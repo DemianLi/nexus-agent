@@ -60,7 +60,13 @@ import {
   toLoggedMessage,
   turnReachedMaxTokens,
 } from '@nexus/core';
-import type { SessionEventMap, SessionLog, SessionRegistry, StepInbox } from '@nexus/core';
+import type {
+  SessionEventMap,
+  SessionLog,
+  SessionRegistry,
+  StepInbox,
+  SubagentSettleReason,
+} from '@nexus/core';
 
 import { BACKGROUND_RUN_PREFIX, agentMessageText } from './background-run-id.js';
 import { markProjectionsHandled } from './thread-pump.js';
@@ -85,7 +91,7 @@ export type BackgroundRoundOutcome =
 export const DEFAULT_MAX_ACTIVE_BACKGROUND_SUBAGENTS = 8;
 
 /** 一個背景子代理的一段（epoch）怎麼結束的，決定通知的第一行。 */
-export type BackgroundStopReason = 'completed' | 'aborted' | 'max-tokens' | 'error';
+export type BackgroundStopReason = SubagentSettleReason;
 
 /**
  * 一個背景子代理結算了（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）：沒有輪次在跑、排著的也空了。
@@ -98,6 +104,8 @@ export interface BackgroundSettlement {
   readonly sessionId: string;
   /** 一行摘要，說它怎麼收的。 */
   readonly summary: string;
+  /** 怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：`summary` 的來源，畫面認這個、不解析英文句。 */
+  readonly reason: BackgroundStopReason;
   /** 送進主對話模型的整段字：摘要，加上它最後一則回覆的非空文字，沒有就是 `It left no closing message.`。 */
   readonly text: string;
 }
@@ -880,6 +888,7 @@ export class BackgroundSubagentHost {
         runId: job.runId,
         sessionId: log.sessionId,
         summary,
+        reason: stop,
         text: settlementText(summary, closingTextOf(log)),
       };
     }

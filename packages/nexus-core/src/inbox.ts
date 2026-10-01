@@ -26,6 +26,12 @@
  */
 
 /**
+ * 一個背景子代理怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：結算通知的原因，四種。
+ * 給模型看的那句英文（`summary`）由它決定，畫面的字也由它決定——畫面不解析英文句，認這個列舉。
+ */
+export type SubagentSettleReason = 'completed' | 'aborted' | 'max-tokens' | 'error';
+
+/**
  * 收件匣的哪一條清單，同 dsh 的 `InboxTarget`。格式 20 以前的日誌只有 `next-turn`（見 `session-store.ts`）。
  */
 export type InboxTarget = 'next-turn' | 'next-step';
@@ -43,6 +49,8 @@ export type QueuedInputSource =
       /** 背景子代理結算的通知（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）：執行期的記帳，不是人說的話。 */
       readonly kind: 'subagent-settled';
       readonly summary: string;
+      /** 怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）；選填只為了格式 26 以前的日誌。 */
+      readonly reason?: SubagentSettleReason;
       readonly senderSessionId: string;
     }
   | {

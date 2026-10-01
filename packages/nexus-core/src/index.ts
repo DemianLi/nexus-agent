@@ -89,6 +89,7 @@ export type {
   InboxTarget,
   QueuedInput,
   QueuedInputSource,
+  SubagentSettleReason,
 } from './inbox.js';
 export { EMPTY_INBOX, foldInbox, spliceInbox } from './inbox.js';
 

@@ -821,6 +821,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
             pump.notifySettled({
               text: settlement.text,
               summary: settlement.summary,
+              reason: settlement.reason,
               senderSessionId: settlement.sessionId,
             }),
           // 背景子代理寫來的話（#849）：同一條路，來源是 `agent-message`（agent 寫的，不是人說的）。

@@ -38,7 +38,7 @@
 
 import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
 import type { GoalChangeMeta, GoalId } from './goal.js';
-import type { InboxSplice } from './inbox.js';
+import type { InboxSplice, SubagentSettleReason } from './inbox.js';
 import type { PresentedFile } from './deliverables.js';
 import type { LoggedMessage } from './logged-message.js';
 import type { TodoItem } from './todo.js';
@@ -273,6 +273,10 @@ export type UserMessageSource =
       readonly form: 'notice';
       /** 一行摘要，說這個背景子代理怎麼收的。 */
       readonly summary: string;
+      /**
+       * 怎麼收的（#884）。**選填只為了格式 26 以前的日誌**：沒帶就是不知道，畫面退成中性的說法，不假裝成「已完成」。
+       */
+      readonly reason?: SubagentSettleReason;
       /** 結算的那個背景子代理的會話 id。 */
       readonly senderSessionId: string;
     }
@@ -329,6 +333,8 @@ export interface SessionEventMap {
         readonly text: string;
         /** 一行摘要，同 {@link UserMessageSource} 的 `subagent-settled`。 */
         readonly summary: string;
+        /** 怎麼收的，同 {@link UserMessageSource} 的 `subagent-settled`。 */
+        readonly reason?: SubagentSettleReason;
         /**
          * 結算的背景子代理的會話 id。照 dsh 的 `SubagentSettledMessageSource`（`subagent/src/continuation-messages.ts`，`477b4f4`）：
          * 這是**執行期自己的記帳**，不是人說的話、也不是子代理自己寫的話（所以不併進 `agent-message`）。

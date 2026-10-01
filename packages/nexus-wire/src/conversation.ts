@@ -34,8 +34,13 @@
 import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
-import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE } from './inbox.js';
-import type { WireQueuedInput, WireQueuedInputSource, WireSessionReference } from './inbox.js';
+import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, isSettleReason } from './inbox.js';
+import type {
+  WireQueuedInput,
+  WireQueuedInputSource,
+  WireSessionReference,
+  WireSettleReason,
+} from './inbox.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
 import { SUBAGENT_STATUS } from './subagent-status.js';
@@ -73,7 +78,7 @@ export interface HumanEntry {
  * 「這一輪（或這一步）是被什麼叫醒的」（[#851](https://github.com/DemianLi/nexus-agent/issues/851)）：目前只有背景子代理的
  * 結算通知。落在**觸發訊息本來會出現的位置**——人話的泡泡出現的地方——所以畫面能在模型的回覆前面畫出來由。
  *
- * **不帶文字**：通知的字是給模型的英文，畫面不顯示它。即時（`inbox` 的 `claimed`／`claimedNextStep`）與歷史重播
+ * **不帶文字**：通知的字是給模型的英文，畫面不顯示它；帶的是怎麼收的（{@link NoticeEntry.reason}，#884），字由畫面自己配。即時（`inbox` 的 `claimed`／`claimedNextStep`）與歷史重播
  * （{@link SETTLE_NOTICE}）長出同一種東西，重新整理後畫面不變。不影響 `status`、`pendings`，也不會是 {@link AiEntry.turnTail}。
  */
 export interface NoticeEntry {
@@ -82,6 +87,11 @@ export interface NoticeEntry {
   readonly id: string;
   /** 通知的來源。今天只有 `subagent-settled`；`agent-message`（#849）的顯示是另一件，這裡不長。 */
   readonly source: 'subagent-settled';
+  /**
+   * 怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：完成、被停止、超出上限、失敗。
+   * **沒有這一格＝不知道**（格式 26 以前的日誌）：畫面退成中性的說法，不假裝成「已完成」。
+   */
+  readonly reason?: WireSettleReason;
   /** 即時的那一種是送出佇列的哪一件（`inbox` 的 `claimed.id`），同一顆 `claimed` 再到一次靠它認出來。歷史的沒有。 */
   readonly inboxId?: string;
 }
@@ -938,7 +948,14 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
     // 結算通知（#851）長一格「通知」，子代理寄來的話（#863）長一格「某某說」，位置都是人話會出現的地方。
     const sourceKind = (source as { kind?: unknown } | undefined)?.kind;
     if (sourceKind === 'subagent-settled') {
-      humans.push({ kind: 'notice', id: `inbox:${id}`, source: 'subagent-settled', inboxId: id });
+      const reason = (source as { reason?: unknown }).reason;
+      humans.push({
+        kind: 'notice',
+        id: `inbox:${id}`,
+        source: 'subagent-settled',
+        ...(isSettleReason(reason) ? { reason } : {}),
+        inboxId: id,
+      });
       continue;
     }
     if (sourceKind === 'agent-message') {
@@ -964,7 +981,14 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
     });
   }
   const queued = (list: readonly WireQueuedInput[]) =>
-    list.map(({ id, text, source }) => ({ id, text, source: { kind: source.kind } }));
+    list.map(({ id, text, source }) => ({
+      id,
+      text,
+      source:
+        source.kind === 'subagent-settled' && isSettleReason(source.reason)
+          ? { kind: source.kind, reason: source.reason }
+          : { kind: source.kind },
+    }));
   const inbox = queued(items);
   const inboxNextStep = queued(nextStep ?? []);
   const fresh = humans.filter(
@@ -981,10 +1005,15 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
 
 /** {@link SETTLE_NOTICE} 的 `payload`：`id` 是字串，同一個 `id` 只長一格。 */
 function reduceSettleNotice(state: ConversationState, payload: object): ConversationState {
-  const { id } = payload as { id?: unknown };
+  const { id, reason } = payload as { id?: unknown; reason?: unknown };
   if (typeof id !== 'string' || id === '') return state;
   if (state.entries.some((entry) => entry.id === id)) return state;
-  const entry: NoticeEntry = { kind: 'notice', id, source: 'subagent-settled' };
+  const entry: NoticeEntry = {
+    kind: 'notice',
+    id,
+    source: 'subagent-settled',
+    ...(isSettleReason(reason) ? { reason } : {}),
+  };
   return { ...state, entries: [...state.entries, entry] };
 }
 

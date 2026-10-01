@@ -188,6 +188,7 @@ describe('背景子代理做完，閒著的主對話被叫醒', () => {
       const start = events.filter((event) => event.type === 'turn/start')[1]!.data as {
         text: string;
         summary: string;
+        reason?: string;
         senderSessionId: string;
       };
       expect(start.summary).toMatch(
@@ -195,6 +196,10 @@ describe('背景子代理做完，閒著的主對話被叫醒', () => {
       );
       expect(start.text).toBe(`${start.summary}\n\nIts closing message:\n做完，結論是 X`);
       expect(start.senderSessionId).toMatch(/^settle-thread\/bg-[0-9a-f]{12}$/);
+      // 怎麼收的走過整條線（host → wire-handler → pump → 日誌 → 畫面），不靠解析英文句（#884）。
+      expect(start.reason).toBe('completed');
+      const notices = r.state().entries.filter((entry) => entry.kind === 'notice');
+      expect(notices.map((entry) => entry.reason)).toEqual(['completed']);
 
       // 沒有人的授權：這一輪背後沒有人。
       expect(hasDirectHumanTurn(events)).toBe(false);

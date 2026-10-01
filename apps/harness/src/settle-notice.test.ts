@@ -16,10 +16,16 @@ import {
   TURN_CANCEL_CONFIG_KEY,
   toLoggedMessage,
 } from '@nexus/core';
-import type { SessionEvent, StepInbox } from '@nexus/core';
+import type { SessionEvent, StepInbox, SubagentSettleReason } from '@nexus/core';
 import { hasDirectHumanTurn } from '@nexus/plugin-goal';
-import type { Event, InboxPayload } from '@nexus/wire';
-import { emptyConversation, encodeSessionReferenceUri, INBOX, reduceAll } from '@nexus/wire';
+import type { Event, InboxPayload, WireSettleReason } from '@nexus/wire';
+import {
+  emptyConversation,
+  encodeSessionReferenceUri,
+  INBOX,
+  reduceAll,
+  SETTLE_REASONS,
+} from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import { historyPage } from './conversation-history.js';
@@ -29,6 +35,7 @@ import type { PumpAgent } from './thread-pump.js';
 const NOTICE = {
   text: 'Background subagent bg-1 finished and will do no further work unless you send it more.\n\nIts closing message:\n找到三個檔案',
   summary: 'Background subagent bg-1 finished and will do no further work unless you send it more.',
+  reason: 'completed' as const,
   senderSessionId: 'settle-root/bg-1',
 };
 
@@ -257,6 +264,7 @@ describe('主對話正跑著', () => {
         kind: 'subagent-settled',
         form: 'notice',
         summary: NOTICE.summary,
+        reason: 'completed',
         senderSessionId: NOTICE.senderSessionId,
       });
       // 這一輪是人開的，人仍在這條鏈後面；通知本身不替它背書也不替它撤銷。
@@ -408,9 +416,9 @@ describe('上線與歷史：不畫人的泡泡', () => {
       const inserted = pushes.find((push) =>
         push.items.some((item) => item.source.kind !== 'user'),
       );
-      expect(inserted?.items[0]?.source).toEqual({ kind: 'subagent-settled' });
+      expect(inserted?.items[0]?.source).toEqual({ kind: 'subagent-settled', reason: 'completed' });
       const claim = pushes.find((push) => push.claimed?.source !== undefined);
-      expect(claim?.claimed?.source).toEqual({ kind: 'subagent-settled' });
+      expect(claim?.claimed?.source).toEqual({ kind: 'subagent-settled', reason: 'completed' });
       // 人的那一顆 claimed 不帶 source（沒帶就是人，舊的一側照舊）。
       expect(pushes.find((push) => push.claimed?.id === 'h1')?.claimed).not.toHaveProperty(
         'source',
@@ -492,6 +500,115 @@ describe('通知長成畫面上的一格，即時與歷史一致（#851）', () 
     } finally {
       await run.close();
     }
+  });
+});
+
+describe('通知帶上怎麼收的，即時、排隊中與歷史一致（#884）', () => {
+  const REASONS = ['completed', 'aborted', 'max-tokens', 'error'] as const;
+  const noticeReasons = (frames: readonly Event[]) =>
+    reduceAll(emptyConversation(), frames).entries.flatMap((entry) =>
+      entry.kind === 'notice' ? [entry.reason ?? 'none'] : [],
+    );
+
+  it.each(REASONS)('%s：叫醒閒著的主對話，即時與歷史都長出這個原因', async (reason) => {
+    const { agent } = fakeAgent();
+    const run = open(agent);
+    try {
+      run.pump.notifySettled({ ...NOTICE, reason });
+      await run.pump.whenIdle();
+      expect(noticeReasons(run.frames)).toEqual([reason]);
+      expect(noticeReasons(historyPage(run.pump.sessionLog.events).events)).toEqual([reason]);
+      const start = run.pump.sessionLog.events.find((event) => event.type === 'turn/start');
+      expect(start?.data).toMatchObject({ kind: 'subagent-settled', reason });
+    } finally {
+      await run.close();
+    }
+  });
+
+  it.each(REASONS)('%s：輪中插進來，即時與歷史都長出這個原因', async (reason) => {
+    const hold = gate();
+    const { agent, inputs } = fakeAgent([{ holdBeforeClaim: hold.opened }]);
+    const run = open(agent, { stepInbox: true });
+    try {
+      const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
+      await until(() => inputs.length === 1);
+      run.pump.notifySettled({ ...NOTICE, reason });
+      hold.open();
+      await first;
+      await run.pump.whenIdle();
+      expect(noticeReasons(run.frames)).toEqual([reason]);
+      expect(noticeReasons(historyPage(run.pump.sessionLog.events).events)).toEqual([reason]);
+      const message = run.pump.sessionLog.events.find((event) => event.type === 'user/message');
+      expect(message?.data.source).toMatchObject({ kind: 'subagent-settled', reason });
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('排隊中那一行也帶原因，領走之後同一格換成正式的通知、原因不變', async () => {
+    const hold = gate();
+    const { agent, inputs } = fakeAgent([{ hold: hold.opened }]);
+    const run = open(agent, { stepInbox: false });
+    try {
+      const first = run.pump.submit({ kind: 'message', text: 'A', id: 'a' });
+      await until(() => inputs.length === 1);
+      run.pump.notifySettled({ ...NOTICE, reason: 'aborted' });
+      await until(() => reduceAll(emptyConversation(), run.frames).inbox.length > 0);
+      const queued = reduceAll(emptyConversation(), run.frames).inbox;
+      expect(queued.map((item) => item.source)).toEqual([
+        { kind: 'subagent-settled', reason: 'aborted' },
+      ]);
+      hold.open();
+      await first;
+      await run.pump.whenIdle();
+      const state = reduceAll(emptyConversation(), run.frames);
+      expect(state.inbox).toEqual([]);
+      expect(noticeReasons(run.frames)).toEqual(['aborted']);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('舊日誌（沒有 reason）：歷史長出沒有原因的通知，不假裝成完成', () => {
+    const log = new SessionLog('legacy');
+    log.append('turn/start', {
+      kind: 'subagent-settled',
+      text: NOTICE.text,
+      summary: NOTICE.summary,
+      senderSessionId: NOTICE.senderSessionId,
+    });
+    log.append('turn/end', {});
+    expect(noticeReasons(historyPage(log.events).events)).toEqual(['none']);
+  });
+
+  it('認不得的原因（壞資料、未來的值）當作沒有，不原樣畫上去', () => {
+    const frames: Event[] = [
+      {
+        type: 'event',
+        seq: 0,
+        method: 'custom',
+        params: {
+          namespace: [],
+          timestamp: 0,
+          data: { name: 'subagent/settle-notice', payload: { id: 'x', reason: 'exploded' } },
+        },
+      },
+    ];
+    expect(noticeReasons(frames)).toEqual(['none']);
+  });
+
+  it('wire 的原因列舉與 core 的 SubagentSettleReason 是同一組', () => {
+    // 兩個方向都釘：任何一邊加或減一個成員，這一行編不過。
+    const fromWire: readonly SubagentSettleReason[] = SETTLE_REASONS;
+    const fromCore: readonly WireSettleReason[] = [
+      'completed',
+      'aborted',
+      'max-tokens',
+      'error',
+    ] satisfies readonly SubagentSettleReason[];
+    expect([...fromWire].sort()).toEqual([...fromCore].sort());
+    const exhaustive = (reason: SubagentSettleReason): WireSettleReason => reason;
+    expect(REASONS.map(exhaustive)).toEqual([...REASONS]);
   });
 });
 
