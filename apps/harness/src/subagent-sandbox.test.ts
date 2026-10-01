@@ -281,11 +281,7 @@ describe('子代理的沙箱模式', () => {
   });
 
   it('沒掛沙箱 plugin 的組裝（沒給 `--workspace`），子代理請求裡沒有政策句', async () => {
-    const run = await runUnfenced([
-      delegate,
-      { content: '子代理收工。' },
-      { content: '根收工。' },
-    ]);
+    const run = await runUnfenced([delegate, { content: '子代理收工。' }, { content: '根收工。' }]);
     try {
       const subagentPrompts = run.model.prompts.filter(isSubagentPrompt);
       expect(subagentPrompts).toHaveLength(1);
@@ -352,11 +348,7 @@ describe('子代理的沙箱模式', () => {
   }, 20000);
 
   it('沒給 --workspace 的組裝：子代理的日誌一顆 `sandbox/mode` 都沒有', async () => {
-    const run = await runUnfenced([
-      delegate,
-      { content: '子代理收工。' },
-      { content: '根收工。' },
-    ]);
+    const run = await runUnfenced([delegate, { content: '子代理收工。' }, { content: '根收工。' }]);
     try {
       // 前提：子代理的日誌真的開了。
       expect(run.sandboxEvents('subagent')).toHaveLength(1);

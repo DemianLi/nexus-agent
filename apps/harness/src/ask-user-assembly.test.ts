@@ -10,7 +10,7 @@
  *   工具結果前面會多一段前綴（`tool-events.ts` 的 `Error: `），所以比「含」不比「等於」。
  * - serve：沒傳 `approvals`，管道是 `human`，停在問答中斷、等人回答。
  *
- * 突變（量過）：`assembly-root.ts` 交給 `createHostServicesPlugin` 的 `channel,` 換成字面的 `{ kind: 'human' }`
+ * 突變（量過）：`assembly-root.ts` 交給 host-services 那顆的 `channel,` 換成字面的 `{ kind: 'human' }`
  * → CLI 那條紅（問題真的發出去了，沒有被拒）；serve 那條照樣綠，它是對照組。
  *
  * **零憑證、零外部連線**：模型是腳本，工作區沒有給。
@@ -32,10 +32,15 @@ import { scriptedPatchText, startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
-const QUESTIONS = [{ id: 'day', question: '哪一天？', options: [{ label: '週一' }, { label: '週二' }] }];
+const QUESTIONS = [
+  { id: 'day', question: '哪一天？', options: [{ label: '週一' }, { label: '週二' }] },
+];
 
 const ASK: readonly ScriptedTurn[] = [
-  { content: '我先問。', toolCalls: [{ name: ASK_USER_QUESTION_TOOL_NAME, args: { questions: QUESTIONS } }] },
+  {
+    content: '我先問。',
+    toolCalls: [{ name: ASK_USER_QUESTION_TOOL_NAME, args: { questions: QUESTIONS } }],
+  },
   { content: '收工。' },
 ];
 

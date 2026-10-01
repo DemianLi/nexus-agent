@@ -16,18 +16,19 @@
  * 4. **五種拒絕各有各的碼**：壓成同一個的話前端分不出該畫什麼，而畫面上看不出來。
  * 5. **上限是拒絕不是截斷**。
  *
- * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，工作區是暫存目錄，測試不碰真的 `~/.nexus-agent`。
+ * **走產品組裝**（#670）：agent 是 `createCliAgent`（出貨清單、組裝點建的 backend 與沙箱控制器）組的，模型換成清單上的腳本
+ * 提供者；handler 這一層（上限、續接的 seed、header 記的根、錨）由測試明著給，因為那幾格正是各條測試要變動的東西。
+ * `workspaceRoot` 取自 `createCliAgent` 回傳的那一個，就是 `serve.ts` 轉交的那一個。
+ *
+ * **零憑證、零外部連線**：模型是腳本，工作區是暫存目錄，測試不碰真的 `~/.nexus-agent`。
  */
 
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-import { MemorySaver } from '@langchain/langgraph';
 import type { SessionEvent, SessionRegistry } from '@nexus/core';
-import { createHostServicesPlugin } from '@nexus/core';
 import { PRESENT_TOOL_NAME } from '@nexus/plugin-present';
-import { createSandboxPolicyPlugin, SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import type {
   DeliverableBytes,
   DeliverableReadBytesResult,
@@ -44,8 +45,7 @@ import {
 } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { createNexusAgent } from './agent-factory.js';
-import { ContainedFilesystemBackend } from './contained-backend.js';
+import { createCliAgent } from './assembly-root.js';
 import { locateDeliverable } from './deliverable-files.js';
 import {
   deliverableFilesConfigSchema,
@@ -58,13 +58,12 @@ import {
   loopbackRequest,
   shippedPlugins,
   TEST_BROWSER_AUTH,
+  withScriptedModel,
 } from './fixtures.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
-import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
-import { composeAttachSessions } from './session-attach.js';
 
 const shipped = await shippedPlugins();
 
@@ -118,31 +117,21 @@ async function present(
   }
   await options.setup?.(root);
   const workspace = options.workspace ?? true;
-  const sandboxMode = new SandboxModeController('workspace-write');
-  const built = await createNexusAgent({
-    model: new ScriptedChatModel({
-      turns: [
-        {
-          content: '交付。',
-          toolCalls: [
-            { name: PRESENT_TOOL_NAME, args: { files: declared.map((path) => ({ path })) } },
-          ],
-        },
-        { content: '交付好了。' },
-      ],
-    }),
-    checkpointer: new MemorySaver(),
-    plugins: [
-      createHostServicesPlugin({ sandboxPolicy: { controller: sandboxMode, rootDir: root } }),
-      ...shipped,
-      createSandboxPolicyPlugin(),
-    ],
-    backend: new ContainedFilesystemBackend({
-      rootDir: root,
-      mode: sandboxMode.source,
-      grants: sandboxMode,
-    }),
-  });
+  // **agent 一律帶 `--workspace`**：`workspace: false` 要模擬的是「handler 沒拿到工作區根」，不是「agent 沒有工作區」——
+  // 後者連 `present` 都叫不動，也就沒有交付可讀。
+  const built = await createCliAgent(
+    { live: false, workspace: root },
+    withScriptedModel(shipped, [
+      {
+        content: '交付。',
+        toolCalls: [
+          { name: PRESENT_TOOL_NAME, args: { files: declared.map((path) => ({ path })) } },
+        ],
+      },
+      { content: '交付好了。' },
+    ]),
+    root,
+  );
   let sessions: SessionRegistry | undefined;
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
@@ -153,9 +142,9 @@ async function present(
       dispose: built.dispose,
       attachSessions: (registry, backgroundPort) => {
         sessions = registry;
-        return composeAttachSessions(built)(registry, backgroundPort);
+        return built.attachSessions(registry, backgroundPort);
       },
-      ...(workspace && { workspaceRoot: root }),
+      ...(workspace && { workspaceRoot: built.workspaceRoot }),
       ...(options.seed !== undefined && { rootSeed: options.seed }),
       ...(options.resumedRoot !== undefined && {
         resumedWorkspaceRoot:
@@ -374,19 +363,16 @@ describe('預覽', () => {
     });
 
     /**
-     * **serve 那條線只能這樣釘，而理由是量出來的。**
+     * **serve 那條線的結構性檢查，行為那一半在 `serve-scripted-provider.test.ts`。**
      *
      * 上面四條證的是「`createWireHandler` 收到什麼就用什麼」。缺的那一步是「`serve.ts` 起動期
-     * 解出來的那一份，真的傳給了 handler」——而那一步**在 serve 上觀察不到**：要看見它就得有一個
-     * 宣告過的交付檔，而 serve 不帶 `--live` 時的假模型腳本（`cli.ts` 的 `CLI_SCRIPT`）只呼叫
-     * `echo` 與 `write_file`，一次都不呼叫 `present`。為了測試去改產品腳本是本末倒置。
+     * 解出來的那一份，真的傳給了 handler」。以前那一步**在 serve 上觀察不到**：要看見它就得有一個
+     * 宣告過的交付檔，而不帶 `--live` 的假模型腳本（`CLI_SCRIPT`）一次都不呼叫 `present`——#536 量過，
+     * 把 `serve.ts` 那一行 `deliverableLimits,` 刪掉，`apps/harness` 全套 1234 條全綠。
      *
-     * **實測過缺口是真的**：把 `serve.ts` 那一行 `deliverableLimits,` 刪掉，`apps/harness` 全套
-     * 1234 條**全綠**。一條用參數傳的線天生沒有觀察點（同 `settings/startup.test.ts` 的檔頭），
-     * 而這一格連那個檔的兩臂手法都用不上。
-     *
-     * 所以退到結構性檢查，形狀照 `eval/session-absence.test.ts`。它擋的正是那次突變：那一行被
-     * 刪掉、或那一列不再被解出來，這裡當場紅。
+     * [#670](https://github.com/DemianLi/nexus-agent/issues/670) 之後有了行為測試：`serve-scripted-provider.test.ts` 在
+     * 真的 `runServe` 上用 patch 換掉模型提供者、叫一次 `present`，上限調小的那一組讀不動。**這一條留著當第二道**：
+     * 它便宜，而且擋的是同一次突變——那一行被刪掉、或那一列不再被解出來，這裡當場紅。
      */
     it('serve 起動期解出那一列，而且真的傳給 handler', async () => {
       const source = await readFile(new URL('./serve.ts', import.meta.url), 'utf8');

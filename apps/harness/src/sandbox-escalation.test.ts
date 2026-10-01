@@ -654,20 +654,17 @@ describe('升級', () => {
           },
         ],
       });
-      const { agent, dispose } = await assembleProduct(
-        'read-only',
-        [
-          submit('遠見科技'),
-          escalate({
-            file_path: '/a.csv',
-            sandbox_permissions: 'workspace-write',
-            justification: '使用者要送出這一筆',
-          }),
-          submit('對不起，無法寫入遠見科技'),
-          submit('遠見科技'),
-          { content: '完成。' },
-        ],
-      );
+      const { agent, dispose } = await assembleProduct('read-only', [
+        submit('遠見科技'),
+        escalate({
+          file_path: '/a.csv',
+          sandbox_permissions: 'workspace-write',
+          justification: '使用者要送出這一筆',
+        }),
+        submit('對不起，無法寫入遠見科技'),
+        submit('遠見科技'),
+        { content: '完成。' },
+      ]);
       const config = { configurable: { thread_id: 'content-submit' } };
       try {
         // 四張卡依序是：送出、升級、改過的送出、原樣的送出。探針照樣全按核准——

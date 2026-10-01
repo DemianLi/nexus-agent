@@ -41,7 +41,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createCliAgent } from './assembly-root.js';
-import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins, withScriptedModel } from './fixtures.js';
+import {
+  TEST_BROWSER_AUTH,
+  loopbackRequest,
+  shippedPlugins,
+  withScriptedModel,
+} from './fixtures.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
