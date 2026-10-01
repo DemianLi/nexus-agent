@@ -159,6 +159,9 @@ export { CHANNEL_SERVICE };
 /** 空的問題清單。dsh 在 `ask()` 當場拋 `EMPTY_QUESTIONS`，我們照做。 */
 export const EMPTY_QUESTIONS_MESSAGE = `${ASK_USER_QUESTION_TOOL_NAME} 至少要有一題，收到的是空清單，所以沒有問任何人。`;
 
+/** 這次組裝沒有人提供答題管道（{@link CHANNEL_SERVICE} 沒人 provide）時的拒絕。對應 dsh 的 `NO_PROVIDER`。 */
+export const NO_CHANNEL_MESSAGE = `這次組裝沒有指定問答管道，${ASK_USER_QUESTION_TOOL_NAME} 不知道該問誰，所以沒有問。這不是有人拒絕回答——是沒有被問到。你要嘛用手上已經有的資料繼續，要嘛說清楚缺了什麼。`;
+
 export function noAnswererMessage(channel: ApprovalChannel): string {
   return channel.kind === 'policy-never'
     ? `這個 session 沒有人在（關掉了人工核准），${ASK_USER_QUESTION_TOOL_NAME} 問不到任何人，所以沒有問。` +
@@ -174,14 +177,19 @@ export function noAnswererMessage(channel: ApprovalChannel): string {
  * 從設定檔 import。它沒有任何資料設定——唯一要的東西是協作者，走
  * {@link CHANNEL_SERVICE} 注入（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。
  *
- * **軟相依，不是硬的**（`services.get` 不是 `services.use`）：沒人提供時退到
- * `{ kind: 'human' }`，與這一刀之前 `options.channel` 省略時完全一樣。這個預設只給
- * 測試與「我知道我在幹嘛」的組裝點用，理由見 {@link CHANNEL_SERVICE}。
+ * **軟相依，但缺席時 fail-closed**（[#669](https://github.com/DemianLi/nexus-agent/issues/669)）：
+ * 載入時 `services.get`（不是 `use`），所以沒掛 host-services 的組裝照樣載得起來；**呼叫時**沒有答題者就回
+ * {@link NO_CHANNEL_MESSAGE}，不再退成 `{ kind: 'human' }`。要有人在答，組裝點得明著提供 {@link CHANNEL_SERVICE}。
  */
 export const askUserPlugin: NexusPlugin = {
   name: 'ask-user',
   apply(registry) {
-    const channel: ApprovalChannel = registry.services.get(CHANNEL_SERVICE) ?? { kind: 'human' };
+    // **沒人提供就是沒有答題者，不是「有人在」**（[#669](https://github.com/DemianLi/nexus-agent/issues/669)）：
+    // 以前缺席時退成 `{ kind: 'human' }`，一份不掛 host-services 的組裝會拿到一顆以為有人在答的工具，
+    // 問了就停在一個沒人接的中斷上。照 dsh：`tool-ask-user` 硬注入 `userQuestions`，沒有任何答題者接下請求時以
+    // `NO_PROVIDER` 拋錯（`packages/interaction/user-questions/src/index.ts:132`）。拒絕發生在**呼叫時**，載入
+    // 照常，所以出貨清單疊在不掛 host-services 的組裝上也載得起來——那種組裝只是沒有這顆工具可用。
+    const channel: ApprovalChannel | undefined = registry.services.get(CHANNEL_SERVICE);
     registry.tools.register(
       tool(
         async (args, config) => {
@@ -198,6 +206,7 @@ export const askUserPlugin: NexusPlugin = {
             });
           // **fail-closed 排在最前面**：沒有人在的時候連中斷都不該發出去，
           // 因為 `no-channel` 底下 `interrupt()` 是當場拋，而那個錯訊說不出原因。
+          if (channel === undefined) return failed(NO_CHANNEL_MESSAGE);
           if (channel.kind !== 'human') return failed(noAnswererMessage(channel));
           if (questions.length === 0) return failed(EMPTY_QUESTIONS_MESSAGE);
 

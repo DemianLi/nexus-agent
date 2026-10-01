@@ -64,6 +64,14 @@ export function shippedPlugins(): Promise<readonly PluginEntry[]> {
 }
 
 /**
+ * 「有人在答」的答題管道，給掛了 `ask-user` 的測試用（[#669](https://github.com/DemianLi/nexus-agent/issues/669)）。
+ * 工具沒有人提供 `channel` 時在呼叫當下拒絕，所以要實際問問題的測試得明著交一份，放在 `ask-user` 前面（它載入時就讀）。
+ * 經 `createCliAgent` 的測試不需要：那條路徑自己算一份交出去。
+ */
+export const humanChannelPlugin = (): PluginEntry =>
+  createHostServicesPlugin({ channel: { kind: 'human' } }, 'test-human-channel');
+
+/**
  * 給**直接呼叫 `loadPlugins`** 的測試：出貨清單的 `system-prompt` 那一列硬要 `systemPromptVariables` 這個服務（#720），
  * 產品路徑上由 `createNexusAgent` 交；直接載清單的測試沒有經過它，自己補一份，放最前面，跟產品路徑同一個位置。
  * 經 `createNexusAgent` 或 `createCliAgent` 的測試不需要這個——那兩個入口自己交，再交一份會撞名。

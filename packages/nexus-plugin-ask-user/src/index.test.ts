@@ -25,6 +25,7 @@ const {
   ASK_USER_OUTPUT_SCHEMA,
   ASK_USER_QUESTION_TOOL_NAME,
   CANCELLED_MESSAGE,
+  NO_CHANNEL_MESSAGE,
 } = await import('./index.js');
 
 async function toolOf(
@@ -145,6 +146,17 @@ describe('四條出口', () => {
   it('沒有 checkpointer 時也一樣——理由與上一條刻意不同', async () => {
     expect(await errorTextOf(await (await toolOf('no-channel')).invoke(ONE_QUESTION))).toMatch(
       /接不回來/,
+    );
+    expect(interrupted).toEqual([]);
+  });
+
+  it('沒人提供答題管道時呼叫當下拒絕，載入照常、連問都不問（#669）', async () => {
+    // 不掛 host-services：以前這裡會退成 `{ kind: 'human' }`，工具停在一個沒人接的中斷上。
+    const { registry } = await loadPlugins([createAskUserPlugin()]);
+    const entry = registry.tools.resolve(ASK_USER_QUESTION_TOOL_NAME);
+    if (entry === undefined) throw new Error('工具沒有註冊上去');
+    expect(await errorTextOf(await entry.value.invoke(ONE_QUESTION))).toBe(
+      `Error: ${NO_CHANNEL_MESSAGE}`,
     );
     expect(interrupted).toEqual([]);
   });

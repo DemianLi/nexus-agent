@@ -1,6 +1,7 @@
 # 出貨的預設 plugin 清單。
 #
-# 這份檔案是「零設定的 nexus 由什麼組成」的唯一來源（#454）。使用者要改的話不是編輯它，
+# 這份檔案是「零設定的 nexus 由什麼組成」的來源（#454）；例外是組裝點在程式碼裡掛的三顆：host-services、
+# sandbox-policy（有 `--workspace` 才掛）、workspace-changes（serve 且有 `--workspace` 才掛），它們不在清單上（#669 後續）。使用者要改的話不是編輯它，
 # 而是在 `$NEXUS_AGENT_HOME/cordis.patch.yml`（預設 `~/.nexus-agent/`）或 `--patch <檔>`
 # 裡按 `id` 覆寫、停用、插入——patch 是整份替換 `config`，不是深層合併，所以覆寫的時候要
 # 把想保留的欄位一起重述。
@@ -17,7 +18,7 @@
 #             （#104 的偏離標註）。
 #
 # 疊完之後這台機器上實際長什麼樣，用 `--dump-config` 看（cli 與 serve 都收）：它印出啟動
-# 真的會掛的那一份，每一段前面標明那幾列來自哪個檔、被哪幾層改過；指到不存在 id 的 patch
+# 會掛的那份清單（上面三顆由程式碼掛的不在內），每一段前面標明那幾列來自哪個檔、被哪幾層改過；指到不存在 id 的 patch
 # 會連同它那一層的標籤報到 stderr。用法見 docs/operations.md 的「plugin 清單」一節。
 #
 # 要事先知道某一列收哪些欄位（寫覆寫檔用），用 `--dump-config-schema`：印出一份 JSON Schema，
@@ -103,6 +104,21 @@
 # 時工具照樣在、叫了被拒，同 dsh。
 - id: present
   name: '@nexus/plugin-present'
+
+# **例外五：提問與提交紀錄**（#669）。這兩顆以前由 `createCliAgent` 在程式碼裡掛，patch 指不到、`--dump-config` 印不出來；
+# 部署方想在多人共用的主機上關掉 `ask_user_question`，寫 `- id: ask-user` ＋ `disabled: true` 只會得到一行「找不到 id」。
+# 搬進清單之後它們跟其他列一樣：看得見、關得掉。dsh 的 ask-user 也只是 preset 裡的一列。
+#
+# 兩顆都沒有資料設定，協作者走服務注入（#459）：`ask_user_question` 讀 host-services 提供的答題管道（**沒有就在呼叫時拒絕**，
+# 不退成「有人在」，照 dsh 的 `NO_PROVIDER`），`submit_record` 在被叫時讀 `fs` 服務（#694，折出來的 backend）。host-services 仍由組裝點在最前面掛。
+# 我們的 CLI 是有人在的互動入口，dsh 沒有對應物，所以兩個入口照舊都有這兩顆。
+#
+# `submit_record` 帶一道核准閘門（一律停下來讓人看過），所以它在 `approval-gate-order.test.ts` 的射程內。
+- id: ask-user
+  name: '@nexus/plugin-ask-user'
+
+- id: submit-record
+  name: '@nexus/plugin-submit-record'
 
 # 系統提示詞的身分與 persona（#720）。照 dsh 的 `system-prompt`（`packages/core/system-prompt/src/index.ts:407-442`）
 # 三格設定；出貨值對應 dsh 四個入口 profile 覆寫成的那一組（`packages/bundle/web-app/cordis.patch.yml:16-20`），
