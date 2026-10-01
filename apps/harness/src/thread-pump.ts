@@ -61,7 +61,9 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
+  APPROVAL_INTERRUPT_KIND,
   foldInbox,
+  humanMessageForTurnStart,
   INTERRUPTED_REPLY_MARKER,
   isTurnCancelled,
   MAX_TOKENS_TURN_END,
@@ -404,10 +406,11 @@ export interface PendingInterrupt {
   /** 這一批要回答幾筆決定——基座逐 index 配對，長度不符當場拋。 */
   readonly actionCount: number;
   /**
-   * 停在核准閘門上的那幾顆工具的名字（酬載的 `actionRequests[].name`）；問答那一種是空的。
+   * 停在核准上的那幾顆工具的名字（酬載的 `actionRequests[].name`）；問答那一種是空的。核准閘門與在本體裡問人的
+   * `request_sandbox_escalation`（[#700](https://github.com/DemianLi/nexus-agent/issues/700)）發的是同一個形狀。
    *
    * 重播靠它分兩種等法（[#317](https://github.com/DemianLi/nexus-agent/issues/317)）：日誌上兩種都只留一顆沒落定的
-   * `tool/call` 與一顆只帶 id 的 `interrupt/raised`，閘門的酬載也沒有 callId——這裡是唯一分得出來的地方。
+   * `tool/call` 與一顆只帶 id 的 `interrupt/raised`，核准的酬載也沒有 callId——這裡是唯一分得出來的地方。
    */
   readonly gatedTools: readonly string[];
   /**
@@ -474,14 +477,46 @@ function asInterruptEntries(data: unknown): readonly InterruptEntry[] {
  * @returns 認得出中斷條目就是 `true`。
  */
 function isSuspensionMessage(message: unknown): boolean {
-  if (typeof message !== 'string') return false;
+  return suspensionEntriesOf(message).length > 0;
+}
+
+/** `tool-error` 的訊息 parse 得出來的中斷條目；不是中斷就是空的。 */
+function suspensionEntriesOf(message: unknown): readonly InterruptEntry[] {
+  if (typeof message !== 'string') return [];
   let parsed: unknown;
   try {
     parsed = JSON.parse(message);
   } catch {
-    return false;
+    return [];
   }
-  return Array.isArray(parsed) && interruptEntriesOf(parsed).length > 0;
+  return interruptEntriesOf(parsed);
+}
+
+/**
+ * 這顆 `tool-error` 是工具**本體**停在核准上嗎（[#700](https://github.com/DemianLi/nexus-agent/issues/700)）——是的話
+ * 整顆不上線。
+ *
+ * 照 dsh，核准的等待不畫在工具卡上：卡維持執行中，面板接管輸入框（#317）。停在核准閘門上的那顆本體沒被呼叫到，
+ * 基座不發 `tool-started` 也不發這顆，所以從來不是問題；`request_sandbox_escalation` 照 dsh 在本體裡問人之後，
+ * 本體被呼叫到了，中斷又是拋出來的，基座就跟問答一樣發一顆 `tool-error`。換成 `tool-suspended` 會畫成
+ * 「等你回答」、重新整理又變回執行中（重播靠 `gatedTools` 認名字）；原樣放行會畫成失敗。所以丟掉。
+ *
+ * **只認明寫 `kind: 'approval'` 的**：判別式缺席在 `@nexus/wire` 那側是「當核准」的向後相容，但這裡丟掉的是一顆
+ * frame，認錯的代價是一張該變「等你回答」的卡停在執行中，所以只收明著說的那一種。
+ *
+ * @param data - 基座給的那顆 `tools` data。
+ * @returns 要丟掉就是 `true`。
+ */
+export function isApprovalSuspension(data: unknown): boolean {
+  const shaped = data as { event?: unknown; message?: unknown } | null;
+  if (shaped === null || typeof shaped !== 'object' || shaped.event !== 'tool-error') return false;
+  const entries = suspensionEntriesOf(shaped.message);
+  return (
+    entries.length > 0 &&
+    entries.every(
+      (entry) => (entry.value as { kind?: unknown } | null)?.kind === APPROVAL_INTERRUPT_KIND,
+    )
+  );
 }
 
 /**
@@ -575,13 +610,20 @@ function failureTextOf(output: unknown): string | undefined {
 }
 
 /**
- * 日誌對一次呼叫的判定（#296）：失敗與否、模型看到的那一句，與給畫面的 `meta`（#617，已照上限截過；
- * 失敗的不帶）。
+ * 日誌對一次呼叫的判定（#296）：失敗與否、模型看到的那一句、給畫面的 `meta`（#617，已照上限截過；
+ * 失敗的不帶），與失敗的錯誤碼（[#667](https://github.com/DemianLi/nexus-agent/issues/667)）。
  */
 interface ToolVerdict {
   readonly failed: boolean;
   readonly text: string | undefined;
   readonly meta?: unknown;
+  /**
+   * 日誌 `tool/result.error.code` 的那個碼，原樣（例如 `ABORTED_BEFORE_DISPATCH`、`FS_SANDBOX_DENIED`）。
+   * 照 dsh 碼跨線（`packages/core/agent-loop/src/tool-calls.ts:285` 把 `error` 放進 `tool/result`，
+   * `packages/client/ui-chat/src/client/conversation-nodes/tool.ts:76` 原樣交給 client 的工具節點），畫面比碼不比字。
+   * 只在失敗那一支上線，見 {@link applyVerdict}。
+   */
+  readonly code?: string;
 }
 
 /** 已經轉發出去、還在等日誌判定的那顆 `tool-finished`。更正時原樣帶回它的 namespace 與 data。 */
@@ -614,6 +656,9 @@ function applyVerdict(
     ...rest,
     failed: true,
     message: verdict.text ?? (typeof bodyText === 'string' ? bodyText : '未指名的錯誤'),
+    // 欄位名照協定 `ToolErrorData` 的 `code`。`tool-finished` 的 data 在協定裡是 `Extensible`，
+    // 上面的 `failed`、`message`、`meta` 本來就是協定外的，多這一格同理（#667）。
+    ...(verdict.code === undefined ? {} : { code: verdict.code }),
   };
 }
 
@@ -663,7 +708,7 @@ function actionCountOf(value: unknown): number {
   return Array.isArray(requests) ? requests.length : 0;
 }
 
-/** 這顆中斷停在閘門上的工具名。問答那一種沒有 `actionRequests`，是空的。見 {@link PendingInterrupt.gatedTools}。 */
+/** 這顆中斷停在核准上的工具名。問答那一種沒有 `actionRequests`，是空的。見 {@link PendingInterrupt.gatedTools}。 */
 function gatedToolsOf(value: unknown): string[] {
   const requests = (value as { actionRequests?: unknown } | null)?.actionRequests;
   if (!Array.isArray(requests)) return [];
@@ -1066,7 +1111,7 @@ export class ThreadPump {
     return this.#pending.size > 0;
   }
 
-  /** 停在核准閘門上的工具名，所有掛著的中斷合起來。見 {@link PendingInterrupt.gatedTools}。 */
+  /** 停在核准上的工具名，所有掛著的中斷合起來。見 {@link PendingInterrupt.gatedTools}。 */
   get gatedTools(): ReadonlySet<string> {
     return new Set([...this.#pending.values()].flatMap((pending) => pending.gatedTools));
   }
@@ -1553,10 +1598,12 @@ export class ThreadPump {
     }
     // 那幾張卡照上面寫的 `tool/result` 收（#297）。**不走日誌的訂閱者**：它只認有 run 的時候，
     // 見 `#noteVerdict`。文字就是寫進對話的那一句，模型看到的也是它。
+    // 碼跟寫進日誌的那個一樣（#667）：畫面比碼判「停在提問時被停止」，不比紅字的結尾。
     for (const call of dangling) {
       this.#closeCard(call.id, {
         failed: true,
         text: started(call.name) ? TOOL_ABORTED_TEXT : TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
+        code: started(call.name) ? TOOL_ABORTED : TOOL_ABORTED_BEFORE_DISPATCH,
       });
     }
     // 看得到那張核准卡的每一條下行都要知道「不必再問了、這一輪停了」。這一顆是合成的：
@@ -1924,7 +1971,7 @@ export class ThreadPump {
         ? // **逐 id 派送，不是裸值。** 鍵是那顆 `XXH3(checkpoint_ns)`，基座只把值送給
           // 那一顆 task；裸值會廣播給每一顆待決的 task（見 `PumpInput` 的 `interruptId`）。
           new Command({ resume: { [input.interruptId]: input.response } })
-        : { messages: [new HumanMessage(input.text)] };
+        : { messages: [humanMessageForTurnStart(turnStartOf(input))] };
 
     // 一輪一個中止控制器，照 dsh（`packages/core/agent-loop/src/agent.ts:149-155`）。
     const current: CurrentRun = {
@@ -2170,6 +2217,8 @@ export class ThreadPump {
     if (raw.method === 'custom' || channelOfMethod(raw.method) === undefined) {
       return;
     }
+    // 本體停在核准上的那顆 `tool-error` 不上線，見 {@link isApprovalSuspension}。
+    if (raw.method === 'tools' && isApprovalSuspension(raw.params.data)) return;
     yield this.#seal({
       method: raw.method,
       params: {
@@ -2411,7 +2460,7 @@ export class ThreadPump {
     // 記著只是漏（同 id 的下一輪不會有，但表會一直長）。
     const background = isBackgroundAddress(address);
     if (this.#current === undefined && !background) return;
-    const { callId, isError, message, meta } = event.data;
+    const { callId, isError, message, meta, error } = event.data;
     // 失敗的不帶由 `applyVerdict` 管（它只在成功那一支放 meta），這裡不再判一次。
     const capped = capToolResultMeta(meta, this.#toolTextMaxBytes);
     const verdict: ToolVerdict = {
@@ -2421,6 +2470,8 @@ export class ThreadPump {
       // 一個樣、重新整理另一個樣」。meta 的上限同理。
       text: toolResultText(message, this.#toolTextMaxBytes),
       ...(capped === undefined ? {} : { meta: capped }),
+      // 碼原樣交出（#667）；成功的不上線由 `applyVerdict` 管。
+      ...(error?.code === undefined ? {} : { code: error.code }),
     };
     if (background) {
       this.#closeCard(callId, verdict);
@@ -2437,10 +2488,12 @@ export class ThreadPump {
     this.#forwardedFinishes.delete(callId);
     const settled = applyVerdict(forwarded.data, verdict);
     // **meta 也要比**（#617）：基座那顆從來不帶 meta，只差這一格的時候不補發，卡就永遠拿不到它。
+    // **碼同理**（#667）：基座那顆從來不帶碼，`failed` 與文字都對得上、只差碼時不補發，碼就到不了畫面。
     if (
       settled.failed === forwarded.data.failed &&
       settled.message === forwarded.data.message &&
-      settled.meta === forwarded.data.meta
+      settled.meta === forwarded.data.meta &&
+      settled.code === forwarded.data.code
     ) {
       return;
     }

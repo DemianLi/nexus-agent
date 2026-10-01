@@ -15,12 +15,12 @@
  * 3. **披露那一行**：一台正在把每一條 thread 的對話寫上磁碟的 server，畫面上要看得出來。
  */
 
-import { mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
+import { appendFile, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDeliverableClient, createWireClient } from '@nexus/wire';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { SESSION_LOG_OFF_DISCLOSURE } from './assembly-root.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
@@ -388,6 +388,51 @@ describe('重開 server 之後接得回同一條 thread', () => {
     expect(count(events, 'turn/start')).toBe(2);
   });
 
+  /**
+   * 當掉那一輪的收尾寫回檔上（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：上一個行程死在
+   * 一輪中間、一次工具呼叫沒結果，續接之後檔上依序是原有事件、補的 `tool/result`、`turn/end {interrupted}`、
+   * `session/end-seed`；再重開一次，不再補。
+   */
+  it('當掉的那一輪：補結與 turn/end interrupted 寫在 end-seed 前面，再重開不重補', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first, 'alpha');
+    await stop(first);
+
+    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const before = readEvents(await readFile(log, 'utf8'));
+    const tail = [
+      { type: 'turn/start', data: { kind: 'message', text: '跑到一半' } },
+      { type: 'tool/call', data: { callId: 'dead-1', name: 'write_file', arguments: '{}' } },
+    ].map((event, index) => ({ ...event, seq: before.length + index, time: 1 }));
+    await appendFile(log, `${tail.map((event) => JSON.stringify(event)).join('\n')}\n`);
+
+    const second = await start(root);
+    await driveTurn(second, 'alpha');
+    await stop(second);
+    const third = await start(root);
+    await driveTurn(third, 'alpha');
+    await stop(third);
+
+    const events = readEvents(await readFile(log, 'utf8'));
+    expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+    const at = before.length + 2;
+    expect(events.slice(at, at + 3).map((event) => event.type)).toEqual([
+      'tool/result',
+      'turn/end',
+      'session/end-seed',
+    ]);
+    expect(events[at]).toMatchObject({
+      data: { callId: 'dead-1', isError: true, error: { code: 'TOOL_OUTCOME_UNKNOWN' } },
+    });
+    expect(events[at + 1]).toMatchObject({ data: { reason: { kind: 'interrupted' } } });
+    expect(
+      events.filter(
+        (event) => event.type === 'turn/end' && event.data.reason?.kind === 'interrupted',
+      ),
+    ).toHaveLength(1);
+  });
+
   it('日誌壞了：這條 thread 起不來，檔案一個位元組都沒動', async () => {
     const root = await tmp('nexus-serve-resume-');
     const first = await start(root);
@@ -549,5 +594,45 @@ describe('重開 server 之後接得回同一條 thread', () => {
     await stop(second);
     // 前提：預設是 workspace-write，所以看得到 read-only 才證明是從日誌回來的。
     expect(JSON.stringify(reported)).toContain('read-only');
+  });
+
+  /**
+   * 日誌裡的模式名認不得（[#699](https://github.com/DemianLi/nexus-agent/issues/699)）：照 dsh 讀回時
+   * 不擋，接得回來；sandbox-policy 的配套入口在重播時報違規。serve 不傳違規去處，走 runner 預設的
+   * `console.error`，進的是伺服器日誌——所以收的是它。
+   */
+  it('最後一顆 `sandbox/mode` 被改成 bogus：接得回來，伺服器日誌報出帶 bogus 的違規', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const workspace = await tmp('nexus-serve-resume-ws-');
+    const first = await start(root, ['--workspace', workspace]);
+    await (await serveClient(first)).slashRun('alpha', '/sandbox read-only');
+    await stop(first);
+
+    // 逐行改，只動最後一顆的 `data.mode`（命令參數裡也有 `read-only`）。
+    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const events = readEvents(await readFile(log, 'utf8'));
+    const last = events.findLastIndex((event) => event.type === 'sandbox/mode');
+    expect(events[last]).toMatchObject({ data: { mode: 'read-only' } });
+    const rewritten = events.map((event, index) =>
+      index === last ? { ...event, data: { mode: 'bogus' } } : event,
+    );
+    await writeFile(log, `${rewritten.map((event) => JSON.stringify(event)).join('\n')}\n`);
+
+    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const second = await start(root, ['--workspace', workspace]);
+      const reported = await (await serveClient(second)).slashRun('alpha', '/sandbox');
+      await stop(second);
+      // 前提：真的接回來了，那一格是日誌上的 bogus。
+      expect(JSON.stringify(reported)).toContain('bogus');
+      const violations = errors.mock.calls
+        .map((args) => args.map(String).join(' '))
+        .filter((line) => line.includes('"@nexus/plugin-sandbox-policy"'));
+      expect(violations.length).toBeGreaterThanOrEqual(1);
+      expect(violations[0]).toContain(`seq ${String(last)}`);
+      expect(violations[0]).toContain('"bogus"');
+    } finally {
+      errors.mockRestore();
+    }
   });
 });

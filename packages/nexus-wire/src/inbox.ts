@@ -86,7 +86,11 @@ export interface SettleNoticePayload {
   readonly reason?: WireSettleReason;
 }
 
-/** 排著的一件。結構上是 `@nexus/core` 的 `QueuedInput`，重新宣告的理由同 `SlashDescriptor`。 */
+/**
+ * 排著的一件。結構上是 `@nexus/core` 的 `QueuedInput`，這裡另寫一份。命令與回饋的詞彙已改成 core 的別名
+ * （[#683](https://github.com/DemianLi/nexus-agent/issues/683)，見 `protocol.ts` 的 `SlashDescriptor`）；這一組還沒，
+ * 型別歸屬見 [#679](https://github.com/DemianLi/nexus-agent/issues/679)。
+ */
 export interface WireQueuedInput {
   /** 就是送出時 `run.start` 回的 `run_id`：畫面拿它對上自己送出的那一句。改過之後不變。 */
   readonly id: string;

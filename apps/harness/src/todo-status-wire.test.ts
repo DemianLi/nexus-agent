@@ -1,7 +1,7 @@
 /**
  * core 的 `TodoStatus` 與 wire 的 `WireTodoItem['status']` 是兩份各自宣告的聯集（wire 要在瀏覽器裡跑，
  * 不相依 core，所以沿用「wire 重新宣告、harness 鏡像」的慣例，見 `conversation.ts` 的說明）。
- * harness 是唯一同時看得到兩邊的地方，所以雙向相等由這裡釘住（[#666](https://github.com/DemianLi/nexus-agent/issues/666)）。
+ * 雙向相等由這裡釘住（[#666](https://github.com/DemianLi/nexus-agent/issues/666)）。
  *
  * **要在型別層比，而且要兩個方向**：wire 沒有執行期清單。單向可指派只擋得住其中一邊多一格
  * （`todosData` 把 core 的值塞進 wire 的欄位，core 多一格會在那裡編不過），擋不住 core 少一格、

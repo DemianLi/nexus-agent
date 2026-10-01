@@ -43,6 +43,7 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import {
   assertInvariantSelection,
+  createFsService,
   createHostServicesPlugin,
   createInvariantRunner,
   createSessionRunner,
@@ -70,7 +71,9 @@ import {
   type SessionRegistry,
   type SessionTelemetrySharingStatus,
   type RepeatReminderSettings,
+  type SearchOverflowOptions,
   type SummarizationSettings,
+  type TokenAnchorBook,
   type ToolResultPruneConfig,
 } from '@nexus/core';
 import type { SystemPromptVariables } from '@nexus/plugin-system-prompt';
@@ -92,6 +95,11 @@ import type { ToolResultStashOptions } from './tool-result-stash.js';
 import { assertHarnessProfileDeclared, describeHarnessProfileEffects } from './harness-profile.js';
 import type { HarnessProfileEffects } from './harness-profile.js';
 import { DEFAULT_RECURSION_LIMIT, RECURSION_LIMIT_SERVICE } from './settings/recursion-limit.js';
+import {
+  DEFAULT_MAX_PARALLEL_TOOL_CALLS,
+  MAX_PARALLEL_TOOL_CALLS_SERVICE,
+} from './settings/agent-loop.js';
+import { SEARCH_RESULT_LIMITS_SERVICE } from './settings/tool-fs-search.js';
 
 /** 組裝時掉了的一列（#751）：載入器交出來的原因，加上它是清單上哪一個條目。 */
 export interface AssemblyDrop {
@@ -264,6 +272,11 @@ export interface CreateNexusAgentOptions {
    * 數值的理由見 [`summarization.ts`](../../../packages/nexus-core/src/summarization.ts)。
    */
   readonly summarization?: Partial<SummarizationSettings> | false;
+  /**
+   * 錨定估算的帳，原樣轉給 `FoldOptions.tokenAnchorBook`（[#702](https://github.com/DemianLi/nexus-agent/issues/702)）。
+   * **省略即這次組裝各建一本**：eval 每題一個組裝，題與題之間本來就不該借彼此的第一次；`runServe` 建一本傳給每條 thread。
+   */
+  readonly tokenAnchorBook?: TokenAnchorBook;
   /**
    * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到 `DEFAULT_TOOL_RESULT_PRUNE`
    * （dsh 的 8192／4096／1024）上，`false` 是摘要照跑、只是不先剪。**省略時由清單上
@@ -570,6 +583,41 @@ function recursionLimitFor(registry: PluginRegistry, options: CreateNexusAgentOp
   return registry.services.get(RECURSION_LIMIT_SERVICE) ?? DEFAULT_RECURSION_LIMIT;
 }
 
+/**
+ * 每步同時在跑的工具呼叫上限（[#711](https://github.com/DemianLi/nexus-agent/issues/711)）：`#settings/agent-loop` 那一列
+ * 提供的值，沒有那一列就是 {@link DEFAULT_MAX_PARALLEL_TOOL_CALLS}。兩態，理由同 {@link recursionLimitFor} 少一態那段：
+ * 這一列關不掉，就算關得掉答案也一樣是內建值。沒有旗標，所以也沒有第一態。帶進 LangGraph 的 `maxConcurrency`，見
+ * `settings/agent-loop.ts` 的檔頭。
+ *
+ * @param registry - 已經跑完 `loadPlugins()` 的 registry。
+ * @returns 同一步最多幾顆工具呼叫同時在跑。
+ */
+function maxParallelToolCallsFor(registry: PluginRegistry): number {
+  return registry.services.get(MAX_PARALLEL_TOOL_CALLS_SERVICE) ?? DEFAULT_MAX_PARALLEL_TOOL_CALLS;
+}
+
+/**
+ * 搜尋結果的筆數上限（[#735](https://github.com/DemianLi/nexus-agent/issues/735)）：`#settings/tool-fs-search` 那一列
+ * 提供了服務才掛，見那一列的檔頭。完整結果存進工具結果暫存（同外溢層那一份存檔服務）；沒有暫存（eval、spike、沒有會話
+ * 日誌的組裝）時照 dsh 只留前段、註明沒存到。
+ */
+function searchOverflowFor(
+  registry: PluginRegistry,
+  stashRoute: StashRoute | undefined,
+  options: CreateNexusAgentOptions,
+): { readonly searchOverflow?: SearchOverflowOptions } {
+  const limits = registry.services.get(SEARCH_RESULT_LIMITS_SERVICE);
+  if (limits === undefined) return {};
+  const warn = options.toolResultStash?.warn;
+  return {
+    searchOverflow: {
+      limits,
+      ...(stashRoute !== undefined && { store: stashRoute.spillStore(TOOL_RESULT_STASH_PREFIX) }),
+      ...(warn !== undefined && { warn }),
+    },
+  };
+}
+
 /** 模型物件自己報的型號；沒有的話退到它的種類名，每個 `BaseChatModel` 都有。字串形式的模型（基座的 `provider:model`）原樣用。 */
 function modelLabelOf(model: AgentModel): string {
   if (typeof model === 'string') return model;
@@ -607,6 +655,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       },
       'system-prompt-variables',
     ),
+    // **工具拿 backend 的那一格**（#694）：這裡先佔位，`foldRegistry` 折完把折出來的那一個填進去，
+    // `present` 與 `submit_record` 被叫時才讀。理由見 `@nexus/core` 的 `fs-service.ts`。
+    createHostServicesPlugin({ fs: createFsService() }, 'fs'),
     ...options.plugins,
     ...(delegation === undefined ? [] : [delegation.entry()]),
   ];
@@ -659,6 +710,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
             }),
           },
         }),
+      ...searchOverflowFor(registry, stashRoute, options),
       toolOrder: options.toolOrder,
       baseToolNames: options.baseToolNames ?? BASE_TOOL_NAMES,
       ...(options.subagentToolFilter !== undefined && {
@@ -669,6 +721,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       store: options.store,
       approvals: options.approvals,
       ...(options.summarization !== undefined && { summarization: options.summarization }),
+      ...(options.tokenAnchorBook !== undefined && { tokenAnchorBook: options.tokenAnchorBook }),
       ...(options.toolResultPruning !== undefined && {
         toolResultPruning: options.toolResultPruning,
       }),
@@ -687,7 +740,12 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     const agent = createDeepAgent({
       ...params,
       ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
-    }).withConfig({ recursionLimit: recursionLimitFor(registry, options) });
+    }).withConfig({
+      recursionLimit: recursionLimitFor(registry, options),
+      // 每步的工具呼叫各是一個 pregel task，`maxConcurrency` 就是同時起跑的上限（#711）；一次性 `task` 子代理經執行脈絡
+      // 繼承同一個值（實測）。
+      maxConcurrency: maxParallelToolCallsFor(registry),
+    });
 
     // 接上去但還沒收掉的協調器。**組裝點自己記著**，因為呼叫端可能只叫 `dispose()`
     // 就走人——那時 `shutdown` 標記與後端的排空都還沒發生，遙測會少掉最後一段。
@@ -733,6 +791,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         ...(model !== undefined && { model }),
       }).withConfig({
         recursionLimit: recursionLimitFor(registry, options),
+        // 平行工具呼叫上限同理（#711）：背景圖不在 root 那次 invoke 的執行脈絡裡，繼承不到，要自己帶。
+        maxConcurrency: maxParallelToolCallsFor(registry),
       });
     };
 

@@ -6,19 +6,22 @@
  * 分得開的唯一地方。不變量伴生**結構上驗不到**這件事：它只看得到日誌那一份。
  */
 
+import { HumanMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
 import {
   createGoalPlugin,
   GOAL_TOOL_AUTHORITY_MESSAGE,
+  GOAL_WRAPUP_MARKER,
   GOALS_SERVICE,
   renderGoalRoundPrompt,
   renderWrapupContext,
 } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import type { GoalServices } from '@nexus/plugin-goal';
-import { fromLoggedMessage, GOAL_WRAPUP_MARKER } from '@nexus/core';
+import { fromLoggedMessage, REPEAT_REMINDER_MARKER } from '@nexus/core';
+import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { SessionEventMap, SessionLog } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -85,6 +88,8 @@ async function build(options: {
   readonly threadId: string;
   readonly withDriver: boolean;
   readonly gated?: boolean;
+  /** 多掛的條目（例如一顆會被重複提醒追蹤的工具）。 */
+  readonly extraPlugins?: readonly PluginEntry[];
   readonly portOverrides?: Partial<GoalDriverPort>;
 }): Promise<{
   pump: ThreadPump;
@@ -103,6 +108,7 @@ async function build(options: {
       plugin,
       createGoalInvariantPlugin(),
       ...(options.gated === true ? [GATED_FIXTURE] : []),
+      ...(options.extraPlugins ?? []),
     ],
     checkpointer: new MemorySaver(),
     onInvariantViolation: (error) => void violations.push(error.message),
@@ -120,8 +126,8 @@ async function build(options: {
     options.withDriver ? port : undefined,
   );
   late.log = pump.sessionLog;
-  // **伴生接在參與者之前**，同 `wire-handler.ts` 那條線的順序：參與者一裝上去就可能記
-  // 東西，而那些東西該被已經在看的檢查看到。
+  // 先接伴生、再接參與者，同 `composeAttachSessions` 的順序。順序不承重（不變量 runner 接上時會重播日誌，
+  // 參與者裝上去寫的東西不論誰先接都被檢查看到），這裡跟著產品的順序只是為了讓讀的人看到一致的形狀。
   const detachInvariants = attachInvariants(pump.sessions);
   const detachSession = attachSession(pump.sessions);
   return {
@@ -395,6 +401,51 @@ describe('掛了旗標', () => {
     await settle(pump);
     // 收回寫的是一輪 `resume`（帶 aborted 收尾），之後只有人說的那一句，沒有第二個續行輪。
     expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal', 'resume', 'message']);
+    await stop();
+  });
+
+  /**
+   * **續行輪次的頭不清零重複工具提醒的計數**（[#662](https://github.com/DemianLi/nexus-agent/issues/662)）。
+   *
+   * 兩個續行輪裡模型各把同一個呼叫重複兩次（共四次，中間隔著一個續行輪的頭）：第三次起計數一路累積，所以
+   * 第 2 輪的第 1 次呼叫是總第 3 次，下一次模型呼叫的 prompt 要帶提醒。頭被當成人講話而清零的話，這裡只有
+   * 第 1 次，一則提醒都沒有，而且沒有任何東西報錯。
+   */
+  it('續行輪次的頭不清零：第 2 輪的第 1 次呼叫是總第 3 次，模型拿到提醒', async () => {
+    const echo = { name: ECHO_TOOL_NAME, args: { message: 'x' } };
+    const { pump, state, stop } = await build({
+      turns: [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 2 } },
+          ],
+        },
+        { content: '建好了。' },
+        { content: '', toolCalls: [echo] },
+        { content: '', toolCalls: [echo] },
+        { content: '第一輪結束。' },
+        { content: '', toolCalls: [echo] },
+        { content: '第二輪結束。' },
+      ],
+      threadId: 'driver-reminder',
+      withDriver: true,
+      extraPlugins: [createEchoPlugin()],
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal', 'goal']);
+    const reminders = state.prompts.map(
+      (prompt) =>
+        prompt.filter(
+          (message) =>
+            HumanMessage.isInstance(message) &&
+            message.additional_kwargs[REPEAT_REMINDER_MARKER] != null,
+        ).length,
+    );
+    // 最後一次模型呼叫（第 2 輪的收尾）之前的 prompt 有一則提醒，之前的每一次都沒有。
+    expect(state.prompts).toHaveLength(7);
+    expect(reminders).toEqual([0, 0, 0, 0, 0, 0, 1]);
     await stop();
   });
 

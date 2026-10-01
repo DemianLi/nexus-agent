@@ -46,6 +46,7 @@ import type { SessionRegistry } from './session-registry.js';
 import type { SessionLog } from './session-log.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 import type { FeedbackService } from './feedback.js';
+import type { FsService } from './fs-service.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
 import type { SummarizationSettings } from './summarization.js';
 import type { ToolResultPruneConfig } from './tool-result-pruner.js';
@@ -276,6 +277,11 @@ export interface NexusServices {
    * 組裝點用的；產品路徑由組裝點明著算一次提供出來。
    */
   channel: ApprovalChannel;
+  /**
+   * 工具實際讀寫的那一個 backend（[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。名字見
+   * {@link ./fs-service.ts | FS_SERVICE}。值是一格 fold 之後才填的把手，**被叫時才讀**；理由見那個模組的偏離登記。
+   */
+  fs: FsService;
 }
 
 /** 已經宣告過型別的服務名。空表時是 `never`，那時只有寬的多載可用。 */
@@ -304,12 +310,19 @@ export type KnownServiceName = keyof NexusServices & string;
  * cordis 的 `inject` 是反應式的——缺件時 fiber 停在 INACTIVE，等到有人提供才啟動
  * （`vendor/cordis/src/fiber.ts:611-622` 的 `_refresh`）。我們的載入是**一趟到底**的
  * 命令式折疊，deepagents / LangGraph 沒有 context 樹與 fiber 狀態機可以表達那件事，
- * 所以退到最接近的實作：**缺件當場失敗**。
+ * 所以退到最接近的實作：**不等**。這句話對兩個讀法的意思不一樣（[#687](https://github.com/DemianLi/nexus-agent/issues/687)）：
  *
- * 直接後果：**清單順序在「誰提供、誰消費」之間是承重的**。今天沒有人踩到——#459 的五個
- * 協作者全是「組裝點提供、plugin 消費」或反過來，一條 plugin → plugin 的服務相依都沒有
- * ——所以組裝點把自己那幾個放在清單最前面就夠了。**plugin → plugin 的服務相依不在
- * #459 的射程內**；真要的那天，順序才會變成承重的，那時再決定是拓撲排序還是照 dsh 做成惰性。
+ * - **`use` 缺件當場拋**，排錯序也一樣（提供者排在後面，讀的那一刻它還不在）。
+ * - **`get` 缺件回 `undefined`**，排錯序也一樣——它分不出「沒人提供」與「提供者還沒載到」。所以軟讀的人
+ *   要照 dsh 自己在「需要卻缺」時拋：tool-bash 在 apply 當下 `ctx.get('sandboxPolicy')`，有圍堵卻拿不到
+ *   就拋（`references/deepseek-harness/packages/shell/tool-bash/src/index.ts:215-217`，SHA `477b4f4`）。
+ *   要等到被叫時才需要的東西，就在被叫時才讀（例如 `fs` 服務，見 {@link ./fs-service.ts}）。
+ *
+ * 直接後果：**清單順序在「誰提供、誰消費」之間是承重的**。今天沒有人踩到——在 `apply` 當下讀服務的
+ * 全是「組裝點提供、plugin 消費」，一條 plugin → plugin 的服務相依都沒有，所以組裝點把自己那幾個放在
+ * 清單最前面就夠了。守這個「沒有」的絆索是 `apps/harness/src/shipped-service-reads.test.ts`。**plugin →
+ * plugin 的服務相依不在 #459 的射程內**；真要的那天，順序才會變成承重的，那時再決定是拓撲排序還是照 dsh
+ * 做成惰性。
  */
 export interface ServiceRegistrationPoint {
   /**
@@ -331,7 +344,8 @@ export interface ServiceRegistrationPoint {
   use<T = unknown>(name: string): T;
   /**
    * 取一個**可以不在**的服務。軟相依，對應 dsh 的 `ctx.get('sandboxPolicy')`
-   * （`references/deepseek-harness/packages/shell/tool-bash/src/index.ts:193`）。
+   * （`references/deepseek-harness/packages/shell/tool-bash/src/index.ts:215-217`，SHA `477b4f4`）。
+   * 缺件與排錯序都回 `undefined`；「需要卻缺」要由呼叫的人自己拋，同上面那段偏離登記。
    * @param name - 服務名。
    * @returns 服務物件，或沒人提供時的 `undefined`。
    */

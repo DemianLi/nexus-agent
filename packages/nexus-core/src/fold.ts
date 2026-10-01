@@ -33,6 +33,7 @@ import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
 import { createOutputSchemaMiddleware } from './output-schema.js';
 import { createFsToolErrorsMiddleware, recordBackendOutcomes } from './fs-tool-errors.js';
+import { FS_SERVICE, settleFsService } from './fs-service.js';
 import { createReadContinuationMiddleware, recordReadExtent } from './read-continuation.js';
 import { recordToolResultMeta } from './tool-result-meta.js';
 import {
@@ -43,6 +44,8 @@ import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 import { createMaxTokensCarrier, createMaxTokensMiddleware } from './max-tokens.js';
 import { createSpillPolicyMiddleware } from './spill-policy.js';
 import type { SpillPolicyOptions } from './spill-policy.js';
+import { capSearchResults, createSearchOverflowMiddleware } from './search-overflow.js';
+import type { SearchOverflowOptions } from './search-overflow.js';
 import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
@@ -71,6 +74,7 @@ import {
   SUMMARIZATION_SERVICE,
 } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
+import { TokenAnchorBook } from './token-estimate.js';
 import { toolCallIdOf, toolRefusal } from './tool-events.js';
 import {
   resolveToolResultPruneConfig,
@@ -248,6 +252,15 @@ export interface FoldOptions {
    */
   summarization?: Partial<SummarizationSettings> | false;
   /**
+   * 錨定估算的帳（[#588](https://github.com/DemianLi/nexus-agent/issues/588)、[#702](https://github.com/DemianLi/nexus-agent/issues/702)）：
+   * 摘要器的預算層用它估「這份請求送出去會是幾個 token」，並在每次呼叫回來時記下供應商報的實數。
+   *
+   * **帳由進入點建、注入**，不是模組全域。要跨 thread 借錨的進入點（`runServe`）建一本傳給每一條 thread 的組裝；
+   * **省略即這次組裝各建一本**——這次組裝裡的 root 與子代理共用它（`foldSummarizer` 只建一次），不同組裝彼此不借。
+   * 只在摘要開著時有作用。
+   */
+  tokenAnchorBook?: TokenAnchorBook;
+  /**
    * 摘要器外面那把工具結果剪刀的預算。給物件就逐格淺合併到
    * {@link DEFAULT_TOOL_RESULT_PRUNE} 上，`false` 是明著不要——摘要照跑，只是不先剪。
    *
@@ -313,6 +326,15 @@ export interface FoldOptions {
    * 沒有 closure 狀態，root 與每個子代理共用同一份實例（儲存本身按會話分）。見 {@link ./spill-policy.ts}。
    */
   spillPolicy?: SpillPolicyOptions;
+
+  /**
+   * 搜尋結果的筆數上限（[#735](https://github.com/DemianLi/nexus-agent/issues/735)）：`grep` 命中、`glob`／`ls` 路徑
+   * 超過上限時，行內留前段，完整的存進 `store`。**省略就不掛**——基座的三顆照原樣，超過 80,000 字元自己截掉。
+   *
+   * 沒有 backend、或 root／任何子代理有 `permissions` 規則時也不掛（同搜尋卡，見 {@link searchMetaAllowed}）。
+   * 見 {@link ./search-overflow.ts}。
+   */
+  searchOverflow?: SearchOverflowOptions;
 
   /**
    * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著，`false` 是明著關掉。
@@ -458,6 +480,9 @@ export function foldRegistry(
   // **backend 提前折**：策略要的版本 token 得從工具實際讀寫的那一個取，所以它不能等到
   // 下面才算。摘要器刻意拿的是兜底那個，兩者的差別見各自的文件。
   const backend = foldBackend(registry, options.defaultBackend);
+  // **工具拿的也是這一個**（#694）：組裝點提供了 `fs` 那一格的話，在這裡填。填的是折出來的這個，不是兜底那個、
+  // 也不是下面交給基座前再包上記錄層的那一份——後者只給基座的檔案工具記結果用。見 {@link ./fs-service.ts}。
+  settleFsService(registry.services.get(FS_SERVICE), backend);
   const observationPolicy = foldObservationPolicy(registry, options, backend);
   // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上
   // 那一個是同一個實例，見 {@link ./fs-tool-errors.ts}。無狀態，一份走遍 root 與每個 subagent。
@@ -474,6 +499,16 @@ export function foldRegistry(
   // **plugin middleware 在這裡就攤平，只攤一次**：要 backend 的那一種（`useWithBackend`，#388）
   // 建出來的實例得走遍 root 與每個子代理，這裡各算一次的話兩邊拿到的會是兩份。
   const plugins = pluginMiddleware(registry, backend);
+  // 搜尋結果的筆數上限（#735）：middleware 與 backend 包裝是一對，只在這裡一起組（#698）。沒有 backend、或有
+  // `permissions` 規則（同搜尋卡）就整對不掛。見 {@link ./search-overflow.ts}。
+  const searchOverflow =
+    options.searchOverflow !== undefined &&
+    backend !== undefined &&
+    searchMetaAllowed(registry, permissions)
+      ? options.searchOverflow
+      : undefined;
+  const searchOverflowMiddleware =
+    searchOverflow === undefined ? undefined : createSearchOverflowMiddleware(searchOverflow);
   const subagentPlugins = subagentPluginMiddleware(plugins);
   // 工具過濾（#707）遮的基座工具：過濾對每個子代理一樣，所以名單一樣；基座工具不可能被子代理自己同名註冊（基座拒絕），
   // 不必扣自帶的。
@@ -503,6 +538,9 @@ export function foldRegistry(
     // 外溢層在 plugin 與核准閘門的外側、圍堵的內側：內層每一顆換過的結果它都看得到，而圍堵寫進日誌的是它換過的那一則
     // （紀錄只記預覽，同 dsh `tool-calls.ts:152-156`）。見 {@link ./spill-policy.ts}。
     shared('spill', spill),
+    // 搜尋結果的筆數上限（#735）緊貼外溢層內側：外溢層看到的是它換過的那則（行內前段加定位），同 dsh `tools/post-execute`
+    // 先於外溢；在 plugin 與核准閘門外側。無狀態、一份走遍 root 與每個子代理（槽逐次呼叫開）。見 {@link ./search-overflow.ts}。
+    shared('searchOverflow', searchOverflowMiddleware),
     // plugin 以 `prepend` 掛的：在中止內側、閘門外側（#327）。子代理拿的是同一批實例，去掉撞名摘要器的那一顆。
     {
       name: 'plugins.prepended',
@@ -589,7 +627,10 @@ export function foldRegistry(
   if (backend !== undefined) {
     params.backend = recordBackendOutcomes(
       recordReadExtent(
-        recordToolResultMeta(backend, { search: searchMetaAllowed(registry, permissions) }),
+        // 筆數上限的包裝在搜尋卡那層內側：卡片看到的是截過的前段，跟模型同一份。
+        recordToolResultMeta(searchOverflow === undefined ? backend : capSearchResults(backend), {
+          search: searchMetaAllowed(registry, permissions),
+        }),
       ),
     );
   }
@@ -1186,7 +1227,9 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
         '地方放。給一個 default backend、明著傳 `summarization: false`，或在部署設定裡把' +
         ' `@nexus/core/summarization` 那一列標成 `disabled: true`。',
     );
-  return () => createSummarizer(backend, settings, registry.sessions, pruning);
+  // **一次組裝一本，root 與子代理共用**：放在工廠外面，每呼叫一次工廠才不會各建一本、把借錨切碎。
+  const book = options.tokenAnchorBook ?? new TokenAnchorBook();
+  return () => createSummarizer(backend, settings, book, registry.sessions, pruning);
 }
 
 /**

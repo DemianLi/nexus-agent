@@ -23,6 +23,7 @@ import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
 import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
 import { SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME } from './subagent-tool-filter.js';
 import { SPILL_POLICY_MIDDLEWARE_NAME } from './spill-policy.js';
+import { SEARCH_OVERFLOW_MIDDLEWARE_NAME } from './search-overflow.js';
 import { STEP_INBOX_MIDDLEWARE_NAME } from './step-inbox.js';
 import {
   TURN_CANCEL_MIDDLEWARE_NAME,
@@ -45,6 +46,8 @@ import {
 } from './summarization.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, toolResultPrunerPlugin } from './tool-result-pruner.js';
 import type { FoldOptions } from './fold.js';
+import { createFsService } from './fs-service.js';
+import { createHostServicesPlugin } from './host-services.js';
 import { loadPlugins } from './load.js';
 import { createRegistry } from './registry.js';
 import { fakeBackend, fakeMiddleware, fakePlugin, fakeSubAgent, fakeTool } from './fixtures.js';
@@ -1724,6 +1727,53 @@ describe('useWithBackend', () => {
 });
 
 /**
+ * `fs` 服務：工具拿 backend 的那一格（[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。
+ *
+ * 組裝點在 `apply` 裡先提供一格，fold 折完填進去。要釘的是**填的是折出來的那一個**：產品組裝今天零個
+ * `backend.mount()`，折出來的就是兜底那個，所以填成兜底那個的突變在 harness 那側一條都不會紅，只有這裡的
+ * 第一條量得到。
+ */
+describe('fs 服務', () => {
+  const marker = (backend: unknown): string =>
+    (backend as { nexusFakeBackend?: string }).nexusFakeBackend ?? '（不是假 backend）';
+
+  it('掛了路由時，那一格裡是包好的 CompositeBackend，不是組裝點給的那一個', async () => {
+    const fs = createFsService();
+    await fold(
+      [
+        createHostServicesPlugin({ fs }),
+        fakePlugin('store', (r) => void r.backend.mount('/memories/', fakeBackend('store'))),
+      ],
+      { defaultBackend: fakeBackend('default') },
+    );
+    const folded = fs.backend();
+    expect(CompositeBackend.isInstance(folded)).toBe(true);
+    expect((folded as CompositeBackend).routePrefixes).toEqual(['/memories/']);
+  });
+
+  it('沒有路由時就是兜底那一個', async () => {
+    const fs = createFsService();
+    const defaultBackend = fakeBackend('default');
+    await fold([createHostServicesPlugin({ fs })], { defaultBackend });
+    expect(marker(fs.backend())).toBe('default');
+  });
+
+  it('fold 之前、以及這次組裝一個 backend 都沒有時，讀到的是 undefined', async () => {
+    const fs = createFsService();
+    expect(fs.backend()).toBeUndefined();
+    await fold([createHostServicesPlugin({ fs })]);
+    expect(fs.backend()).toBeUndefined();
+  });
+
+  it('不是 createFsService 建的那一種不碰：誰提供的就由誰說了算', async () => {
+    const own = fakeBackend('own');
+    const fs = { backend: () => own };
+    await fold([createHostServicesPlugin({ fs })], { defaultBackend: fakeBackend('default') });
+    expect(marker(fs.backend())).toBe('own');
+  });
+});
+
+/**
  * 「先讀後改」的條目——**三態，不是四態**。
  *
  * 它沒有設定，所以「條目在場」與「沒有人問過部署設定層」的正確答案都是「照預設開著」，
@@ -2275,6 +2325,7 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
           maxInlineTokens: 1000,
           store: { saveText: () => Promise.reject(new Error('這條測試不會存')) },
         },
+        searchOverflow: { limits: { grepMaxMatches: 250, globMaxResults: 100 } },
         baseToolNames: gatedTools,
         subagentToolFilter: { deny: ['write_file'] },
         checkpointer: true,
@@ -2289,6 +2340,7 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
       expect.arrayContaining([
         STEP_INBOX_MIDDLEWARE_NAME,
         SPILL_POLICY_MIDDLEWARE_NAME,
+        SEARCH_OVERFLOW_MIDDLEWARE_NAME,
         OBSERVATION_POLICY_MIDDLEWARE_NAME,
         SUMMARIZATION_MIDDLEWARE_NAME,
         REPEAT_REMINDER_MIDDLEWARE_NAME,

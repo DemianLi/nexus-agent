@@ -4,11 +4,12 @@ import { describe, expect, it } from 'vitest';
 import {
   createRepeatReminder,
   DEFAULT_REPEAT_REMINDER,
-  GOAL_WRAPUP_MARKER,
   REPEAT_REMINDER_MARKER,
   resolveRepeatReminderSettings,
 } from './repeat-reminder.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
+import { sourceKwargs } from './message-source.js';
+import type { MessageSource } from './message-source.js';
 
 /** `beforeModel` 拿出來直接呼叫用的形狀。 */
 type BeforeModel = (state: {
@@ -219,11 +220,14 @@ describe('偵測：連續同工具同參數', () => {
 });
 
 describe('goal 收尾指示這則合成訊息', () => {
-  /** 一則帶記號的收尾指示，形狀同 `@nexus/plugin-goal` 造的那顆。 */
+  /** 一則帶來源的收尾指示，形狀同 `@nexus/plugin-goal` 造的那顆（來源 `plugin`）。 */
   function wrapup(): HumanMessage {
     return new HumanMessage({
       content: '<goal_complete>\n…\n</goal_complete>',
-      additional_kwargs: { [GOAL_WRAPUP_MARKER]: { action: 'complete' } },
+      additional_kwargs: {
+        nexus_goal_wrapup: { action: 'complete' },
+        ...sourceKwargs({ kind: 'plugin', plugin: 'update_goal' }),
+      },
     });
   }
 
@@ -264,6 +268,55 @@ describe('goal 收尾指示這則合成訊息', () => {
     const update = hook({ messages });
     expect((update?.messages ?? []).map((message) => message.text)).toHaveLength(1);
     expect(update?.messages[0]?.text).toContain(GENTLE_HEAD);
+  });
+});
+
+/**
+ * **只有人講話才清零，生產者自己宣告來源**（[#662](https://github.com/DemianLi/nexus-agent/issues/662)）。
+ *
+ * 判準讀的是 `additional_kwargs` 上通用的來源，不是 core 裡一張記號白名單：續行輪次的頭、插件在一輪中間注入的
+ * 訊息，都不必在這裡登記。
+ */
+describe('誰算「人講話」：看來源，不看記號白名單', () => {
+  /** 兩次呼叫、一則 `human`、一次呼叫：總共第 3 次命中門檻，除非 `human` 把鏈清零。 */
+  function hitsAfter(human: HumanMessage): number {
+    const messages: BaseMessage[] = [new HumanMessage('開始')];
+    for (const [index, call] of same(2).entries())
+      messages.push(...turn(call.name, call.args, `s${index}`));
+    messages.push(human);
+    messages.push(...turn('grep', { pattern: 'x' }, 's2'));
+    return (hookOf()({ messages })?.messages ?? []).length;
+  }
+  const withSource = (source: MessageSource) =>
+    new HumanMessage({ content: 'x', additional_kwargs: sourceKwargs(source) });
+
+  it('續行輪次的頭（goal 來源）不清零：兩個續行輪各重複兩次，第 3 次拿到提醒', () => {
+    expect(hitsAfter(withSource({ kind: 'goal', goalId: 'g', revision: 1, round: 2 }))).toBe(1);
+  });
+
+  it('沒有來源的 HumanMessage 是人講的話：清零', () => {
+    expect(hitsAfter(new HumanMessage('等一下'))).toBe(0);
+  });
+
+  it('來源是 user（輪中插話）：清零', () => {
+    expect(hitsAfter(withSource({ kind: 'user' }))).toBe(0);
+  });
+
+  it('沒見過的 kind 也不清零——新的生產者不必改提醒器', () => {
+    expect(hitsAfter(withSource({ kind: 'some-future-producer' }))).toBe(1);
+    for (const kind of ['subagent-settled', 'agent-message', 'session-reference', 'plugin']) {
+      expect(hitsAfter(withSource({ kind }))).toBe(1);
+    }
+  });
+
+  it('來源形狀不對（沒有字串 kind）當作沒有來源：清零', () => {
+    for (const bad of [null, 'goal', 3, { kind: 3 }, {}]) {
+      const message = new HumanMessage({
+        content: 'x',
+        additional_kwargs: { nexus_source: bad },
+      });
+      expect(hitsAfter(message)).toBe(0);
+    }
   });
 });
 

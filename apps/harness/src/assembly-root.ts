@@ -31,6 +31,8 @@ import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
+import { composeAttachSessions } from './session-attach.js';
+import type { AttachSessions } from './session-attach.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
@@ -38,6 +40,7 @@ import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import type { ThreadTitleConfig } from './settings/thread-title.js';
 import { findModelEntry } from './model-catalog.js';
+import { resolveDefaultModel } from './model-provider.js';
 import type { ModelSelectionPolicy } from './model-selection-policy.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import type { ToolResultStashOptions } from './tool-result-stash.js';
@@ -49,6 +52,7 @@ import {
   SessionRegistry,
   deriveApprovalChannel,
   type SessionLog,
+  type TokenAnchorBook,
 } from '@nexus/core';
 import {
   HARNESS_HOME_DIR_NAME,
@@ -477,8 +481,12 @@ function createCliModel(
   live: boolean,
   liveModel: LiveModelConfig,
   credentials: CredentialService | undefined,
+  plugins: readonly PluginEntry[],
 ): BaseChatModel {
-  if (!live) return new ScriptedChatModel({ turns: CLI_SCRIPT });
+  // **`--live` 是進 live 的唯一閘門**，不看選擇列（理由見 `model-provider.ts`）；沒帶它才由清單上的
+  // `agent-default-model` 在內建腳本與 patch 插進來的提供者之間選（#670）。
+  if (!live)
+    return resolveDefaultModel(plugins, () => new ScriptedChatModel({ turns: CLI_SCRIPT }));
   return createLiveModel(liveModel, undefined, credentials);
 }
 
@@ -502,6 +510,12 @@ export interface CreateCliAgentSession {
    * `ThreadAgent.rootSeed` 交給 pump。
    */
   readonly rootSeed?: readonly SessionEvent[];
+  /**
+   * 錨定估算的帳（[#702](https://github.com/DemianLi/nexus-agent/issues/702)），原樣轉給 `createNexusAgent`。
+   * **要跨 thread 借錨的入口傳**：serve 在起動期建一本、每條 thread 傳同一本，所以第二條 thread 的第一次借得到第一條的。
+   * CLI 一個行程一個組裝，省略即這個組裝自己一本，行為相同。
+   */
+  readonly tokenAnchorBook?: TokenAnchorBook;
 }
 
 /**
@@ -602,7 +616,7 @@ export async function createCliAgent(
   },
   plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
-  { onInvariantViolation, approvals, rootSeed }: CreateCliAgentSession = {},
+  { onInvariantViolation, approvals, rootSeed, tokenAnchorBook }: CreateCliAgentSession = {},
 ): Promise<{
   agent: NexusAgent;
   dispose: () => Promise<void>;
@@ -611,6 +625,16 @@ export async function createCliAgent(
   sessions: SessionRegistry;
   sessionLog: SessionLog;
   commands: CommandRegistrationPoint;
+  /**
+   * 把這條 thread 的**每一份**會話日誌接上遙測、不變量配套入口與 `sessions` 通道的參與者，一個口三件事
+   * （[#668](https://github.com/DemianLi/nexus-agent/issues/668)）。見 {@link SessionsAttachment}。
+   */
+  attachSessions: AttachSessions;
+  /**
+   * 三個口各自的原件，**只給要量單一消費者的測試**（例如「沒有配套入口時不接線」「出貨清單接得上」）。
+   * 兩個入口與手搭 `ThreadAgent` 一律走 {@link attachSessions}：`ThreadAgent` 上沒有這三個，
+   * 所以 serve 不可能再少轉交其中一個。
+   */
   attachTelemetry: (sessions: SessionRegistry) => (() => Promise<void>) | undefined;
   attachInvariants: (sessions: SessionRegistry) => (() => void) | undefined;
   attachSession: (sessions: SessionRegistry, backgroundPort?: BackgroundParentPort) => () => void;
@@ -641,7 +665,7 @@ export async function createCliAgent(
    * 沒帶 `--live` 不掛是承重的：假模型的腳本是一格一格吃的，多出來的標題呼叫會吃掉主回覆的那一格。它也不另給
    * 一顆假模型——沒有人要讀一個假的標題。
    *
-   * 接線同其他三個 attach，交給呼叫端：CLI 接它那一份，serve 在 wire-handler 建 pump 的那一刻接。
+   * 接線同 {@link attachSessions}，交給呼叫端：CLI 接它那一份，serve 在 wire-handler 建 pump 的那一刻接。
    */
   attachTitle: AttachSessionTitleLlm | undefined;
   /** 這一次組裝掉了的可少掛條目（#751）；沒給 `optionalEntries` 時一律是空的。 */
@@ -653,7 +677,7 @@ export async function createCliAgent(
 }> {
   const liveModel = invocation.liveModel ?? startupSetting(plugins, liveModelPlugin);
   const subagentToolFilter = startupSetting(plugins, backgroundSubagentsPlugin).toolFilter;
-  const model = createCliModel(invocation.live, liveModel, invocation.credentials);
+  const model = createCliModel(invocation.live, liveModel, invocation.credentials, plugins);
   // **標題模型是另一顆實例**：輸出上限換成標題那一列的，並表明用途，由 `createLiveModel` 決定要不要關推理
   // （`live-model.ts` 的 `LiveModelPurpose`）。`.env` 已經在入口（`runCli`／`runServe`）載入過了。
   const attachTitle =
@@ -680,13 +704,11 @@ export async function createCliAgent(
     ...(approvals?.enabled !== undefined && { approvalsEnabled: approvals.enabled }),
     hasCheckpointer: checkpointer !== undefined,
   });
-  // **backend 也是建一次、兩個消費者共用**，理由與上面的 channel 同一條：`submit_record`
-  // 拿的是這一份，`write_file` 拿的是同一份經 `foldRegistry` 之後的那一個。這裡寫成
-  // 內聯的 `new ContainedFilesystemBackend(...)` 再給 plugin 建第二個的話，兩個工具會
-  // 寫到兩個地方——**而且兩邊都會寫成功**，一條測試都不會紅。
+  // **backend 只交給 `createNexusAgent`**：`submit_record` 與 `present` 從 `fs` 服務拿 `foldRegistry`
+  // 折出來的那一個，就是 `write_file` 實際讀寫的那個（#694）。不要再另外交一份給 plugin——
+  // 這一份是折前的，被路由的前綴上兩個工具會寫到兩個地方，**而且兩邊都會寫成功**。
   //
-  // `undefined` 是「沒給 `--workspace`」，兩個消費者都會退到基座那個 `StateBackend` 預設
-  // （plugin 那側的預設字面照抄基座，見 `@nexus/plugin-submit-record` 的模組註解）。
+  // `undefined` 是「沒給 `--workspace`」，`createNexusAgent` 墊一顆 `TextOnlyStateBackend`。
   //
   // **模式是傳一個來源進去，不是一個字面值**：fence 逐次呼叫問一次，所以 `/sandbox` 換掉
   // 控制器那一格之後，下一次檔案變更就照新那格判（理由見 `SandboxModeSource`）。
@@ -727,12 +749,12 @@ export async function createCliAgent(
     stepInbox,
   } = await createNexusAgent({
     model,
+    ...(tokenAnchorBook !== undefined && { tokenAnchorBook }),
     plugins: [
-      // **組裝點的協作者排最前面**（#459）：submit-record 與 sandbox-policy 在自己的
+      // **組裝點的協作者排最前面**（#459）：ask-user、plan-mode、sandbox-policy 在自己的
       // `apply` 當下就讀，排後面它們會拿不到。載入是一趟到底的，不會回頭等。
       createHostServicesPlugin({
         channel,
-        backend,
         ...(workspaceRoot === undefined
           ? {}
           : { sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot } }),
@@ -805,9 +827,15 @@ export async function createCliAgent(
   // 那些日誌也掛在它上面**，第一次有人要寫的時候才出生（見 `SessionRegistry` 的偏離）。
   const sessions = new SessionRegistry(THREAD_ID, rootSeed === undefined ? {} : { rootSeed });
   const sessionLog = sessions.root;
-  // **這裡不接線。** 這個工廠兩條路都在用，而 serve 那條不用這份 `sessionLog`——它一個
-  // thread 一份，接線點在 {@link ./wire-handler.ts} 建 pump 的那一刻。在這裡接等於幫
-  // serve 接上一份永遠不會有事件的日誌，只送得出一筆 `shutdown`。接線交給呼叫端。
+  // **這裡不替呼叫端接。** 這個工廠兩條路都在用，而 serve 那條不用這份 `sessionLog`——它一個
+  // thread 一份，註冊表是 pump 建的。在這裡接等於幫 serve 接上一份永遠不會有事件的日誌，只送得出一筆
+  // `shutdown`。但**接什麼、接的順序、怎麼收**定成 {@link AttachSessions} 一個口，呼叫端只剩「對哪一份
+  // 註冊表接」這一個決定，不再各寫一份三行接線。
+  const attachSessions = composeAttachSessions({
+    attachTelemetry,
+    attachInvariants,
+    attachSession,
+  });
   return {
     agent,
     dispose,
@@ -815,6 +843,7 @@ export async function createCliAgent(
     sessions,
     sessionLog,
     commands,
+    attachSessions,
     attachTelemetry,
     attachInvariants,
     attachSession,

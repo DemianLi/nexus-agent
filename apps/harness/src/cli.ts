@@ -23,7 +23,7 @@ import { createInterface } from 'node:readline/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { CommandDescriptor, CommandRegistrationPoint } from '@nexus/core';
+import type { CommandDescriptor, CommandRegistrationPoint, SessionEventMap } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
@@ -37,9 +37,11 @@ import type { ThreadTitleLimits } from './session-title.js';
 import {
   attachSessionPersistence,
   sessionPersistencePlugin,
+  humanMessageForTurnStart,
   MAX_TOKENS_TURN_END,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
+  resumeClosingInterruptedTurn,
   turnReachedMaxTokens,
   type SessionLog,
 } from '@nexus/core';
@@ -485,8 +487,7 @@ export async function runTurn(
   // **一個 `text`，兩個消費者。** 分開算的話，一顆日誌上逐字正確的 `turn/start` 可以配
   // 上餵給模型的任意字串，而不變量伴生只看得到日誌那一份——它結構上驗不到那種偏差。
   const text = typeof input === 'string' ? input : input.text;
-  sessionLog.append(
-    'turn/start',
+  const turnStart: SessionEventMap['turn/start'] =
     typeof input === 'string'
       ? { kind: 'message', text }
       : {
@@ -495,8 +496,8 @@ export async function runTurn(
           goalId: input.goalId,
           revision: input.revision,
           round: input.round,
-        },
-  );
+        };
+  sessionLog.append('turn/start', turnStart);
   try {
     // 退回標題（#647），同 web 的 pump：人打的字那一種才寫，還沒有標題才寫，寫不進去只講一聲、這一輪照跑。CLI 的日誌
     // 今天沒有讀標題的人（serve 的列表讀不到 run 目錄），寫它是照 dsh：退回標題在 `base` bundle 裡，每一種組裝都有。
@@ -507,10 +508,14 @@ export async function runTurn(
         printer.error(`[標題] 退回標題寫不進去：${String(error)}`);
       }
     }
-    for await (const [mode, payload] of await agent.stream(toAgentInvocation(text), {
-      streamMode: ['updates', 'values'],
-      configurable: { thread_id: THREAD_ID },
-    })) {
+    for await (const [mode, payload] of await agent.stream(
+      // 人打的字是素的字串；續行輪次的頭帶 `goal` 來源（#662），重複提醒才知道它不是人講話。
+      toAgentInvocation(typeof input === 'string' ? text : humanMessageForTurnStart(turnStart)),
+      {
+        streamMode: ['updates', 'values'],
+        configurable: { thread_id: THREAD_ID },
+      },
+    )) {
       if (mode === 'values') {
         files = (payload as { files?: Record<string, unknown> }).files ?? {};
         continue;
@@ -918,7 +923,8 @@ async function runLaunched(
   const resumed =
     resumeDir === undefined || sessionStore === undefined
       ? undefined
-      : await sessionStore.resume(THREAD_ID);
+      : // 當掉那一輪的收尾在這裡寫回檔上（#721），下面吃 `resumed.events` 的各處拿到的已含補結。
+        await resumeClosingInterruptedTurn(sessionStore, THREAD_ID);
   // 模式從日誌來；那一次跑沒有 fence（一顆 `sandbox/mode` 都沒有）就照常從預設起算。
   // `--sandbox` 在這條路上已經被 `parseCliArgs` 擋掉，所以這裡不會蓋掉任何人給的值。
   const resumedSandbox = resumed === undefined ? undefined : recordedSandboxMode(resumed.events);
@@ -1013,15 +1019,8 @@ async function runLaunched(
         ? undefined
         : await restoreConversation(built.agent, THREAD_ID, resumed.events);
     // REPL 是一條連續對話，一份日誌就是整個 session，所以接線點在這裡而不是每輪。
-    // 回傳的 detach 不留：`dispose()` 會把還接著的協調器一起收掉。
-    built.attachTelemetry(built.sessions);
-    // 不變量的 runner 只是一個訂閱，沒有要排空的東西，所以 detach 也不留——行程走了它就沒了。
-    built.attachInvariants(built.sessions);
-    // **接在不變量之後**：參與者拿得到的是可寫的日誌，所以它一裝上去就可能記東西，
-    // 而那些東西該被已經在看的檢查看到。順序反過來的話，安裝期寫的第一批事件會漏檢。
-    // 同一條順序對 subagent 那些後來才出生的日誌也成立——註冊表通知訂閱者的順序就是
-    // 這三行接上去的順序。
-    built.attachSession(built.sessions);
+    // 回傳的把手不留：`dispose()` 會把還接著的協調器一起收掉，不變量的 runner 只是一個訂閱，行程走了它就沒了。
+    built.attachSessions(built.sessions);
   } catch (error) {
     await resumed?.stored.close().catch(() => {});
     throw error;

@@ -26,6 +26,7 @@ import {
   fetchWithCookie,
   foldTurn,
   loopbackRequest,
+  noSessions,
   serveClient,
   TEST_BROWSER_AUTH,
 } from './fixtures.js';
@@ -386,6 +387,7 @@ describe('一頁撐破位元組上限時，server 講一聲', () => {
         ...(toolTextLimits !== undefined && { toolTextLimits }),
         createAgent: async () => ({
           agent: idle,
+          attachSessions: noSessions,
           commands: { find: () => undefined, list: () => [] },
           dispose: async () => undefined,
           rootSeed: withLong,
@@ -429,6 +431,7 @@ describe('一頁撐破位元組上限時，server 講一聲', () => {
         warn: (message) => void said.push(message),
         createAgent: async () => ({
           agent: idle,
+          attachSessions: noSessions,
           commands: { find: () => undefined, list: () => [] },
           dispose: async () => undefined,
           rootSeed: seed,
