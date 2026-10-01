@@ -364,22 +364,19 @@
     maxFileBytes: 33554432
     maxLines: 5000
 
-# 一段工具結果文字放上線的位元組上限（#538／#457）。**「可設定」這件事本身沒有偏離，寫死才有**：
-# dsh 那側它本來就是條目的一格（`spill-policy` 的 `maxInlineBytes: 50000`，
-# `packages/bundle/base/cordis.patch.yml:393-396`，`ddefc45`，**數字一模一樣**），所以這一刀是把一條
-# 既存的偏離收掉。**截在哪一層**那條偏離仍然登記在 `src/tool-result-text.ts` 的檔頭上——dsh 截在
-# 模型面、超標存成 spill 檔、通知裡帶得出檔案位址；我們的外溢層（#719，下面 `spill-policy` 那一列）已經做了同一件事，
-# 所以「沒有 spill 能力」這句前提不再成立——這一列在傳輸上的截斷怎麼收，歸 #736，這裡不動。
+# 工具結果的 `meta` 與壓縮摘要全文放上線的位元組上限（#538／#457）。搜尋與改檔的 `meta` 上限就是 `maxBytes`，讀檔是它的
+# 兩倍；壓縮標記的摘要全文（#896）超過時取頭尾、中間一句說明。
 #
-# 欄位名沒照 dsh 的 `maxInlineBytes`：那個名字描述的是 dsh 的二分（inline 還是進 spill 檔），而我們
-# 超過就是截斷，沒有「另一半去哪裡」這回事。
+# **工具結果文字不歸這一列管**（#736）：外溢層（#719，下面 `spill-policy` 那一列）落地後日誌記的就是換過的預覽，
+# 照 dsh 不再在傳輸上截第二次——文字的上限在模型面，由 `spill-policy` 與讀檔自己的上限決定。名字沒跟著改：
+# 改名會讓已經寫了 `tool-text` 的 patch 載入失敗。50000 當初抄的是 dsh 舊版 `spill-policy` 的 `maxInlineBytes`，
+# dsh 在 `477b4f4` 已改成 `maxInlineTokens: 12500`，對應的是我們 `spill-policy` 那一列。逐條理由見
+# `src/settings/tool-text.ts` 的檔頭。
 #
 # **改這一格會讓一條跨套件的比例失效，而且沒有任何東西會紅。** `@nexus/wire` 的
-# `HISTORY_PAGE_MAX_BYTES = 4_000_000` 是 `80 × 50000`，那個關係一直由 `apps/harness` 的一條測試釘著；
-# 這一列讓它**只在 schema 的預設值底下成立**。那是 #538 三選一裡明著選的第三條（2026-09-23 拍板），
-# 逐條理由見 `src/settings/tool-text.ts` 的檔頭。
-#
-# **這一格也管壓縮標記的摘要全文**（#896）：同一個上限，改它會同時改兩種文字的截斷點。
+# `HISTORY_PAGE_MAX_BYTES = 8_000_000` 是照每張卡「文字加 `meta`」的最壞值算的，`meta` 的那一半跟著這一格走，
+# 那個關係由 `apps/harness` 的一條測試釘著；這一列讓它**只在 schema 的預設值底下成立**。那是 #538 三選一裡
+# 明著選的第三條（2026-09-23 拍板）。
 - id: tool-text
   name: '#settings/tool-text'
   config:

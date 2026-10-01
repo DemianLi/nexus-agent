@@ -32,7 +32,6 @@ import {
 } from './fixtures.js';
 import { HISTORY_PAGE_MAX_BYTES } from '@nexus/wire';
 
-import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -291,14 +290,16 @@ describe('GET /threads/:id/history 的載體與協定層', () => {
  */
 describe('一頁撐破位元組上限時，server 講一聲', () => {
   /**
-   * 幾則滿版工具結果才撐得破一頁。170 × 50000 = 8.5 MB > 8 MB。seed 只帶文字、不帶 `meta`，所以要的
-   * 則數是頁上限算法（每張卡文字加 meta，#617）的兩倍。
+   * 幾則工具結果才撐得破一頁。170 × 50000 = 8.5 MB > 8 MB。seed 只帶文字、不帶 `meta`；文字自
+   * [#736](https://github.com/DemianLi/nexus-agent/issues/736) 起原樣上線，所以撐不撐得破只看 seed 自己的長度。
    */
   const OVERSIZED_CALLS = 170;
+  /** 每則結果的位元組數。 */
+  const OVERSIZED_BODY_BYTES = 50_000;
 
   function oversizedSeed(): SessionEvent[] {
     const ids = Array.from({ length: OVERSIZED_CALLS }, (_, i) => `c${i}`);
-    const body = 'x'.repeat(DEFAULT_TOOL_TEXT_MAX_BYTES);
+    const body = 'x'.repeat(OVERSIZED_BODY_BYTES);
     const drafts: Pick<SessionEvent, 'type' | 'data'>[] = [
       { type: 'turn/start', data: { kind: 'message', text: '讀一堆檔。' } },
       {
@@ -344,16 +345,18 @@ describe('一頁撐破位元組上限時，server 講一聲', () => {
   };
 
   /**
-   * **這條的前提是 schema 的預設值，而 #538 之後那個值改得動。**
+   * **這條的前提是 seed 夠大。**
    *
-   * 每則上限可設定了（`tool-text` 那一列），所以「170 則滿版會超過一頁上限」只在預設值
-   * 底下成立——部署把它調小，這個 seed 就不再超標，這條測試會變成一條什麼都沒測的綠燈。
-   * 那正是 #538 三選一裡第三條明著接受的代價。
-   *
-   * 所以前提寫成顯性斷言：**預設值哪天小到讓這個 seed 不再超標，這裡當場紅**，而不是靜靜空轉。
+   * #538 到 #736 之間，每則文字在傳輸上截到 `tool-text` 那一格，這條前提因此綁著那一格的預設值。#736 照 dsh 拿掉
+   * 傳輸截斷之後，文字原樣上線，前提只剩 seed 自己的長度——**哪天有人把 seed 改小到不再超標，這裡當場紅**，
+   * 而不是讓下面那條變成一條什麼都沒測的綠燈。
    */
-  it('前提：預設上限底下，170 則滿版確實撐得破一頁', () => {
-    expect(OVERSIZED_CALLS * DEFAULT_TOOL_TEXT_MAX_BYTES).toBeGreaterThan(HISTORY_PAGE_MAX_BYTES);
+  it('前提：170 則各 50000 位元組的結果確實撐得破一頁', () => {
+    const [, , , , , first] = oversizedSeed();
+    const content = (first?.data as { message?: { data: { content: unknown } } }).message?.data
+      .content;
+    expect(Buffer.byteLength(String(content), 'utf8')).toBe(OVERSIZED_BODY_BYTES);
+    expect(OVERSIZED_CALLS * OVERSIZED_BODY_BYTES).toBeGreaterThan(HISTORY_PAGE_MAX_BYTES);
   });
 
   /**
@@ -363,12 +366,15 @@ describe('一頁撐破位元組上限時，server 講一聲', () => {
    * **直接建 pump**——handler 忘了把設定往下傳的話，那一條照樣綠。這一條走的是真的 route，
    * 所以釘的是 `createWireHandler` 裡那兩個轉發點。
    *
-   * 兩臂：同一份 seed、同一條 route，只差 handler 收到的那一格。
+   * 兩臂：同一份 seed、同一條 route，只差 handler 收到的那一格。**量的是 `meta`**：結果文字自
+   * [#736](https://github.com/DemianLi/nexus-agent/issues/736) 起不歸這一格管（兩臂都原樣），這一格今天在重播那條上
+   * 管的是 `meta`（與壓縮摘要）。
    */
   it('handler 收到的上限真的走到重播那條路上', async () => {
     const long = 'x'.repeat(2_000);
+    const longPath = `/${'p'.repeat(2_000)}`;
     const seed = oversizedSeed().slice(0, 6);
-    // seed 的第六筆是第一則 `tool/result`，把它的內容換成一段夠長的文字。
+    // seed 的第六筆是第一則 `tool/result`：內容換成一段夠長的文字，再掛一份比 300 位元組大的搜尋 meta。
     const withLong = seed.map((event) =>
       event.type === 'tool/result'
         ? ({
@@ -376,6 +382,7 @@ describe('一頁撐破位元組上限時，server 講一聲', () => {
             data: {
               ...event.data,
               message: toLoggedMessage(new ToolMessage({ content: long, tool_call_id: 'c0' })),
+              meta: { shape: 'paths', paths: ['/keep', longPath], truncated: false, total: 2 },
             },
           } as SessionEvent)
         : event,
@@ -410,14 +417,16 @@ describe('一頁撐破位元組上限時，server 講一聲', () => {
       }
     }
 
-    // 前提：不給那一格時，那段文字整段都在——沒有這一行，下面那句可能只是「它根本沒出現過」。
+    // 前提：不給那一格時，那條長路徑整段都在——沒有這一行，下面那句可能只是「它根本沒出現過」。
     const bare = await textFor();
-    expect(bare).toContain(long);
-    expect(bare).not.toContain('沒有送出來');
+    expect(bare).toContain(longPath);
 
     const capped = await textFor({ maxBytes: 300 });
-    expect(capped).not.toContain(long);
-    expect(capped).toContain('沒有送出來');
+    expect(capped).not.toContain(longPath);
+    expect(capped).toContain('/keep');
+    // 文字兩臂都原樣（#736）。
+    expect(bare).toContain(long);
+    expect(capped).toContain(long);
   });
 
   it('超標那一頁走過 route 之後，warn 收到一行；正常的一頁不講', async () => {

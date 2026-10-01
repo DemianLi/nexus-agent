@@ -547,29 +547,21 @@ describe('結果文字：即時與重播同一串（#439）', () => {
   });
 
   /**
-   * **上限是設定來的，而且兩條路吃同一份**（[#538](https://github.com/DemianLi/nexus-agent/issues/538)）。
+   * **`tool-text` 那一列不再截結果文字**（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）。
    *
-   * 這一條跟上面那條同一個主題的第二半：不只「抽字的規則」要共用，**截字的上限**也要——
-   * 兩邊各讀各的設定的話，同一張卡會「即時一個樣、重新整理另一個樣」，而那是這整個 describe
-   * 存在的理由。
-   *
-   * **最後那一行是對照組**：同一份日誌在預設上限底下一個字都不截，所以上面的差別只可能來自
-   * 那個參數，不是因為內容本來就長到會被某個寫死的數字截掉。
+   * 這條原本是「上限從設定來：即時與重播截在同一個位置」（#538）。外溢層（#719）落地後照 dsh 翻面：上限在模型面，
+   * 日誌到畫面不截。所以給一個**離預設很遠的小值**（schema 的下限 128），兩條路照樣是日誌裡那則的原文——
+   * 把傳輸截斷加回去的話，這裡會紅；不把值調小的話，2000 個位元組本來就在預設底下，加回去也綠。
    */
-  it('上限從設定來：即時與重播截在同一個位置', async () => {
+  it('`tool-text` 調到最小，即時與重播照樣是原文', async () => {
     const long = 'x'.repeat(2_000);
-    const small = 300;
+    const small = 128;
     const { frames, events } = await play('late', long, { maxBytes: small });
+    // 前提：原文確實比這一格長，不然「沒被截」什麼都沒證明。
+    expect(Buffer.byteLength(long, 'utf8')).toBeGreaterThan(small);
 
-    const live = toolEntries(frames)[0]?.text;
-    expect(live).toBeDefined();
-    expect(Buffer.byteLength(live!, 'utf8')).toBeLessThanOrEqual(small);
-    expect(live).toContain('沒有送出來');
-
-    const replayed = toolEntries(historyFrames(events, small))[0]?.text;
-    expect(replayed).toBe(live);
-
-    expect(toolEntries(historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES))[0]?.text).toBe(long);
+    expect(toolEntries(frames)[0]?.text).toBe(long);
+    expect(toolEntries(historyFrames(events, small))[0]?.text).toBe(long);
   });
 
   /**
@@ -913,5 +905,113 @@ describe('產品路徑：讀檔 meta 的上限是文字的兩倍（#630）', () 
       detach();
       await built.dispose();
     }
+  }, 20000);
+});
+
+/**
+ * **外溢層開著時，卡上就是日誌裡那則**（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）。
+ *
+ * 照 dsh：上限在模型面（外溢層把超過預算的結果換成頭尾預覽加帶路徑的通知，日誌記的就是換過的那則），
+ * 日誌到畫面不再截第二次。組裝是真的 `createNexusAgent`＋外溢層＋主機暫存目錄，pump 的 `tool-text` 調到
+ * schema 的下限 128——**比預覽小得多**，所以傳輸截斷要是還在，即時與重播都會被它截，這兩條就紅。
+ */
+describe('產品路徑：外溢層開著，卡上是日誌裡那則預覽，一字不差（#736）', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'nexus-spill-card-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  /** 每行都不一樣（一種字重複 o200k 會壓成很少的 token，量不出預算），約 40,000 字元。 */
+  const BIG = Array.from(
+    { length: 1_000 },
+    (_, i) => `line ${i} alpha beta gamma ${i * 7919}`,
+  ).join('\n');
+  const SMALL = '小結果：在預算內。';
+  const TOOL_TEXT = { maxBytes: 128 };
+
+  function bulk(payload: string): PluginEntry {
+    return {
+      plugin: {
+        name: 'bulk-host',
+        apply: (registry) => {
+          registry.tools.register(
+            tool(() => payload, {
+              name: 'bulk',
+              description: '拿一坨東西。',
+              schema: z.object({}),
+            }),
+          );
+        },
+      },
+    };
+  }
+
+  async function run(payload: string) {
+    const built = await createNexusAgent({
+      model: new ScriptedChatModel({
+        turns: [{ content: '', toolCalls: [{ name: 'bulk', args: {} }] }, { content: '看完了。' }],
+      }),
+      checkpointer: new MemorySaver(),
+      plugins: [bulk(payload)],
+      toolResultStash: { rootDir: root, session: 'spill-card' },
+      spillPolicy: { maxInlineTokens: 3_000 },
+    });
+    const pump = new ThreadPump(
+      built.agent as unknown as PumpAgent,
+      'spill-card',
+      undefined,
+      undefined,
+      TOOL_TEXT,
+    );
+    const detach = built.attachSession(pump.sessions);
+    const frames: Event[] = [];
+    const line = new AbortController();
+    const draining = (async () => {
+      for await (const frame of pump.subscribe(['tools', 'lifecycle'], line.signal))
+        frames.push(frame);
+    })();
+    try {
+      await pump.submit({ kind: 'message', text: '去拿一坨。' });
+      await until(() => frames.some(isRootDone));
+      const results = pump.sessionLog.events.filter((event) => event.type === 'tool/result');
+      expect(results).toHaveLength(1);
+      const content = (results[0]!.data as { message?: { data: { content: unknown } } }).message
+        ?.data.content;
+      expect(typeof content).toBe('string');
+      return {
+        logged: content as string,
+        live: toolEntries(frames)[0],
+        replayed: toolEntries(historyFrames(pump.sessionLog.events, TOOL_TEXT.maxBytes))[0],
+      };
+    } finally {
+      line.abort();
+      await draining;
+      detach();
+      await built.dispose();
+    }
+  }
+
+  it('超過預算：即時與重新整理後的卡都是日誌裡那則預覽加路徑，沒有第二層截斷', async () => {
+    const { logged, live, replayed } = await run(BIG);
+    // 前提：外溢層真的動了（換成帶路徑的預覽），而且那則比 `tool-text` 那一格長得多。
+    expect(logged).toMatch(/stored at: \/\S+\.txt\./u);
+    expect(logged.length).toBeLessThan(BIG.length);
+    expect(Buffer.byteLength(logged, 'utf8')).toBeGreaterThan(TOOL_TEXT.maxBytes);
+
+    expect(live).toMatchObject({ name: 'bulk', status: 'done' });
+    expect(live?.text).toBe(logged);
+    expect(replayed?.text).toBe(logged);
+  }, 20000);
+
+  it('在預算內：原樣上線', async () => {
+    const { logged, live, replayed } = await run(SMALL);
+    expect(logged).toBe(SMALL);
+    expect(live?.text).toBe(SMALL);
+    expect(replayed?.text).toBe(SMALL);
   }, 20000);
 });

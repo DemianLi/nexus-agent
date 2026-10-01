@@ -1,5 +1,5 @@
 /**
- * 抽字的規則與上限（[#439](https://github.com/DemianLi/nexus-agent/issues/439)）。
+ * 抽字的規則（[#439](https://github.com/DemianLi/nexus-agent/issues/439)）與 `capToolText` 的上限（壓縮摘要在用，#896）。
  *
  * 產品路徑上這兩件事的效果在 `tool-card-from-log.test.ts`（即時與重播同一串）與
  * `conversation-history.test.ts`（重播那一側）驗；這一份釘的是規則本身。
@@ -33,11 +33,11 @@ const logged = (content: unknown): LoggedMessage =>
 
 describe('抽字的規則', () => {
   it('內容是字串就原樣給', () => {
-    expect(toolResultText(logged('寫好了'), CAP)).toBe('寫好了');
+    expect(toolResultText(logged('寫好了'))).toBe('寫好了');
   });
 
   it('剛好一塊文字：取那一塊', () => {
-    expect(toolResultText(logged([{ type: 'text', text: '寫好了' }]), CAP)).toBe('寫好了');
+    expect(toolResultText(logged([{ type: 'text', text: '寫好了' }]))).toBe('寫好了');
   });
 
   /**
@@ -52,21 +52,20 @@ describe('抽字的規則', () => {
           { type: 'text', text: '第一塊' },
           { type: 'text', text: '第二塊' },
         ]),
-        CAP,
       ),
     ).toBeUndefined();
   });
 
   it('那一塊不是文字（圖片、檔案）也不給', () => {
-    expect(toolResultText(logged([{ type: 'image', source: {} }]), CAP)).toBeUndefined();
+    expect(toolResultText(logged([{ type: 'image', source: {} }]))).toBeUndefined();
   });
 
   it('沒有訊息（格式 9 以前的日誌）就不給', () => {
-    expect(toolResultText(undefined, CAP)).toBeUndefined();
+    expect(toolResultText(undefined)).toBeUndefined();
   });
 
   it('空字串照樣是一段文字，不會被當成沒有', () => {
-    expect(toolResultText(logged(''), CAP)).toBe('');
+    expect(toolResultText(logged(''))).toBe('');
   });
 });
 
@@ -140,10 +139,15 @@ describe('上限', () => {
     expect(capped.endsWith('x')).toBe(true);
   });
 
-  it('抽字時就套上限，兩條路拿到的都是截過的那一份', () => {
-    const capped = toolResultText(logged(`${HALF}藍鯨${HALF}`), CAP);
-    expect(capped).toBeDefined();
-    expect(Buffer.byteLength(capped!, 'utf8')).toBeLessThanOrEqual(CAP);
+  /**
+   * **抽字不截**（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）：這條原本釘的是「抽字時就套上限」，
+   * 外溢層落地後照 dsh 翻面——上限在模型面，日誌裡那則原樣上線。`capToolText` 只剩壓縮摘要在用（#896）。
+   */
+  it('抽字不套上限：比 `tool-text` 預設上限長的文字照樣一字不差', () => {
+    const long = `${HALF}藍鯨${HALF}`;
+    expect(Buffer.byteLength(long, 'utf8')).toBeGreaterThan(CAP);
+    expect(toolResultText(logged(long))).toBe(long);
+    expect(toolResultText(logged([{ type: 'text', text: long }]))).toBe(long);
   });
 });
 
