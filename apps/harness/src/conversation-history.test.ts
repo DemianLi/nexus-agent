@@ -399,18 +399,28 @@ describe('日誌 → 畫面', () => {
    * 續接補寫的收尾（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：補的 `tool/result` 帶那句「結果不明」、
    * `turn/end {interrupted}` 把那一輪收成完成——畫面與舊檔在 end-seed 收掉的那一條一致，不停在執行中。
    */
-  it('補寫的收尾：工具卡帶補結的紅字、那一輪收掉，畫面不停在執行中', () => {
+  it('補寫的收尾：工具卡仍是「沒有結果」那一句、那一輪收掉，畫面不停在執行中', () => {
     const state = screen(
       log(
         human('跑'),
         call('c1'),
-        result('c1', '結果不明', true),
+        {
+          ...result('c1', 'The tool call was interrupted ... outcome is unknown.', true),
+          data: {
+            ...result('c1', 'x', true).data,
+            error: { name: 'ToolOutcomeUnknownError', code: 'TOOL_OUTCOME_UNKNOWN' },
+          },
+        } as Draft,
         { type: 'turn/end', data: { reason: { kind: 'interrupted' } } },
         { type: 'session/end-seed', data: {} },
       ),
     );
 
-    expect(state.entries.map(line)).toEqual(['human:跑', 'tool:echo:failed:結果不明']);
+    // 畫面講的還是補寫之前的那一句（web 拿它比對「被停止」），不是補結的英文。
+    expect(state.entries.map(line)).toEqual([
+      'human:跑',
+      `tool:echo:failed:${UNFINISHED_TOOL_TEXT}`,
+    ]);
     expect(state.status).toBe('idle');
   });
 
