@@ -43,25 +43,26 @@
  * 沒記過的說還沒開始、要就重試。字逐字照抄。一批結果在下一則訊息進來時還沒到齊也照這樣補——state 在
  * 那個位置也會有一則（基座補的），一則對一則照樣成立。
  *
- * **偏離：補在記憶體裡，不寫進日誌。** dsh 續接時把補的事件寫回日誌（`packages/core/agent-loop/src/index.ts:892`），
- * 冷讀時才只在記憶體裡補（`packages/session-query/session-query/src/cold-read.ts`）。我們兩處都只在記憶體裡：
+ * **續接時記過 `tool/call` 的那種寫回日誌，沒記過的維持在記憶體裡補**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）。
+ * dsh 續接時把補的事件寫回日誌（`packages/core/agent-loop/src/index.ts:855-856`，`477b4f4`），冷讀時才只在記憶體裡補
+ * （`packages/session-query/session-query/src/cold-read.ts`）。我們的寫回在 {@link ./interrupted-turn.ts}：當掉那一輪沒配到結果
+ * 的 `tool/call` 補一顆結果不明的 `tool/result`，最後補 `turn/end {interrupted}`；寫回之後這裡讀到的是日誌上那一顆，
+ * 句子同一句。**偏離只剩一條**：沒記過 `tool/call` 的那種，一顆 `tool/result` 在我們的配對不變量上是違規
+ * （`invariant.ts`），所以還是只補在記憶體裡。停在核准點的那一輪在我們的日誌上是**收掉的**（`interrupt/raised` 之後有
+ * `turn/end`），本來就不是「開著的最後一輪」，不在寫回的射程。
  *
- * - 停在核准點的那一輪在我們的日誌上是**收掉的**（`interrupt/raised` 之後有 `turn/end`），dsh「關掉開著的
- *   最後一輪」在這裡找不到那一輪。要寫就得替它另開一輪，而 `turn/start.kind` 是授權的判別欄：合成一顆
- *   等於憑空多出一個「人回覆了」。
- * - 沒記過 `tool/call` 的那種，一顆 `tool/result` 在我們的配對不變量上是違規（`invariant.ts`）。
- *
- * 推出來的是確定的，同一份日誌推幾次都一樣，所以不寫回去也不會漂。
+ * 推出來的是確定的，同一份日誌推幾次都一樣，所以留在記憶體裡的那一種也不會漂。
  *
  * ## 推不出來就整串不灌
  *
  * #306 拍板 2：推不出完整的歷史，就不灌半截進去，模型從空的開始。見 {@link UnreplayableReason}。
  */
 
-import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
+import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 
 import { fromLoggedMessage } from './logged-message.js';
+import { humanMessageForTurnStart } from './message-source.js';
 import { isModelVisibleEvent } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, toolFeedback } from './tool-events.js';
@@ -136,7 +137,7 @@ function requestedCalls(message: BaseMessage): PendingBatch['calls'] {
  * 沒配到結果的那次，照 dsh `repair.ts` 補一則錯誤結果。**不帶 `Error: `**：那兩句是 dsh 的作者寫好的
  * 回饋，走第二條政策（`tool-events.ts` 的 `toolRefusal`）。
  */
-function closer(
+export function closer(
   call: { readonly id: string; readonly name: string },
   started: boolean,
 ): ToolMessage {
@@ -209,7 +210,7 @@ export function replayConversation(
         case 'turn/start': {
           turn = { replied: false, interrupted: false };
           // `resume` 是回覆核准，沒有使用者說的話——送進圖的是 `Command`，不是一則訊息。
-          if (event.data.kind !== 'resume') push(from(new HumanMessage(event.data.text), event));
+          if (event.data.kind !== 'resume') push(from(humanMessageForTurnStart(event.data), event));
           break;
         }
         case 'assistant/message': {

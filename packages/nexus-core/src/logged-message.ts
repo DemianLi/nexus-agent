@@ -33,10 +33,27 @@ import {
   mapChatMessagesToStoredMessages,
   mapStoredMessagesToChatMessages,
 } from '@langchain/core/messages';
-import type { BaseMessage, StoredMessage } from '@langchain/core/messages';
+import type {
+  BaseMessage,
+  ContentBlock,
+  MessageContent,
+  StoredMessage,
+  StoredMessageData,
+} from '@langchain/core/messages';
 
-/** 日誌裡的一則訊息。`type` 是 `ai`／`human`／`tool` 這些，`data` 是那一則的欄位。 */
-export type LoggedMessage = StoredMessage;
+/**
+ * 日誌裡的一則訊息。`type` 是 `ai`／`human`／`tool` 這些，`data` 是那一則的欄位。
+ *
+ * LangChain 的 `StoredMessageData.content` 宣告是 `string`，但實際落盤時會是區塊陣列。
+ * 改正型別為實際形狀：`MessageContent`（`string | ContentBlock[]`），讀方透過 {@link loggedContentBlocks}
+ * 拿到型別化的區塊陣列（字串也轉成單塊 text）。
+ */
+export interface LoggedMessage {
+  readonly type: string;
+  readonly data: Omit<StoredMessageData, 'content'> & {
+    readonly content: MessageContent;
+  };
+}
 
 /**
  * 把一則訊息轉成日誌收得下的形狀。
@@ -61,6 +78,42 @@ export function toLoggedMessage(message: BaseMessage): LoggedMessage {
  * @returns 同一則訊息。
  */
 export function fromLoggedMessage(logged: LoggedMessage): BaseMessage {
-  const [message] = mapStoredMessagesToChatMessages([structuredClone(logged)]);
+  // LangChain 的 StoredMessageData.content 宣告是 string，但我們落盤的是 string | ContentBlock[]。
+  // mapStoredMessagesToChatMessages 預期 StoredMessage，所以轉型回去。
+  const [message] = mapStoredMessagesToChatMessages([structuredClone(logged as StoredMessage)]);
   return message!;
+}
+
+/**
+ * 把日誌訊息的內容轉成型別化的區塊陣列。
+ *
+ * 讀方透過它拿到寬度統一的區塊陣列，各自的讀法政策（取 text、取 reasoning、判斷有沒有內容）
+ * 就是在型別化的區塊上操作，不用再檢查形狀。
+ *
+ * - 字串 → 一塊 `{ type: 'text', text }`（空字串也是一塊，不是空陣列）。
+ * - 區塊陣列 → 原樣回傳，只收窄型別。
+ * - 其他（undefined、null、一般物件） → 空陣列。
+ *
+ * @param content - 日誌訊息的 `data.content`。
+ * @returns 區塊陣列。
+ */
+export function loggedContentBlocks(content: unknown): readonly ContentBlock[] {
+  if (typeof content === 'string') {
+    return [{ type: 'text', text: content }];
+  }
+  if (Array.isArray(content)) {
+    return content as readonly ContentBlock[];
+  }
+  return [];
+}
+
+/**
+ * 一顆 `assistant/message` 記的訊息 id；沒記的是 `undefined`。
+ *
+ * @param message - 日誌裡的訊息。
+ * @returns 訊息的 id（如果有且非空）。
+ */
+export function loggedMessageId(message: LoggedMessage): string | undefined {
+  const id: unknown = message.data.id;
+  return typeof id === 'string' && id !== '' ? id : undefined;
 }

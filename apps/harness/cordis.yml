@@ -271,7 +271,7 @@
 #   讀（#650）。所以這幾列的 `apply` 是空的，值由
 #   `src/settings/startup.ts` 的 `startupSetting` 在起動期解一次、往下傳一份——形狀上仍是
 #   「值從一個地方來」，機制上不是服務，那條退讓登記在 #529 上。
-# - **組裝期**（`recursion-limit`）：消費者是 `agent-factory.ts`，跑在 `loadPlugins` 之後，
+# - **組裝期**（`recursion-limit`、`agent-loop`）：消費者是 `agent-factory.ts`，跑在 `loadPlugins` 之後，
 #   **註冊表就在手上**。所以這一列跟上面 core 那三列完全同形——`apply` 把驗過的值提供成一個
 #   服務，消費點去讀服務。這一層做得到的事，不該跟著上一層退。
 #
@@ -484,23 +484,36 @@
   config:
     limit: 100
 
+# 每步平行工具呼叫上限（#711 第 1 步）：模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆。**id、欄位名與 10
+# 都是 dsh 的**（`packages/core/agent-loop/src/index.ts:297`、`constants.ts:6`，`477b4f4`），dsh 沒有任何出廠組合覆寫它。
+# **最小是 2，不是 dsh 的 1（串行）**：LangGraph 的 `maxConcurrency: 1` 跑完第一顆就靜靜收掉那一步，其餘工具呼叫
+# 沒跑、也不報錯（基座的缺陷，理由與絆索在 `src/settings/agent-loop.ts` 檔頭）。
+# 組裝期讀一次、帶進 LangGraph 的 `maxConcurrency`，一次性與背景子代理吃同一個值；改值要重啟（dsh 是熱重載，#46 不接）。
+# **還沒有「平行安全／獨佔」的分類**（#711 第 2 步）：今天每顆都可以重疊，只是最多這麼多顆。
+# **這一列關不掉**，理由同 `recursion-limit`：關掉會落回內建的 10，讀起來卻像解除了上限。
+- id: agent-loop
+  name: '#settings/agent-loop'
+  config:
+    maxParallelToolCalls: 10
+
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #
-# 二十個全進，不是只有 `@nexus/core`（#107 拍板）。理由三條：
+# 二十一個全進，不是只有 `@nexus/core`（#107 拍板）。理由三條：
 #
 # - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，所以
 #   「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
 # - **關得掉。** 條目層有 `disabled`（#104），組裝點有 `invariants` 選擇，所以進來不是
 #   單向門。這是它們進得來的前提，而現在連 `disabled` 都寫得進使用者自己的 patch 檔。
-# - **二十個全進。** 十三個是空 installer，掛上去一個檢查都不裝，買到的只有包名歸屬；真的
-#   在檢查的是七個——`@nexus/core`（turn 配對）、`@nexus/plugin-commands`（命令生命週期
+# - **二十一個全進。** 十三個是空 installer，掛上去一個檢查都不裝，買到的只有包名歸屬；真的
+#   在檢查的是八個——`@nexus/core`（turn 配對）、`@nexus/plugin-commands`（命令生命週期
 #   配對，#118）、`@nexus/plugin-plan-mode`（`/plan` 的參數契約，#120）、
 #   `@nexus/plugin-goal`（耐久 goal 串，#126）、`@nexus/plugin-todo`（耐久待辦快照的形狀
 #   與歸屬，#132）、`@nexus/plugin-present`（每一筆交付對得上一次成功的 `present`，#441）、
 #   `@nexus/plugin-workspace-changes`（每一筆改動紀錄落在跑過工具的一輪裡，#443；那個功能
-#   本身不在這份清單裡，只由 serve 掛）。
+#   本身不在這份清單裡，只由 serve 掛）、`@nexus/plugin-sandbox-policy`（每一顆 `sandbox/mode`
+#   帶的都是認得的模式，#699）。
 #
-# **代價是每一次執行多二十個條目、二十次 `apply`**，換到的是這份清單與
+# **代價是每一次執行多二十一個條目、二十一次 `apply`**，換到的是這份清單與
 # `registry.invariants.companions()` 對得起來。違規往哪裡印，見 `runCli` 接線的那一行。
 #
 # 這份清單要跟 `packages/*/src/invariant.ts` 對得上：少掛的那幾個會讓「這個 package 沒有
@@ -549,7 +562,5 @@
   name: '@nexus/plugin-telemetry-otel/invariant'
 - id: todo-invariant
   name: '@nexus/plugin-todo/invariant'
-- id: validation-invariant
-  name: '@nexus/plugin-validation/invariant'
 - id: wire-invariant
   name: '@nexus/wire/invariant'

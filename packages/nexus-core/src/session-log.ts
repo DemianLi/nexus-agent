@@ -162,6 +162,8 @@ export type SessionEventType =
   | 'model/usage'
   | 'model/start'
   | 'model/end'
+  | 'llm/retry'
+  | 'llm/retry-started'
   | 'assistant/message'
   | 'user/message'
   | 'compaction/summary'
@@ -182,7 +184,7 @@ export type SessionEventType =
   | 'session/end-seed';
 
 /**
- * 一輪為什麼沒有正常結束。兩種：
+ * 一輪為什麼沒有正常結束。三種：
  *
  * - **`aborted`**：被中止。原因兩種：`user`（人按了停止）與 `parent`（父代理用 `interrupt_agent` 只停這個背景
  *   子代理當下那一輪，[#838](https://github.com/DemianLi/nexus-agent/issues/838)，dsh 同名，
@@ -193,13 +195,32 @@ export type SessionEventType =
  *   （`packages/core/session/src/types.ts:213-214`，`477b4f4`）：「at least one step reached its
  *   output-token ceiling」，後面的步正常收也不降級（sticky，`agent-loop/src/agent.ts:332-337`）。
  *   判法見 {@link ./max-tokens.ts}。中止蓋過它（`agent.ts:349-355`）。
+ * - **`interrupted`**：行程在這一輪中間死了，**續接時補寫的收尾**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)，
+ *   {@link ./interrupted-turn.ts}）。照 dsh 的 `interrupted`（`packages/core/session/src/types.ts:215-221`，`477b4f4`）。
+ *   它由續接那一刻的 agent 層寫，不是那一輪自己寫的：行程活著的時候沒有人寫得出它。**讀者把它當「這一輪不是正常
+ *   結束」**；goal 續行不看它（續接回來的授權從 `disarmed` 起，且 `currentTurnStart` 不往 end-seed 之前找）。
  *
- * dsh 另有 `completed`、`blocked`、`error`、`interrupted`、`forked`：正常結束在我們這側是不放
+ * dsh 另有 `completed`、`blocked`、`error`、`forked`：正常結束在我們這側是不放
  * `reason`，拋錯是另一顆 `turn/failed`，其餘沒有生產者。
  */
 export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: { readonly kind: 'user' | 'parent' } }
-  | { readonly kind: 'max-tokens' };
+  | { readonly kind: 'max-tokens' }
+  | { readonly kind: 'interrupted' };
+
+/**
+ * 一次模型請求失敗的穩定描述。照 dsh 的 `LlmFailure`（`packages/llm/llm/src/types.ts:45`）：訊息給人看，
+ * `code` 給機器路由，`status` 是供應商回的 HTTP 狀態（有才帶）。
+ *
+ * `code` 的詞彙取 dsh 預設可重試集裡那幾個（`llm/src/retry-policy.ts:18`）：`RATE_LIMIT`、`SERVER`、
+ * `TIMEOUT`、`TRANSPORT`——我們的重試只對這幾類發生。分類歸 adapter（`live-model.ts`），這裡只是形狀。
+ * #434 替 `turn/failed` 定錯誤欄位時用同一個形狀；誰先合誰定。
+ */
+export interface LlmFailure {
+  readonly message: string;
+  readonly code: string;
+  readonly status?: number;
+}
 
 /** 產生標題的那一次模型呼叫走的路由。照 dsh 的 `SessionTitleModelIdentity`。 */
 export interface SessionTitleModelIdentity {
@@ -461,6 +482,34 @@ export interface SessionEventMap {
    * 沒配到 `model/end` 的 `model/start` 只有一種成因：行程在呼叫中途死了。
    */
   'model/end': Record<string, never>;
+  /**
+   * 一次模型請求失敗、而且**排定了重試**（[#712](https://github.com/DemianLi/nexus-agent/issues/712)）。照 dsh 的
+   * `llm/retry`（`packages/llm/llm-retry/src/types.ts:9`）：排定時先寫，再開始等。**只記排定、不記完成**——
+   * 成敗看後面的 `model/end`／`turn/failed`；預算用盡的那一次不排，所以不寫。
+   *
+   * 落在一次模型呼叫的 `model/start`／`model/end` 之間（重試包在那一對之內），一次呼叫的所有重試共用一個
+   * `retryId`。**不進模型**：推模型歷史的一側不讀。
+   *
+   * 欄位比 dsh 少，理由與計數的壽命見 {@link ./llm-retry.ts}：沒有 `delayMs`（接縫看不到退避）、沒有
+   * `turn`／`step`（我們沒有 `step/*`）。
+   */
+  'llm/retry': {
+    readonly retryId: string;
+    /** 第幾次重試，從 1 起算。 */
+    readonly retry: number;
+    readonly maxRetries: number;
+    readonly failure: LlmFailure;
+  };
+  /**
+   * 排定的那次重試等完、**真的要重打**了。與同一個 `retryId` 與 `retry` 的 `llm/retry` 配對；等待中被取消的
+   * 重試沒有這一顆（{@link ./llm-retry.ts} 的「取消之後不再寫」）。`waitedMs` 是**實際**等了多久——dsh 在
+   * `llm/retry` 上帶的是排定的 `delayMs`，這裡的接縫拿不到。
+   */
+  'llm/retry-started': {
+    readonly retryId: string;
+    readonly retry: number;
+    readonly waitedMs: number;
+  };
   /**
    * 一次模型呼叫回來的那一則回覆，**模型看到的原樣**：文字、推理、`tool_calls` 都在 `message` 裡
    * （{@link ./logged-message.ts | LoggedMessage}）。推模型歷史的一側讀的就是它。

@@ -146,6 +146,8 @@ export type {
 export { createRegistry } from './registry.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
+export type { FsService } from './fs-service.js';
+export { createFsService, FS_SERVICE } from './fs-service.js';
 export { scrubbedParentEnv, SENSITIVE_ENV_PATTERN } from './child-env.js';
 export { installProxyFromEnvironment, proxyEnvironmentForChild } from './http-proxy/index.js';
 
@@ -173,7 +175,7 @@ export {
 } from './output-schema.js';
 
 export type { LoggedMessage } from './logged-message.js';
-export { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
+export { fromLoggedMessage, toLoggedMessage, loggedContentBlocks } from './logged-message.js';
 
 export type {
   ConversationReplay,
@@ -267,6 +269,8 @@ export {
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+export { noteFailedAttempt, noteRequestStart, runInRetryScope } from './llm-retry.js';
+export { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,
   SUBAGENT_DELEGATION_CONTEXT,
@@ -321,6 +325,15 @@ export {
   SESSION_CHECKPOINT_PLUGIN_NAME,
   sessionCheckpointPlugin,
 } from './session-checkpoint-policy.js';
+export type { MessageSource } from './message-source.js';
+export {
+  humanMessageForTurnStart,
+  isMachineMessage,
+  MESSAGE_SOURCE_KWARG,
+  messageSourceOf,
+  sourceKwargs,
+  turnStartSource,
+} from './message-source.js';
 export type {
   RepeatReminderConfig,
   RepeatReminderMark,
@@ -329,7 +342,6 @@ export type {
 export {
   createRepeatReminder,
   DEFAULT_REPEAT_REMINDER,
-  GOAL_WRAPUP_MARKER,
   REPEAT_REMINDER_MARKER,
   REPEAT_REMINDER_MIDDLEWARE_NAME,
   REPEAT_REMINDER_PLUGIN_NAME,
@@ -361,7 +373,6 @@ export {
 } from './summarization.js';
 export type { EstimatedRequest, TokenEstimate } from './token-estimate.js';
 export {
-  defaultTokenAnchorBook,
   estimateAnchoredTokens,
   estimateRequestTokens,
   estimateTextTokens,
@@ -413,11 +424,12 @@ export type {
 export {
   currentMessageFeedback,
   FEEDBACK_CATEGORIES,
-  loggedMessageId,
   MESSAGE_FEEDBACK_SERVICE,
 } from './feedback.js';
+export { loggedMessageId } from './logged-message.js';
 
 export type {
+  LlmFailure,
   LogicalTurnStartEvent,
   ModelVisibleEventType,
   SessionEvent,

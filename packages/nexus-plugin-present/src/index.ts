@@ -50,6 +50,11 @@
  * 5. **沒有 `turn` 與輸出 schema。** 事件不帶 `turn`，理由見 `@nexus/core` 的 `SessionEventMap`；工具
  *    回一句字串（LangChain 的 `tool()` 形狀），就是 dsh `render` 出來給模型看的那幾行。
  *
+ * 檔案系統照 dsh 從 `fs` 服務拿（dsh 的 `inject` 有 `'fs'`），拿到的是基座檔案工具實際讀寫的那一個
+ * （[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。服務的值是一格 fold 之後才填的把手、
+ * 所以在工具被叫時才讀，偏離登記在 `@nexus/core` 的 `fs-service.ts`，理由同
+ * `@nexus/plugin-agent-instructions` 的偏離 2，不另立一條。
+ *
  * @see [#441](https://github.com/DemianLi/nexus-agent/issues/441)
  * @module
  */
@@ -58,7 +63,13 @@ import { posix } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
 import type { NexusPlugin, PluginEntry, PluginRegistry, PresentedFile } from '@nexus/core';
-import { toolCallIdOf, toolRefusal, virtualPathOf, WORKSPACE_CAPABILITY } from '@nexus/core';
+import {
+  FS_SERVICE,
+  toolCallIdOf,
+  toolRefusal,
+  virtualPathOf,
+  WORKSPACE_CAPABILITY,
+} from '@nexus/core';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
@@ -68,11 +79,6 @@ export const PRESENT_TOOL_NAME = 'present';
 
 /** 一次最多幾個檔。照 dsh `Config.maxFiles` 的預設。 */
 export const DEFAULT_MAX_FILES = 8;
-
-/**
- * 只為了拿到折出來的 backend 而掛的那顆 middleware 的名字。它沒有任何鉤子（見 `apply`）。
- */
-export const PRESENT_BACKEND_MIDDLEWARE_NAME = 'PresentBackend';
 
 /**
  * 模型看到的描述，**逐字照抄 dsh**（`tool-present/src/index.ts`）。它告訴模型**使用者需要一份
@@ -203,19 +209,11 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
   Config: presentConfigSchema,
   apply(registry: PluginRegistry, config: PresentConfig): void {
     const { maxFiles } = config;
-    // **plugin 在 `apply` 裡看不到 backend**，只有 `useWithBackend` 的工廠拿得到折好的那一顆
-    // （#388 開的窄縫）。所以掛一顆沒有鉤子的 middleware，只為了接住它。變數放在 `apply` 裡：
-    // 同一個 plugin 物件被好幾次組裝各跑一次 `apply`，每次各一格，不會互相看到。
-    let backend: AnyBackendProtocol | undefined;
     /** 還在等結果的訂閱，依 `callId`。見檔頭「一個 `callId` 只留一個」。 */
     const waiting = new Map<string, () => void>();
     registry.lifecycle.onDispose(() => {
       for (const unsubscribe of waiting.values()) unsubscribe();
       waiting.clear();
-    });
-    registry.middleware.useWithBackend((folded) => {
-      backend = folded;
-      return { name: PRESENT_BACKEND_MIDDLEWARE_NAME };
     });
     registry.tools.register(
       tool(
@@ -238,6 +236,8 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
           if (requested.length === 0 || requested.length > maxFiles) {
             return refuse(presentCountMessage(maxFiles));
           }
+          // **被叫時才讀**：`fs` 那一格要等 fold 折完才有值，見檔頭最後一段。
+          const backend = registry.services.get(FS_SERVICE)?.backend();
           if (!registry.capabilities.has(WORKSPACE_CAPABILITY) || backend === undefined) {
             return refuse(PRESENT_NO_WORKSPACE_MESSAGE);
           }

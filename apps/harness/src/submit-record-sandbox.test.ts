@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command, MemorySaver } from '@langchain/langgraph';
-import { createHostServicesPlugin, SessionRegistry } from '@nexus/core';
+import { SessionRegistry } from '@nexus/core';
 import type { SandboxMode, SessionEvent } from '@nexus/core';
 import { createSubmitRecordPlugin, SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -55,7 +55,7 @@ describe('submit_record 被 fence 擋下', () => {
 
   /**
    * 在某一格模式下叫一次 `submit_record`、核准它，回 root 那份日誌的 `tool/result` 與模型拿到的
-   * 那則工具訊息。backend 給同一個物件，同 `cli.ts`。
+   * 那則工具訊息。backend 給 `createNexusAgent`，同 `cli.ts`；submit-record 從 `fs` 服務拿折出來的那一個。
    */
   async function submitAndApprove(
     mode: SandboxMode,
@@ -75,7 +75,7 @@ describe('submit_record 被 fence 擋下', () => {
       }),
       backend,
       checkpointer: new MemorySaver(),
-      plugins: [createHostServicesPlugin({ backend }), createSubmitRecordPlugin()],
+      plugins: [createSubmitRecordPlugin()],
     });
     const sessions = new SessionRegistry('submit-record-sandbox');
     const detach = attachSession(sessions);

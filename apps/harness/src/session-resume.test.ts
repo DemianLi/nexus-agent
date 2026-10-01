@@ -284,7 +284,82 @@ describe('尾巴', () => {
     expect(stderr).not.toContain('[不變量]');
     const after = await readLog(logPath);
     expect(after.map((event) => event.seq)).toEqual(after.map((_, index) => index));
-    expect(after[next + 2]).toMatchObject({ type: 'session/end-seed', seq: next + 2 });
+    // 當掉那一輪的收尾補在 end-seed 前面（#721）；命令沒落定那一顆不屬於這張卡，沒有補。
+    expect(after[next + 2]).toMatchObject({
+      type: 'turn/end',
+      seq: next + 2,
+      data: { reason: { kind: 'interrupted' } },
+    });
+    expect(after[next + 3]).toMatchObject({ type: 'session/end-seed', seq: next + 3 });
+  });
+
+  /**
+   * 當掉那一輪的收尾寫回檔上（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：一次工具呼叫記了
+   * `tool/call`、沒有結果，續接之後檔上依序是原有事件、補的 `tool/result`、`turn/end {interrupted}`、
+   * `session/end-seed`；不變量不報；再接一次不重補。拿掉寫回那一步，這一條會紅。
+   */
+  it('當在工具呼叫中：補結與 turn/end interrupted 寫在 end-seed 前面，再接一次不重補', async () => {
+    const runDir = await firstRun();
+    const logPath = join(runDir, 'cli.jsonl');
+    const before = await readLog(logPath);
+    const next = before.length;
+    const tail = [
+      { type: 'turn/start', data: { kind: 'message', text: '寫個檔' } },
+      { type: 'tool/call', data: { callId: 'dead-1', name: 'write_file', arguments: '{}' } },
+    ].map((event, index) => ({ ...event, seq: next + index, time: 1 }));
+    await appendFile(logPath, `${tail.map((event) => JSON.stringify(event)).join('\n')}\n`);
+
+    const { stderr } = await cli(['--workspace', workspace, '--resume', runDir]);
+    expect(stderr).not.toContain('[不變量]');
+    const once = await readLog(logPath);
+    expect(once.map((event) => event.seq)).toEqual(once.map((_, index) => index));
+    expect(once.slice(next + 2, next + 5).map((event) => event.type)).toEqual([
+      'tool/result',
+      'turn/end',
+      'session/end-seed',
+    ]);
+    expect(once[next + 2]).toMatchObject({
+      data: { callId: 'dead-1', isError: true, error: { code: 'TOOL_OUTCOME_UNKNOWN' } },
+    });
+    expect(once[next + 3]).toMatchObject({ data: { reason: { kind: 'interrupted' } } });
+
+    await cli(['--workspace', workspace, '--resume', runDir]);
+    const twice = await readLog(logPath);
+    expect(
+      twice.filter(
+        (event) => event.type === 'turn/end' && event.data.reason?.kind === 'interrupted',
+      ),
+    ).toHaveLength(1);
+  });
+});
+
+/**
+ * 日誌裡的模式名認不得（[#699](https://github.com/DemianLi/nexus-agent/issues/699)）。
+ *
+ * 讀回時照 dsh 不擋——jsonl store 不看酬載，`recordedSandboxMode` 原樣交出去——所以接得回來；
+ * 對它的回應是 sandbox-policy 的配套入口在重播時報違規，CLI 印成 `[不變量]` 走 stderr。
+ */
+describe('認不得的沙箱模式', () => {
+  it('最後一顆 `sandbox/mode` 被改成 bogus：接得回來，stderr 報出帶 bogus 的違規', async () => {
+    const runDir = await firstRun();
+    const logPath = join(runDir, 'cli.jsonl');
+    // 逐行改，只動最後一顆 `sandbox/mode` 的 `data.mode`：`/sandbox read-only` 的 `command/run`
+    // 參數裡也有 `read-only`，前面還有一顆起始值，整份字串取代會一起改到。
+    const events = await readLog(logPath);
+    const last = events.findLastIndex((event) => event.type === 'sandbox/mode');
+    expect(events[last]).toMatchObject({ data: { mode: 'read-only' } });
+    const rewritten = events.map((event, index) =>
+      index === last ? { ...event, data: { mode: 'bogus' } } : event,
+    );
+    await writeFile(logPath, `${rewritten.map((event) => JSON.stringify(event)).join('\n')}\n`);
+
+    const { stdout, stderr } = await cli(['--workspace', workspace, '--resume', runDir]);
+
+    // 前提：真的是從日誌接回來的那一格，不是預設。
+    expect(stdout).toContain('起始 mode: bogus');
+    expect(stderr).toContain('[不變量] invariant violated by "@nexus/plugin-sandbox-policy"');
+    expect(stderr).toContain(`seq ${String(last)}`);
+    expect(stderr).toContain('"bogus"');
   });
 });
 
