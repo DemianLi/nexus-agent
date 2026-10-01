@@ -207,8 +207,8 @@ export interface ToolEntry {
    *
    * 就是模型收到的那一段（harness 從會話日誌的 `tool/result` 抽，兩條路共用同一個規則），
    * 同 dsh：工具卡的內容是那則結果的 content，`isError` 只是另一個旗標。**內容不是剛好一塊
-   * 文字時這一格不給**（照 dsh 的 `singleResultText`，不自己把幾塊拼起來），太長的那幾段由
-   * harness 取頭尾各半、中間放一行說明。
+   * 文字時這一格不給**（照 dsh 的 `singleResultText`，不自己把幾塊拼起來）。**不截**：上限在模型面
+   * （外溢層換成預覽加路徑，日誌記的就是那則），日誌到這裡照 dsh 原樣（[#736](https://github.com/DemianLi/nexus-agent/issues/736)）。
    *
    * **`tool-finished` 失敗的那些，{@link ToolEntry.error} 裝的是同一串字**：紅字那一格留給
    * 畫面，判斷畫哪一種看 {@link ToolEntry.status}。`tool-error`（本體炸了、基座那條路）只寫
@@ -221,8 +221,8 @@ export interface ToolEntry {
    * 哪幾行、搜尋命中什麼、改檔改了哪幾段。照 dsh 的 `tool/result.meta`，**對這一層不透明**——形狀歸
    * 工具，由畫面那一側的卡片模型自己驗，驗不過就走 generic。
    *
-   * 只有成功的才有；模型看不到它。太大的由 harness 截過或整格拿掉：搜尋與改檔的上限同
-   * {@link ToolEntry.text}，讀檔是它的兩倍（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）。
+   * 只有成功的才有；模型看不到它。太大的由 harness 截過或整格拿掉：搜尋與改檔的上限是 harness `tool-text`
+   * 那一列的 `maxBytes`，讀檔是它的兩倍（[#630](https://github.com/DemianLi/nexus-agent/issues/630)）。
    * 格式 16 以前的日誌接回來沒有這一格。
    */
   readonly meta?: unknown;
