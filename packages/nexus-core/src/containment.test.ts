@@ -92,6 +92,30 @@ describe('圍堵', () => {
     expect(String(result.content)).not.toContain('sk-機密值');
   });
 
+  it('基座包的參數驗證失敗：只剩原因，不帶堆疊、原始參數、主機路徑（直接拋與被 middleware 再包一層）', async () => {
+    const cause = new ToolInputParsingException(
+      'Received tool input did not match expected schema\n\n✖ 缺 file_path',
+    );
+    cause.stack =
+      'Error: 缺\n    at DynamicStructuredTool.call (file:///Users/someone/secret/tool.js:1:1)';
+    const toolCall = { name: 'read_file', args: { path: 'sk-機密值' }, id: 'c' };
+    const invocation = new ToolInvocationError(cause, toolCall);
+    // 前提：基座那層的訊息真的帶了這些，下面的「沒有」才有東西可擋。
+    expect(invocation.message).toContain('/Users/someone/secret/tool.js');
+    expect(invocation.message).toContain('sk-機密值');
+    for (const thrown of [invocation, MiddlewareError.wrap(invocation, 'outer')]) {
+      const result = (await wrap({ toolCall }, () => {
+        throw thrown;
+      })) as ToolMessage;
+      const text = String(result.content);
+      expect(text).toContain('缺 file_path');
+      expect(text).not.toContain('/Users/someone/secret/tool.js');
+      expect(text).not.toContain('    at ');
+      expect(text).not.toContain('sk-機密值');
+      expect(text).not.toContain('kwargs');
+    }
+  });
+
   it('**中斷放行**——GraphBubbleUp 原樣往外拋', async () => {
     const interrupt = new GraphInterrupt([{ value: '要核准嗎', id: 'i1' }]);
     await expect(
