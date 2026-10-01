@@ -41,8 +41,9 @@
  * 句子裡不留主機路徑，括號裡也不放。那個字串就是把模型帶偏的東西。
  *
  * **沒選的另一條路**：讓 backend 也收「主機根＋子路徑」，先剝掉前綴再交給基座，這樣就能維持 dsh 的形狀。
- * 沒選它，是因為那等於改圍堵的路徑解析：fence 判準、`workspace-changes` 的路徑正規化
- * （`packages/nexus-plugin-workspace-changes/src/paths.ts`）都假設虛擬路徑。為了一句提示詞
+ * 沒選它，是因為那等於改圍堵的路徑解析：fence 判準、把工具路徑對到磁碟的共用規則（`@nexus/core`
+ * 的 `virtualPathOf`／`hostPathOf`，present、交付讀檔路由、`workspace-changes` 都走它）都假設虛擬路徑。
+ * 改了 backend 就要一起改那一份，`apps/harness/src/virtual-path.test.ts` 會紅著提醒。為了一句提示詞
  * 去動擋寫入的那一層，換錯的代價比說錯一句話大。
  * 給人看的 `/sandbox` 輸出照舊報主機路徑：命令不進模型（`@nexus/core` 的 `commands.ts`），
  * 而人要的正是磁碟上的位址。
