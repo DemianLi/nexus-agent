@@ -23,6 +23,7 @@ import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
 import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
 import { SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME } from './subagent-tool-filter.js';
 import { SPILL_POLICY_MIDDLEWARE_NAME } from './spill-policy.js';
+import { SEARCH_OVERFLOW_MIDDLEWARE_NAME } from './search-overflow.js';
 import { STEP_INBOX_MIDDLEWARE_NAME } from './step-inbox.js';
 import {
   TURN_CANCEL_MIDDLEWARE_NAME,
@@ -2275,6 +2276,7 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
           maxInlineTokens: 1000,
           store: { saveText: () => Promise.reject(new Error('這條測試不會存')) },
         },
+        searchOverflow: { limits: { grepMaxMatches: 250, globMaxResults: 100 } },
         baseToolNames: gatedTools,
         subagentToolFilter: { deny: ['write_file'] },
         checkpointer: true,
@@ -2289,6 +2291,7 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
       expect.arrayContaining([
         STEP_INBOX_MIDDLEWARE_NAME,
         SPILL_POLICY_MIDDLEWARE_NAME,
+        SEARCH_OVERFLOW_MIDDLEWARE_NAME,
         OBSERVATION_POLICY_MIDDLEWARE_NAME,
         SUMMARIZATION_MIDDLEWARE_NAME,
         REPEAT_REMINDER_MIDDLEWARE_NAME,

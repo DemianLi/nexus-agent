@@ -43,6 +43,8 @@ import type { InvalidArgumentsCarrier } from './invalid-tool-args.js';
 import { createMaxTokensCarrier, createMaxTokensMiddleware } from './max-tokens.js';
 import { createSpillPolicyMiddleware } from './spill-policy.js';
 import type { SpillPolicyOptions } from './spill-policy.js';
+import { capSearchResults, createSearchOverflowMiddleware } from './search-overflow.js';
+import type { SearchOverflowOptions } from './search-overflow.js';
 import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './observation.js';
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
@@ -315,6 +317,15 @@ export interface FoldOptions {
   spillPolicy?: SpillPolicyOptions;
 
   /**
+   * 搜尋結果的筆數上限（[#735](https://github.com/DemianLi/nexus-agent/issues/735)）：`grep` 命中、`glob`／`ls` 路徑
+   * 超過上限時，行內留前段，完整的存進 `store`。**省略就不掛**——基座的三顆照原樣，超過 80,000 字元自己截掉。
+   *
+   * 沒有 backend、或 root／任何子代理有 `permissions` 規則時也不掛（同搜尋卡，見 {@link searchMetaAllowed}）。
+   * 見 {@link ./search-overflow.ts}。
+   */
+  searchOverflow?: SearchOverflowOptions;
+
+  /**
    * 每一次模型呼叫的 token 帳目要不要記進會話日誌。省略即開著，`false` 是明著關掉。
    *
    * **省略時還有第二條關法**：部署設定層把 `@nexus/core/model-usage` 那一列標成
@@ -474,6 +485,18 @@ export function foldRegistry(
   // **plugin middleware 在這裡就攤平，只攤一次**：要 backend 的那一種（`useWithBackend`，#388）
   // 建出來的實例得走遍 root 與每個子代理，這裡各算一次的話兩邊拿到的會是兩份。
   const plugins = pluginMiddleware(registry, backend);
+  // 搜尋結果的筆數上限（#735）：middleware 與 backend 包裝是一對，只在這裡一起組（#698）。middleware 排在 plugin
+  // `prepend` 區的最前面——那個位置在外溢層內側（外溢層看到的是換過的那則）、核准閘門外側，而且 root 與每個子代理
+  // 走同一條（{@link subagentPluginMiddleware}）。見 {@link ./search-overflow.ts}。
+  const searchOverflow =
+    options.searchOverflow !== undefined &&
+    backend !== undefined &&
+    searchMetaAllowed(registry, permissions)
+      ? options.searchOverflow
+      : undefined;
+  if (searchOverflow !== undefined) {
+    plugins.prepended.unshift(createSearchOverflowMiddleware(searchOverflow));
+  }
 
   const params: FoldedAgentParams = {
     tools: orderTools(globalTools, toolOrder),
@@ -530,7 +553,10 @@ export function foldRegistry(
   if (backend !== undefined) {
     params.backend = recordBackendOutcomes(
       recordReadExtent(
-        recordToolResultMeta(backend, { search: searchMetaAllowed(registry, permissions) }),
+        // 筆數上限的包裝在搜尋卡那層內側：卡片看到的是截過的前段，跟模型同一份。
+        recordToolResultMeta(searchOverflow === undefined ? backend : capSearchResults(backend), {
+          search: searchMetaAllowed(registry, permissions),
+        }),
       ),
     );
   }
