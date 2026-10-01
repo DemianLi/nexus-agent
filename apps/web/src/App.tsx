@@ -1,4 +1,4 @@
-import type { WireClient } from '@nexus/wire';
+import type { ConversationEntry, WireClient } from '@nexus/wire';
 import { X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -25,7 +25,7 @@ import { SessionUsage } from '@/components/session-usage';
 import { StatusLine } from '@/components/status-line';
 import { ThemeToggle } from '@/components/theme-toggle';
 import { TodoPanel } from '@/components/todo-panel';
-import { Transcript, useFreshItems } from '@/components/transcript';
+import { Entry as TranscriptEntry, Transcript, useFreshItems } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';
 import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/sidebar';
@@ -136,6 +136,13 @@ export const STOP_QUESTIONS_LABEL = '停止這一輪，不回答這些問題';
  * 起 agent 的方式：`pnpm --filter @nexus/harness run serve`，dev server 的
  * `/threads` 會轉過去（見 `vite.config.ts`）。
  */
+const NO_NAMES: ReadonlyMap<string, string> = new Map();
+
+/** 背景子代理自己的對話裡一則項目的畫法：同主對話（`Transcript` 的 `Entry`），不給評分、不給邊框光。 */
+function renderSubagentEntry(entry: ConversationEntry) {
+  return <TranscriptEntry entry={entry} beam={false} subagentNames={NO_NAMES} />;
+}
+
 export function App({ client }: { client?: WireClient } = {}) {
   // 初始化器只讀不寫——StrictMode 會跑它兩次（見 `recallThread`）。寫在 effect 裡，存的就是
   // 真的留下來的那一個。
@@ -245,6 +252,7 @@ function ConversationView({
     threadId,
     status: conversation.state.subagentStatus,
     connected: conversation.connected,
+    renderEntry: renderSubagentEntry,
   });
   const sessionLinks = useMemo(() => {
     const listed =

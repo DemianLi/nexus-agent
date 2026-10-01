@@ -1116,6 +1116,11 @@ export async function createCliAgent(
     ...(invocation.backgroundSubagents !== undefined && {
       backgroundSubagents: {
         maxActive: invocation.backgroundSubagents.maxActive,
+        // 背景子代理被指定模型時才用到（#876）：同一個端點、另一個型錄 id。沒連真實供應商就沒有別的模型可建。
+        ...(invocation.live && {
+          modelFor: (modelId: string) =>
+            createLiveModel({ ...liveModel, modelId }, undefined, invocation.credentials),
+        }),
         ...(workspaceRoot !== undefined && { sandbox: sandboxMode }),
       },
     }),

@@ -40,6 +40,7 @@
  * [`settings/recursion-limit.ts`](./settings/recursion-limit.ts)。
  */
 
+import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import {
   assertInvariantSelection,
   createHostServicesPlugin,
@@ -694,7 +695,11 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
      * @returns 編好的圖。
      * @throws 沒有這個子代理、規格不合、profile 會動組成。
      */
-    const compileSubagent = (name: string, checkpointer: NonNullable<AgentCheckpointer>) => {
+    const compileSubagent = (
+      name: string,
+      checkpointer: NonNullable<AgentCheckpointer>,
+      model?: BaseChatModel,
+    ) => {
       const effects = describeHarnessProfileEffects(options.model);
       const touched = [
         ...effects.excludedTools.map((tool) => `拿掉工具 ${tool}`),
@@ -711,7 +716,10 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       // `withConfig`，也沒有一次性子代理從 `task` 那次呼叫繼承來的 root 上限，於是落在 LangGraph 的預設 25——
       // 連續 8 次工具呼叫就 `GraphRecursionError`。給它跟 root 同一個值（旗標 > 設定列 > 預設），背景子代理每一輪才跟
       // 一次性的、跟 root 一樣長。
-      return compileSubagentGraph(params, name, { checkpointer }).withConfig({
+      return compileSubagentGraph(params, name, {
+        checkpointer,
+        ...(model !== undefined && { model }),
+      }).withConfig({
         recursionLimit: recursionLimitFor(registry, options),
       });
     };
@@ -887,8 +895,23 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         // 背景派出的 host：**在這裡建**（任何圖的環境之外），detach 時等進行中的輪收完。
         const closeHost = delegation?.attach(
           sessions,
-          (subagent) =>
-            compileSubagent(subagent, options.checkpointer!) as unknown as BackgroundAgent,
+          (subagent, modelId) => {
+            let model: BaseChatModel | undefined;
+            if (modelId !== undefined) {
+              const modelFor = options.backgroundSubagents?.modelFor;
+              if (modelFor === undefined) {
+                throw new Error(
+                  `這份組裝建不出別的模型，背景子代理 "${subagent}" 不能指定 "${modelId}"`,
+                );
+              }
+              model = modelFor(modelId);
+            }
+            return compileSubagent(
+              subagent,
+              options.checkpointer!,
+              model,
+            ) as unknown as BackgroundAgent;
+          },
           backgroundPort,
         );
         const runners: (() => void)[] = [];
