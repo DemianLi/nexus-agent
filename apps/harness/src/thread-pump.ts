@@ -97,7 +97,9 @@ import {
   DELEGATION_TOOL_NAMES,
   eventId,
   SessionReferenceError,
+  SUBAGENT_STATUS,
 } from '@nexus/wire';
+import type { SubagentStatusPayload } from '@nexus/wire';
 
 import {
   contextMeasureData,
@@ -826,6 +828,11 @@ export class ThreadPump {
    * 「回答第一顆」判成 `no_such_interrupt`。
    */
   readonly #pending = new Map<string, PendingInterrupt>();
+  /**
+   * 最後一顆背景子代理現況的 frame（#867），**帶著它原本的號**。新接上的下行在註冊當下先收到它，見 {@link ThreadPump.subscribe}。
+   * 沒有背景派出、或從沒變過就是 `undefined`。
+   */
+  #subagentStatusFrame: Event | undefined;
   /** 聽 {@link PumpActivity} 的人，見 {@link ThreadPump.watch}。 */
   readonly #watchers = new Set<(activity: PumpActivity) => void>();
   /** 最後一次講出去的 {@link ThreadPump.agentRunning}，見 {@link ThreadPump.#noteStatus}。 */
@@ -1149,6 +1156,13 @@ export class ThreadPump {
           .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)),
       );
     }
+    // **背景子代理現況也補送**（#867）：它是「現在」的事，歷史沒有，不補的話重新整理之後要等下一次變動才看得到。
+    // 號是原本那顆的，理由同上面那段。
+    if (!subscriber.done && this.#subagentStatusFrame !== undefined) {
+      if (accepts(subscriber, this.#subagentStatusFrame)) {
+        subscriber.queue.push(this.#subagentStatusFrame);
+      }
+    }
     this.#subscribers.add(subscriber);
     return this.#drain(subscriber, signal);
   }
@@ -1280,6 +1294,27 @@ export class ThreadPump {
       summary: notice.summary,
       senderSessionId: notice.senderSessionId,
     });
+  }
+
+  /**
+   * 背景子代理的現況變了（[#867](https://github.com/DemianLi/nexus-agent/issues/867)）：合成一顆 `custom` frame，**整份取代**，
+   * 並記下它，新接上的下行補送。形狀與規則見 `@nexus/wire` 的 `subagent-status.ts`。
+   *
+   * @param items - 每個認得的背景子代理一項（host 給的整份）。
+   */
+  notifySubagentStatus(items: SubagentStatusPayload['items']): void {
+    if (this.#closed) return;
+    const frame = this.#seal({
+      type: 'event',
+      method: 'custom',
+      params: {
+        namespace: [],
+        timestamp: Date.now(),
+        data: { name: SUBAGENT_STATUS, payload: { items } satisfies SubagentStatusPayload },
+      },
+    } as Event);
+    this.#subagentStatusFrame = frame;
+    this.#broadcast(frame);
   }
 
   /**

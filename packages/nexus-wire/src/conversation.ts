@@ -38,6 +38,8 @@ import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE } from './inbox.js';
 import type { WireQueuedInput, WireQueuedInputSource, WireSessionReference } from './inbox.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
+import { SUBAGENT_STATUS } from './subagent-status.js';
+import type { SubagentRunStatus } from './subagent-status.js';
 import { TITLE } from './title.js';
 import { TODOS } from './todos.js';
 import type { WireTodoItem } from './todos.js';
@@ -483,6 +485,12 @@ export interface ConversationState {
    * `title.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
    */
   readonly title: string | null;
+  /**
+   * 背景子代理現在的狀態（#867）：runId → `running`／`idle`，最後一顆 `subagent/status` frame 的整份。**不在裡面＝收線**
+   * （或根本沒收到過——沒有背景派出的 thread 永遠是空的）。規則見 `subagent-status.ts`。它是「現在」的事，所以
+   * {@link prependEntries} 不動它。
+   */
+  readonly subagentStatus: Readonly<Record<string, SubagentRunStatus>>;
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -502,6 +510,7 @@ export function emptyConversation(): ConversationState {
     inbox: [],
     inboxNextStep: [],
     title: null,
+    subagentStatus: {},
   };
 }
 
@@ -698,7 +707,7 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
 
 /**
  * `custom` frame。**只認 {@link DELIVERABLES_PRESENTED}、{@link WORKSPACE_CHANGES}、{@link MODEL_USAGE}、
- * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE}、{@link SESSION_STATS}、{@link INBOX} 與 {@link TITLE}**，其他名字、形狀
+ * {@link CONTEXT_MEASURE}、{@link TODOS}、{@link TOKEN_USAGE}、{@link SESSION_STATS}、{@link INBOX}、{@link TITLE} 與 {@link SUBAGENT_STATUS}**，其他名字、形狀
  * 不對的一律略過：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。
  */
 function reduceCustom(state: ConversationState, data: unknown): ConversationState {
@@ -714,6 +723,7 @@ function reduceCustom(state: ConversationState, data: unknown): ConversationStat
   if (name === SETTLE_NOTICE) return reduceSettleNotice(state, payload);
   if (name === AGENT_MESSAGE) return reduceAgentMessage(state, payload);
   if (name === TITLE) return reduceTitle(state, payload);
+  if (name === SUBAGENT_STATUS) return reduceSubagentStatus(state, payload);
   if (name !== DELIVERABLES_PRESENTED) return state;
   const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
   if (
@@ -774,6 +784,22 @@ function reduceContextMeasure(state: ConversationState, payload: object): Conver
   }
   const measure: WireContextMeasure = { approxTokens, messageCount, thresholds: parsed };
   return { ...state, contextPressure: { ...state.contextPressure, measure } };
+}
+
+/**
+ * `subagent/status` 的 `payload`：整份換掉。`items` 不是陣列就整顆不收；陣列裡形狀不對的單項略過（同編號以後到的為準）。
+ */
+function reduceSubagentStatus(state: ConversationState, payload: object): ConversationState {
+  const { items } = payload as { items?: unknown };
+  if (!Array.isArray(items)) return state;
+  const subagentStatus: Record<string, SubagentRunStatus> = {};
+  for (const item of items) {
+    const { runId, status } = (item ?? {}) as { runId?: unknown; status?: unknown };
+    if (typeof runId !== 'string' || runId === '') continue;
+    if (status !== 'running' && status !== 'idle') continue;
+    subagentStatus[runId] = status;
+  }
+  return { ...state, subagentStatus };
 }
 
 /**
