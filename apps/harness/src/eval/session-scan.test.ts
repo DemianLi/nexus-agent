@@ -60,7 +60,9 @@ function same(n: number, name = 'grep'): Entry[] {
   return Array.from({ length: n }, () => call(name, { pattern: 'x' }));
 }
 
-const turn = (kind: 'message' | 'goal' | 'resume'): Entry => ['turn/start', { kind }];
+const turn = (
+  kind: 'message' | 'goal' | 'resume' | 'subagent-settled' | 'agent-message',
+): Entry => ['turn/start', { kind }];
 
 function scan(
   entries: readonly Entry[],
@@ -147,10 +149,29 @@ describe('鏈的邊界對到提醒器的哪一條', () => {
     ).toMatchObject({ count: 3 });
   });
 
-  it('續行輪次的頭也清零，同提醒器', () => {
+  it('續行輪次的頭不清零，同提醒器（#662）：鏈跨過它繼續數', () => {
     expect(scan([turn('message'), ...same(3), turn('goal'), ...same(3)]).longestRun).toMatchObject({
-      count: 3,
+      count: 6,
     });
+  });
+
+  it('結算通知與背景子代理的話也不是人講話，不清零', () => {
+    for (const kind of ['subagent-settled', 'agent-message'] as const) {
+      expect(scan([turn('message'), ...same(3), turn(kind), ...same(2)]).longestRun).toMatchObject({
+        count: 5,
+      });
+    }
+  });
+
+  it('輪中插的話（user/message 的 user 來源）清零；外掛注入的不清零', () => {
+    const injected = (source: object) => ['user/message', { message: {}, source }] as const;
+    expect(
+      scan([turn('message'), ...same(3), injected({ kind: 'user' }), ...same(3)]).longestRun,
+    ).toMatchObject({ count: 3 });
+    expect(
+      scan([turn('message'), ...same(3), injected({ kind: 'plugin', plugin: 'x' }), ...same(2)])
+        .longestRun,
+    ).toMatchObject({ count: 5 });
   });
 
   it('resume 不清零：回覆核准沒有新的人話', () => {
