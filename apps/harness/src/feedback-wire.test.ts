@@ -35,7 +35,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createCliAgent } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { TEST_BROWSER_AUTH, approvalAt, loopbackRequest, shippedPlugins } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';

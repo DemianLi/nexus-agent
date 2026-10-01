@@ -32,7 +32,7 @@ import type { Event } from '@nexus/wire';
 import type { WireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createCliAgent } from './cli.js';
+import { createCliAgent } from './assembly-root.js';
 import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -64,9 +64,9 @@ afterEach(async () => {
  */
 async function wire(plugins: readonly PluginEntry[] = shipped): Promise<Wired> {
   const violations: string[] = [];
-  const built = await createCliAgent({ live: false }, plugins, undefined, (error) =>
-    violations.push(error.message),
-  );
+  const built = await createCliAgent({ live: false }, plugins, undefined, {
+    onInvariantViolation: (error) => violations.push(error.message),
+  });
   let captured: SessionLog | undefined;
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,

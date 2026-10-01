@@ -21,7 +21,7 @@
  * 半得先讓那條組裝路徑有一個拿得到 registry 的觀察點，那是另一件事——這裡守的是「預設清單
  * 開始掛路由」，那是今天真的會發生的那一種。
  *
- * **走產品組裝**（`createCliAgent`）。它的假模型腳本是固定的（`cli.ts` 的 `CLI_SCRIPT`），所以這裡包一層
+ * **走產品組裝**（`createCliAgent`）。它的假模型腳本是固定的（`assembly-root.ts` 的 `CLI_SCRIPT`），所以這裡包一層
  * `createNexusAgent`、只換掉模型，其餘原樣轉呼叫（同 `subagent-tool-filter-setting.test.ts` 的攔法）。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，工作區是暫存目錄。
@@ -57,7 +57,7 @@ vi.mock('./agent-factory.js', async (importOriginal) => {
   };
 });
 
-const { createCliAgent } = await import('./cli.js');
+const { createCliAgent } = await import('./assembly-root.js');
 
 const shipped = await shippedPlugins();
 

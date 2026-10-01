@@ -420,6 +420,7 @@ export {
 } from './feedback.js';
 
 export type {
+  LogicalTurnStartEvent,
   ModelVisibleEventType,
   SessionEvent,
   SessionEventMap,
@@ -437,6 +438,7 @@ export type {
 export {
   currentTurnStart,
   hasUnansweredInterrupt,
+  isLogicalTurnStart,
   isModelVisibleEvent,
   MODEL_VISIBLE_EVENT_TYPES,
   SessionLog,
