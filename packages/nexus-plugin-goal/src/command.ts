@@ -213,17 +213,18 @@ export const GOAL_REJECTED_MESSAGE = `這個 goal 命令在目前的狀態下不
  *
  * **這條走得到的路是真的**：`attachSession` 是組裝點自己要呼叫的一步，漏掉它的入口
  * 拿到的是一個註冊了命令卻沒有狀態的 plugin。回一句說得出原因的話，比讓
- * `services[0]` 是 `undefined` 然後在某處炸掉好。
+ * 服務是 `undefined` 然後在某處炸掉好。
  */
 export const GOAL_NOT_ATTACHED_MESSAGE = `goal 域還沒接上這個會話的日誌，/${GOAL_COMMAND_NAME} 沒有可以動的目標。`;
 
 /**
- * 這一份組裝接了不只一份日誌。
+ * 這一份組裝接了不只一份 root 日誌。
  *
- * **這一句釘住的是一個假設，不是一個功能。** `/goal` 靠「一次 `apply` 對應一份日誌」
- * 找得到它要動的服務——CLI 一份、`serve.ts` 每個 thread 各自 `createCliAgent` 因此
- * 各自一份 registry，兩條路都成立。假設破掉時要**當場說**，不能讓後接上的那一份
- * 靜靜贏走：那樣一次 `/goal pause` 會暫停另一個 thread 的目標而沒有任何徵兆。
+ * **命令要動哪一份日誌由執行器交過來**（`CommandInvocation.sessionLog`，#688），所以這一句**不再是
+ * 「找不到要動哪一份」**。它留著，是因為同一份 registry 綁了多於一份會話登記時，goal 的工具一律拒絕
+ * （`registry.sessions.forCall` 回 `ambiguous`，見 `tools.ts`）：命令照樣拒絕，兩邊對「這個組裝
+ * 接了不只一份」說的是同一件事。「一份組裝只接一份日誌」是組裝點的假設，沒有東西攔得住 `attachSession`
+ * 被呼叫兩次，假設破掉時要**當場說**，不能讓人以為目標設在哪一份。
  *
  * 它不寫成安裝期的 throw，是因為 `createSessionRunner` 把參與者安裝失敗**圍堵成一行
  * warn**——在那裡拋，換來的是一個沒有 goal 服務、而且沒有人看得到原因的 agent。
@@ -247,20 +248,20 @@ export function goalAmbiguousMessage(count: number): string {
  *   `/goal` 都會拋**。兩條進入點都接得住——REPL 印到 stderr，wire 回一顆
  *   `kind: 'error'` 的封包，而執行器在往外拋之前已經把 `command/done` 寫進日誌了。
  *
- * @param services - 這一次 `apply` 接上的服務，**期望剛好一個**。
+ * @param service - 執行器交來的那份日誌上的服務；那份日誌沒接 goal 域時是 `undefined`。
+ * @param attachedCount - 這一次組裝接著幾份 root 日誌；多於一份時拒絕（見 {@link goalAmbiguousMessage}）。
  * @param rawInput - 命令名之後的原文。
  * @returns 直接呈現給人的結果。
  * @throws 域的非預期失敗，包含折疊壞掉之後的每一次讀。
  */
 export function executeGoalCommand(
-  services: readonly GoalService[],
+  service: GoalService | undefined,
+  attachedCount: number,
   rawInput: string,
 ): CommandResult {
-  if (services.length === 0) return { kind: 'error', text: GOAL_NOT_ATTACHED_MESSAGE };
-  if (services.length > 1) {
-    return { kind: 'error', text: goalAmbiguousMessage(services.length) };
-  }
-  const goals = services[0] as GoalService;
+  if (attachedCount > 1) return { kind: 'error', text: goalAmbiguousMessage(attachedCount) };
+  if (service === undefined) return { kind: 'error', text: GOAL_NOT_ATTACHED_MESSAGE };
+  const goals = service;
   const command = parseGoalCommand(rawInput);
   try {
     const current = goals.get();

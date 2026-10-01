@@ -181,8 +181,9 @@ export function createFeedbackService(options: FeedbackConfig): FeedbackService 
 /**
  * 掛上評分規則與 `/feedback`。
  *
- * `/feedback` 寫的是**這次組裝接上的 root 那一份日誌**：同 `@nexus/plugin-goal` 的命令，只接
- * root、subagent 那些一份都不接；接到的不是剛好一份時當場回一句錯誤，不猜。
+ * `/feedback` 寫的是**命令執行器交給 handler 的那一份日誌**（`CommandInvocation.sessionLog`，
+ * root 那一份）：照 dsh 的 `/feedback` 直接讀 invocation 上的目標，這個 plugin 因此不必當 sessions
+ * 參與者、也不必自己追「接了幾份」（[#688](https://github.com/DemianLi/nexus-agent/issues/688)）。
  *
  * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
  * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
@@ -199,32 +200,16 @@ export const feedbackPlugin: NexusPlugin<FeedbackConfig> = {
     // 兩份規則就是兩種「內容一樣算不算一次」的答案。那句領域說明原本寫在 `registry.feedback`
     // 的重名訊息裡；搬到 `services` 之後訊息是通用的（照 cordis），所以說明留在這裡。
     registry.services.provide(MESSAGE_FEEDBACK_SERVICE, service);
-    const rootsHere: SessionLog[] = [];
-    registry.sessions.join((subject) => {
-      if (subject.address.kind !== 'root') return undefined;
-      rootsHere.push(subject.log);
-      return () => {
-        const at = rootsHere.indexOf(subject.log);
-        if (at >= 0) rootsHere.splice(at, 1);
-      };
-    });
     registry.commands.register({
       name: FEEDBACK_COMMAND_NAME,
       description: '記下對這個會話的回饋',
       input: { hint: '<內容>' },
       // 那段文字由 `feedback/record` 帶著，`command/run` 不再記一次（照 dsh）。
       recordInput: false,
-      handler: ({ rawInput }) => {
+      handler: ({ rawInput, sessionLog }) => {
         if (rawInput.trim().length === 0) return { kind: 'error', text: FEEDBACK_USAGE };
-        const [log, ...others] = rootsHere;
-        if (log === undefined || others.length > 0) {
-          return {
-            kind: 'error',
-            text: `這次組裝接著 ${String(rootsHere.length)} 份會話日誌，挑不出要記在哪一份。`,
-          };
-        }
-        service.record(log, { text: rawInput });
-        return { kind: 'success', text: `已記下對這個會話的回饋（${log.sessionId}）。` };
+        service.record(sessionLog, { text: rawInput });
+        return { kind: 'success', text: `已記下對這個會話的回饋（${sessionLog.sessionId}）。` };
       },
     });
   },
