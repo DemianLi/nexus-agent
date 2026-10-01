@@ -1,20 +1,28 @@
 /**
- * 模型那一側的升級：`request_sandbox_escalation`，與一道只認它的核准閘門。
+ * 模型那一側的升級：`request_sandbox_escalation`，**在工具本體裡問人**。
  *
  * [#238](https://github.com/DemianLi/nexus-agent/issues/238) 第 2 項。載體是**另開一顆工具**
  * （甲），偏離登記在那張卡上：langchain 在 `wrapModelCall` 回程上拒絕同名不同實例的工具
  * （`AgentNode.ts:601-609`），所以 dsh 攤進 `write`／`edit` schema 的那兩個欄位在我們這側
  * 沒有地方掛。那條基座行為的絆索在 `escalation-carrier.test.ts`。
  *
- * ## 照 dsh 的五條
+ * ## 照 dsh 的六條
  *
  * 出處都是 `references/deepseek-harness/packages/sandbox/sandbox/src/escalation.ts`。
  *
+ * 0. **問人在工具本體裡，fail-closed**（[#700](https://github.com/DemianLi/nexus-agent/issues/700)）。
+ *    dsh 的 `resolvePolicy` 先驗欄位（`packages/fs/tool-fs/src/sandbox.ts:88`），再
+ *    `await approveEscalation(...)`：不加寬就拋、沒有核准服務就拋、最後才問人（`escalation.ts:171-208`）。
+ *    核准在工具自己的路徑上，所以 pre-execute 的 listener 怎麼排都跳不過它。以前這裡是另一個註冊點上
+ *    一顆只認這個名字的核准閘門，排在它前面、回 `allow` 又不呼叫 `next()` 的閘門會把它
+ *    整個短路掉，工具照樣回「核准了」。中斷照 `@nexus/plugin-ask-user` 的先例在本體裡 `interrupt()`，
+ *    酬載與核准閘門同形（`@nexus/core` 的 `approval.ts`），web 那側一行都不用動。
  * 1. **嚴格加寬是執行期檢查，不是 schema 約束。** schema 的 enum 是封閉的目標詞彙
- *    {@link ESCALATION_TARGETS}，**不隨當前模式收窄**；「比現在寬」在閘門上對這一刻的模式判。
+ *    {@link ESCALATION_TARGETS}，**不隨當前模式收窄**；「比現在寬」在本體裡對這一刻的模式判。
  *    理由照 dsh：schema 是全域的，當前模式是逐次呼叫的事實。收窄 enum 會讓一個被 `/sandbox`
- *    切窄的 session 連升級的槓桿都看不到。
- * 2. **不加寬的請求不問人。** 閘門在 `ask` 之前就回 `deny`，核准卡一張都不掛。
+ *    切窄的 session 連升級的槓桿都看不到。enum 外的值（含 `read-only`）在 schema 那一關就被擋，
+ *    走不到本體，同 dsh 的 schema-pinned。
+ * 2. **不加寬的請求不問人。** 本體在發中斷之前就回拒絕，核准卡一張都不掛。
  * 3. **欄位要齊、理由不能是空白。** dsh 的 `validateEscalationArgs`。
  * 4. **理由的消費者是人。** 它原樣進核准卡的那句話（dsh：`escalate sandbox to ${mode}: ${justification}`）。
  * 5. **被擋的當下就講得出能升級。** 指引騎在拒絕上（{@link SANDBOX_ESCALATION_HINT}，對應
@@ -22,17 +30,25 @@
  *
  * ## fail-closed 的出口，各有各的話
  *
- * | 出口 | 誰說的 | 人被問到了嗎 |
- * | --- | --- | --- |
- * | 不加寬（含認不得的模式） | 這裡的 {@link nonWideningRefusal} | 沒有 |
- * | 沒指名檔案、理由空白 | 這裡 | 沒有 |
- * | 被拒 | `@nexus/core` 的核准閘門（`approval.ts`） | 有 |
- * | 這個 session 關掉了人工核准 | 同上（`policy-never`） | 沒有 |
- * | 沒有 checkpointer | 同上（`no-channel`） | 沒有 |
+ * 依本體判的先後排。**全部由這裡說**，照 dsh 的 `approveEscalation` 自己寫一套，不借核准閘門的話：
  *
- * 後三條**不是這裡寫的**，而且它們本來就各說各的（`approval.ts` 的 `ApprovalChannel` 那段）。
- * dsh 的 `cancelled` 在我們這側**沒有對應物**，那段也已經記過；dsh 的「沒有 agent 可以路由」
- * 也沒有——我們每一次工具呼叫都在某個 agent 裡。
+ * | 出口 | 這裡的哪一句 | 人被問到了嗎 |
+ * | --- | --- | --- |
+ * | 沒指名檔案、理由空白 | {@link MISSING_TARGET_REFUSAL}、{@link BLANK_JUSTIFICATION_REFUSAL} | 沒有 |
+ * | 不加寬 | {@link nonWideningRefusal} | 沒有 |
+ * | 子代理、這個 session 關掉了人工核准 | {@link unaskedRefusal}（`policy-never`） | 沒有 |
+ * | 沒有 checkpointer | {@link unaskedRefusal}（`no-channel`） | 沒有 |
+ * | 組裝點沒提供核准管道 | {@link unaskedRefusal}（`no-service`） | 沒有 |
+ * | 被拒 | 人給的理由，或 {@link rejectedRefusal} | 有 |
+ *
+ * 沒提供核准管道那一條是 dsh 的「no approval service is composed」：**讀不到就當作沒有人可問**，不像
+ * `ask_user_question` 退到 `{ kind: 'human' }`。dsh 的 `cancelled` 在我們這側**沒有對應物**（`approval.ts`
+ * 的 `ApprovalChannel` 那段記過）；dsh 的「沒有 agent 可以路由」也沒有——我們每一次工具呼叫都在某個 agent 裡。
+ *
+ * **子代理怎麼拒**：照 #324，子代理的核准政策在委派時釘成 `policy-never`（dsh 把 `'never'` 帶進子代理，
+ * 那條在 `ask` 裡回 `rejected`），所以本體在委派快照裡（{@link SandboxModeController.delegatedMode} 有值）
+ * 就當成 `policy-never`。判在加寬**之後**，同 dsh 的先後：不加寬的請求在子代理裡照樣拿到不加寬那句。
+ * 不用 `rootOnly` 的拒絕樁，因為樁會把整顆工具換掉、連加寬都不判。
  *
  * ## 偏離：grant 綁目標、跨兩顆呼叫
  *
@@ -46,23 +62,24 @@
  * **grant 不會過期。** 它只蓋一個 canonical 目標、用過一次就沒了；沒被用掉的那顆會一直等到
  * 下一顆打到同一個檔、而且被擋下的變更。要有時效是另一顆機制，今天沒做。
  *
- * **subagent 拿不到 grant**（[#326](https://github.com/DemianLi/nexus-agent/issues/326)）：子代理的核准閘門
- * 管道固定 `policy-never`（#324），它自己的升級一定被拒；root 手上那顆也認領不到——控制器在委派裡
- * `peekGrant` 回空、`recordDenial` 不寫（見 `sandbox-mode.ts`）。閘門判「加寬」讀 `controller.current`，
- * 在子代理裡就是委派那一刻拍下的那一格。
+ * **subagent 拿不到 grant**（[#326](https://github.com/DemianLi/nexus-agent/issues/326)）：子代理的升級在本體裡
+ * 被當成 `policy-never` 拒掉（上一節）；root 手上那顆也認領不到——控制器在委派裡 `grant` 不做事、`peekGrant`
+ * 回空、`recordDenial` 不寫（見 `sandbox-mode.ts`）。本體判「加寬」讀 `controller.current`，在子代理裡就是
+ * 委派那一刻拍下的那一格。
  *
  * @module
  */
 
 import { tool } from '@langchain/core/tools';
-import type { NexusPlugin } from '@nexus/core';
-import { toolRefusal } from '@nexus/core';
+import { interrupt } from '@langchain/langgraph';
+import type { ApprovalChannel, NexusPlugin } from '@nexus/core';
+import { APPROVAL_INTERRUPT_KIND, CHANNEL_SERVICE, toolCallIdOf, toolRefusal } from '@nexus/core';
 import { z } from 'zod';
 
 import type { SandboxMode } from '@nexus/core';
 import type { SandboxModeController } from './sandbox-mode.js';
 
-/** 模型看到的工具名。**閘門認的就是這個字串**，所以它是導出的。 */
+/** 模型看到的工具名。核准卡（中斷酬載的 `actionRequests[].name`）帶的就是這個字串，所以它是導出的。 */
 export const SANDBOX_ESCALATION_TOOL_NAME = 'request_sandbox_escalation';
 
 /**
@@ -82,8 +99,8 @@ export const WIDER_MODES: Readonly<Record<SandboxMode, readonly SandboxMode[]>> 
 /**
  * `requested` 是不是比 `current` 嚴格更寬。
  *
- * 收 `unknown` 是因為閘門拿到的是**模型原始的參數**（zod 驗證在工具那一側、在閘門之後），
- * 一個認不得的字串在這裡就是「不加寬」。
+ * 收 `unknown` 是防守：本體拿到的參數已經過 schema 的 enum，但這個判準不靠它——一個認不得的
+ * 字串在這裡就是「不加寬」。
  *
  * @param current - 這一刻的模式。
  * @param requested - 模型要的那一格，未驗證。
@@ -109,7 +126,7 @@ export const SANDBOX_ESCALATION_HINT =
   '核准之後把這一次操作原樣重試一次——只蓋這個檔的這一次操作、只蓋一次，內容改了就不算。';
 
 /**
- * 不加寬的請求的那句話。閘門與工具本體共用，兩邊擋下的是同一件事。
+ * 不加寬的請求的那句話。
  * @param requested - 模型要的那一格，未驗證。
  * @param current - 這一刻的模式。
  * @returns 給模型的拒絕。
@@ -128,6 +145,50 @@ export const MISSING_TARGET_REFUSAL =
 /** 理由空白的那句話。 */
 export const BLANK_JUSTIFICATION_REFUSAL =
   'justification 是空的——一張沒有理由的升級核准卡是壞掉的請求，所以沒有去問人。';
+
+/** 沒有人可問的三種原因：核准管道的兩格非人，加上組裝點根本沒提供管道。 */
+export type UnaskedReason = Exclude<ApprovalChannel['kind'], 'human'> | 'no-service';
+
+/**
+ * 加寬、但沒有人可問的那句話。**三種原因各說各的**，同核准閘門的紀律（`approval.ts` 的
+ * `ApprovalChannel` 那段）：模型要分得出「沒有人被問到」與「有人拒絕了」。
+ * @param reason - 為什麼沒有人可問。
+ * @param requested - 模型要的那一格。
+ * @returns 給模型的拒絕。
+ */
+export function unaskedRefusal(reason: UnaskedReason, requested: SandboxMode): string {
+  const head = `升級到 "${requested}" 要人核准，`;
+  switch (reason) {
+    case 'policy-never':
+      return (
+        `${head}但這個 session 關掉了人工核准，所以沒有去問人。` +
+        '這不是有人拒絕了它——是沒有人被問到。'
+      );
+    case 'no-channel':
+      return (
+        `${head}但這次組裝沒有 checkpointer，核准之後接不回來，所以沒有去問人。` +
+        '這不是有人拒絕了它——是沒有可用的核准管道。'
+      );
+    case 'no-service':
+      return (
+        `${head}但這次組裝沒有提供核准管道，所以沒有去問人。` +
+        '這不是有人拒絕了它——是組裝點沒接上問人的那條路。'
+      );
+  }
+}
+
+/**
+ * 人按了拒絕、又沒給理由時的那句話。照 dsh：它照舊被擋，停下來說明，不要繞路。
+ * @param target - 模型指名的檔。
+ * @param requested - 模型要的那一格。
+ * @returns 給模型的拒絕。
+ */
+export function rejectedRefusal(target: string, requested: SandboxMode): string {
+  return (
+    `有人看過並拒絕了把 ${JSON.stringify(target)} 升到 ${requested}。` +
+    '它照舊被擋，停下來說明，不要換條路繞過去。'
+  );
+}
 
 /**
  * 核准卡上的那句話。**理由原樣放進去**，它的讀者是人（模組註解第 4 條）。
@@ -161,27 +222,81 @@ interface ToolRuntimeLike {
   readonly toolCall?: { readonly id?: string };
 }
 
-function createEscalationTool(controller: SandboxModeController) {
+/** 人回來的東西。形狀與核准閘門收的相同（`approval.ts`）。 */
+interface EscalationVerdict {
+  readonly decisions?: readonly { readonly type?: string; readonly message?: string }[];
+}
+
+/**
+ * @param controller - 這次組裝那一格。
+ * @param channel - 這次組裝有沒有人可以按核准；組裝點沒提供時是 `undefined`，當作沒有人可問。
+ */
+function createEscalationTool(
+  controller: SandboxModeController,
+  channel: ApprovalChannel | undefined,
+) {
   return tool(
-    (args: z.infer<typeof escalationSchema>, runtime: ToolRuntimeLike) => {
-      // **核准之後再判一次**：人看卡片的那段時間裡，`/sandbox` 可能已經換過格子。
-      const current = controller.current;
-      if (!isStrictlyWider(current, args.sandbox_permissions)) {
-        return toolRefusal(nonWideningRefusal(args.sandbox_permissions, current), {
-          callId: runtime?.toolCall?.id ?? '',
+    async (args: z.infer<typeof escalationSchema>, runtime: ToolRuntimeLike) => {
+      // 回拒絕，不拋：中斷之後才落定的那幾條出口，拋出去會在 resume 那一輪逸出成整場 run 死掉
+      // （`@nexus/plugin-ask-user` 量過）。核准閘門的 `denial()` 也是這個形狀。
+      const refuse = (message: string) =>
+        toolRefusal(message, {
+          callId: toolCallIdOf(runtime) ?? '',
           name: SANDBOX_ESCALATION_TOOL_NAME,
         });
+      const { file_path: target, sandbox_permissions: requested, justification } = args;
+      // **順序照 dsh**：先驗欄位（`validateEscalationArgs`），再判加寬，最後才看有沒有人可問。
+      if (target.trim() === '') return refuse(MISSING_TARGET_REFUSAL);
+      if (justification.trim() === '') return refuse(BLANK_JUSTIFICATION_REFUSAL);
+      // resume 時本體整個重跑，所以這一格在**人按下去之後**又判一次：人看卡片的那段時間裡，
+      // `/sandbox` 可能已經換過格子。
+      const current = controller.current;
+      if (!isStrictlyWider(current, requested)) {
+        return refuse(nonWideningRefusal(requested, current));
+      }
+      // 子代理的核准政策釘成 `policy-never`（#324），見模組註解「子代理怎麼拒」。
+      const unasked: UnaskedReason | undefined =
+        controller.delegatedMode !== undefined
+          ? 'policy-never'
+          : channel === undefined
+            ? 'no-service'
+            : channel.kind === 'human'
+              ? undefined
+              : channel.kind;
+      if (unasked !== undefined) return refuse(unaskedRefusal(unasked, requested));
+
+      // `interrupt` 用拋例外傳播，**不能包在 try/catch 裡**
+      // （`@langchain/langgraph@1.4.12`，`dist/pregel/runnable_types.d.ts:56-57`）。
+      const answer = (await interrupt({
+        kind: APPROVAL_INTERRUPT_KIND,
+        actionRequests: [
+          {
+            name: SANDBOX_ESCALATION_TOOL_NAME,
+            args,
+            description: escalationReason(target, requested, justification),
+          },
+        ],
+        reviewConfigs: [
+          { actionName: SANDBOX_ESCALATION_TOOL_NAME, allowedDecisions: ['approve', 'reject'] },
+        ],
+      })) as EscalationVerdict | undefined;
+
+      const verdict = answer?.decisions?.[0];
+      if (verdict?.type === 'reject') {
+        return refuse(verdict.message ?? rejectedRefusal(target, requested));
+      }
+      if (verdict?.type !== 'approve') {
+        return refuse(
+          `核准回覆看不懂：${JSON.stringify(answer)}。` +
+            '這一格只收 { decisions: [{ type: "approve" | "reject" }] }，所以沒有升級。',
+        );
       }
       // 綁的是**這一刻**最近被擋下的那一次。同一則訊息裡另有平行的變更也被擋的話，綁到的
       // 可能是它——那時候對不上的一邊認領不到，是 fail-closed 的方向（見控制器的 `#denial`）。
-      controller.grant({
-        mode: args.sandbox_permissions,
-        target: args.file_path,
-        denied: controller.lastDenial,
-      });
+      controller.grant({ mode: requested, target, denied: controller.lastDenial });
       return (
-        `核准了：${JSON.stringify(args.file_path)} 剛才被擋下的那一次操作可以在 ` +
-        `${args.sandbox_permissions} 之下跑一次。現在把它原樣重試——操作或內容改了就不算。`
+        `核准了：${JSON.stringify(target)} 剛才被擋下的那一次操作可以在 ` +
+        `${requested} 之下跑一次。現在把它原樣重試——操作或內容改了就不算。`
       );
     },
     {
@@ -193,37 +308,21 @@ function createEscalationTool(controller: SandboxModeController) {
 }
 
 /**
- * 掛上升級：工具、只認它的閘門，並告訴控制器「這個組裝有升級」。
+ * 掛上升級：工具（問人在它的本體裡），並告訴控制器「這個組裝有升級」。
  *
- * **三件放在同一步**，理由同 `@nexus/plugin-submit-record` 把工具與閘門放在一起：拆開的失敗
- * 方式是「工具在、閘門沒掛」（模型自己升級，一張卡都不出現），或「指引在、工具不在」
- * （fence 叫模型去呼叫一顆不存在的工具）。
+ * **兩件放在同一步**：拆開的失敗方式是「指引在、工具不在」（fence 叫模型去呼叫一顆不存在的工具）。
+ * 以前還有第三件——一顆只認這個名字的核准閘門——[#700](https://github.com/DemianLi/nexus-agent/issues/700)
+ * 照 dsh 把問人搬進本體之後拿掉了，留著的話同一次升級會問兩次。
  *
- * **閘門沒有開關**，同 `submit_record`：這顆工具存在的意義就是讓人看過。
+ * **問人沒有開關**：這顆工具存在的意義就是讓人看過。
  *
- * @param registry - plugin 拿到的註冊表。
+ * @param registry - plugin 拿到的註冊表。核准管道從 {@link CHANNEL_SERVICE} 讀（軟相依，讀不到就 fail-closed）。
  * @param controller - 這次組裝那一格，grant 發在它身上、fence 從它身上認領。
  */
 export function registerSandboxEscalation(
   registry: Parameters<NexusPlugin['apply']>[0],
   controller: SandboxModeController,
 ): void {
-  registry.tools.register(createEscalationTool(controller));
-  registry.approvals.gate((exec, next) => {
-    if (exec.name !== SANDBOX_ESCALATION_TOOL_NAME) return next();
-    const { file_path: target, sandbox_permissions: requested, justification } = exec.args;
-    // 順序照 dsh：先判加寬，再判欄位。不加寬的請求連欄位齊不齊都不必看。
-    const current = controller.current;
-    if (!isStrictlyWider(current, requested)) {
-      return { kind: 'deny', reason: nonWideningRefusal(requested, current) };
-    }
-    if (typeof target !== 'string' || target.trim() === '') {
-      return { kind: 'deny', reason: MISSING_TARGET_REFUSAL };
-    }
-    if (typeof justification !== 'string' || justification.trim() === '') {
-      return { kind: 'deny', reason: BLANK_JUSTIFICATION_REFUSAL };
-    }
-    return { kind: 'ask', reason: escalationReason(target, requested, justification) };
-  });
+  registry.tools.register(createEscalationTool(controller, registry.services.get(CHANNEL_SERVICE)));
   controller.enableEscalation(SANDBOX_ESCALATION_HINT);
 }
