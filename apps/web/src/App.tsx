@@ -129,13 +129,6 @@ export function inputPlaceholder({
 /** 提問面板名稱列右邊的 ❌：停止這一輪、不回答這些問題（§4.3、§8）。名稱與 tooltip 同一句，不加確認。 */
 export const STOP_QUESTIONS_LABEL = '停止這一輪，不回答這些問題';
 
-/**
- * 對話介面。
- *
- * agent 跑在 Node 那一端，中間是 `@nexus/wire` 那條線（上行 HTTP POST、下行 SSE）。
- * 起 agent 的方式：`pnpm --filter @nexus/harness run serve`，dev server 的
- * `/threads` 會轉過去（見 `vite.config.ts`）。
- */
 const NO_NAMES: ReadonlyMap<string, string> = new Map();
 
 /** 背景子代理自己的對話裡一則項目的畫法：同主對話（`Transcript` 的 `Entry`），不給評分、不給邊框光。 */
@@ -143,6 +136,13 @@ function renderSubagentEntry(entry: ConversationEntry) {
   return <TranscriptEntry entry={entry} beam={false} subagentNames={NO_NAMES} />;
 }
 
+/**
+ * 對話介面。
+ *
+ * agent 跑在 Node 那一端，中間是 `@nexus/wire` 那條線（上行 HTTP POST、下行 SSE）。
+ * 起 agent 的方式：`pnpm --filter @nexus/harness run serve`，dev server 的
+ * `/threads` 會轉過去（見 `vite.config.ts`）。
+ */
 export function App({ client }: { client?: WireClient } = {}) {
   // 初始化器只讀不寫——StrictMode 會跑它兩次（見 `recallThread`）。寫在 effect 裡，存的就是
   // 真的留下來的那一個。
