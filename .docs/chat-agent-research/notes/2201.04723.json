@@ -1,0 +1,187 @@
+{
+  "id": "2201.04723",
+  "title": "Human Evaluation of Conversations is an Open Problem: comparing the sensitivity of various methods for evaluating dialogue agents",
+  "topic": "T7",
+  "subarea": "多輪對話與互動式評估",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在同一批群眾工作者下（論文稱各協定用同一套篩選規則，精讀時發現篩選只套用在逐輪任務的工作者身上），用 BlenderBot 系列的三組模型配對，並排比較五種對話人評協定（單模型／成對 × 逐輪／整段，外加 self-chat 版 Acute-Eval）的區分力與蒐集成本，結論是沒有一種協定在三組配對上都最好。",
+  "problem": "開放領域對話沒有可靠的自動指標，人評被當成黃金標準；但人評本身該怎麼做（逐輪評或整段評、兩模型並排或單一模型打絕對分、評分者親自聊或讀別人的對話）沒有共識。不同協定的統計敏感度不同，直接決定要花多少標註工時才分得出兩個模型，也影響結論能不能重現。在此之前，各篇論文多半各用各的協定，很少把協定本身拿來對照量測。",
+  "core_idea": "把「哪種人評協定比較好」本身當成實驗變數：固定對話設定、受評模型、評估問題與工作者篩選，只換協定。敏感度用兩個量來看：預期較強的 BlenderBot3B 對其他模型的勝率，以及達到統計顯著所需的群眾工時。再挑三種性質不同的模型差異（回應長度、參數量、有沒有用對話資料微調），看各協定的敏感度怎麼隨差異類型改變。",
+  "method": {
+    "對話設定": "每段對話由一位群眾工作者（Human Speaker）與模型（Bot Speaker）進行。工作者開始時拿到兩句 persona 句子，照著扮演角色。工作者第一句固定為「Hi!」（沿用 Meena 的慣例）。雙方各講 6 輪後結束。評估三個面向：preference（長對話中比較想跟誰聊）、humanness（哪一方比較像人）、interestingness（強迫二選一：哪一方有趣、哪一方無聊）。問句措辭改寫自 Acute-Eval，逐輪版與整段版只差在主詞是「下一句回應」還是「說話者」。persona 句子的來源文中沒寫。",
+    "PW-Turn（成對逐輪）": [
+      "每次輪到 bot 發言，同時由兩個受比較的模型各產生一句回應，順序隨機，一起給工作者看。",
+      "工作者依該任務指定的面向選出較好的一句，而且必須寫自由文字理由。被選中的那句成為 bot 的實際發言，對話從那裡接下去。",
+      "每位工作者在每個（模型配對 × 面向）組合只做一段對話。",
+      "上工前的 onboarding（附錄 A）：先標註一段示範對話，其中一方每輪有兩個候選，一個明顯較好；四組都要選對，有兩次機會。",
+      "聚合方式：Lin = x/(x+y)，x、y 是兩模型被選中的輪數；Sqr = 每段對話先算 x²/(x²+y²) 再對所有對話取平均；WTA（winner-takes-all）= 每段對話裡贏較多輪的模型拿下整段，等同指數趨近無限大，再對對話取平均。另外比較用全部 6 輪與只用第 2–6 輪。"
+    ],
+    "PW-Dialog（成對整段，即 Acute-Eval）": [
+      "給工作者看兩段完整對話，各來自一個模型，問哪一位說話者在指定面向較好，並寫理由。",
+      "素材有兩種：(1) 工作者與模型的對話；(2) 同一模型自己跟自己聊的 self-chat。",
+      "對話數的設定（附錄 F）：每對對話組合最多評一次；每個模型有 N 段對話時，最多能做 N² 次比較。真人對話版的成本要另外算上蒐集對話的工時。"
+    ],
+    "SM-Turn／SM-Dialog（單模型）": [
+      "兩者在同一個介面蒐集：工作者與單一模型聊 6 輪，每則模型回應都要勾選是否 engaging、human-like、interesting（可複選）；對話結束時，對三個面向各給一個 1–5 的 Likert 分數。",
+      "逐輪勾選的結果稱為 SM-Turn，結尾的 Likert 分數稱為 SM-Dialog。",
+      "作者觀察到成績高度依賴蒐集日期，所以四個模型同一時間一起跑；每位工作者每個模型只做一段。",
+      "SM-Turn 的 WTA 定義為：至少一半回應被標為成功的對話所占比例。"
+    ],
+    "受評模型與配對": [
+      "BlenderBot3B：2.7B 參數，先在 pushshift.io 的 Reddit 資料上預訓練，再用多個對話資料集微調，最小生成長度 20 token。",
+      "BlenderBot3B-M0：同一個模型，但不設最小生成長度。",
+      "BlenderBot90M：90M 參數，訓練資料與 3B 相同。",
+      "Reddit3B：只做 Reddit 預訓練、沒有對話微調的 3B 模型。",
+      "生成設定一律沿用 Roller et al. 2021（只有 -M0 例外）。成對協定只比三組，都以 BlenderBot3B 為一方：Length（對 3B-M0）、Size（對 90M）、Fine-tuning（對 Reddit3B）。"
+    ],
+    "工作者篩選（§3.2、附錄 B）": [
+      "只收美國居民，在美東時間平日約上午 9 點到下午 6 點蒐集。成對協定分散在數週內的多個日期蒐集，以平滑日間變異。",
+      "PW-Turn 或 SM-Turn 的對話只要犯任一條，該工作者在所有協定的資料一律回溯刪除：平均每則訊息少於 3 個字；自己的第一則訊息又打招呼（固定的 Hi! 已經打過了）；多則訊息全用大寫；後面的訊息重複第一則；任何一則有冒犯性語言。"
+    ],
+    "跨協定比較（§4.4.1）": [
+      "PW-Turn 取第 2–6 輪的 WTA，SM-Turn 取第 3–6 輪的 WTA；兩者都是先前分析中最能拉開 BlenderBot3B 與其他模型差距的設定。",
+      "單模型協定沒有直接的勝率，所以算「等效勝率」：從兩個模型的評分做 bootstrap 抽樣，計算一模型的 SM-Turn 成功率或 SM-Dialog Likert 高於另一模型的比例。抽樣大小與平手的處理方式文中沒寫。",
+      "PW combo：以 1:5 的比例從 PW-Turn（第 2–6 輪）與 PW-Dialog self-chat 抽取評分，合併計算勝率。"
+    ],
+    "達顯著所需工時（§4.4.3、附錄 F）": "PW-Turn 與 PW-Dialog 用雙尾二項檢定，SM-Turn 與 SM-Dialog 用雙尾獨立 t 檢定，顯著水準 p = 0.05。這裡的逐輪協定不用 WTA，因為 WTA 會讓評分筆數大減、反而更慢達到顯著。工時估計包含各協定必做的 onboarding 時間。各協定的實際工時只畫在 Figures 7–9，正文沒有數值，只說趨勢大致與勝率一致。",
+    "單模型合併（附錄 G）": "先把 SM-Dialog 的 1–5 Likert 平移縮放到 [0,1]，與第 3–6 輪的 SM-Turn WTA 成功率依權重做加權平均，掃過多組權重，找出最快達到顯著的那組。",
+    "可重複性（附錄 E）": "把每個協定的評分依時間順序切成每塊 45 分鐘工作者時間，計算各塊勝率的標準差，再對三個面向取平均。真人對話版的 PW-Dialog 因為蒐集時間不規則而省略。",
+    "理由文字分析（附錄 D）": "PW-Turn 的理由文字以空白斷詞算平均字數；再用 scikit-learn 的 TfidfVectorizer 計算詞的 TF-IDF，以 NLTK 英文停用詞過濾，丟掉 document frequency 高於 0.8 的詞，列出每個模型前 20 個詞。",
+    "近因分析（§4.3.1）": "以 SM-Dialog Likert 為依變數、各輪 SM-Turn 評分為自變數做 OLS 迴歸；為降低變異，兩邊都先對三個面向取平均。",
+    "資料量與工時（§4.1）": "篩選後，PW-Turn 每個（配對 × 面向）最少 144、平均 231 筆評分（通常每段 6 筆）；PW-Dialog 最少 191、平均 324 筆；SM-Turn 每個模型最少 349、平均 411 筆；SM-Dialog 最少 58、平均 68 筆（每段一筆）。平均工時：PW-Turn 每個（配對 × 面向）5.73 小時，PW-Dialog 6.03 小時，SM-Turn 加 SM-Dialog 每個模型合計 4.39 小時。",
+    "重做時需自行補齊的缺口": "bootstrap 等效勝率的抽樣大小與平手處理；真人對話版 PW-Dialog 的對話從哪裡來（是否重用 SM 任務的對話）；Figures 7–9 與 11–13 的實際工時數值；群眾平台與報酬；persona 句子的來源；PW-Dialog 評分者是否有對應的 onboarding 與篩選。"
+  },
+  "assumptions": [
+    "BlenderBot3B 在三組比較中都真的比較好，因此它的勝率越接近 100%，就代表協定越敏感（作者明說預期 BlenderBot3B 較好）。",
+    "同一個工作者池、同一套篩選規則下，協定之間的差異來自協定本身，而不是工作者組成或蒐集日期。",
+    "6 輪、由 persona 引導、以 Hi! 開場的開放領域閒聊，足以呈現受評模型之間的差異。",
+    "三個面向的逐輪問句與整段問句措辭幾乎相同，可以視為同一個構念，跨協定比較勝率才有意義。",
+    "達顯著所需工時可以從現有樣本的效果量與評分速度外推。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "自建的群眾外包人評：工作者扮演 persona，與模型進行 6 輪開放領域閒聊",
+      "三組模型配對：Length（BlenderBot3B 對 BlenderBot3B-M0）、Size（對 BlenderBot90M）、Fine-tuning（對 Reddit3B）",
+      "單模型協定另外評四個模型：BlenderBot3B、BlenderBot3B-M0、BlenderBot90M、Reddit3B"
+    ],
+    "metrics": [
+      "BlenderBot3B 勝率：Lin、Sqr、WTA，各分全部輪與去掉前段輪",
+      "SM-Turn 成功率（Lin、WTA）與 SM-Dialog Likert 1–5",
+      "單模型協定以 bootstrap 換算的等效勝率",
+      "達 p < 0.05 所需群眾工時（二項檢定或 t 檢定）",
+      "45 分鐘區塊之間勝率的標準差（可重複性）",
+      "各輪 SM-Turn 對 SM-Dialog 的 OLS 係數（近因偏誤）",
+      "理由文字的平均字數與 TF-IDF 前 20 詞"
+    ],
+    "baselines": [
+      "五種協定互為比較對象：SM-Turn、SM-Dialog、PW-Turn、PW-Dialog（真人對話）、PW-Dialog self-chat",
+      "PW combo：PW-Turn 與 PW-Dialog self-chat 以 1:5 合併",
+      "SM-Turn 與 SM-Dialog 依不同權重加權平均"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "沒有一種協定在三組配對上都最敏感：三組配對的最佳協定各不相同，兩種合併做法也沒有在任何一組拿到最高",
+      "numbers": "Table 3 各配對最高的 BlenderBot3B 勝率（Pref／Human／Inter）：Length 由 PW-Dialog 拿下（self-chat 版 82%、83%，真人對話版 Inter 85%）；Size 由 SM-Dialog 拿下（60%／66%／64%）；Fine-tuning 由 PW-Turn 拿下（93%／93%／85%）。PW combo（1:5）分別是 Length 80／81／73%、Size 54／55／56%、Fine-tuning 69／65／66%",
+      "section": "§4.4.1、Table 3",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "只差在回應長度的 Length 配對，成對協定明顯勝過單模型協定；作者推測是並排呈現讓長度差異一目了然",
+      "numbers": "Length（Pref／Human／Inter）：PW-Turn 74／79／84%；PW-Dialog 真人對話 77／77／85%、self-chat 82／83／73%；SM-Turn 55／52／60%；SM-Dialog 58／59／65%",
+      "section": "§4.4.1、Table 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "只差在參數量的 Size 配對，所有協定都接近 50%，整段協定略勝逐輪協定；這組在 Roller et al. 2021 的 Acute-Eval 中原本就沒有顯著差異",
+      "numbers": "Size（Pref／Human／Inter）：PW-Turn 49／54／55%；PW-Dialog 真人對話 56／61／59%、self-chat 55／55／57%；SM-Turn 59／52／55%；SM-Dialog 60／66／64%",
+      "section": "§4.4.1、Table 3",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "有無對話微調的 Fine-tuning 配對，PW-Turn 遠勝其他協定；作者推測沒微調的回應在親自對話時特別突兀，讀別人對話或單獨評分時就不明顯",
+      "numbers": "Fine-tuning（Pref／Human／Inter）：PW-Turn 93／93／85%；PW-Dialog 真人對話 70／54／59%、self-chat 66／61／64%；SM-Turn 64／62／60%；SM-Dialog 71／73／70%（第二好）",
+      "section": "§4.4.1、Table 3",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "PW-Turn 去掉 bot 的第 1 輪、再改用 WTA 聚合，勝率一路上升；第 1 輪多半是寒暄，Size 配對在第 1 輪甚至大幅落後",
+      "numbers": "Table 1：Length Pref 從 63%（全部輪 Lin）升到 67%（第 2–6 輪 Lin）、72%（Sqr）、74%（WTA）；Fine-tuning Pref 80→82→88→93%；Size Pref 則停在 48–53%（WTA 49%）。Table 4：Size 在第 1 輪的 BlenderBot3B 勝率只有 26%／29%／31%，作者歸因於 BlenderBot3B 較少用 Hi 或 Hello 開頭",
+      "section": "§4.2、§4.2.1、Table 1、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "整段 Likert 分數受後段輪次影響較大，作者解讀為評分者有近因偏誤",
+      "numbers": "OLS 係數只畫在 Figure 6，正文沒有數值；趨勢是越後面的輪次係數越大。BlenderBot3B 的 SM-Turn 各輪成功率本身大致平穩，只有前兩輪略低（Table 5）",
+      "section": "§4.3.1、Figure 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "以 45 分鐘區塊切分時，PW-Turn、PW-Dialog、SM-Turn 的勝率最穩定，SM-Dialog 波動較大；逐輪協定改用 WTA 後波動明顯變大",
+      "numbers": "Table 8 區塊間勝率標準差（Length／Size／Fine-tuning）：PW-Turn 10／8／11%；PW-Turn WTA 18／24／13%；PW-Dialog self-chat 9／9／6%；SM-Turn 14／13／12%；SM-Turn WTA 17／16／15%；SM-Dialog 14／15／16%",
+      "section": "§4.4.1、附錄 E、Table 8",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "把同一段對話的 SM-Turn 與 SM-Dialog 加權平均，比單用 SM-Dialog 稍快、比單用 SM-Turn 快很多達到顯著，最佳權重是 SM-Turn 占很小的比例",
+      "numbers": "最快達顯著的權重為 SM-Turn:SM-Dialog = 1:5 或 1:10；實際工時只畫在 Figures 11–13，正文沒有數值",
+      "section": "§4.4.2、附錄 G、Figures 11–13",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "只比較三組模型配對；要完整判斷各協定的適用情境，需要多得多的配對，群眾工時會大幅增加（§4.4.2、§5）。",
+    "SM-Turn 與 SM-Dialog 在同一介面蒐集，兩者結果可能相關（§3.1.4 註 2）。",
+    "單模型協定的成績高度依賴蒐集日期，推測是工作者池的日間變異（§3.1.4）。",
+    "PW-Turn 三個面向的勝率幾乎一樣，原因不明：可能是問題定義模糊、面向本身相關，或其他因素（§4.2）。",
+    "逐輪協定的 WTA 會讓勝率估計較不精確，算顯著工時時效果較差，因此在那部分改不用 WTA（附錄 E、附錄 F 註 5）。",
+    "PW-Dialog 的對話數設成每對組合最多評一次，模型可能只靠少數幾段對話被評，代表性存疑（附錄 F 註 6）。",
+    "合併逐輪與整段協定的做法縮小了兩者的差距，但沒有在所有情況下勝過個別協定（§5）。",
+    "對話多樣性、實驗可重複性、結果可解釋性只有初步討論，值得更完整的分析（§5）。"
+  ],
+  "limitations_observed": [
+    "「敏感度」被定義成 BlenderBot3B 的勝率，等於預設 BlenderBot3B 一定比較好，把「偏向某個模型」與「分辨能力」混在一起。Length 配對最明顯：兩個模型只差在最小生成長度 20 token，並排呈現讓工作者更容易挑長的那句（附錄 D 的理由詞裡就有 detailed、longer）。照這個標準，越會放大冗長偏好的協定得分越高；對今天校準 LLM-as-a-judge 的冗長偏誤來說，這個定義不能直接沿用。",
+    "Table 3 的單模型「等效勝率」來自 bootstrap，但抽樣大小與平手處理都沒寫。它量的是「抽到的 A 分數高於 B 的機率」，和成對協定裡「單次判斷選 A 的比例」不是同一個統計量，卻在同一張表上直接比（例如 Length 的 SM-Dialog 58% 對 PW-Dialog 77%）。若用全量樣本 bootstrap，SM-Dialog Length Pref 是 4.19 對 4.02（標準差 0.8–1.3、每模型約 68 筆），換算出來應該遠高於 58%，所以實際的抽樣應該很小，但無從確認。",
+    "逐輪協定的聚合設定是在同一份資料上事後挑的：§4.3 明說去掉前兩輪是為了讓 BlenderBot3B 拉開最多，PW-Turn 也挑了第 2–6 輪 WTA。整段協定沒有對應的旋鈕可調，所以 Table 3 對逐輪協定有樂觀偏誤。而 PW-Turn WTA 在 Table 8 的區塊標準差最大（18／24／13%），附錄 F 算顯著工時時又不用 WTA，Table 3 的 93% 與 Figures 7–9 的工時其實出自兩套不同的聚合方式。",
+    "Size 配對各協定的差距（SM-Dialog 60–66% 對 PW-Turn 49–55%）小於 Table 8 的區塊標準差（8–24%），Table 3 又沒有附信賴區間或顯著性。引言說單模型協定擅長分辨細微差異，主要只靠這一組；而且同組的 SM-Turn 只有 59／52／55%，並不支持引言把 SM-Turn 一併歸為擅長此情境。",
+    "PW-Turn 中被選中的回應會成為後續的對話歷史，所以後面幾輪兩個模型都是在「大多由 BlenderBot3B 寫成」的脈絡上作答。較弱模型自己的重複、前後矛盾等跨輪問題根本累積不起來，這與引言強調的「要評多輪才抓得到 emergent faults（例如重複）」相矛盾。Figure 5 勝率隨輪數上升，也可能部分來自脈絡分布越來越偏向 BlenderBot3B，而不只是作者給的兩個解釋（開場寒暄難判、改進逐步累積）。",
+    "摘要說不同方法的人類一致性不同，但全文沒有報告任何評分者間一致性（kappa、alpha 之類），只用區塊間勝率標準差代替；可重複性也只在同一次蒐集期內切塊，沒有隔一段時間重跑。",
+    "Figure 6 的近因偏誤推論有混淆：SM-Turn 勾選與 Likert 在同一個介面，工作者剛勾完第 6 輪就馬上打總分；而且 PW-Turn 與 SM-Turn 都顯示前兩輪多是寒暄、資訊量低，前段係數小也可能只是前段評分對總分沒有解釋力，不一定是記憶上的近因效應。",
+    "篩選規則不對稱：附錄 B 的檢查只套用在參與逐輪任務的工作者身上；只做 PW-Dialog 閱讀評分的工作者沒有自己的對話可檢查，文中也沒說他們有對應的 onboarding 或篩選，所以「所有協定用同一套篩選」的前提並不完全成立。",
+    "PW-Turn 三個面向的勝率幾乎一樣，但在單模型介面上差很多（SM-Turn 的 Interestingness 成功率 35–47%，其他兩個面向 50–73%）。作者把這歸因於並排列出三個問題有助區分，但這也表示同一個面向在兩類協定裡可能不是同一個構念，跨協定直接比勝率的前提並不穩。",
+    "外推範圍有限：單一模型家族（三組都以 BlenderBot3B 為一方）、6 輪 persona 閒聊、固定 Hi! 開場、美國平日的群眾工作者，完全沒有任務成功或工具使用。結論能不能搬到任務導向或工具型 agent 的評估沒有驗證過，而 2022 年這三種差異（長度、尺寸、有無微調）也不是今天 LLM 之間主要的差異型態。"
+  ],
+  "framework_role": "屬於 T7 的人評協定設計，而且正好是 T7 章〈已知缺口與未讀〉所說「直接比較人評方法（Likert 對成對、逐輪對整段）敏感度」的研究：它在 2022 年以同一批工作者並排比較五種協定，並把「達顯著所需工時」當成選協定的準則。所以章裡「本章沒有人評方法比較」與「多輪互動式評估從 2016 年跳到 2023 年」的空白，至少有這一篇 2022 年的直接比較可以填。不過它的射程只到開放領域閒聊：一個 BlenderBot 家族、三組配對、6 輪 persona 對話、美國群眾工作者，沒有任務成功，因此對 agent 評估的結論只能當作人評端的參照，例如替 LLM-as-a-judge 校準時該拿哪種人評當金標準、成對並排可能放大長度偏好。另有兩個交界：一是 Lin／Sqr／WTA 把逐輪判定聚合成整段分數，依章節分工屬於 T8 的分數聚合，T7 只點出；二是 PW-Turn 讓評分者同時扮演推動對話的使用者，評分選擇會改寫後續對話，這是 T6 使用者角色與 T7 評估角色合一的設計，用 LLM 模擬使用者兼評審時會遇到同樣的歷史污染問題。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "所有協定吃的都是互動紀錄：PW-Turn 在對話進行中逐輪記下工作者的選擇與理由，SM-Turn 逐輪記下勾選、SM-Dialog 在結尾記下 Likert；PW-Dialog 則把事先記錄好的真人對話或 self-chat 拿出來離線成對評分。理由文字也被拿去做 TF-IDF 分析，用來解釋勝負原因。論文比較的正是這些紀錄要怎麼收（逐輪或整段、成對或單一）、怎麼聚合，才能用最少工時分出模型。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。ParlAI 的專案頁（https://parl.ai/projects/humaneval/）釋出了 PW-Turn、Fast-ACUTE 與單模型評估的群眾任務程式碼，但這屬於可重現性，不是產品採納；沒有查到官方產品文件、model card 或官方部落格採用這些協定。"
+  },
+  "reproducibility": {
+    "code": "https://parl.ai/projects/humaneval/（指向 ParlAI 的 parlai/crowdsourcing/tasks/pairwise_per_turn_eval、parlai/crowdsourcing/tasks/acute_eval 的 Fast-ACUTE 段落，以及 parlai/crowdsourcing/projects/humaneval/single_model_eval）",
+    "data": "未明示：論文與專案頁都沒有說明是否釋出蒐集到的對話、評分與理由文字。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "直接量測人評協定的敏感度與成本，能補上 T7 章「沒有人評方法比較」的缺口；但證據只來自 BlenderBot 三組配對的開放領域閒聊，敏感度的定義又預設了答案，對 agent 與任務型評估的外推有限，有參考價值但不到必讀。",
+  "related": [
+    "1909.03087",
+    "2004.13637",
+    "2001.09977",
+    "1902.08654",
+    "2010.02140",
+    "1603.08023",
+    "2106.03706",
+    "2111.05241"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

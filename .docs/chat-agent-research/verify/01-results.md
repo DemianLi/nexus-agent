@@ -1,11 +1,12 @@
 # T1 章節主張的程式驗證結果
 
-對象：[`chapters/01-goal-intent.md`](../chapters/01-goal-intent.md)。八條主張分兩批：
+對象：[`chapters/01-goal-intent.md`](../chapters/01-goal-intent.md)。九條主張分三批：
 
 - 第 1–4 條來自精讀筆記的 `limitations_observed`，也就是精讀 agent 自己算出來、沒有經過同儕審查的那一類。
 - 第 5–8 條是 W4 評審指出、章節數字比對工具驗不到的主張：一條是本章推翻筆記結論的重算（MCT 增益），三條是全表計數或全表加總。
+- 第 9 條是 2026-10-02 補讀 2106.04564 時新增的：全表計數、精讀時的回推與基準率，以及章節引用的名次。同日稽核後改寫：precision 差距補上另一種拆分順序、補上 BANKING77-OOS 兩情境的操作點比較、ToD-BERT 改和底座 BERT 比，並刪掉三個只比平均、差距落在 ± 值內的名次。
 
-八條都能用論文表格裡的數字驗。
+九條都能用論文表格裡的數字驗。
 
 | # | 主張 | 程式 | 結論 |
 | --- | --- | --- | --- |
@@ -17,13 +18,14 @@
 | 6 | 2311.09469 Table 4 的全表計數：b=10% 平均、兩種熵方法低於隨機的格數、AUROC 範圍與低於 0.5 的格數 [arXiv:2311.09469] | `01-intentsim-table4-counts.py` | **證實**；Semantic Entropy 也有 8 格低於、1 格等於隨機 |
 | 7 | 2305.07157 Table 5：意圖過濾讓 in-scope accuracy 多半下降，OOS recall 只對 GPT-3 上升 [arXiv:2305.07157] | `01-intent-filter-table5.py` | **證實** |
 | 8 | 2410.12361：Precision＋False-Alarm＝100，Recall 近於 1 的七列 F1 排名與 Precision 排名相同 [arXiv:2410.12361] | `01-proactive-precision-falsealarm.py` | **證實**；「Recall＝1」只是近似 |
+| 9 | 2106.04564 Table 4：ID-OOS 情境 recall 28／30 組較低、precision 全部較低；5-shot BANKING77-OOS 回推誤拒約 52% 到 73%；precision 的基準率與差距的兩種拆分順序；BANKING77-OOS 兩情境的操作點；in-scope 名次；ToD-BERT 對 BERT 的計數 [arXiv:2106.04564] | `01-idoos-table4.py` | **證實**；回推是用平均值算的近似，60 格校準最多超出 0.06 點；舊版的三個 ToD-BERT 名次落在 ± 值內，已從章節刪除 |
 
 共同做法：
 
-- 只用 Python 標準函式庫，沒有隨機數，每支執行不到 0.1 秒（Python 3.9.19）。
+- 只用 Python 標準函式庫，沒有隨機數，每支執行不到 0.1 秒（Python 3.9.19；2026-10-02 補讀後九支重跑，前八支輸出不變）。
 - 每個輸入數字都以原文字串的形式寫在程式裡，**數字由那串字解析出來**，同一串字也拿去 `.cache/text/<id>.txt` 做錨點比對（把全文的空行去掉、空白壓成一格後做子字串比對）。找不到錨點時結論一律印「無法判定」。`.cache/` 不進版控，沒有快取時程式會略過錨點檢查，照樣算。
 - 第 5、6 條的判定式：Intent-Sim 那支把章節寫的計數與範圍寫成常數，逐項和算出的值比，全部相符才判「證實」；MCT 那支除了增益的方向，也把 BERT 增益範圍與「Table 4 不是 BERT 版」納入判定。這兩支的結論字串由算出的值組成。
-- 量具校準（突變測試）：2026-09-26 重做，逐條清單見文末〈突變校準〉。第 1–4 條依序 3＋3＋3＋2＝11 種，第 5–8 條依序 3＋4＋2＋3＝12 種（MCT 3 種、Clarify When Necessary 4 種、Table 5 2 種、Proactive Agent 3 種），合計 11＋12＝23 種。沒有快取時，23 種都讓結論翻成「推翻」；有快取時，23 種都先被錨點擋下，結論印「無法判定」。未突變的原檔在兩種設定下都印「證實」、exit 0。
+- 量具校準（突變測試）：2026-09-26 重做，逐條清單見文末〈突變校準〉。第 1–4 條依序 3＋3＋3＋2＝11 種，第 5–8 條依序 3＋4＋2＋3＝12 種（MCT 3 種、Clarify When Necessary 4 種、Table 5 2 種、Proactive Agent 3 種），合計 11＋12＝23 種；第 9 條 2026-10-02 另做 8 種（稽核改寫後重做，見〈突變校準〉），總計 31 種。沒有快取時，31 種都讓結論翻成「推翻」；有快取時，31 種都先被錨點擋下，結論印「無法判定」。未突變的原檔在兩種設定下都印「證實」、exit 0。
 
 重現（在 repo 根目錄）：
 
@@ -306,13 +308,53 @@ TourSG 對平均方式不敏感。StanfordLU 則會因為 Weather 領域大幅�
 
 ---
 
+## 9. 2106.04564 Table 4：ID-OOS 對 OOD-OOS 的全表計數、回推誤拒與 precision 的基準率
+
+**主張**（2026-10-02 補讀時新增）：
+
+- 全表計數（5 模型 × 3 資料 × 2 shot＝30 組）：ID-OOS 情境的 OOS recall 30 組中 28 組低於 OOD-OOS 情境，例外只有 5-shot Banking 的 ALBERT（86.3 對 85.3）與 ELECTRA（89.4 對 87.3）；in-scope 準確率 19 組較低、11 組平均與 ± 值完全相同、0 組較高；OOS precision 30 組全部較低，其中 BANKING77-OOS 10 組全部較低。出處是筆記 `2106.04564.json` 的 `key_results` 第 1、2 條與 `limitations_observed` 第 4 條（「30 組裡有 11 組數字完全相同」），以及章節〈問題的演進〉2021-06 段、〈陷阱四〉。
+- 回推誤拒：被判 OOS 的筆數＝R×N_oos／P，扣掉真 OOS 就是被拒的 in-scope。5-shot BANKING77-OOS 的 ID-OOS 情境下，ALBERT 約 73%、BERT 約 70%、RoBERTa 約 52%；同一個 RoBERTa 在 OOD-OOS 情境約 21%；5-shot RoBERTa Banking 兩情境都約 15%。章節另外寫「五個模型都落在約 52% 到 73% 之間」，筆記只列三個，另兩個是本章補算。出處是 `limitations_observed` 第 3 條，以及章節〈陷阱一〉ID-OOS 條。
+- precision 的基準率：隨機拒識的 precision 等於測試集的 OOS 比例，CLINC 單領域 ID-OOS 情境 350／(500＋350)≈41.2%、OOD-OOS 情境 1000／(500＋1000)≈66.7%，BANKING77-OOS 1080／(2000＋1080)≈35.1%、1000／(2000＋1000)≈33.3%；5-shot BANKING77-OOS ID-OOS 的 precision 39.8–46.3，只比 35.1% 高 4.7–11.2 點。5-shot RoBERTa Banking 的 precision 差距 92.9→78.6（14.3 點）拆成「OOS 比例」與「recall」兩部分；這是非線性函數的逐段拆分，結果依順序而定，兩種都算。先換 recall、再換比例（筆記的拆法）：ID-OOS recall 也有 OOD 的 97.0、被拒的 in-scope 筆數不變，precision 約 82.0，拆成 92.9−82.0＝10.9 與 82.0−78.6＝3.4。先換比例、再換 recall（稽核後補）：recall 仍是 78.4、被拒筆數不變，只把 OOS 從 350 筆換成 1,000 筆，precision＝1,000／(1,000＋350／0.786−350)≈91.3（recall 在分子分母約掉），拆成 91.3−78.6＝12.7 與 92.9−91.3＝1.6。出處是 `limitations_observed` 第 2、3 條，以及章節〈陷阱一〉〈陷阱四〉。
+- BANKING77-OOS 兩情境只在基準率上可比（稽核後新增）：10 組裡只有 5-shot ALBERT 與 10-shot ELECTRA 兩組的 in-scope 準確率（平均與 ± 值）兩情境相同，其餘 8 組操作點不同；precision 差距最小的是 5-shot ALBERT 的 39.9−39.8＝0.1。出處是章節〈陷阱四〉。
+- 名次（稽核後改寫）：5-shot BANKING77-OOS ID-OOS 的 in-scope 準確率最低 ALBERT 20.3、最高 RoBERTa 43.0，10-shot 最高 RoBERTa 59.7；這三個名次與次低／次高者的差距都要大於兩者 ± 值的較大者。出處是 `key_results` 第 3 條與章節〈問題的演進〉2021-06 段。
+- ToD-BERT 的對照（稽核後改寫）：ToD-BERT 以 BERT-base uncased 初始化（[arXiv:2004.06871]），所以對照組是 BERT。ID-OOS 情境六格（3 資料 × 2 shot）裡，ToD-BERT 的 OOS recall 六格都較低，in-scope 準確率四格較高、兩格較低，precision 三格較高、三格較低；BANKING77-OOS 的 ID-OOS 情境三個指標 × 兩種 shot 共六格都低於 RoBERTa。出處是 `key_results` 第 6 條（「與 BERT 互有勝負」），以及章節〈問題的演進〉2021-06 段、〈爭議〉二。
+- 舊版主張的三個 ToD-BERT 名次（10-shot ID-OOS recall 在 Credit cards 與 BANKING77-OOS 最低、10-shot Banking 的 ID-OOS in-scope 最高）只比了平均。稽核指出差距都落在表中 ± 值之內，章節已刪；程式仍印出差距與 ± 值，但不進判定。
+
+**方法**：輸入取自 `.cache/text/2106.04564.txt`。Table 3（三種語句在 Train／Dev／Test 的筆數）與整段 Table 4（含欄位標頭、5-shot／10-shot 與 ID-OOS／OOD-OOS 的情境標籤）都以原文扁平化後的字串寫在程式裡，整段拿去全文快取做錨點比對，所以數字、欄位順序與每列屬於哪個 shot、哪個情境，都由同一個錨點擋住。另以六句正文當錨點：in-scope 被判 OOS 算錯、δ 在開發集上選、每組超參數訓練十次、表註說兩情境的 in-scope 準確率可能不同、CLINC 每個 ID-OOS 意圖抽 60 句進開發集、BANKING77 的 27 個意圖整批搬到 ID-OOS。Table 4 依原文順序解析成 60 格（每格 in-scope 準確率、OOS recall、OOS precision 的平均與 ± 值；± 精讀時推測是 10 次執行的標準差，論文未明說），檢查分七項，每項都把章節寫的數字當常數，與算出的值逐項比，全部相符才判「證實」：
+
+1. `counts`：30 組的 recall、in-scope、precision 逐組比較；in-scope 分四種（較低、平均與 ± 值都相同、較高、平均相同但 ± 值不同），第四種必須是 0。
+2. `calibration`（量具校準）：被拒的 in-scope 不可能多於答錯的 in-scope，所以回推的誤拒比例要 ≤ 100−A_in。60 格逐一檢查，容差 0.5 個百分點（表中數字應是 10 次執行的平均，用平均值回推只是近似）。
+3. `rejection`：5-shot BANKING77-OOS 五個模型的回推誤拒、五個模型的範圍、RoBERTa 的 OOD-OOS 情境，以及 5-shot RoBERTa Banking 兩情境，四捨五入到整數百分點後比對。
+4. `base_rate`：四個基準率、5-shot BANKING77-OOS ID-OOS 的 precision 範圍與高出基準的點數、兩種拆分順序的反事實 precision 與差距的拆分，四捨五入到一位小數後比對。
+5. `b77_clean`：BANKING77-OOS 十組裡兩情境 in-scope 準確率（平均與 ± 值）相同的組，以及 precision 差距最小的一組與差距；最小值有並列時判不成立。
+6. `ranks`：三個「最低／最高的模型」；最低或最高有並列，或與次低／次高者的差距不大於兩者 ± 值的較大者，都判不成立。舊版的三個 ToD-BERT 名次只印出，不進判定。
+7. `tod_bert`：ToD-BERT 對 BERT 在 ID-OOS 六格的五個計數（recall 較低、in-scope 較高／較低、precision 較高／較低），以及 BANKING77-OOS 的 ID-OOS 六格低於 RoBERTa 的格數。
+
+**實際輸出（摘要）**：
+
+- 錨點：Table 3、整段 Table 4、六句正文都找到。
+- 計數：recall 28／30 較低，例外是 5-shot Banking 的 ALBERT（ID 86.3 對 OOD 85.3，in-scope 54.1 對 63.1）與 ELECTRA（89.4 對 87.3，in-scope 64.8 對 75.5）；in-scope 19／11／0／0；precision 30／30 較低，BANKING77-OOS 10／10。5-shot in-scope 差距最大的三組是 RoBERTa BANKING77-OOS 43.0 對 62.1、ToD-BERT BANKING77-OOS 35.5 對 52.9、RoBERTa Credit cards 64.5 對 81.2，與筆記一致。
+- 校準：超出最多的一格是 10-shot ID-OOS ELECTRA Credit cards，超出 0.06 點，60 格都在容差內。
+- 回推：5-shot BANKING77-OOS ID-OOS 情境 ALBERT 73.1%、BERT 69.8%、ELECTRA 62.6%、RoBERTa 52.0%、ToD-BERT 57.3%，範圍 52.0%–73.1%；RoBERTa OOD-OOS 情境 21.4%；5-shot RoBERTa Banking ID-OOS 14.9%、OOD-OOS 14.8%（兩情境 A_in 都是 83.8）。
+- 基準率：41.18%、66.67%、35.06%、33.33%；5-shot BANKING77-OOS ID-OOS precision 39.8–46.3，高出 4.74–11.24 點。5-shot RoBERTa Banking 被拒的 in-scope 約 74.7 筆；先換 recall 的反事實 precision＝339.5／(339.5＋74.7)＝81.96，14.3 點差距拆成 10.9＋3.4；先換比例的反事實 precision＝784.0／(784.0＋74.7)＝91.30，拆成 12.7＋1.6。兩種順序都是大半來自 OOS 比例。
+- BANKING77-OOS 兩情境：in-scope 準確率相同的只有 5-shot ALBERT（20.3±2.4）與 10-shot ELECTRA（40.1±2.7），2／10 組；precision 差距最小是 5-shot ALBERT 的 0.1，10-shot ELECTRA 是 1.8，其餘八組 4.7 到 22.4。
+- 名次：5-shot 最低 ALBERT 20.3±2.4 對次低 BERT 25.4±3.6（差 5.1）、最高 RoBERTa 43.0±2.9 對次高 ToD-BERT 35.5±1.5（差 7.5），10-shot 最高 RoBERTa 59.7±1.2 對 ToD-BERT 54.3±1.8（差 5.4），都分得開。舊版三個名次：10-shot Credit cards recall ToD-BERT 70.2±5.9 對 BERT 74.5±6.9（差 4.3）、10-shot BANKING77-OOS recall 76.9±2.7 對 77.3±3.2（差 0.4）、10-shot Banking in-scope 80.7±2.5 對 ELECTRA 79.5±2.9（差 1.2），都落在 ± 值內。
+- ToD-BERT 對 BERT：recall 6／6 較低；in-scope 4 較高、2 較低；precision 3 較高、3 較低。BANKING77-OOS 的 ID-OOS 六格都低於 RoBERTa。
+
+**結論：證實。** 筆記的回推與計數都對得上；本章另外補算出五個模型的誤拒範圍，並用校準確認回推只是近似、最多超出不到十分之一個百分點，已回寫進章節〈陷阱一〉ID-OOS 條與〈程式驗證〉。稽核後補算的兩種拆分順序、BANKING77-OOS 兩情境的操作點比較，以及 ToD-BERT 對 BERT 的計數，回寫進章節〈問題的演進〉2021-06 段、〈陷阱四〉與〈爭議〉二；舊版三個 ToD-BERT 名次已從章節刪除。
+
+**重現**：`python3 .docs/chat-agent-research/verify/01-idoos-table4.py`
+
+---
+
 ## 沒有驗的
 
-候選清單上的八條都驗了。章節裡還有別的主張需要逐次原始輸出、公開 repo 或公開資料集才能驗，這次都沒有處理：
+候選清單上的八條與補讀新增的第 9 條都驗了。章節裡還有別的主張需要逐次原始輸出、公開 repo 或公開資料集才能驗，這次都沒有處理：
 
 - 2310.10176 的 p < 0.01 撐不撐得住、GID-FSD 在 3:1 崩到 17.33 是不是單次極端值：要逐次執行的原始輸出。
 - Proactive Agent 與 repo 公開結果的差異、RM 測試集與訓練集的事件重疊、EVPI 公開程式碼的行為：要下載公開 repo 或補充材料。
-- CLINC150 的 OOS 樣本偏向領域外：本章只有精讀時看 45 筆樣本的定性觀察，要量化得拿整份 OOS 集與 in-scope 集算主題距離，這次沒做。
+- CLINC150 的 OOS 樣本偏向領域外：精讀 1909.02027 時看了 45 筆樣本，是定性觀察。補讀的 2106.04564 對 CLINC 開發集 100 筆 OOS 做了人工檢查，但只問跟 Banking、Credit cards 這兩個單一領域相不相關（4 筆、0 筆，準則未說明），不是「多半在 10 個領域之外」的補強；那是人工判斷，程式無法重算。要量化得拿整份 OOS 集與 in-scope 集算主題距離，這次沒做。
+- 2106.04564 的資料集 README 與論文 Table 2 對 27 個 ID-OOS 意圖挑法的說法不一致（隨機對語意相近），README 另列 Table 3 沒有的 ID-OOS 訓練語句：要下載公開資料集比對。開發集洩漏的筆數（每領域 400、BANKING77-OOS 530）在 Table 3 的錨點裡，「開發集每個 in-scope 意圖 50 筆」是 500 除以 10 的單條換算，沒有另外寫判定。
 - 2010.05256 主表的 MPN+ALR 到底用哪一種門檻：論文沒寫，程式回答不了。
 
 單條算式的換算（例如 CollabLLM 的 Macro Accuracy、Future Turns 在同一直接回答比例下對 Random 的 F1 差）已寫在章節句子裡，寫成等式的部分由章節數字比對工具逐式驗算，沒有另外寫程式。
@@ -326,7 +368,7 @@ TourSG 對平均方式不敏感。StanfordLU 則會因為 Weather 領域大幅�
 - **無快取**：副本上一層沒有 `.cache/`，程式略過錨點，判定式真的會被問到。計數只算這一欄有沒有翻成「推翻」。
 - **有快取**：副本上一層的 `.cache/` 連到研究目錄的快取，突變後的字串對不上原文，應被錨點擋下，印「無法判定」。這一欄只驗到錨點，驗不到判定式。
 
-對照組：八支未突變的原檔在兩種設定下都印「證實」、exit 0。
+對照組：九支未突變的原檔在兩種設定下都印「證實」、exit 0（第 9 條的突變是 2026-10-02 另做的，做法相同；同日稽核改寫判定式後，八種全部重跑一次，下表是重跑的結果）。
 
 | 條 | 程式 | 突變 | 無快取 | 有快取 |
 | --- | --- | --- | --- | --- |
@@ -353,8 +395,18 @@ TourSG 對平均方式不敏感。StanfordLU 則會因為 Weather 領域大幅�
 | 8 | `01-proactive-precision-falsealarm.py` | Table 4 LLaMA w/ RM 的 False-Alarm 57.41→57.48（例外列消失） | 推翻（exit 1） | 無法判定（exit 1） |
 | 8 | `01-proactive-precision-falsealarm.py` | Table 3 GPT-4o F1 64.60→66.60（F1 校準不吻合） | 推翻（exit 1） | 無法判定（exit 1） |
 | 8 | `01-proactive-precision-falsealarm.py` | Table 3 Claude-3.5-Sonnet Recall 97.89→96.89（高 Recall 列數與下限改變） | 推翻（exit 1） | 無法判定（exit 1） |
+| 9 | `01-idoos-table4.py` | 5-shot Banking ALBERT 的 OOD-OOS recall 85.3→88.3（recall 例外少一個，只動 `counts`） | 推翻（exit 1） | 無法判定（exit 1） |
+| 9 | `01-idoos-table4.py` | 5-shot Credit cards ALBERT 的 OOD-OOS in-scope 標準差 8.1→8.2（平均相同、標準差不同，只動 `counts`） | 推翻（exit 1） | 無法判定（exit 1） |
+| 9 | `01-idoos-table4.py` | 5-shot BANKING77-OOS RoBERTa 的 ID-OOS precision 46.3→56.3（動 `rejection` 與 `base_rate`） | 推翻（exit 1） | 無法判定（exit 1） |
+| 9 | `01-idoos-table4.py` | 10-shot Credit cards ELECTRA 的 ID-OOS in-scope 78.0→80.0（回推誤拒超過 100−A_in，只動 `calibration`） | 推翻（exit 1） | 無法判定（exit 1） |
+| 9 | `01-idoos-table4.py` | Table 3 BANKING77-OOS 的 ID-OOS test 1080→1008（動 `rejection` 與 `base_rate`） | 推翻（exit 1） | 無法判定（exit 1） |
+| 9 | `01-idoos-table4.py` | 5-shot BANKING77-OOS ToD-BERT 的 ID-OOS in-scope 35.5→24.5（對 BERT 的 in-scope 較高格數 4→3，只動 `tod_bert`） | 推翻（exit 1） | 無法判定（exit 1） |
+| 9 | `01-idoos-table4.py` | 10-shot BANKING77-OOS ToD-BERT 的 ID-OOS in-scope 54.3→58.9（RoBERTa 的最高與次高只差 0.8，落在 ± 內，只動 `ranks`） | 推翻（exit 1） | 無法判定（exit 1） |
+| 9 | `01-idoos-table4.py` | 5-shot BANKING77-OOS ALBERT 的 OOD-OOS precision 39.9→40.9（precision 差距最小值 0.1→1.1，只動 `b77_clean`） | 推翻（exit 1） | 無法判定（exit 1） |
 
-第 1–4 條依序 3＋3＋3＋2＝11 種，第 5–8 條依序 3＋4＋2＋3＝12 種，合計 23 種；無快取時全部翻成「推翻」，有快取時全部印「無法判定」。
+第 1–4 條依序 3＋3＋3＋2＝11 種，第 5–8 條依序 3＋4＋2＋3＝12 種，第 9 條 8 種，合計 31 種；無快取時全部翻成「推翻」，有快取時全部印「無法判定」。
+
+第 9 條舊表的第六種突變（10-shot Banking ToD-BERT 的 ID-OOS in-scope 80.7→79.0，把最高改成 ELECTRA）測的是已刪的名次。改寫後它不再進判定，重跑時印「證實」、exit 0，所以從表中拿掉，改由上面三種新的突變分別蓋住 `tod_bert`、`ranks` 與 `b77_clean`。
 
 標著「只動新納入的檢查」的兩種，無快取時的結論只列出那一項不成立（MCT 那支是「BERT 增益範圍」，Intent-Sim 那支是 `below_half`）；稽核反例一、二分別只列出 `best_range` 與 `se_below_equal`。
 

@@ -8,7 +8,7 @@
 critic 的反駁（缺口 C1、C18、G5）：MetaSim 的 Table 5 有 7 個變體同時有模擬與真人分數；
   其他節點的 AlpacaFarm 有 10 個系統；GATE（2310.11589）附錄 D 也做過名次比較。
 出處：[arXiv:2204.00763]、[arXiv:2305.13112]、[arXiv:2208.10817]、[arXiv:1805.06966]、
-  [arXiv:2309.13233]（📖）、[arXiv:2305.14387]（T7 節點）。
+  [arXiv:2309.13233]（📖）、[arXiv:2305.14387]（T7 節點）；第三輪補讀後加入 [arXiv:1909.01388]、[arXiv:2006.08732]。
 
 輸入（全部由程式從 .cache/text/<id>.txt 解析，不手抄）：
   - MetaSim Table 5（MultiWOZ，7 個受控降級變體）：與 MetaSim 互動的 Success、真人 Success、
@@ -18,6 +18,10 @@ critic 的反駁（缺口 C1、C18、G5）：MetaSim 的 Table 5 有 7 個變體
   - GenTUS Table 5／Table 6（3 個策略）：三個測試用模擬器各一欄，對真人 success。
   - NUS Table 2 的 NUS-best／ABUS-best 列與 Table 4 的四個真人成功率（每個模擬器只有兩個策略可比）。
   - 2309.13233 Table 3（PPTOD、SOLOIST 兩個系統）：Human、Ours、ConvLab2 TUS 的 GSR。
+  - 1909.01388 Table 2（6 個 RL 系統的真人 Solved Ratio、Satisfaction、自家模擬器上的 Auto Success）與
+    Table 3（6 個模擬器 × 6 個系統的交叉成功率）：交叉平均、自家模擬器、3 個 Agenda 平均、3 個 SL 平均、
+    單一模擬器各算一次，並檢查「測試池含 agenda 模擬器」是不是名次一致的充分條件。
+  - 2006.08732 Table 5（3 個 CRS）：三個模擬器與真人的 Reward、Success Rate 名次與分數。
   - AlpacaFarm Table 2（10 個系統兩欄都有值）：模擬勝率、真人勝率；caption 說明兩欄的意義；
     論文報的 Spearman 0.98（全部系統）與 0.94（拿掉未訓練的系統）；SFT 10k／52k 的定義句。
 
@@ -236,6 +240,87 @@ print(f"\n2309.13233 Table 3（第 {s3 + 1}–{c3 + 1} 行，📖）GSR：PPTOD 
 report("2309.13233 Ours（LLM 模擬器）", ["PPTOD", "SOLOIST"], [float(pp[3]), float(so[3])], [float(pp[0]), float(so[0])])
 report("2309.13233 ConvLab2 TUS", ["PPTOD", "SOLOIST"], [float(pp[9]), float(so[9])], [float(pp[0]), float(so[0])])
 
+# ---------------- 1909.01388（第三輪補讀） ----------------
+SL_ = load("1909.01388")
+SIM6 = ["AgenT", "AgenR", "AgenG", "SLT", "SLR", "SLE"]
+
+
+def plain_blocks(lines, a, b):
+    out, cur = [], []
+    for i in range(a, b):
+        t = lines[i].strip()
+        if t:
+            cur.append(t)
+        elif cur:
+            out.append(cur)
+            cur = []
+    if cur:
+        out.append(cur)
+    return out
+
+
+h2 = find_line(SL_, r"^RL System$")
+c2 = find_line(SL_, r"^Table 2: Human evaluation of RL systems", h2)
+S2 = {}
+for b in plain_blocks(SL_, h2, c2)[1:]:
+    if b[0].startswith("Sys-") and len(b) == 8:
+        S2[b[0][4:]] = [float(x.split()[0]) for x in b[1:]]
+h3 = find_line(SL_, r"^Usr\\Sys$")
+c3s = find_line(SL_, r"^Table 3: Cross study results", h3)
+X3 = {}
+for b in plain_blocks(SL_, h3, c3s)[1:]:
+    if b[0] in SIM6:
+        X3[b[0]] = dict(zip(SIM6, [float(x) for x in b[1:]]))
+assert list(S2) == SIM6 and list(X3) == SIM6
+solved6 = [S2[k][0] for k in SIM6]
+satis6 = [S2[k][1] for k in SIM6]
+auto6 = [S2[k][6] for k in SIM6]
+cross6 = [sum(X3[u][k] for u in SIM6) / 6 for k in SIM6]
+sl6 = [sum(X3[u][k] for u in SIM6[3:]) / 3 for k in SIM6]
+print(f"\n1909.01388 Table 2（第 {h2 + 1}–{c2 + 1} 行）與 Table 3（第 {h3 + 1}–{c3s + 1} 行；每格 200 段）：")
+for k, a, b, c, d in zip(SIM6, solved6, satis6, auto6, cross6):
+    print(f"    Sys-{k:6s} 真人 Solved {a:.3f}  Satisfaction {b:.2f}  自家模擬器 Auto Success {c:.3f}  交叉平均 {d:.4f}")
+report("1909.01388 交叉平均（6 個模擬器）對 Solved Ratio", SIM6, cross6, solved6)
+report("1909.01388 交叉平均（6 個模擬器）對 Satisfaction", SIM6, cross6, satis6)
+report("1909.01388 自家模擬器的 Auto Success 對 Solved Ratio", SIM6, auto6, solved6)
+report("1909.01388 只用 3 個 SL 模擬器的平均 對 Solved Ratio", SIM6, sl6, solved6)
+ag6 = [sum(X3[u][k] for u in SIM6[:3]) / 3 for k in SIM6]
+report("1909.01388 只用 3 個 Agenda 模擬器的平均 對 Solved Ratio", SIM6, ag6, solved6)
+single_tau = {}
+for u in SIM6:
+    single_tau[u] = report(f"1909.01388 只用 {u} 一個模擬器 對 Solved Ratio", SIM6, [X3[u][k] for k in SIM6], solved6)[0]
+# 「測試池含 agenda 模擬器就會一致」是不是充分條件：單一 agenda 模擬器是否都比單一 SL 模擬器好
+ag_single = {u: single_tau[u] for u in SIM6[:3]}
+sl_single = {u: single_tau[u] for u in SIM6[3:]}
+print(f"  單一模擬器的 τ：Agenda " + "、".join(f"{u} {t:+.3f}" for u, t in ag_single.items())
+      + "；SL " + "、".join(f"{u} {t:+.3f}" for u, t in sl_single.items()))
+print(f"  最差的單一 Agenda 模擬器 {min(ag_single, key=ag_single.get)}（{min(ag_single.values()):+.3f}）"
+      f"{'低於' if min(ag_single.values()) < max(sl_single.values()) else '不低於'}最好的單一 SL 模擬器 "
+      f"{max(sl_single, key=sl_single.get)}（{max(sl_single.values()):+.3f}）："
+      "「含 agenda 模擬器」不是名次一致的充分條件")
+sh_solved = [r for r in RESULTS if r[0].startswith("1909.01388") and r[0].endswith("對 Solved Ratio")
+             and "Auto Success" not in r[0]]
+tmax = max(r[2] for r in sh_solved)
+print(f"  對 Solved Ratio 到最高 τ = {tmax:+.3f} 的組合：" + "、".join(re.sub(r"^1909\.01388 |\s*對 Solved Ratio$", "", r[0])
+                                                          for r in sh_solved if abs(r[2] - tmax) < 1e-9)
+      + "；除了論文推薦的 6 個全平均，其他組合都是看過資料之後才拿來比的")
+
+# ---------------- 2006.08732（第三輪補讀） ----------------
+ZL = load("2006.08732")
+z5 = find_line(ZL, r"^Table 5\. Performance of conversational agents using real vs\. simulated users")
+z6 = find_line(ZL, r"^## 6\. Experimental Evaluation", z5)
+Z = {}
+for r in blocks(ZL, z5, z6):
+    if r[0] in ("Real users", "QRFA-Single", "CIR6-Single", "CIR6-PKG") and len(r) == 3:
+        Z[r[0]] = [{a: float(v) for a, v in re.findall(r"([ABC]) \(([\d.]+)\)", c)} for c in r[1:]]
+assert len(Z) == 4
+AGS = ["A", "B", "C"]
+print(f"\n2006.08732 Table 5（第 {z5 + 1} 行起）：真人 Reward {Z['Real users'][0]}、Success {Z['Real users'][1]}")
+for m in ("QRFA-Single", "CIR6-Single", "CIR6-PKG"):
+    for j, metric in enumerate(("Reward", "Success Rate")):
+        report(f"2006.08732 {m} {metric}", AGS, [Z[m][j][a] for a in AGS], [Z["Real users"][j][a] for a in AGS])
+report("2006.08732 真人自己的 Reward 對 Success Rate（對照）", AGS, [Z["Real users"][0][a] for a in AGS], [Z["Real users"][1][a] for a in AGS])
+
 # ---------------- AlpacaFarm Table 2 ----------------
 AL = load("2305.14387")
 ca = find_line(AL, r"^Table 2: AlpacaFarm evaluation results on baseline and LHF methods")
@@ -294,9 +379,14 @@ t5all = next(r for r in RESULTS if r[0] == "MetaSim T5 全部 7 個變體")
 t5drop = next(r for r in RESULTS if r[0] == "MetaSim T5 拿掉 beta=0.1、gamma=0.01（事後排除）")
 af10 = next(r for r in RESULTS if r[0] == "AlpacaFarm 10 個系統")
 aflpf = next(r for r in RESULTS if r[0].startswith(f"AlpacaFarm {len(lpf)} 個"))
+sh_c = next(r for r in RESULTS if r[0] == "1909.01388 交叉平均（6 個模擬器）對 Solved Ratio")
+sh_a = next(r for r in RESULTS if r[0] == "1909.01388 自家模擬器的 Auto Success 對 Solved Ratio")
+singles = [r for r in RESULTS if r[0].startswith("1909.01388 只用 ") and "一個模擬器" in r[0]]
 print(f"\n結論：T6 本身就有 {big[1]} 個系統的比較（{big[0]}），「最多 4 個系統」不成立；但 MetaSim 7 個變體的 τ = {t5all[2]:+.3f}，"
       f"只有事後拿掉 β=0.1 與 γ=0.01 兩格後才到 τ = {t5drop[2]:+.1f}（p = {t5drop[3]:.3f}），而那兩格正是與設計前提矛盾的格；"
-      f"其餘 T6 比較只有 2–4 個系統，最小可能 p 分別是 1/2、1/6、1/24，其中只有 iEvaLM 的 τ = +1 碰到 1/24 < 0.05；"
+      f"第三輪補讀的 1909.01388 有 {sh_c[1]} 個系統：6 個模擬器的交叉平均 τ = {sh_c[2]:+.3f}（單尾 p = {sh_c[3]:.4f}），"
+      f"自家模擬器的 Auto Success 只有 τ = {sh_a[2]:+.3f}，單一模擬器的 τ 從 {min(r[2] for r in singles):+.3f} 到 {max(r[2] for r in singles):+.3f}；"
+      f"2006.08732 只有 3 個系統、最小可能 p 是 1/6；其餘 T6 比較只有 2–4 個系統，最小可能 p 分別是 1/2、1/6、1/24，其中只有 iEvaLM 的 τ = +1 碰到 1/24 < 0.05；"
       f"跨節點的 AlpacaFarm 以 {af10[1]} 個系統得到 τ = {af10[2]:+.3f}（Spearman {rs10:.2f}，與論文相符），"
       f"但它模擬的是單輪偏好標註者；其中 {sum(a[3] for a in both)} 個是未訓練的參照模型、{len(SFT)} 個 SFT 不經回饋，兩欄都只差在評估者，"
       f"真正是模擬回饋訓練對真人回饋重訓的 {aflpf[1]} 個方法 τ = {aflpf[2]:+.0f}，而 {aflpf[1]} 個系統完全排對的機率本來就有 1/{math.factorial(aflpf[1])}。")

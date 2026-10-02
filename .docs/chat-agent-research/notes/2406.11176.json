@@ -1,0 +1,173 @@
+{
+  "id": "2406.11176",
+  "title": "Watch Every Step! LLM Agent Learning via Iterative Step-Level Process Refinement",
+  "topic": "T4",
+  "subarea": "軌跡／步驟層級評估與 process reward",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "在只有最終 outcome reward 的 agent 環境裡，用 Monte Carlo rollout 估出每一步的 step reward，沿著 expert 軌跡找出 agent 出錯的那一步、組成對比資料，再以 outcome-DPO＋step-DPO＋SFT 的混合損失反覆訓練（IPR，EMNLP 2024 Main）。",
+  "problem": "既有 agent 微調（SFT on expert 軌跡、RFT、ETO）都把整條軌跡當一個單位、只看最終 outcome reward，無法分辨「繞了遠路才成功」與「中途某步做錯卻碰巧成功」，也不知道失敗軌跡是錯在哪一步。step-level process supervision 在數學推理已證明有用，但搬到 agent 有兩個障礙：(1) WebShop、ALFWorld、InterCode 這類環境只回最終 reward，sub-goal 層級的回饋也很稀疏；人工逐步標註成本高；(2) 長軌跡、大動作空間下，拿到 step reward 之後要怎麼用來訓練，沒有現成作法，直接上 PPO 又不穩定。",
+  "core_idea": "把某一步的 step reward 定義成「從這一步之後交給一個固定的 scorer agent 繼續做，期望能拿到的最終 outcome reward」，用 N 次 Monte Carlo rollout 的平均估計（概念上等同 Math-Shepherd 的 MC 標註搬到互動環境）。讓 agent 沿著 expert 軌跡的每個前綴自己往下走，若 agent 在第 t 步的動作 step reward 明顯低於 expert 動作、而且最終結果也比較差，就判定第 t 步是錯誤步，把 expert 從第 t 步起的後綴（win）與 agent 從第 t 步起的後綴（lose）組成同前綴的對比對，做離線偏好學習；訓練完的 agent 當成下一輪的 base agent 重新探索，反覆迭代。",
+  "method": {
+    "任務形式": "沿用 ETO 的 POMDP 形式 (U,S,A,O,T,R)，R 的值域 [0,1]；指令、動作、觀測都是自然語言。軌跡 e_n = (u, a_1, o_1, …, a_n, o_n)，ReAct 格式（每步 Thought＋Action），outcome reward r_o(u, e_n)；e_{t:n} 表示第 t 步之後的後綴。",
+    "輸入": "(1) expert 軌跡集 D：WebShop 與 ALFWorld 主要沿用 ETO 釋出的軌跡；WebShop 為人工標註＋GPT-4 補標、保留最終 reward > 0.7 者；InterCodeSQL 由作者用 GPT-4 標註、只留 reward = 1.0 者；ALFWorld 為資料集附的人工軌跡；原始軌跡沒有 Thought，由 GPT-4 補寫。(2) 可以重放到任意前綴狀態的環境（WebShop、InterCodeSQL（作者有改過以符合其評估框架）、ALFWorld）。(3) base LLM（主實驗 Llama-2-7B）。",
+    "輸出": "迭代後的 agent policy；副產品是每個 (前綴, 動作) 的 MC step reward 標註，可再訓練成 step reward model（§5.5）。",
+    "步驟": [
+      "Step 0 — SFT：在 expert 軌跡上做標準自回歸 SFT（逐步動作的 log-likelihood 加總），得到 base agent π_θ，同時把這個 SFT agent 凍結當 scorer π_s（之後各輪都不更新）。",
+      "Step 1 — 沿 expert 軌跡探索：對每條 expert 軌跡、每個 t，把 expert 的前 t-1 步 (u, a_1, …, a_{t-1}, o_{t-1}) 當歷史，讓當輪 base agent 以 temperature 0 從第 t 步起自己走完，得到 â_t 與後綴 ê_{t:m}。",
+      "Step 2 — MC step reward：對 expert 動作 a_t 與 agent 動作 â_t，各自由 scorer π_s 以 temperature 1 抽 N = 5 條後續 rollout，取最終 outcome reward 的平均當 step reward；最後一步（t = n）直接用該軌跡的 outcome reward。論文式 (3)–(4) 的符號寫成 scorer 從 e_{t-1} 起生成 e_{t:m}，字面上 a_t 也是生成的、reward 不依賴 a_t，符號有歧義；step reward 要能區分 a_t 與 â_t，實作上應是先把第 t 步動作固定在歷史中再往後 rollout——這是推論，未核對程式碼。",
+      "Step 3 — 錯誤步判定與配對：若 r_s(s_t, â_t) 比 r_s(s_t, a_t) 低超過門檻 τ，且 agent 後綴走完的 outcome reward 低於 expert 軌跡的 outcome reward，判第 t 步為錯誤步；產生 step 對比資料 D_s = {(e_{t-1}, e^w_{t:n}, e^l_{t:m})}，其中 win 是 expert 從 t 起的後綴、lose 是 agent 從 t 起的後綴。注意：比的是共用前綴下的整段後綴，不是單一動作。另外依 outcome reward 建軌跡層級的對比資料 D_t = {(u, e^w_n, e^l_m)}（同 ETO 的形式）。",
+      "Step 4 — Mixture Trajectory Optimization：L = L_o-DPO（D_t 上整條軌跡的 DPO）＋ L_s-DPO（D_s 上以 e_{t-1} 為條件的後綴 DPO）＋ L_SFT（D_t 中 win 軌跡的 NLL）。三項等權相加。加 SFT 項的理由：DPO 只最佳化相對差距，而 agent 任務中正確動作空間遠窄於錯誤動作空間，需要直接拉高成功軌跡的機率。",
+      "Step 5 — 迭代：把更新後的 agent 當新的 base agent 回到 Step 1 重新收集對比資料，直到迭代上限（4 輪）。",
+      "（選配）Step reward model：以 (歷史 e_{t-1}, 動作 a_t) 為輸入、MC 估出的 step reward 為目標，用 MSE 訓練 Llama-2-7B 回歸器；作者在 WebShop 用 Llama-2-7B 與 Llama-2-13B 產生的 70k 個動作訓練，之後可取代 MC scorer 以省掉 rollout。"
+    ],
+    "提示詞": "附錄 F 給三個環境的 ReAct 指令提示詞：要求每輪輸出「Thought: …」與「Action: …」；WebShop 動作限 search[關鍵字] 或 click[值]；InterCodeSQL 每輪只能輸出一個 SQL 指令或 submit，自然語言要註解掉；ALFWorld 列出 9 種動作模板（go to、take、put、open、close、toggle、clean、heat、cool），並說明環境回「Nothing happened」代表動作無效。prompt-based baseline 用 one-shot。",
+    "超參數": {
+      "base 模型": "Llama-2-7B（§5.1 另測 Mistral-7B、Llama-2-13B、Llama-3-8B）",
+      "SFT／訓練": "3 epochs、batch size 48、AdamW、cosine 學習率排程",
+      "scorer": "固定的 SFT agent，temperature 1，N = 5",
+      "探索": "base agent temperature 0",
+      "τ": "ALFWorld 0.5、WebShop 0.01、InterCodeSQL 0.1（§5.3 分析時統一用 0.35）",
+      "DPO": "學習率在 1e-5～5e-5 間搜尋，β 在 0.1～0.5 間搜尋",
+      "迭代上限": "4",
+      "推論": "vllm；8 張 A100 80G"
+    },
+    "環境資料規模": "WebShop 訓練 1624／測試 200、動作空間 8、expert 最多 10 輪；ALFWorld 2851／274（seen 140、unseen 134）、13、20 輪；InterCodeSQL 1500／200、SQL 無限動作空間、10 輪。評估指標一律為平均 reward（WebShop、InterCodeSQL 為 0～1 連續值，InterCodeSQL 用執行結果與 gold 的 IoU；ALFWorld 為 0/1）。",
+    "ALFWorld 門檻的實際意義（自行推算）": "ALFWorld reward 為二元、N = 5，step reward 只能取 0、0.2、…、1；τ = 0.5 等於要求兩者至少差 0.6，也就是 5 次 rollout 中成功次數至少差 3 次。",
+    "成本（自行推算，論文未給）": "每條 n 步的 expert 軌跡，每輪需要 n 次 agent 貪婪 rollout，加上每步對 â_t 的 N 次 scorer rollout；expert 動作 a_t 的 N 次 rollout 因 scorer 固定可跨輪重用。作者回報 WebShop 上 3 輪 IPR 訓練總時長 5.3 小時（SFT 1 小時、ETO 2.5 小時）。",
+    "論文未說明": "π_ref 是否為當輪的 base agent；loss 是否對 observation token 做 mask；Step-PPO baseline 如何把 step reward 接進 PPO；lr／β 搜尋用的是哪個資料切分（文中沒有 validation set）。"
+  },
+  "assumptions": [
+    "環境可以確定性地重放到 expert 軌跡的任意前綴狀態，才能從第 t 步重新 rollout；換成真實使用者或隨機性高的使用者模擬器時這個前提不成立。",
+    "有一批高品質的 expert 軌跡（GPT-4 或人工），而且 expert 那一側在出錯步上確實比 agent 好；WebShop 的 expert 只要求 reward > 0.7，這個前提並非處處成立。",
+    "固定的 SFT scorer 往後接手做完的成功率，能代表「這一步動作好不好」；實際上估的是 SFT policy 的 Q 值 Q^{π_SFT}，不是最佳 Q*。",
+    "N = 5 次 rollout 的平均足以把好壞動作分開，配合各環境手調的 τ 濾掉雜訊。",
+    "錯誤可以歸因到單一步驟：只要第 t 步的 step reward 掉超過 τ，就把整段後綴當成 lose。",
+    "環境有可計算的最終 outcome reward（0～1），作為 MC 估計的唯一監督來源。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "WebShop（網路購物，200 題測試）",
+      "InterCodeSQL（互動式 SQL，Spider 資料庫，200 題測試，作者有修改）",
+      "ALFWorld（文字化具身家務，seen 140／unseen 134）"
+    ],
+    "metrics": [
+      "平均 reward（三個環境的主指標）",
+      "Step reward 估計準確率：以 AgentBoard 的 WebShop 啟發式頁面評分函數為準，對比對順序一致的比例（§5.3、附錄 B）",
+      "平均每步 reward：以 §3.2 的 MC 方法估每個動作的 step reward，先對軌跡內平均再對測試集平均（§5.4）",
+      "訓練時長（附錄 C）"
+    ],
+    "baselines": [
+      "Prompt-based：GPT-4、GPT-3.5-Turbo、未訓練 Llama-2-7B-Chat（ReAct、one-shot）",
+      "Outcome refinement：SFT（FireAct 式）、PPO、RFT（rejection sampling fine-tuning）、ETO",
+      "Process refinement：Step-PPO（以 step-level reward 做 PPO）",
+      "§5.5：No Reward（即 ETO）對 Reward Model 對 MC Method"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "Llama-2-7B＋IPR 在三個環境都勝過所有 baseline，包括先前最強的 ETO 與 Step-PPO；平均也高於 GPT-4。",
+      "numbers": "IPR 對 ETO（絕對分數）：WebShop 71.3 對 67.4（+3.9）、InterCodeSQL 61.3 對 57.2（+4.1）、ALFWorld seen 70.3 對 68.6（+1.7）、unseen 74.7 對 72.4（+2.3）、平均 69.4 對 66.4（+3.0）。作者寫的 5.8%／7.2%／2.5%／3.2%／平均 4.5% 是相對提升比例。Step-PPO 平均 64.8；GPT-4 平均 45.7；未訓練 Llama-2-7B 平均 5.5。IPR 與 ETO 皆取各輪最佳。",
+      "section": "§4.2、Table 2",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "換 base 模型後 IPR 仍一致優於 ETO 與 SFT；SFT 起點越強，IPR 後的最終表現也越強。",
+      "numbers": "WebShop／InterCodeSQL：Mistral-7B SFT 58.5/50.0 → ETO 66.2/54.3 → IPR 69.6/58.9；Llama-2-13B 62.2/59.3 → 68.9/61.5 → 72.2/64.5；Llama-3-8B 61.2/63.4 → 66.2/65.8 → 72.0/68.1。",
+      "section": "§5.1、Table 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "拿掉 SFT 損失的退步最大，InterCodeSQL 幾乎腰斬，低於單純 SFT。",
+      "numbers": "w/o SFT：WebShop 61.8、InterCodeSQL 31.7、ALFWorld unseen 64.9（完整 IPR 為 71.3／61.3／74.7；SFT baseline 的 InterCodeSQL 為 54.9）。",
+      "section": "§5.2、Table 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "拿掉 step-DPO 比拿掉 outcome-DPO 退得更多，作者據此主張 process supervision 有必要。",
+      "numbers": "w/o s-DPO：66.4／58.0／70.2；w/o o-DPO：70.2／59.3／72.4（WebShop／InterCodeSQL／ALFWorld unseen）。",
+      "section": "§5.2、Table 4",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "迭代前幾輪持續進步，超過一定輪數後退步，作者歸因於在小訓練集上過度探索造成過擬合。",
+      "numbers": "WebShop 第 1～5 輪：63.6、63.7、68.2、71.3、68.1；InterCodeSQL：56.6、58.2、59.2、61.3、57.9；ALFWorld unseen：68.7、70.2、74.7、73.5、71.4。",
+      "section": "§5.2、Table 4",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "MC 估出的 step reward 雖有雜訊但堪用；準確率隨 scorer 本身能力與抽樣次數上升，WebShop 上 N = 5 已接近更大樣本數的效果。",
+      "numbers": "以 AgentBoard 啟發式評分為準，對比對順序正確率最高約 82%（Llama-2-13B 當 scorer 最好；此分析統一用 τ = 0.35）。",
+      "section": "§5.3、Figure 3、附錄 B",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "以 MC 標註訓練的 step reward model 可取代 MC scorer、並泛化到沒見過的模型動作，效果介於 ETO 與 MC 之間。",
+      "numbers": "WebShop（No Reward / Reward Model / MC）：Llama-2-7B 67.4 / 68.9 / 71.3；Llama-2-13B 68.9 / 70.7 / 72.2；Llama-3-8B 66.2 / 70.6 / 72.0（Llama-3-8B 的動作不在 RM 訓練資料中）。RM 以 70k 個動作、MSE 訓練。",
+      "section": "§5.5、Table 5",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "IPR 的代價是訓練時長，推論成本不變。",
+      "numbers": "WebShop 上 SFT 1 小時、ETO 2.5 小時、IPR（3 輪）5.3 小時，約 ETO 的 2.1 倍。",
+      "section": "附錄 C",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "訓練資料有限時，在自生成樣本上反覆做偏好學習會過擬合（Table 4 第 5 輪退步）；作者建議用 GPT-4 擴充訓練任務。",
+    "只用 step reward 來辨識錯誤動作、建對比資料，沒有利用 reward 數值本身代表的錯誤嚴重程度（例如 curriculum 先修重大錯誤）。",
+    "step reward model 只在單一任務（WebShop）上訓練，跨任務的泛化未知；通用的 agent step reward model 留待未來。",
+    "MC 估計本身有雜訊（§5.3），而且抽樣次數與準確率之間要取捨時間成本。"
+  ],
+  "limitations_observed": [
+    "在測試集上挑迭代輪數：Table 2 明寫 IPR 與 ETO 皆取「各輪最佳」，對照 Table 4，WebShop 的 71.3 是第 4 輪、ALFWorld unseen 的 74.7 是第 3 輪（第 4 輪只有 73.5），也就是不同資料集、不同 split 各挑了不同輪數；文中沒有 validation set，lr（1e-5～5e-5）與 β（0.1～0.5）的搜尋看起來也是對同一批測試集。報的是上界而非可部署的單一設定。",
+    "主張的增益在雜訊範圍附近：絕對差距只有 +1.7～+4.1 分，測試集 134～200 題、沒有報 seed 或變異數；ALFWorld unseen 的 +2.3 大約只差 3 題。作者在摘要與引言用相對百分比（5.8%、7.2%）呈現，視覺上放大了差距。",
+    "單輪 IPR 打不贏 ETO：Table 4 WebShop 第 1 輪 63.6、第 2 輪 63.7，都低於 ETO 的 67.4（ETO 也取各輪最佳），要到第 3～4 輪才超越；所以「step-level 監督比 outcome-level 好」的證據其實與「多迭代幾輪、多花一倍以上訓練時間」混在一起，沒有等算力的對照。",
+    "消融的「w/o s-DPO」不等於 ETO：w/o s-DPO（o-DPO＋SFT 並迭代）在 WebShop 只有 66.4，反而低於 ETO 的 67.4，表示 IPR 的資料管線（只沿 expert 前綴探索、temperature 0）本身和 ETO 不同，step-DPO 相對 ETO 的淨貢獻無法從這張表乾淨地拆出來。",
+    "方法高度依賴 SFT 正規化項：w/o SFT 在 InterCodeSQL 掉到 31.7，比單純 SFT 的 54.9 還低 23 分，代表兩個 DPO 項單獨使用時會破壞 policy；三項等權相加也沒有做權重消融。",
+    "§5.4「平均每步 reward 提升」是循環量測：用來評估的 step reward 與建構訓練訊號的是同一個 MC scorer（凍結的 SFT agent），IPR 本來就被訓練成偏好該 scorer 評高分的動作，這項指標上升不足以證明動作「真的更好」。",
+    "§5.3 的 82% 驗的不是主實驗設定：只在 WebShop、以 AgentBoard 的頁面啟發式評分當 ground truth（本身也是代理指標），而且分析時 τ 統一設 0.35；主實驗 WebShop 用的是 τ = 0.01，那個門檻下有多少錯配的對比對沒有量。InterCodeSQL 與 ALFWorld 的 step reward 品質完全沒有驗證。",
+    "scorer 的天花板：scorer 固定為 SFT agent，step reward 估的是 Q^{π_SFT}；當 policy 迭代到比 scorer 強之後，「SFT agent 能不能接手做完」越來越不能代表動作好壞，這可能也是第 5 輪退步的原因之一，但作者只歸因於過擬合。",
+    "只在 expert 前綴上產生對比對：agent 從來不會在自己犯錯後的狀態下被監督，所以學不到「錯了之後怎麼救回來」；這對要和 T5（自我修正）銜接的用途是重要缺口。",
+    "錯誤歸因粒度其實是後綴而非單步：lose 是 agent 從第 t 步起的整段後綴，第 t 步之後的所有動作都一起被壓低機率，可能把後面本來正確的動作也當成負例。",
+    "文中數字前後不一：§5.3 說訓練時間是 ETO 的三倍，附錄 C 說不到三倍（5.3 對 2.5 小時約 2.1 倍）；而且附錄 C 量的是 3 輪，但 WebShop 最佳結果在第 4 輪。正文說 expert 只保留正確軌跡，附錄 E 的 WebShop 實際門檻是 reward > 0.7。",
+    "baseline 可能沒調好：PPO 在 ALFWorld 只有 22.1／29.1，遠低於 SFT 的 60.0／67.2；Step-PPO 的實作細節（step reward 如何接入、超參數）幾乎沒交代，「RL 不穩定」的論點因此偏弱。InterCodeSQL 被作者改過，分數不能直接和其他論文的 InterCodeSQL 結果比較。",
+    "「首次把 step-level process supervision 整合進 LLM agent 訓練」的說法要打折：MC rollout 估 step label 正是 Math-Shepherd（2312.08935，文中有引用）的作法，本篇的新意主要在搬到互動環境、改用同前綴後綴 DPO 而非 PPO。"
+  ],
+  "framework_role": "在 T4 裡，這篇是「只有 outcome reward 時如何為 agent 軌跡逐步評分」的代表作：把軌跡切成前綴，用 MC rollout 估每一步的 process reward，對照參考軌跡定位第一個明顯掉分的步驟（錯誤歸因到哪一步），再把 MC 標註蒸餾成可重用的 step reward model。對我們的框架，它提供兩樣可用的東西：(1) 一個步驟層級的異常偵測器原型——step reward 驟降可當 T4 → T5 的觸發訊號；(2) 平均每步 reward 這類軌跡層級的效率指標，可給 T7／T8 參考。但它的主要貢獻是訓練方法（離線偏好學習），修正發生在訓練期而非執行期；而且 MC 估計需要能重放到任意前綴的環境，一旦對話對象是真實使用者或隨機的使用者模擬器（T6），重放成本與確定性都是障礙，需要改走 step reward model 路線。",
+  "edges": [
+    {
+      "edge": "E3",
+      "how": "以 MC step reward 在 agent 軌跡中定位錯誤步（step reward 比 expert 低超過 τ 且最終結果較差），再把該步之後的後綴組成對比對交給 step-DPO 修正 policy。這條 T4 → T5 的資料流是真的，但發生在離線、訓練期：被修正的是模型權重，不是執行期的單次回覆或反思；論文沒有執行期偵測異常後當場重做的機制。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有提到任何部署或產品；作者群有 Huawei Technologies 成員，但這不是採納證據。官方 repo（https://github.com/WeiminXiong/IPR，標示 EMNLP 2024 Main Conference）只是研究用的訓練與評估程式碼，未提任何生產使用。以 WebSearch 查方法名稱加 deployment，只找到論文頁、ACL Anthology（2024.emnlp-main.93）、Hugging Face paper page 與 repo，沒有官方產品頁、model card 或官方部落格。屬學術影響力，不算商用採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/WeiminXiong/IPR",
+    "data": "依 repo README（WebFetch 摘要）：提供 expert 軌跡、環境安裝與 MC 抽樣／建偏好資料的腳本（monte_carlo_sample_*.py、construct_preference_monte_carlo_*.py）；未見釋出訓練後的 checkpoint；授權在 repo 首頁未標示。InterCodeSQL 為作者修改版，需用 repo 內的版本才能重現。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "是把 MC step reward 帶進 agent 軌跡、做錯誤步定位與 step reward model 的早期代表作，方法清楚可重做；但 step reward 品質只在 WebShop 用啟發式代理驗證，主結果有測試集挑輪數與小樣本問題，而且主要貢獻是訓練方法而非軌跡評估本身，因此有價值但非 T4 必讀。",
+  "related": [
+    "2403.02502",
+    "2312.08935",
+    "2305.20050",
+    "2211.14275",
+    "2401.13178",
+    "2402.02658",
+    "2310.10080",
+    "2404.02078",
+    "2310.05915",
+    "2210.03629",
+    "2308.01825"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

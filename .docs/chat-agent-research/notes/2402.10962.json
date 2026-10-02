@@ -1,0 +1,164 @@
+{
+  "id": "2402.10962",
+  "title": "Measuring and Controlling Instruction (In)Stability in Language Model Dialogs",
+  "topic": "T2",
+  "subarea": "LLM agent 的多輪狀態維護、對話記憶與多輪退化",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "讓兩個掛不同 system prompt 的同款 chatbot 自聊，每一輪另開分支插入探針問題、用確定性 Python 函式打分，藉此量化「指令漂移」。作者把漂移連到注意力衰減，並提出免訓練的 split-softmax，在每個 attention head 把權重往 system prompt 重新分配。",
+  "problem": "system prompt 是客製 chatbot 的標準手段，但實務上都假定它在整段對話中持續有效。實際上模型經過幾輪對話就會偏離指定行為，這既是提示工程的問題，也是安全問題：安全類的 system prompt 一旦失效，模型更容易被越獄、也更容易幻覺。既有的指令遵循評測（例如 IFEval）只看單輪，缺少一個不靠人工標註、也不必呼叫閉源 LLM 判分的多輪量測協定。",
+  "core_idea": "（1）量測：用模擬使用者 LM 與受測 agent LM 自聊產生多輪歷史；在第 i 輪把使用者原本那句換成預先設計的探針問題，讓 agent 重答一次，再用確定性函式 f_B 給 0–1 分。這樣得到逐輪的「指令穩定度」曲線。（2）機制：agent 生成回覆時，分給 system prompt token 的注意力比例 π(t) 在同一個 turn 內幾乎不變，跨 turn 則明顯下降。作者用理想化的凸錐幾何解釋：自回歸生成的 token 留在 system prompt 撐出的錐內，外來的使用者 token 則讓錐擴張。（3）控制：既然注意力流失，就在推論時強行把每個 head 的注意力權重以冪次方式往 system prompt 搬（split-softmax），並以 MMLU 下降幅度當預算，和 system prompt 重複（SPR）、classifier-free guidance（CFG）比較取捨曲線。",
+  "method": {
+    "measurement_protocol": {
+      "inputs": "兩個 system prompt：s_A 給模擬使用者 LM，s_B 給受測的 agent LM；對話開場 a_1（隨機抽樣）；s_B 的探針問題 p_B（副量測另用 s_A 的探針 p_A）；穩定度函式 f_B（副量測用 f_A）。",
+      "step1_self_chat": "同一個 chat 模型開兩份實例，各掛 s_A 與 s_B。user LM 先用 a_1 發話，雙方把對方的回覆當成自己的輸入互相接龍，產生 N=8 個 round（一個 turn 是一句發話，一個 round 是雙方各講一句；第 6 節的 16 turns 即 8 rounds）。agent 第 i 輪的輸入序列是 [s_B, a_1, b_1, …, a_{i-1}, b_{i-1}, a_i]，依 LLaMA2 chat 格式組裝（省略 <s>、<<SYS>>、[INST] 等格式 token）。生成設定：temperature 1.0、nucleus sampling p=0.9。",
+      "step2_probe_branch": "在每個 round i，把歷史中使用者那句 a_i 換成探針 p_B，讓 agent 在同樣的前文下重新生成一次答案 b_i'，再以 f_B(b_i') 打分，得到第 i 輪的指令穩定度。這是反事實分支：主對話仍沿用原本的 a_i、b_i 繼續往下走，b_i' 不寫回歷史。",
+      "side_measure_user_adoption": "把 a_i 換成 user LM 自己的探針 p_A，用 f_A(b_i') 量 agent 是否反過來採用了 user LM 的指令。",
+      "control": "把 s_A 設為空字串，讓 user LM 回到底模型的預設行為，用來排除「user 帶著 persona」是漂移主因的可能（Figure 3B）。",
+      "aggregation": "隨機抽 200 組 system prompt 配對，對每個 round 取平均並畫一個標準差的誤差棒。",
+      "benchmark_dataset": "人工策劃 100 個 system prompt，分 5 類：多選題作答方式、agent 的角色性格、回答字串的格式樣式、記住特定事實、agent 使用的語言。每個 system prompt 附一個探針問題和一個 Python 函式 f。容易被誘導破戒的 prompt 會特製探針；中性的 prompt 則從一組通用探針中隨機抽一題。f 是確定性函式，輸入 agent 的回覆、輸出 0–1，數值越大代表越遵循，例如呼叫語言偵測函式庫，輸出回覆是法文的信心。快取全文中 Table 1 的 f 欄位是空白（原文應為程式碼圖片），完整函式要看 HF 資料集。"
+    },
+    "attention_decay_measurement": "定義 π(t)：生成第 t+1 個 token 時，最後一個 token 在某個 head 對前 |s_B| 個 system prompt token 的注意力權重總和，範圍 0–1。在 LLaMA2-7B 第 24 層第 11 個 head 上產生 12 段對話，只在 agent 側沿著解碼步與 turn 追蹤 π(t)。Appendix C 用同樣方法比較 LLaMA2-7B 與 RLHF 後的 LLaMA2-7B-chat。",
+    "theory": "簡化的 transformer：拿掉 MLP 與 layer norm，下一個 token 的嵌入直接取最後一層隱狀態並正規化到單位球面（Appendix B 用 LLaMA2-7B-chat 的嵌入範數集中在 1 附近佐證）。Theorem 5.1：若 system prompt 的嵌入落在 d 維 ε-近似凸錐內，且每個 W_o·W_v 都把錐映回錐內，則自回歸生成的所有 token 都留在錐的凸包內，對應同一個 turn 內 π(t) 的平台。Proposition A.1：若使用者 token 在球面上 i.i.d. 均勻抽樣，約 4D+2log(1/η) 個 token 後，錐以機率 1−η 擴張到整個空間。Proposition A.2：錐體積比上界約為 ε^(d2−d1)，對應跨 turn 的下降。",
+    "mitigation_baselines": {
+      "SPR": "System Prompt Repetition：每次使用者發話前，以機率 p 再插入一次 system prompt。插入內容只出現在模型輸入，使用者看不到。代價是佔用 context window。",
+      "CFG": "Classifier-Free Guidance（Sanchez et al. 2023）：每個 token 跑兩次前向，一次有 s_B、一次沒有，取 log p̂ = log p(w|前文) + α·(log p(w|前文, s_B) − log p(w|前文))，α≥1；α=1 等於一般提示。"
+    },
+    "split_softmax": {
+      "where": "每一層、每一個 attention head，插在 softmax 算出注意力分佈（eq.3）之後、加權求和 value（eq.4）之前。",
+      "formula": "π(t) = 前 |s_B| 個 token 的權重總和。system prompt 內的權重乘以 π^k/π，其餘權重乘以 (1−π^k)/(1−π)。k ∈ [0,1]，k 越小介入越強，k=1 等於不介入。",
+      "properties": "重新分配後權重總和仍為 1；system prompt 區內、對話歷史區內各自的相對比例不變（Appendix E）。因為 0≤π≤1、0≤k≤1，π^k/π ≥ 1，所以只會增加 system prompt 的佔比。不需訓練，也不新增參數。",
+      "implementation_notes": "需要拿到並改寫模型內部正規化後的注意力權重，所以只能用在開放權重模型上（作者的 SS 實驗只用 LLaMA2-70B-chat）。"
+    },
+    "calibration_and_eval": "每種方法各掃自己的強度超參數（SS 的 k、CFG 的 α、SPR 的 p），畫出「指令穩定度 vs MMLU 下降」曲線，只在 MMLU 下降相近時比較穩定度，類比 precision-recall 曲線。穩定度：在 16-turn 對話中對 agent 套用介入，每一輪用第 3 節的方法探針，取各 turn 平均。能力：從受介入 agent 的對話歷史中取一份，在第 4 個 turn 插入 MMLU 題目算準確率；只看介入前後的差值，因為加了 system prompt 和對話歷史後，絕對分數本來就和官方數字不同。規模：模型為 LLaMA2-70B-chat；5 類各取 1 個 system prompt，共 20 組有序配對。超參數實際掃了哪些值，正文未載明。"
+  },
+  "assumptions": [
+    "「是否遵循 system prompt」可以用確定性程式在單一探針問題上判定，而且探針分支的分數能代表主對話中該輪的遵循狀態。",
+    "兩個同款模型實例的自聊（user LM 也掛著自己的 persona）能代表真實使用者互動造成的漂移。",
+    "分給 system prompt 的注意力比例 π(t) 與指令遵循有因果關係。作者明說這是假說，只觀察到兩者同時出現。",
+    "理論部分的理想化前提：沒有 MLP 與 layer norm、嵌入為單位範數、W_o·W_v 保持錐不變、使用者 token 在球面上均勻分佈。",
+    "split-softmax 假設可以存取並改寫每個 head 的注意力權重，且 system prompt 是位於序列開頭、邊界明確的前綴（前 |s_B| 個 token）。",
+    "MMLU 準確率下降能當作介入對一般能力的成本代理。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "作者自建的 system prompt 穩定度基準：100 個 prompt、5 類，附探針與 Python 判分函式（HF：Naomibas/llm-system-prompts-benchmark）",
+      "MMLU（只用來校準介入強度，在第 4 turn 插題）"
+    ],
+    "metrics": [
+      "instruction stability：f_B(b_i' | a_i = p_B)，0–1，逐 round 報告，也報各 turn 平均",
+      "對 user 指令的採用度：f_A(b_i' | a_i = p_A)",
+      "注意力比例 π(t)：最後一個 token 對 system prompt token 的注意力權重總和",
+      "MMLU accuracy drop：介入前後的差值"
+    ],
+    "baselines": [
+      "無介入（純 system prompt）",
+      "System Prompt Repetition（SPR）",
+      "Classifier-Free Guidance（CFG，Sanchez et al. 2023）",
+      "受測模型：LLaMA2-chat-70B（主要）、gpt-3.5-turbo-16k（只做漂移量測，比較 system 參數與併入首句兩種放法）、LLaMA2-7B 與 LLaMA2-7B-chat（注意力分析）"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "LLaMA2-chat-70B 與 GPT-3.5 在 8 個 round 內就出現顯著的指令漂移：agent 對自己 system prompt 的遵循隨輪數遞減。",
+      "numbers": "N=8 rounds、200 組隨機 system prompt 配對；LLaMA2-chat-70B 的漂移幅度正文無數值，只能看 Figure 3A",
+      "section": "Abstract、§3.3、Figure 3A",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "agent 不只偏離自己的指令，還會隨對話推進逐漸採用模擬使用者 LM 的 system prompt 指令（f_A 上升），作者指出這可能被對抗性攻擊利用。",
+      "numbers": "正文無數值，見 Figure 3A 橘線；把 s_A 設為空字串後漂移仍在（Figure 3B），同樣沒有數值",
+      "section": "§3.3、Figure 3",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "注意力衰減的形狀是「同一個 turn 內 π(t) 幾乎平坦、跨 turn 急降」，不符合「均勻注意力下 π(t) 呈雙曲衰減且與 turn 數無關」的天真假說。作者據此主張這是多輪對話特有的問題：單純續寫時，對方送進來的分佈外文字並不存在。",
+      "numbers": "LLaMA2-7B 第 24 層第 11 個 head、12 段對話；正文無數值，見 Figure 4",
+      "section": "§4.2、Figure 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "在相同的 MMLU 下降下，split-softmax 的穩定度等於或高於 SPR 與 CFG。它能在不佔額外 context window 的情況下追平 SPR；如果允許更大的 MMLU 下降，還能換到更高的穩定度。三種方法都呈現穩定度與能力的反向關係。",
+      "numbers": "LLaMA2-70B-chat、20 組有序配對（5 類各取 1 個 prompt）、16 turns；各方法的差距正文無數值，見 Figure 5",
+      "section": "§6.3、§6.4、Figure 5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "CFG 讓模型在第一個 round 非常守指令，但效果無法延續到較長的對話。",
+      "numbers": "操作點是 MMLU 下降約 0.5（Figure 6 caption，單位未載明）；逐輪數值正文沒有",
+      "section": "§6.4、Figure 6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "SPR 與 SS 都比 CFG 更能抑制漂移，但趨勢不同：SPR 在輪數多的後段較強，SS 在對話前段較強；SPR 會吃掉相當大一部分 context window。",
+      "numbers": "同 Figure 6 的操作點（MMLU 下降約 0.5）；正文無數值",
+      "section": "§6.4、Figure 6",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "RLHF 會提高模型分給 system prompt 的注意力比例，有助於抵抗漂移，但無法根除。",
+      "numbers": "LLaMA2-7B 對比 LLaMA2-7B-chat；正文無數值，見 Figure 8",
+      "section": "Appendix C、Figure 8",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "gpt-3.5-turbo-16k 比 LLaMA2-chat-70B 更守 system prompt，但對原指令的穩定度仍下降。",
+      "numbers": "原 system prompt 的穩定度下降 10%；200 組隨機配對。Figure 9 另比較了 system 參數與併入首句兩種放法，正文沒有給出這組比較的結論",
+      "section": "Appendix D、Figure 9",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "注意力衰減與指令漂移目前只證明同時出現；「衰減導致漂移」是假說（§4.2）。",
+    "凸錐模型是理想化的，只比較錐的結構，沒有追蹤錐內 token 嵌入的分佈；需要更貼近現實的理論（Appendix A、§7）。",
+    "三種方法都有穩定度與一般能力之間的明顯取捨，是否必然如此仍是開放問題（§6.3、§7）。",
+    "為了節省計算，緩解實驗只取 5 個 system prompt 組成的 20 組有序配對（§6.4）。",
+    "加上 system prompt 與對話歷史後，MMLU 分數本來就和官方數字不同，只有介入前後的差值有意義（§6.3）。",
+    "RLHF 有幫助但無法根除漂移（Appendix C）；根本原因是訓練方式（續寫或單輪 RLHF）和部署情境（開放式多輪對話）不匹配，可能需要從架構或訓練下手（§7）。"
+  ],
+  "limitations_observed": [
+    "機制與現象的規模不一致：注意力衰減只在 LLaMA2-7B 的單一 head（第 24 層第 11 個）、12 段對話上展示，漂移與緩解卻是在 70B 上量。全文沒有 70B 的 π(t)、跨層跨 head 的統計，也沒有逐樣本的「π(t) 低則 f_B 低」相關分析。SS 有效也不能回頭證明因果：SS 可能只是和 CFG 一樣加強了對 prompt 的條件化，不一定是修好了衰減本身。",
+    "統計力薄弱：緩解實驗只有 20 組有序配對（漂移量測則用了 200 組），只測 LLaMA2-70B-chat 一個模型，沒有多種子、沒有顯著性檢定。三種方法的優劣全部只能從 Figure 5、6 目測，正文沒有任何數值表，也沒寫超參數掃了哪些值，第三方無法從文字核對「SS 較佳」的幅度。",
+    "能力成本和穩定度量在不同的地方：MMLU 只在第 4 turn、從一份對話歷史量一次，穩定度卻是 16 turns 的平均。介入在後段 turn（SPR 正是在那裡勝出）對能力的傷害沒被量到。Figure 6 的「MMLU 下降約 0.5」沒寫單位，無法判斷比較的基準點是輕微還是嚴重的能力損失。",
+    "量測面窄：f 必須是確定性程式，所以只涵蓋格式、語言、多選題、事實記憶、性格這類可程式判定的指令。量不到語意性、政策性的約束，也量不到 DST 意義上的任務狀態（例如前幾輪已確認的槽位值是否還被記得），對話中也沒有工具呼叫或結構化狀態。對 T2 來說，它量的是「規則層」的保持，不是「事實狀態層」的追蹤。",
+    "情境代表性有疑問：user LM 和 agent 是同一個模型，而且 user 帶著另一個強烈 persona 主動發話，比較像對抗性壓力測試。漂移有一部分可能來自 persona 互相傳染，而不只是對話變長。Figure 3B 的空 s_A 對照只排除了「user 的 system prompt」這個因素，沒有用中性填充內容控制「長度」與「內容」各自的貢獻，也沒有報告各輪的 token 長度。注意力分析（7B、單一 head）指向 turn 邊界才是下降點，但穩定度量測本身沒有用長度對照把 turn 數與 token 數的影響分開。",
+    "設定偏短、偏隨機：8 rounds（16 turns）對 agent 的長互動來說很短，沒有測到幾十輪或 context 接近上限的情況。生成用 temperature 1.0、top-p 0.9 這種高隨機設定，可能放大漂移，卻沒有 greedy 或低溫的對照。",
+    "部署可攜性（以下是我的推論，不是論文所述）：SS 必須改寫每層每個 head 正規化後的注意力權重，閉源 API 模型無法使用（作者在 gpt-3.5 上也只做量測、沒測 SS），也和 FlashAttention 這類融合 kernel 不直接相容。對以 API 模型為主的 agent 框架，真正能搬過來的是量測協定，以及 SPR 這類提示層的做法。",
+    "時效：受測的是 2023 年的 LLaMA2 與 gpt-3.5。之後的模型 context 更長，也針對 system prompt 與指令優先序做過專門訓練，漂移曲線可能不同，數字與結論不能直接外推。"
+  ],
+  "framework_role": "T2 中「指令保持」這一面的基準量測工具與現象證據。它把 system prompt 規定的行為當成一種需要跨輪維持的對話狀態，提供可重跑、不靠 LLM 判分的逐輪探針協定。框架可以拿它把「指令保持度」做成每輪的狀態健康指標，探針放在反事實分支裡，不汙染主對話。注意力衰減分析解釋了為什麼退化集中發生在 turn 邊界（新的對方發話進入時），SPR 與 split-softmax 則是兩種狀態維護介入。它不處理槽位、結構化狀態或記憶管理，所以在 T2 裡應定位為「規則層狀態」的量測基準，和 DST 那一支互補，不能取代。",
+  "edges": [
+    {
+      "edge": "E6",
+      "how": "以模擬使用者 LM 驅動自聊，產生多輪互動紀錄；每一輪在反事實分支插入探針，用確定性函式 f_B 打分，互動紀錄直接回流成逐輪的指令穩定度曲線，供評估比較不同模型與緩解方法，全程不用人工標註或閉源 LLM 判分。"
+    },
+    {
+      "edge": "E1",
+      "how": "模擬使用者 LM 帶著自己的 system prompt s_A 發話，這些外部輸入進入 agent 後，實驗顯示會把 agent 拉離自身被指定的目標或指令，甚至讓 agent 改採 user 的指令（f_A 隨輪數上升）。也就是說，外部輸入本身就是目標對齊被侵蝕的來源；空 s_A 的對照（Figure 3B）則檢查 user 的 persona 是不是主因。"
+    }
+  ],
+  "adoption": {
+    "evidence": [],
+    "assessment": "未見證據。論文本身沒有提到任何部署或產品採用；搜尋到的只有作者的社群貼文、論文彙整站，以及作者自己在 HF 釋出的資料集，都不屬於商用採納。被後續論文引用屬於學術影響力，不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/likenneth/persona_drift",
+    "data": "公開。基準資料集（100 個 system prompt＋探針＋判分函式）在 https://huggingface.co/datasets/Naomibas/llm-system-prompts-benchmark（§3.2 所載）；MMLU 為公開資料集。GitHub repo 實際存在（repo 描述沿用舊標題 Persona Drift），但 GitHub API 沒有回報授權條款。"
+  },
+  "value_verdict": "high",
+  "verdict_reason": "主要價值在量測協定：它是早期針對「指令能否在多輪中保持」、作者明確定位為有別於單輪評測的可重跑逐輪量測方法，且不靠 LLM 判分，附程式碼與資料，正好回答這個子領域「有沒有人量過」的問題。緩解法 split-softmax 需要開放權重才能用、證據也薄，屬於次要。",
+  "related": [
+    "2306.17806",
+    "2311.07911",
+    "2311.11829",
+    "2310.15213",
+    "2306.03341",
+    "2310.07641",
+    "2401.04700"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 7,
+    "total": 8
+  }
+}
