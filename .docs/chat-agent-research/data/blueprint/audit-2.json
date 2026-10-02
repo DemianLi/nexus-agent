@@ -1,0 +1,134 @@
+{
+ "findings": [
+  {
+   "id": "T1-01",
+   "kind": "conflict",
+   "evidence": "README.md:101-105 + Self-Ask 的 AUROC 0.371（全表最低、低於 0.5），但 b=20%/30% 時增益占比 25%/37%，四法最高 [2311.09469]；README 自承閘門準確度判斷不了淨效益。T1-01「沒高過平凡策略就當沒學到」與 T1-07 以下游結果判定互相衝突",
+   "suggested_fix": "T1-01 加 switch_when：閘門用途是觸發下游介入時，不能只憑分類指標淘汰，改依 T1-07 量下游淨效益"
+  },
+  {
+   "id": "T5-02",
+   "kind": "missing_condition",
+   "evidence": "chapters/05-self-correction-reflection.md:594；notes/2404.17140.json key_results[5]：以 RFT 解為起點，gpt-3.5-turbo 驗證器 F1 59.7 時增益 −11.2、SC@10 F1 63.6 時 −4.6，gpt-4 F1 89.2 才 +3.6。卡把「比受測模型強的驗證器」列為可用外部訊號，未附條件；也與 T5-06 的反證脫節",
+   "suggested_fix": "加條件：強驗證器也要依 T5-07 量過 FPR/FNR，並對照「不修正」的淨效益；F1 中等時可能比不修更糟"
+  },
+  {
+   "id": "T8-02",
+   "kind": "overgeneralized",
+   "evidence": "chapters/08-task-completion-score.md:769；notes/2010.02840.json「加速變體」：只用一個從 I_g 抽出的單一隨機資料庫比對，21 份提交上與完整測試組結果完全一致。壞的是官方那個無覆蓋率保證的資料庫，不是「單一終態」本身。子字串／只算召回兩子項只有 ABC 撐（F4 unverified，與 AATM 共有作者 Sayash Kapoor，不獨立），GDPL 的只算召回未量化傷害（08:445）",
+   "suggested_fix": "改寫為「不要只用沒有覆蓋率保證的單一官方終態」；子字串與只算召回兩項標為較弱子主張或降級"
+  },
+  {
+   "id": "T4-05",
+   "kind": "overgeneralized",
+   "evidence": "chapters/04-agent-trajectory.md:472-473：只用結果篩、不做過程檢查的訓練照樣有增益（ETO 無專家軌跡時 RFT 17.9→48.4；MoatlessTools 迭代 RFT 7B 7.0%→9.0%→10.0%）；卡的證據只量到盛行率（ReAct 6%；ProcessBench GSM8K 3.5% 到 Omni-MATH 51.8%），沒量到「訓練進去會壞」，且盛行率隨難度變化未寫成條件",
+   "suggested_fix": "訓練那半降為 B 或改成 measure；加難度條件（簡單任務盛行率低時結果篩選可接受）"
+  },
+  {
+   "id": "T3-03",
+   "kind": "missing_condition",
+   "evidence": "chapters/03-agent-observation.md:483（OSWorld GPT-4o a11y tree 11.36 對純截圖 5.03）、:490（OS-ATLAS grounder 11.65 只打平 11.36）、:489（Mind2Web-Live text-only 22.1 高於 UGround 19.2）、:475（AndroidWorld M3A SoM 25.4 低於 text-only 30.6）：有結構化文字觀測時，純文字可追平或勝過卡上的兩個選項",
+   "suggested_fix": "加 switch_when：拿得到 accessibility tree／HTML 時，先以純文字觀測當對照組"
+  },
+  {
+   "id": "T3-01",
+   "kind": "overgeneralized",
+   "evidence": "chapters/03-agent-observation.md:360：單次執行，搜尋那格差距 18.0−15.7=2.3 未必顯著；03:76-79 與卡上 evidence 自述「空輸出明示訊息」「lint 拒絕訊息內容」只是定性觀察、從未消融",
+   "suggested_fix": "把未消融的子項移到 verification 或標為推論，只保留有量測的部分為建議本體"
+  },
+  {
+   "id": "T3-09",
+   "kind": "missing_condition",
+   "evidence": "chapters/03-agent-observation.md:532：Action Monitor 的 60% 反映零樣本 LLM 有沒有注意到；exit(0)、SkipTest 類 hack 用 regex 掃行動原則上可全抓，且它沿用為 CoT 監控寫的提示",
+   "suggested_fix": "加條件：不當行為有已知行動特徵時，先以確定性行動檢查當對照組，LLM 監控只負責剩下的部分"
+  },
+  {
+   "id": "T4-01",
+   "kind": "missing_condition",
+   "evidence": "chapters/04-agent-trajectory.md:424、434、436：ProcessBench「最早錯誤步」不分被自我修正的錯與致命錯；反事實定義對人工標籤一致度低（Brute Force 12.0% 對直接提示 28.0%）；value 型分數把「後面救不救得回來」混進「這步對不對」",
+   "suggested_fix": "要求真值定義與用途相符（觸發修正用首錯、歸因用反事實關鍵步、決定是否續跑用可救回）並寫進 verification"
+  },
+  {
+   "id": "T6-09",
+   "kind": "missing_condition",
+   "evidence": "chapters/06-user-simulator-feedback.md:343：UserLM 的 Assistant Score 74.6 對 57.4 混進了 UserLM-8b 沒給足必要資訊的效果（數學 Intent Coverage 76.5 對 GPT-4o 模擬 97.1），且該列與總體值本身對不上；卡上引用 74.6/57.4 未提此混淆",
+   "suggested_fix": "在 counter_evidence／grade_reason 註明此混淆；比較模擬器時先控制 Intent Coverage 再比下游分數"
+  },
+  {
+   "id": "T5-06",
+   "kind": "missing_condition",
+   "evidence": "chapters/05-self-correction-reflection.md:594；README.md:101-105：量過 FPR/FNR 仍預測不了淨效益（同一驗證器在不同起點解上正負號相反）",
+   "suggested_fix": "recommendation 措辭改為「FPR/FNR 不足以決定開關，要量對照不修正的淨效益」（verification 已有淨準確率對照，屬措辭層級）"
+  },
+  {
+   "id": "T1-09",
+   "kind": "overgeneralized",
+   "evidence": "notes/2310.11589.json key_results[1]；chapters/01-goal-intent.md:102、392、277：GATE 只在 6/10（absolute）、7/10（AUC）設定勝過自寫描述；道德推理領域檢定力不足且模擬器失效；受試者作答可回看對話紀錄，抬高生成式方法一致度",
+   "suggested_fix": "加條件：限於偏好可由例子引出的領域；grade_reason 註明勝出比例與回看紀錄的偏差"
+  },
+  {
+   "id": "T5-08",
+   "kind": "overgeneralized",
+   "evidence": "notes/2306.09896.json；chapters/05-self-correction-reflection.md 反證段：n_fr=1 只有 Olausson 一篇，僅 APPS/HumanEval、溫度固定 0.8；增益隨模型與資料集而異，小預算時很小或不存在，APPS 上只有 GPT-4 明顯受惠",
+   "suggested_fix": "寬度那半加條件（大預算、強模型）或降到 B/C 之間；grade_reason 已部分自承，補成 switch_when"
+  },
+  {
+   "id": "T2-11",
+   "kind": "missing_condition",
+   "evidence": "chapters/02-dialogue-state-tracking.md:604：In(Stability) 只量到 8 個 round，看不出流失會不會停在某水準；卡的 grade_reason 只寫 20 組配對、一個模型，沒提 8 輪",
+   "suggested_fix": "grade_reason 補上「只量 8 輪」，長對話外推標為推論（影響小）"
+  }
+ ],
+ "checked_cards": [
+  "T1-03",
+  "T1-07",
+  "T1-09",
+  "T1-10",
+  "T2-01",
+  "T2-02",
+  "T2-03",
+  "T2-09",
+  "T2-11",
+  "T3-01",
+  "T3-03",
+  "T3-06",
+  "T3-09",
+  "T3-10",
+  "T3-11",
+  "T4-04",
+  "T4-05",
+  "T4-06",
+  "T5-01",
+  "T5-02",
+  "T5-04",
+  "T5-06",
+  "T5-08",
+  "T6-01",
+  "T6-05",
+  "T6-09",
+  "T6-10",
+  "T7-07",
+  "T8-02",
+  "T1-01",
+  "T2-06",
+  "T3-05",
+  "T3-07",
+  "T4-01",
+  "T4-02",
+  "T4-03",
+  "T4-07",
+  "T6-02",
+  "T6-04",
+  "T7-01",
+  "T7-02",
+  "T7-03",
+  "T7-04",
+  "T7-06",
+  "T7-08",
+  "T8-01",
+  "T8-03",
+  "T8-04",
+  "T8-06"
+ ],
+ "summary": "查 29 張 do/avoid 卡與 20 張 measure A 卡，13 項發現：1 conflict（T1-01 對 T1-07）、7 missing_condition、5 overgeneralized。最嚴重：T5-02（gpt-3.5 驗證器使結果 −11.2）、T8-02（單一隨機資料庫即與完整測試組一致，反證通則）、T1-01/T1-07 衝突。T4-05 的 A 級只量到盛行率。T5-01 有輕微保留（CRITIC、Self-Debugging 列在反證，卡以「量過才開」處理，可接受）。行號為原檔行號。"
+}

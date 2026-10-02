@@ -9,7 +9,7 @@
 使用者拍板的兩件事：
 
 - **Agent Observation 兩種讀法都要，按配額切**：計入的 20 篇中約 12 篇講「agent 怎麼感知環境」（觀測空間），約 8 篇講「怎麼觀測 agent」（可觀測性與監控）。
-- **純研究**：各章不附「對 nexus 的意涵」。
+- **純研究**：各章不附「對 nexus 的意涵」。（後來另加一份從八章歸納的通用實作方案 `blueprint.md`，它不對照 nexus，各章仍維持純研究；做法見文末〈藍圖這一輪〉。）
 
 ## 8 個節點與範圍
 
@@ -125,3 +125,7 @@
 筆記的 `limitations_stated` 是論文自述的限制；`limitations_observed` 是精讀 agent 自己的分析，有些是它依論文表格或公開資料重算出來的。後者沒有經過同儕審查，章節引用時一律標明是精讀時的分析，並優先拿去做程式驗證。
 
 每支 workflow 跑完就 commit 一次，讓成果持續落地。
+
+## 藍圖這一輪（通用實作方案）
+
+調研完成後，另做一份 `blueprint.md`：把八章歸納成分級的通用實作方案。做法分五段：S1 八個抽取子代理（每章一個，產出 `data/blueprint/T1..T8.json`，共 96 條決策）；S2 由腳本 `blueprint-tools/build_blueprint.py` 機械產生決策卡、收斂度表、邊介面契約與附錄，手寫的只有開頭、怎麼讀、資料流圖、量測紀律、組裝順序（`blueprint-parts/`）；S3 機械檢查 `blueprint-tools/check_blueprint.py`；S4 三位對抗稽核子代理（查 A 級證據是否過篩、有沒有被反證打臉、建造者能不能照做），降級與補註記在 `data/blueprint/audit-*.json`；S5 收尾。子代理合計 11 支（抽取 8＋稽核 3）。等級取機械重算與抽取者給的較低者，稽核只准降不准升。腳本放在 `blueprint-tools/` 而不是 `tools/`，因為 `tools/` 目錄是唯讀的。

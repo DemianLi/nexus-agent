@@ -1,0 +1,332 @@
+{
+ "cards": [
+  {
+   "id": "T1-01",
+   "verdict": "keep",
+   "reasons": [
+    "兩筆乾淨來源都是對論文表格的重算並經程式驗證（chapters/01-goal-intent.md:241-247、249、321、323），依 SPEC L103 可當 evidence；作者群不同（HIT 對 NYU／UT Austin），無共用標註或判定器。",
+    "弱點：兩筆都只是『有條件證實』。2410.13788 在 balanced accuracy 讀法下三個模型反而高於 50% 地板，只在 5% 邊界被排除（01-goal-intent.md:249、321；notes/2410.13788.json limitations_observed[2]）；2010.05256 依賴 query 分布與 Table 6 逐領域平均兩個前提（01-goal-intent.md:247；notes/2010.05256.json limitations_observed[0]）。卡片 grade_reason 已自陳此風險，未找到推翻其中一筆的行號。",
+    "2410.13788 的閘門訓練偏好來自握有答案的模擬器（notes/2410.13788.json limitations_observed[0]），但不進 Ambig Acc 判分，影響方向對『低於多數類』保守；不構成 F2–F4。",
+    "反證段（01-goal-intent.md:332 起）與 L408–411 沒有『補了平凡基準反而誤導』的反例；PPDPP 的 59.0（L410）約等於多數類 59.8，反而同向。"
+   ],
+   "checked": [
+    "chapters/01-goal-intent.md:241-252,318-328,408-411",
+    "notes/2010.05256.json",
+    "notes/2410.13788.json",
+    ".cache/work/blueprint/SPEC.md:81-103",
+    "scratchpad acards.txt（data/blueprint/T1.json 傾印）"
+   ]
+  },
+  {
+   "id": "T2-06",
+   "verdict": "keep",
+   "reasons": [
+    "主原則（同名 JGA 因未寫明的聚合方式差一大截）有兩筆乾淨來源：FnCTOD 62.59 對 38.71（chapters/02-dialogue-state-tracking.md:372；notes/2402.10466.json limitations_observed[3] 同數）與 IC-DST 逐領域 51.42–71.87 對多領域 35.3（02-dialogue-state-tracking.md:401）。兩者都是各自論文對自己輸出的兩種聚合，精確比對，無 F2–F4。",
+    "獨立性：FnCTOD 引用 IC-DST 的 56.96 當基線（notes/2402.10466.json limitations_observed[2]），但本卡用的兩組數字都是各自的自報輸出，不是互相引用；作者群不同（.cache/text 作者欄）。",
+    "FnCTOD 有測試集挑超參數（每領域 200 筆，limitations_observed[7]）與 5-shot 示範取自訓練集（[0]），屬 F2 但只打在它的頭條 SOTA 主張上，不影響同一組輸出兩種聚合的差距。",
+    "清單其餘項多為單一來源（卡片已自陳）；反證段 02-dialogue-state-tracking.md:544-560 無相關反例。"
+   ],
+   "checked": [
+    "chapters/02-dialogue-state-tracking.md:370-374,398-402,544-560",
+    "notes/2402.10466.json",
+    "notes/2203.08568.json",
+    ".cache/work/blueprint/SPEC.md"
+   ]
+  },
+  {
+   "id": "T3-05",
+   "verdict": "downgrade_B",
+   "reasons": [
+    "地板那一半只有 OSWorld 一個來源：OS-ATLAS 那筆與 OSWorld 共用題目與數字（chapters/03-agent-observation.md:102、510；卡片自己也這樣寫），不算第二個獨立來源。",
+    "重跑雜訊那一半的 OSWorld 0.40 點出處是 notes/2404.07972.json limitations_observed[2]，屬精讀批評，依 SPEC L95 不能列為支持 evidence；它也沒有量任何重跑變異，只是指出單次。",
+    "剩下的 SWE-agent 那筆：論文自報 6 次執行的 SD 是 0.49（.cache/text/2405.15793.txt:2371『17.94 0.49』；notes/2405.15793.json limitations_observed[0]），照自報值 1.7 點約 3.5 個 SD，『不到 2 個標準差』只在綜合階段推的下界成立，章內自己標為『中度張力』（03-agent-observation.md:360）。所以『不估雜訊會看錯』沒有乾淨的量化示範。",
+    "結論：主原則的兩半各只剩一個乾淨來源，且其中一個的方向有張力，未達 SPEC L32–40 的 A 條件。"
+   ],
+   "checked": [
+    "chapters/03-agent-observation.md:100-104,355-362,469-520",
+    "notes/2404.07972.json",
+    "notes/2405.15793.json",
+    ".cache/text/2405.15793.txt:2371",
+    "notes/2410.23218.json",
+    ".cache/work/blueprint/SPEC.md"
+   ]
+  },
+  {
+   "id": "T3-07",
+   "verdict": "keep",
+   "reasons": [
+    "R-Judge（上海交大）與 Llama Guard（Meta）作者群與資料不同；兩筆都是對論文表格的重算並經程式驗證（chapters/03-agent-observation.md:368-372、407-409），SPEC L103 允許。",
+    "R-Judge 標籤沒報標註者一致性（03-agent-observation.md:554；notes/2401.10019.json limitations_observed[7]），依 SPEC L102 不算 F4，卡片 flaw_basis 已寫入；提示框法是第一人稱（limitations_observed[3]）只影響外推。",
+    "Llama Guard 那格的『隨機 AUPRC≈正例比例』是綜合階段的分析（L407），但 0.067 低於 8.1% 是表格計數換算；對手 API 改用 1-vs-benign 移除 hard negatives、基線反而偏樂觀（L407），方向對結論保守。Azure 閾值可能在評估資料上挑（L410；notes/2312.06674.json limitations_observed[9]），但 Azure 不在本卡用的格子裡。",
+    "反證段 03-agent-observation.md:537-554 的 R-Judge 作者相反解讀（L545）是關於 Guard-2 對 GPT-4o 的名次，不反對『要對平凡分類器讀』，反而只比全判 unsafe 高 2.80（L544）。"
+   ],
+   "checked": [
+    "chapters/03-agent-observation.md:367-372,379-383,406-410,537-554",
+    "notes/2401.10019.json",
+    "notes/2312.06674.json",
+    ".cache/work/blueprint/SPEC.md"
+   ]
+  },
+  {
+   "id": "T4-01",
+   "verdict": "keep",
+   "reasons": [
+    "『BoN 會高估評分器』仍有兩個獨立乾淨來源：Qwen 團隊（maj@64 56.3 高於 PRM 56.1）與 OmegaPRM（增益 16.2 點來自多數決）。",
+    "子代理沒標出的毛病：notes/2501.07301.json limitations_observed[2] 指出 ProcessBench 與該文同一團隊發表、協定與判官提示同形，可能偏袒判官組，正好打在 46.5 對 40.1 的翻轉上；卡上反駁只處理 MC 組與 PRM800K 組。所以『排序不一致時以直接定位為準』這個子主張只有 Qwen 團隊一組來源，依 SPEC L101 應註明較弱，不拉低主原則。"
+   ],
+   "checked": [
+    "chapters/04-agent-trajectory.md（scratchpad t4.txt 摘錄段）",
+    "notes/2501.07301.json",
+    "notes/2406.06592.json",
+    ".cache/work/blueprint/SPEC.md:101"
+   ]
+  },
+  {
+   "id": "T4-02",
+   "verdict": "keep",
+   "reasons": [
+    "未找到新的 F1–F4。2412.06559 的 Llama 6.2 可能是解析失敗（notes/2412.06559.json limitations_observed[6]），只影響單一格，不影響方向。",
+    "作者群獨立性已依 .cache/text 作者欄核對，無同組配對。"
+   ],
+   "checked": [
+    "chapters/04-agent-trajectory.md（t4.txt 摘錄段）",
+    "notes/2412.06559.json",
+    "notes/2210.03629.json",
+    "notes/2506.18824.json",
+    ".cache/work/blueprint/SPEC.md"
+   ]
+  },
+  {
+   "id": "T4-03",
+   "verdict": "keep",
+   "reasons": [
+    "未找到新的 F1–F4；MAST 與 Pan 兩筆是條件式推算，卡片已註明。章內反證段無未解釋的反例。"
+   ],
+   "checked": [
+    "chapters/04-agent-trajectory.md（t4.txt 摘錄段）",
+    "notes/2311.08516.json",
+    "notes/2504.08942.json",
+    ".cache/work/blueprint/SPEC.md"
+   ]
+  },
+  {
+   "id": "T4-05",
+   "verdict": "keep",
+   "reasons": [
+    "未找到新的 F1–F4；反證已用軌跡長度條件切開（chapters/04-agent-trajectory.md:329）。"
+   ],
+   "checked": [
+    "chapters/04-agent-trajectory.md:329 與 t4.txt 摘錄段",
+    "notes/2501.07301.json",
+    "notes/2506.18824.json",
+    ".cache/work/blueprint/SPEC.md"
+   ]
+  },
+  {
+   "id": "T4-07",
+   "verdict": "keep",
+   "reasons": [
+    "SWE-Gym 的 capping 與 verifier 在 SWE-Bench 上挑（chapters/04-agent-trajectory.md:351；notes/2412.21139.json limitations_observed[1]）；ETO 的輪數與 β 落在測試集最佳點（notes/2403.02502.json limitations_observed[2]）；IPR 在測試集上挑輪、lr、β（04-agent-trajectory.md:352；notes/2406.11176.json limitations_observed[0]）。依 SPEC L94 這些都是 F2。",
+    "仍判 keep 的理由：本卡要示範的正是『在測試集上挑輪數會看錯』，這些 F2 是被示範的毛病本身，不是逐輪曲線量測的毛病；SWE-Gym 的 OpenHands 那一臂沒調超參數，只有未套 capping 的混淆（notes/2412.21139.json limitations_observed[0]）；IPR 第 1、2 輪低於 ETO 的結論穩健。這個讀法有爭議，列為最沒把握之一。"
+   ],
+   "checked": [
+    "chapters/04-agent-trajectory.md:78-86,344-353,468-476",
+    "notes/2412.21139.json",
+    "notes/2403.02502.json",
+    "notes/2406.11176.json",
+    ".cache/work/blueprint/SPEC.md:94"
+   ]
+  },
+  {
+   "id": "T6-02",
+   "verdict": "keep",
+   "reasons": [
+    "兩筆都是章內對論文表格的重算，SPEC L103 允許；1909.01388（UC Davis／CMU）與 1805.06966（Cambridge）作者群獨立。",
+    "1805.06966 送真人的策略依模擬器結果挑選（notes/1805.06966.json limitations_observed[1]），不算 F2（判分是真人）。",
+    "chapters/06-user-simulator-feedback.md:327-335 沒有反對『做整體名次檢定』的例子；GenTUS 的相反結果反而支持本卡。"
+   ],
+   "checked": [
+    "chapters/06-user-simulator-feedback.md:327-335 與 t6.txt 摘錄段",
+    "notes/1909.01388.json",
+    "notes/1805.06966.json",
+    ".cache/work/blueprint/SPEC.md:103"
+   ]
+  },
+  {
+   "id": "T6-04",
+   "verdict": "keep",
+   "reasons": [
+    "2601.17087 的 ± 只有 3 次執行，分數差可能受模擬器提早結束與子字串判分交互影響，另有資料污染疑慮（notes/2601.17087.json limitations_observed[10]）；但加上 1909.01388 的交叉矩陣與 NUS／GenTUS 一組，仍有 ≥2 個獨立乾淨來源。",
+    "AgenG 的反例已用『事前不知道哪一個模擬器夠用』切開，不是未解釋的反例。"
+   ],
+   "checked": [
+    "chapters/06-user-simulator-feedback.md（t6.txt 摘錄段）",
+    "notes/2601.17087.json",
+    "notes/1909.01388.json",
+    "notes/2208.10817.json",
+    ".cache/work/blueprint/SPEC.md"
+   ]
+  },
+  {
+   "id": "T7-01",
+   "verdict": "keep",
+   "reasons": [
+    "ABC 的 28% 來自單次重跑隨機 agent（notes/2507.02825.json limitations_observed[5]），屬 F5 雜訊，不是 F1–F4。",
+    "grade_reason 說『三組作者不同』不精確：Dongchan Shin 同時列名 OSWorld 與 AgentRewardBench（.cache/text 作者欄）。但兩半各自的配對是 OSWorld＋ABC、ARB＋ABC，ABC 與兩者都無共同作者，不影響等級；建議改寫該句。",
+    "版本問題見 chapters/08-task-completion-score.md:655，已用條件說明。"
+   ],
+   "checked": [
+    "chapters/07-agent-evaluation.md:198-245,397-447",
+    "chapters/08-task-completion-score.md:655",
+    "notes/2507.02825.json",
+    ".cache/text 作者欄（2404.07972、2504.08942、2507.02825）",
+    ".cache/work/blueprint/SPEC.md:82"
+   ]
+  },
+  {
+   "id": "T7-02",
+   "verdict": "keep",
+   "reasons": [
+    "Agent-as-a-Judge 的基準是在 (I) 標籤假設下算的（notes/2410.10934.json limitations_observed[0]）；FairEval 平手處理未交代（notes/2305.17926.json limitations_observed[6]）；兩者都不到 F1–F4。",
+    "MT-Bench 的人類票受 GPT-4 判語影響（notes/2306.05685.json limitations_observed[6]），有 F3 疑慮，但只影響單一來源撐的子主張，依 SPEC L101 註明較弱即可。",
+    "爭議三（chapters/07-agent-evaluation.md:545-552）不構成反例。"
+   ],
+   "checked": [
+    "chapters/07-agent-evaluation.md:366-396,520-580",
+    "notes/2410.10934.json",
+    "notes/2305.17926.json",
+    "notes/2306.05685.json",
+    ".cache/work/blueprint/SPEC.md"
+   ]
+  },
+  {
+   "id": "T7-03",
+   "verdict": "keep",
+   "reasons": [
+    "爭議四、五（chapters/07-agent-evaluation.md:554-566）不構成反例；2502.06193 的 13.33 代表對調後系統性改判（notes/2502.06193.json limitations_observed[9]），與本卡同向。未找到新的 F1–F4。"
+   ],
+   "checked": [
+    "chapters/07-agent-evaluation.md:520-580",
+    "notes/2502.06193.json",
+    "notes/2306.05685.json",
+    ".cache/work/blueprint/SPEC.md"
+   ]
+  },
+  {
+   "id": "T7-04",
+   "verdict": "downgrade_B",
+   "reasons": [
+    "兩個乾淨來源量的是不同的擾動：重複攻擊只有 MT-Bench（23 個回答），verbosity 擺動只有 LC；主原則『長度偏差會讓判分看錯』沒有兩個來源同時量化示範。",
+    "LC 那一半有未被條件解釋掉的反證：verbose 提示讓內容本身變詳細、人類也偏好較長回答（AlpacaFarm 62% 對 64%）（chapters/07-agent-evaluation.md:221、570-571）；notes/2404.04475.json limitations_observed[4] 也指出長度與品質混淆。所以 LC 那一半沒有示範出『偏差造成看錯』。",
+    "依 SPEC L32–40（反證段不得有未解釋的反例）與 L101，降為 B。"
+   ],
+   "checked": [
+    "chapters/07-agent-evaluation.md:198-245,520-580",
+    "notes/2404.04475.json",
+    "notes/2306.05685.json",
+    ".cache/work/blueprint/SPEC.md:32-40,101"
+   ]
+  },
+  {
+   "id": "T7-06",
+   "verdict": "keep",
+   "reasons": [
+    "WebShop（IL 三個種子 SD 2.42 對比差距 0.4；chapters/07-agent-evaluation.md:380）與 GAIA（±2.5；L440）是兩個獨立、量測過的重跑雜訊來源。",
+    "OSWorld 那筆屬精讀批評（L438），依 SPEC L95 不能列為支持；Terminal-Bench 有兩種讀法分不開（L441-443），但相鄰名次在兩種讀法下都分不出高下。主原則仍有兩個乾淨來源。"
+   ],
+   "checked": [
+    "chapters/07-agent-evaluation.md:366-396,397-447",
+    "notes/2207.01206.json",
+    "notes/2311.12983.json",
+    ".cache/work/blueprint/SPEC.md:95"
+   ]
+  },
+  {
+   "id": "T7-08",
+   "verdict": "keep",
+   "reasons": [
+    "SWE-bench 那筆用 oracle retrieval 設定，依 SPEC L100 可能算 F2；排除它後，ProcessBench 加 ABC 仍撐得住過程檢查那一半。",
+    "回歸檢查那一半只有 SWE-bench 一個來源，依 SPEC L101 應註明較弱；P2P 只涵蓋 test_patch 涉及的檔案（notes/2310.06770.json limitations_observed[6]），數字是下限。"
+   ],
+   "checked": [
+    "chapters/07-agent-evaluation.md:397-447,800-806",
+    "notes/2310.06770.json",
+    "notes/2507.02825.json",
+    ".cache/work/blueprint/SPEC.md:100-101"
+   ]
+  },
+  {
+   "id": "T8-01",
+   "verdict": "keep",
+   "reasons": [
+    "ABC（τ-bench do-nothing 38%／spamming 40%）與 ScienceWorld（4-2 上 Random-Valid 0.63 高過所有訓練代理）作者群與環境都不同（chapters/08-task-completion-score.md:80-82 的重疊群不含 2203.07540）。",
+    "SPEC L103『行為只來自單一模擬器時標 F4』的判讀：τ-bench do-nothing 的分數與使用者模擬器說什麼無關，不算 F4；ScienceWorld 的模擬器就是受評環境本身，本卡要支持的是『該環境判準的地板』而非外推行為，所以不標 F4。若稽核主線採字面讀法，ScienceWorld 變成 F4，本卡只剩 ABC 一個乾淨來源、應降為 B——這是本稽核最沒把握的判斷。",
+    "子代理沒寫明的弱點：ScienceWorld 的 0.63 是部分分數，不是二元成功率（08-task-completion-score.md:269；notes/2203.07540.json limitations_observed[1]），而且 Random-Valid 依賴模擬器給的合法動作清單（limitations_stated[0]）；方向仍與本卡一致，不屬 F1–F4。",
+    "反證（08-task-completion-score.md:655-657：版本不同、38% 是應得分不是偏差量）已用『成功條件是否為不動』切開並寫進 switch_when；附帶的『拒絕題要求正面證據』只有 ABC 撐，卡片已註明較弱。"
+   ],
+   "checked": [
+    "chapters/08-task-completion-score.md:78-84,265-270,464-472,650-663,714",
+    "notes/2203.07540.json",
+    "data/blueprint/T8.json（acards.txt 傾印）",
+    ".cache/work/blueprint/SPEC.md:101-103"
+   ]
+  },
+  {
+   "id": "T8-02",
+   "verdict": "keep",
+   "reasons": [
+    "2010.02840 與 2407.01502 作者群不同；AATM 與 ABC 同屬重疊群（chapters/08-task-completion-score.md:80-81），卡片已把 ABC 降為佐證。",
+    "AATM『約 3 個百分點』已回原文核對：.cache/text/2407.01502.txt:2177『responsible for a 3% difference in accuracy (mean across five runs)』，表 A6 對應條目在 :2093。",
+    "偽陽性 6.5% 以 test suite 為參考，人工只驗了另一個方向（08-task-completion-score.md:122、769），但 test suite 是語意上界、判錯代表至少一個資料庫結果不同，偏陽性方向大致由結構撐住；反證（收緊增加偽陰性，L441-442）已用『同時量偽陰性』切開。未找到新的 F1–F4。"
+   ],
+   "checked": [
+    "chapters/08-task-completion-score.md:110-123,336-338,439-462,769",
+    "notes/2407.01502.json",
+    ".cache/text/2407.01502.txt:545-556,2088-2096,2177",
+    ".cache/work/blueprint/SPEC.md"
+   ]
+  },
+  {
+   "id": "T8-03",
+   "verdict": "keep",
+   "reasons": [
+    "2010.02840 與 2504.08942 作者群與資料不同，參考分別是確定性 test suite 與專家標註（SPEC L102 不算 F4）。",
+    "子代理只部分標出的弱點：ARB 的『規則式 recall 55.9 偏低』有兩個混淆——專家標註政策從寬、只報原始一致率（notes/2504.08942.json limitations_observed[7]、limitations_stated[5]），以及 AssistantBench 規則式是部分給分、專家與 judge 是二元，量綱不一（limitations_observed[6]）。這削弱『規則式偏向判失敗』的幅度，但 LLM judge precision 69.8 那一側的方向不受寬鬆標註影響（寬鬆只會讓 judge precision 看起來更高），本卡的主原則（單一 precision 會藏住另一側）仍成立。",
+    "反證段 08-task-completion-score.md:769（test suite 只驗一個方向）卡片已處理；『依難度分層』只有 2010.02840 撐，已註明較弱。"
+   ],
+   "checked": [
+    "chapters/08-task-completion-score.md:110-123,439-446,767-776",
+    "notes/2504.08942.json",
+    ".cache/work/blueprint/SPEC.md:102"
+   ]
+  },
+  {
+   "id": "T8-04",
+   "verdict": "keep",
+   "reasons": [
+    "2106.05555（MultiWOZ 重算）、2010.02840（官方腳本 join bug）、2503.14499（METR）三組作者獨立，判分確定。即使 METR 的『換刻度』不完全是『同名不同實作』，前兩筆已足撐 A。",
+    "08-task-completion-score.md:772 指出 MultiWOZ 子集比對規則沒經人工驗證、DAMD 的落差混有重訓變異；本卡用的 UniConv 是作者 checkpoint，排除了重訓變異（卡片 flaw_basis 已寫）。未找到新的 F1–F4。"
+   ],
+   "checked": [
+    "chapters/08-task-completion-score.md:117-131,439-451,767-776",
+    ".cache/work/blueprint/SPEC.md"
+   ]
+  },
+  {
+   "id": "T8-06",
+   "verdict": "keep",
+   "reasons": [
+    "2411.00640（Miller）與 2010.06595（Card 等）作者群獨立，無 judge 或模擬器。",
+    "弱點：2411.00640 的實證極薄，全文唯一真實數字是表 4 三組 SE、模型未交代（notes/2411.00640.json limitations_observed[4]），969 依它自己的式子應是約 727（limitations_observed[1]；08-task-completion-score.md:216），錯在保守方向；2010.06595 把每題對錯當固定值，套到取樣解碼的 agent 會高估 power（notes/2010.06595.json limitations_observed[0]），卡片已寫進 switch_when。都屬 F5 或適用條件，不是 F1–F4。",
+    "反證 08-task-completion-score.md:751（bootstrap 在 runs 少時覆蓋不足）已用題數多寡切開。"
+   ],
+   "checked": [
+    "chapters/08-task-completion-score.md:198-216,522-530,747-765",
+    "notes/2411.00640.json",
+    "notes/2010.06595.json",
+    ".cache/work/blueprint/SPEC.md"
+   ]
+  }
+ ],
+ "summary": "22 張 A 卡中建議 2 張降為 B：T3-05（地板與重跑雜訊兩半各只剩一個乾淨來源，OSWorld 0.40 點屬精讀批評、SWE-agent 自報 SD 0.49 使 1.7 點約 3.5 SD）、T7-04（重複攻擊與 verbosity 各只有一個來源，LC 那一半的『內容真的變詳細、人類也偏好長答』反證未被解釋）。其餘 20 張 keep，但 T4-01、T7-02、T7-08、T8-01 各有只靠單一來源的子主張應註明較弱；T7-01 的『三組作者不同』句子不精確（Dongchan Shin 重疊）但不影響等級。最沒把握：T8-01 對 SPEC L103 的讀法（字面讀則 ScienceWorld 變 F4、應降 B），以及 T4-07 把測試集挑輪的 F2 視為被示範的毛病而非量測毛病。"
+}
