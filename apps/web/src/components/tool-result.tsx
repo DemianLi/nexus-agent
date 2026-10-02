@@ -37,7 +37,7 @@ import {
   searchSummary,
 } from '@/lib/tool-result-card';
 import type { ReadCard, ReadLine, SearchCard, SearchRow } from '@/lib/tool-result-card';
-import type { ToolOutput } from '@/lib/tool-output';
+import { omittedLabel, type ToolOutput } from '@/lib/tool-output';
 import { cn } from '@/lib/utils';
 
 function DiffLine({ row }: { row: ToolDiffRow }) {
@@ -311,6 +311,7 @@ export function ToolSearch({ card }: { card: SearchCard }) {
 }
 
 export function ToolOutputBlock({ output }: { output: ToolOutput }) {
+  const label = omittedLabel(output);
   return (
     <div className="bg-stage shadow-stage rounded-xl" data-testid="tool-output">
       <div className="text-muted-foreground px-3 pt-2 text-xs">結果</div>
@@ -320,14 +321,14 @@ export function ToolOutputBlock({ output }: { output: ToolOutput }) {
         className="max-h-[150px] overflow-auto px-3 pt-1 pb-2 font-mono text-xs whitespace-pre-wrap wrap-anywhere"
       >
         {output.head}
-        {output.omitted > 0 && (
+        {label !== undefined && (
           <>
             {'\n'}
             <span
               className="text-muted-foreground font-sans italic"
               data-testid="tool-output-omitted"
             >
-              {`⋯ 中間 ${output.omitted} 行沒畫 ⋯`}
+              {label}
             </span>
             {'\n'}
             {output.tail}
