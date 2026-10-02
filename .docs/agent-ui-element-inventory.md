@@ -98,7 +98,7 @@
 
 沒做的按誰先動分三類：
 
-- **等 harness 先投影**（日誌有、線上沒有）：38（原 24 的另一半，要 `plan/mode`）、18、33 已請 dev-harness 排，順序計劃模式 → 壓縮列 → 目標列（2026-10-01 發現當時沒有對應的 issue，是漏接，同日由 demian 拍板照這個順序開卡：[#895](https://github.com/DemianLi/nexus-agent/issues/895) 計劃模式、[#896](https://github.com/DemianLi/nexus-agent/issues/896) 壓縮列、[#897](https://github.com/DemianLi/nexus-agent/issues/897) 目標列，三張都只做 harness 與 wire 的投影，web 那半等線上有資料後另開）；17 要逐次的輸入與輸出；25 是 `sandbox/mode`；37 要整條對話的輪次索引。
+- **等 harness 先投影**（日誌有、線上沒有）：38（原 24 的另一半，要 `plan/mode`）、18、33 已請 dev-harness 排，順序計劃模式 → 壓縮列 → 目標列（2026-10-01 發現當時沒有對應的 issue，是漏接，同日由 demian 拍板照這個順序開卡：[#895](https://github.com/DemianLi/nexus-agent/issues/895) 計劃模式、[#896](https://github.com/DemianLi/nexus-agent/issues/896) 壓縮列、[#897](https://github.com/DemianLi/nexus-agent/issues/897) 目標列，三張都只做 harness 與 wire 的投影，三張的 harness 半邊都已在 2026-10-02 合進 develop，web 那半各開了一張：[#900](https://github.com/DemianLi/nexus-agent/issues/900) 計劃標籤、[#944](https://github.com/DemianLi/nexus-agent/issues/944) 壓縮標記、[#945](https://github.com/DemianLi/nexus-agent/issues/945) 目標列，現在等的是 web）；17 要逐次的輸入與輸出；25 是 `sandbox/mode`；37 要整條對話的輪次索引。
 - **要先開一條路**：8 標頭的標題只在開了會話日誌時隨列表送，要每種情況都有得另開一條拿當前標題的路。harness 那一條由 [#647](https://github.com/DemianLi/nexus-agent/issues/647) 開：即時與歷史都送 `custom` 的 `title`，沒開落盤也有，折疊器的 `title` 讀得到。web 那一刀是 #655（2026-09-26）：標頭、瀏覽器分頁標題、側欄目前這一列都讀它。
 - **整塊新功能**（三層都沒有，先 grilling）：20、30。16 原本也在這裡，2026-10-01 拍板不做獨立檢視，移到「缺的那塊是刻意不做」。28 原本也在這裡，檔案與資料夾那一塊由 #653 做掉（2026-09-28）。5 右側欄原本也歸在這裡，是錯的：dsh 右側欄的兩種主要內容（改動比對 #443、交付預覽 #452）早就做了、放在 Sheet，前端自己就做得了，同一天由 #640 做掉。
 
@@ -134,7 +134,7 @@
 | 15 | 子代理歸屬標示 | P0（`Attribution`）**——2026-09-22 已實作：`tool-card.tsx:52` 的 `AttributionBadge` ＋ transcript 縮排** | `ui-subagent/SubagentHeaderLineage` | AIE `agent` | — | nexus「未歸屬」要照樣顯示 |
 | 16 | 子代理對話檢視（唯讀 composer） | P1 | `ui-subagent/SubagentReadOnlyComposer` | — | — | 2026-10-01 拍板：子代理留在主對話裡，不做獨立檢視（折疊器本來就把子代理的卡併在主對話）。換成委派卡上的背景子代理：狀態（#870）、寄來的話與傳給誰（#864、#868）、展開讀它自己的對話（#872、#874）、傳話與單獨停止（#873），都是 web 自己做的 |
 | 17 | 回合分隔與用量 | P1 | `ui-chat/TurnUsagePanel`、`StatsPills`、`TurnTailNodeView` | AIE `context` | 數字滾動 | #574（PR #600）在頂列畫整條對話累計的 token 與時間，那是總帳；逐輪的用量還沒有，要線上逐次帶輸入與輸出，跟總帳是兩份投影 |
-| 18 | 壓縮／系統注入列 | P1 | `ui-chat/CompactionItem`、`ContextInjectionRow`、`SystemPromptRow` | AIE `checkpoint` | — | 2026-09-25 請 dev-harness 排投影，順序：計劃模式 → 壓縮列 → 目標列；2026-10-01 開了 [#896](https://github.com/DemianLi/nexus-agent/issues/896)，只管壓縮那一列（系統注入列與系統提示列不在內），「被壓掉多少」先只有訊息則數、沒有 token 數（要 token 數得改日誌格式，未定）；web 那半還沒開卡 |
+| 18 | 壓縮／系統注入列 | P1 | `ui-chat/CompactionItem`、`ContextInjectionRow`、`SystemPromptRow` | AIE `checkpoint` | — | 2026-09-25 請 dev-harness 排投影，順序：計劃模式 → 壓縮列 → 目標列；2026-10-01 開了 [#896](https://github.com/DemianLi/nexus-agent/issues/896)，只管壓縮那一列（系統注入列與系統提示列不在內），「被壓掉多少」先只有訊息則數、沒有 token 數（要 token 數得改日誌格式，未定）；2026-10-02 harness 半邊已合（PR #901：`compaction` 項目帶 `cutoff`「前 N 則」、`saved`、摘要全文）；web 那半是 [#944](https://github.com/DemianLi/nexus-agent/issues/944) |
 | 19 | 交付檔案列 | ~~P1~~ **P0（2026-09-22 已做完）** | `ui-deliverables`（`ProducedFiles`，有 `@container` 斷點） | AIE `artifact`、`attachments` | — | |
 | 20 | 附件（輸入與訊息中的圖） | P1 | `ui-attachment` | sc `attachment`；AIE `attachments` | — | 2026-09-26 #715 拍板照 dsh 做：harness 那一刀 #732（先合），web 那一刀 #733；兩張都在等 gemma-4-31b 的收圖實測（#731），送圖另等 #723 的每會話換模型 |
 
@@ -146,7 +146,7 @@
 | 22 | 決定紀錄（人按了什麼） | P0（`DecisionEntry`） | `ui-chat/ApprovalCommand` | — | — | 與失敗工具卡並存 |
 | 23 | 提問（單選／多選／自由文字／跳過／放棄整組） | P0（`PendingQuestion`、`QuestionItem`、`AnswerEntry`） | `ui-user-questions/QuestionComposer`：**"ask_user_question composer takeover"** | sc `questionnaire`；AIE `question` | 題目切換 slide＋blur 2px | 現有 `question-card.tsx` |
 | 24 | 計劃審核 | ~~P1~~ **P0（2026-09-28 已做完）**（`QuestionItem.detail`＋`intent`，#652） | `ui-user-questions/PlanReviewPanel`、`ui-plan`（`PlanCard`、`PlanPreview`） | AIE `plan` | — | #654（2026-09-28）：認得 `plan-review` 意圖的提問換成審核面板（「計劃待審」、標題＋兩行摘要＋「查看全文」、要求修改／同意執行）；「要求修改」關掉這一題、這一輪不停；全文開在右側欄的「計劃」分頁，1024 以上待審時自動停靠一次；對話裡的計劃卡帶結果 chip，重新整理照樣在，舊會話（走核准的那種）也讀得出結果。規則在規格 §4.3。模式的指示與切換拆成第 38 項 |
-| 38 | 計劃模式的指示與切換 | P1（線上沒有 `plan/mode`） | `ui-plan/PlanModeControl`（輸入框的 plan chip） | — | — | 2026-09-28 從第 24 項拆出來；等 harness 把 `plan/mode` 送上線（2026-09-25 已請 dev-harness 排，排在壓縮列、目標列之前；2026-10-01 開了 [#895](https://github.com/DemianLi/nexus-agent/issues/895)，預計只送 `{ active }`：待切換那一欄讀碼結論是永遠為 false，未實跑；web 那半還沒開卡） |
+| 38 | 計劃模式的指示與切換 | P1 | `ui-plan/PlanModeControl`（輸入框的 plan chip） | — | — | 2026-09-28 從第 24 項拆出來；等 harness 把 `plan/mode` 送上線（2026-09-25 已請 dev-harness 排，排在壓縮列、目標列之前；2026-10-01 開了 [#895](https://github.com/DemianLi/nexus-agent/issues/895)，預計只送 `{ active }`：待切換那一欄讀碼結論是永遠為 false，未實跑；2026-10-02 harness 半邊已合（PR #899）；web 那半是 [#900](https://github.com/DemianLi/nexus-agent/issues/900)，三個題目待拍板） |
 | 25 | 權限模式切換 | P1 | `ui-permission-presets` | — | 滑動 tab pill | 2026-09-26 #437 拍板照 dsh 做、排後面：三組（唯讀＋要問、可寫工作區＋要問、全開＋不問），`/permission` 取代 `/sandbox`；harness 那一半先做，web 選單接在後面 |
 
 **分歧**：dsh 的 21、23 都是「輸入框被接管」，nexus 目前是 `App.tsx:319–333` 把 `pendings` 渲染成 `QuestionCard`／`ApprovalCard`。手機上 takeover 比較省空間，因為鍵盤起來時畫面上只剩輸入區那一塊。這要拍板，見 §4 的 fog。
@@ -167,7 +167,7 @@
 | --- | --- | --- | --- | --- | --- | --- |
 | 31 | 狀態列（`idle`／`running`／`awaiting-input`／`failed`／`stopped`） | P0（`ConversationStatus`，`conversation.ts:175`） | `ui-primitives/StateDot` | AIE `shimmer` | `thinking-orbs` 依狀態換 state | 現有 `status-line.tsx` |
 | 32 | todo 清單 | P1 | `ui-conversation/.../TodoPanel` | AIE `task`、`queue` | 勾選 bounce（`--ease-bounce`） | nexus 有 todo plugin，wire 沒送；#575 已做完：待辦清單送上線並畫出來（上一句「wire 沒送」已過期） |
-| 33 | 目標列 | P1 | `ui-goal/GoalBar`（"docked above the composer"） | — | — | nexus 有 goal plugin；2026-09-25 請 dev-harness 排投影，排在計劃模式、壓縮列之後；2026-10-01 開了 [#897](https://github.com/DemianLi/nexus-agent/issues/897)，先只送持久的目標快照（階段、輪數），「會不會自己續行」要等 #638、#660、#661 落地後另開一張；web 那半還沒開卡 |
+| 33 | 目標列 | P1 | `ui-goal/GoalBar`（"docked above the composer"） | — | — | nexus 有 goal plugin；2026-09-25 請 dev-harness 排投影，排在計劃模式、壓縮列之後；2026-10-01 開了 [#897](https://github.com/DemianLi/nexus-agent/issues/897)，先只送持久的目標快照（階段、輪數），「會不會自己續行」要等 #638、#660、#661 落地後另開一張；2026-10-02 harness 半邊已合（PR #903）；web 那半是 [#945](https://github.com/DemianLi/nexus-agent/issues/945)，建議先只讀、動作鈕等 activation 落地 |
 | 34 | context 用量表 | P1 | `ui-conversation/.../ContextMeter` | AIE `context` | 進度條 `--ease-smooth-out` | #528 已做完：輸入框底列畫用掉多少（沒有分母，見 §2.0） |
 
 ### 2.7 回饋與通知
