@@ -14,7 +14,7 @@
     "notes/2010.05256.json",
     "notes/2410.13788.json",
     ".cache/work/blueprint/SPEC.md:81-103",
-    "scratchpad acards.txt（data/blueprint/T1.json 傾印）"
+    "data/blueprint/T1.json"
    ]
   },
   {
@@ -30,17 +30,18 @@
     "chapters/02-dialogue-state-tracking.md:370-374,398-402,544-560",
     "notes/2402.10466.json",
     "notes/2203.08568.json",
-    ".cache/work/blueprint/SPEC.md"
+    ".cache/work/blueprint/SPEC.md",
+    "data/blueprint/T2.json"
    ]
   },
   {
    "id": "T3-05",
    "verdict": "downgrade_B",
    "reasons": [
-    "地板那一半只有 OSWorld 一個來源：OS-ATLAS 那筆與 OSWorld 共用題目與數字（chapters/03-agent-observation.md:102、510；卡片自己也這樣寫），不算第二個獨立來源。",
-    "重跑雜訊那一半的 OSWorld 0.40 點出處是 notes/2404.07972.json limitations_observed[2]，屬精讀批評，依 SPEC L95 不能列為支持 evidence；它也沒有量任何重跑變異，只是指出單次。",
-    "剩下的 SWE-agent 那筆：論文自報 6 次執行的 SD 是 0.49（.cache/text/2405.15793.txt:2371『17.94 0.49』；notes/2405.15793.json limitations_observed[0]），照自報值 1.7 點約 3.5 個 SD，『不到 2 個標準差』只在綜合階段推的下界成立，章內自己標為『中度張力』（03-agent-observation.md:360）。所以『不估雜訊會看錯』沒有乾淨的量化示範。",
-    "結論：主原則的兩半各只剩一個乾淨來源，且其中一個的方向有張力，未達 SPEC L32–40 的 A 條件。"
+    "地板那一半只有 OSWorld 一個乾淨來源：OS-ATLAS 那筆與 OSWorld 共用題目與數字（chapters/03-agent-observation.md:102、510），不算第二個獨立來源。",
+    "OSWorld 0.40 點那筆出處是 notes/2404.07972.json limitations_observed[2]，屬精讀批評，依 SPEC L95 不能列為支持 evidence；它也沒有量任何重跑變異。",
+    "SWE-agent 那筆的方向站不住：論文自報 6 次執行 17.33／18.00／18.00／18.67／17.33／18.33，平均 17.94±0.49（.cache/text/2405.15793.txt:2350-2372）。以 6 個值重算，0.49 是單次執行的母體標準差（樣本 SD 約 0.54），不是平均的 SE。兩次單跑之差的 SD 約 0.49×√2≈0.69（用 0.54 則約 0.76），1.7 點約 2.2–2.5 個差值 SD，高於 2；『不到 2 個標準差』只在綜合階段用獨立二項假設推出的約 1 點下界下成立，章內自己標為『中度張力』（03-agent-observation.md:360）。所以『不估雜訊會看錯』沒有乾淨的量化示範。",
+    "一致規則（套用於 T3-05、T7-04、T7-08）：先看整條主原則有沒有 ≥2 個獨立乾淨來源『量化示範了看錯』；整條讀法下不足才降級。T7-08 整條讀法下過程檢查有 ProcessBench＋ABC 兩個來源，回歸那一半依 SPEC L101 只註明較弱；T3-05 與 T7-04 在整條讀法下也只剩一個能示範看錯的乾淨來源，所以降級不依賴『兩半各算』。 依 SPEC L32–40，降為 B。"
    ],
    "checked": [
     "chapters/03-agent-observation.md:100-104,355-362,469-520",
@@ -48,7 +49,9 @@
     "notes/2405.15793.json",
     ".cache/text/2405.15793.txt:2371",
     "notes/2410.23218.json",
-    ".cache/work/blueprint/SPEC.md"
+    ".cache/work/blueprint/SPEC.md",
+    ".cache/text/2405.15793.txt:2350-2380",
+    "data/blueprint/T3.json"
    ]
   },
   {
@@ -64,20 +67,22 @@
     "chapters/03-agent-observation.md:367-372,379-383,406-410,537-554",
     "notes/2401.10019.json",
     "notes/2312.06674.json",
-    ".cache/work/blueprint/SPEC.md"
+    ".cache/work/blueprint/SPEC.md",
+    "data/blueprint/T3.json"
    ]
   },
   {
    "id": "T4-01",
    "verdict": "keep",
    "reasons": [
-    "『BoN 會高估評分器』仍有兩個獨立乾淨來源：Qwen 團隊（maj@64 56.3 高於 PRM 56.1）與 OmegaPRM（增益 16.2 點來自多數決）。",
+    "『BoN 會高估評分器』有兩個獨立乾淨來源：Qwen 團隊 Best-of-64 時 PRM-7B 56.1 低於 maj@64 56.3（chapters/04-agent-trajectory.md:115、286；notes/2501.07301.json limitations_observed[0]），OmegaPRM 51→69.4 中 67.2−51=16.2 點來自多數決（04-agent-trajectory.md:113、285，程式驗證 L304）。",
     "子代理沒標出的毛病：notes/2501.07301.json limitations_observed[2] 指出 ProcessBench 與該文同一團隊發表、協定與判官提示同形，可能偏袒判官組，正好打在 46.5 對 40.1 的翻轉上；卡上反駁只處理 MC 組與 PRM800K 組。所以『排序不一致時以直接定位為準』這個子主張只有 Qwen 團隊一組來源，依 SPEC L101 應註明較弱，不拉低主原則。"
    ],
    "checked": [
-    "chapters/04-agent-trajectory.md（scratchpad t4.txt 摘錄段）",
+    "chapters/04-agent-trajectory.md:112-122,283-304",
     "notes/2501.07301.json",
     "notes/2406.06592.json",
+    "data/blueprint/T4.json",
     ".cache/work/blueprint/SPEC.md:101"
    ]
   },
@@ -85,14 +90,13 @@
    "id": "T4-02",
    "verdict": "keep",
    "reasons": [
-    "未找到新的 F1–F4。2412.06559 的 Llama 6.2 可能是解析失敗（notes/2412.06559.json limitations_observed[6]），只影響單一格，不影響方向。",
-    "作者群獨立性已依 .cache/text 作者欄核對，無同組配對。"
+    "未找到新的 F1–F4。ProcessBench 那筆（04-agent-trajectory.md:311、662）的 Llama 6.2 可能是解析失敗（notes/2412.06559.json limitations_observed[6]），只影響單一格；QwQ 的 71.5 是 maj@8、greedy 只有約 49.1（04-agent-trajectory.md:290；notes/2412.06559.json limitations_observed[0]），與本卡方向無關。",
+    "作者群獨立性依 .cache/text 作者欄核對，無同組配對。"
    ],
    "checked": [
-    "chapters/04-agent-trajectory.md（t4.txt 摘錄段）",
+    "chapters/04-agent-trajectory.md:290,303,311,662",
     "notes/2412.06559.json",
-    "notes/2210.03629.json",
-    "notes/2506.18824.json",
+    "data/blueprint/T4.json",
     ".cache/work/blueprint/SPEC.md"
    ]
   },
@@ -100,12 +104,13 @@
    "id": "T4-03",
    "verdict": "keep",
    "reasons": [
-    "未找到新的 F1–F4；MAST 與 Pan 兩筆是條件式推算，卡片已註明。章內反證段無未解釋的反例。"
+    "未找到新的 F1–F4。MAST 那筆的 accuracy 大半來自負例、比重偏向程式任務與弱模型（04-agent-trajectory.md:313、328），Pan 的一致率可能低於永遠答失敗的基線（04-agent-trajectory.md:287、312）——兩筆都是條件式推算，卡片已註明；這些正是本卡要示範的『只報 accuracy 會看錯』，不是反例。"
    ],
    "checked": [
-    "chapters/04-agent-trajectory.md（t4.txt 摘錄段）",
+    "chapters/04-agent-trajectory.md:119,167,287,309-314,328,339",
     "notes/2311.08516.json",
     "notes/2504.08942.json",
+    "data/blueprint/T4.json",
     ".cache/work/blueprint/SPEC.md"
    ]
   },
@@ -113,42 +118,46 @@
    "id": "T4-05",
    "verdict": "keep",
    "reasons": [
-    "未找到新的 F1–F4；反證已用軌跡長度條件切開（chapters/04-agent-trajectory.md:329）。"
+    "未找到新的 F1–F4；『成功軌跡也帶錯誤』的來源（04-agent-trajectory.md:483-485）方向一致，反證已用軌跡長度條件切開（04-agent-trajectory.md:329）。"
    ],
    "checked": [
-    "chapters/04-agent-trajectory.md:329 與 t4.txt 摘錄段",
-    "notes/2501.07301.json",
+    "chapters/04-agent-trajectory.md:53-56,161,265,327-329,483-485",
+    "notes/2210.03629.json",
     "notes/2506.18824.json",
+    "data/blueprint/T4.json",
     ".cache/work/blueprint/SPEC.md"
    ]
   },
   {
    "id": "T4-07",
-   "verdict": "keep",
+   "verdict": "downgrade_B",
    "reasons": [
-    "SWE-Gym 的 capping 與 verifier 在 SWE-Bench 上挑（chapters/04-agent-trajectory.md:351；notes/2412.21139.json limitations_observed[1]）；ETO 的輪數與 β 落在測試集最佳點（notes/2403.02502.json limitations_observed[2]）；IPR 在測試集上挑輪、lr、β（04-agent-trajectory.md:352；notes/2406.11176.json limitations_observed[0]）。依 SPEC L94 這些都是 F2。",
-    "仍判 keep 的理由：本卡要示範的正是『在測試集上挑輪數會看錯』，這些 F2 是被示範的毛病本身，不是逐輪曲線量測的毛病；SWE-Gym 的 OpenHands 那一臂沒調超參數，只有未套 capping 的混淆（notes/2412.21139.json limitations_observed[0]）；IPR 第 1、2 輪低於 ETO 的結論穩健。這個讀法有爭議，列為最沒把握之一。"
+    "三筆 evidence 的逐輪曲線本身都帶 SPEC L94 的 F2，不只頭條挑輪：IPR 的 lr 與 β 也在測試集上挑（notes/2406.11176.json limitations_observed[0]；chapters/04-agent-trajectory.md:352），整條曲線都在這組設定下產生；ETO 的 β 與輪數落在測試集最佳點（notes/2403.02502.json limitations_observed[2]；04-agent-trajectory.md:351）；SWE-Gym 的 capping 門檻與 verifier 在 SWE-Bench 上比過才定（notes/2412.21139.json limitations_observed[1]；04-agent-trajectory.md:351），MoatlessTools 那臂受影響。卡片 flaw_basis 以『測試集挑輪是頭條的毛病、不是曲線的毛病』免標 F2，SPEC L94 沒有這個例外。",
+    "獨立性：IPR 與 ETO 共用第一作者與專家軌跡（卡片自陳，04-agent-trajectory.md:80、85），只算一個來源。剩下 SWE-Gym OpenHands 臂（15.3%→8.7%）沒用 capping，混了『沒套 capping』的變因（notes/2412.21139.json limitations_observed[0]）。",
+    "沒有任何一筆量到『在測試集上挑』的代價（held-out 對測試集的差，或有挑對沒挑的對照）；逐輪不單調是真的，但那是在帶 F2 的設定下量的。不足兩個獨立乾淨來源，降為 B。IPR 第 1、2 輪低於 ETO 的觀察仍可留作 B 級證據。"
    ],
    "checked": [
     "chapters/04-agent-trajectory.md:78-86,344-353,468-476",
     "notes/2412.21139.json",
     "notes/2403.02502.json",
     "notes/2406.11176.json",
-    ".cache/work/blueprint/SPEC.md:94"
+    ".cache/work/blueprint/SPEC.md:94",
+    "data/blueprint/T4.json"
    ]
   },
   {
    "id": "T6-02",
    "verdict": "keep",
    "reasons": [
-    "兩筆都是章內對論文表格的重算，SPEC L103 允許；1909.01388（UC Davis／CMU）與 1805.06966（Cambridge）作者群獨立。",
+    "兩筆都是章內對論文表格的重算（chapters/06-user-simulator-feedback.md:223、228），SPEC L103 允許；1909.01388（UC Davis／CMU）與 1805.06966（Cambridge）作者群獨立。",
     "1805.06966 送真人的策略依模擬器結果挑選（notes/1805.06966.json limitations_observed[1]），不算 F2（判分是真人）。",
     "chapters/06-user-simulator-feedback.md:327-335 沒有反對『做整體名次檢定』的例子；GenTUS 的相反結果反而支持本卡。"
    ],
    "checked": [
-    "chapters/06-user-simulator-feedback.md:327-335 與 t6.txt 摘錄段",
+    "chapters/06-user-simulator-feedback.md:185,223-241,327-335",
     "notes/1909.01388.json",
     "notes/1805.06966.json",
+    "data/blueprint/T6.json",
     ".cache/work/blueprint/SPEC.md:103"
    ]
   },
@@ -156,14 +165,15 @@
    "id": "T6-04",
    "verdict": "keep",
    "reasons": [
-    "2601.17087 的 ± 只有 3 次執行，分數差可能受模擬器提早結束與子字串判分交互影響，另有資料污染疑慮（notes/2601.17087.json limitations_observed[10]）；但加上 1909.01388 的交叉矩陣與 NUS／GenTUS 一組，仍有 ≥2 個獨立乾淨來源。",
+    "2601.17087（06-user-simulator-feedback.md:75）的 ± 只有 3 次執行，分數差可能受模擬器提早結束與子字串判分交互影響，另有資料污染疑慮（notes/2601.17087.json limitations_observed[10]）；但加上 1909.01388 的交叉矩陣（06-user-simulator-feedback.md:339-340；notes/1909.01388.json limitations_observed[0]–[3] 只削弱『單一模擬器會排錯』的統計強度）與 NUS／GenTUS 一組（L330），仍有 ≥2 個獨立乾淨來源。",
     "AgenG 的反例已用『事前不知道哪一個模擬器夠用』切開，不是未解釋的反例。"
    ],
    "checked": [
-    "chapters/06-user-simulator-feedback.md（t6.txt 摘錄段）",
+    "chapters/06-user-simulator-feedback.md:27,75,327-343",
     "notes/2601.17087.json",
     "notes/1909.01388.json",
     "notes/2208.10817.json",
+    "data/blueprint/T6.json",
     ".cache/work/blueprint/SPEC.md"
    ]
   },
@@ -180,7 +190,8 @@
     "chapters/08-task-completion-score.md:655",
     "notes/2507.02825.json",
     ".cache/text 作者欄（2404.07972、2504.08942、2507.02825）",
-    ".cache/work/blueprint/SPEC.md:82"
+    ".cache/work/blueprint/SPEC.md:82",
+    "data/blueprint/T7.json"
    ]
   },
   {
@@ -196,7 +207,8 @@
     "notes/2410.10934.json",
     "notes/2305.17926.json",
     "notes/2306.05685.json",
-    ".cache/work/blueprint/SPEC.md"
+    ".cache/work/blueprint/SPEC.md",
+    "data/blueprint/T7.json"
    ]
   },
   {
@@ -209,7 +221,8 @@
     "chapters/07-agent-evaluation.md:520-580",
     "notes/2502.06193.json",
     "notes/2306.05685.json",
-    ".cache/work/blueprint/SPEC.md"
+    ".cache/work/blueprint/SPEC.md",
+    "data/blueprint/T7.json"
    ]
   },
   {
@@ -218,13 +231,14 @@
    "reasons": [
     "兩個乾淨來源量的是不同的擾動：重複攻擊只有 MT-Bench（23 個回答），verbosity 擺動只有 LC；主原則『長度偏差會讓判分看錯』沒有兩個來源同時量化示範。",
     "LC 那一半有未被條件解釋掉的反證：verbose 提示讓內容本身變詳細、人類也偏好較長回答（AlpacaFarm 62% 對 64%）（chapters/07-agent-evaluation.md:221、570-571）；notes/2404.04475.json limitations_observed[4] 也指出長度與品質混淆。所以 LC 那一半沒有示範出『偏差造成看錯』。",
-    "依 SPEC L32–40（反證段不得有未解釋的反例）與 L101，降為 B。"
+    "一致規則（套用於 T3-05、T7-04、T7-08）：先看整條主原則有沒有 ≥2 個獨立乾淨來源『量化示範了看錯』；整條讀法下不足才降級。T7-08 整條讀法下過程檢查有 ProcessBench＋ABC 兩個來源，回歸那一半依 SPEC L101 只註明較弱；T3-05 與 T7-04 在整條讀法下也只剩一個能示範看錯的乾淨來源，所以降級不依賴『兩半各算』。 依 SPEC L32–40（反證段不得有未解釋的反例）與 L101，降為 B。"
    ],
    "checked": [
     "chapters/07-agent-evaluation.md:198-245,520-580",
     "notes/2404.04475.json",
     "notes/2306.05685.json",
-    ".cache/work/blueprint/SPEC.md:32-40,101"
+    ".cache/work/blueprint/SPEC.md:32-40,101",
+    "data/blueprint/T7.json"
    ]
   },
   {
@@ -238,7 +252,8 @@
     "chapters/07-agent-evaluation.md:366-396,397-447",
     "notes/2207.01206.json",
     "notes/2311.12983.json",
-    ".cache/work/blueprint/SPEC.md:95"
+    ".cache/work/blueprint/SPEC.md:95",
+    "data/blueprint/T7.json"
    ]
   },
   {
@@ -246,13 +261,15 @@
    "verdict": "keep",
    "reasons": [
     "SWE-bench 那筆用 oracle retrieval 設定，依 SPEC L100 可能算 F2；排除它後，ProcessBench 加 ABC 仍撐得住過程檢查那一半。",
-    "回歸檢查那一半只有 SWE-bench 一個來源，依 SPEC L101 應註明較弱；P2P 只涵蓋 test_patch 涉及的檔案（notes/2310.06770.json limitations_observed[6]），數字是下限。"
+    "回歸檢查那一半只有 SWE-bench 一個來源，依 SPEC L101 應註明較弱；P2P 只涵蓋 test_patch 涉及的檔案（notes/2310.06770.json limitations_observed[6]），數字是下限。",
+    "一致規則（套用於 T3-05、T7-04、T7-08）：先看整條主原則有沒有 ≥2 個獨立乾淨來源『量化示範了看錯』；整條讀法下不足才降級。T7-08 整條讀法下過程檢查有 ProcessBench＋ABC 兩個來源，回歸那一半依 SPEC L101 只註明較弱；T3-05 與 T7-04 在整條讀法下也只剩一個能示範看錯的乾淨來源，所以降級不依賴『兩半各算』。"
    ],
    "checked": [
     "chapters/07-agent-evaluation.md:397-447,800-806",
     "notes/2310.06770.json",
     "notes/2507.02825.json",
-    ".cache/work/blueprint/SPEC.md:100-101"
+    ".cache/work/blueprint/SPEC.md:100-101",
+    "data/blueprint/T7.json"
    ]
   },
   {
@@ -260,14 +277,14 @@
    "verdict": "keep",
    "reasons": [
     "ABC（τ-bench do-nothing 38%／spamming 40%）與 ScienceWorld（4-2 上 Random-Valid 0.63 高過所有訓練代理）作者群與環境都不同（chapters/08-task-completion-score.md:80-82 的重疊群不含 2203.07540）。",
-    "SPEC L103『行為只來自單一模擬器時標 F4』的判讀：τ-bench do-nothing 的分數與使用者模擬器說什麼無關，不算 F4；ScienceWorld 的模擬器就是受評環境本身，本卡要支持的是『該環境判準的地板』而非外推行為，所以不標 F4。若稽核主線採字面讀法，ScienceWorld 變成 F4，本卡只剩 ABC 一個乾淨來源、應降為 B——這是本稽核最沒把握的判斷。",
+    "SPEC L103『行為只來自單一模擬器時標 F4』的判讀：τ-bench do-nothing 的分數與使用者模擬器說什麼無關，不算 F4；ScienceWorld 的模擬器就是受評環境本身，本卡要支持的是『該環境判準的地板』而非外推行為，所以不標 F4。若稽核主線採字面讀法，ScienceWorld 變成 F4，本卡只剩 ABC 一個乾淨來源、應降為 B——這是本稽核最沒把握的判斷。 一致性：本稽核也沒有把 OSWorld、WebArena 這類『環境即模擬器』的基準標成 F4，L103 在這裡的讀法前後一致。",
     "子代理沒寫明的弱點：ScienceWorld 的 0.63 是部分分數，不是二元成功率（08-task-completion-score.md:269；notes/2203.07540.json limitations_observed[1]），而且 Random-Valid 依賴模擬器給的合法動作清單（limitations_stated[0]）；方向仍與本卡一致，不屬 F1–F4。",
     "反證（08-task-completion-score.md:655-657：版本不同、38% 是應得分不是偏差量）已用『成功條件是否為不動』切開並寫進 switch_when；附帶的『拒絕題要求正面證據』只有 ABC 撐，卡片已註明較弱。"
    ],
    "checked": [
     "chapters/08-task-completion-score.md:78-84,265-270,464-472,650-663,714",
     "notes/2203.07540.json",
-    "data/blueprint/T8.json（acards.txt 傾印）",
+    "data/blueprint/T8.json",
     ".cache/work/blueprint/SPEC.md:101-103"
    ]
   },
@@ -283,7 +300,8 @@
     "chapters/08-task-completion-score.md:110-123,336-338,439-462,769",
     "notes/2407.01502.json",
     ".cache/text/2407.01502.txt:545-556,2088-2096,2177",
-    ".cache/work/blueprint/SPEC.md"
+    ".cache/work/blueprint/SPEC.md",
+    "data/blueprint/T8.json"
    ]
   },
   {
@@ -297,7 +315,8 @@
    "checked": [
     "chapters/08-task-completion-score.md:110-123,439-446,767-776",
     "notes/2504.08942.json",
-    ".cache/work/blueprint/SPEC.md:102"
+    ".cache/work/blueprint/SPEC.md:102",
+    "data/blueprint/T8.json"
    ]
   },
   {
@@ -309,7 +328,8 @@
    ],
    "checked": [
     "chapters/08-task-completion-score.md:117-131,439-451,767-776",
-    ".cache/work/blueprint/SPEC.md"
+    ".cache/work/blueprint/SPEC.md",
+    "data/blueprint/T8.json"
    ]
   },
   {
@@ -324,9 +344,10 @@
     "chapters/08-task-completion-score.md:198-216,522-530,747-765",
     "notes/2411.00640.json",
     "notes/2010.06595.json",
-    ".cache/work/blueprint/SPEC.md"
+    ".cache/work/blueprint/SPEC.md",
+    "data/blueprint/T8.json"
    ]
   }
  ],
- "summary": "22 張 A 卡中建議 2 張降為 B：T3-05（地板與重跑雜訊兩半各只剩一個乾淨來源，OSWorld 0.40 點屬精讀批評、SWE-agent 自報 SD 0.49 使 1.7 點約 3.5 SD）、T7-04（重複攻擊與 verbosity 各只有一個來源，LC 那一半的『內容真的變詳細、人類也偏好長答』反證未被解釋）。其餘 20 張 keep，但 T4-01、T7-02、T7-08、T8-01 各有只靠單一來源的子主張應註明較弱；T7-01 的『三組作者不同』句子不精確（Dongchan Shin 重疊）但不影響等級。最沒把握：T8-01 對 SPEC L103 的讀法（字面讀則 ScienceWorld 變 F4、應降 B），以及 T4-07 把測試集挑輪的 F2 視為被示範的毛病而非量測毛病。"
+ "summary": "22 張 A 卡建議 3 張降為 B：T3-05（地板只有 OSWorld；OSWorld 0.40 點屬精讀批評；SWE-agent 自報 6 次的單次 SD 0.49，1.7 點約 2.2–2.5 個差值 SD，『看錯』沒有乾淨示範）、T4-07（IPR／ETO／SWE-Gym 的曲線本身都在測試集挑過的 lr、β、capping 下產生，屬 SPEC L94 的 F2；IPR 與 ETO 同組只算一個，SWE-Gym OpenHands 臂有 capping 混淆）、T7-04（重複攻擊與 verbosity 各只有一個來源，LC 那一半『內容真的變詳細、人類也偏好長答』的反證未被解釋）。其餘 19 張 keep；T4-01、T7-02、T7-08、T8-01 各有只靠單一來源的子主張應註明較弱；T7-01 的『三組作者不同』不精確（Dongchan Shin 同列 OSWorld 與 ARB），不影響等級。一致規則：先看整條主原則有沒有 ≥2 個獨立乾淨來源量化示範看錯，整條讀法下不足才降。最沒把握：T8-01 對 SPEC L103 的讀法（字面讀則 ScienceWorld 變 F4、應降 B）；T1-01 兩筆來源都只是『有條件證實』。"
 }
