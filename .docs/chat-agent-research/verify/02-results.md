@@ -2,7 +2,7 @@
 
 驗證對象：`.docs/chat-agent-research/chapters/02-dialogue-state-tracking.md`。
 
-第一輪的四條候選主張都能用程式驗，所以四條都驗了（第 1–4 節）。修訂時依缺口清單（`.cache/work/w4/02-gaps.md` 的 C20、C21、C23，以及全域的 G7）再補驗三條（第 5–7 節）；另一條 C22 被資料擋住，沒有驗（見〈被擋住的驗證〉）。每條一支程式，只用 Python 標準函式庫；第 1–5、7 節各自在 0.1 秒內跑完，第 6 節的模擬約 3 秒。輸入數字只取自 `notes/<id>.json` 與 `.cache/text/<id>.txt`，出處寫在各程式的檔頭。
+第一輪的四條候選主張都能用程式驗，所以四條都驗了（第 1–4 節）。修訂時依缺口清單（`.cache/work/w4/02-gaps.md` 的 C20、C21、C23，以及全域的 G7）再補驗三條（第 5–7 節）；另一條 C22 被資料擋住，第一輪沒有驗。補讀 SOM-DST（[arXiv:1911.03906]）之後，C22 的「slot 被移除」那一項可以從它的 Table 5 接上，所以加驗第 8 節；C22 其餘部分仍被擋住（見〈被擋住的驗證〉）。每條一支程式，只用 Python 標準函式庫；第 1–5、7、8 節各自在 0.1 秒內跑完，第 6 節的模擬約 3 秒。輸入數字只取自 `notes/<id>.json` 與 `.cache/text/<id>.txt`，出處寫在各程式的檔頭。
 
 一條主張裡如果有幾個子主張的判讀不同，就分開下結論。
 
@@ -26,6 +26,10 @@
 | 6b | Table 6 的 b、R² 就是虛無模型的期望值 | **只對兩列成立**（GPT-4.1 與 70B 的 Baseline，在測過的段數 K = 1、5、20、100 下都在 95% 區間內；區間隨 K 變窄，K 再大時也可能落到區間外）；另四列不在中心、方向也不是有記憶的恢復，K = 20 與 100 時都在區間外，K 小時其中幾列仍在內 |
 | 7a | MemoryBank 的 exp(-t/5*S) 依運算順序是 e^(−t·S/5)，隨 S 遞減，與論文公式方向相反 | **證實**（算術） |
 | 7b | 公開程式碼確實寫成那一行 | **無法判定**：快取沒有程式碼 |
+| 8a | SOM-DST Table 5 四種操作在 train／valid／test 的合計都被 30 整除，test 換算 7,368 回合 | **證實**（三個 split 餘數都是 0；抽出的次數與 F1 和筆記逐項相同） |
+| 8b | delete 占 test 全部 slot 操作 0.049%，含 delete 的回合最多 1.48% | **證實**（後者是每個 delete 落在不同回合時的上限） |
+| 8c | 模型一個 delete 都不預測時，test JGA 少掉的不超過 1.48 個百分點 | **條件式證實**：只在餵金標上一輪狀態時成立；吃自己的預測時不成立，程式沒量 |
+| 8d | Table 4 改餵金標上一輪狀態消掉 59.6% 的錯誤，與論文的 2.47 倍等價 | **證實**（重算 2.473） |
 
 ---
 
@@ -432,9 +436,53 @@ python3 .docs/chat-agent-research/verify/02-memorybank-forgetting.py
 
 ---
 
+## 8. SOM-DST 的操作統計與錯誤傳遞
+
+**主張。** 補讀 SOM-DST 後，章節用它的兩張表補上 C22 被擋住的一部分，並把論文的錯誤放大倍數換成另一種讀法：
+
+- (a) Table 5 四種操作（carryover／update／dontcare／delete）在每個 split 的合計都被 J = 30 整除，也就是每回合對 30 個 slot 各記一次操作；換算 train 54,984、valid 7,371、test 7,368 回合。
+- (b) delete 只占全部 slot 操作的極小一部分；含 delete 的回合最多占 test 的 109 ÷ 7,368。
+- (c) 所以在「餵金標上一輪狀態」的設定下，模型一個 delete 都不預測，test JGA 因此少掉的不超過 (b) 的比例。
+- (d) Table 4：改餵金標上一輪狀態，錯誤率從 100 − 53.01 降到 100 − 81.00，少掉的錯誤占比與論文的「錯誤放大 2.47 倍」等價。
+
+**出處。** [arXiv:1911.03906] 的 Table 4、Table 5 與 §4.1（J = 30）；`notes/1911.03906.json` 的 key_results（操作次數與 F1）、method.ground_truth_operation_derivation（操作標籤由相鄰兩回合的金標狀態導出，依官方程式碼，論文沒寫），以及 limitations_observed（delete 標籤可能多半是標註前後不一致）。這一條是撰寫時的推算，不是筆記的主張。
+
+**輸入。**
+
+- `.cache/text/1911.03906.txt` 的 Table 5 區塊：四種操作在 train／valid／test 的次數與 test F1，程式用正則抽出，不手抄；抽出後與筆記 key_results 的 train 次數、test F1 逐項交叉核對。
+- 同一份全文的 Table 4（53.01、81.00）與正文的 2.47 算式；§4.1 的「the number of slots $J$ is 30」。
+
+**方法。** 對每個 split 加總四種操作再除以 30，檢查餘數；算各操作占全部 slot 操作的比例；以「每個 delete 都落在不同回合」求含 delete 的回合比例上限；重算 Table 4 的錯誤率比與少掉的錯誤占比。另做了兩個突變檢查：把 J 改成 29 時結論變成「不符」；把 81.00 改掉時 2.47 的斷言失敗。
+
+**實際輸出（摘要）。**
+
+- train／valid／test 的合計是 1,649,520／221,130／221,040，除以 30 都整除，得 54,984／7,371／7,368 回合。
+- 占全部 slot 操作的比例：train 的 carryover 96.074%、update 3.736%、dontcare 0.116%、delete 0.074%；test 依序 96.045%、3.800%、0.106%、0.049%。
+- 含該操作的回合比例上限：test delete 109 ÷ 7,368 = 1.48%、dontcare 235 ÷ 7,368 = 3.19%；train delete 2.23%、dontcare 3.48%。
+- Table 4：錯誤率 46.99 對 19.00，比值 2.473；少掉的錯誤 (46.99 − 19.00) ÷ 46.99 = 59.6%。
+
+**結論。**
+
+- **8a：證實。** 三個 split 的餘數都是 0，所以 Table 5 是「每回合每個 slot 一筆操作」的計數。這也和官方程式碼的標籤導出方式一致：只要相鄰兩回合的金標值沒變就記 carryover。
+- **8b：證實。** delete 只占 test slot 操作的 0.049%；含 delete 的回合最多 1.48%，是每個 delete 都落在不同回合時的上限，實際比例可能更低。
+- **8c：條件式證實。** 在餵金標上一輪狀態時，不預測 delete 只會讓「真的有 delete 的回合」答錯，所以 JGA 損失以 1.48 個百分點為上限。模型吃自己的預測狀態時，漏刪的舊值可能被 carryover 帶到後面的回合，之後每一輪都可能算錯，這個上限不成立；錯值實際留幾個回合，論文沒有量，程式只印出提醒。
+- **8d：證實。** 改餵金標上一輪狀態少掉 59.6% 的錯誤，就是 1 − 1/2.473，與論文的 2.47 倍是同一件事的兩種寫法。
+
+**範圍。** Table 5 只涵蓋 SOM-DST 用的五個領域、30 個 slot 的 MultiWOZ 2.1。update 把「第一次填值」與「改成另一個值」混在一起（依筆記轉述的標籤規則推得），所以改值的比例仍統計不了；delete 標籤裡有多少是標註前後不一致，也要逐輪狀態才能查。依同一條標籤規則，模型自己寫錯、而金標前後兩回合都是空值的 slot，金標操作是 carryover；所以 delete 的 F1（2.86）量的是偵測金標裡的撤銷，量不到模型清不清得掉自己寫錯的值，本節也不處理這一點。
+
+**重現。**
+
+```bash
+python3 .docs/chat-agent-research/verify/02-somdst-op-share.py
+```
+
+---
+
 ## 被擋住的驗證
 
-缺口 C22 建議從 MultiWOZ 2.1／2.2 的逐輪狀態，直接統計 slot 被移除、值被改寫、同一輪跨領域變更的輪次比例；這是章節「JGA 看不出刪除類錯誤」「資料的更新型態太窄」的核心證據。快取裡沒有 MultiWOZ 的資料檔，本調研的規則也不允許下載，所以沒有驗。章節相關的句子已改寫成「本調研讀過的論文沒有統計，本調研也統計不了」。
+缺口 C22 建議從 MultiWOZ 2.1／2.2 的逐輪狀態，直接統計 slot 被移除、值被改寫、同一輪跨領域變更的輪次比例；這是章節「JGA 看不出刪除類錯誤」「資料的更新型態太窄」的核心證據。快取裡沒有 MultiWOZ 的資料檔，本調研的規則也不允許下載，所以第一輪沒有驗。
+
+補讀 SOM-DST 之後，「slot 被移除」這一項由它的 Table 5 接上（第 8 節），在它用的五個領域、30 個 slot 上有了次數與上限。仍被擋住的是：update 裡有多少是改值而不是第一次填值、delete 標籤裡有多少是標註前後不一致、同一輪跨領域變更有多少。這三項都要逐輪狀態才能數，章節相關的句子維持「本調研讀過的論文沒有統計，本調研也統計不了」。
 
 ---
 
@@ -443,7 +491,7 @@ python3 .docs/chat-agent-research/verify/02-memorybank-forgetting.py
 ```bash
 cd .docs/chat-agent-research/verify
 for f in 02-lic-au-percentile.py 02-trade-slot-acc-bound.py 02-sumbt-floor-div.py 02-locomo-weights.py \
-         02-locomo-category-map.py 02-drift-iid-null.py 02-memorybank-forgetting.py; do
+         02-locomo-category-map.py 02-drift-iid-null.py 02-memorybank-forgetting.py 02-somdst-op-share.py; do
   python3 "$f"
 done
 ```
