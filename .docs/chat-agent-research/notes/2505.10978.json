@@ -1,0 +1,159 @@
+{
+  "id": "2505.10978",
+  "title": "Group-in-Group Policy Optimization for LLM Agent Training",
+  "topic": "T4",
+  "subarea": "軌跡／步驟層級評估與 process reward",
+  "read_level": "full",
+  "source": "arxiv-html",
+  "one_liner": "提出 GiGPO：在 GRPO 的軌跡層級分組之外，事後把同一任務多條軌跡中觀測相同的步驟再分成步驟層級群組，用折扣回報算組內相對優勢，不需 critic、不需額外 rollout，就能為多輪 LLM agent 做逐步的 credit assignment。",
+  "problem": "群組式 RL（GRPO、RLOO）在數學、程式碼這類單輪任務上效果好，因為獎勵即時到、credit 好分配。多輪 agent 不同：ALFWorld 一集最多 50 步、超過 2 萬 token，獎勵稀疏而且延遲。把整條軌跡當一個樣本、只給一個優勢，每一步拿到的訊號都一樣，分不出哪一步有用、哪一步是繞路或在迴圈裡打轉。PPO 類方法靠 value model 能逐步給 credit，代價是多一個 critic，記憶體與調參成本都高；對每個狀態額外取樣（VinePPO 式）則 rollout 成本爆炸，假想動作的獎勵也難評。核心問題因此是：能不能保留群組式 RL 免 critic、低記憶體、收斂穩定的性質，同時拿到逐步 credit。放到 T4 的語境，就是問能不能不訓練 PRM、只靠同一任務的一群軌跡本身，導出步驟層級的品質訊號。",
+  "core_idea": "同一任務、同一初始狀態下的 N 條軌跡，常因無效動作、迴圈、回上一頁等原因反覆經過相同的環境狀態。把這些重複出現的狀態當成 anchor state，事後把所有從同一個 anchor 出發的（動作, 折扣回報）收成一組，就得到不花錢的步驟層級比較組，等於重用既有 rollout 做逐狀態的蒙地卡羅比較，不必再取樣。最終優勢是軌跡層級相對優勢（巨觀）加上 ω 倍的步驟層級相對優勢（微觀），其餘沿用 GRPO 的 clipped 目標。完全沒有狀態重複時步驟優勢為 0，演算法退化成 GRPO。",
+  "method": {
+    "輸入與輸出": "輸入：任務分布 p(X)；能平行開 N 個初始狀態完全相同之副本的環境（gym 式介面）；初始策略 LLM π_θ。每一步的策略輸入是提示詞模板組出的文字（任務描述、已走步數、最近 k 步的觀測與動作、目前觀測、可行動作清單），輸出是含 <think> 推理與 <action> 動作的文字；環境回傳純量獎勵與下一個觀測。輸出：更新後的策略。",
+    "軌跡資料格式": "每條軌跡 τ_i = {(s_t, a_t, r_t)}，t=1..T。官方實作 verl-agent 以「步驟」為列：每列帶該步的完整提示詞、回應 token、步驟獎勵 r_t、anchor 觀測、軌跡 uid（traj_uid）與群組 uid（同一任務的 N 條軌跡共用）。anchor 觀測是環境當下回傳的原始觀測（ALFWorld 為 text_obs，WebShop 與 Search 為環境觀測的副本），不含歷史，也不含可行動作清單；這點我用 gh 讀 agent_system/environments/env_manager.py 原始碼核實過。與 RAGEN／Search-R1 把整段歷史串成一個長回應不同，verl-agent 每步重新組提示詞，可自訂要帶哪些歷史。",
+    "步驟 1：分組 rollout": "每次迭代取 16 個任務，每個任務開 N=8 個初始狀態相同的環境（共 128 個），用 π_θold、溫度 1.0 平行跑完整集（上限：ALFWorld 50 步、WebShop 15 步、Search 4 回合）。",
+    "步驟 2：軌跡層級優勢 A^E": "R(τ_i) = Σ_t r_t。稀疏獎勵時就是成功 10、失敗 0（QA 為 1／0），另對無效動作每次扣 0.1（QA 扣 0.01）。A^E(τ_i) = (R(τ_i) − 群組內 R 的平均) / F_norm。F_norm 取 std 即 GiGPO w/ std；取 1 即 GiGPO w/o std，附錄 C 證明此時等於 RLOO 乘上常數 (N−1)/N，因此不偏。",
+    "步驟 3：anchor state 分組": "在同一任務群組內，以 anchor 觀測為 key 建 hashmap，把所有 s_t^(i) 相同的步驟歸成一個步驟群組 G^S(s̃)，跨軌跡也包含同一軌跡內不同時間的重訪。QA 實驗改用相似度分組：兩個觀測字串的相似度（論文寫最長匹配子序列；程式碼用 difflib SequenceMatcher 的 ratio）達 0.9 以上就併入；程式碼以貪婪方式逐一比對既有群組的代表字串，併入第一個夠相似的群組。",
+    "步驟 4：步驟層級優勢 A^S": "對每一步算折扣回報 R_t = Σ_{k≥t} γ^{k−t} r_k（γ=0.95），在 G^S(s̃) 內做 A^S = (R_t − 組內平均) / F_norm。大小為 1 的群組 A^S = 0（程式碼把該組平均設為它自己、std 設為 1）。",
+    "步驟 5：合成與更新": "A(a_t^(i)) = A^E(τ_i) + ω · A^S(a_t^(i))，ω=1（論文稱沒有調）。目標函式與 GRPO 相同：對所有 (i, t) 平均 min(ρ·A, clip(ρ, 1±ε)·A)，再減 β·KL(π_θ ‖ π_ref)；ρ 是該步動作的重要性比率，同一步回應的所有 token 共用該步的 A。附錄 D 有完整虛擬碼。",
+    "提示詞要點": "ALFWorld／WebShop：角色設定、任務、已走幾步、最近 2 步的觀測與動作、目前觀測、可行動作清單，要求先在 <think> 內逐步推理，再於 <action> 內挑一個可行動作。Search：帶完整歷史（過去的 <search> 查詢與 <information> 檢索結果），每步只能二選一，<search> 發查詢或 <answer> 作答。",
+    "關鍵超參數": "基底模型 Qwen2.5-1.5B／3B／7B-Instruct；actor 學習率 1e-6（PPO 的 critic 1e-5）。ALFWorld：提示詞上限 2048、回應 512 token、mini-batch 256。WebShop：提示詞 4096、回應 512、mini-batch 64。兩者 KL 係數 0.01、驗證溫度 0.4。QA：群組大小 5、train data size 256、mini-batch 512、KL 0.001、驗證溫度 0.0、檢索器 E5。ALFWorld／WebShop 各跑 150 次迭代（1.5B 用 2×H100、7B 用 4×H100）；QA 跑 200 次（3B 用 4×H100、7B 用 8×H100）。",
+    "程式碼與論文的差異（我核對 gigpo/core_gigpo.py 與範例腳本）": "(1) 軌跡層級的平均預設以「步驟列」為單位計算（compute_mean_std_cross_steps=True，註解說比較穩定），相當於以軌跡長度加權，而不是式 (3) 的 N 條軌跡平均。(2) 預設 mode 為 mean_norm，即 F_norm=1。(3) 相似度門檻的函式預設值是 0.95，QA 範例腳本明確傳入 0.9 並設 mode=mean_std_norm，與論文一致。"
+  },
+  "assumptions": [
+    "環境可重置也可複製：同一任務能平行開 N 個初始狀態完全相同的副本。真實使用者或線上系統做不到這點。",
+    "當下觀測足以代表狀態：分組只看當下觀測、不看歷史；若觀測沒反映持有物、已做過的事等隱藏狀態，不同的真實狀態會被併成同一組。",
+    "環境轉移大致確定、動作空間有限（有可行動作清單），不同軌跡才會頻繁交會到同一個觀測。",
+    "有能自動判定的結果獎勵（成功／失敗規則），步驟回報才算得出來。",
+    "以單一軌跡的實際後續回報當作該動作的價值估計，接受高變異（同一狀態下每個動作通常只有一個樣本）。",
+    "時間折扣 γ 隱含「越快成功越好」，作者把這當成步驟品質的代理。"
+  ],
+  "evaluation": {
+    "benchmarks": [
+      "ALFWorld（Pick、Look、Clean、Heat、Cool、Pick2 六類家務任務）",
+      "WebShop",
+      "單跳 QA：NQ、TriviaQA、PopQA",
+      "多跳 QA：HotpotQA、2WikiMultiHopQA、MuSiQue、Bamboogle（訓練只用 NQ 與 HotpotQA，其餘為域外）",
+      "附錄 E.3 的 VLM 環境：Sokoban 6×6、Gym Cards 的 EZPoints"
+    ],
+    "metrics": [
+      "ALFWorld 各子類與整體成功率（%）",
+      "WebShop 平均分數與成功率（%）",
+      "QA 準確率（論文沒寫明是 EM，說法是沿用 Search-R1 設定）",
+      "QA 每題平均工具呼叫次數",
+      "步驟群組大小 |G^S(s̃)| 的分布",
+      "每次迭代的訓練時間分解"
+    ],
+    "baselines": [
+      "閉源提示：GPT-4o、Gemini-2.5-Pro",
+      "開源提示：Qwen2.5 直接提示、ReAct、Reflexion",
+      "RL：PPO（帶 critic）、RLOO、GRPO",
+      "附錄 E.4：DAPO",
+      "搜尋 QA：R1-Instruct、Search-R1、ZeroSearch、StepSearch"
+    ]
+  },
+  "key_results": [
+    {
+      "claim": "在 ALFWorld 與 WebShop 上，兩種 GiGPO 變體都穩定勝過 GRPO 與 RLOO；摘要寫的「> 12%」「> 9%」是百分點差，不是相對提升。",
+      "numbers": "1.5B：ALFWorld 整體成功率 GiGPO w/o std 86.1 對 GRPO 72.8（+13.3 點），WebShop 成功率 67.4 對 56.8（+10.6 點）；GiGPO w/ std 的 ALFWorld 為 86.7。7B：ALFWorld 90.2 對 77.6（+12.6），WebShop 75.2 對 66.1（+9.1）；7B 的 PPO 為 80.4／68.7。閉源最佳 Gemini-2.5-Pro 為 60.3／35.9。RL 結果皆為 3 個 seed 平均。",
+      "section": "§5.2、Table 1",
+      "anchor_idx": 0
+    },
+    {
+      "claim": "搜尋增強 QA 上 GiGPO 的平均準確率最高，工具呼叫也較省。",
+      "numbers": "平均：3B 為 42.1（Search-R1 32.5、ZeroSearch 31.7），7B 為 47.2（Search-R1 38.5、ZeroSearch 39.1）。Bamboogle：3B 64.1、7B 68.9，對比 Search-R1 的 26.4、36.8。7B 在最多 3 次工具呼叫的限制下，單跳平均約 0.9 次、多跳約 1.6 次（OTC 約 1.0／1.7）。",
+      "section": "§5.3、Table 2",
+      "anchor_idx": 1
+    },
+    {
+      "claim": "消融：拿掉 A^E 或 A^S 都明顯掉分；拿掉 A^S 在 Cool、Pick2、WebShop 這類較難任務掉最多；std 與否的差距小於結構性消融。",
+      "numbers": "只有 Figure 4 長條圖，正文沒有數值；使用 Qwen2.5-1.5B-Instruct。",
+      "section": "§5.4、Figure 4",
+      "anchor_idx": 2
+    },
+    {
+      "claim": "ALFWorld 訓練過程中大多數 anchor 狀態都有重複，群組大小分布隨策略成熟而收斂到接近 N。",
+      "numbers": "大小為 1 的群組始終 < 35%；第 10 次迭代大小 ≥ 10 的群組超過 20%；第 75 次迭代大小 10–49 由 16.2% 降到 12.1%、≥ 50 由 5.6% 降到 3.1%；第 140 次迭代集中在 6–8（N=8），成功率 > 80%。",
+      "section": "§5.5、Figure 5",
+      "anchor_idx": 3
+    },
+    {
+      "claim": "GiGPO 新增的計算幾乎不花時間，GPU 記憶體與 rollout 成本與 GRPO 相同；但論文宣稱的比例數字算錯了。",
+      "numbers": "主要運算（rollout、old／ref 機率、策略更新）每次迭代 362.83 秒；anchor 分組 0.01 秒、步驟優勢 0.53 秒。論文寫兩者合計 < 0.002%，實際約 0.54／362.83 ≈ 0.15%。",
+      "section": "§5.6、Figure 6",
+      "anchor_idx": 4
+    },
+    {
+      "claim": "ω 有最佳區間，過大會壓過軌跡層級訊號。",
+      "numbers": "WebShop、1.5B 的成功率：ω=0 為 56.6，0.2 為 63.1，0.4 為 65.8，0.6 為 67.2，0.8 為 68.3（最高），1.0 為 67.4，1.2 為 66.5，1.4 為 56.3；分數由 76.2 升到 84.9（ω=0.8），再掉到 77.0。",
+      "section": "附錄 E.5、Table 5",
+      "anchor_idx": 5
+    },
+    {
+      "claim": "同樣的方法可用在影像觀測的 VLM agent。",
+      "numbers": "Qwen2.5-VL-3B：Sokoban 6×6 為 GiGPO w/o std 81.0±3.6、w/ std 76.9±2.7，GRPO 67.1±4.7，直接提示 11.7；EZPoints 兩種 GiGPO 都 100.0，GRPO 86.9，直接提示 3.1。",
+      "section": "附錄 E.3、Table 3",
+      "anchor_idx": 6
+    },
+    {
+      "claim": "GiGPO 可與 DAPO 的 dynamic sampling、clip-higher 疊加。",
+      "numbers": "WebShop、1.5B（分數／成功率）：GRPO 75.8／56.8，DAPO 84.6／66.1，GiGPO-dynamic 87.5／75.0。對照 Table 1，單純的 GiGPO w/o std 為 83.5／67.4。",
+      "section": "附錄 E.4、Table 4",
+      "anchor_idx": 7
+    }
+  ],
+  "limitations_stated": [
+    "anchor 群組依賴狀態比對；在高度複雜的環境中，雜訊或細微差異會讓相同狀態難以偵測（§6）。",
+    "極端情況下完全沒有重複狀態，A^S=0，演算法退化成 GRPO；作者把這當成效能下限（§6）。",
+    "相似度分組只能部分緩解比對問題；更穩健的比對方式（embedding 表示、領域特定的結構等價）留待未來（§6）。",
+    "F_norm 的選擇依任務而定：在 Look、Pick2、WebShop 等較難任務上用 std 會放大過難樣本或極不平衡群組的梯度、傷害穩定性（§5.2）。",
+    "ω 需要適當取值，過度強調步驟訊號會壓過軌跡層級的引導（附錄 E.5）。",
+    "方法本身沒有直接的下游部署；但 agent 訓練技術進步可能間接帶來更自主的行為，需要防護措施（附錄 B）。"
+  ],
+  "limitations_observed": [
+    "計算成本的數字自相矛盾：摘要、引言與 §5.6 都說新增成本 < 0.002%，但 §5.6 自己給的數字是 0.01 秒加 0.53 秒，除以 362.83 秒約 0.15%，差了約 75 倍。比較像是把比例 0.0015 誤寫成百分比；「幾乎不花時間」的結論仍成立，引用時不要沿用那個百分比。",
+    "分組的鍵與策略的條件不一致（已核程式碼）：anchor 是當下的原始觀測，策略輸入卻帶最近 2 步歷史（QA 帶完整歷史）。同一群組裡的動作其實是在不同提示詞下取樣的，A^S 會把歷史造成的差異算到動作頭上。論文自己的附錄 F.1 就有實例：第 4 步與第 10 步走到 countertop 1 時，環境回傳的觀測一字不差，但第 10 步手上已拿著加熱過的蛋、第 4 步沒有。ALFWorld 的 anchor 正是這段原始觀測，所以這兩步會被併進同一個步驟群組：第 4 步的正確動作（去 countertop 2 找蛋）因為離成功較遠、折扣回報較低（γ=0.95 下約 7.4 對 10），A^S 會低於第 10 步「把蛋放下」，等於被拿來跟它比較，而兩者根本不是同一個狀態下的選擇。§5.5 早期出現大小 ≥ 50 的超大群組，可能就是這類混疊或無效動作的固定回應造成的（這部分是推測），論文完全沒分析群組內是否同質。",
+    "第 1 步所有 N 條軌跡共享初始觀測，這個群組大小必然 ≥ N。只有終局獎勵、γ=0.95 時，該組的 A^S 只取決於 γ 的「剩幾步才成功」次方，也就是按成功速度排序，等於一種隱性的長度塑形。論文沒有「GRPO 改用折扣回報」或「GRPO 加長度懲罰」的對照組，分不出增益是來自真正的逐步 credit 還是長度塑形；ω=0 的對照（成功率 56.6）只排除了「完全沒有 A^S」這一種情況。",
+    "官方程式碼的軌跡層級平均預設以步驟列加權（compute_mean_std_cross_steps=True），與式 (3) 的 N 條軌跡平均不同：長的失敗軌跡占更多列，會把平均拉低，放大成功軌跡的 A^E。論文沒交代 Table 1 的 GRPO 基準是否用同一套優勢實作；若不同，差距有一部分來自這個沒寫進論文的實作細節。",
+    "步驟層級訊號從沒被當成「評估」驗證過：沒有任何步驟層級的人工標註，也沒有與 PRM 或 value 估計的一致性量測，唯一證據是 Figure 3 的一個 WebShop 示例，加上下游成功率。若想在 T4 把 A^S 當 process reward 或失敗歸因訊號來用，它的準確度是未知數。",
+    "QA 實驗的歸因不乾淨：Table 2 沒有 ±，也沒說跑了幾個 seed；同一框架下沒有 GRPO 基準；Search-R1、ZeroSearch、StepSearch 的數字是重跑還是沿用原論文，沒有說明；verl-agent 逐步組提示詞（不串接整段歷史）與不同的提示詞形狀本身就是混淆變因。Bamboogle 從 26.4（Search-R1 3B）跳到 64.1，遠大於其他資料集的增幅，這麼大的差距需要單獨解釋（例如資料集規模、答案比對方式），正文沒有交代；QA 的指標定義也沒寫。",
+    "ω 敏感度分析的解析度不夠：Table 5 沒有報 ±，也沒寫跑了幾個 seed；ω=1.0 那列（83.5／67.4）與 Table 1 GiGPO w/o std 的 3 seed 平均完全相同，可見是重用同一組結果。Table 1 WebShop 成功率的標準差達 ±4.5，而 ω=0.8 與 1.0 只差 0.9 點，「0.8 最佳」在這個雜訊水準下分辨不出來；ω=1.4 驟降到 56.3 也只有一個點支撐，看不出掉分從哪裡開始。",
+    "主表沒有納入 DAPO 這類同期改良的群組式 RL：附錄 E.4 顯示單純 GiGPO 的 WebShop 分數 83.5 其實低於 DAPO 的 84.6，成功率只高 1.3 點（67.4 對 66.1），在標準差範圍內。所以「勝過群組式 RL」只對 GRPO 與 RLOO 成立；對 DAPO 的優勢要到疊加之後（GiGPO-dynamic）才明確。",
+    "基準的公平性：所有方法用「完全相同的超參數」，PPO 的 critic 沒有另外調；PPO 用 128 個各自獨立的環境，群組法則是 16 組、每組 8 個相同初始狀態的環境。PPO 在 7B 已達 80.4（高於 GRPO 的 77.6），在 1.5B 卻只有 54.4，可能是沒調參。GPT-4o 與 Gemini 的提示詞與試次沒交代；ALFWorld 用哪個評估 split（seen／unseen）、評了幾集也沒寫。",
+    "適用範圍受限：所有實驗都是可行動作清單有限、轉移確定的模擬環境，狀態重複率高（超過 65% 的 anchor 有重複）。開放式對話中使用者的回覆幾乎不會逐字重複，精確比對會讓多數群組大小為 1，方法退化成 GRPO；論文沒在狀態不易重複、長回合的環境測過相似度分組（QA 只有 4 回合）。"
+  ],
+  "framework_role": "在 T4「軌跡／步驟層級評估與 process reward」子領域，GiGPO 示範了一種不需 PRM、也不需額外 rollout 的步驟 credit 導出法：把同一任務的一群軌跡當成資料物件，以「狀態相同」為鍵做事後對齊，再在對齊點上比較不同動作的實際後續回報。對框架有三點可用：(1) 軌跡資料格式的範本，以步驟為列，帶 anchor 觀測、軌跡 uid、群組 uid、步驟獎勵（verl-agent）；(2) 「跨軌跡對齊、找分歧點」可以挪作失敗歸因的候選步驟產生器，也就是同一狀態下成功與失敗軌跡分道揚鑣的那一步，但論文本身沒做歸因，也沒驗證過；(3) 若 T6 的使用者模擬器能用固定種子重置、行為確定，就能對同一對話情境跑 N 次，並改用 T2 的對話狀態（slot 值）當 anchor 而不是原文，才有機會套用。它的主貢獻是訓練演算法，論文裡沒有使用者模擬器、沒有反思修正、也沒有評估回流，所以不碰框架的 6 條資料流，edges 留空。",
+  "edges": [],
+  "adoption": {
+    "evidence": [
+      "alibaba/ROLL（阿里巴巴官方開源的 LLM RL 函式庫）的 README：2025-08-10 消息稱 Agentic RL 支援像 GiGPO 這樣的 stepwise learning，功能清單列出 TrajectoryWise（StarPO）與 StepWise（GiGPO）兩種訓練範式，並附 GiGPO 文件連結。來源：https://github.com/alibaba/ROLL（以 gh api 讀取 README 核實）",
+      "agentscope-ai/Trinity-RFT 的 README 演算法表列有 GiGPO，設定值為 algorithm_type: gigpo，附 ALFWorld 範例與 advantage 函式實作路徑。來源：https://github.com/agentscope-ai/Trinity-RFT（以 gh api 讀取 README 核實）",
+      "論文附錄 B 自述 GiGPO 是方法貢獻，沒有直接的下游部署。來源：arXiv:2505.10978 附錄 B"
+    ],
+    "assessment": "已被業界開源的 RL 訓練框架整合成可選演算法（阿里巴巴 ROLL、Trinity-RFT），屬於工具層的採納；用 GiGPO 訓練並上線的商用產品或官方模型卡，未見證據。作者自己的 verl-agent 與 Hugging Face 檢查點、volcengine/verl README 的生態系列名、個人上傳的模型，都不計入採納。學術影響力很高（Semantic Scholar 425 次引用、NeurIPS 2025），但那不算採納。"
+  },
+  "reproducibility": {
+    "code": "https://github.com/langfengQ/verl-agent（Apache-2.0；GiGPO 核心在 gigpo/core_gigpo.py，QA 範例腳本在 examples/gigpo_trainer/run_search.sh）",
+    "data": "全部使用公開基準（ALFWorld、WebShop、七個 QA 資料集、Sokoban、Gym Cards），沒有新資料集；作者在 Hugging Face（langfeng01）上傳了 7B 的 ALFWorld 與 WebShop 檢查點。論文沒有提到釋出訓練軌跡。"
+  },
+  "value_verdict": "medium",
+  "verdict_reason": "對 T4 的價值在於示範不靠 PRM、只從同任務的軌跡群組導出步驟 credit，但主貢獻是訓練演算法，步驟訊號從沒被當成評估驗證過，又依賴可重置的相同環境與精確狀態比對，對話情境難以直接套用。",
+  "related": [
+    "2402.03300",
+    "2402.14740",
+    "2504.20073",
+    "2502.01600",
+    "2402.19446",
+    "2410.01679",
+    "2503.09516",
+    "2505.15107",
+    "2503.20783",
+    "2503.14476",
+    "2504.14870"
+  ],
+  "anchor_check": {
+    "exact": 8,
+    "deep": 8,
+    "total": 8
+  }
+}

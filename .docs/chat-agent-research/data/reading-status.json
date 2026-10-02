@@ -1,7 +1,7 @@
 {
   "topics": {
     "T1": {
-      "counted": 22,
+      "counted": 23,
       "papers": [
         {
           "id": "1609.01454",
@@ -319,66 +319,99 @@
           "id": "1909.03862",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2004.10645",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2304.14399",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2403.05534",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2001.11458",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "1707.02363",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2103.03095",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2010.13009",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2109.06349",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "1805.10190",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
+        },
+        {
+          "id": "2106.04564",
+          "tier": "reserve",
+          "topic": "T1",
+          "title": "Are Pretrained Transformers Robust in Intent Classification? A Missing Ingredient in Evaluation of Out-of-Scope Intent Detection",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         }
       ]
     },
     "T2": {
-      "counted": 23,
+      "counted": 25,
       "papers": [
         {
           "id": "1810.00278",
@@ -696,48 +729,88 @@
           "id": "2308.15022",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "1901.04713",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2507.21428",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "1712.10224",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2009.12005",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "1908.01946",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2104.00773",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
+        },
+        {
+          "id": "2402.10962",
+          "tier": "reserve",
+          "topic": "T2",
+          "title": "Measuring and Controlling Instruction (In)Stability in Language Model Dialogs",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "1911.03906",
+          "tier": "reserve",
+          "topic": "T2",
+          "title": "Efficient Dialogue State Tracking by Selectively Overwriting Memory",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         }
       ]
     },
     "T3": {
-      "counted": 22,
+      "counted": 25,
       "papers": [
         {
           "id": "2405.15793",
@@ -1055,48 +1128,93 @@
           "id": "2209.08199",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2410.18967",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2402.06596",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2605.00551",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2510.09312",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2504.10374",
           "tier": "reserve",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T3",
+          "title": "Ctrl-Z: Controlling AI Agents via Resampling",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 5,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2501.18837",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
+        },
+        {
+          "id": "2311.10538",
+          "tier": "reserve",
+          "topic": "T3",
+          "title": "Testing Language Model Agents Safely in the Wild",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "2505.05410",
+          "tier": "reserve",
+          "topic": "T3",
+          "title": "Reasoning Models Don't Always Say What They Think",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         }
       ]
     },
     "T4": {
-      "counted": 24,
+      "counted": 26,
       "papers": [
         {
           "id": "2210.03629",
@@ -1414,42 +1532,64 @@
           "id": "2110.14168",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2406.11176",
           "tier": "reserve",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Watch Every Step! LLM Agent Learning via Iterative Step-Level Process Refinement",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2505.10978",
           "tier": "reserve",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T4",
+          "title": "Group-in-Group Policy Optimization for LLM Agent Training",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2406.04151",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2112.09332",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2306.14898",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         }
       ]
     },
     "T5": {
-      "counted": 23,
+      "counted": 26,
       "papers": [
         {
           "id": "2303.17651",
@@ -1767,36 +1907,77 @@
           "id": "2401.07301",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2305.03268",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2501.12948",
           "tier": "reserve",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T5",
+          "title": "DeepSeek-R1: Incentivizing Reasoning Capability in LLMs via Reinforcement Learning",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2412.14959",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2402.14809",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
+        },
+        {
+          "id": "2306.09896",
+          "tier": "reserve",
+          "topic": "T5",
+          "title": "Is Self-Repair a Silver Bullet for Code Generation?",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "2402.08115",
+          "tier": "reserve",
+          "topic": "T5",
+          "title": "On the Self-Verification Limitations of Large Language Models on Reasoning and Planning Tasks",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         }
       ]
     },
     "T6": {
-      "counted": 23,
+      "counted": 27,
       "papers": [
         {
           "id": "1612.05688",
@@ -2114,48 +2295,114 @@
           "id": "2212.07769",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2202.02912",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2403.12388",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2210.15893",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2010.12251",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "1607.00070",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2411.10109",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
+        },
+        {
+          "id": "2006.08732",
+          "tier": "reserve",
+          "topic": "T6",
+          "title": "Evaluating Conversational Recommender Systems via User Simulation",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "1909.01388",
+          "tier": "reserve",
+          "topic": "T6",
+          "title": "How to Build User Simulators to Train RL-based Dialog Systems",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "2303.06135",
+          "tier": "reserve",
+          "topic": "T6",
+          "title": "Rewarding Chatbots for Real-World Engagement with Millions of Users",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "2308.11534",
+          "tier": "reserve",
+          "topic": "T6",
+          "title": "PlatoLM: Teaching LLMs in Multi-Round Dialogue via a User Simulator",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 6,
+          "counted": true,
+          "problems": []
         }
       ]
     },
     "T7": {
-      "counted": 24,
+      "counted": 26,
       "papers": [
         {
           "id": "2306.05685",
@@ -2473,36 +2720,64 @@
           "id": "2407.18901",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2406.19314",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2310.17623",
           "tier": "reserve",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T7",
+          "title": "Proving Test Set Contamination in Black Box Language Models",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2212.09746",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2406.11657",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
+        },
+        {
+          "id": "2201.04723",
+          "tier": "reserve",
+          "topic": "T7",
+          "title": "Human Evaluation of Conversations is an Open Problem: comparing the sensitivity of various methods for evaluating dialogue agents",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
         }
       ]
     },
     "T8": {
-      "counted": 24,
+      "counted": 28,
       "papers": [
         {
           "id": "2010.02840",
@@ -2820,31 +3095,77 @@
           "id": "2406.10229",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "2506.14245",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "1906.04908",
           "tier": "reserve",
           "counted": false,
-          "problems": ["尚未精讀"]
+          "problems": [
+            "尚未精讀"
+          ]
         },
         {
           "id": "1908.10719",
           "tier": "reserve",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Guided Dialog Policy Learning: Reward Estimation for Multi-Domain Task-Oriented Dialog",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
         },
         {
           "id": "2302.10342",
           "tier": "reserve",
-          "counted": false,
-          "problems": ["尚未精讀"]
+          "topic": "T8",
+          "title": "Fantastic Rewards and How to Tame Them: A Case Study on Reward Learning for Task-oriented Dialogue Systems",
+          "read_level": "full",
+          "value_verdict": "medium",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 8,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "cmp-lg/9704004",
+          "tier": "reserve",
+          "topic": "T8",
+          "title": "PARADISE: A Framework for Evaluating Spoken Dialogue Agents",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 7,
+          "counted": true,
+          "problems": []
+        },
+        {
+          "id": "2503.14499",
+          "tier": "reserve",
+          "topic": "T8",
+          "title": "Measuring AI Ability to Complete Long Software Tasks",
+          "read_level": "full",
+          "value_verdict": "high",
+          "anchors_exact": 8,
+          "anchors_total": 8,
+          "anchors_deep": 5,
+          "counted": true,
+          "problems": []
         }
       ]
     }
