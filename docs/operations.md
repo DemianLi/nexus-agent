@@ -779,3 +779,16 @@ pnpm --filter @nexus/harness run eval:compare --samples 2
 迴圈與時鐘上限），之後每次執行一行（含評分器看到的原始觀測），最後一行是 footer；
 **沒有 footer 的檔是沒跑完的**。比較兩次跑的數字之前，先看兩份檔的題庫版本與評分程式版本是不是同一個。
 格式與讀檔重算在 [`apps/harness/src/eval/result-file.ts`](../apps/harness/src/eval/result-file.ts)。
+
+報表上每個模型都有一行**「這題成功」**，它不是「工具成功率」那一欄：有可判的三欄（工具成功率、
+參數正確性、回覆提到）全是 1.00，而且多叫次數沒超過那一題在資料集裡宣告的容許值
+（`maxExtraToolCalls`，沒宣告就是 0）才算。它底下一行是**地板**：三個不需要模型的平凡 agent
+（什麼都不做、固定亂吐、隨機合法動作，`src/eval/floor.ts`）在同一份題目上的成功題數，正常是全
+`0/題數`。不是 0 就代表評分器放寬了，這一輪的「這題成功」不可信。只想看地板（零憑證、不連外）：
+
+```bash
+pnpm --filter @nexus/harness run eval:compare --floor-only
+```
+
+CI 那條（`pnpm --filter @nexus/harness exec vitest run src/eval`）同時擋兩個方向：平凡 agent 不准
+被判成功（`floor.test.ts`），每題的標準解必須被判成功（`eval.test.ts`）。

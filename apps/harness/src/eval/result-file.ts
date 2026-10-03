@@ -53,8 +53,13 @@ import {
 import { BENCHMARK, EASY_CASE_COUNT, type BenchmarkCase } from './dataset.js';
 import type { ModelUnderTest } from './model-under-test.js';
 
-/** 結果檔的格式版號。欄位改了就升，讀檔的人認不得的版號當場拋。 */
-export const EVAL_RESULT_FORMAT_VERSION = 1;
+/**
+ * 結果檔的格式版號。欄位改了就升，讀檔的人認不得的版號當場拋。
+ *
+ * 2：每筆 scored 的 `score` 多了 `success`（「這題成功」）。舊檔沒有那一欄，照讀的話
+ * `summarize` 會把成功題數靜靜算成 0，所以拋比讀得通好。
+ */
+export const EVAL_RESULT_FORMAT_VERSION = 2;
 
 /** 哪一支進入點產生的。 */
 export type EvalTool = 'eval:compare' | 'eval:survey';

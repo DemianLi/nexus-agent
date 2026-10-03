@@ -392,6 +392,35 @@ describe('summarize：失敗不會被平均成零分', () => {
     expect(summary.mentions).toMatchObject({ mean: 1, count: 1 });
   });
 
+  it('「這題成功」只算評到分的執行：成功的算一題、只講話的算零、失敗的不進分母', async () => {
+    const good = await runTier(TIER, { createModel: scripted(PERFECT), cases: [ECHO_CASE] });
+    const talky = await runTier(TIER, { createModel: scripted(ALL_TALK), cases: [ECHO_CASE] });
+    const dead = await runTier(TIER, {
+      createModel: throwing(Object.assign(new Error('x'), { status: 400 })),
+      cases: [ECHO_CASE],
+    });
+    const summary = summarize({
+      tier: TIER,
+      outcomes: [...good.outcomes, ...talky.outcomes, ...dead.outcomes],
+    });
+
+    expect(summary.scored).toBe(2);
+    expect(summary.successes).toBe(1);
+    expect(summary.failures).toEqual({ rejected: 1 });
+  });
+
+  it('createModel 收得到這次要跑的題目（隨機地板靠它定種子）', async () => {
+    const seen: string[] = [];
+    await runTier(TIER, {
+      createModel: (_modelId, testCase) => {
+        seen.push(testCase.id);
+        return new ScriptedChatModel({ turns: PERFECT });
+      },
+      cases: [ECHO_CASE, BENCHMARK[1] as BenchmarkCase],
+    });
+    expect(seen).toEqual([ECHO_CASE.id, (BENCHMARK[1] as BenchmarkCase).id]);
+  });
+
   it('全距報得出來 —— 單次取樣的一個數字不該讀成定論', async () => {
     let call = 0;
     const report = await runTier(TIER, {
