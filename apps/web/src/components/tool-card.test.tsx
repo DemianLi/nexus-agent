@@ -581,6 +581,17 @@ describe('工具卡的結果與 diff', () => {
     expect(screen.getByTestId('tool-output-omitted').textContent).toBe('⋯ 中間 4800 行沒畫 ⋯');
   });
 
+  it('一行超長的結果（行數沒超過）也有字元上限：畫頭尾各半，中間一行講沒畫幾個字（#950）', () => {
+    const text = `${'頭'.repeat(10_000)}${'麻'.repeat(7)}${'尾'.repeat(10_000)}`;
+    render(<ToolCard entry={tool({ name: 'echo', text })} beam={false} />);
+    expand(/回聲/);
+    expect(screen.getByTestId('tool-output-omitted').textContent).toBe('⋯ 中間 7 字沒畫 ⋯');
+    const drawn = screen.getByLabelText('工具結果').textContent ?? '';
+    expect(drawn).not.toContain('麻');
+    expect(drawn.startsWith('頭'.repeat(10_000))).toBe(true);
+    expect(drawn.endsWith('尾'.repeat(10_000))).toBe(true);
+  });
+
   describe('write_file', () => {
     const write = tool({
       name: 'write_file',
