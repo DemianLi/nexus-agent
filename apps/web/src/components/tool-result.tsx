@@ -4,7 +4,8 @@
  * `lib/tool-diff.ts`、`lib/tool-result-card.ts` 與 `lib/tool-output.ts` 決定，這裡只管畫。
  *
  * - **收合**：diff、讀檔、搜尋三種在對話裡都只畫頭尾兩段，中間一顆鈕展開（照 dsh 的 `FoldToggle`）；展開之後照審查頁
- *   的上限畫到 {@link MAX_RENDERED_LINES} 列——harness 的上限管的是位元組，管不住畫面上的行數。
+ *   的上限畫到 {@link MAX_RENDERED_LINES} 列——harness 的上限管的是位元組，管不住畫面上的行數。diff 與搜尋另有字元上限
+ *   （每列、整張卡，`lib/card-limit.ts`，#961）：列數管不到一列超長、也管不到幾千列各二十幾字。
  * - **diff**：對話裡最多 {@link CHAT_DIFF_MAX_LINES} 列。底色與符號色跟審查頁同一組（`DIFF_TONE`／`DIFF_SIGN`）。
  * - **讀檔**（dsh `ReadBlock`）：標頭是路徑、讀到哪裡、語言；每行帶行號，整段一起高亮（`highlightLines`），語言的文法
  *   還在載時先畫純文字、載完補上色。對話裡最多 {@link CHAT_READ_MAX_LINES} 行。
@@ -123,8 +124,12 @@ function FoldToggle({
 }
 
 /** 展開後沒畫完時的那一句：撞到 {@link MAX_RENDERED_LINES} 列，或（diff、搜尋）撞到整張卡的字元預算。 */
-function RenderCapNote({ shown }: { shown: number }) {
-  return <p className="text-muted-foreground px-3 pt-1 font-sans">只顯示前 {shown} 行</p>;
+function RenderCapNote({ shown, unit }: { shown: number; unit: '行' | '列' }) {
+  return (
+    <p className="text-muted-foreground px-3 pt-1 font-sans">
+      只顯示前 {shown} {unit}
+    </p>
+  );
 }
 
 /**
@@ -167,7 +172,7 @@ function Folded<T>({
         />
       )}
       {!expanded && tail.map((row, at) => render(row, head.length + hidden + at))}
-      {expanded && rows.length > limit && <RenderCapNote shown={limit} />}
+      {expanded && rows.length > limit && <RenderCapNote shown={limit} unit={unit} />}
     </>
   );
 }

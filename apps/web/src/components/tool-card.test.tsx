@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { ToolCard } from '@/components/tool-card';
 import { CARD_LINE_MAX_CHARS, CARD_MAX_CHARS } from '@/lib/card-limit';
+import { MAX_RENDERED_LINES } from '@/lib/diff-rows';
 import {
   PARTIAL_OUTPUT_HEADING,
   SUBAGENT_MAX_TOKENS_REASON,
@@ -1060,17 +1061,21 @@ describe('diff 卡與搜尋卡的畫面字元上限（#961）', () => {
   });
 
   it('diff：列數沒超過 5000、但全部字元超過整張卡的預算，展開後只畫前面幾列並說明', () => {
-    const content = Array.from({ length: 3000 }, (_, at) => `第 ${at + 1} 行${'字'.repeat(30)}`).join(
-      '\n',
-    );
+    // 每列約 36 字元，總量是預算的三倍，但列數仍遠低於 5000（不是列數上限擋的）。
+    const count = Math.ceil((CARD_MAX_CHARS * 3) / 36);
+    expect(count).toBeLessThan(MAX_RENDERED_LINES);
+    const content = Array.from(
+      { length: count },
+      (_, at) => `第 ${at + 1} 行${'字'.repeat(30)}`,
+    ).join('\n');
     render(<ToolCard entry={write(content)} beam={false} />);
     expand(/寫入檔案/);
     fireEvent.click(screen.getByTestId('tool-diff-toggle'));
     const card = screen.getByTestId('tool-diff');
     const drawn = card.querySelectorAll('[data-diff-line]').length;
     expect(drawn).toBeGreaterThan(100);
-    expect(drawn).toBeLessThan(1000);
-    expect(card.textContent?.length).toBeLessThan(CARD_MAX_CHARS + 1_000);
+    expect(drawn).toBeLessThan(count / 2);
+    expect(card.textContent?.length).toBeLessThan(CARD_MAX_CHARS * 1.2);
     expect(card.textContent).toContain(`只顯示前 ${drawn} 行`);
   });
 
@@ -1097,7 +1102,9 @@ describe('diff 卡與搜尋卡的畫面字元上限（#961）', () => {
   });
 
   it('搜尋：很多短命中，展開後受整張卡的預算限制並說明', () => {
-    const matches = Array.from({ length: 2000 }, (_, at) => ({
+    const count = Math.ceil((CARD_MAX_CHARS * 3) / 36);
+    expect(count).toBeLessThan(MAX_RENDERED_LINES);
+    const matches = Array.from({ length: count }, (_, at) => ({
       lineNumber: at + 1,
       line: `foo ${'字'.repeat(30)}`,
     }));
@@ -1107,9 +1114,9 @@ describe('diff 卡與搜尋卡的畫面字元上限（#961）', () => {
     const card = screen.getByTestId('tool-search');
     const drawn = card.querySelectorAll('[data-search-row]').length;
     expect(drawn).toBeGreaterThan(100);
-    expect(drawn).toBeLessThan(1000);
-    expect(card.textContent?.length).toBeLessThan(CARD_MAX_CHARS + 1_000);
-    expect(card.textContent).toContain(`只顯示前 ${drawn} 行`);
+    expect(drawn).toBeLessThan(count / 2);
+    expect(card.textContent?.length).toBeLessThan(CARD_MAX_CHARS * 1.2);
+    expect(card.textContent).toContain(`只顯示前 ${drawn} 列`);
   });
 });
 
