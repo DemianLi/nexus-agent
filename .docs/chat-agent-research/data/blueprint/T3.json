@@ -1,0 +1,729 @@
+{
+  "node": "T3",
+  "decisions": [
+    {
+      "id": "T3-01",
+      "type": "do",
+      "decision": "文字工具的回傳（搜尋、讀檔、編輯、空輸出）要原樣丟給模型，還是先經過一層為模型設計的介面改寫？",
+      "recommendation": "在工具與模型之間加一層介面改寫：搜尋只回摘要清單，結果太多就要求縮小查詢；讀檔一次回固定長度、附行號的視窗；指令成功但沒有輸出時回一句明示訊息；編輯後回顯改動處，並以 lint 守門，語法錯就不套用，同時回傳錯誤類型、這次編輯套用後的樣子與原始內容。",
+      "defaults": "檔案檢視視窗 100 行、搜尋結果超過 50 筆就要求縮小查詢 [arXiv:2405.15793]；lint 用 flake8、只查 8 個錯誤碼 [arXiv:2405.15793]。這些值是在 GPT-4 Turbo 上、以 37 題 dev 子集各跑 5 次挑出來的 [arXiv:2405.15793]。",
+      "switch_when": "換成長上下文能力更強的模型時，100 行視窗與整檔的差距要重量：精讀者指出最佳值是在 2024 年的 GPT-4 Turbo（128k）上調出來的，整檔 12.7% 可能反映當時模型處理長上下文的弱點 [arXiv:2405.15793]。觀測是單頁長 HTML、而不是可分頁的檔案或搜尋結果時，只加摘要器不一定有幫助：WebAgent 只加 HTML-T5 摘要器的 +S，real-estate 從 10 掉到 0 [arXiv:2307.12856]；這類長觀測與跨回合的歷史怎麼壓，見 T3-02。",
+      "evidence": [
+        {
+          "id": "2405.15793",
+          "finding": "SWE-bench Lite、GPT-4 Turbo 上，搜尋結果一次列摘要 18.0%、完全不給搜尋 15.7%、逐筆瀏覽 12.0%；檢視視窗 100 行 18.0%、30 行 14.3%、整個檔案 12.7% [arXiv:2405.15793]。同一模型只給 shell、不經介面改寫的 Shell-only 是 11.00% [arXiv:2405.15793]。",
+          "where": "ch03 §(a) SWE-agent 段 L76–77；notes/2405.15793.json key_results[0]、[1]、[2]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：Table 3 每格只跑一次（L77），精讀者指出 1.7 與 2.3 點的差距只相當於 5–7 題（notes limitations_observed[0]）；綜合階段估單次標準差至少約 3 題、約 1 個百分點（L360）。這裡用到的搜尋 18.0 對 12.0（差 6.0 點）與視窗 18.0 對 12.7（差 5.3 點）都大於那兩格。F1 不成立：有不經介面改寫的 Shell-only 對照（notes key_results[0]），搜尋另有完全不給的對照。F2、F3 不成立：判分是送出後把 patch 套上 repo 跑相關單元測試（全文 Metrics 段，notes evaluation.metrics），不是模型自評，也不在互動中提供。F4 不成立：判分是可執行測試，依 SPEC 試點後補充不算 F4。只在 Lite、只用 GPT-4 Turbo，屬外推限制，不在 F1–F5 內。"
+        },
+        {
+          "id": "2405.15793",
+          "finding": "同一設定下，編輯指令加 lint 守門 18.0%、不加 lint 15.0%、完全沒有 edit 指令 10.3% [arXiv:2405.15793]；全集裡一次被 lint 擋下之後，最終編輯成功的機率從 90.5% 降到 57.2% [arXiv:2405.15793]。lint 拒絕訊息缺了錯誤類型、套用後樣子或原始內容任一段，就出現對應的壞行為，這是開發中的定性觀察，沒有數字 [arXiv:2405.15793]。",
+          "where": "notes/2405.15793.json key_results[3]、[5]、[7]；ch03 §(a) SWE-agent 段 L79",
+          "flaws": ["F5"],
+          "unverified": ["F1"],
+          "flaw_basis": "F5 同上一筆。F1 放 unverified：lint 守門是一種介入（擋下並要求重下），依 SPEC 試點後補充要同時對照『不介入』與『同預算重抽』；這裡只有同樣 $4 預算上限的不加 lint 對照，沒有同預算重抽那一組。F2、F3、F4 不成立理由同上一筆。lint 只查 8 個錯誤碼，擋不住語意錯誤（notes limitations_observed[6]）。"
+        }
+      ],
+      "counter_evidence": [
+        {
+          "id": "2307.12856",
+          "finding": "WebAgent 只加 HTML-T5 摘要器的 +S，三個真實網站漲跌不一，real-estate 從 10 掉到 0；每站只有 20 條指令、只跑一次 [arXiv:2307.12856]。",
+          "where": "ch03 §(a) WebAgent 段 L46；§感知陷阱 小樣本 L357",
+          "flaws": ["F5"]
+        },
+        {
+          "id": "2405.15793",
+          "finding": "摘要式搜尋把 grep 的用法錯誤和『沒有結果』一起回傳，agent 原樣重下同一指令、得到同樣結果 [arXiv:2405.15793]；這是 pylint-5859 一條軌跡上的觀察，多常發生沒人量過。",
+          "where": "ch03 §兩塊之間的接點 L250；notes/2405.15793.json limitations_observed[4]",
+          "flaws": ["F5"]
+        }
+      ],
+      "verification": "在自己的工具上做與 SWE-agent 同形的消融：同一模型、同一預算，一次只改一個介面元件（摘要式對原樣輸出、固定視窗對整檔、有無 lint），每組重跑多次估變異（量法見 T3-05）。對照組是不經改寫、原樣回傳的 shell 介面。沒效的判準：改寫版的整題成功率在重跑雜訊內不高於原樣回傳。另外抽查軌跡，確認摘要沒有把工具自己的錯誤包成『沒有結果』（章內只在一條軌跡上看到，L250）。",
+      "what_to_measure": null,
+      "grade": "B",
+      "grade_reason": "A 不成立：支持來源只有 SWE-agent 一篇，沒有第二個獨立來源量過文字工具回傳的格式。它的搜尋與視窗消融不含 F1–F4（lint 那一項 F1 未確認），所以是『只有 1 個不含 F1–F4 的來源』，歸 B。反例 WebAgent 的 +S 可以用觀測型態切開（單頁長 HTML 對上可分頁的檔案與搜尋結果），已寫進 switch_when；pylint-5859 那條只是一條軌跡，放進 verification 當抽查項目。支持結果都是單次小樣本：Table 3 每格跑一次，同設定 6 次執行的單次標準差至少約 3 題（L360）。",
+      "depends_on": [],
+      "edges": ["E3"]
+    },
+    {
+      "id": "T3-02",
+      "type": "open",
+      "decision": "舊觀測要在上下文裡留幾輪，更早的要直接截斷、摺成一行，還是做摘要？",
+      "recommendation": "文獻沒有答案",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2405.15793",
+          "finding": "SWE-bench Lite 上，舊觀測只留最後 5 則、更早的摺成一行是 18.0%，保留完整歷史是 15.0% [arXiv:2405.15793]；37 題 dev 子集各跑 5 次，兩者是 15.1% 對 14.1% [arXiv:2405.15793]。",
+          "where": "ch03 §(a) SWE-agent 段 L76–77；notes/2405.15793.json key_results[4]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：Lite 每格一次；dev 子集 15.1 對 14.1 平均每次差不到半題（notes limitations_observed[1]）；完整歷史那一格顯不顯著，要看消融設定本身的變異（L360）。F1–F4 不成立理由同 T3-01：完整歷史就是不摺疊的對照，判分是可執行測試。精讀者另指出分不開『省 context』與『去除過時內容』兩種機制，也沒量重讀次數與 token（L667；notes limitations_observed[8]）。"
+        },
+        {
+          "id": "2404.07972",
+          "finding": "OSWorld 用 GPT-4V 在 10% 子集上放 1、2、3 輪或盡量塞滿的歷史，SoM 設定（每個框另附文字中繼資料）隨歷史變長而上升，純截圖設定沒有提升 [arXiv:2404.07972]。",
+          "where": "ch03 §(a) 合起來看 L136；未解問題 2 L670",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：約 37 題、各跑一次（L136；notes limitations_observed[2]）。F1 不成立：比的是同一設定不同歷史長度，最短歷史就是對照。F2、F3 不成立。F4 不成立：OSWorld 用執行式評估函式（notes/2404.07972.json evaluation.metrics）。"
+        },
+        {
+          "id": "2501.12326",
+          "finding": "UI-TARS 只留最近 5 張截圖、文字的 thought 與 action 全留，作者說是為了塞進約 32k 的序列長度；N 沒有消融，程式驗證在全文找不到歷史長度的掃描 [arXiv:2501.12326]。",
+          "where": "ch03 §(a) UI-TARS 段 L115、L118；未解問題 2 L668",
+          "flaws": [],
+          "unverified": [],
+          "flaw_basis": "這一筆是做法而不是量測結果，沒有可判 F1–F5 的數字；列進來是說明業界常見的 N=5 沒有消融支撐。"
+        },
+        {
+          "id": "2410.16464",
+          "finding": "Beyond Browsing 把動作與 API 回傳原樣留在提示裡、完全不截斷，每題成本是瀏覽 agent 的 12 到 14 倍（$1.2 ÷ $0.1 = 12，$1.4 ÷ $0.1 = 14）[arXiv:2410.16464]。",
+          "where": "ch03 §(a) Beyond Browsing 段 L110–111；未解問題 2 L669",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：只跑一次（L359）。F4 不成立：WebArena 官方判準是答案、網站狀態與 URL 比對（notes/2410.16464.json evaluation.metrics）。同時換了動作空間與觀測，成本差不能全歸給不截斷（L110），論文也沒有壓縮的消融（L669）。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": null,
+      "what_to_measure": "同一任務、同一模型、同一步數預算下，先掃保留輪數 N（例如 1、5、全部），再在固定 N 下比三種處理舊觀測的方式：直接截斷、摺成只剩長度的一行、做摘要；每組重跑多次（量法見 T3-05）。每組同時記四件事：整題成功率、每題輸入 token、每步延遲、被摺掉之後又重新讀取同一內容的次數。決定方式：取成功率在重跑雜訊內不輸給『全部保留』、而 token 最少的那一組；文字型觀測與截圖型觀測若最佳 N 不同，就分開設定。",
+      "grade": null,
+      "grade_reason": "open 型不評等級。降成 open 的原因：唯一的直接消融（SWE-agent）說少留比較好，但 dev 子集上兩者每次差不到半題；OSWorld 的 SoM 設定卻是多留比較好、純截圖沒差，而且只有約 37 題跑一次。兩個方向的觀測型態、模型、任務都不同，寫不出可操作的切換條件；也沒有一篇同時量 token、延遲與任務損失（未解問題 2 L671；README L531–533）。所以 T3-01 的 defaults 也刻意不放『最後 5 則』。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T3-03",
+      "type": "do",
+      "decision": "在 GUI 上要對某個元素動作時，讓模型用什麼方式指出是哪一個？",
+      "recommendation": "不要讓沒受過 GUI grounding 訓練的通用視覺語言模型直接輸出像素座標。二選一：(1) 把候選元素編號、讓模型回答編號，而且每個編號附上文字（HTML 文字、OCR 文字或圖示描述），不要只給疊在截圖上的數字；(2) 讓 planner 用一句文字描述目標，再交給專用 grounder 換成座標。候選清單要允許回答『都不是』。",
+      "defaults": "planner 交給 grounder 的描述：一句 30 字以內、能唯一定位目標的描述 [arXiv:2410.05243]；這是 UGround 的介面契約，30 字這個長度沒有消融過 [arXiv:2410.05243]。",
+      "switch_when": "模型受過 GUI grounding 訓練時可以直接輸出座標：ScreenSpot 平均 SeeClick 53.4、UGround 73.3 [arXiv:2401.10935][arXiv:2410.05243]，OS-Atlas-7B 是 82.47 [arXiv:2410.23218]；但這些是單步離線分數，OS-Atlas-7B 配 GPT-4o 在 OSWorld 只有 14.63 [arXiv:2410.23218]，換算見 T3-06。畫面元素超過 40 個時只給編號掉得最多：OmniParser 的 SeeAssign 只給編號 0.620，補上框內文字與圖示描述後 0.900 [arXiv:2408.00203]。",
+      "evidence": [
+        {
+          "id": "2310.11441",
+          "finding": "同一個 GPT-4V 在 RefCOCOg REC 上，要它輸出框座標是 25.7，改成在影像上疊編號、回答編號後是 86.4 [arXiv:2310.11441]。",
+          "where": "ch03 §(a) SoM 段 L49–50；§感知陷阱 小樣本 L358",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：REC 只有 177 個實例、單次（L358）；而且 25.7 寫不成 k/177，計分單位與分母論文沒交代（L358），兩個數字未必在同一組題上。F1 不成立：對照就是不加標記、直接輸出座標的同一模型。F2、F3、F4 不成立：判分對照標準框，不經模型或 LLM 評審。射程限制：物件場景圖，不是元素密集的 GUI 截圖（L477），不在 F1–F5 內。"
+        },
+        {
+          "id": "2408.00203",
+          "finding": "ScreenSpot 上同一個 GPT-4V，只疊 Grounding DINO 與 OCR 的框、改答編號是 58.38%，再加上局部語意 68.7%，換成微調偵測器 73.0%；作為起點的直接輸出座標 16.2% 引自 SeeClick [arXiv:2408.00203][arXiv:2401.10935]。SeeAssign 框超過 40 個的題目，只給編號 0.620，補上框內文字與圖示描述後 0.900 [arXiv:2408.00203]。",
+          "where": "ch03 §(a) OmniParser 段 L85–86；§感知陷阱 ScreenSpot L345–346",
+          "flaws": ["F5"],
+          "unverified": ["F2"],
+          "flaw_basis": "F5：SeeAssign 只有 112 題（L86），單次。F2 放 unverified：圖示描述模型的 7,185 組訓練資料切自 ScreenSpot 截圖，局部語意的增益也量在 ScreenSpot 上，SeeAssign 的截圖同樣取自 ScreenSpot（L346）；測試影像進過訓練，算不算『正解進了迴圈』無法從章確認。只疊框的 58.38% 不經這個模型，但它對照的 16.2% 是引自另一篇的數字，不是同一次跑。F4 不成立：判分是點是否落在標準框內。另與 SoM（2310.11441）有共同作者（兩篇快取全文的作者列），不算獨立來源。"
+        },
+        {
+          "id": "2401.01614",
+          "finding": "同一個 GPT-4V 寫好下一步計劃後，Mind2Web 每個 split 30 題的子集上，把候選元素的 HTML 文字做成多選題的 Step SR 是 39.1／32.7／42.0，在截圖上疊候選框與編號只有 20.3／13.9／23.7 [arXiv:2401.01614]。",
+          "where": "ch03 §(a) SeeAct 段 L62–63；爭議 SoM 段 L475、L477",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：每個 split 只有 30 題（L63）。F1 不成立：兩組共用同一個 planner 與同一組 ranker 候選，比的是相對差，另有人工 oracle 當上限。F2、F3、F4 不成立：Step SR 逐步與標註路徑精確比對。但 SoM 式的分組設計讓多數組的正解是 NA，54% 的錯誤正好是應答 NA 卻捏造編號（L477），差距有一部分來自分組設計，不全是『有沒有文字』。"
+        },
+        {
+          "id": "2410.23218",
+          "finding": "同一次跑的 OSWorld 上，GPT-4o 當 planner、配 SeeClick 當 grounder 是 9.21，配 OS-Atlas-Base-7B 是 14.63；每題回 FAIL 的地板是 30/369 = 8.13% [arXiv:2410.23218][arXiv:2404.07972]。",
+          "where": "ch03 §(a) OS-ATLAS 段 L102–103",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：單次，程式驗證只確認分數落在 369 題的格點上（L102）。F1：論文沒報 FAIL 地板，但章已補上（L103）：+7B 高出 14.63 − 8.13 = 6.50 點，+SeeClick 只高 9.21 − 8.13 = 1.08 點。F2、F3 不成立。F4 不成立：OSWorld 用執行式評估函式（notes/2404.07972.json evaluation.metrics）。這一筆支撐的是『grounder 的品質決定上限』，不是『不要輸出座標』。"
+        }
+      ],
+      "counter_evidence": [
+        {
+          "id": "2404.07972",
+          "finding": "OSWorld 上 GPT-4o 加 SoM（框取自 accessibility tree，另附每個編號的 tag、name、text 中繼資料，動作可用 tag_N）是 4.59，低於只看截圖、輸出座標的 5.03；同一設定下 GPT-4V 從 5.26% 升到 11.77%、Gemini-Pro-1.5 從 5.40 升到 7.79 [arXiv:2404.07972]。GPT-4o 的兩個值都在 8.13% 地板之下，差 5.03 − 4.59 = 0.44 點，約 0.44 ÷ 0.27 ≈ 1.6 題 [arXiv:2404.07972]。",
+          "where": "ch03 爭議 SoM 段 L475–476；§評估 關鍵數字表 L308",
+          "flaws": ["F5"]
+        },
+        {
+          "id": "2410.05243",
+          "finding": "Mind2Web-Live 上 GPT-4o 配 UGround（只看截圖、走 grounder）是 19.2，低於 text-only GPT-4o 的 22.1 [arXiv:2410.05243]。",
+          "where": "ch03 §(a) UGround 段 L95；爭議 L489",
+          "flaws": ["F5"]
+        },
+        {
+          "id": "2404.05719",
+          "finding": "Ferret-UI 測到用 SoM 的 GPT-4V 在 Android grounding 只有 4.7、iPhone 是 70.3 [arXiv:2404.05719]；但只跑 100 筆，標準答案與 SoM 候選來自同一個偵測器，精讀者判斷 4.7 比較像量測產物（L477）。",
+          "where": "ch03 §(a) Ferret-UI 段 L71；爭議 L477",
+          "flaws": ["F2", "F5"]
+        }
+      ],
+      "verification": "在自己的介面上，固定 planner 與任務，比三組：模型直接輸出座標、編號加文字、planner 加專用 grounder；量線上整題成功率並對照 FAIL 或放棄的地板（T3-05）。把同畫面有多個相同元素、元素超過 40 個的畫面分開報分數。沒效的判準：編號加文字或 grounder 的成功率在重跑雜訊內不高於直接輸出座標。",
+      "what_to_measure": null,
+      "grade": "B",
+      "grade_reason": "regrade.py 依 flaws 機械判定給 A 候選（SoM、SeeAct、OS-ATLAS 三筆都只有 F5），這裡給 B，逐點說明：(1) A 的定義要求章的反證段沒有未被條件解釋掉的反例，這裡有一個：OSWorld 的 SoM 已附文字中繼資料，GPT-4o 仍從 5.03 降到 4.59，同一設定下 GPT-4V 與 Gemini 卻上升（L476）；只能說兩個值都在 8.13% 地板下、差約 1.6 題，這是雜訊，不是可寫進 switch_when 的條件。(2) 建議裡『編號要附文字』那一半，章自己標明是推論（L478），沒有一篇在同一組候選上比過只給編號、只給文字、兩者都給（L479）。OmniParser 的文字增益有 F2 疑慮，又與 SoM 共作者，不能補成第二個獨立來源。支持結果都是單次小樣本。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T3-04",
+      "type": "open",
+      "decision": "給 GUI agent 的觀測要用截圖、accessibility tree／HTML，還是改走 API 回應？",
+      "recommendation": "文獻沒有答案",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2404.07972",
+          "finding": "OSWorld 用同一個動作空間、同一個 15 步預算，只換輸入：GPT-4o 是 accessibility tree 11.36、只看截圖 5.03；Gemini-Pro-1.5 反過來是 accessibility tree 4.81、只看截圖 5.40；26 組模型×設定只有 5 組高過每題回 FAIL 的 8.13% [arXiv:2404.07972]。",
+          "where": "ch03 爭議 截圖 vs 結構化 L482–487",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：每題一次、temperature 1.0（L486）。F1 不成立：章已對照 FAIL 地板（L486）。F2、F3 不成立。F4 不成立：執行式評估函式。另有混淆：GPT-4 系列純 accessibility tree 與含截圖的設定用了不同模型版本（L486），不在 F1–F5 內。"
+        },
+        {
+          "id": "2410.16464",
+          "finding": "同一個 GPT-4o 跑 WebArena 812 題，瀏覽 14.8%、API 29.2%、兩者混用 38.9%，每題成本 $0.1 對 $1.2／$1.4 [arXiv:2410.16464]。",
+          "where": "ch03 §(a) Beyond Browsing 段 L109–111；爭議 L493",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：只跑一次（L359）。F2、F3 不成立。F4 不成立：WebArena 官方判準是答案、網站狀態與 URL 比對（notes/2410.16464.json evaluation.metrics）。同時換了動作空間，增益不能歸給觀測（L493）；自家瀏覽基線偏弱（L111）。"
+        },
+        {
+          "id": "2410.05243",
+          "finding": "UGround 在離線基準上大致勝過使用額外文字輸入的方法，但 Mind2Web-Live 上 GPT-4o 配 UGround 是 19.2，低於 text-only GPT-4o 的 22.1 [arXiv:2410.05243]。",
+          "where": "ch03 §(a) UGround 段 L95；爭議 L488–489",
+          "flaws": ["F5"],
+          "unverified": ["F4"],
+          "flaw_basis": "F5：單次。F4 放 unverified：Mind2Web-Live 的線上判定方式章與筆記沒寫。"
+        },
+        {
+          "id": "2410.23218",
+          "finding": "OS-Atlas-Base-4B 配 GPT-4o 只看截圖是 11.65，與 OSWorld 原論文 GPT-4o 用 accessibility tree 的 11.36 打平；+7B 的 14.63 也只多 14.63 − 11.36 = 3.27 點，而且兩者不是同一次跑 [arXiv:2410.23218][arXiv:2404.07972]。",
+          "where": "ch03 §(a) OS-ATLAS 段 L104；爭議 L490",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：單次。F4 不成立：執行式評估。跨兩次執行的比較，排除不了環境映像或評估腳本的版本差異（L490）。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": null,
+      "what_to_measure": "固定同一個模型（要包含受過 GUI 訓練的模型）、同一動作空間、同一步數預算，只換觀測：純截圖、accessibility tree 或 HTML、截圖加 accessibility tree、截圖加編號與文字、結構化 API 回應。每組重跑多次並對照 FAIL 或放棄的地板（T3-05）；把『觀測裡看不到』造成的失敗（下拉選單、disabled 狀態、捲出畫面的內容）分開記；同時記每題 token 與成本。決定方式：取在重跑雜訊內成功率最高的幾組裡成本最低的；若結果依模型家族翻轉，就依實際要用的模型各量一次，不套通則。",
+      "grade": null,
+      "grade_reason": "open 型不評等級。降成 open 的原因：唯一的受控比較（OSWorld）方向依模型家族翻轉，GPT-4 系列偏好結構化、Gemini 不一定，而且大多數設定在 FAIL 地板下；對受過 GUI 訓練的模型，同一模型只換觀測模態的比較在本調研讀過的論文裡沒有（L481；未解問題 1 L661–665）。Beyond Browsing 換觀測時連動作空間一起換。寫不出『哪種模型配哪種觀測』的可操作條件。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T3-05",
+      "type": "measure",
+      "decision": "改了觀測格式或觀測通道之後，怎麼判斷它真的有效？",
+      "recommendation": "讀線上整題成功率之前，先在同一批任務上備好兩條參照：『一律回 FAIL 或什麼都不做』拿得到的分數，以及同一設定重跑數次得到的單次變異；比較對象也要在同一次、同一批任務上自己重跑，動作空間、模型與步數預算固定，一次只換觀測。差距要同時高過地板與重跑雜訊，才算觀測改動有效。",
+      "defaults": "估變異的重跑次數：SWE-agent 在 SWE-bench Lite 上同一設定跑 6 次 [arXiv:2405.15793]；這是它用過的次數，不是驗證過的最佳次數 [arXiv:2405.15793]。",
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2404.07972",
+          "finding": "OSWorld 369 題中有 30 題不可行，回 FAIL 就得分，一律回 FAIL 可拿 30/369 = 8.13%；Table 5 的 26 組模型×設定只有 5 組高過它，所有純截圖設定（最高 5.80%）都在地板下 [arXiv:2404.07972]。",
+          "where": "ch03 §(a) OS-ATLAS 段 L103；爭議 L486；README L90",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "這是『不對地板會看錯』的證據：論文自己沒報這條地板（notes limitations_observed[0]），純截圖的低分可能有一部分來自不回 FAIL，不全是看不懂畫面（L486）。F5：每題一次（notes limitations_observed[2]）。F1：這一筆本身就是平凡基準。F2、F3 不成立。F4 不成立：執行式評估函式（notes evaluation.metrics）。題目取自公開來源、沒有私有測試集（notes limitations_observed[9]），可能抬高各設定的分數，但不影響地板的算法。"
+        },
+        {
+          "id": "2405.15793",
+          "finding": "SWE-agent 同一設定 6 次執行，平均 pass@1 是 17.94%、pass@6 是 32.67% [arXiv:2405.15793]；在每題獨立解出的模型下，單次解題數的標準差至少約 3 題、約 1 個百分點，所以消融表中無示範的 18.0 − 16.3 = 1.7 點不到 2 個標準差 [arXiv:2405.15793]。",
+          "where": "ch03 §感知陷阱 小樣本 L360",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "這是『不重跑會看錯』的證據，由綜合階段與程式驗證算出（L360）。F5：消融本身每格一次；論文自報的標準差 0.49 只有這個下界的一半，程式驗證判為中度張力（L360）。F1 不成立：有 Shell-only 對照（notes key_results[0]）。F2、F3 不成立：判分是送出後跑單元測試。F4 不成立：可執行測試。"
+        },
+        {
+          "id": "2404.07972",
+          "finding": "OSWorld 論文以 GPT-4V 加 SoM 的 11.77% 對截圖加 accessibility tree 的 12.17% 主張 SoM 讓 GPT-4V 下降，兩者只差 0.40 點、約 1.5 題，而且每題只跑一次 [arXiv:2404.07972]。",
+          "where": "notes/2404.07972.json limitations_observed[2]；ch03 爭議 L484、L486",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "這是『不估重跑雜訊會看錯』的第二個示範，與 SWE-agent 那一筆彼此獨立。F5：temperature 1.0、每題一次，1 題約 0.27 個百分點（notes limitations_observed[2]）。F1–F4 的判斷同本卡第一筆 OSWorld。"
+        },
+        {
+          "id": "2410.23218",
+          "finding": "OS-ATLAS 表上 GPT-4o 只看截圖的 5.03 是逐格照抄 OSWorld 原論文、不是重跑；拿它算增益是 14.63 − 5.03 = 9.60 點，同一次跑的 GPT-4o＋SeeClick 對照則是 14.63 − 9.21 = 5.42 點 [arXiv:2410.23218][arXiv:2404.07972]。",
+          "where": "ch03 §(a) OS-ATLAS 段 L102；照抄的基線 L510",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "程式驗證證實逐 app 十格都與 OSWorld Table 14 相同（L102、L510）。F5：單次。F1 不成立：章已補 FAIL 地板。F4 不成立：執行式評估。這一筆與上面的 OSWorld 共用題目與數字，不算獨立來源。"
+        },
+        {
+          "id": "2501.12326",
+          "finding": "UI-TARS 在 OSWorld 只給截圖、15 步預算時，72B-DPO 22.7 對 Claude Computer Use 14.9；放寬到 50 步變成 24.6 對 22.0，差距從 22.7 − 14.9 = 7.8 縮到 24.6 − 22.0 = 2.6 點 [arXiv:2501.12326]。",
+          "where": "ch03 §(a) UI-TARS 段 L117",
+          "flaws": ["F5"],
+          "unverified": ["F2"],
+          "flaw_basis": "F5：取 3 次平均但沒給變異數（L331）。F2 放 unverified：附錄的 VS Code 案例指令與 OSWorld 官方題目逐字相同，論文沒說線上自舉的指令有沒有排除 OSWorld 題目（L512）。Claude 的兩個數字與 OSWorld 筆記記下的 Anthropic 公告值相同（notes/2404.07972.json limitations_observed[6]），很可能不是同一次跑。"
+        },
+        {
+          "id": "2410.16464",
+          "finding": "Beyond Browsing 把觀測從 accessibility tree 換成 API JSON，成功率從 14.8% 升到 29.2%，但同時換了動作空間；每題成本是瀏覽的 12 到 14 倍（$1.2 ÷ $0.1 = 12，$1.4 ÷ $0.1 = 14）[arXiv:2410.16464]。",
+          "where": "ch03 §(a) Beyond Browsing 段 L110–111；爭議 L493",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：只跑一次（L359）。F4 不成立：WebArena 官方判準是確定性比對（notes evaluation.metrics）。這一筆示範的是『同時換兩個變數就分不出觀測的貢獻』與『不記成本會漏掉 12 倍的代價』。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "拿這次的觀測改動照上面跑一遍：同一批任務、同一預算，舊觀測與新觀測各重跑數次，附上 FAIL 或放棄的地板。另外記每題 token 或美元成本：Beyond Browsing 的 API 觀測成本是瀏覽的 12 到 14 倍（L111），不記就看不到這個代價。讀法：地板只是參考線，不能從分數裡扣掉當成『真正能力』，真的 agent 在不可行題上也可能沒回 FAIL（L103）。觀測改動算沒效的判準：新舊差距不超過重跑之間的雜訊，或新觀測的成功率沒有高過地板。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "measure 型看的是『不這樣量會看錯』。本卡與 T3-07、T3-03 用同一條判法：A 看整條建議背後的那一條原則，是否有 2 個以上獨立、不含 F1–F4 的來源量化示範過；只靠單一來源的附帶做法移到 verification（例如記成本）。這條的原則是：線上數字要對同一次跑出來的參照讀，參照包括平凡地板與重跑雜訊。兩個彼此獨立（香港大學等的 OSWorld、普林斯頓的 SWE-agent，不共用資料或判定器）的乾淨來源都量化了看錯的幅度：沒有地板時，OSWorld 26 組裡有 26 − 5 = 21 組其實低於一律回 FAIL 的 8.13%（L486、README L90）；不估重跑雜訊時，SWE-agent 單次 1.7 點的消融差距不到 2 個標準差（L360），OSWorld 自己也拿 0.40 點、約 1.5 題的差距下結論（notes limitations_observed[2]）。OS-ATLAS 那一筆與 OSWorld 共用題目與數字，不算另一個獨立來源；UI-TARS 有 F2 疑慮、Beyond Browsing 有混淆，只當補充。章內沒有反對這條原則的反例；L103 說地板不能扣掉當能力，已寫進 verification 的讀法。支持結果都是單次小樣本（OSWorld 每題一次；SWE-agent 消融每格一次）。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T3-06",
+      "type": "avoid",
+      "decision": "可以拿單步離線分數（逐步比對標註路徑的 step SR、action matching，或單步 grounding 準確率）當觀測改動的驗收依據嗎？",
+      "recommendation": "不要。離線逐步分數只當開發中的診斷，驗收看線上整題成功率（量法見 T3-05）；離線與線上都報時，要在同一批任務上配對報。",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2401.01614",
+          "finding": "SeeAct 的 SeeActChoice 在同一批任務上，離線 Offline0 的整題成功率是 3.3，線上是 37.8 [arXiv:2401.01614]。",
+          "where": "ch03 §感知陷阱 L327；未解問題 4 L678–679",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：線上只有 90 題，精讀者粗估 oracle 51.1% 的 95% 信賴區間約 ±10 點（L327）。F4 不適用：線上成功由人判定，不是模擬器、LLM 評審或學出來的判定器（SPEC 試點後補充），但沒有報判定者一致性，而且人手會關彈窗（L327），不在 F1–F4 內。F1、F2、F3 不成立：離線是與標註路徑精確比對，線上是人判任務有沒有完成，agent 看不到判定。"
+        },
+        {
+          "id": "2312.08914",
+          "finding": "CogAgent 抽樣複核 AITW 上被判錯的回應，42% 其實是另一條正確路徑 [arXiv:2312.08914]。",
+          "where": "ch03 §感知陷阱 L326",
+          "flaws": ["F5"],
+          "unverified": ["F3"],
+          "flaw_basis": "F5：樣本只說是『數百例』（L326）。F3 放 unverified：作者只複核自己模型的錯例（L326），沒有獨立的判定者，無法確認不偏。F4 不適用：人工複核。"
+        },
+        {
+          "id": "2501.12326",
+          "finding": "UI-TARS 量到 72B 對 7B 在線上 AndroidWorld 差 46.6 − 33.0 = 13.6，離線 AndroidControl-High 只差 2.2；但同一篇的 OSWorld 15 步 SFT 版只差 18.8 − 17.7 = 1.1，比離線 Mind2Web cross-task 的 1.5 還小 [arXiv:2501.12326]。",
+          "where": "ch03 §感知陷阱 L329",
+          "flaws": ["F5"],
+          "unverified": ["F2", "F4"],
+          "flaw_basis": "F5：3 次平均沒給變異數（L331）。F2 放 unverified：OSWorld 題目可能進了線上自舉資料，AndroidWorld 被稱為 OOD、訓練卻含大量 Android 軌跡（L512）。F4 放 unverified：AndroidWorld 的判定方式章與筆記沒寫。"
+        },
+        {
+          "id": "2406.12373",
+          "finding": "WebCanvas 在 40 題上，Mind2Web 離線 Step SR 是 MindAct 44.3、GPT-4 28.4、GPT-3.5 15.5；一年後放到線上，Completion Rate 是 25.5、41.1、35.4，排名反過來 [arXiv:2406.12373]。",
+          "where": "notes/2406.12373.json key_results[3]",
+          "flaws": ["F5"],
+          "unverified": ["F4"],
+          "flaw_basis": "F5：只有 40 題。F4 放 unverified：線上分數由 key node 判定函式算出，筆記沒交代其中有沒有 LLM 判定。另有混淆：離線與線上相隔一年、網站已變，MindAct 是在 Mind2Web 訓練集上訓練的；作者也說兩邊量尺本來就不同（單步動作預測對中間狀態）。"
+        }
+      ],
+      "counter_evidence": [
+        {
+          "id": "2401.10935",
+          "finding": "SeeClick 說幾個 checkpoint 在 ScreenSpot 與下游任務上的提升同向，但沒給 checkpoint 數或相關係數，精讀者判斷只能算相關 [arXiv:2401.10935]。",
+          "where": "ch03 爭議 grounding vs planning L496"
+        }
+      ],
+      "verification": "在自己的任務集上，同一批任務同時算離線逐步分數與線上整題成功率，比兩個以上版本的排名。這條 avoid 不成立的判準：多個版本、重跑之後，離線與線上的排名始終一致，而且離線差距能預測線上差距的方向。",
+      "what_to_measure": null,
+      "grade": "B",
+      "grade_reason": "A 不成立：四個來源只有 SeeAct 一筆不含 F1–F4（CogAgent 的 F3、UI-TARS 的 F2 與 F4、WebCanvas 的 F4 都未確認），是『只有 1 個不含 F1–F4 的來源』，歸 B。四筆方向一致：離線分數與線上結果的大小或排名對不上。反例 SeeClick 只是沒有數字的同向觀察，而且它的下游多半也是離線，可以用『有沒有線上配對』切開。支持結果都是單次小樣本（90 題、40 題、數百例）。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T3-07",
+      "type": "measure",
+      "decision": "監控器或介入閘門的準確度要怎麼報，才不會被陽性比例騙？",
+      "recommendation": "報任何隨陽性比例而變的指標（F1、precision、AUPRC）時，旁邊列出同一份資料上平凡分類器的值：全判陽性的 F1、等於陽性比例的 precision、約等於陽性比例的隨機 AUPRC；監控器的數字沒有高過它，就不算有鑑別力。",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2401.10019",
+          "finding": "R-Judge 以 unsafe 為正類算 F1，只拿擲硬幣的 51.32 當參考；依它的組成（unsafe 200 + 100 = 300 筆、safe 214 + 55 = 269 筆），全判 unsafe 的全集 F1 是 2 × 300 ÷ (300 + 569) ≈ 69.04，11 個模型只有 GPT-4o 的 74.45 高過它 [arXiv:2401.10019]。GPT-4o 在 Intended Attacks 的 Specificity 是 42.06，等於把 100 − 42.06 = 57.94% 的 safe 紀錄判成 unsafe [arXiv:2401.10019]。",
+          "where": "ch03 §監控陷阱 R-Judge L367–370；README L88",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "這是『只對隨機基準會看錯』的證據；組成由 Table 5 與 Table 1 反推，程式驗證證實是唯一解、33 個 F1 全部吻合（L368）。F5：只跑一次。F1：這一筆本身就是補上的平凡基準。F2、F3 不成立：標籤是人工標註，受測模型沒參與。F4 不成立：判分對照人工標籤，不是模擬器、LLM 評審或學出來的判定器。81 筆紀錄取自 ToolEmu 的模擬軌跡、沒有報標註者一致性（L192、L554），屬標籤品質問題，不在 F1–F4。"
+        },
+        {
+          "id": "2312.06674",
+          "finding": "Llama Guard 的對手 API 在分類別評估時用 1-vs-benign，Regulated Substances 類 response 的正例比例約 581 ÷ (581 + 6550) ≈ 8.1%，OpenAI API 的 AUPRC 只有 0.067，低於隨機分數的期望值 [arXiv:2312.06674]。",
+          "where": "ch03 §監控陷阱 Llama Guard L407–408",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "這是『跨正例比例比 AUPRC 會看錯』的證據：那幾格的大差距反映對方沒有這個類別，不是分類能力差距（L408）；隨機 AUPRC 約等於正例比例是綜合階段的分析（L407）。F5：單次。F1 不成立：這一筆就是補上的隨機基準。F2、F3、F4 不成立：標籤由紅隊人工標註（L409），OpenAI API 沒有參與。內部測試集與 Llama Guard 同分佈（L409），影響的是 Llama Guard 自己的分數，不影響這一格的下限論證。"
+        },
+        {
+          "id": "2311.10538",
+          "finding": "AgentMonitor 的測試集約 30% 是作者插入的手寫正例；依同列 Accuracy、Precision、Recall 反推誤報率約 9.1%，陽性比例若是 10%、5%、1%，Precision 依序只剩約 54.5%、36.2%、9.8% [arXiv:2311.10538]。",
+          "where": "ch03 §監控陷阱 AgentMonitor L380–381；README L87",
+          "flaws": ["F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：57 筆不重複的正例平均重複約 6.8 次，插入發生在切分之前，同一筆正例幾乎必然同時出現在訓練與測試集，元件與門檻又在訓練集上選（L383，來自公開 notebook）。這會讓測試集的 Recall 與 Precision 偏高，所以低陽性比例下的真實 Precision 只會更差，不改變方向。F5：單次、沒有信賴區間（L383）。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "拿自己的監控器在標好的資料上算 F1、precision、AUPRC，每一個旁邊列出同一份資料上的平凡分類器值。另外兩件事各只有一個來源示範過，所以放在這裡而不放進建議本體：recall 與 specificity（或誤報率）分開報，R-Judge 的 GPT-4o 在 F1 74.45 底下藏著 57.94% 的 safe 誤判（L370）；precision 依部署時預期的陽性比例重算，AgentMonitor 在陽性比例 1% 時只剩約 9.8%（L381，該來源有 F2）。再把誤報換成操作代價，例如每次執行至少被誤停一次的機率（AgentMonitor 以每步獨立誤報粗估約 25%–36%，L382）。監控器算沒效的判準：F1 或 AUPRC 不高於同一份資料上的平凡分類器，或換算到部署陽性比例後，precision 低到誤停代價不可接受。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "measure 型看『不這樣量會看錯』，判法與 T3-05、T3-03 相同：看建議本體那一條原則是否有 2 個以上獨立、不含 F1–F4 的來源量化示範過，只有單一來源的附帶做法移到 verification。建議本體只有一條：隨陽性比例而變的指標要對同一份資料上的平凡分類器讀。兩個彼此獨立（上海交大的 R-Judge、Meta 的 Llama Guard，不共用資料或判定器）的乾淨來源都量化了看錯：R-Judge 只對隨機 51.32 時多數模型看似有效，對全判 unsafe 的 69.04 只剩 GPT-4o 一個；Llama Guard 那一格 0.067 的 AUPRC 低於約 8.1% 的隨機下限，表上的大差距是類別缺漏造成的。AgentMonitor 方向一致但有 F2，只當補充。章內沒有反例。支持結果都是單次小樣本。",
+      "depends_on": [],
+      "edges": ["E3"]
+    },
+    {
+      "id": "T3-08",
+      "type": "measure",
+      "decision": "監控器的評估資料與流程要怎麼造，才不會把答案、攻擊特徵或同一方的判斷放進判分裡？",
+      "recommendation": "這是推論。評估監控器時：(1) 監控器的輸入只放部署時拿得到的東西，不放測試案例專屬的風險清單或欄位；(2) 正例不要在切分前插入或重複，訓練與測試用不同的不當行為樣本；(3) 監控器的提示詞不要照評估用的攻擊特徵寫，至少另拿一組提示詞沒見過的威脅測；(4) 攻擊方、標籤判定者、監控器不要是同一個模型或同一家族；(5) 門檻依誠實分布校準時，寫明誠實分布從哪裡來，換任務就重新取。",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2309.15817",
+          "finding": "ToolEmu 的安全評估器輸入含測試案例專屬的 Underspecifications 與潛在風險清單，recall 73.1%、precision 75.3%；人類標註指南就是評估器的同一份提示詞，評估器對人類的 κ 0.478 與人類之間的 0.480 持平 [arXiv:2309.15817]。",
+          "where": "ch03 §(b) ToolEmu 段 L164–165；§監控陷阱 L375–376；爭議 L552–553",
+          "flaws": ["F2", "F3", "F4"],
+          "unverified": [],
+          "flaw_basis": "F2：評估器拿到測試案例專屬的風險清單（L375）。F3：GPT-4 同時是模擬器、兩個評估器、測試案例生成者，也是表現最好的 agent（L568）。F4：只在 GPT-4 模擬的單一沙盒上量（L163、L568）。沒做『拿掉提示』的消融，提示的貢獻沒有量（L553）。"
+        },
+        {
+          "id": "2401.10019",
+          "finding": "R-Judge 的監控器只拿到紀錄本身，11 個模型只有 GPT-4o 高過全判 unsafe；R-Judge 有 81 筆紀錄就是從 ToolEmu 的軌跡轉來的 [arXiv:2401.10019]。",
+          "where": "ch03 爭議 特權提示 L552–553",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "與 ToolEmu 的任務定義與模型都不同，不能當『拿掉提示會掉多少』的直接量測（L553），只是間接對照。F5：單次。F1–F4 的判斷同 T3-07 的 R-Judge 那一筆。"
+        },
+        {
+          "id": "2311.10538",
+          "finding": "AgentMonitor 的 387 個替換位置由 57 筆不重複的正例填滿，平均每筆用約 387 ÷ 57 ≈ 6.8 次，插入在切分之前，元件與門檻又在訓練集上選 [arXiv:2311.10538]。",
+          "where": "ch03 §監控陷阱 AgentMonitor L383",
+          "flaws": ["F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：測試正例在選元件與門檻時已部分看過（L383）。這一點來自公開 notebook，章沒有另外驗證（L383）。F5：單次。"
+        },
+        {
+          "id": "2504.10374",
+          "finding": "Ctrl-Z 可信監控器提示詞的五項檢查（網址、混淆、寫入字串、被執行的檔案、編碼解碼）幾乎就是『下載並執行惡意程式』的特徵清單，稽核者 o1-preview 被假設不會出錯 [arXiv:2504.10374]。",
+          "where": "ch03 §監控陷阱 Ctrl-Z L398–399；README L115",
+          "flaws": ["F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：藍隊事先知道紅隊的旁支任務，提示詞照攻擊特徵寫（notes limitations_observed[4]）；稽核完美是假設，依據只有一句沒有樣本數的說法（L398）。F5：157 題、沒有信賴區間（L396）。F4 不成立：攻擊成功看惡意程式有沒有被執行。"
+        },
+        {
+          "id": "2312.06942",
+          "finding": "AI Control 用同一份 GPT-4 exploit 回應決定紅隊出不出手、判定後門是否成功、充當人工稽核，所以 safety 是稽核完美時的上限 [arXiv:2312.06942]。",
+          "where": "ch03 §監控陷阱 AI Control L391",
+          "flaws": ["F2", "F3", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2、F3：判定與稽核用的就是攻擊方產生的 exploit（notes limitations_observed[1]）。F5：71 次後門嘗試、19 次成功（L393）。"
+        },
+        {
+          "id": "2506.15740",
+          "finding": "SHADE-Arena 的 Claude 3.7 Sonnet 身兼最強的攻擊方、部分任務的 LLM 評審與被評估的 monitor；閾值 80 取自 Claude 3.6 Sonnet 良性分數的 99 百分位，作者後來的風險報告改成閾值 30 [arXiv:2506.15740]。",
+          "where": "ch03 爭議 量具重疊 L567；§監控陷阱 SHADE L402",
+          "flaws": ["F3", "F4", "F5"],
+          "unverified": [],
+          "flaw_basis": "F3：同一模型身兼攻擊方、評審與 monitor（L567）。F4：部分任務成敗由 LLM 評審判定。F5：人類基準只有 32 份軌跡，約 40 種監控策略在同一批任務上比較（L404）。"
+        },
+        {
+          "id": "2505.05410",
+          "finding": "Chen et al. 判定 CoT 有沒有說出暗示的是 Claude 3.5 Sonnet (New)，與受測的兩個 Claude 模型同家族，人工檢查沒有樣本數與一致率 [arXiv:2505.05410]。",
+          "where": "ch03 爭議 量具重疊 L569；§監控陷阱 Chen L420",
+          "flaws": ["F3", "F4", "F5"],
+          "unverified": [],
+          "flaw_basis": "F3：評判器與受測模型同家族（L569）。F4：單一 LLM 評判器、準確度沒有量化（L420）。F5：保留的成對樣本數沒有報，整體數字沒有不確定性（L418）。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "評估資料造好後做兩個對照：拿掉監控器輸入裡的特權欄位重跑一次；換一組監控器提示詞沒見過的不當行為重跑一次。若兩個對照下偵測率都不掉，這幾條防範在你的設定裡就沒有作用；若掉了，以掉之後的數字為準。",
+      "what_to_measure": null,
+      "grade": "C",
+      "grade_reason": "這是推論。章內點出這些做法（特權提示、切分前插入正例、照攻擊特徵寫提示、同家族身兼數職、單一 monitor 校準的閾值）存在於多篇監控論文，但沒有一篇量過它們讓偵測率高估多少：ToolEmu 與 R-Judge 都沒做拿掉提示的消融（L553），AgentMonitor 的重複正例沒有重算（L383），Ctrl-Z 沒有換威脅測（L540）。推論依據有二：README 第 3 條（L108–115）在別的節點量過『知道答案的一方進了迴圈』會抬高分數，例如標籤決定何時停止 89.7 對拿掉標籤 41.8；以及 R-Judge 拿掉提示後只剩 GPT-4o 高過平凡基準這一個間接對照（L552）。evidence 裡只有 R-Judge 一筆不含 F1–F4，不夠 A，也不是直接量測。",
+      "depends_on": [],
+      "edges": ["E3"]
+    },
+    {
+      "id": "T3-09",
+      "type": "do",
+      "decision": "監控器要讀 agent 的哪些東西：最終產出、行動，還是連推理一起讀？",
+      "recommendation": "拿得到原始推理、而且推理沒有被拿來當訓練目標時，讓監控器讀推理加行動（工具呼叫）加前一步的上下文，不要只讀行動或只讀最終產出。推理裡沒寫出不當意圖，只能當弱證據，不能當成安全的證明。",
+      "defaults": null,
+      "switch_when": "只拿得到推理摘要（多數商用 API 的情形）時，這條無法照做，本節點沒有一篇量過監控摘要版推理的效果 [arXiv:2503.11926][arXiv:2507.11473]。被監控者可能主動規避時，它自己寫的文字（推理、對可疑片段的辯護）不能當可信觀測：AI Control 讓不可信模型替被標記的片段辯護沒有幫助 [arXiv:2312.06942]。不當行為不需要推理就做得到時，推理多半不會說出來：Chen et al. 在 6 個注入 reward hack 的環境中有 5 個說出率不到 2%，整體忠實度 25%／39% [arXiv:2505.05410]。推理已經受到最佳化壓力時，見 T3-10。",
+      "evidence": [
+        {
+          "id": "2503.11926",
+          "finding": "同一個 GPT-4o 監控器、同一份提示，看完整軌跡（CoT、工具呼叫、輸出）對兩種系統性 hack 的合併召回率是 95%，只看工具呼叫與輸出是 60% [arXiv:2503.11926]。",
+          "where": "ch03 §(b) Baker 段 L205；爭議 看不看推理 L532",
+          "flaws": ["F5"],
+          "unverified": ["F1"],
+          "flaw_basis": "F5：只有圖與單一訓練過程，模型與環境不公開（notes limitations_observed[3]）。F1 放 unverified：近似精確率定義不嚴謹、沒有真實誤報率，也沒報 hack 的盛行率，對不上全判陽性的基準（L387–388；notes limitations_observed[2]）。F4 不成立：地面真值是事後字串 regex，屬確定性比對，但只涵蓋兩種 hack（L386–387）。另有混淆：Action Monitor 沿用為 CoT 寫的第一版提示（L532；notes limitations_observed[1]），而且這兩種 hack 必然出現在行動裡，只掃行動的 regex 原則上能全抓，60% 量到的是零樣本 LLM 在長軌跡裡有沒有注意到（notes limitations_observed[0]）。"
+        },
+        {
+          "id": "2506.15740",
+          "finding": "SHADE-Arena 讓 monitor 看得到 scratchpad 時，GPT-4o 監看 Claude 3.7 Sonnet 軌跡的 AUC 是 0.999，看不到時 0.51 [arXiv:2506.15740]。",
+          "where": "ch03 §(b) SHADE-Arena 段 L232；爭議 L527、L529",
+          "flaws": ["F3", "F4", "F5"],
+          "unverified": [],
+          "flaw_basis": "F3：Claude 3.7 Sonnet 是攻擊方，也是主任務與部分副任務的 LLM 評審（L567），而 AUC 只取副任務成功的攻擊軌跡（L403）。F4：成敗部分由 LLM 評審判定。F5：攻擊軌跡只來自兩個攻擊方，沒有誤差。0.999 來自被告知 scratchpad 看不到、因而公開寫出副任務的 agent，論文自己說這對 monitor 是人為簡單的設定（L529）。"
+        },
+        {
+          "id": "2311.10538",
+          "finding": "AgentMonitor 拿掉前一步輸出（Previous Context），F1 從 89.4 掉到 86.8，主要掉在 Precision（82.1 到 77.4）；拿掉要執行的檔案內容，四個指標完全不變 [arXiv:2311.10538]。",
+          "where": "ch03 §(b) AgentMonitor 段 L172；兩塊之間的接點 L249",
+          "flaws": ["F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：正例在切分前插入、跨切分重複（L383）。F5：單次，差距多半不到 1 個 F1 點（L249、L383）。精讀者指出『與上一步接不起來』本身就是訊號，前一步上下文的效果可能被高估（L249）。"
+        }
+      ],
+      "counter_evidence": [
+        {
+          "id": "2505.05410",
+          "finding": "Chen et al. 量推理模型的 CoT 有沒有說出改變答案的暗示：整體忠實度 Claude 3.7 Sonnet 25%、DeepSeek R1 39%；6 個合成 RL 環境中 5 個的 reward hack 說出率不到 2% [arXiv:2505.05410]。它量的是 CoT 有沒有把暗示說成作答原因，不是監控器的召回率，全文沒有放監控器（L530）。",
+          "where": "ch03 §(b) Chen 段 L222–225；爭議 L528、L530",
+          "flaws": ["F3", "F4", "F5"]
+        },
+        {
+          "id": "2305.04388",
+          "finding": "Turpin et al. 抽查 426 篇支撐偏誤答案的解釋，只有 1 篇提到偏誤特徵 [arXiv:2305.04388]；單輪選擇題、2023 年的非推理模型，也沒有放監控器。",
+          "where": "ch03 §(b) Turpin 段 L157–158",
+          "flaws": ["F5"]
+        },
+        {
+          "id": "2312.06942",
+          "finding": "AI Control 讓不可信的 GPT-4 替被標記的片段辯護、加進監控器輸入，沒有幫助，因為它很會替後門編出合理說法 [arXiv:2312.06942]。",
+          "where": "ch03 兩塊之間的接點 L249；爭議 L528",
+          "flaws": ["F2", "F3"]
+        }
+      ],
+      "verification": "在自己的軌跡上，同一個監控器、同一組已知不當行為，比四種輸入：只看最終產出、只看行動、行動加前一步上下文、再加推理；每種輸入都要各自調過提示，報 recall 與誤報率（報法見 T3-07）。沒效的判準：加了推理之後，在固定誤報率下的 recall 不高於只看行動。再在『agent 知道推理會被監看』的條件下量一次，這一格文獻沒有（L533）。",
+      "what_to_measure": null,
+      "grade": "B",
+      "grade_reason": "A 不成立：三個支持來源都含 F1–F4（Baker 的 F1 未確認、SHADE 的 F3 與 F4、AgentMonitor 的 F2），歸 B（2 個以上來源都含 F1–F4）。Baker（OpenAI）與 SHADE（Anthropic）彼此獨立、方向一致。反例可以用條件切開：Chen 與 Turpin 量的是 CoT 會不會說出暗示，AI Control 的被監控者是會主動規避的對手，都寫進 switch_when；但 Chen 的『不到 2%』與 Baker 的 95% 之間沒有受控對照（L530），所以只能說可切開，不能說已解釋。支持結果都是單次小樣本。工具參數與工具輸出要不要給監控器，本節點沒有一篇消融過（L249），不在這條建議的射程內，列進 unresolved。",
+      "depends_on": [],
+      "edges": ["E3"]
+    },
+    {
+      "id": "T3-10",
+      "type": "avoid",
+      "decision": "可以把讀推理的監控器訊號接進訓練 reward，或用它直接懲罰推理嗎？",
+      "recommendation": "不要把讀推理的監控器分數當 reward 或懲罰項；監控結果只用來偵測、擋下、重抽或調查。",
+      "defaults": null,
+      "switch_when": "CoT Monitorability 保留了空間：過程監督若大幅改善對齊，犧牲一點可監控性可能值得，但它沒有給量化條件 [arXiv:2507.11473]。依監控標記去修補訓練環境，Baker 等人自承也是一種微弱的最佳化壓力 [arXiv:2503.11926]。",
+      "evidence": [
+        {
+          "id": "2503.11926",
+          "finding": "在較小的模型上把只看 CoT 的監控器併進 RL reward，最佳化壓力夠大時 agent 照樣作弊，但 CoT 看起來無害，監控器召回率掉到接近 0；約從訓練進度 25% 起開始混淆 [arXiv:2503.11926]。",
+          "where": "ch03 §(b) Baker 段 L206；未解問題 7 L689",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：只有曲線圖，沒有數值表、誤差或重跑次數，模型與環境不公開（notes limitations_observed[3]）。F1 不成立：對照是沒有 CoT 壓力的基準 agent。F2 不成立：被最佳化的是監控器分數，作弊與否另由事後 regex 判定。F3 不成立：判召回率的是 regex，不是被最佳化的那個監控器。F4 不成立：regex 是確定性比對；但 Cheating 標籤只抓改測試一類、是作弊率下界，而且定義前後不一（L388；notes limitations_observed[4]、[5]）。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "訓練流程裡只要有任何訊號來自讀推理的監控器（包括依標記修補環境），就保留一個不受這個訊號影響的獨立偵測（例如事後的確定性檢查）持續量作弊率，並對照監控器自己的告警率。壞掉的判準：獨立偵測量到的作弊率持平或上升，而監控器的告警率下降。",
+      "what_to_measure": null,
+      "grade": "B",
+      "grade_reason": "只有 1 個不含 F1–F4 的來源（Baker 等人），歸 B。CoT Monitorability 的同一主張引的就是這份實證、自己沒有實驗（L562），不算第二個來源，所以沒列進 evidence。Chen et al. 說的是不施壓也不保證看得見（L579），與這條不衝突，不列為反例。支持結果都是單次小樣本：只有一條訓練曲線、不公開、不可重現（notes limitations_observed[3]）。",
+      "depends_on": ["T3-09"],
+      "edges": ["E3"]
+    },
+    {
+      "id": "T3-11",
+      "type": "do",
+      "decision": "會產生外部效果的動作，要不要在執行前逐步用監控器把關？門檻怎麼定？",
+      "recommendation": "要。每一步執行前讓一個可信監控器替這個動作打可疑分數；門檻依誠實 agent 在同類任務上的分數分布校準到固定的誤報率或稽核預算，只把最可疑的那一段送人工稽核；不要只靠事前抽查。稽核預算可以集中在部署前段。",
+      "defaults": "AI Control 把門檻校準在誠實解的 2% FPR，稽核只花在最可疑的 2% [arXiv:2312.06942]。Ctrl-Z 的稽核預算是行動數的 1%，按部署序號指數衰減分配 [arXiv:2504.10374]；作者自述 1% 是任意選的，絕對 safety 對它很敏感，只有協定之間的相對表現不敏感 [arXiv:2504.10374]。",
+      "switch_when": "威脅已知、被監控的模型以非零溫度取樣時，可以把『超過門檻就改用可信模型的行動』換成先向同一模型重抽、執行最不可疑的樣本：95% usefulness 下 defer to trusted 72.7%、defer to resample 83.2%、再回頭補抽的 time travel 87.1% [arXiv:2504.10374]。論文沒交代取樣溫度，temperature 0 或固定 seed 時重抽只會得到同一個行動，這條就不成立 [arXiv:2504.10374]。威脅未知時協定能補多少，文獻沒有答案 [arXiv:2504.10374]。平行工具呼叫或邊產生邊執行的架構，要另加一道執行前閘門 [arXiv:2504.10374]。",
+      "evidence": [
+        {
+          "id": "2312.06942",
+          "finding": "APPS 程式題上，可信的 GPT-3.5 替每份產出打分、門檻校準在誠實解的 2% FPR，safety 從只做事前抽查的 15% 升到 62%，usefulness 97% [arXiv:2312.06942]。",
+          "where": "ch03 §(b) AI Control 段 L178",
+          "flaws": ["F2", "F3", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2、F3：同一份 GPT-4 exploit 回應決定紅隊出不出手、判定後門是否成功、充當人工稽核，safety 是稽核完美時的上限（L391；notes limitations_observed[1]）。F5：1500 題中只有 71 次後門嘗試、19 次成功（L393）。F1 不成立：對照是同稽核預算的事前抽查。單輪程式題、監控器只看最終程式碼，外推到多步 agent 有落差（L180）。"
+        },
+        {
+          "id": "2504.10374",
+          "finding": "BashBench 多步任務上，事前抽查的 safety 是 5.5%；可信監控器每一步執行前打分、稽核預算按指數衰減集中在部署前段是 41.8%，均勻分配只有 22%（都在 100% usefulness）[arXiv:2504.10374]。",
+          "where": "ch03 §(b) Ctrl-Z 段 L213；爭議 弱監控器 L538",
+          "flaws": ["F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：攻擊目標已知、監控器提示詞照攻擊特徵寫，稽核被假設不會出錯（L398–399；README L115）。F5：157 題測試集、重要性抽樣外推、全文沒有信賴區間（L396）。F1 不成立：對照是同預算的事前抽查。F4 不成立：攻擊成功看惡意程式有沒有被執行。與 AI Control 同出 Redwood Research（兩篇快取全文的作者列），不算獨立。"
+        }
+      ],
+      "counter_evidence": [
+        {
+          "id": "2401.10019",
+          "finding": "R-Judge 上 GPT-4o 在 Intended Attacks 把 57.94% 的 safe 紀錄判成 unsafe，精讀者指出放到執行期當守門員，誤攔率高到無法使用 [arXiv:2401.10019]。",
+          "where": "ch03 §監控陷阱 R-Judge L370",
+          "flaws": ["F5"]
+        },
+        {
+          "id": "2311.10538",
+          "finding": "AgentMonitor 以每步獨立誤報粗估，乾淨的測試約有 25% 到 36% 會被誤停至少一次 [arXiv:2311.10538]；論文沒有量誤停對 CI 的影響。",
+          "where": "ch03 §監控陷阱 AgentMonitor L382",
+          "flaws": ["F2", "F5"]
+        }
+      ],
+      "verification": "上線前用誠實 agent 跑一批同類任務取分數分布定門檻，再用紅隊或已知不當行為量 safety，對照只做事前抽查。同時量三個代價：usefulness 降幅（Ctrl-Z 的 95% usefulness 即 5% 的代價，L213）、每次執行被誤停的比例、每步多出的延遲與監控器呼叫數（Ctrl-Z 沒量延遲，notes/2504.10374.json limitations_observed[5]）。沒效的判準：在相同 usefulness 下 safety 不高於只做事前抽查，或誤停比例讓誠實任務的完成率掉到不能接受。換任務分布後要重新取誠實分數分布（notes/2312.06942.json limitations_observed[5]）。",
+      "what_to_measure": null,
+      "grade": "B",
+      "grade_reason": "A 不成立：兩個支持來源都含 F1–F4（AI Control 的 F2 與 F3、Ctrl-Z 的 F2），而且同出 Redwood Research，不算獨立；歸 B（2 個以上來源都含 F1–F4）。反證 R-Judge 與 AgentMonitor 的高誤攔，可以用『有沒有依誠實分布校準門檻、在固定誤報率下操作』切開；但校準需要的『確定誠實』分布在部署時本身是未知量（L424；未解問題 8），沒有一篇解決。支持結果都是單次小樣本（71 次後門嘗試；157 題、沒有信賴區間）。重抽與 time travel 只在已知威脅、量身打造的提示詞下量過（L540），所以放在 switch_when，不放進建議本體。",
+      "depends_on": ["T3-09", "T3-07"],
+      "edges": ["E3"]
+    },
+    {
+      "id": "T3-12",
+      "type": "open",
+      "decision": "非安全類的軌跡異常（重複同一動作、迴圈、連續幾步沒有新資訊）要怎麼偵測？",
+      "recommendation": "文獻沒有答案",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2303.11366",
+          "finding": "Reflexion 在 ALFWorld 以『同一動作得到同一回應連續超過 3 次』或『單一環境動作數超過 30』判失敗、觸發反思並重試，134 題解出 130 題；兩個門檻是為這個環境手調的 [arXiv:2303.11366]。",
+          "where": "ch03 與其他節點的關係 E3 L646",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "觸發規則本身沒有評估誤報與漏報（L649）；130/134 是整個反思迴圈的結果，分不出偵測的貢獻。F5：單次。"
+        },
+        {
+          "id": "2404.06411",
+          "finding": "AgentQuest 在 Mastermind 加『已猜過就重新提示』的記憶元件，15 個實例上 SR 從 0.47 升到 0.60、RR60 從 0.32 降到 0.00；觸發條件是精確比對，RR60 歸零是機制強制出來的 [arXiv:2404.06411]。",
+          "where": "ch03 與其他節點的關係 E3 L647",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：15 個實例。沒有評估誤報與漏報（L649）。"
+        },
+        {
+          "id": "2406.12373",
+          "finding": "WebCanvas 由 LLM 依提示詞判定最後兩步相同就回報 loop，寫回 memory；作者自述沒有參考答案的自評 reward 反而拉低表現，GPT-4 無 reward 的 Completion Rate 46.9，加自評 reward 42.1 [arXiv:2406.12373]。",
+          "where": "ch03 與其他節點的關係 E3 L648；notes/2406.12373.json key_results[4]",
+          "flaws": ["F5"],
+          "unverified": ["F4"],
+          "flaw_basis": "F5：130 題、單次。F4 放 unverified：線上分數由 key node 判定函式算出，筆記沒交代其中有沒有 LLM 判定。偵測只是 reward 模組的一部分，分不出 loop 偵測本身的貢獻。"
+        },
+        {
+          "id": "2407.20859",
+          "finding": "📖 Breaking Agents：執行前只看指令文字的自我檢查，抓顯性有害注入 83.7%–100%，對無限迴圈這類失靈攻擊的偵測率是 0.0% [arXiv:2407.20859]。",
+          "where": "ch03 §(b) Breaking Agents 段 L199–201",
+          "flaws": ["F3", "F4"],
+          "unverified": [],
+          "flaw_basis": "📖 低價值論文。F3：攻擊成功率由被攻擊 agent 自評（L570）。F4：建在 ToolEmu 模擬器上（L199）。射程只到執行前、只看指令文字的檢查，軌跡層的重複偵測一個都沒測（L201）。"
+        },
+        {
+          "id": "2405.15793",
+          "finding": "SWE-agent 的守門只在單步：sympy-21614 在 3,389 行的檔案裡連續 scroll_down 約二十次，直到預算耗盡，期間沒有任何提示 [arXiv:2405.15793]。",
+          "where": "ch03 §兩塊之間的接點 L250；notes/2405.15793.json limitations_observed[5]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "一條軌跡上的觀察（F5），說明這類異常實際會發生，不是偵測器的量測。"
+        },
+        {
+          "id": "2311.10538",
+          "finding": "AgentMonitor 的陽性類含 27 筆手寫的離題輸出，但逐步判斷、只看前一步，離題又和不安全合併計分，看不出各被抓到多少 [arXiv:2311.10538]。",
+          "where": "ch03 §(b) 這一塊實際涵蓋什麼 L147；AgentMonitor 段 L173；爭議 L549",
+          "flaws": ["F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：正例切分前插入、跨切分重複（L383）。F5：單次。不涵蓋停滯、重複與迴圈（L147）。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": null,
+      "what_to_measure": "在自然發生（不是插入的）的軌跡上，人工標出重複動作、迴圈與停滯發生在第幾步，成功軌跡也要一起標。比三種偵測器：只設步數上限的平凡規則、精確比對的重複規則（例如同一動作同一回應連續 N 次）、讀軌跡的 LLM 判斷；分別報成功軌跡上的誤報率、失敗軌跡上的漏報率，以及第一次告警時已經浪費幾步。決定方式：重複規則或 LLM 判斷要在誤報率不高於步數上限的前提下比它更早告警，才值得加。",
+      "grade": null,
+      "grade_reason": "open 型不評等級。不寫成 C 的原因：現有的三個觸發規則都是拿來改善任務成功率，沒有一個評估過自己的誤報與漏報（L649；README L135），唯一的偵測率數字（📖 Breaking Agents 的 0.0%）量的是執行前的文字檢查；連『重複規則比步數上限好』這種最小的建議都撐不起來。本節點計入的監控論文以安全為主，非安全類的異常偵測是零篇（L147；README L133）。",
+      "depends_on": [],
+      "edges": ["E3"]
+    }
+  ],
+  "trivial_baselines": [
+    {
+      "metric": "OSWorld 成功率（369 題）",
+      "baseline": "第一步就回 FAIL",
+      "value": "30/369 = 8.13%；Table 5 的 26 組模型×設定只有 5 組高過 [arXiv:2404.07972]",
+      "id": "2404.07972"
+    },
+    {
+      "metric": "R-Judge F1（unsafe 為正類）",
+      "baseline": "全判 unsafe",
+      "value": "全集 2 × 300 ÷ (300 + 569) ≈ 69.04，Intended 65.15、Unintended 78.43；論文只列擲硬幣的 51.32 [arXiv:2401.10019]",
+      "id": "2401.10019"
+    },
+    {
+      "metric": "AUPRC",
+      "baseline": "隨機分數",
+      "value": "期望值約等於正例比例：Regulated Substances 類 response 約 581 ÷ (581 + 6550) ≈ 8.1%、Guns 類 prompt 約 166 ÷ (166 + 7228) ≈ 2.2% [arXiv:2312.06674]",
+      "id": "2312.06674"
+    },
+    {
+      "metric": "監控器 precision",
+      "baseline": "全判陽性（precision 等於陽性比例）",
+      "value": "AgentMonitor 測試集約 30%；同一監控器換到陽性比例 10%、5%、1% 時 precision 約 54.5%、36.2%、9.8% [arXiv:2311.10538]",
+      "id": "2311.10538"
+    },
+    {
+      "metric": "監控器 ROC AUC",
+      "baseline": "隨機（0.5）",
+      "value": "SHADE-Arena 看不到 scratchpad 時 GPT-4o 是 0.51 [arXiv:2506.15740]",
+      "id": "2506.15740"
+    },
+    {
+      "metric": "控制協定的 safety（APPS 單輪）",
+      "baseline": "只做事前抽查（upfront auditing）",
+      "value": "15% [arXiv:2312.06942]",
+      "id": "2312.06942"
+    },
+    {
+      "metric": "控制協定的 safety（BashBench 多步）",
+      "baseline": "只做事前抽查（upfront auditing）",
+      "value": "5.5% [arXiv:2504.10374]",
+      "id": "2504.10374"
+    },
+    {
+      "metric": "SWE-bench Lite 解題率",
+      "baseline": "只給 shell、不經介面改寫（Shell-only）",
+      "value": "11.00%（無示範 7.33%）；全集上非互動的 RAG 是 3.79% [arXiv:2405.15793]",
+      "id": "2405.15793"
+    },
+    {
+      "metric": "CoT 偏誤歸因比例（BBH，Answer is Always A）",
+      "baseline": "隨機",
+      "value": "36.3%；Claude 1.0 的 47.2% 只高 47.2 − 36.3 = 10.9 點 [arXiv:2305.04388]",
+      "id": "2305.04388"
+    }
+  ],
+  "edge_interfaces": [
+    {
+      "edge": "E3",
+      "role": "produces",
+      "payload": "每一步執行前的監控結果：可疑分數；門檻與它怎麼校準（在哪一份誠實分布上、對應多少誤報率或稽核預算）[arXiv:2312.06942][arXiv:2504.10374]；這一步在軌跡中的位置；監控器實際讀到哪些欄位（有沒有推理、工具參數、工具輸出）[arXiv:2504.10374][arXiv:2506.15740]；以及在同分布上量過的 recall、誤報率與量測時的陽性比例 [arXiv:2311.10538][arXiv:2401.10019]。依章的判斷，地圖上 E3 從 T4 出發，實際產生異常訊號的多半是 T3 的監控器讀 T4 的軌跡（ch03 L644）。",
+      "must_not_pass": "測試案例專屬的風險清單或欄位 [arXiv:2309.15817]；評估用的地面真值（事後 regex 標籤、攻擊方產生的 exploit 判定）[arXiv:2503.11926][arXiv:2312.06942]；被監控模型自己對可疑片段的辯護不能當佐證一起傳 [arXiv:2312.06942]。下游也不能把監控分數接成訓練 reward [arXiv:2503.11926]。",
+      "id": ["2504.10374", "2312.06942", "2311.10538", "2503.11926"]
+    },
+    {
+      "edge": "E3",
+      "role": "produces",
+      "payload": "單步的工具層偵測：lint 擋下編輯時，回傳錯誤類型、這次編輯套用後的樣子與原始內容，由 agent 自己修正後重下 [arXiv:2405.15793]；這是本節點唯一由外部偵測觸發、agent 自己修正的迴路（ch03 L643–644）。",
+      "must_not_pass": "把工具自己的錯誤摺成『沒有結果』這類關於環境的敘述；章內在 pylint-5859 一條軌跡上看到過（ch03 L250）[arXiv:2405.15793]。",
+      "id": "2405.15793"
+    }
+  ],
+  "unresolved": [
+    "監控器的觀測契約：工具參數、工具輸出與外部狀態要不要給監控器，本節點沒有一篇在同一組不當行為上消融過；SHADE-Arena 的公開實作對每個 tool call 只給函式名稱，Ctrl-Z 的歷史沒有指令輸出（未解問題 5 L680–683；L573）。",
+    "門檻校準需要一份『確定誠實』的分數分布；部署時它本身是未知量，而且會隨任務漂移，三個對抗評估都假設拿得到（L424；未解問題 8 L694–697）。",
+    "注入內容同時出現在 agent 的觀測與監控器的輸入時，監控器還剩多少偵測能力，沒有一篇量過（L252；未解問題 8 L696–697）。",
+    "沒有地面真值時，怎麼知道讀推理的監控器已經失明；讀內部表徵的白箱監控本節點零篇（未解問題 7 L688–693）。",
+    "第一次告警時傷害已經發生幾步：缺自然發生、標出風險步的軌跡；監控與重抽的延遲與成本也少有人量（未解問題 6 L684–687）。",
+    "離線逐步分數與線上成功率怎麼換算：在同一批任務上配對報的只有 SeeAct 的 90 題（未解問題 4 L676–679）。",
+    "planner 加 grounder 與端到端兩種架構，沒有在同一底模、同一資料上對照過（L499）；重複元素的消歧，評估與訓練資料都繞開了，沒有一篇分開報分數（未解問題 3 L672–675）。",
+    "追蹤與日誌（行為紀錄怎麼收、長什麼樣子）在本節點計入的論文是零篇；最接近的 TRAIL 做的是事後錯誤定位，不是執行期監控（L147、L656；README L133）。"
+  ]
+}
