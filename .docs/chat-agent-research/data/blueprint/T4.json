@@ -1,923 +1,749 @@
 {
- "node": "T4",
- "decisions": [
-  {
-   "id": "T4-01",
-   "type": "measure",
-   "decision": "步驟評分器（PRM、步驟分數、逐步判官）要用什麼量法驗收，才不會把重排效果當成找錯能力？",
-   "recommendation": "在含有錯與無錯兩類樣本、帶步驟真值的評估集上直接量定位：要求評分器輸出最早錯誤步，全對時輸出「沒有錯」，分別算錯誤樣本的命中率與正確樣本答「沒有錯」的比率，再取調和平均；best-of-N、加權多數決或下游成功率只當輔助數字，而且一定和同 N 的多數決並列；兩種量法排序不一致時，拿評分器去定位錯誤或觸發修正的用途，以直接定位的結果為準。",
-   "defaults": "最早錯誤步協定：輸出最早錯誤步的索引、全對輸出 -1，F1 取錯誤樣本命中率與正確樣本答 -1 比率的調和平均，並依最終答案對錯平衡抽樣 [arXiv:2412.06559]。",
-   "switch_when": "評分器只拿來在 N 個候選中重排、不拿來定位或觸發時，可以 BoN 為主要量法，但一定要對同 N 多數決：OmegaPRM 在四組設定上比多數決只多 2.2／3.5／0.9／1.6 點 [arXiv:2406.06592]；Qwen 的 PRM-7B 在 Best-of-64 時是 56.1，還低於 maj@64 的 56.3 [arXiv:2501.07301]。",
-   "evidence": [
+  "node": "T4",
+  "decisions": [
     {
-     "id": "2501.07301",
-     "finding": "在同一批 86 萬筆題目與回應上，ProcessBench 平均 F1 是 LLM 判官標註 46.5、MC 估計標註 40.1，Best-of-8 平均卻是 MC 65.9、判官 65.3，排序相反 [arXiv:2501.07301]；人工標註的 PRM800K 組在 ProcessBench 是 56.5、在 Best-of-8 是 64.9，BoN 上各組差距都在 1.6 分以內 [arXiv:2501.07301]；放大到 Best-of-64，PRM-7B 平均 56.1 低於 maj@64 的 56.3 [arXiv:2501.07301]。",
-     "where": "ch04 §軌跡／步驟層級評估與 process reward（數學這條線，2025 年 1 月 Qwen）L115；§評估方式與關鍵數字 陷阱〈best-of-N 的最終答案正確率，被當成步驟評分器的品質〉L303；notes/2501.07301.json limitations_observed[0][11]",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F5：筆記 limitations_observed[1] 指出 BoN 差距 0.4–1.4 分、沒有 seed 或變異數。F1：BoN 有對 maj@8／maj@64；ProcessBench 的 F1 含正確樣本一類（ch04 L159），一律判全對或一律判錯都會被拉低（L311），不缺平凡基準。F2：ProcessBench 標籤是 3 位專家一致才定（L159），受評 PRM 訓練時看不到。F3：limitations_observed[2] 指出 ProcessBench 由同一團隊發表、判官提示詞與協定同形，會偏袒判官組；但本條要的是「ProcessBench 分得開、BoN 分不開」，MC 組與 PRM800K 組都沒用判官，就本條量測不構成 F3。F4：判分是專家索引的完全比對與最終答案比對，依規格補充不算 F4。另有混淆：PRM800K 組資料量與分布不同（L115），所以 56.5 對 40.1 不能讀成純標籤來源的差。"
+      "id": "T4-01",
+      "type": "measure",
+      "decision": "步驟評分器（PRM、步驟分數、逐步判官）要用什麼量法驗收，才不會把重排效果當成找錯能力？",
+      "recommendation": "在含有錯與無錯兩類樣本、帶步驟真值的評估集上直接量定位：要求評分器輸出最早錯誤步，全對時輸出「沒有錯」，分別算錯誤樣本的命中率與正確樣本答「沒有錯」的比率，再取調和平均；best-of-N、加權多數決或下游成功率只當輔助數字，而且一定和同 N 的多數決並列；兩種量法排序不一致時，拿評分器去定位錯誤或觸發修正的用途，以直接定位的結果為準。",
+      "defaults": "最早錯誤步協定：輸出最早錯誤步的索引、全對輸出 -1，F1 取錯誤樣本命中率與正確樣本答 -1 比率的調和平均，並依最終答案對錯平衡抽樣 [arXiv:2412.06559]。",
+      "switch_when": "評分器只拿來在 N 個候選中重排、不拿來定位或觸發時，可以 BoN 為主要量法，但一定要對同 N 多數決：OmegaPRM 在四組設定上比多數決只多 2.2／3.5／0.9／1.6 點 [arXiv:2406.06592]；Qwen 的 PRM-7B 在 Best-of-64 時是 56.1，還低於 maj@64 的 56.3 [arXiv:2501.07301]。",
+      "evidence": [
+        {
+          "id": "2501.07301",
+          "finding": "在同一批 86 萬筆題目與回應上，ProcessBench 平均 F1 是 LLM 判官標註 46.5、MC 估計標註 40.1，Best-of-8 平均卻是 MC 65.9、判官 65.3，排序相反 [arXiv:2501.07301]；人工標註的 PRM800K 組在 ProcessBench 是 56.5、在 Best-of-8 是 64.9，BoN 上各組差距都在 1.6 分以內 [arXiv:2501.07301]；放大到 Best-of-64，PRM-7B 平均 56.1 低於 maj@64 的 56.3 [arXiv:2501.07301]。",
+          "where": "ch04 §軌跡／步驟層級評估與 process reward（數學這條線，2025 年 1 月 Qwen）L115；§評估方式與關鍵數字 陷阱〈best-of-N 的最終答案正確率，被當成步驟評分器的品質〉L303；notes/2501.07301.json limitations_observed[0][11]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：筆記 limitations_observed[1] 指出 BoN 差距 0.4–1.4 分、沒有 seed 或變異數。F1：BoN 有對 maj@8／maj@64；ProcessBench 的 F1 含正確樣本一類（ch04 L159），一律判全對或一律判錯都會被拉低（L311），不缺平凡基準。F2：ProcessBench 標籤是 3 位專家一致才定（L159），受評 PRM 訓練時看不到。F3：limitations_observed[2] 指出 ProcessBench 由同一團隊發表、判官提示詞與協定同形，會偏袒判官組；但本條要的是「ProcessBench 分得開、BoN 分不開」，MC 組與 PRM800K 組都沒用判官，就本條量測不構成 F3。F4：判分是專家索引的完全比對與最終答案比對，依規格補充不算 F4。另有混淆：PRM800K 組資料量與分布不同（L115），所以 56.5 對 40.1 不能讀成純標籤來源的差。"
+        },
+        {
+          "id": "2406.06592",
+          "finding": "Gemini Pro 在 MATH500 上，k=64 的 PRM 加權多數決是 69.4，多數決本身 67.2、PRM800K 67.6 [arXiv:2406.06592]；頭條的 51 → 69.4 裡，67.2 − 51 = 16.2 點來自多數決，69.4 − 67.2 = 2.2 點才來自 PRM [arXiv:2406.06592]；它據以主張自動標籤勝過人工的唯一下游比較就是加權多數決，沒有量任何錯誤步定位 [arXiv:2406.06592]。",
+          "where": "ch04 §軌跡／步驟層級評估與 process reward（2024 年 6 月 OmegaPRM）L113；〈頭條數字與打折後的讀法〉表 L285；陷阱〈增益多半來自投票〉L304（程式驗證證實）；爭議〈人工對自動〉L454",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：筆記 limitations_observed[1] 沒有重複 seed，粗估 MATH500 標準誤約 ±2.1 點。F1：表內有同 k 的多數決（L113），本條正是用它拆出增益。F2／F3：判分是最終答案對 golden answer 的比對，PRM 不參與判分（L249）。F4：最終答案比對屬確定性判分，依規格補充不算 F4。51 與 69.4 的集合與解碼不同（limitations_observed[0]），本條只用同表的 67.2 對 69.4。"
+        },
+        {
+          "id": "2412.06559",
+          "finding": "Math-Shepherd-PRM-7B 在 ProcessBench 找最早錯誤步的平均 F1 只有 31.5 [arXiv:2412.06559]，而它在原論文以 best-of-256 量時勝過 ORM，GSM8K 93.2 對 91.8、MATH500 44.5 對 40.4 [arXiv:2312.08935]；ProcessBench 的出發點正是 PRM 過去多透過 BoN 間接評估、結果受生成模型左右 [arXiv:2412.06559]。",
+          "where": "ch04 §軌跡分析、失敗分類與歸因（2024 年 12 月 ProcessBench）L159、L162；§數學這條線 L112；陷阱〈落差有直接證據〉L303",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "F5：單次評估（規格補充：單次即標）。F4：專家共識標籤、索引完全比對，不算 F4。F1：F1 取兩類調和平均，平凡預測會被拉低（L311）。F3：筆記 limitations_observed[7] 指出生成器與受評 critic 重疊，但 Math-Shepherd-PRM 不是生成器，不影響本條。另有混淆：步驟由 Qwen2.5-72B-Instruct 重切成段落，可能讓分步慣例不同的 PRM 吃虧（limitations_observed[3]），31.5 有一部分可能是格式偏移，不屬 F1–F4 但讀數要打折。與 2501.07301 同一團隊（ch04 L165），不算獨立來源。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "在自己的步驟真值集上，對同一個評分器同時量直接定位的兩類 F1 與 BoN；平凡基準是一律答「沒有錯」、一律判第 1 步錯，以及同 N 的多數決。兩類 F1 不高於這兩個平凡預測，或 BoN 落在同 N 多數決的誤差範圍內，就判這個評分器沒有效。兩種量法排序不同時兩者都報，依用途取捨（見 switch_when）。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "逐點對照 A：(1) flaws 與 unverified 都不含 F1–F4 的來源有 2501.07301、2406.06592、2412.06559 三個；其中 2412.06559 與 2501.07301 出自同一團隊（ch04 L165、L366），依規格補充只算一個，所以獨立的是 2501.07301 與 2406.06592（不同作者群；兩者共用的 MATH500 屬公開基準，不算共用資料）。(2) 方向一致：兩者都顯示只看 BoN 或加權多數決，會看不出或高估步驟評分器的差異。(3) 有量化數字。(4) 章的〈爭議、矛盾與反證〉裡沒有「BoN 與直接定位排序一致、因而推翻本條」的例子；OmegaPRM 與 Qwen 對「人工或自動標籤誰好」結論相反（L454），正是量法不同造成的，支持本條。依規格補充，measure 型看的是「不這樣量會看錯」。支持結果全是單次執行（F5），屬雜訊旗標；BoN 上的差距本身就在雜訊範圍內，這正是本條的論點。",
+      "depends_on": [],
+      "edges": ["E3"]
     },
     {
-     "id": "2406.06592",
-     "finding": "Gemini Pro 在 MATH500 上，k=64 的 PRM 加權多數決是 69.4，多數決本身 67.2、PRM800K 67.6 [arXiv:2406.06592]；頭條的 51 → 69.4 裡，67.2 − 51 = 16.2 點來自多數決，69.4 − 67.2 = 2.2 點才來自 PRM [arXiv:2406.06592]；它據以主張自動標籤勝過人工的唯一下游比較就是加權多數決，沒有量任何錯誤步定位 [arXiv:2406.06592]。",
-     "where": "ch04 §軌跡／步驟層級評估與 process reward（2024 年 6 月 OmegaPRM）L113；〈頭條數字與打折後的讀法〉表 L285；陷阱〈增益多半來自投票〉L304（程式驗證證實）；爭議〈人工對自動〉L454",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F5：筆記 limitations_observed[1] 沒有重複 seed，粗估 MATH500 標準誤約 ±2.1 點。F1：表內有同 k 的多數決（L113），本條正是用它拆出增益。F2／F3：判分是最終答案對 golden answer 的比對，PRM 不參與判分（L249）。F4：最終答案比對屬確定性判分，依規格補充不算 F4。51 與 69.4 的集合與解碼不同（limitations_observed[0]），本條只用同表的 67.2 對 69.4。"
+      "id": "T4-02",
+      "type": "measure",
+      "decision": "評估錯誤偵測器或失敗歸因器時，評估集要不要放進成功（無錯）的軌跡？",
+      "recommendation": "評估集同時放進有錯與無錯（成功）的軌跡，讓偵測器可以回答「沒有錯」；分兩類報：有錯軌跡的定位命中率、無錯軌跡判「沒有錯」的比率（即誤報率的補數），再取兩者的調和平均；只在失敗軌跡上算出的定位準確率，不能當作偵測器可以接上觸發修正的證據。",
+      "defaults": "依最終答案對錯平衡抽樣，兩類各自計分後取調和平均 [arXiv:2412.06559]。",
+      "switch_when": "成功軌跡拿不到逐步真值、標註成本太高時（Who&When 三位標註者標 184 條失敗軌跡約花 84 工時 [arXiv:2505.00212]），至少在軌跡層級量偵測器把專家認定成功的軌跡判成失敗的比例，例如 AgentRewardBench 的 GPT-4o (A) 成功 recall 是 83.1，即 100 − 83.1 = 16.9% 的成功軌跡被判失敗 [arXiv:2504.08942]。",
+      "evidence": [
+        {
+          "id": "2412.06559",
+          "finding": "ProcessBench 把錯誤樣本命中率與正確樣本答 -1 的比率取調和平均 [arXiv:2412.06559]；Qwen2.5-Math-7B-Instruct 在 GSM8K 的兩類是 15.5 與 100.0，F1 為 2×15.5×100/(15.5+100) ≈ 26.8 [arXiv:2412.06559]；Llama-3.1-8B-Instruct 反過來，GSM8K 錯誤樣本 44.4、正確樣本只有 6.2，F1 為 10.9 [arXiv:2412.06559]；只看錯誤樣本時 Llama-3.1-8B-Instruct 的 44.4 高於 Qwen2.5-Math-7B-Instruct 的 15.5，取兩類調和平均後是 10.9 對 26.8，排序對調 [arXiv:2412.06559]。",
+          "where": "ch04 陷阱〈ProcessBench 是反例〉L311；E4〈ProcessBench 是唯一在步驟層級量「全對時答 -1」的〉L662；notes/2412.06559.json key_results[3]（44.4／6.2 → 10.9）",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "專家共識標籤、兩類平衡抽樣（ch04 L159），不是 F1；判分是索引完全比對，不是 F4；受評模型不產生標籤，不是 F2／F3。筆記 limitations_observed[6] 指出部分小模型的低分是格式解析失敗，Qwen2.5-Math-7B-Instruct 正確樣本的 100.0 不受影響；Llama-3.1-8B-Instruct 的 6.2 有沒有混入解析失敗，章與筆記沒有說。單次評估，F5。"
+        },
+        {
+          "id": "2311.08516",
+          "finding": "BIG-Bench Mistake 上，從 trace-level 到 step-level 再到 CoT step-level，生成呼叫越多、模型越容易判出至少一個錯：GPT-4 在 Dyck 的無錯軌跡準確率從 98.41 掉到 78.57 再到 13.79 [arXiv:2311.08516]；作者指出 overall 分數偏向 step-level，部分是因為資料集中有錯軌跡佔多數 [arXiv:2311.08516]。",
+          "where": "notes/2311.08516.json key_results[2]；本篇在 ch04 §與其他節點的關係 E3〈T4 交出的異常訊號〉L646 被引用",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "標籤是人工標首個邏輯錯誤步，Krippendorff's α 0.97（筆記 key_results[0]），判分為索引比對，不是 F4；有錯與無錯軌跡分開報，另有全猜有錯的基準（key_results[3]），不是 F1；GPT-4 檢查的是 PaLM 2 產生的軌跡（limitations_observed[6]），不是 F3；標籤不進迴圈，不是 F2。F5：單次執行，logical deduction 只有 6 條無錯軌跡（limitations_observed[5]），Dyck 的分母較大。"
+        },
+        {
+          "id": "2505.00212",
+          "finding": "Who&When 的 184 條全是失敗軌跡，Without-GT 提示詞仍告訴 judge 這是錯的解答，所以誤報率從沒被量過 [arXiv:2505.00212]；同類的 AgenTracer 與 AgentDebug 也只收失敗軌跡 [arXiv:2509.03312][arXiv:2509.25370]。",
+          "where": "ch04 陷阱〈失敗歸因的評估集只有失敗軌跡〉L309；E3〈誤報率多半沒量〉L648；未解問題 2 L680；README L136",
+          "flaws": ["F1", "F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "這一條描述缺口，不是量到的破壞。F1：只和 random 比（ch04 L333）；F2：有 GT 的設定把真值放進提示詞（L379、L425）；F5：hand-crafted 只有 58 條、沒有重複執行（L344）。"
+        },
+        {
+          "id": "2503.13657",
+          "finding": "MAST Table 7 中，FM-3.3 在 ChatDev 的成功 run 是 20.0%、失敗 run 是 25.0%，MetaGPT 的 FM-1.1 在成功 run 是 33.3%，反而高於失敗 run 的 16.7% [arXiv:2503.13657]；以這類失敗模式當觸發條件，會把成功軌跡也判成有異常（本章推論）[arXiv:2503.13657]。",
+          "where": "ch04 §成功的軌跡也帶著「錯誤」L485；E4 L664",
+          "flaws": ["F5"],
+          "unverified": ["F4"],
+          "flaw_basis": "F5：筆記 limitations_observed[7] 推算 ChatDev 成功約 10 條、MetaGPT 成功約 12 條。F4：MAST-Data 由單一 o1 judge 標註（ch04 L167），Table 7 的標籤是 judge 給的還是人工給的，章與筆記沒寫明，放 unverified。"
+        },
+        {
+          "id": "2504.08942",
+          "finding": "AgentRewardBench 以 6 位專家的標註為準，GPT-4o (A) 的成功 recall 是 83.1，即專家認定成功的軌跡有 100 − 83.1 = 16.9% 被判成失敗，規則式評估的 recall 只有 55.9 [arXiv:2504.08942]。",
+          "where": "ch04 E4〈AgentRewardBench 量了軌跡層級的 recall〉L663；§軌跡／步驟層級評估 L122",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "以專家標註為準，依規格補充不是 F4（judge 是被量的對象）；有規則式評估當對照，不是 F1；judge 不產生軌跡，不是 F2。judge 與 agent 骨幹重疊（筆記 limitations_observed[10]）是被評對象可能的自我偏好，不改變以專家為準的量測，不算 F3。F5：每個 agent 的測試軌跡少、沒有信賴區間（limitations_observed[4]）；標註政策偏寬（limitations_observed[7]）會讓專家認定的成功偏多。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "對同一個偵測器算兩組數字：只用失敗軌跡的定位準確率，以及兩類混合時的兩類 F1 與誤報率；平凡基準是一律判有錯（判第 1 步）與一律判沒有錯。兩類 F1 不高於這兩個平凡預測，或在無錯軌跡上判「沒有錯」的比率接近一律判有錯的 0，就判為還不能接上 E3。只看失敗軌跡的分數與兩類 F1 排名不同時，以兩類 F1 為準。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "逐點對照 A：(1) 不含 F1–F4 的來源有 2412.06559、2311.08516、2504.08942；2412.06559 與 2311.08516 不同作者群、不同資料（數學題對 BIG-Bench Mistake），彼此獨立。(2) 方向一致：兩者都量到「只看有錯樣本會獎勵過度判錯」——ProcessBench 上只看錯誤樣本時 Llama-3.1-8B-Instruct（44.4）排在 Qwen2.5-Math-7B-Instruct（15.5）之前，兩類 F1 下排序對調（10.9 對 26.8，筆記 key_results[3]）；Tyen 的 GPT-4 隨呼叫數增加，無錯軌跡準確率掉到 13.79。(3) 有量化數字。(4) 章內沒有反例；ProcessBench 本身就是章點名的「反例」（L311），支持本條。依規格補充，measure 型看的是「不這樣量會看錯」。支持結果全是單次執行（F5），屬雜訊旗標。",
+      "depends_on": [],
+      "edges": ["E3", "E4"]
     },
     {
-     "id": "2412.06559",
-     "finding": "Math-Shepherd-PRM-7B 在 ProcessBench 找最早錯誤步的平均 F1 只有 31.5 [arXiv:2412.06559]，而它在原論文以 best-of-256 量時勝過 ORM，GSM8K 93.2 對 91.8、MATH500 44.5 對 40.4 [arXiv:2312.08935]；ProcessBench 的出發點正是 PRM 過去多透過 BoN 間接評估、結果受生成模型左右 [arXiv:2412.06559]。",
-     "where": "ch04 §軌跡分析、失敗分類與歸因（2024 年 12 月 ProcessBench）L159、L162；§數學這條線 L112；陷阱〈落差有直接證據〉L303",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F5：單次評估（規格補充：單次即標）。F4：專家共識標籤、索引完全比對，不算 F4。F1：F1 取兩類調和平均，平凡預測會被拉低（L311）。F3：筆記 limitations_observed[7] 指出生成器與受評 critic 重疊，但 Math-Shepherd-PRM 不是生成器，不影響本條。另有混淆：步驟由 Qwen2.5-72B-Instruct 重切成段落，可能讓分步慣例不同的 PRM 吃虧（limitations_observed[3]），31.5 有一部分可能是格式偏移，不屬 F1–F4 但讀數要打折。與 2501.07301 同一團隊（ch04 L165），不算獨立來源。"
+      "id": "T4-03",
+      "type": "measure",
+      "decision": "偵測器、評審或歸因器的頭條數字，要對照哪些平凡基準、命中要怎麼定義，才不會看錯？",
+      "recommendation": "在同一批資料上算出並和頭條並列：一律判多數類（一律判失敗、一律答「沒出現」）、一律猜第一步、一律猜最常出錯的 agent、均勻隨機；放寬容忍度（±k）時，每個 k 都重算一次隨機基準；報 accuracy 時一定附正例基率與兩類各自的 recall 或 precision；命中定義寫死成索引完全比對，不用子字串比對，並記錄標籤版本；依軌跡長度分桶報分數，每桶附同長度下的隨機基準；超出上下文或輸出無法解析的樣本留在分母裡算判錯，並另報比例。",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2311.08516",
+          "finding": "BIG-Bench Mistake 上一律猜「有錯」的加權 F1 是 78 [arXiv:2311.08516]；GPT-3.5-Turbo 的 direct trace-level 只有 3.76–46.57，低於這個基準 [arXiv:2311.08516]。",
+          "where": "notes/2311.08516.json key_results[3]、limitations_observed[4]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "人工標籤（α 0.97，key_results[0]），不是 F4；本條本身就是平凡基準的比較，不是 F1；GPT-3.5-Turbo 評的是 PaLM 2 的軌跡，不是 F3；不是 F2。limitations_observed[4] 指出 GPT-4 家族有 10／15 與 6／10 格高於基準，所以結論是「多數模型低於、較強模型稍高且依任務波動」。F5：單次執行。"
+        },
+        {
+          "id": "2504.08942",
+          "finding": "副作用 recall 都能寫成 k/72，測試集中約 72/1106 ≈ 6.51% 有副作用 [arXiv:2504.08942]；GPT-4o mini (A) 的副作用 precision 7.2 幾乎等於基率，最佳的 14.1 也只有基率的 14.1 ÷ 6.51 ≈ 2.17 倍 [arXiv:2504.08942]；GPT-4o (A) 的副作用 recall 91.7、precision 7.7，換算約判出 91.7% × 72 ÷ 7.7% ≈ 857 條有副作用 [arXiv:2504.08942]。",
+          "where": "ch04〈頭條數字與打折後的讀法〉表 L296；陷阱〈AgentRewardBench 只比 precision〉L314；§程式驗證 L394（證實 72 是唯一解）",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "以專家標註為準，不是 F4；本條是對基率的比較，不是 F1；judge 不產生軌跡，不是 F2／F3。F5：單次執行、每個 agent 的軌跡少（筆記 limitations_observed[4]）。"
+        },
+        {
+          "id": "2503.13657",
+          "finding": "MAST judge 在 14 個稀疏二元標籤上的 accuracy 是 0.94 [arXiv:2503.13657]；本章在「對全部格子做 micro 計算」的前提下，取 recall 0.77、precision 0.833，反推正例率約 (1 − 0.94)/((1 − 0.77) + 0.77 × (1/0.833 − 1)) ≈ 0.156，一律答「沒出現」的 accuracy 也有約 1 − 0.156 ≈ 0.844 [arXiv:2503.13657]。",
+          "where": "ch04 陷阱〈MAST judge 的 accuracy 大半來自負例〉L313",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "judge 對人工標籤的量測，judge 是被量的對象，不是 F4；本條是平凡基準的比較，不是 F1；不是 F2／F3。「micro 計算」這個前提論文沒寫明（L313），是條件式推算。F5：人工一致度只來自 15 條軌跡（筆記 limitations_observed[0]）。"
+        },
+        {
+          "id": "2505.00212",
+          "finding": "Who&When hand-crafted 一律猜 WebSurfer，agent-level 在現行標籤是 33/58 ≈ 56.9%，論文當時的標籤是 31/58 ≈ 53.4%，與 all-at-once 的 55.17／53.44 相當 [arXiv:2505.00212]；均勻隨機在 ±2、±3、±5 分別是 16.05、21.77、31.70，step-by-step 在 ±3 的 18.10 低於隨機 [arXiv:2505.00212]；±1 時 step-by-step 最高（14.66），±5 時 all-at-once 以 43.10 反超 [arXiv:2505.00212]；公開評分腳本用子字串比對，真值 4 時預測 14 也算命中，論文實驗時還有 3/58 條標籤指到 log 結尾之後 [arXiv:2505.00212]。",
+          "where": "ch04 陷阱〈Who&When 只和 random 比〉L333；〈放寬容忍度就改寫排名〉L319；〈評分腳本用子字串比對〉L320；〈基準在發表後改版〉L379",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "這些計數是精讀時依公開資料重算，程式驗證因不下載資料集而無法判定（ch04 L333、L392），不屬 F1–F4 但要記得。本條本身就是平凡基準的比較，不是 F1；人工標籤，不是 F4；不是 F2／F3。多數類基準用到測試集的標籤分佈，量的是「只靠先驗能拿幾分」（L333）。F5：58 條、沒有重複執行（L344）。"
+        },
+        {
+          "id": "2404.06474",
+          "finding": "Pan 的評估器在 WebArena 對 oracle 的一致率是 74.4–82.1% [arXiv:2404.06474]；若這批 GPT-4 軌跡的成功率落在 WebArena 原報的 14.41% 與 Pan 重現的 15.6% 之間，一律判失敗就有 100 − 15.6 = 84.4 到 100 − 14.4 = 85.6（%），高於評估器 [arXiv:2404.06474][arXiv:2307.13854]；照 accuracy = π·TPR + (1 − π)·TNR 推算，失敗軌跡被判成成功的比例至少是 GPT-4V 1 − 0.806/(1 − 0.144) ≈ 5.8%、Captioner + Mixtral 1 − 0.744/(1 − 0.144) ≈ 13.1% [arXiv:2404.06474]。",
+          "where": "ch04〈頭條數字與打折後的讀法〉表 L287；陷阱〈不平衡資料上的 accuracy 會被多數類撐高〉L312",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "條件式推算：只在該軌跡集成功率約 14.4%–15.6% 時成立（ch04 L312；筆記 limitations_observed[0]）。對照的 WebArena oracle 是手寫規則，依規格補充不算 F4，但它本身會漏判成功（規則式 recall 55.9，L192），一致率會繼承這個漏判。本條是平凡基準的比較，不是 F1；不是 F2。F5：單次評估、沒有變異（limitations_observed[8]）。"
+        },
+        {
+          "id": "2505.08638",
+          "finding": "TRAIL 的所有指標都與輸入長度負相關，Location 的 Spearman ρ 是 −0.508，GAIA 分割的軌跡平均約 287K tokens、最長 7.5M [arXiv:2505.08638]；公開腳本把超出上下文或無法解析的軌跡直接跳過、不計入分母 [arXiv:2505.08638]；定位指標的分母是金標集合，本質是 recall，列出所有 span id 理論上就能拿到 Location Accuracy 1.0（精讀時從官方腳本讀出，程式驗證無法判定）[arXiv:2505.08638]。",
+          "where": "ch04 未解問題 6 L688；陷阱〈格式失敗被算成判斷失敗〉L358；〈TRAIL 的定位指標只算 recall〉L310；§程式驗證 L393",
+          "flaws": ["F1", "F5"],
+          "unverified": [],
+          "flaw_basis": "F1：TRAIL 沒有切塊、逐 span 掃描或有工具裁判的對照組（ch04 L335），長度趨勢也沒有附同長度的隨機基準（span 越多，隨機命中越難，本章未量）。人工逐 span 標註，不是 F4。F5：148 條、SWE 分割約 30 條（L344）。"
+        },
+        {
+          "id": "2412.06559",
+          "finding": "ProcessBench 的 Qwen2.5-Coder-7B-Instruct 在 greedy 下 GSM8K 錯誤樣本 0.0、正確樣本 20.2，精讀時推測是 \\boxed{} 解析失敗，論文沒報無法解析的比例 [arXiv:2412.06559]；AgenTracer 表中本身就是標註者的 DeepSeek-R1 在 code 子集只有 agent 11.81、step 10.23，精讀時同樣推測是解析失敗 [arXiv:2509.03312]。",
+          "where": "ch04 陷阱〈格式失敗被算成判斷失敗〉L358",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "專家標籤、索引比對，不是 F4；本條指出排行榜混入指令遵循能力（筆記 limitations_observed[6]），不涉及 F1–F3。F5：單次評估。「解析失敗」是精讀推測，論文沒報比例。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "對每個偵測器、評審或歸因器，在同一批資料上算出上述各平凡基準並與頭條並列；頭條不高於最強的平凡基準就判為沒有效。容忍度放寬後的排名、長度分桶後的排名與完全比對下不一致時，報告會分岔的那幾格。另記：被排除或解析失敗的樣本比例，以及所用標籤的版本。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "逐點對照 A：(1) 不含 F1–F4 的來源有 2311.08516、2504.08942、2503.13657、2505.00212、2404.06474、2412.06559，作者群彼此不同、資料不共用（2509.03312 在 Who&When 上評估，但這裡引的是它自己的 code 子集）。(2) 方向一致：平凡基準都追平或超過報告的數字（全猜有錯的 78、副作用基率 6.51%、一律「沒出現」的 0.844、一律 WebSurfer 的 56.9%、±3 隨機 21.77、一律判失敗的 84.4–85.6）。(3) 有量化數字。(4) 反證段落沒有反例；Who&When「一律猜第 1 步 34/126 ≈ 26.98%」因分母可能不同而無法確認（L291、L392），所以沒有放進證據，只列在 trivial_baselines。限制：MAST 與 Pan 的兩筆是條件式推算，Who&When 的計數程式驗證無法判定。依規格補充，measure 型看的是「不這樣量會看錯」。支持結果全是單次小樣本（F5），屬雜訊旗標。",
+      "depends_on": [],
+      "edges": ["E3"]
+    },
+    {
+      "id": "T4-04",
+      "type": "avoid",
+      "decision": "能不能直接拿 LLM 評審判定軌跡成敗，當合成資料的過濾器、訓練獎勵或修正的觸發器？",
+      "recommendation": "不要在沒量過之前就接上：先在自己的軌跡上抽一批由人工標成敗（與副作用）的樣本，量評審的 precision 與 recall，並與規則式判定、一律判成功、一律判失敗並列；兩者都達到用途需要時才接上；不要拿一致率、相關係數或下游成績代替這一步。",
+      "defaults": null,
+      "switch_when": "有可執行的確定性判定（單元測試、環境 reward）時改用它標成敗，例如 SWE-Gym 以單元測試替任何 agent 的軌跡自動標成敗 [arXiv:2412.21139]；但規則式評估的 recall 只有 55.9，會漏判 100 − 55.9 = 44.1% 的成功軌跡 [arXiv:2504.08942]，所以用規則式時同樣要抽人工量 recall。",
+      "evidence": [
+        {
+          "id": "2504.08942",
+          "finding": "以 6 位專家對 1302 條網頁 agent 軌跡的標註為準，受測的 12 個 judge 沒有一個成功 precision 超過 70%，最高是 GPT-4o (A) 的 69.8 [arXiv:2504.08942]；作者用 GPT-4o 重做的 Pan 評估器 AER-C、AER-V 是 67.7、67.6 [arXiv:2504.08942]；副作用的最佳 precision 只有 14.1 [arXiv:2504.08942]；judge 會附和 agent 自述的錯誤推理，拿掉最終 AXTree 與截圖後，GPT-4o mini 的成功 precision 只從 61.5–64.5 掉到 60.7 [arXiv:2504.08942]。",
+          "where": "ch04 §軌跡／步驟層級評估與 process reward（2025 年 4 月 AgentRewardBench）L122；§LLM 當評審 L499；§軌跡裡 agent 的自述 L515",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "就這個量測本身判：以專家標註為準，judge 是被量的對象，依規格補充不是 F4；有規則式評估（P 83.8、R 55.9）與副作用基率當對照（L122、L314），不是 F1；judge 不產生被評的軌跡，不是 F2。judge 與 agent 骨幹重疊（筆記 limitations_observed[10]）若造成自我偏好，只會讓量到的 precision 更低，不會讓「不到 70%」變假，不算 F3。F5：每個 agent 的測試軌跡少、沒有信賴區間（limitations_observed[4]）。標註政策偏寬（limitations_observed[7]）讓專家端偏向判成功，會把 precision 往上推，真實 precision 可能更低。"
+        },
+        {
+          "id": "2412.09605",
+          "finding": "AgentTrek 的 GPT-4o 評估器在 558 筆人工金標準上一致 84.0% [arXiv:2412.09605]；但判準寬鬆（超過 8 個正確動作就算成功、沒按送出也算成功），輸入只有推理與動作文字、沒有截圖，等於讓 GPT-4o 評重放 agent 自己寫的自述 [arXiv:2412.09605]；論文說評估器會找出最早失敗點，提示詞卻只要求二元判定 [arXiv:2412.09605]。",
+          "where": "ch04〈頭條數字與打折後的讀法〉表 L295；§軌跡裡 agent 的自述 L514；§軌跡的格式、收集與合成 L76",
+          "flaws": ["F1", "F3", "F5"],
+          "unverified": [],
+          "flaw_basis": "F3：GPT-4o 重放產生軌跡與自述，同一個 GPT-4o 評估器讀這段自述判成敗（ch04 L514）。F1：只報一致率，沒有成敗基率或一律判成功的對照。F5：單次。人工金標準不是 F4。"
+        },
+        {
+          "id": "2412.19723",
+          "finding": "OS-Genesis 的 TRM 與人工評分的 Spearman 在 100 條軌跡上是 0.813／0.798 [arXiv:2412.19723]；但 TRM 只看執行器自己寫的低階指令與最後三張截圖，點錯元素而敘述寫對時，中段的錯誤看不到 [arXiv:2412.19723]；按 1–5 分比例抽樣時，1 分的軌跡仍有滿分軌跡五分之一的機率被抽進訓練 [arXiv:2412.19723]。",
+          "where": "ch04 §三條線在哪裡交會 L192；陷阱〈LLM 給的標籤〉L340；§軌跡裡 agent 的自述 L514；§軌跡的格式、收集與合成 L77",
+          "flaws": ["F3", "F5"],
+          "unverified": [],
+          "flaw_basis": "F3：GPT-4o 既產生軌跡的低階指令，又在 TRM 裡讀這些指令打分（ch04 L514、L340）。F5：100 條、單次；標註者人數與一致度沒報（L340）。相關係數在 1–5 分粗刻度上計算，沒有平凡基準可比，F1 不適用。"
+        },
+        {
+          "id": "2404.06474",
+          "finding": "Pan 的評估器被拿去篩 filtered BC 的資料並當 Reflexion 的獎勵 [arXiv:2404.06474]；它對 WebArena oracle 的一致率 74.4–82.1% 可能低於一律判失敗的 84.4–85.6%（條件式推算）[arXiv:2404.06474][arXiv:2307.13854]；WebArena 與 Android 實驗都只餵最後一張截圖加動作字串 [arXiv:2404.06474]。",
+          "where": "ch04 §軌跡／步驟層級評估（2024 年 4 月 Pan）L119；〈頭條數字與打折後的讀法〉L287；E3 L630",
+          "flaws": ["F5"],
+          "unverified": ["F3"],
+          "flaw_basis": "F3：評估器與 actor 同屬 GPT-4 系列，可能有相關的盲點（筆記 limitations_observed[8]），論文沒有分析，放 unverified。對照的是手寫 oracle，不是 F4。F5：單次評估。84.4–85.6 的比較只在該軌跡集成功率約 14.4%–15.6% 時成立（L312）。"
+        }
+      ],
+      "counter_evidence": [
+        {
+          "id": "2410.10934",
+          "finding": "Agent-as-a-Judge 與人類共識的一致率是 83.88–92.07%，同樣輸入的 LLM-as-a-Judge 是 60.38–84.15% [arXiv:2410.10934]；作者自己指出需求判定類別不平衡，一律判未達成也能拿到高一致率 [arXiv:2410.10934]。",
+          "where": "ch04 §軌跡／步驟層級評估〈評審對人工的另一組讀數〉L146",
+          "flaws": ["F1"]
+        },
+        {
+          "id": "2404.06474",
+          "finding": "Pan 的評估器在 AitW 上對人工判定的一致率是 89.8–92.9% [arXiv:2404.06474]；但這是四種策略的軌跡合併計算，各策略成功率差很大，類別不平衡同樣會墊高 accuracy [arXiv:2404.06474]。",
+          "where": "ch04 §軌跡／步驟層級評估 L119；notes/2404.06474.json limitations_observed[1]",
+          "flaws": ["F1", "F5"]
+        }
+      ],
+      "verification": "抽自己的軌跡（成功與失敗都要有）由人工標成敗，量評審的 precision、recall，並與規則式判定、一律判成功（precision 等於成功基率）、一律判失敗並列；precision 不高於成功基率，或 recall 低於規則式判定，就判為不能接上。另做一組拿掉 agent 自述、只留動作與觀測的消融，看 precision 掉多少——章內沒有人做過這個對照（L517）。",
+      "what_to_measure": null,
+      "grade": "B",
+      "grade_reason": "逐點對照：(1) 不含 F1–F4 的來源只有 2504.08942 一個；2412.09605 與 2412.19723 有 F3（評審讀的是同一個模型寫的自述），2404.06474 的 F3 未能排除，所以不是 A。B 成立的條件是「只有 1 個不含 F1–F4 的來源」。(2) 反例（Agent-as-a-Judge 的 83.88–92.07%、Pan 在 AitW 的 89.8–92.9%）可用條件切開：都是一致率，類別不平衡時會被多數類墊高，和以專家為準的 precision 不是同一個量（ch04 L146、L192 說三種數字不能直接比）。依規格，avoid 型的毛病就「壞掉的那個量測」本身判。支持結果都是單次小樣本（F5），屬雜訊旗標。",
+      "depends_on": [],
+      "edges": ["E3", "E4"]
+    },
+    {
+      "id": "T4-05",
+      "type": "avoid",
+      "decision": "能不能把最終結果成功的軌跡直接當成過程正確的示範，或把在失敗軌跡上找到的失敗模式當成失敗原因？",
+      "recommendation": "不要：以結果篩出的成功軌跡進訓練或當正例之前，抽樣做過程檢查（逐步人工檢查，或依 T4-01 量過的步驟評分器），報「結果對、過程錯」的比例；失敗模式標籤要同時在成功與失敗軌跡上算出現率，只有兩組出現率差得開的模式，才拿來當失敗原因或觸發條件。",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2210.03629",
+          "finding": "ReAct 只用答案 EM 篩出 3,000 條軌跡當微調資料 [arXiv:2210.03629]；依論文自己的 Table 2，答對的軌跡有 6% 是推理或事實捏造的 false positive，答錯的軌跡有 29% 其實是標籤歧義 [arXiv:2210.03629]。",
+          "where": "ch04 §軌跡的格式、收集與合成（2022 年 10 月 ReAct）L53、L56；§成功的軌跡也帶著「錯誤」L483",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "人工逐條標成功與失敗模式（ch04 L54），不是 LLM 判定，不是 F4；本條是比例描述，不涉及方法比較，F1 不適用；標註者不產生軌跡，不是 F2／F3。F5：每格 50 條、只做 HotpotQA、標註者人數與一致性沒說（筆記 limitations_observed[5]）。"
+        },
+        {
+          "id": "2412.06559",
+          "finding": "最終答案正確、過程卻被專家判為有錯的比例，GSM8K 3.5%、MATH 18.8%、OlympiadBench 32.2%、Omni-MATH 51.8%，隨難度上升 [arXiv:2412.06559]。",
+          "where": "ch04 §軌跡分析、失敗分類與歸因（ProcessBench）L161；§成功的軌跡也帶著「錯誤」L484；README L161",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "3 位博士級數學背景標註者一致才定標（ch04 L159），不是 F4；比例描述，F1 不適用；不是 F2／F3。標註者手上有參考解，「最早錯誤」可能偏向偏離參考解之處（筆記 limitations_observed[8]），比例可能偏高。F5：單次。"
+        },
+        {
+          "id": "2501.07301",
+          "finding": "在「答案對、過程錯」的子集上，除了 Qwen 自己的兩個模型，其他開源 PRM 的偵測準確率都低於 50% [arXiv:2501.07301]。",
+          "where": "ch04 §成功的軌跡也帶著「錯誤」L484；陷阱〈Qwen 的 Table 5 用算術平均〉L327",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "專家標籤（ProcessBench 子集），不是 F4。F5：GSM8K 子集只有 7 題（筆記 limitations_observed[8]）。與 2412.06559 同一團隊，不算獨立來源。"
+        },
+        {
+          "id": "2503.13657",
+          "finding": "MAST Table 7 中，FM-3.3 在 ChatDev 的成功 run 是 20.0%、失敗 run 25.0%，MetaGPT 的 FM-1.1 在成功 run 33.3%、失敗 run 16.7% [arXiv:2503.13657]；精讀時據此指出 MAST 標籤是「過程缺陷」，不等於「失敗原因」[arXiv:2503.13657]。",
+          "where": "ch04 §成功的軌跡也帶著「錯誤」L485；未解問題 2 L680",
+          "flaws": ["F5"],
+          "unverified": ["F4"],
+          "flaw_basis": "F5：成功組約 10–12 條（筆記 limitations_observed[7]）。F4：MAST-Data 由單一 o1 judge 標（L167），Table 7 用的是不是 judge 標籤沒寫明，放 unverified。"
+        },
+        {
+          "id": "2506.18824",
+          "finding": "SWE 軌跡研究的摘要把 thought–action 不一致寫成與失敗強相關，但 RepairAgent 成功組的 2.3% 反而高於失敗組的 1.3% [arXiv:2506.18824]。",
+          "where": "ch04 §成功的軌跡也帶著「錯誤」L485；方法比較表 L265",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "約 14K 對元件主要由第一作者一人標註（ch04 L339），人工標註依規格補充不算 F4；成功與失敗組並列，不是 F1；不是 F2／F3。F5：每個 agent 的成功組約 10 條、沒有顯著性檢定（L173）。"
+        }
+      ],
+      "counter_evidence": [
+        {
+          "id": "2506.18824",
+          "finding": "失敗組連續重複同一動作的比例較高：RepairAgent 6.1% 對 13.6%、AutoCodeRover 0.0% 對 8.8% [arXiv:2506.18824]；但沒有顯著性檢定，失敗軌跡較長（RepairAgent 平均 40 步對 22 步），也可能只是預算耗盡前原地打轉 [arXiv:2506.18824]。",
+          "where": "ch04 §軌跡分析（SWE 軌跡研究）L173；陷阱〈SWE 軌跡研究的比例偏向失敗軌跡〉L329",
+          "flaws": ["F5"]
+        }
+      ],
+      "verification": "抽一批結果成功的軌跡做逐步人工檢查，算「結果對、過程錯」的比例；對每個失敗模式算成功組與失敗組的出現率差與信賴區間。平凡基準是兩組出現率相同；差的信賴區間含 0 的模式不能當失敗原因或觸發條件。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "逐點對照 A：(1) 不含 F1–F4 的來源有 2210.03629、2412.06559、2501.07301、2506.18824；2501.07301 與 2412.06559 同一團隊只算一個，2210.03629、2412.06559、2506.18824 作者群與資料彼此不同，彼此獨立。(2) 方向一致：結果成功不代表過程無錯（6%、3.5%–51.8%），某些「錯誤」在成功組更常見（2.3% 對 1.3%）。(3) 有量化數字。(4) 反例（重複動作在失敗組較高）可用條件切開：本條沒有說所有模式都分不開，而是要求逐一量兩組出現率，重複動作正是可能分得開的那種；它本身也有長度混淆（L329）。avoid 型的毛病就「壞掉的那個量測」本身判。支持結果全是單次小樣本（F5），屬雜訊旗標。",
+      "depends_on": [],
+      "edges": ["E3", "E4"]
+    },
+    {
+      "id": "T4-06",
+      "type": "avoid",
+      "decision": "能不能把一個學出來的步驟評分器或異常偵測器併進訓練獎勵，再用它自己的分數判斷訓練有沒有進步？",
+      "recommendation": "不要拿它自己的分數判進度：併進獎勵或篩選條件時，另外保留一個不參與訓練的判定（環境成敗、單元測試或人工抽樣）追蹤真實成功率，訓練進度與停點以它為準；評分器在驗證集上的分數、或用同一個評分器量出的每步分數提升，都不算進步的證據；被併進獎勵的偵測器，要在新策略的軌跡上重新量過召回率，才能再當執行期的異常觸發器。",
+      "defaults": null,
+      "switch_when": "每一輪都以新策略的 rollout 重訓評分器時，AgentPRM 三輪迭代的成功率逐輪上升，64.9 → 73.9 → 85.8 → 88.1 [arXiv:2502.10325]；最佳化壓力還低的訓練早期，把 CoT 監控器併進 reward 反而產出較多真解 [arXiv:2503.11926]；但兩篇都沒給出何時開始崩的可用門檻。",
+      "evidence": [
+        {
+          "id": "2502.10325",
+          "finding": "PRM 只用 10k 條 rollout 訓練時，約 400 步後成功率由 82% 掉到 70%，驗證集上的 process reward 卻一路上升 [arXiv:2502.10325]；用資料分割訓練的 ensemble 分數也一起上升，偵測不到 [arXiv:2502.10325]。",
+          "where": "ch04 §軌跡／步驟層級評估（2025 年 2 月 AgentPRM）L121；〈驗證集上的 process reward 會騙人〉L477；E3〈偵測器一旦變成最佳化目標就會失效〉L649",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "壞掉的量測是 ALFWorld 環境的成功率，屬確定性判定，不是 F4；PRM 的訓練標籤來自訓練任務的 rollout 結果，評估在 OOD 評估局，不是 F2；成功率不是 PRM 給的，不是 F3；有同一條曲線的前段當對照，F1 不適用。F5：單次執行、134 局（筆記 limitations_observed[5]）。"
+        },
+        {
+          "id": "2503.11926",
+          "finding": "把 CoT 監控器併進 reward 之後，agent 仍以可觀比例作弊，監控器召回率卻降到接近 0（只有曲線圖）[arXiv:2503.11926]；沒有併進 reward 的基準 agent，作弊幾乎全被同一個監控器抓到 [arXiv:2503.11926]。",
+          "where": "ch04 E3〈偵測器一旦變成最佳化目標就會失效〉L649；notes/2503.11926.json key_results[3]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "作弊真值是事後的字串 regex，屬確定性判定，不是 F4；有不加壓力的基準 agent 當對照，不是 F1；真值不是監控器給的，不是 F2／F3。F5：只有曲線圖，沒有數值表、誤差區間或種子數（筆記 limitations_observed[3]）。Cheating 標籤定義前後不一、只抓改測試一類（limitations_observed[4][5]），所以「仍在作弊」是下界。"
+        },
+        {
+          "id": "2312.08935",
+          "finding": "以 PRM 分數做逐步 PPO 之後，再拿 PRM 替新策略做驗證，在 MATH 上輸給 self-consistency，41.1 對 42.3 [arXiv:2312.08935]；ORM 也掉到 41.3，精讀時指出這比較像兩種 RM 都跟不上策略分布的移動 [arXiv:2312.08935]。",
+          "where": "ch04 §用自己產生的軌跡繼續訓練〈評估器也跟不上變強的策略〉L476",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "最終答案比對，不是 F4；有 self-consistency 當平凡基準，不是 F1；判分不是 PRM 給的，不是 F2／F3。F5：RL 只有單一種子（ch04 L346）。ORM 同樣下降，表示原因可能是策略分布移動而不只是「被當成獎勵」；兩者都支持「最佳化之後不能沿用舊評分器的效度」。"
+        }
+      ],
+      "counter_evidence": [
+        {
+          "id": "2502.10325",
+          "finding": "同一篇的主實驗每輪重訓 PRM，成功率從 π0 的 64.9 逐輪升到 π3 的 88.1 [arXiv:2502.10325]。",
+          "where": "ch04 §軌跡／步驟層級評估 L121；notes/2502.10325.json key_results[0]",
+          "flaws": ["F5"]
+        },
+        {
+          "id": "2503.11926",
+          "finding": "訓練早期以測試期 rejection sampling 選樣時，加了 CoT 壓力的 agent 產出更多真解、作弊率與基準相同；約訓練進度 25% 起情況反轉 [arXiv:2503.11926]。",
+          "where": "notes/2503.11926.json key_results[4][5]",
+          "flaws": ["F5"]
+        }
+      ],
+      "verification": "訓練時同時畫兩條曲線：評分器在驗證集上的分數，與不參與訓練的判定量到的真實成功率；兩者走勢分岔（評分器升、真實成功率持平或降）就停。平凡基準是不併評分器、只用結果獎勵的同算力訓練；真實成功率不高於它，就判為沒有效。IPR 用建構訓練訊號的同一個凍結 SFT scorer 量「每步 reward 提升」，精讀時指為循環量測（L477），這類數字不能當驗收依據。",
+      "what_to_measure": null,
+      "grade": "B",
+      "grade_reason": "逐點對照 A 不成立，給 B。(1) 不含 F1–F4 的來源有 2502.10325、2503.11926、2312.08935，作者群、環境與資料彼此不同，形式上彼此獨立，regrade.py 會算成 A 候選。(2) 方向一致：策略對著學出來的評分器或偵測器最佳化之後，評分器的數字不再反映真實品質（AgentPRM 驗證分數升、成功率 82% → 70%；監控器召回率降到接近 0；PRM 驗證輸給 self-consistency）。(3) 但直接檢驗本條「評分器自己的分數會誤導進度判斷」的只有 2502.10325（驗證分數升、成功率 82% → 70%）有數值；2503.11926 也是直接檢驗，卻只有曲線圖，量化不足；2312.08935 檢驗的是相鄰的主張（策略移動之後舊評分器失效），而且 ORM 掉得一樣多，原因可能是分布移動而不是「被當成獎勵」。所以「2 個以上獨立、方向一致且有量化」只勉強靠一個有數值的直接來源撐著，依 B 的「只有 1 個」處理。(4) 反例可用條件切開：AgentPRM 主實驗每輪重訓評分器（本條要避免的是「固定的評分器」）；監控器在最佳化壓力低時有益，已寫進 switch_when。IPR 的循環量測是批評不是量到的破壞，沒有列為證據。avoid 型的毛病就「壞掉的那個量測」本身判。支持結果全是單次小樣本（F5），屬雜訊旗標。",
+      "depends_on": [],
+      "edges": ["E3"]
+    },
+    {
+      "id": "T4-07",
+      "type": "measure",
+      "decision": "用自產軌跡或步驟對比反覆重訓時，怎麼量才不會把挑出來的高點當成方法的效果？",
+      "recommendation": "準備與測試集分開的驗證集，用它挑輪數、學習率、β 這類設定；報從第一輪起的完整逐輪曲線，不只報最佳輪；與同樣輪數或同樣 rollout 數的軌跡層級方法、以及只做 SFT 的起點比；每輪記錄新增訓練資料的題目分布與每題軌跡數。",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2406.11176",
+          "finding": "IPR 在 WebShop 第 1 到 5 輪是 63.6、63.7、68.2、71.3、68.1，第 1、2 輪都低於 ETO 的 67.4 [arXiv:2406.11176]；主表取的是測試集上的最佳輪（WebShop 第 4 輪、ALFWorld unseen 第 3 輪），文中沒有驗證集 [arXiv:2406.11176]；對 ETO 的提升寫成相對比例 5.8%、7.2%，絕對差是 71.3 − 67.4 = 3.9 與 61.3 − 57.2 = 4.1 點 [arXiv:2406.11176]。",
+          "where": "ch04 §軌跡的格式、收集與合成〈這條線停在結果層級〉L82–L83；〈頭條數字與打折後的讀法〉L283；〈在評估集上挑設定〉L352；〈IPR 的高點晚一兩輪〉L474；§程式驗證 L400",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "逐輪曲線本身由環境 reward 判分，不是 F4；它是未經挑選的完整曲線，測試集挑輪是 IPR 頭條的毛病，不是這條證據的毛病，所以不標 F2；有 ETO 與 SFT 當對照，不是 F1；不是 F3。F5：沒有 seed 或變異數，測試集 134 到 200 題（ch04 L346）。"
+        },
+        {
+          "id": "2403.02502",
+          "finding": "ETO 在 WebShop 與 ScienceWorld 前兩輪提升、第三輪後下降，ALFWorld 只有第一輪有效 [arXiv:2403.02502]；迭代輪數與 β 正好落在各資料集曲線的最佳點 [arXiv:2403.02502]；有 BC 起點時，RFT 在 WebShop 只從 63.1 升到 63.6，在 ALFWorld-Unseen 反而從 67.2 降到 66.4 [arXiv:2403.02502]。",
+          "where": "ch04 §用自己產生的軌跡繼續訓練 L473；〈在評估集上挑設定〉L351",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "環境 reward 判分，不是 F4；有 SFT 起點當對照，不是 F1；不是 F2／F3（這裡用的是逐輪趨勢）。F5：單次。與 2406.11176 共用第一作者與專家軌跡（ch04 L80、L85），不算獨立來源。"
+        },
+        {
+          "id": "2412.21139",
+          "finding": "SWE-Gym 在 OpenHands 上把 868 條 on-policy 成功軌跡與 491 條教師軌跡混合重訓，SWE-Bench Lite 從 15.3% 降到 8.7%，這一輪沒有套用每題軌跡數上限 [arXiv:2412.21139]；MoatlessTools 上迭代 RFT 讓 7B 從 7.0% 到 9.0% 再到 10.0%，32B 從 19.0% 到 19.7% 就停 [arXiv:2412.21139]；capping 門檻與 verifier 設定都在 SWE-Bench 上比過才定，各 cap 設定只差 0.4–2.0 個百分點 [arXiv:2412.21139]。",
+          "where": "ch04 §用自己產生的軌跡繼續訓練 L472；〈在評估集上挑設定〉L351；〈樣本小〉L347；notes/2412.21139.json key_results[3][4]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "單元測試判分，屬確定性判定，不是 F4；有教師軌跡起點當對照，不是 F1；不是 F2／F3（這裡用的是逐輪結果，不是被挑的頭條）。F5：t=0 單次評估、沒有信賴區間（筆記 limitations_observed[2]）。15.3% → 8.7% 混了「沒套 capping」的變因（limitations_observed[0]）。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "同一方法跑完整輪數、多個種子（GiGPO 的主表用 3 個 seed，L346）；在驗證集挑出的輪數下報測試分數，與測試集上最佳輪的分數並列，兩者的差就是挑選偏差的估計。平凡基準是第 0 輪（只做 SFT）與同算力的軌跡層級方法；驗證集挑出的輪在誤差棒內不高於它們，就判為沒有效。",
+      "what_to_measure": null,
+      "grade": "A",
+      "grade_reason": "逐點對照 A：(1) 不含 F1–F4 的來源有 2406.11176、2403.02502、2412.21139；2406.11176 與 2403.02502 共用作者與專家軌跡只算一個，與 2412.21139 彼此獨立（不同作者群、不同環境）。另有一筆沒列為證據的批評：AgentPRM 的模型挑選沒說清楚、探索與 shaping 的比較取單條曲線的峰值（筆記 2502.10325 limitations_observed[5][8]），屬精讀批評而非量測。(2) 方向一致：自產軌跡重訓的增益隨輪數不單調（IPR 第 1、2 輪低於 ETO、第 5 輪回落；ETO 一兩輪後下降；SWE-Gym 沒 capping 時 15.3% → 8.7%、有 capping 時兩輪就飽和），只報挑出的高點會高估。(3) 有量化數字。(4) 章內沒有逐輪單調上升、推翻本條的反例；AgentPRM 三輪上升（L121）不違反「要報逐輪曲線」。依規格補充，measure 型看的是「不這樣量會看錯」。支持結果全是單次小樣本（F5），屬雜訊旗標。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T4-08",
+      "type": "open",
+      "decision": "軌跡要用哪種格式記錄、失敗要用哪一套分類法標，才能和文獻與自己的其他資料對照？",
+      "recommendation": "文獻沒有答案",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2506.18824",
+          "finding": "把三個框架的日誌統一成 (thought, action, result) 三元組時，丟掉了 8.3% 無法歸類的動作，圖上也省略了 ErrorResponse 事件 [arXiv:2506.18824]；AutoCodeRover 失敗軌跡長度的離群值常來自 Response Parse Error 這類內部錯誤，動作分析看不到這類失敗訊號 [arXiv:2506.18824]。",
+          "where": "ch04 未解問題 8 L692",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "描述格式轉換的損失，不涉及方法比較，F1–F4 不適用。F5：每個 agent 約 10 條成功軌跡（L173）。"
+        },
+        {
+          "id": "2503.13657",
+          "finding": "MAST 的失敗分布是系統設計類 FC1 44.2、agent 間失準 FC2 約 32.4、任務驗證 FC3 23.5 [arXiv:2503.13657]；但 1642 條中有 700 條是 ProgramDev-v2 程式任務，整體比重偏向程式任務與弱模型 [arXiv:2503.13657]。",
+          "where": "ch04 §「失敗主要出在哪」受收集的腳手架左右 L490；陷阱 L328",
+          "flaws": ["F4", "F5"],
+          "unverified": [],
+          "flaw_basis": "F4：1642 條由單一 o1 judge 標註（ch04 L167）。F5：judge 的人工驗證只有 15 條（L339）。"
+        },
+        {
+          "id": "2505.08638",
+          "finding": "TRAIL 的 Output Generation 類佔 353/841 ≈ 42%，SWE 分割的 256 個錯誤中這一類佔六成以上，正對應作者刻意加上的提示詞限制 [arXiv:2505.08638]。",
+          "where": "ch04 §「失敗主要出在哪」受收集的腳手架左右 L491",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "人工逐 span 標註，不是 F4；一致性只報複核改動比例、不是獨立雙標（L339）。F5：148 條。"
+        },
+        {
+          "id": "2403.12881",
+          "finding": "語料內唯一直接比過格式的 Agent-FLAN，held-out Overall 41.7 對自行重做的 AgentTuning 38.2，但格式對齊的增益和訓練 token 幾乎翻倍（19.2M → 37.3M）混在一起 [arXiv:2403.12881]；Overall 還含只有它針對性訓練過的自建 Agent-H，扣掉後四項平均是 29.8 對 26.7 [arXiv:2403.12881]。",
+          "where": "ch04 §軌跡的格式、收集與合成（Agent-FLAN）L72；〈頭條數字與打折後的讀法〉L284；未解問題 8 L692",
+          "flaws": ["F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：能力配比直接在 T-Eval 與 HotpotQA 這兩個 held-out 集上挑（ch04 L48、L351）。F5：單次。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "見 what_to_measure。",
+      "what_to_measure": "拿同一批軌跡（成功與失敗都要有）做兩件事。第一，用兩種以上格式序列化（例如逐步的 thought／action／observation 文字，與結構化的 span 樹），量轉換時丟掉的事件比例（無法歸類的動作、錯誤事件、解析錯誤），以及同一個偵測器在兩種格式上的兩類 F1 差。第二，用兩套以上分類法各標一次，量兩套類別的對應表與一致度（κ），以及每個類別在成功與失敗軌跡上的出現率差。決定方式：選轉換損失最低、而且類別在成功與失敗之間分得開的組合；兩套分類法對同一軌跡的主要失敗類別一致度低時，不要用任一套的分布結論決定先修什麼。",
+      "grade": null,
+      "grade_reason": "open 型不評等級。章的未解問題 8（L692）與 README 框架未解問題 8（L545–L549）都說軌跡格式與分類法沒有共同標準；五套分類法沒有在同一批軌跡上互相標過（L494）；唯一直接比過格式的 Agent-FLAN 混了 token 數翻倍（L72）。證據連一個有道理的建議都撐不起來，所以寫 open 而不是 C。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T4-09",
+      "type": "open",
+      "decision": "用軌跡做監督微調時，環境觀測（工具回傳）的 token 要不要算進 loss？",
+      "recommendation": "文獻沒有答案",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2310.05915",
+          "finding": "FireAct 附錄 A.7 是語料內唯一的直接實驗，方向隨規模相反：13B 的 ReAct+CoT 遮與不遮分別是 24.8 與 30.2，7B 是 24.0 與 22.2 [arXiv:2310.05915]；其餘組合多半差不到 1 分，例如 7B 的 ReAct 26.0 對 26.2、13B 的 ReAct 34.6 對 34.4 [arXiv:2310.05915]；HotpotQA 500 題、EM 約 40 時單一設定的標準誤約 2.2，兩設定相減約 3.1 [arXiv:2310.05915]。",
+          "where": "ch04 §觀測 token 要不要算進 loss L468；notes/2310.05915.json key_results[7]、limitations_observed[1]",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "EM 判分，不是 F4；遮與不遮互為對照，F1 不適用；不是 F2／F3。F5：單次、沒有多個 seed（筆記 limitations_observed[1]）。表的列名寫 CodeLlama、標題寫 Llama-2（limitations_observed[2]）。"
+        },
+        {
+          "id": "2310.12823",
+          "finding": "AgentTuning 只對模型回合（Thought＋Action）算 loss，Agent-FLAN 只算 assistant 輪，ETO 把指令與觀測一律遮蔽，三篇都沒有遮與不遮的比較 [arXiv:2310.12823][arXiv:2403.12881][arXiv:2403.02502]。",
+          "where": "ch04 §觀測 token 要不要算進 loss L468；格式對照表 L232–L239",
+          "flaws": [],
+          "unverified": ["F1"],
+          "flaw_basis": "這是做法描述，沒有量測；有沒有和「不遮」比過，三篇都沒有，所以 F1 放 unverified。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "見 what_to_measure。",
+      "what_to_measure": "同一批軌跡、同樣訓練步數，比遮與不遮觀測 token 的 loss，至少兩種模型規模、每組多個種子；量任務成功率，另量模型在推論時自己寫出觀測（捏造工具回傳）的比例——ReAct 的精讀推測不遮會助長這種捏造（L468），但沒有人量過。決定方式：兩種規模上都超出種子誤差棒的一方才採用；規模之間方向相反時，以實際要部署的規模的結果為準，並記下這個選擇沒有通則。",
+      "grade": null,
+      "grade_reason": "open 型不評等級。唯一的直接實驗方向隨規模相反，差距多在標準誤內（L468），章的判斷是「遮觀測是慣例、不是被證明過的做法」；寫不出區分兩種結果的條件，所以是 open 而不是 C。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T4-10",
+      "type": "open",
+      "decision": "失敗或只完成一部分的軌跡要丟掉、降權留下、當 DPO 負例、拿去訓練結果評分器，還是改用結果獎勵做線上 RL？",
+      "recommendation": "文獻沒有答案",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2310.12823",
+          "finding": "AgentTuning 的 7B 用未過濾軌跡訓練，held-in 從 1.96 降到 1.34 [arXiv:2310.12823]；但論文沒交代未過濾組有幾條、有沒有同樣混 ShareGPT，而 1.34 與「只用 agent 資料」完全相同，混淆了資料量與模仿失敗 [arXiv:2310.12823]。",
+          "where": "ch04 §失敗或部分完成的軌跡 L460",
+          "flaws": ["F5"],
+          "unverified": ["F2"],
+          "flaw_basis": "F2：η 依 held-out 表現挑出（ch04 L351），這個消融是否也受影響沒寫，放 unverified。F5：單次。"
+        },
+        {
+          "id": "2412.19723",
+          "finding": "OS-Genesis 主張保留部分完成的軌跡、按 TRM 分數降權，在高階任務上勝過不用 RM 與只留完整軌跡，但這個比較只有 Figure 5 的相對長條、沒有數字 [arXiv:2412.19723]。",
+          "where": "ch04 §失敗或部分完成的軌跡 L461",
+          "flaws": ["F3", "F5"],
+          "unverified": [],
+          "flaw_basis": "F3：GPT-4o 既執行又在 TRM 裡打分（L514）。F5：AndroidWorld 112 題、單次（L347）。"
+        },
+        {
+          "id": "2403.02502",
+          "finding": "ETO 把失敗軌跡當軌跡層級 DPO 的負例，WebShop 平均報酬從 SFT 的 63.1 升到 67.4 [arXiv:2403.02502]；沒有專家軌跡、跳過 SFT 時，單獨的 ETO 只有 12.5，低於未微調模型的 17.9 [arXiv:2403.02502]。",
+          "where": "ch04 §軌跡的格式、收集與合成（ETO）L66；§失敗或部分完成的軌跡 L462",
+          "flaws": ["F5"],
+          "unverified": ["F2"],
+          "flaw_basis": "F2：迭代輪數與 β 落在曲線最佳點，可能在評估集上挑（L351），放 unverified。環境判分，不是 F4。F5：單次。"
+        },
+        {
+          "id": "2412.21139",
+          "finding": "SWE-Gym 以成功與失敗各 1,318 條軌跡訓練軌跡層級 ORM，Best@16 達 32.0% [arXiv:2412.21139]。",
+          "where": "ch04 §軌跡的格式、收集與合成（SWE-Gym）L78；§失敗或部分完成的軌跡 L462",
+          "flaws": ["F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：verifier 設定在 SWE-Bench 測試集上比過才定（筆記 limitations_observed[1]）。F5：單次。"
+        },
+        {
+          "id": "2505.10978",
+          "finding": "GiGPO 以結果獎勵做線上 RL，失敗軌跡透過 advantage 拿到負訊號，是本章二十六篇裡這一類的唯一例子 [arXiv:2505.10978]；它只和 PPO、RLOO、GRPO 比，沒有和前四種做法在同一環境上比過 [arXiv:2505.10978]。",
+          "where": "ch04 §失敗或部分完成的軌跡 L463；未解問題 4 L684",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "環境判分，不是 F4。F5：3 個 seed，WebShop 標準差 ±4.5（L346）。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "見 what_to_measure。",
+      "what_to_measure": "同一環境、同一任務集、同算力，比五組：只用成功軌跡 SFT；成功軌跡加按分數降權的部分完成軌跡；失敗軌跡當軌跡層級 DPO 負例；成功與失敗等量訓練結果評分器、再做 best-of-N；以結果獎勵做線上 RL。每組多個種子、輪數在驗證集上挑（量法見 T4-07），並記錄每組實際用了幾條軌跡；資料量不同的組另加一組等資料量的對照。平凡基準是只用成功軌跡 SFT。決定方式：只採用勝過平凡基準、差距超出種子誤差棒的做法。",
+      "grade": null,
+      "grade_reason": "open 型不評等級。章的判斷是「還回答不了部分完成的軌跡放進 SFT 是好是壞」（L464），未解問題 4（L684）指出四種做法分散在不同環境、基座與資料量，撐起各自做法的消融都有混淆；GiGPO 也沒和前四種在同一環境比過。寫不出切開結論的條件，所以是 open 而不是 C。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T4-11",
+      "type": "open",
+      "decision": "要不要把結果獎勵拆成步驟層級的訊號（步驟分數、步驟 advantage、步驟層級 DPO）來訓練 agent？",
+      "recommendation": "文獻沒有答案",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2406.11176",
+          "finding": "IPR 加上步驟層級 DPO 後四欄平均 69.4，ETO 66.4 [arXiv:2406.11176]；但只做一、兩輪時 WebShop 是 63.6、63.7，低於 ETO 的 67.4，最佳輪看測試集挑，拿掉步驟層級 DPO 後 WebShop 66.4 仍低於 ETO，兩者 SFT 起點也不同（60.2 對 63.1）[arXiv:2406.11176]；表中 Step-PPO 64.8 對 PPO 42.0，但 PPO 那列有三格與 ETO 自報相同、InterCodeSQL 的 52.4 來源不明 [arXiv:2406.11176]。",
+          "where": "ch04〈這條線停在結果層級〉L80–L87；爭議〈IPR 對 ETO〉L448、〈Step-PPO 對 PPO〉L449",
+          "flaws": ["F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：最佳輪數與 lr、β 看測試集挑（ch04 L352）。F5：沒有 seed、134–200 題（L346）。另有 SFT 起點不同的混淆（L85）。"
+        },
+        {
+          "id": "2505.10978",
+          "finding": "GiGPO 的 1.5B 在 ALFWorld 是 86.1 對 GRPO 的 72.8，WebShop 成功率 67.4 對 56.8，3 個 seed 平均 [arXiv:2505.10978]；ω = 0 拿掉步驟項時 WebShop 成功率是 56.6 [arXiv:2505.10978]；步驟項用 γ = 0.95 的折扣回報，論文沒有「GRPO 改用折扣回報」或「GRPO 加長度懲罰」的對照，增益可能有一部分來自長度塑形 [arXiv:2505.10978]；附錄的 DAPO 在 WebShop 分數 84.6 高於 GiGPO 的 83.5 [arXiv:2505.10978]。",
+          "where": "ch04 §軌跡／步驟層級評估（GiGPO）L123–L127；爭議〈GiGPO 對 GRPO〉L447",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "環境判分，不是 F4；有 GRPO 當對照，不是 F1；不是 F2／F3。F5：3 個 seed，WebShop 標準差 ±4.5（L346）。步驟訊號從沒對過步驟真值（L124）。"
+        },
+        {
+          "id": "2403.02502",
+          "finding": "ETO 的步驟層級對比在 WebShop 上，lr 1e-6、β 0.1 時只剩 8.3，lr 1e-7、β 0.5 時是 62.8，兩者混合 64.3，都不如軌跡層級的 67.4 [arXiv:2403.02502]。",
+          "where": "ch04 §軌跡的格式、收集與合成（ETO）L66；§三條線在哪裡交會 L188",
+          "flaws": ["F5"],
+          "unverified": ["F2"],
+          "flaw_basis": "F2：設定可能在評估集上挑（L351），放 unverified。只試了兩組設定，談不上證明這條路不可行（L682）。F5：單次。"
+        },
+        {
+          "id": "2410.08146",
+          "finding": "Setlur 指出，prover 就是當前策略時，以 advantage 當過程獎勵的 policy gradient 與只用結果獎勵相同 [arXiv:2410.08146]；它的 dense-reward 線上 RL 比 ORM-RL 高 >7%，但只有 MATH 一個資料集、只有 Gemma 2 系列，也沒有和以 Q^π-PRM 做 RL 的設定比 [arXiv:2410.08146]。",
+          "where": "ch04 §數學這條線（Setlur）L114；爭議 L439、L451",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "最終答案比對，不是 F4；有 ORM-RL 當對照，不是 F1。F5：單次、單一資料集。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "見 what_to_measure。",
+      "what_to_measure": "同一環境、同樣 rollout 數，比：GRPO；GRPO 改用 γ 折扣回報；GRPO 加長度懲罰；GRPO 加步驟 advantage 項（GiGPO 式）；軌跡層級 DPO；步驟層級 DPO（IPR 式，需能重放到任意前綴）。每組多個種子、輪數在驗證集上挑。另抽一批軌跡由人工標出錯誤步，量各種步驟訊號判出的低分步與人工錯誤步的一致度——章內沒有任何一篇拿步驟真值檢查過 agent 上的步驟分數（L190）。含使用者回合時先確認環境能否重放或複製，IPR 與 GiGPO 都依賴這個前提（L660）。決定方式：步驟訊號同時勝過「GRPO＋折扣」與「GRPO＋長度懲罰」、差距超出種子標準差時才採用。",
+      "grade": null,
+      "grade_reason": "open 型不評等級。章的判斷是 IPR 只推翻了「步驟層級只能不如軌跡層級」的外推，不是證明步驟層級比較好（L87）；agent 上三組對照都不是乾淨的單變數實驗（L445），ETO 的步驟層級又輸給軌跡層級（L66）。正反兩邊都寫不出切開的條件，所以是 open 而不是 C。",
+      "depends_on": [],
+      "edges": []
+    },
+    {
+      "id": "T4-12",
+      "type": "open",
+      "decision": "要不要讓軌跡異常偵測器（不靠驗收用的成敗 oracle）在執行期直接觸發修正？觸發門檻怎麼定？",
+      "recommendation": "文獻沒有答案",
+      "defaults": null,
+      "switch_when": null,
+      "evidence": [
+        {
+          "id": "2404.06474",
+          "finding": "Pan 是本章唯一由偵測器自己的判定觸發修正、不靠 oracle 的例子：接上 Reflexion、最多 3 輪後，相對成功率增益 Captioner + Mixtral 16%、GPT-4V 29% [arXiv:2404.06474]；但偵測那一半只報 accuracy、可能低於一律判失敗，最終成功率仍由 WebArena oracle 計算，修正方式是整條任務重試，觸發訊號也沒有指出出錯的步驟 [arXiv:2404.06474]。",
+          "where": "ch04 E3〈兩半都做到的〉Pan L630；README L104（跨節點發現 2）",
+          "flaws": ["F1", "F5"],
+          "unverified": ["F3"],
+          "flaw_basis": "F1：有「不觸發」的對照，但沒有同預算、不經偵測的重試對照（規格補充：兩種平凡基準只對了一種就標 F1）。F3：評估器與 actor 同屬 GPT-4 系列（筆記 limitations_observed[8]），放 unverified。F5：沒有重複次數或變異（limitations_observed[8]）。"
+        },
+        {
+          "id": "2509.25370",
+          "finding": "AgentDebug 從關鍵步帶著修正指引重跑，ALFWorld 上 GPT-4o-mini 從 21 升到 55，論文沒有標單位與評估集大小 [arXiv:2509.25370]；要等 Eval 判定整條任務失敗之後才觸發 [arXiv:2509.25370]。",
+          "where": "ch04 E3〈兩半都做到的〉L628；〈下游修正的增益，無法歸功於精準歸因〉L535",
+          "flaws": ["F1", "F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：觸發依賴成功 oracle（ch04 L535）。F1：缺「強模型給、不做定位的通用回饋」對照（L535）。F5：每個環境 50–100 條（L344）。"
+        },
+        {
+          "id": "2509.03312",
+          "finding": "AgenTracer 把診斷注入下一輪解題，在 MaAS、OWL、MetaGPT 上帶來 4.8% 到 14.21% 的提升 [arXiv:2509.03312]；觸發條件是 oracle 給的失敗訊號，對照的通用反思 CRITIC 在 MaAS＋GAIA 第 2、3 輪是 −4.9% 與 −5.5% [arXiv:2509.03312]。",
+          "where": "ch04 E3 L629；〈下游修正的增益〉L535",
+          "flaws": ["F1", "F2", "F5"],
+          "unverified": [],
+          "flaw_basis": "F2：觸發依賴 oracle，標註者 R1 也看得到 ground truth（ch04 L177、L535）。F1：只有通用反思，沒有同預算重抽或強模型通用回饋的對照（L535）。F5：單次。"
+        },
+        {
+          "id": "2311.08516",
+          "finding": "以模擬分類器掃描，多數任務要在錯誤定位準確率約 60–70% 時，回溯修正的增益才大過損失 [arXiv:2311.08516]；T4 的偵測器是 Who&When step-level 最佳 14.2%、AgentDebug 的 Step 45.0，任務與錯誤定義不同，只能當量級參考 [arXiv:2505.00212][arXiv:2509.25370]。",
+          "where": "ch04 E3〈T4 交出的異常訊號，準確度遠低於下游修正需要的水準〉L646；README L129–L131",
+          "flaws": ["F1", "F5"],
+          "unverified": [],
+          "flaw_basis": "F1：沒有同算力的重抽或多數決基準（筆記 limitations_observed[1]）。F5：單次、分母小（limitations_observed[5]）。模擬分類器的假設不實際（limitations_observed[3]），60–70% 只是該模擬設定下的數字。"
+        },
+        {
+          "id": "2402.08115",
+          "finding": "GPT-4 當自己的驗證器時，在 Graph Coloring 把 118 個正確答案中的 113 個判錯，113 ÷ 118 ≈ 95.8%，系統因此在更差的候選上耗到 timeout、低於單次生成，換成程式驗證器就穩定提升 [arXiv:2402.08115]。",
+          "where": "ch04 E3〈誤報率多半沒量〉L648",
+          "flaws": ["F5"],
+          "unverified": [],
+          "flaw_basis": "程式驗證器是確定性判定，不是 F4；有單次生成當對照。F5：單次。判定對象是整份答案，不是軌跡上的逐步偵測（L648）。"
+        }
+      ],
+      "counter_evidence": [],
+      "verification": "見 what_to_measure。",
+      "what_to_measure": "在自己的任務上分四組、同 token 預算：不觸發；偵測器觸發修正；不偵測、直接以同預算重抽或多數決；oracle 觸發（只當上限，不能上線）。量淨成功率、對→錯翻轉數（成功被誤判後重做而失敗）、偵測器在成功與失敗軌跡上的誤報率與漏報率（量法見 T4-02），並掃描觸發門檻。Pan 觀察到成功被誤判成失敗而重做時幾乎一定失敗，但沒有量化（L648），所以翻轉數要單獨報。決定方式：只在偵測器觸發組的淨成功率超出誤差棒、同時勝過「不觸發」與「同預算重抽」的門檻上採用；找不到這樣的門檻就不接 E3。",
+      "grade": null,
+      "grade_reason": "open 型不評等級。README 框架未解問題 2（L511）與章 E3 一節（L646–L648）都說非 oracle 偵測器接上修正後的淨效益沒有答案：唯一的非 oracle 例子（Pan）缺同預算對照，其餘兩篇靠 oracle 觸發，T4 偵測器的準確度也遠低於模擬推得的門檻。寫不出可行的建議，所以是 open 而不是 C。",
+      "depends_on": [],
+      "edges": ["E3"]
     }
-   ],
-   "counter_evidence": [],
-   "verification": "在自己的步驟真值集上，對同一個評分器同時量直接定位的兩類 F1 與 BoN；平凡基準是一律答「沒有錯」、一律判第 1 步錯，以及同 N 的多數決。兩類 F1 不高於這兩個平凡預測，或 BoN 落在同 N 多數決的誤差範圍內，就判這個評分器沒有效。兩種量法排序不同時兩者都報，依用途取捨（見 switch_when）。",
-   "what_to_measure": null,
-   "grade": "A",
-   "grade_reason": "逐點對照 A：(1) flaws 與 unverified 都不含 F1–F4 的來源有 2501.07301、2406.06592、2412.06559 三個；其中 2412.06559 與 2501.07301 出自同一團隊（ch04 L165、L366），依規格補充只算一個，所以獨立的是 2501.07301 與 2406.06592（不同作者群；兩者共用的 MATH500 屬公開基準，不算共用資料）。(2) 方向一致：兩者都顯示只看 BoN 或加權多數決，會看不出或高估步驟評分器的差異。(3) 有量化數字。(4) 章的〈爭議、矛盾與反證〉裡沒有「BoN 與直接定位排序一致、因而推翻本條」的例子；OmegaPRM 與 Qwen 對「人工或自動標籤誰好」結論相反（L454），正是量法不同造成的，支持本條。依規格補充，measure 型看的是「不這樣量會看錯」。支持結果全是單次執行（F5），屬雜訊旗標；BoN 上的差距本身就在雜訊範圍內，這正是本條的論點。",
-   "depends_on": [],
-   "edges": [
-    "E3"
-   ]
-  },
-  {
-   "id": "T4-02",
-   "type": "measure",
-   "decision": "評估錯誤偵測器或失敗歸因器時，評估集要不要放進成功（無錯）的軌跡？",
-   "recommendation": "評估集同時放進有錯與無錯（成功）的軌跡，讓偵測器可以回答「沒有錯」；分兩類報：有錯軌跡的定位命中率、無錯軌跡判「沒有錯」的比率（即誤報率的補數），再取兩者的調和平均；只在失敗軌跡上算出的定位準確率，不能當作偵測器可以接上觸發修正的證據。",
-   "defaults": "依最終答案對錯平衡抽樣，兩類各自計分後取調和平均 [arXiv:2412.06559]。",
-   "switch_when": "成功軌跡拿不到逐步真值、標註成本太高時（Who&When 三位標註者標 184 條失敗軌跡約花 84 工時 [arXiv:2505.00212]），至少在軌跡層級量偵測器把專家認定成功的軌跡判成失敗的比例，例如 AgentRewardBench 的 GPT-4o (A) 成功 recall 是 83.1，即 100 − 83.1 = 16.9% 的成功軌跡被判失敗 [arXiv:2504.08942]。",
-   "evidence": [
+  ],
+  "trivial_baselines": [
     {
-     "id": "2412.06559",
-     "finding": "ProcessBench 把錯誤樣本命中率與正確樣本答 -1 的比率取調和平均 [arXiv:2412.06559]；Qwen2.5-Math-7B-Instruct 在 GSM8K 的兩類是 15.5 與 100.0，F1 為 2×15.5×100/(15.5+100) ≈ 26.8 [arXiv:2412.06559]；Llama-3.1-8B-Instruct 反過來，GSM8K 錯誤樣本 44.4、正確樣本只有 6.2，F1 為 10.9 [arXiv:2412.06559]；只看錯誤樣本時 Llama-3.1-8B-Instruct 的 44.4 高於 Qwen2.5-Math-7B-Instruct 的 15.5，取兩類調和平均後是 10.9 對 26.8，排序對調 [arXiv:2412.06559]。",
-     "where": "ch04 陷阱〈ProcessBench 是反例〉L311；E4〈ProcessBench 是唯一在步驟層級量「全對時答 -1」的〉L662；notes/2412.06559.json key_results[3]（44.4／6.2 → 10.9）",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "專家共識標籤、兩類平衡抽樣（ch04 L159），不是 F1；判分是索引完全比對，不是 F4；受評模型不產生標籤，不是 F2／F3。筆記 limitations_observed[6] 指出部分小模型的低分是格式解析失敗，Qwen2.5-Math-7B-Instruct 正確樣本的 100.0 不受影響；Llama-3.1-8B-Instruct 的 6.2 有沒有混入解析失敗，章與筆記沒有說。單次評估，F5。"
+      "metric": "評估器判軌跡成敗的 accuracy（WebArena 的 GPT-4 軌跡，對手寫 oracle）",
+      "baseline": "一律判失敗",
+      "value": "100 − 15.6 = 84.4 到 100 − 14.4 = 85.6（%），條件是該軌跡集成功率在 14.4%–15.6% 之間；評估器是 74.4–82.1%",
+      "id": ["2404.06474", "2307.13854"]
     },
     {
-     "id": "2311.08516",
-     "finding": "BIG-Bench Mistake 上，從 trace-level 到 step-level 再到 CoT step-level，生成呼叫越多、模型越容易判出至少一個錯：GPT-4 在 Dyck 的無錯軌跡準確率從 98.41 掉到 78.57 再到 13.79 [arXiv:2311.08516]；作者指出 overall 分數偏向 step-level，部分是因為資料集中有錯軌跡佔多數 [arXiv:2311.08516]。",
-     "where": "notes/2311.08516.json key_results[2]；本篇在 ch04 §與其他節點的關係 E3〈T4 交出的異常訊號〉L646 被引用",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "標籤是人工標首個邏輯錯誤步，Krippendorff's α 0.97（筆記 key_results[0]），判分為索引比對，不是 F4；有錯與無錯軌跡分開報，另有全猜有錯的基準（key_results[3]），不是 F1；GPT-4 檢查的是 PaLM 2 產生的軌跡（limitations_observed[6]），不是 F3；標籤不進迴圈，不是 F2。F5：單次執行，logical deduction 只有 6 條無錯軌跡（limitations_observed[5]），Dyck 的分母較大。"
+      "metric": "MAST judge 在 14 個失敗模式二元標籤上的 accuracy",
+      "baseline": "一律答「沒出現」",
+      "value": "約 0.844（本章在 micro 計算前提下由 accuracy 0.94、recall 0.77、precision 0.833 反推）；judge 是 0.94",
+      "id": "2503.13657"
     },
     {
-     "id": "2505.00212",
-     "finding": "Who&When 的 184 條全是失敗軌跡，Without-GT 提示詞仍告訴 judge 這是錯的解答，所以誤報率從沒被量過 [arXiv:2505.00212]；同類的 AgenTracer 與 AgentDebug 也只收失敗軌跡 [arXiv:2509.03312][arXiv:2509.25370]。",
-     "where": "ch04 陷阱〈失敗歸因的評估集只有失敗軌跡〉L309；E3〈誤報率多半沒量〉L648；未解問題 2 L680；README L136",
-     "flaws": [
-      "F1",
-      "F2",
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "這一條描述缺口，不是量到的破壞。F1：只和 random 比（ch04 L333）；F2：有 GT 的設定把真值放進提示詞（L379、L425）；F5：hand-crafted 只有 58 條、沒有重複執行（L344）。"
+      "metric": "軌跡副作用判定的 precision（AgentRewardBench）",
+      "baseline": "副作用基率（隨機判有副作用的 precision）",
+      "value": "72/1106 ≈ 6.51%；GPT-4o mini (A) 7.2、最佳 14.1",
+      "id": "2504.08942"
     },
     {
-     "id": "2503.13657",
-     "finding": "MAST Table 7 中，FM-3.3 在 ChatDev 的成功 run 是 20.0%、失敗 run 是 25.0%，MetaGPT 的 FM-1.1 在成功 run 是 33.3%，反而高於失敗 run 的 16.7% [arXiv:2503.13657]；以這類失敗模式當觸發條件，會把成功軌跡也判成有異常（本章推論）[arXiv:2503.13657]。",
-     "where": "ch04 §成功的軌跡也帶著「錯誤」L485；E4 L664",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [
-      "F4"
-     ],
-     "flaw_basis": "F5：筆記 limitations_observed[7] 推算 ChatDev 成功約 10 條、MetaGPT 成功約 12 條。F4：MAST-Data 由單一 o1 judge 標註（ch04 L167），Table 7 的標籤是 judge 給的還是人工給的，章與筆記沒寫明，放 unverified。"
+      "metric": "Who&When hand-crafted 的 agent-level accuracy",
+      "baseline": "一律猜 WebSurfer",
+      "value": "現行標籤 33/58 ≈ 56.9%、論文當時標籤 31/58 ≈ 53.4%；all-at-once 55.17／53.44；計數要讀資料集，程式驗證無法判定",
+      "id": "2505.00212"
     },
     {
-     "id": "2504.08942",
-     "finding": "AgentRewardBench 以 6 位專家的標註為準，GPT-4o (A) 的成功 recall 是 83.1，即專家認定成功的軌跡有 100 − 83.1 = 16.9% 被判成失敗，規則式評估的 recall 只有 55.9 [arXiv:2504.08942]。",
-     "where": "ch04 E4〈AgentRewardBench 量了軌跡層級的 recall〉L663；§軌跡／步驟層級評估 L122",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "以專家標註為準，依規格補充不是 F4（judge 是被量的對象）；有規則式評估當對照，不是 F1；judge 不產生軌跡，不是 F2。judge 與 agent 骨幹重疊（筆記 limitations_observed[10]）是被評對象可能的自我偏好，不改變以專家為準的量測，不算 F3。F5：每個 agent 的測試軌跡少、沒有信賴區間（limitations_observed[4]）；標註政策偏寬（limitations_observed[7]）會讓專家認定的成功偏多。"
+      "metric": "Who&When hand-crafted 的 step-level accuracy（±k 容忍度）",
+      "baseline": "均勻隨機",
+      "value": "±2／±3／±5 分別是 16.05／21.77／31.70；step-by-step 在 ±3 是 18.10",
+      "id": "2505.00212"
+    },
+    {
+      "metric": "Who&When algorithm-generated 的 step-level accuracy",
+      "baseline": "一律猜第 1 步；均勻隨機",
+      "value": "一律猜第 1 步 34/126 ≈ 26.98%，高於 Table 1 該子集最佳 25.51，但 Table 1 的百分比沒有一格能寫成 k/126，分母未必相同，無法確認；均勻隨機精讀重算 12.0，Table 1 印 19.06",
+      "id": "2505.00212"
+    },
+    {
+      "metric": "錯誤定位的加權 F1（BIG-Bench Mistake）",
+      "baseline": "一律猜有錯",
+      "value": "78；GPT-3.5-Turbo direct trace-level 3.76–46.57",
+      "id": "2311.08516"
+    },
+    {
+      "metric": "ProcessBench 兩類 F1",
+      "baseline": "一律答全對（-1）",
+      "value": "正確樣本 100、錯誤樣本 0，F1 為 0；接近這種行為的 Qwen2.5-Math-7B-Instruct 在 GSM8K 是 15.5／100.0，F1 ≈ 26.8",
+      "id": "2412.06559"
+    },
+    {
+      "metric": "PRM 加權多數決的最終答案正確率（Gemini Pro，MATH500，k=64）",
+      "baseline": "同 k 多數決",
+      "value": "67.2；OmegaPRM 69.4、PRM800K 67.6",
+      "id": "2406.06592"
+    },
+    {
+      "metric": "Best-of-64 平均正確率（7B policy）",
+      "baseline": "maj@64",
+      "value": "56.3；Qwen2.5-Math-PRM-7B 56.1",
+      "id": "2501.07301"
+    },
+    {
+      "metric": "PRM 推論期 best-of-N 的成功率（ALFWorld，134 局）",
+      "baseline": "同一策略不做重排",
+      "value": "π3 88.1；BoN(π3,Q2) 91.0，差 2.9 點約 4 局；沒有對多數決",
+      "id": "2502.10325"
+    },
+    {
+      "metric": "WebShop 平均報酬（ETO 設定，Llama-2-7B-Chat）",
+      "baseline": "SFT 起點；帶真實環境報酬挑 10 條的 Best-of-N",
+      "value": "SFT 63.1、Best-of-N 63.8；ETO 67.4",
+      "id": "2403.02502"
+    },
+    {
+      "metric": "WebShop 成功率（GiGPO，Qwen2.5-1.5B）",
+      "baseline": "GRPO；拿掉步驟項（ω = 0）",
+      "value": "GRPO 56.8、ω = 0 為 56.6；GiGPO 67.4（3 個 seed，標準差 ±4.5）",
+      "id": "2505.10978"
     }
-   ],
-   "counter_evidence": [],
-   "verification": "對同一個偵測器算兩組數字：只用失敗軌跡的定位準確率，以及兩類混合時的兩類 F1 與誤報率；平凡基準是一律判有錯（判第 1 步）與一律判沒有錯。兩類 F1 不高於這兩個平凡預測，或在無錯軌跡上判「沒有錯」的比率接近一律判有錯的 0，就判為還不能接上 E3。只看失敗軌跡的分數與兩類 F1 排名不同時，以兩類 F1 為準。",
-   "what_to_measure": null,
-   "grade": "A",
-   "grade_reason": "逐點對照 A：(1) 不含 F1–F4 的來源有 2412.06559、2311.08516、2504.08942；2412.06559 與 2311.08516 不同作者群、不同資料（數學題對 BIG-Bench Mistake），彼此獨立。(2) 方向一致：兩者都量到「只看有錯樣本會獎勵過度判錯」——ProcessBench 上只看錯誤樣本時 Llama-3.1-8B-Instruct（44.4）排在 Qwen2.5-Math-7B-Instruct（15.5）之前，兩類 F1 下排序對調（10.9 對 26.8，筆記 key_results[3]）；Tyen 的 GPT-4 隨呼叫數增加，無錯軌跡準確率掉到 13.79。(3) 有量化數字。(4) 章內沒有反例；ProcessBench 本身就是章點名的「反例」（L311），支持本條。依規格補充，measure 型看的是「不這樣量會看錯」。支持結果全是單次執行（F5），屬雜訊旗標。",
-   "depends_on": [],
-   "edges": [
-    "E3",
-    "E4"
-   ]
-  },
-  {
-   "id": "T4-03",
-   "type": "measure",
-   "decision": "偵測器、評審或歸因器的頭條數字，要對照哪些平凡基準、命中要怎麼定義，才不會看錯？",
-   "recommendation": "在同一批資料上算出並和頭條並列：一律判多數類（一律判失敗、一律答「沒出現」）、一律猜第一步、一律猜最常出錯的 agent、均勻隨機；放寬容忍度（±k）時，每個 k 都重算一次隨機基準；報 accuracy 時一定附正例基率與兩類各自的 recall 或 precision；命中定義寫死成索引完全比對，不用子字串比對，並記錄標籤版本；依軌跡長度分桶報分數，每桶附同長度下的隨機基準；超出上下文或輸出無法解析的樣本留在分母裡算判錯，並另報比例。",
-   "defaults": null,
-   "switch_when": null,
-   "evidence": [
+  ],
+  "edge_interfaces": [
     {
-     "id": "2311.08516",
-     "finding": "BIG-Bench Mistake 上一律猜「有錯」的加權 F1 是 78 [arXiv:2311.08516]；GPT-3.5-Turbo 的 direct trace-level 只有 3.76–46.57，低於這個基準 [arXiv:2311.08516]。",
-     "where": "notes/2311.08516.json key_results[3]、limitations_observed[4]",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "人工標籤（α 0.97，key_results[0]），不是 F4；本條本身就是平凡基準的比較，不是 F1；GPT-3.5-Turbo 評的是 PaLM 2 的軌跡，不是 F3；不是 F2。limitations_observed[4] 指出 GPT-4 家族有 10／15 與 6／10 格高於基準，所以結論是「多數模型低於、較強模型稍高且依任務波動」。F5：單次執行。"
+      "edge": "E3",
+      "role": "produces",
+      "payload": "異常判定（有沒有異常）；位置（步驟索引、負責的 agent 或 span id），並註明所用的命中定義與容忍度；異常類別，並註明分類法與版本；判定依據的軌跡片段；偵測器身分與版本；該偵測器在同時含成功與失敗軌跡的集合上量到的誤報率與漏報率（量法見 T4-02）。",
+      "must_not_pass": "驗收用的成敗 oracle 或 ground truth 本身，以及由它觸發或推出的判定（AgentDebug 與 AgenTracer 的觸發依賴 oracle，AgenTracer 的標註者還看得到 ground truth）；被併進訓練獎勵、而且沒在新策略軌跡上重量過召回率的偵測器輸出；只在失敗軌跡上評過的偵測器所給的位置當成已驗證；把過程缺陷標籤（例如 MAST 類）當成失敗原因傳過去。",
+      "id": ["2509.25370", "2509.03312", "2503.11926", "2505.00212", "2503.13657", "2404.06474"]
     },
     {
-     "id": "2504.08942",
-     "finding": "副作用 recall 都能寫成 k/72，測試集中約 72/1106 ≈ 6.51% 有副作用 [arXiv:2504.08942]；GPT-4o mini (A) 的副作用 precision 7.2 幾乎等於基率，最佳的 14.1 也只有基率的 14.1 ÷ 6.51 ≈ 2.17 倍 [arXiv:2504.08942]；GPT-4o (A) 的副作用 recall 91.7、precision 7.7，換算約判出 91.7% × 72 ÷ 7.7% ≈ 857 條有副作用 [arXiv:2504.08942]。",
-     "where": "ch04〈頭條數字與打折後的讀法〉表 L296；陷阱〈AgentRewardBench 只比 precision〉L314；§程式驗證 L394（證實 72 是唯一解）",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "以專家標註為準，不是 F4；本條是對基率的比較，不是 F1；judge 不產生軌跡，不是 F2／F3。F5：單次執行、每個 agent 的軌跡少（筆記 limitations_observed[4]）。"
-    },
-    {
-     "id": "2503.13657",
-     "finding": "MAST judge 在 14 個稀疏二元標籤上的 accuracy 是 0.94 [arXiv:2503.13657]；本章在「對全部格子做 micro 計算」的前提下，取 recall 0.77、precision 0.833，反推正例率約 (1 − 0.94)/((1 − 0.77) + 0.77 × (1/0.833 − 1)) ≈ 0.156，一律答「沒出現」的 accuracy 也有約 1 − 0.156 ≈ 0.844 [arXiv:2503.13657]。",
-     "where": "ch04 陷阱〈MAST judge 的 accuracy 大半來自負例〉L313",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "judge 對人工標籤的量測，judge 是被量的對象，不是 F4；本條是平凡基準的比較，不是 F1；不是 F2／F3。「micro 計算」這個前提論文沒寫明（L313），是條件式推算。F5：人工一致度只來自 15 條軌跡（筆記 limitations_observed[0]）。"
-    },
-    {
-     "id": "2505.00212",
-     "finding": "Who&When hand-crafted 一律猜 WebSurfer，agent-level 在現行標籤是 33/58 ≈ 56.9%，論文當時的標籤是 31/58 ≈ 53.4%，與 all-at-once 的 55.17／53.44 相當 [arXiv:2505.00212]；均勻隨機在 ±2、±3、±5 分別是 16.05、21.77、31.70，step-by-step 在 ±3 的 18.10 低於隨機 [arXiv:2505.00212]；±1 時 step-by-step 最高（14.66），±5 時 all-at-once 以 43.10 反超 [arXiv:2505.00212]；公開評分腳本用子字串比對，真值 4 時預測 14 也算命中，論文實驗時還有 3/58 條標籤指到 log 結尾之後 [arXiv:2505.00212]。",
-     "where": "ch04 陷阱〈Who&When 只和 random 比〉L333；〈放寬容忍度就改寫排名〉L319；〈評分腳本用子字串比對〉L320；〈基準在發表後改版〉L379",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "這些計數是精讀時依公開資料重算，程式驗證因不下載資料集而無法判定（ch04 L333、L392），不屬 F1–F4 但要記得。本條本身就是平凡基準的比較，不是 F1；人工標籤，不是 F4；不是 F2／F3。多數類基準用到測試集的標籤分佈，量的是「只靠先驗能拿幾分」（L333）。F5：58 條、沒有重複執行（L344）。"
-    },
-    {
-     "id": "2404.06474",
-     "finding": "Pan 的評估器在 WebArena 對 oracle 的一致率是 74.4–82.1% [arXiv:2404.06474]；若這批 GPT-4 軌跡的成功率落在 WebArena 原報的 14.41% 與 Pan 重現的 15.6% 之間，一律判失敗就有 100 − 15.6 = 84.4 到 100 − 14.4 = 85.6（%），高於評估器 [arXiv:2404.06474][arXiv:2307.13854]；照 accuracy = π·TPR + (1 − π)·TNR 推算，失敗軌跡被判成成功的比例至少是 GPT-4V 1 − 0.806/(1 − 0.144) ≈ 5.8%、Captioner + Mixtral 1 − 0.744/(1 − 0.144) ≈ 13.1% [arXiv:2404.06474]。",
-     "where": "ch04〈頭條數字與打折後的讀法〉表 L287；陷阱〈不平衡資料上的 accuracy 會被多數類撐高〉L312",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "條件式推算：只在該軌跡集成功率約 14.4%–15.6% 時成立（ch04 L312；筆記 limitations_observed[0]）。對照的 WebArena oracle 是手寫規則，依規格補充不算 F4，但它本身會漏判成功（規則式 recall 55.9，L192），一致率會繼承這個漏判。本條是平凡基準的比較，不是 F1；不是 F2。F5：單次評估、沒有變異（limitations_observed[8]）。"
-    },
-    {
-     "id": "2505.08638",
-     "finding": "TRAIL 的所有指標都與輸入長度負相關，Location 的 Spearman ρ 是 −0.508，GAIA 分割的軌跡平均約 287K tokens、最長 7.5M [arXiv:2505.08638]；公開腳本把超出上下文或無法解析的軌跡直接跳過、不計入分母 [arXiv:2505.08638]；定位指標的分母是金標集合，本質是 recall，列出所有 span id 理論上就能拿到 Location Accuracy 1.0（精讀時從官方腳本讀出，程式驗證無法判定）[arXiv:2505.08638]。",
-     "where": "ch04 未解問題 6 L688；陷阱〈格式失敗被算成判斷失敗〉L358；〈TRAIL 的定位指標只算 recall〉L310；§程式驗證 L393",
-     "flaws": [
-      "F1",
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F1：TRAIL 沒有切塊、逐 span 掃描或有工具裁判的對照組（ch04 L335），長度趨勢也沒有附同長度的隨機基準（span 越多，隨機命中越難，本章未量）。人工逐 span 標註，不是 F4。F5：148 條、SWE 分割約 30 條（L344）。"
-    },
-    {
-     "id": "2412.06559",
-     "finding": "ProcessBench 的 Qwen2.5-Coder-7B-Instruct 在 greedy 下 GSM8K 錯誤樣本 0.0、正確樣本 20.2，精讀時推測是 \\boxed{} 解析失敗，論文沒報無法解析的比例 [arXiv:2412.06559]；AgenTracer 表中本身就是標註者的 DeepSeek-R1 在 code 子集只有 agent 11.81、step 10.23，精讀時同樣推測是解析失敗 [arXiv:2509.03312]。",
-     "where": "ch04 陷阱〈格式失敗被算成判斷失敗〉L358",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "專家標籤、索引比對，不是 F4；本條指出排行榜混入指令遵循能力（筆記 limitations_observed[6]），不涉及 F1–F3。F5：單次評估。「解析失敗」是精讀推測，論文沒報比例。"
+      "edge": "E4",
+      "role": "produces",
+      "payload": "「沒偵測到異常」的判定；該偵測器在成功軌跡上判對的比率（ProcessBench 正確樣本準確率式的數字）；這次沒被檢查到的部分（例如超出上下文被跳過、輸出無法解析）。",
+      "must_not_pass": "只在失敗軌跡上評過、成功軌跡上的表現未知的偵測器所給的「正常」判定，卻不加標記；被跳過或解析失敗的軌跡被當成「正常」放行；以使用者或模擬器的成敗 oracle 決定要不要走正常路徑。",
+      "id": ["2412.06559", "2504.08942", "2505.00212", "2505.08638"]
     }
-   ],
-   "counter_evidence": [],
-   "verification": "對每個偵測器、評審或歸因器，在同一批資料上算出上述各平凡基準並與頭條並列；頭條不高於最強的平凡基準就判為沒有效。容忍度放寬後的排名、長度分桶後的排名與完全比對下不一致時，報告會分岔的那幾格。另記：被排除或解析失敗的樣本比例，以及所用標籤的版本。",
-   "what_to_measure": null,
-   "grade": "A",
-   "grade_reason": "逐點對照 A：(1) 不含 F1–F4 的來源有 2311.08516、2504.08942、2503.13657、2505.00212、2404.06474、2412.06559，作者群彼此不同、資料不共用（2509.03312 在 Who&When 上評估，但這裡引的是它自己的 code 子集）。(2) 方向一致：平凡基準都追平或超過報告的數字（全猜有錯的 78、副作用基率 6.51%、一律「沒出現」的 0.844、一律 WebSurfer 的 56.9%、±3 隨機 21.77、一律判失敗的 84.4–85.6）。(3) 有量化數字。(4) 反證段落沒有反例；Who&When「一律猜第 1 步 34/126 ≈ 26.98%」因分母可能不同而無法確認（L291、L392），所以沒有放進證據，只列在 trivial_baselines。限制：MAST 與 Pan 的兩筆是條件式推算，Who&When 的計數程式驗證無法判定。依規格補充，measure 型看的是「不這樣量會看錯」。支持結果全是單次小樣本（F5），屬雜訊旗標。",
-   "depends_on": [],
-   "edges": [
-    "E3"
-   ]
-  },
-  {
-   "id": "T4-04",
-   "type": "avoid",
-   "decision": "能不能直接拿 LLM 評審判定軌跡成敗，當合成資料的過濾器、訓練獎勵或修正的觸發器？",
-   "recommendation": "不要在沒量過之前就接上：先在自己的軌跡上抽一批由人工標成敗（與副作用）的樣本，量評審的 precision 與 recall，並與規則式判定、一律判成功、一律判失敗並列；兩者都達到用途需要時才接上；不要拿一致率、相關係數或下游成績代替這一步。",
-   "defaults": null,
-   "switch_when": "有可執行的確定性判定（單元測試、環境 reward）時改用它標成敗，例如 SWE-Gym 以單元測試替任何 agent 的軌跡自動標成敗 [arXiv:2412.21139]；但規則式評估的 recall 只有 55.9，會漏判 100 − 55.9 = 44.1% 的成功軌跡 [arXiv:2504.08942]，所以用規則式時同樣要抽人工量 recall。",
-   "evidence": [
-    {
-     "id": "2504.08942",
-     "finding": "以 6 位專家對 1302 條網頁 agent 軌跡的標註為準，受測的 12 個 judge 沒有一個成功 precision 超過 70%，最高是 GPT-4o (A) 的 69.8 [arXiv:2504.08942]；作者用 GPT-4o 重做的 Pan 評估器 AER-C、AER-V 是 67.7、67.6 [arXiv:2504.08942]；副作用的最佳 precision 只有 14.1 [arXiv:2504.08942]；judge 會附和 agent 自述的錯誤推理，拿掉最終 AXTree 與截圖後，GPT-4o mini 的成功 precision 只從 61.5–64.5 掉到 60.7 [arXiv:2504.08942]。",
-     "where": "ch04 §軌跡／步驟層級評估與 process reward（2025 年 4 月 AgentRewardBench）L122；§LLM 當評審 L499；§軌跡裡 agent 的自述 L515",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "就這個量測本身判：以專家標註為準，judge 是被量的對象，依規格補充不是 F4；有規則式評估（P 83.8、R 55.9）與副作用基率當對照（L122、L314），不是 F1；judge 不產生被評的軌跡，不是 F2。judge 與 agent 骨幹重疊（筆記 limitations_observed[10]）若造成自我偏好，只會讓量到的 precision 更低，不會讓「不到 70%」變假，不算 F3。F5：每個 agent 的測試軌跡少、沒有信賴區間（limitations_observed[4]）。標註政策偏寬（limitations_observed[7]）讓專家端偏向判成功，會把 precision 往上推，真實 precision 可能更低。"
-    },
-    {
-     "id": "2412.09605",
-     "finding": "AgentTrek 的 GPT-4o 評估器在 558 筆人工金標準上一致 84.0% [arXiv:2412.09605]；但判準寬鬆（超過 8 個正確動作就算成功、沒按送出也算成功），輸入只有推理與動作文字、沒有截圖，等於讓 GPT-4o 評重放 agent 自己寫的自述 [arXiv:2412.09605]；論文說評估器會找出最早失敗點，提示詞卻只要求二元判定 [arXiv:2412.09605]。",
-     "where": "ch04〈頭條數字與打折後的讀法〉表 L295；§軌跡裡 agent 的自述 L514；§軌跡的格式、收集與合成 L76",
-     "flaws": [
-      "F1",
-      "F3",
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F3：GPT-4o 重放產生軌跡與自述，同一個 GPT-4o 評估器讀這段自述判成敗（ch04 L514）。F1：只報一致率，沒有成敗基率或一律判成功的對照。F5：單次。人工金標準不是 F4。"
-    },
-    {
-     "id": "2412.19723",
-     "finding": "OS-Genesis 的 TRM 與人工評分的 Spearman 在 100 條軌跡上是 0.813／0.798 [arXiv:2412.19723]；但 TRM 只看執行器自己寫的低階指令與最後三張截圖，點錯元素而敘述寫對時，中段的錯誤看不到 [arXiv:2412.19723]；按 1–5 分比例抽樣時，1 分的軌跡仍有滿分軌跡五分之一的機率被抽進訓練 [arXiv:2412.19723]。",
-     "where": "ch04 §三條線在哪裡交會 L192；陷阱〈LLM 給的標籤〉L340；§軌跡裡 agent 的自述 L514；§軌跡的格式、收集與合成 L77",
-     "flaws": [
-      "F3",
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F3：GPT-4o 既產生軌跡的低階指令，又在 TRM 裡讀這些指令打分（ch04 L514、L340）。F5：100 條、單次；標註者人數與一致度沒報（L340）。相關係數在 1–5 分粗刻度上計算，沒有平凡基準可比，F1 不適用。"
-    },
-    {
-     "id": "2404.06474",
-     "finding": "Pan 的評估器被拿去篩 filtered BC 的資料並當 Reflexion 的獎勵 [arXiv:2404.06474]；它對 WebArena oracle 的一致率 74.4–82.1% 可能低於一律判失敗的 84.4–85.6%（條件式推算）[arXiv:2404.06474][arXiv:2307.13854]；WebArena 與 Android 實驗都只餵最後一張截圖加動作字串 [arXiv:2404.06474]。",
-     "where": "ch04 §軌跡／步驟層級評估（2024 年 4 月 Pan）L119；〈頭條數字與打折後的讀法〉L287；E3 L630",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [
-      "F3"
-     ],
-     "flaw_basis": "F3：評估器與 actor 同屬 GPT-4 系列，可能有相關的盲點（筆記 limitations_observed[8]），論文沒有分析，放 unverified。對照的是手寫 oracle，不是 F4。F5：單次評估。84.4–85.6 的比較只在該軌跡集成功率約 14.4%–15.6% 時成立（L312）。"
-    }
-   ],
-   "counter_evidence": [
-    {
-     "id": "2410.10934",
-     "finding": "Agent-as-a-Judge 與人類共識的一致率是 83.88–92.07%，同樣輸入的 LLM-as-a-Judge 是 60.38–84.15% [arXiv:2410.10934]；作者自己指出需求判定類別不平衡，一律判未達成也能拿到高一致率 [arXiv:2410.10934]。",
-     "where": "ch04 §軌跡／步驟層級評估〈評審對人工的另一組讀數〉L146",
-     "flaws": [
-      "F1"
-     ]
-    },
-    {
-     "id": "2404.06474",
-     "finding": "Pan 的評估器在 AitW 上對人工判定的一致率是 89.8–92.9% [arXiv:2404.06474]；但這是四種策略的軌跡合併計算，各策略成功率差很大，類別不平衡同樣會墊高 accuracy [arXiv:2404.06474]。",
-     "where": "ch04 §軌跡／步驟層級評估 L119；notes/2404.06474.json limitations_observed[1]",
-     "flaws": [
-      "F1",
-      "F5"
-     ]
-    }
-   ],
-   "verification": "抽自己的軌跡（成功與失敗都要有）由人工標成敗，量評審的 precision、recall，並與規則式判定、一律判成功（precision 等於成功基率）、一律判失敗並列；precision 不高於成功基率，或 recall 低於規則式判定，就判為不能接上。另做一組拿掉 agent 自述、只留動作與觀測的消融，看 precision 掉多少——章內沒有人做過這個對照（L517）。",
-   "what_to_measure": null,
-   "grade": "B",
-   "grade_reason": "逐點對照：(1) 不含 F1–F4 的來源只有 2504.08942 一個；2412.09605 與 2412.19723 有 F3（評審讀的是同一個模型寫的自述），2404.06474 的 F3 未能排除，所以不是 A。B 成立的條件是「只有 1 個不含 F1–F4 的來源」。(2) 反例（Agent-as-a-Judge 的 83.88–92.07%、Pan 在 AitW 的 89.8–92.9%）可用條件切開：都是一致率，類別不平衡時會被多數類墊高，和以專家為準的 precision 不是同一個量（ch04 L146、L192 說三種數字不能直接比）。依規格，avoid 型的毛病就「壞掉的那個量測」本身判。支持結果都是單次小樣本（F5），屬雜訊旗標。",
-   "depends_on": [],
-   "edges": [
-    "E3",
-    "E4"
-   ]
-  },
-  {
-   "id": "T4-05",
-   "type": "avoid",
-   "decision": "能不能把最終結果成功的軌跡直接當成過程正確的示範，或把在失敗軌跡上找到的失敗模式當成失敗原因？",
-   "recommendation": "不要：以結果篩出的成功軌跡進訓練或當正例之前，抽樣做過程檢查（逐步人工檢查，或依 T4-01 量過的步驟評分器），報「結果對、過程錯」的比例；失敗模式標籤要同時在成功與失敗軌跡上算出現率，只有兩組出現率差得開的模式，才拿來當失敗原因或觸發條件。",
-   "defaults": null,
-   "switch_when": null,
-   "evidence": [
-    {
-     "id": "2210.03629",
-     "finding": "ReAct 只用答案 EM 篩出 3,000 條軌跡當微調資料 [arXiv:2210.03629]；依論文自己的 Table 2，答對的軌跡有 6% 是推理或事實捏造的 false positive，答錯的軌跡有 29% 其實是標籤歧義 [arXiv:2210.03629]。",
-     "where": "ch04 §軌跡的格式、收集與合成（2022 年 10 月 ReAct）L53、L56；§成功的軌跡也帶著「錯誤」L483",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "人工逐條標成功與失敗模式（ch04 L54），不是 LLM 判定，不是 F4；本條是比例描述，不涉及方法比較，F1 不適用；標註者不產生軌跡，不是 F2／F3。F5：每格 50 條、只做 HotpotQA、標註者人數與一致性沒說（筆記 limitations_observed[5]）。"
-    },
-    {
-     "id": "2412.06559",
-     "finding": "最終答案正確、過程卻被專家判為有錯的比例，GSM8K 3.5%、MATH 18.8%、OlympiadBench 32.2%、Omni-MATH 51.8%，隨難度上升 [arXiv:2412.06559]。",
-     "where": "ch04 §軌跡分析、失敗分類與歸因（ProcessBench）L161；§成功的軌跡也帶著「錯誤」L484；README L161",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "3 位博士級數學背景標註者一致才定標（ch04 L159），不是 F4；比例描述，F1 不適用；不是 F2／F3。標註者手上有參考解，「最早錯誤」可能偏向偏離參考解之處（筆記 limitations_observed[8]），比例可能偏高。F5：單次。"
-    },
-    {
-     "id": "2501.07301",
-     "finding": "在「答案對、過程錯」的子集上，除了 Qwen 自己的兩個模型，其他開源 PRM 的偵測準確率都低於 50% [arXiv:2501.07301]。",
-     "where": "ch04 §成功的軌跡也帶著「錯誤」L484；陷阱〈Qwen 的 Table 5 用算術平均〉L327",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "專家標籤（ProcessBench 子集），不是 F4。F5：GSM8K 子集只有 7 題（筆記 limitations_observed[8]）。與 2412.06559 同一團隊，不算獨立來源。"
-    },
-    {
-     "id": "2503.13657",
-     "finding": "MAST Table 7 中，FM-3.3 在 ChatDev 的成功 run 是 20.0%、失敗 run 25.0%，MetaGPT 的 FM-1.1 在成功 run 33.3%、失敗 run 16.7% [arXiv:2503.13657]；精讀時據此指出 MAST 標籤是「過程缺陷」，不等於「失敗原因」[arXiv:2503.13657]。",
-     "where": "ch04 §成功的軌跡也帶著「錯誤」L485；未解問題 2 L680",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [
-      "F4"
-     ],
-     "flaw_basis": "F5：成功組約 10–12 條（筆記 limitations_observed[7]）。F4：MAST-Data 由單一 o1 judge 標（L167），Table 7 用的是不是 judge 標籤沒寫明，放 unverified。"
-    },
-    {
-     "id": "2506.18824",
-     "finding": "SWE 軌跡研究的摘要把 thought–action 不一致寫成與失敗強相關，但 RepairAgent 成功組的 2.3% 反而高於失敗組的 1.3% [arXiv:2506.18824]。",
-     "where": "ch04 §成功的軌跡也帶著「錯誤」L485；方法比較表 L265",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "約 14K 對元件主要由第一作者一人標註（ch04 L339），人工標註依規格補充不算 F4；成功與失敗組並列，不是 F1；不是 F2／F3。F5：每個 agent 的成功組約 10 條、沒有顯著性檢定（L173）。"
-    }
-   ],
-   "counter_evidence": [
-    {
-     "id": "2506.18824",
-     "finding": "失敗組連續重複同一動作的比例較高：RepairAgent 6.1% 對 13.6%、AutoCodeRover 0.0% 對 8.8% [arXiv:2506.18824]；但沒有顯著性檢定，失敗軌跡較長（RepairAgent 平均 40 步對 22 步），也可能只是預算耗盡前原地打轉 [arXiv:2506.18824]。",
-     "where": "ch04 §軌跡分析（SWE 軌跡研究）L173；陷阱〈SWE 軌跡研究的比例偏向失敗軌跡〉L329",
-     "flaws": [
-      "F5"
-     ]
-    }
-   ],
-   "verification": "抽一批結果成功的軌跡做逐步人工檢查，算「結果對、過程錯」的比例；對每個失敗模式算成功組與失敗組的出現率差與信賴區間。平凡基準是兩組出現率相同；差的信賴區間含 0 的模式不能當失敗原因或觸發條件。",
-   "what_to_measure": null,
-   "grade": "A",
-   "grade_reason": "逐點對照 A：(1) 不含 F1–F4 的來源有 2210.03629、2412.06559、2501.07301、2506.18824；2501.07301 與 2412.06559 同一團隊只算一個，2210.03629、2412.06559、2506.18824 作者群與資料彼此不同，彼此獨立。(2) 方向一致：結果成功不代表過程無錯（6%、3.5%–51.8%），某些「錯誤」在成功組更常見（2.3% 對 1.3%）。(3) 有量化數字。(4) 反例（重複動作在失敗組較高）可用條件切開：本條沒有說所有模式都分不開，而是要求逐一量兩組出現率，重複動作正是可能分得開的那種；它本身也有長度混淆（L329）。avoid 型的毛病就「壞掉的那個量測」本身判。支持結果全是單次小樣本（F5），屬雜訊旗標。",
-   "depends_on": [],
-   "edges": [
-    "E3",
-    "E4"
-   ]
-  },
-  {
-   "id": "T4-06",
-   "type": "avoid",
-   "decision": "能不能把一個學出來的步驟評分器或異常偵測器併進訓練獎勵，再用它自己的分數判斷訓練有沒有進步？",
-   "recommendation": "不要拿它自己的分數判進度：併進獎勵或篩選條件時，另外保留一個不參與訓練的判定（環境成敗、單元測試或人工抽樣）追蹤真實成功率，訓練進度與停點以它為準；評分器在驗證集上的分數、或用同一個評分器量出的每步分數提升，都不算進步的證據；被併進獎勵的偵測器，要在新策略的軌跡上重新量過召回率，才能再當執行期的異常觸發器。",
-   "defaults": null,
-   "switch_when": "每一輪都以新策略的 rollout 重訓評分器時，AgentPRM 三輪迭代的成功率逐輪上升，64.9 → 73.9 → 85.8 → 88.1 [arXiv:2502.10325]；最佳化壓力還低的訓練早期，把 CoT 監控器併進 reward 反而產出較多真解 [arXiv:2503.11926]；但兩篇都沒給出何時開始崩的可用門檻。",
-   "evidence": [
-    {
-     "id": "2502.10325",
-     "finding": "PRM 只用 10k 條 rollout 訓練時，約 400 步後成功率由 82% 掉到 70%，驗證集上的 process reward 卻一路上升 [arXiv:2502.10325]；用資料分割訓練的 ensemble 分數也一起上升，偵測不到 [arXiv:2502.10325]。",
-     "where": "ch04 §軌跡／步驟層級評估（2025 年 2 月 AgentPRM）L121；〈驗證集上的 process reward 會騙人〉L477；E3〈偵測器一旦變成最佳化目標就會失效〉L649",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "壞掉的量測是 ALFWorld 環境的成功率，屬確定性判定，不是 F4；PRM 的訓練標籤來自訓練任務的 rollout 結果，評估在 OOD 評估局，不是 F2；成功率不是 PRM 給的，不是 F3；有同一條曲線的前段當對照，F1 不適用。F5：單次執行、134 局（筆記 limitations_observed[5]）。"
-    },
-    {
-     "id": "2503.11926",
-     "finding": "把 CoT 監控器併進 reward 之後，agent 仍以可觀比例作弊，監控器召回率卻降到接近 0（只有曲線圖）[arXiv:2503.11926]；沒有併進 reward 的基準 agent，作弊幾乎全被同一個監控器抓到 [arXiv:2503.11926]。",
-     "where": "ch04 E3〈偵測器一旦變成最佳化目標就會失效〉L649；notes/2503.11926.json key_results[3]",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "作弊真值是事後的字串 regex，屬確定性判定，不是 F4；有不加壓力的基準 agent 當對照，不是 F1；真值不是監控器給的，不是 F2／F3。F5：只有曲線圖，沒有數值表、誤差區間或種子數（筆記 limitations_observed[3]）。Cheating 標籤定義前後不一、只抓改測試一類（limitations_observed[4][5]），所以「仍在作弊」是下界。"
-    },
-    {
-     "id": "2312.08935",
-     "finding": "以 PRM 分數做逐步 PPO 之後，再拿 PRM 替新策略做驗證，在 MATH 上輸給 self-consistency，41.1 對 42.3 [arXiv:2312.08935]；ORM 也掉到 41.3，精讀時指出這比較像兩種 RM 都跟不上策略分布的移動 [arXiv:2312.08935]。",
-     "where": "ch04 §用自己產生的軌跡繼續訓練〈評估器也跟不上變強的策略〉L476",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "最終答案比對，不是 F4；有 self-consistency 當平凡基準，不是 F1；判分不是 PRM 給的，不是 F2／F3。F5：RL 只有單一種子（ch04 L346）。ORM 同樣下降，表示原因可能是策略分布移動而不只是「被當成獎勵」；兩者都支持「最佳化之後不能沿用舊評分器的效度」。"
-    }
-   ],
-   "counter_evidence": [
-    {
-     "id": "2502.10325",
-     "finding": "同一篇的主實驗每輪重訓 PRM，成功率從 π0 的 64.9 逐輪升到 π3 的 88.1 [arXiv:2502.10325]。",
-     "where": "ch04 §軌跡／步驟層級評估 L121；notes/2502.10325.json key_results[0]",
-     "flaws": [
-      "F5"
-     ]
-    },
-    {
-     "id": "2503.11926",
-     "finding": "訓練早期以測試期 rejection sampling 選樣時，加了 CoT 壓力的 agent 產出更多真解、作弊率與基準相同；約訓練進度 25% 起情況反轉 [arXiv:2503.11926]。",
-     "where": "notes/2503.11926.json key_results[4][5]",
-     "flaws": [
-      "F5"
-     ]
-    }
-   ],
-   "verification": "訓練時同時畫兩條曲線：評分器在驗證集上的分數，與不參與訓練的判定量到的真實成功率；兩者走勢分岔（評分器升、真實成功率持平或降）就停。平凡基準是不併評分器、只用結果獎勵的同算力訓練；真實成功率不高於它，就判為沒有效。IPR 用建構訓練訊號的同一個凍結 SFT scorer 量「每步 reward 提升」，精讀時指為循環量測（L477），這類數字不能當驗收依據。",
-   "what_to_measure": null,
-   "grade": "B",
-   "grade_reason": "逐點對照 A 不成立，給 B。(1) 不含 F1–F4 的來源有 2502.10325、2503.11926、2312.08935，作者群、環境與資料彼此不同，形式上彼此獨立，regrade.py 會算成 A 候選。(2) 方向一致：策略對著學出來的評分器或偵測器最佳化之後，評分器的數字不再反映真實品質（AgentPRM 驗證分數升、成功率 82% → 70%；監控器召回率降到接近 0；PRM 驗證輸給 self-consistency）。(3) 但直接檢驗本條「評分器自己的分數會誤導進度判斷」的只有 2502.10325（驗證分數升、成功率 82% → 70%）有數值；2503.11926 也是直接檢驗，卻只有曲線圖，量化不足；2312.08935 檢驗的是相鄰的主張（策略移動之後舊評分器失效），而且 ORM 掉得一樣多，原因可能是分布移動而不是「被當成獎勵」。所以「2 個以上獨立、方向一致且有量化」只勉強靠一個有數值的直接來源撐著，依 B 的「只有 1 個」處理。(4) 反例可用條件切開：AgentPRM 主實驗每輪重訓評分器（本條要避免的是「固定的評分器」）；監控器在最佳化壓力低時有益，已寫進 switch_when。IPR 的循環量測是批評不是量到的破壞，沒有列為證據。avoid 型的毛病就「壞掉的那個量測」本身判。支持結果全是單次小樣本（F5），屬雜訊旗標。",
-   "depends_on": [],
-   "edges": [
-    "E3"
-   ]
-  },
-  {
-   "id": "T4-07",
-   "type": "measure",
-   "decision": "用自產軌跡或步驟對比反覆重訓時，怎麼量才不會把挑出來的高點當成方法的效果？",
-   "recommendation": "準備與測試集分開的驗證集，用它挑輪數、學習率、β 這類設定；報從第一輪起的完整逐輪曲線，不只報最佳輪；與同樣輪數或同樣 rollout 數的軌跡層級方法、以及只做 SFT 的起點比；每輪記錄新增訓練資料的題目分布與每題軌跡數。",
-   "defaults": null,
-   "switch_when": null,
-   "evidence": [
-    {
-     "id": "2406.11176",
-     "finding": "IPR 在 WebShop 第 1 到 5 輪是 63.6、63.7、68.2、71.3、68.1，第 1、2 輪都低於 ETO 的 67.4 [arXiv:2406.11176]；主表取的是測試集上的最佳輪（WebShop 第 4 輪、ALFWorld unseen 第 3 輪），文中沒有驗證集 [arXiv:2406.11176]；對 ETO 的提升寫成相對比例 5.8%、7.2%，絕對差是 71.3 − 67.4 = 3.9 與 61.3 − 57.2 = 4.1 點 [arXiv:2406.11176]。",
-     "where": "ch04 §軌跡的格式、收集與合成〈這條線停在結果層級〉L82–L83；〈頭條數字與打折後的讀法〉L283；〈在評估集上挑設定〉L352；〈IPR 的高點晚一兩輪〉L474；§程式驗證 L400",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "逐輪曲線本身由環境 reward 判分，不是 F4；它是未經挑選的完整曲線，測試集挑輪是 IPR 頭條的毛病，不是這條證據的毛病，所以不標 F2；有 ETO 與 SFT 當對照，不是 F1；不是 F3。F5：沒有 seed 或變異數，測試集 134 到 200 題（ch04 L346）。"
-    },
-    {
-     "id": "2403.02502",
-     "finding": "ETO 在 WebShop 與 ScienceWorld 前兩輪提升、第三輪後下降，ALFWorld 只有第一輪有效 [arXiv:2403.02502]；迭代輪數與 β 正好落在各資料集曲線的最佳點 [arXiv:2403.02502]；有 BC 起點時，RFT 在 WebShop 只從 63.1 升到 63.6，在 ALFWorld-Unseen 反而從 67.2 降到 66.4 [arXiv:2403.02502]。",
-     "where": "ch04 §用自己產生的軌跡繼續訓練 L473；〈在評估集上挑設定〉L351",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "環境 reward 判分，不是 F4；有 SFT 起點當對照，不是 F1；不是 F2／F3（這裡用的是逐輪趨勢）。F5：單次。與 2406.11176 共用第一作者與專家軌跡（ch04 L80、L85），不算獨立來源。"
-    },
-    {
-     "id": "2412.21139",
-     "finding": "SWE-Gym 在 OpenHands 上把 868 條 on-policy 成功軌跡與 491 條教師軌跡混合重訓，SWE-Bench Lite 從 15.3% 降到 8.7%，這一輪沒有套用每題軌跡數上限 [arXiv:2412.21139]；MoatlessTools 上迭代 RFT 讓 7B 從 7.0% 到 9.0% 再到 10.0%，32B 從 19.0% 到 19.7% 就停 [arXiv:2412.21139]；capping 門檻與 verifier 設定都在 SWE-Bench 上比過才定，各 cap 設定只差 0.4–2.0 個百分點 [arXiv:2412.21139]。",
-     "where": "ch04 §用自己產生的軌跡繼續訓練 L472；〈在評估集上挑設定〉L351；〈樣本小〉L347；notes/2412.21139.json key_results[3][4]",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "單元測試判分，屬確定性判定，不是 F4；有教師軌跡起點當對照，不是 F1；不是 F2／F3（這裡用的是逐輪結果，不是被挑的頭條）。F5：t=0 單次評估、沒有信賴區間（筆記 limitations_observed[2]）。15.3% → 8.7% 混了「沒套 capping」的變因（limitations_observed[0]）。"
-    }
-   ],
-   "counter_evidence": [],
-   "verification": "同一方法跑完整輪數、多個種子（GiGPO 的主表用 3 個 seed，L346）；在驗證集挑出的輪數下報測試分數，與測試集上最佳輪的分數並列，兩者的差就是挑選偏差的估計。平凡基準是第 0 輪（只做 SFT）與同算力的軌跡層級方法；驗證集挑出的輪在誤差棒內不高於它們，就判為沒有效。",
-   "what_to_measure": null,
-   "grade": "A",
-   "grade_reason": "逐點對照 A：(1) 不含 F1–F4 的來源有 2406.11176、2403.02502、2412.21139；2406.11176 與 2403.02502 共用作者與專家軌跡只算一個，與 2412.21139 彼此獨立（不同作者群、不同環境）。另有一筆沒列為證據的批評：AgentPRM 的模型挑選沒說清楚、探索與 shaping 的比較取單條曲線的峰值（筆記 2502.10325 limitations_observed[5][8]），屬精讀批評而非量測。(2) 方向一致：自產軌跡重訓的增益隨輪數不單調（IPR 第 1、2 輪低於 ETO、第 5 輪回落；ETO 一兩輪後下降；SWE-Gym 沒 capping 時 15.3% → 8.7%、有 capping 時兩輪就飽和），只報挑出的高點會高估。(3) 有量化數字。(4) 章內沒有逐輪單調上升、推翻本條的反例；AgentPRM 三輪上升（L121）不違反「要報逐輪曲線」。依規格補充，measure 型看的是「不這樣量會看錯」。支持結果全是單次小樣本（F5），屬雜訊旗標。",
-   "depends_on": [],
-   "edges": []
-  },
-  {
-   "id": "T4-08",
-   "type": "open",
-   "decision": "軌跡要用哪種格式記錄、失敗要用哪一套分類法標，才能和文獻與自己的其他資料對照？",
-   "recommendation": "文獻沒有答案",
-   "defaults": null,
-   "switch_when": null,
-   "evidence": [
-    {
-     "id": "2506.18824",
-     "finding": "把三個框架的日誌統一成 (thought, action, result) 三元組時，丟掉了 8.3% 無法歸類的動作，圖上也省略了 ErrorResponse 事件 [arXiv:2506.18824]；AutoCodeRover 失敗軌跡長度的離群值常來自 Response Parse Error 這類內部錯誤，動作分析看不到這類失敗訊號 [arXiv:2506.18824]。",
-     "where": "ch04 未解問題 8 L692",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "描述格式轉換的損失，不涉及方法比較，F1–F4 不適用。F5：每個 agent 約 10 條成功軌跡（L173）。"
-    },
-    {
-     "id": "2503.13657",
-     "finding": "MAST 的失敗分布是系統設計類 FC1 44.2、agent 間失準 FC2 約 32.4、任務驗證 FC3 23.5 [arXiv:2503.13657]；但 1642 條中有 700 條是 ProgramDev-v2 程式任務，整體比重偏向程式任務與弱模型 [arXiv:2503.13657]。",
-     "where": "ch04 §「失敗主要出在哪」受收集的腳手架左右 L490；陷阱 L328",
-     "flaws": [
-      "F4",
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F4：1642 條由單一 o1 judge 標註（ch04 L167）。F5：judge 的人工驗證只有 15 條（L339）。"
-    },
-    {
-     "id": "2505.08638",
-     "finding": "TRAIL 的 Output Generation 類佔 353/841 ≈ 42%，SWE 分割的 256 個錯誤中這一類佔六成以上，正對應作者刻意加上的提示詞限制 [arXiv:2505.08638]。",
-     "where": "ch04 §「失敗主要出在哪」受收集的腳手架左右 L491",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "人工逐 span 標註，不是 F4；一致性只報複核改動比例、不是獨立雙標（L339）。F5：148 條。"
-    },
-    {
-     "id": "2403.12881",
-     "finding": "語料內唯一直接比過格式的 Agent-FLAN，held-out Overall 41.7 對自行重做的 AgentTuning 38.2，但格式對齊的增益和訓練 token 幾乎翻倍（19.2M → 37.3M）混在一起 [arXiv:2403.12881]；Overall 還含只有它針對性訓練過的自建 Agent-H，扣掉後四項平均是 29.8 對 26.7 [arXiv:2403.12881]。",
-     "where": "ch04 §軌跡的格式、收集與合成（Agent-FLAN）L72；〈頭條數字與打折後的讀法〉L284；未解問題 8 L692",
-     "flaws": [
-      "F2",
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F2：能力配比直接在 T-Eval 與 HotpotQA 這兩個 held-out 集上挑（ch04 L48、L351）。F5：單次。"
-    }
-   ],
-   "counter_evidence": [],
-   "verification": "見 what_to_measure。",
-   "what_to_measure": "拿同一批軌跡（成功與失敗都要有）做兩件事。第一，用兩種以上格式序列化（例如逐步的 thought／action／observation 文字，與結構化的 span 樹），量轉換時丟掉的事件比例（無法歸類的動作、錯誤事件、解析錯誤），以及同一個偵測器在兩種格式上的兩類 F1 差。第二，用兩套以上分類法各標一次，量兩套類別的對應表與一致度（κ），以及每個類別在成功與失敗軌跡上的出現率差。決定方式：選轉換損失最低、而且類別在成功與失敗之間分得開的組合；兩套分類法對同一軌跡的主要失敗類別一致度低時，不要用任一套的分布結論決定先修什麼。",
-   "grade": null,
-   "grade_reason": "open 型不評等級。章的未解問題 8（L692）與 README 框架未解問題 8（L545–L549）都說軌跡格式與分類法沒有共同標準；五套分類法沒有在同一批軌跡上互相標過（L494）；唯一直接比過格式的 Agent-FLAN 混了 token 數翻倍（L72）。證據連一個有道理的建議都撐不起來，所以寫 open 而不是 C。",
-   "depends_on": [],
-   "edges": []
-  },
-  {
-   "id": "T4-09",
-   "type": "open",
-   "decision": "用軌跡做監督微調時，環境觀測（工具回傳）的 token 要不要算進 loss？",
-   "recommendation": "文獻沒有答案",
-   "defaults": null,
-   "switch_when": null,
-   "evidence": [
-    {
-     "id": "2310.05915",
-     "finding": "FireAct 附錄 A.7 是語料內唯一的直接實驗，方向隨規模相反：13B 的 ReAct+CoT 遮與不遮分別是 24.8 與 30.2，7B 是 24.0 與 22.2 [arXiv:2310.05915]；其餘組合多半差不到 1 分，例如 7B 的 ReAct 26.0 對 26.2、13B 的 ReAct 34.6 對 34.4 [arXiv:2310.05915]；HotpotQA 500 題、EM 約 40 時單一設定的標準誤約 2.2，兩設定相減約 3.1 [arXiv:2310.05915]。",
-     "where": "ch04 §觀測 token 要不要算進 loss L468；notes/2310.05915.json key_results[7]、limitations_observed[1]",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "EM 判分，不是 F4；遮與不遮互為對照，F1 不適用；不是 F2／F3。F5：單次、沒有多個 seed（筆記 limitations_observed[1]）。表的列名寫 CodeLlama、標題寫 Llama-2（limitations_observed[2]）。"
-    },
-    {
-     "id": "2310.12823",
-     "finding": "AgentTuning 只對模型回合（Thought＋Action）算 loss，Agent-FLAN 只算 assistant 輪，ETO 把指令與觀測一律遮蔽，三篇都沒有遮與不遮的比較 [arXiv:2310.12823][arXiv:2403.12881][arXiv:2403.02502]。",
-     "where": "ch04 §觀測 token 要不要算進 loss L468；格式對照表 L232–L239",
-     "flaws": [],
-     "unverified": [
-      "F1"
-     ],
-     "flaw_basis": "這是做法描述，沒有量測；有沒有和「不遮」比過，三篇都沒有，所以 F1 放 unverified。"
-    }
-   ],
-   "counter_evidence": [],
-   "verification": "見 what_to_measure。",
-   "what_to_measure": "同一批軌跡、同樣訓練步數，比遮與不遮觀測 token 的 loss，至少兩種模型規模、每組多個種子；量任務成功率，另量模型在推論時自己寫出觀測（捏造工具回傳）的比例——ReAct 的精讀推測不遮會助長這種捏造（L468），但沒有人量過。決定方式：兩種規模上都超出種子誤差棒的一方才採用；規模之間方向相反時，以實際要部署的規模的結果為準，並記下這個選擇沒有通則。",
-   "grade": null,
-   "grade_reason": "open 型不評等級。唯一的直接實驗方向隨規模相反，差距多在標準誤內（L468），章的判斷是「遮觀測是慣例、不是被證明過的做法」；寫不出區分兩種結果的條件，所以是 open 而不是 C。",
-   "depends_on": [],
-   "edges": []
-  },
-  {
-   "id": "T4-10",
-   "type": "open",
-   "decision": "失敗或只完成一部分的軌跡要丟掉、降權留下、當 DPO 負例、拿去訓練結果評分器，還是改用結果獎勵做線上 RL？",
-   "recommendation": "文獻沒有答案",
-   "defaults": null,
-   "switch_when": null,
-   "evidence": [
-    {
-     "id": "2310.12823",
-     "finding": "AgentTuning 的 7B 用未過濾軌跡訓練，held-in 從 1.96 降到 1.34 [arXiv:2310.12823]；但論文沒交代未過濾組有幾條、有沒有同樣混 ShareGPT，而 1.34 與「只用 agent 資料」完全相同，混淆了資料量與模仿失敗 [arXiv:2310.12823]。",
-     "where": "ch04 §失敗或部分完成的軌跡 L460",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [
-      "F2"
-     ],
-     "flaw_basis": "F2：η 依 held-out 表現挑出（ch04 L351），這個消融是否也受影響沒寫，放 unverified。F5：單次。"
-    },
-    {
-     "id": "2412.19723",
-     "finding": "OS-Genesis 主張保留部分完成的軌跡、按 TRM 分數降權，在高階任務上勝過不用 RM 與只留完整軌跡，但這個比較只有 Figure 5 的相對長條、沒有數字 [arXiv:2412.19723]。",
-     "where": "ch04 §失敗或部分完成的軌跡 L461",
-     "flaws": [
-      "F3",
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F3：GPT-4o 既執行又在 TRM 裡打分（L514）。F5：AndroidWorld 112 題、單次（L347）。"
-    },
-    {
-     "id": "2403.02502",
-     "finding": "ETO 把失敗軌跡當軌跡層級 DPO 的負例，WebShop 平均報酬從 SFT 的 63.1 升到 67.4 [arXiv:2403.02502]；沒有專家軌跡、跳過 SFT 時，單獨的 ETO 只有 12.5，低於未微調模型的 17.9 [arXiv:2403.02502]。",
-     "where": "ch04 §軌跡的格式、收集與合成（ETO）L66；§失敗或部分完成的軌跡 L462",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [
-      "F2"
-     ],
-     "flaw_basis": "F2：迭代輪數與 β 落在曲線最佳點，可能在評估集上挑（L351），放 unverified。環境判分，不是 F4。F5：單次。"
-    },
-    {
-     "id": "2412.21139",
-     "finding": "SWE-Gym 以成功與失敗各 1,318 條軌跡訓練軌跡層級 ORM，Best@16 達 32.0% [arXiv:2412.21139]。",
-     "where": "ch04 §軌跡的格式、收集與合成（SWE-Gym）L78；§失敗或部分完成的軌跡 L462",
-     "flaws": [
-      "F2",
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F2：verifier 設定在 SWE-Bench 測試集上比過才定（筆記 limitations_observed[1]）。F5：單次。"
-    },
-    {
-     "id": "2505.10978",
-     "finding": "GiGPO 以結果獎勵做線上 RL，失敗軌跡透過 advantage 拿到負訊號，是本章二十六篇裡這一類的唯一例子 [arXiv:2505.10978]；它只和 PPO、RLOO、GRPO 比，沒有和前四種做法在同一環境上比過 [arXiv:2505.10978]。",
-     "where": "ch04 §失敗或部分完成的軌跡 L463；未解問題 4 L684",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "環境判分，不是 F4。F5：3 個 seed，WebShop 標準差 ±4.5（L346）。"
-    }
-   ],
-   "counter_evidence": [],
-   "verification": "見 what_to_measure。",
-   "what_to_measure": "同一環境、同一任務集、同算力，比五組：只用成功軌跡 SFT；成功軌跡加按分數降權的部分完成軌跡；失敗軌跡當軌跡層級 DPO 負例；成功與失敗等量訓練結果評分器、再做 best-of-N；以結果獎勵做線上 RL。每組多個種子、輪數在驗證集上挑（量法見 T4-07），並記錄每組實際用了幾條軌跡；資料量不同的組另加一組等資料量的對照。平凡基準是只用成功軌跡 SFT。決定方式：只採用勝過平凡基準、差距超出種子誤差棒的做法。",
-   "grade": null,
-   "grade_reason": "open 型不評等級。章的判斷是「還回答不了部分完成的軌跡放進 SFT 是好是壞」（L464），未解問題 4（L684）指出四種做法分散在不同環境、基座與資料量，撐起各自做法的消融都有混淆；GiGPO 也沒和前四種在同一環境比過。寫不出切開結論的條件，所以是 open 而不是 C。",
-   "depends_on": [],
-   "edges": []
-  },
-  {
-   "id": "T4-11",
-   "type": "open",
-   "decision": "要不要把結果獎勵拆成步驟層級的訊號（步驟分數、步驟 advantage、步驟層級 DPO）來訓練 agent？",
-   "recommendation": "文獻沒有答案",
-   "defaults": null,
-   "switch_when": null,
-   "evidence": [
-    {
-     "id": "2406.11176",
-     "finding": "IPR 加上步驟層級 DPO 後四欄平均 69.4，ETO 66.4 [arXiv:2406.11176]；但只做一、兩輪時 WebShop 是 63.6、63.7，低於 ETO 的 67.4，最佳輪看測試集挑，拿掉步驟層級 DPO 後 WebShop 66.4 仍低於 ETO，兩者 SFT 起點也不同（60.2 對 63.1）[arXiv:2406.11176]；表中 Step-PPO 64.8 對 PPO 42.0，但 PPO 那列有三格與 ETO 自報相同、InterCodeSQL 的 52.4 來源不明 [arXiv:2406.11176]。",
-     "where": "ch04〈這條線停在結果層級〉L80–L87；爭議〈IPR 對 ETO〉L448、〈Step-PPO 對 PPO〉L449",
-     "flaws": [
-      "F2",
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F2：最佳輪數與 lr、β 看測試集挑（ch04 L352）。F5：沒有 seed、134–200 題（L346）。另有 SFT 起點不同的混淆（L85）。"
-    },
-    {
-     "id": "2505.10978",
-     "finding": "GiGPO 的 1.5B 在 ALFWorld 是 86.1 對 GRPO 的 72.8，WebShop 成功率 67.4 對 56.8，3 個 seed 平均 [arXiv:2505.10978]；ω = 0 拿掉步驟項時 WebShop 成功率是 56.6 [arXiv:2505.10978]；步驟項用 γ = 0.95 的折扣回報，論文沒有「GRPO 改用折扣回報」或「GRPO 加長度懲罰」的對照，增益可能有一部分來自長度塑形 [arXiv:2505.10978]；附錄的 DAPO 在 WebShop 分數 84.6 高於 GiGPO 的 83.5 [arXiv:2505.10978]。",
-     "where": "ch04 §軌跡／步驟層級評估（GiGPO）L123–L127；爭議〈GiGPO 對 GRPO〉L447",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "環境判分，不是 F4；有 GRPO 當對照，不是 F1；不是 F2／F3。F5：3 個 seed，WebShop 標準差 ±4.5（L346）。步驟訊號從沒對過步驟真值（L124）。"
-    },
-    {
-     "id": "2403.02502",
-     "finding": "ETO 的步驟層級對比在 WebShop 上，lr 1e-6、β 0.1 時只剩 8.3，lr 1e-7、β 0.5 時是 62.8，兩者混合 64.3，都不如軌跡層級的 67.4 [arXiv:2403.02502]。",
-     "where": "ch04 §軌跡的格式、收集與合成（ETO）L66；§三條線在哪裡交會 L188",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [
-      "F2"
-     ],
-     "flaw_basis": "F2：設定可能在評估集上挑（L351），放 unverified。只試了兩組設定，談不上證明這條路不可行（L682）。F5：單次。"
-    },
-    {
-     "id": "2410.08146",
-     "finding": "Setlur 指出，prover 就是當前策略時，以 advantage 當過程獎勵的 policy gradient 與只用結果獎勵相同 [arXiv:2410.08146]；它的 dense-reward 線上 RL 比 ORM-RL 高 >7%，但只有 MATH 一個資料集、只有 Gemma 2 系列，也沒有和以 Q^π-PRM 做 RL 的設定比 [arXiv:2410.08146]。",
-     "where": "ch04 §數學這條線（Setlur）L114；爭議 L439、L451",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "最終答案比對，不是 F4；有 ORM-RL 當對照，不是 F1。F5：單次、單一資料集。"
-    }
-   ],
-   "counter_evidence": [],
-   "verification": "見 what_to_measure。",
-   "what_to_measure": "同一環境、同樣 rollout 數，比：GRPO；GRPO 改用 γ 折扣回報；GRPO 加長度懲罰；GRPO 加步驟 advantage 項（GiGPO 式）；軌跡層級 DPO；步驟層級 DPO（IPR 式，需能重放到任意前綴）。每組多個種子、輪數在驗證集上挑。另抽一批軌跡由人工標出錯誤步，量各種步驟訊號判出的低分步與人工錯誤步的一致度——章內沒有任何一篇拿步驟真值檢查過 agent 上的步驟分數（L190）。含使用者回合時先確認環境能否重放或複製，IPR 與 GiGPO 都依賴這個前提（L660）。決定方式：步驟訊號同時勝過「GRPO＋折扣」與「GRPO＋長度懲罰」、差距超出種子標準差時才採用。",
-   "grade": null,
-   "grade_reason": "open 型不評等級。章的判斷是 IPR 只推翻了「步驟層級只能不如軌跡層級」的外推，不是證明步驟層級比較好（L87）；agent 上三組對照都不是乾淨的單變數實驗（L445），ETO 的步驟層級又輸給軌跡層級（L66）。正反兩邊都寫不出切開的條件，所以是 open 而不是 C。",
-   "depends_on": [],
-   "edges": []
-  },
-  {
-   "id": "T4-12",
-   "type": "open",
-   "decision": "要不要讓軌跡異常偵測器（不靠驗收用的成敗 oracle）在執行期直接觸發修正？觸發門檻怎麼定？",
-   "recommendation": "文獻沒有答案",
-   "defaults": null,
-   "switch_when": null,
-   "evidence": [
-    {
-     "id": "2404.06474",
-     "finding": "Pan 是本章唯一由偵測器自己的判定觸發修正、不靠 oracle 的例子：接上 Reflexion、最多 3 輪後，相對成功率增益 Captioner + Mixtral 16%、GPT-4V 29% [arXiv:2404.06474]；但偵測那一半只報 accuracy、可能低於一律判失敗，最終成功率仍由 WebArena oracle 計算，修正方式是整條任務重試，觸發訊號也沒有指出出錯的步驟 [arXiv:2404.06474]。",
-     "where": "ch04 E3〈兩半都做到的〉Pan L630；README L104（跨節點發現 2）",
-     "flaws": [
-      "F1",
-      "F5"
-     ],
-     "unverified": [
-      "F3"
-     ],
-     "flaw_basis": "F1：有「不觸發」的對照，但沒有同預算、不經偵測的重試對照（規格補充：兩種平凡基準只對了一種就標 F1）。F3：評估器與 actor 同屬 GPT-4 系列（筆記 limitations_observed[8]），放 unverified。F5：沒有重複次數或變異（limitations_observed[8]）。"
-    },
-    {
-     "id": "2509.25370",
-     "finding": "AgentDebug 從關鍵步帶著修正指引重跑，ALFWorld 上 GPT-4o-mini 從 21 升到 55，論文沒有標單位與評估集大小 [arXiv:2509.25370]；要等 Eval 判定整條任務失敗之後才觸發 [arXiv:2509.25370]。",
-     "where": "ch04 E3〈兩半都做到的〉L628；〈下游修正的增益，無法歸功於精準歸因〉L535",
-     "flaws": [
-      "F1",
-      "F2",
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F2：觸發依賴成功 oracle（ch04 L535）。F1：缺「強模型給、不做定位的通用回饋」對照（L535）。F5：每個環境 50–100 條（L344）。"
-    },
-    {
-     "id": "2509.03312",
-     "finding": "AgenTracer 把診斷注入下一輪解題，在 MaAS、OWL、MetaGPT 上帶來 4.8% 到 14.21% 的提升 [arXiv:2509.03312]；觸發條件是 oracle 給的失敗訊號，對照的通用反思 CRITIC 在 MaAS＋GAIA 第 2、3 輪是 −4.9% 與 −5.5% [arXiv:2509.03312]。",
-     "where": "ch04 E3 L629；〈下游修正的增益〉L535",
-     "flaws": [
-      "F1",
-      "F2",
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F2：觸發依賴 oracle，標註者 R1 也看得到 ground truth（ch04 L177、L535）。F1：只有通用反思，沒有同預算重抽或強模型通用回饋的對照（L535）。F5：單次。"
-    },
-    {
-     "id": "2311.08516",
-     "finding": "以模擬分類器掃描，多數任務要在錯誤定位準確率約 60–70% 時，回溯修正的增益才大過損失 [arXiv:2311.08516]；T4 的偵測器是 Who&When step-level 最佳 14.2%、AgentDebug 的 Step 45.0，任務與錯誤定義不同，只能當量級參考 [arXiv:2505.00212][arXiv:2509.25370]。",
-     "where": "ch04 E3〈T4 交出的異常訊號，準確度遠低於下游修正需要的水準〉L646；README L129–L131",
-     "flaws": [
-      "F1",
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "F1：沒有同算力的重抽或多數決基準（筆記 limitations_observed[1]）。F5：單次、分母小（limitations_observed[5]）。模擬分類器的假設不實際（limitations_observed[3]），60–70% 只是該模擬設定下的數字。"
-    },
-    {
-     "id": "2402.08115",
-     "finding": "GPT-4 當自己的驗證器時，在 Graph Coloring 把 118 個正確答案中的 113 個判錯，113 ÷ 118 ≈ 95.8%，系統因此在更差的候選上耗到 timeout、低於單次生成，換成程式驗證器就穩定提升 [arXiv:2402.08115]。",
-     "where": "ch04 E3〈誤報率多半沒量〉L648",
-     "flaws": [
-      "F5"
-     ],
-     "unverified": [],
-     "flaw_basis": "程式驗證器是確定性判定，不是 F4；有單次生成當對照。F5：單次。判定對象是整份答案，不是軌跡上的逐步偵測（L648）。"
-    }
-   ],
-   "counter_evidence": [],
-   "verification": "見 what_to_measure。",
-   "what_to_measure": "在自己的任務上分四組、同 token 預算：不觸發；偵測器觸發修正；不偵測、直接以同預算重抽或多數決；oracle 觸發（只當上限，不能上線）。量淨成功率、對→錯翻轉數（成功被誤判後重做而失敗）、偵測器在成功與失敗軌跡上的誤報率與漏報率（量法見 T4-02），並掃描觸發門檻。Pan 觀察到成功被誤判成失敗而重做時幾乎一定失敗，但沒有量化（L648），所以翻轉數要單獨報。決定方式：只在偵測器觸發組的淨成功率超出誤差棒、同時勝過「不觸發」與「同預算重抽」的門檻上採用；找不到這樣的門檻就不接 E3。",
-   "grade": null,
-   "grade_reason": "open 型不評等級。README 框架未解問題 2（L511）與章 E3 一節（L646–L648）都說非 oracle 偵測器接上修正後的淨效益沒有答案：唯一的非 oracle 例子（Pan）缺同預算對照，其餘兩篇靠 oracle 觸發，T4 偵測器的準確度也遠低於模擬推得的門檻。寫不出可行的建議，所以是 open 而不是 C。",
-   "depends_on": [],
-   "edges": [
-    "E3"
-   ]
-  }
- ],
- "trivial_baselines": [
-  {
-   "metric": "評估器判軌跡成敗的 accuracy（WebArena 的 GPT-4 軌跡，對手寫 oracle）",
-   "baseline": "一律判失敗",
-   "value": "100 − 15.6 = 84.4 到 100 − 14.4 = 85.6（%），條件是該軌跡集成功率在 14.4%–15.6% 之間；評估器是 74.4–82.1%",
-   "id": [
-    "2404.06474",
-    "2307.13854"
-   ]
-  },
-  {
-   "metric": "MAST judge 在 14 個失敗模式二元標籤上的 accuracy",
-   "baseline": "一律答「沒出現」",
-   "value": "約 0.844（本章在 micro 計算前提下由 accuracy 0.94、recall 0.77、precision 0.833 反推）；judge 是 0.94",
-   "id": "2503.13657"
-  },
-  {
-   "metric": "軌跡副作用判定的 precision（AgentRewardBench）",
-   "baseline": "副作用基率（隨機判有副作用的 precision）",
-   "value": "72/1106 ≈ 6.51%；GPT-4o mini (A) 7.2、最佳 14.1",
-   "id": "2504.08942"
-  },
-  {
-   "metric": "Who&When hand-crafted 的 agent-level accuracy",
-   "baseline": "一律猜 WebSurfer",
-   "value": "現行標籤 33/58 ≈ 56.9%、論文當時標籤 31/58 ≈ 53.4%；all-at-once 55.17／53.44；計數要讀資料集，程式驗證無法判定",
-   "id": "2505.00212"
-  },
-  {
-   "metric": "Who&When hand-crafted 的 step-level accuracy（±k 容忍度）",
-   "baseline": "均勻隨機",
-   "value": "±2／±3／±5 分別是 16.05／21.77／31.70；step-by-step 在 ±3 是 18.10",
-   "id": "2505.00212"
-  },
-  {
-   "metric": "Who&When algorithm-generated 的 step-level accuracy",
-   "baseline": "一律猜第 1 步；均勻隨機",
-   "value": "一律猜第 1 步 34/126 ≈ 26.98%，高於 Table 1 該子集最佳 25.51，但 Table 1 的百分比沒有一格能寫成 k/126，分母未必相同，無法確認；均勻隨機精讀重算 12.0，Table 1 印 19.06",
-   "id": "2505.00212"
-  },
-  {
-   "metric": "錯誤定位的加權 F1（BIG-Bench Mistake）",
-   "baseline": "一律猜有錯",
-   "value": "78；GPT-3.5-Turbo direct trace-level 3.76–46.57",
-   "id": "2311.08516"
-  },
-  {
-   "metric": "ProcessBench 兩類 F1",
-   "baseline": "一律答全對（-1）",
-   "value": "正確樣本 100、錯誤樣本 0，F1 為 0；接近這種行為的 Qwen2.5-Math-7B-Instruct 在 GSM8K 是 15.5／100.0，F1 ≈ 26.8",
-   "id": "2412.06559"
-  },
-  {
-   "metric": "PRM 加權多數決的最終答案正確率（Gemini Pro，MATH500，k=64）",
-   "baseline": "同 k 多數決",
-   "value": "67.2；OmegaPRM 69.4、PRM800K 67.6",
-   "id": "2406.06592"
-  },
-  {
-   "metric": "Best-of-64 平均正確率（7B policy）",
-   "baseline": "maj@64",
-   "value": "56.3；Qwen2.5-Math-PRM-7B 56.1",
-   "id": "2501.07301"
-  },
-  {
-   "metric": "PRM 推論期 best-of-N 的成功率（ALFWorld，134 局）",
-   "baseline": "同一策略不做重排",
-   "value": "π3 88.1；BoN(π3,Q2) 91.0，差 2.9 點約 4 局；沒有對多數決",
-   "id": "2502.10325"
-  },
-  {
-   "metric": "WebShop 平均報酬（ETO 設定，Llama-2-7B-Chat）",
-   "baseline": "SFT 起點；帶真實環境報酬挑 10 條的 Best-of-N",
-   "value": "SFT 63.1、Best-of-N 63.8；ETO 67.4",
-   "id": "2403.02502"
-  },
-  {
-   "metric": "WebShop 成功率（GiGPO，Qwen2.5-1.5B）",
-   "baseline": "GRPO；拿掉步驟項（ω = 0）",
-   "value": "GRPO 56.8、ω = 0 為 56.6；GiGPO 67.4（3 個 seed，標準差 ±4.5）",
-   "id": "2505.10978"
-  }
- ],
- "edge_interfaces": [
-  {
-   "edge": "E3",
-   "role": "produces",
-   "payload": "異常判定（有沒有異常）；位置（步驟索引、負責的 agent 或 span id），並註明所用的命中定義與容忍度；異常類別，並註明分類法與版本；判定依據的軌跡片段；偵測器身分與版本；該偵測器在同時含成功與失敗軌跡的集合上量到的誤報率與漏報率（量法見 T4-02）。",
-   "must_not_pass": "驗收用的成敗 oracle 或 ground truth 本身，以及由它觸發或推出的判定（AgentDebug 與 AgenTracer 的觸發依賴 oracle，AgenTracer 的標註者還看得到 ground truth）；被併進訓練獎勵、而且沒在新策略軌跡上重量過召回率的偵測器輸出；只在失敗軌跡上評過的偵測器所給的位置當成已驗證；把過程缺陷標籤（例如 MAST 類）當成失敗原因傳過去。",
-   "id": [
-    "2509.25370",
-    "2509.03312",
-    "2503.11926",
-    "2505.00212",
-    "2503.13657",
-    "2404.06474"
-   ]
-  },
-  {
-   "edge": "E4",
-   "role": "produces",
-   "payload": "「沒偵測到異常」的判定；該偵測器在成功軌跡上判對的比率（ProcessBench 正確樣本準確率式的數字）；這次沒被檢查到的部分（例如超出上下文被跳過、輸出無法解析）。",
-   "must_not_pass": "只在失敗軌跡上評過、成功軌跡上的表現未知的偵測器所給的「正常」判定，卻不加標記；被跳過或解析失敗的軌跡被當成「正常」放行；以使用者或模擬器的成敗 oracle 決定要不要走正常路徑。",
-   "id": [
-    "2412.06559",
-    "2504.08942",
-    "2505.00212",
-    "2505.08638"
-   ]
-  }
- ],
- "unresolved": [
-  "agent 軌跡上的步驟真值要怎麼定義、由誰標：人工判斷、反事實重放、「第一次出現」規則三種來源並存，反事實搜尋對人工標籤只有 12.0% 對直接提示 28.0% [arXiv:2509.25370]；沒有它，T4-01 與 T4-02 的步驟層級量法沒有共同的真值可用（ch04 未解問題 1 L678）。",
-  "偵測器在成功軌跡上的誤報率：Who&When、AgenTracer、AgentDebug 的評估集只有失敗軌跡，ProcessBench 有兩類但只有數學 [arXiv:2505.00212][arXiv:2509.03312][arXiv:2509.25370][arXiv:2412.06559]；T4-02 給了量法，但 agent 軌跡上沒有現成的兩類資料可以照做（ch04 未解問題 2 L680）。",
-  "PRM 式的步驟分數與失敗歸因兩條線在 agent 上沒有交會：AgentPRM、IPR、GiGPO 的步驟訊號都沒對過逐步人工真值，Who&When、TRAIL、AgentDebug 的步驟標籤也沒被拿來評步驟分數（ch04 未解問題 3 L682、L190）。",
-  "自動標籤的雜訊有多大、怎麼傳進訓練：EM 過濾留下 6% false positive [arXiv:2210.03629]，Qwen 的共識過濾丟掉 50–60% 資料 [arXiv:2501.07301]，沒有人量過標籤錯誤率對訓練結果的影響（ch04 未解問題 5 L686）。",
-  "長軌跡上量到的是除錯能力還是讀長文能力：TRAIL 的 Location 與輸入長度的 Spearman ρ 是 −0.508 [arXiv:2505.08638]，沒有一篇拿切塊、摘要或有工具的裁判當對照（ch04 未解問題 6 L688）。",
-  "評估器怎麼跟上變強的策略、不看結果時怎麼偵測 reward hacking：AgentPRM 的 ensemble 偵測不到，IPR 把評分者固定在第 0 輪成了天花板，GiGPO 每輪重算但訊號沒驗過 [arXiv:2502.10325][arXiv:2406.11176][arXiv:2505.10978]（ch04 未解問題 7 L690；T4-06 只說了不要做什麼）。",
-  "非 oracle 異常偵測器接上執行期修正後的淨效益（README 框架未解問題 2 L511；T4-12）：唯一的例子 Pan 缺同預算重試的對照，其餘靠 oracle 觸發 [arXiv:2404.06474][arXiv:2509.25370][arXiv:2509.03312]。",
-  "含使用者回合的軌跡：本章八篇合成論文的軌跡都沒有使用者回合，E4 的「沒偵測到異常就繼續與使用者互動」沒有任何 T4 論文實作；IPR 與 GiGPO 需要重放或複製環境，換成真實或隨機的使用者時前提不成立 [arXiv:2406.11176][arXiv:2505.10978]（ch04 E4 L660）。",
-  "agent 自述（thought、reasoning）當評審或歸因證據的影響：沒有一篇在 agent 軌跡上做過「有自述對沒有自述」的對照 [arXiv:2504.08942][arXiv:2412.09605]（ch04 L517）；T4-04 的評審驗收因此少一個該量的變因。"
- ]
+  ],
+  "unresolved": [
+    "agent 軌跡上的步驟真值要怎麼定義、由誰標：人工判斷、反事實重放、「第一次出現」規則三種來源並存，反事實搜尋對人工標籤只有 12.0% 對直接提示 28.0% [arXiv:2509.25370]；沒有它，T4-01 與 T4-02 的步驟層級量法沒有共同的真值可用（ch04 未解問題 1 L678）。",
+    "偵測器在成功軌跡上的誤報率：Who&When、AgenTracer、AgentDebug 的評估集只有失敗軌跡，ProcessBench 有兩類但只有數學 [arXiv:2505.00212][arXiv:2509.03312][arXiv:2509.25370][arXiv:2412.06559]；T4-02 給了量法，但 agent 軌跡上沒有現成的兩類資料可以照做（ch04 未解問題 2 L680）。",
+    "PRM 式的步驟分數與失敗歸因兩條線在 agent 上沒有交會：AgentPRM、IPR、GiGPO 的步驟訊號都沒對過逐步人工真值，Who&When、TRAIL、AgentDebug 的步驟標籤也沒被拿來評步驟分數（ch04 未解問題 3 L682、L190）。",
+    "自動標籤的雜訊有多大、怎麼傳進訓練：EM 過濾留下 6% false positive [arXiv:2210.03629]，Qwen 的共識過濾丟掉 50–60% 資料 [arXiv:2501.07301]，沒有人量過標籤錯誤率對訓練結果的影響（ch04 未解問題 5 L686）。",
+    "長軌跡上量到的是除錯能力還是讀長文能力：TRAIL 的 Location 與輸入長度的 Spearman ρ 是 −0.508 [arXiv:2505.08638]，沒有一篇拿切塊、摘要或有工具的裁判當對照（ch04 未解問題 6 L688）。",
+    "評估器怎麼跟上變強的策略、不看結果時怎麼偵測 reward hacking：AgentPRM 的 ensemble 偵測不到，IPR 把評分者固定在第 0 輪成了天花板，GiGPO 每輪重算但訊號沒驗過 [arXiv:2502.10325][arXiv:2406.11176][arXiv:2505.10978]（ch04 未解問題 7 L690；T4-06 只說了不要做什麼）。",
+    "非 oracle 異常偵測器接上執行期修正後的淨效益（README 框架未解問題 2 L511；T4-12）：唯一的例子 Pan 缺同預算重試的對照，其餘靠 oracle 觸發 [arXiv:2404.06474][arXiv:2509.25370][arXiv:2509.03312]。",
+    "含使用者回合的軌跡：本章八篇合成論文的軌跡都沒有使用者回合，E4 的「沒偵測到異常就繼續與使用者互動」沒有任何 T4 論文實作；IPR 與 GiGPO 需要重放或複製環境，換成真實或隨機的使用者時前提不成立 [arXiv:2406.11176][arXiv:2505.10978]（ch04 E4 L660）。",
+    "agent 自述（thought、reasoning）當評審或歸因證據的影響：沒有一篇在 agent 軌跡上做過「有自述對沒有自述」的對照 [arXiv:2504.08942][arXiv:2412.09605]（ch04 L517）；T4-04 的評審驗收因此少一個該量的變因。"
+  ]
 }
