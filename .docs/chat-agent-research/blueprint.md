@@ -39,21 +39,37 @@ F1–F4 會讓結果失效（量到的不是它宣稱的東西），F5 只是不
 
 ### 資料流
 
-八個節點與六條邊（依 `data/topics.json`），圖照 demian 提供的框架圖畫：實線是主幹與分支，虛線是回饋邊。T3 與 T8 不是六條邊的端點。
+八個節點與六條邊（依 `data/topics.json`），圖照 demian 提供的框架圖畫：實線是主幹與分支，虛線是回饋邊。T3 與 T8 不是六條邊的端點。圖用純文字畫，因為 Mermaid 在部分檢視器裡不渲染，在 GitHub 上則被框在很矮的視窗裡只看得到最上面兩格。
 
-```mermaid
-flowchart TD
-  T1["T1 Goal Alignment & Intent Detection"] -- "M1" --> T2["T2 Multi-Turn State Tracking (DST)"]
-  T2 -- "M2" --> T3["T3 Agent Observation"]
-  T3 -- "M3" --> T4["T4 Agent Trace / Trajectory"]
-  T4 -- "M4" --> T7["T7 Agent Evaluation / Eval"]
-  T7 -- "M5" --> T8["T8 Task Completion Score"]
-  T4 -- "E3 Anomalies Detected" --> T5["T5 Self-Correction & Reflection"]
-  T4 -- "E4 Nominal Path" --> T6["T6 User Simulator & User Feedback Loop"]
-  T6 -. "E1 External Input" .-> T1
-  T5 -. "E2 State Adjustments" .-> T2
-  T5 -. "E5 Correction Logs" .-> T7
-  T6 -. "E6 Interaction Logs" .-> T7
+```text
+Spine (solid arrows, top to bottom)
+
+  T1 Goal Alignment & Intent Detection
+   |  M1
+   v
+  T2 Multi-Turn State Tracking (DST)
+   |  M2
+   v
+  T3 Agent Observation
+   |  M3
+   v
+  T4 Agent Trace / Trajectory
+   |-- E3 Anomalies Detected --> T5 Self-Correction & Reflection
+   |-- E4 Nominal Path ---------> T6 User Simulator & User Feedback Loop
+   |
+   |  M4
+   v
+  T7 Agent Evaluation / Eval
+   |  M5
+   v
+  T8 Task Completion Score
+
+Feedback edges (dashed arrows, back into the spine)
+
+  T6 - - E1 External Input - - >     T1
+  T5 - - E2 State Adjustments - - >  T2
+  T5 - - E5 Correction Logs - - >    T7
+  T6 - - E6 Interaction Logs - - >   T7
 ```
 
 E1（T6→T1）使用者輸入進入目標對齊；E2（T5→T2）修正結果寫回狀態；E3（T4→T5）偵測到異常觸發修正；E4（T4→T6）正常路徑繼續互動；E5（T5→T7）修正紀錄回流評估；E6（T6→T7）互動紀錄回流評估。實線主幹的五條箭頭標 M1–M5，契約在第 5 節。這張圖只是地圖，不代表有論文驗過整條線（見第 6 節）。
