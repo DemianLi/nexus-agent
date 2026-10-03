@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DeliverablesCard } from '@/components/deliverables-card';
 import { createDeliverableDownloader } from '@/lib/deliverable-download';
-import { createDeliverableFileStore } from '@/lib/deliverable-file';
+import { MISSING_REASON, createDeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
 import type { DeliverableCall, Reply } from '@/test/deliverable-commands';
@@ -157,7 +157,7 @@ describe('卡片上的下載鈕', () => {
 
   it.each<[string, Reply, string]>([
     ['參數不合格（協定錯誤）', badRequestReply, '下載不了這個檔'],
-    ['deliverable/not-found', refuseReply('deliverable/not-found'), '這個檔已經讀不到了'],
+    ['deliverable/not-found', refuseReply('deliverable/not-found'), '讀不到這個檔'],
     ['deliverable/too-large', tooLargeReply(), '檔案太大，連下載都超過上限'],
     // 下載不會收到 `not-text`；真收到就落在可重試的 error，見 `deliverable-download.ts` 檔頭。
     ['deliverable/not-text', refuseReply('deliverable/not-text'), '沒辦法下載這個檔'],
@@ -166,6 +166,17 @@ describe('卡片上的下載鈕', () => {
     fireEvent.click(screen.getByRole('button', { name: `下載：${FILE.path}` }));
     await waitFor(() => expect(toastSpy.error).toHaveBeenCalled());
     expect(toastSpy.error.mock.calls[0]![0]).toBe(said);
+  });
+
+  it('讀不到的說明不斷言成因：不說「這一輪之後」，也講到路徑可能本來就不在工作區（#951）', async () => {
+    mount(() => refuseReply('deliverable/not-found'));
+    fireEvent.click(screen.getByRole('button', { name: `下載：${FILE.path}` }));
+    await waitFor(() => expect(toastSpy.error).toHaveBeenCalled());
+    const [, options] = toastSpy.error.mock.calls[0]!;
+    const description = (options as { description: string }).description;
+    expect(description).toBe(MISSING_REASON);
+    expect(description).not.toContain('這一輪之後');
+    expect(description).toContain('本來就不在工作區');
   });
 
   it('axe：一列三顆圖示鈕沒有違規', async () => {
@@ -203,7 +214,11 @@ describe('預覽面裡的下載鈕', () => {
   });
 
   it.each<[string, Reply, string]>([
-    ['deliverable/not-found', refuseReply('deliverable/not-found'), '這個檔已經讀不到了'],
+    [
+      'deliverable/not-found',
+      refuseReply('deliverable/not-found'),
+      `讀不到這個檔：${MISSING_REASON}`,
+    ],
     ['參數不合格（協定錯誤）', badRequestReply, '讀不到這個檔：座標不對'],
   ])('%s 那一格沒有下載鈕——下載也救不了它', async (_name, reply, said) => {
     await openPreviewWith(reply);

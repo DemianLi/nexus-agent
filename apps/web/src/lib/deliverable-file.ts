@@ -55,6 +55,17 @@ import { createLineDecoder, startsWithBom, utf8Length } from '@/lib/line-bytes';
 import type { PageLimit, PageOutcome } from '@/lib/page-limit';
 import { INITIAL_PAGE_LIMIT, stepPageLimit } from '@/lib/page-limit';
 
+/**
+ * `'missing'` 講的那句話，預覽與下載共用一份。
+ *
+ * **只講得出「不在工作區裡」，講不出為什麼。** `'missing'` 收了三個理由碼（見檔頭那張表），而且 server 讀的永遠是
+ * 工作區：檔被刪了、被換成目錄或連結、或這個路徑從來就不在工作區（模型宣告了 agent 側才看得到的路由路徑，
+ * [#951](https://github.com/DemianLi/nexus-agent/issues/951)），三種在這裡長得一樣。**所以不能斷言成因**——
+ * 先前那句「在這一輪之後被移走或刪掉了」對最後那種是錯的，使用者會去找一個沒人動過的檔。
+ */
+export const MISSING_REASON =
+  '它不在工作區裡了，或不是一般檔案。可能被移走、刪掉，也可能這個路徑本來就不在工作區裡。';
+
 /** 讀不到的幾種結局；每一個對應一個不同的畫面，見檔頭那張表。 */
 export type DeliverableFileFailure = 'invalid' | 'missing' | 'too-large' | 'not-text' | 'error';
 

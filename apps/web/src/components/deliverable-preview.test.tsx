@@ -4,7 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { BLOCK_LINES, linesOf, loadedChain } from '@/components/deliverable-preview';
 import { DeliverablesCard } from '@/components/deliverables-card';
-import { createDeliverableFileStore } from '@/lib/deliverable-file';
+import { MISSING_REASON, createDeliverableFileStore } from '@/lib/deliverable-file';
 import type { DeliverableFileState, DeliverableLongLine } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
@@ -166,12 +166,20 @@ describe('交付檔預覽', () => {
 
   it.each<[string, Reply, string]>([
     ['參數不合格（協定錯誤）', badRequestReply, '讀不到這個檔：座標不對'],
-    ['deliverable/not-found', refuseReply('deliverable/not-found'), '這個檔已經讀不到了'],
-    ['deliverable/no-anchor', refuseReply('deliverable/no-anchor'), '這個檔已經讀不到了'],
+    [
+      'deliverable/not-found',
+      refuseReply('deliverable/not-found'),
+      `讀不到這個檔：${MISSING_REASON}`,
+    ],
+    [
+      'deliverable/no-anchor',
+      refuseReply('deliverable/no-anchor'),
+      `讀不到這個檔：${MISSING_REASON}`,
+    ],
     [
       'deliverable/not-regular-file',
       refuseReply('deliverable/not-regular-file'),
-      '這個檔已經讀不到了',
+      `讀不到這個檔：${MISSING_REASON}`,
     ],
     ['deliverable/too-large', tooLargeReply(), '檔案太大，沒辦法在這裡預覽'],
     ['deliverable/not-text', refuseReply('deliverable/not-text'), '不是文字檔，沒辦法預覽'],
