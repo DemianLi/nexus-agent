@@ -4,9 +4,10 @@
  *
  * ## 為什麼從日誌抽
  *
- * dsh 的工具卡只從會話日誌導出，文字就是 `tool/result` 那一則的內容，`isError` 是另一個旗標——
+ * dsh 的工具卡，結果文字只從會話日誌導出，就是 `tool/result` 那一則的內容，`isError` 是另一個旗標——
  * **成功的結果文字照樣帶**（`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:51-68`，
- * `ddefc45`）。提問卡解析的就是這段字（`ui-tool/.../toolviews/ask-question-row.tsx`）。
+ * `ddefc45`；`5badb15009a` 的 `rootResult` 仍是這樣，只是行號位移。開卡的時機則已提前到參數串流中，見
+ * `thread-pump.ts` 檔頭）。提問卡解析的就是這段字（`ui-tool/.../toolviews/ask-question-row.tsx`）。
  *
  * 我們這邊另一個現成的來源是基座那顆 `tool-finished` 的 `output`，但它**比日誌差**：基座的
  * `FilesystemMiddleware` 排在圍堵外層，超過 80,000 字元的結果在那裡已經被換成預覽

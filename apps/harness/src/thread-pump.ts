@@ -35,10 +35,20 @@
  *
  * ## 工具卡從日誌開、以日誌收（[#296](https://github.com/DemianLi/nexus-agent/issues/296)、[#297](https://github.com/DemianLi/nexus-agent/issues/297)）
  *
- * dsh 的 web 工具卡只從會話日誌導出：`tool/call` 開卡、`tool/result` 收卡，文字是那則結果的內容
+ * dsh 的 web 工具卡從會話日誌導出：`tool/call` 開卡、`tool/result` 收卡，文字是那則結果的內容
  * （`packages/client/ui-chat/src/client/conversation-nodes/tool.ts:40-66`，`c291e79`）。`tool/call`
  * 在核准之前就寫（`packages/core/agent-loop/src/tool-calls.ts:168`），`tool/result` 在所有鉤子之後
  * 才寫，所以等核准時畫面上已經有卡，事後被改成錯誤的結果畫面上就是錯誤。
+ *
+ * **dsh 之後提前了開卡的時機，我們沒跟（2026-10-04 對讀 `5badb15009a`）。** `91818992b05`（2026-09-30）刪掉
+ * `partial.ts`，改成 `tool.ts` 的 `applyDelta` 在 `assistant/live-chunk` 的 `tool-call-delta`（帶名字的第一顆）
+ * 到達時就以 `phase: 'preparing'` 開卡、參數隨串流增長；`tool/call` 一到才換成 `phase: 'start'`（`rootCall`），
+ * `tool/result` 照舊收卡。所以今天 dsh 的卡在**參數還在串流時**就出現，不再只有 `tool/call` 之後。上面第一段
+ * 講的「日誌是開卡的唯一來源」因此已不是事實，仍成立的是：**定案與收卡**仍只以 `tool/call`／`tool/result` 為準。
+ * 我們的卡在 `tool/call` 才開，即比 dsh 晚一段（模型還在吐參數的那段）。這不屬於這條規則管的範圍：web 的 UI／UX
+ * 不以 dsh 為標準（AGENTS.md），要不要提前開由 dev-ui 以產品體驗判斷；要做的話得先讓 wire 的折疊吃工具參數的串流片段
+ * （今天 `conversation.ts` 的 `content-block-delta` 分支把它們丟掉，工具只走 `tools` channel），那會動到 wire 與
+ * 折疊（見 [#984](https://github.com/DemianLi/nexus-agent/issues/984)）。
  *
  * 我們的 `tools` frame 是基座在**工具本體**被呼叫時發的：本體沒被呼叫到的那些——核准閘門、先讀後改、
  * plan-mode 在 `handler` 之前擋下的，分派前就中止的，基座找不到的工具——一顆都沒有；本體之後才把結果
