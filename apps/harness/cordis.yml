@@ -13,7 +13,7 @@
 #   config    交給那顆 plugin 的設定，由它自己的 `Config` schema 驗。驗不過（或 `apply` 裡才驗的
 #             值不合法）的那一列掉了、啟動時印一段警告，其餘照樣起來；只有 `browser-session`
 #             （必掛）掉了會整個起不來（#751，照 dsh 分必掛與可少掛）。沒有 `Config` 的 plugin
-#             （下面二十個配套入口全部是）沒有設定：寫了也沒有作用，照樣掛，啟動時印警告。
+#             （下面八個配套入口全部是）沒有設定：寫了也沒有作用，照樣掛，啟動時印警告。
 #   disabled  這一次掛載不跑。只收字面布林——dsh 那邊可以寫 `!!js` 運算式，我們刻意不接
 #             （#104 的偏離標註）。
 #
@@ -539,27 +539,32 @@
 
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #
-# 二十個全進，不是只有 `@nexus/core`（#107 拍板）。理由三條：
+# 只掛**有檢查的**配套入口，一共八個，不是只有 `@nexus/core`（#107 拍板）。#107 當時是二十個
+# 全進；其中十二個是空 installer，掛上去一個檢查都不裝，買到的只有包名歸屬，所以 #974 拿掉了
+# （dsh 早就判定「沒有獨立觀察就不要發布配套入口」，並於 `f028f25667d` 把整套運行時不變量
+# 移除，見 `.docs/invariant-companions-decision-2026-10-03.md`）。**剩下這八個是暫時保留、
+# 觀察中**，第二刀還沒決定。理由兩條：
 #
 # - **它們不裝功能，只裝觀察。** 一個配套入口不註冊工具、不改 prompt、不碰 backend，所以
 #   「替誰決定該裝什麼」這個顧慮對它們不成立——沒有人的 agent 因為它們而不一樣。
 # - **關得掉。** 條目層有 `disabled`（#104），組裝點有 `invariants` 選擇，所以進來不是
 #   單向門。這是它們進得來的前提，而現在連 `disabled` 都寫得進使用者自己的 patch 檔。
-# - **二十個全進。** 十二個是空 installer，掛上去一個檢查都不裝，買到的只有包名歸屬；真的
-#   在檢查的是八個——`@nexus/core`（turn 配對）、`@nexus/plugin-commands`（命令生命週期
-#   配對，#118）、`@nexus/plugin-plan-mode`（`/plan` 的參數契約，#120）、
-#   `@nexus/plugin-goal`（耐久 goal 串，#126）、`@nexus/plugin-todo`（耐久待辦快照的形狀
-#   與歸屬，#132）、`@nexus/plugin-present`（每一筆交付對得上一次成功的 `present`，#441）、
-#   `@nexus/plugin-workspace-changes`（每一筆改動紀錄落在跑過工具的一輪裡，#443；那個功能
-#   本身不在這份清單裡，只由 serve 掛）、`@nexus/plugin-sandbox-policy`（每一顆 `sandbox/mode`
-#   帶的都是認得的模式，#699）。
 #
-# **代價是每一次執行多二十個條目、二十次 `apply`**，換到的是這份清單與
+# 八個各自在檢查的東西：`@nexus/core`（turn 配對）、`@nexus/plugin-commands`（命令生命週期
+# 配對，#118）、`@nexus/plugin-plan-mode`（`/plan` 的參數契約，#120）、
+# `@nexus/plugin-goal`（耐久 goal 串，#126）、`@nexus/plugin-todo`（耐久待辦快照的形狀
+# 與歸屬，#132）、`@nexus/plugin-present`（每一筆交付對得上一次成功的 `present`，#441）、
+# `@nexus/plugin-workspace-changes`（每一筆改動紀錄落在跑過工具的一輪裡，#443；那個功能
+# 本身不在這份清單裡，只由 serve 掛）、`@nexus/plugin-sandbox-policy`（每一顆 `sandbox/mode`
+# 帶的都是認得的模式，#699）。
+#
+# **代價是每一次執行多八個條目、八次 `apply`**，換到的是這份清單與
 # `registry.invariants.companions()` 對得起來。違規往哪裡印，見 `runCli` 接線的那一行。
 #
 # 這份清單要跟 `packages/*/src/invariant.ts` 對得上：少掛的那幾個會讓「這個 package 沒有
 # 可檢的關係」與「這個 package 的檢查沒掛上」在診斷裡長得一模一樣。對帳由
-# `invariant-companions.test.ts` 與 `package-invariants.test.ts` 守著（#489）。
+# `invariant-companions.test.ts` 與 `package-invariants.test.ts` 守著（#489）。新增一個沒有
+# 檢查的配套入口會被 `package-invariants` 擋下來——沒有可檢的關係就不要發布。
 #
 # **順序不是字母序，它是從舊的 `DEFAULT_PLUGINS` 照抄過來的**（#454 的搬家）。順序不承載
 # 語意——啟用與否由服務相依決定，不由列的先後決定。要整理的話自己開一張卡，那不是這份
@@ -567,41 +572,17 @@
 
 - id: core-invariant
   name: '@nexus/core/invariant'
-- id: agent-instructions-invariant
-  name: '@nexus/plugin-agent-instructions/invariant'
 - id: commands-invariant
   name: '@nexus/plugin-commands/invariant'
-- id: ask-user-invariant
-  name: '@nexus/plugin-ask-user/invariant'
-- id: echo-invariant
-  name: '@nexus/plugin-echo/invariant'
-- id: feedback-invariant
-  name: '@nexus/plugin-feedback/invariant'
 - id: goal-invariant
   name: '@nexus/plugin-goal/invariant'
-- id: mcp-invariant
-  name: '@nexus/plugin-mcp/invariant'
-- id: memory-invariant
-  name: '@nexus/plugin-memory/invariant'
 - id: plan-mode-invariant
   name: '@nexus/plugin-plan-mode/invariant'
 - id: present-invariant
   name: '@nexus/plugin-present/invariant'
-- id: quickjs-invariant
-  name: '@nexus/plugin-quickjs/invariant'
 - id: workspace-changes-invariant
   name: '@nexus/plugin-workspace-changes/invariant'
 - id: sandbox-policy-invariant
   name: '@nexus/plugin-sandbox-policy/invariant'
-- id: skills-invariant
-  name: '@nexus/plugin-skills/invariant'
-- id: system-prompt-invariant
-  name: '@nexus/plugin-system-prompt/invariant'
-- id: submit-record-invariant
-  name: '@nexus/plugin-submit-record/invariant'
-- id: telemetry-otel-invariant
-  name: '@nexus/plugin-telemetry-otel/invariant'
 - id: todo-invariant
   name: '@nexus/plugin-todo/invariant'
-- id: wire-invariant
-  name: '@nexus/wire/invariant'

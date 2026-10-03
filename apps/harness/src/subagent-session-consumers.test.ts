@@ -216,7 +216,7 @@ function delegatingModel(toolName: string): ScriptedChatModel {
 }
 
 /**
- * 跑一輪，回報**真的十二個配套入口**報了什麼。
+ * 跑一輪，回報**真的出貨的那幾個配套入口**報了什麼。
  *
  * **重點在「真的」。** 上面那一組掛的是自己寫的 `@nexus/observing`，它從來不 `fail`，
  * 所以它證得了「消費者接上了」，證不了「接上去之後不會誤報」。而誤報的去處是使用者的
