@@ -34,6 +34,7 @@ import type {
 import { ReferencedText } from '@/components/session-reference';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { ChangesCard } from '@/components/changes-card';
+import { CompactionRow } from '@/components/compaction-row';
 import { DeliverablesCard } from '@/components/deliverables-card';
 import { EarlierPager, earlierLoadedNotice, useEarlierAutoLoad } from '@/components/earlier-pager';
 import type { EarlierHistory } from '@/components/earlier-pager';
@@ -228,7 +229,12 @@ export function Entry({
     );
   }
 
-  // 到這裡只剩模型的回覆：線上的項目種類以後還會長（例如壓縮格），不認得的不畫，免得往下讀 `entry.text` 炸掉。
+  if (entry.kind === 'compaction') {
+    // 模型的歷史在這裡換成了摘要（#944）：落在觸發它的那則回覆之後，不取代被蓋掉的列。
+    return <CompactionRow entry={entry} />;
+  }
+
+  // 到這裡只剩模型的回覆：線上的項目種類以後還會長，不認得的不畫，免得往下讀 `entry.text` 炸掉。
   if (entry.kind !== 'ai') return null;
 
   const reasoning = visibleReasoning(entry);
