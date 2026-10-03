@@ -652,7 +652,7 @@ describe('不變量的選擇面', () => {
 
   it('blocklist 從組裝點傳得進去，那個 package 的檢查就真的沒裝', async () => {
     // **這條是 #104 那個落差的回歸測試**：`InvariantSelection` 早就存在，但組裝點沒有
-    // 把它接出來，所以九個配套入口一個都選不動。它要走 `createNexusAgent`，core 那側
+    // 把它接出來，所以當時的九個配套入口一個都選不動。它要走 `createNexusAgent`，core 那側
     // 的單元測試驗不到「接沒接出來」。
     expect(
       await violationsUnder([createEchoPlugin(), noisyInvariantPlugin('@nexus/noisy')], {

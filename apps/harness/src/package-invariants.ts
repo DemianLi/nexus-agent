@@ -5,9 +5,13 @@
  * dsh 的，而且是它明說的自我約束：門禁不從方法名或 helper 呼叫推斷語意品質
  * （`docs/subsystems/invariants.md:59`）。
  *
- * **它存在的理由是「加第十個 package 的人會被擋下來」。** 在這之前守著九個配套入口的只有
- * [`invariant-companions.test.ts`](./invariant-companions.test.ts) 裡那份手寫的九列表格，
- * 而表格不會提醒任何人補第十列。所以底下**發現 owner 的那一段才是主角**，AST 規則是配菜。
+ * **它守的是「發布了配套入口的 package，長得對不對」，不再守「每個 package 都要有」。**
+ * 原本的規則是後者（加第十個 package 的人會被擋下來），所以二十個 package 各有一個配套入口，
+ * 其中十二個是空 installer；#974 把這條規則翻了面：沒有可檢的關係就**不要發布**配套入口，
+ * 空 installer 本身是違規。理由是 dsh 在 `2026-08-28-omit-unneeded-invariant-companions`
+ * 就判定「沒有獨立觀察就不要發布配套入口」，並於 `f028f25667d` 把整套運行時不變量移除
+ * （`.docs/invariant-companions-decision-2026-10-03.md`）。**剩下的八個是暫時保留、觀察中**。
+ * 代價是新增 package 的人不再被這裡擋下來——那條目的消失了，是接受的。
  *
  * 對讀日期 2026-08-30，dsh `cd5ef8148158c3a752a658978873241fdf8e2bbc`
  * （`scripts/package-invariants.ts` 與 `scripts/verify-package-invariants.ts`）。
@@ -34,18 +38,10 @@ import { fileURLToPath } from 'node:url';
 import ts from 'typescript';
 
 /**
- * 空 installer 必須帶的說明標記。
- *
- * **半形冒號**。九個檔案原本寫的是全形的 `：`，那是無意的不一致，#108 的拍板選了「標記統一
- * 到半形、其餘照我們的約定」，所以動的是原始檔不是這個常數。
- */
-const NO_RUNTIME_INVARIANT_MARKER = 'No runtime invariant:';
-
-/**
  * owner 只在 `packages/*` 裡找。
  *
  * `apps/harness` 與 `apps/web` 也是 workspace package，兩個都沒有 `src/invariant.ts`，
- * 掃進來 gate 第一天就是紅的。**這是選的，不是 glob 字串默默決定的**：dsh 的 owner 樹在
+ * 照舊不會被當成 owner。**這是選的，不是 glob 字串默默決定的**：dsh 的 owner 樹在
  * `packages` 底下**再深一層**，app 本來就不在裡面；而配套入口認領的是「這個 package 擁有的跨筆關係」，
  * 組裝點與前端不擁有任何人的關係——它們是消費者。理由與另外兩個選項見 #108。
  */
@@ -97,15 +93,16 @@ export function repositoryRoot(): string {
 }
 
 /**
- * 掃出每一個 owner。
+ * 掃出每一個 owner：**發布了配套入口的 package**。
  *
- * **這裡不看 `src/invariant.ts` 在不在**——不在也是一個 owner，只是它會在
- * {@link collectPackageInvariantViolations} 裡拿到一條「缺配套入口」。少掃一個 package
- * 與掃到一個壞掉的 package，前者是靜默的，所以發現與判定分開。
+ * 判準是「有 `src/invariant.ts`」**或**「`exports["./invariant"]` 有宣告」，兩者擇一就算。
+ * 只認其中一個的話，另一個忘了寫的那一半會被靜默跳過——所以任何一半在場都先收進來，
+ * 兩半對不對得上留給 {@link collectPackageInvariantViolations}。**什麼都沒有的 package
+ * 不是 owner，也不是違規**：沒有可檢的關係就不要發布（#974）。
  *
  * @param root - repo 根，省略即 {@link repositoryRoot} 的結果。
  * @returns 依目錄名排序的 owner。
- * @throws 某個 `package.json` 沒有 `name`——沒有名字就對不出它該註冊什麼。
+ * @throws 某個 owner 的 `package.json` 沒有 `name`——沒有名字就對不出它該註冊什麼。
  */
 export function packageInvariantOwners(root: string = repositoryRoot()): PackageInvariantOwner[] {
   const ownerRoot = resolve(root, OWNER_ROOT);
@@ -114,18 +111,17 @@ export function packageInvariantOwners(root: string = repositoryRoot()): Package
     .map((entry) => `${OWNER_ROOT}/${entry.name}`)
     .filter((dir) => existsSync(resolve(root, dir, 'package.json')))
     .sort()
-    .map((dir) => {
+    .flatMap((dir) => {
       const manifestPath = `${dir}/package.json`;
       const manifest = readManifest(resolve(root, manifestPath));
+      const sourcePath = `${dir}/src/invariant.ts`;
+      const publishes =
+        existsSync(resolve(root, sourcePath)) || manifest.exports?.['./invariant'] !== undefined;
+      if (!publishes) return [];
       if (manifest.name === undefined || manifest.name === '') {
         throw new Error(`${manifestPath}：package 必須宣告 name`);
       }
-      return {
-        dir,
-        manifestPath,
-        sourcePath: `${dir}/src/invariant.ts`,
-        packageName: manifest.name,
-      };
+      return [{ dir, manifestPath, sourcePath, packageName: manifest.name }];
     });
 }
 
@@ -194,7 +190,12 @@ function checkSource(
 ): void {
   const absolute = resolve(root, owner.sourcePath);
   if (!existsSync(absolute)) {
-    addViolation(violations, owner.sourcePath, '缺配套入口——每個 package 都要有一個');
+    addViolation(
+      violations,
+      owner.sourcePath,
+      `缺配套入口——manifest 宣告了 exports["./invariant"]，但這個檔不存在；` +
+        '沒有可檢的關係就把那一格也拿掉',
+    );
     return;
   }
   const sourceText = readFileSync(absolute, 'utf8');
@@ -285,7 +286,7 @@ function checkSource(
 
   const installerName = installerNames[0];
   if (installerName !== undefined) {
-    checkInstaller(owner, sourceFile, sourceText, installerName, violations);
+    checkInstaller(owner, sourceFile, installerName, violations);
   }
 }
 
@@ -300,7 +301,6 @@ function checkSource(
 function checkInstaller(
   owner: PackageInvariantOwner,
   sourceFile: ts.SourceFile,
-  sourceText: string,
   installerName: string,
   violations: PackageInvariantViolation[],
 ): void {
@@ -317,18 +317,12 @@ function checkInstaller(
   }
 
   if (ts.isBlock(installer.body) && installer.body.statements.length === 0) {
-    if (
-      !explanationFor(sourceFile, sourceText, declaration.statement).includes(
-        NO_RUNTIME_INVARIANT_MARKER,
-      )
-    ) {
-      addViolation(
-        violations,
-        owner.sourcePath,
-        `空 installer 必須說明為什麼，註解要含 "${NO_RUNTIME_INVARIANT_MARKER}"——` +
-          '空的是正確結果，沒有說明的空的不是',
-      );
-    }
+    addViolation(
+      violations,
+      owner.sourcePath,
+      '空 installer 沒有任何檢查——沒有可檢的關係就不要發布配套入口：' +
+        '把這個檔與 manifest 的 exports["./invariant"] 一起拿掉（#974）',
+    );
     return;
   }
 
@@ -345,22 +339,6 @@ function checkInstaller(
         '觀察了卻不回報，等於沒有檢查',
     );
   }
-}
-
-/**
- * 空 installer 的說明可以寫在哪裡。
- *
- * 兩個地方都算：**模組檔頭**（第一個 statement 之前的整段），或**這個宣告自己的前置註解**。
- * dsh 只認後者；我們九個檔案的說明都在檔頭，而說明的價值在讀得到不在位置——#108 的拍板選了
- * 「規則照我們的約定」。
- */
-function explanationFor(
-  sourceFile: ts.SourceFile,
-  sourceText: string,
-  statement: ts.VariableStatement,
-): string {
-  const header = sourceText.slice(0, sourceFile.statements[0]?.getStart() ?? 0);
-  return `${header}\n${sourceText.slice(statement.getFullStart(), statement.getEnd())}`;
 }
 
 function topLevelVariableStatement(

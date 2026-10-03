@@ -110,17 +110,17 @@ describe('出貨的 cordis.yml', () => {
     const { plugins: fromYaml, dropped, ignoredConfig } = await loadPluginConfig();
     expect(dropped).toEqual([]);
     expect(ignoredConfig).toEqual([]);
-    // 53 = 10 個功能（#669 加了 `ask-user` 與 `submit-record`）＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
+    // 41 = 10 個功能（#669 加了 `ask-user` 與 `submit-record`）＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
     // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的——與 #599 的
     // `session-checkpoint-policy`）
-    // ＋ **15 個 harness 自己的設定條目**（#529、#538、#545、#650、#631、#734、#719、#841、#875、#711、#670、#735）＋ 20 個配套入口。**數目寫在這裡是為了擋
-    // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個空 installer
+    // ＋ **15 個 harness 自己的設定條目**（#529、#538、#545、#650、#631、#734、#719、#841、#875、#711、#670、#735）＋ 8 個配套入口（#974 之前是 20 個，其中 12 個是空 installer，拿掉後 53 → 41）。**數目寫在這裡是為了擋
+    // 「靜靜少一列」**：底下那些測試各自只看得到自己關心的那幾列，少掉一個配套入口
     // 不會有人紅。確切該有哪些配套入口由 `invariant-companions.test.ts` 對帳（#489）。
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 53。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(53);
+    // 解析、import、而且長得像一顆 plugin，才數得到 41。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(41);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 
@@ -129,8 +129,8 @@ describe('出貨的 cordis.yml', () => {
     expect(ids).not.toContain(undefined);
     expect(ids).toContain('echo');
     expect(ids).toContain('core-invariant');
-    // 二十個配套入口一個不漏，對帳的另一半在 `invariant-companions.test.ts`。
-    expect(ids.filter((id) => id?.endsWith('-invariant'))).toHaveLength(20);
+    // 八個配套入口一個不漏，對帳的另一半在 `invariant-companions.test.ts`。
+    expect(ids.filter((id) => id?.endsWith('-invariant'))).toHaveLength(8);
   });
 
   /**
@@ -138,7 +138,7 @@ describe('出貨的 cordis.yml', () => {
    *
    * 等價斷言退休之後跑了一輪突變，問「`cordis.yml` 被改壞時還有沒有人紅」。結構那幾格答案
    * 是有：少一列 present → 3 個檔紅、少一列 plan-mode → 6 個檔、少一個空 installer 的配套
-   * 入口 → 3 個檔、改一個 id → `approval-gate-order` 紅、把 goal 關掉 → 4 個檔。
+   * 入口 → 3 個檔（當時有；#974 之後沒有空 installer，這一格不能再量）、改一個 id → `approval-gate-order` 紅、把 goal 關掉 → 4 個檔。
    *
    * **但那幾個 `config` 值改掉是全綠的。** 它們只在執行期被讀，不在任何註冊點上留下痕跡，所以
    * 十七個載出貨清單的測試檔一個都不會動。那是等價探針原本蓋著、而它退休之後露出來的洞。
@@ -175,7 +175,7 @@ describe('出貨的 cordis.yml', () => {
     // 這一行只管出貨檔跟它沒有漂開。
     expect(byId.get('summarization')).toEqual({ ...DEFAULT_SUMMARIZATION });
 
-    // **其餘每一列都不帶 config**，這半句同樣承重：二十個配套入口一個 `Config` schema 都
+    // **其餘每一列都不帶 config**，這半句同樣承重：八個配套入口一個 `Config` schema 都
     // 沒有，給它們設定沒有作用——照 dsh 原樣交下去、不驗，啟動時印警告（#751）。
     //
     // **`observation-policy` 不在這張名單上，而那是承重的不對稱**（#456）：那一顆沒有設定、
