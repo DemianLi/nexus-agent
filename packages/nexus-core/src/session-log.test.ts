@@ -5,6 +5,7 @@ import {
   currentTurnStart,
   hasUnansweredInterrupt,
   isLogicalTurnStart,
+  openTurnStart,
   SessionLog,
 } from './session-log.js';
 
@@ -309,6 +310,54 @@ describe('當前這一段物理輪次', () => {
   it('只看當前這一段，不往上穿', () => {
     const events = logOf([START, RAISED, END, RESUME, END]).events;
     expect(hasUnansweredInterrupt(events)).toBe(false);
+  });
+});
+
+/**
+ * 日誌尾巴上有沒有一輪還開著（[#953](https://github.com/DemianLi/nexus-agent/issues/953)）：畫面那一側拿它分「回覆還沒落盤」與「回覆沒有存」。
+ * 每一格都配一個對照，免得「永遠回 -1」或「永遠回最後一顆 turn/start」也會綠。
+ */
+describe('openTurnStart', () => {
+  function logOf(script: readonly (readonly [string, unknown])[]): SessionLog {
+    const log = new SessionLog('open');
+    for (const [type, data] of script)
+      log.append(type as 'turn/end', data as Record<string, never>);
+    return log;
+  }
+  const START: readonly [string, unknown] = ['turn/start', { kind: 'message', text: '動手' }];
+  const MODEL: readonly [string, unknown] = ['model/start', {}];
+
+  it('最後一輪還沒收尾：回它那顆 turn/start 的位置', () => {
+    expect(openTurnStart(logOf([START, MODEL]).events)).toBe(0);
+    expect(openTurnStart(logOf([START, ['turn/end', {}], START, MODEL]).events)).toBe(2);
+  });
+
+  it('收尾了（完成、拋錯）就是 -1，不論前面有沒有開著過', () => {
+    expect(openTurnStart(logOf([START, MODEL, ['turn/end', {}]]).events)).toBe(-1);
+    expect(openTurnStart(logOf([START, ['turn/failed', { message: '壞了' }]]).events)).toBe(-1);
+  });
+
+  it('停在核准點的那一輪有 turn/end，不算開著；續接它的 resume 一開始就又開著', () => {
+    const parked: (readonly [string, unknown])[] = [
+      START,
+      ['interrupt/raised', { interruptId: 'i-1' }],
+      ['turn/end', {}],
+    ];
+    expect(openTurnStart(logOf(parked).events)).toBe(-1);
+    expect(openTurnStart(logOf([...parked, ['turn/start', { kind: 'resume' }]]).events)).toBe(3);
+  });
+
+  it('沒有 turn/start、或空的日誌是 -1', () => {
+    expect(openTurnStart([])).toBe(-1);
+    expect(openTurnStart(logOf([['todo/write', { todos: [] }]]).events)).toBe(-1);
+  });
+
+  it('上一個行程留在輪中的，續接之後不算開著（停在 session/end-seed）', () => {
+    const before = logOf([START, MODEL]);
+    const resumed = new SessionLog('open', { seed: before.events });
+    expect(openTurnStart(resumed.events)).toBe(-1);
+    resumed.append('turn/start', { kind: 'message', text: '新的一輪' });
+    expect(openTurnStart(resumed.events)).toBe(resumed.events.length - 1);
   });
 });
 
