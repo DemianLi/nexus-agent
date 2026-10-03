@@ -51,6 +51,12 @@ export interface ScriptedTurn {
    * `content` 與 `toolCalls` 在這一輪不會被用到。
    */
   readonly error?: string;
+  /**
+   * 給了就**每吐一個字**等這麼多毫秒：回覆串流到一半的那一段，測試可以停在裡面
+   * （[#953](https://github.com/DemianLi/nexus-agent/issues/953)）。是資料，所以腳本設定（`settings/scripted-model.ts`）也收。
+   * 只對串流那條路有作用——web 與產品路徑走的是它。
+   */
+  readonly tokenDelayMs?: number;
 }
 
 /**
@@ -196,6 +202,9 @@ export class ScriptedChatModel extends BaseChatModel {
     for (const token of [...turn.content]) {
       // handleLLMNewToken 要自己呼叫，基座才收得到 token 事件；
       // 少了這行，streamMode: 'messages' 只會拿到聚合後的整段訊息。
+      if (turn.tokenDelayMs !== undefined) {
+        await new Promise((resolve) => setTimeout(resolve, turn.tokenDelayMs));
+      }
       await runManager?.handleLLMNewToken(token);
       yield {
         text: token,

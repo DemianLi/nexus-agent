@@ -456,6 +456,7 @@ export type {
 } from './session-log.js';
 export {
   currentTurnStart,
+  openTurnStart,
   hasUnansweredInterrupt,
   isLogicalTurnStart,
   isModelVisibleEvent,

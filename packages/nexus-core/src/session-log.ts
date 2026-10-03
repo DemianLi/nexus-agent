@@ -1304,6 +1304,30 @@ export function currentTurnStart(events: readonly SessionEvent[]): number {
   return -1;
 }
 
+/**
+ * 當前這一段物理輪次**還開著**的話，它的 `turn/start` 的位置；已經收工（`turn/end` 或 `turn/failed`）或根本沒有
+ * 就是 `-1`（[#953](https://github.com/DemianLi/nexus-agent/issues/953)）。
+ *
+ * 「開著」＝這一輪正在跑：`turn/start` 在 `try` 之前 append（見 `apps/harness` 的 `goal-driver.ts` `turnClosed` 那段），所以日誌上
+ * 開著的那一輪不會是「跑過但沒有頭」，也不會是上一個行程留下的——續接時補寫 `turn/end { interrupted }`、舊檔補
+ * `session/end-seed`，{@link currentTurnStart} 本來就停在那顆。**停在核准點的那一輪有 `turn/end`**，所以不算開著。
+ *
+ * 讀它的人是**畫面那一側**要知道「日誌尾巴上有一輪還沒寫完」：它的回覆還沒落盤，不是缺。續行排程器的就緒判準
+ * （`turnClosed`）要的是為什麼收工的原因，不只是有沒有，所以不共用這個。
+ *
+ * @param events - 一份會話日誌到目前為止的全部事件，照 `seq` 排。
+ * @returns 開著的那一輪的 `turn/start` 索引；沒有開著的是 `-1`。
+ */
+export function openTurnStart(events: readonly SessionEvent[]): number {
+  const start = currentTurnStart(events);
+  if (start < 0) return -1;
+  for (let at = start + 1; at < events.length; at += 1) {
+    const type = events[at]?.type;
+    if (type === 'turn/end' || type === 'turn/failed') return -1;
+  }
+  return start;
+}
+
 /** 開新的邏輯輪的那一種 `turn/start`：`kind` 收窄成不是 `resume`。守衛的假支不會被誤收窄掉整個 `turn/start`。 */
 export type LogicalTurnStartEvent = Omit<SessionEvent<'turn/start'>, 'data'> & {
   readonly data: Exclude<SessionEventMap['turn/start'], { readonly kind: 'resume' }>;

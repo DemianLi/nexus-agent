@@ -108,6 +108,7 @@ import {
   isMaxTokensFinish,
   loggedContentBlocks,
   loggedMessageId,
+  openTurnStart,
   replayConversation,
   sessionStatsUnit,
   TOOL_OUTCOME_UNKNOWN,
@@ -1107,6 +1108,27 @@ function fitBytes(
 }
 
 /**
+ * 判舊格式時要看的那一段日誌：**還開著的那一輪不算**（[#953](https://github.com/DemianLi/nexus-agent/issues/953)）。
+ *
+ * 舊格式的判準是「叫過模型、卻沒有任何一則回覆」（`replayConversation` 的 `reply-missing`）。**正在跑的那一輪正好符合**：
+ * `model/start` 已經寫了，回覆要等這次呼叫結束才落盤。新會話第一句的回覆串流中重新整理，整份日誌就只有這一輪，
+ * 於是被誤報成「回覆沒有保存」，而且那句話在回覆落盤之後還留在畫面上（歷史是一次拿的）。
+ *
+ * 開著的那一輪由日誌自己認（{@link openTurnStart}），不另問 pump：畫面的 `lifecycle running` 也是從同一份日誌的
+ * `turn/start` 折出來的，兩邊不會各說各話。真的舊格式照舊：開著的那一輪前面的每一輪都還在被檢查，只有尾巴不算——
+ * 往前退到那一輪的**邏輯**開頭，續接核准的 `resume` 不另開一輪。
+ *
+ * @param events - 這條 thread 的 root 日誌，全部。
+ * @returns 沒有開著的輪就是原樣；有的話是那一輪開頭之前的那一段。
+ */
+function settledEvents(events: readonly SessionEvent[]): readonly SessionEvent[] {
+  let from = openTurnStart(events);
+  if (from < 0) return events;
+  while (from > 0 && !isLogicalTurnStart(events[from]!)) from -= 1;
+  return events.slice(0, from);
+}
+
+/**
  * 一頁歷史。
  *
  * @param events - 這條 thread 的 root 日誌，全部。
@@ -1203,7 +1225,7 @@ export function historyPage(
   // 軟上限撐破了。**沒有人講的話這件事在線上完全看不見**——回應照樣是 200、畫面照樣對。
   if (bytes > HISTORY_PAGE_MAX_BYTES) onOversize?.(bytes);
 
-  const replay = replayConversation(events);
+  const replay = replayConversation(settledEvents(events));
   return {
     // **三種原因都是舊格式**：回覆、結果內容、摘要本文都是格式 9 才開始記的（#305），缺哪一樣都只可能出自 9 以前
     // 寫的那一段；哪一種先被撞到看的是日誌的順序（格式 8 的一輪，沒內容的結果落在收尾之前）。只認「沒有回覆」的話，
