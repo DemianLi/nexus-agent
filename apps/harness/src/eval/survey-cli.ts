@@ -33,7 +33,9 @@ import {
   type TierSummary,
 } from './compare.js';
 import { BENCHMARK, HARD_CASES } from './dataset.js';
+import { intervalLines, tokenTotalsLine } from './compare-report.js';
 import { startResultFile } from './result-file.js';
+import type { CaseStats } from './stats.js';
 import { SURVEY_INVENTORY_DATE, SURVEY_MODELS, type SurveyModel } from './survey.js';
 
 const USAGE = `用法：eval:survey [--samples <n>] [--cases <id,...>] [--models <label,...>] [--out <dir>]
@@ -111,14 +113,22 @@ function printModel(all: TierSummary<SurveyModel>, hard: TierSummary<SurveyModel
 
   console.log(`\n${tier.label}  ${tier.modelId}`);
   console.log(`  評到分      ${all.scored} 次${failed === '' ? '' : `，失敗 ${failed}`}`);
+  // **這題成功**不是下面「工具成功率」那一欄（見 `scorers.ts` 的 isCaseSuccess）。區間是
+  // 以題目為單位重抽的；難題只有四題，它會比全部那組寬得多，這是對的（見 `stats.ts`）。
+  console.log(
+    `  這題成功    全部 ${all.successes}/${all.scored}  ｜ 難題 ${hard.successes}/${hard.scored}`,
+  );
+  printIntervals(all.caseStats.success, hard.caseStats.success);
   console.log(
     `  工具成功率  全部 ${formatSpread(all.toolCallSuccess)}` +
       `  ｜ 難題 ${formatSpread(hard.toolCallSuccess)}`,
   );
+  printIntervals(all.caseStats.toolCallSuccess, hard.caseStats.toolCallSuccess);
   console.log(
     `  參數正確性  全部 ${formatSpread(all.argumentCorrectness)}` +
       `  ｜ 難題 ${formatSpread(hard.argumentCorrectness)}`,
   );
+  printIntervals(all.caseStats.argumentCorrectness, hard.caseStats.argumentCorrectness);
   console.log(
     `  多叫次數    全部 ${formatSpread(all.extraToolCalls)}` +
       `  ｜ 難題 ${formatSpread(hard.extraToolCalls)}`,
@@ -126,11 +136,18 @@ function printModel(all: TierSummary<SurveyModel>, hard: TierSummary<SurveyModel
   console.log(
     `  回覆提到    全部 ${formatSpread(all.mentions)}  ｜ 難題 ${formatSpread(hard.mentions)}`,
   );
+  printIntervals(all.caseStats.mentions, hard.caseStats.mentions);
   console.log(
     `  總 token    ${formatSpread(all.totalTokens)}` +
       `${all.costed === all.scored ? '' : `（只有 ${all.costed}/${all.scored} 次有回報 usage）`}`,
   );
+  const tokenTotal = tokenTotalsLine(all);
+  if (tokenTotal !== undefined) console.log(tokenTotal);
   console.log(`  單次秒數    ${formatSpread(all.seconds)}`);
+}
+
+function printIntervals(all: CaseStats | undefined, hard: CaseStats | undefined): void {
+  for (const line of intervalLines(all, hard)) console.log(line);
 }
 
 async function main(argv: readonly string[]): Promise<void> {

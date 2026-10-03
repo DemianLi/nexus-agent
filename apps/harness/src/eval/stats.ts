@@ -162,7 +162,9 @@ export function formatCaseStats(stats: CaseStats | undefined): string {
     return `只有 ${stats.cases} 題，抽不出區間；${granularity}`;
   }
   const { low, high, level, resamples } = stats.interval;
-  const range = `${Math.round(level * 100)}% 區間 ${low.toFixed(2)}–${high.toFixed(2)}`;
+  // 區間配著它自己的中心值印：它是**以題為單位**的平均，跟上一行逐次合併的平均在取樣不止
+  // 一次、又有失敗吃掉某幾題的執行時會分開，不印的話區間看起來像沒包住上一行的數字。
+  const range = `題均 ${stats.mean.toFixed(2)}，${Math.round(level * 100)}% 區間 ${low.toFixed(2)}–${high.toFixed(2)}`;
   const method = `以 ${stats.cases} 題為單位重抽 ${resamples} 次`;
   const collapsed = stats.collapsed ? '；**所有題目同值，區間塌成一點，不代表沒有不確定度**' : '';
   return `${range}（${method}）；${granularity}${collapsed}`;

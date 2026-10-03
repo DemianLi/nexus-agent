@@ -9,7 +9,7 @@
 import type { Spread, TierSummary } from './compare.js';
 import { formatFloor } from './floor.js';
 import type { ModelUnderTest } from './model-under-test.js';
-import { formatCaseStats } from './stats.js';
+import { formatCaseStats, type CaseStats } from './stats.js';
 
 /**
  * 一欄數字：平均，加上**範圍**（最小到最大）。
@@ -76,17 +76,37 @@ export function summaryLines<T extends ModelUnderTest>(
       `${summary.costed === summary.scored ? '' : `（只有 ${summary.costed}/${summary.scored} 次有回報 usage）`}`,
   ];
 
-  const totals = summary.tokenTotals;
-  if (totals !== undefined) {
-    // **失敗的執行照樣花了 token**，所以合計分開列：評到分的、失敗的、全部。失敗那一欄是
-    // 下限（被中止或被拒的最後一次呼叫沒有結束事件，量不到）。
-    const failedNote =
-      totals.failedRuns === 0
-        ? ''
-        : `（${totals.failedRuns} 次失敗中 ${totals.failedReported} 次有記到，是下限）`;
-    lines.push(
-      `  token 合計  評到分 ${tokens(totals.scored)} ＋ 失敗 ${tokens(totals.failed)}${failedNote} ＝ ${tokens(totals.all)}`,
-    );
-  }
+  const total = tokenTotalsLine(summary);
+  if (total !== undefined) lines.push(total);
   return lines;
+}
+
+/**
+ * 區間兩行：全部、難題（`eval:survey` 的版面）。方法與 n 在字裡。難題只有四題，它的區間會比
+ * 全部那組寬得多 —— 這是對的，不是排版問題。
+ */
+export function intervalLines(
+  all: CaseStats | undefined,
+  hard: CaseStats | undefined,
+): readonly string[] {
+  return [
+    `    區間      全部 ${formatCaseStats(all)}`,
+    `              難題 ${formatCaseStats(hard)}`,
+  ];
+}
+
+/**
+ * token 合計那一行。**失敗的執行照樣花了 token**，所以合計分開列：評到分的、失敗的、全部。
+ * 失敗那一欄是下限（被中止或被拒的最後一次呼叫沒有結束事件，量不到）。
+ *
+ * 一次都沒記到就沒有這一行 —— 「沒有資料」不印成 0。
+ */
+export function tokenTotalsLine(summary: TierSummary): string | undefined {
+  const totals = summary.tokenTotals;
+  if (totals === undefined) return undefined;
+  const failedNote =
+    totals.failedRuns === 0
+      ? ''
+      : `（${totals.failedRuns} 次失敗中 ${totals.failedReported} 次有記到，是下限）`;
+  return `  token 合計  評到分 ${tokens(totals.scored)} ＋ 失敗 ${tokens(totals.failed)}${failedNote} ＝ ${tokens(totals.all)}`;
 }

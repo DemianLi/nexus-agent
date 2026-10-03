@@ -8,9 +8,11 @@ import { describe, expect, it } from 'vitest';
 import { LoopingChatModel } from '../looping-model.js';
 import { ScriptedChatModel, type ScriptedTurn } from '../scripted-model.js';
 import { HumanMessage } from '@langchain/core/messages';
-import { UsageTally } from './runner.js';
+import { runBenchmarkCase, UsageTally } from './runner.js';
+import { benchmarkPlugins } from './assembly.js';
+import { restrictTo } from './compare.js';
 import { summarize, runTier, evalModelRounds, EVAL_RECURSION_LIMIT } from './compare.js';
-import { summaryLines } from './compare-report.js';
+import { intervalLines, summaryLines, tokenTotalsLine } from './compare-report.js';
 import type { BenchmarkCase } from './dataset.js';
 import type { MeasuredModel } from './tiers.js';
 
@@ -230,5 +232,58 @@ describe('記帳的觀察者', () => {
       void chunk;
     }
     expect(seen).toEqual([110]);
+  });
+});
+
+describe('兩本帳是同一把尺量的', () => {
+  it('回呼累計的用量等於最終訊息串加總的用量（評到分的與失敗的才能加在一起）', async () => {
+    // 評到分的 token 從最終訊息串加總，失敗的從每次呼叫結束時累計；合計那一行把兩邊相加。
+    // 這條證明在同一次成功的執行上，兩種算法量到一樣的數字。**只用腳本模型驗過**：真模型
+    // 走的 handleLLMEnd 沒有跑過（需要憑證），子代理與側呼叫若繼承了回呼，兩邊會分開。
+    let tallied = 0;
+    const run = await runBenchmarkCase(CASES[0] as BenchmarkCase, {
+      model: new ScriptedChatModel({ turns: PASS }),
+      plugins: benchmarkPlugins(),
+      onUsage: (usage) => {
+        tallied += usage.totalTokens;
+      },
+    });
+    expect(run.usage?.totalTokens).toBe(235);
+    expect(tallied).toBe(run.usage?.totalTokens);
+  });
+});
+
+describe('survey 的版面：全部與難題兩組各自的區間', () => {
+  // 三條簡單題、四條難題，期望都一樣（只差 id）；簡單題全過、難題兩過兩不過。
+  const named = (prefix: string, count: number): BenchmarkCase[] =>
+    Array.from({ length: count }, (_, index) => ({
+      ...(CASES[0] as BenchmarkCase),
+      id: `${prefix}${index}`,
+    }));
+  const easy = named('e', 3);
+  const hard = named('h', 4);
+
+  it('難題只有四題，區間比全部那組寬', async () => {
+    const report = await runTier(TIER, {
+      createModel: (_id, testCase) => {
+        const pass = testCase.id.startsWith('e') || Number(testCase.id.slice(1)) < 2;
+        return new ScriptedChatModel({ turns: pass ? PASS : FAIL });
+      },
+      cases: [...easy, ...hard],
+    });
+    const allSummary = summarize(report);
+    const hardSummary = summarize(restrictTo(report, new Set(hard.map((entry) => entry.id))));
+
+    const text = intervalLines(allSummary.caseStats.success, hardSummary.caseStats.success).join(
+      '\n',
+    );
+    expect(text).toContain('全部 題均');
+    expect(text).toContain('難題 題均');
+    expect(text).toContain('以 7 題為單位重抽');
+    expect(text).toContain('以 4 題為單位重抽');
+    const width = (s: typeof allSummary): number =>
+      (s.caseStats.success?.interval?.high ?? 0) - (s.caseStats.success?.interval?.low ?? 0);
+    expect(width(hardSummary)).toBeGreaterThan(width(allSummary));
+    expect(tokenTotalsLine(allSummary)).toContain('評到分');
   });
 });
