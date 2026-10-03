@@ -89,8 +89,8 @@ describe('正文空的回覆', () => {
   });
 
   it('不是模型回覆的新種類項目不畫、也不炸：整格不佔列表的間距', () => {
-    // 線上的項目種類以後還會長（壓縮格 #896 之類），web 還不認得的那一格走到收尾分支會讀 `entry.text`。
-    // 這裡用一則改了 `kind` 的回覆頂替；真的新種類落地後，由它自己的卡換成真的項目。
+    // 線上的項目種類以後還會長，web 還不認得的那一格走到收尾分支會讀 `entry.text`。
+    // 這裡用一則改成編出來的 `kind` 的回覆頂替（壓縮格 #896 有了真的畫法之後，不能再拿它當替身，#944）。
     const folded = reduceAll(emptyConversation(), [
       asked('問'),
       running(),
@@ -99,7 +99,7 @@ describe('正文空的回覆', () => {
       finish('a'),
     ]);
     const entries = folded.entries.map((entry) =>
-      entry.kind === 'ai' ? ({ ...entry, kind: 'compaction' } as never) : entry,
+      entry.kind === 'ai' ? ({ ...entry, kind: 'not-yet-invented' } as never) : entry,
     );
     render(<Transcript state={{ ...folded, entries }} isFresh={() => false} />);
     expect(screen.queryByTestId('ai-entry')).toBeNull();
