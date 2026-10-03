@@ -69,7 +69,7 @@ function formatSpread(spread: Spread | undefined): string {
   const body =
     spread.min === spread.max
       ? mean
-      : `${mean} (${spread.min.toFixed(2)}–${spread.max.toFixed(2)})`;
+      : `${mean}（範圍 ${spread.min.toFixed(2)}–${spread.max.toFixed(2)}）`;
   return `${body} n=${spread.count}`;
 }
 

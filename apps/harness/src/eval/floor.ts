@@ -31,6 +31,7 @@ import { ScriptedChatModel, type ScriptedToolCall } from '../scripted-model.js';
 import { compareTiers, summarize, type TierReport, type TierSummary } from './compare.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
 import type { ModelUnderTest } from './model-under-test.js';
+import { mulberry32 } from './stats.js';
 
 /** 一個平凡 agent。 */
 export interface FloorAgent extends ModelUnderTest {
@@ -107,18 +108,6 @@ export const FIXED_SPRAY: FloorAgent = {
       ],
     }),
 };
-
-/** 種子固定的小亂數（mulberry32）。要的是確定，不是品質。 */
-function mulberry32(seed: number): () => number {
-  let state = seed >>> 0;
-  return () => {
-    state = (state + 0x6d2b79f5) >>> 0;
-    let t = state;
-    t = Math.imul(t ^ (t >>> 15), t | 1);
-    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-  };
-}
 
 /** 字串的 32 位元雜湊，當亂數種子用。 */
 function seedOf(text: string): number {
