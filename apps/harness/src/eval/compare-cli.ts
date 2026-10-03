@@ -34,6 +34,7 @@ import {
 } from './compare.js';
 import { parseCases, parseModels, parseOut, parseSamples } from './cli-args.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
+import { summaryLines } from './compare-report.js';
 import { floorHolds, formatFloor, summarizeFloor } from './floor.js';
 import { startResultFile, type ResultWriter } from './result-file.js';
 import { MEASURED_MODELS, type MeasuredModel } from './tiers.js';
@@ -54,44 +55,13 @@ const USAGE = `用法：eval:compare [--samples <n>] [--cases <id,id,...>] [--mo
 
 需要環境變數 NVIDIA_API_KEY（見 .env.example）。`;
 
-function formatSpread(spread: { mean: number; min: number; max: number } | undefined): string {
-  if (spread === undefined) return '—';
-  const mean = spread.mean.toFixed(2);
-  // 全距塌成一點時不印它，省得每一行都拖一段沒有資訊的括號。
-  if (spread.min === spread.max) return mean;
-  return `${mean} (${spread.min.toFixed(2)}–${spread.max.toFixed(2)})`;
-}
-
 function printSummary(summary: TierSummary<MeasuredModel>, floor: readonly TierSummary[]): void {
   const { tier } = summary;
-  const failed = Object.entries(summary.failures)
-    .map(([reason, count]) => `${reason}×${count}`)
-    .join(' ');
-
-  console.log(`\n${tier.label}  ${tier.modelId}`);
-  console.log(`  上次量它    ${tier.measuredOn} —— ${tier.note}`);
-  console.log(`  評到分      ${summary.scored} 次${failed === '' ? '' : `，失敗 ${failed}`}`);
-  // **「這題成功」不是下面「工具成功率」那一欄**：後者只問該叫的叫了沒；這一項要三欄全滿、
-  // 多叫沒超過容許值（見 `scorers.ts` 的 isCaseSuccess）。分母是評到分的次數。
-  console.log(`  這題成功    ${summary.successes}/${summary.scored}`);
-  console.log(`    地板      ${formatFloor(floor)}（每題一次，同一份題目）`);
-  // 前兩欄的 count 不一定等於「評到分」的次數：期望零筆呼叫的題目在這兩欄是
-  // 「沒有可判的」，被濾掉了（見 `compare.ts` 的 TierSummary）。所以少於總數時印出來。
-  console.log(
-    `  工具成功率  ${formatSpread(summary.toolCallSuccess)}${judged(summary, summary.toolCallSuccess)}`,
-  );
-  console.log(
-    `  參數正確性  ${formatSpread(summary.argumentCorrectness)}${judged(summary, summary.argumentCorrectness)}`,
-  );
-  console.log(`  多叫次數    ${formatSpread(summary.extraToolCalls)}`);
-  console.log(
-    `  回覆提到    ${formatSpread(summary.mentions)}${judged(summary, summary.mentions)}`,
-  );
-  // 成本與分數分開講：沒回報 usage 是「不知道」，印成 0 會讀成「免費」。
-  console.log(
-    `  總 token    ${formatSpread(summary.totalTokens)}` +
-      `${summary.costed === summary.scored ? '' : `（只有 ${summary.costed}/${summary.scored} 次有回報 usage）`}`,
-  );
+  for (const line of summaryLines(summary, floor, [
+    `  上次量它    ${tier.measuredOn} —— ${tier.note}`,
+  ])) {
+    console.log(line);
+  }
 }
 
 /** 被上限切掉的執行數。**它是資料損失，不是分數**，所以跑完要單獨提一句。 */
@@ -104,15 +74,6 @@ let budgetHits = 0;
  * （2026-08-28 出過一次）。
  */
 let throttledHits = 0;
-
-/** 這一欄實際判了幾次。等於評到分的次數時不印 —— 每行都拖一段沒有資訊的括號很吵。 */
-function judged(
-  summary: TierSummary<MeasuredModel>,
-  spread: { count: number } | undefined,
-): string {
-  if (spread === undefined || spread.count === summary.scored) return '';
-  return `（判了 ${spread.count}/${summary.scored} 次）`;
-}
 
 /** 沒有可判的那一格印 `—`，不印 `0.00`。理由同 `formatSpread`。 */
 function formatScore(value: number | undefined): string {

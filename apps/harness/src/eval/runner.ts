@@ -35,7 +35,9 @@
  * 靠「反正沒有 checkpointer」的巧合（見 {@link runBenchmarkCase} 裡那段註解）。
  */
 
+import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { AIMessage } from '@langchain/core/messages';
+import type { LLMResult } from '@langchain/core/outputs';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { AgentModel, PluginEntry } from '@nexus/core';
 import { createNexusAgent, HEADLESS_APPROVALS } from '../agent-factory.js';
@@ -71,7 +73,45 @@ export interface BenchmarkRun {
   readonly usage?: TokenUsage;
 }
 
+/**
+ * 每次模型呼叫結束時回報用量的觀察者。
+ *
+ * **它存在是為了失敗的執行**：`runBenchmarkCase` 丟出例外時，`result.messages` 跟著沒了，
+ * 迴圈上限切掉的那一次可能已經燒了十幾輪的 token（#1002）。只有在呼叫結束的那一刻記帳，
+ * 後面不管怎麼死，已經花掉的都留得住。
+ *
+ * 看不到的：被中止的那一次呼叫（沒有結束事件）。所以失敗那幾次的 token 是**下限**。
+ */
+export class UsageTally extends BaseCallbackHandler {
+  name = 'eval-usage-tally';
+
+  constructor(private readonly sink: (usage: TokenUsage) => void) {
+    super();
+  }
+
+  override handleLLMEnd(output: LLMResult): void {
+    for (const generation of output.generations.flat()) {
+      const message = (generation as { message?: unknown }).message;
+      if (!AIMessage.isInstance(message)) continue;
+      const usage = message.usage_metadata;
+      if (usage === undefined) continue;
+      this.sink({
+        inputTokens: usage.input_tokens,
+        outputTokens: usage.output_tokens,
+        totalTokens: usage.total_tokens,
+      });
+    }
+  }
+}
+
 export interface RunBenchmarkOptions {
+  /**
+   * 每次模型呼叫結束就回報一次用量，**包括後來整輪失敗的那一輪**。省略即不記。
+   *
+   * 評分用的 {@link BenchmarkRun.usage} 不走這條（仍然從最終訊息串加總）；這條是給
+   * 失敗的執行補帳用的，見 {@link UsageTally}。
+   */
+  readonly onUsage?: (usage: TokenUsage) => void;
   /** 這一輪用哪個模型。CI 傳假模型，供應商比較傳真模型。 */
   readonly model: AgentModel;
   /** plugin 清單。兩邊必須是同一份，否則比的不是模型是組裝。 */
@@ -142,9 +182,13 @@ export async function runBenchmarkCase(
     const invoke = (
       agent as unknown as { invoke(input: unknown, config?: unknown): Promise<AgentResult> }
     ).invoke.bind(agent);
+    const config = {
+      ...(options.signal === undefined ? {} : { signal: options.signal }),
+      ...(options.onUsage === undefined ? {} : { callbacks: [new UsageTally(options.onUsage)] }),
+    };
     const result = await invoke(
       toAgentInvocation(testCase.prompt),
-      options.signal === undefined ? undefined : { signal: options.signal },
+      Object.keys(config).length === 0 ? undefined : config,
     );
     return summarize(testCase.id, result.messages);
   } finally {
