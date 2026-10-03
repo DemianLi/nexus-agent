@@ -29,6 +29,17 @@ import { runBenchmarkCase } from './runner.js';
 
 type Scored = Extract<TierOutcome, { kind: 'scored' }>;
 
+/**
+ * 整份資料集的地板結果，**整個檔案只跑一次**。三個 agent × 七題是 21 次完整的 agent 執行，
+ * 每條測試各跑一遍的話本機快、CI 慢的差距會把它推到逾時（#1005 的 CI 就栽在這個形狀上）。
+ * 結果是確定的，共用沒有風險。
+ */
+let cachedFloor: ReturnType<typeof runFloor> | undefined;
+function fullFloor(): ReturnType<typeof runFloor> {
+  cachedFloor ??= runFloor();
+  return cachedFloor;
+}
+
 function scoredOnly(outcomes: readonly TierOutcome[]): readonly Scored[] {
   const scored = outcomes.filter((outcome): outcome is Scored => outcome.kind === 'scored');
   expect(scored.length, '有執行失敗：地板沒跑完，成功題數不代表任何事').toBe(outcomes.length);
@@ -37,7 +48,7 @@ function scoredOnly(outcomes: readonly TierOutcome[]): readonly Scored[] {
 
 describe('平凡地板：每個 agent、每一題都判不成功', () => {
   it('三個 agent × 整份資料集，全部評到分、全部不成功', async () => {
-    const reports = await runFloor();
+    const reports = await fullFloor();
     expect(reports.map((report) => report.tier.label)).toEqual(
       FLOOR_AGENTS.map((agent) => agent.label),
     );
@@ -64,7 +75,7 @@ describe('固定亂吐要有牙齒', () => {
   // 所以光看它，評分器放寬到什麼程度都看不出來。亂吐這個 agent 之所以存在，是因為它在
   // 寬鬆的兩欄（工具成功率、回覆提到）拿滿分 —— 它若失了牙，上一條就失去擋人的資格。
   async function sprayOutcomes(): Promise<readonly Scored[]> {
-    const reports = await runFloor();
+    const reports = await fullFloor();
     const report = reports.find((entry) => entry.tier.modelId === FIXED_SPRAY.modelId);
     expect(report).toBeDefined();
     return scoredOnly(report?.outcomes ?? []);
@@ -183,7 +194,7 @@ describe('地板的字串不能撞上資料集', () => {
 
 describe('報表那一行', () => {
   it('印得出三個 agent 的成功題數，不需要憑證', async () => {
-    const summaries = await summarizeFloor();
+    const summaries = (await fullFloor()).map((report) => summarize(report));
     expect(formatFloor(summaries)).toBe(
       FLOOR_AGENTS.map((agent) => `${agent.label} 0/${BENCHMARK.length}`).join('、'),
     );
@@ -198,7 +209,7 @@ describe('報表那一行', () => {
   });
 
   it('地板被破（有人成功）或沒跑完時 floorHolds 回 false', async () => {
-    const summaries = await summarizeFloor();
+    const summaries = (await fullFloor()).map((report) => summarize(report));
     expect(
       floorHolds(
         summaries.map((entry) => ({ ...entry, successes: 1 })),
