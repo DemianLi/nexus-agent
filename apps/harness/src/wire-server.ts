@@ -90,11 +90,11 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     const origin = `http://${host}:${address.port}`;
     // 對方斷線就中止這個 request 的 signal——**中止的是這條線，不是 agent 的 run**。
     const aborted = new AbortController();
-    // **這個 Request 要活到連線關掉。** `new Request(base, { signal })` 把來源 signal 的中止轉給自己的 signal
-    // 照 undici 的實作是一條弱參照（`WeakRef`），Request 被回收之後那條線就斷了（沒有直接重現成功，下面的數字是
-    // 修前後的對照）；而 handler 常常只留 `request.signal`、不留 Request（`handleList(request.signal)`）。斷了的話客戶端斷線之後 handler 的
-    // signal 永遠不會中止——實測 1000 份日誌的列表，放棄的請求有 8／49 次整份掃完，這樣改之後 0／40（#983）。
-    // 所以由 `close` 的回呼抓著它，關線時才放手。
+    // **這個 Request 要活到連線關掉。** `new Request(base, { signal })` 把來源 signal 的中止轉給自己的 signal，
+    // 照 undici 的實作是一條弱參照（`WeakRef`），Request 被回收之後那條線就斷了（機制是推的；缺陷本身可重現：
+    // `measure/abort-delivery.ts`，修前放棄 160 次約 11–14% 沒中止，修後 0）。而 handler 常常只留 `request.signal`、
+    // 不留 Request（`handleList(request.signal)`；下行的 `openFeed`／`openStream` 回完串流之後更是什麼都不抓），
+    // 斷了的話客戶端斷線之後 handler 的 signal 永遠不會中止（#983）。所以由 `close` 的回呼抓著它，關線時才放手。
     let live: Request | undefined;
     outgoing.on('close', () => {
       aborted.abort();
