@@ -14,6 +14,7 @@ import {
   CONTEXT_MEASURE,
   formatSessionReferenceMention,
   MODEL_USAGE,
+  PLAN_MODE,
   SUBAGENT_STATUS,
   TITLE,
   TODOS,
@@ -989,6 +990,109 @@ describe('斜線命令回應讓位給伺服器自己排的輪（#947）', () => 
     downlink.push(opened[0]!, [downlink.lifecycleFrame('completed')]);
     await waitFor(() => expect(screen.getByRole('status').textContent).toBe('就緒'));
     expect(screen.queryByText(goalReply)).toBeNull();
+  });
+});
+
+describe('計劃模式標籤（#900）', () => {
+  const planCommand: SlashDescriptor = {
+    name: 'plan',
+    description: '進出計劃模式。',
+    input: { hint: '[off]' },
+  };
+
+  beforeEach(stubCmdkLayout);
+
+  const planFrame = (downlink: ReturnType<typeof fakeClient>['downlink'], active: boolean): Event =>
+    downlink.pushedFrame('custom', 'plan', { name: PLAN_MODE, payload: { active } });
+
+  const chip = () => screen.queryByRole('button', { name: '退出計劃模式' });
+
+  it('`planMode` 為 null、{active:false} 不畫，{active:true} 才畫', async () => {
+    seq = 0;
+    const { client, downlink, opened } = fakeClient([], { commands: [planCommand] });
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    expect(chip()).toBeNull();
+
+    downlink.push(opened[0]!, [planFrame(downlink, false)]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(chip()).toBeNull();
+
+    downlink.push(opened[0]!, [planFrame(downlink, true)]);
+    await waitFor(() => expect(chip()).toBeTruthy());
+    expect(chip()!.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('按標籤送一次 `/plan off`，成功了也不自己拿掉，等線上的值翻回關著；送出期間再按不送', async () => {
+    seq = 0;
+    const { client, downlink, opened, slashed } = fakeClient([], {
+      commands: [planCommand],
+      run: () => ({ kind: 'success', command_id: 'cmd-1', text: '計劃模式關了。' }),
+    });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slashRun = client.slashRun;
+    client.slashRun = async (...args) => {
+      await gate;
+      return slashRun(...args);
+    };
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    downlink.push(opened[0]!, [planFrame(downlink, true)]);
+    await waitFor(() => expect(chip()).toBeTruthy());
+
+    fireEvent.click(chip()!);
+    await waitFor(() => expect(chip()!.hasAttribute('disabled')).toBe(true));
+    fireEvent.click(chip()!);
+    release();
+    await waitFor(() => expect(slashed).toEqual(['/plan off']));
+    // 命令回來了、線上的值還沒翻：標籤還在，能再按。
+    await waitFor(() => expect(chip()!.hasAttribute('disabled')).toBe(false));
+    expect(slashed).toEqual(['/plan off']);
+
+    downlink.push(opened[0]!, [planFrame(downlink, false)]);
+    await waitFor(() => expect(chip()).toBeNull());
+  });
+
+  it('被拒、不認得、命令回錯誤：標籤留著，旁邊說出原因，不佔狀態列', async () => {
+    seq = 0;
+    const outcomes: SlashRunOutcome[] = [
+      { kind: 'rejected', message: '這條 thread 正在跑：等這一輪跑完再打斜線命令' },
+      { kind: 'unknown' },
+      { kind: 'error', command_id: 'cmd-2', text: '本來就不在計劃模式。' },
+    ];
+    let at = 0;
+    const { client, downlink, opened } = fakeClient([], {
+      commands: [planCommand],
+      run: () => outcomes[at++]!,
+    });
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    downlink.push(opened[0]!, [planFrame(downlink, true)]);
+    await waitFor(() => expect(chip()).toBeTruthy());
+
+    for (const expected of ['正在跑', '不認得這個命令：/plan off', '本來就不在計劃模式']) {
+      fireEvent.click(chip()!);
+      await waitFor(() => expect(screen.getByTestId('plan-chip').textContent).toContain(expected));
+      expect(chip()).toBeTruthy();
+      // 失敗講在標籤旁邊，狀態列沒有被借走。
+      expect(screen.getByRole('status').textContent).toBe('就緒');
+    }
+  });
+
+  it('一輪跑著時標籤照畫但停用，提示說跑完才能關；收尾後恢復', async () => {
+    seq = 0;
+    const { client, downlink, opened } = fakeClient([], { commands: [planCommand] });
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    downlink.push(opened[0]!, [planFrame(downlink, true), downlink.lifecycleFrame('running')]);
+    await waitFor(() => expect(chip()!.hasAttribute('disabled')).toBe(true));
+    expect(chip()!.getAttribute('title')).toBe('這一輪跑完才能關');
+
+    downlink.push(opened[0]!, [downlink.lifecycleFrame('completed')]);
+    await waitFor(() => expect(chip()!.hasAttribute('disabled')).toBe(false));
   });
 });
 
