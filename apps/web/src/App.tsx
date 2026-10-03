@@ -10,6 +10,7 @@ import { ContextMeter } from '@/components/context-meter';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
+import { GoalBar } from '@/components/goal-bar';
 import { PlanChip } from '@/components/plan-chip';
 import { PlanReviewPanel, usePlanLibrary } from '@/components/plan-review';
 import { QueueDock } from '@/components/queue-dock';
@@ -475,6 +476,8 @@ function ConversationView({
             connected={conversation.connected}
             onExit={conversation.exitPlanMode}
           />
+          {/* 目標列也在換手區外面（#945）：只讀；排在計劃標籤之後、待辦面板之前。 */}
+          <GoalBar goal={conversation.state.goal} />
           {/* 換手區外面：底下換成核准或提問面板時照樣看得到，焦點搬移也不算它（#575 Q1）。 */}
           <TodoPanel todos={conversation.state.todos} status={conversation.state.status} />
           {/* 也在換手區外面：停在核准點時排著的照樣看得到、改得到（#645 Q3、Q7）。 */}

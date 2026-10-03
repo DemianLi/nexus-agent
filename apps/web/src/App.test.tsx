@@ -9,10 +9,12 @@ import type {
   RunStartMode,
   UplinkResult,
   WireClient,
+  WireGoal,
 } from '@nexus/wire';
 import {
   CONTEXT_MEASURE,
   formatSessionReferenceMention,
+  GOAL,
   MODEL_USAGE,
   PLAN_MODE,
   SUBAGENT_STATUS,
@@ -1093,6 +1095,96 @@ describe('計劃模式標籤（#900）', () => {
 
     downlink.push(opened[0]!, [downlink.lifecycleFrame('completed')]);
     await waitFor(() => expect(chip()!.hasAttribute('disabled')).toBe(false));
+  });
+});
+
+describe('目標列（#945）', () => {
+  beforeEach(stubCmdkLayout);
+
+  const wireGoal = (patch: Partial<WireGoal> = {}): WireGoal => ({
+    id: 'g1',
+    revision: 1,
+    objective: '把登入改好',
+    phase: 'active',
+    maxGoalRounds: 256,
+    roundsStarted: 0,
+    createdAt: 0,
+    updatedAt: 0,
+    ...patch,
+  });
+  const goalFrame = (
+    downlink: ReturnType<typeof fakeClient>['downlink'],
+    goal: WireGoal | null,
+  ): Event => downlink.pushedFrame('custom', 'goal', { name: GOAL, payload: { goal } });
+  const bar = () => screen.queryByTestId('goal-bar');
+
+  async function mounted() {
+    seq = 0;
+    const fake = fakeClient([]);
+    render(<App client={fake.client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    return fake;
+  }
+
+  it('沒有目標與 complete 不畫；active、paused、blocked 畫，階段字不說進行中', async () => {
+    const { downlink, opened } = await mounted();
+    expect(bar()).toBeNull();
+
+    downlink.push(opened[0]!, [goalFrame(downlink, wireGoal({ phase: 'complete' }))]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(bar()).toBeNull();
+
+    downlink.push(opened[0]!, [goalFrame(downlink, wireGoal())]);
+    await waitFor(() => expect(bar()).toBeTruthy());
+    expect(bar()!.textContent).toContain('目標：未完成');
+    expect(bar()!.textContent).toContain('把登入改好');
+    expect(bar()!.textContent).not.toMatch(/進行中|正在跑/);
+
+    downlink.push(opened[0]!, [goalFrame(downlink, wireGoal({ phase: 'paused' }))]);
+    await waitFor(() => expect(bar()!.textContent).toContain('目標：已暫停'));
+  });
+
+  it('blocked 的理由直接顯示在列上；從有目標變成沒有（清掉）時整列消失', async () => {
+    const { downlink, opened } = await mounted();
+    downlink.push(opened[0]!, [
+      goalFrame(
+        downlink,
+        wireGoal({ phase: 'blocked', blockedReason: { code: 'x', message: '連續兩輪沒有進展' } }),
+      ),
+    ]);
+    await waitFor(() =>
+      expect(screen.getByTestId('goal-blocked-reason').textContent).toBe('連續兩輪沒有進展'),
+    );
+
+    downlink.push(opened[0]!, [goalFrame(downlink, null)]);
+    await waitFor(() => expect(bar()).toBeNull());
+  });
+
+  it('輪數：開始過才畫「第 N／M 輪」；長目標單行截短而全文在 title 與無障礙名稱', async () => {
+    const { downlink, opened } = await mounted();
+    const long = '把登入流程整個重寫一遍，包含錯誤處理、重試與測試。'.repeat(6);
+    downlink.push(opened[0]!, [goalFrame(downlink, wireGoal({ objective: long }))]);
+    await waitFor(() => expect(bar()).toBeTruthy());
+    expect(screen.queryByTestId('goal-rounds')).toBeNull();
+    const objective = screen.getByTitle(long);
+    expect(objective.className).toContain('truncate');
+    expect(bar()!.getAttribute('aria-label')).toContain(long);
+
+    downlink.push(opened[0]!, [
+      goalFrame(downlink, wireGoal({ objective: long, roundsStarted: 3, maxGoalRounds: 10 })),
+    ]);
+    await waitFor(() => expect(screen.getByTestId('goal-rounds').textContent).toBe('第 3／10 輪'));
+  });
+
+  it('跟計劃標籤同時出現：兩個都在，標籤排在目標列前面', async () => {
+    const { downlink, opened } = await mounted();
+    downlink.push(opened[0]!, [
+      goalFrame(downlink, wireGoal()),
+      downlink.pushedFrame('custom', 'plan', { name: PLAN_MODE, payload: { active: true } }),
+    ]);
+    await waitFor(() => expect(bar()).toBeTruthy());
+    const chip = await screen.findByTestId('plan-chip');
+    expect(chip.compareDocumentPosition(bar()!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 });
 
