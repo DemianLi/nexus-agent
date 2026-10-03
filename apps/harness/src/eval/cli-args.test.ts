@@ -7,7 +7,7 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { parseCases, parseModels, parseSamples } from './cli-args.js';
+import { parseCases, parseModels, parseOut, parseSamples } from './cli-args.js';
 import { BENCHMARK } from './dataset.js';
 
 const MODELS = [
@@ -90,5 +90,21 @@ describe('parseModels', () => {
 
   it('後面接著另一個旗標時拋', () => {
     expect(() => parseModels(['--models', '--cases'], MODELS)).toThrow(/逗號/);
+  });
+});
+
+describe('parseOut', () => {
+  it('沒給就是 undefined，由結果檔模組用預設目錄', () => {
+    expect(parseOut([])).toBeUndefined();
+    expect(parseOut(['--samples', '3'])).toBeUndefined();
+  });
+
+  it('讀得到目錄', () => {
+    expect(parseOut(['--out', '/var/tmp/evals'])).toBe('/var/tmp/evals');
+  });
+
+  it('旗標後面沒接值、或接到下一個旗標，當場拋 —— 不要悄悄落在預設目錄', () => {
+    expect(() => parseOut(['--out'])).toThrow(/目錄/);
+    expect(() => parseOut(['--out', '--samples', '3'])).toThrow(/目錄/);
   });
 });

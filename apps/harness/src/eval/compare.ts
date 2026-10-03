@@ -30,7 +30,7 @@ import type { AgentModel } from '@nexus/core';
 import { BENCHMARK_SYSTEM_PROMPT, benchmarkPlugins } from './assembly.js';
 import { isRetryableRateLimit } from '../live-model.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
-import { runBenchmarkCase } from './runner.js';
+import { runBenchmarkCase, type BenchmarkRun } from './runner.js';
 import { scoreCase, type CaseScore } from './scorers.js';
 import type { ModelUnderTest } from './model-under-test.js';
 
@@ -83,6 +83,31 @@ export type FailureReason =
 export const EVAL_RECURSION_LIMIT = 40;
 
 /**
+ * 基準任務的組裝每一輪模型呼叫佔幾個 super-step。
+ *
+ * 預設組裝打底提醒器，而 `beforeModel` 在 LangGraph 裡是圖裡的一個節點，所以每輪是
+ * 模型、工具、提醒器三格，不是裸組裝的兩格（換算與逐格實測見
+ * [`looping-model.ts`](../looping-model.ts) 檔頭的表）。`compare.test.ts` 用
+ * `benchmarkPlugins()` 配 `LoopingChatModel` 實跑打滿上限，釘死這個值與下面那個換算。
+ */
+export const EVAL_SUPERSTEPS_PER_ROUND = 3;
+
+/**
+ * 一個迴圈上限約等於幾輪模型呼叫：`floor((recursionLimit - 1) / 每輪格數)`。
+ *
+ * **CLI 印給人看的輪數與結果檔記下的輪數都從這裡來。** 之前 `compare-cli.ts` 自己寫
+ * `(上限 - 2) / 2`，那是裸組裝每輪兩格的舊算法，對基準任務的組裝印出 19 輪，實際是 13 輪。
+ *
+ * **只在上限 4 到 87 之間精確**（2026-10-04 用 `LoopingChatModel` 逐一實測，`compare.test.ts`
+ * 有掃描）。從 88 起實測比這個換算多一輪（88 → 30 輪，換算 29；100 → 34，換算 33），
+ * 原因沒有追。出貨的上限 {@link EVAL_RECURSION_LIMIT} 是 40，在精確的範圍內；CLI 沒有改上限的
+ * 旗標，所以今天不會落到範圍外。
+ */
+export function evalModelRounds(recursionLimit: number): number {
+  return Math.floor((recursionLimit - 1) / EVAL_SUPERSTEPS_PER_ROUND);
+}
+
+/**
  * 一次執行的時間預算。
  *
  * **迴圈上限管不到的那一半**：`ultra` 在 `edit-after-read` 上跑過 420.9 秒與 247.3 秒，
@@ -94,7 +119,18 @@ export const EVAL_DEADLINE_MS = 300_000;
 
 /** 一次執行的結果。 */
 export type TierOutcome =
-  | { readonly kind: 'scored'; readonly score: CaseScore; readonly seconds: number }
+  | {
+      readonly kind: 'scored';
+      readonly score: CaseScore;
+      readonly seconds: number;
+      /**
+       * 評分器當時看到的原始觀測（工具呼叫序列、最終回覆、用量）。
+       *
+       * 分數是觀測的函式；只留分數的話，評分程式或題庫一改，舊結果就沒辦法用新的判準重新
+       * 評分（結果檔因此也存它，見 [`result-file.ts`](./result-file.ts)）。
+       */
+      readonly run: BenchmarkRun;
+    }
   | {
       readonly kind: 'failed';
       readonly caseId: string;
@@ -208,7 +244,7 @@ async function runOnce(
       recursionLimit: options.recursionLimit ?? EVAL_RECURSION_LIMIT,
       ...(deadline === undefined ? {} : { signal: deadline }),
     });
-    return { kind: 'scored', score: scoreCase(testCase, run), seconds: elapsed(started) };
+    return { kind: 'scored', score: scoreCase(testCase, run), seconds: elapsed(started), run };
   } catch (error) {
     if (deadline?.aborted === true) {
       return {

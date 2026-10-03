@@ -25,17 +25,19 @@ import { createLiveModel, loadLiveLaunchEnv, DEFAULT_LIVE_MAX_RETRIES } from '..
 import { liveModelConfigForModel } from '../settings/live-model.js';
 import {
   compareTiers,
+  evalModelRounds,
   summarize,
   EVAL_DEADLINE_MS,
   EVAL_RECURSION_LIMIT,
   type TierOutcome,
   type TierSummary,
 } from './compare.js';
-import { parseCases, parseModels, parseSamples } from './cli-args.js';
+import { parseCases, parseModels, parseOut, parseSamples } from './cli-args.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
+import { startResultFile, type ResultWriter } from './result-file.js';
 import { MEASURED_MODELS, type MeasuredModel } from './tiers.js';
 
-const USAGE = `用法：eval:compare [--samples <n>] [--cases <id,id,...>] [--models <label,...>]
+const USAGE = `用法：eval:compare [--samples <n>] [--cases <id,id,...>] [--models <label,...>] [--out <dir>]
 
   --samples <n>        每題重複幾次，預設 1。取樣是隨機的（temperature 1），
                        n=1 的數字是指示性的，不是定論。
@@ -43,6 +45,9 @@ const USAGE = `用法：eval:compare [--samples <n>] [--cases <id,id,...>] [--mo
                        ${BENCHMARK.map((entry) => entry.id).join(' / ')}
   --models <label,...> 只跑指定的模型，預設全部。短名見 src/eval/tiers.ts：
                        ${MEASURED_MODELS.map((model) => model.label).join(' / ')}
+  --out <dir>          結果檔放哪個目錄，預設 apps/harness/eval-results/（不進版控）。
+                       每次執行逐筆寫進一份 .jsonl，開頭記 commit、題庫與評分程式版本、
+                       取樣設定；沒有最後一行 footer 的檔是沒跑完的。
 
 需要環境變數 NVIDIA_API_KEY（見 .env.example）。`;
 
@@ -132,6 +137,7 @@ async function runAll(
   samples: number,
   cases: readonly BenchmarkCase[],
   credentials: CredentialService,
+  writer: ResultWriter,
 ): Promise<void> {
   const reports = await compareTiers(models, {
     // **只換模型 id**（#545）：其餘四格是 schema 預設，不跟任何一台部署的設定走——量的是出貨
@@ -140,7 +146,10 @@ async function runAll(
       createLiveModel(liveModelConfigForModel(modelId), undefined, credentials),
     samples,
     cases,
-    onOutcome: printOutcome,
+    onOutcome: (tier, outcome) => {
+      writer.append(tier, outcome);
+      printOutcome(tier, outcome);
+    },
   });
   for (const report of reports) printSummary(summarize(report));
 }
@@ -154,6 +163,7 @@ async function main(argv: readonly string[]): Promise<void> {
   const samples = parseSamples(argv);
   const cases = parseCases(argv);
   const models = parseModels(argv, MEASURED_MODELS);
+  const out = parseOut(argv);
   const { credentials, launchEnv } = loadLiveLaunchEnv();
   // 對外代理（#746）：跟 CLI／serve 同一個時間點，載完環境之後、連模型之前。這支腳本跑到行程結束，不另收尾。
   await installLaunchProxy(launchEnv, (message) => console.error(message));
@@ -167,11 +177,32 @@ async function main(argv: readonly string[]): Promise<void> {
       `共 ${models.length * cases.length * samples} 次執行。`,
   );
   console.log(
-    `單次執行的上限：迴圈 ${EVAL_RECURSION_LIMIT} 個 super-step（約 ${(EVAL_RECURSION_LIMIT - 2) / 2} 輪模型呼叫）、` +
+    `單次執行的上限：迴圈 ${EVAL_RECURSION_LIMIT} 個 super-step（約 ${evalModelRounds(EVAL_RECURSION_LIMIT)} 輪模型呼叫）、` +
       `時鐘 ${EVAL_DEADLINE_MS / 1000} 秒。超過就記成 budget，不是分數。`,
   );
 
-  await runAll(models, samples, cases, credentials);
+  // 取樣設定從模型實例讀（建構不連外），不在這裡再抄一份字面值。先建檔：建不起來就在花錢之前拋。
+  const first = models[0];
+  if (first === undefined) throw new Error('沒有要跑的模型');
+  const probe = createLiveModel(liveModelConfigForModel(first.modelId), undefined, credentials);
+  const writer = startResultFile({
+    tool: 'eval:compare',
+    argv,
+    cases,
+    models,
+    samples,
+    sampling: { temperature: probe.temperature, topP: probe.topP },
+    dir: out,
+  });
+  console.log(`結果檔：${writer.path}（逐筆寫入）`);
+
+  await runAll(models, samples, cases, credentials, writer);
+
+  const saved = writer.finish();
+  console.log(
+    `\n結果檔：${writer.path}（${saved.outcomes} 筆）` +
+      `${saved.writeFailed ? '。**中途有寫入失敗，檔案不完整**' : ''}`,
+  );
 
   if (samples === 1) {
     console.log('\n注意：每題只取樣一次，取樣是隨機的 —— 這組數字是指示性的，不是定論。');
