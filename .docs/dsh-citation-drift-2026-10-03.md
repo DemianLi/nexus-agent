@@ -181,9 +181,11 @@ nexus 引用了 **350 個不重複的 dsh 檔案路徑**（含重複共 1,103 �
 
 `packages/goal/goal-round-driver/src/index.ts`（+8/-4）：目標回合被取消、而預約還排在佇列裡時，agent 一到 idle 就把預約撤回（`agent.inbox.remove(attempt.messageId)`），避免排在它後面的人類輸入被卡住；原本只做 `ctx.goals.pause`。`apps/harness/src/goal-driver.ts` 對這個檔有 7 處引用（皆帶 SHA `477b4f4`，引用本身仍成立），其中登記過的偏離（「我們只收回行程內授權、不暫停」）對照的正是被改的這一段。**nexus 有沒有同樣的「預約卡住人類輸入」風險，未驗證。**
 
-### (3) `session-controller` 的清單／搜尋加了分段讓出
+### (3) `session-controller` 的清單加了分段讓出
 
-`packages/api/session-controller/src/list.ts`（+27/-7）與 `index.ts`（+11/-4）：新增設定 `listWorkSliceMs`、建構子多一個 `workSliceMs`、迴圈裡加 `yieldDeadline` 與 `signal?.throwIfAborted()`。`apps/harness/src/session-list.ts:4`、`apps/harness/src/thread-search.ts:5` 都是「照 dsh」做的。**只讀了 diff 的前段，沒有讀完整個 search 路徑。**
+`packages/api/session-controller/src/list.ts`（+27/-7）與 `index.ts`（+11/-4）：新增設定 `listWorkSliceMs`、建構子多一個 `workSliceMs`、迴圈裡加 `yieldDeadline` 與 `signal?.throwIfAborted()`。`apps/harness/src/session-list.ts:4`、`apps/harness/src/thread-search.ts:5` 都是「照 dsh」做的。**更正（2026-10-04，[#983](https://github.com/DemianLi/nexus-agent/issues/983)）**：原標題寫「清單／搜尋」，但這兩個提交只動 `list()`，**搜尋沒有被改**；`thread-search.ts` 的 reconcile 迴圈這次沒有涵蓋（沒有量過它佔住事件圈，所以沒有動它）。
+
+**後續（#983 已處理）**：實測後，分段讓出**不採用**——我們每份日誌都先 `await readFile`，事件圈本來就每份回得去；1000 份 × 1 MB 一次列表 2.6 秒，事件圈最大延遲 9–16 ms，停頓上限是單一份的解析（約 1.7 ms／MB，一份 100 MB 約 170 ms）。**中止採用**：沒有它時客戶端放棄的請求照樣把整份掃完（放棄後 2.6 秒窗口用掉 2.59 秒 CPU）。數字與登記的偏離寫在 `apps/harness/src/session-list.ts` 檔頭。量測時連帶抓到 `wire-server.ts` 讓一部分放棄請求的 `request.signal` 永遠不中止（只留 signal、沒留 Request），一併修了。
 
 ### (4) web 工具卡的開卡時機（只影響一句描述）
 

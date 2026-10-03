@@ -222,4 +222,31 @@ describe('最後一道防線（照 dsh webserver）', () => {
     expect(next.status).toBe(200);
     expect(await next.text()).toBe('ok');
   });
+
+  it('客戶端砍掉連線，handler 手上的 request.signal 跟著中止（#983）', async () => {
+    // handler 只留 signal、不留 Request——`wire-handler.ts` 的 `handleList(request.signal)` 就是這樣。
+    let seen: AbortSignal | undefined;
+    const aborted = new Promise<void>((resolve) => {
+      const handler: WireHandler = {
+        handle: (request) => {
+          seen = request.signal;
+          seen.addEventListener('abort', () => resolve(), { once: true });
+          // 不回答：連線一直掛著，直到客戶端砍掉它。
+          return new Promise<Response>(() => undefined);
+        },
+        close: async () => undefined,
+      };
+      void startWireServer({ handler }).then((server) => {
+        running = server;
+        const { hostname, port } = new URL(server.url);
+        const socket = connect({ host: hostname, port: Number(port) }, () => {
+          socket.write(`GET / HTTP/1.1\r\nhost: ${hostname}\r\n\r\n`);
+          setTimeout(() => socket.destroy(), 50);
+        });
+      });
+    });
+
+    await aborted;
+    expect(seen?.aborted).toBe(true);
+  });
 });

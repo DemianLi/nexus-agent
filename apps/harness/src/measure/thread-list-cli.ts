@@ -2,7 +2,8 @@
  * 量會話列表的延遲——[#742](https://github.com/DemianLi/nexus-agent/issues/742)。
  *
  * 列表每次都把專案下每一份日誌整個讀進來（`listStoredThreads`，#665），成本正比於「份數 × 每份大小」。
- * 這支腳本造一批假日誌，量 serve 的 `GET /threads` 與直接呼叫 `listStoredThreads` 各要多久。
+ * 這支腳本造一批假日誌，量 serve 的 `GET /threads` 與直接呼叫 `listStoredThreads` 各要多久，
+ * **以及列表進行中事件圈最長被佔住多久**（[#983](https://github.com/DemianLi/nexus-agent/issues/983)）。
  * **只量、不改產品程式**；不進 vitest、不進 CI（要寫幾 GB 的檔）。
  *
  * ```bash
@@ -20,15 +21,16 @@
  */
 
 import { createReadStream } from 'node:fs';
+import { request as httpRequest } from 'node:http';
 import { mkdir, rm, stat, writeFile } from 'node:fs/promises';
 import { randomBytes } from 'node:crypto';
 import { arch, cpus, platform, release, totalmem } from 'node:os';
 import { join } from 'node:path';
-import { performance } from 'node:perf_hooks';
+import { monitorEventLoopDelay, performance } from 'node:perf_hooks';
 import { parseArgs } from 'node:util';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { createWireClient } from '@nexus/wire';
+import { createWireClient, THREADS_PATH } from '@nexus/wire';
 import { openJsonlSessionStore, projectKey } from '../jsonl-session-store.js';
 import { runServe } from '../serve.js';
 import { listStoredThreads } from '../session-list.js';
@@ -42,17 +44,122 @@ interface Cell {
   readonly fileBytes: number;
 }
 
+/** 一組量測期間事件圈的延遲（毫秒）：每 1 ms 排一次計時器，看實際晚了多少。 */
+interface LoopDelay {
+  readonly max: number;
+  readonly p99: number;
+  readonly mean: number;
+}
+
+interface AbandonCost {
+  /** 一次完整列表的時間（毫秒），也是放棄之後觀察的窗口長度。 */
+  readonly windowMs: number;
+  /** 窗口內本行程用掉的 CPU（user＋system，毫秒）：每次放棄一個值。 */
+  readonly afterAbandon: readonly number[];
+  /** 同長度、什麼都不做的窗口內的 CPU。 */
+  readonly idle: readonly number[];
+}
+
 interface CellResult {
   readonly cell: Cell;
   readonly totalBytes: number;
   readonly http: readonly number[];
   readonly direct: readonly number[];
+  /** [#983](https://github.com/DemianLi/nexus-agent/issues/983)：列表進行中事件圈被佔住多久。 */
+  readonly httpLoop: LoopDelay;
+  readonly directLoop: LoopDelay;
+  /** 客戶端在列表進行中放棄之後，伺服器還花了多少 CPU 毫秒（對照同長度的靜止窗口）。 */
+  readonly abandon: AbandonCost;
+  /** 同上，但客戶端是直接砍 socket（對照 `fetch` 的中止）。 */
+  readonly abandonSocket: AbandonCost;
   readonly valid: boolean;
   readonly problems: readonly string[];
 }
 
 function ms(value: number): string {
   return value.toFixed(0);
+}
+
+/**
+ * 跑 `run` 的期間用 `monitorEventLoopDelay` 量事件圈（[#983](https://github.com/DemianLi/nexus-agent/issues/983)）。
+ * 列表是一串 `await 讀檔`＋同步解析：事件圈只在「一份的解析」那一段被佔住，不是整次列表。要看的就是那一段最長多久。
+ * 直方圖有 1 ms 的底（`resolution`），量不到比它更短的停頓；單位換成毫秒。
+ */
+async function withLoopDelay<T>(run: () => Promise<T>): Promise<{ value: T; loop: LoopDelay }> {
+  const histogram = monitorEventLoopDelay({ resolution: 1 });
+  histogram.enable();
+  try {
+    const value = await run();
+    return {
+      value,
+      loop: {
+        max: histogram.max / 1e6,
+        p99: histogram.percentile(99) / 1e6,
+        mean: histogram.mean / 1e6,
+      },
+    };
+  } finally {
+    histogram.disable();
+  }
+}
+
+function cpuMs(since: NodeJS.CpuUsage): number {
+  const used = process.cpuUsage(since);
+  return (used.user + used.system) / 1000;
+}
+
+/**
+ * 客戶端在列表開始 100 ms 後中止請求（[#983](https://github.com/DemianLi/nexus-agent/issues/983)），
+ * 之後的 `windowMs` 內量本行程的 CPU。伺服器有把中止當一回事的話，窗口內只剩閒置的底；
+ * 沒有的話，剩下的整份掃描都會算在這裡。量窗口前先等請求本身結束，免得上一輪的尾巴混進下一輪。
+ */
+async function abandonCost(
+  url: string,
+  cookie: string,
+  windowMs: number,
+  runs: number,
+  via: 'fetch' | 'socket',
+): Promise<AbandonCost> {
+  const afterAbandon: number[] = [];
+  const idle: number[] = [];
+  const wait = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+  for (let run = 0; run < runs; run += 1) {
+    await wait(windowMs + 200);
+    const baseline = process.cpuUsage();
+    await wait(windowMs);
+    idle.push(cpuMs(baseline));
+
+    await wait(200);
+    let abandon: () => void;
+    let request: Promise<unknown>;
+    if (via === 'fetch') {
+      const controller = new AbortController();
+      request = fetch(`${url}${THREADS_PATH}`, {
+        headers: { cookie, 'content-type': 'application/json' },
+        signal: controller.signal,
+      }).catch(() => undefined);
+      abandon = () => controller.abort();
+    } else {
+      // 瀏覽器關分頁、斷網的樣子：新開一條連線，送出請求，一段時間後直接砍掉 socket。
+      const outgoing = httpRequest(`${url}${THREADS_PATH}`, {
+        agent: false,
+        headers: { cookie, 'content-type': 'application/json' },
+      });
+      request = new Promise((resolve) => {
+        outgoing.on('error', resolve);
+        outgoing.on('close', resolve);
+      });
+      outgoing.end();
+      abandon = () => outgoing.destroy();
+    }
+    await wait(100);
+    abandon();
+    const start = process.cpuUsage();
+    await request;
+    await wait(windowMs);
+    afterAbandon.push(cpuMs(start));
+  }
+  return { windowMs, afterAbandon, idle };
 }
 
 function median(values: readonly number[]): number {
@@ -215,36 +322,52 @@ async function measureCell(
 
     const http: number[] = [];
     if (filler !== undefined) await flush(filler);
-    for (let run = 0; run < runs; run += 1) {
-      const start = performance.now();
-      const outcome = await client.listThreads();
-      http.push(performance.now() - start);
-      if (outcome.kind !== 'ok') {
-        problems.push(`第 ${run} 次 rejected：${outcome.message}`);
-        continue;
+    const httpMeasured = await withLoopDelay(async () => {
+      for (let run = 0; run < runs; run += 1) {
+        const start = performance.now();
+        const outcome = await client.listThreads();
+        http.push(performance.now() - start);
+        if (outcome.kind !== 'ok') {
+          problems.push(`第 ${run} 次 rejected：${outcome.message}`);
+          continue;
+        }
+        const { items, unreadable } = outcome.result;
+        if (items.length !== cell.count) problems.push(`items ${items.length} ≠ ${cell.count}`);
+        if (unreadable !== 0) problems.push(`unreadable ${unreadable}`);
+        if (items.some((item) => item.blank || item.title === undefined)) {
+          problems.push('有 blank 或沒標題的列');
+        }
       }
-      const { items, unreadable } = outcome.result;
-      if (items.length !== cell.count) problems.push(`items ${items.length} ≠ ${cell.count}`);
-      if (unreadable !== 0) problems.push(`unreadable ${unreadable}`);
-      if (items.some((item) => item.blank || item.title === undefined)) {
-        problems.push('有 blank 或沒標題的列');
-      }
-    }
+    });
 
     const direct: number[] = [];
     const store = openJsonlSessionStore({ directory: dir });
     if (filler !== undefined) await flush(filler);
-    for (let run = 0; run < runs; run += 1) {
-      const start = performance.now();
-      const listed = await listStoredThreads(store, { cwd, title: LIMITS });
-      direct.push(performance.now() - start);
-      if (listed.items.length !== cell.count) problems.push(`direct items ${listed.items.length}`);
-    }
+    const directMeasured = await withLoopDelay(async () => {
+      for (let run = 0; run < runs; run += 1) {
+        const start = performance.now();
+        const listed = await listStoredThreads(store, { cwd, title: LIMITS });
+        direct.push(performance.now() - start);
+        if (listed.items.length !== cell.count) {
+          problems.push(`direct items ${listed.items.length}`);
+        }
+      }
+    });
     return {
       cell,
       totalBytes,
       http,
       direct,
+      httpLoop: httpMeasured.loop,
+      directLoop: directMeasured.loop,
+      abandon: await abandonCost(running.url, cookie, Math.round(median(direct)), runs, 'fetch'),
+      abandonSocket: await abandonCost(
+        running.url,
+        cookie,
+        Math.round(median(direct)),
+        runs,
+        'socket',
+      ),
       valid: problems.length === 0,
       problems: [...new Set(problems)],
     };
@@ -254,6 +377,14 @@ async function measureCell(
   }
 }
 
+function abandonText(cost: AbandonCost): string {
+  return `${cost.windowMs} ms 內的 CPU：${ms(median(cost.afterAbandon))} ms（中位；各次 ${cost.afterAbandon.map(ms).join('、')}）｜靜止對照 ${ms(median(cost.idle))} ms`;
+}
+
+function loopText(loop: LoopDelay): string {
+  return `最大 ${loop.max.toFixed(1)} ms｜p99 ${loop.p99.toFixed(1)} ms｜平均 ${loop.mean.toFixed(1)} ms`;
+}
+
 function report(result: CellResult): string {
   const { cell, http, direct } = result;
   const fmt = (series: readonly number[]): string =>
@@ -261,7 +392,11 @@ function report(result: CellResult): string {
   return [
     `${cell.count} 份 × ${(cell.fileBytes / 1024).toFixed(0)} KB（實寫 ${(result.totalBytes / 1024 ** 2).toFixed(0)} MB）${result.valid ? '' : ' ⚠ 作廢：' + result.problems.join('；')}`,
     `  GET /threads      ${fmt(http)}`,
+    `    事件圈延遲 ${loopText(result.httpLoop)}`,
     `  listStoredThreads ${fmt(direct)}`,
+    `    事件圈延遲 ${loopText(result.directLoop)}`,
+    `  放棄請求之後（fetch 中止）${abandonText(result.abandon)}`,
+    `  放棄請求之後（砍 socket）${abandonText(result.abandonSocket)}`,
   ].join('\n');
 }
 
