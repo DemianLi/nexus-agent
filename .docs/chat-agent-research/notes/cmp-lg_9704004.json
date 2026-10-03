@@ -146,10 +146,7 @@
   },
   "value_verdict": "high",
   "verdict_reason": "這是多目標分數「以使用者滿意度迴歸求權重」的源頭方法，直接回答本子領域的入選問題。但全文是假設資料、沒有樣本外驗證，應該當作方法範本讀，而不是實證結果。",
-  "related": [
-    "cmp-lg/9602004",
-    "cmp-lg/9511003"
-  ],
+  "related": ["cmp-lg/9602004", "cmp-lg/9511003"],
   "anchor_check": {
     "exact": 8,
     "deep": 7,
