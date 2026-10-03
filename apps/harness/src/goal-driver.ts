@@ -126,6 +126,15 @@ export type GoalDriverIdleReason =
    *
    * **偏離一格（Q8 拍板過）**：dsh 在被中止的是自己排的那一輪時，還會在下一個 idle 把目標暫停（改耐久相位）；
    * 我們只收回行程內的授權，相位與修訂號不動——Q8 寫的是「目標狀態不動」。
+   *
+   * **dsh 後來加的那一格我們已經有，機制不同**：dsh `9a8d21dfe75`／`c02925ed6b5`（2026-09-29，對讀 `5badb15009a`）
+   * 讓 driver 在 idle 時把還排在佇列的續行預約從 inbox 撤回（`agent.inbox.remove(attempt.messageId)`），否則下一則
+   * 人類輸入會先領到那份過期的預約、被 pre-step 拒掉，人的輸入就卡著。被中止的是別的工作時，dsh 只停用續行、不暫停目標，
+   * 這一半與我們同。我們沒有 inbox 預約：續行是 pump 佇列裡沒有 `itemId` 的一件，那一輪收成中止時
+   * `ThreadPump.#parkIfStopped`（`thread-pump.ts`） 把它整件拿掉（送出它的 promise 就此有結果），排在它後面的人類輸入照停住的規矩等下一次
+   * 送出。`send-queue.test.ts` 的「排著的續行那一輪在停止落定時丟掉，不停住」釘住這一條，情境與 dsh 的
+   * `queue-actions.e2e.ts` goal-stop 一致：人類那一輪在跑、續行排在後面、按停止、再送一句話只跑人類的那句，不跑續行。
+   * 引用的行號（`246-249`、`328-337`、`329-331`）是 `477b4f4` 那一版，之後 dsh 的檔案已經位移。
    */
   | 'turn-aborted'
   /**
