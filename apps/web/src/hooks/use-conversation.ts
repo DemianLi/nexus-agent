@@ -41,6 +41,7 @@ import { FEEDBACK_COMMAND_LINE, FEEDBACK_COPY } from '@/lib/feedback';
 import { FramePublisher, publicationOf } from '@/lib/frame-publisher';
 import type { Publication } from '@/lib/frame-publisher';
 import { RatingsController } from '@/lib/feedback-ratings';
+import { PLAN_EXIT_LINE } from '@/lib/plan-chip';
 import type { RatingsView } from '@/lib/feedback-ratings';
 import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
 
@@ -162,6 +163,12 @@ export interface Conversation {
    * 泡泡。斜線命令不看它。省略就是排隊。
    */
   send(text: string, mode?: RunStartMode): Promise<SendRejected | undefined>;
+  /**
+   * 退出計劃模式（#900）：送 `/plan off`，走跟打字送出同一條 `slash.run`。**結果由呼叫端自己畫**——回 `undefined` 是
+   * 命令成功（標籤等線上的值翻回關著才消失），回字串是失敗的原因（被拒、不認得、命令回錯誤）。不碰
+   * {@link Conversation.slashNotice} 與 {@link Conversation.slashError}：那兩格是狀態列的，標籤的失敗講在標籤旁邊。
+   */
+  exitPlanMode(): Promise<string | undefined>;
   /**
    * 改或刪送出佇列裡的一件（`queue.update`，#637）。**只回有沒有收下**：清單的新樣子走下行的 `inbox`，
    * 不拿回條改本地的東西。
@@ -484,6 +491,25 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     [threadId],
   );
 
+  const exitPlanMode = useCallback(async (): Promise<string | undefined> => {
+    let outcome: SlashRunOutcome;
+    try {
+      outcome = await clientRef.current.slashRun(threadId, PLAN_EXIT_LINE);
+    } catch (error) {
+      return error instanceof Error ? error.message : String(error);
+    }
+    switch (outcome.kind) {
+      case 'rejected':
+        return outcome.message;
+      case 'unknown':
+        return `不認得這個命令：${PLAN_EXIT_LINE}`;
+      case 'error':
+        return outcome.text;
+      default:
+        return undefined;
+    }
+  }, [threadId]);
+
   const send = useCallback(
     async (text: string, mode?: RunStartMode): Promise<SendRejected | undefined> => {
       const trimmed = text.trim();
@@ -746,6 +772,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     ...(historyError === undefined ? {} : { historyError }),
     slashCommands,
     send,
+    exitPlanMode,
     updateQueue,
     respond,
     answer,
