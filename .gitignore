@@ -26,3 +26,6 @@ coverage/
 references/
 
 __pycache__/
+
+# eval 結果檔（eval:compare／eval:survey 逐筆寫出，不進版控）
+eval-results/

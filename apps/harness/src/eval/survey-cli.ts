@@ -19,9 +19,10 @@
 import { installLaunchProxy } from '../http-proxy-boot.js';
 import { createLiveModel, loadLiveLaunchEnv, DEFAULT_LIVE_MAX_RETRIES } from '../live-model.js';
 import { liveModelConfigForModel } from '../settings/live-model.js';
-import { parseCases, parseModels, parseSamples } from './cli-args.js';
+import { parseCases, parseModels, parseOut, parseSamples } from './cli-args.js';
 import {
   compareTiers,
+  evalModelRounds,
   restrictTo,
   summarize,
   EVAL_DEADLINE_MS,
@@ -32,15 +33,18 @@ import {
   type TierSummary,
 } from './compare.js';
 import { BENCHMARK, HARD_CASES } from './dataset.js';
+import { startResultFile } from './result-file.js';
 import { SURVEY_INVENTORY_DATE, SURVEY_MODELS, type SurveyModel } from './survey.js';
 
-const USAGE = `用法：eval:survey [--samples <n>] [--cases <id,...>] [--models <label,...>]
+const USAGE = `用法：eval:survey [--samples <n>] [--cases <id,...>] [--models <label,...>] [--out <dir>]
 
   --samples <n>        每題重複幾次，預設 1。取樣是隨機的（temperature 1）。
   --cases <id,...>     只跑指定的題目，預設全部。id 見 src/eval/dataset.ts：
                        ${BENCHMARK.map((entry) => entry.id).join(' / ')}
   --models <label,...> 只跑指定的候選，預設全部 ${SURVEY_MODELS.length} 個。短名見 src/eval/survey.ts：
                        ${SURVEY_MODELS.map((model) => model.label).join(' / ')}
+  --out <dir>          結果檔放哪個目錄，預設 apps/harness/eval-results/（不進版控）。
+                       逐筆寫進一份 .jsonl，開頭記 commit、題庫與評分程式版本、取樣設定。
 
 冒煙（先量一次每題要跑多久，再決定整輪跑不跑得起）：
   pnpm --filter @nexus/harness eval:survey --cases reverse-round-trip
@@ -138,6 +142,7 @@ async function main(argv: readonly string[]): Promise<void> {
   const samples = parseSamples(argv);
   const cases = parseCases(argv);
   const models = parseModels(argv, SURVEY_MODELS);
+  const out = parseOut(argv);
   const { credentials, launchEnv } = loadLiveLaunchEnv();
   // 對外代理（#746）：跟 CLI／serve 同一個時間點，載完環境之後、連模型之前。這支腳本跑到行程結束，不另收尾。
   await installLaunchProxy(launchEnv, (message) => console.error(message));
@@ -158,9 +163,24 @@ async function main(argv: readonly string[]): Promise<void> {
       `是 14 個而且成員不同，所以報表上的每個數字都綁在這個日期上。`,
   );
   console.log(
-    `單次執行的上限：迴圈 ${EVAL_RECURSION_LIMIT} 個 super-step、時鐘 ${EVAL_DEADLINE_MS / 1000} 秒。` +
+    `單次執行的上限：迴圈 ${EVAL_RECURSION_LIMIT} 個 super-step（約 ${evalModelRounds(EVAL_RECURSION_LIMIT)} 輪模型呼叫）、時鐘 ${EVAL_DEADLINE_MS / 1000} 秒。` +
       `超過記成 budget，不是分數。**整輪沒有上限**，開跑前自己算好要跑多久。`,
   );
+
+  // 取樣設定從模型實例讀（建構不連外），不在這裡再抄一份字面值。先建檔：建不起來就在花錢之前拋。
+  const first = models[0];
+  if (first === undefined) throw new Error('沒有要跑的候選');
+  const probe = createLiveModel(liveModelConfigForModel(first.modelId), undefined, credentials);
+  const writer = startResultFile({
+    tool: 'eval:survey',
+    argv,
+    cases,
+    models,
+    samples,
+    sampling: { temperature: probe.temperature, topP: probe.topP },
+    dir: out,
+  });
+  console.log(`結果檔：${writer.path}（逐筆寫入）`);
   console.log('\n───── 逐次執行 ─────');
 
   const reports = await compareTiers<SurveyModel>(models, {
@@ -170,12 +190,20 @@ async function main(argv: readonly string[]): Promise<void> {
       createLiveModel(liveModelConfigForModel(modelId), undefined, credentials),
     samples,
     cases,
-    onOutcome: printOutcome,
+    onOutcome: (model, outcome) => {
+      writer.append(model, outcome);
+      printOutcome(model, outcome);
+    },
   });
+  const saved = writer.finish();
 
   console.log('\n───── 各候選彙總 ─────');
   console.log('  平坦的一張表，沒有尺寸那一欄 —— 十六個候選跨八家廠商，那條線讀不成尺寸效應。');
   for (const report of reports) printReport(report, hardIds);
+  console.log(
+    `\n結果檔：${writer.path}（${saved.outcomes} 筆）` +
+      `${saved.writeFailed ? '。**中途有寫入失敗，檔案不完整**' : ''}`,
+  );
 
   if (samples === 1) {
     console.log('\n注意：每題只取樣一次，取樣是隨機的 —— 這組數字是指示性的，不是定論。');

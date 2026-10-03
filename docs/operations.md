@@ -772,3 +772,10 @@ pnpm --filter @nexus/harness run eval:compare --samples 2
 它跑 `MEASURED_MODELS`，`--models` 可以挑子集，`--cases` 只跑指定的題目。**成本是題數 × 模型數 ×
 取樣數的乘積**，跑滿是小時級。量過的結論與模型盤點在
 [`.docs/model-inventory.md`](../.docs/model-inventory.md)。
+
+`eval:compare` 與 `eval:survey` 每次執行都會逐筆寫進一份結果檔，預設在
+`apps/harness/eval-results/`（不進版控），`--out <目錄>` 可以改。檔案是 JSON Lines：第一行記
+這一輪的條件（commit 與工作樹有沒有未提交的改動、題庫版本、評分程式版本、取樣溫度與 topP、
+迴圈與時鐘上限），之後每次執行一行（含評分器看到的原始觀測），最後一行是 footer；
+**沒有 footer 的檔是沒跑完的**。比較兩次跑的數字之前，先看兩份檔的題庫版本與評分程式版本是不是同一個。
+格式與讀檔重算在 [`apps/harness/src/eval/result-file.ts`](../apps/harness/src/eval/result-file.ts)。

@@ -73,3 +73,17 @@ export function parseModels<T extends ModelUnderTest>(
   }
   return all.filter((model) => wanted.includes(model.label));
 }
+
+/**
+ * `--out` 解析 —— 結果檔放哪個目錄。省略就是 `undefined`，由 `result-file.ts` 用預設目錄。
+ *
+ * 旗標後面沒接值（或接到下一個旗標）當場拋，理由同 `--cases`：打錯一個字，結果卻悄悄
+ * 落在預設目錄，事後找不到。
+ */
+export function parseOut(argv: readonly string[]): string | undefined {
+  const at = argv.indexOf('--out');
+  if (at < 0) return undefined;
+  const raw = argv[at + 1];
+  if (raw === undefined || raw.startsWith('--')) throw new Error('--out 要一個目錄路徑');
+  return raw;
+}
