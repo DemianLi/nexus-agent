@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   OUTPUT_MAX_CHARS,
+  clipMiddle,
   OUTPUT_MAX_LINES,
   omittedLabel,
   outputOf,
@@ -168,5 +169,34 @@ describe('omittedLabel', () => {
   });
   it('都沒有時沒有說明', () => {
     expect(omittedLabel({ ...base, omitted: 0, omittedChars: 0 })).toBeUndefined();
+  });
+});
+
+/** #958：展開後的參數整段一刀切成頭尾各半。 */
+describe('clipMiddle', () => {
+  it('沒超過或剛好等於上限：原文，不切', () => {
+    expect(clipMiddle('abc', 4)).toEqual({ head: 'abc', tail: '', dropped: 0 });
+    expect(clipMiddle('abcd', 4)).toEqual({ head: 'abcd', tail: '', dropped: 0 });
+  });
+
+  it('多一個字就切：頭取前一半（奇數上限頭多一個）、尾取後面，中間記下丟了幾個', () => {
+    expect(clipMiddle('0123456789', 5)).toEqual({ head: '012', tail: '89', dropped: 5 });
+    expect(clipMiddle('0123456', 6)).toEqual({ head: '012', tail: '456', dropped: 1 });
+  });
+
+  it('頭尾加起來剛好是上限，丟掉的加頭尾剛好是原長', () => {
+    const text = 'x'.repeat(1000) + 'y'.repeat(1000);
+    const { head, tail, dropped } = clipMiddle(text, 100);
+    expect(head.length + tail.length).toBe(100);
+    expect(head.length + tail.length + dropped).toBe(text.length);
+  });
+
+  it('不把代理對（emoji）從中間剖開', () => {
+    const text = `a${'😀'.repeat(50)}b`;
+    for (const max of [10, 11, 12, 13]) {
+      const { head, tail } = clipMiddle(text, max);
+      expect(head).not.toMatch(LONE_SURROGATE);
+      expect(tail).not.toMatch(LONE_SURROGATE);
+    }
   });
 });

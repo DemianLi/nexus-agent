@@ -96,6 +96,21 @@ function capChars(output: ToolOutput): ToolOutput {
   return { head: newHead, tail: newTail, omitted, omittedChars };
 }
 
+/**
+ * 一整段文字照 `max` 字元切成頭尾各半：沒超過時 `head` 是原文、`tail` 空、`dropped` 是 0。
+ * 工具卡展開後的參數（#958）走這裡；結果文字另有行數那一道，走 {@link outputOf}。
+ */
+export function clipMiddle(
+  text: string,
+  max: number,
+): { readonly head: string; readonly tail: string; readonly dropped: number } {
+  if (text.length <= max) return { head: text, tail: '', dropped: 0 };
+  const headLimit = Math.ceil(max / 2);
+  const head = text.slice(0, capHeadEnd(text, headLimit));
+  const tail = text.slice(capTailStart(text, max - headLimit));
+  return { head, tail, dropped: text.length - head.length - tail.length };
+}
+
 /** 頭那段留到哪裡（不含）：不剖開代理對。 */
 function capHeadEnd(text: string, limit: number): number {
   if (text.length <= limit) return text.length;

@@ -34,10 +34,15 @@ import { useMemo, useState } from 'react';
 
 import { AgentOrb } from '@/components/agent-orb';
 import { Counts } from '@/components/change-counts';
-import { CodeBlock } from '@/components/markdown/code-block';
 import { SubagentPanel, SubagentStateLabel } from '@/components/subagent-control';
 import { TodoList } from '@/components/todo-list';
-import { ToolDiff, ToolOutputBlock, ToolRead, ToolSearch } from '@/components/tool-result';
+import {
+  ToolDiff,
+  ToolInputBlock,
+  ToolOutputBlock,
+  ToolRead,
+  ToolSearch,
+} from '@/components/tool-result';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
@@ -343,8 +348,8 @@ export function ToolCard({
                 (body === undefined ? (
                   <p className="text-muted-foreground px-3 py-2 text-xs">沒有參數。</p>
                 ) : (
-                  <CodeBlock
-                    code={body.text}
+                  <ToolInputBlock
+                    text={body.text}
                     lang={body.lang}
                     streaming={entry.status === 'running'}
                   />

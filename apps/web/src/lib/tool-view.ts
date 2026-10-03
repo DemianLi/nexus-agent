@@ -113,9 +113,25 @@ function parseArgs(input: string): unknown {
   }
 }
 
+/**
+ * 收合那一行摘要最多留幾個字元。那一格靠 CSS 省略號截成一行，寬螢幕也只排得下一兩百字，
+ * 但整串字都進了 DOM：一個 527KB 的單行參數就是 527KB 的文字要排版（#958）。
+ */
+export const SUMMARY_MAX_CHARS = 500;
+
+/** 摘要用的第一行：多半是參數裡挑出來的字串，或失敗的錯誤文字；超過 {@link SUMMARY_MAX_CHARS} 的尾巴換成「…」。 */
 function firstLine(text: string): string {
   const newline = text.indexOf('\n');
-  return newline === -1 ? text : text.slice(0, newline);
+  const line = newline === -1 ? text : text.slice(0, newline);
+  if (line.length <= SUMMARY_MAX_CHARS) return line;
+  const end = isHighSurrogate(line.charCodeAt(SUMMARY_MAX_CHARS - 1))
+    ? SUMMARY_MAX_CHARS - 1
+    : SUMMARY_MAX_CHARS;
+  return `${line.slice(0, end)}…`;
+}
+
+function isHighSurrogate(code: number): boolean {
+  return code >= 0xd800 && code <= 0xdbff;
 }
 
 /** 收合時那一行的摘要。挑不到欄位就拿第一個字串值，再不行就是參數原文的第一行。 */
@@ -132,6 +148,14 @@ export function toolSummary(name: string, input: string): string {
   }
   return firstLine(input);
 }
+
+/**
+ * 展開後參數最多畫幾個字元，多的收在中間（#958）。參數是 JSON 時整串字串值是一行（換行被跳脫成 `\\n`），
+ * 位元組或行數的上限擋不住畫面。20,000 來自實測（headless Chrome、`serve` 假模型，527KB 的單筆參數，
+ * 切開的兩塊畫純文字）：參數很小時點開約 49ms 是底；上限 10,000、20,000 時各種形狀都貼著底，最壞的不含空白連續中文
+ * 20,000 時 79ms、沒有長任務；40,000 時同一形狀 385ms，80,000 時 800ms。跟結果的 `OUTPUT_MAX_CHARS` 同一個值。
+ */
+export const INPUT_MAX_CHARS = 20_000;
 
 /** 展開後的參數：`code` 類直接是那段程式、`bash` 類是那行指令，其他是排好的 JSON（照 dsh `formatToolBody`）。 */
 export function toolInputBody(

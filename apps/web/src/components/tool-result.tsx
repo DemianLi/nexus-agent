@@ -11,6 +11,7 @@
  * - **搜尋**（dsh `SearchBlock`）：標頭一句摘要，截斷時寫「顯示 X／共 N」；grep 每個檔一列標題、底下帶行號的命中，
  *   glob 一列一個路徑。對話裡最多 {@link CHAT_SEARCH_MAX_LINES} 列。
  * - **不做的**：dsh 的複製、換行切換、每個檔各自收合，我們的卡都沒有。
+ * - **參數**：`CodeBlock` 畫，超過 {@link INPUT_MAX_CHARS} 字元時頭尾各畫一塊、中間一行說明（#958）。
  * - **結果**：純文字、自動換行，限高 150px 在框裡捲（dsh `ToolRow.module.css` 的 `.ioText`）。框可以捲，所以
  *   鍵盤要能停上去。
  */
@@ -18,6 +19,7 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 
+import { CodeBlock } from '@/components/markdown/code-block';
 import { DIFF_SIGN, DIFF_TONE, MAX_RENDERED_LINES } from '@/lib/diff-rows';
 import {
   grammarLoadCount,
@@ -37,7 +39,8 @@ import {
   searchSummary,
 } from '@/lib/tool-result-card';
 import type { ReadCard, ReadLine, SearchCard, SearchRow } from '@/lib/tool-result-card';
-import { omittedLabel, type ToolOutput } from '@/lib/tool-output';
+import { clipMiddle, omittedLabel, type ToolOutput } from '@/lib/tool-output';
+import { INPUT_MAX_CHARS } from '@/lib/tool-view';
 import { cn } from '@/lib/utils';
 
 function DiffLine({ row }: { row: ToolDiffRow }) {
@@ -336,5 +339,38 @@ export function ToolOutputBlock({ output }: { output: ToolOutput }) {
         )}
       </pre>
     </div>
+  );
+}
+
+/**
+ * 展開後的參數（#958）：沒超過 {@link INPUT_MAX_CHARS} 字元就是一塊 `CodeBlock`；超過時頭尾各一塊、中間一行
+ * 講沒畫多少字，跟結果（`ToolOutputBlock`）同一個形狀，不動模型看到什麼。
+ *
+ * **切開的兩塊畫純文字、不上色**：尾那一塊是從原文中間開始的，不知道自己落在字串、註解還是程式裡，上色是猜的；
+ * 而且 shiki 的文法對長長一串空白會慢得很不成比例（實測：一段 10,000 字元、夾空白的尾巴上色約 470ms，同樣長度
+ * 在註解裡面只有約 50ms）。沒超過上限的整段照常上色（串流中照常串流上色）。
+ */
+export function ToolInputBlock({
+  text,
+  lang,
+  streaming,
+}: {
+  readonly text: string;
+  readonly lang: string | undefined;
+  readonly streaming: boolean;
+}) {
+  const clipped = useMemo(() => clipMiddle(text, INPUT_MAX_CHARS), [text]);
+  if (clipped.dropped === 0) return <CodeBlock code={text} lang={lang} streaming={streaming} />;
+  return (
+    <>
+      <CodeBlock code={clipped.head} lang={undefined} streaming={false} />
+      <p
+        className="text-muted-foreground px-3 py-1 text-xs italic"
+        data-testid="tool-input-omitted"
+      >
+        {`⋯ 中間 ${clipped.dropped} 字沒畫 ⋯`}
+      </p>
+      <CodeBlock code={clipped.tail} lang={undefined} streaming={false} />
+    </>
   );
 }

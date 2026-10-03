@@ -3,7 +3,16 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
-import { classifyTool, isKnownTool, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
+import {
+  INPUT_MAX_CHARS,
+  SUMMARY_MAX_CHARS,
+  classifyTool,
+  firstLine,
+  isKnownTool,
+  toolInputBody,
+  toolSummary,
+  toolTitle,
+} from '@/lib/tool-view';
 
 /**
  * `classifyTool` 涵蓋 nexus 每一個實際工具名（#406 驗收）。plugin 的工具名**從原始碼讀**（各 plugin 匯出的
@@ -142,5 +151,38 @@ describe('摘要與展開內容', () => {
       lang: 'json',
     });
     expect(toolInputBody('echo', '')).toBeUndefined();
+  });
+});
+
+/** #958：收合那一行摘要有字元上限，展開後參數的上限常數另有人用。 */
+describe('摘要的字元上限', () => {
+  it('第一行沒超過（含剛好）上限時原樣', () => {
+    const line = 'x'.repeat(SUMMARY_MAX_CHARS);
+    expect(firstLine(`${line}\n第二行`)).toBe(line);
+    expect(toolSummary('echo', JSON.stringify({ message: line }))).toBe(line);
+  });
+
+  it('超過就截在上限、尾巴換成「…」；只看第一行，換行以後的不算', () => {
+    const line = 'x'.repeat(SUMMARY_MAX_CHARS + 1);
+    expect(firstLine(line)).toBe(`${'x'.repeat(SUMMARY_MAX_CHARS)}…`);
+    expect(firstLine(`短\n${line}`)).toBe('短');
+    expect(toolSummary('echo', JSON.stringify({ message: 'y'.repeat(527_000) }))).toBe(
+      `${'y'.repeat(SUMMARY_MAX_CHARS)}…`,
+    );
+  });
+
+  it('參數不是 JSON 時（原文的第一行）也受上限管', () => {
+    expect(toolSummary('echo', 'z'.repeat(10_000))).toBe(`${'z'.repeat(SUMMARY_MAX_CHARS)}…`);
+  });
+
+  it('不把代理對剖開', () => {
+    const summary = firstLine(`${'a'.repeat(SUMMARY_MAX_CHARS - 1)}😀😀`);
+    expect(summary).toBe(`${'a'.repeat(SUMMARY_MAX_CHARS - 1)}…`);
+  });
+
+  it('展開後參數的上限是個正整數', () => {
+    expect(Number.isInteger(INPUT_MAX_CHARS) && INPUT_MAX_CHARS > 0).toBe(true);
+    // 摘要那一行永遠比展開的上限短，兩者不會顛倒。
+    expect(SUMMARY_MAX_CHARS).toBeLessThan(INPUT_MAX_CHARS);
   });
 });
