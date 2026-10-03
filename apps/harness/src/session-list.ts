@@ -16,6 +16,26 @@
  * **本文整份讀、整份解析**，不再逐行篩：dsh 的冷列讀投影快取，我們沒有那一層（[#725](https://github.com/DemianLi/nexus-agent/issues/725)），
  * 讀的是日誌本身。#665 量過整份解析不比逐行篩慢（見 PR），換到的是標題規則只剩一份（{@link threadTitleOf}）。
  *
+ * ## 分段讓出不採用，中止採用（[#983](https://github.com/DemianLi/nexus-agent/issues/983)）
+ *
+ * dsh 在 `4402fa47e4c`／`ecc01b54a4d`（2026-09-29，對讀 `5badb15009a`）讓 `ApiSessionList.list()` 照 `listWorkSliceMs`
+ * （預設 16 ms）分段 `scheduler.yield`，並在每圈 `signal?.throwIfAborted()`。
+ *
+ * - **分段讓出不採用。** dsh 的 `summarizeCold` 是同步的（讀投影快取），所以工作要自己切段；我們每一份都先
+ *   `await readFile`，事件圈每讀完一份就回得去，本來就沒有「整次列表佔住事件圈」這件事。2026-10-04 實測
+ *   （`measure/thread-list-cli.ts`，M3 Pro、Node 25）：1000 份 × 1 MB 一次列表約 2.6 秒，事件圈延遲最大 9–16 ms、
+ *   p99 約 2.6 ms；停頓的上限是**單一份**的解析，約 1.7 ms／MB（50、200 份 × 10 MB 最大 17–33 ms，一份 100 MB 的最大
+ *   約 170 ms）。分段讓出切不進一份裡面，對這個上限沒有幫助；要降它得讓列表不讀本文，那是
+ *   [#725](https://github.com/DemianLi/nexus-agent/issues/725)（投影快取）的題目。
+ * - **中止採用。** 沒有它的話，客戶端放棄的請求照樣把整份掃完：放棄之後 2.6 秒的窗口內伺服器用掉 2.59 秒 CPU
+ *   （200 份 × 1 MB：0.52 秒窗口用掉 0.46 秒）。`listStoredThreads` 現在每份之前看一次 `signal`；`GET /threads`
+ *   把那個請求的 `request.signal` 交下來（`wire-handler.ts` 的 `listThreads(signal)`），同 `searchThreads`。
+ *   放棄之後的 CPU 從 2.59 秒降到中位 4 ms（1000 份 × 1 MB；`fetch` 中止與直接砍 socket 各 20 次，沒有一次整份掃完）。
+ *   **量到一個連帶的缺陷，也一併修了**：`wire-server.ts` 只留了 `request.signal`、沒留包著它的 Request，中止的轉送
+ *   靠的是 Request 內部的弱參照，所以有一部分放棄請求的 handler 永遠收不到中止（量測時看到 `close` 事件到了、
+ *   handler 的 signal 沒動）。現在 Request 由 `close` 的回呼抓著、關線才放手。機制是從 undici 的設計推的，
+ *   沒有直接重現成功；證據是修前後的對照：修前 8／49 次整份掃完，修後 0／40。
+ *
  * ## 列出來的每一列都要切得過去
  *
  * 切換走的是 serve 的續接路徑，所以會在那裡被擋的，這裡就不列（{@link isListedThread}）：
@@ -164,18 +184,26 @@ export async function readStoredSubagentSession(
  * @param store - serve 的那一個（`<會話根>/<projectKey(cwd)>` 那一格）。
  * @param options - `cwd` 是這台 server 的工作目錄；`title` 的兩個上限必填。
  * @returns 由新到舊的列，與沒列的份數。
- * @throws 上限不是正整數；存放處存在但讀不到。
+ * @throws 上限不是正整數；存放處存在但讀不到；`signal` 中止時拋它的 `reason`。
  */
 export async function listStoredThreads(
   store: SessionStore,
-  options: { readonly cwd: string; readonly title: ThreadTitleLimits },
+  options: {
+    readonly cwd: string;
+    readonly title: ThreadTitleLimits;
+    /** 中止就在下一份之前拋它的 `reason`（[#983](https://github.com/DemianLi/nexus-agent/issues/983)）。 */
+    readonly signal?: AbortSignal;
+  },
 ): Promise<StoredThreadList> {
   // 先驗，不等到第一則人打的字：一份空的存放處不該讓錯的設定看起來是對的。
   assertThreadTitleLimits(options.title);
-  const visible = await listVisibleThreads(store, options.cwd);
+  const { signal } = options;
+  const visible = await listVisibleThreads(store, options.cwd, signal);
   const items: StoredThreadSummary[] = [];
   let { unreadable } = visible;
   for (const { header } of visible.items) {
+    // 每份之前看一次：被放棄的請求不再多讀一份（#983）。
+    signal?.throwIfAborted();
     let events: readonly SessionEvent[];
     try {
       events = await (await store.open(header.id, 'read')).read({ salvage: true });

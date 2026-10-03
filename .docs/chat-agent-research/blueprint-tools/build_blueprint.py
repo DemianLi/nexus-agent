@@ -2,7 +2,7 @@
 """由 data/blueprint/T1..T8.json 與手寫段落（blueprint-parts/*.md）組出 blueprint.md。
 
 用法（在研究目錄 .docs/chat-agent-research/ 下）：python3 blueprint-tools/build_blueprint.py
-只用標準函式庫。決策卡、收斂度表、邊介面契約、開放決策匯整、附錄全由 JSON 機械產生，不手寫；唯一手寫的契約是主幹 M1–M5（blueprint-parts/edge-spine.md，推論）。
+只用標準函式庫。決策卡、收斂度表、邊介面契約、開放決策匯整、附錄全由 JSON 機械產生，不手寫；唯一手寫的契約是主幹 M1–M5（blueprint-parts/edge-spine.md，推論）；附錄 D 的補讀論文來自 data/blueprint/supplementary-reads.json。
 
 等級規則：取「依 SPEC 由 flaws／unverified 重算的候選等級」與「子代理給的等級」中較低者（A > B > C）。
 A 只是候選：獨立性與藏起來的毛病由稽核員另查；稽核降級的結果記在 data/blueprint/audit-overrides.json，
@@ -255,6 +255,8 @@ def main():
             out.append(f"- {u}")
         out.append('')
 
+    supp = load_json('supplementary-reads.json').get('papers', [])
+    n_supp = len(supp)
     a1 = load_json('audit-1.json')
     a2 = load_json('audit-2.json')
     a3 = load_json('audit-3.json')
@@ -269,7 +271,12 @@ def main():
     out.append('- 稽核員 3 指出的欄位修補只處理了預設值錯誤、判準模糊與邊介面缺口等有行號依據的項目；卡片本文由子代理寫成，許多句子較長，沒有為了簡短而改寫。')
     out.append('- 第 6 節的組裝順序整節是推論，沒有任何實驗支持；第 5 節的邊介面缺口與連結鍵建議也是推論。')
     out.append('- 這份方案不是一份完整的「觀測 agent」方案：T3 的可觀測性那一塊，追蹤與日誌、白箱監控在 T3 計入的論文裡是零篇，非安全類的異常偵測在 T3 計入的論文裡只有 AgentMonitor 碰到一角，監控的證據以安全面為主；T3 的建議做型卡（T3-01、T3-03、T3-09、T3-11）最高是 B，A 級只有量測規則 T3-07，非安全類的異常偵測只能寫成待決（T3-12）。')
-    out.append('- 方案只涵蓋自我進化之前的底座：圖上沒有從評估或分數回到 agent 的更新箭頭，所以「量到→提出改動→驗證改動→收進去」的閉環不在範圍內（見第 2 節）；圖上主幹的五條箭頭沒有任何論文當邊研究過，第 5 節 M1–M5 的契約全是從相鄰的卡推出來的，等級 C，其中 M2 最薄，只有 M4 有可直接執行的驗收（T7-10，本身也是推論）。M1–M5 是 S4 對抗稽核之後才加的，沒有經過稽核，只由寫的人自己核對過卡號與等級。')
+    out.append('- 方案只涵蓋自我進化之前的底座：圖上沒有從評估或分數回到 agent 的更新箭頭，所以「量到→提出改動→驗證改動→收進去」的閉環不在範圍內（見第 2 節）；圖上主幹的五條箭頭沒有任何論文把它們整條當邊研究過，第 5 節 M1–M5 的契約主要是從相鄰的卡推出來的，等級 C，M4 的驗收借 T7-10 的五項可執行檢查（本身也是推論）。M2、M3 另外逐欄標了證據標記（地圖 #962 補強），結果仍是五條裡最薄的兩條，沒有任何欄位有乾淨的直接證據；其餘三條沒有欄位標記。M1–M5 是 S4 對抗稽核之後才加的，後來另做了一輪專門的對抗稽核（地圖 #962，見下一條）。')
+    spine = load_json('audit-spine.json')
+    n_sp = len(spine['findings'])
+    n_sp_must = sum(1 for f in spine['findings'] if f['level'] == '必修')
+    out.append(f"- M1–M5 的對抗稽核共三位稽核員：一位看得到證據、對全文重驗標記（虛標），一位只拿拿掉證據的契約、去語料找反例（反證），一位只拿拿掉證據的契約與 E1–E6、站在建造者角度找對不上與含糊（建造者），共 {n_sp} 筆發現，必修 {n_sp_must}、記錄 {n_sp - n_sp_must}；原始記錄與每一筆的處置在 `data/blueprint/audit-spine.json`。必修的都已改進第 5 節，記錄項要嘛改了文字、要嘛寫進缺口、要嘛寫明不處理的理由。限制：反證與建造者兩位刻意看不到證據整理，虛標那位看得到，所以前兩位沒找到的不等於證據支持；主線只對全文抽查了部分發現，沒有逐筆重驗；稽核員各自的量具限制寫在 `audit-spine.json` 的 `summaries`。")
+    out.append(f'- 第 5 節 M2、M3 引用了 {n_supp} 篇補讀論文（附錄 D），不在八章與 README 內，沒有精讀筆記，也沒有經過錨點驗證；它們的數字由 `check_blueprint.py` 對照全文快取 `.cache/text/<id>.txt` 核對，這份快取不進版控，乾淨 clone 上只能驗到「名單與 full 的標記」，驗不到數字。')
     out.append('- 八份抽取是在不同時間、規格逐步補充下進行的（T1–T4 開跑時沒有「試點後補充」那一節），等級雖已統一重算並取較低者，邊界案例的寬嚴仍可能不一致。')
     out.append('')
     out.append('## 附錄 A　證據索引\n')
@@ -302,6 +309,19 @@ def main():
             out.append(f"- {x['id']}（{final_grade(x, ov)}）：{(x.get('grade_reason') or '').strip()}")
         out.append('')
 
+    out.append('## 附錄 D　補讀論文（第 5 節 M2、M3 的證據）\n')
+    out.append('地圖 #962 補強 M2、M3 時新讀的論文，來源是 `data/blueprint/supplementary-reads.json`。它們不在八章與 README 內，沒有精讀筆記；全部讀過 arxiv-html 全文（read_level 為 full，由 `check_blueprint.py` 對照全文快取驗證）。「毛病與旗標」欄的 F1–F5 見第 1 節；RECENT-INELIGIBLE 表示 2025 年以後、不是頂會、沒有採納證據、影響力引用數太低；這類論文，以及卡在水論文判準邊上的論文，最多支撐【單側】。\n')
+    rs = json.load(open(os.path.join(ROOT, 'data', 'reading-status.json'), encoding='utf-8'))
+    in_rs = {p['id'] for t in rs['topics'].values() for p in t['papers']}
+    both = [q['id'] for q in supp if q['id'] in in_rs]
+    if both:
+        out.append('其中 ' + '、'.join(both) + ' 在章內原本列為候補（尚未精讀），這一輪讀完全文；章與 `reading-status.json` 沒有改，仍照原狀態。\n')
+    out.append('| arXiv | 標題 | 年／venue／引用 | 毛病與旗標 | 用在哪 | 最高標記 |')
+    out.append('| --- | --- | --- | --- | --- | --- |')
+    for q in supp:
+        fl = '、'.join(q.get('flags', [])) or '無'
+        out.append(f"| {q['id']} | {q['title'].replace('|', '／')} | {q['year']}／{q['venue']}／{q['citations']} | {fl} | {q['used_for']} | {q['max_tag']} |")
+    out.append('')
     text = '\n'.join(out)
     open(OUT, 'w', encoding='utf-8').write(text)
     print(f'寫出 {OUT}，{len(text)} 字元；A {tot["A"]} B {tot["B"]} C {tot["C"]} 待決 {tot["open"]}；雜訊旗標 {tot["noise"]}')

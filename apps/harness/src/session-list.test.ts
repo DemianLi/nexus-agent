@@ -370,3 +370,73 @@ describe('readStoredSubagentSession', () => {
     await expect(readStoredSubagentSession(store(directory), 'root', RUN)).rejects.toThrow();
   });
 });
+
+describe('客戶端放棄請求（#983）', () => {
+  /** 數開了幾份，並在第 `at` 次開檔時中止。 */
+  function abortingStore(
+    directory: string,
+    at: number,
+  ): { store: SessionStore; opened: string[]; signal: AbortSignal } {
+    const real = store(directory);
+    const controller = new AbortController();
+    const opened: string[] = [];
+    const counting: SessionStore = {
+      ...real,
+      async open(id, mode) {
+        opened.push(id);
+        if (opened.length === at) controller.abort(new Error('客戶端斷線'));
+        return real.open(id, mode);
+      },
+    };
+    return { store: counting, opened, signal: controller.signal };
+  }
+
+  it('中止之後不再多開一份，拋的是中止的原因', async () => {
+    const directory = await dir();
+    for (const id of ['a', 'b', 'c', 'd', 'e']) {
+      await writeThread(directory, id, { events: [said(`問 ${id}`, 1_100)] });
+    }
+    const probe = abortingStore(directory, 2);
+
+    await expect(
+      listStoredThreads(probe.store, { cwd: CWD, title: LIMITS, signal: probe.signal }),
+    ).rejects.toThrow('客戶端斷線');
+    // 第二份開到一半被中止：那一份讀完，第三份起一份都不開。
+    expect(probe.opened).toHaveLength(2);
+  });
+
+  it('一開始就已經中止：一份都不開', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', { events: [said('問', 1_100)] });
+    const opened: string[] = [];
+    const real = store(directory);
+    const counting: SessionStore = {
+      ...real,
+      async open(id, mode) {
+        opened.push(id);
+        return real.open(id, mode);
+      },
+    };
+
+    await expect(
+      listStoredThreads(counting, {
+        cwd: CWD,
+        title: LIMITS,
+        signal: AbortSignal.abort(new Error('早就斷了')),
+      }),
+    ).rejects.toThrow('早就斷了');
+    expect(opened).toEqual([]);
+  });
+
+  it('沒中止就跟沒傳 signal 一樣', async () => {
+    const directory = await dir();
+    await writeThread(directory, 'a', { events: [said('問', 1_100)] });
+    const withSignal = await listStoredThreads(store(directory), {
+      cwd: CWD,
+      title: LIMITS,
+      signal: new AbortController().signal,
+    });
+    const without = await listStoredThreads(store(directory), { cwd: CWD, title: LIMITS });
+    expect(withSignal).toEqual(without);
+  });
+});

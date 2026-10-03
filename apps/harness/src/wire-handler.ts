@@ -272,8 +272,11 @@ export interface WireHandlerOptions {
    *
    * **它不准碰 {@link createAgent}**：列表照 dsh 是冷讀，一條 thread 都不為它啟動。`running` 那一格由這個
    * handler 從手上活著的 thread 補，不從檔案猜。
+   *
+   * **`signal` 是這一個請求的**（客戶端斷線就中止，同 {@link searchThreads}；[#983](https://github.com/DemianLi/nexus-agent/issues/983)）：
+   * 實作要在每一份之間看它，不然一個被放棄的請求會把整份掃描做完（實測 1000 份 × 1 MB 約 2.6 秒的 CPU 白花）。
    */
-  listThreads?(): Promise<StoredThreadList>;
+  listThreads?(signal: AbortSignal): Promise<StoredThreadList>;
   /**
    * 讀一個背景子代理自己的落盤日誌（唯讀冷讀，[#871](https://github.com/DemianLi/nexus-agent/issues/871)）：`undefined`＝
    * 沒有這一份。**實作要自己確認它屬於 `threadId`**（header 的 `parentSession`），不然別條 thread 的編號讀得到。缺席＝沒開落盤，
@@ -1356,7 +1359,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    * `GET /threads`。**不經 `threadFor`**：一條 thread 都不為列表建（同 `run.cancel` 的理由，而且這裡更嚴——
    * 列的正是還沒開起來的那些）。讀不動整個目錄是協定層的錯，同 `threadOrError` 的分寸。
    */
-  async function handleList(): Promise<Response> {
+  async function handleList(signal: AbortSignal): Promise<Response> {
     if (options.listThreads === undefined) {
       return json(
         errorResponse(
@@ -1368,7 +1371,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     }
     let stored: StoredThreadList;
     try {
-      stored = await options.listThreads();
+      stored = await options.listThreads(signal);
     } catch (error: unknown) {
       const reason = error instanceof Error ? error.message : String(error);
       return json(errorResponse(null, 'unknown_error', `以前的 thread 列不出來：${reason}`));
@@ -1829,7 +1832,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         if (request.method !== 'GET') return new Response('not found', { status: 404 });
         // `GET` 沒有 body，這個 header 在這裡純粹是閘門：見 `THREADS_PATH` 的說明。
         if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-        return handleList();
+        return handleList(request.signal);
       }
       if (pathname === THREAD_SEARCH_PATH) {
         if (request.method !== 'POST') return new Response('not found', { status: 404 });
