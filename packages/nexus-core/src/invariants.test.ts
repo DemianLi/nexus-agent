@@ -405,3 +405,159 @@ describe('配套入口拿到的日誌是唯讀視圖', () => {
     expect(lengthsWhileObserving).toEqual([1, 2]);
   });
 });
+
+/**
+ * 只記錄的旁路（[#976](https://github.com/DemianLi/nexus-agent/issues/976)）。
+ *
+ * 它的價值是讓「零違規」有分母：`installed` 說得出這一份日誌上**真的**裝了誰，所以「沒報過」
+ * 與「根本沒掛上」分得開。
+ */
+describe('tap', () => {
+  const noop: InvariantInstaller = (subject) => subject.observe(() => {});
+
+  it('installed：每個 runner 恰好一次，列的是真的掛上觀察者的 package（排除安裝失敗與被過濾掉的）', () => {
+    const installed: { sessionId: string; packages: readonly string[] }[] = [];
+    createInvariantRunner({
+      log: new SessionLog('s-tap'),
+      companions: [
+        companion('@nexus/a', noop, 0),
+        companion('@nexus/b', noop, 1),
+        companion(
+          '@nexus/broken',
+          () => {
+            throw new Error('裝不起來');
+          },
+          2,
+        ),
+        companion('@nexus/filtered', noop, 3),
+        // 沒有掛任何觀察者的 installer 不算「裝上」。
+        companion('@nexus/empty', () => {}, 4),
+      ],
+      selection: { packageBlocklist: ['^@nexus/filtered$'] },
+      warn: () => {},
+      tap: { installed: (info) => installed.push(info) },
+    })();
+
+    expect(installed).toEqual([{ sessionId: 's-tap', packages: ['@nexus/a', '@nexus/b'] }]);
+  });
+
+  it('installed：整個關掉（過濾成空集合）時照樣叫一次，packages 是空的——分母才不會憑空消失', () => {
+    const installed: (readonly string[])[] = [];
+    createInvariantRunner({
+      log: new SessionLog('s-off'),
+      companions: [companion('@nexus/a', noop)],
+      selection: { enabled: false },
+      tap: { installed: ({ packages }) => installed.push(packages) },
+    })();
+
+    expect(installed).toEqual([[]]);
+  });
+
+  it('installed：同一個 package 掛多個觀察者只算一個', () => {
+    const installed: (readonly string[])[] = [];
+    createInvariantRunner({
+      log: new SessionLog('s-two'),
+      companions: [
+        companion('@nexus/a', (subject) => {
+          subject.observe(() => {});
+          subject.observe(() => {});
+        }),
+      ],
+      tap: { installed: ({ packages }) => installed.push(packages) },
+    })();
+
+    expect(installed).toEqual([['@nexus/a']]);
+  });
+
+  it('violation：照舊先走 onViolation，tap 另外收一份，帶得出 package 與完整訊息', () => {
+    const order: string[] = [];
+    const taps: unknown[] = [];
+    const log = new SessionLog('s-v');
+    const detach = createInvariantRunner({
+      log,
+      companions: [companion('@nexus/noisy', alwaysFails)],
+      onViolation: (error) => order.push(`report:${error.message}`),
+      tap: {
+        violation: (info) => {
+          order.push('tap');
+          taps.push(info);
+        },
+      },
+    });
+    log.append('turn/start', { kind: 'message', text: 'hi' });
+    detach();
+
+    expect(order).toEqual([
+      'report:invariant violated by "@nexus/noisy": 事件 turn/start 一律不合格',
+      'tap',
+    ]);
+    expect(taps).toEqual([
+      {
+        sessionId: 's-v',
+        packageName: '@nexus/noisy',
+        message: 'invariant violated by "@nexus/noisy": 事件 turn/start 一律不合格',
+      },
+    ]);
+  });
+
+  it('旁路自己拋了不影響任何一側：違規照報、後面的事件照檢查、不產生 warn', () => {
+    const reported: string[] = [];
+    const warned: string[] = [];
+    const log = new SessionLog('s-throw');
+    const detach = createInvariantRunner({
+      log,
+      companions: [companion('@nexus/noisy', alwaysFails)],
+      onViolation: (error) => reported.push(error.message),
+      warn: (message) => warned.push(message),
+      tap: {
+        installed: () => {
+          throw new Error('installed 壞了');
+        },
+        violation: () => {
+          throw new Error('violation 壞了');
+        },
+      },
+    });
+    log.append('turn/start', { kind: 'message', text: 'a' });
+    log.append('turn/end', {});
+    detach();
+
+    expect(reported).toHaveLength(2);
+    expect(warned).toEqual([]);
+  });
+
+  it('檢查自己拋的（不是違規）不進 violation——那是 warn 的事', () => {
+    const taps: unknown[] = [];
+    const log = new SessionLog('s-bug');
+    const detach = createInvariantRunner({
+      log,
+      companions: [
+        companion('@nexus/buggy', (subject) =>
+          subject.observe(() => {
+            throw new TypeError('檢查有 bug');
+          }),
+        ),
+      ],
+      warn: () => {},
+      tap: { violation: (info) => taps.push(info) },
+    });
+    log.append('turn/start', { kind: 'message', text: 'a' });
+    detach();
+
+    expect(taps).toEqual([]);
+  });
+
+  it('沒給 tap 時行為與原來一樣', () => {
+    const reported: string[] = [];
+    const log = new SessionLog('s-none');
+    const detach = createInvariantRunner({
+      log,
+      companions: [companion('@nexus/noisy', alwaysFails)],
+      onViolation: (error) => reported.push(error.message),
+    });
+    log.append('turn/start', { kind: 'message', text: 'a' });
+    detach();
+
+    expect(reported).toHaveLength(1);
+  });
+});

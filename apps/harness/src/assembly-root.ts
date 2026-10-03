@@ -22,6 +22,7 @@ import type {
   CommandRegistrationPoint,
   FeedbackService,
   InvariantError,
+  InvariantTap,
   PluginEntry,
   PluginWarning,
   SessionEvent,
@@ -56,6 +57,7 @@ import {
   HARNESS_HOME_DIR_NAME,
   HARNESS_HOME_ENV,
   HARNESS_SESSIONS_DIR_NAME,
+  harnessInvariantLogPath,
   harnessSessionsDir,
 } from './harness-home.js';
 import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/plugin-goal';
@@ -367,6 +369,35 @@ export function resolveWorkspaceRoot(
   return workspace === undefined ? undefined : resolve(cwd, workspace);
 }
 
+/**
+ * 不變量量測記錄（[#976](https://github.com/DemianLi/nexus-agent/issues/976)）要寫到哪裡；
+ * **不該寫的時候回 `undefined`**，呼叫端就不建 tap。它跟著會話日誌的兩條既有承諾走，不另立規矩：
+ *
+ * - **落盤關掉就一個位元組都不寫**（#612）：清單上 `session-persistence` 那一列沒掛，home 連目錄都不建。
+ * - **預設位置不能落在 `--workspace` 底下**（#424）：寫在可寫根裡，模型讀得到也改得動。會話日誌那一格
+ *   遇到這種情況是當場拋（`resolveSessionLogDir`）；這裡**只是不寫**，因為量測記錄不是使用者要的東西，
+ *   不值得替它擋掉一次啟動。唯一到得了這個分支的組合是 `--session-log` 明指到工作區外、home 卻在工作區裡。
+ *
+ * @param workspace - `--workspace`，沒給就沒有圍堵、也就沒有這一條。
+ * @param persistenceMounted - 清單上落盤那一列這次有沒有掛。
+ * @param cwd - 解析相對路徑的基準。
+ * @param env - 同 {@link resolveHarnessHome}。
+ * @returns 記錄檔的絕對路徑，或 `undefined`（不寫）。
+ */
+export function resolveInvariantLogPath(
+  workspace: string | undefined,
+  persistenceMounted: boolean,
+  cwd: string,
+  env: Readonly<Record<string, string | undefined>>,
+): string | undefined {
+  if (!persistenceMounted) return undefined;
+  try {
+    return outsideWorkspace(harnessInvariantLogPath(env), workspace, cwd, '量測記錄');
+  } catch {
+    return undefined;
+  }
+}
+
 /** 兩個日誌目錄旗標共用的那道檢查。**一份**，理由同 {@link resolveSessionLogDir} 的呼叫端。 */
 export function outsideWorkspace(
   path: string,
@@ -498,6 +529,13 @@ export interface CreateCliAgentSession {
    */
   readonly onInvariantViolation?: (error: InvariantError) => void;
   /**
+   * 不變量的只記錄旁路（[#976](https://github.com/DemianLi/nexus-agent/issues/976)），原樣轉給
+   * `createNexusAgent`：每一份日誌裝上了哪幾個 package 的檢查、報了哪一條違規。**CLI 與 serve 都傳**
+   * （各自建一份寫到 `$NEXUS_AGENT_HOME/invariant-log.jsonl`），所以兩條路徑答案相同；其餘呼叫端
+   * 省略就是不記，測試與 eval 不會寫到任何人的家目錄。
+   */
+  readonly invariantTap?: InvariantTap;
+  /**
    * 核准政策的 session 開關。[`serve.ts`](./serve.ts) 刻意不傳，維持預設的「有人在」——瀏覽器那端真的按得下去。
    * CLI 這條傳 {@link HEADLESS_APPROVALS}，因為它收不了核准決定（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
    */
@@ -614,7 +652,13 @@ export async function createCliAgent(
   },
   plugins: readonly PluginEntry[],
   cwd: string = process.cwd(),
-  { onInvariantViolation, approvals, rootSeed, tokenAnchorBook }: CreateCliAgentSession = {},
+  {
+    onInvariantViolation,
+    invariantTap,
+    approvals,
+    rootSeed,
+    tokenAnchorBook,
+  }: CreateCliAgentSession = {},
 ): Promise<{
   agent: NexusAgent;
   dispose: () => Promise<void>;
@@ -777,6 +821,7 @@ export async function createCliAgent(
     },
     checkpointer,
     ...(onInvariantViolation !== undefined && { onInvariantViolation }),
+    ...(invariantTap !== undefined && { invariantTap }),
     ...(approvals !== undefined && { approvals }),
     ...(invocation.optionalEntries !== undefined && {
       optionalEntries: invocation.optionalEntries,

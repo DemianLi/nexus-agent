@@ -72,12 +72,14 @@ import {
   startupErrorFrom,
   startupWarning,
 } from './startup-audit.js';
+import { createInvariantLog } from './invariant-log.js';
 import { toAgentInvocation } from './messages.js';
 import { formatTelemetryDisclosure } from './telemetry-disclosure.js';
 import { formatTracingDisclosure, readTracingDisclosure } from './tracing.js';
 import {
   type CliInvocation,
   parseSandboxMode,
+  resolveInvariantLogPath,
   resolveSessionLogDir,
   SESSION_LOG_OFF_DISCLOSURE,
   assertPersistenceFlags,
@@ -899,6 +901,14 @@ async function runLaunched(
   // 續接那條不解析根——那時根本不寫那裡，拿它擋人（例如 `--workspace ~`）是誤擋。落盤關掉
   // （#612）就一個 store 都不建，根也不解析：只在記憶體裡的一次啟動被那道檢查擋下同樣是誤擋。
   // 兩個工廠都是惰性的：第一次寫入之前不碰磁碟。
+  const invariantLogPath = resolveInvariantLogPath(
+    invocation.workspace,
+    persistenceMounted,
+    options.cwd ?? process.cwd(),
+    options.env ?? process.env,
+  );
+  const invariantTap =
+    invariantLogPath === undefined ? undefined : createInvariantLog(invariantLogPath);
   const sessionStore = !persistenceMounted
     ? undefined
     : resumeDir === undefined
@@ -994,6 +1004,9 @@ async function runLaunched(
         // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
         // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
         onInvariantViolation: (error) => printer.error(`[不變量] ${error.message}`),
+        // 量測記錄（#976）：違規照上面那行印出來，另外留一份可數的紀錄，並記下這一輪實際裝上了哪幾個檢查。
+        // 落盤關掉或 home 在工作區底下時沒有 tap，理由見 `resolveInvariantLogPath`。
+        ...(invariantTap !== undefined && { invariantTap }),
         // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
         // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
         // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。

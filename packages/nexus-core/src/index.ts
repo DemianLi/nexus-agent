@@ -518,6 +518,7 @@ export type {
   InvariantRunnerOptions,
   InvariantSelection,
   InvariantSubject,
+  InvariantTap,
 } from './invariants.js';
 export type { InvariantFailure } from './invariants.js';
 export { assertInvariantSelection, createInvariantRunner, InvariantError } from './invariants.js';

@@ -42,6 +42,7 @@ import {
   parseSandboxMode,
   formatGoalDriverDisclosure,
   goalDriverPort,
+  resolveInvariantLogPath,
   resolveSessionLogDir,
   resolveWorkspaceRoot,
   SESSION_LOG_OFF_DISCLOSURE,
@@ -67,6 +68,7 @@ import { BrowserAuth } from './browser-auth.js';
 import { loadOrCreateBrowserSessionSecret } from './browser-session-secret.js';
 import { createProcessShutdown } from './process-shutdown.js';
 import { HARNESS_HOME_ENV, resolveHarnessHome } from './harness-home.js';
+import { createInvariantLog } from './invariant-log.js';
 import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
@@ -503,6 +505,17 @@ async function startServer(
   // 只印這一次，在綁 port 之前。
   // **錨定估算的帳（#702）**：一台 server 一本，下面每條 thread 的組裝都傳同一本，借錨才跨得過 thread。
   const tokenAnchorBook = new TokenAnchorBook();
+  // **不變量的量測記錄（#976）**：一台 server 一份，每條 thread 的組裝傳同一個 tap。違規本身照舊走 runner 預設的
+  // `console.error`（進伺服器日誌），這份只是另外留一份可數的紀錄；試組那一次不接線所以不傳。
+  // 落盤關掉或 home 在工作區底下時不寫，理由見 `resolveInvariantLogPath`。
+  const invariantLogPath = resolveInvariantLogPath(
+    invocation.workspace,
+    persistenceMounted,
+    cwd,
+    env,
+  );
+  const invariantTap =
+    invariantLogPath === undefined ? undefined : createInvariantLog(invariantLogPath);
   const trial = await createCliAgent(
     {
       ...invocation,
@@ -704,7 +717,7 @@ async function startServer(
           threadPlugins,
           options.cwd,
           // 帳是這台 server 的，不是這條 thread 的：第二條 thread 的第一次借第一條的（#702）。
-          { tokenAnchorBook },
+          { tokenAnchorBook, ...(invariantTap !== undefined && { invariantTap }) },
         );
       } catch (error) {
         await release().catch(() => {});

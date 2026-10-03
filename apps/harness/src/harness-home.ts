@@ -59,3 +59,16 @@ export const HARNESS_SESSIONS_DIR_NAME = 'sessions';
 export function harnessSessionsDir(env: Readonly<Record<string, string | undefined>>): string {
   return join(resolveHarnessHome(env), HARNESS_SESSIONS_DIR_NAME);
 }
+
+/** 不變量量測記錄在 home 底下的檔名（[#976](https://github.com/DemianLi/nexus-agent/issues/976)）。 */
+export const HARNESS_INVARIANT_LOG_FILE_NAME = 'invariant-log.jsonl';
+
+/**
+ * 不變量量測記錄的路徑。
+ *
+ * @param env - 同 {@link resolveHarnessHome}。
+ * @returns `<harness home>/invariant-log.jsonl` 的絕對路徑。只解析，不建目錄。
+ */
+export function harnessInvariantLogPath(env: Readonly<Record<string, string | undefined>>): string {
+  return join(resolveHarnessHome(env), HARNESS_INVARIANT_LOG_FILE_NAME);
+}
