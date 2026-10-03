@@ -612,7 +612,8 @@ async function startServer(
     ...(sessionStore === undefined
       ? {}
       : {
-          listThreads: () => listStoredThreads(sessionStore, { cwd, title: threadTitle }),
+          listThreads: (signal: AbortSignal) =>
+            listStoredThreads(sessionStore, { cwd, title: threadTitle, signal }),
           // 背景子代理自己的落盤日誌（#871）：唯讀冷讀，規則見 `readStoredSubagentSession`。
           readSubagentSession: (threadId: string, runId: string) =>
             readStoredSubagentSession(sessionStore, threadId, runId),
