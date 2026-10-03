@@ -581,6 +581,48 @@ describe('工具卡的結果與 diff', () => {
     expect(screen.getByTestId('tool-output-omitted').textContent).toBe('⋯ 中間 4800 行沒畫 ⋯');
   });
 
+  it('參數超過字元上限：頭尾各畫一塊、中間一行講沒畫幾個字；沒超過就是一塊（#958）', () => {
+    const small = JSON.stringify({ message: '嗨' });
+    const { unmount } = render(
+      <ToolCard entry={tool({ name: 'echo', input: small, text: 'echo: 嗨' })} beam={false} />,
+    );
+    expand(/回聲/);
+    expect(screen.queryByTestId('tool-input-omitted')).toBeNull();
+    expect(document.querySelectorAll('.md-code')).toHaveLength(1);
+    unmount();
+
+    const message = `${'頭'.repeat(15_000)}${'麻'.repeat(7)}${'尾'.repeat(15_000)}`;
+    const input = JSON.stringify({ message, extra: 1 });
+    render(<ToolCard entry={tool({ name: 'echo', input, text: '收到' })} beam={false} />);
+    expand(/回聲/);
+    const omitted = screen.getByTestId('tool-input-omitted').textContent ?? '';
+    expect(omitted).toMatch(/^⋯ 中間 \d+ 字沒畫 ⋯$/);
+    const blocks = [...document.querySelectorAll('.md-code pre')].map((pre) => pre.textContent);
+    expect(blocks).toHaveLength(2);
+    const drawn = `${blocks[0]}${blocks[1]}`;
+    expect(drawn).not.toContain('麻');
+    // 畫出來的字加上說明裡的數字，剛好是排好的 JSON 的長度。
+    const total = JSON.stringify(JSON.parse(input), null, 2).length;
+    expect(drawn.length + Number(/\d+/.exec(omitted)?.[0])).toBe(total);
+    expect(blocks[0]?.startsWith('{\n  "message": "頭')).toBe(true);
+    expect(blocks[1]?.endsWith('"extra": 1\n}')).toBe(true);
+  });
+
+  it('參數還在串流、已經超過上限時也頭尾各一塊，不拋錯（#958）', () => {
+    const input = JSON.stringify({ message: 'x'.repeat(50_000) });
+    render(<ToolCard entry={tool({ name: 'echo', input, status: 'running' })} beam={false} />);
+    expand(/回聲/);
+    expect(screen.getByTestId('tool-input-omitted')).toBeTruthy();
+    expect(document.querySelectorAll('.md-code pre')).toHaveLength(2);
+  });
+
+  it('收合那一行摘要不會把整串超長的參數放進 DOM（#958）', () => {
+    const input = JSON.stringify({ message: 'm'.repeat(527_000) });
+    render(<ToolCard entry={tool({ name: 'echo', input, text: 'ok' })} beam={false} />);
+    // 沒展開：卡片上所有文字加起來遠小於參數本身。
+    expect(screen.getByTestId('tool-entry').textContent?.length).toBeLessThan(2_000);
+  });
+
   it('一行超長的結果（行數沒超過）也有字元上限：畫頭尾各半，中間一行講沒畫幾個字（#950）', () => {
     const text = `${'頭'.repeat(10_000)}${'麻'.repeat(7)}${'尾'.repeat(10_000)}`;
     render(<ToolCard entry={tool({ name: 'echo', text })} beam={false} />);
