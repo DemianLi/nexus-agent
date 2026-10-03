@@ -3,12 +3,14 @@
 
 檢查項：
 1. 文中每個 arXiv ID 都有 notes/<id>.json；引用到的論文若 read_level 不是 full／deep 或不在 reading-status 內，列出。
+   補讀名單（data/blueprint/supplementary-reads.json）內的論文沒有筆記，改驗：只准是 full，且全文快取 .cache/text/<id>.json 的 level 也是 full。
 2. 數字比對：呼叫 tools/check_chapter.py --json，再把結果分類。
    - 「找不到」的數字：若出現在 chapters/ 或 README.md（章作者已驗過、含換算），記為「章內換算」；否則列為待處理。
    - 「整行沒有出處」：只准出現在抽取欄位（驗收／等級理由／附錄／表格／標題／章行號引用）；其他行列為待處理。
 3. 每張卡有六格、有等級、有出處；A 級卡在 JSON 裡有 ≥2 個 flaws 與 unverified 皆不含 F1–F4 的 measured 證據。
 4. 沒有超過 15 個英文單字的連續引文；沒有大陸用語。
 5. blueprint.md 裡每張卡的等級與重算一致；待決卡沒有等級。
+6. 第 5 節 M2、M3 的每個編號項目底下至少有一個帶標記的證據條目（【直接】【直接（帶毛病：F?）】【單側】【推論】四選一），並印出各標記列數。
 退出碼 = 待處理條數（0 才算過）。
 """
 import glob
@@ -43,8 +45,30 @@ def main():
     for t in rs['topics'].values():
         for p in t['papers']:
             status[p['id']] = p
+    # 補讀名單（地圖 #962）：不在八章與 reading-status 內，沒有 notes/<id>.json，只准是 full。
+    # read_level 以 .cache/text/<id>.json（fetch 寫的）為準，不採名單自己填的值；快取不進版控，乾淨 clone 上只能警告。
+    supp = {}
+    sp = os.path.join(ROOT, 'data', 'blueprint', 'supplementary-reads.json')
+    if os.path.exists(sp):
+        for p in json.load(open(sp, encoding='utf-8'))['papers']:
+            supp[p['id']] = p
     levels = {}
+    n_supp = 0
     for i in ids:
+        if i in supp:
+            n_supp += 1
+            if supp[i].get('read_level') != 'full':
+                bad('未讀', f'{i} 補讀名單的 read_level={supp[i].get("read_level")}，只准 full')
+            cj = os.path.join(ROOT, '.cache', 'text', i.replace('/', '_') + '.json')
+            if os.path.exists(cj):
+                lv = json.load(open(cj, encoding='utf-8')).get('level', '快取沒有 level')
+                if lv != 'full':
+                    bad('未讀', f'{i} 全文快取的 level={lv}，補讀只准 full')
+            else:
+                print(f'[警告] {i} 沒有 .cache/text 快取，補讀的 full 與數字都無法在這裡驗證')
+                lv = 'full'
+            levels[lv] = levels.get(lv, 0) + 1
+            continue
         f = os.path.join(ROOT, 'notes', i.replace('/', '_') + '.json')
         if not os.path.exists(f):
             bad('ID', f'{i} 沒有筆記')
@@ -52,7 +76,7 @@ def main():
         levels[lv] = levels.get(lv, 0) + 1
         if lv not in ('full', 'deep'):
             bad('未讀', f'{i} read_level={lv}')
-    print(f'引用的不同論文 {len(ids)} 篇；read_level 分佈 {levels}')
+    print(f'引用的不同論文 {len(ids)} 篇（語料內 {len(ids) - n_supp}、補讀 {n_supp}）；read_level 分佈 {levels}')
 
     # 2 數字
     r = subprocess.run([sys.executable, os.path.join(ROOT, 'tools', 'check_chapter.py'), 'blueprint.md', '--json'],
@@ -79,6 +103,8 @@ def main():
             if lines[sec].startswith(('## 附錄 B', '## 7', '## 6', '## 8')):  # 6、8 節的數字是本文自己數的次數與編號
                 ok = True
             if row['line'] == 3:  # 206 篇：調研總數，見 README
+                ok = True
+            if re.search(r'#\d{3}|\d+ 列', row['sentence']):  # 地圖／issue 編號與本文自己數的列數（第 6 項另驗）
                 ok = True
             if ok:
                 n_nocite_ok += 1
@@ -153,6 +179,31 @@ def main():
     for w in MAINLAND:
         if w in stripped:
             bad('大陸用語', f'{w} x{stripped.count(w)}')
+
+    # 6 M2、M3 的欄位證據標記（地圖 #962）
+    tag_re = r'(直接（帶毛病：F[1-4][^】]*）|直接|單側|推論)'
+    for blk in ('M2', 'M3'):
+        m = re.search(r'(?ms)^##### ' + blk + r'　.*?(?=^##### |^\*\*五條契約)', text)
+        if not m:
+            bad('標記', f'找不到 {blk} 區塊')
+            continue
+        sub = m.group(0).split('\n')
+        counts = {}
+        starts = [i for i, l in enumerate(sub) if re.match(r'^  \d+\. ', l)]
+        for i in starts:
+            seg = []
+            for l in sub[i + 1:]:
+                if re.match(r'^  \d+\. ', l) or re.match(r'^- \*\*', l):
+                    break
+                seg.append(l)
+            tags = [re.match(r'^\s+- 證據【' + tag_re + r'】', l) for l in seg]
+            tags = [t.group(1) for t in tags if t]
+            if not tags:
+                bad('標記', f'{blk} 「{sub[i].strip()[:30]}」底下沒有帶標記的證據條目')
+            for t in tags:
+                k = '直接（帶毛病）' if t.startswith('直接（') else t
+                counts[k] = counts.get(k, 0) + 1
+        print(f'{blk} 欄位標記 {sum(counts.values())} 列：' + '、'.join(f'{k} {counts.get(k, 0)}' for k in ('直接', '直接（帶毛病）', '單側', '推論')))
 
     for k, m in problems:
         print(f'[{k}] {m}')
