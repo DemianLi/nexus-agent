@@ -801,3 +801,7 @@ pnpm --filter @nexus/harness run eval:compare --floor-only
 
 CI 那條（`pnpm --filter @nexus/harness exec vitest run src/eval`）同時擋兩個方向：平凡 agent 不准
 被判成功（`floor.test.ts`），每題的標準解必須被判成功（`eval.test.ts`）。
+
+這七題上的分數**當上限、不當實力**（設定與題目是同一批挑的），要拿它挑改動就得在新題上驗過；
+LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
+[`apps/harness/docs/eval-measurement.md`](../apps/harness/docs/eval-measurement.md)。
