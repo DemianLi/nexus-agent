@@ -24,7 +24,7 @@ import {
   WORKSPACE_CAPABILITY,
 } from '@nexus/core';
 import type { PluginRegistry, SessionEvent, SessionLog } from '@nexus/core';
-import { FilesystemBackend } from 'deepagents';
+import { FilesystemBackend, StateBackend } from 'deepagents';
 
 import {
   createPresentPlugin,
@@ -37,6 +37,7 @@ import {
   presentCountMessage,
   presentNotFileMessage,
   presentNotFoundMessage,
+  presentOffWorkspaceMessage,
 } from './index.js';
 
 const roots: string[] = [];
@@ -65,7 +66,16 @@ interface Mounted {
  * backend（fold 過、這次組裝一個 backend 都沒有）。
  */
 function mount(
-  options: { root?: string; workspace?: boolean; maxFiles?: number; fs?: 'empty' } = {},
+  options: {
+    root?: string;
+    workspace?: boolean;
+    maxFiles?: number;
+    fs?: 'empty';
+    /** 組裝點明著交的、不在磁碟上的路由前綴（`fs` 服務那一格）。 */
+    offWorkspace?: readonly string[];
+    /** plugin 用 `backend.mount()` 掛的路由。 */
+    mounts?: readonly string[];
+  } = {},
 ): Mounted {
   const registry = createRegistry();
   const backend =
@@ -74,7 +84,15 @@ function mount(
       : new FilesystemBackend({ rootDir: options.root, virtualMode: true });
   if (backend !== undefined || options.fs === 'empty') {
     const leave = registry.enter({ id: 'host-services#0', name: 'host-services' });
-    registry.services.provide(FS_SERVICE, { backend: () => backend });
+    registry.services.provide(FS_SERVICE, {
+      backend: () => backend,
+      offWorkspacePrefixes: () => options.offWorkspace ?? [],
+    });
+    leave();
+  }
+  for (const prefix of options.mounts ?? []) {
+    const leave = registry.enter({ id: 'mounter#0', name: 'mounter' });
+    registry.backend.mount(prefix, new StateBackend());
     leave();
   }
   const plugin = createPresentPlugin(
@@ -297,6 +315,70 @@ describe('拒絕', () => {
       expect(refusal.code, JSON.stringify(files)).toBe(code);
     }
     expect(deliveries(log)).toEqual([]);
+  });
+
+  describe('不在工作區磁碟上的路由（#951）', () => {
+    /**
+     * 兩個來源各一格：組裝點交的（`fs` 服務）、plugin 掛的（`backend.mounts()`）。**檔案在 backend 上是看得到的**
+     * ——裸的 `FilesystemBackend` 底下真的有那個檔，所以拒絕的理由只可能是前綴，不是「找不到」。
+     */
+    it('落在前綴底下就拒，不帶 FS_NOT_FOUND，一筆交付都不寫', async () => {
+      const root = await workspace();
+      await mkdir(join(root, 'stash'));
+      await writeFile(join(root, 'stash', 'a.md'), 'a');
+      await mkdir(join(root, 'mounted'));
+      await writeFile(join(root, 'mounted', 'a.md'), 'a');
+      const mounted = mount({ root, offWorkspace: ['/stash'], mounts: ['/mounted/'] });
+      const log = mounted.sessions.root;
+      const paths = [
+        '/stash/a.md', // 組裝點交的（沒結尾斜線）
+        'stash/a.md', // 相對路徑補成以根為起點
+        '/stash/../stash/a.md', // `..` 在 virtualPathOf 那一步就夾掉
+        '/mounted/a.md', // plugin 掛的（有結尾斜線）
+        '/stash', // 前綴本身
+      ];
+      for (const [index, path] of paths.entries()) {
+        const refusal = refusalOf(
+          await callThrough(mounted, log, [{ path }], rootConfig(`c${index}`), 'error'),
+        );
+        expect(refusal.text, path).toBe(`Error: ${presentOffWorkspaceMessage(path)}`);
+        expect(refusal.code, path).toBeUndefined();
+      }
+      expect(deliveries(log)).toEqual([]);
+    });
+
+    it('名字只是以前綴開頭的目錄不算：整段比，不是字串前綴', async () => {
+      const root = await workspace();
+      await mkdir(join(root, 'stash_x'));
+      await writeFile(join(root, 'stash_x', 'a.md'), 'a');
+      await writeFile(join(root, 'mounted.md'), 'a');
+      const mounted = mount({ root, offWorkspace: ['/stash/'], mounts: ['/mounted/'] });
+      const log = mounted.sessions.root;
+      expect(
+        textOf(await callThrough(mounted, log, [{ path: '/stash_x/a.md' }], rootConfig('a'))),
+      ).toBe('Presented /stash_x/a.md');
+      expect(
+        textOf(await callThrough(mounted, log, [{ path: 'mounted.md' }], rootConfig('b'))),
+      ).toBe('Presented mounted.md');
+    });
+
+    it('一次交幾個，有一個在路由上整批都拒', async () => {
+      const root = await workspace();
+      await writeFile(join(root, 'ok.md'), 'a');
+      const mounted = mount({ root, offWorkspace: ['/stash/'] });
+      const log = mounted.sessions.root;
+      const refusal = refusalOf(
+        await callThrough(
+          mounted,
+          log,
+          [{ path: 'ok.md' }, { path: '/stash/a.md' }],
+          rootConfig('c'),
+          'error',
+        ),
+      );
+      expect(refusal.text).toBe(`Error: ${presentOffWorkspaceMessage('/stash/a.md')}`);
+      expect(deliveries(log)).toEqual([]);
+    });
   });
 
   it('檔數要在 1 到 maxFiles 之間', async () => {

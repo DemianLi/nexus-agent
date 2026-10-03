@@ -45,13 +45,29 @@
  * 3. **路徑在 backend 的命名空間裡解析。** dsh 的絕對路徑可以指到工作區外（例如 `/tmp`），只要
  *    Session 檔案系統讀得到；我們的 backend 是以工作區為根的虛擬路徑，`/report.md` 就是工作區根下
  *    的 `report.md`，工作區外本來就指不到。相對路徑補成以根為起點，同 dsh「相對路徑以工作目錄為準」。
+ *    **但那句「指不到」對路由不成立**，見偏離 6。
  * 4. **拒絕是回錯誤訊息，不是拋。** 同 `@nexus/plugin-todo` 的第 3 條（[#271](https://github.com/DemianLi/nexus-agent/issues/271)）：
  *    模型手上的字與 dsh 一致，`Error: ` 前綴由 `toolRefusal` 加。
  * 5. **沒有 `turn` 與輸出 schema。** 事件不帶 `turn`，理由見 `@nexus/core` 的 `SessionEventMap`；工具
  *    回一句字串（LangChain 的 `tool()` 形狀），就是 dsh `render` 出來給模型看的那幾行。
+ * 6. **不在工作區磁碟上的路由一律拒**（[#951](https://github.com/DemianLi/nexus-agent/issues/951)）。
+ *    **哪一條**：dsh 只要 Session 檔案系統讀得到就收。它的讀端（`packages/client/ui-deliverables/src/present-open.ts`，
+ *    SHA `5badb15`）拿工作區根加交付記的路徑，經 `workspaceFiles.stat` 與 `fs.resolve` 在同一個 `ctx.fs` 上
+ *    驗過才開；那個檔案系統是真的磁碟，沒有只存在於 Session 裡的路由，所以「檢查看得到」與「讀端找得到」
+ *    從沒分開過。**為什麼表達不出來**：我們的檢查走基座的虛擬 backend，它在磁碟之上疊了組裝點的路由，
+ *    兩端不再是同一個東西。檢查走折後的 backend（偏離 1），
+ *    而讀端（`apps/harness` 的 `deliverable-files.ts`）只對工作區磁碟做 `realpath`；組裝點包的會話歷史與工具
+ *    結果暫存兩條路由、plugin 用 `backend.mount()` 掛的路由，檢查端看得到、讀端永遠讀不到，於是 `present`
+ *    記下一筆沒人下載得了的交付。**退到什麼**：路徑落在這些路由的前綴底下就拒，回話叫模型先 `write_file`
+ *    到工作區再交付（{@link presentOffWorkspaceMessage}，沒有 dsh 對應，句型接 `Cannot present <path>: …`）。
+ *    不帶 `FS_NOT_FOUND`：檔案是在的，只是不在磁碟那一側，帶那個碼會讓讀它的人以為是「不存在」。
+ *    前綴由兩處合併而來：組裝點明著交的（`FsService.offWorkspacePrefixes`，折後的 backend 是巢狀的，
+ *    裡面兩層的前綴在 private 欄位裡讀不到）與 `registry.backend.mounts()`。
  *
  * 檔案系統照 dsh 從 `fs` 服務拿（dsh 的 `inject` 有 `'fs'`），拿到的是基座檔案工具實際讀寫的那一個
- * （[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。服務的值是一格 fold 之後才填的把手、
+ * （[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。**那條理由只對一半成立**：走服務是為了
+ * 看得見檔案工具寫的檔（工作區那一側，今天仍如此）；但「看得見」不等於「讀端讀得到」，路由那一側看得見的
+ * 檔要另外擋掉（偏離 6）。服務的值是一格 fold 之後才填的把手、
  * 所以在工具被叫時才讀，偏離登記在 `@nexus/core` 的 `fs-service.ts`，理由同
  * `@nexus/plugin-agent-instructions` 的偏離 2，不另立一條。
  *
@@ -132,6 +148,17 @@ export function presentNotFileMessage(path: string): string {
 }
 
 /**
+ * 路徑落在不在工作區磁碟上的路由時回的話。**沒有 dsh 對應**，見檔頭偏離 6。
+ *
+ * 句型照上一句（`Cannot present <path>: …`），後半告訴模型下一步：交付的檔要在工作區裡，先 `write_file` 寫過去。
+ * @param path - 模型給的路徑，原樣。
+ * @returns 模型看到的那一句。
+ */
+export function presentOffWorkspaceMessage(path: string): string {
+  return `Cannot present ${path}: it is not on the workspace disk. Write the file into the workspace with write_file, then present that path.`;
+}
+
+/**
  * 成功時模型看到的字：一個檔一行，照 dsh 的 `render`。
  * @param files - 通過檢查的檔案。
  * @returns 模型看到的那幾行。
@@ -164,6 +191,22 @@ export type PresentConfig = z.infer<typeof presentConfigSchema>;
 
 /** 工廠收的東西：schema 的輸入面。 */
 export type PresentPluginOptions = z.input<typeof presentConfigSchema>;
+
+/**
+ * 虛擬路徑在不在某個路由前綴底下（前綴本身也算）。
+ *
+ * 前綴的結尾斜線正規化掉再比，並且比的是「整段路徑」：`/large_tool_results_x/a.md` **不**在
+ * `/large_tool_results/` 底下，那是工作區根下一個名字剛好以它開頭的目錄。
+ * @param target - 已過 `virtualPathOf` 的路徑。
+ * @param prefixes - 路由前綴，有沒有結尾斜線都行。
+ * @returns 在其中任何一個底下就是真。
+ */
+function isUnderPrefix(target: string, prefixes: readonly string[]): boolean {
+  return prefixes.some((prefix) => {
+    const bare = prefix.replace(/\/+$/, '');
+    return target === bare || target.startsWith(`${bare}/`);
+  });
+}
 
 /** 一個路徑在 backend 上是什麼。 */
 type Inspection = 'file' | 'not-file' | 'missing';
@@ -241,9 +284,18 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
           if (!registry.capabilities.has(WORKSPACE_CAPABILITY) || backend === undefined) {
             return refuse(PRESENT_NO_WORKSPACE_MESSAGE);
           }
+          // 不在工作區磁碟上的前綴：組裝點交的那幾格，加上 plugin 自己 `backend.mount()` 掛的。**被叫時才讀**，
+          // 理由同上面的 backend——mount 在每顆 plugin 的 `apply` 裡才註冊進來。
+          const offWorkspace = [
+            ...(registry.services.get(FS_SERVICE)?.offWorkspacePrefixes() ?? []),
+            ...registry.backend.mounts().map(([prefix]) => prefix),
+          ];
           const files: PresentedFile[] = [];
           for (const file of requested) {
             if (file.path.trim().length === 0) return refuse(PRESENT_EMPTY_PATH_MESSAGE);
+            if (isUnderPrefix(virtualPathOf(file.path), offWorkspace)) {
+              return refuse(presentOffWorkspaceMessage(file.path));
+            }
             const kind = await inspect(backend, file.path);
             if (kind === 'missing') return refuse(presentNotFoundMessage(file.path), NOT_FOUND);
             if (kind === 'not-file') return refuse(presentNotFileMessage(file.path));

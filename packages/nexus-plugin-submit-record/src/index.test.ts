@@ -48,7 +48,7 @@ function fakeBackend(seed: Record<string, string> = {}, checkpoint = false) {
 
 async function toolOf(backend: AnyBackendProtocol): Promise<StructuredTool> {
   const { registry } = await loadPlugins([
-    createHostServicesPlugin({ fs: { backend: () => backend } }),
+    createHostServicesPlugin({ fs: { backend: () => backend, offWorkspacePrefixes: () => [] } }),
     createSubmitRecordPlugin(),
   ]);
   const entry = registry.tools.resolve(SUBMIT_RECORD_TOOL_NAME);
@@ -169,7 +169,11 @@ describe('拿不到 backend', () => {
     ['沒有人提供 `fs` 服務', [] as const],
     [
       '`fs` 服務在、裡面沒有 backend',
-      [createHostServicesPlugin({ fs: { backend: () => undefined } })],
+      [
+        createHostServicesPlugin({
+          fs: { backend: () => undefined, offWorkspacePrefixes: () => [] },
+        }),
+      ],
     ],
   ])('%s：那一次呼叫拒絕，訊息指名 submit-record 與 backend', async (_label, hosts) => {
     const { registry } = await loadPlugins([...hosts, createSubmitRecordPlugin()]);
@@ -214,7 +218,7 @@ describe('閘門只認 submit_record', () => {
   it('認得它 → `ask`；別人 → 走到鏈底 `allow`', async () => {
     const { backend } = fakeBackend();
     const { registry } = await loadPlugins([
-      createHostServicesPlugin({ fs: { backend: () => backend } }),
+      createHostServicesPlugin({ fs: { backend: () => backend, offWorkspacePrefixes: () => [] } }),
       createSubmitRecordPlugin(),
     ]);
     const listeners = registry.approvals.listeners();
