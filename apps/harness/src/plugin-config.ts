@@ -651,8 +651,8 @@ export function shippedConfigPath(): string {
  * **`module.default ?? module` 照 dsh 的 `unwrapExports`**（`vendor/loader/src/index.ts:189`）：
  * 先看 default，沒有才退回 namespace。dsh 的配套入口把 `name`／`apply` 散在頂層，namespace
  * 自己就是 plugin；我們的是巢狀常數，所以實際上走的是 default 那一條
- * （[#493](https://github.com/DemianLi/nexus-agent/pull/493) 讓二十個配套入口都有了 default
- * export）。兩種形狀都接得住，是因為退路本來就是標準的一部分。
+ * （[#493](https://github.com/DemianLi/nexus-agent/pull/493) 讓當時的二十個配套入口都有了 default
+ * export；#974 之後剩八個）。兩種形狀都接得住，是因為退路本來就是標準的一部分。
  *
  * **指到檔案的條目，import 之前先過 {@link assertPrivateFile}**（[#542](https://github.com/DemianLi/nexus-agent/issues/542)）。
  * 判別式是 `file:` 開頭：出貨清單的 `name` 全是裸 specifier，patch 裡只有 `insert` 生得出新 `name`，而

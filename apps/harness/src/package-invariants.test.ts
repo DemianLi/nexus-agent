@@ -3,11 +3,14 @@
  *
  * 分成兩半，而**上半才是這張的理由**：
  *
- * 1. **對著真的 repo 跑。** 掃得到的 owner 正好是那二十個、而且現在零違規。glob 寫壞、腳本
+ * 1. **對著真的 repo 跑。** 掃得到的 owner 正好是那八個、而且現在零違規。glob 寫壞、腳本
  *    搬家、repo 根算錯——這幾種缺陷會讓 gate 掃到空清單然後回報零違規，也就是**永遠綠**。
  *    一個永遠綠的結構 gate 比沒有 gate 更糟，所以這一條是逐條 AST 規則之上的那一條。
  * 2. **對著臨時目錄裡的壞樣本跑。** 每一條規則配一個真的會紅的樣本；規則沒接上去的話，
  *    樣本會綠。
+ *
+ * #974 把兩條規則翻了面，**翻面要有絆索**：沒有配套入口的 package 不再是違規（它根本不是
+ * owner），而空 installer 本身是違規——連「帶了說明標記」的舊式合格寫法也一樣會紅。
  */
 
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
@@ -22,28 +25,16 @@ import {
   repositoryRoot,
 } from './package-invariants.js';
 
-/** 這個 repo 現在該有的二十個 owner。**寫死字串**：拿 glob 的結果自己比自己驗不出東西。 */
+/** 這個 repo 現在該有的八個 owner：每一個都有真的檢查（`fail(` 至少一處）。**寫死字串**：拿 glob 的結果自己比自己驗不出東西。 */
 const EXPECTED_OWNERS = [
   '@nexus/core',
-  '@nexus/plugin-agent-instructions',
-  '@nexus/plugin-ask-user',
   '@nexus/plugin-commands',
-  '@nexus/plugin-echo',
-  '@nexus/plugin-feedback',
   '@nexus/plugin-goal',
-  '@nexus/plugin-mcp',
-  '@nexus/plugin-memory',
   '@nexus/plugin-plan-mode',
   '@nexus/plugin-present',
-  '@nexus/plugin-quickjs',
   '@nexus/plugin-sandbox-policy',
-  '@nexus/plugin-skills',
-  '@nexus/plugin-submit-record',
-  '@nexus/plugin-system-prompt',
-  '@nexus/plugin-telemetry-otel',
   '@nexus/plugin-todo',
   '@nexus/plugin-workspace-changes',
-  '@nexus/wire',
 ];
 
 const temporaryRoots: string[] = [];
@@ -56,7 +47,6 @@ afterEach(() => {
 function companionSource(
   overrides: {
     readonly header?: string;
-    readonly declarationComment?: string;
     readonly installer?: string;
     readonly registration?: string;
     readonly defaultExport?: string;
@@ -64,9 +54,9 @@ function companionSource(
   } = {},
 ): string {
   const {
-    header = '/**\n * No runtime invariant: 這個樣本沒有可檢的關係。\n *\n * @module\n */',
-    declarationComment = '',
-    installer = 'const install: InvariantInstaller = () => {};',
+    header = '/**\n * 樣本。\n *\n * @module\n */',
+    installer = 'const install: InvariantInstaller = (subject, fail) => {\n' +
+      "  subject.observe(() => fail('壞了'));\n};",
     registration = 'registry.invariants.register(SAMPLE_PACKAGE, install);',
     defaultExport = 'export default samplePlugin;',
     extra = '',
@@ -77,7 +67,7 @@ import type { InvariantInstaller, NexusPlugin, PluginEntry } from '@nexus/core';
 
 export const SAMPLE_PACKAGE = '@nexus/sample';
 
-${declarationComment}${installer}
+${installer}
 ${extra}
 export const samplePlugin: NexusPlugin = {
   name: 'sample-invariant',
@@ -95,15 +85,15 @@ export function createSampleInvariantPlugin(): PluginEntry {
 }
 
 /**
- * 造一個只有一個 package 的臨時 repo，跑規則，回傳訊息。
+ * 造一個只有一個 package 的臨時 repo。
  *
- * @param source - 配套入口的內容；`null` 代表這個 package 根本沒有配套入口。
+ * @param source - 配套入口的內容；`null` 代表這個 package 沒有 `src/invariant.ts`。
  * @param exportsInvariant - manifest 的 `exports["./invariant"]`，`null` 代表沒有這一格。
  */
-function violationsFor(
+function sampleRoot(
   source: string | null,
   exportsInvariant: string | null = './src/invariant.ts',
-): string[] {
+): string {
   const root = mkdtempSync(join(tmpdir(), 'package-invariants-'));
   temporaryRoots.push(root);
   const dir = join(root, 'packages', 'sample');
@@ -116,7 +106,17 @@ function violationsFor(
     }),
   );
   if (source !== null) writeFileSync(join(dir, 'src', 'invariant.ts'), source);
-  return collectPackageInvariantViolations(root).map((violation) => violation.message);
+  return root;
+}
+
+/** 造臨時 repo、跑規則，回傳訊息。參數同 {@link sampleRoot}。 */
+function violationsFor(
+  source: string | null,
+  exportsInvariant: string | null = './src/invariant.ts',
+): string[] {
+  return collectPackageInvariantViolations(sampleRoot(source, exportsInvariant)).map(
+    (violation) => violation.message,
+  );
 }
 
 describe('對著真的 repo', () => {
@@ -126,7 +126,7 @@ describe('對著真的 repo', () => {
     expect(packageInvariantOwners().map((owner) => owner.dir)).toContain('packages/nexus-core');
   });
 
-  it('**掃出來的 owner 正好是那二十個**——glob 壞掉時這一條紅，零違規那一條不會', () => {
+  it('**掃出來的 owner 正好是那八個**——glob 壞掉時這一條紅，零違規那一條不會', () => {
     expect(
       packageInvariantOwners()
         .map((owner) => owner.packageName)
@@ -134,14 +134,31 @@ describe('對著真的 repo', () => {
     ).toEqual([...EXPECTED_OWNERS].sort());
   });
 
-  it('二十個現在全部合格', () => {
+  it('八個現在全部合格——包括「沒有任何空殼」', () => {
     expect(collectPackageInvariantViolations()).toEqual([]);
   });
 });
 
 describe('發現 owner', () => {
-  it('沒有 src/invariant.ts 的 package 是違規，不是被跳過', () => {
+  it('什麼都沒發布的 package 不是 owner，也不是違規——沒有可檢的關係就不要發布', () => {
+    // 翻面前這一格是「缺配套入口」違規；它變成合法，才是 #974 拿掉十二個空殼的前提。
+    const root = sampleRoot(null, null);
+    expect(packageInvariantOwners(root)).toEqual([]);
+    expect(collectPackageInvariantViolations(root)).toEqual([]);
+  });
+
+  it('只宣告了 exports 卻沒有檔案，是 owner 而且違規——不是被跳過', () => {
     expect(violationsFor(null)).toEqual([expect.stringContaining('缺配套入口')]);
+  });
+
+  it('只有檔案沒有 exports，同樣是 owner 而且違規——兩半要同時在場', () => {
+    const root = sampleRoot(companionSource(), null);
+    expect(packageInvariantOwners(root).map((owner) => owner.packageName)).toEqual([
+      '@nexus/sample',
+    ]);
+    expect(violationsFor(companionSource(), null)).toEqual([
+      expect.stringContaining('exports["./invariant"]'),
+    ]);
   });
 
   it('合格的樣本零違規——底下每個壞樣本都是從它改一處出來的', () => {
@@ -166,7 +183,7 @@ describe('manifest', () => {
 describe('原始碼', () => {
   it('帶 @generated 標記是違規', () => {
     const source = companionSource({
-      header: '/**\n * No runtime invariant: 樣本。\n *\n * @generated\n */',
+      header: '/**\n * 樣本。\n *\n * @generated\n */',
     });
     expect(violationsFor(source)).toEqual([expect.stringContaining('@generated')]);
   });
@@ -251,25 +268,20 @@ describe('原始碼', () => {
 });
 
 describe('installer', () => {
-  it('空 installer 沒說明是違規', () => {
-    const source = companionSource({ header: '/**\n * 樣本。\n *\n * @module\n */' });
-    expect(violationsFor(source)).toEqual([expect.stringContaining('空 installer 必須說明')]);
+  it('空 installer 本身是違規——沒有可檢的關係就不要發布配套入口', () => {
+    // #974 翻面的那一條。翻面前這個樣本是違規只因為沒有說明；現在連說明都不看。
+    const source = companionSource({ installer: 'const install: InvariantInstaller = () => {};' });
+    expect(violationsFor(source)).toEqual([expect.stringContaining('空 installer 沒有任何檢查')]);
   });
 
-  it('說明寫在宣告的註解上也算——那是 dsh 認的位置', () => {
+  it('帶著舊式說明標記的空 installer 照樣違規——標記不再是通行證', () => {
+    // 這一條擋的是「翻面只刪了要求說明那條、卻留著說明就放行的分支」：留著它，
+    // 十二個空殼原封不動也會綠。
     const source = companionSource({
-      header: '/**\n * 樣本。\n *\n * @module\n */',
-      declarationComment: '/** No runtime invariant: 寫在宣告上。 */\n',
+      header: '/**\n * No runtime invariant: 這個樣本沒有可檢的關係。\n *\n * @module\n */',
+      installer: 'const install: InvariantInstaller = () => {};',
     });
-    expect(violationsFor(source)).toEqual([]);
-  });
-
-  it('全形冒號不算——標記是半形的，#108 的拍板選了改原始檔那一側', () => {
-    // 這一條擋的是「規則悄悄放寬去遷就原始檔」：放寬了它就綠。
-    const source = companionSource({
-      header: '/**\n * No runtime invariant：全形。\n *\n * @module\n */',
-    });
-    expect(violationsFor(source)).toEqual([expect.stringContaining('空 installer 必須說明')]);
+    expect(violationsFor(source)).toEqual([expect.stringContaining('空 installer 沒有任何檢查')]);
   });
 
   it('非空 installer 沒有第二個參數是違規', () => {

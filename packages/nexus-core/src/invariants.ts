@@ -10,8 +10,13 @@
  *
  * **只檢查真的關係，不為了覆蓋而編造斷言。** dsh 那份 README 明說：確認方法存在、
  * 插件名字、注入、純函式的固定結果，全都是型別、載入或單元測試的事，**不是運行時
- * 不變量**。沒有可觀察的事件或可變資料關係時，配套入口就是一個空 installer 加一句
- * `No runtime invariant:` 說明。
+ * 不變量**。沒有可觀察的事件或可變資料關係時，**就不要發布配套入口**：這裡原本的做法是
+ * 一個空 installer 加一句 `No runtime invariant:` 說明，#974 拿掉了那十二個空殼，空
+ * installer 現在會被 `apps/harness/src/package-invariants.ts` 擋下來。
+ *
+ * **dsh 已於 `f028f25667d`（2026-09-30）把整套運行時不變量移除**；剩下的八個配套入口是
+ * **暫時保留、觀察中**，不是「基礎建設表達不出來」的偏離，第二刀還沒決定。事實、選項與
+ * 重審條件見 `.docs/invariant-companions-decision-2026-10-03.md`。
  *
  * @see [#101](https://github.com/DemianLi/nexus-agent/issues/101)
  * @module

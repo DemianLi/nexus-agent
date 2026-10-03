@@ -1,9 +1,9 @@
 /**
  * `@nexus/plugin-present` 的不變量配套入口：**每一筆交付都對得上一次成功的 `present` 呼叫**。
  *
- * dsh 的 `tool-present` 不發布配套入口（README：「不发布伴生入口」）。我們這邊的 gate 要求每個
- * `packages/*` 都有一個（`apps/harness/src/package-invariants.ts`），而這個套件擁有一條機械判得出來的
- * 跨筆關係，所以寫實的，不寫只帶說明標記的空 installer：
+ * dsh 的 `tool-present` 不發布配套入口（README：「不发布伴生入口」）。我們這邊只有擁有可檢關係的
+ * package 才發布一個（空 installer 會被 `apps/harness/src/package-invariants.ts` 擋下來，#974），
+ * 而這個套件擁有一條機械判得出來的跨筆關係，所以寫實的：
  *
  * 1. **有配對的呼叫**：同一份日誌裡，前面有一顆同 `callId` 的 `tool/call`，工具名是 `present`。
  * 2. **那次呼叫成功了**：它最後一顆 `tool/result` 在這一筆之前，而且 `isError` 為否。這一條就是

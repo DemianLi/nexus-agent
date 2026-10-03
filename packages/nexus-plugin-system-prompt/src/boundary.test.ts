@@ -45,9 +45,9 @@ function sources(): readonly string[] {
 
 describe('套件邊界', () => {
   it('掃得到這個套件的每一個 .ts——掃空的結構檢查永遠綠', () => {
-    // 今天是 4 個（index / invariant ＋ 兩份測試）。
-    // 下限寫 4：再拆檔案不該讓這一條紅，少掉檔案該讓它紅。
-    expect(sources().length).toBeGreaterThanOrEqual(4);
+    // 今天是 3 個（index ＋ 兩份測試）。#974 拿掉空殼的 invariant.ts 之前是 4 個。
+    // 下限寫 3：再拆檔案不該讓這一條紅，少掉檔案該讓它紅。
+    expect(sources().length).toBeGreaterThanOrEqual(3);
   });
 
   it('沒有任何一個檔 import 得到 app', () => {

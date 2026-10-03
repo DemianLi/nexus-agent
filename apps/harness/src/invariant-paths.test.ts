@@ -137,17 +137,18 @@ describe('不變量接線：CLI 那條路', () => {
 });
 
 describe('預設清單', () => {
-  it('二十個配套入口都在，而且各自認領自己的包名', async () => {
-    // #107 拍的是「全進」。少掛的那幾個會讓「這個 package 沒有可檢的關係」與
-    // 「這個 package 的檢查沒掛上」在診斷裡長得一模一樣，所以這裡數的是**二十**（#720 加了 `@nexus/plugin-system-prompt`，#441 加了 `@nexus/plugin-present`，#443 加了
-    // `@nexus/plugin-workspace-changes`）。
+  it('八個配套入口都在，而且各自認領自己的包名', async () => {
+    // #107 拍的是「有檢查的全進」。少掛的那幾個會讓「這個 package 沒有可檢的關係」與
+    // 「這個 package 的檢查沒掛上」在診斷裡長得一模一樣，所以這裡數的是**八**（#974 拿掉
+    // 十二個空殼；#720、#441、#443 加進來的 `system-prompt`、`present`、`workspace-changes`
+    // 之中只有後兩者有檢查，`system-prompt` 的空殼一併拿掉了）。
     const { dispose, sessions, attachInvariants } = await createCliAgent({ live: false }, shipped);
     try {
       expect(attachInvariants(sessions)).toBeDefined();
     } finally {
       await dispose();
     }
-    expect(shipped.filter((entry) => entry.plugin.name.endsWith('-invariant'))).toHaveLength(20);
+    expect(shipped.filter((entry) => entry.plugin.name.endsWith('-invariant'))).toHaveLength(8);
   });
 });
 
