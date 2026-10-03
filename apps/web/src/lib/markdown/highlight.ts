@@ -8,6 +8,8 @@
  *   通知重畫。
  * - 不認得的語言：純文字（仍是等寬），不報錯。
  * - **帶行號的檔案檢視**（讀檔卡，#625）：{@link highlightLines} 整段一起高亮、按行交回，跨行的註解與字串才不會斷。
+ * - **長行與總預算**（#992）：一行超過 {@link HIGHLIGHT_LINE_MAX_CHARS} 字不上色（三條路徑共用）；讀檔卡整頁最多花
+ *   {@link HIGHLIGHT_BUDGET_MS} 毫秒，超過的行畫純文字。TextMate 的成本是行長的平方，壓縮檔一行就能卡半秒。
  *
  * @module
  */
@@ -167,6 +169,27 @@ function highlighter(): HighlighterCore {
   return singleton;
 }
 
+/**
+ * 一行最多高亮到這個字元數（shiki 的 `tokenizeMaxLineLength`，預設 0＝不限）；達到的那一行畫純文字、不上色，
+ * 後面的行照常接著高亮（文法狀態不重置）。TextMate 對單行的成本約是長度的平方（[#992](https://github.com/DemianLi/nexus-agent/issues/992)
+ * 實測：1,000 字約 21 ms、2,000 字約 85 ms、5,000 字起撞到 shiki 每行 500 ms 的時限），壓縮過的 JS／JSON 一行幾萬字
+ * 是真實會出現的檔案。三條路徑（讀檔卡、fence、串流）共用。
+ */
+export const HIGHLIGHT_LINE_MAX_CHARS = 1_000;
+
+/** 三條高亮路徑共用的 shiki 選項。 */
+const LINE_OPTIONS = { tokenizeMaxLineLength: HIGHLIGHT_LINE_MAX_CHARS } as const;
+
+/**
+ * {@link highlightLines} 整頁高亮最多花的毫秒數；超過就停，剩下的行畫純文字。行長上限擋不住「很多條中等長度的緊密行」
+ * （#992 實測：263 行×380 字約 0.9 s、132 行×760 字約 1.7 s），所以另外要有總預算；時間不是行數，因為成本由內容的
+ * 密度決定。普通程式碼（1,250 行約 134 ms）在預算之內全部上色。
+ */
+export const HIGHLIGHT_BUDGET_MS = 150;
+
+/** 預算每隔幾行檢查一次；每行最多約 {@link HIGHLIGHT_LINE_MAX_CHARS} 字的成本，所以超出預算的量有界。 */
+const HIGHLIGHT_CHUNK_LINES = 4;
+
 /** 已經發出 import 的文法，每套只要一次。 */
 const requested = new Set<string>();
 const listeners = new Set<() => void>();
@@ -220,7 +243,11 @@ export function highlightToHtml(code: string, lang: string | undefined): string 
   const resolved = resolveLang(lang);
   if (resolved === undefined) return undefined;
   if (!ensureGrammar(resolved)) return undefined;
-  return highlighter().codeToHtml(code, { lang: resolved, theme: 'css-variables' });
+  return highlighter().codeToHtml(code, {
+    lang: resolved,
+    theme: 'css-variables',
+    ...LINE_OPTIONS,
+  });
 }
 
 /** 一行裡的一段：字與 shiki 給它的 inline style（css-variables 主題下 `color` 一定有）。 */
@@ -265,25 +292,54 @@ function lineSpans(line: ThemedToken[]): HighlightSpan[] {
   return spans;
 }
 
+/** shiki 切行的規則（`\r\n`、`\r`、`\n`），分段高亮要跟整段高亮切出同樣的行。 */
+const LINE_BREAK = /\r\n|\r|\n/;
+
 /**
  * 整段一起高亮，一行一筆交回（dsh `highlightLines`，`477b4f4` 的 `markdown/highlight.ts:585`）：帶行號的檔案檢視每行
  * 自己一列，拿不到 {@link highlightToHtml} 那一整棵 `<pre>`。`undefined` 表示畫純文字（不認得的語言，或 lazy 文法還在載）。
  *
  * 跟 dsh 的差別：段照 {@link lineSpans} 收（空白併進下一段、保留粗斜體），跟 fence 那一臂畫出來的一樣；dsh 只留顏色。
  * 結尾的換行 shiki 會多切出一行空行，那一行丟掉，行數才跟呼叫端自己的陣列對得上。
+ *
+ * **登記的偏離**（#992）：dsh 整段一次高亮、沒有任何上限（`codeToTokens` 預設值），成本由內容決定、最壞數秒。這裡
+ * 一行超過 {@link HIGHLIGHT_LINE_MAX_CHARS} 字就畫純文字；整段改成每 {@link HIGHLIGHT_CHUNK_LINES} 行一段、
+ * 接著前一段的文法狀態往下高亮（結果與整段一次高亮相同，串流那一臂早就這樣做），累計超過 `budgetMs` 就停。
+ * **回傳的陣列可能比行數短**：沒輪到的行沒有那一筆，呼叫端對 `undefined` 畫純文字。
+ *
+ * @param code - 要高亮的整段字。
+ * @param lang - 語言提示。
+ * @param options - `budgetMs`：總預算（毫秒）；`now`：時鐘，測試用。
  */
 export function highlightLines(
   code: string,
   lang: string | undefined,
+  options: { readonly budgetMs?: number; readonly now?: () => number } = {},
 ): HighlightSpan[][] | undefined {
   const resolved = resolveLang(lang);
   if (resolved === undefined) return undefined;
   if (!ensureGrammar(resolved)) return undefined;
-  const tokens = highlighter().codeToTokensBase(code, { lang: resolved, theme: 'css-variables' });
-  const last = tokens.at(-1);
-  const lines =
-    tokens.length > 1 && last !== undefined && last.length === 0 ? tokens.slice(0, -1) : tokens;
-  return lines.map(lineSpans);
+  const { budgetMs = HIGHLIGHT_BUDGET_MS, now = () => performance.now() } = options;
+  const source = code.split(LINE_BREAK);
+  const lines: HighlightSpan[][] = [];
+  const started = now();
+  let state: GrammarState | undefined;
+  for (let at = 0; at < source.length; at += HIGHLIGHT_CHUNK_LINES) {
+    if (at > 0 && now() - started > budgetMs) return lines;
+    const tokens = highlighter().codeToTokensBase(
+      source.slice(at, at + HIGHLIGHT_CHUNK_LINES).join('\n'),
+      {
+        lang: resolved,
+        theme: 'css-variables',
+        ...LINE_OPTIONS,
+        ...(state === undefined ? {} : { grammarState: state }),
+      },
+    );
+    for (const line of tokens) lines.push(lineSpans(line));
+    state = highlighter().getLastGrammarState(tokens);
+  }
+  const last = lines.at(-1);
+  return lines.length > 1 && last !== undefined && last.length === 0 ? lines.slice(0, -1) : lines;
 }
 
 /** {@link StreamingHighlightSession.updateFrame} 交給保留式 renderer 的一次更新。 */
@@ -328,6 +384,7 @@ export class StreamingHighlightSession {
     return highlighter().codeToTokensBase(text, {
       lang: resolved,
       theme: 'css-variables',
+      ...LINE_OPTIONS,
       ...(this.state === undefined ? {} : { grammarState: this.state }),
     });
   }
