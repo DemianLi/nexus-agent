@@ -34,8 +34,9 @@
  *   **量到一個連帶的缺陷，也一併修了**：`wire-server.ts` 只留了 `request.signal`、沒留包著它的 Request，中止的轉送
  *   靠的是 Request 內部的弱參照，所以有一部分放棄請求的 handler 永遠收不到中止（量測時看到 `close` 事件到了、
  *   handler 的 signal 沒動）。現在 Request 由 `close` 的回呼抓著、關線才放手。機制是從 undici 的設計推的；
- *   缺陷本身用 `measure/abort-delivery.ts` 在 wire-server 這一層重現了（修前放棄 160 次約 11–14% 沒中止，修後 0），
- *   並有回歸測試。這一條的列表量測：修前 8／49 次整份掃完，修後 0／40。
+ *   缺陷本身後來用 `measure/abort-delivery.ts`、`subscriber-leak.ts` 在 wire-server 這一層重現了，機制是完整的垃圾回收
+ *   收掉了沒人抓著的 Request（強制回收時修前真的下行路由漏 396–400／400，修後 0），並有回歸測試。這一條的列表量測：
+ *   修前 8／49 次整份掃完，修後 0／40。
  *
  * ## 列出來的每一列都要切得過去
  *
