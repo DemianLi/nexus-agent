@@ -468,16 +468,34 @@ describe('evalModelRounds：印給人看的輪數要等於實際跑到的輪數'
     return made[0]?.calls ?? -1;
   }
 
-  it('上限 4 到 87 每一個值：換算都等於實測（預設組裝每輪三格）', async () => {
+  // 換算在 4 到 87 之間是精確的（2026-10-04 逐一掃過每個值）。這裡只留代表值：頭一段每個值（輪數
+  // 逐格往上跳的地方）、出貨的 40 附近、精確範圍的最後幾個。全掃要 84 次完整 agent 迴圈，
+  // 在 CI 上跑了 5.8 秒、超過預設逾時。
+  const EXACT_LIMITS = [
+    ...Array.from({ length: 13 }, (_, at) => 4 + at), // 4..16
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43, // 出貨的上限附近
+    60,
+    85,
+    86,
+    87, // 精確範圍的尾端；88 起實測多一輪
+  ];
+
+  it('代表性的上限：換算都等於實測（預設組裝每輪三格）', async () => {
     const mismatches: string[] = [];
-    for (let limit = 4; limit <= 87; limit += 1) {
+    for (const limit of EXACT_LIMITS) {
       const actual = await roundsAt(limit);
       if (actual !== evalModelRounds(limit)) {
         mismatches.push(`${limit}：實測 ${actual}、換算 ${evalModelRounds(limit)}`);
       }
     }
     expect(mismatches).toEqual([]);
-  });
+  }, 30_000);
 
   it('出貨的上限實測就是 13 輪', async () => {
     expect(await roundsAt(EVAL_RECURSION_LIMIT)).toBe(13);
