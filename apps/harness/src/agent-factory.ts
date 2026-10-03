@@ -63,6 +63,7 @@ import {
   type ApprovalPolicy,
   type InvariantError,
   type InvariantSelection,
+  type InvariantTap,
   type DroppedEntry,
   type PluginEntry,
   type PluginOrigin,
@@ -347,6 +348,13 @@ export interface CreateNexusAgentOptions {
    * 終端機。兩條進入點答案不同是選的，不是漏的。
    */
   readonly onInvariantViolation?: (error: InvariantError) => void;
+  /**
+   * 只記錄的旁路（[#976](https://github.com/DemianLi/nexus-agent/issues/976)）：每一份日誌**裝上了
+   * 哪幾個** package 的檢查，以及報了哪一條違規，原樣轉給每個 runner。**它不取代
+   * {@link CreateNexusAgentOptions.onInvariantViolation}**——違規照舊走那條路，tap 另外收一份；
+   * tap 拋了一律吞掉。為第二刀的決策量測用，第二刀若選全部拿掉，這個選項跟著拿掉。
+   */
+  readonly invariantTap?: InvariantTap;
 }
 
 /**
@@ -929,6 +937,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
               ...(options.onInvariantViolation !== undefined && {
                 onViolation: options.onInvariantViolation,
               }),
+              ...(options.invariantTap !== undefined && { tap: options.invariantTap }),
             }),
           );
         });

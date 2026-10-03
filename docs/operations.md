@@ -70,6 +70,37 @@ CLI 每一次啟動各自一個 run 目錄，一份會話一個 `.jsonl` 加一�
 暫停自動寫入、這一輪照跑，等到收尾才響亮地失敗；現在檢查點排空被拒時：模型不被叫，這一輪以失敗
 收尾；工具不動手，圍堵把它收成一則錯誤結果交給模型。同 dsh：寧可不做，也不要做出一段沒有紀錄的事。
 
+### 不變量量測記錄
+
+不變量配套入口的違規原本只進 `console.error`（CLI 是 stderr 的 `[不變量] …`，serve 是伺服器日誌），
+沒有計數、沒有留存，所以「這些檢查過去有沒有報過」答不了。為了讓第二刀（那八個配套入口要不要留）
+的決策有數字（[#976](https://github.com/DemianLi/nexus-agent/issues/976)），CLI 與 serve 都會另外
+append 一份 `$NEXUS_AGENT_HOME/invariant-log.jsonl`，一行一筆、兩種：
+
+- `{"kind":"installed","sessionId":…,"packages":[…]}`：**每一份會話日誌各一行**，列這一份上真的
+  裝上了哪幾個 package 的檢查。這是分母——沒有它，「零違規」與「檢查根本沒掛上」長得一模一樣。
+  過濾成空集合時 `packages` 是空的，照樣寫。
+- `{"kind":"violation","sessionId":…,"package":…,"message":…}`：一條違規，`message` 最多留前 500 個字元。
+
+**跟著會話日誌的兩條承諾走**：清單上 `session-persistence` 那一列關掉時一個位元組都不寫（home 不建）；
+home 落在 `--workspace` 底下時也不寫（不拋——量測記錄不值得擋掉一次啟動）。檔案 `0600`、目錄 `0700`，
+不輪替，要清就直接刪。寫不進去只講一次，不影響產品；違規本身仍照舊印出來。
+
+每個 package 掛上幾個會話、報了幾次違規：
+
+```bash
+jq -rs '
+  (map(select(.kind=="installed") | .packages[]) | group_by(.) | map({key: .[0], value: length}) | from_entries) as $s
+  | (map(select(.kind=="violation") | .package) | group_by(.) | map({key: .[0], value: length}) | from_entries) as $v
+  | ([$s, $v] | map(keys) | add | unique) as $all
+  | (["package", "sessions", "violations"] | @tsv),
+    ($all[] | [., ($s[.] // 0), ($v[.] // 0)] | @tsv)' ~/.nexus-agent/invariant-log.jsonl | column -t
+```
+
+`sessions` 是 0 而 `violations` 不是 0 的列是異常（報了違規卻沒有「裝上」那一行），先查記錄有沒有被截斷或
+換過 home。**零違規是弱證據**：一個人在自己機器上跑一陣子沒報過，不代表檢查沒有價值（它們擋的是回歸，
+測試也擋回歸）。這份記錄是 dsh 沒有的、我們自己加的；第二刀若選全部拿掉，它跟著拿掉。
+
 ## 接著上一次跑下去
 
 CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、往同一個檔續寫；serve 不用旗標——
