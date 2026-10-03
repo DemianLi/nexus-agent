@@ -1142,6 +1142,44 @@ describe('讀檔卡收著時不畫內容（#625）', () => {
   });
 });
 
+describe('讀檔卡的單列畫面字元上限（#980）', () => {
+  const read = (text: string, lang?: string) =>
+    tool({
+      meta: {
+        path: lang === undefined ? '/a.txt' : '/a.ts',
+        offset: 1,
+        lines: [{ number: 1, text }],
+        totalLines: 1,
+        ...(lang === undefined ? {} : { lang }),
+      },
+    });
+  const head = '頭'.repeat(CARD_LINE_MAX_CHARS / 2);
+  const tail = '尾'.repeat(CARD_LINE_MAX_CHARS / 2);
+
+  it('單列超長：畫頭尾各半，中間一句講沒畫幾個字', () => {
+    render(<ToolCard entry={read(`${head}${'麻'.repeat(9)}${tail}`)} beam={false} />);
+    fireEvent.click(screen.getByRole('button', { name: /讀取/ }));
+    const row = screen.getByTestId('tool-read').querySelector('[data-read-line="1"]');
+    expect(row?.textContent).toBe(`1${head}⋯ 中間 9 字沒畫 ⋯${tail}`);
+  });
+
+  it('有高亮語言、單列超長：同樣收，不畫上色的段', () => {
+    const code = `const s = "${head}${'麻'.repeat(4)}${tail}";`;
+    render(<ToolCard entry={read(code, 'ts')} beam={false} />);
+    fireEvent.click(screen.getByRole('button', { name: /讀取/ }));
+    const row = screen.getByTestId('tool-read').querySelector('[data-read-line="1"]');
+    expect(screen.getByTestId('card-line-omitted').textContent).toMatch(/^⋯ 中間 \d+ 字沒畫 ⋯$/);
+    expect(row?.textContent?.length).toBeLessThan(CARD_LINE_MAX_CHARS + 100);
+  });
+
+  it('剛好在上限內：原樣畫、沒有那一句', () => {
+    render(<ToolCard entry={read(`${head}${tail}`)} beam={false} />);
+    fireEvent.click(screen.getByRole('button', { name: /讀取/ }));
+    expect(screen.queryByTestId('card-line-omitted')).toBeNull();
+    expect(screen.getByTestId('tool-read').textContent).toContain(`${head}${tail}`);
+  });
+});
+
 describe('子代理撞到輸出上限的 task（#608）', () => {
   const HEADLINE = `Error: ${SUBAGENT_MAX_TOKENS_REASON}`;
 

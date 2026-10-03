@@ -1,7 +1,8 @@
 /**
- * diff 卡與搜尋卡的畫面字元上限（[#961](https://github.com/DemianLi/nexus-agent/issues/961)）。
+ * diff 卡、搜尋卡與讀檔卡的畫面字元上限（[#961](https://github.com/DemianLi/nexus-agent/issues/961)、
+ * [#980](https://github.com/DemianLi/nexus-agent/issues/980)）。
  *
- * 這兩種專屬卡的列是 `whitespace-pre-wrap`＋`wrap-anywhere`，**單列超長時點開的成本隨長度超線性成長**：
+ * 這幾種專屬卡的列是 `whitespace-pre-wrap`＋`wrap-anywhere`，**單列超長時點開的成本隨長度超線性成長**：
  * 一行 527KB 的連續中文，diff 卡點開要 105 秒、搜尋卡 66 秒；「字＋127 空白」約 0.5／0.9 秒。
  * 傳輸上的上限擋不住它：搜尋 meta「至少留一項」（`capToolResultMeta`），write_file 新建檔的 diff 是從參數算的，
  * 兩條都沒有大小上限。列數上限（{@link MAX_RENDERED_LINES}）也管不到：它管列數、不管每列多長，
@@ -16,7 +17,11 @@
  * **登記的偏離**：dsh 的 `DiffBlock`、`SearchBlock` 預設 `white-space: pre`＋橫向捲動、不截字（換行是選項：
  * `DiffBlock.module.css` 的 `data-code-wrap`、`SearchBlock.module.css` 的 `.line`，master `ec48669`），所以沒有這個問題；
  * 我們的卡一開始就選了自動換行，成本出在換行。這裡不退回橫向捲動（那是 UI 形狀的改變，不是這張卡的事），
- * 沿用 #950、#958 已登記的做法在畫面上截。
+ * 沿用 #950、#958 已登記的做法在畫面上截。讀檔卡同理（dsh `ReadBlock.module.css` 預設 `white-space: pre`，`data-code-wrap` 才換行，
+ * dsh master `5badb15009a`）。
+ *
+ * **讀檔卡只收每列、不收整張卡**（#980）：一頁最多 100,000 位元組的 meta 擋住了總量，單列連續中文最多約 33,000 字
+ * （超過就整格不給、改走通用卡），那一列點開約 99–105ms 且有長任務，每列 {@link CARD_LINE_MAX_CHARS} 之後回到地板。
  *
  * **上限值怎麼挑**（#961 實測：`serve`＋假 OpenAI 模型＋headless Chrome，點開前等 1.5 秒，點開到兩個 rAF，
  * 地板約 48ms；每格 3 次中位數，ms）：

@@ -235,7 +235,12 @@ function ReadRow({
         {line.number}
       </span>
       <span className="wrap-anywhere">
-        {spans === undefined ? line.text : <Spans spans={spans} />}
+        {/* 超長的一行畫截過的純文字，不畫上色的段：段是從整行切的，截不得（#980）。 */}
+        {spans === undefined || line.text.length > CARD_LINE_MAX_CHARS ? (
+          <ClippedText text={line.text} />
+        ) : (
+          <Spans spans={spans} />
+        )}
       </span>
     </div>
   );
