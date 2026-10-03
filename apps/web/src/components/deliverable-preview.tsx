@@ -81,7 +81,7 @@ import type {
   DeliverableFileStore,
   DeliverableLongLine,
 } from '@/lib/deliverable-file';
-import { isLongLine, isPage } from '@/lib/deliverable-file';
+import { MISSING_REASON, isLongLine, isPage } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { LONG_LINE_CHARS, columnsOf, layoutOf } from '@/lib/line-segments';
 import { cn } from '@/lib/utils';
@@ -196,7 +196,9 @@ function Failure({
     downloader === undefined ? null : <DownloadAction file={file} downloader={downloader} />;
   switch (state) {
     case 'missing':
-      return <Status>{midway ? '這個檔讀到一半就讀不到了' : '這個檔已經讀不到了'}</Status>;
+      return (
+        <Status>{midway ? '這個檔讀到一半就讀不到了' : `讀不到這個檔：${MISSING_REASON}`}</Status>
+      );
     case 'too-large':
       // 上限是拒絕不是截斷，所以不能講成「只顯示前面一段」——那會讓人以為看到的是全部。
       return (

@@ -18,6 +18,7 @@ import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
 import type { DeliverableDownloadFailure, DeliverableDownloader } from '@/lib/deliverable-download';
+import { MISSING_REASON } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 
 /**
@@ -31,7 +32,7 @@ function complaint(failure: DeliverableDownloadFailure): { title: string; descri
       // 座標是程式給的，不是人打的——會走到這裡就是我們算錯了。
       return { title: '下載不了這個檔', description: '座標不對，這是程式的問題，不是這個檔的。' };
     case 'missing':
-      return { title: '這個檔已經讀不到了', description: '它可能在這一輪之後被移走或刪掉了。' };
+      return { title: '讀不到這個檔', description: MISSING_REASON };
     case 'too-large':
       // **終局**：下載的 `too-large` 只有一個成因（整檔超過上限），沒有下一步可以建議。
       return { title: '檔案太大，連下載都超過上限', description: '請直接到工作區取這個檔。' };
