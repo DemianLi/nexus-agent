@@ -4,7 +4,8 @@
  * `lib/tool-diff.ts`、`lib/tool-result-card.ts` 與 `lib/tool-output.ts` 決定，這裡只管畫。
  *
  * - **收合**：diff、讀檔、搜尋三種在對話裡都只畫頭尾兩段，中間一顆鈕展開（照 dsh 的 `FoldToggle`）；展開之後照審查頁
- *   的上限畫到 {@link MAX_RENDERED_LINES} 列——harness 的上限管的是位元組，管不住畫面上的行數。
+ *   的上限畫到 {@link MAX_RENDERED_LINES} 列——harness 的上限管的是位元組，管不住畫面上的行數。diff 與搜尋另有字元上限
+ *   （每列、整張卡，`lib/card-limit.ts`，#961）：列數管不到一列超長、也管不到幾千列各二十幾字。
  * - **diff**：對話裡最多 {@link CHAT_DIFF_MAX_LINES} 列。底色與符號色跟審查頁同一組（`DIFF_TONE`／`DIFF_SIGN`）。
  * - **讀檔**（dsh `ReadBlock`）：標頭是路徑、讀到哪裡、語言；每行帶行號，整段一起高亮（`highlightLines`），語言的文法
  *   還在載時先畫純文字、載完補上色。對話裡最多 {@link CHAT_READ_MAX_LINES} 行。
@@ -20,6 +21,7 @@ import { useMemo, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 
 import { CodeBlock } from '@/components/markdown/code-block';
+import { CARD_LINE_MAX_CHARS, fitRowCount } from '@/lib/card-limit';
 import { DIFF_SIGN, DIFF_TONE, MAX_RENDERED_LINES } from '@/lib/diff-rows';
 import {
   grammarLoadCount,
@@ -42,6 +44,24 @@ import type { ReadCard, ReadLine, SearchCard, SearchRow } from '@/lib/tool-resul
 import { clipMiddle, omittedLabel, type ToolOutput } from '@/lib/tool-output';
 import { INPUT_MAX_CHARS } from '@/lib/tool-view';
 import { cn } from '@/lib/utils';
+
+/**
+ * 一列的文字，超過 {@link CARD_LINE_MAX_CHARS} 字元時取頭尾各半、中間一句講沒畫多少字（#961）。
+ * 只動畫面，不動 `meta` 與參數。
+ */
+function ClippedText({ text }: { text: string }) {
+  const clipped = clipMiddle(text, CARD_LINE_MAX_CHARS);
+  if (clipped.dropped === 0) return text;
+  return (
+    <>
+      {clipped.head}
+      <span className="text-muted-foreground font-sans italic" data-testid="card-line-omitted">
+        {`⋯ 中間 ${clipped.dropped} 字沒畫 ⋯`}
+      </span>
+      {clipped.tail}
+    </>
+  );
+}
 
 function DiffLine({ row }: { row: ToolDiffRow }) {
   if (row.kind === 'path') {
@@ -69,7 +89,9 @@ function DiffLine({ row }: { row: ToolDiffRow }) {
       <span className={cn('text-center select-none', DIFF_SIGN[row.kind])}>
         {row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' '}
       </span>
-      <span className="pr-3 wrap-anywhere">{row.text}</span>
+      <span className="pr-3 wrap-anywhere">
+        <ClippedText text={row.text} />
+      </span>
     </div>
   );
 }
@@ -101,15 +123,18 @@ function FoldToggle({
   );
 }
 
-/** 展開後超過 {@link MAX_RENDERED_LINES} 時的那一句。 */
-function RenderCapNote() {
+/** 展開後沒畫完時的那一句：撞到 {@link MAX_RENDERED_LINES} 列，或（diff、搜尋）撞到整張卡的字元預算。 */
+function RenderCapNote({ shown, unit }: { shown: number; unit: '行' | '列' }) {
   return (
-    <p className="text-muted-foreground px-3 pt-1 font-sans">只顯示前 {MAX_RENDERED_LINES} 行</p>
+    <p className="text-muted-foreground px-3 pt-1 font-sans">
+      只顯示前 {shown} {unit}
+    </p>
   );
 }
 
 /**
  * 頭尾兩段、中間一顆鈕。`capped` 是收著時的切法，展開後畫 `rows` 的前 {@link MAX_RENDERED_LINES} 列。
+ * 給了 `weigh`（一列的字元數）就再受整張卡的字元預算限制（`fitRowCount`，#961）；讀檔卡不給，維持原樣。
  */
 function Folded<T>({
   rows,
@@ -117,16 +142,23 @@ function Folded<T>({
   unit,
   testId,
   render,
+  weigh,
 }: {
   rows: readonly T[];
   capped: { head: readonly T[]; tail: readonly T[]; hidden: number };
   unit: '行' | '列';
   testId: string;
   render: (row: T, key: number) => ReactNode;
+  weigh?: (row: T) => number;
 }) {
   const [expanded, setExpanded] = useState(false);
   const { head, tail, hidden } = capped;
-  const shown = expanded ? rows.slice(0, MAX_RENDERED_LINES) : head;
+  const limit = expanded
+    ? weigh === undefined
+      ? MAX_RENDERED_LINES
+      : Math.min(MAX_RENDERED_LINES, fitRowCount(rows, weigh))
+    : 0;
+  const shown = expanded ? rows.slice(0, limit) : head;
   return (
     <>
       {shown.map((row, at) => render(row, at))}
@@ -140,7 +172,7 @@ function Folded<T>({
         />
       )}
       {!expanded && tail.map((row, at) => render(row, head.length + hidden + at))}
-      {expanded && rows.length > MAX_RENDERED_LINES && <RenderCapNote />}
+      {expanded && rows.length > limit && <RenderCapNote shown={limit} unit={unit} />}
     </>
   );
 }
@@ -158,6 +190,7 @@ export function ToolDiff({ fragments }: { fragments: readonly DiffFragment[] }) 
         unit="行"
         testId="tool-diff-toggle"
         render={(row, key) => <DiffLine key={key} row={row} />}
+        weigh={(row) => row.text.length}
       />
     </div>
   );
@@ -283,7 +316,7 @@ function SearchLine({ row }: { row: SearchRow }) {
   return (
     <div className="px-3 whitespace-pre-wrap wrap-anywhere" data-search-row="match">
       <span className="text-muted-foreground select-none">{row.lineNumber}: </span>
-      {row.line}
+      <ClippedText text={row.line} />
     </div>
   );
 }
@@ -292,6 +325,12 @@ function searchRowKey(row: SearchRow): string {
   if (row.type === 'match') return `match:${row.fileIndex}:${row.lineNumber}`;
   if (row.type === 'file') return `file:${row.index}`;
   return `path:${row.path}`;
+}
+
+/** 搜尋卡一列畫出來的字元數：命中算行號那一小段加整行，檔案標題與路徑算路徑。 */
+function searchRowChars(row: SearchRow): number {
+  if (row.type === 'match') return String(row.lineNumber).length + 2 + row.line.length;
+  return row.path.length;
 }
 
 export function ToolSearch({ card }: { card: SearchCard }) {
@@ -308,6 +347,7 @@ export function ToolSearch({ card }: { card: SearchCard }) {
         unit="列"
         testId="tool-search-toggle"
         render={(row, key) => <SearchLine key={`${searchRowKey(row)}@${key}`} row={row} />}
+        weigh={searchRowChars}
       />
     </div>
   );

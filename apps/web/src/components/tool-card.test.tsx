@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ToolCard } from '@/components/tool-card';
+import { CARD_LINE_MAX_CHARS, CARD_MAX_CHARS } from '@/lib/card-limit';
+import { MAX_RENDERED_LINES } from '@/lib/diff-rows';
 import {
   PARTIAL_OUTPUT_HEADING,
   SUBAGENT_MAX_TOKENS_REASON,
@@ -1009,6 +1011,112 @@ describe('讀檔卡與搜尋卡（#625）', () => {
       fireEvent.click(trigger);
     }
     expect(await axeViolations(container)).toEqual([]);
+  });
+});
+
+describe('diff 卡與搜尋卡的畫面字元上限（#961）', () => {
+  function expand(name: RegExp) {
+    fireEvent.click(screen.getByRole('button', { name }));
+  }
+  const write = (content: string, meta?: unknown) =>
+    tool({
+      name: 'write_file',
+      input: JSON.stringify({ file_path: '/notes.md', content }),
+      text: 'Successfully wrote to /notes.md',
+      ...(meta === undefined ? {} : { meta }),
+    });
+  const grep = (files: { path: string; matches: { lineNumber: number; line: string }[] }[]) =>
+    tool({
+      name: 'grep',
+      input: JSON.stringify({ pattern: 'foo', glob: null }),
+      text: '（deepagents 格式的結果文字）',
+      meta: { shape: 'matches', files, truncated: false, total: 1 },
+    });
+  const head = '頭'.repeat(CARD_LINE_MAX_CHARS / 2);
+  const tail = '尾'.repeat(CARD_LINE_MAX_CHARS / 2);
+
+  it('diff：新建檔一行超長，畫頭尾各半，中間一句講沒畫幾個字', () => {
+    render(<ToolCard entry={write(`${head}${'麻'.repeat(7)}${tail}`)} beam={false} />);
+    expand(/寫入檔案/);
+    const row = screen.getByTestId('tool-diff').querySelector('[data-diff-line="add"]');
+    expect(row?.textContent).toBe(`+${head}⋯ 中間 7 字沒畫 ⋯${tail}`);
+    expect(screen.getByTestId('card-line-omitted').textContent).toBe('⋯ 中間 7 字沒畫 ⋯');
+  });
+
+  it('diff：一行剛好在上限內，原樣畫、沒有那一句', () => {
+    render(<ToolCard entry={write(`${head}${tail}`)} beam={false} />);
+    expand(/寫入檔案/);
+    expect(screen.queryByTestId('card-line-omitted')).toBeNull();
+    expect(screen.getByTestId('tool-diff').textContent).toContain(`${head}${tail}`);
+  });
+
+  it('diff：meta 帶的 diffs 一側超長也一樣收', () => {
+    const meta = {
+      operation: 'update',
+      diffs: [{ path: '/notes.md', oldText: `${head}${'麻'.repeat(3)}${tail}`, newText: '新的' }],
+    };
+    render(<ToolCard entry={write('新的', meta)} beam={false} />);
+    expand(/寫入檔案/);
+    expect(screen.getByTestId('card-line-omitted').textContent).toBe('⋯ 中間 3 字沒畫 ⋯');
+  });
+
+  it('diff：列數沒超過 5000、但全部字元超過整張卡的預算，展開後只畫前面幾列並說明', () => {
+    // 每列約 36 字元，總量是預算的三倍，但列數仍遠低於 5000（不是列數上限擋的）。
+    const count = Math.ceil((CARD_MAX_CHARS * 3) / 36);
+    expect(count).toBeLessThan(MAX_RENDERED_LINES);
+    const content = Array.from(
+      { length: count },
+      (_, at) => `第 ${at + 1} 行${'字'.repeat(30)}`,
+    ).join('\n');
+    render(<ToolCard entry={write(content)} beam={false} />);
+    expand(/寫入檔案/);
+    fireEvent.click(screen.getByTestId('tool-diff-toggle'));
+    const card = screen.getByTestId('tool-diff');
+    const drawn = card.querySelectorAll('[data-diff-line]').length;
+    expect(drawn).toBeGreaterThan(100);
+    expect(drawn).toBeLessThan(count / 2);
+    expect(card.textContent?.length).toBeLessThan(CARD_MAX_CHARS * 1.2);
+    expect(card.textContent).toContain(`只顯示前 ${drawn} 行`);
+  });
+
+  it('diff：預算內的列全畫、沒有那一句', () => {
+    const content = Array.from({ length: 12 }, (_, at) => `第 ${at + 1} 行`).join('\n');
+    render(<ToolCard entry={write(content)} beam={false} />);
+    expand(/寫入檔案/);
+    fireEvent.click(screen.getByTestId('tool-diff-toggle'));
+    expect(screen.getByTestId('tool-diff').querySelectorAll('[data-diff-line]')).toHaveLength(13);
+    expect(screen.queryByText(/只顯示前/)).toBeNull();
+  });
+
+  it('搜尋：命中行超長，畫頭尾各半，行號與冒號留著', () => {
+    const line = `${head}${'麻'.repeat(5)}${tail}`;
+    render(
+      <ToolCard
+        entry={grep([{ path: '/src/min.js', matches: [{ lineNumber: 1, line }] }])}
+        beam={false}
+      />,
+    );
+    expand(/搜尋/);
+    const row = screen.getByTestId('tool-search').querySelector('[data-search-row="match"]');
+    expect(row?.textContent).toBe(`1: ${head}⋯ 中間 5 字沒畫 ⋯${tail}`);
+  });
+
+  it('搜尋：很多短命中，展開後受整張卡的預算限制並說明', () => {
+    const count = Math.ceil((CARD_MAX_CHARS * 3) / 36);
+    expect(count).toBeLessThan(MAX_RENDERED_LINES);
+    const matches = Array.from({ length: count }, (_, at) => ({
+      lineNumber: at + 1,
+      line: `foo ${'字'.repeat(30)}`,
+    }));
+    render(<ToolCard entry={grep([{ path: '/src/a.ts', matches }])} beam={false} />);
+    expand(/搜尋/);
+    fireEvent.click(screen.getByTestId('tool-search-toggle'));
+    const card = screen.getByTestId('tool-search');
+    const drawn = card.querySelectorAll('[data-search-row]').length;
+    expect(drawn).toBeGreaterThan(100);
+    expect(drawn).toBeLessThan(count / 2);
+    expect(card.textContent?.length).toBeLessThan(CARD_MAX_CHARS * 1.2);
+    expect(card.textContent).toContain(`只顯示前 ${drawn} 列`);
   });
 });
 
