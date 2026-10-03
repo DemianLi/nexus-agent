@@ -225,6 +225,21 @@
       "flags": ["RECENT-INELIGIBLE"],
       "used_for": "M3 該傳 5b",
       "max_tag": "單側"
+    },
+    {
+      "id": "2005.07362",
+      "title": "Is Your Goal-Oriented Dialog Model Performing Really Well? Empirical Analysis of System-wise Evaluation",
+      "short": "系統層級評估",
+      "year": 2020,
+      "venue": "SIGDIAL Conferences",
+      "citations": 54,
+      "influential": 7,
+      "read_level": "full",
+      "source": "arxiv-html",
+      "read_by": "#971（對抗稽核的反證稽核員讀過全文，主線對照過引用的數字）",
+      "flags": [],
+      "used_for": "第 5 節共用理由（單獨量元件不能用來挑元件）",
+      "max_tag": "不當任何欄位的證據，只用在共用理由那一句"
     }
   ]
 }
