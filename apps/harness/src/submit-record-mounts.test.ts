@@ -6,8 +6,10 @@
  * 的是**折後**的那一個，`agent-factory.ts` 在 fold 之前已經包了兩層路由
  * （`/conversation_history/` 與 `/large_tool_results/`，各送到一顆 `TextOnlyStateBackend`），
  * 只要有 plugin 呼叫 `registry.backend.mount()` 還會再包一層。所以這裡量的不是「同一個物件」，
- * 是**行為**：同一條被路由的路徑，`submit_record` 寫進去的那一列，`read_file` 讀得到、`present`
- * 判得出它在。
+ * 是**行為**：同一條被路由的路徑，`submit_record` 寫進去的那一列，`read_file` 讀得到。
+ * **`present` 那一半在 [#951](https://github.com/DemianLi/nexus-agent/issues/951) 翻面了**：它以前也判得出
+ * 路由上的檔在，現在明著拒絕——交付的讀端只認工作區磁碟，路由上的檔記了也下載不了。`present` 仍走同一個 `fs` 服務，
+ * 只是對這兩個前綴多一道前綴判斷（`present-tool.test.ts` 在產品組裝上量）。
  *
  * 載體是 `@nexus/core` 的 `fs` 服務（`FS_SERVICE`）：組裝點提供一格，fold 折完把折出來的那一個
  * 填進去，兩顆工具被叫時才讀。
@@ -35,6 +37,7 @@ import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
+import { presentOffWorkspaceMessage } from '@nexus/plugin-present';
 import { SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
@@ -127,8 +130,9 @@ describe('submit_record 寫進去的，就是 read_file 與 present 看得到的
     // 前提：送出真的成功了，不是被拒。
     expect(seen.get(SUBMIT_RECORD_TOOL_NAME)?.status).not.toBe('error');
     expect(textOf(seen.get('read_file'))).toContain('阿明');
-    expect(seen.get('present')?.status).not.toBe('error');
-    expect(textOf(seen.get('present'))).toBe(`Presented ${historyPath}`);
+    // `present` 拒絕路由上的檔（#951）：檔在（上面 `read_file` 讀得到），但不在工作區磁碟上，交付的讀端讀不到。
+    expect(seen.get('present')?.status).toBe('error');
+    expect(textOf(seen.get('present'))).toBe(`Error: ${presentOffWorkspaceMessage(historyPath)}`);
     // 磁碟上沒有它：那一列沒有繞過路由寫進工作區。
     expect(await readdir(root)).toEqual([]);
   }, 20000);
@@ -144,7 +148,7 @@ describe('submit_record 寫進去的，就是 read_file 與 present 看得到的
     const seen = await submitThenRead(stashPath, { workspace: true, present: true });
     expect(seen.get(SUBMIT_RECORD_TOOL_NAME)?.status).not.toBe('error');
     expect(textOf(seen.get('read_file'))).toContain('阿明');
-    expect(textOf(seen.get('present'))).toBe(`Presented ${stashPath}`);
+    expect(textOf(seen.get('present'))).toBe(`Error: ${presentOffWorkspaceMessage(stashPath)}`);
     expect(await readdir(root)).toEqual([]);
   }, 20000);
 

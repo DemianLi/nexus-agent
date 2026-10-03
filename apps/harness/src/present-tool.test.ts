@@ -22,7 +22,11 @@ import { join } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
 import type { InvariantError, PluginEntry, SessionEvent, SessionRegistry } from '@nexus/core';
-import { PRESENT_NO_WORKSPACE_MESSAGE, PRESENT_TOOL_NAME } from '@nexus/plugin-present';
+import {
+  PRESENT_NO_WORKSPACE_MESSAGE,
+  PRESENT_TOOL_NAME,
+  presentOffWorkspaceMessage,
+} from '@nexus/plugin-present';
 import type { DeliverablesPresentedPayload, Event } from '@nexus/wire';
 import {
   CONTEXT_MEASURE,
@@ -43,6 +47,7 @@ import { z } from 'zod';
 import { createCliAgent } from './assembly-root.js';
 import {
   TEST_BROWSER_AUTH,
+  createMountPlugin,
   loopbackRequest,
   shippedPlugins,
   withScriptedModel,
@@ -323,6 +328,40 @@ describe('present 在真的圖上', () => {
     expect(deliveriesIn(outcome.history)).toEqual([]);
     expect(eventsOf(outcome.sessions, 'deliverables/presented')).toEqual([]);
     expect(outcome.violations).toEqual([]);
+  });
+
+  // **不在工作區磁碟上的路徑一律拒**（#951）。讀端（`deliverable-files.ts`）只對工作區做 `realpath`，路由那幾格
+  // 它讀不到；檢查端走折後的 backend，以前會看見檔案、記下交付，於是下載永遠失敗。這一組在產品組裝上量：plugin 自己的
+  // 測試用的是裸 `FilesystemBackend`，沒有路由，改不改都綠。
+  describe.each([
+    ['會話歷史', '/conversation_history/notes.md', []],
+    ['工具結果暫存', '/large_tool_results/notes.md', []],
+    // plugin 用 `backend.mount()` 掛的路由：同一個 bug 換個前綴，所以也要擋。
+    ['plugin 掛的路由', '/mounted/notes.md', [createMountPlugin('/mounted/')]],
+  ] as const)('路由上的檔：%s', (_label, path, extra) => {
+    it('檔案寫得進去也 present 不了：卡片失敗、沒有交付', async () => {
+      const outcome = await run(
+        [
+          {
+            content: '先寫。',
+            toolCalls: [{ name: 'write_file', args: { file_path: path, content: '# 內容' } }],
+          },
+          { content: '交付。', toolCalls: [presentCall([{ path }])] },
+          { content: '好了。' },
+        ],
+        { extra: [...extra] },
+      );
+      // 前提：那個檔真的寫進去了——不然拒絕的理由是「找不到」而不是「不在磁碟上」，這一格就沒有量到它要量的。
+      expectSucceeded(outcome.live, 'write_file');
+      expect(finishedOf(outcome.live, PRESENT_TOOL_NAME)).toMatchObject({
+        failed: true,
+        message: `Error: ${presentOffWorkspaceMessage(path)}`,
+      });
+      expect(deliveriesIn(outcome.live)).toEqual([]);
+      expect(deliveriesIn(outcome.history)).toEqual([]);
+      expect(eventsOf(outcome.sessions, 'deliverables/presented')).toEqual([]);
+      expect(outcome.violations).toEqual([]);
+    });
   });
 
   it('子代理交付：寫進子代理那一份，即時與重新整理都不送', async () => {

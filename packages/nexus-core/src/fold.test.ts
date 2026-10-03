@@ -1767,7 +1767,7 @@ describe('fs 服務', () => {
 
   it('不是 createFsService 建的那一種不碰：誰提供的就由誰說了算', async () => {
     const own = fakeBackend('own');
-    const fs = { backend: () => own };
+    const fs = { backend: () => own, offWorkspacePrefixes: () => [] };
     await fold([createHostServicesPlugin({ fs })], { defaultBackend: fakeBackend('default') });
     expect(marker(fs.backend())).toBe('own');
   });

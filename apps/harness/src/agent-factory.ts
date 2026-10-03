@@ -665,7 +665,16 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     ),
     // **工具拿 backend 的那一格**（#694）：這裡先佔位，`foldRegistry` 折完把折出來的那一個填進去，
     // `present` 與 `submit_record` 被叫時才讀。理由見 `@nexus/core` 的 `fs-service.ts`。
-    createHostServicesPlugin({ fs: createFsService() }, 'fs'),
+    createHostServicesPlugin(
+      {
+        fs: createFsService({
+          // 這兩格是組裝點在 fold 之前包的（`withToolResultStash`／`withConversationHistory`），不在工作區磁碟上；
+          // 交付的讀端只認磁碟，`present` 靠這份清單拒掉它們（#951）。
+          offWorkspacePrefixes: [TOOL_RESULT_STASH_PREFIX, CONVERSATION_HISTORY_PREFIX],
+        }),
+      },
+      'fs',
+    ),
     ...options.plugins,
     ...(delegation === undefined ? [] : [delegation.entry()]),
   ];
