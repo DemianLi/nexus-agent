@@ -19,6 +19,8 @@
 
 import { request as httpRequest } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import v8 from 'node:v8';
+import vm from 'node:vm';
 import { THREADS_PATH } from '@nexus/wire';
 import { TEST_BROWSER_AUTH, testSessionCookie } from '../fixtures.js';
 import { createWireHandler } from '../wire-handler.js';
@@ -37,6 +39,11 @@ export interface DeliveryOptions {
   readonly concurrency: number;
   /** handler 最多撐多久（毫秒）；沒等到中止就算「沒收到」。 */
   readonly holdMs: number;
+  /**
+   * 量的期間每隔幾毫秒強制做一次完整的垃圾回收，預設 0（不強制）。缺陷要等一次完整回收才發作，強制它就不必靠運氣
+   * （`subscriber-leak.ts` 用 25 毫秒，修前漏 396–400／400）。
+   */
+  readonly gcEveryMs?: number;
   /** 換一份 `startWireServer`（例如修前的那一版）。預設是現行的。 */
   readonly startWireServer?: StartWireServer;
 }
@@ -47,6 +54,16 @@ export interface DeliveryResult {
   readonly noticed: number;
   /** 撐到 `holdMs` 都沒收到的次數。 */
   readonly lost: number;
+}
+
+/** 每隔 `everyMs` 毫秒強制一次完整的垃圾回收；回傳停掉它的函式。 */
+export function startForcedGc(everyMs: number): () => void {
+  v8.setFlagsFromString('--expose-gc');
+  const gc = vm.runInNewContext('gc') as () => void;
+  const timer = setInterval(gc, everyMs);
+  return () => {
+    clearInterval(timer);
+  };
 }
 
 function churn(round: number): void {
@@ -125,6 +142,7 @@ export async function measureAbortDelivery(options: DeliveryOptions): Promise<De
   };
 
   const server = await start({ handler: options.shape === 'sse' ? sseHandler : listHandler });
+  const stopGc = (options.gcEveryMs ?? 0) > 0 ? startForcedGc(options.gcEveryMs!) : undefined;
   try {
     const url = new URL(server.url);
     let issued = 0;
@@ -156,6 +174,7 @@ export async function measureAbortDelivery(options: DeliveryOptions): Promise<De
       await new Promise((resolve) => setTimeout(resolve, 20));
     }
   } finally {
+    stopGc?.();
     await server.close();
   }
   return { total: options.total, noticed, lost };

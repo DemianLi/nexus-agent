@@ -20,6 +20,7 @@ const { values } = parseArgs({
     total: { type: 'string', default: '400' },
     concurrency: { type: 'string', default: '16' },
     hold: { type: 'string', default: '1500' },
+    'gc-every': { type: 'string', default: '0' },
     shape: { type: 'string', default: 'list,sse' },
     'wire-server': { type: 'string' },
   },
@@ -39,6 +40,7 @@ for (const shape of values.shape!.split(',') as DeliveryShape[]) {
     total: Number(values.total),
     concurrency: Number(values.concurrency),
     holdMs: Number(values.hold),
+    gcEveryMs: Number(values['gc-every']),
     ...(startWireServer !== undefined && { startWireServer }),
   });
   console.log(
