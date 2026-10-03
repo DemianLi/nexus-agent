@@ -909,6 +909,89 @@ describe('斜線命令', () => {
   });
 });
 
+describe('斜線命令回應讓位給伺服器自己排的輪（#947）', () => {
+  const goalCommand: SlashDescriptor = {
+    name: 'goal',
+    description: '設目標。',
+    input: { hint: '[目標]' },
+  };
+  const goalReply = '目標建好了　狀態：進行中';
+
+  beforeEach(stubCmdkLayout);
+
+  async function typeGoal() {
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '/goal 做完' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+  }
+
+  it('回應畫出來之後伺服器開了一輪：跑著時講執行中，收尾後講就緒，命令回應不再冒出來', async () => {
+    seq = 0;
+    const { client, downlink, opened } = fakeClient([], {
+      commands: [goalCommand],
+      run: () => ({ kind: 'success', command_id: 'cmd-1', text: goalReply }),
+    });
+    render(<App client={client} />);
+    await typeGoal();
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain(goalReply));
+
+    downlink.push(opened[0]!, [downlink.lifecycleFrame('running')]);
+    await waitFor(() => expect(screen.getByRole('status').textContent).not.toContain(goalReply));
+    downlink.push(opened[0]!, [downlink.lifecycleFrame('completed')]);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('就緒'));
+  });
+
+  it('那一輪被中止：收尾後講已停止，不是命令回應', async () => {
+    seq = 0;
+    const { client, downlink, opened } = fakeClient([], {
+      commands: [goalCommand],
+      run: () => ({ kind: 'success', command_id: 'cmd-1', text: goalReply }),
+    });
+    render(<App client={client} />);
+    await typeGoal();
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain(goalReply));
+
+    downlink.push(opened[0]!, [downlink.lifecycleFrame('running')]);
+    await waitFor(() => expect(screen.getByRole('status').textContent).not.toContain(goalReply));
+    downlink.push(opened[0]!, [
+      downlink.pushedFrame('lifecycle', 'lifecycle', {
+        event: 'failed',
+        graph_name: 'root',
+        error: '這一輪被中止了',
+        aborted: true,
+      }),
+    ]);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('已停止'));
+    expect(screen.getByRole('status').textContent).not.toContain(goalReply);
+  });
+
+  it('命令的回應比那一輪晚到：已經有輪開跑過了，就不畫那句，收尾後講就緒', async () => {
+    seq = 0;
+    const { client, downlink, opened } = fakeClient([], {
+      commands: [goalCommand],
+      run: () => ({ kind: 'success', command_id: 'cmd-1', text: goalReply }),
+    });
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slashRun = client.slashRun;
+    client.slashRun = async (...args) => {
+      await gate;
+      return slashRun(...args);
+    };
+    render(<App client={client} />);
+    await typeGoal();
+
+    downlink.push(opened[0]!, [downlink.lifecycleFrame('running')]);
+    await waitFor(() => expect(screen.getByRole('status').textContent).not.toContain('就緒'));
+    release();
+    downlink.push(opened[0]!, [downlink.lifecycleFrame('completed')]);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe('就緒'));
+    expect(screen.queryByText(goalReply)).toBeNull();
+  });
+});
+
 describe('停止（#276）', () => {
   it('一輪在跑時出現停止，按下去送 run.cancel', async () => {
     seq = 0;
