@@ -87,6 +87,8 @@ def main():
         corpus += open(f, encoding='utf-8').read()
     corpus = re.sub(r'(?<=\d),(?=\d{3})', '', corpus)
     n_derived = n_nocite_ok = 0
+    spine_a = next(i for i, l in enumerate(lines) if l.startswith('### 主幹五條箭頭'))
+    spine_b = next(i for i, l in enumerate(lines) if l.startswith('## 6　組裝順序'))
     allowed_prefix = ('- **怎麼驗收**', '- **前提**', '- **要自己量什麼**', '- **推論依據**')
     for row in rep['rows']:
         line = lines[row['line'] - 1]
@@ -104,7 +106,9 @@ def main():
                 ok = True
             if row['line'] == 3:  # 206 篇：調研總數，見 README
                 ok = True
-            if re.search(r'#\d{3}|\d+ 列', row['sentence']):  # 地圖／issue 編號與本文自己數的列數（第 6 項另驗）
+            # 第 5 節主幹契約與附錄 D 導言：地圖編號、本文自己數的列數（第 6 項另驗）、M2／M3 的「查過」條目（查詢命中數不是論文的數字）
+            in_spine = spine_a <= row['line'] - 1 < spine_b or lines[row['line'] - 1].startswith('地圖 #')
+            if in_spine and (re.search(r'#\d{3}|\d+ 列', row['sentence']) or lines[row['line'] - 1].lstrip().startswith('- 查過')):
                 ok = True
             if ok:
                 n_nocite_ok += 1

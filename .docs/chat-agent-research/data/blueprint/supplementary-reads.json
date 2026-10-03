@@ -14,7 +14,7 @@
       "read_by": "#967",
       "flags": ["F5：單次、溫度 0、無變異數"],
       "used_for": "M2 該傳 1（記憶摘要對不給記憶）、不能傳 N1、該傳 3、不能傳 N2",
-      "max_tag": "直接（有雜訊旗標，範圍限記憶摘要）"
+      "max_tag": "直接（帶毛病：F2；範圍限記憶摘要）"
     },
     {
       "id": "2401.16745",
@@ -186,7 +186,7 @@
       "title": "Fidelity Is Not Enough: Dispatch-Level Instrumentation for Agentic Datasheet Extraction",
       "short": "Fidelity Is Not Enough",
       "year": 2026,
-      "venue": "無",
+      "venue": "EMNLP 2026 Industry Track（論文自述，S2 未登錄）",
       "citations": 0,
       "influential": 0,
       "read_level": "full",
