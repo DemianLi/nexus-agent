@@ -58,9 +58,12 @@
   --font-sans:
     'Google Sans Flex Variable', 'Noto Sans TC Variable', -apple-system, BlinkMacSystemFont,
     'PingFang TC', sans-serif;
+  /* 尾端的三個 emoji 字型（#979）：堆疊裡沒有字型涵蓋的符號（旗、☺、❤ 之類）原本要走系統回退，
+     每個新頁面第一次約 40ms，裸旗 U+1F3F3 每含它的一列還要約 1.6ms；明寫之後兩項都回到地板。
+     只放在最尾，所以前面字型涵蓋的字不受影響。--font-sans 補了沒有效果，沒有改。 */
   --font-mono:
     'Google Sans Code Variable', 'Noto Sans TC Variable', ui-monospace, SFMono-Regular, Menlo,
-    monospace;
+    monospace, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
 
   /* 字重只用 400／500，semibold 以上一律落在 500 */
   --font-weight-semibold: 500;
