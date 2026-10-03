@@ -208,5 +208,6 @@ export function fakeDownlink() {
     inboxFrame,
     titleFrame,
     lifecycleFrame,
+    pushedFrame,
   };
 }

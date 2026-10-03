@@ -278,6 +278,15 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [slashCommands, setSlashCommands] = useState<readonly SlashDescriptor[]>([]);
   const [slashError, setSlashError] = useState<string | undefined>(undefined);
   const [slashNotice, setSlashNotice] = useState<string | undefined>(undefined);
+  /** 這條會話開跑過幾輪（`status` 變成 `running` 的次數）。命令回應靠它認得「發出命令之後有輪開跑了」。 */
+  const turnsStarted = useRef(0);
+  // 命令回應只在「沒有輪跑著」的時候畫，所以一輪開跑就是它退場的時刻——不分人送的還是伺服器自己排的
+  // （目標續行，#947）。只靠人的動作收，伺服器排的那一輪跑完它又冒出來，蓋掉「就緒」「已停止」。
+  useEffect(() => {
+    if (state.status !== 'running') return;
+    turnsStarted.current += 1;
+    setSlashNotice(undefined);
+  }, [state.status]);
   /** 往前翻要帶回去的兩格，跟畫面要的那三格放一起。 */
   const [history, setHistory] = useState<
     (HistoryView & { readonly firstSeq: number; readonly throughSeq: number }) | undefined
@@ -444,6 +453,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     async (line: string) => {
       setSlashError(undefined);
       setSlashNotice(undefined);
+      const turnsBefore = turnsStarted.current;
       let outcome: SlashRunOutcome;
       try {
         outcome = await clientRef.current.slashRun(threadId, line);
@@ -465,6 +475,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         setSlashError(outcome.text);
         return;
       }
+      // 命令回來之前伺服器已經排了一輪開跑（`/goal` 建好就自己續行）：那一輪的結果才是現況，回應晚到
+      // 也不畫，否則它在那一輪收尾後留在狀態列（#947）。
+      if (turnsStarted.current !== turnsBefore) return;
       // 成功而沒話說時什麼都不顯示，跟 CLI 一樣（`result.text` 是選配的）。
       setSlashNotice(outcome.text);
     },
