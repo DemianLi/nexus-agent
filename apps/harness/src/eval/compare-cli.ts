@@ -34,10 +34,11 @@ import {
 } from './compare.js';
 import { parseCases, parseModels, parseOut, parseSamples } from './cli-args.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
+import { floorHolds, formatFloor, summarizeFloor } from './floor.js';
 import { startResultFile, type ResultWriter } from './result-file.js';
 import { MEASURED_MODELS, type MeasuredModel } from './tiers.js';
 
-const USAGE = `用法：eval:compare [--samples <n>] [--cases <id,id,...>] [--models <label,...>] [--out <dir>]
+const USAGE = `用法：eval:compare [--samples <n>] [--cases <id,id,...>] [--models <label,...>] [--out <dir>] [--floor-only]
 
   --samples <n>        每題重複幾次，預設 1。取樣是隨機的（temperature 1），
                        n=1 的數字是指示性的，不是定論。
@@ -45,6 +46,8 @@ const USAGE = `用法：eval:compare [--samples <n>] [--cases <id,id,...>] [--mo
                        ${BENCHMARK.map((entry) => entry.id).join(' / ')}
   --models <label,...> 只跑指定的模型，預設全部。短名見 src/eval/tiers.ts：
                        ${MEASURED_MODELS.map((model) => model.label).join(' / ')}
+  --floor-only         只印平凡地板（三個不需要模型的 agent 在這份題目上的成功題數），
+                       不連外、不需要憑證、不寫結果檔。
   --out <dir>          結果檔放哪個目錄，預設 apps/harness/eval-results/（不進版控）。
                        每次執行逐筆寫進一份 .jsonl，開頭記 commit、題庫與評分程式版本、
                        取樣設定；沒有最後一行 footer 的檔是沒跑完的。
@@ -59,7 +62,7 @@ function formatSpread(spread: { mean: number; min: number; max: number } | undef
   return `${mean} (${spread.min.toFixed(2)}–${spread.max.toFixed(2)})`;
 }
 
-function printSummary(summary: TierSummary<MeasuredModel>): void {
+function printSummary(summary: TierSummary<MeasuredModel>, floor: readonly TierSummary[]): void {
   const { tier } = summary;
   const failed = Object.entries(summary.failures)
     .map(([reason, count]) => `${reason}×${count}`)
@@ -68,6 +71,10 @@ function printSummary(summary: TierSummary<MeasuredModel>): void {
   console.log(`\n${tier.label}  ${tier.modelId}`);
   console.log(`  上次量它    ${tier.measuredOn} —— ${tier.note}`);
   console.log(`  評到分      ${summary.scored} 次${failed === '' ? '' : `，失敗 ${failed}`}`);
+  // **「這題成功」不是下面「工具成功率」那一欄**：後者只問該叫的叫了沒；這一項要三欄全滿、
+  // 多叫沒超過容許值（見 `scorers.ts` 的 isCaseSuccess）。分母是評到分的次數。
+  console.log(`  這題成功    ${summary.successes}/${summary.scored}`);
+  console.log(`    地板      ${formatFloor(floor)}（每題一次，同一份題目）`);
   // 前兩欄的 count 不一定等於「評到分」的次數：期望零筆呼叫的題目在這兩欄是
   // 「沒有可判的」，被濾掉了（見 `compare.ts` 的 TierSummary）。所以少於總數時印出來。
   console.log(
@@ -138,6 +145,7 @@ async function runAll(
   cases: readonly BenchmarkCase[],
   credentials: CredentialService,
   writer: ResultWriter,
+  floor: readonly TierSummary[],
 ): Promise<void> {
   const reports = await compareTiers(models, {
     // **只換模型 id**（#545）：其餘四格是 schema 預設，不跟任何一台部署的設定走——量的是出貨
@@ -151,7 +159,7 @@ async function runAll(
       printOutcome(tier, outcome);
     },
   });
-  for (const report of reports) printSummary(summarize(report));
+  for (const report of reports) printSummary(summarize(report), floor);
 }
 
 async function main(argv: readonly string[]): Promise<void> {
@@ -162,6 +170,16 @@ async function main(argv: readonly string[]): Promise<void> {
 
   const samples = parseSamples(argv);
   const cases = parseCases(argv);
+
+  if (argv.includes('--floor-only')) {
+    const floor = await summarizeFloor(cases);
+    console.log(`地板（這題成功，${cases.length} 題）：${formatFloor(floor)}`);
+    if (!floorHolds(floor, cases.length)) {
+      console.log('**地板不是全 0/題數** —— 有平凡 agent 被判成功，或有執行沒跑完。');
+      process.exitCode = 1;
+    }
+    return;
+  }
   const models = parseModels(argv, MEASURED_MODELS);
   const out = parseOut(argv);
   const { credentials, launchEnv } = loadLiveLaunchEnv();
@@ -196,7 +214,18 @@ async function main(argv: readonly string[]): Promise<void> {
   });
   console.log(`結果檔：${writer.path}（逐筆寫入）`);
 
-  await runAll(models, samples, cases, credentials, writer);
+  // 地板先跑：零憑證、不連外，幾十毫秒。跑在花錢之前，地板被破了（有平凡 agent 被判成功）
+  // 就在這裡看得到，不必等一輪真模型跑完。
+  const floor = await summarizeFloor(cases);
+  console.log(`地板（三個不需要模型的平凡 agent，這題成功）：${formatFloor(floor)}`);
+  if (!floorHolds(floor, cases.length)) {
+    console.log(
+      '**注意：地板不是全 0/題數 —— 有平凡 agent 被判成功，或有執行沒跑完。** ' +
+        '這一輪的「這題成功」不可信，先查評分器（floor.test.ts 在 CI 應該已經紅了）。',
+    );
+  }
+
+  await runAll(models, samples, cases, credentials, writer, floor);
 
   const saved = writer.finish();
   console.log(

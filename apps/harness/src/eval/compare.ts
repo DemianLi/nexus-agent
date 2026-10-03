@@ -154,8 +154,14 @@ export interface TierReport<T extends ModelUnderTest = ModelUnderTest> {
 }
 
 export interface CompareOptions<T extends ModelUnderTest = ModelUnderTest> {
-  /** 拿 model id 換一個 model。真的比較時是 `createLiveModel`，測試時是假模型。 */
-  readonly createModel: (modelId: string) => AgentModel;
+  /**
+   * 拿 model id 換一個 model。真的比較時是 `createLiveModel`，測試時是假模型。
+   *
+   * 第二個參數是這次要跑的題目：真模型不看它（一個 id 就是一個模型），平凡地板那幾個
+   * agent 看它 —— 隨機合法動作要靠題目 id 定種子，才每題各自確定又彼此不同
+   * （見 [`floor.ts`](./floor.ts)）。
+   */
+  readonly createModel: (modelId: string, testCase: BenchmarkCase) => AgentModel;
   /** 每題重複幾次。預設 1。 */
   readonly samples?: number;
   /** 每跑完一次就回報一次，讓呼叫端邊跑邊印 —— 一輪比較是分鐘級的。 */
@@ -238,7 +244,7 @@ async function runOnce(
 
   try {
     const run = await runBenchmarkCase(testCase, {
-      model: options.createModel(tier.modelId),
+      model: options.createModel(tier.modelId, testCase),
       plugins: benchmarkPlugins(),
       systemPrompt: BENCHMARK_SYSTEM_PROMPT,
       recursionLimit: options.recursionLimit ?? EVAL_RECURSION_LIMIT,
@@ -343,6 +349,13 @@ export interface TierSummary<T extends ModelUnderTest = ModelUnderTest> {
   readonly tier: T;
   /** 真的評到分的次數。 */
   readonly scored: number;
+  /**
+   * 判成「這題成功」的次數（見 {@link CaseScore.success}），分母是 {@link scored}。
+   *
+   * **失敗的執行不算成功也不算不成功** —— 沒有資料，跟其他欄的規矩一樣。它與前幾欄的
+   * 差別是它沒有平均與全距：它是個計數，要看的是「幾題做成功了」。
+   */
+  readonly successes: number;
   /** 各類失敗的次數。沒有的類別不會出現。 */
   readonly failures: Readonly<Partial<Record<FailureReason, number>>>;
   /**
@@ -438,6 +451,7 @@ export function summarize<T extends ModelUnderTest>(report: TierReport<T>): Tier
   return {
     tier: report.tier,
     scored: scored.length,
+    successes: scored.filter((outcome) => outcome.score.success).length,
     failures,
     ...spreadOf('toolCallSuccess', present(scored.map((o) => o.score.toolCallSuccess))),
     ...spreadOf('argumentCorrectness', present(scored.map((o) => o.score.argumentCorrectness))),
