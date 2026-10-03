@@ -181,7 +181,7 @@ describe('成績單', () => {
     );
     // **四個欄位一個都不該在。** 缺席的理由各不相同（沒有可判的／沒要求／沒回報），
     // 但填進去的後果一樣：一個看起來像測量值的數字。
-    expect(score).toEqual({ caseId: 'bare', extraToolCalls: 0 });
+    expect(score).toEqual({ caseId: 'bare', success: false, extraToolCalls: 0 });
     for (const key of ['toolCallSuccess', 'argumentCorrectness', 'mentions', 'cost']) {
       expect(key in score).toBe(false);
     }

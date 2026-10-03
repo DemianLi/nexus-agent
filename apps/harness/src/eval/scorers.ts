@@ -141,11 +141,48 @@ export function readCost(run: BenchmarkRun): TokenUsage | undefined {
  */
 export interface CaseScore {
   readonly caseId: string;
+  /**
+   * **這題成功**：有可判的那幾欄（工具成功率、參數正確性、回覆提到）全是 `1`，而且多叫
+   * 次數沒超過這題宣告的容許值（`maxExtraToolCalls`，沒宣告就是 0），而且至少有一欄是
+   * 真的判過的。
+   *
+   * 它**不是**「工具成功率」那一欄 —— 那一欄只問「該叫的叫了沒」。一個把每個工具各叫一遍、
+   * 回覆裡塞滿關鍵字的 agent 在那一欄與回覆提到那一欄都是 `1.00`；只有參數與多叫次數
+   * 擋得住它（見 {@link isCaseSuccess}）。
+   */
+  readonly success: boolean;
   readonly toolCallSuccess?: number;
   readonly argumentCorrectness?: number;
   readonly extraToolCalls: number;
   readonly mentions?: number;
   readonly cost?: TokenUsage;
+}
+
+/**
+ * 這題成功了沒。
+ *
+ * 每一項都是獨立承重的：少叫、參數錯、回覆沒講出來、多叫過了容許值，任何一項單獨出現
+ * 都判不成功（`success.test.ts` 逐項釘住，拿掉哪一項哪一條就紅）。
+ *
+ * **一欄都沒判到的題目判不成功**，不是空洞地成功：全部缺席時「每一欄都是 1」是空的真，
+ * 等於把「沒有可判的」填成滿分 —— 本檔開頭那條規矩的反面。資料集有測試擋著不讓這種
+ * 題目進來；這裡再擋一次，是因為自訂的題目清單不經過那條測試。
+ */
+export function isCaseSuccess(
+  testCase: BenchmarkCase,
+  columns: {
+    readonly toolCallSuccess?: number | undefined;
+    readonly argumentCorrectness?: number | undefined;
+    readonly mentions?: number | undefined;
+    readonly extraToolCalls: number;
+  },
+): boolean {
+  const judged = [columns.toolCallSuccess, columns.argumentCorrectness, columns.mentions].filter(
+    (value): value is number => value !== undefined,
+  );
+  if (judged.length === 0) return false;
+  if (!judged.every((value) => value === 1)) return false;
+  return columns.extraToolCalls <= (testCase.expected.maxExtraToolCalls ?? 0);
 }
 
 /**
@@ -160,11 +197,18 @@ export function scoreCase(testCase: BenchmarkCase, run: BenchmarkRun): CaseScore
   const argumentCorrectness = scoreArgumentCorrectness(testCase, run);
   const mentions = scoreMentions(testCase, run);
   const cost = readCost(run);
+  const extraToolCalls = countExtraToolCalls(testCase, run);
   return {
     caseId: testCase.id,
+    success: isCaseSuccess(testCase, {
+      toolCallSuccess,
+      argumentCorrectness,
+      mentions,
+      extraToolCalls,
+    }),
     ...(toolCallSuccess === undefined ? {} : { toolCallSuccess }),
     ...(argumentCorrectness === undefined ? {} : { argumentCorrectness }),
-    extraToolCalls: countExtraToolCalls(testCase, run),
+    extraToolCalls,
     ...(mentions === undefined ? {} : { mentions }),
     ...(cost === undefined ? {} : { cost }),
   };
