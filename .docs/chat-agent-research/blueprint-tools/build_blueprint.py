@@ -2,7 +2,7 @@
 """由 data/blueprint/T1..T8.json 與手寫段落（blueprint-parts/*.md）組出 blueprint.md。
 
 用法（在研究目錄 .docs/chat-agent-research/ 下）：python3 blueprint-tools/build_blueprint.py
-只用標準函式庫。決策卡、收斂度表、邊介面契約、開放決策匯整、附錄全由 JSON 機械產生，不手寫。
+只用標準函式庫。決策卡、收斂度表、邊介面契約、開放決策匯整、附錄全由 JSON 機械產生，不手寫；唯一手寫的契約是主幹 M1–M5（blueprint-parts/edge-spine.md，推論）。
 
 等級規則：取「依 SPEC 由 flaws／unverified 重算的候選等級」與「子代理給的等級」中較低者（A > B > C）。
 A 只是候選：獨立性與藏起來的毛病由稽核員另查；稽核降級的結果記在 data/blueprint/audit-overrides.json，
@@ -214,8 +214,8 @@ def main():
         for x in sorted(rest, key=lambda x: x['id']):
             out.append(open_card(x) if x['type'] == 'open' else card(x, final_grade(x, ov), ov))
 
-    out.append('## 5　六條邊的介面契約\n')
-    out.append('每條邊傳什麼、不能傳什麼，逐字彙整自各節點 JSON 的 `edge_interfaces`。T3 與 T8 不是任何一條邊的端點（見 README〈六條邊〉），所以 T3 的項目是它的監控器對 E3 的貢獻，不是地圖上的正式端點。\n')
+    out.append('## 5　介面契約：六條邊與主幹五條箭頭\n')
+    out.append('每條邊傳什麼、不能傳什麼，逐字彙整自各節點 JSON 的 `edge_interfaces`。T3 與 T8 不是任何一條邊的端點（見 README〈六條邊〉），所以 T3 的項目是它的監控器對 E3 的貢獻，不是地圖上的正式端點。E1–E6 之後另有主幹 M1–M5 五條箭頭的契約，那一段是推論，不是彙整。\n')
     for e in edges:
         out.append(f"### {e['key']} {e['label']}（{e['from']} → {e['to']}）：{e['meaning']}\n")
         n = 0
@@ -233,6 +233,8 @@ def main():
         out.append('')
         if os.path.exists(os.path.join(PARTS, f"edge-{e['key']}.md")):
             out.append(part(f"edge-{e['key']}.md"))
+
+    out.append(part('edge-spine.md'))
 
     out.append(part('assembly.md'))
 
@@ -267,7 +269,7 @@ def main():
     out.append('- 稽核員 3 指出的欄位修補只處理了預設值錯誤、判準模糊與邊介面缺口等有行號依據的項目；卡片本文由子代理寫成，許多句子較長，沒有為了簡短而改寫。')
     out.append('- 第 6 節的組裝順序整節是推論，沒有任何實驗支持；第 5 節的邊介面缺口與連結鍵建議也是推論。')
     out.append('- 這份方案不是一份完整的「觀測 agent」方案：T3 的可觀測性那一塊，追蹤與日誌、白箱監控在 T3 計入的論文裡是零篇，非安全類的異常偵測在 T3 計入的論文裡只有 AgentMonitor 碰到一角，監控的證據以安全面為主；T3 的建議做型卡（T3-01、T3-03、T3-09、T3-11）最高是 B，A 級只有量測規則 T3-07，非安全類的異常偵測只能寫成待決（T3-12）。')
-    out.append('- 方案只涵蓋自我進化之前的底座：圖上沒有從評估或分數回到 agent 的更新箭頭，所以「量到→提出改動→驗證改動→收進去」的閉環不在範圍內（見第 2 節）；圖上主幹的五條箭頭也沒有介面契約。')
+    out.append('- 方案只涵蓋自我進化之前的底座：圖上沒有從評估或分數回到 agent 的更新箭頭，所以「量到→提出改動→驗證改動→收進去」的閉環不在範圍內（見第 2 節）；圖上主幹的五條箭頭沒有任何論文當邊研究過，第 5 節 M1–M5 的契約全是從相鄰的卡推出來的，等級 C，其中 M2 最薄，只有 M4 有可直接執行的驗收（T7-10，本身也是推論）。')
     out.append('- 八份抽取是在不同時間、規格逐步補充下進行的（T1–T4 開跑時沒有「試點後補充」那一節），等級雖已統一重算並取較低者，邊界案例的寬嚴仍可能不一致。')
     out.append('')
     out.append('## 附錄 A　證據索引\n')
