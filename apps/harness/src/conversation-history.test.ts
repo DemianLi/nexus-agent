@@ -774,6 +774,45 @@ describe('舊格式', () => {
 });
 
 /**
+ * 還在跑的那一輪不是舊格式（[#953](https://github.com/DemianLi/nexus-agent/issues/953)）：模型呼叫已經開始、回覆要等它結束才落盤，
+ * 整份日誌看起來就是「叫過模型、沒有回覆」。這一組每一格都有對照——只認「尾巴是開著的輪」而不管前面，真的舊格式也會被吞掉。
+ */
+describe('還在跑的那一輪', () => {
+  const modelStart: Draft = { type: 'model/start', data: {} };
+
+  it('新會話第一句的回覆還沒落盤：不是舊格式，畫面是執行中、人話在', () => {
+    const events = log(human('跑一下'), modelStart);
+    expect(historyPage(events).legacy).toBe(false);
+    const state = screen(events);
+    expect(state.status).toBe('running');
+    expect(state.entries.map(line)).toEqual(['human:跑一下']);
+  });
+
+  it('對照：同一份日誌收了尾、仍沒有回覆，就是舊格式', () => {
+    const events = log(human('跑一下'), modelStart, { type: 'model/end', data: {} }, turnEnd);
+    expect(historyPage(events).legacy).toBe(true);
+  });
+
+  it('工具跑到一半（回覆已落盤、結果還沒到）：不是舊格式，畫面是執行中', () => {
+    const events = log(human('跑一下'), modelStart, reply('先回聲。', ['c1']), call('c1'));
+    expect(historyPage(events).legacy).toBe(false);
+    expect(screen(events).status).toBe('running');
+  });
+
+  it('前面有格式 8 的輪：開著的那一輪不蓋掉它，照舊報舊格式', () => {
+    const events = log(
+      human('舊的一輪'),
+      modelStart,
+      { type: 'model/end', data: {} },
+      turnEnd,
+      human('新的一輪'),
+      modelStart,
+    );
+    expect(historyPage(events).legacy).toBe(true);
+  });
+});
+
+/**
  * **一頁的位元組上限**（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
  *
  * 則數上限綁不住位元組量——一則底下可以掛任意多張工具卡。這一組釘的是那個上限與**輪邊界**的關係：

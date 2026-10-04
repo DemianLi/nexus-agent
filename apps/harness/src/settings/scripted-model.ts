@@ -12,7 +12,7 @@
  *   config: { provider: my-script }
  * ```
  *
- * 腳本是資料：`content`、可選的 `toolCalls`（`name`／`args`／`id`）、`usage`、`error`，欄位照 `ScriptedChatModel`。
+ * 腳本是資料：`content`、可選的 `toolCalls`（`name`／`args`／`id`）、`usage`、`error`、`tokenDelayMs`，欄位照 `ScriptedChatModel`。
  * 沒有用到 `shared` 這種非資料的選項，要用的測試留在手搭的組裝上。
  *
  * 形狀照 dsh 的 `cli-mock-llm`（`packages/test-support/loader-smoke/tests/fixtures/cli-mock-llm.ts:19`）：一顆
@@ -42,6 +42,7 @@ const turnSchema = z.strictObject({
   toolCalls: z.array(toolCallSchema).optional(),
   usage: z.strictObject({ inputTokens: z.number(), outputTokens: z.number() }).optional(),
   error: z.string().optional(),
+  tokenDelayMs: z.number().int().nonnegative().optional(),
 });
 
 /** 一格。腳本不能空：空腳本的第一次呼叫就耗盡，載入期擋掉比跑到才錯好讀。 */
