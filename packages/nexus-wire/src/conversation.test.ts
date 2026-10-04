@@ -105,6 +105,35 @@ describe('折疊器', () => {
     expect(twice.entries.length).toBe(1);
   });
 
+  it('同一則回覆的第二個開頭不再長一格（#953：歷史已有它、下行又補送一次）', () => {
+    seq = 0;
+    // 歷史那一側：`run_id` 是 `history-<seq>`、`id` 是日誌記的訊息 id；補送那一側：`run_id` 是即時的 uuid、`id` 同上。
+    const history: Event[] = [
+      frame('messages', [], {
+        event: 'message-start',
+        role: 'ai',
+        run_id: 'history-7',
+        id: 'run-X',
+      }),
+      frame('messages', [], {
+        event: 'content-block-delta',
+        index: 0,
+        delta: { type: 'text-delta', text: '講完了' },
+        run_id: 'history-7',
+      }),
+      frame('messages', [], { event: 'message-finish', reason: 'stop', run_id: 'history-7' }),
+    ];
+    const replayed = text('X', [], '講完了');
+    const state = reduceAll(reduceAll(emptyConversation(), history), replayed);
+    expect(aiEntries(state)).toEqual([{ text: '講完了', attribution: { kind: 'root' } }]);
+  });
+
+  it('不同訊息 id 的兩則照常各長一格', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [...text('a', [], '一'), ...text('b', [], '二')]);
+    expect(aiEntries(state).map((entry) => entry?.text)).toEqual(['一', '二']);
+  });
+
   it('seq 退回去的 frame 一律丟掉', () => {
     seq = 0;
     const state = reduceAll(emptyConversation(), text('one', ['model_request:x'], '嗨'));
