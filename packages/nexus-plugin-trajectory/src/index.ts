@@ -15,7 +15,13 @@
  *
  * ## 範圍
  *
- * v1 只折 **root** 那份日誌（通道的折疊器也只折 root）。子代理在 `subagent/catalog` 節點上以連結出現，不展開。
+ * 兩個單元都宣告 `children: true`（[#1070](https://github.com/DemianLi/nexus-agent/issues/1070)）：root 與**每個子代理自己的日誌**各折一份，
+ * 同一個 `apply`、同樣的上限。子代理那份在 web 的 `subagentProjections[runId]`；root 軌跡上派它的那顆工具帶 `subagent` 連結
+ * （`runId`、`childId`、`mode`），兩邊靠 `runId` 接起來。**兩個單元要一起展開**：子代理的呼叫上記的 `system`／`header` 是它自己
+ * 日誌的 `seq`，快照得跟著它折。
+ *
+ * 前景子代理的日誌沒有 `turn/start`（從第一次模型呼叫就開始），軌跡從那次呼叫開一輪 `kind: 'run'`，沒有 `end`；背景的有輪，
+ * 照一般的輪折。見 {@link ./trajectory.ts} 的 `startRun`。
  *
  * @module
  */
