@@ -17,7 +17,7 @@ import {
   repairInvalidToolCalls,
 } from './invalid-tool-args.js';
 import { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
-import { INVALID_ARGS, toolErrorOf } from './tool-events.js';
+import { INVALID_ARGS, markToolError, toolErrorOf, UNKNOWN_TOOL } from './tool-events.js';
 
 const RAW = '{"text": 嗨}';
 
@@ -218,6 +218,53 @@ describe('拒絕：照常派發，工具換成同名的樁', () => {
       return 'base';
     });
     expect(handed).toBe(request);
+  });
+});
+
+/**
+ * 未知工具的碼在這一層標（[#1024](https://github.com/DemianLi/nexus-agent/issues/1024)）：交到這裡時還沒有工具的
+ * 那次，基座回的錯誤標 `UNKNOWN_TOOL`；有工具的、成功的、已經有碼的都不動。
+ */
+describe('未知工具：基座回的錯誤在這一層標 UNKNOWN_TOOL', () => {
+  const wrapToolCall = (
+    createInvalidToolArgsMiddleware() as unknown as {
+      wrapToolCall: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
+    }
+  ).wrapToolCall;
+  const notFound = () =>
+    new ToolMessage({
+      content: 'Error: nope is not a valid tool',
+      tool_call_id: 'call_1',
+      name: 'nope',
+      status: 'error',
+    });
+  const request = (tool: unknown) => ({
+    toolCall: { id: 'call_1', name: 'nope', args: {} },
+    tool,
+    state: { messages: [okMessage('call_1')] },
+  });
+
+  it('交到這裡時沒有工具、基座回了錯誤 → UNKNOWN_TOOL，回的是同一則', async () => {
+    const message = notFound();
+    const result = await wrapToolCall(request(undefined), async () => message);
+    expect(result).toBe(message);
+    expect(toolErrorOf(result)).toEqual({ name: 'ToolNotFoundError', code: UNKNOWN_TOOL });
+  });
+
+  it('有工具：本體回的沒碼錯誤不標', async () => {
+    const result = await wrapToolCall(request({ name: 'nope' }), async () => notFound());
+    expect(toolErrorOf(result)).toBeUndefined();
+  });
+
+  it('沒有工具但結果是成功的：不標', async () => {
+    const ok = new ToolMessage({ content: '好', tool_call_id: 'call_1' });
+    expect(toolErrorOf(await wrapToolCall(request(undefined), async () => ok))).toBeUndefined();
+  });
+
+  it('沒有工具、結果已經有碼：原碼不被蓋掉', async () => {
+    const coded = markToolError(notFound(), { name: 'AbortError', code: 'ABORTED' });
+    const result = await wrapToolCall(request(undefined), async () => coded);
+    expect(toolErrorOf(result)).toEqual({ name: 'AbortError', code: 'ABORTED' });
   });
 });
 
