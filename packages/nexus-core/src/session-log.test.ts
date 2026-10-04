@@ -434,7 +434,7 @@ describe('isLogicalTurnStart（#682）', () => {
 /**
  * 格式版本 32 時詞彙裡的每一種（[#507](https://github.com/DemianLi/nexus-agent/issues/507)）。**只增不減，這份清單也只增不減**：
  * 缺席＝必需，所以任何一版寫過的種類，之後每一版都必須認得，否則那份舊日誌從此讀不回來。要退役一種，它留在
- * `KNOWN_SESSION_EVENT_TABLE` 裡、只是不再寫；這裡要拿掉某一行的人，等於宣布「那一類舊日誌從此不能讀」。
+ * `SessionEventMap` 裡、只是不再寫；這裡要拿掉某一行的人，等於宣布「那一類舊日誌從此不能讀」。
  */
 const TYPES_WRITTEN_BY_FORMAT_32 = [
   'turn/start',

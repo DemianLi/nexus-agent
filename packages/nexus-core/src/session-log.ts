@@ -38,6 +38,7 @@
 import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
 import type { GoalChangeMeta, GoalId } from './goal.js';
 import type { InboxSplice, SubagentSettleReason } from './inbox.js';
+import { KNOWN_SESSION_EVENT_TYPES } from './known-event-types.js';
 import type { PresentedFile } from './deliverables.js';
 import type { LoggedMessage } from './logged-message.js';
 import type { TodoItem } from './todo.js';
@@ -154,39 +155,7 @@ import type { ToolErrorInfo } from './tool-events.js';
  * `subagent/catalog` 兩個寫者各走一條舊路：前景走 `tool/call` 那條（圍堵登記、會話註冊點在子日誌出生時寫），背景走
  * 背景子代理的 host（它自己開子日誌的那一刻）。只寫父那一份，不進模型。見 [#1023](https://github.com/DemianLi/nexus-agent/issues/1023)。
  */
-export type SessionEventType =
-  | 'turn/start'
-  | 'turn/end'
-  | 'turn/failed'
-  | 'interrupt/raised'
-  | 'command/run'
-  | 'command/done'
-  | 'goal/change'
-  | 'todo/write'
-  | 'model/usage'
-  | 'model/start'
-  | 'model/end'
-  | 'llm/retry'
-  | 'llm/retry-started'
-  | 'assistant/message'
-  | 'user/message'
-  | 'compaction/summary'
-  | 'context/measure'
-  | 'sandbox/mode'
-  | 'plan/mode'
-  | 'subagent/model-selection-policy'
-  | 'subagent/catalog'
-  | 'tool/call'
-  | 'tool/result'
-  | 'feedback/message-put'
-  | 'feedback/message-delete'
-  | 'feedback/record'
-  | 'deliverables/presented'
-  | 'workspace/changes'
-  | 'inbox/spliced'
-  | 'session/title'
-  | 'session/title-llm-request'
-  | 'session/end-seed';
+export type SessionEventType = keyof SessionEventMap;
 
 /**
  * 一輪為什麼沒有正常結束。三種：
@@ -991,57 +960,26 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = T exte
   : never;
 
 /**
+ * 這個 `type` 是這一版認得的事件種類嗎。表外的（更新的版本寫的、或別的東西寫的）回 `false`。
+ *
  * **這一版的程式認得的事件種類**——讀方碰到表外的 `type` 時拒絕重建，除非那一筆標了
  * {@link SessionEvent.ignorable}（[#507](https://github.com/DemianLi/nexus-agent/issues/507)，
  * 同 dsh 的 `KNOWN_SESSION_EVENT_TYPES`，`packages/core/session/src/known-event-types.ts`，`5badb15`）。
  *
- * **逐種列出、型別綁死**（同 {@link MODEL_VISIBLE_EVENT_TYPES} 的做法）：詞彙多一種或少一種，這張表都編不過。
- * 少一種的那個方向是這張表的第二個職責——**種類只增不減**：舊日誌沒有 `ignorable` 旗標，缺席＝必需，所以
- * 任何一版寫過的種類，這一版都必須認得，否則那份舊日誌從此讀不回來。要退役一種，留在這裡，只是不再寫。
+ * **表是生成的**（[#679](https://github.com/DemianLi/nexus-agent/issues/679) 第 4 步）：詞彙是 {@link SessionEventMap}
+ * 的鍵，各套件用宣告合併補的種類在這個檔裡看不到，所以由 `apps/harness/src/gen-known-event-types.ts` 掃過每一處
+ * 宣告生成 `./known-event-types.ts`，`apps/harness/src/known-event-types.test.ts` 驗它沒過期。不是讓各 plugin 在
+ * 執行期登記（登記只說「有這個名字」，說不出「略過它安不安全」，而且會讓同一份日誌在不同組裝下讀出不同結果，
+ * dsh 的 `2026-08-10-session-log-version-mechanism.md` 的 Alternatives considered）。
  *
- * **詞彙開放之後（[#679](https://github.com/DemianLi/nexus-agent/issues/679) 第 4 步）這張手寫表要換成生成的**：
- * 各套件用宣告合併補的種類，這張表看不到。dsh 的做法是生成器掃過每一處 `SessionEventMap` 合併，再用一支檢查
- * 驗它沒過期；不是讓各 plugin 在執行期登記（登記只說「有這個名字」，說不出「略過它安不安全」，而且會讓同一份日誌
- * 在不同組裝下讀出不同結果，`2026-08-10-session-log-version-mechanism.md` 的 Alternatives considered）。
+ * **種類只增不減**：舊日誌沒有 `ignorable` 旗標，缺席＝必需，所以任何一版寫過的種類，這一版都必須認得，否則那份舊日誌
+ * 從此讀不回來。要退役一種，留在 {@link SessionEventMap} 裡、只是不再寫；`session-log.test.ts` 的凍結清單擋著。
+ *
+ * 回傳 `boolean` 而不是型別守衛：表是執行期的生成集合，認得不等於這個字串此刻在這個編譯單元看得到——各套件的宣告
+ * 合併只在 import 了該套件的編譯單元裡進得了 {@link SessionEventType}。
  */
-const KNOWN_SESSION_EVENT_TABLE = {
-  'turn/start': true,
-  'turn/end': true,
-  'turn/failed': true,
-  'interrupt/raised': true,
-  'command/run': true,
-  'command/done': true,
-  'goal/change': true,
-  'todo/write': true,
-  'model/usage': true,
-  'model/start': true,
-  'model/end': true,
-  'llm/retry': true,
-  'llm/retry-started': true,
-  'assistant/message': true,
-  'user/message': true,
-  'compaction/summary': true,
-  'context/measure': true,
-  'sandbox/mode': true,
-  'plan/mode': true,
-  'subagent/model-selection-policy': true,
-  'subagent/catalog': true,
-  'tool/call': true,
-  'tool/result': true,
-  'feedback/message-put': true,
-  'feedback/message-delete': true,
-  'feedback/record': true,
-  'deliverables/presented': true,
-  'workspace/changes': true,
-  'inbox/spliced': true,
-  'session/title': true,
-  'session/title-llm-request': true,
-  'session/end-seed': true,
-} as const satisfies Record<SessionEventType, true>;
-
-/** 這個 `type` 是這一版認得的事件種類嗎。表外的（更新的版本寫的、或別的東西寫的）回 `false`。 */
-export function isKnownSessionEventType(type: string): type is SessionEventType {
-  return Object.hasOwn(KNOWN_SESSION_EVENT_TABLE, type);
+export function isKnownSessionEventType(type: string): boolean {
+  return KNOWN_SESSION_EVENT_TYPES.has(type);
 }
 
 /**

@@ -14,6 +14,7 @@
     "eval:compare": "tsx src/eval/compare-cli.ts",
     "eval:sessions": "tsx src/eval/sessions-cli.ts",
     "eval:survey": "tsx src/eval/survey-cli.ts",
+    "gen-known-event-types": "tsx src/gen-known-event-types.ts",
     "lint": "eslint .",
     "serve": "tsx src/serve.ts",
     "serve:live": "tsx src/serve.ts --live",
