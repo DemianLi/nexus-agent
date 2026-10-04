@@ -259,7 +259,7 @@ describe('搜尋結果超過筆數上限時自存全文（#735）', { timeout: 3
 
   it('搜尋卡記的是行內那一頁，truncated 為真、total 是截之前的數（同 dsh）', async () => {
     const { backend } = await workspace(51, 101);
-    const { metas } = await run([GREP, GLOB], { backend, stash: await stashOptions() });
+    const { metas } = await run([GREP, GLOB, LS], { backend, stash: await stashOptions() });
     const grep = metas[0] as Extract<SearchResultMeta, { shape: 'matches' }>;
     expect(grep.shape).toBe('matches');
     expect(grep.files.reduce((sum, file) => sum + file.matches.length, 0)).toBe(250);
@@ -269,6 +269,12 @@ describe('搜尋結果超過筆數上限時自存全文（#735）', { timeout: 3
     expect(glob.paths).toHaveLength(100);
     expect(glob.truncated).toBe(true);
     expect(glob.total).toBe(101);
+    // `ls` 沿用 `glob` 的形狀與上限（#948）：卡片看到的是行內那一頁，不是給模型的那句英文。
+    const ls = metas[2] as Extract<SearchResultMeta, { shape: 'paths' }>;
+    expect(ls.shape).toBe('paths');
+    expect(ls.paths).toHaveLength(100);
+    expect(ls.truncated).toBe(true);
+    expect(ls.total).toBe(101);
   });
 
   it('子代理那條組裝路也截：一次性委派的 general-purpose 拿到的是前段加定位', async () => {

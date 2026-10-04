@@ -682,7 +682,7 @@ function assertScopesHaveSubAgents(registry: PluginRegistry): void {
  * 設定裡列到一個此處不可見、但別處確實存在的名字，是合法的，不是打錯字。
  */
 /**
- * 搜尋（`grep`／`glob`）的 meta 開不開：**root 與每個 subagent 都沒有 `permissions` 規則才開。**
+ * 搜尋（`grep`／`glob`／`ls`）的 meta 開不開：**root 與每個 subagent 都沒有 `permissions` 規則才開。**
  *
  * 基座的搜尋工具拿到 backend 的結果之後還會照 `permissions` 濾一次，而抓 meta 的那一層看到的是濾之前的
  * 那份——照樣放進 meta，模型看不到的路徑就會出現在畫面上。比對規則是基座沒匯出的 `filterByPermissions`，

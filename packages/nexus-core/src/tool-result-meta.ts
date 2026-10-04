@@ -13,7 +13,11 @@
  * - `grep`／`glob` ↔ dsh 的 `SearchMeta`（`fs/tool-fs-search/src/presentation.ts:60-68`）。
  * - `edit_file`／`write_file` ↔ dsh 的 `FsDiffMeta`（`fs/tool-fs/src/diff.ts:22`），hunk 照
  *   `computeHunkDiffs`（同檔 `:35-59`）逐行抄。
- * - `ls` 不帶：dsh 沒有這顆工具。失敗的呼叫不帶：client 對失敗一律走 generic，不看 meta。
+ * - `ls` ↔ **dsh 沒有這顆工具**，退到最接近的 `glob`：帶同一個 `paths` 形狀的 `SearchMeta`（[#948](https://github.com/DemianLi/nexus-agent/issues/948)），
+ *   `paths` 是 backend 交出來的路徑（目錄那幾筆結尾帶 backend 給的 `/`，原樣），`total`／`truncated` 與 `glob` 同一套規則。
+ *   不帶它的話，web 只能把基座給模型看的那句英文復原句（`search-overflow.ts` 的 `decorate`，指向點不開的暫存路徑）原文畫出來，
+ *   或去解析它——後者違反下面「不從工具輸出的文字解析」。偏離登記同 `search-overflow.ts` 檔頭偏離 1：`ls` 沿用 `glob` 的形狀與上限。
+ *   失敗的呼叫不帶：client 對失敗一律走 generic，不看 meta。
  *
  * ## 載體退了什麼
  *
@@ -238,7 +242,7 @@ interface BackendResultLike {
 /** 選項。 */
 export interface RecordToolResultMetaOptions {
   /**
-   * 搜尋（`grep`／`glob`）要不要帶 meta。**有任何 `permissions` 規則的組裝要關**：基座的工具拿 backend 的
+   * 搜尋（`grep`／`glob`／`ls`）要不要帶 meta。**有任何 `permissions` 規則的組裝要關**：基座的工具拿 backend 的
    * 結果之後還會照 `permissions` 濾一次（`filterByPermissions`，沒匯出），而這一層看到的是**濾之前**那份
    * ——照樣放進 meta 的話，模型看不到的路徑會出現在畫面上。自己重寫一份比對規則，寫錯的代價是外洩，
    * 所以在組裝期整類關掉（見 `fold.ts`）。讀檔與改檔不受影響：基座在呼叫 backend 之前就擋掉了。
@@ -247,7 +251,7 @@ export interface RecordToolResultMetaOptions {
 }
 
 /**
- * 把 backend 包一層，在 `grep`／`glob`／`write_file`／`edit_file` 那一次呼叫裡抓下 meta。
+ * 把 backend 包一層，在 `grep`／`glob`／`ls`／`write_file`／`edit_file` 那一次呼叫裡抓下 meta。
  *
  * **包在最內層**（直接包 fold 折出來的 backend），看到的是 backend 原本交出的結果。改檔之前讀原檔用的是
  * `readRaw`，**不在 `recordBackendOutcomes` 追蹤的方法裡**（它只追各工具的主方法，`fs-tool-errors.ts`
@@ -274,7 +278,10 @@ export function recordToolResultMeta<T extends object>(
         case 'grep':
           return options.search ? withGrepMeta(method) : method;
         case 'glob':
-          return options.search ? withGlobMeta(method) : method;
+          return options.search ? withPathsMeta('glob', method) : method;
+        case 'ls':
+          // 同 `glob`：基座的 `ls` 也在拿到 backend 結果之後才照 `permissions` 濾，見 {@link RecordToolResultMetaOptions.search}。
+          return options.search ? withPathsMeta('ls', method) : method;
         case 'write':
           return withWriteMeta(raw, method);
         case 'edit':
@@ -355,13 +362,14 @@ function withGrepMeta(method: (...args: unknown[]) => unknown) {
   };
 }
 
-function withGlobMeta(method: (...args: unknown[]) => unknown) {
+/** `glob` 與 `ls` 共用：兩個都是「列路徑」，meta 同一個 `paths` 形狀。 */
+function withPathsMeta(tool: 'glob' | 'ls', method: (...args: unknown[]) => unknown) {
   return async (...args: unknown[]): Promise<unknown> => {
     const result = (await method(...args)) as BackendResultLike & {
       readonly files?: readonly { readonly path?: unknown }[];
       readonly truncated?: unknown;
     };
-    if (slotFor('glob') === undefined || result.error !== undefined) return result;
+    if (slotFor(tool) === undefined || result.error !== undefined) return result;
     if (!Array.isArray(result.files)) return result;
     const paths = result.files.flatMap((info) =>
       typeof info.path === 'string' ? [info.path] : [],
@@ -375,7 +383,7 @@ function withGlobMeta(method: (...args: unknown[]) => unknown) {
       truncated: result.truncated === true || seen !== undefined,
       total: seen ?? paths.length,
     };
-    putToolResultMeta('glob', meta);
+    putToolResultMeta(tool, meta);
     return result;
   };
 }

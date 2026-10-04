@@ -127,7 +127,12 @@ describe('檔案工具的失敗在日誌上記成錯誤', () => {
     ]);
     expect(results).toEqual([
       { callId: expect.any(String), isError: true },
-      { callId: expect.any(String), isError: false },
+      // `ls` 成功照帶 `meta`（#948）：這一格只在意它是成功，meta 的內容由 `tool-result-meta.test.ts` 管。
+      {
+        callId: expect.any(String),
+        isError: false,
+        meta: expect.objectContaining({ shape: 'paths' }),
+      },
     ]);
     expect(messages[0]?.status).toBe('error');
     expect(messages[1]?.status).not.toBe('error');
