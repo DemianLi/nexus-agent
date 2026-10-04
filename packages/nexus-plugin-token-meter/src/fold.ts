@@ -3,7 +3,7 @@
  *
  * **全部從日誌折，不回寫日誌、不碰產品路徑。** `apply` 是純的、同步的，不相干的事件回**同一個參照**（通道靠這個省掉下游工作）。
  * 單元宣告 `children: true`（#1073），所以 root 與每個子代理各折各的、`apply` 不知道自己在折誰：前景子代理的日誌沒有 `turn/start`，
- * 數字全落在 `outside`；背景的有（派出去那句開一輪，實測），照一般的輪折。root 的輪外事件也落在 `outside`，**逐輪加總因此總能對回會話總計**
+ * 數字全落在 `outside`；背景的每一輪（派出去與每次 `subagent.send`）各有 `turn/start`／`turn/end`（`background-subagents.ts`，實測），照一般的輪折。root 的輪外事件也落在 `outside`，**逐輪加總因此總能對回會話總計**
  * （`session` ＝ `outside` ＋ 每一輪）。
  *
  * ## 輪是邏輯輪
@@ -19,8 +19,9 @@
  *   （同 `llmMs`）。所以逐輪加總 + 退避 ＝ 會話統計的 `llmMs`。
  * - **工具**：`tool/call`→`tool/result` 以 `callId` 配對，**取區間聯集**（平行的工具不重複算）；另帶各自加總 `toolSumMs`（＝ `toolMs` of
  *   `sessionStats`）。核准後同一個 `callId` 會再記一顆 `tool/call`：配對看最後那顆，停在核准點的那一次沒有結果、不算。
- * - **等待**：見上。
- * - **殘差** `unaccountedMs` ＝ 牆鐘 − 三段，不夾 0（見型別）。前景子代理跑的時間已在派它的工具裡。
+ * - **等待**：重試退避（`retryWaitMs`，包在模型呼叫的起訖之內，所以上面從模型時間扣掉）加上停在核准點的時間（`waitMs`，見上）。
+ *   兩格分開放，畫面要合成一段「等待」就相加。
+ * - **殘差** `unaccountedMs` ＝ 牆鐘 − 模型 − 工具 − 重試退避 − 核准等待，不夾 0（見型別）。前景子代理跑的時間已在派它的工具裡。
  *
  * ## 模型 id
  *
@@ -562,7 +563,7 @@ function rowToTurn(row: Row): TokenMeterTurn {
       ? {}
       : {
           wallMs,
-          unaccountedMs: wallMs - span.modelMs - span.toolMs - span.waitMs,
+          unaccountedMs: wallMs - span.modelMs - span.toolMs - span.retryWaitMs - span.waitMs,
         }),
   };
 }

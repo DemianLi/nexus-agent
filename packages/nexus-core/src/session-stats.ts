@@ -34,7 +34,8 @@
  * 在 dsh 那側是同一輪裡的等待，不是新的一輪；直接數 `turn/start` 會讓每次核准多算一輪。
  * 一輪要等到它的第一顆 `model/end` 才算數：沒叫到模型的輪不算，同 dsh。
  *
- * **subagent 那份沒有 `turn/start`**（入口點只包 root 的輪），一份就是一次委派，整份算一輪。
+ * **前景 subagent 那份沒有 `turn/start`**（入口點只包 root 的輪），一份就是一次委派，整份算一輪。**背景的每一輪**（派出去與每次
+ * `subagent.send`）各有 `turn/start`／`turn/end`（`apps/harness/src/background-subagents.ts`），照一般的輪數。
  *
  * ## 數字是逐份日誌的
  *

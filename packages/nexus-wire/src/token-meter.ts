@@ -11,7 +11,7 @@
  * - root 的值在 `ConversationState.projections['token-meter']`，
  * - 每個子代理的值在 `ConversationState.subagentProjections[runId]['token-meter']`。
  *
- * 兩邊**同一個形狀**。前景子代理的日誌沒有 `turn/start`，所以它的 `turns` 是空的、數字全在 `outside`；背景的有（派出去那句開一輪），照一般的輪折。
+ * 兩邊**同一個形狀**。前景子代理的日誌沒有 `turn/start`，所以它的 `turns` 是空的、數字全在 `outside`；背景的每一輪（派出去與每次 `subagent.send`）各有 `turn/start`，照一般的輪折。
  * 哪個 `runId` 是哪一顆呼叫派的、前景還是背景，讀 root 那份的 {@link TokenMeterView.links}。
  *
  * ## 數字的口徑（讀的人必須看得到，否則會把下限當成總數）
@@ -20,7 +20,7 @@
  *
  * - **token 是供應商報的**：成功與失敗的呼叫都算（失敗那幾筆另列），**沒報的呼叫不是 0**——數在 {@link TokenMeterSpan.unknownSteps}。
  * - **生摘要那一次的用量另列**（`summary*`），**不含在** `inputTokens`／`outputTokens` 裡，也不進 root 的 `tokenUsage` 總帳。
- * - **時間三段加一格殘差**：模型（扣掉重試退避）、工具（平行的取聯集）、等待（停在核准點的時間），其餘是 `unaccountedMs`。
+ * - **時間三段加一格殘差**：模型（扣掉重試退避）、工具（平行的取聯集）、等待（重試退避 `retryWaitMs` ＋ 停在核准點的 `waitMs`），其餘是 `unaccountedMs`。
  * - **token 跨會話可以相加，時間不行**：前景子代理跑的時間已經在 root 那顆工具呼叫的耗時裡。
  * - **不畫金額、不畫完成率**（#1019）。快取讀寫與推理 token 細項等 #724。
  *
@@ -143,7 +143,7 @@ export interface TokenMeterTurn extends TokenMeterSpan {
   /** `endTime − time`：含停在核准點等的那段。 */
   readonly wallMs?: number;
   /**
-   * `wallMs − modelMs − toolMs − waitMs`：三段都沒覆蓋到的時間（圖的啟動、生摘要那一次、事件之間的空隙）。
+   * `wallMs − modelMs − toolMs − retryWaitMs − waitMs`：幾段都沒覆蓋到的時間（圖的啟動、生摘要那一次、事件之間的空隙）。
    * **不夾 0**：負的代表「三段互不重疊」這個前提被破壞了，那是要追的 bug，不是要藏的。
    */
   readonly unaccountedMs?: number;
@@ -190,13 +190,13 @@ export interface TokenMeterView {
  */
 export const TOKEN_METER_CALIBER: Readonly<Record<string, string>> = {
   steps:
-    '結束了的模型呼叫，完成、失敗、中止都算；重試掉的中間幾次不算（重試在記錄器底下，只有最後一次的起訖）。',
+    '結束了的模型呼叫，完成、失敗、中止都算；重試掉的中間幾次不算（重試在記錄器底下，只有最後一次的起訖）；不含產生會話標題的那一次呼叫（標題不記用量，#1022）。',
   failedSteps: '沒有正常回來的呼叫（拋錯或使用者按了停止）。',
   unknownSteps: '有結束但供應商沒報用量的呼叫：燒了多少不知道，不是 0，所以 token 是下限。',
   inputTokens:
-    '供應商報的輸入 token，含快取讀取；成功與失敗的呼叫都算；不含生摘要那一次；沒報的呼叫不在裡面。',
+    '供應商報的輸入 token，含快取讀取；成功與失敗的呼叫都算；不含生摘要那一次、不含產生會話標題的那一次；沒報的呼叫不在裡面。',
   outputTokens:
-    '供應商報的輸出 token；成功與失敗的呼叫都算；不含生摘要那一次；沒報的呼叫不在裡面。',
+    '供應商報的輸出 token；成功與失敗的呼叫都算；不含生摘要那一次、不含產生會話標題的那一次；沒報的呼叫不在裡面。',
   failedInputTokens: '上面輸入 token 裡，失敗或中止的呼叫報的那一份（已含在上面）。',
   failedOutputTokens: '上面輸出 token 裡，失敗或中止的呼叫報的那一份（已含在上面）。',
   summaries: '壓縮上下文時生摘要的次數。',
@@ -205,13 +205,15 @@ export const TOKEN_METER_CALIBER: Readonly<Record<string, string>> = {
     '生摘要那一次報的輸入 token，另列，不在輸入 token 裡、也不進 root 的 token 總帳。',
   summaryOutputTokens: '生摘要那一次報的輸出 token，另列，同上。',
   retries: '模型呼叫的重試次數。',
-  retryWaitMs: '重試實際等的退避時間，包在該次模型呼叫的起訖之內，所以從模型時間扣掉。',
+  retryWaitMs:
+    '重試實際等的退避時間，包在該次模型呼叫的起訖之內，所以從模型時間扣掉；畫面把它和核准等待合成「等待」時要相加。',
   modelMs:
-    '模型呼叫的牆鐘（含失敗與中止的），扣掉重試退避。逐輪加總會小於會話總計的 llmMs，差的正是退避。',
+    '模型呼叫的牆鐘（含失敗與中止的），扣掉重試退避；不含產生會話標題的那一次。逐輪加總會小於會話總計的 llmMs，差的正是退避。',
   toolCalls: '落定的工具呼叫（有結果的）；核准被拒的也有結果；停在核准點、沒跑的那一次不算。',
   toolErrors: '落定的工具呼叫裡 isError 的。',
   toolSumMs: '每個工具各自的牆鐘加總，平行的重疊會重複算（同會話統計的工具耗時）。',
   toolMs: '至少有一個工具在跑的牆鐘（區間聯集）。前景子代理跑的時間已經在派它的那顆工具裡。',
   waitMs: '停在核准點的時間：一輪的收尾到接著它的 resume 開始；人離開、行程重啟的時間也在裡面。',
-  unaccountedMs: '一輪牆鐘扣掉模型、工具、等待之後剩的：圖的啟動、生摘要那一次、事件之間的空隙。',
+  unaccountedMs:
+    '一輪牆鐘扣掉模型、工具、重試退避、核准等待之後剩的：圖的啟動、生摘要那一次、事件之間的空隙。',
 };

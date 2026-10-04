@@ -567,6 +567,9 @@ export function applyTrajectory(state: TrajectoryState, event: SessionEvent): Tr
         ...call,
         endTime: event.time,
         durationMs: event.time - call.time,
+        ...(data['outcome'] === 'error' || data['outcome'] === 'aborted'
+          ? { outcome: data['outcome'] }
+          : {}),
       }));
     case 'model/usage':
       return onCall(state, data['modelCall'], (call) => ({

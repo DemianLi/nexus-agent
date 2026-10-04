@@ -23,6 +23,7 @@ import {
   TRAJECTORY_PROJECTION,
   REQUEST_SNAPSHOTS_PROJECTION,
   TRAJECTORY_DETAIL_TURNS,
+  TOKEN_METER_PROJECTION,
 } from '@nexus/wire';
 import type { RequestSnapshotsView, TrajectoryView } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -32,6 +33,7 @@ import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
 const DISABLED = fileURLToPath(new URL('./trajectory-disabled.patch.yml', import.meta.url));
+const METER_DISABLED = fileURLToPath(new URL('./token-meter-disabled.patch.yml', import.meta.url));
 
 let running: RunningServe | undefined;
 
@@ -265,6 +267,41 @@ describe('軌跡投影走產品路徑', () => {
           .filter(isProjection)
           .map((f) => (f.params.data as { payload: { key: string } }).payload.key),
       ).not.toContain(TRAJECTORY_PROJECTION);
+
+      expect(withoutProjections(offLive)).toEqual(withoutProjections(onLive));
+      expect(withoutProjections(offHistory)).toEqual(withoutProjections(onHistory));
+    },
+  );
+
+  it(
+    '關掉 token-meter（#1028）：除了它的投影 frame，下行與歷史逐位元組不變；軌跡照樣在',
+    { timeout: 30_000 },
+    async () => {
+      const keysOf = (frames: readonly Event[]) =>
+        frames
+          .filter(isProjection)
+          .map((f) => (f.params.data as { payload: { key: string } }).payload.key);
+      const onRoot = await mkdtemp(join(tmpdir(), 'nexus-meter-on-'));
+      const on = await start(onRoot);
+      const onClient = await serveClient(on);
+      const onLive = await sayAndCollect(onClient, 't', '回聲一次');
+      const onHistory = await historyFrames(onClient, 't');
+      await on.close();
+      running = undefined;
+
+      const offRoot = await mkdtemp(join(tmpdir(), 'nexus-meter-off-'));
+      const off = await start(offRoot, METER_DISABLED);
+      const offClient = await serveClient(off);
+      const offLive = await sayAndCollect(offClient, 't', '回聲一次');
+      const offHistory = await historyFrames(offClient, 't');
+
+      // 前提：開著的時候用量投影真的來過（即時與歷史），關著的時候一顆都沒有；軌跡兩邊都在。
+      expect(keysOf(onLive)).toContain(TOKEN_METER_PROJECTION);
+      expect(keysOf(onHistory)).toContain(TOKEN_METER_PROJECTION);
+      expect(keysOf(offLive)).not.toContain(TOKEN_METER_PROJECTION);
+      expect(keysOf(offHistory)).not.toContain(TOKEN_METER_PROJECTION);
+      expect(keysOf(offLive)).toContain(TRAJECTORY_PROJECTION);
+      expect(keysOf(offHistory)).toContain(TRAJECTORY_PROJECTION);
 
       expect(withoutProjections(offLive)).toEqual(withoutProjections(onLive));
       expect(withoutProjections(offHistory)).toEqual(withoutProjections(onHistory));

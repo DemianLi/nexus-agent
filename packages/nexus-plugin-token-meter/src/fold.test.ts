@@ -175,9 +175,12 @@ describe('手算的主場景', () => {
     expect(turn0.toolMs).toBe(25);
     // 等待：turn/end(70) 到 resume 的 turn/start(170) = 100。
     expect(turn0.waitMs).toBe(100);
-    // 牆鐘：最後一顆 turn/end(300) - 開輪(0) = 300；殘差 = 300 - 105 - 25 - 100 = 70。
+    // 牆鐘：最後一顆 turn/end(300) - 開輪(0) = 300。
+    // 殘差 = 300 - 模型 105 - 工具 25 - 重試退避 25 - 核准等待 100 = 45。
+    // 逐項列出那 45 ms 的空隙：[0,10] 開輪到第一次呼叫 10；[60,70] 最後一個工具到收尾 10；
+    // [175,180] 工具到下一次呼叫 5；[240,250] 呼叫 B 到 C 10；[290,300] 呼叫 C 到收尾 10 ⇒ 10+10+5+10+10 = 45。
     expect(turn0.wallMs).toBe(300);
-    expect(turn0.unaccountedMs).toBe(70);
+    expect(turn0.unaccountedMs).toBe(45);
   });
 
   it('第 1 輪：沒有 usage 的呼叫 ⇒ 用量未知，不是 0；turn/failed 收尾', () => {

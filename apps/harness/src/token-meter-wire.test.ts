@@ -21,7 +21,7 @@ import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { attachSessionPersistence } from '@nexus/core';
-import type { PluginEntry, SessionEvent, SessionRegistry } from '@nexus/core';
+import type { PluginEntry, SessionRegistry } from '@nexus/core';
 import { createTokenMeterPlugin, tokenMeterUnit } from '@nexus/plugin-token-meter';
 import {
   createWireClient,
@@ -36,6 +36,7 @@ import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { readSessionLogs } from './eval/session-scan.js';
+import { readStoredSubagentSession } from './session-list.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
@@ -286,15 +287,12 @@ describe.each(CASES)('$label：用量投影', (entry) => {
     await handler.close();
     const { logs } = await readSessionLogs([store.directory]);
     const rootSeed = logs.find((log) => log.header.id === 't1')?.events;
-    const cold = new Map<string, readonly SessionEvent[]>();
-    for (const log of logs) {
-      if (log.header.id.startsWith('t1/')) cold.set(log.header.id.slice(3), log.events);
-    }
     const rebuilt = await build(entry);
     const reopened = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       warn: (message) => reported.push(message),
-      readSubagentSession: async (_thread, each) => cold.get(each),
+      // 產品路徑的冷讀（serve.ts 接的就是這一個），不是替身：前景的 runId 真的讀得到嗎，在這裡才量得到。
+      readSubagentSession: (thread, each) => readStoredSubagentSession(store, thread, each),
       createAgent: async () => ({
         agent: rebuilt.agent as unknown as PumpAgent,
         commands: emptyCommandPoint(),

@@ -34,7 +34,7 @@
  *   （[#306](https://github.com/DemianLi/nexus-agent/issues/306) 的 `conversation-restore.ts`），兩邊都在這裡斷。
  *   所以 end-seed 這一格照舊清零，而它只在寫不出來的形狀上有作用（接縫之後沒有頭就有呼叫）；留著是防兩個行程的
  *   日誌拼出一條實際上沒有人看過的長串。
- * - **subagent 那份沒有 `turn/start`**，一份就是一次委派，鏈跨整份。
+ * - **前景 subagent 那份沒有 `turn/start`**，一份就是一次委派，鏈跨整份（背景的每一輪各有 `turn/start`，見 `background-subagents.ts`）。
  * - **同一個 `callId` 第二次出現不推進鏈。** 被核准閘門中斷的那次，resume 之後以同一個 `callId`
  *   再記一顆 `tool/call`（`session-log.ts` 的 `tool/call` 那段）。提醒器數的是 `tool_calls`，那次
  *   呼叫在訊息裡只有一則——這裡不去重的話，每一次核准都會讓鏈多一格。
