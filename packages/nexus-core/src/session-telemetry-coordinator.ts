@@ -20,6 +20,7 @@
 
 import { formatOrigin } from './plugin.js';
 import type { SessionEvent, SessionLog } from './session-log.js';
+import { isMirroredEvent } from './session-telemetry.js';
 import type {
   SessionTelemetryRecord,
   SessionTelemetryRedactRule,
@@ -138,6 +139,11 @@ export class SessionTelemetryCoordinator {
 
   /** 投影一筆事件、脫敏、交出去，然後推進游標。 */
   #captureEvent(event: SessionEvent): void {
+    // 不放行的種類（`isMirroredEvent`）：游標照推，不然下一次補送會一直回頭撈它。
+    if (!isMirroredEvent(event)) {
+      this.#cursor = event.seq;
+      return;
+    }
     const record = this.#redact({
       channel: 'ledger',
       time: event.time,

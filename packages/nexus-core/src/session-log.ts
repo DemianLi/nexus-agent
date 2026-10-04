@@ -40,6 +40,7 @@ import type { GoalId } from './goal.js';
 import type { InboxSplice, SubagentSettleReason } from './inbox.js';
 import { KNOWN_SESSION_EVENT_TYPES } from './known-event-types.js';
 import type { LoggedMessage } from './logged-message.js';
+import type { RequestHeader, RequestSnapshotReason } from './request-snapshot.js';
 import type { SubagentCatalogData } from './subagent-catalog.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
@@ -416,6 +417,34 @@ export interface SessionEventMap {
      * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
      * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
      */
+    readonly modelCall?: number;
+  };
+  /**
+   * 這次呼叫**實際送出**的呼叫設定與工具清單，**變了才記一份**（[#1020](https://github.com/DemianLi/nexus-agent/issues/1020)）。
+   * 照 dsh 的 `request/header`（`packages/core/session/src/types.ts:390-397`，`5badb15`）。記錄點在模型被叫的那一刻
+   * （callback），不是 middleware——見 `request-snapshot.ts` 檔頭，那裡有偏離與理由。
+   *
+   * **不進模型**，用 `{ ignorable: true }` 寫（純資訊性的新種類不升格式版本，#507）；會話遙測的鏡像**不送**它
+   * （`isMirroredEvent`）。⚠️ 工具描述與設定值原樣進本機日誌。
+   *
+   * 落在配對的 `model/start` 之後、回覆之前；`modelCall` 指回記下它的那次呼叫。這份日誌沒有快照時第一份的
+   * `reason` 是 `'initial'`，之後不同才記、`reason` 是 `'change'`；**續接後沒變不重記**（偏離 dsh 的 `'resume'`）。
+   */
+  'request/header': {
+    readonly header: RequestHeader;
+    readonly reason: RequestSnapshotReason;
+    readonly modelCall?: number;
+  };
+  /**
+   * 這次呼叫**實際送出**的系統提示詞全文，**變了才記一份**（#1020）。dsh 的對應物是 `system/message`——它是模型可見的
+   * surface 節點、對話史從它導出；這一顆**只是快照、不進模型**，所以換了名字（理由見 `request-snapshot.ts`）。
+   * 沒有系統提示詞時第一份是空字串（明著記「沒有」，不是「沒記」）。其餘規則同 `request/header`。
+   *
+   * ⚠️ **系統提示詞可能含工作區內容**（AGENTS.md、記憶檔），原樣進本機日誌，**不進遙測**。
+   */
+  'request/system': {
+    readonly system: string;
+    readonly reason: RequestSnapshotReason;
     readonly modelCall?: number;
   };
   /**

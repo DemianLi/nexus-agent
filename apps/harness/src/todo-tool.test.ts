@@ -163,9 +163,9 @@ describe('todo_write 在真的圖上', () => {
     });
 
     expect(violations).toEqual([
-      // 中間三格是那一輪的模型起訖（#266）夾著它的回覆（#305），再一格是摘要器的量測（#528），
-      // 所以輪收掉之後這一顆是 seq 6。
-      'invariant violated by "@nexus/plugin-todo": todo/write（seq 6）落在任何開著的輪之外',
+      // 中間五格是那一輪的模型起訖（#266）夾著它的請求快照（#1020，兩顆）與回覆（#305），再一格是摘要器的量測（#528），
+      // 所以輪收掉之後這一顆是 seq 8。
+      'invariant violated by "@nexus/plugin-todo": todo/write（seq 8）落在任何開著的輪之外',
     ]);
   });
 
@@ -224,6 +224,8 @@ describe('todo_write 在真的圖上', () => {
     expect(todosIn(sessions.root.events)).toEqual([]);
     expect(sessions.root.events.map((event) => event.type)).toEqual([
       'model/start',
+      'request/system',
+      'request/header',
       'assistant/message',
       'model/end',
       'context/measure',
@@ -237,7 +239,7 @@ describe('todo_write 在真的圖上', () => {
     // **模型拿到的是一句錯誤，日誌也記成錯誤**（#273）：工具回一則 `status: 'error'` 的
     // ToolMessage，文字就是上面那一句。**不帶碼**——dsh 對這一類拋的是一般 `Error`，所以
     // 用 `toEqual`，多出一個 `error` 會紅。`message`（#305）是內容，另外比。
-    const settled = sessions.root.events[5];
+    const settled = sessions.root.events[7];
     expect(settled?.type).toBe('tool/result');
     const { message, ...verdict } = settled!.data as SessionEventMap['tool/result'];
     expect(verdict).toEqual({ callId: expect.any(String), isError: true });

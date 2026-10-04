@@ -13,7 +13,7 @@ import type { PluginOrigin } from './plugin.js';
 import { SessionLog } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 import { SessionTelemetryCoordinator } from './session-telemetry-coordinator.js';
-import { isFeedbackEvent } from './session-telemetry.js';
+import { isFeedbackEvent, isMirroredEvent } from './session-telemetry.js';
 import type { SessionTelemetryRedactRule } from './session-telemetry.js';
 import type { NamedEntry } from './entries.js';
 
@@ -400,5 +400,72 @@ describe('flush 的圍堵自成一格', () => {
     expect(sink.records).toHaveLength(1);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('flush 壞了');
+  });
+});
+
+describe('請求快照不進遙測（#1020）', () => {
+  /** 系統提示詞可能含工作區內容；用一個認得出來的字串追它有沒有出現在任何一筆記錄裡。 */
+  const SECRET = '工作區機密-AGENTS-內容';
+
+  function logWithSnapshots(): SessionLog {
+    const log = new SessionLog('thread-a');
+    log.append('turn/start', { kind: 'message', text: '你好' });
+    log.append(
+      'request/system',
+      { system: `你是助手。${SECRET}`, reason: 'initial' },
+      { ignorable: true },
+    );
+    log.append(
+      'request/header',
+      {
+        header: { config: { model: 'm' }, tools: [{ name: 't', description: SECRET }] },
+        reason: 'initial',
+      },
+      { ignorable: true },
+    );
+    log.append('turn/end', {});
+    return log;
+  }
+
+  it('live（full）：兩種快照都不送，其餘照送，游標照推', () => {
+    const log = logWithSnapshots();
+    const sink = fakeSink();
+    new SessionTelemetryCoordinator({ log, sink });
+    log.append(
+      'request/system',
+      { system: `改了。${SECRET}`, reason: 'change' },
+      { ignorable: true },
+    );
+
+    expect(sink.records.map((record) => record.attributes['event.type'])).toEqual([
+      'turn/start',
+      'turn/end',
+    ]);
+    expect(JSON.stringify(sink.records)).not.toContain(SECRET);
+  });
+
+  it('on-demand（feedback-only 補送整份前綴）：前綴裡的快照一樣不送，補送不回頭撈', () => {
+    const log = logWithSnapshots();
+    const sink = fakeSink({ sharing: 'feedback-only' });
+    const coordinator = new SessionTelemetryCoordinator({ log, sink, capture: 'on-demand' });
+    log.append('feedback/record', { text: '回答錯了' });
+    coordinator.captureNow();
+
+    expect(sink.records.map((record) => record.attributes['event.type'])).toEqual([
+      'turn/start',
+      'turn/end',
+      'feedback/record',
+    ]);
+    expect(JSON.stringify(sink.records)).not.toContain(SECRET);
+    // 游標越過了被跳過的那兩顆：再補送一次不重送、也不掃回它們。
+    coordinator.captureNow();
+    expect(sink.records).toHaveLength(3);
+  });
+
+  it('isMirroredEvent 預設放行：只有明列的兩種被擋', () => {
+    const log = logWithSnapshots();
+    expect(
+      log.events.filter((event) => !isMirroredEvent(event)).map((event) => event.type),
+    ).toEqual(['request/system', 'request/header']);
   });
 });

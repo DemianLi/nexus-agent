@@ -206,6 +206,8 @@ describe('同名取代是唯一的縫', () => {
         'nexusInvalidToolArgs',
         // 撞到輸出上限（#433）：貼在修補的內側，清掉被切斷的回覆裡的工具呼叫。
         'nexusMaxTokens',
+        // 請求快照（#1020）：模型呼叫上的 callback，緊貼綁訊號那顆外面（兩顆併成同一層綁定，見 `model-binding.ts`）。
+        'nexusRequestSnapshot',
         // 中止的內層那顆（#276）：最內層，只替模型綁中止訊號。它在摘要器**裡面**，所以摘要器
         // 讀到的是原本的模型，不是那層 `RunnableBinding`——見 `turn-cancel.ts` 的「為什麼是兩顆」。
         'nexusTurnCancelModelSignal',

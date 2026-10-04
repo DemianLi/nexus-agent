@@ -33,6 +33,8 @@
  * 2. **{@link createTurnCancelModelSignal}（我們交出去那串的最內層）**：把訊號綁到模型上。綁法是把
  *    `request.model` 包成核心的 `RunnableBinding`，而一顆排在它外面的 middleware 若讀模型本身的屬性
  *    就會讀到那層包裝——放在最內層，外面每一顆看到的都是原本的模型。
+ *    **綁定只能有一層**：緊貼它外面的 `requestSnapshot` 也要往模型上掛 callback，兩顆都經 `model-binding.ts` 併成同一層
+ *    （基座之後綁工具只認一層，疊兩層整輪失敗）。
  *
  * ## 綁模型為什麼不用 `withConfig` 或 `modelSettings`
  *
@@ -69,6 +71,7 @@
 
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import { RunnableBinding } from '@langchain/core/runnables';
+import { bindModelConfig } from './model-binding.js';
 import { Command, isCommand } from '@langchain/langgraph';
 import { createMiddleware, MiddlewareError } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
@@ -314,11 +317,7 @@ export function createTurnCancelModelSignal(): AgentMiddleware {
       try {
         return await handler({
           ...request,
-          model: new RunnableBinding({
-            bound: request.model,
-            config: { signal },
-            kwargs: {},
-          }) as unknown as typeof request.model,
+          model: bindModelConfig(request.model, (current) => ({ ...current, signal })),
         });
       } catch (error) {
         // 被切斷的那次拋什麼要看供應商與抽法（實測有 `Error("AbortError")`，也有
