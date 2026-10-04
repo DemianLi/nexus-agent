@@ -233,6 +233,34 @@ export function toolCallAborted(request: unknown): boolean {
 }
 
 /**
+ * 這次模型呼叫所屬的那一輪，中止訊號是不是已經舉起來了——給起訖與用量的紀錄器判斷「沒有正常回來」是被切斷還是拋錯
+ * （[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）。
+ *
+ * 判準是訊號，不是錯誤長什麼樣：被切斷的那次拋什麼要看供應商與抽法（見 {@link createTurnCancelModelSignal}）。
+ *
+ * @param request - `wrapModelCall` 拿到的 request。
+ * @returns 已中止就是 `true`；這一輪沒有人放訊號也是 `false`（CLI 與 eval）。
+ */
+export function modelCallAborted(request: unknown): boolean {
+  return signalOfRequest(request)?.aborted === true;
+}
+
+/**
+ * 子代理被中止時 {@link stopHere} 回的那則空訊息：帶中斷記號、沒有字、沒有呼叫。它不是模型的回覆，是合成來讓子代理的圖
+ * 收尾的——起訖與用量的紀錄器都要認得它，把那次呼叫記成被中止，而不是正常回覆。
+ *
+ * @param message - 模型呼叫回來的東西。
+ * @returns 是不是那則合成的收尾。
+ */
+export function isSyntheticStopReply(message: AIMessage): boolean {
+  return (
+    message.additional_kwargs[INTERRUPTED_REPLY_MARKER] === true &&
+    message.text === '' &&
+    (message.tool_calls ?? []).length === 0
+  );
+}
+
+/**
  * 還沒動手就被中止的那次工具呼叫的結果（dsh 的 `TOOL_ABORTED_BEFORE_DISPATCH`）。
  *
  * 外層的 guard 用它；耐久檢查點排空之後再問一次中止時也用它

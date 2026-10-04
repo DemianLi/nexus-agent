@@ -369,6 +369,13 @@ import type { SessionEvent } from './session-log.js';
  *   一台 32 的舊 runtime 讀回這份日誌，多一個不認得的欄位照舊投影，只是不知道誰屬於哪次呼叫。判準同上：寫方寫出來的東西，
  *   舊 runtime 還能不能完整正確地處理——能。**沒有這一格就是沒記**（這一版以前寫的，或寫入點不在呼叫範圍裡），讀的人標「—」，
  *   不是推位置（`indexModelCalls`）。
+ * - **`outcome` 與 `usage`**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：`model/end` 與 `model/usage` 各多一個選填的
+ *   `outcome`（`error`｜`aborted`，只在那次呼叫沒有正常回來時帶），`compaction/summary` 多一個選填的 `usage`（生摘要那次報的用量）。
+ *   另外失敗的呼叫現在也可能寫出 `model/usage`（帶 `outcome`）。**不升**：兩個 `outcome` 與 `usage` 都是選填欄、沒有人拿它們
+ *   左右重建；失敗那顆 `model/usage` 不進模型，**舊讀方照常讀它**——加總的折疊本來就該把花掉的 token 都算進去，「目前大小」讀最新一筆的
+ *   也照讀（同 dsh：`contextPressure` 連 `assistant/attempt` 的用量也取樣，那份請求真的送出去過），所以一台 32 的舊 runtime
+ *   讀回這份日誌的畫面與新 runtime 一樣。判準同上：寫方寫出來的東西，舊 runtime 還能不能完整正確地處理——能。**沒有這幾格就是沒記**
+ *   （這一版以前寫的，或供應商沒報），讀的人標「—」，不是 0。
  */
 export const SESSION_LOG_FORMAT_VERSION = 32;
 

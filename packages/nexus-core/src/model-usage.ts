@@ -22,6 +22,15 @@
  * 沒退的還有第二件：**輪級彙總我們同樣不寫回日誌**。要一輪花了多少，讀日誌自己加，
  * 跟 dsh 的 `deriveTurnTokenUsage` 一樣。
  *
+ * ## 沒有正常回來的呼叫也記（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）
+ *
+ * dsh 的 `assistant/attempt` 串流裡報了用量就算，失敗與中止的 attempt 也在帳上
+ * （`packages/llm/token-meter/src/usage-projection.ts`）。我們的呼叫拋錯時沒有回應物件可讀，v3 串流的模型層又收不到 token 回呼，
+ * 供應商的用量只活在 `fetch` 回來的位元組裡——所以由 adapter（`live-model.ts` 的串流用量嗅探）在請求開跑時拿一個回報函式
+ * （`beginAttemptReport`，{@link ./model-call-scope.ts}），串流裡看到用量就回報；這顆 middleware 在呼叫拋錯（或子代理被中止回合成收尾）
+ * 時讀它，**過同一把尺**（{@link validateUsage}）才記，記成帶 `outcome` 的 `model/usage`。**沒報就不記**：「不知道花了多少」
+ * 不是 0，由配對的 `model/end.outcome` 表態。每次請求（含 SDK 的重試）各換一格，所以只有**最後一次請求**的用量算數。
+ *
  * ## 生產者是一個 `wrapModelCall`，而那個鉤子是選的
  *
  * `beforeModel`／`afterModel` 會各自展開成 `StateGraph` 上的一個節點，每一輪多吃一格
@@ -56,11 +65,19 @@
  * @module
  */
 
+import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { currentModelCall, withModelCall } from './model-call-scope.js';
+import {
+  currentModelCall,
+  reportedAttemptUsage,
+  withModelCall,
+  type AttemptUsage,
+} from './model-call-scope.js';
 import type { NexusPlugin } from './plugin.js';
 import type { SessionLookup } from './registry.js';
+import type { ModelCallOutcome } from './session-log.js';
+import { isSyntheticStopReply, modelCallAborted } from './turn-cancel.js';
 
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
 export const MODEL_USAGE_MIDDLEWARE_NAME = 'nexusModelUsage';
@@ -126,10 +143,60 @@ export function readModelUsage(message: unknown): ModelUsage | undefined {
     output_tokens: output,
     total_tokens: total,
   } = metadata as Record<string, unknown>;
+  return validateUsage(input, output, total);
+}
+
+/**
+ * 三個數字驗得過就成一筆帳目，驗不過整筆不要——{@link readModelUsage} 的兩道檢查，給「數字不是從訊息上讀的」那條路
+ * 共用：adapter 在串流裡看到的用量（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）同一把尺。
+ *
+ * @param input - prompt token 數。
+ * @param output - 回應 token 數。
+ * @param total - 供應商報的完整總量。
+ * @returns 驗得過的帳目，或 `undefined`。
+ */
+export function validateUsage(
+  input: unknown,
+  output: unknown,
+  total: unknown,
+): ModelUsage | undefined {
   if (!isCount(input) || !isCount(output) || !isCount(total)) return undefined;
   const prompt = total - output;
   if (!isCount(prompt) || prompt < input) return undefined;
   return { inputTokens: input, outputTokens: output, totalTokens: total };
+}
+
+/** adapter 回報的用量（還沒驗）過同一把尺。 */
+function validateAttempt(reported: AttemptUsage | undefined): ModelUsage | undefined {
+  if (reported === undefined) return undefined;
+  return validateUsage(reported.inputTokens, reported.outputTokens, reported.totalTokens);
+}
+
+/**
+ * 沒有正常回來的呼叫：adapter 在串流裡報過用量才記一筆帶 `outcome` 的 `model/usage`（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）。
+ *
+ * **沒報、或報得對不起來就什麼都不記**——「不知道花了多少」不是 0，由配對的 `model/end.outcome` 表態。這個函式不准拋：
+ * 它跑在 `catch` 裡，從這裡漏出去的錯會蓋掉原本那個，所以 `forCall` 與 `append` 的失敗一律吃掉。
+ */
+function recordUnfinished(
+  sessions: { forCall(config: unknown): SessionLookup },
+  request: unknown,
+  outcome: ModelCallOutcome,
+): void {
+  try {
+    const found = sessions.forCall({
+      configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+    });
+    if (found.kind !== 'ok') return;
+    const usage = validateAttempt(reportedAttemptUsage(found.log));
+    if (usage === undefined) return;
+    found.log.append(
+      'model/usage',
+      withModelCall({ ...usage, outcome }, currentModelCall(found.log)),
+    );
+  } catch {
+    // 見檔頭最後一段。
+  }
 }
 
 /**
@@ -149,9 +216,22 @@ export function createModelUsageRecorder(sessions: {
   return createMiddleware({
     name: MODEL_USAGE_MIDDLEWARE_NAME,
     wrapModelCall: async (request, handler) => {
-      const response = await handler(request);
+      let response: Awaited<ReturnType<typeof handler>>;
+      try {
+        response = await handler(request);
+      } catch (error) {
+        // 拋錯的呼叫：供應商若在串流裡報過用量，那些 token 照樣花掉了（#1022）。
+        recordUnfinished(sessions, request, modelCallAborted(request) ? 'aborted' : 'error');
+        throw error;
+      }
       const usage = readModelUsage(response);
-      if (usage === undefined) return response;
+      if (usage === undefined) {
+        // 子代理被中止回的是合成的空收尾，不是拋錯：同樣是沒有正常回來的呼叫。
+        if (AIMessage.isInstance(response) && isSyntheticStopReply(response)) {
+          recordUnfinished(sessions, request, 'aborted');
+        }
+        return response;
+      }
       // `runtime.configurable` 就是 `forCall` 要的那份 —— 包回一層 `configurable` 是因為
       // 它收的是 handler 的 config 形狀，不是 configurable 本身。
       const found = sessions.forCall({

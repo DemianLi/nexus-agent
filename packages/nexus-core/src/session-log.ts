@@ -191,6 +191,13 @@ export type TurnEndReason =
   | { readonly kind: 'interrupted' };
 
 /**
+ * 一次模型呼叫沒有正常回來的方式（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）。
+ *
+ * 判準是**這一輪的中止訊號有沒有舉起來**（`turn-cancel.ts`），不是錯誤長什麼樣——被切斷的那次拋什麼要看供應商與抽法。
+ */
+export type ModelCallOutcome = 'error' | 'aborted';
+
+/**
  * 一次模型請求失敗的穩定描述。照 dsh 的 `LlmFailure`（`packages/llm/llm/src/types.ts:45`）：訊息給人看，
  * `code` 給機器路由，`status` 是供應商回的 HTTP 狀態（有才帶）。
  *
@@ -386,11 +393,25 @@ export interface SessionEventMap {
    *
    * **這一筆只有數字。** `command/run` 那條「使用者原話會原樣進遙測」的警告在這裡沒有
    * 指涉對象：三個欄位都是計數，不含 prompt、不含檔案路徑、不含模型 id。
+   *
+   * ## 失敗與中止的呼叫也記（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）
+   *
+   * 帶 `outcome` 的是**沒有正常回來的那次呼叫**，供應商在串流裡報了用量才記（照 dsh 的 `assistant/attempt`：串流最後一個
+   * `usage` chunk 算數）。數字一樣進總帳——那些 token 真的花掉了。**沒報就沒有這顆**，不是 0：「燒了但不知道燒多少」靠
+   * 配對的 `model/end.outcome` 看出來，兩者分得開。重試掉的中間幾次拿不到（SDK 的重試在記錄器底下，見 `llm-retry.ts`）。
+   * 沒有 `outcome` ＝ 正常回來的那次，舊日誌全是這一種。
    */
   'model/usage': {
     readonly inputTokens: number;
     readonly outputTokens: number;
     readonly totalTokens: number;
+    /**
+     * 這次呼叫沒有正常回來：`error` ＝ 拋錯，`aborted` ＝ 使用者按了停止。**只有失敗那一種才帶這一格。**
+     * 讀者**都照常讀**：加總的照加，「目前大小」讀最新一筆的也照讀——同 dsh，它的 `contextPressure` 連
+     * `assistant/attempt` 的用量也取樣（那份請求真的送出去過，prompt 大小是真的）。名字借 dsh `TurnEndReason` 的
+     * `kind`（`aborted`／`error`，`core/session/src/types.ts:204-212`）。
+     */
+    readonly outcome?: ModelCallOutcome;
     /**
      * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
      * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
@@ -408,11 +429,17 @@ export interface SessionEventMap {
   'model/start': Record<string, never>;
   /**
    * 配對的那次模型呼叫結束了——**完成、拋錯、中止都記**（在 `finally` 裡），同 dsh 那條「每一
-   * 個進入的步恰好一顆 `step/end`」。不帶結果：要知道那次成不成，看後面有沒有 `turn/failed`。
+   * 個進入的步恰好一顆 `step/end`」。
+   *
+   * **`outcome` 只在沒有正常回來時帶**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：拋錯是 `error`、
+   * 使用者按了停止是 `aborted`，兩者同 {@link ModelCallOutcome}。這一格讓「這次呼叫燒了多少不知道」讀得出來——配對的
+   * `model/usage` 不在，而這裡有 `outcome`。沒有這一格 ＝ 正常回來，或舊日誌（那時只能看後面有沒有 `turn/failed`）。
    *
    * 沒配到 `model/end` 的 `model/start` 只有一種成因：行程在呼叫中途死了。
    */
   'model/end': {
+    /** 這次呼叫沒有正常回來的方式；正常回來沒有這一格。 */
+    readonly outcome?: ModelCallOutcome;
     /**
      * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
      * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
@@ -605,6 +632,17 @@ export interface SessionEventMap {
     readonly filePath: string | null;
     /** 換上去的那則摘要訊息。 */
     readonly summary?: LoggedMessage;
+    /**
+     * 生這份摘要的那一次模型呼叫報的用量（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)），照 dsh 的
+     * `compaction/summary.usage`（選填）。**不進 `model/usage`、不進總帳**：基座直接 `request.model.invoke` 生摘要，
+     * 它不是一次對話呼叫，記進總帳會讓「目前大小」與逐呼叫的歸屬都對不上。要算它的人（#1028）明寫口徑另加。
+     * 沒有這一格 ＝ 沒報、報得對不起來、或舊日誌——**不是 0**。
+     */
+    readonly usage?: {
+      readonly inputTokens: number;
+      readonly outputTokens: number;
+      readonly totalTokens: number;
+    };
   };
   /**
    * 摘要器量到的一次模型呼叫：**那份請求離自動摘要還有多遠**（[#528](https://github.com/DemianLi/nexus-agent/issues/528)）。

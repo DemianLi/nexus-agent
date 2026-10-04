@@ -12,7 +12,7 @@ import { createModelCallRecorder } from './model-calls.js';
 import type { SessionLookup } from './registry.js';
 import { SessionLog } from './session-log.js';
 import type { SessionEventMap } from './session-log.js';
-import { INTERRUPTED_REPLY_MARKER } from './turn-cancel.js';
+import { INTERRUPTED_REPLY_MARKER, TURN_CANCEL_CONFIG_KEY } from './turn-cancel.js';
 
 /** 把 middleware 的 `wrapModelCall` 挖出來。 */
 function hookOf(middleware: unknown): (request: unknown, handler: unknown) => Promise<unknown> {
@@ -154,5 +154,56 @@ describe('記不進去不能扳倒模型呼叫', () => {
     const response = new AIMessage('好。');
     await expect(run(ok(log), () => response)).resolves.toBe(response);
     expect(typesOf(log)).toEqual(['model/start', 'model/end']);
+  });
+});
+
+/** [#1022](https://github.com/DemianLi/nexus-agent/issues/1022)：`model/end` 帶沒有正常回來的方式。 */
+describe('model/end.outcome', () => {
+  const endOf = (log: SessionLog) => log.events.at(-1)!.data;
+
+  it('正常回來沒有這一格', async () => {
+    const log = new SessionLog('calls');
+    await run(ok(log), () => new AIMessage('好。'));
+    expect(endOf(log)).toEqual({ modelCall: 0 });
+  });
+
+  it('拋錯是 error', async () => {
+    const log = new SessionLog('calls');
+    await expect(
+      run(ok(log), () => {
+        throw new Error('掛了');
+      }),
+    ).rejects.toThrow('掛了');
+    expect(endOf(log)).toEqual({ modelCall: 0, outcome: 'error' });
+  });
+
+  it('中止訊號舉起來了就是 aborted——不管拋的是什麼', async () => {
+    const log = new SessionLog('calls');
+    const controller = new AbortController();
+    controller.abort();
+    const request = {
+      runtime: {
+        configurable: {
+          checkpoint_ns: 'model_request:x',
+          [TURN_CANCEL_CONFIG_KEY]: controller.signal,
+        },
+      },
+    };
+    await expect(
+      hookOf(createModelCallRecorder({ forCall: () => ok(log) }))(request, () => {
+        throw new Error('隨便什麼');
+      }),
+    ).rejects.toThrow();
+    expect(endOf(log)).toEqual({ modelCall: 0, outcome: 'aborted' });
+  });
+
+  it('子代理被中止回的合成收尾（不拋）：不記回覆，outcome 是 aborted', async () => {
+    const log = new SessionLog('calls');
+    await run(
+      ok(log),
+      () => new AIMessage({ content: '', additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true } }),
+    );
+    expect(typesOf(log)).toEqual(['model/start', 'model/end']);
+    expect(endOf(log)).toEqual({ modelCall: 0, outcome: 'aborted' });
   });
 });

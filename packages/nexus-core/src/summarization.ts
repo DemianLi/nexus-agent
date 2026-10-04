@@ -63,6 +63,7 @@
  *   模型解得出 `maxInputTokens` 的那天要紅。
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { ContextOverflowError } from '@langchain/core/errors';
 import type { BaseMessage } from '@langchain/core/messages';
 import { createSummarizationMiddleware } from 'deepagents';
@@ -71,6 +72,7 @@ import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
 import { captureModelCall, withModelCall } from './model-call-scope.js';
+import { readModelUsage, type ModelUsage } from './model-usage.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
 import { estimateAnchoredTokens } from './token-estimate.js';
@@ -359,6 +361,16 @@ export function createSummarizer(
 const SUMMARY_CALL_TAG = 'nostream';
 
 /**
+ * 生摘要那一次呼叫報回的用量（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：外層 {@link withCompactionLog}
+ * 放一格，內層 {@link quietInvoke} 的替身在 `invoke` 回來時填。兩層是分開的 middleware，沒有共同的區域變數，
+ * 所以用 `AsyncLocalStorage` 把格子帶進去（同 {@link ./model-call-scope.ts} 的 `captureModelCall`）。
+ */
+interface SummaryUsageCell {
+  usage: ModelUsage | undefined;
+}
+const summaryUsageCells = new AsyncLocalStorage<SummaryUsageCell>();
+
+/**
  * 讓生摘要的那次模型呼叫不上線（[#584](https://github.com/DemianLi/nexus-agent/issues/584)）。
  *
  * ## 病
@@ -403,7 +415,7 @@ function withQuietSummaryCall(base: AgentMiddleware): AgentMiddleware {
       // 基座自己有退路（`getChatModel()`），沒有模型可換就原樣交給它。
       /* v8 ignore next */
       if (model === undefined) return inner(request, handler);
-      const quiet = quietInvoke(model);
+      const quiet = quietInvoke(model, summaryUsageCells.getStore());
       return inner({ ...request, model: quiet }, (sent) =>
         handler(sent.model === quiet ? { ...sent, model } : sent),
       );
@@ -421,16 +433,21 @@ function withQuietSummaryCall(base: AgentMiddleware): AgentMiddleware {
  * @param model - 本尊。
  * @returns 替身。
  */
-function quietInvoke<T extends object>(model: T): T {
+function quietInvoke<T extends object>(model: T, cell: SummaryUsageCell | undefined): T {
   return new Proxy(model, {
     get(target, key) {
       if (key !== 'invoke') return Reflect.get(target, key) as unknown;
       const invoke = (target as { invoke(input: unknown, config?: unknown): unknown }).invoke;
-      return (input: unknown, config?: { tags?: readonly string[] }) =>
-        invoke.call(target, input, {
+      return async (input: unknown, config?: { tags?: readonly string[] }) => {
+        const result = await invoke.call(target, input, {
           ...config,
           tags: [...(config?.tags ?? []), SUMMARY_CALL_TAG],
         });
+        // 摘要的用量（#1022）：回來的那則訊息上讀，驗不過就是沒有。拋錯的那次連 `compaction/summary` 都不記，
+        // 用量也就跟著沒有（見 withCompactionLog 的說明）。
+        if (cell !== undefined) cell.usage = readModelUsage(result);
+        return result;
+      };
     },
   });
 }
@@ -480,7 +497,8 @@ function withCompactionLog(
   return {
     ...base,
     wrapModelCall: async (request, handler) => {
-      const response = await inner(request, handler);
+      const cell: SummaryUsageCell = { usage: undefined };
+      const response = await summaryUsageCells.run(cell, () => inner(request, handler));
       const event = readSummarizationEvent(response);
       if (event === undefined) return response;
       try {
@@ -498,6 +516,8 @@ function withCompactionLog(
           ...(event.summaryMessage === undefined
             ? {}
             : { summary: toLoggedMessage(event.summaryMessage) }),
+          // 生這份摘要的那一次報的用量（#1022）：沒報、報得對不起來就不放 key。**不進 `model/usage`**。
+          ...(cell.usage === undefined ? {} : { usage: cell.usage }),
         });
       } catch {
         // 記不進去不能反過來把摘要器殺掉。見上面最後一段。

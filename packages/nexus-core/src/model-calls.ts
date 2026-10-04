@@ -64,7 +64,8 @@
  * 參數的那顆與清掉截斷回覆裡呼叫的那顆（{@link ./max-tokens.ts}）都在內側。
  *
  * **拋錯的呼叫不記**：那次沒有回覆可記（dsh 那一次記的是 `assistant/attempt`，我們沒有，見
- * `session-log.ts`）。子代理那一層被中止時回的空訊息也不記——它是 {@link ./turn-cancel.ts} 合成來
+ * `session-log.ts`）。**但 `model/end` 帶 `outcome`**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：
+ * 拋錯是 `error`、使用者按了停止是 `aborted`，讓「這次燒了多少不知道」讀得出來。子代理那一層被中止時回的空訊息也不記——它是 {@link ./turn-cancel.ts} 合成來
  * 讓子代理的圖收尾的，不是模型的回覆；dsh 那側被中止、沒有看得見內容的那一步沒有 `assistant/message`。
  *
  * ## 記不進去不能扳倒模型呼叫
@@ -82,9 +83,9 @@ import type { AgentMiddleware } from './base-types.js';
 import { runInRetryScope } from './llm-retry.js';
 import { toLoggedMessage } from './logged-message.js';
 import { noteModelCallReplied, runInModelCall, withModelCall } from './model-call-scope.js';
-import type { SessionLog } from './session-log.js';
+import type { ModelCallOutcome, SessionLog } from './session-log.js';
 import type { SessionLookup } from './registry.js';
-import { INTERRUPTED_REPLY_MARKER } from './turn-cancel.js';
+import { isSyntheticStopReply, modelCallAborted } from './turn-cancel.js';
 
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
 export const MODEL_CALL_EVENTS_MIDDLEWARE_NAME = 'nexusModelCallEvents';
@@ -98,30 +99,18 @@ function tryAppendStart(log: SessionLog): number | undefined {
   }
 }
 
-/** 記配對的 `model/end`，帶這次呼叫的識別；記不進去就算了。 */
-function tryAppendEnd(log: SessionLog, modelCall: number): void {
+/** 記配對的 `model/end`，帶這次呼叫的識別與（沒有正常回來時的）結果；記不進去就算了。 */
+function tryAppendEnd(log: SessionLog, modelCall: number, outcome: ModelCallOutcome | undefined) {
   try {
-    log.append('model/end', { modelCall });
+    log.append('model/end', outcome === undefined ? { modelCall } : { modelCall, outcome });
   } catch {
     // 見檔頭「記不進去不能扳倒模型呼叫」。
   }
 }
 
-/**
- * 子代理被中止時 {@link ./turn-cancel.ts} 回的那則空訊息：帶中斷記號、沒有字、沒有呼叫。
- * 它不是模型的回覆，見檔頭。
- */
-function isSyntheticStop(message: AIMessage): boolean {
-  return (
-    message.additional_kwargs[INTERRUPTED_REPLY_MARKER] === true &&
-    message.text === '' &&
-    (message.tool_calls ?? []).length === 0
-  );
-}
-
 /** 記下這次呼叫回來的那一則。不是回覆的（`Command`、合成的空訊息）不記；記不進去就算了。 */
 function tryRecordReply(log: SessionLog, response: unknown, modelCall: number): void {
-  if (!AIMessage.isInstance(response) || isSyntheticStop(response)) return;
+  if (!AIMessage.isInstance(response) || isSyntheticStopReply(response)) return;
   try {
     log.append(
       'assistant/message',
@@ -154,16 +143,23 @@ export function createModelCallRecorder(sessions: {
       const { log } = found;
       const modelCall = tryAppendStart(log);
       if (modelCall === undefined) return handler(request);
+      // 沒有正常回來的方式（#1022）：拋錯、或使用者按了停止。正常回來沒有。
+      let outcome: ModelCallOutcome | undefined;
       try {
         // 這次呼叫的識別（`model/start` 的 `seq`）往內傳給用量與重試的寫入點，往外填給摘要器的量測
         // （{@link ./model-call-scope.ts}）。重試範圍包住 handler：adapter 在裡面回報失敗與重開（{@link ./llm-retry.ts}）。
         const response = await runInModelCall(log, modelCall, () =>
           runInRetryScope(log, () => handler(request)),
         );
+        // 子代理被中止時回的是合成的空收尾，不是拋錯：它沒有回覆可記，這次呼叫算被中止。
+        if (AIMessage.isInstance(response) && isSyntheticStopReply(response)) outcome = 'aborted';
         tryRecordReply(log, response, modelCall);
         return response;
+      } catch (error) {
+        outcome = modelCallAborted(request) ? 'aborted' : 'error';
+        throw error;
       } finally {
-        tryAppendEnd(log, modelCall);
+        tryAppendEnd(log, modelCall, outcome);
       }
     },
   }) as unknown as AgentMiddleware;

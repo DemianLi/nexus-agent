@@ -44,10 +44,27 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
 import type { SessionLog } from './session-log.js';
 
+/**
+ * adapter 在一次請求裡看到的供應商用量，三個數字**原樣、還沒驗**（驗的是讀它的那一側，見 `model-usage.ts` 的
+ * `validateUsage`）。
+ */
+export interface AttemptUsage {
+  readonly inputTokens: unknown;
+  readonly outputTokens: unknown;
+  readonly totalTokens: unknown;
+}
+
+/** 一次呼叫裡最近那次請求的用量格。每次請求開跑時換一格新的，所以舊請求遲到的回報進不了新的。 */
+interface AttemptCell {
+  usage: AttemptUsage | undefined;
+}
+
 /** 起訖紀錄器為一次呼叫開的範圍，給它內側的寫入點讀。 */
 interface CallScope {
   readonly log: SessionLog;
   readonly modelCall: number;
+  /** 最近那次請求的用量格（#1022）。`undefined` ＝ 還沒有請求開跑。 */
+  attempt: AttemptCell | undefined;
 }
 
 /** 外層放的格子，內層的起訖紀錄器填。 */
@@ -79,7 +96,7 @@ export function runInModelCall<T>(
     probe.log = log;
     probe.modelCall = modelCall;
   }
-  return Promise.resolve(scopes.run({ log, modelCall }, call));
+  return Promise.resolve(scopes.run({ log, modelCall, attempt: undefined }, call));
 }
 
 /**
@@ -111,6 +128,42 @@ export function lastModelCall(log: SessionLog): number | undefined {
 export function noteModelCallReplied(log: SessionLog, modelCall: number): void {
   const last = lastCalls.get(log);
   if (last !== undefined && last.modelCall === modelCall) last.replied = true;
+}
+
+/**
+ * adapter 在**每次請求開跑**時呼叫（`fetch` 層，跟 `noteRequestStart` 同一個時刻），換來一個回報函式：請求的串流裡
+ * 看到供應商的用量就用它回報（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）。
+ *
+ * ## 為什麼是 adapter 回報，不是記錄器自己讀
+ *
+ * 失敗的呼叫沒有回應物件可讀；v3 串流的模型層也收不到 token 回呼（pump 轉發的逐段片段不經模型的回呼）。
+ * 供應商的用量只活在 `fetch` 回來的位元組裡，所以只有 adapter 手上有它——同 {@link ./llm-retry.ts} 的重試回報。
+ *
+ * ## 回報函式要在請求開跑時就拿住
+ *
+ * 串流是之後才被讀的，那時候已經不在這個範圍的 `AsyncLocalStorage` 裡，所以不能事後再問「現在屬於哪次呼叫」。
+ * 每次請求各拿一個函式，**重試的下一次請求會換一格新的**（上一次的用量不算這一次的）。範圍外（標題那一顆、沒有日誌的
+ * 呼叫、測試直接叫）回 `undefined`，呼叫端不回報。
+ *
+ * @returns 回報函式（後到的覆蓋先到的：供應商的用量在最後一則片段，累計值以最後一個為準）；不在範圍裡是 `undefined`。
+ */
+export function beginAttemptReport(): ((usage: AttemptUsage) => void) | undefined {
+  const scope = scopes.getStore();
+  if (scope === undefined) return undefined;
+  const cell: AttemptCell = { usage: undefined };
+  scope.attempt = cell;
+  return (usage) => {
+    cell.usage = usage;
+  };
+}
+
+/**
+ * 最近那次請求報回來的用量（還沒驗）；沒報、或這份日誌不是此刻範圍裡的那一份是 `undefined`。
+ * 給用量記錄器在呼叫沒有正常回來時讀（它在起訖紀錄器內側，所以範圍還在）。
+ */
+export function reportedAttemptUsage(log: SessionLog): AttemptUsage | undefined {
+  const scope = scopes.getStore();
+  return scope !== undefined && scope.log === log ? scope.attempt?.usage : undefined;
 }
 
 /** {@link captureModelCall} 交回的識別。 */
