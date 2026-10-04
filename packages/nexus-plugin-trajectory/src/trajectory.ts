@@ -1,5 +1,5 @@
 /**
- * 軌跡投影的折疊：把 root 會話日誌一輪一組折成 {@link TrajectoryView}（[#1027](https://github.com/DemianLi/nexus-agent/issues/1027)）。
+ * 軌跡投影的折疊：把一份會話日誌（root 或子代理的，#1070）一輪一組折成 {@link TrajectoryView}（[#1027](https://github.com/DemianLi/nexus-agent/issues/1027)）。
  *
  * **全部從日誌折，不回寫日誌、不碰產品路徑。** `apply` 是純的、同步的，不相干的事件回**同一個參照**（通道靠這個省掉下游工作）；
  * 每顆事件只複製它碰到的那一輪與那一次呼叫，成本不隨會話長度長（長度被窗口封頂，見 `@nexus/wire` 的 `trajectory.ts`）。
@@ -475,6 +475,24 @@ function startTurn(state: TrajectoryState, event: SessionEvent): TrajectoryState
   return { ...state, turns, digests, omitted, total: state.total + 1 };
 }
 
+/** 沒有 `turn/start` 的日誌的那一輪：從第一次模型呼叫開始，不會收尾。 */
+function startRun(state: TrajectoryState, event: SessionEvent): TrajectoryState {
+  const turn: TurnState = {
+    index: 0,
+    seq: event.seq,
+    time: event.time,
+    kind: 'run',
+    logical: true,
+    inputs: [],
+    calls: [],
+    looseTools: [],
+    decisions: [],
+    unattributed: 0,
+    carry: NO_CARRY,
+  };
+  return { ...state, turns: [turn], total: 1 };
+}
+
 function closeTurn(
   state: TrajectoryState,
   event: SessionEvent,
@@ -506,7 +524,10 @@ function onCall(
   return at === undefined ? unattributed(state) : updateCall(state, at, change);
 }
 
-function startCall(state: TrajectoryState, event: SessionEvent): TrajectoryState {
+function startCall(prior: TrajectoryState, event: SessionEvent): TrajectoryState {
+  // 一份整份都沒有 `turn/start` 的日誌（前景子代理，#1070）：第一次模型呼叫開一輪 `run`，不然它的呼叫與工具全落在輪外、被丟掉。
+  // 只在「一輪都還沒開過」時開：root 的第一次模型呼叫一定在 `turn/start` 之後，所以這一條對 root 不會觸發；之後輪外的呼叫照舊丟。
+  const state = prior.total === 0 && prior.turns.length === 0 ? startRun(prior, event) : prior;
   if (openTurn(state) === undefined) return state;
   const call: TrajectoryCall = {
     id: event.seq,
@@ -672,13 +693,15 @@ export function applyTrajectory(state: TrajectoryState, event: SessionEvent): Tr
     }
     case 'subagent/catalog': {
       const callId = String(data['callId']);
+      const childId = String(data['childId']);
       return applyTool(state, callId, (previous) =>
         previous === undefined
           ? undefined
           : {
               ...previous,
               subagent: {
-                childId: String(data['childId']),
+                childId,
+                runId: childId.slice(childId.lastIndexOf('/') + 1),
                 mode: data['mode'] === 'continuable' ? 'continuable' : 'one-shot',
                 catalogSeq: event.seq,
               },
@@ -841,6 +864,7 @@ export function viewTrajectory(state: TrajectoryState): TrajectoryView {
 export const trajectoryUnit: ProjectionUnit<TrajectoryState, TrajectoryView> = {
   key: TRAJECTORY_PROJECTION,
   stateVersion: TRAJECTORY_VERSION,
+  children: true,
   init: initialTrajectory,
   apply: applyTrajectory,
   view: viewTrajectory,

@@ -72,7 +72,8 @@ interface ProjectionUnit<S, V> {
   值帶 `session`（子代理的 `runId`）送出，web 收進 `subagentProjections[runId][key]`。形狀照 dsh（投影格子按 session 分、
   一份日誌一份折疊，單元的 `apply` 不必知道在折誰）。子日誌的集合只有 pump 一份（`projectionChildren()`，活著的取記憶體、
   上一個行程留下的啟動時讀進來），即時與歷史讀同一份；細節見 `apps/harness/src/projection-children.ts`。
-  沒有宣告 `children` 的單元一顆子代理事件都收不到。
+  沒有宣告 `children` 的單元一顆子代理事件都收不到。軌跡（#1070）與用量（#1028）都宣告了；軌跡連同它的請求快照一起展開，
+  因為子代理的呼叫指的是它自己日誌的快照 `seq`。
 - **輪中的 frame 合併**（[#1071](https://github.com/DemianLi/nexus-agent/issues/1071)）：整份取代讓下行量 ≈ 事件數 × view 大小，
   所以輪中同一個單元連續的變更合成一顆——單元第一次變更開一個 100 毫秒的視窗，視窗到了送**那一刻最新的**整份值，視窗內再變的
   只換掉待送的那份。照 dsh job-controller 的觀察串流（`streamJobRows`：等 wake、睡 `observeFlushMs`、醒來才讀現況）。

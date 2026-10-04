@@ -374,6 +374,8 @@ describe('決策點與子代理連結', () => {
     const tool = foldAll(log.events).turns[0]!.calls[0]!.tools[0]!;
     expect(tool.subagent).toEqual({
       childId: 'root/run1',
+      // `runId` 是 `childId` 最後一段，web 拿它去 `subagentProjections[runId]` 找這個子代理自己的軌跡（#1070）。
+      runId: 'run1',
       mode: 'one-shot',
       catalogSeq: catalog.seq,
     });
@@ -672,4 +674,78 @@ describe('差分：歸屬跟 core 的 indexModelCalls 一致', () => {
       );
     },
   );
+});
+
+describe('沒有 turn/start 的日誌：前景子代理（#1070）', () => {
+  /** 前景子代理日誌的真實形狀：從第一次模型呼叫開始，沒有 `turn/start`、也沒有 `turn/end`。 */
+  function foregroundChild(): SessionLog {
+    const log = new SessionLog('child');
+    const first = log.append('model/start', {});
+    log.append('assistant/message', reply(first.seq, '', 'c1'));
+    log.append('model/end', { modelCall: first.seq });
+    log.append('tool/call', call('c1'));
+    log.append('tool/result', ok('c1'));
+    const second = log.append('model/start', {});
+    log.append('model/usage', {
+      inputTokens: 5,
+      outputTokens: 2,
+      totalTokens: 7,
+      modelCall: second.seq,
+    });
+    log.append('assistant/message', reply(second.seq, '做完'));
+    log.append('model/end', { modelCall: second.seq });
+    return log;
+  }
+
+  it('第一次模型呼叫開一輪 run：呼叫、工具、用量都在，沒有 end', () => {
+    const view = foldAll(foregroundChild().events);
+    expect(view.turns).toHaveLength(1);
+    const turn = view.turns[0]!;
+    expect(turn).toMatchObject({
+      index: 0,
+      kind: 'run',
+      logical: true,
+      callCount: 2,
+      toolCount: 1,
+      inputTokens: 5,
+      outputTokens: 2,
+      unattributed: 0,
+    });
+    expect(turn).not.toHaveProperty('end');
+    expect(turn.calls.map((each) => each.tools.map((tool) => tool.callId))).toEqual([['c1'], []]);
+    expect(turn.calls[1]?.reply).toMatchObject({ textChars: 2 });
+  });
+
+  it('沒有輪的日誌後來才出現 turn/start：run 那一輪照舊留著，新的一輪接在後面', () => {
+    const log = foregroundChild();
+    simpleTurn(log, '後來');
+    const view = foldAll(log.events);
+    expect(view.turns.map((turn) => [turn.index, turn.kind])).toEqual([
+      [0, 'run'],
+      [1, 'message'],
+    ]);
+  });
+
+  it('只在「一輪都還沒開過」時開：開過輪的日誌，輪外的模型呼叫照舊不改狀態（root 不受影響）', () => {
+    const rooted = new SessionLog('root');
+    simpleTurn(rooted, '先有一輪');
+    let state = initialTrajectory();
+    for (const event of rooted.events) state = applyTrajectory(state, event);
+    const stray = rooted.append('model/start', {});
+    expect(applyTrajectory(state, stray)).toBe(state);
+    // 有 turn/start 在前的日誌，第一輪是 message，不是 run。
+    expect(foldAll(rooted.events).turns.map((turn) => turn.kind)).toEqual(['message']);
+  });
+
+  it('兩個單元都宣告 children：子代理的日誌也各折一份', () => {
+    const registry = createRegistry();
+    const leave = registry.enter({ id: 'trajectory#0', name: 'trajectory' });
+    trajectoryPlugin.apply(registry, undefined as never);
+    leave();
+    const units = registry.projections.list();
+    expect(units.map((unit) => [unit.key, unit.children])).toEqual([
+      ['trajectory', true],
+      ['request-snapshots', true],
+    ]);
+  });
 });

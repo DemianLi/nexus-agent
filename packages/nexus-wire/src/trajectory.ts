@@ -34,7 +34,7 @@ export const TRAJECTORY_PROJECTION = 'trajectory';
 export const REQUEST_SNAPSHOTS_PROJECTION = 'request-snapshots';
 
 /** `trajectory` 的 `stateVersion`：折疊語意或 view 形狀一變就升。 */
-export const TRAJECTORY_VERSION = 1;
+export const TRAJECTORY_VERSION = 2;
 /** `request-snapshots` 的 `stateVersion`。 */
 export const REQUEST_SNAPSHOTS_VERSION = 1;
 
@@ -61,9 +61,13 @@ export const REQUEST_SNAPSHOTS_KEEP = 4;
 /** 一份系統提示詞最多存幾個字元；超過的截斷並標 `truncated`。 */
 export const REQUEST_SYSTEM_MAX_CHARS = 64 * 1024;
 
-/** 一輪是怎麼開始的。同 `turn/start` 的 `kind`。 */
+/**
+ * 一輪是怎麼開始的。同 `turn/start` 的 `kind`，外加 `run`：一份**整份都沒有 `turn/start`** 的日誌（前景子代理，它的日誌從第一次
+ * 模型呼叫就開始、沒有輪的邊界）從第一次模型呼叫算一輪，標 `run`（#1070）。它沒有 `turn/end`，所以不會有 `end`——那一份有沒有
+ * 跑完，看 root 軌跡上 `subagent/catalog` 的連結。
+ */
 export type TrajectoryTurnKind =
-  'message' | 'resume' | 'agent-message' | 'subagent-settled' | 'goal';
+  'message' | 'resume' | 'agent-message' | 'subagent-settled' | 'goal' | 'run';
 
 /** 一輪怎麼結束的；還沒結束就沒有這一格。 */
 export type TrajectoryEnd = 'completed' | 'aborted' | 'max-tokens' | 'interrupted' | 'failed';
@@ -87,8 +91,13 @@ export interface TrajectoryRetry {
 
 /** 子代理連結（`subagent/catalog`）。 */
 export interface TrajectorySubagentLink {
-  /** 子會話 id。 */
+  /** 子會話 id（`<root>/<runId>`）。 */
   readonly childId: string;
+  /**
+   * 子代理的 `runId`，就是 `childId` 最後一段：這個子代理自己那份軌跡在 `subagentProjections[runId]`（#1070）。直接給出來，
+   * 讀的人不必知道 `childId` 的拼法。
+   */
+  readonly runId: string;
   readonly mode: 'one-shot' | 'continuable';
   /** 那顆目錄在 root 日誌上的位置。 */
   readonly catalogSeq: number;
