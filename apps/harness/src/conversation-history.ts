@@ -128,6 +128,11 @@ import { threadTitleConfigSchema } from './settings/thread-title.js';
 import { capToolResultMeta, capToolText, toolResultText } from './tool-result-text.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
+// 讀這些種類（#679 第 4 步：由各自的 owner 套件用宣告合併補進 `SessionEventMap`）；沒有執行期的引用。
+import type {} from '@nexus/plugin-todo';
+import type {} from '@nexus/plugin-plan-mode';
+import type {} from '@nexus/plugin-present';
+import type {} from '@nexus/plugin-workspace-changes';
 
 /** 推不回模型的原因裡，說的是「這份日誌是格式 9 以前寫的」的那幾種。見 {@link historyPage}。 */
 const LEGACY_REASONS: ReadonlySet<UnreplayableReason> = new Set([

@@ -55,6 +55,9 @@
  */
 
 import type { InvariantInstaller, NexusPlugin, PluginEntry } from '@nexus/core';
+// 只為了讓 `command/run`／`command/done` 兩個種類進得了這個編譯單元（它們由 `@nexus/plugin-commands` 用宣告合併補，
+// #679 第 4 步）；沒有執行期的引用。
+import type {} from '@nexus/plugin-commands';
 
 import { parsePlanCommandArgs, PLAN_COMMAND_NAME } from './command.js';
 

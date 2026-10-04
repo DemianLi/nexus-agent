@@ -509,15 +509,17 @@ describe('什麼推得動 roundsStarted', () => {
     // `turn/start` 後面，推的是那一顆。
     // `session/title-llm-request`（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）：不推。LLM 標題在背景
     // 跑、寫在一輪之外，不是一輪的開始。
+    //
+    // **這張表只列這個編譯單元看得到的種類**（#679 第 4 步）：核心的 `SessionEventMap` 加上本套件自己補的 `goal/change`。
+    // 其他套件用宣告合併補的（`command/*`、`todo/write`、`plan/mode`、`sandbox/mode`、`deliverables/presented`、
+    // `workspace/changes`、`session/title*`，上面各段決議照舊成立）在這裡看不到，所以多一個那種不會讓這條絆索紅；
+    // 折疊的 `default` 分支對沒列的種類一律不推。照 dsh：開放詞彙之後，窮舉只能在擁有者那一側做。
     const KNOWN = [
       'turn/start',
       'turn/end',
       'turn/failed',
       'interrupt/raised',
-      'command/run',
-      'command/done',
       'goal/change',
-      'todo/write',
       'model/usage',
       'model/start',
       'model/end',
@@ -526,8 +528,6 @@ describe('什麼推得動 roundsStarted', () => {
       'assistant/message',
       'user/message',
       'compaction/summary',
-      'sandbox/mode',
-      'plan/mode',
       'subagent/model-selection-policy',
       'subagent/catalog',
       'tool/call',
@@ -536,12 +536,8 @@ describe('什麼推得動 roundsStarted', () => {
       'feedback/message-put',
       'feedback/message-delete',
       'feedback/record',
-      'deliverables/presented',
-      'workspace/changes',
       'context/measure',
       'inbox/spliced',
-      'session/title',
-      'session/title-llm-request',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];
     // 反過來這一條才是絆索：多一種而沒有列進來，`Exhaustive` 就變成 `never`。

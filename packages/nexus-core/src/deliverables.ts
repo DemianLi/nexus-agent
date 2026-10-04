@@ -5,9 +5,9 @@
  * （`references/deepseek-harness/packages/deliverables/tool-present/src/types.ts`，`ddefc45`）。
  *
  * **詞彙今天在這裡而工具在 plugin：同 {@link ./todo.ts | todo.ts} 那一條。**
- * 酬載型別目前列在 {@link ./session-log.ts | SessionEventMap}；工具、檢查與不變量住在
- * `@nexus/plugin-present`。照 dsh 該由 plugin 那一側宣告合併，還沒做，見
- * [#679](https://github.com/DemianLi/nexus-agent/issues/679)。
+ * 事件種類 `deliverables/presented` 由 `@nexus/plugin-present` 用宣告合併補進
+ * {@link ./session-log.ts | SessionEventMap}（[#679](https://github.com/DemianLi/nexus-agent/issues/679) 第 4 步），工具、
+ * 檢查與不變量也住在那裡；酬載裡的 {@link PresentedFile} 留在這裡，因為 `@nexus/wire` 與 web 都讀它。
  *
  * @see [#441](https://github.com/DemianLi/nexus-agent/issues/441)
  * @module

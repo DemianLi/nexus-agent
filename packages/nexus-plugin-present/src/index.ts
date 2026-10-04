@@ -357,3 +357,33 @@ export default presentPlugin;
 export function createPresentPlugin(options: PresentPluginOptions = {}): PluginEntry {
   return { plugin: presentPlugin, config: options };
 }
+
+declare module '@nexus/core' {
+  interface SessionEventMap {
+    /**
+     * 模型用 `present` 宣告這幾個檔案是交付物，**而且那次呼叫的最終結果是成功的**。
+     *
+     * 照 dsh 的同名事件（`packages/deliverables/tool-present/src/types.ts`，`ddefc45`）：寫進**呼叫者
+     * 自己那一份**日誌，子代理宣告的留在子代理那份——主代理要交付，得自己再叫一次 `present`（dsh README
+     * 原話）。寫的時刻見檔頭：配對的 `tool/result` 之後。
+     *
+     * ## 對 dsh 的偏離：沒有 `turn`
+     *
+     * dsh 的 `turn` 出自 `turnBoundary` 投影的 `lastTurn`，我們沒有那個投影，日誌與 wire 上也都沒有輪的
+     * 編號（見 `tool/call` 那一條）。這一筆屬於哪一輪照 repo 既有的規則由 `seq` 推：往前找最近一顆不是
+     * resume 的 `turn/start`（{@link isLogicalTurnStart}，各讀方共用）。放一個自己數的號進來，就會有兩個
+     * 可能對不上的輪。
+     *
+     * web 只收 root 那一份的這一顆，即時與重新整理同一條規則——歷史路由只讀 root（`conversation-history.ts`）。
+     *
+     * ⚠️ **檔案路徑與模型寫的說明原樣進本機日誌、也原樣進遙測**，同 `tool/call` 的 `arguments`（同一串路徑
+     * 本來就在那顆呼叫的參數裡）。
+     */
+    'deliverables/presented': {
+      /** 配對的那顆 `tool/call`／`tool/result` 的 `callId`。 */
+      readonly callId: string;
+      /** 通過檢查的檔案，順序照模型給的。 */
+      readonly files: readonly PresentedFile[];
+    };
+  }
+}

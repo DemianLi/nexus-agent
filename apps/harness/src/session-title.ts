@@ -41,6 +41,11 @@
  */
 
 import type { SessionEvent, SessionLog } from '@nexus/core';
+import type {
+  SessionTitleSource,
+  SessionTitleModelIdentity,
+  SessionTitleLlmMessage,
+} from '@nexus/core';
 
 /** 標題的兩個上限。見檔頭「規則」。 */
 export interface ThreadTitleLimits {
@@ -175,4 +180,40 @@ export function ensureFallbackTitle(log: SessionLog, limits: ThreadTitleLimits):
     messageSeqs: [first.seq],
     source: { kind: 'fallback' },
   });
+}
+
+declare module '@nexus/core' {
+  interface SessionEventMap {
+    /**
+     * 這條會話現在叫什麼（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。**latest-wins**：讀的人拿最後
+     * 一顆。
+     *
+     * 照 dsh 的 `session/title`（`packages/session/session-title/src/types.ts`，`477b4f4`）：
+     *
+     * - `messageSeqs` 是推出這個標題用到的那幾則人話。dsh 指的是 `user/message`，我們對到的是
+     *   `turn/start {kind:'message'}`——人打的字在我們的日誌上只在那裡。
+     * - `source` 見 {@link SessionTitleSource}。dsh 另有 `user`（改名，會釘住），有了生產者再加成員，同
+     *   {@link TurnEndReason}。
+     */
+    'session/title': {
+      readonly title: string;
+      readonly messageSeqs: readonly number[];
+      readonly source: SessionTitleSource;
+    };
+    /**
+     * 一次標題模型呼叫**送出之前**記下它送了什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
+     *
+     * 照 dsh 的 `session/title-llm-request`（`packages/session/session-title-llm/src/index.ts`，`477b4f4`）：系統提示、
+     * 訊息、輸出上限都是**真的送出去的那一份**，路由是那一次解析出來的。模型後來失敗了，這一顆照樣留著。
+     * `messageSeqs` 同 `session/title`，指到 `turn/start {kind:'message'}`。
+     */
+    'session/title-llm-request': {
+      readonly titleProvider: string;
+      readonly messageSeqs: readonly number[];
+      readonly route: SessionTitleModelIdentity;
+      readonly system: string;
+      readonly messages: readonly SessionTitleLlmMessage[];
+      readonly maxTokens: number;
+    };
+  }
 }

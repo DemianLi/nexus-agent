@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { SessionLog, createInvariantRunner, createRegistry } from '@nexus/core';
 import type { InvariantError, PluginOrigin } from '@nexus/core';
+import type {} from '@nexus/plugin-commands';
 import { PLAN_COMMAND_NAME } from './command.js';
 import { createPlanModeInvariantPlugin } from './invariant.js';
 

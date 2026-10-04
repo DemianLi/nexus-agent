@@ -294,3 +294,17 @@ export default todoPlugin;
 export function createTodoPlugin(options: TodoPluginOptions): PluginEntry {
   return { plugin: todoPlugin, config: options };
 }
+
+declare module '@nexus/core' {
+  interface SessionEventMap {
+    /**
+     * 這個會話的待辦清單被整份換掉了一次。**每一筆帶完整的替換清單**，重放時後寫覆蓋
+     * 先寫。
+     *
+     * 帶整份的理由與 `goal/change` 一樣（讀它的是嚴格重放），但它是**模型**寫的而不是人
+     * ——所以沒有 CAS、沒有修訂號：整表替換的語義本身就沒有「基於哪一版改的」這個問題。
+     * 條目的形狀見 {@link ./todo.ts | TodoItem}，域住在 `@nexus/plugin-todo`。
+     */
+    'todo/write': { readonly todos: readonly TodoItem[] };
+  }
+}

@@ -36,18 +36,25 @@
  */
 
 import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
-import type { GoalChangeMeta, GoalId } from './goal.js';
+import type { GoalId } from './goal.js';
 import type { InboxSplice, SubagentSettleReason } from './inbox.js';
 import { KNOWN_SESSION_EVENT_TYPES } from './known-event-types.js';
-import type { PresentedFile } from './deliverables.js';
 import type { LoggedMessage } from './logged-message.js';
-import type { TodoItem } from './todo.js';
-import type { SandboxMode } from './sandbox.js';
 import type { SubagentCatalogData } from './subagent-catalog.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
 /**
  * 這一版收得下的事件種類。**加種類要同時回答「兩條路都產得出來嗎」。**
+ *
+ * **種類是 {@link SessionEventMap} 的鍵，而鍵不全在核心**（[#679](https://github.com/DemianLi/nexus-agent/issues/679)
+ * 第 4 步，照 dsh 的 `SessionEventType = keyof SessionEventMap`）：核心留下的是跨 plugin 的流程骨架（輪、中斷、模型
+ * 呼叫、訊息、壓縮、工具、子代理、回饋、收件匣），領域的種類由擁有者用 `declare module '@nexus/core'` 補——
+ * `command/*`（`@nexus/plugin-commands`）、`goal/change`（`@nexus/plugin-goal`）、`todo/write`（`@nexus/plugin-todo`）、
+ * `plan/mode`（`@nexus/plugin-plan-mode`）、`sandbox/mode`（`@nexus/plugin-sandbox-policy`）、`deliverables/presented`
+ * （`@nexus/plugin-present`）、`workspace/changes`（`@nexus/plugin-workspace-changes`）、`session/title*`
+ * （`apps/harness/src/session-title.ts`）。**宣告合併是以編譯單元為單位的**：一個套件只看得到自己 import 的擁有者補的
+ * 鍵，要讀就加一行 `import type {} from '@nexus/plugin-x'`。認得哪些種類的執行期清單是生成的，見
+ * {@link isKnownSessionEventType}。下面各段講的寫入規則照舊適用，種類的酬載型別去擁有者那裡找。
  *
  * `command/*` 這一對答得乾淨，理由值得留著：**它們根本不是模型串流事件**。產它們的是
  * 進入點（`runRepl` 手上就有這份日誌），不是 `streamEvents` 或 `stream(['updates'])`
@@ -367,62 +374,6 @@ export interface SessionEventMap {
   /** 掛上了一顆等人回答的中斷。 */
   'interrupt/raised': { readonly interruptId: string };
   /**
-   * 一個解析得出來的斜線命令進了它的 handler。**只記日誌，永遠不進模型**。
-   *
-   * 與 `command/done` 靠 `commandId` 配對，形狀照 dsh 的 `tool/call`↔`tool/result`
-   * （我們自己的那一對在下面，模型的工具呼叫記在那裡）。
-   * `name` 與 `args` 是 `parseCommand` 自己的切分（命令名，以及**含分隔空白的原文**），
-   * 所以讀日誌的人不必再解析一次。
-   *
-   * **收不下的行不記**：語法不符或名字不認得的，從來沒進過 handler，日誌裡不留痕跡。
-   * 這一條照 dsh 的 `execute`：「Admission misses log nothing」。
-   *
-   * **`args` 是使用者原話，而它會原樣進遙測**——協調器一律鏡像每一顆事件（見
-   * `session-telemetry-coordinator.ts`）。
-   *
-   * **命令宣告 `recordInput: false` 時整個不放 `args`**，照 dsh
-   * （`packages/interaction/commands/src/index.ts:376`，`c291e79`）：那段輸入由命令自己的 domain 事件
-   * 帶著，這裡再記一次就是同一段話在日誌裡出現兩次。今天只有 `/feedback` 這樣宣告
-   * （[#278](https://github.com/DemianLi/nexus-agent/issues/278)）；v8 以前每一顆都帶這一格。
-   */
-  'command/run': {
-    readonly commandId: string;
-    readonly name: string;
-    readonly args?: string;
-    readonly source: { readonly kind: 'user' };
-  };
-  /**
-   * 配對的那次執行落定了。handler 拋錯或被中止都落成 `kind: 'error'`。
-   *
-   * **`text` 沒話說的時候要整個不放這個 key，不能放 `undefined`**——`snapshotJsonValue`
-   * 對 `undefined` 是當場拋的，而它拋的時候整筆不算，等於這次執行在日誌裡沒有落定。
-   */
-  'command/done': {
-    readonly commandId: string;
-    readonly kind: 'success' | 'error';
-    readonly text?: string;
-  };
-  /**
-   * 這個會話的長期目標動了一次。**每一筆帶整份耐久狀態**（六個 operation），或是一顆
-   * clear 墓碑。
-   *
-   * 帶整份而不是帶差異，是因為讀它的是一個**嚴格重放**的折疊：差異要求讀的人先有正確
-   * 的前一份狀態才解得開，而整份快照讓「這一筆自己合不合法」與「它接不接得上前一筆」
-   * 分成兩道各自報得出理由的檢查。折疊在 `@nexus/plugin-goal`。
-   *
-   * **`goal.blockedReason` 沒有時要整個不放 key**，同 `command/done` 的 `text`。
-   */
-  'goal/change': GoalChangeMeta;
-  /**
-   * 這個會話的待辦清單被整份換掉了一次。**每一筆帶完整的替換清單**，重放時後寫覆蓋
-   * 先寫。
-   *
-   * 帶整份的理由與 `goal/change` 一樣（讀它的是嚴格重放），但它是**模型**寫的而不是人
-   * ——所以沒有 CAS、沒有修訂號：整表替換的語義本身就沒有「基於哪一版改的」這個問題。
-   * 條目的形狀見 {@link ./todo.ts | TodoItem}，域住在 `@nexus/plugin-todo`。
-   */
-  'todo/write': { readonly todos: readonly TodoItem[] };
-  /**
    * 一次模型呼叫的 token 帳目，**供應商報什麼記什麼**。
    *
    * 一輪有幾格就有幾筆（工具呼叫每一輪都要再叫一次模型）；一輪花了多少要自己加，
@@ -625,54 +576,6 @@ export interface SessionEventMap {
     }[];
   };
   /**
-   * 這個會話的**檔案效果政策**現在是哪一格。**每一筆帶整個值**，不是差異。
-   *
-   * ## 誰寫它
-   *
-   * `apps/harness/src/sandbox-mode.ts` 的 `SandboxModeController`：接上一份日誌的當下寫
-   * 一顆**起始值**，之後每一次**真的變了**的切換各寫一顆。切到已經生效的那一格不寫
-   * ——照 dsh 的「净变化为零的选择不追加任何内容」
-   * （`packages/interaction/permission-presets/README.zh.md`）。
-   *
-   * **子代理的日誌只有一顆，帶 `source: 'delegation'`**（[#326](https://github.com/DemianLi/nexus-agent/issues/326)）：
-   * 委派那一刻拍下的那一格，照 dsh 的 `appendDelegatedPolicyOverrides`
-   * （`packages/subagent/subagent/src/child-agent.ts`，SHA `0d1f500`）。子代理之後一直照這一格判，root 再切
-   * 也不會寫進子代理的日誌——所以 root 的日誌答不出子代理跑在哪一格，要記在這裡。
-   *
-   * **沒掛 fence 的組裝一顆都不寫。** 沒有 `--workspace` 就沒有
-   * `ContainedFilesystemBackend`，沒有東西在擋——那種組裝底下記一顆「政策是
-   * workspace-write」是**在日誌裡說謊**，與 `@nexus/plugin-sandbox-policy` 那句提示不貢獻是同一條理由。
-   *
-   * ## 今天誰讀它，以及誰還讀不到
-   *
-   * **讀的人是讀日誌的人**：有了它，一份日誌才答得出「這一輪跑的時候檔案政策是哪一格」
-   * ——`command/run` 只記得住使用者打了什麼字，記不住生效的值，而 `--sandbox` 給的起始
-   * 值在它之前就決定了，命令那條路上根本沒出現過。
-   *
-   * **它回得到執行期。** CLI 的 `--resume <run 目錄>` 與 serve 碰到以前寫過的 thread 都讀回
-   * 那一份日誌，最後一顆就是起始那一格（`sandbox-mode.ts` 的 `recordedSandboxMode`）——
-   * [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A。
-   */
-  'sandbox/mode': {
-    readonly mode: SandboxMode;
-    /** 委派那一刻拍進子代理日誌的那一顆；省略是 root 的起始值或一次切換。照 dsh 同名欄位。 */
-    readonly source?: 'delegation';
-  };
-  /**
-   * 計劃模式這一刻開著還是關著——**整份值，不是切換**，最後一顆就是答案
-   * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的第二刀）。
-   *
-   * 照 dsh 的 `plan/mode`（`packages/plan/plan-mode/src/index.ts`，`d347e70`）：`{ active }`。
-   * 寫者兩個，都只寫 **root** 那一份：`/plan` 的 handler（人）與 `exit_plan_mode`（模型，
-   * 計劃獲准之後；照 dsh 排到下一步請求組起來之前才寫，[#652](https://github.com/DemianLi/nexus-agent/issues/652)）。
-   * 折疊它的是 `@nexus/plugin-plan-mode` 自己。
-   *
-   * **它是第一顆要熬過 `session/end-seed` 的狀態。** 那顆標記之前的開頭屬於上一個生命週期，
-   * 讀「當前這一段」的人要在那裡重設；這一顆相反——跨重啟留得住正是它搬進日誌的理由，所以
-   * 折疊它的人**不**在 end-seed 歸零。
-   */
-  'plan/mode': { readonly active: boolean };
-  /**
    * 這個會話**允許子代理逐次挑哪些模型**（[#875](https://github.com/DemianLi/nexus-agent/issues/875)，卡 [#709](https://github.com/DemianLi/nexus-agent/issues/709)）。
    * 照 dsh 的同名事件（`packages/subagent/tool-subagent/src/model-selection-state.ts:17`，`477b4f4`）。
    *
@@ -827,47 +730,6 @@ export interface SessionEventMap {
    */
   'feedback/record': FeedbackRecord;
   /**
-   * 模型用 `present` 宣告這幾個檔案是交付物，**而且那次呼叫的最終結果是成功的**。
-   *
-   * 照 dsh 的同名事件（`packages/deliverables/tool-present/src/types.ts`，`ddefc45`）：寫進**呼叫者
-   * 自己那一份**日誌，子代理宣告的留在子代理那份——主代理要交付，得自己再叫一次 `present`（dsh README
-   * 原話）。寫的時刻見檔頭：配對的 `tool/result` 之後。
-   *
-   * ## 對 dsh 的偏離：沒有 `turn`
-   *
-   * dsh 的 `turn` 出自 `turnBoundary` 投影的 `lastTurn`，我們沒有那個投影，日誌與 wire 上也都沒有輪的
-   * 編號（見 `tool/call` 那一條）。這一筆屬於哪一輪照 repo 既有的規則由 `seq` 推：往前找最近一顆不是
-   * resume 的 `turn/start`（{@link isLogicalTurnStart}，各讀方共用）。放一個自己數的號進來，就會有兩個
-   * 可能對不上的輪。
-   *
-   * web 只收 root 那一份的這一顆，即時與重新整理同一條規則——歷史路由只讀 root（`conversation-history.ts`）。
-   *
-   * ⚠️ **檔案路徑與模型寫的說明原樣進本機日誌、也原樣進遙測**，同 `tool/call` 的 `arguments`（同一串路徑
-   * 本來就在那顆呼叫的參數裡）。
-   */
-  'deliverables/presented': {
-    /** 配對的那顆 `tool/call`／`tool/result` 的 `callId`。 */
-    readonly callId: string;
-    /** 通過檢查的檔案，順序照模型給的。 */
-    readonly files: readonly PresentedFile[];
-  };
-  /**
-   * 一輪改了工作區的檔，**摘要留在 server 上**，這一顆只是指標：摘要與逐檔比較由
-   * `@nexus/plugin-workspace-changes` 保管，web 拿這一顆的 `seq` 去兩條路由要，會話結束就沒了。
-   *
-   * 照 dsh 的同名事件（`packages/deliverables/workspace-changes/src/types.ts`，`ddefc45`）。只寫在 root 那一份
-   * （dsh 不記子代理的會話）。同一輪可能有不只一顆：後寫的取代先寫的。
-   *
-   * ## 對 dsh 的偏離：沒有 `turn`
-   *
-   * 同 `deliverables/presented`：這一筆屬於哪一輪由 `seq` 推，往前找最近一顆開邏輯輪的 `turn/start`（{@link isLogicalTurnStart}）
-   * （[#443](https://github.com/DemianLi/nexus-agent/issues/443) 第二則決議）。**所以它一定落在它那一輪的
-   * `turn/start` 之後、下一輪的之前**，記錄器為此在輪內記，見那個套件的 `recorder.ts`。
-   *
-   * 資料是空的，所以進遙測也沒有東西外洩——檔名與內容都不在日誌上。
-   */
-  'workspace/changes': Record<string, never>;
-  /**
    * 送出佇列的一次變動（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）：送進來、領走、改、刪。
    * 形狀與折疊見 {@link ./inbox.ts}。
    *
@@ -881,37 +743,6 @@ export interface SessionEventMap {
    * - **改、刪**：任何時候（排著的那一件還沒被領走就行）。
    */
   'inbox/spliced': InboxSplice;
-  /**
-   * 這條會話現在叫什麼（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。**latest-wins**：讀的人拿最後
-   * 一顆。
-   *
-   * 照 dsh 的 `session/title`（`packages/session/session-title/src/types.ts`，`477b4f4`）：
-   *
-   * - `messageSeqs` 是推出這個標題用到的那幾則人話。dsh 指的是 `user/message`，我們對到的是
-   *   `turn/start {kind:'message'}`——人打的字在我們的日誌上只在那裡。
-   * - `source` 見 {@link SessionTitleSource}。dsh 另有 `user`（改名，會釘住），有了生產者再加成員，同
-   *   {@link TurnEndReason}。
-   */
-  'session/title': {
-    readonly title: string;
-    readonly messageSeqs: readonly number[];
-    readonly source: SessionTitleSource;
-  };
-  /**
-   * 一次標題模型呼叫**送出之前**記下它送了什麼（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
-   *
-   * 照 dsh 的 `session/title-llm-request`（`packages/session/session-title-llm/src/index.ts`，`477b4f4`）：系統提示、
-   * 訊息、輸出上限都是**真的送出去的那一份**，路由是那一次解析出來的。模型後來失敗了，這一顆照樣留著。
-   * `messageSeqs` 同 `session/title`，指到 `turn/start {kind:'message'}`。
-   */
-  'session/title-llm-request': {
-    readonly titleProvider: string;
-    readonly messageSeqs: readonly number[];
-    readonly route: SessionTitleModelIdentity;
-    readonly system: string;
-    readonly messages: readonly SessionTitleLlmMessage[];
-    readonly maxTokens: number;
-  };
   /**
    * 一段 seed 的結尾——這一顆之前的事件是上一個行程寫的，這個行程一顆都沒寫
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
