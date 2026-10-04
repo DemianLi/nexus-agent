@@ -23,7 +23,7 @@ import { fromLoggedMessage } from './logged-message.js';
 import type { SessionLookup } from './registry.js';
 import { SessionLog } from './session-log.js';
 import type { SessionEventMap } from './session-log.js';
-import { HarnessError, INVALID_TOOL_OUTPUT, markToolError } from './tool-events.js';
+import { HarnessError, INVALID_TOOL_OUTPUT, markToolError, UNKNOWN_TOOL } from './tool-events.js';
 
 /** middleware 的 `wrapToolCall` 拿出來直接呼叫用的形狀。 */
 type Wrapper = (
@@ -430,19 +430,32 @@ describe('工具事件', () => {
     expect(lastResult(log)).toEqual({ callId: 'call-1', isError: false });
   });
 
-  it('工具不存在而內層回了錯誤 → UNKNOWN_TOOL；工具存在就不是', async () => {
-    const unknown = new SessionLog('u');
-    const known = new SessionLog('k');
-    const failed = () =>
-      new ToolMessage({ content: '沒這顆', tool_call_id: 'call-1', status: 'error' });
-    await recorder(unknown)(call({ tool: undefined }), async () => failed());
-    await recorder(known)(call(), async () => failed());
-    expect(lastResult(unknown)).toEqual({
+  /**
+   * **#1024 翻過來的那一條**：這一格的 `request.tool` 是 `undefined` 不代表沒有這顆工具——動態加給模型的
+   * `subagent` 在這裡也是 `undefined`，它在外層回的合法拒絕以前就這樣被記成 `UNKNOWN_TOOL`。圍堵只讀碼。
+   */
+  it('`request.tool` 是 undefined、內層回了沒碼的錯誤 → 照樣沒碼，圍堵不猜 UNKNOWN_TOOL', async () => {
+    const log = new SessionLog('u');
+    await recorder(log)(
+      call({ tool: undefined }),
+      async () =>
+        new ToolMessage({ content: '前景不能指定', tool_call_id: 'call-1', status: 'error' }),
+    );
+    expect(lastResult(log)).toEqual({ callId: 'call-1', isError: true });
+  });
+
+  it('內層標了 UNKNOWN_TOOL（最內層替基座的「沒有這顆工具」標的）→ 帶那個碼', async () => {
+    const log = new SessionLog('u');
+    const notFound = markToolError(
+      new ToolMessage({ content: '沒這顆', tool_call_id: 'call-1', status: 'error' }),
+      { name: 'ToolNotFoundError', code: UNKNOWN_TOOL },
+    );
+    await recorder(log)(call({ tool: undefined }), async () => notFound);
+    expect(lastResult(log)).toEqual({
       callId: 'call-1',
       isError: true,
       error: { name: 'ToolNotFoundError', code: 'UNKNOWN_TOOL' },
     });
-    expect(lastResult(known)).toEqual({ callId: 'call-1', isError: true });
   });
 
   it('工具回 `Command` → 讀它夾帶的那則 ToolMessage', async () => {

@@ -577,8 +577,13 @@ describe('評分要的兩格（#382）', () => {
       ['history-1', 'm-1'],
       ['history-2', undefined],
     ]);
-    // 人那一則沒有訊息 id：它不是評分的目標。
-    expect(state.entries[0]).toEqual({ kind: 'human', id: 'history-0', text: '跑' });
+    // 人那一則沒有訊息 id：它不是評分的目標。時刻是那一筆 `turn/start` 的 `time`（#1030）。
+    expect(state.entries[0]).toEqual({
+      kind: 'human',
+      id: 'history-0',
+      text: '跑',
+      startedAt: 1000,
+    });
   });
 
   it('停在核准點又續接的一輪不在中間收掉：收尾只有續接後那則，同即時', () => {

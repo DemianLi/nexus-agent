@@ -68,6 +68,8 @@ export interface HumanEntry {
   readonly kind: 'human';
   readonly id: string;
   readonly text: string;
+  /** 這一句出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
+  readonly startedAt?: number;
   /**
    * 這一則是送出佇列的哪一件開跑時畫的（`inbox` 的 `claimed.id`）。同一顆 `claimed` 再到一次靠它認出來，不畫第二次。
    * 歷史重播的人話沒有這一格。
@@ -100,6 +102,8 @@ export interface NoticeEntry {
   readonly reason?: WireSettleReason;
   /** 即時的那一種是送出佇列的哪一件（`inbox` 的 `claimed.id`），同一顆 `claimed` 再到一次靠它認出來。歷史的沒有。 */
   readonly inboxId?: string;
+  /** 這則通知出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
+  readonly startedAt?: number;
 }
 
 /**
@@ -121,6 +125,8 @@ export interface AgentMessageEntry {
   readonly text: string;
   /** 即時的那一種是送出佇列的哪一件，同一顆 `claimed` 再到一次靠它認出來。歷史的沒有。 */
   readonly inboxId?: string;
+  /** 這則話出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
+  readonly startedAt?: number;
 }
 
 export interface AiEntry {
@@ -176,6 +182,15 @@ export interface AiEntry {
    * 畫法歸畫面那一側，這裡只帶資料。
    */
   readonly maxTokens?: true;
+  /**
+   * `message-start` 的時刻。**兩條路的意思不同**：即時是第一個字到的那一刻（`message-start` 跟它一起到，同 dsh 的
+   * `firstTokenTime`，不是 `stepStartTime`）；歷史重播的整則是同一個時刻（日誌
+   * `assistant/message` 落盤，也就是講完的那一刻），所以重新整理之後它等於 {@link AiEntry.settledAt}。見
+   * {@link ConversationEntry} 的「時刻」。
+   */
+  readonly startedAt?: number;
+  /** 講完的時刻：`message-finish`、`error`，或講到一半被停止時收尾那顆 `lifecycle` 的時刻。還在吐字就沒有。 */
+  readonly settledAt?: number;
 }
 
 export interface ToolEntry {
@@ -240,6 +255,20 @@ export interface ToolEntry {
    */
   readonly meta?: unknown;
   readonly attribution: Attribution;
+  /**
+   * 這次呼叫**第一次**出現在線上的時刻（`tool-started`），同 dsh 結果節點的 `callTime`。
+   *
+   * **同一個 `tool_call_id` 再到一次不換**：即時那條本來就會到兩次（pump 從日誌 `tool/call` 開卡、基座的
+   * `tool-started` 晚到），續接時（答了中斷、圖從 tools 節點重跑）基座與日誌也都再發一次。dsh 不重派，
+   * `callTime` 就是那一顆 `tool/call` 的時刻，等核准、等回答的時間算在裡面；這裡取第一顆，意思相同。
+   */
+  readonly startedAt?: number;
+  /**
+   * 這張卡落定的時刻：最後一顆 `tool-finished`（pump 的更正幀照這一顆換掉，同 {@link ToolEntry.text}）、`tool-error`，或
+   * 一輪關掉時還沒有結果、由收尾那顆 `lifecycle` 收成失敗的時刻（同 dsh 替沒結果的卡合成的那則用收尾邊界的時刻）。
+   * 被翻回執行中（續接、晚到的 `tool-started`）就拿掉。執行中與等人回答時沒有。
+   */
+  readonly settledAt?: number;
 }
 
 /**
@@ -317,6 +346,8 @@ export interface DeliverablesEntry {
   readonly seq: number;
   /** 交付的檔案，順序照模型給的。 */
   readonly files: readonly WirePresentedFile[];
+  /** 這次交付出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
+  readonly startedAt?: number;
 }
 
 /**
@@ -338,6 +369,8 @@ export interface CompactionEntry {
   readonly saved: boolean;
   /** 摘要全文，沒有就是沒有。 */
   readonly summary?: string;
+  /** 這次壓縮出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
+  readonly startedAt?: number;
 }
 
 /**
@@ -355,8 +388,28 @@ export interface WorkspaceChangesEntry {
   readonly id: string;
   /** 那顆 `workspace/changes` 在 root 日誌裡的 `seq`，兩條路由拿它定位摘要。 */
   readonly seq: number;
+  /** 這份改動紀錄出現在線上的時刻，見 {@link ConversationEntry} 的「時刻」。 */
+  readonly startedAt?: number;
 }
 
+/**
+ * 畫面上的一格。
+ *
+ * ## 時刻（[#1030](https://github.com/DemianLi/nexus-agent/issues/1030)）
+ *
+ * `startedAt`／`settledAt` 是 Unix epoch 毫秒，**取自長出（或收掉）那一格的 frame 的 `params.timestamp`**，折疊器自己
+ * 不看時鐘。照 dsh：每種節點都帶來源事件的時刻（`ui-conversation` 的 `contract/records.ts`，`5badb15`）。
+ *
+ * - **一個時刻的**（人話、通知、子代理來信、交付、改動紀錄、壓縮）只帶 `startedAt`，同 dsh 那幾種節點只有一個 `time`。
+ * - **有起訖的**（模型回覆、工具卡）兩格都帶：規則見 {@link AiEntry.startedAt}、{@link ToolEntry.startedAt}。
+ * - **人按的決定與答案**（{@link DecisionEntry}、{@link AnswerEntry}）不帶：它們不是從線上來的，沒有 frame 可取，
+ *   用瀏覽器的時鐘補會跟其餘的格混用兩個時鐘。
+ *
+ * **兩條路的時鐘不同**：歷史重播的 frame 帶的是日誌那一筆的 `time`；即時的是基座 frame 原帶的、或 pump 合成
+ * 那一刻的 `Date.now()`。實測（`@nexus/harness` 的 `wire-entry-timestamps.test.ts`）只有模型回覆的 `startedAt` 差得多：
+ * 即時是第一個字到的那一刻、歷史是講完；其餘的格兩條路只差幾毫秒。frame 沒帶可用的時刻（不是正的有限數字）就不給那一格，
+ * 理由見 {@link wireTime}。
+ */
 export type ConversationEntry =
   | HumanEntry
   | AiEntry
@@ -745,21 +798,42 @@ function reduceFrame(state: ConversationState, event: Event): ConversationState 
   }
   const advanced = seq === undefined ? state : { ...state, lastSeq: seq };
   const namespace = event.params.namespace;
+  const time = wireTime((event.params as { timestamp?: unknown }).timestamp);
 
   switch (event.method) {
     case 'messages':
-      return reduceMessage(advanced, namespace, event.params.data);
+      return reduceMessage(advanced, namespace, event.params.data, time);
     case 'tools':
-      return reduceTool(advanced, namespace, event.params.data);
+      return reduceTool(advanced, namespace, event.params.data, time);
     case 'lifecycle':
-      return reduceLifecycle(advanced, namespace, event.params.data);
+      return reduceLifecycle(advanced, namespace, event.params.data, time);
     case 'input.requested':
       return reduceInputRequested(advanced, namespace, event.params.data);
     case 'custom':
-      return reduceCustom(advanced, event.params.data);
+      return reduceCustom(advanced, event.params.data, time);
     default:
       return advanced;
   }
+}
+
+/**
+ * frame 的 `params.timestamp` 能不能當 entry 的時刻：正的有限數字才算，其餘當沒有（見 {@link ConversationEntry} 的「時刻」）。
+ *
+ * **0 也當沒有**：產品路徑上兩個生產者都給不出 0（即時是基座的時刻或 `Date.now()`，歷史是日誌寫入那一刻的
+ * `Date.now()`），而現有的測試夾具一律拿 0 佔位；收下 0 的話，那些比整個 entry 的斷言會因為多一格而紅。
+ */
+function wireTime(timestamp: unknown): number | undefined {
+  return typeof timestamp === 'number' && Number.isFinite(timestamp) && timestamp > 0
+    ? timestamp
+    : undefined;
+}
+
+/** 有時刻才帶那一格：沒有時刻不留一個值是 `undefined` 的鍵。 */
+function timeField<K extends 'startedAt' | 'settledAt'>(
+  key: K,
+  time: number | undefined,
+): Partial<Record<K, number>> {
+  return time === undefined ? {} : ({ [key]: time } as Record<K, number>);
 }
 
 /** `files` 裡的一格長得像不像一個交付的檔案。 */
@@ -777,15 +851,23 @@ function isPresentedFile(value: unknown): value is WirePresentedFile {
  * 或酬載不是物件，一律原樣回 state：這個 channel 上的東西由 pump 從日誌合成，認不得的不猜。各格的酬載形狀由各自的
  * `reduceX` 驗，不在這一層。
  */
-function reduceCustom(state: ConversationState, data: unknown): ConversationState {
+function reduceCustom(
+  state: ConversationState,
+  data: unknown,
+  time: number | undefined,
+): ConversationState {
   const { name, payload } = (data ?? {}) as { name?: unknown; payload?: unknown };
   if (typeof payload !== 'object' || payload === null) return state;
   if (typeof name !== 'string' || !Object.hasOwn(CUSTOM_REDUCERS, name)) return state;
-  return CUSTOM_REDUCERS[name as CustomFrameName](state, payload);
+  return CUSTOM_REDUCERS[name as CustomFrameName](state, payload, time);
 }
 
 /** 一交付的那一格：`deliverables` 條目，同一個 `callId` 只長一次。 */
-function reduceDeliverablesPresented(state: ConversationState, payload: object): ConversationState {
+function reduceDeliverablesPresented(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
   const { callId, seq, files } = payload as { callId?: unknown; seq?: unknown; files?: unknown };
   if (
     typeof callId !== 'string' ||
@@ -797,16 +879,27 @@ function reduceDeliverablesPresented(state: ConversationState, payload: object):
   }
   const id = `deliverables:${callId}`;
   if (state.entries.some((entry) => entry.id === id)) return state;
-  const entry: DeliverablesEntry = { kind: 'deliverables', id, callId, seq, files };
+  const entry: DeliverablesEntry = {
+    kind: 'deliverables',
+    id,
+    callId,
+    seq,
+    files,
+    ...timeField('startedAt', time),
+  };
   return { ...state, entries: [...state.entries, entry] };
 }
 
 /**
  * 名字→那一格的折疊。**型別對 {@link CustomFrameName} 窮舉**（見 {@link reduceCustom}）。酬載收成 `object`：執行期的形狀
- * 驗證是各個 `reduceX` 的事，表上的型別只約束生產端。
+ * 驗證是各個 `reduceX` 的事，表上的型別只約束生產端。`time` 是那顆 frame 的時刻，只有長出 entry 的那幾格用得到。
  */
 const CUSTOM_REDUCERS: {
-  readonly [K in CustomFrameName]: (state: ConversationState, payload: object) => ConversationState;
+  readonly [K in CustomFrameName]: (
+    state: ConversationState,
+    payload: object,
+    time: number | undefined,
+  ) => ConversationState;
 } = {
   [DELIVERABLES_PRESENTED]: reduceDeliverablesPresented,
   [WORKSPACE_CHANGES]: reduceWorkspaceChanges,
@@ -900,7 +993,11 @@ function reduceTitle(state: ConversationState, payload: object): ConversationSta
  * `compaction` 的 `payload`：`seq` 與 `cutoff` 要是非負整數、`saved` 要是布林，同一個 `seq` 只長一格。
  * `summary` 不是字串就當沒有，不拿它擋整顆。
  */
-function reduceCompaction(state: ConversationState, payload: object): ConversationState {
+function reduceCompaction(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
   const { seq, cutoff, saved, summary } = payload as {
     seq?: unknown;
     cutoff?: unknown;
@@ -917,6 +1014,7 @@ function reduceCompaction(state: ConversationState, payload: object): Conversati
     cutoff,
     saved,
     ...(typeof summary === 'string' ? { summary } : {}),
+    ...timeField('startedAt', time),
   };
   return { ...state, entries: [...state.entries, entry] };
 }
@@ -1068,7 +1166,11 @@ function referencesField(
  * - **`status` 不在這裡轉**：開跑由接著到的 `lifecycle` 說，理由同 `claimed` 的先後保證（見 `inbox.ts`）。插話被領走時
  *   這一輪本來就在跑。
  */
-function reduceInbox(state: ConversationState, payload: object): ConversationState {
+function reduceInbox(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
   const { items, nextStep, claimed, claimedNextStep } = payload as {
     items?: unknown;
     nextStep?: unknown;
@@ -1107,6 +1209,7 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
         source: 'subagent-settled',
         ...(isSettleReason(reason) ? { reason } : {}),
         inboxId: id,
+        ...timeField('startedAt', time),
       });
       continue;
     }
@@ -1121,6 +1224,7 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
         runId,
         text,
         inboxId: id,
+        ...timeField('startedAt', time),
       });
       continue;
     }
@@ -1130,6 +1234,7 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
       text,
       inboxId: id,
       ...referencesField(references),
+      ...timeField('startedAt', time),
     });
   }
   const queued = (list: readonly WireQueuedInput[]) =>
@@ -1156,7 +1261,11 @@ function reduceInbox(state: ConversationState, payload: object): ConversationSta
 }
 
 /** {@link SETTLE_NOTICE} 的 `payload`：`id` 是字串，同一個 `id` 只長一格。 */
-function reduceSettleNotice(state: ConversationState, payload: object): ConversationState {
+function reduceSettleNotice(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
   const { id, reason } = payload as { id?: unknown; reason?: unknown };
   if (typeof id !== 'string' || id === '') return state;
   if (state.entries.some((entry) => entry.id === id)) return state;
@@ -1165,12 +1274,17 @@ function reduceSettleNotice(state: ConversationState, payload: object): Conversa
     id,
     source: 'subagent-settled',
     ...(isSettleReason(reason) ? { reason } : {}),
+    ...timeField('startedAt', time),
   };
   return { ...state, entries: [...state.entries, entry] };
 }
 
 /** {@link AGENT_MESSAGE} 的 `payload`：三個字串欄位都要在，`id` 非空，同一個 `id` 只長一格。 */
-function reduceAgentMessage(state: ConversationState, payload: object): ConversationState {
+function reduceAgentMessage(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
   const { id, senderSessionId, runId, text } = payload as {
     id?: unknown;
     senderSessionId?: unknown;
@@ -1186,17 +1300,33 @@ function reduceAgentMessage(state: ConversationState, payload: object): Conversa
     return state;
   }
   if (state.entries.some((entry) => entry.id === id)) return state;
-  const entry: AgentMessageEntry = { kind: 'agent-message', id, senderSessionId, runId, text };
+  const entry: AgentMessageEntry = {
+    kind: 'agent-message',
+    id,
+    senderSessionId,
+    runId,
+    text,
+    ...timeField('startedAt', time),
+  };
   return { ...state, entries: [...state.entries, entry] };
 }
 
 /** `workspace/changes` 的 `payload`：`seq` 要是非負整數，同一個 `seq` 只長一格。 */
-function reduceWorkspaceChanges(state: ConversationState, payload: object): ConversationState {
+function reduceWorkspaceChanges(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
   const { seq } = payload as { seq?: unknown };
   if (!isSeq(seq)) return state;
   const id = `workspace-changes:${seq}`;
   if (state.entries.some((entry) => entry.id === id)) return state;
-  const entry: WorkspaceChangesEntry = { kind: 'workspace-changes', id, seq };
+  const entry: WorkspaceChangesEntry = {
+    kind: 'workspace-changes',
+    id,
+    seq,
+    ...timeField('startedAt', time),
+  };
   return { ...state, entries: [...state.entries, entry] };
 }
 
@@ -1214,7 +1344,8 @@ export function reduceAll(state: ConversationState, events: Iterable<Event>): Co
  *
  * **只接條目**：狀態、掛著的中斷、`lastSeq` 都是「現在」的事，更早那一頁說不動它們。那一頁要自己從
  * {@link emptyConversation} 折好再交進來——折進現在這一份的話，它的 `lifecycle` 會把現在的狀態蓋掉。
- * 頁是在一輪的開頭切的（server 那側），所以同一顆工具呼叫不會一半在這頁、一半在下一頁。
+ * 頁是在一輪的開頭切的（server 那側），所以同一顆工具呼叫不會一半在這頁、一半在下一頁。條目原樣接上，時刻
+ * （{@link ConversationEntry} 的「時刻」）跟著留著。
  */
 export function prependEntries(
   state: ConversationState,
@@ -1262,6 +1393,7 @@ function reduceMessage(
   state: ConversationState,
   namespace: readonly string[],
   raw: unknown,
+  time: number | undefined,
 ): ConversationState {
   const data = raw as MessageData;
   // 一則訊息的 id 就是它的 entry key，所以交錯的 subagent 訊息天然分得開。
@@ -1282,7 +1414,13 @@ function reduceMessage(
         // `status` 不動——這一句已經說過了，不是剛開跑的那一句（那一句走 `inbox` 的 `claimed`）。
         // 引用長得不對就當沒有：這一則人話還是要畫，只是少了引用的標記。
         const references = isWireReferences(data.references) ? data.references : undefined;
-        const entry: HumanEntry = { kind: 'human', id, text: '', ...referencesField(references) };
+        const entry: HumanEntry = {
+          kind: 'human',
+          id,
+          text: '',
+          ...referencesField(references),
+          ...timeField('startedAt', time),
+        };
         return { ...state, entries: [...state.entries, entry] };
       }
       const entry: AiEntry = {
@@ -1292,6 +1430,7 @@ function reduceMessage(
         streaming: true,
         attribution: attribute(state, namespace),
         ...(typeof data.id === 'string' && data.id !== '' && { messageId: data.id }),
+        ...timeField('startedAt', time),
       };
       return { ...state, entries: [...state.entries, entry] };
     }
@@ -1327,7 +1466,9 @@ function reduceMessage(
       return {
         ...state,
         entries: replace(state.entries, id, (entry) =>
-          entry.kind === 'ai' ? { ...entry, streaming: false } : entry,
+          entry.kind === 'ai'
+            ? { ...entry, streaming: false, ...timeField('settledAt', time) }
+            : entry,
         ),
       };
     case 'error':
@@ -1335,7 +1476,12 @@ function reduceMessage(
         ...state,
         entries: replace(state.entries, id, (entry) =>
           entry.kind === 'ai'
-            ? { ...entry, streaming: false, error: data.message ?? '未指名的錯誤' }
+            ? {
+                ...entry,
+                streaming: false,
+                error: data.message ?? '未指名的錯誤',
+                ...timeField('settledAt', time),
+              }
             : entry,
         ),
       };
@@ -1458,6 +1604,7 @@ function reduceTool(
   state: ConversationState,
   namespace: readonly string[],
   raw: unknown,
+  time: number | undefined,
 ): ConversationState {
   const data = raw as ToolData;
   const id = `tool-${data.tool_call_id}`;
@@ -1479,27 +1626,30 @@ function reduceTool(
       input: data.input ?? '',
       status: 'running',
       attribution: attribute(state, namespace),
+      ...timeField('startedAt', time),
     };
     // **同一個 `tool_call_id` 會來第二次**：人回答了中斷之後圖從 tools 節點重跑，基座
     // 再發一顆 `tool-started`（實測）。無條件 append 的話，畫面上同一顆呼叫長出兩個條目
     // ——而 `id` 是一樣的，所以連「哪一個是真的」都分不出來。第二次是**同一次呼叫的續行**，
     // 更新那一格；`error` 要一起清掉，不然中斷那段留下的字會跟著新狀態一起顯示。`text`、`meta` 同理。
+    // 時刻：`startedAt` 留第一顆的，`settledAt` 拿掉——卡又在跑了（見 {@link ToolEntry.startedAt}）。
     if (state.entries.some((existing) => existing.id === id)) {
       return {
         ...state,
         subagents,
-        entries: replace(state.entries, id, (existing) =>
-          existing.kind === 'tool'
-            ? {
-                ...existing,
-                status: 'running',
-                error: undefined,
-                errorCode: undefined,
-                text: undefined,
-                meta: undefined,
-              }
-            : existing,
-        ),
+        entries: replace(state.entries, id, (existing) => {
+          if (existing.kind !== 'tool') return existing;
+          const { settledAt: _settled, ...rest } = existing;
+          return {
+            ...rest,
+            status: 'running',
+            error: undefined,
+            errorCode: undefined,
+            text: undefined,
+            meta: undefined,
+            ...(rest.startedAt === undefined ? timeField('startedAt', time) : {}),
+          };
+        }),
       };
     }
     return { ...state, subagents, entries: [...state.entries, entry] };
@@ -1531,6 +1681,7 @@ function reduceTool(
           meta: failed ? undefined : data.meta,
           ...(failed ? { error: data.message ?? '未指名的錯誤' } : {}),
           ...(failed && data.code !== undefined ? { errorCode: data.code } : {}),
+          ...timeField('settledAt', time),
         };
       }),
     };
@@ -1547,6 +1698,7 @@ function reduceTool(
               status: 'failed',
               error: data.message ?? '未指名的錯誤',
               ...(data.code === undefined ? {} : { errorCode: data.code }),
+              ...timeField('settledAt', time),
             }
           : entry,
       ),
@@ -1605,13 +1757,22 @@ export const UNFINISHED_TOOL_CODE = 'interrupted';
  * `interruption`，`c291e79`）——關閉的原因不分。有結果的那些 pump 已經照日誌收了；產品路徑上會走到
  * 這裡的是停在核准點時按了停止、等核准的在子代理裡（pump 只替 root 懸著的那幾顆寫結果）。正常收尾
  * 的那一支今天沒有生產者：圍堵記了 `tool/call` 之後，`tool/result` 只有日誌寫不進去時才會缺。
+ *
+ * 收掉的那幾張的 {@link ToolEntry.settledAt} 是收尾那顆 `lifecycle` 的時刻，同 dsh 合成的那則用收尾邊界的 `time`。
  */
 function settleUnfinishedTools(
   entries: readonly ConversationEntry[],
+  time: number | undefined,
 ): readonly ConversationEntry[] {
   return entries.map((entry) =>
     entry.kind === 'tool' && (entry.status === 'running' || entry.status === 'suspended')
-      ? { ...entry, status: 'failed', error: UNFINISHED_TOOL_TEXT, errorCode: UNFINISHED_TOOL_CODE }
+      ? {
+          ...entry,
+          status: 'failed',
+          error: UNFINISHED_TOOL_TEXT,
+          errorCode: UNFINISHED_TOOL_CODE,
+          ...timeField('settledAt', time),
+        }
       : entry,
   );
 }
@@ -1620,6 +1781,7 @@ function reduceLifecycle(
   state: ConversationState,
   namespace: readonly string[],
   raw: unknown,
+  time: number | undefined,
 ): ConversationState {
   const data = raw as LifecycleData;
   if (namespace.length > 0 || data.graph_name !== 'root') {
@@ -1635,9 +1797,9 @@ function reduceLifecycle(
       status: 'stopped',
       error: undefined,
       pendings: [],
-      entries: settleUnfinishedTools(state.entries).map((entry) =>
+      entries: settleUnfinishedTools(state.entries, time).map((entry) =>
         entry.kind === 'ai' && entry.streaming
-          ? { ...entry, streaming: false, stopped: true }
+          ? { ...entry, streaming: false, stopped: true, ...timeField('settledAt', time) }
           : entry,
       ),
     };
@@ -1661,14 +1823,14 @@ function reduceLifecycle(
       ...state,
       status: 'failed',
       error: data.error ?? '未指名的錯誤',
-      entries: settleUnfinishedTools(state.entries),
+      entries: settleUnfinishedTools(state.entries, time),
     };
   }
   if (data.event === 'completed') {
     // **中斷時 root 照樣發 completed**，所以停在核准點的那一輪不能被它翻成 idle，卡也不收——
     // 那一輪還沒關，卡還在等人。
     if (state.status === 'awaiting-input') return state;
-    const settled = settleUnfinishedTools(state.entries);
+    const settled = settleUnfinishedTools(state.entries, time);
     return {
       ...state,
       status: 'idle',
