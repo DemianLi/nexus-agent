@@ -268,7 +268,13 @@ describe('每一輪的改動紀錄在真的圖上', () => {
         expect(state.turnStart).toBe(bare.turnStart + 1);
         return state.entries.filter((entry) => entry.kind === 'workspace-changes');
       });
-      const entry = { kind: 'workspace-changes', id: `workspace-changes:${seq}`, seq };
+      // 時刻兩條路的時鐘不同（#1030）：即時是 pump 合成那一刻、歷史是日誌那一筆，這裡只比內容。
+      const entry = {
+        kind: 'workspace-changes',
+        id: `workspace-changes:${seq}`,
+        seq,
+        startedAt: expect.any(Number),
+      };
       expect(folded).toEqual([[entry], [entry]]);
 
       // **builder 的輸出先對手寫的字串，再把同一段手寫的查詢送進真的 handler**（照 dsh 的 host spec，

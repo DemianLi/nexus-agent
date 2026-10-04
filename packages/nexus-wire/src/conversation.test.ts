@@ -9,13 +9,18 @@ import {
   emptyConversation,
   isApprovalPending,
   isBackgroundSubagentMeta,
+  prependEntries,
   reduceAll,
   reduceConversation,
   UNFINISHED_TOOL_CODE,
   UNFINISHED_TOOL_TEXT,
   uniformDecisions,
 } from './conversation.js';
-import type { PendingApproval } from './conversation.js';
+import type { ConversationEntry, PendingApproval } from './conversation.js';
+import { COMPACTION } from './compaction.js';
+import { DELIVERABLES_PRESENTED } from './deliverables.js';
+import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE } from './inbox.js';
+import { WORKSPACE_CHANGES } from './workspace-changes.js';
 
 /**
  * 取第 n 顆，並斷言它是核准請求。
@@ -1077,5 +1082,275 @@ describe('工具卡的錯誤碼（#667）', () => {
     ]);
     expect(tool(state)).toMatchObject({ status: 'running' });
     expect(tool(state).errorCode).toBeUndefined();
+  });
+});
+
+/**
+ * 條目的時刻（[#1030](https://github.com/DemianLi/nexus-agent/issues/1030)）：取自 frame 的 `params.timestamp`。
+ *
+ * 這裡造的是兩條路各自會送的 frame 形狀；真組裝下兩條路的時刻差多少在 `@nexus/harness` 的
+ * `wire-entry-timestamps.test.ts` 量。
+ */
+describe('時刻（#1030）', () => {
+  let at = 0;
+  function timed(
+    method: string,
+    data: unknown,
+    timestamp: unknown,
+    namespace: readonly string[] = [],
+  ): Event {
+    const current = at++;
+    return {
+      type: 'event',
+      seq: current,
+      event_id: `time:${current}`,
+      method,
+      params: { namespace, timestamp, data },
+    } as Event;
+  }
+  const custom = (name: string, payload: unknown, timestamp: number) =>
+    timed('custom', { name, payload }, timestamp);
+  const started = (callId: string, timestamp: number) =>
+    timed(
+      'tools',
+      { event: 'tool-started', tool_call_id: callId, tool_name: 'echo', input: '{}' },
+      timestamp,
+      ['tools:a'],
+    );
+  const finished = (callId: string, timestamp: number, extra: object = {}) =>
+    timed(
+      'tools',
+      { event: 'tool-finished', tool_call_id: callId, message: 'ok', ...extra },
+      timestamp,
+      ['tools:a'],
+    );
+  const lifecycle = (event: string, timestamp: number, extra: object = {}) =>
+    timed('lifecycle', { event, graph_name: 'root', ...extra }, timestamp);
+  const only = (state: ConversationState, id: string): ConversationEntry => {
+    const found = state.entries.find((entry) => entry.id === id);
+    if (found === undefined) throw new Error(`沒有 ${id}`);
+    return found;
+  };
+  /** 決定與答案沒有這一格（型別上也沒有），所以用 `in` 取。 */
+  const startedAtOf = (entry: ConversationEntry) =>
+    'startedAt' in entry ? entry.startedAt : undefined;
+
+  it('模型回覆：`message-start` 是開始、`message-finish` 是講完；還在吐字時沒有 settledAt', () => {
+    at = 0;
+    const open = reduceAll(emptyConversation(), [
+      lifecycle('running', 90),
+      timed('messages', { event: 'message-start', id: 'run-m', run_id: 'm' }, 100),
+      timed(
+        'messages',
+        { event: 'content-block-delta', delta: { type: 'text-delta', text: '嗨' }, run_id: 'm' },
+        150,
+      ),
+    ]);
+    expect(only(open, 'm')).toMatchObject({ startedAt: 100, streaming: true });
+    expect(only(open, 'm')).not.toHaveProperty('settledAt');
+    const done = reduceConversation(
+      open,
+      timed('messages', { event: 'message-finish', run_id: 'm' }, 300),
+    );
+    expect(only(done, 'm')).toMatchObject({ startedAt: 100, settledAt: 300, streaming: false });
+  });
+
+  it('模型回覆出錯：settledAt 是 `error` 那顆的時刻', () => {
+    at = 0;
+    const state = reduceAll(emptyConversation(), [
+      timed('messages', { event: 'message-start', id: 'run-m', run_id: 'm' }, 100),
+      timed('messages', { event: 'error', run_id: 'm', message: '斷了' }, 240),
+    ]);
+    expect(only(state, 'm')).toMatchObject({ startedAt: 100, settledAt: 240, error: '斷了' });
+  });
+
+  it('工具卡：同一顆 `tool-started` 到兩次（日誌開卡、基座晚到）取第一顆；收卡取最後一顆 `tool-finished`', () => {
+    at = 0;
+    const state = reduceAll(emptyConversation(), [
+      started('c1', 1000),
+      started('c1', 1004),
+      finished('c1', 2000),
+      // pump 的更正幀（#296）：同一張卡再收一次，照這一顆換掉。
+      finished('c1', 2003, { failed: true, message: '其實失敗了' }),
+    ]);
+    expect(only(state, 'tool-c1')).toMatchObject({
+      status: 'failed',
+      startedAt: 1000,
+      settledAt: 2003,
+    });
+  });
+
+  it('續接（resume）：答了中斷、同一顆 `tool-started` 再到，startedAt 不換，等人的時間算在裡面', () => {
+    at = 0;
+    const suspended = reduceAll(emptyConversation(), [
+      started('c1', 1000),
+      timed('tools', { event: 'tool-suspended', tool_call_id: 'c1' }, 1100, ['tools:a']),
+    ]);
+    expect(only(suspended, 'tool-c1')).toMatchObject({ status: 'suspended', startedAt: 1000 });
+    expect(only(suspended, 'tool-c1')).not.toHaveProperty('settledAt');
+    const resumed = reduceAll(suspended, [started('c1', 5000), finished('c1', 6000)]);
+    expect(only(resumed, 'tool-c1')).toMatchObject({
+      status: 'done',
+      startedAt: 1000,
+      settledAt: 6000,
+    });
+  });
+
+  it('收過的卡被翻回執行中（判定先到、基座的 `tool-started` 晚到，#297）：settledAt 拿掉，不是留著舊的', () => {
+    at = 0;
+    const reopened = reduceAll(emptyConversation(), [
+      started('c1', 1000),
+      finished('c1', 1010),
+      started('c1', 1020),
+    ]);
+    expect(only(reopened, 'tool-c1')).toMatchObject({ status: 'running', startedAt: 1000 });
+    expect(only(reopened, 'tool-c1')).not.toHaveProperty('settledAt');
+    const settled = reduceConversation(reopened, finished('c1', 1030));
+    expect(only(settled, 'tool-c1')).toMatchObject({ startedAt: 1000, settledAt: 1030 });
+  });
+
+  it('`tool-error` 收卡：settledAt 是它的時刻', () => {
+    at = 0;
+    const state = reduceAll(emptyConversation(), [
+      started('c1', 1000),
+      timed('tools', { event: 'tool-error', tool_call_id: 'c1', message: '炸了' }, 1500, [
+        'tools:a',
+      ]),
+    ]);
+    expect(only(state, 'tool-c1')).toMatchObject({ status: 'failed', settledAt: 1500 });
+  });
+
+  it('按了停止：還在吐字的回覆與沒結果的卡，settledAt 都是收尾那顆 `lifecycle` 的時刻', () => {
+    at = 0;
+    const state = reduceAll(emptyConversation(), [
+      lifecycle('running', 90),
+      timed('messages', { event: 'message-start', id: 'run-m', run_id: 'm' }, 100),
+      started('c1', 200),
+      lifecycle('failed', 9000, { aborted: true }),
+    ]);
+    expect(only(state, 'm')).toMatchObject({ stopped: true, startedAt: 100, settledAt: 9000 });
+    expect(only(state, 'tool-c1')).toMatchObject({
+      status: 'failed',
+      errorCode: UNFINISHED_TOOL_CODE,
+      startedAt: 200,
+      settledAt: 9000,
+    });
+  });
+
+  it('一輪正常收掉或失敗時沒結果的卡：settledAt 同樣是收尾那顆的時刻', () => {
+    at = 0;
+    for (const close of ['completed', 'failed']) {
+      const state = reduceAll(emptyConversation(), [
+        lifecycle('running', 90),
+        started('c1', 200),
+        lifecycle(close, 7000),
+      ]);
+      expect(only(state, 'tool-c1')).toMatchObject({ status: 'failed', settledAt: 7000 });
+    }
+  });
+
+  it('一個時刻的條目只帶 startedAt：人話、通知、子代理來信、交付、改動紀錄、壓縮', () => {
+    at = 0;
+    const state = reduceAll(emptyConversation(), [
+      // 歷史重播的人話。
+      timed('messages', { event: 'message-start', role: 'human', id: 'history-0' }, 10),
+      // 即時那條：送出佇列被領走。
+      custom(INBOX, { items: [], claimed: { id: 'q1', text: '嗨' } }, 20),
+      custom(
+        INBOX,
+        { items: [], claimed: { id: 'q2', text: 'done', source: { kind: 'subagent-settled' } } },
+        30,
+      ),
+      custom(
+        INBOX,
+        {
+          items: [],
+          claimed: {
+            id: 'q3',
+            text: '話',
+            source: { kind: 'agent-message', senderSessionId: 's', runId: 'r' },
+          },
+        },
+        40,
+      ),
+      // 歷史那條：通知與來信是自己的 frame。
+      custom(SETTLE_NOTICE, { id: 'history-5' }, 50),
+      custom(AGENT_MESSAGE, { id: 'history-6', senderSessionId: 's', runId: 'r', text: '話' }, 60),
+      custom(DELIVERABLES_PRESENTED, { callId: 'c9', seq: 7, files: [{ path: 'a.md' }] }, 70),
+      custom(WORKSPACE_CHANGES, { seq: 8 }, 80),
+      custom(COMPACTION, { seq: 9, cutoff: 2, saved: true }, 90),
+    ]);
+    expect(state.entries.map((entry) => [entry.kind, entry.id, startedAtOf(entry)])).toEqual([
+      ['human', 'history-0', 10],
+      ['human', 'inbox:q1', 20],
+      ['notice', 'inbox:q2', 30],
+      ['agent-message', 'inbox:q3', 40],
+      ['notice', 'history-5', 50],
+      ['agent-message', 'history-6', 60],
+      ['deliverables', 'deliverables:c9', 70],
+      ['workspace-changes', 'workspace-changes:8', 80],
+      ['compaction', 'compaction:9', 90],
+    ]);
+    for (const entry of state.entries) expect(entry).not.toHaveProperty('settledAt');
+  });
+
+  it('人按的決定與答案不帶時刻：它們不是從線上來的', () => {
+    at = 0;
+    const asked = reduceAll(emptyConversation(), [
+      timed(
+        'input.requested',
+        {
+          interrupt_id: 'i1',
+          payload: {
+            actionRequests: [{ name: 'echo', args: {} }],
+            reviewConfigs: [{ actionName: 'echo', allowedDecisions: ['approve'] }],
+          },
+        },
+        100,
+      ),
+      timed(
+        'input.requested',
+        { interrupt_id: 'q1', payload: { kind: 'question', questions: [] } },
+        110,
+      ),
+    ]);
+    const decided = appendAnswers(appendDecision(asked, 'i1', 'approve'), 'q1', []);
+    const local = decided.entries.filter(
+      (entry) => entry.kind === 'decision' || entry.kind === 'answer',
+    );
+    expect(local).toHaveLength(2);
+    for (const entry of local) expect(entry).not.toHaveProperty('startedAt');
+  });
+
+  it('不能用的時刻（0、負數、NaN、不是數字、沒帶）不給那一格，JSON 往返也沒有這個鍵', () => {
+    at = 0;
+    for (const timestamp of [0, -5, Number.NaN, Number.POSITIVE_INFINITY, '100', undefined]) {
+      const state = reduceAll(emptyConversation(), [
+        timed('messages', { event: 'message-start', id: 'run-m', run_id: 'm' }, timestamp),
+        timed('messages', { event: 'message-finish', run_id: 'm' }, timestamp),
+        started('c1', 0),
+        custom(WORKSPACE_CHANGES, { seq: 1 }, 0),
+      ]);
+      for (const entry of state.entries) {
+        expect(entry).not.toHaveProperty('startedAt');
+        expect(entry).not.toHaveProperty('settledAt');
+        expect(Object.keys(JSON.parse(JSON.stringify(entry)) as object)).not.toContain('startedAt');
+      }
+    }
+  });
+
+  it('`prependEntries`（往前翻頁）原樣留著較早那一頁的時刻', () => {
+    at = 0;
+    const earlier = reduceAll(emptyConversation(), [
+      timed('messages', { event: 'message-start', role: 'human', id: 'history-0' }, 10),
+      started('c0', 20),
+      finished('c0', 30),
+    ]);
+    const now = reduceAll(emptyConversation(), [
+      timed('messages', { event: 'message-start', role: 'human', id: 'history-9' }, 900),
+    ]);
+    const joined = prependEntries(now, earlier);
+    expect(joined.entries.map(startedAtOf)).toEqual([10, 20, 900]);
+    expect(only(joined, 'tool-c0')).toMatchObject({ startedAt: 20, settledAt: 30 });
   });
 });
