@@ -399,6 +399,40 @@ describe('照格式版本表態', () => {
     expect(formatScanReport([], [], { threshold: 5 }).join('\n')).toContain('#293');
   });
 
+  it('#1039 之前把 subagent 的合法拒絕記成 UNKNOWN_TOOL：修好之前寫的那份，報表底下有這一句', () => {
+    // 修前的形狀：前景帶 reasoning_effort 被拒，日誌記成 ToolNotFoundError／UNKNOWN_TOOL。
+    // header 帶 build 也照印——帶 commit 分不出修好前後（見檔頭），這句不是逐份的標記。
+    const preFix = scanSessionLog({
+      file: 'pre-1039.jsonl',
+      header: {
+        id: 'pre-1039',
+        version: SESSION_LOG_FORMAT_VERSION,
+        metadata: { build: { commit: 'ee07d29c1', dirty: false } },
+      },
+      events: events([
+        turn('message'),
+        call('subagent', { subagent_type: 'general-purpose', reasoning_effort: 'high' }, 'sa'),
+        [
+          'tool/result',
+          {
+            callId: 'sa',
+            isError: true,
+            error: { name: 'ToolNotFoundError', code: 'UNKNOWN_TOOL' },
+          },
+        ],
+      ]),
+    });
+    expect(preFix.errors).toEqual({ UNKNOWN_TOOL: 1 });
+    const report = formatScanReport([preFix], [], { threshold: 5 });
+    // 逐份那幾行本來就印得出 subagent 與 UNKNOWN_TOOL，所以釘的是「注意」那一行本身。
+    const note = report.filter((line) => line.startsWith('注意：#1039'));
+    expect(note).toHaveLength(1);
+    expect(note[0]).toContain('（2026-10-04）');
+    expect(note[0]).toContain('subagent');
+    expect(note[0]).toContain('UNKNOWN_TOOL');
+    expect(note[0]).toContain('逐份分不出來');
+  });
+
   it('base 底下的印相對路徑，外面的照印絕對路徑', () => {
     const inside = { ...scan(same(1)), file: '/logs/run/cli.jsonl' };
     const outside = { ...scan(same(1)), file: '/elsewhere/cli.jsonl' };
