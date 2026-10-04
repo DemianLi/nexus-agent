@@ -32,13 +32,15 @@
  * ## 「那一輪」從位置讀，不另記
  *
  * 我們的 `tool/call` 沒有 `turn`（見 `session-log.ts` 的 `tool/call`）。root 那份以落在哪一對 `turn/start`／`turn/end`
- * 之間定輪，所以 {@link subagentLinks} 從 catalog 那顆往回找：最近一顆同 `callId` 的 `tool/call` 與最近一顆 `turn/start`。
+ * 之間定輪，所以 {@link subagentLinks} 從 catalog 那顆往回找：最近一顆同 `callId` 的 `tool/call` 與最近一顆**開邏輯輪的**
+ * `turn/start`（`isLogicalTurnStart`：`resume` 是回覆核准、接著上一輪，不另開一輪——同評分與會話統計對「輪」的那一份判法）。
  * **不全檔搜 `callId`**：被核准閘門中斷的呼叫 resume 之後以同一個 `callId` 再記一顆（`session-log.ts` 的 `tool/call`），
  * 供應商的 id 也不保證全域不重複；往回找到的那一顆一定是同一輪裡最近的那一次派出。
  *
  * @module
  */
 
+import { isLogicalTurnStart } from './session-log.js';
 import type { SessionLog, SessionEvent } from './session-log.js';
 
 /** 子代理的生命週期：前景跑完就結束（`one-shot`），背景的收得到後續的話（`continuable`）。同 dsh 的 `mode`。 */
@@ -76,7 +78,10 @@ export interface SubagentLink extends SubagentCatalogData {
   readonly catalogSeq: number;
   /** 派它的那顆 `tool/call` 的 `seq`；往回找不到（日誌被截過）就沒有。 */
   readonly callSeq?: number;
-  /** 那一輪起頭那顆 `turn/start` 的 `seq`，同 `ratingsByTurn` 對「輪」的鍵；往回找不到就沒有。 */
+  /**
+   * 那一輪起頭那顆 `turn/start` 的 `seq`：往回第一顆開邏輯輪的（`isLogicalTurnStart`），同評分（`currentMessageFeedback`）
+   * 對「輪」的鍵；往回找不到就沒有。
+   */
   readonly turnSeq?: number;
 }
 
@@ -103,7 +108,7 @@ export function subagentLinks(events: readonly SessionEvent[]): readonly Subagen
         earlier.data.callId === data.callId
       ) {
         callSeq = earlier.seq;
-      } else if (earlier.type === 'turn/start') {
+      } else if (isLogicalTurnStart(earlier)) {
         turnSeq = earlier.seq;
       }
     }

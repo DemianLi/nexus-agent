@@ -50,14 +50,14 @@ describe('subagentLinks', () => {
     ]);
   });
 
-  it('同一個 callId 記過兩顆（核准中斷後 resume）：配到最近的那一顆，不是檔頭那顆', () => {
+  it('同一個 callId 記過兩顆（核准中斷後 resume）：呼叫配到最近的那一顆；輪不停在 resume，是人開的那一輪', () => {
     const log = new SessionLog('root');
     log.append('turn/start', { kind: 'message', text: '一' });
     call(log, 'a');
     log.append('turn/start', { kind: 'resume' });
     call(log, 'a');
     appendSubagentCatalog(log, { childId: 'root/x', callId: 'a', mode: 'one-shot' });
-    expect(subagentLinkOf(log.events, 'root/x')).toMatchObject({ callSeq: 3, turnSeq: 2 });
+    expect(subagentLinkOf(log.events, 'root/x')).toMatchObject({ callSeq: 3, turnSeq: 0 });
   });
 
   it('沒有目錄（舊日誌、沒派過）就是空的；往回找不到的那一格就不給', () => {

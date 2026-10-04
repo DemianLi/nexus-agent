@@ -40,8 +40,14 @@ import type { WireHandler } from './wire-handler.js';
 
 let dir: string;
 const opened: WireHandler[] = [];
+/**
+ * 不變量的違規與 handler 的 warn 收在這裡，每條結尾斷言是空的：新的事件種類若讓哪一個配套入口（core、present……）
+ * 不認帳，只會換來一行 warn，套件照樣綠——不收起來看就等於沒驗。
+ */
+let reported: string[] = [];
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'nexus-subagent-link-'));
+  reported = [];
 });
 afterEach(async () => {
   for (const handler of opened.splice(0)) await handler.close();
@@ -125,6 +131,7 @@ async function build(entry: Case, root: string, warmup = false) {
     plugins: [workerPlugin()],
     backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
     ...(entry.background && { backgroundSubagents: {} }),
+    onInvariantViolation: (error) => reported.push(`不變量：${error.message}`),
   });
 }
 
@@ -214,6 +221,7 @@ describe.each(CASES)('$label：落盤的日誌兩個方向都接得回去', (ent
       `派它的 呼叫 root-call（tool/call #${call.seq}）｜那一輪 turn/start #${turnStart.seq}`,
     );
     expect(text).toContain(`派出 ${child.header.id}（${entry.mode}）← 呼叫 root-call`);
+    expect(reported).toEqual([]);
   }, 30000);
 });
 
@@ -232,6 +240,7 @@ describe.each(CASES)('$label：wire 的工具卡帶著子會話，重新整理�
     let sessions: SessionRegistry | undefined;
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
+      warn: (message) => reported.push(`handler：${message}`),
       createAgent: async () => ({
         agent: built.agent as unknown as PumpAgent,
         commands: emptyCommandPoint(),
@@ -289,6 +298,7 @@ describe.each(CASES)('$label：wire 的工具卡帶著子會話，重新整理�
     const rebuilt = await build(entry, workspace);
     const reopened = createWireHandler({
       auth: TEST_BROWSER_AUTH,
+      warn: (message) => reported.push(`handler：${message}`),
       createAgent: async () => ({
         agent: rebuilt.agent as unknown as PumpAgent,
         commands: emptyCommandPoint(),
@@ -307,5 +317,6 @@ describe.each(CASES)('$label：wire 的工具卡帶著子會話，重新整理�
     expect(
       delegationCard(reduceAll(emptyConversation(), replayed.result.events))?.subagentSession,
     ).toEqual(live);
+    expect(reported).toEqual([]);
   }, 30000);
 });
