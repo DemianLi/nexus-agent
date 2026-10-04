@@ -52,7 +52,12 @@ import type { BackgroundSubagentMeta } from '@nexus/wire';
 import { z } from 'zod';
 
 import { isBackgroundAddress } from './background-run-id.js';
-import { BackgroundSubagentHost, withReturnGuidance } from './background-subagents.js';
+import {
+  BackgroundSubagentError,
+  BackgroundSubagentHost,
+  backgroundRefusalInfo,
+  withReturnGuidance,
+} from './background-subagents.js';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
 import { describeSubagentModels, resolveModelSelection } from './subagent-model-selection.js';
 import type { ModelSelectionConfig } from './subagent-model-selection.js';
@@ -417,8 +422,9 @@ export class BackgroundDelegation {
           selection === undefined ? subagentSchema : selectingSubagentSchema
         ).safeParse(request.toolCall.args);
         // 參數不合 schema 帶 `INVALID_ARGS`，同 dsh `defineTool` 的 `ToolArgsError`（`packages/core/tools/src/schema.ts:599`，
-        // `5badb15`）。這一顆的其餘拒絕都不帶碼：dsh `subagent` 的同類拒絕是工具本體拋一般的 `Error`
-        // （`packages/subagent/tool-subagent/src/index.ts:294-295`），渲染出來沒有碼（#1024）。
+        // `5badb15`）。host 拒絕 `start`（名額滿、已關）照 dsh `SubagentError` 帶碼（#1046，見下面的 `catch`）；其餘拒絕
+        // 不帶碼：dsh `subagent` 的同類拒絕是工具本體拋一般的 `Error`（`packages/subagent/tool-subagent/src/index.ts:294-295`），
+        // 渲染出來沒有碼（#1024）。
         if (!parsed.success) {
           return toolRefusal(`subagent 的參數不合：${parsed.error.message}`, {
             callId,
@@ -513,9 +519,13 @@ export class BackgroundDelegation {
             name: SUBAGENT_TOOL_NAME,
           });
         } catch (error) {
+          // host 拒絕（名額滿、已關）帶 dsh `SubagentError` 的碼（#1046），見 `backgroundRefusalInfo`；其餘（編不出圖等）不帶。
+          const info =
+            error instanceof BackgroundSubagentError ? backgroundRefusalInfo(error) : undefined;
           return toolRefusal(error instanceof Error ? error.message : String(error), {
             callId,
             name: SUBAGENT_TOOL_NAME,
+            ...(info !== undefined && { error: info }),
           });
         }
       },
