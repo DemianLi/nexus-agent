@@ -1,15 +1,18 @@
 import type { WorkspaceChangesSummary } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { ChangesCard } from '@/components/changes-card';
 import { DeliverablesCard } from '@/components/deliverables-card';
+import { PANELS } from '@/components/right-sidebar-panels';
 import {
   RIGHT_SIDEBAR_EMPTY_TEXT,
   RightSidebarPanel,
   RightSidebarProvider,
   RightSidebarToggle,
   changesTabTitle,
+  useRightSidebar,
 } from '@/components/right-sidebar';
 import { createChangesStores } from '@/lib/changes-diff';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
@@ -386,4 +389,146 @@ it('axe：停靠、兩種分頁、亮與暗', async () => {
   expect(await axeViolations(document.body)).toEqual([]);
   document.documentElement.classList.add('dark');
   expect(await axeViolations(document.body)).toEqual([]);
+});
+
+describe('單例面板：觀測與成本（#1031）', () => {
+  const PanelOpeners = () => {
+    const api = useRightSidebar();
+    return (
+      <>
+        <button type="button" onClick={() => api?.openPanel('trace')}>
+          開觀測
+        </button>
+        <button type="button" onClick={() => api?.openPanel('cost')}>
+          開成本
+        </button>
+      </>
+    );
+  };
+  const mountPanels = async (stored?: SidebarLayout) => {
+    if (stored !== undefined) localStorage.setItem(LAYOUT_KEY_PREFIX + 't', JSON.stringify(stored));
+    const view = render(
+      <RightSidebarProvider threadId="t" sources={{}}>
+        <RightSidebarToggle />
+        <PanelOpeners />
+        <RightSidebarPanel />
+      </RightSidebarProvider>,
+    );
+    await act(async () => {});
+    return view;
+  };
+  const stored = (tabs: SidebarLayout['tabs'], active: string): SidebarLayout => ({
+    open: true,
+    tabs,
+    active,
+  });
+
+  it('空狀態：一句話加兩顆入口鈕，鈕在分頁列外面；按下去打開那個分頁、焦點進分頁', async () => {
+    await mountPanels();
+    await click(screen.getByRole('button', { name: '打開右側欄' }));
+    expect(screen.getByText(RIGHT_SIDEBAR_EMPTY_TEXT)).toBeTruthy();
+    const trace = screen.getByRole('button', { name: '觀測' });
+    expect(screen.getByRole('button', { name: '成本' })).toBeTruthy();
+    expect(trace.closest('[role="tablist"]')).toBeNull();
+
+    await click(trace);
+    const tab = screen.getByRole('tab', { name: '觀測' });
+    expect(tab.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(tab);
+    expect(screen.getByTestId('right-sidebar-panel-trace').textContent).toBe('尚無資料');
+    // 有分頁之後空狀態讓位。
+    expect(screen.queryByText(RIGHT_SIDEBAR_EMPTY_TEXT)).toBeNull();
+    expect(saved()?.tabs).toEqual([{ kind: 'trace' }]);
+  });
+
+  it('單例：重複打開只是選中，不多一個分頁', async () => {
+    await mountPanels();
+    await click(screen.getByRole('button', { name: '開觀測' }));
+    await click(screen.getByRole('button', { name: '開成本' }));
+    expect(tabNames()).toEqual(['觀測', '成本']);
+    await click(screen.getByRole('button', { name: '開觀測' }));
+    expect(tabNames()).toEqual(['觀測', '成本']);
+    expect(screen.getByRole('tab', { name: '觀測' }).getAttribute('aria-selected')).toBe('true');
+  });
+
+  it('沒選中過的分頁不掛上；選中才掛；Delete 關得掉', async () => {
+    await mountPanels(stored([{ kind: 'trace' }, { kind: 'cost' }], 'trace'));
+    expect(screen.getByTestId('right-sidebar-panel-trace')).toBeTruthy();
+    expect(screen.queryByTestId('right-sidebar-panel-cost')).toBeNull();
+
+    await click(screen.getByRole('tab', { name: '成本' }));
+    expect(screen.getByTestId('right-sidebar-panel-cost')).toBeTruthy();
+
+    fireEvent.keyDown(screen.getByRole('tab', { name: '成本' }), { key: 'Delete' });
+    await act(async () => {});
+    expect(tabNames()).toEqual(['觀測']);
+  });
+
+  it('串流中的重畫不連累面板：父層無關地重畫多次，已掛上的分頁（含藏起來的）都不重畫', async () => {
+    // 數兩個面板內容各畫了幾次：它們沒有 `memo`，面板外殼一旦被重畫就會跟著重畫。
+    const renders = { trace: 0, cost: 0 };
+    const real = { trace: PANELS.trace.Body, cost: PANELS.cost.Body };
+    for (const kind of ['trace', 'cost'] as const) {
+      (PANELS[kind] as unknown as { Body: () => null }).Body = () => {
+        renders[kind] += 1;
+        return null;
+      };
+    }
+    try {
+      let bump: () => void = () => {};
+      // 身分要穩（`App` 用 `useMemo`）：每次 render 都換一個新的，面板就跟著每格重畫。
+      const sources = {};
+      function App() {
+        const [, set] = useState(0);
+        bump = () => set((n) => n + 1);
+        // 面板跟會話一起在這一層畫，同 `App.tsx`：每一格串流都會讓這個元件重畫。
+        return (
+          <RightSidebarProvider threadId="t" sources={sources}>
+            <RightSidebarPanel />
+          </RightSidebarProvider>
+        );
+      }
+      localStorage.setItem(
+        LAYOUT_KEY_PREFIX + 't',
+        JSON.stringify(stored([{ kind: 'trace' }, { kind: 'cost' }], 'cost')),
+      );
+      render(<App />);
+      await act(async () => {});
+      // 兩個都選中過（掛上了），現在選中的是觀測、成本藏起來。
+      await click(screen.getByRole('tab', { name: '觀測' }));
+      expect(renders.trace).toBeGreaterThan(0);
+      expect(renders.cost).toBeGreaterThan(0);
+      const before = { ...renders };
+      for (let i = 0; i < 5; i += 1) await act(async () => bump());
+      expect(renders).toEqual(before);
+
+      // 對照：版面真的變了，面板照樣重畫，量具沒壞。
+      await click(screen.getByRole('tab', { name: '成本' }));
+      expect(renders.cost).toBeGreaterThan(before.cost);
+    } finally {
+      (PANELS.trace as unknown as { Body: unknown }).Body = real.trace;
+      (PANELS.cost as unknown as { Body: unknown }).Body = real.cost;
+    }
+  });
+
+  it('axe：觀測（窄螢幕覆蓋、暗）與成本（停靠、亮）', async () => {
+    const { unmount } = await mountPanels(stored([{ kind: 'trace' }], 'trace'));
+    expect(await axeViolations(document.body)).toEqual([]);
+    unmount();
+    cleanup();
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: true,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        }) as unknown as MediaQueryList,
+    );
+    document.documentElement.classList.add('dark');
+    await mountPanels(stored([{ kind: 'cost' }], 'cost'));
+    await click(screen.getByRole('button', { name: '打開右側欄' }));
+    expect(await axeViolations(document.body)).toEqual([]);
+  });
 });

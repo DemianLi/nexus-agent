@@ -24,6 +24,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  memo,
   useEffect,
   useMemo,
   useRef,
@@ -35,6 +36,7 @@ import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from 'react';
 import { ChangesReviewTab } from '@/components/changes-review';
 import { DeliverablePreviewTab } from '@/components/deliverable-preview';
 import { PlanPreviewTab } from '@/components/plan-preview-tab';
+import { PANELS } from '@/components/right-sidebar-panels';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -48,6 +50,7 @@ import {
   MIN_PANEL_WIDTH,
   clampPanelWidth,
   closeTab,
+  isPanelTab,
   openTab,
   readLayout,
   readWidth,
@@ -58,14 +61,16 @@ import {
   writeLayout,
   writeWidth,
 } from '@/lib/right-sidebar';
-import type { SidebarLayout, SidebarTab } from '@/lib/right-sidebar';
+import { PANEL_KINDS } from '@/lib/right-sidebar';
+import type { PanelKind, SidebarLayout, SidebarTab } from '@/lib/right-sidebar';
 import { cn } from '@/lib/utils';
 
 /** 停靠面板的 id：開關鈕的 `aria-controls` 指它。 */
 export const RIGHT_SIDEBAR_ID = 'right-sidebar';
 
-/** 空狀態那一句（#640 決定 3）。 */
-export const RIGHT_SIDEBAR_EMPTY_TEXT = '這裡會顯示改動比對、交付預覽與計劃。從對話裡的卡片打開。';
+/** 空狀態那一句（#640 決定 3；#1031 加上觀測與成本的入口鈕）。 */
+export const RIGHT_SIDEBAR_EMPTY_TEXT =
+  '這裡會顯示改動比對、交付預覽與計劃，從對話裡的卡片打開。觀測與成本可以直接打開：';
 
 /** 計劃分頁找不到那一份時（還沒載入到那一段對話，或存下來的分頁指到別處）。 */
 export const PLAN_TAB_MISSING_TEXT =
@@ -97,6 +102,11 @@ export interface RightSidebarApi {
    * 待審時自動打開一次（#654 二-Q4）：只有停靠的寬度才開，焦點不動。回傳有沒有開；沒開的話呼叫端不該記成開過。
    */
   autoOpenPlan(id: string): boolean;
+  /**
+   * 打開單例面板（觀測、成本，#1031）：已經開著就只是選中。焦點進分頁；`from` 是按下去的那顆鈕，停靠時收起鈕把焦點交回它
+   * （同 {@link RightSidebarApi.openPlan}）。
+   */
+  openPanel(kind: PanelKind, from?: HTMLElement | null): void;
 }
 
 interface RightSidebarControl {
@@ -178,6 +188,12 @@ export function RightSidebarProvider({
         update((current) => openTab(current, { kind: 'plan', id }));
         return true;
       },
+      openPanel: (kind, from) => {
+        const tab: SidebarTab = { kind };
+        focusTab.current = tabKey(tab);
+        returnFocus.current = from ?? null;
+        update((current) => openTab(current, tab));
+      },
     }),
     [update, canPreview, isMobile],
   );
@@ -227,8 +243,14 @@ export function RightSidebarToggle({ className }: { className?: string }) {
   );
 }
 
-/** 面板本體：寬螢幕停靠，窄螢幕全螢幕覆蓋。放在 `SidebarInset` 後面、同一排。 */
-export function RightSidebarPanel() {
+/**
+ * 面板本體：寬螢幕停靠，窄螢幕全螢幕覆蓋。放在 `SidebarInset` 後面、同一排。
+ *
+ * **`memo` 是承重的**（#1031）：它跟會話一起在 `App` 裡畫，沒有 props，而 `App` 每收一格串流就重畫一次——沒有 `memo` 的話，
+ * 每一格都連分頁列、所有已掛上的分頁內容一起重畫（實測：5 次無關的父層重畫，面板提交 5 次）。有 `memo` 之後只有 context
+ * 變了（版面、寬度、`sources`）才重畫，所以 `sources` 的身分要穩（`App` 用 `useMemo`），別把隨串流變的東西放進去。
+ */
+export const RightSidebarPanel = memo(function RightSidebarPanel() {
   const { layout, isMobile, width, update } = useControl();
   if (isMobile) {
     return (
@@ -243,7 +265,9 @@ export function RightSidebarPanel() {
           data-testid="right-sidebar"
         >
           <SheetTitle className="sr-only">右側欄</SheetTitle>
-          <SheetDescription className="sr-only">改動比對、交付預覽與計劃</SheetDescription>
+          <SheetDescription className="sr-only">
+            改動比對、交付預覽、計劃、觀測與成本
+          </SheetDescription>
           <PanelContents />
         </SheetContent>
       </Sheet>
@@ -264,7 +288,7 @@ export function RightSidebarPanel() {
       <PanelContents />
     </aside>
   );
-}
+});
 
 /** 會話區與面板加起來多寬：拖寬的上限從這裡算。量不到（jsdom）時是 `undefined`。 */
 function measureRoom(aside: HTMLElement | null): number | undefined {
@@ -376,9 +400,7 @@ function PanelContents() {
         </Button>
       </div>
       {tabs.length === 0 ? (
-        <p className="text-muted-foreground flex flex-1 items-center justify-center px-6 text-center text-sm">
-          {RIGHT_SIDEBAR_EMPTY_TEXT}
-        </p>
+        <EmptyState />
       ) : (
         tabs.map((tab) => {
           const key = tabKey(tab);
@@ -401,8 +423,42 @@ function PanelContents() {
   );
 }
 
+/**
+ * 沒有分頁時：一句話加兩顆入口鈕（#1031，#1017 Q3 ①）。**鈕在分頁列外面**：`tablist` 裡只能有 `tab`（見檔頭）。
+ */
+function EmptyState() {
+  const { api } = useControl();
+  return (
+    <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
+      <p className="text-muted-foreground text-sm">{RIGHT_SIDEBAR_EMPTY_TEXT}</p>
+      <div className="flex gap-2">
+        {PANEL_KINDS.map((kind) => {
+          const { title, Icon } = PANELS[kind];
+          return (
+            <Button
+              key={kind}
+              type="button"
+              variant="outline"
+              className="h-11 rounded-full lg:h-9"
+              data-testid={`right-sidebar-open-${kind}`}
+              onClick={(event) => api.openPanel(kind, event.currentTarget)}
+            >
+              <Icon aria-hidden />
+              {title}
+            </Button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 function TabBody({ tab }: { tab: SidebarTab }) {
   const { sources, update } = useControl();
+  if (isPanelTab(tab)) {
+    const { Body } = PANELS[tab.kind];
+    return <Body />;
+  }
   if (tab.kind === 'plan') {
     const plan = sources.plans?.get(tab.id);
     return plan === undefined ? (
@@ -531,6 +587,7 @@ function useTabTitle(tab: SidebarTab): { label: string; detail: string | undefin
   useEffect(() => {
     if (store !== undefined && seq !== undefined) store.load(seq);
   }, [store, seq]);
+  if (isPanelTab(tab)) return { label: PANELS[tab.kind].title, detail: undefined };
   if (tab.kind === 'deliverable') return { label: basename(tab.file.path), detail: tab.file.path };
   if (tab.kind === 'plan') {
     const title = sources.plans?.get(tab.id)?.title ?? '計劃';
@@ -556,7 +613,13 @@ function TabChip({
 }) {
   const key = tabKey(tab);
   const { label, detail } = useTabTitle(tab);
-  const Icon = tab.kind === 'changes' ? FileDiff : tab.kind === 'plan' ? ScrollText : FileText;
+  const Icon = isPanelTab(tab)
+    ? PANELS[tab.kind].Icon
+    : tab.kind === 'changes'
+      ? FileDiff
+      : tab.kind === 'plan'
+        ? ScrollText
+        : FileText;
   return (
     <div
       role="none"

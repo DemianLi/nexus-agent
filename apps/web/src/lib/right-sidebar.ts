@@ -5,6 +5,13 @@
  * **形狀是一格停靠＋分頁**（#640 決定 1）：dsh `ui-sidebar-right` 的分格、浮窗、拖放、復原都不做。以後多一種
  * 內容只是 {@link SidebarTab} 多一支（#654 的計劃就是這樣加的；檔案樹還沒有）。
  *
+ * **單例面板的註冊表**（[#1017](https://github.com/DemianLi/nexus-agent/issues/1017) Q1 A、#1031）：觀測、成本這類「一個會話
+ * 一份」的面板不各開一支聯集成員，種類名記在 {@link PANEL_KINDS}，標題、圖示、渲染元件記在
+ * `components/right-sidebar-panels.tsx` 的 `PANELS`（`Record<PanelKind, …>`，漏一個編不過）。「註冊」是建置時加一列，
+ * 不是執行期載入程式碼（內網、無外部 CDN）。**種類清單放在這裡而不是元件那邊**：`readLayout` 在畫面第一次 render
+ * 的初始化器裡就要認得它們，認不得的 `kind` 整份版面作廢（{@link parseLayout}），不能靠模組副作用晚一步才填進去。
+ * 既有的三種（改動、交付、計劃）有座標，先不搬進來。
+ *
  * **去重的鍵就是內容的座標**（決定 8、9）：改動一輪一個分頁（`seq`），同一輪換檔只改 `index`；交付一個檔一個分頁
  * （`seq`、`index`），不同輪交付的同名檔是兩個分頁；計劃一份一個分頁（工具呼叫 id，#654 二-Q3）。
  *
@@ -18,6 +25,22 @@
  */
 
 import type { LocatedFile } from '@/lib/deliverables-view';
+
+/**
+ * 單例面板的種類（#1031）：觀測與成本。要加一種就在這裡加一個名字，再到 `PANELS` 補那一列。
+ * 名字不能跟有座標的三種撞（`changes`、`deliverable`、`plan`），型別上就擋了。
+ */
+export const PANEL_KINDS = ['trace', 'cost'] as const;
+export type PanelKind = (typeof PANEL_KINDS)[number];
+
+export function isPanelKind(value: unknown): value is PanelKind {
+  return (PANEL_KINDS as readonly unknown[]).includes(value);
+}
+
+/** 單例面板的分頁：沒有座標，一個會話一份（#1017 Q2）。 */
+export interface PanelTab {
+  readonly kind: PanelKind;
+}
 
 /** 一個分頁的內容座標。 */
 export type SidebarTab =
@@ -33,7 +56,13 @@ export type SidebarTab =
       readonly kind: 'plan';
       /** 交出這份計劃的那次工具呼叫 id（#654）；審核請求沒帶的話是 `review:<interruptId>`。 */
       readonly id: string;
-    };
+    }
+  | PanelTab;
+
+/** 是不是單例面板的分頁。 */
+export function isPanelTab(tab: SidebarTab): tab is PanelTab {
+  return isPanelKind(tab.kind);
+}
 
 export interface SidebarLayout {
   readonly open: boolean;
@@ -44,11 +73,12 @@ export interface SidebarLayout {
 
 export const EMPTY_LAYOUT: SidebarLayout = { open: false, tabs: [], active: undefined };
 
-/** 分頁的身分：同一個鍵只開一個。 */
+/** 分頁的身分：同一個鍵只開一個。單例面板的鍵就是種類名，重複打開只是選中（{@link openTab}）。 */
 export function tabKey(tab: SidebarTab): string {
   if (tab.kind === 'changes') return `changes:${tab.seq}`;
   if (tab.kind === 'plan') return `plan:${tab.id}`;
-  return `deliverable:${tab.file.seq}:${tab.file.index}`;
+  if (tab.kind === 'deliverable') return `deliverable:${tab.file.seq}:${tab.file.index}`;
+  return tab.kind;
 }
 
 /**
@@ -145,6 +175,7 @@ function parseTab(value: unknown): SidebarTab | undefined {
   if (tab.kind === 'plan') {
     return typeof tab.id === 'string' && tab.id !== '' ? { kind: 'plan', id: tab.id } : undefined;
   }
+  if (isPanelKind(tab.kind)) return { kind: tab.kind };
   if (tab.kind !== 'deliverable') return undefined;
   const file = tab.file as Record<string, unknown> | null;
   if (typeof file !== 'object' || file === null) return undefined;

@@ -6,6 +6,7 @@ import {
   LAYOUT_KEY_PREFIX,
   MAX_REMEMBERED_THREADS,
   MIN_PANEL_WIDTH,
+  PANEL_KINDS,
   RECENT_KEY,
   WIDTH_KEY,
   clampPanelWidth,
@@ -66,6 +67,26 @@ describe('開分頁', () => {
     expect(openTab(once, plan('call_1')).active).toBe('plan:call_1');
   });
 
+  it('單例面板的鍵就是種類名，重複打開只是選中、不多一個（#1017 Q2）', () => {
+    const panel = (kind: 'trace' | 'cost'): SidebarTab => ({ kind });
+    expect(tabKey(panel('trace'))).toBe('trace');
+    expect(tabKey(panel('cost'))).toBe('cost');
+    const layout = openTab(
+      openTab(openTab(EMPTY_LAYOUT, panel('trace')), panel('cost')),
+      changes(1),
+    );
+    expect(keys(layout)).toEqual(['trace', 'cost', 'changes:1']);
+    const again = openTab(layout, panel('trace'));
+    expect(keys(again)).toEqual(['trace', 'cost', 'changes:1']);
+    expect(again.active).toBe('trace');
+  });
+
+  it('單例面板的名字不跟有座標的三種撞', () => {
+    for (const reserved of ['changes', 'deliverable', 'plan']) {
+      expect(PANEL_KINDS as readonly string[]).not.toContain(reserved);
+    }
+  });
+
   it('收起時開分頁會展開', () => {
     const layout = openTab({ ...openTab(EMPTY_LAYOUT, changes(1)), open: false }, changes(1));
     expect(layout.open).toBe(true);
@@ -115,10 +136,30 @@ describe('存下來的版面', () => {
     expect(parseLayout(JSON.parse(JSON.stringify(layout)))).toEqual(layout);
   });
 
+  it('單例面板（觀測、成本）收得下，多餘的欄位不留', () => {
+    const withPanels: SidebarLayout = {
+      open: true,
+      tabs: [{ kind: 'trace' }, { kind: 'cost' }, changes(1)],
+      active: 'cost',
+    };
+    expect(parseLayout(JSON.parse(JSON.stringify(withPanels)))).toEqual(withPanels);
+    expect(
+      parseLayout({ open: true, tabs: [{ kind: 'trace', seq: 3, junk: 'x' }], active: 'trace' }),
+    ).toEqual({ open: true, tabs: [{ kind: 'trace' }], active: 'trace' });
+  });
+
   it.each([
     ['不是物件', 'x'],
     ['少了 open', { tabs: [], active: undefined }],
     ['認不得的 kind', { open: true, tabs: [{ kind: 'terminal' }], active: 'terminal' }],
+    [
+      '認得的分頁旁邊混了一個認不得的 kind：新增種類時不能被順手放寬（#1031）',
+      { open: true, tabs: [{ kind: 'trace' }, { kind: 'terminal' }], active: 'trace' },
+    ],
+    [
+      '單例面板出現兩次',
+      { open: true, tabs: [{ kind: 'cost' }, { kind: 'cost' }], active: 'cost' },
+    ],
     [
       '座標不是非負整數',
       { open: true, tabs: [{ kind: 'changes', seq: -1, index: 0 }], active: 'changes:-1' },
