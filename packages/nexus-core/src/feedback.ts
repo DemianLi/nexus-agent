@@ -256,6 +256,9 @@ export function currentMessageFeedback(
   for (const event of events) {
     if (isLogicalTurnStart(event)) origin = event.seq;
     if (event.type !== 'assistant/message' || origin === undefined) continue;
+    // 講到一半被停下來的那則不能評（同 dsh：凍結的半段沒有 `messageId`）。它帶著即時那則的 id 只是為了讓重新整理時補送與歷史
+    // 對得上（#1044），不是為了讓它變成評分的目標。
+    if (event.data.interrupted === true) continue;
     const id = loggedMessageId(event.data.message);
     if (id === undefined) continue;
     turnOfMessage.set(id, origin);
