@@ -1,0 +1,4 @@
+# 把 projection-toy.fixture.ts 那顆玩具投影插到出貨清單上（#1026 的端到端驗收）。
+- insert:
+    - id: projection-toy
+      name: './projection-toy.fixture.ts'

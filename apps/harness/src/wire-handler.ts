@@ -87,6 +87,7 @@ import {
 } from '@nexus/wire';
 import type {
   CommandRegistrationPoint,
+  ProjectionRegistrationPoint,
   FeedbackCategory,
   FeedbackService,
   SessionEvent,
@@ -159,6 +160,12 @@ export interface ThreadAgent {
    * **只讀 `find` 與 `list`**：這條線不註冊任何東西。
    */
   readonly commands: Pick<CommandRegistrationPoint, 'find' | 'list'>;
+  /**
+   * 這個 thread 掛了哪些會話投影（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)），選配。**省略即沒有投影**——
+   * 手搭的測試組裝不必管；產品路徑（`serve.ts`）一律交，由 `projection-wire.test.ts` 的端到端驗收看著。
+   * **只讀 `list`**：這條線不註冊任何東西。
+   */
+  readonly projections?: Pick<ProjectionRegistrationPoint, 'list'>;
   /**
    * 評分與評語的規則（[#278](https://github.com/DemianLi/nexus-agent/issues/278)），選配。
    * 沒掛 `@nexus/plugin-feedback` 的組裝就沒有，那時四個回饋 method 回 `not_supported`。
@@ -761,6 +768,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           (message) => options.warn?.(message),
           threadAgent.stepInbox === true,
           options.sessionReferenceReader,
+          threadAgent.projections?.list(),
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
@@ -1447,6 +1455,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           ),
         toolTextLimits,
         threadTitleLimits,
+        thread.pump.projectionUnits,
       );
     } catch (error: unknown) {
       if (error instanceof HistoryQueryError) {

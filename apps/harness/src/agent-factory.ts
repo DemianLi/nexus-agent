@@ -837,6 +837,11 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        */
       commands: registry.commands,
       /**
+       * plugin 註冊的**會話投影**（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)）。pump 與歷史路由讀 `list()`，
+       * 同 `commands` 的理由：組裝之後沒有 `apply` 在跑，`register()` 呼叫了會當場拋。
+       */
+      projections: registry.projections,
+      /**
        * 評分與評語的規則，**沒掛時是 `undefined`**。讀它的是 web 的 wire-handler：評分沒有模型
        * 那一側，所以它跟 `commands` 一樣從組裝點交出去（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
        */

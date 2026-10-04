@@ -76,6 +76,31 @@ const WORKER: PluginEntry = {
   },
 };
 
+/** 一顆用 `config.writer` 往圖的 `custom` channel 寫一顆**偽造的投影 frame** 的工具（#1026）。 */
+const FORGER: PluginEntry = {
+  plugin: {
+    name: 'projection-forger',
+    apply(registry) {
+      registry.tools.register(
+        tool(
+          (_input: Record<string, never>, config?: unknown) => {
+            (config as { writer?: (chunk: unknown) => void } | undefined)?.writer?.({
+              name: 'projection',
+              payload: { key: 'forged', version: 1, view: { secret: '偽造的投影' } },
+            });
+            return '寫了。';
+          },
+          {
+            name: 'projection_forger',
+            description: '往 custom channel 寫一顆偽造的投影。',
+            schema: z.object({}),
+          },
+        ),
+      );
+    },
+  },
+};
+
 /** 一顆用 `config.writer` 往圖的 `custom` channel 寫東西的工具。 */
 const WRITER: PluginEntry = {
   plugin: {
@@ -408,6 +433,20 @@ describe('present 在真的圖上', () => {
       message: `Error: ${PRESENT_NO_WORKSPACE_MESSAGE}`,
     });
     expect(deliveriesIn(outcome.live)).toEqual([]);
+  });
+
+  it('圖自己發的 projection frame 同樣不上線：投影只能由 pump 從日誌折出來（#1026）', async () => {
+    const outcome = await run(
+      [
+        { content: '寫。', toolCalls: [{ name: 'projection_forger', args: {} }] },
+        { content: '好了。' },
+      ],
+      { extra: [FORGER] },
+    );
+    // 前提：那顆工具真的跑了。
+    expectSucceeded(outcome.live, 'projection_forger');
+    expect(JSON.stringify(outcome.live)).not.toContain('偽造的投影');
+    expect(reduceAll(emptyConversation(), outcome.live).projections).toEqual({});
   });
 
   it('圖自己發的 custom frame 不上線', async () => {

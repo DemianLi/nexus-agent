@@ -763,6 +763,7 @@ async function startServer(
       const {
         agent,
         commands,
+        projections,
         dispose,
         attachSessions,
         feedback,
@@ -780,6 +781,8 @@ async function startServer(
         // （[#123](https://github.com/DemianLi/nexus-agent/issues/123)）；發派面本身在
         // `wire-handler.ts` 的 `threadFor`，一條 thread 一個執行器。
         commands,
+        // 插件投影（#1026）：pump 即時折、歷史路由折同一份清單。
+        projections,
         // 評分與評語（#278）：沒掛 plugin 的組裝就缺席，那時三個回饋 method 回 `not_supported`。
         ...(feedback !== undefined && { feedback }),
         // 每一輪的改動摘要（#443）：沒給 `--workspace` 就缺席，兩條 `changes` 路由一律 404。

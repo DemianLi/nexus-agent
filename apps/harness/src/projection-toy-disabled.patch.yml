@@ -1,0 +1,5 @@
+# 同 projection-toy.patch.yml，但這一列關著：投影整個消失，其他一切照舊（#1026）。
+- insert:
+    - id: projection-toy
+      name: './projection-toy.fixture.ts'
+      disabled: true
