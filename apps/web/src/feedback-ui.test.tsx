@@ -190,7 +190,7 @@ describe('評分按鈕', () => {
     expect(within(entryOf('先說一句。')).queryByTestId('rating-buttons')).toBeNull();
   });
 
-  it('讚踩列旁的「這一輪的過程」打開右側欄的觀測分頁（#1031）；只放入口，不定位', async () => {
+  it('讚踩列旁的「這一輪的過程」打開右側欄的觀測分頁（#1031）：分頁讀得到這條對話（#1033）；不定位到那一輪（#1034）', async () => {
     seq = 0;
     render(<App client={fakeClient().client} />);
     await ready();
@@ -198,7 +198,11 @@ describe('評分按鈕', () => {
     fireEvent.click(within(screen.getByTestId('rating-buttons')).getByTestId('turn-trace'));
     const tab = await screen.findByRole('tab', { name: '觀測' });
     expect(tab.getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByTestId('right-sidebar-panel-trace').textContent).toBe('尚無資料');
+    // 資料走 `useConversation` 的 store 一路接到分頁：畫出來的是這條對話裡的回覆，不是空狀態。
+    const panel = screen.getByTestId('right-sidebar-panel-trace');
+    expect(panel.textContent).toContain('先說一句。');
+    expect(panel.textContent).toContain('收工了。');
+    expect(within(panel).getAllByTestId('trace-row').length).toBeGreaterThanOrEqual(2);
   });
 
   it('點踩：先開對話框，選分類、寫備註、送出才記；再點一次是收回', async () => {

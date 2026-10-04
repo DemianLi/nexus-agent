@@ -175,16 +175,19 @@ export function ToolCard({
   beam,
   answer,
   subagentNames,
+  defaultOpen = false,
 }: {
   entry: ToolEntry;
   beam: boolean;
+  /** 一掛上就是展開的（觀測分頁在列上按開才掛這張卡，不必再點第二下，#1033）。 */
+  defaultOpen?: boolean;
   /** 配到這張提問卡的那一則答案（`pairAnswers`）；別的工具、或配不到時沒有。 */
   answer?: AnswerEntry;
   /** 背景子代理的編號 → 名字（`lib/subagent-view.ts`），`send_message` 那張卡用它說出傳給誰；沒給就說不出名字。 */
   subagentNames?: ReadonlyMap<string, string>;
 }) {
   const stopped = isStoppedQuestion(entry);
-  const [open, setOpen] = useState(stopped);
+  const [open, setOpen] = useState(stopped || defaultOpen);
   // 停下來的那一刻這張卡早就在畫面上了（等你回答），所以要在**翻成**停止時打開，初始值只管重播出來的那種。
   const [wasStopped, setWasStopped] = useState(stopped);
   if (stopped !== wasStopped) {

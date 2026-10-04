@@ -37,6 +37,8 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createAgentClient } from '@/lib/agent';
+import { createConversationStore } from '@/lib/conversation-store';
+import type { ConversationStore } from '@/lib/conversation-store';
 import { FEEDBACK_COMMAND_LINE, FEEDBACK_COPY } from '@/lib/feedback';
 import { FramePublisher, publicationOf } from '@/lib/frame-publisher';
 import type { Publication } from '@/lib/frame-publisher';
@@ -98,6 +100,11 @@ export interface HistoryView {
 
 export interface Conversation {
   readonly state: ConversationState;
+  /**
+   * 同一份狀態的可訂閱版本（#1033），給右側欄的面板讀：身分穩定，面板只在看得見時訂閱。
+   * 它跟 {@link Conversation.state} 在同一個發布回呼裡換，所以兩邊永遠是同一份。
+   */
+  readonly store: ConversationStore;
   /** 歷史拿到了沒、還有沒有更早的。**拿到之前是 `undefined`**，拿不到時看 {@link historyError}。 */
   readonly history?: HistoryView;
   /** 第一頁歷史拿不回來的原因。對話照樣接得下去，只是之前說過的話不在畫面上。往前翻的失敗在 {@link HistoryView.error}。 */
@@ -236,8 +243,16 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const threadId = useMemo(() => options.threadId ?? crypto.randomUUID(), [options.threadId]);
 
   const [state, setState] = useState<ConversationState>(emptyConversation);
+  // 右側欄的面板讀對話走這一條（#1033）：跟交給 React 的同一刻、同一份，所以放在發布回呼裡，不另外排。
+  const [store] = useState(() => createConversationStore(state));
   // 串流的逐字片段按動畫幀合併交給 React（`FramePublisher`，#527 Q8）。它手上的那份永遠是最新的。
-  const [publisher] = useState(() => new FramePublisher(state, setState));
+  const [publisher] = useState(
+    () =>
+      new FramePublisher(state, (published) => {
+        store.set(published);
+        setState(published);
+      }),
+  );
   useEffect(() => () => publisher.cancel(), [publisher]);
   /** 所有改對話狀態的地方都走這裡。 */
   const advance = useCallback(
@@ -753,6 +768,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
 
   return {
     state,
+    store,
     connected,
     recovered,
     reconnectNow,

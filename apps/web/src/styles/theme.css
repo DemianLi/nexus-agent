@@ -72,3 +72,12 @@ body {
   background-color: var(--background);
   color: var(--foreground);
 }
+
+/*
+ * 「在對話裡定位」（#1033）：觀測分頁捲到對話區某一則時，那一格掛 `data-located`（`lib/transcript-locate.ts`，約 1.6 秒）。
+ * 只是靜態底色的開與關，不做動效（spec §7）；圓角跟泡泡同一階，免得底色切成直角。
+ */
+[data-slot='message-scroller-item'][data-located] {
+  background-color: var(--chip);
+  border-radius: 1.5rem;
+}
