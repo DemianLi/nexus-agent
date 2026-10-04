@@ -2265,7 +2265,14 @@ export class ThreadPump {
     const reasoning = current.reasoning.trim() === '' ? '' : current.reasoning;
     const text = current.partial.trim() === '' ? '' : current.partial;
     if (!current.replyOpen || (reasoning === '' && text === '')) return;
+    // **沿用即時那則的 id**（[#1044](https://github.com/DemianLi/nexus-agent/issues/1044)）：沒有 id 的話，停止與重新整理撞在一起時，
+    // 下行補送的那份（帶即時 id，{@link CurrentRun.reply}）與歷史那份（日誌上這一則）對不起來，畫面出現同一則兩次，折疊器照訊息
+    // id 去重擋不到。**偏離 dsh**（凍結的半段沒有 id，`assembler.ts:169` 的 `interruptedBlocks`）：dsh 的下行與歷史同一刻產出、
+    // 沒有這個重疊；我們是兩個請求。**評分不因此開放**：兩處讀方都明確排除 `interrupted`（`@nexus/core` 的 `currentMessageFeedback`、
+    // 評分外掛的 `isAssistantMessage`），web 的 `isRatable` 也照舊不畫。
+    const liveId = (current.reply?.start as { id?: unknown } | undefined)?.id;
     const reply = new AIMessage({
+      ...(typeof liveId === 'string' && liveId !== '' ? { id: liveId } : {}),
       content:
         reasoning === ''
           ? text

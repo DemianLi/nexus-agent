@@ -217,7 +217,13 @@ describe('按了停止的那則，推理在重新整理之後還在（#561）', 
       // 日誌那顆真的帶著推理——少了這一句，兩邊都沒有推理也會相等。
       expect(run.interrupted).toHaveLength(1);
       expect(blocksOf(run.interrupted[0]!)).toEqual([{ type: 'reasoning', reasoning: shown }]);
-      expect(loggedMessageId(run.interrupted[0]!.message)).toBeUndefined();
+      // **沿用即時那則的 id**（#1044）：停止與重新整理撞在一起時，補送與歷史靠它對上、不會畫成兩則。
+      const liveId = run.frames
+        .filter((frame) => frame.method === 'messages' && frame.params.namespace.length <= 1)
+        .map((frame) => frame.params.data as { event?: string; id?: string })
+        .find((data) => data.event === 'message-start')?.id;
+      expect(liveId).toEqual(expect.any(String));
+      expect(loggedMessageId(run.interrupted[0]!.message)).toBe(liveId);
 
       // 不是 `turnTail`：那格判的是「正文非空的最後一則」（`@nexus/wire`），兩條路判得一樣。
       const live = aiView(run.frames);

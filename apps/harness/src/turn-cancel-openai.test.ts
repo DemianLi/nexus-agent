@@ -168,15 +168,16 @@ describe('真的 ChatOpenAI 串到一半按停止', () => {
       expect(fromLoggedMessage(interrupted.message).text).toBe(shown);
       expect(types.indexOf('assistant/message')).toBeGreaterThan(types.indexOf('model/end'));
 
-      // #382：那半段在日誌裡是新建的一則、沒有 id，所以評不到——畫面那則手上的 `messageId` 是串流那次呼叫的。
-      // 這就是 web 的 `isRatable` 把被停下來的那則排掉的理由；哪天記半段時帶上了 id，這裡先紅，那條排除要重看。
-      expect(loggedMessageId(interrupted.message)).toBeUndefined();
+      // #382／#1044：那半段在日誌裡沿用即時那則的 id（讓重新整理時補送與歷史對得上，不畫成兩則），但**不因此評得到**：
+      // 評分的兩處讀方都明確排除 `interrupted`，web 的 `isRatable` 也照舊把被停下來的那則排掉。哪天排除被拿掉，下面的
+      // `target-not-found` 先紅。
       const stopped = frames
         .reduce(reduceConversation, emptyConversation())
         .entries.find((entry) => entry.kind === 'ai' && entry.stopped === true);
       expect(stopped).toMatchObject({ kind: 'ai', turnTail: true });
       const messageId = stopped?.kind === 'ai' ? stopped.messageId : undefined;
       expect(messageId).toBeDefined();
+      expect(loggedMessageId(interrupted.message)).toBe(messageId);
       expect(
         createFeedbackService({ maxNoteBytes: 64 }).put(pump.sessions.root, {
           messageId: messageId!,

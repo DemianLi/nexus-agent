@@ -78,15 +78,22 @@ function fedAgent() {
   let wake: (() => void) | undefined;
   let ended = false;
   const agent = {
-    streamEvents: async () =>
-      (async function* () {
+    streamEvents: async (_input: unknown, config: { configurable: Record<string, unknown> }) => {
+      // 按了停止：像被切斷的模型請求那樣拋，pump 認的是中止訊號已經觸發（#276）。
+      const signal = Object.values(config.configurable).find(
+        (value): value is AbortSignal => value instanceof AbortSignal,
+      );
+      signal?.addEventListener('abort', () => wake?.(), { once: true });
+      return (async function* () {
         for (;;) {
           while (pending.length > 0) yield pending.shift();
+          if (signal?.aborted === true) throw new Error('被切斷了');
           if (ended) return;
           await new Promise<void>((resolve) => (wake = resolve));
           wake = undefined;
         }
-      })(),
+      })();
+    },
     getState: async () => ({ values: {} }),
     updateState: async () => ({}),
   };
@@ -326,6 +333,29 @@ describe('回覆串流到一半才接上的下行', () => {
     expect(aiEntries(fold(run.pump, joined.frames))).toEqual([
       { text: '第一則', reasoning: undefined, streaming: false },
       { text: '第二', reasoning: undefined, streaming: true },
+    ]);
+  });
+
+  it('停止與重新整理撞在一起（#1044）：補送排著、回覆才被記成中斷的半段，畫面上仍只有一則', async () => {
+    const run = await running();
+    await run.send(start('r1', 'run-r1'));
+    await run.send(text('r1', '講到一半'));
+
+    // web 的順序：先開下行（補送這時排進佇列，歷史那時還沒有這一則）……
+    const joined = join(run.pump);
+    open.push(joined);
+    await until(() => joined.frames.length >= 2);
+    // ……停止，pump 把使用者看到的半段記進日誌……
+    run.pump.cancel();
+    await until(() =>
+      run.pump.sessionLog.events.some(
+        (event) => event.type === 'assistant/message' && event.data.interrupted === true,
+      ),
+    );
+    // ……然後才拿歷史、折，再折排著的補送。
+    const state = fold(run.pump, joined.frames);
+    expect(aiEntries(state)).toEqual([
+      { text: '講到一半', reasoning: undefined, streaming: false },
     ]);
   });
 
