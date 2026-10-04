@@ -1285,6 +1285,16 @@ function reduceMessage(
         const entry: HumanEntry = { kind: 'human', id, text: '', ...referencesField(references) };
         return { ...state, entries: [...state.entries, entry] };
       }
+      // **同一則回覆已經在畫面上就不再長一格**（[#953](https://github.com/DemianLi/nexus-agent/issues/953) 第二刀）：
+      // 重新整理時下行補送進行中的那則（它的 `id` 就是日誌記的訊息 id），歷史是另一個請求、晚一步才拿——
+      // 兩者之間回覆落盤了的話，歷史已經有它，補送再長一格就是畫面上同一則出現兩次。之後這一則的
+      // `content-block-delta` 與 `message-finish` 對不到 entry，`replace` 找不到就是不動。
+      if (typeof data.id === 'string' && data.id !== '') {
+        const messageId = data.id;
+        if (state.entries.some((entry) => entry.kind === 'ai' && entry.messageId === messageId)) {
+          return state;
+        }
+      }
       const entry: AiEntry = {
         kind: 'ai',
         id,

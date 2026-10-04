@@ -764,6 +764,12 @@ interface CurrentRun {
   reasoning: string;
   /** root 有一則回覆講到一半。 */
   replyOpen: boolean;
+  /**
+   * root 上最近一則**還沒落進日誌**的回覆，給新接上的下行補送（[#953](https://github.com/DemianLi/nexus-agent/issues/953)
+   * 第二刀）。跟 {@link partial} 分開：它撐到 `assistant/message` 落盤才放掉，不是撐到 `message-finish`（量過，
+   * `message-finish` 先到 pump、日誌後寫，中間那段重新整理拿不到歷史、線上也沒有，回覆就憑空消失）；而且不收人話。
+   */
+  reply: UnsettledReply | undefined;
   /** root 那顆收尾的 `lifecycle` 已經標成中止送上線了。日誌照它收尾，畫面與日誌才對得上。 */
   stopped: boolean;
   /** 同 {@link stopped}，標的是撞到輸出上限（#433）。 */
@@ -822,6 +828,113 @@ function trackRootReply(current: CurrentRun, raw: RawProtocolEvent): void {
     default:
       return;
   }
+}
+
+/** 一則已經上線、日誌還沒記的 root 回覆：開頭、到目前為止的推理與正文、收尾（有的話）。見 {@link CurrentRun.reply}。 */
+interface UnsettledReply {
+  /** 畫面上那一格的 key：`run_id`，沒有就取 `id`（同 `@nexus/wire` 的 `reduceMessage`）。 */
+  readonly key: string;
+  readonly namespace: readonly string[];
+  readonly node: string | undefined;
+  readonly timestamp: number;
+  /** `message-start` 的 `data` 原樣——`id`（評分用）、`run_id` 都在裡面，補送時才接得上之後的即時片段。 */
+  readonly start: object;
+  reasoning: string;
+  text: string;
+  /** `message-finish` 的 `data` 原樣；還沒收尾是 `undefined`。 */
+  finish: object | undefined;
+}
+
+/**
+ * 跟著 root 那一層的訊息片段，記下 {@link CurrentRun.reply}。
+ *
+ * **只收回覆、不收人話**：圖裡注進來的 human 訊息不上線（{@link ThreadPump.#dropInjectedMessage}），這裡記下它的話，
+ * 補送出去的是一則線上從沒出現過的訊息。**之後的片段認 key 不認順序**：別則訊息的 `message-finish` 不能把這一則收掉。
+ * 跟 {@link trackRootReply} 在同一個同步段裡呼叫、早於廣播，所以 `subscribe` 看到的永遠是已經廣播出去的那一份。
+ */
+function trackUnsettledReply(current: CurrentRun, raw: RawProtocolEvent): void {
+  if (raw.method !== 'messages' || raw.params.namespace.length > 1) return;
+  const data = raw.params.data as {
+    event?: string;
+    role?: string;
+    id?: unknown;
+    run_id?: unknown;
+    delta?: { type?: string; text?: string; reasoning?: string };
+  } | null;
+  if (data === null || typeof data !== 'object') return;
+  const key = typeof data.run_id === 'string' ? data.run_id : data.id;
+  if (typeof key !== 'string') return;
+  if (data.event === 'message-start') {
+    if (data.role === 'human') return;
+    current.reply = {
+      key,
+      namespace: raw.params.namespace,
+      node: raw.params.node,
+      timestamp: raw.params.timestamp,
+      start: data,
+      reasoning: '',
+      text: '',
+      finish: undefined,
+    };
+    return;
+  }
+  const reply = current.reply;
+  if (reply === undefined || reply.key !== key) return;
+  if (data.event === 'content-block-delta') {
+    if (data.delta?.type === 'text-delta') reply.text += data.delta.text ?? '';
+    if (data.delta?.type === 'reasoning-delta') reply.reasoning += data.delta.reasoning ?? '';
+  } else if (data.event === 'message-finish') {
+    reply.finish = data;
+  }
+}
+
+/**
+ * 把一則還沒落盤的回覆攤成一串 frame（**還沒蓋號**）：開頭、推理、正文、收尾（有的話）。
+ *
+ * 形狀同歷史重播那一側的 `message()`（`conversation-history.ts`）：推理是 `index: 1`、正文是 `index: 0`，推理排在前面；
+ * 片段合成一顆，不照原本一字一顆送。**照 dsh 的重連 baseline**（`packages/api/session-controller/src/client/sessions/assistant-stream.ts`
+ * 的 `replace`，`5badb15009a`）：進行中那一次嘗試的前綴在連上時一次交出，之後的即時片段接在後面。
+ *
+ * **三處偏離**（載體表達不出來，不是形狀不同）：dsh 的 baseline 與持久視窗在 `follow` 的同一個同步段裡產出，再用序號切掉
+ * 在那之前排進佇列的 frame（`packages/api/session-controller/src/history.ts` 的 `follow`），客戶端還把持久的那則壓到
+ * `end` 才發布；我們的下行與歷史是兩個請求，所以 ①在下行註冊時補送、②蓋新號（合成的片段沒有原始號）、③撐到
+ * `assistant/message` 落盤才放掉（量過 `message-finish` 先到），重疊由折疊器照訊息 id 擋。
+ */
+function replyBaseline(reply: UnsettledReply): Event[] {
+  const frame = (data: object): Event =>
+    ({
+      method: 'messages',
+      params: {
+        namespace: reply.namespace,
+        timestamp: reply.timestamp,
+        ...(reply.node === undefined ? {} : { node: reply.node }),
+        data,
+      },
+    }) as Event;
+  return [
+    frame(reply.start),
+    ...(reply.reasoning === ''
+      ? []
+      : [
+          frame({
+            event: 'content-block-delta',
+            run_id: reply.key,
+            index: 1,
+            delta: { type: 'reasoning-delta', reasoning: reply.reasoning },
+          }),
+        ]),
+    ...(reply.text === ''
+      ? []
+      : [
+          frame({
+            event: 'content-block-delta',
+            run_id: reply.key,
+            index: 0,
+            delta: { type: 'text-delta', text: reply.text },
+          }),
+        ]),
+    ...(reply.finish === undefined ? [] : [frame(reply.finish)]),
+  ];
 }
 
 /** root 那一層「這一輪結束了」的那顆 `lifecycle`：完成與失敗都算。 */
@@ -1212,10 +1325,13 @@ export class ThreadPump {
    * 沒有重播——訂閱之前發生的事這條線上看不到，接回來的方式是重開 ＋ 重抓歷史
    * （照 dsh 的 `reconnection = reopen the stream + refetch history`）。
    *
-   * **唯一的例外是還掛著的中斷**（[#728](https://github.com/DemianLi/nexus-agent/issues/728)）：註冊當下把它們那幾顆
-   * `input.requested` 先放進這條線的佇列，同 dsh gateway 接上就補送還沒答的（`packages/api/gateway/src/index.ts:500`，
-   * `477b4f4`）。歷史折不出它們——酬載不在日誌上。**號是原本那顆的**：歷史的 frame 不帶號，從空重折的一頁收得下它，
-   * 之後的即時 frame 號都比它大。答掉或收回的那一刻就從 `#pending` 拿掉，之後接上的不會再拿到。
+   * **例外有三種現況，都是歷史折不出來的「現在」**：
+   * - 還掛著的中斷（[#728](https://github.com/DemianLi/nexus-agent/issues/728)）：註冊當下把它們那幾顆
+   *   `input.requested` 先放進這條線的佇列，同 dsh gateway 接上就補送還沒答的（`packages/api/gateway/src/index.ts:500`，
+   *   `477b4f4`）。歷史折不出它們——酬載不在日誌上。**號是原本那顆的**：歷史的 frame 不帶號，從空重折的一頁收得下它，
+   *   之後的即時 frame 號都比它大。答掉或收回的那一刻就從 `#pending` 拿掉，之後接上的不會再拿到。
+   * - 背景子代理現況（#867）。
+   * - 還沒落盤的 root 回覆（[#953](https://github.com/DemianLi/nexus-agent/issues/953)），見 {@link CurrentRun.reply}。
    */
   subscribe(
     channels: readonly WireChannel[],
@@ -1239,6 +1355,18 @@ export class ThreadPump {
     if (!subscriber.done && this.#subagentStatusFrame !== undefined) {
       if (accepts(subscriber, this.#subagentStatusFrame)) {
         subscriber.queue.push(this.#subagentStatusFrame);
+      }
+    }
+    // **還沒落盤的那則回覆也補送**（[#953](https://github.com/DemianLi/nexus-agent/issues/953) 第二刀）：它的開頭與已吐出的
+    // 字在下行開之前就送完了，歷史又要等那次模型呼叫結束才有，不補的話重新整理之後這一則要等下一次重新整理才看得到。
+    // **蓋的是新號、不是原本的號**：合成的字是一整塊，沒有哪一顆原始 frame 的號對得上；新號比這條線上已經排著的
+    // （上面兩種）都大、又比之後的即時 frame 都小，折疊器照號丟的規則不會把它丟掉，也不會把後面的丟掉。
+    // 補送與歷史可能重疊（回覆在開線與拿歷史之間落盤了），由折疊器照訊息 id 擋掉，見 `@nexus/wire` 的 `reduceMessage`。
+    const reply = this.#current?.reply;
+    if (!subscriber.done && reply !== undefined) {
+      const frames = replyBaseline(reply);
+      if (frames.length > 0 && accepts(subscriber, frames[0] as Event)) {
+        for (const frame of frames) subscriber.queue.push(this.#seal(frame));
       }
     }
     this.#subscribers.add(subscriber);
@@ -2013,6 +2141,7 @@ export class ThreadPump {
       partial: '',
       reasoning: '',
       replyOpen: false,
+      reply: undefined,
       stopped: false,
       maxTokens: false,
       closed: false,
@@ -2063,6 +2192,7 @@ export class ThreadPump {
       markProjectionsHandled(run);
       for await (const raw of run) {
         trackRootReply(current, raw);
+        trackUnsettledReply(current, raw);
         for (const event of this.#translate(raw)) {
           this.#broadcast(event);
         }
@@ -2365,6 +2495,14 @@ export class ThreadPump {
       if (goal !== undefined) this.#presentCustom(goal);
       this.#reportGoalFailure();
       if (event.type === 'goal/change') this.#scheduleGoalDrive();
+    }
+    // 回覆落進日誌了：從這一刻起歷史拿得到它，不再補送（#953）。
+    if (
+      event.type === 'assistant/message' &&
+      entry.address.kind === 'root' &&
+      this.#current !== undefined
+    ) {
+      this.#current.reply = undefined;
     }
     if (event.type === 'tool/call') this.#openCard(entry.address, event.data);
     else if (event.type === 'tool/result') this.#noteVerdict(event, entry.address);

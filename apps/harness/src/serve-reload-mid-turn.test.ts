@@ -7,8 +7,9 @@
  *
  * **前提一定要先確認**：拿歷史的那一刻畫面是執行中、還沒有回覆——不然「不是舊格式」是這一輪已經收尾之後的平凡答案。
  *
- * **第二刀還沒做**：中途接上之後，進行中的半段回覆在畫面上是接不起來的（它的 `message-start` 在下行開之前就送過了），
- * 回覆要重新整理一次才出現。這一組不斷言那一半，等第二刀補。
+ * **第二刀（補進行中的半段回覆）**：中途接上之後，進行中那則回覆的 `message-start` 與已吐出的字在下行開之前就送過了，
+ * 下行接上時由 pump 補送（`thread-pump.ts` 的 `subscribe`，照 dsh 的重連 baseline）。這裡量的是整條路對起來之後，
+ * 畫面上那一則與腳本原文**完全相等**——重字、漏字、重複一則都抓得到。
  */
 
 import type { ConversationState, Event } from '@nexus/wire';
@@ -26,6 +27,7 @@ afterEach(async () => {
 });
 
 const THREAD = 'reload-mid-turn';
+const REPLY = '這是一段慢慢吐出來的回覆。';
 
 function isRootRunning(event: Event): boolean {
   const data = event.params.data as { event?: string; graph_name?: string } | null;
@@ -33,10 +35,8 @@ function isRootRunning(event: Event): boolean {
 }
 
 describe('回覆串流到一半重新整理', () => {
-  it('不報舊格式；畫面是執行中、人話在；跑完之後再拿歷史也不是舊格式、回覆在', async () => {
-    served = await startScriptedServe([
-      { content: '這是一段慢慢吐出來的回覆。', tokenDelayMs: 150 },
-    ]);
+  it('不報舊格式；畫面是執行中、人話在；接上後回覆完整接得起來；跑完之後再拿歷史也不是舊格式、回覆在', async () => {
+    served = await startScriptedServe([{ content: REPLY, tokenDelayMs: 150 }]);
     const sender = await serveClient(served.running);
     const first = await sender.openEvents(THREAD);
     await sender.runStart(THREAD, '哈囉');
@@ -74,11 +74,21 @@ describe('回覆串流到一半重新整理', () => {
       }
     }
     expect(state.status).toBe('idle');
+    // 補送的前綴加上之後的即時片段，等於腳本全文：一個字不多、一個字不少，而且只有一則。
+    expect(state.entries.map((entry) => entry.kind)).toEqual(['human', 'ai']);
+    expect(state.entries[1]).toMatchObject({ kind: 'ai', text: REPLY, streaming: false });
 
     const after = await reloaded.threadHistory(THREAD);
     if (after.kind !== 'ok') throw new Error(`歷史拿不到：${after.message}`);
     expect(after.result.legacy).toBe(false);
     const settled = reduceAll(emptyConversation(), after.result.events);
     expect(settled.entries.map((entry) => entry.kind)).toEqual(['human', 'ai']);
+    // **折疊器去重的前提**（`@nexus/wire` 的 `reduceMessage`）：補送那則的 `id` 與日誌記的訊息 id 是同一個。不成立的話，
+    // 回覆在開線與拿歷史之間落盤時畫面會有兩則，而且沒有任何錯誤。
+    const liveAi = state.entries[1];
+    const settledAi = settled.entries[1];
+    if (liveAi?.kind !== 'ai' || settledAi?.kind !== 'ai') throw new Error('兩邊都該有那則回覆');
+    expect(liveAi.messageId).toEqual(expect.any(String));
+    expect(liveAi.messageId).toBe(settledAi.messageId);
   }, 30000);
 });
