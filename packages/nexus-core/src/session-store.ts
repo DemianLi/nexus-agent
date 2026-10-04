@@ -324,8 +324,17 @@ import type { SessionEvent } from './session-log.js';
  *
  * 29 以前的檔直接讀：一格都沒有就是那時候沒記。**判準是那一格在不在，不是 {@link StoredSessionHeader.version}**
  * ——續接會把舊檔的 `version` 蓋成這一版而不回填這四格，理由同 13 的 `workspaceRoot`。
+ *
+ * ## 31：`subagent/catalog`
+ *
+ * 父那一份記下派出去的子代理：子會話 id 與派它的那一顆 `tool/call`（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)，
+ * 照 dsh 的同名事件，見 `subagent-catalog.ts`）。v30 以前的檔直接讀：那時候沒有這一顆，前景子代理從父日誌找不到，只剩子日誌 header
+ * 的 `parentSession`；背景的仍可從 `tool/result.meta.runId` 推。讀的人照「沒記」表態（「—」），**不是沒有子代理**。
+ *
+ * 升版照新增詞彙的慣例（同 26、28），不是非升不可：30 的讀者遇到它會當成認不得的種類略過（各 switch 都有 `default`），它不進模型、
+ * 也不左右任何折疊，所以略過是對的。
  */
-export const SESSION_LOG_FORMAT_VERSION = 30;
+export const SESSION_LOG_FORMAT_VERSION = 31;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

@@ -44,6 +44,7 @@ import { toolCallSessionAddress } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
 import type { SessionRegistry } from './session-registry.js';
 import type { SessionLog } from './session-log.js';
+import { appendSubagentCatalog } from './subagent-catalog.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 import type { FeedbackService } from './feedback.js';
 import type { FsService } from './fs-service.js';
@@ -828,6 +829,21 @@ export interface SessionRegistrationPoint {
    */
   flush(log: SessionLog): Promise<void>;
   /**
+   * **登記「這次呼叫可能派出子代理」**（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)）：登記期間，綁上來的
+   * 註冊表若開出 `runId` 正是這一格的子會話日誌，就在 `link.parent` 記一顆 `subagent/catalog`（見 {@link ./subagent-catalog.ts}）。
+   *
+   * 寫的時刻是**子日誌出生**那一刻，不是登記那一刻：只發布成功的事實，同 dsh 的目錄。從頭到尾沒寫過日誌的子代理（派不出去的）
+   * 就沒有目錄，指不到不存在的東西。鑰匙是 `runId`：父圖那次呼叫的 `checkpoint_ns`，跟子代理那一側算出來的是同一個值
+   * （`session-address.ts` 的 `spawnedSubagentRunId`），兩邊不必互相通知就對得上。
+   *
+   * 生產者是圍堵：它記下 `tool/call` 之後登記、呼叫落定（含拋錯與中斷）之後退。
+   *
+   * @param runId - 這次呼叫派出的子代理會帶著的 `runId`。
+   * @param link - 寫在哪一份（`forCall` 交給這次呼叫的那一份）、配哪一顆 `tool/call`。
+   * @returns 退掉這次登記。冪等。
+   */
+  expectSpawn(runId: string, link: SpawnLink): () => void;
+  /**
    * 把一張會話註冊表綁上來。**組裝點的一步，不是 plugin 的**。
    *
    * **綁第二張不拋。** 「剛好一份」是一個假設而不是一條保證——`attachSession` 是組裝點
@@ -840,6 +856,14 @@ export interface SessionRegistrationPoint {
    * @returns 只解綁這一次的冪等函式。
    */
   bind(sessions: SessionRegistry): () => void;
+}
+
+/** {@link SessionRegistrationPoint.expectSpawn} 登記的那一格。 */
+export interface SpawnLink {
+  /** 派它的那一份日誌，目錄寫在這裡。 */
+  readonly parent: SessionLog;
+  /** 派它的那一顆 `tool/call` 的 `callId`。 */
+  readonly callId: string;
 }
 
 /**
@@ -1333,6 +1357,8 @@ export function createRegistry(): InternalPluginRegistry {
 
   // 插入序，而且**允許多於一張**——理由見 `SessionRegistrationPoint.bind`。
   const boundSessions = new Set<SessionRegistry>();
+  /** 登記著「可能派出子代理」的呼叫，`runId` → 那一格。見 `expectSpawn`。 */
+  const expectedSpawns = new Map<string, SpawnLink>();
   const sessionPoint: SessionRegistrationPoint = {
     join: (installer) =>
       effect('sessions.join()', (origin) => sessionInstallers.append(installer, origin)),
@@ -1350,12 +1376,35 @@ export function createRegistry(): InternalPluginRegistry {
     async flush(log) {
       await Promise.all([...boundSessions].map((sessions) => sessions.flush(log)));
     },
+    expectSpawn(runId, link) {
+      expectedSpawns.set(runId, link);
+      return () => {
+        // 只退自己那一格：同一個 `runId` 被核准中斷之後 resume 會再登記一次（見 `session-log.ts` 的 `tool/call`）。
+        if (expectedSpawns.get(runId) === link) expectedSpawns.delete(runId);
+      };
+    },
     bind(sessions) {
       boundSessions.add(sessions);
+      // 子日誌出生的那一刻寫目錄（#1023）。`observe` 先掃一遍已經在的：root 與這次綁上來之前就開的，都不在登記表上。
+      const unobserve = sessions.observe(({ address, log }) => {
+        if (address.kind !== 'subagent') return;
+        const link = expectedSpawns.get(address.runId);
+        // 寫的那一份要是這張註冊表的：別張註冊表（另一條 thread）的同名 `runId` 不寫過去。
+        if (link === undefined || !sessions.list().some((entry) => entry.log === link.parent)) {
+          return;
+        }
+        expectedSpawns.delete(address.runId);
+        appendSubagentCatalog(link.parent, {
+          childId: log.sessionId,
+          callId: link.callId,
+          mode: 'one-shot',
+        });
+      });
       let active = true;
       return () => {
         if (!active) return;
         active = false;
+        unobserve();
         boundSessions.delete(sessions);
       };
     },

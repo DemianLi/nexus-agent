@@ -71,6 +71,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import {
   currentMessageFeedback,
   deriveSessionStats,
+  subagentLinks,
   repeatCallKey,
   repeatReminderTracks,
   resolveRepeatReminderSettings,
@@ -84,6 +85,7 @@ import type {
   RepeatReminderSettings,
   SessionEvent,
   SessionEventType,
+  SubagentLink,
 } from '@nexus/core';
 // 讀的事件種類（`todo/write`、`feedback/*`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
 import type {} from '@nexus/plugin-todo';
@@ -106,6 +108,8 @@ const MODEL_CALLS_SINCE = 6;
 export const CANCEL_SINCE = 7;
 /** 評分與 `/feedback` 從這一版開始記。見 `session-store.ts` 的版本 8。 */
 export const FEEDBACK_SINCE = 8;
+/** 子代理目錄（`subagent/catalog`）從這一版開始記。見 `session-store.ts` 的版本 31（#1023）。 */
+export const SUBAGENT_CATALOG_SINCE = 31;
 
 /**
  * 這一版認得的事件種類。
@@ -134,6 +138,7 @@ const KNOWN_EVENT_TYPES: Readonly<Record<SessionEventType, true>> = {
   'sandbox/mode': true,
   'plan/mode': true,
   'subagent/model-selection-policy': true,
+  'subagent/catalog': true,
   'tool/call': true,
   'tool/result': true,
   'feedback/message-put': true,
@@ -200,6 +205,12 @@ export interface SessionScan {
   readonly negativeTurns: number | null;
   /** `/feedback` 記下的評語則數。v8 之前是 `null`。 */
   readonly feedbackRecords: number | null;
+  /**
+   * 這一份派出的子會話，一顆 `subagent/catalog` 一筆（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)）。
+   * v31 之前是 `null`：那時候不記，**不是沒派過**。子會話那一頭找回派它的呼叫，靠的是它 header 的 `parentSession`
+   * 指到的那一份的這一格（{@link formatScanReport}）。
+   */
+  readonly subagents: readonly SubagentLink[] | null;
   /** 認不得而略過的事件顆數。 */
   readonly unknownEvents: number;
   /**
@@ -358,6 +369,7 @@ export function scanSessionLog(
         ? [...ratingsByTurn(known).values()].filter((item) => item.rating === 'negative').length
         : null,
     feedbackRecords: version >= FEEDBACK_SINCE ? feedbackRecords : null,
+    subagents: version >= SUBAGENT_CATALOG_SINCE ? subagentLinks(known) : null,
     unknownEvents: log.events.length - known.length,
     ...(log.header.metadata !== undefined && { headerMetadata: log.header.metadata }),
   };
@@ -461,6 +473,27 @@ export function displayPath(file: string, base?: string): string {
   return inside.startsWith('..') || isAbsolute(inside) ? file : inside;
 }
 
+/** 一顆連結的父端位置：呼叫與那一輪。往回找不到的那一格印「—」。 */
+function describeDispatch(link: SubagentLink): string {
+  return (
+    `呼叫 ${link.callId}（tool/call #${link.callSeq ?? '—'}）` +
+    `｜那一輪 turn/start #${link.turnSeq ?? '—'}`
+  );
+}
+
+/**
+ * 子會話那一頭：拿 header 的 `parentSession` 找到父那一份，在它的目錄裡找自己。找不到一律印「—」並說是哪一種沒有——
+ * **不推論成「沒有人派它」**。
+ */
+function dispatchedBy(child: SessionScan, parent: SessionScan | undefined): string {
+  if (parent === undefined) return `—（上層 ${child.parentSession} 不在這次掃描裡）`;
+  if (parent.subagents === null) {
+    return `—（上層是格式版本 ${parent.version}：第 ${SUBAGENT_CATALOG_SINCE} 版才記子代理目錄）`;
+  }
+  const link = parent.subagents.find((each) => each.childId === child.sessionId);
+  return link === undefined ? '—（上層的子代理目錄沒有這一份）' : describeDispatch(link);
+}
+
 /**
  * 印成給人看的報表。疑似打轉的排前面，其餘照路徑。
  *
@@ -480,6 +513,7 @@ export function formatScanReport(
       Number(b.looping === true) - Number(a.looping === true) || a.file.localeCompare(b.file),
   );
   const flagged = scans.filter((scan) => scan.looping === true).length;
+  const byId = new Map(scans.map((scan) => [scan.sessionId, scan]));
 
   const lines: string[] = [
     `會話掃描：${scans.length} 份日誌，疑似打轉 ${flagged} 份` +
@@ -499,6 +533,12 @@ export function formatScanReport(
       `  中止 ${scan.aborted ?? '—'} 輪 ｜點踩 ${scan.negativeTurns ?? '—'} 輪 ｜回饋 ${scan.feedbackRecords ?? '—'} 則`,
       `  ${formatSessionHeaderMetadata(scan.headerMetadata ?? {})}`,
     );
+    if (scan.parentSession !== undefined) {
+      lines.push(`  派它的 ${dispatchedBy(scan, byId.get(scan.parentSession))}`);
+    }
+    for (const link of scan.subagents ?? []) {
+      lines.push(`  派出 ${link.childId}（${link.mode}）← ${describeDispatch(link)}`);
+    }
     if (scan.version < FEEDBACK_SINCE) {
       const missing = [
         ...(scan.version < TOOL_EVENTS_SINCE ? [`第 ${TOOL_EVENTS_SINCE} 版才記工具事件`] : []),

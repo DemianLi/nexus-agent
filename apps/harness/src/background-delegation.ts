@@ -480,6 +480,8 @@ export class BackgroundDelegation {
               subagent: subagentType,
               text: withReturnGuidance(description, host.rootSessionId),
               ...(choice !== undefined && { choice }),
+              // root 那一份記子代理目錄，指回這一顆呼叫（#1023）。
+              ...(callId !== '' && { callId }),
             });
           const started = sandbox === undefined ? start() : sandbox.delegate(start);
           // 編號告訴折疊器：背景那一輪的卡從日誌開、namespace 是 `[編號, 'tools']`，沒有這一格就永遠認不出是誰的
