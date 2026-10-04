@@ -41,11 +41,17 @@ import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
 import type { ChangesStores } from '@/lib/changes-diff';
+import type { ConversationStore } from '@/lib/conversation-store';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import type { DeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import type { PlanDocument } from '@/lib/plan-review';
 import { basename } from '@/lib/present-view';
+import {
+  findTranscriptItem,
+  focusTranscriptItem,
+  revealTranscriptItem,
+} from '@/lib/transcript-locate';
 import {
   MIN_PANEL_WIDTH,
   clampPanelWidth,
@@ -86,6 +92,11 @@ export interface RightSidebarSources {
   readonly deliverableDownload?: DeliverableDownloader | undefined;
   /** 對話裡的計劃，以 {@link SidebarTab} 的 `plan` id 為鍵（#654）。 */
   readonly plans?: ReadonlyMap<string, PlanDocument> | undefined;
+  /**
+   * 對話狀態的可訂閱 store（#1033），觀測分頁讀它。**放的是 store 不是 `ConversationState`**：`sources` 一變身分，
+   * `RightSidebarPanel` 的 `memo` 就擋不住（見該元件的註解）。沒給就是沒有對話可看（觀測分頁畫「尚無資料」）。
+   */
+  readonly conversation?: ConversationStore | undefined;
 }
 
 /** 卡片用得到的那一半。 */
@@ -107,6 +118,11 @@ export interface RightSidebarApi {
    * （同 {@link RightSidebarApi.openPlan}）。
    */
   openPanel(kind: PanelKind, from?: HTMLElement | null): void;
+  /**
+   * 捲到對話區的那一則（#1033，觀測分頁的「在對話裡定位」）。找不到那一格（沒載入、或那一則畫不出來）回 `false`，什麼都不動。
+   * 1024 以下右側欄是蓋住整個對話的抽屜：先收掉它，抽屜關掉時焦點交給那一則；停靠時焦點留在面板，不搬（spec §8「只在焦點本來會丟掉時才搬」）。
+   */
+  locate(entryId: string): boolean;
 }
 
 interface RightSidebarControl {
@@ -121,6 +137,8 @@ interface RightSidebarControl {
   readonly focusTab: RefObject<string | undefined>;
   /** 停靠時收起鈕把焦點交回哪裡；沒有（或已經不在畫面上）就交回標頭的開關鈕。 */
   readonly returnFocus: RefObject<HTMLElement | null>;
+  /** 1024 以下定位之後，抽屜關掉時焦點要去的那一格（`locate`）。 */
+  readonly locateFocus: RefObject<HTMLElement | null>;
   update(change: (layout: SidebarLayout) => SidebarLayout): void;
   setWidth(width: number, commit: boolean): void;
 }
@@ -156,6 +174,7 @@ export function RightSidebarProvider({
   const toggle = useRef<HTMLButtonElement>(null);
   const focusTab = useRef<string | undefined>(undefined);
   const returnFocus = useRef<HTMLElement | null>(null);
+  const locateFocus = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (touched.current) writeLayout(threadId, layout);
   }, [threadId, layout]);
@@ -194,6 +213,16 @@ export function RightSidebarProvider({
         returnFocus.current = from ?? null;
         update((current) => openTab(current, tab));
       },
+      locate: (entryId) => {
+        const item = findTranscriptItem(entryId);
+        if (item === undefined) return false;
+        revealTranscriptItem(item);
+        if (isMobile) {
+          locateFocus.current = item;
+          update((current) => setOpen(current, false));
+        }
+        return true;
+      },
     }),
     [update, canPreview, isMobile],
   );
@@ -207,6 +236,7 @@ export function RightSidebarProvider({
       toggle,
       focusTab,
       returnFocus,
+      locateFocus,
       update,
       setWidth,
     }),
@@ -251,7 +281,7 @@ export function RightSidebarToggle({ className }: { className?: string }) {
  * 變了（版面、寬度、`sources`）才重畫，所以 `sources` 的身分要穩（`App` 用 `useMemo`），別把隨串流變的東西放進去。
  */
 export const RightSidebarPanel = memo(function RightSidebarPanel() {
-  const { layout, isMobile, width, update } = useControl();
+  const { layout, isMobile, width, locateFocus, update } = useControl();
   if (isMobile) {
     return (
       <Sheet
@@ -263,6 +293,14 @@ export const RightSidebarPanel = memo(function RightSidebarPanel() {
           showCloseButton={false}
           className="w-full gap-0 p-0 sm:max-w-none"
           data-testid="right-sidebar"
+          // 沒有 Trigger（受控開啟），焦點自己還（spec §8）：從觀測分頁定位時交給對話裡那一則，其餘照 Radix 預設。
+          onCloseAutoFocus={(event) => {
+            const target = locateFocus.current;
+            if (target === null) return;
+            locateFocus.current = null;
+            event.preventDefault();
+            focusTranscriptItem(target);
+          }}
         >
           <SheetTitle className="sr-only">右側欄</SheetTitle>
           <SheetDescription className="sr-only">
@@ -414,7 +452,7 @@ function PanelContents() {
               hidden={key !== active}
               className="flex min-h-0 flex-1 flex-col"
             >
-              <TabBody tab={tab} />
+              <TabBody tab={tab} visible={layout.open && key === active} />
             </div>
           );
         })
@@ -453,11 +491,11 @@ function EmptyState() {
   );
 }
 
-function TabBody({ tab }: { tab: SidebarTab }) {
-  const { sources, update } = useControl();
+function TabBody({ tab, visible }: { tab: SidebarTab; visible: boolean }) {
+  const { api, sources, update } = useControl();
   if (isPanelTab(tab)) {
     const { Body } = PANELS[tab.kind];
-    return <Body />;
+    return <Body visible={visible} sources={sources} locate={api.locate} />;
   }
   if (tab.kind === 'plan') {
     const plan = sources.plans?.get(tab.id);
