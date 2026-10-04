@@ -72,6 +72,7 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
   APPROVAL_INTERRUPT_KIND,
+  createProjectionFold,
   foldInbox,
   humanMessageForTurnStart,
   INTERRUPTED_REPLY_MARKER,
@@ -92,6 +93,9 @@ import {
   turnReachedMaxTokens,
   type InboxSplice,
   type InboxState,
+  type ProjectionFold,
+  type ProjectionSession,
+  type ProjectionUnit,
   type QueuedInput,
   type QueuedInputSource,
   type SessionAddress,
@@ -133,6 +137,7 @@ import {
   todosData,
   workspaceChangesData,
 } from './conversation-history.js';
+import { projectionData } from './projection-wire.js';
 import { driveGoalRound } from './goal-driver.js';
 import {
   parseReferencedText,
@@ -1084,6 +1089,14 @@ export class ThreadPump {
    */
   readonly #goal = new RootGoal();
   /**
+   * 插件投影（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)）：單元清單與同一個折疊器（歷史路由用同一個
+   * `createProjectionFold`）。`#projections` 是 root 日誌那一份的即時折疊，接上 root 時 seed。只收 root：
+   * 歷史路由只讀 root，子代理的即時送出去重新整理就不見了。
+   */
+  readonly #projectionUnits: readonly ProjectionUnit[];
+  readonly #projectionFold: ProjectionFold;
+  #projections: ProjectionSession | undefined;
+  /**
    * 排著、還沒開跑的事。**一個 thread 一次只跑一件**；後到的排隊，不平行跑。
    *
    * 挑下一件的規則在 {@link ThreadPump.#nextIndex}：答覆先跑；還有中斷掛著、又沒有答覆排著的時候，
@@ -1163,8 +1176,17 @@ export class ThreadPump {
     warn?: (message: string) => void,
     stepInbox = false,
     sessionReferences?: SessionReferenceReader,
+    projections: readonly ProjectionUnit[] = [],
   ) {
     this.#agent = agent;
+    this.#projectionUnits = projections;
+    this.#projectionFold = createProjectionFold(projections, {
+      // 每個單元在一份折疊器裡最多回報一次：拋錯的投影只停用自己，產品路徑不受影響（#1026）。
+      onFailure: (key, error) =>
+        this.#warn?.(
+          `[投影] thread ${threadId} 的投影 "${key}" 折疊失敗，已停用：${error instanceof Error ? error.message : String(error)}`,
+        ),
+    });
     this.#stepInboxMounted = stepInbox;
     this.#referenceReader = sessionReferences;
     this.#threadId = threadId;
@@ -1186,6 +1208,8 @@ export class ThreadPump {
         // 目標同理：那一段的值由歷史的最後一頁送，即時只送之後的變化。
         this.#goal.seed(entry.log.events);
         this.#goal.flush();
+        // 投影同理：已經在日誌裡的先折進來、不送，那一段的值由歷史的最新一頁送。
+        this.#projections = this.#projectionFold.session(entry.log.events);
         this.#reportGoalFailure();
       }
       unsubscribes.push(entry.log.subscribe((event) => this.#noteLogEvent(entry, event)));
@@ -1232,6 +1256,13 @@ export class ThreadPump {
   /** 這條 thread 的 root 會話事件日誌。**耐久序號的擁有者**，見 `@nexus/core` 的 `SessionLog`。 */
   get sessionLog(): SessionLog {
     return this.#sessions.root;
+  }
+
+  /**
+   * 這條 thread 掛的會話投影單元。歷史路由用同一份清單折（{@link historyPage}），所以重新整理後長出的狀態與即時一致。
+   */
+  get projectionUnits(): readonly ProjectionUnit[] {
+    return this.#projectionUnits;
   }
 
   /** 掛著等人回答的中斷，發出的順序。一顆都沒有就是空的。 */
@@ -2509,6 +2540,10 @@ export class ThreadPump {
       if (goal !== undefined) this.#presentCustom(goal);
       this.#reportGoalFailure();
       if (event.type === 'goal/change') this.#scheduleGoalDrive();
+      // 插件投影：一個泛用呼叫，不是每種投影一個分支。變了的單元各送一顆 `projection` frame。
+      for (const value of this.#projections?.push(event) ?? []) {
+        this.#presentCustom(projectionData(value));
+      }
     }
     // 回覆落進日誌了：從這一刻起歷史拿得到它，不再補送（#953）。
     if (

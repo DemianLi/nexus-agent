@@ -106,6 +106,7 @@ import type {
   UnreplayableReason,
 } from '@nexus/core';
 import {
+  createProjectionFold,
   foldInbox,
   isLogicalTurnStart,
   isMaxTokensFinish,
@@ -116,12 +117,14 @@ import {
   sessionStatsUnit,
   TOOL_OUTCOME_UNKNOWN,
   tokenUsageUnit,
+  type ProjectionUnit,
 } from '@nexus/core';
 
 // 讀的事件種類（`todo/write`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
 import type {} from '@nexus/plugin-todo';
 import { agentMessageBody, runIdOfSession } from './background-run-id.js';
 import { goalData, RootGoal } from './goal-wire.js';
+import { projectionData } from './projection-wire.js';
 import { threadTitleOf } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import { threadTitleConfigSchema } from './settings/thread-title.js';
@@ -1174,6 +1177,7 @@ export function historyPage(
   onOversize?: (bytes: number) => void,
   toolText?: ToolTextConfig,
   titleLimits?: ThreadTitleLimits,
+  projections: readonly ProjectionUnit[] = [],
 ): ThreadHistoryResult {
   // **這是這條路上唯一的退路**：呼叫端沒講就用 schema 的預設，同 `createWireHandler` 對
   // `deliverableLimits` 的做法（#536）。底下每一層都是必填轉發，所以「忘了傳」不會變成
@@ -1240,12 +1244,22 @@ export function historyPage(
     end === window.length && goal.touched && !goal.broken
       ? [customFrame(lastTime, goalData(goal.value))]
       : [];
+  // 插件投影（#1026）：同標題與計劃模式，**只在最新一頁**、是目前的值，而且**每個註冊的單元都送**（包括沒折到任何事件的、
+  // 空日誌的、折壞了的）——這一頁就是 baseline，web 的 `projections` 有哪些 key 由它定；即時那一側只送之後的變化。
+  // 折疊器與 pump 的即時折疊是同一個（`createProjectionFold`），frame 長相只寫在 `projection-wire.ts`。
+  const projectionFrames =
+    end === window.length
+      ? createProjectionFold(projections)
+          .fold(window)
+          .map((value) => customFrame(lastTime, projectionData(value)))
+      : [];
   const tailFrames = [
     ...totalsFrames,
     ...inboxFrames,
     ...titleFrames,
     ...planFrames,
     ...goalFrames,
+    ...projectionFrames,
   ];
   const bytes =
     fitted.bytes +

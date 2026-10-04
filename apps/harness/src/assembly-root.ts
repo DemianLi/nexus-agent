@@ -20,6 +20,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import type {
   ApprovalPolicy,
   CommandRegistrationPoint,
+  ProjectionRegistrationPoint,
   FeedbackService,
   InvariantError,
   InvariantTap,
@@ -667,6 +668,7 @@ export async function createCliAgent(
   sessions: SessionRegistry;
   sessionLog: SessionLog;
   commands: CommandRegistrationPoint;
+  projections: ProjectionRegistrationPoint;
   /**
    * 把這條 thread 的**每一份**會話日誌接上遙測、不變量配套入口與 `sessions` 通道的參與者，一個口三件事
    * （[#668](https://github.com/DemianLi/nexus-agent/issues/668)）。見 {@link SessionsAttachment}。
@@ -779,6 +781,7 @@ export async function createCliAgent(
   const {
     agent,
     commands,
+    projections,
     dispose,
     attachTelemetry,
     attachInvariants,
@@ -884,6 +887,7 @@ export async function createCliAgent(
     sessions,
     sessionLog,
     commands,
+    projections,
     attachSessions,
     attachTelemetry,
     attachInvariants,

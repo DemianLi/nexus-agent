@@ -178,7 +178,7 @@ export type { SubagentRunStatus, SubagentStatusPayload } from './subagent-status
 export { COMPACTION } from './compaction.js';
 export { GOAL, GOAL_PHASES } from './goal.js';
 export { PLAN_MODE } from './plan-mode.js';
-export { PROJECTION } from './projection.js';
+export { PROJECTION, PROJECTION_KEY_PATTERN } from './projection.js';
 export { TITLE } from './title.js';
 export { TODOS } from './todos.js';
 export type { WireSessionStats, WireTokenUsage } from './session-totals.js';
