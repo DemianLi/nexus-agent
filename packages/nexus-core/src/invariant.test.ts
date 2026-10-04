@@ -259,6 +259,33 @@ describe('model/start ↔ model/end', () => {
     ]);
   });
 
+  /** [#1021](https://github.com/DemianLi/nexus-agent/issues/1021)：`modelCall` 要指到前面真的有的 `model/start`。 */
+  it('指向前面的 model/start 不吵：包括呼叫結束之後才寫的量測與被切斷的半段', () => {
+    const log = new SessionLog('models');
+    const violations = watch(log);
+    log.append('model/start', {}); // 0
+    log.append('model/end', { modelCall: 0 });
+    log.append('context/measure', {
+      approxTokens: 1,
+      messageCount: 1,
+      thresholds: [],
+      modelCall: 0,
+    });
+    expect(violations).toEqual([]);
+  });
+
+  it('指向不存在或不是 model/start 的 seq → 報', () => {
+    const log = new SessionLog('models');
+    const violations = watch(log);
+    log.append('model/start', {}); // 0
+    log.append('model/usage', { inputTokens: 1, outputTokens: 1, totalTokens: 2, modelCall: 7 });
+    log.append('model/end', { modelCall: 1 }); // seq 1 是上面那顆 usage，不是開頭
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('model/usage（seq 1）的 modelCall 7'),
+      expect.stringContaining('model/end（seq 2）的 modelCall 1'),
+    ]);
+  });
+
   it('**end-seed 之前沒結尾的開頭，不替之後的結尾背書**', () => {
     const earlier = new SessionLog('models');
     earlier.append('model/start', {});

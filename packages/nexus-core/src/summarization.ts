@@ -70,6 +70,7 @@ import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
+import { captureModelCall, withModelCall } from './model-call-scope.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
 import { estimateAnchoredTokens } from './token-estimate.js';
@@ -594,7 +595,8 @@ function withTokenBudget(
             );
           }
         }
-        const response = await handler(sent);
+        // 夾住下一層，拿回它裡面那次模型呼叫的識別：量測寫在 `model/end` 之後，位置歸不對（#1021）。
+        const { result: response, call } = await captureModelCall(() => handler(sent));
         if (estimate === undefined) return response;
         try {
           book.record(response, sent, estimate.estimated, estimate.basis);
@@ -608,11 +610,17 @@ function withTokenBudget(
               ?.configurable,
           });
           if (found.kind === 'ok')
-            found.log.append('context/measure', {
-              approxTokens: estimate.tokens,
-              messageCount: (sent.messages ?? []).length,
-              thresholds,
-            });
+            found.log.append(
+              'context/measure',
+              withModelCall(
+                {
+                  approxTokens: estimate.tokens,
+                  messageCount: (sent.messages ?? []).length,
+                  thresholds,
+                },
+                call.of(found.log),
+              ),
+            );
         } catch {
           // 記不進去不能反過來把摘要器殺掉。見 withCompactionLog。
         }

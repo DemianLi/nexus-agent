@@ -73,6 +73,18 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
    * 裡哪天有了並行的模型呼叫也不會誤報。
    */
   let openModelCalls = 0;
+  /**
+   * 記過的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)）：
+   * 事件上的 `modelCall` 是這個集合的成員才算指得到東西。**跨 `session/end-seed` 不清**——上一個行程的呼叫
+   * 仍可能被它之後補寫的事件指到（量測、被切斷的半段回覆都在呼叫結束之後才寫）。
+   */
+  const startSeqs = new Set<number>();
+  const checkModelCall = (type: string, seq: number, modelCall: number | undefined): void => {
+    if (modelCall === undefined) return;
+    if (!startSeqs.has(modelCall)) {
+      fail(`${type}（seq ${seq}）的 modelCall ${modelCall} 不是前面任何一顆 model/start 的 seq`);
+    }
+  };
   /** 從檔頭折起的送出佇列。**跨 `session/end-seed` 不重設**，見檔頭。 */
   let inbox: InboxState = EMPTY_INBOX;
 
@@ -90,9 +102,19 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
       }
       case 'model/start': {
         openModelCalls += 1;
+        startSeqs.add(event.seq);
+        break;
+      }
+      case 'model/usage':
+      case 'llm/retry':
+      case 'llm/retry-started':
+      case 'assistant/message':
+      case 'context/measure': {
+        checkModelCall(event.type, event.seq, event.data.modelCall);
         break;
       }
       case 'model/end': {
+        checkModelCall(event.type, event.seq, event.data.modelCall);
         if (openModelCalls === 0) {
           fail(`model/end（seq ${event.seq}）前面沒有開著的 model/start`);
         } else {

@@ -77,6 +77,7 @@ import {
   humanMessageForTurnStart,
   INTERRUPTED_REPLY_MARKER,
   isTurnCancelled,
+  lastModelCall,
   MAX_TOKENS_TURN_END,
   SessionRegistry,
   spliceInbox,
@@ -91,6 +92,7 @@ import {
   TURN_CANCEL_CONFIG_KEY,
   toLoggedMessage,
   turnReachedMaxTokens,
+  withModelCall,
   type InboxSplice,
   type InboxState,
   type ProjectionFold,
@@ -2320,10 +2322,14 @@ export class ThreadPump {
       additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true },
     });
     try {
-      this.#sessions.root.append('assistant/message', {
-        message: toLoggedMessage(reply),
-        interrupted: true,
-      });
+      // 被切斷的是這份日誌最近開的那次呼叫（一份日誌一次一個），#1021。
+      this.#sessions.root.append(
+        'assistant/message',
+        withModelCall(
+          { message: toLoggedMessage(reply), interrupted: true as const },
+          lastModelCall(this.#sessions.root),
+        ),
+      );
     } catch {
       // 同下：這一輪照樣收成中止。
     }

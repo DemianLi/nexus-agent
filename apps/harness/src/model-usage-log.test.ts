@@ -34,7 +34,11 @@ const TURNS = [{ content: '好。', usage: { inputTokens: 11, outputTokens: 7 } 
 function usagesOf(events: readonly SessionEvent[]): ModelUsage[] {
   return events
     .filter((event) => event.type === 'model/usage')
-    .map((event) => event.data as ModelUsage);
+    .map((event) => {
+      // 只取三個數字：`modelCall`（#1021）由 `model-usage.test.ts` 與 core 的 `model-call-identity.test.ts` 釘。
+      const { inputTokens, outputTokens, totalTokens } = event.data as ModelUsage;
+      return { inputTokens, outputTokens, totalTokens };
+    });
 }
 
 /**

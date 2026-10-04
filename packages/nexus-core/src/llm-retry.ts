@@ -23,6 +23,8 @@
  *   `llm/retry-started` 改帶**實際等了多久**（`waitedMs`），量的是排定到下一次請求開跑的牆鐘。
  * - **沒有 `turn`／`step`／`provider`／`mode`／`policyKey`。** 我們沒有 `step/*`（見 `model-calls.ts` 檔頭），
  *   關聯鍵是 `retryId`：一次模型呼叫的所有重試共用一個，落在那一次呼叫的 `model/start`／`model/end` 之間。
+ *   **哪一次呼叫**由 `modelCall` 指（#1021，那次的 `model/start` 的 `seq`），不靠落在哪一對之間。第一次嘗試本身沒有事件，
+ *   「第幾次嘗試」就是 `retry + 1`。
  * - **不是耐久的計數狀態。** dsh 的 `llmRetry` 投影從這顆事件折出計數、讓行程重啟之後接著數；這裡計數只活在
  *   那一次呼叫的範圍裡。卡上交給 demian 決定的範圍題，這裡只做觀測。
  *
@@ -41,6 +43,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { currentModelCall, withModelCall } from './model-call-scope.js';
 import type { LlmFailure, SessionLog } from './session-log.js';
 
 interface RetryScope {
@@ -106,7 +109,10 @@ export function noteFailedAttempt(failure: LlmFailure, maxRetries: number): void
   const retry = scope.retries;
   scope.pending = { retry, scheduledAt: Date.now() };
   tryAppend(scope, () => {
-    scope.log.append('llm/retry', { retryId, retry, maxRetries, failure });
+    scope.log.append(
+      'llm/retry',
+      withModelCall({ retryId, retry, maxRetries, failure }, currentModelCall(scope.log)),
+    );
   });
 }
 
@@ -121,10 +127,16 @@ export function noteRequestStart(): void {
   if (pending === undefined || retryId === undefined) return;
   scope.pending = undefined;
   tryAppend(scope, () => {
-    scope.log.append('llm/retry-started', {
-      retryId,
-      retry: pending.retry,
-      waitedMs: Math.max(0, Date.now() - pending.scheduledAt),
-    });
+    scope.log.append(
+      'llm/retry-started',
+      withModelCall(
+        {
+          retryId,
+          retry: pending.retry,
+          waitedMs: Math.max(0, Date.now() - pending.scheduledAt),
+        },
+        currentModelCall(scope.log),
+      ),
+    );
   });
 }

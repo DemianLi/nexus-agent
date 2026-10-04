@@ -58,6 +58,7 @@
 
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { currentModelCall, withModelCall } from './model-call-scope.js';
 import type { NexusPlugin } from './plugin.js';
 import type { SessionLookup } from './registry.js';
 
@@ -158,7 +159,7 @@ export function createModelUsageRecorder(sessions: {
       });
       if (found.kind !== 'ok') return response;
       try {
-        found.log.append('model/usage', usage);
+        found.log.append('model/usage', withModelCall(usage, currentModelCall(found.log)));
       } catch {
         // 記不進去不能反過來殺掉這次模型呼叫。見檔頭最後一段。
       }

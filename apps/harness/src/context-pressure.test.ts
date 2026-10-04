@@ -18,6 +18,7 @@ import { createServer } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
+import { indexModelCalls } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
 import type { Event, WireContextPressure } from '@nexus/wire';
 import {
@@ -261,6 +262,15 @@ describe('分子跟摘要判準同源：門檻夾擠', () => {
     ]);
     const { approxTokens: A, messageCount: M } = measured[1]!;
     expect(M).toBe(3);
+    // #1021：每筆量測指回它量的那一次呼叫——量測寫在 `model/end` 之後，位置歸不對。走產品組裝（摘要器在起訖紀錄器外層）。
+    const index = indexModelCalls(baseline.root);
+    expect(index.calls).toHaveLength(2);
+    expect(index.calls.map((each) => each.measures.length)).toEqual([1, 1]);
+    expect(index.unattributed.filter((event) => event.type === 'context/measure')).toEqual([]);
+    for (const each of index.calls) {
+      const measure = each.measures[0]!;
+      expect(measure.seq).toBeGreaterThan(each.end!.seq);
+    }
     // 前提：同一段對話量兩次是同一個數，夾擠才有意義。
     const again = eventsOf(
       (
@@ -335,7 +345,10 @@ describe('即時與重新整理拿到同一份，只算 root', () => {
     expect(eventsOf(subagents, 'model/usage').map((usage) => usage.inputTokens)).toEqual([1001]);
     expect(eventsOf(subagents, 'context/measure')).toHaveLength(1);
     expect(eventsOf(root, 'model/usage').map((usage) => usage.inputTokens)).toEqual([1000, 1002]);
-    const rootMeasures = eventsOf(root, 'context/measure');
+    // 線上的量測沒有 `modelCall`（識別是日誌內的事，畫面不需要）；其餘三格與日誌逐一相等。
+    const rootMeasures = eventsOf(root, 'context/measure').map(
+      ({ modelCall: _modelCall, ...wire }) => wire,
+    );
     expect(rootMeasures).toHaveLength(2);
     // 前提：最後一輪真的失敗了，而且沒有留下任何一筆。
     expect(root.at(-1)?.type).toBe('turn/failed');
