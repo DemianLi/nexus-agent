@@ -533,3 +533,17 @@ describe('註冊表上的排空者（#599）', () => {
     expect(await sessions.flush(stranger)).toBe(true);
   });
 });
+
+describe('可忽略旗標（#507）', () => {
+  it('append 帶 { ignorable: true } 的那一筆，連旗標一起交給後端；沒帶的不多出這個鍵', async () => {
+    const log = new SessionLog('s');
+    const stored = fakeStored();
+    const coordinator = new SessionPersistenceCoordinator({ log, stored });
+    log.append('turn/end', {});
+    log.append('llm/retry-started', { retryId: 'r-1', retry: 1, waitedMs: 0 }, { ignorable: true });
+    await coordinator.flush();
+
+    expect(stored.written.map((event) => 'ignorable' in event)).toEqual([false, true]);
+    expect(stored.written[1]?.ignorable).toBe(true);
+  });
+});

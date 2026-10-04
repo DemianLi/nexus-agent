@@ -11,7 +11,7 @@
  * 立下的那條線（`fold.ts:252`：「歷史是基礎建設，不是 agent 的工作區」）的第二次應用。
  */
 
-import { mkdtemp, readdir, readFile, mkdir, stat } from 'node:fs/promises';
+import { appendFile, mkdtemp, readdir, readFile, mkdir, stat } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -406,5 +406,60 @@ describe('後端的兩條拒絕', () => {
     const stored = store.create({ version: SESSION_LOG_FORMAT_VERSION, id: 'z', createdAt: 1 });
     await stored.close();
     await expect(stored.flush()).rejects.toThrow(/已經關掉/);
+  });
+});
+
+/**
+ * `--resume` 碰到這一版不認得的事件種類（[#507](https://github.com/DemianLi/nexus-agent/issues/507)）。**整條產品路徑**：
+ * CLI 寫一份真的日誌、事後補一行更新的版本才會寫的種類、再 `--resume`。單元層的斷言在 `session-store-read.test.ts`。
+ */
+describe('--resume 碰到不認得的事件種類', () => {
+  /** 在一份剛寫完的日誌尾巴補一行 `future/thing`。回傳補之前有幾行。 */
+  async function plantFutureEvent(runDir: string, extra: Record<string, unknown>): Promise<number> {
+    const path = join(runDir, 'cli.jsonl');
+    const lines = (await readFile(path, 'utf8')).split('\n').filter((line) => line.length > 0);
+    await appendFile(
+      path,
+      `${JSON.stringify({ type: 'future/thing', seq: lines.length, time: 1, data: {}, ...extra })}\n`,
+    );
+    return lines.length;
+  }
+
+  it('沒標可忽略：當場拒絕，點名種類與第幾筆；日誌一個位元組都沒動', async () => {
+    const root = await tmp('nexus-log-');
+    await runOnce(['--session-log', root, '第一次。']);
+    const runDir = await onlyRunDir(root);
+    const seq = await plantFutureEvent(runDir, {});
+    const before = await readFile(join(runDir, 'cli.jsonl'), 'utf8');
+
+    await expect(runOnce(['--resume', runDir, '第二次。'])).rejects.toThrow(
+      new RegExp(`第 ${seq} 筆事件種類是 "future/thing".*不認得.*沒標可忽略`, 'su'),
+    );
+    expect(await readFile(join(runDir, 'cli.jsonl'), 'utf8')).toBe(before);
+  });
+
+  it('標了 ignorable: true：接得回來，那一行原樣留著，新事件接在它後面、seq 連續', async () => {
+    const root = await tmp('nexus-log-');
+    await runOnce(['--session-log', root, '第一次。']);
+    const runDir = await onlyRunDir(root);
+    const seq = await plantFutureEvent(runDir, { ignorable: true });
+    const planted = (await readFile(join(runDir, 'cli.jsonl'), 'utf8')).split('\n')[seq];
+
+    const printed = await runOnce(['--resume', runDir, '第二次。']);
+    expect(printed).toContain('第二次。');
+
+    const lines = (await readFile(join(runDir, 'cli.jsonl'), 'utf8'))
+      .split('\n')
+      .filter((line) => line.length > 0);
+    expect(lines[seq]).toBe(planted);
+    const events = lines.map((line) => JSON.parse(line) as SessionEvent);
+    expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+    expect(events.length).toBeGreaterThan(seq + 1);
+    // 續接蓋成這一版（沒升版的詞彙成長也一樣：header 描述的是「現在這個 runtime 讀得懂的最新號」）。
+    const header = JSON.parse(await readFile(join(runDir, 'cli.header.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >;
+    expect(header.version).toBe(SESSION_LOG_FORMAT_VERSION);
   });
 });

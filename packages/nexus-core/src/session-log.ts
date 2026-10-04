@@ -975,8 +975,86 @@ export type SessionEvent<T extends SessionEventType = SessionEventType> = T exte
       /** Unix epoch 毫秒。 */
       readonly time: number;
       readonly data: SessionEventMap[T];
+      /**
+       * 讀方碰到不認得的 `type` 時可以安全略過這一筆（[#507](https://github.com/DemianLi/nexus-agent/issues/507)）。
+       * **沒有＝必需**：讀方碰到不認得、又沒有這個標記的種類，必須拒絕重建整份日誌（{@link ./session-store.ts | SessionEventUnsupportedError}），
+       * 不能靜靜丟掉——不認得的必需事件可能左右後面每一筆怎麼讀。
+       *
+       * 寫方只在**純資訊性、遺失了也不影響重建**的種類上標 `true`。預設必需是刻意的：忘了標只會多拒（不便），
+       * 預設可略過則會讓同一個疏忽變成靜靜接續一份被掏空的日誌（安全失敗）。同 dsh
+       * （`packages/core/session/src/types.ts:501-511`，`5badb15`）。
+       *
+       * **對已經認得的種類沒有作用**：認得就照該種類的語意讀，標不標都一樣。
+       */
+      readonly ignorable?: true;
     }
   : never;
+
+/**
+ * **這一版的程式認得的事件種類**——讀方碰到表外的 `type` 時拒絕重建，除非那一筆標了
+ * {@link SessionEvent.ignorable}（[#507](https://github.com/DemianLi/nexus-agent/issues/507)，
+ * 同 dsh 的 `KNOWN_SESSION_EVENT_TYPES`，`packages/core/session/src/known-event-types.ts`，`5badb15`）。
+ *
+ * **逐種列出、型別綁死**（同 {@link MODEL_VISIBLE_EVENT_TYPES} 的做法）：詞彙多一種或少一種，這張表都編不過。
+ * 少一種的那個方向是這張表的第二個職責——**種類只增不減**：舊日誌沒有 `ignorable` 旗標，缺席＝必需，所以
+ * 任何一版寫過的種類，這一版都必須認得，否則那份舊日誌從此讀不回來。要退役一種，留在這裡，只是不再寫。
+ *
+ * **詞彙開放之後（[#679](https://github.com/DemianLi/nexus-agent/issues/679) 第 4 步）這張手寫表要換成生成的**：
+ * 各套件用宣告合併補的種類，這張表看不到。dsh 的做法是生成器掃過每一處 `SessionEventMap` 合併，再用一支檢查
+ * 驗它沒過期；不是讓各 plugin 在執行期登記（登記只說「有這個名字」，說不出「略過它安不安全」，而且會讓同一份日誌
+ * 在不同組裝下讀出不同結果，`2026-08-10-session-log-version-mechanism.md` 的 Alternatives considered）。
+ */
+const KNOWN_SESSION_EVENT_TABLE = {
+  'turn/start': true,
+  'turn/end': true,
+  'turn/failed': true,
+  'interrupt/raised': true,
+  'command/run': true,
+  'command/done': true,
+  'goal/change': true,
+  'todo/write': true,
+  'model/usage': true,
+  'model/start': true,
+  'model/end': true,
+  'llm/retry': true,
+  'llm/retry-started': true,
+  'assistant/message': true,
+  'user/message': true,
+  'compaction/summary': true,
+  'context/measure': true,
+  'sandbox/mode': true,
+  'plan/mode': true,
+  'subagent/model-selection-policy': true,
+  'subagent/catalog': true,
+  'tool/call': true,
+  'tool/result': true,
+  'feedback/message-put': true,
+  'feedback/message-delete': true,
+  'feedback/record': true,
+  'deliverables/presented': true,
+  'workspace/changes': true,
+  'inbox/spliced': true,
+  'session/title': true,
+  'session/title-llm-request': true,
+  'session/end-seed': true,
+} as const satisfies Record<SessionEventType, true>;
+
+/** 這個 `type` 是這一版認得的事件種類嗎。表外的（更新的版本寫的、或別的東西寫的）回 `false`。 */
+export function isKnownSessionEventType(type: string): type is SessionEventType {
+  return Object.hasOwn(KNOWN_SESSION_EVENT_TABLE, type);
+}
+
+/**
+ * 一筆事件的 `type` 這一版認得嗎——**不認得、又沒標 {@link SessionEvent.ignorable} 的就是讀方必須拒絕的**。
+ * 參數收 `{ type: string; ignorable?: unknown }` 而不是 {@link SessionEvent}：它的用途是檢查剛從磁碟讀回來、
+ * 還沒驗過形狀的東西。
+ */
+export function isUnreadableSessionEvent(event: {
+  readonly type: string;
+  readonly ignorable?: unknown;
+}): boolean {
+  return !isKnownSessionEventType(event.type) && event.ignorable !== true;
+}
 
 /**
  * **產生模型訊息的那幾種事件**——續接時 {@link ./conversation-replay.ts | replayConversation} 從日誌推回
@@ -1106,6 +1184,17 @@ export interface SessionLogOptions {
    * `length` 與 `seq` 對不上，下一筆 append 會跟已存的撞號。
    */
   readonly seed?: readonly SessionEvent[];
+}
+
+/** {@link SessionLog.append} 的選項。 */
+export interface SessionAppendOptions {
+  /**
+   * 把這一筆標成可略過（{@link SessionEvent.ignorable}），落盤時原樣寫進去。**只給純資訊性、遺失了也不影響重建的新種類**：
+   * 讀方碰到不認得的種類又沒有這個標記就拒絕整份日誌，所以標了，一台還沒學會這個種類的舊 runtime 才讀得回這份日誌。
+   * 已經是既有種類的事件不需要標（認得就照該種類的語意讀）。**會進模型的種類（{@link MODEL_VISIBLE_EVENT_TYPES}）標了會當場拋**：
+   * 略過它就是模型看到的對話少一截。
+   */
+  readonly ignorable?: true;
 }
 
 /**
@@ -1242,11 +1331,24 @@ export class SessionLog implements SessionLogView {
   /**
    * 記一筆，回傳記進去的那一筆。
    *
+   * @param type - 事件種類。
+   * @param data - 酬載，必須是純 JSON。
+   * @param options - 見 {@link SessionAppendOptions}。
+   * @throws 會進模型的種類帶了 `options.ignorable`（{@link SessionAppendOptions.ignorable}）。
    * @throws `data` 帶了 JSON 表達不出來的東西（class 實例、函式、`undefined`、
    *   `NaN`、循環參考）——**當場拋，日誌不變**。
    * @throws 在某個 listener 的回呼裡被呼叫——重入防護，見 class 註解。
    */
-  append<T extends SessionEventType>(type: T, data: SessionEventMap[T]): SessionEvent<T> {
+  append<T extends SessionEventType>(
+    type: T,
+    data: SessionEventMap[T],
+    options: SessionAppendOptions = {},
+  ): SessionEvent<T> {
+    // 會進模型的種類不能標可忽略：略過它就是模型看到的對話少一截，正是「靜靜讀錯」那一類。同 dsh 的論證——
+    // 模型看得到的內容只走產訊息的那幾種，所以危險的不認得事件就是這幾種與左右重建的非訊息事件（版本機制筆記）。
+    if (options.ignorable === true && Object.hasOwn(MODEL_VISIBLE_EVENT_TABLE, type)) {
+      throw new TypeError(`會話事件 "${type}" 會進模型，不能標可忽略（#507）`);
+    }
     // 先驗再推進：拷不動的話這一筆整個不算，日誌不會留下半筆。
     const snapshot = snapshotJsonValue(data, `${type} 的 data`, new Set()) as SessionEventMap[T];
     if (this.#publishing) {
@@ -1263,6 +1365,7 @@ export class SessionLog implements SessionLogView {
       seq: this.#events.length,
       time: Date.now(),
       data: snapshot,
+      ...(options.ignorable === true && { ignorable: true }),
     }) as SessionEvent<T>;
     // 清單先凍住：回呼期間的訂閱／退訂不影響這一輪看得到誰。
     const listeners = [...this.#listeners];

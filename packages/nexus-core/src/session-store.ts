@@ -128,8 +128,8 @@ import type { SessionEvent } from './session-log.js';
  *
  * **這一次比前幾次更非升不可。** 前幾次升版是慣例，這一次是閘：一個讀不懂 9 的舊 runtime 接續新檔的話，
  * 它寫下去的輪次沒有回覆、沒有結果內容，推出來的歷史就有洞。它得看到「版本太新」而拒讀
- * （{@link SessionFormatUnsupportedError}）。守這條線的**只有**這個號：我們的 body parser 對不認得的
- * `type` 照收（`apps/harness/src/jsonl-session-store.ts`），沒有 dsh 那個逐顆的 `ignorable` 旗標。
+ * （{@link SessionFormatUnsupportedError}）。守這條線的**只有**這個號：那時我們的 body parser 對不認得的
+ * `type` 照收（`apps/harness/src/jsonl-session-store.ts`），沒有 dsh 那個逐顆的 `ignorable` 旗標（32 補上了，見下）。
  *
  * ## 10：評分指名回覆，不指名輪
  *
@@ -333,8 +333,35 @@ import type { SessionEvent } from './session-log.js';
  *
  * 升版照新增詞彙的慣例（同 26、28），不是非升不可：30 的讀者遇到它會當成認不得的種類略過（各 switch 都有 `default`），它不進模型、
  * 也不左右任何折疊，所以略過是對的。
+ *
+ * ## 32：事件信封多一格 `ignorable`，讀方開始拒絕不認得的必需種類
+ *
+ * 每一筆事件可以帶 `ignorable: true`（[#507](https://github.com/DemianLi/nexus-agent/issues/507)，見 {@link SessionEvent.ignorable}），
+ * 同時讀方多了一道守衛：**碰到不認得的 `type`、又沒有這個標記，就拒絕重建整份日誌**（{@link SessionEventUnsupportedError}），
+ * 不再照收。前面三十一版「對不認得的種類照收」，所以那時守這條線的**只有版本號**，詞彙每長一次都得升。
+ *
+ * **非升不可，而且這是最後一次因為「守衛不存在」而升**：31 以前的 runtime 沒有這道守衛，讀到一份 32 以後的日誌裡它不認得、
+ * 也沒有人替它把關的種類，只會照收然後續寫下去。升到 32，它們讀 header 就以 {@link SessionFormatUnsupportedError} 拒讀。
+ * 同 dsh 那條門檻裡的「事件信封」一項（`packages/core/session/src/types.ts:74-87`，`5badb15`）。
+ *
+ * ### 32 起什麼時候要升版
+ *
+ * 照 dsh：**判準是寫方寫出來的東西，一台舊 runtime 還能不能完整正確地處理**，不是「讀得過不過」。只有結構性變更才算：
+ * header 的形狀、事件信封、**已有種類的語意**（含它進不進模型、左右不左右折疊）、以及會左右重建的必需種類。純資訊性的新種類
+ * **不升**，由 `ignorable` 承擔——新增時在 {@link ./session-log.ts | SessionLog.append} 帶 `{ ignorable: true }`；一台還不認得它的舊 runtime
+ * 讀得回這份日誌，把它略過。**拿不準就升**：多升一次的代價是營運面的（一台停在舊號的 server 接不回新號寫過的 thread），
+ * 少升一次是舊 runtime 靜靜讀錯；忘了標 `ignorable` 則只是多拒一次（預設必需），不會讀錯。
+ *
+ * ### 這一版的讀法
+ *
+ * - **舊的號直接讀。** 31 以前的檔沒有 `ignorable` 這一格，而它們裡面的每一種都在 {@link ./session-log.ts | isKnownSessionEventType} 的表裡——
+ *   **種類只增不減**（缺席＝必需，所以任何一版寫過的種類這一版都必須認得；要退役一種，留在表裡、只是不再寫）。
+ *   這是一條要守的前提，`session-log.test.ts` 有一份凍結的清單釘它。
+ * - **守衛只在讀方**，不在 append：append 時拒絕詞彙會讓正在跑的會話的耐久寫入卡住（同 dsh）。離線掃描
+ *   （`apps/harness/src/eval/session-scan.ts`，產品路徑外）不守，它照格式版本表態、認不得的略過並報數。
+ * - **不追溯改前三十一次的版本號**：寫下的 header 就是那些號。
  */
-export const SESSION_LOG_FORMAT_VERSION = 31;
+export const SESSION_LOG_FORMAT_VERSION = 32;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
@@ -591,19 +618,56 @@ export interface ResumedStoredSession {
  * 一個升級過的使用者拿舊版打開新檔，看到的會是「你的檔案壞了」。
  */
 export class SessionFormatUnsupportedError extends Error {
-  override readonly name = 'SessionFormatUnsupportedError';
+  // 子類（{@link SessionEventUnsupportedError}）換名字，所以不寫成字面量型別。
+  override readonly name: string = 'SessionFormatUnsupportedError';
 
   /**
    * @param id - 哪一份會話。
    * @param version - 存檔上寫的版本，原樣。
+   * @param message - 子類說明自己是怎麼發現的；省略即「版本比這一版新」。
    */
   constructor(
     readonly id: string,
     readonly version: unknown,
+    message?: string,
   ) {
     super(
-      `會話 "${id}" 的格式版本是 ${JSON.stringify(version)}，這一版只讀得懂到 ` +
-        `${SESSION_LOG_FORMAT_VERSION}。檔案沒有壞，是比這一版新。`,
+      message ??
+        `會話 "${id}" 的格式版本是 ${JSON.stringify(version)}，這一版只讀得懂到 ` +
+          `${SESSION_LOG_FORMAT_VERSION}。檔案沒有壞，是比這一版新。`,
+    );
+  }
+}
+
+/**
+ * 存檔裡有一筆事件的種類這一版不認得、又沒標 {@link SessionEvent.ignorable}——**不是壞的，是讀不懂**
+ * （[#507](https://github.com/DemianLi/nexus-agent/issues/507)）。
+ *
+ * 繼承 {@link SessionFormatUnsupportedError}：兩者對讀者是同一件事（這份是更新的版本寫的、升級再來），
+ * 所以列表、搜尋、引用候選那幾處本來就擋 `SessionFormatUnsupportedError` 的地方不用改。差別只在是怎麼發現的：
+ * 版本號比這一版新（讀 header 就知道），或版本號沒升但本文裡有這一版不認得的必需種類（讀到那一行才知道）。
+ * 不認得的必需事件可能左右後面每一筆怎麼讀，所以拒絕整份而不是略過那一筆。
+ */
+export class SessionEventUnsupportedError extends SessionFormatUnsupportedError {
+  override readonly name: string = 'SessionEventUnsupportedError';
+
+  /**
+   * @param id - 哪一份會話。
+   * @param version - header 上寫的版本，原樣。
+   * @param seq - 那一筆事件的 `seq`。
+   * @param eventType - 那一筆的 `type`，原樣。
+   */
+  constructor(
+    id: string,
+    version: unknown,
+    readonly seq: number,
+    readonly eventType: string,
+  ) {
+    super(
+      id,
+      version,
+      `會話 "${id}" 的第 ${seq} 筆事件種類是 ${JSON.stringify(eventType)}，這一版（格式版本 ` +
+        `${SESSION_LOG_FORMAT_VERSION}）不認得它，它也沒標可忽略。檔案沒有壞，多半是更新的版本寫的。`,
     );
   }
 }

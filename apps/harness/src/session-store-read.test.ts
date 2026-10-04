@@ -13,6 +13,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   SESSION_LOG_FORMAT_VERSION,
   SessionCorruptionError,
+  SessionEventUnsupportedError,
   SessionFormatUnsupportedError,
   SessionNotFoundError,
 } from '@nexus/core';
@@ -23,6 +24,7 @@ import {
   listSessionStoreDirectories,
   openJsonlSessionStore,
   parseHeader,
+  parseJsonlSessionBody,
   projectKey,
   sessionLogPathOf,
 } from './jsonl-session-store.js';
@@ -238,5 +240,120 @@ describe('listSessionStoreDirectories', () => {
 
   it('會話根還不存在：空的', async () => {
     await expect(listSessionStoreDirectories(join(dir, '還沒有'))).resolves.toEqual([]);
+  });
+});
+
+/** 一筆這一版不認得的事件：更新的版本寫的，或別的東西寫的。 */
+function futureEvent(seq: number, extra: Record<string, unknown> = {}): string {
+  return JSON.stringify({ type: 'future/thing', seq, time: 1, data: { n: 1 }, ...extra });
+}
+
+/**
+ * 不認得的種類：沒標可忽略就整份拒絕，標了就原樣放行（[#507](https://github.com/DemianLi/nexus-agent/issues/507)）。
+ * 守衛在**讀方**（解析本文那一步），所以唯讀打開、續接、離線掃描三條各有一個斷言。
+ */
+describe('不認得的事件種類', () => {
+  async function plant(id: string, lines: readonly string[]): Promise<void> {
+    await written(id, 2);
+    await appendFile(join(dir, `${id}.jsonl`), `${lines.join('\n')}\n`);
+  }
+
+  it("open(id, 'read')：沒標可忽略的拒絕整份，是「讀不懂」不是「壞了」，點得出哪一筆", async () => {
+    await plant('future', [futureEvent(2)]);
+    const reader = await openJsonlSessionStore({ directory: dir }).open('future', 'read');
+    const failure = await reader.read().then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(SessionEventUnsupportedError);
+    // 對讀者是同一件事：列表、搜尋、引用候選那幾處擋 `SessionFormatUnsupportedError` 的地方不用改。
+    expect(failure).toBeInstanceOf(SessionFormatUnsupportedError);
+    expect(failure).not.toBeInstanceOf(SessionCorruptionError);
+    expect(failure).toMatchObject({ id: 'future', seq: 2, eventType: 'future/thing' });
+    expect((failure as Error).message).toContain('"future/thing"');
+  });
+
+  it('撿回模式救不了它：壞行排在不認得的種類前面或後面，結果都一樣（撿回的是壞行，不是「更新的版本寫的」）', async () => {
+    for (const order of ['壞行在前', '壞行在後'] as const) {
+      const id = order === '壞行在前' ? 'salvage-bad-first' : 'salvage-bad-last';
+      await written(id, 1);
+      const lines = order === '壞行在前' ? ['{壞掉', futureEvent(2)] : [futureEvent(1), '{壞掉'];
+      await appendFile(join(dir, `${id}.jsonl`), `${lines.join('\n')}\n`);
+      const reader = await openJsonlSessionStore({ directory: dir }).open(id, 'read');
+      await expect(reader.read({ salvage: true }), order).rejects.toBeInstanceOf(
+        SessionEventUnsupportedError,
+      );
+    }
+  });
+
+  it('撿回模式：標了可忽略的照撿，壞行照略過', async () => {
+    await written('salvage-ok', 1);
+    await appendFile(
+      join(dir, 'salvage-ok.jsonl'),
+      `{壞掉\n${futureEvent(2, { ignorable: true })}\n`,
+    );
+    const reader = await openJsonlSessionStore({ directory: dir }).open('salvage-ok', 'read');
+    expect((await reader.read({ salvage: true })).map((e) => e.type)).toEqual([
+      'model/usage',
+      'future/thing',
+    ]);
+  });
+
+  it('標了 ignorable: true 的原樣放行，旗標與酬載都在', async () => {
+    await plant('future', [futureEvent(2, { ignorable: true })]);
+    const reader = await openJsonlSessionStore({ directory: dir }).open('future', 'read');
+    const events = (await reader.read()) as readonly unknown[];
+    expect(events).toHaveLength(3);
+    expect(events[2]).toEqual({
+      type: 'future/thing',
+      seq: 2,
+      time: 1,
+      data: { n: 1 },
+      ignorable: true,
+    });
+  });
+
+  it('只認字面的 true：false、字串、1 都不算標了', async () => {
+    for (const loose of [false, 'true', 1]) {
+      const id = `loose-${String(loose)}`;
+      await plant(id, [futureEvent(2, { ignorable: loose })]);
+      const reader = await openJsonlSessionStore({ directory: dir }).open(id, 'read');
+      await expect(reader.read(), String(loose)).rejects.toBeInstanceOf(
+        SessionEventUnsupportedError,
+      );
+    }
+  });
+
+  it('同一行既不認得又 seq 對不上：先報壞檔（那一種更需要人看）', async () => {
+    await plant('both', [futureEvent(7)]);
+    const reader = await openJsonlSessionStore({ directory: dir }).open('both', 'read');
+    await expect(reader.read()).rejects.toBeInstanceOf(SessionCorruptionError);
+  });
+
+  it('續接：沒標的當場拒絕，檔一個位元組都沒動、租約放掉了；標了的接得回來，旗標那一行原樣留著', async () => {
+    await plant('required', [futureEvent(2)]);
+    const store = openJsonlSessionStore({ directory: dir });
+    const before = await snapshot();
+    await expect(store.resume('required')).rejects.toBeInstanceOf(SessionEventUnsupportedError);
+    expect(await snapshot()).toEqual(before);
+    // 租約放掉了（鎖檔本來就留著）：再接一次拿到的還是同一個失敗，不是「別人握著」。
+    await expect(store.resume('required')).rejects.toBeInstanceOf(SessionEventUnsupportedError);
+
+    await plant('skippable', [futureEvent(2, { ignorable: true })]);
+    const { events, stored } = await store.resume('skippable');
+    expect(events.map((e) => e.type)).toEqual(['model/usage', 'model/usage', 'future/thing']);
+    await stored.append([{ ...event(3) }]);
+    await stored.close();
+    const lines = (await readFile(join(dir, 'skippable.jsonl'), 'utf8')).trimEnd().split('\n');
+    expect(lines[2]).toBe(futureEvent(2, { ignorable: true }));
+    expect(lines).toHaveLength(4);
+  });
+
+  it('離線掃描用的 acceptUnknownEvents：不守，什麼都收', () => {
+    const body = `${futureEvent(0)}\n`;
+    expect(parseJsonlSessionBody('s', body, { acceptUnknownEvents: true }).events).toHaveLength(1);
+    expect(() => parseJsonlSessionBody('s', body, { version: SESSION_LOG_FORMAT_VERSION })).toThrow(
+      SessionEventUnsupportedError,
+    );
   });
 });
