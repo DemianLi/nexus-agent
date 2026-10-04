@@ -59,8 +59,10 @@ import type { BigIntStats } from 'node:fs';
 import { join } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
 import {
+  isUnreadableSessionEvent,
   SESSION_LOG_FORMAT_VERSION,
   SessionCorruptionError,
+  SessionEventUnsupportedError,
   SessionFormatUnsupportedError,
   SessionNotFoundError,
 } from '@nexus/core';
@@ -415,10 +417,31 @@ export function sessionLogPathOf(headerPath: string): string | undefined {
 }
 
 /**
+ * {@link parseJsonlSessionBody} 的選項。**要嘛說明白是哪一版的日誌，要嘛明說不守**——不給預設，因為守衛開著的時候
+ * 拒絕訊息要講是哪一份的哪個版本，而不守是少數呼叫方的例外。
+ */
+export type ParseBodyOptions =
+  | {
+      /** 不認得又沒標可忽略的種類也照收。**只給產品路徑外的離線掃描**（`eval/session-scan.ts` 的「照格式版本表態」）。 */
+      readonly acceptUnknownEvents: true;
+    }
+  | {
+      readonly acceptUnknownEvents?: false;
+      /** header 上寫的版本，原樣；只用在拒絕時的訊息。 */
+      readonly version: unknown;
+    };
+
+/**
  * 讀日誌本文：**實體上有效的前綴**，加上它有幾個位元組。
  *
  * 最後一個換行之後的東西是寫到一半的那一行——當掉時的常態，不算壞檔，只是不算進去。
  * 換行之前的每一行都必須是一筆 `seq` 等於行號的事件；不是的話那不是當掉，是壞檔。
+ *
+ * **種類這一版不認得、又沒標 `ignorable` 的，整份拒絕**（{@link SessionEventUnsupportedError}，
+ * [#507](https://github.com/DemianLi/nexus-agent/issues/507)），不是略過那一行：不認得的必需事件可能左右後面每一筆
+ * 怎麼讀。同 dsh（`packages/core/session/src/types.ts:501-511`，`5badb15`）。守衛在這裡而不是 append：
+ * append 時拒絕詞彙會讓正在跑的會話的耐久寫入卡住。順序在壞檔判斷**之後**：同一行既不認得又 `seq` 對不上的話，
+ * 先報壞檔，那是比「更新的版本寫的」更需要人看的一種。
  *
  * **匯出給唯讀的讀方**：離線掃描（`eval/session-scan.ts`）不能走 {@link JsonlSessionStore.resume}
  * ——那條會拿寫租約、覆寫 header、截掉撕裂的尾巴，全是寫入，還會把一個正在寫的行程擋在門外。
@@ -429,6 +452,7 @@ export function sessionLogPathOf(headerPath: string): string | undefined {
 export function parseJsonlSessionBody(
   id: string,
   body: string,
+  options: ParseBodyOptions,
 ): { events: SessionEvent[]; validBytes: number } {
   const complete = body.slice(0, body.lastIndexOf('\n') + 1);
   const lines = complete.split('\n');
@@ -453,6 +477,10 @@ export function parseJsonlSessionBody(
         `第 ${index + 1} 行的 seq 是 ${JSON.stringify(value['seq'])}，應該是 ${index}——缺號或重號`,
       );
     }
+    const { type, ignorable } = value;
+    if (options.acceptUnknownEvents !== true && isUnreadableSessionEvent({ type, ignorable })) {
+      throw new SessionEventUnsupportedError(id, options.version, index, type);
+    }
     return value as unknown as SessionEvent;
   });
   return { events, validBytes: Buffer.byteLength(complete, 'utf8') };
@@ -462,7 +490,7 @@ export function parseJsonlSessionBody(
  * 中段壞掉的本文**撿回讀得懂的**：只看完整的行（最後一個換行之前），解析不動、或沒有數字的 `seq` 與 `time` 的略過。
  * 見 `@nexus/core` 的 `StoredSessionReadOptions.salvage`。
  */
-function salvageJsonlSessionBody(body: string): SessionEvent[] {
+function salvageJsonlSessionBody(id: string, body: string, version: unknown): SessionEvent[] {
   const events: SessionEvent[] = [];
   for (const line of body.slice(0, body.lastIndexOf('\n') + 1).split('\n')) {
     let value: unknown;
@@ -471,7 +499,17 @@ function salvageJsonlSessionBody(body: string): SessionEvent[] {
     } catch {
       continue;
     }
-    if (isRecord(value) && typeof value['seq'] === 'number' && typeof value['time'] === 'number') {
+    if (
+      isRecord(value) &&
+      typeof value['seq'] === 'number' &&
+      typeof value['time'] === 'number' &&
+      typeof value['type'] === 'string'
+    ) {
+      // 撿回的是**壞行**，不是「更新的版本寫的」：不認得的必需種類照樣整份拒絕（#507）。壞行排在它前面或後面，結果
+      // 不能不一樣。
+      if (isUnreadableSessionEvent({ type: value['type'], ignorable: value['ignorable'] })) {
+        throw new SessionEventUnsupportedError(id, version, value['seq'], value['type']);
+      }
       events.push(value as unknown as SessionEvent);
     }
   }
@@ -591,10 +629,10 @@ async function openStoredSessionForRead(
     async read(options: StoredSessionReadOptions = {}): Promise<readonly SessionEvent[]> {
       const body = await readBody(logPath);
       try {
-        return parseJsonlSessionBody(id, body).events;
+        return parseJsonlSessionBody(id, body, { version: header.version }).events;
       } catch (error: unknown) {
         if (options.salvage === true && error instanceof SessionCorruptionError) {
-          return salvageJsonlSessionBody(body);
+          return salvageJsonlSessionBody(id, body, header.version);
         }
         throw error;
       }
@@ -637,7 +675,7 @@ async function resumeStoredSession(
     }
     const header = parseHeader(headerText, { id });
     const body = await readBody(join(directory, `${base}${LOG_SUFFIX}`));
-    const { events, validBytes } = parseJsonlSessionBody(id, body);
+    const { events, validBytes } = parseJsonlSessionBody(id, body, { version: header.version });
     const torn = validBytes < Buffer.byteLength(body, 'utf8');
     return {
       header,

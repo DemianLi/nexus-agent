@@ -4,7 +4,10 @@ import { goalId } from './goal.js';
 import {
   currentTurnStart,
   hasUnansweredInterrupt,
+  isKnownSessionEventType,
   isLogicalTurnStart,
+  isUnreadableSessionEvent,
+  MODEL_VISIBLE_EVENT_TYPES,
   openTurnStart,
   SessionLog,
 } from './session-log.js';
@@ -425,5 +428,121 @@ describe('isLogicalTurnStart（#682）', () => {
     log.append('turn/start', { kind: 'resume' });
     log.append('turn/end', {});
     expect(log.events.map(isLogicalTurnStart)).toEqual([true, true, false, false]);
+  });
+});
+
+/**
+ * 格式版本 32 時詞彙裡的每一種（[#507](https://github.com/DemianLi/nexus-agent/issues/507)）。**只增不減，這份清單也只增不減**：
+ * 缺席＝必需，所以任何一版寫過的種類，之後每一版都必須認得，否則那份舊日誌從此讀不回來。要退役一種，它留在
+ * `KNOWN_SESSION_EVENT_TABLE` 裡、只是不再寫；這裡要拿掉某一行的人，等於宣布「那一類舊日誌從此不能讀」。
+ */
+const TYPES_WRITTEN_BY_FORMAT_32 = [
+  'turn/start',
+  'turn/end',
+  'turn/failed',
+  'interrupt/raised',
+  'command/run',
+  'command/done',
+  'goal/change',
+  'todo/write',
+  'model/usage',
+  'model/start',
+  'model/end',
+  'llm/retry',
+  'llm/retry-started',
+  'assistant/message',
+  'user/message',
+  'compaction/summary',
+  'context/measure',
+  'sandbox/mode',
+  'plan/mode',
+  'subagent/model-selection-policy',
+  'subagent/catalog',
+  'tool/call',
+  'tool/result',
+  'feedback/message-put',
+  'feedback/message-delete',
+  'feedback/record',
+  'deliverables/presented',
+  'workspace/changes',
+  'inbox/spliced',
+  'session/title',
+  'session/title-llm-request',
+  'session/end-seed',
+] as const;
+
+describe('認得的事件種類與可忽略旗標（#507）', () => {
+  it('格式版本 32 寫過的每一種，這一版都認得', () => {
+    for (const type of TYPES_WRITTEN_BY_FORMAT_32) {
+      expect(isKnownSessionEventType(type), type).toBe(true);
+    }
+  });
+
+  it('表外的不認得，包括物件原型上的名字', () => {
+    for (const type of [
+      'future/thing',
+      'turn/start ',
+      '',
+      'constructor',
+      '__proto__',
+      'toString',
+    ]) {
+      expect(isKnownSessionEventType(type), JSON.stringify(type)).toBe(false);
+    }
+  });
+
+  it('不認得又沒標可忽略的，讀方必須拒絕；只有字面的 true 算標了', () => {
+    expect(isUnreadableSessionEvent({ type: 'future/thing' })).toBe(true);
+    expect(isUnreadableSessionEvent({ type: 'future/thing', ignorable: true })).toBe(false);
+    for (const loose of [false, 'true', 1, null, {}]) {
+      expect(
+        isUnreadableSessionEvent({ type: 'future/thing', ignorable: loose }),
+        String(loose),
+      ).toBe(true);
+    }
+  });
+
+  it('認得的種類標不標都能讀：標記只對不認得的有作用', () => {
+    expect(isUnreadableSessionEvent({ type: 'turn/end' })).toBe(false);
+    expect(isUnreadableSessionEvent({ type: 'turn/end', ignorable: true })).toBe(false);
+  });
+
+  it('append 帶 { ignorable: true } 的那一筆有這一格，凍著；沒帶的連這個鍵都沒有', () => {
+    const log = new SessionLog('t');
+    const plain = log.append('turn/end', {});
+    const marked = log.append(
+      'llm/retry-started',
+      { retryId: 'r-1', retry: 1, waitedMs: 0 },
+      { ignorable: true },
+    );
+
+    expect('ignorable' in plain).toBe(false);
+    expect(marked.ignorable).toBe(true);
+    expect(JSON.parse(JSON.stringify(marked))).toMatchObject({
+      type: 'llm/retry-started',
+      ignorable: true,
+    });
+    expect(() => {
+      (marked as { ignorable?: true }).ignorable = undefined;
+    }).toThrow(TypeError);
+    // 沒帶選項的，位元組跟以前一樣——既有種類的落盤格式不因為這一刀改變。
+    expect(Object.keys(plain)).toEqual(['type', 'seq', 'time', 'data']);
+  });
+
+  it('會進模型的種類標可忽略會當場拋，日誌不變：略過它就是對話少一截', () => {
+    const log = new SessionLog('t');
+    for (const type of MODEL_VISIBLE_EVENT_TYPES) {
+      expect(() => log.append(type, {} as never, { ignorable: true }), type).toThrow(
+        /會進模型，不能標可忽略/,
+      );
+    }
+    expect(log.length).toBe(0);
+  });
+
+  it('seed 接上來的標記原樣活過', () => {
+    const resumed = new SessionLog('t', {
+      seed: [{ type: 'turn/end', seq: 0, time: 1, data: {}, ignorable: true }],
+    });
+    expect(resumed.events[0]?.ignorable).toBe(true);
   });
 });

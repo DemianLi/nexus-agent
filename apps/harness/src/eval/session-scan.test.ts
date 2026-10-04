@@ -394,6 +394,51 @@ describe('照格式版本表態', () => {
     expect(text).toContain('步數 — ｜工具呼叫 — ｜最長重複 —');
   });
 
+  /**
+   * 32 起新增純資訊性的種類不升版（#507），所以版本號不比這一版新的日誌裡也會有這一版不認得的種類。舊說法
+   * 「詞彙這一版都認得，檔案可能被別的東西寫過」在 32 起是錯的；32 以前的日誌沒有這條路，說法照舊。
+   */
+  it('版本不比這一版新但有不認得的種類：32 起講「多半是更新的程式寫的」並報幾顆標了可忽略，32 以前照舊', () => {
+    const entries: readonly Entry[] = [turn('message'), ['future/a', {}], ['future/b', {}]];
+    const marked = events(entries).map((event) =>
+      (event.type as string) === 'future/b'
+        ? ({ ...event, ignorable: true } as SessionEvent)
+        : event,
+    );
+    const at = (version: number, list: SessionEvent[]) =>
+      scanSessionLog({ file: 'x.jsonl', header: { id: 's', version }, events: list });
+
+    const current = at(SESSION_LOG_FORMAT_VERSION, marked);
+    expect(current).toMatchObject({ unknownEvents: 2, unknownIgnorableEvents: 1 });
+    const text = formatScanReport([current], [], { threshold: 5 }).join('\n');
+    expect(text).toContain('2 顆認不得的事件略過了（其中 1 顆標了可忽略');
+    expect(text).toContain('比這一版更新的程式寫的');
+    expect(text).not.toContain('詞彙這一版都認得');
+
+    const old = at(31, events(entries));
+    expect(old.unknownIgnorableEvents).toBe(0);
+    const oldText = formatScanReport([old], [], { threshold: 5 }).join('\n');
+    expect(oldText).toContain('格式版本 31 的詞彙這一版都認得，檔案可能被別的東西寫過');
+    expect(oldText).not.toContain('可忽略');
+  });
+
+  it('掃描不守「不認得的必需種類就拒讀」：整份照掃、略過並報數，不進「讀不懂的」', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-unknown-'));
+    await writeFile(
+      join(root, 's.header.json'),
+      JSON.stringify({ version: SESSION_LOG_FORMAT_VERSION, id: 's', createdAt: 0 }),
+    );
+    await writeFile(
+      join(root, 's.jsonl'),
+      `${events([turn('message'), ['future/thing', {}]])
+        .map((event) => JSON.stringify(event))
+        .join('\n')}\n`,
+    );
+    const { logs, unreadable } = await readSessionLogs([root]);
+    expect(unreadable).toEqual([]);
+    expect(logs.map((log) => scanSessionLog(log).unknownEvents)).toEqual([1]);
+  });
+
   it('#273 之前的拒絕記成成功這件事，每次都印在報表底下', () => {
     expect(formatScanReport([], [], { threshold: 5 }).join('\n')).toContain('#273');
     expect(formatScanReport([], [], { threshold: 5 }).join('\n')).toContain('#293');

@@ -71,6 +71,7 @@ import { isAbsolute, join, relative } from 'node:path';
 import {
   currentMessageFeedback,
   deriveSessionStats,
+  isKnownSessionEventType,
   subagentLinks,
   repeatCallKey,
   repeatReminderTracks,
@@ -84,7 +85,6 @@ import type {
   MessageFeedbackItem,
   RepeatReminderSettings,
   SessionEvent,
-  SessionEventType,
   SubagentLink,
 } from '@nexus/core';
 // 讀的事件種類（`todo/write`、`feedback/*`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
@@ -110,47 +110,11 @@ export const CANCEL_SINCE = 7;
 export const FEEDBACK_SINCE = 8;
 /** 子代理目錄（`subagent/catalog`）從這一版開始記。見 `session-store.ts` 的版本 31（#1023）。 */
 export const SUBAGENT_CATALOG_SINCE = 31;
-
 /**
- * 這一版認得的事件種類。
- *
- * **型別逼它完整**：詞彙加了一種而這裡沒跟上，typecheck 就紅。不這樣的話，新種類會被當成
- * 「認不得」，而一份完全正常的日誌會報出一串疑似壞檔。
+ * 新增純資訊性種類不再升格式版本的起點。見 `session-store.ts` 的版本 32（#507）：從這一版起，版本號相同的日誌裡也可能
+ * 出現這一版不認得的種類（更新的版本寫的、標了 `ignorable`）。
  */
-const KNOWN_EVENT_TYPES: Readonly<Record<SessionEventType, true>> = {
-  'turn/start': true,
-  'turn/end': true,
-  'turn/failed': true,
-  'interrupt/raised': true,
-  'command/run': true,
-  'command/done': true,
-  'goal/change': true,
-  'todo/write': true,
-  'model/usage': true,
-  'model/start': true,
-  'model/end': true,
-  'llm/retry': true,
-  'llm/retry-started': true,
-  'assistant/message': true,
-  'user/message': true,
-  'compaction/summary': true,
-  'context/measure': true,
-  'sandbox/mode': true,
-  'plan/mode': true,
-  'subagent/model-selection-policy': true,
-  'subagent/catalog': true,
-  'tool/call': true,
-  'tool/result': true,
-  'feedback/message-put': true,
-  'feedback/message-delete': true,
-  'feedback/record': true,
-  'deliverables/presented': true,
-  'workspace/changes': true,
-  'inbox/spliced': true,
-  'session/title': true,
-  'session/title-llm-request': true,
-  'session/end-seed': true,
-};
+const IGNORABLE_VOCABULARY_SINCE = 32;
 
 /** 一份日誌的身分：從 header 讀出來的那幾格。 */
 export interface SessionLogHeader {
@@ -213,6 +177,8 @@ export interface SessionScan {
   readonly subagents: readonly SubagentLink[] | null;
   /** 認不得而略過的事件顆數。 */
   readonly unknownEvents: number;
+  /** {@link unknownEvents} 之中標了 `ignorable` 的顆數（#507）：寫方自己說略過它不影響重建。 */
+  readonly unknownIgnorableEvents: number;
   /**
    * header 上的建置中繼資料（#1025）。**判準是那一格在不在，不是 {@link version}**：續接會把舊檔的版本蓋成新的而不回填。
    * 沒有就是一格都沒記，報表印「—」。
@@ -292,7 +258,7 @@ export function scanSessionLog(
   const threshold = loopingThreshold(settings);
   const tracks = repeatReminderTracks(settings);
 
-  const known = log.events.filter((event) => Object.hasOwn(KNOWN_EVENT_TYPES, event.type));
+  const known = log.events.filter((event) => isKnownSessionEventType(event.type));
   const seenCalls = new Set<string>();
   // 鍵是從檔上讀來的碼，不能有原型：`constructor` 這種碼會讀到繼承來的函式，數字變成字串。
   // 同 `session-stats.ts` 對 `callId` 的 `Object.hasOwn`。
@@ -371,6 +337,9 @@ export function scanSessionLog(
     feedbackRecords: version >= FEEDBACK_SINCE ? feedbackRecords : null,
     subagents: version >= SUBAGENT_CATALOG_SINCE ? subagentLinks(known) : null,
     unknownEvents: log.events.length - known.length,
+    unknownIgnorableEvents: log.events.filter(
+      (event) => !isKnownSessionEventType(event.type) && event.ignorable === true,
+    ).length,
     ...(log.header.metadata !== undefined && { headerMetadata: log.header.metadata }),
   };
 }
@@ -438,7 +407,12 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
         if ((error as { code?: unknown } | null)?.code !== 'ENOENT') throw error;
       }
       try {
-        logs.push({ file, header, events: parseJsonlSessionBody(header.id, body).events });
+        logs.push({
+          file,
+          header,
+          // 掃描照格式版本表態、認不得的略過並報數，不守「不認得的必需種類就拒讀」（#507）：那是產品路徑的讀方才要守的。
+          events: parseJsonlSessionBody(header.id, body, { acceptUnknownEvents: true }).events,
+        });
       } catch (error: unknown) {
         unreadable.push({ file, reason: error instanceof Error ? error.message : String(error) });
       }
@@ -549,11 +523,18 @@ export function formatScanReport(
       lines.push(`  格式版本 ${scan.version}：${missing.join('、')}，「—」是沒記，不是 0。`);
     }
     if (scan.unknownEvents > 0) {
+      const ignorable =
+        scan.unknownIgnorableEvents > 0
+          ? `（其中 ${scan.unknownIgnorableEvents} 顆標了可忽略，寫方說略過它不影響重建）`
+          : '';
       lines.push(
         scan.version > SESSION_LOG_FORMAT_VERSION
           ? `  格式版本 ${scan.version} 比這一版（${SESSION_LOG_FORMAT_VERSION}）新：` +
-              `${scan.unknownEvents} 顆認不得的事件略過了，上面的數字可能不全。`
-          : `  ${scan.unknownEvents} 顆認不得的事件略過了——格式版本 ${scan.version} 的詞彙` +
+              `${scan.unknownEvents} 顆認不得的事件略過了${ignorable}，上面的數字可能不全。`
+          : scan.version >= IGNORABLE_VOCABULARY_SINCE
+            ? `  ${scan.unknownEvents} 顆認不得的事件略過了${ignorable}——格式版本 ${scan.version} 起新增純資訊性的種類` +
+              '不升版，多半是比這一版更新的程式寫的；上面的數字可能不全。'
+            : `  ${scan.unknownEvents} 顆認不得的事件略過了——格式版本 ${scan.version} 的詞彙` +
               '這一版都認得，檔案可能被別的東西寫過。',
       );
     }
