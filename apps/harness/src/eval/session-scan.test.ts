@@ -419,6 +419,48 @@ describe('照格式版本表態', () => {
   });
 });
 
+/**
+ * 子代理那一份找回派它的呼叫（#1023）。兩頭都在的那條走產品組裝，在 `subagent-session-link.test.ts`；這裡釘找不到時的
+ * 「—」：**不推論成沒有人派它**，並說是哪一種沒有。
+ */
+describe('派它的呼叫：找不到一律「—」，說是哪一種沒有', () => {
+  const child = (parentSession: string): SessionScan =>
+    scanSessionLog({
+      file: 'child.jsonl',
+      header: {
+        id: `${parentSession}/tools:x`,
+        version: SESSION_LOG_FORMAT_VERSION,
+        parentSession,
+      },
+      events: events(same(1)),
+    });
+  const parent = (id: string, version: number, entries: readonly Entry[]): SessionScan =>
+    scanSessionLog({ file: `${id}.jsonl`, header: { id, version }, events: events(entries) });
+  const report = (...scans: SessionScan[]) =>
+    formatScanReport(scans, [], { threshold: 5 }).join('\n');
+
+  it('上層是 30 版：目錄是 null（沒記），印「—」與第 31 版才記', () => {
+    const old = parent('p', 30, [turn('message'), call('task', {}, 'c1')]);
+    expect(old.subagents).toBeNull();
+    expect(report(old, child('p'))).toContain(
+      '派它的 —（上層是格式版本 30：第 31 版才記子代理目錄）',
+    );
+  });
+
+  it('上層不在這次掃描裡', () => {
+    expect(report(child('gone'))).toContain('派它的 —（上層 gone 不在這次掃描裡）');
+  });
+
+  it('上層是新版、但目錄裡沒有這一份', () => {
+    const fresh = parent('p', SESSION_LOG_FORMAT_VERSION, [
+      turn('message'),
+      call('task', {}, 'c1'),
+    ]);
+    expect(fresh.subagents).toEqual([]);
+    expect(report(fresh, child('p'))).toContain('派它的 —（上層的子代理目錄沒有這一份）');
+  });
+});
+
 /** 在 `directory` 裡寫一份會話，照 JSONL 後端的寫法。 */
 async function writeSession(
   root: string,
@@ -489,6 +531,40 @@ describe('讀磁碟：唯讀，壞一份不擋其餘', () => {
     expect(unreadable.map((item) => item.reason)).toEqual([
       expect.stringContaining('header 沒有 createdAt'),
     ]);
+  });
+
+  /**
+   * header 的建置中繼資料（#1025）：記了的照印，舊版沒記的印「—」。**判準是那一格在不在**，所以舊檔的 `version` 被續接
+   * 蓋成這一版也一樣印「—」。
+   */
+  it('header 記了建置那幾格就印出來，沒記的（含版本被續接蓋過的舊檔）印「—」', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-metadata-'));
+    const store = createJsonlSessionStore({ rootDir: root });
+    const recorded = store.create({
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'recorded',
+      createdAt: 0,
+      build: { commit: 'abcdef0123456789', dirty: false },
+      plugins: [{ name: '@nexus/plugin-todo', id: 'todo', disabled: true }],
+      configHash: 'hmac-sha256:0011223344556677',
+      modelEntryId: 'vendor/model',
+    });
+    await recorded.append(events([turn('message')]));
+    await recorded.close();
+    await writeSession(root, 'resumed-old', [turn('message')]);
+
+    const { logs } = await readSessionLogs([root]);
+    expect(logs).toHaveLength(2);
+    const text = formatScanReport(
+      logs.map((log) => scanSessionLog(log)),
+      [],
+      { threshold: 5 },
+    ).join('\n');
+    expect(text).toContain(
+      '建置 abcdef012345（未提交的改動：無） ｜模型 vendor/model ｜插件 1 列（停用 1） ｜' +
+        '設定雜湊 hmac-sha256:0011223344556677',
+    );
+    expect(text).toContain('建置 — ｜模型 — ｜插件 — ｜設定雜湊 —');
   });
 
   /**

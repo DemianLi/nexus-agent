@@ -22,6 +22,7 @@
  * | `turn/end`（`reason.kind: "interrupted"`） | 續接時補寫的收尾（#721）：上一個行程死在這一輪中間，畫面與完成同（`completed`），不論那一輪死前有沒有 `interrupt/raised`；補的 `tool/result`（`TOOL_OUTCOME_UNKNOWN`）的卡仍畫成 `UNFINISHED_TOOL_TEXT`，與補寫之前一字不差 |
  * | `session/end-seed` | 舊檔（#721 之前）上一個行程停在一輪中間的話，那一輪在這裡收掉；新檔那一輪已由上一列收掉 |
  * | `deliverables/presented` | `custom` frame，`data` 同即時（{@link deliverablesData}） |
+ * | `subagent/catalog` | 委派呼叫派出的子會話（#1023）：`custom` frame，**逐顆轉**，位置就是日誌上的位置（配對的 `tool/call` 之後、同一輪）；`data` 同即時（{@link subagentCatalogData}）；31 以前的日誌沒有這一顆 |
  * | `workspace/changes` | `custom` frame，`data` 同即時（{@link workspaceChangesData}）；它指到的摘要可能已經不在 |
  * | `model/usage` ／ `context/measure` | 用量表（#528）：**一頁各一顆，是到這一頁結尾為止最新的那一筆**，`data` 同即時（{@link modelUsageData}、{@link contextMeasureData}） |
  *
@@ -63,6 +64,7 @@ import type {
   ModelUsagePayload,
   PlanModePayload,
   SettleNoticePayload,
+  SubagentCatalogPayload,
   TitlePayload,
   TodosPayload,
   WireSessionReference,
@@ -85,6 +87,7 @@ import {
   PLAN_MODE,
   SETTLE_NOTICE,
   SESSION_STATS,
+  SUBAGENT_CATALOG,
   TITLE,
   TODOS,
   TOKEN_USAGE,
@@ -472,6 +475,23 @@ export function titleData(title: string): {
   readonly payload: TitlePayload;
 } {
   return { name: TITLE, payload: { title } };
+}
+
+/**
+ * 子代理目錄在線上的 `custom` 事件 `data`（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)）。即時與這裡共用，
+ * 規則見 `@nexus/wire` 的 `subagent-catalog.ts`。
+ *
+ * @param catalog - root 日誌上那一顆的載荷。
+ * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `SubagentCatalogPayload`。
+ */
+export function subagentCatalogData(catalog: SessionEventMap['subagent/catalog']): {
+  readonly name: typeof SUBAGENT_CATALOG;
+  readonly payload: SubagentCatalogPayload;
+} {
+  return {
+    name: SUBAGENT_CATALOG,
+    payload: { childId: catalog.childId, callId: catalog.callId, mode: catalog.mode },
+  };
 }
 
 /** 摘要器給模型的那則話裡，包著正文的標記。外框（前面的「You are in the middle…」）是寫給模型看的。 */
@@ -960,6 +980,10 @@ export function historyFrames(
       case 'deliverables/presented':
         // 這裡讀的本來就只有 root 那一份，子代理的交付不在裡面——同即時那條規則。
         frames.push(customFrame(event.time, deliverablesData(event.data, event.seq)));
+        break;
+      case 'subagent/catalog':
+        // 子代理目錄（#1023）：逐顆轉，位置就是日誌上的位置——配對的 `tool/call` 在它前面、同一輪，卡已經開了。
+        frames.push(customFrame(event.time, subagentCatalogData(event.data)));
         break;
       case 'workspace/changes':
         // 同上：只讀 root 那一份，而記錄器本來就只寫在 root。

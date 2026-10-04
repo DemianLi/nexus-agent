@@ -117,6 +117,12 @@ const entriesOf = (frames: readonly Event[]) => reduceAll(emptyConversation(), f
 const compactionsOf = (frames: readonly Event[]): CompactionEntry[] =>
   entriesOf(frames).filter((entry): entry is CompactionEntry => entry.kind === 'compaction');
 const kindsOf = (frames: readonly Event[]) => entriesOf(frames).map((entry) => entry.kind);
+/**
+ * 拿掉時刻再比：兩條路的時鐘不同（#1030），即時是 pump 合成那一刻、歷史是日誌那一筆，同一格可以差一毫秒。
+ * 時刻本身由 `wire-entry-timestamps.test.ts` 量。
+ */
+const untimed = (entries: readonly CompactionEntry[]) =>
+  entries.map(({ startedAt: _startedAt, ...rest }) => rest);
 
 describe('壓縮過這件事在即時與重新整理之後都一樣', () => {
   it('每一次壓縮長一格，兩條路的內容與順序相同；位置在觸發它的回覆之後', async () => {
@@ -128,7 +134,7 @@ describe('壓縮過這件事在即時與重新整理之後都一樣', () => {
     const live = compactionsOf(frames);
     const refreshed = compactionsOf(historyPage(events).events);
     expect(live).toHaveLength(logged.length);
-    expect(refreshed).toEqual(live);
+    expect(untimed(refreshed)).toEqual(untimed(live));
     expect(live.map((entry) => entry.seq)).toEqual(logged.map((event) => event.seq));
     expect(live.map((entry) => entry.cutoff)).toEqual(
       logged.map((event) => (event.data as { cutoffIndex: number }).cutoffIndex),
@@ -164,7 +170,7 @@ describe('壓縮過這件事在即時與重新整理之後都一樣', () => {
     expect(live.length).toBeGreaterThan(0);
     const toolText = toolTextConfigSchema.parse({ maxBytes });
     const refreshed = compactionsOf(historyPage(events, {}, undefined, undefined, toolText).events);
-    expect(refreshed).toEqual(live);
+    expect(untimed(refreshed)).toEqual(untimed(live));
     for (const entry of live) {
       expect(Buffer.byteLength(entry.summary ?? '', 'utf8')).toBeLessThanOrEqual(maxBytes);
       // 對照：沒套上限時比這個長，不然「截得一樣」是兩邊都沒截。

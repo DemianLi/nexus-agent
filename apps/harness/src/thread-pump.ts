@@ -128,6 +128,7 @@ import {
   modelUsageData,
   SessionTotals,
   planModeData,
+  subagentCatalogData,
   titleData,
   todosData,
   workspaceChangesData,
@@ -2527,6 +2528,9 @@ export class ThreadPump {
     } else if (event.type === 'session/title' && entry.address.kind === 'root') {
       // 標題（#647）：只收 root 的，同 dsh 的 `title` 投影。
       this.#presentCustom(titleData(event.data.title));
+    } else if (event.type === 'subagent/catalog' && entry.address.kind === 'root') {
+      // 子代理目錄（#1023）：只收 root 的，同 dsh 的 `subagentCatalog`；與歷史那一側共用 {@link subagentCatalogData}。
+      this.#presentCustom(subagentCatalogData(event.data));
     } else if (entry.address.kind === 'root' && isTodosReset(event)) {
       // 開新的一輪：清單回到 `null`。每一輪都送，不管之前有沒有清單——pump 不記清單的狀態。
       this.#presentCustom(todosData(null));

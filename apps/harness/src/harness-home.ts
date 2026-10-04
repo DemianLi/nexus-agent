@@ -7,7 +7,8 @@
  * `~/.nexus-agent`；`~`、`~/` 開頭展開成作業系統的家目錄；最後正規化成絕對路徑。dsh 的變數叫
  * `DSH_HOME`、預設 `~/.dsh`，這裡只換名字。
  *
- * 住在這裡的：瀏覽器會話的簽章密鑰（`browser-session-secret.ts`）、使用者那一層 patch
+ * 住在這裡的：瀏覽器會話的簽章密鑰（`browser-session-secret.ts`）、會話日誌 header 設定雜湊的鍵（`session-header-metadata.ts`，
+ * #1025）、使用者那一層 patch
  * （`cordis.patch.yml`，`plugin-config.ts`），以及會話日誌的預設根（{@link harnessSessionsDir}）。
  */
 

@@ -42,6 +42,7 @@ import type { PresentedFile } from './deliverables.js';
 import type { LoggedMessage } from './logged-message.js';
 import type { TodoItem } from './todo.js';
 import type { SandboxMode } from './sandbox.js';
+import type { SubagentCatalogData } from './subagent-catalog.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
 /**
@@ -149,6 +150,9 @@ import type { ToolErrorInfo } from './tool-events.js';
  * `session/title` 另有第三個寫者、`session/title-llm-request` 只有它一個：LLM 標題（[#650](https://github.com/DemianLi/nexus-agent/issues/650)，
  * `apps/harness/src/session-title-llm.ts`）。它是 root 日誌的訂閱者，在背景跑，**寫在一輪之外**——主回覆不等它。
  * 兩顆都不進模型。
+ *
+ * `subagent/catalog` 兩個寫者各走一條舊路：前景走 `tool/call` 那條（圍堵登記、會話註冊點在子日誌出生時寫），背景走
+ * 背景子代理的 host（它自己開子日誌的那一刻）。只寫父那一份，不進模型。見 [#1023](https://github.com/DemianLi/nexus-agent/issues/1023)。
  */
 export type SessionEventType =
   | 'turn/start'
@@ -171,6 +175,7 @@ export type SessionEventType =
   | 'sandbox/mode'
   | 'plan/mode'
   | 'subagent/model-selection-policy'
+  | 'subagent/catalog'
   | 'tool/call'
   | 'tool/result'
   | 'feedback/message-put'
@@ -717,6 +722,25 @@ export interface SessionEventMap {
    * 子代理的日誌不寫（我們的子代理不巢狀，沒有「子會話繼承父政策」這條路）。
    */
   'subagent/model-selection-policy': { readonly allowedModels: readonly string[] };
+  /**
+   * 派出去的一個子代理**出生了**：子會話的 id 與派它的那一顆 `tool/call`（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)）。
+   * 照 dsh 的同名事件（`packages/subagent/subagent/src/catalog.ts`，`5badb15`），多一格 `callId`、少三格，理由見
+   * {@link ./subagent-catalog.ts}。
+   *
+   * ## 誰寫、寫在哪
+   *
+   * 只寫**父**那一份（今天一律是 root），同 dsh「parent-owned」。只發布成功的事實，兩個寫者各在子代理成立的那一刻寫：
+   *
+   * - **前景**（基座的 `task`）：子會話日誌**出生**的那一刻，由註冊點的觀察者寫（`registry.ts` 的 `expectSpawn`；圍堵在
+   *   記下 `tool/call` 之後登記「這次呼叫可能派出子代理」）。我們沒有 dsh 的 spawn 點，日誌出生是看得到的最接近那一刻，
+   *   同 `SessionRegistry` 的偏離 1。從頭到尾沒寫過日誌的子代理（例如 `subagent_type` 打錯）就沒有這一顆——它也沒有日誌可指。
+   * - **背景**（`subagent`）：`BackgroundSubagentHost.start` 開好子日誌、接受第一句話之後寫，同 dsh continuable 的順序。
+   *
+   * 所以它永遠落在配對的 `tool/call` **之後**、同一輪之內，前景也在配對的 `tool/result` 之前。
+   *
+   * **它不進模型**，同 dsh 的 log-only：推模型歷史的一側不讀它。web 的工具卡讀它（`@nexus/wire` 的 `SUBAGENT_CATALOG`）。
+   */
+  'subagent/catalog': SubagentCatalogData;
   /**
    * 模型要叫一次工具，**在它進任何一層之前記**——照 dsh 在核准之前就記
    * （`packages/core/agent-loop/src/tool-calls.ts:168`，`c291e79`），所以被核准閘門擋掉的

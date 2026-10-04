@@ -15,7 +15,7 @@ import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
-import { SessionRegistry } from '@nexus/core';
+import { attachSessionPersistence, SessionRegistry } from '@nexus/core';
 import {
   DELEGATION_TOOL_NAMES,
   emptyConversation,
@@ -29,6 +29,8 @@ import { historyPage } from './conversation-history.js';
 import { LIST_SUBAGENT_MODELS_TOOL_NAME } from './background-delegation.js';
 import type { ModelChoice } from './background-subagents.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import { readSessionLogs, scanSessionLog, UNCODED_ERROR } from './eval/session-scan.js';
+import { createJsonlSessionStore } from './jsonl-session-store.js';
 import { createLiveModel } from './live-model.js';
 import type { ModelEntry } from './model-catalog.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -460,5 +462,87 @@ describe('產品路徑：subagent 工具帶 model／reasoning_effort', () => {
     } finally {
       await run.close();
     }
+  });
+
+  /**
+   * **日誌上記的碼**（[#1024](https://github.com/DemianLi/nexus-agent/issues/1024)）。`subagent` 是 `wrapModelCall`
+   * 加給模型的，ToolNode 的工具表裡沒有它；修之前它在外層回的每一則拒絕都被圍堵記成 `UNKNOWN_TOOL`，離線掃描因此
+   * 說模型叫了不存在的工具。照 dsh：參數不合 schema 是 `INVALID_ARGS`（`ToolArgsError`），其餘拒絕沒有碼
+   * （dsh 那側是工具本體拋一般的 `Error`）。拒絕的路逐條各叫一次，`list_subagent_models` 的拒絕也算進來。
+   */
+  describe('每一條拒絕在日誌上記的碼', () => {
+    /** root 那份日誌裡，每一顆 `tool/result` 的 `error`（沒有就是 `undefined`），照呼叫順序。 */
+    const loggedErrors = (sessions: SessionRegistry) =>
+      sessions.root.events
+        .filter((event) => event.type === 'tool/result')
+        .map((event) => {
+          const data = event.data as { isError: boolean; error?: unknown };
+          expect(data.isError).toBe(true);
+          return data.error;
+        });
+    const INVALID = { name: 'ToolArgsError', code: 'INVALID_ARGS' };
+
+    async function scanned(run: { sessions: SessionRegistry }, drive: () => Promise<unknown>) {
+      const store = createJsonlSessionStore({ rootDir: join(dir, 'logs') });
+      const persistence = attachSessionPersistence(run.sessions, store);
+      try {
+        await drive();
+      } finally {
+        await persistence.dispose();
+      }
+      const { logs, unreadable } = await readSessionLogs([store.directory]);
+      expect(unreadable).toEqual([]);
+      return logs.map((log) => scanSessionLog(log));
+    }
+
+    it('沒開選模型：帶 model／reasoning_effort 沒碼，參數不合 INVALID_ARGS；掃描不報 UNKNOWN_TOOL', async () => {
+      const run = await assemble({
+        rootTurns: [
+          delegate({ model: 'cheap' }),
+          delegate({ reasoning_effort: 'off' }),
+          call('subagent', { description: '少了 subagent_type' }),
+          { content: '根收尾' },
+        ],
+        selection: undefined,
+      });
+      try {
+        const scans = await scanned(run, () => run.say());
+        expect(loggedErrors(run.sessions)).toEqual([undefined, undefined, INVALID]);
+        expect(scans.map((scan) => scan.errors)).toEqual([{ [UNCODED_ERROR]: 2, INVALID_ARGS: 1 }]);
+      } finally {
+        await run.close();
+      }
+    });
+
+    it('開了選模型：前景帶 reasoning_effort／model、清單外的模型、modelFor 建不出來、清單工具的拒絕都沒碼', async () => {
+      const run = await assemble({
+        rootTurns: [
+          // 卡上那一則：前景不能指定 reasoning_effort。
+          delegate({ reasoning_effort: 'off', run_in_background: false }),
+          delegate({ model: 'cheap', run_in_background: false }),
+          delegate({ model: 'secret' }),
+          delegate({ model: 'cheap' }),
+          call(LIST_SUBAGENT_MODELS_TOOL_NAME, { model: 'secret' }),
+          { content: '根收尾' },
+        ],
+        selection: config(['strong', 'cheap']),
+        modelFor: () => {
+          throw new Error('端點連不上');
+        },
+      });
+      try {
+        const scans = await scanned(run, () => run.say());
+        expect(loggedErrors(run.sessions)).toEqual([
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+          undefined,
+        ]);
+        expect(scans.map((scan) => scan.errors)).toEqual([{ [UNCODED_ERROR]: 5 }]);
+      } finally {
+        await run.close();
+      }
+    });
   });
 });

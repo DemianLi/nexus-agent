@@ -935,6 +935,15 @@ export interface LoadedPluginConfig {
    * 模組名、必掛名單要比 id，從這裡查（`startup-audit.ts`）。
    */
   readonly rows: ReadonlyMap<PluginEntry, { readonly id: string; readonly module: string }>;
+  /**
+   * 疊完、驗過、**還沒 import 任何模組**的那份清單（{@link composeEntries} 的回傳值，原樣）——`--dump-config` 印的就是
+   * 這一份（同一組層、同一次 {@link applyEntryPatches}、同一次 {@link validateEntries}）。會話日誌 header 的插件清單與
+   * 設定雜湊從這裡投影（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)，`session-header-metadata.ts`），
+   * **不另外再疊一次**：兩次讀檔之間 patch 被改的話，header 會描述一棵沒有掛過的樹。
+   *
+   * 啟動時才掉的列（{@link dropped}）在這裡照宣告的樣子留著，同 `--dump-config`。
+   */
+  readonly entries: readonly ConfigEntry[];
 }
 
 /**
@@ -1009,7 +1018,7 @@ export async function loadPluginConfig(
     }
     return entry;
   });
-  return { plugins, dropped, ignoredConfig, rows };
+  return { plugins, dropped, ignoredConfig, rows, entries };
 }
 
 /**

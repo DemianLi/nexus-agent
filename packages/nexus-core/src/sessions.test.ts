@@ -311,6 +311,87 @@ describe('forCall', () => {
   });
 });
 
+/**
+ * 前景子代理的目錄（#1023）：圍堵在派出那顆呼叫上登記 `runId`，子日誌出生的那一刻在派它的那一份寫一顆 `subagent/catalog`。
+ * 產品路徑上的那一條在 harness 的 `subagent-session-link.test.ts`；這裡釘登記表自己的規矩。
+ */
+describe('sessions.expectSpawn', () => {
+  const inChild = { configurable: { checkpoint_ns: 'tools:spawn|tools:inner' } };
+  const catalogs = (log: SessionLog) =>
+    log.events.filter((event) => event.type === 'subagent/catalog').map((event) => event.data);
+
+  it('登記過的 runId：子日誌出生時在派它的那一份寫一顆，之後再開不重寫', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1' });
+    const found = registry.sessions.forCall(inChild);
+    expect(catalogs(sessions.root)).toEqual([
+      { childId: found.kind === 'ok' ? found.log.sessionId : '?', callId: 'c1', mode: 'one-shot' },
+    ]);
+    registry.sessions.forCall(inChild);
+    expect(catalogs(sessions.root)).toHaveLength(1);
+  });
+
+  it('子日誌出生前就退掉登記（那顆呼叫沒派出子代理）：一顆都不寫', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    const release = registry.sessions.expectSpawn('tools:spawn', {
+      parent: sessions.root,
+      callId: 'c1',
+    });
+    release();
+    registry.sessions.forCall(inChild);
+    expect(catalogs(sessions.root)).toEqual([]);
+  });
+
+  it('沒登記的 runId 開出來的子日誌不寫', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    registry.sessions.expectSpawn('tools:other', { parent: sessions.root, callId: 'c1' });
+    registry.sessions.forCall(inChild);
+    expect(catalogs(sessions.root)).toEqual([]);
+  });
+
+  it('同一個 runId 再登記一次（核准中斷後 resume）：舊的那一格退掉不會帶走新的', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    const releaseOld = registry.sessions.expectSpawn('tools:spawn', {
+      parent: sessions.root,
+      callId: 'c1',
+    });
+    registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1' });
+    releaseOld();
+    registry.sessions.forCall(inChild);
+    expect(catalogs(sessions.root)).toHaveLength(1);
+  });
+
+  it('派它的那一份不在開出子日誌的這張註冊表上（另一條 thread 的同名 runId）：不寫過去', () => {
+    const registry = createRegistry();
+    const mine = new SessionRegistry('t1');
+    const other = new SessionRegistry('t2');
+    registry.sessions.bind(mine);
+    registry.sessions.bind(other);
+    registry.sessions.expectSpawn('tools:spawn', { parent: mine.root, callId: 'c1' });
+    other.open({ kind: 'subagent', runId: 'tools:spawn' });
+    expect(catalogs(mine.root)).toEqual([]);
+    expect(catalogs(other.root)).toEqual([]);
+  });
+
+  it('解綁之後開出來的子日誌不寫', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    const unbind = registry.sessions.bind(sessions);
+    registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1' });
+    unbind();
+    sessions.open({ kind: 'subagent', runId: 'tools:spawn' });
+    expect(catalogs(sessions.root)).toEqual([]);
+  });
+});
+
 /** 註冊點上的耐久檢查點入口（#599）：plugin 手上那一面，後面是綁上來的註冊表。 */
 describe('sessions.flush', () => {
   it('沒綁註冊表：立刻 resolve', async () => {

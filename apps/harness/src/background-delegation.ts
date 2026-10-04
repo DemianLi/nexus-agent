@@ -42,8 +42,8 @@ import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import { putToolResultMeta, toolCallSessionAddress, toolRefusal } from '@nexus/core';
-import type { PluginEntry, SessionLog, SessionRegistry } from '@nexus/core';
+import { INVALID_ARGS, putToolResultMeta, toolCallSessionAddress, toolRefusal } from '@nexus/core';
+import type { PluginEntry, SessionLog, SessionRegistry, ToolErrorInfo } from '@nexus/core';
 import type { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { createMiddleware } from 'langchain';
 import type { BackgroundSubagentMeta } from '@nexus/wire';
@@ -68,6 +68,8 @@ export const INTERRUPT_AGENT_TOOL_NAME = 'interrupt_agent';
 export const SEND_MESSAGE_TOOL_NAME = 'send_message';
 /** 被換掉的基座委派工具。 */
 const BASE_DELEGATION_TOOL_NAME = 'task';
+/** `subagent` 參數不合 schema 時的碼，同圍堵認出 schema 不合時給的那一組（dsh `ToolArgsError`）。 */
+const SUBAGENT_ARGS_ERROR: ToolErrorInfo = { name: 'ToolArgsError', code: INVALID_ARGS };
 
 /** 這個 middleware 的名字。 */
 export const BACKGROUND_DELEGATION_MIDDLEWARE_NAME = 'nexusBackgroundDelegation';
@@ -405,10 +407,14 @@ export class BackgroundDelegation {
         const parsed = (
           selection === undefined ? subagentSchema : selectingSubagentSchema
         ).safeParse(request.toolCall.args);
+        // 參數不合 schema 帶 `INVALID_ARGS`，同 dsh `defineTool` 的 `ToolArgsError`（`packages/core/tools/src/schema.ts:599`，
+        // `5badb15`）。這一顆的其餘拒絕都不帶碼：dsh `subagent` 的同類拒絕是工具本體拋一般的 `Error`
+        // （`packages/subagent/tool-subagent/src/index.ts:294-295`），渲染出來沒有碼（#1024）。
         if (!parsed.success) {
           return toolRefusal(`subagent 的參數不合：${parsed.error.message}`, {
             callId,
             name: SUBAGENT_TOOL_NAME,
+            error: SUBAGENT_ARGS_ERROR,
           });
         }
         const {
@@ -474,6 +480,8 @@ export class BackgroundDelegation {
               subagent: subagentType,
               text: withReturnGuidance(description, host.rootSessionId),
               ...(choice !== undefined && { choice }),
+              // root 那一份記子代理目錄，指回這一顆呼叫（#1023）。
+              ...(callId !== '' && { callId }),
             });
           const started = sandbox === undefined ? start() : sandbox.delegate(start);
           // 編號告訴折疊器：背景那一輪的卡從日誌開、namespace 是 `[編號, 'tools']`，沒有這一格就永遠認不出是誰的

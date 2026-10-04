@@ -304,6 +304,43 @@ describe('載體本身（假 agent）', () => {
     expect(() => host.start({ subagent: 'worker', text: '句' })).toThrow('已經關閉');
   });
 
+  /** #1023：目錄只記成功的事實，同 dsh continuable「先准入、再寫目錄、最後回 id」。 */
+  it('start 帶 callId：接受之後在 root 記一顆目錄；被拒（名額滿、編不出圖、已關閉）與沒帶 callId 都不記', async () => {
+    const hold = gate();
+    const { agent } = fakeAgent(async (text) => (text === '佔位' ? hold.opened : undefined));
+    const { host, sessions } = make((name) => {
+      if (name === 'missing') throw new Error('沒有 "missing" 這個子代理');
+      return agent;
+    }, 1);
+    const catalogs = () =>
+      sessions.root.events
+        .filter((event) => event.type === 'subagent/catalog')
+        .map((event) => event.data);
+
+    const accepted = host.start({ subagent: 'worker', text: '佔位', callId: 'c1' });
+    expect(catalogs()).toEqual([
+      {
+        childId: sessions.get({ kind: 'subagent', runId: accepted.runId })!.sessionId,
+        callId: 'c1',
+        mode: 'continuable',
+      },
+    ]);
+    expect(() => host.start({ subagent: 'worker', text: '滿了', callId: 'c2' })).toThrow(
+      BackgroundSubagentError,
+    );
+    hold.open();
+    await accepted.outcome;
+    // 名額空出來之後才走得到編圖那一步（上限先擋）。
+    expect(() => host.start({ subagent: 'missing', text: '句', callId: 'c3' })).toThrow(
+      '沒有 "missing"',
+    );
+    const untagged = host.start({ subagent: 'worker', text: '句' });
+    await untagged.outcome;
+    await host.close();
+    expect(() => host.start({ subagent: 'worker', text: '句', callId: 'c4' })).toThrow('已經關閉');
+    expect(catalogs().map((data) => data.callId)).toEqual(['c1']);
+  });
+
   it('list：依派出先後列出每一個，跑著的是 running、其餘 inactive；別的 host 的不在裡面', async () => {
     const hold = gate();
     const { agent } = fakeAgent(async (text) => (text === '慢' ? hold.opened : undefined));

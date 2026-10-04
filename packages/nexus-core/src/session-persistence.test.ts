@@ -267,6 +267,63 @@ describe('接在註冊表上', () => {
     expect(omitted.headers.every((header) => !('workspaceRoot' in header))).toBe(true);
     await omitted.persistence.dispose();
   });
+
+  /**
+   * 建置版本、插件清單、設定雜湊與模型型錄 id（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+   * 前三格是這個行程的性質，每一份新建的 header 都帶；模型只進 root——subagent 可能被選模型政策換掉。
+   */
+  it('建置那三格每一份都帶，模型型錄 id 只進 root；沒給就一格都沒有', async () => {
+    const metadata = {
+      build: { commit: 'a'.repeat(40), dirty: false },
+      plugins: [
+        { name: '@nexus/core/approval-gate', id: 'approval-gate', disabled: false },
+        { name: '#settings/x', disabled: true },
+      ],
+      configHash: 'hmac-sha256:0123456789abcdef',
+    } as const;
+    function headersFor(options: Parameters<typeof attachSessionPersistence>[2]) {
+      const sessions = new SessionRegistry('root-b');
+      const headers: StoredSessionHeader[] = [];
+      const store: SessionStore = {
+        ...NO_READS,
+        create(header) {
+          headers.push(header);
+          return fakeStored();
+        },
+        resume() {
+          return Promise.reject(new Error('這一條不續接'));
+        },
+      };
+      const persistence = attachSessionPersistence(sessions, store, options);
+      sessions.open({ kind: 'subagent', runId: 'r1' });
+      return { headers, persistence };
+    }
+
+    const given = headersFor({ buildMetadata: metadata, rootModelEntryId: 'vendor/model-a' });
+    expect(given.headers.map((header) => header.id)).toEqual(['root-b', 'root-b/r1']);
+    for (const header of given.headers) {
+      expect(header.build).toEqual(metadata.build);
+      expect(header.plugins).toEqual(metadata.plugins);
+      expect(header.configHash).toBe(metadata.configHash);
+    }
+    expect(given.headers[0]?.modelEntryId).toBe('vendor/model-a');
+    expect('modelEntryId' in given.headers[1]!).toBe(false);
+    await given.persistence.dispose();
+
+    const omitted = headersFor({});
+    expect(omitted.headers).toHaveLength(2);
+    for (const key of ['build', 'plugins', 'configHash', 'modelEntryId']) {
+      expect(omitted.headers.every((header) => !(key in header))).toBe(true);
+    }
+    await omitted.persistence.dispose();
+
+    // 雜湊算不出來（金鑰檔讀不到）時只少那一格，其餘照帶。
+    const { configHash: _dropped, ...withoutHash } = metadata;
+    const unhashed = headersFor({ buildMetadata: withoutHash });
+    expect(unhashed.headers.every((header) => header.build !== undefined)).toBe(true);
+    expect(unhashed.headers.every((header) => !('configHash' in header))).toBe(true);
+    await unhashed.persistence.dispose();
+  });
 });
 
 describe('批次窗口一路轉發', () => {
@@ -381,6 +438,9 @@ describe('續接：只寫還沒存的後綴', () => {
     const persistence = attachSessionPersistence(sessions, store, {
       resumedRoot: { stored: fakeStored(), storedCount: earlier.length },
       workspaceRoot: '/今天的根',
+      // #1025：這一次的建置與模型同樣碰不到 root 那一份。
+      buildMetadata: { build: { commit: 'b'.repeat(40), dirty: true }, plugins: [] },
+      rootModelEntryId: 'vendor/today',
     });
     // root 一份 header 都沒建——這一次的根碰不到那一份已存的日誌。
     expect(headers).toEqual([]);
@@ -388,6 +448,9 @@ describe('續接：只寫還沒存的後綴', () => {
     expect(headers.map((header) => [header.id, header.workspaceRoot])).toEqual([
       ['root-r/r1', '/今天的根'],
     ]);
+    // 續接之後新生的 subagent 帶的是這一次的建置，沒有模型型錄 id。
+    expect(headers[0]?.build).toEqual({ commit: 'b'.repeat(40), dirty: true });
+    expect('modelEntryId' in headers[0]!).toBe(false);
     await persistence.dispose();
   });
 
