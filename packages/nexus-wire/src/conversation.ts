@@ -46,6 +46,8 @@ import { COMPACTION } from './compaction.js';
 import { GOAL, GOAL_PHASES } from './goal.js';
 import type { WireGoal, WireGoalPhase } from './goal.js';
 import { PLAN_MODE } from './plan-mode.js';
+import { PROJECTION, PROJECTION_KEY_PATTERN } from './projection.js';
+import type { WireProjection } from './projection.js';
 import type { PlanModePayload } from './plan-mode.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
@@ -580,6 +582,11 @@ export interface ConversationState {
    */
   readonly planMode: PlanModePayload | null;
   /**
+   * 插件投影（#1026）：`key` → 最後一顆該 key 的 `projection` frame 的整份值。**所有插件共用這一格**，新增一個投影不改
+   * 這個檔。沒有收到過的 key 就不在裡面；插件關掉（`disabled`）就不會有它的 key。往前翻頁不動它，規則見 `projection.ts`。
+   */
+  readonly projections: Readonly<Record<string, WireProjection>>;
+  /**
    * 會話目前的目標與階段（#897）：最後一顆 `goal` frame 的整份值。**沒有目標（從沒建立、或清掉了、或還沒收到）就是
    * `null`**，不分這幾種——理由與少了 dsh 的 activation 見 `goal.ts`。只算 root。它是「現在」的事，所以
    * {@link prependEntries} 不動它。
@@ -633,6 +640,7 @@ export function emptyConversation(): ConversationState {
     contextPressure: null,
     todos: null,
     planMode: null,
+    projections: {},
     goal: null,
     tokenUsage: null,
     sessionStats: null,
@@ -919,6 +927,7 @@ const CUSTOM_REDUCERS: {
   [CONTEXT_MEASURE]: reduceContextMeasure,
   [TODOS]: reduceTodos,
   [PLAN_MODE]: reducePlanMode,
+  [PROJECTION]: reduceProjection,
   [COMPACTION]: reduceCompaction,
   [GOAL]: reduceGoal,
   [TOKEN_USAGE]: reduceTokenUsage,
@@ -1114,6 +1123,27 @@ function reducePlanMode(state: ConversationState, payload: object): Conversation
   const { active } = payload as { active?: unknown };
   if (typeof active !== 'boolean') return state;
   return { ...state, planMode: { active } };
+}
+
+/**
+ * `projection` 的 `payload`：一個插件投影的整份值，整份換掉（#1026）。`key` 不合格、`version` 不是非負整數、
+ * `failed` 存在卻不是 `true`、或 `failed` 時 `view` 不是 `null`，整顆不收。`view` 是什麼由渲染它的元件驗，這一層不看。
+ */
+function reduceProjection(state: ConversationState, payload: object): ConversationState {
+  const { key, version, view, failed } = payload as {
+    key?: unknown;
+    version?: unknown;
+    view?: unknown;
+    failed?: unknown;
+  };
+  if (typeof key !== 'string' || !PROJECTION_KEY_PATTERN.test(key)) return state;
+  if (typeof version !== 'number' || !Number.isInteger(version) || version < 0) return state;
+  if (failed !== undefined && (failed !== true || view !== null)) return state;
+  // 酬載裡沒有 `view` 這個鍵（`undefined`）不是合法的 JSON 值，整顆不收。
+  if (view === undefined) return state;
+  const next: WireProjection =
+    failed === true ? { version, view: null, failed: true } : { version, view };
+  return { ...state, projections: { ...state.projections, [key]: next } };
 }
 
 /** 清單裡的一項長得對不對：同 dsh 的 `todosProjectionSchema`。 */
