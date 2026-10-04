@@ -60,6 +60,7 @@
     "@nexus/plugin-telemetry-otel": "workspace:*",
     "@nexus/plugin-present": "workspace:*",
     "@nexus/plugin-todo": "workspace:*",
+    "@nexus/plugin-trajectory": "workspace:*",
     "@nexus/plugin-workspace-changes": "workspace:*",
     "@nexus/wire": "workspace:*",
     "@nexus/web": "workspace:*",

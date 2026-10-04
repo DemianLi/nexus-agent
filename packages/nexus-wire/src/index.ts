@@ -285,3 +285,35 @@ export type {
   WireClientOptions,
 } from './client.js';
 export { createWireClient } from './client.js';
+export type {
+  RequestHeaderSnapshot,
+  RequestSnapshotsView,
+  RequestSystemSnapshot,
+  TrajectoryCall,
+  TrajectoryDecision,
+  TrajectoryDigest,
+  TrajectoryElided,
+  TrajectoryEnd,
+  TrajectoryInput,
+  TrajectoryReply,
+  TrajectoryRetry,
+  TrajectorySubagentLink,
+  TrajectoryTool,
+  TrajectoryTurn,
+  TrajectoryTurnKind,
+  TrajectoryView,
+} from './trajectory.js';
+export {
+  REQUEST_SNAPSHOTS_KEEP,
+  REQUEST_SNAPSHOTS_PROJECTION,
+  REQUEST_SNAPSHOTS_VERSION,
+  REQUEST_SYSTEM_MAX_CHARS,
+  TRAJECTORY_CALL_TOOLS_CAP,
+  TRAJECTORY_DETAIL_TURNS,
+  TRAJECTORY_DIGEST_CAP,
+  TRAJECTORY_PREVIEW_CHARS,
+  TRAJECTORY_PROJECTION,
+  TRAJECTORY_TURN_CALLS_CAP,
+  TRAJECTORY_TURN_LIST_CAP,
+  TRAJECTORY_VERSION,
+} from './trajectory.js';

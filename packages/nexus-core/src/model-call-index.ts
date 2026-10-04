@@ -73,8 +73,13 @@ interface MutableRecord {
   toolResults: SessionEvent<'tool/result'>[];
 }
 
-/** 一則回覆發出的工具呼叫 id；讀不出來（壞掉的訊息）當作沒有。 */
-function toolCallIds(event: SessionEvent<'assistant/message'>): readonly string[] {
+/**
+ * 一則回覆發出的工具呼叫 id；讀不出來（壞掉的訊息）當作沒有。
+ *
+ * 匯出給別的折疊用（軌跡投影的 `apply` 要純、不能持 indexer 這種會就地改的物件，所以自己帶一份 callId→呼叫 的表，
+ * 但「哪些 id 是這則回覆發出的」只有這一份讀法）。
+ */
+export function toolCallIds(event: SessionEvent<'assistant/message'>): readonly string[] {
   try {
     const message = fromLoggedMessage(event.data.message);
     if (!AIMessage.isInstance(message)) return [];
@@ -95,8 +100,10 @@ export interface ModelCallIndexer {
 }
 
 /**
- * 增量版：一顆一顆折，隨時讀結果。軌跡投影（#1027）的 `apply` 用它；{@link indexModelCalls} 就是把整串推進去，
- * 所以**歸屬邏輯只有這一份**，即時與歷史不會各寫一次。
+ * 增量版：一顆一顆折，隨時讀結果。{@link indexModelCalls} 就是把整串推進去。
+ *
+ * **軌跡投影（#1027）不用它**：indexer 是會就地改的物件，放進投影狀態的話，`apply` 回同一個參照（通道當作沒變、一顆 frame 都不送）
+ * 或每次包新殼（每顆事件都算有變）都不對。投影自己帶一張 callId→呼叫 的表，規則相同，由 `@nexus/plugin-trajectory` 的差分測試釘在一起。
  */
 export function createModelCallIndexer(): ModelCallIndexer {
   const bySeq = new Map<number, MutableRecord>();
