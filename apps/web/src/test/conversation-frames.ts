@@ -142,6 +142,13 @@ export class Script {
     ]);
   }
 
+  /** 帶 `meta` 的結果：背景委派卡的 `runId` 就是這樣來的。 */
+  finishedWith(callId: string, message: string, meta: unknown): Event {
+    return this.frame('tools', { event: 'tool-finished', tool_call_id: callId, message, meta }, [
+      'tools:a',
+    ]);
+  }
+
   failed(callId: string, message: string, code?: string): Event {
     return this.frame(
       'tools',
