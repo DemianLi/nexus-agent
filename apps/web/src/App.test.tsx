@@ -17,9 +17,11 @@ import {
   GOAL,
   MODEL_USAGE,
   PLAN_MODE,
+  SESSION_STATS,
   SUBAGENT_STATUS,
   TITLE,
   TODOS,
+  TOKEN_USAGE,
 } from '@nexus/wire';
 import {
   cleanup,
@@ -3209,6 +3211,56 @@ describe('背景子代理的輸入框接線（#869）', () => {
     fake.downlink.push(fake.opened[0]!, [statusFrame([])]);
     await waitFor(() => expect(within(card).getByText('已收線')).toBeTruthy());
     expect((screen.getByLabelText('對背景子代理說話') as HTMLInputElement).disabled).toBe(true);
+  });
+
+  it('用量鈕的「看明細」打開成本分頁：主對話讀總帳、背景子代理各讀自己那份（#1032），不經委派卡的展開', async () => {
+    seq = 0;
+    const fake = fakeClient([
+      ...delegated([{ runId: 'bg-1', status: 'idle' }]),
+      frame('custom', [], {
+        name: TOKEN_USAGE,
+        payload: { inputTokens: 5_000, outputTokens: 500 },
+      }),
+      frame('custom', [], {
+        name: SESSION_STATS,
+        payload: { turns: 1, steps: 2, llmMs: 4_000, toolMs: 500 },
+      }),
+    ]);
+    // 子代理那份日誌的總帳：跟 root 的數字分得開。
+    const subagentHistory = vi.fn(async () => ({
+      kind: 'ok' as const,
+      result: {
+        events: [
+          historyFrame('custom', {
+            name: TOKEN_USAGE,
+            payload: { inputTokens: 21, outputTokens: 9 },
+          }),
+          historyFrame('custom', {
+            name: SESSION_STATS,
+            payload: { turns: 1, steps: 3, llmMs: 1_200, toolMs: 300 },
+          }),
+        ],
+        firstSeq: 0,
+        throughSeq: 0,
+        hasMore: false,
+        legacy: false,
+      },
+    }));
+    render(<App client={{ ...fake.client, subagentHistory }} />);
+
+    fireEvent.click(await screen.findByTestId('session-usage'));
+    fireEvent.click(await screen.findByTestId('session-usage-detail'));
+    const panel = await screen.findByTestId('right-sidebar-panel-cost');
+    expect(within(panel).getByTestId('cost-totals').textContent).toContain('5,500 token');
+    const row = await within(panel).findByTestId('cost-subagent');
+    await waitFor(() => expect(row.textContent).toContain('30 token'));
+    expect(row.getAttribute('data-run-id')).toBe('bg-1');
+    expect(row.textContent).toContain('researcher');
+    expect(subagentHistory).toHaveBeenCalledExactlyOnceWith(fake.opened[0], 'bg-1', {
+      maxMessages: 1,
+    });
+    // root 的累計沒有把子代理加進去。
+    expect(within(panel).getByTestId('cost-totals').textContent).not.toContain('5,530');
   });
 
   it('展開時讀子代理自己的對話並用主對話同一套畫法畫出來（#861）', async () => {

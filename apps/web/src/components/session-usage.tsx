@@ -5,20 +5,8 @@ import { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { useRightSidebar } from '@/components/right-sidebar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Rows } from '@/components/usage-rows';
 import { sessionUsageView } from '@/lib/session-usage-view';
-
-function Rows({ rows }: { rows: readonly (readonly [string, string])[] }) {
-  return (
-    <dl className="grid grid-cols-[1fr_auto] gap-x-4 gap-y-1 tabular-nums">
-      {rows.map(([label, value]) => (
-        <div key={label} className="contents">
-          <dt className="text-muted-foreground">{label}</dt>
-          <dd className="text-right">{value}</dd>
-        </div>
-      ))}
-    </dl>
-  );
-}
 
 /**
  * 頂列右邊那顆「這條對話的用量」（[#574](https://github.com/DemianLi/nexus-agent/issues/574) 決定 3、4）：收著顯示

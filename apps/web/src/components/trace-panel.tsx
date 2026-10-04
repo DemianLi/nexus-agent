@@ -26,7 +26,7 @@ import {
   User,
   Wrench,
 } from 'lucide-react';
-import { memo, useCallback, useMemo, useRef, useState } from 'react';
+import { memo, useCallback, useMemo, useState } from 'react';
 import type { ComponentType, ReactNode } from 'react';
 
 import type { Attribution, ConversationState } from '@nexus/wire';
@@ -39,11 +39,11 @@ import type { PanelBodyProps } from '@/components/right-sidebar-panels';
 import { ToolCard, TOOL_STATUS_LABEL } from '@/components/tool-card';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { useStableNames } from '@/hooks/use-stable-names';
 import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot';
 import { mentionDisplayText } from '@/lib/session-mention';
 import { EXIT_PLAN_MODE, PLAN_OUTCOME_LABEL } from '@/lib/plan-review';
 import { reasoningRunning } from '@/lib/reasoning-view';
-import { subagentNames } from '@/lib/subagent-view';
 import {
   ENDING_LABEL,
   TRACE_HEADLINE,
@@ -383,20 +383,6 @@ function TurnGroup({
       ))}
     </ol>
   );
-}
-
-/**
- * 背景子代理的名字表。`entries` 每一格串流都換一個新的，表的內容卻幾乎從不變；內容沒變就回上一份，列的 `memo` 才擋得住
- * （每次算出新的 `Map` 身分就變，所有列跟著重畫）。
- */
-function useStableNames(entries: ConversationState['entries']): ReadonlyMap<string, string> {
-  const previous = useRef<ReadonlyMap<string, string>>(new Map());
-  const next = subagentNames(entries);
-  const same =
-    next.size === previous.current.size &&
-    [...next].every(([runId, name]) => previous.current.get(runId) === name);
-  if (!same) previous.current = next;
-  return previous.current;
 }
 
 const Timeline = memo(function Timeline({
