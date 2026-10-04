@@ -293,7 +293,7 @@ export type {
   RequestSnapshotReason,
   RequestToolSchema,
 } from './request-snapshot.js';
-export { createModelCallIndexer, indexModelCalls } from './model-call-index.js';
+export { createModelCallIndexer, indexModelCalls, toolCallIds } from './model-call-index.js';
 export type { ModelCallIndex, ModelCallIndexer, ModelCallRecord } from './model-call-index.js';
 export { noteFailedAttempt, noteRequestStart, runInRetryScope } from './llm-retry.js';
 export { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';

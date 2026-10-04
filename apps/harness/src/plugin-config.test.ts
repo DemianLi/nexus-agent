@@ -110,7 +110,7 @@ describe('出貨的 cordis.yml', () => {
     const { plugins: fromYaml, dropped, ignoredConfig } = await loadPluginConfig();
     expect(dropped).toEqual([]);
     expect(ignoredConfig).toEqual([]);
-    // 41 = 10 個功能（#669 加了 `ask-user` 與 `submit-record`）＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
+    // 42 = 11 個功能（#669 加了 `ask-user` 與 `submit-record`，#1027 加了 `trajectory`）＋ 8 個 core 的條目（#456：5 顆 middleware 設定 ＋ 關不掉的核准閘門，
     // 外加 #529 的 `session-persistence`——它是 core 那一段裡唯一消費點在起動期的——與 #599 的
     // `session-checkpoint-policy`）
     // ＋ **15 個 harness 自己的設定條目**（#529、#538、#545、#650、#631、#734、#719、#841、#875、#711、#670、#735）＋ 8 個配套入口（#974 之前是 20 個，其中 12 個是空 installer，拿掉後 53 → 41）。**數目寫在這裡是為了擋
@@ -119,8 +119,8 @@ describe('出貨的 cordis.yml', () => {
     //
     // **這一條同時是 `#settings/…` 這個載體唯一的整條路驗收**（#529）：它走的是真的
     // `loadPluginConfig`，所以那八列要真的經由 `apps/harness/package.json` 的 `imports`
-    // 解析、import、而且長得像一顆 plugin，才數得到 41。拿掉那個 `imports` 區塊，這裡當場紅。
-    expect(fromYaml).toHaveLength(41);
+    // 解析、import、而且長得像一顆 plugin，才數得到 42。拿掉那個 `imports` 區塊，這裡當場紅。
+    expect(fromYaml).toHaveLength(42);
     for (const entry of fromYaml) expect(typeof entry.plugin.apply).toBe('function');
   });
 

@@ -152,10 +152,26 @@ describe('切回以前的 thread，畫面照日誌重播', () => {
     const server = await start([]);
     const page = await (await serveClient(server)).threadHistory('delta');
 
+    // 沒有日誌就沒有對話事件；但出貨的投影（#1027 的 `trajectory`、`request-snapshots`）在歷史最新一頁一律帶初值（#1026 的 baseline），
+    // 所以「空」的意思是：除了那兩顆投影 frame 以外什麼都沒有。
     expect(page).toEqual({
       kind: 'ok',
-      result: { events: [], firstSeq: 0, throughSeq: -1, hasMore: false, legacy: false },
+      result: {
+        events: [
+          expect.objectContaining({ method: 'custom' }),
+          expect.objectContaining({ method: 'custom' }),
+        ],
+        firstSeq: 0,
+        throughSeq: -1,
+        hasMore: false,
+        legacy: false,
+      },
     });
+    if (page.kind !== 'ok') throw new Error('歷史沒拿到');
+    const keys = page.result.events.map(
+      (frame) => (frame.params as { data: { payload: { key: string } } }).data.payload.key,
+    );
+    expect(keys).toEqual(['trajectory', 'request-snapshots']);
   });
 });
 
