@@ -982,6 +982,31 @@ describe('讀檔卡與搜尋卡（#625）', () => {
     ).toEqual(['/src/a.ts', '/src/b.ts']);
   });
 
+  it('ls：超過上限時畫「顯示 X／共 N 個路徑」，不畫給模型看的英文復原句（#948）', () => {
+    const paths = Array.from(
+      { length: 100 },
+      (_, i) => `/many/f${String(i + 1).padStart(3, '0')}.txt`,
+    );
+    const text = `${paths.join('\n')}\n\n(Showing 100 of 300 entries. Full ls result stored at: /large_tool_results/abc-ls.txt. Use read_file with offset/limit.)`;
+    render(
+      <ToolCard
+        entry={tool({
+          name: 'ls',
+          input: JSON.stringify({ path: '/many' }),
+          text,
+          meta: { shape: 'paths', paths, truncated: true, total: 300 },
+        })}
+        beam={false}
+      />,
+    );
+    fireEvent.click(screen.getAllByRole('button')[0] as HTMLElement);
+    const card = screen.getByTestId('tool-search');
+    expect(within(card).getByText('顯示 100／共 300 個路徑')).toBeTruthy();
+    expect(card.querySelectorAll('[data-search-row="path"]').length).toBeGreaterThan(0);
+    expect(document.body.textContent).not.toContain('/large_tool_results/');
+    expect(screen.queryByTestId('tool-output')).toBeNull();
+  });
+
   it('meta 形狀不對：照舊畫結果文字，不畫半套', () => {
     render(
       <ToolCard
