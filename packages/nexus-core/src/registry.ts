@@ -6,17 +6,18 @@
  * `permissions` / `approvals`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
- * 外加八條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * 外加九條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
  * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
  * {@link TelemetryRegistrationPoint} 回答「送出去之前怎麼洗」，
  * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」，
  * {@link CommandRegistrationPoint} 回答「人打得出哪些斜線命令」，
  * {@link SessionRegistrationPoint} 回答「誰拿得到這個會話的日誌」，
+ * {@link ProjectionRegistrationPoint} 回答「web 看得到哪些從日誌折出來的狀態」（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)），
  * {@link ServiceRegistrationPoint} 回答「這次組裝的協作者從哪裡拿」（[#459](https://github.com/DemianLi/nexus-agent/issues/459)），
  * {@link PluginLogger} 回答「掛上的時候有什麼要跟人講」（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
  * 九個註冊點回答的是「這個 agent 由什麼組成」，七者正交。
  *
- * **第八條是唯一一條沒有人往裡面註冊東西的**：{@link DisabledEntryView | disabledEntries}
+ * **第九條是唯一一條沒有人往裡面註冊東西的**：{@link DisabledEntryView | disabledEntries}
  * 回答「產生這個 registry 的那份清單說了什麼」，是唯讀視圖而不是註冊點
  * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。它進得了這份清單是因為
  * 它確實是 `PluginRegistry` 的一個欄位，而那個數字有絆索在數（`registry-channel-count.test.ts`）。
@@ -38,6 +39,8 @@ import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import { duplicateCompanionError } from './invariants.js';
+import { normalizeProjectionUnit } from './projections.js';
+import type { ProjectionUnit } from './projections.js';
 import type { InvariantCompanion, InvariantInstaller } from './invariants.js';
 import type { SessionInstaller } from './sessions.js';
 import { toolCallSessionAddress } from './session-address.js';
@@ -772,6 +775,29 @@ export interface CommandRegistrationPoint {
 }
 
 /**
+ * `projections` 通道：**插件宣告的會話投影**——從 root 日誌折出一份有名字的狀態，由 pump 以 `projection` frame 送到 web
+ * （[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)，設計見 `.docs/session-projections-design.md`）。
+ *
+ * 與另外那些不折進 `createDeepAgent` 的通道同軸：產物不進圖，pump 與歷史路由讀這裡。照 dsh 的 `sessionProjections`
+ * （`5badb15`）；**差異**：dsh 的 `register` 同 key 重複註冊共用一個單元並計數（為了 HMR），我們一次組裝一張註冊表、不熱換，
+ * 所以 key 重複就是拋。
+ */
+export interface ProjectionRegistrationPoint {
+  /**
+   * 註冊一個投影單元。中繼資料在這裡就驗（見 {@link normalizeProjectionUnit}）。
+   * @param unit - key、stateVersion、init／apply／view。
+   * @returns 只撤銷這一次註冊的冪等 undo。
+   * @throws key 重複，或中繼資料不合格。
+   */
+  register<S, V>(unit: ProjectionUnit<S, V>): () => void;
+  /**
+   * 目前註冊的單元，**依註冊順序**。pump 與歷史路由讀它。
+   * @returns 凍過的單元。
+   */
+  list(): readonly ProjectionUnit[];
+}
+
+/**
  * `sessions` 通道：**誰拿得到這個會話的日誌**。
  *
  * 與另外十三個不同軸的理由同 lifecycle 與 telemetry：產物不進 `createDeepAgent` 的參數。
@@ -941,6 +967,7 @@ export interface PluginRegistry {
   readonly invariants: InvariantRegistrationPoint;
   readonly commands: CommandRegistrationPoint;
   readonly sessions: SessionRegistrationPoint;
+  readonly projections: ProjectionRegistrationPoint;
   /** 外掛在 `apply` 裡交出的警告，見 {@link PluginLogger}。 */
   readonly logger: PluginLogger;
   /** 這一次沒掛上的條目（明著被關掉的，加上掉了的），見 {@link DisabledEntryView}。**不算註冊點。** */
@@ -1070,6 +1097,14 @@ export function createRegistry(): InternalPluginRegistry {
   const disposers = new AnonymousEntries<Disposer>();
   const redactRules = new AnonymousEntries<SessionTelemetryRedactRule>();
   const companions = new NamedEntries<InvariantInstaller>(duplicateCompanionError);
+  const projectionEntries = new NamedEntries<ProjectionUnit>(
+    (key, existing, incoming) =>
+      new Error(
+        `投影 "${key}" 已經註冊過了：${formatOrigin(existing)} 註冊過，` +
+          `${formatOrigin(incoming)} 又註冊一次。一個 key 只能有一個單元——web 端的 \`projections[${key}]\` ` +
+          `只有一格，讓後來的靜靜蓋掉前面的，畫面上的值會隨載入順序改變。`,
+      ),
+  );
   const commandEntries = new NamedEntries<{
     definition: CommandDefinition;
     descriptor: CommandDescriptor;
@@ -1410,6 +1445,15 @@ export function createRegistry(): InternalPluginRegistry {
     },
   };
 
+  const projectionPoint: ProjectionRegistrationPoint = {
+    register: (unit) =>
+      effect('projections.register()', (origin) => {
+        const normalized = normalizeProjectionUnit(unit) as ProjectionUnit;
+        return projectionEntries.insert(normalized.key, normalized, origin);
+      }),
+    list: () => Object.freeze([...projectionEntries.entries()].map(([, entry]) => entry.value)),
+  };
+
   const lifecyclePoint: LifecycleRegistrationPoint = {
     onDispose: (dispose) =>
       effect('lifecycle.onDispose()', (origin) => disposers.append(dispose, origin)),
@@ -1446,6 +1490,7 @@ export function createRegistry(): InternalPluginRegistry {
     invariants: invariantPoint,
     commands: commandPoint,
     sessions: sessionPoint,
+    projections: projectionPoint,
     logger: loggerPoint,
     disabledEntries: {
       has: (pluginName) =>
