@@ -317,3 +317,24 @@ export {
   TRAJECTORY_TURN_LIST_CAP,
   TRAJECTORY_VERSION,
 } from './trajectory.js';
+export type {
+  TokenMeterEarlier,
+  TokenMeterEnd,
+  TokenMeterLink,
+  TokenMeterModelRow,
+  TokenMeterModelsOther,
+  TokenMeterSpan,
+  TokenMeterToolRow,
+  TokenMeterToolsOther,
+  TokenMeterTurn,
+  TokenMeterView,
+} from './token-meter.js';
+export {
+  TOKEN_METER_CALIBER,
+  TOKEN_METER_LINKS_CAP,
+  TOKEN_METER_MODELS_CAP,
+  TOKEN_METER_PROJECTION,
+  TOKEN_METER_TOOL_NAMES_CAP,
+  TOKEN_METER_TURNS_KEEP,
+  TOKEN_METER_VERSION,
+} from './token-meter.js';

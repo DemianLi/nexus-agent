@@ -146,7 +146,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是十一顆功能 ＋ 八列 core 設定 ＋ 十四列 harness 設定 ＋ 八個配套入口', async () => {
+  it('預設清單是十二顆功能 ＋ 八列 core 設定 ＋ 十四列 harness 設定 ＋ 八個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
@@ -191,6 +191,9 @@ describe('一次性模式', () => {
       // **`trajectory` 進來的理由是 web 的觀測分頁讀它**（[#1027](https://github.com/DemianLi/nexus-agent/issues/1027)）：
       // 不多工具、不改 prompt、不寫日誌，模型那一側零差別；多的是兩個從日誌折出來的投影（#1026 的通道）。
       'trajectory',
+      // **`token-meter` 進來的理由同 `trajectory`**（[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)）：web 的觀測分頁讀它的逐輪與子代理用量；
+      // 不多工具、不改 prompt、不寫日誌，多的是一個從日誌折出來的投影（root 與每個子代理各一份）。
+      'token-meter',
       // **`system-prompt` 進來的理由是模型該知道自己是誰**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）：
       // 出貨值把「命令列助手」那句寫死在程式碼裡的身分，換成部署方寫得動的一列。它不多一顆工具、不多一個命令，
       // 多的是系統提示詞前後各一段；沒有這一列，模型只剩組裝點那一句指引。

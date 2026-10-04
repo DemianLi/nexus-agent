@@ -2,6 +2,8 @@
 # 出貨的 `trajectory`（#1027）也有投影；這份驗收只量玩具，所以把它關掉，免得斷言要認得別人的 key。
 - id: trajectory
   disabled: true
+- id: token-meter
+  disabled: true
 - insert:
     - id: projection-toy
       name: './projection-toy.fixture.ts'
