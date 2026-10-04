@@ -41,6 +41,7 @@ import { agentBaseUrl, createAgentClient } from '@/lib/agent';
 import { createChangesStores } from '@/lib/changes-diff';
 import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
+import { createSubagentUsageLoader } from '@/lib/subagent-usage';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
 import { isPlanReview, planReviewOf } from '@/lib/plan-review';
 import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
@@ -363,6 +364,11 @@ function ConversationView({
   }, []);
   // 計劃分頁讀的是對話裡那一份（#654）：沒變就是同一個參照。
   const plans = usePlanLibrary(conversation.state.entries, pendings);
+  // 成本分頁讀背景子代理自己的總帳（#1032）：身分跟著 `[client, threadId]`，不然 `sources` 一變身分 memo 就擋不住。
+  const subagentUsage = useMemo(
+    () => createSubagentUsageLoader(client, threadId),
+    [client, threadId],
+  );
   // 右側欄讀的跟卡片同一批 store（#640）：分頁與卡片看到的是同一份快取。
   // `conversation` 放的是 store（身分穩定），不是對話狀態：後者每一格串流都變，`sources` 一變 `RightSidebarPanel` 的 `memo` 就擋不住（#1033）。
   const sidebarSources = useMemo(
@@ -372,8 +378,9 @@ function ConversationView({
       deliverableDownload,
       plans,
       conversation: conversation.store,
+      subagentUsage,
     }),
-    [changes, deliverableFiles, deliverableDownload, plans, conversation.store],
+    [changes, deliverableFiles, deliverableDownload, plans, conversation.store, subagentUsage],
   );
 
   return (

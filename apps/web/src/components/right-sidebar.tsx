@@ -47,6 +47,7 @@ import type { DeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import type { PlanDocument } from '@/lib/plan-review';
 import { basename } from '@/lib/present-view';
+import type { SubagentUsageLoader } from '@/lib/subagent-usage';
 import {
   findTranscriptItem,
   focusTranscriptItem,
@@ -97,6 +98,11 @@ export interface RightSidebarSources {
    * `RightSidebarPanel` 的 `memo` 就擋不住（見該元件的註解）。沒給就是沒有對話可看（觀測分頁畫「尚無資料」）。
    */
   readonly conversation?: ConversationStore | undefined;
+  /**
+   * 讀一個背景子代理自己的總帳（#1032，成本分頁的子代理分列）。**身分要穩定**（`App` 以 `[client, threadId]` 建），理由同
+   * {@link RightSidebarSources.conversation}。沒給就不畫子代理那一段。
+   */
+  readonly subagentUsage?: SubagentUsageLoader | undefined;
 }
 
 /** 卡片用得到的那一半。 */
