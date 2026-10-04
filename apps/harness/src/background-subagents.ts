@@ -56,6 +56,7 @@ import {
   BACKGROUND_SESSION_CONFIG_KEY,
   STEP_INBOX_CONFIG_KEY,
   TURN_CANCEL_CONFIG_KEY,
+  appendSubagentCatalog,
   fromLoggedMessage,
   toLoggedMessage,
   turnReachedMaxTokens,
@@ -617,6 +618,8 @@ export class BackgroundSubagentHost {
    * @param input.subagent - 子代理名（規格名）。
    * @param input.text - 第一輪的人話。
    * @param input.choice - 這個子代理用哪一顆模型與推理等級，省略＝沿用 root 的；之後每一輪都是它（#876、#877）。
+   * @param input.callId - 派它的那一顆 `tool/call`（root 那一份上的）。給了就在 root 記一顆 `subagent/catalog`（#1023），
+   *   **在接受第一句話之後**，同 dsh continuable「先准入、再寫目錄、最後回 id」。
    * @returns 編號（`bg-` 加隨機，不是計數器：root 續接之後不能撞上舊日誌）與第一輪的下場。
    * @throws host 已關閉；存活的背景子代理已達並存上限；編不出這個子代理的圖。
    */
@@ -624,6 +627,7 @@ export class BackgroundSubagentHost {
     readonly subagent: string;
     readonly text: string;
     readonly choice?: ModelChoice;
+    readonly callId?: string;
   }): {
     readonly runId: string;
     readonly outcome: Promise<BackgroundRoundOutcome>;
@@ -636,8 +640,13 @@ export class BackgroundSubagentHost {
     let runId: string;
     do runId = `${BACKGROUND_RUN_PREFIX}${randomUUID().replaceAll('-', '').slice(0, 12)}`;
     while (this.#known.has(runId));
-    this.#sessions.open({ kind: 'subagent', runId });
-    return { runId, outcome: this.submit({ runId, ...input }) };
+    const childId = this.#sessions.open({ kind: 'subagent', runId }).sessionId;
+    const { callId, ...first } = input;
+    const outcome = this.submit({ runId, ...first });
+    if (callId !== undefined) {
+      appendSubagentCatalog(this.#sessions.root, { childId, callId, mode: 'continuable' });
+    }
+    return { runId, outcome };
   }
 
   /**

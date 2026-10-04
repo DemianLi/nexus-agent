@@ -138,6 +138,7 @@ export type {
   CommandRegistrationPoint,
   SessionRegistrationPoint,
   SessionLookup,
+  SpawnLink,
   Disposer,
   RegisterOptions,
   RootOnlyRefusal,
@@ -542,6 +543,8 @@ export type {
   SessionRegistryOptions,
 } from './session-registry.js';
 export { SessionRegistry } from './session-registry.js';
+export type { SubagentCatalogData, SubagentCatalogMode, SubagentLink } from './subagent-catalog.js';
+export { appendSubagentCatalog, subagentLinkOf, subagentLinks } from './subagent-catalog.js';
 
 // 配套入口（`./invariant`）刻意**不從主入口再匯出**，形狀照 dsh：那邊每個 package 的
 // 配套入口都只掛在 `<pkg>/invariant` 這個子路徑上，import 主入口不會把它拖進來。

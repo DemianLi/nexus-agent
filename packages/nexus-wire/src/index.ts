@@ -171,6 +171,8 @@ export type {
 export { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, SETTLE_REASONS, isSettleReason } from './inbox.js';
 export type { TitlePayload } from './title.js';
 export { SUBAGENT_STATUS } from './subagent-status.js';
+export { SUBAGENT_CATALOG } from './subagent-catalog.js';
+export type { SubagentCatalogPayload } from './subagent-catalog.js';
 export type { SubagentRunStatus, SubagentStatusPayload } from './subagent-status.js';
 export { COMPACTION } from './compaction.js';
 export { GOAL, GOAL_PHASES } from './goal.js';

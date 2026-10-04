@@ -49,6 +49,8 @@ import { PLAN_MODE } from './plan-mode.js';
 import type { PlanModePayload } from './plan-mode.js';
 import { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';
 import type { WireSessionStats, WireTokenUsage } from './session-totals.js';
+import { SUBAGENT_CATALOG } from './subagent-catalog.js';
+import type { SubagentCatalogPayload } from './subagent-catalog.js';
 import { SUBAGENT_STATUS } from './subagent-status.js';
 import type { SubagentRunStatus } from './subagent-status.js';
 import { TITLE } from './title.js';
@@ -239,6 +241,16 @@ export interface ToolEntry {
    * 格式 16 以前的日誌接回來沒有這一格。
    */
   readonly meta?: unknown;
+  /**
+   * 這一顆委派呼叫派出的子代理是哪一份會話（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)）：`id` 是子會話
+   * 日誌的 id，拿它去找那個子代理的軌跡與用量。前景與背景都有，來源是 root 日誌的 `subagent/catalog`（見 `subagent-catalog.ts`）。
+   *
+   * **沒有這一格不等於沒派出子代理**：格式 30 以前的日誌沒記，派出去但子代理一筆都沒寫就失敗的也沒有。
+   */
+  readonly subagentSession?: {
+    readonly id: string;
+    readonly mode: SubagentCatalogPayload['mode'];
+  };
   readonly attribution: Attribution;
 }
 
@@ -823,7 +835,40 @@ const CUSTOM_REDUCERS: {
   [AGENT_MESSAGE]: reduceAgentMessage,
   [TITLE]: reduceTitle,
   [SUBAGENT_STATUS]: reduceSubagentStatus,
+  [SUBAGENT_CATALOG]: reduceSubagentCatalog,
 };
+
+/**
+ * 子代理目錄（#1023）：掛到 `callId` 那張工具卡上。卡不在（不該發生：目錄永遠在配對的呼叫之後、同一輪之內）就原樣回，
+ * 不另開一張。任何一格不對就整顆不收。
+ */
+function reduceSubagentCatalog(state: ConversationState, payload: object): ConversationState {
+  const { childId, callId, mode } = payload as {
+    childId?: unknown;
+    callId?: unknown;
+    mode?: unknown;
+  };
+  if (
+    typeof childId !== 'string' ||
+    childId === '' ||
+    typeof callId !== 'string' ||
+    (mode !== 'one-shot' && mode !== 'continuable')
+  ) {
+    return state;
+  }
+  const id = `tool-${callId}`;
+  if (!state.entries.some((entry) => entry.id === id && entry.kind === 'tool')) return state;
+  const session: NonNullable<ToolEntry['subagentSession']> = {
+    id: childId,
+    mode: mode satisfies SubagentCatalogPayload['mode'],
+  };
+  return {
+    ...state,
+    entries: replace(state.entries, id, (entry) =>
+      entry.kind === 'tool' ? { ...entry, subagentSession: session } : entry,
+    ),
+  };
+}
 
 /**
  * 日誌位置的形狀：非負安全整數。

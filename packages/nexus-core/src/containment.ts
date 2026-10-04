@@ -84,7 +84,8 @@ import { createMiddleware, MiddlewareError, ToolInvocationError } from 'langchai
 import type { AgentMiddleware } from './base-types.js';
 import { rawArgumentsOf } from './invalid-tool-args.js';
 import { toLoggedMessage } from './logged-message.js';
-import type { SessionLookup } from './registry.js';
+import type { SessionLookup, SpawnLink } from './registry.js';
+import { spawnedSubagentRunId } from './session-address.js';
 import {
   HarnessError,
   INVALID_ARGS,
@@ -263,6 +264,11 @@ const UNKNOWN_TOOL_ERROR: ToolErrorInfo = { name: 'ToolNotFoundError', code: UNK
 /** 註冊表的 `sessions` 通道裡，記工具事件用得到的那一半。 */
 export interface ToolEventSessions {
   forCall(config: unknown): SessionLookup;
+  /**
+   * 登記這次呼叫可能派出子代理，見 `SessionRegistrationPoint.expectSpawn`（#1023）。**選填**：只給 `forCall` 的替身照舊
+   * 記工具事件，只是不寫子代理目錄。產品組裝傳的是 `registry.sessions`，一定有。
+   */
+  expectSpawn?(runId: string, link: SpawnLink): () => void;
 }
 
 /** `wrapToolCall` 收到的請求裡，記工具事件讀得到的那幾格。 */
@@ -282,12 +288,23 @@ type SettleToolCall = (
   meta?: unknown,
 ) => void;
 
+/** {@link recordToolCall} 交回來的兩件事。 */
+interface RecordedToolCall {
+  readonly settle: SettleToolCall;
+  /** 退掉「可能派出子代理」的登記（#1023）。呼叫落定之後一定要叫，拋錯與中斷也是。 */
+  readonly release: () => void;
+}
+
 /**
  * 記下 `tool/call`，回傳記 `tool/result` 用的函式。
  *
  * **這次不記的時候回 `undefined`，而且是整對不記**：沒接會話、認不出屬於哪一份
  * （`forCall` 不是 `ok`）、沒有 `callId`（配不起來）、或 `tool/call` 寫不進去。只寫得進
  * 結果那一半的話，日誌上會有一顆找不到呼叫的結果。
+ *
+ * **記下了就順手登記「這次呼叫可能派出子代理」**（#1023）：鑰匙是這次呼叫自己的命名空間（`spawnedSubagentRunId`），
+ * 子代理那一側算出來的 `runId` 就是它，所以不必認工具名——不是 `task` 的呼叫不會有子日誌以它出生，登記到退掉為止都用不到。
+ * 只在 `tool/call` 記成之後登記：目錄一定落在它配對的那顆呼叫後面。
  *
  * **跟著結果塞進對話的訊息接在 `tool/result` 後面各記一顆 `user/message`**，同它們在對話裡的位置
  * （見 `session-log.ts`）。結果那顆沒寫成就一顆都不記：沒有結果的注入在推歷史時接不到任何地方。
@@ -298,11 +315,12 @@ function recordToolCall(
   sessions: ToolEventSessions | undefined,
   request: RecordableRequest,
   raw: string | undefined,
-): SettleToolCall | undefined {
+): RecordedToolCall | undefined {
   const callId = request.toolCall.id;
   if (sessions === undefined || callId === undefined || callId === '') return undefined;
   // `runtime.configurable` 就是 `forCall` 要的那份，包回一層 `configurable` 同 `model-usage.ts`。
-  const found = sessions.forCall({ configurable: request.runtime?.configurable });
+  const where = { configurable: request.runtime?.configurable };
+  const found = sessions.forCall(where);
   if (found.kind !== 'ok') return undefined;
   const { log } = found;
   try {
@@ -316,7 +334,12 @@ function recordToolCall(
     // 參數序列化不動或日誌不收：這一對整個不記，見上面。
     return undefined;
   }
-  return (outcome, message, injected, meta) => {
+  const runId = spawnedSubagentRunId(where);
+  const release =
+    runId === undefined || sessions.expectSpawn === undefined
+      ? () => {}
+      : sessions.expectSpawn(runId, { parent: log, callId });
+  const settle: SettleToolCall = (outcome, message, injected, meta) => {
     try {
       log.append('tool/result', {
         callId,
@@ -343,6 +366,7 @@ function recordToolCall(
       }
     }
   };
+  return { settle, release };
 }
 
 /**
@@ -378,7 +402,8 @@ export function createContainmentMiddleware(sessions?: ToolEventSessions): Agent
       const startedAt = Date.now();
       // 解不開的那幾顆讓 `tool/call.arguments` 記原字串（記號在那則 AI 訊息上，`invalid-tool-args.ts`）。
       const raw = rawArgumentsOf(request);
-      const settle = recordToolCall(sessions, request as RecordableRequest, raw);
+      const recorded = recordToolCall(sessions, request as RecordableRequest, raw);
+      const settle = recorded?.settle;
       try {
         // 槽在這一層開：產生者（backend 那層的 Proxy、讀檔的 middleware）都在內層，
         // 寫進來的東西由這裡交給 `tool/result`。見 `tool-result-meta.ts`。
@@ -421,6 +446,9 @@ export function createContainmentMiddleware(sessions?: ToolEventSessions): Agent
           [],
         );
         return message;
+      } finally {
+        // 子代理出生在 `handler` 裡；落定之後（拋錯、中斷也是）就不會再有以這次呼叫出生的，退掉登記（#1023）。
+        recorded?.release();
       }
     },
   }) as AgentMiddleware;

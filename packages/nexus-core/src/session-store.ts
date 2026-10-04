@@ -310,8 +310,17 @@ import type { SessionEvent } from './session-log.js';
  * 升版照新增詞彙的慣例（同 22、23），不是非升不可：28 讀到 `interrupted` 時，goal 續行只認得 `aborted`、`max-tokens`
  * 就把它當正常收尾，但那顆 `turn/end` 在 end-seed 之前，而 28 的續行判準從 `currentTurnStart`（不往 end-seed 前找）起算，
  * 續接回來的授權也從 `disarmed` 起，所以不會因此多排一輪；歷史把它當完成收掉，同 28 在 end-seed 收掉的那一條。
+ *
+ * ## 30：`subagent/catalog`
+ *
+ * 父那一份記下派出去的子代理：子會話 id 與派它的那一顆 `tool/call`（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)，
+ * 照 dsh 的同名事件，見 `subagent-catalog.ts`）。v29 的檔直接讀：那時候沒有這一顆，前景子代理從父日誌找不到，只剩子日誌 header
+ * 的 `parentSession`；背景的仍可從 `tool/result.meta.runId` 推。讀的人照「沒記」表態（「—」），**不是沒有子代理**。
+ *
+ * 升版照新增詞彙的慣例（同 26、28），不是非升不可：29 的讀者遇到它會當成認不得的種類略過（各 switch 都有 `default`），它不進模型、
+ * 也不左右任何折疊，所以略過是對的。
  */
-export const SESSION_LOG_FORMAT_VERSION = 29;
+export const SESSION_LOG_FORMAT_VERSION = 30;
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
