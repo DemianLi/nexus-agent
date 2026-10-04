@@ -187,10 +187,13 @@ export interface AiEntry {
    */
   readonly maxTokens?: true;
   /**
-   * `message-start` 的時刻。**兩條路的意思不同**：即時是第一個字到的那一刻（`message-start` 跟它一起到，同 dsh 的
-   * `firstTokenTime`，不是 `stepStartTime`）；歷史重播的整則是同一個時刻（日誌
-   * `assistant/message` 落盤，也就是講完的那一刻），所以重新整理之後它等於 {@link AiEntry.settledAt}。見
-   * {@link ConversationEntry} 的「時刻」。
+   * `message-start` 的時刻。**兩條路的意思差一段首字等待（TTFT）**：即時是第一個字到的那一刻（`message-start` 跟它一起到，
+   * 同 dsh 的 `firstTokenTime`，不是 `stepStartTime`）；歷史重播是**這則回覆所屬那一次模型呼叫開始**的時刻（日誌
+   * `model/start`，由 `assistant/message.modelCall` 指到，同 dsh 的 `stepStartTime`），所以重新整理之後它早於
+   * {@link AiEntry.settledAt}、差的是整次呼叫的耗時（#1048；以前取落盤那一刻，兩格相等）。差距就是 TTFT，腳本模型
+   * 的量測見 `wire-entry-timestamps.test.ts`。dsh 重新整理後還留得住 `firstTokenTime`，是因為它的日誌記了逐字的
+   * `stream`；我們的日誌沒有（寫入點看不到逐字片段），所以歷史拿不到首字時刻。日誌沒有 `modelCall` 的舊回覆退回
+   * 落盤的時刻（兩格相等）。見 {@link ConversationEntry} 的「時刻」。
    */
   readonly startedAt?: number;
   /** 講完的時刻：`message-finish`、`error`，或講到一半被停止時收尾那顆 `lifecycle` 的時刻。還在吐字就沒有。 */
@@ -420,8 +423,8 @@ export interface WorkspaceChangesEntry {
  *   用瀏覽器的時鐘補會跟其餘的格混用兩個時鐘。
  *
  * **兩條路的時鐘不同**：歷史重播的 frame 帶的是日誌那一筆的 `time`；即時的是基座 frame 原帶的、或 pump 合成
- * 那一刻的 `Date.now()`。實測（`@nexus/harness` 的 `wire-entry-timestamps.test.ts`）只有模型回覆的 `startedAt` 差得多：
- * 即時是第一個字到的那一刻、歷史是講完；其餘的格兩條路只差幾毫秒。frame 沒帶可用的時刻（不是正的有限數字）就不給那一格，
+ * 那一刻的 `Date.now()`。實測（`@nexus/harness` 的 `wire-entry-timestamps.test.ts`）只有模型回覆的 `startedAt` 不同：
+ * 即時是第一個字到的那一刻、歷史是那一次模型呼叫開始（差一段首字等待，見 {@link AiEntry.startedAt}）；其餘的格兩條路只差幾毫秒。frame 沒帶可用的時刻（不是正的有限數字）就不給那一格，
  * 理由見 {@link wireTime}。
  */
 export type ConversationEntry =

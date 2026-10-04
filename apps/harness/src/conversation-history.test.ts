@@ -1011,3 +1011,94 @@ describe('isTodosReset（#682：與頁起點共用「不是 resume 的 turn/star
     expect(log.events.map(isTodosReset)).toEqual([true, false, false]);
   });
 });
+
+describe('模型回覆的開始時刻（#1048）', () => {
+  /** 排好 `seq`，時刻按給的表（沒給的用 `1000 + seq`）。 */
+  function timed(
+    drafts: readonly Draft[],
+    times: Readonly<Record<number, number>>,
+  ): SessionEvent[] {
+    return drafts.map(
+      (draft, seq) => ({ ...draft, seq, time: times[seq] ?? 1000 + seq }) as SessionEvent,
+    );
+  }
+  const modelStart: Draft = { type: 'model/start', data: {} };
+  const modelEnd: Draft = { type: 'model/end', data: { outcome: 'ok' } } as Draft;
+  const replyOf = (text: string, modelCall?: number, callIds: readonly string[] = []): Draft => {
+    const draft = reply(text, callIds);
+    return modelCall === undefined
+      ? draft
+      : ({ ...draft, data: { ...draft.data, modelCall } } as Draft);
+  };
+  const aiEntries = (events: readonly SessionEvent[]) =>
+    screen(events).entries.filter((entry) => entry.kind === 'ai');
+
+  it('一輪兩次呼叫：每則回覆的 startedAt 是它自己那次的 model/start，settledAt 是落盤', () => {
+    // seq: 0 輪首 · 1 model/start(A) · 2 回覆 A(落盤 1500) · 3 model/end · 4 call · 5 result ·
+    //      6 model/start(B, 3000) · 7 回覆 B(落盤 3400) · 8 model/end
+    const events = timed(
+      [
+        human('查一下'),
+        modelStart,
+        replyOf('先查。', 1, ['c1']),
+        modelEnd,
+        call('c1'),
+        result('c1', '好'),
+        modelStart,
+        replyOf('查好了。', 6),
+        modelEnd,
+        turnEnd,
+      ],
+      { 1: 1100, 2: 1500, 4: 1600, 5: 2900, 6: 3000, 7: 3400 },
+    );
+    const [first, second] = aiEntries(events);
+    expect([first?.startedAt, first?.settledAt]).toEqual([1100, 1500]);
+    // 不是整輪第一顆 model/start（1100），也不是 B 落盤（3400）。
+    expect([second?.startedAt, second?.settledAt]).toEqual([3000, 3400]);
+  });
+
+  it('日誌沒有 modelCall（#1021 之前）或找不到那顆 model/start：退回落盤的時刻，兩格相等', () => {
+    const old = timed([human('嗨'), modelStart, replyOf('你好。'), modelEnd, turnEnd], {
+      1: 1100,
+      2: 1500,
+    });
+    const orphan = timed([human('嗨'), modelStart, replyOf('你好。', 99), modelEnd, turnEnd], {
+      1: 1100,
+      2: 1500,
+    });
+    for (const events of [old, orphan]) {
+      const [entry] = aiEntries(events);
+      expect([entry?.startedAt, entry?.settledAt]).toEqual([1500, 1500]);
+    }
+  });
+
+  it('model/start 的時刻晚於落盤（時鐘倒退）：不晚於落盤', () => {
+    const events = timed([human('嗨'), modelStart, replyOf('你好。', 1), modelEnd, turnEnd], {
+      1: 1700,
+      2: 1500,
+    });
+    const [entry] = aiEntries(events);
+    expect([entry?.startedAt, entry?.settledAt]).toEqual([1500, 1500]);
+  });
+
+  it('講到一半被停止的那則（interrupted）：startedAt 同樣取呼叫開始，settledAt 取收尾', () => {
+    const events = timed(
+      [
+        human('嗨'),
+        modelStart,
+        {
+          ...replyOf('講到一', 1),
+          data: { ...replyOf('講到一', 1).data, interrupted: true },
+        } as Draft,
+        {
+          type: 'turn/end',
+          data: { reason: { kind: 'aborted', cause: { kind: 'user' } } },
+        } as Draft,
+      ],
+      { 1: 1100, 2: 1500, 3: 1600 },
+    );
+    const [entry] = aiEntries(events);
+    expect(entry?.startedAt).toBe(1100);
+    expect(entry?.settledAt).toBe(1600);
+  });
+});
