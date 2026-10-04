@@ -58,7 +58,8 @@ interface CallProbe {
 
 const scopes = new AsyncLocalStorage<CallScope>();
 const probes = new AsyncLocalStorage<CallProbe>();
-const lastCalls = new WeakMap<SessionLog, number>();
+/** 每份日誌最近開的那次呼叫，與它有沒有記過正常回覆。 */
+const lastCalls = new WeakMap<SessionLog, { readonly modelCall: number; replied: boolean }>();
 
 /**
  * 在一次模型呼叫的範圍裡跑 `call`：它內側的寫入點用 {@link currentModelCall} 讀得到識別。
@@ -72,7 +73,7 @@ export function runInModelCall<T>(
   modelCall: number,
   call: () => T | Promise<T>,
 ): Promise<T> {
-  lastCalls.set(log, modelCall);
+  lastCalls.set(log, { modelCall, replied: false });
   const probe = probes.getStore();
   if (probe !== undefined) {
     probe.log = log;
@@ -91,14 +92,25 @@ export function currentModelCall(log: SessionLog): number | undefined {
 }
 
 /**
- * 這份日誌**最近開的**那一次呼叫的 `model/start` `seq`；從沒開過是 `undefined`。
+ * 這份日誌**最近開的**那一次呼叫的 `model/start` `seq`；從沒開過、或那一次**已經記過正常回覆**是 `undefined`。
  *
  * 給「呼叫已經結束、寫入點不在範圍裡」的那一個用：人按停止，pump 在那一輪收尾時補記被切斷的半段回覆
  * （`assistant/message {interrupted}`）。一份日誌的模型呼叫是一次一個（子代理有自己的日誌），被切斷的那次
- * 必定是最近開的那次。**行程重啟就沒有**：這是行程內的記憶，不是日誌上的事實，所以只給當場補記用。
+ * 通常就是最近開的那次。
+ *
+ * **最近那次已經有正常回覆就不給**：被切斷的那次是拋錯收的，沒有回覆。最近那次若已經回完，半段字就不是它的——
+ * 例如摘要器自己叫模型產摘要（不經起訖紀錄器）時被停止。寧可標「—」也不掛到一次已經完整回覆的呼叫底下，
+ * 讀方才不會看到同一次呼叫兩則回覆。**行程重啟就沒有**：這是行程內的記憶，不是日誌上的事實，只給當場補記用。
  */
 export function lastModelCall(log: SessionLog): number | undefined {
-  return lastCalls.get(log);
+  const last = lastCalls.get(log);
+  return last === undefined || last.replied ? undefined : last.modelCall;
+}
+
+/** 起訖紀錄器記下一則正常回覆之後呼叫：那一次不再是「可能被切斷」的候選。 */
+export function noteModelCallReplied(log: SessionLog, modelCall: number): void {
+  const last = lastCalls.get(log);
+  if (last !== undefined && last.modelCall === modelCall) last.replied = true;
 }
 
 /** {@link captureModelCall} 交回的識別。 */

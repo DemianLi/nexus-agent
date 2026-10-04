@@ -108,12 +108,22 @@ describe('識別只在同一份日誌上給', () => {
     expect(lastModelCall(log)).toBeUndefined();
   });
 
-  it('lastModelCall 記的是這份日誌最近開的那次，呼叫結束之後還在', async () => {
+  it('lastModelCall：最近開的那次沒有正常回覆（拋了）就是它，呼叫結束之後還在', async () => {
     const log = new SessionLog('last');
     await onion(log, () => withUsage());
-    await onion(log, () => withUsage());
+    await expect(
+      onion(log, () => {
+        throw new Error('被切斷');
+      }),
+    ).rejects.toThrow();
     const starts = log.events.filter((event) => event.type === 'model/start');
     expect(lastModelCall(log)).toBe(starts[1]!.seq);
+  });
+
+  it('lastModelCall：最近那次已經記過正常回覆就不給——半段回覆寧可沒有識別，也不掛到完整回覆過的呼叫底下', async () => {
+    const log = new SessionLog('replied');
+    await onion(log, () => withUsage());
+    expect(lastModelCall(log)).toBeUndefined();
   });
 });
 

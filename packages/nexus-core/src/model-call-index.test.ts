@@ -5,7 +5,7 @@
 
 import { AIMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
-import { indexModelCalls } from './model-call-index.js';
+import { createModelCallIndexer, indexModelCalls } from './model-call-index.js';
 import { toLoggedMessage } from './logged-message.js';
 import { SessionLog } from './session-log.js';
 
@@ -192,5 +192,37 @@ describe('舊日誌與歸不到的：標「—」，不猜', () => {
     const { calls, unattributed } = indexModelCalls(tail);
     expect(calls).toEqual([]);
     expect(seqsOf(unattributed)).toEqual([1, 2]);
+  });
+});
+
+describe('增量版與整批版是同一份實作', () => {
+  it('逐顆推進去，任何時刻的結果等於把到那一顆為止的整串丟給 indexModelCalls', () => {
+    const log = new SessionLog('inc');
+    log.append('model/start', {}); // 0
+    log.append('llm/retry', {
+      retryId: 'a',
+      retry: 1,
+      maxRetries: 3,
+      failure: LLM_FAILURE,
+      modelCall: 0,
+    });
+    log.append('assistant/message', reply(0, 'c1')); // 2
+    log.append('model/end', { modelCall: 0 }); // 3
+    log.append('tool/call', call('c1')); // 4
+    log.append('context/measure', {
+      approxTokens: 1,
+      messageCount: 1,
+      thresholds: [],
+      modelCall: 0,
+    }); // 5
+    log.append('tool/result', result('c1')); // 6
+    log.append('model/start', {}); // 7
+    log.append('model/usage', { inputTokens: 1, outputTokens: 1, totalTokens: 2 }); // 8：沒有識別
+    const indexer = createModelCallIndexer();
+    const events = log.events;
+    for (const [at, event] of events.entries()) {
+      indexer.push(event);
+      expect(indexer.result()).toEqual(indexModelCalls(events.slice(0, at + 1)));
+    }
   });
 });

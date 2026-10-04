@@ -86,12 +86,19 @@ function toolCallIds(event: SessionEvent<'assistant/message'>): readonly string[
   }
 }
 
+/** {@link createModelCallIndexer} 的產物。 */
+export interface ModelCallIndexer {
+  /** 折進一顆事件（照 `seq` 的順序）。每顆 O(1)，所以長會話可以逐顆折、不必每顆重折全部。 */
+  push(event: SessionEvent): void;
+  /** 目前為止的歸屬。回的陣列是活的（之後的 `push` 會長進去），呼叫端不要改。 */
+  result(): ModelCallIndex;
+}
+
 /**
- * 把一份日誌的事件歸到它們的模型呼叫。純函式，一趟走完，成本隨事件數線性。
- *
- * @param events - 一份日誌的事件，照 `seq` 排（可以是從中間切開的一段）。
+ * 增量版：一顆一顆折，隨時讀結果。軌跡投影（#1027）的 `apply` 用它；{@link indexModelCalls} 就是把整串推進去，
+ * 所以**歸屬邏輯只有這一份**，即時與歷史不會各寫一次。
  */
-export function indexModelCalls(events: readonly SessionEvent[]): ModelCallIndex {
+export function createModelCallIndexer(): ModelCallIndexer {
   const bySeq = new Map<number, MutableRecord>();
   const order: MutableRecord[] = [];
   const unattributed: SessionEvent[] = [];
@@ -109,7 +116,7 @@ export function indexModelCalls(events: readonly SessionEvent[]): ModelCallIndex
     return record;
   };
 
-  for (const event of events) {
+  const push = (event: SessionEvent): void => {
     switch (event.type) {
       case 'model/start': {
         const start = event as SessionEvent<'model/start'>;
@@ -180,6 +187,17 @@ export function indexModelCalls(events: readonly SessionEvent[]): ModelCallIndex
       default:
         break;
     }
-  }
-  return { calls: order, unattributed };
+  };
+  return { push, result: () => ({ calls: order, unattributed }) };
+}
+
+/**
+ * 把一份日誌的事件歸到它們的模型呼叫。純函式，一趟走完，成本隨事件數線性。
+ *
+ * @param events - 一份日誌的事件，照 `seq` 排（可以是從中間切開的一段）。
+ */
+export function indexModelCalls(events: readonly SessionEvent[]): ModelCallIndex {
+  const indexer = createModelCallIndexer();
+  for (const event of events) indexer.push(event);
+  return indexer.result();
 }

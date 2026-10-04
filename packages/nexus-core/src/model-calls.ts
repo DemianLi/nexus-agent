@@ -81,7 +81,7 @@ import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { runInRetryScope } from './llm-retry.js';
 import { toLoggedMessage } from './logged-message.js';
-import { runInModelCall, withModelCall } from './model-call-scope.js';
+import { noteModelCallReplied, runInModelCall, withModelCall } from './model-call-scope.js';
 import type { SessionLog } from './session-log.js';
 import type { SessionLookup } from './registry.js';
 import { INTERRUPTED_REPLY_MARKER } from './turn-cancel.js';
@@ -127,6 +127,8 @@ function tryRecordReply(log: SessionLog, response: unknown, modelCall: number): 
       'assistant/message',
       withModelCall({ message: toLoggedMessage(response) }, modelCall),
     );
+    // 這一次有正常回覆了：之後 pump 補記的被切斷半段不會再掛到它底下（`lastModelCall`）。
+    noteModelCallReplied(log, modelCall);
   } catch {
     // 見檔頭「記不進去不能扳倒模型呼叫」。
   }

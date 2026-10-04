@@ -9,7 +9,9 @@
  * 少很多**，而那是對的：
  *
  * - dsh 檢的 turn/step 巢狀，{@link ./session-log.ts | SessionEventType} **沒有詞彙表達**
- *   ——沒有 step。`tool/call` ↔ `tool/result` 的 `callId` 配對從
+ *   ——沒有 `step/*` 事件，也沒有逐事件的 `{turn, step}`。一次模型呼叫的識別是 `modelCall`
+ *   （[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，它的 `model/start` 的 `seq`），另有一道檢查（`startSeqs`）只檢它**指得到前面真的有的開頭**，
+ *   不檢「落在哪一輪」。`tool/call` ↔ `tool/result` 的 `callId` 配對從
  *   [#264](https://github.com/DemianLi/nexus-agent/issues/264) 起有詞彙了，照 dsh 檢，但**只檢
  *   配對、不檢落在哪一步**（形狀的偏離見 `session-log.ts` 的那兩顆）。`model/start` ↔
  *   `model/end`（[#266](https://github.com/DemianLi/nexus-agent/issues/266)）只檢結尾那一側，
@@ -18,7 +20,7 @@
  *   （`#events.length`、`snapshotJsonValue`、`deepFreeze`、`#publishing`）。抄過來只是
  *   複製擁有者的邊界，dsh 明說配套入口只檢**擁有者自己不負責**的那部分。
  *
- * 剩下真的沒人管的跨筆關係就是 turn 配對。三條都對著兩個生產者實際發的序列驗過
+ * 剩下真的沒人管的跨筆關係就是 turn 配對，外加 `modelCall` 的指向。turn 配對對著兩個生產者實際發的序列驗過
  * （`apps/harness/src/thread-pump.ts` 的 `#runOnce`、`apps/harness/src/cli.ts` 的
  * `runTurn`）：兩條路都是 `turn/start` →（`interrupt/raised`）* → `turn/end` 或
  * `turn/failed`，而且 pump 的輪是排隊跑的，不會交錯。
@@ -60,7 +62,7 @@ export const sessionInvariant: InvariantInstaller = (subject, fail) => {
    * 記過 `tool/call`、還沒配到結果的 `callId`。
    *
    * **同一個 `callId` 記兩次不是違規**：被中斷的呼叫 resume 後會再記一顆（見 `session-log.ts`
-   * 的 `tool/call`），集合吃得下重複。dsh 在 `step/end` 清空；我們沒有 step，而一顆沒配到的
+   * 的 `tool/call`），集合吃得下重複。dsh 在 `step/end` 清空；我們沒有 `step/*` 事件，而一顆沒配到的
    * 呼叫就是被中斷或跑到一半的那次，留著不會讓後面的檢查誤判，所以只在 end-seed 清。
    */
   const pendingCalls = new Set<string>();
