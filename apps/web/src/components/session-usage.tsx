@@ -1,6 +1,9 @@
 import type { WireSessionStats, WireTokenUsage } from '@nexus/wire';
-import { Coins } from 'lucide-react';
+import { ChevronRight, Coins } from 'lucide-react';
+import { useRef, useState } from 'react';
 
+import { Button } from '@/components/ui/button';
+import { useRightSidebar } from '@/components/right-sidebar';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { sessionUsageView } from '@/lib/session-usage-view';
 
@@ -24,6 +27,8 @@ function Rows({ rows }: { rows: readonly (readonly [string, string])[] }) {
  * - **popover，不是 tooltip**：手機上沒有 hover（同用量表）。
  * - **不掛 `role="status"`**：全站的 live region 只有狀態列一個，每次模型呼叫都唸一次太吵（同用量表）。
  * - 頂列不會被核准或提問面板換掉，所以不用像用量表那樣在 `hidden` 時自己關。
+ * - **底部「看明細」**（#1031，#1017 Q3 ②）：打開右側欄的成本分頁。沒有右側欄時不畫（同卡片的慣例）。按下去先關 popover，
+ *   而 Radix 關閉時會把焦點還給觸發鈕——那會蓋掉分頁要拿的焦點，所以這一次不還。
  */
 export function SessionUsage({
   tokenUsage,
@@ -33,10 +38,13 @@ export function SessionUsage({
   readonly sessionStats: WireSessionStats | null;
 }) {
   const view = sessionUsageView(tokenUsage, sessionStats);
+  const sidebar = useRightSidebar();
+  const [open, setOpen] = useState(false);
+  const toCost = useRef(false);
   if (view === null) return null;
   const { usage, time } = view;
   return (
-    <Popover>
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger
         aria-label={view.ariaLabel}
         data-testid="session-usage"
@@ -50,6 +58,11 @@ export function SessionUsage({
         align="end"
         aria-label="這條對話的用量明細"
         className="w-72 space-y-3 text-sm"
+        onCloseAutoFocus={(event) => {
+          if (!toCost.current) return;
+          toCost.current = false;
+          event.preventDefault();
+        }}
       >
         {usage !== undefined && (
           <section className="space-y-1.5" data-testid="session-usage-tokens">
@@ -80,6 +93,22 @@ export function SessionUsage({
               ]}
             />
           </section>
+        )}
+        {sidebar !== undefined && (
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-11 w-full justify-between lg:h-9"
+            data-testid="session-usage-detail"
+            onClick={(event) => {
+              toCost.current = true;
+              setOpen(false);
+              sidebar.openPanel('cost', event.currentTarget);
+            }}
+          >
+            看明細
+            <ChevronRight aria-hidden />
+          </Button>
         )}
       </PopoverContent>
     </Popover>

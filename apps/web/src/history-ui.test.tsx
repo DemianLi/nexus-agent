@@ -204,7 +204,8 @@ describe('畫面照日誌重播', () => {
     expect(lines[0]).toBe('記住暗號是藍鯨');
     expect(lines[1]).toContain('echo');
     expect(lines[1]).toContain('完成');
-    expect(lines[2]).toBe('記住了。');
+    // 回覆底下的讚踩列旁多了「這一輪的過程」（#1031），所以是「開頭是」而不是「整句是」。
+    expect(lines[2]).toMatch(/^記住了。/);
     expect(lines.at(-1)).toContain('即時的回覆');
   });
 

@@ -20,7 +20,7 @@
  * （`markdown-text.tsx`，#405），使用者說的照原文畫（人打的字不當 markdown 解）。
  */
 
-import { ArrowDown, ThumbsDown, ThumbsUp } from 'lucide-react';
+import { Activity, ArrowDown, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { useEffect, useMemo, useRef, useState } from 'react';
 
 import type {
@@ -41,6 +41,7 @@ import type { EarlierHistory } from '@/components/earlier-pager';
 import { MarkdownText } from '@/components/markdown-text';
 import { PlanToolCard } from '@/components/plan-review';
 import { ReasoningRow } from '@/components/reasoning-row';
+import { useRightSidebar } from '@/components/right-sidebar';
 import { AttributionBadge, ToolCard } from '@/components/tool-card';
 import { Button } from '@/components/ui/button';
 import { Message, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
@@ -84,6 +85,9 @@ export interface TranscriptFeedback {
 /**
  * 一則回覆底下的讚與踩。**已選的那顆實心、`aria-pressed`**，再點一次就是收回；另一顆開對話框
  * （照 dsh 的 `MessageFeedbackActions`）。
+ *
+ * 旁邊的「這一輪的過程」（#1031，#1017 Q3 ③）打開右側欄的觀測分頁；**只放入口，定位到那一輪歸 #1034**。它跟著讚踩列
+ * 一起出現，所以沒有評分外掛的部署、以及講到一半被停下來的那一輪（`isRatable` 為否）都看不到；沒有右側欄時不畫。
  */
 function RatingButtons({
   messageId,
@@ -92,6 +96,7 @@ function RatingButtons({
   messageId: string;
   feedback: TranscriptFeedback;
 }) {
+  const sidebar = useRightSidebar();
   const rating = feedback.ratings.get(messageId)?.rating;
   const likeLabel = rating === 'positive' ? FEEDBACK_COPY.likeActive : FEEDBACK_COPY.like;
   const dislikeLabel = rating === 'negative' ? FEEDBACK_COPY.dislikeActive : FEEDBACK_COPY.dislike;
@@ -127,6 +132,18 @@ function RatingButtons({
       >
         <ThumbsDown className={rating === 'negative' ? 'fill-current' : undefined} />
       </Button>
+      {sidebar !== undefined && (
+        <Button
+          type="button"
+          variant="ghost"
+          className="text-muted-foreground h-7 gap-1.5 px-2 text-xs"
+          data-testid="turn-trace"
+          onClick={(event) => sidebar.openPanel('trace', event.currentTarget)}
+        >
+          <Activity aria-hidden className="size-3.5" />
+          這一輪的過程
+        </Button>
+      )}
       {feedback.loadFailed && (
         <span className="text-muted-foreground text-xs" role="status">
           {FEEDBACK_COPY.load}

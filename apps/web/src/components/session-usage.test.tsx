@@ -1,14 +1,19 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SessionUsage } from '@/components/session-usage';
 import { axeViolations } from '@/test/axe';
+import { WithRightSidebar, memoryStorage } from '@/test/right-sidebar';
 
 /**
  * 頂列那顆「這條對話的用量」（#574）。什麼時候畫、字怎麼寫驗在 `lib/session-usage-view.test.ts`；這裡只驗畫出來的。
  */
 
-afterEach(cleanup);
+beforeEach(() => vi.stubGlobal('localStorage', memoryStorage()));
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 const usage = { inputTokens: 412_380, outputTokens: 9_815 };
 const stats = { turns: 4, steps: 17, llmMs: 133_000, toolMs: 38_400 };
@@ -66,5 +71,29 @@ describe('會話累計用量（#574）', () => {
     expect(await axeViolations(baseElement)).toEqual([]);
     fireEvent.click(chip());
     expect(await axeViolations(baseElement)).toEqual([]);
+  });
+});
+
+describe('看明細（#1031）', () => {
+  it('沒有右側欄時不畫：一顆按了沒反應的鈕比不給更糟', () => {
+    render(<SessionUsage tokenUsage={usage} sessionStats={stats} />);
+    fireEvent.click(chip());
+    expect(screen.queryByTestId('session-usage-detail')).toBeNull();
+  });
+
+  it('按下去關掉 popover、打開右側欄的成本分頁，焦點進那個分頁而不是被還給用量鈕', async () => {
+    render(
+      <WithRightSidebar sources={{}}>
+        <SessionUsage tokenUsage={usage} sessionStats={stats} />
+      </WithRightSidebar>,
+    );
+    fireEvent.click(chip());
+    fireEvent.click(screen.getByTestId('session-usage-detail'));
+    await act(async () => {});
+    expect(screen.queryByRole('dialog', { name: '這條對話的用量明細' })).toBeNull();
+    const tab = screen.getByRole('tab', { name: '成本' });
+    expect(tab.getAttribute('aria-selected')).toBe('true');
+    expect(document.activeElement).toBe(tab);
+    expect(screen.getByTestId('right-sidebar-panel-cost').textContent).toBe('尚無資料');
   });
 });
