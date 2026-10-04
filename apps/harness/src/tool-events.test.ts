@@ -293,6 +293,37 @@ describe('subagent 裡的呼叫', () => {
   });
 
   /**
+   * **未知工具的碼在子代理的疊裡也標得到**（#1024）。碼由最內層標（`invalid-tool-args.ts`），那一顆是槽位表裡
+   * `shared` 的一列；子代理那一欄漏接的話，這裡會退成沒碼的錯誤。
+   */
+  it('子代理叫不存在的工具：子代理那份記 UNKNOWN_TOOL', async () => {
+    const run = await assemble(
+      [
+        {
+          content: '委派。',
+          toolCalls: [{ name: 'task', args: { description: '幹活', subagent_type: 'worker' } }],
+        },
+        { content: '子代理動手。', toolCalls: [{ name: 'nope', args: {} }] },
+        { content: '子代理收工。' },
+        ...done,
+      ],
+      [toolsPlugin, workerPlugin],
+    );
+    try {
+      await run.agent.invoke(toAgentInvocation('跑。'), run.config);
+      const subagents = run.subagents();
+      expect(subagents).toHaveLength(1);
+      expect(resultsByName(subagents[0]!).get('nope')).toEqual({
+        callId: expect.any(String),
+        isError: true,
+        error: { name: 'ToolNotFoundError', code: 'UNKNOWN_TOOL' },
+      });
+    } finally {
+      await run.close();
+    }
+  });
+
+  /**
    * **沒有人註冊的 `general-purpose` 也一樣。** 它以前是基座自己補的那份，我們的 stack 一顆都
    * 沒有——跑完了，但 subagent 那份日誌根本沒出生，root 那份只看得到 `task`。
    */

@@ -55,6 +55,23 @@
  * dsh 那側它們看到的是原字串，兩者都沒有任何欄位，觀測政策這類按路徑判斷的因此原樣放行。
  * 時刻是 `tools/execute`，佔用者的索引見 `apps/harness/src/interception-index.test.ts`。
  *
+ * ## 未知工具在這一層認（[#1024](https://github.com/DemianLi/nexus-agent/issues/1024)）
+ *
+ * 交到這一層時 `request.tool` 還是 `undefined` 的呼叫，基座按名字也查不到（`ToolNode.js:209-221`），
+ * 它回的錯誤結果在這裡標上 `UNKNOWN_TOOL`，碼經 `tool-events.ts` 的載體走到圍堵記進日誌。dsh 那側
+ * `ToolNotFoundError` 是在派發那一步、查註冊表落空時拋的（`packages/core/tools/src/index.ts:1578-1579`，
+ * `5badb15`），註解明寫未知工具走派發階段（`:1400-1406`）。所以外層 policy 自己回的拒絕不可能是 `UNKNOWN_TOOL`。
+ *
+ * **之前是圍堵在第 0 格看 `request.tool === undefined` 猜的，猜錯過**：`subagent` 是
+ * `apps/harness/src/background-delegation.ts` 在 `wrapModelCall` 加給模型的，ToolNode 的工具表裡沒有它，
+ * 第 0 格看到的 `request.tool` 永遠是 `undefined`；它在外層回的每一則沒碼的拒絕（例如前景不能指定
+ * `reasoning_effort`）都被記成 `UNKNOWN_TOOL`，離線掃描因此說模型叫了不存在的工具。這一層在每一顆
+ * 會自己回拒絕的 middleware 內側，到得了這裡、`request.tool` 又還是空的，才是真的要交給基座查名字的那次。
+ *
+ * **判準成立的前提**：比這一層更內側的沒有人設 `request.tool`（只有 {@link ./max-tokens.ts}，它只看 `task`、
+ * 原樣交回結果）；外層改 `toolCall.name` 的只有 `background-delegation.ts` 的前景改派，而它同時設了
+ * `request.tool`。哪天有一層只改名不設工具，基座會按新名字找到工具，這裡卻還以為沒有。
+ *
  * ## 登記的偏離
  *
  * 1. **回送用 `{}`**，照 dsh 多供應商的 pi-ai 轉接器（`packages/llm/llm-pi-ai/src/replay.ts:43-54`），
@@ -90,12 +107,20 @@
  * 代價：原字串在日誌裡有兩份（`tool/call.arguments` 與這則 AI 訊息）。
  */
 
-import { AIMessage } from '@langchain/core/messages';
+import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { ToolCall } from '@langchain/core/messages/tool';
 import { tool as makeTool } from '@langchain/core/tools';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { INVALID_ARGS, TOOL_ERROR_PREFIX, toolCallIdOf, toolRefusal } from './tool-events.js';
+import {
+  INVALID_ARGS,
+  markToolError,
+  TOOL_ERROR_PREFIX,
+  toolCallIdOf,
+  toolErrorOf,
+  toolRefusal,
+  UNKNOWN_TOOL,
+} from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
 /** 這顆 middleware 的名字。排序斷言用得到。 */
@@ -115,6 +140,29 @@ export const INVALID_ARGUMENTS_REFUSAL = TOOL_ERROR_PREFIX + INVALID_ARGUMENTS_R
 
 /** 碼照 dsh 的 `ToolArgsError`，同圍堵認出 schema 不合時給的那一組。 */
 const INVALID_ARGS_ERROR: ToolErrorInfo = { name: 'ToolArgsError', code: INVALID_ARGS };
+
+/** 基座自己回的「沒有這顆工具」。碼照 dsh 的 `ToolNotFoundError`。 */
+const UNKNOWN_TOOL_ERROR: ToolErrorInfo = { name: 'ToolNotFoundError', code: UNKNOWN_TOOL };
+
+/**
+ * 交到基座手上時還沒有工具的那次呼叫，回來的錯誤結果標上 `UNKNOWN_TOOL`（[#1024](https://github.com/DemianLi/nexus-agent/issues/1024)）。
+ *
+ * 那則是基座自己回的「沒有這顆工具」（`langchain@1.5.10` `ToolNode.js:209-221`：`request.tool` 與按名字查都落空）。
+ * **只標沒碼的錯誤**：成功的、已經有碼的原樣不動；`Command` 也不動——基座這條路只回 ToolMessage。
+ *
+ * @param result - `handler(request)` 回來的值。
+ * @returns 同一個值。
+ */
+function markUnknownTool<T>(result: T): T {
+  if (
+    ToolMessage.isInstance(result) &&
+    result.status === 'error' &&
+    toolErrorOf(result) === undefined
+  ) {
+    markToolError(result, UNKNOWN_TOOL_ERROR);
+  }
+  return result;
+}
 
 /**
  * 記號放在 AI 訊息 `additional_kwargs` 的哪一格：`{ [callId]: 原字串 }`。
@@ -257,11 +305,12 @@ export function createInvalidToolArgsMiddleware(): AgentMiddleware {
       const response = await handler(request);
       return AIMessage.isInstance(response) ? repairInvalidToolCalls(response) : response;
     },
-    wrapToolCall: (request, handler) => {
+    wrapToolCall: async (request, handler) => {
+      // **未知工具不換樁，碼在這裡標**：基座自己回「沒有這顆工具」，這一層把它標成 `UNKNOWN_TOOL`——同 dsh
+      // 先認工具、再驗參數（`packages/core/tools/src/index.ts:1365`）。理由與位置見檔頭「未知工具在這一層認」。
+      if (request.tool === undefined) return markUnknownTool(await handler(request));
       const raw = rawArgumentsOf(request);
-      // **未知工具不換樁**：基座自己回「沒有這顆工具」，圍堵記成 `UNKNOWN_TOOL`——同 dsh 先認工具、
-      // 再驗參數（`packages/core/tools/src/index.ts:1365`）。
-      if (raw === undefined || request.tool === undefined) return handler(request);
+      if (raw === undefined) return handler(request);
       // **參數不換，照歷史裡的 `{}` 交下去**：換成原字串的話，langchain 的 v3 串流轉換器對
       // `tool-started` 的 `input` 做 `JSON.parse`（`langchain@1.5.10`
       // `dist/agents/transformers/tool-call.js:93`），整條串流當場拋掉（實測）。

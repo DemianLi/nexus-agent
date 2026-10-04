@@ -20,8 +20,9 @@
  * 的失敗——fence 擋的那條帶 `FS_SANDBOX_DENIED`，見 {@link ./fs-tool-errors.ts}——以及 goal、
  * todo、計劃模式、root-only 樁那些「這次呼叫沒有生效」的拒絕，見 {@link toolRefusal}）自己產一則
  * `status: 'error'` 的 ToolMessage，
- * 那則訊息原樣一路回到圍堵。唯一不是自己產的：fence 擋下非檔案工具（`submit_record`）時，碼補在
- * 工具自己回的那則上（#316）。碼**不能寫進訊息本身**：`additional_kwargs` 在轉成供應商格式時
+ * 那則訊息原樣一路回到圍堵。不是自己產的有兩處：fence 擋下非檔案工具（`submit_record`）時，碼補在
+ * 工具自己回的那則上（#316）；基座回的「沒有這顆工具」由最內層補上 `UNKNOWN_TOOL`
+ * （`invalid-tool-args.ts`，#1024）。碼**不能寫進訊息本身**：`additional_kwargs` 在轉成供應商格式時
  * 會被讀回去（`@langchain/openai` 的 `converters/completions.js:472`），寫進去就是改了模型的
  * 輸入。所以碼掛在一張以訊息為鍵的 `WeakMap` 上，對應 dsh `ToolExecutionResult.error.info`
  * 那種與模型可見內容分開走的欄位。**載體只在同一個行程、同一個物件上成立**——實測內層換出來
@@ -97,8 +98,9 @@ const marked = new WeakMap<object, ToolErrorInfo>();
 
 /**
  * 替一則錯誤結果標上碼。**只標自己產的那則，或自己握有成因的那則**——原樣轉交、不知道為什麼
- * 失敗的別人的訊息不要標。後者今天只有一處：fence 擋下非檔案工具時由 `fs-tool-errors.ts` 補碼，
- * 成因是 fence 自己的回報。
+ * 失敗的別人的訊息不要標。後者今天有兩處：fence 擋下非檔案工具時由 `fs-tool-errors.ts` 補碼，
+ * 成因是 fence 自己的回報；基座回「沒有這顆工具」時由 `invalid-tool-args.ts` 補 `UNKNOWN_TOOL`，
+ * 成因是那次呼叫交到基座時還沒有工具（#1024）。
  *
  * @param message - 要回給上一層的那則 ToolMessage。
  * @param info - 它是哪一種失敗。
