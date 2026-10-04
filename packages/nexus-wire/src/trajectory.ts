@@ -132,6 +132,11 @@ export interface TrajectoryCall {
   readonly time: number;
   readonly endTime?: number;
   readonly durationMs?: number;
+  /**
+   * 這次呼叫沒有正常回來的方式（`model/end.outcome`，#1022）：`error` ＝ 拋錯，`aborted` ＝ 使用者按了停止。
+   * 沒有這一格 ＝ 正常回來，或舊日誌。失敗的呼叫若供應商報過用量，數字在 `usage` 裡。
+   */
+  readonly outcome?: 'error' | 'aborted';
   /** 模型 id（取自當時生效的請求快照）。 */
   readonly model?: string;
   /** 當時生效的 `request/system` 的位置；細節在 `request-snapshots` 投影。 */

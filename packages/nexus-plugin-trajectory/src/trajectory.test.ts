@@ -69,6 +69,27 @@ function simpleTurn(log: SessionLog, text: string): void {
   log.append('turn/end', {});
 }
 
+describe('失敗與中止的呼叫（#1022）', () => {
+  it('model/end 帶 outcome 的呼叫在 view 上標出來，它報的用量照常在 usage；正常的呼叫沒有這一格', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    const failed = log.append('model/start', {});
+    log.append('model/usage', {
+      inputTokens: 7,
+      outputTokens: 0,
+      totalTokens: 7,
+      outcome: 'error',
+      modelCall: failed.seq,
+    });
+    log.append('model/end', { outcome: 'error', modelCall: failed.seq });
+    const ok2 = log.append('model/start', {});
+    log.append('model/end', { modelCall: ok2.seq });
+    const [first, second] = foldAll([...log.events]).turns[0]!.calls;
+    expect(first).toMatchObject({ outcome: 'error', usage: { inputTokens: 7 } });
+    expect(second).not.toHaveProperty('outcome');
+  });
+});
+
 describe('一輪的結構', () => {
   it('呼叫、用量、重試、回覆、工具各歸到自己的那一次呼叫', () => {
     const log = new SessionLog('t');
