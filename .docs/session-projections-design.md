@@ -67,8 +67,12 @@ interface ProjectionUnit<S, V> {
   即時只送之後的變化」，投影照同一個分工；新開 thread 的 key 集合來自它的空歷史頁。測試要釘「空日誌的歷史頁每個單元都有 frame」。
 - **單元清單從哪來**：`historyPage` 由 `wire-handler.ts` 呼叫、不經過 pump，所以清單要走 wire-handler 的選項（跟 `toolText` 一樣由組裝點傳入），
   不能只綁在某個 pump 上，否則冷 thread（server 重啟後第一次打開、還沒有 pump）的歷史沒有單元清單。PR3 開工前先追組裝點確認。
-- 只折 **root** 日誌，同現有的 todos／goal／plan 等：歷史路由只讀 root，子代理的即時送出去重新整理就不見了。
-  dsh 有子代理自己的投影（`subagent` key），我們今天沒有需要，**不做**，這是已知差距而不是偏離。
+- 預設只折 **root** 日誌，同現有的 todos／goal／plan 等。**單元可以宣告 `children: true`**
+  （[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)）：這樣的單元也對每個子代理自己的日誌各折一份，
+  值帶 `session`（子代理的 `runId`）送出，web 收進 `subagentProjections[runId][key]`。形狀照 dsh（投影格子按 session 分、
+  一份日誌一份折疊，單元的 `apply` 不必知道在折誰）。子日誌的集合只有 pump 一份（`projectionChildren()`，活著的取記憶體、
+  上一個行程留下的啟動時讀進來），即時與歷史讀同一份；細節見 `apps/harness/src/projection-children.ts`。
+  沒有宣告 `children` 的單元一顆子代理事件都收不到。
 - `disabled: true` 關掉插件 → 註冊表裡沒有那個單元 → 歷史與即時都不送 → web 的 `projections` 沒有那個 key。
   dsh 同樣**不推移除 frame**（mandatory-seam note 第 29 行：註冊表增減不跨串流廣播），靠下一份 baseline 反映。
 - 圖自己發的 `custom` frame **照舊一律丟**（`thread-pump.ts` 的 `raw.method === 'custom'` 那條）。`projection` 只能由 pump 從日誌折出來，
@@ -95,7 +99,7 @@ dsh 的 `stateVersion` 是**持久化快取的失效版本**：序列化欄位�
 | `stateSchema`／`viewSchema` 驗證 | 有 | 沒有；`view` 只要求純 JSON，形狀由 web 渲染器自己驗 | 本次不做 |
 | 獨立 host 全域 control 串流與 baseline／逐 key frame | 有 | 一條 `custom` channel；歷史補 baseline、即時送增量 | 載體不同 |
 | 按 key 定址、帶 seq 的 client store | 有（seq 高者贏） | `projections[key]` 整份取代；frame 層已有單一 `lastSeq` 去重 | 載體不同 |
-| 子代理自己的投影 | 有 | 不做（只 root） | 差距 |
+| 子代理自己的投影 | 有（每個 session 一份格子） | 有，單元宣告 `children: true` 才折；值落在 `subagentProjections[runId][key]` | 載體不同 |
 | 單元拋錯 | 只在事件派發層圍堵；之後同單元一直重拋、snapshot 一直拋 | 逐單元圍堵，該 key 送 `failed: true`，不影響別的單元 | 卡的驗收，比 dsh 多一層 |
 | 同 key 多方註冊（refs） | 有 | 重複即拋 | 沒有 HMR |
 

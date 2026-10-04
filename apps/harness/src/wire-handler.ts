@@ -130,6 +130,7 @@ import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { isTrustedWireRequest } from './request-trust.js';
+import { readProjectionChildSeeds } from './projection-children.js';
 import type { StoredThreadList } from './session-list.js';
 import type { PumpAgent, QueueAction } from './thread-pump.js';
 import { ThreadFeed } from './thread-feed.js';
@@ -769,6 +770,14 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           threadAgent.stepInbox === true,
           options.sessionReferenceReader,
           threadAgent.projections?.list(),
+          // 上一個行程留下的子代理日誌（#1028）：只有註冊了要折子代理的單元、又接了落盤才讀，見 `projection-children.ts`。
+          await readProjectionChildSeeds(
+            threadId,
+            threadAgent.rootSeed,
+            threadAgent.projections?.list() ?? [],
+            options.readSubagentSession,
+            options.warn,
+          ),
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
@@ -1456,6 +1465,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         toolTextLimits,
         threadTitleLimits,
         thread.pump.projectionUnits,
+        thread.pump.projectionChildren(),
       );
     } catch (error: unknown) {
       if (error instanceof HistoryQueryError) {

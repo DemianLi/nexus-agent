@@ -587,6 +587,11 @@ export interface ConversationState {
    */
   readonly projections: Readonly<Record<string, WireProjection>>;
   /**
+   * 子代理自己的插件投影（#1028）：`runId` → `key` → 最後一顆的整份值，與 {@link projections} 同一種格子、同一套規則
+   * （整份取代、不認得的 version 由渲染它的元件擋）。只有宣告 `children` 的單元會有；root 那一格不受影響。
+   */
+  readonly subagentProjections: Readonly<Record<string, Readonly<Record<string, WireProjection>>>>;
+  /**
    * 會話目前的目標與階段（#897）：最後一顆 `goal` frame 的整份值。**沒有目標（從沒建立、或清掉了、或還沒收到）就是
    * `null`**，不分這幾種——理由與少了 dsh 的 activation 見 `goal.ts`。只算 root。它是「現在」的事，所以
    * {@link prependEntries} 不動它。
@@ -641,6 +646,7 @@ export function emptyConversation(): ConversationState {
     todos: null,
     planMode: null,
     projections: {},
+    subagentProjections: {},
     goal: null,
     tokenUsage: null,
     sessionStats: null,
@@ -1130,11 +1136,12 @@ function reducePlanMode(state: ConversationState, payload: object): Conversation
  * `failed` 存在卻不是 `true`、或 `failed` 時 `view` 不是 `null`，整顆不收。`view` 是什麼由渲染它的元件驗，這一層不看。
  */
 function reduceProjection(state: ConversationState, payload: object): ConversationState {
-  const { key, version, view, failed } = payload as {
+  const { key, version, view, failed, session } = payload as {
     key?: unknown;
     version?: unknown;
     view?: unknown;
     failed?: unknown;
+    session?: unknown;
   };
   if (typeof key !== 'string' || !PROJECTION_KEY_PATTERN.test(key)) return state;
   if (typeof version !== 'number' || !Number.isInteger(version) || version < 0) return state;
@@ -1143,7 +1150,18 @@ function reduceProjection(state: ConversationState, payload: object): Conversati
   if (view === undefined) return state;
   const next: WireProjection =
     failed === true ? { version, view: null, failed: true } : { version, view };
-  return { ...state, projections: { ...state.projections, [key]: next } };
+  if (session === undefined) {
+    return { ...state, projections: { ...state.projections, [key]: next } };
+  }
+  // 子代理自己的值（#1028）：`session` 要是非空字串，不然整顆不收（不退回寫進 root 那一格）。
+  if (typeof session !== 'string' || session === '') return state;
+  return {
+    ...state,
+    subagentProjections: {
+      ...state.subagentProjections,
+      [session]: { ...state.subagentProjections[session], [key]: next },
+    },
+  };
 }
 
 /** 清單裡的一項長得對不對：同 dsh 的 `todosProjectionSchema`。 */
