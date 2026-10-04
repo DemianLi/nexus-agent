@@ -26,7 +26,8 @@
  * 也還在比對 `task`——這幾處歸 #832，預設關的今天不會被走到。
  *
  * `subagent` 的描述取自當次請求裡 `task` 的描述（改掉跟背景矛盾的兩句，見 {@link TASK_DESCRIPTION_REWRITES}），所以子代理清單永遠與 fold 定的同步，不另外維護。子代理的疊
- * （plugin middleware 也射進去，#327）沒有 `task`，所以在那裡什麼都不做，不需要 rootOnly 樁。
+ * （plugin middleware 也射進去，#327）沒有 `task`，所以 `wrapModelCall` 在那裡什麼都不做；`wrapToolCall` 則要明確放行
+ * 子代理幻覺出來的 `subagent` 呼叫（#1045），不然它會被這一層接手、派出孫代理。
  *
  * ## 沙箱快照
  *
@@ -392,6 +393,15 @@ export class BackgroundDelegation {
       },
       wrapToolCall: async (request, handler) => {
         if (request.toolCall.name !== SUBAGENT_TOOL_NAME) return handler(request);
+        // **子代理那一層不接手**（[#1045](https://github.com/DemianLi/nexus-agent/issues/1045)）：子代理的模型看不到 `subagent`
+        // （上面的 `wrapModelCall` 沒有 `task` 就什麼都不加），幻覺出這個呼叫時照放行——往內落到「找不到工具」，最內層標
+        // `UNKNOWN_TOOL`（#1024）。接手的話前景與背景的子代理都能再派出孫代理（實測四種組合都派得出去）。認的是呼叫者的會話
+        // 身分，前景（`checkpoint_ns`）與背景（身分鍵）兩條路都認得到。照 dsh 預設 `maxDepth = 1`（`packages/subagent/subagent/src/index.ts:200`）：
+        // 子代理再派一層一律被拒；差別只在 dsh 的工具對子代理仍可見、由執行期丟 `SubagentDepthError`，我們的工具從沒給它看，所以走「沒有這顆工具」。
+        const caller = toolCallSessionAddress({
+          configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+        });
+        if (caller?.kind === 'subagent') return handler(request);
         const callId = request.toolCall.id ?? '';
         const selection = this.#options.modelSelection;
         // 沒開選模型卻帶了這兩格：拒絕，不靜靜忽略（zod 預設會丟掉多餘欄位，模型會以為選了）。dsh：關著的實例不但不顯示、還拒絕。

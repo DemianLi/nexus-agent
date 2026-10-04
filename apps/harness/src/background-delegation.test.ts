@@ -1118,3 +1118,65 @@ describe('背景路徑上的 #326：沙箱快照', () => {
     }
   });
 });
+
+describe('子代理那一層不接手 subagent 呼叫（#1045）', () => {
+  /**
+   * 子代理的模型看不到 `subagent`，這裡讓它幻覺出這個呼叫。修之前，子代理那一層的 `wrapToolCall` 只看工具名，
+   * 前景與背景的子代理都能再派出孫代理（背景的多出一份 `bg-` 日誌、前景的多出一層 `tools:` 巢狀日誌）。
+   * 照 dsh 預設 `maxDepth = 1`：子代理再派一層一律被拒；我們的工具從沒給子代理看，所以走「沒有這顆工具」。
+   */
+  const cases = [
+    ['前景子代理叫 subagent（背景）', delegate(false), delegate(true, '孫')],
+    ['前景子代理叫 subagent（前景）', delegate(false), delegate(false, '孫')],
+    ['背景子代理叫 subagent（背景）', delegate(true), delegate(true, '孫')],
+    ['背景子代理叫 subagent（前景）', delegate(true), delegate(false, '孫')],
+  ] as const;
+
+  it.each(cases)('%s：被當成不存在的工具，沒有孫代理', async (_label, rootTurn, grandchild) => {
+    const run = await assemble({
+      rootTurns: [rootTurn, { content: '根收尾' }],
+      // 子代理的第一步幻覺出 subagent，第二步收尾；若被接手，還會多吃一步（孫代理的腳本）。
+      workerTurns: [grandchild, { content: '子收尾' }, { content: '孫答' }],
+      background: {},
+    });
+    try {
+      await run.say();
+      // 背景那一輪不在父輪裡等：等它收尾，免得看的是一半。
+      const logs = () => run.backgroundLogs();
+      await until(() => logs().length >= 1);
+      for (const log of logs()) {
+        await until(() => log.events.some((event) => event.type === 'model/end'));
+      }
+      await settle();
+
+      // 只有一份子代理日誌（前景的 `tools:` 那條、或背景的 `bg-` 那條），沒有第二層。
+      expect(logs()).toHaveLength(1);
+      expect(run.workerModel.prompts).toHaveLength(2);
+      // 子代理拿到的是基座「沒有這顆工具」的結果，日誌標 UNKNOWN_TOOL（#1024），不是別的碼。
+      expect(toolTexts(run.workerModel.prompts.flat())).toEqual([
+        expect.stringContaining('subagent is not a valid tool'),
+      ]);
+      const results = logs()[0]!.events.filter((event) => event.type === 'tool/result');
+      expect(results).toHaveLength(1);
+      expect(results[0]?.data).toMatchObject({ isError: true, error: { code: 'UNKNOWN_TOOL' } });
+      expect(unhandled).toEqual([]);
+    } finally {
+      await run.close();
+    }
+  });
+
+  it('root 自己叫 subagent 照舊派得出去（同一支組裝，對照組）', async () => {
+    const run = await assemble({
+      rootTurns: [delegate(true), { content: '根收尾' }],
+      workerTurns: [{ content: '背景做完' }],
+      background: {},
+    });
+    try {
+      const result = await run.say();
+      expect(toolTexts(result.messages)[0]).toMatch(/bg-[0-9a-f]{12}/);
+      await until(() => run.backgroundLogs().length === 1);
+    } finally {
+      await run.close();
+    }
+  });
+});
