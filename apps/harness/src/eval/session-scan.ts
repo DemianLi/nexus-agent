@@ -65,7 +65,7 @@
  * - 有 `build` 那一格不代表修好之後寫的。#1040 自己的分支上 `ee07d29c1` 已經會寫 `build`，卻是在 #1039 合併
  *   之前提交、還沒併進 develop 的那一版——那個 commit 跑出來的日誌帶 commit、而拒絕照舊記成 `UNKNOWN_TOOL`。
  * - 拿 commit 去問「`4b6faef` 是不是它的祖先」也不準：feature 分支的 commit 被 squash 掉、遠端分支合併後刪除，
- *   別的 clone 上查不到那個 commit；`dirty` 為真時跑的不是那個 commit 的程式碼；`commit` 可能是 `null`。
+ *   別的 clone 上可能查不到那個 commit；`dirty` 為真時跑的不是那個 commit 的程式碼；`commit` 可能是 `null`。
  *   而且掃描得在讀檔時去叫 git，這支腳本就不再只是讀檔的純函式。
  *
  * **另一件版本也帶不出來**：續接過的檔，header 在第一次續寫時被蓋成當時的版本，而續接之前那一段
