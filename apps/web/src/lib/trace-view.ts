@@ -242,10 +242,18 @@ export type TraceRow =
 
 /** 一輪的標題。取自投影，只放原始值。 */
 export interface TurnHead {
-  readonly index: number;
+  /**
+   * 第幾個**邏輯輪**（1 起）：核准後續接的 `resume` 併回它接著的那一輪、不另外編號，與 #1028 的用量折疊同一套（兩個分頁的輪才對得上）。
+   * 投影的 `index` 把每顆 `turn/start` 都算進去、含 `resume`，所以不能直接拿來當編號。`omitted` 裡看不到的輪當成都是邏輯輪，
+   * 超過窗口與摘要（約 200 輪）的長會話裡，編號可能比實際大一點（被省略的續接輪無從得知）。
+   */
+  readonly number: number;
   readonly kind: TrajectoryTurnKind;
   readonly time: number;
   readonly end?: TrajectoryEnd;
+  /** 這一輪（含併進來的續接）收尾的時刻；還沒結束沒有。 */
+  readonly endTime?: number;
+  /** 牆鐘：第一顆 `turn/start` 到最後收尾，**含停在核准點等人的時間**（同 #1028）。 */
   readonly durationMs?: number;
   readonly callCount: number;
   readonly toolCount: number;
@@ -564,22 +572,34 @@ function assignSlots(
       }
     } else if (
       current !== undefined &&
-      current.call === undefined &&
       (entry.kind === 'ai' || entry.kind === 'tool') &&
       entry.attribution.kind === 'root'
     ) {
-      // 還在吐字的回覆、還在跑的工具：歸給這一輪還在進行的那次呼叫，免得回覆落地時列從段落上方跳到下方。
+      // 還在吐字的回覆、還在跑的工具：歸給這一輪還在進行的那次呼叫（不只是第一次），免得回覆落地時列從段落上方跳到下方。
       const call = inFlight(current.turn);
-      if (call !== undefined) current = { turn: current.turn, call };
+      if (call !== undefined && (current.call === undefined || call > current.call)) {
+        current = { turn: current.turn, call };
+      }
     }
     out.push(current);
   });
   return out;
 }
 
-function headOf(digest: TrajectoryDigest): TurnHead {
+/** 投影的 turn/start seq → 第幾個邏輯輪，見 {@link TurnHead.number}。 */
+function logicalNumbers(view: TrajectoryView): ReadonlyMap<number, number> {
+  const numbers = new Map<number, number>();
+  let count = view.omitted;
+  for (const item of [...view.digests, ...view.turns]) {
+    if (item.logical) count += 1;
+    numbers.set(item.seq, Math.max(count, 1));
+  }
+  return numbers;
+}
+
+function headOf(digest: TrajectoryDigest, number: number): TurnHead {
   return {
-    index: digest.index,
+    number,
     kind: digest.kind,
     time: digest.time,
     callCount: digest.callCount,
@@ -589,8 +609,48 @@ function headOf(digest: TrajectoryDigest): TurnHead {
     inputTokens: digest.inputTokens,
     outputTokens: digest.outputTokens,
     ...(digest.end === undefined ? {} : { end: digest.end }),
+    ...(digest.endTime === undefined ? {} : { endTime: digest.endTime }),
     ...(digest.durationMs === undefined ? {} : { durationMs: digest.durationMs }),
   };
+}
+
+/** 把接在後面的 `resume` 併進它接著的那一輪：計數相加，收尾取最後一段，牆鐘從第一段開始算（含等人核准）。 */
+function mergeHead(first: TurnHead, resume: TurnHead): TurnHead {
+  const elidedCalls = (first.elidedCalls ?? 0) + (resume.elidedCalls ?? 0);
+  const elidedTools = (first.elidedTools ?? 0) + (resume.elidedTools ?? 0);
+  return {
+    number: first.number,
+    kind: first.kind,
+    time: first.time,
+    callCount: first.callCount + resume.callCount,
+    toolCount: first.toolCount + resume.toolCount,
+    toolErrors: first.toolErrors + resume.toolErrors,
+    retryCount: first.retryCount + resume.retryCount,
+    inputTokens: first.inputTokens + resume.inputTokens,
+    outputTokens: first.outputTokens + resume.outputTokens,
+    ...(resume.end === undefined ? {} : { end: resume.end }),
+    ...(resume.endTime === undefined
+      ? {}
+      : { endTime: resume.endTime, durationMs: resume.endTime - first.time }),
+    ...(elidedCalls > 0 ? { elidedCalls } : {}),
+    ...(elidedTools > 0 ? { elidedTools } : {}),
+  };
+}
+
+/** 摘要或輪的標題清單：`resume` 併回前一項（清單第一項若是 `resume`，它的前一輪在清單之外，原樣留著）。 */
+function foldResumes<T extends { readonly head: TurnHead; readonly logical: boolean }>(
+  items: readonly T[],
+): T[] {
+  const out: T[] = [];
+  for (const item of items) {
+    const previous = out.at(-1);
+    if (!item.logical && previous !== undefined) {
+      out[out.length - 1] = { ...previous, head: mergeHead(previous.head, item.head) };
+    } else {
+      out.push(item);
+    }
+  }
+  return out;
 }
 
 function snapshotRowParts(
@@ -660,7 +720,13 @@ function structuredTurns(
     }
   });
 
-  const turns: TraceTurn[] = view.turns.map((turn, t) => {
+  const numbers = logicalNumbers(view);
+  const groups: { key: string; rows: TraceRow[]; head: TurnHead }[] = [];
+  view.turns.forEach((turn, t) => {
+    // `resume`（核准後續接）併回前一個邏輯輪：同一輪、同一組，編號不加。
+    const previous = groups.at(-1);
+    const merging = !turn.logical && previous !== undefined;
+    const callBase = merging ? previous.head.callCount : 0;
     const rows: TraceRow[] = [...(pre[t] ?? [])];
     const skipped = turn.elided?.calls ?? 0;
     const decisions = turn.decisions.filter((d) => d.kind !== 'compaction');
@@ -687,7 +753,7 @@ function structuredTurns(
         kind: 'call',
         key: `call-${call.id}`,
         target: callTarget[t]?.[c],
-        n: skipped + c + 1,
+        n: callBase + skipped + c + 1,
         time: call.time,
         toolCount: call.tools.length,
         retryCount: call.retries.length,
@@ -716,26 +782,43 @@ function structuredTurns(
           ...(retry.waitedMs === undefined ? {} : { waitedMs: retry.waitedMs }),
         });
       }
-      rows.push(...loadedRows);
+      for (const row of loadedRows) {
+        // 人的核准、人的答案是對「停下來等人」的回答：把還沒排進去的那幾顆停下來的提醒先放在它前面。
+        if (row.kind === 'decision' || row.kind === 'answer') {
+          const lastInterrupt = decisions.findLastIndex(
+            (d, i) => i >= next && d.kind === 'interrupt',
+          );
+          if (lastInterrupt >= 0) flushSignals((decisions[lastInterrupt]?.seq ?? 0) + 1);
+        }
+        rows.push(row);
+      }
     });
     flushSignals(Number.POSITIVE_INFINITY);
     const elidedTools = turn.elided?.tools;
-    return {
-      key: `turn-${turn.seq}`,
-      rows,
-      legacy: false,
-      head: {
-        ...headOf(turn),
-        ...(skipped > 0 ? { elidedCalls: skipped } : {}),
-        ...(elidedTools !== undefined && elidedTools > 0 ? { elidedTools } : {}),
-      },
+    const head: TurnHead = {
+      ...headOf(turn, numbers.get(turn.seq) ?? 1),
+      ...(skipped > 0 ? { elidedCalls: skipped } : {}),
+      ...(elidedTools !== undefined && elidedTools > 0 ? { elidedTools } : {}),
     };
+    if (merging) {
+      previous.rows.push(...rows);
+      previous.head = mergeHead(previous.head, head);
+    } else {
+      groups.push({ key: `turn-${turn.seq}`, rows, head });
+    }
   });
+  const turns: TraceTurn[] = groups.map((group) => ({ ...group, legacy: false }));
 
   return {
     structured: true,
     turns: [...legacyGroups(leading), ...turns, ...legacyGroups(trailing)],
-    digests: view.digests.map((digest) => ({ ...headOf(digest), key: `digest-${digest.index}` })),
+    digests: foldResumes(
+      view.digests.map((digest) => ({
+        head: headOf(digest, numbers.get(digest.seq) ?? 1),
+        logical: digest.logical,
+        key: `digest-${digest.index}`,
+      })),
+    ).map(({ head, key }) => ({ ...head, key })),
     omitted: view.omitted,
   };
 }

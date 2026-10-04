@@ -8,7 +8,7 @@
  * `lib/trace-view.ts`，這裡只畫。UI/UX 以 shadcn＋Tailwind 為基底、Libraries.dev 為模仿對象，不是照 dsh 的
  * `ui-trajectory` 畫時間線。
  *
- * - **畫面上的列數有上限**：只畫最新的 {@link TURN_PAGE} 組、更早的按「顯示更早的」再展開；窗口外的輪摘要（最多 200 列）收在
+ * - **畫面上的列數有上限**：只畫最新的 {@link TURN_PAGE} 組、每組只畫最新的 {@link ROW_PAGE} 列，更早的按「顯示更早的」再展開；窗口外的輪摘要（最多 200 列）收在
  *   一個摺起來的區塊、同樣分段。投影每顆事件整份換掉，所以列只放原始值（`lib/trace-view.ts`），`memo` 才擋得住。
  * - **資料走可訂閱的 store**（`sources.conversation`），而且**只在看得見時訂閱**（`useVisibleSnapshot`）：分頁藏起來時
  *   不卸載（保住捲動位置與展開狀態），但串流的逐字片段不會讓它重算。
@@ -484,9 +484,12 @@ function Limits({ structured }: { structured: boolean }) {
 export const TURN_PAGE = 12;
 /** 窗口外的輪摘要一次畫幾列。 */
 export const DIGEST_PAGE = 20;
+/** 一組裡一次畫幾列（最新的）；單輪可以很長（目標自己排的輪、一輪幾百次呼叫），列數不設限畫面會凍住。 */
+export const ROW_PAGE = 200;
 
 export const TRACE_MORE_TURNS_LABEL = '顯示更早的輪';
 export const TRACE_MORE_DIGESTS_LABEL = '顯示更早的摘要';
+export const TRACE_MORE_ROWS_LABEL = '顯示更早的列';
 export const TRACE_LEGACY_GROUP_TEXT = '沒有結構資料的一輪：以人說的那一句切開';
 
 /** 一輪的數字（呼叫、工具、重試、token）；摺掉的部分仍算在計數裡，所以另外講。 */
@@ -513,7 +516,7 @@ function TurnHeader({ head }: { head: TurnHead }) {
   return (
     <header className="px-2 pt-1 pb-1" data-testid="trace-turn-head">
       <h3 className="text-foreground text-sm font-medium">
-        第 {head.index + 1} 輪
+        第 {head.number} 輪
         <span className="text-muted-foreground ml-2 text-xs font-normal">
           {TURN_KIND_LABEL[head.kind]}
         </span>
@@ -545,7 +548,10 @@ function TurnGroup({
   missing: string | undefined;
   onLocate: (row: TraceRow) => void;
 }) {
-  const title = turn.head === undefined ? '' : `第 ${turn.head.index + 1} 輪`;
+  const title = turn.head === undefined ? '' : `第 ${turn.head.number} 輪`;
+  const [shown, setShown] = useState(ROW_PAGE);
+  const hiddenRows = Math.max(0, turn.rows.length - shown);
+  const rows = hiddenRows === 0 ? turn.rows : turn.rows.slice(hiddenRows);
   return (
     <section
       className="border-border mb-4 border-l pl-1"
@@ -558,11 +564,22 @@ function TurnGroup({
           {TRACE_LEGACY_GROUP_TEXT}
         </p>
       )}
+      {hiddenRows > 0 && (
+        <Button
+          type="button"
+          variant="ghost"
+          className="min-h-11 w-full text-xs lg:min-h-9"
+          data-testid="trace-more-rows"
+          onClick={() => setShown((count) => count + ROW_PAGE)}
+        >
+          {TRACE_MORE_ROWS_LABEL}（還有 {hiddenRows} 列）
+        </Button>
+      )}
       <ol
         aria-label={`${title}的過程，共 ${turn.rows.length} 列`.trimStart()}
         className="flex flex-col gap-0.5"
       >
-        {turn.rows.map((row) => (
+        {rows.map((row) => (
           <TraceRowView
             key={row.key}
             row={row}
@@ -608,9 +625,9 @@ function Digests({ digests, omitted }: { digests: readonly TraceDigest[]; omitte
         )}
         <ol className="flex flex-col gap-1 px-2 text-xs" aria-label="更早的輪的摘要">
           {visible.map((digest) => (
-            <li key={digest.key} data-testid="trace-digest" data-index={digest.index}>
+            <li key={digest.key} data-testid="trace-digest" data-number={digest.number}>
               <p className="text-foreground">
-                第 {digest.index + 1} 輪
+                第 {digest.number} 輪
                 <span className="text-muted-foreground ml-2">{TURN_KIND_LABEL[digest.kind]}</span>
               </p>
               <p className="text-muted-foreground flex flex-wrap gap-x-2">

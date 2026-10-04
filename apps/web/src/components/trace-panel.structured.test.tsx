@@ -6,6 +6,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RightSidebarToggle } from '@/components/right-sidebar';
 import {
   DIGEST_PAGE,
+  ROW_PAGE,
+  TRACE_MORE_ROWS_LABEL,
   TRACE_LEGACY_GROUP_TEXT,
   TRACE_MORE_DIGESTS_LABEL,
   TRACE_MORE_TURNS_LABEL,
@@ -111,7 +113,7 @@ function conversation() {
       }),
       turn(1, { calls: [call(32, { reply: reply(34, 'run-b1') })] }),
     ],
-    { digests: [digest(0), digest(1)], omitted: 4 },
+    { digests: [digest(10), digest(11)], omitted: 4 },
   );
   return { script, state, trajectory };
 }
@@ -140,7 +142,8 @@ describe('觀測分頁：結構化模式', () => {
     ]);
     const heads = screen.getAllByTestId('trace-turn-head');
     expect(heads).toHaveLength(2);
-    expect(heads[0]!.textContent).toContain('第 1 輪');
+    // 省略 4 輪、兩份摘要，所以窗口裡第一輪是第 7 輪。
+    expect(heads[0]!.textContent).toContain('第 7 輪');
     expect(heads[0]!.textContent).toContain('人的訊息');
     expect(heads[0]!.textContent).toContain('2 次呼叫');
     expect(heads[0]!.textContent).toContain('耗時 2.5 秒');
@@ -266,6 +269,33 @@ describe('觀測分頁：結構化模式', () => {
     expect(TRACE_MORE_TURNS_LABEL).toBeTruthy();
   });
 
+  it('一組裡的列數有上限：一輪幾百次呼叫只畫最新的一段，其餘按「顯示更早的列」才出來', async () => {
+    const script = new Script();
+    const total = ROW_PAGE + 50;
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('inbox:r1', '做很多事'),
+      ...Array.from({ length: total }, (_, i) => [
+        script.started(`c${i}`, 'ls', { path: `/${i}` }),
+        script.finished(`c${i}`, 'ok'),
+      ]).flat(),
+      script.completed(),
+    ]);
+    // 沒有投影：整份是一組第 0 版的組，列數 = 1 句話 + total 顆工具。
+    mount(state);
+    await act(async () => {});
+    expect(screen.getAllByTestId('trace-row')).toHaveLength(ROW_PAGE);
+    // 畫的是最新的一段：最後一顆工具在，那句人話（最舊）不在。
+    expect(screen.queryByText('做很多事')).toBeNull();
+    const more = screen.getByTestId('trace-more-rows');
+    expect(more.textContent).toContain(TRACE_MORE_ROWS_LABEL);
+    expect(more.textContent).toContain('還有 51 列');
+    fireEvent.click(more);
+    expect(screen.getAllByTestId('trace-row')).toHaveLength(total + 1);
+    expect(screen.queryByTestId('trace-more-rows')).toBeNull();
+    expect(screen.getByText('做很多事')).toBeTruthy();
+  });
+
   it('窗口之前的已載入對話：沒有標題、標明「沒有結構資料」', async () => {
     const script = new Script();
     const state = reduceAll(emptyConversation(), [
@@ -287,7 +317,7 @@ describe('觀測分頁：結構化模式', () => {
       TRACE_LEGACY_GROUP_TEXT,
     );
     expect(within(groups[0]!).queryByTestId('trace-turn-head')).toBeNull();
-    expect(within(groups[1]!).getByTestId('trace-turn-head').textContent).toContain('第 6 輪');
+    expect(within(groups[1]!).getByTestId('trace-turn-head').textContent).toContain('第 1 輪');
   });
 
   it('沒有投影：整個是第 0 版，標語與四條限制都在，沒有標題與段落', async () => {

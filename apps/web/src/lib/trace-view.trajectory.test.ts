@@ -9,6 +9,7 @@ import {
 } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
+import { appendDecision } from '@nexus/wire';
 import { Script } from '@/test/conversation-frames';
 import {
   call,
@@ -75,9 +76,9 @@ describe('traceModel：結構化模式的歸位', () => {
     const { script, state, trajectory } = live();
     const model = traceModel(withTrajectory(state, script, trajectory));
     expect(model.structured).toBe(true);
-    expect(model.turns.map((t) => [t.legacy, t.head?.index])).toEqual([
-      [false, 0],
+    expect(model.turns.map((t) => [t.legacy, t.head?.number])).toEqual([
       [false, 1],
+      [false, 2],
     ]);
     expect(kinds(model.turns[0]!.rows)).toEqual([
       'input',
@@ -207,10 +208,10 @@ describe('traceModel：兩個方向的對不上', () => {
     ]);
     const trajectory = view([turn(7, { calls: [call(5, { reply: reply(11, 'run-a1') })] })]);
     const model = traceModel(withTrajectory(state, script, trajectory));
-    expect(model.turns.map((t) => [t.legacy, t.head?.index ?? null])).toEqual([
+    expect(model.turns.map((t) => [t.legacy, t.head?.number ?? null])).toEqual([
       [true, null],
       [true, null],
-      [false, 7],
+      [false, 1],
     ]);
     // 舊的兩組是以人那一句切的：各自一句話、一則回覆。
     expect(kinds(model.turns[0]!.rows)).toEqual(['input', 'reply']);
@@ -228,7 +229,7 @@ describe('traceModel：兩個方向的對不上', () => {
       }),
     ]);
     const [only] = traceModel(withTrajectory(state, script, trajectory)).turns;
-    expect(only!.head?.index).toBe(0);
+    expect(only!.head?.number).toBe(1);
     expect(kinds(only!.rows)).toEqual(['call']);
     const row = only!.rows[0] as Extract<TraceRow, { kind: 'call' }>;
     expect(row.hasContent).toBe(true);
@@ -241,13 +242,14 @@ describe('traceModel：兩個方向的對不上', () => {
     const model = traceModel(
       withTrajectory(state, script, {
         ...trajectory,
-        digests: [digest(0), digest(1)],
+        digests: [digest(20), digest(21)],
         omitted: 7,
       }),
     );
-    expect(model.digests.map((d) => [d.key, d.index, d.callCount])).toEqual([
-      ['digest-0', 0, 2],
-      ['digest-1', 1, 2],
+    // 被省略的 7 輪當成邏輯輪，摘要接著編 8、9。
+    expect(model.digests.map((d) => [d.key, d.number, d.callCount])).toEqual([
+      ['digest-20', 8, 2],
+      ['digest-21', 9, 2],
     ]);
     expect(model.omitted).toBe(7);
   });
@@ -560,6 +562,169 @@ describe('traceModel：重試、提醒與決策點', () => {
       elidedCalls: 38,
       elidedTools: 9,
     });
+  });
+});
+
+describe('traceModel：核准後續接併回同一個邏輯輪', () => {
+  /** v0 的 `richTurn` 的結構化版：讀檔、停在核准點、人核准（本地決定）、續接、收尾；另有第二則人話。 */
+  function approvalConversation() {
+    const script = new Script();
+    const asked = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('inbox:r1', '幫我改 README'),
+      ...script.ai('a', { reasoning: '先讀' }),
+      script.started('c1', 'read_file', { file_path: 'README.md' }),
+      script.finished('c1', '# 專案'),
+      ...script.ai('b', { text: '接下來改寫' }),
+      script.started('c2', 'edit_file', { file_path: 'README.md' }),
+      script.approval('int-1', 'edit_file'),
+    ]);
+    const decided = appendDecision(asked, 'int-1', 'approve');
+    const state = reduceAll(decided, [
+      script.finished('c2', '已改'),
+      ...script.ai('c', { text: '改好了' }),
+      script.completed(),
+      script.running(),
+      ...script.human('inbox:r2', '再問一件事'),
+      ...script.ai('d', { text: '好' }),
+      script.completed(),
+    ]);
+    const trajectory = view([
+      turn(0, {
+        end: 'completed',
+        time: 1_000,
+        endTime: 3_000,
+        durationMs: 2_000,
+        calls: [
+          call(5, { reply: reply(11, 'run-a'), tools: [tool('c1')] }),
+          call(16, { reply: reply(18, 'run-b'), tools: [tool('c2', { status: 'running' })] }),
+        ],
+        decisions: [decision('interrupt', 20, {})],
+      }),
+      turn(1, {
+        kind: 'resume',
+        logical: false,
+        time: 9_000,
+        endTime: 10_000,
+        durationMs: 1_000,
+        calls: [call(30, { reply: reply(32, 'run-c') })],
+      }),
+      turn(2, { time: 20_000, calls: [call(40, { reply: reply(42, 'run-d') })] }),
+    ]);
+    return { script, state, trajectory };
+  }
+
+  it('續接的那一段不另開一組：同一組裡，本地的決定列落在停下來的工具之後、續接的呼叫之前', () => {
+    const { script, state, trajectory } = approvalConversation();
+    const model = traceModel(withTrajectory(state, script, trajectory));
+    expect(model.turns).toHaveLength(2);
+    expect(kinds(model.turns[0]!.rows)).toEqual([
+      'input',
+      'call',
+      'thinking',
+      'tool',
+      'call',
+      'reply',
+      'tool',
+      'signal',
+      'decision',
+      'call',
+      'reply',
+    ]);
+    // 第二則人話開的才是第 2 輪。
+    expect(model.turns.map((t) => t.head?.number)).toEqual([1, 2]);
+    expect(kinds(model.turns[1]!.rows)).toEqual(['input', 'call', 'reply']);
+  });
+
+  it('併起來的標題：計數相加、收尾取續接那一段、牆鐘含等人核准的時間；續接的呼叫編號接著算', () => {
+    const { script, state, trajectory } = approvalConversation();
+    const [first] = traceModel(withTrajectory(state, script, trajectory)).turns;
+    expect(first!.head).toMatchObject({
+      number: 1,
+      kind: 'message',
+      callCount: 3,
+      toolCount: 2,
+      end: 'completed',
+      time: 1_000,
+      endTime: 10_000,
+      // 第一段 2 秒＋等人 6 秒＋續接 1 秒：從第一顆 turn/start 起算到最後收尾。
+      durationMs: 9_000,
+    });
+    const callNumbers = first!.rows
+      .filter((r) => r.kind === 'call')
+      .map((r) => (r as { n: number }).n);
+    expect(callNumbers).toEqual([1, 2, 3]);
+  });
+
+  it('續接還沒收尾時，併起來的標題沒有收尾也沒有牆鐘（不拿第一段的充數）', () => {
+    const { script, state, trajectory } = approvalConversation();
+    const open = view([
+      trajectory.turns[0]!,
+      turn(1, {
+        kind: 'resume',
+        logical: false,
+        end: undefined as never,
+        endTime: undefined as never,
+        durationMs: undefined as never,
+        calls: [],
+      }),
+    ]);
+    const [only] = traceModel(withTrajectory(state, script, open)).turns;
+    expect(only!.head).not.toHaveProperty('end');
+    expect(only!.head).not.toHaveProperty('durationMs');
+    expect(only!.head).not.toHaveProperty('endTime');
+  });
+
+  it('摘要也折：續接併回前一輪，編號是邏輯輪的序號；被省略的輪當成邏輯輪往後數', () => {
+    const { script, state } = approvalConversation();
+    const trajectory = view([turn(9, { calls: [call(5)] })], {
+      digests: [
+        digest(0),
+        digest(1, {
+          kind: 'resume',
+          logical: false,
+          callCount: 1,
+          toolCount: 0,
+          inputTokens: 5,
+          outputTokens: 2,
+        }),
+        digest(2),
+      ],
+      omitted: 3,
+    });
+    const model = traceModel(withTrajectory(state, script, trajectory));
+    // 省略 3 輪；摘要 0 → 第 4 輪，續接併進它，摘要 2 → 第 5 輪；窗口裡那一輪 → 第 6 輪。
+    expect(model.digests.map((d) => [d.number, d.callCount])).toEqual([
+      [4, 3],
+      [5, 2],
+    ]);
+    expect(model.turns.find((t) => t.head !== undefined)?.head?.number).toBe(6);
+  });
+});
+
+describe('traceModel：還在進行的呼叫不只在每一輪的第一次', () => {
+  it('第二次呼叫還在吐字：回覆歸在第二個呼叫段落之下，不是上一次呼叫的尾巴', () => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('inbox:r1', '問'),
+      ...script.ai('a1', { reasoning: '想' }),
+      script.started('c1', 'ls', {}),
+      script.finished('c1', 'ok'),
+      script.openAi('a2'),
+      script.delta('a2', '講到一半'),
+    ]);
+    const trajectory = view([
+      turn(0, {
+        end: undefined as never,
+        calls: [
+          call(5, { reply: reply(11, 'run-a1'), tools: [tool('c1')] }),
+          call(16, { endTime: undefined as never }),
+        ],
+      }),
+    ]);
+    const [only] = traceModel(withTrajectory(state, script, trajectory)).turns;
+    expect(kinds(only!.rows)).toEqual(['input', 'call', 'thinking', 'tool', 'call', 'reply']);
   });
 });
 

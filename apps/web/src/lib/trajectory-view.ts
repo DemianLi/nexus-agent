@@ -92,12 +92,15 @@ export const TURN_KIND_LABEL: Readonly<Record<TrajectoryTurnKind, string>> = {
   goal: '目標排的輪',
 };
 
-/** 一輪是怎麼結束的；還沒結束沒有這一格。 */
+/**
+ * 一輪是怎麼結束的；還沒結束沒有這一格。`interrupted` 是行程被打斷後重啟補收的那一種（`interrupted-turn.ts` 補的 `turn/end`），
+ * 不是停在核准點：停在核准點的輪是正常收尾，接著另有一顆 `resume`。
+ */
 export const TURN_END_LABEL: Readonly<Record<TrajectoryEnd, string>> = {
   completed: '完成',
   aborted: '已停止',
   'max-tokens': '輸出上限',
-  interrupted: '被打斷',
+  interrupted: '意外中斷',
   failed: '失敗',
 };
 
