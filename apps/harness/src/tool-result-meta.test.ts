@@ -8,7 +8,7 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
@@ -321,16 +321,42 @@ describe('工具結果帶結構化 meta', () => {
     }, 20000);
   }
 
-  it('不帶：ls、失敗的呼叫、二進位檔都沒有 meta 這一格', async () => {
+  it('ls：paths 與 total 對得上，目錄那一筆照 backend 給的原樣（#948）', async () => {
+    // 列子目錄：根目錄上組裝點的兩條路由（會話歷史、工具結果暫存）也會被列出來。
+    await mkdir(join(root, 'proj'));
+    await writeFile(join(root, 'proj', 'a.md'), 'a');
+    await mkdir(join(root, 'proj', 'sub'));
+    const { messages, logged } = await run([{ name: 'ls', args: { path: '/proj' } }]);
+    const meta = logged[0]?.meta as {
+      shape: string;
+      paths: string[];
+      truncated: boolean;
+      total: number;
+    };
+    expect(meta.shape).toBe('paths');
+    expect([...meta.paths].sort()).toEqual(['/proj/a.md', '/proj/sub/']);
+    expect(meta.truncated).toBe(false);
+    expect(meta.total).toBe(2);
+    // 模型那一份不變：meta 只是旁邊多帶一份。
+    expect(textOf(messages[0])).toContain('/proj/a.md');
+    expect(textOf(messages[0])).toContain('/proj/sub/ (directory)');
+  }, 20000);
+
+  it('ls 列不出東西也帶：paths 是空的、total 是 0（同 glob 沒命中）', async () => {
+    await mkdir(join(root, 'empty'));
+    const { logged } = await run([{ name: 'ls', args: { path: '/empty' } }]);
+    expect(logged[0]?.meta).toEqual({ shape: 'paths', paths: [], truncated: false, total: 0 });
+  }, 20000);
+
+  it('不帶：失敗的呼叫、二進位檔都沒有 meta 這一格；ls 失敗也是', async () => {
     await writeFile(join(root, 'pic.png'), Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 1, 2, 3]));
     const { logged } = await run([
-      { name: 'ls', args: { path: '/' } },
       { name: 'read_file', args: { file_path: '/nope.txt' } },
       { name: 'edit_file', args: { file_path: '/nope.txt', old_string: 'a', new_string: 'b' } },
       { name: 'read_file', args: { file_path: '/pic.png' } },
     ]);
-    expect(logged.map((entry) => entry.hasMeta)).toEqual([false, false, false, false]);
-    expect(logged[1]?.isError).toBe(true);
+    expect(logged.map((entry) => entry.hasMeta)).toEqual([false, false, false]);
+    expect(logged[0]?.isError).toBe(true);
   }, 20000);
 
   describe('有 permissions 規則的組裝，搜尋不帶 meta（抓的是濾之前那份）', () => {
@@ -346,12 +372,13 @@ describe('工具結果帶結構化 meta', () => {
             [
               { name: 'grep', args: { pattern: 'needle', path: '/' } },
               { name: 'glob', args: { pattern: '*.txt', path: '/' } },
+              { name: 'ls', args: { path: '/' } },
               { name: 'read_file', args: { file_path: '/a.txt' } },
             ],
             { plugins: [plugin] },
           );
           // 讀檔照帶：基座在呼叫 backend 之前就擋掉了，讀得到的就是模型看得到的。
-          expect(logged.map((entry) => entry.hasMeta)).toEqual([false, false, true]);
+          expect(logged.map((entry) => entry.hasMeta)).toEqual([false, false, false, true]);
         },
         20000,
       );
