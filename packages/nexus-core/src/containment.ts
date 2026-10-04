@@ -65,7 +65,8 @@
  * `tool/call` 在進任何一層之前記，`tool/result` 在落定之後記。**只有這一層兩樣都看得到**：
  * 內層拋出來的原始錯誤（超時、取消、參數不合）只在這裡的 `catch` 裡還是錯誤，出了這一層
  * 就變成訊息；內層自己回的錯誤訊息（核准被拒、schema 違規、未知工具）則原樣從 `handler()`
- * 回來。另開一顆排在它外面的 middleware 看不到前者，而且它自己一拋就是整場 run 死掉
+ * 回來，碼由產生它的那一層標好（未知工具由最內層標，見 `invalid-tool-args.ts`），這裡只讀不猜。
+ * 另開一顆排在它外面的 middleware 看不到前者，而且它自己一拋就是整場 run 死掉
  * ——那正是這一層要擋的東西。
  *
  * 時刻同 dsh：`tool/call` 在核准之前（`packages/core/agent-loop/src/tool-calls.ts:168` 在
@@ -94,7 +95,6 @@ import {
   TOOL_ABORTED,
   TOOL_TIMEOUT,
   toolRefusal,
-  UNKNOWN_TOOL,
 } from './tool-events.js';
 import type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
 import { runInToolMetaSlot } from './tool-result-meta.js';
@@ -257,9 +257,6 @@ export function classifyThrownToolError(error: unknown): ToolErrorInfo | undefin
   return undefined;
 }
 
-/** 基座自己回的「沒有這顆工具」。碼照 dsh 的 `ToolNotFoundError`。 */
-const UNKNOWN_TOOL_ERROR: ToolErrorInfo = { name: 'ToolNotFoundError', code: UNKNOWN_TOOL };
-
 /** 註冊表的 `sessions` 通道裡，記工具事件用得到的那一半。 */
 export interface ToolEventSessions {
   forCall(config: unknown): SessionLookup;
@@ -387,19 +384,15 @@ export function createContainmentMiddleware(sessions?: ToolEventSessions): Agent
           request.toolCall.args,
           () => handler(request),
         );
-        if (settle !== undefined) {
-          const outcome = readToolOutcome(result, request.toolCall.id ?? '');
-          // **未知工具從結構上認**：基座找不到那顆工具時 `request.tool` 是 `undefined`，
-          // 自己回一則沒標碼的錯誤（`ToolNode.js:210-221`）。不比對它的措辭。
-          settle(
-            outcome.isError && outcome.error === undefined && request.tool === undefined
-              ? { isError: true, error: UNKNOWN_TOOL_ERROR }
-              : outcome,
-            readToolResultMessage(result, request.toolCall.id ?? ''),
-            readInjectedMessages(result),
-            meta,
-          );
-        }
+        // **未知工具不在這裡猜**：碼由最內層在交給基座查名字的那一刻標（`invalid-tool-args.ts`，#1024）。
+        // 這一格的 `request.tool` 對動態加給模型的工具（`subagent`）也是 `undefined`，拿它當判準會把
+        // 外層回的合法拒絕記成 `UNKNOWN_TOOL`。
+        settle?.(
+          readToolOutcome(result, request.toolCall.id ?? ''),
+          readToolResultMessage(result, request.toolCall.id ?? ''),
+          readInjectedMessages(result),
+          meta,
+        );
         return result;
       } catch (error) {
         // 中斷、`Command` 這類控制流是用拋例外走的，接住它們等於把功能吃掉。
