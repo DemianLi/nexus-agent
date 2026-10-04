@@ -74,12 +74,14 @@ const CHANNELS = {
   approvals: true,
   skills: true,
   memory: true,
-  // 六條不折進任何參數的正交通道。
+  // 七條不折進任何參數的正交通道。
   lifecycle: true,
   telemetry: true,
   invariants: true,
   commands: true,
   sessions: true,
+  // 插件宣告的會話投影（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)）：產物不進圖，pump 與歷史路由讀它。
+  projections: true,
   services: true,
   // 外掛在 `apply` 裡交出警告的出口（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
   logger: true,
@@ -92,7 +94,7 @@ const CHANNELS = {
 /** 折進 `createDeepAgent` 參數的那幾個。`registry.ts` 檔頭的「九個註冊點」。 */
 const FOLDED_CHANNELS = 9;
 /** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加八條」。 */
-const ORTHOGONAL_CHANNELS = 8;
+const ORTHOGONAL_CHANNELS = 9;
 /** 兩者相加，也就是 `PluginRegistry` 的欄位數。 */
 const TOTAL_CHANNELS = FOLDED_CHANNELS + ORTHOGONAL_CHANNELS;
 
