@@ -104,3 +104,51 @@ describe('projections', () => {
     });
   });
 });
+
+/** [#1028](https://github.com/DemianLi/nexus-agent/issues/1028)：子代理自己的投影值。 */
+describe('subagentProjections', () => {
+  const sub = (...frames: Event[]) => reduceAll(emptyConversation(), frames);
+
+  it('一顆都沒有是空物件', () => {
+    expect(sub().subagentProjections).toEqual({});
+  });
+
+  it('帶 session 的值落在 runId → key，不碰 root 的 projections', () => {
+    const state = sub(
+      frame({ key: 'meter', version: 1, view: { root: true } }),
+      frame({ key: 'meter', version: 1, view: { n: 1 }, session: 'run-a' }),
+      frame({ key: 'meter', version: 1, view: { n: 2 }, session: 'run-b' }),
+      frame({ key: 'meter', version: 1, view: { n: 3 }, session: 'run-a' }),
+    );
+    expect(state.projections).toEqual({ meter: { version: 1, view: { root: true } } });
+    expect(state.subagentProjections).toEqual({
+      'run-a': { meter: { version: 1, view: { n: 3 } } },
+      'run-b': { meter: { version: 1, view: { n: 2 } } },
+    });
+  });
+
+  it('failed 只換掉那個子代理的那一格', () => {
+    const state = sub(
+      frame({ key: 'meter', version: 1, view: 1, session: 'run-a' }),
+      frame({ key: 'other', version: 1, view: 2, session: 'run-a' }),
+      frame({ key: 'meter', version: 1, view: null, failed: true, session: 'run-a' }),
+    );
+    expect(state.subagentProjections['run-a']).toEqual({
+      meter: { version: 1, view: null, failed: true },
+      other: { version: 1, view: 2 },
+    });
+  });
+
+  it.each(['', 3, null, {}])('session %j 不合格：整顆不收，也不退回寫進 root', (session) => {
+    const state = sub(frame({ key: 'meter', version: 1, view: 1, session }));
+    expect(state.projections).toEqual({});
+    expect(state.subagentProjections).toEqual({});
+  });
+
+  it('往前翻頁不動它', () => {
+    const state = sub(frame({ key: 'meter', version: 1, view: 1, session: 'run-a' }));
+    expect(prependEntries(state, emptyConversation()).subagentProjections).toEqual(
+      state.subagentProjections,
+    );
+  });
+});

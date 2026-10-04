@@ -43,6 +43,12 @@ export interface ProjectionPayload {
   readonly view: unknown;
   /** 該單元的折疊拋過、已停用。有這一格時 `view` 一定是 `null`。 */
   readonly failed?: true;
+  /**
+   * 這是**哪一個子代理自己的日誌**折出來的值（它的 `runId`，[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)）；
+   * 省略 ＝ root 的。單元要宣告 `children` 才會有子代理的值；落在 `ConversationState.subagentProjections[session][key]`，
+   * 不碰 root 那一格。
+   */
+  readonly session?: string;
 }
 
 /** `ConversationState.projections` 上一格：{@link ProjectionPayload} 去掉 `key`（key 是它的鍵）。 */

@@ -6,7 +6,11 @@
  */
 
 import { describe, expect, it } from 'vitest';
-import { createProjectionFold, normalizeProjectionUnit } from './projections.js';
+import {
+  childProjectionUnits,
+  createProjectionFold,
+  normalizeProjectionUnit,
+} from './projections.js';
 import type { ProjectionUnit } from './projections.js';
 import type { PluginOrigin } from './plugin.js';
 import { createRegistry } from './registry.js';
@@ -228,5 +232,44 @@ describe('註冊規則', () => {
     expect(() =>
       normalizeProjectionUnit({ ...counter(), view: undefined as unknown as () => unknown }),
     ).toThrow(/view/);
+  });
+});
+
+/** [#1028](https://github.com/DemianLi/nexus-agent/issues/1028)：單元可以宣告也折子代理自己的日誌。 */
+describe('children：也折子代理', () => {
+  it('預設只折 root：沒有這一格，childProjectionUnits 不挑它', () => {
+    expect(normalizeProjectionUnit(counter()).children).toBeUndefined();
+    expect(childProjectionUnits([counter()])).toEqual([]);
+  });
+
+  it('宣告 children: true 的單元被挑出來，保持註冊順序，且註冊後這一格還在', () => {
+    const a = normalizeProjectionUnit({ ...counter('a'), children: true as const });
+    const b = normalizeProjectionUnit(counter('b'));
+    const c = normalizeProjectionUnit({ ...counter('c'), children: true as const });
+    expect(a.children).toBe(true);
+    expect(childProjectionUnits([a, b, c]).map((unit) => unit.key)).toEqual(['a', 'c']);
+
+    const registry = createRegistry();
+    const leave = registry.enter({ id: 'p#0', name: 'p' });
+    registry.projections.register({ ...counter('d'), children: true as const });
+    leave();
+    expect(registry.projections.list()[0]?.children).toBe(true);
+  });
+
+  it.each([false, 1, 'yes'])('children 只收 true 或省略，%j 拋', (children) => {
+    expect(() =>
+      normalizeProjectionUnit({ ...counter(), children: children as unknown as true }),
+    ).toThrow(/children/);
+  });
+
+  it('一份日誌一份折疊：兩份折疊器各折各的，狀態不互相滲', () => {
+    const fold = createProjectionFold([counter()]);
+    const root = fold.session();
+    const child = fold.session();
+    const events = sampleEvents();
+    for (const event of events) root.push(event);
+    for (const event of events.slice(0, 2)) child.push(event);
+    expect(root.current()[0]?.view).toEqual({ calls: 2 });
+    expect(child.current()[0]?.view).toEqual({ calls: 1 });
   });
 });

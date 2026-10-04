@@ -343,6 +343,7 @@ export type {
   ProjectionValue,
 } from './projections.js';
 export {
+  childProjectionUnits,
   createProjectionFold,
   normalizeProjectionUnit,
   PROJECTION_KEY_PATTERN,

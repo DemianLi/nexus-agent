@@ -15,8 +15,9 @@ import { PROJECTION } from '@nexus/wire';
  * 一個投影的值 → 一顆 `projection` frame 的 `data`。
  *
  * @param value - 折疊器交出的一筆。
+ * @param session - 這一筆是哪個子代理自己的日誌折出來的（它的 `runId`，#1028）；省略 ＝ root 的。
  */
-export function projectionData(value: ProjectionValue): CustomFrameData {
+export function projectionData(value: ProjectionValue, session?: string): CustomFrameData {
   return {
     name: PROJECTION,
     payload: {
@@ -24,6 +25,7 @@ export function projectionData(value: ProjectionValue): CustomFrameData {
       version: value.version,
       view: value.view,
       ...(value.failed === true && { failed: true as const }),
+      ...(session !== undefined && { session }),
     },
   };
 }

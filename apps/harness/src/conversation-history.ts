@@ -124,6 +124,8 @@ import {
 import type {} from '@nexus/plugin-todo';
 import { agentMessageBody, runIdOfSession } from './background-run-id.js';
 import { goalData, RootGoal } from './goal-wire.js';
+import { childProjectionData } from './projection-children.js';
+import type { ProjectionChildren } from './projection-children.js';
 import { projectionData } from './projection-wire.js';
 import { threadTitleOf } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
@@ -1180,6 +1182,7 @@ export function historyPage(
   toolText?: ToolTextConfig,
   titleLimits?: ThreadTitleLimits,
   projections: readonly ProjectionUnit[] = [],
+  projectionChildren?: ProjectionChildren,
 ): ThreadHistoryResult {
   // **這是這條路上唯一的退路**：呼叫端沒講就用 schema 的預設，同 `createWireHandler` 對
   // `deliverableLimits` 的做法（#536）。底下每一層都是必填轉發，所以「忘了傳」不會變成
@@ -1249,11 +1252,18 @@ export function historyPage(
   // 插件投影（#1026）：同標題與計劃模式，**只在最新一頁**、是目前的值，而且**每個註冊的單元都送**（包括沒折到任何事件的、
   // 空日誌的、折壞了的）——這一頁就是 baseline，web 的 `projections` 有哪些 key 由它定；即時那一側只送之後的變化。
   // 折疊器與 pump 的即時折疊是同一個（`createProjectionFold`），frame 長相只寫在 `projection-wire.ts`。
+  // 子代理自己的投影（#1028）同一頁、同一個折疊器：宣告 `children` 的單元對 `projectionChildren` 裡每個子代理各折一份，
+  // 集合與即時那一側讀的是同一份（`ThreadPump.projectionChildren`）。
   const projectionFrames =
     end === window.length
-      ? createProjectionFold(projections)
-          .fold(window)
-          .map((value) => customFrame(lastTime, projectionData(value)))
+      ? [
+          ...createProjectionFold(projections)
+            .fold(window)
+            .map((value) => customFrame(lastTime, projectionData(value))),
+          ...childProjectionData(projections, projectionChildren ?? new Map()).map((data) =>
+            customFrame(lastTime, data),
+          ),
+        ]
       : [];
   const tailFrames = [
     ...totalsFrames,

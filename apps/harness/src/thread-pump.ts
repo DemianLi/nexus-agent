@@ -72,6 +72,7 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
   APPROVAL_INTERRUPT_KIND,
+  childProjectionUnits,
   createProjectionFold,
   foldInbox,
   humanMessageForTurnStart,
@@ -139,6 +140,7 @@ import {
   todosData,
   workspaceChangesData,
 } from './conversation-history.js';
+import type { ProjectionChildren } from './projection-children.js';
 import { projectionData } from './projection-wire.js';
 import { driveGoalRound } from './goal-driver.js';
 import {
@@ -1099,6 +1101,15 @@ export class ThreadPump {
   readonly #projectionFold: ProjectionFold;
   #projections: ProjectionSession | undefined;
   /**
+   * 子代理自己的投影（[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)）：只有宣告 `children` 的單元，一個子代理一份折疊
+   * （`runId` → 折疊），形狀與理由見 `projection-children.ts`。`#childSeeds` 是上一個行程留下的子代理日誌（啟動時讀進來），
+   * 歷史路由透過 {@link ThreadPump.projectionChildren} 與活著的合起來讀，兩條路讀同一份集合。
+   */
+  readonly #childFold: ProjectionFold;
+  readonly #childUnits: readonly ProjectionUnit[];
+  readonly #childSeeds: ProjectionChildren;
+  readonly #childSessions = new Map<string, ProjectionSession>();
+  /**
    * 排著、還沒開跑的事。**一個 thread 一次只跑一件**；後到的排隊，不平行跑。
    *
    * 挑下一件的規則在 {@link ThreadPump.#nextIndex}：答覆先跑；還有中斷掛著、又沒有答覆排著的時候，
@@ -1179,9 +1190,22 @@ export class ThreadPump {
     stepInbox = false,
     sessionReferences?: SessionReferenceReader,
     projections: readonly ProjectionUnit[] = [],
+    projectionChildSeeds?: ProjectionChildren,
   ) {
     this.#agent = agent;
     this.#projectionUnits = projections;
+    this.#childUnits = childProjectionUnits(projections);
+    this.#childFold = createProjectionFold(this.#childUnits, {
+      onFailure: (key, error) =>
+        this.#warn?.(
+          `[投影] thread ${threadId} 的子代理投影 "${key}" 折疊失敗，已停用：${error instanceof Error ? error.message : String(error)}`,
+        ),
+    });
+    this.#childSeeds = projectionChildSeeds ?? new Map();
+    // 上一個行程留下的子代理：先折進來、不送——那一段的值由歷史的最新一頁送，同 root。
+    for (const [runId, events] of this.#childSeeds) {
+      this.#childSessions.set(runId, this.#childFold.session(events));
+    }
     this.#projectionFold = createProjectionFold(projections, {
       // 每個單元在一份折疊器裡最多回報一次：拋錯的投影只停用自己，產品路徑不受影響（#1026）。
       onFailure: (key, error) =>
@@ -1213,6 +1237,13 @@ export class ThreadPump {
         // 投影同理：已經在日誌裡的先折進來、不送，那一段的值由歷史的最新一頁送。
         this.#projections = this.#projectionFold.session(entry.log.events);
         this.#reportGoalFailure();
+      }
+      if (entry.address.kind === 'subagent' && this.#childUnits.length > 0) {
+        // 這個子代理的投影折疊（#1028）：已經有（上一個行程讀進來的）就沿用，否則從它目前的日誌開始。
+        const { runId } = entry.address;
+        if (!this.#childSessions.has(runId)) {
+          this.#childSessions.set(runId, this.#childFold.session(entry.log.events));
+        }
       }
       unsubscribes.push(entry.log.subscribe((event) => this.#noteLogEvent(entry, event)));
     });
@@ -1265,6 +1296,19 @@ export class ThreadPump {
    */
   get projectionUnits(): readonly ProjectionUnit[] {
     return this.#projectionUnits;
+  }
+
+  /**
+   * 子代理自己的日誌集合，給歷史路由折子代理的投影用（#1028）：上一個行程留下的（啟動時讀進來）加上註冊表裡活著的，
+   * 同一個 `runId` 以活著的為準。**沒有單元宣告 `children` 時是空的**——不為了沒人讀的東西把子日誌複製出來。
+   */
+  projectionChildren(): ProjectionChildren {
+    if (this.#childUnits.length === 0) return new Map();
+    const merged = new Map<string, readonly SessionEvent[]>(this.#childSeeds);
+    for (const entry of this.#sessions.list()) {
+      if (entry.address.kind === 'subagent') merged.set(entry.address.runId, entry.log.events);
+    }
+    return merged;
   }
 
   /** 掛著等人回答的中斷，發出的順序。一顆都沒有就是空的。 */
@@ -2549,6 +2593,13 @@ export class ThreadPump {
       // 插件投影：一個泛用呼叫，不是每種投影一個分支。變了的單元各送一顆 `projection` frame。
       for (const value of this.#projections?.push(event) ?? []) {
         this.#presentCustom(projectionData(value));
+      }
+    }
+    // 子代理自己的投影（#1028）：宣告 `children` 的單元對每個子代理各折一份，值帶 `session`（它的 `runId`）送出。
+    if (entry.address.kind === 'subagent') {
+      const { runId } = entry.address;
+      for (const value of this.#childSessions.get(runId)?.push(event) ?? []) {
+        this.#presentCustom(projectionData(value, runId));
       }
     }
     // 回覆落進日誌了：從這一刻起歷史拿得到它，不再補送（#953）。

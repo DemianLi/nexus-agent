@@ -53,6 +53,23 @@ export interface ProjectionUnit<S = unknown, V = unknown> {
   apply(state: S, event: SessionEvent): S;
   /** 狀態→送給 web 的值。純 JSON。 */
   view(state: S): V;
+  /**
+   * `true` ＝ 這個單元**也對每個子代理自己的日誌各折一份**（[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)）。
+   * 照 dsh：投影的格子按 session 分（`registration.cells.get(session)`，`session-projection/src/index.ts`），子會話與
+   * root 各折各的、互不相見；一份日誌一份折疊，所以**單元的 `apply` 不必知道它在折誰**。省略 ＝ 只折 root（預設）：
+   * 子代理的事件整個不會送到這個單元，所以既有的 root 單元（`trajectory`…）不受影響。
+   *
+   * 子代理的日誌**沒有 `turn/start`**（它不是對話，是一次委派），折它的單元要自己處理這一點。
+   */
+  readonly children?: true;
+}
+
+/**
+ * 要對子代理自己的日誌也折的那幾個單元（{@link ProjectionUnit.children}），保持註冊順序。
+ * 即時（`thread-pump.ts`）與歷史（`conversation-history.ts`）**都用這個函式**挑單元，所以兩條路折的是同一批。
+ */
+export function childProjectionUnits(units: readonly ProjectionUnit[]): readonly ProjectionUnit[] {
+  return units.filter((unit) => unit.children === true);
 }
 
 /** 一個單元此刻的值，也就是一顆 `projection` frame 的內容。 */
@@ -89,12 +106,19 @@ export function normalizeProjectionUnit<S, V>(unit: ProjectionUnit<S, V>): Proje
       throw new TypeError(`投影 "${unit.key}" 的 ${name} 要是函式。`);
     }
   }
+  const children: unknown = unit.children;
+  if (children !== undefined && children !== true) {
+    throw new TypeError(
+      `投影 "${unit.key}" 的 children 要是 true 或省略，拿到 ${String(children)}。`,
+    );
+  }
   return Object.freeze({
     key: unit.key,
     stateVersion: unit.stateVersion,
     init: unit.init,
     apply: unit.apply,
     view: unit.view,
+    ...(children === true && { children: true as const }),
   });
 }
 
