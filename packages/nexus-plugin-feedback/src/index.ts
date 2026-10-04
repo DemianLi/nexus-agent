@@ -92,7 +92,10 @@ export function currentFeedbackItems(
 function isAssistantMessage(events: readonly SessionEvent[], messageId: string): boolean {
   return events.some(
     (event) =>
-      event.type === 'assistant/message' && loggedMessageId(event.data.message) === messageId,
+      event.type === 'assistant/message' &&
+      // 講到一半被停下來的那則不是評分的目標，它帶的 id 只用來對補送與歷史（#1044）。
+      event.data.interrupted !== true &&
+      loggedMessageId(event.data.message) === messageId,
   );
 }
 

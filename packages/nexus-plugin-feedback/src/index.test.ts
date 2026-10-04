@@ -76,6 +76,17 @@ describe('評分', () => {
     expect(events[0]!.data).toEqual({ item: result.value });
   });
 
+  it('講到一半被停下來的那則帶著 id 也不能評（#1044：id 只用來對補送與歷史）', () => {
+    const { log } = logWithTurns();
+    log.append('assistant/message', { message: ai('半段', 'm-stopped'), interrupted: true });
+    expect(
+      service.put(log, { messageId: 'm-stopped', rating: 'positive', ifVersion: null }),
+    ).toEqual({
+      ok: false,
+      error: { code: 'target-not-found', messageId: 'm-stopped' },
+    });
+  });
+
   it('不是 assistant/message 記的 id 都是 target-not-found，日誌不動', () => {
     const { log } = logWithTurns();
     // 外掛注入的 user/message 帶了 id 也不算：目標只認 assistant 訊息（同 dsh）。
