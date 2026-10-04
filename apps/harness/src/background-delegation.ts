@@ -26,7 +26,9 @@
  * 也還在比對 `task`——這幾處歸 #832，預設關的今天不會被走到。
  *
  * `subagent` 的描述取自當次請求裡 `task` 的描述（改掉跟背景矛盾的兩句，見 {@link TASK_DESCRIPTION_REWRITES}），所以子代理清單永遠與 fold 定的同步，不另外維護。子代理的疊
- * （plugin middleware 也射進去，#327）沒有 `task`，所以在那裡什麼都不做，不需要 rootOnly 樁。
+ * （plugin middleware 也射進去，#327）沒有 `task`，`wrapModelCall` 在那裡不加 `subagent`；`wrapToolCall` 按呼叫者身分只接手
+ * root 的，子代理幻覺出來的 `subagent` 呼叫原樣交下去、落到 `UNKNOWN_TOOL`（[#1045](https://github.com/DemianLi/nexus-agent/issues/1045)：
+ * 之前只比工具名，子代理那一層也接手，前景用 root 那份 `task` 派出巢狀孫代理、背景把孫代理掛到 root 的 host 上）。
  *
  * ## 沙箱快照
  *
@@ -392,6 +394,13 @@ export class BackgroundDelegation {
       },
       wrapToolCall: async (request, handler) => {
         if (request.toolCall.name !== SUBAGENT_TOOL_NAME) return handler(request);
+        // 只接手 root 的呼叫（#1045）：`subagent` 只在 root 那一層的模型視野裡（上面看到 `task` 才加），子代理的模型看不到它，
+        // 叫了就原樣交下去，落到基座的「沒有這顆工具」、由最內層標 `UNKNOWN_TOOL`（#1024）。同 dsh：派發與 schema 用同一份
+        // 逐 agent 視圖，看不到的呼叫在派發那一步是 `ToolNotFoundError`（`packages/core/tools/src/index.ts:1230-1252`、
+        // `:1578-1579`，`5badb15`）。這一份實例掛在每一層（#327），哪一層要從這次呼叫的身分查（`registry.ts` 的 `use`）；
+        // 認不出身分的也不接手。前提：root 那一層有 `task`——沒有 profile 拿掉它（基座內建的 profile 沒有）。
+        const caller = toolCallSessionAddress({ configurable: request.runtime?.configurable });
+        if (caller?.kind !== 'root') return handler(request);
         const callId = request.toolCall.id ?? '';
         const selection = this.#options.modelSelection;
         // 沒開選模型卻帶了這兩格：拒絕，不靜靜忽略（zod 預設會丟掉多餘欄位，模型會以為選了）。dsh：關著的實例不但不顯示、還拒絕。
