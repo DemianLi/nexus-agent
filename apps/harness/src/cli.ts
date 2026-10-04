@@ -58,6 +58,7 @@ import { loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
 import type { LiveLaunch } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { runDumpConfigSchema } from './config-schema-dump.js';
+import { resolveSessionHeaderMetadata } from './session-header-metadata.js';
 import {
   composeDefaultEntries,
   loadDefaultPlugins,
@@ -1045,11 +1046,27 @@ async function runLaunched(
   // 先被檢查、被參與者看過，才寫下去。
   //
   // 落盤關掉（#612）就不接：一個 store 都沒建，日誌只在註冊表的記憶體裡。
+  //
+  // **新建的 header 帶建置版本、插件清單與設定雜湊**（#1025）。清單是上面 `loadDefaultPlugins` 疊好的那一份，
+  // 跟 `--dump-config` 印的同源，不再疊一次；落盤關掉就不算（連設定雜湊的鍵檔都不建）。
+  const buildMetadata =
+    sessionStore === undefined
+      ? undefined
+      : await resolveSessionHeaderMetadata({
+          entries: loaded.entries,
+          env: options.env ?? process.env,
+          ...(invocation.workspace !== undefined && { workspace: invocation.workspace }),
+          cwd: options.cwd ?? process.cwd(),
+          warn: (message) => printer.error(`[會話日誌] ${message}`),
+        });
   const persistence =
     sessionStore === undefined
       ? undefined
       : attachSessionPersistence(sessions, sessionStore, {
           cwd: options.cwd ?? process.cwd(),
+          ...(buildMetadata !== undefined && { buildMetadata }),
+          // 模型型錄 id 只進 root（#1025）；假模型不是型錄裡的一筆，不寫。
+          ...(invocation.live && { rootModelEntryId: liveModel.modelId }),
           // 批次窗口：上面從清單解出來的那一份。
           windowMs: persistenceWindow.windowMs,
           // **錨（#504）取的是組裝真的用的那一個**，不是在這裡再算一次：`createCliAgent`

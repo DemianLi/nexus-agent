@@ -66,6 +66,7 @@ import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
 import { BrowserAuth } from './browser-auth.js';
 import { loadOrCreateBrowserSessionSecret } from './browser-session-secret.js';
+import { resolveSessionHeaderMetadata } from './session-header-metadata.js';
 import { createProcessShutdown } from './process-shutdown.js';
 import { HARNESS_HOME_ENV, resolveHarnessHome } from './harness-home.js';
 import { createInvariantLog } from './invariant-log.js';
@@ -576,6 +577,20 @@ async function startServer(
             log(`[會話日誌] ${message}`);
           },
         });
+  // **新建的 header 帶建置版本、插件清單與設定雜湊**（#1025）：server 的性質，起動期算一次，每條 thread 新建的
+  // header 帶同一份。清單是上面 `loadDefaultPlugins` 疊好的那一份，跟 `--dump-config` 同源；落盤關掉就不算。
+  const buildMetadata =
+    sessionStore === undefined
+      ? undefined
+      : await resolveSessionHeaderMetadata({
+          entries: loaded.entries,
+          env,
+          ...(invocation.workspace !== undefined && { workspace: invocation.workspace }),
+          cwd,
+          warn: (message) => {
+            log(`[會話日誌] ${message}`);
+          },
+        });
 
   // 一台 server 一份索引：對帳與查詢在它裡面排隊。沒接落盤時照樣建，搜尋回空（沒有東西可搜）。
   const threadSearch = threadSearchMounted
@@ -810,6 +825,9 @@ async function startServer(
               attachPersistence: (sessions: SessionRegistry) => {
                 const persistence = attachSessionPersistence(sessions, sessionStore, {
                   cwd,
+                  ...(buildMetadata !== undefined && { buildMetadata }),
+                  // 模型型錄 id 只進 root（#1025）；假模型不是型錄裡的一筆，不寫。
+                  ...(invocation.live && { rootModelEntryId: liveModel.modelId }),
                   // 批次窗口：起動期解出來的那一份（`runServe` 頂上那一行），一台伺服器一個節奏。
                   windowMs: persistenceWindow.windowMs,
                   // 錨（#504）：同 CLI，取的是這一次組裝真的用的那一個（上面從 `built`
