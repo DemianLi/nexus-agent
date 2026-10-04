@@ -21,7 +21,12 @@ import type { AddressInfo } from 'node:net';
 import { AIMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
-import { fromLoggedMessage, INTERRUPTED_REPLY_MARKER, loggedMessageId } from '@nexus/core';
+import {
+  fromLoggedMessage,
+  indexModelCalls,
+  INTERRUPTED_REPLY_MARKER,
+  loggedMessageId,
+} from '@nexus/core';
 import type { SessionEvent, SessionEventMap } from '@nexus/core';
 import { createFeedbackService } from '@nexus/plugin-feedback';
 import type { Event } from '@nexus/wire';
@@ -167,6 +172,10 @@ describe('真的 ChatOpenAI 串到一半按停止', () => {
       expect(interrupted.interrupted).toBe(true);
       expect(fromLoggedMessage(interrupted.message).text).toBe(shown);
       expect(types.indexOf('assistant/message')).toBeGreaterThan(types.indexOf('model/end'));
+      // #1021：被切斷的半段指回被切斷的那一次呼叫（pump 在 `model/end` 之後補寫，位置推不出，靠這份日誌最近開的那次）。
+      const cutStart = events.find((event) => event.type === 'model/start')!;
+      expect(interrupted.modelCall).toBe(cutStart.seq);
+      expect(indexModelCalls(events).calls[0]!.replies).toHaveLength(1);
 
       // #382／#1044：那半段在日誌裡沿用即時那則的 id（讓重新整理時補送與歷史對得上，不畫成兩則），但**不因此評得到**：
       // 評分的兩處讀方都明確排除 `interrupted`，web 的 `isRatable` 也照舊把被停下來的那則排掉。哪天排除被拿掉，下面的

@@ -16,7 +16,12 @@ import { PassThrough } from 'node:stream';
 
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { SessionLog } from '@nexus/core';
+import {
+  createModelCallRecorder,
+  noteFailedAttempt,
+  noteRequestStart,
+  SessionLog,
+} from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import type { Event, TitlePayload } from '@nexus/wire';
 import { emptyConversation, reduceAll, TITLE } from '@nexus/wire';
@@ -176,6 +181,38 @@ describe('送出去的是什麼、寫了什麼', () => {
       },
     ]);
     expect(t.warnings).toEqual([]);
+    await t.detach();
+  });
+
+  /**
+   * #1021：標題請求由 `model/start` 的訂閱者排起，主呼叫的重試與識別範圍不能把它收進去，否則它的 `llm/retry` 會帶著主呼叫
+   * 的識別寫進主日誌。兩層擋著：起訖紀錄器在**開範圍之前**寫 `model/start`，標題呼叫又綁在接上那一刻的 context 上
+   * （`AsyncResource.bind`）。**單拿掉 bind 這條不會紅**（實測過：第一層還在）——它釘的是結果（主日誌上沒有標題的重試事件），
+   不是 bind 本身；bind 的理由是 LangChain 的 callbacks，由上面的案例與 serve 的產品路徑測試守著。
+   * 這裡走真的起訖紀錄器，並讓標題模型像 adapter 一樣回報一次失敗重試。
+   */
+  it('標題請求的重試不會掉進主呼叫的重試範圍', async () => {
+    let titleCalled = false;
+    const t = attached(async () => {
+      noteFailedAttempt({ message: '標題端點壞了', code: 'SERVER', status: 500 }, 3);
+      noteRequestStart();
+      titleCalled = true;
+      return stopReply();
+    });
+    t.log.append('turn/start', { kind: 'message', text: FIRST });
+    ensureFallbackTitle(t.log, LIMITS);
+    const recorder = createModelCallRecorder({
+      forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log: t.log }),
+    }) as unknown as {
+      wrapModelCall: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
+    };
+    await recorder.wrapModelCall({ runtime: { configurable: {} } }, async () => {
+      await until(() => titleCalled);
+      return new AIMessage('好。');
+    });
+    await until(() => titleEvents(t.log.events).length === 2);
+    expect(titleCalled).toBe(true);
+    expect(t.log.events.filter((event) => event.type.startsWith('llm/retry'))).toEqual([]);
     await t.detach();
   });
 

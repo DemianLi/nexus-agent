@@ -390,10 +390,15 @@ export interface SessionEventMap {
     readonly inputTokens: number;
     readonly outputTokens: number;
     readonly totalTokens: number;
+    /**
+     * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
+     * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
+     */
+    readonly modelCall?: number;
   };
   /**
    * 一次模型呼叫開始了。與下一顆 `model/end` 配對；會話統計拿這一對數步數、量模型耗時
-   * （`session-stats.ts`）。
+   * （`session-stats.ts`）。**這一顆的 `seq` 就是這次呼叫的識別**（#1021）：`model/end` 等事件的 `modelCall` 指它。
    *
    * **這不是 dsh 的 `step/start`，名字是故意換的**：dsh 的一步包含它派發的工具，`step/end` 在
    * 工具之後；這一對只包模型那一段，工具事件落在 `model/end` **之後**。顆數對得上（一步一次
@@ -406,7 +411,13 @@ export interface SessionEventMap {
    *
    * 沒配到 `model/end` 的 `model/start` 只有一種成因：行程在呼叫中途死了。
    */
-  'model/end': Record<string, never>;
+  'model/end': {
+    /**
+     * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
+     * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
+     */
+    readonly modelCall?: number;
+  };
   /**
    * 一次模型請求失敗、而且**排定了重試**（[#712](https://github.com/DemianLi/nexus-agent/issues/712)）。照 dsh 的
    * `llm/retry`（`packages/llm/llm-retry/src/types.ts:9`）：排定時先寫，再開始等。**只記排定、不記完成**——
@@ -416,7 +427,7 @@ export interface SessionEventMap {
    * `retryId`。**不進模型**：推模型歷史的一側不讀。
    *
    * 欄位比 dsh 少，理由與計數的壽命見 {@link ./llm-retry.ts}：沒有 `delayMs`（接縫看不到退避）、沒有
-   * `turn`／`step`（我們沒有 `step/*`）。
+   * `turn`（由 `seq` 推）。`step` 的對應物是 `modelCall`（#1021）：所屬那次呼叫的 `model/start` 的 `seq`。
    */
   'llm/retry': {
     readonly retryId: string;
@@ -424,6 +435,11 @@ export interface SessionEventMap {
     readonly retry: number;
     readonly maxRetries: number;
     readonly failure: LlmFailure;
+    /**
+     * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
+     * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
+     */
+    readonly modelCall?: number;
   };
   /**
    * 排定的那次重試等完、**真的要重打**了。與同一個 `retryId` 與 `retry` 的 `llm/retry` 配對；等待中被取消的
@@ -434,6 +450,11 @@ export interface SessionEventMap {
     readonly retryId: string;
     readonly retry: number;
     readonly waitedMs: number;
+    /**
+     * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
+     * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
+     */
+    readonly modelCall?: number;
   };
   /**
    * 一次模型呼叫回來的那一則回覆，**模型看到的原樣**：文字、推理、`tool_calls` 都在 `message` 裡
@@ -460,12 +481,20 @@ export interface SessionEventMap {
    *   逐字片段不走模型層的回呼，只有 pump 看得到。
    * - **沒有 `assistant/attempt`**。失敗、沒產出看得見內容的那一次，dsh 記下它的串流；我們沒有
    *   `stream` 可記，那一次在日誌上是一對中間沒有 `assistant/message` 的 `model/start`／`model/end`。
-   * - **沒有 `turn`／`step`，也沒有 `usage`**。前兩格同 `tool/call`；用量另有 `model/usage`，而
-   *   `message` 裡的 `usage_metadata` 本來就在。
+   * - **沒有 `turn`，也沒有 `usage`**。`turn` 同 `tool/call`（由 `seq` 推）；`step` 的對應物是 `modelCall`（#1021，
+   *   所屬那次呼叫的 `model/start` 的 `seq`）；用量另有 `model/usage`，而 `message` 裡的 `usage_metadata` 本來就在。
    *
    * ⚠️ **回覆全文原樣進本機日誌、也原樣進遙測**，同 `tool/call` 的 `arguments`。
    */
-  'assistant/message': { readonly message: LoggedMessage; readonly interrupted?: true };
+  'assistant/message': {
+    readonly message: LoggedMessage;
+    readonly interrupted?: true;
+    /**
+     * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
+     * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
+     */
+    readonly modelCall?: number;
+  };
   /**
    * 塞進對話的一則 user-role 訊息。兩種來源：
    *
@@ -574,6 +603,11 @@ export interface SessionEventMap {
       readonly type: 'messages' | 'tokens';
       readonly value: number;
     }[];
+    /**
+     * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
+     * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
+     */
+    readonly modelCall?: number;
   };
   /**
    * 這個會話**允許子代理逐次挑哪些模型**（[#875](https://github.com/DemianLi/nexus-agent/issues/875)，卡 [#709](https://github.com/DemianLi/nexus-agent/issues/709)）。
@@ -625,9 +659,11 @@ export interface SessionEventMap {
    *   `toolCall.args`。**JSON 都不合格的那顆例外：記的就是模型吐的原字串，所以這一格不一定解得開
    *   JSON**（[#281](https://github.com/DemianLi/nexus-agent/issues/281)，見 `invalid-tool-args.ts`）。
    *   格式版本不升：dsh 只在結構變更時升，這一格的型別沒變（dsh 這一格本來就是原字串）。
-   * - **沒有 `turn`／`step`。** 我們沒有 `step/*` 事件（`model/start`／`model/end` 不是步的邊界，
+   * - **沒有 `turn`／`step` 欄位。** 我們沒有 `step/*` 事件（`model/start`／`model/end` 不是步的邊界，
    *   這一顆落在它們之後，見那兩顆），subagent 的日誌裡也沒有 `turn/start`
    *   （入口點只包 root 的輪）。root 那份以落在哪一對 `turn/start`／`turn/end` 之間定輪。
+   *   **步**不另存：`callId` 出現在發出它的那則 `assistant/message` 的 `tool_calls` 裡，那則帶 `modelCall`
+   *   （#1021，`indexModelCalls` 做這個歸屬；供應商重用 `callId` 時取最近一則）。
    *
    * ## 同一個 `callId` 可能有兩顆
    *

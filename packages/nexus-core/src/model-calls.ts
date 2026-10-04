@@ -15,7 +15,19 @@
  * `finally` 裡記結束，完成、失敗、中止的呼叫都落一顆，同 dsh 那條「每一個進入的步
  * 恰好一顆 `step/end`」。
  *
- * 兩顆都不帶資料：步數與耗時都只要事件自己的 `time`。
+ * `model/start` 不帶資料：步數與耗時都只要事件自己的 `time`。
+ *
+ * ## 識別：哪些事件屬於同一次呼叫（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)）
+ *
+ * dsh 的 `assistant/message`、`tool/call`、`tool/result`、`system/message` 都帶 `{turn, step}`；我們的事件只有 `seq`／`time`，
+ * 一對起訖之間夾什麼、量測寫在哪一顆之後，位置都不可靠（`model-call-index.ts` 檔頭有三個真實日誌的反例）。所以
+ * 呼叫的識別就是**它的 `model/start` 的 `seq`**，`model/end`、`model/usage`、`llm/retry*`、`assistant/message`、
+ * `context/measure` 各帶一格 `modelCall` 指回去；`tool/call`／`tool/result` 靠 `callId` 出現在發出它的那則回覆裡來歸
+ * （不另存，見 `indexModelCalls`）。傳法見 {@link ./model-call-scope.ts}。**輪編號維持由 `seq` 推導、不另存。**
+ *
+ * 這一格是 dsh `step` 的對應物——**同一個詞、不同的邊界**：我們的「一次呼叫」只包模型那一段（見上），工具在它外面，
+ * 所以工具歸它靠 `callId` 而不是時刻。上面登記的三處偏離逐項重核過：`model/start` 不是 `step/start`（載體是
+ * `wrapModelCall`，沒變）、脈絡溢出算兩次呼叫（現在兩次各有各的識別，不再只是顆數）、拋錯的呼叫沒有 `assistant/attempt`（沒變）。
  *
  * ## 鉤子與位置都是選的
  *
@@ -69,6 +81,7 @@ import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { runInRetryScope } from './llm-retry.js';
 import { toLoggedMessage } from './logged-message.js';
+import { noteModelCallReplied, runInModelCall, withModelCall } from './model-call-scope.js';
 import type { SessionLog } from './session-log.js';
 import type { SessionLookup } from './registry.js';
 import { INTERRUPTED_REPLY_MARKER } from './turn-cancel.js';
@@ -76,13 +89,21 @@ import { INTERRUPTED_REPLY_MARKER } from './turn-cancel.js';
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
 export const MODEL_CALL_EVENTS_MIDDLEWARE_NAME = 'nexusModelCallEvents';
 
-/** 記一顆，記不進去回 `false`。 */
-function tryAppend(log: SessionLog, type: 'model/start' | 'model/end'): boolean {
+/** 記 `model/start`，回它的 `seq`；記不進去回 `undefined`。 */
+function tryAppendStart(log: SessionLog): number | undefined {
   try {
-    log.append(type, {});
-    return true;
+    return log.append('model/start', {}).seq;
   } catch {
-    return false;
+    return undefined;
+  }
+}
+
+/** 記配對的 `model/end`，帶這次呼叫的識別；記不進去就算了。 */
+function tryAppendEnd(log: SessionLog, modelCall: number): void {
+  try {
+    log.append('model/end', { modelCall });
+  } catch {
+    // 見檔頭「記不進去不能扳倒模型呼叫」。
   }
 }
 
@@ -99,10 +120,15 @@ function isSyntheticStop(message: AIMessage): boolean {
 }
 
 /** 記下這次呼叫回來的那一則。不是回覆的（`Command`、合成的空訊息）不記；記不進去就算了。 */
-function tryRecordReply(log: SessionLog, response: unknown): void {
+function tryRecordReply(log: SessionLog, response: unknown, modelCall: number): void {
   if (!AIMessage.isInstance(response) || isSyntheticStop(response)) return;
   try {
-    log.append('assistant/message', { message: toLoggedMessage(response) });
+    log.append(
+      'assistant/message',
+      withModelCall({ message: toLoggedMessage(response) }, modelCall),
+    );
+    // 這一次有正常回覆了：之後 pump 補記的被切斷半段不會再掛到它底下（`lastModelCall`）。
+    noteModelCallReplied(log, modelCall);
   } catch {
     // 見檔頭「記不進去不能扳倒模型呼叫」。
   }
@@ -124,14 +150,20 @@ export function createModelCallRecorder(sessions: {
       const found = sessions.forCall({
         configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
       });
-      if (found.kind !== 'ok' || !tryAppend(found.log, 'model/start')) return handler(request);
+      if (found.kind !== 'ok') return handler(request);
+      const { log } = found;
+      const modelCall = tryAppendStart(log);
+      if (modelCall === undefined) return handler(request);
       try {
-        // 重試範圍包住 handler：adapter 在裡面回報失敗與重開（{@link ./llm-retry.ts}）。
-        const response = await runInRetryScope(found.log, () => handler(request));
-        tryRecordReply(found.log, response);
+        // 這次呼叫的識別（`model/start` 的 `seq`）往內傳給用量與重試的寫入點，往外填給摘要器的量測
+        // （{@link ./model-call-scope.ts}）。重試範圍包住 handler：adapter 在裡面回報失敗與重開（{@link ./llm-retry.ts}）。
+        const response = await runInModelCall(log, modelCall, () =>
+          runInRetryScope(log, () => handler(request)),
+        );
+        tryRecordReply(log, response, modelCall);
         return response;
       } finally {
-        tryAppend(found.log, 'model/end');
+        tryAppendEnd(log, modelCall);
       }
     },
   }) as unknown as AgentMiddleware;

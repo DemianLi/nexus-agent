@@ -360,6 +360,15 @@ import type { SessionEvent } from './session-log.js';
  * - **守衛只在讀方**，不在 append：append 時拒絕詞彙會讓正在跑的會話的耐久寫入卡住（同 dsh）。離線掃描
  *   （`apps/harness/src/eval/session-scan.ts`，產品路徑外）不守，它照格式版本表態、認不得的略過並報數。
  * - **不追溯改前三十一次的版本號**：寫下的 header 就是那些號。
+ *
+ * ### 32 之內新增、沒有升版的欄位
+ *
+ * - **`modelCall`**（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)）：`model/end`、`model/usage`、`llm/retry`、
+ *   `llm/retry-started`、`assistant/message`、`context/measure` 各多一個選填欄，值是所屬那次模型呼叫的 `model/start` 的 `seq`。
+ *   **不升**：前五種不進模型；`assistant/message` 進，但新欄不左右它怎麼進。六種都不左右任何折疊，沒有任何舊讀方拿這一格做事；
+ *   一台 32 的舊 runtime 讀回這份日誌，多一個不認得的欄位照舊投影，只是不知道誰屬於哪次呼叫。判準同上：寫方寫出來的東西，
+ *   舊 runtime 還能不能完整正確地處理——能。**沒有這一格就是沒記**（這一版以前寫的，或寫入點不在呼叫範圍裡），讀的人標「—」，
+ *   不是推位置（`indexModelCalls`）。
  */
 export const SESSION_LOG_FORMAT_VERSION = 32;
 

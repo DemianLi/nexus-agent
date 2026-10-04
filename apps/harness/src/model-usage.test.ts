@@ -9,7 +9,7 @@
 
 import { MemorySaver } from '@langchain/langgraph';
 import { describe, expect, it } from 'vitest';
-import { SessionRegistry } from '@nexus/core';
+import { indexModelCalls, SessionRegistry } from '@nexus/core';
 import type { ModelUsage, PluginEntry, SessionEvent } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { toAgentInvocation } from './messages.js';
@@ -28,11 +28,27 @@ const withWorker: PluginEntry = {
   },
 };
 
-/** 一份日誌裡的用量，照 `seq` 排。 */
+/**
+ * 一份日誌裡的用量，照 `seq` 排。只取三個數字：`modelCall`（#1021，指回所屬那次呼叫）由 {@link callsOf} 的案例另外釘，
+ * 這裡的斷言管的是數字對不對得上。
+ */
 function usageOf(events: readonly SessionEvent[]): ModelUsage[] {
   return events
     .filter((event) => event.type === 'model/usage')
-    .map((event) => event.data as ModelUsage);
+    .map((event) => {
+      const { inputTokens, outputTokens, totalTokens } = event.data as ModelUsage;
+      return { inputTokens, outputTokens, totalTokens };
+    });
+}
+
+/** 每筆用量指回的那顆 `model/start` 的 `seq`，與那份日誌裡所有 `model/start` 的 `seq`。 */
+function callsOf(events: readonly SessionEvent[]) {
+  return {
+    cited: events
+      .filter((event) => event.type === 'model/usage')
+      .map((event) => (event.data as { modelCall?: number }).modelCall),
+    starts: events.filter((event) => event.type === 'model/start').map((event) => event.seq),
+  };
 }
 
 /**
@@ -47,7 +63,11 @@ async function run(
   turns: readonly ScriptedTurn[],
   plugins: readonly PluginEntry[] = [],
   streaming = false,
-): Promise<{ root: ModelUsage[]; subagents: ModelUsage[][] }> {
+): Promise<{
+  root: ModelUsage[];
+  subagents: ModelUsage[][];
+  logs: { root: readonly SessionEvent[]; subagents: (readonly SessionEvent[])[] };
+}> {
   const model = new ScriptedChatModel({ turns });
   const { agent, attachSession, dispose } = await createNexusAgent({
     model,
@@ -73,11 +93,14 @@ async function run(
     await dispose();
   }
   const entries = sessions.list();
+  const rootEvents = entries.find((entry) => entry.address.kind === 'root')?.log.events ?? [];
+  const subagentEvents = entries
+    .filter((entry) => entry.address.kind === 'subagent')
+    .map((entry) => entry.log.events);
   return {
-    root: usageOf(entries.find((entry) => entry.address.kind === 'root')?.log.events ?? []),
-    subagents: entries
-      .filter((entry) => entry.address.kind === 'subagent')
-      .map((entry) => usageOf(entry.log.events)),
+    root: usageOf(rootEvents),
+    subagents: subagentEvents.map(usageOf),
+    logs: { root: rootEvents, subagents: subagentEvents },
   };
 }
 
@@ -89,7 +112,7 @@ describe('模型報了用量', () => {
    * 在這裡是紅的。用量是 per-step 的，一輪裡叫幾次模型就有幾筆。
    */
   it('跑三格模型呼叫就是三筆，數字一一對得上', async () => {
-    const { root } = await run([
+    const { root, logs } = await run([
       {
         content: '先寫個清單。',
         usage: { inputTokens: 11, outputTokens: 22 },
@@ -107,6 +130,10 @@ describe('模型報了用量', () => {
       { inputTokens: 33, outputTokens: 44, totalTokens: 77 },
       { inputTokens: 55, outputTokens: 66, totalTokens: 121 },
     ]);
+    // #1021：每筆用量指回自己那次呼叫的 `model/start`——三筆各指各的，不是都指同一個、也不是靠位置。
+    const { cited, starts } = callsOf(logs.root);
+    expect(starts).toHaveLength(3);
+    expect(cited).toEqual(starts);
   });
 
   /**
@@ -178,7 +205,7 @@ describe('模型沒報用量', () => {
  */
 describe('subagent 的那幾輪', () => {
   it('記在 subagent 那份，不在 root 的', async () => {
-    const { root, subagents } = await run(
+    const { root, subagents, logs } = await run(
       [
         {
           content: '委派。',
@@ -195,5 +222,17 @@ describe('subagent 的那幾輪', () => {
       { inputTokens: 11, outputTokens: 22, totalTokens: 33 },
       { inputTokens: 55, outputTokens: 66, totalTokens: 121 },
     ]);
+    // #1021：子代理那筆指的是**它自己那份日誌**的 `model/start`，不是 root 的。兩份的 seq 各自從 0 起，
+    // 拿錯日誌的話會指到不相干的事件；`indexModelCalls` 在各自那份上歸得乾淨。
+    const own = callsOf(logs.subagents[0]!);
+    expect(own.cited).toEqual(own.starts);
+    expect(own.starts).toHaveLength(1);
+    const rootCalls = callsOf(logs.root);
+    expect(rootCalls.cited).toEqual(rootCalls.starts);
+    for (const events of [logs.root, logs.subagents[0]!]) {
+      expect(indexModelCalls(events).unattributed.filter((e) => e.type === 'model/usage')).toEqual(
+        [],
+      );
+    }
   });
 });

@@ -11,7 +11,7 @@
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { runInRetryScope, SessionLog } from '@nexus/core';
+import { createModelCallRecorder, runInRetryScope, SessionLog } from '@nexus/core';
 import {
   classifyLlmFailure,
   createLiveModel,
@@ -101,6 +101,31 @@ describe('重試寫進日誌', () => {
       'llm/retry',
       'llm/retry-started',
     ]);
+  }, 30_000);
+
+  /** #1021：經真的起訖紀錄器，真 adapter 回報的重試帶著這次呼叫的識別——也就是 `model/start` 的 `seq`。 */
+  it('經起訖紀錄器跑：llm/retry 與 llm/retry-started 都帶 modelCall，指回那顆 model/start', async () => {
+    cell = 'http500';
+    const log = new SessionLog('r');
+    const model = createLiveModel(config());
+    const recorder = createModelCallRecorder({
+      forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }),
+    }) as unknown as {
+      wrapModelCall: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
+    };
+    await recorder
+      .wrapModelCall({ runtime: { configurable: {} } }, async () => {
+        for await (const _part of await model.stream('嗨')) void _part;
+      })
+      .catch(() => undefined);
+
+    const start = log.events.find((event) => event.type === 'model/start')!;
+    expect(retries(log)).toHaveLength(RETRIES);
+    for (const event of [...retries(log), ...starts(log)]) {
+      expect((event.data as { modelCall?: number }).modelCall).toBe(start.seq);
+    }
+    const end = log.events.find((event) => event.type === 'model/end')!;
+    expect(end.data).toEqual({ modelCall: start.seq });
   }, 30_000);
 
   it('第一則事件是 503：同上（#516 的串流內錯誤也進得了日誌）', async () => {

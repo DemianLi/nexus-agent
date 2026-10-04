@@ -46,10 +46,11 @@ describe('記什麼', () => {
     expect(seen).toEqual(['model/start']);
     // 回覆夾在起訖中間，順序同 dsh：回覆在前，它派發的工具事件在 `model/end` 之後（#305）。
     expect(typesOf(log)).toEqual(['model/start', 'assistant/message', 'model/end']);
+    // 起訖與回覆互相指回：識別就是 `model/start` 的 `seq`（#1021）。
     expect(log.events.map((event) => event.data)).toEqual([
       {},
-      { message: toLoggedMessage(response) },
-      {},
+      { message: toLoggedMessage(response), modelCall: 0 },
+      { modelCall: 0 },
     ]);
   });
 
