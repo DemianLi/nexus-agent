@@ -160,6 +160,26 @@ export function isFeedbackEvent(event: SessionEvent): boolean {
 }
 
 /**
+ * 這一顆要不要鏡像到遙測的 ledger——**不放行的種類，`full` 與 `feedback-only` 兩種模式都不送**。
+ *
+ * 預設放行（ledger 是日誌的一對一鏡像），**明著列出來的才擋**：`request/header`、`request/system`
+ * （[#1020](https://github.com/DemianLi/nexus-agent/issues/1020)）是模型被叫那一刻實際收到的設定與系統提示詞，
+ * 系統提示詞可能含工作區內容（AGENTS.md、記憶檔）。要放行得是一個明著的決定，不是新種類加進來就順便出去了。
+ * 與 {@link isFeedbackEvent} 的預設相反——那邊沒表態就不送，這邊沒表態就送，因為 `full` 的契約本來就是整份。
+ *
+ * @param event - 剛進日誌的那一顆。
+ */
+export function isMirroredEvent(event: SessionEvent): boolean {
+  switch (event.type) {
+    case 'request/header':
+    case 'request/system':
+      return false;
+    default:
+      return true;
+  }
+}
+
+/**
  * 可掛載的後端形：{@link SessionTelemetrySink} 的能力，**加上必須表態的共享策略**。
  *
  * `registry.services.provide(SESSION_TELEMETRY_SERVICE, …)` 收的是這個。dsh 的對應物是 `SessionTelemetryBackend`

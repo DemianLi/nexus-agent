@@ -48,6 +48,7 @@ import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import type { MiddlewareRegistration, PluginRegistry, RootOnlyRefusal } from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
+import { createRequestSnapshotRecorder } from './request-snapshot.js';
 import { createModelUsageRecorder, MODEL_USAGE_PLUGIN_NAME } from './model-usage.js';
 import {
   createSessionCheckpointMiddleware,
@@ -467,6 +468,8 @@ export function foldRegistry(
   const modelUsage = foldModelUsage(registry, options);
   // 同上，無狀態、一份走遍。位置緊貼用量記錄器，理由見 {@link ./model-calls.ts}。
   const modelCalls = createModelCallRecorder(registry.sessions);
+  // 請求快照（#1020）：同上，無狀態、一份走遍；基準住在日誌上。排在最內層，見 {@link ./request-snapshot.ts}。
+  const requestSnapshot = createRequestSnapshotRecorder(registry.sessions);
   // 耐久檢查點（#599）：同上，無狀態、一份走遍 root 與每個子代理。位置緊貼用量記錄器內側，
   // 理由見 {@link foldMiddleware}。
   const sessionCheckpoint = foldSessionCheckpoint(registry);
@@ -597,6 +600,9 @@ export function foldRegistry(
     // 撞到輸出上限：清工具呼叫排在修補的內側（被切斷的那顆不會先被修成 `{}` 參數），外面每一顆看到的都是清過的；
     // 子代理的截斷要記進同一份載體給父圖的 `task` 讀。見 {@link ./max-tokens.ts}。
     shared('maxTokens', maxTokens),
+    // 請求快照（#1020）緊貼最內層、在中止訊號外面：它也包 `request.model`，排在這裡外面每一顆看到的仍是原本的模型。
+    // 記錄點其實在模型被叫的那一刻（callback），不靠這個位置——deepagents 自己還有幾顆在我們這串後面，見 {@link ./request-snapshot.ts}。
+    shared('requestSnapshot', requestSnapshot),
     // 最內層：只替模型綁中止訊號，外面每一顆看到的都是原本的模型。見 {@link ./turn-cancel.ts}。
     shared('turnCancelModelSignal', turnCancelModelSignal),
   ];

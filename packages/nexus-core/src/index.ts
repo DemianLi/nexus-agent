@@ -281,6 +281,18 @@ export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
 export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
 export { lastModelCall, withModelCall } from './model-call-scope.js';
+export {
+  createRequestSnapshotRecorder,
+  extractRequest,
+  REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
+} from './request-snapshot.js';
+export type {
+  ExtractedRequest,
+  RequestConfig,
+  RequestHeader,
+  RequestSnapshotReason,
+  RequestToolSchema,
+} from './request-snapshot.js';
 export { createModelCallIndexer, indexModelCalls } from './model-call-index.js';
 export type { ModelCallIndex, ModelCallIndexer, ModelCallRecord } from './model-call-index.js';
 export { noteFailedAttempt, noteRequestStart, runInRetryScope } from './llm-retry.js';
@@ -492,7 +504,11 @@ export type {
   SessionTelemetrySharingStatus,
   SessionTelemetrySink,
 } from './session-telemetry.js';
-export { isFeedbackEvent, SESSION_TELEMETRY_SERVICE } from './session-telemetry.js';
+export {
+  isFeedbackEvent,
+  isMirroredEvent,
+  SESSION_TELEMETRY_SERVICE,
+} from './session-telemetry.js';
 
 export type {
   SessionTelemetryCapture,

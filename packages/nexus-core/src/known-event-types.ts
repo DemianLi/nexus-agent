@@ -29,6 +29,8 @@ export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'model/start',
   'model/usage',
   'plan/mode',
+  'request/header',
+  'request/system',
   'sandbox/mode',
   'session/end-seed',
   'session/title',
