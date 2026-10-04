@@ -57,6 +57,17 @@
  * 寫入與基座檔案工具的失敗記成成功（基座回裸字串，見 `@nexus/core` 的 `fs-tool-errors.ts`）。那一段的錯誤數偏低，
  * 逐份分不出來，所以是報表底下每次都印的一句，不是某一份的標記。
  *
+ * #1039（PR #1039，2026-10-04 合進 develop，`4b6faef`）之前同樣有一段：`subagent` 工具的合法拒絕（前景指定
+ * `reasoning_effort`、沒開選模型、參數不合 schema……）都被記成 `ToolNotFoundError`／`UNKNOWN_TOOL`，修後是無碼，
+ * 參數不合是 `INVALID_ARGS`。格式版本沒升。**header 的 `build.commit`（30 起，#1040）也分不出來**，所以照樣只印
+ * 一句，不逐份標：
+ *
+ * - 有 `build` 那一格不代表修好之後寫的。#1040 自己的分支上 `ee07d29c1` 已經會寫 `build`，卻是在 #1039 合併
+ *   之前提交、還沒併進 develop 的那一版——那個 commit 跑出來的日誌帶 commit、而拒絕照舊記成 `UNKNOWN_TOOL`。
+ * - 拿 commit 去問「`4b6faef` 是不是它的祖先」也不準：feature 分支的 commit 被 squash 掉、遠端分支合併後刪除，
+ *   別的 clone 上可能查不到那個 commit；`dirty` 為真時跑的不是那個 commit 的程式碼；`commit` 可能是 `null`。
+ *   而且掃描得在讀檔時去叫 git，這支腳本就不再只是讀檔的純函式。
+ *
  * **另一件版本也帶不出來**：續接過的檔，header 在第一次續寫時被蓋成當時的版本，而續接之前那一段
  * 是舊版寫的。那一段的缺欄會被讀成 0。
  *
@@ -549,6 +560,9 @@ export function formatScanReport(
     '注意：#273（2026-09-12）之前寫的日誌把 goal、todo、計劃模式、root-only 樁的拒絕記成成功，' +
       '#293（2026-09-13）之前把 fence 擋下的寫入與檔案工具的失敗記成成功，' +
       '格式版本沒升、逐份分不出來——那一段的工具錯誤數偏低。',
+    '注意：#1039（2026-10-04）之前寫的日誌把 subagent 工具的合法拒絕（例如前景指定 reasoning_effort、參數不合）' +
+      '記成 UNKNOWN_TOOL，格式版本沒升、逐份分不出來——那一段的 UNKNOWN_TOOL 偏高、無碼與 INVALID_ARGS 偏低，' +
+      '不全是叫了不存在的工具。',
   );
   return lines;
 }

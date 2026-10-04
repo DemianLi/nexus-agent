@@ -67,6 +67,7 @@ import type {
   SessionRegistry,
   StepInbox,
   SubagentSettleReason,
+  ToolErrorInfo,
 } from '@nexus/core';
 
 import { BACKGROUND_RUN_PREFIX, agentMessageText } from './background-run-id.js';
@@ -258,7 +259,8 @@ export type BackgroundSubagentErrorCode = 'closed' | 'not-found' | 'at-capacity'
 
 /**
  * 往背景子代理送話或查它時被拒的原因，帶**型別化的碼**。訊息是給模型／人看的那句話，原樣不變；碼是給程式分流的
- * （wire 的 `subagent.send` 把它譯成三個錯誤碼，不去比對中文訊息）。
+ * （wire 的 `subagent.send` 把它譯成三個錯誤碼，不去比對中文訊息）。`subagent` 工具派不出去時，碼也經
+ * {@link backgroundRefusalInfo} 翻成 dsh 的那一組進會話日誌。
  */
 export class BackgroundSubagentError extends Error {
   readonly code: BackgroundSubagentErrorCode;
@@ -267,6 +269,34 @@ export class BackgroundSubagentError extends Error {
     super(message);
     this.name = 'BackgroundSubagentError';
     this.code = code;
+  }
+}
+
+/**
+ * {@link BackgroundSubagentHost.start} 被 host 拒絕時，`subagent` 那一顆 `tool/result` 記的碼（[#1046](https://github.com/DemianLi/nexus-agent/issues/1046)）。
+ *
+ * 照 dsh（`5badb15`）：`subagent` 工具本體 await `startContinuable`、不接錯（`packages/subagent/tool-subagent/src/index.ts:526-537`），
+ * 名額滿了拋 `SubagentError` 的 `ACTIVATION_LIMIT_REACHED`（`packages/subagent/subagent/src/continuation-activation.ts:45-51`），
+ * 收線中拋 `DRAINING`（同檔 `:446-455`，`continuation.ts:107` 起呼叫）；`SubagentError` 是 `HarnessError`（`error.ts:10-15`），
+ * 註冊表接住後由 `errorInfo` 取 `{ name, code }`（`packages/core/tools/src/index.ts:661-668`、`:1586-1587`、`:1909-1917`），
+ * 寫進 `tool/result` 的 `error`（`packages/core/agent-loop/src/tool-calls.ts:285`）。名字與碼抄 dsh 的字串，同
+ * `INVALID_ARGS`、`UNKNOWN_TOOL` 的先例；`closed` 對 `DRAINING` 是最接近的對照（dsh 是收線開始就不收，我們是 host 已關）。
+ *
+ * **`closed` 在 `subagent` 工具這條路上今天沒有生產者**：收線先同步把 delegation 的 host 清掉、才關 host
+ * （`background-delegation.ts` 的 `attach`），而 `wrapToolCall` 從讀 host 到 `start` 之間沒有 await，所以關了之後模型收到的是
+ * 「還沒接上會話」那句。照樣翻，是為了兩種拒絕走同一條路。`not-found` 不會從 `start` 出來（全新的編號），回 `undefined`。
+ *
+ * @param error - `start` 拋的那一顆。
+ * @returns 記進日誌的 `{ name, code }`，或 `undefined`（不帶碼）。
+ */
+export function backgroundRefusalInfo(error: BackgroundSubagentError): ToolErrorInfo | undefined {
+  switch (error.code) {
+    case 'at-capacity':
+      return { name: 'SubagentError', code: 'ACTIVATION_LIMIT_REACHED' };
+    case 'closed':
+      return { name: 'SubagentError', code: 'DRAINING' };
+    case 'not-found':
+      return undefined;
   }
 }
 

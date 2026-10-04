@@ -36,6 +36,7 @@ import { createNexusAgent } from './agent-factory.js';
 import {
   BackgroundSubagentError,
   BackgroundSubagentHost,
+  backgroundRefusalInfo,
   settlementSummary,
   withReturnGuidance,
 } from './background-subagents.js';
@@ -971,6 +972,18 @@ describe('載體本身（假 agent）', () => {
       await holder.outcome;
       await host.close();
       expect(codeOf(() => host.sendFromUser({ runId: settled.runId, text: 'x' }))).toBe('closed');
+    });
+
+    it('派不出去時進日誌的碼照 dsh SubagentError（#1046）：名額滿、已關各一組，沒有這個編號不帶碼', () => {
+      // 名額滿的產品路徑見 `background-host-refusal.test.ts`；`closed` 在 `subagent` 工具那條路上沒有生產者，只釘這張表。
+      const info = (code: 'closed' | 'not-found' | 'at-capacity') =>
+        backgroundRefusalInfo(new BackgroundSubagentError(code, 'x'));
+      expect(info('at-capacity')).toEqual({
+        name: 'SubagentError',
+        code: 'ACTIVATION_LIMIT_REACHED',
+      });
+      expect(info('closed')).toEqual({ name: 'SubagentError', code: 'DRAINING' });
+      expect(info('not-found')).toBeUndefined();
     });
 
     it('interrupt：不認得的編號是被接受的 no-op（false）；root 這邊的 sendToParent 錯誤也帶碼', async () => {

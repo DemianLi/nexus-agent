@@ -52,11 +52,14 @@ import {
   MessageScrollerItem,
   MessageScrollerProvider,
   MessageScrollerViewport,
+  useMessageScroller,
 } from '@/components/ui/message-scroller';
 import { mentionDisplayText } from '@/lib/session-mention';
 import type { ChangesStores } from '@/lib/changes-diff';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
+import { decisionText } from '@/lib/decision-view';
 import { transcriptItems } from '@/lib/deliverables-view';
+import { registerTranscriptScroller } from '@/lib/transcript-locate';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
@@ -199,12 +202,7 @@ export function Entry({
   }
 
   if (entry.kind === 'decision') {
-    const approved = entry.decision === 'approve';
-    return (
-      <Marker testId="decision-entry">
-        {`${approved ? '已核准' : entry.decision === 'reject' ? '已拒絕' : entry.decision}：${entry.actions.join('、')}${approved ? '' : '（沒有執行）'}`}
-      </Marker>
-    );
+    return <Marker testId="decision-entry">{decisionText(entry)}</Marker>;
   }
 
   if (entry.kind === 'answer') {
@@ -418,6 +416,22 @@ function scrollBehavior(): ScrollBehavior {
   return reduce ? 'auto' : 'smooth';
 }
 
+/**
+ * 把這個對話區的 `scrollToMessage` 登記給觀測分頁的「定位」（`lib/transcript-locate.ts`）：右側欄不在
+ * `MessageScrollerProvider` 裡，串流中直接捲會被自動捲到底拉回去。不畫任何東西。
+ */
+function ScrollerRegistration() {
+  const { scrollToMessage } = useMessageScroller();
+  useEffect(
+    () =>
+      registerTranscriptScroller((id) =>
+        scrollToMessage(id, { align: 'center', behavior: 'auto' }),
+      ),
+    [scrollToMessage],
+  );
+  return null;
+}
+
 export function Transcript({
   state,
   isFresh,
@@ -490,6 +504,7 @@ export function Transcript({
 
   return (
     <MessageScrollerProvider autoScroll>
+      <ScrollerRegistration />
       <MessageScroller className="min-h-0 flex-1">
         <MessageScrollerViewport aria-label="對話訊息" preserveScrollOnPrepend {...autoLoad}>
           {/* 在 content 外面，prepend 保位才動得了手（見 `earlier-pager.tsx`）。 */}
