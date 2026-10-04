@@ -5,8 +5,9 @@
  * 分歧）。我們只有擁有可檢關係的 package 才發布一個（空 installer 會被 `apps/harness/src/package-invariants.ts`
  * 擋下來，#974），而這顆事件在日誌上有三條機械判得出來的關係，所以寫實的：
  *
- * 1. **落在一輪裡**：同一份日誌前面有一顆 `turn/start`。子代理的日誌沒有 `turn/start`，所以這一條同時擋住
- *    「寫進子代理那一份」——記錄器只接 root。
+ * 1. **落在一輪裡**：同一份日誌前面有一顆 `turn/start`。**這一條不擋「寫進子代理那一份」**：前景子代理的日誌沒有
+ *    `turn/start`（會被擋），但背景子代理的每一輪（派出去與每次 `subagent.send`）都有（`background-subagents.ts`，
+ *    2026-10-05 實測）。「只寫 root」靠的是接上記錄器那一處（`index.ts` 的 `subject.address.kind !== 'root'` 直接略過），不是這條不變量。
  * 2. **那一輪跑過工具**：從最近一顆不是 resume 的 `turn/start` 算起，至少有一顆 `tool/result`。記錄器在一輪
  *    沒有任何結果時不記（同 dsh 的 `lastToolResultSeq < 0`）。**web 認輪靠的就是事件在串流裡的位置**
  *    （`@nexus/wire` 的 `WorkspaceChangesEntry`），一顆落在錯的輪裡的事件會先在這裡露出來。
