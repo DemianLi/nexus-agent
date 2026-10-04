@@ -22,7 +22,7 @@
  * | `turn/end`（`reason.kind: "interrupted"`） | 續接時補寫的收尾（#721）：上一個行程死在這一輪中間，畫面與完成同（`completed`），不論那一輪死前有沒有 `interrupt/raised`；補的 `tool/result`（`TOOL_OUTCOME_UNKNOWN`）的卡仍畫成 `UNFINISHED_TOOL_TEXT`，與補寫之前一字不差 |
  * | `session/end-seed` | 舊檔（#721 之前）上一個行程停在一輪中間的話，那一輪在這裡收掉；新檔那一輪已由上一列收掉 |
  * | `deliverables/presented` | `custom` frame，`data` 同即時（{@link deliverablesData}） |
- * | `subagent/catalog` | 委派呼叫派出的子會話（#1023）：`custom` frame，**逐顆轉**，位置就是日誌上的位置（配對的 `tool/call` 之後、同一輪）；`data` 同即時（{@link subagentCatalogData}）；30 以前的日誌沒有這一顆 |
+ * | `subagent/catalog` | 委派呼叫派出的子會話（#1023）：`custom` frame，**逐顆轉**，位置就是日誌上的位置（配對的 `tool/call` 之後、同一輪）；`data` 同即時（{@link subagentCatalogData}）；31 以前的日誌沒有這一顆 |
  * | `workspace/changes` | `custom` frame，`data` 同即時（{@link workspaceChangesData}）；它指到的摘要可能已經不在 |
  * | `model/usage` ／ `context/measure` | 用量表（#528）：**一頁各一顆，是到這一頁結尾為止最新的那一筆**，`data` 同即時（{@link modelUsageData}、{@link contextMeasureData}） |
  *

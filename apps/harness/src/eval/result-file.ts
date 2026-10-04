@@ -37,11 +37,12 @@
  * 預設目錄 {@link defaultResultDir} 在 `.gitignore` 裡；結果檔不進版控。
  */
 
-import { execFileSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { readGitProvenance, type BuildVersion } from '../build-version.js';
+import { stableStringify } from '../stable-stringify.js';
 import { BENCHMARK_SYSTEM_PROMPT } from './assembly.js';
 import {
   EVAL_DEADLINE_MS,
@@ -64,12 +65,11 @@ export const EVAL_RESULT_FORMAT_VERSION = 2;
 /** 哪一支進入點產生的。 */
 export type EvalTool = 'eval:compare' | 'eval:survey';
 
-/** 跑的時候 repo 是什麼狀態。拿不到（不在 git 底下、沒有 git）就是 `null`，不猜。 */
-export interface EvalProvenance {
-  readonly commit: string | null;
-  /** 工作樹有沒有未提交的改動（含未追蹤的檔）。本機跑 eval 多半有，只記 SHA 會說謊。 */
-  readonly dirty: boolean | null;
-}
+/**
+ * 跑的時候 repo 是什麼狀態。拿不到（不在 git 底下、沒有 git）就是 `null`，不猜。取法在 `../build-version.ts`，
+ * 會話日誌的 header 也用那一份（#1025）。
+ */
+export type EvalProvenance = BuildVersion;
 
 /** 這一輪的設定。**這些值任何一個不同，數字就不是同一把尺量的。** */
 export interface EvalRunSettings {
@@ -117,19 +117,6 @@ interface FooterLine {
 }
 
 // ───────────────────────── 版本識別 ─────────────────────────
-
-/** 欄位順序固定的序列化，雜湊才不隨鍵的寫法而變。 */
-function stableStringify(value: unknown): string {
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  if (typeof value === 'object' && value !== null) {
-    const entries = Object.entries(value as Record<string, unknown>)
-      .filter(([, item]) => item !== undefined)
-      .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0))
-      .map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`);
-    return `{${entries.join(',')}}`;
-  }
-  return JSON.stringify(value) ?? 'null';
-}
 
 /** 取前 12 個十六進位字元，跟 git 的短 SHA 一樣長；夠人眼比對，不拿來防偽。 */
 export function shortHash(text: string): string {
@@ -195,35 +182,8 @@ export function describeSettings(input: DescribeSettingsInput): EvalRunSettings 
   };
 }
 
-/** 跑一個 git 指令；失敗（沒有 git、不在 repo 裡）回 `undefined`。 */
-export type GitProbe = (args: readonly string[]) => string | undefined;
-
-function defaultGitProbe(args: readonly string[]): string | undefined {
-  try {
-    return execFileSync('git', [...args], {
-      cwd: fileURLToPath(new URL('.', import.meta.url)),
-      encoding: 'utf8',
-      stdio: ['ignore', 'pipe', 'ignore'],
-    });
-  } catch {
-    return undefined;
-  }
-}
-
-/**
- * 這一輪跑在哪個 commit、工作樹乾不乾淨。
- *
- * `probe` 可注入，測試不打真的 git。**拿不到就記 `null`**，不填 `'unknown'` 字串：
- * 字串會被當成一個 SHA 比對，`null` 不會。
- */
-export function readGitProvenance(probe: GitProbe = defaultGitProbe): EvalProvenance {
-  const head = probe(['rev-parse', 'HEAD'])?.trim();
-  const porcelain = probe(['status', '--porcelain']);
-  return {
-    commit: head === undefined || head === '' ? null : head,
-    dirty: porcelain === undefined ? null : porcelain.trim() !== '',
-  };
-}
+// 這一輪跑在哪個 commit、工作樹乾不乾淨：取法搬到 `../build-version.ts`（#1025），會話日誌的 header 用同一份。
+export { readGitProvenance, type GitProbe } from '../build-version.js';
 
 // ───────────────────────── 失敗訊息的遮罩 ─────────────────────────
 

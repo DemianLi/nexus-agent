@@ -314,6 +314,8 @@ describe('present 在真的圖上', () => {
       // 同上：座標從日誌取。折出來的那一格帶的就是 frame 上那一個。
       seq: presentedSeq!,
       files: [{ path: 'report.md', description: '報告' }],
+      // 時刻兩條路的時鐘不同（#1030）：即時是 pump 合成那一刻、歷史是日誌那一筆，這裡只比內容。
+      startedAt: expect.any(Number),
     };
     expect(folded).toEqual([[entry], [entry]]);
   });

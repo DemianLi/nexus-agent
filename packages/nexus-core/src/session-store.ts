@@ -311,16 +311,68 @@ import type { SessionEvent } from './session-log.js';
  * 就把它當正常收尾，但那顆 `turn/end` 在 end-seed 之前，而 28 的續行判準從 `currentTurnStart`（不往 end-seed 前找）起算，
  * 續接回來的授權也從 `disarmed` 起，所以不會因此多排一輪；歷史把它當完成收掉，同 28 在 end-seed 收掉的那一條。
  *
- * ## 30：`subagent/catalog`
+ * ## 30：header 多四格——`build`、`plugins`、`configHash`、`modelEntryId`
+ *
+ * 拿到一份日誌要答得出「哪一版程式寫的、掛了哪些插件、用哪一筆模型型錄」（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+ * 四格都是**建立者的描述**，見 {@link StoredSessionHeader} 各格。這是 header 的形狀第二次變（第一次是 13）。
+ *
+ * 升版照新增欄位的慣例（同 27），也照 dsh 那條門檻把 header 的形狀列為結構性變更、「拿不準就升」
+ * （`packages/core/session/src/types.ts:74-87`，`5badb15`），**不是 13 那種非升不可**：29 續接一份 30 的日誌時，
+ * 重寫 header 那一行是 `{ ...header, version: … }`（`apps/harness/src/jsonl-session-store.ts`），這四格原樣活過重寫；
+ * 而它們描述的本來就是**最初寫這份日誌的那一個行程**，續接的行程不該蓋掉它（30 自己續接也不蓋），沒有任何讀方拿它們
+ * 判准不准續接、怎麼重建對話。
+ *
+ * 29 以前的檔直接讀：一格都沒有就是那時候沒記。**判準是那一格在不在，不是 {@link StoredSessionHeader.version}**
+ * ——續接會把舊檔的 `version` 蓋成這一版而不回填這四格，理由同 13 的 `workspaceRoot`。
+ *
+ * ## 31：`subagent/catalog`
  *
  * 父那一份記下派出去的子代理：子會話 id 與派它的那一顆 `tool/call`（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)，
- * 照 dsh 的同名事件，見 `subagent-catalog.ts`）。v29 的檔直接讀：那時候沒有這一顆，前景子代理從父日誌找不到，只剩子日誌 header
+ * 照 dsh 的同名事件，見 `subagent-catalog.ts`）。v30 以前的檔直接讀：那時候沒有這一顆，前景子代理從父日誌找不到，只剩子日誌 header
  * 的 `parentSession`；背景的仍可從 `tool/result.meta.runId` 推。讀的人照「沒記」表態（「—」），**不是沒有子代理**。
  *
- * 升版照新增詞彙的慣例（同 26、28），不是非升不可：29 的讀者遇到它會當成認不得的種類略過（各 switch 都有 `default`），它不進模型、
+ * 升版照新增詞彙的慣例（同 26、28），不是非升不可：30 的讀者遇到它會當成認不得的種類略過（各 switch 都有 `default`），它不進模型、
  * 也不左右任何折疊，所以略過是對的。
  */
-export const SESSION_LOG_FORMAT_VERSION = 30;
+export const SESSION_LOG_FORMAT_VERSION = 31;
+
+/**
+ * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+ *
+ * 取法同 eval 結果檔（`apps/harness/src/eval/result-file.ts` 的 `readGitProvenance`，#1000）：**拿不到就是 `null`**，
+ * 不填 `'unknown'` 字串——字串會被當成一個 SHA 比對，`null` 不會。
+ */
+export interface StoredSessionBuild {
+  /** `git rev-parse HEAD`；不在 git 底下、沒有 git 就是 `null`。 */
+  readonly commit: string | null;
+  /** 工作樹有沒有未提交的改動（含未追蹤的檔）；問不到就是 `null`。只記 SHA 的話，本機改過的程式會冒名成那個 commit。 */
+  readonly dirty: boolean | null;
+}
+
+/**
+ * 疊完的插件清單上的一列，**不帶 `config`**（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+ *
+ * 設定可能含金鑰或內網位址，所以內容不進日誌，只進 {@link StoredSessionHeader.configHash}。
+ */
+export interface StoredSessionPluginRow {
+  /** 那一列的 `name`：**模組 specifier**（`@nexus/…`、`#settings/…`、`file:` 網址），不是 plugin 物件上的 `name`。 */
+  readonly name: string;
+  /** 那一列寫的 `id`；沒寫就沒有這一格（不補載入器補的號，那是 `--dump-config` 印不出來的東西）。 */
+  readonly id?: string;
+  /** 那一列寫了 `disabled: true`。 */
+  readonly disabled: boolean;
+}
+
+/**
+ * 一次組裝裡**每一份新建的 header** 都帶的那三格，由入口算一次、交給
+ * {@link ./session-persistence.ts | attachSessionPersistence}（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+ */
+export interface SessionHeaderBuildMetadata {
+  readonly build: StoredSessionBuild;
+  readonly plugins: readonly StoredSessionPluginRow[];
+  /** 見 {@link StoredSessionHeader.configHash}。算不出來（金鑰檔讀不到）就沒有這一格。 */
+  readonly configHash?: string;
+}
 
 /**
  * 一份已存會話的元資料，**存在事件日誌之外**。
@@ -361,6 +413,30 @@ export interface StoredSessionHeader {
    * 「id 是 `<root>/<runId>`，對到 dsh 的 `header.parentSession`」。
    */
   readonly parentSession?: string;
+  /**
+   * 寫這份日誌的程式碼版本（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
+   *
+   * **續接不改它**：續接的行程沿用已存的 header，所以這一格永遠是最初那一個行程。續接之後才新開的 subagent
+   * 日誌帶的是續接那個行程的版本——同 {@link workspaceRoot} 那條「root 沒有、subagent 有」，那是對的，不要回填。
+   * 30 以前的日誌沒有這一格。
+   */
+  readonly build?: StoredSessionBuild;
+  /** 建立當下疊完的插件清單，順序同 `--dump-config`。見 {@link StoredSessionPluginRow}；續接規則同 {@link build}。 */
+  readonly plugins?: readonly StoredSessionPluginRow[];
+  /**
+   * 建立當下疊完的整份插件設定（含每一列的 `config` 與 `disabled`）的**帶鍵雜湊**，格式 `hmac-sha256:<16 個十六進位字元>`。
+   *
+   * **只能跟同一台機器、同一個 harness home 寫的比**：鍵是 home 底下一個只有擁有者讀得到的檔，不進日誌。不用無鍵
+   * 雜湊是因為設定的大半是公開的（出貨的 `cordis.yml` 在 repo 裡），剩下的未知數常常只是一個內網位址——無鍵的話，
+   * 拿日誌的人可以逐一猜到雜湊對上。續接規則同 {@link build}。
+   */
+  readonly configHash?: string;
+  /**
+   * root 用的那一筆模型型錄 id（`live-model` 的 `modelId`）。**只有 root 的 header 有**：subagent 可能被選模型政策換成
+   * 型錄裡的另一筆，蓋上 root 的 id 等於替它宣稱一個沒用過的模型；假模型（沒帶 `--live`）不是型錄裡的一筆，也沒有。
+   * 續接規則同 {@link build}。
+   */
+  readonly modelEntryId?: string;
 }
 
 /**

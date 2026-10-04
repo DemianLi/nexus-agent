@@ -86,7 +86,7 @@ export interface SubagentLink extends SubagentCatalogData {
 }
 
 /**
- * 父日誌上每一顆 `subagent/catalog` 解成連結，照日誌順序。**一顆都沒有就是空的**——30 以前的日誌、或沒派過子代理，
+ * 父日誌上每一顆 `subagent/catalog` 解成連結，照日誌順序。**一顆都沒有就是空的**——31 以前的日誌、或沒派過子代理，
  * 讀的人照「沒記」表態（「—」），不推論成沒有子代理。
  *
  * @param events - 父那一份日誌的全部事件。

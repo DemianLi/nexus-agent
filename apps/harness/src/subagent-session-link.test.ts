@@ -232,6 +232,18 @@ function delegationCard(state: ConversationState): ToolEntry | undefined {
   );
 }
 
+/**
+ * 卡上兩組新欄位並存（#1041 的條目時刻與本卡的子會話）：收掉的卡兩個時刻都在、有先後，子會話也在。
+ * 時刻的規則本身由 #1041 的 `wire-entry-timestamps.test.ts` 量，這裡只證明目錄那顆 frame 沒有把它們弄丟或改寫成別的形狀。
+ */
+function expectBoth(found: ToolEntry | undefined, session: ToolEntry['subagentSession']): void {
+  expect(found?.status).toBe('done');
+  expect(found?.subagentSession).toEqual(session);
+  expect(typeof found?.startedAt).toBe('number');
+  expect(typeof found?.settledAt).toBe('number');
+  expect(found!.settledAt!).toBeGreaterThanOrEqual(found!.startedAt!);
+}
+
 describe.each(CASES)('$label：wire 的工具卡帶著子會話，重新整理與重開之後都還在', (entry) => {
   it('即時、歷史、只剩磁碟那一份的歷史，三處折出來的卡都指到同一份子會話', async () => {
     const workspace = join(dir, 'workspace');
@@ -274,6 +286,9 @@ describe.each(CASES)('$label：wire 的工具卡帶著子會話，重新整理�
       () => delegationCard(reduceAll(emptyConversation(), frames))?.subagentSession !== undefined,
     );
     const live = delegationCard(reduceAll(emptyConversation(), frames))?.subagentSession;
+    // 即時那條：等卡收掉，再看兩組欄位並存。
+    await until(() => delegationCard(reduceAll(emptyConversation(), frames))?.status === 'done');
+    expectBoth(delegationCard(reduceAll(emptyConversation(), frames)), live);
     line.abort();
     await draining;
 
@@ -285,9 +300,9 @@ describe.each(CASES)('$label：wire 的工具卡帶著子會話，重新整理�
     // 重新整理：歷史路由讀日誌那一份。
     const page = await client.threadHistory('t1');
     if (page.kind !== 'ok') throw new Error(page.message);
-    expect(
-      delegationCard(reduceAll(emptyConversation(), page.result.events))?.subagentSession,
-    ).toEqual(live);
+    const refreshed = delegationCard(reduceAll(emptyConversation(), page.result.events));
+    expect(refreshed?.subagentSession).toEqual(live);
+    expectBoth(refreshed, live);
 
     // 重開：收掉這個行程，只剩磁碟上那一份，交給新的 handler 當 seed 再讀一次歷史。
     opened.splice(opened.indexOf(handler), 1);
@@ -314,9 +329,14 @@ describe.each(CASES)('$label：wire 的工具卡帶著子會話，重新整理�
     });
     const replayed = await again.threadHistory('t1');
     if (replayed.kind !== 'ok') throw new Error(replayed.message);
-    expect(
-      delegationCard(reduceAll(emptyConversation(), replayed.result.events))?.subagentSession,
-    ).toEqual(live);
+    const reopenedCard = delegationCard(reduceAll(emptyConversation(), replayed.result.events));
+    expect(reopenedCard?.subagentSession).toEqual(live);
+    expectBoth(reopenedCard, live);
+    // 兩次歷史讀的是同一份日誌：時刻一樣。
+    expect([reopenedCard?.startedAt, reopenedCard?.settledAt]).toEqual([
+      refreshed?.startedAt,
+      refreshed?.settledAt,
+    ]);
     expect(reported).toEqual([]);
   }, 30000);
 });
