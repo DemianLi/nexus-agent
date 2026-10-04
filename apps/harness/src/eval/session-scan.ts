@@ -60,6 +60,9 @@
  * **另一件版本也帶不出來**：續接過的檔，header 在第一次續寫時被蓋成當時的版本，而續接之前那一段
  * 是舊版寫的。那一段的缺欄會被讀成 0。
  *
+ * header 上的建置版本、插件清單、設定雜湊與模型型錄 id（30 起，#1025）因此**不照版本判**，照那一格在不在：沒有就印「—」。
+ * 規則在 `session-header-metadata.ts`。
+ *
  * @module
  */
 
@@ -86,6 +89,11 @@ import type {
 import type {} from '@nexus/plugin-todo';
 import type {} from '@nexus/plugin-feedback';
 import { parseHeader, parseJsonlSessionBody, sessionLogPathOf } from '../jsonl-session-store.js';
+import {
+  formatSessionHeaderMetadata,
+  readSessionHeaderMetadata,
+  type SessionHeaderMetadataView,
+} from '../session-header-metadata.js';
 
 /** 沒帶碼的錯誤結果落在這一格。dsh 只替帶碼的錯誤填 `error`，一般拋錯與核准被拒都在這裡。 */
 export const UNCODED_ERROR = '無碼';
@@ -144,6 +152,8 @@ export interface SessionLogHeader {
   readonly id: string;
   readonly version: number;
   readonly parentSession?: string;
+  /** 建置版本、插件清單、設定雜湊、模型型錄 id（#1025），只留形狀對得上的那幾格；沒有就是沒記。 */
+  readonly metadata?: SessionHeaderMetadataView;
 }
 
 /** 讀進來、還沒掃的一份。 */
@@ -192,6 +202,11 @@ export interface SessionScan {
   readonly feedbackRecords: number | null;
   /** 認不得而略過的事件顆數。 */
   readonly unknownEvents: number;
+  /**
+   * header 上的建置中繼資料（#1025）。**判準是那一格在不在，不是 {@link version}**：續接會把舊檔的版本蓋成新的而不回填。
+   * 沒有就是一格都沒記，報表印「—」。
+   */
+  readonly headerMetadata?: SessionHeaderMetadataView;
 }
 
 /** 讀得到但讀不懂的那一份。 */
@@ -344,6 +359,7 @@ export function scanSessionLog(
         : null,
     feedbackRecords: version >= FEEDBACK_SINCE ? feedbackRecords : null,
     unknownEvents: log.events.length - known.length,
+    ...(log.header.metadata !== undefined && { headerMetadata: log.header.metadata }),
   };
 }
 
@@ -359,10 +375,13 @@ function readHeader(text: string): SessionLogHeader | string {
     if (error instanceof SessionCorruptionError) return error.message;
     throw error;
   }
+  const metadata = readSessionHeaderMetadata(header);
   return {
     id: header.id,
     version: header.version,
     ...(header.parentSession !== undefined && { parentSession: header.parentSession }),
+    // 一格都沒記（30 以前的日誌）就整個不帶，報表照樣印「—」。
+    ...(Object.keys(metadata).length > 0 && { metadata }),
   };
 }
 
@@ -478,6 +497,7 @@ export function formatScanReport(
       `  步數 ${scan.steps ?? '—'} ｜工具呼叫 ${scan.toolCalls ?? '—'} ｜最長重複 ${run}`,
       `  工具錯誤 ${scan.errors === null ? '—' : formatErrors(scan.errors)}`,
       `  中止 ${scan.aborted ?? '—'} 輪 ｜點踩 ${scan.negativeTurns ?? '—'} 輪 ｜回饋 ${scan.feedbackRecords ?? '—'} 則`,
+      `  ${formatSessionHeaderMetadata(scan.headerMetadata ?? {})}`,
     );
     if (scan.version < FEEDBACK_SINCE) {
       const missing = [

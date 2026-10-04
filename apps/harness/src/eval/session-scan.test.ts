@@ -492,6 +492,40 @@ describe('讀磁碟：唯讀，壞一份不擋其餘', () => {
   });
 
   /**
+   * header 的建置中繼資料（#1025）：記了的照印，舊版沒記的印「—」。**判準是那一格在不在**，所以舊檔的 `version` 被續接
+   * 蓋成這一版也一樣印「—」。
+   */
+  it('header 記了建置那幾格就印出來，沒記的（含版本被續接蓋過的舊檔）印「—」', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-scan-metadata-'));
+    const store = createJsonlSessionStore({ rootDir: root });
+    const recorded = store.create({
+      version: SESSION_LOG_FORMAT_VERSION,
+      id: 'recorded',
+      createdAt: 0,
+      build: { commit: 'abcdef0123456789', dirty: false },
+      plugins: [{ name: '@nexus/plugin-todo', id: 'todo', disabled: true }],
+      configHash: 'hmac-sha256:0011223344556677',
+      modelEntryId: 'vendor/model',
+    });
+    await recorded.append(events([turn('message')]));
+    await recorded.close();
+    await writeSession(root, 'resumed-old', [turn('message')]);
+
+    const { logs } = await readSessionLogs([root]);
+    expect(logs).toHaveLength(2);
+    const text = formatScanReport(
+      logs.map((log) => scanSessionLog(log)),
+      [],
+      { threshold: 5 },
+    ).join('\n');
+    expect(text).toContain(
+      '建置 abcdef012345（未提交的改動：無） ｜模型 vendor/model ｜插件 1 列（停用 1） ｜' +
+        '設定雜湊 hmac-sha256:0011223344556677',
+    );
+    expect(text).toContain('建置 — ｜模型 — ｜插件 — ｜設定雜湊 —');
+  });
+
+  /**
    * **這條才分得出唯讀與否**：上面那條的鎖檔名跟寫的那一方同名，走續接的讀法也不會多出檔案。
    * 一個還開著的寫入把手握著租約，續接那條會拋 `SessionAlreadyOwnedError`；掃描照讀。
    */

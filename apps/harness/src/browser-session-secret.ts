@@ -61,11 +61,33 @@ function isMissing(error: unknown): boolean {
 }
 
 /**
+ * 一把住在 harness home 底下的密鑰：檔名，與錯誤訊息裡怎麼稱呼它、怎麼重設。
+ *
+ * 會話日誌 header 的設定雜湊（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)，`session-header-metadata.ts`）
+ * 也要一把落盤的密鑰，規矩跟這一把一模一樣（版本、canonical、owner-only、先寫的贏），所以共用這一份讀寫；
+ * **不共用同一把**：刪掉瀏覽器那一把是「撤銷全部瀏覽器會話」的開關，不該順便讓每一份日誌的設定雜湊換掉。
+ */
+export interface HomeSecretRole {
+  /** 在 harness home 底下的檔名。 */
+  readonly file: string;
+  /** 錯誤訊息裡的稱呼，例如「瀏覽器會話密鑰檔」。 */
+  readonly label: string;
+  /** 錯誤訊息最後那一句：怎麼重設、重設的代價。 */
+  readonly resetHint: string;
+}
+
+const BROWSER_SESSION_SECRET_ROLE: HomeSecretRole = {
+  file: BROWSER_SESSION_SECRET_FILE,
+  label: '瀏覽器會話密鑰檔',
+  resetHint: '要重設就刪掉它再重啟 serve——所有瀏覽器會話都會失效。',
+};
+
+/**
  * 讀一份已存在的密鑰檔；不存在回 `undefined`。
  *
  * @throws 權限過寬、內容認不得、密鑰不合格——三種都不覆寫，由人決定怎麼處理。
  */
-async function readSecretFile(file: string): Promise<Buffer | undefined> {
+async function readSecretFile(file: string, role: HomeSecretRole): Promise<Buffer | undefined> {
   let mode: number;
   try {
     mode = (await stat(file)).mode;
@@ -73,7 +95,7 @@ async function readSecretFile(file: string): Promise<Buffer | undefined> {
     if (isMissing(error)) return undefined;
     throw error;
   }
-  assertOwnerOnlyMode('瀏覽器會話密鑰檔', file, mode);
+  assertOwnerOnlyMode(role.label, file, mode);
   const text = await readFile(file, 'utf8');
   let parsed: unknown;
   try {
@@ -84,38 +106,35 @@ async function readSecretFile(file: string): Promise<Buffer | undefined> {
   }
   if (!isRecord(parsed) || parsed.version !== RECORD_VERSION) {
     throw new Error(
-      `瀏覽器會話密鑰檔 ${file} 的格式認不得（要 { "version": 1, "secret": … }）；` +
-        `確認它不是別的東西寫的。要重設就刪掉它再重啟 serve——所有瀏覽器會話都會失效。`,
+      `${role.label} ${file} 的格式認不得（要 { "version": 1, "secret": … }）；` +
+        `確認它不是別的東西寫的。${role.resetHint}`,
     );
   }
   const secret = canonicalSecret(parsed.secret);
   if (secret === undefined) {
     throw new Error(
-      `瀏覽器會話密鑰檔 ${file} 的密鑰不合格（要 32 bytes 的 base64url）；` +
-        `要重設就刪掉它再重啟 serve——所有瀏覽器會話都會失效。`,
+      `${role.label} ${file} 的密鑰不合格（要 32 bytes 的 base64url）；${role.resetHint}`,
     );
   }
   return secret;
 }
 
 /**
- * 讀 home 底下的簽章密鑰，沒有就建一把。
+ * 讀 home 底下的一把密鑰，沒有就建一把。
  *
  * @param home - harness home（`harness-home.ts` 解析出來的絕對路徑）。不存在就以 `0700` 建。
+ * @param role - 哪一把：檔名與錯誤訊息的稱呼。
  * @returns 32 bytes 的密鑰。兩個呼叫同時第一次建立時，拿到的是同一把。
  * @throws 檔案權限過寬、內容認不得、或建立失敗。
  */
-export async function loadOrCreateBrowserSessionSecret(home: string): Promise<Buffer> {
-  const file = join(home, BROWSER_SESSION_SECRET_FILE);
-  const existing = await readSecretFile(file);
+export async function loadOrCreateHomeSecret(home: string, role: HomeSecretRole): Promise<Buffer> {
+  const file = join(home, role.file);
+  const existing = await readSecretFile(file, role);
   if (existing !== undefined) return existing;
 
   await mkdir(home, { recursive: true, mode: DIR_MODE });
   const text = `${JSON.stringify({ version: RECORD_VERSION, secret: encodeBase64Url(randomBytes(SECRET_BYTES)) })}\n`;
-  const staging = join(
-    home,
-    `.${BROWSER_SESSION_SECRET_FILE}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`,
-  );
+  const staging = join(home, `.${role.file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
   await writeFile(staging, text, { mode: FILE_MODE, flag: 'wx' });
   try {
     await link(staging, file);
@@ -125,9 +144,20 @@ export async function loadOrCreateBrowserSessionSecret(home: string): Promise<Bu
   } finally {
     await rm(staging, { force: true });
   }
-  const created = await readSecretFile(file);
+  const created = await readSecretFile(file, role);
   if (created === undefined) {
-    throw new Error(`瀏覽器會話密鑰檔 ${file} 建立之後讀不到。`);
+    throw new Error(`${role.label} ${file} 建立之後讀不到。`);
   }
   return created;
+}
+
+/**
+ * 讀 home 底下的簽章密鑰，沒有就建一把。
+ *
+ * @param home - harness home（`harness-home.ts` 解析出來的絕對路徑）。不存在就以 `0700` 建。
+ * @returns 32 bytes 的密鑰。兩個呼叫同時第一次建立時，拿到的是同一把。
+ * @throws 檔案權限過寬、內容認不得、或建立失敗。
+ */
+export function loadOrCreateBrowserSessionSecret(home: string): Promise<Buffer> {
+  return loadOrCreateHomeSecret(home, BROWSER_SESSION_SECRET_ROLE);
 }

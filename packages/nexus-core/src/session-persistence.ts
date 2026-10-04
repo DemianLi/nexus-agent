@@ -33,7 +33,12 @@ import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry } from './registry.js';
 import type { SessionEvent, SessionLog } from './session-log.js';
 import { SESSION_LOG_FORMAT_VERSION } from './session-store.js';
-import type { SessionStore, StoredSession, StoredSessionHeader } from './session-store.js';
+import type {
+  SessionHeaderBuildMetadata,
+  SessionStore,
+  StoredSession,
+  StoredSessionHeader,
+} from './session-store.js';
 import type { SessionRegistry } from './session-registry.js';
 
 /** 第一顆待處理事件開的批次窗口，毫秒。 */
@@ -249,6 +254,16 @@ export function attachSessionPersistence(
     readonly warn?: (message: string) => void;
     readonly resumedRoot?: { readonly stored: StoredSession; readonly storedCount: number };
     /**
+     * 建置版本、插件清單與設定雜湊（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）：**這裡新建的每一份
+     * header 都帶**（root 與 subagent），由入口算一次往下傳——這個套件不碰 git、不讀設定檔。`resumedRoot` 那一份
+     * 不新建 header，所以續接的 root 留著最初那一份，同 `workspaceRoot`。
+     */
+    readonly buildMetadata?: SessionHeaderBuildMetadata;
+    /**
+     * root 用的模型型錄 id，**只進 root 的 header**，理由見 {@link StoredSessionHeader.modelEntryId}。
+     */
+    readonly rootModelEntryId?: string;
+    /**
      * 批次窗口，毫秒。省略即 {@link DEFAULT_PERSISTENCE_WINDOW_MS}。
      *
      * **一路轉發給每一份協調器**——這個行程裡的每一條會話（root 與 subagent）共用同一個
@@ -271,6 +286,15 @@ export function attachSessionPersistence(
       ...(options.workspaceRoot !== undefined && { workspaceRoot: options.workspaceRoot }),
       // 血緣：subagent 那些的 id 是 `<root>/<runId>`，root 就是它的父。
       ...(address.kind === 'subagent' && { parentSession: sessions.root.sessionId }),
+      ...(options.buildMetadata !== undefined && {
+        build: options.buildMetadata.build,
+        plugins: options.buildMetadata.plugins,
+        ...(options.buildMetadata.configHash !== undefined && {
+          configHash: options.buildMetadata.configHash,
+        }),
+      }),
+      ...(address.kind === 'root' &&
+        options.rootModelEntryId !== undefined && { modelEntryId: options.rootModelEntryId }),
     };
     const resumed = address.kind === 'root' ? options.resumedRoot : undefined;
     const coordinator = new SessionPersistenceCoordinator({
