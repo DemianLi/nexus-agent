@@ -68,10 +68,11 @@ export function failureCopy(code: string): string {
  * 這則回覆長不長讚踩：**那一輪收尾的那則**（`turnTail`，同 dsh 的 `TurnTailNodeView`），而且指名得到
  * （有 `messageId`）。
  *
- * **講到一半被停下來的那則不長**，同 dsh（凍結的半段沒有 `messageId`，那一輪就沒有按鈕），而我們這邊的
- * 理由是同一個：pump 把那半段記進日誌時是新建的一則、沒有 id（`thread-pump.ts` 的
- * `#keepInterruptedReply`），server 找不到它。即時那則手上的 `messageId` 是串流那次呼叫的，評下去一律
- * `target-not-found`；重播出來的那則則是根本沒有 `messageId`。
+ * **講到一半被停下來的那則不長**，同 dsh（凍結的半段沒有 `messageId`，那一輪就沒有按鈕），結論一樣、理由
+ * 不同：pump 記那半段時（`thread-pump.ts` 的 `#keepInterruptedReply`）沿用即時那則的 id，好讓重新整理時補送
+ * 與歷史對得上（#1044），所以現在即時與重播出來的那則手上都有 `messageId`；但 server 的兩處讀方
+ * （`@nexus/core` 的 `currentMessageFeedback`、評分外掛的 `isAssistantMessage`）明確排除 `interrupted`，
+ * 評下去一律 `target-not-found`。這裡靠 `stopped` 擋，不靠有沒有 id。
  *
  * @param entry - 一則回覆。
  * @returns 要不要畫讚踩。
