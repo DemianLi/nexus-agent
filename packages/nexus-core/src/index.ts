@@ -445,6 +445,7 @@ export type {
   SessionEvent,
   SessionEventMap,
   SessionEventType,
+  SessionAppendOptions,
   SessionLogListener,
   SessionLogOptions,
   SessionLogView,
@@ -459,8 +460,10 @@ export {
   currentTurnStart,
   openTurnStart,
   hasUnansweredInterrupt,
+  isKnownSessionEventType,
   isLogicalTurnStart,
   isModelVisibleEvent,
+  isUnreadableSessionEvent,
   MODEL_VISIBLE_EVENT_TYPES,
   SessionLog,
 } from './session-log.js';
@@ -500,6 +503,7 @@ export {
   SessionAlreadyOwnedError,
   SessionNotFoundError,
   SessionCorruptionError,
+  SessionEventUnsupportedError,
   SessionFormatUnsupportedError,
 } from './session-store.js';
 
