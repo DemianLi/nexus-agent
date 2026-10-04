@@ -294,7 +294,9 @@ describe('觀測分頁：結構化模式', () => {
     expect(screen.getAllByTestId('trace-row')).toHaveLength(total + 1);
     expect(screen.queryByTestId('trace-more-rows')).toBeNull();
     expect(screen.getByText('做很多事')).toBeTruthy();
-  });
+    // 要畫兩次 200 多列：本機約 1.2 秒、CI 的機器慢四倍（跑過 5.2 秒、撞預設的 5 秒逾時），
+    // 所以這顆單獨放寬；列數是要驗的東西，不能為了快而縮小。
+  }, 30_000);
 
   it('窗口之前的已載入對話：沒有標題、標明「沒有結構資料」', async () => {
     const script = new Script();
