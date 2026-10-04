@@ -141,6 +141,7 @@ import {
   workspaceChangesData,
 } from './conversation-history.js';
 import type { ProjectionChildren } from './projection-children.js';
+import { ProjectionCoalescer } from './projection-coalescer.js';
 import { projectionData } from './projection-wire.js';
 import { driveGoalRound } from './goal-driver.js';
 import {
@@ -1106,6 +1107,8 @@ export class ThreadPump {
    * 歷史路由透過 {@link ThreadPump.projectionChildren} 與活著的合起來讀，兩條路讀同一份集合。
    */
   readonly #childFold: ProjectionFold;
+  /** 投影 frame 的出口（#1071）：輪中同一個單元連續的變更合成一顆，輪結束與收線之前送完，見 `projection-coalescer.ts`。 */
+  readonly #projectionOut = new ProjectionCoalescer((data) => this.#presentCustom(data));
   readonly #childUnits: readonly ProjectionUnit[];
   readonly #childSeeds: ProjectionChildren;
   readonly #childSessions = new Map<string, ProjectionSession>();
@@ -1860,6 +1863,7 @@ export class ThreadPump {
   close(): void {
     this.#closed = true;
     this.#unobserveLogs();
+    this.#projectionOut.dispose();
     // 停住的那幾件由 `#next` 收掉（#629）。**不在這裡收**：這一刻還在跑的那一輪可能之後才撞上
     // 核准點，那時排著的才變成停住的——只在這裡看一次會漏掉它們。
     this.#kick();
@@ -2592,16 +2596,19 @@ export class ThreadPump {
       if (event.type === 'goal/change') this.#scheduleGoalDrive();
       // 插件投影：一個泛用呼叫，不是每種投影一個分支。變了的單元各送一顆 `projection` frame。
       for (const value of this.#projections?.push(event) ?? []) {
-        this.#presentCustom(projectionData(value));
+        // 輪外（命令、接上時的 baseline）當場送；輪中才合併。
+        this.#projectionOut.offer(value.key, projectionData(value), this.#current !== undefined);
       }
     }
     // 子代理自己的投影（#1028）：宣告 `children` 的單元對每個子代理各折一份，值帶 `session`（它的 `runId`）送出。
     if (entry.address.kind === 'subagent') {
       const { runId } = entry.address;
       for (const value of this.#childSessions.get(runId)?.push(event) ?? []) {
-        this.#presentCustom(projectionData(value, runId));
+        this.#projectionOut.offer(`${runId}\0${value.key}`, projectionData(value, runId));
       }
     }
+    // 一輪收尾（root 的 `turn/end`）：合併視窗裡待送的當場全送，下行看到的就是最終值（#1071）。
+    if (event.type === 'turn/end' && entry.address.kind === 'root') this.#projectionOut.flush();
     // 回覆落進日誌了：從這一刻起歷史拿得到它，不再補送（#953）。
     if (
       event.type === 'assistant/message' &&

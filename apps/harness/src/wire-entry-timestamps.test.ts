@@ -9,7 +9,7 @@
  * | 條目 | 對應的日誌那一筆 |
  * | --- | --- |
  * | 人話 | `turn/start` |
- * | 模型回覆 | 同一個訊息 id 的 `assistant/message`（兩格都比它） |
+ * | 模型回覆 | `startedAt` 比它所屬那一次呼叫的 `model/start`（`assistant/message.modelCall` 指的那顆）、`settledAt` 比同一個訊息 id 的 `assistant/message` |
  * | 工具卡 | `startedAt` 比第一顆 `tool/call`、`settledAt` 比 `tool/result` |
  *
  * **量具先自我校準**：歷史那條的每一格差值必須正好是 0——不是 0 就是量具讀錯了欄位或配錯了對，先修量具。腳本的模型
@@ -201,15 +201,23 @@ function measure(
           event.type === 'assistant/message' &&
           loggedMessageId(event.data.message) === entry.messageId,
       );
-      if (anchor === undefined) throw new Error(`回覆 ${entry.id} 配不到 assistant/message`);
+      if (anchor === undefined || anchor.type !== 'assistant/message') {
+        throw new Error(`回覆 ${entry.id} 配不到 assistant/message`);
+      }
+      // 開始的那一格對**這則回覆所屬那一次**呼叫的 `model/start`（#1048），不是整輪第一顆。
+      const modelStart = log.find(
+        (event) => event.type === 'model/start' && event.seq === anchor.data.modelCall,
+      );
+      if (modelStart === undefined) throw new Error(`回覆 ${entry.id} 配不到 model/start`);
       for (const field of ['startedAt', 'settledAt'] as const) {
         const value = entry[field];
+        const base = field === 'startedAt' ? modelStart : anchor;
         rows.push({
           path,
           kind: 'ai',
           field,
-          anchor: 'assistant/message',
-          delta: value === undefined ? null : value - anchor.time,
+          anchor: base.type,
+          delta: value === undefined ? null : value - base.time,
         });
       }
     }
@@ -281,11 +289,17 @@ describe('條目時刻在真的線上（#1030）', () => {
     // **校準**：歷史那條的 frame 帶的就是日誌的 `time`，差值逐格是 0。
     expect(historyRows.map((row) => row.delta)).toEqual(historyRows.map(() => 0));
 
-    // 即時那條的回覆：`startedAt` 是開始吐字那一刻（`message-start` 跟第一個字一起到），早於日誌（講完才落盤）至少
-    // 吐剩下那幾個字的時間；`settledAt` 貼著日誌。計時器可能早一毫秒醒，每個字讓一毫秒。
+    // 即時那條的回覆：`startedAt` 是第一個字到的那一刻（`message-start` 跟它一起到），**晚於**這一次呼叫的 `model/start`
+    // 一段首字等待（TTFT）——腳本模型每個字前面都等一下，所以至少一個字的時間；`settledAt` 貼著日誌。計時器可能早一毫秒醒。
+    // 這一段就是兩條路 `startedAt` 的差距（歷史那條取 `model/start`，見 `AiEntry.startedAt`）；它遠小於整則回覆的長度。
     const [first, second] = deltaOf(liveRows, 'ai', 'startedAt') as number[];
-    expect(first).toBeLessThanOrEqual(-(FIRST.length - 1) * (TOKEN_DELAY_MS - 1));
-    expect(second).toBeLessThanOrEqual(-(SECOND.length - 1) * (TOKEN_DELAY_MS - 1));
+    for (const [ttft, text] of [
+      [first, FIRST],
+      [second, SECOND],
+    ] as const) {
+      expect(ttft).toBeGreaterThanOrEqual(TOKEN_DELAY_MS - 1);
+      expect(ttft).toBeLessThan(text.length * (TOKEN_DELAY_MS - 1));
+    }
     // 人話、回覆的 `settledAt`、工具卡兩格：即時那條也貼著日誌（pump 在同一個同步段裡從日誌合成，或基座的 frame 與
     // 日誌幾乎同時）。實測多半是 0 或 1 毫秒，界線見 {@link NEAR_MS}。
     for (const delta of [
@@ -305,10 +319,14 @@ describe('條目時刻在真的線上（#1030）', () => {
         TOOL_MS - 1,
       );
     }
-    // 歷史那條的回覆兩格是同一個時刻（日誌只記講完那一筆），這是兩條路語意不同的地方。
-    for (const entry of history) {
-      if (entry.kind === 'ai') expect(entry.startedAt).toBe(entry.settledAt);
-    }
+    // 歷史那條的回覆有耗時：`startedAt` 是呼叫開始、`settledAt` 是落盤，隔著整則吐字的時間（#1048；以前兩格是同一個時刻）。
+    const texts = [FIRST, SECOND];
+    history
+      .filter((entry) => entry.kind === 'ai')
+      .forEach((entry, index) => {
+        const streamMs = ((entry.settledAt ?? 0) - (entry.startedAt ?? Infinity)) as number;
+        expect(streamMs).toBeGreaterThanOrEqual(texts[index]!.length * (TOKEN_DELAY_MS - 1));
+      });
   }, 30000);
 
   it('續接：同一顆呼叫的 `tool-started` 在兩條路上都到兩次，startedAt 取第一顆，等人回答的時間算在裡面', async () => {

@@ -737,10 +737,11 @@ function message(
   messageId?: string,
   reasoning = '',
   references?: readonly WireSessionReference[],
+  startTime = time,
 ): Event[] {
   const ids = role === 'ai' ? { run_id: key } : { id: key };
   return [
-    frame('messages', time, {
+    frame('messages', startTime, {
       event: 'message-start',
       role,
       ...ids,
@@ -814,6 +815,15 @@ export function historyFrames(
   /** 這一輪記了 `tool/call`、還沒有 `tool/result` 的：callId → 工具名。 */
   const unsettled = new Map<string, string>();
   const last = events.at(-1);
+  /**
+   * 每一次模型呼叫開始的時刻：`model/start` 的 `seq` → `time`。一則回覆的 `startedAt` 取自它所屬那一次的開始（#1048），
+   * 見 `AiEntry.startedAt`。一頁從輪首切，一輪裡的每顆 `model/start` 都在同一頁；找不到（#1021 之前的日誌沒有
+   * `modelCall`、或呼叫的開始不在這一段）就退回回覆落盤的時刻。
+   */
+  const modelStartedAt = new Map<number, number>();
+  for (const event of events) {
+    if (event.type === 'model/start') modelStartedAt.set(event.seq, event.time);
+  }
   /**
    * 這一段結尾時的待辦清單（#575）。**從 `null` 起算不用往前補**：一頁一定從 seq 0 或一顆不是 `resume` 的
    * `turn/start` 開始（`historyPage` 在輪邊界上切），而那一顆本來就會把它清成 `null`。
@@ -940,6 +950,9 @@ export function historyFrames(
               event.data.interrupted,
               loggedMessageId(event.data.message),
               reasoning,
+              undefined,
+              // 開始＝這一次模型呼叫開始（dsh 的 `stepStartTime`），不是落盤；不會晚於落盤，防時鐘倒退。
+              Math.min(event.time, modelStartedAt.get(event.data.modelCall ?? -1) ?? event.time),
             ),
           );
         }

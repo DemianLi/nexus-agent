@@ -42,7 +42,7 @@ describe('workspace/changes 的配套入口', () => {
     expect(violations).toEqual([]);
   });
 
-  it('前面沒有 turn/start（子代理那一份就是這樣）', () => {
+  it('前面沒有 turn/start（輪外；前景子代理那一份就是這樣）', () => {
     const log = new SessionLog('orphan');
     const violations = watch(log);
     log.append('tool/result', { callId: 'c1', isError: false });
