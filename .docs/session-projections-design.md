@@ -73,6 +73,11 @@ interface ProjectionUnit<S, V> {
   一份日誌一份折疊，單元的 `apply` 不必知道在折誰）。子日誌的集合只有 pump 一份（`projectionChildren()`，活著的取記憶體、
   上一個行程留下的啟動時讀進來），即時與歷史讀同一份；細節見 `apps/harness/src/projection-children.ts`。
   沒有宣告 `children` 的單元一顆子代理事件都收不到。
+- **輪中的 frame 合併**（[#1071](https://github.com/DemianLi/nexus-agent/issues/1071)）：整份取代讓下行量 ≈ 事件數 × view 大小，
+  所以輪中同一個單元連續的變更合成一顆——單元第一次變更開一個 100 毫秒的視窗，視窗到了送**那一刻最新的**整份值，視窗內再變的
+  只換掉待送的那份。照 dsh job-controller 的觀察串流（`streamJobRows`：等 wake、睡 `observeFlushMs`、醒來才讀現況）。
+  **最後一顆一定是最終值**：root 的 `turn/end` 當場送掉所有待送的，收線丟掉（下行已無人聽）；root 輪外的變更（命令、接上時的
+  baseline）不合併、當場送；子代理的投影一律走視窗。實作與理由見 `apps/harness/src/projection-coalescer.ts`。
 - `disabled: true` 關掉插件 → 註冊表裡沒有那個單元 → 歷史與即時都不送 → web 的 `projections` 沒有那個 key。
   dsh 同樣**不推移除 frame**（mandatory-seam note 第 29 行：註冊表增減不跨串流廣播），靠下一份 baseline 反映。
 - 圖自己發的 `custom` frame **照舊一律丟**（`thread-pump.ts` 的 `raw.method === 'custom'` 那條）。`projection` 只能由 pump 從日誌折出來，
