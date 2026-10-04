@@ -137,6 +137,12 @@ const glob = (args: unknown, ...rest: [meta?: unknown]): Call => ({
   input: JSON.stringify(args),
   meta: rest.length === 0 ? globMeta : rest[0],
 });
+const ls = (args: unknown, ...rest: [meta?: unknown]): Call => ({
+  name: 'ls',
+  status: 'done',
+  input: JSON.stringify(args),
+  meta: rest.length === 0 ? globMeta : rest[0],
+});
 
 describe('searchCardOf', () => {
   it('grep 的命中照檔案分組', () => {
@@ -162,6 +168,12 @@ describe('searchCardOf', () => {
     });
   });
 
+  it('ls 沿用路徑卡，path 選填（#948）', () => {
+    const card = { kind: 'paths', paths: globMeta.paths, truncated: true, total: 212 };
+    expect(searchCardOf(ls({}))).toEqual(card);
+    expect(searchCardOf(ls({ path: '/many' }))).toEqual(card);
+  });
+
   it.each([
     ['grep 沒有 meta（非 content 模式、舊日誌）', grep({ pattern: 'foo' }, undefined)],
     ['grep 的 pattern 是空字串', grep({ pattern: '' })],
@@ -180,6 +192,10 @@ describe('searchCardOf', () => {
       ),
     ],
     ['路徑不是字串', glob({ pattern: '*' }, { ...globMeta, paths: [1] })],
+    ['ls 沒有 meta（舊日誌）', ls({ path: '/many' }, undefined)],
+    ['ls 的 path 是空白', ls({ path: ' ' })],
+    ['ls 的 path 是數字', ls({ path: 1 })],
+    ['ls 拿到 matches 形狀', ls({ path: '/many' }, grepMeta)],
   ])('%s：走通用卡', (_, call) => {
     expect(searchCardOf(call)).toBeUndefined();
   });

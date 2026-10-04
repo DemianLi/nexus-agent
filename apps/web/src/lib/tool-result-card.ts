@@ -16,6 +16,11 @@
  * **搜尋的 `meta` 可能比模型看到的文字多**：基座還會再截文字，`meta` 是截之前的那份，`total` 是截之前的總數；
  * 卡片以 `meta` 為準，不跟文字對。dsh 截斷時還有一個看完整結果的出口（`recovery`），我們沒有存完整結果的地方，不做。
  *
+ * **`ls` 沿用 glob 的路徑卡**（[#948](https://github.com/DemianLi/nexus-agent/issues/948)）：dsh 沒有 `ls` 這顆工具，
+ * harness 給它的 `meta` 就是 glob 的 `{ shape: 'paths', paths, truncated, total }`（#1038）。沒有這份 `meta`、web 只能把
+ * 給模型看的英文復原句（指向點不開的 `/large_tool_results/…`）原文畫出來；有了它，超過上限時標頭寫「顯示 X／共 N 個路徑」。
+ * `ls` 沒有 `pattern`，只認選填的 `path`。
+ *
  * 子代理的呼叫照樣畫：dsh 排除的是 `parentCallId`（`run_code` 裡的子呼叫，我們沒有這種）。
  *
  * @module
@@ -28,6 +33,7 @@ import { parseArgs } from '@/lib/tool-diff';
 export const READ_FILE = 'read_file';
 export const GREP = 'grep';
 export const GLOB = 'glob';
+export const LS = 'ls';
 
 /** 對話裡讀檔卡最多畫幾行，多的收在中間（dsh `CHAT_READ_MAX_LINES`）。 */
 export const CHAT_READ_MAX_LINES = 8;
@@ -121,12 +127,15 @@ export type SearchCard =
       readonly total: number;
     };
 
-/** dsh `validSearchCall`，檔案過濾照 deepagents 的 `glob`（見檔頭）。 */
-function validSearchCall(entry: Settled): typeof GREP | typeof GLOB | undefined {
-  if (entry.name !== GREP && entry.name !== GLOB) return undefined;
+/** dsh `validSearchCall`，檔案過濾照 deepagents 的 `glob`（見檔頭）；`ls` 只驗 `path`。 */
+function validSearchCall(entry: Settled): typeof GREP | typeof GLOB | typeof LS | undefined {
+  if (entry.name !== GREP && entry.name !== GLOB && entry.name !== LS) return undefined;
   const args = parseArgs(entry.input);
   if (args === undefined) return undefined;
   const { pattern, path } = args;
+  if (entry.name === LS) {
+    return path === undefined || (typeof path === 'string' && path.trim() !== '') ? LS : undefined;
+  }
   if (typeof pattern !== 'string') return undefined;
   if (entry.name === GREP ? pattern === '' : pattern.trim() === '') return undefined;
   if (path !== undefined && (typeof path !== 'string' || path.trim() === '')) return undefined;
@@ -179,7 +188,7 @@ export function searchCardOf(entry: Settled): SearchCard | undefined {
   return { kind: 'paths', paths: paths as string[], truncated, total };
 }
 
-/** 卡上留著的結果數：grep 是命中的行數，glob 是路徑數。截斷時拿它跟 `total` 比。 */
+/** 卡上留著的結果數：grep 是命中的行數，glob、ls 是路徑數。截斷時拿它跟 `total` 比。 */
 function shownCount(card: SearchCard): number {
   return card.kind === 'paths'
     ? card.paths.length
@@ -192,7 +201,7 @@ function shownCount(card: SearchCard): number {
 export function searchSummary(card: SearchCard): string {
   const shown = shownCount(card);
   if (shown === 0 && !card.truncated) return '沒有符合的結果';
-  // glob 被截時 harness 數不出截之前有幾筆，`total` 就是交出來的筆數（`tool-result-meta.ts` 的 `withGlobMeta`）；
+  // glob 被截時 harness 數不出截之前有幾筆，`total` 就是交出來的筆數（`tool-result-meta.ts` 的 `withPathsMeta`）；
   // 那時寫「顯示 50／共 50」像是全列了，改寫「顯示前 50」。
   const count = !card.truncated
     ? `${shown}`
