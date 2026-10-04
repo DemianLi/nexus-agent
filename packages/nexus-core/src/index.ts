@@ -137,6 +137,7 @@ export type {
   TelemetryRegistrationPoint,
   CommandRegistrationPoint,
   SessionRegistrationPoint,
+  ProjectionRegistrationPoint,
   SessionLookup,
   SpawnLink,
   Disposer,
@@ -318,6 +319,18 @@ export {
 } from './turn-cancel.js';
 export type { SessionStats, SessionStatsState } from './session-stats.js';
 export { deriveSessionStats, sessionStatsUnit } from './session-stats.js';
+export type {
+  ProjectionFold,
+  ProjectionFoldOptions,
+  ProjectionSession,
+  ProjectionUnit,
+  ProjectionValue,
+} from './projections.js';
+export {
+  createProjectionFold,
+  normalizeProjectionUnit,
+  PROJECTION_KEY_PATTERN,
+} from './projections.js';
 export type { TokenUsageTotals } from './token-usage.js';
 export { deriveTokenUsage, tokenUsageUnit } from './token-usage.js';
 export type { ModelUsage } from './model-usage.js';
