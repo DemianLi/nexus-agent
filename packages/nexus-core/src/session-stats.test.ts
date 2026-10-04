@@ -202,7 +202,12 @@ describe('工具耗時', () => {
 describe('單元的形狀', () => {
   it('不相干的事件回同一個參照', () => {
     const state = sessionStatsUnit.init();
-    for (const type of ['command/run', 'model/usage', 'plan/mode', 'turn/end'] as const) {
+    for (const type of [
+      'model/usage',
+      'context/measure',
+      'interrupt/raised',
+      'turn/end',
+    ] as const) {
       expect(sessionStatsUnit.apply(state, ev(type, 1))).toBe(state);
     }
   });

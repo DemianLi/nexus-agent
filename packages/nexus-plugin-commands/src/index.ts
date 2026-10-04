@@ -280,3 +280,44 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
     },
   };
 }
+
+declare module '@nexus/core' {
+  interface SessionEventMap {
+    /**
+     * 一個解析得出來的斜線命令進了它的 handler。**只記日誌，永遠不進模型**。
+     *
+     * 與 `command/done` 靠 `commandId` 配對，形狀照 dsh 的 `tool/call`↔`tool/result`
+     * （我們自己的那一對在下面，模型的工具呼叫記在那裡）。
+     * `name` 與 `args` 是 `parseCommand` 自己的切分（命令名，以及**含分隔空白的原文**），
+     * 所以讀日誌的人不必再解析一次。
+     *
+     * **收不下的行不記**：語法不符或名字不認得的，從來沒進過 handler，日誌裡不留痕跡。
+     * 這一條照 dsh 的 `execute`：「Admission misses log nothing」。
+     *
+     * **`args` 是使用者原話，而它會原樣進遙測**——協調器一律鏡像每一顆事件（見
+     * `session-telemetry-coordinator.ts`）。
+     *
+     * **命令宣告 `recordInput: false` 時整個不放 `args`**，照 dsh
+     * （`packages/interaction/commands/src/index.ts:376`，`c291e79`）：那段輸入由命令自己的 domain 事件
+     * 帶著，這裡再記一次就是同一段話在日誌裡出現兩次。今天只有 `/feedback` 這樣宣告
+     * （[#278](https://github.com/DemianLi/nexus-agent/issues/278)）；v8 以前每一顆都帶這一格。
+     */
+    'command/run': {
+      readonly commandId: string;
+      readonly name: string;
+      readonly args?: string;
+      readonly source: { readonly kind: 'user' };
+    };
+    /**
+     * 配對的那次執行落定了。handler 拋錯或被中止都落成 `kind: 'error'`。
+     *
+     * **`text` 沒話說的時候要整個不放這個 key，不能放 `undefined`**——`snapshotJsonValue`
+     * 對 `undefined` 是當場拋的，而它拋的時候整筆不算，等於這次執行在日誌裡沒有落定。
+     */
+    'command/done': {
+      readonly commandId: string;
+      readonly kind: 'success' | 'error';
+      readonly text?: string;
+    };
+  }
+}

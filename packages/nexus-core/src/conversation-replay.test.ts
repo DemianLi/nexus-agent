@@ -176,26 +176,13 @@ describe('每一種產訊息的事件', () => {
 
   it('只記日誌的事件不產訊息', () => {
     const log = new SessionLog('replay');
-    log.append('command/run', { commandId: 'k1', name: 'plan', source: { kind: 'user' } });
-    log.append('command/done', { commandId: 'k1', kind: 'success' });
-    log.append('plan/mode', { active: true });
+    log.append('model/start', {});
+    log.append('model/end', {});
+    log.append('session/end-seed', {});
+    log.append('subagent/model-selection-policy', { allowedModels: ['m'] });
     chat(log, '嗨', '你好');
-    log.append('todo/write', { todos: [] });
     log.append('model/usage', { inputTokens: 1, outputTokens: 1, totalTokens: 2 });
-    // 兩種標題事件（#647、#650）只進日誌：加進去之後推出來的串不變（#681）。
-    log.append('session/title', {
-      title: '打招呼',
-      messageSeqs: [0],
-      source: { kind: 'fallback' },
-    });
-    log.append('session/title-llm-request', {
-      titleProvider: 'p',
-      messageSeqs: [0],
-      route: { provider: 'p', model: 'm' },
-      system: 's',
-      messages: [{ role: 'user', content: '嗨' }],
-      maxTokens: 32,
-    });
+    log.append('llm/retry-started', { retryId: 'r1', retry: 1, waitedMs: 0 });
 
     expect(shape(replayConversation(log.events))).toEqual(['human:嗨', 'ai:你好']);
   });

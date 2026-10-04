@@ -270,3 +270,42 @@ export {
   unaskedRefusal,
 } from './sandbox-escalation.js';
 export type { UnaskedReason } from './sandbox-escalation.js';
+
+declare module '@nexus/core' {
+  interface SessionEventMap {
+    /**
+     * 這個會話的**檔案效果政策**現在是哪一格。**每一筆帶整個值**，不是差異。
+     *
+     * ## 誰寫它
+     *
+     * `apps/harness/src/sandbox-mode.ts` 的 `SandboxModeController`：接上一份日誌的當下寫
+     * 一顆**起始值**，之後每一次**真的變了**的切換各寫一顆。切到已經生效的那一格不寫
+     * ——照 dsh 的「净变化为零的选择不追加任何内容」
+     * （`packages/interaction/permission-presets/README.zh.md`）。
+     *
+     * **子代理的日誌只有一顆，帶 `source: 'delegation'`**（[#326](https://github.com/DemianLi/nexus-agent/issues/326)）：
+     * 委派那一刻拍下的那一格，照 dsh 的 `appendDelegatedPolicyOverrides`
+     * （`packages/subagent/subagent/src/child-agent.ts`，SHA `0d1f500`）。子代理之後一直照這一格判，root 再切
+     * 也不會寫進子代理的日誌——所以 root 的日誌答不出子代理跑在哪一格，要記在這裡。
+     *
+     * **沒掛 fence 的組裝一顆都不寫。** 沒有 `--workspace` 就沒有
+     * `ContainedFilesystemBackend`，沒有東西在擋——那種組裝底下記一顆「政策是
+     * workspace-write」是**在日誌裡說謊**，與 `@nexus/plugin-sandbox-policy` 那句提示不貢獻是同一條理由。
+     *
+     * ## 今天誰讀它，以及誰還讀不到
+     *
+     * **讀的人是讀日誌的人**：有了它，一份日誌才答得出「這一輪跑的時候檔案政策是哪一格」
+     * ——`command/run` 只記得住使用者打了什麼字，記不住生效的值，而 `--sandbox` 給的起始
+     * 值在它之前就決定了，命令那條路上根本沒出現過。
+     *
+     * **它回得到執行期。** CLI 的 `--resume <run 目錄>` 與 serve 碰到以前寫過的 thread 都讀回
+     * 那一份日誌，最後一顆就是起始那一格（`sandbox-mode.ts` 的 `recordedSandboxMode`）——
+     * [#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A。
+     */
+    'sandbox/mode': {
+      readonly mode: SandboxMode;
+      /** 委派那一刻拍進子代理日誌的那一顆；省略是 root 的起始值或一次切換。照 dsh 同名欄位。 */
+      readonly source?: 'delegation';
+    };
+  }
+}

@@ -27,6 +27,7 @@
     "@langchain/core": "^1.2.9",
     "@langchain/langgraph": "^1.4.10",
     "@nexus/core": "workspace:*",
+    "@nexus/plugin-commands": "workspace:*",
     "langchain": "^1.5.10",
     "zod": "^4.3.6"
   }

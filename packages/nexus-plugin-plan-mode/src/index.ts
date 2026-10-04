@@ -711,3 +711,22 @@ export default planModePlugin;
 export function createPlanModePlugin(options: PlanModePluginOptions = {}): PluginEntry {
   return { plugin: planModePlugin, config: options };
 }
+
+declare module '@nexus/core' {
+  interface SessionEventMap {
+    /**
+     * 計劃模式這一刻開著還是關著——**整份值，不是切換**，最後一顆就是答案
+     * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的第二刀）。
+     *
+     * 照 dsh 的 `plan/mode`（`packages/plan/plan-mode/src/index.ts`，`d347e70`）：`{ active }`。
+     * 寫者兩個，都只寫 **root** 那一份：`/plan` 的 handler（人）與 `exit_plan_mode`（模型，
+     * 計劃獲准之後；照 dsh 排到下一步請求組起來之前才寫，[#652](https://github.com/DemianLi/nexus-agent/issues/652)）。
+     * 折疊它的是 `@nexus/plugin-plan-mode` 自己。
+     *
+     * **它是第一顆要熬過 `session/end-seed` 的狀態。** 那顆標記之前的開頭屬於上一個生命週期，
+     * 讀「當前這一段」的人要在那裡重設；這一顆相反——跨重啟留得住正是它搬進日誌的理由，所以
+     * 折疊它的人**不**在 end-seed 歸零。
+     */
+    'plan/mode': { readonly active: boolean };
+  }
+}

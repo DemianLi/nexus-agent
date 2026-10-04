@@ -117,7 +117,7 @@ describe('往回追鏈', () => {
   });
 
   it('有事件但一顆 turn/start 都沒有時是假', () => {
-    expect(hasDirectHumanTurn(logOf([['todo/write', { todos: [] }]]).events)).toBe(false);
+    expect(hasDirectHumanTurn(logOf([['model/start', {}]]).events)).toBe(false);
   });
 
   /**

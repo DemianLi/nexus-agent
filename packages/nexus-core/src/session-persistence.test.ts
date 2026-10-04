@@ -217,7 +217,7 @@ describe('接在註冊表上', () => {
     const persistence = attachSessionPersistence(sessions, store, { cwd: '/w' });
     // **後來才出生的那一份也自動有**——subagent 的日誌是懶建的。
     const child = sessions.open({ kind: 'subagent', runId: 'r9' });
-    child.append('todo/write', { todos: [] });
+    child.append('model/start', {});
     sessions.root.append('turn/start', { kind: 'message', text: 'p' });
     await persistence.flush();
 
@@ -406,7 +406,7 @@ describe('續接：只寫還沒存的後綴', () => {
     // root 走的是續寫的把手，**沒有**替它 `create` 一份新的。
     expect(created).toEqual([]);
     // subagent 是這個行程新出生的，照常 `create`。
-    sessions.open({ kind: 'subagent', runId: 'r1' }).append('todo/write', { todos: [] });
+    sessions.open({ kind: 'subagent', runId: 'r1' }).append('model/start', {});
     await persistence.dispose();
     expect(created).toEqual(['root-r/r1']);
   });
@@ -498,7 +498,7 @@ describe('註冊表上的排空者（#599）', () => {
   it('`sessions.flush(log)` 只排空那一份，別份照舊等窗口', async () => {
     const { sessions, handles } = assemble();
     const child = sessions.open({ kind: 'subagent', runId: 'r9' });
-    child.append('todo/write', { todos: [] });
+    child.append('model/start', {});
     sessions.root.append('turn/start', { kind: 'message', text: 'p' });
 
     expect(await sessions.flush(child)).toBe(true);

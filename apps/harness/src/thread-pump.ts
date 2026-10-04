@@ -149,6 +149,12 @@ import type { ThreadTitleLimits } from './session-title.js';
 import { threadTitleConfigSchema } from './settings/thread-title.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
+// 讀這些種類（#679 第 4 步：由各自的 owner 套件用宣告合併補進 `SessionEventMap`）；沒有執行期的引用。
+import type {} from '@nexus/plugin-goal';
+import type {} from '@nexus/plugin-todo';
+import type {} from '@nexus/plugin-plan-mode';
+import type {} from '@nexus/plugin-present';
+import type {} from '@nexus/plugin-workspace-changes';
 
 /** 基座 v3 run 抽出來的一顆原始封包（`GraphRunStream implements AsyncIterable<ProtocolEvent>`）。 */
 interface RawProtocolEvent {

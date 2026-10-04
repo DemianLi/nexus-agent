@@ -7,11 +7,9 @@
  *
  * **詞彙今天在這裡而域在 plugin：** 命令的詞彙（{@link ./commands.ts | CommandDefinition}）
  * 住在 `@nexus/core`，執行那一半住在 `@nexus/plugin-commands`；goal 一樣——`goal/change`
- * 的酬載型別目前列在 {@link ./session-log.ts | SessionEventMap}，折疊、服務、錯誤與活的
- * 視圖住在 `@nexus/plugin-goal`。dsh 的做法是由擁有者套件用宣告合併（`declare module
- * '@deepseek-ai/dsh-session/types'`）補事件種類；**我們的 `SessionEventMap` 已經是
- * interface，做得到，只是還沒做**，照 dsh 該由 goal 這一側宣告，見
- * [#679](https://github.com/DemianLi/nexus-agent/issues/679)。`GoalId` 例外會留在 core：
+ * 這個事件種類由 `@nexus/plugin-goal` 用宣告合併補進 {@link ./session-log.ts | SessionEventMap}（照 dsh 的
+ * `declare module '@deepseek-ai/dsh-session/types'`，[#679](https://github.com/DemianLi/nexus-agent/issues/679)
+ * 第 4 步），折疊、服務、錯誤與活的視圖也住在那裡；酬載型別 {@link GoalChangeMeta} 留在這裡。`GoalId` 例外會留在 core：
  * `turn/start` 的 `kind: 'goal'` 拿它當授權判別。
  *
  * **這裡只有耐久的那一半。** `GoalView` 帶的 `activation`（armed／disarmed）刻意不持久，

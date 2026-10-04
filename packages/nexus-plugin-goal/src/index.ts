@@ -74,6 +74,7 @@ import {
   DEFAULT_BLOCKED_AFTER_CONSECUTIVE_ROUNDS,
   GOAL_TOOL_OUTPUT_SCHEMA,
 } from './tools.js';
+import type { GoalChangeMeta } from '@nexus/core';
 
 export type { GoalCommand } from './command.js';
 export {
@@ -374,4 +375,20 @@ export function createGoalPlugin(options: GoalPluginOptions = {}): PluginEntry {
     } satisfies NexusPlugin<GoalConfig>,
     config,
   };
+}
+
+declare module '@nexus/core' {
+  interface SessionEventMap {
+    /**
+     * 這個會話的長期目標動了一次。**每一筆帶整份耐久狀態**（六個 operation），或是一顆
+     * clear 墓碑。
+     *
+     * 帶整份而不是帶差異，是因為讀它的是一個**嚴格重放**的折疊：差異要求讀的人先有正確
+     * 的前一份狀態才解得開，而整份快照讓「這一筆自己合不合法」與「它接不接得上前一筆」
+     * 分成兩道各自報得出理由的檢查。折疊在 `@nexus/plugin-goal`。
+     *
+     * **`goal.blockedReason` 沒有時要整個不放 key**，同 `command/done` 的 `text`。
+     */
+    'goal/change': GoalChangeMeta;
+  }
 }

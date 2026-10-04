@@ -7,7 +7,7 @@
  * 兩條路產出同一種 frame。**只有 root 那一份**：子代理宣告的交付留在子代理的日誌裡，兩條路都不送。
  *
  * 這裡只放形狀——`@nexus/wire` 不相依 `@nexus/core`，所以 `PresentedFile` 在這裡另寫一份，兩份的
- * 欄位要一樣（core 那份是 `SessionEventMap['deliverables/presented']`）。
+ * 欄位要一樣（`@nexus/plugin-present` 補進 `SessionEventMap` 的 `deliverables/presented`）。
  *
  * @module
  */

@@ -6,9 +6,10 @@
  * ## 為什麼詞彙非搬到 core 不可
  *
  * 同 {@link ./commands.ts | CommandDefinition} 與 {@link ./goal.ts | GoalChangeMeta} 那一條：
- * **會話事件的酬載型別全部在 {@link ./session-log.ts | SessionEventMap} 上宣告**，而那張表
- * 住在 core。`sandbox/mode` 這一顆要帶的是模式本身，所以模式的聯集也得在 core——留在
- * harness 的話，酬載只能寫成 `string`，於是「哪三個字串合法」在寫入端與讀取端各有一份，
+ * **事件酬載要帶的型別得是 `@nexus/core` 與 plugin 兩邊都 import 得到的**（`sandbox/mode`
+ * 現在由 `@nexus/plugin-sandbox-policy` 用宣告合併補進 {@link ./session-log.ts | SessionEventMap}，
+ * [#679](https://github.com/DemianLi/nexus-agent/issues/679) 第 4 步）。`sandbox/mode` 這一顆要帶的是模式本身，所以模式的聯集
+ * 也得在 core——留在 harness 的話，酬載只能寫成 `string`，於是「哪三個字串合法」在寫入端與讀取端各有一份，
  * **而分岔的樣子是日誌裡出現一個沒有人認得的模式名，沒有任何測試會紅**。
  *
  * ## 名字為什麼不叫 `ContainmentMode`

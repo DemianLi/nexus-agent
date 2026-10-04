@@ -54,6 +54,8 @@ import type { SessionEvent } from '@nexus/core';
 import type { DeliverableFilePage, DeliverableFileStat } from '@nexus/wire';
 
 import type { DeliverableFilesConfig } from './settings/deliverable-files.js';
+// 讀 `deliverables/presented`（#679 第 4 步：由 `@nexus/plugin-present` 補進 `SessionEventMap`）；沒有執行期的引用。
+import type {} from '@nexus/plugin-present';
 
 /** 文字不會帶的那個位元組；它在就代表這個檔不是文字。照 dsh 的 `NUL`。 */
 const NUL = String.fromCharCode(0);
