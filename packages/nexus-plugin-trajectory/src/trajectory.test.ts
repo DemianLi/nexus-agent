@@ -17,9 +17,12 @@ import {
 } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import {
+  TRAJECTORY_CALL_TOOLS_CAP,
   TRAJECTORY_DETAIL_TURNS,
   TRAJECTORY_DIGEST_CAP,
   TRAJECTORY_PREVIEW_CHARS,
+  TRAJECTORY_TURN_CALLS_CAP,
+  TRAJECTORY_TURN_LIST_CAP,
 } from '@nexus/wire';
 import type { TrajectoryView } from '@nexus/wire';
 import { trajectoryPlugin } from './index.js';
@@ -406,6 +409,109 @@ describe('窗口與上限', () => {
       modelCall: start.seq,
     });
     expect(() => foldAll(log.events)).not.toThrow();
+  });
+});
+
+describe('單輪上限：摺掉的東西不讓計數變小', () => {
+  it('呼叫超過上限：留最新的，更早的折進 elided，用量與重試照樣算進總數', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    const total = TRAJECTORY_TURN_CALLS_CAP + 10;
+    const firstStart = log.append('model/start', {});
+    log.append('model/usage', {
+      inputTokens: 7,
+      outputTokens: 3,
+      totalTokens: 10,
+      modelCall: firstStart.seq,
+    });
+    log.append('llm/retry', {
+      retryId: 'r',
+      retry: 1,
+      maxRetries: 2,
+      failure: { message: 'x', code: 'SERVER' },
+      modelCall: firstStart.seq,
+    });
+    for (let i = 1; i < total; i += 1) {
+      const start = log.append('model/start', {});
+      log.append('model/usage', {
+        inputTokens: 1,
+        outputTokens: 1,
+        totalTokens: 2,
+        modelCall: start.seq,
+      });
+    }
+    // 被摺掉的呼叫遲到的事件靜靜丟掉。
+    log.append('model/usage', {
+      inputTokens: 100,
+      outputTokens: 100,
+      totalTokens: 200,
+      modelCall: firstStart.seq,
+    });
+    const turn = foldAll(log.events).turns[0]!;
+    expect(turn.calls).toHaveLength(TRAJECTORY_TURN_CALLS_CAP);
+    expect(turn.calls[0]?.id).not.toBe(firstStart.seq);
+    expect(turn.elided).toEqual({ calls: 10, tools: 0, inputs: 0, decisions: 0 });
+    expect(turn.callCount).toBe(total);
+    expect(turn.inputTokens).toBe(7 + (total - 1));
+    expect(turn.outputTokens).toBe(3 + (total - 1));
+    expect(turn.retryCount).toBe(1);
+    expect(turn.unattributed).toBe(1);
+  });
+
+  it('一次呼叫的工具超過上限：留最新的，總數與摺掉當下已失敗的數目照算', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    const start = log.append('model/start', {});
+    const total = TRAJECTORY_CALL_TOOLS_CAP + 6;
+    const ids = Array.from({ length: total }, (_, i) => `t${i}`);
+    log.append('assistant/message', reply(start.seq, '', ...ids));
+    ids.forEach((id, i) => {
+      log.append('tool/call', call(id));
+      log.append('tool/result', i < 2 ? { callId: id, isError: true } : ok(id));
+    });
+    const turn = foldAll(log.events).turns[0]!;
+    expect(turn.calls[0]?.tools).toHaveLength(TRAJECTORY_CALL_TOOLS_CAP);
+    expect(turn.calls[0]?.tools.at(-1)?.callId).toBe(`t${total - 1}`);
+    expect(turn.elided).toMatchObject({ tools: 6 });
+    expect(turn.toolCount).toBe(total);
+    expect(turn.toolErrors).toBe(2);
+  });
+
+  it('inputs、decisions、looseTools 各有上限，摺掉的記進 elided', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    const extra = 5;
+    for (let i = 0; i < TRAJECTORY_TURN_LIST_CAP + extra; i += 1) {
+      log.append('inbox/spliced', { target: 'next-step', start: 0, inserted: [] });
+      foreign(log, 'plan/mode', { active: i % 2 === 0 });
+      log.append('tool/call', call(`loose${i}`));
+    }
+    const turn = foldAll(log.events).turns[0]!;
+    expect(turn.inputs).toHaveLength(TRAJECTORY_TURN_LIST_CAP);
+    expect(turn.decisions).toHaveLength(TRAJECTORY_TURN_LIST_CAP);
+    expect(turn.looseTools).toHaveLength(TRAJECTORY_TURN_LIST_CAP);
+    expect(turn.elided).toEqual({ calls: 0, tools: extra, inputs: extra, decisions: extra });
+    expect(turn.toolCount).toBe(TRAJECTORY_TURN_LIST_CAP + extra);
+  });
+
+  it('沒超過上限就沒有 elided 這一格', () => {
+    const log = new SessionLog('t');
+    simpleTurn(log, 'a');
+    expect(foldAll(log.events).turns[0]).not.toHaveProperty('elided');
+  });
+
+  it('整數形的工具 id 也是先進先出：表滿了丟的是最早記下的，不是數字最小的', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    const start = log.append('model/start', {});
+    // 由大到小記：最早記下的是 "2099"。物件鍵若不加前綴，整數形的鍵會按數字升冪排，被丟的會變成 "0"。
+    const ids = Array.from({ length: 2100 }, (_, i) => String(2099 - i));
+    log.append('assistant/message', reply(start.seq, '', ...ids));
+    log.append('tool/call', call('0'));
+    log.append('tool/call', call('2099'));
+    const turn = foldAll(log.events).turns[0]!;
+    expect(turn.calls[0]?.tools.map((t) => t.callId)).toEqual(['0']);
+    expect(turn.looseTools.map((t) => t.callId)).toEqual(['2099']);
   });
 });
 

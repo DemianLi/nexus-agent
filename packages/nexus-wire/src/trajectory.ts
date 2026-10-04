@@ -44,7 +44,19 @@ export const TRAJECTORY_DETAIL_TURNS = 8;
 export const TRAJECTORY_DIGEST_CAP = 200;
 /** 預覽字串（輸入、錯誤訊息）最多幾個字元。 */
 export const TRAJECTORY_PREVIEW_CHARS = 120;
-/** 請求快照每種最多留幾份（最新的）。 */
+/** 一輪最多留幾次呼叫的逐呼叫結構（最新的）；更早的折進 {@link TrajectoryElided}。 */
+export const TRAJECTORY_TURN_CALLS_CAP = 32;
+/** 一次呼叫最多留幾個工具（最新的）。 */
+export const TRAJECTORY_CALL_TOOLS_CAP = 16;
+/** 一輪的 `inputs`、`decisions`、`looseTools` 各最多留幾筆（最新的）。 */
+export const TRAJECTORY_TURN_LIST_CAP = 32;
+/**
+ * 請求快照每種最多留幾份（最新的）。
+ *
+ * **比軌跡窗口（{@link TRAJECTORY_DETAIL_TURNS} 輪）留得少**：呼叫上記的 `system`／`header` 是指向快照的 `seq`，窗口裡舊的呼叫
+ * 指到的快照可能已經不在這裡——讀的人要接得住「找不到」並標「已不保留」。系統提示詞只在計劃模式、沙箱模式這類切換時才變，所以
+ * 實際上很少發生，但型別上沒有保證。
+ */
 export const REQUEST_SNAPSHOTS_KEEP = 4;
 /** 一份系統提示詞最多存幾個字元；超過的截斷並標 `truncated`。 */
 export const REQUEST_SYSTEM_MAX_CHARS = 64 * 1024;
@@ -184,6 +196,16 @@ export type TrajectoryDecision =
     }
   | { readonly kind: 'interrupt'; readonly seq: number; readonly time: number };
 
+/** 超過單輪上限而被摺掉的結構數（只有真的摺過才出現）。計數（`callCount` 等）仍然包含它們。 */
+export interface TrajectoryElided {
+  /** 被摺掉的最舊幾次呼叫。 */
+  readonly calls: number;
+  /** 被摺掉的工具（含歸不到呼叫的 `looseTools`）。 */
+  readonly tools: number;
+  readonly inputs: number;
+  readonly decisions: number;
+}
+
 /** 一輪的摘要，窗口外的輪只剩這些。 */
 export interface TrajectoryDigest {
   /** 第幾輪（0 起，每顆 `turn/start` 一輪，含 `resume`）。 */
@@ -199,7 +221,11 @@ export interface TrajectoryDigest {
   readonly durationMs?: number;
   /** 模型呼叫數。 */
   readonly callCount: number;
-  /** 工具呼叫數（含歸不到呼叫的）。 */
+  /**
+   * 工具呼叫數（含歸不到呼叫的、含被摺掉的）。
+   *
+   * **被摺掉的那幾個，成功與否只記到「摺掉當下」**：還在跑的就算沒失敗，之後才失敗的不會回頭加進 `toolErrors`。
+   */
   readonly toolCount: number;
   readonly toolErrors: number;
   readonly retryCount: number;
@@ -217,8 +243,10 @@ export interface TrajectoryTurn extends TrajectoryDigest {
   readonly failure?: string;
   /** 輪中進來的輸入。起訖之間夾著的佇列變動在這裡，**不算進任何一次模型呼叫**（#1067 的承諾）。 */
   readonly inputs: readonly TrajectoryInput[];
-  /** 這一輪的模型呼叫，照 `model/start` 的順序。 */
+  /** 這一輪的模型呼叫，照 `model/start` 的順序。最多留最新 {@link TRAJECTORY_TURN_CALLS_CAP} 次，更早的見 `elided`。 */
   readonly calls: readonly TrajectoryCall[];
+  /** 單輪上限摺掉了什麼；沒摺過就沒有這一格。 */
+  readonly elided?: TrajectoryElided;
   /** 歸不到任何一次呼叫的工具（舊日誌的回覆沒記 `modelCall`、或回覆不在這份日誌裡）。**不猜**。 */
   readonly looseTools: readonly TrajectoryTool[];
   readonly decisions: readonly TrajectoryDecision[];

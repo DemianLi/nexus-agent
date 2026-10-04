@@ -13,6 +13,13 @@
  * 要嘛每次包新殼（每次都算有變）。所以這裡自己帶一張 callId→呼叫的表；**兩份實作由 `trajectory.test.ts` 的差分測試釘在一起**
  * （同一串事件，這裡歸給的呼叫與 indexer 歸給的必須一致）。歸不到的不猜：工具進 `looseTools`，模型事件計進 `unattributed`。
  *
+ * ## 上限
+ *
+ * 窗口只封住輪數，一輪裡的量另有上限：最多留最新 {@link TRAJECTORY_TURN_CALLS_CAP} 次呼叫、一次呼叫最多留 {@link TRAJECTORY_CALL_TOOLS_CAP} 個工具、
+ * `inputs`／`decisions`／`looseTools` 各最多 {@link TRAJECTORY_TURN_LIST_CAP} 筆。**摺掉的不讓計數變小**：摺掉的當下就把它們該貢獻的呼叫數、
+ * 工具數、失敗數、重試數與用量記進 `carry`，`view` 加回去；`elided` 告訴讀的人有東西被摺掉了。代價是兩條明著的近似：摺掉的工具，
+ * 失敗與否只記到摺掉當下；摺掉的呼叫，遲到的事件（用量、重試）靜靜丟掉並計進 `unattributed`。
+ *
  * ## 輪
  *
  * 每顆 `turn/start` 開一輪（含 `resume`），`logical` 標它是不是開了新的邏輯輪（`resume` 不算：它接著上一輪停在核准點的那幾顆呼叫）。
@@ -36,10 +43,13 @@ import {
 } from '@nexus/core';
 import type { ProjectionUnit, SessionEvent } from '@nexus/core';
 import {
+  TRAJECTORY_CALL_TOOLS_CAP,
   TRAJECTORY_DETAIL_TURNS,
   TRAJECTORY_DIGEST_CAP,
   TRAJECTORY_PREVIEW_CHARS,
   TRAJECTORY_PROJECTION,
+  TRAJECTORY_TURN_CALLS_CAP,
+  TRAJECTORY_TURN_LIST_CAP,
   TRAJECTORY_VERSION,
 } from '@nexus/wire';
 import type {
@@ -55,10 +65,40 @@ import type {
   TrajectoryView,
 } from '@nexus/wire';
 
+/** 表裡的鍵：加前綴，免得 `"0"`、`"1"` 這種整數形的 id 被物件按數字序排到前面，把「最舊的先丟」的順序弄反。 */
+const ownerKey = (callId: string): string => `#${callId}`;
+
 /** 工具 id→呼叫 的表最多留幾筆；超過從最舊的丟。恢復（resume）要用到的只是還沒落定的那幾個，遠遠小於這個數。 */
 const OWNERS_CAP = 2000;
 
-/** 狀態裡的一輪：沒有算出來的計數（那些在 `view` 才算）。 */
+/**
+ * 一輪被單輪上限摺掉的東西的累計。**計數要含它們**（`callCount`／`toolCount`…不能因為摺掉而變小），所以摺掉的當下就把
+ * 它們該貢獻的數字記在這裡。
+ */
+interface Carry {
+  readonly calls: number;
+  readonly tools: number;
+  /** 摺掉的工具裡，摺掉當下已經是 `error` 的數目。 */
+  readonly toolErrors: number;
+  readonly retries: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly inputs: number;
+  readonly decisions: number;
+}
+
+const NO_CARRY: Carry = {
+  calls: 0,
+  tools: 0,
+  toolErrors: 0,
+  retries: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  inputs: 0,
+  decisions: 0,
+};
+
+/** 狀態裡的一輪：沒有算出來的計數（那些在 `view` 才算），多一份摺掉的累計。 */
 type TurnState = Omit<
   TrajectoryTurn,
   | 'callCount'
@@ -68,7 +108,8 @@ type TurnState = Omit<
   | 'inputTokens'
   | 'outputTokens'
   | 'durationMs'
->;
+  | 'elided'
+> & { readonly carry: Carry };
 
 /** 折疊狀態。純 JSON（沒有 `undefined`）。 */
 export interface TrajectoryState {
@@ -123,11 +164,13 @@ export function initialTrajectory(): TrajectoryState {
 // ── 計數與摘要（view 才算） ─────────────────────────────────────────────────────────────
 
 function withCounts(turn: TurnState): TrajectoryTurn {
-  let toolCount = turn.looseTools.length;
-  let toolErrors = turn.looseTools.filter((tool) => tool.status === 'error').length;
-  let retryCount = 0;
-  let inputTokens = 0;
-  let outputTokens = 0;
+  const { carry, ...rest } = turn;
+  let toolCount = turn.looseTools.length + carry.tools;
+  let toolErrors =
+    turn.looseTools.filter((tool) => tool.status === 'error').length + carry.toolErrors;
+  let retryCount = carry.retries;
+  let inputTokens = carry.inputTokens;
+  let outputTokens = carry.outputTokens;
   for (const call of turn.calls) {
     toolCount += call.tools.length;
     toolErrors += call.tools.filter((tool) => tool.status === 'error').length;
@@ -135,15 +178,26 @@ function withCounts(turn: TurnState): TrajectoryTurn {
     inputTokens += call.usage?.inputTokens ?? 0;
     outputTokens += call.usage?.outputTokens ?? 0;
   }
+  const folded = carry.calls > 0 || carry.tools > 0 || carry.inputs > 0 || carry.decisions > 0;
   return {
-    ...turn,
-    callCount: turn.calls.length,
+    ...rest,
+    callCount: turn.calls.length + carry.calls,
     toolCount,
     toolErrors,
     retryCount,
     inputTokens,
     outputTokens,
     ...(turn.endTime === undefined ? {} : { durationMs: turn.endTime - turn.time }),
+    ...(folded
+      ? {
+          elided: {
+            calls: carry.calls,
+            tools: carry.tools,
+            inputs: carry.inputs,
+            decisions: carry.decisions,
+          },
+        }
+      : {}),
   };
 }
 
@@ -226,13 +280,38 @@ const openTurn = (state: TrajectoryState): TurnState | undefined => {
   return turn !== undefined && turn.end === undefined ? turn : undefined;
 };
 
+/** 清單超過上限就丟最舊的，回新清單與被丟掉的那幾筆。 */
+function capList<T>(
+  list: readonly T[],
+  cap: number,
+): { kept: readonly T[]; dropped: readonly T[] } {
+  const cut = list.length - cap;
+  return cut <= 0
+    ? { kept: list, dropped: [] }
+    : { kept: list.slice(cut), dropped: list.slice(0, cut) };
+}
+
 function withDecision(state: TrajectoryState, decision: TrajectoryDecision): TrajectoryState {
-  return updateLastTurn(state, (turn) => ({ ...turn, decisions: [...turn.decisions, decision] }));
+  return updateLastTurn(state, (turn) => {
+    const { kept, dropped } = capList([...turn.decisions, decision], TRAJECTORY_TURN_LIST_CAP);
+    return {
+      ...turn,
+      decisions: kept,
+      carry: { ...turn.carry, decisions: turn.carry.decisions + dropped.length },
+    };
+  });
 }
 
 function withInput(state: TrajectoryState, input: TrajectoryInput): TrajectoryState {
   if (openTurn(state) === undefined) return state;
-  return updateLastTurn(state, (turn) => ({ ...turn, inputs: [...turn.inputs, input] }));
+  return updateLastTurn(state, (turn) => {
+    const { kept, dropped } = capList([...turn.inputs, input], TRAJECTORY_TURN_LIST_CAP);
+    return {
+      ...turn,
+      inputs: kept,
+      carry: { ...turn.carry, inputs: turn.carry.inputs + dropped.length },
+    };
+  });
 }
 
 /** 工具表：加進一筆擁有者，超過上限從最舊的丟。 */
@@ -245,8 +324,8 @@ function noteOwners(
   const next: Record<string, number | null> = { ...owners };
   for (const id of ids) {
     // 先刪再放：同一個 id 重新出現要排到最新。
-    delete next[id];
-    next[id] = owner;
+    delete next[ownerKey(id)];
+    next[ownerKey(id)] = owner;
   }
   const keys = Object.keys(next);
   for (let drop = 0; drop < keys.length - OWNERS_CAP; drop += 1) delete next[keys[drop]!];
@@ -273,23 +352,53 @@ function applyTool(
   callId: string,
   change: (previous: TrajectoryTool | undefined) => TrajectoryTool | undefined,
 ): TrajectoryState {
-  const owner = state.owners[callId];
+  const owner = state.owners[ownerKey(callId)];
   if (owner === undefined || owner === null) {
     // 歸不到：放進目前開著那一輪的 looseTools（輪外沒有地方放，丟）。
     if (openTurn(state) === undefined) return state;
     return updateLastTurn(state, (turn) => {
       const previous = turn.looseTools.find((each) => each.callId === callId);
       const next = change(previous);
-      return next === undefined ? turn : { ...turn, looseTools: upsertTool(turn.looseTools, next) };
+      if (next === undefined) return turn;
+      const { kept, dropped } = capList(
+        upsertTool(turn.looseTools, next),
+        TRAJECTORY_TURN_LIST_CAP,
+      );
+      return { ...turn, looseTools: kept, carry: carryTools(turn.carry, dropped) };
     });
   }
   const at = locateCall(state, owner);
   if (at === undefined) return state;
-  return updateCall(state, at, (call) => {
+  const changed = updateCall(state, at, (call) => {
     const previous = call.tools.find((each) => each.callId === callId);
     const next = change(previous);
     return next === undefined ? call : { ...call, tools: upsertTool(call.tools, next) };
   });
+  return capCallTools(changed, at);
+}
+
+/** 摺掉的工具記進累計：數目與當下已失敗的數目。 */
+function carryTools(carry: Carry, dropped: readonly TrajectoryTool[]): Carry {
+  if (dropped.length === 0) return carry;
+  return {
+    ...carry,
+    tools: carry.tools + dropped.length,
+    toolErrors: carry.toolErrors + dropped.filter((tool) => tool.status === 'error').length,
+  };
+}
+
+/** 一次呼叫的工具超過上限就丟最舊的，記進那一輪的累計。 */
+function capCallTools(state: TrajectoryState, at: CallAt): TrajectoryState {
+  const turn = state.turns[at.turn]!;
+  const call = turn.calls[at.call]!;
+  if (call.tools.length <= TRAJECTORY_CALL_TOOLS_CAP) return state;
+  const { kept, dropped } = capList(call.tools, TRAJECTORY_CALL_TOOLS_CAP);
+  const next: TurnState = {
+    ...turn,
+    calls: replaceAt(turn.calls, at.call, { ...call, tools: kept }),
+    carry: carryTools(turn.carry, dropped),
+  };
+  return { ...state, turns: replaceAt(state.turns, at.turn, next) };
 }
 
 // ── 折疊 ────────────────────────────────────────────────────────────────────────────
@@ -350,6 +459,7 @@ function startTurn(state: TrajectoryState, event: SessionEvent): TrajectoryState
     looseTools: [],
     decisions: [],
     unattributed: 0,
+    carry: NO_CARRY,
   };
   let turns = [...state.turns, turn];
   let digests = state.digests;
@@ -407,7 +517,22 @@ function startCall(state: TrajectoryState, event: SessionEvent): TrajectoryState
     retries: [],
     tools: [],
   };
-  return updateLastTurn(state, (turn) => ({ ...turn, calls: [...turn.calls, call] }));
+  return updateLastTurn(state, (turn) => {
+    const { kept, dropped } = capList([...turn.calls, call], TRAJECTORY_TURN_CALLS_CAP);
+    if (dropped.length === 0) return { ...turn, calls: kept };
+    let carry = turn.carry;
+    for (const gone of dropped) {
+      carry = carryTools(carry, gone.tools);
+      carry = {
+        ...carry,
+        calls: carry.calls + 1,
+        retries: carry.retries + gone.retries.length,
+        inputTokens: carry.inputTokens + (gone.usage?.inputTokens ?? 0),
+        outputTokens: carry.outputTokens + (gone.usage?.outputTokens ?? 0),
+      };
+    }
+    return { ...turn, calls: kept, carry };
+  });
 }
 
 /**

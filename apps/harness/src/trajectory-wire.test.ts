@@ -22,6 +22,7 @@ import {
   TRAJECTORY_PREVIEW_CHARS,
   TRAJECTORY_PROJECTION,
   REQUEST_SNAPSHOTS_PROJECTION,
+  TRAJECTORY_DETAIL_TURNS,
 } from '@nexus/wire';
 import type { RequestSnapshotsView, TrajectoryView } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -109,6 +110,16 @@ async function historyFrames(client: WireClient, threadId: string): Promise<Even
   return [...outcome.result.events];
 }
 
+/** 這串 frame 裡最後一顆軌跡投影的 view。 */
+const latestTrajectory = (frames: readonly Event[]): TrajectoryView | undefined =>
+  frames
+    .filter(isProjection)
+    .map(
+      (frame) => (frame.params.data as { payload: { key: string; view: TrajectoryView } }).payload,
+    )
+    .filter((payload) => payload.key === TRAJECTORY_PROJECTION)
+    .at(-1)?.view;
+
 const isProjection = (frame: Event) =>
   frame.method === 'custom' && (frame.params.data as { name?: string } | null)?.name === PROJECTION;
 
@@ -180,6 +191,48 @@ describe('軌跡投影走產品路徑', () => {
     expect(turn.chars).toBe(prompt.length);
     expect(JSON.stringify(view)).not.toContain('很長的一句話'.repeat(30));
   });
+
+  it(
+    '超過窗口的長會話：即時與重新整理仍是同一份，更早的輪退成摘要',
+    { timeout: 60_000 },
+    async () => {
+      const root = await mkdtemp(join(tmpdir(), 'nexus-trajectory-long-'));
+      const server = await start(root);
+      const client = await serveClient(server);
+      // 同一條下行上連說 TRAJECTORY_DETAIL_TURNS + 2 句：即時那一側從頭折到尾，歷史那一側整份重折。
+      const frames: Event[] = [];
+      const events = await client.openEvents('t');
+      void (async () => {
+        try {
+          for await (const frame of events) frames.push(frame);
+        } catch {
+          // server 收掉時下行會斷。
+        }
+      })();
+      const rounds = TRAJECTORY_DETAIL_TURNS + 2;
+      for (let round = 1; round <= rounds; round += 1) {
+        await client.runStart('t', `第 ${round} 句`);
+        for (let tries = 0; tries < 600; tries += 1) {
+          const view = latestTrajectory(frames);
+          if (
+            view !== undefined &&
+            view.digests.length + view.turns.length === round &&
+            view.turns.at(-1)?.end !== undefined
+          )
+            break;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+      }
+      const live = reduceAll(emptyConversation(), frames).projections[TRAJECTORY_PROJECTION];
+      const refreshed = reduceAll(emptyConversation(), await historyFrames(client, 't'))
+        .projections[TRAJECTORY_PROJECTION];
+      const view = live?.view as TrajectoryView;
+      expect(view.turns).toHaveLength(TRAJECTORY_DETAIL_TURNS);
+      expect(view.digests).toHaveLength(2);
+      expect(view.digests.map((digest) => digest.index)).toEqual([0, 1]);
+      expect(refreshed).toEqual(live);
+    },
+  );
 
   it(
     '關掉 trajectory：除了那兩顆投影 frame，下行與歷史逐位元組不變',
