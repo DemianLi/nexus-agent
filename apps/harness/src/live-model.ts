@@ -1,7 +1,7 @@
 import { ContextOverflowError } from '@langchain/core/errors';
 import { ChatOpenAI } from '@langchain/openai';
-import { noteFailedAttempt, noteRequestStart } from '@nexus/core';
-import type { LlmFailure } from '@nexus/core';
+import { beginAttemptReport, noteFailedAttempt, noteRequestStart } from '@nexus/core';
+import type { AttemptUsage, LlmFailure } from '@nexus/core';
 
 import { resolveHarnessHome } from './harness-home.js';
 import { ambientCredentials, createCredentialService } from './credentials.js';
@@ -854,6 +854,105 @@ export function withEmptyAssistantContent(baseFetch: typeof fetch = fetch): type
   };
 }
 
+/** 串流用量嗅探單行的長度上限：超過的行放棄（供應商的片段不會這麼長，上限只防暴長的怪行把記憶體吃光）。 */
+const USAGE_TAP_MAX_LINE_CHARS = 1_000_000;
+
+/**
+ * 從一行 SSE 資料讀供應商的用量（OpenAI 相容：`usage.prompt_tokens`／`completion_tokens`／`total_tokens`）。
+ * 不是 `data:` 行、沒有 `"usage"`、JSON 壞掉、`usage` 為 `null` 或缺欄一律 `undefined`——**不補 0**。
+ */
+function usageOfSseLine(line: string): AttemptUsage | undefined {
+  if (!line.startsWith('data:') || !line.includes('"usage"')) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(line.slice('data:'.length));
+  } catch {
+    return undefined;
+  }
+  const usage = (parsed as { usage?: unknown } | null)?.usage;
+  if (typeof usage !== 'object' || usage === null) return undefined;
+  const {
+    prompt_tokens: input,
+    completion_tokens: output,
+    total_tokens: total,
+  } = usage as Record<string, unknown>;
+  if (input === undefined || output === undefined || total === undefined) return undefined;
+  return { inputTokens: input, outputTokens: output, totalTokens: total };
+}
+
+/**
+ * 把串流裡供應商報的用量回報給這次模型呼叫（`@nexus/core` 的 `beginAttemptReport`，
+ * [#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：呼叫沒有正常回來時，用量記錄器靠它記下那次燒掉的 token。
+ *
+ * ## 為什麼在 `fetch` 層
+ *
+ * 失敗的呼叫沒有回應物件可讀；v3 串流的模型層又收不到 token 回呼（pump 轉發的逐段片段不經模型的回呼）。供應商的用量只活在
+ * 串流的位元組裡，而 `fetch` 是手上最靠近那些位元組的一格——同 {@link withInbandStreamErrors} 退到這裡的理由。
+ * **放最內層，緊貼底層 fetch**：外面的嗅探與逾時層動過的位元組，這一層不必知道。
+ *
+ * ## 做什麼、不做什麼
+ *
+ * - **每次請求開跑就換一格新的**（重試的下一次請求不繼承上一次的），串流邊流邊嗅每一行 `data:`，看到 `usage` 就回報，後到的覆蓋先到的。
+ * - **位元組原樣放行**，不解碼重編、不延後：只是旁邊讀一份。
+ * - **供應商不報就沒有**。OpenAI 相容的串流把用量放在**最後一則**片段（`stream_options.include_usage`），所以串流中途斷線的呼叫
+ *   多半拿不到——那種「不知道」靠 `model/end.outcome` 表態，**不是 0**。
+ * - 非 2xx、非 SSE、沒有 body 的回應原樣放行（錯誤回應沒有用量）；不在模型呼叫範圍裡（標題那一顆）不嗅。
+ *
+ * @param baseFetch - 底層的 fetch。預設全域那個；測試用它換掉。
+ */
+export function withStreamUsageReport(baseFetch: typeof fetch = fetch): typeof fetch {
+  return async (input, init) => {
+    const report = beginAttemptReport();
+    const response = await baseFetch(input, init);
+    const contentType = response.headers.get('content-type') ?? '';
+    if (
+      report === undefined ||
+      !response.ok ||
+      response.body === null ||
+      !contentType.includes('text/event-stream')
+    ) {
+      return response;
+    }
+    const decoder = new TextDecoder();
+    let pending = '';
+    let skipping = false;
+    const scan = (text: string, flush: boolean): void => {
+      const lines = (pending + text).split('\n');
+      pending = flush ? '' : (lines.pop() ?? '');
+      for (const raw of lines) {
+        // 暴長行的尾巴：頭已經丟了，這一段不是完整的一行。
+        if (skipping) {
+          skipping = false;
+          continue;
+        }
+        const usage = usageOfSseLine(raw.replace(/\r$/, ''));
+        if (usage !== undefined) report(usage);
+      }
+      if (pending.length > USAGE_TAP_MAX_LINE_CHARS) {
+        pending = '';
+        skipping = true;
+      }
+    };
+    // `pipeThrough` 當場鎖住來源，沒鎖的 body 會在 GC 時被取消（見 {@link withInbandStreamErrors}）。
+    const tapped = response.body.pipeThrough(
+      new TransformStream<Uint8Array, Uint8Array>({
+        transform(chunk, controller) {
+          controller.enqueue(chunk);
+          scan(decoder.decode(chunk, { stream: true }), false);
+        },
+        flush() {
+          scan(decoder.decode(), true);
+        },
+      }),
+    );
+    return new Response(tapped, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  };
+}
+
 /**
  * 一次模型呼叫的用途。照 dsh `GenerateOptions.purpose`（`packages/llm/llm/src/types.ts:547-552`，`477b4f4`）：
  * 「adapters may map the purpose to … purpose-specific generation policy」，一般的對話請求不帶。
@@ -900,7 +999,7 @@ export function createLiveModel(
 
   return new ChatOpenAI({
     model: config.modelId,
-    // `fetch` 疊三層：最內層是 #592（送出前換掉空的助手內容），中間是 #516（串流內回報的錯誤
+    // `fetch` 疊三層（再加最內層貼著底層 fetch 的串流用量回報，#1022，只旁讀不改位元組）：最內層是 #592（送出前換掉空的助手內容），中間是 #516（串流內回報的錯誤
     // 翻成 HTTP 錯誤回應，才進得了重試射程），外層是 #521（第一則事件之後的閒置逾時）。外層收到的
     // 是中間那層嗅完第一則事件的那份回應。
     configuration: {
@@ -915,7 +1014,7 @@ export function createLiveModel(
       fetch: ((base) => (purpose === undefined ? withRequestStartNotice(base) : base))(
         withStreamIdleTimeout(
           config.timeoutMs,
-          withInbandStreamErrors(withEmptyAssistantContent()),
+          withInbandStreamErrors(withEmptyAssistantContent(withStreamUsageReport())),
         ),
       ),
     },

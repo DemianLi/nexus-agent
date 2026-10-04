@@ -125,7 +125,8 @@ describe('重試寫進日誌', () => {
       expect((event.data as { modelCall?: number }).modelCall).toBe(start.seq);
     }
     const end = log.events.find((event) => event.type === 'model/end')!;
-    expect(end.data).toEqual({ modelCall: start.seq });
+    // 重試用盡之後這次呼叫是拋錯收的：`model/end` 標 `error`（#1022）。
+    expect(end.data).toEqual({ modelCall: start.seq, outcome: 'error' });
   }, 30_000);
 
   it('第一則事件是 503：同上（#516 的串流內錯誤也進得了日誌）', async () => {

@@ -8,7 +8,9 @@
 
 import { AIMessage } from '@langchain/core/messages';
 import { describe, expect, it, vi } from 'vitest';
+import { beginAttemptReport, runInModelCall } from './model-call-scope.js';
 import { createModelUsageRecorder, readModelUsage } from './model-usage.js';
+import { INTERRUPTED_REPLY_MARKER, TURN_CANCEL_CONFIG_KEY } from './turn-cancel.js';
 import type { SessionLookup } from './registry.js';
 import { SessionLog } from './session-log.js';
 
@@ -192,5 +194,134 @@ describe('身分從執行期的 configurable 推', () => {
     const middleware = createModelUsageRecorder({ forCall });
     await hookOf(middleware)({ runtime: { configurable: {} } }, () => reply());
     expect(forCall).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * **沒有正常回來的呼叫也要進帳**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）。
+ *
+ * adapter 在請求開跑時拿回報函式、串流裡看到用量就回報；記錄器在呼叫拋錯（或子代理被中止回合成收尾）時讀它。
+ * 這一組量的是規則：什麼時候記、記成什麼、「不知道」跟 0 分不分得開。
+ */
+describe('失敗與中止的呼叫', () => {
+  const ok = (log: SessionLog): SessionLookup => ({ kind: 'ok', address: { kind: 'root' }, log });
+
+  /** 在 `model/start` 為 `modelCall` 的範圍裡跑一次呼叫；`attempt` 是 adapter 這次請求的動作。 */
+  async function run(
+    log: SessionLog,
+    options: {
+      readonly attempt?: (report: ReturnType<typeof beginAttemptReport>) => void;
+      readonly outcome: 'throw' | 'synthetic-stop';
+      readonly signal?: AbortSignal;
+    },
+  ): Promise<unknown> {
+    const middleware = createModelUsageRecorder({ forCall: () => ok(log) });
+    const request = {
+      runtime: {
+        configurable: {
+          checkpoint_ns: 'model_request:x',
+          ...(options.signal === undefined ? {} : { [TURN_CANCEL_CONFIG_KEY]: options.signal }),
+        },
+      },
+    };
+    const call = runInModelCall(log, 7, () =>
+      hookOf(middleware)(request, () => {
+        options.attempt?.(beginAttemptReport());
+        if (options.outcome === 'throw') throw new Error('串流中途斷了');
+        return new AIMessage({
+          content: '',
+          additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true },
+        });
+      }),
+    );
+    return call.catch((error: unknown) => error);
+  }
+
+  const reported = { inputTokens: 100, outputTokens: 40, totalTokens: 140 };
+
+  it('拋錯、已報用量：記一筆帶 outcome 的 model/usage，歸給那次呼叫，數字原樣', async () => {
+    const log = new SessionLog('s');
+    const error = await run(log, { outcome: 'throw', attempt: (report) => report?.(reported) });
+    expect(error).toBeInstanceOf(Error);
+    expect(log.events.map((event) => event.type)).toEqual(['model/usage']);
+    expect(log.events[0]?.data).toEqual({ ...reported, outcome: 'error', modelCall: 7 });
+  });
+
+  it('中止訊號舉起來了就是 aborted，不看錯誤長什麼樣', async () => {
+    const log = new SessionLog('s');
+    const controller = new AbortController();
+    controller.abort();
+    await run(log, {
+      outcome: 'throw',
+      signal: controller.signal,
+      attempt: (report) => report?.(reported),
+    });
+    expect(log.events[0]?.data).toMatchObject({ outcome: 'aborted' });
+  });
+
+  it('子代理被中止回的是合成的空收尾（不拋）：照樣記成 aborted', async () => {
+    const log = new SessionLog('s');
+    const controller = new AbortController();
+    controller.abort();
+    await run(log, {
+      outcome: 'synthetic-stop',
+      signal: controller.signal,
+      attempt: (report) => report?.(reported),
+    });
+    expect(log.events.map((event) => event.data)).toEqual([
+      { ...reported, outcome: 'aborted', modelCall: 7 },
+    ]);
+  });
+
+  it('供應商沒報用量：一筆都沒有——不是 0', async () => {
+    const log = new SessionLog('s');
+    await run(log, { outcome: 'throw', attempt: () => undefined });
+    expect(log.events).toEqual([]);
+  });
+
+  it('報得自相矛盾也整筆不要，同正常回來的那條', async () => {
+    const log = new SessionLog('s');
+    await run(log, {
+      outcome: 'throw',
+      attempt: (report) => report?.({ inputTokens: 50, outputTokens: 50, totalTokens: 80 }),
+    });
+    expect(log.events).toEqual([]);
+  });
+
+  it('重試的下一次請求換一格新的：上一次的用量不算到這一次頭上', async () => {
+    const log = new SessionLog('s');
+    await run(log, {
+      outcome: 'throw',
+      attempt: (first) => {
+        first?.(reported);
+        beginAttemptReport(); // 第二次請求開跑，什麼都沒報
+      },
+    });
+    expect(log.events).toEqual([]);
+  });
+
+  it('同一次請求報了好幾次：以最後一次為準（累計值在最後一則片段）', async () => {
+    const log = new SessionLog('s');
+    await run(log, {
+      outcome: 'throw',
+      attempt: (report) => {
+        report?.({ inputTokens: 100, outputTokens: 1, totalTokens: 101 });
+        report?.(reported);
+      },
+    });
+    expect(log.events[0]?.data).toMatchObject(reported);
+  });
+
+  it('不在呼叫範圍裡（沒有 model/start）就沒有回報函式，也不記', async () => {
+    expect(beginAttemptReport()).toBeUndefined();
+  });
+
+  it('記不進去不能蓋掉模型原本的錯', async () => {
+    const log = new SessionLog('s');
+    vi.spyOn(log, 'append').mockImplementation(() => {
+      throw new Error('日誌拒收');
+    });
+    const error = await run(log, { outcome: 'throw', attempt: (report) => report?.(reported) });
+    expect((error as Error).message).toBe('串流中途斷了');
   });
 });

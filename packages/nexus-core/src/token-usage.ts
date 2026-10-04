@@ -12,20 +12,24 @@
  *   `inputTokens` **含快取讀取**（LangChain 的語義，見 `model-usage.ts`），dsh 的 `uncachedInputTokens` 不含。兩邊的
  *   「輸入 + 輸出」都是整筆帳，桶的切法不同。
  * - **沒有重試的替換槽。** dsh 的一步可能落好幾次 `assistant/attempt`，同一個 `(turn, step)` 後到的取代先到的，
- *   `llm/retry-started` 再把槽關掉讓重試那次另外加。我們的 `model/usage` 由 `wrapModelCall` 在**成功回來之後**記一顆
- *   （`model-usage.ts`），SDK 自己的重試在它底下、看不見，所以一次呼叫恰好一顆，沒有東西要取代。
- * - **失敗與中止的呼叫不進帳。** dsh 的 `assistant/attempt` 串流裡報了用量就算；我們的記錄器在回應拋錯時根本沒走到
- *   記帳那行。燒掉但沒回來的那幾次，總帳看不到。
+ *   `llm/retry-started` 再把槽關掉讓重試那次另外加。我們的 `model/usage` 由 `wrapModelCall` 記一顆
+ *   （`model-usage.ts`），SDK 自己的重試在它底下、看不見，所以一次呼叫**至多**一顆，沒有東西要取代。
+ *   **代價**：重試掉的中間幾次（它們也可能在串流裡報過用量）不在帳上，只有最後那一次算數。
+ * - **失敗與中止的呼叫也進帳**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：供應商在串流裡報過用量、
+ *   之後斷線或被使用者停止的那次呼叫，記成一顆帶 `outcome` 的 `model/usage`，這一道加總照加（那些 token 真的花掉了），
+ *   不必認得 `outcome`。**沒報就沒有那一顆**（不是 0），所以漏的仍有一類：OpenAI 相容的串流把用量放在最後一則片段，
+ *   中途斷線的多半拿不到——那種呼叫靠 `model/end.outcome` 看得出來「燒了、但不知道多少」。
  *
  * ## 數字是逐份日誌的
  *
  * subagent 的模型呼叫記進它自己那份（`model-usage.ts` 的 `forCall`），所以 **root 那份的總帳不含子代理**——#574
  * 定案要的正是這個，同 dsh：子代理是另一個會話，`tokenUsage` 只折自己那份。
  *
- * **生摘要的那次也不在任何一份裡**，同 dsh（它記在 `compaction/summary.usage`、不進 `tokenUsage`）：基座在自己的
+ * **生摘要的那次不在任何一份的 `model/usage` 裡**，同 dsh（它記在 `compaction/summary.usage`、不進 `tokenUsage`）：基座在自己的
  * `wrapModelCall` 裡直接 `request.model.invoke` 生摘要（`summarization.ts` 的 `withQuietSummaryCall` 那段說明），
- * 不經過 `handler`，而記帳只記 `handler` 回來的那一顆。實測在 `apps/harness/src/context-pressure.test.ts` 的
- * 「會話總帳不含生摘要的那一次」。
+ * 不經過 `handler`，而記帳只記 `handler` 回來的那一顆。它的用量在 `compaction/summary.usage`（#1022，選填），這一道加總
+ * 不含它——要算它的人（#1028）明寫口徑另加。實測在 `apps/harness/src/context-pressure.test.ts` 的
+ * 「會話總帳不含生摘要的那一次」。**生標題那一次也不記**：dsh 的標題套件（`session-title*`）沒有任何用量欄位，我們同。
  *
  * @module
  */

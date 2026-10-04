@@ -2567,6 +2567,8 @@ export class ThreadPump {
       this.#presentCustom(workspaceChangesData(event.seq));
     } else if (event.type === 'model/usage' && entry.address.kind === 'root') {
       // 用量表（#528）：只收 root 的，同 dsh 的 `contextPressure`；子代理的呼叫不算進主對話的大小。
+      // 沒有正常回來的呼叫（#1022）也算一筆樣本：dsh 的 `contextPressure` 連 `assistant/attempt` 的用量也取樣
+      // （`token-meter/src/usage-projection.ts` 的 `usageOf`），那份請求真的送出去過，prompt 大小是真的。歷史那一側同一條。
       this.#presentCustom(modelUsageData(event.data));
     } else if (event.type === 'context/measure' && entry.address.kind === 'root') {
       this.#presentCustom(contextMeasureData(event.data));

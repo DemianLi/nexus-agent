@@ -695,6 +695,8 @@ function latestPressureEvents(events: readonly SessionEvent[]): PressureEvent[] 
     at -= 1
   ) {
     const event = events[at]!;
+    // 沒有正常回來的呼叫（#1022）也是一筆樣本（dsh 的 `contextPressure` 連 `assistant/attempt` 的用量也取樣），
+    // 與即時那一側（thread-pump 的 `model/usage` 分支）同一條。
     if (event.type === 'model/usage') usage ??= event;
     else if (event.type === 'context/measure') measure ??= event;
   }

@@ -86,7 +86,8 @@ describe('起訖、用量、重試、回覆都帶同一個識別', () => {
       }),
     ).rejects.toThrow('炸了');
     const end = log.events.find((event) => event.type === 'model/end')!;
-    expect(end.data).toEqual({ modelCall: 0 });
+    // 拋錯收的呼叫還帶沒有正常回來的方式（#1022）。
+    expect(end.data).toEqual({ modelCall: 0, outcome: 'error' });
   });
 });
 
