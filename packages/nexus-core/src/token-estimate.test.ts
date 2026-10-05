@@ -5,10 +5,12 @@
 
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { describe, expect, it } from 'vitest';
+import { Tiktoken } from 'js-tiktoken/lite';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   estimateAnchoredTokens,
   estimateRequestTokens,
+  estimateTextTokens,
   TokenAnchorBook,
 } from './token-estimate.js';
 
@@ -98,6 +100,97 @@ describe('E：o200k 的純估算', () => {
     const tokens = estimateRequestTokens({ messages: [new HumanMessage('X'.repeat(40_000))] });
     expect(tokens).toBeGreaterThan(1_000);
     expect(Date.now() - started).toBeLessThan(5_000);
+  });
+});
+
+/**
+ * [#952](https://github.com/DemianLi/nexus-agent/issues/952)：存檔點每次讀回來都是新的訊息物件，以物件為鍵的快取跨輪
+ * 全部落空，長中文歷史每輪重編一遍。這裡量的是**編碼器被叫了幾次、編了幾個字元**，不是牆鐘時間——牆鐘在 CI 上不穩。
+ */
+/** 沒有另一半的代理碼元。 */
+const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[\udc00-\udfff]/u;
+
+describe('內容備忘與超長抽樣（#952）', () => {
+  /** 數編碼器這段時間被餵了幾次、共多少字元。 */
+  function countEncoding() {
+    const spy = vi.spyOn(Tiktoken.prototype, 'encode');
+    return {
+      calls: () => spy.mock.calls.length,
+      chars: () => spy.mock.calls.reduce((sum, [text]) => sum + text.length, 0),
+    };
+  }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  // 不同的字串避免撞到別的測試已經備忘過的內容。
+  const longChinese = (seed: string, chars: number) =>
+    `${seed}｜中文工具結果，沒有空白。`.repeat(Math.ceil(chars / 14)).slice(0, chars);
+
+  it('同樣的內容換一個訊息物件再估：不再編碼，數字不變', () => {
+    const text = longChinese('備忘', 20_000);
+    const first = estimateRequestTokens({ messages: [new HumanMessage(text)] });
+    const encoding = countEncoding();
+    // 模擬存檔點讀回來：內容一樣、物件是新的。
+    const second = estimateRequestTokens({ messages: [new HumanMessage(text)] });
+    expect(second).toBe(first);
+    expect(encoding.calls()).toBe(0);
+  });
+
+  it('內容不同就要重編', () => {
+    const encoding = countEncoding();
+    estimateRequestTokens({ messages: [new HumanMessage(longChinese('甲', 2_000))] });
+    estimateRequestTokens({ messages: [new HumanMessage(longChinese('乙', 2_000))] });
+    expect(encoding.calls()).toBeGreaterThanOrEqual(2);
+  });
+
+  it('工具定義與 system 同樣以內容備忘', () => {
+    const tool = {
+      type: 'function',
+      function: { name: 'big', description: longChinese('工具', 3_000), parameters: {} },
+    };
+    const system = () => new SystemMessage(longChinese('系統', 3_000));
+    const first = estimateRequestTokens({ systemMessage: system(), tools: [{ ...tool }] });
+    const encoding = countEncoding();
+    const second = estimateRequestTokens({ systemMessage: system(), tools: [{ ...tool }] });
+    expect(second).toBe(first);
+    expect(encoding.calls()).toBe(0);
+  });
+
+  it('超長的一段只編幾個窗口：編進去的字元數有上限，估的數離全量不遠', () => {
+    const text = longChinese('抽樣', 400_000);
+    const encoding = countEncoding();
+    const sampled = estimateRequestTokens({ messages: [new HumanMessage(text)] }) - 4;
+    expect(encoding.chars()).toBeLessThanOrEqual(40_000);
+    vi.restoreAllMocks();
+    const exact = estimateTextTokens(text);
+    expect(Math.abs(sampled / exact - 1)).toBeLessThan(0.05);
+  });
+
+  it('抽樣是確定的：同一段永遠推出同一個數', () => {
+    const text = longChinese('確定', 150_000);
+    const a = estimateRequestTokens({ messages: [new HumanMessage(text)] });
+    const b = estimateRequestTokens({ messages: [new HumanMessage(`${text}`)] });
+    expect(b).toBe(a);
+  });
+
+  it('單段文字的入口不抽樣：外溢層靠它做預算的硬保證', () => {
+    const text = longChinese('全量', 120_000);
+    const encoding = countEncoding();
+    estimateTextTokens(text);
+    expect(encoding.chars()).toBeGreaterThanOrEqual(text.length);
+  });
+
+  it('抽樣的窗口不會把代理對切成兩半', () => {
+    // 每個字元都是兩個 UTF-16 碼元：任何一刀落在中間都會餵進孤立的代理。
+    const text = longChinese('😀', 200_000).replaceAll(/[^😀]/gu, '😀');
+    const encoding = countEncoding();
+    estimateRequestTokens({ messages: [new HumanMessage(text)] });
+    for (const [piece] of vi.mocked(Tiktoken.prototype.encode).mock.calls) {
+      expect(LONE_SURROGATE.test(piece)).toBe(false);
+    }
+    expect(encoding.calls()).toBeGreaterThan(0);
   });
 });
 
