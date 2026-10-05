@@ -38,6 +38,7 @@ import {
 } from './deliverable-files.js';
 import { liveModelPlugin } from './live-model.js';
 import { startupEntryMounted, startupSetting } from './startup.js';
+import { projectionFlushPlugin } from './projection-flush.js';
 import { toolTextPlugin } from './tool-text.js';
 import { DEFAULT_THREAD_TITLE_MAX_WORDS, threadTitlePlugin } from './thread-title.js';
 import { threadSearchPlugin } from './thread-search.js';
@@ -338,6 +339,36 @@ describe('startupSetting', () => {
     expect(source).toContain('toolTextLimits = startupSetting(plugins, toolTextPlugin)');
     const call = source.slice(source.indexOf('createWireHandler({'));
     expect(call.slice(0, call.indexOf('createAgent'))).toContain('toolTextLimits,');
+  });
+
+  it('serve 起動期解出投影合併視窗，而且真的傳給 handler——結構性的', async () => {
+    // 同 `tool-text` 那一條的處境：`serve.ts → createWireHandler` 這一跳沒有行為觀察點（產品路徑上沒有 patch 能在這個測試
+    // 裡換掉出貨的 cordis.yml 再起一台 serve）。handler 往下那一跳有行為測試（`projection-coalesce-wire.test.ts` 的「視窗是設定」），
+    // 紅的分工因此是：那條管轉發，這一條管接線。
+    const source = await readFile(new URL('../serve.ts', import.meta.url), 'utf8');
+    expect(source).toContain('projectionFlush = startupSetting(plugins, projectionFlushPlugin)');
+    const call = source.slice(source.indexOf('createWireHandler({'));
+    expect(call.slice(0, call.indexOf('createAgent'))).toContain(
+      'projectionFlushMs: projectionFlush.flushMs',
+    );
+  });
+
+  it('投影合併視窗低於 1 毫秒或不是整數：載入期就失敗', () => {
+    // 釘的是 schema 的 `int().min(1)`（形狀抄 dsh 的 `observeFlushMs`）。`0` 在合併器建構子是「不合併」，留給測試，設定層不收。
+    for (const flushMs of [0, -5, 1.5]) {
+      expect(() =>
+        startupSetting(
+          [{ plugin: projectionFlushPlugin, id: 'projection-flush', config: { flushMs } }],
+          projectionFlushPlugin,
+        ),
+      ).toThrow(/projection-flush/u);
+    }
+    expect(
+      startupSetting(
+        [{ plugin: projectionFlushPlugin, id: 'projection-flush', config: { flushMs: 250 } }],
+        projectionFlushPlugin,
+      ),
+    ).toEqual({ flushMs: 250 });
   });
 
   it('handler 把工具文字那一格轉給即時那條——結構性的', async () => {

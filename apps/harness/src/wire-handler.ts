@@ -359,6 +359,11 @@ export interface WireHandlerOptions {
    */
   readonly threadTitleLimits?: ThreadTitleLimits;
   /**
+   * 插件投影 frame 的合併視窗毫秒（`projection-flush` 那一列，[#1071](https://github.com/DemianLi/nexus-agent/issues/1071)）。
+   * 每條 thread 的 pump 吃同一個數字。省略即合併器的預設。
+   */
+  readonly projectionFlushMs?: number;
+  /**
    * 這台 server 講話的地方，選配（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
    *
    * **今天有三件事走到它**，加它的理由都很窄——發生時回應照樣是 200、畫面照樣對，不講就完全看不見：
@@ -778,6 +783,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
             options.readSubagentSession,
             options.warn,
           ),
+          options.projectionFlushMs,
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);

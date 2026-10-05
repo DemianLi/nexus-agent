@@ -1116,7 +1116,7 @@ export class ThreadPump {
    */
   readonly #childFold: ProjectionFold;
   /** 投影 frame 的出口（#1071）：輪中同一個單元連續的變更合成一顆，輪結束與收線之前送完，見 `projection-coalescer.ts`。 */
-  readonly #projectionOut = new ProjectionCoalescer((data) => this.#presentCustom(data));
+  readonly #projectionOut: ProjectionCoalescer;
   readonly #childUnits: readonly ProjectionUnit[];
   readonly #childSeeds: ProjectionChildren;
   readonly #childSessions = new Map<string, ProjectionSession>();
@@ -1188,6 +1188,9 @@ export class ThreadPump {
    *   `createNexusAgent` 回的那一格）。**省略即沒掛**：插話退成排隊，不放進一條沒人領的 `next-step`。
    * @param sessionReferences - 讀被引用的會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。**省略即這條
    *   thread 不收引用**：帶引用的話會被 {@link ThreadPump.referencedText} 擋下。
+   * @param projectionChildSeeds - 上一個行程留下的子代理日誌（#1028），見 `projection-children.ts`。
+   * @param projectionFlushMs - 插件投影 frame 的合併視窗毫秒（`projection-flush` 那一列，#1071）。值由 `serve.ts` 在起動期解出來、
+   *   經 `createWireHandler` 傳進來。**省略即合併器的預設 100**，同 `toolText`。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -1202,8 +1205,13 @@ export class ThreadPump {
     sessionReferences?: SessionReferenceReader,
     projections: readonly ProjectionUnit[] = [],
     projectionChildSeeds?: ProjectionChildren,
+    projectionFlushMs?: number,
   ) {
     this.#agent = agent;
+    this.#projectionOut = new ProjectionCoalescer(
+      (data) => this.#presentCustom(data),
+      projectionFlushMs,
+    );
     this.#projectionUnits = projections;
     this.#childUnits = childProjectionUnits(projections);
     this.#childFold = createProjectionFold(this.#childUnits, {
