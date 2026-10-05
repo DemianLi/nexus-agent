@@ -390,6 +390,126 @@ describe('人那條路：asked 在中斷的那一刻、decided 在回答的那�
     const asked = rootEvents(session, ['approval/asked'])[0]!;
     expect(decided.data).toEqual({ id: (asked.data as { id: string }).id, outcome: 'cancelled' });
   });
+
+  it('一輪兩顆都要核准、分兩次答：兩對各自配對，軌跡兩列（沒答的那顆以同 id 再掛不長第二列）各帶自己的結局', async () => {
+    const session = await open('a4', [
+      {
+        content: '兩顆。',
+        toolCalls: [
+          { name: GATED, id: 'call-one', args: {} },
+          { name: GATED, id: 'call-two', args: {} },
+        ],
+      },
+      { content: '收工。' },
+      { content: '再收一次工。' },
+    ]);
+    await until(session, requested);
+    const first = approvalAt(session.state.pendings).interruptId;
+    await respond(session, 'a4', 'approve');
+    // 第二顆以**同一個 id** 再掛上來（resume 輪），等它出現在 pendings 才答。
+    await until(session, (each) =>
+      each.state.pendings.some(
+        (pending) => pending.kind === 'approval' && pending.interruptId !== first,
+      ),
+    );
+    const second = approvalAt(session.state.pendings).interruptId;
+    expect(second).not.toBe(first);
+    await respond(session, 'a4', 'reject');
+    await until(session, settled(2));
+
+    const asked = rootEvents(session, ['approval/asked']).map((event) => event.data);
+    expect(asked).toEqual([
+      expect.objectContaining({ id: first, callId: 'call-one' }),
+      expect.objectContaining({ id: second, callId: 'call-two' }),
+    ]);
+    expect(rootEvents(session, ['approval/decided']).map((event) => event.data)).toEqual([
+      { id: first, outcome: 'allowed-once' },
+      { id: second, outcome: 'rejected' },
+    ]);
+
+    const rows = () =>
+      (trajectoryOf(session.state)?.turns ?? [])
+        .flatMap((turn) => turn.decisions)
+        .filter((decision) => decision.kind === 'interrupt');
+    await until(
+      session,
+      () => rows().every((row) => row.approval?.outcome !== undefined) && rows().length >= 2,
+    );
+    expect(rows().map((row) => [row.id, row.approval?.callId, row.approval?.outcome])).toEqual([
+      [first, 'call-one', 'allowed-once'],
+      [second, 'call-two', 'rejected'],
+    ]);
+  });
+});
+
+/**
+ * 重開：收掉行程，只剩磁碟上的日誌；另一個 handler 以 root 的 seed 起來，第一次開歷史就要有軌跡。
+ * 回重開後歷史折出來的軌跡中斷列。
+ */
+async function interruptRowsAfterReopen(session: Session, threadId: string) {
+  opened.splice(opened.indexOf(session.handler), 1);
+  await session.handler.close();
+  const { logs } = await readSessionLogs([join(dir, 'logs')]);
+  const rootSeed = logs.find((log) => log.header.id === threadId)?.events ?? [];
+  expect(rootSeed.some((event) => event.type === 'approval/asked')).toBe(true);
+  const rebuilt = await createNexusAgent({
+    model: new ScriptedChatModel({ turns: [{ content: '不會被叫到。' }] }),
+    checkpointer: new MemorySaver(),
+    plugins: [spyPlugin(), gatePlugin(), createTrajectoryPlugin()],
+  });
+  const reopened = createWireHandler({
+    auth: TEST_BROWSER_AUTH,
+    createAgent: async () => ({
+      agent: rebuilt.agent as unknown as PumpAgent,
+      commands: emptyCommandPoint(),
+      projections: rebuilt.projections,
+      dispose: () => rebuilt.dispose(),
+      attachSessions: composeAttachSessions(rebuilt),
+      rootSeed,
+    }),
+  });
+  opened.push(reopened);
+  const client = createWireClient({
+    baseUrl: BASE_URL,
+    fetch: async (input, init) => reopened.handle(loopbackRequest(input as string, init)),
+  });
+  const page = await client.threadHistory(threadId);
+  if (page.kind !== 'ok') throw new Error(page.message);
+  const state = reduceAll(emptyConversation(), page.result.events);
+  return (trajectoryOf(state)?.turns ?? [])
+    .flatMap((turn) => turn.decisions)
+    .filter((decision) => decision.kind === 'interrupt');
+}
+
+describe('重開之後', () => {
+  it('答完的：中斷列帶著 approval 與結局，和即時一樣', async () => {
+    const session = await open('r1', SCRIPT_TWO_TURNS);
+    await until(session, requested);
+    const interruptId = approvalAt(session.state.pendings).interruptId;
+    await respond(session, 'r1', 'approve');
+    await until(session, settled(2));
+    const rows = await interruptRowsAfterReopen(session, 'r1');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({
+      id: interruptId,
+      approval: { tool: GATED, callId: 'call-alpha', outcome: 'allowed-once' },
+    });
+  });
+
+  it('停在核准點沒人答就關掉的：asked 開著、沒有結局（不憑空推一個），也不當掉', async () => {
+    const session = await open('r2', SCRIPT_TWO_TURNS);
+    await until(session, requested);
+    await vi.waitFor(() => {
+      expect(rootEvents(session, ['turn/end'])).toHaveLength(1);
+    });
+    const interruptId = approvalAt(session.state.pendings).interruptId;
+    // 前提：日誌上有 asked、沒有 decided。
+    expect(rootEvents(session, ['approval/decided'])).toEqual([]);
+    const rows = await interruptRowsAfterReopen(session, 'r2');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ id: interruptId, approval: { tool: GATED } });
+    expect(rows[0]?.kind === 'interrupt' ? rows[0].approval?.outcome : 'x').toBeUndefined();
+  });
 });
 
 describe('不必問人就確定的：閘門在圖內一次寫一對', () => {

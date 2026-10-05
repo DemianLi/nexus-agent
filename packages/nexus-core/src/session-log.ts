@@ -402,9 +402,10 @@ export interface SessionEventMap {
    * （政策關掉、沒有管道、子代理）由閘門在圖內一次寫一對，`id` 是新產的。
    *
    * 標 `ignorable`：它不進模型也不左右重建，舊 runtime 略過它是對的（#507，所以不升格式版本）。
-   * 會話遙測的鏡像預設不放行。
    *
-   * ⚠️ `reason` 是發問的一方寫的字，可能帶工具參數裡的片段，原樣進本機日誌。
+   * ⚠️ `reason` 是發問的一方寫的字，可能帶工具參數裡的片段，原樣進本機日誌；**會話遙測的鏡像是預設放行**
+   * （`isMirroredEvent` 只擋 `request/header` 與 `request/system`），所以它跟 `tool/call` 的參數一樣會被鏡像出去
+   * ——要擋就在 `isMirroredEvent` 明列，不要靠這裡的說明。
    */
   'approval/asked': {
     readonly id: string;

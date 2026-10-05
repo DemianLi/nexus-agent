@@ -326,7 +326,8 @@ function auditDecision(
  *
  * **拒絕的 `tool/result` 帶碼**（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／`APPROVAL_NO_CHANNEL`／
  * `TOOL_DENIED_BY_LISTENER`，見 `tool-events.ts`），讓「被人拒」與「工具自己失敗」在日誌上分得開。**這是 dsh 沒有的**
- * （它的核准拒絕不帶 `info`），理由與退到哪一格見 `tool-events.ts` 的碼定義。
+ * （它的核准拒絕不帶 `info`）。依據是 #1018 Q2 的「拒絕帶原因碼」決定，載體是 dsh `deny.info` 那一格，
+ * 登記見 `tool-events.ts` 的碼定義。
  *
  * 閱讀面在 `apps/harness/src/interception-index.test.ts` 第 4 列。
  *

@@ -314,6 +314,13 @@ function isApprovalOutcome(value: unknown): value is TrajectoryApprovalOutcome {
   return APPROVAL_OUTCOMES.some((each) => each === value);
 }
 
+/** 任何一輪裡是否已有這個 id 的中斷列。 */
+function hasInterrupt(state: TrajectoryState, id: string): boolean {
+  return state.turns.some((turn) =>
+    turn.decisions.some((decision) => decision.kind === 'interrupt' && decision.id === id),
+  );
+}
+
 /**
  * 改某顆中斷的決策列（以中斷 id 認）。**結局落在回答它的那一輪（`resume`），中斷在前一輪**，所以往回找所有留著逐呼叫
  * 結構的輪；找不到（被摺進摘要、或根本不是人那條路）就原樣不動。
@@ -775,13 +782,18 @@ export function applyTrajectory(state: TrajectoryState, event: SessionEvent): Tr
         cutoffIndex: Number(data['cutoffIndex'] ?? 0),
         messagesBefore: Number(data['messagesBefore'] ?? 0),
       });
-    case 'interrupt/raised':
+    case 'interrupt/raised': {
+      // 一輪裡有好幾顆要答的（一批工具各自要核准），答掉一顆後沒答的會在恢復那一輪**以同一個 id 再掛一次**。
+      // 同 id 是同一個問題，不長第二列——否則它搶走之後的結局、側欄看到一個永遠「等著」的重複列。
+      const raisedId = data['interruptId'];
+      if (typeof raisedId === 'string' && hasInterrupt(state, raisedId)) return state;
       return withDecision(state, {
         kind: 'interrupt',
         seq: event.seq,
         time: event.time,
-        ...(typeof data['interruptId'] === 'string' ? { id: data['interruptId'] } : {}),
+        ...(typeof raisedId === 'string' ? { id: raisedId } : {}),
       });
+    }
     case 'approval/asked': {
       // 核准的問題掛在它的那顆中斷上（人那條路上兩者同 id，pump 在同一刻寫）。找不到中斷的是不必問人就確定的
       // （政策關掉、沒有管道）：沒有人被擋下來等，結局在那一次呼叫的錯誤碼上，不在這裡。

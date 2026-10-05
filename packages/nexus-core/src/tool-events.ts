@@ -97,9 +97,11 @@ export const TOOL_NOT_STARTED = 'TOOL_NOT_STARTED';
 /**
  * 核准被拒的四個碼（[#1029](https://github.com/DemianLi/nexus-agent/issues/1029)）。**這四個是我們多出來的，dsh 沒有**：
  * dsh 的核准拒絕（`packages/core/tools/src/index.ts:1744-1766`，`5badb15`）只回一則 `Error: <reason>`，不帶 `error.info`；
- * 它分「人拒」與「政策拒」靠 `approval/policy` 事件。`PreToolDecision` 的 `deny` 倒是留了 `info?: ToolErrorInfo`
- * 這一格（「structured error identity」），dsh 自己沒用在核准上。**我們的政策是組裝決定的、不進日誌**，所以沒有
- * `approval/policy` 可以分，就用這一格讓 `tool/result` 自己說得出是誰拒的——退到最接近的做法，不是新機制。
+ * 它分「人拒」與「政策拒」靠 `approval/policy` 事件。**登記的偏離**：依據是 demian 在 #1018 Q2（2026-10-04）拍板的
+ * 「拒絕帶原因碼」——這是產品要求，不是 dsh 的做法（#1029 卡上說 dsh 的拒絕帶 `error{name,code,reason}`，那是讀錯：
+ * dsh 的核准拒絕結果沒有這一格）。載體是 dsh `PreToolDecision` 的 `deny.info?: ToolErrorInfo`
+ * （「structured error identity」，dsh 自己沒用在核准上）：槽是 dsh 的，填法是我們的，所以不是新機制。
+ * 之後若要照 dsh 補 `approval/policy` 事件來分人拒與政策拒，是另一個決定（demian 定），補了這四個碼也不必拿掉。
  *
  * - {@link APPROVAL_REJECTED_BY_USER}：有人看過並按了拒絕。
  * - {@link APPROVAL_POLICY_NEVER}：這個 session 關掉了核准，確定性拒絕，沒有人被問到。

@@ -53,9 +53,9 @@
  *    dsh 那格是只觀察的 `mode: 'emit'` 通知，佔住它的是**聽者**，而我們這側讀 `tool/result`
  *    的只有遙測協調器——它照單全收每一顆事件，不是為這一格掛的。`goal-driver.ts` 檔頭那條
  *    婉拒 #180 停損的理由跟著改寫了：量得到了，結論沒變。
- * 4. **第 4 格核准沒有審計事件**——dsh 每次 request 一對 `approval/asked` ＋
- *    `approval/decided`，我們一顆都沒有；逐條在第 4 列的紀錄差，結局（認帳不做、重開條件）
- *    見 [#220](https://github.com/DemianLi/nexus-agent/issues/220)。
+ * 4. **第 4 格核准的審計事件**——dsh 每次 request 一對 `approval/asked` ＋
+ *    `approval/decided`；我們 #1029 起也有（人那條由 pump 寫、不必問人的由閘門寫），逐條在第 4 列的紀錄差。
+ *    這一條原本是「認帳不做」（[#220](https://github.com/DemianLi/nexus-agent/issues/220)），#1018 Q2 翻案。
  *
  * **第 2 與第 3 筆原本是同一個缺件**（圖裡發生的事沒有一條進日誌的路）。第 3 筆補上的方式是
  * **讓圖裡的 middleware 自己寫**（同 `model/usage`），不是補那條路——所以第 2 筆照舊開著：
@@ -218,8 +218,8 @@ const INDEX: readonly InterceptionRow[] = [
       '沒有管道 → `unavailable`、子代理一律 `policy-never`）由閘門在圖內一次寫一對。listener 直接 `deny` 不寫，' +
       '同 dsh（只有 `ask` 才進核准服務）。**dsh 沒有而我們多的一格**：核准拒絕的 `tool/result` 帶碼' +
       '（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／`APPROVAL_NO_CHANNEL`／`TOOL_DENIED_BY_LISTENER`），' +
-      '因為我們的政策是組裝決定的、沒有 `approval/policy` 事件可以分人拒與政策拒；用的是 dsh 的 `deny.info` 那一格。' +
-      '**還沒有的**：`cancelled` 只在停在核准點按停止時寫（pump 的 `#withdraw`）；沒有 `approval/policy`；' +
+      '依據是 #1018 Q2 拍板的「拒絕帶原因碼」（卡上說 dsh 也帶，是讀錯：dsh 的核准拒絕結果沒有 info），載體用 dsh 的 `deny.info` 那一格。' +
+      '**還沒有的**：`cancelled` 只在停在核准點按停止時寫（pump 的 `#withdraw`）；沒有 `approval/policy`（要不要照 dsh 補是另一個決定）；' +
       '`request_sandbox_escalation` 在本體裡的政策／無管道拒絕不寫 `approval/*`（只有人那條路會）。',
     frequencyDelta: UNMEASURED,
   },
