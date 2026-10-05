@@ -10,8 +10,9 @@
  * ## 與 dsh 的偏離
  *
  * dsh 的 `ui-trajectory` 是**客戶端分頁的投影**：瀏覽器依需要向 host 要某一頁軌跡。我們的通道（#1026）是
- * **伺服器端的整份取代 frame**，所以 view 要有上限（最近 8 輪完整、更早只留摘要），不是分頁。原因：通道的 `projection`
- * frame 沒有「要哪一頁」的往返，而重做它不在這張卡的範圍。通道本身的偏離登記在 `.docs/session-projections-design.md`。
+ * **伺服器端的整份取代 frame**，所以 view 要有上限（最近 3 輪完整、更早只留摘要），不是分頁。原因：通道的 `projection`
+ * frame 沒有「要哪一頁」的往返，而重做它不在這張卡的範圍。**窗口已從 8 輪降到 3 輪**（2026-10-05，過渡值）；標準的形狀（骨架全推、細節按需拉）是
+ * [#1083](https://github.com/DemianLi/nexus-agent/issues/1083)，做完後這個窗口與這段偏離一併拿掉。通道本身的偏離登記在 `.docs/session-projections-design.md`。
  *
  * ## 範圍
  *

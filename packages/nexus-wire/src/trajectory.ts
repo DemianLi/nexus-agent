@@ -34,12 +34,19 @@ export const TRAJECTORY_PROJECTION = 'trajectory';
 export const REQUEST_SNAPSHOTS_PROJECTION = 'request-snapshots';
 
 /** `trajectory` 的 `stateVersion`：折疊語意或 view 形狀一變就升。 */
-export const TRAJECTORY_VERSION = 3;
+export const TRAJECTORY_VERSION = 4;
 /** `request-snapshots` 的 `stateVersion`。 */
 export const REQUEST_SNAPSHOTS_VERSION = 1;
 
-/** 帶逐呼叫結構的最近幾輪。 */
-export const TRAJECTORY_DETAIL_TURNS = 8;
+/**
+ * 帶逐呼叫結構的最近幾輪。
+ *
+ * **過渡值**：8 → 3（2026-10-05，[#1083](https://github.com/DemianLi/nexus-agent/issues/1083) 的 B 半）。整份取代的 frame
+ * 最壞情況（滿載輪：33 次呼叫 × 10 工具）8 輪是 377 KB，3 輪約 140 KB（推算，非實測）。dsh 與 penguin-harness 都沒有
+ * 「推送的投影裡留最近 N 輪完整細節」這種形狀，共通做法是骨架給全部、細節按需拉；那一半是 #1083，做完後這個常數就不再需要。
+ * 代價：第 4 輪以前只剩摘要，「跳到舊輪」落地的是摘要列。
+ */
+export const TRAJECTORY_DETAIL_TURNS = 3;
 /** 摘要列最多幾列；更早的只記進 `omitted`。 */
 export const TRAJECTORY_DIGEST_CAP = 200;
 /** 預覽字串（輸入、錯誤訊息）最多幾個字元。 */
