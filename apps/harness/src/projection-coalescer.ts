@@ -29,7 +29,7 @@
 
 import type { CustomFrameData } from '@nexus/wire';
 
-/** 合併視窗，毫秒。同 dsh `observeFlushMs` 的預設。 */
+/** 合併視窗的預設，毫秒。同 dsh `observeFlushMs` 的預設；部署時用 `projection-flush` 那一列（`settings/projection-flush.ts`）改。 */
 export const PROJECTION_FLUSH_MS = 100;
 
 /** 計時器的縫，測試換成假的。 */

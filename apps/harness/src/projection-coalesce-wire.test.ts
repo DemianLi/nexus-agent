@@ -91,7 +91,7 @@ interface Outcome {
   readonly units: Parameters<typeof createProjectionFold>[0];
 }
 
-async function run(): Promise<Outcome> {
+async function run(flushMs?: number): Promise<Outcome> {
   const root = await mkdtemp(join(tmpdir(), 'nexus-coalesce-'));
   roots.push(root);
   const built = await createCliAgent(
@@ -102,6 +102,7 @@ async function run(): Promise<Outcome> {
   let sessions: SessionRegistry | undefined;
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
+    ...(flushMs === undefined ? {} : { projectionFlushMs: flushMs }),
     createAgent: async () => ({
       agent: built.agent as unknown as PumpAgent,
       commands: built.commands,
@@ -138,7 +139,9 @@ async function run(): Promise<Outcome> {
       await new Promise((resolve) => setTimeout(resolve, 10));
     }
     // 收尾之後再多等兩個合併視窗，看有沒有遲到的待送值倒過來蓋掉最終值。
-    await new Promise((resolve) => setTimeout(resolve, PROJECTION_FLUSH_MS * 2));
+    await new Promise((resolve) =>
+      setTimeout(resolve, Math.min(flushMs ?? PROJECTION_FLUSH_MS, 200) * 2),
+    );
     const page = await client.threadHistory(THREAD_ID);
     if (page.kind !== 'ok') throw new Error(`歷史拿不到：${page.message}`);
     if (sessions === undefined) throw new Error('attachSessions 沒被叫到');
@@ -217,4 +220,34 @@ describe('投影 frame 的合併（#1071）', () => {
     });
     expect(callCounts).toEqual([...callCounts].sort((a, b) => a - b));
   }, 120000);
+  /**
+   * **視窗是設定**（`projection-flush` 那一列）：同一段腳本，`createWireHandler` 的 `projectionFlushMs` 設大，下行上的軌跡 frame
+   * 就比設 1 少。量的是產品路徑（真的 handler → 真的 `ThreadPump` → 合併器），不是合併器建構子傳值——後者證明不了設定有接上。
+   * 兩邊的終值結構相同（視窗只影響輪中的 frame 數，不影響終值）。
+   *
+   * 突變：讓 pump 不用傳進來的值（寫死預設 100）→ 兩邊 frame 數接近，這條紅。
+   */
+  it('視窗是設定：設大的比設 1 的少送，終值結構相同', async () => {
+    const tight = await run(1);
+    const wide = await run(1500);
+    const frames = (outcome: Outcome) => outcome.live.filter(isTrajectory);
+    // 終值的**結構**相同（兩次執行的時刻與 id 不同，所以不比逐位元組）：輪數、每輪呼叫數、工具數、結局。
+    const shapeOf = (outcome: Outcome) => {
+      const view = reduceAll(emptyConversation(), outcome.live).projections[TRAJECTORY_PROJECTION]
+        ?.view as TrajectoryView | undefined;
+      return (view?.turns ?? []).map((turn) => ({
+        end: turn.end,
+        calls: turn.calls.length,
+        tools: turn.calls.reduce((sum, call) => sum + call.tools.length, 0),
+      }));
+    };
+    await report({ flushMs: [1, 1500], frames: [frames(tight).length, frames(wide).length] });
+    // 前提：1 毫秒的視窗幾乎不合併，至少要送出一大把，否則比較量不出東西。
+    expect(frames(tight).length).toBeGreaterThanOrEqual(CALLS);
+    expect(frames(wide).length * 2).toBeLessThanOrEqual(frames(tight).length);
+    expect(shapeOf(tight)).toEqual([
+      { end: 'completed', calls: CALLS + 1, tools: CALLS * TOOLS_PER_CALL },
+    ]);
+    expect(shapeOf(wide)).toEqual(shapeOf(tight));
+  }, 60_000);
 });

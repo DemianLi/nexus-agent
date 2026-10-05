@@ -315,7 +315,7 @@
 #
 # **它們內部又分兩層，分界是消費點跑的時刻**：
 #
-# - **起動期**（`thread-title`、`thread-title-llm`、`thread-search`、`browser-session`、`deliverable-files`、`tool-text`、
+# - **起動期**（`thread-title`、`thread-title-llm`、`thread-search`、`browser-session`、`deliverable-files`、`tool-text`、`projection-flush`、
 #   `tool-result-stash`、`spill-policy`、`background-subagents`、`subagent-model-selection`、`live-model`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
 #   兩條交付路由，以及交給組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。`thread-title`
 #   另外還給寫退回標題的 pump 與 CLI（#647），吃的是同一份起動期的值；`thread-title-llm` 跟它一起在建模型的那一刻
@@ -427,6 +427,16 @@
   name: '#settings/tool-text'
   config:
     maxBytes: 50000
+
+# 插件投影 frame 的合併視窗（#1071；2026-10-05 的 #1015 決議做成設定項）：輪中連續變更的投影值，一個單元一個視窗，
+# 視窗到了送那一刻最新的整份值。**視窗本身在 dsh 的投影通道上沒有對應物**（`control.ts:22-31` 每次變動就廣播），形狀借自
+# job-controller 的 `observeFlushMs`（`z.natural().min(1).default(100)`），所以視窗是偏離、旋鈕抄 dsh：自然數、最小 1、預設 100。
+# 只在輪中有效，輪結束與收線一定先送掉待送的，所以調大只讓輪中更新變慢、不影響最終值。對所有插件投影單元共用。
+# 起動期讀一次、改值要重啟。**這一列關不掉**，理由同 `tool-text`：關掉會回到預設 100，讀起來卻像把合併關了。
+- id: projection-flush
+  name: '#settings/projection-flush'
+  config:
+    flushMs: 100
 
 # 過大的工具結果暫存到主機上的哪裡、留多久（#734）。**兩格名字都是 dsh `spill-local` 的**（`root`、`cleanupPeriodDays`，
 # `packages/spill/spill-local/src/index.ts:66-69`，`477b4f4`）。`root` 不寫就是 harness home 底下的 `tool-results`

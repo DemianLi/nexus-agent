@@ -174,6 +174,12 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
       '送出去的位元組一個都不變，只會讓這份設定讀起來像關掉了什麼。',
   ],
   [
+    '#settings/projection-flush',
+    '這一列不裝任何東西，只講插件投影 frame 的合併視窗毫秒數。關掉它不會讓合併停下來' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，視窗於是回到 schema 的預設 100，' +
+      '合併照樣在，只會讓這份設定讀起來像把合併關了。',
+  ],
+  [
     '#settings/tool-result-stash',
     '這一列不裝任何東西，只講過大工具結果暫存的根目錄與保留天數。關掉它不會讓工具結果不再暫存' +
       '——`startupSetting` 把關掉的那一列當成沒有那一列，值於是回到 schema 的預設，' +
