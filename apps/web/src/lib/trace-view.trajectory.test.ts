@@ -27,6 +27,7 @@ import {
   sameRow,
   traceModel,
   traceTurns,
+  turnSeqOfMessage,
 } from '@/lib/trace-view';
 import type { TraceRow } from '@/lib/trace-view';
 
@@ -718,6 +719,26 @@ describe('traceModel：核准後續接併回同一個邏輯輪', () => {
     };
     const [first] = traceModel(withTrajectory(multi, script, trajectory)).turns;
     expect(kinds(first!.rows)).toContain('decision');
+  });
+
+  it('回那一組的 seq；續接併回前一輪，所以續接之後的回覆答的是併起來那一組', () => {
+    const { script, state, trajectory } = approvalConversation();
+    const withView = withTrajectory(state, script, trajectory);
+    const model = traceModel(withView);
+    const [first, second] = model.turns;
+    expect(first!.seq).toBeDefined();
+    // 第一輪的兩段（run-a、run-b）與續接之後的 run-c 都在第一組；第二輪的 run-d 在第二組。
+    expect(turnSeqOfMessage(model, withView.entries, 'run-a')).toBe(first!.seq);
+    expect(turnSeqOfMessage(model, withView.entries, 'run-c')).toBe(first!.seq);
+    expect(turnSeqOfMessage(model, withView.entries, 'run-d')).toBe(second!.seq);
+    expect(first!.seq).not.toBe(second!.seq);
+  });
+
+  it('答不出就 undefined：不在對話裡的訊息 id、沒有軌跡投影（第 0 版的組沒有 seq）', () => {
+    const { script, state, trajectory } = approvalConversation();
+    const withView = withTrajectory(state, script, trajectory);
+    expect(turnSeqOfMessage(traceModel(withView), withView.entries, 'run-nowhere')).toBeUndefined();
+    expect(turnSeqOfMessage(traceModel(state), state.entries, 'run-a')).toBeUndefined();
   });
 
   it('續接還沒收尾時，併起來的標題沒有收尾也沒有牆鐘（不拿第一段的充數）', () => {

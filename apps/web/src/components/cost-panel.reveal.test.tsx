@@ -200,7 +200,9 @@ describe('成本分頁 →「在觀測分頁看這一輪」', () => {
     fireEvent.click(screen.getByRole('button', { name: '直接要求' }));
     await act(async () => {});
     expect(screen.getByRole('tab', { name: '觀測' }).getAttribute('aria-selected')).toBe('true');
-    expect(screen.getByText(TRACE_REVEAL_MISSING_TEXT)).toBeTruthy();
+    // 讀屏的 status 與畫面上的說明各一份。
+    expect(screen.getAllByText(TRACE_REVEAL_MISSING_TEXT)).toHaveLength(2);
+    expect(screen.getByTestId('trace-reveal-notice').textContent).toBe(TRACE_REVEAL_MISSING_TEXT);
     expect(document.querySelector('[data-revealed]')).toBeNull();
     // 分頁列自己可能把選中的分頁捲進視野；要緊的是沒有任何一輪被捲到。
     expect(

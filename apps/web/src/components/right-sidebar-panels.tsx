@@ -35,11 +35,15 @@ export interface PanelBodyProps {
   readonly onRevealed?: ((nonce: number) => void) | undefined;
 }
 
-/** 請求顯示觀測分頁的某一輪：`seq` 是開那一輪的 `turn/start` 的位置，`nonce` 讓同一輪連按兩次也算兩次請求。 */
-export interface TurnReveal {
-  readonly seq: number;
-  readonly nonce: number;
-}
+/**
+ * 請求顯示觀測分頁的某一輪，`nonce` 讓同一輪連按兩次也算兩次請求。要哪一輪有兩種說法：
+ * `seq` 是開那一輪的 `turn/start` 的位置（成本分頁的「看這一輪」）；`messageId` 是對話裡某一則回覆的訊息 id，
+ * 觀測分頁自己查它落在哪一輪（回覆底下的「這一輪的過程」，#1034）。
+ */
+export type TurnReveal = { readonly nonce: number } & (
+  | { readonly seq: number; readonly messageId?: undefined }
+  | { readonly messageId: string; readonly seq?: undefined }
+);
 
 export interface PanelDefinition {
   /** 分頁上的標題，也是入口鈕的名稱。 */

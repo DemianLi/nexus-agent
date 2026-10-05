@@ -136,6 +136,12 @@ export interface RightSidebarApi {
    * 兩個分頁在 1024 以下同在一個抽屜裡，所以不收抽屜；焦點交給那一輪的標題。
    */
   revealTurn(seq: number): void;
+  /**
+   * 打開觀測分頁、捲到這一則回覆所在的那一輪並標示（#1034，回覆底下的「這一輪的過程」）。`messageId` 是對話裡那則回覆的訊息 id。
+   * 那一輪在哪由觀測分頁自己判斷：落在軌跡窗口之外（只剩摘要或根本沒有）就在分頁裡講，不跳錯地方。
+   * `from` 是按下的那顆鈕：1024 以下抽屜關掉時焦點交回它；抽屜開著時焦點交給那一輪的標題。
+   */
+  revealReply(messageId: string, from?: HTMLElement | null): void;
 }
 
 interface RightSidebarControl {
@@ -240,6 +246,14 @@ export function RightSidebarProvider({
         setReveal({ seq, nonce: revealCount.current });
         update((current) => openTab(current, { kind: 'trace' }));
       },
+      revealReply: (messageId, from) => {
+        // 先把焦點交給分頁（那一輪找不到時就停在這）；找得到時觀測分頁隨後把焦點放到那一輪的標題。
+        focusTab.current = tabKey({ kind: 'trace' });
+        returnFocus.current = from ?? null;
+        revealCount.current += 1;
+        setReveal({ messageId, nonce: revealCount.current });
+        update((current) => openTab(current, { kind: 'trace' }));
+      },
       locate: (entryId) => {
         const item = findTranscriptItem(entryId);
         if (item === undefined) return false;
@@ -310,7 +324,7 @@ export function RightSidebarToggle({ className }: { className?: string }) {
  * 變了（版面、寬度、`sources`）才重畫，所以 `sources` 的身分要穩（`App` 用 `useMemo`），別把隨串流變的東西放進去。
  */
 export const RightSidebarPanel = memo(function RightSidebarPanel() {
-  const { layout, isMobile, width, locateFocus, update } = useControl();
+  const { layout, isMobile, width, locateFocus, returnFocus, toggle, update } = useControl();
   if (isMobile) {
     return (
       <Sheet
@@ -322,13 +336,20 @@ export const RightSidebarPanel = memo(function RightSidebarPanel() {
           showCloseButton={false}
           className="w-full gap-0 p-0 sm:max-w-none"
           data-testid="right-sidebar"
-          // 沒有 Trigger（受控開啟），焦點自己還（spec §8）：從觀測分頁定位時交給對話裡那一則，其餘照 Radix 預設。
+          // 沒有 Trigger（受控開啟），焦點自己還（spec §8）：從觀測分頁定位時交給對話裡那一則；其餘交回從哪裡打開的那顆
+          // （「查看全文」、「這一輪的過程」），不在了就交回標頭的開關鈕。Radix 的預設在沒有 Trigger 時什麼都不還，焦點掉到 body
+          // （實機量到，#1034）。
           onCloseAutoFocus={(event) => {
-            const target = locateFocus.current;
-            if (target === null) return;
-            locateFocus.current = null;
             event.preventDefault();
-            focusTranscriptItem(target);
+            const target = locateFocus.current;
+            if (target !== null) {
+              locateFocus.current = null;
+              focusTranscriptItem(target);
+              return;
+            }
+            const back = returnFocus.current;
+            returnFocus.current = null;
+            (back?.isConnected === true ? back : toggle.current)?.focus();
           }}
         >
           <SheetTitle className="sr-only">右側欄</SheetTitle>
@@ -457,10 +478,11 @@ function PanelContents() {
           onClick={() => {
             update((current) => setOpen(current, false));
             // 停靠時面板一藏，焦點就掉到 body；交回從哪裡打開的那顆（「查看全文」，#654），不在了就交回標頭的開關鈕。
-            // 覆蓋那一種由 Sheet 自己還焦點。
+            // 覆蓋那一種由 Sheet 的 `onCloseAutoFocus` 還焦點（要等抽屜真的關掉）。
+            if (isMobile) return;
             const back = returnFocus.current;
             returnFocus.current = null;
-            if (!isMobile) (back?.isConnected === true ? back : toggle.current)?.focus();
+            (back?.isConnected === true ? back : toggle.current)?.focus();
           }}
         >
           <PanelRightClose />
