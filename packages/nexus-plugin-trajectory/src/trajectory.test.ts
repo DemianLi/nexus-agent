@@ -15,6 +15,7 @@ import {
   SessionLog,
   toLoggedMessage,
 } from '@nexus/core';
+import { ProjectionDetailError } from '@nexus/core';
 import type { ApprovalOutcome, SessionEvent } from '@nexus/core';
 import {
   TRAJECTORY_CALL_TOOLS_CAP,
@@ -29,6 +30,7 @@ import { trajectoryPlugin } from './index.js';
 import {
   applyTrajectory,
   initialTrajectory,
+  trajectoryTurnDetail,
   trajectoryUnit,
   viewTrajectory,
 } from './trajectory.js';
@@ -834,5 +836,168 @@ describe('核准的問題掛在它的中斷列上（#1029）', () => {
     // 雙向可賦值：少一邊多一值，其中一行就編不過。
     const back: readonly ApprovalOutcome[] = fromWire;
     expect(back).toEqual(fromCore);
+  });
+});
+
+describe('子代理計數（#1083）', () => {
+  /** 一輪裡派 `n` 個子代理（每個一次呼叫的一個 task 工具）。 */
+  function delegateTurn(log: SessionLog, n: number): void {
+    log.append('turn/start', { kind: 'message', text: '分頭做' });
+    const start = log.append('model/start', {});
+    const ids = Array.from({ length: n }, (_, i) => `d${String(i)}`);
+    log.append('assistant/message', reply(start.seq, '', ...ids));
+    for (const id of ids) {
+      log.append('tool/call', call(id, 'task'));
+      log.append('subagent/catalog', { childId: `root/bg-${id}`, callId: id, mode: 'one-shot' });
+      log.append('tool/result', ok(id));
+    }
+    log.append('turn/end', {});
+  }
+
+  it('摘要與完整輪都帶 subagentCount；工具超過單輪上限被摺掉的也算', () => {
+    const log = new SessionLog('t');
+    delegateTurn(log, TRAJECTORY_CALL_TOOLS_CAP + 4);
+    simpleTurn(log, '下一輪');
+    simpleTurn(log, '再下一輪');
+    simpleTurn(log, '又一輪');
+    const view = foldAll(log.events);
+    // 第 0 輪已退成摘要：摺掉的 4 個工具在摺掉當下已經帶連結的，沒有連結的不算（連結在 tool/call 之後才掛）。
+    expect(view.digests[0]?.toolCount).toBe(TRAJECTORY_CALL_TOOLS_CAP + 4);
+    expect(view.digests[0]?.subagentCount).toBeGreaterThanOrEqual(TRAJECTORY_CALL_TOOLS_CAP);
+    expect(view.turns.every((turn) => turn.subagentCount === 0)).toBe(true);
+  });
+
+  it('沒摺掉時精確：三個子代理就是 3', () => {
+    const log = new SessionLog('t');
+    delegateTurn(log, 3);
+    expect(foldAll(log.events).turns[0]?.subagentCount).toBe(3);
+  });
+});
+
+describe('按需拉一個邏輯輪（#1083）', () => {
+  const idReply = (modelCall: number, id: string, text: string, ...toolCallIds: string[]) => ({
+    message: toLoggedMessage(
+      new AIMessage({
+        id,
+        content: text,
+        tool_calls: toolCallIds.map((each) => ({ id: each, name: 'read_file', args: {} })),
+      }),
+    ),
+    modelCall,
+  });
+
+  /** 六個邏輯輪；第 2 輪停在核准點、第 3 個實體輪是它的 resume；第 0 輪有個一直到後面才回結果的工具。 */
+  function longLog(): { log: SessionLog; lateResult: number } {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '第 0 句' });
+    const s0 = log.append('model/start', {});
+    log.append('assistant/message', idReply(s0.seq, 'm-0', '好', 'bg'));
+    log.append('tool/call', call('bg', 'task'));
+    log.append('turn/end', {});
+    simpleTurn(log, '第 1 句');
+    log.append('turn/start', { kind: 'message', text: '第 2 句' });
+    const s2 = log.append('model/start', {});
+    log.append('assistant/message', idReply(s2.seq, 'm-2', '', 'c2'));
+    log.append('tool/call', call('c2'));
+    log.append('interrupt/raised', { interruptId: 'i-2' });
+    log.append('turn/end', {});
+    log.append('turn/start', { kind: 'resume' });
+    log.append('tool/result', ok('c2'));
+    log.append('turn/end', {});
+    simpleTurn(log, '第 3 句');
+    simpleTurn(log, '第 4 句');
+    const late = log.append('tool/result', ok('bg'));
+    simpleTurn(log, '第 5 句');
+    return { log, lateResult: late.seq };
+  }
+
+  /** 對照組：窗口開到不裁，每一輪都有完整細節。 */
+  function reference(events: readonly SessionEvent[]) {
+    let state = initialTrajectory();
+    for (const event of events) state = applyTrajectory(state, event, { detailTurns: 1000 });
+    return viewTrajectory(state).turns;
+  }
+
+  it('每個邏輯輪拉回來的實體輪，與不裁窗口時同一輪逐欄相同（index、seq 都對得上骨架）', () => {
+    const { log } = longLog();
+    const ref = reference(log.events);
+    const starts = ref.filter((turn) => turn.logical);
+    expect(starts).toHaveLength(6);
+    for (const [at, start] of starts.entries()) {
+      const end = starts[at + 1]?.seq ?? Number.POSITIVE_INFINITY;
+      const detail = trajectoryTurnDetail(log.events, { seq: start.seq });
+      expect(detail.turns).toEqual(ref.filter((turn) => turn.seq >= start.seq && turn.seq < end));
+      expect(detail.seq).toBe(log.events.at(-1)!.seq);
+    }
+  });
+
+  it('錨點落在 resume 輪上，回整個邏輯輪（從 logical:true 那顆開始）', () => {
+    const { log } = longLog();
+    const resume = foldAll(log.events).digests.find((digest) => digest.kind === 'resume')!;
+    const detail = trajectoryTurnDetail(log.events, { seq: resume.seq + 1 });
+    expect(detail.turns.map((turn) => [turn.kind, turn.logical])).toEqual([
+      ['message', true],
+      ['resume', false],
+    ]);
+  });
+
+  it('messageId 與 seq 解到同一個邏輯輪；錨點可以是呼叫的 id', () => {
+    const { log } = longLog();
+    const byMessage = trajectoryTurnDetail(log.events, { messageId: 'm-2' });
+    expect(byMessage.turns[0]?.preview).toBe('第 2 句');
+    const callId = byMessage.turns[0]!.calls[0]!.id;
+    expect(trajectoryTurnDetail(log.events, { seq: String(callId) })).toEqual(byMessage);
+  });
+
+  it('遲到的事件記得回去：第 0 輪的背景工具後來才回結果，拉到的是 ok；推送的窗口裡它早已退成摘要', () => {
+    const { log } = longLog();
+    const detail = trajectoryTurnDetail(log.events, { messageId: 'm-0' });
+    expect(detail.turns[0]?.calls[0]?.tools[0]).toMatchObject({ callId: 'bg', status: 'ok' });
+    expect(detail.turns[0]?.unattributed).toBe(0);
+  });
+
+  it('沒給錨點是第一個邏輯輪', () => {
+    const { log } = longLog();
+    expect(trajectoryTurnDetail(log.events, {}).turns[0]?.preview).toBe('第 0 句');
+  });
+
+  it('沒有 turn/start 的日誌（前景子代理）整份就是一個邏輯輪', () => {
+    const log = new SessionLog('child');
+    const start = log.append('model/start', {});
+    log.append('assistant/message', idReply(start.seq, 'm-c', '做完', 'c1'));
+    log.append('tool/call', call('c1'));
+    log.append('tool/result', ok('c1'));
+    const detail = trajectoryTurnDetail(log.events, {});
+    expect(detail.turns).toHaveLength(1);
+    expect(detail.turns[0]).toMatchObject({ kind: 'run', logical: true, callCount: 1 });
+    expect(trajectoryTurnDetail(log.events, { messageId: 'm-c' })).toEqual(detail);
+  });
+
+  it('錨點不合與找不到各有各的失敗，原因是中文', () => {
+    const { log } = longLog();
+    const fails = (
+      query: Record<string, unknown>,
+      events: readonly SessionEvent[] = log.events,
+    ) => {
+      try {
+        trajectoryTurnDetail(events, query);
+      } catch (error: unknown) {
+        expect(error).toBeInstanceOf(ProjectionDetailError);
+        return error as ProjectionDetailError;
+      }
+      throw new Error('應該要拋');
+    };
+    expect(fails({ seq: 1, messageId: 'm-0' }).kind).toBe('invalid-argument');
+    expect(fails({ seq: 'abc' }).kind).toBe('invalid-argument');
+    expect(fails({ seq: -1 }).kind).toBe('invalid-argument');
+    expect(fails({ messageId: '' }).kind).toBe('invalid-argument');
+    expect(fails({ seq: 99_999 }).kind).toBe('not-found');
+    expect(fails({ messageId: '不存在' }).kind).toBe('not-found');
+    expect(fails({}, []).kind).toBe('not-found');
+    expect(fails({ messageId: '不存在' }).message).toMatch(/[\u4e00-\u9fff]/u);
+  });
+
+  it('單元註冊的 detail 就是這個函式', () => {
+    expect(trajectoryUnit.detail).toBe(trajectoryTurnDetail);
   });
 });

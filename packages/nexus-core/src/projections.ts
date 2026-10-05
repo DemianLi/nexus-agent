@@ -62,6 +62,30 @@ export interface ProjectionUnit<S = unknown, V = unknown> {
    * 子代理的日誌**沒有 `turn/start`**（它不是對話，是一次委派），折它的單元要自己處理這一點。
    */
   readonly children?: true;
+  /**
+   * **按需細節**（[#1083](https://github.com/DemianLi/nexus-agent/issues/1083)）：單元的 view 只推有界的骨架，某一塊的細節由客戶端
+   * 帶著錨點來要，這裡**從日誌重新折出來**——事件是來源，投影不存細節（dsh 的形狀：投影只推小而有界的整份值，細節走 seq 錨點
+   * 按需分頁，`loadThrough(seq)`）。省略＝這個單元沒有按需細節。
+   *
+   * **純、同步、不寫日誌**。`events` 是這份日誌（root 或子代理）目前的全部事件；`query` 是客戶端送來的、單元自己定義的錨點，
+   * 要自己驗。查不到或錨點不合時拋 {@link ProjectionDetailError}，其他拋出視為單元的 bug。
+   * 不經 `apply`／`view` 的圍堵（那是即時折疊的），所以拋錯只影響這一次請求。
+   */
+  readonly detail?: (
+    events: readonly SessionEvent[],
+    query: Readonly<Record<string, unknown>>,
+  ) => unknown;
+}
+
+/** 按需細節查不到（`not-found`）或錨點不合（`invalid-argument`）。訊息是講給人聽的中文原因，客戶端可以直接顯示。 */
+export class ProjectionDetailError extends Error {
+  readonly kind: 'not-found' | 'invalid-argument';
+
+  constructor(kind: 'not-found' | 'invalid-argument', message: string) {
+    super(message);
+    this.name = 'ProjectionDetailError';
+    this.kind = kind;
+  }
 }
 
 /**
@@ -112,6 +136,10 @@ export function normalizeProjectionUnit<S, V>(unit: ProjectionUnit<S, V>): Proje
       `投影 "${unit.key}" 的 children 要是 true 或省略，拿到 ${String(children)}。`,
     );
   }
+  const detail: unknown = unit.detail;
+  if (detail !== undefined && typeof detail !== 'function') {
+    throw new TypeError(`投影 "${unit.key}" 的 detail 要是函式或省略。`);
+  }
   return Object.freeze({
     key: unit.key,
     stateVersion: unit.stateVersion,
@@ -119,6 +147,7 @@ export function normalizeProjectionUnit<S, V>(unit: ProjectionUnit<S, V>): Proje
     apply: unit.apply,
     view: unit.view,
     ...(children === true && { children: true as const }),
+    ...(unit.detail !== undefined && { detail: unit.detail }),
   });
 }
 

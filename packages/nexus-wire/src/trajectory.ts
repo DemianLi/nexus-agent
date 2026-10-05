@@ -34,7 +34,7 @@ export const TRAJECTORY_PROJECTION = 'trajectory';
 export const REQUEST_SNAPSHOTS_PROJECTION = 'request-snapshots';
 
 /** `trajectory` 的 `stateVersion`：折疊語意或 view 形狀一變就升。 */
-export const TRAJECTORY_VERSION = 4;
+export const TRAJECTORY_VERSION = 5;
 /** `request-snapshots` 的 `stateVersion`。 */
 export const REQUEST_SNAPSHOTS_VERSION = 1;
 
@@ -280,6 +280,11 @@ export interface TrajectoryDigest {
    */
   readonly toolCount: number;
   readonly toolErrors: number;
+  /**
+   * 這一輪派出幾個子代理（工具帶 `subagent` 連結的數目，含被摺掉的），讓骨架就能畫「N 個子代理」而不必展開
+   * （[#1083](https://github.com/DemianLi/nexus-agent/issues/1083)）。**被摺掉的那幾個，連結與否只記到摺掉當下**，同 `toolErrors`。
+   */
+  readonly subagentCount: number;
   readonly retryCount: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
@@ -343,4 +348,30 @@ export interface RequestHeaderSnapshot {
 export interface RequestSnapshotsView {
   readonly system: readonly RequestSystemSnapshot[];
   readonly header: readonly RequestHeaderSnapshot[];
+}
+
+/**
+ * 按需拉一個邏輯輪的錨點（[#1083](https://github.com/DemianLi/nexus-agent/issues/1083)），`seq` 與 `messageId` 二擇一。
+ * `runId` 可選：給了就在那個子代理自己的日誌裡找（沒給 `seq`／`messageId` 時回它的第一個邏輯輪）。
+ */
+export interface TrajectoryTurnQuery {
+  /** 日誌上任意一顆事件的位置（摘要的 `seq`、呼叫的 `id`、工具的 `seq` 都行）；解析成包含它的那個邏輯輪。 */
+  readonly seq?: number;
+  /** 對話裡 ai 條目的 `messageId`；找到那則回覆，再解析成包含它的邏輯輪。 */
+  readonly messageId?: string;
+  /** 子代理的編號：`subagentProjections` 的鍵，也是工具上 `subagent.runId`。前景的是 `tools:…`，背景的是 `bg-…`。 */
+  readonly runId?: string;
+}
+
+/**
+ * 按需拉到的一個邏輯輪。
+ *
+ * `turns` 是組成它的**實體輪**：第一個 `logical: true`，其後是它的 resume 輪（`logical: false`）。每一輪的形狀、`index`、`seq`
+ * 都與推送的骨架裡同一輪完全相同，所以拉回來的可以原位取代那一列摘要。整份日誌都折過，所以**窗口外才到的事件**（遲到的工具結果、
+ * 後面的 resume 輪才落日誌的核准結局）也已經記在裡面；比推送出去的摘要更完整，兩邊的計數可能因此不同，以這一份為準。
+ */
+export interface TrajectoryTurnDetail {
+  readonly turns: readonly TrajectoryTurn[];
+  /** 折疊時看到的日誌最後一顆事件的位置；拿它判斷這份細節新不新。 */
+  readonly seq: number;
 }

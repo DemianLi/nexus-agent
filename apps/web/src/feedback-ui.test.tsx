@@ -126,6 +126,11 @@ function fakeClient(
     subagentSend: async () => ({ type: 'success', id: 5, result: { accepted: true } }),
     subagentInterrupt: async () => ({ type: 'success', id: 6, result: { accepted: true } }),
     subagentHistory: async () => ({ kind: 'rejected', message: '這一檔沒有接背景子代理' }),
+    trajectoryTurn: async () => ({
+      kind: 'rejected',
+      code: 'not_supported',
+      message: '這一檔沒有接軌跡細節',
+    }),
     slashList: async () => ({ kind: 'ok', commands: [] }),
     slashRun: async (_threadId, line) => {
       slashed.push(line);

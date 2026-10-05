@@ -108,6 +108,7 @@ dsh 的 `stateVersion` 是**持久化快取的失效版本**：序列化欄位�
 | 子代理自己的投影 | 有（每個 session 一份格子） | 有，單元宣告 `children: true` 才折；值落在 `subagentProjections[runId][key]` | 載體不同 |
 | 單元拋錯 | 只在事件派發層圍堵；之後同單元一直重拋、snapshot 一直拋 | 逐單元圍堵，該 key 送 `failed: true`，不影響別的單元 | 卡的驗收，比 dsh 多一層 |
 | 同 key 多方註冊（refs） | 有 | 重複即拋 | 沒有 HMR |
+| 細節按需拉（#1083） | 投影只推有界的整份值；細節是增量事件加 seq 錨點分頁（`loadThrough(seq)`），客戶端自己折 | 單元的選填 `detail(events, query)`：伺服端從日誌重新折，host 以 `GET /threads/:id/trajectory/turn` 暴露 | 客戶端沒有折疊器，表達不出「客戶端折」，退到最接近的：同一個 `apply` 重放日誌 |
 
 ## 現有 16 種 `custom` frame 不動
 

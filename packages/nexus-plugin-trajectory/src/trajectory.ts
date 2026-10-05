@@ -41,6 +41,7 @@ import {
   REPEAT_REMINDER_MARKER,
   toolCallIds,
 } from '@nexus/core';
+import { ProjectionDetailError } from '@nexus/core';
 import type { ProjectionUnit, SessionEvent } from '@nexus/core';
 import {
   TRAJECTORY_CALL_TOOLS_CAP,
@@ -62,6 +63,7 @@ import type {
   TrajectoryRetry,
   TrajectoryTool,
   TrajectoryTurn,
+  TrajectoryTurnDetail,
   TrajectoryTurnKind,
   TrajectoryView,
 } from '@nexus/wire';
@@ -86,6 +88,8 @@ interface Carry {
   readonly outputTokens: number;
   readonly inputs: number;
   readonly decisions: number;
+  /** 摺掉的工具裡，摺掉當下已帶子代理連結的數目。 */
+  readonly subagents: number;
 }
 
 const NO_CARRY: Carry = {
@@ -97,6 +101,7 @@ const NO_CARRY: Carry = {
   outputTokens: 0,
   inputs: 0,
   decisions: 0,
+  subagents: 0,
 };
 
 /** 狀態裡的一輪：沒有算出來的計數（那些在 `view` 才算），多一份摺掉的累計。 */
@@ -105,6 +110,7 @@ type TurnState = Omit<
   | 'callCount'
   | 'toolCount'
   | 'toolErrors'
+  | 'subagentCount'
   | 'retryCount'
   | 'inputTokens'
   | 'outputTokens'
@@ -169,12 +175,15 @@ function withCounts(turn: TurnState): TrajectoryTurn {
   let toolCount = turn.looseTools.length + carry.tools;
   let toolErrors =
     turn.looseTools.filter((tool) => tool.status === 'error').length + carry.toolErrors;
+  let subagentCount =
+    turn.looseTools.filter((tool) => tool.subagent !== undefined).length + carry.subagents;
   let retryCount = carry.retries;
   let inputTokens = carry.inputTokens;
   let outputTokens = carry.outputTokens;
   for (const call of turn.calls) {
     toolCount += call.tools.length;
     toolErrors += call.tools.filter((tool) => tool.status === 'error').length;
+    subagentCount += call.tools.filter((tool) => tool.subagent !== undefined).length;
     retryCount += call.retries.length;
     inputTokens += call.usage?.inputTokens ?? 0;
     outputTokens += call.usage?.outputTokens ?? 0;
@@ -185,6 +194,7 @@ function withCounts(turn: TurnState): TrajectoryTurn {
     callCount: turn.calls.length + carry.calls,
     toolCount,
     toolErrors,
+    subagentCount,
     retryCount,
     inputTokens,
     outputTokens,
@@ -216,6 +226,7 @@ function digestOf(turn: TurnState): TrajectoryDigest {
     callCount: full.callCount,
     toolCount: full.toolCount,
     toolErrors: full.toolErrors,
+    subagentCount: full.subagentCount,
     retryCount: full.retryCount,
     inputTokens: full.inputTokens,
     outputTokens: full.outputTokens,
@@ -363,13 +374,36 @@ function withInput(state: TrajectoryState, input: TrajectoryInput): TrajectorySt
   });
 }
 
+/** 就地改的歸屬表目前有幾筆（只有按需拉細節的重放用就地改，見 {@link TrimPolicy.ownersInPlace}）。 */
+const inPlaceSizes = new WeakMap<object, number>();
+
 /** 工具表：加進一筆擁有者，超過上限從最舊的丟。 */
 function noteOwners(
   owners: Readonly<Record<string, number | null>>,
   ids: readonly string[],
   owner: number | null,
+  inPlace: boolean,
 ): Readonly<Record<string, number | null>> {
   if (ids.length === 0) return owners;
+  if (inPlace) {
+    // 重放自己獨佔這張表：每筆都複製整張（上限 2000）會讓重放成本隨會話長度平方長。就地改，語意相同（先刪再放、丟最舊的）。
+    const table = owners as Record<string, number | null>;
+    let size = inPlaceSizes.get(table) ?? Object.keys(table).length;
+    for (const id of ids) {
+      if (Object.hasOwn(table, ownerKey(id))) size -= 1;
+      delete table[ownerKey(id)];
+      table[ownerKey(id)] = owner;
+      size += 1;
+    }
+    // 批次丟：超過兩倍上限才一次丟回上限，攤下來每筆 O(1)。代價是重放的表最多比推送的多留 {@link OWNERS_CAP} 筆較舊的歸屬——
+    // 更遠以前的遲到事件在這裡認得出歸屬、在推送的投影裡認不出（那裡窗口外的輪本來就丟掉遲到事件），細節比骨架完整，不是更差。
+    if (size > OWNERS_CAP * 2) {
+      for (const key of Object.keys(table).slice(0, size - OWNERS_CAP)) delete table[key];
+      size = OWNERS_CAP;
+    }
+    inPlaceSizes.set(table, size);
+    return table;
+  }
   const next: Record<string, number | null> = { ...owners };
   for (const id of ids) {
     // 先刪再放：同一個 id 重新出現要排到最新。
@@ -433,6 +467,7 @@ function carryTools(carry: Carry, dropped: readonly TrajectoryTool[]): Carry {
     ...carry,
     tools: carry.tools + dropped.length,
     toolErrors: carry.toolErrors + dropped.filter((tool) => tool.status === 'error').length,
+    subagents: carry.subagents + dropped.filter((tool) => tool.subagent !== undefined).length,
   };
 }
 
@@ -488,7 +523,21 @@ const TURN_KINDS: ReadonlySet<string> = new Set([
   'goal',
 ]);
 
-function startTurn(state: TrajectoryState, event: SessionEvent): TrajectoryState {
+/**
+ * 窗口的裁法。預設（推送的投影）是只留最新 {@link TRAJECTORY_DETAIL_TURNS} 輪；按需拉細節時重放整份日誌，`pinned` 指到的輪**不裁**
+ * （目標邏輯輪的實體輪們），好讓之後才到的事件還記得進去。
+ */
+interface TrimPolicy {
+  readonly detailTurns: number;
+  /** 以輪的 `seq` 判斷；省略就都不釘。 */
+  readonly pinned?: (seq: number) => boolean;
+  /** 歸屬表就地改。**只有獨佔狀態的重放可以開**（推送的投影要純，狀態會被通道拿去比對）。 */
+  readonly ownersInPlace?: true;
+}
+
+const DEFAULT_TRIM: TrimPolicy = { detailTurns: TRAJECTORY_DETAIL_TURNS };
+
+function startTurn(state: TrajectoryState, event: SessionEvent, trim: TrimPolicy): TrajectoryState {
   const data = event.data as unknown as Record<string, unknown>;
   const kindRaw = data['kind'];
   // 不認得的 `turn/start` 種類（之後才長出來的）照樣開一輪，標成 message 以外沒有的誠實做法是丟掉它的預覽。
@@ -513,9 +562,11 @@ function startTurn(state: TrajectoryState, event: SessionEvent): TrajectoryState
   let turns = [...state.turns, turn];
   let digests = state.digests;
   let omitted = state.omitted;
-  while (turns.length > TRAJECTORY_DETAIL_TURNS) {
-    digests = [...digests, digestOf(turns[0]!)];
-    turns = turns.slice(1);
+  const pinned = trim.pinned ?? ((): boolean => false);
+  while (turns.filter((each) => !pinned(each.seq)).length > trim.detailTurns) {
+    const at = turns.findIndex((each) => !pinned(each.seq));
+    digests = [...digests, digestOf(turns[at]!)];
+    turns = turns.filter((_, index) => index !== at);
     if (digests.length > TRAJECTORY_DIGEST_CAP) {
       digests = digests.slice(digests.length - TRAJECTORY_DIGEST_CAP);
       omitted += 1;
@@ -609,16 +660,21 @@ function startCall(prior: TrajectoryState, event: SessionEvent): TrajectoryState
  * 軌跡投影的 `apply`。
  *
  * @param state - 目前的狀態。
- * @param event - root 日誌的下一顆事件。
+ * @param event - 日誌的下一顆事件。
+ * @param trim - 窗口的裁法，只有按需拉細節（{@link trajectoryTurnDetail}）會換掉預設。
  * @returns 新狀態；不相干的事件回傳同一個參照。
  */
-export function applyTrajectory(state: TrajectoryState, event: SessionEvent): TrajectoryState {
+export function applyTrajectory(
+  state: TrajectoryState,
+  event: SessionEvent,
+  trim: TrimPolicy = DEFAULT_TRIM,
+): TrajectoryState {
   // 擁有者套件才宣告的種類（`goal/change`…）不在 core 的聯集裡，所以用字串比，資料當未知結構讀。
   const type: string = event.type;
   const data = event.data as unknown as Record<string, unknown>;
   switch (type) {
     case 'turn/start':
-      return startTurn(state, event);
+      return startTurn(state, event, trim);
     case 'turn/end': {
       const end = endOf(data['reason']);
       return closeTurn(state, event, end);
@@ -695,7 +751,12 @@ export function applyTrajectory(state: TrajectoryState, event: SessionEvent): Tr
       const at = modelCall === null ? undefined : locateCall(state, modelCall);
       const ids = toolCallIds(event as SessionEvent<'assistant/message'>);
       // 工具的歸屬先記：歸不到的回覆也要蓋掉同 id 較早的歸屬（null），否則工具會落到更早一次呼叫上。
-      const owners = noteOwners(state.owners, ids, at === undefined ? null : modelCall);
+      const owners = noteOwners(
+        state.owners,
+        ids,
+        at === undefined ? null : modelCall,
+        trim.ownersInPlace === true,
+      );
       const withOwners = owners === state.owners ? state : { ...state, owners };
       if (at === undefined) return unattributed(withOwners);
       const messageId = message === undefined ? undefined : loggedMessageId(message as never);
@@ -943,6 +1004,105 @@ export function viewTrajectory(state: TrajectoryState): TrajectoryView {
   };
 }
 
+// ── 按需細節 ────────────────────────────────────────────────────────────────────────
+
+/** 錨點的 `seq`：非負整數，數字或數字字串（來自網址）。 */
+function anchorSeq(value: unknown): number | undefined {
+  if (value === undefined) return undefined;
+  const number = typeof value === 'string' && /^\d+$/u.test(value) ? Number(value) : value;
+  if (typeof number !== 'number' || !Number.isSafeInteger(number) || number < 0) {
+    throw new ProjectionDetailError('invalid-argument', 'seq 要是非負整數');
+  }
+  return number;
+}
+
+/** 對話裡那則回覆的 `assistant/message` 事件位置；同一個 id 出現多次取最後一次（對話端也是後者取代前者）。 */
+function seqOfMessage(events: readonly SessionEvent[], messageId: string): number | undefined {
+  let found: number | undefined;
+  for (const event of events) {
+    if (event.type !== 'assistant/message') continue;
+    const message = (event.data as { message?: unknown }).message;
+    if (message !== undefined && loggedMessageId(message as never) === messageId) {
+      found = event.seq;
+    }
+  }
+  return found;
+}
+
+/**
+ * **按需拉一個邏輯輪**（[#1083](https://github.com/DemianLi/nexus-agent/issues/1083)）：把整份日誌餵進同一個 {@link applyTrajectory}，
+ * 目標邏輯輪（它的實體輪們：開頭那顆 `logical` 輪加上它的 resume 輪）釘住不裁，其餘照預設只留最新一輪。
+ *
+ * **為什麼重放整份而不只切那一段**：折疊狀態有跨輪的承載（`system`／`header`／`model` 的位置、callId 的歸屬表、第幾輪），
+ * 切片不是自給自足的。**也為什麼不在目標輪結束就停**：之後才到的事件（遲到的工具結果、後面 resume 輪才落日誌的核准結局）
+ * 要能記回這一輪——推送的投影裡窗口外的輪會丟掉它們，這裡不丟，所以細節比摘要更完整，以這邊為準。
+ *
+ * 沒有 `turn/start` 的日誌（前景子代理，只有一輪 `run`）整份就是一個邏輯輪。
+ *
+ * @param events - 這份日誌目前全部的事件。
+ * @param query - `{ seq? , messageId? }`，最多給一個；都沒給就是第一個邏輯輪。
+ * @throws {@link ProjectionDetailError} 錨點不合（`invalid-argument`）或日誌裡沒有對應的輪（`not-found`）。
+ */
+export function trajectoryTurnDetail(
+  events: readonly SessionEvent[],
+  query: Readonly<Record<string, unknown>>,
+): TrajectoryTurnDetail {
+  const seq = anchorSeq(query['seq']);
+  const messageId = query['messageId'];
+  if (messageId !== undefined && (typeof messageId !== 'string' || messageId === '')) {
+    throw new ProjectionDetailError('invalid-argument', 'messageId 要是非空字串');
+  }
+  if (seq !== undefined && messageId !== undefined) {
+    throw new ProjectionDetailError('invalid-argument', 'seq 與 messageId 只能給一個');
+  }
+  const last = events.at(-1);
+  if (last === undefined) throw new ProjectionDetailError('not-found', '這份日誌是空的');
+  const starts = events
+    .filter((event) => event.type === 'turn/start' && isLogicalTurnStart(event))
+    .map((event) => event.seq);
+  let from = Number.NEGATIVE_INFINITY;
+  let until = Number.POSITIVE_INFINITY;
+  if (starts.length > 0) {
+    let target: number | undefined = seq;
+    if (messageId !== undefined) {
+      target = seqOfMessage(events, messageId);
+      if (target === undefined) {
+        throw new ProjectionDetailError('not-found', `日誌裡沒有訊息 ${messageId} 的回覆`);
+      }
+    }
+    if (target !== undefined && target > last.seq) {
+      throw new ProjectionDetailError(
+        'not-found',
+        `日誌最後只到 ${String(last.seq)}，沒有 ${String(target)}`,
+      );
+    }
+    // 沒給錨點＝第一個邏輯輪。
+    const at = target === undefined ? 0 : starts.findLastIndex((start) => start <= target);
+    if (at < 0) {
+      throw new ProjectionDetailError('not-found', `${String(target)} 在第一輪開始之前`);
+    }
+    from = starts[at]!;
+    until = starts[at + 1] ?? Number.POSITIVE_INFINITY;
+  } else if (messageId !== undefined && seqOfMessage(events, messageId) === undefined) {
+    throw new ProjectionDetailError('not-found', `日誌裡沒有訊息 ${messageId} 的回覆`);
+  } else if (seq !== undefined && seq > last.seq) {
+    throw new ProjectionDetailError(
+      'not-found',
+      `日誌最後只到 ${String(last.seq)}，沒有 ${String(seq)}`,
+    );
+  }
+  const trim: TrimPolicy = {
+    detailTurns: TRAJECTORY_DETAIL_TURNS,
+    pinned: (turnSeq) => turnSeq >= from && turnSeq < until,
+    ownersInPlace: true,
+  };
+  let state = initialTrajectory();
+  for (const event of events) state = applyTrajectory(state, event, trim);
+  const turns = state.turns.filter((turn) => turn.seq >= from && turn.seq < until).map(withCounts);
+  if (turns.length === 0) throw new ProjectionDetailError('not-found', '這份日誌裡沒有這一輪');
+  return { turns, seq: last.seq };
+}
+
 /** 軌跡投影單元。 */
 export const trajectoryUnit: ProjectionUnit<TrajectoryState, TrajectoryView> = {
   key: TRAJECTORY_PROJECTION,
@@ -951,4 +1111,5 @@ export const trajectoryUnit: ProjectionUnit<TrajectoryState, TrajectoryView> = {
   init: initialTrajectory,
   apply: applyTrajectory,
   view: viewTrajectory,
+  detail: trajectoryTurnDetail,
 };

@@ -10,6 +10,7 @@
  * upstream traffic remains on HTTP.」
  */
 
+import type { TrajectoryTurnDetail, TrajectoryTurnQuery } from './trajectory.js';
 import type {
   FileReferenceCandidate,
   FileReferenceListResponse,
@@ -51,6 +52,7 @@ import type {
   ThreadFeedFrame,
   ThreadHistoryQuery,
   ThreadHistoryResponse,
+  TrajectoryTurnResponse,
   ThreadHistoryResult,
   ThreadListResponse,
   ThreadListResult,
@@ -73,6 +75,7 @@ import {
   commandPath,
   historyPath,
   subagentHistoryPath,
+  trajectoryTurnPath,
   isThreadFeedFrame,
   streamPath,
 } from './protocol.js';
@@ -274,6 +277,18 @@ export interface WireClient {
     query?: ThreadHistoryQuery,
   ): Promise<ThreadHistoryOutcome>;
   /**
+   * 軌跡某一個邏輯輪的細節（[#1083](https://github.com/DemianLi/nexus-agent/issues/1083)）。契約見 `trajectoryTurnPath`。
+   * 失敗是 `rejected`，**帶錯誤碼與可直接顯示的中文原因**（`turn_not_found`／`subagent_not_found`／`invalid_argument`／`not_supported`）。
+   * 允許並行請求；**排在 {@link openEvents} 兌現之後**，同 {@link threadHistory}（這條 thread 會為它建起來）。
+   *
+   * @param signal - 中止這一次。
+   */
+  trajectoryTurn(
+    threadId: string,
+    query: TrajectoryTurnQuery,
+    signal?: AbortSignal,
+  ): Promise<TrajectoryTurnOutcome>;
+  /**
    * `@` 後面那一段的候選（[#651](https://github.com/DemianLi/nexus-agent/issues/651)）。契約見 `fileReferencesPath`。
    *
    * @param query - `@` 或 `@"` 後面那一段，原文原樣；開頭的 `/` 給不給都一樣。
@@ -334,6 +349,15 @@ function readFileReferences(result: unknown): FileReferenceListResult {
   };
 }
 
+/** 線上回來的軌跡細節要先驗過形狀的最外層，理由同 {@link readDescriptors}；每一輪的內部交給消費端（同歷史的 frame）。 */
+function readTrajectoryTurn(result: unknown): TrajectoryTurnDetail {
+  const { turns, seq } = result as Record<string, unknown>;
+  if (!Array.isArray(turns) || turns.length === 0 || typeof seq !== 'number') {
+    throw new Error('GET /threads/:id/trajectory/turn 回了不認得的結果');
+  }
+  return { turns: turns as TrajectoryTurnDetail['turns'], seq };
+}
+
 /** `GET /threads/:id/session-references` 的結果。`rejected` 是讀不了存放處。 */
 export type SessionReferenceListOutcome =
   | { readonly kind: 'ok'; readonly result: SessionReferenceListResult }
@@ -387,6 +411,11 @@ function readSessionReferences(result: unknown): SessionReferenceListResult {
 export type ThreadHistoryOutcome =
   | { readonly kind: 'ok'; readonly result: ThreadHistoryResult }
   | { readonly kind: 'rejected'; readonly message: string };
+
+/** `GET /threads/:id/trajectory/turn` 的結果。 */
+export type TrajectoryTurnOutcome =
+  | { readonly kind: 'ok'; readonly result: TrajectoryTurnDetail }
+  | { readonly kind: 'rejected'; readonly code: string; readonly message: string };
 
 /** 線上回來的歷史得先驗過，理由同 {@link readDescriptors}。frame 本身交給折疊器，它本來就收別人的位元組。 */
 function readHistory(result: unknown): ThreadHistoryResult {
@@ -760,6 +789,30 @@ export function createWireClient(options: WireClientOptions): WireClient {
 
     async subagentHistory(threadId, runId, query = {}) {
       return fetchHistory(subagentHistoryPath(threadId, runId), query);
+    },
+
+    async trajectoryTurn(threadId, query, signal) {
+      const params = new URLSearchParams();
+      for (const [key, value] of Object.entries(query)) {
+        if (value !== undefined) params.set(key, String(value));
+      }
+      const encoded = params.toString();
+      const response = await doFetch(
+        `${base}${trajectoryTurnPath(threadId)}${encoded === '' ? '' : `?${encoded}`}`,
+        {
+          method: 'GET',
+          // 同 `listThreads`，見 `THREADS_PATH`。
+          headers: { 'content-type': 'application/json' },
+          signal,
+        },
+      );
+      if (!response.ok) {
+        throw new Error(`軌跡被載體層擋下：${response.status} ${await response.text()}`);
+      }
+      const body = (await response.json()) as TrajectoryTurnResponse;
+      return body.type === 'error'
+        ? { kind: 'rejected', code: String(body.error), message: body.message }
+        : { kind: 'ok', result: readTrajectoryTurn(body.result) };
     },
 
     async fileReferences(threadId, query, signal) {
