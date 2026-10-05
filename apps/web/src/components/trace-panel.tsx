@@ -49,6 +49,7 @@ import { ToolCard, TOOL_STATUS_LABEL } from '@/components/tool-card';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { useStableNames } from '@/hooks/use-stable-names';
+import { useTrajectoryPull } from '@/hooks/use-trajectory-pull';
 import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot';
 import { mentionDisplayText } from '@/lib/session-mention';
 import { EXIT_PLAN_MODE, PLAN_OUTCOME_LABEL } from '@/lib/plan-review';
@@ -66,6 +67,8 @@ import {
   turnSeqOfMessage,
 } from '@/lib/trace-view';
 import type { TraceDigest, TraceRow, TraceTurn, TurnHead } from '@/lib/trace-view';
+import { statusOf } from '@/lib/trajectory-pull';
+import type { PullSnapshot, PullStatus, TrajectoryPuller } from '@/lib/trajectory-pull';
 import {
   ABSENT,
   SIGNAL_LABEL,
@@ -93,6 +96,13 @@ export const TRACE_REPLY_UNPLACED_TEXT =
 /** 同上，但軌跡有更早輪的摘要：多半是那一輪太舊，只剩摘要，對不到是哪一輪。 */
 export const TRACE_REPLY_OLDER_TEXT =
   '這一則回覆多半在軌跡窗口之前：更早的輪只剩摘要（上面「更早的輪」），對不到是哪一輪。';
+/** 按需拉那一輪的細節（#1083）。 */
+export const TRACE_PULL_LABEL = '載入這一輪的細節';
+export const TRACE_PULL_RETRY_LABEL = '重試';
+export const TRACE_PULL_LOADING_TEXT = '正在載入這一輪的細節…';
+export const TRACE_PULL_SUMMARY_ONLY_TEXT = '只有摘要，細節沒有載入';
+/** 載入失敗：後面接伺服器（或連線）給的原因，原樣不加前綴。 */
+export const TRACE_PULL_FAILED_TEXT = '無法載入這一輪的細節：';
 /** 「看這一輪」標示的那一圈亮多久。 */
 export const REVEAL_HIGHLIGHT_MS = 3000;
 
@@ -521,6 +531,9 @@ function HeadFacts({ head }: { head: TurnHead }) {
         {head.toolCount} 個工具
         {head.toolErrors > 0 && `（${head.toolErrors} 個失敗）`}
       </span>
+      {head.subagentCount > 0 && (
+        <span data-testid="trace-subagent-count">{head.subagentCount} 個子代理</span>
+      )}
       {head.retryCount > 0 && <span>重試 {head.retryCount} 次</span>}
       <span>
         輸入 {tokenText(head.inputTokens)}／輸出 {tokenText(head.outputTokens)}
@@ -557,6 +570,34 @@ function TurnHeader({ head }: { head: TurnHead }) {
   );
 }
 
+/** 一列摘要、或只有摘要的組：載入那一輪的細節（進行中講進度，失敗講原因並給重試）。 */
+function PullControl({ status, onPull }: { status: PullStatus; onPull: () => void }) {
+  return (
+    <div className="px-2 pt-1 pb-1" data-testid="trace-pull" data-status={status.kind}>
+      {status.kind === 'failed' && (
+        <p className="text-destructive pb-1 text-xs" data-testid="trace-pull-failed">
+          {TRACE_PULL_FAILED_TEXT}
+          {status.message}
+        </p>
+      )}
+      <Button
+        type="button"
+        variant="ghost"
+        size="sm"
+        className="min-h-11 text-xs lg:min-h-8"
+        disabled={status.kind === 'loading'}
+        onClick={onPull}
+      >
+        {status.kind === 'loading'
+          ? TRACE_PULL_LOADING_TEXT
+          : status.kind === 'failed'
+            ? TRACE_PULL_RETRY_LABEL
+            : TRACE_PULL_LABEL}
+      </Button>
+    </div>
+  );
+}
+
 function TurnGroup({
   turn,
   structured,
@@ -564,6 +605,8 @@ function TurnGroup({
   missing,
   revealed,
   onLocate,
+  pullStatus,
+  onPull,
 }: {
   turn: TraceTurn;
   structured: boolean;
@@ -572,6 +615,9 @@ function TurnGroup({
   /** 剛被成本分頁指到的那一組：畫一圈標示。 */
   revealed: boolean;
   onLocate: (row: TraceRow) => void;
+  /** 只有摘要的組才有：載入細節的進度（沒給就不畫載入鈕）。 */
+  pullStatus?: PullStatus | undefined;
+  onPull?: ((seq: number) => void) | undefined;
 }) {
   const title = turn.head === undefined ? '' : `第 ${turn.head.number} 輪`;
   const [shown, setShown] = useState(ROW_PAGE);
@@ -586,6 +632,17 @@ function TurnGroup({
       data-revealed={revealed ? '' : undefined}
     >
       {turn.head !== undefined && <TurnHeader head={turn.head} />}
+      {turn.summaryOnly === true && (
+        <p className="text-muted-foreground px-2 text-xs" data-testid="trace-summary-only">
+          {TRACE_PULL_SUMMARY_ONLY_TEXT}
+        </p>
+      )}
+      {turn.summaryOnly === true &&
+        turn.seq !== undefined &&
+        pullStatus !== undefined &&
+        onPull !== undefined && (
+          <PullControl status={pullStatus} onPull={() => onPull(turn.seq!)} />
+        )}
       {structured && turn.legacy && (
         <p className="text-muted-foreground px-2 pt-1 text-xs" data-testid="trace-legacy-group">
           {TRACE_LEGACY_GROUP_TEXT}
@@ -627,9 +684,14 @@ function Digests({
   reveal,
   revealedSeq,
   onRevealed,
+  statusOf: pullStatusOf,
+  onPull,
 }: {
   digests: readonly TraceDigest[];
   omitted: number;
+  /** 載入某一輪細節的進度與動作（沒給就不畫載入鈕）。 */
+  statusOf?: ((seq: number) => PullStatus) | undefined;
+  onPull?: ((seq: number) => void) | undefined;
   /** 要顯示的是這裡面的某一輪：展開區塊、展開到那一輪那一頁，再捲過去。 */
   reveal: { readonly seq: number; readonly nonce: number } | undefined;
   revealedSeq: number | undefined;
@@ -701,6 +763,9 @@ function Digests({
               <p className="text-muted-foreground flex flex-wrap gap-x-2">
                 <HeadFacts head={digest} />
               </p>
+              {pullStatusOf !== undefined && onPull !== undefined && (
+                <PullControl status={pullStatusOf(digest.seq)} onPull={() => onPull(digest.seq)} />
+              )}
             </li>
           ))}
         </ol>
@@ -714,13 +779,19 @@ const Timeline = memo(function Timeline({
   locate,
   reveal,
   onRevealed,
+  puller,
+  pull,
 }: {
   state: ConversationState;
   locate: PanelBodyProps['locate'];
   reveal: TurnReveal | undefined;
   onRevealed: (nonce: number) => void;
+  /** 按需拉細節（#1083）；沒給就只有推送的那幾輪。 */
+  puller: TrajectoryPuller | undefined;
+  pull: PullSnapshot | undefined;
 }) {
-  const model = useMemo(() => traceModel(state), [state]);
+  const pulled = pull?.turns;
+  const model = useMemo(() => traceModel(state, pulled), [state, pulled]);
   const names = useStableNames(state.entries);
   const [missing, setMissing] = useState<string | undefined>(undefined);
   const [announced, setAnnounced] = useState('');
@@ -729,6 +800,16 @@ const Timeline = memo(function Timeline({
   const [shown, setShown] = useState(TURN_PAGE);
   const [revealedSeq, setRevealedSeq] = useState<number | undefined>(undefined);
   const [readyTurn, setReadyTurn] = useState<number | undefined>(undefined);
+  // 「看這一輪」落在只有摘要的輪、或回覆歸不進軌跡時，先把那一輪的細節拉回來再定位（#1083）：`loading` 期間不下結論，
+  // `settled` 之後照拉不到的老辦法講；失敗的原因記在這裡，給標示用。
+  const [pullNote, setPullNote] = useState<
+    | {
+        readonly nonce: number;
+        readonly phase: 'loading' | 'settled';
+        readonly failure?: string;
+      }
+    | undefined
+  >(undefined);
   const section = useRef<HTMLElement>(null);
   // 回覆底下的「這一輪的過程」給的是訊息 id：先換成那一輪的 `seq`，換不出來（歸不進軌跡的輪）就講明白。
   const target = useMemo(() => {
@@ -748,29 +829,72 @@ const Timeline = memo(function Timeline({
           : model.digests.some((digest) => digest.seq === target.seq)
             ? ('digests' as const)
             : ('missing' as const);
+  const pullAnchor =
+    puller === undefined || reveal === undefined || !model.structured
+      ? undefined
+      : revealIn === 'digests' && placed !== undefined
+        ? { seq: placed.seq }
+        : revealIn === 'unplaced' && reveal.messageId !== undefined
+          ? { messageId: reveal.messageId }
+          : undefined;
+  const pullHold =
+    pullAnchor !== undefined &&
+    reveal !== undefined &&
+    !(pullNote?.nonce === reveal.nonce && pullNote.phase === 'settled');
+  useEffect(() => {
+    if (reveal === undefined || puller === undefined || pullAnchor === undefined) return;
+    if (pullNote?.nonce === reveal.nonce) return;
+    const { nonce } = reveal;
+    setPullNote({ nonce, phase: 'loading' });
+    void puller.pull(pullAnchor).then((outcome) => {
+      setPullNote((current) =>
+        current?.nonce === nonce
+          ? {
+              nonce,
+              phase: 'settled',
+              ...(outcome.ok || outcome.code === 'turn_not_found' || outcome.code === 'aborted'
+                ? {}
+                : { failure: outcome.message }),
+            }
+          : current,
+      );
+    });
+  }, [reveal, puller, pullAnchor, pullNote]);
   // 「看這一輪」（#1034）：第一段只動狀態——展開到那一組那一頁、或交給摘要區塊自己展開；第二段在畫出來之後才找元素、捲過去、
   // 把焦點放在標題。`readyTurn` 讓兩段落在同一個 commit。1024 以下兩個分頁在同一個抽屜裡，不收抽屜。
   useEffect(() => {
     if (reveal === undefined) return;
-    if (revealIn === 'turns' && placed !== undefined) {
+    if (pullHold) {
+      setAnnounced(TRACE_PULL_LOADING_TEXT);
+      setNotice(TRACE_PULL_LOADING_TEXT);
+      return;
+    }
+    const failure = pullNote?.nonce === reveal.nonce ? pullNote.failure : undefined;
+    if (revealIn === 'digests') {
+      // 摘要列自己會捲過去、標示（`Digests`）；拉失敗就在上面講原因，不是靜靜退回摘要。
+      const text = failure === undefined ? undefined : `${TRACE_PULL_FAILED_TEXT}${failure}`;
+      setNotice(text);
+      if (text !== undefined) setAnnounced(text);
+    } else if (revealIn === 'turns' && placed !== undefined) {
       setNotice(undefined);
       const at = model.turns.findIndex((turn) => turn.seq === placed.seq);
       setShown((count) => Math.max(count, model.turns.length - at));
       setReadyTurn(reveal.nonce);
     } else if (revealIn === 'missing' || revealIn === 'unplaced') {
-      const text =
+      const base =
         revealIn === 'missing'
           ? TRACE_REVEAL_MISSING_TEXT
           : model.structured && (model.digests.length > 0 || model.omitted > 0)
             ? TRACE_REPLY_OLDER_TEXT
             : TRACE_REPLY_UNPLACED_TEXT;
+      const text = failure === undefined ? base : `${base}（${TRACE_PULL_FAILED_TEXT}${failure}）`;
       setAnnounced(text);
       setNotice(text);
       // 說明在最上面；面板可能停在很下面，捲回去才看得到。
       if (section.current !== null) section.current.scrollTop = 0;
       onRevealed(reveal.nonce);
     }
-  }, [reveal, revealIn, placed, model, onRevealed]);
+  }, [reveal, revealIn, placed, model, onRevealed, pullHold, pullNote]);
   useEffect(() => {
     if (placed === undefined || readyTurn !== placed.nonce) return;
     const group = section.current?.querySelector<HTMLElement>(`section[data-seq="${placed.seq}"]`);
@@ -804,6 +928,20 @@ const Timeline = memo(function Timeline({
     },
     [locate],
   );
+  const onPull = useMemo(
+    () =>
+      puller === undefined
+        ? undefined
+        : (seq: number) => {
+            void puller.pull({ seq });
+          },
+    [puller],
+  );
+  const statusFor = useMemo(
+    () =>
+      pull === undefined || puller === undefined ? undefined : (seq: number) => statusOf(pull, seq),
+    [pull, puller],
+  );
   const hiddenTurns = Math.max(0, model.turns.length - shown);
   const turns = hiddenTurns === 0 ? model.turns : model.turns.slice(hiddenTurns);
   return (
@@ -832,7 +970,9 @@ const Timeline = memo(function Timeline({
         <Digests
           digests={model.digests}
           omitted={model.omitted}
-          reveal={revealIn === 'digests' ? placed : undefined}
+          reveal={revealIn === 'digests' && !pullHold ? placed : undefined}
+          statusOf={statusFor}
+          onPull={onPull}
           revealedSeq={revealedSeq}
           onRevealed={onDigestRevealed}
         />
@@ -857,6 +997,10 @@ const Timeline = memo(function Timeline({
           missing={missing}
           revealed={turn.seq !== undefined && turn.seq === revealedSeq}
           onLocate={onLocate}
+          pullStatus={
+            turn.summaryOnly === true && turn.seq !== undefined ? statusFor?.(turn.seq) : undefined
+          }
+          onPull={onPull}
         />
       ))}
       <Limits structured={model.structured} />
@@ -869,6 +1013,8 @@ const Timeline = memo(function Timeline({
 
 export function TraceBody({ visible, sources, locate, reveal, onRevealed }: PanelBodyProps) {
   const state = useVisibleSnapshot(sources.conversation, visible);
+  const pull = useVisibleSnapshot(sources.trajectoryPull, visible);
+  useTrajectoryPull(sources.trajectoryPull, state, visible);
   // 條目是空的、但軌跡投影已經有輪（內文沒載入）時照樣畫結構，不寫「尚無資料」。
   const empty =
     state === undefined ||
@@ -891,6 +1037,8 @@ export function TraceBody({ visible, sources, locate, reveal, onRevealed }: Pane
       // 看不見時不消費：分頁選中之後才會有最新的快照可找。
       reveal={visible ? reveal : undefined}
       onRevealed={onRevealed ?? noop}
+      puller={sources.trajectoryPull}
+      pull={pull}
     />
   );
 }
