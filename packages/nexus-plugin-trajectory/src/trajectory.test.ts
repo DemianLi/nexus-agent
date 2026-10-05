@@ -33,6 +33,7 @@ import {
   trajectoryTurnDetail,
   trajectoryUnit,
   viewTrajectory,
+  viewTrajectoryFull,
 } from './trajectory.js';
 
 /** 寫一顆 core 不認得種類的事件（owner 套件才宣告的那些）。 */
@@ -53,8 +54,15 @@ const reply = (modelCall: number | undefined, text: string, ...toolCallIds: stri
 const call = (callId: string, name = 'read_file') => ({ callId, name, arguments: '{}' });
 const ok = (callId: string) => ({ callId, isError: false });
 
-/** 整串事件折一遍。 */
+/** 整串事件折一遍，窗口開到不裁：量折疊本身，每一輪都帶完整結構。 */
 function foldAll(events: readonly SessionEvent[]): TrajectoryView {
+  let state = initialTrajectory();
+  for (const event of events) state = applyTrajectory(state, event, { detailTurns: 1000 });
+  return viewTrajectoryFull(state);
+}
+
+/** 整串事件照推送的樣子折一遍：預設窗口、`run` 輪只出摘要。 */
+function foldWindowed(events: readonly SessionEvent[]): TrajectoryView {
   let state = initialTrajectory();
   for (const event of events) state = applyTrajectory(state, event);
   return viewTrajectory(state);
@@ -390,7 +398,7 @@ describe('窗口與上限', () => {
     const log = new SessionLog('t');
     const total = TRAJECTORY_DETAIL_TURNS + 3;
     for (let i = 0; i < total; i += 1) simpleTurn(log, `第 ${i} 句`);
-    const view = foldAll(log.events);
+    const view = foldWindowed(log.events);
     expect(view.turns).toHaveLength(TRAJECTORY_DETAIL_TURNS);
     expect(view.digests).toHaveLength(3);
     expect(view.digests.map((d) => d.index)).toEqual([0, 1, 2]);
@@ -415,7 +423,7 @@ describe('窗口與上限', () => {
   it('預覽有字數上限，且換行壓成空格', () => {
     const log = new SessionLog('t');
     log.append('turn/start', { kind: 'message', text: `一\n\n二${'三'.repeat(500)}` });
-    const turn = foldAll(log.events).turns[0]!;
+    const turn = foldWindowed(log.events).turns[0]!;
     expect(turn.preview).toHaveLength(TRAJECTORY_PREVIEW_CHARS);
     expect(turn.preview?.startsWith('一 二')).toBe(true);
     expect(turn.chars).toBe(503 + 1);
@@ -433,7 +441,7 @@ describe('窗口與上限', () => {
       totalTokens: 2,
       modelCall: start.seq,
     });
-    expect(() => foldAll(log.events)).not.toThrow();
+    expect(() => foldWindowed(log.events)).not.toThrow();
   });
 });
 
@@ -752,6 +760,44 @@ describe('沒有 turn/start 的日誌：前景子代理（#1070）', () => {
   });
 });
 
+describe('推送的 view（#1083）', () => {
+  it('只有最新一個實體輪帶逐呼叫結構，其餘都是摘要', () => {
+    const log = new SessionLog('t');
+    for (let i = 0; i < 4; i += 1) simpleTurn(log, `第 ${i} 句`);
+    const view = foldWindowed(log.events);
+    expect(TRAJECTORY_DETAIL_TURNS).toBe(1);
+    expect(view.turns.map((turn) => turn.index)).toEqual([3]);
+    expect(view.digests.map((digest) => digest.index)).toEqual([0, 1, 2]);
+  });
+
+  it('前景子代理的 run 輪（永不收尾）只出摘要，細節要用 detail 拉', () => {
+    const child = new SessionLog('child');
+    const start = child.append('model/start', {});
+    child.append('assistant/message', reply(start.seq, '做完', 'c1'));
+    child.append('tool/call', call('c1'));
+    const view = foldWindowed(child.events);
+    expect(view.turns).toEqual([]);
+    expect(view.digests).toEqual([
+      expect.objectContaining({ index: 0, kind: 'run', callCount: 1, toolCount: 1 }),
+    ]);
+    expect(view.digests[0]).not.toHaveProperty('calls');
+    // 拉得到完整的。
+    expect(trajectoryTurnDetail(child.events, {}).turns[0]).toMatchObject({
+      kind: 'run',
+      calls: [expect.objectContaining({ id: start.seq })],
+    });
+  });
+
+  it('run 輪之後才出現 turn/start 的日誌：摘要在前、新的一輪接在後面', () => {
+    const log = new SessionLog('child');
+    log.append('model/start', {});
+    simpleTurn(log, '後來');
+    const view = foldWindowed(log.events);
+    expect(view.digests.map((digest) => digest.kind)).toEqual(['run']);
+    expect(view.turns.map((turn) => turn.kind)).toEqual(['message']);
+  });
+});
+
 describe('核准的問題掛在它的中斷列上（#1029）', () => {
   const interruptRows = (view: TrajectoryView) =>
     view.turns
@@ -860,7 +906,7 @@ describe('子代理計數（#1083）', () => {
     simpleTurn(log, '下一輪');
     simpleTurn(log, '再下一輪');
     simpleTurn(log, '又一輪');
-    const view = foldAll(log.events);
+    const view = foldWindowed(log.events);
     // 第 0 輪已退成摘要：摺掉的 4 個工具在摺掉當下已經帶連結的，沒有連結的不算（連結在 tool/call 之後才掛）。
     expect(view.digests[0]?.toolCount).toBe(TRAJECTORY_CALL_TOOLS_CAP + 4);
     expect(view.digests[0]?.subagentCount).toBeGreaterThanOrEqual(TRAJECTORY_CALL_TOOLS_CAP);
@@ -933,7 +979,7 @@ describe('按需拉一個邏輯輪（#1083）', () => {
 
   it('錨點落在 resume 輪上，回整個邏輯輪（從 logical:true 那顆開始）', () => {
     const { log } = longLog();
-    const resume = foldAll(log.events).digests.find((digest) => digest.kind === 'resume')!;
+    const resume = foldWindowed(log.events).digests.find((digest) => digest.kind === 'resume')!;
     const detail = trajectoryTurnDetail(log.events, { seq: resume.seq + 1 });
     expect(detail.turns.map((turn) => [turn.kind, turn.logical])).toEqual([
       ['message', true],

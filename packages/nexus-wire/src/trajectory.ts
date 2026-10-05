@@ -17,8 +17,9 @@
  *
  * ## 窗口
  *
- * frame 是**整份取代**、每顆事件都重送，所以 view 不能隨會話無限長：最近 {@link TRAJECTORY_DETAIL_TURNS} 輪帶逐呼叫結構
- * （`turns`），更早的輪只留一列摘要（`digests`，最多 {@link TRAJECTORY_DIGEST_CAP} 列，再早的只記數量 `omitted`）。
+ * frame 是**整份取代**、每顆事件都重送，所以 view 不能隨會話無限長：只有最新 {@link TRAJECTORY_DETAIL_TURNS} 輪帶逐呼叫結構
+ * （`turns`），其餘的輪都只留一列摘要（`digests`，最多 {@link TRAJECTORY_DIGEST_CAP} 列，再早的只記數量 `omitted`）；
+ * 前景子代理的 `run` 輪永不收尾，**一律只出摘要**。細節由客戶端按需向伺服器要（`trajectoryTurnPath`）。
  * 預覽字串都有上限（{@link TRAJECTORY_PREVIEW_CHARS}）。
  *
  * ## 「沒記」與「是 0」
@@ -34,19 +35,18 @@ export const TRAJECTORY_PROJECTION = 'trajectory';
 export const REQUEST_SNAPSHOTS_PROJECTION = 'request-snapshots';
 
 /** `trajectory` 的 `stateVersion`：折疊語意或 view 形狀一變就升。 */
-export const TRAJECTORY_VERSION = 5;
+export const TRAJECTORY_VERSION = 6;
 /** `request-snapshots` 的 `stateVersion`。 */
 export const REQUEST_SNAPSHOTS_VERSION = 1;
 
 /**
- * 帶逐呼叫結構的最近幾輪。
+ * 推送的投影裡帶逐呼叫結構的實體輪數：**只有最新那一輪**（[#1083](https://github.com/DemianLi/nexus-agent/issues/1083)）。
  *
- * **過渡值**：8 → 3（2026-10-05，[#1083](https://github.com/DemianLi/nexus-agent/issues/1083) 的 B 半）。整份取代的 frame
- * 最壞情況（滿載輪：33 次呼叫 × 10 工具）8 輪是 377 KB，3 輪約 140 KB（推算，非實測）。dsh 與 penguin-harness 都沒有
- * 「推送的投影裡留最近 N 輪完整細節」這種形狀，共通做法是骨架給全部、細節按需拉；那一半是 #1083，做完後這個常數就不再需要。
- * 代價：第 4 輪以前只剩摘要，「跳到舊輪」落地的是摘要列。
+ * 它是給**進行中的輪**即時更新用的——畫面不必為了看它在做什麼而一直重拉。其餘的輪（含更早的實體輪、前景子代理的 `run` 輪）
+ * 只推摘要，細節走 `GET /threads/:id/trajectory/turn` 按需拉。dsh 的投影連這一輪都不帶（細節一律走事件頁），
+ * 我們多留這一輪是因為按需拉不是即時的；登記為偏離，量法與數字見 #1083。
  */
-export const TRAJECTORY_DETAIL_TURNS = 3;
+export const TRAJECTORY_DETAIL_TURNS = 1;
 /** 摘要列最多幾列；更早的只記進 `omitted`。 */
 export const TRAJECTORY_DIGEST_CAP = 200;
 /** 預覽字串（輸入、錯誤訊息）最多幾個字元。 */

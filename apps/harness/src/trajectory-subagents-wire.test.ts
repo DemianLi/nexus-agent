@@ -160,6 +160,8 @@ const trajectoryOf = (state: ConversationState): TrajectoryView | undefined =>
   state.projections[TRAJECTORY_PROJECTION]?.view as TrajectoryView | undefined;
 const childTrajectoryOf = (state: ConversationState, runId: string): TrajectoryView | undefined =>
   state.subagentProjections[runId]?.[TRAJECTORY_PROJECTION]?.view as TrajectoryView | undefined;
+/** 推送的投影裡這一份軌跡最新的一輪：前景子代理的 `run` 輪只有摘要（#1083），背景的有完整結構。 */
+const latestOf = (view: TrajectoryView | undefined) => view?.turns.at(-1) ?? view?.digests.at(-1);
 const childSnapshotsOf = (
   state: ConversationState,
   runId: string,
@@ -216,7 +218,7 @@ describe.each(CASES)('$label：軌跡投影', (entry) => {
     // 背景那條在結算之後還會排一輪續行：等到 root 的最後一輪收尾、而且子代理的三次呼叫都進了。
     const settled = (state: ConversationState) =>
       trajectoryOf(state)?.turns.at(-1)?.end !== undefined &&
-      childTrajectoryOf(state, runId)?.turns.at(-1)?.callCount === 3;
+      latestOf(childTrajectoryOf(state, runId))?.callCount === 3;
     await until(() => settled(reduceAll(emptyConversation(), frames)));
     let refreshed = await history();
     for (let tries = 0; tries < 200; tries += 1) {
@@ -239,16 +241,32 @@ describe.each(CASES)('$label：軌跡投影', (entry) => {
     expect(live.subagentProjections).toEqual(refreshed.subagentProjections);
 
     // 2. 子代理在自己那一格：三次呼叫、兩個 noop。前景的日誌沒有 `turn/start`，開的是 `run`，沒有 `end`；背景的有。
+    // 推送的只有骨架（前景 run 輪只出摘要，#1083），逐呼叫結構按需拉，兩邊的計數必須一致。
     const child = childTrajectoryOf(live, runId)!;
-    expect(child.turns).toHaveLength(1);
-    const turn = child.turns[0]!;
+    const pushed = latestOf(child)!;
+    const pulledChild = await client.trajectoryTurn('t1', { runId });
+    if (pulledChild.kind !== 'ok') throw new Error(pulledChild.message);
+    expect(pulledChild.result.turns).toHaveLength(1);
+    const turn = pulledChild.result.turns[0]!;
     expect(turn).toMatchObject({ callCount: 3, toolCount: 2, toolErrors: 0, unattributed: 0 });
+    expect(turn).toMatchObject({
+      index: pushed.index,
+      seq: pushed.seq,
+      callCount: pushed.callCount,
+      toolCount: pushed.toolCount,
+      inputTokens: pushed.inputTokens,
+      outputTokens: pushed.outputTokens,
+    });
     if (entry.mode === 'one-shot') {
       expect(turn).toMatchObject({ kind: 'run', logical: true });
       expect(turn).not.toHaveProperty('end');
+      // 前景 run 輪永不收尾，推送的只有摘要。
+      expect(child.turns).toEqual([]);
+      expect(pushed).not.toHaveProperty('calls');
     } else {
       expect(turn.kind).not.toBe('run');
       expect(turn.end).toBe('completed');
+      expect(child.turns.at(-1)).toEqual(turn);
     }
     expect(turn.calls.flatMap((each) => each.tools.map((tool) => tool.name))).toEqual([
       'noop',
@@ -257,7 +275,11 @@ describe.each(CASES)('$label：軌跡投影', (entry) => {
     // root 自己的軌跡不含子代理的呼叫（各折各的），而且派它的那顆工具帶連結指到這個 runId。
     const root = trajectoryOf(live)!;
     expect(root.turns.every((each) => each.kind !== 'run')).toBe(true);
-    const links = root.turns
+    // 派它的那一輪可能已經退成摘要（#1083），連結在拉到的細節裡。
+    const firstTurn = (root.digests[0] ?? root.turns[0])!;
+    const pulledRoot = await client.trajectoryTurn('t1', { seq: firstTurn.seq });
+    if (pulledRoot.kind !== 'ok') throw new Error(pulledRoot.message);
+    const links = pulledRoot.result.turns
       .flatMap((each) => each.calls)
       .flatMap((each) => each.tools)
       .flatMap((tool) => (tool.subagent === undefined ? [] : [tool.subagent]));
