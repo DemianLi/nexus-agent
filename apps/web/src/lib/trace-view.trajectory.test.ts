@@ -808,6 +808,7 @@ describe('限制文字', () => {
     expect(Object.keys(TRACE_STRUCTURED_LIMITS)).toEqual(['decisions', 'loaded', 'absent']);
     expect(TRACE_STRUCTURED_LIMITS.decisions).not.toBe(TRACE_LIMITS.decisions);
     expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('重新整理後仍在');
+    expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('更早的輪只剩摘要');
     expect(TRACE_STRUCTURED_LIMITS.decisions).not.toContain('只記在這個分頁');
     expect(Object.keys(TRACE_LIMITS)).toEqual(['turns', 'decisions', 'loaded', 'absent']);
   });
