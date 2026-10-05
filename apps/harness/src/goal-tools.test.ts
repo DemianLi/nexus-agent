@@ -134,6 +134,7 @@ describe('模型工具走真的 pump', () => {
         'context/measure',
         'tool/call',
         'interrupt/raised',
+        'approval/asked',
         'turn/end',
       ]);
 
@@ -143,8 +144,8 @@ describe('模型工具走真的 pump', () => {
         response: { decisions: [{ type: 'approve' }] },
       });
 
-      // 恢復那一輪的起點真的是 `resume`，不是又一顆 `message`。它緊接在上面那十三顆之後。
-      expect(pump.sessionLog.events[13]?.data).toEqual({ kind: 'resume' });
+      // 恢復那一輪的起點真的是 `resume`，不是又一顆 `message`。它緊接在上面那十四顆之後（含 #1029 的 `approval/asked`）。
+      expect(pump.sessionLog.events[14]?.data).toEqual({ kind: 'resume' });
       const changes = pump.sessionLog.events.filter((event) => event.type === 'goal/change');
       expect(changes).toHaveLength(1);
       expect(changes[0]?.data).toMatchObject({

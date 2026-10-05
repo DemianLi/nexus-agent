@@ -302,17 +302,19 @@ describe('沒有一輪在跑', () => {
       await run.pump.whenIdle();
 
       const tail = run.root().slice(before);
-      expect(typesOf(tail)).toEqual(['turn/start', 'tool/result', 'turn/end']);
+      // 收回那一輪：先記還欠的 `approval/decided`（`cancelled`，#1029），再是被收回的呼叫的結果與收尾。
+      expect(typesOf(tail)).toEqual(['turn/start', 'approval/decided', 'tool/result', 'turn/end']);
       expect(tail[0]?.data).toEqual({ kind: 'resume' });
+      expect(tail[1]?.data).toMatchObject({ outcome: 'cancelled' });
       expect(resultsOf(tail)).toEqual([abortedResult(TOOL_ABORTED_BEFORE_DISPATCH)]);
       // #305：帶的就是寫進對話的那一則——下面「下一句」量到模型看到的也是這一句。
-      expect((tail[1]?.data as SessionEventMap['tool/result']).message?.data.content).toBe(
+      expect((tail[2]?.data as SessionEventMap['tool/result']).message?.data.content).toBe(
         TOOL_ABORTED_BEFORE_DISPATCH_TEXT,
       );
-      expect(tail[2]?.data).toEqual(ABORTED_END);
+      expect(tail[3]?.data).toEqual(ABORTED_END);
       // 配的是暫停那一輪留下、還沒配到結果的那顆 `tool/call`。
       const call = run.root().find((event) => event.type === 'tool/call');
-      expect((tail[1]?.data as { callId: string }).callId).toBe(
+      expect((tail[2]?.data as { callId: string }).callId).toBe(
         (call?.data as { callId: string }).callId,
       );
       await until(() => run.frames.some(isStoppedFrame));

@@ -22,7 +22,14 @@ import type {
   PreToolListener,
   ToolExecution,
 } from './approval.js';
+import type { ToolEventSessions } from './containment.js';
 import type { NamedEntry } from './entries.js';
+import {
+  APPROVAL_NO_CHANNEL,
+  APPROVAL_POLICY_NEVER,
+  TOOL_DENIED_BY_LISTENER,
+  toolErrorOf,
+} from './tool-events.js';
 
 const exec: ToolExecution = { name: 'deploy_prod', args: { target: 'prod' }, callId: 'call-1' };
 
@@ -40,8 +47,9 @@ type Wrapper = (
 function wrapperOf(
   listeners: readonly NamedEntry<PreToolListener>[],
   channel: ApprovalChannel,
+  sessions?: ToolEventSessions,
 ): Wrapper {
-  const middleware = createApprovalGateMiddleware(listeners, channel);
+  const middleware = createApprovalGateMiddleware(listeners, channel, sessions);
   const wrap = (middleware as { wrapToolCall?: Wrapper }).wrapToolCall;
   if (wrap === undefined) throw new Error('這個 middleware 沒有 wrapToolCall');
   return wrap;
@@ -180,5 +188,100 @@ describe('middleware 本身', () => {
   it('名字固定——排序斷言與錯誤訊息靠它', () => {
     const middleware = createApprovalGateMiddleware([], { kind: 'human' });
     expect((middleware as { name?: string }).name).toBe(APPROVAL_GATE_MIDDLEWARE_NAME);
+  });
+});
+
+describe('拒絕帶碼，分得出誰拒的（#1029）', () => {
+  const codeOf = (result: unknown) => toolErrorOf(result);
+
+  it('listener 直接 deny → TOOL_DENIED_BY_LISTENER', async () => {
+    const wrap = wrapperOf([entry(() => ({ kind: 'deny', reason: '不准' }))], { kind: 'human' });
+    expect(codeOf(await wrap(call().request, call().ran))).toEqual({
+      name: 'PreExecuteDenied',
+      code: TOOL_DENIED_BY_LISTENER,
+    });
+  });
+
+  it('政策關掉 → APPROVAL_POLICY_NEVER；沒有管道 → APPROVAL_NO_CHANNEL', async () => {
+    const ask = [entry(() => ({ kind: 'ask' as const }))];
+    expect(
+      codeOf(await wrapperOf(ask, { kind: 'policy-never' })(call().request, call().ran)),
+    ).toEqual({ name: 'ApprovalDenied', code: APPROVAL_POLICY_NEVER });
+    expect(
+      codeOf(await wrapperOf(ask, { kind: 'no-channel' })(call().request, call().ran)),
+    ).toEqual({ name: 'ApprovalDenied', code: APPROVAL_NO_CHANNEL });
+  });
+});
+
+describe('不必問人就確定的拒絕，圖內寫一對 approval/*（#1029）', () => {
+  /** 記下 append 的假日誌；`kind` 不是 ok 時模擬「找不到這次呼叫屬於哪份日誌」。 */
+  function recording(found: 'ok' | 'missing' = 'ok') {
+    const appended: { type: string; data: unknown; options: unknown }[] = [];
+    const sessions: ToolEventSessions = {
+      forCall: () =>
+        found === 'ok'
+          ? ({
+              kind: 'ok',
+              log: {
+                append: (type: string, data: unknown, options: unknown) =>
+                  void appended.push({ type, data, options }),
+              },
+            } as never)
+          : ({ kind: 'missing' } as never),
+    };
+    return { sessions, appended };
+  }
+  const ask = [entry(() => ({ kind: 'ask' as const, reason: '會動到線上' }))];
+
+  it('政策關掉 → asked＋decided(rejected)，同一個 id，標可略過', async () => {
+    const { sessions, appended } = recording();
+    await wrapperOf(ask, { kind: 'policy-never' }, sessions)(call().request, call().ran);
+    expect(appended.map((each) => each.type)).toEqual(['approval/asked', 'approval/decided']);
+    const [asked, decided] = appended;
+    expect(asked?.data).toMatchObject({
+      toolName: 'deploy_prod',
+      callId: 'call-1',
+      reason: '會動到線上',
+    });
+    expect(decided?.data).toEqual({
+      id: (asked?.data as { id: string }).id,
+      outcome: 'rejected',
+    });
+    expect(appended.map((each) => each.options)).toEqual([
+      { ignorable: true },
+      { ignorable: true },
+    ]);
+  });
+
+  it('沒有管道 → decided 是 unavailable', async () => {
+    const { sessions, appended } = recording();
+    await wrapperOf(ask, { kind: 'no-channel' }, sessions)(call().request, call().ran);
+    expect(appended.map((each) => (each.data as { outcome?: string }).outcome)).toEqual([
+      undefined,
+      'unavailable',
+    ]);
+  });
+
+  it('listener 直接 deny 不寫（沒有問任何人，同 dsh）', async () => {
+    const { sessions, appended } = recording();
+    await wrapperOf(
+      [entry(() => ({ kind: 'deny', reason: '不准' }))],
+      { kind: 'human' },
+      sessions,
+    )(call().request, call().ran);
+    expect(appended).toEqual([]);
+  });
+
+  it('沒給 sessions、或找不到這次呼叫的日誌 → 照樣拒絕，只是不記', async () => {
+    const without = await wrapperOf(ask, { kind: 'policy-never' })(call().request, call().ran);
+    expect(without.status).toBe('error');
+    const { sessions, appended } = recording('missing');
+    const lost = await wrapperOf(
+      ask,
+      { kind: 'policy-never' },
+      sessions,
+    )(call().request, call().ran);
+    expect(lost.status).toBe('error');
+    expect(appended).toEqual([]);
   });
 });

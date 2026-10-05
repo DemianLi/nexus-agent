@@ -166,6 +166,12 @@ import type { ToolErrorInfo } from './tool-events.js';
 export type SessionEventType = keyof SessionEventMap;
 
 /**
+ * 一次核准的結局。**四值封閉，照 dsh 的 `ApprovalOutcome`**（`packages/interaction/user-approval/src/types.ts:34`，`5badb15`）：
+ * `allowed-once` 是唯一的放行，其餘都不執行（fail closed）。見 `approval/decided`。
+ */
+export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
+
+/**
  * 一輪為什麼沒有正常結束。三種：
  *
  * - **`aborted`**：被中止。原因兩種：`user`（人按了停止）與 `parent`（父代理用 `interrupt_agent` 只停這個背景
@@ -381,6 +387,47 @@ export interface SessionEventMap {
   'turn/failed': { readonly message: string };
   /** 掛上了一顆等人回答的中斷。 */
   'interrupt/raised': { readonly interruptId: string };
+  /**
+   * 核准閘門把一個問題擺到了人面前（或確定沒有人可以問）——**只做審計，不進模型、不左右任何折疊**
+   * （[#1029](https://github.com/DemianLi/nexus-agent/issues/1029)，翻了 [#220](https://github.com/DemianLi/nexus-agent/issues/220)
+   * 的「認帳不做」：側欄是第一個消費者）。
+   *
+   * 照 dsh 的同名事件（`packages/interaction/user-approval/src/types.ts:44-58`，`5badb15`）：`id` 配對隨後那顆
+   * `approval/decided`，`toolName` 是被問的工具，`callId` 是那一次呼叫（配得上 `tool/call`），`reason` 是發問的一方
+   * 寫的人話。**每一顆 asked 最後都該有一顆同 `id` 的 decided**；停在核准點的那一輪若沒人答，那一對就是開著的，
+   * 讀的人照「還在等」表態，不是推一個結果。
+   *
+   * **兩條路寫它**：人那條由 pump 在記 `interrupt/raised` 的同一刻寫，`id` 就是那顆中斷的 `interruptId`
+   * （閘門在圖內、續接時會從頭重跑，在 `interrupt()` 之前寫會寫成兩筆）；不必問人就確定結果的
+   * （政策關掉、沒有管道、子代理）由閘門在圖內一次寫一對，`id` 是新產的。
+   *
+   * 標 `ignorable`：它不進模型也不左右重建，舊 runtime 略過它是對的（#507，所以不升格式版本）。
+   *
+   * ⚠️ `reason` 是發問的一方寫的字，可能帶工具參數裡的片段，原樣進本機日誌；**會話遙測的鏡像是預設放行**
+   * （`isMirroredEvent` 只擋 `request/header` 與 `request/system`），所以它跟 `tool/call` 的參數一樣會被鏡像出去
+   * ——要擋就在 `isMirroredEvent` 明列，不要靠這裡的說明。
+   */
+  'approval/asked': {
+    readonly id: string;
+    readonly toolName: string;
+    readonly callId?: string;
+    readonly reason?: string;
+  };
+  /**
+   * 一次 `approval/asked` 的結局（同 `id`），**每一顆 asked 至多一顆**。
+   *
+   * 詞彙照 dsh 的 `ApprovalOutcome`：`allowed-once` 是唯一的放行；`rejected` 是人按了拒絕，**也是政策關掉核准時的確定性
+   * 拒絕**（dsh 同：`approval` 服務在 `never` 政策下直接回 `rejected`）；`cancelled` 是問題在被答之前被收回（按了停止）；
+   * `unavailable` 是沒有人可以答（沒有管道）。**fail closed**：除了 `allowed-once` 都不執行。
+   *
+   * 「是誰拒的」在 dsh 靠 `approval/policy` 事件分（我們的政策是組裝決定的、不進日誌），所以這裡分不出
+   * 人拒與政策拒；分得出的是那一次 `tool/result` 的碼（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／
+   * `APPROVAL_NO_CHANNEL`，見 `tool-events.ts`）。
+   */
+  'approval/decided': {
+    readonly id: string;
+    readonly outcome: ApprovalOutcome;
+  };
   /**
    * 一次模型呼叫的 token 帳目，**供應商報什麼記什麼**。
    *

@@ -20,6 +20,7 @@ import { tool } from '@langchain/core/tools';
 import { Command, MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI, convertMessagesToCompletionsMessageParams } from '@langchain/openai';
 import {
+  APPROVAL_REJECTED_BY_USER,
   INVALID_ARGS,
   INVALID_ARGUMENTS_REFUSAL,
   repairInvalidToolCalls,
@@ -498,8 +499,12 @@ describe('要核准的工具', () => {
         });
         expect(textOf(replay.next?.content)).toBe(INVALID_ARGUMENTS_REFUSAL);
       } else {
-        // 被拒照 dsh 不帶碼，文字是閘門自己的那句。
-        expect(result?.data).toEqual({ callId: 'call_bad', isError: true });
+        // 被人拒：文字是閘門自己的那句，碼是 #1029 多給的（dsh 的核准拒絕不帶碼，理由見 `tool-events.ts`）。
+        expect(result?.data).toEqual({
+          callId: 'call_bad',
+          isError: true,
+          error: { name: 'ApprovalDenied', code: APPROVAL_REJECTED_BY_USER },
+        });
         expect(textOf(replay.next?.content)).toBe('Error: 有人看過並拒絕了 "danger"。');
       }
       expect(bodies).toEqual([]);

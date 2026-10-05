@@ -73,10 +73,17 @@
 import { tool } from '@langchain/core/tools';
 import { interrupt } from '@langchain/langgraph';
 import type { ApprovalChannel, NexusPlugin } from '@nexus/core';
-import { APPROVAL_INTERRUPT_KIND, CHANNEL_SERVICE, toolCallIdOf, toolRefusal } from '@nexus/core';
+import {
+  APPROVAL_INTERRUPT_KIND,
+  APPROVAL_REJECTED_BY_USER,
+  approvalDenied,
+  CHANNEL_SERVICE,
+  toolCallIdOf,
+  toolRefusal,
+} from '@nexus/core';
 import { z } from 'zod';
 
-import type { SandboxMode } from '@nexus/core';
+import type { SandboxMode, ToolErrorInfo } from '@nexus/core';
 import type { SandboxModeController } from './sandbox-mode.js';
 
 /** 模型看到的工具名。核准卡（中斷酬載的 `actionRequests[].name`）帶的就是這個字串，所以它是導出的。 */
@@ -239,10 +246,11 @@ function createEscalationTool(
     async (args: z.infer<typeof escalationSchema>, runtime: ToolRuntimeLike) => {
       // 回拒絕，不拋：中斷之後才落定的那幾條出口，拋出去會在 resume 那一輪逸出成整場 run 死掉
       // （`@nexus/plugin-ask-user` 量過）。核准閘門的 `denial()` 也是這個形狀。
-      const refuse = (message: string) =>
+      const refuse = (message: string, error?: ToolErrorInfo) =>
         toolRefusal(message, {
           callId: toolCallIdOf(runtime) ?? '',
           name: SANDBOX_ESCALATION_TOOL_NAME,
+          ...(error === undefined ? {} : { error }),
         });
       const { file_path: target, sandbox_permissions: requested, justification } = args;
       // **順序照 dsh**：先驗欄位（`validateEscalationArgs`），再判加寬，最後才看有沒有人可問。
@@ -274,6 +282,8 @@ function createEscalationTool(
             name: SANDBOX_ESCALATION_TOOL_NAME,
             args,
             description: escalationReason(target, requested, justification),
+            // pump 記 `approval/asked` 要配得上 `tool/call`（#1029），同核准閘門的酬載。
+            ...(toolCallIdOf(runtime) === undefined ? {} : { callId: toolCallIdOf(runtime) }),
           },
         ],
         reviewConfigs: [
@@ -283,7 +293,12 @@ function createEscalationTool(
 
       const verdict = answer?.decisions?.[0];
       if (verdict?.type === 'reject') {
-        return refuse(verdict.message ?? rejectedRefusal(target, requested));
+        // 人按了拒絕：碼同核准閘門（#1029）。這條工具本體裡的其他拒絕（政策關掉、沒有管道）不寫 `approval/*`，
+        // 因為沒有走核准閘門——見 `approval.ts` 的檔頭。
+        return refuse(
+          verdict.message ?? rejectedRefusal(target, requested),
+          approvalDenied(APPROVAL_REJECTED_BY_USER),
+        );
       }
       if (verdict?.type !== 'approve') {
         return refuse(
