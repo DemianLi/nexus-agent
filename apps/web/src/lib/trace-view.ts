@@ -269,6 +269,8 @@ export interface TurnHead {
 /** 窗口外那些輪只剩的一行摘要。 */
 export interface TraceDigest extends TurnHead {
   readonly key: string;
+  /** 開這一輪的 `turn/start` 的 `seq`（`resume` 併進來之後仍是第一段的）；成本分頁的「看這一輪」靠它找。 */
+  readonly seq: number;
 }
 
 export interface TraceTurn {
@@ -279,6 +281,8 @@ export interface TraceTurn {
   readonly head?: TurnHead;
   /** 這一組是以人那一句切的（第 0 版的做法），不是投影的輪界。 */
   readonly legacy: boolean;
+  /** 開這一輪的 `turn/start` 的 `seq`（等於 `TokenMeterTurn.seq`）；沒有結構資料的組沒有。 */
+  readonly seq?: number;
 }
 
 export interface TraceModel {
@@ -721,7 +725,7 @@ function structuredTurns(
   });
 
   const numbers = logicalNumbers(view);
-  const groups: { key: string; rows: TraceRow[]; head: TurnHead }[] = [];
+  const groups: { key: string; seq: number; rows: TraceRow[]; head: TurnHead }[] = [];
   view.turns.forEach((turn, t) => {
     // `resume`（核准後續接）併回前一個邏輯輪：同一輪、同一組，編號不加。
     const previous = groups.at(-1);
@@ -804,7 +808,7 @@ function structuredTurns(
       previous.rows.push(...rows);
       previous.head = mergeHead(previous.head, head);
     } else {
-      groups.push({ key: `turn-${turn.seq}`, rows, head });
+      groups.push({ key: `turn-${turn.seq}`, seq: turn.seq, rows, head });
     }
   });
   const turns: TraceTurn[] = groups.map((group) => ({ ...group, legacy: false }));
@@ -817,8 +821,9 @@ function structuredTurns(
         head: headOf(digest, numbers.get(digest.seq) ?? 1),
         logical: digest.logical,
         key: `digest-${digest.index}`,
+        seq: digest.seq,
       })),
-    ).map(({ head, key }) => ({ ...head, key })),
+    ).map(({ head, key, seq }) => ({ ...head, key, seq })),
     omitted: view.omitted,
   };
 }

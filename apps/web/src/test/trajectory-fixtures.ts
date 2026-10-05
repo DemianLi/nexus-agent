@@ -115,7 +115,7 @@ export function projectionFrame(
   key: string,
   version: number,
   value: unknown,
-  extra: { failed?: true } = {},
+  extra: { failed?: true; session?: string } = {},
 ): Event {
   return script.custom(PROJECTION, {
     key,
