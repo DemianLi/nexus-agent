@@ -577,7 +577,6 @@ function SubagentCalls({ runId }: { runId: string }) {
       });
     },
     // `snapshots` 只用來畫拉回來的那一輪；它每個 frame 都是新的，不該讓拉取的函式跟著換。
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [puller, runId],
   );
 

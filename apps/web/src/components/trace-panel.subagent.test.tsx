@@ -114,14 +114,21 @@ function scenario(
 function fakeClient() {
   const queries: { seq?: number; messageId?: string; runId?: string }[] = [];
   const waiting: ((outcome: TrajectoryTurnOutcome) => void)[] = [];
+  const signals: AbortSignal[] = [];
   return {
     queries,
+    signals,
     waiting,
     client: {
       trajectoryTurn: vi.fn(
-        (_threadId: string, query: { seq?: number; messageId?: string; runId?: string }) =>
+        (
+          _threadId: string,
+          query: { seq?: number; messageId?: string; runId?: string },
+          signal?: AbortSignal,
+        ) =>
           new Promise<TrajectoryTurnOutcome>((resolve) => {
             queries.push(query);
+            if (signal !== undefined) signals.push(signal);
             waiting.push(resolve);
           }),
       ),
@@ -290,6 +297,22 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
       waiting[0]!({ kind: 'rejected', code: 'SUBAGENT_NOT_FOUND', message: '找不到這個子代理' });
     });
     expect(block.textContent).toContain('找不到這個子代理');
+  });
+
+  it('分頁關掉（卸載）時，還在飛的拉取被取消', async () => {
+    const { client, signals } = fakeClient();
+    const { unmount } = mount(
+      scenario('bg-1', {
+        trajectory: view([childTurn(3)], { digests: [digest(1, { seq: 10 })] }),
+      }),
+      client,
+    );
+    const block = await expandSubagent();
+    fireEvent.click(within(block).getByRole('button', { name: /拉|載入|看/ }));
+    expect(signals).toHaveLength(1);
+    expect(signals[0]!.aborted).toBe(false);
+    unmount();
+    expect(signals[0]!.aborted).toBe(true);
   });
 
   it('沒掛拉取通道：摘要照舊並說明', async () => {
