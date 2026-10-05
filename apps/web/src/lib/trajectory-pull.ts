@@ -72,6 +72,11 @@ export interface FailedPull {
 export const NETWORK_CODE = 'network';
 export const NETWORK_MESSAGE = '連線出了問題';
 
+/** {@link TrajectoryPuller.fetchTurns} 的結果。 */
+export type FetchedTurns =
+  | { readonly ok: true; readonly turns: readonly TrajectoryTurn[]; readonly through: number }
+  | ({ readonly ok: false } & FailedPull);
+
 export type PullOutcome = { readonly ok: true } | ({ readonly ok: false } & FailedPull);
 
 export interface TrajectoryPuller {
@@ -82,6 +87,11 @@ export interface TrajectoryPuller {
    * 不會拋：失敗是 `{ ok: false }`，也記進快照的 `failed`。
    */
   pull(anchor: PullAnchor): Promise<PullOutcome>;
+  /**
+   * 照任意查詢拉，**不進快取、不動快照**：回來的實體輪交給呼叫端自己放（子代理的軌跡用，`query.runId`；那些輪不是 root 的
+   * 輪，`mergePulled` 不該看到）。不會拋：失敗是 `{ ok: false }`。
+   */
+  fetchTurns(query: TrajectoryTurnQuery, signal?: AbortSignal): Promise<FetchedTurns>;
   /** 把推送窗口裡已定案的輪收進快取。 */
   seed(turns: readonly TrajectoryTurn[]): void;
   /** 清掉快取與失敗（軌跡投影不可用、換版本時）。進行中的請求照走，但回來的不收。 */
@@ -220,6 +230,19 @@ export function createTrajectoryPuller(
       });
       inflight.set(key, entry);
       return entry.promise;
+    },
+    async fetchTurns(query, signal) {
+      try {
+        const outcome = await client.trajectoryTurn(threadId, query, signal);
+        if (outcome.kind === 'ok') {
+          return { ok: true, turns: outcome.result.turns, through: outcome.result.seq };
+        }
+        return { ok: false, code: outcome.code, message: outcome.message };
+      } catch {
+        return signal?.aborted === true
+          ? { ok: false, code: 'aborted', message: '已取消' }
+          : { ok: false, code: NETWORK_CODE, message: NETWORK_MESSAGE };
+      }
     },
     seed(turns) {
       const fresh = turns.filter((turn) => {

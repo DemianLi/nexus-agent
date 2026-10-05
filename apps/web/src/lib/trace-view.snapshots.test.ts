@@ -2,7 +2,7 @@ import type { RequestSnapshotsView } from '@nexus/wire';
 import { emptyConversation, reduceAll } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { sameRow, traceModel } from '@/lib/trace-view';
+import { sameRow, subagentTurnView, traceModel } from '@/lib/trace-view';
 import type { TraceRow } from '@/lib/trace-view';
 import { Script } from '@/test/conversation-frames';
 import { call, turn, view, withTrajectory } from '@/test/trajectory-fixtures';
@@ -131,5 +131,35 @@ describe('呼叫列帶請求快照的內容', () => {
       undefined,
     ]);
     expect('outcome' in fine!).toBe(false);
+  });
+});
+
+describe('子代理自己的呼叫結構', () => {
+  it('subagentTurnView：只放原始值、呼叫從摺掉的數目接著編號、工具與重試只有結構', () => {
+    const t = turn(1, {
+      elided: { calls: 3 } as never,
+      calls: [
+        call(5, {
+          system: 8,
+          tools: [{ callId: 'k', name: 'ls', seq: 1, time: 9, status: 'error', code: 'ABORTED' }],
+          retries: [{ seq: 2, time: 3, retryId: 'r', retry: 1, maxRetries: 3, code: 'RATE_LIMIT' }],
+        }),
+      ],
+    });
+    const out = subagentTurnView(t, snapshots());
+    expect(out.elidedCalls).toBe(3);
+    expect(out.calls[0]!.row.n).toBe(4);
+    expect(out.calls[0]!.row.systemChars).toBe(SYSTEM_TEXT.length);
+    expect(out.calls[0]!.tools).toEqual([
+      { key: 'k', name: 'ls', status: 'error', time: 9, code: 'ABORTED' },
+    ]);
+    expect(out.calls[0]!.retries[0]).toMatchObject({ retry: 1, maxRetries: 3, code: 'RATE_LIMIT' });
+    expect(JSON.stringify(out)).not.toContain(SYSTEM_TEXT);
+  });
+
+  it('沒摺過的輪沒有 elidedCalls', () => {
+    expect(subagentTurnView(turn(1, { calls: [call(5)] }), undefined)).not.toHaveProperty(
+      'elidedCalls',
+    );
   });
 });
