@@ -1,5 +1,5 @@
 import type { ConversationState, TrajectoryReply } from '@nexus/wire';
-import { emptyConversation, reduceAll } from '@nexus/wire';
+import { appendDecision, emptyConversation, reduceAll } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -149,7 +149,7 @@ describe('觀測分頁：結構化模式', () => {
     expect(heads[0]!.textContent).toContain('耗時 2.5 秒');
     const limits = within(screen.getByTestId('trace-limits')).getAllByRole('listitem');
     expect(limits.map((item) => item.textContent)).toEqual(Object.values(TRACE_STRUCTURED_LIMITS));
-    // 切輪那一條沒有了，決定只存本地那一條還在。
+    // 切輪那一條沒有了；決定那一條換成「核准結局來自軌跡」。
     expect(limits.map((item) => item.getAttribute('data-limit'))).toEqual([
       'decisions',
       'loaded',
@@ -173,6 +173,53 @@ describe('觀測分頁：結構化模式', () => {
     // 這兩種不是對話裡的一則，沒有地方可定位。
     expect(within(retry).queryByTestId('trace-locate')).toBeNull();
     expect(within(signal).queryByTestId('trace-locate')).toBeNull();
+  });
+
+  it('核准：停下來的那一列照軌跡的結局說，本地的決定列不重複；被政策擋下的工具卡帶白話說明', async () => {
+    const script = new Script();
+    const asked = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('inbox:r1', '幫我改'),
+      ...script.ai('a', { text: '改' }),
+      script.started('c1', 'edit_file', { file_path: 'a.md' }),
+      script.approval('int-1', 'edit_file'),
+    ]);
+    const state = reduceAll(appendDecision(asked, 'int-1', 'approve'), [
+      script.finished('c1', '已改'),
+      ...script.ai('b', { text: '再試' }),
+      script.started('c2', 'bash', { command: 'ls' }),
+      script.failed('c2', '政策不允許', 'APPROVAL_POLICY_NEVER'),
+      script.started('c3', 'ls', {}),
+      script.failed('c3', '中止', 'ABORTED'),
+      ...script.ai('c', { text: '好' }),
+      script.completed(),
+    ]);
+    const trajectory = view([
+      turn(0, {
+        end: 'completed',
+        calls: [call(5, { reply: reply(11, 'run-a') }), call(20, { reply: reply(22, 'run-b') })],
+        decisions: [
+          decision('interrupt', 10, {
+            id: 'int-1',
+            approval: { tool: 'edit_file', outcome: 'allowed-once', decidedAt: 1_700_000_013_000 },
+          }),
+        ],
+      }),
+    ]);
+    mount(withTrajectory(state, script, trajectory));
+    await act(async () => {});
+    expect(kinds()).not.toContain('decision');
+    const signal = screen
+      .getAllByTestId('trace-row')
+      .find((row) => row.getAttribute('data-kind') === 'signal')!;
+    expect(signal.textContent).toContain('核准 edit_file：允許一次（等了 13.0 秒）');
+    const chips = screen.getAllByTestId('trace-approval-code');
+    expect(chips.map((chip) => chip.textContent)).toEqual(['核准政策一律不允許']);
+    // 不是核准的失敗碼只顯示碼本身。
+    expect(screen.getAllByTestId('trace-error-code').map((c) => c.textContent)).toEqual([
+      'APPROVAL_POLICY_NEVER',
+      'ABORTED',
+    ]);
   });
 
   it('呼叫段落展開：缺席的欄位寫「—」不寫 0；指到已被擠掉的快照寫「已不保留」', async () => {

@@ -1,4 +1,4 @@
-import type { ConversationState, TrajectoryReply } from '@nexus/wire';
+import type { ConversationState, TrajectoryApproval, TrajectoryReply } from '@nexus/wire';
 import {
   REQUEST_SNAPSHOTS_PROJECTION,
   REQUEST_SNAPSHOTS_VERSION,
@@ -567,7 +567,7 @@ describe('traceModel：重試、提醒與決策點', () => {
 
 describe('traceModel：核准後續接併回同一個邏輯輪', () => {
   /** v0 的 `richTurn` 的結構化版：讀檔、停在核准點、人核准（本地決定）、續接、收尾；另有第二則人話。 */
-  function approvalConversation() {
+  function approvalConversation(interrupt: { id?: string; approval?: TrajectoryApproval } = {}) {
     const script = new Script();
     const asked = reduceAll(emptyConversation(), [
       script.running(),
@@ -599,7 +599,7 @@ describe('traceModel：核准後續接併回同一個邏輯輪', () => {
           call(5, { reply: reply(11, 'run-a'), tools: [tool('c1')] }),
           call(16, { reply: reply(18, 'run-b'), tools: [tool('c2', { status: 'running' })] }),
         ],
-        decisions: [decision('interrupt', 20, {})],
+        decisions: [decision('interrupt', 20, interrupt)],
       }),
       turn(1, {
         kind: 'resume',
@@ -654,6 +654,70 @@ describe('traceModel：核准後續接併回同一個邏輯輪', () => {
       .filter((r) => r.kind === 'call')
       .map((r) => (r as { n: number }).n);
     expect(callNumbers).toEqual([1, 2, 3]);
+  });
+
+  it('軌跡帶著核准結局：停下來那一列照結局說，本地的決定列不再重複出現', () => {
+    const approval: TrajectoryApproval = {
+      tool: 'edit_file',
+      outcome: 'allowed-once',
+      decidedAt: 1_700_000_000_020 + 5_000,
+    };
+    const { script, state, trajectory } = approvalConversation({ id: 'int-1', approval });
+    const [first] = traceModel(withTrajectory(state, script, trajectory)).turns;
+    expect(kinds(first!.rows)).not.toContain('decision');
+    const signal = first!.rows.find((r) => r.kind === 'signal');
+    expect(signal).toMatchObject({ summary: '核准 edit_file：允許一次（等了 5.0 秒）' });
+  });
+
+  it('軌跡的核准還沒有結局：本地的決定列照舊留著，停下來那一列說還沒有結局', () => {
+    const { script, state, trajectory } = approvalConversation({
+      id: 'int-1',
+      approval: { tool: 'edit_file' },
+    });
+    const [first] = traceModel(withTrajectory(state, script, trajectory)).turns;
+    expect(kinds(first!.rows)).toContain('decision');
+    const signal = first!.rows.find((r) => r.kind === 'signal');
+    expect((signal as { summary: string }).summary).toContain('還沒有結局');
+  });
+
+  it('結局對不上本地決定的中斷 id：兩邊都留著（只認同一顆）', () => {
+    const { script, state, trajectory } = approvalConversation({
+      id: 'int-other',
+      approval: { tool: 'edit_file', outcome: 'rejected' },
+    });
+    const [first] = traceModel(withTrajectory(state, script, trajectory)).turns;
+    expect(kinds(first!.rows)).toContain('decision');
+  });
+
+  it('重新整理之後（沒有本地決定）：只靠軌跡就看得到結局', () => {
+    const { script, state, trajectory } = approvalConversation({
+      id: 'int-1',
+      approval: { tool: 'edit_file', outcome: 'rejected' },
+    });
+    const reloaded: ConversationState = {
+      ...state,
+      entries: state.entries.filter((entry) => entry.kind !== 'decision'),
+    };
+    const [first] = traceModel(withTrajectory(reloaded, script, trajectory)).turns;
+    expect(kinds(first!.rows)).not.toContain('decision');
+    expect(first!.rows.find((r) => r.kind === 'signal')).toMatchObject({
+      summary: '核准 edit_file：已拒絕',
+    });
+  });
+
+  it('一顆中斷同時問了好幾個動作：本地那一列說得全，不被軌跡的單一工具名取代', () => {
+    const { script, state, trajectory } = approvalConversation({
+      id: 'int-1',
+      approval: { tool: 'edit_file', outcome: 'allowed-once' },
+    });
+    const multi: ConversationState = {
+      ...state,
+      entries: state.entries.map((entry) =>
+        entry.kind === 'decision' ? { ...entry, actions: ['edit_file', 'write_file'] } : entry,
+      ),
+    };
+    const [first] = traceModel(withTrajectory(multi, script, trajectory)).turns;
+    expect(kinds(first!.rows)).toContain('decision');
   });
 
   it('續接還沒收尾時，併起來的標題沒有收尾也沒有牆鐘（不拿第一段的充數）', () => {
@@ -740,9 +804,12 @@ describe('traceModel：列只放原始值，投影整份換掉時 memo 才擋得
 });
 
 describe('限制文字', () => {
-  it('結構化的限制拿掉了「切輪靠人」，仍留著「決定只存本地」', () => {
+  it('結構化的限制拿掉了「切輪靠人」；決定那條不再說「只存本地」（核准結局來自軌跡）', () => {
     expect(Object.keys(TRACE_STRUCTURED_LIMITS)).toEqual(['decisions', 'loaded', 'absent']);
-    expect(TRACE_STRUCTURED_LIMITS.decisions).toBe(TRACE_LIMITS.decisions);
+    expect(TRACE_STRUCTURED_LIMITS.decisions).not.toBe(TRACE_LIMITS.decisions);
+    expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('重新整理後仍在');
+    expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('更早的輪只剩摘要');
+    expect(TRACE_STRUCTURED_LIMITS.decisions).not.toContain('只記在這個分頁');
     expect(Object.keys(TRACE_LIMITS)).toEqual(['turns', 'decisions', 'loaded', 'absent']);
   });
 });

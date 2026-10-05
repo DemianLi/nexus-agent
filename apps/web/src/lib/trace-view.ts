@@ -121,11 +121,12 @@ export const TRACE_LIMITS = {
 } as const;
 
 /**
- * 結構化模式的限制。**決定那一條原樣留著**（#1029 還沒合，行為沒變，測試仍釘住它）；切輪那一條拿掉；其餘兩條照現況改寫。
+ * 結構化模式的限制。切輪那一條拿掉；決定那一條改寫（核准的問與答已落成日誌事件，重新整理後仍在）；其餘兩條照現況改寫。
  * 鍵與第 0 版相同，所以畫面與測試用同一個 `data-limit`。
  */
 export const TRACE_STRUCTURED_LIMITS = {
-  decisions: TRACE_LIMITS.decisions,
+  decisions:
+    '核准的結局（允許一次、已拒絕、已取消、無法回答）與等了多久來自軌跡，重新整理後仍在，但只有軌跡窗口內的輪看得到（更早的輪只剩摘要）；沒有結局的核准是還沒回答、或停在那裡就關掉了。問答與計劃審核的回答不在軌跡裡，政策或沒有管道擋下的核准只看得到那張工具卡的錯誤碼。',
   loaded:
     '內文只列出已載入的對話。軌跡只帶最近幾輪的逐次呼叫結構，更早的輪只剩一行摘要；已載入但落在窗口之前的對話，仍以人說的那一句切開。',
   absent:
@@ -687,9 +688,16 @@ function snapshotRowParts(
 /** 結構化模式：條目歸進投影的輪與呼叫，再把投影的結構列（呼叫、重試、提醒）照順序插進去。 */
 function structuredTurns(
   state: ConversationState,
-  items: readonly Item[],
+  allItems: readonly Item[],
   view: TrajectoryView,
 ): TraceModel {
+  const answered = answeredApprovals(view);
+  // 軌跡已經有這顆核准的結局（工具名、結局、等多久）：本地那一列說的是同一件事，留著就是同一個決定出現兩次。
+  // 只擋「一個動作」的決定：一顆中斷若同時問了好幾個動作，軌跡那一格只有一個工具名，本地那一列才說得全。
+  const items = allItems.filter(
+    ({ entry }) =>
+      !(entry.kind === 'decision' && entry.actions.length === 1 && answered.has(entry.id)),
+  );
   const index = indexView(view);
   const snapshots = snapshotsOf(state);
   const slots = assignSlots(
@@ -826,6 +834,20 @@ function structuredTurns(
     ).map(({ head, key, seq }) => ({ ...head, key, seq })),
     omitted: view.omitted,
   };
+}
+
+/** 軌跡裡已經有結局的核准中斷，換算成本地決定列的 id（`decision-<中斷 id>`）。 */
+function answeredApprovals(view: TrajectoryView): ReadonlySet<string> {
+  const ids = new Set<string>();
+  for (const turn of view.turns)
+    for (const decision of turn.decisions)
+      if (
+        decision.kind === 'interrupt' &&
+        decision.id !== undefined &&
+        decision.approval?.outcome !== undefined
+      )
+        ids.add(`decision-${decision.id}`);
+  return ids;
 }
 
 function withToolFact(row: TraceRow, index: ViewIndex): TraceRow {
