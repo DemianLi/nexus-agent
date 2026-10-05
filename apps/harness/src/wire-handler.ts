@@ -40,6 +40,8 @@ import type {
   SlashRunResult,
   ThreadHistoryQuery,
   ThreadHistoryResponse,
+  TrajectoryTurnDetail,
+  TrajectoryTurnResponse,
   ThreadHistoryResult,
   ThreadListResponse,
   ThreadSearchResponse,
@@ -78,6 +80,9 @@ import {
   SUBAGENT_AT_CAPACITY,
   SUBAGENT_CLOSED,
   SUBAGENT_NOT_FOUND,
+  TRAJECTORY_PROJECTION,
+  trajectoryTurnPath,
+  TURN_NOT_FOUND,
   SUBAGENT_SEND_METHOD,
   isSlashMethod,
   isWireChannel,
@@ -94,7 +99,7 @@ import type {
   SessionLog,
   SessionRegistry,
 } from '@nexus/core';
-import { FEEDBACK_CATEGORIES } from '@nexus/core';
+import { FEEDBACK_CATEGORIES, ProjectionDetailError } from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createCommandExecutor } from '@nexus/plugin-commands';
@@ -404,6 +409,12 @@ function json(body: unknown, status = 200): Response {
   });
 }
 
+/**
+ * 軌跡按需細節認的子代理編號（前景的是 `tools:<uuid>`，背景的是 `bg-<hex>`），當檔名的一段用之前先過這一關：
+ * 不含路徑分隔符與點，長度有上限。**不只認背景的**——軌跡投影（#1070）連前景子代理也展開了。
+ */
+const SUBAGENT_RUN_ID = /^[A-Za-z0-9][A-Za-z0-9:_-]{0,127}$/;
+
 /** 一頁歷史的三個查詢參數（root 的與背景子代理的共用）；不是整數就回現成的 `invalid_argument` 回應。 */
 function historyQueryOf(search: URLSearchParams): ThreadHistoryQuery | Response {
   const query: ThreadHistoryQuery = {};
@@ -432,6 +443,7 @@ function parsePath(
   | { readonly kind: 'stream'; readonly threadId: string }
   | { readonly kind: 'history'; readonly threadId: string }
   | { readonly kind: 'subagent-history'; readonly threadId: string; readonly runId: string }
+  | { readonly kind: 'trajectory-turn'; readonly threadId: string }
   | { readonly kind: 'file-references'; readonly threadId: string }
   | { readonly kind: 'session-references'; readonly threadId: string }
   | { readonly kind: 'changes-summary'; readonly threadId: string }
@@ -456,6 +468,9 @@ function parsePath(
     segments[4] === 'history'
   ) {
     return { kind: 'subagent-history', threadId, runId: decodeURIComponent(segments[3]) };
+  }
+  if (segments.length === 4 && pathname === trajectoryTurnPath(threadId)) {
+    return { kind: 'trajectory-turn', threadId };
   }
   if (segments.length === 3 && pathname === fileReferencesPath(threadId)) {
     return { kind: 'file-references', threadId };
@@ -1542,6 +1557,79 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   }
 
   /**
+   * `GET /threads/:id/trajectory/turn?seq=|messageId=[&runId=]`（[#1083](https://github.com/DemianLi/nexus-agent/issues/1083)）：
+   * 軌跡某個邏輯輪的細節，契約見 `trajectoryTurnPath`。**這裡只負責找到日誌與單元、把錨點交下去、把結果與失敗翻成封包**；
+   * 折疊本身是軌跡投影單元的 `detail`（同一個 `apply`），所以 host 不依賴軌跡插件，沒掛它就是 `not_supported`。
+   *
+   * **經 `threadFor`，同 `handleHistory`**：要的是這條 thread 組裝裡的投影單元，web 看觀測分頁之前這條 thread 已經建起來了。
+   * 日誌的來源跟歷史頁同一套：root 讀記憶體裡那份（含 seed 與還沒落盤的）；子代理先讀 live 的，沒有就冷讀落盤的。
+   */
+  async function handleTrajectoryTurn(
+    threadId: string,
+    search: URLSearchParams,
+  ): Promise<Response> {
+    const runId = search.get('runId');
+    const seq = search.get('seq');
+    const messageId = search.get('messageId');
+    if (runId === null && seq === null && messageId === null) {
+      return json(
+        errorResponse(null, 'invalid_argument', '要給 seq 或 messageId（背景子代理可只給 runId）'),
+      );
+    }
+    const thread = await threadOrError(threadId, null);
+    if (thread instanceof Response) return thread;
+    const unit = thread.pump.projectionUnits.find((each) => each.key === TRAJECTORY_PROJECTION);
+    if (unit?.detail === undefined) {
+      return json(errorResponse(null, 'not_supported', '這台 server 沒掛軌跡投影，沒有可拉的細節'));
+    }
+    let events: readonly SessionEvent[] | undefined;
+    if (runId === null) {
+      events = thread.pump.sessionLog.events;
+    } else {
+      if (!SUBAGENT_RUN_ID.test(runId)) {
+        return json(errorResponse(null, SUBAGENT_NOT_FOUND, `沒有編號 ${runId} 的子代理`));
+      }
+      events = thread.pump.sessions.get({ kind: 'subagent', runId })?.events;
+      if (events === undefined) {
+        try {
+          events = await options.readSubagentSession?.(threadId, runId);
+        } catch (error: unknown) {
+          options.warn?.(
+            `[軌跡] thread ${threadId} 的子代理 ${runId} 讀不出來：${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      if (events === undefined) {
+        return json(errorResponse(null, SUBAGENT_NOT_FOUND, `沒有編號 ${runId} 的子代理`));
+      }
+    }
+    try {
+      const result = unit.detail(events, {
+        ...(seq === null ? {} : { seq }),
+        ...(messageId === null ? {} : { messageId }),
+      });
+      // 單元的 `detail` 回 `unknown`（host 不知道各單元的形狀）；軌跡這一個的形狀由 `@nexus/wire` 的 `TrajectoryTurnDetail` 定。
+      return json({
+        type: 'success',
+        result: result as TrajectoryTurnDetail,
+      } satisfies TrajectoryTurnResponse);
+    } catch (error: unknown) {
+      if (error instanceof ProjectionDetailError) {
+        return json(
+          errorResponse(
+            null,
+            error.kind === 'not-found' ? TURN_NOT_FOUND : 'invalid_argument',
+            error.message,
+          ),
+        );
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      options.warn?.(`[軌跡] thread ${threadId} 折不出細節：${reason}`);
+      return json(errorResponse(null, 'unknown_error', `軌跡折不出來：${reason}`));
+    }
+  }
+
+  /**
    * `GET /threads/:id/file-references?query=`（[#651](https://github.com/DemianLi/nexus-agent/issues/651)）：`@` 後面那一段的候選。
    * 契約見 `@nexus/wire` 的 `file-references.ts`，查法與圍堵見 `file-references.ts`。
    *
@@ -1887,6 +1975,11 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         if (request.method !== 'GET') return new Response('not found', { status: 404 });
         if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
         return handleSubagentHistory(route.threadId, route.runId, searchParams);
+      }
+      if (route?.kind === 'trajectory-turn') {
+        if (request.method !== 'GET') return new Response('not found', { status: 404 });
+        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+        return handleTrajectoryTurn(route.threadId, searchParams);
       }
       if (route?.kind === 'file-references') {
         if (request.method !== 'GET') return new Response('not found', { status: 404 });

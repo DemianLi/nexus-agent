@@ -351,6 +351,7 @@ export {
   childProjectionUnits,
   createProjectionFold,
   normalizeProjectionUnit,
+  ProjectionDetailError,
   PROJECTION_KEY_PATTERN,
 } from './projections.js';
 export type { TokenUsageTotals } from './token-usage.js';

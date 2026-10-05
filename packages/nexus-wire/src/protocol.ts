@@ -33,6 +33,7 @@ import type {
 } from '@nexus/core/src/feedback.ts';
 
 import { isDeliverableMethod } from './deliverables.js';
+import type { TrajectoryTurnDetail } from './trajectory.js';
 import type { DeliverableMethod } from './deliverables.js';
 
 export type {
@@ -291,9 +292,13 @@ export const SUBAGENT_AT_CAPACITY = 'subagent_at_capacity';
 /** 背景子代理的載體已經關閉（這條 thread 正在拆）。 */
 export const SUBAGENT_CLOSED = 'subagent_closed';
 
+/** 按需拉軌跡的某一輪（{@link trajectoryTurnPath}），錨點在日誌裡沒有對應的輪。 */
+export const TURN_NOT_FOUND = 'turn_not_found';
+
 /** 這條線上的錯誤碼：協定的那十個，加上我們自己的命令用到的。 */
 export type WireErrorCode =
   | ErrorCode
+  | typeof TURN_NOT_FOUND
   | typeof QUEUE_ITEM_NOT_FOUND
   | typeof STEER_UNAVAILABLE
   | typeof SUBAGENT_NOT_FOUND
@@ -755,6 +760,25 @@ export function subagentHistoryPath(threadId: string, runId: string): string {
   return `/threads/${encodeURIComponent(threadId)}/subagents/${encodeURIComponent(runId)}/history`;
 }
 
+/**
+ * `GET /threads/:id/trajectory/turn?seq=|messageId=[&runId=]`——軌跡的某一個邏輯輪的細節
+ * （[#1083](https://github.com/DemianLi/nexus-agent/issues/1083)）。
+ *
+ * 軌跡投影只推有界的骨架（每輪一筆摘要），逐呼叫、逐工具的細節由客戶端帶著錨點來要。照 dsh 的形狀：投影只推小而有界的整份值，
+ * 細節走 seq 錨點按需拉（`loadThrough(seq)`）。**偏離**：dsh 拉的是事件頁、由客戶端自己折；我們的軌跡是伺服端折疊的投影，
+ * 客戶端沒有折疊器，所以回的是伺服端折好的結果（形狀 {@link TrajectoryTurnDetail}）。
+ *
+ * - 錨點 `seq` 或 `messageId` 二擇一（都給或都沒給是 `invalid_argument`）；`runId` 可選，給了就在那個子代理（前景或背景，軌跡投影兩種都展開）自己的日誌裡找。
+ * - 錨點落在 resume 輪上，回的仍是整個邏輯輪。
+ * - 錨點在日誌裡沒有對應的輪：{@link TURN_NOT_FOUND}。`runId` 長得不對、不是這條 thread 派的、日誌讀不到：{@link SUBAGENT_NOT_FOUND}，
+ *   不細分。這份組裝沒掛軌跡投影：`not_supported`。
+ * - **經 `threadFor`**（同 {@link historyPath}）：要的是這條 thread 組裝裡的軌跡投影單元；子代理的日誌 live 的讀記憶體、沒有就冷讀落盤的。
+ * - 認證同歷史頁（會話認證）。允許並行請求，回應不保證順序。**GET 也要帶 `content-type: application/json`**，理由同 {@link THREADS_PATH}。
+ */
+export function trajectoryTurnPath(threadId: string): string {
+  return `/threads/${encodeURIComponent(threadId)}/trajectory/turn`;
+}
+
 /** 一頁歷史的則數上限，同 dsh 的預設（`history.ts:38`）。 */
 export const HISTORY_PAGE_MESSAGES = 50;
 
@@ -865,6 +889,10 @@ export interface ThreadHistoryResult {
 /** `GET /threads/:id/history` 的回應。錯誤分層同 {@link ThreadListResponse}。 */
 export type ThreadHistoryResponse =
   { readonly type: 'success'; readonly result: ThreadHistoryResult } | ErrorResponse;
+
+/** `GET /threads/:id/trajectory/turn` 的回應。 */
+export type TrajectoryTurnResponse =
+  { readonly type: 'success'; readonly result: TrajectoryTurnDetail } | ErrorResponse;
 
 /**
  * 上行：協定只在 WebSocket 那條路上指定怎麼送 `Command`，HTTP 這格是空的。
