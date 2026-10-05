@@ -110,6 +110,16 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 - **結果的呈現由 adapter 決定。** 文字與圖片進 `content`、embedded resource 進 `artifact`
   是 `@langchain/mcp-adapters` 的預設，我們不改。dsh 那套「圖片要先證明這條 model route
   真的收圖片才落地」在這裡沒有對應物。
+- **server 回 `isError` 時，plugin 把它拋回去。** `@langchain/mcp-adapters` 2.0.0 在有 `tool_call_id`
+  時不拋，回一則 `status: 'error'` 的訊息、文字是 server 的原文；1.x 是拋 `ToolException`。plugin 在每個
+  工具外面把前者改回拋，錯誤才走圍堵（`containment.ts`）那條出口，模型看到 `Error: 工具 … 執行失敗：<原文>`
+  ——Chat Completions 轉換器只送 content，前綴不在文字裡模型就分不出這是失敗（照 dsh 的 `throw new Error(text)`）。
+- **不處理 server 的 elicitation（向使用者追問）。** 2.0.0 對現代協定的 server 預設開啟，問到時走 LangGraph
+  interrupt、等一次 resume；nexus 沒有這條 resume 路徑，所以每個連線一律 `elicitation: false`，這種呼叫
+  當作工具失敗。舊協定的 server 要問需要 `onElicitation`，我們不給，所以它不會宣告這個能力。現代協定的
+  elicitation **沒有被測**：測試用的假 server 走舊協定。
+- **工具的參數 schema 原樣送給模型。** 2.0.0 不再簡化 server 公告的 JSON Schema，`anyOf`、可為 null 與
+  `$schema` 都會帶到供應商。收不收由供應商決定；見 #1074 的實跑紀錄。
 - **子行程的 stderr 直接接到父行程。** 這是 MCP 的慣例（server 的診斷要看得到），代價是
   一台吵的 server 會把 CLI 的輸出洗掉。
 - **正規化過的名字只在 nexus 內部一致。** 指紋是我們自己算的（`sha256("<serverName> <rawName>")` 取前 12 位），dsh 的 preimage 沒有公開，Claude Code 與 Codex 也各有各的算法。所以同一支

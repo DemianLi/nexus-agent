@@ -42,7 +42,7 @@
  * 時間、分類、措辭。我們**只做後兩件**，理由是前一件基座已經做了——工具上的
  * `defaultConfig: { timeout }` 會被 `ensureConfig` 變成 `AbortSignal.timeout(ms)` 併進
  * `signal`（`@langchain/core@1.2.9` 的 `runnables/config.js:100-120`，實測），而我們樹上
- * 唯一有預算的 MCP 工具走的正是這條（`@langchain/mcp-adapters` 的 `tools.js:450`）。
+ * 唯一有預算的 MCP 工具走的正是這條（`@langchain/mcp-adapters` 的 `tools.js` 的 `defaultConfig: { timeout }`）。
  * 一個只剩措辭的 plugin 沒有東西可武裝，而且照 [#159](https://github.com/DemianLi/nexus-agent/issues/159)
  * 的結論，圍堵旁邊的行為藏在選配 plugin 裡等於沒有。**載體丟掉，紀律照抄**：分類
  * （它是超時，不是一般失敗）與射程（只作用在這次工具呼叫，不動整場 run）。

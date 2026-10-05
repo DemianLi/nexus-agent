@@ -28,4 +28,12 @@ server.registerTool(
   ({ project }) => ({ content: [{ type: 'text', text: `${project}：${CHANGELOG}` }] }),
 );
 
+// MCP 的 `isError`：工具本身失敗（不是協定層的錯）。agent 看到的要帶 `Error: ` 前綴、`status: 'error'`，與其他失敗的工具一致
+// （#1074：adapter 2.0.0 預設直接回沒有前綴的錯誤訊息，要在 plugin 裡補回）。
+export const FAILURE_TEXT = 'upstream exploded: 503';
+server.registerTool('fail', { description: '一定失敗，回 isError。', inputSchema: {} }, () => ({
+  isError: true,
+  content: [{ type: 'text', text: FAILURE_TEXT }],
+}));
+
 await server.connect(new StdioServerTransport());

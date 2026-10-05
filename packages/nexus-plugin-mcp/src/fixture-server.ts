@@ -36,6 +36,29 @@ server.registerTool(
   () => ({ content: [{ type: 'text', text: 'pong' }] }),
 );
 
+/** `fail` 回的錯誤原文。 */
+export const FAILURE_TEXT = 'upstream exploded: 503';
+
+// server 自己說「失敗了」（`isError`），不是協定層的錯。adapter 2.0.0 對這種結果回 `status: 'error'` 的訊息、不拋，
+// 文字是原文沒有前綴（#1074）；這一支讓外掛層的測試釘住「我們把它變回拋錯」。
+server.registerTool('fail', { description: '一定失敗，回 isError。', inputSchema: {} }, () => ({
+  isError: true,
+  content: [{ type: 'text', text: FAILURE_TEXT }],
+}));
+
+// 欄位可為 null、又有可省略的聯集：2.0.0 起 adapter 不再簡化 schema，`anyOf` 與 `$schema` 原樣送給模型供應商。
+server.registerTool(
+  'nullable_args',
+  {
+    description: '收一個可為 null 的字串與一個字串或數字的聯集。',
+    inputSchema: {
+      label: z.string().nullable().describe('標籤，可為 null'),
+      value: z.union([z.string(), z.number()]).optional().describe('字串或數字'),
+    },
+  },
+  ({ label, value }) => ({ content: [{ type: 'text', text: JSON.stringify({ label, value }) }] }),
+);
+
 /** 一張 1×1 的 PNG，base64。`snapshot` 回它。 */
 export const SNAPSHOT_PNG =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';

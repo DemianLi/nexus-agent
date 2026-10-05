@@ -18,6 +18,7 @@
  * `@langchain/mcp-adapters` 這個獨立套件。修訂隨本 PR 一併落地。
  */
 
+import { ToolMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
 import type { Connection } from '@langchain/mcp-adapters';
@@ -159,9 +160,10 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     try {
       for (const tool of await client.getTools()) {
         // 改的是**註冊給模型看的**名字。`tools/call` 送上線的是 adapter 在建這個工具時
-        // 就閉包住的 raw name（`dist/tools.js:456`），不是這個欄位——所以改它不會讓
+        // 就閉包住的 raw name（`convertMcpTools` 裡的 `toolName: tool.name`），不是這個欄位——所以改它不會讓
         // 呼叫送到不存在的工具上。
         tool.name = publicToolName(serverName, tool.name);
+        throwOnToolError(tool);
         registered.push(registry.tools.register(tool as StructuredTool));
       }
     } catch (error) {
@@ -197,6 +199,35 @@ export function createMcpPlugin(options: McpPluginOptions): PluginEntry {
   return { plugin: mcpPlugin, config: options };
 }
 
+/**
+ * 把 server 回的 `isError` 結果改成**拋**，照 dsh（`throw new Error(text)`）。
+ *
+ * adapter 2.0.0 在有 `tool_call_id` 時不拋，回一則 `status: 'error'` 的 `ToolMessage`，文字是 server 給的原文、
+ * 沒有前綴；1.1.4 是拋 `ToolException`。回訊息的話不經過圍堵（`containment.ts`）那條「拋錯 → `Error: 工具 … 執行失敗：`」
+ * 的路，而 Chat Completions 的轉換器只送 content，模型就只看到一段裸文字，分不出這是失敗。拋回去，
+ * 失敗的格式（前綴、`status: 'error'`、日誌事件）就跟其他工具共用同一個出口。
+ */
+function throwOnToolError(tool: StructuredTool): void {
+  const inner = (tool as unknown as { func: (...args: unknown[]) => Promise<unknown> }).func;
+  (tool as unknown as { func: typeof inner }).func = async (...args) => {
+    const result = await inner.call(tool, ...args);
+    const message = Array.isArray(result) ? result[0] : result;
+    if (ToolMessage.isInstance(message) && message.status === 'error') {
+      throw new Error(textOf(message.content));
+    }
+    return result;
+  };
+}
+
+/** 一則訊息 content 裡的文字塊，換行接起來。 */
+function textOf(content: ToolMessage['content']): string {
+  if (typeof content === 'string') return content;
+  return content
+    .map((block) => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
+    .filter((text) => text !== '')
+    .join('\n');
+}
+
 /** 把我們的連線設定翻成 adapter 收的形狀。 */
 function toAdapterConnection(config: McpConfig): Connection {
   const timeout = config.toolCallTimeoutMs;
@@ -212,6 +243,10 @@ function toAdapterConnection(config: McpConfig): Connection {
       // （`getDefaultEnvironment()`，六個名字）決定，語系與代理都到不了子行程。
       env: { ...scrubbedParentEnv(), ...connection.env },
       ...(connection.cwd !== undefined && { cwd: connection.cwd }),
+      // 2.0.0 的現代協定 server 要問使用者（elicitation）時，預設走 LangGraph interrupt，等一次 resume。nexus 沒有這條
+      // resume 路徑（ask-user 是另一套），開著會讓那一輪停在沒人接的 interrupt 上。關掉之後 adapter 把這種呼叫當工具失敗，
+      // 走一般的錯誤出口。舊協定 server 要問的話需要 `onElicitation`，我們不給，所以它不會宣告這個能力。
+      elicitation: false,
       defaultToolTimeout: timeout,
     };
   }
@@ -219,6 +254,7 @@ function toAdapterConnection(config: McpConfig): Connection {
     transport: 'http',
     url: connection.url,
     ...(connection.headers !== undefined && { headers: { ...connection.headers } }),
+    elicitation: false,
     defaultToolTimeout: timeout,
   };
 }
