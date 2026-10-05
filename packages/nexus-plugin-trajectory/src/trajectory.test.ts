@@ -15,7 +15,7 @@ import {
   SessionLog,
   toLoggedMessage,
 } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
+import type { ApprovalOutcome, SessionEvent } from '@nexus/core';
 import {
   TRAJECTORY_CALL_TOOLS_CAP,
   TRAJECTORY_DETAIL_TURNS,
@@ -24,7 +24,7 @@ import {
   TRAJECTORY_TURN_CALLS_CAP,
   TRAJECTORY_TURN_LIST_CAP,
 } from '@nexus/wire';
-import type { TrajectoryView } from '@nexus/wire';
+import type { TrajectoryApprovalOutcome, TrajectoryView } from '@nexus/wire';
 import { trajectoryPlugin } from './index.js';
 import {
   applyTrajectory,
@@ -747,5 +747,92 @@ describe('沒有 turn/start 的日誌：前景子代理（#1070）', () => {
       ['trajectory', true],
       ['request-snapshots', true],
     ]);
+  });
+});
+
+describe('核准的問題掛在它的中斷列上（#1029）', () => {
+  const interruptRows = (view: TrajectoryView) =>
+    view.turns
+      .flatMap((turn) => turn.decisions)
+      .filter((decision) => decision.kind === 'interrupt');
+
+  /** 停在核准點的一輪，後面接（或不接）回答它的那一輪。 */
+  function askedLog(): SessionLog {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '動手' });
+    log.append('tool/call', call('c1', 'alpha'));
+    log.append('interrupt/raised', { interruptId: 'i-1' });
+    log.append('approval/asked', {
+      id: 'i-1',
+      toolName: 'alpha',
+      callId: 'c1',
+      reason: '要人看過',
+    });
+    log.append('turn/end', {});
+    return log;
+  }
+
+  it('asked 之後還沒有 decided：approval 只有工具與呼叫，沒有 outcome（還在等，不是推一個結果）', () => {
+    const [row] = interruptRows(foldAll(askedLog().events));
+    expect(row).toMatchObject({
+      kind: 'interrupt',
+      id: 'i-1',
+      approval: { tool: 'alpha', callId: 'c1' },
+    });
+    expect(row).not.toHaveProperty('approval.outcome');
+    // 發問的人話不上線（只有結構化欄位，#1018 Q3）。
+    expect(JSON.stringify(row)).not.toContain('要人看過');
+  });
+
+  it('decided 落在回答它的那一輪（resume），結局回填到前一輪的中斷列上，帶 decidedAt', () => {
+    const log = askedLog();
+    log.append('turn/start', { kind: 'resume' });
+    const decided = log.append('approval/decided', { id: 'i-1', outcome: 'rejected' });
+    log.append('tool/result', { callId: 'c1', isError: true });
+    log.append('turn/end', {});
+    const view = foldAll(log.events);
+    expect(interruptRows(view)).toHaveLength(1);
+    expect(interruptRows(view)[0]).toMatchObject({
+      approval: { tool: 'alpha', outcome: 'rejected', decidedAt: decided.time },
+    });
+  });
+
+  it('問答中斷（沒有 approval/asked）沒有 approval；不必問人的那一對（沒有中斷）不長中斷列', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '問' });
+    log.append('interrupt/raised', { interruptId: 'q-1' });
+    log.append('turn/end', {});
+    log.append('turn/start', { kind: 'message', text: '再來' });
+    // 政策關掉：圖內一次寫一對，id 是新產的，沒有任何中斷認領它。
+    log.append('approval/asked', { id: 'x-1', toolName: 'alpha', callId: 'c2' });
+    log.append('approval/decided', { id: 'x-1', outcome: 'rejected' });
+    log.append('turn/end', {});
+    const rows = interruptRows(foldAll(log.events));
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ kind: 'interrupt', id: 'q-1' });
+    expect(rows[0]).not.toHaveProperty('approval');
+  });
+
+  it('認不得的結局、缺欄位的事件不動狀態；對不上 id 的 decided 也不動', () => {
+    const log = askedLog();
+    log.append('turn/start', { kind: 'resume' });
+    foreign(log, 'approval/decided', { id: 'i-1', outcome: 'maybe' });
+    log.append('approval/decided', { id: 'someone-else', outcome: 'allowed-once' });
+    log.append('turn/end', {});
+    const [row] = interruptRows(foldAll(log.events));
+    expect(row).not.toHaveProperty('approval.outcome');
+  });
+
+  it('wire 的結局詞彙與 core 的 ApprovalOutcome 是同一組（兩邊各寫一份，這裡釘住）', () => {
+    const fromCore: readonly ApprovalOutcome[] = [
+      'allowed-once',
+      'rejected',
+      'cancelled',
+      'unavailable',
+    ];
+    const fromWire: readonly TrajectoryApprovalOutcome[] = fromCore;
+    // 雙向可賦值：少一邊多一值，其中一行就編不過。
+    const back: readonly ApprovalOutcome[] = fromWire;
+    expect(back).toEqual(fromCore);
   });
 });

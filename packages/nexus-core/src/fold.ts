@@ -455,11 +455,14 @@ export function foldRegistry(
   // 誰叫而變，變的是問不問得到人。無狀態，一份走遍每個子代理。
   //
   // **偏離（登記）**：dsh 另把 `approval/policy: never`（`source: 'delegation'`）寫進子代理的日誌；
-  // 我們不記。root 的核准政策今天也不進日誌（見 {@link ./approval.ts} 的 `createApprovalGateMiddleware`），
-  // 這是跟 root 現況一致，不是新開的缺口。
-  const subagentApprovalGate = createApprovalGateMiddleware(registry.approvals.listeners(), {
-    kind: 'policy-never',
-  });
+  // 我們不記。root 的核准政策今天也不進日誌，這是跟 root 現況一致，不是新開的缺口。子代理每次被擋仍寫一對
+  // `approval/asked`＋`approval/decided`（`rejected`）進自己的日誌（#1029），碼是 `APPROVAL_POLICY_NEVER`，
+  // 所以「這個子代理的核准一律被拒」從每一次被擋讀得出來。
+  const subagentApprovalGate = createApprovalGateMiddleware(
+    registry.approvals.listeners(),
+    { kind: 'policy-never' },
+    registry.sessions,
+  );
   const subagentDelegation = createSubagentDelegationMiddleware();
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(registry, options);
@@ -883,7 +886,7 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
     }),
     hasCheckpointer: options.checkpointer !== undefined && options.checkpointer !== false,
   });
-  return createApprovalGateMiddleware(registry.approvals.listeners(), channel);
+  return createApprovalGateMiddleware(registry.approvals.listeners(), channel, registry.sessions);
 }
 
 /**

@@ -34,7 +34,7 @@ export const TRAJECTORY_PROJECTION = 'trajectory';
 export const REQUEST_SNAPSHOTS_PROJECTION = 'request-snapshots';
 
 /** `trajectory` 的 `stateVersion`：折疊語意或 view 形狀一變就升。 */
-export const TRAJECTORY_VERSION = 2;
+export const TRAJECTORY_VERSION = 3;
 /** `request-snapshots` 的 `stateVersion`。 */
 export const REQUEST_SNAPSHOTS_VERSION = 1;
 
@@ -208,7 +208,38 @@ export type TrajectoryDecision =
       readonly cutoffIndex: number;
       readonly messagesBefore: number;
     }
-  | { readonly kind: 'interrupt'; readonly seq: number; readonly time: number };
+  | {
+      readonly kind: 'interrupt';
+      readonly seq: number;
+      readonly time: number;
+      /** 這顆中斷的 id（`interrupt/raised.interruptId`）。**選填**：v3 以前的值沒有它。 */
+      readonly id?: string;
+      /**
+       * 這顆中斷是一個**核准問題**時才有（#1029，`approval/asked` 與它的結局）；問答那一種（`ask_user_question`、計劃審核）
+       * 與沒記過 `approval/*` 的舊日誌沒有這一格，**缺席不是「沒有核准」**，只是這份日誌答不出。
+       */
+      readonly approval?: TrajectoryApproval;
+    };
+
+/** 結局的詞彙，同 `@nexus/core` 的 `ApprovalOutcome`（dsh 的 `ApprovalOutcome`）。`plugin-trajectory` 的測試釘兩邊一致。 */
+export type TrajectoryApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
+
+/**
+ * 一個核准問題。**只有結構化欄位**，不帶發問的人話（那在對話的核准卡上，且可能夾著工具參數的片段）。
+ *
+ * 配對是 `approval/asked` 與 `approval/decided` 靠同一個 id（人那條路上 id 就是中斷的 id）。**沒有 `outcome` ＝ 還在等，
+ * 或這一輪死在等的時候**：讀的人照「未決」表態，不要推一個結果。政策／無管道這類不必問人就確定的核准不在這裡
+ * （沒有人被擋下來等；它們的結局在那一次呼叫的錯誤碼 `APPROVAL_POLICY_NEVER`／`APPROVAL_NO_CHANNEL`）。
+ */
+export interface TrajectoryApproval {
+  /** 被問的工具名。 */
+  readonly tool: string;
+  /** 被問的那一次呼叫，配得上呼叫列的工具 id。基座沒給就缺席。 */
+  readonly callId?: string;
+  readonly outcome?: TrajectoryApprovalOutcome;
+  /** 結局落日誌的時刻（毫秒）；等多久自己和中斷的 `time` 相減。 */
+  readonly decidedAt?: number;
+}
 
 /** 超過單輪上限而被摺掉的結構數（只有真的摺過才出現）。計數（`callCount` 等）仍然包含它們。 */
 export interface TrajectoryElided {

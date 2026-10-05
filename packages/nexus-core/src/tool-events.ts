@@ -5,12 +5,13 @@
  * 寫它們的是{@link ./containment.ts | 圍堵}——只有第 0 格同時看得到內層拋出來的錯與內層
  * 回的錯誤訊息。見 [#264](https://github.com/DemianLi/nexus-agent/issues/264)。
  *
- * ## 碼照 dsh，而且只有這幾個
+ * ## 碼照 dsh，而且只有這幾個（核准被拒的四個是例外，見 {@link APPROVAL_REJECTED_BY_USER}）
  *
  * 字串逐字對過 `references/deepseek-harness`（SHA `c291e7961a515f6d7af9304e7fd1d257929aef26`）。
- * **一般拋錯與核准被拒沒有碼**：dsh 的 `errorInfo` 只替帶碼的 `HarnessError` 填這一格
+ * **一般拋錯沒有碼**：dsh 的 `errorInfo` 只替帶碼的 `HarnessError` 填這一格
  * （`packages/core/tools/src/index.ts:635-641`），其餘的錯誤結果不帶 `error`。所以「沒碼」是
- * 照抄，不是漏分類。**拋出 {@link HarnessError} 的有碼**，同 dsh：`{ name, code }` 原樣進
+ * 照抄，不是漏分類。**核准被拒不在這句裡**：dsh 的核准拒絕也沒碼，我們自 #1029 起多給四個，理由見 {@link APPROVAL_REJECTED_BY_USER}。
+ * **拋出 {@link HarnessError} 的有碼**，同 dsh：`{ name, code }` 原樣進
  * `tool/result`（`477b4f4` 的 `index.ts:661-668`；[#615](https://github.com/DemianLi/nexus-agent/issues/615)
  * 之前我們沒有這個基底類別，第一個用它的是 `@nexus/plugin-quickjs` 的 `CodeRunFailedError`）。
  *
@@ -92,6 +93,33 @@ export const INVALID_TOOL_OUTPUT = 'INVALID_TOOL_OUTPUT';
 export const TOOL_OUTCOME_UNKNOWN = 'TOOL_OUTCOME_UNKNOWN';
 /** 回覆裡要了、行程結束前還沒記到 `tool/call`。dsh 同檔 `:15` 的 `TOOL_NOT_STARTED`。 */
 export const TOOL_NOT_STARTED = 'TOOL_NOT_STARTED';
+
+/**
+ * 核准被拒的四個碼（[#1029](https://github.com/DemianLi/nexus-agent/issues/1029)）。**這四個是我們多出來的，dsh 沒有**：
+ * dsh 的核准拒絕（`packages/core/tools/src/index.ts:1744-1766`，`5badb15`）只回一則 `Error: <reason>`，不帶 `error.info`；
+ * 它分「人拒」與「政策拒」靠 `approval/policy` 事件。**登記的偏離**：依據是 demian 在 #1018 Q2（2026-10-04）拍板的
+ * 「拒絕帶原因碼」——這是產品要求，不是 dsh 的做法（#1029 卡上說 dsh 的拒絕帶 `error{name,code,reason}`，那是讀錯：
+ * dsh 的核准拒絕結果沒有這一格）。載體是 dsh `PreToolDecision` 的 `deny.info?: ToolErrorInfo`
+ * （「structured error identity」，dsh 自己沒用在核准上）：槽是 dsh 的，填法是我們的，所以不是新機制。
+ * 之後若要照 dsh 補 `approval/policy` 事件來分人拒與政策拒，是另一個決定（demian 定），補了這四個碼也不必拿掉。
+ *
+ * - {@link APPROVAL_REJECTED_BY_USER}：有人看過並按了拒絕。
+ * - {@link APPROVAL_POLICY_NEVER}：這個 session 關掉了核准，確定性拒絕，沒有人被問到。
+ * - {@link APPROVAL_NO_CHANNEL}：沒有可用的核准管道（沒有 checkpointer），沒有人被問到。
+ * - {@link TOOL_DENIED_BY_LISTENER}：某位 pre-execute listener 直接回了 `deny`（沒有問人）。哪一位看 `tool/result.message`。
+ */
+export const APPROVAL_REJECTED_BY_USER = 'APPROVAL_REJECTED_BY_USER';
+export const APPROVAL_POLICY_NEVER = 'APPROVAL_POLICY_NEVER';
+export const APPROVAL_NO_CHANNEL = 'APPROVAL_NO_CHANNEL';
+export const TOOL_DENIED_BY_LISTENER = 'TOOL_DENIED_BY_LISTENER';
+
+/** 核准拒絕的 {@link ToolErrorInfo}：三個核准的碼共用 `ApprovalDenied` 這個名字（`name` 是錯誤類別名，不是分類）。 */
+export function approvalDenied(
+  code:
+    typeof APPROVAL_REJECTED_BY_USER | typeof APPROVAL_POLICY_NEVER | typeof APPROVAL_NO_CHANNEL,
+): ToolErrorInfo {
+  return { name: 'ApprovalDenied', code };
+}
 
 /** 內層替自己產的錯誤訊息標上的碼。見檔頭「碼怎麼從內層走到外層」。 */
 const marked = new WeakMap<object, ToolErrorInfo>();

@@ -468,4 +468,15 @@ describe('請求快照不進遙測（#1020）', () => {
       log.events.filter((event) => !isMirroredEvent(event)).map((event) => event.type),
     ).toEqual(['request/system', 'request/header']);
   });
+
+  /**
+   * #1029：核准的問與答是審計事件，**沒被擋**——`reason` 跟 `tool/call` 的參數同級，都在鏡像的射程內。
+   * 這條釘住現況；哪天要擋，改 `isMirroredEvent` 並翻這條，不要只改 `approval/asked` 的說明。
+   */
+  it('approval/* 照鏡像（和 tool/call 同級，不在被擋的兩種裡）', () => {
+    const log = new SessionLog('thread-a');
+    log.append('approval/asked', { id: 'a1', toolName: 'take_note', reason: '看一下' });
+    log.append('approval/decided', { id: 'a1', outcome: 'allowed-once' });
+    expect(log.events.map((event) => isMirroredEvent(event))).toEqual([true, true]);
+  });
 });

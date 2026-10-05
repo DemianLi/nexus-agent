@@ -376,6 +376,11 @@ import type { SessionEvent } from './session-log.js';
  *   也照讀（同 dsh：`contextPressure` 連 `assistant/attempt` 的用量也取樣，那份請求真的送出去過），所以一台 32 的舊 runtime
  *   讀回這份日誌的畫面與新 runtime 一樣。判準同上：寫方寫出來的東西，舊 runtime 還能不能完整正確地處理——能。**沒有這幾格就是沒記**
  *   （這一版以前寫的，或供應商沒報），讀的人標「—」，不是 0。
+ * - **`approval/asked` 與 `approval/decided`**（[#1029](https://github.com/DemianLi/nexus-agent/issues/1029)）：核准的問與答各一顆，
+ *   新增的**種類**、都帶 `ignorable: true`。**不升**：判準同上（寫方寫出來的東西，舊 runtime 還能不能完整正確地處理）——能，
+ *   它們不進模型、不左右任何折疊，一台 32 的舊 runtime 讀回這份日誌時略過它們，畫面與新 runtime 只差側欄那一格。**沒有這兩顆
+ *   就是沒記**（這一版以前寫的），讀的人標「—」，不是「沒有人被問過」。同批：核准拒絕的 `tool/result.error` 多了
+ *   `APPROVAL_REJECTED_BY_USER` 等碼（`tool-events.ts`），`error` 本來就是選填，舊讀方照收。
  */
 export const SESSION_LOG_FORMAT_VERSION = 32;
 

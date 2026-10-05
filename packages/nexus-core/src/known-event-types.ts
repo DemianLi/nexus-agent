@@ -11,6 +11,8 @@
 
 /** 這一版認得的事件種類。 */
 export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
+  'approval/asked',
+  'approval/decided',
   'assistant/message',
   'command/done',
   'command/run',

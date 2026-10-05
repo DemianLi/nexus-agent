@@ -94,6 +94,7 @@ import {
   toLoggedMessage,
   turnReachedMaxTokens,
   withModelCall,
+  type ApprovalOutcome,
   type InboxSplice,
   type InboxState,
   type ProjectionFold,
@@ -1025,6 +1026,13 @@ export class ThreadPump {
    */
   readonly #pending = new Map<string, PendingInterrupt>();
   /**
+   * 已經記過 `approval/asked`、還欠一顆 `approval/decided` 的中斷 id（#1029）。
+   *
+   * 不能拿 {@link ThreadPump.#pending} 代替：回答收下的那一刻它就清掉了（`submit`），而 decided 要等這一輪的
+   * `turn/start` 落了才寫（審計要落在輪裡）。同 id 再度中斷（沒被答到的那些會帶著原本的 id 重來）時，靠它不重記 asked。
+   */
+  readonly #approvalOpen = new Set<string>();
+  /**
    * 最後一顆背景子代理現況的 frame（#867），**帶著它原本的號**。新接上的下行在註冊當下先收到它，見 {@link ThreadPump.subscribe}。
    * 沒有背景派出、或從沒變過就是 `undefined`。
    */
@@ -1791,6 +1799,8 @@ export class ThreadPump {
   async #withdraw(): Promise<void> {
     const log = this.#sessions.root;
     log.append('turn/start', { kind: 'resume' });
+    // 還欠決定的那幾顆核准問題，在這一輪裡收回（#1029）。
+    for (const id of [...this.#approvalOpen]) this.#noteApprovalDecided(id, undefined);
     const started = (name: string) => DELEGATION_TOOLS.includes(name);
     let dangling: { readonly id: string; readonly name: string }[];
     try {
@@ -2195,6 +2205,8 @@ export class ThreadPump {
       input = { ...input, text: referenced.text };
     }
     this.#sessions.root.append('turn/start', turnStartOf(input));
+    // 人的決定落在它回答的那一輪裡（審計要在輪內，#1029）。
+    if (input.kind === 'resume') this.#noteApprovalDecided(input.interruptId, input.response);
     // 領走：落在 `turn/start` 之後、叫模型之前，所以帶 `claimed` 的那顆推送一定比這一輪模型與工具的任何 frame 早。
     // 比它早的只有 `turn/start` 的訂閱者當場合成的 `custom`（清空待辦），同 dsh 的先後。
     //
@@ -2391,6 +2403,60 @@ export class ThreadPump {
     }
   }
 
+  /**
+   * 這顆中斷若是核准問題，記 `approval/asked`（#1029）。`id` 就是中斷的 id，之後的 `approval/decided` 靠它配對。
+   *
+   * **為什麼在這裡寫，不在核准閘門**：閘門在圖內，`interrupt()` 回來之後整顆 middleware 會從頭重跑，在它之前寫會寫成兩筆。
+   * 這裡每顆中斷只走一次——除了「沒被答到的那些會帶著原本的 id 再度中斷」，那一次靠 {@link ThreadPump.#approvalOpen} 擋掉。
+   *
+   * **只認明寫 `kind: 'approval'` 的**（同 {@link isApprovalSuspension}；線上每一顆都有寫，判別式缺席只是給舊測試的
+   * 向後相容）：問答（`ask_user_question`、計劃審核）不長這顆事件。核准閘門與在本體裡問人的 `request_sandbox_escalation`（#700）發的是同一個
+   * 形狀，所以兩者都算——那是刻意的：兩者都是「把一個放行與否的決定擺到人面前」。一顆中斷問幾件事都只記第一件，閘門與升級
+   * 工具今天都恆為一件。
+   */
+  #noteApprovalAsked(entry: InterruptEntry): void {
+    if (this.#approvalOpen.has(entry.id)) return;
+    const value = entry.value as { kind?: unknown; actionRequests?: unknown } | null;
+    if (value?.kind !== APPROVAL_INTERRUPT_KIND) return;
+    const first = (Array.isArray(value?.actionRequests) ? value.actionRequests : [])[0] as
+      { name?: unknown; callId?: unknown; description?: unknown } | undefined;
+    if (typeof first?.name !== 'string') return;
+    this.#approvalOpen.add(entry.id);
+    this.#sessions.root.append(
+      'approval/asked',
+      {
+        id: entry.id,
+        toolName: first.name,
+        ...(typeof first.callId === 'string' && first.callId !== ''
+          ? { callId: first.callId }
+          : {}),
+        ...(typeof first.description === 'string' ? { reason: first.description } : {}),
+      },
+      { ignorable: true },
+    );
+  }
+
+  /**
+   * 記 `approval/decided`（#1029），只對 {@link ThreadPump.#noteApprovalAsked} 記過的 id。
+   *
+   * @param id - 中斷的 id。
+   * @param response - 人的回覆（`{ decisions: [{ type }] }`）；`undefined` 是問題被收回（按了停止）。
+   *   看不懂的回覆**不記**：閘門收到它會拋（`approval.ts` 的「核准回覆看不懂」），沒有結局可言，那一對留著開著。
+   */
+  #noteApprovalDecided(id: string, response: unknown): void {
+    if (!this.#approvalOpen.delete(id)) return;
+    let outcome: ApprovalOutcome;
+    if (response === undefined) {
+      outcome = 'cancelled';
+    } else {
+      const type = (response as { decisions?: { type?: unknown }[] } | null)?.decisions?.[0]?.type;
+      if (type === 'approve') outcome = 'allowed-once';
+      else if (type === 'reject') outcome = 'rejected';
+      else return;
+    }
+    this.#sessions.root.append('approval/decided', { id, outcome }, { ignorable: true });
+  }
+
   /** 一顆原始封包 → 零到多顆線上的封包。 */
   *#translate(raw: RawProtocolEvent): Generator<Event> {
     if (raw.method === 'updates' && raw.params.node === '__interrupt__') {
@@ -2401,6 +2467,7 @@ export class ThreadPump {
         // **先記日誌、再蓋號**，同以前的先後：日誌的訂閱者同步送出的 frame 要拿比這顆小的號，否則這顆廣播出去時
         // 會被折疊器當成重複丟掉。
         this.#sessions.root.append('interrupt/raised', { interruptId: entry.id });
+        this.#noteApprovalAsked(entry);
         // **補送的是廣播出去的同一顆**，號也一樣：同 dsh 把原本那顆 frame 再送一次。
         const request = this.#seal({
           method: 'input.requested',

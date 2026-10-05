@@ -521,6 +521,8 @@ describe('什麼推得動 roundsStarted', () => {
       'turn/end',
       'turn/failed',
       'interrupt/raised',
+      'approval/asked',
+      'approval/decided',
       'goal/change',
       'model/usage',
       'model/start',
