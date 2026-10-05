@@ -239,3 +239,59 @@ describe('回覆底下的「這一輪的過程」→ 觀測分頁那一輪（#10
     expect(turnScrolls()).toBe(1);
   });
 });
+
+/** Radix 在卸載的下一個 tick 才還焦點（FocusScope 的 `setTimeout(0)`）。 */
+const settle = () =>
+  act(async () => void (await new Promise((resolve) => setTimeout(resolve, 20))));
+
+describe('窄螢幕抽屜：關掉後焦點交回按下去的那顆（#1034）', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: true,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+        }) as unknown as MediaQueryList,
+    );
+  });
+
+  it.each([
+    ['Esc', async () => fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' })],
+    [
+      '收起鈕',
+      async () =>
+        fireEvent.click(
+          within(screen.getByRole('dialog')).getByRole('button', { name: '收起右側欄' }),
+        ),
+    ],
+  ])('用 %s 關掉：焦點回到「這一輪的過程」', async (_name, close) => {
+    mount(scenario(), 'run-c');
+    await act(async () => {});
+    const opener = screen.getByRole('button', { name: '這一輪的過程' });
+    opener.focus();
+    fireEvent.click(opener);
+    await act(async () => {});
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    // 抽屜開著時焦點在那一輪的標題。
+    expect(document.activeElement).toBe(group(300)!.querySelector('[data-reveal-target]'));
+    await close();
+    await settle();
+    expect(screen.queryByRole('dialog')).toBeNull();
+    expect(document.activeElement).toBe(opener);
+  });
+
+  it('不是從按鈕打開的（標頭的開關鈕）：關掉後焦點回到開關鈕，不掉到 body', async () => {
+    mount(scenario(), 'run-c');
+    await act(async () => {});
+    const toggle = screen.getByRole('button', { name: '打開右側欄' });
+    toggle.focus();
+    fireEvent.click(toggle);
+    await act(async () => {});
+    fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+    await settle();
+    expect(document.activeElement).toBe(screen.getByRole('button', { name: '打開右側欄' }));
+  });
+});

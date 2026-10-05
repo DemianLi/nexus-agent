@@ -324,7 +324,7 @@ export function RightSidebarToggle({ className }: { className?: string }) {
  * 變了（版面、寬度、`sources`）才重畫，所以 `sources` 的身分要穩（`App` 用 `useMemo`），別把隨串流變的東西放進去。
  */
 export const RightSidebarPanel = memo(function RightSidebarPanel() {
-  const { layout, isMobile, width, locateFocus, update } = useControl();
+  const { layout, isMobile, width, locateFocus, returnFocus, toggle, update } = useControl();
   if (isMobile) {
     return (
       <Sheet
@@ -336,13 +336,20 @@ export const RightSidebarPanel = memo(function RightSidebarPanel() {
           showCloseButton={false}
           className="w-full gap-0 p-0 sm:max-w-none"
           data-testid="right-sidebar"
-          // 沒有 Trigger（受控開啟），焦點自己還（spec §8）：從觀測分頁定位時交給對話裡那一則，其餘照 Radix 預設。
+          // 沒有 Trigger（受控開啟），焦點自己還（spec §8）：從觀測分頁定位時交給對話裡那一則；其餘交回從哪裡打開的那顆
+          // （「查看全文」、「這一輪的過程」），不在了就交回標頭的開關鈕。Radix 的預設在沒有 Trigger 時什麼都不還，焦點掉到 body
+          // （實機量到，#1034）。
           onCloseAutoFocus={(event) => {
-            const target = locateFocus.current;
-            if (target === null) return;
-            locateFocus.current = null;
             event.preventDefault();
-            focusTranscriptItem(target);
+            const target = locateFocus.current;
+            if (target !== null) {
+              locateFocus.current = null;
+              focusTranscriptItem(target);
+              return;
+            }
+            const back = returnFocus.current;
+            returnFocus.current = null;
+            (back?.isConnected === true ? back : toggle.current)?.focus();
           }}
         >
           <SheetTitle className="sr-only">右側欄</SheetTitle>
@@ -471,10 +478,11 @@ function PanelContents() {
           onClick={() => {
             update((current) => setOpen(current, false));
             // 停靠時面板一藏，焦點就掉到 body；交回從哪裡打開的那顆（「查看全文」，#654），不在了就交回標頭的開關鈕。
-            // 覆蓋那一種由 Sheet 自己還焦點。
+            // 覆蓋那一種由 Sheet 的 `onCloseAutoFocus` 還焦點（要等抽屜真的關掉）。
+            if (isMobile) return;
             const back = returnFocus.current;
             returnFocus.current = null;
-            if (!isMobile) (back?.isConnected === true ? back : toggle.current)?.focus();
+            (back?.isConnected === true ? back : toggle.current)?.focus();
           }}
         >
           <PanelRightClose />
