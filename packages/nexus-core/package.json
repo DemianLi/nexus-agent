@@ -33,7 +33,7 @@
   },
   "dependencies": {
     "@langchain/core": "^1.2.9",
-    "@langchain/langgraph": "^1.4.10",
+    "@langchain/langgraph": "^1.4.13",
     "deepagents": "~1.13.1",
     "diff": "^9.0.0",
     "js-tiktoken": "^1.0.21",

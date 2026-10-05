@@ -22,7 +22,7 @@ import {
   mcpConfigSchema,
   mcpPlugin,
 } from './index.js';
-import { RELEASE_NOTE } from './fixture-server.js';
+import { FAILURE_TEXT, RELEASE_NOTE } from './fixture-server.js';
 import { publicToolName } from './names.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
@@ -146,6 +146,8 @@ describe('接上一台真的 MCP server', () => {
       expect([...registry.tools.effective().keys()]).toEqual([
         'mcp__fixture__fetch_release_note',
         expect.stringMatching(/^mcp__fixture__legacy_ping_[0-9a-f]{12}$/),
+        'mcp__fixture__fail',
+        'mcp__fixture__nullable_args',
         'mcp__fixture__snapshot',
         'mcp__fixture__read_env',
         'mcp__fixture__fetch_url',
@@ -190,6 +192,36 @@ describe('接上一台真的 MCP server', () => {
         { type: 'text', text: '[image unavailable: image/png; no attachment store is mounted]' },
         { type: 'text', text: '畫面之後' },
       ]);
+    } finally {
+      await dispose();
+    }
+  });
+
+  // adapter 2.0.0 對 server 回的 `isError` 不拋，回 `status: 'error'` 的訊息、文字是原文（#1074）。圍堵只替**拋出來**的
+  // 工具失敗補 `Error: 工具 … 執行失敗：`，回訊息會繞過它。兩種呼叫形狀都要拋：有 tool_call 的（agent 迴圈）與只給參數的。
+  it('server 回 isError：兩種呼叫形狀都拋，帶原文', async () => {
+    const { registry, dispose } = await loadPlugins([fixturePlugin()]);
+    try {
+      const fail = registry.tools.resolve('mcp__fixture__fail')?.value;
+      await expect(
+        fail?.invoke({ type: 'tool_call', id: 'call_fail', name: 'mcp__fixture__fail', args: {} }),
+      ).rejects.toThrow(FAILURE_TEXT);
+      await expect(fail?.invoke({})).rejects.toThrow(FAILURE_TEXT);
+    } finally {
+      await dispose();
+    }
+  });
+
+  // 釘住現況：2.0.0 不簡化 schema，供應商看到的就是 server 原樣公告的 `anyOf`／`$schema`。供應商若有一天不收，
+  // 這一條會是第一個指到那裡的絆索（真供應商的實跑見 #1074 的 PR 內文）。
+  it('可為 null 與聯集的參數：schema 原樣，呼叫也走得通', async () => {
+    const { registry, dispose } = await loadPlugins([fixturePlugin()]);
+    try {
+      const nullable = registry.tools.resolve('mcp__fixture__nullable_args')?.value;
+      const schema = JSON.stringify((nullable as unknown as { schema: unknown }).schema);
+      expect(schema).toContain('anyOf');
+      const text = String(await nullable?.invoke({ label: null, value: 3 }));
+      expect(JSON.parse(text)).toEqual({ label: null, value: 3 });
     } finally {
       await dispose();
     }
