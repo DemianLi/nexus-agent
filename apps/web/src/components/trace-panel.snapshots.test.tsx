@@ -162,4 +162,22 @@ describe('觀測分頁：呼叫列的系統提示詞、取樣設定與工具清�
     );
     expect(await axeViolations(container)).toEqual([]);
   });
+
+  it('呼叫沒有正常回來：標題列寫失敗或已中止，展開多一行「結果」；正常的沒有', async () => {
+    mountWith({ system: [], header: [] }, { outcome: 'error' });
+    await act(async () => {});
+    expect(screen.getByTestId('trace-call-outcome').textContent).toContain('失敗');
+    fireEvent.click(screen.getByRole('button', { name: /^模型呼叫 #1/ }));
+    expect(screen.getByTestId('trace-call-details').textContent).toContain('結果失敗');
+    cleanup();
+    mountWith({ system: [], header: [] }, { outcome: 'aborted' });
+    await act(async () => {});
+    expect(screen.getByTestId('trace-call-outcome').textContent).toContain('已中止');
+    cleanup();
+    mountWith({ system: [], header: [] });
+    await act(async () => {});
+    expect(screen.queryByTestId('trace-call-outcome')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: /^模型呼叫 #1/ }));
+    expect(screen.getByTestId('trace-call-details').textContent).not.toContain('結果');
+  });
 });

@@ -141,6 +141,9 @@ export const TRACE_TARGET_MISSING_TEXT =
   '這一則不在目前載入的對話裡。往上捲載入更早的對話，再從這裡定位。';
 
 /** 投影有、條目沒載入的呼叫段落底下那一句。 */
+/** 一次模型呼叫沒有正常回來的說法：拋錯，或使用者按了停止。 */
+export const CALL_OUTCOME_LABEL = { error: '失敗', aborted: '已中止' } as const;
+
 export const TRACE_CALL_UNLOADED_TEXT = '這次呼叫的內文不在目前載入的對話裡。';
 
 export type EndingReason = 'stopped' | 'max-tokens' | 'failed';
@@ -221,6 +224,8 @@ export type TraceRow =
       readonly outputTokens?: number;
       readonly toolCount: number;
       readonly retryCount: number;
+      /** 這次呼叫沒有正常回來的方式（投影的 `TrajectoryCall.outcome`）；沒有這一格 ＝ 正常回來，或舊日誌。 */
+      readonly outcome?: 'error' | 'aborted';
       readonly system: SnapshotState;
       readonly systemChars?: number;
       readonly systemTruncated?: boolean;
@@ -860,6 +865,7 @@ function structuredTurns(
           (call.reply !== undefined && call.reply.textChars + call.reply.reasoningChars > 0),
         ...(call.endTime === undefined ? {} : { endTime: call.endTime }),
         ...(call.durationMs === undefined ? {} : { durationMs: call.durationMs }),
+        ...(call.outcome === undefined ? {} : { outcome: call.outcome }),
         ...(call.model === undefined ? {} : { model: call.model }),
         ...(call.usage === undefined
           ? {}

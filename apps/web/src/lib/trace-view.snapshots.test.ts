@@ -118,4 +118,18 @@ describe('呼叫列帶請求快照的內容', () => {
     expect([odd!.headerTools, number!.headerTools]).toEqual([3, undefined]);
     expect(number!.headerJson).toBe('42');
   });
+
+  it('呼叫的結果（失敗、已中止）進列；正常回來的沒有這一格', () => {
+    const [failed, aborted, fine] = rowsOf(snapshots(), [
+      call(5, { outcome: 'error' }),
+      call(6, { outcome: 'aborted' }),
+      call(7),
+    ]);
+    expect([failed!.outcome, aborted!.outcome, fine!.outcome]).toEqual([
+      'error',
+      'aborted',
+      undefined,
+    ]);
+    expect('outcome' in fine!).toBe(false);
+  });
 });
