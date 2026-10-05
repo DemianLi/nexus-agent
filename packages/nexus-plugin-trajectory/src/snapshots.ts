@@ -80,6 +80,8 @@ export function applyRequestSnapshots(
 export const requestSnapshotsUnit: ProjectionUnit<RequestSnapshotsState, RequestSnapshotsView> = {
   key: REQUEST_SNAPSHOTS_PROJECTION,
   stateVersion: REQUEST_SNAPSHOTS_VERSION,
+  // 子代理的軌跡（#1070）上記的 `system`／`header` 指的是子代理自己日誌的 `seq`，快照要跟著它折，否則指到 root 的快照。
+  children: true,
   init: initialRequestSnapshots,
   apply: applyRequestSnapshots,
   view: (state) => state,
