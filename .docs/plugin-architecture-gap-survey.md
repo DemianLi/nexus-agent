@@ -27,7 +27,7 @@
 | `context/` 的 `time-context`／`tmux-context` | **登記不排**，兩條重開條件（2026-09-19 從「五個非預設」縮成這兩個，另外三個見下一列） | §五第 7 條 |
 | `context/` 的 `session-reference`／`file-reference-local`（連同 seam `file-reference`） | **等 web 要做 @ 提及／@file 補全時再一起做，web 先**（2026-09-19 拍板）。web-app 出廠就掛；#215 判「不是缺口」的第 1 點只查了 base，第 2、3 點只講 `time-context` | §五第 5 條第 1 點；[`decisions-2026-09-19.md`](decisions-2026-09-19.md) 第 5、6 題 |
 | 核准的**應答者掛點** | **不做**——逼出 seam 的第二個提問者我們沒有 | §五第 7 條 |
-| 核准的**審計事件** | **不做**——射程選擇，非可行性；今天零消費者 | §五第 7 條 |
+| 核准的**審計事件** | ~~不做~~ **2026-10-05 翻案，已做**（[#1029](https://github.com/DemianLi/nexus-agent/issues/1029)）：側欄成了第一個消費者（[#1018](https://github.com/DemianLi/nexus-agent/issues/1018) Q2）；`approval/asked`＋`approval/decided`，人那條路由 pump 寫、不必問人的由閘門在圖內寫 | §五第 7 條（原結論） |
 | 核准線那組絆索守錯對象 | **不排**（#226），兩條重開條件 | §五第 7 條 |
 | `subagent/start` 的帶外注入殘值 | **認帳**，持有人是 §五第 3 條 (b) | §五第 3 條 |
 | `subagent/end` | **判為不是缺口**——消費者一個都不存在 | §五第 3 條 |

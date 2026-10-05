@@ -13,7 +13,7 @@
 import type { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Command, MemorySaver } from '@langchain/langgraph';
-import { fromLoggedMessage, SessionRegistry } from '@nexus/core';
+import { APPROVAL_REJECTED_BY_USER, fromLoggedMessage, SessionRegistry } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
 import { createAskUserPlugin } from '@nexus/plugin-ask-user';
 import { describe, expect, it } from 'vitest';
@@ -358,7 +358,8 @@ describe('subagent 裡的呼叫', () => {
 
 /**
  * **中斷不是落定**（卡上「動工時的決定」第一條）。暫停那一次只留一顆呼叫；resume 之後以
- * **同一個 `callId`** 再記一對。拒絕那一格照 dsh 不帶碼——被拒不是工具的錯。
+ * **同一個 `callId`** 再記一對。拒絕那一格帶 `APPROVAL_REJECTED_BY_USER`（#1029，dsh 沒有這一格）：被拒不是工具的錯，
+ * 而碼讓日誌上「被人拒」與「工具自己失敗」分得開。
  */
 describe('被核准閘門中斷的呼叫', () => {
   it.each([
@@ -383,7 +384,13 @@ describe('被核准閘門中斷的呼叫', () => {
       const callIds = events.map((event) => (event.data as ToolCall | ToolResult).callId);
       expect(new Set(callIds).size).toBe(1);
       const { message: _message, ...verdict } = events[2]!.data as ToolResult;
-      expect(verdict).toEqual({ callId: callIds[0], isError });
+      expect(verdict).toEqual({
+        callId: callIds[0],
+        isError,
+        ...(decision === 'reject'
+          ? { error: { name: 'ApprovalDenied', code: APPROVAL_REJECTED_BY_USER } }
+          : {}),
+      });
     } finally {
       await run.close();
     }

@@ -192,6 +192,10 @@ export {
 
 export type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
 export {
+  APPROVAL_NO_CHANNEL,
+  APPROVAL_POLICY_NEVER,
+  APPROVAL_REJECTED_BY_USER,
+  approvalDenied,
   HarnessError,
   INVALID_ARGS,
   INVALID_TOOL_OUTPUT,
@@ -199,6 +203,7 @@ export {
   readToolOutcome,
   TOOL_ABORTED,
   TOOL_ABORTED_BEFORE_DISPATCH,
+  TOOL_DENIED_BY_LISTENER,
   TOOL_ERROR_PREFIX,
   TOOL_NOT_STARTED,
   TOOL_OUTCOME_UNKNOWN,
@@ -484,6 +489,7 @@ export type {
   SessionTitleModelIdentity,
   SessionTitleSource,
   TurnEndReason,
+  ApprovalOutcome,
   SessionReferenceSourceEntry,
   UserMessageSource,
 } from './session-log.js';

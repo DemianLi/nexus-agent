@@ -17,14 +17,25 @@
  * fold 時折成一個 `wrapToolCall` middleware」。決策詞彙與 `next()` 的語義照抄。
  */
 
+import { randomUUID } from 'node:crypto';
 import { ToolMessage } from '@langchain/core/messages';
 import { interrupt, isGraphBubbleUp } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import type { ToolEventSessions } from './containment.js';
 import type { NamedEntry } from './entries.js';
 import { rawArgumentsOf } from './invalid-tool-args.js';
 import { formatOrigin, type NexusPlugin } from './plugin.js';
-import { toolRefusal } from './tool-events.js';
+import type { ApprovalOutcome } from './session-log.js';
+import {
+  APPROVAL_NO_CHANNEL,
+  APPROVAL_POLICY_NEVER,
+  APPROVAL_REJECTED_BY_USER,
+  approvalDenied,
+  TOOL_DENIED_BY_LISTENER,
+  toolRefusal,
+  type ToolErrorInfo,
+} from './tool-events.js';
 
 /** 核准閘門 middleware 的名字。錯誤訊息與排序斷言用得到。 */
 export const APPROVAL_GATE_MIDDLEWARE_NAME = 'nexusApprovalGate';
@@ -244,8 +255,47 @@ export async function runApprovalGate(
  * （`packages/core/tools/src/index.ts:1479-1487`）。**`status` 不是模型分辨它的依據**：Chat
  * Completions 的轉換器不送它（見 `tool-events.ts` 的 `toolRefusal`），模型靠的是前綴與原因。
  */
-function denial(exec: ToolExecution, reason: string): ToolMessage {
-  return toolRefusal(reason, { callId: exec.callId ?? '', name: exec.name });
+function denial(exec: ToolExecution, reason: string, error: ToolErrorInfo): ToolMessage {
+  return toolRefusal(reason, { callId: exec.callId ?? '', name: exec.name, error });
+}
+
+/** listener 直接 deny 的 `ToolErrorInfo.name`（核准的三個見 {@link approvalDenied}）。 */
+const PRE_EXECUTE_DENIED = 'PreExecuteDenied';
+
+/**
+ * 不必問人就確定結果的那幾條路（政策關掉、沒有管道）在圖內一次寫一對 `approval/asked`＋`approval/decided`，照 dsh
+ * （`ApprovalService.request` 對 `never` 政策也先寫 asked 再回 `rejected`）。日誌寫不進去**不影響這次呼叫的結果**，
+ * 同圍堵記 `tool/call`；找不到這次呼叫屬於哪份日誌（只給閘門、沒給 `sessions` 的測試組裝）就整對不記。
+ *
+ * **人那條路不在這裡寫**：閘門在圖內、`interrupt()` 之後會從頭重跑，在它前面寫會寫成兩筆；asked 由 pump 在記
+ * `interrupt/raised` 的同一刻寫、decided 在收到回覆那一刻寫（`apps/harness/src/thread-pump.ts`）。
+ */
+function auditDecision(
+  sessions: ToolEventSessions | undefined,
+  request: { readonly runtime?: { readonly configurable?: unknown } },
+  exec: ToolExecution,
+  reason: string,
+  outcome: ApprovalOutcome,
+): void {
+  if (sessions === undefined) return;
+  const found = sessions.forCall({ configurable: request.runtime?.configurable });
+  if (found.kind !== 'ok') return;
+  const id = randomUUID();
+  try {
+    found.log.append(
+      'approval/asked',
+      {
+        id,
+        toolName: exec.name,
+        ...(exec.callId === undefined || exec.callId === '' ? {} : { callId: exec.callId }),
+        reason,
+      },
+      { ignorable: true },
+    );
+    found.log.append('approval/decided', { id, outcome }, { ignorable: true });
+  } catch {
+    // 審計寫不進去不該賠上這次呼叫（它在 fail-closed 那一邊，結果不變）。
+  }
 }
 
 /**
@@ -261,21 +311,24 @@ function denial(exec: ToolExecution, reason: string): ToolMessage {
  * **代價是同一批裡排在前面的工具在人被問到時已經跑完了**——基座是問之前一個都沒跑。
  * 兩種都不是全有全無，差別在副作用落在問之前還是問之後。實測見 #111 的 spike 留言。
  *
- * **核准這件事在日誌上一顆事件都沒有。** dsh 每次 request 追加一對 `approval/asked` ＋
- * `approval/decided`（`references/deepseek-harness/packages/interaction/user-approval/src/types.ts:44-58`，
- * log-only 的審計，帶 id／工具名／結果）。我們這側三件都量過（2026-09-08）：
+ * **核准的問與答在日誌上各有一顆事件**（[#1029](https://github.com/DemianLi/nexus-agent/issues/1029)，翻了
+ * [#220](https://github.com/DemianLi/nexus-agent/issues/220) 的「認帳不做」：側欄是第一個消費者）。照 dsh 每次
+ * request 一對 `approval/asked`＋`approval/decided`（`references/deepseek-harness/packages/interaction/user-approval/src/types.ts:44-58`，
+ * `5badb15`，log-only 審計）：
  *
- * - `deny`／`policy-never`／`no-channel` 三條路**一顆都不記**——那三個出口只回一則
- *   `denial()`，這個檔案裡沒有任何 `append`；
- * - 人那條路只有一顆 `interrupt/raised`，**只帶 `interruptId`**（`session-log.ts` 的酬載型別
- *   就只有那一個欄位），不帶工具名、call id、理由；
- * - **結果從來沒進日誌**——`wire-handler.ts` 收到 `decisions` 之後零個 `append`（全檔零個），
- *   日誌上只剩 `turn/start` 的 resume 那一格，而它分不出核准與拒絕。
+ * - **人那條路由 pump 寫**（`apps/harness/src/thread-pump.ts`）：asked 在它記 `interrupt/raised` 的同一刻（`id` 就是
+ *   中斷的 id），decided 在收到回覆（核准／拒絕）或收回（`cancelled`）那一刻。**不在這裡寫**：閘門在圖內，
+ *   `interrupt()` 回來之後整顆 middleware 從頭重跑，在 `interrupt()` 前寫會是兩筆。中斷酬載多帶 `callId`，
+ *   asked 才配得上 `tool/call`。
+ * - **不必問人就確定的由這裡寫**（{@link auditDecision}）：政策關掉 → `rejected`，沒有管道 → `unavailable`，
+ *   子代理的閘門管道固定 `policy-never`（#324）所以走前者，寫進子代理自己的日誌。
+ * - **listener 直接回 `deny` 不寫**：沒有問任何人，dsh 也不寫（只有 `ask` 才進核准服務）。
  *
- * **這是認帳不做，不是待辦。** 結局與兩條重開條件見
- * [#220](https://github.com/DemianLi/nexus-agent/issues/220)；閱讀面在
- * `apps/harness/src/interception-index.test.ts` 第 4 列的紀錄差，**源碼散文（這裡）才是第一
- * 產物**。
+ * **拒絕的 `tool/result` 帶碼**（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／`APPROVAL_NO_CHANNEL`／
+ * `TOOL_DENIED_BY_LISTENER`，見 `tool-events.ts`），讓「被人拒」與「工具自己失敗」在日誌上分得開。**這是 dsh 沒有的**
+ * （它的核准拒絕不帶 `info`），理由與退到哪一格見 `tool-events.ts` 的碼定義。
+ *
+ * 閱讀面在 `apps/harness/src/interception-index.test.ts` 第 4 列。
  *
  * **參數解不開的那顆照樣先問人**（dsh 核准在驗參數之前），拒絕在內側那顆
  * （`invalid-tool-args.ts`）。listener 拿到的是歷史裡的 `{}`；**只有中斷酬載的 `args` 換成
@@ -284,11 +337,13 @@ function denial(exec: ToolExecution, reason: string): ToolMessage {
  *
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
+ * @param sessions - 記審計事件用的通道（`registry.sessions`）；不給就只回拒絕、不寫 `approval/*`。
  * @returns 可以交給 `registry.middleware.use()` 或塞進 subagent 的 middleware。
  */
 export function createApprovalGateMiddleware(
   listeners: readonly NamedEntry<PreToolListener>[],
   channel: ApprovalChannel,
+  sessions?: ToolEventSessions,
 ): AgentMiddleware {
   return createMiddleware({
     name: APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -300,21 +355,30 @@ export function createApprovalGateMiddleware(
       };
       const decision = await runApprovalGate(listeners, exec);
       if (decision.kind === 'allow') return handler(request);
-      if (decision.kind === 'deny') return denial(exec, decision.reason);
+      if (decision.kind === 'deny') {
+        return denial(exec, decision.reason, {
+          name: PRE_EXECUTE_DENIED,
+          code: TOOL_DENIED_BY_LISTENER,
+        });
+      }
 
       const because = decision.reason ?? `"${exec.name}" 需要人工核准`;
       if (channel.kind === 'policy-never') {
+        auditDecision(sessions, request, exec, because, 'rejected');
         return denial(
           exec,
           `${because}，但這個 session 關掉了人工核准，所以沒有執行。` +
             `這不是有人拒絕了它——是沒有人被問到。`,
+          approvalDenied(APPROVAL_POLICY_NEVER),
         );
       }
       if (channel.kind === 'no-channel') {
+        auditDecision(sessions, request, exec, because, 'unavailable');
         return denial(
           exec,
           `${because}，但這次組裝沒有 checkpointer，核准之後接不回來，所以沒有執行。` +
             `這不是有人拒絕了它——是沒有可用的核准管道。`,
+          approvalDenied(APPROVAL_NO_CHANNEL),
         );
       }
 
@@ -323,14 +387,26 @@ export function createApprovalGateMiddleware(
       const raw = rawArgumentsOf(request);
       const answer = (await interrupt({
         kind: APPROVAL_INTERRUPT_KIND,
-        actionRequests: [{ name: exec.name, args: raw ?? exec.args, description: because }],
+        actionRequests: [
+          {
+            name: exec.name,
+            args: raw ?? exec.args,
+            description: because,
+            // pump 記 `approval/asked` 要配得上 `tool/call`（#1029）；選填，基座那一側不讀它。
+            ...(exec.callId === undefined || exec.callId === '' ? {} : { callId: exec.callId }),
+          },
+        ],
         reviewConfigs: [{ actionName: exec.name, allowedDecisions: ['approve', 'reject'] }],
       })) as { decisions?: { type?: string; message?: string }[] } | undefined;
 
       const verdict = answer?.decisions?.[0];
       if (verdict?.type === 'approve') return handler(request);
       if (verdict?.type === 'reject') {
-        return denial(exec, verdict.message ?? `有人看過並拒絕了 "${exec.name}"。`);
+        return denial(
+          exec,
+          verdict.message ?? `有人看過並拒絕了 "${exec.name}"。`,
+          approvalDenied(APPROVAL_REJECTED_BY_USER),
+        );
       }
       throw new Error(
         `核准回覆看不懂：${JSON.stringify(answer)}。` +

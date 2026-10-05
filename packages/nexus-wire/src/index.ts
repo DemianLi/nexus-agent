@@ -290,6 +290,8 @@ export type {
   RequestSnapshotsView,
   RequestSystemSnapshot,
   TrajectoryCall,
+  TrajectoryApproval,
+  TrajectoryApprovalOutcome,
   TrajectoryDecision,
   TrajectoryDigest,
   TrajectoryElided,

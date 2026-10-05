@@ -53,6 +53,7 @@ import {
   TRAJECTORY_VERSION,
 } from '@nexus/wire';
 import type {
+  TrajectoryApprovalOutcome,
   TrajectoryCall,
   TrajectoryDecision,
   TrajectoryDigest,
@@ -300,6 +301,47 @@ function withDecision(state: TrajectoryState, decision: TrajectoryDecision): Tra
       carry: { ...turn.carry, decisions: turn.carry.decisions + dropped.length },
     };
   });
+}
+
+const APPROVAL_OUTCOMES: readonly TrajectoryApprovalOutcome[] = [
+  'allowed-once',
+  'rejected',
+  'cancelled',
+  'unavailable',
+];
+
+function isApprovalOutcome(value: unknown): value is TrajectoryApprovalOutcome {
+  return APPROVAL_OUTCOMES.some((each) => each === value);
+}
+
+/**
+ * 改某顆中斷的決策列（以中斷 id 認）。**結局落在回答它的那一輪（`resume`），中斷在前一輪**，所以往回找所有留著逐呼叫
+ * 結構的輪；找不到（被摺進摘要、或根本不是人那條路）就原樣不動。
+ */
+function settleInterrupt(
+  state: TrajectoryState,
+  id: string,
+  change: (decision: Extract<TrajectoryDecision, { kind: 'interrupt' }>) => TrajectoryDecision,
+): TrajectoryState {
+  for (let t = state.turns.length - 1; t >= 0; t -= 1) {
+    const turn = state.turns[t]!;
+    const at = turn.decisions.findIndex(
+      (decision) => decision.kind === 'interrupt' && decision.id === id,
+    );
+    if (at < 0) continue;
+    const decision = turn.decisions[at]!;
+    if (decision.kind !== 'interrupt') continue;
+    const next = change(decision);
+    if (next === decision) return state;
+    return {
+      ...state,
+      turns: replaceAt(state.turns, t, {
+        ...turn,
+        decisions: replaceAt(turn.decisions, at, next),
+      }),
+    };
+  }
+  return state;
 }
 
 function withInput(state: TrajectoryState, input: TrajectoryInput): TrajectoryState {
@@ -734,7 +776,36 @@ export function applyTrajectory(state: TrajectoryState, event: SessionEvent): Tr
         messagesBefore: Number(data['messagesBefore'] ?? 0),
       });
     case 'interrupt/raised':
-      return withDecision(state, { kind: 'interrupt', seq: event.seq, time: event.time });
+      return withDecision(state, {
+        kind: 'interrupt',
+        seq: event.seq,
+        time: event.time,
+        ...(typeof data['interruptId'] === 'string' ? { id: data['interruptId'] } : {}),
+      });
+    case 'approval/asked': {
+      // 核准的問題掛在它的那顆中斷上（人那條路上兩者同 id，pump 在同一刻寫）。找不到中斷的是不必問人就確定的
+      // （政策關掉、沒有管道）：沒有人被擋下來等，結局在那一次呼叫的錯誤碼上，不在這裡。
+      const id = data['id'];
+      const tool = data['toolName'];
+      if (typeof id !== 'string' || typeof tool !== 'string') return state;
+      return settleInterrupt(state, id, (decision) => ({
+        ...decision,
+        approval: {
+          tool,
+          ...(typeof data['callId'] === 'string' ? { callId: data['callId'] } : {}),
+        },
+      }));
+    }
+    case 'approval/decided': {
+      const id = data['id'];
+      const outcome = data['outcome'];
+      if (typeof id !== 'string' || !isApprovalOutcome(outcome)) return state;
+      return settleInterrupt(state, id, (decision) =>
+        decision.approval === undefined
+          ? decision
+          : { ...decision, approval: { ...decision.approval, outcome, decidedAt: event.time } },
+      );
+    }
     case 'goal/change': {
       const goal = isRecord(data['goal']) ? data['goal'] : undefined;
       return withDecision(state, {
