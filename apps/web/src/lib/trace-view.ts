@@ -101,7 +101,7 @@ import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
 import { firstLine, toolSummary, toolTitle } from '@/lib/tool-view';
 import { mergePulled } from '@/lib/trajectory-pull';
 import type { PulledTurn } from '@/lib/trajectory-pull';
-import { signalText, snapshotsOf, trajectoryOf } from '@/lib/trajectory-view';
+import { ABSENT, signalText, snapshotsOf, trajectoryOf } from '@/lib/trajectory-view';
 import type { SignalKind } from '@/lib/trajectory-view';
 import { startsTurn } from '@/lib/turn-start';
 
@@ -166,6 +166,9 @@ interface RowBase {
 /** 一份請求快照在這次呼叫上的狀態：呼叫沒記指向哪一份、指到的已不保留、或還在。 */
 export type SnapshotState = 'none' | 'gone' | 'kept';
 
+/** 這份快照為什麼被記：第一次記，或內容變了（`request/system`、`request/header` 的 `reason`）。 */
+export type SnapshotReason = 'initial' | 'change';
+
 export type TraceRow =
   | (RowBase & { readonly kind: 'input'; readonly entry: HumanEntry; readonly summary: string })
   | (RowBase & { readonly kind: 'notice'; readonly entry: NoticeEntry; readonly summary: string })
@@ -223,6 +226,14 @@ export type TraceRow =
       readonly systemTruncated?: boolean;
       readonly header: SnapshotState;
       readonly headerTools?: number;
+      /** 展開要看的內容。**都是字串**：列只放原始值（見上），投影的物件每個 frame 都是新的。 */
+      readonly systemText?: string;
+      readonly systemReason?: SnapshotReason;
+      /** 設定與工具清單（`request/header` 的 `header`）整份轉成 JSON；展開時才解析。 */
+      readonly headerJson?: string;
+      readonly headerReason?: SnapshotReason;
+      /** 這份工具清單相對上一份留著的快照，多了哪些、少了哪些；沒有上一份、或沒變就沒有這一格。 */
+      readonly toolsDiff?: string;
       /** 投影說這次呼叫有東西可看：回覆有字、有推理，或叫了工具。 */
       readonly hasContent: boolean;
       /** 有沒有任何條目歸在這次呼叫上。`hasContent` 而沒有 `loaded`，就是內文沒載入。 */
@@ -670,30 +681,85 @@ function foldResumes<T extends { readonly head: TurnHead; readonly logical: bool
   return out;
 }
 
-function snapshotRowParts(
-  call: TrajectoryView['turns'][number]['calls'][number],
-  snapshots: ReturnType<typeof snapshotsOf>,
-): Pick<
+type SnapshotParts = Pick<
   Extract<TraceRow, { kind: 'call' }>,
-  'system' | 'systemChars' | 'systemTruncated' | 'header' | 'headerTools'
-> {
-  const system =
-    call.system === undefined ? undefined : snapshots?.system.find((s) => s.seq === call.system);
-  const header =
-    call.header === undefined ? undefined : snapshots?.header.find((s) => s.seq === call.header);
-  const tools =
-    header !== undefined &&
-    typeof header.header === 'object' &&
-    header.header !== null &&
-    Array.isArray((header.header as { tools?: unknown }).tools)
-      ? (header.header as { tools: unknown[] }).tools.length
-      : undefined;
-  return {
-    system: call.system === undefined ? 'none' : system === undefined ? 'gone' : 'kept',
-    header: call.header === undefined ? 'none' : header === undefined ? 'gone' : 'kept',
-    ...(system === undefined ? {} : { systemChars: system.chars }),
-    ...(system?.truncated === true ? { systemTruncated: true } : {}),
-    ...(tools === undefined ? {} : { headerTools: tools }),
+  | 'system'
+  | 'systemChars'
+  | 'systemTruncated'
+  | 'systemText'
+  | 'systemReason'
+  | 'header'
+  | 'headerTools'
+  | 'headerJson'
+  | 'headerReason'
+  | 'toolsDiff'
+>;
+
+function toolNamesOf(header: unknown): string[] | undefined {
+  if (typeof header !== 'object' || header === null) return undefined;
+  const { tools } = header as { tools?: unknown };
+  if (!Array.isArray(tools)) return undefined;
+  return tools.map((tool) =>
+    typeof tool === 'object' &&
+    tool !== null &&
+    typeof (tool as { name?: unknown }).name === 'string'
+      ? (tool as { name: string }).name
+      : ABSENT,
+  );
+}
+
+/** 「新增 a、b；移除 c」；兩份的名字集合相同就是 `undefined`。 */
+function toolsDiffText(before: readonly string[], after: readonly string[]): string | undefined {
+  const added = after.filter((name) => !before.includes(name));
+  const removed = before.filter((name) => !after.includes(name));
+  if (added.length === 0 && removed.length === 0) return undefined;
+  return [
+    added.length === 0 ? undefined : `新增 ${added.join('、')}`,
+    removed.length === 0 ? undefined : `移除 ${removed.join('、')}`,
+  ]
+    .filter((part) => part !== undefined)
+    .join('；');
+}
+
+/**
+ * 呼叫列上的請求快照部分的產生器。**一份快照在一次建模型裡只轉一次 JSON**（一輪可以有幾十次呼叫，它們指到同一份）：
+ * 整份清單帶每個工具的說明與參數，常有二十幾 KB。
+ */
+function snapshotPartsOf(
+  snapshots: ReturnType<typeof snapshotsOf>,
+): (call: TrajectoryView['turns'][number]['calls'][number]) => SnapshotParts {
+  const json = new Map<number, string>();
+  const jsonOf = (seq: number, header: unknown): string => {
+    let text = json.get(seq);
+    if (text === undefined) {
+      text = JSON.stringify(header) ?? 'null';
+      json.set(seq, text);
+    }
+    return text;
+  };
+  return (call) => {
+    const system =
+      call.system === undefined ? undefined : snapshots?.system.find((s) => s.seq === call.system);
+    const header =
+      call.header === undefined ? undefined : snapshots?.header.find((s) => s.seq === call.header);
+    const tools = toolNamesOf(header?.header);
+    const previous =
+      header === undefined ? undefined : snapshots?.header.filter((s) => s.seq < header.seq).at(-1);
+    const before = previous === undefined ? undefined : toolNamesOf(previous.header);
+    const diff =
+      tools === undefined || before === undefined ? undefined : toolsDiffText(before, tools);
+    return {
+      system: call.system === undefined ? 'none' : system === undefined ? 'gone' : 'kept',
+      header: call.header === undefined ? 'none' : header === undefined ? 'gone' : 'kept',
+      ...(system === undefined ? {} : { systemChars: system.chars }),
+      ...(system?.truncated === true ? { systemTruncated: true } : {}),
+      ...(system === undefined ? {} : { systemText: system.text, systemReason: system.reason }),
+      ...(tools === undefined ? {} : { headerTools: tools.length }),
+      ...(header === undefined
+        ? {}
+        : { headerJson: jsonOf(header.seq, header.header), headerReason: header.reason }),
+      ...(diff === undefined ? {} : { toolsDiff: diff }),
+    };
   };
 }
 
@@ -712,7 +778,7 @@ function structuredTurns(
       !(entry.kind === 'decision' && entry.actions.length === 1 && answered.has(entry.id)),
   );
   const index = indexView(view);
-  const snapshots = snapshotsOf(state);
+  const snapshotParts = snapshotPartsOf(snapshotsOf(state));
   const slots = assignSlots(
     items.map((item) => item.entry),
     view,
@@ -798,7 +864,7 @@ function structuredTurns(
         ...(call.usage === undefined
           ? {}
           : { inputTokens: call.usage.inputTokens, outputTokens: call.usage.outputTokens }),
-        ...snapshotRowParts(call, snapshots),
+        ...snapshotParts(call),
       });
       for (const retry of call.retries) {
         rows.push({
