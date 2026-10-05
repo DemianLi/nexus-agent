@@ -10,16 +10,16 @@
  * ## 與 dsh 的偏離
  *
  * dsh 的 `ui-trajectory` 是**客戶端分頁的投影**：瀏覽器依需要向 host 要某一頁軌跡。我們的通道（#1026）是
- * **伺服器端的整份取代 frame**，所以 view 要有上限（最近 3 輪完整、更早只留摘要），不是分頁。原因：通道的 `projection`
- * frame 沒有「要哪一頁」的往返。**窗口是過渡值**（8 輪→3 輪，2026-10-05）；標準的形狀（骨架全推、細節按需拉）是
- * [#1083](https://github.com/DemianLi/nexus-agent/issues/1083)，分兩刀：
+ * **伺服器端的整份取代 frame**，沒有「要哪一頁」的往返，所以 view 有上限：**骨架全推、細節按需拉**
+ * （[#1083](https://github.com/DemianLi/nexus-agent/issues/1083)）——
  *
- * 1. **（已落地）按需拉的通道**：單元的 `detail`（{@link ./trajectory.ts} 的 `trajectoryTurnDetail`），host 以
- *    `GET /threads/:id/trajectory/turn` 暴露。錨點（`seq`／`messageId`／`runId`）與「細節不進投影、從日誌重新折」照 dsh 的
- *    `loadThrough(seq)`；**偏離**：dsh 拉的是事件頁、客戶端自己折，我們的軌跡是伺服端折疊的投影、客戶端沒有折疊器，
- *    所以回的是伺服端折好的結果（表達不出「客戶端折」，退到最接近的：同一個 `apply` 重放整份日誌，目標邏輯輪釘住不裁）。
- * 2. **（下一刀）推送改成骨架**：窗口降到最新一個實體輪、子代理只推摘要；做完後 `TRAJECTORY_DETAIL_TURNS` 與這段偏離一併拿掉。
+ * - 推送的 view 是每輪一列摘要（`digests`），加上**最新一個實體輪**的逐呼叫結構（給進行中的輪即時更新用）。前景子代理的
+ *   `run` 輪永不收尾，一律只出摘要。
+ * - 其餘細節走單元的 `detail`（{@link ./trajectory.ts} 的 `trajectoryTurnDetail`），host 以 `GET /threads/:id/trajectory/turn`
+ *   暴露。錨點（`seq`／`messageId`／`runId`）與「細節不進投影、從日誌重新折」照 dsh 的 `loadThrough(seq)`。
  *
+ * **登記的偏離：** (1) dsh 拉的是事件頁、客戶端自己折；我們客戶端沒有折疊器，表達不出「客戶端折」，退到最接近的：同一個
+ * `apply` 重放整份日誌，目標邏輯輪釘住不裁。(2) dsh 的投影連最新一輪的細節都不帶；我們多留一個實體輪，因為按需拉不是即時的。
  * 通道本身的偏離登記在 `.docs/session-projections-design.md`。
  *
  * ## 範圍

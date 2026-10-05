@@ -223,6 +223,24 @@ function rootEvents(session: Session, types: readonly string[]): SessionEvent[] 
 const trajectoryOf = (state: ConversationState): TrajectoryView | undefined =>
   state.projections[TRAJECTORY_PROJECTION]?.view as TrajectoryView | undefined;
 
+/**
+ * 軌跡裡中斷的決策列，**按需拉**的（#1083）：推送的投影只留最新一個實體輪，答完核准之後中斷那一輪早已退成摘要，
+ * 結局只在拉到的細節裡（整個邏輯輪，含 resume 輪）。錨點用第一個 `turn/start` 的位置。
+ */
+async function pulledInterruptRows(
+  client: Session['client'],
+  threadId: string,
+  firstTurnSeq: number,
+) {
+  const outcome = await client.trajectoryTurn(threadId, { seq: firstTurnSeq });
+  if (outcome.kind !== 'ok') throw new Error(`${outcome.code}：${outcome.message}`);
+  return outcome.result.turns
+    .flatMap((turn) => turn.decisions)
+    .filter((decision) => decision.kind === 'interrupt');
+}
+
+const firstTurnSeqOf = (session: Session): number => rootEvents(session, ['turn/start'])[0]!.seq;
+
 async function historyOf(session: Session, threadId: string): Promise<ConversationState> {
   const page = await session.client.threadHistory(threadId);
   if (page.kind !== 'ok') throw new Error(page.message);
@@ -288,17 +306,8 @@ describe('人那條路：asked 在中斷的那一刻、decided 在回答的那�
       rootEvents(session, ['tool/call']).map((event) => (event.data as { callId: string }).callId),
     ).toContain('call-alpha');
 
-    // 軌跡：中斷那一列帶 approval。
-    await until(session, (each) =>
-      (trajectoryOf(each.state)?.turns ?? []).some((turn) =>
-        turn.decisions.some(
-          (decision) => decision.kind === 'interrupt' && decision.approval?.outcome !== undefined,
-        ),
-      ),
-    );
-    const row = trajectoryOf(session.state)!
-      .turns.flatMap((turn) => turn.decisions)
-      .find((decision) => decision.kind === 'interrupt');
+    // 軌跡：中斷那一列帶 approval（按需拉；推送的窗口只剩 resume 輪，中斷那一輪已是摘要）。
+    const [row] = await pulledInterruptRows(session.client, 'a1', firstTurnSeqOf(session));
     expect(row).toMatchObject({
       kind: 'interrupt',
       id: interruptId,
@@ -427,15 +436,8 @@ describe('人那條路：asked 在中斷的那一刻、decided 在回答的那�
       { id: second, outcome: 'rejected' },
     ]);
 
-    const rows = () =>
-      (trajectoryOf(session.state)?.turns ?? [])
-        .flatMap((turn) => turn.decisions)
-        .filter((decision) => decision.kind === 'interrupt');
-    await until(
-      session,
-      () => rows().every((row) => row.approval?.outcome !== undefined) && rows().length >= 2,
-    );
-    expect(rows().map((row) => [row.id, row.approval?.callId, row.approval?.outcome])).toEqual([
+    const rows = await pulledInterruptRows(session.client, 'a4', firstTurnSeqOf(session));
+    expect(rows.map((row) => [row.id, row.approval?.callId, row.approval?.outcome])).toEqual([
       [first, 'call-one', 'allowed-once'],
       [second, 'call-two', 'rejected'],
     ]);
@@ -473,12 +475,12 @@ async function interruptRowsAfterReopen(session: Session, threadId: string) {
     baseUrl: BASE_URL,
     fetch: async (input, init) => reopened.handle(loopbackRequest(input as string, init)),
   });
+  // 重開之後只剩磁碟上的日誌：歷史頁要折得出軌跡（推送的最新一輪），細節按需拉得到同樣的中斷列。
   const page = await client.threadHistory(threadId);
   if (page.kind !== 'ok') throw new Error(page.message);
-  const state = reduceAll(emptyConversation(), page.result.events);
-  return (trajectoryOf(state)?.turns ?? [])
-    .flatMap((turn) => turn.decisions)
-    .filter((decision) => decision.kind === 'interrupt');
+  expect(trajectoryOf(reduceAll(emptyConversation(), page.result.events))).toBeDefined();
+  const firstTurn = rootSeed.find((event) => event.type === 'turn/start')!.seq;
+  return pulledInterruptRows(client, threadId, firstTurn);
 }
 
 describe('重開之後', () => {

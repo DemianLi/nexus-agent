@@ -206,7 +206,10 @@ describe.each(CASES)('$label：按需拉軌跡', (entry) => {
     const runId = address.runId;
     const settled = (state: ConversationState) =>
       trajectoryOf(state)?.turns.at(-1)?.end !== undefined &&
-      childTrajectoryOf(state, runId)?.turns.at(-1)?.callCount === 3;
+      (
+        childTrajectoryOf(state, runId)?.turns.at(-1) ??
+        childTrajectoryOf(state, runId)?.digests.at(-1)
+      )?.callCount === 3;
     await until(() => settled(reduceAll(emptyConversation(), frames)));
     // 背景那條結算後還會續行一輪；等 frame 停下來再拿推送的值當對照。
     let previous = '';
@@ -231,26 +234,43 @@ describe.each(CASES)('$label：按需拉軌跡', (entry) => {
       return outcome.result;
     };
 
-    // 1. 拉到的 = 推送的。root 用 seq；有 resume 的話拉回來的是整個邏輯輪。
-    const first = root.turns.find((each) => each.logical)!;
+    // 1. 拉到的 = 推送的。推送的投影只有骨架（#1083）：最新一個實體輪帶完整結構，其餘是摘要。
+    //    最新那一輪：拉到的與推送的逐欄相同；更早的：拉到的與摘要的骨架欄位相同。
+    const latest = root.turns.at(-1)!;
+    const pulledLatest = await pull(client, { seq: latest.seq });
+    expect(pulledLatest.turns.find((each) => each.seq === latest.seq)).toEqual(latest);
+    const first = (root.digests[0] ?? root.turns[0])!;
     const bySeq = await pull(client, { seq: first.seq });
-    const group = root.turns.filter(
-      (each) => each.index >= first.index && each.index < first.index + bySeq.turns.length,
-    );
-    expect(bySeq.turns).toEqual(group);
     expect(bySeq.turns[0]).toMatchObject({ logical: true });
-    // messageId：下行軌跡上某次呼叫的回覆訊息 id，與 seq 拉到同一個邏輯輪。
-    const messageId = root.turns
+    expect(bySeq.turns[0]).toMatchObject({
+      index: first.index,
+      seq: first.seq,
+      kind: first.kind,
+      callCount: first.callCount,
+      toolCount: first.toolCount,
+      subagentCount: first.subagentCount,
+    });
+    // 每個摘要都能原位換成拉到的那一輪（index、seq 對得上）。
+    for (const digest of root.digests) {
+      const group = await pull(client, { seq: digest.seq });
+      expect(group.turns.map((each) => each.index)).toContain(digest.index);
+    }
+    // messageId：拉到的呼叫上某次回覆的訊息 id，與 seq 拉到同一個邏輯輪。
+    const messageId = bySeq.turns
       .flatMap((each) => each.calls)
       .find((each) => each.reply?.messageId !== undefined)?.reply?.messageId;
     expect(messageId).toBeDefined();
     const byMessage = await pull(client, { messageId });
-    expect(byMessage.turns.map((each) => each.index)).toContain(
-      root.turns.find((each) => each.calls.some((c) => c.reply?.messageId === messageId))!.index,
-    );
-    // 子代理：只給 runId＝它的第一個邏輯輪；前景只有一輪 `run`。
+    expect(byMessage.turns).toEqual(bySeq.turns);
+    // 子代理：只給 runId＝它的第一個邏輯輪；前景只有一輪 `run`（推送的只有摘要）。
     const bySubagent = await pull(client, { runId });
-    expect(bySubagent.turns[0]).toEqual(child.turns[0]);
+    const pushedChild = child.turns.at(-1) ?? child.digests.at(-1)!;
+    expect(bySubagent.turns[0]).toMatchObject({
+      index: pushedChild.index,
+      seq: pushedChild.seq,
+      callCount: pushedChild.callCount,
+      toolCount: pushedChild.toolCount,
+    });
     // 並行請求互不干擾、結果與單獨拉的相同。
     const [a, b, c] = await Promise.all([
       pull(client, { seq: first.seq }),

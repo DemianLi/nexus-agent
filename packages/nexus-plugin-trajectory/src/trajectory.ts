@@ -997,10 +997,13 @@ function textOfContent(content: unknown): string {
  * @param state - 折疊狀態。
  */
 export function viewTrajectory(state: TrajectoryState): TrajectoryView {
+  // `run` 輪（前景子代理）永不收尾，沒有「結束後退成摘要」的時刻，所以在 view 這一層直接只出摘要：K 個子代理的瀏覽器狀態
+  // 不該是 K 份完整輪。它只會是日誌的第一輪（`startRun` 只在一輪都還沒開過時開），所以接在 `digests` 後面仍然是由舊到新。
+  const running = state.turns.filter((turn) => turn.kind === 'run');
   return {
-    digests: state.digests,
+    digests: running.length === 0 ? state.digests : [...state.digests, ...running.map(digestOf)],
     omitted: state.omitted,
-    turns: state.turns.map(withCounts),
+    turns: state.turns.filter((turn) => turn.kind !== 'run').map(withCounts),
   };
 }
 
@@ -1101,6 +1104,15 @@ export function trajectoryTurnDetail(
   const turns = state.turns.filter((turn) => turn.seq >= from && turn.seq < until).map(withCounts);
   if (turns.length === 0) throw new ProjectionDetailError('not-found', '這份日誌裡沒有這一輪');
   return { turns, seq: last.seq };
+}
+
+/**
+ * 不做窗口與 `run` 輪摘要化的 view：狀態裡每一輪都帶完整結構。測試（量折疊本身，不量窗口）用；推送的是 {@link viewTrajectory}。
+ *
+ * @param state - 折疊狀態。
+ */
+export function viewTrajectoryFull(state: TrajectoryState): TrajectoryView {
+  return { digests: state.digests, omitted: state.omitted, turns: state.turns.map(withCounts) };
 }
 
 /** 軌跡投影單元。 */
