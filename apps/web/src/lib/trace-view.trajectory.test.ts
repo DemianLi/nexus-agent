@@ -830,7 +830,143 @@ describe('限制文字', () => {
     expect(TRACE_STRUCTURED_LIMITS.decisions).not.toBe(TRACE_LIMITS.decisions);
     expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('重新整理後仍在');
     expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('更早的輪只剩摘要');
+    expect(TRACE_STRUCTURED_LIMITS.decisions).toContain('載入這一輪的細節');
+    expect(TRACE_STRUCTURED_LIMITS.loaded).toContain('載入這一輪的細節');
     expect(TRACE_STRUCTURED_LIMITS.decisions).not.toContain('只記在這個分頁');
     expect(Object.keys(TRACE_LIMITS)).toEqual(['turns', 'decisions', 'loaded', 'absent']);
+  });
+});
+
+describe('traceModel：按需拉回來的輪（#1083）', () => {
+  /**
+   * 對話有三輪（seq 100、200、300），推送只帶最後一輪的細節，前兩輪是摘要。第一輪的回覆（`run-a`）與第二輪的（`run-b`）
+   * 都已載入在對話裡。
+   */
+  function pushedOnlyLast() {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('inbox:r1', '第一輪'),
+      ...script.ai('a', { text: '第一輪的回覆' }),
+      script.completed(),
+      script.running(),
+      ...script.human('inbox:r2', '第二輪'),
+      ...script.ai('b', { text: '第二輪的回覆' }),
+      script.completed(),
+      script.running(),
+      ...script.human('inbox:r3', '第三輪'),
+      ...script.ai('c', { text: '第三輪的回覆' }),
+      script.completed(),
+    ]);
+    const trajectory = view([turn(3, { calls: [call(30, { reply: reply(32, 'run-c') })] })], {
+      digests: [digest(1), digest(2)],
+    });
+    return { script, state, trajectory };
+  }
+
+  const pulled = (...turns: ReturnType<typeof turn>[]) =>
+    new Map(turns.map((t) => [t.seq, { turn: t, final: true, through: 9 }]));
+
+  it('沒拉到東西：跟只看推送的結果完全一樣', () => {
+    const { script, state, trajectory } = pushedOnlyLast();
+    const withState = withTrajectory(state, script, trajectory);
+    expect(traceModel(withState, new Map())).toEqual(traceModel(withState));
+    expect(traceModel(withState).digests.map((d) => d.number)).toEqual([1, 2]);
+  });
+
+  it('摘要拉到細節：那一輪變成完整的一組、載入的內文歸進去，摘要少一列，編號不變', () => {
+    const { script, state, trajectory } = pushedOnlyLast();
+    const model = traceModel(
+      withTrajectory(state, script, trajectory),
+      pulled(turn(2, { calls: [call(20, { reply: reply(22, 'run-b') })] })),
+    );
+    expect(model.digests.map((d) => d.number)).toEqual([1]);
+    expect(model.turns.filter((t) => !t.legacy).map((t) => [t.head!.number, t.seq])).toEqual([
+      [2, 200],
+      [3, 300],
+    ]);
+    const second = model.turns.find((t) => t.seq === 200)!;
+    expect(second.summaryOnly).toBeUndefined();
+    expect(kinds(second.rows)).toEqual(['input', 'call', 'reply']);
+  });
+
+  it('中間那一輪拉到、它後面的摘要還沒拉：後面的補成「只有摘要」的組，照時間順序接在後面', () => {
+    const { script, state } = pushedOnlyLast();
+    const trajectory = view([turn(4, { calls: [call(40, { reply: reply(42, 'run-c') })] })], {
+      digests: [digest(1), digest(2), digest(3)],
+    });
+    const model = traceModel(
+      withTrajectory(state, script, trajectory),
+      pulled(turn(2, { calls: [call(20, { reply: reply(22, 'run-b') })] })),
+    );
+    expect(model.digests.map((d) => d.number)).toEqual([1]);
+    const structured = model.turns.filter((t) => !t.legacy);
+    expect(structured.map((t) => [t.head!.number, t.seq, t.summaryOnly === true])).toEqual([
+      [2, 200, false],
+      [3, 300, true],
+      [4, 400, false],
+    ]);
+    // 只有摘要的組沒有列，頭上的計數還在。
+    expect(structured[1]!.rows).toEqual([]);
+    expect(structured[1]!.head!.callCount).toBe(2);
+  });
+
+  it('一個邏輯輪拆成兩個實體輪（續接）拉回來：併成一組，編號不加、計數相加、子代理數相加', () => {
+    const { script, state } = pushedOnlyLast();
+    const trajectory = view([turn(4)], {
+      digests: [digest(2), digest(3, { kind: 'resume', logical: false })],
+    });
+    const model = traceModel(
+      withTrajectory(state, script, trajectory),
+      pulled(
+        turn(2, { subagentCount: 1, calls: [call(20)] }),
+        turn(3, { kind: 'resume', logical: false, subagentCount: 2, calls: [call(30)] }),
+      ),
+    );
+    const merged = model.turns.find((t) => t.seq === 200)!;
+    expect(merged.head).toMatchObject({ number: 1, callCount: 2, subagentCount: 3 });
+    expect(model.turns.some((t) => t.seq === 300)).toBe(false);
+  });
+
+  it('只拉到續接那一半：邏輯輪的開頭仍是摘要補的，併起來的那一組不算「只有摘要」（它有一半的細節）', () => {
+    const { script, state } = pushedOnlyLast();
+    const trajectory = view([turn(5)], {
+      digests: [digest(1), digest(2), digest(3, { kind: 'resume', logical: false })],
+    });
+    const model = traceModel(
+      withTrajectory(state, script, trajectory),
+      pulled(turn(1), turn(3, { kind: 'resume', logical: false, calls: [call(30)] })),
+    );
+    expect(model.digests).toEqual([]);
+    const second = model.turns.find((t) => t.seq === 200)!;
+    expect(second.head).toMatchObject({ callCount: 2 + 1 });
+    expect(second.summaryOnly).toBeUndefined();
+    // 兩段都是補出來的：整組都只有摘要。
+    const bare = traceModel(withTrajectory(state, script, trajectory), pulled(turn(1)));
+    expect(bare.turns.find((t) => t.seq === 200)!.summaryOnly).toBe(true);
+  });
+
+  it('子代理數在摘要上也帶著（併進摘要列時相加）', () => {
+    const { script, state } = pushedOnlyLast();
+    const trajectory = view([turn(4)], {
+      digests: [
+        digest(2, { subagentCount: 2 }),
+        digest(3, { kind: 'resume', logical: false, subagentCount: 1 }),
+      ],
+    });
+    const model = traceModel(withTrajectory(state, script, trajectory));
+    expect(model.digests).toHaveLength(1);
+    expect(model.digests[0]!.subagentCount).toBe(3);
+  });
+
+  it('「這則回覆在哪一輪」：回覆原本歸不進任何輪，那一輪拉回來之後就歸得進去', () => {
+    const { script, state, trajectory } = pushedOnlyLast();
+    const withState = withTrajectory(state, script, trajectory);
+    expect(turnSeqOfMessage(traceModel(withState), withState.entries, 'run-b')).toBeUndefined();
+    const merged = traceModel(
+      withState,
+      pulled(turn(2, { calls: [call(20, { reply: reply(22, 'run-b') })] })),
+    );
+    expect(turnSeqOfMessage(merged, withState.entries, 'run-b')).toBe(200);
   });
 });

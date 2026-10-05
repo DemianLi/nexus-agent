@@ -27,7 +27,8 @@
  *
  * - **窗口之前的條目**（投影只帶最近幾輪）：已載入但不在任何一輪裡，照第 0 版以人那一句切成組，標「沒有結構資料」。
  * - **投影有、條目沒載入**的輪或呼叫：照樣畫輪的標題與呼叫段落，只是沒有內文可展開、也沒有定位鈕，並說明原因。
- *   窗口更早的輪只剩 `digests` 的計數，畫成只有數字的摘要列。
+ *   窗口更早的輪只剩 `digests` 的計數，畫成只有數字的摘要列；人要看（或「看這一輪」落在那裡）時向伺服器按需拉那一輪的細節
+ *   （`lib/trajectory-pull.ts`），拉回來的併進去、原位取代那一列摘要。
  *
  * ## 事實讀投影，不讀條目
  *
@@ -98,6 +99,8 @@ import { mentionDisplayText } from '@/lib/session-mention';
 import { agentMessageCaption, subagentLabel, subagentNames } from '@/lib/subagent-view';
 import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
 import { firstLine, toolSummary, toolTitle } from '@/lib/tool-view';
+import { mergePulled } from '@/lib/trajectory-pull';
+import type { PulledTurn } from '@/lib/trajectory-pull';
 import { signalText, snapshotsOf, trajectoryOf } from '@/lib/trajectory-view';
 import type { SignalKind } from '@/lib/trajectory-view';
 import { startsTurn } from '@/lib/turn-start';
@@ -126,9 +129,9 @@ export const TRACE_LIMITS = {
  */
 export const TRACE_STRUCTURED_LIMITS = {
   decisions:
-    '核准的結局（允許一次、已拒絕、已取消、無法回答）與等了多久來自軌跡，重新整理後仍在，但只有軌跡窗口內的輪看得到（更早的輪只剩摘要）；沒有結局的核准是還沒回答、或停在那裡就關掉了。問答與計劃審核的回答不在軌跡裡，政策或沒有管道擋下的核准只看得到那張工具卡的錯誤碼。',
+    '核准的結局（允許一次、已拒絕、已取消、無法回答）與等了多久來自軌跡，重新整理後仍在，但只有拿到細節的輪看得到（更早的輪只剩摘要，按「載入這一輪的細節」才有）；沒有結局的核准是還沒回答、或停在那裡就關掉了。問答與計劃審核的回答不在軌跡裡，政策或沒有管道擋下的核准只看得到那張工具卡的錯誤碼。',
   loaded:
-    '內文只列出已載入的對話。軌跡只帶最近幾輪的逐次呼叫結構，更早的輪只剩一行摘要；已載入但落在窗口之前的對話，仍以人說的那一句切開。',
+    '內文只列出已載入的對話。軌跡直接帶的只有最近幾輪的逐次呼叫結構，更早的輪只剩一行摘要，按「載入這一輪的細節」向伺服器要；已載入但落在軌跡之前的對話，仍以人說的那一句切開。',
   absent:
     '時刻、模型呼叫的起訖、重試與重複呼叫的提醒來自軌跡投影，記錄它們之前的舊會話沒有這些，標「—」。子代理自己的呼叫結構今天沒有。',
 } as const;
@@ -259,6 +262,8 @@ export interface TurnHead {
   readonly callCount: number;
   readonly toolCount: number;
   readonly toolErrors: number;
+  /** 這一輪（含併進來的續接）派出幾個子代理。 */
+  readonly subagentCount: number;
   readonly retryCount: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
@@ -284,6 +289,11 @@ export interface TraceTurn {
   readonly legacy: boolean;
   /** 開這一輪的 `turn/start` 的 `seq`（等於 `TokenMeterTurn.seq`）；沒有結構資料的組沒有。 */
   readonly seq?: number;
+  /**
+   * 這一組只有摘要的計數、沒有逐呼叫的結構：它前面有一輪的細節被拉了回來，時間順序要接得上，所以這一輪補成一組放在原位
+   * （按需拉的細節見 `lib/trajectory-pull.ts`）。畫面在這一組放「載入這一輪的細節」。
+   */
+  readonly summaryOnly?: true;
 }
 
 export interface TraceModel {
@@ -610,6 +620,7 @@ function headOf(digest: TrajectoryDigest, number: number): TurnHead {
     callCount: digest.callCount,
     toolCount: digest.toolCount,
     toolErrors: digest.toolErrors,
+    subagentCount: digest.subagentCount,
     retryCount: digest.retryCount,
     inputTokens: digest.inputTokens,
     outputTokens: digest.outputTokens,
@@ -630,6 +641,7 @@ function mergeHead(first: TurnHead, resume: TurnHead): TurnHead {
     callCount: first.callCount + resume.callCount,
     toolCount: first.toolCount + resume.toolCount,
     toolErrors: first.toolErrors + resume.toolErrors,
+    subagentCount: first.subagentCount + resume.subagentCount,
     retryCount: first.retryCount + resume.retryCount,
     inputTokens: first.inputTokens + resume.inputTokens,
     outputTokens: first.outputTokens + resume.outputTokens,
@@ -690,6 +702,7 @@ function structuredTurns(
   state: ConversationState,
   allItems: readonly Item[],
   view: TrajectoryView,
+  placeholders: ReadonlySet<number>,
 ): TraceModel {
   const answered = answeredApprovals(view);
   // 軌跡已經有這顆核准的結局（工具名、結局、等多久）：本地那一列說的是同一件事，留著就是同一個決定出現兩次。
@@ -733,7 +746,13 @@ function structuredTurns(
   });
 
   const numbers = logicalNumbers(view);
-  const groups: { key: string; seq: number; rows: TraceRow[]; head: TurnHead }[] = [];
+  const groups: {
+    key: string;
+    seq: number;
+    rows: TraceRow[];
+    head: TurnHead;
+    summaryOnly: boolean;
+  }[] = [];
   view.turns.forEach((turn, t) => {
     // `resume`（核准後續接）併回前一個邏輯輪：同一輪、同一組，編號不加。
     const previous = groups.at(-1);
@@ -812,14 +831,20 @@ function structuredTurns(
       ...(skipped > 0 ? { elidedCalls: skipped } : {}),
       ...(elidedTools !== undefined && elidedTools > 0 ? { elidedTools } : {}),
     };
+    const summaryOnly = placeholders.has(turn.seq);
     if (merging) {
       previous.rows.push(...rows);
       previous.head = mergeHead(previous.head, head);
+      previous.summaryOnly = previous.summaryOnly && summaryOnly;
     } else {
-      groups.push({ key: `turn-${turn.seq}`, seq: turn.seq, rows, head });
+      groups.push({ key: `turn-${turn.seq}`, seq: turn.seq, rows, head, summaryOnly });
     }
   });
-  const turns: TraceTurn[] = groups.map((group) => ({ ...group, legacy: false }));
+  const turns: TraceTurn[] = groups.map(({ summaryOnly, ...group }) => ({
+    ...group,
+    legacy: false,
+    ...(summaryOnly ? { summaryOnly: true as const } : {}),
+  }));
 
   return {
     structured: true,
@@ -878,17 +903,26 @@ function closeWithStatus(rows: TraceRow[], state: ConversationState): void {
 }
 
 /**
- * 對話投成一輪一組的列，以及（結構化模式）窗口外那些輪的摘要。純函式，只看 `state`。
+ * 對話投成一輪一組的列，以及（結構化模式）窗口外那些輪的摘要。純函式，只看 `state` 與選配的、按需拉回來的輪（`lib/trajectory-pull.ts`）。
  *
  * 子代理的歸屬原樣帶著（`attribution`）；同一輪裡主對話與子代理的列照出現的先後交錯。
  */
-export function traceModel(state: ConversationState): TraceModel {
+export function traceModel(
+  state: ConversationState,
+  pulled?: ReadonlyMap<number, PulledTurn>,
+): TraceModel {
   const items = itemsOf(state);
-  const view = trajectoryOf(state);
+  const pushed = trajectoryOf(state);
+  const merged =
+    pushed === undefined
+      ? undefined
+      : pulled === undefined
+        ? { view: pushed, placeholders: new Set<number>() }
+        : mergePulled(pushed, pulled);
   const model: TraceModel =
-    view === undefined
+    merged === undefined
       ? { structured: false, turns: legacyGroups(items), digests: [], omitted: 0 }
-      : structuredTurns(state, items, view);
+      : structuredTurns(state, items, merged.view, merged.placeholders);
   const last = model.turns.at(-1);
   if (last !== undefined) {
     const rows = [...last.rows];
