@@ -13,6 +13,7 @@ import {
   ABSENT,
   clockText,
   durationText,
+  TURN_KIND_LABEL,
   signalText,
   snapshotsOf,
   tokenText,
@@ -117,5 +118,13 @@ describe('trajectoryOf 的閘門', () => {
     );
     expect(snapshotsOf(wrongVersion)).toBeUndefined();
     expect(PROJECTION).toBe('projection');
+  });
+});
+
+describe('輪的起因標籤', () => {
+  it('前景子代理的 run（#1070）有自己的字，不跟別種起因混在一起', () => {
+    expect(TURN_KIND_LABEL.run).toBe('子代理的一段執行');
+    const labels = Object.values(TURN_KIND_LABEL);
+    expect(new Set(labels).size).toBe(labels.length);
   });
 });

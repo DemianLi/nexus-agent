@@ -90,6 +90,8 @@ export const TURN_KIND_LABEL: Readonly<Record<TrajectoryTurnKind, string>> = {
   'agent-message': '子代理來信',
   'subagent-settled': '子代理結算',
   goal: '目標排的輪',
+  // 前景子代理整份日誌沒有輪的邊界，從第一次模型呼叫算一輪、沒有結束；跑完與否看派它的那顆工具的狀態。
+  run: '子代理的一段執行',
 };
 
 /**
