@@ -27,6 +27,18 @@ export interface PanelBodyProps {
   readonly sources: RightSidebarSources;
   /** 捲到對話區的那一則；找得到回 `true`。1024 以下它會先收掉抽屜。 */
   readonly locate: (entryId: string) => boolean;
+  /**
+   * 有人從別的分頁要求顯示觀測分頁的某一輪（#1034，成本分頁的「看這一輪」）；只有觀測分頁收到。沒有人要求時是 `undefined`。
+   * 用完回報 {@link PanelBodyProps.onRevealed}，右側欄才清掉：分頁沒掛上或藏著時請求留著，等它看得見再消費。
+   */
+  readonly reveal?: TurnReveal | undefined;
+  readonly onRevealed?: ((nonce: number) => void) | undefined;
+}
+
+/** 請求顯示觀測分頁的某一輪：`seq` 是開那一輪的 `turn/start` 的位置，`nonce` 讓同一輪連按兩次也算兩次請求。 */
+export interface TurnReveal {
+  readonly seq: number;
+  readonly nonce: number;
 }
 
 export interface PanelDefinition {
@@ -41,5 +53,6 @@ export const PANELS: Readonly<Record<PanelKind, PanelDefinition>> = {
   // 包一層：`trace-panel` 經計劃卡間接 import 回 `right-sidebar`（它 import 這個檔），這樣參照 `TraceBody` 發生在畫的時候，
   // 不在模組載入時，不管從哪一頭先載入都不會踩到還沒初始化的綁定。
   trace: { title: '觀測', Icon: Activity, Body: (props) => <TraceBody {...props} /> },
-  cost: { title: '成本', Icon: Coins, Body: CostBody },
+  // 同觀測：`cost-panel` 為了「看這一輪」會 import 回 `right-sidebar`，包一層讓參照發生在畫的時候。
+  cost: { title: '成本', Icon: Coins, Body: (props) => <CostBody {...props} /> },
 };

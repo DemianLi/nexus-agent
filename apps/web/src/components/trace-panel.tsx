@@ -35,7 +35,7 @@ import {
   User,
   Wrench,
 } from 'lucide-react';
-import { memo, useCallback, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { ComponentType, ReactNode } from 'react';
 
 import type { Attribution, ConversationState } from '@nexus/wire';
@@ -44,7 +44,7 @@ import { CompactionRow } from '@/components/compaction-row';
 import { MarkdownText } from '@/components/markdown-text';
 import { PlanToolCard } from '@/components/plan-review';
 import { ReasoningRow } from '@/components/reasoning-row';
-import type { PanelBodyProps } from '@/components/right-sidebar-panels';
+import type { PanelBodyProps, TurnReveal } from '@/components/right-sidebar-panels';
 import { ToolCard, TOOL_STATUS_LABEL } from '@/components/tool-card';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -83,6 +83,12 @@ export const TRACE_EMPTY_TEXT = '尚無資料';
 export const TRACE_LOCATE_LABEL = '在對話裡定位';
 export const TRACE_LOCATED_TEXT = '已在對話裡定位';
 export const TRACE_LIMITS_HEADING = '這一版的限制';
+export const TRACE_REVEALED_TEXT = '已捲到那一輪';
+export const TRACE_REVEAL_MISSING_TEXT = '觀測分頁已經沒有那一輪的資料';
+/** 「看這一輪」標示的那一圈亮多久。 */
+export const REVEAL_HIGHLIGHT_MS = 3000;
+
+const noop = () => {};
 
 const LINE =
   'group hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-xl px-2 text-left text-xs transition-colors duration-(--duration-quick)';
@@ -515,7 +521,12 @@ function HeadFacts({ head }: { head: TurnHead }) {
 function TurnHeader({ head }: { head: TurnHead }) {
   return (
     <header className="px-2 pt-1 pb-1" data-testid="trace-turn-head">
-      <h3 className="text-foreground text-sm font-medium">
+      <h3
+        className="text-foreground text-sm font-medium outline-none"
+        // 成本分頁的「看這一輪」把焦點交到這裡（`reveal`）；平常不在 Tab 順序裡。
+        data-reveal-target=""
+        tabIndex={-1}
+      >
         第 {head.number} 輪
         <span className="text-muted-foreground ml-2 text-xs font-normal">
           {TURN_KIND_LABEL[head.kind]}
@@ -540,12 +551,15 @@ function TurnGroup({
   structured,
   names,
   missing,
+  revealed,
   onLocate,
 }: {
   turn: TraceTurn;
   structured: boolean;
   names: ReadonlyMap<string, string>;
   missing: string | undefined;
+  /** 剛被成本分頁指到的那一組：畫一圈標示。 */
+  revealed: boolean;
   onLocate: (row: TraceRow) => void;
 }) {
   const title = turn.head === undefined ? '' : `第 ${turn.head.number} 輪`;
@@ -554,9 +568,11 @@ function TurnGroup({
   const rows = hiddenRows === 0 ? turn.rows : turn.rows.slice(hiddenRows);
   return (
     <section
-      className="border-border mb-4 border-l pl-1"
+      className={`border-border mb-4 border-l pl-1 ${revealed ? 'ring-ring rounded-md ring-2' : ''}`}
       data-testid="trace-turn"
       data-legacy={turn.legacy ? '' : undefined}
+      data-seq={turn.seq}
+      data-revealed={revealed ? '' : undefined}
     >
       {turn.head !== undefined && <TurnHeader head={turn.head} />}
       {structured && turn.legacy && (
@@ -594,12 +610,45 @@ function TurnGroup({
 }
 
 /** 窗口外那些輪：只有計數，沒有內文、沒有定位鈕。 */
-function Digests({ digests, omitted }: { digests: readonly TraceDigest[]; omitted: number }) {
+function Digests({
+  digests,
+  omitted,
+  reveal,
+  revealedSeq,
+  onRevealed,
+}: {
+  digests: readonly TraceDigest[];
+  omitted: number;
+  /** 要顯示的是這裡面的某一輪：展開區塊、展開到那一輪那一頁，再捲過去。 */
+  reveal: TurnReveal | undefined;
+  revealedSeq: number | undefined;
+  onRevealed: (nonce: number) => void;
+}) {
   const [shown, setShown] = useState(DIGEST_PAGE);
+  const [open, setOpen] = useState(false);
+  const [ready, setReady] = useState<number | undefined>(undefined);
+  const list = useRef<HTMLOListElement>(null);
   const hidden = Math.max(0, digests.length - shown);
   const visible = digests.slice(hidden);
+  // 第一段：決定要展開到哪（只動狀態）。第二段在這些狀態落地、列畫出來之後才找元素。
+  useEffect(() => {
+    if (reveal === undefined) return;
+    const at = digests.findIndex((digest) => digest.seq === reveal.seq);
+    if (at === -1) return;
+    setOpen(true);
+    setShown((count) => Math.max(count, digests.length - at));
+    setReady(reveal.nonce);
+  }, [reveal, digests]);
+  useEffect(() => {
+    if (reveal === undefined || ready !== reveal.nonce) return;
+    const target = list.current?.querySelector<HTMLElement>(`[data-seq="${reveal.seq}"]`);
+    if (target === null || target === undefined) return;
+    target.scrollIntoView({ block: 'center' });
+    target.focus({ preventScroll: true });
+    onRevealed(reveal.nonce);
+  }, [reveal, ready, shown, open, onRevealed]);
   return (
-    <Collapsible className="mb-4" data-testid="trace-digests">
+    <Collapsible className="mb-4" data-testid="trace-digests" open={open} onOpenChange={setOpen}>
       <CollapsibleTrigger className={LINE}>
         <span className="text-muted-foreground">
           更早的 {digests.length + omitted} 輪（只有摘要）
@@ -623,9 +672,17 @@ function Digests({ digests, omitted }: { digests: readonly TraceDigest[]; omitte
             {TRACE_MORE_DIGESTS_LABEL}（還有 {hidden} 輪）
           </Button>
         )}
-        <ol className="flex flex-col gap-1 px-2 text-xs" aria-label="更早的輪的摘要">
+        <ol ref={list} className="flex flex-col gap-1 px-2 text-xs" aria-label="更早的輪的摘要">
           {visible.map((digest) => (
-            <li key={digest.key} data-testid="trace-digest" data-number={digest.number}>
+            <li
+              key={digest.key}
+              className={`outline-none ${revealedSeq === digest.seq ? 'ring-ring rounded-md ring-2' : ''}`}
+              data-testid="trace-digest"
+              data-number={digest.number}
+              data-seq={digest.seq}
+              data-revealed={revealedSeq === digest.seq ? '' : undefined}
+              tabIndex={-1}
+            >
               <p className="text-foreground">
                 第 {digest.number} 輪
                 <span className="text-muted-foreground ml-2">{TURN_KIND_LABEL[digest.kind]}</span>
@@ -644,15 +701,67 @@ function Digests({ digests, omitted }: { digests: readonly TraceDigest[]; omitte
 const Timeline = memo(function Timeline({
   state,
   locate,
+  reveal,
+  onRevealed,
 }: {
   state: ConversationState;
   locate: PanelBodyProps['locate'];
+  reveal: TurnReveal | undefined;
+  onRevealed: (nonce: number) => void;
 }) {
   const model = useMemo(() => traceModel(state), [state]);
   const names = useStableNames(state.entries);
   const [missing, setMissing] = useState<string | undefined>(undefined);
   const [announced, setAnnounced] = useState('');
   const [shown, setShown] = useState(TURN_PAGE);
+  const [revealedSeq, setRevealedSeq] = useState<number | undefined>(undefined);
+  const [readyTurn, setReadyTurn] = useState<number | undefined>(undefined);
+  const section = useRef<HTMLElement>(null);
+  const revealIn =
+    reveal === undefined
+      ? undefined
+      : model.turns.some((turn) => turn.seq === reveal.seq)
+        ? ('turns' as const)
+        : model.digests.some((digest) => digest.seq === reveal.seq)
+          ? ('digests' as const)
+          : ('missing' as const);
+  // 「看這一輪」（#1034）：第一段只動狀態——展開到那一組那一頁、或交給摘要區塊自己展開；第二段在畫出來之後才找元素、捲過去、
+  // 把焦點放在標題。`readyTurn` 讓兩段落在同一個 commit。1024 以下兩個分頁在同一個抽屜裡，不收抽屜。
+  useEffect(() => {
+    if (reveal === undefined) return;
+    if (revealIn === 'turns') {
+      const at = model.turns.findIndex((turn) => turn.seq === reveal.seq);
+      setShown((count) => Math.max(count, model.turns.length - at));
+      setReadyTurn(reveal.nonce);
+    } else if (revealIn === 'missing') {
+      setAnnounced(TRACE_REVEAL_MISSING_TEXT);
+      onRevealed(reveal.nonce);
+    }
+  }, [reveal, revealIn, model, onRevealed]);
+  useEffect(() => {
+    if (reveal === undefined || readyTurn !== reveal.nonce) return;
+    const group = section.current?.querySelector<HTMLElement>(`section[data-seq="${reveal.seq}"]`);
+    if (group === null || group === undefined) return;
+    group.scrollIntoView({ block: 'start' });
+    group.querySelector<HTMLElement>('[data-reveal-target]')?.focus({ preventScroll: true });
+    setRevealedSeq(reveal.seq);
+    setAnnounced(TRACE_REVEALED_TEXT);
+    onRevealed(reveal.nonce);
+  }, [reveal, readyTurn, shown, onRevealed]);
+  const onDigestRevealed = useCallback(
+    (nonce: number) => {
+      if (reveal !== undefined) setRevealedSeq(reveal.seq);
+      setAnnounced(TRACE_REVEALED_TEXT);
+      onRevealed(nonce);
+    },
+    [reveal, onRevealed],
+  );
+  // 標示只亮一下。
+  useEffect(() => {
+    if (revealedSeq === undefined) return;
+    const timer = setTimeout(() => setRevealedSeq(undefined), REVEAL_HIGHLIGHT_MS);
+    return () => clearTimeout(timer);
+  }, [revealedSeq]);
   const onLocate = useCallback(
     (row: TraceRow) => {
       if (row.target === undefined) return;
@@ -666,6 +775,7 @@ const Timeline = memo(function Timeline({
   const turns = hiddenTurns === 0 ? model.turns : model.turns.slice(hiddenTurns);
   return (
     <section
+      ref={section}
       aria-label="對話的過程"
       className="min-h-0 flex-1 overflow-y-auto px-3 py-3"
       data-testid="right-sidebar-panel-trace"
@@ -676,7 +786,13 @@ const Timeline = memo(function Timeline({
         {model.structured ? TRACE_STRUCTURED_HEADLINE : TRACE_HEADLINE}
       </p>
       {model.structured && (model.digests.length > 0 || model.omitted > 0) && (
-        <Digests digests={model.digests} omitted={model.omitted} />
+        <Digests
+          digests={model.digests}
+          omitted={model.omitted}
+          reveal={revealIn === 'digests' ? reveal : undefined}
+          revealedSeq={revealedSeq}
+          onRevealed={onDigestRevealed}
+        />
       )}
       {hiddenTurns > 0 && (
         <Button
@@ -696,6 +812,7 @@ const Timeline = memo(function Timeline({
           structured={model.structured}
           names={names}
           missing={missing}
+          revealed={turn.seq !== undefined && turn.seq === revealedSeq}
           onLocate={onLocate}
         />
       ))}
@@ -707,7 +824,7 @@ const Timeline = memo(function Timeline({
   );
 });
 
-export function TraceBody({ visible, sources, locate }: PanelBodyProps) {
+export function TraceBody({ visible, sources, locate, reveal, onRevealed }: PanelBodyProps) {
   const state = useVisibleSnapshot(sources.conversation, visible);
   // 條目是空的、但軌跡投影已經有輪（內文沒載入）時照樣畫結構，不寫「尚無資料」。
   const empty =
@@ -724,5 +841,13 @@ export function TraceBody({ visible, sources, locate }: PanelBodyProps) {
       </p>
     );
   }
-  return <Timeline state={state} locate={locate} />;
+  return (
+    <Timeline
+      state={state}
+      locate={locate}
+      // 看不見時不消費：分頁選中之後才會有最新的快照可找。
+      reveal={visible ? reveal : undefined}
+      onRevealed={onRevealed ?? noop}
+    />
+  );
 }

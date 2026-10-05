@@ -27,13 +27,19 @@ import type {
   TrajectoryEnd,
   TrajectoryTurnKind,
   TrajectoryView,
+  WireProjection,
 } from '@nexus/wire';
 
 /** 沒記的欄位顯示成這個。 */
 export const ABSENT = '—';
 
-function viewOf(state: ConversationState, key: string, version: number): unknown {
-  const projection = state.projections[key];
+/** 一個投影的 view；沒有、拋過、版本不認得都是 `undefined`。root 與子代理的值同一個形狀，所以收一份 `key → 投影` 的表。 */
+export function viewOf(
+  projections: Readonly<Record<string, WireProjection>>,
+  key: string,
+  version: number,
+): unknown {
+  const projection = projections[key];
   if (projection === undefined || projection.failed === true || projection.version !== version) {
     return undefined;
   }
@@ -42,7 +48,7 @@ function viewOf(state: ConversationState, key: string, version: number): unknown
 
 /** 軌跡投影的 view；沒有、拋過、版本不認得、形狀不對都是 `undefined`。 */
 export function trajectoryOf(state: ConversationState): TrajectoryView | undefined {
-  const view = viewOf(state, TRAJECTORY_PROJECTION, TRAJECTORY_VERSION);
+  const view = viewOf(state.projections, TRAJECTORY_PROJECTION, TRAJECTORY_VERSION);
   if (typeof view !== 'object' || view === null) return undefined;
   const { turns, digests, omitted } = view as Partial<TrajectoryView>;
   if (!Array.isArray(turns) || !Array.isArray(digests) || typeof omitted !== 'number') {
@@ -53,7 +59,7 @@ export function trajectoryOf(state: ConversationState): TrajectoryView | undefin
 
 /** 請求快照投影的 view；同上。 */
 export function snapshotsOf(state: ConversationState): RequestSnapshotsView | undefined {
-  const view = viewOf(state, REQUEST_SNAPSHOTS_PROJECTION, REQUEST_SNAPSHOTS_VERSION);
+  const view = viewOf(state.projections, REQUEST_SNAPSHOTS_PROJECTION, REQUEST_SNAPSHOTS_VERSION);
   if (typeof view !== 'object' || view === null) return undefined;
   const { system, header } = view as Partial<RequestSnapshotsView>;
   if (!Array.isArray(system) || !Array.isArray(header)) return undefined;

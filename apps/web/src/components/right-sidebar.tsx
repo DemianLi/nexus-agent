@@ -37,6 +37,7 @@ import { ChangesReviewTab } from '@/components/changes-review';
 import { DeliverablePreviewTab } from '@/components/deliverable-preview';
 import { PlanPreviewTab } from '@/components/plan-preview-tab';
 import { PANELS } from '@/components/right-sidebar-panels';
+import type { TurnReveal } from '@/components/right-sidebar-panels';
 import { Button } from '@/components/ui/button';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { useIsMobile } from '@/hooks/use-mobile';
@@ -129,6 +130,12 @@ export interface RightSidebarApi {
    * 1024 以下右側欄是蓋住整個對話的抽屜：先收掉它，抽屜關掉時焦點交給那一則；停靠時焦點留在面板，不搬（spec §8「只在焦點本來會丟掉時才搬」）。
    */
   locate(entryId: string): boolean;
+  /**
+   * 打開觀測分頁、捲到那一輪並標示（#1034，成本分頁的「看這一輪」）。`seq` 是開那一輪的 `turn/start` 的位置
+   * （`TokenMeterTurn.seq`）。觀測分頁還有沒有那一輪的資料它自己判斷：沒有就在分頁裡講，不跳錯地方。
+   * 兩個分頁在 1024 以下同在一個抽屜裡，所以不收抽屜；焦點交給那一輪的標題。
+   */
+  revealTurn(seq: number): void;
 }
 
 interface RightSidebarControl {
@@ -145,6 +152,9 @@ interface RightSidebarControl {
   readonly returnFocus: RefObject<HTMLElement | null>;
   /** 1024 以下定位之後，抽屜關掉時焦點要去的那一格（`locate`）。 */
   readonly locateFocus: RefObject<HTMLElement | null>;
+  /** 還沒被觀測分頁消費的「顯示某一輪」請求。 */
+  readonly reveal: TurnReveal | undefined;
+  settleReveal(nonce: number): void;
   update(change: (layout: SidebarLayout) => SidebarLayout): void;
   setWidth(width: number, commit: boolean): void;
 }
@@ -181,6 +191,8 @@ export function RightSidebarProvider({
   const focusTab = useRef<string | undefined>(undefined);
   const returnFocus = useRef<HTMLElement | null>(null);
   const locateFocus = useRef<HTMLElement | null>(null);
+  const [reveal, setReveal] = useState<TurnReveal | undefined>(undefined);
+  const revealCount = useRef(0);
   useEffect(() => {
     if (touched.current) writeLayout(threadId, layout);
   }, [threadId, layout]);
@@ -194,6 +206,10 @@ export function RightSidebarProvider({
     if (commit) writeWidth(next);
   }, []);
 
+  const settleReveal = useCallback(
+    (nonce: number) => setReveal((current) => (current?.nonce === nonce ? undefined : current)),
+    [],
+  );
   const canPreview = sources.deliverableFiles !== undefined;
   const api = useMemo<RightSidebarApi>(
     () => ({
@@ -219,6 +235,11 @@ export function RightSidebarProvider({
         returnFocus.current = from ?? null;
         update((current) => openTab(current, tab));
       },
+      revealTurn: (seq) => {
+        revealCount.current += 1;
+        setReveal({ seq, nonce: revealCount.current });
+        update((current) => openTab(current, { kind: 'trace' }));
+      },
       locate: (entryId) => {
         const item = findTranscriptItem(entryId);
         if (item === undefined) return false;
@@ -243,10 +264,12 @@ export function RightSidebarProvider({
       focusTab,
       returnFocus,
       locateFocus,
+      reveal,
+      settleReveal,
       update,
       setWidth,
     }),
-    [api, layout, sources, isMobile, width, update, setWidth],
+    [api, layout, sources, isMobile, width, reveal, settleReveal, update, setWidth],
   );
   return <Control.Provider value={control}>{children}</Control.Provider>;
 }
@@ -498,10 +521,19 @@ function EmptyState() {
 }
 
 function TabBody({ tab, visible }: { tab: SidebarTab; visible: boolean }) {
-  const { api, sources, update } = useControl();
+  const { api, sources, update, reveal, settleReveal } = useControl();
   if (isPanelTab(tab)) {
     const { Body } = PANELS[tab.kind];
-    return <Body visible={visible} sources={sources} locate={api.locate} />;
+    const mine = tab.kind === 'trace' ? reveal : undefined;
+    return (
+      <Body
+        visible={visible}
+        sources={sources}
+        locate={api.locate}
+        reveal={mine}
+        onRevealed={settleReveal}
+      />
+    );
   }
   if (tab.kind === 'plan') {
     const plan = sources.plans?.get(tab.id);
