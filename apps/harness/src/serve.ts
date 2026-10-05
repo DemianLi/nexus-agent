@@ -103,6 +103,7 @@ import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
 import { toolTextPlugin } from './settings/tool-text.js';
 import { cleanupToolResultStash } from './tool-result-stash.js';
+import { projectionFlushPlugin } from './settings/projection-flush.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
@@ -463,6 +464,8 @@ async function startServer(
   // 工具結果 meta 與壓縮摘要放上線的上限（#538；結果文字自 #736 起不截）。**同樣是 server 的性質**：兩個消費點（即時的
   // `ThreadPump`、重播的 `historyPage`）都住在 `createWireHandler` 的閉包底下，一個 server 一次。
   const toolTextLimits = startupSetting(plugins, toolTextPlugin);
+  // 插件投影 frame 的合併視窗（#1071）。同樣是 server 的性質：每條 thread 的 pump 吃同一個數字。
+  const projectionFlush = startupSetting(plugins, projectionFlushPlugin);
   // 過大工具結果的暫存（#734）：根與保留天數是 server 的性質，解一次；啟動時清一次超過保留期的會話目錄，
   // 別人改得動的根不清，失敗只記一筆不擋啟動。
   const stashConfig = startupSetting(plugins, toolResultStashPlugin);
@@ -618,6 +621,7 @@ async function startServer(
     deliverableLimits,
     toolTextLimits,
     threadTitleLimits: threadTitle,
+    projectionFlushMs: projectionFlush.flushMs,
     // 一頁歷史撐破軟上限時（#479）、退回標題寫不進去時（#647）、模型標題寫不成時（#650）講一聲。
     warn: (message) => {
       serverLog(message);
