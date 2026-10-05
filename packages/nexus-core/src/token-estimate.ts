@@ -7,6 +7,7 @@
  *
  * ```
  * E(req) = Σ o200k(每則訊息的文字 ＋ 工具呼叫名與參數 ＋ 工具定義 JSON) ＋ 4 × 則數（system 也算一則）
+ *          超過 4 萬字元的一段只抽樣、不全量編（#952），其餘逐位精確；以內容為鍵備忘，換了訊息物件也不重編
  * T(m)   = AI 訊息 m 身上 `usage_metadata.input_tokens`——產出它的那次請求的實數
  *
  * 有錨（這串訊息裡最後一則帶實數的 AI 訊息 a）：
@@ -114,6 +115,99 @@ function o200k(text: string): number {
   return total + encoded(text.slice(last));
 }
 
+/**
+ * 短於這麼多字元的不進備忘：編它比雜湊它還便宜。
+ */
+const MEMO_MIN_CHARS = 256;
+
+/** 備忘最多記幾筆。每筆是一個 40 字元的雜湊鍵加一個數，滿了丟最久沒用的。 */
+const MEMO_MAX_ENTRIES = 20_000;
+
+/**
+ * 超過這麼多字元的一段文字，請求估算只量幾個等距的窗口、按比例推整段，見 {@link sampledTokens}。
+ */
+const SAMPLE_OVER_CHARS = 40_000;
+const SAMPLE_WINDOWS = 32;
+const SAMPLE_WINDOW_CHARS = 1_000;
+
+/**
+ * 以文字內容為鍵的備忘（**exact** 與 **sampled** 兩種各記各的）。
+ *
+ * **為什麼要有它**（[#952](https://github.com/DemianLi/nexus-agent/issues/952)）：下面的 `perMessage`／`perTool` 以物件
+ * 為鍵，而物件跨輪不穩——存檔點（`MemorySaver`）每次讀回來都反序列化出新的訊息物件，量過：同一則訊息第二輪就不是同一個
+ * 物件。於是歷史裡每一則都在**每一輪**重編一次，而 js-tiktoken 在中文上約 7 µs／字元（二十七萬字元 1.8 秒），長中文
+ * 歷史的每輪開頭就同步卡住好幾秒，serve 此時處理不了任何請求。文字是不可變的，以內容的 sha1 為鍵，換了物件、換了 thread
+ * 都命中；結果與不備忘逐位相同。
+ *
+ * 備忘的是一個純函式（文字 → 數），所以放模組層級不違反 [#702](https://github.com/DemianLi/nexus-agent/issues/702)
+ * 對「帳」的要求：那條管的是會隨 thread 變的狀態。
+ */
+const memo = new Map<string, number>();
+
+function memoized(
+  text: string,
+  mode: 'exact' | 'sampled',
+  compute: (text: string) => number,
+): number {
+  if (text.length < MEMO_MIN_CHARS) return compute(text);
+  const key = `${mode}:${createHash('sha1').update(text).digest('hex')}`;
+  const hit = memo.get(key);
+  if (hit !== undefined) {
+    // 命中就挪到最後，LRU。
+    memo.delete(key);
+    memo.set(key, hit);
+    return hit;
+  }
+  const value = compute(text);
+  memo.set(key, value);
+  if (memo.size > MEMO_MAX_ENTRIES) {
+    const oldest = memo.keys().next().value;
+    if (oldest !== undefined) memo.delete(oldest);
+  }
+  return value;
+}
+
+/** 從 `start` 起 `length` 個字元，不把代理對切成兩半。 */
+function windowAt(text: string, start: number, length: number): string {
+  let from = start;
+  const low = text.charCodeAt(from);
+  if (low >= 0xdc00 && low <= 0xdfff) from += 1;
+  let to = Math.min(text.length, from + length);
+  const high = text.charCodeAt(to - 1);
+  if (high >= 0xd800 && high <= 0xdbff) to -= 1;
+  return text.slice(from, to);
+}
+
+/**
+ * 一段**很長**的文字約幾個 token：頭到尾等距取 {@link SAMPLE_WINDOWS} 個窗口各編一次，按字元數的比例推整段。
+ *
+ * 只在請求估算用（壓力檢查、預算、剪刀），那裡不要求精確、要求的是別把事件迴圈卡住：第一次看到一則八十萬字元的中文
+ * 工具結果，全量編要 1.8 秒以上，抽樣只編三萬兩千字元（約 0.2 秒）。等距而不是只取開頭，是因為長結果常常前後不是同一種東西
+ * （前面一段 JSON、後面一大段中文）。結果是確定的，同一段文字永遠推出同一個數，所以帳上記的 E 與之後再估的 E 是同一個。
+ * 單段文字的入口 {@link estimateTextTokens} 不抽樣：外溢層用它做預算的硬保證。
+ *
+ * **量到的誤差**：五種素材（中文文件、去掉空白的中文、程式碼、lockfile、每 7000 字元換一種的混合）各取
+ * 4.5 萬～30 萬字元三種長度三個起點，對全量編的偏差最大 6.0%，多數在 3% 以內。16 個窗口時同一批最大 12.6%，所以是 32 個
+ * 一千字元的窗口，不是 16 個兩千字元的：同樣編三萬兩千字元，窗口多、切到不同種內容的機會大。
+ */
+function sampledTokens(text: string): number {
+  if (text.length <= SAMPLE_OVER_CHARS) return o200k(text);
+  const stride = (text.length - SAMPLE_WINDOW_CHARS) / (SAMPLE_WINDOWS - 1);
+  let tokens = 0;
+  let chars = 0;
+  for (let index = 0; index < SAMPLE_WINDOWS; index += 1) {
+    const piece = windowAt(text, Math.floor(index * stride), SAMPLE_WINDOW_CHARS);
+    tokens += o200k(piece);
+    chars += piece.length;
+  }
+  return Math.round((tokens * text.length) / Math.max(1, chars));
+}
+
+/** 請求估算裡一段文字的 token 數：備忘過，超長的抽樣。 */
+function requestTextTokens(text: string): number {
+  return memoized(text, text.length > SAMPLE_OVER_CHARS ? 'sampled' : 'exact', sampledTokens);
+}
+
 /** 摘要器交給下一層、或剪刀收到的那份請求，估算要的只有這幾格。 */
 export interface EstimatedRequest {
   readonly messages?: readonly BaseMessage[];
@@ -164,7 +258,7 @@ function contentText(content: unknown): string {
  * @returns o200k 算出來的 token 數。
  */
 export function estimateTextTokens(text: string): number {
-  return o200k(text);
+  return memoized(text, 'exact', o200k);
 }
 
 /** 一則訊息的 E。同一個物件只編一次。 */
@@ -175,7 +269,7 @@ function messageTokens(message: BaseMessage): number {
   const calls = (message as { tool_calls?: readonly { name?: unknown; args?: unknown }[] })
     .tool_calls;
   for (const call of calls ?? []) text += String(call.name ?? '') + JSON.stringify(call.args ?? {});
-  const tokens = o200k(text) + MESSAGE_OVERHEAD;
+  const tokens = requestTextTokens(text) + MESSAGE_OVERHEAD;
   perMessage.set(message, tokens);
   return tokens;
 }
@@ -191,7 +285,7 @@ function toolTokens(tool: unknown): number {
   } catch {
     json = JSON.stringify(tool) ?? '';
   }
-  const tokens = o200k(json);
+  const tokens = requestTextTokens(json);
   perTool.set(tool, tokens);
   return tokens;
 }
@@ -202,7 +296,7 @@ function systemTokens(system: unknown): number {
   const cached = perMessage.get(system);
   if (cached !== undefined) return cached;
   const text = contentText((system as { content?: unknown }).content);
-  const tokens = text.length === 0 ? 0 : o200k(text) + MESSAGE_OVERHEAD;
+  const tokens = text.length === 0 ? 0 : requestTextTokens(text) + MESSAGE_OVERHEAD;
   perMessage.set(system, tokens);
   return tokens;
 }
