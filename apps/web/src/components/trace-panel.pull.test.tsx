@@ -178,6 +178,28 @@ describe('預拉（#1083）', () => {
   });
 });
 
+describe('子代理數', () => {
+  it('摘要列與完整輪的標題：有派子代理才寫「N 個子代理」，沒有就不寫', async () => {
+    const script = new Script();
+    const state = withTrajectory(
+      reduceAll(emptyConversation(), []),
+      script,
+      view([turn(3, { subagentCount: 2 }), turn(4)], {
+        digests: [digest(1, { subagentCount: 3 }), digest(2)],
+      }),
+    );
+    mount(state, fakeClient().client);
+    await flush();
+    fireEvent.click(screen.getByRole('button', { name: /更早的 2 輪/ }));
+    expect(within(digestRow(100)!).getByTestId('trace-subagent-count').textContent).toBe(
+      '3 個子代理',
+    );
+    expect(within(digestRow(200)!).queryByTestId('trace-subagent-count')).toBeNull();
+    expect(within(group(300)!).getByTestId('trace-subagent-count').textContent).toBe('2 個子代理');
+    expect(within(group(400)!).queryByTestId('trace-subagent-count')).toBeNull();
+  });
+});
+
 describe('摘要列的「載入這一輪的細節」', () => {
   async function opened() {
     const fake = fakeClient();

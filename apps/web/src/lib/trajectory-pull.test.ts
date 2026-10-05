@@ -245,6 +245,9 @@ describe('createTrajectoryPuller', () => {
     await stale.catch(() => {});
     expect(puller.getSnapshot().turns.size).toBe(0);
     expect(puller.getSnapshot().pending.has('seq:200')).toBe(true);
+    // 舊請求收尾時沒有把新請求的位置刪掉：這時再拉同一個錨點，仍是同一個進行中的請求。
+    void puller.pull({ seq: 200 });
+    expect(client.trajectoryTurn).toHaveBeenCalledTimes(2);
     waiting[1]!.resolve(ok([turn(2)]));
     await again;
     expect(puller.getSnapshot().turns.size).toBe(1);

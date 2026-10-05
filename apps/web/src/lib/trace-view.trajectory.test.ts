@@ -928,6 +928,24 @@ describe('traceModel：按需拉回來的輪（#1083）', () => {
     expect(model.turns.some((t) => t.seq === 300)).toBe(false);
   });
 
+  it('只拉到續接那一半：邏輯輪的開頭仍是摘要補的，併起來的那一組不算「只有摘要」（它有一半的細節）', () => {
+    const { script, state } = pushedOnlyLast();
+    const trajectory = view([turn(5)], {
+      digests: [digest(1), digest(2), digest(3, { kind: 'resume', logical: false })],
+    });
+    const model = traceModel(
+      withTrajectory(state, script, trajectory),
+      pulled(turn(1), turn(3, { kind: 'resume', logical: false, calls: [call(30)] })),
+    );
+    expect(model.digests).toEqual([]);
+    const second = model.turns.find((t) => t.seq === 200)!;
+    expect(second.head).toMatchObject({ callCount: 2 + 1 });
+    expect(second.summaryOnly).toBeUndefined();
+    // 兩段都是補出來的：整組都只有摘要。
+    const bare = traceModel(withTrajectory(state, script, trajectory), pulled(turn(1)));
+    expect(bare.turns.find((t) => t.seq === 200)!.summaryOnly).toBe(true);
+  });
+
   it('子代理數在摘要上也帶著（併進摘要列時相加）', () => {
     const { script, state } = pushedOnlyLast();
     const trajectory = view([turn(4)], {
