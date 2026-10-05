@@ -31,6 +31,7 @@ function spyPuller(snapshot: Partial<PullSnapshot> = {}) {
     getSnapshot: vi.fn(() => full),
     subscribe: vi.fn(() => () => {}),
     pull: vi.fn((_anchor: PullAnchor) => Promise.resolve({ ok: true as const })),
+    fetchTurns: vi.fn(() => Promise.resolve({ ok: true as const, turns: [], through: 0 })),
     seed: vi.fn(),
     reset: vi.fn(),
     dispose: vi.fn(),

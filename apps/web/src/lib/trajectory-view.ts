@@ -59,6 +59,36 @@ export function trajectoryOf(state: ConversationState): TrajectoryView | undefin
   return view as TrajectoryView;
 }
 
+/** 一個子代理自己的軌跡 view（`subagentProjections[runId]`）；沒有、拋過、版本不認得、形狀不對都是 `undefined`。 */
+export function subagentTrajectoryOf(
+  state: ConversationState,
+  runId: string,
+): TrajectoryView | undefined {
+  const projections = state.subagentProjections[runId];
+  if (projections === undefined) return undefined;
+  const view = viewOf(projections, TRAJECTORY_PROJECTION, TRAJECTORY_VERSION);
+  if (typeof view !== 'object' || view === null) return undefined;
+  const { turns, digests, omitted } = view as Partial<TrajectoryView>;
+  if (!Array.isArray(turns) || !Array.isArray(digests) || typeof omitted !== 'number') {
+    return undefined;
+  }
+  return view as TrajectoryView;
+}
+
+/** 一個子代理自己的請求快照（`system`／`header` 的 `seq` 指的是它自己日誌的位置）；同上。 */
+export function subagentSnapshotsOf(
+  state: ConversationState,
+  runId: string,
+): RequestSnapshotsView | undefined {
+  const projections = state.subagentProjections[runId];
+  if (projections === undefined) return undefined;
+  const view = viewOf(projections, REQUEST_SNAPSHOTS_PROJECTION, REQUEST_SNAPSHOTS_VERSION);
+  if (typeof view !== 'object' || view === null) return undefined;
+  const { system, header } = view as Partial<RequestSnapshotsView>;
+  if (!Array.isArray(system) || !Array.isArray(header)) return undefined;
+  return view as RequestSnapshotsView;
+}
+
 /** 請求快照投影的 view；同上。 */
 export function snapshotsOf(state: ConversationState): RequestSnapshotsView | undefined {
   const view = viewOf(state.projections, REQUEST_SNAPSHOTS_PROJECTION, REQUEST_SNAPSHOTS_VERSION);

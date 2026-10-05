@@ -372,3 +372,36 @@ describe('staleAnchors：還會變的輪', () => {
     ).toEqual([]);
   });
 });
+
+describe('fetchTurns：不進快取的一次性拉取（子代理用）', () => {
+  it('帶 runId 與 seq 原樣送給伺服器，成功回輪與日誌位置，不動快照', async () => {
+    const { client, queries, waiting } = fakeClient();
+    const puller = createTrajectoryPuller(client, 't');
+    const before = puller.getSnapshot();
+    const pending = puller.fetchTurns({ runId: 'bg-1', seq: 10 });
+    expect(queries).toEqual([{ runId: 'bg-1', seq: 10 }]);
+    waiting[0]!.resolve(ok([turn(1)], 77));
+    expect(await pending).toEqual({ ok: true, turns: [turn(1)], through: 77 });
+    expect(puller.getSnapshot()).toBe(before);
+  });
+
+  it('伺服器拒絕：帶回碼與訊息；不支援也不設「整份不支援」', async () => {
+    const { client, waiting } = fakeClient();
+    const puller = createTrajectoryPuller(client, 't');
+    const pending = puller.fetchTurns({ runId: 'bg-1', seq: 10 });
+    waiting[0]!.resolve({ kind: 'rejected', code: 'not_supported', message: '這份組裝沒有' });
+    expect(await pending).toEqual({ ok: false, code: 'not_supported', message: '這份組裝沒有' });
+    expect(puller.getSnapshot().unsupported).toBe(false);
+  });
+
+  it('連線出錯是網路碼；被自己取消是 aborted；兩者都不拋', async () => {
+    const { client } = fakeClient();
+    client.trajectoryTurn.mockRejectedValueOnce(new Error('boom'));
+    const puller = createTrajectoryPuller(client, 't');
+    expect(await puller.fetchTurns({ seq: 1 })).toMatchObject({ ok: false, code: 'network' });
+    const abort = new AbortController();
+    const pending = puller.fetchTurns({ runId: 'bg-1', seq: 1 }, abort.signal);
+    abort.abort();
+    expect(await pending).toMatchObject({ ok: false, code: 'aborted' });
+  });
+});

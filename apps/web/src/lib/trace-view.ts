@@ -77,8 +77,12 @@ import type {
   HumanEntry,
   NoticeEntry,
   ToolEntry,
+  RequestSnapshotsView,
+  TrajectoryCall,
   TrajectoryDigest,
   TrajectoryEnd,
+  TrajectoryTool,
+  TrajectoryTurn,
   TrajectoryTurnKind,
   TrajectoryView,
 } from '@nexus/wire';
@@ -133,7 +137,7 @@ export const TRACE_STRUCTURED_LIMITS = {
   loaded:
     '內文只列出已載入的對話。軌跡直接帶的只有最近幾輪的逐次呼叫結構，更早的輪只剩一行摘要，按「載入這一輪的細節」向伺服器要；已載入但落在軌跡之前的對話，仍以人說的那一句切開。',
   absent:
-    '時刻、模型呼叫的起訖、重試與重複呼叫的提醒來自軌跡投影，記錄它們之前的舊會話沒有這些，標「—」。子代理自己的呼叫結構今天沒有。',
+    '時刻、模型呼叫的起訖、重試與重複呼叫的提醒來自軌跡投影，記錄它們之前的舊會話沒有這些，標「—」。子代理自己的呼叫結構在派它的那顆工具底下，展開才載入，只有結構、沒有內文；重新整理後，子代理自己的工具卡與回覆（即時串流的畫面）不在對話裡。',
 } as const;
 
 /** 找不到那一則時（沒載入、或那一則畫不出來）。說法沿用計劃分頁（`PLAN_TAB_MISSING_TEXT`）。 */
@@ -195,6 +199,8 @@ export type TraceRow =
       /** 結構化模式才有：`tool/call` 的時刻與配對結果的耗時（取自投影，不取條目）。 */
       readonly time?: number;
       readonly durationMs?: number;
+      /** 這顆工具派出的子代理（`runId`）：展開它的呼叫結構要用。 */
+      readonly subagentRunId?: string;
     })
   | (RowBase & {
       readonly kind: 'decision';
@@ -502,6 +508,7 @@ interface Slot {
 interface ToolFact {
   readonly time: number;
   readonly durationMs: number | undefined;
+  readonly subagentRunId: string | undefined;
 }
 
 interface ViewIndex {
@@ -510,6 +517,14 @@ interface ViewIndex {
 }
 
 /** 條目鍵 → 位置。鍵的形狀見檔頭的表。 */
+function toolFact(tool: TrajectoryTool): ToolFact {
+  return {
+    time: tool.time,
+    durationMs: tool.durationMs,
+    subagentRunId: tool.subagent?.runId,
+  };
+}
+
 function indexView(view: TrajectoryView): ViewIndex {
   const slots = new Map<string, Slot>();
   const tools = new Map<string, ToolFact>();
@@ -523,12 +538,12 @@ function indexView(view: TrajectoryView): ViewIndex {
       }
       for (const tool of call.tools) {
         slots.set(`tool-${tool.callId}`, { turn: t, call: c });
-        tools.set(`tool-${tool.callId}`, { time: tool.time, durationMs: tool.durationMs });
+        tools.set(`tool-${tool.callId}`, toolFact(tool));
       }
     });
     for (const tool of turn.looseTools) {
       slots.set(`tool-${tool.callId}`, { turn: t, call: undefined });
-      tools.set(`tool-${tool.callId}`, { time: tool.time, durationMs: tool.durationMs });
+      tools.set(`tool-${tool.callId}`, toolFact(tool));
     }
   });
   return { slots, tools };
@@ -768,6 +783,108 @@ function snapshotPartsOf(
   };
 }
 
+/** 一次模型呼叫的段落列。root 的與子代理的共用：`loaded` 是「有沒有條目歸在這次呼叫上」。 */
+function callRowOf(
+  call: TrajectoryCall,
+  options: {
+    readonly n: number;
+    readonly target: string | undefined;
+    readonly loaded: boolean;
+    readonly snapshotParts: (call: TrajectoryCall) => SnapshotParts;
+  },
+): Extract<TraceRow, { kind: 'call' }> {
+  return {
+    kind: 'call',
+    key: `call-${call.id}`,
+    target: options.target,
+    n: options.n,
+    time: call.time,
+    toolCount: call.tools.length,
+    retryCount: call.retries.length,
+    loaded: options.loaded,
+    hasContent:
+      call.tools.length > 0 ||
+      (call.reply !== undefined && call.reply.textChars + call.reply.reasoningChars > 0),
+    ...(call.endTime === undefined ? {} : { endTime: call.endTime }),
+    ...(call.durationMs === undefined ? {} : { durationMs: call.durationMs }),
+    ...(call.outcome === undefined ? {} : { outcome: call.outcome }),
+    ...(call.model === undefined ? {} : { model: call.model }),
+    ...(call.usage === undefined
+      ? {}
+      : { inputTokens: call.usage.inputTokens, outputTokens: call.usage.outputTokens }),
+    ...options.snapshotParts(call),
+  };
+}
+
+/** 子代理一輪的摘要（還沒拉細節）的標題。 */
+export function subagentDigestHead(digest: TrajectoryDigest): TurnHead {
+  return headOf(digest, 1);
+}
+
+/** 子代理的一次呼叫：呼叫段落列、它的重試、它叫的工具（只有結構，沒有內文）。 */
+export interface SubagentCallView {
+  readonly row: Extract<TraceRow, { kind: 'call' }>;
+  readonly retries: readonly Extract<TraceRow, { kind: 'retry' }>[];
+  readonly tools: readonly SubagentToolView[];
+}
+
+export interface SubagentToolView {
+  readonly key: string;
+  readonly name: string;
+  readonly status: TrajectoryTool['status'];
+  readonly time: number;
+  readonly durationMs?: number;
+  readonly code?: string;
+}
+
+/** 子代理的一輪（或一份前景子代理的整段執行）：標題與逐次呼叫。 */
+export interface SubagentTurnView {
+  readonly seq: number;
+  readonly head: TurnHead;
+  /** 單輪上限摺掉的呼叫數；沒摺過沒有這一格。 */
+  readonly elidedCalls?: number;
+  readonly calls: readonly SubagentCallView[];
+}
+
+/**
+ * 一個子代理的一輪轉成畫面要的形狀。**只放原始值**（理由同 `call` 那一列）；快照讀子代理自己的 `request-snapshots`
+ * （`system`／`header` 指的是它自己日誌的位置）。呼叫的 `loaded` 一律是真的：子代理的內文不在這條路上，沒有「內文沒載入」可講。
+ */
+export function subagentTurnView(
+  turn: TrajectoryTurn,
+  snapshots: RequestSnapshotsView | undefined,
+): SubagentTurnView {
+  const snapshotParts = snapshotPartsOf(snapshots);
+  const skipped = turn.elided?.calls ?? 0;
+  return {
+    seq: turn.seq,
+    head: headOf(turn, 1),
+    ...(skipped === 0 ? {} : { elidedCalls: skipped }),
+    calls: turn.calls.map((call, c) => ({
+      row: callRowOf(call, { n: skipped + c + 1, target: undefined, loaded: true, snapshotParts }),
+      retries: call.retries.map((retry) => ({
+        kind: 'retry' as const,
+        key: `retry-${call.id}-${retry.retry}`,
+        target: undefined,
+        retry: retry.retry,
+        maxRetries: retry.maxRetries,
+        time: retry.time,
+        code: retry.code,
+        ...(retry.status === undefined ? {} : { status: retry.status }),
+        ...(retry.waitedMs === undefined ? {} : { waitedMs: retry.waitedMs }),
+      })),
+      tools: call.tools.map((tool) => ({
+        key: tool.callId,
+        name: tool.name,
+        status: tool.status,
+        time: tool.time,
+        ...(tool.durationMs === undefined ? {} : { durationMs: tool.durationMs }),
+        ...(tool.code === undefined ? {} : { code: tool.code }),
+      })),
+    })),
+  };
+}
+
 /** 結構化模式：條目歸進投影的輪與呼叫，再把投影的結構列（呼叫、重試、提醒）照順序插進去。 */
 function structuredTurns(
   state: ConversationState,
@@ -851,27 +968,14 @@ function structuredTurns(
     turn.calls.forEach((call, c) => {
       flushSignals(call.id);
       const loadedRows = byCall[t]?.[c] ?? [];
-      rows.push({
-        kind: 'call',
-        key: `call-${call.id}`,
-        target: callTarget[t]?.[c],
-        n: callBase + skipped + c + 1,
-        time: call.time,
-        toolCount: call.tools.length,
-        retryCount: call.retries.length,
-        loaded: loadedRows.length > 0,
-        hasContent:
-          call.tools.length > 0 ||
-          (call.reply !== undefined && call.reply.textChars + call.reply.reasoningChars > 0),
-        ...(call.endTime === undefined ? {} : { endTime: call.endTime }),
-        ...(call.durationMs === undefined ? {} : { durationMs: call.durationMs }),
-        ...(call.outcome === undefined ? {} : { outcome: call.outcome }),
-        ...(call.model === undefined ? {} : { model: call.model }),
-        ...(call.usage === undefined
-          ? {}
-          : { inputTokens: call.usage.inputTokens, outputTokens: call.usage.outputTokens }),
-        ...snapshotParts(call),
-      });
+      rows.push(
+        callRowOf(call, {
+          n: callBase + skipped + c + 1,
+          target: callTarget[t]?.[c],
+          loaded: loadedRows.length > 0,
+          snapshotParts,
+        }),
+      );
       for (const retry of call.retries) {
         rows.push({
           kind: 'retry',
@@ -955,6 +1059,7 @@ function withToolFact(row: TraceRow, index: ViewIndex): TraceRow {
     ...row,
     time: fact.time,
     ...(fact.durationMs === undefined ? {} : { durationMs: fact.durationMs }),
+    ...(fact.subagentRunId === undefined ? {} : { subagentRunId: fact.subagentRunId }),
   };
 }
 
