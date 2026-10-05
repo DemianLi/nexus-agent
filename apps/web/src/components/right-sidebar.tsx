@@ -49,6 +49,7 @@ import type { LocatedFile } from '@/lib/deliverables-view';
 import type { PlanDocument } from '@/lib/plan-review';
 import { basename } from '@/lib/present-view';
 import type { SubagentUsageLoader } from '@/lib/subagent-usage';
+import type { TrajectoryPuller } from '@/lib/trajectory-pull';
 import {
   findTranscriptItem,
   focusTranscriptItem,
@@ -104,6 +105,11 @@ export interface RightSidebarSources {
    * {@link RightSidebarSources.conversation}。沒給就不畫子代理那一段。
    */
   readonly subagentUsage?: SubagentUsageLoader | undefined;
+  /**
+   * 軌跡細節的按需拉取（#1083，觀測分頁）：快取與進行中的請求放在這裡，**身分要穩定**（`App` 以 `[client, threadId]` 建）——
+   * 分頁切走再回來、面板重掛，已經拉到的不必再拉。沒給就只有推送的那幾輪細節、更早的輪只有摘要。
+   */
+  readonly trajectoryPull?: TrajectoryPuller | undefined;
 }
 
 /** 卡片用得到的那一半。 */
