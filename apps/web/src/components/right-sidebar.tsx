@@ -136,6 +136,12 @@ export interface RightSidebarApi {
    * 兩個分頁在 1024 以下同在一個抽屜裡，所以不收抽屜；焦點交給那一輪的標題。
    */
   revealTurn(seq: number): void;
+  /**
+   * 打開觀測分頁、捲到這一則回覆所在的那一輪並標示（#1034，回覆底下的「這一輪的過程」）。`messageId` 是對話裡那則回覆的訊息 id。
+   * 那一輪在哪由觀測分頁自己判斷：落在軌跡窗口之外（只剩摘要或根本沒有）就在分頁裡講，不跳錯地方。
+   * `from` 是按下的那顆鈕：1024 以下抽屜關掉時焦點交回它；抽屜開著時焦點交給那一輪的標題。
+   */
+  revealReply(messageId: string, from?: HTMLElement | null): void;
 }
 
 interface RightSidebarControl {
@@ -238,6 +244,14 @@ export function RightSidebarProvider({
       revealTurn: (seq) => {
         revealCount.current += 1;
         setReveal({ seq, nonce: revealCount.current });
+        update((current) => openTab(current, { kind: 'trace' }));
+      },
+      revealReply: (messageId, from) => {
+        // 先把焦點交給分頁（那一輪找不到時就停在這）；找得到時觀測分頁隨後把焦點放到那一輪的標題。
+        focusTab.current = tabKey({ kind: 'trace' });
+        returnFocus.current = from ?? null;
+        revealCount.current += 1;
+        setReveal({ messageId, nonce: revealCount.current });
         update((current) => openTab(current, { kind: 'trace' }));
       },
       locate: (entryId) => {

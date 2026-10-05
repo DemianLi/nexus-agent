@@ -89,7 +89,8 @@ export interface TranscriptFeedback {
  * 一則回覆底下的讚與踩。**已選的那顆實心、`aria-pressed`**，再點一次就是收回；另一顆開對話框
  * （照 dsh 的 `MessageFeedbackActions`）。
  *
- * 旁邊的「這一輪的過程」（#1031，#1017 Q3 ③）打開右側欄的觀測分頁；**只放入口，定位到那一輪歸 #1034**。它跟著讚踩列
+ * 旁邊的「這一輪的過程」（#1031，#1017 Q3 ③）打開右側欄的觀測分頁、捲到這一則回覆所在的那一輪並標示（#1034，`revealReply`；
+ * 那一輪不在軌跡窗口裡時分頁會講明白）。對每一則評得了的回覆都一樣，不只倒讚的。它跟著讚踩列
  * 一起出現，所以沒有評分外掛的部署、以及講到一半被停下來的那一輪（`isRatable` 為否）都看不到；沒有右側欄時不畫。
  */
 function RatingButtons({
@@ -141,7 +142,7 @@ function RatingButtons({
           variant="ghost"
           className="text-muted-foreground h-7 gap-1.5 px-2 text-xs"
           data-testid="turn-trace"
-          onClick={(event) => sidebar.openPanel('trace', event.currentTarget)}
+          onClick={(event) => sidebar.revealReply(messageId, event.currentTarget)}
         >
           <Activity aria-hidden className="size-3.5" />
           這一輪的過程

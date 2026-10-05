@@ -63,6 +63,7 @@ import {
   TRACE_TARGET_MISSING_TEXT,
   sameRow,
   traceModel,
+  turnSeqOfMessage,
 } from '@/lib/trace-view';
 import type { TraceDigest, TraceRow, TraceTurn, TurnHead } from '@/lib/trace-view';
 import {
@@ -86,6 +87,12 @@ export const TRACE_LOCATED_TEXT = '已在對話裡定位';
 export const TRACE_LIMITS_HEADING = '這一版的限制';
 export const TRACE_REVEALED_TEXT = '已捲到那一輪';
 export const TRACE_REVEAL_MISSING_TEXT = '觀測分頁已經沒有那一輪的資料';
+/** 從回覆底下按「這一輪的過程」，那一則歸不進軌跡的輪（窗口之前、投影還沒跟上、或沒有軌跡投影）。 */
+export const TRACE_REPLY_UNPLACED_TEXT =
+  '這一則回覆歸不到軌跡裡的輪：它在軌跡窗口之前，或軌跡還沒跟上、或這個會話沒有軌跡投影。';
+/** 同上，但軌跡有更早輪的摘要：多半是那一輪太舊，只剩摘要，對不到是哪一輪。 */
+export const TRACE_REPLY_OLDER_TEXT =
+  '這一則回覆多半在軌跡窗口之前：更早的輪只剩摘要（上面「更早的輪」），對不到是哪一輪。';
 /** 「看這一輪」標示的那一圈亮多久。 */
 export const REVEAL_HIGHLIGHT_MS = 3000;
 
@@ -624,7 +631,7 @@ function Digests({
   digests: readonly TraceDigest[];
   omitted: number;
   /** 要顯示的是這裡面的某一輪：展開區塊、展開到那一輪那一頁，再捲過去。 */
-  reveal: TurnReveal | undefined;
+  reveal: { readonly seq: number; readonly nonce: number } | undefined;
   revealedSeq: number | undefined;
   onRevealed: (nonce: number) => void;
 }) {
@@ -717,48 +724,70 @@ const Timeline = memo(function Timeline({
   const names = useStableNames(state.entries);
   const [missing, setMissing] = useState<string | undefined>(undefined);
   const [announced, setAnnounced] = useState('');
+  // 找不到那一輪時，畫面上也要說（`announced` 只給讀屏）：不然看得見的人只看到側邊欄打開、什麼都沒標示。
+  const [notice, setNotice] = useState<string | undefined>(undefined);
   const [shown, setShown] = useState(TURN_PAGE);
   const [revealedSeq, setRevealedSeq] = useState<number | undefined>(undefined);
   const [readyTurn, setReadyTurn] = useState<number | undefined>(undefined);
   const section = useRef<HTMLElement>(null);
+  // 回覆底下的「這一輪的過程」給的是訊息 id：先換成那一輪的 `seq`，換不出來（歸不進軌跡的輪）就講明白。
+  const target = useMemo(() => {
+    if (reveal === undefined) return undefined;
+    if (reveal.seq !== undefined) return { nonce: reveal.nonce, seq: reveal.seq };
+    const seq = turnSeqOfMessage(model, state.entries, reveal.messageId);
+    return seq === undefined ? 'unplaced' : { nonce: reveal.nonce, seq };
+  }, [reveal, model, state.entries]);
+  const placed = target === undefined || target === 'unplaced' ? undefined : target;
   const revealIn =
-    reveal === undefined
+    target === undefined
       ? undefined
-      : model.turns.some((turn) => turn.seq === reveal.seq)
-        ? ('turns' as const)
-        : model.digests.some((digest) => digest.seq === reveal.seq)
-          ? ('digests' as const)
-          : ('missing' as const);
+      : target === 'unplaced'
+        ? ('unplaced' as const)
+        : model.turns.some((turn) => turn.seq === target.seq)
+          ? ('turns' as const)
+          : model.digests.some((digest) => digest.seq === target.seq)
+            ? ('digests' as const)
+            : ('missing' as const);
   // 「看這一輪」（#1034）：第一段只動狀態——展開到那一組那一頁、或交給摘要區塊自己展開；第二段在畫出來之後才找元素、捲過去、
   // 把焦點放在標題。`readyTurn` 讓兩段落在同一個 commit。1024 以下兩個分頁在同一個抽屜裡，不收抽屜。
   useEffect(() => {
     if (reveal === undefined) return;
-    if (revealIn === 'turns') {
-      const at = model.turns.findIndex((turn) => turn.seq === reveal.seq);
+    if (revealIn === 'turns' && placed !== undefined) {
+      setNotice(undefined);
+      const at = model.turns.findIndex((turn) => turn.seq === placed.seq);
       setShown((count) => Math.max(count, model.turns.length - at));
       setReadyTurn(reveal.nonce);
-    } else if (revealIn === 'missing') {
-      setAnnounced(TRACE_REVEAL_MISSING_TEXT);
+    } else if (revealIn === 'missing' || revealIn === 'unplaced') {
+      const text =
+        revealIn === 'missing'
+          ? TRACE_REVEAL_MISSING_TEXT
+          : model.structured && (model.digests.length > 0 || model.omitted > 0)
+            ? TRACE_REPLY_OLDER_TEXT
+            : TRACE_REPLY_UNPLACED_TEXT;
+      setAnnounced(text);
+      setNotice(text);
+      // 說明在最上面；面板可能停在很下面，捲回去才看得到。
+      if (section.current !== null) section.current.scrollTop = 0;
       onRevealed(reveal.nonce);
     }
-  }, [reveal, revealIn, model, onRevealed]);
+  }, [reveal, revealIn, placed, model, onRevealed]);
   useEffect(() => {
-    if (reveal === undefined || readyTurn !== reveal.nonce) return;
-    const group = section.current?.querySelector<HTMLElement>(`section[data-seq="${reveal.seq}"]`);
+    if (placed === undefined || readyTurn !== placed.nonce) return;
+    const group = section.current?.querySelector<HTMLElement>(`section[data-seq="${placed.seq}"]`);
     if (group === null || group === undefined) return;
     group.scrollIntoView({ block: 'start' });
     group.querySelector<HTMLElement>('[data-reveal-target]')?.focus({ preventScroll: true });
-    setRevealedSeq(reveal.seq);
+    setRevealedSeq(placed.seq);
     setAnnounced(TRACE_REVEALED_TEXT);
-    onRevealed(reveal.nonce);
-  }, [reveal, readyTurn, shown, onRevealed]);
+    onRevealed(placed.nonce);
+  }, [placed, readyTurn, shown, onRevealed]);
   const onDigestRevealed = useCallback(
     (nonce: number) => {
-      if (reveal !== undefined) setRevealedSeq(reveal.seq);
+      if (placed !== undefined) setRevealedSeq(placed.seq);
       setAnnounced(TRACE_REVEALED_TEXT);
       onRevealed(nonce);
     },
-    [reveal, onRevealed],
+    [placed, onRevealed],
   );
   // 標示只亮一下。
   useEffect(() => {
@@ -789,11 +818,21 @@ const Timeline = memo(function Timeline({
       <p className="text-muted-foreground mb-3 px-2 text-xs" data-testid="trace-headline">
         {model.structured ? TRACE_STRUCTURED_HEADLINE : TRACE_HEADLINE}
       </p>
+      {notice !== undefined && (
+        <p
+          // 讀屏已經從下面的 `role=status` 聽到同一句，這裡只給看得見的人。
+          aria-hidden
+          className="bg-chip mb-3 rounded-md px-3 py-2 text-xs"
+          data-testid="trace-reveal-notice"
+        >
+          {notice}
+        </p>
+      )}
       {model.structured && (model.digests.length > 0 || model.omitted > 0) && (
         <Digests
           digests={model.digests}
           omitted={model.omitted}
-          reveal={revealIn === 'digests' ? reveal : undefined}
+          reveal={revealIn === 'digests' ? placed : undefined}
           revealedSeq={revealedSeq}
           onRevealed={onDigestRevealed}
         />

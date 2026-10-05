@@ -900,6 +900,23 @@ export function traceModel(state: ConversationState): TraceModel {
   return model;
 }
 
+/**
+ * 一則回覆（訊息 id）落在哪一輪：回那一組的 `seq`（`TokenMeterTurn.seq`、`reveal` 的鍵）。
+ * 答不出就 `undefined`：條目不在這份對話裡、那一則歸不進投影的輪（窗口之前、投影還沒跟上）、或沒有軌跡投影（第 0 版的組沒有 `seq`）。
+ * 續接併回前一輪的組，所以續接之後那一則的答案是併起來那一組。
+ */
+export function turnSeqOfMessage(
+  model: TraceModel,
+  entries: readonly ConversationEntry[],
+  messageId: string,
+): number | undefined {
+  const entry = entries.find((e) => e.kind === 'ai' && e.messageId === messageId);
+  if (entry === undefined) return undefined;
+  return model.turns.find(
+    (turn) => turn.seq !== undefined && turn.rows.some((row) => row.target === entry.id),
+  )?.seq;
+}
+
 /** {@link traceModel} 的輪。 */
 export function traceTurns(state: ConversationState): readonly TraceTurn[] {
   return traceModel(state).turns;

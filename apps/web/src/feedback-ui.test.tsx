@@ -13,6 +13,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '@/App';
+import { TRACE_REPLY_UNPLACED_TEXT } from '@/components/trace-panel';
 import { FEEDBACK_COPY } from '@/lib/feedback';
 
 /**
@@ -190,7 +191,7 @@ describe('評分按鈕', () => {
     expect(within(entryOf('先說一句。')).queryByTestId('rating-buttons')).toBeNull();
   });
 
-  it('讚踩列旁的「這一輪的過程」打開右側欄的觀測分頁（#1031）：分頁讀得到這條對話（#1033）；不定位到那一輪（#1034）', async () => {
+  it('讚踩列旁的「這一輪的過程」打開右側欄的觀測分頁（#1031）：分頁讀得到這條對話（#1033）；沒有軌跡投影時定位不了那一輪，分頁講明白（#1034）', async () => {
     seq = 0;
     render(<App client={fakeClient().client} />);
     await ready();
@@ -203,6 +204,7 @@ describe('評分按鈕', () => {
     expect(panel.textContent).toContain('先說一句。');
     expect(panel.textContent).toContain('收工了。');
     expect(within(panel).getAllByTestId('trace-row').length).toBeGreaterThanOrEqual(2);
+    expect(panel.querySelector('[role=status]')?.textContent).toBe(TRACE_REPLY_UNPLACED_TEXT);
   });
 
   it('點踩：先開對話框，選分類、寫備註、送出才記；再點一次是收回', async () => {
