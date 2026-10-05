@@ -23,6 +23,8 @@ import {
 import type {
   ConversationState,
   RequestSnapshotsView,
+  TrajectoryApproval,
+  TrajectoryApprovalOutcome,
   TrajectoryDecision,
   TrajectoryEnd,
   TrajectoryTurnKind,
@@ -169,6 +171,52 @@ export function signalText(decision: Exclude<TrajectoryDecision, { kind: 'compac
     case 'todo':
       return `待辦清單更新，共 ${decision.items} 項`;
     case 'interrupt':
-      return '停下來等人決定';
+      return decision.approval === undefined
+        ? '停下來等人決定'
+        : approvalText(decision.approval, decision.time);
   }
+}
+
+/**
+ * 核准結局的說法（詞彙同 `@nexus/core` 的 `ApprovalOutcome`）。不認得的結局（以後多出來的）原樣顯示，不猜它的意思。
+ */
+export const APPROVAL_OUTCOME_LABEL: Readonly<Record<TrajectoryApprovalOutcome, string>> = {
+  'allowed-once': '允許一次',
+  rejected: '已拒絕',
+  cancelled: '已取消',
+  unavailable: '無法回答',
+};
+
+/** 還沒有結局時寫的話：**不推一個結果**——還沒答、或停在這裡沒人答就關掉了（重開之後一樣）。 */
+export const APPROVAL_UNDECIDED_TEXT = '還沒有結局（還沒回答，或停在這裡就關掉了）';
+
+/**
+ * 一個核准問題寫成一行：被問的工具、結局、等了多久。等多久是結局時刻減中斷時刻，兩邊都有才算（`decidedAt` 缺席就不寫，
+ * 不拿現在的時鐘補）。
+ */
+export function approvalText(approval: TrajectoryApproval, raisedAt: number): string {
+  const head = `核准 ${approval.tool}`;
+  if (approval.outcome === undefined) return `${head}：${APPROVAL_UNDECIDED_TEXT}`;
+  const verdict = APPROVAL_OUTCOME_LABEL[approval.outcome] ?? approval.outcome;
+  const waited =
+    approval.decidedAt === undefined
+      ? ''
+      : `（等了 ${durationText(approval.decidedAt - raisedAt)}）`;
+  return `${head}：${verdict}${waited}`;
+}
+
+/**
+ * 不必問人就確定的核准，結局在那一次工具呼叫的錯誤碼（`tool/result.error.code`，`TrajectoryTool.code`）：沒有人被擋下來等，
+ * 所以軌跡上沒有中斷列。`error.name` 都是 `ApprovalDenied`，與工具自己失敗分得開。其他的碼不在這裡（原樣不顯示）。
+ */
+export const APPROVAL_CODE_LABEL: Readonly<Record<string, string>> = {
+  APPROVAL_POLICY_NEVER: '核准政策一律不允許',
+  APPROVAL_NO_CHANNEL: '沒有人可以問',
+  APPROVAL_REJECTED_BY_USER: '人拒絕了',
+  TOOL_DENIED_BY_LISTENER: '被攔截器拒絕',
+};
+
+/** 錯誤碼對應的一句話；不是核准那幾個碼就 `undefined`（只認自己的鍵，不認 `constructor` 這類原型上的）。 */
+export function approvalCodeText(code: string): string | undefined {
+  return Object.hasOwn(APPROVAL_CODE_LABEL, code) ? APPROVAL_CODE_LABEL[code] : undefined;
 }

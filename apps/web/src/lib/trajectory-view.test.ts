@@ -11,6 +11,7 @@ import { Script } from '@/test/conversation-frames';
 import { decision, projectionFrame, view } from '@/test/trajectory-fixtures';
 import {
   ABSENT,
+  approvalCodeText,
   clockText,
   durationText,
   TURN_KIND_LABEL,
@@ -54,6 +55,33 @@ describe('signalText：只讀結構化欄位', () => {
     [decision('plan', 1, { active: false }), '離開計劃模式'],
     [decision('todo', 1, { items: 4 }), '待辦清單更新，共 4 項'],
     [decision('interrupt', 1, {}), '停下來等人決定'],
+    [decision('interrupt', 1, { id: 'q1' }), '停下來等人決定'],
+    [
+      decision('interrupt', 1, { approval: { tool: 'bash' } }),
+      '核准 bash：還沒有結局（還沒回答，或停在這裡就關掉了）',
+    ],
+    [
+      decision('interrupt', 1, { approval: { tool: 'bash', outcome: 'allowed-once' } }),
+      '核准 bash：允許一次',
+    ],
+    [
+      decision('interrupt', 1, {
+        approval: { tool: 'bash', outcome: 'rejected', decidedAt: 1_700_000_000_001 + 12_000 },
+      }),
+      '核准 bash：已拒絕（等了 12.0 秒）',
+    ],
+    [
+      decision('interrupt', 1, { approval: { tool: 'bash', outcome: 'cancelled' } }),
+      '核准 bash：已取消',
+    ],
+    [
+      decision('interrupt', 1, { approval: { tool: 'bash', outcome: 'unavailable' } }),
+      '核准 bash：無法回答',
+    ],
+    [
+      decision('interrupt', 1, { approval: { tool: 'bash', outcome: 'future' as never } }),
+      '核准 bash：future',
+    ],
   ])('%j → %s', (input, text) => {
     if (input.kind === 'compaction') throw new Error('壓縮不長列');
     expect(signalText(input)).toBe(text);
@@ -127,4 +155,22 @@ describe('輪的起因標籤', () => {
     const labels = Object.values(TURN_KIND_LABEL);
     expect(new Set(labels).size).toBe(labels.length);
   });
+});
+
+describe('approvalCodeText：不必問人的核准結局', () => {
+  it.each([
+    ['APPROVAL_POLICY_NEVER', '核准政策一律不允許'],
+    ['APPROVAL_NO_CHANNEL', '沒有人可以問'],
+    ['APPROVAL_REJECTED_BY_USER', '人拒絕了'],
+    ['TOOL_DENIED_BY_LISTENER', '被攔截器拒絕'],
+  ])('%s → %s', (code, text) => {
+    expect(approvalCodeText(code)).toBe(text);
+  });
+
+  it.each(['UNKNOWN_TOOL', 'ABORTED', '', 'constructor', 'toString', '__proto__'])(
+    '%j 不是核准的碼 → undefined',
+    (code) => {
+      expect(approvalCodeText(code)).toBeUndefined();
+    },
+  );
 });

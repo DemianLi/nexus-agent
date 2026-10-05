@@ -70,6 +70,7 @@ import {
   SIGNAL_LABEL,
   TURN_END_LABEL,
   TURN_KIND_LABEL,
+  approvalCodeText,
   clockText,
   durationText,
   tokenText,
@@ -203,6 +204,8 @@ function ToolDetail({
 
 function toolMeta(row: Extract<TraceRow, { kind: 'tool' }>) {
   const { entry, outcome } = row;
+  const approvalCode =
+    entry.errorCode === undefined ? undefined : approvalCodeText(entry.errorCode);
   return (
     <>
       <span className={entry.status === 'failed' ? 'text-destructive' : undefined}>
@@ -219,6 +222,7 @@ function toolMeta(row: Extract<TraceRow, { kind: 'tool' }>) {
           {entry.errorCode}
         </code>
       )}
+      {approvalCode !== undefined && <span data-testid="trace-approval-code">{approvalCode}</span>}
       {outcome !== undefined && (
         <span className="bg-chip rounded-full px-2 py-0.5" data-testid="trace-plan-outcome">
           {PLAN_OUTCOME_LABEL[outcome]}
