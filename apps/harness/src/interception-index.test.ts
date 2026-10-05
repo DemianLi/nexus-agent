@@ -203,7 +203,7 @@ const INDEX: readonly InterceptionRow[] = [
       '我們的 `registry.approvals` **只收提問者**（`gate()`），應答者是 `approval.ts` 裡寫死的' +
       ' `interrupt(...)`，而 `ApprovalChannel` 是 `fold.ts` 折疊當下的一個判決、**不是掛點**，' +
       '所以機器應答者在我們這側沒有位置可掛。結果詞彙也跟著窄一格：dsh 的 `ApprovalOutcome`' +
-      ' 四值（`types.ts:32`），我們只有 approve／reject，**`cancelled` 沒有表達式**。' +
+      ' 四值（`types.ts:32`），我們的**應答**只有 approve／reject（`cancelled` 不是人答的，是停止收回時由 pump 記，#1029）。' +
       '**`approval/request` 是第十條縫，不在 #190 那九個時刻名裡**，所以它沒有自己的列；' +
       '記在這一列是因為第 4 格是我們這側**唯一的提問者**' +
       '（例如 `packages/nexus-plugin-submit-record/src/index.ts` 的 `approvals.gate`，`submit_record` 回 `ask`；' +
