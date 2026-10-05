@@ -1,8 +1,8 @@
 /**
  * MCP 工具結果裡的非文字塊換成文字說明——[#642](https://github.com/DemianLi/nexus-agent/issues/642)。
  *
- * `@langchain/mcp-adapters` 把 MCP 的 `image` 轉成 `image_url` 塊、`audio` 轉成 `audio` 塊、`resource_link` 轉成
- * `file` 塊（`dist/tools.js:247-283`），原樣放進 ToolMessage 的 content。模型那一側的工具訊息只收文字：NVIDIA 對
+ * `@langchain/mcp-adapters` 把 MCP 的 `image` 轉成 `image` 塊（1.x 是 `image_url`，2.0.0 起帶 `data`／`mimeType`）、`audio` 轉成 `audio` 塊、
+ * `resource_link` 轉成 `file` 塊（`dist/content.js` 的 `convertCallToolResult`），原樣放進 ToolMessage 的 content。模型那一側的工具訊息只收文字：NVIDIA 對
  * `role: tool` 裡的 `image_url` 回 400（實測），而那則工具結果已經進了 state，同一條 thread 之後每一輪都 400。
  *
  * 照 dsh 的 `projectContent`（`packages/mcp/mcp-client/src/tools.ts:376-505`，`477b4f4`）：收不下的圖換成

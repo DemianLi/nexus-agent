@@ -21,7 +21,7 @@ import { fileURLToPath } from 'node:url';
 import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
-import { CHANGELOG } from './mcp-fixture-server.js';
+import { CHANGELOG, FAILURE_TEXT } from './mcp-fixture-server.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
@@ -74,6 +74,40 @@ describe('MCP 工具在 agent 迴圈裡', () => {
 
       // 而它落進了虛擬檔案系統。
       expect(result.files?.['/changelog.md']?.content).toContain(CHANGELOG);
+    } finally {
+      await dispose();
+    }
+  });
+
+  // #1074：MCP 回 `isError` 時，agent 看到的跟其他失敗的工具一樣——`status: 'error'`、文字帶 `Error: ` 前綴。
+  // 照 dsh：MCP 的 `isError` 在 dsh 是拋錯（`packages/mcp/mcp-client/src/tools.ts:296-297`），由註冊表渲染成帶前綴的結果。
+  // Chat Completions 的轉換器只送 `content`，`status` 到不了模型，所以前綴要在文字裡。
+  it('MCP 回 isError：agent 看到 status: error，文字帶 Error: 前綴，原因逐字', async () => {
+    const model = new ScriptedChatModel({
+      turns: [
+        { content: '', toolCalls: [{ name: 'mcp__docs__fail', args: {} }] },
+        { content: '失敗了。' },
+      ],
+    });
+    const { agent, dispose } = await createNexusAgent({
+      model,
+      plugins: [
+        createMcpPlugin({
+          serverName: 'docs',
+          connection: {
+            transport: 'stdio',
+            command: process.execPath,
+            args: ['--import', 'tsx', FIXTURE_SERVER],
+          },
+        }),
+      ],
+    });
+    try {
+      const result = await agent.invoke(toAgentInvocation('呼叫會失敗的工具。'));
+      const failed = result.messages.find((message) => message.getType() === 'tool');
+      expect(failed).toMatchObject({ name: 'mcp__docs__fail', status: 'error' });
+      expect(failed?.text).toMatch(/^Error: 工具 mcp__docs__fail 執行失敗：/u);
+      expect(failed?.text).toContain(FAILURE_TEXT);
     } finally {
       await dispose();
     }
