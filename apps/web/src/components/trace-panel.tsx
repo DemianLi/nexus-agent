@@ -56,6 +56,7 @@ import { EXIT_PLAN_MODE, PLAN_OUTCOME_LABEL } from '@/lib/plan-review';
 import { reasoningRunning } from '@/lib/reasoning-view';
 import {
   ENDING_LABEL,
+  CALL_OUTCOME_LABEL,
   TRACE_CALL_UNLOADED_TEXT,
   TRACE_HEADLINE,
   TRACE_LIMITS,
@@ -431,6 +432,9 @@ function CallRow({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) {
     ['開始', clockText(row.time)],
     ['結束', clockText(row.endTime)],
     ['耗時', durationText(row.durationMs)],
+    ...(row.outcome === undefined
+      ? []
+      : ([['結果', CALL_OUTCOME_LABEL[row.outcome]]] as [string, string][])),
     ['模型', row.model ?? ABSENT],
     ['輸入 token', tokenText(row.inputTokens)],
     ['輸出 token', tokenText(row.outputTokens)],
@@ -447,6 +451,11 @@ function CallRow({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) {
         summary: row.model ?? '',
         meta: (
           <span data-testid="trace-time">
+            {row.outcome !== undefined && (
+              <span className="text-destructive" data-testid="trace-call-outcome">
+                {CALL_OUTCOME_LABEL[row.outcome]} ·{' '}
+              </span>
+            )}
             {clockText(row.time)} · {durationText(row.durationMs)}
             {row.inputTokens !== undefined &&
               ` · 輸入 ${tokenText(row.inputTokens)}／輸出 ${tokenText(row.outputTokens)}`}
