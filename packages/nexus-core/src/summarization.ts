@@ -61,6 +61,35 @@
  * - **退到最接近的實作**：dsh 的門檻是比例（吃得到窗口大小），我們退到它提供的另一個
  *   形式——絕對值（`retainTokens` 那條路）。代價是那個數字**手維護**，所以配了一條絆索：
  *   模型解得出 `maxInputTokens` 的那天要紅。
+ *
+ * ## 摘要的提示詞（[#432](https://github.com/DemianLi/nexus-agent/issues/432)）
+ *
+ * 基座預設的 `DEFAULT_SUMMARY_PROMPT` 只要「主話題、關鍵決策、必要背景」，沒有一個字保護使用者
+ * 的原意與糾正。dsh 的 `COMPACTION_INSTRUCTION`
+ * （`packages/compaction/compaction-basic/src/summarizer.ts`，`5badb15`）是八段固定結構，第一段
+ * 「Primary Request and Intent」要求逐字引用、第四段「Errors and Fixes」連同使用者的回饋，規則裡
+ * 還有「忠實保留指示，尤其是糾正」。{@link SUMMARY_PROMPT} 取它的文字，**用英文**（dsh 明寫要英文，
+ * 這是給模型讀的，不是給 demian 讀的）。**沒有把「是哪一版提示詞」寫進日誌**：dsh 的
+ * `compaction/summary` 也沒有這一格，指令是程式碼常數，事件記的是那次呼叫的信封。
+ *
+ * ### 與 dsh 的差，各自的理由（AGENTS.md 的偏離規則）
+ *
+ * - **形狀：模板，不是「重播整串對話再接一則 user 訊息」。** dsh 把整串原對話（連同 system 與工具
+ *   schema）原樣重播，指令放在最後一則，這樣那次摘要呼叫是上一次主請求的**前綴**，吃得到供應商的
+ *   KV cache。基座的縫表達不出這個：`createSummary` 只把 `getBufferString(要摘的那段)` 攤成**一個
+ *   字串**、塞進 `summaryPrompt` 的 `{conversation}`、包成**一則** `HumanMessage` 交給 `request.model.invoke`；
+ *   切點在基座裡算，這一層拿不到那串訊息；那顆 `request.model` 也是還沒綁工具、不帶主 system prompt 的本尊。
+ *   要重播得換掉基座整顆摘要器（切點、offload、事件都跟著重寫），不是這一張卡的量。退到最接近的：
+ *   模板，**對話在前、指令在後**（dsh 的先後），所以 dsh 那句「Condense the conversation ABOVE」不用改
+ *   就成立。代價：這一次呼叫的輸入按全價算，沒有量過重播能省多少。
+ * - **前一次摘要的標籤。** dsh 認 `<compacted-summary>`；我們的是基座 `buildSummaryMessage` 包的：有
+ *   `filePath` 時是一段前言加 `<summary>…</summary>`，**沒有**（offload 失敗）時只有
+ *   「Here is a summary of the conversation to date:」一句，不包標籤。所以那條規則兩種都要認。
+ *
+ * ⚠️ **基座的 `{conversation}` 替換有一個已知的小缺陷，我們這層擋不住**：`createSummary` 用
+ * `String.prototype.replace(字串, 字串)`，替換字串裡的 `$&`、`` $` ``、`$'`、`$$` 會被當成特殊樣式解讀。
+ * 對話文字裡有 `$$`（shell 的行程號、Makefile）時，餵給模型的那份會少一個 `$`；有 `$&` 時會多出一段
+ * 字面的 `{conversation}`（實測）。只影響「要摘的那份」的字面，不影響摘要的結構，也沒有東西會因此拋。
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -91,6 +120,59 @@ import type { ToolResultPruneConfig } from './tool-result-pruner.js';
  * `summarization.test.ts` 那條數 stack 名字的測試。那條測試存在的理由就是這個。
  */
 export const SUMMARIZATION_MIDDLEWARE_NAME = 'SummarizationMiddleware';
+
+/**
+ * 交給基座 `summaryPrompt` 的模板（[#432](https://github.com/DemianLi/nexus-agent/issues/432)）。
+ *
+ * 文字照 dsh 的 `COMPACTION_INSTRUCTION`，**只動三處**，理由見檔頭「摘要的提示詞」：
+ *
+ * 1. 前面接一段 `{conversation}`。基座**只換第一個** `{conversation}`，所以指令本文裡一個都不能有。
+ * 2. 「PRIOR checkpoint」那條規則改認我們的包法（`<summary>` 與「Here is a summary…」兩種）。
+ * 3. 分隔線讓「ABOVE」指到那一段。
+ *
+ * 前六條規則、八個段落與 `(none)` 的寫法都是 dsh 的原句，改了就不是 #432 要的東西。
+ */
+export const SUMMARY_PROMPT = [
+  'Conversation to condense:',
+  '{conversation}',
+  '',
+  '--- END OF CONVERSATION ---',
+  '',
+  'You are now acting as a compaction engine for this AI coding assistant. Condense the conversation ABOVE into a structured checkpoint that lets another model resume the work with no loss of essential context.',
+  '',
+  'Output EXACTLY the Markdown structure below: keep every section, in order. Use terse bullets, not prose paragraphs. Write "(none)" for an empty section — never drop a section.',
+  '',
+  '## Primary Request and Intent',
+  "- [the user's original and evolving goals; quote verbatim where the exact wording matters]",
+  '',
+  '## Key Technical Concepts',
+  '- [technologies, frameworks, patterns, and conventions in play]',
+  '',
+  '## Files and Code',
+  '- [exact path: why it matters, key changes or snippets]',
+  '',
+  '## Errors and Fixes',
+  '- [error: how it was resolved, plus any related user feedback]',
+  '',
+  '## Pending Jobs',
+  '- [explicitly requested work not yet completed]',
+  '',
+  '## Current Work',
+  '- [precisely what was in progress at this checkpoint]',
+  '',
+  '## Next Step',
+  '- [the single next action, directly in line with the most recent request, or "(none)"]',
+  '',
+  '## Critical Context',
+  '- [decisions and their rationale, constraints, user preferences, open questions, data needed to continue]',
+  '',
+  'Rules:',
+  '- Write concise English engineering prose. Preserve exact file paths, commands, error strings, identifiers, numeric values, function signatures, and syntax fragments.',
+  '- Capture user feedback and explicit instructions faithfully, especially corrections.',
+  '- Do NOT mention this summarization request or that the context was compacted.',
+  '- Output only the checkpoint text: do not call any tool or take any other action.',
+  '- If the conversation already contains an earlier summary — a message that starts with "You are in the middle of a conversation that has been summarized" and holds a <summary> block, or one that starts with "Here is a summary of the conversation to date:" — it is a PRIOR checkpoint. Do not copy it forward verbatim: preserve still-true facts, drop stale ones, and merge newer information into a single consolidated summary under the same structure.',
+].join('\n');
 
 /**
  * 一道門檻。
@@ -322,6 +404,7 @@ export function createSummarizer(
 ): AgentMiddleware {
   const base = createSummarizationMiddleware({
     backend,
+    summaryPrompt: SUMMARY_PROMPT,
     // 只交 `messages` 那幾道，`tokens` 由 withTokenBudget 比。一道都沒有時是空陣列：基座逐條試，一條都不成立。
     trigger: settings.trigger
       .filter((threshold) => threshold.type === 'messages')
