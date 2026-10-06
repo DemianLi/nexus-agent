@@ -12,13 +12,13 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
-import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
 import { emptyConversation, reduceAll } from '@nexus/wire';
 import type { ConversationState, Event, ToolEntry } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -96,7 +96,7 @@ async function run(
   };
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns: rootTurns }),
-    checkpointer: new MemorySaver(),
+    checkpointer: new PrunedMemorySaver(),
     plugins: [worker],
     backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
     backgroundSubagents: {},

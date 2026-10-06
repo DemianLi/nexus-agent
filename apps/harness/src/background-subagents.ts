@@ -71,6 +71,7 @@ import type {
 } from '@nexus/core';
 
 import { BACKGROUND_RUN_PREFIX, agentMessageText } from './background-run-id.js';
+import { RUN_DURABILITY } from './pruned-memory-saver.js';
 import { markProjectionsHandled } from './thread-pump.js';
 import type { RunProjections } from './thread-pump.js';
 
@@ -80,6 +81,7 @@ export interface BackgroundAgent {
     input: never,
     config: {
       readonly version: 'v3';
+      readonly durability?: typeof RUN_DURABILITY;
       readonly configurable: Readonly<Record<string, unknown>>;
     },
   ): Promise<AsyncIterable<unknown> & RunProjections>;
@@ -996,6 +998,8 @@ export class BackgroundSubagentHost {
       { messages: [new HumanMessage(job.text)] } as never,
       {
         version: 'v3',
+        // 存檔點只在這一輪結束時存一份（#1106），理由見 `pruned-memory-saver.ts`。
+        durability: RUN_DURABILITY,
         // **只給明確的鍵**：不靠隱式繼承，也不帶 root 的中止訊號（見檔頭）。中止訊號是這一輪自己的
         // （`interrupt` 舉的那個），走合作式的 `TURN_CANCEL_CONFIG_KEY`，不交給 LangGraph 的 `signal`
         // （後者會丟下工具，見 `turn-cancel.ts` 檔頭）。
