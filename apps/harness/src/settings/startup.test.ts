@@ -302,6 +302,7 @@ describe('startupSetting', () => {
           maxTokens: 16384,
           input: ['text'],
           reasoningEfforts: { off: null, default: 'default' },
+          tokenizer: { digits: 'single' },
           compat: { chatTemplateKwargs: { enable_thinking: { $var: 'thinking.enabled' } } },
         },
       ],

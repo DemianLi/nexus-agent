@@ -34,7 +34,12 @@ import {
   LIVE_API_KEY_ENV,
   createLiveModel,
 } from '../live-model.js';
-import { acceptsImages, findModelEntry, thinkingOffBody } from '../model-catalog.js';
+import {
+  acceptsImages,
+  findModelEntry,
+  singleDigitModelIds,
+  thinkingOffBody,
+} from '../model-catalog.js';
 import type { ModelEntry } from '../model-catalog.js';
 import { loadDefaultPlugins } from '../plugin-config.js';
 import { runServe } from '../serve.js';
@@ -106,6 +111,8 @@ describe('live-model 的 schema', () => {
       maxTokens: 16_384,
       input: ['text'],
       reasoningEfforts: { off: null, default: 'default' },
+      // #1102：量過這顆把數字逐位切詞（CSV 是 o200k 的 1.88 倍），估算要按位數計。
+      tokenizer: { digits: 'single' },
       compat: { chatTemplateKwargs: { enable_thinking: { $var: 'thinking.enabled' } } },
     });
     expect(thinkingOffBody(entry!)).toEqual({ chat_template_kwargs: { enable_thinking: false } });
@@ -175,6 +182,15 @@ describe('live-model 的 schema', () => {
     expect(() => liveModelConfigSchema.parse({ models: [noMax] })).toThrow();
   });
 
+  it('tokenizer 只認 digits 的 grouped／single；別的值或別的格是打錯字', () => {
+    const parse = (tokenizer: unknown) =>
+      liveModelConfigSchema.parse({ models: [{ ...DEFAULT_LIVE_MODEL_ENTRY, tokenizer }] });
+    expect(parse({ digits: 'grouped' }).models[0]?.tokenizer).toEqual({ digits: 'grouped' });
+    expect(() => parse({ digits: 'double' })).toThrow();
+    expect(() => parse({ digits: 'single', bpe: 'o200k' })).toThrow();
+    expect(() => parse({})).toThrow();
+  });
+
   it('eval 用的入口：型錄外的 id 合成一筆，輸出上限沿用出廠那一筆', () => {
     const config = liveModelConfigForModel('openai/gpt-oss-20b');
     expect(config.modelId).toBe('openai/gpt-oss-20b');
@@ -213,6 +229,18 @@ describe('live-model 的 schema', () => {
 });
 
 describe('型錄的查詢（#729）', () => {
+  it('逐位切詞的模型 id：只收明著宣告 single 的（#1102）', () => {
+    const base = { contextWindow: 1, maxTokens: 1 };
+    expect(
+      singleDigitModelIds([
+        { ...base, id: 'a', tokenizer: { digits: 'single' } },
+        { ...base, id: 'b', tokenizer: { digits: 'grouped' } },
+        { ...base, id: 'c' },
+      ]),
+    ).toEqual(['a']);
+    expect(singleDigitModelIds([DEFAULT_LIVE_MODEL_ENTRY])).toEqual([DEFAULT_LIVE_MODEL_ID]);
+  });
+
   it('收不收圖：宣告 image 的收、只宣告 text 的不收、沒宣告 input 的回「沒宣告」', () => {
     const base = { id: 'x', contextWindow: 1, maxTokens: 1 };
     expect(acceptsImages({ ...base, input: ['text', 'image'] })).toBe('accepts');

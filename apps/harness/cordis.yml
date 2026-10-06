@@ -531,6 +531,8 @@
         reasoningEfforts:
           off:
           default: default
+        tokenizer:
+          digits: single
         compat:
           chatTemplateKwargs:
             enable_thinking:

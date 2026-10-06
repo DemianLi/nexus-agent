@@ -8,6 +8,7 @@
  * ```
  * E(req) = Σ o200k(每則訊息的文字 ＋ 工具呼叫名與參數 ＋ 工具定義 JSON) ＋ 4 × 則數（system 也算一則）
  *          超過 4 萬字元的一段只抽樣、不全量編（#952），其餘逐位精確；以內容為鍵備忘，換了訊息物件也不重編
+ *          型錄宣告逐位切詞數字的模型再加 Σ (L − ⌈L÷3⌉)，L ＝ 每一串連續 ASCII 數字（≥ 2 位）的長度（#1102）
  * T(m)   = AI 訊息 m 身上 `usage_metadata.input_tokens`——產出它的那次請求的實數
  *
  * 有錨（這串訊息裡最後一則帶實數的 AI 訊息 a）：
@@ -34,6 +35,24 @@
  * **比例只用內容那一截算**：兩個實數相減、兩個估算相減，system 與工具定義那一截抵掉。用整份 prompt 的比例會把
  * 套版開銷一起放大——#586 量到 `gpt-oss-20b` 因此從 0.6% 被拉到 17%。
  *
+ * ## 逐位切詞的數字（[#1102](https://github.com/DemianLi/nexus-agent/issues/1102)）
+ *
+ * o200k 把數字切成最多三位一組；`nemotron-3-super-120b-a12b` 是**一位一個 token**。數字為主的內容因此少估到一半：
+ * 錄下產品 body 送真端點量到的 真實 ÷ o200k——中文 1.10、程式碼 1.09、JSON 日誌 1.43、表格 1.53、十六進位 1.55、
+ * CSV 1.88、純數字 2.47。**c̄ 是單一個數，補不了這個**：它學到「CSV 的 1.88」之後借給中文，中文就多估 62%；學到中文的
+ * 1.10 再借給 CSV，CSV 少估 36%。所以要在 E 這一層把數字數對，c̄ 才只需要補剩下那個跟內容無關的 ≈1.1。
+ *
+ * 做法：連續 L 位 ASCII 數字，o200k 算 ⌈L÷3⌉，這類模型算 L，差額加在 E 上。**只對型錄條目宣告
+ * `tokenizer.digits: 'single'` 的模型做**（沒宣告的照舊，`gpt-oss-20b` 的 ±0.6% 不動），只有量過的才宣告。差額跟著
+ * 訊息一起記，備忘不分模型，所以同一份內容換模型不會拿錯。`estimateTextTokens`（外溢層用的精確數）不加：它量的是
+ * o200k 本身。差額掃全文、不跟著超長抽樣走——一個正則掃過去很便宜，抽樣的目的是省編碼。
+ *
+ * 修好之後在 nemotron 上用同一組情境量（真端點的 `prompt_tokens`；素材是手搭的 OpenAI 訊息，不是
+ * serve 錄的 body）：冷行程貼 40k 字元 CSV 從 −51.2% 到 −0.5%；中文教過 c̄ 之後再貼 CSV（借錨）從 −46.1% 到 +9.3%；
+ * 單錨的第二次，c̄ 從 CSV 借給中文的 +81.4% 到 −8.5%、從中文借給 CSV 的 −39.8% 到 +7.8%；JSON 日誌 −16.3% 到 +5.9%。
+ * 最差一筆 +9.3%。`gpt-oss-20b`（沒宣告）同一組情境全部在 ±0.5% 以內，跟修之前一樣。**留下的**：模型自己的固定
+ * 開銷（例如只有一則短訊息的第一次，估 77 實 299），這個絕對差 200 多個 token、跟內容無關，#588 驗收時就在。
+ *
  * ## 量到的
  *
  * #586 錄下 serve 組裝出來的 92 份 body、原樣送 NVIDIA 取 `prompt_tokens`：第 2 次以後最大誤差 nemotron 8.9%、
@@ -59,6 +78,10 @@
  *    建的 {@link TokenAnchorBook} 實例**（`runServe` 一本給所有 thread），由組裝點一路注入到摘要器——對應 dsh 的 ctx
  *    注入，而不是模組全域（[#702](https://github.com/DemianLi/nexus-agent/issues/702)）。理由同 #588：目標是每一次 ≤10%，
  *    第一次沒有錨就只能借。
+ *
+ * 4. **逐位切詞的數字**（#1102）：dsh 的估算器是固定密度、沒有 tokenizer 的概念，所以也沒有這一格；它的做法（每 4 個
+ *    字元一個 token）對純數字更糟：四位的 `1234` 在逐位切詞下是 4 個 token，它算 1 個（o200k 算 2 個）。表達不出來的是「這顆模型的數字怎麼切」——退到最接近的：型錄條目上一個明著宣告的欄位，估算器
+ *    據此加差額。
  *
  * 另外 dsh 只在「用量 ≥ 那次的估算」時才採用錨（保守的那一邊），我們一律採用：目標是雙向 10%，不是只防少估。
  *
@@ -216,8 +239,39 @@ export interface EstimatedRequest {
   readonly model?: unknown;
 }
 
-const perMessage = new WeakMap<object, number>();
-const perTool = new WeakMap<object, number>();
+/**
+ * 一段內容的兩個量：`tokens` 是 o200k 的 token 數（備忘過、超長的抽樣），`excess` 是**逐位切詞的模型比 o200k 多出來**
+ * 的那一截（見 {@link digitExcess}）。分開記，是因為同一則訊息可能被不同的模型估——快取在物件上，不能把某個模型的答案
+ * 烤進去。
+ */
+interface Counted {
+  readonly tokens: number;
+  readonly excess: number;
+}
+
+const NONE: Counted = { tokens: 0, excess: 0 };
+
+const perMessage = new WeakMap<object, Counted>();
+const perTool = new WeakMap<object, Counted>();
+
+/**
+ * o200k 的數字規則是「最多三位一組」，所以連續 L 位的數字是 ceil(L/3) 個 token；逐位切詞的模型是 L 個。多出來的
+ * 就是 L − ceil(L/3)，對全文每一段連續數字加總（[#1102](https://github.com/DemianLi/nexus-agent/issues/1102)）。
+ *
+ * 只認 ASCII 數字：量測用的素材（CSV、JSON、表格、hex）全是它，全形數字等沒量過就不猜。**掃全文，不抽樣**：
+ * 一個正規表達式線性掃過去比編碼便宜三個數量級（八十萬字元約幾毫秒）。
+ */
+function digitExcess(text: string): number {
+  let excess = 0;
+  for (const match of text.matchAll(/\d{2,}/g))
+    excess += match[0].length - Math.ceil(match[0].length / 3);
+  return excess;
+}
+
+/** 一段文字的兩個量。 */
+function countText(text: string): Counted {
+  return { tokens: requestTextTokens(text), excess: digitExcess(text) };
+}
 
 /**
  * 不算進內容的區塊。
@@ -262,21 +316,26 @@ export function estimateTextTokens(text: string): number {
 }
 
 /** 一則訊息的 E。同一個物件只編一次。 */
-function messageTokens(message: BaseMessage): number {
+function messageTokens(message: BaseMessage): Counted {
   const cached = perMessage.get(message);
   if (cached !== undefined) return cached;
   let text = contentText(message.content);
   const calls = (message as { tool_calls?: readonly { name?: unknown; args?: unknown }[] })
     .tool_calls;
   for (const call of calls ?? []) text += String(call.name ?? '') + JSON.stringify(call.args ?? {});
-  const tokens = requestTextTokens(text) + MESSAGE_OVERHEAD;
-  perMessage.set(message, tokens);
-  return tokens;
+  const counted = withOverhead(countText(text));
+  perMessage.set(message, counted);
+  return counted;
+}
+
+/** 每則訊息的角色框架開銷，加在 o200k 那一截上。 */
+function withOverhead(counted: Counted): Counted {
+  return { tokens: counted.tokens + MESSAGE_OVERHEAD, excess: counted.excess };
 }
 
 /** 一個工具定義的 E：送上線的那個 OpenAI 形狀的 JSON。轉不過去就照原物件的 JSON。 */
-function toolTokens(tool: unknown): number {
-  if (tool === null || typeof tool !== 'object') return 0;
+function toolTokens(tool: unknown): Counted {
+  if (tool === null || typeof tool !== 'object') return NONE;
   const cached = perTool.get(tool);
   if (cached !== undefined) return cached;
   let json: string;
@@ -285,33 +344,44 @@ function toolTokens(tool: unknown): number {
   } catch {
     json = JSON.stringify(tool) ?? '';
   }
-  const tokens = requestTextTokens(json);
-  perTool.set(tool, tokens);
-  return tokens;
+  const counted = countText(json);
+  perTool.set(tool, counted);
+  return counted;
 }
 
 /** system 那一則的 E。沒有就是 0。 */
-function systemTokens(system: unknown): number {
-  if (system === null || typeof system !== 'object') return 0;
+function systemTokens(system: unknown): Counted {
+  if (system === null || typeof system !== 'object') return NONE;
   const cached = perMessage.get(system);
   if (cached !== undefined) return cached;
   const text = contentText((system as { content?: unknown }).content);
-  const tokens = text.length === 0 ? 0 : requestTextTokens(text) + MESSAGE_OVERHEAD;
-  perMessage.set(system, tokens);
-  return tokens;
+  const counted = text.length === 0 ? NONE : withOverhead(countText(text));
+  perMessage.set(system, counted);
+  return counted;
 }
 
 /**
  * 一份請求的 E（不錨）。
  *
  * @param request - 要估的請求；`messages` 可以只給一段前綴。
- * @returns o200k 算出來的 token 數。
+ * @param options - `singleDigits`：這顆模型把數字逐位切成一個 token 一位（[#1102](https://github.com/DemianLi/nexus-agent/issues/1102)），
+ *   連續數字按位數計，不按 o200k 的三位一組。省略就是 o200k 原樣。
+ * @returns token 數：o200k 算出來的，加上 `singleDigits` 時逐位切詞多出來的那一截。
  */
-export function estimateRequestTokens(request: EstimatedRequest): number {
-  let total = systemTokens(request.systemMessage);
-  for (const message of request.messages ?? []) total += messageTokens(message);
-  if (Array.isArray(request.tools)) for (const tool of request.tools) total += toolTokens(tool);
-  return total;
+export function estimateRequestTokens(
+  request: EstimatedRequest,
+  options: { readonly singleDigits?: boolean } = {},
+): number {
+  let tokens = 0;
+  let excess = 0;
+  const add = (counted: Counted): void => {
+    tokens += counted.tokens;
+    excess += counted.excess;
+  };
+  add(systemTokens(request.systemMessage));
+  for (const message of request.messages ?? []) add(messageTokens(message));
+  if (Array.isArray(request.tools)) for (const tool of request.tools) add(toolTokens(tool));
+  return options.singleDigits === true ? tokens + excess : tokens;
 }
 
 /** 模型的名字：`ChatOpenAI` 叫 `model`，舊的叫 `modelName`。認不出就是 `undefined`。 */
@@ -402,9 +472,23 @@ export interface TokenEstimate {
  * 鍵是 AI 訊息的 id，跨 agent 共用不會撞。
  */
 export class TokenAnchorBook {
+  readonly #singleDigitModels: ReadonlySet<string>;
   readonly #sent = new Map<string, number>();
   readonly #firstCalls = new Map<string, { readonly tokens: number; readonly estimated: number }>();
   readonly #ratios = new Map<string, number>();
+
+  /**
+   * @param options - `singleDigitModels`：把數字逐位切詞的模型 id（型錄條目的 `tokenizer.digits: 'single'`，
+   *   [#1102](https://github.com/DemianLi/nexus-agent/issues/1102)）。不在裡面的模型照 o200k 的三位一組估。
+   */
+  constructor(options: { readonly singleDigitModels?: Iterable<string> } = {}) {
+    this.#singleDigitModels = new Set(options.singleDigitModels ?? []);
+  }
+
+  /** 這個模型是不是逐位切詞數字。認不出名字的模型不是。 */
+  singleDigits(model: string | undefined): boolean {
+    return model !== undefined && this.#singleDigitModels.has(model);
+  }
 
   /** 這個模型最近一次學到的內容比例（c̄）。還沒學到就是 `undefined`。 */
   learnedRatio(model: string | undefined): number | undefined {
@@ -496,8 +580,9 @@ export function estimateAnchoredTokens(
   book: TokenAnchorBook,
 ): TokenEstimate & { readonly estimated: number } {
   const messages = request.messages ?? [];
-  const estimated = estimateRequestTokens(request);
   const current = modelNameOf(request.model);
+  const digits = { singleDigits: book.singleDigits(current) };
+  const estimated = estimateRequestTokens(request, digits);
   const learned = book.learnedRatio(current) ?? 1;
   const { last, first } = anchorsIn(messages, current);
   if (last >= 0) {
@@ -505,7 +590,7 @@ export function estimateAnchoredTokens(
     const tokens = reportedInput(anchor)!.tokens;
     const before =
       book.sentEstimate(anchor.id) ??
-      estimateRequestTokens({ ...request, messages: messages.slice(0, last) });
+      estimateRequestTokens({ ...request, messages: messages.slice(0, last) }, digits);
     let ratio: number | undefined;
     const earliest = messages[first]!;
     const earliestSent = first < last ? book.sentEstimate(earliest.id) : undefined;

@@ -14,6 +14,7 @@
  * **零憑證、零外部連線**：假 key、本機端點。
  */
 
+import { randomUUID } from 'node:crypto';
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
@@ -24,7 +25,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { foldTurn, serveClient } from './fixtures.js';
-import { LIVE_API_KEY_ENV } from './live-model.js';
+import { DEFAULT_LIVE_MODEL_ENTRY, LIVE_API_KEY_ENV } from './live-model.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -122,5 +123,65 @@ describe('serve：帳是這台 server 的，不是一條 thread 的', () => {
     // 借錨：T(ref) ＋ 增量，量級跟著實數走。
     expect(second).toBeGreaterThan(REPORTED_PROMPT_TOKENS * 0.75);
     expect(second).toBeLessThan(REPORTED_PROMPT_TOKENS * 1.25);
+  }, 60000);
+});
+
+describe('serve：型錄宣告逐位切詞的模型，第一次就按位數估（#1102）', () => {
+  let fake: Awaited<ReturnType<typeof startUsageEndpoint>>;
+  let running: RunningServe | undefined;
+
+  beforeEach(async () => {
+    vi.stubEnv(LIVE_API_KEY_ENV, 'sk-fake-anchor-book');
+    fake = await startUsageEndpoint();
+  });
+  afterEach(async () => {
+    await running?.close();
+    running = undefined;
+    await new Promise<void>((resolve) => fake.server.close(() => resolve()));
+    vi.unstubAllEnvs();
+  });
+
+  /** 起一台 serve、問一輪（prompt 是一長串數字），回第一次呼叫量到的 `approxTokens`。 */
+  async function firstMeasure(models: readonly unknown[] | undefined): Promise<number> {
+    const dir = await mkdtemp(join(tmpdir(), 'nexus-digits-'));
+    const patch = join(dir, 'live-model.patch.yml');
+    await writeFile(
+      patch,
+      [
+        '- id: live-model',
+        '  config:',
+        `    baseUrl: '${fake.baseUrl}'`,
+        ...(models === undefined ? [] : [`    models: ${JSON.stringify(models)}`]),
+        '',
+      ].join('\n'),
+      'utf8',
+    );
+    running = (await runServe({
+      argv: ['--port', '0', '--live', '--patch', patch],
+      log: () => undefined,
+      env: {},
+    })) as RunningServe;
+    const client = await serveClient(running);
+    // 每次一條新 thread：同 id 會續接上一次留在磁碟上的日誌，第二次就錨在上一次的實數上。
+    const threadId = `digits-${randomUUID()}`;
+    const events = await client.openEvents(threadId);
+    await client.runStart(threadId, '7'.repeat(3000));
+    const state = await foldTurn(events);
+    await events.return?.(undefined);
+    await running.close();
+    running = undefined;
+    const measure = state.contextPressure?.measure;
+    if (measure === undefined) throw new Error('沒有量到 context/measure');
+    return measure.approxTokens;
+  }
+
+  it('出廠那一筆宣告了 single：3000 位數字比沒宣告的多估約 2000 個', async () => {
+    const { tokenizer: _declared, ...undeclared } = DEFAULT_LIVE_MODEL_ENTRY;
+    // 前提：出廠那一筆真的有宣告，不然下面兩邊一樣是空話。
+    expect(_declared).toEqual({ digits: 'single' });
+    const plain = await firstMeasure([undeclared]);
+    const declared = await firstMeasure(undefined);
+    expect(declared - plain).toBeGreaterThanOrEqual(1_900);
+    expect(declared - plain).toBeLessThanOrEqual(2_100);
   }, 60000);
 });

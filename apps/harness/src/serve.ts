@@ -28,6 +28,7 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { THREADS_PATH } from '@nexus/wire';
 import { TokenAnchorBook } from '@nexus/core';
+import { singleDigitModelIds } from './model-catalog.js';
 import type {
   PluginEntry,
   ResumedStoredSession,
@@ -508,7 +509,10 @@ async function startServer(
   // 只讓它掉；必掛的、組裝點自己加的外掛掉了，換成跟第一次同一種 `StartupError`。兩次合起來印一段到伺服器日誌，
   // 只印這一次，在綁 port 之前。
   // **錨定估算的帳（#702）**：一台 server 一本，下面每條 thread 的組裝都傳同一本，借錨才跨得過 thread。
-  const tokenAnchorBook = new TokenAnchorBook();
+  // 型錄上宣告逐位切詞的模型（#1102）按位數估，其餘照 o200k。
+  const tokenAnchorBook = new TokenAnchorBook({
+    singleDigitModels: singleDigitModelIds(liveModel.models),
+  });
   // **不變量的量測記錄（#976）**：一台 server 一份，每條 thread 的組裝傳同一個 tap。違規本身照舊走 runner 預設的
   // `console.error`（進伺服器日誌），這份只是另外留一份可數的紀錄；試組那一次不接線所以不傳。
   // 落盤關掉或 home 在工作區底下時不寫，理由見 `resolveInvariantLogPath`。
