@@ -252,6 +252,46 @@ describe('一輪的結構', () => {
   });
 });
 
+describe('失敗的分類碼（#434／#1115）', () => {
+  it('turn/failed 帶 error.code：失敗的那一輪有 failureCode；沒帶（舊日誌）就沒有，不補 UNKNOWN', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'a' });
+    log.append('turn/failed', {
+      message: '額度用完',
+      error: { message: '額度用完', code: 'QUOTA' },
+    });
+    log.append('turn/start', { kind: 'message', text: 'b' });
+    log.append('turn/failed', { message: '舊日誌的失敗' });
+    log.append('turn/start', { kind: 'message', text: 'c' });
+    log.append('turn/failed', { message: 'x', error: { message: 'x', code: '' } });
+    log.append('turn/start', { kind: 'message', text: 'd' });
+    log.append('turn/end', { reason: { kind: 'max-tokens' } });
+    const view = foldAll(log.events);
+    expect(view.turns.map((t) => t.failureCode)).toEqual([
+      'QUOTA',
+      undefined,
+      undefined,
+      undefined,
+    ]);
+    expect(view.turns[1]).not.toHaveProperty('failureCode');
+    expect(view.turns[2]).not.toHaveProperty('failureCode');
+    // 失敗的訊息預覽照舊。
+    expect(view.turns[0]?.failure).toBe('額度用完');
+  });
+
+  it('退成摘要之後碼還在：窗口外的失敗輪在骨架上也看得出是哪一類', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'a' });
+    log.append('turn/failed', { message: '慢', error: { message: '慢', code: 'TIMEOUT' } });
+    for (let i = 0; i < TRAJECTORY_DETAIL_TURNS; i += 1) simpleTurn(log, `後來 ${i}`);
+    const view = foldWindowed(log.events);
+    expect(view.digests[0]).toMatchObject({ index: 0, end: 'failed', failureCode: 'TIMEOUT' });
+    expect(view.digests[0]).not.toHaveProperty('calls');
+    // 沒失敗的輪不帶這一格。
+    expect(view.turns[0]).not.toHaveProperty('failureCode');
+  });
+});
+
 describe('歸屬不看位置', () => {
   it('沒有 modelCall 的重試（標題請求）不算主呼叫的；計進 unattributed', () => {
     const log = new SessionLog('t');
