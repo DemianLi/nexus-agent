@@ -2,7 +2,7 @@
 
 這份筆記回答一個問題：「我們的理念跟 dsh 一樣是萬物皆可插件，所以想把 langchain／deepagents／langgraph／langfuse 移除，再用 Rust 取代 Cordis 取得更好的資源管控與效能」——這個方向值不值得走。它是 [`openbitfun-plugin-architecture-2026-10-06.md`](openbitfun-plugin-architecture-2026-10-06.md) 的後續：那份回答「Rust 專案是不是萬物皆可插件」，本篇回答「我們該不該換成 Rust」。我方現況見 [`plugin-architecture-gap-survey.md`](plugin-architecture-gap-survey.md)。
 
-**調研日期**：2026-10-06。對讀版本：nexus `0e759edd`（develop）；dsh `5badb15009ae1756c3afe0ae0cef1faafc290ccc`（`references/deepseek-harness`，HEAD 日期 2026-10-03，這次**沒有**重新 fetch）；OpenBitFun `18aa5441d89f5e24cfb4d8ff54d4b53d92c68896`。**§一前七節的量測跑在 `@langchain/langgraph` 1.4.12 上**（作者 checkout 的 `node_modules` 落後 lockfile；develop 解析的是 1.4.19），1.4.19 的重跑見 §1-8。 **2026-10-06 晚對齊至 develop `50966c1c`**：兩個熱點已被 [#1109](https://github.com/DemianLi/nexus-agent/pull/1109) 與 [#1110](https://github.com/DemianLi/nexus-agent/pull/1110) 修掉，見結論後的「更新」；§一的數字是**修前**的基準。
+**調研日期**：2026-10-06。對讀版本：nexus `0e759edd`（develop）；dsh `5badb15009ae1756c3afe0ae0cef1faafc290ccc`（`references/deepseek-harness`，HEAD 日期 2026-10-03；§七動工時用 `git ls-remote origin master` 比對，遠端 `master` 仍是同一個 SHA）；OpenBitFun `18aa5441d89f5e24cfb4d8ff54d4b53d92c68896`。**§一前七節的量測跑在 `@langchain/langgraph` 1.4.12 上**（作者 checkout 的 `node_modules` 落後 lockfile；develop 解析的是 1.4.19），1.4.19 的重跑見 §1-8。 **2026-10-06 晚對齊至 develop `50966c1c`**：兩個熱點已被 [#1109](https://github.com/DemianLi/nexus-agent/pull/1109) 與 [#1110](https://github.com/DemianLi/nexus-agent/pull/1110) 修掉，見結論後的「更新」；§一的數字是**修前**的基準。 **2026-10-06 夜補 §七**：估算拿掉 `deepagents` 的成本（對齊 develop `7090669b`）。
 
 ## 結論
 
@@ -30,6 +30,7 @@
 | §二 相依足跡 | 主代理 `grep` | 第一手；數法寫在表下，可重跑 |
 | §三 dsh 與 OpenBitFun 的證據 | 主代理讀 | 第一手；dsh 的 `llm-pi-ai` 說明已讀原文（見 §三的更正） |
 | §四 已知的 LangChain 基座陷阱 | 記憶筆記彙整 | **沒有逐條重核**；每條都曾在實跑中遇到並修過，但本篇只列名，不重新驗證 |
+| §七 deepagents 替換成本 | 主代理讀與量 | 第一手：原始碼取自 `deepagents@1.13.1` 的 sourcemap（`sourcesContent`），行數用腳本數；匯入成本在 Node v25.9.0、1 分鐘平均負載 5～6 的機器上各量 3 次；**沒有**估人力、沒有跑覆蓋率 |
 | §五 建議 | 判斷 | 不是事實，不是決議 |
 
 **這份筆記沒有子代理的產出。**
@@ -144,6 +145,7 @@
 
 - **測試佔大頭**（186／257），而且測試用 LangChain 的型別建構訊息與假模型——拿掉相依，測試夾具要整批改寫。這是真正的工作量，不是 71。
 - **符號層面，最重的不是模型，是 middleware 與訊息型別**：我先前的符號統計裡 `createMiddleware` 約 27 處、`ToolMessage` 22、`tool` 19、`BaseMessage` 18、`AnyBackendProtocol` 11；`ChatOpenAI` 只有 1 處、`MultiServerMCPClient` 1 處、`createDeepAgent` 2 處。那份統計是 session 內的一次 `grep`，沒有存檔，要引用請重跑。
+- **`deepagents` 那一列的口徑**：§七用 `from 'deepagents'` 重算，正式碼 20 檔（其中 4 個是夾具與量測，產品路徑 16）、測試 28 檔；上表的 18／29 是另一種掃法（含 `deepagents/…` 子路徑與 `fixtures` 規則），兩者沒有逐檔對過。要引用時以 §七 為準，並註明口徑。
 - `@langchain/langgraph-checkpoint` 與 `@langchain/langgraph-sdk` 雖然列在 `apps/harness/package.json`，**原始碼零 import**——它們是傳遞相依的顯式宣告，不是用到的東西。
 
 ## 三、標準那一側（dsh）與 Rust 專案（OpenBitFun）給了什麼證據
@@ -178,7 +180,7 @@
 1. **（已完成，[#1109](https://github.com/DemianLi/nexus-agent/pull/1109)）存檔點。** 當時的判斷是：`MemorySaver` 每步保留一份完整序列化狀態、不修剪，是記憶體平方成長與每輪 CPU 線性變長的主因（§1-2、1-3、1-4），而且與 LangChain 去留、與 Rust 都無關。結果證實了這個判斷，也證實「兩件要一起做」（見結論後的更新）。**當時列為「沒驗證」的前提——只留最新一份會不會破壞核准中斷、`resume`、背景子代理——PR #1109 用測試驗了**：核准與拒絕的來回、只留 1 份仍能續行都有測試，並用四項變異各弄壞一處確認測試會紅；它另外記了兩件副作用：每個結束的子代理命名空間會殘留一份小狀態，`getStateHistory` 與帶 `checkpoint_id` 的重放在這顆 saver 上不再可用（nexus 沒有任何地方使用，已 grep）。
 2. **（已完成，[#1110](https://github.com/DemianLi/nexus-agent/pull/1110)）我們自己的 `token-estimate.ts`**：每輪寫 100 KB 的 profile 裡 `js-tiktoken` 佔 19%，全從這個檔案進來（§1-4）。我當時問「為什麼 #1094 的抽樣之後仍佔這麼多」沒有追到；答案是成本在編碼器而不在抽樣，換成 `gpt-tokenizer` 即解（見更新）。
 3. **不要為了效能換 Rust。** 量到的熱點全是 JS 層的演算法與資料保留問題（存檔點、序列化、估算），沒有一處是「JS 做不到的事」。Rust 的合理位置仍是插件內的實作語言：只在 profile 指出某個具體熱點、且 TypeScript 最佳化動不了它時，才用 N-API 或 sidecar 換那一塊，不是換掉容器。 **兩個熱點最後都是用 TypeScript 層的改動修掉的**（換存檔點實作與存檔時機、換編碼器），這是對這一點最直接的事後證據。
-4. **若要拿掉 LangChain，沿縫逐段，從最小的縫開始**：模型轉接器（1 個檔案碰 `ChatOpenAI`；dsh 自己是 `fetch`＋`eventsource-parser` 的自寫轉接器）→ MCP 轉接器（1 個檔案）→ **存檔點**（已由 #1109 處理，不再是拿掉 LangChain 的前置）→ 訊息型別與 middleware（最重，31＋28 個檔案）。每一段動工前先決定新契約是什麼，因為訊息型別與 middleware 的行為現在由 LangChain 的型別隱含定義，測試夾具也建在它上面（§二）。
+4. **若要拿掉 LangChain，沿縫逐段，從最小的縫開始**：模型轉接器（1 個檔案碰 `ChatOpenAI`；dsh 自己是 `fetch`＋`eventsource-parser` 的自寫轉接器）→ MCP 轉接器（1 個檔案）→ **存檔點**（已由 #1109 處理，不再是拿掉 LangChain 的前置）→ 訊息型別與 middleware（最重，31＋28 個檔案）。每一段動工前先決定新契約是什麼，因為訊息型別與 middleware 的行為現在由 LangChain 的型別隱含定義，測試夾具也建在它上面（§二）。**`deepagents` 那一層的成本與順序見 §七**：只拿掉它省不了資源，而且它那三顆 middleware 是寫在 `createAgent` 的介面上，要不要走「連 `createAgent` 一起拿掉」會決定這些該寫在哪個介面。
 5. **常駐記憶體**：閒置堆 70 MB、`footprint` 341 MB，224 MB 在 V8 的頁裡（§1-3）。要再動它之前，先拆開那 224 MB（主堆、程式碼空間、tsx 載入緒各多少）。現在**不知道**哪一塊最大。
 6. **langfuse 不用處理**——零相依。若是想把追溯／觀測做起來，那是 [#1015](https://github.com/DemianLi/nexus-agent/issues/1015) 那張地圖在做的事，與這個決定無關。
 
@@ -196,4 +198,83 @@
 - 真模型、真檔案系統後端、子代理下的數字；Node 22 上的數字。
 - ~~`token-estimate.ts` 在 100 KB 工具參數下仍佔 19% 的原因~~：編碼器（#1110）。
 - #1109 自己記的未驗項：沒用真模型實跑；每個結束的子代理命名空間殘留一份小狀態；`projection-children.test.ts`、`trajectory-subagents-wire.test.ts` 偶爾 30 秒逾時（PR 內文說修前就會，建議另開卡）。
-- 若拿掉 LangChain，`deepagents` 的檔案後端與子代理那一整層（我們多處依賴它的行為；用到的是 `CompositeBackend`／`StateBackend`／`FilesystemBackend`、四個 middleware、`createDeepAgent`，其餘多是型別）要自己補多少——**這一項沒有估價**。
+- ~~若拿掉 LangChain，`deepagents` 的檔案後端與子代理那一整層要自己補多少，沒有估價~~：§七給了**尺寸與順序**（可達原始碼約 11K 行、單拿掉只省約 13 MB），**沒有給人力**；該項下剩的未知見 §七末段。更正這裡原本的描述：用到的不只是型別與四個 middleware——`ContainedFilesystemBackend`、`TextOnlyStateBackend`、`HostStashBackend` 是**繼承**它的後端類別。
+
+## 七、拿掉 `deepagents` 要花多少（2026-10-06 夜補）
+
+這一節回答 §六 最後一項。**結論先講：只拿掉 `deepagents`，省不了什麼資源；要花的是「接手它的程式碼」，而且順序取決於 §五.4 的另一個決定（要不要連 `createAgent` 一起拿掉）。**
+
+### 7-1 先分兩種做法
+
+| 情境 | 內容 |
+| --- | --- |
+| **A** | 拿掉 `deepagents`，保留 `langchain` 的 `createAgent`、`@langchain/core`、langgraph |
+| **B** | 連 `createAgent` 一起拿掉（§五.4 的整條路） |
+
+`createDeepAgent`（`deepagents@1.13.1` 的 `src/agent.ts`，548 行）本身只是疊在 `createAgent` 上的一疊 middleware：檔案工具、`task` 子代理、摘要、補懸空工具呼叫，外加選配的 skills、memory、async 子代理、快取、HITL。我方 `packages/nexus-core/src/subagent-graph.ts`（158 行）**已經**在背景子代理上直接呼叫 `createAgent` 並自己組那一疊預設，所以 A 有現成先例。
+
+### 7-2 情境 A 按接縫拆開
+
+「可達行數」只算我方 import 的符號走得到的模組；原始碼取自 sourcemap 的 `sourcesContent`，用腳本逐檔數行。dsh 欄是 dsh 對應套件的非測試行數（`5badb150`），**含我方用不到的功能，只能當尺寸參考**。
+
+| 接縫 | 我方碰到它的正式檔 | `deepagents` 可達行數 | dsh 對應 | 測試檔（跨接縫會重複計） | 模型看得到？ |
+| --- | --- | --- | --- | --- | --- |
+| 1 組裝（`createDeepAgent`、harness profile） | `apps/harness/src/agent-factory.ts`（呼叫在 :757）、`harness-profile.ts` 295 行、`base-tools.ts`、`packages/nexus-core/src/base-types.ts` | 2,030 | 沒對照 | 14 | 否，但系統提示要逐字相同 |
+| 2 後端（`StateBackend`／`FilesystemBackend`／`CompositeBackend`、`adaptBackendProtocol`、`resolveBackend`、協定型別） | `contained-backend.ts` 662、`binary-read.ts` 70、`tool-result-stash.ts` 336，另有 `fold.ts`、`fs-service.ts`、`observation.ts`、`tool-result-meta.ts` 與三個 plugin | 3,931 | `fs-local` 1,271＋`fs` 499 | 25 | 否 |
+| 3 檔案工具 middleware | `subagent-graph.ts`（root 那顆在 `createDeepAgent` 內部） | 2,085（權限檢查 91 行算在接縫 2） | `tool-fs` 1,527＋`tool-fs-search` 1,539＋`tool-str-replace-editor` 532 | 5，另有許多測試依賴它的輸出形狀 | **是**：工具描述與參數形狀 |
+| 4 摘要 middleware | `packages/nexus-core/src/summarization.ts` 946 行（包在 :405） | 1,282 | `compaction-basic` 1,715＋`compaction` 505 | 3＋1 | **是**：觸發、切點、緊急摘要；提示詞已是我方的（#432） |
+| 5 子代理 `task` | `fold.ts`、`subagent-graph.ts`、背景子代理相關檔 | 826 | `tool-subagent` 1,164 | 9 | **是**：`task` 描述、狀態過濾 |
+| 6 補懸空工具呼叫 | `subagent-graph.ts`、一個夾具 | 190 | 沒對照 | 1 | 行為面 |
+| 共用小件 | — | 638 | — | — | — |
+| **合計** |  | **10,982** |  |  |  |
+
+另有兩批不在合計裡：
+
+- **skills 與 memory**（1,289＋668＝1,957 行）：`nexus-plugin-skills` 與 `nexus-plugin-memory` 存在，但**不在預設的 `apps/harness/cordis.yml`**。要保留（就得自有實作）還是砍掉，是決定，不是工程。
+- **async 子代理、store／sandbox／langsmith／context-hub／local-shell 等**（4,777 行）：我方不在射程內，沒有 import 它們的符號。
+
+幾點要讀對：
+
+- **接縫 2 不是換型別，是繼承。** `ContainedFilesystemBackend extends FilesystemBackend`、`TextOnlyStateBackend extends StateBackend`、`HostStashBackend` 再繼承前者，三處都呼叫 `super.read／write／edit／grep`。所以這一縫實質上是把約 4 千行實作接過來。
+- **dsh 的檔案工具叫 `read`／`write`／`edit`，我方是 `read_file`／`write_file`／`edit_file`。** 照 dsh 改名會連動 web 卡片、`tool-result-meta` 與 wire，是另一張卡；本估算假設描述與名稱先**逐字**搬。
+- **只有組裝點能從現有程式推出寫多少**：約 200 行，依據是 `agent.ts` 實際走到的分支（解 profile、組 middleware、`createAgent`、`withConfig`）加上 `subagent-graph.ts` 這個同類先例。**其餘接縫我只給上限（整份搬進來的行數），不給改寫會少多少**，沒有依據。
+
+### 7-3 拿掉後會消失的繞道（這是收益）
+
+- `harness-profile.ts` 整個檔案、組裝點的「必須宣告 profile」檢查，以及背景子代理自編圖在 profile 會動組成時拋錯的那段守衛。
+- `base-tools.ts` 裡躲內建工具名的迴避，與 `createDeepAgent` 開頭 `TOOL_NAME_COLLISION` 的雙重檢查。
+- 摘要那條「`fraction` 會靜靜壞掉」的型別層與執行期防線，以及登記在 [#143](https://github.com/DemianLi/nexus-agent/issues/143)、[#149](https://github.com/DemianLi/nexus-agent/issues/149)、[#150](https://github.com/DemianLi/nexus-agent/issues/150) 的「基座表達不出來」——那些在自有實作下變成表達得出來。
+- **最大的一塊**：一次性子代理（走基座的 `task`）與背景子代理（自編 `createAgent`）現在是兩條路，靠「漂移絆索」測試維持一致，並在 `subagent-graph.ts` 的檔頭列了一張「自編路徑要補的東西」清單；統一之後可以合成一條。
+
+### 7-4 資源面：幾乎沒有收益
+
+同一個行程依序 `import`，量每一步的增量（Node v25.9.0，1 分鐘平均負載 5～6，各 3 次，三次結果一致）：
+
+| 套件（依序載入） | 增加的 RSS | 載入時間 |
+| --- | --- | --- |
+| `@langchain/core/messages` | 約 51 MB | 約 90 ms |
+| `langchain` | 約 68 MB | 約 100 ms |
+| `@langchain/openai` | 約 1.5 MB | 約 40 ms |
+| **`deepagents`** | **約 12～14 MB** | **約 60～70 ms** |
+
+閒置 RSS 約 286～323 MB（§1-6），所以只拿掉 `deepagents` 約省 4%。**順序會影響各列**：單獨載 `@langchain/openai` 約 75 MB，是因為它順便載入了 core，不是它自己的；上表是累加後的增量。**拿掉它的理由是控制權（7-3），不是效能。**
+
+### 7-5 情境 B 另算，而且要先想順序
+
+- 正式碼有 32 個檔案 import `langchain`；`createMiddleware` 28 個呼叫點，用到的 hook 是 `wrapModelCall`（29 處）與 `wrapToolCall`（19 處）；langgraph 這一側：`MemorySaver` 的 import 共 100 行，**正式碼只有 1 行**（`pruned-memory-saver.ts` 那條線，其餘是測試與夾具）；`Command` 的 import 正式碼 7 行；`interrupt` 4 個檔。前兩項是 `grep` 計數，`langchain`／`createMiddleware`／hook 的計數排除測試與夾具。**B 的測試面比正式碼大得多**（`MemorySaver` 一項就有約 99 行在測試與夾具）。
+- `deepagents` 的檔案、摘要、`task` 三顆 middleware 都是寫在 `createAgent` 的 middleware 介面上。**做 A 時若用「整份搬進來」，B 之後這些全要再移植一次**；若 B 是真目標，接縫 3～5 應該直接寫在我方自己的 hook 介面上，A 才不會白做。這代表要先決定那個介面長什麼樣——dsh 的 `core/agent-loop`（2,425 行）是參考，但它的 hook 模型與 LangChain 的不同，28 個 middleware 都得移植。
+
+### 7-6 建議順序（判斷，不是決議）
+
+1. **接縫 1＋6**：自寫組裝點、拿掉 harness profile 繞道。最便宜，且不碰模型看得到的東西。
+2. **接縫 5**：把一次性與背景子代理合成一條路。需要 live A/B（`task` 描述與狀態過濾）。
+3. **接縫 4**：摘要。提示詞已是我方的，剩觸發與切點行為；需要 live A/B。
+4. **接縫 3＋2**：成本核心——約 4 千行後端繼承、2 千行檔案工具、25 個測試檔、檔案工具的模型面驗證。**動工前先決定情境 B 要不要走。**
+
+### 7-7 這一節沒有回答的
+
+- **沒估人力**，沒有把行數換算成工期；除組裝點外沒有「要寫幾行」的依據。
+- **沒量 10,982 行實際被執行的比例**（沒跑覆蓋率），「可達」不等於「用到」。
+- **沒估 live A/B 的成本**：接縫 3、4、5 都要跑，但要跑幾輪、用哪些模型沒有基礎。
+- skills／memory 保留與否沒有答案。
+- 7-4 的量測跑在 Node 25 上，Node 22 沒量（同 §六）。
