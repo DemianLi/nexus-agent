@@ -258,9 +258,12 @@ export HTTP_PROXY=http://127.0.0.1:7890
 `config.maxParallelToolCalls`（至少 2，改了要重啟）。**今天每一顆都可以跟別顆重疊**——dsh 只讓宣告了
 平行安全的工具重疊、其餘一顆一顆跑，那一半還沒做（[#711](https://github.com/DemianLi/nexus-agent/issues/711)）。
 
-**目標不會自己往下走，除非你說可以。** `--goal-driver`（CLI 與 `serve` 共用）打開之後，一個 active
-的目標在每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的 `max_goal_rounds`（預設 256）。
-預設關。模型從第 `blockedAfterConsecutiveRounds` 輪（預設 3）起可以把自己標成 blocked 而退出迴圈，
+**目標自己往下走與否，CLI 與 `serve` 的預設相反**（[#445](https://github.com/DemianLi/nexus-agent/issues/445)）。
+開著的時候，一個 active 的目標在每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的
+`max_goal_rounds`（預設 256）。**CLI 預設關**，要 `--goal-driver` 才開：CLI 的核准是自動拒絕，續行只會一再撞
+同一個拒絕、空轉燒輪。**`serve` 預設開**，要 `--no-goal-driver` 才關：要核准的工具在 `serve` 上是停下來等人，
+不會空轉（`serve` 也接受 `--goal-driver`，意思是明講要開；兩個一起給會報錯）。啟動時印的那一行「續行：…」
+講的是這一次實際的狀態。模型從第 `blockedAfterConsecutiveRounds` 輪（預設 3）起可以把自己標成 blocked 而退出迴圈，
 但那是准許不是保證。額外那條「連續 N 輪沒進展就停」刻意沒做，理由在
 `apps/harness/src/goal-driver.ts` 的檔頭。
 

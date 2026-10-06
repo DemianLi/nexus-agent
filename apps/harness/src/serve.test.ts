@@ -39,10 +39,9 @@ describe('serve 的旗標', () => {
     expect(parseServeArgs([])).toEqual({
       live: false,
       port: DEFAULT_PORT,
-      // **續行預設關**，兩個入口同一個決定：dsh 的續行驅動器是「需要你刻意掛載的可選
-      // 消費方」，而我們的入口點擁有輪迴圈，掛載的等價物就是這個旗標。（2026-09-19 註：dsh 的
-      // base 其實出廠就掛著續行驅動器，這個前提待重核，見調研筆記 §三第 18 列。）
-      goalDriver: false,
+      // **續行 serve 預設開、CLI 預設關**（#445）：serve 要核准時停下來等人，不會空轉；
+      // CLI 的 `HEADLESS_APPROVALS` 確定性拒絕，續行只會一再撞同一個拒絕。
+      goalDriver: true,
       // 印設定預設關——它是一個診斷出口，不是一種跑法（#454）。
       dumpConfig: false,
       dumpConfigSchema: false,
@@ -51,8 +50,20 @@ describe('serve 的旗標', () => {
     });
   });
 
-  it('--goal-driver 打得開', () => {
+  it('續行預設開；--no-goal-driver 關得掉；--goal-driver 是明講要開', () => {
+    expect(parseServeArgs([]).goalDriver).toBe(true);
+    expect(parseServeArgs(['--no-goal-driver']).goalDriver).toBe(false);
     expect(parseServeArgs(['--goal-driver']).goalDriver).toBe(true);
+  });
+
+  it('--goal-driver 與 --no-goal-driver 一起給就當場說清楚', () => {
+    expect(() => parseServeArgs(['--goal-driver', '--no-goal-driver'])).toThrow(
+      '--goal-driver 與 --no-goal-driver 不能一起給',
+    );
+  });
+
+  it('用法文字說得出怎麼關', () => {
+    expect(() => parseServeArgs(['--port', '七'])).toThrow('--no-goal-driver');
   });
 
   it('port 不是合法整數就當場說清楚', () => {
@@ -244,9 +255,9 @@ describe('/goal 之後的續行', () => {
     return Promise.race([foldTurn(events), timeout]);
   }
 
-  it('開著 --goal-driver：打 /goal 之後不說話，第 1 輪自己開始', async () => {
+  it('沒給旗標（預設開）：打 /goal 之後不說話，第 1 輪自己開始', async () => {
     running = await runServe({
-      argv: ['--port', '0', '--goal-driver'],
+      argv: ['--port', '0'],
       log: () => undefined,
       env: {},
     });
@@ -260,8 +271,12 @@ describe('/goal 之後的續行', () => {
     expect(JSON.stringify(state.entries)).toContain('回聲：');
   }, 15000);
 
-  it('沒開 --goal-driver：打 /goal 之後一輪都不排', async () => {
-    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
+  it('--no-goal-driver：打 /goal 之後一輪都不排', async () => {
+    running = await runServe({
+      argv: ['--port', '0', '--no-goal-driver'],
+      log: () => undefined,
+      env: {},
+    });
     const client = await serveClient(running as RunningServe);
     const events = await client.openEvents('goal-cmd-off');
     const created = await client.slashRun('goal-cmd-off', `/${GOAL_COMMAND_NAME} 把測試修綠`);
