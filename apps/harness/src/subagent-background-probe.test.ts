@@ -67,17 +67,17 @@ import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
-/** `createDeepAgent` 收到的參數，最近一次。 */
+/** `assembleAgent` 收到的參數，最近一次（產品路徑自有組裝點，取代以前的 `createDeepAgent`）。 */
 const captured = vi.hoisted(() => ({ params: undefined as Record<string, unknown> | undefined }));
 
-vi.mock('deepagents', async (importOriginal) => {
-  const original = await importOriginal<typeof import('deepagents')>();
+vi.mock('@nexus/core', async (importOriginal) => {
+  const original = await importOriginal<typeof import('@nexus/core')>();
   return {
     ...original,
-    createDeepAgent: ((params: Record<string, unknown>) => {
+    assembleAgent: ((params: Record<string, unknown>) => {
       captured.params = params;
-      return (original.createDeepAgent as (p: unknown) => unknown)(params);
-    }) as typeof original.createDeepAgent,
+      return (original.assembleAgent as (p: unknown) => unknown)(params);
+    }) as typeof original.assembleAgent,
   };
 });
 
