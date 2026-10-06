@@ -216,6 +216,7 @@ export const DEFAULT_LIVE_MODEL_ENTRY: ModelEntry = Object.freeze({
   maxTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
   input: Object.freeze(['text' as const]) as ModelEntry['input'],
   reasoningEfforts: Object.freeze({ off: null, default: 'default' }),
+  tokenizer: Object.freeze({ digits: 'single' as const }),
   compat: Object.freeze({
     chatTemplateKwargs: Object.freeze({
       enable_thinking: Object.freeze({ $var: 'thinking.enabled' as const }),

@@ -431,3 +431,110 @@ describe('第一次：借別條 thread 的第一次', () => {
     expect(book.firstCall(thread)).toBeUndefined();
   });
 });
+
+describe('逐位切詞的數字（#1102）', () => {
+  const SINGLE = { singleDigits: true };
+  /** 一串 ASCII 數字夾在文字裡：o200k 三位一組，逐位切詞是一位一個。 */
+  const digits = (n: number) => '7'.repeat(n);
+
+  it('數字連續 L 位，逐位算比 o200k 多 L − ceil(L/3)', () => {
+    const base = estimateRequestTokens({ messages: [new HumanMessage('值：')] });
+    const grouped = (n: number) =>
+      estimateRequestTokens({ messages: [new HumanMessage(`值：${digits(n)}`)] }) - base;
+    for (const n of [2, 3, 6, 10, 31]) {
+      const single =
+        estimateRequestTokens({ messages: [new HumanMessage(`值：${digits(n)}`)] }, SINGLE) - base;
+      expect(single - grouped(n)).toBe(n - Math.ceil(n / 3));
+    }
+  });
+
+  it('沒開旗標就跟舊的一模一樣', () => {
+    const body = { messages: [new HumanMessage('編號 20260927 共 1234567 筆')] };
+    expect(estimateRequestTokens(body, { singleDigits: false })).toBe(estimateRequestTokens(body));
+    expect(estimateRequestTokens(body, SINGLE)).toBeGreaterThan(estimateRequestTokens(body));
+  });
+
+  it('單位數字與全形數字不加：o200k 本來就一個一位', () => {
+    const body = { messages: [new HumanMessage('第 3 項，０１２３４５')] };
+    expect(estimateRequestTokens(body, SINGLE)).toBe(estimateRequestTokens(body));
+  });
+
+  it('同一則訊息先開旗標再不開，各算各的（快取不跨模型外洩）', () => {
+    const message = new HumanMessage(`id=${digits(30)}`);
+    const off = estimateRequestTokens({ messages: [message] });
+    const on = estimateRequestTokens({ messages: [message] }, SINGLE);
+    expect(on - off).toBe(30 - 10);
+    expect(estimateRequestTokens({ messages: [message] })).toBe(off);
+    expect(estimateRequestTokens({ messages: [message] }, SINGLE)).toBe(on);
+  });
+
+  it('超過備忘門檻的長文也一樣算（內容備忘不吃掉旗標）', () => {
+    const text = `${'列 '.repeat(200)}${digits(300)}`;
+    const body = { messages: [new HumanMessage(text)] };
+    expect(estimateRequestTokens(body, SINGLE) - estimateRequestTokens(body)).toBe(300 - 100);
+  });
+
+  it('工具呼叫參數與工具結果裡的數字也算', () => {
+    const calling = new AIMessage({
+      content: '',
+      tool_calls: [{ id: 'c', name: 'read_file', args: { n: digits(30) } }],
+    });
+    const result = new ToolMessage({ content: digits(30), tool_call_id: 'c' });
+    for (const message of [calling, result]) {
+      const gap =
+        estimateRequestTokens({ messages: [message] }, SINGLE) -
+        estimateRequestTokens({ messages: [message] });
+      expect(gap).toBeGreaterThanOrEqual(30 - 10);
+    }
+  });
+
+  it('精確的 estimateTextTokens 不受影響', () => {
+    expect(estimateTextTokens(digits(30))).toBe(estimateTextTokens(digits(30)));
+    const exact = estimateTextTokens(digits(30));
+    estimateRequestTokens({ messages: [new HumanMessage(digits(30))] }, SINGLE);
+    expect(estimateTextTokens(digits(30))).toBe(exact);
+  });
+
+  it('TokenAnchorBook 只對宣告過的模型回 true', () => {
+    const book = new TokenAnchorBook({ singleDigitModels: ['m-digits'] });
+    expect(book.singleDigits('m-digits')).toBe(true);
+    expect(book.singleDigits('m-1')).toBe(false);
+    expect(book.singleDigits(undefined)).toBe(false);
+    expect(new TokenAnchorBook().singleDigits('m-digits')).toBe(false);
+  });
+
+  it('錨定估算：宣告過的模型第一次估得高、沒宣告的不動', () => {
+    const csv = Array.from(
+      { length: 200 },
+      (_, i) => `${1000000 + i},${20260927 + i},3.14159`,
+    ).join('\n');
+    const thread = (model: string) => request([new HumanMessage(csv)], { model });
+    const plain = estimateAnchoredTokens(thread('m-1'), new TokenAnchorBook());
+    const declared = estimateAnchoredTokens(
+      thread('m-digits'),
+      new TokenAnchorBook({ singleDigitModels: ['m-digits'] }),
+    );
+    expect(declared.basis).toBe('estimate');
+    expect(declared.tokens).toBeGreaterThan(plain.tokens * 1.3);
+    // 沒宣告的模型不因為帳上有別的模型宣告而改變。
+    expect(
+      estimateAnchoredTokens(
+        thread('m-1'),
+        new TokenAnchorBook({ singleDigitModels: ['m-digits'] }),
+      ).tokens,
+    ).toBe(plain.tokens);
+  });
+
+  it('錨之後的增量也按位數計', () => {
+    const book = new TokenAnchorBook({ singleDigitModels: ['m-digits'] });
+    const model = { model: 'm-digits' };
+    const answer = answered('a1', 5_000, 'm-digits');
+    const before = [new HumanMessage('開始'), answer];
+    const after = [...before, new HumanMessage(digits(300))];
+    book.record(answer, request(before.slice(0, 1), model), 100, 'estimate');
+    const without = estimateAnchoredTokens(request(before, model), book).tokens;
+    const grown = estimateAnchoredTokens(request(after, model), book).tokens;
+    // 300 位數字逐位算至少 300 個 token，不是 o200k 的 100。
+    expect(grown - without).toBeGreaterThanOrEqual(300);
+  });
+});

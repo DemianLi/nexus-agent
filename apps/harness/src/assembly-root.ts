@@ -39,7 +39,7 @@ import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import type { ThreadTitleConfig } from './settings/thread-title.js';
-import { findModelEntry } from './model-catalog.js';
+import { findModelEntry, singleDigitModelIds } from './model-catalog.js';
 import { resolveDefaultModel } from './model-provider.js';
 import type { ModelSelectionPolicy } from './model-selection-policy.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
@@ -52,7 +52,7 @@ import {
   SessionRegistry,
   deriveApprovalChannel,
   type SessionLog,
-  type TokenAnchorBook,
+  TokenAnchorBook,
 } from '@nexus/core';
 import {
   HARNESS_HOME_DIR_NAME,
@@ -794,7 +794,10 @@ export async function createCliAgent(
     stepInbox,
   } = await createNexusAgent({
     model,
-    ...(tokenAnchorBook !== undefined && { tokenAnchorBook }),
+    // 沒傳就在這裡按型錄建一本（#1102）：fold 自己 new 的那本不認得哪些模型逐位切詞。
+    tokenAnchorBook:
+      tokenAnchorBook ??
+      new TokenAnchorBook({ singleDigitModels: singleDigitModelIds(liveModel.models) }),
     plugins: [
       // **組裝點的協作者排最前面**（#459）：ask-user、plan-mode、sandbox-policy 在自己的
       // `apply` 當下就讀，排後面它們會拿不到。載入是一趟到底的，不會回頭等。

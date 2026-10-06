@@ -9,6 +9,10 @@
  *
  * ## 與 dsh 的差異
  *
+ * - **多一格 `tokenizer`（#1102）。** dsh 的型錄沒有這一格：它的估算器是固定密度（4 個字元一個 token，見
+ *   `token-estimate.ts` 的偏離），不分模型。我們的估算以 o200k 為底，而出廠預設模型把數字逐位切詞，數字為主的內容
+ *   會少估到一半。dsh 表達得出來的做法（固定密度加錨）在同一批資料上更差，所以這是我們才有的缺口，記在條目上、跟 id
+ *   同一筆（理由同下面的 `compat`：換模型時要一起換）。
  * - **`compat` 只收 `chatTemplateKwargs`。** dsh 的 `compat` 是 pi-ai 的一整組線上相容開關（系統提示放哪個角色、
  *   哪個欄位限制輸出、思考怎麼送……）；我們沒有 pi-ai 那一層，只有一個要送 chat template 參數的需求。值裡只認
  *   `{ $var: 'thinking.enabled' }` 這一個佔位符（dsh 有三個：另兩個是 `thinking.effort`、`thinking.budget`，
@@ -59,6 +63,13 @@ export const modelEntrySchema = z.strictObject({
   reasoningEfforts: z
     .union([z.literal(false), z.record(z.string(), z.string().nullable())])
     .optional(),
+  /**
+   * 這顆模型的 tokenizer 跟 o200k 不一樣的地方，給 token 估算用（[#1102](https://github.com/DemianLi/nexus-agent/issues/1102)）。
+   * 今天只有一格：`digits: 'single'` 是這顆把數字逐位切成一個 token 一位（o200k 是最多三位一組）。**沒寫就是照
+   * o200k 估**。只有量過的才宣告：`nemotron-3-super-120b-a12b` 量到數字為主的內容（CSV）真實是 o200k 的 1.88 倍，
+   * 按位數計之後差 0.0%。
+   */
+  tokenizer: z.strictObject({ digits: z.enum(['grouped', 'single']) }).optional(),
   /** 線上相容開關，見檔頭「與 dsh 的差異」。 */
   compat: z
     .strictObject({
@@ -111,6 +122,16 @@ export function requireModelEntry(catalog: readonly ModelEntry[], id: string): M
     throw new Error(`型錄裡沒有模型 "${id}"（型錄有：${known === '' ? '（空的）' : known}）`);
   }
   return entry;
+}
+
+/**
+ * 型錄裡把數字逐位切詞的模型 id，給 {@link TokenAnchorBook} 的建構子（[#1102](https://github.com/DemianLi/nexus-agent/issues/1102)）。
+ *
+ * @param catalog - 型錄。
+ * @returns 宣告了 `tokenizer.digits: 'single'` 的那幾顆的 id。
+ */
+export function singleDigitModelIds(catalog: readonly ModelEntry[]): string[] {
+  return catalog.filter((entry) => entry.tokenizer?.digits === 'single').map((entry) => entry.id);
 }
 
 /** 收不收圖的三種答案。 */
