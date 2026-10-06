@@ -87,7 +87,13 @@ async function slowOpenAi(scripts: readonly (readonly Record<string, unknown>[])
     baseURL: `http://127.0.0.1:${port}/v1`,
     assistants,
     sent,
-    close: () => new Promise<void>((resolve) => server.close(() => resolve())),
+    // 先斷掉所有連線再關：按停止時串流還開到一半，只 `close()` 會等那條連線自己收，量到 2.9 秒
+    // （同檔其他三個測試整個才 0.2 秒），那一個測試因此只剩 1.5 倍的餘裕就撞 5 秒的預設逾時。
+    close: () =>
+      new Promise<void>((resolve) => {
+        server.close(() => resolve());
+        server.closeAllConnections();
+      }),
   };
 }
 
