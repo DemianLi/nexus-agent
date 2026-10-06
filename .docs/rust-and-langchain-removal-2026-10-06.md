@@ -2,7 +2,7 @@
 
 這份筆記回答一個問題：「我們的理念跟 dsh 一樣是萬物皆可插件，所以想把 langchain／deepagents／langgraph／langfuse 移除，再用 Rust 取代 Cordis 取得更好的資源管控與效能」——這個方向值不值得走。它是 [`openbitfun-plugin-architecture-2026-10-06.md`](openbitfun-plugin-architecture-2026-10-06.md) 的後續：那份回答「Rust 專案是不是萬物皆可插件」，本篇回答「我們該不該換成 Rust」。我方現況見 [`plugin-architecture-gap-survey.md`](plugin-architecture-gap-survey.md)。
 
-**調研日期**：2026-10-06。對讀版本：nexus `0e759edd`（develop）；dsh `5badb15009ae1756c3afe0ae0cef1faafc290ccc`（`references/deepseek-harness`，HEAD 日期 2026-10-03，這次**沒有**重新 fetch）；OpenBitFun `18aa5441d89f5e24cfb4d8ff54d4b53d92c68896`。
+**調研日期**：2026-10-06。對讀版本：nexus `0e759edd`（develop）；dsh `5badb15009ae1756c3afe0ae0cef1faafc290ccc`（`references/deepseek-harness`，HEAD 日期 2026-10-03，這次**沒有**重新 fetch）；OpenBitFun `18aa5441d89f5e24cfb4d8ff54d4b53d92c68896`。**§一前七節的量測跑在 `@langchain/langgraph` 1.4.12 上**（作者 checkout 的 `node_modules` 落後 lockfile；develop 解析的是 1.4.19），1.4.19 的重跑見 §1-8。
 
 ## 結論
 
@@ -101,6 +101,24 @@
 7. 第二輪的每次執行都接著 inspector，閒置 RSS 比第一輪多 15～35 MB。
 8. 「去掉 `MemorySaver` 的修剪問題後，每輪 CPU 會不會回到常數」**沒有驗證**：profile 顯示它佔 40% 以上，不代表拿掉就剩 60%。
 
+### 1-8 在 `@langchain/langgraph` 1.4.19 上重跑（2026-10-06 晚）
+
+§1-1～1-7 的數字都是在 1.4.12 上量的：作者 checkout 的 `node_modules` 比 lockfile 舊（lockfile 與 develop 實際解析的是 1.4.19，`langgraph-checkpoint` 兩邊都是 1.1.5）。事後用乾淨工作樹（develop `20601874`、`pnpm install --frozen-lockfile`，確認解析到 1.4.19）重跑 G、L、W、記憶體歸屬與 profile：
+
+| 項目 | 1.4.19 | 1.4.12 |
+| --- | --- | --- |
+| 100 輪後存檔點與位元組 | 1,300 個；`storage` 545.2 MB、`writes` 49 MB；`ArrayBuffer` 598.2 MB | 同（逐位元組相同） |
+| 堆疊上有 `langgraph-checkpoint` 的時間 | 38.4% | 40～42% |
+| `fast-safe-stringify` 自身時間 | 13.0%（`MemorySaver.put` 呼叫 803／866 ms） | 14～15% |
+| G 每 25 輪一段的每輪 CPU（ms，兩次） | 52→89→122→145→177→202；54→112→160→186→170→200 | 43→72→99→123→144→177 |
+| L 每 10 輪一段（ms，兩次） | 65→…→280；90→…→324 | 63→…→220 |
+| W 每 10 輪一段（ms，兩次） | 287→…→1,450；302→…→1,366 | 249→…→1,300 |
+| G 150 輪後 RSS | 1.75／1.77 GB | 1.74 GB |
+
+**結論不變**：保留量與版本無關（存檔點數與位元組一致），CPU 成長形狀同為線性，profile 歸屬一致。
+
+**絕對 CPU 比 1.4.12 那次高 10～35%，這個差不能歸給版本**：跑完當下機器 1 分鐘平均負載是 15.8（有別的 session 在量）、兩次重複最多差 30%（L），而且 develop 也往前走了（閒置堆從 70 MB 升到 76 MB）。要隔離版本對 CPU 的影響，得在同一棵樹上連續換版本重跑，**這輪沒做**。所以：**拿這份文件的絕對 CPU 當基準線要小心，比較各格要看斜率與保留量，並在同一時段、同一棵樹上連續跑。**
+
 ## 二、相依足跡：「拿掉」要碰多少
 
 數法：`grep -rlE "from '<套件>(/…)?'"` 掃 `apps/`、`packages/` 的 `.ts`／`.tsx`，排除 `node_modules`、`dist`；「測試」指路徑含 `.test.` 或 `fixtures` 的檔案。
@@ -165,6 +183,7 @@
 **沒查清楚**（都可能改變 §五）：
 
 - 只留最新存檔點會不會破壞核准中斷、`resume`、背景子代理（第 1 點的前提）。
+- `@langchain/langgraph` 版本對每輪 CPU 的影響（1.4.12 對 1.4.19，§1-8 沒隔離，只知道保留量不受版本影響）。
 - 拿掉存檔點的成本後，每輪 CPU 會不會回到常數（§1-7 第 8 條）。
 - 長歷史下並行的事件迴圈利用率；壓縮在長會話裡實際何時觸發。
 - 閒置 224 MB 的 V8 頁怎麼分。
