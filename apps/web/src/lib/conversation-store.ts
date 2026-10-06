@@ -3,7 +3,7 @@
  *
  * 右側欄的面板要讀對話，但**不能靠 props 或 `RightSidebarSources` 帶 `ConversationState`**：`App` 每收一格串流就重畫一次，
  * `sources` 一變身分，`RightSidebarPanel` 的 `memo` 就整個擋不住（#1031 量過）。這裡給面板一條自己的線：`useSyncExternalStore`
- * 同 `changes.summary`，面板只在**看得見**時訂閱（見 `components/trace-panel.tsx`），藏起來時逐字片段不會讓它重算。
+ * 同 `changes.summary`，面板只在**看得見**時訂閱（見 `components/trace/trace-panel.tsx`），藏起來時逐字片段不會讓它重算。
  *
  * **快照是「已交給 React 的那一份」**，不是 `FramePublisher.current`：後者在動畫幀排著時已經往前走了，面板讀到它會比對話區
  * 早看到還沒畫出來的字。所以 `set` 跟 `setState` 在同一個發布回呼裡（`use-conversation.ts`），兩邊同一刻換、同一份。

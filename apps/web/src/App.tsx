@@ -3,7 +3,7 @@ import { X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
-import { AppSidebar } from '@/components/app-sidebar';
+import { AppSidebar } from '@/components/sidebar/app-sidebar';
 import { ApprovalCard } from '@/components/approval-card';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
@@ -11,8 +11,8 @@ import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
 import { GoalBar } from '@/components/goal-bar';
-import { PlanChip } from '@/components/plan-chip';
-import { PlanReviewPanel, usePlanLibrary } from '@/components/plan-review';
+import { PlanChip } from '@/components/plan/plan-chip';
+import { PlanReviewPanel, usePlanLibrary } from '@/components/plan/plan-review';
 import { QueueDock } from '@/components/queue-dock';
 import { FEEDBACK_COMMAND_LINE } from '@/lib/feedback';
 import { QuestionPanel } from '@/components/question-panel';
@@ -20,13 +20,13 @@ import {
   RightSidebarPanel,
   RightSidebarProvider,
   RightSidebarToggle,
-} from '@/components/right-sidebar';
+} from '@/components/sidebar/right-sidebar';
 import { SessionReferenceContext } from '@/components/session-reference';
-import { SubagentControlContext, useSubagentControl } from '@/components/subagent-control';
-import { SessionUsage } from '@/components/session-usage';
+import { SubagentControlContext, useSubagentControl } from '@/components/tool/subagent-control';
+import { SessionUsage } from '@/components/cost/session-usage';
 import { StatusLine } from '@/components/status-line';
 import { ThemeToggle } from '@/components/theme-toggle';
-import { TodoPanel } from '@/components/todo-panel';
+import { TodoPanel } from '@/components/todo/todo-panel';
 import { Entry as TranscriptEntry, Transcript, useFreshItems } from '@/components/transcript';
 import { Button } from '@/components/ui/button';
 import { Toaster } from '@/components/ui/sonner';

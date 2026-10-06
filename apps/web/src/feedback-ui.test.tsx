@@ -13,7 +13,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { App } from '@/App';
-import { TRACE_REPLY_UNPLACED_TEXT } from '@/components/trace-panel';
+import { TRACE_REPLY_UNPLACED_TEXT } from '@/components/trace/trace-panel';
 import { FEEDBACK_COPY } from '@/lib/feedback';
 
 /**
