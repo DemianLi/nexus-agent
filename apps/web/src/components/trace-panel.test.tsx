@@ -11,7 +11,8 @@ import { Profiler } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PANELS, type PanelBodyProps } from '@/components/right-sidebar-panels';
-import { TRACE_LOCATE_LABEL, TRACE_LOCATED_TEXT } from '@/components/trace-panel';
+import { TRACE_LOCATED_TEXT } from '@/components/trace-panel';
+import { TRACE_LOCATE_LABEL } from '@/components/trace-row';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';
