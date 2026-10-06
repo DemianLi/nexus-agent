@@ -14,6 +14,8 @@ import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
 export interface ScriptedModelState {
   turn: number;
   boundToolNames: readonly string[];
+  /** `bindTools` 收到的工具物件本身（#442：工具目錄要讀模型實際拿到的名稱、描述與 schema）。省略就是還沒綁過。 */
+  boundTools?: readonly unknown[];
   lastPrompt: readonly BaseMessage[];
   prompts: (readonly BaseMessage[])[];
 }
@@ -107,6 +109,11 @@ export class ScriptedChatModel extends BaseChatModel {
     return this.shared.boundToolNames;
   }
 
+  /** `bindTools` 最近一次收到的工具物件，沒綁過是空陣列。 */
+  get boundTools(): readonly unknown[] {
+    return this.shared.boundTools ?? [];
+  }
+
   /**
    * 最近一輪送進模型的完整訊息串，含基座組出來的 system prompt。
    *
@@ -136,6 +143,7 @@ export class ScriptedChatModel extends BaseChatModel {
   }
 
   override bindTools(tools: readonly unknown[]): ScriptedChatModel {
+    this.shared.boundTools = tools;
     this.shared.boundToolNames = tools.map((candidate) => {
       const name = (candidate as { name?: unknown }).name;
       return typeof name === 'string' ? name : '<anonymous>';
