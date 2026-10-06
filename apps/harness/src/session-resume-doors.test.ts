@@ -136,7 +136,7 @@ function saverConstructions(): string[] {
  * 不是失敗訊息裡那兩個目的地的任何一個。
  */
 const THE_ONLY_SAVER = [
-  'apps/harness/src/assembly-root.ts: const checkpointer = new MemorySaver();',
+  'apps/harness/src/assembly-root.ts: const checkpointer = new PrunedMemorySaver();',
 ];
 
 /**

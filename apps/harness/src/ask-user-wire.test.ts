@@ -11,7 +11,6 @@
  * （它要在瀏覽器裡跑），所以 `question` 這個值在兩邊各寫了一份。
  */
 
-import { MemorySaver } from '@langchain/langgraph';
 import {
   QUESTION_INTERRUPT_KIND,
   APPROVAL_INTERRUPT_KIND,
@@ -34,6 +33,7 @@ import {
 } from '@nexus/wire';
 import { describe, expect, it, vi } from 'vitest';
 
+import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { createNexusAgent } from './agent-factory.js';
 import { historyFrames } from './conversation-history.js';
 import {
@@ -77,7 +77,7 @@ async function open(threadId: string): Promise<Session> {
         { content: '再收一次工。' },
       ],
     }),
-    checkpointer: new MemorySaver(),
+    checkpointer: new PrunedMemorySaver(),
     plugins: [humanChannelPlugin(), createAskUserPlugin()],
   });
   // **日誌要接在 pump 自己那一份註冊表上**：handler 建完 pump 才把它交過來（`wire-handler.ts`），

@@ -14,7 +14,6 @@
  */
 
 import { tool } from '@langchain/core/tools';
-import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
 import type { ConversationState, Event, WireChannel, WireClient } from '@nexus/wire';
 import {
@@ -27,6 +26,7 @@ import {
 import { beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { createNexusAgent } from './agent-factory.js';
 import {
   approvalAt,
@@ -85,7 +85,7 @@ async function build(names: readonly string[]) {
         { content: '再收一次工。' },
       ],
     }),
-    checkpointer: new MemorySaver(),
+    checkpointer: new PrunedMemorySaver(),
     plugins: [gated(names)],
   });
 }

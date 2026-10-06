@@ -1,5 +1,4 @@
 import { tool } from '@langchain/core/tools';
-import { MemorySaver } from '@langchain/langgraph';
 import type { ConversationState, Event, WireClient } from '@nexus/wire';
 import {
   appendDecision,
@@ -11,6 +10,7 @@ import {
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
+import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -68,7 +68,7 @@ function build(
     model: new ScriptedChatModel({ turns }),
     tools: [spy(calls, 'alpha'), spy(calls, 'beta')],
     backend: new StateBackend(),
-    checkpointer: new MemorySaver(),
+    checkpointer: new PrunedMemorySaver(),
     interruptOn: interruptOn as never,
   });
   return { agent: agent as unknown as PumpAgent, calls };
