@@ -22,7 +22,7 @@ import {
   mcpConfigSchema,
   mcpPlugin,
 } from './index.js';
-import { FAILURE_TEXT, RELEASE_NOTE } from './fixture-server.js';
+import { FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
 import { publicToolName } from './names.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
