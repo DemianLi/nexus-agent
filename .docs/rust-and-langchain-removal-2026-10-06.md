@@ -2,7 +2,7 @@
 
 這份筆記回答一個問題：「我們的理念跟 dsh 一樣是萬物皆可插件，所以想把 langchain／deepagents／langgraph／langfuse 移除，再用 Rust 取代 Cordis 取得更好的資源管控與效能」——這個方向值不值得走。它是 [`openbitfun-plugin-architecture-2026-10-06.md`](openbitfun-plugin-architecture-2026-10-06.md) 的後續：那份回答「Rust 專案是不是萬物皆可插件」，本篇回答「我們該不該換成 Rust」。我方現況見 [`plugin-architecture-gap-survey.md`](plugin-architecture-gap-survey.md)。
 
-**調研日期**：2026-10-06。對讀版本：nexus `0e759edd`（develop）；dsh `5badb15009ae1756c3afe0ae0cef1faafc290ccc`（`references/deepseek-harness`，HEAD 日期 2026-10-03，這次**沒有**重新 fetch）；OpenBitFun `18aa5441d89f5e24cfb4d8ff54d4b53d92c68896`。**§一前七節的量測跑在 `@langchain/langgraph` 1.4.12 上**（作者 checkout 的 `node_modules` 落後 lockfile；develop 解析的是 1.4.19），1.4.19 的重跑見 §1-8。
+**調研日期**：2026-10-06。對讀版本：nexus `0e759edd`（develop）；dsh `5badb15009ae1756c3afe0ae0cef1faafc290ccc`（`references/deepseek-harness`，HEAD 日期 2026-10-03，這次**沒有**重新 fetch）；OpenBitFun `18aa5441d89f5e24cfb4d8ff54d4b53d92c68896`。**§一前七節的量測跑在 `@langchain/langgraph` 1.4.12 上**（作者 checkout 的 `node_modules` 落後 lockfile；develop 解析的是 1.4.19），1.4.19 的重跑見 §1-8。 **2026-10-06 晚對齊至 develop `50966c1c`**：兩個熱點已被 [#1109](https://github.com/DemianLi/nexus-agent/pull/1109) 與 [#1110](https://github.com/DemianLi/nexus-agent/pull/1110) 修掉，見結論後的「更新」；§一的數字是**修前**的基準。
 
 ## 結論
 
@@ -10,9 +10,15 @@
 
 | 決定 | 建議 | 一句話理由 |
 | --- | --- | --- |
-| ① 用 Rust 重寫編排層（取代 Cordis 那一側） | **現在不做**；先處理存檔點（見 §五第 1 點） | 量到的成本**不是常數**：每輪 CPU 隨歷史線性變長（短訊息 150 輪：43→177 ms；每輪寫 100 KB 的 60 輪：249→1,300 ms），記憶體隨輪數平方成長（100 輪保留 600 MB）。主因是 LangGraph 的 `MemorySaver`——每個步驟存一份完整狀態的序列化、不修剪（100 輪 1,300 份），其次是我們自己的 `token-estimate.ts`。這兩處都是 JS 層的演算法問題，不需要 Rust 才動得到 |
+| ① 用 Rust 重寫編排層（取代 Cordis 那一側） | **現在不做**；存檔點那件事已由 [#1109](https://github.com/DemianLi/nexus-agent/pull/1109) 處理（見下方「更新」） | （修前的量測）量到的成本**不是常數**：每輪 CPU 隨歷史線性變長（短訊息 150 輪：43→177 ms；每輪寫 100 KB 的 60 輪：249→1,300 ms），記憶體隨輪數平方成長（100 輪保留 600 MB）。主因是 LangGraph 的 `MemorySaver`——每個步驟存一份完整狀態的序列化、不修剪（100 輪 1,300 份），其次是我們自己的 `token-estimate.ts`。這兩處都是 JS 層的演算法問題，不需要 Rust 才動得到 |
 | ② 移除 LangChain／deepagents／langgraph | **可以做，但理由要換**：「標準那一側沒有它」加上「存檔點是它帶來的實際成本」；要沿縫逐段換，不是一次拿掉 | dsh 的 agent loop 是 2,425 行自己的 TypeScript，零 LangChain 相依；我方正式碼有 71 個檔案碰它。**只換存檔點是否夠用沒驗證**（核准中斷、背景子代理、resume 都依賴它） |
 | ③ langfuse | **不適用** | nexus 的程式碼與 `package.json` 裡一個 `langfuse` 都沒有（`grep` 掃 `apps/`、`packages/` 的 `.ts`／`.tsx`／`.json`，零命中） |
+
+**更新（2026-10-06 晚）：兩個熱點都已修掉，而且都沒有用到 Rust，也沒有拿掉 LangChain。**
+
+- **存檔點**：[#1106](https://github.com/DemianLi/nexus-agent/issues/1106) 由 [PR #1109](https://github.com/DemianLi/nexus-agent/pull/1109) 修掉：新增 `PrunedMemorySaver`（每個 thread 只留最新 1 份存檔點與它的 writes），並讓每輪只存一次（`durability: 'exit'`，中斷與出錯照樣存，所以核准與 `resume` 不受影響）。**兩件要一起做**：只修剪，記憶體平了但 CPU 照樣變長（44→228 ms）；只開 exit，CPU 好大半（35→88 ms）但記憶體仍成長。兩者並用後，150 輪短訊息的 `arrayBuffers` 從修前的 1.4～10 GB 降到 3～25 MB 且持平；最重那組（每輪寫 100 KB）RSS 約 1.29 GB（修前 7～12 GB）。**每輪 CPU 沒有完全持平**，從 4～5 倍降到約 2 倍，PR 內文推測殘餘是每輪仍要反序列化最新那份含全歷史的存檔點，該推測沒有單獨量證。這些數字取自 PR 內文，我沒有重量。
+- **token 估算**：[#1107](https://github.com/DemianLi/nexus-agent/issues/1107) 由 [PR #1110](https://github.com/DemianLi/nexus-agent/pull/1110) 修掉。**它推翻了我開卡時的框架**：我把成本歸給抽樣（準確度對成本的取捨），PR 作者重量後發現成本在編碼器——`js-tiktoken` 在中文上比 `gpt-tokenizer` 慢 40～200 倍，token 數逐位相同——所以直接換編碼器，沒有準確度代價。
+- **偏離登記**（`AGENTS.md`「技術實現標準」）：#1109 的內文登記了這條偏離——dsh 沒有逐步存檔點，狀態以 append-only 會話日誌為準；LangGraph 的 `MemorySaver` 表達不出「沒有狀態歷史」，退到最接近的實作（只留最新的即時狀態）。
 
 **要先更正一句我先前的說法**：我曾說「nexus 沒有 Cordis」。精確版本是：**nexus 沒有 import Cordis 這個套件**（`from 'cordis'` 零命中），但它**有一個 Cordis 形狀的設定面**——`apps/harness/cordis.yml`（45 條插件條目（`grep -c "- id:"`））、`cordis.patch.yml` 疊層、`--dump-config`，組裝在 `apps/harness/src/assembly-root.ts`；插件容器是我們自己寫的 `PluginRegistry`（`packages/nexus-core/src/fold.ts` 一帶）。所以「用 Rust 取代 Cordis」在我方的實際意思是**重寫我們自己的容器、折疊器與所有插件**，不是換掉一個相依。
 
@@ -99,7 +105,7 @@
 5. **只量了一種工具 I/O**：`ls` 與寫進虛擬檔案系統的 `write_file`；真的檔案系統後端、`grep`、子代理沒進來。
 6. **Node 只有 25.9.0**（專案 `engines` 寫 `>=22.19`；機器上另一個只有 20，低於下限，所以沒有跨版本對照）。
 7. 第二輪的每次執行都接著 inspector，閒置 RSS 比第一輪多 15～35 MB。
-8. 「去掉 `MemorySaver` 的修剪問題後，每輪 CPU 會不會回到常數」**沒有驗證**：profile 顯示它佔 40% 以上，不代表拿掉就剩 60%。
+8. 「去掉 `MemorySaver` 的修剪問題後，每輪 CPU 會不會回到常數」**沒有驗證**：profile 顯示它佔 40% 以上，不代表拿掉就剩 60%。**（後續：#1109 量過，不會完全持平，兩件事並用後每輪 CPU 約 2 倍成長；見結論後的更新。）**
 
 ### 1-8 在 `@langchain/langgraph` 1.4.19 上重跑（2026-10-06 晚）
 
@@ -169,24 +175,25 @@
 
 ## 五、建議（判斷，不是決議）
 
-1. **第一優先，而且與 LangChain 去留、與 Rust 都無關：存檔點。** `MemorySaver` 每步保留一份完整序列化狀態、不修剪，是記憶體平方成長（100 輪 600 MB）與每輪 CPU 線性變長的主因（§1-2、1-3、1-4）。在共用主機上，一個長會話就能吃掉數 GB。選項（**都沒驗證**）：(a) 自訂存檔點，每個 thread 只留最新幾份；(b) 查 LangGraph 有沒有現成的修剪介面；(c) 換便宜的序列化。動工前要先弄清楚：核准中斷、`resume`、背景子代理（`agent-factory.ts:645` 說它需要 checkpointer）對**舊**存檔點有沒有依賴——只留最新一份會不會破壞它們。這是一張要開的卡。
-2. **我們自己的 `token-estimate.ts`**：每輪寫 100 KB 的 profile 裡 `js-tiktoken` 佔 19%，全從這個檔案進來（§1-4）。自家程式，用 TypeScript 就能改；為什麼 [#1094](https://github.com/DemianLi/nexus-agent/pull/1094) 的抽樣之後在 100 KB 工具參數下仍佔這麼多，**沒有追**。
-3. **不要為了效能換 Rust。** 量到的熱點全是 JS 層的演算法與資料保留問題（存檔點、序列化、估算），沒有一處是「JS 做不到的事」。Rust 的合理位置仍是插件內的實作語言：只在 profile 指出某個具體熱點、且 TypeScript 最佳化動不了它時，才用 N-API 或 sidecar 換那一塊，不是換掉容器。
-4. **若要拿掉 LangChain，沿縫逐段，從最小的縫開始**：模型轉接器（1 個檔案碰 `ChatOpenAI`；dsh 自己是 `fetch`＋`eventsource-parser` 的自寫轉接器）→ MCP 轉接器（1 個檔案）→ **存檔點**（第 1 點的產物）→ 訊息型別與 middleware（最重，31＋28 個檔案）。每一段動工前先決定新契約是什麼，因為訊息型別與 middleware 的行為現在由 LangChain 的型別隱含定義，測試夾具也建在它上面（§二）。
+1. **（已完成，[#1109](https://github.com/DemianLi/nexus-agent/pull/1109)）存檔點。** 當時的判斷是：`MemorySaver` 每步保留一份完整序列化狀態、不修剪，是記憶體平方成長與每輪 CPU 線性變長的主因（§1-2、1-3、1-4），而且與 LangChain 去留、與 Rust 都無關。結果證實了這個判斷，也證實「兩件要一起做」（見結論後的更新）。**當時列為「沒驗證」的前提——只留最新一份會不會破壞核准中斷、`resume`、背景子代理——PR #1109 用測試驗了**：核准與拒絕的來回、只留 1 份仍能續行都有測試，並用四項變異各弄壞一處確認測試會紅；它另外記了兩件副作用：每個結束的子代理命名空間會殘留一份小狀態，`getStateHistory` 與帶 `checkpoint_id` 的重放在這顆 saver 上不再可用（nexus 沒有任何地方使用，已 grep）。
+2. **（已完成，[#1110](https://github.com/DemianLi/nexus-agent/pull/1110)）我們自己的 `token-estimate.ts`**：每輪寫 100 KB 的 profile 裡 `js-tiktoken` 佔 19%，全從這個檔案進來（§1-4）。我當時問「為什麼 #1094 的抽樣之後仍佔這麼多」沒有追到；答案是成本在編碼器而不在抽樣，換成 `gpt-tokenizer` 即解（見更新）。
+3. **不要為了效能換 Rust。** 量到的熱點全是 JS 層的演算法與資料保留問題（存檔點、序列化、估算），沒有一處是「JS 做不到的事」。Rust 的合理位置仍是插件內的實作語言：只在 profile 指出某個具體熱點、且 TypeScript 最佳化動不了它時，才用 N-API 或 sidecar 換那一塊，不是換掉容器。 **兩個熱點最後都是用 TypeScript 層的改動修掉的**（換存檔點實作與存檔時機、換編碼器），這是對這一點最直接的事後證據。
+4. **若要拿掉 LangChain，沿縫逐段，從最小的縫開始**：模型轉接器（1 個檔案碰 `ChatOpenAI`；dsh 自己是 `fetch`＋`eventsource-parser` 的自寫轉接器）→ MCP 轉接器（1 個檔案）→ **存檔點**（已由 #1109 處理，不再是拿掉 LangChain 的前置）→ 訊息型別與 middleware（最重，31＋28 個檔案）。每一段動工前先決定新契約是什麼，因為訊息型別與 middleware 的行為現在由 LangChain 的型別隱含定義，測試夾具也建在它上面（§二）。
 5. **常駐記憶體**：閒置堆 70 MB、`footprint` 341 MB，224 MB 在 V8 的頁裡（§1-3）。要再動它之前，先拆開那 224 MB（主堆、程式碼空間、tsx 載入緒各多少）。現在**不知道**哪一塊最大。
 6. **langfuse 不用處理**——零相依。若是想把追溯／觀測做起來，那是 [#1015](https://github.com/DemianLi/nexus-agent/issues/1015) 那張地圖在做的事，與這個決定無關。
 
 ## 六、查清楚了什麼、還沒查清楚什麼
 
-**查清楚了**：框架成本隨歷史變長，以及它在哪（存檔點的序列化與保留，§一）；記憶體留在 `MemorySaver`（1,300 個存檔點，99%）；事件迴圈在短歷史下不吃緊；相依足跡的數字與數法（§二）；dsh 的 loop 規模、零 LangChain、零 Rust、自寫的 `fetch` 轉接器（§三）；nexus 有 Cordis 形狀的設定面但不 import Cordis。
+**查清楚了**：框架成本隨歷史變長，以及它在哪（存檔點的序列化與保留，§一）；記憶體留在 `MemorySaver`（1,300 個存檔點，99%）；事件迴圈在短歷史下不吃緊；相依足跡的數字與數法（§二）；dsh 的 loop 規模、零 LangChain、零 Rust、自寫的 `fetch` 轉接器（§三）；nexus 有 Cordis 形狀的設定面但不 import Cordis。 **後續（2026-10-06 晚）**：只留最新存檔點不破壞核准中斷與 `resume`（#1109 的測試）；token 估算的熱點在編碼器，不在抽樣（#1110）。
 
 **沒查清楚**（都可能改變 §五）：
 
-- 只留最新存檔點會不會破壞核准中斷、`resume`、背景子代理（第 1 點的前提）。
+- ~~只留最新存檔點會不會破壞核准中斷、`resume`、背景子代理~~：#1109 用測試驗了核准與 `resume`；**背景子代理**的覆蓋我沒有逐項核對 PR 的測試清單。
 - `@langchain/langgraph` 版本對每輪 CPU 的影響（1.4.12 對 1.4.19，§1-8 沒隔離，只知道保留量不受版本影響）。
-- 拿掉存檔點的成本後，每輪 CPU 會不會回到常數（§1-7 第 8 條）。
+- ~~修掉存檔點後每輪 CPU 會不會回到常數~~：**不會完全持平**，約 2 倍成長（#1109，推測來源是反序列化最新那份，未單獨量證）；這個殘餘成長是新的待查項。
 - 長歷史下並行的事件迴圈利用率；壓縮在長會話裡實際何時觸發。
 - 閒置 224 MB 的 V8 頁怎麼分。
 - 真模型、真檔案系統後端、子代理下的數字；Node 22 上的數字。
-- `token-estimate.ts` 在 100 KB 工具參數下仍佔 19% 的原因。
+- ~~`token-estimate.ts` 在 100 KB 工具參數下仍佔 19% 的原因~~：編碼器（#1110）。
+- #1109 自己記的未驗項：沒用真模型實跑；每個結束的子代理命名空間殘留一份小狀態；`projection-children.test.ts`、`trajectory-subagents-wire.test.ts` 偶爾 30 秒逾時（PR 內文說修前就會，建議另開卡）。
 - 若拿掉 LangChain，`deepagents` 的檔案後端與子代理那一整層（我們多處依賴它的行為；用到的是 `CompositeBackend`／`StateBackend`／`FilesystemBackend`、四個 middleware、`createDeepAgent`，其餘多是型別）要自己補多少——**這一項沒有估價**。
