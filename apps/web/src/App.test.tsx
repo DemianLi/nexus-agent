@@ -42,7 +42,7 @@ import {
   SWITCHED_THREAD_NOTICE,
 } from '@/App';
 import { NO_DECISION_REASON } from '@/components/approval-card';
-import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/thread-list';
+import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/sidebar/thread-list';
 import { STOPPED_QUESTION_TEXT, WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/lib/steer-view';

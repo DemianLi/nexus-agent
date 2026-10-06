@@ -33,16 +33,16 @@ import type {
 
 import { ReferencedText } from '@/components/session-reference';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
-import { ChangesCard } from '@/components/changes-card';
+import { ChangesCard } from '@/components/changes/changes-card';
 import { CompactionRow } from '@/components/compaction-row';
-import { DeliverablesCard } from '@/components/deliverables-card';
+import { DeliverablesCard } from '@/components/deliverable/deliverables-card';
 import { EarlierPager, earlierLoadedNotice, useEarlierAutoLoad } from '@/components/earlier-pager';
 import type { EarlierHistory } from '@/components/earlier-pager';
 import { MarkdownText } from '@/components/markdown-text';
-import { PlanToolCard } from '@/components/plan-review';
+import { PlanToolCard } from '@/components/plan/plan-review';
 import { ReasoningRow } from '@/components/reasoning-row';
-import { useRightSidebar } from '@/components/right-sidebar';
-import { AttributionBadge, ToolCard } from '@/components/tool-card';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar';
+import { AttributionBadge, ToolCard } from '@/components/tool/tool-card';
 import { Button } from '@/components/ui/button';
 import { Message, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
 import {

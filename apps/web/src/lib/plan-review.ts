@@ -1,6 +1,6 @@
 /**
  * 計劃審核（[#654](https://github.com/DemianLi/nexus-agent/issues/654)，harness 那一半是 #652）：認出一次審核、
- * 從計劃全文算出標題與摘要、從 `exit_plan_mode` 那張工具卡讀出審核結果。畫面在 `components/plan-review.tsx`。
+ * 從計劃全文算出標題與摘要、從 `exit_plan_mode` 那張工具卡讀出審核結果。畫面在 `components/plan/plan-review.tsx`。
  *
  * 行為照 dsh（`477b4f4`，MIT，Copyright (c) DeepSeek）：
  *
