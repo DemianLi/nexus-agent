@@ -75,16 +75,16 @@ function mount(state: ConversationState) {
 const head = () => screen.getAllByTestId('trace-turn-head').at(-1)!;
 
 describe('觀測分頁：停在等人的那一輪，標頭不寫「完成」', () => {
-  it('停在核准：寫「等待核准」，不寫「完成」也不寫耗時', async () => {
+  it('停在核准：寫「停在核准點」，不寫「完成」；耗時照寫（是停下來前那一段）', async () => {
     mount(paused('approval'));
     await act(async () => {});
     expect(screen.getByTestId('trace-head-waiting').textContent).toBe(TRACE_WAITING_LABEL.approval);
     expect(head().textContent).not.toContain('完成');
-    expect(head().textContent).not.toContain('耗時');
+    expect(head().textContent).toContain('耗時');
     expect(head().textContent).toContain('1 次呼叫');
   });
 
-  it('停在問答：寫「等待回答」', async () => {
+  it('停在問答：寫「停在提問」', async () => {
     mount(paused('question'));
     await act(async () => {});
     expect(screen.getByTestId('trace-head-waiting').textContent).toBe(TRACE_WAITING_LABEL.question);

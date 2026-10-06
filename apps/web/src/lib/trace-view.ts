@@ -295,9 +295,8 @@ export interface TurnHead {
   readonly elidedTools?: number;
   /**
    * 這一輪現在停在等人：掛著核准（`approval`）或問答（`question`）。**只有最後一組、而且收尾還是 `completed`（或還沒收）時才有。**
-   * 停在中斷點的那個實體輪，日誌上是照常 `turn/end`（`completed`）收的，標頭照著寫「完成」、聊天區卻寫「等待核准」，
+   * 停在中斷點的那個實體輪，日誌上是照常 `turn/end`（`completed`）收的，標頭照著寫「完成」、聊天區卻寫「等待核准」（成本分頁的用量投影早有 `paused` 這一格，寫「停在核准點」），
    * 讀的人會以為這一輪做完了。續接之後核准有了結局、併回同一組，這一格就沒了，標頭照常。
-   * 有這一格時畫面不寫耗時：那是停下來之前那一段的時間，不是這一輪的。
    */
   readonly waiting?: 'approval' | 'question';
 }
