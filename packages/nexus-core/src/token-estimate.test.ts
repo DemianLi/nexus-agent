@@ -5,7 +5,9 @@
 
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
+import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
 import { Tiktoken } from 'js-tiktoken/lite';
+import o200kRanks from 'js-tiktoken/ranks/o200k_base';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   estimateAnchoredTokens,
@@ -113,7 +115,7 @@ const LONE_SURROGATE = /[\ud800-\udbff](?![\udc00-\udfff])|(?<![\ud800-\udbff])[
 describe('內容備忘與超長抽樣（#952）', () => {
   /** 數編碼器這段時間被餵了幾次、共多少字元。 */
   function countEncoding() {
-    const spy = vi.spyOn(Tiktoken.prototype, 'encode');
+    const spy = vi.spyOn(o200k_base, 'encode');
     return {
       calls: () => spy.mock.calls.length,
       chars: () => spy.mock.calls.reduce((sum, [text]) => sum + text.length, 0),
@@ -187,7 +189,7 @@ describe('內容備忘與超長抽樣（#952）', () => {
     const text = longChinese('😀', 200_000).replaceAll(/[^😀]/gu, '😀');
     const encoding = countEncoding();
     estimateRequestTokens({ messages: [new HumanMessage(text)] });
-    for (const [piece] of vi.mocked(Tiktoken.prototype.encode).mock.calls) {
+    for (const [piece] of vi.mocked(o200k_base.encode).mock.calls) {
       expect(LONE_SURROGATE.test(piece)).toBe(false);
     }
     expect(encoding.calls()).toBeGreaterThan(0);
@@ -430,6 +432,85 @@ describe('第一次：借別條 thread 的第一次', () => {
     book.record(answered('t1', 6_000, 'm-other'), thread, 100, 'estimate');
     expect(book.firstCall(thread)).toBeUndefined();
   });
+});
+
+/**
+ * [#1107](https://github.com/DemianLi/nexus-agent/issues/1107)：編碼器從 js-tiktoken 換成 gpt-tokenizer。換的前提是
+ * **每一個輸入的 token 數逐位相同**——否則 spill-policy 的外溢預算（`estimateTextTokens`，精確數）會悄悄移位。
+ * js-tiktoken 留在 devDependencies 當對照組：這裡用它照舊的做法（128 字元切塊、特殊 token 當一般文字）重算一遍。
+ */
+describe('編碼器對照（#1107）', () => {
+  const oracle = new Tiktoken(o200kRanks);
+  /** 前一個編碼器的算法，原樣：長的無空白／連續空白片段切 128 字元，其餘整段編。 */
+  function oracleTokens(text: string): number {
+    const encode = (piece: string) =>
+      piece.length === 0 ? 0 : oracle.encode(piece, [], []).length;
+    let total = 0;
+    let last = 0;
+    for (const match of text.matchAll(/\S{129,}|\s{129,}/g)) {
+      total += encode(text.slice(last, match.index));
+      for (let start = 0; start < match[0].length; start += 128)
+        total += encode(match[0].slice(start, start + 128));
+      last = match.index + match[0].length;
+    }
+    return total + encode(text.slice(last));
+  }
+
+  let seed = 20261006;
+  const random = () => (seed = (seed * 1103515245 + 12345) & 0x7fffffff) / 0x7fffffff;
+  const pick = (low: number, high: number) =>
+    String.fromCodePoint(low + Math.floor(random() * (high - low)));
+  const many = (count: number, make: () => string) => Array.from({ length: count }, make).join('');
+
+  const MATERIALS: Record<string, string> = {
+    中文: '這是一段要送進模型的中文內容，會有標點、數字 123 與英文 words。'.repeat(400),
+    英文程式碼: 'export function f(a: number, b: string) { return `${a}-${b}`; }\n'.repeat(300),
+    隨機漢字: many(3_000, () => pick(0x4e00, 0x4e00 + 20_000)),
+    隨機數字: many(3_000, () => pick(48, 58)),
+    表情與組合字元: '👨‍👩‍👧‍👦🏳️‍🌈é́ 😀'.repeat(200),
+    全字元範圍: many(3_000, () => {
+      const code = Math.floor(random() * 0xffff);
+      return code >= 0xd800 && code < 0xe000 ? 'x' : String.fromCharCode(code);
+    }),
+    特殊token字串: 'a<|endoftext|>b<|im_start|>c<|fim_prefix|> <|endofprompt|>x'.repeat(40),
+    孤立代理碼元: 'ab\ud800cd\udc00ef'.repeat(100),
+    長連續空白: ' \n\t'.repeat(2_000),
+    長無空白英數: 'a1B2'.repeat(2_000),
+    空字元: 'a\u0000b\u0000'.repeat(100),
+  };
+
+  it.each(Object.entries(MATERIALS))('%s：token 數與前一個編碼器逐位相同', (_name, text) => {
+    expect(estimateTextTokens(text)).toBe(oracleTokens(text));
+  });
+
+  it('超過 128 字元的無空白片段切塊與否，由切塊後的數決定，與前一個編碼器相同', () => {
+    for (const run of [127, 128, 129, 130, 300, 1_000]) {
+      const text = `前 ${'漢'.repeat(run)} 後`;
+      expect(estimateTextTokens(text)).toBe(oracleTokens(text));
+    }
+  });
+
+  /**
+   * 切塊是防崩潰的承重件：gpt-tokenizer 對十五萬個沒有空白的隨機漢字，不切的話四十三秒後拋
+   * `RangeError: Maximum call stack size exceeded`（量過）；十八萬字元的空白與換行要編十一秒。`estimateTextTokens` 在外溢層
+   * 的工具呼叫路徑上，拋出來就是那一次工具呼叫整個失敗。
+   * 突變（量過）：把 `MAX_RUN` 改成極大值，這一條紅（拋 RangeError）。
+   */
+  it('極長的無空白片段不拋，估算與請求估算兩條路都是', () => {
+    const hanzi = many(150_000, () => pick(0x4e00, 0x4e00 + 20_000));
+    const base64 = many(
+      150_000,
+      () =>
+        'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/'[
+          Math.floor(random() * 64)
+        ]!,
+    );
+    for (const text of [hanzi, base64]) {
+      expect(() => estimateTextTokens(text)).not.toThrow();
+      expect(() => estimateRequestTokens({ messages: [new HumanMessage(text)] })).not.toThrow();
+    }
+    expect(estimateTextTokens(hanzi)).toBeGreaterThan(100_000);
+  }, 60_000);
 });
 
 describe('逐位切詞的數字（#1102）', () => {
