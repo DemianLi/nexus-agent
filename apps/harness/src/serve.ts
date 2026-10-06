@@ -126,7 +126,7 @@ export interface ServeInvocation {
   readonly patches?: readonly string[];
   /** 見 `assembly-root.ts` 的 `CliInvocation.sessionLog`：換位置用，省略即 harness home 底下的 `sessions`。 */
   readonly sessionLog?: string;
-  /** 見 `assembly-root.ts` 的 `CliInvocation.goalDriver`。**兩個入口共用同一個旗標名與同一個預設**。 */
+  /** 見 `assembly-root.ts` 的 `CliInvocation.goalDriver`。**兩個入口共用同一個旗標名；預設不同**：serve 開、CLI 關（#445）。 */
   readonly goalDriver: boolean;
   /** 見 `assembly-root.ts` 的 `CliInvocation.dumpConfig`。**兩個入口印的是同一份設定**。 */
   readonly dumpConfig: boolean;
@@ -159,8 +159,9 @@ const USAGE = `用法：
                        （預設 $NEXUS_AGENT_HOME/sessions，沒設就是 ~/.nexus-agent/sessions）
                        要完全不落盤，在 patch 裡把 session-persistence 那一列寫成 disabled: true
   --port <n>           監聽的 port，預設 ${DEFAULT_PORT}
-  --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
-                       上限是那個目標自己的 max_goal_rounds
+  --no-goal-driver     關掉自動續行：一個 active 的目標沒達成時，預設會自己再開一輪
+                       （上限是那個目標自己的 max_goal_rounds）；關掉之後一輪結束就結束
+  --goal-driver        明講要開（預設就是開；與 --no-goal-driver 不能一起給）
   --help               印這段話
 
 環境變數：
@@ -182,6 +183,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         'session-log': { type: 'string' },
         port: { type: 'string' },
         'goal-driver': { type: 'boolean', default: false },
+        'no-goal-driver': { type: 'boolean', default: false },
         'dump-config': { type: 'boolean', default: false },
         'dump-config-schema': { type: 'boolean', default: false },
         'dump-default-config': { type: 'boolean', default: false },
@@ -207,6 +209,12 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
   }
 
   const sandbox = parseSandboxMode(values.sandbox, values.workspace, USAGE);
+
+  if (values['goal-driver'] === true && values['no-goal-driver'] === true) {
+    throw new Error(
+      `--goal-driver 與 --no-goal-driver 不能一起給：一個要開、一個要關。\n\n${USAGE}`,
+    );
+  }
 
   const dumpConfig = values['dump-config'] === true;
   const dumpConfigSchema = values['dump-config-schema'] === true;
@@ -244,7 +252,10 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     ...(values.workspace !== undefined && { workspace: values.workspace }),
     ...(sandbox !== undefined && { sandbox }),
     ...(values['session-log'] !== undefined && { sessionLog: values['session-log'] }),
-    goalDriver: values['goal-driver'] === true,
+    // **serve 預設開，CLI 預設關**（#445）：要核准的工具在 serve 上是停下來等人，CLI 的
+    // `HEADLESS_APPROVALS` 則確定性拒絕、續行只會一再撞同一個拒絕空轉。`--goal-driver` 留著
+    // 當成「明講要開」，與 CLI 共用同一個旗標名；`--no-goal-driver` 關掉。
+    goalDriver: values['no-goal-driver'] !== true,
     dumpConfig,
     dumpConfigSchema,
     dumpDefaultConfig,
@@ -904,7 +915,7 @@ async function startServer(
   );
   // 同一條規矩底下的另一行：**這一輪結束之後還會不會有下一輪**。這台 server 上它是
   // per-thread 的行為，但旗標是整個 process 的，所以講在這裡。
-  log(formatGoalDriverDisclosure(invocation.goalDriver));
+  log(formatGoalDriverDisclosure(invocation.goalDriver, undefined, 'serve'));
   for (const line of formatTracingDisclosure(readTracingDisclosure(env))) {
     log(line);
   }

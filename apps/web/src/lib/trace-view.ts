@@ -278,6 +278,11 @@ export interface TurnHead {
   readonly kind: TrajectoryTurnKind;
   readonly time: number;
   readonly end?: TrajectoryEnd;
+  /**
+   * `end` 是 `failed` 時，日誌帶了哪一類失敗碼（`TrajectoryDigest.failureCode`，#1121）。**缺席就是「沒記」**（舊日誌的 `turn/failed`
+   * 沒有 `error`），標頭只寫「失敗」，不補成「原因不明」。
+   */
+  readonly failureCode?: string;
   /** 這一輪（含併進來的續接）收尾的時刻；還沒結束沒有。 */
   readonly endTime?: number;
   /** 牆鐘：第一顆 `turn/start` 到最後收尾，**含停在核准點等人的時間**（同 #1028）。 */
@@ -663,6 +668,7 @@ function headOf(digest: TrajectoryDigest, number: number): TurnHead {
     inputTokens: digest.inputTokens,
     outputTokens: digest.outputTokens,
     ...(digest.end === undefined ? {} : { end: digest.end }),
+    ...(digest.failureCode === undefined ? {} : { failureCode: digest.failureCode }),
     ...(digest.endTime === undefined ? {} : { endTime: digest.endTime }),
     ...(digest.durationMs === undefined ? {} : { durationMs: digest.durationMs }),
   };
@@ -684,6 +690,7 @@ function mergeHead(first: TurnHead, resume: TurnHead): TurnHead {
     inputTokens: first.inputTokens + resume.inputTokens,
     outputTokens: first.outputTokens + resume.outputTokens,
     ...(resume.end === undefined ? {} : { end: resume.end }),
+    ...(resume.failureCode === undefined ? {} : { failureCode: resume.failureCode }),
     ...(resume.endTime === undefined
       ? {}
       : { endTime: resume.endTime, durationMs: resume.endTime - first.time }),

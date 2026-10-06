@@ -24,28 +24,23 @@
  *   給正在跑的子代理在下一步領走。基座的一次性子代理沒有這顆（root 的載體不折進子代理）；它不加工具也不動系統提示，
  *   所以不影響上面那條漂移絆索。
  *
- * 併法是基座 `mergeMiddlewareStack` 的複本（基座沒匯出）：預設疊裡同名的原地換成規格自己帶的，沒撞名的接在後面。
+ * 預設疊與併法住在 [`agent-assembly.ts`](./agent-assembly.ts)（`subagentDefaultMiddleware`、`mergeMiddlewareStack`），
+ * **一次性子代理（經 `task`）與這個出口共用同一份**，不再各抄一份。
  * **漂移絆索**在 harness 的測試：同一份規格經 `task` 與經這個出口各跑一次，模型看到的工具名與系統提示要相同。
  *
  * ## 不做的事：拒絕，不悄悄少做
  *
- * 基座 `createSubAgent` 還處理 `interruptOn`、`responseFormat`，以及 harness profile 的幾根槓桿（拿掉檔案工具、
- * 額外加 middleware、按名字移除 middleware）。fold 交出的規格不會帶前兩者，profile 那幾根在組裝點有「宣告」的檢查
- * （`apps/harness/src/harness-profile.ts`），所以這裡遇到就**拋並指名**，不是默默略過。
+ * 基座 `createSubAgent` 還處理 `interruptOn`、`responseFormat`。fold 交出的規格不會帶它們，所以這裡遇到就
+ * **拋並指名**，不是默默略過。（基座的 harness profile 曾是第三個要拒絕的東西；自有組裝點不套 profile，那一項不存在了。）
  *
  * @module
  */
 
-import {
-  createFilesystemMiddleware,
-  createPatchToolCallsMiddleware,
-  createSkillsMiddleware,
-  createSummarizationMiddleware,
-} from 'deepagents';
 import type { SubAgent } from 'deepagents';
 import { createAgent } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
+import { mergeMiddlewareStack, subagentDefaultMiddleware } from './agent-assembly.js';
 import type { AgentCheckpointer } from './base-types.js';
 import type { FoldedAgentParams } from './fold.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
@@ -81,12 +76,7 @@ export function mergeMiddlewareByName(
   defaults: readonly AgentMiddleware[],
   custom: readonly AgentMiddleware[],
 ): AgentMiddleware[] {
-  const customByName = new Map(custom.map((entry) => [entry.name, entry]));
-  const defaultNames = new Set(defaults.map((entry) => entry.name));
-  return [
-    ...defaults.map((entry) => customByName.get(entry.name) ?? entry),
-    ...custom.filter((entry) => !defaultNames.has(entry.name)),
-  ];
+  return mergeMiddlewareStack(defaults, custom);
 }
 
 /**
@@ -129,20 +119,13 @@ export function compileSubagentGraph(
   if (backend === undefined)
     throw new Error(`子代理 "${name}" 沒有 backend，檔案系統 middleware 建不起來`);
 
-  // 基座傳的是 `input.permissions ?? permissions`：規格自己有就用規格的（fold 已把全域的併進去）。
-  const permissions = declarative.permissions ?? params.permissions;
-  const skills = declarative.skills ?? [];
+  // 預設疊與一次性子代理共用同一個函式（`subagentDefaultMiddleware`）：檔案系統那顆帶的 `permissions`
+  // 是 `spec.permissions ?? 全域`，漏傳的話全域的 deny 在背景圖上消失（#738 第 2 項，實測）。
   const defaults = [
-    createFilesystemMiddleware({
-      backend,
-      ...(permissions !== undefined && { permissions }),
-    }),
-    createSummarizationMiddleware({ backend }),
-    createPatchToolCallsMiddleware(),
-    ...(skills.length > 0 ? [createSkillsMiddleware({ backend, sources: skills })] : []),
+    ...subagentDefaultMiddleware(declarative, { backend, permissions: params.permissions }),
     // 背景版插話載體（#858）：host 經 `configurable` 交 handle 進來才有作用，沒交就什麼都不做。
     createStepInboxMiddleware('background'),
-  ] as unknown as AgentMiddleware[];
+  ];
 
   return createAgent({
     model: model as never,

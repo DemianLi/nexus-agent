@@ -297,6 +297,19 @@ const PRE_STEP_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages'] as const
  */
 const PRE_STEP_OTHER_CARRIERS: readonly string[] = ['packages/nexus-plugin-plan-mode/src/index.ts'];
 
+/**
+ * 掃描會找到、但**不是**第 2 列佔用者的 `beforeAgent:` 實作。
+ *
+ * `patch-tool-calls.ts`（補懸空的工具呼叫，接縫 6）：載體是 `beforeAgent`，卻不是 dsh `agent/pre-step`
+ * 的佔用者——它**修復歷史**（整串訊息換掉），不注入內容、不提交待辦。dsh 對同一件事的位置**不在 pre-step**：
+ * `agent-loop/src/index.ts` 的續行準備（open session 之後、`prepare` 之前）呼叫 `interruptedTurnClosers`，
+ * 把「缺的工具結果、step/end、turn/end」**寫進日誌**（2026-10-07 對過 dsh `5badb150`）。我們的版本只在
+ * 每次 invoke 開頭改圖裡的狀態、不寫日誌，這個差距與接縫 6 同批登記在 PR 內文，不在這份索引的軸上。
+ *
+ * 它從基座時代就是 `beforeAgent` 載體，只是住在 `node_modules`，這一條掃描看不到；搬進我們的樹才現形。
+ */
+const PRE_STEP_NOT_OCCUPANTS: readonly string[] = ['packages/nexus-core/src/patch-tool-calls.ts'];
+
 /** 遞迴列出產品原始碼的 `.ts`。 */
 function productSources(dir: string): string[] {
   const out: string[] = [];
@@ -386,7 +399,8 @@ describe('攔截時刻索引', () => {
     for (const root of PRE_STEP_ROOTS) {
       for (const file of productSources(join(REPO_ROOT, root))) {
         if (/\bbeforeAgent\s*:/u.test(readFileSync(file, 'utf8'))) {
-          found.push(file.slice(REPO_ROOT.length));
+          const relative = file.slice(REPO_ROOT.length);
+          if (!PRE_STEP_NOT_OCCUPANTS.includes(relative)) found.push(relative);
         }
       }
     }
