@@ -40,7 +40,13 @@
  * @module
  */
 
-import { createFilesystemMiddleware, createMemoryMiddleware, createSkillsMiddleware, createSubAgentMiddleware, createSummarizationMiddleware } from 'deepagents';
+import {
+  createFilesystemMiddleware,
+  createMemoryMiddleware,
+  createSkillsMiddleware,
+  createSubAgentMiddleware,
+  createSummarizationMiddleware,
+} from 'deepagents';
 import type { SubAgent } from 'deepagents';
 import { createAgent } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
@@ -160,7 +166,9 @@ export function assembleAgent(params: AssembleAgentParams) {
   // 基座只在清單裡沒有 `general-purpose` 時才自己補一個；fold 一律自己補，所以這裡斷言它在，
   // 不照搬基座那段補件（它會讓 profile 的 `generalPurposeSubagent` 設定有作用，我們不要）。
   if (!params.subagents.some((spec) => spec.name === 'general-purpose')) {
-    throw new Error('fold 的產物沒有 general-purpose 子代理：fold 一律自己補它，缺了表示 fold 壞了');
+    throw new Error(
+      'fold 的產物沒有 general-purpose 子代理：fold 一律自己補它，缺了表示 fold 壞了',
+    );
   }
 
   const inlineSubagents = params.subagents.map((spec) =>

@@ -74,9 +74,9 @@ vi.mock('@nexus/core', async (importOriginal) => {
   const original = await importOriginal<typeof import('@nexus/core')>();
   return {
     ...original,
-    assembleAgent: ((params: Record<string, unknown>) => {
-      captured.params = params;
-      return (original.assembleAgent as (p: unknown) => unknown)(params);
+    assembleAgent: ((params: Parameters<typeof original.assembleAgent>[0]) => {
+      captured.params = params as unknown as Record<string, unknown>;
+      return original.assembleAgent(params);
     }) as typeof original.assembleAgent,
   };
 });

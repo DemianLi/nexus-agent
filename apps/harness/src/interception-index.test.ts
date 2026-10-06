@@ -160,6 +160,9 @@ const INDEX: readonly InterceptionRow[] = [
       // 邊界提交（#652）：`exit_plan_mode` 同意之後的待關在下一步請求組起來之前交出去，同 dsh。
       // 載體是 `wrapModelCall`，不是 `beforeAgent`，見下面 `PRE_STEP_OTHER_CARRIERS`。
       'packages/nexus-plugin-plan-mode/src/index.ts',
+      // 補懸空工具呼叫（接縫 6）：基座時代就佔著這一格，只是在 node_modules 裡沒人掃；
+      // 搬進我們的樹（行為逐字照舊）它才現形。**不是新佔用者**，是第一次被登記。
+      'packages/nexus-core/src/patch-tool-calls.ts',
     ],
     permissionDelta:
       '**邊界提交那半由 plan-mode 佔著**（#652）：`exit_plan_mode` 同意之後排一格待關，下一次模型呼叫' +
@@ -270,7 +273,7 @@ const INDEX: readonly InterceptionRow[] = [
 const EXPECTED_ROWS = 5;
 
 /** 佔用位址的總數（列可能共用檔案，第 6 與第 7 格就共用 `output-schema.ts`）。 */
-const EXPECTED_SITES = 15;
+const EXPECTED_SITES = 16;
 
 /**
  * 第 2 列的承重事實：全樹的產品程式碼裡，`beforeAgent:` 的實作**恰好就是這一列列出的那些**。

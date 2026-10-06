@@ -24,7 +24,10 @@ const project = (messages: readonly BaseMessage[]) =>
   messages.map((message) => ({
     type: message.getType(),
     content: message.content,
-    ...(ToolMessage.isInstance(message) && { toolCallId: message.tool_call_id, name: message.name }),
+    ...(ToolMessage.isInstance(message) && {
+      toolCallId: message.tool_call_id,
+      name: message.name,
+    }),
     ...(AIMessage.isInstance(message) && {
       toolCalls: (message.tool_calls ?? []).map((call) => ({ id: call.id, name: call.name })),
     }),
@@ -47,7 +50,10 @@ function history(): BaseMessage[] {
   ];
 }
 
-async function run(middleware: ReturnType<typeof createPatchToolCallsMiddleware>, input: BaseMessage[]) {
+async function run(
+  middleware: ReturnType<typeof createPatchToolCallsMiddleware>,
+  input: BaseMessage[],
+) {
   const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
   const agent = createAgent({
     model: model as never,
@@ -70,7 +76,9 @@ describe('自有補懸空呼叫 middleware', () => {
     const base = await run(createBasePatchToolCallsMiddleware() as never, history());
 
     // 這條測試真的量到了東西：懸空的補了一則、孤兒丟了一則。
-    const toolIds = own.prompt.flatMap((message) => ('toolCallId' in message ? [message.toolCallId] : []));
+    const toolIds = own.prompt.flatMap((message) =>
+      'toolCallId' in message ? [message.toolCallId] : [],
+    );
     // 補的那則緊接在帶呼叫的 AI 訊息後面，所以排在原本配得上的那則前面；孤兒 `call-orphan` 不見了。
     expect(toolIds).toEqual(['call-dangling', 'call-answered']);
 

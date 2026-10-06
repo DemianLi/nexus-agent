@@ -20,6 +20,12 @@
  *    在那則 AI 訊息後面補一則「被取消」的 `ToolMessage`。供應商會拒收配不到結果的呼叫。
  * 2. **丟**：`ToolMessage` 的 `tool_call_id` 在整串裡找不到任何 AI 訊息的呼叫與它配——丟掉這則孤兒。
  *
+ * ## 佔著 dsh 的 `agent/pre-step` 這一格
+ *
+ * `beforeAgent` 那半在每次 invoke 開頭改整串訊息，是[攔截時刻索引](../../../apps/harness/src/interception-index.test.ts)
+ * 第 2 列的佔用者之一：基座時代就是，只是載體在 `node_modules`。它**修復歷史、不注入內容**，節奏是每次 invoke
+ * 一次（`wrapModelCall` 那半每次模型呼叫一次），與該列量過的 `beforeAgent` 同。
+ *
  * 兩處掛點：`beforeAgent` 改**狀態**（一次 invoke 一次）、`wrapModelCall` 只改**這次送出去的請求**
  * （不動狀態），所以續行之後狀態被補過、同一輪裡新冒出來的懸空也不會漏到模型那裡。
  *

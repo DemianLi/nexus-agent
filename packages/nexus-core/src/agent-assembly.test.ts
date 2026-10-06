@@ -35,9 +35,14 @@ describe('mergeMiddlewareStack', () => {
 
   it('appendNew: false 時沒撞名的 custom 被丟掉，同名的照換', () => {
     const replaced = named('summary', 'custom');
-    const merged = mergeMiddlewareStack([named('fs'), named('summary')], [named('novel'), replaced], [], {
-      appendNew: false,
-    });
+    const merged = mergeMiddlewareStack(
+      [named('fs'), named('summary')],
+      [named('novel'), replaced],
+      [],
+      {
+        appendNew: false,
+      },
+    );
 
     expect(namesOf(merged)).toEqual(['fs', 'summary']);
     expect(merged[1]).toBe(replaced);
@@ -93,7 +98,13 @@ describe('assembleAgent 拒絕基座支援而我們不支援的東西', () => {
     ['interruptOn', { interruptOn: { write_file: true } }, /interruptOn/],
     ['responseFormat', { responseFormat: {} }, /responseFormat/],
   ])('子代理帶了 %s 就拋並指名', (_label, extra, pattern) => {
-    const worker = { name: 'worker', description: '幹活。', systemPrompt: '幹活。', tools: [], ...extra };
+    const worker = {
+      name: 'worker',
+      description: '幹活。',
+      systemPrompt: '幹活。',
+      tools: [],
+      ...extra,
+    };
 
     expect(() =>
       assembleAgent(paramsWith({ subagents: [GENERAL_PURPOSE, worker as unknown as SubAgent] })),

@@ -20,9 +20,9 @@ vi.mock('@nexus/core', async (importOriginal) => {
   const original = await importOriginal<typeof import('@nexus/core')>();
   return {
     ...original,
-    assembleAgent: ((params: Record<string, unknown>) => {
-      captured.params = params;
-      return (original.assembleAgent as (p: unknown) => unknown)(params);
+    assembleAgent: ((params: Parameters<typeof original.assembleAgent>[0]) => {
+      captured.params = params as unknown as Record<string, unknown>;
+      return original.assembleAgent(params);
     }) as typeof original.assembleAgent,
   };
 });
@@ -60,7 +60,9 @@ class RecordingModel extends ScriptedChatModel {
   override bindTools(tools: readonly unknown[]): ScriptedChatModel {
     this.sink.push(
       JSON.stringify(
-        tools.map((candidate) => convertToOpenAITool(candidate as Parameters<typeof convertToOpenAITool>[0])),
+        tools.map((candidate) =>
+          convertToOpenAITool(candidate as Parameters<typeof convertToOpenAITool>[0]),
+        ),
       ),
     );
     return super.bindTools(tools);
@@ -152,7 +154,10 @@ async function assemble(model: RecordingModel, plugins: readonly PluginEntry[] =
 }
 
 /** 同一份 fold 參數經基座的 `createDeepAgent` 跑一次當參照答案；模型與存檔點換成乾淨的。 */
-async function referenceRun(plugins: readonly PluginEntry[], model: RecordingModel): Promise<Observed> {
+async function referenceRun(
+  plugins: readonly PluginEntry[],
+  model: RecordingModel,
+): Promise<Observed> {
   const { params } = await assemble(model, plugins);
   const reference = createDeepAgent({
     ...(params as Record<string, unknown>),

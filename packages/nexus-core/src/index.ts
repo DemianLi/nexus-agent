@@ -579,7 +579,11 @@ export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './s
 export { createSessionRunner } from './sessions.js';
 export { compileSubagentGraph, mergeMiddlewareByName } from './subagent-graph.js';
 export type { AssembleAgentParams } from './agent-assembly.js';
-export { assembleAgent, mergeMiddlewareStack, subagentDefaultMiddleware } from './agent-assembly.js';
+export {
+  assembleAgent,
+  mergeMiddlewareStack,
+  subagentDefaultMiddleware,
+} from './agent-assembly.js';
 export {
   createPatchToolCallsMiddleware,
   PATCH_TOOL_CALLS_MIDDLEWARE_NAME,
