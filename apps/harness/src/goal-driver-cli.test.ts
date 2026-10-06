@@ -470,6 +470,20 @@ describe('披露', () => {
   });
 
   /**
+   * **兩個入口的預設相反（#445），所以「怎麼換邊」那半句也要跟著入口講。** serve 關著時叫人去加
+   * `--goal-driver` 等於叫人加一個本來就是預設的旗標；serve 也沒有 `--max-goal-rounds`，不能提它。
+   */
+  it('serve 的披露：開著說得出怎麼關，關著說得出是誰關的，而且都不提 CLI 的旗標', () => {
+    const on = formatGoalDriverDisclosure(true, undefined, 'serve');
+    expect(on).toContain('--no-goal-driver');
+    expect(on).toContain('max_goal_rounds');
+    expect(on).not.toContain('--max-goal-rounds');
+    const off = formatGoalDriverDisclosure(false, undefined, 'serve');
+    expect(off).toContain('--no-goal-driver');
+    expect(off).not.toContain('可以打開');
+  });
+
+  /**
    * **兩條上限都要出現在畫面上，而且沒給的時候要明著說沒給。**
    *
    * 這一行自己的檔頭寫著「說謊的披露比沒有披露更糟」。只印目標那條會讓人以為有一個他控制
