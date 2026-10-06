@@ -14,6 +14,8 @@ import {
   approvalCodeText,
   clockText,
   durationText,
+  FAILURE_CODE_LABEL,
+  failureCodeText,
   TURN_KIND_LABEL,
   signalText,
   snapshotsOf,
@@ -173,4 +175,44 @@ describe('approvalCodeText：不必問人的核准結局', () => {
       expect(approvalCodeText(code)).toBeUndefined();
     },
   );
+});
+
+describe('失敗碼：一句話，不認得的原樣顯示', () => {
+  it('每個 harness 送的詞彙都有一句話（#1121）', () => {
+    const vocabulary = [
+      'AUTH',
+      'QUOTA',
+      'RATE_LIMIT',
+      'CONTEXT_WINDOW_EXCEEDED',
+      'INVALID_REQUEST',
+      'SERVER',
+      'TIMEOUT',
+      'TRANSPORT',
+      'UNKNOWN',
+    ];
+    for (const code of vocabulary) {
+      expect(failureCodeText(code), code).toBe(FAILURE_CODE_LABEL[code]);
+      expect(failureCodeText(code), code).not.toBe(code);
+    }
+    expect(failureCodeText('QUOTA')).toBe('額度用盡');
+  });
+
+  it('HTTP_<n> 寫成「HTTP <n>」', () => {
+    expect(failureCodeText('HTTP_404')).toBe('HTTP 404');
+    expect(failureCodeText('HTTP_418')).toBe('HTTP 418');
+  });
+
+  it('不認得的碼原樣顯示：不猜、不改成「原因不明」；HTTP_ 後面不是三位數也不算', () => {
+    expect(failureCodeText('NEW_KIND')).toBe('NEW_KIND');
+    expect(failureCodeText('HTTP_')).toBe('HTTP_');
+    expect(failureCodeText('HTTP_4040')).toBe('HTTP_4040');
+    expect(failureCodeText('HTTP_4x4')).toBe('HTTP_4x4');
+    expect(failureCodeText('http_404')).toBe('http_404');
+  });
+
+  it('只認自己的鍵，原型上的名字不會被當成詞彙', () => {
+    for (const name of ['constructor', 'toString', '__proto__', 'hasOwnProperty']) {
+      expect(failureCodeText(name)).toBe(name);
+    }
+  });
 });
