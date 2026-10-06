@@ -3,7 +3,7 @@
  *
  * agent 工廠與訊息標準化入口。**正式路徑上組出來的 agent 只從 `createNexusAgent` 出來**；
  * 其餘直接呼叫 `createDeepAgent` 的地方全部是測試與 spike，而且都是刻意繞過我們這一層去
- * 驗基座自己的形狀（`baseline.test.ts`、`permissions.test.ts`、`stream-parity.test.ts`、
+ * 驗基座自己的形狀或當對照組（`assembly-parity.test.ts`、`baseline.test.ts`、`permissions.test.ts`、`stream-parity.test.ts`、
  * `contained-backend.test.ts`、`sandbox-backend-conflict.test.ts`、`wire*.test.ts`、
  * `spike/spike-agent.ts`）。
  *
@@ -19,14 +19,6 @@ export type { AgentInput, AgentInvocation } from './messages.js';
 export { toAgentInvocation } from './messages.js';
 
 export { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
-
-export type { HarnessProfileEffects } from './harness-profile.js';
-export {
-  describeHarnessProfileEffects,
-  EXTRA_MIDDLEWARE_FACTORY,
-  formatHarnessProfileEffects,
-  NO_HARNESS_PROFILE_EFFECTS,
-} from './harness-profile.js';
 
 export type { PumpAgent, PumpInput } from './thread-pump.js';
 export { ThreadPump } from './thread-pump.js';

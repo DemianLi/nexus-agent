@@ -13,11 +13,10 @@
  * `StateBackend` 下基座實際註冊了哪些工具，但它比的是自己寫死的另一份名單、不讀這一份，所以基座改了名字會紅，
  * 這份抄錯了不會（`agent-factory.test.ts` 的行為測試以字面值打到其中幾個名字，那幾個抄錯會紅）。
  *
- * **這兩個常數與模型無關，而基座那側不是。** `createDeepAgent()` 會依 `model` 解出一份
- * harness profile，那份 profile 加得了工具也拿得掉工具——「基座這次帶哪些名字」因此是
- * 模型的函式，是這裡的常數形狀表達不出來的東西。那件事在
- * [`harness-profile.ts`](./harness-profile.ts) 處理，見
- * [#140](https://github.com/DemianLi/nexus-agent/issues/140)。
+ * **這兩個常數與模型無關，現在基座那側也是了。** 基座的 `createDeepAgent()` 會依 `model` 解出一份
+ * harness profile，那份 profile 加得了工具也拿得掉工具——「基座這次帶哪些名字」因此曾經是
+ * 模型的函式（[#140](https://github.com/DemianLi/nexus-agent/issues/140)）。自有組裝點
+ * （`@nexus/core` 的 `assembleAgent`）不套 profile，名單只由檔案工具與 `task` 那兩顆 middleware 決定。
  */
 
 /**

@@ -578,6 +578,17 @@ export { assertInvariantSelection, createInvariantRunner, InvariantError } from 
 export type { SessionInstaller, SessionRunnerOptions, SessionSubject } from './sessions.js';
 export { createSessionRunner } from './sessions.js';
 export { compileSubagentGraph, mergeMiddlewareByName } from './subagent-graph.js';
+export type { AssembleAgentParams } from './agent-assembly.js';
+export {
+  assembleAgent,
+  mergeMiddlewareStack,
+  subagentDefaultMiddleware,
+} from './agent-assembly.js';
+export {
+  createPatchToolCallsMiddleware,
+  PATCH_TOOL_CALLS_MIDDLEWARE_NAME,
+  patchDanglingToolCalls,
+} from './patch-tool-calls.js';
 export type { SubagentGraph, SubagentGraphOptions, SubagentGraphParams } from './subagent-graph.js';
 export type { SessionAddress } from './session-address.js';
 export {

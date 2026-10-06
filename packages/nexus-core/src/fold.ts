@@ -1424,8 +1424,8 @@ function foldBackend(
  *
  * **抄不到的兩格，是偏離**：harness profile 對 gp 提示詞的改寫（`applyProfilePrompt`）與
  * profile 的 `generalPurposeSubagent` 設定。profile 是基座在 fold 之後才從 model 解出來的，
- * 這裡看不到（見 `apps/harness/src/harness-profile.ts`）。今天沒有任何組裝宣告過 profile，
- * 所以兩格都是 no-op；哪天有組裝宣告了會改提示詞的 profile，gp 那份不會跟著改，要一起想。
+ * 這裡看不到。**自有組裝點（`agent-assembly.ts`）不套 profile**，所以這兩格不是 no-op 而是不存在：
+ * 模型字串不影響 gp 的提示詞。
  *
  * **工具不照抄，也是刻意的**：基座那份拿 root 的 `tools` 原樣（`effectiveTools`），root-only
  * 工具在它裡面是原件、叫得到。這裡走 {@link foldSubAgents} 的集合，換成拒絕樁，跟每個
