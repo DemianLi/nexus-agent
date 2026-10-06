@@ -53,6 +53,15 @@
  * 最差一筆 +9.3%。`gpt-oss-20b`（沒宣告）同一組情境全部在 ±0.5% 以內，跟修之前一樣。**留下的**：模型自己的固定
  * 開銷（例如只有一則短訊息的第一次，估 77 實 299），這個絕對差 200 多個 token、跟內容無關，#588 驗收時就在。
  *
+ * ## 編碼器（[#1107](https://github.com/DemianLi/nexus-agent/issues/1107)）
+ *
+ * o200k 的實作是 `gpt-tokenizer`（純 JS、零相依、MIT），不是 `js-tiktoken`。換的理由是速度，而且 token 數**逐位相同**
+ * （`token-estimate.test.ts` 的「編碼器對照」用 js-tiktoken 當對照組重算過各種素材）：同一台機器上，一次全新的 10 萬字元
+ * 隨機漢字（最壞的素材）js-tiktoken 4.4 秒、gpt-tokenizer 0.13 秒；一般中文散文差約兩個數量級。載入也輕：載入後常駐堆
+ * +17 MB（js-tiktoken +72 MB）、載入含初始化 76 ms（222 ms）。它內部有一個合併結果的 LRU（上限 10 萬筆），實測對抗性輸入
+ * 之後最多增 14 MB，不會無界成長。**這一換讓 `estimateTextTokens`（外溢層的精確數）同樣變快，數字不變。**
+ * 抽樣（{@link sampledTokens}）與它的誤差界線**沒有動**；編碼器夠快之後還要不要抽樣是另一個問題。
+ *
  * ## 量到的
  *
  * #586 錄下 serve 組裝出來的 92 份 body、原樣送 NVIDIA 取 `prompt_tokens`：第 2 次以後最大誤差 nemotron 8.9%、
@@ -91,8 +100,7 @@
 import { createHash } from 'node:crypto';
 import type { BaseMessage } from '@langchain/core/messages';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
-import { Tiktoken } from 'js-tiktoken/lite';
-import o200kBase from 'js-tiktoken/ranks/o200k_base';
+import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
 
 /** 每則訊息的角色框架開銷。#586 的評估用同一個值。 */
 const MESSAGE_OVERHEAD = 4;
@@ -104,25 +112,31 @@ const MIN_RATIO_SPAN = 500;
 const MAX_SENT_ENTRIES = 20_000;
 
 /**
- * 沒有空白的一段（以及一整段空白）超過這麼長就切開來編。
+ * 沒有空白的一段（以及一整段空白）超過這麼長就切開來編。**這是防崩潰與防卡死的承重件，不是微調**（#1107 換編碼器時重量）。
  *
- * js-tiktoken 對一個 regex 片段做 BPE 合併是平方級的：4 萬個 `X` 連在一起要編一分多鐘（量過）。切成 128 字元
- * 一塊之後 4 萬個 `X` 是 0.25 秒，而 #586 那四種素材（中文、混合、英文程式碼）的 token 數差不到 0.01%——
- * 一般文字裡這麼長的無空白片段本來就少，中文段落雖然沒有空白，切點多一兩個 token 而已。
+ * gpt-tokenizer 對一個 regex 片段做 BPE 合併，片段很長時有幾種壞法（各量過，Node 25.9，不切的情況）：四萬個 `X` 連在一起
+ * 0.6 秒；十八萬字元的空白與換行 11 秒；十五萬個隨機漢字（中間沒有空白）**四十三秒之後拋 `RangeError: Maximum call stack
+ * size exceeded`**（`push(...tokens)` 展開太大的陣列）。後者在 {@link estimateTextTokens} 上會讓外溢層那一次工具呼叫整個
+ * 失敗。切成 128 字元一塊之後這些都只是一般成本，而 #586 那四種素材（中文、混合、英文程式碼）的 token 數與不切差不到 0.01%。
+ * 前一個編碼器（js-tiktoken）是另一種壞法（平方級，四萬個 `X` 要一分多鐘），所以 128 這個數字是那時量的；換編碼器後沒有
+ * 理由動它，**而且換了之後每一個素材的 token 數與前一個編碼器逐位相同**（`token-estimate.test.ts` 的對照測試）。
  *
- * **連續空白同理**（#719 量到）：十八萬字元的空白與換行編了超過四十秒沒有結果，切成 128 字元一塊之後不是問題。外溢層在工具
- * 呼叫的路徑上量長結果，不能被一則怪輸出卡住。
+ * **連續空白同理**（#719 量到）：外溢層在工具呼叫的路徑上量長結果，不能被一則怪輸出卡住。
  */
 const MAX_RUN = 128;
 const LONG_RUN = new RegExp(`\\S{${MAX_RUN + 1},}|\\s{${MAX_RUN + 1},}`, 'g');
 
-let encoder: Tiktoken | undefined;
+/**
+ * 編碼選項：**特殊 token 的字串一律當一般文字**。gpt-tokenizer 預設碰到 `<|endoftext|>` 這種字串會拋
+ * （`Disallowed special token found`）；清空 `disallowedSpecial` 就當一般文字編，與前一個編碼器 `encode(text, [], [])`
+ * 的結果逐位相同（`token-estimate.test.ts` 對照過）。
+ */
+const ENCODE_OPTIONS = { disallowedSpecial: new Set<string>() } as const;
 
-/** 一段文字直接編。**特殊 token 的字串一律當一般文字**：預設的 `encode` 碰到 `<|endoftext|>` 這種字串會拋。 */
+/** 一段文字直接編。呼叫 `o200k_base.encode`（物件上的屬性，不先解構），測試才攔得到。 */
 function encoded(text: string): number {
   if (text.length === 0) return 0;
-  encoder ??= new Tiktoken(o200kBase);
-  return encoder.encode(text, [], []).length;
+  return o200k_base.encode(text, ENCODE_OPTIONS).length;
 }
 
 /** o200k 的 token 數，長的無空白片段切開來編，見 {@link MAX_RUN}。 */
@@ -158,7 +172,7 @@ const SAMPLE_WINDOW_CHARS = 1_000;
  *
  * **為什麼要有它**（[#952](https://github.com/DemianLi/nexus-agent/issues/952)）：下面的 `perMessage`／`perTool` 以物件
  * 為鍵，而物件跨輪不穩——存檔點（`MemorySaver`）每次讀回來都反序列化出新的訊息物件，量過：同一則訊息第二輪就不是同一個
- * 物件。於是歷史裡每一則都在**每一輪**重編一次，而 js-tiktoken 在中文上約 7 µs／字元（二十七萬字元 1.8 秒），長中文
+ * 物件。於是歷史裡每一則都在**每一輪**重編一次，而當時的編碼器 js-tiktoken 在中文上約 7 µs／字元（二十七萬字元 1.8 秒；#1107 換成 gpt-tokenizer 之後慢兩個數量級，見檔頭「編碼器」），長中文
  * 歷史的每輪開頭就同步卡住好幾秒，serve 此時處理不了任何請求。文字是不可變的，以內容的 sha1 為鍵，換了物件、換了 thread
  * 都命中；結果與不備忘逐位相同。
  *
