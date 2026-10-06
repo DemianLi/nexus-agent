@@ -25,6 +25,7 @@ import {
 } from '@nexus/wire';
 import { createHostServicesPlugin, createRegistry } from '@nexus/core';
 import { StateBackend } from 'deepagents';
+import type { FileData } from 'deepagents';
 import { z } from 'zod';
 import { BrowserAuth } from './browser-auth.js';
 import { loadPluginConfig } from './plugin-config.js';
@@ -382,4 +383,17 @@ export function approvalToolNames(pendings: readonly PendingInput[]): string[] {
   return pendings.flatMap((pending) =>
     isApprovalPending(pending) ? pending.actions.map((action) => action.name) : [],
   );
+}
+
+/**
+ * 讀一次 `invoke` 結果裡的虛擬檔案系統（`StateBackend` 寫進圖狀態的 `files`）。
+ *
+ * 以前 agent 的型別帶著基座的狀態形狀，`result.files` 直接讀得到；自有組裝點之後 middleware 疊是動態的
+ * 陣列，型別推不出 `files` 這一欄，所以測試經這個函式讀——**執行期行為沒變**，只是不靠型別推導。
+ *
+ * @param result - `agent.invoke()` 的結果。
+ * @returns 路徑對檔案資料；沒有就是空物件。
+ */
+export function virtualFilesOf(result: object): Record<string, FileData | undefined> {
+  return (result as { files?: Record<string, FileData | undefined> }).files ?? {};
 }

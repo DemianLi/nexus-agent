@@ -22,6 +22,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { virtualFilesOf } from './fixtures.js';
 import { CHANGELOG, FAILURE_TEXT } from './mcp-fixture-server.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -79,7 +80,7 @@ describe('MCP 工具在 agent 迴圈裡', () => {
       expect(toolMessages[0]?.text).toContain(CHANGELOG);
 
       // 而它落進了虛擬檔案系統。
-      expect(result.files?.['/changelog.md']?.content).toContain(CHANGELOG);
+      expect(virtualFilesOf(result)['/changelog.md']?.content).toContain(CHANGELOG);
     } finally {
       await dispose();
     }

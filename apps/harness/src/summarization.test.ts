@@ -873,8 +873,7 @@ describe('正式路徑上的門檻是我們選的', () => {
    * `ContextOverflowError` 借基座的緊急摘要。基座那條 `catch` 在解得出 `maxInputTokens` 時會拿它去調
    * `tokenEstimationMultiplier`，也可能改走 `compactToolResults`——兩件都不是我們要的。
    *
-   * 手法照 [`harness-profile.test.ts`](./harness-profile.test.ts) 那條「真實 live model
-   * 過得了這道檢查」：塞一把假 key 進環境變數、只建模型不發任何請求。**刻意不是
+   * 手法：塞一把假 key 進環境變數、只建模型不發任何請求。**刻意不是
    * `it.skipIf(缺 key)`**——缺 key 就跳過的絆索永遠不紅。
    */
   it('live model 今天仍然解不出 maxInputTokens，所以走的是固定值那條', () => {

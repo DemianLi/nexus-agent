@@ -86,13 +86,11 @@
  * **摘要門檻不跟型錄走**：`DEFAULT_SUMMARIZATION` 仍是絕對值 `100_000`，按量過最小那顆的窗口挑；型錄的
  * `contextWindow` 今天沒有消費者。
  *
- * ## 換 `modelId` 今天碰不到 harness profile 那道檢查
+ * ## 換 `modelId` 不會碰到基座的 harness profile
  *
- * 組裝點會比對基座按模型查到的 harness profile 與宣告的是否一致（`harness-profile.ts` 的
- * `assertHarnessProfileDeclared`）。**今天換哪一個 id 都過得了**：`ChatOpenAI` 把型號存在
- * `model` 而不是 `model_name`／`modelName`，查詢鍵湊不出型號（`harness-profile.ts` 的
- * `identifierHint` 檔頭）。哪天欄位補齊，換成一顆基座登記過 profile 的模型就會在**組裝期**
- * 失敗並印出該填的宣告——那是那道檢查的本意，不是這一列的缺陷。
+ * 基座的 `createDeepAgent` 會按模型查一份 harness profile 並改寫組裝；自有組裝點
+ * （`@nexus/core` 的 `assembleAgent`）**不套 profile**，所以換哪一個 id 組成都不變。
+ * （以前組裝點有一道「宣告」檢查擋這件事，隨 `harness-profile.ts` 一起拿掉了。）
  *
  * ## 端點的規則照 dsh
  *

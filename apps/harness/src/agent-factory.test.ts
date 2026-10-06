@@ -15,6 +15,7 @@ import {
   createToolPlugin,
   fakeTool,
   NOTE_TOOL_NAME,
+  virtualFilesOf,
 } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -111,7 +112,7 @@ describe('createNexusAgent', () => {
     const { agent } = await createNexusAgent({ model, plugins: [createNotePlugin()] });
 
     const result = await agent.invoke(toAgentInvocation('寫檔。'));
-    const files = Object.keys(result.files ?? {});
+    const files = Object.keys(virtualFilesOf(result));
 
     expect(files).not.toContain('/secrets/token');
     expect(files).toContain('/notes.md');
@@ -173,7 +174,7 @@ describe('createNexusAgent', () => {
 
     const result = await agent.invoke(toAgentInvocation('寫檔。'));
 
-    expect(Object.keys(result.files ?? {})).toContain('/a.md');
+    expect(Object.keys(virtualFilesOf(result))).toContain('/a.md');
   });
 
   it('組裝點給的 system prompt 到得了模型', async () => {

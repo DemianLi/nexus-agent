@@ -1,38 +1,35 @@
 /**
  * agent 工廠——**plugin 清單組出來的 agent 只有這一個組裝點**。
  *
- * 整個 repo 只有一處例外：[`baseline.test.ts`](./baseline.test.ts) 直接呼叫
- * `createDeepAgent`，而那是刻意的——它斷言的是「基座還是不是我們以為的那個形狀」，
- * 中間隔著我們自己的 fold 就驗不到那件事了。
+ * 整個 repo 只有一處例外：[`assembly-parity.test.ts`](./assembly-parity.test.ts) 直接呼叫
+ * `createDeepAgent` 當對照組，那是刻意的——它斷言「自有組裝點組出來的東西與基座逐位元組相同」，
+ * 中間隔著我們自己的 fold 就驗不到那件事了。基座拿乾淨之後那條測試跟著拿掉。
  *
  * 三步：`loadPlugins()` 把清單跑進 registry、`foldRegistry()` 折成參數、
- * `createDeepAgent()` 收下。前兩步住在 `@nexus/core`（純轉換層，不碰基座的建構），
- * 第三步只有這裡有。換模型、換儲存、換工具組合＝換 plugin 清單，core 不動。
+ * `assembleAgent()` 收下。前兩步與第三步都住在 `@nexus/core`（`agent-assembly.ts` 是自有的組裝，
+ * 取代 `deepagents` 的 `createDeepAgent`），這裡只負責把組裝點自有的東西餵進去。換模型、換儲存、
+ * 換工具組合＝換 plugin 清單，core 不動。
  *
  * 「組裝點自有、plugin 不得提供」的那些（default backend、工具呈現順序、model、
  * checkpointer / store、核准政策的 session 開關、摘要的門檻與去向、重複呼叫提醒的門檻與
  * 射程，加一份基座工具名單）
  * 從 {@link CreateNexusAgentOptions} 進來，原樣交給 fold：**所有權在這裡，檢查跑在 core**。
  *
- * 這也是 fold 的產物第一次真的碰到基座。基座在建構時還有三道自己的檢查是 fold 看不到的，
- * 外加**一件不是檢查而是改寫**的事（第 4 條）：
+ * 基座在建構時有兩道自己的檢查是 fold 看不到的；自有組裝點之後，只剩第一道還需要我們自己守：
  *
- * 1. **工具名撞到內建**——`createDeepAgent()` 開頭丟 `ConfigurationError('TOOL_NAME_COLLISION')`。
- *    我們在 fold 之前先擋一次，理由見 {@link assertNoBaseToolNameCollision}。
- * 2. **`permissions` 的路徑格式**——只要規則非空，`createFilesystemMiddleware()` 就跑
- *    `validatePermissionPaths()`：非絕對路徑、含 `..`、含 `~` 一律拋錯。`registry.permissions.deny()`
- *    明文不驗第二次，所以這條的失敗只會在這裡出現。
- * 3. **`permissions` 配上支援命令執行的 backend**——同一個地方拋，因為 shell 指令碰得到任何路徑，
- *    路徑規則會失效。**它丟的是普通的 `Error`，不是 `ConfigurationError`**（PR #53 的內文寫成
- *    後者，是錯的；1.13.1 的 `ConfigurationError` 只有 `TOOL_NAME_COLLISION` 一個 code）。
- *    現在觸發不到——`StateBackend` 的 `isSandboxBackend` 是 false——所以這裡不寫測試，
+ * 1. **工具名撞到內建**——基座的 `createDeepAgent()` 開頭會丟 `ConfigurationError('TOOL_NAME_COLLISION')`，
+ *    自有組裝點**沒有**這道。我們在 fold 之前先擋（{@link assertNoBaseToolNameCollision}），而且比基座
+ *    多擋一半（subagent 層）。**這道不能拆**：檔案工具與 `task` 還是基座的 middleware 在注入，名字照樣會撞。
+ * 2. **`permissions` 的路徑格式**與**配上支援命令執行的 backend**——都是 `createFilesystemMiddleware()`
+ *    自己跑的，自有組裝點照樣呼叫它，所以照樣會在這裡失敗。路徑格式：非絕對路徑、含 `..`、含 `~` 一律拋錯，
+ *    而 `registry.permissions.deny()` 明文不驗第二次，所以這條的失敗只會在這裡出現。後者拋的是普通的
+ *    `Error`；現在觸發不到——`StateBackend` 的 `isSandboxBackend` 是 false——所以不寫測試，
  *    留給 Phase 2 的 `feat/sandbox-plugin` 當場驗。
- * 4. **按模型改寫組裝**——`createDeepAgent()` 從 `model` 解出一份 harness profile，然後才
- *    開始組 middleware。它拿得掉工具、改得動我們自己註冊的工具的 description、加得了
- *    middleware（連同它帶的工具）、換得掉系統提示詞。**前三條是檢查，這一條是改寫**：
- *    它不會拒絕任何東西，只會安靜地讓組出來的 agent 不是我們宣告的那個。所以這裡在
- *    fold 之前先要求宣告，見 {@link CreateNexusAgentOptions.expectedHarnessProfile} 與
- *    [`harness-profile.ts`](./harness-profile.ts)。
+ *
+ * **曾經有第三條，是改寫不是檢查：按模型改寫組裝（harness profile）。** 基座從 `model` 解出一份 profile，
+ * 拿得掉工具、改得動我們自己註冊的工具的 description、加得了 middleware、換得掉系統提示詞，
+ * 而且不拒絕任何東西。自有組裝點之後**沒有這回事**：模型字串不再影響組成，所以原本那道「要求宣告」的
+ * 檢查（`expectedHarnessProfile`、`harness-profile.ts`）整個拿掉了。
  *
  * 組裝點還負責一件基座**設了但等於沒設**的事：agent 迴圈的上限。值由
  * {@link recursionLimitFor} 的三態決定（明著傳的 > `#settings/recursion-limit` 那一列提供的
@@ -42,6 +39,7 @@
 
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import {
+  assembleAgent,
   assertInvariantSelection,
   createFsService,
   createHostServicesPlugin,
@@ -78,7 +76,7 @@ import {
   type ToolResultPruneConfig,
 } from '@nexus/core';
 import type { SystemPromptVariables } from '@nexus/plugin-system-prompt';
-import { CompositeBackend, createDeepAgent } from 'deepagents';
+import { CompositeBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BackgroundDelegation } from './background-delegation.js';
 import type { BackgroundSubagentsOptions } from './background-delegation.js';
@@ -93,8 +91,6 @@ import { TextOnlyStateBackend } from './binary-read.js';
 import { createToolResultStash } from './tool-result-stash.js';
 import type { StashRoute } from './tool-result-stash.js';
 import type { ToolResultStashOptions } from './tool-result-stash.js';
-import { assertHarnessProfileDeclared, describeHarnessProfileEffects } from './harness-profile.js';
-import type { HarnessProfileEffects } from './harness-profile.js';
 import { DEFAULT_RECURSION_LIMIT, RECURSION_LIMIT_SERVICE } from './settings/recursion-limit.js';
 import {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,
@@ -162,10 +158,9 @@ export interface CreateNexusAgentOptions {
    */
   readonly optionalEntries?: ReadonlySet<PluginEntry>;
   /**
-   * 模型。**刻意是必填**——基座省略時會退到它自己的預設（`anthropic:claude-sonnet-4-6`），
-   * 那會讓「忘了指定」與「就是要 Anthropic」看起來一模一樣，而前者的代價是打一支
-   * 沒人預期的付費 API。預設供應商的決策（Anthropic）不受影響：那是清單怎麼寫的事，
-   * 不是這裡該替人填的預設值。
+   * 模型。**刻意是必填**——組裝點沒有預設模型（基座的 `createDeepAgent` 省略時會退到
+   * `anthropic:claude-sonnet-4-6`，自有組裝點沒有這個退路），因為那會讓「忘了指定」與「就是要
+   * Anthropic」看起來一模一樣，而前者的代價是打一支沒人預期的付費 API。
    */
   readonly model: AgentModel;
   /**
@@ -178,16 +173,6 @@ export interface CreateNexusAgentOptions {
    * 跟建模型讀的是同一份。
    */
   readonly systemPromptVariables?: Partial<SystemPromptVariables>;
-  /**
-   * 宣告「這個模型會讓基座對組裝做哪些事」。**省略即宣告「什麼都不做」**——那是今天所有
-   * 呼叫端的實情，也是唯一一種不必寫的宣告。
-   *
-   * 基座解出來的 profile 與這份宣告不一致，組裝當場失敗（兩個方向都擋：沒宣告卻有東西、
-   * 宣告了卻沒有那些東西）。**這不是把某些模型封死**——確認過改動可以接受，就照錯誤訊息
-   * 把實際那份貼進來。理由、形狀與 dsh 那側的對照見
-   * [`harness-profile.ts`](./harness-profile.ts) 的檔頭。
-   */
-  readonly expectedHarnessProfile?: HarnessProfileEffects;
   /**
    * default backend。plugin 掛的是路由分支（`backend.mount()`），兜底的這個是組裝點的事。
    * 省略即 `StateBackend`（跑在 state 裡的虛擬 FS，不碰真實磁碟）。**含路徑圍堵的
@@ -306,7 +291,7 @@ export interface CreateNexusAgentOptions {
    * 再多一格）。見 {@link DEFAULT_RECURSION_LIMIT}。
    */
   readonly repeatReminder?: Partial<RepeatReminderSettings> | false;
-  /** 附加在基座 base prompt 前面的 system prompt。 */
+  /** 系統提示詞，原樣送給模型（基座的 base prompt 預設本來就不注入，自有組裝點也不墊）。 */
   readonly systemPrompt?: string;
   /**
    * agent 迴圈的上限，單位是 LangGraph 的 super-step。
@@ -382,13 +367,12 @@ export const HEADLESS_APPROVALS: ApprovalPolicy = { enabled: false };
 /**
  * 組裝好的 agent，加上收掉它的方法。
  *
- * **刻意是推導出來的別名，不是自己打一份 interface**：`createDeepAgent` 的回傳型別帶著
- * 一整串由參數推導的型別參數，寫成 `ReturnType<typeof createDeepAgent>` 會退回預設值，
- * 呼叫端的 `result.messages` 當場變成 `any`。
+ * **刻意是推導出來的別名，不是自己打一份 interface**：`createAgent` 的回傳型別帶著
+ * 一整串由參數推導的型別參數，手寫一份會退回預設值，呼叫端的 `result.messages` 當場變成 `any`。
  *
  * `dispose` 收的是清單裡的 plugin 經 `registry.lifecycle.onDispose()` 登記的活資源
  * （MCP 的 stdio 子行程是第一個），逆序、冪等，**外加還接著的遙測協調器**。
- * **不收 agent 本身**——deepagents 建構後不可變，也沒有東西要關。不呼叫的下場是行程
+ * **不收 agent 本身**——agent 建構後不可變，也沒有東西要關。不呼叫的下場是行程
  * 不退出：子行程的 stdio pipe 是活的 handle。
  *
  * `attachTelemetry` 是遙測的接線口。它在這裡而不在 `@nexus/core`，因為接線需要同時
@@ -639,9 +623,6 @@ function modelLabelOf(model: AgentModel): string {
 }
 
 export async function createNexusAgent(options: CreateNexusAgentOptions) {
-  // **跑在 `loadPlugins` 之前**：它只看 `options.model`，這時候還沒有任何 plugin 開好資源，
-  // 所以失敗了不必先 `dispose()`。其餘四種都在下面那個 try 裡，因為它們要等 registry。
-  assertHarnessProfileDeclared(options.model, options.expectedHarnessProfile);
   if (options.backgroundSubagents !== undefined && options.checkpointer == null) {
     throw new Error(
       'backgroundSubagents 需要 checkpointer：沒有存檔點，背景子代理的第二輪就看不到第一輪',
@@ -750,11 +731,13 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ...(options.stepInbox === true && { stepInbox: true }),
     });
 
-    // `withConfig` 疊在基座自己那一層 `withConfig` 上面，後者贏（實測 `8` → 模型只被叫
-    // 3 輪）。**推導出來的型別沒有塌**：包完之後 `invoke()` 的 `messages` 仍然是
-    // `BaseMessage[]` 而不是 `any`，所以 {@link NexusAgentHandle} 那個別名照樣成立
-    // ——這件事驗過，因為 `any` 是不會讓 typecheck 紅的那種壞掉。
-    const agent = createDeepAgent({
+    // **推導出來的型別沒有塌**：`assembleAgent` 回 `createAgent` 的型別，`invoke()` 的 `messages` 仍然是
+    // `BaseMessage[]` 而不是 `any`，所以 {@link NexusAgentHandle} 那個別名照樣成立——這件事驗過，
+    // 因為 `any` 是不會讓 typecheck 紅的那種壞掉。
+    //
+    // 基座那一層 `withConfig({ recursionLimit: 10_000 })` 不再有：以前我們的 `withConfig` 疊在它上面、
+    // 靠「後者贏」蓋掉它（實測 `8` → 模型只被叫 3 輪），現在只有這一層。
+    const agent = assembleAgent({
       ...params,
       ...(options.systemPrompt !== undefined && { systemPrompt: options.systemPrompt }),
     }).withConfig({
@@ -774,32 +757,17 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
      * [#737](https://github.com/DemianLi/nexus-agent/issues/737)）。一次性的委派仍走基座的 `task`；這是另一條路，
      * 細節與為什麼要另編見 {@link @nexus/core!compileSubagentGraph}。
      *
-     * **模型的 harness profile 若會動子代理的組成就拋**：拿掉工具、加或拿 middleware 這幾根槓桿基座在 `createSubAgent`
-     * 之外套用，自編的圖不套用，靜靜略過的話背景子代理與一次性子代理就是兩個不同的東西。
-     *
      * @param name - 子代理名（`general-purpose` 或某個 plugin 註冊的）。
      * @param checkpointer - 這張圖的存檔點；同一個 `thread_id` 的下一輪看得到上一輪。
      * @returns 編好的圖。
-     * @throws 沒有這個子代理、規格不合、profile 會動組成。
+     * @throws 沒有這個子代理、規格不合。
      */
     const compileSubagent = (
       name: string,
       checkpointer: NonNullable<AgentCheckpointer>,
       model?: BaseChatModel,
     ) => {
-      const effects = describeHarnessProfileEffects(options.model);
-      const touched = [
-        ...effects.excludedTools.map((tool) => `拿掉工具 ${tool}`),
-        ...effects.excludedMiddleware.map((each) => `移除 middleware ${each}`),
-        ...effects.extraMiddleware.map((each) => `加 middleware ${each}`),
-      ];
-      if (touched.length > 0) {
-        throw new Error(
-          `這個模型的 harness profile 會動子代理的組成（${touched.join('、')}），背景子代理的自編圖不套用；` +
-            '一次性委派走基座，兩條路會長得不一樣，所以不編。',
-        );
-      }
-      // **背景圖要自己帶上限**（#858 的量測）：它是 `createAgent` 直接編的，沒有 `createDeepAgent` 最後那層
+      // **背景圖要自己帶上限**（#858 的量測）：它是 `createAgent` 直接編的，沒有 root 那層
       // `withConfig`，也沒有一次性子代理從 `task` 那次呼叫繼承來的 root 上限，於是落在 LangGraph 的預設 25——
       // 連續 8 次工具呼叫就 `GraphRecursionError`。給它跟 root 同一個值（旗標 > 設定列 > 預設），背景子代理每一輪才跟
       // 一次性的、跟 root 一樣長。
@@ -1121,9 +1089,12 @@ function watchFeedback(
 /**
  * plugin 註冊的工具不得佔用基座內建的名字。
  *
- * 基座自己有一道同樣意思的檢查（`createDeepAgent()` 開頭的 `BUILTIN_TOOL_NAMES`
- * → `ConfigurationError('TOOL_NAME_COLLISION')`），這裡先擋是為了兩件事：
+ * 基座的 `createDeepAgent()` 開頭有一道同樣意思的檢查（`BUILTIN_TOOL_NAMES`
+ * → `ConfigurationError('TOOL_NAME_COLLISION')`），**自有組裝點之後那道不在了，這裡是唯一一道**。
+ * 先前先擋是為了兩件事，現在多了第三件：
  *
+ * - **沒有別人擋。** 檔案工具與 `task` 還是基座的 middleware 在注入，名字照樣會撞，撞了之後
+ *   `createAgent` 不會拒絕，要到供應商那邊才炸。
  * - **指名是誰。** 基座的訊息只說哪個工具名撞了，不知道是清單裡哪一個 plugin 註冊的——
  *   而 registry 每次註冊都記著 origin，這是我們比基座多知道的東西。
  * - **補上基座沒查的那半。** 它只檢查 root 的 `tools`。註冊到 subagent 層、或 subagent
