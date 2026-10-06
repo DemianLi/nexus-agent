@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 
-import { RightSidebarPanel, RightSidebarProvider } from '@/components/right-sidebar';
-import type { RightSidebarSources } from '@/components/right-sidebar';
+import { RightSidebarPanel, RightSidebarProvider } from '@/components/sidebar/right-sidebar';
+import type { RightSidebarSources } from '@/components/sidebar/right-sidebar';
 
 /**
  * 卡片連同右側欄一起畫（#640）：卡片的鈕打開的分頁畫在同一棵樹裡，測試照樣找得到。

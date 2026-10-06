@@ -1,13 +1,13 @@
 /**
  * 右側欄的狀態（[#640](https://github.com/DemianLi/nexus-agent/issues/640)）：一條會話一套分頁，開著哪些、選中哪一個、
- * 面板開或收；寬度全站一個值。這裡只有純函式與 `localStorage` 的讀寫，畫面在 `components/right-sidebar.tsx`。
+ * 面板開或收；寬度全站一個值。這裡只有純函式與 `localStorage` 的讀寫，畫面在 `components/sidebar/right-sidebar.tsx`。
  *
  * **形狀是一格停靠＋分頁**（#640 決定 1）：dsh `ui-sidebar-right` 的分格、浮窗、拖放、復原都不做。以後多一種
  * 內容只是 {@link SidebarTab} 多一支（#654 的計劃就是這樣加的；檔案樹還沒有）。
  *
  * **單例面板的註冊表**（[#1017](https://github.com/DemianLi/nexus-agent/issues/1017) Q1 A、#1031）：觀測、成本這類「一個會話
  * 一份」的面板不各開一支聯集成員，種類名記在 {@link PANEL_KINDS}，標題、圖示、渲染元件記在
- * `components/right-sidebar-panels.tsx` 的 `PANELS`（`Record<PanelKind, …>`，漏一個編不過）。「註冊」是建置時加一列，
+ * `components/sidebar/right-sidebar-panels.tsx` 的 `PANELS`（`Record<PanelKind, …>`，漏一個編不過）。「註冊」是建置時加一列，
  * 不是執行期載入程式碼（內網、無外部 CDN）。**種類清單放在這裡而不是元件那邊**：`readLayout` 在畫面第一次 render
  * 的初始化器裡就要認得它們，認不得的 `kind` 整份版面作廢（{@link parseLayout}），不能靠模組副作用晚一步才填進去。
  * 既有的三種（改動、交付、計劃）有座標，先不搬進來。
