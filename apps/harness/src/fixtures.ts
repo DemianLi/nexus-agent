@@ -178,6 +178,13 @@ export function testSessionCookie(authority = 'localhost'): string {
  * `new Request(url)` 不會替你帶 `Host`——真的 HTTP/1.1 請求一定有，所以圍欄缺 Host 就拒、不退回去讀 URL。
  * 測試的 base URL（`http://wire.test` 之類）跟 Host 無關，保留原樣。呼叫端自己帶了 `cookie` 就不蓋。
  *
+ * **帶了 `signal` 的話，這個請求要活到那個 signal 中止為止**：`new Request(url, { signal })` 的 `request.signal` 是
+ * 一個「跟隨」原 signal 的衍生 signal，而 Node 只用弱參考把它掛在原 signal 上——沒人抓著那個 Request 的時候，一次完整
+ * GC 會把它回收，之後原 signal 中止，衍生的那個永遠不會跟著中止（同 [#990](https://github.com/DemianLi/nexus-agent/issues/990)
+ * 在 handler 那一側修的那一條）。測試把 `AbortController` 交給 client、而 client 的 `fetch` 是 `handler.handle(loopbackRequest(…))`
+ * 時，handler 那頭等 `request.signal` 中止來收線，收不到就卡到測試逾時（`token-meter-wire.test.ts` 的 `await draining` 量過：
+ * 修之前四次跑掉三次，每次卡 30 秒；留住請求之後連跑都過）。真的 HTTP 請求不會遇到，Node 的伺服器自己抓著它。
+ *
  * @param input - 請求 URL。
  * @param init - 其餘照 `fetch` 傳進來的原樣。
  * @returns 帶著 `host: localhost` 與 {@link TEST_BROWSER_AUTH} 認得的 cookie 的請求。
@@ -186,7 +193,10 @@ export function loopbackRequest(input: string, init?: RequestInit): Request {
   const headers = new Headers(init?.headers);
   headers.set('host', 'localhost');
   if (!headers.has('cookie')) headers.set('cookie', testSessionCookie('localhost'));
-  return new Request(input, { ...init, headers });
+  const request = new Request(input, { ...init, headers });
+  // 監聽器的閉包抓著 request：原 signal 活著它就活著，中止之後（`once`）自然放掉。
+  init?.signal?.addEventListener('abort', () => void request, { once: true });
+  return request;
 }
 
 /**
