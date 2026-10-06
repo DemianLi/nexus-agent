@@ -269,6 +269,13 @@ export interface TrajectoryDigest {
   /** 這一輪是不是開了新的邏輯輪（`resume` 不算，它接著上一輪停在核准點的那幾顆呼叫）。 */
   readonly logical: boolean;
   readonly end?: TrajectoryEnd;
+  /**
+   * 失敗的那一輪是哪一類失敗（`turn/failed` 的 `error.code`，#434／#1115）：`AUTH`、`QUOTA`、`RATE_LIMIT`、
+   * `CONTEXT_WINDOW_EXCEEDED`、`INVALID_REQUEST`、`SERVER`、`HTTP_<n>`、`TIMEOUT`、`TRANSPORT`、`UNKNOWN`（與 `llm/retry`
+   * 同一份詞彙）。**只有 `end` 是 `failed` 且日誌帶了碼才有**：舊日誌的 `turn/failed` 沒有 `error`，缺席就是「沒記」，
+   * 不補 `UNKNOWN`。選填欄位，沒升 {@link TRAJECTORY_VERSION}（#1021／#1022 的先例）。
+   */
+  readonly failureCode?: string;
   readonly endTime?: number;
   readonly durationMs?: number;
   /** 模型呼叫數。 */

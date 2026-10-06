@@ -221,6 +221,7 @@ function digestOf(turn: TurnState): TrajectoryDigest {
     kind: full.kind,
     logical: full.logical,
     ...(full.end === undefined ? {} : { end: full.end }),
+    ...(full.failureCode === undefined ? {} : { failureCode: full.failureCode }),
     ...(full.endTime === undefined ? {} : { endTime: full.endTime }),
     ...(full.durationMs === undefined ? {} : { durationMs: full.durationMs }),
     callCount: full.callCount,
@@ -598,6 +599,7 @@ function closeTurn(
   event: SessionEvent,
   end: TrajectoryEnd,
   failure?: string,
+  failureCode?: string,
 ): TrajectoryState {
   if (openTurn(state) === undefined) return state;
   return updateLastTurn(state, (turn) => ({
@@ -606,6 +608,7 @@ function closeTurn(
     endSeq: event.seq,
     endTime: event.time,
     ...(failure === undefined ? {} : { failure: preview(failure) }),
+    ...(failureCode === undefined ? {} : { failureCode }),
   }));
 }
 
@@ -685,6 +688,11 @@ export function applyTrajectory(
         event,
         'failed',
         typeof data['message'] === 'string' ? data['message'] : '',
+        isRecord(data['error']) &&
+          typeof data['error']['code'] === 'string' &&
+          data['error']['code'] !== ''
+          ? data['error']['code']
+          : undefined,
       );
     case 'model/start':
       return startCall(state, event);
