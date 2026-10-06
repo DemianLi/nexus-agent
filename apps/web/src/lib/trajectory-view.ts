@@ -144,6 +144,34 @@ export const TURN_END_LABEL: Readonly<Record<TrajectoryEnd, string>> = {
   failed: '失敗',
 };
 
+/**
+ * 失敗的那一輪是哪一類失敗（`TrajectoryDigest.failureCode`，#434／#1115／#1121）。詞彙與 `llm/retry` 的碼同一份；
+ * 少了一個鍵就是畫面上多一個看不懂的英文碼，所以每一個都有一句話。`HTTP_<n>` 帶狀態碼，另走 {@link failureCodeText}。
+ */
+export const FAILURE_CODE_LABEL: Readonly<Record<string, string>> = {
+  AUTH: '驗證失敗',
+  QUOTA: '額度用盡',
+  RATE_LIMIT: '被限流',
+  CONTEXT_WINDOW_EXCEEDED: '超出上下文上限',
+  INVALID_REQUEST: '請求被拒',
+  SERVER: '服務端錯誤',
+  TIMEOUT: '逾時',
+  TRANSPORT: '連線失敗',
+  UNKNOWN: '原因不明',
+};
+
+const HTTP_FAILURE_CODE = /^HTTP_(\d{3})$/;
+
+/**
+ * 失敗碼的一句話。`HTTP_<n>` 寫成 `HTTP <n>`；不認得的碼**原樣顯示**，不猜也不改成「原因不明」（日誌可能比這份畫面新）。
+ * 只認自己的鍵，不認 `constructor` 這類原型上的。
+ */
+export function failureCodeText(code: string): string {
+  if (Object.hasOwn(FAILURE_CODE_LABEL, code)) return FAILURE_CODE_LABEL[code]!;
+  const http = HTTP_FAILURE_CODE.exec(code);
+  return http === null ? code : `HTTP ${http[1]}`;
+}
+
 export type SignalKind = Exclude<TrajectoryDecision['kind'], 'compaction'>;
 
 export const SIGNAL_LABEL: Readonly<Record<SignalKind, string>> = {

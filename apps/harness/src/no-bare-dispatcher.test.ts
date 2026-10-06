@@ -45,6 +45,10 @@ interface Violation {
  * @param text - 原始碼。
  */
 export function findViolations(file: string, text: string): Violation[] {
+  // 預篩：建語法樹是這條測試的成本（908 個檔約 2.5–3 秒，CI 併行時會撞上 5 秒的預設逾時）。
+  // 三種匯入寫法都要有 `undici` 字面值，`dispatcher` 屬性要有那個識別字，兩者都沒有的檔不可能違規。
+  // 放在這裡而不是掃描迴圈，是為了讓下面的量具自檢每一種寫法都走過這道預篩。
+  if (!/undici|dispatcher/u.test(text)) return [];
   const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
   const lines = text.split('\n');
   const found: Violation[] = [];
