@@ -927,13 +927,27 @@ export const TRACE_MORE_DIGESTS_LABEL = '顯示更早的摘要';
 export const TRACE_MORE_ROWS_LABEL = '顯示更早的列';
 export const TRACE_LEGACY_GROUP_TEXT = '沒有結構資料的一輪：以人說的那一句切開';
 
+/** 停在中斷點的那一輪，標頭的結束狀態寫它停在哪，不寫「完成」。「停在核准點」與成本分頁同一句。 */
+export const TRACE_WAITING_LABEL: Readonly<Record<NonNullable<TurnHead['waiting']>, string>> = {
+  approval: '停在核准點',
+  question: '停在提問',
+};
+
 /** 一輪的數字（呼叫、工具、重試、token）；摺掉的部分仍算在計數裡，所以另外講。 */
 function HeadFacts({ head, noEnd = false }: { head: TurnHead; noEnd?: boolean }) {
   return (
     <>
       <span>{clockText(head.time)}</span>
       {!noEnd && <span>耗時 {durationText(head.durationMs)}</span>}
-      {!noEnd && <span>{head.end === undefined ? '進行中' : TURN_END_LABEL[head.end]}</span>}
+      {!noEnd && (
+        <span data-testid={head.waiting === undefined ? undefined : 'trace-head-waiting'}>
+          {head.waiting !== undefined
+            ? TRACE_WAITING_LABEL[head.waiting]
+            : head.end === undefined
+              ? '進行中'
+              : TURN_END_LABEL[head.end]}
+        </span>
+      )}
       <span>{head.callCount} 次呼叫</span>
       <span>
         {head.toolCount} 個工具

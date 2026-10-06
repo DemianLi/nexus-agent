@@ -86,6 +86,7 @@ import type {
   TrajectoryTurnKind,
   TrajectoryView,
 } from '@nexus/wire';
+import { isApprovalPending, isQuestionPending } from '@nexus/wire';
 
 import { decisionText } from '@/lib/decision-view';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
@@ -292,6 +293,12 @@ export interface TurnHead {
   /** 單輪上限摺掉的呼叫與工具數；沒摺過沒有這兩格。計數仍含它們。 */
   readonly elidedCalls?: number;
   readonly elidedTools?: number;
+  /**
+   * 這一輪現在停在等人：掛著核准（`approval`）或問答（`question`）。**只有最後一組、而且收尾還是 `completed`（或還沒收）時才有。**
+   * 停在中斷點的那個實體輪，日誌上是照常 `turn/end`（`completed`）收的，標頭照著寫「完成」、聊天區卻寫「等待核准」（成本分頁的用量投影早有 `paused` 這一格，寫「停在核准點」），
+   * 讀的人會以為這一輪做完了。續接之後核准有了結局、併回同一組，這一格就沒了，標頭照常。
+   */
+  readonly waiting?: 'approval' | 'question';
 }
 
 /** 窗口外那些輪只剩的一行摘要。 */
@@ -1104,11 +1111,30 @@ export function traceModel(
   if (last !== undefined) {
     const rows = [...last.rows];
     closeWithStatus(rows, state);
-    if (rows.length !== last.rows.length) {
-      return { ...model, turns: [...model.turns.slice(0, -1), { ...last, rows }] };
+    const waiting = last.head === undefined ? undefined : waitingOf(state, last.head);
+    if (rows.length !== last.rows.length || waiting !== undefined) {
+      const next = {
+        ...last,
+        rows,
+        ...(waiting === undefined || last.head === undefined
+          ? {}
+          : { head: { ...last.head, waiting } }),
+      };
+      return { ...model, turns: [...model.turns.slice(0, -1), next] };
     }
   }
   return model;
+}
+
+/**
+ * 最後一組現在是不是停在等人：掛著中斷，而且這一組的收尾是 `completed` 或還沒收。`aborted`、`failed` 那些是真的結束了，
+ * 不會還在等。核准優先於問答：兩種同時掛著時，狀態列也是先講核准。
+ */
+function waitingOf(state: ConversationState, head: TurnHead): TurnHead['waiting'] {
+  if (head.end !== undefined && head.end !== 'completed') return undefined;
+  if (state.pendings.some(isApprovalPending)) return 'approval';
+  if (state.pendings.some(isQuestionPending)) return 'question';
+  return undefined;
 }
 
 /**
