@@ -209,7 +209,7 @@ export type ModelCallOutcome = 'error' | 'aborted';
  *
  * `code` 的詞彙取 dsh 預設可重試集裡那幾個（`llm/src/retry-policy.ts:18`）：`RATE_LIMIT`、`SERVER`、
  * `TIMEOUT`、`TRANSPORT`——我們的重試只對這幾類發生。分類歸 adapter（`live-model.ts`），這裡只是形狀。
- * #434 替 `turn/failed` 定錯誤欄位時用同一個形狀；誰先合誰定。
+ * `turn/failed.error` 用同一個形狀（#434）；那裡的碼詞彙比這裡寬，見 `live-model.ts` 的 `classifyTurnFailure`。
  */
 export interface LlmFailure {
   readonly message: string;
@@ -383,8 +383,19 @@ export interface SessionEventMap {
    * goal 收回續行授權（`goal-driver.ts`）。
    */
   'turn/end': { readonly reason?: TurnEndReason };
-  /** 一輪拋錯結束。只留訊息，堆疊不進日誌。 */
-  'turn/failed': { readonly message: string };
+  /**
+   * 一輪拋錯結束。訊息之外帶一份分類（[#434](https://github.com/DemianLi/nexus-agent/issues/434)），堆疊不進日誌。
+   *
+   * **`error` 是選填，舊日誌沒有**：那時只有 `message`，讀的人要容忍缺欄位（缺就是缺，不是 `UNKNOWN`）。新日誌四個寫入點
+   * （`thread-pump` 兩處、`cli`、背景子代理）一律帶，不是模型的錯也帶——`code` 是 `UNKNOWN`，同 dsh
+   * （`packages/core/session/src/types.ts:206-210`）。碼的詞彙與判法見 `live-model.ts` 的 `classifyTurnFailure`。
+   *
+   * **與 dsh 的形狀差（偏離登記）**：dsh 沒有這顆事件，失敗放在 `turn/end` 的 `reason: { kind: 'error', error: LlmFailure }`。
+   * 獨立的 `turn/failed` 從 #98 就在，二十個非測試的讀者（goal 續行、歷史、統計、遙測、軌跡、token 用量…）都認它。
+   * **這裡退的不是「基座表達不出來」，是改動面**：照 dsh 搬要動那些讀者、升日誌格式版本、而且舊日誌的 `turn/failed`
+   * 得永遠雙讀。`error` 的形狀照 dsh 的 `LlmFailure`，搬家那天這個欄位原封不動搬進 `reason`。
+   */
+  'turn/failed': { readonly message: string; readonly error?: LlmFailure };
   /** 掛上了一顆等人回答的中斷。 */
   'interrupt/raised': { readonly interruptId: string };
   /**

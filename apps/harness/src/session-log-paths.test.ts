@@ -127,7 +127,11 @@ describe('會話事件日誌：web 那條路', () => {
       ...QUEUED_TURN,
       'turn/failed',
     ]);
-    expect(pump.sessionLog.events[4]?.data).toEqual({ message: '模型不見了' });
+    expect(pump.sessionLog.events[4]?.data).toEqual({
+      message: '模型不見了',
+      // 不是供應商的錯：`UNKNOWN`（#434）。
+      error: { message: '模型不見了', code: 'UNKNOWN' },
+    });
   });
 });
 

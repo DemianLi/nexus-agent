@@ -55,7 +55,7 @@ import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
 import { recordedSandboxMode, SANDBOX_COMMAND_NAME } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
 import { processLaunchEnv } from './launch-env.js';
-import { loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
+import { classifyTurnFailure, loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
 import type { LiveLaunch } from './live-model.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { runDumpConfigSchema } from './config-schema-dump.js';
@@ -545,6 +545,7 @@ export async function runTurn(
   } catch (error) {
     sessionLog.append('turn/failed', {
       message: error instanceof Error ? error.message : String(error),
+      error: classifyTurnFailure(error),
     });
     throw error;
   }

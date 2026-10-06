@@ -208,8 +208,13 @@ describe('載體本身（假 agent）', () => {
         .get({ kind: 'subagent', runId })!
         .events.filter((event) => event.type === 'turn/failed')
         .map((event) => event.data);
-    expect(failed('m')).toEqual([{ message: '串流中途炸了' }]);
-    expect(failed('o')).toEqual([{ message: OVERLOADED }]);
+    // 不是供應商的錯（沒有狀態、不是連線錯）：分類碼是 `UNKNOWN`，不是 `TRANSPORT`（#434）。
+    expect(failed('m')).toEqual([
+      { message: '串流中途炸了', error: { message: '串流中途炸了', code: 'UNKNOWN' } },
+    ]);
+    expect(failed('o')).toEqual([
+      { message: OVERLOADED, error: { message: OVERLOADED, code: 'UNKNOWN' } },
+    ]);
     // 失敗的一輪不會卡住同一個子代理的下一輪。
     expect(await host.submit({ runId: 'o', subagent: 'open', text: '再一句' })).toMatchObject({
       ok: false,

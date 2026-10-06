@@ -1,4 +1,5 @@
 import { ContextOverflowError } from '@langchain/core/errors';
+import { MiddlewareError } from 'langchain';
 import { ChatOpenAI } from '@langchain/openai';
 import { beginAttemptReport, noteFailedAttempt, noteRequestStart } from '@nexus/core';
 import type { AttemptUsage, LlmFailure } from '@nexus/core';
@@ -1133,8 +1134,7 @@ export function classifyLlmFailure(error: unknown): LlmFailure {
   for (const link of causeLinks(error)) {
     const found = (link as { status?: unknown }).status;
     if (status === undefined && typeof found === 'number') status = found;
-    const name = (link as { name?: unknown }).name;
-    if (name === 'StreamIdleTimeoutError' || name === 'APIConnectionTimeoutError') timedOut = true;
+    if (isTimeoutLink(link)) timedOut = true;
   }
   const code =
     status === 429
@@ -1144,6 +1144,105 @@ export function classifyLlmFailure(error: unknown): LlmFailure {
         : timedOut
           ? 'TIMEOUT'
           : 'TRANSPORT';
+  return { message, code, ...(status !== undefined && { status }) };
+}
+
+/**
+ * 這一環是不是「請求逾時」。**認的是名字，而且要認 SDK 真的丟的那個**：openai SDK 的逾時是 `TimeoutError`
+ * （`name`，訊息 `Request timed out.`，沒有 `status`），不是它型別宣告裡的 `APIConnectionTimeoutError`——
+ * 後一個名字從來沒出現過，原本只認它，逾時就被記成 `TRANSPORT`（#434 量到）。`StreamIdleTimeoutError` 是我們自己
+ * 在第一則事件之後的閒置逾時（#521）。
+ */
+function isTimeoutLink(link: object): boolean {
+  const name = (link as { name?: unknown }).name;
+  return (
+    name === 'StreamIdleTimeoutError' ||
+    name === 'APIConnectionTimeoutError' ||
+    name === 'TimeoutError'
+  );
+}
+
+/**
+ * 把「這一輪為什麼失敗」描述成日誌裡的 {@link LlmFailure}（[#434](https://github.com/DemianLi/nexus-agent/issues/434)），
+ * 給 `turn/failed.error`。
+ *
+ * ## 跟 {@link classifyLlmFailure} 是兩個函式，因為它們回答不同的問題
+ *
+ * 那一個只對**會被重試**的失敗有意義（429／5xx／逾時／斷線，四個碼），判放棄的不經過它。**`turn/failed` 記的偏偏
+ * 是放棄的那些**：金鑰錯、配額耗盡、上下文溢出、請求本身有問題。照 dsh 的 `providerError`
+ * （`packages/llm/llm-deepseek/src/transport.ts`，`5badb15`）的順序與詞彙：
+ *
+ * | 條件（認結構化欄位，不解析訊息） | `code` |
+ * | --- | --- |
+ * | 401、403 | `AUTH` |
+ * | 402，或任何一環 `code`／`type` 是 `insufficient_quota`（要在 429 之前，它跟限流共用 429） | `QUOTA` |
+ * | 429 | `RATE_LIMIT` |
+ * | 鏈上有 `ContextOverflowError`（含伺服器導出負 `max_tokens` 那種，見 {@link isDerivedContextOverflow}） | `CONTEXT_WINDOW_EXCEEDED` |
+ * | 400、413 | `INVALID_REQUEST` |
+ * | 5xx | `SERVER` |
+ * | 其他有狀態的（404、410…） | `HTTP_<狀態>` |
+ * | 沒有狀態、逾時那幾個名字（{@link isTimeoutLink}） | `TIMEOUT` |
+ * | 沒有狀態、`APIConnectionError`（連線被拒、被重設） | `TRANSPORT` |
+ * | **其餘——不是供應商的錯** | `UNKNOWN` |
+ *
+ * `UNKNOWN` 是 dsh 的規矩（`packages/core/session/src/types.ts:206-210`：解不成 `LlmFailure` 的錯一律壓成
+ * `{ message, code: 'UNKNOWN' }`）。我們的 `turn/failed` 還有不是模型的來源——工具 middleware 拋的、遞迴上限、
+ * `#withdraw` 的狀態查詢——它們沒有供應商的任何痕跡，就是 `UNKNOWN`。**不要把它們套進 `TRANSPORT`**：
+ * {@link classifyLlmFailure} 把「沒有狀態」一律當 `TRANSPORT`，在這裡會把整類程式錯誤標成網路問題。
+ *
+ * ## 為什麼要先拆 `MiddlewareError`
+ *
+ * 實測（假端點＋真的 `createNexusAgent`）：丟到 `thread-pump` 那個 catch 的錯是 **14 層** `MiddlewareError`，
+ * 供應商的錯在最底下。{@link causeLinks} 只展 10 層，所以直接丟進來**一個狀態都讀不到**。先沿 `cause` 拆到不是
+ * `MiddlewareError` 為止，同 `turn-cancel.ts` 的 `isTurnCancelled`。
+ *
+ * `message` 是呼叫端照舊寫進 `turn/failed.message` 的那句（最外層的 `error.message`），不是底下那個：兩處同一句，
+ * 讀的人不用猜哪個才是人話。
+ *
+ * @param error - 這一輪拋出來的東西，可能已經被包過很多層。
+ */
+export function classifyTurnFailure(error: unknown): LlmFailure {
+  const message = error instanceof Error ? error.message : String(error);
+  let root = error;
+  while (MiddlewareError.isInstance(root)) root = root.cause;
+
+  let status: number | undefined;
+  let quota = false;
+  let overflow = false;
+  let timedOut = false;
+  let connection = false;
+  for (const link of causeLinks(root)) {
+    const found = (link as { status?: unknown }).status;
+    if (status === undefined && typeof found === 'number') status = found;
+    const { code, type } = link as { code?: unknown; type?: unknown };
+    if (code === 'insufficient_quota' || type === 'insufficient_quota') quota = true;
+    if (ContextOverflowError.isInstance(link)) overflow = true;
+    if (isTimeoutLink(link)) timedOut = true;
+    if ((link.constructor as { name?: string } | undefined)?.name === 'APIConnectionError') {
+      connection = true;
+    }
+  }
+
+  const code =
+    status === 401 || status === 403
+      ? 'AUTH'
+      : quota || status === 402
+        ? 'QUOTA'
+        : status === 429
+          ? 'RATE_LIMIT'
+          : overflow
+            ? 'CONTEXT_WINDOW_EXCEEDED'
+            : status === 400 || status === 413
+              ? 'INVALID_REQUEST'
+              : status !== undefined && status >= 500
+                ? 'SERVER'
+                : status !== undefined
+                  ? `HTTP_${String(status)}`
+                  : timedOut
+                    ? 'TIMEOUT'
+                    : connection
+                      ? 'TRANSPORT'
+                      : 'UNKNOWN';
   return { message, code, ...(status !== undefined && { status }) };
 }
 
