@@ -116,10 +116,14 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   ——Chat Completions 轉換器只送 content，前綴不在文字裡模型就分不出這是失敗（照 dsh 的 `throw new Error(text)`）。
 - **不處理 server 的 elicitation（向使用者追問）。** 2.0.0 對現代協定的 server 預設開啟，問到時走 LangGraph
   interrupt、等一次 resume；nexus 沒有這條 resume 路徑，所以每個連線一律 `elicitation: false`，這種呼叫
-  當作工具失敗。舊協定的 server 要問需要 `onElicitation`，我們不給，所以它不會宣告這個能力。現代協定的
-  elicitation **沒有被測**：測試用的假 server 走舊協定。
+  當作工具失敗。舊協定的 server 要問需要 `onElicitation`，我們不給，所以它不會宣告這個能力。這一條有人守
+  （#1095）：新協議（`2026-07-28`）的測試 server 起了 stdio 與 HTTP 兩台——`toAdapterConnection` 的兩個分支各有一行
+  `elicitation: false`——server 端量到 client 沒宣告 elicitation，問使用者的工具落成帶 `Error: ` 前綴的工具失敗；
+  把任一行改成 `true` 都有測試紅。
 - **工具的參數 schema 原樣送給模型。** 2.0.0 不再簡化 server 公告的 JSON Schema，`anyOf`、可為 null 與
-  `$schema` 都會帶到供應商。收不收由供應商決定；見 #1074 的實跑紀錄。
+  `$schema` 都會帶到供應商。收不收由供應商決定。實跑（#1074、#1095）：NVIDIA 端點上六個家族共七顆模型
+  （OpenAI、NVIDIA、Meta、智譜、Poolside、DeepSeek）都收，沒有被拒收的；**沒有驗到 NVIDIA 以外的端點**，
+  換端點要重量。結果表在 #1095 的 PR 內文。
 - **子行程的 stderr 直接接到父行程。** 這是 MCP 的慣例（server 的診斷要看得到），代價是
   一台吵的 server 會把 CLI 的輸出洗掉。
 - **正規化過的名字只在 nexus 內部一致。** 指紋是我們自己算的（`sha256("<serverName> <rawName>")` 取前 12 位），dsh 的 preimage 沒有公開，Claude Code 與 Codex 也各有各的算法。所以同一支

@@ -18,6 +18,7 @@
  */
 
 import { fileURLToPath } from 'node:url';
+import { MemorySaver } from '@langchain/langgraph';
 import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -26,6 +27,11 @@ import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./mcp-fixture-server.ts', import.meta.url));
+
+/** 只講新協議（`2026-07-28`）的 stdio 假 server，住在 plugin 套件裡（#1095）。 */
+const MODERN_SERVER = fileURLToPath(
+  new URL('../../../packages/nexus-plugin-mcp/src/modern-stdio-server.ts', import.meta.url),
+);
 
 /** 這台假 server 的工具在模型面的名字。 */
 const FETCH_TOOL = 'mcp__docs__fetch_changelog';
@@ -112,4 +118,53 @@ describe('MCP 工具在 agent 迴圈裡', () => {
       await dispose();
     }
   });
+
+  // #1095：新協議的 server 要問使用者時，nexus 沒有續行路徑，所以每條連線寫了 `elicitation: false`。這條走真的組裝與
+  // 真的 agent 迴圈：那一次呼叫落成**普通的工具失敗**——`status: 'error'`、`Error: ` 前綴——模型看得到、這一輪照常收尾，
+  // 不停在一個沒人接的 interrupt 上。把設定改成 `true`，這裡拿到的就不是工具失敗，而是一個 interrupt。
+  // 兩種組裝都要：沒有存檔點時，打開 elicitation 會得到 MISSING_CHECKPOINTER 的失敗；有存檔點（serve 的組裝）時，
+  // 打開它會讓那一輪停在 interrupt 上等一次沒人會送的 resume——後者才是卡上要防的事，所以不能只測前者。
+  it.each([
+    { label: '沒有存檔點', checkpointer: false },
+    { label: '有存檔點', checkpointer: true },
+  ])(
+    '新協議 server 要問使用者（$label）：落成帶 Error: 前綴的工具失敗，這一輪照常收尾，不產生 interrupt',
+    async ({ checkpointer }) => {
+      const model = new ScriptedChatModel({
+        turns: [
+          { content: '', toolCalls: [{ name: 'mcp__modern__ask', args: {} }] },
+          { content: '它問不了人。' },
+        ],
+      });
+      const { agent, dispose } = await createNexusAgent({
+        model,
+        ...(checkpointer && { checkpointer: new MemorySaver() }),
+        plugins: [
+          createMcpPlugin({
+            serverName: 'modern',
+            connection: {
+              transport: 'stdio',
+              command: process.execPath,
+              args: ['--import', 'tsx', MODERN_SERVER],
+            },
+          }),
+        ],
+      });
+      try {
+        const result = await agent.invoke(
+          toAgentInvocation('呼叫會問使用者的工具。'),
+          checkpointer ? { configurable: { thread_id: 'modern-ask' } } : undefined,
+        );
+        const asked = result.messages.find((message) => message.getType() === 'tool');
+        expect(asked).toMatchObject({ name: 'mcp__modern__ask', status: 'error' });
+        expect(asked?.text).toMatch(/^Error: 工具 mcp__modern__ask 執行失敗：/u);
+        expect(asked?.text).toMatch(/elicitation\/create/u);
+        // 這一輪走完了：模型收到失敗之後還說了話，沒有停在 interrupt。
+        expect(result.messages.at(-1)?.text).toBe('它問不了人。');
+        expect(result).not.toHaveProperty('__interrupt__');
+      } finally {
+        await dispose();
+      }
+    },
+  );
 });
