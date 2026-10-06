@@ -71,6 +71,7 @@ import type {
 } from '@nexus/core';
 
 import { BACKGROUND_RUN_PREFIX, agentMessageText } from './background-run-id.js';
+import { classifyTurnFailure } from './live-model.js';
 import { RUN_DURABILITY } from './pruned-memory-saver.js';
 import { markProjectionsHandled } from './thread-pump.js';
 import type { RunProjections } from './thread-pump.js';
@@ -912,7 +913,7 @@ export class BackgroundSubagentHost {
       if (log === undefined) this.#warnFailure(job, message);
       else {
         try {
-          log.append('turn/failed', { message });
+          log.append('turn/failed', { message, error: classifyTurnFailure(error) });
         } catch (appendError) {
           this.#warnFailure(job, `${message}（連 turn/failed 都寫不進去：${String(appendError)}）`);
         }

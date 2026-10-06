@@ -381,6 +381,10 @@ import type { SessionEvent } from './session-log.js';
  *   它們不進模型、不左右任何折疊，一台 32 的舊 runtime 讀回這份日誌時略過它們，畫面與新 runtime 只差側欄那一格。**沒有這兩顆
  *   就是沒記**（這一版以前寫的），讀的人標「—」，不是「沒有人被問過」。同批：核准拒絕的 `tool/result.error` 多了
  *   `APPROVAL_REJECTED_BY_USER` 等碼（`tool-events.ts`），`error` 本來就是選填，舊讀方照收。
+ * - **`turn/failed.error`**（[#434](https://github.com/DemianLi/nexus-agent/issues/434)）：`turn/failed` 多一個選填的 `error`
+ *   （`{ message, code, status? }`，失敗的分類）。**不升**：判準同上——一台 32 的舊 runtime 讀回這份日誌，`turn/failed` 的每個讀者
+ *   （goal 續行、歷史、統計、遙測…）只認「有這顆事件」或讀 `message`，多一個不認得的欄位照舊投影。**沒有這一格就是沒記**
+ *   （這一版以前寫的），讀的人標「—」，不是 `UNKNOWN`；`UNKNOWN` 是「記了、而且不是供應商的錯」。
  */
 export const SESSION_LOG_FORMAT_VERSION = 32;
 
