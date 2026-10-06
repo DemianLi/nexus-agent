@@ -15,7 +15,8 @@ import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { MemorySaver } from '@langchain/langgraph';
 import { SessionLog } from '@nexus/core';
-import type { SessionEventMap } from '@nexus/core';
+import type { SessionEvent, SessionEventMap } from '@nexus/core';
+import { applyTrajectory, initialTrajectory, viewTrajectory } from '@nexus/plugin-trajectory';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { runTurn } from './cli.js';
@@ -70,6 +71,15 @@ afterEach(async () => {
 async function failedTurn(
   model: Parameters<typeof createNexusAgent>[0]['model'],
 ): Promise<SessionEventMap['turn/failed']> {
+  const failed = (await failedLog(model)).filter((event) => event.type === 'turn/failed');
+  expect(failed).toHaveLength(1);
+  return failed[0]!.data as SessionEventMap['turn/failed'];
+}
+
+/** 跑一輪、讓它失敗，回 pump 的整份日誌事件。 */
+async function failedLog(
+  model: Parameters<typeof createNexusAgent>[0]['model'],
+): Promise<readonly SessionEvent[]> {
   const built = await createNexusAgent({ model, checkpointer: new MemorySaver(), plugins: [] });
   const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'turn-failed-code');
   const detach = built.attachSession(pump.sessions);
@@ -78,9 +88,7 @@ async function failedTurn(
       () => undefined,
       () => undefined,
     );
-    const failed = pump.sessions.root.events.filter((event) => event.type === 'turn/failed');
-    expect(failed).toHaveLength(1);
-    return failed[0]!.data as SessionEventMap['turn/failed'];
+    return [...pump.sessions.root.events];
   } finally {
     detach();
     await built.dispose();
@@ -189,6 +197,28 @@ describe('turn/failed 帶分類碼（假端點＋真的 pump）', () => {
       new ScriptedChatModel({ turns: [{ content: '', error: '腳本裡的錯' }] }),
     );
     expect(data.error).toEqual({ message: data.message, code: 'UNKNOWN' });
+  });
+});
+
+describe('軌跡投影讀得到這個碼（#1115 之後補上）', () => {
+  it('真的失敗的那一輪：投影的 failureCode 就是日誌上 turn/failed 的 error.code', async () => {
+    reply = {
+      status: 429,
+      body: error('You exceeded your current quota', {
+        type: 'insufficient_quota',
+        code: 'insufficient_quota',
+      }),
+    };
+    const events = await failedLog(live());
+    let state = initialTrajectory();
+    for (const event of events) state = applyTrajectory(state, event);
+    const view = viewTrajectory(state);
+    expect(view.turns).toHaveLength(1);
+    expect(view.turns[0]).toMatchObject({ end: 'failed', failureCode: 'QUOTA' });
+    // 同一份日誌上的碼，不是投影自己猜的。
+    const logged = events.find((event) => event.type === 'turn/failed')
+      ?.data as SessionEventMap['turn/failed'];
+    expect(view.turns[0]?.failureCode).toBe(logged.error?.code);
   });
 });
 
