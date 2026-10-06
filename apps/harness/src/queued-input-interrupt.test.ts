@@ -20,7 +20,6 @@
  */
 
 import { tool } from '@langchain/core/tools';
-import { MemorySaver } from '@langchain/langgraph';
 import { TOOL_ABORTED_BEFORE_DISPATCH_TEXT } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionLog } from '@nexus/core';
 import type { Event } from '@nexus/wire';
@@ -28,6 +27,7 @@ import { createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { createNexusAgent } from './agent-factory.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -136,7 +136,7 @@ async function assemble(turns: readonly ScriptedTurn[] = SCRIPT) {
   const model = new ScriptedChatModel({ turns });
   const built = await createNexusAgent({
     model,
-    checkpointer: new MemorySaver(),
+    checkpointer: new PrunedMemorySaver(),
     plugins: [toolsPlugin(probe)],
   });
   const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'queued-root');
@@ -493,7 +493,7 @@ describe('wire：跑著時收下的一句，等 input.respond 那一輪收掉才
     const model = new ScriptedChatModel({ turns: SCRIPT });
     const built = await createNexusAgent({
       model,
-      checkpointer: new MemorySaver(),
+      checkpointer: new PrunedMemorySaver(),
       plugins: [toolsPlugin(probe)],
     });
     let log: SessionLog | undefined;

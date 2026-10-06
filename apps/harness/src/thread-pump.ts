@@ -143,6 +143,7 @@ import {
 } from './conversation-history.js';
 import type { ProjectionChildren } from './projection-children.js';
 import { ProjectionCoalescer } from './projection-coalescer.js';
+import { RUN_DURABILITY } from './pruned-memory-saver.js';
 import { projectionData } from './projection-wire.js';
 import { driveGoalRound } from './goal-driver.js';
 import {
@@ -262,6 +263,7 @@ export interface PumpAgent {
     input: never,
     config: {
       readonly version: 'v3';
+      readonly durability?: typeof RUN_DURABILITY;
       readonly configurable: {
         readonly thread_id: string;
         /** 這一輪的中止訊號。**不交給 LangGraph 的 `signal`**，理由見 `@nexus/core` 的 `turn-cancel.ts`。 */
@@ -2288,6 +2290,7 @@ export class ThreadPump {
       // 日誌上看起來像跑到一半消失，跟真的跑到一半消失分不出來。
       const run = await this.#agent.streamEvents(payload as never, {
         version: 'v3',
+        durability: RUN_DURABILITY,
         configurable: {
           thread_id: this.#threadId,
           // **放在 `configurable`，不是 LangGraph 的 `signal`**：交給 LangGraph 會丟下正在跑的

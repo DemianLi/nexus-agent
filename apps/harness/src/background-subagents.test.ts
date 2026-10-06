@@ -16,7 +16,6 @@ import { join } from 'node:path';
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
-import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
 import {
   BACKGROUND_SESSION_CONFIG_KEY,
@@ -32,6 +31,7 @@ import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { createNexusAgent } from './agent-factory.js';
 import {
   BackgroundSubagentError,
@@ -1200,7 +1200,7 @@ describe('產品組裝上的背景子代理', () => {
     const model = makeModel(turns);
     const built = await createNexusAgent({
       model,
-      checkpointer: new MemorySaver(),
+      checkpointer: new PrunedMemorySaver(),
       plugins: [plugin],
       backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
     });
@@ -1210,7 +1210,7 @@ describe('產品組裝上的背景子代理', () => {
     wiring.host = new BackgroundSubagentHost({
       sessions: pump.sessions,
       compile: (name) =>
-        built.compileSubagent(name, new MemorySaver()) as unknown as BackgroundAgent,
+        built.compileSubagent(name, new PrunedMemorySaver()) as unknown as BackgroundAgent,
     });
     return {
       ...wiring,

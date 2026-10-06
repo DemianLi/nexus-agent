@@ -10,7 +10,6 @@
  * 3. **停止這一輪**：掛著的呼叫由 pump 收回，工具本體不會再跑，中止保留它自己那句。
  */
 
-import { MemorySaver } from '@langchain/langgraph';
 import { SessionRegistry, TOOL_ABORTED_BEFORE_DISPATCH_TEXT } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import {
@@ -34,6 +33,7 @@ import {
 } from '@nexus/wire';
 import { describe, expect, it, vi } from 'vitest';
 
+import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { createNexusAgent } from './agent-factory.js';
 import { historyFrames, historyPage } from './conversation-history.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
@@ -67,7 +67,7 @@ async function open(threadId: string): Promise<Session> {
         { content: '開始動手。' },
       ],
     }),
-    checkpointer: new MemorySaver(),
+    checkpointer: new PrunedMemorySaver(),
     plugins: [createPlanModePlugin({ startActive: true })],
   });
   // 日誌接在 pump 自己那一份註冊表上，同 `ask-user-wire.test.ts`：另建一份的話計劃模式折的是別人。

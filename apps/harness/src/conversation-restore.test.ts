@@ -18,7 +18,6 @@ import { fileURLToPath } from 'node:url';
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
-import { MemorySaver } from '@langchain/langgraph';
 import {
   fromLoggedMessage,
   SessionLog,
@@ -30,6 +29,7 @@ import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
+import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import { createNexusAgent } from './agent-factory.js';
 import { runCli } from './cli.js';
 import { seenRequests } from './conversation-restore.fixture.js';
@@ -276,7 +276,7 @@ describe('過大的工具結果', () => {
       model: new ScriptedChatModel({
         turns: [{ content: '拿', toolCalls: [{ name: 'big', args: {} }] }, { content: '好' }],
       }),
-      checkpointer: new MemorySaver(),
+      checkpointer: new PrunedMemorySaver(),
       plugins: [big],
     });
     const sessions = new SessionRegistry('big');

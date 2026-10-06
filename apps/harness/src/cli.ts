@@ -25,6 +25,7 @@ import { fileURLToPath } from 'node:url';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { CommandDescriptor, CommandRegistrationPoint, SessionEventMap } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
+import { RUN_DURABILITY } from './pruned-memory-saver.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-title.js';
@@ -516,6 +517,8 @@ export async function runTurn(
       toAgentInvocation(typeof input === 'string' ? text : humanMessageForTurnStart(turnStart)),
       {
         streamMode: ['updates', 'values'],
+        // 存檔點只在這一輪結束時存一份（#1106），理由見 `pruned-memory-saver.ts`。
+        durability: RUN_DURABILITY,
         configurable: { thread_id: THREAD_ID },
       },
     )) {
