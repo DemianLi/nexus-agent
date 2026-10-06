@@ -6,6 +6,7 @@ import {
   TURN_KIND_LABEL,
   clockText,
   durationText,
+  failureCodeText,
   tokenText,
 } from '@/lib/trajectory-view';
 
@@ -15,21 +16,36 @@ export const TRACE_WAITING_LABEL: Readonly<Record<NonNullable<TurnHead['waiting'
   question: '停在提問',
 };
 
+/**
+ * 一輪怎麼收的。停在中斷點寫它停在哪；失敗而且日誌帶了碼，寫「失敗（額度用盡）」，原碼放在 `title` 與 `data-failure-code`；
+ * 沒帶碼（舊日誌）就只寫「失敗」，不補「原因不明」。
+ */
+function EndFact({ head }: { head: TurnHead }) {
+  if (head.waiting !== undefined) {
+    return <span data-testid="trace-head-waiting">{TRACE_WAITING_LABEL[head.waiting]}</span>;
+  }
+  if (head.end === undefined) return <span>進行中</span>;
+  if (head.end === 'failed' && head.failureCode !== undefined) {
+    return (
+      <span
+        data-testid="trace-head-failure"
+        data-failure-code={head.failureCode}
+        title={head.failureCode}
+      >
+        {TURN_END_LABEL.failed}（{failureCodeText(head.failureCode)}）
+      </span>
+    );
+  }
+  return <span>{TURN_END_LABEL[head.end]}</span>;
+}
+
 /** 一輪的數字（呼叫、工具、重試、token）；摺掉的部分仍算在計數裡，所以另外講。 */
 export function HeadFacts({ head, noEnd = false }: { head: TurnHead; noEnd?: boolean }) {
   return (
     <>
       <span>{clockText(head.time)}</span>
       {!noEnd && <span>耗時 {durationText(head.durationMs)}</span>}
-      {!noEnd && (
-        <span data-testid={head.waiting === undefined ? undefined : 'trace-head-waiting'}>
-          {head.waiting !== undefined
-            ? TRACE_WAITING_LABEL[head.waiting]
-            : head.end === undefined
-              ? '進行中'
-              : TURN_END_LABEL[head.end]}
-        </span>
-      )}
+      {!noEnd && <EndFact head={head} />}
       <span>{head.callCount} 次呼叫</span>
       <span>
         {head.toolCount} 個工具
