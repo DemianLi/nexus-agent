@@ -414,6 +414,7 @@ export {
   SUMMARIZATION_MIDDLEWARE_NAME,
   SUMMARIZATION_PLUGIN_NAME,
   SUMMARIZATION_SERVICE,
+  SUMMARY_PROMPT,
   summarizationConfigSchema,
   summarizationPlugin,
 } from './summarization.js';
