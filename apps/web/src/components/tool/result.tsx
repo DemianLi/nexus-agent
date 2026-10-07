@@ -181,7 +181,7 @@ export function ToolDiff({ fragments }: { fragments: readonly DiffFragment[] }) 
   const rows = useMemo(() => diffRows(fragments), [fragments]);
   return (
     <div
-      className="bg-stage shadow-stage rounded-xl py-2 font-mono text-xs leading-5.5"
+      className="bg-stage shadow-stage rounded-xl py-2 font-mono text-tip leading-5.5"
       data-testid="tool-diff"
     >
       <Folded
@@ -263,7 +263,7 @@ export function ToolRead({ card }: { card: ReadCard }) {
   const lang = supportsHighlighting(card.lang) ? card.lang : undefined;
   return (
     <div
-      className="bg-stage shadow-stage rounded-xl py-2 font-mono text-xs leading-5.5"
+      className="bg-stage shadow-stage rounded-xl py-2 font-mono text-tip leading-5.5"
       data-testid="tool-read"
     >
       <CardHeader
@@ -342,7 +342,7 @@ export function ToolSearch({ card }: { card: SearchCard }) {
   const rows = useMemo(() => searchRows(card), [card]);
   return (
     <div
-      className="bg-stage shadow-stage rounded-xl py-2 font-mono text-xs leading-5.5"
+      className="bg-stage shadow-stage rounded-xl py-2 font-mono text-tip leading-5.5"
       data-testid="tool-search"
     >
       <CardHeader title={searchSummary(card)} />
@@ -362,11 +362,11 @@ export function ToolOutputBlock({ output }: { output: ToolOutput }) {
   const label = omittedLabel(output);
   return (
     <div className="bg-stage shadow-stage rounded-xl" data-testid="tool-output">
-      <div className="text-muted-foreground px-3 pt-2 text-xs">結果</div>
+      <div className="text-muted-foreground px-3 pt-2 text-tip">結果</div>
       <pre
         tabIndex={0}
         aria-label="工具結果"
-        className="max-h-[150px] overflow-auto px-3 pt-1 pb-2 font-mono text-xs whitespace-pre-wrap wrap-anywhere"
+        className="max-h-[150px] overflow-auto px-3 pt-1 pb-2 font-mono text-tip whitespace-pre-wrap wrap-anywhere"
       >
         {output.head}
         {label !== undefined && (
@@ -410,7 +410,7 @@ export function ToolInputBlock({
     <>
       <CodeBlock code={clipped.head} lang={undefined} streaming={false} />
       <p
-        className="text-muted-foreground px-3 py-1 text-xs italic"
+        className="text-muted-foreground px-3 py-1 text-tip italic"
         data-testid="tool-input-omitted"
       >
         {`⋯ 中間 ${clipped.dropped} 字沒畫 ⋯`}

@@ -59,7 +59,7 @@ export function TurnGroup({
     >
       {turn.head !== undefined && <TurnHeader head={turn.head} />}
       {turn.summaryOnly === true && (
-        <p className="text-muted-foreground px-2 text-xs" data-testid="trace-summary-only">
+        <p className="text-muted-foreground px-2 text-tip" data-testid="trace-summary-only">
           {TRACE_PULL_SUMMARY_ONLY_TEXT}
         </p>
       )}
@@ -70,7 +70,7 @@ export function TurnGroup({
           <PullControl status={pullStatus} onPull={() => onPull(turn.seq!)} />
         )}
       {structured && turn.legacy && (
-        <p className="text-muted-foreground px-2 pt-1 text-xs" data-testid="trace-legacy-group">
+        <p className="text-muted-foreground px-2 pt-1 text-tip" data-testid="trace-legacy-group">
           {TRACE_LEGACY_GROUP_TEXT}
         </p>
       )}
@@ -78,7 +78,7 @@ export function TurnGroup({
         <Button
           type="button"
           variant="ghost"
-          className="min-h-11 w-full text-xs lg:min-h-9"
+          className="min-h-11 w-full text-tip lg:min-h-9"
           data-testid="trace-more-rows"
           onClick={() => setShown((count) => count + ROW_PAGE)}
         >
@@ -156,7 +156,7 @@ export function Digests({
       </CollapsibleTrigger>
       <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
         {omitted > 0 && (
-          <p className="text-muted-foreground px-2 pb-1 text-xs" data-testid="trace-omitted">
+          <p className="text-muted-foreground px-2 pb-1 text-tip" data-testid="trace-omitted">
             再更早的 {omitted} 輪連摘要都沒留下。
           </p>
         )}
@@ -164,14 +164,14 @@ export function Digests({
           <Button
             type="button"
             variant="ghost"
-            className="mb-1 min-h-11 w-full text-xs lg:min-h-9"
+            className="mb-1 min-h-11 w-full text-tip lg:min-h-9"
             data-testid="trace-more-digests"
             onClick={() => setShown((count) => count + DIGEST_PAGE)}
           >
             {TRACE_MORE_DIGESTS_LABEL}（還有 {hidden} 輪）
           </Button>
         )}
-        <ol ref={list} className="flex flex-col gap-1 px-2 text-xs" aria-label="更早的輪的摘要">
+        <ol ref={list} className="flex flex-col gap-1 px-2 text-tip" aria-label="更早的輪的摘要">
           {visible.map((digest) => (
             <li
               key={digest.key}

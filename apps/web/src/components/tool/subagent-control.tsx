@@ -176,7 +176,7 @@ export function SubagentStateLabel({ runId }: { readonly runId: string }) {
     SUBAGENT_STATE_LABEL[useContext(SubagentControlContext)?.stateOf(runId) ?? 'unknown'];
   if (label === undefined) return null;
   return (
-    <span className="text-muted-foreground shrink-0 text-xs" data-subagent-state>
+    <span className="text-muted-foreground shrink-0 text-tip" data-subagent-state>
       {label}
     </span>
   );
@@ -283,11 +283,11 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
             <li
               key={index}
               data-subagent-echo
-              className="flex items-baseline gap-2 text-sm [overflow-wrap:anywhere] whitespace-pre-wrap"
+              className="flex items-baseline gap-2 text-body [overflow-wrap:anywhere] whitespace-pre-wrap"
             >
-              <span className="text-muted-foreground shrink-0 text-xs">你：</span>
+              <span className="text-muted-foreground shrink-0 text-tip">你：</span>
               <span className="min-w-0 flex-1">{echo}</span>
-              <span className="text-muted-foreground shrink-0 text-xs">已送出</span>
+              <span className="text-muted-foreground shrink-0 text-tip">已送出</span>
             </li>
           ))}
         </ul>
@@ -328,7 +328,7 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
         </Button>
       </form>
       {error !== undefined && (
-        <p role="alert" className="text-destructive text-xs" data-subagent-error>
+        <p role="alert" className="text-destructive text-tip" data-subagent-error>
           {error}
         </p>
       )}
@@ -403,8 +403,8 @@ function Conversation({
       data-subagent-conversation
     >
       <div className="flex min-h-8 items-center gap-2">
-        <span className="text-muted-foreground text-xs">子代理的對話</span>
-        {history.loading && <span className="text-muted-foreground text-xs">讀取中…</span>}
+        <span className="text-muted-foreground text-tip">子代理的對話</span>
+        {history.loading && <span className="text-muted-foreground text-tip">讀取中…</span>}
         <Button
           type="button"
           variant="ghost"
@@ -419,7 +419,7 @@ function Conversation({
       </div>
       {history.error !== undefined && (
         <p
-          className={closed ? 'text-muted-foreground text-xs' : 'text-destructive text-xs'}
+          className={closed ? 'text-muted-foreground text-tip' : 'text-destructive text-tip'}
           data-subagent-history-error
         >
           {closed ? '這個子代理的對話讀不到了。' : `子代理的對話讀不回來：${history.error}`}
@@ -430,7 +430,7 @@ function Conversation({
           {entries.map((entry, index) => (
             <div key={entry.id} className="flex flex-col gap-1">
               {fromStart && index === 0 && entry.kind === 'human' && (
-                <p className="text-muted-foreground text-right text-xs">{TASK_CAPTION}</p>
+                <p className="text-muted-foreground text-right text-tip">{TASK_CAPTION}</p>
               )}
               {renderEntry(entry)}
             </div>
@@ -438,7 +438,7 @@ function Conversation({
         </div>
       )}
       {history.conversation?.hasMore === true && (
-        <p className="text-muted-foreground text-xs">
+        <p className="text-muted-foreground text-tip">
           只顯示最近 {SUBAGENT_HISTORY_MAX_MESSAGES} 則，更早的沒有載入。
         </p>
       )}

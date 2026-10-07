@@ -213,7 +213,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
           data-queue-readonly=""
           data-leaving={leaving || undefined}
           aria-hidden={leaving || undefined}
-          className="animate-in fade-in-0 text-muted-foreground flex min-w-0 items-start gap-2 rounded-[20px] px-3 py-1 text-sm transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden"
+          className="animate-in fade-in-0 text-muted-foreground flex min-w-0 items-start gap-2 rounded-[20px] px-3 py-1 text-body transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden"
         >
           {/* 跟人排的那一列同一條線：只有一列時才有圖示，多列時文字左緣對齊。 */}
           {live.length === 1 && <ListEnd aria-hidden className="mt-2.5 size-4 shrink-0 lg:mt-2" />}
@@ -234,7 +234,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
         data-queue-item={item.id}
         data-leaving={leaving || undefined}
         aria-hidden={leaving || undefined}
-        className="animate-in fade-in-0 flex min-w-0 items-start gap-2 rounded-[20px] px-3 py-1 text-sm transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden"
+        className="animate-in fade-in-0 flex min-w-0 items-start gap-2 rounded-[20px] px-3 py-1 text-body transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden"
       >
         {isEditing ? (
           <>
@@ -332,7 +332,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
   };
 
   const hint = parked && (
-    <p className="text-muted-foreground px-3 pt-1 text-xs" data-testid="queue-parked">
+    <p className="text-muted-foreground px-3 pt-1 text-tip" data-testid="queue-parked">
       {QUEUE_PARKED_TEXT}
     </p>
   );
@@ -361,7 +361,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
         >
           <CollapsibleTrigger
             disabled={editing !== undefined || busy !== undefined}
-            className="group text-muted-foreground hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[20px] px-3 text-left text-xs transition-colors duration-(--duration-quick) disabled:cursor-default lg:min-h-9"
+            className="group text-muted-foreground hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[20px] px-3 text-left text-tip transition-colors duration-(--duration-quick) disabled:cursor-default lg:min-h-9"
           >
             <ListEnd aria-hidden className="size-4 shrink-0" />
             <span className="min-w-0 flex-1 truncate">{queueHeading(live.length)}</span>

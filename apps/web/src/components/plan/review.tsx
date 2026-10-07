@@ -97,7 +97,7 @@ function PlanSummary({ plan, id }: { plan: PlanDocument; id: string }) {
   return (
     <div className="flex flex-col gap-1 px-3 py-2">
       <div className="flex min-w-0 items-center gap-2">
-        <h3 className="min-w-0 flex-1 text-sm font-medium break-words" data-testid="plan-title">
+        <h3 className="min-w-0 flex-1 text-body font-medium break-words" data-testid="plan-title">
           {plan.title}
         </h3>
         {/* 沒有右側欄時不給這顆：按了沒反應比不給更糟（同交付卡）。 */}
@@ -116,7 +116,7 @@ function PlanSummary({ plan, id }: { plan: PlanDocument; id: string }) {
         )}
       </div>
       {plan.summary !== '' && (
-        <p className="text-muted-foreground line-clamp-2 text-sm" data-testid="plan-summary">
+        <p className="text-muted-foreground line-clamp-2 text-body" data-testid="plan-summary">
           {plan.summary}
         </p>
       )}
@@ -192,7 +192,7 @@ export function PlanCard({ entry, plan }: { entry: ToolEntry; plan: PlanDocument
       data-testid="plan-card"
       data-outcome={outcome}
     >
-      <div className="text-muted-foreground flex min-h-9 items-center gap-2 px-3 pt-1 text-xs">
+      <div className="text-muted-foreground flex min-h-9 items-center gap-2 px-3 pt-1 text-tip">
         <ScrollText aria-hidden className="size-4 shrink-0" />
         <span className="flex-1">計劃</span>
         {outcome !== undefined && (

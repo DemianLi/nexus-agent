@@ -52,10 +52,10 @@ function Actions({ pending }: { pending: PendingApproval }) {
     >
       {pending.actions.map((action, index) => (
         <div key={`${action.name}-${index}`} className="flex flex-col gap-1.5">
-          <p className="text-sm">
+          <p className="text-body">
             要執行 <code className="font-mono font-medium">{action.name}</code>
           </p>
-          <pre className="text-muted-foreground font-mono text-xs whitespace-pre-wrap">
+          <pre className="text-muted-foreground font-mono text-tip whitespace-pre-wrap">
             {/* 參數解不開的那顆，酬載帶的是模型吐的原字串（#281）：原樣顯示，不再包一層引號。 */}
             {typeof action.args === 'string' ? action.args : JSON.stringify(action.args, null, 2)}
           </pre>
@@ -80,9 +80,9 @@ export function ApprovalCard({
   if (pending.allowedDecisions.length === 0) {
     return (
       <div className="flex flex-col gap-2" data-testid="approval-card">
-        <p className="text-destructive px-3 text-sm">{NO_DECISION_REASON}</p>
+        <p className="text-destructive px-3 text-body">{NO_DECISION_REASON}</p>
         <Collapsible>
-          <CollapsibleTrigger className="group hover:bg-chip-hover active:bg-chip-pressed text-muted-foreground flex min-h-11 w-full items-center gap-2 rounded-[20px] px-3 text-left text-xs transition-colors duration-(--duration-quick) lg:min-h-9">
+          <CollapsibleTrigger className="group hover:bg-chip-hover active:bg-chip-pressed text-muted-foreground flex min-h-11 w-full items-center gap-2 rounded-[20px] px-3 text-left text-tip transition-colors duration-(--duration-quick) lg:min-h-9">
             <ChevronDown
               className="size-4 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
               aria-hidden

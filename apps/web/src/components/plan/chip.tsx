@@ -51,14 +51,14 @@ export function PlanChip({
         title={view.hint}
         disabled={view.disabled || busy}
         onClick={() => void exit()}
-        className="bg-card text-muted-foreground hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 items-center gap-1.5 rounded-full border px-3 text-xs transition-colors duration-(--duration-quick) disabled:cursor-default disabled:opacity-60 disabled:hover:bg-card lg:min-h-8"
+        className="bg-card text-muted-foreground hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 items-center gap-1.5 rounded-full border px-3 text-tip transition-colors duration-(--duration-quick) disabled:cursor-default disabled:opacity-60 disabled:hover:bg-card lg:min-h-8"
       >
         <ClipboardList aria-hidden className="size-4 shrink-0" />
         <span>{PLAN_CHIP_TEXT}</span>
         <X aria-hidden className="size-3.5 shrink-0" />
       </button>
       {failure !== undefined && (
-        <p id={failureId} className="text-destructive min-w-0 text-xs">
+        <p id={failureId} className="text-destructive min-w-0 text-tip">
           {failure}
         </p>
       )}

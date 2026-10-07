@@ -8,7 +8,7 @@ import type { CompactionEntry } from '@nexus/wire';
  */
 
 /**
- * 展開區的高度上限，單位 rem。文字是 `text-xs`（行高 1rem），所以這是約 20 行。摘要只有位元組上限，位元組上限擋不住
+ * 展開區的高度上限，單位 rem。文字是 `text-tip`（行高 1rem），所以這是約 20 行。摘要只有位元組上限，位元組上限擋不住
  * 畫面凍住（見 `card-limit.ts`），所以展開區自己捲。
  */
 export const COMPACTION_SUMMARY_MAX_REM = 20;

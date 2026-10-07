@@ -421,7 +421,7 @@ function EmptyState() {
   const { api } = useControl();
   return (
     <div className="flex flex-1 flex-col items-center justify-center gap-4 px-6 text-center">
-      <p className="text-muted-foreground text-sm">{RIGHT_SIDEBAR_EMPTY_TEXT}</p>
+      <p className="text-muted-foreground text-body">{RIGHT_SIDEBAR_EMPTY_TEXT}</p>
       <div className="flex gap-2">
         {PANEL_KINDS.map((kind) => {
           const { title, Icon } = PANELS[kind];
@@ -462,7 +462,7 @@ function TabBody({ tab, visible }: { tab: SidebarTab; visible: boolean }) {
   if (tab.kind === 'plan') {
     const plan = sources.plans?.get(tab.id);
     return plan === undefined ? (
-      <p className="text-muted-foreground flex flex-1 items-center justify-center px-6 text-center text-sm">
+      <p className="text-muted-foreground flex flex-1 items-center justify-center px-6 text-center text-body">
         {PLAN_TAB_MISSING_TEXT}
       </p>
     ) : (
@@ -638,7 +638,7 @@ function TabChip({
         aria-keyshortcuts="Delete"
         tabIndex={selected ? 0 : -1}
         title={detail}
-        className="focus-visible:ring-ring/50 flex h-full min-w-0 items-center gap-2 rounded-lg pr-1 pl-3 text-sm outline-none focus-visible:ring-[3px]"
+        className="focus-visible:ring-ring/50 flex h-full min-w-0 items-center gap-2 rounded-lg pr-1 pl-3 text-body outline-none focus-visible:ring-[3px]"
         onClick={onSelect}
         onKeyDown={onKeyDown}
       >

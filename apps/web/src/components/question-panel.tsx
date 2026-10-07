@@ -164,7 +164,7 @@ export function QuestionPanel({
                 // 認不出來的計劃審核（#652）也走到這裡：全文不能丟。
                 <div
                   data-slot="question-detail"
-                  className="text-body border-border rounded-lg border px-3 py-2 text-sm"
+                  className="text-body border-border rounded-lg border px-3 py-2"
                 >
                   <MarkdownText text={question.detail} />
                 </div>

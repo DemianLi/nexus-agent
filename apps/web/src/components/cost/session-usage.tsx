@@ -36,7 +36,7 @@ export function SessionUsage({
       <PopoverTrigger
         aria-label={view.ariaLabel}
         data-testid="session-usage"
-        className="hover:bg-chip-hover active:bg-chip-pressed text-muted-foreground flex h-11 shrink-0 items-center gap-1.5 rounded-full px-2 text-xs tabular-nums transition-colors duration-(--duration-quick) lg:h-9"
+        className="hover:bg-chip-hover active:bg-chip-pressed text-muted-foreground flex h-11 shrink-0 items-center gap-1.5 rounded-full px-2 text-tip tabular-nums transition-colors duration-(--duration-quick) lg:h-9"
       >
         <Coins aria-hidden className="size-4" />
         {view.label}
@@ -45,7 +45,7 @@ export function SessionUsage({
         side="bottom"
         align="end"
         aria-label="這條對話的用量明細"
-        className="w-72 space-y-3 text-sm"
+        className="w-72 space-y-3 text-body"
         onCloseAutoFocus={(event) => {
           if (!toCost.current) return;
           toCost.current = false;
@@ -55,7 +55,7 @@ export function SessionUsage({
         {usage !== undefined && (
           <section className="space-y-1.5" data-testid="session-usage-tokens">
             <div className="flex items-baseline justify-between">
-              <p className="text-muted-foreground text-xs">這條對話累計</p>
+              <p className="text-muted-foreground text-tip">這條對話累計</p>
               <p className="font-medium tabular-nums">{usage.total}</p>
             </div>
             <Rows
@@ -64,7 +64,7 @@ export function SessionUsage({
                 ['輸出', usage.output],
               ]}
             />
-            <p className="text-muted-foreground text-xs">
+            <p className="text-muted-foreground text-tip">
               每一次模型呼叫的帳加起來，所以比「目前大小」大很多。不含子代理與自動摘要那幾次。
             </p>
           </section>
@@ -72,7 +72,7 @@ export function SessionUsage({
         {usage !== undefined && time !== undefined && <hr className="border-border" />}
         {time !== undefined && (
           <section className="space-y-1.5" data-testid="session-usage-time">
-            <p className="text-muted-foreground text-xs">時間</p>
+            <p className="text-muted-foreground text-tip">時間</p>
             <Rows
               rows={[
                 ['輪／模型呼叫', time.counts],

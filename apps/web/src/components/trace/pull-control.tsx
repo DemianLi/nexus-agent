@@ -16,7 +16,7 @@ export function PullControl({ status, onPull }: { status: PullStatus; onPull: ()
   return (
     <div className="px-2 pt-1 pb-1" data-testid="trace-pull" data-status={status.kind}>
       {status.kind === 'failed' && (
-        <p className="text-destructive pb-1 text-xs" data-testid="trace-pull-failed">
+        <p className="text-destructive pb-1 text-tip" data-testid="trace-pull-failed">
           {TRACE_PULL_FAILED_TEXT}
           {status.message}
         </p>
@@ -25,7 +25,7 @@ export function PullControl({ status, onPull }: { status: PullStatus; onPull: ()
         type="button"
         variant="ghost"
         size="sm"
-        className="min-h-11 text-xs lg:min-h-8"
+        className="min-h-11 text-tip lg:min-h-8"
         disabled={status.kind === 'loading'}
         onClick={onPull}
       >

@@ -115,11 +115,11 @@ function QuestionList({
   answers: ReadonlyMap<string, QuestionAnswer> | undefined;
 }) {
   return (
-    <ol className="bg-stage shadow-stage flex flex-col gap-3 rounded-xl p-3 text-sm">
+    <ol className="bg-stage shadow-stage flex flex-col gap-3 rounded-xl p-3 text-body">
       {questions.map((question) => (
         <li key={question.id} className="flex flex-col gap-1" data-testid="question-row">
           {question.header !== undefined && (
-            <span className="text-muted-foreground text-xs">{question.header}</span>
+            <span className="text-muted-foreground text-tip">{question.header}</span>
           )}
           <span>{question.question}</span>
           {answers !== undefined ? (
@@ -133,7 +133,7 @@ function QuestionList({
           ) : (
             question.options !== undefined &&
             question.options.length > 0 && (
-              <ul className="text-muted-foreground flex list-disc flex-col gap-0.5 pl-5 text-xs">
+              <ul className="text-muted-foreground flex list-disc flex-col gap-0.5 pl-5 text-tip">
                 {question.options.map((option) => (
                   <li key={option.label}>
                     {option.label}
@@ -152,7 +152,7 @@ function QuestionList({
 /** 宣告交付的檔案照宣告的順序列出來：檔名一眼認，完整路徑分得出同名檔，說明是模型給人看的那句。 */
 function PresentedFileList({ files }: { files: readonly PresentedFile[] }) {
   return (
-    <ul className="bg-stage shadow-stage flex flex-col gap-3 rounded-xl p-3 text-sm">
+    <ul className="bg-stage shadow-stage flex flex-col gap-3 rounded-xl p-3 text-body">
       {files.map((file, index) => (
         <li
           key={`${index}:${file.path}`}
@@ -160,9 +160,9 @@ function PresentedFileList({ files }: { files: readonly PresentedFile[] }) {
           data-testid="presented-file"
         >
           <span className="font-medium break-all">{basename(file.path)}</span>
-          <code className="text-muted-foreground font-mono text-xs break-all">{file.path}</code>
+          <code className="text-muted-foreground font-mono text-tip break-all">{file.path}</code>
           {file.description !== undefined && (
-            <span className="text-muted-foreground text-xs">{file.description}</span>
+            <span className="text-muted-foreground text-tip">{file.description}</span>
           )}
         </li>
       ))}
@@ -264,11 +264,11 @@ export function ToolCard({
             : toolTitle(entry.name)}
         </span>
         {/* 手機寬度讓給摘要：標題已經講了是哪一類，工具名是給熟的人對照的；不讓的話改檔卡的路徑只剩「/…」（#625 實機）。 */}
-        <code className="text-muted-foreground hidden shrink-0 font-mono text-xs sm:inline">
+        <code className="text-muted-foreground hidden shrink-0 font-mono text-tip sm:inline">
           {entry.name}
         </code>
         {/* 外層吃掉剩下的寬度，裡面那格才截斷：「+N」要貼在摘要後面，不是被推到最右邊的狀態字旁邊。 */}
-        <span className="flex min-w-0 flex-1 gap-1.5 text-xs">
+        <span className="flex min-w-0 flex-1 gap-1.5 text-tip">
           <span
             className={`min-w-0 truncate ${failed ? 'text-destructive' : 'text-muted-foreground'}`}
           >
@@ -320,7 +320,7 @@ export function ToolCard({
             </div>
           )}
           {subagentModel !== undefined && (
-            <p data-subagent-model="" className="text-muted-foreground px-3 pt-1 text-xs">
+            <p data-subagent-model="" className="text-muted-foreground px-3 pt-1 text-tip">
               {subagentModel}
             </p>
           )}
@@ -328,7 +328,7 @@ export function ToolCard({
             <>
               <QuestionList questions={questions} answers={paired} />
               {answered && paired === undefined && (
-                <p className="text-muted-foreground px-3 pb-1 text-xs">
+                <p className="text-muted-foreground px-3 pb-1 text-tip">
                   {given === undefined
                     ? '這次的答案讀不出來：結果文字太長被截過，或不是預期的形狀。'
                     : '答案和題目對不起來，只列題目。'}
@@ -349,7 +349,7 @@ export function ToolCard({
             <>
               {inputShown &&
                 (body === undefined ? (
-                  <p className="text-muted-foreground px-3 py-2 text-xs">沒有參數。</p>
+                  <p className="text-muted-foreground px-3 py-2 text-tip">沒有參數。</p>
                 ) : (
                   <ToolInputBlock
                     text={body.text}
@@ -359,7 +359,7 @@ export function ToolCard({
                 ))}
               {output !== undefined && <ToolOutputBlock output={output} />}
               {!inputShown && output === undefined && entry.error === undefined && (
-                <p className="text-muted-foreground px-3 py-2 text-xs">
+                <p className="text-muted-foreground px-3 py-2 text-tip">
                   {entry.status === 'running' ? '還沒有結果。' : '沒有結果文字。'}
                 </p>
               )}
@@ -367,7 +367,7 @@ export function ToolCard({
           )}
           {truncated !== undefined ? (
             <>
-              <p className="bg-stage shadow-stage text-destructive rounded-xl p-3 text-xs">
+              <p className="bg-stage shadow-stage text-destructive rounded-xl p-3 text-tip">
                 {SUBAGENT_MAX_TOKENS_TEXT}
                 {truncated.partial.trim() !== '' && SUBAGENT_PARTIAL_TEXT}
               </p>
@@ -378,7 +378,7 @@ export function ToolCard({
           ) : (
             entry.error !== undefined &&
             !stopped && (
-              <pre className="bg-stage shadow-stage text-destructive rounded-xl p-3 font-mono text-xs whitespace-pre-wrap">
+              <pre className="bg-stage shadow-stage text-destructive rounded-xl p-3 font-mono text-tip whitespace-pre-wrap">
                 {entry.error}
               </pre>
             )

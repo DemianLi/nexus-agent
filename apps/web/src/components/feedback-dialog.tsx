@@ -83,7 +83,7 @@ export function FeedbackDialog({
         </div>
         <textarea
           ref={detailRef}
-          className="border-input bg-background min-h-24 rounded-md border px-3 py-2 text-sm"
+          className="border-input bg-background min-h-24 rounded-md border px-3 py-2 text-body"
           aria-label={FEEDBACK_COPY.detail}
           placeholder={FEEDBACK_COPY.hint}
           value={text}
@@ -91,7 +91,7 @@ export function FeedbackDialog({
           onChange={(event) => setText(event.target.value)}
         />
         {failure !== undefined && (
-          <p className="text-destructive text-sm" role="alert">
+          <p className="text-destructive text-body" role="alert">
             {failure}
           </p>
         )}

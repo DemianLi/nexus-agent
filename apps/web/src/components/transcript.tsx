@@ -140,7 +140,7 @@ function RatingButtons({
         <Button
           type="button"
           variant="ghost"
-          className="text-muted-foreground h-7 gap-1.5 px-2 text-xs"
+          className="text-muted-foreground h-7 gap-1.5 px-2 text-tip"
           data-testid="turn-trace"
           onClick={(event) => sidebar.revealReply(messageId, event.currentTarget)}
         >
@@ -149,7 +149,7 @@ function RatingButtons({
         </Button>
       )}
       {feedback.loadFailed && (
-        <span className="text-muted-foreground text-xs" role="status">
+        <span className="text-muted-foreground text-tip" role="status">
           {FEEDBACK_COPY.load}
         </span>
       )}
@@ -162,7 +162,7 @@ function Marker({ children, testId }: { children: string; testId: string }) {
   return (
     <div className="flex justify-center">
       <p
-        className="text-muted-foreground bg-chip rounded-full px-3 py-1 text-xs"
+        className="text-muted-foreground bg-chip rounded-full px-3 py-1 text-tip"
         data-testid={testId}
       >
         {children}
@@ -308,7 +308,7 @@ export function Entry({
         {entry.maxTokens === true && (
           <MessageFooter className="px-0">{MAX_TOKENS_NOTICE}</MessageFooter>
         )}
-        {entry.error !== undefined && <p className="text-destructive text-xs">{entry.error}</p>}
+        {entry.error !== undefined && <p className="text-destructive text-tip">{entry.error}</p>}
         {feedback !== undefined && isRatable(entry) && (
           <RatingButtons messageId={entry.messageId} feedback={feedback} />
         )}
@@ -402,7 +402,7 @@ function AgentMessageCard({ caption, text }: { caption: string; text: string }) 
   return (
     <Message align="start" data-agent-message="">
       <MessageContent>
-        <p className="text-muted-foreground px-1 pb-1 text-xs">{caption}</p>
+        <p className="text-muted-foreground px-1 pb-1 text-tip">{caption}</p>
         <div className="bg-chip text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">{text}</div>
       </MessageContent>
     </Message>

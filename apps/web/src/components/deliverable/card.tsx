@@ -107,10 +107,12 @@ export function DeliverablesCard({
             <FileText className="text-muted-foreground mt-0.5 size-5 shrink-0" aria-hidden />
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="truncate font-medium">{basename(file.path)}</span>
-              <span className="text-muted-foreground text-xs">
+              <span className="text-muted-foreground text-tip">
                 {file.description ?? fallbackDescription(file.path)}
               </span>
-              <span className="text-muted-foreground font-mono text-xs break-all">{file.path}</span>
+              <span className="text-muted-foreground font-mono text-tip break-all">
+                {file.path}
+              </span>
             </div>
             {preview !== undefined && (
               <Button

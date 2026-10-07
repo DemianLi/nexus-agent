@@ -15,7 +15,7 @@ export function PlanPreviewTab({ plan }: { plan: PlanDocument }) {
       // 可捲動的區塊要能用鍵盤捲：進 Tab 順序（同核准面板的內容區，§8）。
       tabIndex={0}
     >
-      <div className="text-body mx-auto max-w-3xl text-sm">
+      <div className="text-body mx-auto max-w-3xl">
         <MarkdownText text={plan.markdown} />
       </div>
     </section>
