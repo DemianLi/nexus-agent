@@ -4,7 +4,7 @@
  * 改過的地方（照原型 tag `proto-375-design-language`）：只淡入＋blur 3px、開 150（延遲 50）／關 150（§7），拿掉 zoom 與 slide。
  */
 import * as React from 'react';
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 import { Tooltip as TooltipPrimitive } from 'radix-ui';
 
 function TooltipProvider({

@@ -6,7 +6,7 @@
  * `InputGroupTextarea`，邊線與陰影都由外層的 `InputGroup` 畫。
  */
 import * as React from 'react';
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 
 function Textarea({ className, ...props }: React.ComponentProps<'textarea'>) {
   return (

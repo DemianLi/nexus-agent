@@ -3,7 +3,7 @@
  * shadcn CLI 4.21.0 `shadcn add sidebar sheet --overwrite`。裝進來就是我們的原始碼，不靠重跑 `shadcn add` 更新。
  * 沒有改動。
  */
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 
 function Skeleton({ className, ...props }: React.ComponentProps<'div'>) {
   return (
