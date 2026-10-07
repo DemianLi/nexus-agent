@@ -1,5 +1,6 @@
 import { Check, Circle, CircleDot } from 'lucide-react';
 
+import { Surface } from '@/components/surface';
 import { TODO_STATUS_LABEL } from '@/lib/todo-view';
 import type { TodoItem } from '@/lib/todo-view';
 
@@ -21,7 +22,7 @@ export function TodoList({
     return <p className="text-muted-foreground px-3 py-2 text-tip">清單是空的。</p>;
   }
   return (
-    <ul className="bg-stage shadow-stage flex flex-col gap-2 rounded-xl p-3 text-body">
+    <Surface as="ul" tone="stage" className="flex flex-col gap-2 p-3 text-body">
       {todos.map((todo, index) => (
         <li
           key={`${index}:${todo.content}`}
@@ -38,7 +39,7 @@ export function TodoList({
           </span>
         </li>
       ))}
-    </ul>
+    </Surface>
   );
 }
 
