@@ -4,7 +4,7 @@
  * 改過的地方：拿掉 `shadow-xs`（邊緣畫在陰影裡：輸入框留 border，不再疊陰影；原型沒改這一處，§11 第 1 條擋下）。
  */
 import * as React from 'react';
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 
 function Input({ className, type, ...props }: React.ComponentProps<'input'>) {
   return (

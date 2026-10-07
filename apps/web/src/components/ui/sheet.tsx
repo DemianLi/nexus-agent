@@ -5,7 +5,7 @@
  * 邊線與 `shadow-lg` 換成 `shadow-menu`（§5 邊緣畫在陰影裡——兩者在不同字串裡，§11 第 1 條看不到，要靠 review）。
  */
 import * as React from 'react';
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 import { XIcon } from 'lucide-react';
 import { Dialog as SheetPrimitive } from 'radix-ui';
 
