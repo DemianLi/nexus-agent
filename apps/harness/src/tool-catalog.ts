@@ -17,6 +17,10 @@
  * - **目錄讀的是 `bindTools` 收到的那一份**（`convertToOpenAITool` 轉出來的線上形狀），不是 plugin 註冊時的原物件：
  *   中間隔著圍堵與 middleware，模型看到的才是要審的東西。
  * - **基座的工具也列**（dsh 的 `dsh-tools` 也在它的目錄裡）：零 plugin 組裝綁到的那些，來源標成基座。
+ * - **兩條產品路徑都收**：CLI（`task` 委派，沒有背景續行）與 `serve`（出廠就是背景續行：`subagent`、`list_agents`、
+ *   `interrupt_agent`、`send_message`，沒有 `task`）。只收 CLI 那一條的話，web 實際看到的工具就不在目錄裡。出廠關著的
+ *   選配（子代理的模型授權清單，#877）另收一份：新增的 `list_subagent_models` 列在選配那一節，`subagent` 多出的欄位
+ *   以「選配版本」接在它自己底下。兩條路都有的同名工具，描述與 schema 必須逐字相同，不同就失敗。
  */
 
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
@@ -28,8 +32,10 @@ import type { PluginEntry } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
 import { shippedPlugins, withSystemPromptVariables } from './fixtures.js';
+import { DEFAULT_LIVE_MODEL_ID } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { DEFAULT_MAX_ACTIVE_SUBAGENTS } from './settings/background-subagents.js';
 
 /** 一個工具在目錄裡的一列。 */
 export interface CatalogTool {
@@ -37,6 +43,11 @@ export interface CatalogTool {
   readonly description: string;
   /** 送給供應商的 `parameters`（JSON Schema）。 */
   readonly parameters: unknown;
+  /**
+   * 某個設定打開之後模型看到的另一個版本（出廠關著）。同名，所以**不另開一個工具標題**（web 的覆蓋測試把目錄標題當工具名、
+   * 要求不重複），而是接在這個工具底下，渲染成 `####` 小節。
+   */
+  readonly optionalVariant?: Pick<CatalogTool, 'description' | 'parameters'>;
 }
 
 /** 一個來源底下的工具。 */
@@ -50,8 +61,15 @@ export interface CatalogSection {
 
 /** 基座（deepagents）自己的工具：零 plugin 組裝綁到的那些。 */
 export const BASE_SOURCE = '基座（deepagents）';
-/** 組裝點自己加的、不經 plugin 註冊點的工具（背景子代理那一組等）。 */
+/** 組裝點自己加的、不經 plugin 註冊點的工具（CLI 與 serve 都有的那些）。 */
 export const ASSEMBLY_SOURCE = '組裝點（harness）';
+/**
+ * 背景續行子代理那一組：**`serve` 出廠就是這一組**（`cordis.yml` 的 `background-subagents` 寫 `backgroundMode: continuable`），
+ * CLI 不給（REPL 與一次性模式沒有可被叫醒的一輪），所以 CLI 的目錄那一份（{@link BASE_SOURCE} 裡的 `task`）與這一節是兩條產品路徑。
+ */
+export const BACKGROUND_SOURCE = '組裝點（harness）· 背景續行子代理（serve 出廠）';
+/** 要設定打開才有的組裝點工具：今天只有授權清單存在時才註冊的 `list_subagent_models`。 */
+export const OPTIONAL_SOURCE = '組裝點（harness）· 選配（出廠關著）';
 
 /** 清單上一個套件的預期。 */
 export type PackageExpectation =
@@ -241,15 +259,38 @@ async function baseTools(): Promise<Map<string, CatalogTool>> {
   }
 }
 
+/** 照一組呼叫參數跑一次產品組裝（`createCliAgent`），回模型那一輪實際綁到的工具。 */
+async function assembledTools(
+  invocation: Parameters<typeof createCliAgent>[0],
+  shipped: readonly PluginEntry[],
+  tempRoot: string,
+): Promise<Map<string, CatalogTool>> {
+  const assembled = await createCliAgent(invocation, shipped, tempRoot);
+  try {
+    await assembled.agent.invoke(toAgentInvocation('看一下。'), {
+      configurable: { thread_id: 'tool-catalog-assembled' },
+    });
+    return boundCatalogTools((assembled.model as ScriptedChatModel).boundTools);
+  } finally {
+    await assembled.dispose();
+  }
+}
+
 /**
  * 出廠清單的產品組裝：模型實際綁到的工具，加上各工具是哪個 plugin 註冊的。
  *
  * 組裝**兩種**：沒給 `--workspace`，與給了（有它才掛 `request_sandbox_escalation` 那一類）。兩邊都有的工具名，描述與
  * schema 必須逐字相同——不同就是目錄寫不出「模型看到的」那一個，直接失敗。
  */
-async function shippedTools(
-  tempRoot: string,
-): Promise<{ bound: Map<string, CatalogTool>; origins: Map<string, string> }> {
+async function shippedTools(tempRoot: string): Promise<{
+  bound: Map<string, CatalogTool>;
+  origins: Map<string, string>;
+  background: Map<string, CatalogTool>;
+  /** 授權清單打開才有的新工具。 */
+  optional: Map<string, CatalogTool>;
+  /** 授權清單打開之後內容跟出廠不同的同名工具，值是打開之後的那一份。 */
+  optionalVariants: Map<string, CatalogTool>;
+}> {
   const shipped = await shippedPlugins();
   const bound = new Map<string, CatalogTool>();
   for (const workspace of [undefined, tempRoot]) {
@@ -277,6 +318,41 @@ async function shippedTools(
       await assembled.dispose();
     }
   }
+  // `serve` 那條：出廠就是背景續行（上限用設定的預設值），再加一份有授權清單的（`list_subagent_models` 只在那時才有）。
+  // 與上面 CLI 那兩份同名的工具，描述與 schema 一樣要逐字相同，不同就是目錄寫不出「模型看到的」那一個。
+  const serveBound = await assembledTools(
+    { live: false, backgroundSubagents: { maxActive: DEFAULT_MAX_ACTIVE_SUBAGENTS } },
+    shipped,
+    tempRoot,
+  );
+  const optionalBound = await assembledTools(
+    {
+      live: false,
+      backgroundSubagents: { maxActive: DEFAULT_MAX_ACTIVE_SUBAGENTS },
+      modelSelectionPolicy: { allowedModels: [DEFAULT_LIVE_MODEL_ID] },
+    },
+    shipped,
+    tempRoot,
+  );
+  const background = new Map<string, CatalogTool>();
+  for (const [name, tool] of serveBound) {
+    const seen = bound.get(name);
+    if (seen === undefined) background.set(name, tool);
+    else if (JSON.stringify(seen) !== JSON.stringify(tool)) {
+      throw new Error(
+        `工具 ${name} 在 CLI 與 serve（背景續行）兩種組裝下描述或 schema 不同，目錄只能列一個`,
+      );
+    }
+  }
+  // 授權清單打開時：新增的工具（`list_subagent_models`）列在選配那一節；同名但不一樣的（`subagent` 多出選模型的兩格、
+  // 描述多一段）是打開之後模型看到的那個版本，掛在原工具底下（見 {@link CatalogTool.optionalVariant}）。
+  const optional = new Map<string, CatalogTool>();
+  const optionalVariants = new Map<string, CatalogTool>();
+  for (const [name, tool] of optionalBound) {
+    const seen = serveBound.get(name) ?? bound.get(name);
+    if (seen === undefined) optional.set(name, tool);
+    else if (JSON.stringify(seen) !== JSON.stringify(tool)) optionalVariants.set(name, tool);
+  }
   // 歸屬另載一次：產品組裝不交出註冊表。載入同一份清單、同一組補的服務，`origin` 就是註冊那一列的 plugin。
   const { registry, dispose } = await loadPlugins(withSystemPromptVariables(shipped));
   try {
@@ -285,7 +361,7 @@ async function shippedTools(
       const origin = registry.tools.resolve(name)?.origin.name;
       if (origin !== undefined) origins.set(name, origin);
     }
-    return { bound, origins };
+    return { bound, origins, background, optional, optionalVariants };
   } finally {
     await dispose();
   }
@@ -331,7 +407,7 @@ export async function collectToolCatalog(repoRoot: string): Promise<readonly Cat
   } finally {
     rmSync(tempRoot, { recursive: true, force: true });
   }
-  const { bound, origins } = shipped;
+  const { bound, origins, background, optional, optionalVariants } = shipped;
 
   const byPlugin = new Map<string, CatalogTool[]>();
   const contributed = new Map<string, string[]>();
@@ -382,6 +458,22 @@ export async function collectToolCatalog(repoRoot: string): Promise<readonly Cat
       tools: assembly.sort(byName),
     });
   }
+  if (background.size > 0) {
+    sections.push({
+      source: BACKGROUND_SOURCE,
+      note:
+        '`serve` 出廠就是背景續行（`cordis.yml` 的 `background-subagents` 是 `continuable`）：模型看到的委派工具是 `subagent`，' +
+        '沒有基座的 `task`；CLI 不給這一組，委派用 `task`（列在基座那一節）。',
+      tools: [...background.values()].sort(byName),
+    });
+  }
+  if (optional.size > 0) {
+    sections.push({
+      source: OPTIONAL_SOURCE,
+      note: '出廠關著，設定打開才有（`subagent-model-selection` 的授權清單，#877）：新增這一個工具；同時 `subagent` 會多出選模型的兩格，那個版本接在 `subagent` 底下。',
+      tools: [...optional.values()].sort(byName),
+    });
+  }
   for (const pluginName of [...byPlugin.keys()].sort()) {
     const dir = facts.find((pkg) => pkg.pluginName === pluginName)?.dir;
     sections.push({
@@ -390,7 +482,18 @@ export async function collectToolCatalog(repoRoot: string): Promise<readonly Cat
       tools: [...(byPlugin.get(pluginName) ?? [])].sort(byName),
     });
   }
-  return sections;
+  return sections.map((section) => ({
+    ...section,
+    tools: section.tools.map((tool) => {
+      const variant = optionalVariants.get(tool.name);
+      return variant === undefined
+        ? tool
+        : {
+            ...tool,
+            optionalVariant: { description: variant.description, parameters: variant.parameters },
+          };
+    }),
+  }));
 }
 
 /** 目錄檔頭，也是「怎麼重新產生」的唯一出處。 */
@@ -403,6 +506,7 @@ export const CATALOG_REGEN_COMMAND = 'pnpm --filter @nexus/harness run gen-tool-
  * @returns 整份目錄的文字，結尾一個換行。
  */
 export function renderToolCatalog(sections: readonly CatalogSection[]): string {
+  // 每個工具標題算一個：選配那一節裡同名的另一個版本也各算一個。web 的解析器拿這個數字對標題數（`apps/web/src/test/tool-catalog.ts`）。
   const total = sections.reduce((sum, section) => sum + section.tools.length, 0);
   const lines: string[] = [
     '# 工具 schema 目錄',
@@ -436,6 +540,24 @@ export function renderToolCatalog(sections: readonly CatalogSection[]): string {
         '```',
         '',
       );
+      if (tool.optionalVariant !== undefined) {
+        lines.push(
+          '#### 選配打開之後的版本（出廠關著）',
+          '',
+          '描述：',
+          '',
+          '```text',
+          tool.optionalVariant.description,
+          '```',
+          '',
+          '參數：',
+          '',
+          '```json',
+          JSON.stringify(tool.optionalVariant.parameters, null, 2),
+          '```',
+          '',
+        );
+      }
     }
   }
   return `${lines.join('\n').trimEnd()}\n`;

@@ -12,9 +12,11 @@ import { repositoryRoot } from './package-invariants.js';
 import {
   ASSEMBLY_SOURCE,
   assertManifestComplete,
+  BACKGROUND_SOURCE,
   BASE_SOURCE,
   CATALOG_REGEN_COMMAND,
   collectToolCatalog,
+  OPTIONAL_SOURCE,
   PACKAGE_MANIFEST,
   pluginPackageDirs,
   renderToolCatalog,
@@ -45,15 +47,68 @@ describe('docs/tool-catalog.md', () => {
     '每個工具都有描述與物件形狀的參數 schema，名字在整份目錄裡不重複',
     async () => {
       const sections = await collectToolCatalog(root);
-      const names = sections.flatMap((section) => section.tools.map((tool) => tool.name));
+      const tools = sections.flatMap((section) => section.tools);
+      const names = tools.map((tool) => tool.name);
+      // web 的覆蓋測試把目錄的工具標題當工具名並要求不重複；同名的選配版本因此接在原工具底下，不另開標題。
       expect(new Set(names).size).toBe(names.length);
-      for (const tool of sections.flatMap((section) => section.tools)) {
+      for (const tool of tools) {
         expect(tool.description, `${tool.name} 的描述`).not.toBe('');
         expect(tool.parameters, `${tool.name} 的參數`).toMatchObject({ type: 'object' });
+        if (tool.optionalVariant !== undefined) {
+          expect(tool.optionalVariant.parameters, `${tool.name} 選配版本的參數`).toMatchObject({
+            type: 'object',
+          });
+          // 一模一樣的複本只是讓目錄變長。
+          expect(tool.optionalVariant, `${tool.name} 的選配版本`).not.toEqual({
+            description: tool.description,
+            parameters: tool.parameters,
+          });
+        }
       }
-      // 前提：基座與組裝點與 plugin 三種來源都真的在裡面，空目錄也「沒有重複」。
+      // 前提：基座、組裝點、背景續行、選配與 plugin 五種來源都真的在裡面，空目錄也「沒有重複」。
       const sources = sections.map((section) => section.source);
-      expect(sources).toEqual(expect.arrayContaining([BASE_SOURCE, ASSEMBLY_SOURCE, 'goal']));
+      expect(sources).toEqual(
+        expect.arrayContaining([
+          BASE_SOURCE,
+          ASSEMBLY_SOURCE,
+          BACKGROUND_SOURCE,
+          OPTIONAL_SOURCE,
+          'goal',
+        ]),
+      );
+    },
+    TIMEOUT,
+  );
+
+  /**
+   * **目錄涵蓋兩條產品路徑。** CLI 委派用基座的 `task`；`serve` 出廠就是背景續行，模型看到的是 `subagent` 與三顆控制工具、
+   * 沒有 `task`；`list_subagent_models` 要授權清單打開才有。只列 CLI 那一份，web 看到的工具就不在目錄裡（#1131 之後
+   * web 的覆蓋測試讀這份目錄，缺了它新增或改名不會有任何一邊紅）。
+   */
+  it(
+    'serve 的背景續行子代理與選配的模型清單各在自己那一節，task 只在基座，subagent 的選配版本接在它底下',
+    async () => {
+      const sections = await collectToolCatalog(root);
+      const namesOf = (source: string) =>
+        (sections.find((section) => section.source === source)?.tools ?? []).map(
+          (tool) => tool.name,
+        );
+      expect(namesOf(BACKGROUND_SOURCE).sort()).toEqual(
+        ['interrupt_agent', 'list_agents', 'send_message', 'subagent'].sort(),
+      );
+      expect(namesOf(OPTIONAL_SOURCE)).toEqual(['list_subagent_models']);
+      // `subagent` 在授權清單打開時多出選模型的兩格：那個版本接在它底下，出廠版本沒有那兩格。
+      const subagent = sections
+        .find((section) => section.source === BACKGROUND_SOURCE)
+        ?.tools.find((tool) => tool.name === 'subagent');
+      const properties = (parameters: unknown) =>
+        Object.keys((parameters as { properties: Record<string, unknown> }).properties);
+      expect(properties(subagent?.parameters)).not.toContain('model');
+      expect(properties(subagent?.optionalVariant?.parameters)).toEqual(
+        expect.arrayContaining(['model', 'reasoning_effort']),
+      );
+      expect(namesOf(BASE_SOURCE)).toContain('task');
+      expect(namesOf(BACKGROUND_SOURCE)).not.toContain('task');
     },
     TIMEOUT,
   );
