@@ -91,4 +91,4 @@ npx tsx src/measure/plugin-coexist-cli.ts matrix --updates 50
 npx tsx src/measure/plugin-coexist-cli.ts memory --mode dir --ext ts --ballast-kb 300 --control --updates 50
 ```
 
-夾具放在 `/private/var/tmp/nexus-coexist-*`，跑完自己刪。
+夾具放在 `/var/tmp` 的 realpath 底下的 `nexus-coexist-*`（macOS 上是 `/private/var/tmp`），跑完自己刪。

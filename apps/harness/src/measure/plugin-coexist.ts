@@ -11,8 +11,8 @@
  * - `dir`：`<root>/dir/<version>/index.ts`，每個版本一份完整目錄，用絕對路徑的 file URL `import()`。
  * - `query`：同一個檔，網址後面加 `?v=<n>`。只有那個檔本身重新求值，**它靜態相依的檔仍然共用**。
  *
- * 夾具放在 `/private/var/tmp`（不是 `os.tmpdir()`）：`assertPrivateModule` 要求祖先鏈只有自己寫得動，
- * macOS 的 `$TMPDIR` 底下那條不一定過；`/var/tmp` 是 symlink，要用 `/private/var/tmp` 才不會被 realpath 比對絆倒。
+ * 夾具放在 `/var/tmp` 的 realpath（不是 `os.tmpdir()`）：`assertPrivateModule` 要求祖先鏈只有自己寫得動，
+ * macOS 的 `$TMPDIR` 底下那條不一定過；macOS 的 `/var/tmp` 是 symlink，要用它的 realpath（`/private/var/tmp`）才不會被比對絆倒。
  *
  * @module
  */
@@ -50,7 +50,8 @@ export interface Fixture {
   readonly cleanup: () => Promise<void>;
 }
 
-const FIXTURE_PARENT = '/private/var/tmp';
+/** `/var/tmp` 的 realpath：macOS 上是 `/private/var/tmp`（symlink），Linux 上就是它自己。 */
+const FIXTURE_PARENT = await realpath('/var/tmp');
 
 /** 壓艙檔：許多不同的小函式加一張字串表，V8 要為每個函式留字節碼與共享資訊。 */
 function ballastSource(kb: number, seed: string): string {
@@ -99,7 +100,7 @@ export default {
 };
 `;
 
-/** 在 `/private/var/tmp` 底下生一份夾具。 */
+/** 在 `/var/tmp` 底下生一份夾具。 */
 export async function makeFixture(options: FixtureOptions): Promise<Fixture> {
   const root = await mkdtemp(join(FIXTURE_PARENT, 'nexus-coexist-'));
   const zodDir = options.privateZod
