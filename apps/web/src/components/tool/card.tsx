@@ -32,6 +32,7 @@ import type { AnswerEntry, Attribution, QuestionItem, ToolEntry } from '@nexus/w
 import { Check, ChevronDown, Hand, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
+import { Surface } from '@/components/surface';
 import { AgentOrb } from '@/components/agent-orb';
 import { Counts } from '@/components/changes/counts';
 import { SubagentPanel, SubagentStateLabel } from '@/components/tool/subagent-control';
@@ -44,7 +45,8 @@ import {
   ToolSearch,
 } from '@/components/tool/result';
 import { Badge } from '@/components/ui/badge';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { RowTrigger } from '@/components/row-trigger';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import {
   answersOfText,
   answerText,
@@ -115,11 +117,11 @@ function QuestionList({
   answers: ReadonlyMap<string, QuestionAnswer> | undefined;
 }) {
   return (
-    <ol className="bg-stage shadow-stage flex flex-col gap-3 rounded-xl p-3 text-sm">
+    <Surface as="ol" tone="stage" className="flex flex-col gap-3 p-3 text-body">
       {questions.map((question) => (
         <li key={question.id} className="flex flex-col gap-1" data-testid="question-row">
           {question.header !== undefined && (
-            <span className="text-muted-foreground text-xs">{question.header}</span>
+            <span className="text-muted-foreground text-tip">{question.header}</span>
           )}
           <span>{question.question}</span>
           {answers !== undefined ? (
@@ -133,7 +135,7 @@ function QuestionList({
           ) : (
             question.options !== undefined &&
             question.options.length > 0 && (
-              <ul className="text-muted-foreground flex list-disc flex-col gap-0.5 pl-5 text-xs">
+              <ul className="text-muted-foreground flex list-disc flex-col gap-0.5 pl-5 text-tip">
                 {question.options.map((option) => (
                   <li key={option.label}>
                     {option.label}
@@ -145,14 +147,14 @@ function QuestionList({
           )}
         </li>
       ))}
-    </ol>
+    </Surface>
   );
 }
 
 /** 宣告交付的檔案照宣告的順序列出來：檔名一眼認，完整路徑分得出同名檔，說明是模型給人看的那句。 */
 function PresentedFileList({ files }: { files: readonly PresentedFile[] }) {
   return (
-    <ul className="bg-stage shadow-stage flex flex-col gap-3 rounded-xl p-3 text-sm">
+    <Surface as="ul" tone="stage" className="flex flex-col gap-3 p-3 text-body">
       {files.map((file, index) => (
         <li
           key={`${index}:${file.path}`}
@@ -160,13 +162,13 @@ function PresentedFileList({ files }: { files: readonly PresentedFile[] }) {
           data-testid="presented-file"
         >
           <span className="font-medium break-all">{basename(file.path)}</span>
-          <code className="text-muted-foreground font-mono text-xs break-all">{file.path}</code>
+          <code className="text-muted-foreground font-mono text-tip break-all">{file.path}</code>
           {file.description !== undefined && (
-            <span className="text-muted-foreground text-xs">{file.description}</span>
+            <span className="text-muted-foreground text-tip">{file.description}</span>
           )}
         </li>
       ))}
-    </ul>
+    </Surface>
   );
 }
 
@@ -240,152 +242,157 @@ export function ToolCard({
   const truncated = subagentMaxTokensOf(entry);
   const inputShown = showsInput(entry.name);
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      className="bg-card shadow-material border-beam rounded-3xl p-1"
-      data-testid="tool-entry"
-      data-status={entry.status}
-      data-variant={variant}
-      data-kind="run"
-      data-active={beam}
-    >
-      <CollapsibleTrigger className="group hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[20px] px-3 py-2 text-left transition-colors duration-(--duration-quick)">
-        <span className="flex size-5 shrink-0 items-center justify-center">
-          {stopped ? (
-            <X aria-hidden className="text-muted-foreground size-4" />
-          ) : (
-            <StatusIcon status={entry.status} />
-          )}
-        </span>
-        <span className="text-ui shrink-0 font-medium">
-          {entry.name === SEND_MESSAGE
-            ? sendMessageTitle(entry.attribution)
-            : toolTitle(entry.name)}
-        </span>
-        {/* 手機寬度讓給摘要：標題已經講了是哪一類，工具名是給熟的人對照的；不讓的話改檔卡的路徑只剩「/…」（#625 實機）。 */}
-        <code className="text-muted-foreground hidden shrink-0 font-mono text-xs sm:inline">
-          {entry.name}
-        </code>
-        {/* 外層吃掉剩下的寬度，裡面那格才截斷：「+N」要貼在摘要後面，不是被推到最右邊的狀態字旁邊。 */}
-        <span className="flex min-w-0 flex-1 gap-1.5 text-xs">
-          <span
-            className={`min-w-0 truncate ${failed ? 'text-destructive' : 'text-muted-foreground'}`}
-          >
-            {/* 失敗時這一格換成錯誤的第一行（照 dsh `errorSummary`）：收著也看得到為什麼。 */}
-            {stopped
-              ? STOPPED_QUESTION_TEXT
-              : failed && entry.error !== undefined
-                ? truncated !== undefined
-                  ? SUBAGENT_MAX_TOKENS_TEXT
-                  : firstLine(entry.error)
-                : questions !== undefined
-                  ? questionSummary(questions, answered, given)
-                  : presented !== undefined
-                    ? presentSummary(presented)
-                    : todoLine !== undefined
-                      ? todoLine.text
-                      : (sendLine ?? toolSummary(entry.name, entry.input))}
-          </span>
-          {todoLine !== undefined &&
-            todoLine.extra > 0 &&
-            !(failed && entry.error !== undefined) && (
-              <span className="text-muted-foreground shrink-0" data-testid="todo-extra">
-                <span aria-hidden>+{todoLine.extra}</span>
-                <span className="sr-only">，另有 {todoLine.extra} 項進行中</span>
-              </span>
+    <Collapsible open={open} onOpenChange={setOpen} asChild>
+      <Surface
+        tone="raised"
+        className="border-beam"
+        data-testid="tool-entry"
+        data-status={entry.status}
+        data-variant={variant}
+        data-kind="run"
+        data-active={beam}
+      >
+        <RowTrigger className="gap-2.5 py-2">
+          <span className="flex size-5 shrink-0 items-center justify-center">
+            {stopped ? (
+              <X aria-hidden className="text-muted-foreground size-4" />
+            ) : (
+              <StatusIcon status={entry.status} />
             )}
-          {diffView !== undefined && (
-            <Counts added={diffView.totals.added} deleted={diffView.totals.removed} />
-          )}
-        </span>
-        {backgroundRunId !== undefined && <SubagentStateLabel runId={backgroundRunId} />}
-        <span className="hidden sm:inline-flex">
-          <AttributionBadge attribution={entry.attribution} />
-        </span>
-        <Badge variant={failed ? 'destructive' : 'secondary'} className="shrink-0">
-          {stopped ? '已停止' : TOOL_STATUS_LABEL[entry.status]}
-        </Badge>
-        <ChevronDown
-          aria-hidden
-          data-motion-rotate
-          className="text-muted-foreground size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
-        />
-      </CollapsibleTrigger>
-      <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
-        <div className="m-1 mt-0 flex flex-col gap-2">
-          {entry.attribution.kind !== 'root' && (
-            <div className="px-2 sm:hidden">
-              <AttributionBadge attribution={entry.attribution} />
-            </div>
-          )}
-          {subagentModel !== undefined && (
-            <p data-subagent-model="" className="text-muted-foreground px-3 pt-1 text-xs">
-              {subagentModel}
-            </p>
-          )}
-          {questions !== undefined ? (
-            <>
-              <QuestionList questions={questions} answers={paired} />
-              {answered && paired === undefined && (
-                <p className="text-muted-foreground px-3 pb-1 text-xs">
-                  {given === undefined
-                    ? '這次的答案讀不出來：結果文字太長被截過，或不是預期的形狀。'
-                    : '答案和題目對不起來，只列題目。'}
-                </p>
+          </span>
+          <span className="text-ui shrink-0 font-medium">
+            {entry.name === SEND_MESSAGE
+              ? sendMessageTitle(entry.attribution)
+              : toolTitle(entry.name)}
+          </span>
+          {/* 手機寬度讓給摘要：標題已經講了是哪一類，工具名是給熟的人對照的；不讓的話改檔卡的路徑只剩「/…」（#625 實機）。 */}
+          <code className="text-muted-foreground hidden shrink-0 font-mono text-tip sm:inline">
+            {entry.name}
+          </code>
+          {/* 外層吃掉剩下的寬度，裡面那格才截斷：「+N」要貼在摘要後面，不是被推到最右邊的狀態字旁邊。 */}
+          <span className="flex min-w-0 flex-1 gap-1.5 text-tip">
+            <span
+              className={`min-w-0 truncate ${failed ? 'text-destructive' : 'text-muted-foreground'}`}
+            >
+              {/* 失敗時這一格換成錯誤的第一行（照 dsh `errorSummary`）：收著也看得到為什麼。 */}
+              {stopped
+                ? STOPPED_QUESTION_TEXT
+                : failed && entry.error !== undefined
+                  ? truncated !== undefined
+                    ? SUBAGENT_MAX_TOKENS_TEXT
+                    : firstLine(entry.error)
+                  : questions !== undefined
+                    ? questionSummary(questions, answered, given)
+                    : presented !== undefined
+                      ? presentSummary(presented)
+                      : todoLine !== undefined
+                        ? todoLine.text
+                        : (sendLine ?? toolSummary(entry.name, entry.input))}
+            </span>
+            {todoLine !== undefined &&
+              todoLine.extra > 0 &&
+              !(failed && entry.error !== undefined) && (
+                <span className="text-muted-foreground shrink-0" data-testid="todo-extra">
+                  <span aria-hidden>+{todoLine.extra}</span>
+                  <span className="sr-only">，另有 {todoLine.extra} 項進行中</span>
+                </span>
               )}
-            </>
-          ) : presented !== undefined && presented.length > 0 ? (
-            <PresentedFileList files={presented} />
-          ) : todos !== undefined ? (
-            <TodoList todos={todos} />
-          ) : diffView !== undefined ? (
-            <ToolDiff fragments={diffView.fragments} />
-          ) : readCard !== undefined ? (
-            <ToolRead card={readCard} />
-          ) : searchCard !== undefined ? (
-            <ToolSearch card={searchCard} />
-          ) : (
-            <>
-              {inputShown &&
-                (body === undefined ? (
-                  <p className="text-muted-foreground px-3 py-2 text-xs">沒有參數。</p>
-                ) : (
-                  <ToolInputBlock
-                    text={body.text}
-                    lang={body.lang}
-                    streaming={entry.status === 'running'}
-                  />
-                ))}
-              {output !== undefined && <ToolOutputBlock output={output} />}
-              {!inputShown && output === undefined && entry.error === undefined && (
-                <p className="text-muted-foreground px-3 py-2 text-xs">
-                  {entry.status === 'running' ? '還沒有結果。' : '沒有結果文字。'}
-                </p>
-              )}
-            </>
-          )}
-          {truncated !== undefined ? (
-            <>
-              <p className="bg-stage shadow-stage text-destructive rounded-xl p-3 text-xs">
-                {SUBAGENT_MAX_TOKENS_TEXT}
-                {truncated.partial.trim() !== '' && SUBAGENT_PARTIAL_TEXT}
+            {diffView !== undefined && (
+              <Counts added={diffView.totals.added} deleted={diffView.totals.removed} />
+            )}
+          </span>
+          {backgroundRunId !== undefined && <SubagentStateLabel runId={backgroundRunId} />}
+          <span className="hidden sm:inline-flex">
+            <AttributionBadge attribution={entry.attribution} />
+          </span>
+          <Badge variant={failed ? 'destructive' : 'secondary'} className="shrink-0">
+            {stopped ? '已停止' : TOOL_STATUS_LABEL[entry.status]}
+          </Badge>
+          <ChevronDown
+            aria-hidden
+            data-motion-rotate
+            className="text-muted-foreground size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
+          />
+        </RowTrigger>
+        <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
+          <div className="m-1 mt-0 flex flex-col gap-2">
+            {entry.attribution.kind !== 'root' && (
+              <div className="px-2 sm:hidden">
+                <AttributionBadge attribution={entry.attribution} />
+              </div>
+            )}
+            {subagentModel !== undefined && (
+              <p data-subagent-model="" className="text-muted-foreground px-3 pt-1 text-tip">
+                {subagentModel}
               </p>
-              {truncated.partial.trim() !== '' && (
-                <ToolOutputBlock output={outputOf(truncated.partial)} />
-              )}
-            </>
-          ) : (
-            entry.error !== undefined &&
-            !stopped && (
-              <pre className="bg-stage shadow-stage text-destructive rounded-xl p-3 font-mono text-xs whitespace-pre-wrap">
-                {entry.error}
-              </pre>
-            )
-          )}
-          {backgroundRunId !== undefined && <SubagentPanel runId={backgroundRunId} />}
-        </div>
-      </CollapsibleContent>
+            )}
+            {questions !== undefined ? (
+              <>
+                <QuestionList questions={questions} answers={paired} />
+                {answered && paired === undefined && (
+                  <p className="text-muted-foreground px-3 pb-1 text-tip">
+                    {given === undefined
+                      ? '這次的答案讀不出來：結果文字太長被截過，或不是預期的形狀。'
+                      : '答案和題目對不起來，只列題目。'}
+                  </p>
+                )}
+              </>
+            ) : presented !== undefined && presented.length > 0 ? (
+              <PresentedFileList files={presented} />
+            ) : todos !== undefined ? (
+              <TodoList todos={todos} />
+            ) : diffView !== undefined ? (
+              <ToolDiff fragments={diffView.fragments} />
+            ) : readCard !== undefined ? (
+              <ToolRead card={readCard} />
+            ) : searchCard !== undefined ? (
+              <ToolSearch card={searchCard} />
+            ) : (
+              <>
+                {inputShown &&
+                  (body === undefined ? (
+                    <p className="text-muted-foreground px-3 py-2 text-tip">沒有參數。</p>
+                  ) : (
+                    <ToolInputBlock
+                      text={body.text}
+                      lang={body.lang}
+                      streaming={entry.status === 'running'}
+                    />
+                  ))}
+                {output !== undefined && <ToolOutputBlock output={output} />}
+                {!inputShown && output === undefined && entry.error === undefined && (
+                  <p className="text-muted-foreground px-3 py-2 text-tip">
+                    {entry.status === 'running' ? '還沒有結果。' : '沒有結果文字。'}
+                  </p>
+                )}
+              </>
+            )}
+            {truncated !== undefined ? (
+              <>
+                <Surface as="p" tone="stage" className="text-destructive p-3 text-tip">
+                  {SUBAGENT_MAX_TOKENS_TEXT}
+                  {truncated.partial.trim() !== '' && SUBAGENT_PARTIAL_TEXT}
+                </Surface>
+                {truncated.partial.trim() !== '' && (
+                  <ToolOutputBlock output={outputOf(truncated.partial)} />
+                )}
+              </>
+            ) : (
+              entry.error !== undefined &&
+              !stopped && (
+                <Surface
+                  as="pre"
+                  tone="stage"
+                  className="text-destructive p-3 font-mono text-tip whitespace-pre-wrap"
+                >
+                  {entry.error}
+                </Surface>
+              )
+            )}
+            {backgroundRunId !== undefined && <SubagentPanel runId={backgroundRunId} />}
+          </div>
+        </CollapsibleContent>
+      </Surface>
     </Collapsible>
   );
 }

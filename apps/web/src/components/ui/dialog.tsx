@@ -6,7 +6,7 @@
  * 圓角 `rounded-2xl`、縮放 .96、遮罩 200（§7）；「Close」→「關閉」（§8）。
  */
 import * as React from 'react';
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 import { XIcon } from 'lucide-react';
 import { Dialog as DialogPrimitive } from 'radix-ui';
 
@@ -129,7 +129,7 @@ function DialogDescription({
   return (
     <DialogPrimitive.Description
       data-slot="dialog-description"
-      className={cn('text-sm text-muted-foreground', className)}
+      className={cn('text-body text-muted-foreground', className)}
       {...props}
     />
   );

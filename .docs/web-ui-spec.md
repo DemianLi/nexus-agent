@@ -20,7 +20,7 @@
 | 無障礙 | WCAG 2.2 AA＋APG＋Radix 內建；焦點只在會丟掉時才搬 | §8 |
 | 斷點 | 1024（以下收成抽屜）；驗收 375／768／1280 | §9 |
 | 原型哪些能搬 | 主題、token、模式規則、registry 改法直接搬；原型 App 只當參考 | §10 |
-| 實作必須帶的測試 | 11 條絆索 | §11 |
+| 實作必須帶的測試 | 12 條絆索 | §11 |
 
 ## 1. 怎麼用這份文件
 
@@ -57,9 +57,11 @@
 
 ### 4.1 安裝程序
 
+（新增自己的元件、改樣式該放哪一層、用哪些值、什麼會被擋：[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)。）
+
 1. `shadcn add … --overwrite`（shadcn 4.21.0 實測）。**不加 `--overwrite` 時非互動安裝會卡在覆寫提問、exit 0 靜默中止、檔案寫一半**——判準是實際寫入的檔，不是 exit code。
 2. 舊版 `button.tsx` 讓 registry 版覆寫（default／secondary／destructive 少了 `shadow-xs`、outline 暗色改 `bg-input/30`、多四種尺寸與 `data-variant`／`data-size`；原型並排比過，沒有異議）。
-3. `shadcn migrate cn`：`cn` 統一成 `cn` 套件，`@/lib/utils` 變成 `export { cn } from "cn"`，`clsx`、`tailwind-merge` 移除。**`@radix-ui/react-slot` 會殘留**，覆寫 button 後已經沒人用，要手動拿掉。
+3. `shadcn migrate cn`：`cn` 統一成 `cn` 套件，`@/lib/utils` 的 `cn` 是 `cn/config` 的 `createCn`，並登記自訂字級名（`text-ui`／`text-body`／`text-tip`／`text-micro`，與 `index.css` 的 `--text-*` 一致；沒登記的話預設 `cn` 會把它們當文字顏色，跟 `text-primary-foreground` 之類互相吃掉，#1141 的後續）。**全站只從 `@/lib/utils` 取 `cn`，registry 檔裝進來也要把 `from "cn"` 改成 `@/lib/utils`**（`utils.test.ts` 會擋）。`clsx`、`tailwind-merge` 移除。**`@radix-ui/react-slot` 會殘留**，覆寫 button 後已經沒人用，要手動拿掉。
 4. 對寫入的檔跑 `prettier --write`（registry 檔全數過不了 `format:check`，**不排除**）。
 5. **registry 檔裝進來就是我們的原始碼**：照 repo 規範改，檔頭記來源 URL 與版本，之後不靠重跑 `shadcn add` 更新。
 6. 提問的 `questionnaire` 只能從 `radix-vega` 風格裝（new-york 404），要用完整網址。
@@ -167,6 +169,7 @@
 - 介面 **Google Sans Flex**；等寬 **Google Sans Code**，只用在程式碼、工具輸入輸出、終端機；中文兩者都退 **Noto Sans TC**（所以介面上的中文實際是 Noto Sans TC）。
 - 三套都用 `@fontsource-variable/*` 打包（OFL，自帶 unicode-range 切片；原型建置 120 檔 5.2 MB，零外部請求）。
 - 字級 UI 13、內文 14／23、tooltip 12、微標籤 11（`@theme` 的 `text-ui`／`text-body`／`text-tip`／`text-micro`）；**字重只用 400／500**（`semibold`、`bold` 落在 500）。
+- **只走這四階，不用 Tailwind 預設的 `text-xs`／`text-sm`**（#1141）：`text-xs`（12／16）一律寫成 `text-tip`（尺寸與行高相同，畫面不變）；`text-sm`（14／20）一律寫成 `text-body`（字級相同、行高 20 → 23）。`ui/` 的 registry 原文也照改（它們裝進來就是我們的原始碼）。例外：`text-base`、`text-lg` 沒有對應的階，registry 原文裡的（輸入框手機尺寸防 iOS 放大、dialog 標題等）保留。`text-ui`（13）與 `text-micro`（11）還沒有地方用，留給之後真的需要的元件；要用第五個尺寸，先在這裡加一階，不要寫任意值。
 
 **互動狀態**
 - 焦點外框 `outline: 2px solid` 文字色、`offset 2px`；registry 的 `ring-[3px]` 關掉。
@@ -297,7 +300,7 @@
 
 ## 11. 實作必須帶的絆索
 
-每條連回出處；#378 的三條量**建置出來的 CSS**，不是原始碼。
+每條連回出處；#378 的三條量**建置出來的 CSS**，不是原始碼；第 12 條量原始碼的字串字面值。
 
 | # | 絆索 | 出處 |
 | --- | --- | --- |
@@ -312,6 +315,7 @@
 | 9 | `index.html` 內嵌腳本與程式碼用同一個 `localStorage` key（讀腳本文字比對常數） | [#391](https://github.com/DemianLi/nexus-agent/issues/391#issuecomment-5722962752) |
 | 10 | 三態各自套出正確結果：淺色沒有 `.dark`、深色有、`color-scheme` 跟著對 | [#391](https://github.com/DemianLi/nexus-agent/issues/391#issuecomment-5722962752) |
 | 11 | 沒存過偏好時跟隨系統：stub `matchMedia` 回深色，確認掛上 `.dark` | [#391](https://github.com/DemianLi/nexus-agent/issues/391#issuecomment-5722962752) |
+| 12 | 元件原始碼的字串字面值不越過系統的值：不用 Tailwind 預設色板（含 `white`／`black`）、字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`、圓角不寫數字任意值、不硬寫色碼、卡片與內層 stage 用 `Surface` 不手寫配方。例外只能列在 `apps/web/src/styles/design-system.test.ts` 的 `ALLOWED`（附理由），列了卻不再命中的條目報錯，所以例外只會變少 | [#1141](https://github.com/DemianLi/nexus-agent/issues/1141) |
 
 **靠 review、不寫測試的**：blur 只給小元素、持續動畫只動 transform／opacity。
 

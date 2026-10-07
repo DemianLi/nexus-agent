@@ -50,7 +50,7 @@ type ChildPull =
 function SubagentTool({ tool }: { tool: SubagentCallView['tools'][number] }) {
   return (
     <li
-      className="text-muted-foreground flex min-w-0 flex-wrap gap-x-2 text-xs"
+      className="text-muted-foreground flex min-w-0 flex-wrap gap-x-2 text-tip"
       data-testid="trace-subagent-tool"
     >
       <code className="text-foreground font-mono">{tool.name}</code>
@@ -73,12 +73,12 @@ function SubagentTool({ tool }: { tool: SubagentCallView['tools'][number] }) {
 function SubagentTurn({ turn }: { turn: SubagentTurnView }) {
   return (
     <section className="mb-2" data-testid="trace-subagent-turn" data-seq={turn.seq}>
-      <p className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 px-2 text-xs">
+      <p className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 px-2 text-tip">
         <span>{SUBAGENT_TURN_LABEL(turn.head.kind)}</span>
         <HeadFacts head={turn.head} noEnd={turn.head.kind === 'run'} />
       </p>
       {turn.elidedCalls !== undefined && (
-        <p className="text-muted-foreground px-2 text-xs">
+        <p className="text-muted-foreground px-2 text-tip">
           更早的 {turn.elidedCalls} 次呼叫被單輪上限摺掉了，只留計數。
         </p>
       )}
@@ -88,7 +88,7 @@ function SubagentTurn({ turn }: { turn: SubagentTurnView }) {
           {call.retries.map((retry) => (
             <p
               key={retry.key}
-              className="text-muted-foreground px-2 pl-8 text-xs"
+              className="text-muted-foreground px-2 pl-8 text-tip"
               data-testid="trace-subagent-retry"
             >
               重試 {retry.retry}/{retry.maxRetries} ·{' '}
@@ -165,7 +165,7 @@ export function SubagentCalls({ runId }: { runId: string }) {
 
   if (child === undefined) {
     return (
-      <p className="text-muted-foreground px-2 text-xs" data-testid="trace-subagent-nodata">
+      <p className="text-muted-foreground px-2 text-tip" data-testid="trace-subagent-nodata">
         {SUBAGENT_CALLS_NO_DATA_TEXT}
       </p>
     );
@@ -178,9 +178,9 @@ export function SubagentCalls({ runId }: { runId: string }) {
   });
   return (
     <div data-testid="trace-subagent-calls">
-      <p className="text-muted-foreground px-2 pb-1 text-xs">{SUBAGENT_CALLS_CONTENT_TEXT}</p>
+      <p className="text-muted-foreground px-2 pb-1 text-tip">{SUBAGENT_CALLS_CONTENT_TEXT}</p>
       {child.omitted > 0 && (
-        <p className="text-muted-foreground px-2 pb-1 text-xs">
+        <p className="text-muted-foreground px-2 pb-1 text-tip">
           更早還有 {child.omitted} 輪連摘要都沒留。
         </p>
       )}
@@ -197,7 +197,7 @@ export function SubagentCalls({ runId }: { runId: string }) {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="min-h-11 text-xs lg:min-h-8"
+                  className="min-h-11 text-tip lg:min-h-8"
                   onClick={() => pullSeq(digest.seq)}
                 >
                   {SUBAGENT_CALLS_RELOAD_LABEL}
@@ -214,12 +214,12 @@ export function SubagentCalls({ runId }: { runId: string }) {
             data-testid="trace-subagent-digest"
             data-seq={digest.seq}
           >
-            <p className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 px-2 text-xs">
+            <p className="text-muted-foreground flex flex-wrap gap-x-3 gap-y-0.5 px-2 text-tip">
               <span>{SUBAGENT_TURN_LABEL(head.kind)}</span>
               <HeadFacts head={head} noEnd={head.kind === 'run'} />
             </p>
             {puller === undefined ? (
-              <p className="text-muted-foreground px-2 text-xs">{SUBAGENT_CALLS_NO_PULL_TEXT}</p>
+              <p className="text-muted-foreground px-2 text-tip">{SUBAGENT_CALLS_NO_PULL_TEXT}</p>
             ) : (
               <PullControl status={pull ?? { kind: 'idle' }} onPull={() => pullSeq(digest.seq)} />
             )}

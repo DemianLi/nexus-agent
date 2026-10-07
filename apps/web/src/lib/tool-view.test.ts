@@ -18,23 +18,14 @@ import {
  * `classifyTool` 涵蓋 nexus 每一個實際工具名（#406 驗收）。工具名**從 `docs/tool-catalog.md` 讀**（模型實際收到的那一份，
  * 含基座與 plugin；由 harness 產生、CI 驗新鮮度，#442／#666）：新增一個出廠的工具而沒在 `lib/tool-view.ts` 分類，這裡紅。
  *
- * 目錄涵蓋的是**出廠預設**，下面這幾顆不在裡面，所以手列：
- * - `execute`：今天產品路徑上沒有 shell，基座不綁它；web 先分類好，絆索在 harness 的 `execute-not-bound.test.ts`。
- * - 背景子代理那一組：`backgroundSubagents` 預設關，不經產品預設組裝，名字在 harness 的 `background-delegation.ts`
- *   （`subagent`、`list_agents`、`interrupt_agent`、`send_message`）與 `list_subagent_models`（有政策才有，#877）。
- *   這幾顆新增或改名時，web 這邊不會自己紅；要靠 harness 把它們也列進目錄才補得上。
+ * 目錄涵蓋 CLI 與 serve 兩條出廠組裝（含 serve 出廠的背景續行子代理四顆，以及選配的 `list_subagent_models`，#1133），
+ * 只有 `execute` 不在裡面，所以手列：今天產品路徑上沒有 shell，基座不綁它；web 先分類好，絆索在 harness 的
+ * `execute-not-bound.test.ts`。
  */
 
 const catalogNames = catalogToolNames();
 
-const NOT_IN_CATALOG_TOOL_NAMES = [
-  'execute',
-  'subagent',
-  'list_agents',
-  'interrupt_agent',
-  'send_message',
-  'list_subagent_models',
-];
+const NOT_IN_CATALOG_TOOL_NAMES = ['execute'];
 
 describe('classifyTool', () => {
   it('讀得到目錄裡的工具名（量具本身沒壞）', () => {
@@ -46,6 +37,8 @@ describe('classifyTool', () => {
         'ask_user_question',
         'run_javascript',
         'request_sandbox_escalation',
+        'subagent',
+        'list_subagent_models',
       ]),
     );
     expect(new Set(catalogNames).size).toBe(catalogNames.length);

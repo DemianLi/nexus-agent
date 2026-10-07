@@ -31,8 +31,10 @@ import { ChevronDown } from 'lucide-react';
 
 import type { PendingApproval } from '@nexus/wire';
 
+import { Surface } from '@/components/surface';
 import { Button } from '@/components/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { RowTrigger } from '@/components/row-trigger';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 
 /** 封閉詞彙的中文字面。認不得的原樣顯示——寧可露出來，不要吞掉。 */
 const LABELS: Record<string, string> = { approve: '全部核准', reject: '全部拒絕' };
@@ -44,24 +46,25 @@ export const NO_DECISION_REASON =
 function Actions({ pending }: { pending: PendingApproval }) {
   return (
     // 可捲動，所以要能用鍵盤捲：進 Tab 順序並給名稱（§8）。
-    <div
+    <Surface
+      tone="stage"
       role="group"
       tabIndex={0}
       aria-label="要執行的內容"
-      className="bg-stage shadow-stage flex max-h-[40svh] flex-col gap-3 overflow-auto rounded-xl p-3"
+      className="flex max-h-[40svh] flex-col gap-3 overflow-auto p-3"
     >
       {pending.actions.map((action, index) => (
         <div key={`${action.name}-${index}`} className="flex flex-col gap-1.5">
-          <p className="text-sm">
+          <p className="text-body">
             要執行 <code className="font-mono font-medium">{action.name}</code>
           </p>
-          <pre className="text-muted-foreground font-mono text-xs whitespace-pre-wrap">
+          <pre className="text-muted-foreground font-mono text-tip whitespace-pre-wrap">
             {/* 參數解不開的那顆，酬載帶的是模型吐的原字串（#281）：原樣顯示，不再包一層引號。 */}
             {typeof action.args === 'string' ? action.args : JSON.stringify(action.args, null, 2)}
           </pre>
         </div>
       ))}
-    </div>
+    </Surface>
   );
 }
 
@@ -80,15 +83,15 @@ export function ApprovalCard({
   if (pending.allowedDecisions.length === 0) {
     return (
       <div className="flex flex-col gap-2" data-testid="approval-card">
-        <p className="text-destructive px-3 text-sm">{NO_DECISION_REASON}</p>
+        <p className="text-destructive px-3 text-body">{NO_DECISION_REASON}</p>
         <Collapsible>
-          <CollapsibleTrigger className="group hover:bg-chip-hover active:bg-chip-pressed text-muted-foreground flex min-h-11 w-full items-center gap-2 rounded-[20px] px-3 text-left text-xs transition-colors duration-(--duration-quick) lg:min-h-9">
+          <RowTrigger className="text-muted-foreground gap-2 text-tip lg:min-h-9">
             <ChevronDown
               className="size-4 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
               aria-hidden
             />
             原始中斷內容
-          </CollapsibleTrigger>
+          </RowTrigger>
           <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
             <Actions pending={pending} />
           </CollapsibleContent>

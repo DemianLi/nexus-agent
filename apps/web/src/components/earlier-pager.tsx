@@ -68,7 +68,7 @@ export function EarlierPager({ earlier }: { earlier: EarlierHistory }) {
             : LOAD_EARLIER_LABEL}
       </Button>
       {failed && !earlier.loading && (
-        <p className="text-destructive text-center text-xs">讀不到更早的對話：{earlier.error}</p>
+        <p className="text-destructive text-center text-tip">讀不到更早的對話：{earlier.error}</p>
       )}
     </div>
   );

@@ -55,7 +55,7 @@ export function StatusLine({
   if (reconnecting !== undefined) {
     return (
       <div className="flex items-center gap-2">
-        <p className="text-warning text-sm" role="status">
+        <p className="text-warning text-body" role="status">
           {lostText(reconnecting, connectionError)}
         </p>
         {onReconnect !== undefined && (
@@ -74,21 +74,21 @@ export function StatusLine({
   }
   if (connectionError !== undefined) {
     return (
-      <p className="text-destructive text-sm" role="status">
+      <p className="text-destructive text-body" role="status">
         連不上 agent：{connectionError}
       </p>
     );
   }
   if (!connected) {
     return (
-      <p className="text-muted-foreground text-sm" role="status">
+      <p className="text-muted-foreground text-body" role="status">
         連線中…
       </p>
     );
   }
   if (state.status === 'failed') {
     return (
-      <p className="text-destructive text-sm" role="status">
+      <p className="text-destructive text-body" role="status">
         這一輪失敗了：{state.error ?? '未指名的錯誤'}
       </p>
     );
@@ -96,7 +96,7 @@ export function StatusLine({
   if (commandError !== undefined) {
     // 上行拒絕是 200 ＋ error 封包。不說出來就等於把 server 端那幾道圍欄的理由吞掉。
     return (
-      <p className="text-destructive text-sm" role="status">
+      <p className="text-destructive text-body" role="status">
         這個動作沒送出去：{commandError}
       </p>
     );
@@ -105,7 +105,7 @@ export function StatusLine({
     // 命令自己失敗，或那一行不是認得的命令。**跟上面那條是兩件事**：那個是這條線
     // 拒絕發派，這個是發派成功之後命令講的話。
     return (
-      <p className="text-destructive text-sm" role="status">
+      <p className="text-destructive text-body" role="status">
         {slashError}
       </p>
     );
@@ -114,7 +114,7 @@ export function StatusLine({
     // 命令的結果**由發派它的這一側直接呈現**，不進 transcript（命令不進模型）。
     // 下一輪一開跑就讓位——那時人要看的是那一輪。
     return (
-      <p className="text-sm" role="status">
+      <p className="text-body" role="status">
         {slashNotice}
       </p>
     );
@@ -124,14 +124,14 @@ export function StatusLine({
     // **唸的是換手層上那一個面板的名稱**（§8）：面板出現不另開 live region，名稱與面板的 `aria-label` 同一句，
     // 帶跨面板進度「（1／2）」——兩種中斷混著掛時，進度讓人知道後面還有幾個。
     return (
-      <p className="text-sm" role="status">
+      <p className="text-body" role="status">
         {pendingLabel(pending, { index: 0, total: state.pendings.length })}
       </p>
     );
   }
   if (state.status === 'running') {
     return (
-      <p className="text-muted-foreground flex items-center gap-1.5 text-sm" role="status">
+      <p className="text-muted-foreground flex items-center gap-1.5 text-body" role="status">
         <AgentOrb state="working" size={20} decorative />
         <span className="text-shimmer">執行中…</span>
       </p>
@@ -140,13 +140,13 @@ export function StatusLine({
   if (recovered) {
     // 只蓋掉最後這一格（就緒／已停止）：接回來時要是正在跑、停在核准點或失敗了，人要看的是那個。
     return (
-      <p className="text-muted-foreground text-sm" role="status">
+      <p className="text-muted-foreground text-body" role="status">
         已重新連線
       </p>
     );
   }
   return (
-    <p className="text-muted-foreground text-sm" role="status">
+    <p className="text-muted-foreground text-body" role="status">
       {/* 已停止不是失敗（#276）：人按的，所以不用紅字。 */}
       {state.status === 'stopped' ? '已停止' : '就緒'}
     </p>

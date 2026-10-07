@@ -4,7 +4,7 @@
  * 改過的地方（照原型 tag `proto-375-design-language`）：只淡入＋blur 3px、開 150（延遲 50）／關 150（§7），拿掉 zoom 與 slide。
  */
 import * as React from 'react';
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 import { Tooltip as TooltipPrimitive } from 'radix-ui';
 
 function TooltipProvider({
@@ -40,7 +40,7 @@ function TooltipContent({
         data-slot="tooltip-content"
         sideOffset={sideOffset}
         className={cn(
-          'z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-md bg-foreground px-3 py-1.5 text-xs text-balance text-background animation-duration-150 delay-50 fade-in-0 blur-in-3 data-[state=closed]:animate-out data-[state=closed]:delay-0 data-[state=closed]:fade-out-0',
+          'z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-md bg-foreground px-3 py-1.5 text-tip text-balance text-background animation-duration-150 delay-50 fade-in-0 blur-in-3 data-[state=closed]:animate-out data-[state=closed]:delay-0 data-[state=closed]:fade-out-0',
           className,
         )}
         {...props}

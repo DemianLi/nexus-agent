@@ -19,6 +19,7 @@ import { Check, ChevronDown, ChevronUp, Copy, Eye, FileText } from 'lucide-react
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
+import { Surface } from '@/components/surface';
 import { DownloadIconButton } from '@/components/deliverable/download-button';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { Button } from '@/components/ui/button';
@@ -97,20 +98,24 @@ export function DeliverablesCard({
       {/* 兩欄看的是會話區多寬，不是視窗多寬：右側欄打開時寬視窗裡的會話區可能只剩 480（#640）。 */}
       <ul className="grid gap-2 @xl:grid-cols-2">
         {shown.map((file) => (
-          <li
+          <Surface
+            as="li"
+            tone="stage"
             // **用座標當 key，不用列表位置**：同一輪可能宣告兩次同一個路徑，而 `(seq, index)` 本來就唯一
             // ——`seq` 是日誌位置，一顆事件一個（#452）。列表位置在合併之後不再對應宣告當下的位置。
             key={`${file.seq}:${file.index}`}
-            className="bg-stage shadow-stage flex min-w-0 items-start gap-3 rounded-xl p-3"
+            className="flex min-w-0 items-start gap-3 p-3"
             data-testid="deliverable"
           >
             <FileText className="text-muted-foreground mt-0.5 size-5 shrink-0" aria-hidden />
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
               <span className="truncate font-medium">{basename(file.path)}</span>
-              <span className="text-muted-foreground text-xs">
+              <span className="text-muted-foreground text-tip">
                 {file.description ?? fallbackDescription(file.path)}
               </span>
-              <span className="text-muted-foreground font-mono text-xs break-all">{file.path}</span>
+              <span className="text-muted-foreground font-mono text-tip break-all">
+                {file.path}
+              </span>
             </div>
             {preview !== undefined && (
               <Button
@@ -127,7 +132,7 @@ export function DeliverablesCard({
             )}
             {download !== undefined && <DownloadIconButton file={file} downloader={download} />}
             <CopyPathButton path={file.path} />
-          </li>
+          </Surface>
         ))}
       </ul>
       {collapsible && (

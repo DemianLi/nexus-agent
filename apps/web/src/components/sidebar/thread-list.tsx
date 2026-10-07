@@ -140,7 +140,7 @@ export function ThreadList({
   const titleOnly = !searching || fellBack || !on;
 
   return (
-    <SidebarGroup role="group" aria-labelledby={labelId} className="text-sm">
+    <SidebarGroup role="group" aria-labelledby={labelId} className="text-body">
       <SidebarGroupLabel id={labelId}>以前的會話</SidebarGroupLabel>
       {listing.kind === 'loading' && <p className="text-muted-foreground px-2">讀取中…</p>}
       {/* 列不出來與「沒有」是兩件事：關掉落盤的 server（清單上 `session-persistence` 那一列，#613）走這一格，原因照 server 講的印。
@@ -200,17 +200,17 @@ export function ThreadList({
                 </p>
               )}
               {view.hasMore && (
-                <p className="text-muted-foreground px-2 pt-1 text-xs">
+                <p className="text-muted-foreground px-2 pt-1 text-tip">
                   還有更多沒列出來，多打幾個字可以縮小範圍。
                 </p>
               )}
               {fallback !== null && (
-                <p className="text-muted-foreground px-2 pt-1 text-xs">{fallback}</p>
+                <p className="text-muted-foreground px-2 pt-1 text-tip">{fallback}</p>
               )}
             </>
           )}
           {listing.result.unreadable > 0 && (
-            <p className="text-muted-foreground px-2 text-xs">
+            <p className="text-muted-foreground px-2 text-tip">
               另有 {listing.result.unreadable} 份讀不懂、或格式比這台 server 新，沒有列出來。
             </p>
           )}
@@ -272,7 +272,7 @@ function BucketGroup({
   const labelId = useId();
   return (
     <div role="group" aria-labelledby={labelId} className="mt-2" data-testid="thread-bucket">
-      <div id={labelId} className="text-muted-foreground px-2 pb-1 text-xs font-medium">
+      <div id={labelId} className="text-muted-foreground px-2 pb-1 text-tip font-medium">
         {label}
       </div>
       <SidebarMenu>{children}</SidebarMenu>
@@ -329,7 +329,7 @@ function ThreadRow({
           )}
         </span>
         {(current || !item.blank) && (
-          <span className="text-muted-foreground text-xs">
+          <span className="text-muted-foreground text-tip">
             {[
               ...(current ? ['目前這條'] : []),
               // 空白的那一列不帶時間（dsh `Rows.tsx`）：它的時間是建立時間，不是誰說過話。
@@ -345,7 +345,10 @@ function ThreadRow({
           </span>
         )}
         {snippet !== undefined && (
-          <span className="text-muted-foreground line-clamp-2 text-xs" data-testid="thread-snippet">
+          <span
+            className="text-muted-foreground line-clamp-2 text-tip"
+            data-testid="thread-snippet"
+          >
             {highlightMatches(snippet, query).map((part, index) =>
               part.hit ? (
                 <mark key={index} className="bg-brand/15 text-foreground rounded-xs">

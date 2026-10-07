@@ -6,7 +6,7 @@
  * 開 250 縮放 .97、關 150 縮放 .99（時長來自 `index.css` 的 `--animate-in`／`--animate-out`），拿掉 slide。
  */
 import * as React from 'react';
-import { cn } from 'cn';
+import { cn } from '@/lib/utils';
 import { Popover as PopoverPrimitive } from 'radix-ui';
 
 function Popover({ ...props }: React.ComponentProps<typeof PopoverPrimitive.Root>) {
@@ -47,7 +47,7 @@ function PopoverHeader({ className, ...props }: React.ComponentProps<'div'>) {
   return (
     <div
       data-slot="popover-header"
-      className={cn('flex flex-col gap-1 text-sm', className)}
+      className={cn('flex flex-col gap-1 text-body', className)}
       {...props}
     />
   );

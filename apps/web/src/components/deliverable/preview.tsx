@@ -163,7 +163,7 @@ export function linesOf(page: DeliverableFilePage): string[] {
 function Status({ children, busy = false }: { children: ReactNode; busy?: boolean }) {
   return (
     <div
-      className="text-muted-foreground flex items-center gap-3 px-4 py-4 text-sm"
+      className="text-muted-foreground flex items-center gap-3 px-4 py-4 text-body"
       role={busy ? 'status' : undefined}
     >
       {children}
@@ -475,7 +475,7 @@ function PreviewBody({
   if (lastLine === 0) return <Status>這個檔是空的</Status>;
 
   // 行號欄的寬度跟著讀到的最後一行長：一千行的檔不需要留七位數的空白。`--gutter` 只是數字本身的寬度，
-  // 右邊的 `pr-3` 另外加在 `::before` 的寬度上 —— 以前寫成「位數 + 1ch」，那 1ch（`text-xs` 約 7px）比 `pr-3`
+  // 右邊的 `pr-3` 另外加在 `::before` 的寬度上 —— 以前寫成「位數 + 1ch」，那 1ch（`text-tip` 約 7px）比 `pr-3`
   // 的 12px 窄，最大位數的行號放不下，換行時被 `overflow-wrap:anywhere` 折成兩行，每行變兩倍高。
   // `::before` 另外設 `nowrap`，寬度再算錯也只會溢出，不會折行。
   const gutter = { '--gutter': `${digits}ch` } as CSSProperties;
@@ -483,7 +483,7 @@ function PreviewBody({
     <>
       <div
         className={cn(
-          'py-2 font-mono text-xs leading-5',
+          'py-2 font-mono text-tip leading-5',
           wrap ? 'whitespace-pre-wrap [overflow-wrap:anywhere]' : 'w-max min-w-full whitespace-pre',
         )}
         style={gutter}
@@ -536,7 +536,7 @@ export function DeliverablePreviewTab({
   return (
     <div className="flex min-h-0 flex-1 flex-col" data-testid="deliverable-preview">
       <div className="flex items-center gap-3 border-b px-4 py-2">
-        <p className="text-muted-foreground min-w-0 flex-1 font-mono text-xs break-all">
+        <p className="text-muted-foreground min-w-0 flex-1 font-mono text-tip break-all">
           {file.path}
         </p>
         <Button

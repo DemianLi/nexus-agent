@@ -68,7 +68,7 @@ const noop = () => {};
 function Limits({ structured }: { structured: boolean }) {
   const limits = structured ? TRACE_STRUCTURED_LIMITS : TRACE_LIMITS;
   return (
-    <section aria-labelledby="trace-limits" className="text-muted-foreground mt-2 px-2 text-xs">
+    <section aria-labelledby="trace-limits" className="text-muted-foreground mt-2 px-2 text-tip">
       <h3 id="trace-limits" className="mb-1 font-medium">
         {TRACE_LIMITS_HEADING}
       </h3>
@@ -269,14 +269,14 @@ const Timeline = memo(function Timeline({
         // 可捲動的區塊要能用鍵盤捲：進 Tab 順序（同計劃分頁，§8）。
         tabIndex={0}
       >
-        <p className="text-muted-foreground mb-3 px-2 text-xs" data-testid="trace-headline">
+        <p className="text-muted-foreground mb-3 px-2 text-tip" data-testid="trace-headline">
           {model.structured ? TRACE_STRUCTURED_HEADLINE : TRACE_HEADLINE}
         </p>
         {notice !== undefined && (
           <p
             // 讀屏已經從下面的 `role=status` 聽到同一句，這裡只給看得見的人。
             aria-hidden
-            className="bg-chip mb-3 rounded-md px-3 py-2 text-xs"
+            className="bg-chip mb-3 rounded-md px-3 py-2 text-tip"
             data-testid="trace-reveal-notice"
           >
             {notice}
@@ -297,7 +297,7 @@ const Timeline = memo(function Timeline({
           <Button
             type="button"
             variant="ghost"
-            className="mb-3 min-h-11 w-full text-xs lg:min-h-9"
+            className="mb-3 min-h-11 w-full text-tip lg:min-h-9"
             data-testid="trace-more-turns"
             onClick={() => setShown((count) => count + TURN_PAGE)}
           >
@@ -342,7 +342,7 @@ export function TraceBody({ visible, sources, locate, reveal, onRevealed }: Pane
   if (empty) {
     return (
       <p
-        className="text-muted-foreground flex flex-1 items-center justify-center px-6 text-center text-sm"
+        className="text-muted-foreground flex flex-1 items-center justify-center px-6 text-center text-body"
         data-testid="right-sidebar-panel-trace"
       >
         {TRACE_EMPTY_TEXT}

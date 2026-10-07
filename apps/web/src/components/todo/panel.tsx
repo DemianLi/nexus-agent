@@ -2,8 +2,9 @@ import type { ConversationStatus, WireTodoItem } from '@nexus/wire';
 import { ChevronDown, ListTodo } from 'lucide-react';
 import { useState } from 'react';
 
+import { RowTrigger } from '@/components/row-trigger';
 import { TodoList } from '@/components/todo/list';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import { todoPanelLabel, todoSummary } from '@/lib/todo-view';
 
 /**
@@ -40,9 +41,9 @@ export function TodoPanel({
       data-testid="todo-panel"
       className="bg-card mb-2 rounded-3xl border p-1"
     >
-      <CollapsibleTrigger
+      <RowTrigger
         aria-label={todoPanelLabel(summary)}
-        className="group text-muted-foreground hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[20px] px-3 text-left text-xs transition-colors duration-(--duration-quick) lg:min-h-9"
+        className="text-muted-foreground gap-2 text-tip lg:min-h-9"
       >
         <ListTodo aria-hidden className="size-4 shrink-0" />
         <span className="flex min-w-0 flex-1 gap-1.5">
@@ -57,7 +58,7 @@ export function TodoPanel({
           aria-hidden
           className="size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
         />
-      </CollapsibleTrigger>
+      </RowTrigger>
       <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
         <div className="m-1 mt-0 max-h-60 overflow-y-auto" data-testid="todo-panel-scroll">
           <TodoList todos={todos} live={status === 'running'} />

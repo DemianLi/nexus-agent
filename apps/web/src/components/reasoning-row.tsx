@@ -11,7 +11,7 @@ import { reasoningSummary } from '@/lib/reasoning-view';
  * 比工具卡輕：沒有卡片底，一列小字。一輪有好幾步時每一步都有一列，做成卡片會變成一面卡片牆。
  *
  * - 收合時一行摘要：串流中是最新一行，講完是第一行（`reasoningSummary`）。
- * - 展開用正文的 `MarkdownText`，外層縮成 `text-xs`（`.markdown` 的字級都是 `em`）。
+ * - 展開用正文的 `MarkdownText`，外層縮成 `text-tip`（`.markdown` 的字級都是 `em`）。
  * - **摘要不進可存取名稱**（`aria-hidden`）：它每來一顆 chunk 就變一次，焦點停在按鈕上時報讀器會跟著重唸。
  *   全文展開後照樣讀得到；推理也不進 polite 區唸（狀態列已經唸「執行中」）。
  */
@@ -19,7 +19,7 @@ export function ReasoningRow({ text, running }: { text: string; running: boolean
   const summary = reasoningSummary(text, running);
   return (
     <Collapsible data-testid="reasoning-row" data-running={running || undefined}>
-      <CollapsibleTrigger className="group text-muted-foreground hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-xl px-2 text-left text-xs transition-colors duration-(--duration-quick)">
+      <CollapsibleTrigger className="group text-muted-foreground hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-xl px-2 text-left text-tip transition-colors duration-(--duration-quick)">
         <Brain aria-hidden className="size-4 shrink-0" />
         <span className={running ? 'text-shimmer shrink-0' : 'shrink-0'}>
           {running ? '思考中' : '思考過程'}
@@ -56,7 +56,7 @@ export function ReasoningRow({ text, running }: { text: string; running: boolean
         />
       </CollapsibleTrigger>
       <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
-        <div className="text-muted-foreground pt-1 pr-2 pb-2 pl-8 text-xs">
+        <div className="text-muted-foreground pt-1 pr-2 pb-2 pl-8 text-tip">
           <MarkdownText text={text} streaming={running} />
         </div>
       </CollapsibleContent>
