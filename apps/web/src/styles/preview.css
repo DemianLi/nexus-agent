@@ -1,5 +1,5 @@
 /*
- * 交付檔預覽的畫面上限（#543、#555），見 `components/deliverable/deliverable-preview.tsx`。
+ * 交付檔預覽的畫面上限（#543、#555），見 `components/deliverable/preview.tsx`。
  *
  * 寫在這裡而不是 className：估計尺寸要看換不換行，而換行只掛在容器上（`data-preview-wrap`）——這樣切換換行時
  * 不重畫幾萬個節點，也不必把容器寬度放進 React state。

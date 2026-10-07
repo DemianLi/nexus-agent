@@ -5,10 +5,10 @@
 
 import { useEffect, useRef, useState } from 'react';
 
-import { PullControl, TRACE_PULL_SUMMARY_ONLY_TEXT } from '@/components/trace/trace-pull-control';
-import { TraceRowView } from '@/components/trace/trace-row';
-import { Chevron, LINE } from '@/components/trace/trace-lines';
-import { HeadFacts, TurnHeader } from '@/components/trace/trace-turn-head';
+import { PullControl, TRACE_PULL_SUMMARY_ONLY_TEXT } from '@/components/trace/pull-control';
+import { TraceRowView } from '@/components/trace/row';
+import { Chevron, LINE } from '@/components/trace/lines';
+import { HeadFacts, TurnHeader } from '@/components/trace/turn-head';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import type { TraceDigest, TraceRow, TraceTurn } from '@/lib/trace-view';

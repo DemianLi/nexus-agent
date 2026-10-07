@@ -2,7 +2,7 @@ import type { ConversationStatus, WireTodoItem } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { TodoPanel } from '@/components/todo/todo-panel';
+import { TodoPanel } from '@/components/todo/panel';
 import { axeViolations } from '@/test/axe';
 
 /**

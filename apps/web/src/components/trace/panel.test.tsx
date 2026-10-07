@@ -12,8 +12,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PANELS } from '@/components/sidebar/right-sidebar-panels';
 import type { PanelBodyProps } from '@/lib/right-sidebar-api';
-import { TRACE_LOCATED_TEXT } from '@/components/trace/trace-panel';
-import { TRACE_LOCATE_LABEL } from '@/components/trace/trace-row';
+import { TRACE_LOCATED_TEXT } from '@/components/trace/panel';
+import { TRACE_LOCATE_LABEL } from '@/components/trace/row';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';

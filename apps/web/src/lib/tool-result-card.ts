@@ -1,6 +1,6 @@
 /**
  * 讀檔卡與搜尋卡要畫什麼（[#625](https://github.com/DemianLi/nexus-agent/issues/625)）：從工具結果的 `meta` 驗出來，
- * 驗不過就走通用卡。畫法在 `components/tool/tool-result.tsx`。
+ * 驗不過就走通用卡。畫法在 `components/tool/result.tsx`。
  *
  * 照 dsh `readCardModel`／`searchCardModel`（`packages/client/ui-tool/src/client/tool/models/read-card-model.ts`、
  * `search-card-model.ts`，master `477b4f4`），`meta` 的形狀逐字相同（harness 的 `packages/nexus-core/src/tool-result-meta.ts`）。

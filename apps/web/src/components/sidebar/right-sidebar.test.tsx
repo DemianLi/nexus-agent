@@ -3,8 +3,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { useState } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ChangesCard } from '@/components/changes/changes-card';
-import { DeliverablesCard } from '@/components/deliverable/deliverables-card';
+import { ChangesCard } from '@/components/changes/card';
+import { DeliverablesCard } from '@/components/deliverable/card';
 import { PANELS } from '@/components/sidebar/right-sidebar-panels';
 import {
   RIGHT_SIDEBAR_EMPTY_TEXT,

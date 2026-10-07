@@ -13,7 +13,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { Profiler } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { COST_NO_USAGE, COST_RELOAD_LABEL } from '@/components/cost/cost-panel';
+import { COST_NO_USAGE, COST_RELOAD_LABEL } from '@/components/cost/panel';
 import { RightSidebarToggle } from '@/components/sidebar/right-sidebar';
 import { PANELS } from '@/components/sidebar/right-sidebar-panels';
 import type { PanelBodyProps } from '@/lib/right-sidebar-api';

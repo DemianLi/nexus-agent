@@ -3,7 +3,7 @@ import type { ConversationState, ToolEntry } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { ToolCard } from '@/components/tool/tool-card';
+import { ToolCard } from '@/components/tool/card';
 import { CARD_LINE_MAX_CHARS, CARD_MAX_CHARS } from '@/lib/card-limit';
 import { MAX_RENDERED_LINES } from '@/lib/diff-rows';
 import {

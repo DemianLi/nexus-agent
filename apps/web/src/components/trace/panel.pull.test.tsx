@@ -5,14 +5,14 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { RightSidebarToggle } from '@/components/sidebar/right-sidebar';
-import { TRACE_REPLY_OLDER_TEXT, TRACE_REVEALED_TEXT } from '@/components/trace/trace-panel';
+import { TRACE_REPLY_OLDER_TEXT, TRACE_REVEALED_TEXT } from '@/components/trace/panel';
 import {
   TRACE_PULL_FAILED_TEXT,
   TRACE_PULL_LABEL,
   TRACE_PULL_LOADING_TEXT,
   TRACE_PULL_RETRY_LABEL,
   TRACE_PULL_SUMMARY_ONLY_TEXT,
-} from '@/components/trace/trace-pull-control';
+} from '@/components/trace/pull-control';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';

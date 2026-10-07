@@ -3,7 +3,7 @@ import { changesSummaryUrl } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { ChangesCard, COLLAPSED_ROWS } from '@/components/changes/changes-card';
+import { ChangesCard, COLLAPSED_ROWS } from '@/components/changes/card';
 import { createChangesStores } from '@/lib/changes-diff';
 import { axeViolations } from '@/test/axe';
 

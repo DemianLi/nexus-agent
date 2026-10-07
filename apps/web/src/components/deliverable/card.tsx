@@ -10,7 +10,7 @@
  * 連進來，在 Host 上開啟使用者看不到，而且等於讓瀏覽器驅動伺服器開程式。
  *
  * **每個檔案帶著讀檔路由的座標**（{@link LocatedFile}，[#452](https://github.com/DemianLi/nexus-agent/issues/452)）：
- * 第一刀接線，第二刀拿那組 `(seq, index)` 開預覽（`deliverable-preview.tsx`；#640 起在右側欄開成一個分頁），
+ * 第一刀接線，第二刀拿那組 `(seq, index)` 開預覽（`preview.tsx`；#640 起在右側欄開成一個分頁），
  * 第三刀是下載（{@link DownloadIconButton}）。三顆動作鈕**各自獨立可選**：沒有右側欄（或它沒有讀檔的 store）
  * 就不畫預覽鈕，`download` 沒給就不畫下載鈕，複製路徑一直都在——它不需要讀檔。
  */
@@ -19,7 +19,7 @@ import { Check, ChevronDown, ChevronUp, Copy, Eye, FileText } from 'lucide-react
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
-import { DownloadIconButton } from '@/components/deliverable/deliverable-download-button';
+import { DownloadIconButton } from '@/components/deliverable/download-button';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { Button } from '@/components/ui/button';
 import { copyText } from '@/lib/clipboard';

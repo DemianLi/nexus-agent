@@ -2,7 +2,7 @@ import type { ConversationStatus, WireTodoItem } from '@nexus/wire';
 import { ChevronDown, ListTodo } from 'lucide-react';
 import { useState } from 'react';
 
-import { TodoList } from '@/components/todo/todo-list';
+import { TodoList } from '@/components/todo/list';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { todoPanelLabel, todoSummary } from '@/lib/todo-view';
 

@@ -1,6 +1,6 @@
 /**
  * 讀用量投影（[#1028](https://github.com/DemianLi/nexus-agent/issues/1028)）的那一層：哪些值可以信、每個欄位怎麼寫成列。
- * 成本分頁（`cost-view.ts`、`cost-panel.tsx`）第 1 版（[#1034](https://github.com/DemianLi/nexus-agent/issues/1034)）只透過這裡碰投影。
+ * 成本分頁（`cost-view.ts`、`panel.tsx`）第 1 版（[#1034](https://github.com/DemianLi/nexus-agent/issues/1034)）只透過這裡碰投影。
  *
  * ## 數字只有一個來源
  *

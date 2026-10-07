@@ -5,7 +5,7 @@
  * 與總行數，一檔一列，二進位與過大的檔不給行數；超過 {@link COLLAPSED_ROWS} 列先收起。**摘要拿到了、而且有檔才畫**：
  * 還在讀、404（serve 重開後重播的那一格）、讀壞了都不畫，同 dsh。
  *
- * 點標頭從第一個檔打開這一輪的審查頁，點一列就打開那一列的檔（同 dsh；審查頁見 `changes-review.tsx`）。
+ * 點標頭從第一個檔打開這一輪的審查頁，點一列就打開那一列的檔（同 dsh；審查頁見 `review.tsx`）。
  * 審查頁住在右側欄，一輪一個分頁（#640）；**沒有右側欄時標頭與列都不能點**，不給一顆按了沒反應的鈕。
  * 不做 `changes.open`（在 Host 上開檔，#443 決議 1）。
  */
@@ -14,7 +14,7 @@ import { ChevronDown, ChevronUp, FileDiff } from 'lucide-react';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 
-import { Counts, FileCounts } from '@/components/changes/change-counts';
+import { Counts, FileCounts } from '@/components/changes/counts';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { Button } from '@/components/ui/button';
 import type { ChangesStores } from '@/lib/changes-diff';

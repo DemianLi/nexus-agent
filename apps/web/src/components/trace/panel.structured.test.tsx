@@ -4,14 +4,14 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RightSidebarToggle } from '@/components/sidebar/right-sidebar';
-import { TRACE_MORE_TURNS_LABEL, TURN_PAGE } from '@/components/trace/trace-panel';
+import { TRACE_MORE_TURNS_LABEL, TURN_PAGE } from '@/components/trace/panel';
 import {
   DIGEST_PAGE,
   ROW_PAGE,
   TRACE_MORE_ROWS_LABEL,
   TRACE_LEGACY_GROUP_TEXT,
   TRACE_MORE_DIGESTS_LABEL,
-} from '@/components/trace/trace-groups';
+} from '@/components/trace/groups';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';

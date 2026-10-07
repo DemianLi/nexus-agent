@@ -2,7 +2,7 @@ import type { PendingQuestion, ToolEntry } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PlanReviewPanel, PlanToolCard } from '@/components/plan/plan-review';
+import { PlanReviewPanel, PlanToolCard } from '@/components/plan/review';
 import { PLAN_TAB_MISSING_TEXT, RightSidebarToggle } from '@/components/sidebar/right-sidebar';
 import { AUTO_OPENED_KEY, planDocument, planReviewOf } from '@/lib/plan-review';
 import type { PlanDocument } from '@/lib/plan-review';

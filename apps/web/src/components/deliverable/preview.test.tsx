@@ -2,8 +2,8 @@ import type { DeliverableFilePage } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { BLOCK_LINES, linesOf, loadedChain } from '@/components/deliverable/deliverable-preview';
-import { DeliverablesCard } from '@/components/deliverable/deliverables-card';
+import { BLOCK_LINES, linesOf, loadedChain } from '@/components/deliverable/preview';
+import { DeliverablesCard } from '@/components/deliverable/card';
 import { MISSING_REASON, createDeliverableFileStore } from '@/lib/deliverable-file';
 import type { DeliverableFileState, DeliverableLongLine } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
@@ -25,7 +25,7 @@ import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
  *
  * **每個理由碼各釘自己那句話**。只斷言「有顯示東西」的話，`too-large` 與 `not-text` 互換之後它照樣綠——而那
  * 兩個講的不是同一件事：`not-text` 是「這個檔不是文字」，`too-large` 是「這一份太大」，成因與下一步都不同。
- * 第三刀之後兩格都有下載鈕（那幾條在 `deliverable-download-button.test.tsx`），這裡只管話術。
+ * 第三刀之後兩格都有下載鈕（那幾條在 `download-button.test.tsx`），這裡只管話術。
  *
  * **接續那幾條用一個手動的 IntersectionObserver 替身**：jsdom 沒有它，而元件在沒有它的環境會直接讀
  * （同 `use-viewport-highlighting.ts`），那樣「沒捲到底就不讀」這件事就驗不到了。
@@ -68,7 +68,7 @@ function nearBottom() {
 beforeEach(() => {
   ManualObserver.live = [];
   vi.stubGlobal('IntersectionObserver', ManualObserver);
-  // 右側欄的版面記在 localStorage，每個測試換一份新的（見 changes-review.test.tsx）。
+  // 右側欄的版面記在 localStorage，每個測試換一份新的（見 review.test.tsx）。
   vi.stubGlobal('localStorage', memoryStorage());
 });
 
