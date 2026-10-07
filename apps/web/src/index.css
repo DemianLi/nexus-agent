@@ -54,6 +54,8 @@
   --radius-xl: 14px;
   --radius-2xl: 16px;
   --radius-3xl: 24px;
+  /* 嵌在卡片（3xl＝24、內距 4）裡的列：24 減 4，同心。給 `RowTrigger` 與排隊清單的列用，不要寫 `rounded-[20px]`。 */
+  --radius-row: 20px;
 
   --font-sans:
     'Google Sans Flex Variable', 'Noto Sans TC Variable', -apple-system, BlinkMacSystemFont,

@@ -10,7 +10,8 @@ import type { KeyboardEvent } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { RowTrigger } from '@/components/row-trigger';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import { Textarea } from '@/components/ui/textarea';
 import type { QueueUpdateRejected } from '@/hooks/use-conversation';
 import { useSettledQueue } from '@/hooks/use-settled-queue';
@@ -213,7 +214,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
           data-queue-readonly=""
           data-leaving={leaving || undefined}
           aria-hidden={leaving || undefined}
-          className="animate-in fade-in-0 text-muted-foreground flex min-w-0 items-start gap-2 rounded-[20px] px-3 py-1 text-body transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden"
+          className="animate-in fade-in-0 text-muted-foreground flex min-w-0 items-start gap-2 rounded-row px-3 py-1 text-body transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden"
         >
           {/* 跟人排的那一列同一條線：只有一列時才有圖示，多列時文字左緣對齊。 */}
           {live.length === 1 && <ListEnd aria-hidden className="mt-2.5 size-4 shrink-0 lg:mt-2" />}
@@ -234,7 +235,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
         data-queue-item={item.id}
         data-leaving={leaving || undefined}
         aria-hidden={leaving || undefined}
-        className="animate-in fade-in-0 flex min-w-0 items-start gap-2 rounded-[20px] px-3 py-1 text-body transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden"
+        className="animate-in fade-in-0 flex min-w-0 items-start gap-2 rounded-row px-3 py-1 text-body transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden"
       >
         {isEditing ? (
           <>
@@ -359,9 +360,9 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
           open={open || editing !== undefined || busy !== undefined}
           onOpenChange={setOpen}
         >
-          <CollapsibleTrigger
+          <RowTrigger
             disabled={editing !== undefined || busy !== undefined}
-            className="group text-muted-foreground hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[20px] px-3 text-left text-tip transition-colors duration-(--duration-quick) disabled:cursor-default lg:min-h-9"
+            className="text-muted-foreground gap-2 text-tip disabled:cursor-default lg:min-h-9"
           >
             <ListEnd aria-hidden className="size-4 shrink-0" />
             <span className="min-w-0 flex-1 truncate">{queueHeading(live.length)}</span>
@@ -369,7 +370,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
               aria-hidden
               className="size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
             />
-          </CollapsibleTrigger>
+          </RowTrigger>
           {hint}
           <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
             {list}
