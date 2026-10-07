@@ -26,7 +26,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 
 import type { ConversationState } from '@nexus/wire';
 
-import type { PanelBodyProps, TurnReveal } from '@/components/sidebar/right-sidebar-panels';
+import type { PanelBodyProps, TurnReveal } from '@/lib/right-sidebar-api';
 import { Digests, TurnGroup } from '@/components/trace/trace-groups';
 import {
   TRACE_PULL_FAILED_TEXT,

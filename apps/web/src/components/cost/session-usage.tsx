@@ -3,7 +3,7 @@ import { ChevronRight, Coins } from 'lucide-react';
 import { useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
-import { useRightSidebar } from '@/components/sidebar/right-sidebar';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { Rows } from '@/components/cost/usage-rows';
 import { sessionUsageView } from '@/lib/session-usage-view';

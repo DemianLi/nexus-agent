@@ -12,38 +12,10 @@ import { Activity, Coins } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import type { ComponentType } from 'react';
 
-import type { RightSidebarSources } from '@/components/sidebar/right-sidebar';
 import { CostBody } from '@/components/cost/cost-panel';
 import { TraceBody } from '@/components/trace/trace-panel';
 import type { PanelKind } from '@/lib/right-sidebar';
-
-/** 面板內容拿到的東西，由 `right-sidebar.tsx` 的 `TabBody` 給。 */
-export interface PanelBodyProps {
-  /**
-   * 現在看得見嗎：右側欄開著、而且是選中的這一個分頁。分頁藏起來時不卸載（保住捲動位置），所以內容要靠它判斷
-   * 要不要訂閱資料（`useVisibleSnapshot`）。
-   */
-  readonly visible: boolean;
-  readonly sources: RightSidebarSources;
-  /** 捲到對話區的那一則；找得到回 `true`。1024 以下它會先收掉抽屜。 */
-  readonly locate: (entryId: string) => boolean;
-  /**
-   * 有人從別的分頁要求顯示觀測分頁的某一輪（#1034，成本分頁的「看這一輪」）；只有觀測分頁收到。沒有人要求時是 `undefined`。
-   * 用完回報 {@link PanelBodyProps.onRevealed}，右側欄才清掉：分頁沒掛上或藏著時請求留著，等它看得見再消費。
-   */
-  readonly reveal?: TurnReveal | undefined;
-  readonly onRevealed?: ((nonce: number) => void) | undefined;
-}
-
-/**
- * 請求顯示觀測分頁的某一輪，`nonce` 讓同一輪連按兩次也算兩次請求。要哪一輪有兩種說法：
- * `seq` 是開那一輪的 `turn/start` 的位置（成本分頁的「看這一輪」）；`messageId` 是對話裡某一則回覆的訊息 id，
- * 觀測分頁自己查它落在哪一輪（回覆底下的「這一輪的過程」，#1034）。
- */
-export type TurnReveal = { readonly nonce: number } & (
-  | { readonly seq: number; readonly messageId?: undefined }
-  | { readonly messageId: string; readonly seq?: undefined }
-);
+import type { PanelBodyProps } from '@/lib/right-sidebar-api';
 
 export interface PanelDefinition {
   /** 分頁上的標題，也是入口鈕的名稱。 */
@@ -54,9 +26,6 @@ export interface PanelDefinition {
 
 /** `Record<PanelKind, …>`：`PANEL_KINDS` 加一種而這裡沒補，編不過。 */
 export const PANELS: Readonly<Record<PanelKind, PanelDefinition>> = {
-  // 包一層：`trace-panel` 經計劃卡間接 import 回 `right-sidebar`（它 import 這個檔），這樣參照 `TraceBody` 發生在畫的時候，
-  // 不在模組載入時，不管從哪一頭先載入都不會踩到還沒初始化的綁定。
-  trace: { title: '觀測', Icon: Activity, Body: (props) => <TraceBody {...props} /> },
-  // 同觀測：`cost-panel` 為了「看這一輪」會 import 回 `right-sidebar`，包一層讓參照發生在畫的時候。
-  cost: { title: '成本', Icon: Coins, Body: (props) => <CostBody {...props} /> },
+  trace: { title: '觀測', Icon: Activity, Body: TraceBody },
+  cost: { title: '成本', Icon: Coins, Body: CostBody },
 };

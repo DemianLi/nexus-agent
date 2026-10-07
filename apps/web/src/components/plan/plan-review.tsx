@@ -18,7 +18,7 @@ import { useEffect, useMemo, useRef } from 'react';
 
 import type { ConversationEntry, PendingInput, PendingQuestion, ToolEntry } from '@nexus/wire';
 
-import { useRightSidebar } from '@/components/sidebar/right-sidebar';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { ToolCard } from '@/components/tool/tool-card';
 import { Button } from '@/components/ui/button';
 import {

@@ -3,7 +3,8 @@ import { emptyConversation, reduceAll } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { RightSidebarToggle, useRightSidebar } from '@/components/sidebar/right-sidebar';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
+import { RightSidebarToggle } from '@/components/sidebar/right-sidebar';
 import {
   REVEAL_HIGHLIGHT_MS,
   TRACE_REPLY_OLDER_TEXT,
