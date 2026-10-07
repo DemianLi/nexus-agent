@@ -15,7 +15,7 @@ import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 
 import { Counts, FileCounts } from '@/components/changes/change-counts';
-import { useRightSidebar } from '@/components/sidebar/right-sidebar';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { Button } from '@/components/ui/button';
 import type { ChangesStores } from '@/lib/changes-diff';
 

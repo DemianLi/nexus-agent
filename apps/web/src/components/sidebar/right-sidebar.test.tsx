@@ -12,8 +12,8 @@ import {
   RightSidebarProvider,
   RightSidebarToggle,
   changesTabTitle,
-  useRightSidebar,
 } from '@/components/sidebar/right-sidebar';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { createChangesStores } from '@/lib/changes-diff';
 import { createDeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';

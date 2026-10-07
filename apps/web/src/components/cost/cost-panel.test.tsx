@@ -15,7 +15,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { COST_NO_USAGE, COST_RELOAD_LABEL } from '@/components/cost/cost-panel';
 import { RightSidebarToggle } from '@/components/sidebar/right-sidebar';
-import { PANELS, type PanelBodyProps } from '@/components/sidebar/right-sidebar-panels';
+import { PANELS } from '@/components/sidebar/right-sidebar-panels';
+import type { PanelBodyProps } from '@/lib/right-sidebar-api';
 import { COST_HEADLINE, COST_LIMITS } from '@/lib/cost-view';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';

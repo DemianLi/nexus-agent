@@ -1,22 +1,18 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
 import type { WireTodoItem } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import { TODO_STATUS_LABEL, TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
 import type { TodoStatus } from '@/lib/todo-view';
 
+import { catalogToolNames } from '@/test/tool-catalog';
+
 /** `todo_write` 的參數怎麼讀（#575）。形狀照 dsh `tool-todo`：`{ todos: [{ content, status }] }`。 */
 
-const packages = fileURLToPath(new URL('../../../../packages/', import.meta.url));
-
-describe('跟 @nexus/plugin-todo 對得上', () => {
-  // web 不相依 plugin，所以這裡讀原始碼：那一側改名時這裡紅，而不是卡片默默退回參數原文（等 #442 的工具目錄落地再換）。
-  it('工具名同 TODO_TOOL_NAME', () => {
-    const source = readFileSync(`${packages}nexus-plugin-todo/src/index.ts`, 'utf8');
-    expect(source).toContain(`export const TODO_TOOL_NAME = '${TODO_WRITE}';`);
+describe('跟工具目錄對得上', () => {
+  // 目錄是模型實際收到的工具（#442）：那一側改名時這裡紅，而不是卡片默默退回參數原文。
+  it('工具名在目錄裡', () => {
+    expect(catalogToolNames()).toContain(TODO_WRITE);
   });
 });
 

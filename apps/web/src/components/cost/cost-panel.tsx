@@ -34,8 +34,8 @@ import type {
 import { ChevronDown, LocateFixed, RefreshCw } from 'lucide-react';
 import { memo } from 'react';
 
-import { useRightSidebar } from '@/components/sidebar/right-sidebar';
-import type { PanelBodyProps } from '@/components/sidebar/right-sidebar-panels';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
+import type { PanelBodyProps } from '@/lib/right-sidebar-api';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { Rows } from '@/components/cost/usage-rows';

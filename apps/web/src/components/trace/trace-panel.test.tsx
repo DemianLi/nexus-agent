@@ -10,7 +10,8 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { Profiler } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { PANELS, type PanelBodyProps } from '@/components/sidebar/right-sidebar-panels';
+import { PANELS } from '@/components/sidebar/right-sidebar-panels';
+import type { PanelBodyProps } from '@/lib/right-sidebar-api';
 import { TRACE_LOCATED_TEXT } from '@/components/trace/trace-panel';
 import { TRACE_LOCATE_LABEL } from '@/components/trace/trace-row';
 import { createConversationStore } from '@/lib/conversation-store';

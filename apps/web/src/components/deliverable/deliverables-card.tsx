@@ -20,7 +20,7 @@ import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { DownloadIconButton } from '@/components/deliverable/deliverable-download-button';
-import { useRightSidebar } from '@/components/sidebar/right-sidebar';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { Button } from '@/components/ui/button';
 import { copyText } from '@/lib/clipboard';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
