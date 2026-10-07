@@ -15,7 +15,7 @@
  *   交付成不成立看狀態，交付卡片是第二刀。判法在 `lib/present-view.ts`。
  * - **`todo_write`**（#575）：收著講「2/5 完成 · 進行中的那一項」，同時進行的其餘幾項另起一格「+N」，不接在會被
  *   截斷的字後面（照 dsh `planSummary`）；展開逐項列那一次寫入的快照，不畫參數原文，不做跟前一次的差異。參數解不開
- *   或有一項壞掉就退回參數原文，不畫半套。判法在 `lib/todo-view.ts`；清單跟輸入框上方的面板共用（`todo-list.tsx`），
+ *   或有一項壞掉就退回參數原文，不畫半套。判法在 `lib/todo-view.ts`；清單跟輸入框上方的面板共用（`list.tsx`），
  *   這裡是快照，所以進行中那一項不閃。
  * - **結果與 diff**（#601）：其他工具展開後畫結果文字（`ToolEntry.text`）；`ls`、`read_file`、`glob`、`grep`、`write_file`、
  *   `edit_file` 只畫結果、不畫參數（照 dsh）。`write_file`、`edit_file` 畫 diff，收著那一行接 `+N −M`，失敗時不接：
@@ -33,16 +33,16 @@ import { Check, ChevronDown, Hand, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
 import { AgentOrb } from '@/components/agent-orb';
-import { Counts } from '@/components/changes/change-counts';
+import { Counts } from '@/components/changes/counts';
 import { SubagentPanel, SubagentStateLabel } from '@/components/tool/subagent-control';
-import { TodoList } from '@/components/todo/todo-list';
+import { TodoList } from '@/components/todo/list';
 import {
   ToolDiff,
   ToolInputBlock,
   ToolOutputBlock,
   ToolRead,
   ToolSearch,
-} from '@/components/tool/tool-result';
+} from '@/components/tool/result';
 import { Badge } from '@/components/ui/badge';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {

@@ -1,6 +1,6 @@
 /**
  * 讀軌跡投影（[#1027](https://github.com/DemianLi/nexus-agent/issues/1027)）的那一層：哪些值可以信、怎麼寫成字。
- * 觀測分頁（`trace-view.ts`、`trace-panel.tsx`）只透過這裡碰投影，所以「不認得的版本不畫、拋過的不畫」只有一個地方。
+ * 觀測分頁（`trace-view.ts`、`panel.tsx`）只透過這裡碰投影，所以「不認得的版本不畫、拋過的不畫」只有一個地方。
  *
  * ## 閘門
  *

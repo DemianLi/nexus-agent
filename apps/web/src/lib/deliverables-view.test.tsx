@@ -23,7 +23,7 @@ import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
  */
 
 beforeEach(() => {
-  // 右側欄的版面記在 localStorage，每個測試換一份新的（見 changes-review.test.tsx）。
+  // 右側欄的版面記在 localStorage，每個測試換一份新的（見 review.test.tsx）。
   vi.stubGlobal('localStorage', memoryStorage());
 });
 

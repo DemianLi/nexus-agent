@@ -9,7 +9,7 @@ import {
   TRACE_SNAPSHOT_REASON_TEXT,
   TRACE_SYSTEM_TRUNCATED_TEXT,
   TRACE_TOOLS_DIFF_PREFIX,
-} from '@/components/trace/trace-call';
+} from '@/components/trace/call';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';

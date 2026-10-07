@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { DeliverablesCard } from '@/components/deliverable/deliverables-card';
+import { DeliverablesCard } from '@/components/deliverable/card';
 import { createDeliverableDownloader } from '@/lib/deliverable-download';
 import { MISSING_REASON, createDeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
@@ -35,7 +35,7 @@ const FILE: LocatedFile = { path: 'out/report.pdf', seq: 11, index: 0 };
 let serial = 0;
 
 beforeEach(() => {
-  // 右側欄的版面記在 localStorage，每個測試換一份新的（見 changes-review.test.tsx）。
+  // 右側欄的版面記在 localStorage，每個測試換一份新的（見 review.test.tsx）。
   vi.stubGlobal('localStorage', memoryStorage());
   URL.createObjectURL = vi.fn(() => {
     serial += 1;

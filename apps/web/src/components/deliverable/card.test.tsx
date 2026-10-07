@@ -5,7 +5,7 @@ import {
   COLLAPSED_COUNT,
   DeliverablesCard,
   fallbackDescription,
-} from '@/components/deliverable/deliverables-card';
+} from '@/components/deliverable/card';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
 

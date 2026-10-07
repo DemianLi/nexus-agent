@@ -6,7 +6,7 @@
 import { Cpu } from 'lucide-react';
 import { useMemo } from 'react';
 
-import { ExpandableLine, SnapshotBlock } from '@/components/trace/trace-lines';
+import { ExpandableLine, SnapshotBlock } from '@/components/trace/lines';
 import { CALL_OUTCOME_LABEL, TRACE_CALL_UNLOADED_TEXT } from '@/lib/trace-view';
 import type { TraceRow } from '@/lib/trace-view';
 import { ABSENT, clockText, durationText, tokenText } from '@/lib/trajectory-view';

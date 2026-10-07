@@ -4,7 +4,7 @@
  *
  * **只讀呼叫參數**，照 dsh 的 `TodoRow`（`packages/client/ui-tool/src/client/tool/toolviews/todo-row.tsx`，`46a7f68`）：
  * 參數是整份清單，`{ todos: [{ content, status }] }`，所以一顆呼叫的參數就是那一刻的快照。**不做跟前一次的差異**
- * （dsh 有；#575 grilling Q3 決定先不做）。「現在的清單」是另一件事，那是輸入框上方的面板（`todo-panel.tsx`），
+ * （dsh 有；#575 grilling Q3 決定先不做）。「現在的清單」是另一件事，那是輸入框上方的面板（`panel.tsx`），
  * 資料走 harness 的投影（`ConversationState.todos`）；兩邊共用這裡的摘要。
  *
  * @module

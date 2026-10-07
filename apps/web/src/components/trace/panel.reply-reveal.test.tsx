@@ -10,7 +10,7 @@ import {
   TRACE_REPLY_OLDER_TEXT,
   TRACE_REPLY_UNPLACED_TEXT,
   TRACE_REVEALED_TEXT,
-} from '@/components/trace/trace-panel';
+} from '@/components/trace/panel';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';

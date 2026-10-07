@@ -3,14 +3,14 @@ import { emptyConversation, reduceAll } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { COST_REVEAL_GONE_TEXT, COST_REVEAL_LABEL } from '@/components/cost/cost-panel';
+import { COST_REVEAL_GONE_TEXT, COST_REVEAL_LABEL } from '@/components/cost/panel';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { RightSidebarToggle } from '@/components/sidebar/right-sidebar';
 import {
   REVEAL_HIGHLIGHT_MS,
   TRACE_REVEAL_MISSING_TEXT,
   TURN_PAGE,
-} from '@/components/trace/trace-panel';
+} from '@/components/trace/panel';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';

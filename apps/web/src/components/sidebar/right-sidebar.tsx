@@ -34,9 +34,9 @@ import {
 } from 'react';
 import type { KeyboardEvent, PointerEvent, ReactNode, RefObject } from 'react';
 
-import { ChangesReviewTab } from '@/components/changes/changes-review';
-import { DeliverablePreviewTab } from '@/components/deliverable/deliverable-preview';
-import { PlanPreviewTab } from '@/components/plan/plan-preview-tab';
+import { ChangesReviewTab } from '@/components/changes/review';
+import { DeliverablePreviewTab } from '@/components/deliverable/preview';
+import { PlanPreviewTab } from '@/components/plan/preview-tab';
 import { Control, useControl } from '@/components/sidebar/right-sidebar-context';
 import type { RightSidebarControl } from '@/components/sidebar/right-sidebar-context';
 import { PANELS } from '@/components/sidebar/right-sidebar-panels';

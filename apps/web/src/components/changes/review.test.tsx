@@ -2,7 +2,7 @@ import type { WorkspaceChangesSummary, WorkspaceFileDiff } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ChangesCard } from '@/components/changes/changes-card';
+import { ChangesCard } from '@/components/changes/card';
 import { createChangesStores } from '@/lib/changes-diff';
 import { MAX_RENDERED_LINES } from '@/lib/diff-rows';
 import { axeViolations } from '@/test/axe';

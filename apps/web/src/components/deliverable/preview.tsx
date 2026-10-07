@@ -71,7 +71,7 @@ import {
 } from 'react';
 import type { CSSProperties, ReactNode, RefObject } from 'react';
 
-import { DownloadAction } from '@/components/deliverable/deliverable-download-button';
+import { DownloadAction } from '@/components/deliverable/download-button';
 import { Button } from '@/components/ui/button';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import type {

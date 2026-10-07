@@ -8,7 +8,7 @@ import {
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { COST_NO_USAGE, COST_SUBAGENT_PENDING } from '@/components/cost/cost-panel';
+import { COST_NO_USAGE, COST_SUBAGENT_PENDING } from '@/components/cost/panel';
 import { RightSidebarToggle } from '@/components/sidebar/right-sidebar';
 import { createConversationStore } from '@/lib/conversation-store';
 import { COST_HEADLINE, COST_LIMITS } from '@/lib/cost-view';

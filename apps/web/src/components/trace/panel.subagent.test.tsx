@@ -21,7 +21,7 @@ import {
   SUBAGENT_CALLS_NO_PULL_TEXT,
   SUBAGENT_CALLS_RELOAD_LABEL,
   SUBAGENT_CALLS_TITLE,
-} from '@/components/trace/trace-subagent';
+} from '@/components/trace/subagent';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';

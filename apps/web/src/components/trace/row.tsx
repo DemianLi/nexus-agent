@@ -21,12 +21,12 @@ import { memo } from 'react';
 
 import { CompactionRow } from '@/components/compaction-row';
 import { MarkdownText } from '@/components/markdown-text';
-import { PlanToolCard } from '@/components/plan/plan-review';
+import { PlanToolCard } from '@/components/plan/review';
 import { ReasoningRow } from '@/components/reasoning-row';
-import { CallRow } from '@/components/trace/trace-call';
-import { ExpandableLine, SnapshotBlock, StaticLine } from '@/components/trace/trace-lines';
-import { SUBAGENT_CALLS_TITLE, SubagentCalls } from '@/components/trace/trace-subagent';
-import { ToolCard, TOOL_STATUS_LABEL } from '@/components/tool/tool-card';
+import { CallRow } from '@/components/trace/call';
+import { ExpandableLine, SnapshotBlock, StaticLine } from '@/components/trace/lines';
+import { SUBAGENT_CALLS_TITLE, SubagentCalls } from '@/components/trace/subagent';
+import { ToolCard, TOOL_STATUS_LABEL } from '@/components/tool/card';
 import { Button } from '@/components/ui/button';
 import { mentionDisplayText } from '@/lib/session-mention';
 import { EXIT_PLAN_MODE, PLAN_OUTCOME_LABEL } from '@/lib/plan-review';

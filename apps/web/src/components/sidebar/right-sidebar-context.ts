@@ -35,7 +35,7 @@ export const Control = createContext<RightSidebarControl | undefined>(undefined)
 
 /**
  * 卡片打開分頁用。**沒有右側欄時是 `undefined`**，卡片就不畫那顆鈕：一顆按了沒反應的鈕比不給更糟
- * （同 `deliverable-download-button.tsx`）。
+ * （同 `download-button.tsx`）。
  */
 export function useRightSidebar(): RightSidebarApi | undefined {
   return useContext(Control)?.api;

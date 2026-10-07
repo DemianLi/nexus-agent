@@ -7,10 +7,10 @@ import { createContext, useCallback, useContext, useEffect, useRef, useState } f
 
 import type { ConversationState, TrajectoryDigest, TrajectoryTurnKind } from '@nexus/wire';
 
-import { CallRow } from '@/components/trace/trace-call';
-import { PullControl } from '@/components/trace/trace-pull-control';
-import { HeadFacts } from '@/components/trace/trace-turn-head';
-import { TOOL_STATUS_LABEL } from '@/components/tool/tool-card';
+import { CallRow } from '@/components/trace/call';
+import { PullControl } from '@/components/trace/pull-control';
+import { HeadFacts } from '@/components/trace/turn-head';
+import { TOOL_STATUS_LABEL } from '@/components/tool/card';
 import { Button } from '@/components/ui/button';
 import { subagentDigestHead, subagentTurnView } from '@/lib/trace-view';
 import type { SubagentCallView, SubagentTurnView } from '@/lib/trace-view';

@@ -1,6 +1,6 @@
 /**
  * 計劃審核的畫面（[#654](https://github.com/DemianLi/nexus-agent/issues/654)）：換掉輸入框的審核面板、對話裡的計劃卡。
- * 全文開在右側欄的「計劃」分頁（`plan-preview-tab.tsx`）。規則在 `lib/plan-review.ts`。
+ * 全文開在右側欄的「計劃」分頁（`preview-tab.tsx`）。規則在 `lib/plan-review.ts`。
  *
  * 行為照 dsh（`477b4f4`）的 `ui-user-questions` `PlanReviewPanel` 與 `ui-plan` `PlanReviewOpen`：
  *
@@ -19,7 +19,7 @@ import { useEffect, useMemo, useRef } from 'react';
 import type { ConversationEntry, PendingInput, PendingQuestion, ToolEntry } from '@nexus/wire';
 
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
-import { ToolCard } from '@/components/tool/tool-card';
+import { ToolCard } from '@/components/tool/card';
 import { Button } from '@/components/ui/button';
 import {
   EXIT_PLAN_MODE,

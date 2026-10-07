@@ -8,16 +8,16 @@
  * `lib/trace-view.ts`，這裡只畫。UI/UX 以 shadcn＋Tailwind 為基底、Libraries.dev 為模仿對象，不是照 dsh 的
  * `ui-trajectory` 畫時間線。
  *
- * - **畫面上的列數有上限**：只畫最新的 {@link TURN_PAGE} 組、每組只畫最新的 `ROW_PAGE` 列（`trace-groups.tsx`），更早的按「顯示更早的」再展開；窗口外的輪摘要（最多 200 列）收在
+ * - **畫面上的列數有上限**：只畫最新的 {@link TURN_PAGE} 組、每組只畫最新的 `ROW_PAGE` 列（`groups.tsx`），更早的按「顯示更早的」再展開；窗口外的輪摘要（最多 200 列）收在
  *   一個摺起來的區塊、同樣分段。投影每顆事件整份換掉，所以列只放原始值（`lib/trace-view.ts`），`memo` 才擋得住。
  * - **資料走可訂閱的 store**（`sources.conversation`），而且**只在看得見時訂閱**（`useVisibleSnapshot`）：分頁藏起來時
  *   不卸載（保住捲動位置與展開狀態），但串流的逐字片段不會讓它重算。
  * - **細節是展開的**：思考與壓縮本身就是一列可展開的元件（`ReasoningRow`、`CompactionRow`），直接當列用，不再包一層；
  *   工具列展開時才掛 `ToolCard`（沿用它的全部畫法，收著的列不付它的錢）。
  * - **375／768 單欄**：細節在列下面展開，不並排；觸控目標 44px（`min-h-11`）。串流中新增的列不做進場動效（spec §7）。
- * - **檔案分工**：這個檔只留時間線（「看這一輪」的定位與按需拉）與分頁入口；畫面的零件各在自己的檔——`trace-lines`（列的基本件）、
- *   `trace-row`（一列）、`trace-call`（模型呼叫列與請求快照）、`trace-subagent`（子代理的呼叫結構）、`trace-turn-head`（一輪的標頭）、
- *   `trace-pull-control`（載入細節的鈕）、`trace-groups`（一組與更早的摘要）。
+ * - **檔案分工**：這個檔只留時間線（「看這一輪」的定位與按需拉）與分頁入口；畫面的零件各在自己的檔——`lines.tsx`（列的基本件）、
+ *   `row.tsx`（一列）、`call.tsx`（模型呼叫列與請求快照）、`subagent.tsx`（子代理的呼叫結構）、`turn-head.tsx`（一輪的標頭）、
+ *   `pull-control.tsx`（載入細節的鈕）、`groups.tsx`（一組與更早的摘要）。
  * - **「在對話裡定位」**：每列右邊一顆鈕，捲到對話區那一則（`lib/transcript-locate.ts`）；1024 以下由右側欄先收掉抽屜、
  *   再把焦點交給那一則（`right-sidebar.tsx`）。找不到時在那一列底下講原因。
  */
@@ -27,12 +27,9 @@ import { useCallback, useEffect, useMemo, useRef, useState, memo } from 'react';
 import type { ConversationState } from '@nexus/wire';
 
 import type { PanelBodyProps, TurnReveal } from '@/lib/right-sidebar-api';
-import { Digests, TurnGroup } from '@/components/trace/trace-groups';
-import {
-  TRACE_PULL_FAILED_TEXT,
-  TRACE_PULL_LOADING_TEXT,
-} from '@/components/trace/trace-pull-control';
-import { SubagentSourceContext } from '@/components/trace/trace-subagent';
+import { Digests, TurnGroup } from '@/components/trace/groups';
+import { TRACE_PULL_FAILED_TEXT, TRACE_PULL_LOADING_TEXT } from '@/components/trace/pull-control';
+import { SubagentSourceContext } from '@/components/trace/subagent';
 import { Button } from '@/components/ui/button';
 import { useStableNames } from '@/hooks/use-stable-names';
 import { useTrajectoryPull } from '@/hooks/use-trajectory-pull';
