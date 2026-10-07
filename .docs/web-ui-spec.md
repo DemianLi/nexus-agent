@@ -20,7 +20,7 @@
 | 無障礙 | WCAG 2.2 AA＋APG＋Radix 內建；焦點只在會丟掉時才搬 | §8 |
 | 斷點 | 1024（以下收成抽屜）；驗收 375／768／1280 | §9 |
 | 原型哪些能搬 | 主題、token、模式規則、registry 改法直接搬；原型 App 只當參考 | §10 |
-| 實作必須帶的測試 | 11 條絆索 | §11 |
+| 實作必須帶的測試 | 12 條絆索 | §11 |
 
 ## 1. 怎麼用這份文件
 
@@ -298,7 +298,7 @@
 
 ## 11. 實作必須帶的絆索
 
-每條連回出處；#378 的三條量**建置出來的 CSS**，不是原始碼。
+每條連回出處；#378 的三條量**建置出來的 CSS**，不是原始碼；第 12 條量原始碼的字串字面值。
 
 | # | 絆索 | 出處 |
 | --- | --- | --- |
@@ -313,6 +313,7 @@
 | 9 | `index.html` 內嵌腳本與程式碼用同一個 `localStorage` key（讀腳本文字比對常數） | [#391](https://github.com/DemianLi/nexus-agent/issues/391#issuecomment-5722962752) |
 | 10 | 三態各自套出正確結果：淺色沒有 `.dark`、深色有、`color-scheme` 跟著對 | [#391](https://github.com/DemianLi/nexus-agent/issues/391#issuecomment-5722962752) |
 | 11 | 沒存過偏好時跟隨系統：stub `matchMedia` 回深色，確認掛上 `.dark` | [#391](https://github.com/DemianLi/nexus-agent/issues/391#issuecomment-5722962752) |
+| 12 | 元件原始碼的字串字面值不越過系統的值：不用 Tailwind 預設色板（含 `white`／`black`）、字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`、圓角不寫數字任意值、不硬寫色碼。例外只能列在 `apps/web/src/styles/design-system.test.ts` 的 `ALLOWED`（附理由），列了卻不再命中的條目報錯，所以例外只會變少 | [#1141](https://github.com/DemianLi/nexus-agent/issues/1141) |
 
 **靠 review、不寫測試的**：blur 只給小元素、持續動畫只動 transform／opacity。
 
