@@ -1,6 +1,6 @@
 # 工具 schema 目錄
 
-模型實際收到的每個工具的名稱、描述與參數 schema（共 19 個）。**這份檔案由程式產生，不要手改**：
+模型實際收到的每個工具的名稱、描述與參數 schema（共 24 個）。**這份檔案由程式產生，不要手改**：
 
 ```bash
 pnpm --filter @nexus/harness run gen-tool-catalog
@@ -403,6 +403,224 @@ Usage:
     "sandbox_permissions",
     "justification"
   ],
+  "additionalProperties": false
+}
+```
+
+## 組裝點（harness）· 背景續行子代理（serve 出廠）
+
+`serve` 出廠就是背景續行（`cordis.yml` 的 `background-subagents` 是 `continuable`）：模型看到的委派工具是 `subagent`，沒有基座的 `task`；CLI 不給這一組，委派用 `task`（列在基座那一節）。
+
+### `interrupt_agent`
+
+描述：
+
+```text
+Ask a subagent to stop its current work. This call returns without waiting for it to stop. You can continue a direct child's conversation later with send_message. Subagents it started will keep running.
+```
+
+參數：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "description": "The id of an agent created under you: your direct child or a deeper descendant."
+    }
+  },
+  "required": [
+    "agent_id"
+  ],
+  "additionalProperties": false
+}
+```
+
+### `list_agents`
+
+描述：
+
+```text
+List subagents you started, with their ids, labels, and status. running means it is working; inactive means it is not currently working. You will be notified when a subagent finishes; there is no need to keep checking its status. Use send_message to continue the conversation.
+```
+
+參數：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {},
+  "additionalProperties": false
+}
+```
+
+### `send_message`
+
+描述：
+
+```text
+Send a message to an agent. A working agent receives it at its next step; an idle agent starts a new turn with it. Returns delivery confirmation, not the agent's answer.
+```
+
+參數：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "agent_id": {
+      "type": "string",
+      "description": "The id of one of your background subagents (from subagent or list_agents), or your direct parent when you are a resident continuable child."
+    },
+    "message": {
+      "type": "string",
+      "description": "The message to deliver to the agent."
+    }
+  },
+  "required": [
+    "agent_id",
+    "message"
+  ],
+  "additionalProperties": false
+}
+```
+
+### `subagent`
+
+描述：
+
+```text
+Launch a subagent to handle a complex, multi-step task in an isolated context window.
+
+Available agent types and the tools they have access to:
+- general-purpose: General-purpose agent for researching complex questions, searching for files and content, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. This agent has access to all tools as the main agent.
+
+Specify subagent_type to select the agent. Usage notes:
+- Launch multiple agents concurrently when their tasks are independent, using a single message with multiple tool calls.
+- Each new delegation starts fresh: the agent sees only the prompt you give it, and reports its final result when it finishes. Put full detail in the prompt and state exactly what it should return.
+- The agent's report is not shown to the user; relay a summary yourself.
+- Tell the agent whether to create content, analyze, or only research, since it cannot see the user's intent.
+- If an agent's description says to use it proactively, do so without waiting to be asked.
+- When only general-purpose is available, use it for any complex, context-heavy task; it has the same capabilities as the main agent.
+
+`run_in_background` 預設 true：子代理在背景跑，這次呼叫當場回它的編號，你可以接著做別的事。要等它的結果才能往下時傳 `false`，這次呼叫會等它跑完並回結果。
+```
+
+參數：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "description": {
+      "type": "string",
+      "description": "交給子代理的任務，寫清楚它需要的背景與期待的產出。"
+    },
+    "subagent_type": {
+      "type": "string",
+      "description": "要用哪一種子代理（見上面的清單）。"
+    },
+    "run_in_background": {
+      "description": "預設 true：當場回子代理編號，你接著做別的事。要等結果才能往下時傳 false。",
+      "type": "boolean"
+    }
+  },
+  "required": [
+    "description",
+    "subagent_type"
+  ],
+  "additionalProperties": false
+}
+```
+
+#### 選配打開之後的版本（出廠關著）
+
+描述：
+
+```text
+Launch a subagent to handle a complex, multi-step task in an isolated context window.
+
+Available agent types and the tools they have access to:
+- general-purpose: General-purpose agent for researching complex questions, searching for files and content, and executing multi-step tasks. When you are searching for a keyword or file and are not confident that you will find the right match in the first few tries use this agent to perform the search for you. This agent has access to all tools as the main agent.
+
+Specify subagent_type to select the agent. Usage notes:
+- Launch multiple agents concurrently when their tasks are independent, using a single message with multiple tool calls.
+- Each new delegation starts fresh: the agent sees only the prompt you give it, and reports its final result when it finishes. Put full detail in the prompt and state exactly what it should return.
+- The agent's report is not shown to the user; relay a summary yourself.
+- Tell the agent whether to create content, analyze, or only research, since it cannot see the user's intent.
+- If an agent's description says to use it proactively, do so without waiting to be asked.
+- When only general-purpose is available, use it for any complex, context-heavy task; it has the same capabilities as the main agent.
+
+`run_in_background` 預設 true：子代理在背景跑，這次呼叫當場回它的編號，你可以接著做別的事。要等它的結果才能往下時傳 `false`，這次呼叫會等它跑完並回結果。
+
+選模型是選填的：省略 `model` 與 `reasoning_effort` 就沿用你現在的模型。要指定時，先用 `list_subagent_models` 看可選的模型與它的推理等級；換了模型卻沒給推理等級，就用新模型的預設。選模型只在背景委派（`run_in_background` 為 true）時可用。
+```
+
+參數：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "description": {
+      "type": "string",
+      "description": "交給子代理的任務，寫清楚它需要的背景與期待的產出。"
+    },
+    "subagent_type": {
+      "type": "string",
+      "description": "要用哪一種子代理（見上面的清單）。"
+    },
+    "run_in_background": {
+      "description": "預設 true：當場回子代理編號，你接著做別的事。要等結果才能往下時傳 false。",
+      "type": "boolean"
+    },
+    "model": {
+      "description": "子代理用哪一顆模型（型錄 id）。省略＝沿用你現在用的這顆。先用 list_subagent_models 看可選的。",
+      "type": "string"
+    },
+    "reasoning_effort": {
+      "description": "子代理在這顆模型上的推理等級。省略＝這顆模型的預設；換了模型卻沒給，也用新模型的預設。",
+      "type": "string"
+    }
+  },
+  "required": [
+    "description",
+    "subagent_type"
+  ],
+  "additionalProperties": false
+}
+```
+
+## 組裝點（harness）· 選配（出廠關著）
+
+出廠關著，設定打開才有（`subagent-model-selection` 的授權清單，#877）：新增這一個工具；同時 `subagent` 會多出選模型的兩格，那個版本接在 `subagent` 底下。
+
+### `list_subagent_models`
+
+描述：
+
+```text
+List the models a subagent may use, without changing your own. Call with no arguments to list the authorized models, or with `model` to see the reasoning efforts of that exact model. Use the returned ids with the `model` and `reasoning_effort` fields of the subagent tool.
+```
+
+參數：
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "model": {
+      "description": "Exact model id to inspect. Omit to list the authorized models.",
+      "type": "string"
+    }
+  },
   "additionalProperties": false
 }
 ```
