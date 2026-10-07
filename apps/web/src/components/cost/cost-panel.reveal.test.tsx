@@ -4,7 +4,8 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { COST_REVEAL_GONE_TEXT, COST_REVEAL_LABEL } from '@/components/cost/cost-panel';
-import { RightSidebarToggle, useRightSidebar } from '@/components/sidebar/right-sidebar';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
+import { RightSidebarToggle } from '@/components/sidebar/right-sidebar';
 import {
   REVEAL_HIGHLIGHT_MS,
   TRACE_REVEAL_MISSING_TEXT,

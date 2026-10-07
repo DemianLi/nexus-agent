@@ -41,7 +41,7 @@ import type { EarlierHistory } from '@/components/earlier-pager';
 import { MarkdownText } from '@/components/markdown-text';
 import { PlanToolCard } from '@/components/plan/plan-review';
 import { ReasoningRow } from '@/components/reasoning-row';
-import { useRightSidebar } from '@/components/sidebar/right-sidebar';
+import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { AttributionBadge, ToolCard } from '@/components/tool/tool-card';
 import { Button } from '@/components/ui/button';
 import { Message, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
