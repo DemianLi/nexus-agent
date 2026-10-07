@@ -413,6 +413,13 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   - **擁有者也算**：別人擁有的模組檔，就算只有他寫得動也會被拒。
   - **要共用 plugin**：複製一份到自己的私有目錄再指過去，或裝成套件用套件名引用。直接指向開發組共用的
     目錄不再起得來。
+- **`insert` 進來的模組宣告的 `@nexus/core` 範圍要滿足**（[#1137](https://github.com/DemianLi/nexus-agent/issues/1137)）。
+  指到檔案的那一列在 import 之前讀最近的 `package.json`，把 `peerDependencies["@nexus/core"]` 對執行中的 core 版本
+  （`packages/nexus-core/package.json` 的 `version`）跑 semver 比對；不滿足時那一列掉了、其餘照樣起來，訊息
+  寫 `套件@版本 需要 @nexus/core <範圍>，執行中的是 <版本>`，模組的程式碼一行都沒跑。範圍寫壞、`package.json` 讀不了一樣掉。
+  沒宣告（沒有 `package.json`、沒有 `peerDependencies`、沒有 `@nexus/core` 那一格）就放行。**沒有豁免機制**。
+  - **這個版本只有人守得住**：改了 registry 的形狀（欄位改名、註冊點簽章換形狀、聯集少一支）要跟著升 core 的 `version`，
+    不然範圍檢查會放行一個其實已經不相容的插件。目前沒有機械守著。
 - **核准閘門關不掉。** `- id: approval-gate` ＋ `disabled: true` 不是一行被忽略的字，是
   **啟動失敗**，`--dump-config` 也一樣擋。詳見下一節最後一列。
 

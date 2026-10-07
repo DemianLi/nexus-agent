@@ -505,6 +505,57 @@ describe('權限', () => {
   });
 });
 
+describe('insert 進來的模組宣告的 @nexus/core 範圍不滿足：import 之前那一列掉了（#1137）', () => {
+  /** 私有目錄裡一個帶 manifest 的插件；模組頂層會寫一個見證檔。回傳 { 目錄, 見證檔 }。 */
+  function peerPlugin(root: string, peer: string) {
+    const witness = join(root, 'ran');
+    writePrivate(
+      root,
+      'package.json',
+      JSON.stringify({
+        name: 'team-plugin',
+        version: '2.0.0',
+        peerDependencies: { '@nexus/core': peer },
+      }),
+    );
+    const module = writePrivate(
+      root,
+      'team.mjs',
+      `import { writeFileSync } from 'node:fs';\nwriteFileSync(${JSON.stringify(witness)}, 'x');\n` +
+        "export default { name: 'team', apply() {} };\n",
+    );
+    return { module, witness };
+  }
+
+  function loadWith(root: string, name: string) {
+    const shipped = writePrivate(root, 'cordis.yml', '[]\n');
+    const patch = writePrivate(root, 'p.yml', `- insert:\n    - id: team\n      name: '${name}'\n`);
+    return loadPluginConfig({ shipped, overlays: [patch], warn: () => {} });
+  }
+
+  it('不滿足：那一列掉了、其餘照樣載，訊息指名 套件@版本、範圍與執行中的版本，模組主體一行都沒跑', async () => {
+    const root = privateDirectory();
+    const { witness } = peerPlugin(root, '>=999.0.0');
+    const { plugins, dropped } = await loadWith(root, './team.mjs');
+    expect(plugins).toEqual([]);
+    expect(dropped).toHaveLength(1);
+    expect(dropped[0]).toMatchObject({ id: 'team', stage: 'module' });
+    expect(dropped[0]?.message).toMatch(
+      /^條目 "team"（file:[^）]+） 不相容：team-plugin@2\.0\.0 需要 @nexus\/core >=999\.0\.0，執行中的是 \d+\.\d+\.\d+/u,
+    );
+    expect(existsSync(witness)).toBe(false);
+  });
+
+  it('滿足：照常載入，模組主體有跑（對照：見證檔量得到「跑了」）', async () => {
+    const root = privateDirectory();
+    const { witness } = peerPlugin(root, '>=0.0.0');
+    const { plugins, dropped } = await loadWith(root, './team.mjs');
+    expect(dropped).toEqual([]);
+    expect(plugins[0]?.plugin.name).toBe('team');
+    expect(existsSync(witness)).toBe(true);
+  });
+});
+
 describe('insert 進來的模組檔也要只有自己動得了（#542）', () => {
   /** 一顆會匯出 plugin 的模組，模式位照給的設。 */
   function moduleFile(dir: string, name: string, mode = 0o600): string {
