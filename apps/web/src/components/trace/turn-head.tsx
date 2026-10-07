@@ -66,21 +66,21 @@ export function TurnHeader({ head }: { head: TurnHead }) {
   return (
     <header className="px-2 pt-1 pb-1" data-testid="trace-turn-head">
       <h3
-        className="text-foreground text-sm font-medium outline-none"
+        className="text-foreground text-body font-medium outline-none"
         // 成本分頁的「看這一輪」把焦點交到這裡（`reveal`）；平常不在 Tab 順序裡。
         data-reveal-target=""
         tabIndex={-1}
       >
         第 {head.number} 輪
-        <span className="text-muted-foreground ml-2 text-xs font-normal">
+        <span className="text-muted-foreground ml-2 text-tip font-normal">
           {TURN_KIND_LABEL[head.kind]}
         </span>
       </h3>
-      <p className="text-muted-foreground flex flex-wrap gap-x-2 text-xs">
+      <p className="text-muted-foreground flex flex-wrap gap-x-2 text-tip">
         <HeadFacts head={head} />
       </p>
       {head.elidedCalls !== undefined && (
-        <p className="text-muted-foreground text-xs" data-testid="trace-elided">
+        <p className="text-muted-foreground text-tip" data-testid="trace-elided">
           另有 {head.elidedCalls} 次呼叫已摺掉
           {head.elidedTools !== undefined && `、${head.elidedTools} 個工具已摺掉`}
           ，上面的計數仍包含它們。

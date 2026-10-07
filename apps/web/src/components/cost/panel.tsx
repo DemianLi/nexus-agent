@@ -89,7 +89,7 @@ function Section({
 }) {
   return (
     <section className="space-y-1.5 px-2 py-3" data-testid={testId} aria-label={title}>
-      <h3 className="text-muted-foreground text-xs font-medium">{title}</h3>
+      <h3 className="text-muted-foreground text-tip font-medium">{title}</h3>
       {children}
     </section>
   );
@@ -104,10 +104,10 @@ function Totals({
 }) {
   const { tokens, stats } = usageSections(tokenUsage, sessionStats);
   if (tokens === undefined && stats === undefined) {
-    return <p className="text-muted-foreground text-sm">{COST_NO_USAGE}</p>;
+    return <p className="text-muted-foreground text-body">{COST_NO_USAGE}</p>;
   }
   return (
-    <div className="space-y-2 text-sm">
+    <div className="space-y-2 text-body">
       {tokens !== undefined && <Rows rows={tokens} />}
       {stats !== undefined && <Rows rows={stats} />}
     </div>
@@ -125,18 +125,18 @@ function SubagentRow({
 }) {
   return (
     <li className="space-y-1.5 py-2" data-testid="cost-subagent" data-run-id={runId}>
-      <p className="text-sm font-medium">
+      <p className="text-body font-medium">
         {label}
-        <span className="text-muted-foreground ml-2 text-xs font-normal">{runId}</span>
+        <span className="text-muted-foreground ml-2 text-tip font-normal">{runId}</span>
       </p>
       {slot?.error !== undefined ? (
-        <p className="text-destructive text-sm" data-testid="cost-subagent-error">
+        <p className="text-destructive text-body" data-testid="cost-subagent-error">
           讀不回來：{slot.error}
         </p>
       ) : slot?.usage !== undefined ? (
         <Totals tokenUsage={slot.usage.tokenUsage} sessionStats={slot.usage.sessionStats} />
       ) : (
-        <p className="text-muted-foreground text-sm">{COST_SUBAGENT_LOADING}</p>
+        <p className="text-muted-foreground text-body">{COST_SUBAGENT_LOADING}</p>
       )}
     </li>
   );
@@ -157,7 +157,7 @@ function Subagents({
   return (
     <Section title="背景子代理" testId="cost-subagents">
       {runIds.length === 0 ? (
-        <p className="text-muted-foreground text-sm">這條對話裡還沒有派出背景子代理</p>
+        <p className="text-muted-foreground text-body">這條對話裡還沒有派出背景子代理</p>
       ) : (
         <>
           <ul className="divide-border divide-y">
@@ -192,7 +192,7 @@ function Subagents({
 
 function Limits() {
   return (
-    <section aria-labelledby="cost-limits" className="text-muted-foreground mt-2 px-2 text-xs">
+    <section aria-labelledby="cost-limits" className="text-muted-foreground mt-2 px-2 text-tip">
       <h3 id="cost-limits" className="mb-1 font-medium">
         {COST_LIMITS_HEADING}
       </h3>
@@ -231,15 +231,15 @@ const TurnCard = memo(
     return (
       <li className="space-y-1.5 py-3" data-testid="cost-turn" data-seq={row.seq}>
         <div className="flex flex-wrap items-baseline gap-x-2">
-          <h4 className="text-sm font-medium">第 {row.number} 輪</h4>
-          <span className="text-muted-foreground text-xs">{row.kindLabel}</span>
+          <h4 className="text-body font-medium">第 {row.number} 輪</h4>
+          <span className="text-muted-foreground text-tip">{row.kindLabel}</span>
         </div>
-        <p className="text-muted-foreground flex flex-wrap gap-x-2 text-xs">
+        <p className="text-muted-foreground flex flex-wrap gap-x-2 text-tip">
           <span>{row.time}</span>
           <span>耗時 {row.wall}</span>
           <span>{row.endLabel}</span>
         </p>
-        <div className="text-sm">
+        <div className="text-body">
           <FieldRows rows={row.fields} />
         </div>
         {sidebar !== undefined && (
@@ -257,7 +257,7 @@ const TurnCard = memo(
               {COST_REVEAL_LABEL}
             </Button>
             {!row.revealable && (
-              <p id={describedBy} className="text-muted-foreground text-xs">
+              <p id={describedBy} className="text-muted-foreground text-tip">
                 {COST_REVEAL_GONE_TEXT}
               </p>
             )}
@@ -274,11 +274,11 @@ function Distributions({ meter }: { meter: TokenMeterView }) {
   if (models.length === 0 && tools.length === 0) return null;
   return (
     <Collapsible data-testid="cost-distributions">
-      <CollapsibleTrigger className="text-muted-foreground flex min-h-11 w-full items-center justify-between px-2 text-xs lg:min-h-9">
+      <CollapsibleTrigger className="text-muted-foreground flex min-h-11 w-full items-center justify-between px-2 text-tip lg:min-h-9">
         依模型、依工具
         <ChevronDown aria-hidden className="size-4" />
       </CollapsibleTrigger>
-      <CollapsibleContent className="space-y-2 px-2 pb-2 text-sm">
+      <CollapsibleContent className="space-y-2 px-2 pb-2 text-body">
         {models.length > 0 && <Rows rows={models} />}
         {tools.length > 0 && <Rows rows={tools} />}
       </CollapsibleContent>
@@ -295,24 +295,24 @@ function SubagentCard({ subagent, label }: { subagent: CostSubagent; label: stri
       data-run-id={runId}
       data-mode={mode}
     >
-      <p className="text-sm font-medium">
+      <p className="text-body font-medium">
         {label}
-        <span className="text-muted-foreground ml-2 text-xs font-normal">
+        <span className="text-muted-foreground ml-2 text-tip font-normal">
           {mode === 'one-shot' ? '前景' : '背景'}
           {turn !== undefined && `・第 ${turn + 1} 輪派出`}
         </span>
       </p>
       {view === undefined ? (
-        <p className="text-muted-foreground text-sm" data-testid="cost-subagent-pending">
+        <p className="text-muted-foreground text-body" data-testid="cost-subagent-pending">
           {COST_SUBAGENT_PENDING}
         </p>
       ) : (
-        <div className="text-sm">
+        <div className="text-body">
           <FieldRows rows={spanRows(view.session)} />
         </div>
       )}
       {mode === 'one-shot' && (
-        <p className="text-muted-foreground text-xs">
+        <p className="text-muted-foreground text-tip">
           前景子代理跑的時間已經在派它的那顆工具的耗時裡，不要和主對話的時間相加。
         </p>
       )}
@@ -325,12 +325,12 @@ function Calibers({ rows }: { rows: readonly FieldRow[] }) {
   for (const [field, label] of rows) if (!fields.has(field)) fields.set(field, label);
   return (
     <Collapsible data-testid="cost-calibers" className="mt-2 px-2">
-      <CollapsibleTrigger className="text-muted-foreground flex min-h-11 w-full items-center justify-between text-xs font-medium lg:min-h-9">
+      <CollapsibleTrigger className="text-muted-foreground flex min-h-11 w-full items-center justify-between text-tip font-medium lg:min-h-9">
         每個數字的口徑（{fields.size} 項）
         <ChevronDown aria-hidden className="size-4" />
       </CollapsibleTrigger>
       <CollapsibleContent>
-        <ul className="text-muted-foreground flex list-disc flex-col gap-1 pb-2 pl-4 text-xs">
+        <ul className="text-muted-foreground flex list-disc flex-col gap-1 pb-2 pl-4 text-tip">
           {[...fields].map(([field, label]) => (
             <li key={field} data-caliber={field}>
               <span className="text-foreground">{label}</span>：{caliberOf(field) ?? ''}
@@ -344,7 +344,7 @@ function Calibers({ rows }: { rows: readonly FieldRow[] }) {
 
 function StructuredLimits() {
   return (
-    <section aria-labelledby="cost-limits" className="text-muted-foreground mt-2 px-2 text-xs">
+    <section aria-labelledby="cost-limits" className="text-muted-foreground mt-2 px-2 text-tip">
       <h3 id="cost-limits" className="mb-1 font-medium">
         {COST_LIMITS_HEADING}
       </h3>
@@ -396,14 +396,14 @@ function StructuredCost({
       data-structured=""
       tabIndex={0}
     >
-      <p className="text-muted-foreground mb-1 px-2 text-xs" data-testid="cost-headline">
+      <p className="text-muted-foreground mb-1 px-2 text-tip" data-testid="cost-headline">
         {COST_STRUCTURED_HEADLINE}
       </p>
       <Section title="這條對話累計" testId="cost-totals">
         {empty ? (
-          <p className="text-muted-foreground text-sm">{COST_NO_USAGE}</p>
+          <p className="text-muted-foreground text-body">{COST_NO_USAGE}</p>
         ) : (
-          <div className="space-y-2 text-sm">
+          <div className="space-y-2 text-body">
             <FieldRows rows={total} />
             {withSubagents !== undefined && (
               <dl className="grid grid-cols-[1fr_auto] gap-x-4 tabular-nums">
@@ -422,27 +422,27 @@ function StructuredCost({
       <Distributions meter={meter} />
       {context !== undefined && (
         <Section title="目前的 context" testId="cost-context">
-          <div className="text-sm">
+          <div className="text-body">
             <Rows rows={context} />
           </div>
         </Section>
       )}
       <Section title="壓縮" testId="cost-compactions">
-        <div className="text-sm">
+        <div className="text-body">
           <Rows rows={[['已載入的壓縮次數', `${compactions} 次`]]} />
         </div>
       </Section>
       <Section title="逐輪" testId="cost-turns">
         {meter.earlier !== undefined && (
-          <div className="space-y-1.5 pb-2 text-sm" data-testid="cost-earlier">
-            <p className="text-muted-foreground text-xs">
+          <div className="space-y-1.5 pb-2 text-body" data-testid="cost-earlier">
+            <p className="text-muted-foreground text-tip">
               更早的 {meter.earlier.turns} 輪合計（沒有逐輪的列）
             </p>
             <FieldRows rows={spanRows(meter.earlier)} />
           </div>
         )}
         {turns.length === 0 && meter.earlier === undefined ? (
-          <p className="text-muted-foreground text-sm">還沒有開過輪</p>
+          <p className="text-muted-foreground text-body">還沒有開過輪</p>
         ) : (
           <ol className="divide-border divide-y">
             {turns.map((row) => (
@@ -451,15 +451,15 @@ function StructuredCost({
           </ol>
         )}
         {hasOutside && (
-          <div className="space-y-1.5 pt-2 text-sm" data-testid="cost-outside">
-            <p className="text-muted-foreground text-xs">不在任何一輪裡的用量</p>
+          <div className="space-y-1.5 pt-2 text-body" data-testid="cost-outside">
+            <p className="text-muted-foreground text-tip">不在任何一輪裡的用量</p>
             <FieldRows rows={spanRows(meter.outside)} />
           </div>
         )}
       </Section>
       <Section title="子代理" testId="cost-subagents">
         {subagents.length === 0 ? (
-          <p className="text-muted-foreground text-sm">這條對話裡還沒有派出子代理</p>
+          <p className="text-muted-foreground text-body">這條對話裡還沒有派出子代理</p>
         ) : (
           <ul className="divide-border divide-y">
             {subagents.map((subagent) => (
@@ -472,7 +472,7 @@ function StructuredCost({
           </ul>
         )}
         {meter.linksOmitted > 0 && (
-          <p className="text-muted-foreground text-xs" data-testid="cost-links-omitted">
+          <p className="text-muted-foreground text-tip" data-testid="cost-links-omitted">
             更早派出的 {meter.linksOmitted} 個子代理沒有逐個列出，含子代理的 token 因此是下限。
           </p>
         )}
@@ -511,7 +511,7 @@ const CostView = memo(function CostView({
       // 可捲動的區塊要能用鍵盤捲：進 Tab 順序（同觀測與計劃分頁，§8）。
       tabIndex={0}
     >
-      <p className="text-muted-foreground mb-1 px-2 text-xs" data-testid="cost-headline">
+      <p className="text-muted-foreground mb-1 px-2 text-tip" data-testid="cost-headline">
         {COST_HEADLINE}
       </p>
       <Section title="這條對話累計" testId="cost-totals">
@@ -519,13 +519,13 @@ const CostView = memo(function CostView({
       </Section>
       {context !== undefined && (
         <Section title="目前的 context" testId="cost-context">
-          <div className="text-sm">
+          <div className="text-body">
             <Rows rows={context} />
           </div>
         </Section>
       )}
       <Section title="壓縮" testId="cost-compactions">
-        <div className="text-sm">
+        <div className="text-body">
           <Rows rows={[['已載入的壓縮次數', `${compactions} 次`]]} />
         </div>
       </Section>
@@ -568,7 +568,7 @@ export function CostBody({ visible, sources }: PanelBodyProps) {
   if (state === undefined) {
     return (
       <p
-        className="text-muted-foreground flex flex-1 items-center justify-center px-6 text-center text-sm"
+        className="text-muted-foreground flex flex-1 items-center justify-center px-6 text-center text-body"
         data-testid="right-sidebar-panel-cost"
       >
         {COST_EMPTY_TEXT}

@@ -35,7 +35,7 @@ function QuestionnaireProgress({
     <QuestionnairePrimitive.Progress
       data-slot="questionnaire-progress"
       className={cn(
-        'min-h-[1lh] w-fit min-w-[14ch] text-xs font-medium text-muted-foreground tabular-nums',
+        'min-h-[1lh] w-fit min-w-[14ch] text-tip font-medium text-muted-foreground tabular-nums',
         className,
       )}
       {...props}
@@ -79,7 +79,7 @@ function QuestionnaireDescription({
   return (
     <QuestionnairePrimitive.Description
       data-slot="questionnaire-description"
-      className={cn('text-sm text-pretty text-muted-foreground', className)}
+      className={cn('text-body text-pretty text-muted-foreground', className)}
       {...props}
     />
   );
@@ -107,7 +107,7 @@ function QuestionnaireChoice({
     <QuestionnairePrimitive.Choice
       data-slot="questionnaire-choice"
       className={cn(
-        'group/questionnaire-choice relative flex min-h-11 cursor-pointer items-start gap-3 rounded-lg bg-card px-4 py-3.5 text-start text-sm shadow-material transition-colors outline-none select-none hover:bg-chip-hover has-[>input:focus-visible]:outline-2 has-[>input:focus-visible]:outline-offset-2 has-[>input:focus-visible]:outline-ring data-invalid:shadow-[inset_0_0_0_1px_var(--destructive)] data-checked:bg-chip',
+        'group/questionnaire-choice relative flex min-h-11 cursor-pointer items-start gap-3 rounded-lg bg-card px-4 py-3.5 text-start text-body shadow-material transition-colors outline-none select-none hover:bg-chip-hover has-[>input:focus-visible]:outline-2 has-[>input:focus-visible]:outline-offset-2 has-[>input:focus-visible]:outline-ring data-invalid:shadow-[inset_0_0_0_1px_var(--destructive)] data-checked:bg-chip',
         'data-disabled:pointer-events-none data-disabled:cursor-not-allowed data-disabled:opacity-50',
         className,
       )}
@@ -167,7 +167,7 @@ function QuestionnaireInput({
       <QuestionnairePrimitive.Input
         data-slot="questionnaire-input"
         className={cn(
-          'h-9 min-h-11 w-full min-w-0 rounded-lg bg-card px-2.5 py-1 text-base shadow-material transition-[color,box-shadow,background-color] outline-none disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60 aria-invalid:shadow-[inset_0_0_0_1px_var(--destructive)] sm:min-h-0 md:text-sm',
+          'h-9 min-h-11 w-full min-w-0 rounded-lg bg-card px-2.5 py-1 text-base shadow-material transition-[color,box-shadow,background-color] outline-none disabled:pointer-events-none disabled:cursor-not-allowed disabled:opacity-60 aria-invalid:shadow-[inset_0_0_0_1px_var(--destructive)] sm:min-h-0 md:text-body',
           'selection:bg-primary selection:text-primary-foreground placeholder:text-muted-foreground',
           className,
         )}
@@ -184,7 +184,7 @@ function QuestionnaireError({
   return (
     <QuestionnairePrimitive.Error
       data-slot="questionnaire-error"
-      className={cn('text-sm text-destructive', className)}
+      className={cn('text-body text-destructive', className)}
       {...props}
     />
   );

@@ -42,7 +42,7 @@ export function TodoPanel({
     >
       <CollapsibleTrigger
         aria-label={todoPanelLabel(summary)}
-        className="group text-muted-foreground hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[20px] px-3 text-left text-xs transition-colors duration-(--duration-quick) lg:min-h-9"
+        className="group text-muted-foreground hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-[20px] px-3 text-left text-tip transition-colors duration-(--duration-quick) lg:min-h-9"
       >
         <ListTodo aria-hidden className="size-4 shrink-0" />
         <span className="flex min-w-0 flex-1 gap-1.5">

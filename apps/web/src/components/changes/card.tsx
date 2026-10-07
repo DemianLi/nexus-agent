@@ -63,7 +63,7 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
               onPress={openAt === undefined ? undefined : () => openAt(index)}
               className="flex w-full items-baseline gap-3 px-2 py-1.5"
             >
-              <span className="min-w-0 flex-1 font-mono text-xs break-all">{file.display}</span>
+              <span className="min-w-0 flex-1 font-mono text-tip break-all">{file.display}</span>
               <FileCounts file={file} />
             </Pressable>
           </li>
@@ -85,7 +85,7 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
           )}
           {unlisted > 0 && (
             // 摘要有上限；總數與總行數含沒列出來的那些。
-            <span className="text-muted-foreground px-2 text-xs">{`另有 ${unlisted} 個檔沒有列出`}</span>
+            <span className="text-muted-foreground px-2 text-tip">{`另有 ${unlisted} 個檔沒有列出`}</span>
           )}
         </div>
       )}

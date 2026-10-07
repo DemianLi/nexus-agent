@@ -9,7 +9,7 @@ const GROUPED = new Intl.NumberFormat('en-US');
 
 export function Counts({ added, deleted }: { added: number; deleted: number }) {
   return (
-    <span className="flex shrink-0 gap-2 font-mono text-xs tabular-nums">
+    <span className="flex shrink-0 gap-2 font-mono text-tip tabular-nums">
       <span className="text-success">
         <span aria-hidden>{`+${GROUPED.format(added)}`}</span>
         <span className="sr-only">{`新增 ${added} 行，`}</span>
@@ -23,8 +23,8 @@ export function Counts({ added, deleted }: { added: number; deleted: number }) {
 }
 
 export function FileCounts({ file }: { file: WorkspaceChangedFile }) {
-  if (file.binary === true) return <span className="text-muted-foreground text-xs">二進位檔</span>;
+  if (file.binary === true) return <span className="text-muted-foreground text-tip">二進位檔</span>;
   if (file.oversized === true)
-    return <span className="text-muted-foreground text-xs">檔案過大</span>;
+    return <span className="text-muted-foreground text-tip">檔案過大</span>;
   return <Counts added={file.added} deleted={file.deleted} />;
 }

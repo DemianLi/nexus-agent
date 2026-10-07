@@ -40,7 +40,7 @@ export function ContextMeter({
         aria-label={contextMeterLabel(view)}
         data-testid="context-meter"
         data-warning={view.warning}
-        className={`hover:bg-chip-hover active:bg-chip-pressed flex h-11 shrink-0 items-center gap-1.5 rounded-full px-2 text-xs tabular-nums transition-colors duration-(--duration-quick) lg:h-9 ${tone}`}
+        className={`hover:bg-chip-hover active:bg-chip-pressed flex h-11 shrink-0 items-center gap-1.5 rounded-full px-2 text-tip tabular-nums transition-colors duration-(--duration-quick) lg:h-9 ${tone}`}
       >
         <svg aria-hidden viewBox="0 0 16 16" className="size-4 -rotate-90">
           <circle cx="8" cy="8" r={RADIUS} fill="none" strokeWidth="2" className="stroke-border" />
@@ -63,18 +63,18 @@ export function ContextMeter({
         side="top"
         align="start"
         aria-label="對話用量明細"
-        className="w-64 space-y-3 text-sm"
+        className="w-64 space-y-3 text-body"
       >
         {view.inputTokens !== undefined && (
           <div>
-            <p className="text-muted-foreground text-xs">目前大小</p>
+            <p className="text-muted-foreground text-tip">目前大小</p>
             <p className="tabular-nums" data-testid="context-meter-input">
               {view.inputTokens}
             </p>
           </div>
         )}
         <div>
-          <p className="text-muted-foreground text-xs">距離自動摘要</p>
+          <p className="text-muted-foreground text-tip">距離自動摘要</p>
           <ul>
             {view.rows.map((row, index) => (
               <li
@@ -89,7 +89,7 @@ export function ContextMeter({
             ))}
           </ul>
         </div>
-        <p className="text-muted-foreground text-xs">
+        <p className="text-muted-foreground text-tip">
           到了任何一道門檻，較早的訊息會被摘要成一段。比例是估算的。
         </p>
       </PopoverContent>

@@ -18,10 +18,10 @@ export function TodoList({
   readonly live?: boolean;
 }) {
   if (todos.length === 0) {
-    return <p className="text-muted-foreground px-3 py-2 text-xs">清單是空的。</p>;
+    return <p className="text-muted-foreground px-3 py-2 text-tip">清單是空的。</p>;
   }
   return (
-    <ul className="bg-stage shadow-stage flex flex-col gap-2 rounded-xl p-3 text-sm">
+    <ul className="bg-stage shadow-stage flex flex-col gap-2 rounded-xl p-3 text-body">
       {todos.map((todo, index) => (
         <li
           key={`${index}:${todo.content}`}

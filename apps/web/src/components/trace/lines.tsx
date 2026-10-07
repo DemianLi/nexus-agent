@@ -12,7 +12,7 @@ import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/component
 import { cn } from '@/lib/utils';
 
 export const LINE =
-  'group hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-xl px-2 text-left text-xs transition-colors duration-(--duration-quick)';
+  'group hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-xl px-2 text-left text-tip transition-colors duration-(--duration-quick)';
 
 export function Chevron() {
   return (
@@ -58,11 +58,11 @@ export function Line({
         <span className="flex min-w-0 items-baseline gap-2">
           <span className="text-muted-foreground shrink-0">{label}</span>
           {summary !== '' && (
-            <span className="text-foreground min-w-0 truncate text-sm">{summary}</span>
+            <span className="text-foreground min-w-0 truncate text-body">{summary}</span>
           )}
         </span>
         {(meta !== undefined || who !== undefined) && (
-          <span className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-2 text-xs">
+          <span className="text-muted-foreground flex min-w-0 flex-wrap items-center gap-x-2 text-tip">
             {who !== undefined && <span>{who}</span>}
             {meta}
           </span>
@@ -75,7 +75,7 @@ export function Line({
 /** 不能展開的一列（決定、收尾、沒有摘要可看的壓縮之類）。 */
 export function StaticLine(props: Parameters<typeof Line>[0]) {
   return (
-    <p className="flex min-h-11 w-full min-w-0 items-center gap-2 px-2 text-xs">
+    <p className="flex min-h-11 w-full min-w-0 items-center gap-2 px-2 text-tip">
       <Line {...props} />
     </p>
   );
@@ -95,7 +95,7 @@ export function ExpandableLine({
         <Chevron />
       </CollapsibleTrigger>
       <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
-        <div className="pt-1 pr-2 pb-2 pl-8 text-sm">{children}</div>
+        <div className="pt-1 pr-2 pb-2 pl-8 text-body">{children}</div>
       </CollapsibleContent>
     </Collapsible>
   );

@@ -223,7 +223,7 @@ export const TraceRowView = memo(
         {missing && (
           <p
             role="status"
-            className="text-muted-foreground px-2 pb-2 text-xs"
+            className="text-muted-foreground px-2 pb-2 text-tip"
             data-testid="trace-missing"
           >
             {TRACE_TARGET_MISSING_TEXT}

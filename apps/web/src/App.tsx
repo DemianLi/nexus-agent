@@ -416,7 +416,7 @@ function ConversationView({
           {/* 觸控目標 44px，1024 以上回到 36（§9）。 */}
           <SidebarTrigger className="size-11 rounded-full lg:size-9" />
           {/* 換字不做動效（Q4）；截斷時 `title` 帶全文。 */}
-          <h1 className="min-w-0 flex-1 truncate text-sm font-medium" title={heading}>
+          <h1 className="min-w-0 flex-1 truncate text-body font-medium" title={heading}>
             {heading}
           </h1>
           {/* #574：這條對話累計燒了多少（root 日誌的總帳，不是畫面加總）。 */}
@@ -453,12 +453,12 @@ function ConversationView({
               onReconnect={conversation.reconnectNow}
             />
             {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
-            {notice !== undefined && <p className="text-muted-foreground text-xs">{notice}</p>}
+            {notice !== undefined && <p className="text-muted-foreground text-tip">{notice}</p>}
             {conversation.history?.legacy === true && (
-              <p className="text-muted-foreground text-xs">{LEGACY_THREAD_NOTICE}</p>
+              <p className="text-muted-foreground text-tip">{LEGACY_THREAD_NOTICE}</p>
             )}
             {conversation.historyError !== undefined && (
-              <p className="text-destructive text-xs">
+              <p className="text-destructive text-tip">
                 之前說過的話拿不回來：{conversation.historyError}
               </p>
             )}

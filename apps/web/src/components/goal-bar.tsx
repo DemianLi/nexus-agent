@@ -21,7 +21,7 @@ export function GoalBar({ goal }: { readonly goal: WireGoal | null }) {
       role="group"
       aria-label={view.label}
       data-testid="goal-bar"
-      className="bg-card text-muted-foreground mb-2 min-w-0 rounded-3xl border px-3 py-2 text-xs"
+      className="bg-card text-muted-foreground mb-2 min-w-0 rounded-3xl border px-3 py-2 text-tip"
     >
       <div className="flex min-w-0 items-center gap-2">
         <Target aria-hidden className="size-4 shrink-0" />

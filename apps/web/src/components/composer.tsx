@@ -406,7 +406,7 @@ export function Composer({
           />
           <InputGroupAddon align="block-end" className="px-2 pb-2">
             {/* `gap-0`：外殼是 flex、預設 `gap-2`，寬螢幕那一段會被隔開一大截（實機截圖量到）。 */}
-            <InputGroupText className="gap-0 pl-2 text-xs" data-testid="send-hint">
+            <InputGroupText className="gap-0 pl-2 text-tip" data-testid="send-hint">
               {sendHint.text}
               {sendHint.wide !== undefined && (
                 <span className="hidden sm:inline">{sendHint.wide}</span>
@@ -496,11 +496,11 @@ export function Composer({
                   onSelect={() => pick(command)}
                   className="flex-col items-start gap-0.5 rounded-lg px-3 py-2"
                 >
-                  <span className="font-mono text-sm">
+                  <span className="font-mono text-body">
                     /{command.name}
                     {command.input === undefined ? '' : ` ${command.input.hint}`}
                   </span>
-                  <span className="text-muted-foreground text-xs">{command.description}</span>
+                  <span className="text-muted-foreground text-tip">{command.description}</span>
                 </CommandItem>
               ))}
             </CommandList>
@@ -550,13 +550,13 @@ function MentionList({
         >
           <Icon aria-hidden className="text-muted-foreground" />
           <span className="min-w-0 flex-1 truncate">
-            <span className="text-sm">{row.name}</span>
+            <span className="text-body">{row.name}</span>
             {row.parent !== undefined && (
-              <span className="text-muted-foreground ml-2 text-xs">{row.parent}</span>
+              <span className="text-muted-foreground ml-2 text-tip">{row.parent}</span>
             )}
           </span>
           {directory && (
-            <span aria-hidden className="text-muted-foreground flex items-center gap-1 text-xs">
+            <span aria-hidden className="text-muted-foreground flex items-center gap-1 text-tip">
               Tab
               <ChevronRight className="size-3" />
             </span>
@@ -576,11 +576,11 @@ function MentionList({
         {/* 截斷的是名字這一格；小字（子代理屬於誰、別的專案的目錄）在它外面且不縮。子代理的名字是 id，約 80 字，
             放在同一格裡會把小字擠到省略號後面（實機 #783 補驗）。 */}
         <span className="flex min-w-0 flex-1 items-baseline">
-          <span className="min-w-0 truncate text-sm" title={row.name}>
+          <span className="min-w-0 truncate text-body" title={row.name}>
             {row.name}
           </span>
           {row.hint !== undefined && (
-            <span className="text-muted-foreground ml-2 shrink-0 text-xs">{row.hint}</span>
+            <span className="text-muted-foreground ml-2 shrink-0 text-tip">{row.hint}</span>
           )}
         </span>
       </CommandItem>

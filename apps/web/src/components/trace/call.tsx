@@ -37,7 +37,7 @@ function snapshotText(
 }
 
 const SNAPSHOT_PRE =
-  'bg-chip max-h-72 min-w-0 overflow-auto rounded-lg p-2 font-mono text-xs break-words whitespace-pre-wrap';
+  'bg-chip max-h-72 min-w-0 overflow-auto rounded-lg p-2 font-mono text-tip break-words whitespace-pre-wrap';
 
 interface ParsedHeader {
   readonly config: readonly (readonly [string, string])[];
@@ -82,10 +82,10 @@ function parseHeader(json: string): ParsedHeader | undefined {
 function HeaderBody({ json, diff }: { json: string; diff: string | undefined }) {
   const header = useMemo(() => parseHeader(json), [json]);
   if (header === undefined) {
-    return <p className="text-muted-foreground text-xs">{TRACE_HEADER_BAD_TEXT}</p>;
+    return <p className="text-muted-foreground text-tip">{TRACE_HEADER_BAD_TEXT}</p>;
   }
   return (
-    <div className="space-y-2 text-xs">
+    <div className="space-y-2 text-tip">
       {header.config.length > 0 && (
         <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1" data-testid="trace-header-config">
           {header.config.map(([key, value]) => (
@@ -131,12 +131,12 @@ function SnapshotDetails({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) 
           title={`系統提示詞全文（${tokenText(row.systemChars)} 字元）`}
         >
           {row.systemReason !== undefined && (
-            <p className="text-muted-foreground mb-1 text-xs">
+            <p className="text-muted-foreground mb-1 text-tip">
               {TRACE_SNAPSHOT_REASON_TEXT[row.systemReason]}
             </p>
           )}
           {row.systemTruncated === true && (
-            <p className="text-muted-foreground mb-1 text-xs" data-testid="trace-system-truncated">
+            <p className="text-muted-foreground mb-1 text-tip" data-testid="trace-system-truncated">
               {TRACE_SYSTEM_TRUNCATED_TEXT}
             </p>
           )}
@@ -153,7 +153,7 @@ function SnapshotDetails({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) 
           }
         >
           {row.headerReason !== undefined && (
-            <p className="text-muted-foreground mb-1 text-xs">
+            <p className="text-muted-foreground mb-1 text-tip">
               {TRACE_SNAPSHOT_REASON_TEXT[row.headerReason]}
             </p>
           )}
@@ -202,7 +202,7 @@ export function CallRow({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) {
       }}
     >
       <dl
-        className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-xs"
+        className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-1 text-tip"
         data-testid="trace-call-details"
       >
         {details.map(([term, value]) => (
@@ -214,7 +214,7 @@ export function CallRow({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) {
       </dl>
       <SnapshotDetails row={row} />
       {row.hasContent && !row.loaded && (
-        <p className="text-muted-foreground mt-2 text-xs" data-testid="trace-call-unloaded">
+        <p className="text-muted-foreground mt-2 text-tip" data-testid="trace-call-unloaded">
           {TRACE_CALL_UNLOADED_TEXT}
         </p>
       )}
