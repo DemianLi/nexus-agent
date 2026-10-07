@@ -137,13 +137,16 @@ export interface CliInvocation {
   /**
    * 一個 active 的目標沒達成時自己再開一輪（[#180](https://github.com/DemianLi/nexus-agent/issues/180)）。
    *
-   * **預設關，而且那是一個決定不是保守。** dsh 的續行驅動器是「需要你刻意掛載的可選消費
+   * **CLI 預設關，而且那是一個決定不是保守**（serve 的預設是開，見下面 2026-10-07 那段）。dsh 的續行驅動器是「需要你刻意掛載的可選消費
    * 方」（`packages/goal/README.zh.md`），而我們的入口點擁有輪迴圈——**掛載的等價物就是
    * 這個旗標**。
    *
    * （2026-09-19 註：引文是 dsh 當時 README 的原話，但 dsh 的 base 其實出廠就掛著續行驅動器——
-   * 「可選」指套件可以不掛，不是出廠關著。這個決定不動，前提待重核，見
-   * `.docs/plugin-architecture-gap-survey.md` §三第 18 列。）
+   * 「可選」指套件可以不掛，不是出廠關著。見 `.docs/plugin-architecture-gap-survey.md` §三第 18 列。
+   * **2026-10-07（#445）重核的結論：預設只有 CLI 關，serve 預設開。** CLI 用 `HEADLESS_APPROVALS`，
+   * 要核准的工具被確定性拒絕，續行只會一再撞同一個拒絕空轉；serve 要核准時停下來等人，沒有
+   * 這個問題。所以這個欄位在兩個入口的預設相反，旗標名同一個：CLI `--goal-driver` 開、
+   * serve `--no-goal-driver` 關。）
    *
    * 開著的時候，唯一的硬上限是那個目標自己的 `max_goal_rounds`；額外那條停損刻意沒做，
    * 理由在 `goal-driver.ts` 檔頭。
@@ -487,11 +490,24 @@ export const THREAD_ID = 'cli';
  * 得了的數字，只印命令列那條會讓人看不見模型可以在它底下自己挑一個更小的。沒給命令列那
  * 條時要**明著說沒給**，理由同上。
  *
- * @param on - 旗標開著沒有。
- * @param roundCap - `--max-goal-rounds` 那個數字；省略即這一次呼叫沒給。
+ * **兩個入口的預設相反**（#445）：CLI 預設關、要 `--goal-driver` 才開；serve 預設開、要
+ * `--no-goal-driver` 才關。所以「怎麼改成另一邊」那半句要看入口講，不然 serve 關著的時候這一行
+ * 會叫人去加一個本來就是預設的旗標。serve 也沒有 `--max-goal-rounds`，所以那一半不講。
+ *
+ * @param on - 續行開著沒有。
+ * @param roundCap - `--max-goal-rounds` 那個數字；省略即這一次呼叫沒給。只有 CLI 有這個旗標。
+ * @param entry - 哪個入口；預設 CLI。
  * @returns 那一行。
  */
-export function formatGoalDriverDisclosure(on: boolean, roundCap?: number): string {
+export function formatGoalDriverDisclosure(
+  on: boolean,
+  roundCap?: number,
+  entry: 'cli' | 'serve' = 'cli',
+): string {
+  if (entry === 'serve') {
+    if (!on) return '續行：關閉（--no-goal-driver；一輪結束就結束，要人再推）';
+    return `續行：開啟（預設；目標沒達成時自己再開一輪；上限只有一條——目標自己的 max_goal_rounds，模型在 create_goal 填的，沒填就是 ${DEFAULT_MAX_GOAL_ROUNDS}；--no-goal-driver 可以關掉）`;
+  }
   if (!on) return '續行：關閉（一輪結束就結束，要人再推；--goal-driver 可以打開）';
   const own = `目標自己的 max_goal_rounds（模型在 create_goal 填的，沒填就是 ${DEFAULT_MAX_GOAL_ROUNDS}）`;
   return roundCap === undefined
