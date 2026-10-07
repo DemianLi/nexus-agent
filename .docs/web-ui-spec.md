@@ -57,6 +57,8 @@
 
 ### 4.1 安裝程序
 
+（新增自己的元件、改樣式該放哪一層、用哪些值、什麼會被擋：[`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)。）
+
 1. `shadcn add … --overwrite`（shadcn 4.21.0 實測）。**不加 `--overwrite` 時非互動安裝會卡在覆寫提問、exit 0 靜默中止、檔案寫一半**——判準是實際寫入的檔，不是 exit code。
 2. 舊版 `button.tsx` 讓 registry 版覆寫（default／secondary／destructive 少了 `shadow-xs`、outline 暗色改 `bg-input/30`、多四種尺寸與 `data-variant`／`data-size`；原型並排比過，沒有異議）。
 3. `shadcn migrate cn`：`cn` 統一成 `cn` 套件，`@/lib/utils` 的 `cn` 是 `cn/config` 的 `createCn`，並登記自訂字級名（`text-ui`／`text-body`／`text-tip`／`text-micro`，與 `index.css` 的 `--text-*` 一致；沒登記的話預設 `cn` 會把它們當文字顏色，跟 `text-primary-foreground` 之類互相吃掉，#1141 的後續）。**全站只從 `@/lib/utils` 取 `cn`，registry 檔裝進來也要把 `from "cn"` 改成 `@/lib/utils`**（`utils.test.ts` 會擋）。`clsx`、`tailwind-merge` 移除。**`@radix-ui/react-slot` 會殘留**，覆寫 button 後已經沒人用，要手動拿掉。

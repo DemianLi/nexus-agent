@@ -40,6 +40,12 @@ describe('cn 認得我們的字級名', () => {
     expect(cn('text-body', 'lg:text-tip')).toBe('text-body lg:text-tip');
   });
 
+  test('rounded-row 是圓角：同組的互相取代，不影響其他 class', () => {
+    expect(cn('rounded-lg', 'rounded-row')).toBe('rounded-row');
+    expect(cn('rounded-row', 'rounded-lg')).toBe('rounded-lg');
+    expect(cn('rounded-row', 'px-3')).toBe('rounded-row px-3');
+  });
+
   test('顏色之間照舊互相取代', () => {
     expect(cn('text-muted-foreground', 'text-foreground')).toBe('text-foreground');
   });

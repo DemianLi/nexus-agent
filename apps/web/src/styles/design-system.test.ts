@@ -111,20 +111,10 @@ interface Allowed {
 }
 
 /**
- * 已知的例外。**只能變少**：第 3 刀（抽共用積木）換掉自己手寫的，registry 原文的例外要等它們各自被改掉或確認要留。
+ * 已知的例外。**只能變少**：自己的元件要換掉，registry 原文的例外要等它們各自被改掉或確認要留。
  */
 const ALLOWED: readonly Allowed[] = [
-  // 自己的元件：待第 3 刀換成共用積木。
-  ...[
-    'components/approval-card.tsx',
-    'components/queue-dock.tsx',
-    'components/todo/panel.tsx',
-    'components/tool/card.tsx',
-  ].map((file) => ({
-    file,
-    what: 'rounded-[20px]',
-    why: '可展開列的手寫配方，20px 是「卡片 24 減內距 4」的同心圓角；第 3 刀抽成共用元件時換成有名字的值',
-  })),
+  // 自己的元件。
   {
     file: 'components/empty-hero.tsx',
     what: 'text-2xl',
@@ -243,6 +233,14 @@ describe('元件只能用系統裡的值', () => {
 
 describe('判準', () => {
   const rules = (text: string) => rulesBroken(text).map((b) => `${b.rule}:${b.what}`);
+
+  test('`rounded-row` 有定義，且是卡片圓角 3xl 減內距 p-1（4）：讓列與卡片同心', () => {
+    const css = readFileSync(join(SRC, 'index.css'), 'utf8');
+    const px = (name: string) => Number(new RegExp(`--radius-${name}:\\s*(\\d+)px`).exec(css)?.[1]);
+    expect(px('3xl')).toBe(24);
+    expect(px('row')).toBe(px('3xl') - 4);
+    expect(rules('rounded-row rounded-3xl')).toEqual([]);
+  });
 
   test('原生色板與 white／black，連同 variant 前綴與透明度', () => {
     expect(rules('text-red-500')).toEqual(['色板:text-red-500']);

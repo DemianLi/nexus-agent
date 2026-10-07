@@ -44,7 +44,8 @@ import {
   ToolSearch,
 } from '@/components/tool/result';
 import { Badge } from '@/components/ui/badge';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { RowTrigger } from '@/components/row-trigger';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import {
   answersOfText,
   answerText,
@@ -250,7 +251,7 @@ export function ToolCard({
       data-kind="run"
       data-active={beam}
     >
-      <CollapsibleTrigger className="group hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2.5 rounded-[20px] px-3 py-2 text-left transition-colors duration-(--duration-quick)">
+      <RowTrigger className="gap-2.5 py-2">
         <span className="flex size-5 shrink-0 items-center justify-center">
           {stopped ? (
             <X aria-hidden className="text-muted-foreground size-4" />
@@ -311,7 +312,7 @@ export function ToolCard({
           data-motion-rotate
           className="text-muted-foreground size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
         />
-      </CollapsibleTrigger>
+      </RowTrigger>
       <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
         <div className="m-1 mt-0 flex flex-col gap-2">
           {entry.attribution.kind !== 'root' && (
