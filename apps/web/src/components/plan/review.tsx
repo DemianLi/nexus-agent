@@ -18,6 +18,7 @@ import { useEffect, useMemo, useRef } from 'react';
 
 import type { ConversationEntry, PendingInput, PendingQuestion, ToolEntry } from '@nexus/wire';
 
+import { Surface } from '@/components/surface';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { ToolCard } from '@/components/tool/card';
 import { Button } from '@/components/ui/button';
@@ -152,9 +153,9 @@ export function PlanReviewPanel({
   }, [sidebar, id]);
   return (
     <div className="flex flex-col" data-testid="plan-review-panel">
-      <div className="bg-stage shadow-stage rounded-xl">
+      <Surface tone="stage">
         <PlanSummary plan={plan} id={id} />
-      </div>
+      </Surface>
       <div className="flex justify-end gap-2 p-2">
         {/* 要求修改在左（次要），同意執行在右（主要）。 */}
         <Button
@@ -186,9 +187,10 @@ export function PlanReviewPanel({
 export function PlanCard({ entry, plan }: { entry: ToolEntry; plan: PlanDocument }) {
   const outcome = planOutcomeOf(entry);
   return (
-    <section
+    <Surface
+      as="section"
+      tone="raised"
       aria-label={`計劃：${plan.title}`}
-      className="bg-card shadow-material rounded-3xl p-1"
       data-testid="plan-card"
       data-outcome={outcome}
     >
@@ -202,7 +204,7 @@ export function PlanCard({ entry, plan }: { entry: ToolEntry; plan: PlanDocument
         )}
       </div>
       <PlanSummary plan={plan} id={entry.callId} />
-    </section>
+    </Surface>
   );
 }
 

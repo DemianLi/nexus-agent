@@ -18,6 +18,7 @@
 
 - **顏色**：只用語意 token（`bg-card`、`text-muted-foreground`、`bg-chip-hover`…）。不用 Tailwind 預設色板（`bg-red-500`、`text-white`、`bg-black/50`），不寫 `#fff`、`rgb(…)`。
 - **字級**：只有 `text-ui`／`text-body`／`text-tip`／`text-micro` 四階。不用 `text-xs`／`text-sm`／`text-base`／`text-lg`，不寫 `text-[13px]`。
+- **表面**：卡片與內層底用 `Surface`，不手寫 `bg-stage shadow-stage`、`bg-card shadow-material rounded-3xl`。
 - **圓角**：走階梯（`rounded-md`…`rounded-3xl`、`rounded-full`）或有名字的 `rounded-row`。不寫 `rounded-[20px]`。
 - 需要一個系統裡沒有的值 → **先在規格與 `index.css` 加一階**（有名字、有理由），不要寫任意值。
 
@@ -36,7 +37,8 @@
 - **兩處以上手寫同一份配方**（不只是名字像）才抽；只有一處就留在原地。
 - 只抽**共通的部分**，差異用 `className` 補（例：`RowTrigger` 只含底色、最小高度、圓角、過渡，圖示與間距由呼叫端給）。
 - 抽完要證明**畫面沒變**：展開成的 class 集合與原本逐項相等，再加實機前後比對。
-- 還沒抽的共用：卡片表面（`bg-card … rounded-3xl p-1`）與內層 stage（`bg-stage shadow-stage`）各處手寫，變體不一，要抽先盤點。
+- 已抽的：`RowTrigger`（可展開列）、`Surface`（卡片 `raised` 與內層 `stage`，用 `as` 選元素）。新的卡片或內層底用 `Surface`，手寫 `bg-stage shadow-stage` 或 `bg-card shadow-material rounded-3xl` 會被護欄擋下。
+- 還沒抽的：`border` 畫邊線的卡片（`queue-dock`、`todo/panel`、`goal-bar`，與 `raised` 的陰影邊緣不同，待決定）、`pending-swap`（走 `ui/Card` 覆寫）。
 
 ## 新增 shadcn 元件
 

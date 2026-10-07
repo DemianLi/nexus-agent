@@ -26,6 +26,7 @@ import type { FormEvent } from 'react';
 
 import type { PendingQuestion } from '@nexus/wire';
 
+import { Surface } from '@/components/surface';
 import { MarkdownText } from '@/components/markdown-text';
 import {
   Questionnaire,
@@ -113,7 +114,7 @@ export function QuestionPanel({
   };
 
   return (
-    <div className="bg-stage shadow-stage max-h-[55svh] overflow-auto rounded-xl px-4 pt-4">
+    <Surface tone="stage" className="max-h-[55svh] overflow-auto px-4 pt-4">
       <Questionnaire
         item={item}
         onItemChange={go}
@@ -220,6 +221,6 @@ export function QuestionPanel({
           <QuestionnaireSubmit disabled={busy}>送出答案</QuestionnaireSubmit>
         </QuestionnaireActions>
       </Questionnaire>
-    </div>
+    </Surface>
   );
 }

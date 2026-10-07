@@ -31,6 +31,7 @@ import { ChevronDown } from 'lucide-react';
 
 import type { PendingApproval } from '@nexus/wire';
 
+import { Surface } from '@/components/surface';
 import { Button } from '@/components/ui/button';
 import { RowTrigger } from '@/components/row-trigger';
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
@@ -45,11 +46,12 @@ export const NO_DECISION_REASON =
 function Actions({ pending }: { pending: PendingApproval }) {
   return (
     // 可捲動，所以要能用鍵盤捲：進 Tab 順序並給名稱（§8）。
-    <div
+    <Surface
+      tone="stage"
       role="group"
       tabIndex={0}
       aria-label="要執行的內容"
-      className="bg-stage shadow-stage flex max-h-[40svh] flex-col gap-3 overflow-auto rounded-xl p-3"
+      className="flex max-h-[40svh] flex-col gap-3 overflow-auto p-3"
     >
       {pending.actions.map((action, index) => (
         <div key={`${action.name}-${index}`} className="flex flex-col gap-1.5">
@@ -62,7 +64,7 @@ function Actions({ pending }: { pending: PendingApproval }) {
           </pre>
         </div>
       ))}
-    </div>
+    </Surface>
   );
 }
 

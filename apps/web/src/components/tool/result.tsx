@@ -20,6 +20,7 @@
 import { useMemo, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 
+import { Surface } from '@/components/surface';
 import { CodeBlock } from '@/components/markdown/code-block';
 import { CARD_LINE_MAX_CHARS, fitRowCount } from '@/lib/card-limit';
 import { DIFF_SIGN, DIFF_TONE, MAX_RENDERED_LINES } from '@/lib/diff-rows';
@@ -180,10 +181,7 @@ function Folded<T>({
 export function ToolDiff({ fragments }: { fragments: readonly DiffFragment[] }) {
   const rows = useMemo(() => diffRows(fragments), [fragments]);
   return (
-    <div
-      className="bg-stage shadow-stage rounded-xl py-2 font-mono text-tip leading-5.5"
-      data-testid="tool-diff"
-    >
+    <Surface tone="stage" className="py-2 font-mono text-tip leading-5.5" data-testid="tool-diff">
       <Folded
         rows={rows}
         capped={cappedRows(rows, CHAT_DIFF_MAX_LINES)}
@@ -192,7 +190,7 @@ export function ToolDiff({ fragments }: { fragments: readonly DiffFragment[] }) 
         render={(row, key) => <DiffLine key={key} row={row} />}
         weigh={(row) => row.text.length}
       />
-    </div>
+    </Surface>
   );
 }
 
@@ -262,10 +260,7 @@ export function ToolRead({ card }: { card: ReadCard }) {
   const windowText = readWindowText(card);
   const lang = supportsHighlighting(card.lang) ? card.lang : undefined;
   return (
-    <div
-      className="bg-stage shadow-stage rounded-xl py-2 font-mono text-tip leading-5.5"
-      data-testid="tool-read"
-    >
+    <Surface tone="stage" className="py-2 font-mono text-tip leading-5.5" data-testid="tool-read">
       <CardHeader
         title={card.path}
         aside={
@@ -295,7 +290,7 @@ export function ToolRead({ card }: { card: ReadCard }) {
           )}
         />
       )}
-    </div>
+    </Surface>
   );
 }
 
@@ -341,10 +336,7 @@ function searchRowChars(row: SearchRow): number {
 export function ToolSearch({ card }: { card: SearchCard }) {
   const rows = useMemo(() => searchRows(card), [card]);
   return (
-    <div
-      className="bg-stage shadow-stage rounded-xl py-2 font-mono text-tip leading-5.5"
-      data-testid="tool-search"
-    >
+    <Surface tone="stage" className="py-2 font-mono text-tip leading-5.5" data-testid="tool-search">
       <CardHeader title={searchSummary(card)} />
       <Folded
         rows={rows}
@@ -354,14 +346,14 @@ export function ToolSearch({ card }: { card: SearchCard }) {
         render={(row, key) => <SearchLine key={`${searchRowKey(row)}@${key}`} row={row} />}
         weigh={searchRowChars}
       />
-    </div>
+    </Surface>
   );
 }
 
 export function ToolOutputBlock({ output }: { output: ToolOutput }) {
   const label = omittedLabel(output);
   return (
-    <div className="bg-stage shadow-stage rounded-xl" data-testid="tool-output">
+    <Surface tone="stage" data-testid="tool-output">
       <div className="text-muted-foreground px-3 pt-2 text-tip">結果</div>
       <pre
         tabIndex={0}
@@ -383,7 +375,7 @@ export function ToolOutputBlock({ output }: { output: ToolOutput }) {
           </>
         )}
       </pre>
-    </div>
+    </Surface>
   );
 }
 

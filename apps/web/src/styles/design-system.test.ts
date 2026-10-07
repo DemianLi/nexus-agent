@@ -9,11 +9,12 @@ import { describe, expect, test } from 'vitest';
  * 元件的 className 越過它就報錯。守的是**原始碼裡的字串字面值**（className、cva 的各段、`cn(...)` 的參數都是字串），
  * 做法同 `border-shadow.test.ts`；先把註解拿掉，註解裡講到類別名不算。
  *
- * 四條：
+ * 五條：
  * 1. **不用 Tailwind 預設色板**（`text-red-500`、`bg-white`、`bg-black/50`…）：顏色只走語意 token（`bg-card`、`text-destructive`…）。
  * 2. **字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`**：不用 `text-xs`／`text-sm`／`text-base`…，也不寫 `text-[…px]`。
  * 3. **圓角只走階梯**（`rounded-sm`…`rounded-3xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
  * 4. **不硬寫顏色字面值**：`#fff`、`rgb(…)`、沒有 `var(…)` 的 `oklch(…)`／`color-mix(…)`。從 token 推出來的（`oklch(from var(--primary) …)`）可以。
+ * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`，或 `bg-card`＋`shadow-material`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
  *
  * **例外只能列在 {@link ALLOWED}**，每一條寫明理由；列了卻再也沒有命中的條目會報錯，所以例外只會變少、不會悄悄留著。
  * 沒量的：間距與寬高的任意值（`max-h-[300px]`、`top-[50%]` 都是版面值，不是系統值）、`styles/*.css`（那裡就是 token 層）。
@@ -85,10 +86,21 @@ const HEX_WHOLE = /^#[0-9a-fA-F]{3,8}$/;
 const HEX_IN_CLASS = /-\[#[0-9a-fA-F]{3,8}\]/;
 const COLOR_FUNCTION = /\b(?:oklch|oklab|rgba?|hsla?|hwb|lab|lch|color-mix)\(/;
 
-type Rule = '色板' | '字級' | '圓角' | '色碼';
+type Rule = '色板' | '字級' | '圓角' | '色碼' | '表面';
 
 function rulesBroken(text: string): { rule: Rule; what: string }[] {
   const found: { rule: Rule; what: string }[] = [];
+  const utilities = new Set(text.split(/\s+/).map(utility));
+  if (utilities.has('bg-stage') && utilities.has('shadow-stage')) {
+    found.push({ rule: '表面', what: 'bg-stage shadow-stage' });
+  }
+  if (
+    utilities.has('bg-card') &&
+    utilities.has('shadow-material') &&
+    utilities.has('rounded-3xl')
+  ) {
+    found.push({ rule: '表面', what: 'bg-card shadow-material rounded-3xl' });
+  }
   for (const token of text.split(/\s+/)) {
     const u = utility(token);
     if (RAW_PALETTE.test(u)) found.push({ rule: '色板', what: u });
@@ -115,6 +127,16 @@ interface Allowed {
  */
 const ALLOWED: readonly Allowed[] = [
   // 自己的元件。
+  {
+    file: 'components/surface.tsx',
+    what: 'bg-stage shadow-stage',
+    why: '`Surface` 的 stage 配方本身：全站唯一該寫這串的地方',
+  },
+  {
+    file: 'components/surface.tsx',
+    what: 'bg-card shadow-material rounded-3xl',
+    why: '`Surface` 的 raised 配方本身：全站唯一該寫這串的地方',
+  },
   {
     file: 'components/empty-hero.tsx',
     what: 'text-2xl',
@@ -286,6 +308,17 @@ describe('判準', () => {
     expect(rules('bg-[color-mix(in_oklch,var(--secondary),var(--foreground)_5%)]')).toEqual([]);
     expect(rules('bg-[oklch(from_var(--primary)_0.93_calc(c*0.4)_h)]')).toEqual([]);
     expect(rules('第 #607 號、#1033 的說明')).toEqual([]);
+  });
+
+  test('表面：手寫 stage 或 raised 的整組配方擋，只用到一部分的不擋', () => {
+    expect(rules('bg-stage shadow-stage rounded-xl p-3')).toEqual(['表面:bg-stage shadow-stage']);
+    expect(rules('hover:bg-stage dark:shadow-stage')).toEqual(['表面:bg-stage shadow-stage']);
+    expect(rules('bg-card shadow-material rounded-3xl p-1')).toEqual([
+      '表面:bg-card shadow-material rounded-3xl',
+    ]);
+    expect(rules('bg-stage sticky bottom-0 pb-4')).toEqual([]);
+    expect(rules('bg-card shadow-material rounded-lg')).toEqual([]);
+    expect(rules('bg-card border rounded-3xl p-1')).toEqual([]);
   });
 
   test('註解裡寫到類別名不算', () => {

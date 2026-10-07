@@ -14,6 +14,7 @@ import { ChevronDown, ChevronUp, FileDiff } from 'lucide-react';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 
+import { Surface } from '@/components/surface';
 import { Counts, FileCounts } from '@/components/changes/counts';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { Button } from '@/components/ui/button';
@@ -43,9 +44,11 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
     sidebar === undefined ? undefined : (index: number) => sidebar.openChanges(seq, index);
 
   return (
-    <section
+    <Surface
+      as="section"
+      tone="stage"
       aria-label={`這一輪改動的檔案，共 ${total} 個`}
-      className="bg-stage shadow-stage flex flex-col rounded-xl p-1"
+      className="flex flex-col p-1"
       data-testid="changes"
     >
       <Pressable
@@ -89,7 +92,7 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
           )}
         </div>
       )}
-    </section>
+    </Surface>
   );
 }
 

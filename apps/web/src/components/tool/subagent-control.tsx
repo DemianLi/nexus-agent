@@ -33,6 +33,7 @@ import { RotateCw, Send, Square } from 'lucide-react';
 import type { ReactNode } from 'react';
 import type { ConversationEntry, WireClient } from '@nexus/wire';
 
+import { Surface } from '@/components/surface';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import {
@@ -267,10 +268,7 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
   };
 
   return (
-    <div
-      className="bg-stage shadow-stage flex flex-col gap-2 rounded-xl p-3"
-      data-subagent-panel={runId}
-    >
+    <Surface tone="stage" className="flex flex-col gap-2 p-3" data-subagent-panel={runId}>
       <Conversation
         history={history}
         closed={state === 'closed'}
@@ -332,7 +330,7 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
           {error}
         </p>
       )}
-    </div>
+    </Surface>
   );
 }
 
