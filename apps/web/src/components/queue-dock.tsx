@@ -9,6 +9,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { toast } from 'sonner';
 
+import { Surface } from '@/components/surface';
 import { Button } from '@/components/ui/button';
 import { RowTrigger } from '@/components/row-trigger';
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
@@ -344,11 +345,13 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
   );
 
   return (
-    <section
+    <Surface
+      as="section"
+      tone="docked"
       ref={root}
       aria-label="送出佇列"
       data-testid="queue-dock"
-      className="bg-card mb-2 rounded-3xl border p-1"
+      className="mb-2 p-1"
     >
       {live.length <= 1 && rows.length <= 1 ? (
         <>
@@ -377,6 +380,6 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
           </CollapsibleContent>
         </Collapsible>
       )}
-    </section>
+    </Surface>
   );
 }
