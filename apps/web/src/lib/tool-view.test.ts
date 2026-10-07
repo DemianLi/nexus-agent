@@ -1,7 +1,7 @@
 // @vitest-environment node
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+
+import { catalogToolNames } from '@/test/tool-catalog';
 
 import {
   INPUT_MAX_CHARS,
@@ -15,60 +15,43 @@ import {
 } from '@/lib/tool-view';
 
 /**
- * `classifyTool` 涵蓋 nexus 每一個實際工具名（#406 驗收）。plugin 的工具名**從原始碼讀**（各 plugin 匯出的
- * `*_TOOL_NAME` 常數；沙箱升級那顆已經搬進 plugin。`apps/harness/src` 今天沒有命中的宣告，掃它是留給 harness 以後自己掛的工具）：
- * 新增一個工具而沒在 `lib/tool-view.ts` 分類，這裡紅。基座的工具名是 deepagents 定的，
- * 手列（1.13.1；升版時對一次 `deepagents/dist` 的工具定義）。
+ * `classifyTool` 涵蓋 nexus 每一個實際工具名（#406 驗收）。工具名**從 `docs/tool-catalog.md` 讀**（模型實際收到的那一份，
+ * 含基座與 plugin；由 harness 產生、CI 驗新鮮度，#442／#666）：新增一個出廠的工具而沒在 `lib/tool-view.ts` 分類，這裡紅。
+ *
+ * 目錄涵蓋的是**出廠預設**，下面這幾顆不在裡面，所以手列：
+ * - `execute`：今天產品路徑上沒有 shell，基座不綁它；web 先分類好，絆索在 harness 的 `execute-not-bound.test.ts`。
+ * - 背景子代理那一組：`backgroundSubagents` 預設關，不經產品預設組裝，名字在 harness 的 `background-delegation.ts`
+ *   （`subagent`、`list_agents`、`interrupt_agent`、`send_message`）與 `list_subagent_models`（有政策才有，#877）。
+ *   這幾顆新增或改名時，web 這邊不會自己紅；要靠 harness 把它們也列進目錄才補得上。
  */
 
-const PACKAGES = new URL('../../../../packages/', import.meta.url);
-const HARNESS = new URL('../../../harness/src/', import.meta.url);
+const catalogNames = catalogToolNames();
 
-function sources(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) return name === 'node_modules' ? [] : sources(path);
-    // 測試與 fixture 裡的是假工具（`fixtures.ts` 的 `take_note`、`*.fixture.ts`），不是產品會掛的。
-    return /\.ts$/.test(name) && !/\.(test|fixture)\.ts$|^fixtures\.ts$/.test(name) ? [path] : [];
-  });
-}
-
-const pluginToolNames = [
-  ...readdirSync(PACKAGES)
-    .filter((name) => name.startsWith('nexus-plugin-'))
-    .flatMap((name) => sources(join(PACKAGES.pathname, name, 'src'))),
-  ...sources(HARNESS.pathname),
-].flatMap((file) =>
-  [...readFileSync(file, 'utf8').matchAll(/export const \w*TOOL_NAME\w* = '([a-z_]+)'/g)].map(
-    (match) => match[1] ?? '',
-  ),
-);
-
-const BASE_TOOL_NAMES = [
-  'ls',
-  'read_file',
-  'write_file',
-  'edit_file',
-  'delete',
-  'glob',
-  'grep',
+const NOT_IN_CATALOG_TOOL_NAMES = [
   'execute',
-  'task',
+  'subagent',
+  'list_agents',
+  'interrupt_agent',
+  'send_message',
+  'list_subagent_models',
 ];
 
 describe('classifyTool', () => {
-  it('從 plugin 原始碼讀得到工具名（量具本身沒壞）', () => {
-    expect(pluginToolNames).toEqual(
+  it('讀得到目錄裡的工具名（量具本身沒壞）', () => {
+    expect(catalogNames).toEqual(
       expect.arrayContaining([
+        'ls',
+        'task',
         'echo',
         'ask_user_question',
         'run_javascript',
         'request_sandbox_escalation',
       ]),
     );
+    expect(new Set(catalogNames).size).toBe(catalogNames.length);
   });
 
-  it.each([...BASE_TOOL_NAMES, ...new Set(pluginToolNames)])('%s 在表上有明寫', (name) => {
+  it.each([...catalogNames, ...NOT_IN_CATALOG_TOOL_NAMES])('%s 在表上有明寫', (name) => {
     expect(isKnownTool(name)).toBe(true);
     expect(toolTitle(name)).not.toBe('工具');
   });
