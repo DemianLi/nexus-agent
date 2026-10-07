@@ -83,10 +83,10 @@ dsh 宣告了 81 個 harness 事件（`event-producer-consumer.zh.md`），迴�
 
 ### 3-3 已登記的偏離與既有的先例
 
-- **#190 的偏離登記**：`TelemetryRegistrationPoint` 檔頭寫「我們沒有 service 註冊也沒有事件匯流排，`deepagents`／LangChain JS／LangGraph JS 三者都不提供可掛任意具名事件的 waterfall」。所以 #190 把 dsh 的九個攔截時刻逐格退到 middleware 鉤子上，佔住四格，索引在 `apps/harness/src/interception-index.test.ts`（有防漂移的絆索）。
-- **已經有一條 waterfall**：核准閘門 `approvals.gate`，順序就是載入順序（`apps/harness/src/approval-gate-order.test.ts` 守著）。事件匯流排不是從零開始，是把這個機制一般化。
+- **#190 的偏離登記**：`registry.ts:664`（`TelemetryRegistrationPoint` 的說明）現在寫「我們沒有事件匯流排」，並指出 `deepagents`／LangChain JS／LangGraph JS 三者都不提供可掛任意具名事件的 waterfall。（#190 當年的版本還多一句「沒有 service 註冊」，#459 之後那半句已經不成立、已被改掉。）所以 #190 把 dsh 的九個攔截時刻逐格退到 middleware 鉤子上，佔住四格，索引在 `apps/harness/src/interception-index.test.ts`（有防漂移的絆索）。
+- **已經有一條 waterfall**：`approvals` 註冊點，一條 pre-execute waterfall（`registry.ts:504`），順序就是載入順序（`apps/harness/src/approval-gate-order.test.ts` 守著）。事件匯流排不是從零開始，是把這個機制一般化。
 - **服務查找已有**（#459：`registry.services.provide/use/get`）。與 Cordis 對照表裡，仍是「退到」或「部分」的是：型別化事件、`inject` 排序、可逆註冊的 reload 撤銷。
-- **插件沒有被隔離在 LangChain 之外**：22 個插件有 13 個直接 import LangChain 家族，且 registry 的 `middleware` 註冊點收的是 LangChain 的 `AgentMiddleware` 型別。這是上限，不是工作量——沒逐個看是只用 `tool()` 還是用了 middleware。
+- **插件沒有被隔離在 LangChain 之外**：21 個 `nexus-plugin-*` 套件有 13 個直接 import LangChain 家族（`langchain`、`@langchain/*`、`deepagents`），且 registry 的 `middleware` 註冊點收的是 LangChain 的 `AgentMiddleware` 型別。這是上限，不是工作量——沒逐個看是只用 `tool()` 還是用了 middleware。
 
 ## 四、契約設計（建議，不是決議）
 
