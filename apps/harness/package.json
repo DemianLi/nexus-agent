@@ -29,6 +29,7 @@
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",
     "@types/micromatch": "^4.0.10",
+    "@types/semver": "^7.8.0",
     "@types/node": "^24.10.0",
     "ajv": "8.20.0",
     "eslint": "^9.39.0",
@@ -70,6 +71,7 @@
     "langchain": "^1.5.10",
     "langsmith": ">=0.7.1 <0.10.0",
     "micromatch": "^4.0.8",
+    "semver": "^7.8.5",
     "yaml": "^2.9.0",
     "zod": "^4.3.6"
   }
