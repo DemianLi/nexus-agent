@@ -24,7 +24,7 @@
  * @module
  */
 
-import type { CommandResult, GoalPhase, GoalRef } from '@nexus/core';
+import type { AttachmentRef, CommandResult, GoalPhase, GoalRef } from '@nexus/core';
 
 import { GoalError } from './service.js';
 import type { GoalService, GoalView } from './service.js';
@@ -38,12 +38,18 @@ export const GOAL_COMMAND_DESCRIPTION = '設定或查看長期任務的目標';
 /**
  * 使用者還沒打字時的佔位字串。
  *
- * **dsh 的 `input` 還有一格 `images: true`，我們沒有。** 差的不是這個字串，是整條
- * 附件水管：`CommandInvocation` 沒有 `attachments`，那一格的「是缺，不是省略」已經寫在
- * {@link @nexus/core!CommandInvocation} 的檔頭上。提示字串要跟真的收得下的東西一致，
- * 所以這裡不寫圖片。
+ * **`/goal` 收附件**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)，照 dsh `command-goal` 的 `input: { hint, attachments: true }`）：
+ * 宣告在 descriptor 的 `input.attachments`，字串本身跟 dsh 一樣不變。附件**只隨目標**：`create` 與 `edit` 成功時，命令請宿主送一句帶著這些
+ * 附件的話（{@link GOAL_ATTACHMENTS_TEXT}），後面幾輪的目標輪次從一般對話歷史讀到它們，goal 域不存附件狀態；其餘子命令（含被拒絕的
+ * `create`／`edit`）收到附件一律在動任何域之前回 `error`（{@link GOAL_ATTACHMENTS_ONLY_MESSAGE}），輸入框的草稿與附件留著。
  */
 export const GOAL_COMMAND_HINT = '[<目標>|clear|edit <目標>|pause|resume]';
+
+/** 帶附件送出的 `create`／`edit` 成功後，請宿主送進對話的那一句。**固定字串，照 dsh**（`Reference attachments for the goal objective.`）。 */
+export const GOAL_ATTACHMENTS_TEXT = 'Reference attachments for the goal objective.';
+
+/** 附件帶到不收附件的子命令上。**在動任何域之前**回，所以什麼都沒改。 */
+export const GOAL_ATTACHMENTS_ONLY_MESSAGE = '附件只隨目標：/goal <目標> 或 /goal edit <目標>。';
 
 /** 打錯時附在後面的那一行。**指名收得下什麼**，不然人只知道自己錯了。 */
 export const GOAL_USAGE = `用法：/${GOAL_COMMAND_NAME} [<目標>|clear|edit <目標>|pause|resume]`;
@@ -251,6 +257,9 @@ export function goalAmbiguousMessage(count: number): string {
  * @param service - 執行器交來的那份日誌上的服務；那份日誌沒接 goal 域時是 `undefined`。
  * @param attachedCount - 這一次組裝接著幾份 root 日誌；多於一份時拒絕（見 {@link goalAmbiguousMessage}）。
  * @param rawInput - 命令名之後的原文。
+ * @param attachments - 這次呼叫收下的附件參照；沒有就省略。
+ * @param steer - 請宿主送一句帶附件的話（`CommandInvocation.steer`）。**在動域之前呼叫**：被宿主拒收就什麼都沒改；之後域拒絕的話
+ *   （回 `error`），執行器會把這句作廢。
  * @returns 直接呈現給人的結果。
  * @throws 域的非預期失敗，包含折疊壞掉之後的每一次讀。
  */
@@ -258,11 +267,18 @@ export function executeGoalCommand(
   service: GoalService | undefined,
   attachedCount: number,
   rawInput: string,
+  attachments: readonly AttachmentRef[] = [],
+  steer?: (text: string, attachments?: readonly AttachmentRef[]) => void,
 ): CommandResult {
   if (attachedCount > 1) return { kind: 'error', text: goalAmbiguousMessage(attachedCount) };
   if (service === undefined) return { kind: 'error', text: GOAL_NOT_ATTACHED_MESSAGE };
   const goals = service;
   const command = parseGoalCommand(rawInput);
+  // 附件只隨目標；其餘一律在動任何域之前擋掉（dsh 同）。
+  if (attachments.length > 0 && command.kind !== 'create' && command.kind !== 'edit') {
+    return { kind: 'error', text: GOAL_ATTACHMENTS_ONLY_MESSAGE };
+  }
+  const sendAttachments = (): void => steer?.(GOAL_ATTACHMENTS_TEXT, attachments);
   try {
     const current = goals.get();
     switch (command.kind) {
@@ -278,12 +294,14 @@ export function executeGoalCommand(
         if (current !== undefined && current.phase !== 'complete') {
           return { kind: 'error', text: goalAlreadyMessage(current.phase) };
         }
+        if (attachments.length > 0) sendAttachments();
         return renderGoal('目標建好了', goals.create({ objective: command.objective }));
       }
       case 'edit': {
         if (current === undefined) return { kind: 'error', text: goalMissingMessage('edit') };
         // **完成掉的目標用 edit 換一個新的**，而且回的是「建好了」不是「改好了」——
         // 換掉的是身分不只是敘述，說成「改好了」會讓人以為歷史還接在同一條上。
+        if (attachments.length > 0) sendAttachments();
         if (current.phase === 'complete') {
           return renderGoal('目標建好了', goals.create({ objective: command.objective }));
         }

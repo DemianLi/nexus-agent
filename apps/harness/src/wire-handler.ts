@@ -117,7 +117,7 @@ import type {
 import { FEEDBACK_CATEGORIES, ProjectionDetailError } from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
-import { createCommandExecutor } from '@nexus/plugin-commands';
+import { CommandAttachmentRejected, createCommandExecutor } from '@nexus/plugin-commands';
 import { AttachmentError } from './attachment-store.js';
 import { referencedImage } from './attachment-reference.js';
 import type { AttachmentStore, FileAttachmentRef, ImageAttachmentRef } from './attachment-store.js';
@@ -664,6 +664,15 @@ function requestedChannels(body: EventStreamRequest): readonly WireChannel[] | u
  *
  * @returns 合格的陣列，或一句講哪一件不對的話。
  */
+/** {@link admitAttachmentsCore} 的結果。收下時附帶「放回收據」：命令沒成功時使用。 */
+type AdmitOutcome =
+  | {
+      readonly kind: 'admitted';
+      readonly attachments: readonly AttachmentRef[];
+      readonly restore: () => void;
+    }
+  | { readonly kind: 'rejected'; readonly code: WireErrorCode; readonly message: string };
+
 function promptAttachmentsOf(raw: readonly unknown[]): readonly PromptAttachment[] | string {
   const shaped: PromptAttachment[] = [];
   for (const [index, item] of raw.entries()) {
@@ -1204,6 +1213,29 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   }
 
   /**
+   * 請求 `params.attachments` 的形狀檢查（`run.start` 與 `slash.run` 共用）：省略或空陣列＝沒有；不是陣列、沒有附件儲存、
+   * 形狀壞掉各回對應的錯誤。
+   */
+  function attachmentsParam(
+    id: number,
+    method: string,
+    params: unknown,
+  ): readonly PromptAttachment[] | Response {
+    const attachments = (params as { attachments?: unknown } | null)?.attachments;
+    if (attachments === undefined) return [];
+    if (!Array.isArray(attachments)) {
+      return json(errorResponse(id, 'invalid_argument', `${method} 的 attachments 要是陣列`));
+    }
+    if (attachments.length === 0) return [];
+    if (options.attachments === undefined) {
+      return json(errorResponse(id, 'not_supported', '這個組裝沒有附件儲存，不收附件'));
+    }
+    const shaped = promptAttachmentsOf(attachments);
+    if (typeof shaped === 'string') return json(errorResponse(id, 'invalid_argument', shaped));
+    return shaped;
+  }
+
+  /**
    * 收下一句話帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：**全部通過才收，一張不行整句拒收**。
    *
    * 1. **收圖檢查**：這條 thread 下一個請求用的那顆宣告了輸入種類、而裡面沒有 `image` → `model_does_not_support_images`
@@ -1220,22 +1252,34 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     id: number,
     attachments: readonly PromptAttachment[],
   ): Promise<readonly AttachmentRef[] | Response> {
+    const outcome = await admitAttachmentsCore(thread, threadId, attachments);
+    if (outcome.kind === 'rejected') {
+      return json(errorResponse(id, outcome.code, outcome.message));
+    }
+    return outcome.attachments;
+  }
+
+  /** {@link admitAttachments} 的本體：不碰回應格式，`run.start` 與 `slash.run` 共用。成功時附帶「放回收據」。 */
+  async function admitAttachmentsCore(
+    thread: ThreadState,
+    threadId: string,
+    attachments: readonly PromptAttachment[],
+  ): Promise<AdmitOutcome> {
     const store = options.attachments;
     /* v8 ignore next -- 呼叫端已擋過。 */
-    if (store === undefined)
-      return json(errorResponse(id, 'not_supported', '這個組裝沒有附件儲存'));
+    if (store === undefined) {
+      return { kind: 'rejected', code: 'not_supported', message: '這個組裝沒有附件儲存' };
+    }
     const images = attachments.filter(
       (attachment): attachment is Extract<PromptAttachment, { type: 'image' }> =>
         attachment.type === 'image',
     );
     if (images.length > 0 && thread.modelSelection?.imageSupport?.() === 'rejects') {
-      return json(
-        errorResponse(
-          id,
-          MODEL_DOES_NOT_SUPPORT_IMAGES,
-          '目前的模型不收圖片：換一顆能看圖的模型，或拿掉圖片再送',
-        ),
-      );
+      return {
+        kind: 'rejected',
+        code: MODEL_DOES_NOT_SUPPORT_IMAGES,
+        message: '目前的模型不收圖片：換一顆能看圖的模型，或拿掉圖片再送',
+      };
     }
     const own = receipts.get(threadId);
     const taken: [string, FileAttachmentRef][] = [];
@@ -1249,13 +1293,11 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const ref = own?.get(attachment.receiptId);
       if (own === undefined || ref === undefined) {
         restore();
-        return json(
-          errorResponse(
-            id,
-            'invalid_argument',
-            `收據 ${attachment.receiptId} 不存在、已經用過，或不是這條 thread 發的`,
-          ),
-        );
+        return {
+          kind: 'rejected',
+          code: 'invalid_argument',
+          message: `收據 ${attachment.receiptId} 不存在、已經用過，或不是這條 thread 發的`,
+        };
       }
       own.delete(attachment.receiptId);
       taken.push([attachment.receiptId, ref]);
@@ -1276,19 +1318,23 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           }),
         );
       }
-      return attachments.map((attachment): AttachmentRef => {
-        const file = resolved.get(attachment);
-        if (file !== undefined) return { type: 'file', ...file };
-        return { type: 'image', ...saved.get(attachment)! };
-      });
+      return {
+        kind: 'admitted',
+        restore,
+        attachments: attachments.map((attachment): AttachmentRef => {
+          const file = resolved.get(attachment);
+          if (file !== undefined) return { type: 'file', ...file };
+          return { type: 'image', ...saved.get(attachment)! };
+        }),
+      };
     } catch (error: unknown) {
       restore();
       if (error instanceof ImageIntakeError) {
-        return json(errorResponse(id, 'invalid_argument', error.message));
+        return { kind: 'rejected', code: 'invalid_argument', message: error.message };
       }
       const reason = error instanceof Error ? error.message : String(error);
       options.warn?.(`[附件] thread ${threadId} 的圖存不下：${reason}`);
-      return json(errorResponse(id, 'unknown_error', `圖存不下：${reason}`));
+      return { kind: 'rejected', code: 'unknown_error', message: `圖存不下：${reason}` };
     }
   }
 
@@ -1465,7 +1511,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       );
     }
     if (isSlashMethod(method)) {
-      return handleSlash(thread, method, envelope.id, body, signal);
+      return handleSlash(thread, threadId, method, envelope.id, body, signal);
     }
     if (isQueueUpdateMethod(method)) {
       return handleQueueUpdate(thread.pump, envelope.id, body);
@@ -1497,27 +1543,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       // **停在核准點時照收**（#637 的 Q4，同 dsh）：以前這裡回錯，因為基座會照跑新的一輪、把中斷靜靜丟掉。
       // 現在收下的這句進送出佇列，由 pump 停住，等中斷答完、那一輪收掉才跑（#629，`ThreadPump.#nextIndex`）。
       // 附件（#732）：先驗形狀（便宜、不碰任何東西），收據與圖的收下留到最後——前面任何一道擋掉這句話時，收據不該被用掉。
-      const attachments = (params as { attachments?: unknown }).attachments;
-      let promptAttachments: readonly PromptAttachment[] = [];
-      if (attachments !== undefined) {
-        if (!Array.isArray(attachments)) {
-          return json(
-            errorResponse(command.id, 'invalid_argument', 'run.start 的 attachments 要是陣列'),
-          );
-        }
-        if (attachments.length > 0) {
-          if (options.attachments === undefined) {
-            return json(
-              errorResponse(command.id, 'not_supported', '這個組裝沒有附件儲存，不收附件'),
-            );
-          }
-          const shaped = promptAttachmentsOf(attachments);
-          if (typeof shaped === 'string') {
-            return json(errorResponse(command.id, 'invalid_argument', shaped));
-          }
-          promptAttachments = shaped;
-        }
-      }
+      const parsedAttachments = attachmentsParam(command.id, 'run.start', params);
+      if (parsedAttachments instanceof Response) return parsedAttachments;
+      const promptAttachments = parsedAttachments;
       // 點名子代理（#328 第 2 項）：同附件，契約先合、實作還沒做，**有值就整句拒絕**，不悄悄收下文字、丟掉點名。
       const mention = (params as { mention?: unknown }).mention;
       if (mention !== undefined) {
@@ -1626,6 +1654,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    */
   async function handleSlash(
     thread: ThreadState,
+    threadId: string,
     method: SlashMethod,
     id: number,
     body: unknown,
@@ -1640,6 +1669,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     if (typeof params?.line !== 'string') {
       return json(errorResponse(id, 'invalid_argument', 'slash.run 缺 line'));
     }
+    const promptAttachments = attachmentsParam(id, 'slash.run', params);
+    if (promptAttachments instanceof Response) return promptAttachments;
     if (thread.pump.awaitingInput) {
       return json(
         errorResponse(
@@ -1665,7 +1696,21 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     thread.slashInFlight = true;
     try {
       // **取消訊號就是發派它的那次請求的**：瀏覽器關掉分頁，這次執行也就沒有人要了。
-      const execution = await thread.executor.execute(params.line, signal);
+      // 附件（#732）：交給執行器，**命令宣告收附件之後它才呼叫 `admit`**——不收附件的命令、不是命令的一行，都不碰收據與儲存。
+      const execution = await thread.executor.execute(
+        params.line,
+        signal,
+        promptAttachments.length === 0
+          ? undefined
+          : {
+              admit: async () => {
+                const outcome = await admitAttachmentsCore(thread, threadId, promptAttachments);
+                if (outcome.kind === 'rejected')
+                  throw new CommandAttachmentRejected(outcome.message);
+                return { attachments: outcome.attachments, rollback: outcome.restore };
+              },
+            },
+      );
       if (execution === undefined) {
         // 語法不符或名字不認得。**日誌裡一個字都沒有**（執行器保證），線上也不是錯誤
         // ——封包是好的，只是那一行不是命令。
@@ -1675,8 +1720,13 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       // **`command/done` 已經寫完了才開這一輪**（`CommandInvocation.steer` 的時刻承諾）：日誌上 `command/run` → `command/done`
       // 的配對先完整收掉，才有 `turn/start`。`slashInFlight` 這時還沒放，但它只擋斜線命令，不擋 `pump.submit`。
       // 每句一件、進送出佇列，順序就是命令呼叫 `steer` 的順序。
-      for (const text of steers)
-        start(thread.pump, { kind: 'message', text, id: crypto.randomUUID() });
+      for (const { text, attachments } of steers)
+        start(thread.pump, {
+          kind: 'message',
+          text,
+          id: crypto.randomUUID(),
+          ...(attachments !== undefined && { attachments }),
+        });
       return json(
         successResponse(
           id,

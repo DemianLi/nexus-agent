@@ -10,8 +10,12 @@
  * 到 transcript 裡影響下一次推理，命令的結果只印給人看。dsh 兩者分屬不同子系統，
  * 我們照做。
  *
- * **`attachments` 這一格我們沒有。** dsh 的 `CommandInvocation` 帶 `attachments`（圖片附件經
- * attachment store 收下之後交給 handler）。attachment store 還不存在，**那一格是缺，不是省略**。
+ * **附件**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：照 dsh 的 `CommandInvocation.attachments`
+ * （`packages/interaction/commands/src/index.ts`，`5badb150`）。命令用 `input.attachments: true` **宣告收附件**，宣告了才會在
+ * {@link CommandInvocation.attachments} 收到收下之後的**參照**（圖與一般檔案，照選取順序；位元組在日誌之外，見
+ * `apps/harness` 的 `attachment-store.ts`）；沒宣告的命令收到附件，執行器在 handler 之前就落定成 `error`，輸入框的草稿與附件留著。
+ * **registry 從不自己拿附件做事**：怎麼讓模型看到（`/goal` 是送一句帶附件的話，{@link CommandInvocation.steer} 的第二個參數）、
+ * 這個文法收不收，全是 handler 的決定，收不下就回 `error`。
  *
  * **dsh 的 `agent`（「收到命令的那個 agent」）在我們這裡對應 {@link CommandInvocation.sessionLog}**
  * （[#688](https://github.com/DemianLi/nexus-agent/issues/688)）。這一格的理由換過兩次：原本寫的是
@@ -25,6 +29,7 @@
  * @see [#118](https://github.com/DemianLi/nexus-agent/issues/118)
  */
 
+import type { AttachmentRef } from './attachment-ref.js';
 import type { SessionLog } from './session-log.js';
 
 /** 命令名的形狀。**正則照抄 dsh**——小寫開頭，其後小寫、數字、底線、連字號。 */
@@ -34,6 +39,11 @@ export const COMMAND_NAME_PATTERN = /^[a-z][a-z0-9_-]*$/u;
 export interface CommandInputDescriptor {
   /** 使用者還沒打字時顯示的佔位字串。 */
   readonly hint: string;
+  /**
+   * 這個命令收不收附件（照 dsh 的 `input.attachments`）。**沒給或 `false`＝不收**：執行器拒絕帶附件的呼叫，
+   * 會看這一格的輸入框在送出之前就擋下。宣告了，handler 收到收下之後的參照，並**自己決定**每一種文法收不收。
+   */
+  readonly attachments?: boolean;
 }
 
 /**
@@ -70,6 +80,11 @@ export interface CommandInvocation {
    * 不做 trim：要不要 trim 是 handler 自己的文法決定的，這一層先把原文原樣交出去。
    */
   readonly rawInput: string;
+  /**
+   * 這次呼叫帶的附件，**收下之後的參照**，照選取順序。沒宣告 `input.attachments` 的命令永遠是空的（帶了附件的呼叫根本進不了
+   * handler）；宣告了但這一次沒帶也是空的。handler 的文法收不下它們時回 `error`，這樣發派的輸入框留著草稿與附件。
+   */
+  readonly attachments: readonly AttachmentRef[];
   /** 發派它的那次請求擁有的取消訊號。 */
   readonly signal: AbortSignal;
   /**
@@ -95,8 +110,10 @@ export interface CommandInvocation {
    * - **不能在命令結束後才叫**：那時候宿主已經不看了，靜靜丟掉比拋錯更糟，所以拋錯。
    *
    * @param text - 要送的話，非空字串。
+   * @param attachments - 這句話帶的附件參照（通常是 {@link CommandInvocation.attachments} 原樣），省略＝沒有。送進對話的那一輪
+   *   開場那句就帶著它們（`turn/start.attachments`），所以讀圖的授權（日誌引用過它）自然成立。
    */
-  readonly steer: (text: string) => void;
+  readonly steer: (text: string, attachments?: readonly AttachmentRef[]) => void;
 }
 
 /** 一筆命令註冊。 */
@@ -163,7 +180,12 @@ export function normalizeCommandDefinition(definition: CommandDefinition): {
     if (typeof hint !== 'string' || hint.trim().length === 0) {
       throw new TypeError(`命令 "${definition.name}" 的 input.hint 要是非空字串。`);
     }
-    input = Object.freeze({ hint });
+    const attachments: unknown = definition.input.attachments;
+    if (attachments !== undefined && typeof attachments !== 'boolean') {
+      throw new TypeError(`命令 "${definition.name}" 的 input.attachments 要是布林。`);
+    }
+    // 沒宣告（或宣告 false）就整個不放這個 key：descriptor 上只有「收」這一種說法。
+    input = Object.freeze({ hint, ...(attachments === true ? { attachments: true } : {}) });
   }
   const recordInput: unknown = definition.recordInput;
   if (recordInput !== undefined && typeof recordInput !== 'boolean') {

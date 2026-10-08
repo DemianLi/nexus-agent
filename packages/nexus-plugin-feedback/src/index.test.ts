@@ -358,6 +358,7 @@ describe('/feedback', () => {
           rawInput: '   ',
           signal: new AbortController().signal,
           sessionLog: new SessionLog('feedback-root'),
+          attachments: [],
           steer: () => undefined,
         }),
       ).toEqual({
@@ -381,6 +382,7 @@ describe('/feedback', () => {
         rawInput: '回答錯了',
         signal: new AbortController().signal,
         sessionLog: log,
+        attachments: [],
         steer: () => undefined,
       });
       expect(result).toEqual({

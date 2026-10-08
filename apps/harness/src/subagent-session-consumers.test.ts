@@ -313,6 +313,7 @@ describe('goal 的參與者只掛在 root 上', () => {
         signal: new AbortController().signal,
         // 執行器手上的是 root 那一份。
         sessionLog: sessions.list().find((entry) => entry.address.kind === 'root')!.log,
+        attachments: [],
         steer: () => undefined,
       });
       expect(answer?.text).not.toBe(goalAmbiguousMessage(2));

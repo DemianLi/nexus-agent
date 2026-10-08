@@ -739,7 +739,7 @@ export async function runRepl(
           }
           // **命令請宿主接著送的話**（`/plan <message>`）：`command/done` 已經寫完，這裡才開這一輪，
           // 跟人接著打了那一句一樣。REPL 一行一輪，所以逐句 await。
-          for (const message of execution.steers) {
+          for (const { text: message } of execution.steers) {
             await runTurn(agent, message, printer, sessionLog, titleLimits);
           }
         }

@@ -9,13 +9,21 @@
 import { describe, expect, it } from 'vitest';
 
 import { createRegistry, createSessionRunner, SessionLog } from '@nexus/core';
-import type { CommandDefinition, CommandResult, GoalChangeMeta, PluginRegistry } from '@nexus/core';
+import type {
+  AttachmentRef,
+  CommandDefinition,
+  CommandResult,
+  GoalChangeMeta,
+  PluginRegistry,
+} from '@nexus/core';
 
 import {
   createGoalPlugin,
   executeGoalCommand,
   goalConfigSchema,
   GOALS_SERVICE,
+  GOAL_ATTACHMENTS_ONLY_MESSAGE,
+  GOAL_ATTACHMENTS_TEXT,
   GOAL_CLEARED_MESSAGE,
   GOAL_COMMAND_HINT,
   GOAL_COMMAND_NAME,
@@ -39,7 +47,9 @@ function mount(
   command: CommandDefinition;
   logs: SessionLog[];
   serviceFor: (log: SessionLog) => GoalService;
-  run: (rawInput: string) => CommandResult;
+  run: (rawInput: string, attachments?: readonly AttachmentRef[]) => CommandResult;
+  /** `run` 期間命令請宿主送的話（`steer` 收到的），照呼叫順序。 */
+  steers: { text: string; attachments?: readonly AttachmentRef[] }[];
   detach: () => void;
 } {
   const clock = 100;
@@ -56,6 +66,7 @@ function mount(
   const goals = registry.services.use(GOALS_SERVICE);
 
   const opened: SessionLog[] = [];
+  const steers: { text: string; attachments?: readonly AttachmentRef[] }[] = [];
   const detachers: (() => void)[] = [];
   for (let index = 0; index < logs; index += 1) {
     const log = new SessionLog(`goal-${String(index)}`);
@@ -83,14 +94,21 @@ function mount(
       if (service === undefined) throw new Error('接線之後應該找得到服務');
       return service;
     },
-    run: (rawInput) => {
+    steers,
+    run: (rawInput, attachments = []) => {
       const result = command.handler({
         commandId: 'cmd-test-1',
         rawInput,
+        attachments,
         signal: new AbortController().signal,
         // 執行器手上的那一份（#688）：接了日誌就是第一份，一份都沒接時交一份沒人接的。
         sessionLog: opened[0] ?? new SessionLog('unattached'),
-        steer: () => undefined,
+        steer: (text, steerAttachments) => {
+          steers.push({
+            text,
+            ...(steerAttachments === undefined ? {} : { attachments: steerAttachments }),
+          });
+        },
       });
       if (result instanceof Promise) throw new TypeError('/goal 是同步的');
       return result;
@@ -166,16 +184,21 @@ describe('註冊', () => {
       {
         name: GOAL_COMMAND_NAME,
         description: expect.any(String) as unknown as string,
-        input: { hint: GOAL_COMMAND_HINT },
+        input: { hint: GOAL_COMMAND_HINT, attachments: true },
       },
     ]);
     detach();
   });
 
-  it('**提示裡沒有圖片**——附件那條水管不存在', () => {
-    // 絆索：`CommandInvocation` 有 `attachments` 的那天，提示要跟著改，不然它在騙人。
-    expect(GOAL_COMMAND_HINT).not.toContain('image');
-    expect(GOAL_COMMAND_HINT).not.toContain('圖');
+  it('**宣告收附件**——descriptor 的 input.attachments 是 true（#732，照 dsh）', () => {
+    // 這條是從「提示裡沒有圖片」翻面來的絆索：`CommandInvocation` 有 `attachments` 之前，提示不能寫圖片；現在附件水管在了，
+    // 宣告就是 `input.attachments`（提示字串跟 dsh 一樣不變）。
+    const { registry, detach } = mount(1);
+    expect(registry.commands.list()[0]?.input).toEqual({
+      hint: GOAL_COMMAND_HINT,
+      attachments: true,
+    });
+    detach();
   });
 });
 
@@ -224,6 +247,7 @@ describe('找得到要動的那一份', () => {
       command.handler({
         commandId: 'cmd-test-1',
         rawInput,
+        attachments: [],
         signal: new AbortController().signal,
         // 收掉 `first` 之後執行器手上剩下的是 `second`。
         sessionLog: second,
@@ -263,6 +287,7 @@ describe('找得到要動的那一份', () => {
           command.handler({
             commandId: 'cmd-test-1',
             rawInput: input,
+            attachments: [],
             signal: new AbortController().signal,
             sessionLog: log,
             steer: () => undefined,
@@ -350,6 +375,96 @@ describe('六種輸入', () => {
     expect(successText(run(''))).toBe(GOAL_NONE_MESSAGE);
     // 墓碑也是一顆事件——清掉不是刪掉。
     expect(logs[0]?.events.filter((event) => event.type === 'goal/change')).toHaveLength(2);
+    detach();
+  });
+});
+
+describe('附件隨目標（#732）', () => {
+  const sha = (c: string) => `sha256:${c.repeat(64)}`;
+  const image = {
+    type: 'image',
+    attachmentId: sha('a'),
+    mediaType: 'image/png',
+    bytes: 3,
+    width: 1,
+    height: 1,
+  } as const;
+  const file = { type: 'file', attachmentId: sha('b'), name: 'a.txt', bytes: 1 } as const;
+  const attached = [image, file] as const;
+
+  it('/goal <目標> 帶附件：建起來，請宿主送一句固定的話，帶著附件（照選取順序）', () => {
+    const { run, logs, steers, detach } = mount(1);
+    expect(successText(run('把測試修綠', attached))).toContain('目標建好了');
+    expect(steers).toEqual([{ text: GOAL_ATTACHMENTS_TEXT, attachments: attached }]);
+    // 附件不進 goal 域：日誌上只有 goal/change。
+    expect(JSON.stringify(logs[0]?.events)).not.toContain(sha('a'));
+    detach();
+  });
+
+  it('沒帶附件就不 steer', () => {
+    const { run, steers, detach } = mount(1);
+    run('把測試修綠');
+    expect(steers).toEqual([]);
+    detach();
+  });
+
+  it('/goal edit <目標> 帶附件：改好了並 steer；完成掉的目標用 edit 換新的也 steer', () => {
+    const { run, logs, serviceFor, steers, detach } = mount(1);
+    run('把測試修綠');
+    expect(successText(run('edit 把文件補完', [image]))).toContain('目標改好了');
+    expect(steers).toEqual([{ text: GOAL_ATTACHMENTS_TEXT, attachments: [image] }]);
+
+    const service = serviceFor(logs[0] as SessionLog);
+    const current = service.get();
+    if (current === undefined) throw new Error('剛建好應該有目標');
+    service.complete({ id: current.id, revision: current.revision });
+    expect(successText(run('edit 再來一個', [file]))).toContain('目標建好了');
+    expect(steers).toHaveLength(2);
+    expect(steers[1]).toEqual({ text: GOAL_ATTACHMENTS_TEXT, attachments: [file] });
+    detach();
+  });
+
+  it('**其餘子命令收到附件一律在動域之前回 error**：什麼都沒改、沒有 steer', () => {
+    const { run, logs, steers, detach } = mount(1);
+    run('把測試修綠');
+    const before = logs[0]?.events.length;
+    for (const input of ['', 'pause', 'resume', 'clear', 'edit']) {
+      expect(errorText(run(input, [image])), input).toBe(GOAL_ATTACHMENTS_ONLY_MESSAGE);
+    }
+    expect(logs[0]?.events.length).toBe(before);
+    expect(steers).toEqual([]);
+    detach();
+  });
+
+  it('被拒絕的 create／edit 不 steer：已有未完成的目標、沒有目標就 edit', () => {
+    const none = mount(1);
+    expect(errorText(none.run('edit 新目標', [image]))).toBe(goalMissingMessage('edit'));
+    expect(none.steers).toEqual([]);
+    none.detach();
+
+    const have = mount(1);
+    have.run('把測試修綠');
+    expect(errorText(have.run('另一個目標', [image]))).toContain('已經有一個進行中的目標');
+    expect(have.steers).toEqual([]);
+    have.detach();
+  });
+
+  it('宿主拒收這句 steer（例如引用不能用）：拋出來，目標沒建', () => {
+    const { command, logs, detach } = mount(1);
+    const reject = () => {
+      throw new Error('宿主不收');
+    };
+    expect(() =>
+      command.handler({
+        commandId: 'c',
+        rawInput: '目標',
+        attachments: [image],
+        signal: new AbortController().signal,
+        sessionLog: logs[0] as SessionLog,
+        steer: reject,
+      }),
+    ).toThrow('宿主不收');
+    expect(logs[0]?.events.filter((event) => event.type === 'goal/change')).toHaveLength(0);
     detach();
   });
 });

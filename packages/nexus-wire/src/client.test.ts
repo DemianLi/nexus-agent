@@ -234,6 +234,44 @@ describe('瀏覽器端的 client', () => {
     expect(calls[1]?.body).toEqual({ id: 2, method: 'slash.run', params: { line: '/plan' } });
   });
 
+  it('斜線命令帶附件（#732）：descriptor 的 input.attachments 照實讀回；slashRun 的 attachments 非空才送', async () => {
+    const { calls, client } = stub((seen) =>
+      Response.json(
+        String(seen.url).endsWith('slash.list')
+          ? successResponse(1, {
+              commands: [
+                {
+                  name: 'goal',
+                  description: '目標',
+                  input: { hint: '[<目標>]', attachments: true },
+                },
+                { name: 'plan', description: '計劃', input: { hint: '[off]', attachments: false } },
+                { name: 'x', description: 'x', input: { hint: 'h', attachments: 'yes' } },
+              ],
+            })
+          : successResponse(2, { kind: 'success', command_id: 'cmd-1' }),
+      ),
+    );
+    const listed = await client.slashList('t5');
+    expect(listed).toEqual({
+      kind: 'ok',
+      commands: [
+        { name: 'goal', description: '目標', input: { hint: '[<目標>]', attachments: true } },
+        { name: 'plan', description: '計劃', input: { hint: '[off]' } },
+        { name: 'x', description: 'x', input: { hint: 'h' } },
+      ],
+    });
+    const file = { type: 'file', receiptId: 'r1' } as const;
+    await client.slashRun('t5', '/goal 目標', [file]);
+    await client.slashRun('t5', '/goal 目標', []);
+    expect(calls[1]?.body).toEqual({
+      id: 2,
+      method: 'slash.run',
+      params: { line: '/goal 目標', attachments: [file] },
+    });
+    expect(calls[2]?.body).toEqual({ id: 3, method: 'slash.run', params: { line: '/goal 目標' } });
+  });
+
   it('這條線拒絕發派與命令自己失敗，回來的是兩種形狀', async () => {
     const refused = stub(() =>
       Response.json(errorResponse(1, 'invalid_argument', '這條 thread 正在跑')),
