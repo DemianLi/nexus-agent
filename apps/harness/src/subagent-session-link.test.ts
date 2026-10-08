@@ -17,7 +17,12 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import { attachSessionPersistence, subagentLinkOf, subagentLinks } from '@nexus/core';
+import {
+  attachSessionPersistence,
+  replayConversation,
+  subagentLinkOf,
+  subagentLinks,
+} from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionRegistry } from '@nexus/core';
 import { createWireClient, emptyConversation, reduceAll } from '@nexus/wire';
 import type { ConversationState, Event, ToolEntry } from '@nexus/wire';
@@ -339,4 +344,42 @@ describe.each(CASES)('$label：wire 的工具卡帶著子會話，重新整理�
     ]);
     expect(reported).toEqual([]);
   }, 30000);
+});
+
+describe.each(CASES)('$label：子日誌記不記得它收到的那一句話', (entry) => {
+  it(
+    entry.background && entry.mode === 'continuable'
+      ? '背景：輸入由 turn/start 記，子日誌不多出 user/message'
+      : '前景：出生就記一顆來源 user 的 user/message，落在它的第一次叫模型與叫工具之前，照日誌推得出同一句',
+    async () => {
+      const logs = await runAndRead(entry);
+      const child = logs.find((log) => log.header.parentSession !== undefined)!;
+      const inputs = child.events.filter((event) => event.type === 'user/message');
+      if (entry.mode === 'continuable') {
+        expect(inputs).toEqual([]);
+        expect(child.events.some((event) => event.type === 'turn/start')).toBe(true);
+      } else {
+        // 刻意只認一顆：目錄與 `tool/call` 之外，子日誌不該有第二個地方記這句話。
+        expect(inputs).toHaveLength(1);
+        expect(inputs[0]).toMatchObject({
+          data: { source: { kind: 'user' }, message: { data: { content: '幹活' } } },
+        });
+        const at = child.events.indexOf(inputs[0]!);
+        const firstWork = child.events.findIndex(
+          (event) => event.type === 'model/start' || event.type === 'tool/call',
+        );
+        expect(firstWork).toBeGreaterThan(at);
+        // 照日誌推這個子代理第一次叫模型的歷史，開頭就是那一句話。
+        const replayed = replayConversation(child.events.slice(0, firstWork));
+        expect(replayed.kind).toBe('replayed');
+        if (replayed.kind === 'replayed') {
+          expect(replayed.messages.map((message) => [message.getType(), message.content])).toEqual([
+            ['human', '幹活'],
+          ]);
+        }
+      }
+      expect(reported).toEqual([]);
+    },
+    30000,
+  );
 });
