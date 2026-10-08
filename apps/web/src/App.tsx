@@ -56,9 +56,11 @@ import {
   STEER_QUEUE_PLACEHOLDER,
   STEER_UNAVAILABLE_TEXT,
 } from '@/lib/steer-queue';
+import { serverSupportsAttachments } from '@/lib/attachments';
 import { pendingSteers } from '@/lib/steer-view';
 import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
+import { useDraftAttachments } from '@/lib/use-draft-attachments';
 
 /**
  * 接回上一次那條 thread 時講的話。
@@ -299,6 +301,8 @@ function ConversationView({
     };
   }, [title]);
   const [draft, setDraft] = useState('');
+  // 草稿附件（#733）。伺服器不收附件時不傳給輸入框，整個功能不出現；上傳與送出帶收據等 #732 的連線協定。
+  const draftAttachments = useDraftAttachments();
   // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
   const lastDialog = useRef(conversation.feedbackDialog);
   // **每打開一次就是一張新表單**（跟以前關掉就卸掉一樣）：同一則關掉再開，草稿不留。
@@ -624,6 +628,15 @@ function ConversationView({
                 commands={conversation.slashCommands}
                 fileReferences={fileReferences}
                 sessionReferences={sessionReferences}
+                {...(serverSupportsAttachments()
+                  ? {
+                      attachments: {
+                        items: draftAttachments.items,
+                        onAdd: draftAttachments.add,
+                        onRemove: draftAttachments.remove,
+                      },
+                    }
+                  : {})}
                 decorated={DECORATED_COMMANDS}
                 // 從 `/` 選單直接執行不帶參數的命令：走斜線那一道閘（跑著時只有 `/feedback` 過得去）。
                 onRunCommand={(line) => {
