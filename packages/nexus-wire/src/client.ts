@@ -38,6 +38,7 @@ import type {
   ThreadUnpinCommand,
   ThreadUnpinResult,
 } from './thread-management.js';
+import type { SubagentListCommand, SubagentListResult, SubagentMention } from './subagent-list.js';
 import type { TrajectoryTurnDetail, TrajectoryTurnQuery } from './trajectory.js';
 import type {
   FileReferenceCandidate,
@@ -212,6 +213,8 @@ export interface WireClient {
       readonly mode?: RunStartMode;
       /** 這句話帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：先上傳的檔案收據與內嵌的圖，順序就是選取的順序。 */
       readonly attachments?: readonly PromptAttachment[];
+      /** 這句話點名派哪一種子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328)，形狀見 `subagent-list.ts`）。 */
+      readonly mention?: SubagentMention;
     },
   ): Promise<UplinkResult>;
   /**
@@ -266,6 +269,11 @@ export interface WireClient {
    * 契約見 `model-selection.ts`。**還沒實作的 server 回 `rejected`，`code` 是 `not_supported`**——web 據此藏起模型座。
    */
   modelCatalog(threadId: string): Promise<CommandOutcome<ModelCatalogResult>>;
+  /**
+   * 列這個組裝可以點名派的子代理種類（`subagent.list`，[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）。
+   * 契約見 `subagent-list.ts`。**還沒實作的 server 回 `rejected`，`code` 是 `not_supported`**——web 據此藏起 `@` 子代理的入口。
+   */
+  subagentList(threadId: string): Promise<CommandOutcome<SubagentListResult>>;
   /**
    * 選模型與推理強度（`model.select`）。從下一步生效，跑著的那步不換。型錄沒有那顆或強度沒宣告：`result` 是
    * `{ ok: false, error: { code: 'model_unavailable' } }`，選擇不變。
@@ -697,6 +705,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       | FeedbackCommand
       | ModelCommand
       | PermissionCommand
+      | SubagentListCommand
       | ThreadManagementCommand,
   ): Promise<UplinkResult> {
     // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的端點慣例
@@ -726,7 +735,12 @@ export function createWireClient(options: WireClientOptions): WireClient {
   /** 同 {@link sendFeedback} 的拆法，給回 `{ ok, … }` 的其他命令；`label` 只用在「看不懂」的訊息裡。 */
   async function sendOkCommand<T>(
     threadId: string,
-    command: FeedbackCommand | ModelCommand | PermissionCommand | ThreadManagementCommand,
+    command:
+      | FeedbackCommand
+      | ModelCommand
+      | PermissionCommand
+      | SubagentListCommand
+      | ThreadManagementCommand,
     label: string,
   ): Promise<CommandOutcome<T>> {
     const response = await sendCommand(threadId, command.method, command);
@@ -793,6 +807,8 @@ export function createWireClient(options: WireClientOptions): WireClient {
           ...(options?.attachments === undefined || options.attachments.length === 0
             ? {}
             : { attachments: options.attachments }),
+          // 省略就不放這個 key：舊的 server 也收得下。
+          ...(options?.mention === undefined ? {} : { mention: options.mention }),
         },
       });
     },
@@ -834,6 +850,15 @@ export function createWireClient(options: WireClientOptions): WireClient {
         method: SUBAGENT_INTERRUPT_METHOD,
         params: { run_id: runId },
       });
+    },
+
+    async subagentList(threadId) {
+      const command: SubagentListCommand = {
+        id: nextCommandId++,
+        method: 'subagent.list',
+        params: {},
+      };
+      return sendOkCommand<SubagentListResult>(threadId, command, '列子代理');
     },
 
     async modelCatalog(threadId) {

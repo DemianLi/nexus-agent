@@ -38,6 +38,8 @@ import { isDeliverableMethod } from './deliverables.js';
 import { isModelMethod } from './model-selection.js';
 import type { ModelMethod } from './model-selection.js';
 import { isPermissionMethod } from './permission-presets.js';
+import { isSubagentListMethod } from './subagent-list.js';
+import type { SubagentMention, SUBAGENT_LIST_METHOD } from './subagent-list.js';
 import { isThreadManagementMethod } from './thread-management.js';
 import type { ThreadListSets, ThreadManagementMethod } from './thread-management.js';
 import type { PermissionMethod } from './permission-presets.js';
@@ -124,6 +126,12 @@ export interface RunStartCommand {
      * 沒實作的 server 對非空的 `attachments` 回 `not_supported`。
      */
     readonly attachments?: readonly PromptAttachment[];
+    /**
+     * 這句話點名派哪一種子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項，形狀見 `subagent-list.ts`）。
+     * 協定的 `RunStartParams` 沒有這一格，dsh 也沒有使用者派工的入口。沒實作的 server 對有值的 `mention` 回 `not_supported`；
+     * 名字不在 `subagent.list` 上回 `invalid_argument`。
+     */
+    readonly mention?: SubagentMention;
   };
 }
 
@@ -470,7 +478,8 @@ export type RpcMethod =
   | DeliverableMethod
   | ModelMethod
   | PermissionMethod
-  | ThreadManagementMethod;
+  | ThreadManagementMethod
+  | typeof SUBAGENT_LIST_METHOD;
 
 export function isRpcMethod(value: unknown): value is RpcMethod {
   return (
@@ -483,7 +492,8 @@ export function isRpcMethod(value: unknown): value is RpcMethod {
     isDeliverableMethod(value) ||
     isModelMethod(value) ||
     isPermissionMethod(value) ||
-    isThreadManagementMethod(value)
+    isThreadManagementMethod(value) ||
+    isSubagentListMethod(value)
   );
 }
 

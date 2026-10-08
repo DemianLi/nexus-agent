@@ -151,6 +151,15 @@ export type {
 } from './thread-management.js';
 export { isThreadManagementMethod, THREAD_MANAGEMENT_METHODS } from './thread-management.js';
 export type {
+  SubagentKind,
+  SubagentListCommand,
+  SubagentListResult,
+  SubagentMention,
+} from './subagent-list.js';
+export { isSubagentListMethod, SUBAGENT_LIST_METHOD } from './subagent-list.js';
+export type { MessageDiscardPayload } from './message-discard.js';
+export { MESSAGE_DISCARD } from './message-discard.js';
+export type {
   PermissionCatalog,
   PermissionCatalogCommand,
   PermissionCatalogResult,

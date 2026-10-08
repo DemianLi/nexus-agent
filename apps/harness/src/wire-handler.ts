@@ -72,6 +72,7 @@ import {
   isModelMethod,
   isPermissionMethod,
   isThreadManagementMethod,
+  isSubagentListMethod,
   uploadPath,
   isDeliverableMethod,
   isFeedbackMethod,
@@ -414,6 +415,7 @@ const NOT_IMPLEMENTED = {
   'thread.archive': '這個組裝還沒有伺服器端的封存',
   'thread.unarchive': '這個組裝還沒有伺服器端的封存',
   'thread.rename': '這個組裝還沒有伺服器端的改名',
+  'subagent.list': '這個組裝還沒有可點名的子代理清單',
 } as const;
 
 /** 搜尋失敗怎麼上線。`disabled` 同 dsh 的 `SESSION_QUERY_SEARCH_DISABLED`：web 收到就退回只比標題。 */
@@ -1087,10 +1089,10 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
       return json(feedbackResponse(thread, envelope.id, method, body));
     }
-    if (isModelMethod(method) || isThreadManagementMethod(method)) {
-      // 每會話模型選擇（#723）與釘選／封存／改名（#633）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把
-      // 模型座與釘選封存改名藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
-      // 契約在 `@nexus/wire` 的 `model-selection.ts`／`thread-management.ts`；實作落地時把這個分支換成真的 handler。
+    if (isModelMethod(method) || isThreadManagementMethod(method) || isSubagentListMethod(method)) {
+      // 每會話模型選擇（#723）、釘選／封存／改名（#633）與可點名的子代理清單（#328）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把
+      // 模型座、釘選封存改名與 `@` 子代理藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
+      // 契約在 `@nexus/wire` 的 `model-selection.ts`／`thread-management.ts`／`subagent-list.ts`；實作落地時把這個分支換成真的 handler。
       return json(errorResponse(envelope.id, 'not_supported', NOT_IMPLEMENTED[method]));
     }
     const thread = await threadOrError(threadId, envelope.id);
@@ -1158,6 +1160,11 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         if (attachments.length > 0) {
           return json(errorResponse(command.id, 'not_supported', '這個組裝還不收附件'));
         }
+      }
+      // 點名子代理（#328 第 2 項）：同附件，契約先合、實作還沒做，**有值就整句拒絕**，不悄悄收下文字、丟掉點名。
+      const mention = (params as { mention?: unknown }).mention;
+      if (mention !== undefined) {
+        return json(errorResponse(command.id, 'not_supported', '這個組裝還不能點名子代理'));
       }
       const text = firstHumanText(params.input);
       if (text === undefined) {

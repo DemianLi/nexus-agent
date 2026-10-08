@@ -12,6 +12,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import {
   createWireClient,
   MODEL_METHODS,
+  SUBAGENT_LIST_METHOD,
   THREAD_MANAGEMENT_METHODS,
   uploadPath,
 } from '@nexus/wire';
@@ -57,19 +58,22 @@ function connect() {
 const NOT_SUPPORTED = { kind: 'rejected', code: 'not_supported' } as const;
 
 describe('每一支未實作的方法都回 not_supported', () => {
-  it('RPC：model 與 thread 管理的每一支，而且不為它們建 agent', async () => {
+  it('RPC：model、thread 管理與子代理清單的每一支，而且不為它們建 agent', async () => {
     const { client, handler, created } = connect();
     try {
       // 清單與契約同步：新增一支 method 而沒有登記到這裡，這條先紅。
-      expect([...MODEL_METHODS, ...THREAD_MANAGEMENT_METHODS].sort()).toEqual([
-        'model.catalog',
-        'model.select',
-        'thread.archive',
-        'thread.pin',
-        'thread.rename',
-        'thread.unarchive',
-        'thread.unpin',
-      ]);
+      expect([...MODEL_METHODS, ...THREAD_MANAGEMENT_METHODS, SUBAGENT_LIST_METHOD].sort()).toEqual(
+        [
+          'model.catalog',
+          'model.select',
+          'subagent.list',
+          'thread.archive',
+          'thread.pin',
+          'thread.rename',
+          'thread.unarchive',
+          'thread.unpin',
+        ],
+      );
       const outcomes = [
         await client.modelCatalog('t'),
         await client.selectModel('t', { modelId: 'm', reasoningEffort: 'high' }),
@@ -78,6 +82,7 @@ describe('每一支未實作的方法都回 not_supported', () => {
         await client.threadArchive('t', { stopActivity: true }),
         await client.threadUnarchive('t'),
         await client.threadRename('t', '新標題'),
+        await client.subagentList('t'),
       ];
       for (const outcome of outcomes) expect(outcome).toMatchObject(NOT_SUPPORTED);
       for (const outcome of outcomes) {
@@ -138,6 +143,19 @@ describe('每一支未實作的方法都回 not_supported', () => {
         const response = await client.runStart('t', '沒附件', options);
         expect(response).toMatchObject({ type: 'success' });
       }
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it('run.start 帶 mention（點名子代理）：整句拒絕，不收下文字；沒帶照常收', async () => {
+    const { client, handler } = connect();
+    try {
+      const response = await client.runStart('t', '請 reviewer 看一下', {
+        mention: { kind: 'subagent', name: 'reviewer' },
+      });
+      expect(response).toMatchObject({ type: 'error', error: 'not_supported' });
+      expect(await client.runStart('t', '沒點名')).toMatchObject({ type: 'success' });
     } finally {
       await handler.close();
     }
