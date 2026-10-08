@@ -177,6 +177,11 @@ const ALLOWED: readonly Allowed[] = [
     why: '遮罩的黑色半透明；沒有對應的語意 token',
   },
   {
+    file: 'components/ui/alert-dialog.tsx',
+    what: 'bg-black/50',
+    why: '遮罩的黑色半透明；沒有對應的語意 token（與 dialog、sheet 同一條，#437 手抄 alert-dialog 時帶進來）',
+  },
+  {
     file: 'components/ui/dialog.tsx',
     what: 'text-lg',
     why: 'registry 的標題尺寸；規格沒有標題階（同 empty-hero）',
