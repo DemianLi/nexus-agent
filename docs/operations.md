@@ -439,6 +439,10 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `### MCP server: <名字>` 接在系統提示詞後面，模型另有 `list_mcp_resources`、`list_mcp_resource_templates`、
   `read_mcp_resource` 三支工具讀它的資源。指引連同標頭超過 `maxInstructionBytes`（預設 32768 位元組）那一列算連線失敗，
   走上一條的 `failOnStartupError` 規則。細節見同一份 README。
+- **MCP 伺服器掛上之後掉了線會自動重連**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)，照 dsh）：500 ms
+  起每次連續失敗加倍、上限 30 秒，連續失敗 10 次放棄，連上之後撐過 30 秒失敗次數歸零；斷線期間工具照列但呼叫失敗，連回來之後同一批
+  工具又叫得動、定義不變。放棄之後那台的工具對模型隱藏，到下一次組裝才恢復。進度往伺服器日誌（stderr）寫。`reconnect.enabled: false`
+  關掉。`tools/list_changed` 與重連後的新工具不處理（工具集合在組裝時定下）。
 - **空檔與只有註解的檔會讓啟動失敗。** 要停用某一層請寫 `[]`——「我把它清空了」與「我把它
   寫壞了」在磁碟上長得一樣，所以不猜。
 - **patch 檔只有你自己動得了才會被接受。** 檔案本身與它每一層上層目錄都不能讓群組或其他人

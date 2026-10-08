@@ -23,15 +23,20 @@ import type { StructuredTool } from '@langchain/core/tools';
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
 import type { Connection } from '@langchain/mcp-adapters';
 import { scrubbedParentEnv } from '@nexus/core';
-import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
+import type { AgentMiddleware, NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
+import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { projectNonText } from './project-content.js';
 import { ensureHub } from './hub.js';
+import { Supervisor, reconnectSchema } from './supervisor.js';
+import type { ReconnectPolicy } from './supervisor.js';
 import type { McpResourceRequest, McpSource } from './hub.js';
 
 export { publicToolName, SERVER_NAME_PATTERN } from './names.js';
 export { MCP_HUB_SERVICE, RESOURCE_TOOL_NAMES } from './hub.js';
+export { reconnectSchema } from './supervisor.js';
+export type { ReconnectPolicy } from './supervisor.js';
 
 /** 帶出處標頭的 server 指引預設上限（UTF-8 位元組），照 dsh 的 `maxInstructionBytes`。 */
 export const DEFAULT_MAX_INSTRUCTION_BYTES = 32_768;
@@ -111,6 +116,12 @@ export const mcpConfigSchema = z.strictObject({
    * `failOnStartupError` 那條：預設撤掉工具、收連線、交出警告，寫 `true` 就拋），不截斷——截一半的指引比沒有更糟。
    */
   maxInstructionBytes: z.number().int().positive().default(DEFAULT_MAX_INSTRUCTION_BYTES),
+  /**
+   * 連線掉了之後的自動重連（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)），欄位與預設照 dsh 的
+   * `reconnect`：`enabled`（`true`）、`initialDelayMs`（500，每次連續失敗加倍）、`maxDelayMs`（30000，退避上限，也是穩定多久
+   * 之後失敗次數歸零）、`maxAttempts`（10）。**只管掛上之後才掉的線**；掛上那一刻就連不上的列不重連（見 `supervisor.ts` 檔頭偏離 5）。
+   */
+  reconnect: reconnectSchema.default(() => reconnectSchema.parse({})),
 });
 
 /** 驗過的設定。 */
@@ -137,8 +148,11 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
  * 收住的做法是自己 `catch`，不是把 adapter 換成 `onConnectionError: 'ignore'`：那一格只管連線，列不出工具照樣拋，
  * 蓋不到 dsh 的三種。
  *
- * **偏離登記**：dsh 連不上之後在背景重連、連上就把工具補上。我們一次組裝之內工具就定了（deepagents 建好就不可變，
- * `packages/nexus-core/src/load.ts` 檔頭），不重連；serve 下一條對話重新組裝時會再連一次。
+ * **偏離登記（掛上那一刻就連不上的列）**：dsh 連不上之後在背景重連、連上就把工具補上。我們一次組裝之內工具就定了
+ * （deepagents 建好就不可變，`packages/nexus-core/src/load.ts` 檔頭），補不了工具，所以這一種不重連；serve 下一條對話重新組裝時會再連一次。
+ *
+ * **掛上之後才掉的線會自動重連**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)），政策照 dsh，實作與偏離見
+ * [`supervisor.ts`](./supervisor.ts) 檔頭：已註冊的工具物件換不掉，所以註冊的物件把呼叫委派給目前這一代連線。
  *
  * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
  * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
@@ -168,24 +182,74 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
       },
     });
 
+    const label = `mcp-client(${serverName})`;
     const registered: (() => void)[] = [];
+    let supervisor: Supervisor<Generation> | undefined;
     let unregisterSource: (() => void) | undefined;
-    let closed = false;
+    // 進度（掉線、第 n 次重連、放棄、連回來）往 `console.warn` 講，照 `session-log.ts`、`sessions.ts` 等執行期通報的慣例（伺服器的
+    // stderr 就是 `serve` 的日誌）。**不能走 `registry.logger`**：它只在 `apply` 裡呼叫得動（要指名是誰交的警告），而重連發生在組裝之後。
+    const report = (message: string): void => {
+      console.warn(message);
+    };
     try {
+      const first = new Map<string, ToolCall>();
+      const names: string[] = [];
       for (const tool of await client.getTools()) {
+        const rawName = tool.name;
+        throwOnToolError(tool);
+        // **先收走這一代的呼叫，再把註冊的物件換成委派**——否則第 0 代的呼叫會指到自己，無窮遞迴。
+        first.set(rawName, callOf(tool));
         // 改的是**註冊給模型看的**名字。`tools/call` 送上線的是 adapter 在建這個工具時
         // 就閉包住的 raw name（`convertMcpTools` 裡的 `toolName: tool.name`），不是這個欄位——所以改它不會讓
         // 呼叫送到不存在的工具上。
-        tool.name = publicToolName(serverName, tool.name);
-        throwOnToolError(tool);
+        tool.name = publicToolName(serverName, rawName);
+        delegateTo(tool, rawName, label, () => supervisor);
+        names.push(tool.name);
         registered.push(registry.tools.register(tool as StructuredTool));
       }
       // 指引與資源走同一條已經連上的 SDK client，不再經 `MultiServerMCPClient` 開新連線。放在 `try` 裡：
       // 超過上限的指引算連線失敗，要跟列不出工具走同一個出口（撤工具、收連線、警告或拋）。
       const sdk = await client.getClient(serverName);
       const instructions = instructionsOf(sdk?.getInstructions(), config);
+      const policy: ReconnectPolicy = config.reconnect;
+      const current = (supervisor = new Supervisor<Generation>(
+        {
+          label,
+          policy,
+          // 重連 = 把整個 adapter client 收掉再重新列工具：同一個 `MultiServerMCPClient` 在 `close()` 之後再 `getTools()` 會開新連線、
+          // 新子行程、新的 SDK client（實測）。舊的工具物件永遠綁著死掉的 client，所以只取它們的呼叫，不取物件。
+          async connect() {
+            await client.close();
+            const calls = new Map<string, ToolCall>();
+            for (const tool of await client.getTools()) {
+              throwOnToolError(tool);
+              calls.set(tool.name, callOf(tool));
+            }
+            return { calls, sdk: await client.getClient(serverName) };
+          },
+          close: () => client.close(),
+          watch(generation, onDown) {
+            if (generation.sdk !== undefined) generation.sdk.onclose = onDown;
+          },
+          report,
+        },
+        { calls: first, sdk },
+      ));
+      // 放棄重連之後，這一台的工具對模型隱藏（dsh 此時把工具從註冊表撤掉；我們的註冊表在組裝之後撤了沒有效果，
+      // 所以改在每次模型呼叫前把它們從請求的工具清單拿掉，見 `supervisor.ts` 檔頭偏離 4）。
+      registered.push(registry.middleware.use(hideTools(serverName, names, () => current.gaveUp)));
       unregisterSource = ensureHub(registry).add(
-        resourceSource(serverName, instructions, config.toolCallTimeoutMs, sdk, () => closed),
+        resourceSource(serverName, instructions, config.toolCallTimeoutMs, () => {
+          const generation = current.current();
+          return generation?.sdk === undefined
+            ? undefined
+            : {
+                sdk: generation.sdk,
+                lost: () => {
+                  current.down(generation);
+                },
+              };
+        }),
       );
     } catch (error) {
       // **模型看到的是整台伺服器的工具或一個都沒有**，照 dsh：註冊到一半撞了，已經註冊的撤掉（撤銷是冪等的，
@@ -194,6 +258,7 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
       // 回滾期的資源釋放是 plugin 自己的事——`lifecycle` 通道只管關機，而這裡是
       // `apply` 還沒跑完就壞掉，登記根本還沒發生。連線已經開了就得收掉，否則這個
       // 子行程會活過整個行程。收住的那條路也一樣：沒有工具就沒有理由留著它。
+      await supervisor?.dispose();
       await client.close().catch(() => {});
       if (config.failOnStartupError) throw error;
       const reason = error instanceof Error ? error.message : String(error);
@@ -204,16 +269,17 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
       // 照 dsh：資源 provider 的登記不看連線成敗，名字照列、呼叫時才報不可用。**沒有 `failOnStartupError` 的這一列
       // 才登記**——寫了 `true` 的那一列拋出去，不留任何東西在 hub 裡。
       const hubUndo = ensureHub(registry).add(
-        resourceSource(serverName, '', config.toolCallTimeoutMs, undefined, () => true),
+        resourceSource(serverName, '', config.toolCallTimeoutMs, () => undefined),
       );
       registry.lifecycle.onDispose(hubUndo);
       return;
     }
 
-    registry.lifecycle.onDispose(() => {
-      closed = true;
+    registry.lifecycle.onDispose(async () => {
       unregisterSource?.();
-      return client.close();
+      // 先取消待跑的重連、等進行中的那次收斂，再把 adapter client 收掉（連一次都沒連上的間隙也要收）。
+      await supervisor.dispose();
+      await client.close();
     });
   },
 };
@@ -232,6 +298,7 @@ export function createMcpPlugin(options: McpPluginOptions): PluginEntry {
 
 /** SDK client 上，這個檔會用到的那幾個方法；結構型別，不直接依賴 `@modelcontextprotocol/client`。 */
 interface SdkClient {
+  onclose?: () => void;
   getInstructions(): string | undefined;
   listResources(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
   listResourceTemplates(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
@@ -259,29 +326,116 @@ function instructionsOf(raw: string | undefined, config: McpConfig): string {
   return attributed;
 }
 
-/** 一台 server 登記進 hub 的那一份；`client` 是 `undefined` 或 `isClosed()` 時，叫它都是 dsh 那句 `server is disconnected`。 */
+/** 一代連線：這一代每個工具的呼叫（以 raw name 為鍵）與它的 SDK client。 */
+interface Generation {
+  readonly calls: ReadonlyMap<string, ToolCall>;
+  readonly sdk: SdkClient | undefined;
+}
+
+type ToolCall = (...args: unknown[]) => Promise<unknown>;
+
+/** 一個工具目前的呼叫（已經過 {@link throwOnToolError} 的那一層）。 */
+function callOf(tool: StructuredTool): ToolCall {
+  const func = (tool as unknown as { func: ToolCall }).func;
+  return (...args) => func.call(tool, ...args);
+}
+
+/**
+ * 連線斷了的錯誤長相：SDK 在 transport 已經關掉之後送請求是 `Not connected`，請求進行到一半被關是 `Connection closed`
+ * （MCP 錯誤碼 -32000）。沿 `cause` 往下找。逾時、server 回的 `isError` 都不算。
+ */
+export function isConnectionLost(error: unknown): boolean {
+  for (let current = error, depth = 0; current !== undefined && depth < 5; depth += 1) {
+    const message = current instanceof Error ? current.message : String(current);
+    if (/\bNot connected\b|\bConnection closed\b|MCP error -32000/u.test(message)) return true;
+    current = (current as { cause?: unknown } | null)?.cause;
+  }
+  return false;
+}
+
+/**
+ * 把已註冊的工具物件的 `func` 換成「委派給目前這一代同名工具」。註冊表裡的物件換不掉，而 adapter 重連之後它們仍綁著死掉的
+ * client，所以呼叫要繞到目前這一代去。照 dsh：斷線期間（沒有目前這一代）工具照樣列著、呼叫失敗。
+ */
+function delegateTo(
+  tool: StructuredTool,
+  rawName: string,
+  label: string,
+  supervisorOf: () => Supervisor<Generation> | undefined,
+): void {
+  (tool as unknown as { func: ToolCall }).func = async (...args) => {
+    const supervisor = supervisorOf();
+    const generation = supervisor?.current();
+    if (supervisor === undefined || generation === undefined) {
+      throw new Error(
+        supervisor?.gaveUp === true
+          ? `${label}: server is disconnected and reconnection was given up — assemble the plugin again to reconnect`
+          : `${label}: server is disconnected`,
+      );
+    }
+    const call = generation.calls.get(rawName);
+    if (call === undefined) {
+      throw new Error(`${label}: tool "${rawName}" is no longer offered by the server`);
+    }
+    try {
+      return await call(...args);
+    } catch (error) {
+      if (isConnectionLost(error)) supervisor.down(generation);
+      throw error;
+    }
+  };
+}
+
+/** 放棄重連之後，把這一台的工具從每次模型請求的工具清單拿掉；沒放棄就原樣穿過。 */
+function hideTools(
+  serverName: string,
+  names: readonly string[],
+  gaveUp: () => boolean,
+): AgentMiddleware {
+  const hidden = new Set(names);
+  return createMiddleware({
+    // 每一列一個名字：同名的兩顆 middleware 會在基座那邊撞名。
+    name: `mcp-tools-guard:${serverName}`,
+    wrapModelCall: (request, handler) => {
+      if (!gaveUp()) return handler(request);
+      const tools = request.tools.filter(
+        (tool) => !hidden.has((tool as { name?: string }).name ?? ''),
+      );
+      return handler({ ...request, tools });
+    },
+  }) as AgentMiddleware;
+}
+
+/**
+ * 一台 server 登記進 hub 的那一份。`acquire` 回目前這一代的 SDK client 與「這一代斷了」的通報；沒有（連不上、掉線等待重連、
+ * 已放棄、已關閉）就是 dsh 那句 `server is disconnected`。
+ */
 function resourceSource(
   serverName: string,
   instructions: string,
   timeout: number,
-  client: SdkClient | undefined,
-  isClosed: () => boolean,
+  acquire: () => { sdk: SdkClient; lost: () => void } | undefined,
 ): McpSource {
   return {
     serverName,
     instructions,
-    request(request: McpResourceRequest, signal: AbortSignal | undefined): Promise<unknown> {
-      if (client === undefined || isClosed()) {
-        return Promise.reject(new Error(`mcp-client(${serverName}): server is disconnected`));
-      }
+    async request(request: McpResourceRequest, signal: AbortSignal | undefined): Promise<unknown> {
+      const held = acquire();
+      if (held === undefined) throw new Error(`mcp-client(${serverName}): server is disconnected`);
+      const { sdk } = held;
       const options: RequestOptions = { timeout, ...(signal !== undefined && { signal }) };
-      switch (request.method) {
-        case 'resources/list':
-          return client.listResources(cursorParams(request.cursor), options);
-        case 'resources/templates/list':
-          return client.listResourceTemplates(cursorParams(request.cursor), options);
-        case 'resources/read':
-          return client.readResource({ uri: request.uri }, options);
+      try {
+        switch (request.method) {
+          case 'resources/list':
+            return await sdk.listResources(cursorParams(request.cursor), options);
+          case 'resources/templates/list':
+            return await sdk.listResourceTemplates(cursorParams(request.cursor), options);
+          case 'resources/read':
+            return await sdk.readResource({ uri: request.uri }, options);
+        }
+      } catch (error) {
+        if (isConnectionLost(error)) held.lost();
+        throw error;
       }
     },
   };

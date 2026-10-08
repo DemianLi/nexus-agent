@@ -87,6 +87,14 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   **這台 server 一個工具都沒有**，並經 `registry.logger` 交出一則警告。出貨的啟動程式把它印在
   啟動時那段警告裡（「警告：N 則外掛掛上時交出的話」），`serve` 每條對話組裝時又連不上的話在
   伺服器日誌記一行 `[組裝] thread "…" 警告：…`。
+- **掛上之後掉了線會自動重連，照 dsh**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)）：500 ms 起每次連續失敗加倍、
+  上限 30000 ms；同一次中斷連續失敗 10 次就放棄；連上之後撐過 30000 ms 才又掉線，失敗次數歸零。**斷線期間工具照樣列在
+  清單上，但呼叫會失敗**（`mcp-client(<名字>): server is disconnected`）。連回來之後同一批工具物件又叫得動，工具定義逐位元組
+  不變，提示詞前綴不會因重連失效。**放棄之後**那台的工具從每次模型請求的工具清單拿掉（註冊表上仍在，呼叫得到「已放棄重連」），
+  要等重新組裝（`serve` 的下一條對話、或重啟）才恢復。`reconnect.enabled: false` 關掉自動重連（工具照列、呼叫失敗，直到
+  重新組裝）。重連的進度——掉線、第 n 次嘗試、放棄、連回來——往 `console.warn` 講（`serve` 就是伺服器日誌）；不能走
+  `registry.logger`，它只在 `apply` 裡呼叫得動。偵測有兩個來源：SDK client 的 `onclose`（子行程被殺立刻觸發），與工具／資源呼叫
+  失敗且錯誤是 `Not connected`／`Connection closed`（沒掛 `onclose` 的傳輸也能觸發）。
 - **`failOnStartupError: true` 讓這一列失敗。** 同樣三件事改成在 `apply` 裡拋：清單上的這一列
   掉了（啟動時的警告指名它），手搭清單則整個載入失敗。`serve` 啟動時就掉了的列之後每條對話都
   算沒掛、不再重連，要到重啟。
@@ -114,7 +122,7 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   `failOnStartupError: true` 而掉了的列不留任何東西。
 - **偏離**：dsh 的兩種提示詞是 `systemPrompt.section(...)`；我們沒有段落註冊點，提示詞是 middleware 一層層接的，
   所以用 `wrapModelCall` 把文字**接**（不是取代）到 system message 後面，與 goal、plan-mode 同一條已登記的偏離。
-  dsh 的 `instructions()` 讀最近一次成功連線的快照、重連會換，我們不重連（見下），所以不會換。
+  dsh 的 `instructions()` 讀最近一次成功連線的快照、重連成功會換；我們重連之後不換（工具集合與提示詞都在組裝時定下，`supervisor.ts` 檔頭偏離 3）。
   Prompts（`prompts/*`）dsh 也不支援（「MCP prompt templates are unsupported」），這裡同樣不做。
 
 ## 明文限制
@@ -127,10 +135,13 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   寫進虛擬 FS」那條路。要圍堵 MCP server 本身只能從啟動它的方式下手（沙箱／容器），
   不在 Phase 2 範圍（[#34](https://github.com/DemianLi/nexus-agent/issues/34)）。
 - **Prompts 不橋接。** dsh 也不支援 MCP prompt templates；工具、指引與資源見上一節。
-- **不重連。** 連線掉了之後那台 server 的工具留在註冊表上、呼叫會失敗，直到重新組裝
-  agent；掛上時就連不上的那台，這一次組裝都沒有它的工具。dsh 有指數退避的重連監督與
-  `notifications/tools/list_changed` 的重新同步，連上了就把工具補上；deepagents 建構後不可變，
-  工具集合換不掉，重連回來也沒有地方放。`serve` 每條對話各組裝一次，所以下一條對話會再連。
+- **`tools/list_changed` 不處理，重連也不改工具集合。** dsh 在 server 通知工具清單變了、或重連之後會重新同步並換掉註冊的工具；
+  deepagents 建好之後工具集合不可變，註冊表上的工具換不掉。所以：新工具要到下一次組裝才有；重連回來的新一代若少了某個原本有的
+  工具，呼叫它得到 `tool "x" is no longer offered by the server`。這是登記過的偏離（`supervisor.ts` 檔頭偏離 2），範圍是「工具集合」，
+  連線恢復本身照 dsh 做了。
+- **掛上那一刻就連不上的那台不重連**，這一次組裝都沒有它的工具（補不了工具，見上）；`serve` 每條對話各組裝一次，所以下一條對話會再連。
+- **重連只對 stdio 的子行程掉線有實測。** HTTP 傳輸是每個請求各自連，沒有「連線掉了」這回事；server 重啟之後 session 失效那一類錯誤
+  不在 `Not connected`／`Connection closed` 的辨識裡，不會觸發重連。
 - **結果的呈現由 adapter 決定。** 文字與圖片進 `content`、embedded resource 進 `artifact`
   是 `@langchain/mcp-adapters` 的預設，我們不改。dsh 那套「圖片要先證明這條 model route
   真的收圖片才落地」在這裡沒有對應物。
@@ -160,8 +171,7 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 `packages/mcp/mcp-client` 為標準（見 [AGENTS.md](../../AGENTS.md)）。這裡走
 `@langchain/mcp-adapters` 而不是自己接 `@modelcontextprotocol/sdk`：adapter 產出的是
 `DynamicStructuredTool`，正是 `registry.tools.register()` 收的東西，自己接 SDK 等於把
-「MCP content block 翻成 LangChain 工具結果」整段重寫一次。上面的明文限制裡，不重連、
-結果呈現、`stderr` 三條就是這個選擇的代價。
+「MCP content block 翻成 LangChain 工具結果」整段重寫一次。上面的明文限制裡，結果呈現、`stderr` 三條就是這個選擇的代價；重連因此是自己包的 supervisor，沒開 adapter 內建的 `restart`（固定間隔、固定次數，表達不出 dsh 的指數退避與穩定期重置，而且重連之後已註冊的舊工具物件仍綁著死掉的 client，實測 `Not connected`）。
 
 **基座沒有內建 MCP。** `deepagents@1.13.1` 整包沒有一處提到 MCP；MCP 在 LangChain JS 這一
 側是 `@langchain/mcp-adapters` 這個獨立套件。
