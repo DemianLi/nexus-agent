@@ -531,8 +531,12 @@ describe('摘要之後下一句話把基線補回來', () => {
  * **宣告 `stateSchema` 沒有把私有鍵推上輸出通道。** `summarization.test.ts` 那條「回傳值只有 `files` 與
  * `messages`」量的組裝沒有這顆 plugin；這顆為了讀切點宣告了同一個鍵，而宣告 `stateSchema` 就是往圖的
  * channel 表上加東西。這一條在出貨清單＋`--workspace`、而且摘要真的發生過的組裝上再量一次。
+ *
+ * **`skillsMetadata` 是例外，而且只有它**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：出貨清單掛了
+ * skills 之後，基座的 skills 狀態 channel 是公開的、帶預設值 `[]`，掛了就出現在回傳值裡（沒有 skill 時是空陣列，
+ * 不影響 system prompt）。要量的是**私有鍵**（`_summarizationEvent` 之類）沒有外洩，所以其餘一律不准多。
  */
-it('shipped 摘要過之後，invoke 的回傳值還是只有 files 與 messages', async () => {
+it('shipped 摘要過之後，invoke 的回傳值除了 skills 自己那一格沒有多的鍵', async () => {
   const root = await mkdtemp(join(tmpdir(), 'nexus-instructions-keys-'));
   await writeFile(join(root, 'AGENTS.md'), '規矩。', 'utf8');
   const model = new ScriptedChatModel({
@@ -563,7 +567,7 @@ it('shipped 摘要過之後，invoke 的回傳值還是只有 files 與 messages
     ).getState({ configurable: { thread_id: 'keys' } });
     expect(snapshot.values._summarizationEvent).toBeDefined();
 
-    expect(Object.keys(returned).sort()).toEqual(['files', 'messages']);
+    expect(Object.keys(returned).sort()).toEqual(['files', 'messages', 'skillsMetadata']);
   } finally {
     await built.dispose();
     await rm(root, { recursive: true, force: true });

@@ -6,10 +6,13 @@
  * 那段清單，與模型照著清單去 `read_file` 時拿到的東西。斷言 registry 裡有幾筆來源證明
  * 不了任何事，那是 `@nexus/plugin-skills` 那邊薄測試的工作。
  *
- * 六條裡有四條是**斷言缺陷**的（`看得到讀不到`、`空清單每輪重掃`、`custom subagent 沒有`、
- * `不合規範的名字照樣進清單`）。跟 [`contained-backend.test.ts`](./contained-backend.test.ts)
- * 那組升版絆索同樣的用意：這些是 `deepagents@1.13.1` 的實際形狀，寫成可執行的證據比寫在
- * 註解裡強，基座哪天改了它們會紅。
+ * 有幾條是**斷言缺陷**的（`看得到讀不到`、`custom subagent 沒有`、`不合規範的名字照樣進清單`）。
+ * 跟 [`contained-backend.test.ts`](./contained-backend.test.ts) 那組升版絆索同樣的用意：這些是
+ * `deepagents@1.13.1` 的實際形狀，寫成可執行的證據比寫在註解裡強，基座哪天改了它們會紅。
+ *
+ * **「空清單」那一組不是缺陷了**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：基座對空清單照樣
+ * 接約 2000 字、又每輪重掃，組裝點包了一層（`packages/nexus-core/src/skills-middleware.ts`）讓它整個隱形，
+ * 最後一組 `沒有 skill 就一個字都不加` 走產品組裝（`createCliAgent` ＋ 出貨清單）量這件事。
  */
 
 import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
@@ -20,7 +23,10 @@ import type { PluginEntry } from '@nexus/core';
 import { createSkillsPlugin } from '@nexus/plugin-skills';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
+import { createCliAgent } from './assembly-root.js';
+import { runTurn } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 
@@ -158,19 +164,21 @@ describe('skills 進到 system prompt', () => {
 });
 
 /**
- * **skills 的快取比記憶更硬，但只在載到東西的時候。**
+ * **skills 的快取：載到東西就凍住，載到空的也一樣。**
  *
  * `loadedSkills` 是 middleware 工廠的閉包變數，不是 state：
  * `if (loadedSkills.length > 0) return ...` 之後就永不重載，跨 thread 也一樣。
  *
- * **而空的不算。** 載入結果為空時 `loadedSkills.length > 0` 是 false，於是**每一次
- * `beforeAgent` 都重掃整個來源**——一個沒有 skill 的工作區是最貴的那種。這一條計劃沒寫。
+ * **基座的空結果不算**：載入結果為空時 `loadedSkills.length > 0` 是 false，於是每一次
+ * `beforeAgent` 都重掃整個來源。**這條絆索翻面了**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：
+ * 原本斷言「沒 skill」是兩次掃描，現在是一次——照 dsh，掃描結果連空的也進快取
+ * （`packages/skill/skill/src/index.ts:540-541`）。改的是組裝點包的那一層，不是基座。
  */
 describe('skills 的快取邊界', () => {
-  it('載到 skill 就凍住，載到空的每輪重掃', async () => {
+  it('載到 skill 就凍住，載到空的也凍住', async () => {
     for (const [label, source, expected] of [
       ['有 skill', '/skills/', 1],
-      ['沒 skill', '/empty/', 2],
+      ['沒 skill', '/empty/', 1],
     ] as const) {
       const root = await workspace({ skills: { 'web-research': '上網查資料。' } });
       await mkdir(join(root, 'empty'), { recursive: true });
@@ -326,5 +334,94 @@ describe('基座驗證了但不擋的那些', () => {
     const prompt = systemPrompt(model.lastPrompt);
     expect(prompt).toContain('WebResearch');
     expect(prompt).not.toContain('No skills available');
+  });
+});
+
+/**
+ * **沒有 skill 就一個字都不加**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）——走產品組裝：
+ * `createCliAgent` ＋ 出貨清單（`cordis.yml` 的 `skills` 那一列），不是 `createNexusAgent` 手掛 plugin。
+ *
+ * 基座的 skills middleware 對空清單照樣把約 2000 字的說明接到 system prompt 後面；組裝點包了一層讓它隱形。
+ * **驗收是位元組相同**：同一份出貨清單，把 `skills` 那一列停用（＝沒掛 skills）對照啟用，送給模型的 system prompt
+ * 逐字相同——包含「沒給 `--workspace`」「工作區沒有 `skills/`」「有 `skills/` 目錄但裡面是空的」三種空。
+ */
+describe('沒有 skill 就一個字都不加', () => {
+  /** 出貨清單，`skills` 那一列照 `enabled` 啟用或停用（patch 寫 `disabled: true` 的效果）。 */
+  async function rows(enabled: boolean): Promise<readonly PluginEntry[]> {
+    const shipped = await shippedPlugins();
+    expect(shipped.some((entry) => entry.id === 'skills')).toBe(true);
+    return shipped.map((entry) =>
+      entry.id === 'skills' && !enabled ? { ...entry, disabled: true as const } : entry,
+    );
+  }
+
+  /** 產品組裝跑一輪，回傳每一次模型呼叫的 system prompt。 */
+  async function promptsOf(
+    enabled: boolean,
+    workspaceRoot: string | undefined,
+    turns: Parameters<typeof withScriptedModel>[1],
+  ): Promise<string[]> {
+    const built = await createCliAgent(
+      workspaceRoot === undefined ? { live: false } : { live: false, workspace: workspaceRoot },
+      withScriptedModel([...(await rows(enabled))], turns),
+      workspaceRoot,
+    );
+    try {
+      await runTurn(
+        built.agent,
+        '嗨。',
+        { log: () => undefined, error: () => undefined },
+        built.sessionLog,
+      );
+    } finally {
+      await built.dispose();
+    }
+    return (built.model as unknown as { prompts: BaseMessage[][] }).prompts.map(systemPrompt);
+  }
+
+  it('沒給 --workspace、工作區沒有 skills/、skills/ 是空的：system prompt 與沒掛 skills 逐字相同', async () => {
+    const cases: [string, string | undefined][] = [
+      ['沒給 --workspace', undefined],
+      ['工作區沒有 skills/', await workspace({})],
+      ['skills/ 是空的', await workspace({ skills: {} })],
+    ];
+    for (const [label, root] of cases) {
+      const without = await promptsOf(false, root, [{ content: '好。' }]);
+      const withSkills = await promptsOf(true, root, [{ content: '好。' }]);
+      expect(without.length, label).toBeGreaterThan(0);
+      expect(withSkills, label).toEqual(without);
+      expect(withSkills.join('\n'), label).not.toContain('Skills System');
+      expect(withSkills.join('\n'), label).not.toContain('No skills available');
+    }
+  });
+
+  it('有 skills/<name>/SKILL.md：模型看得到名字、描述與路徑（零設定的產品組裝找得到 skills）', async () => {
+    const root = await workspace({ skills: { 'web-research': '上網查資料。' } });
+    const [prompt] = await promptsOf(true, root, [{ content: '好。' }]);
+    expect(prompt).toContain('## Skills System');
+    expect(prompt).toContain('web-research');
+    expect(prompt).toContain('上網查資料。');
+    expect(prompt).toContain('/skills/web-research/SKILL.md');
+    // 對照：停用那一列，清單就消失——證明上面看到的是這一列掛的，不是別處帶的。
+    const [off] = await promptsOf(false, root, [{ content: '好。' }]);
+    expect(off).not.toContain('web-research');
+  });
+
+  it('general-purpose 子代理在沒有 skill 的工作區也不多一個字', async () => {
+    const root = await workspace({});
+    const turns = [
+      {
+        content: '',
+        toolCalls: [
+          { name: 'task', args: { description: '去做事', subagent_type: 'general-purpose' } },
+        ],
+      },
+      { content: 'subagent 做完了。' },
+      { content: '收工。' },
+    ];
+    const without = await promptsOf(false, root, turns);
+    const withSkills = await promptsOf(true, root, turns);
+    expect(withSkills).toHaveLength(3);
+    expect(withSkills).toEqual(without);
   });
 });
