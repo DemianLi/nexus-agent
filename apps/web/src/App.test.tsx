@@ -3,6 +3,7 @@ import type {
   ModelCatalogResult,
   ModelSelectResult,
   ModelSelection,
+  PermissionCatalogResult,
   SlashDescriptor,
   SessionReferenceCandidate,
   SlashRunOutcome,
@@ -18,6 +19,7 @@ import {
   CONTEXT_MEASURE,
   formatSessionReferenceMention,
   GOAL,
+  MODEL_DOES_NOT_SUPPORT_IMAGES,
   MODEL_USAGE,
   PLAN_MODE,
   PROJECTION,
@@ -77,12 +79,20 @@ function memoryStorage(): Storage {
   };
 }
 
+// 附件功能的開關今天寫死 false（#733）：整條送出路徑的測試把它打開，其餘照舊。
+const attachmentGate = vi.hoisted(() => ({ on: false }));
+vi.mock('@/lib/attachments', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/attachments')>()),
+  serverSupportsAttachments: () => attachmentGate.on,
+}));
+
 // App 會把 thread id 記進 `localStorage`；每條一份新的，不然下一條測試就成了「接回上一次」。
 beforeEach(() => {
   vi.stubGlobal('localStorage', memoryStorage());
 });
 
 afterEach(() => {
+  attachmentGate.on = false;
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -3613,5 +3623,406 @@ describe('模型座（#723）', () => {
 
       await waitFor(() => expect(selected).toEqual([{ modelId: 'model-b' }]));
     });
+  });
+});
+
+describe('權限座（#437）', () => {
+  beforeEach(stubCmdkLayout);
+
+  const CATALOG: PermissionCatalogResult = {
+    ok: true,
+    value: {
+      catalog: {
+        options: [
+          { value: 'read-only', name: '唯讀', description: '只能讀，改東西要問' },
+          { value: 'workspace-write', name: '可寫工作區' },
+          { value: 'danger-full-access', name: '全開' },
+        ],
+        defaultOptions: [{ value: 'workspace-write', name: '可寫工作區' }],
+        defaultPreset: 'workspace-write',
+      },
+    },
+  };
+
+  const seat = () => screen.queryByTestId('permission-seat');
+  const permissionFrame = (
+    downlink: ReturnType<typeof fakeClient>['downlink'],
+    currentValue: string,
+  ): Event =>
+    downlink.customFrame(PROJECTION, {
+      key: 'permissions',
+      version: 1,
+      view: { currentValue },
+    });
+
+  /** 接上權限目錄的假 client；`current` 不是 `undefined` 就在一開始推那顆投影。 */
+  async function withPermissions(
+    current: string | undefined,
+    events: readonly Event[] = [frame('lifecycle', [], { event: 'completed', graph_name: 'root' })],
+  ) {
+    seq = 0;
+    const fake = fakeClient(events);
+    const client: WireClient = {
+      ...fake.client,
+      permissionCatalog: async () => ({ kind: 'ok', result: CATALOG }),
+    };
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    if (current !== undefined) {
+      fake.downlink.push(fake.opened[0]!, [permissionFrame(fake.downlink, current)]);
+      await screen.findByTestId('permission-seat');
+    }
+    return fake;
+  }
+
+  const pickOption = async (name: string) => {
+    fireEvent.click(await screen.findByTestId('permission-seat'));
+    const list = await screen.findByRole('listbox');
+    fireEvent.click(within(list).getByText(name));
+  };
+
+  it.each([
+    ['not_supported', { kind: 'rejected', code: 'not_supported', message: '還沒實作' }],
+    ['其他拒絕', { kind: 'rejected', message: '這條線收不了' }],
+  ] as const)('目錄回 %s：沒有權限座，即使投影到了', async (_case, outcome) => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const permissionCatalog = vi.fn(async () => outcome);
+    render(<App client={{ ...fake.client, permissionCatalog }} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    await waitFor(() => expect(permissionCatalog).toHaveBeenCalled());
+    fake.downlink.push(fake.opened[0]!, [permissionFrame(fake.downlink, 'workspace-write')]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(seat()).toBeNull();
+  });
+
+  it('投影沒有送來（這個組裝沒有權限組合）：沒有權限座', async () => {
+    await withPermissions(undefined);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(seat()).toBeNull();
+  });
+
+  it('座位寫目前的組（無障礙名稱含目前的值），投影換了就跟著換', async () => {
+    const fake = await withPermissions('workspace-write');
+    const button = screen.getByTestId('permission-seat');
+    expect(button.getAttribute('aria-label')).toBe('權限：可寫工作區，點開切換');
+    expect(button.getAttribute('data-warning')).toBe('false');
+
+    fake.downlink.push(fake.opened[0]!, [permissionFrame(fake.downlink, 'read-only')]);
+    await waitFor(() =>
+      expect(screen.getByTestId('permission-seat').getAttribute('aria-label')).toBe(
+        '權限：唯讀，點開切換',
+      ),
+    );
+  });
+
+  it('`custom`（對不上任何一組）寫「自訂」，清單裡沒有哪一列打勾', async () => {
+    await withPermissions('custom');
+    expect(screen.getByTestId('permission-seat').getAttribute('aria-label')).toBe(
+      '權限：自訂，點開切換',
+    );
+    fireEvent.click(screen.getByTestId('permission-seat'));
+    const list = await screen.findByRole('listbox');
+    expect(within(list).getAllByRole('option')).toHaveLength(3);
+    expect(list.querySelector('[data-checked="true"]')).toBeNull();
+  });
+
+  it('選另一組：送 `/permission <組名>`；座位等伺服器推新值才換', async () => {
+    const { slashed } = await withPermissions('workspace-write');
+
+    await pickOption('唯讀');
+
+    await waitFor(() => expect(slashed).toEqual(['/permission read-only']));
+    expect(screen.getByTestId('permission-seat').getAttribute('aria-label')).toBe(
+      '權限：可寫工作區，點開切換',
+    );
+  });
+
+  it('選目前這一組：什麼都不送', async () => {
+    const { slashed } = await withPermissions('workspace-write');
+    await pickOption('可寫工作區');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(slashed).toEqual([]);
+  });
+
+  it('命令失敗：原因由斜線命令的那一套顯示，座位不自己改', async () => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const client: WireClient = {
+      ...fake.client,
+      permissionCatalog: async () => ({ kind: 'ok', result: CATALOG }),
+      slashRun: async () => ({ kind: 'error', text: '這一組在設定裡被拿掉了' }),
+    };
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    fake.downlink.push(fake.opened[0]!, [permissionFrame(fake.downlink, 'workspace-write')]);
+    await pickOption('唯讀');
+
+    expect(await screen.findByText('這一組在設定裡被拿掉了')).toBeTruthy();
+    expect(screen.getByTestId('permission-seat').getAttribute('aria-label')).toContain(
+      '可寫工作區',
+    );
+  });
+
+  describe('全開要先確認', () => {
+    it('選「全開」先跳確認，還沒送；取消就不送', async () => {
+      const { slashed } = await withPermissions('workspace-write');
+
+      await pickOption('全開');
+
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText('切換到「全開」？')).toBeTruthy();
+      expect(within(dialog).getByText(/不再跳出核准請求/u)).toBeTruthy();
+      expect(slashed).toEqual([]);
+      // 預設落在取消：不小心按 Enter 不會切過去。
+      expect(document.activeElement?.textContent).toBe('取消');
+
+      fireEvent.click(within(dialog).getByRole('button', { name: '取消' }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+      expect(slashed).toEqual([]);
+    });
+
+    it('按「切換」才送 `/permission danger-full-access`', async () => {
+      const { slashed } = await withPermissions('workspace-write');
+
+      await pickOption('全開');
+      const dialog = await screen.findByRole('alertdialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '切換' }));
+
+      await waitFor(() => expect(slashed).toEqual(['/permission danger-full-access']));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    });
+
+    it('其他組不問、直接送；目前就是全開時座位換警示色', async () => {
+      const fake = await withPermissions('danger-full-access');
+      expect(screen.getByTestId('permission-seat').getAttribute('data-warning')).toBe('true');
+
+      await pickOption('唯讀');
+
+      await waitFor(() => expect(fake.slashed).toEqual(['/permission read-only']));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
+  });
+
+  it('一輪在跑時清單停用，寫明原因，選了也不送', async () => {
+    const { slashed } = await withPermissions('workspace-write', [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+    ]);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+
+    fireEvent.click(screen.getByTestId('permission-seat'));
+    const list = await screen.findByRole('listbox');
+    expect(screen.getByTestId('picker-locked').textContent).toBe('這一輪結束後才能切換。');
+    fireEvent.click(within(list).getByText('唯讀'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(slashed).toEqual([]);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+});
+
+describe('附件送出（#733、#732）', () => {
+  beforeEach(() => {
+    attachmentGate.on = true;
+    URL.createObjectURL = vi.fn(() => 'blob:preview');
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  const png = (name = 'shot.png') => new File(['PNG'], name, { type: 'image/png' });
+  const pdf = (name = 'plan.pdf') => new File(['PDF'], name, { type: 'application/pdf' });
+
+  /** 接好上傳與送出的假 client：`runStart` 記下每次的參數，`uploadFile` 回 `r-<檔名>`。 */
+  function withUploads(
+    runStartResult: UplinkResult = { type: 'success', id: 1, result: { run_id: 'run-1' } },
+  ) {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const uploads: { threadId: string; name: string | undefined }[] = [];
+    const runStart = vi.fn(async (..._args: Parameters<WireClient['runStart']>) => runStartResult);
+    const client: WireClient = {
+      ...fake.client,
+      runStart,
+      uploadFile: async (threadId, _body, name) => {
+        uploads.push({ threadId, name });
+        return { kind: 'ok', receipt: { receiptId: `r-${name}`, name: name ?? '', bytes: 3 } };
+      },
+    };
+    return { ...fake, client, runStart, uploads };
+  }
+
+  const addFiles = (files: File[]) =>
+    fireEvent.change(screen.getByTestId('attachment-input'), { target: { files } });
+  const input = () => screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+  const chips = () => screen.queryAllByTestId('draft-attachment');
+  const send = (text: string) => {
+    fireEvent.change(input(), { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+  };
+
+  it('圖內嵌、檔案先上傳換收據，照選取順序帶進 run.start；收下後草稿與附件都清掉', async () => {
+    const { client, runStart, uploads } = withUploads();
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([png('a.png'), pdf('b.pdf'), png('c.png')]);
+    expect(chips()).toHaveLength(3);
+    send('看這幾個');
+
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    const [threadId, text, options] = runStart.mock.calls[0]!;
+    expect(text).toBe('看這幾個');
+    expect(options?.attachments).toEqual([
+      { type: 'image', mediaType: 'image/png', data: btoa('PNG'), name: 'a.png' },
+      { type: 'file', receiptId: 'r-b.pdf' },
+      { type: 'image', mediaType: 'image/png', data: btoa('PNG'), name: 'c.png' },
+    ]);
+    // 只有檔案上傳，傳到的是同一條 thread。
+    expect(uploads).toEqual([{ threadId, name: 'b.pdf' }]);
+    await waitFor(() => expect(chips()).toHaveLength(0));
+    expect(input().value).toBe('');
+  });
+
+  it('沒有附件：run.start 的參數跟以前一樣（沒有 attachments 這個鍵）', async () => {
+    const { client, runStart, uploads } = withUploads();
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    send('只有字');
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(runStart.mock.calls[0]!.length).toBe(2);
+    expect(uploads).toEqual([]);
+  });
+
+  it.each([
+    [
+      '目前的模型不收圖',
+      { type: 'error', id: 1, error: MODEL_DOES_NOT_SUPPORT_IMAGES, message: 'model rejects' },
+      '目前的模型不收圖片',
+    ],
+    [
+      '伺服器不收附件',
+      { type: 'error', id: 1, error: 'not_supported', message: 'no attachment store' },
+      '這個伺服器不收附件。',
+    ],
+    [
+      '別的原因',
+      { type: 'error', id: 1, error: 'invalid_argument', message: '圖太大了（伺服器的話）' },
+      '圖太大了（伺服器的話）',
+    ],
+  ] as const)('被拒（%s）：說原因，草稿與附件都留著', async (_case, result, shown) => {
+    const { client, runStart } = withUploads(result as UplinkResult);
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([png('a.png'), pdf('b.pdf')]);
+    send('這句會被拒');
+
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(new RegExp(shown, 'u'))).toBeTruthy();
+    await waitFor(() => expect(input().value).toBe('這句會被拒'));
+    expect(chips()).toHaveLength(2);
+  });
+
+  it('上傳失敗：這句不送，說原因，草稿與附件留著；再按一次會重傳', async () => {
+    const { client, runStart, uploads } = withUploads();
+    let failing = true;
+    const failingClient: WireClient = {
+      ...client,
+      uploadFile: async (threadId, body, name, signal) => {
+        if (failing) return { kind: 'rejected', message: '磁碟滿了' };
+        return client.uploadFile(threadId, body, name, signal);
+      },
+    };
+    render(<App client={failingClient} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([pdf('b.pdf')]);
+    send('帶檔案');
+    expect(await screen.findByText('「b.pdf」上傳失敗：磁碟滿了')).toBeTruthy();
+    expect(runStart).not.toHaveBeenCalled();
+    await waitFor(() => expect(input().value).toBe('帶檔案'));
+    expect(chips()).toHaveLength(1);
+
+    failing = false;
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(uploads).toEqual([{ threadId: expect.any(String), name: 'b.pdf' }]);
+  });
+
+  it('送出中不收第二次送出', async () => {
+    const { client, runStart } = withUploads();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow: WireClient = {
+      ...client,
+      uploadFile: async (threadId, body, name, signal) => {
+        await gate;
+        return client.uploadFile(threadId, body, name, signal);
+      },
+    };
+    render(<App client={slow} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([pdf('b.pdf')]);
+    send('第一句');
+    fireEvent.change(input(), { target: { value: '第二句' } });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(true),
+    );
+    release();
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(runStart.mock.calls[0]![1]).toBe('第一句');
+  });
+
+  it('送出期間才加進來的附件，收下後留著；只清掉送出的那一批', async () => {
+    const { client, runStart } = withUploads();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow: WireClient = {
+      ...client,
+      uploadFile: async (threadId, body, name, signal) => {
+        await gate;
+        return client.uploadFile(threadId, body, name, signal);
+      },
+    };
+    render(<App client={slow} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([pdf('first.pdf')]);
+    send('第一句');
+    addFiles([pdf('late.pdf')]);
+    release();
+
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(chips()[0]!.textContent).toContain('late.pdf');
+  });
+
+  it('斜線命令不帶附件，附件留在草稿裡', async () => {
+    const fake = withUploads();
+    render(<App client={fake.client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([pdf('b.pdf')]);
+    send('/plan');
+    await waitFor(() => expect(fake.slashed).toEqual(['/plan']));
+    expect(fake.runStart).not.toHaveBeenCalled();
+    expect(fake.uploads).toEqual([]);
+    expect(chips()).toHaveLength(1);
+  });
+
+  it('超過上限的圖不收進草稿，並說原因', async () => {
+    const { client } = withUploads();
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    const big = png('big.png');
+    Object.defineProperty(big, 'size', { value: 25 * 1024 * 1024 });
+    addFiles([big, pdf('ok.pdf')]);
+
+    expect(await screen.findByText(/「big.png」有 25.0 MB/u)).toBeTruthy();
+    expect(chips().map((chip) => chip.textContent)).toEqual([expect.stringContaining('ok.pdf')]);
   });
 });

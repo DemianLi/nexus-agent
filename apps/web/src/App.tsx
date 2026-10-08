@@ -8,6 +8,7 @@ import { ApprovalCard } from '@/components/approval-card';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
 import { ModelSeat, MODEL_SELECT_FAILED } from '@/components/model-seat';
+import { PermissionSeat } from '@/components/permission-seat';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
@@ -36,6 +37,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useConversation } from '@/hooks/use-conversation';
 import { SM_BREAKPOINT, useMinWidth } from '@/hooks/use-min-width';
 import { MODEL_SELECTION_PROJECTION, useModelSeat } from '@/hooks/use-model-seat';
+import { PERMISSIONS_PROJECTION_KEY, usePermissionSeat } from '@/hooks/use-permission-seat';
 import { useThreadDirectory } from '@/hooks/use-thread-directory';
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { useThemePreference } from '@/hooks/use-theme-preference';
@@ -60,9 +62,11 @@ import {
 } from '@/lib/steer-queue';
 import { serverSupportsAttachments } from '@/lib/attachments';
 import { MODEL_COMMAND, parseModelLine } from '@/lib/model-selection';
+import { permissionLocked } from '@/lib/permission-presets';
 import { pendingSteers } from '@/lib/steer-view';
 import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
+import { prepareAttachments } from '@/lib/attachment-send';
 import { useDraftAttachments } from '@/lib/use-draft-attachments';
 
 /**
@@ -251,6 +255,13 @@ function ConversationView({
     conversation.state.projections[MODEL_SELECTION_PROJECTION],
   );
   const [modelOpen, setModelOpen] = useState(false);
+  // 權限座（#437）：目錄回 `not_supported` 或投影沒送來就是 `null`，座位整個沒有。
+  const permissionSeat = usePermissionSeat(
+    client,
+    threadId,
+    conversation.state.projections[PERMISSIONS_PROJECTION_KEY],
+  );
+  const [permissionOpen, setPermissionOpen] = useState(false);
   // 改動的摘要與比較都快取到這條 thread 的畫面卸掉（換 thread 整個重掛，#443）。
   const changes = useMemo(
     () => createChangesStores({ threadId, baseUrl: agentBaseUrl() }),
@@ -321,7 +332,11 @@ function ConversationView({
   }, [title]);
   const [draft, setDraft] = useState('');
   // 草稿附件（#733）。伺服器不收附件時不傳給輸入框，整個功能不出現；上傳與送出帶收據等 #732 的連線協定。
-  const draftAttachments = useDraftAttachments();
+  const draftAttachments = useDraftAttachments((messages) => {
+    toast.error('有附件沒加進來', { description: messages.join('\n') });
+  });
+  // 附件送出中（上傳、編碼、等伺服器收下）：這段時間不收第二次送出。
+  const [sendingAttachments, setSendingAttachments] = useState(false);
   // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
   const lastDialog = useRef(conversation.feedbackDialog);
   // **每打開一次就是一張新表單**（跟以前關掉就卸掉一樣）：同一則關掉再開，草稿不留。
@@ -402,7 +417,7 @@ function ConversationView({
     });
     return true;
   };
-  const canSend = canSendLine(draft);
+  const canSend = canSendLine(draft) && !sendingAttachments;
   const hasModelSeat = modelSeat !== null;
   const commands = useMemo(
     () =>
@@ -676,7 +691,27 @@ function ConversationView({
                   setDraft('');
                   // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。
                   const mode = resolveSubmitMode(conversation.state.status, gesture);
-                  void conversation.send(text, mode).then((rejected) => {
+                  // 只有功能開著才帶附件；`/` 開頭的是命令，不帶（附件留在草稿裡）。
+                  const items =
+                    serverSupportsAttachments() && !text.trim().startsWith('/')
+                      ? draftAttachments.items
+                      : [];
+                  void (async () => {
+                    if (items.length === 0) return conversation.send(text, mode);
+                    setSendingAttachments(true);
+                    try {
+                      const prepared = await prepareAttachments(client, threadId, items);
+                      if (prepared.kind === 'failed') return { message: prepared.message };
+                      const rejected = await conversation.send(text, mode, prepared.attachments);
+                      // 收下了才移掉這一批；送出期間才加進來的留著。沒收下就全留著，連同草稿。
+                      if (rejected === undefined) {
+                        draftAttachments.removeMany(items.map((item) => item.id));
+                      }
+                      return rejected;
+                    } finally {
+                      setSendingAttachments(false);
+                    }
+                  })().then((rejected) => {
                     if (rejected === undefined) return;
                     // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。
                     setDraft((current) => (current === '' ? text : current));
@@ -686,11 +721,32 @@ function ConversationView({
                 commands={commands}
                 fileReferences={fileReferences}
                 sessionReferences={sessionReferences}
-                {...(modelSeat === null
+                {...(modelSeat === null && permissionSeat === null
                   ? {}
                   : {
                       seats: (
-                        <ModelSeat seat={modelSeat} open={modelOpen} onOpenChange={setModelOpen} />
+                        <>
+                          {modelSeat !== null && (
+                            <ModelSeat
+                              seat={modelSeat}
+                              open={modelOpen}
+                              onOpenChange={setModelOpen}
+                            />
+                          )}
+                          {permissionSeat !== null && (
+                            <PermissionSeat
+                              seat={permissionSeat}
+                              open={permissionOpen}
+                              onOpenChange={setPermissionOpen}
+                              locked={permissionLocked(
+                                conversation.connected,
+                                status === 'running' || status === 'awaiting-input',
+                              )}
+                              // 成功的回話與失敗的原因由斜線命令那一套顯示（狀態列），這裡不另開一條。
+                              onSwitch={(line) => void conversation.send(line)}
+                            />
+                          )}
+                        </>
                       ),
                     })}
                 {...(serverSupportsAttachments()

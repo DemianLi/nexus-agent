@@ -58,8 +58,12 @@ import {
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
 import { shippedPlugins, withScriptedModel } from './fixtures.js';
-import { createHostServicesPlugin, deriveApprovalChannel } from '@nexus/core';
-import type { PluginEntry } from '@nexus/core';
+import {
+  ApprovalPolicyController,
+  createHostServicesPlugin,
+  deriveApprovalChannel,
+} from '@nexus/core';
+import type { ApprovalPolicyValue, PluginEntry } from '@nexus/core';
 
 const shipped = await shippedPlugins();
 
@@ -161,9 +165,15 @@ describe('升級', () => {
       approvalsEnabled?: boolean;
       channel?: false;
       permissive?: boolean;
+      /** 核准政策控制器的起始值（#437）；省略就不提供這個服務（手搭的組裝，當作 `ask`）。 */
+      approvalPolicy?: ApprovalPolicyValue;
     } = {},
   ) {
     const controller = new SandboxModeController(mode);
+    const approvalPolicy =
+      options.approvalPolicy === undefined
+        ? undefined
+        : new ApprovalPolicyController(options.approvalPolicy);
     const model = new ScriptedChatModel({ turns });
     const backend = new ContainedFilesystemBackend({
       rootDir: root,
@@ -176,6 +186,7 @@ describe('升級', () => {
       plugins: [
         createHostServicesPlugin({
           backend,
+          ...(approvalPolicy !== undefined && { approvalPolicy }),
           ...(options.channel !== false && {
             channel: deriveApprovalChannel({
               ...(options.approvalsEnabled !== undefined && {
@@ -199,7 +210,7 @@ describe('升級', () => {
         approvals: { enabled: options.approvalsEnabled },
       }),
     });
-    return { agent, dispose, controller };
+    return { agent, dispose, controller, approvalPolicy };
   }
 
   /**
@@ -723,6 +734,32 @@ describe('升級', () => {
         expect(refused).toContain('拒絕了');
         expect(again).toContain('這個 backend 是唯讀的');
         expect(controller.peekGrant()).toBeUndefined();
+      } finally {
+        await dispose();
+      }
+    });
+
+    it('核准政策 never（有人在）：不發核准卡、不發 grant，說的是「政策是不問」；切回 ask 之後同一個請求就問人', async () => {
+      const { agent, dispose, controller, approvalPolicy } = await assemble(
+        'read-only',
+        [write('/a.txt', '一'), request, { content: '好。' }, request, { content: '好。' }],
+        { approvalPolicy: 'never' },
+      );
+      const config = { configurable: { thread_id: 'approval-never' } };
+      try {
+        const result = await agent.invoke(toAgentInvocation('寫 a.txt。'), config);
+        expect(pendingCard(result)).toBeUndefined();
+        expect(controller.peekGrant()).toBeUndefined();
+        const texts = toolTexts(result);
+        expect(texts[1]).toBe(`Error: ${unaskedRefusal('approval-never', 'workspace-write')}`);
+        expect(texts[1]).toContain('核准政策是不問');
+        // 跟「入口沒有人在」是兩句話。
+        expect(texts[1]).not.toBe(`Error: ${unaskedRefusal('policy-never', 'workspace-write')}`);
+
+        // 每次呼叫讀一次：切回 ask，同一個請求這次問人（掛出一張核准卡）。
+        approvalPolicy?.switchTo('ask');
+        const again = await agent.invoke(toAgentInvocation('再升級一次。'), config);
+        expect(pendingCard(again)).toBeDefined();
       } finally {
         await dispose();
       }

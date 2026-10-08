@@ -33,6 +33,15 @@ describe('seats 槽', () => {
     expect(screen.getByTestId('send-hint').className).not.toContain('max-sm:hidden');
   });
 
+  it('有座位時底列放不下就換行，沒座位時不動（375 寬最壞情況會超出框）', () => {
+    const bar = () => screen.getByTestId('send-hint').parentElement!;
+    const { unmount } = render(<Host />);
+    expect(bar().className).not.toContain('flex-wrap');
+    unmount();
+    render(<Host seats={<button>座</button>} />);
+    expect(bar().className).toContain('flex-wrap');
+  });
+
   it('給了：座位畫在底列裡，窄螢幕不寫送出提示（底列塞不下）', () => {
     render(<Host seats={<button data-testid="seat">座</button>} />);
     const bar = screen.getByTestId('seat').parentElement!;

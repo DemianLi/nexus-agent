@@ -21,6 +21,7 @@ import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepagents';
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import { createApprovalGateMiddleware } from './approval.js';
+import type { ApprovalPolicySource } from './approval-policy.js';
 import { createSubagentDelegationMiddleware } from './subagent-delegation.js';
 import {
   assertToolFilter,
@@ -177,6 +178,12 @@ export interface ApprovalPolicy {
    * 那道拋比 dsh 嚴，而且嚴在錯的地方：dsh 的 agent 在 headless 下跑得起來。
    */
   enabled?: boolean;
+  /**
+   * 核准政策的來源（`ask`／`never`，[#437](https://github.com/DemianLi/nexus-agent/issues/437)），**每次要問人之前問一次**。
+   * 省略即永遠 `ask`。**與 {@link ApprovalPolicy.enabled} 是兩個問題**：那一格問「這個入口有沒有人在」，這一格問「要不要問」，
+   * 見 `approval-policy.ts`。只管核准——`ask_user_question` 與 `exit_plan_mode` 不讀它。
+   */
+  policy?: ApprovalPolicySource;
 }
 
 /** 組裝點在 fold 時交出來的那七樣，加一份基座工具名單。 */
@@ -454,10 +461,10 @@ export function foldRegistry(
   // 不在執行期查身分——分得開就沒有「查不到是誰」那幾種情況。listener 同一組：判斷「要不要問」不因
   // 誰叫而變，變的是問不問得到人。無狀態，一份走遍每個子代理。
   //
-  // **偏離（登記）**：dsh 另把 `approval/policy: never`（`source: 'delegation'`）寫進子代理的日誌；
-  // 我們不記。root 的核准政策今天也不進日誌，這是跟 root 現況一致，不是新開的缺口。子代理每次被擋仍寫一對
-  // `approval/asked`＋`approval/decided`（`rejected`）進自己的日誌（#1029），碼是 `APPROVAL_POLICY_NEVER`，
-  // 所以「這個子代理的核准一律被拒」從每一次被擋讀得出來。
+  // dsh 另把 `approval/policy: never`（`source: 'delegation'`）寫進子代理的日誌（`child-agent.ts:267-279`）；我們同樣記
+  // （#437，翻了以前「root 也不記所以子代理不記」的偏離）：由 `approvalGatePlugin` 在子代理日誌開啟時寫，見 `approval.ts`。
+  // 子代理每次被擋仍寫一對 `approval/asked`＋`approval/decided`（`rejected`）進自己的日誌（#1029），碼是
+  // `APPROVAL_POLICY_NEVER`。
   const subagentApprovalGate = createApprovalGateMiddleware(
     registry.approvals.listeners(),
     { kind: 'policy-never' },
@@ -886,7 +893,12 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
     }),
     hasCheckpointer: options.checkpointer !== undefined && options.checkpointer !== false,
   });
-  return createApprovalGateMiddleware(registry.approvals.listeners(), channel, registry.sessions);
+  return createApprovalGateMiddleware(
+    registry.approvals.listeners(),
+    channel,
+    registry.sessions,
+    options.approvals?.policy,
+  );
 }
 
 /**

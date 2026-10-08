@@ -234,7 +234,14 @@ describe('遙測接線：CLI 那條路', () => {
 });
 
 /** 一輪的開頭：人送出的話先進送出佇列（#637），領走之後第一句寫退回標題（#647）。 */
-const TURN_HEAD = ['inbox/spliced', 'turn/start', 'inbox/spliced', 'session/title'];
+// 最前面一顆是接上日誌時釘進去的核准政策起始值（#437）。
+const TURN_HEAD = [
+  'approval/policy',
+  'inbox/spliced',
+  'turn/start',
+  'inbox/spliced',
+  'session/title',
+];
 /** 出貨腳本的三輪模型呼叫，其中兩輪帶一顆工具呼叫。 */
 const MODEL_AND_TOOL_ROUNDS = [
   ...[

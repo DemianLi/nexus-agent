@@ -433,6 +433,63 @@ describe('重開 server 之後接得回同一條 thread', () => {
     ).toHaveLength(1);
   });
 
+  /** 日誌上 root 的核准政策事件（#437），照 seq 排。 */
+  function policies(events: readonly SessionEvent[]) {
+    return events.filter((event) => event.type === 'approval/policy').map((event) => event.data);
+  }
+
+  it('核准政策跨重啟（#437）：記著 never 的日誌，重開之後仍是 never，而且空轉的續接不讓日誌長', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first, 'alpha');
+    await stop(first);
+    const log = join(projectDirOf(root), 'alpha.jsonl');
+    const before = readEvents(await readFile(log, 'utf8'));
+    expect(policies(before)).toEqual([{ policy: 'ask' }]);
+
+    // 上一次跑到一半切成 never（這一步的切換入口在 `/permission`，這裡直接把那一顆寫進檔，量的是續接這一半）。
+    await appendFile(
+      log,
+      `${JSON.stringify({ type: 'approval/policy', data: { policy: 'never' }, seq: before.length, time: 1 })}\n`,
+    );
+
+    const second = await start(root);
+    await driveTurn(second, 'alpha');
+    await stop(second);
+    const third = await start(root);
+    await driveTurn(third, 'alpha');
+    await stop(third);
+
+    // 重開兩次之後，日誌上還是 [ask, never]：續接從最後一顆起算，沒有被預設的 ask 蓋回去，也沒有每次重釘一顆。
+    const events = readEvents(await readFile(log, 'utf8'));
+    expect(policies(events)).toEqual([{ policy: 'ask' }, { policy: 'never' }]);
+    expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+  });
+
+  it('核准政策跨重啟（#437）：#437 以前的日誌沒有這一顆，照 ask 起算並補上一顆', async () => {
+    const root = await tmp('nexus-serve-resume-');
+    const first = await start(root);
+    await driveTurn(first, 'alpha');
+    await stop(first);
+    const log = join(projectDirOf(root), 'alpha.jsonl');
+    // 把這一顆從檔上拿掉，重排 seq：等於一份 #437 之前寫的日誌。
+    const [header, ...rest] = (await readFile(log, 'utf8'))
+      .split('\n')
+      .filter((line) => line !== '');
+    const kept = rest
+      .map((line) => JSON.parse(line) as SessionEvent)
+      .filter((event) => event.type !== 'approval/policy')
+      .map((event, index) => ({ ...event, seq: index + 1 })); // 檔頭那一行佔 seq 0
+    await writeFile(log, `${[header, ...kept.map((event) => JSON.stringify(event))].join('\n')}\n`);
+
+    const second = await start(root);
+    await driveTurn(second, 'alpha');
+    await stop(second);
+    const events = readEvents(await readFile(log, 'utf8'));
+    expect(policies(events)).toEqual([{ policy: 'ask' }]);
+    expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
+  });
+
   it('日誌壞了：這條 thread 起不來，檔案一個位元組都沒動', async () => {
     const root = await tmp('nexus-serve-resume-');
     const first = await start(root);
