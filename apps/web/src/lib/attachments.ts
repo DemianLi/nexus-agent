@@ -1,11 +1,14 @@
 /**
  * 輸入框的草稿附件（#733）：還沒送出的檔案與圖，排在輸入框底下，可以移除。
  *
- * 這一層只管**畫面上的草稿**——檔案選進來、排成一列、移掉。上傳、收據、送出時帶上收據，
- * 要等 #732 的連線協定（那邊還沒合）；這裡不猜它的形狀。
+ * 這一層管**畫面上的草稿**與前端先擋的上限（`admitFiles`）；上傳、收據與送出時帶什麼在 `lib/attachment-send.ts`，
+ * 連線協定在 `@nexus/wire` 的 `attachments.ts`（#732）。
  *
  * @module
  */
+
+import { IMAGE_MEDIA_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE } from '@nexus/wire';
+import type { ImageMediaType } from '@nexus/wire';
 
 /** 一個草稿附件。 */
 export interface DraftAttachment {
@@ -25,17 +28,91 @@ export interface ComposerAttachments {
 }
 
 /**
- * 伺服器收不收附件。**現在一律不收**：#732 的上傳與收據還沒有，沒有它，附件選進來也送不出去（貼上一張圖會變成
- * 一顆永遠送不出的晶片）。連線協定合進來之後，這裡改成讀伺服器回的能力，收到 `not_supported` 就維持 `false`
- * ——整個功能（按鈕、貼上、拖放）都不出現。
+ * 這個組裝收不收附件。**寫死 `false`，不在執行期探測**：web 與 serve 一起打包出貨，伺服器端的上傳與收圖
+ * （[#732](https://github.com/DemianLi/nexus-agent/issues/732)）有沒有落地，是出貨時就知道的事，不需要執行期問；
+ * 探測反而多一條「探測失敗算有還是沒有」的路。
+ *
+ * 伺服器端實作合進 develop 之後，**另開一張 PR 把這裡改成 `true`**（只改這一行與它的測試）。在那之前整個功能
+ * （加入鈕、貼上、拖放、附件列）都不出現：沒有它，附件選進來也送不出去，貼上一張圖會變成一顆永遠送不出的晶片。
+ * 萬一出貨時開了、伺服器卻回 `not_supported`，送出會失敗並說出原因、草稿與附件留著（見 `lib/attachment-send.ts`）。
  */
 export function serverSupportsAttachments(): boolean {
   return false;
 }
 
-/** 瀏覽器認得它是圖就當圖畫，其餘都是檔案。 */
+/**
+ * 這個檔案是不是伺服器收的內嵌圖片：只認 dsh 的 `ImageMediaType` 白名單（`IMAGE_MEDIA_TYPES`：png、jpeg、webp、gif），
+ * 不是「`image/` 開頭」。svg、heic、bmp、tiff 等沒在白名單裡的圖，伺服器的收圖檢查不收，**當一般檔案走上傳**。
+ */
+export function imageMediaType(file: Pick<File, 'type'>): ImageMediaType | undefined {
+  return IMAGE_MEDIA_TYPES.find((type) => type === file.type);
+}
+
+/** 白名單裡的圖畫縮圖、其餘（含不在白名單的圖）都是檔案卡。 */
 export function attachmentKind(file: Pick<File, 'type'>): DraftAttachment['kind'] {
-  return file.type.startsWith('image/') ? 'image' : 'file';
+  return imageMediaType(file) === undefined ? 'file' : 'image';
+}
+
+/**
+ * 一句話所有內嵌圖片的位元組總和上限，同 dsh 的 `DEFAULT_MAX_MESSAGE_IMAGE_BYTES`
+ * （`packages/attachment/attachment-local/src/index.ts:38`）。單張與張數上限在 `@nexus/wire`（`MAX_IMAGE_BYTES`、
+ * `MAX_IMAGES_PER_MESSAGE`）；這一個 wire 沒有收，前端自己對著 dsh 的預設擋。
+ */
+export const MAX_MESSAGE_IMAGE_BYTES = 200 * 1024 * 1024;
+
+/** 單張圖的總像素上限，同 dsh 的 `DEFAULT_MAX_IMAGE_PIXELS`（`attachment-local/src/index.ts:40`）。讀得到尺寸時才擋。 */
+export const MAX_IMAGE_PIXELS = 64_000_000;
+
+export interface Admission {
+  /** 收得進來的，照原本的順序。 */
+  readonly accepted: readonly File[];
+  /** 擋下的，每個一句講得出原因的話。 */
+  readonly rejected: readonly string[];
+}
+
+/**
+ * 前端先擋的上限（單張 20 MB、一句話 20 張、一句話圖片總量 200 MB）：新選進來的檔案逐個看，**超過的那一個不收進草稿**，
+ * 並說原因；其餘照常收。超過就拒收、不縮圖（同 dsh）。不是白名單內的圖與一般檔案不受這三條管（檔案的大小由伺服器決定）。
+ * 總像素要讀圖才知道，在送出時擋（`lib/attachment-send.ts`）。
+ *
+ * @param current - 草稿裡已經有的。
+ */
+export function admitFiles(
+  current: readonly DraftAttachment[],
+  incoming: readonly File[],
+): Admission {
+  let images = 0;
+  let bytes = 0;
+  for (const item of current) {
+    if (item.kind === 'image') {
+      images += 1;
+      bytes += item.file.size;
+    }
+  }
+  const accepted: File[] = [];
+  const rejected: string[] = [];
+  for (const file of incoming) {
+    if (attachmentKind(file) === 'file') {
+      accepted.push(file);
+      continue;
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      rejected.push(
+        `「${file.name}」有 ${formatBytes(file.size)}，一張圖最多 ${formatBytes(MAX_IMAGE_BYTES)}（超過不縮圖）。`,
+      );
+    } else if (images >= MAX_IMAGES_PER_MESSAGE) {
+      rejected.push(`一句話最多 ${MAX_IMAGES_PER_MESSAGE} 張圖，「${file.name}」沒有加進來。`);
+    } else if (bytes + file.size > MAX_MESSAGE_IMAGE_BYTES) {
+      rejected.push(
+        `一句話的圖片加起來最多 ${formatBytes(MAX_MESSAGE_IMAGE_BYTES)}，「${file.name}」沒有加進來。`,
+      );
+    } else {
+      images += 1;
+      bytes += file.size;
+      accepted.push(file);
+    }
+  }
+  return { accepted, rejected };
 }
 
 /** 位元組數寫成人讀的樣子：`0 B`、`512 B`、`12.3 KB`、`4.0 MB`（1024 進位，一位小數，B 不帶小數）。 */
