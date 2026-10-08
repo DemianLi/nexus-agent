@@ -240,3 +240,173 @@ describe('sendRejectionText', () => {
     expect(sendRejectionText(MODEL_DOES_NOT_SUPPORT_IMAGES, true, true)).toContain('不收圖片');
   });
 });
+
+describe('prepareAttachments：進度與取消（#733）', () => {
+  const nothing = async () => undefined;
+
+  it('只有檔案開始上傳（圖內嵌不經過）：進度與完成都帶著附件的 id，signal 傳到 client', async () => {
+    const seen: unknown[] = [];
+    const uploadFile = vi.fn(
+      async (
+        _threadId: string,
+        _body: Blob | Uint8Array,
+        name?: string,
+        signal?: AbortSignal,
+        onProgress?: (progress: { loaded: number; total?: number }) => void,
+      ) => {
+        seen.push(['signal', signal instanceof AbortSignal]);
+        onProgress?.({ loaded: 3, total: 5 });
+        return {
+          kind: 'ok',
+          receipt: { receiptId: `r-${name}`, name: name ?? '', bytes: 5 },
+        } as const;
+      },
+    );
+    const events: unknown[] = [];
+    const controller = new AbortController();
+    const outcome = await prepareAttachments(
+      { uploadFile },
+      't',
+      [item('a.png', 'image/png'), item('b.pdf', 'application/pdf')],
+      nothing,
+      {
+        signal: controller.signal,
+        onStart: (id) => events.push(['start', id]),
+        onProgress: (id, progress) => events.push(['progress', id, progress]),
+        onDone: (id) => events.push(['done', id]),
+      },
+    );
+    expect(outcome.kind).toBe('ok');
+    expect(seen).toEqual([['signal', true]]);
+    expect(events).toEqual([
+      ['start', 'b.pdf'],
+      ['progress', 'b.pdf', { loaded: 3, total: 5 }],
+      ['done', 'b.pdf'],
+    ]);
+  });
+
+  it('取消：回 cancelled，不是 failed；進行中的上傳收到 abort', async () => {
+    let aborted = false;
+    const uploadFile = vi.fn(
+      (_t: string, _b: Blob | Uint8Array, _n?: string, signal?: AbortSignal) =>
+        new Promise<UploadOutcome>((_resolve, reject) => {
+          signal?.addEventListener('abort', () => {
+            aborted = true;
+            reject(new DOMException('aborted', 'AbortError'));
+          });
+        }),
+    );
+    const controller = new AbortController();
+    const pending = prepareAttachments(
+      { uploadFile },
+      't',
+      [item('b.pdf', 'application/pdf')],
+      nothing,
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(uploadFile).toHaveBeenCalled());
+    controller.abort();
+    expect(await pending).toEqual({ kind: 'cancelled' });
+    expect(aborted).toBe(true);
+  });
+
+  it('client 不理會 signal 也一樣：取消立刻回得來，不等上傳自己跑完', async () => {
+    const uploadFile = vi.fn(() => new Promise<UploadOutcome>(() => undefined));
+    const controller = new AbortController();
+    const pending = prepareAttachments(
+      { uploadFile },
+      't',
+      [item('b.pdf', 'application/pdf')],
+      nothing,
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(uploadFile).toHaveBeenCalled());
+    controller.abort();
+    expect(await pending).toEqual({ kind: 'cancelled' });
+  });
+
+  it('整句取消：同一句裡其他還在跑的上傳也停，已完成的不改變結果', async () => {
+    const signals: AbortSignal[] = [];
+    const uploadFile = vi.fn(
+      (_t: string, _b: Blob | Uint8Array, name?: string, signal?: AbortSignal) => {
+        if (signal !== undefined) signals.push(signal);
+        return name === 'fast.pdf'
+          ? Promise.resolve({
+              kind: 'ok',
+              receipt: { receiptId: 'r', name: 'fast.pdf', bytes: 1 },
+            } as const)
+          : new Promise<UploadOutcome>(() => undefined);
+      },
+    );
+    const controller = new AbortController();
+    const pending = prepareAttachments(
+      { uploadFile },
+      't',
+      [item('fast.pdf', 'application/pdf'), item('slow.pdf', 'application/pdf')],
+      nothing,
+      { signal: controller.signal },
+    );
+    await vi.waitFor(() => expect(uploadFile).toHaveBeenCalledTimes(2));
+    controller.abort();
+    expect(await pending).toEqual({ kind: 'cancelled' });
+    expect(signals).toHaveLength(2);
+    expect(signals.every((signal) => signal.aborted)).toBe(true);
+  });
+
+  it('開始之前就已經取消：一個上傳都不發', async () => {
+    const { uploadFile } = uploader();
+    const controller = new AbortController();
+    controller.abort();
+    const outcome = await prepareAttachments(
+      { uploadFile },
+      't',
+      [item('b.pdf', 'application/pdf')],
+      nothing,
+      { signal: controller.signal },
+    );
+    expect(outcome).toEqual({ kind: 'cancelled' });
+    expect(uploadFile).not.toHaveBeenCalled();
+  });
+
+  it('取消之後才到的進度不再回報', async () => {
+    let report: (progress: { loaded: number; total?: number }) => void = () => undefined;
+    const uploadFile = vi.fn(
+      (
+        _t: string,
+        _b: Blob | Uint8Array,
+        _n?: string,
+        _s?: AbortSignal,
+        onProgress?: (progress: { loaded: number; total?: number }) => void,
+      ) => {
+        if (onProgress !== undefined) report = onProgress;
+        return new Promise<UploadOutcome>(() => undefined);
+      },
+    );
+    const seen: number[] = [];
+    const controller = new AbortController();
+    const pending = prepareAttachments(
+      { uploadFile },
+      't',
+      [item('b.pdf', 'application/pdf')],
+      nothing,
+      { signal: controller.signal, onProgress: (_id, progress) => seen.push(progress.loaded) },
+    );
+    await vi.waitFor(() => expect(uploadFile).toHaveBeenCalled());
+    report({ loaded: 1 });
+    controller.abort();
+    report({ loaded: 2 });
+    await pending;
+    expect(seen).toEqual([1]);
+  });
+
+  it('沒給 hooks 的呼叫跟以前一樣：失敗還是 failed', async () => {
+    const { uploadFile } = uploader({ 'b.pdf': { kind: 'rejected', message: '磁碟滿了' } });
+    const outcome = await prepareAttachments(
+      { uploadFile },
+      't',
+      [item('b.pdf', 'application/pdf')],
+      nothing,
+    );
+    expect(outcome).toEqual({ kind: 'failed', message: '「b.pdf」上傳失敗：磁碟滿了' });
+  });
+});

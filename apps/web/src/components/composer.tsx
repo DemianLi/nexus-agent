@@ -481,7 +481,12 @@ export function Composer({
             )}
             {attachments !== undefined && attachments.items.length > 0 && (
               <InputGroupAddon align="block-start" className="min-w-0 pb-0">
-                <AttachmentRail items={attachments.items} onRemove={attachments.onRemove} />
+                <AttachmentRail
+                  items={attachments.items}
+                  onRemove={attachments.onRemove}
+                  uploads={attachments.uploads}
+                  onCancelUpload={attachments.onCancelUpload}
+                />
               </InputGroupAddon>
             )}
             <InputGroupTextarea
