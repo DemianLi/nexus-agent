@@ -12,10 +12,12 @@
  *
  * - dsh 是輸入框底列兩顆 pill，這裡**併成頂列一顆**，點開分兩段。平常顯示總量，沒有 token 時退成次數，跟 dsh
  *   只剩時間那顆時一樣。
- * - **總量不分快取**：我們的 `inputTokens` 含快取讀取，直接跟輸出相加就是總量。
- * - **快取讀、快取寫另列兩格**（[#724](https://github.com/DemianLi/nexus-agent/issues/724)）：照 `WireTokenUsage` 的選填欄位，
- *   **缺席畫「沒記」，不畫 0**——舊日誌、供應商沒報快取細節的呼叫、還沒寫這兩格的 server 都沒有，而 0 是「記了、沒命中」，
- *   兩件事分開（以後算命中率的分母不能混進沒記的）。兩格是輸入的明細，已含在輸入裡，不另加進總量。
+ * - **四桶互不重疊**（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，照 dsh `usage-projection`）：輸入（未快取）、
+ *   快取讀、快取寫、輸出，**合計是四項相加，不再靠 `inputTokens` 含不含快取**（{@link usageBuckets}）。server 有送
+ *   `uncachedInputTokens` 就走這條，所以 `inputTokens` 之後改成只算未快取，畫面的數字不變；沒送的舊 server 退回讀
+ *   `inputTokens`（含快取讀取，兩格快取是它的明細）。
+ * - **快取讀、快取寫缺席畫「沒記」，不畫 0**——舊日誌、供應商沒報快取細節的呼叫、還沒寫這兩格的 server 都沒有，而 0 是
+ *   「記了、沒命中」，兩件事分開（以後算命中率的分母不能混進沒記的）；沒記的那一項在合計裡不加。
  * - **沒有首字延遲與輸出速度**：我們沒記串流第一個 token 的時間。
  *
  * @module
@@ -24,6 +26,44 @@
 import type { WireSessionStats, WireTokenUsage } from '@nexus/wire';
 
 import { compact } from '@/lib/context-meter-view';
+
+/**
+ * 一份總帳分成的幾桶，畫面上每個地方的數字都從這裡來。
+ *
+ * - **新 server**（有 `uncachedInputTokens`）：`input` 是未快取的輸入，與快取讀、快取寫、輸出互不重疊，`total` 是四項相加
+ *   （沒記的快取那一項不加）。**完全不讀 `inputTokens`**。
+ * - **舊 server**（沒有）：`input` 是 `inputTokens`（含快取讀取），兩格快取是它的明細已含在裡面，`total` 是輸入加輸出。
+ */
+export interface UsageBuckets {
+  readonly input: number;
+  /** 命中快取讀出來的輸入；沒記是 `undefined`。 */
+  readonly cacheRead: number | undefined;
+  /** 寫進快取的輸入；沒記是 `undefined`。 */
+  readonly cacheWrite: number | undefined;
+  readonly output: number;
+  readonly total: number;
+  /** `true`：`input` 含快取（舊 server），兩格快取是它的明細，不另加進 `total`。 */
+  readonly cacheInInput: boolean;
+}
+
+export function usageBuckets(tokenUsage: WireTokenUsage | null): UsageBuckets {
+  const output = tokenUsage?.outputTokens ?? 0;
+  const cacheRead = tokenUsage?.cacheReadTokens;
+  const cacheWrite = tokenUsage?.cacheWriteTokens;
+  const uncached = tokenUsage?.uncachedInputTokens;
+  if (uncached !== undefined) {
+    return {
+      input: uncached,
+      cacheRead,
+      cacheWrite,
+      output,
+      total: uncached + (cacheRead ?? 0) + (cacheWrite ?? 0) + output,
+      cacheInInput: false,
+    };
+  }
+  const input = tokenUsage?.inputTokens ?? 0;
+  return { input, cacheRead, cacheWrite, output, total: input + output, cacheInInput: true };
+}
 
 export interface SessionUsageView {
   /** 收著時那顆上的字。 */
@@ -66,25 +106,27 @@ export function sessionUsageView(
   tokenUsage: WireTokenUsage | null,
   sessionStats: WireSessionStats | null,
 ): SessionUsageView | null {
-  const input = tokenUsage?.inputTokens ?? 0;
-  const output = tokenUsage?.outputTokens ?? 0;
-  const hasTokens = input > 0 || output > 0;
+  const buckets = usageBuckets(tokenUsage);
+  const hasTokens = buckets.total > 0;
   const steps = sessionStats?.steps ?? 0;
   if (steps === 0 && !hasTokens) return null;
 
-  const cacheRead = tokenUsage?.cacheReadTokens;
-  const cacheWrite = tokenUsage?.cacheWriteTokens;
+  const { cacheRead, cacheWrite } = buckets;
+  const unrecorded = cacheRead === undefined || cacheWrite === undefined;
   const usage = hasTokens
     ? {
-        total: exactTokens(input + output),
-        input: exactTokens(input),
-        output: exactTokens(output),
+        total: exactTokens(buckets.total),
+        input: exactTokens(buckets.input),
+        output: exactTokens(buckets.output),
         cacheRead: cacheRead === undefined ? NOT_RECORDED : exactTokens(cacheRead),
         cacheWrite: cacheWrite === undefined ? NOT_RECORDED : exactTokens(cacheWrite),
-        cacheNote:
-          cacheRead === undefined || cacheWrite === undefined
+        cacheNote: unrecorded
+          ? buckets.cacheInInput
             ? '「沒記」是這台 server 沒有記錄，不是 0。'
-            : '快取讀、快取寫已含在輸入裡。',
+            : '「沒記」是這台 server 沒有記錄，不是 0；合計不含沒記的那一項。'
+          : buckets.cacheInInput
+            ? '快取讀、快取寫已含在輸入裡。'
+            : '輸入是未快取的部分；輸入、快取讀、快取寫、輸出互不重疊，合計是四項相加。',
       }
     : undefined;
   const time =
@@ -96,7 +138,7 @@ export function sessionUsageView(
         }
       : undefined;
 
-  const label = hasTokens ? `${compact(input + output)} token` : time!.counts;
+  const label = hasTokens ? `${compact(buckets.total)} token` : time!.counts;
   return {
     label,
     ariaLabel: `這條對話的用量：${label}，點開看明細`,

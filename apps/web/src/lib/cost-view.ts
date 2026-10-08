@@ -23,7 +23,11 @@ import type {
 } from '@nexus/wire';
 
 import { contextMeterView, percentText } from '@/lib/context-meter-view';
-import { exactTokens, formatDuration } from '@/lib/session-usage-view';
+import { NOT_RECORDED, exactTokens, formatDuration, usageBuckets } from '@/lib/session-usage-view';
+
+function cacheText(count: number | undefined): string {
+  return count === undefined ? NOT_RECORDED : exactTokens(count);
+}
 
 export type CostRow = readonly [label: string, value: string];
 
@@ -43,7 +47,8 @@ export const COST_LIMITS_HEADING = '口徑';
 export const COST_LIMITS = {
   scope:
     '這裡的 token 只是主對話那一份總帳：不含任何子代理（背景的在下面分列，前景的目前沒有數字）、不含生摘要的那一次、不含生標題的那一次；失敗或中止的呼叫算在裡面，但供應商沒報用量的不在（燒了多少不知道，所以是下限）。',
-  input: '輸入含快取讀取，所以輸入加輸出就是整筆帳。',
+  input:
+    '合計是各項相加就是整筆帳：這台 server 有分快取時，輸入只算未快取的部分，快取讀、快取寫另列；沒分的話輸入含快取讀取。',
   time: '模型耗時含重試退避與失敗呼叫的時間；工具耗時不含等人核准。',
   loaded:
     '壓縮次數與背景子代理的分列只算已載入的對話：更早的在對話裡上捲、載入之後才會出現在這裡。',
@@ -67,17 +72,23 @@ export function usageSections(
   tokenUsage: WireTokenUsage | null,
   sessionStats: WireSessionStats | null,
 ): UsageSections {
-  const input = tokenUsage?.inputTokens ?? 0;
-  const output = tokenUsage?.outputTokens ?? 0;
-  const hasTokens = input > 0 || output > 0;
+  const buckets = usageBuckets(tokenUsage);
+  const hasTokens = buckets.total > 0;
   const hasStats = sessionStats !== null && sessionStats.steps > 0;
   return {
     ...(hasTokens
       ? {
           tokens: [
-            ['輸入', exactTokens(input)],
-            ['輸出', exactTokens(output)],
-            ['合計', exactTokens(input + output)],
+            ['輸入', exactTokens(buckets.input)],
+            // 舊 server 的快取兩格是輸入的明細（已含在輸入裡），不另列；新 server 的四桶互不重疊，各列一行，沒記畫「沒記」。
+            ...(buckets.cacheInInput
+              ? []
+              : ([
+                  ['快取讀', cacheText(buckets.cacheRead)],
+                  ['快取寫', cacheText(buckets.cacheWrite)],
+                ] satisfies readonly CostRow[])),
+            ['輸出', exactTokens(buckets.output)],
+            ['合計', exactTokens(buckets.total)],
           ] satisfies readonly CostRow[],
         }
       : {}),

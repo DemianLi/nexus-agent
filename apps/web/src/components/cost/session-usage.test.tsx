@@ -54,7 +54,7 @@ describe('會話累計用量（#574）', () => {
     expect(dialog.textContent).not.toContain('token/秒');
   });
 
-  it('帶了快取兩格：寫數字，說明講已含在輸入裡', () => {
+  it('新 server 帶了快取兩格：寫數字，輸入只算未快取，說明講四項互不重疊', () => {
     render(
       <SessionUsage
         tokenUsage={{
@@ -70,7 +70,8 @@ describe('會話累計用量（#574）', () => {
     const tokens = screen.getByTestId('session-usage-tokens');
     expect(tokens.textContent).toContain('快取讀300,000 token');
     expect(tokens.textContent).toContain('快取寫0 token');
-    expect(tokens.textContent).toContain('快取讀、快取寫已含在輸入裡');
+    expect(tokens.textContent).toContain('輸入112,380 token');
+    expect(tokens.textContent).toContain('合計是四項相加');
     expect(tokens.textContent).not.toContain('沒記');
   });
 
