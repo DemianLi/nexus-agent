@@ -21,7 +21,31 @@ describe('政策那句話本身', () => {
   it('三格各有各的話，沒有一格漏掉', () => {
     expect(sandboxPolicySentence('read-only')).toContain('read-only');
     expect(sandboxPolicySentence('workspace-write')).toContain('`/` 就是工作區根');
-    expect(sandboxPolicySentence('danger-full-access')).toContain('不限制');
+    expect(sandboxPolicySentence('danger-full-access')).toContain('不受限制');
+  });
+
+  it('三句都限定在「受檔案沙箱管的可用操作」——這是句子不宣稱圍堵的來源（照 dsh）', () => {
+    for (const mode of ['read-only', 'workspace-write', 'danger-full-access'] as const) {
+      for (const contained of [true, false]) {
+        expect(sandboxPolicySentence(mode, { contained })).toContain('受檔案沙箱管的可用操作');
+      }
+    }
+  });
+
+  it('workspace-write：有圍堵帶可寫根（`/`）與暫存區半句，沒有圍堵不帶根、不教路徑規則', () => {
+    const contained = sandboxPolicySentence('workspace-write', { contained: true });
+    const uncontained = sandboxPolicySentence('workspace-write', { contained: false });
+    expect(contained).toContain('`/` 就是工作區根');
+    expect(contained).toContain('平台的暫存區也可能可寫');
+    expect(uncontained).toContain('平台的暫存區也可能可寫');
+    expect(uncontained).not.toContain('`/`');
+    expect(uncontained).not.toContain('磁碟上的絕對路徑');
+  });
+
+  it('read-only：叫模型不要只因這個政策就拒絕必要的修改，照拒絕與升級指引做', () => {
+    const sentence = sandboxPolicySentence('read-only');
+    expect(sentence).toContain('不要只因這個政策就拒絕必要的修改');
+    expect(sentence).toContain('拒絕與升級指引');
   });
 
   it('read-only 那句叫模型照升級指引做，但不在提示句裡講模式名', () => {

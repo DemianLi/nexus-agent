@@ -55,7 +55,7 @@
  *
  * - **政策段落無條件貢獻**（dsh `packages/sandbox/sandbox-policy/src/index.ts:141-150`，`477b4f4`），措辭刻意不宣稱掛了哪些能力
  *   （同檔 `:41`）。**所以我們那句話改成不宣稱圍堵**——以前說「改不動任何檔案」「工作區根之下的變更直接放行」，是把「有一道 fence
- *   在擋」當前提；現在這句話有沒有圍堵都成立（沒有圍堵時它只是政策，說的不是誰在擋）。
+ *   在擋」當前提；現在每一句都限定在「受檔案沙箱管的可用操作」（dsh 的措辭），有沒有圍堵都為真。
  * - **看「有沒有圍堵」的是消費端，而且各自反應不同**（dsh `packages/fs/tool-fs/src/sandbox.ts:7` 稱之為 capability fact，
  *   `ctx.fs.sandboxMode`）。我們對應的事實是組裝點經 host 服務交的 {@link FS_CONTAINMENT_SERVICE}：**不拿 `sandboxPolicy`
  *   服務在不在當訊號**——那是控制器，不是事實。有圍堵：控制器、可寫根、`WORKSPACE_CAPABILITY`、`sandbox/mode`、升級、`/sandbox`
@@ -103,28 +103,42 @@ export const SANDBOX_POLICY_MIDDLEWARE_NAME = 'nexusSandboxPolicy';
 const DELEGATION_TOOL_NAME = 'task';
 
 /**
- * 一格模式對模型講的那一段話。
+ * 一格模式對模型講的那一段話，**照 dsh 的措辭：每一句只講「受檔案沙箱管的操作」**
+ * （`packages/sandbox/sandbox-policy/src/index.ts` 的 `renderPolicyContext`，`5badb15`）。
  *
- * **不收可寫根的主機路徑**：`workspace-write` 那一句用工具的位址空間指名它（`/`），理由見模組註解的登記。
+ * 這個限定是句子「不宣稱圍堵」的來源：沒有圍堵的組裝上，沒有任何操作受沙箱管，句子照樣為真，
+ * 不會暗示根外被擋著。以前的措辭（「改不動任何檔案」「直接放行」）把一道 fence 當前提，沒有圍堵時是謊。
+ *
+ * **登記：可寫根用工具的位址空間指名（`/`），不給主機路徑**，理由見模組註解的登記。**沒有圍堵時不帶根**
+ * （沒有一個「可寫根」可指名；也不能叫模型別傳主機路徑，那是 `virtualMode` 圍堵才有的位址規則）。「平台暫存區也可能可寫」照 dsh 抄那半句，
+ * 是個「可能」，不是我們量到的承諾。
  *
  * @param mode - 這一刻的圍堵強度。
+ * @param options - `contained`：這次組裝有沒有圍堵（預設有）。決定 `workspace-write` 帶不帶可寫根。
  * @returns 接到 system prompt 後面的那段話。
  */
-export function sandboxPolicySentence(mode: SandboxMode): string {
+export function sandboxPolicySentence(
+  mode: SandboxMode,
+  options: { readonly contained?: boolean } = {},
+): string {
+  const contained = options.contained ?? true;
   switch (mode) {
     case 'read-only':
       return (
-        '目前的檔案政策：read-only。這個政策不允許變更檔案。' +
-        '**不要只憑這一條就拒絕使用者要的修改**：照常去呼叫工具，被擋下來時照它回的拒絕與升級指引決定下一步。'
+        '目前的檔案政策：read-only。受檔案沙箱管的可用操作，在這個常態模式下不能變更檔案。' +
+        '**不要只因這個政策就拒絕必要的修改**：照常去呼叫可用的工具，照它回的拒絕與升級指引決定下一步。'
       );
     case 'workspace-write':
       return (
-        '目前的檔案政策：workspace-write。檔案工具的路徑一律從 `/` 寫起，`/` 就是工作區根' +
-        '（例如 `/src/index.ts`、`/notes/todo.md`）；這個政策允許變更工作區根之下的檔案。' +
-        '不要把磁碟上的絕對路徑傳給檔案工具，那會被當成工作區根底下的一條子路徑。'
+        '目前的檔案政策：workspace-write。受檔案沙箱管的可用操作可以變更' +
+        (contained
+          ? '工作區根之下的檔案（檔案工具的路徑一律從 `/` 寫起，`/` 就是工作區根，例如 `/src/index.ts`、`/notes/todo.md`；' +
+            '不要把磁碟上的絕對路徑傳給檔案工具，那會被當成工作區根底下的一條子路徑）。'
+          : '工作區之下的檔案。') +
+        '平台的暫存區也可能可寫。'
       );
     case 'danger-full-access':
-      return '目前的檔案政策：danger-full-access。這個政策不限制檔案變更。';
+      return '目前的檔案政策：danger-full-access。受檔案沙箱管的可用操作，檔案變更不受限制。';
   }
 }
 
@@ -192,7 +206,10 @@ declare module '@nexus/core' {
  *
  * @param resolveMode - 每次模型呼叫問一次。
  */
-function policyPromptMiddleware(resolveMode: () => SandboxMode) {
+function policyPromptMiddleware(
+  resolveMode: () => SandboxMode,
+  options: { readonly contained: boolean },
+) {
   return {
     name: SANDBOX_POLICY_MIDDLEWARE_NAME,
     wrapModelCall: (
@@ -201,7 +218,7 @@ function policyPromptMiddleware(resolveMode: () => SandboxMode) {
     ) => {
       // 子代理也走這裡（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在 `wrapToolCall` 包的 ALS 之內，
       // `controller.source` 先讀快照。同 dsh 讀子代理自己 session 上那顆 `sandbox/mode { source: 'delegation' }`。
-      const sentence = sandboxPolicySentence(resolveMode());
+      const sentence = sandboxPolicySentence(resolveMode(), options);
       // 兩條路是同一件事的兩個入口，照抄 plan-mode 那段註解：`systemMessage` 在的時候接在它後面，不在的時候由
       // `systemPrompt` 這個字串欄位承接。基座兩個都讀，給錯那一個等於沒講。
       const { systemMessage } = request;
@@ -232,7 +249,9 @@ export const sandboxPolicyPlugin: NexusPlugin = {
     if (registry.services.get(FS_CONTAINMENT_SERVICE) === undefined) {
       // **沒有圍堵：只講那一句**。控制器、可寫根、能力、日誌事件、升級、`/sandbox` 一樣都不掛——沒有東西可以切、可以升、可以記。
       registry.middleware.use(
-        createMiddleware(policyPromptMiddleware(() => UNCONTAINED_POLICY_MODE)),
+        createMiddleware(
+          policyPromptMiddleware(() => UNCONTAINED_POLICY_MODE, { contained: false }),
+        ),
       );
       return;
     }
@@ -267,7 +286,7 @@ export const sandboxPolicyPlugin: NexusPlugin = {
     });
     registry.middleware.use(
       createMiddleware({
-        ...policyPromptMiddleware(resolveMode),
+        ...policyPromptMiddleware(resolveMode, { contained: true }),
         // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
         // handler，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
         // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），
