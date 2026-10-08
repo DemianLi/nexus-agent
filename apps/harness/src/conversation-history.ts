@@ -113,6 +113,7 @@ import {
   loggedContentBlocks,
   loggedMessageId,
   openTurnStart,
+  promptTokensOf,
   replayConversation,
   sessionStatsUnit,
   TOOL_NOT_STARTED,
@@ -351,6 +352,9 @@ export function workspaceChangesData(seq: number): {
  * 即時與這裡共用，同 {@link deliverablesData}。**只送 `inputTokens`**：用量表只顯示「目前多大」；
  * 累計燒了多少另外走 {@link tokenUsageData}（#574）。
  *
+ * **送的是完整的 prompt**（未快取、快取讀、快取寫三桶相加，#724）：日誌上的 `inputTokens` 從格式 36 起只是未快取那一桶，直接送會讓
+ * 「目前多大」在命中快取時縮水。舊日誌沒有快取兩格，三桶相加就是它本來的 `inputTokens`，所以畫面的數字不因升版而變。
+ *
  * @param usage - 日誌裡那一顆 `model/usage` 的酬載。
  * @returns `{ name, payload }`，形狀見 `@nexus/wire` 的 `ModelUsagePayload`。
  */
@@ -358,7 +362,7 @@ export function modelUsageData(usage: SessionEventMap['model/usage']): {
   readonly name: typeof MODEL_USAGE;
   readonly payload: ModelUsagePayload;
 } {
-  return { name: MODEL_USAGE, payload: { inputTokens: usage.inputTokens } };
+  return { name: MODEL_USAGE, payload: { inputTokens: promptTokensOf(usage) } };
 }
 
 /**
@@ -629,9 +633,13 @@ export class SessionTotals {
   flush(): CustomFrameData[] {
     const out: CustomFrameData[] = [];
     const usage = tokenUsageUnit.view(this.#usage);
+    const sent = this.#sentUsage;
     if (
-      usage.inputTokens !== this.#sentUsage.inputTokens ||
-      usage.outputTokens !== this.#sentUsage.outputTokens
+      usage.inputTokens !== sent.inputTokens ||
+      usage.outputTokens !== sent.outputTokens ||
+      usage.uncachedInputTokens !== sent.uncachedInputTokens ||
+      usage.cacheReadTokens !== sent.cacheReadTokens ||
+      usage.cacheWriteTokens !== sent.cacheWriteTokens
     ) {
       this.#sentUsage = usage;
       out.push(tokenUsageData(usage));
@@ -662,7 +670,14 @@ export function tokenUsageData(usage: TokenUsageTotals): {
 } {
   return {
     name: TOKEN_USAGE,
-    payload: { inputTokens: usage.inputTokens, outputTokens: usage.outputTokens },
+    payload: {
+      inputTokens: usage.inputTokens,
+      outputTokens: usage.outputTokens,
+      uncachedInputTokens: usage.uncachedInputTokens,
+      // 缺席＝日誌上沒有任何一顆報過，不放 key（不是 0）。
+      ...(usage.cacheReadTokens === undefined ? {} : { cacheReadTokens: usage.cacheReadTokens }),
+      ...(usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: usage.cacheWriteTokens }),
+    },
   };
 }
 

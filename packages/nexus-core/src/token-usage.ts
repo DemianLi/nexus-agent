@@ -6,11 +6,17 @@
  * `init`／`apply`／`view` 三件、狀態是純 JSON、不相干的事件回同一個參照，值是**整份日誌**的加總——畫面是分頁載入
  * 的、會被摘要改寫，從畫面上加會算錯。
  *
+ * ## 四桶（[#724](https://github.com/DemianLi/nexus-agent/issues/724)）
+ *
+ * 照 dsh 的 `usage-projection.ts:21-25`：未快取輸入、輸出、快取讀、快取寫，**互不重疊**，完整的輸入是三桶相加（{@link TokenUsageTotals.inputTokens}）。
+ * `model/usage` 的 `inputTokens` 從格式 36 起就是未快取的那一格（見 `model-usage.ts` 的 `ModelUsage`），所以這裡直接加。
+ *
+ * - **快取兩桶缺席是「沒記」，不是 0**：只要日誌上有一顆報了那一桶，總帳才帶那一格（那一顆報的是 0 也算有報）。舊日誌與供應商不報
+ *   快取細節的呼叫沒有它——算命中率的人要把「沒記」與「0」分開，**混著的會話分母裡有不知道快取多少的呼叫**，命中率只是下限。
+ * - **舊日誌不必逐版分辨**：35 以前沒有快取兩格，`inputTokens` 本來就是整個 prompt，當未快取、快取當沒記，數字跟以前一樣。
+ *
  * ## 跟 dsh 對不上的幾格
  *
- * - **只有兩個桶：輸入、輸出。** dsh 分四桶（未快取輸入、輸出、快取讀、快取寫）。#574 定的是畫面上顯示什麼、第一版不分快取；資料層照 dsh 分四桶延後到 [#724](https://github.com/DemianLi/nexus-agent/issues/724)；而且我們的
- *   `inputTokens` **含快取讀取**（LangChain 的語義，見 `model-usage.ts`），dsh 的 `uncachedInputTokens` 不含。兩邊的
- *   「輸入 + 輸出」都是整筆帳，桶的切法不同。
  * - **沒有重試的替換槽。** dsh 的一步可能落好幾次 `assistant/attempt`，同一個 `(turn, step)` 後到的取代先到的，
  *   `llm/retry-started` 再把槽關掉讓重試那次另外加。我們的 `model/usage` 由 `wrapModelCall` 記一顆
  *   （`model-usage.ts`），SDK 自己的重試在它底下、看不見，所以一次呼叫**至多**一顆，沒有東西要取代。
@@ -36,12 +42,18 @@
 
 import type { SessionEvent } from './session-log.js';
 
-/** 整份日誌的總帳。沒有任何一顆 `model/usage` 之前兩格都是 0。 */
+/** 整份日誌的總帳。沒有任何一顆 `model/usage` 之前數字格都是 0，快取兩格缺席。 */
 export interface TokenUsageTotals {
-  /** 每一次呼叫供應商報的 prompt token 數加總，含快取讀取的部分。 */
+  /** 每一次呼叫的完整 prompt token 數加總：未快取、快取讀、快取寫三桶相加（舊欄位的語義，web 換完之前照舊送）。 */
   readonly inputTokens: number;
+  /** 其中未快取的那一桶加總（每顆 `model/usage` 的 `inputTokens`）。 */
+  readonly uncachedInputTokens: number;
   /** 每一次回應的 token 數加總。 */
   readonly outputTokens: number;
+  /** 快取讀的加總。**缺席＝日誌上沒有任何一顆報過**，不是 0。 */
+  readonly cacheReadTokens?: number;
+  /** 快取寫的加總。缺席＝沒記。 */
+  readonly cacheWriteTokens?: number;
 }
 
 /**
@@ -51,16 +63,32 @@ export interface TokenUsageTotals {
  */
 export const tokenUsageUnit = {
   key: 'tokenUsage',
-  stateVersion: 1,
-  init: (): TokenUsageTotals => ({ inputTokens: 0, outputTokens: 0 }),
+  // 2：分四桶（#724）。投影的形狀變了（多三格），狀態版本跟著升。
+  stateVersion: 2,
+  init: (): TokenUsageTotals => ({ inputTokens: 0, uncachedInputTokens: 0, outputTokens: 0 }),
   apply: (state: TokenUsageTotals, event: SessionEvent): TokenUsageTotals => {
     if (event.type !== 'model/usage') return state;
-    const { inputTokens, outputTokens } = event.data;
-    // 兩格都是 0 的那顆不改任何數字，回同一個參照。
-    if (inputTokens === 0 && outputTokens === 0) return state;
+    const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = event.data;
+    // 四格都沒東西可加、也沒有快取欄位要記下「有報過」的那顆，不改任何數字，回同一個參照。
+    if (
+      inputTokens === 0 &&
+      outputTokens === 0 &&
+      cacheReadTokens === undefined &&
+      cacheWriteTokens === undefined
+    ) {
+      return state;
+    }
     return {
-      inputTokens: state.inputTokens + inputTokens,
+      inputTokens:
+        state.inputTokens + inputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0),
+      uncachedInputTokens: state.uncachedInputTokens + inputTokens,
       outputTokens: state.outputTokens + outputTokens,
+      ...(cacheReadTokens === undefined && state.cacheReadTokens === undefined
+        ? {}
+        : { cacheReadTokens: (state.cacheReadTokens ?? 0) + (cacheReadTokens ?? 0) }),
+      ...(cacheWriteTokens === undefined && state.cacheWriteTokens === undefined
+        ? {}
+        : { cacheWriteTokens: (state.cacheWriteTokens ?? 0) + (cacheWriteTokens ?? 0) }),
     };
   },
   view: (state: TokenUsageTotals): TokenUsageTotals => state,

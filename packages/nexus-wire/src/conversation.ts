@@ -1270,12 +1270,29 @@ function reduceTodos(state: ConversationState, payload: object): ConversationSta
  * 總量會是兩個不同時刻的數字加起來，而且看起來正常。
  */
 function reduceTokenUsage(state: ConversationState, payload: object): ConversationState {
-  const { inputTokens, outputTokens } = payload as {
-    inputTokens?: unknown;
-    outputTokens?: unknown;
-  };
+  const { inputTokens, outputTokens, uncachedInputTokens, cacheReadTokens, cacheWriteTokens } =
+    payload as {
+      inputTokens?: unknown;
+      outputTokens?: unknown;
+      uncachedInputTokens?: unknown;
+      cacheReadTokens?: unknown;
+      cacheWriteTokens?: unknown;
+    };
   if (!isCount(inputTokens) || !isCount(outputTokens)) return state;
-  return { ...state, tokenUsage: { inputTokens, outputTokens } };
+  // 快取分桶那三格（#724）選填，**缺席是「沒記」**；有就得是數量，有一格不對整顆不收（同上，不收一半）。
+  for (const optional of [uncachedInputTokens, cacheReadTokens, cacheWriteTokens]) {
+    if (optional !== undefined && !isCount(optional)) return state;
+  }
+  return {
+    ...state,
+    tokenUsage: {
+      inputTokens,
+      outputTokens,
+      ...(isCount(uncachedInputTokens) ? { uncachedInputTokens } : {}),
+      ...(isCount(cacheReadTokens) ? { cacheReadTokens } : {}),
+      ...(isCount(cacheWriteTokens) ? { cacheWriteTokens } : {}),
+    },
+  };
 }
 
 /** `sessionStats` 的 `payload`：投影的整個值，**整顆換掉**。任何一格不對就整顆不收，理由同 {@link reduceTokenUsage}。 */

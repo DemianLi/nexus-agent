@@ -487,9 +487,18 @@ export interface SessionEventMap {
    * 沒有 `outcome` ＝ 正常回來的那次，舊日誌全是這一種。
    */
   'model/usage': {
+    /**
+     * **未快取**的輸入 token（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，格式 36 起；照 dsh `TokenUsage.inputTokens`）。
+     * 這次請求完整的 prompt 是它加上下面兩格（`promptTokensOf`）。供應商沒報快取細節時就是整個 prompt——35 以前的日誌全是這一種，
+     * 所以舊檔照舊讀就是對的。
+     */
     readonly inputTokens: number;
     readonly outputTokens: number;
     readonly totalTokens: number;
+    /** 命中快取、從快取讀出來的輸入 token。**缺席＝沒記，不是 0**（舊日誌、供應商沒報快取細節）。 */
+    readonly cacheReadTokens?: number;
+    /** 寫進快取的輸入 token。缺席＝沒記。 */
+    readonly cacheWriteTokens?: number;
     /**
      * 這次呼叫沒有正常回來：`error` ＝ 拋錯，`aborted` ＝ 使用者按了停止。**只有失敗那一種才帶這一格。**
      * 讀者**都照常讀**：加總的照加，「目前大小」讀最新一筆的也照讀——同 dsh，它的 `contextPressure` 連
@@ -724,9 +733,12 @@ export interface SessionEventMap {
      * 沒有這一格 ＝ 沒報、報得對不起來、或舊日誌——**不是 0**。
      */
     readonly usage?: {
+      /** 未快取的輸入（#724，語義同 `model/usage.inputTokens`）。 */
       readonly inputTokens: number;
       readonly outputTokens: number;
       readonly totalTokens: number;
+      readonly cacheReadTokens?: number;
+      readonly cacheWriteTokens?: number;
     };
   };
   /**

@@ -38,8 +38,23 @@ export interface ScriptedToolCall {
  * 時一樣。給了才有，這樣「成本算得出來」與「成本是我們捏的」在測試裡分得開。
  */
 export interface ScriptedUsage {
+  /** 完整的 prompt token 數，**含**下面兩格快取（LangChain 的 `input_tokens` 語義；日誌記的未快取那桶是記錄器減出來的）。 */
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /**
+   * 快取讀（#724）：翻成 `input_token_details.cache_read`。**省略就不放 key**，跟真模型沒報快取細節時一樣；
+   * `undefined` 的形狀由 `cacheDetailsUndefined` 另造。
+   */
+  readonly cacheReadTokens?: number;
+  /** 快取寫：翻成 `input_token_details.cache_creation`。省略就不放 key。 */
+  readonly cacheWriteTokens?: number;
+  /**
+   * 造出 LangChain 在 `prompt_tokens_details` 整個缺席時建出的那個形狀：`input_token_details: { cache_read: undefined }`
+   * （基座用 `!== null` 判斷，`undefined` 也會進去）。用來證明記錄器遇到 `undefined` 當沒報、不寫 key。
+   */
+  readonly cacheDetailsUndefined?: true;
+  /** 覆寫 `total_tokens`（預設 `inputTokens + outputTokens`）：造「總量與組成對不上」的回應。 */
+  readonly totalTokens?: number;
 }
 
 /** agent 迴圈的一輪：模型講一段話，並可選擇呼叫工具。 */
@@ -71,11 +86,25 @@ function toUsageMetadata(usage: ScriptedUsage): {
   input_tokens: number;
   output_tokens: number;
   total_tokens: number;
+  input_token_details?: { cache_read?: number | undefined; cache_creation?: number | undefined };
 } {
+  const reported = usage.cacheReadTokens !== undefined || usage.cacheWriteTokens !== undefined;
   return {
     input_tokens: usage.inputTokens,
     output_tokens: usage.outputTokens,
-    total_tokens: usage.inputTokens + usage.outputTokens,
+    total_tokens: usage.totalTokens ?? usage.inputTokens + usage.outputTokens,
+    ...(reported
+      ? {
+          input_token_details: {
+            ...(usage.cacheReadTokens === undefined ? {} : { cache_read: usage.cacheReadTokens }),
+            ...(usage.cacheWriteTokens === undefined
+              ? {}
+              : { cache_creation: usage.cacheWriteTokens }),
+          },
+        }
+      : usage.cacheDetailsUndefined === true
+        ? { input_token_details: { cache_read: undefined } }
+        : {}),
   };
 }
 

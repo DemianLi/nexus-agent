@@ -123,7 +123,11 @@ describe('會話累計在即時、重新整理、重開之後都一樣', () => {
       expect(subagentUsage).toHaveLength(1);
 
       const expected = {
-        tokenUsage: { inputTokens: 1000 + 1100 + 1300, outputTokens: 20 + 30 + 40 },
+        tokenUsage: {
+          inputTokens: 1000 + 1100 + 1300,
+          uncachedInputTokens: 1000 + 1100 + 1300,
+          outputTokens: 20 + 30 + 40,
+        },
         sessionStats: deriveSessionStats(first.pump.sessionLog.events),
       };
       expect(deriveTokenUsage(first.pump.sessionLog.events)).toEqual(expected.tokenUsage);
@@ -144,13 +148,18 @@ describe('會話累計在即時、重新整理、重開之後都一樣', () => {
       expect(totalsFrames(second.frames)).toEqual([]);
       expect(refreshed(second.pump.sessionLog.events)[0]?.tokenUsage).toEqual({
         inputTokens: 3400,
+        uncachedInputTokens: 3400,
         outputTokens: 90,
       });
 
       await second.pump.submit({ kind: 'message', text: '還在嗎' });
       await settle();
       const expected = {
-        tokenUsage: { inputTokens: 3400 + 1500, outputTokens: 90 + 50 },
+        tokenUsage: {
+          inputTokens: 3400 + 1500,
+          uncachedInputTokens: 3400 + 1500,
+          outputTokens: 90 + 50,
+        },
         sessionStats: deriveSessionStats(second.pump.sessionLog.events),
       };
       expect(expected.sessionStats).toMatchObject({ turns: 3, steps: 4 });

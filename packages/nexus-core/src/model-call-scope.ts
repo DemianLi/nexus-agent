@@ -49,9 +49,14 @@ import type { SessionLog } from './session-log.js';
  * `validateUsage`）。
  */
 export interface AttemptUsage {
+  /** 供應商報的 prompt 總數，**含**下面兩格（OpenAI 相容端點的 `prompt_tokens`）。 */
   readonly inputTokens: unknown;
   readonly outputTokens: unknown;
   readonly totalTokens: unknown;
+  /** `prompt_tokens_details.cached_tokens`；供應商沒報（缺欄或 `null`）就不放 key。 */
+  readonly cacheReadTokens?: unknown;
+  /** `prompt_tokens_details.cache_write_tokens`；供應商沒報（缺欄或 `null`）就不放 key。 */
+  readonly cacheWriteTokens?: unknown;
 }
 
 /** 一次呼叫裡最近那次請求的用量格。每次請求開跑時換一格新的，所以舊請求遲到的回報進不了新的。 */

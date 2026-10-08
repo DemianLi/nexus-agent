@@ -270,6 +270,7 @@ describe.each(CASES)('$label：用量投影', (entry) => {
     // 3. 不另造總帳：root 逐項對得上 web 已有的 tokenUsage／sessionStats。
     expect(live.tokenUsage).toEqual({
       inputTokens: root.session.inputTokens,
+      uncachedInputTokens: root.session.inputTokens,
       outputTokens: root.session.outputTokens,
     });
     expect(live.sessionStats).toMatchObject({
