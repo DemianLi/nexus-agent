@@ -55,6 +55,7 @@ import type {
   DeliverableMethod,
   DeliverableReadError,
   DeliverableRefusalCode,
+  PermissionCatalog,
 } from '@nexus/wire';
 import {
   THREAD_FEED_PATH,
@@ -186,6 +187,11 @@ export interface ThreadAgent {
    * 沒給 `--workspace` 的組裝就沒有，那時兩條 `changes` 路由一律 404——同「這台 server 不服務這份摘要」。
    */
   readonly workspaceChanges?: WorkspaceChanges;
+  /**
+   * 權限組合的目錄（[#437](https://github.com/DemianLi/nexus-agent/issues/437)），選配。沒有圍堵（沒給 `--workspace`）或
+   * 沒掛 `@nexus/plugin-permission-presets` 的組裝就沒有，那時 `permission.catalog` 回 `not_supported`、`permissions` 投影缺席。
+   */
+  readonly permissionPresets?: { catalog(): PermissionCatalog };
   dispose(): Promise<void>;
   /**
    * 把這個 thread 的**每一份**會話日誌接上遙測、不變量配套入口與參與者，**必填**（[#668](https://github.com/DemianLi/nexus-agent/issues/668)）。
@@ -399,11 +405,10 @@ export interface WireHandler {
 
 const JSON_MEDIA_TYPE = 'application/json';
 
-/** 契約已合、實作還沒做的 RPC method 回 `not_supported` 時的說明（#723、#437、#633），實作落地時隨分支一起拿掉。 */
+/** 契約已合、實作還沒做的 RPC method 回 `not_supported` 時的說明（#723、#633），實作落地時隨分支一起拿掉。 */
 const NOT_IMPLEMENTED = {
   'model.catalog': '這個組裝還沒有每會話的模型選擇',
   'model.select': '這個組裝還沒有每會話的模型選擇',
-  'permission.catalog': '這個組裝還沒有具名的權限組合',
   'thread.pin': '這個組裝還沒有伺服器端的釘選',
   'thread.unpin': '這個組裝還沒有伺服器端的釘選',
   'thread.archive': '這個組裝還沒有伺服器端的封存',
@@ -591,6 +596,7 @@ interface ThreadState {
   readonly executor: CommandExecutor;
   readonly feedback: FeedbackService | undefined;
   readonly workspaceChanges: WorkspaceChanges | undefined;
+  readonly permissionPresets: { catalog(): PermissionCatalog } | undefined;
   /**
    * 接回來那批事件的長度；沒續接就是 0（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
    *
@@ -872,6 +878,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           }),
           feedback: threadAgent.feedback,
           workspaceChanges: threadAgent.workspaceChanges,
+          permissionPresets: threadAgent.permissionPresets,
           // **就是 seed 的長度**，不另外傳一個數字：兩個來源各記一次的話，有一天它們會不一樣，
           // 而那時錯的方向是「把重播的事件當成這個行程寫的」——靜靜讀到另一個工作區的同名檔。
           storedCount: threadAgent.rootSeed?.length ?? 0,
@@ -1080,14 +1087,34 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
       return json(feedbackResponse(thread, envelope.id, method, body));
     }
-    if (isModelMethod(method) || isPermissionMethod(method) || isThreadManagementMethod(method)) {
-      // 每會話模型選擇（#723）、權限組合目錄（#437）與釘選／封存／改名（#633）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把
-      // 模型座與權限選單藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
-      // 契約在 `@nexus/wire` 的 `model-selection.ts`／`permission-presets.ts`；實作落地時把這個分支換成真的 handler。
+    if (isModelMethod(method) || isThreadManagementMethod(method)) {
+      // 每會話模型選擇（#723）與釘選／封存／改名（#633）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把
+      // 模型座與釘選封存改名藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
+      // 契約在 `@nexus/wire` 的 `model-selection.ts`／`thread-management.ts`；實作落地時把這個分支換成真的 handler。
       return json(errorResponse(envelope.id, 'not_supported', NOT_IMPLEMENTED[method]));
     }
     const thread = await threadOrError(threadId, envelope.id);
     if (thread instanceof Response) return thread;
+    if (isPermissionMethod(method)) {
+      // 權限組合目錄（#437）：整台共用的一份，掛在這條 thread 的組裝上讀（目錄在 `permission-presets` 的 `apply` 當下定了）。
+      // 經 `threadFor`：web 打開一條 thread 才畫權限選單，那條 thread 的組裝本來就要建。沒有目錄的組裝（沒圍堵、那一列沒掛）
+      // 回 `not_supported`，web 據這個碼把選單藏起來。
+      if (thread.permissionPresets === undefined) {
+        return json(
+          errorResponse(
+            envelope.id,
+            'not_supported',
+            '這個組裝沒有具名的權限組合（沒給 --workspace）',
+          ),
+        );
+      }
+      return json(
+        successResponse(envelope.id, {
+          ok: true,
+          value: { catalog: thread.permissionPresets.catalog() },
+        }),
+      );
+    }
     if (isSlashMethod(method)) {
       return handleSlash(thread, method, envelope.id, body, signal);
     }

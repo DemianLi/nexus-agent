@@ -119,6 +119,10 @@ export const PACKAGE_MANIFEST: Readonly<Record<string, PackageExpectation>> = {
       '工具由設定指到的外部 MCP server 決定，以 `mcp__<server>__<tool>` 註冊；沒有 server 就沒有工具。',
   },
   'nexus-plugin-memory': { kind: 'none', reason: '只把記憶注入系統提示詞。' },
+  'nexus-plugin-permission-presets': {
+    kind: 'none',
+    reason: '只提供 `/permission` 命令與 `permissions` 投影，不是模型的工具。',
+  },
   'nexus-plugin-plan-mode': { kind: 'shipped', reason: '`exit_plan_mode`。' },
   'nexus-plugin-present': { kind: 'shipped', reason: '`present`。' },
   'nexus-plugin-quickjs': {

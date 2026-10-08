@@ -1,5 +1,5 @@
 /**
- * 契約先合、實作還沒做的三塊（#723 模型選擇、#732 上傳與收據、#437 權限組合）：**每一支未實作的方法都回 `not_supported`**。
+ * 契約先合、實作還沒做的兩塊（#723 模型選擇、#732 上傳與收據）：**每一支未實作的方法都回 `not_supported`**。
  *
  * web 據這個碼把功能藏起來，所以「還沒做」必須是這個碼，不是 404、不是空結果、不是 `invalid_argument`。實作落地時，
  * 對應的那條在這裡換成真的行為測試——這條測試紅了就是有人實作了一半、忘了來更新契約這一側。
@@ -12,7 +12,6 @@ import { MemorySaver } from '@langchain/langgraph';
 import {
   createWireClient,
   MODEL_METHODS,
-  PERMISSION_METHODS,
   THREAD_MANAGEMENT_METHODS,
   uploadPath,
 } from '@nexus/wire';
@@ -58,16 +57,13 @@ function connect() {
 const NOT_SUPPORTED = { kind: 'rejected', code: 'not_supported' } as const;
 
 describe('每一支未實作的方法都回 not_supported', () => {
-  it('RPC：model、permission、thread 管理的每一支，而且不為它們建 agent', async () => {
+  it('RPC：model 與 thread 管理的每一支，而且不為它們建 agent', async () => {
     const { client, handler, created } = connect();
     try {
       // 清單與契約同步：新增一支 method 而沒有登記到這裡，這條先紅。
-      expect(
-        [...MODEL_METHODS, ...PERMISSION_METHODS, ...THREAD_MANAGEMENT_METHODS].sort(),
-      ).toEqual([
+      expect([...MODEL_METHODS, ...THREAD_MANAGEMENT_METHODS].sort()).toEqual([
         'model.catalog',
         'model.select',
-        'permission.catalog',
         'thread.archive',
         'thread.pin',
         'thread.rename',
@@ -77,7 +73,6 @@ describe('每一支未實作的方法都回 not_supported', () => {
       const outcomes = [
         await client.modelCatalog('t'),
         await client.selectModel('t', { modelId: 'm', reasoningEffort: 'high' }),
-        await client.permissionCatalog('t'),
         await client.threadPin('t'),
         await client.threadUnpin('t'),
         await client.threadArchive('t', { stopActivity: true }),
@@ -89,6 +84,17 @@ describe('每一支未實作的方法都回 not_supported', () => {
         expect(outcome.kind === 'rejected' && outcome.message !== '').toBe(true);
       }
       expect(created()).toBe(0);
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it('permission.catalog：組裝沒有權限組合（沒圍堵）回 not_supported，web 據此藏起選單（#437）', async () => {
+    const { client, handler } = connect();
+    try {
+      const outcome = await client.permissionCatalog('t');
+      expect(outcome).toMatchObject(NOT_SUPPORTED);
+      expect(outcome.kind === 'rejected' && outcome.message !== '').toBe(true);
     } finally {
       await handler.close();
     }

@@ -53,6 +53,7 @@
     "@nexus/plugin-goal": "workspace:*",
     "@nexus/plugin-mcp": "workspace:*",
     "@nexus/plugin-memory": "workspace:*",
+    "@nexus/plugin-permission-presets": "workspace:*",
     "@nexus/plugin-plan-mode": "workspace:*",
     "@nexus/plugin-quickjs": "workspace:*",
     "@nexus/plugin-sandbox-policy": "workspace:*",

@@ -8,17 +8,38 @@
 **要 `--workspace` 才存在。** 沒給的話檔案跑在虛擬檔案系統裡，那道 fence 根本不在路徑上。
 
 給了之後 `--sandbox <mode>` 決定**起始**強度——`read-only`、`workspace-write`（預設）、
-`danger-full-access`——而跑起來之後 `/sandbox` 切得動它：不帶引數報告現在是哪一格，帶一個模式名
-就切過去。切換同時作用在兩個地方：檔案工具擋不擋得住，以及模型自己知不知道現在在哪一格
+`danger-full-access`——而跑起來之後 `/permission` 切得動它：不帶引數報告現在是哪一組權限組合與可寫根，
+帶一個組名就切過去（見下一節）。切換同時作用在兩個地方：檔案工具擋不擋得住，以及模型自己知不知道現在在哪一格
 （那句話每次模型呼叫重算）。每一次真的變了都會在會話日誌裡留一顆 `sandbox/mode`，接線當下也會
 釘一顆起始值——所以一份日誌答得出「這一輪跑的時候政策是哪一格」。
+
+### 權限組合：`/permission`
+
+[#437](https://github.com/DemianLi/nexus-agent/issues/437)。把「檔案政策」與「核准政策」兩顆旋鈕捆成使用者看得懂的具名組合，
+**是切換它們的唯一入口**（舊的 `/sandbox` 拿掉了）。出廠三組，名字與值照 dsh：
+
+| 組 | 檔案政策 | 核准政策 |
+| --- | --- | --- |
+| `read-only` | `read-only` | `ask`（要改動時先問你） |
+| `workspace-write`（預設） | `workspace-write` | `ask` |
+| `danger-full-access` | `danger-full-access` | `never`（不問：要人點頭的事一律直接回絕） |
+
+- **現在是哪一組是推導出來的**：兩顆旋鈕實際的值對上哪一組就是哪一組，對不上任何一組顯示 `custom`（只能顯示，不是切換目標）。
+- **`--sandbox` 同時決定核准的起始值**：`--sandbox danger-full-access` 是「全開＋不問」。**這是行為改變**：以前它只放寬檔案、核准照舊會問。
+  續接（`--resume`、重開 server 接回同一條 thread）一律用日誌裡記的值，日誌沒記核准的舊會話照 `ask`。
+- **日誌上多一顆 `permission/preset`**（格式 35）：只記使用者選了哪一組（意圖），執行仍由 `sandbox/mode` 與 `approval/policy` 各自控制。
+  新會話接線當下釘一顆起始組合。
+- **子代理**：核准一律 `never`；組合名只在父代理是 `danger-full-access` 時帶下去。
+- **web**：目錄走 RPC `permission.catalog`，目前是哪一組走會話投影 `permissions`（`{ currentValue }`）；切換送的就是 `/permission <組名>` 這一行。
+- **設定**：清單上 `permission-presets` 那一列。`presets` 整份替換、每組必填 `sandbox` 與 `approval`；`defaultPreset` 選填，
+  與明確給的 `--sandbox` 矛盾時啟動失敗。有 `--workspace` 時這一列關不掉（會話中就沒有任何辦法改兩顆旋鈕），沒有 `--workspace` 時它什麼都不註冊。
 
 **被擋下來時，模型可以請一次升級。** 拒絕後面會接一行指引，模型照著呼叫
 `request_sandbox_escalation`，指名那個檔、要升到哪一格、一句給人看的理由；核准卡上看得到這三樣。
 核准之後**只有那一個檔的下一次變更**在升上去的那一格跑，用完就沒了，session 的模式不動。
 不比現在寬的請求不會去問人。
 
-**沒有 `--workspace` 的組裝不會有 `/sandbox`、那句話，也不會有升級工具**：一格圍堵都沒有的時候
+**沒有 `--workspace` 的組裝不會有 `/permission`、那句話，也不會有升級工具**：一格圍堵都沒有的時候
 講「目前是 workspace-write」是說謊。
 
 ## 會話日誌
@@ -143,7 +164,7 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
   那些照常接得回來（也不會被補上：錨是整份日誌一個值，補進去等於替更早的事件宣稱一個沒人
   驗證過的根）。
 
-`--resume` 不能配 `--sandbox`（模式從日誌來，要換就接起來之後 `/sandbox`）或 `--session-log`
+`--resume` 不能配 `--sandbox`（模式從日誌來，要換就接起來之後 `/permission`）或 `--session-log`
 （就寫回那個目錄）。**同一份會話同一時間只有一個行程寫得進去**：另一個行程還開著它時當場擋下。
 只有 macOS 與 Linux 鎖得到；其他平台照常寫，第一次要鎖的時候講一聲。
 
@@ -339,7 +360,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 agent 由什麼組成」的來源。例外是組裝點在程式碼裡掛的一顆（host-services）。**`serve` 另有一層專屬的出貨清單**
 （`apps/harness/cordis.serve.yml`），疊在上面那份之後，放 serve 才有的列（今天是 `workspace-changes`：每一輪改了哪些檔；
 沒給 `--workspace` 它什麼都不做）；CLI 不載那一層。 `sandbox-policy` 是清單上的一列：有 `--workspace` 時
-它是檔案政策的全部（`/sandbox`、升級、`sandbox/mode`），**這時關掉它啟動會失敗**（fence 還在擋，模型卻不知道）；沒有
+它是檔案政策的全部（升級、`sandbox/mode`；切換入口在 `permission-presets` 那一列），**這時關掉它啟動會失敗**（fence 還在擋，模型卻不知道）；沒有
 `--workspace` 時它只講一句不宣稱圍堵的政策，關掉合法。
 
 要改它不是去編輯那份檔案，而是疊一層自己的 patch。**三層，後面的蓋前面的**：

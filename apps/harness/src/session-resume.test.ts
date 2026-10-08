@@ -37,7 +37,7 @@ import {
   ResumeWorkspaceConflictError,
 } from './resume-guards.js';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
-import { SANDBOX_COMMAND_NAME } from '@nexus/plugin-sandbox-policy';
+import { PERMISSION_COMMAND_NAME } from '@nexus/plugin-permission-presets';
 
 /** 分開收 stdout 與 stderr：不變量違規走的是後者。 */
 function recorder() {
@@ -98,7 +98,7 @@ afterEach(async () => {
 async function firstRun(): Promise<string> {
   await cli(
     ['--workspace', workspace, '--session-log', logs],
-    `/${SANDBOX_COMMAND_NAME} read-only\n/${GOAL_COMMAND_NAME} 把測試修綠\n/exit\n`,
+    `/${PERMISSION_COMMAND_NAME} read-only\n/${GOAL_COMMAND_NAME} 把測試修綠\n/exit\n`,
   );
   const entries = await readdir(logs);
   expect(entries).toHaveLength(1);
@@ -110,11 +110,11 @@ describe('接回來的是日誌那一半', () => {
     const runDir = await firstRun();
     const { stdout, stderr } = await cli(
       ['--workspace', workspace, '--resume', runDir],
-      `/${SANDBOX_COMMAND_NAME}\n/${GOAL_COMMAND_NAME}\n/exit\n`,
+      `/${PERMISSION_COMMAND_NAME}\n/${GOAL_COMMAND_NAME}\n/exit\n`,
     );
 
     expect(stdout).toContain('起始 mode: read-only（從續接的日誌來）');
-    // `/sandbox` 不帶引數報的是**控制器此刻那一格**，也就是 fence 讀的那一顆。
+    // `/permission` 不帶引數報的是**控制器此刻那一格**（推導出的組合與兩顆旋鈕的值），也就是 fence 讀的那一顆。
     expect(stdout).toMatch(/目前.*read-only/);
     // 目標回來了，相位 active，但授權打回 disarmed——所以提示的是 `/goal resume`。
     expect(stdout).toContain('目標：把測試修綠');
@@ -220,11 +220,11 @@ describe('接第二次', () => {
     const runDir = await firstRun();
     await cli(
       ['--workspace', workspace, '--resume', runDir],
-      `/${SANDBOX_COMMAND_NAME} workspace-write\n說點什麼\n/exit\n`,
+      `/${PERMISSION_COMMAND_NAME} workspace-write\n說點什麼\n/exit\n`,
     );
     const { stdout, stderr } = await cli(
       ['--workspace', workspace, '--resume', runDir],
-      `/${SANDBOX_COMMAND_NAME}\n說點什麼\n/exit\n`,
+      `/${PERMISSION_COMMAND_NAME}\n說點什麼\n/exit\n`,
     );
 
     expect(stdout).toContain('起始 mode: workspace-write（從續接的日誌來）');
@@ -284,7 +284,7 @@ describe('尾巴', () => {
 
     const { stderr } = await cli(
       ['--workspace', workspace, '--resume', runDir],
-      `/${SANDBOX_COMMAND_NAME}\n說點什麼\n/exit\n`,
+      `/${PERMISSION_COMMAND_NAME}\n說點什麼\n/exit\n`,
     );
 
     expect(stderr).not.toContain('[不變量]');
@@ -455,7 +455,7 @@ describe('認不得的沙箱模式', () => {
   it('最後一顆 `sandbox/mode` 被改成 bogus：接得回來，stderr 報出帶 bogus 的違規', async () => {
     const runDir = await firstRun();
     const logPath = join(runDir, 'cli.jsonl');
-    // 逐行改，只動最後一顆 `sandbox/mode` 的 `data.mode`：`/sandbox read-only` 的 `command/run`
+    // 逐行改，只動最後一顆 `sandbox/mode` 的 `data.mode`：`/permission read-only` 的 `command/run`
     // 參數裡也有 `read-only`，前面還有一顆起始值，整份字串取代會一起改到。
     const events = await readLog(logPath);
     const last = events.findLastIndex((event) => event.type === 'sandbox/mode');
@@ -538,7 +538,7 @@ describe('寫租約', () => {
     await expect(cli(['--resume', runDir])).rejects.toThrow(/--resume 要配 --workspace/);
     const { stdout } = await cli(
       ['--workspace', workspace, '--resume', runDir],
-      `/${SANDBOX_COMMAND_NAME}\n/exit\n`,
+      `/${PERMISSION_COMMAND_NAME}\n/exit\n`,
     );
     expect(stdout).toContain('read-only');
   });
@@ -610,7 +610,7 @@ describe('屬於哪個目錄', () => {
     const runDir = await firstRun();
     const { stdout } = await cli(
       ['--workspace', workspace, '--resume', runDir],
-      `/${SANDBOX_COMMAND_NAME}\n/exit\n`,
+      `/${PERMISSION_COMMAND_NAME}\n/exit\n`,
       process.cwd(),
     );
     expect(stdout).toContain('read-only');
@@ -663,7 +663,7 @@ describe('屬於哪個工作區', () => {
     const runDir = await firstRun();
     const { stdout } = await cli(
       ['--workspace', workspace, '--resume', runDir],
-      `/${SANDBOX_COMMAND_NAME}\n/exit\n`,
+      `/${PERMISSION_COMMAND_NAME}\n/exit\n`,
     );
     expect(stdout).toContain('read-only');
   });
@@ -685,7 +685,7 @@ describe('屬於哪個工作區', () => {
 
     const { stdout } = await cli(
       ['--workspace', workspace, '--resume', runDir],
-      `/${SANDBOX_COMMAND_NAME}\n/exit\n`,
+      `/${PERMISSION_COMMAND_NAME}\n/exit\n`,
     );
     expect(stdout).toContain('read-only');
   });

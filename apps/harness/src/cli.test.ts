@@ -266,8 +266,10 @@ describe('一次性模式', () => {
       'agent-loop',
       // **`sandbox-policy` 進來的理由是它本來就在產品路徑上，只是藏在組裝點的條件裡**
       // （[#669](https://github.com/DemianLi/nexus-agent/issues/669) 第 3 步）：`--dump-config` 印不出來、patch 關不掉。
-      // 不論有沒有 `--workspace` 都掛：有圍堵時註冊 `/sandbox`、升級與 `sandbox/mode`，沒有圍堵時只講一句不宣稱圍堵的政策。
+      // 不論有沒有 `--workspace` 都掛：有圍堵時註冊升級與 `sandbox/mode`，沒有圍堵時只講一句不宣稱圍堵的政策。
       'sandbox-policy',
+      // 權限組合（#437）：`/permission` 是切沙箱與核准的唯一入口，沒有圍堵時什麼都不註冊。
+      'permission-presets',
     ]);
     // 八個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
     // 只由 serve 經 `createCliAgent` 掛（#443），同 dsh 只在 web-app bundle 掛。

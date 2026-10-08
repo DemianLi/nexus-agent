@@ -26,7 +26,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
 import { toAgentInvocation } from './messages.js';
-import { SANDBOX_COMMAND_NAME } from '@nexus/plugin-sandbox-policy';
+import { PERMISSION_COMMAND_NAME } from '@nexus/plugin-permission-presets';
 import type { ScriptedChatModel } from './scripted-model.js';
 import { shippedPlugins, withScriptedModel } from './fixtures.js';
 
@@ -65,8 +65,8 @@ describe('一次切換搬得動兩個消費者', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('`/sandbox read-only` 之後 `write_file` 被擋，而且下一輪的提示句也換成 read-only', async () => {
-    // **產品組裝**（#670）：控制器、backend、沙箱 plugin 都是 `createCliAgent` 建的，切換走產品掛上去的 `/sandbox` 命令，
+  it('`/permission read-only` 之後 `write_file` 被擋，而且下一輪的提示句也換成 read-only', async () => {
+    // **產品組裝**（#670）：控制器、backend、沙箱 plugin 都是 `createCliAgent` 建的，切換走產品掛上去的 `/permission` 命令，
     // 不再自己握一顆控制器——「兩個消費者讀的是同一顆」要在產品組裝上成立才算數。
     const turns = [
       {
@@ -96,14 +96,14 @@ describe('一次切換搬得動兩個消費者', () => {
       expect(wrote?.text).not.toContain('唯讀');
       expect(systemPrompt(model)).toContain('目前的檔案政策：workspace-write');
 
-      const switched = await built.commands.find(SANDBOX_COMMAND_NAME)?.handler({
+      const switched = await built.commands.find(PERMISSION_COMMAND_NAME)?.handler({
         commandId: 'switch',
         rawInput: ' read-only',
         signal: new AbortController().signal,
         sessionLog: built.sessionLog,
         steer: noSteer,
       });
-      expect(switched?.text).toContain('workspace-write 換成 read-only');
+      expect(switched?.text).toContain('從 workspace-write 換成 read-only');
 
       const after = await built.agent.invoke(toAgentInvocation('再寫一個檔。'), config);
       const denied = after.messages.filter((message) => message.getType() === 'tool').at(-1);
@@ -129,7 +129,7 @@ describe('組裝起來之後', () => {
     await rm(root, { recursive: true, force: true });
   });
 
-  it('掛了 --workspace 的組裝有 `/sandbox`，日誌上也有那顆起始值', async () => {
+  it('掛了 --workspace 的組裝有 `/permission`（沒有 `/sandbox`），日誌上也有那顆起始值與起始組合', async () => {
     const { commands, sessions, attachSession, sessionLog, dispose } = await createCliAgent(
       { live: false, workspace: root, sandbox: 'read-only' },
       shipped,
@@ -137,19 +137,27 @@ describe('組裝起來之後', () => {
     );
     const detach = attachSession(sessions);
     try {
-      expect(commands.find(SANDBOX_COMMAND_NAME)).toBeDefined();
+      expect(commands.find(PERMISSION_COMMAND_NAME)).toBeDefined();
+      // `/sandbox` 在 #437 拿掉了：切換的唯一入口是 `/permission`。
+      expect(commands.find('sandbox')).toBeUndefined();
       expect(
         sessionLog.events
           .filter((event) => event.type === 'sandbox/mode')
           .map((event) => event.data),
       ).toEqual([{ mode: 'read-only' }]);
+      // 新會話把起始組合釘進日誌（dsh `pinInitialPermission`）：`--sandbox read-only` 配核准 `ask` 就是 `read-only` 那一組。
+      expect(
+        sessionLog.events
+          .filter((event) => event.type === 'permission/preset')
+          .map((event) => event.data),
+      ).toEqual([{ preset: 'read-only' }]);
     } finally {
       detach();
       await dispose();
     }
   });
 
-  it('**沒有 --workspace 就沒有 `/sandbox`，日誌上也一顆都沒有**', async () => {
+  it('**沒有 --workspace 就沒有 `/permission`，日誌上也一顆都沒有**', async () => {
     const { commands, sessions, attachSession, sessionLog, dispose } = await createCliAgent(
       { live: false },
       shipped,
@@ -159,8 +167,11 @@ describe('組裝起來之後', () => {
     try {
       // 那種組裝一格圍堵都沒有。一個報告「目前是 workspace-write」的命令說的謊跟那句
       // 提示一模一樣，而且它還讓人以為自己切了什麼東西。
-      expect(commands.find(SANDBOX_COMMAND_NAME)).toBeUndefined();
+      expect(commands.find(PERMISSION_COMMAND_NAME)).toBeUndefined();
       expect(sessionLog.events.filter((event) => event.type === 'sandbox/mode')).toHaveLength(0);
+      expect(sessionLog.events.filter((event) => event.type === 'permission/preset')).toHaveLength(
+        0,
+      );
     } finally {
       detach();
       await dispose();
@@ -175,7 +186,7 @@ describe('組裝起來之後', () => {
       // （`@nexus/plugin-commands` 的 `execute` 在進 handler 之前就 `throw abortError`），
       // 所以餵一個 abort 過的進來會讓這條測試記下一件產品路徑上不成立的事。
       const signal = new AbortController().signal;
-      const command = first.commands.find(SANDBOX_COMMAND_NAME);
+      const command = first.commands.find(PERMISSION_COMMAND_NAME);
       await command?.handler({
         commandId: 'c1',
         rawInput: ' read-only',
@@ -184,7 +195,7 @@ describe('組裝起來之後', () => {
         steer: noSteer,
       });
 
-      const still = await second.commands.find(SANDBOX_COMMAND_NAME)?.handler({
+      const still = await second.commands.find(PERMISSION_COMMAND_NAME)?.handler({
         commandId: 'c2',
         rawInput: '',
         signal,
@@ -192,7 +203,7 @@ describe('組裝起來之後', () => {
         steer: noSteer,
       });
 
-      expect(still?.text).toContain('目前的檔案政策：workspace-write');
+      expect(still?.text).toContain('目前的權限組合：workspace-write');
     } finally {
       await first.dispose();
       await second.dispose();

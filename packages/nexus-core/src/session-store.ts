@@ -417,8 +417,17 @@ import type { SessionEvent } from './session-log.js';
  * 同 `sandbox/mode`，也同 dsh（它的 `approval/policy` 沒有略過旗標）：舊 runtime 該拒絕讀。
  *
  * **讀舊檔**：33 以前沒有這一顆，續接時照 `ask` 起算，也就是以前的行為，不補寫歷史。
+ *
+ * ## 35：具名權限組合進日誌（[#437](https://github.com/DemianLi/nexus-agent/issues/437)）
+ *
+ * 新增 `permission/preset { preset }`（使用者選了哪一組；由 `@nexus/plugin-permission-presets` 宣告與寫入）。
+ *
+ * **升版，不標 `ignorable`**——它自己不控制執行（兩顆旋鈕各自的事件才控制），但 dsh 的 `permission/preset` 同樣沒有略過旗標，而且它是
+ * 新增的**種類**：舊 runtime 讀到不認得的種類就該拒絕，由版本號管相容，不要靠「略過了應該沒事」。
+ *
+ * **讀舊檔**：34 以前沒有這一顆，續接時由目前的沙箱與核准值推導現在是哪一組，不補寫歷史；新會話在起始時把推出來的那一組釘進去。
  */
-export const SESSION_LOG_FORMAT_VERSION = 34;
+export const SESSION_LOG_FORMAT_VERSION = 35;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

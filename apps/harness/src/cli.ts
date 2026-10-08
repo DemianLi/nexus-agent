@@ -53,7 +53,8 @@ import { PLAN_COMMAND_NAME, recordedPlanMode } from '@nexus/plugin-plan-mode';
 import { AssemblyDropError, HEADLESS_APPROVALS } from './agent-factory.js';
 import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
-import { recordedSandboxMode, SANDBOX_COMMAND_NAME } from '@nexus/plugin-sandbox-policy';
+import { PERMISSION_COMMAND_NAME } from '@nexus/plugin-permission-presets';
+import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
 import { processLaunchEnv } from './launch-env.js';
 import { classifyTurnFailure, loadLiveLaunchEnv, DEFAULT_LIVE_MODEL_ID } from './live-model.js';
@@ -192,7 +193,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     if (values.sandbox !== undefined) {
       throw new Error(
         `--resume 不能配 --sandbox：續接的模式從日誌來，兩個一起給的話不管誰贏，另一個都是` +
-          `靜靜被丟掉。要換模式，接起來之後用 /${SANDBOX_COMMAND_NAME} 切——那一次會記進日誌。` +
+          `靜靜被丟掉。要換模式，接起來之後用 /${PERMISSION_COMMAND_NAME} 切——那一次會記進日誌。` +
           `\n\n${USAGE}`,
       );
     }
@@ -947,8 +948,9 @@ async function runLaunched(
   // 日誌記著模式，就表示上一次有 fence（沒給 `--workspace` 一顆都不寫）。這一次不給的話
   // 檔案跑在虛擬 FS、fence 不在路徑上，接回來的 `read-only` 會**靜靜蒸發**——與
   // `--sandbox 要配 --workspace` 同一個理由，所以也同樣在什麼都還沒起來之前擋下。
+  // **續接就給滿**：日誌沒記（#437 以前的）照 `ask` 起算，不讓組裝點按沙箱模式去推——全開沙箱配舊日誌會被推成 `never`。
   const resumedApprovalPolicy =
-    resumed === undefined ? undefined : recordedApprovalPolicy(resumed.events);
+    resumed === undefined ? undefined : (recordedApprovalPolicy(resumed.events) ?? 'ask');
   const effective = {
     ...invocation,
     ...(resumedSandbox !== undefined && { sandbox: resumedSandbox }),
@@ -1115,7 +1117,7 @@ async function runLaunched(
         : `檔案系統：${resolve(options.cwd ?? process.cwd(), invocation.workspace)}` +
             `（變更圍堵在它之下，起始 mode: ${effective.sandbox ?? 'workspace-write'}` +
             `${resumedSandbox === undefined ? '' : '（從續接的日誌來）'}，` +
-            `/${SANDBOX_COMMAND_NAME} 切得動）`,
+            `/${PERMISSION_COMMAND_NAME} 切得動）`,
     );
     printer.log(APPROVAL_DISCLOSURE);
     // 第四行是**披露**，不是設定。tracing 開沒開不由這支程式決定——基座讀到環境變數就
