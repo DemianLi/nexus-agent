@@ -2,8 +2,11 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  admitFiles,
   attachmentDetail,
   attachmentKind,
+  imageMediaType,
+  MAX_MESSAGE_IMAGE_BYTES,
   fileExtension,
   formatBytes,
   serverSupportsAttachments,
@@ -11,9 +14,16 @@ import {
 import { dragHasFiles } from '@/lib/file-drag';
 
 describe('草稿附件的純函式', () => {
-  it('image/* 是圖，其餘（含沒有型別）是檔案', () => {
-    expect(attachmentKind({ type: 'image/png' })).toBe('image');
-    expect(attachmentKind({ type: 'image/svg+xml' })).toBe('image');
+  it('只有 dsh 白名單內的四種是圖（png、jpeg、webp、gif），其餘（含不在白名單的圖、沒有型別）是檔案', () => {
+    for (const type of ['image/png', 'image/jpeg', 'image/webp', 'image/gif']) {
+      expect(attachmentKind({ type })).toBe('image');
+      expect(imageMediaType({ type })).toBe(type);
+    }
+    // 不是「image/ 開頭」：伺服器的收圖檢查不收這些，當一般檔案走上傳。
+    for (const type of ['image/svg+xml', 'image/heic', 'image/bmp', 'image/tiff', 'image/avif']) {
+      expect(attachmentKind({ type })).toBe('file');
+      expect(imageMediaType({ type })).toBeUndefined();
+    }
     expect(attachmentKind({ type: 'application/pdf' })).toBe('file');
     expect(attachmentKind({ type: '' })).toBe('file');
   });
@@ -53,5 +63,77 @@ describe('草稿附件的純函式', () => {
     expect(dragHasFiles(['text/plain'])).toBe(false);
     expect(dragHasFiles(['text/uri-list'])).toBe(false);
     expect(dragHasFiles(undefined)).toBe(false);
+  });
+});
+
+/** 不真的配置那麼大的記憶體：檔案物件的 `size` 另外指定。 */
+const fileOf = (name: string, type: string, size = 10): File => {
+  const file = new File(['x'], name, { type });
+  Object.defineProperty(file, 'size', { value: size });
+  return file;
+};
+const draft = (file: File, id = file.name) => ({ id, file, kind: attachmentKind(file) }) as const;
+const MB = 1024 * 1024;
+
+describe('前端先擋的上限（admitFiles）', () => {
+  it('單張超過 20 MB：不收、說原因；剛好 20 MB 收', () => {
+    const { accepted, rejected } = admitFiles(
+      [],
+      [fileOf('big.png', 'image/png', 20 * MB + 1), fileOf('edge.png', 'image/png', 20 * MB)],
+    );
+    expect(accepted.map((file) => file.name)).toEqual(['edge.png']);
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toContain('big.png');
+    expect(rejected[0]).toContain('20.0 MB');
+  });
+
+  it('一句話最多 20 張圖：算上草稿裡已有的，第 21 張不收', () => {
+    const current = Array.from({ length: 19 }, (_, i) => draft(fileOf(`${i}.png`, 'image/png')));
+    const { accepted, rejected } = admitFiles(current, [
+      fileOf('20.png', 'image/png'),
+      fileOf('21.png', 'image/png'),
+    ]);
+    expect(accepted.map((file) => file.name)).toEqual(['20.png']);
+    expect(rejected[0]).toContain('最多 20 張');
+    expect(rejected[0]).toContain('21.png');
+  });
+
+  it('圖片加起來最多 200 MB：超過的那張不收，後面小的還收', () => {
+    const current = [draft(fileOf('a.png', 'image/png', 15 * MB))];
+    const incoming = [
+      ...Array.from({ length: 9 }, (_, i) => fileOf(`b${i}.jpg`, 'image/jpeg', 20 * MB)),
+      fileOf('c.jpg', 'image/jpeg', 6 * MB),
+      fileOf('tiny.jpg', 'image/jpeg', 1 * MB),
+    ];
+    // 15 + 9×20 = 195；再 6 → 201 超過；tiny 1 → 196 收。
+    const { accepted, rejected } = admitFiles(current, incoming);
+    expect(accepted.map((file) => file.name)).toEqual(
+      [...incoming.slice(0, 9), incoming[10]!].map((f) => f.name),
+    );
+    expect(rejected).toHaveLength(1);
+    expect(rejected[0]).toContain('c.jpg');
+    expect(rejected[0]).toContain(`${MAX_MESSAGE_IMAGE_BYTES / MB}.0 MB`);
+  });
+
+  it('一般檔案與不在白名單的圖不受這三條管、也不佔額度', () => {
+    const current = Array.from({ length: 20 }, (_, i) => draft(fileOf(`${i}.png`, 'image/png')));
+    const { accepted, rejected } = admitFiles(current, [
+      fileOf('huge.pdf', 'application/pdf', 900 * MB),
+      fileOf('logo.svg', 'image/svg+xml', 30 * MB),
+    ]);
+    expect(accepted.map((file) => file.name)).toEqual(['huge.pdf', 'logo.svg']);
+    expect(rejected).toEqual([]);
+  });
+
+  it('收進來的照原本順序', () => {
+    const { accepted } = admitFiles(
+      [],
+      [
+        fileOf('1.png', 'image/png'),
+        fileOf('2.pdf', 'application/pdf'),
+        fileOf('3.gif', 'image/gif'),
+      ],
+    );
+    expect(accepted.map((file) => file.name)).toEqual(['1.png', '2.pdf', '3.gif']);
   });
 });
