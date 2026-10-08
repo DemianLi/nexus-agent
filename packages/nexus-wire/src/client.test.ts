@@ -134,7 +134,11 @@ describe('瀏覽器端的 client', () => {
     );
     expect(urls[1]).toBe('http://agent.test/threads/t%201/subagents/bg-gone/history');
     expect(ok).toEqual({ kind: 'ok', result: page });
-    expect(missing).toEqual({ kind: 'rejected', message: '沒有這個子代理' });
+    expect(missing).toEqual({
+      kind: 'rejected',
+      code: 'subagent_not_found',
+      message: '沒有這個子代理',
+    });
   });
 
   it('下行預設訂全部放行的 channel，回來的是解好的封包', async () => {
@@ -197,6 +201,7 @@ describe('瀏覽器端的 client', () => {
     );
     expect(await refused.client.slashRun('t6', '/plan')).toEqual({
       kind: 'rejected',
+      code: 'invalid_argument',
       message: '這條 thread 正在跑',
     });
 
@@ -276,7 +281,7 @@ describe('列檔（#651）', () => {
     });
     expect(
       await reply(errorResponse(null, 'unknown_error', '建不起來')).fileReferences('t', ''),
-    ).toEqual({ kind: 'rejected', message: '建不起來' });
+    ).toEqual({ kind: 'rejected', code: 'unknown_error', message: '建不起來' });
   });
 });
 
@@ -350,7 +355,7 @@ describe('列會話候選（#713）', () => {
     });
     expect(
       await reply(errorResponse(null, 'unknown_error', '讀不了')).sessionReferences('t', ''),
-    ).toEqual({ kind: 'rejected', message: '讀不了' });
+    ).toEqual({ kind: 'rejected', code: 'unknown_error', message: '讀不了' });
   });
 
   it.each([
@@ -365,5 +370,50 @@ describe('列會話候選（#713）', () => {
       fetch: async () => Response.json(successResponse(0, { available: true, candidates: [bad] })),
     });
     await expect(client.sessionReferences('t', '')).rejects.toThrow('不認得的候選');
+  });
+});
+
+describe('被拒時把 server 的錯誤碼交給呼叫端（#764）', () => {
+  // 每個會回 `rejected` 的方法一列：server 回什麼碼，呼叫端就拿到什麼碼，原樣、不改寫。
+  // 回的碼刻意用每個方法不會自己合成的那一個，這樣「碼從哪來」只有一個答案。
+  const rejectedCalls: readonly (readonly [
+    string,
+    (client: ReturnType<typeof createWireClient>) => Promise<unknown>,
+  ])[] = [
+    ['slashList', (c) => c.slashList('t')],
+    ['slashRun', (c) => c.slashRun('t', '/plan')],
+    ['feedbackPut', (c) => c.feedbackPut('t', {} as never)],
+    ['feedbackDelete', (c) => c.feedbackDelete('t', {} as never)],
+    ['feedbackList', (c) => c.feedbackList('t')],
+    ['feedbackRecord', (c) => c.feedbackRecord('t', {} as never)],
+    ['listThreads', (c) => c.listThreads()],
+    ['searchThreads', (c) => c.searchThreads('q')],
+    ['threadHistory', (c) => c.threadHistory('t')],
+    ['subagentHistory', (c) => c.subagentHistory('t', 'bg-0123456789ab')],
+    ['trajectoryTurn', (c) => c.trajectoryTurn('t', {} as never)],
+    ['fileReferences', (c) => c.fileReferences('t', '')],
+    ['sessionReferences', (c) => c.sessionReferences('t', '')],
+  ];
+
+  it.each(rejectedCalls)('%s 被拒時帶 server 的碼與原因', async (_name, call) => {
+    const client = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async () => Response.json(errorResponse(1, 'not_supported', '這個部署沒開')),
+    });
+    expect(await call(client)).toEqual({
+      kind: 'rejected',
+      code: 'not_supported',
+      message: '這個部署沒開',
+    });
+  });
+
+  it('client 自己合成的拒絕（回饋的回應看不懂）沒有碼，不假造一個', async () => {
+    const client = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async () => Response.json(successResponse(1, { nope: true })),
+    });
+    const outcome = await client.feedbackList('t');
+    expect(outcome.kind).toBe('rejected');
+    expect(outcome).not.toHaveProperty('code');
   });
 });

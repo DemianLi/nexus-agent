@@ -98,11 +98,13 @@ describe('出廠的清單', () => {
     const client = await serveClient(await start(root));
     expect(await client.searchThreads('會話')).toEqual({
       kind: 'rejected',
+      code: 'not_supported',
       message: THREAD_SEARCH_DISABLED_MESSAGE,
     });
     // 不合法的查詢講的是查詢，不是沒開：同 dsh 先正規化。
     expect(await client.searchThreads('   ')).toEqual({
       kind: 'rejected',
+      code: 'invalid_argument',
       message: '搜尋的 query 不能是空的',
     });
   });
@@ -131,10 +133,12 @@ describe('出廠的清單', () => {
     );
     expect(await client.searchThreads('會話')).toEqual({
       kind: 'rejected',
+      code: 'not_supported',
       message: expect.stringContaining('沒掛會話內容搜尋'),
     });
     expect(await client.searchThreads('')).toEqual({
       kind: 'rejected',
+      code: 'invalid_argument',
       message: '搜尋的 query 不能是空的',
     });
   });
