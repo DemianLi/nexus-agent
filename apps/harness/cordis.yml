@@ -622,7 +622,8 @@
 # **檔案政策那一句，永遠由這一列講。** 對應 dsh 的 `sandbox-policy`：不論有沒有 `--workspace` 都掛，
 # 差別只在**講什麼、帶不帶控制器**——
 #
-# - **有 `--workspace`（檔案系統有圍堵）**：註冊 `/sandbox` 命令、升級流程、`sandbox/mode` 事件，並講目前的檔案政策。
+# - **有 `--workspace`（檔案系統有圍堵）**：註冊升級流程、記 `sandbox/mode` 事件，並講目前的檔案政策。**沒有 `/sandbox`**：
+#   切換入口是下一列 `permission-presets` 的 `/permission`（#437）。
 #   組裝點會一起交出 `fsContainment` 與 `sandboxPolicy` 兩個服務；缺 `sandboxPolicy` 這一列載入當場拋。
 # - **沒有 `--workspace`**：只貢獻一句不宣稱圍堵的政策，不註冊命令、不寫事件。以前這裡是整顆不掛，
 #   那是「沒有圍堵就什麼都不講」，模型只能從工具行為猜自己能不能改檔。
@@ -632,6 +633,21 @@
 # 沒有 `Config`：沒有可設的欄位，模式由 `--sandbox` 決定。
 - id: sandbox-policy
   name: '@nexus/plugin-sandbox-policy'
+
+# ── 權限組合（#437）──────────────────────────────────────────────────────────
+#
+# **把「檔案政策」與「核准政策」兩顆旋鈕捆成具名組合，並且是切換它們的唯一入口 `/permission`。** 對應 dsh 的
+# `permission-presets`（`packages/bundle/base/cordis.patch.yml:244-261`）：出廠三組 `read-only`／`workspace-write`／
+# `danger-full-access`，名字與值一字不差。
+#
+# - **`presets` 是整份替換、不是深層合併**（patch 的規矩）：要刪掉某一組，把整張表重寫一份只留要的。每一組必填 `sandbox` 與
+#   `approval`，選填 `name`／`description`。`custom` 是保留字（對不上任何一組時的顯示值），不能當組名。
+# - **`defaultPreset` 選填**：新會話的起始組。省略就由 `--sandbox` 推出的起始值對表（全開＋不問、其他＋問）。與明確給的
+#   `--sandbox` 矛盾時啟動報錯，不悄悄讓其中一個蓋掉另一個。
+# - **沒有圍堵（沒給 `--workspace`）時這一列什麼都不註冊**（沒有東西可以捆）；有圍堵時這一列關不掉，理由同上一列。
+#   這一列 `apply` 拋（表壞了、預設組對不上）整個起不來——它的 id 在 `startup-audit.ts` 的必掛名單上。
+- id: permission-presets
+  name: '@nexus/plugin-permission-presets'
 
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #

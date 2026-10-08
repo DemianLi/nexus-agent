@@ -1,5 +1,5 @@
 /**
- * 那顆**切得動**的圍堵格子，與切它的入口 `/sandbox`。
+ * 那顆**切得動**的圍堵格子。切它的入口是 `@nexus/plugin-permission-presets` 的 `/permission`（[#437](https://github.com/DemianLi/nexus-agent/issues/437)）。
  *
  * ## 這一刀補的是什麼
  *
@@ -18,20 +18,17 @@
  * 3. **切換走的是各自的權威 setter。** dsh 的 preset 只改真的不同的那顆旋鈕，兩顆旋鈕各自
  *    保留自己的值。我們這裡只有一顆旋鈕，所以「權威 setter」就是 {@link SandboxModeController.switchTo}
  *    ——**fence 與提示句都跟它讀同一顆**，不各存快照。
- * 4. **不做具名 preset，而這是「還沒做」不是「做不到」。** dsh 把沙箱模式與核准政策捆成
- *    `workspace-write` / `danger-full-access` 兩個具名 preset 給人選。我們今天捆不起來，因為
- *    **另一顆旋鈕還不是逐次解析的**：`ApprovalPolicy.enabled` 在 fold 當下就被
- *    `deriveApprovalChannel` 算成一顆 `ApprovalChannel`，扣進 `createApprovalGateMiddleware`
- *    的閉包（`packages/nexus-core/src/approval.ts`）。今天發一個 preset 出去，它會**只搬得動
- *    自己的一半旋鈕而另一半靜靜不動**——一個承諾了捆綁卻只捆了一邊的選擇器。
- *    把核准那顆也變成來源是**同一個一行的把戲**（傳來源不傳值），所以這是排序不是障礙。
+ * 4. **具名 preset 在 `@nexus/plugin-permission-presets`。** dsh 把沙箱模式與核准政策捆成具名 preset 給人選；這一刀以前我們捆不起來，因為核准那顆旋鈕
+ *    不是逐次解析的（`ApprovalChannel` 在 fold 當下扣進閘門的閉包）。[#437](https://github.com/DemianLi/nexus-agent/issues/437) 把核准政策也做成一顆
+ *    控制器（`@nexus/core` 的 `ApprovalPolicyController`），兩顆旋鈕各自留著自己的權威入口，由那個 plugin 的 `/permission` 一次切兩顆。
+ *    **`/sandbox` 因此拿掉了**：留著的話，部署的人在設定裡刪掉「全開」那一組也關不掉全開（dsh 也沒有 `/sandbox`）。
  *
  * ## 這顆格子的壽命是「一次組裝」，而那剛好就是一條 thread
  *
  * 它由 `createCliAgent` 建，而 `serve.ts` 是**一條 thread 呼叫一次 `createCliAgent`**
  * （「一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統」）。所以兩條 thread
  * 不會共用同一格。**放進模組層或工廠閉包就會串台**，同 `@nexus/plugin-goal` 那段註解記的
- * 事故形狀：一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上。
+ * 事故形狀：一條 thread 的 `/permission read-only` 收緊到另一條 thread 的檔案工具上。
  *
  * ## 子代理照委派那一刻的那一格
  *
@@ -60,11 +57,11 @@
  * 切換寫得進日誌，**CLI 的 `--resume <run 目錄>` 與 serve 碰到以前寫過的 thread 都讀得回來**：最後一顆 `sandbox/mode` 就是
  * 起始那一格（{@link recordedSandboxMode}，[#251](https://github.com/DemianLi/nexus-agent/issues/251)
  * 的門 A）。續接不收 `--sandbox`——兩個來源不管誰贏，另一個都是靜靜被丟掉；接起來之後要換
- * 就用 `/sandbox`，那一次會記進日誌。**驗收在 `sandbox-mode.test.ts` 最後一組**，由原本釘住
+ * 就用 `/permission`，那一次會記進日誌。**驗收在 `sandbox-mode.test.ts` 最後一組**，由原本釘住
  * 「`SessionStore` 只有 `create`」的那條絆索翻面而來。
  *
  * serve 那一半在 `serve-session-log.test.ts` 的「重開 server 之後接得回同一條 thread」：上一次
- * 切成 `read-only`，重開之後 `/sandbox` 報的還是它；日誌記著模式而這一次沒給 `--workspace` 就
+ * 切成 `read-only`，重開之後 `/permission` 報的還是它；日誌記著模式而這一次沒給 `--workspace` 就
  * 擋下，同 CLI。web 那端把 thread id 記在瀏覽器裡，所以重新整理之後接的是同一條（`apps/web/src/lib/remembered-thread.ts`）。
  *
  * @module
@@ -80,16 +77,6 @@ import type {
   SessionEvent,
   SessionLog,
 } from '@nexus/core';
-import { isSandboxMode, SANDBOX_MODES } from '@nexus/core';
-
-/** `/sandbox` 的命令名，不帶斜線。 */
-export const SANDBOX_COMMAND_NAME = 'sandbox';
-
-/** `/sandbox` 在探索清單裡的那一句。 */
-export const SANDBOX_COMMAND_DESCRIPTION = '看或切換這個會話的檔案效果政策';
-
-/** `/sandbox` 的輸入提示。 */
-export const SANDBOX_COMMAND_HINT = `[${SANDBOX_MODES.join('｜')}]`;
 
 /**
  * 一份日誌上**最後一顆** `sandbox/mode` 記的那一格，一顆都沒有時是 `undefined`。
@@ -246,7 +233,7 @@ export class SandboxModeController implements SandboxGrantLedger {
   /**
    * 現在接著幾份日誌。
    *
-   * `/sandbox` 讀它是為了**在零份的時候把「這次切換沒留痕跡」講出來**——一次悄悄沒進
+   * `/permission` 讀它是為了**在零份的時候把「這次切換沒留痕跡」講出來**——一次悄悄沒進
    * 日誌的切換與一次進了日誌的切換，在畫面上長得一模一樣。
    */
   get attachedCount(): number {
@@ -356,48 +343,4 @@ export class SandboxModeController implements SandboxGrantLedger {
     for (const log of this.#logs) log.append('sandbox/mode', { mode: next });
     return { kind: 'switched', from, to: next };
   }
-}
-
-/** 沒接上任何日誌時，`/sandbox` 的回覆會多的那一句。 */
-export const SANDBOX_UNRECORDED_NOTE = '（這次切換沒有記進任何會話日誌——沒有日誌接在上面。）';
-
-/**
- * 跑一次 `/sandbox`。
- *
- * 三條路：沒有引數就報告現況與可切的那幾格；引數是認得的模式就切；認不得就回一則說得出
- * 認得哪幾個的錯誤。**認不得的那一條回 `kind: 'error'`**——一個把打錯字靜靜當成「看一下
- * 現況」的命令，會讓人以為自己切過了。
- *
- * @param controller - 這次組裝那一格。
- * @param rootDir - 可寫根，報告時指名它。
- * @param rawInput - 命令名之後的原文，含分隔的空白。
- * @returns 直接呈現給人的結果。
- */
-export function executeSandboxCommand(
-  controller: SandboxModeController,
-  rootDir: string,
-  rawInput: string,
-): { readonly kind: 'success' | 'error'; readonly text: string } {
-  const argument = rawInput.trim();
-  const table = SANDBOX_MODES.join('、');
-  if (argument.length === 0) {
-    return {
-      kind: 'success',
-      text:
-        `目前的檔案政策：${controller.current}（可寫根 ${JSON.stringify(rootDir)}）。\n` +
-        `切得過去的：${table}。`,
-    };
-  }
-  if (!isSandboxMode(argument)) {
-    return { kind: 'error', text: `/sandbox 認不得 "${argument}"。認得的是 ${table}。` };
-  }
-  const outcome = controller.switchTo(argument);
-  if (outcome.kind === 'unchanged') {
-    return { kind: 'success', text: `本來就是 ${outcome.mode}，沒有變。` };
-  }
-  const note = controller.attachedCount === 0 ? `\n${SANDBOX_UNRECORDED_NOTE}` : '';
-  return {
-    kind: 'success',
-    text: `檔案政策從 ${outcome.from} 換成 ${outcome.to}。${note}`,
-  };
 }

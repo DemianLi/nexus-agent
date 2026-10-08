@@ -1,8 +1,8 @@
 /**
- * 那顆會被切的格子自己的驗收：**`/sandbox` 這個命令、切換留下的痕跡、委派的邊界**。
+ * 那顆會被切的格子自己的驗收：**切換、切換留下的痕跡、委派的邊界**（`/permission` 這個命令在 `@nexus/plugin-permission-presets`）。
  *
  * **要跑起 agent 的那幾條不在這裡**——「一次切換搬得動 fence 與提示句兩個消費者」與
- * 「組裝起來之後有沒有 `/sandbox`」留在 `@nexus/harness` 的 `sandbox-mode.test.ts`，
+ * 「組裝起來之後有沒有 `/permission`」留在 `@nexus/harness` 的 `sandbox-mode.test.ts`，
  * 理由同 {@link ./index.test.ts}。
  *
  * ## 為什麼每一條驗收都是一對
@@ -19,35 +19,21 @@ import { describe, expect, it } from 'vitest';
 import { SessionLog } from '@nexus/core';
 import type { SandboxDenial, SandboxGrant, SessionStore } from '@nexus/core';
 
-import { executeSandboxCommand, SandboxModeController } from './sandbox-mode.js';
+import { SandboxModeController } from './sandbox-mode.js';
 
-/** 跑一次 `/sandbox <引數>`，回它給人看的那句話。 */
-function sandbox(controller: SandboxModeController, root: string, argument: string): string {
-  return executeSandboxCommand(controller, root, argument).text;
-}
-
-describe('`/sandbox` 這個命令本身', () => {
-  it('沒有引數就報告現況與可切的那幾格，**不動任何東西**', () => {
+describe('切換', () => {
+  it('切換搬動 current 與 source，回 switched；淨變化為零回 unchanged', () => {
     const controller = new SandboxModeController('workspace-write');
 
-    const text = sandbox(controller, '/w', '');
-
-    expect(text).toContain('目前的檔案政策：workspace-write');
-    expect(text).toContain('"/w"');
-    expect(text).toContain('read-only');
-    expect(text).toContain('danger-full-access');
-    expect(controller.current).toBe('workspace-write');
-  });
-
-  it('認不得的名字回 error，**而且模式沒有動**', () => {
-    const controller = new SandboxModeController('workspace-write');
-
-    const result = executeSandboxCommand(controller, '/w', ' readonly');
-
-    expect(result.kind).toBe('error');
-    expect(result.text).toContain('認不得 "readonly"');
-    // 承重的是這一句：一個把打錯字靜靜吞掉的實作會讓人以為自己切過了。
-    expect(controller.current).toBe('workspace-write');
+    expect(controller.switchTo('read-only')).toEqual({
+      kind: 'switched',
+      from: 'workspace-write',
+      to: 'read-only',
+    });
+    expect(controller.current).toBe('read-only');
+    expect(controller.source()).toBe('read-only');
+    // 反例：目標就是現在這一格，什麼都沒動。
+    expect(controller.switchTo('read-only')).toEqual({ kind: 'unchanged', mode: 'read-only' });
   });
 
   it('切到已經生效的那一格什麼都不發生——照 dsh 的「淨變化為零不追加」', () => {
@@ -56,14 +42,15 @@ describe('`/sandbox` 這個命令本身', () => {
     controller.attach(log);
     const afterAttach = log.events.length;
 
-    expect(sandbox(controller, '/w', ' read-only')).toContain('本來就是 read-only');
+    expect(controller.switchTo('read-only').kind).toBe('unchanged');
     expect(log.events).toHaveLength(afterAttach);
   });
 
-  it('沒有日誌接在上面時，切換要說「這次沒留痕跡」', () => {
+  it('沒有日誌接在上面時 attachedCount 是 0（呼叫端據此說「這次切換沒留痕跡」）', () => {
     const controller = new SandboxModeController('workspace-write');
-
-    expect(sandbox(controller, '/w', ' read-only')).toContain('沒有記進任何會話日誌');
+    expect(controller.attachedCount).toBe(0);
+    controller.attach(new SessionLog('t'));
+    expect(controller.attachedCount).toBe(1);
   });
 });
 

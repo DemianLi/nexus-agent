@@ -194,6 +194,16 @@ describe('子代理的沙箱模式', () => {
     return { ...built, controller, model };
   }
 
+  /** **產品組裝，有 `--workspace`**：權限組合那一列要真的掛著，所以不走上面手搭的 `assemble`。 */
+  async function assembleProduct(mode: SandboxMode, turns: readonly ScriptedTurn[]) {
+    const built = await createCliAgent(
+      { live: false, workspace: root, sandbox: mode },
+      withScriptedModel([...shipped, WORKER], turns),
+      root,
+    );
+    return { ...built, model: built.model as ScriptedChatModel };
+  }
+
   /**
    * **產品組裝，沒給 `--workspace`**（#670）：沒有 backend、沒有沙箱 plugin，產品組裝正是這樣，所以不必手搭。
    * 腳本裡不能有 `flip`——這一種組裝沒有控制器可切。
@@ -235,10 +245,17 @@ describe('子代理的沙箱模式', () => {
           .filter((event) => event.type === 'sandbox/mode')
           .map((event) => event.data),
       );
+    const presetEvents = (kind: 'root' | 'subagent') =>
+      logOf(kind).map((session) =>
+        session.log.events
+          .filter((event) => event.type === 'permission/preset')
+          .map((event) => event.data),
+      );
     return {
       ...built,
       pump,
       sandboxEvents,
+      presetEvents,
       close: async () => {
         line.abort();
         await draining;
@@ -350,6 +367,39 @@ describe('子代理的沙箱模式', () => {
       ]);
     } finally {
       await run.close();
+    }
+  }, 20000);
+
+  /**
+   * **權限組合名只在父代理是全開時帶給子代理**（#437，dsh `child-agent.ts:252`、`:277`）：其餘的組合子代理靠兩顆旋鈕各自的
+   * 委派快照就夠了，名字不另外帶；全開那一組要帶，是因為 web 的「全開」確認認的是組合名。
+   */
+  it('權限組合名：父代理全開，子代理日誌帶 danger-full-access；父代理 workspace-write，子代理沒有', async () => {
+    const full = await drive(
+      await assembleProduct('danger-full-access', [
+        delegate,
+        { content: '子代理收工。' },
+        { content: '根收工。' },
+      ]),
+    );
+    try {
+      expect(full.presetEvents('subagent')).toEqual([[{ preset: 'danger-full-access' }]]);
+      expect(full.presetEvents('root')).toEqual([[{ preset: 'danger-full-access' }]]);
+    } finally {
+      await full.close();
+    }
+    const fenced = await drive(
+      await assembleProduct('workspace-write', [
+        delegate,
+        { content: '子代理收工。' },
+        { content: '根收工。' },
+      ]),
+    );
+    try {
+      expect(fenced.presetEvents('subagent')).toEqual([[]]);
+      expect(fenced.presetEvents('root')).toEqual([[{ preset: 'workspace-write' }]]);
+    } finally {
+      await fenced.close();
     }
   }, 20000);
 

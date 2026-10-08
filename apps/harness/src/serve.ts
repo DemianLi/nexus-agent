@@ -716,8 +716,9 @@ async function startServer(
           );
         }
         // 核准政策同樣從日誌來（#437）；#437 以前的日誌沒有，照 `ask` 起算，也就是以前的行為。
+        // 續接就給滿：沒記照 `ask`，不讓組裝點按沙箱模式去推（全開沙箱配 #437 以前的日誌會被推成 `never`）。
         const resumedApprovalPolicy =
-          resumed === undefined ? undefined : recordedApprovalPolicy(resumed.events);
+          resumed === undefined ? undefined : (recordedApprovalPolicy(resumed.events) ?? 'ask');
         const effective = {
           ...invocation,
           ...(resumedSandbox !== undefined && { sandbox: resumedSandbox }),
@@ -794,6 +795,7 @@ async function startServer(
         attachSessions,
         feedback,
         workspaceChanges,
+        permissionPresets,
         goals,
         workspaceRoot,
         attachTitle,
@@ -813,6 +815,8 @@ async function startServer(
         ...(feedback !== undefined && { feedback }),
         // 每一輪的改動摘要（#443）：沒給 `--workspace` 就缺席，兩條 `changes` 路由一律 404。
         ...(workspaceChanges !== undefined && { workspaceChanges }),
+        // 權限組合的目錄（#437）：沒圍堵就缺席，`permission.catalog` 回 `not_supported`。
+        ...(permissionPresets !== undefined && { permissionPresets }),
         // 交付讀檔方法的錨（#452）：沒給 `--workspace` 就缺席，兩支方法一律 no-anchor。
         // **這個值由 `createCliAgent` 算、從這裡原樣轉交**，呼叫端不再寫一次 `resolve(cwd, ...)`。
         ...(workspaceRoot !== undefined && { workspaceRoot }),
