@@ -174,6 +174,9 @@ export function isMirroredEvent(event: SessionEvent): boolean {
     case 'request/header':
     case 'request/system':
       return false;
+    // 續接時實際載入的插件清單（#1138）：本機的模組路徑與只能同機比的設定雜湊，不出這台機器。
+    case 'session/resumed':
+      return false;
     default:
       return true;
   }

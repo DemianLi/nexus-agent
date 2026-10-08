@@ -537,6 +537,7 @@ describe('什麼推得動 roundsStarted', () => {
       'tool/call',
       'tool/result',
       'session/end-seed',
+      'session/resumed',
       'feedback/message-put',
       'feedback/message-delete',
       'feedback/record',

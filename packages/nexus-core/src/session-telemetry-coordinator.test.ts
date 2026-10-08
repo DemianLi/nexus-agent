@@ -469,6 +469,13 @@ describe('請求快照不進遙測（#1020）', () => {
     ).toEqual(['request/system', 'request/header']);
   });
 
+  /** #1138：續接時實際載入的插件清單帶本機的模組路徑與只能同機比的設定雜湊，不鏡像。 */
+  it('session/resumed 不鏡像', () => {
+    const log = new SessionLog('thread-a');
+    log.append('session/resumed', { build: { commit: null, dirty: null }, plugins: [] });
+    expect(log.events.map((event) => isMirroredEvent(event))).toEqual([false]);
+  });
+
   /**
    * #1029：核准的問與答是審計事件，**沒被擋**——`reason` 跟 `tool/call` 的參數同級，都在鏡像的射程內。
    * 這條釘住現況；哪天要擋，改 `isMirroredEvent` 並翻這條，不要只改 `approval/asked` 的說明。

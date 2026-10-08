@@ -248,7 +248,11 @@ describe('接第二次', () => {
     const twice = await readLog(join(runDir, 'cli.jsonl'));
 
     expect(twice).toEqual(once);
-    expect(twice.at(-1)).toMatchObject({ type: 'session/end-seed' });
+    // 尾巴是 end-seed 加上續接寫的 `session/resumed`（#1138）；第二次內容相同不疊，所以兩次一模一樣。
+    expect(twice.slice(-2).map((event) => event.type)).toEqual([
+      'session/end-seed',
+      'session/resumed',
+    ]);
   });
 });
 

@@ -7,7 +7,7 @@
  * 2. **能不能讓它們乾淨結束、日誌不壞？** 能：取消之後那一輪正常收尾；直接關機也只留下一份讀得出來的前綴。
  *    但**沒有「這條 thread 退役」這件事**：取消之後同一條 thread 照收新輸入、照用舊版。
  * 3. **換成新版之後 resume，走的是新版嗎？歷史完整嗎？** 走新版、歷史完整；但 header 不更新，所以
- *    第 1 題那條路會把已經換到新版的 thread 繼續列成舊版的使用者。
+ *    第 1 題那條路會把已經換到新版的 thread 繼續列成舊版的使用者——所以續接時另記一顆 `session/resumed`（#1138 缺口 2）。
  *
  * 「新舊並存」在今天只有一種形狀：**兩台 serve 行程**（插件清單在啟動時解析一次，見 `loadDefaultPlugins`），
  * 所以這裡起兩台以上的 `runServe`，各自 `--patch` 一份指向不同版本目錄的清單，共用同一個會話根。
@@ -137,6 +137,25 @@ describe('仍在用舊版插件的 thread', () => {
       .sort();
   }
 
+  /**
+   * 「現在」跑哪一版：最後一顆 `session/resumed`（#1138 起續接時寫）的清單，沒有就是 header 那份。
+   * 順序是日誌的順序，所以讀的是整份事件，不只是 header。
+   */
+  async function currentUsersOf(suffix: string): Promise<string[]> {
+    const { sessions } = await store().list({});
+    const users: string[] = [];
+    for (const { header } of sessions) {
+      const opened = await store().open(header.id, 'read');
+      const resumed = (await opened.read()).findLast((event) => event.type === 'session/resumed');
+      const plugins =
+        resumed === undefined
+          ? header.plugins
+          : (resumed.data as { plugins: readonly { name: string }[] }).plugins;
+      if (plugins?.some((row) => row.name.endsWith(suffix))) users.push(header.id);
+    }
+    return users.sort();
+  }
+
   async function types(id: string): Promise<string[]> {
     // 嚴格讀：中段壞掉或 seq 不連續會拋——「日誌不壞」的判準就是它讀得完。
     return (await (await store().open(id, 'read')).read()).map((event) => event.type);
@@ -229,7 +248,7 @@ describe('仍在用舊版插件的 thread', () => {
     expect((await types('old-idle')).at(-1)).toBe('turn/end');
   }, 40_000);
 
-  it('問題 3：換成 v2 之後 resume，走的是 v2、歷史完整；header 不更新', async () => {
+  it('問題 3：換成 v2 之後 resume，走的是 v2、歷史完整；header 不更新，另記的 session/resumed 才是現在', async () => {
     const a = await seedV1();
     await a.close();
     const mark = (await witness()).length;
@@ -259,8 +278,19 @@ describe('仍在用舊版插件的 thread', () => {
     expect(busy).toContain('session/end-seed');
     expect(busy.indexOf('session/end-seed')).toBeGreaterThan(busy.indexOf('model/start'));
 
-    // header 不更新：這兩條現在跑在 v2 上，卻仍被第 1 題那條路列成 v1 的使用者。
+    // header 不更新：這兩條現在跑在 v2，header 仍把它們列成 v1 的使用者……
     expect(await usersOf(V1)).toEqual(['old-busy', 'old-idle']);
     expect(await usersOf(V2)).toEqual([]);
+    // ……所以「現在」看續接時另記的那一顆（#1138 缺口 2）：已經換到 v2，而且 v1 名單上沒有它們了。
+    expect(await currentUsersOf(V1)).toEqual([]);
+    expect(await currentUsersOf(V2)).toEqual(['old-busy', 'old-idle']);
+    // 沒續接過的 `old-*` 以外，header 本來就對。
+    for (const id of ['old-busy', 'old-idle']) {
+      const resumed = (await (await store().open(id, 'read')).read()).filter(
+        (event) => event.type === 'session/resumed',
+      );
+      expect(resumed).toHaveLength(1);
+      expect(resumed[0]?.ignorable).toBe(true);
+    }
   }, 40_000);
 });
