@@ -22,6 +22,7 @@ import type {
   PreToolListener,
   ToolExecution,
 } from './approval.js';
+import type { ApprovalPolicySource, ApprovalPolicyValue } from './approval-policy.js';
 import type { ToolEventSessions } from './containment.js';
 import type { NamedEntry } from './entries.js';
 import {
@@ -48,8 +49,9 @@ function wrapperOf(
   listeners: readonly NamedEntry<PreToolListener>[],
   channel: ApprovalChannel,
   sessions?: ToolEventSessions,
+  policy?: ApprovalPolicySource,
 ): Wrapper {
-  const middleware = createApprovalGateMiddleware(listeners, channel, sessions);
+  const middleware = createApprovalGateMiddleware(listeners, channel, sessions, policy);
   const wrap = (middleware as { wrapToolCall?: Wrapper }).wrapToolCall;
   if (wrap === undefined) throw new Error('這個 middleware 沒有 wrapToolCall');
   return wrap;
@@ -283,5 +285,96 @@ describe('不必問人就確定的拒絕，圖內寫一對 approval/*（#1029）
     )(call().request, call().ran);
     expect(lost.status).toBe('error');
     expect(appended).toEqual([]);
+  });
+});
+
+describe('核准政策 never（#437）：人在，但使用者選了不問', () => {
+  const ask = [entry(() => ({ kind: 'ask' as const, reason: '會動到線上' }))];
+  const human: ApprovalChannel = { kind: 'human' };
+  const codeOf = (result: unknown) => toolErrorOf(result);
+
+  /** 記下 append 的假日誌，同上一組。 */
+  function recording() {
+    const appended: { type: string; data: unknown }[] = [];
+    const sessions: ToolEventSessions = {
+      forCall: () =>
+        ({
+          kind: 'ok',
+          log: { append: (type: string, data: unknown) => void appended.push({ type, data }) },
+        }) as never,
+    };
+    return { sessions, appended };
+  }
+
+  it('管道有人、政策 never → 確定性回絕，不發中斷，說的是「政策是不問」', async () => {
+    const { ran, request } = call();
+    const result = await wrapperOf(ask, human, undefined, () => 'never')(request, ran);
+    expect(ran).not.toHaveBeenCalled();
+    expect(result.status).toBe('error');
+    expect(result.text).toContain('會動到線上');
+    expect(result.text).toContain('核准政策是不問（never）');
+    expect(result.text).toContain('沒有人被問到');
+    expect(codeOf(result)).toEqual({ name: 'ApprovalDenied', code: APPROVAL_POLICY_NEVER });
+  });
+
+  it('**跟「入口沒有人在」是兩句話**——兩個原因收斂成同一句，模型與日誌讀者就分不出誰在、誰選了不問', async () => {
+    const headless = await wrapperOf(ask, { kind: 'policy-never' })(call().request, call().ran);
+    const chosen = await wrapperOf(
+      ask,
+      human,
+      undefined,
+      () => 'never',
+    )(call().request, call().ran);
+    expect(chosen.text).not.toBe(headless.text);
+    expect(headless.text).toContain('關掉了人工核准');
+    expect(chosen.text).not.toContain('關掉了人工核准');
+  });
+
+  it('每次呼叫都讀一次來源：切換之後下一次呼叫就照新的一格（不是組裝時扣進閉包）', async () => {
+    let current: ApprovalPolicyValue = 'never';
+    const wrap = wrapperOf(ask, human, undefined, () => current);
+    expect((await wrap(call().request, call().ran)).status).toBe('error');
+    current = 'ask';
+    // `ask` 時走到 `interrupt()`；在 graph 之外它拋，這一句只用來證明「這次沒有被政策回絕」。
+    await expect(wrap(call().request, call().ran)).rejects.toThrow();
+    current = 'never';
+    expect((await wrap(call().request, call().ran)).status).toBe('error');
+  });
+
+  it('只管要問人的：listener 回 allow 的照跑，回 deny 的照原因回絕', async () => {
+    const allowed = call();
+    await wrapperOf(
+      [entry((_e, next) => next())],
+      human,
+      undefined,
+      () => 'never',
+    )(allowed.request, allowed.ran);
+    expect(allowed.ran).toHaveBeenCalledOnce();
+    const denied = await wrapperOf(
+      [entry(() => ({ kind: 'deny' as const, reason: '規則擋的' }))],
+      human,
+      undefined,
+      () => 'never',
+    )(call().request, call().ran);
+    expect(denied.text).toContain('規則擋的');
+    expect(codeOf(denied)).toEqual({ name: 'PreExecuteDenied', code: TOOL_DENIED_BY_LISTENER });
+  });
+
+  it('管道不是人時，管道自己的理由在前：政策 never 不蓋掉「沒有 checkpointer」', async () => {
+    const result = await wrapperOf(
+      ask,
+      { kind: 'no-channel' },
+      undefined,
+      () => 'never',
+    )(call().request, call().ran);
+    expect(result.text).toContain('沒有 checkpointer');
+    expect(codeOf(result)).toEqual({ name: 'ApprovalDenied', code: APPROVAL_NO_CHANNEL });
+  });
+
+  it('日誌：asked＋decided(rejected) 一對，標可略過，同入口沒有人在那一條', async () => {
+    const { sessions, appended } = recording();
+    await wrapperOf(ask, human, sessions, () => 'never')(call().request, call().ran);
+    expect(appended.map((each) => each.type)).toEqual(['approval/asked', 'approval/decided']);
+    expect(appended[1]?.data).toMatchObject({ outcome: 'rejected' });
   });
 });

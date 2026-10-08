@@ -35,6 +35,7 @@
  * 20 萬字元以上的一則話，推的一側要自己判）。
  */
 
+import type { ApprovalPolicyValue } from './approval-policy.js';
 import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
 import type { GoalId } from './goal.js';
 import type { InboxSplice, SubagentSettleReason } from './inbox.js';
@@ -432,13 +433,38 @@ export interface SessionEventMap {
    * 拒絕**（dsh 同：`approval` 服務在 `never` 政策下直接回 `rejected`）；`cancelled` 是問題在被答之前被收回（按了停止）；
    * `unavailable` 是沒有人可以答（沒有管道）。**fail closed**：除了 `allowed-once` 都不執行。
    *
-   * 「是誰拒的」在 dsh 靠 `approval/policy` 事件分（我們的政策是組裝決定的、不進日誌），所以這裡分不出
-   * 人拒與政策拒；分得出的是那一次 `tool/result` 的碼（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／
+   * 「是誰拒的」在 dsh 靠 `approval/policy` 事件分；我們多一格「入口沒有人在」（不進日誌），所以日誌上分人拒與政策拒
+   * 最準的是那一次 `tool/result` 的碼（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／
    * `APPROVAL_NO_CHANNEL`，見 `tool-events.ts`）。
    */
   'approval/decided': {
     readonly id: string;
     readonly outcome: ApprovalOutcome;
+  };
+  /**
+   * 這個會話的**核准政策**現在是哪一格（[#437](https://github.com/DemianLi/nexus-agent/issues/437)）：`ask` 去問人、`never` 一律回絕。
+   * **每一筆帶整個值**，不是差異。照 dsh 的同名事件（`packages/interaction/user-approval/src/index.ts:100-104`，`5badb15`）。
+   *
+   * ## 誰寫它
+   *
+   * root：`ApprovalPolicyController`（`approval-policy.ts`）接上日誌的當下寫一顆**起始值**，之後每一次真的變了的切換各寫一顆；
+   * 切到已經生效的那一格不寫。**子代理的日誌只有一顆、帶 `source: 'delegation'`**：委派時一律釘成 `never`（照 dsh
+   * `child-agent.ts:254-275`），子代理之後都照它，root 再切不影響——所以要記在子代理自己的日誌上，讀的人才答得出。
+   *
+   * ## 為什麼不標 `ignorable`、而且升格式版本（34）
+   *
+   * 同 `sandbox/mode`、也同 dsh（dsh 的 `append('approval/policy', …)` 沒有略過旗標）：它**左右續接之後的行為**。一台 33 的舊 runtime
+   * 讀到它若只是略過，會把一份記著 `never` 的日誌當 `ask` 續接；拒絕讀才是 fail-closed 的方向。
+   *
+   * ## 缺席的意思
+   *
+   * #437 以前的日誌沒有這一顆：續接時照 `ask` 起算，也就是以前的行為。**入口沒有人在**（CLI、評測）是另一件事，不寫在這裡，
+   * 由組裝時的核准管道表達（`ApprovalChannel`）。
+   */
+  'approval/policy': {
+    readonly policy: ApprovalPolicyValue;
+    /** 子代理日誌上委派時寫的那一顆；省略是 root 的起始值或一次切換。照 dsh 同名欄位。 */
+    readonly source?: 'delegation';
   };
   /**
    * 一次模型呼叫的 token 帳目，**供應商報什麼記什麼**。

@@ -21,6 +21,11 @@ import { randomUUID } from 'node:crypto';
 import { ToolMessage } from '@langchain/core/messages';
 import { interrupt, isGraphBubbleUp } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
+import {
+  APPROVAL_POLICY_SERVICE,
+  DEFAULT_APPROVAL_POLICY,
+  type ApprovalPolicySource,
+} from './approval-policy.js';
 import type { AgentMiddleware } from './base-types.js';
 import type { ToolEventSessions } from './containment.js';
 import type { NamedEntry } from './entries.js';
@@ -339,12 +344,16 @@ function auditDecision(
  * @param listeners - 依註冊順序的 listener。
  * @param channel - 這次組裝有沒有人可以按核准。
  * @param sessions - 記審計事件用的通道（`registry.sessions`）；不給就只回拒絕、不寫 `approval/*`。
+ * @param policy - 核准政策的來源（[#437](https://github.com/DemianLi/nexus-agent/issues/437)），**每次要問人之前問一次**。
+ *   `never` 時確定性回絕、不發中斷；省略即 `ask`（手搭的測試組裝）。只在管道是 `human` 時才讀：管道非人
+ *   （入口沒有人在、沒有 checkpointer）時那兩格自己的拒絕在前，理由說的是「沒有人被問到」的真正原因。
  * @returns 可以交給 `registry.middleware.use()` 或塞進 subagent 的 middleware。
  */
 export function createApprovalGateMiddleware(
   listeners: readonly NamedEntry<PreToolListener>[],
   channel: ApprovalChannel,
   sessions?: ToolEventSessions,
+  policy: ApprovalPolicySource = () => DEFAULT_APPROVAL_POLICY,
 ): AgentMiddleware {
   return createMiddleware({
     name: APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -380,6 +389,19 @@ export function createApprovalGateMiddleware(
           `${because}，但這次組裝沒有 checkpointer，核准之後接不回來，所以沒有執行。` +
             `這不是有人拒絕了它——是沒有可用的核准管道。`,
           approvalDenied(APPROVAL_NO_CHANNEL),
+        );
+      }
+
+      // **政策在管道之後判**：入口沒有人在（上面兩格）是更根本的原因，說的話也不同。dsh 的 `never` 在發問之前就回
+      // `rejected`，不經過任何 listener（`user-approval/src/index.ts:275`）——這裡同樣在 `interrupt()` 之前，且每次呼叫讀一次，
+      // 所以 `/permission` 切換之後下一次呼叫就照新的一格。
+      if (policy() === 'never') {
+        auditDecision(sessions, request, exec, because, 'rejected');
+        return denial(
+          exec,
+          `${because}，但這個 session 的核准政策是不問（never），所以沒有執行。` +
+            `這不是有人拒絕了它——是沒有人被問到。`,
+          approvalDenied(APPROVAL_POLICY_NEVER),
         );
       }
 
@@ -432,7 +454,7 @@ export const APPROVAL_GATE_PLUGIN_NAME = 'approval-gate';
 /**
  * 核准閘門的**設定條目**（[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。
  *
- * **它一顆服務都不註冊、`apply` 是空的，而且它是這幾顆裡唯一關不掉的。** 這一列在場有
+ * **它一顆服務都不註冊、`apply` 除了接核准政策的審計（見 `apply`）什麼都不做，而且它是這幾顆裡唯一關不掉的。** 這一列在場有
  * 兩個各自獨立的理由，兩個都不是「掛上一個功能」：
  *
  * 1. **讓 `disabled: true` 變成失敗，而不是一句讀起來像成功的話。** 這一列不存在的時候，
@@ -461,8 +483,22 @@ export const APPROVAL_GATE_PLUGIN_NAME = 'approval-gate';
  */
 export const approvalGatePlugin: NexusPlugin = {
   name: APPROVAL_GATE_PLUGIN_NAME,
-  apply() {
-    // 空的，而且是承重的空：見上面的檔頭。這一顆唯一的作用是「在場、而且關不掉」。
+  apply(registry) {
+    // **核准政策的審計掛在這一列上**（[#437](https://github.com/DemianLi/nexus-agent/issues/437)）：它關不掉，所以「政策有沒有記進日誌」
+    // 不會因為某個部署少掛了一列而悄悄不成立。控制器本身歸組裝點（`NexusServices.approvalPolicy`），這裡只接線。
+    // 沒有人提供控制器（手搭的測試組裝）就什麼都不接，閘門照 `ask` 判。
+    const controller = registry.services.get(APPROVAL_POLICY_SERVICE);
+    if (controller === undefined) return;
+    registry.sessions.join((subject) => {
+      if (subject.address.kind === 'root') return controller.attach(subject.log);
+      // 子代理：委派時一律釘成 `never`（照 dsh `child-agent.ts:254-275`，fold 為它另建的閘門管道固定 `policy-never`，#324），
+      // 日誌上補一顆讓讀的人答得出。第一次開啟時寫一次；這一份日誌之後沒有人會切它。
+      // 背景續行的子代理被叫醒時日誌是從磁碟讀回來的，已經有這一顆就不再寫。
+      if (!subject.log.events.some((event) => event.type === 'approval/policy')) {
+        subject.log.append('approval/policy', { policy: 'never', source: 'delegation' });
+      }
+      return undefined;
+    });
   },
 };
 

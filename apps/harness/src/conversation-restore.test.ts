@@ -167,6 +167,25 @@ describe('CLI 的 --resume', () => {
   });
 
   /**
+   * 核准政策跟著日誌走（#437）：上一次切成 `never`，`--resume` 之後仍是 `never`，空轉的續接不重釘一顆。
+   * 沒讀日誌的話，控制器照預設 `ask` 起算、日誌尾巴多一顆 `ask`——這條會紅。
+   */
+  it('核准政策跟著日誌走：記著 never 的日誌，續接之後不被預設的 ask 蓋回去', async () => {
+    const runDir = await firstRun();
+    const log = join(runDir, 'cli.jsonl');
+    const policies = async () =>
+      (await readLog(log))
+        .filter((event) => event.type === 'approval/policy')
+        .map((event) => event.data);
+    expect(await policies()).toEqual([{ policy: 'ask' }]);
+    await appendTail(log, [{ type: 'approval/policy', data: { policy: 'never' } }]);
+
+    await cli(['--resume', runDir], '/exit\n');
+    await cli(['--resume', runDir], '/exit\n');
+    expect(await policies()).toEqual([{ policy: 'ask' }, { policy: 'never' }]);
+  });
+
+  /**
    * **斷言的是那一則的字**：拿掉補結果這一步，基座的 `patchToolCallsMiddleware` 照樣補一則（實測），那一輪照樣
    * 不會被供應商拒收——只看「沒被拒收」的話這條驗收有沒有這個功能都綠。
    */
