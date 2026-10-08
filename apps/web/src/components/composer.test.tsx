@@ -45,6 +45,7 @@ function Harness({
   onSubmit = () => {},
   sendHint,
   onSteerQueue,
+  withAttachment = false,
   fileReferences,
   sessionReferences,
 }: {
@@ -54,6 +55,8 @@ function Harness({
   onSubmit?: (draft: string, gesture: SubmitGesture) => void;
   sendHint?: SendHint;
   onSteerQueue?: () => void;
+  /** 草稿裡有一個附件：沒打字也算送得出去。 */
+  withAttachment?: boolean;
   fileReferences?: (query: string, signal: AbortSignal) => Promise<FileReferenceListOutcome>;
   sessionReferences?: (query: string, signal: AbortSignal) => Promise<SessionReferenceListOutcome>;
 }) {
@@ -64,13 +67,22 @@ function Harness({
         draft={draft}
         onDraftChange={setDraft}
         placeholder="說點什麼…"
-        canSend={canSend && draft.trim() !== ''}
+        canSend={canSend && (draft.trim() !== '' || withAttachment)}
         onSubmit={(gesture) => {
           onSubmit(draft, gesture);
           setDraft('');
         }}
         {...(sendHint === undefined ? {} : { sendHint })}
         {...(onSteerQueue === undefined ? {} : { onSteerQueue })}
+        {...(withAttachment
+          ? {
+              attachments: {
+                items: [{ id: 'a1', kind: 'file' as const, file: new File(['x'], 'a.pdf') }],
+                onAdd: () => {},
+                onRemove: () => {},
+              },
+            }
+          : {})}
         commands={[plan, feedback, goal, todo]}
         decorated={new Set(['feedback'])}
         onRunCommand={run}
@@ -151,6 +163,15 @@ describe('送出', () => {
     render(<Harness onSubmit={quiet} />);
     key('Enter', { ctrlKey: true });
     expect(quiet).not.toHaveBeenCalled();
+  });
+
+  it('草稿空白但有附件：Cmd/Ctrl＋Enter 是帶著附件送出，不是把佇列改成插話', () => {
+    const onSteerQueue = vi.fn();
+    const onSubmit = vi.fn();
+    render(<Harness onSteerQueue={onSteerQueue} onSubmit={onSubmit} withAttachment />);
+    key('Enter', { ctrlKey: true });
+    expect(onSteerQueue).not.toHaveBeenCalled();
+    expect(onSubmit).toHaveBeenCalledWith('', 'accelerated');
   });
 
   it('底列提示預設「Enter 送出」，呼叫端可以換掉；寬螢幕才畫的那一段窄螢幕藏起來', () => {

@@ -334,6 +334,12 @@ export interface AnswerEntry {
    * （dsh 的 `ASK_CANCELLED`）。所以它是同一個 kind 裡的一格，不是一則假答案。
    */
   readonly cancelled?: true;
+  /**
+   * 人按了「拒絕」（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)，MCP elicitation）：**明確說不給**，
+   * 不是放棄（`cancelled`）也不是每題跳過。三者在 MCP 那頭是三種動作——`accept`（有 `answers`）、`decline`（本欄）、`cancel`（`cancelled`）。
+   * 只有 {@link PendingQuestion.origin} 是 MCP 反問時才會出現。
+   */
+  readonly declined?: true;
   /** 逐題的答案，順序同問題。空的 `selected` 且沒有 `custom` ＝ 那一題被跳過。 */
   readonly answers: readonly {
     readonly id: string;
@@ -531,10 +537,32 @@ export interface PendingApproval extends PendingCommon {
   readonly allowedDecisions: readonly string[];
 }
 
+/**
+ * 這組問題是哪裡問的（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）。省略＝模型自己問的（`ask_user_question`、計劃審核），
+ * 畫面照舊。
+ *
+ * **超出 dsh**：dsh 的 `mcp-client` 宣告的 client capabilities 是 `{}`（`packages/mcp/mcp-client/src/connection.ts:261`，`5badb150`），
+ * 沒有 elicitation，所以沒有對應物。做它的理由是 demian 2026-10-08 指示（見卡上的 PM 決策）：MCP server 執行到一半反問使用者，
+ * 以前那一次呼叫會落成普通工具錯誤。形狀是我們定的，只加不減：舊 client 不認得這一格時把它當一般提問畫，答法不變。
+ *
+ * 畫面要讓人看得出**是哪台 server、哪支工具在問，用的是什麼有效參數**——一個不說來源的問答卡，讓人不知道自己在回答誰。
+ */
+export interface QuestionOrigin {
+  readonly kind: 'mcp-elicitation';
+  /** 反問的 MCP server 名（設定裡的名字）。 */
+  readonly server: string;
+  /** 那次呼叫的工具名。 */
+  readonly tool: string;
+  /** 那次呼叫的**有效參數**（經過模型與政策之後實際送出的）。純 JSON。 */
+  readonly arguments: unknown;
+}
+
 /** 停在問答點：模型問了一組問題，等人填。 */
 export interface PendingQuestion extends PendingCommon {
   readonly kind: typeof QUESTION_PENDING_KIND;
   readonly questions: readonly QuestionItem[];
+  /** 這組問題是哪裡問的；省略是模型自己問的。見 {@link QuestionOrigin}。 */
+  readonly origin?: QuestionOrigin;
 }
 
 /**
@@ -775,6 +803,40 @@ export function answerResponse(answers: AnswerEntry['answers']): unknown {
 /** 放棄整組問題時送回去的東西。工具據它拋錯，見 `@nexus/plugin-ask-user`。 */
 export function cancelResponse(): unknown {
   return { cancelled: true };
+}
+
+/**
+ * 拒絕整組問題時送回去的東西（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)，只有 MCP 反問有這個動作）。
+ * 與 {@link cancelResponse} 並列：沒有 `declined`／`cancelled` 的回覆就是接受（`{ answers }`），所以舊 client 與舊 server 照常運作。
+ */
+export function declineResponse(): unknown {
+  return { declined: true };
+}
+
+/**
+ * 人拒絕了整組問題。與 {@link appendQuestionCancel} 同一條路，只是留下的紀錄不同。
+ */
+export function appendQuestionDecline(
+  state: ConversationState,
+  interruptId: string,
+): ConversationState {
+  const pending = state.pendings.find((candidate) => candidate.interruptId === interruptId);
+  if (pending === undefined || pending.kind !== QUESTION_PENDING_KIND) {
+    return state;
+  }
+  const entry: AnswerEntry = {
+    kind: 'answer',
+    id: `answer-${pending.interruptId}`,
+    answers: [],
+    declined: true,
+  };
+  const rest = state.pendings.filter((candidate) => candidate.interruptId !== interruptId);
+  return {
+    ...state,
+    entries: [...state.entries, entry],
+    pendings: rest,
+    status: rest.length > 0 ? 'awaiting-input' : 'running',
+  };
 }
 
 /**
@@ -1954,6 +2016,8 @@ interface InputRequestedData {
     readonly actionRequests?: readonly { name: string; args: unknown; description?: string }[];
     readonly reviewConfigs?: readonly { actionName: string; allowedDecisions: string[] }[];
     readonly questions?: readonly QuestionItem[];
+    /** 問答卡的來源（#1098）；省略是模型自己問的。 */
+    readonly origin?: QuestionOrigin;
   };
 }
 
@@ -1995,7 +2059,12 @@ function reduceInputRequested(
       allowedDecisions: intersectDecisions(data.payload?.reviewConfigs ?? []),
     };
   } else if (kind === QUESTION_PENDING_KIND) {
-    incoming = { ...common, kind: QUESTION_PENDING_KIND, questions: data.payload?.questions ?? [] };
+    incoming = {
+      ...common,
+      kind: QUESTION_PENDING_KIND,
+      questions: data.payload?.questions ?? [],
+      ...(data.payload?.origin === undefined ? {} : { origin: data.payload.origin }),
+    };
   } else {
     return {
       ...state,

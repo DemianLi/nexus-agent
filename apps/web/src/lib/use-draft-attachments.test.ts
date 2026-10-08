@@ -84,4 +84,46 @@ describe('草稿附件的狀態', () => {
     unmount();
     expect(revoke.mock.calls).toEqual([['blob:preview-2']]);
   });
+
+  it('超過上限的不收進草稿，並把原因交給 onReject；其餘照收', () => {
+    const onReject = vi.fn();
+    const big = new File(['x'], 'big.png', { type: 'image/png' });
+    Object.defineProperty(big, 'size', { value: 21 * 1024 * 1024 });
+    const { result } = renderHook(() => useDraftAttachments(onReject));
+    act(() => result.current.add([big, pdf('ok.pdf')]));
+    expect(result.current.items.map((item) => item.file.name)).toEqual(['ok.pdf']);
+    expect(onReject).toHaveBeenCalledTimes(1);
+    expect(onReject.mock.calls[0]![0]).toHaveLength(1);
+    expect(onReject.mock.calls[0]![0][0]).toContain('big.png');
+  });
+
+  it('同一個 tick 連加兩批：後一批的張數上限把前一批算進去', () => {
+    const onReject = vi.fn();
+    const { result } = renderHook(() => useDraftAttachments(onReject));
+    act(() => {
+      result.current.add(Array.from({ length: 15 }, (_, i) => png(`a${i}.png`)));
+      result.current.add(Array.from({ length: 15 }, (_, i) => png(`b${i}.png`)));
+    });
+    expect(result.current.items).toHaveLength(20);
+    expect(onReject.mock.calls[0]![0]).toHaveLength(10);
+  });
+
+  it('沒給 onReject 也不拋', () => {
+    const big = new File(['x'], 'big.png', { type: 'image/png' });
+    Object.defineProperty(big, 'size', { value: 21 * 1024 * 1024 });
+    const { result } = renderHook(() => useDraftAttachments());
+    act(() => result.current.add([big]));
+    expect(result.current.items).toEqual([]);
+  });
+
+  it('removeMany：只移掉指定的、只 revoke 它們的預覽網址', () => {
+    const { result } = renderHook(() => useDraftAttachments());
+    act(() => result.current.add([png('1.png'), pdf('2.pdf'), png('3.png')]));
+    const [first, , third] = result.current.items;
+    act(() => result.current.removeMany([first!.id, 'attachment-999']));
+    expect(revoke.mock.calls).toEqual([['blob:preview-1']]);
+    expect(result.current.items.map((item) => item.file.name)).toEqual(['2.pdf', '3.png']);
+    act(() => result.current.removeMany([]));
+    expect(result.current.items.map((item) => item.id)).toContain(third!.id);
+  });
 });

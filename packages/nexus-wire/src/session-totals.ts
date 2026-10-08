@@ -49,6 +49,19 @@ export interface WireTokenUsage {
   readonly inputTokens: number;
   /** root 每一次回應的 token 數加總。 */
   readonly outputTokens: number;
+  /**
+   * 以下三格是 [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，**選填、過渡期**：照 dsh 的投影名
+   * （`packages/llm/token-meter/src/usage-projection.ts:21-25`，`5badb150`），四桶互不重疊——未快取的輸入、快取讀、快取寫、輸出。
+   * **舊的 `inputTokens` 語義不動**（照舊含快取讀取），web 換到新欄位之後才拿掉它。
+   *
+   * **缺席是「沒記」，不是 0**：寫下這些的 server 才會送；舊日誌、供應商沒報快取細節的呼叫都沒有，畫面要把「沒記」與「0」分開
+   * （快取命中率的分母不能混進沒記的）。
+   */
+  readonly uncachedInputTokens?: number;
+  /** 命中快取、從快取讀出來的輸入 token 加總。缺席＝沒記。 */
+  readonly cacheReadTokens?: number;
+  /** 寫進快取的輸入 token 加總。缺席＝沒記。 */
+  readonly cacheWriteTokens?: number;
 }
 
 /** {@link SESSION_STATS} 的 `payload`，也是 `ConversationState.sessionStats`。 */

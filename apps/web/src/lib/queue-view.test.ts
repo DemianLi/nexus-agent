@@ -75,6 +75,14 @@ describe('canSendText（Q2）', () => {
     expect(canSendText(false, 'idle', '一句話')).toBe(false);
     expect(canSendText(true, 'idle', '   ')).toBe(false);
   });
+
+  it('有附件時空白文字也放行（文字或附件至少一個）；斷線與停在核准點照擋', () => {
+    expect(canSendText(true, 'idle', '', true)).toBe(true);
+    expect(canSendText(true, 'running', '   ', true)).toBe(true);
+    expect(canSendText(false, 'idle', '', true)).toBe(false);
+    expect(canSendText(true, 'awaiting-input', '', true)).toBe(false);
+    expect(canSendText(true, 'idle', '', false)).toBe(false);
+  });
 });
 
 describe('canRunSlash', () => {

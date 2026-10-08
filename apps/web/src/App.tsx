@@ -66,6 +66,7 @@ import { permissionLocked } from '@/lib/permission-presets';
 import { pendingSteers } from '@/lib/steer-view';
 import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
+import { prepareAttachments } from '@/lib/attachment-send';
 import { useDraftAttachments } from '@/lib/use-draft-attachments';
 
 /**
@@ -331,7 +332,11 @@ function ConversationView({
   }, [title]);
   const [draft, setDraft] = useState('');
   // 草稿附件（#733）。伺服器不收附件時不傳給輸入框，整個功能不出現；上傳與送出帶收據等 #732 的連線協定。
-  const draftAttachments = useDraftAttachments();
+  const draftAttachments = useDraftAttachments((messages) => {
+    toast.error('有附件沒加進來', { description: messages.join('\n') });
+  });
+  // 附件送出中（上傳、編碼、等伺服器收下）：這段時間不收第二次送出。
+  const [sendingAttachments, setSendingAttachments] = useState(false);
   // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
   const lastDialog = useRef(conversation.feedbackDialog);
   // **每打開一次就是一張新表單**（跟以前關掉就卸掉一樣）：同一則關掉再開，草稿不留。
@@ -385,12 +390,14 @@ function ConversationView({
   const isModelLine = (line: string) =>
     modelSeat !== null &&
     parseModelLine(line, modelSeat.catalog, modelSeat.selection) !== undefined;
+  // 功能開著且草稿裡有附件：沒打字也送得出去（文字或附件至少一個）。
+  const hasDraftAttachments = serverSupportsAttachments() && draftAttachments.items.length > 0;
   const canSendLine = (line: string) =>
     isModelLine(line)
       ? conversation.connected
       : line.trim().startsWith('/')
         ? canRunSlash(conversation.connected, status, line, FEEDBACK_COMMAND_LINE)
-        : canSendText(conversation.connected, status, line);
+        : canSendText(conversation.connected, status, line, hasDraftAttachments);
   /**
    * 執行一行 `/model`。不是 `/model` 回 `undefined`（走一般流程）；打不開、找不到那顆回 `false`（那一行留在草稿，
    * 看得到為什麼）；其餘回 `true`。
@@ -412,7 +419,7 @@ function ConversationView({
     });
     return true;
   };
-  const canSend = canSendLine(draft);
+  const canSend = canSendLine(draft) && !sendingAttachments;
   const hasModelSeat = modelSeat !== null;
   const commands = useMemo(
     () =>
@@ -686,7 +693,27 @@ function ConversationView({
                   setDraft('');
                   // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。
                   const mode = resolveSubmitMode(conversation.state.status, gesture);
-                  void conversation.send(text, mode).then((rejected) => {
+                  // 只有功能開著才帶附件；`/` 開頭的是命令，不帶（附件留在草稿裡）。
+                  const items =
+                    serverSupportsAttachments() && !text.trim().startsWith('/')
+                      ? draftAttachments.items
+                      : [];
+                  void (async () => {
+                    if (items.length === 0) return conversation.send(text, mode);
+                    setSendingAttachments(true);
+                    try {
+                      const prepared = await prepareAttachments(client, threadId, items);
+                      if (prepared.kind === 'failed') return { message: prepared.message };
+                      const rejected = await conversation.send(text, mode, prepared.attachments);
+                      // 收下了才移掉這一批；送出期間才加進來的留著。沒收下就全留著，連同草稿。
+                      if (rejected === undefined) {
+                        draftAttachments.removeMany(items.map((item) => item.id));
+                      }
+                      return rejected;
+                    } finally {
+                      setSendingAttachments(false);
+                    }
+                  })().then((rejected) => {
                     if (rejected === undefined) return;
                     // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。
                     setDraft((current) => (current === '' ? text : current));

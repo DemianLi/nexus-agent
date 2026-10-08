@@ -97,6 +97,82 @@ describe('modelCatalog／selectModel／permissionCatalog', () => {
   });
 });
 
+describe('thread 釘選／封存／改名', () => {
+  it('五支都在 RPC 白名單裡，送到 /commands/:method，params 照契約', async () => {
+    for (const method of [
+      'thread.pin',
+      'thread.unpin',
+      'thread.archive',
+      'thread.unarchive',
+      'thread.rename',
+    ]) {
+      expect(isRpcMethod(method), method).toBe(true);
+    }
+    expect(isRpcMethod('thread.delete')).toBe(false);
+    const { client, seen } = recording(() =>
+      Response.json({ type: 'success', id: 1, result: { ok: true, value: {} } }),
+    );
+    await client.threadPin('t');
+    await client.threadUnpin('t');
+    await client.threadArchive('t');
+    await client.threadArchive('t', { stopActivity: true });
+    await client.threadUnarchive('t');
+    await client.threadRename('t', '新標題');
+    expect(seen.map((s) => [s.url, s.body])).toEqual([
+      [
+        `http://agent.test${commandPath('t', 'thread.pin')}`,
+        { id: 1, method: 'thread.pin', params: {} },
+      ],
+      [
+        `http://agent.test${commandPath('t', 'thread.unpin')}`,
+        { id: 2, method: 'thread.unpin', params: {} },
+      ],
+      // 省略 stopActivity 就不放這個 key：舊 server 與預設（不停活動）一致。
+      [
+        `http://agent.test${commandPath('t', 'thread.archive')}`,
+        { id: 3, method: 'thread.archive', params: {} },
+      ],
+      [
+        `http://agent.test${commandPath('t', 'thread.archive')}`,
+        { id: 4, method: 'thread.archive', params: { stopActivity: true } },
+      ],
+      [
+        `http://agent.test${commandPath('t', 'thread.unarchive')}`,
+        { id: 5, method: 'thread.unarchive', params: {} },
+      ],
+      [
+        `http://agent.test${commandPath('t', 'thread.rename')}`,
+        { id: 6, method: 'thread.rename', params: { title: '新標題' } },
+      ],
+    ]);
+  });
+
+  it('業務失敗在 result 裡（thread_archived、thread_active、title_invalid），不是 rejected', async () => {
+    const respondWith = (error: unknown) =>
+      recording(() => Response.json({ type: 'success', id: 1, result: { ok: false, error } }))
+        .client;
+    expect(await respondWith({ code: 'thread_archived' }).threadPin('t')).toEqual({
+      kind: 'ok',
+      result: { ok: false, error: { code: 'thread_archived' } },
+    });
+    expect(await respondWith({ code: 'thread_active' }).threadArchive('t')).toEqual({
+      kind: 'ok',
+      result: { ok: false, error: { code: 'thread_active' } },
+    });
+    expect(await respondWith({ code: 'title_invalid' }).threadRename('t', '')).toEqual({
+      kind: 'ok',
+      result: { ok: false, error: { code: 'title_invalid' } },
+    });
+  });
+
+  it('not_supported 是 rejected 帶碼', async () => {
+    const { client } = recording(notSupported);
+    const expected = { kind: 'rejected', code: 'not_supported', message: '還沒做' };
+    expect(await client.threadPin('t')).toEqual(expected);
+    expect(await client.threadRename('t', 'x')).toEqual(expected);
+  });
+});
+
 describe('uploadFile', () => {
   it('POST 原始位元組，content-type 是 octet-stream，檔名走 name 查詢參數', async () => {
     const { client, seen } = recording(() =>

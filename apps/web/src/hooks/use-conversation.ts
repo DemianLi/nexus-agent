@@ -9,6 +9,7 @@
 import type {
   AnswerEntry,
   ConversationState,
+  PromptAttachment,
   SlashDescriptor,
   QueueSteerAction,
   QueueUpdateAction,
@@ -37,6 +38,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createAgentClient } from '@/lib/agent';
+import { attachmentRejectionText } from '@/lib/attachment-send';
 import { createConversationStore } from '@/lib/conversation-store';
 import type { ConversationStore } from '@/lib/conversation-store';
 import { FEEDBACK_COMMAND_LINE, FEEDBACK_COPY } from '@/lib/feedback';
@@ -168,8 +170,17 @@ export interface Conversation {
    *
    * `mode` 是 `steer` 時送插話（#710）：跑著的這一輪下一步就送進模型，被領走時由 `inbox` 的 `claimedNextStep` 畫人的
    * 泡泡。斜線命令不看它。省略就是排隊。
+   *
+   * `attachments` 是已經準備好的附件（圖內嵌、檔案是收據，`lib/attachment-send.ts`），放進 `run.start`；斜線命令不看它。
+   * 文字可以是空的，只要附件至少一個（只有附件的一句話）。
+   * 伺服器不收（`not_supported`）或目前的模型不收圖（`model_does_not_support_images`）時回 {@link SendRejected}，
+   * 訊息是講給人聽的話。
    */
-  send(text: string, mode?: RunStartMode): Promise<SendRejected | undefined>;
+  send(
+    text: string,
+    mode?: RunStartMode,
+    attachments?: readonly PromptAttachment[],
+  ): Promise<SendRejected | undefined>;
   /**
    * 退出計劃模式（#900）：送 `/plan off`，走跟打字送出同一條 `slash.run`。**結果由呼叫端自己畫**——回 `undefined` 是
    * 命令成功（標籤等線上的值翻回關著才消失），回字串是失敗的原因（被拒、不認得、命令回錯誤）。不碰
@@ -526,9 +537,15 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   }, [threadId]);
 
   const send = useCallback(
-    async (text: string, mode?: RunStartMode): Promise<SendRejected | undefined> => {
+    async (
+      text: string,
+      mode?: RunStartMode,
+      attachments?: readonly PromptAttachment[],
+    ): Promise<SendRejected | undefined> => {
       const trimmed = text.trim();
-      if (trimmed === '') {
+      const hasAttachments = attachments !== undefined && attachments.length > 0;
+      // 文字或附件至少一個；只有附件時文字是空字串，照樣送。
+      if (trimmed === '' && !hasAttachments) {
         return undefined;
       }
       if (trimmed === FEEDBACK_COMMAND_LINE) {
@@ -547,15 +564,21 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setSlashNotice(undefined);
       let result: UplinkResult;
       try {
-        // 排隊不帶 `mode`：它是預設，送出的封包跟插話之前一樣。
+        // 排隊不帶 `mode`、沒有附件不帶 `attachments`：都是預設，送出的封包跟以前一樣。
+        const options = {
+          ...(mode === 'steer' ? { mode } : {}),
+          ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
+        };
         result =
-          mode === 'steer'
-            ? await clientRef.current.runStart(threadId, trimmed, { mode })
-            : await clientRef.current.runStart(threadId, trimmed);
+          Object.keys(options).length === 0
+            ? await clientRef.current.runStart(threadId, trimmed)
+            : await clientRef.current.runStart(threadId, trimmed, options);
       } catch (error) {
         return { message: error instanceof Error ? error.message : String(error) };
       }
-      if (result.type === 'error') return { message: result.message };
+      if (result.type === 'error') {
+        return { message: attachmentRejectionText(result.error) ?? result.message };
+      }
       setCommandError(undefined);
       return undefined;
     },

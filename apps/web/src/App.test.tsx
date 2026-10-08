@@ -19,6 +19,7 @@ import {
   CONTEXT_MEASURE,
   formatSessionReferenceMention,
   GOAL,
+  MODEL_DOES_NOT_SUPPORT_IMAGES,
   MODEL_USAGE,
   PLAN_MODE,
   PROJECTION,
@@ -78,12 +79,20 @@ function memoryStorage(): Storage {
   };
 }
 
+// 附件功能的開關今天寫死 false（#733）：整條送出路徑的測試把它打開，其餘照舊。
+const attachmentGate = vi.hoisted(() => ({ on: false }));
+vi.mock('@/lib/attachments', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/attachments')>()),
+  serverSupportsAttachments: () => attachmentGate.on,
+}));
+
 // App 會把 thread id 記進 `localStorage`；每條一份新的，不然下一條測試就成了「接回上一次」。
 beforeEach(() => {
   vi.stubGlobal('localStorage', memoryStorage());
 });
 
 afterEach(() => {
+  attachmentGate.on = false;
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -3808,5 +3817,268 @@ describe('權限座（#437）', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(slashed).toEqual([]);
     expect(screen.queryByRole('alertdialog')).toBeNull();
+  });
+});
+
+describe('附件送出（#733、#732）', () => {
+  beforeEach(() => {
+    attachmentGate.on = true;
+    URL.createObjectURL = vi.fn(() => 'blob:preview');
+    URL.revokeObjectURL = vi.fn();
+  });
+
+  const png = (name = 'shot.png') => new File(['PNG'], name, { type: 'image/png' });
+  const pdf = (name = 'plan.pdf') => new File(['PDF'], name, { type: 'application/pdf' });
+
+  /** 接好上傳與送出的假 client：`runStart` 記下每次的參數，`uploadFile` 回 `r-<檔名>`。 */
+  function withUploads(
+    runStartResult: UplinkResult = { type: 'success', id: 1, result: { run_id: 'run-1' } },
+  ) {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const uploads: { threadId: string; name: string | undefined }[] = [];
+    const runStart = vi.fn(async (..._args: Parameters<WireClient['runStart']>) => runStartResult);
+    const client: WireClient = {
+      ...fake.client,
+      runStart,
+      uploadFile: async (threadId, _body, name) => {
+        uploads.push({ threadId, name });
+        return { kind: 'ok', receipt: { receiptId: `r-${name}`, name: name ?? '', bytes: 3 } };
+      },
+    };
+    return { ...fake, client, runStart, uploads };
+  }
+
+  const addFiles = (files: File[]) =>
+    fireEvent.change(screen.getByTestId('attachment-input'), { target: { files } });
+  const input = () => screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+  const chips = () => screen.queryAllByTestId('draft-attachment');
+  const send = (text: string) => {
+    fireEvent.change(input(), { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+  };
+
+  it('圖內嵌、檔案先上傳換收據，照選取順序帶進 run.start；收下後草稿與附件都清掉', async () => {
+    const { client, runStart, uploads } = withUploads();
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([png('a.png'), pdf('b.pdf'), png('c.png')]);
+    expect(chips()).toHaveLength(3);
+    send('看這幾個');
+
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    const [threadId, text, options] = runStart.mock.calls[0]!;
+    expect(text).toBe('看這幾個');
+    expect(options?.attachments).toEqual([
+      { type: 'image', mediaType: 'image/png', data: btoa('PNG'), name: 'a.png' },
+      { type: 'file', receiptId: 'r-b.pdf' },
+      { type: 'image', mediaType: 'image/png', data: btoa('PNG'), name: 'c.png' },
+    ]);
+    // 只有檔案上傳，傳到的是同一條 thread。
+    expect(uploads).toEqual([{ threadId, name: 'b.pdf' }]);
+    await waitFor(() => expect(chips()).toHaveLength(0));
+    expect(input().value).toBe('');
+  });
+
+  it('只有附件、沒打字也送得出去：文字是空字串，附件照帶；沒附件沒文字仍送不出', async () => {
+    const { client, runStart } = withUploads();
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    const sendButton = () => screen.getByRole('button', { name: '送出' });
+
+    expect(sendButton().hasAttribute('disabled')).toBe(true);
+    addFiles([png('a.png'), pdf('b.pdf')]);
+    expect(input().value).toBe('');
+    await waitFor(() => expect(sendButton().hasAttribute('disabled')).toBe(false));
+    fireEvent.click(sendButton());
+
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    const [, text, options] = runStart.mock.calls[0]!;
+    expect(text).toBe('');
+    expect(options?.attachments).toEqual([
+      { type: 'image', mediaType: 'image/png', data: btoa('PNG'), name: 'a.png' },
+      { type: 'file', receiptId: 'r-b.pdf' },
+    ]);
+    await waitFor(() => expect(chips()).toHaveLength(0));
+    expect(sendButton().hasAttribute('disabled')).toBe(true);
+  });
+
+  it('只有附件時 Enter 也送；Cmd+Enter 是帶著附件插話，不是把佇列改成插話', async () => {
+    const { client, runStart } = withUploads();
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([png('a.png')]);
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(runStart.mock.calls[0]![1]).toBe('');
+
+    addFiles([png('b.png')]);
+    fireEvent.keyDown(input(), { key: 'Enter', metaKey: true, ctrlKey: true });
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(2));
+    expect(runStart.mock.calls[1]![2]?.attachments).toHaveLength(1);
+  });
+
+  it('被拒時只有附件的那句：附件留著，草稿維持空白', async () => {
+    const { client, runStart } = withUploads({
+      type: 'error',
+      id: 1,
+      error: 'invalid_argument',
+      message: '只有附件的那句被拒了（伺服器的話）',
+    });
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    addFiles([png('a.png')]);
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/只有附件的那句被拒了/u)).toBeTruthy();
+    expect(chips()).toHaveLength(1);
+    expect(input().value).toBe('');
+  });
+
+  it('沒有附件：run.start 的參數跟以前一樣（沒有 attachments 這個鍵）', async () => {
+    const { client, runStart, uploads } = withUploads();
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    send('只有字');
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(runStart.mock.calls[0]!.length).toBe(2);
+    expect(uploads).toEqual([]);
+  });
+
+  it.each([
+    [
+      '目前的模型不收圖',
+      { type: 'error', id: 1, error: MODEL_DOES_NOT_SUPPORT_IMAGES, message: 'model rejects' },
+      '目前的模型不收圖片',
+    ],
+    [
+      '伺服器不收附件',
+      { type: 'error', id: 1, error: 'not_supported', message: 'no attachment store' },
+      '這個伺服器不收附件。',
+    ],
+    [
+      '別的原因',
+      { type: 'error', id: 1, error: 'invalid_argument', message: '圖太大了（伺服器的話）' },
+      '圖太大了（伺服器的話）',
+    ],
+  ] as const)('被拒（%s）：說原因，草稿與附件都留著', async (_case, result, shown) => {
+    const { client, runStart } = withUploads(result as UplinkResult);
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([png('a.png'), pdf('b.pdf')]);
+    send('這句會被拒');
+
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(new RegExp(shown, 'u'))).toBeTruthy();
+    await waitFor(() => expect(input().value).toBe('這句會被拒'));
+    expect(chips()).toHaveLength(2);
+  });
+
+  it('上傳失敗：這句不送，說原因，草稿與附件留著；再按一次會重傳', async () => {
+    const { client, runStart, uploads } = withUploads();
+    let failing = true;
+    const failingClient: WireClient = {
+      ...client,
+      uploadFile: async (threadId, body, name, signal) => {
+        if (failing) return { kind: 'rejected', message: '磁碟滿了' };
+        return client.uploadFile(threadId, body, name, signal);
+      },
+    };
+    render(<App client={failingClient} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([pdf('b.pdf')]);
+    send('帶檔案');
+    expect(await screen.findByText('「b.pdf」上傳失敗：磁碟滿了')).toBeTruthy();
+    expect(runStart).not.toHaveBeenCalled();
+    await waitFor(() => expect(input().value).toBe('帶檔案'));
+    expect(chips()).toHaveLength(1);
+
+    failing = false;
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(uploads).toEqual([{ threadId: expect.any(String), name: 'b.pdf' }]);
+  });
+
+  it('送出中不收第二次送出', async () => {
+    const { client, runStart } = withUploads();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow: WireClient = {
+      ...client,
+      uploadFile: async (threadId, body, name, signal) => {
+        await gate;
+        return client.uploadFile(threadId, body, name, signal);
+      },
+    };
+    render(<App client={slow} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([pdf('b.pdf')]);
+    send('第一句');
+    fireEvent.change(input(), { target: { value: '第二句' } });
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(true),
+    );
+    release();
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(runStart.mock.calls[0]![1]).toBe('第一句');
+  });
+
+  it('送出期間才加進來的附件，收下後留著；只清掉送出的那一批', async () => {
+    const { client, runStart } = withUploads();
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const slow: WireClient = {
+      ...client,
+      uploadFile: async (threadId, body, name, signal) => {
+        await gate;
+        return client.uploadFile(threadId, body, name, signal);
+      },
+    };
+    render(<App client={slow} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([pdf('first.pdf')]);
+    send('第一句');
+    addFiles([pdf('late.pdf')]);
+    release();
+
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(chips()).toHaveLength(1));
+    expect(chips()[0]!.textContent).toContain('late.pdf');
+  });
+
+  it('斜線命令不帶附件，附件留在草稿裡', async () => {
+    const fake = withUploads();
+    render(<App client={fake.client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([pdf('b.pdf')]);
+    send('/plan');
+    await waitFor(() => expect(fake.slashed).toEqual(['/plan']));
+    expect(fake.runStart).not.toHaveBeenCalled();
+    expect(fake.uploads).toEqual([]);
+    expect(chips()).toHaveLength(1);
+  });
+
+  it('超過上限的圖不收進草稿，並說原因', async () => {
+    const { client } = withUploads();
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    const big = png('big.png');
+    Object.defineProperty(big, 'size', { value: 25 * 1024 * 1024 });
+    addFiles([big, pdf('ok.pdf')]);
+
+    expect(await screen.findByText(/「big.png」有 25.0 MB/u)).toBeTruthy();
+    expect(chips().map((chip) => chip.textContent)).toEqual([expect.stringContaining('ok.pdf')]);
   });
 });
