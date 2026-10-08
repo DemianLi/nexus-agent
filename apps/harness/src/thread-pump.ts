@@ -93,8 +93,10 @@ import {
   TURN_CANCEL_CONFIG_KEY,
   toLoggedMessage,
   turnReachedMaxTokens,
+  userContent,
   withModelCall,
   type ApprovalOutcome,
+  type AttachmentRef,
   type InboxSplice,
   type InboxState,
   type ProjectionFold,
@@ -292,7 +294,11 @@ function pumpInputOf(item: QueuedInput): PumpInput {
   const source = item.source;
   switch (source.kind) {
     case 'user':
-      return { kind: 'message', text: item.text };
+      return {
+        kind: 'message',
+        text: item.text,
+        ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
+      };
     case 'subagent-settled':
       return {
         kind: 'subagent-settled',
@@ -355,6 +361,11 @@ export type PumpInput =
        * 不收了（閒著、按了停止、正在收尾）就排到 `next-turn` 的**頭**，照樣開一輪。見 {@link ThreadPump.submit}。
        */
       readonly steer?: true;
+      /**
+       * 這句話帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)），照選取順序，只放參照；呼叫端（`run.start`）
+       * 已經收過收據、驗過圖。空陣列與省略同義，進佇列前正規化成省略。
+       */
+      readonly attachments?: readonly AttachmentRef[];
     }
   | {
       readonly kind: 'resume';
@@ -709,7 +720,13 @@ function cardNamespace(address: SessionAddress): readonly string[] {
 function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
   switch (input.kind) {
     case 'message':
-      return { kind: 'message', text: input.text };
+      return {
+        kind: 'message',
+        text: input.text,
+        ...(input.attachments === undefined || input.attachments.length === 0
+          ? {}
+          : { attachments: input.attachments }),
+      };
     case 'resume':
       return { kind: 'resume' };
     case 'subagent-settled':
@@ -1539,7 +1556,14 @@ export class ThreadPump {
     }
     if (input.kind === 'message') {
       const id = input.id ?? crypto.randomUUID();
-      const item: QueuedInput = { id, text: input.text, source: { kind: 'user' } };
+      const item: QueuedInput = {
+        id,
+        text: input.text,
+        source: { kind: 'user' },
+        ...(input.attachments === undefined || input.attachments.length === 0
+          ? {}
+          : { attachments: input.attachments }),
+      };
       const steer = input.steer === true;
       const intoStep = steer && this.#acceptsSteer();
       try {
@@ -2115,7 +2139,10 @@ export class ThreadPump {
     jobs.forEach((job, index) => {
       if (job.text !== undefined) {
         // **id 就是佇列裡那一件的 id**：日誌、checkpoint、推回模型的那一則是同一則，reducer 照 id 對得上。
-        const message = new HumanMessage({ content: job.text.text, id: job.text.id });
+        const message = new HumanMessage({
+          content: userContent(job.text.text, job.text.attachments) as never,
+          id: job.text.id,
+        });
         this.#sessions.root.append('user/message', {
           message: toLoggedMessage(message),
           source: userMessageSourceOf(job.text.source),

@@ -35,6 +35,7 @@
  * 20 萬字元以上的一則話，推的一側要自己判）。
  */
 
+import type { AttachmentRef } from './attachment-ref.js';
 import type { ModelRoute } from './model-route.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
 import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
@@ -326,7 +327,18 @@ export interface SessionEventMap {
    * 而那正是這個判別欄要擋的東西。
    */
   'turn/start':
-    | { readonly kind: 'message'; readonly text: string }
+    | {
+        readonly kind: 'message';
+        readonly text: string;
+        /**
+         * 這句話帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)），照選取順序，**只放參照**：位元組在日誌之外
+         * （`apps/harness` 的 `attachment-store.ts`）。沒有附件就整個不放這個 key。送進模型的 `HumanMessage` 由它和 `text` 造
+         * （`message-source.ts` 的 `humanMessageForTurnStart`），重放用同一個函式。
+         *
+         * **格式 38 起才有**，而且不標 `ignorable`：一台 37 的 runtime 讀到會把它略過，排著的項目被折回來重跑時附件就悄悄不見了。
+         */
+        readonly attachments?: readonly AttachmentRef[];
+      }
     | { readonly kind: 'resume' }
     | {
         readonly kind: 'agent-message';

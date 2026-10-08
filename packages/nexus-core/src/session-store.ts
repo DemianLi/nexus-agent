@@ -452,8 +452,19 @@ import type { SessionEvent } from './session-log.js';
  *
  * **讀舊檔**：36 以前沒有這兩樣，續接時走部署預設、不補寫歷史；舊日誌上沒有路由，所以第一次選了別顆之後也不附換模型的通知
  * （沒有「上一次走的是誰」可比）。
+ *
+ * ## 38：訊息帶附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）
+ *
+ * 人送出的一句話可以帶檔案與圖片。位元組在日誌之外（附件儲存，內容定址），日誌與存檔點只留**參照**：`inbox/spliced` 裡那一件
+ * （`QueuedInput`）與 `turn/start`（`kind: 'message'`）各多一格選填的 `attachments`（`AttachmentRef` 的陣列，照選取順序），
+ * 輪中插話被領走時記的 `user/message` 的 `HumanMessage` 內容多了 `nexus-file`／`nexus-image` 區塊。
+ *
+ * **升版，不標 `ignorable`——而且前例（#1021、#1022 的觀測欄位）不適用**：那兩次的欄位只供觀測，這次的欄位**左右續接之後的行為**。
+ * 一台 37 的 runtime 讀到新檔會把 `attachments` 略過：排著的項目被折回來重跑時附件悄悄消失，模型收到一句缺了檔案的話，沒有任何東西報錯。
+ *
+ * **讀舊檔**：37 以前沒有這一格，等於沒有附件，不補寫歷史。
  */
-export const SESSION_LOG_FORMAT_VERSION = 37;
+export const SESSION_LOG_FORMAT_VERSION = 38;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

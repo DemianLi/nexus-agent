@@ -1,6 +1,7 @@
 import { ContextOverflowError } from '@langchain/core/errors';
 import { MiddlewareError } from 'langchain';
 import { ChatOpenAI } from '@langchain/openai';
+import type { ChatOpenAIFields } from '@langchain/openai';
 import {
   beginAttemptReport,
   noteFailedAttempt,
@@ -9,12 +10,15 @@ import {
 } from '@nexus/core';
 import type { AttemptUsage, LlmFailure } from '@nexus/core';
 
+import { AttachmentChatOpenAI } from './attachment-chat-openai.js';
+import { projectAttachments } from './attachment-projection.js';
+import type { AttachmentSource } from './attachment-projection.js';
 import { resolveHarnessHome } from './harness-home.js';
 import { ambientCredentials, createCredentialService } from './credentials.js';
 import type { CredentialService } from './credentials.js';
 import { legacyEnvMovedError, loadLaunchEnv } from './launch-env.js';
 import type { LaunchEnvironment } from './launch-env.js';
-import { requireModelEntry, thinkingOffBody } from './model-catalog.js';
+import { acceptsImages, requireModelEntry, thinkingOffBody } from './model-catalog.js';
 import type { ModelEntry } from './model-catalog.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 
@@ -1008,6 +1012,11 @@ export function createLiveModel(
      * `thinkingOffBody`，同標題那一顆的做法。條目沒宣告 `off` 或沒有 chat template 參數時什麼都不加。
      */
     readonly thinkingOff?: boolean;
+    /**
+     * 附件儲存（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：給了就建會在送出請求前把附件參照換成模型看得懂的
+     * 東西的子類（`attachment-chat-openai.ts`）。對話那條路（root，與可以換成的別顆）給；標題與背景子代理的模型不會看到附件參照。
+     */
+    readonly attachments?: AttachmentSource;
   } = {},
 ): ChatOpenAI {
   // 型錄沒有這個 id 就拋，訊息指名 id：設定的 schema 已經擋過一次，這裡是手搭設定的呼叫端（測試、eval）的最後一道。
@@ -1017,7 +1026,7 @@ export function createLiveModel(
   // 請求時的那一次負責受管檔在兩個請求之間被拿掉的情況。
   if (credentials.resolve(LIVE_API_KEY_ENV) === undefined) throw new Error(missingKeyMessage());
 
-  const instance = new ChatOpenAI({
+  const fields: ChatOpenAIFields = {
     model: config.modelId,
     // `fetch` 疊三層（再加最內層貼著底層 fetch 的串流用量回報，#1022，只旁讀不改位元組）：最內層是 #592（送出前換掉空的助手內容），中間是 #516（串流內回報的錯誤
     // 翻成 HTTP 錯誤回應，才進得了重試射程），外層是 #521（第一則事件之後的閒置逾時）。外層收到的
@@ -1056,7 +1065,15 @@ export function createLiveModel(
       Object.keys(thinkingOffBody(entry)).length > 0 && {
         modelKwargs: thinkingOffBody(entry),
       }),
-  });
+  };
+  // 帶了附件儲存的才用會投影附件的子類（#732）：沒有儲存就不會有附件參照進得了請求，也就不需要它。
+  const attachments = overrides.attachments;
+  const instance =
+    attachments === undefined
+      ? new ChatOpenAI(fields)
+      : new AttachmentChatOpenAI(fields, (messages) =>
+          projectAttachments(messages, attachments, acceptsImages(entry)),
+        );
   // 對話那一顆（含子代理）貼路由標籤（#723）：`model/start.route`、換模型通知與系統提示詞的 `{{model}}` 讀它。標題等別的用途不貼——
   // 它們不是對話的請求，不該冒充「最近一次請求走的路由」。
   return purpose === undefined

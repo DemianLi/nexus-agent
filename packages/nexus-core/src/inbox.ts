@@ -25,6 +25,8 @@
  * @module
  */
 
+import type { AttachmentRef } from './attachment-ref.js';
+
 /**
  * 一個背景子代理怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：結算通知的原因，四種。
  * 給模型看的那句英文（`summary`）由它決定，畫面的字也由它決定——畫面不解析英文句，認這個列舉。
@@ -62,13 +64,19 @@ export type QueuedInputSource =
 /**
  * 排著的一件。
  *
- * **對 dsh 的偏離**：dsh 的 `UserMessage.content` 收圖片與檔案，我們的 `run.start` 只收文字，所以這裡是 `text`。
+ * **對 dsh 的偏離**：dsh 的 `UserMessage.content` 是一串內容區塊（文字、圖片、檔案），我們是 `text` 加一格選填的 `attachments`：
+ * `run.start` 的文字欄位本來就是獨立的，附件另開一個陣列（`@nexus/wire` 的 `attachments.ts` 偏離 3）。
  */
 export interface QueuedInput {
   /** 就是 `run.start` 回給呼叫端的 `run_id`。改過之後不變。 */
   readonly id: string;
   readonly text: string;
   readonly source: QueuedInputSource;
+  /**
+   * 這一件帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)），照選取順序，只放參照。沒有就整個不放這個 key。
+   * 改文字（`updateQueue` 的 `edit`）時原樣保留。**格式 38 起才有**，不標 `ignorable`（見 `session-store.ts`）。
+   */
+  readonly attachments?: readonly AttachmentRef[];
 }
 
 /** 一次變動。形狀照 dsh 的 `agent/inbox/spliced`。 */

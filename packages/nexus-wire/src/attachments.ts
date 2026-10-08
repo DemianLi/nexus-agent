@@ -3,7 +3,8 @@
  *
  * **契約**：路徑、收據的型別、送訊息帶收據的欄位、client 方法。**上傳路徑 server 端已實作**（`apps/harness` 的
  * `attachment-store.ts` 與 `wire-handler.ts`）：沒有附件儲存的組裝仍回 `not_supported`，web 據這個碼把附件列藏起來。
- * `run.start` 帶 {@link PromptAttachment} 的收下還沒做，那時一律回 `not_supported`。
+ * `run.start` 帶 {@link PromptAttachment} 的收下**已實作**（有附件儲存的組裝）：檔案要有這條 thread 的收據，圖要過收圖檢查與
+ * 四道上限；沒有附件儲存的組裝仍回 `not_supported`。只有附件、文字是空的也收（dsh 同）。
  *
  * 照 dsh 的 `file-upload`（`packages/client/file-upload/src/{protocol,types,http-route}.ts`，`5badb150`）：
  *
@@ -93,6 +94,29 @@ export type PromptAttachment =
       /** 圖片位元組的標準 base64。 */
       readonly data: string;
       /** 顯示用的檔名；不當路徑解讀。 */
+      readonly name?: string;
+    };
+
+/**
+ * 送進模型的一件附件在線上的樣子：**參照**，不是位元組（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。
+ * 排著的與領走的訊息（`WireQueuedInput`、`WireClaimedInput`）與歷史裡人的那一句都帶這個，畫面據它畫附件列。
+ * 結構上是 `@nexus/core` 的 `AttachmentRef`，這裡另寫一份（同 `inbox.ts` 的 `WireQueuedInput`）。
+ * `attachmentId` 是內容定址的 `sha256:<hex>`；讀圖的路由是下一張卡。
+ */
+export type WireAttachmentRef =
+  | {
+      readonly type: 'file';
+      readonly attachmentId: string;
+      readonly name: string;
+      readonly bytes: number;
+    }
+  | {
+      readonly type: 'image';
+      readonly attachmentId: string;
+      readonly mediaType: ImageMediaType;
+      readonly bytes: number;
+      readonly width: number;
+      readonly height: number;
       readonly name?: string;
     };
 

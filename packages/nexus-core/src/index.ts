@@ -200,6 +200,15 @@ export {
   OUTPUT_SCHEMA_MIDDLEWARE_NAME,
 } from './output-schema.js';
 
+export type { ProjectedBlock } from './attachment-projection.js';
+export {
+  assumedFileLine,
+  hasAttachmentBlocks,
+  rewriteAttachmentBlocks,
+  summaryImageText,
+  textOnlyImageText,
+  unavailableImageText,
+} from './attachment-projection.js';
 export type {
   AttachmentRef,
   FileAttachmentRef,
@@ -211,6 +220,7 @@ export type {
 export {
   ATTACHMENTS_MODEL_PREFIX,
   attachmentBlock,
+  attachmentRefOfBlock,
   fileHandleText,
   fileModelPath,
   IMAGE_TOKENS,
@@ -446,6 +456,7 @@ export {
 export type { MessageSource } from './message-source.js';
 export {
   humanMessageForTurnStart,
+  userContent,
   isMachineMessage,
   MESSAGE_SOURCE_KWARG,
   messageSourceOf,

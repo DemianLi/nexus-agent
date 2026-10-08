@@ -35,6 +35,8 @@
  * @module
  */
 
+import type { WireAttachmentRef } from './attachments.js';
+
 /** `custom` 事件的 `data.name`：送出佇列現在是這一份。 */
 export const INBOX = 'inbox';
 
@@ -100,6 +102,8 @@ export interface WireQueuedInput {
    * 只放判別欄與結算通知的原因，摘要與寄件人留在日誌上。
    */
   readonly source: WireQueuedInputSource;
+  /** 這一件帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)），照選取順序，只放參照。沒有就不給這一格。 */
+  readonly attachments?: readonly WireAttachmentRef[];
 }
 
 /** {@link WireQueuedInput.source}：判別欄，加結算通知的原因（#884）；摘要與寄件人留在日誌上。 */
@@ -128,6 +132,8 @@ export interface WireClaimedInput {
   readonly text: string;
   /** 這句話 `@` 的會話，照出現先後、去重。沒有引用就不給這一格（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）。 */
   readonly references?: readonly WireSessionReference[];
+  /** 這句話帶的附件（#732），照選取順序，只放參照；畫面據它在人的泡泡上畫附件列。沒有就不給這一格。 */
+  readonly attachments?: readonly WireAttachmentRef[];
   /**
    * 這一件不是人送的時才帶（#840、#849）：`subagent-settled` 是背景子代理結算的通知，`agent-message` 是背景子代理用 `send_message` 寫來的話。**沒帶就是人**，舊的一側照舊。
    * 有帶的不畫人的泡泡——那是執行期的記帳，不是使用者說的話；`subagent-settled` 長 `NoticeEntry`（#851），`agent-message`

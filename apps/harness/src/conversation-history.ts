@@ -55,6 +55,7 @@
  */
 
 import type {
+  WireAttachmentRef,
   AgentMessagePayload,
   CompactionPayload,
   CustomFrameData,
@@ -95,6 +96,7 @@ import {
   WORKSPACE_CHANGES,
 } from '@nexus/wire';
 import type {
+  AttachmentRef,
   LoggedMessage,
   InboxState,
   QueuedInput,
@@ -106,6 +108,7 @@ import type {
   UnreplayableReason,
 } from '@nexus/core';
 import {
+  attachmentRefOfBlock,
   createProjectionFold,
   foldInbox,
   isLogicalTurnStart,
@@ -150,6 +153,15 @@ const LEGACY_REASONS: ReadonlySet<UnreplayableReason> = new Set([
 
 /** 參數不合規時拋的錯。wire 那側據它回 `invalid_argument`，不是 `unknown_error`。 */
 export class HistoryQueryError extends Error {}
+
+/** 一則人的訊息帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：內容裡 `nexus-file`／`nexus-image` 區塊的參照，照順序。 */
+function attachmentsOf(message: LoggedMessage | undefined): readonly AttachmentRef[] {
+  if (!message) return [];
+  return loggedContentBlocks(message.data.content).flatMap((block: unknown) => {
+    const ref = attachmentRefOfBlock(block);
+    return ref === undefined ? [] : [ref];
+  });
+}
 
 /** 一則訊息的文字：區塊中的 text 接起來（推理另走 {@link reasoningOf}）。 */
 function textOf(message: LoggedMessage | undefined): string {
@@ -420,6 +432,17 @@ export interface InboxClaim {
 }
 
 /**
+ * 附件參照在線上的欄位（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：沒有就整個不給這一格，有就逐件拷成
+ * 乾淨的物件（日誌折出來的值是凍過的，不把它們的參照直接送上線）。
+ */
+export function attachmentsField(attachments: readonly AttachmentRef[] | undefined): {
+  readonly attachments?: readonly WireAttachmentRef[];
+} {
+  if (attachments === undefined || attachments.length === 0) return {};
+  return { attachments: attachments.map((ref) => ({ ...ref })) };
+}
+
+/**
  * 送出佇列在線上的 `custom` 事件 `data`（[#637](https://github.com/DemianLi/nexus-agent/issues/637)、
  * [#710](https://github.com/DemianLi/nexus-agent/issues/710)）：兩條整份清單，領走那一次多帶 `claimed` 或 `claimedNextStep`。
  * 即時與這裡共用，規則見 `@nexus/wire` 的 `inbox.ts`。
@@ -436,17 +459,19 @@ export function inboxData(
   const shown = (text: string, source: QueuedInput['source']) =>
     source.kind === 'agent-message' ? agentMessageBody(source.senderSessionId, text) : text;
   const wire = (items: readonly QueuedInput[]) =>
-    items.map(({ id, text, source }) => ({
+    items.map(({ id, text, source, attachments }) => ({
       id,
       text: shown(text, source),
       source:
         source.kind === 'subagent-settled' && source.reason !== undefined
           ? { kind: source.kind, reason: source.reason }
           : { kind: source.kind },
+      ...attachmentsField(attachments),
     }));
-  const claim = ({ id, text, references, source }: ClaimedInput) => ({
+  const claim = ({ id, text, references, source, attachments }: ClaimedInput) => ({
     id,
     text: shown(text, source),
+    ...attachmentsField(attachments),
     ...(source.kind === 'user'
       ? {}
       : source.kind === 'agent-message'
@@ -753,6 +778,7 @@ function message(
   messageId?: string,
   reasoning = '',
   references?: readonly WireSessionReference[],
+  attachments?: readonly AttachmentRef[],
   startTime = time,
 ): Event[] {
   const ids = role === 'ai' ? { run_id: key } : { id: key };
@@ -763,6 +789,7 @@ function message(
       ...ids,
       ...(messageId !== undefined && { id: messageId }),
       ...(references !== undefined && references.length > 0 && { references }),
+      ...attachmentsField(attachments),
     }),
     ...(reasoning === ''
       ? []
@@ -901,6 +928,7 @@ export function historyFrames(
               undefined,
               '',
               referencesAfter(events, index),
+              event.data.attachments,
             ),
           );
         }
@@ -940,6 +968,7 @@ export function historyFrames(
               undefined,
               '',
               referencesAfter(events, index),
+              attachmentsOf(event.data.message),
             ),
           );
         }
@@ -966,6 +995,7 @@ export function historyFrames(
               event.data.interrupted,
               loggedMessageId(event.data.message),
               reasoning,
+              undefined,
               undefined,
               // 開始＝這一次模型呼叫開始（dsh 的 `stepStartTime`），不是落盤；不會晚於落盤，防時鐘倒退。
               Math.min(event.time, modelStartedAt.get(event.data.modelCall ?? -1) ?? event.time),

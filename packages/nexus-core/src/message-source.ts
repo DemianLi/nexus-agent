@@ -32,6 +32,8 @@
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 
+import { attachmentBlock } from './attachment-ref.js';
+import type { AttachmentRef, FileBlock, ImageBlock } from './attachment-ref.js';
 import type { SessionEventMap } from './session-log.js';
 
 /** 來源在 `additional_kwargs` 上的鍵。 */
@@ -93,6 +95,25 @@ export function turnStartSource(data: SessionEventMap['turn/start']): MessageSou
 }
 
 /**
+ * 人說的一句話在 `HumanMessage` 裡的內容（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：沒有附件就是那串字（跟以前
+ * 逐位元組相同），有附件就是**附件區塊照選取順序在前、文字在後**（dsh 前端一律送 `[...附件, 文字]`，
+ * `ui-conversation/src/client/service.ts:261-267`）；只有附件、沒有字時不放文字區塊。
+ *
+ * 存進圖與日誌的是**參照**（{@link attachmentBlock}）；變成模型看得到的字或圖是組請求時的事（`apps/harness` 的
+ * `attachment-projection.ts`）。
+ */
+export function userContent(
+  text: string,
+  attachments?: readonly AttachmentRef[],
+): string | (FileBlock | ImageBlock | { readonly type: 'text'; readonly text: string })[] {
+  if (attachments === undefined || attachments.length === 0) return text;
+  return [
+    ...attachments.map(attachmentBlock),
+    ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+  ];
+}
+
+/**
  * 一顆 `turn/start` 送進圖的那則 `HumanMessage`：文字加上它的來源。
  * **live 路徑（pump、CLI）與重放共用這一個函式**，不然續接之後同一個位置的訊息會和即時的分岔。
  */
@@ -101,7 +122,10 @@ export function humanMessageForTurnStart(data: SessionEventMap['turn/start']): H
   if (data.kind === 'resume') throw new Error('`resume` 沒有訊息可造：它送進圖的是 Command');
   const source = turnStartSource(data);
   return new HumanMessage({
-    content: data.text,
+    content: userContent(
+      data.text,
+      data.kind === 'message' ? data.attachments : undefined,
+    ) as never,
     ...(source === undefined ? {} : { additional_kwargs: sourceKwargs(source) }),
   });
 }

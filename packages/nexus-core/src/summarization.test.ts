@@ -475,3 +475,101 @@ describe('tokens 門檻（接線）', () => {
     expect(two.invokes).toEqual([]);
   });
 });
+
+/**
+ * **摘要器看到的附件是文字，留給主模型的仍是原本的區塊**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。
+ *
+ * 基座把訊息串成文字時，對不認得的區塊只寫 `[nexus-file]`；沒有這一層，摘要與歷史檔裡就沒有「使用者附過哪個檔、存在哪」。
+ * 另一頭同樣要釘：留下來的那則訊息裡有圖，主模型還要看，換成文字只能發生在摘要的輸入上。
+ */
+describe('摘要輸入裡的附件', () => {
+  const FILE = {
+    attachmentId: `sha256:${'a'.repeat(64)}`,
+    name: 'report.csv',
+    bytes: 12,
+  };
+  const IMAGE = {
+    attachmentId: `sha256:${'b'.repeat(64)}`,
+    mediaType: 'image/png' as const,
+    bytes: 90,
+    width: 3,
+    height: 2,
+    name: 'shot.png',
+  };
+
+  async function summarize(messages: readonly BaseMessage[]) {
+    const prompts: string[] = [];
+    const model = {
+      profile: {},
+      invoke: async (input: readonly BaseMessage[]) => {
+        prompts.push(String(input[0]?.content));
+        return { text: '這是摘要。' };
+      },
+    };
+    const middleware = createSummarizer(
+      { write: async (path: string) => ({ path }) } as never,
+      {
+        ...DEFAULT_SUMMARIZATION,
+        trigger: [{ type: 'messages', value: 3 }],
+        keep: { type: 'messages', value: 2 },
+      },
+      new TokenAnchorBook(),
+      undefined,
+      false,
+    );
+    let sent: readonly BaseMessage[] = [];
+    await middleware.wrapModelCall?.(
+      {
+        messages,
+        state: {},
+        model,
+        systemMessage: new SystemMessage('系統。'),
+        tools: [],
+      } as never,
+      ((request: { messages: readonly BaseMessage[] }) => {
+        sent = request.messages;
+        return new AIMessage('好。');
+      }) as never,
+    );
+    return { prompts, sent };
+  }
+
+  it('被摘要的那段：檔案是組請求時同一行字，圖是佔位字；留下的那則原樣交給主模型', async () => {
+    const old = new HumanMessage({
+      content: [
+        { type: 'nexus-file', attachment: FILE },
+        { type: 'nexus-image', attachment: IMAGE },
+        { type: 'text', text: '看這兩個' },
+      ] as never,
+    });
+    const kept = new HumanMessage({
+      content: [
+        { type: 'nexus-image', attachment: IMAGE },
+        { type: 'text', text: '再看一次' },
+      ] as never,
+    });
+    const { prompts, sent } = await summarize([
+      old,
+      new AIMessage('一'),
+      new HumanMessage('二'),
+      new AIMessage('三'),
+      kept,
+      new AIMessage('五'),
+    ]);
+
+    expect(prompts).toHaveLength(1);
+    expect(prompts[0]).toContain('File "report.csv" (12 bytes, sha256:aaaaaaaa)');
+    expect(prompts[0]).toContain('/attachments/aa/' + 'a'.repeat(64) + '/report.csv');
+    expect(prompts[0]).toContain('"shot.png" (sha256:bbbbbbbb, 3x2) was attached here');
+    expect(prompts[0]).not.toContain('[nexus-file]');
+    expect(prompts[0]).not.toContain('[nexus-image]');
+    // 留下的那則：同一個物件、區塊沒被換。
+    expect(sent.at(-2)).toBe(kept);
+  });
+
+  it('沒有附件時，訊息串原樣進基座', async () => {
+    const { prompts, sent } = await summarize(longHistory(6));
+    expect(prompts).toHaveLength(1);
+    expect(sent.slice(1)).toHaveLength(2);
+  });
+});
