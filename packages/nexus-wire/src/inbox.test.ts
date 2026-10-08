@@ -235,6 +235,114 @@ describe('inbox', () => {
       ]);
     });
 
+    describe('附件參照（#732）', () => {
+      const sha = (c: string) => `sha256:${c.repeat(64)}`;
+      const file = { type: 'file', attachmentId: sha('a'), name: 'notes.txt', bytes: 12 } as const;
+      const image = {
+        type: 'image',
+        attachmentId: sha('b'),
+        mediaType: 'image/png',
+        bytes: 345,
+        width: 10,
+        height: 20,
+        name: 'shot.png',
+      } as const;
+      const { name: _shot, ...unnamed } = image;
+
+      it('claimed 與 claimedNextStep 的 attachments 折進人的話，照選取順序；空陣列與沒給一樣不帶這一格', () => {
+        const state = fold(
+          inboxFrame({
+            items: [],
+            claimed: { id: first.id, text: '', attachments: [image, file] },
+            claimedNextStep: [
+              { id: second.id, text: '再看', attachments: [] },
+              { id: 'run-c', text: '沒附件' },
+              { id: 'run-d', text: '只有圖', attachments: [unnamed] },
+            ],
+          }),
+        );
+        expect(state.entries).toEqual([
+          {
+            kind: 'human',
+            id: `inbox:${first.id}`,
+            text: '',
+            inboxId: first.id,
+            attachments: [image, file],
+          },
+          { kind: 'human', id: `inbox:${second.id}`, text: '再看', inboxId: second.id },
+          { kind: 'human', id: 'inbox:run-c', text: '沒附件', inboxId: 'run-c' },
+          {
+            kind: 'human',
+            id: 'inbox:run-d',
+            text: '只有圖',
+            inboxId: 'run-d',
+            attachments: [unnamed],
+          },
+        ]);
+      });
+
+      it('只留認得的欄位，不把多出來的東西轉手', () => {
+        const state = fold(
+          inboxFrame({
+            items: [],
+            claimed: { id: first.id, text: 't', attachments: [{ ...file, secret: 'x' }] },
+          }),
+        );
+        expect(state.entries).toEqual([
+          {
+            kind: 'human',
+            id: `inbox:${first.id}`,
+            text: 't',
+            inboxId: first.id,
+            attachments: [file],
+          },
+        ]);
+      });
+
+      it('形狀不對：整顆不收，同 references', () => {
+        const before = fold(inboxFrame({ items: [first] }));
+        for (const attachments of [
+          'x',
+          [null],
+          [{ type: 'file', attachmentId: sha('a'), bytes: 1 }],
+          [{ ...file, name: '' }],
+          [{ ...file, bytes: -1 }],
+          [{ ...file, bytes: 1.5 }],
+          [{ ...file, attachmentId: '' }],
+          [{ ...image, mediaType: 'image/bmp' }],
+          [{ ...image, width: 'x' }],
+          [{ ...image, name: 3 }],
+          [{ ...file, type: 'audio' }],
+          [file, { type: 'image' }],
+        ]) {
+          const after = reduceConversation(
+            before,
+            inboxFrame({ items: [], claimed: { id: 'z', text: 't', attachments } }),
+          );
+          expect([after.inbox, after.entries], JSON.stringify(attachments)).toEqual([
+            before.inbox,
+            before.entries,
+          ]);
+        }
+      });
+
+      it('歷史重播的人話（message-start）帶 attachments 就掛上；壞的當沒有，人話照畫', () => {
+        const start = (extra: object) =>
+          frame('messages', { event: 'message-start', role: 'human', id: 'history-1', ...extra });
+        expect(fold(start({ attachments: [file, image] })).entries).toEqual([
+          { kind: 'human', id: 'history-1', text: '', attachments: [file, image] },
+        ]);
+        expect(fold(start({ attachments: [] })).entries).toEqual([
+          { kind: 'human', id: 'history-1', text: '' },
+        ]);
+        for (const attachments of ['x', [null], [{ ...file, bytes: 'x' }]]) {
+          expect(fold(start({ attachments })).entries).toEqual([
+            { kind: 'human', id: 'history-1', text: '' },
+          ]);
+        }
+      });
+    });
+
     it('形狀不對整顆不收', () => {
       const before = fold(inboxFrame({ items: [first], nextStep: [second] }));
       for (const payload of [
