@@ -4,16 +4,18 @@
  * 跟 `lib/session-mention.ts` 不同的兩件事（那一段是「引用一條已經存在的會話」）：
  *
  * - **選了之後不進草稿**。`@` 那一段從草稿拿掉，換成輸入框上方的一顆標記（{@link AgentMentionState.selected}），
- *   整顆刪掉就是取消。**送出時怎麼帶上它是連線契約的事**，不轉成文字塞進 `input`（那是 harness 的語意）。
+ *   整顆刪掉就是取消。**送出時走 `run.start` 的 `mention` 欄位**，不轉成文字塞進 `input`（那是 harness 的語意）。
  * - **一句話最多一個**：再選一個就取代前一個。
  *
- * **整個功能藏在一個寫死的開關後面**（{@link agentMentionEnabled}），同附件（`serverSupportsAttachments`）與會話管理
- * （`threadManagementEnabled`）的做法：沒開時 `@` 選單沒有「委派給」那一段、也沒有標記，畫面與以前逐像素相同。
- * 清單目前是寫死的假資料（{@link FAKE_AGENTS}）；伺服器端的子代理清單與 `run.start` 的提及欄位合進 develop 之後，
- * 另開一張 PR 把清單接上 server、開關改成 `true`。
+ * **有沒有這個功能看 server**：`subagent.list` 回 `not_supported`（還沒實作的 server）、被拒或拋錯，整個功能就不出現
+ * （`hooks/use-agent-mention.ts`），跟模型座同一個做法。附件寫死開關是因為沒有可以先問的 RPC，這裡有。
+ * 送出時 `run.start` 帶 `mention`（{@link toMention}）；server 回 `not_supported` 時送出失敗、說出原因、草稿與標記留著
+ * （`hooks/use-conversation.ts`）。
  *
  * @module
  */
+
+import type { SubagentKind, SubagentMention } from '@nexus/wire';
 
 import type { MentionHit } from '@/lib/file-mention';
 
@@ -35,22 +37,15 @@ export interface AgentMentionState {
   readonly onSelect: (agent: MentionAgent | undefined) => void;
 }
 
-/**
- * 有沒有 `@子代理` 提及。**寫死 `false`，不在執行期探測**，理由同 `serverSupportsAttachments`：伺服器端有沒有落地
- * 是出貨時就知道的事。契約（子代理清單、`run.start` 的提及欄位）合進 develop 之後，**另開一張 PR 把這裡改成 `true`**
- * 並把假資料換成 server 的清單。
- */
-export function agentMentionEnabled(): boolean {
-  return false;
+/** server 回的一種子代理換成選單用的：註冊的名字就是身分。 */
+export function agentsFromKinds(kinds: readonly SubagentKind[]): readonly MentionAgent[] {
+  return kinds.map((kind) => ({ id: kind.name, name: kind.name, description: kind.description }));
 }
 
-/** 假資料：契約定下來之前讓畫面有東西可選。 */
-export const FAKE_AGENTS: readonly MentionAgent[] = [
-  { id: 'explorer', name: 'explorer', description: '唯讀地探索程式碼、回報結構' },
-  { id: 'reviewer', name: 'reviewer', description: '審查一段變更，列出風險' },
-  { id: 'planner', name: 'planner', description: '把任務拆成可以逐步驗證的計劃' },
-  { id: 'tester', name: 'tester', description: '補測試並實際跑過' },
-];
+/** 選中的子代理換成 `run.start` 的 `mention`。 */
+export function toMention(agent: MentionAgent): SubagentMention {
+  return { kind: 'subagent', name: agent.name };
+}
 
 /** 選單上的一列子代理。 */
 export interface AgentMentionRow {

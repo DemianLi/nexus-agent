@@ -86,13 +86,6 @@ vi.mock('@/lib/attachments', async (importOriginal) => ({
   serverSupportsAttachments: () => attachmentGate.on,
 }));
 
-// `@子代理` 提及的開關今天寫死 false（#328）：要測的那幾條自己打開。
-const agentGate = vi.hoisted(() => ({ on: false }));
-vi.mock('@/lib/agent-mention', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/agent-mention')>()),
-  agentMentionEnabled: () => agentGate.on,
-}));
-
 // 側欄的釘選、封存、改名開關今天寫死 false（#633）：要測的那幾條自己打開。
 const managementGate = vi.hoisted(() => ({ on: false }));
 vi.mock('@/lib/thread-management', async (importOriginal) => ({
@@ -108,7 +101,6 @@ beforeEach(() => {
 afterEach(() => {
   attachmentGate.on = false;
   managementGate.on = false;
-  agentGate.on = false;
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -4272,114 +4264,195 @@ describe('附件送出（#733、#732）', () => {
 describe('@子代理 提及（#328）', () => {
   beforeEach(stubCmdkLayout);
 
+  const KINDS = [
+    { name: 'explorer', description: '唯讀地探索程式碼' },
+    { name: 'reviewer', description: '審查一段變更' },
+  ];
+  const supported = async (): Promise<
+    ReturnType<WireClient['subagentList']> extends Promise<infer R> ? R : never
+  > => ({
+    kind: 'ok',
+    result: { ok: true, value: { subagents: KINDS } },
+  });
   const input = () => screen.getByLabelText<HTMLTextAreaElement>('要說的話');
   const type = (value: string) => fireEvent.change(input(), { target: { value } });
+  const chip = () => screen.queryByTestId('agent-mention-chip');
 
-  async function ready() {
+  async function ready(
+    subagentList: WireClient['subagentList'] | undefined = supported,
+    runStartResult: UplinkResult = { type: 'success', id: 1, result: { run_id: 'run-1' } },
+  ) {
     seq = 0;
     const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
-    const runStart = vi.fn(async (..._args: Parameters<WireClient['runStart']>) => ({
-      type: 'success' as const,
-      id: 1,
-      result: { run_id: 'run-1' },
-    }));
-    render(<App client={{ ...fake.client, runStart }} />);
+    const runStart = vi.fn(async (..._args: Parameters<WireClient['runStart']>) => runStartResult);
+    const listed = vi.fn(subagentList);
+    render(<App client={{ ...fake.client, runStart, subagentList: listed }} />);
     await screen.findByPlaceholderText('說點什麼…');
-    return runStart;
+    return { runStart, listed };
   }
 
-  it('開關關著（今天的出貨狀態）：@ 不開選單、沒有標記', async () => {
-    await ready();
+  /** 打 `@` 開選單、挑第 `down` 個（從 0 起）、Enter。 */
+  async function pick(draft: string, down = 0) {
+    type(draft);
+    await screen.findByRole('dialog', { name: '@ 選單' });
+    for (let i = 0; i < down; i += 1) fireEvent.keyDown(input(), { key: 'ArrowDown' });
+    fireEvent.keyDown(input(), { key: 'Enter' });
+  }
+
+  it.each([
+    [
+      'server 還沒實作（not_supported）',
+      async () => ({ kind: 'rejected' as const, code: 'not_supported', message: '沒接' }),
+    ],
+    [
+      '被拒',
+      async () => ({ kind: 'rejected' as const, code: 'invalid_argument', message: '不行' }),
+    ],
+    [
+      '讀的時候拋錯',
+      async (): Promise<never> => {
+        throw new Error('斷了');
+      },
+    ],
+    [
+      '清單是空的（沒有可點名的對象）',
+      async () => ({
+        kind: 'ok' as const,
+        result: { ok: true as const, value: { subagents: [] } },
+      }),
+    ],
+  ])('server 不支援就整個不出現：%s', async (_case, list) => {
+    const { listed } = await ready(list);
+    await waitFor(() => expect(listed).toHaveBeenCalledTimes(1));
     type('@');
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(screen.queryByRole('dialog', { name: '@ 選單' })).toBeNull();
-    expect(screen.queryByTestId('agent-mention-chip')).toBeNull();
+    expect(chip()).toBeNull();
   });
 
-  it('開著：選了出現標記，送出後清掉；送出的文字不含提及', async () => {
-    agentGate.on = true;
-    const runStart = await ready();
-    type('請看 @expl');
-    await screen.findByRole('dialog', { name: '@ 選單' });
-    fireEvent.keyDown(input(), { key: 'Enter' });
-    expect(screen.getByTestId('agent-mention-chip').textContent).toBe('@explorer');
+  it('清單讀自 server：選單列出它給的種類與說明', async () => {
+    await ready();
+    type('@');
+    const menu = await screen.findByRole('dialog', { name: '@ 選單' });
+    expect(
+      within(menu)
+        .getAllByRole('option')
+        .map((option) => option.textContent),
+    ).toEqual(['explorer唯讀地探索程式碼', 'reviewer審查一段變更']);
+  });
+
+  it('支援時走完整流程：選了出現標記，送出帶 mention，文字不含提及，標記清掉', async () => {
+    const { runStart } = await ready();
+    await pick('請看 @rev');
+    expect(chip()?.textContent).toBe('@reviewer');
     expect(input().value).toBe('請看 ');
     type('請看 這個檔案');
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
     await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
-    // 不把提及轉成文字塞進 input：契約定了才有它的位置。
-    expect(runStart.mock.calls[0]![1]).toBe('請看 這個檔案');
-    expect(screen.queryByTestId('agent-mention-chip')).toBeNull();
+    const [, text, options] = runStart.mock.calls[0]!;
+    // 提及走 `mention` 欄位，不轉成文字塞進 input。
+    expect(text).toBe('請看 這個檔案');
+    expect(options).toEqual({ mention: { kind: 'subagent', name: 'reviewer' } });
+    expect(chip()).toBeNull();
   });
 
-  it('送出沒收下：標記放回去；這段時間已經選了別的，就不蓋掉', async () => {
-    agentGate.on = true;
-    seq = 0;
-    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
-    let reject: (result: UplinkResult) => void = () => {};
-    const runStart = vi.fn(
-      () =>
-        new Promise<UplinkResult>((resolve) => {
-          reject = resolve;
-        }),
-    );
-    render(<App client={{ ...fake.client, runStart }} />);
-    await screen.findByPlaceholderText('說點什麼…');
-    const pick = async (draft: string) => {
-      type(draft);
-      await screen.findByRole('dialog', { name: '@ 選單' });
-      fireEvent.keyDown(input(), { key: 'ArrowDown' });
-      fireEvent.keyDown(input(), { key: 'Enter' });
-    };
-    // 先選第二個（reviewer）送出；沒收下前又選了第一個（explorer）。
+  it('沒選就沒有 mention 欄位：封包跟以前一樣', async () => {
+    const { runStart } = await ready();
+    type('一句話');
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(runStart.mock.calls[0]!.length).toBe(2);
+  });
+
+  it('取代前一個：送出的是最後選的那個', async () => {
+    const { runStart } = await ready();
     await pick('@');
-    expect(screen.getByTestId('agent-mention-chip').textContent).toBe('@reviewer');
+    await pick('@', 1);
+    expect(chip()?.textContent).toBe('@reviewer');
     type('甲');
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
     await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
-    expect(screen.queryByTestId('agent-mention-chip')).toBeNull();
-    type('@');
-    await screen.findByRole('dialog', { name: '@ 選單' });
-    fireEvent.keyDown(input(), { key: 'Enter' });
-    expect(screen.getByTestId('agent-mention-chip').textContent).toBe('@explorer');
-    reject({ type: 'error', id: 1, error: 'invalid_argument', message: '這條 thread 收不了' });
-    expect(await screen.findByText('這條 thread 收不了')).toBeTruthy();
-    expect(screen.getByTestId('agent-mention-chip').textContent).toBe('@explorer');
+    expect(runStart.mock.calls[0]![2]).toEqual({ mention: { kind: 'subagent', name: 'reviewer' } });
   });
 
-  it('送出沒收下：什麼都沒選時標記放回去', async () => {
-    agentGate.on = true;
-    seq = 0;
-    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
-    const runStart = vi.fn(async (): Promise<UplinkResult> => ({
+  it('server 對 mention 回 not_supported：說的是子代理不是附件，草稿與標記都留著', async () => {
+    await ready(supported, {
       type: 'error',
       id: 1,
-      error: 'invalid_argument',
-      message: '這條 thread 又收不了',
-    }));
-    render(<App client={{ ...fake.client, runStart }} />);
-    await screen.findByPlaceholderText('說點什麼…');
-    type('@');
-    await screen.findByRole('dialog', { name: '@ 選單' });
-    fireEvent.keyDown(input(), { key: 'Enter' });
+      error: 'not_supported',
+      message: '伺服器自己的訊息',
+    });
+    await pick('@');
     type('乙');
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
-    expect(await screen.findByText('這條 thread 又收不了')).toBeTruthy();
-    expect(screen.getByTestId('agent-mention-chip').textContent).toBe('@explorer');
+    expect(await screen.findByText('這個伺服器不收點名子代理：取消標記再送。')).toBeTruthy();
+    expect(chip()?.textContent).toBe('@explorer');
     expect(input().value).toBe('乙');
   });
 
-  it('以 / 開頭的命令不用掉標記', async () => {
-    agentGate.on = true;
-    await ready();
-    type('@');
-    await screen.findByRole('dialog', { name: '@ 選單' });
-    fireEvent.keyDown(input(), { key: 'Enter' });
-    expect(screen.getByTestId('agent-mention-chip')).toBeTruthy();
+  it('名字不在清單上（invalid_argument）：用 server 的訊息，草稿與標記留著', async () => {
+    await ready(supported, {
+      type: 'error',
+      id: 1,
+      error: 'invalid_argument',
+      message: '沒有叫 explorer 的子代理',
+    });
+    await pick('@');
+    type('丙');
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    expect(await screen.findByText('沒有叫 explorer 的子代理')).toBeTruthy();
+    expect(chip()?.textContent).toBe('@explorer');
+  });
+
+  it('送出沒收下時，這段時間已經選了別的，就不蓋掉', async () => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    let settle: (result: UplinkResult) => void = () => {};
+    const runStart = vi.fn(
+      () =>
+        new Promise<UplinkResult>((resolve) => {
+          settle = resolve;
+        }),
+    );
+    render(<App client={{ ...fake.client, runStart, subagentList: supported }} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    await pick('@', 1);
+    type('甲');
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(chip()).toBeNull();
+    await pick('@');
+    expect(chip()?.textContent).toBe('@explorer');
+    settle({ type: 'error', id: 1, error: 'invalid_argument', message: '這條 thread 收不了' });
+    expect(await screen.findByText('這條 thread 收不了')).toBeTruthy();
+    expect(chip()?.textContent).toBe('@explorer');
+  });
+
+  it('以 / 開頭的命令不帶也不用掉標記', async () => {
+    const { runStart } = await ready();
+    await pick('@');
     type('/model');
     fireEvent.keyDown(input(), { key: 'Escape' });
     fireEvent.keyDown(input(), { key: 'Enter' });
     await new Promise((resolve) => setTimeout(resolve, 30));
-    expect(screen.queryByTestId('agent-mention-chip')).not.toBeNull();
+    expect(runStart).not.toHaveBeenCalled();
+    expect(chip()).not.toBeNull();
+  });
+
+  it('帶附件時兩樣都在 run.start 裡', async () => {
+    attachmentGate.on = true;
+    URL.createObjectURL = vi.fn(() => 'blob:preview');
+    URL.revokeObjectURL = vi.fn();
+    const { runStart } = await ready();
+    await pick('@', 1);
+    fireEvent.change(screen.getByTestId('attachment-input'), {
+      target: { files: [new File(['PNG'], 'a.png', { type: 'image/png' })] },
+    });
+    type('看這張');
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    const options = runStart.mock.calls[0]![2];
+    expect(options?.mention).toEqual({ kind: 'subagent', name: 'reviewer' });
+    expect(options?.attachments).toHaveLength(1);
   });
 });
