@@ -549,11 +549,14 @@
           chatTemplateKwargs:
             enable_thinking:
               $var: thinking.enabled
-      # `meta/llama-3.2-11b-vision-instruct`：**宣告純文字，不收圖**（#732 真模型實跑，2026-10-09）。#731 判它「穩定收得了使用者訊息裡的圖」，
-      # 那次量的請求**沒帶 `tools`**；產品每一輪都帶 `tools`，而這顆在請求帶 `tools` 時，使用者訊息裡的圖一律 400：
-      #   `The number of image tokens (0) must be the same as the number of images (1)`（`https://integrate.api.nvidia.com/v1`，NVIDIA）。
-      # 直接請求隔離過六種組合：圖在文字前／後、有無 system 都無關，**只有「帶 tools」會觸發**（不帶 tools 兩種順序都唸對）。
-      # 宣告收圖的話，使用者會在一輪跑到一半才撞上 400；宣告純文字，收件時就回 `model_does_not_support_images`。
+      # `meta/llama-3.2-11b-vision-instruct`：**宣告純文字，不收圖**（#732 真模型實跑，2026-10-09；PM 拍板 (a)）。#731 判它「穩定收得了使用者
+      # 訊息裡的圖」，那次量的請求**沒帶 `tools`**。產品每一輪都帶 `tools`，而這顆在請求帶 `tools` 時，**圖在整段對話的第一則使用者訊息**
+      # 就 400：`The number of image tokens (0) must be the same as the number of images (1)`（`https://integrate.api.nvidia.com/v1`，NVIDIA）。
+      # 直接請求隔離過（`temperature: 0`）：單輪帶圖 400（圖 1×1 到 256×256、純色或有圖樣、圖在文字前或後、有無 system、`tool_choice: none`
+      # 都一樣）；**前面已經有一輪往返（純文字，或工具往返）再帶圖就 200**（回 "Red."）；不帶 `tools` 單輪也 200。產品路徑同樣：全新 thread 第一句帶圖
+      # 失敗，先說一句再帶圖、或先用別顆模型跑一輪再切過來帶圖都正常。
+      # 型錄只能宣告收不收圖，表達不出「第一則不收」，而宣告收圖的話最常見的路（新對話拖一張圖送出）會跑到一半才吃 400；宣告純文字則收件時就回
+      # `model_does_not_support_images`。代價：已有歷史時它其實看得到圖，卻被擋掉——接受。要用看圖請選下面的 90b。
       # 窗口與輸出上限在真端點量過一次（2026-10-09，`say hi`，非串流）：`max_tokens` 4096、8192、16384 都回 200；131072 回 400，
       # 訊息寫 "maximum context length is 131072 tokens"。`maxTokens` 取 4096 是**選擇不是上限**。
       - id: 'meta/llama-3.2-11b-vision-instruct'
