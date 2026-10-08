@@ -1014,7 +1014,7 @@ describe('計劃模式標籤（#900）', () => {
   beforeEach(stubCmdkLayout);
 
   const planFrame = (downlink: ReturnType<typeof fakeClient>['downlink'], active: boolean): Event =>
-    downlink.pushedFrame('custom', 'plan', { name: PLAN_MODE, payload: { active } });
+    downlink.customFrame(PLAN_MODE, { active });
 
   const chip = () => screen.queryByRole('button', { name: '退出計劃模式' });
 
@@ -1124,7 +1124,7 @@ describe('目標列（#945）', () => {
   const goalFrame = (
     downlink: ReturnType<typeof fakeClient>['downlink'],
     goal: WireGoal | null,
-  ): Event => downlink.pushedFrame('custom', 'goal', { name: GOAL, payload: { goal } });
+  ): Event => downlink.customFrame(GOAL, { goal });
   const bar = () => screen.queryByTestId('goal-bar');
 
   async function mounted() {
@@ -1189,7 +1189,7 @@ describe('目標列（#945）', () => {
     const { downlink, opened } = await mounted();
     downlink.push(opened[0]!, [
       goalFrame(downlink, wireGoal()),
-      downlink.pushedFrame('custom', 'plan', { name: PLAN_MODE, payload: { active: true } }),
+      downlink.customFrame(PLAN_MODE, { active: true }),
     ]);
     await waitFor(() => expect(bar()).toBeTruthy());
     const chip = await screen.findByTestId('plan-chip');

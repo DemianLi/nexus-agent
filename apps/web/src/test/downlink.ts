@@ -1,4 +1,6 @@
 import type {
+  CustomFrameName,
+  CustomFramePayloads,
   Event,
   InboxPayload,
   QueueSteerAction,
@@ -94,7 +96,11 @@ export function fakeDownlink() {
     } as Event;
   }
 
-  function customFrame(name: string, payload: unknown): Event {
+  /**
+   * 一顆 `custom` frame。名字與酬載走 wire 的 `CustomFramePayloads` 表（`CustomFrameData` 的來源）：寫不在表上的名字、
+   * 或形狀跟那一格不合的酬載，編不過——測試備的 frame 不會飄離線上真有的形狀（#685）。
+   */
+  function customFrame<K extends CustomFrameName>(name: K, payload: CustomFramePayloads[K]): Event {
     return pushedFrame('custom', name, { name, payload });
   }
 
@@ -207,6 +213,7 @@ export function fakeDownlink() {
     update,
     inboxFrame,
     titleFrame,
+    customFrame,
     lifecycleFrame,
     pushedFrame,
   };
