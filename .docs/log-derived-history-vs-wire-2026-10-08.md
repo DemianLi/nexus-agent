@@ -125,4 +125,4 @@
 
 ## 七、探針留存
 
-一次性探針不進版控。17 個場景、假端點與比對函式的備份在這次工作階段的暫存區（`zz-probe-1159.test.ts.bak`）；要重跑需要放回 `apps/harness/src/` 並用 `pnpm -C apps/harness exec vitest run src/zz-probe-1159.test.ts`，輸出寫到暫存區的 `probe-out.txt`（vitest 會吞 `console.log`）。
+一次性探針不進版控。23 個場景、假端點與比對函式的備份在這次工作階段的暫存區（`zz-probe-1159.test.ts.bak`）；要重跑需要放回 `apps/harness/src/` 並用 `pnpm -C apps/harness exec vitest run src/zz-probe-1159.test.ts`，輸出寫到暫存區的 `probe-out.txt`（vitest 會吞 `console.log`）。
