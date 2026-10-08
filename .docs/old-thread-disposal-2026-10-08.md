@@ -72,3 +72,14 @@ pnpm --filter @nexus/harness exec vitest run src/measure/old-thread-disposal.tes
 1. 續接時把「這一次實際載入的清單」另記一格（不改原 header 的 `plugins`，同 `build` 的規則；或事件日誌記一顆）——解缺口 2，不碰結構。
 2. 線上列表加「這條 thread 載入的插件」——要先有 1，否則給的是過期的答案。
 3. 逐條退役——要先決定語意（拒收新輸入？等這一輪？），是新功能，不是修補。
+
+## 後續：缺口 2 已補（2026-10-08）
+
+續接時，`attachSessionPersistence` 在 root 接上之後寫一顆 `session/resumed`（建置版本、插件清單、設定雜湊，形狀同 header 的那三格，不帶 `config`）。header 不動；「這份日誌現在跑哪一版」讀**最後一顆 `session/resumed`，沒有就是 header**。
+
+- 標 `ignorable`，格式版本不升（舊 runtime 略過它，只少了「後來是哪一版接手」）。
+- 前一顆已經是同樣內容就不疊；`SessionLog` 建構子判斷「seed 已停在 end-seed」時略過尾端的 `session/resumed`，所以空轉的續接不多疊 end-seed。
+- 不鏡像到會話遙測（本機模組路徑、同機才能比的設定雜湊）。
+- 探針的問題 3 多了一組斷言：header 仍列成 v1，另記的那一顆讀成 v2。
+
+缺口 1（線上列表沒有插件欄位）與缺口 3（逐條退役）仍在；前者現在有可讀的來源，後者仍是要先決定語意的新功能。

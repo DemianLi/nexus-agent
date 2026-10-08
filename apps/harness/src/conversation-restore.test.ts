@@ -142,6 +142,31 @@ describe('CLI 的 --resume', () => {
   });
 
   /**
+   * 續接時另記這一次實際載入的清單（#1138）：header 沿用最初那一份，這一顆才說得出現在跑的是哪些。
+   * 連續兩次空轉的續接只留一顆（內容相同不疊），而且第二次沒有多疊 `session/end-seed`。
+   */
+  it('續接寫一顆 session/resumed，帶這一次的插件清單；空轉的續接不疊', async () => {
+    const runDir = await firstRun();
+    const log = join(runDir, 'cli.jsonl');
+    const count = async (type: string) =>
+      (await readLog(log)).filter((event) => event.type === type).length;
+
+    // 兩次什麼都沒說的續接：第一次記一顆，第二次內容相同不疊，也沒有多疊一顆 `session/end-seed`。
+    await cli(['--resume', runDir], '/exit\n');
+    await cli(['--resume', runDir], '/exit\n');
+    expect([await count('session/resumed'), await count('session/end-seed')]).toEqual([1, 1]);
+    const resumed = (await readLog(log)).filter((event) => event.type === 'session/resumed');
+    expect(resumed[0]?.ignorable).toBe(true);
+    const data = resumed[0]?.data as { plugins: { id?: string }[] };
+    expect(data.plugins.map((row) => row.id)).toContain('request-recorder');
+
+    // 第三次說了話（清單沒變，緊接在上一顆後面，不另記）；再下一次續接前面隔了一輪，才是新的一段：再記一顆。
+    await cli(['--resume', runDir], '暗號是什麼\n/exit\n');
+    await cli(['--resume', runDir], '/exit\n');
+    expect([await count('session/resumed'), await count('session/end-seed')]).toEqual([2, 2]);
+  });
+
+  /**
    * **斷言的是那一則的字**：拿掉補結果這一步，基座的 `patchToolCallsMiddleware` 照樣補一則（實測），那一輪照樣
    * 不會被供應商拒收——只看「沒被拒收」的話這條驗收有沒有這個功能都綠。
    */

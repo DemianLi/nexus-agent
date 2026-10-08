@@ -454,6 +454,116 @@ describe('續接：只寫還沒存的後綴', () => {
     await persistence.dispose();
   });
 
+  /**
+   * **續接的 root 記下這一次實際載入的清單**（[#1138](https://github.com/DemianLi/nexus-agent/issues/1138)）。
+   * header 沿用最初那一份，所以換了插件版本續接的 thread 要靠這一顆才讀得出現在跑哪一版。
+   */
+  describe('session/resumed', () => {
+    const metadata = {
+      build: { commit: 'c'.repeat(40), dirty: false },
+      plugins: [{ name: 'file:///v2/plugin.mjs', id: 'versioned-probe', disabled: false }],
+      configHash: 'hmac-sha256:0123456789abcdef',
+    } as const;
+
+    function resume(
+      seed: readonly SessionEvent[],
+      buildMetadata: typeof metadata | undefined,
+    ): {
+      sessions: SessionRegistry;
+      stored: ReturnType<typeof fakeStored>;
+      flush(): Promise<void>;
+    } {
+      const sessions = new SessionRegistry('root-r', { rootSeed: seed });
+      const stored = fakeStored();
+      const persistence = attachSessionPersistence(
+        sessions,
+        {
+          ...NO_READS,
+          create: () => fakeStored(),
+          resume: () => Promise.reject(new Error('不續接')),
+        },
+        {
+          resumedRoot: { stored, storedCount: seed.length },
+          ...(buildMetadata !== undefined && { buildMetadata }),
+        },
+      );
+      return { sessions, stored, flush: () => persistence.flush() };
+    }
+
+    function earlierTurn(): readonly SessionEvent[] {
+      const log = new SessionLog('root-r');
+      log.append('turn/start', { kind: 'message', text: '一' });
+      log.append('turn/end', {});
+      return log.events;
+    }
+
+    it('接在 end-seed 之後落盤，帶 ignorable，內容是這一次的清單', async () => {
+      const run = resume(earlierTurn(), metadata);
+      await run.flush();
+
+      expect(run.stored.written.map((event) => event.type)).toEqual([
+        'session/end-seed',
+        'session/resumed',
+      ]);
+      const event = run.stored.written[1]!;
+      expect(event.data).toEqual(metadata);
+      expect(event.ignorable).toBe(true);
+    });
+
+    it('入口沒給建置資料就不寫（不是每一種入口都算得出來）', async () => {
+      const run = resume(earlierTurn(), undefined);
+      await run.flush();
+      expect(run.stored.written.map((event) => event.type)).toEqual(['session/end-seed']);
+    });
+
+    it('空轉的續接不讓日誌長：同樣內容不疊，也不多疊一顆 end-seed', async () => {
+      const first = resume(earlierTurn(), metadata);
+      await first.flush();
+      const afterFirst = first.sessions.root.events;
+      expect(afterFirst.map((event) => event.type)).toEqual([
+        'turn/start',
+        'turn/end',
+        'session/end-seed',
+        'session/resumed',
+      ]);
+
+      const second = resume(afterFirst, metadata);
+      await second.flush();
+      expect(second.stored.written).toEqual([]);
+      expect(second.sessions.root.length).toBe(afterFirst.length);
+    });
+
+    it('內容變了才再記一顆：換了版本就多一顆，end-seed 仍只有一顆', async () => {
+      const first = resume(earlierTurn(), metadata);
+      await first.flush();
+      const v3 = {
+        ...metadata,
+        plugins: [{ name: 'file:///v3/plugin.mjs', id: 'versioned-probe', disabled: false }],
+      };
+
+      const second = resume(first.sessions.root.events, v3);
+      await second.flush();
+      expect(second.stored.written.map((event) => event.type)).toEqual(['session/resumed']);
+      expect(second.stored.written[0]?.data).toEqual(v3);
+      expect(second.sessions.root.events.filter((e) => e.type === 'session/end-seed')).toHaveLength(
+        1,
+      );
+    });
+
+    it('新建的會話不寫：header 就是它', async () => {
+      const sessions = new SessionRegistry('root-n');
+      const created = fakeStored();
+      const persistence = attachSessionPersistence(
+        sessions,
+        { ...NO_READS, create: () => created, resume: () => Promise.reject(new Error('不續接')) },
+        { buildMetadata: metadata },
+      );
+      sessions.root.append('turn/start', { kind: 'message', text: '一' });
+      await persistence.flush();
+      expect(created.written.map((event) => event.type)).toEqual(['turn/start']);
+    });
+  });
+
   /** 反例：已存筆數不給的話，seed 那兩筆會被重送——撞號就是這個樣子。 */
   it('反例：不給已存筆數就從 seq 0 重送一次', async () => {
     const earlier = new SessionLog('root-r');
