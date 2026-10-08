@@ -1,7 +1,8 @@
 # 出貨的預設 plugin 清單。
 #
-# 這份檔案是「零設定的 nexus 由什麼組成」的來源（#454）；例外是組裝點在程式碼裡掛的兩顆：host-services、
-# workspace-changes（serve 且有 `--workspace` 才掛），它們不在清單上（#669 第 4 步會把後者搬進來）。使用者要改的話不是編輯它，
+# 這份檔案是「零設定的 nexus 由什麼組成」的來源（#454）；例外只剩組裝點在程式碼裡掛的一顆：
+# host-services（它交的是協作者，不是功能），它不在清單上。**serve 另有一個專屬的出貨層** `cordis.serve.yml`（#669），疊在這份之後、
+# 只有 serve 載，放 serve 才有的列（今天只有 workspace-changes）；CLI 的 `--dump-config` 印不到它。使用者要改的話不是編輯它，
 # 而是在 `$NEXUS_AGENT_HOME/cordis.patch.yml`（預設 `~/.nexus-agent/`）或 `--patch <檔>`
 # 裡按 `id` 覆寫、停用、插入——patch 是整份替換 `config`，不是深層合併，所以覆寫的時候要
 # 把想保留的欄位一起重述。
@@ -18,7 +19,7 @@
 #             （#104 的偏離標註）。
 #
 # 疊完之後這台機器上實際長什麼樣，用 `--dump-config` 看（cli 與 serve 都收）：它印出啟動
-# 會掛的那份清單（上面三顆由程式碼掛的不在內），每一段前面標明那幾列來自哪個檔、被哪幾層改過；指到不存在 id 的 patch
+# 會掛的那份清單（上面由程式碼掛的那一顆不在內；serve 的包含 `cordis.serve.yml` 那一層），每一段前面標明那幾列來自哪個檔、被哪幾層改過；指到不存在 id 的 patch
 # 會連同它那一層的標籤報到 stderr。用法見 docs/operations.md 的「plugin 清單」一節。
 #
 # 要事先知道某一列收哪些欄位（寫覆寫檔用），用 `--dump-config-schema`：印出一份 JSON Schema，
@@ -639,7 +640,7 @@
 # `@nexus/plugin-goal`（耐久 goal 串，#126）、`@nexus/plugin-todo`（耐久待辦快照的形狀
 # 與歸屬，#132）、`@nexus/plugin-present`（每一筆交付對得上一次成功的 `present`，#441）、
 # `@nexus/plugin-workspace-changes`（每一筆改動紀錄落在跑過工具的一輪裡，#443；那個功能
-# 本身不在這份清單裡，只由 serve 掛）、`@nexus/plugin-sandbox-policy`（每一顆 `sandbox/mode`
+# 本身不在這份清單裡，在 serve 專屬的 `cordis.serve.yml`）、`@nexus/plugin-sandbox-policy`（每一顆 `sandbox/mode`
 # 帶的都是認得的模式，#699）。
 #
 # **代價是每一次執行多八個條目、八次 `apply`**，換到的是這份清單與

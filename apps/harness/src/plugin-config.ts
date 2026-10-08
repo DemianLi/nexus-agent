@@ -59,6 +59,16 @@ import { z } from 'zod';
 /** 出貨的預設清單，放在 `apps/harness/` 底下。 */
 export const SHIPPED_CONFIG_FILENAME = 'cordis.yml';
 
+/**
+ * serve 專屬的出貨層（[#669](https://github.com/DemianLi/nexus-agent/issues/669) 第 4 步）。疊在 {@link SHIPPED_CONFIG_FILENAME}
+ * 之後、使用者的 patch 之前，**只有 serve 載**（`DefaultConfigOptions.serve`）；CLI 不載，`--dump-config` 也跟著入口走。
+ *
+ * 照 dsh：web-app bundle 疊在 base 上（`packages/bundle/web-app/cordis.patch.yml`，`477b4f4`）。**登記：我們沒有 profile／組合包
+ * （#46 Out of scope），所以退到最接近的一個檔**——出貨層有兩個檔而不是 dsh 的 preset 機制；層與層之間不能互相覆寫或刪列，
+ * 只能追加列（patch 才能改列），所以它不是 profile 層，不會長成 #46 排除的東西。
+ */
+export const SERVE_SHIPPED_CONFIG_FILENAME = 'cordis.serve.yml';
+
 /** 使用者那一層的檔名，放在 harness home 底下。 */
 export const USER_PATCH_FILENAME = 'cordis.patch.yml';
 
@@ -652,6 +662,11 @@ export function shippedConfigPath(): string {
   return fileURLToPath(new URL(`../${SHIPPED_CONFIG_FILENAME}`, import.meta.url));
 }
 
+/** serve 專屬出貨層的絕對路徑，見 {@link SERVE_SHIPPED_CONFIG_FILENAME}。 */
+export function serveShippedConfigPath(): string {
+  return fileURLToPath(new URL(`../${SERVE_SHIPPED_CONFIG_FILENAME}`, import.meta.url));
+}
+
 /**
  * 把一列條目變成一個可以載入的 `PluginEntry`。
  *
@@ -741,6 +756,11 @@ function assertPrivateModule(entry: ConfigEntry): void {
 export interface PluginConfigSources {
   /** 出貨那一份的路徑，省略即 {@link shippedConfigPath}。 */
   readonly shipped?: string;
+  /**
+   * 追加在出貨那一份**後面**、仍算出貨的檔（serve 專屬層，見 {@link SERVE_SHIPPED_CONFIG_FILENAME}），照給的順序。
+   * 它們的列接在出貨列後面，dump 的來源註解標各自的檔；使用者的 patch 照樣疊在全部出貨列之上。
+   */
+  readonly shippedLayers?: readonly string[];
   /** harness home 底下那一份的路徑，省略即不讀這一層。 */
   readonly userPatch?: string;
   /** `--patch` 指定的檔，照命令列順序。 */
@@ -791,16 +811,25 @@ export interface ConfigLayer {
 function readLayers(sources: PluginConfigSources): {
   shipped: string;
   rows: Record<string, unknown>[];
+  /** 每一列出貨列來自哪個檔，與 `rows` 同長同序。 */
+  rowOrigins: string[];
   layers: ConfigLayer[];
 } {
   const shipped = sources.shipped ?? shippedConfigPath();
-  let source: string;
-  try {
-    source = readFileSync(shipped, 'utf8');
-  } catch (error) {
-    throw new PluginConfigError(`讀不到出貨的 ${shipped}：${String(error)}`);
+  const rows: Record<string, unknown>[] = [];
+  const rowOrigins: string[] = [];
+  for (const path of [shipped, ...(sources.shippedLayers ?? [])]) {
+    let source: string;
+    try {
+      source = readFileSync(path, 'utf8');
+    } catch (error) {
+      throw new PluginConfigError(`讀不到出貨的 ${path}：${String(error)}`);
+    }
+    for (const row of parseEntryList(source, path)) {
+      rows.push(row);
+      rowOrigins.push(path);
+    }
   }
-  const rows = parseEntryList(source, shipped);
 
   const layers: ConfigLayer[] = [];
   if (sources.userPatch !== undefined) {
@@ -810,7 +839,7 @@ function readLayers(sources: PluginConfigSources): {
   for (const overlay of sources.overlays ?? []) {
     layers.push({ label: overlay, patches: loadOverlayPatches(overlay) });
   }
-  return { shipped, rows, layers };
+  return { shipped, rows, rowOrigins, layers };
 }
 
 /**
@@ -838,7 +867,7 @@ function readLayers(sources: PluginConfigSources): {
  * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
  */
 export function renderConfigDump(sources: PluginConfigSources = {}): string {
-  const { shipped, rows, layers } = readLayers(sources);
+  const { shipped, rows, rowOrigins, layers } = readLayers(sources);
   const warn = sources.warn ?? warnToStderr;
 
   // **每份快照都自己 clone 一份 patch**：`applyEntryPatches` 會把 `insert` 的列放進結果，
@@ -850,7 +879,7 @@ export function renderConfigDump(sources: PluginConfigSources = {}): string {
       (message) => warnings.push(message),
     );
 
-  const origins = rows.map(() => ({ origin: shipped, patchedBy: [] as string[] }));
+  const origins = rowOrigins.map((origin) => ({ origin, patchedBy: [] as string[] }));
   let previous: Record<string, unknown>[] = rows;
   let previousWarnings: string[] = [];
   let composed: Record<string, unknown>[] = rows;
@@ -1057,6 +1086,11 @@ export async function loadDefaultPlugins(
 
 /** {@link loadDefaultPlugins} 與 {@link renderLayeredConfigDump} 共用的那幾格。 */
 export interface DefaultConfigOptions {
+  /**
+   * 這是 serve 入口：多疊一層 serve 專屬的出貨清單（{@link SERVE_SHIPPED_CONFIG_FILENAME}）。省略／`false` 是 CLI。
+   * **啟動與 `--dump-config`／`--dump-config-schema`／`--dump-default-config` 傳同一個值**，否則 dump 印的不是啟動會掛的樹。
+   */
+  readonly serve?: boolean;
   /** 決定 harness home 落在哪，省略即 `process.env`。 */
   readonly env?: NodeJS.ProcessEnv;
   /** `--patch` 給的那幾個檔，照命令列順序。 */
@@ -1077,6 +1111,7 @@ export interface DefaultConfigOptions {
 function defaultSources(options: DefaultConfigOptions): PluginConfigSources {
   const home = resolveHarnessHome(options.env ?? process.env);
   return {
+    ...(options.serve === true && { shippedLayers: [serveShippedConfigPath()] }),
     userPatch: join(home, USER_PATCH_FILENAME),
     ...(options.patches !== undefined && { overlays: options.patches }),
     ...(options.warn !== undefined && { warn: options.warn }),
@@ -1116,11 +1151,14 @@ export function renderLayeredConfigDump(options: DefaultConfigOptions = {}): str
  * **刻意不經過 `defaultSources`**：那條路一定帶 `userPatch`，也要解析 home 路徑；這裡直接給一份空來源，
  * 讀的只有 `shippedConfigPath()`。我們沒有 profile 也沒有組合包（#46 Out of scope），dsh 的「出貨」在這裡就是一個檔。
  *
+ * @param options - `serve`：serve 入口，出貨層多一個 serve 專屬檔（同 {@link DefaultConfigOptions.serve}）。
  * @returns 一份帶來源註解的 YAML 文件。
  * @throws {PluginConfigError} 出貨檔讀不了、形狀不合，或有壞掉的列。
  */
-export function renderShippedConfigDump(): string {
-  return renderConfigDump({});
+export function renderShippedConfigDump(options: { readonly serve?: boolean } = {}): string {
+  return renderConfigDump(
+    options.serve === true ? { shippedLayers: [serveShippedConfigPath()] } : {},
+  );
 }
 
 function isPluginShaped(value: unknown): value is PluginEntry['plugin'] {

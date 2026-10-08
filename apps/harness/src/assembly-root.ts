@@ -62,7 +62,7 @@ import {
 } from './harness-home.js';
 import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/plugin-goal';
 import type { GoalServices } from '@nexus/plugin-goal';
-import { createWorkspaceChanges, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
+import { WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createNexusAgent } from './agent-factory.js';
 import type { GoalDriverPort } from './goal-driver.js';
@@ -572,11 +572,6 @@ export interface CreateCliAgentSession {
 export async function createCliAgent(
   invocation: Pick<CliInvocation, 'live' | 'workspace' | 'sandbox' | 'recursionLimit'> & {
     /**
-     * 記每一輪改了哪些檔（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）。**只有 serve 開**：dsh 由
-     * web-app bundle 掛，CLI 沒有人讀摘要。沒給 `--workspace` 時開了也不掛——那正是 dsh 的「不合格」。
-     */
-    readonly workspaceChanges?: boolean;
-    /**
      * 真實供應商的五個連線值（[#545](https://github.com/DemianLi/nexus-agent/issues/545)）。
      * 兩條產品路徑都傳：CLI 與 serve 在起動期從同一份清單解一次（serve 的這個函式一條 thread
      * 跑一次，只解在這裡的話設定寫壞要等到第一條 thread 才炸；起動期那一次也是啟動時印模型名
@@ -672,7 +667,10 @@ export async function createCliAgent(
   telemetrySharing: SessionTelemetrySharingStatus | undefined;
   /** 評分與評語的規則。serve 那條交給 wire-handler；CLI 那條只用得到 `/feedback`（走命令面）。 */
   feedback: FeedbackService | undefined;
-  /** 每一輪的改動摘要，serve 交給 wire-handler 的兩條路由。沒開或沒有工作區時是 `undefined`。 */
+  /**
+   * 每一輪的改動摘要，serve 交給 wire-handler 的兩條路由。**沒有 `workspace-changes` 那一列（CLI 不載 serve 專屬層、或被停用）
+   * 或沒有工作區時是 `undefined`**——兩條路由對這三種成因的反應相同。
+   */
   workspaceChanges: WorkspaceChanges | undefined;
   /**
    * 這一次組裝的 goal 域，**沒掛時是 `undefined`**——出貨清單上有 goal，但一份 patch
@@ -769,11 +767,6 @@ export async function createCliAgent(
           mode: sandboxMode.source,
           grants: sandboxMode,
         });
-  // **一條 thread 一份**：服務答的是這一次組裝的 root，所以條目建在這裡，同上面的控制器。
-  const workspaceChanges =
-    invocation.workspaceChanges === true && workspaceRoot !== undefined
-      ? createWorkspaceChanges({ root: workspaceRoot })
-      : undefined;
   const {
     agent,
     commands,
@@ -805,6 +798,9 @@ export async function createCliAgent(
         ...(workspaceRoot === undefined
           ? {}
           : {
+              // **工作區根也是一格 host 服務**（#669 第 4 步）：`workspace-changes` 等要根的列在 `apply` 當下讀它，沒有就不合格
+              // （照 dsh 的 `eligible`）；以前是組裝點把根塞進那一列的 Config，那一列就進不了出貨清單。
+              workspaceRoot,
               fsContainment: CONTAINED_FILESYSTEM,
               sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot },
             }),
@@ -812,7 +808,6 @@ export async function createCliAgent(
       ...plugins,
       // **`@` 引用那一句跟圍堵同一個條件**（#651）：沒有工作區時不提供列檔，使用者插不出 `@` 路徑，檔案工具讀的也不是磁碟。
       ...(workspaceRoot === undefined ? [] : [createFileReferencePlugin()]),
-      ...(workspaceChanges === undefined ? [] : [workspaceChanges]),
     ],
     ...(backend !== undefined && { backend }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),

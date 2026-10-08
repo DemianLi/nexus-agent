@@ -359,6 +359,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     await runDumpConfigSchema(
       () =>
         composeDefaultEntries({
+          serve: true,
           env: options.env ?? process.env,
           ...(invocation.patches !== undefined && { patches: invocation.patches }),
         }),
@@ -375,12 +376,13 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   }
   // 只印出貨那一層（#740）：同 `cli.ts`，不讀 home 覆寫檔，所以覆寫檔壞了也印得出來。
   if (invocation.dumpDefaultConfig) {
-    log(renderShippedConfigDump().trimEnd());
+    log(renderShippedConfigDump({ serve: true }).trimEnd());
     return undefined;
   }
   if (invocation.dumpConfig) {
     log(
       renderLayeredConfigDump({
+        serve: true,
         env: options.env ?? process.env,
         ...(invocation.patches !== undefined && { patches: invocation.patches }),
       }).trimEnd(),
@@ -440,7 +442,9 @@ async function startServer(
   //
   // **它排在瀏覽器會話之前，那是承重的**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：
   // cookie 的有效期由清單上 `#settings/browser-session` 那一列講，密鑰讀出來的那一刻就要有它。
+  // **serve 多疊一層專屬的出貨清單**（`cordis.serve.yml`，#669 第 4 步）：每一輪改了哪些檔那一列只在這裡。
   const loaded = await loadDefaultPlugins({
+    serve: true,
     env,
     ...(invocation.patches !== undefined && { patches: invocation.patches }),
   });
@@ -538,7 +542,6 @@ async function startServer(
   const trial = await createCliAgent(
     {
       ...invocation,
-      workspaceChanges: true,
       liveModel,
       ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
       threadTitle,
@@ -719,11 +722,9 @@ async function startServer(
           resumedEvents: resumed?.events,
           setting: modelSelection,
         });
-        // 每一輪改了哪些檔（#443）：只有 serve 開，見 `createCliAgent` 那一格。
         built = await createCliAgent(
           {
             ...effective,
-            workspaceChanges: true,
             // 插話（#710）：只有 serve 有，見 `createCliAgent` 那一格。
             stepInbox: true,
             ...(modelSelectionPolicy !== undefined && { modelSelectionPolicy }),
