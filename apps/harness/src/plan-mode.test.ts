@@ -1,10 +1,15 @@
 /**
- * **手搭組裝（#670）**：這一檔**沒有搬到產品組裝**（`createCliAgent`）。這是判斷，不是「組不出來」：它的案例是把 `plan-mode`
- * 單獨掛上、逐一換建構選項（`startActive`、`guidance`）看 prompt 與日誌，沒有握著什麼產品拿不到的東西；搬的成本是整檔改寫
- * （八處 `createNexusAgent`，每個案例要用 patch 換 `plan-mode` 那一列的 config），這一張收尾不做。計劃審核走真的線的那一份已經在
- * `plan-review-wire.test.ts`。要搬就另開一張。
+ * **產品組裝（#670）**：這一檔的案例都經 `createCliAgent` 跑，清單是 `cordis.yml` 出貨的那一份——`plan-mode` 那一列用
+ * config 換 `startActive`／`guidance`、`summarization` 那一列換低門檻、模型用 `withScriptedModel` 換成腳本。以前是手搭的
+ * `createNexusAgent` 單獨掛上 `plan-mode`，量到的是「一個 plugin 掛在空清單上」；現在量的是它在出貨清單裡、跟其餘
+ * 條目一起 fold 之後的樣子（指引疊在記憶與別的 prompt 貢獻者上、`exit_plan_mode` 走產品算出來的提問通道）。
  *
- * 計劃模式的**行為**驗收（[#116](https://github.com/DemianLi/nexus-agent/issues/116)）。
+ * **留在手搭組裝的一處**：「工具目錄不隨模式變動」那條（`createNexusAgent` ＋ `toolOrder`）。產品組裝沒有 `toolOrder`
+ * 這個選項（`createCliAgent` 不傳，`assembly-root.ts` 零處提到它），而這條要證明的是「模式關著時 `exit_plan_mode` 仍是
+ * 一個排得進呈現順序的已註冊工具」——`agent-factory.test.ts` 守的是用 echo／note 兩顆的泛用排序，不涵蓋這一點。
+ * 產品組裝那側另外加了「模式關著時 `exit_plan_mode` 仍綁在模型上」，不替代它。
+ *
+ *  * 計劃模式的**行為**驗收（[#116](https://github.com/DemianLi/nexus-agent/issues/116)）。
  *
  * `packages/nexus-plugin-plan-mode` 那邊的薄測試看的是 registry 的內容；這裡看的是
  * **模型收到的 prompt** 與**跑完之後的日誌**——一個 middleware 有沒有作用，只有在
@@ -25,16 +30,14 @@
  */
 
 import { PassThrough } from 'node:stream';
-import { mkdtemp, readdir, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
-import { Command, MemorySaver } from '@langchain/langgraph';
-import { createHostServicesPlugin, deriveApprovalChannel, SessionRegistry } from '@nexus/core';
+import { Command } from '@langchain/langgraph';
+import { SessionRegistry } from '@nexus/core';
 import type { PluginEntry, QuestionInterruptItem, QuestionReply, SessionEvent } from '@nexus/core';
 import { CANCELLED_MESSAGE } from '@nexus/plugin-ask-user';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
-import { createMemoryPlugin } from '@nexus/plugin-memory';
 import {
   createPlanModePlugin,
   DEFAULT_PLAN_GUIDANCE,
@@ -54,14 +57,62 @@ import {
   planFeedbackMessage,
   recordedPlanMode,
 } from '@nexus/plugin-plan-mode';
-import { createSummarizationMiddleware } from 'deepagents';
-import { describe, expect, it } from 'vitest';
-import { createNexusAgent } from './agent-factory.js';
+import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createMemoryPlugin } from '@nexus/plugin-memory';
+import { afterEach, describe, expect, it } from 'vitest';
+import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
+import { createCliAgent } from './assembly-root.js';
 import { runRepl } from './cli.js';
-import { HEADLESS_APPROVALS } from './agent-factory.js';
-import { ContainedFilesystemBackend } from './contained-backend.js';
+import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import type { ScriptedTurn } from './scripted-model.js';
+
+const shipped = await shippedPlugins();
+
+/** 出貨清單上 `plan-mode` 那一列換 config，其餘不動。不給就是出貨的樣子（`startActive` 關）。 */
+function withPlanMode(config?: { startActive?: boolean; guidance?: string }): PluginEntry[] {
+  return shipped.map((entry) =>
+    entry.id === 'plan-mode' && config ? { ...entry, config } : entry,
+  );
+}
+
+/** 暫存的 workspace，測完收掉。 */
+const roots: string[] = [];
+afterEach(async () => {
+  await Promise.all(roots.splice(0).map((dir) => rm(dir, { recursive: true, force: true })));
+});
+async function tmpRoot(prefix: string): Promise<string> {
+  const dir = await mkdtemp(join(tmpdir(), prefix));
+  roots.push(dir);
+  return dir;
+}
+
+interface AssembleOptions {
+  /** `plan-mode` 那一列的 config。省略就是出貨的樣子。 */
+  readonly plan?: { startActive?: boolean; guidance?: string };
+  /** 放在清單**最前面**的條目：註冊順序在計劃模式之前，所以更外層。 */
+  readonly before?: readonly PluginEntry[];
+  /** 對整份清單再做一次改動（例如換 `summarization` 那一列）。 */
+  readonly patch?: (plugins: PluginEntry[]) => PluginEntry[];
+  readonly workspace?: string;
+  readonly headless?: boolean;
+}
+
+/** 在產品組裝上跑：出貨清單＋這一檔要的改動＋腳本模型。 */
+async function assemble(turns: readonly ScriptedTurn[], options: AssembleOptions = {}) {
+  const base = [...(options.before ?? []), ...withPlanMode(options.plan)];
+  const plugins = withScriptedModel(options.patch ? options.patch(base) : base, turns);
+  const built = await createCliAgent(
+    { live: false, ...(options.workspace === undefined ? {} : { workspace: options.workspace }) },
+    plugins,
+    options.workspace,
+    options.headless === true ? { approvals: HEADLESS_APPROVALS } : {},
+  );
+  return { ...built, model: built.model as ScriptedChatModel };
+}
+
+const quiet = (text = '好。'): ScriptedTurn[] => [{ content: text }];
 
 /** 一輪 prompt 裡的 system 訊息。指引併進的是 system prompt，不是對話。 */
 function systemPrompt(messages: readonly BaseMessage[]): string {
@@ -87,28 +138,20 @@ function lastToolMessage(messages: readonly BaseMessage[]): BaseMessage | undefi
 }
 
 /** 一份會呼叫 `exit_plan_mode` 再收工的腳本。 */
-function planScript(): ScriptedChatModel {
-  return new ScriptedChatModel({
-    turns: [
-      {
-        content: '我先規劃。',
-        toolCalls: [{ name: EXIT_PLAN_MODE_TOOL_NAME, args: { plan: '# 計劃\n\n先看再改。' } }],
-      },
-      { content: '開始動手。' },
-    ],
-  });
-}
+const PLAN_SCRIPT: readonly ScriptedTurn[] = [
+  {
+    content: '我先規劃。',
+    toolCalls: [{ name: EXIT_PLAN_MODE_TOOL_NAME, args: { plan: '# 計劃\n\n先看再改。' } }],
+  },
+  { content: '開始動手。' },
+];
 
 describe('計劃指引進不進 system prompt', () => {
   it('startActive 開著就夾進去', async () => {
-    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      plugins: [createPlanModePlugin({ startActive: true })],
-    });
+    const { agent, model, dispose } = await assemble(quiet(), { plan: { startActive: true } });
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'));
+      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: 'guidance-on' } });
     } finally {
       await dispose();
     }
@@ -120,16 +163,16 @@ describe('計劃指引進不進 system prompt', () => {
    * **這一條是「未激活不增加 token」那句話的執行版**（dsh
    * `packages/plan/plan-mode/README.zh.md` 的 Token 影響）。middleware 掛著、工具註冊著、
    * 但 prompt 裡一個字都沒有多——不然「掛了這個 plugin」就變成一筆每輪都在付的稅。
+   *
+   * 這一條走**出貨的 `plan-mode` 那一列、不加任何 config**：出貨預設是關的才算數。
    */
-  it('預設是關的，prompt 裡一個字都不多', async () => {
-    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      plugins: [createPlanModePlugin()],
-    });
+  it('出貨預設是關的，prompt 裡一個字都不多', async () => {
+    const { agent, model, dispose } = await assemble(quiet());
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'));
+      await agent.invoke(toAgentInvocation('嗨。'), {
+        configurable: { thread_id: 'guidance-off' },
+      });
     } finally {
       await dispose();
     }
@@ -139,14 +182,14 @@ describe('計劃指引進不進 system prompt', () => {
 
   it('部署換掉的指引就是原樣那一段', async () => {
     const guidance = '<部署自己寫的那一段>';
-    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      plugins: [createPlanModePlugin({ startActive: true, guidance })],
+    const { agent, model, dispose } = await assemble(quiet(), {
+      plan: { startActive: true, guidance },
     });
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'));
+      await agent.invoke(toAgentInvocation('嗨。'), {
+        configurable: { thread_id: 'guidance-own' },
+      });
     } finally {
       await dispose();
     }
@@ -165,20 +208,21 @@ describe('計劃指引進不進 system prompt', () => {
    * `prepend` 的，站在記憶**外面**，所以就算它把 `systemMessage` 整個換掉，記憶也是
    * 之後才接上去的——實測把 `concat` 改成 `new SystemMessage(guidance)`，這一條照樣綠。
    * 真正釘住 `concat` 的是下面那條「更外層的 prompt 不會被吃掉」。
+   *
+   * 記憶 plugin 是**選配、不在出貨清單上**（出貨的 `agent-instructions` 把 `AGENTS.md` 當使用者訊息送，不進 system prompt），
+   * 所以這一條在出貨清單前面加一顆 `createMemoryPlugin()`，仍然跑在產品組裝上。
    */
   it('記憶與指引在同一份 prompt 裡同時存在', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'nexus-plan-'));
+    const root = await tmpRoot('nexus-plan-');
     await writeFile(join(root, 'AGENTS.md'), '使用者的代號是胡桃。');
-    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
-
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      backend: new ContainedFilesystemBackend({ rootDir: root }),
-      plugins: [createMemoryPlugin(), createPlanModePlugin({ startActive: true })],
+    const { agent, model, dispose } = await assemble(quiet(), {
+      plan: { startActive: true },
+      before: [createMemoryPlugin()],
+      workspace: root,
     });
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'));
+      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: 'memory' } });
     } finally {
       await dispose();
     }
@@ -195,6 +239,8 @@ describe('計劃指引進不進 system prompt', () => {
    * 先註冊的 `marker` 更外層：它先在 system prompt 上留記號，計劃模式後跑。
    * 把 `concat` 換成取代，這個記號會靜靜消失——那正是
    * `dynamicSystemPromptMiddleware` 那條路的下場，也是刻意不用它的原因。
+   *
+   * 這裡 `outer` 放在**整份出貨清單的最前面**，所以它在計劃模式之前註冊。
    */
   it('更外層的 prompt 不會被吃掉', async () => {
     const marker = '<更外層的那一段>';
@@ -220,15 +266,13 @@ describe('計劃指引進不進 system prompt', () => {
       },
     };
 
-    const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      // 順序有意義：`outer` 先註冊，所以它排在計劃模式**外面**。
-      plugins: [outer, createPlanModePlugin({ startActive: true })],
+    const { agent, model, dispose } = await assemble(quiet(), {
+      plan: { startActive: true },
+      before: [outer],
     });
 
     try {
-      await agent.invoke(toAgentInvocation('嗨。'));
+      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: 'outer' } });
     } finally {
       await dispose();
     }
@@ -258,14 +302,10 @@ async function reviewPlan(
   readonly events: readonly SessionEvent[];
   readonly model: ScriptedChatModel;
 }> {
-  const model = planScript();
-  const { agent, attachSession, dispose } = await createNexusAgent({
-    model,
-    checkpointer: new MemorySaver(),
-    plugins: [createPlanModePlugin({ startActive: true })],
+  const { agent, model, sessions, attachSession, dispose } = await assemble(PLAN_SCRIPT, {
+    plan: { startActive: true },
   });
   const config = { configurable: { thread_id: threadId } };
-  const sessions = new SessionRegistry(threadId);
   const detach = attachSession(sessions);
   try {
     const paused = await agent.invoke(toAgentInvocation('幫我改一下。'), config);
@@ -408,27 +448,15 @@ describe('exit_plan_mode 的結局', () => {
   /**
    * **沒有人可以回答 → 確定性拒絕，請使用者自己切模式，而且模式還開著。**
    *
-   * 照 dsh「沒有提問通道就拋錯」。`channel` 由組裝點明著算（同 `cli.ts`），輸入跟 `HEADLESS_APPROVALS`
-   * 同一組；少了這一格的話 plugin 退到「有人在」，這一輪會停下來問一個不會來的答案。
+   * 照 dsh「沒有提問通道就拋錯」。`channel` 由產品組裝點自己算（`createCliAgent` 收 `approvals: HEADLESS_APPROVALS`，同
+   * `cli.ts`）；少了這一格的話 plugin 退到「有人在」，這一輪會停下來問一個不會來的答案。以前這裡手交一顆
+   * `createHostServicesPlugin({ channel })`，現在是產品算出來的那一顆。
    */
   it('headless → 請使用者自己切模式，沒有中斷，模式還開著', async () => {
-    const model = planScript();
-    const checkpointer = new MemorySaver();
-    const { agent, attachSession, dispose } = await createNexusAgent({
-      model,
-      checkpointer,
-      approvals: HEADLESS_APPROVALS,
-      plugins: [
-        createHostServicesPlugin({
-          channel: deriveApprovalChannel({
-            approvalsEnabled: HEADLESS_APPROVALS.enabled,
-            hasCheckpointer: true,
-          }),
-        }),
-        createPlanModePlugin({ startActive: true }),
-      ],
+    const { agent, sessions, attachSession, dispose } = await assemble(PLAN_SCRIPT, {
+      plan: { startActive: true },
+      headless: true,
     });
-    const sessions = new SessionRegistry('headless');
     const detach = attachSession(sessions);
 
     let result;
@@ -458,7 +486,6 @@ describe('exit_plan_mode 的結局', () => {
    * 「你不在計劃模式」。
    */
   it('模式外呼叫 → 說的是「不在計劃模式」，不是核准的措辭', async () => {
-    const model = planScript();
     const askEverything: PluginEntry = {
       plugin: {
         name: 'probe-ask-everything',
@@ -467,13 +494,10 @@ describe('exit_plan_mode 的結局', () => {
         },
       },
     };
-    const { agent, attachSession, dispose } = await createNexusAgent({
-      model,
-      checkpointer: new MemorySaver(),
-      approvals: HEADLESS_APPROVALS,
-      plugins: [askEverything, createPlanModePlugin()],
+    const { agent, sessions, attachSession, dispose } = await assemble(PLAN_SCRIPT, {
+      before: [askEverything],
+      headless: true,
     });
-    const sessions = new SessionRegistry('not-in-mode');
     const detach = attachSession(sessions);
 
     let result;
@@ -499,14 +523,10 @@ describe('exit_plan_mode 的結局', () => {
 
 describe('模式狀態活得過什麼', () => {
   it('同一條 thread 的下一輪還在', async () => {
-    const model = new ScriptedChatModel({
-      turns: [{ content: '第一輪。' }, { content: '第二輪。' }],
-    });
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      checkpointer: new MemorySaver(),
-      plugins: [createPlanModePlugin({ startActive: true })],
-    });
+    const { agent, model, dispose } = await assemble(
+      [{ content: '第一輪。' }, { content: '第二輪。' }],
+      { plan: { startActive: true } },
+    );
     const config = { configurable: { thread_id: 'across-turns' } };
 
     try {
@@ -526,36 +546,30 @@ describe('模式狀態活得過什麼', () => {
    * 模式住在 graph state 裡的時候，這一條擋的是「摘要器只改 `messages`」這個沒人承諾過的
    * 實作細節。模式搬進日誌之後它**在構造上就成立了**——摘要器碰不到日誌——但照樣留著：
    * 它釘的是一句宣稱，不是一個機制，哪天模式又搬回 state，這一條就回到有牙齒的樣子。
-   * 低門檻的摘要器是照 `summarization.test.ts` 的做法換掉內建那個。
+   * 低門檻是把出貨清單上 `summarization` 那一列的 config 換掉（整份替換，所以其餘格照抄），
+   * 不再另掛一顆摘要器。
    */
   it('一次真的壓縮之後還在', async () => {
-    const root = await mkdtemp(join(tmpdir(), 'nexus-plan-sum-'));
-    const backend = new ContainedFilesystemBackend({ rootDir: root });
-    const model = new ScriptedChatModel({
-      turns: Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
-    });
-
-    const tuned: PluginEntry = {
-      plugin: {
-        name: 'tuned-summarization',
-        apply: (registry) =>
-          void registry.middleware.use(
-            createSummarizationMiddleware({
-              backend,
-              trigger: { type: 'messages', value: 3 },
-              keep: { type: 'messages', value: 1 },
-            }) as never,
-          ),
-      },
-    };
-
-    const { agent, dispose } = await createNexusAgent({
-      model,
-      backend,
-      checkpointer: new MemorySaver(),
-      plugins: [createPlanModePlugin({ startActive: true }), tuned],
-    });
+    const root = await tmpRoot('nexus-plan-sum-');
+    const lowThreshold = (plugins: PluginEntry[]): PluginEntry[] =>
+      plugins.map((entry) =>
+        entry.id === 'summarization'
+          ? {
+              ...entry,
+              config: {
+                ...(entry.config as Record<string, unknown>),
+                trigger: [{ type: 'messages', value: 3 }],
+                keep: { type: 'messages', value: 1 },
+              },
+            }
+          : entry,
+      );
+    const { agent, model, sessions, attachSession, dispose } = await assemble(
+      Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
+      { plan: { startActive: true }, workspace: root, patch: lowThreshold },
+    );
     const config = { configurable: { thread_id: 'summarize' } };
+    const detach = attachSession(sessions);
 
     let last;
     try {
@@ -563,13 +577,14 @@ describe('模式狀態活得過什麼', () => {
         last = await agent.invoke(toAgentInvocation(line), config);
       }
     } finally {
+      detach();
       await dispose();
     }
 
     // **先證明壓縮真的發生了。** 少了這一句，一個根本沒觸發摘要的組裝也會讓下面兩條
-    // 通過——那時綠的是「什麼都沒發生」，不是「熬過了壓縮」。摘要器把歷史 offload 到
-    // `/conversation_history`，那個目錄非空就是它跑過的外顯（照 `summarization.test.ts`）。
-    expect(await readdir(join(root, 'conversation_history'))).not.toHaveLength(0);
+    // 通過——那時綠的是「什麼都沒發生」，不是「熬過了壓縮」。外顯是會話日誌上的 `compaction/summary`
+    // （#143；產品的摘要列把歷史放在 graph state、不寫工作區，所以不再看 `conversation_history` 目錄）。
+    expect(sessions.root.events.some((event) => event.type === 'compaction/summary')).toBe(true);
 
     expect(last).toBeDefined();
     expect(systemPrompt(model.lastPrompt)).toContain(DEFAULT_PLAN_GUIDANCE);
@@ -580,10 +595,26 @@ describe('工具目錄不隨模式變動', () => {
   /**
    * 照 dsh：模式沒啟用時 `exit_plan_mode` 仍然留在面向模型的 schema 裡，
    * 「這樣狀態轉換不會在規劃策略變更之外額外造成工具目錄變動」。
-   * 代價是 `startActive: false` 的組裝裡它是活的 schema、死的執行路徑——上面那條
+   * 代價是模式關著的組裝裡它是活的 schema、死的執行路徑——上面那條
    * 「模式外呼叫」測的就是那條死路徑說了什麼。
    */
-  it('模式關著的時候工具也在，而且排得進 toolOrder', async () => {
+  it('產品組裝：模式關著的時候 exit_plan_mode 也綁在模型上', async () => {
+    const { agent, model, dispose } = await assemble(quiet());
+
+    try {
+      await agent.invoke(toAgentInvocation('嗨。'), { configurable: { thread_id: 'catalog' } });
+    } finally {
+      await dispose();
+    }
+
+    expect(model.boundToolNames).toContain(EXIT_PLAN_MODE_TOOL_NAME);
+  });
+
+  /**
+   * **這一條留在手搭組裝**（理由見檔頭）：產品組裝不傳 `toolOrder`，而這一條要證明的是模式關著時
+   * `exit_plan_mode` 仍是「排得進呈現順序的已註冊工具」——名字要是沒註冊，`toolOrder` 會指向不存在的工具。
+   */
+  it('手搭組裝：模式關著的時候工具也在，而且排得進 toolOrder', async () => {
     const model = new ScriptedChatModel({ turns: [{ content: '好。' }] });
     const { agent, dispose } = await createNexusAgent({
       model,
@@ -617,7 +648,6 @@ describe('工具目錄不隨模式變動', () => {
 describe('/plan 這條路', () => {
   /** 餵幾行進 REPL，把印出來的東西與日誌一起收回來。 */
   async function repl(
-    plugins: readonly PluginEntry[],
     lines: string,
     turns: number,
   ): Promise<{
@@ -626,17 +656,10 @@ describe('/plan 這條路', () => {
     stderr: string;
     events: readonly SessionEvent[];
   }> {
-    const model = new ScriptedChatModel({
-      turns: Array.from({ length: turns }, () => ({ content: '好。' })),
-    });
-    const { agent, commands, attachSession, dispose } = await createNexusAgent({
-      model,
-      plugins,
-      checkpointer: new MemorySaver(),
-    });
-    const sessions = new SessionRegistry('plan-repl');
+    const { agent, model, commands, sessions, sessionLog, attachSession, dispose } = await assemble(
+      Array.from({ length: turns }, () => ({ content: '好。' })),
+    );
     const detach = attachSession(sessions);
-    const sessionLog = sessions.root;
     const events: SessionEvent[] = [];
     sessionLog.subscribe((event) => events.push(event));
 
@@ -667,11 +690,7 @@ describe('/plan 這條路', () => {
    * 的話，一個從來不夾的實作也綠。兩輪一起比才擋得住。
    */
   it('/plan 之後那一輪夾指引，/plan off 之後那一輪不夾', async () => {
-    const { model, stdout } = await repl(
-      [createEchoPlugin(), createPlanModePlugin()],
-      '/plan\n先想想\n/plan off\n動手吧\n/exit\n',
-      2,
-    );
+    const { model, stdout } = await repl('/plan\n先想想\n/plan off\n動手吧\n/exit\n', 2);
 
     expect(model.prompts).toHaveLength(2);
     expect(systemPrompt(model.prompts[0] ?? [])).toContain(DEFAULT_PLAN_GUIDANCE);
@@ -686,11 +705,7 @@ describe('/plan 這條路', () => {
    * 不掉回模型」在計劃模式上的驗收：模型只該看到兩句人話，日誌裡則是兩對命令事件。
    */
   it('命令走命令的路，模型只收到那兩句人話', async () => {
-    const { events } = await repl(
-      [createEchoPlugin(), createPlanModePlugin()],
-      '/plan\n先想想\n/plan off\n動手吧\n/exit\n',
-      2,
-    );
+    const { events } = await repl('/plan\n先想想\n/plan off\n動手吧\n/exit\n', 2);
 
     expect(events.filter((event) => event.type === 'command/run')).toHaveLength(2);
     expect(events.filter((event) => event.type === 'command/done')).toHaveLength(2);
@@ -716,11 +731,7 @@ describe('/plan 這條路', () => {
    * 照舊留著：那個形狀歸基座，下一個回非空更新的節點照樣會帶著它。
    */
   it('進了計劃模式之後，使用者那句話不會在畫面上出現兩次', async () => {
-    const { stdout } = await repl(
-      [createEchoPlugin(), createPlanModePlugin()],
-      '/plan\n先想想\n/exit\n',
-      1,
-    );
+    const { stdout } = await repl('/plan\n先想想\n/exit\n', 1);
 
     expect(stdout).toContain(PLAN_ENTERED_MESSAGE);
     expect(stdout).not.toContain('先想想');
@@ -734,11 +745,7 @@ describe('/plan 這條路', () => {
    * 只斷言「有一輪」的話，一個把話在 `command/done` 之前就送出去的實作照樣綠——順序才是這張卡的承諾。
    */
   it('/plan 幫我規劃：命令落定之後才開那一輪，第一個請求有指引也有那句話', async () => {
-    const { model, events, stdout } = await repl(
-      [createEchoPlugin(), createPlanModePlugin()],
-      '/plan 幫我規劃\n/exit\n',
-      1,
-    );
+    const { model, events, stdout } = await repl('/plan 幫我規劃\n/exit\n', 1);
 
     expect(stdout).toContain(PLAN_ENTERED_MESSAGE);
     expect(
@@ -764,11 +771,7 @@ describe('/plan 這條路', () => {
    * ——以前它回 error。翻面登記在 `index.ts` 的偏離說明，這條是它的絆索。
    */
   it('/plan of 是進入並把 of 送給模型，不是離開也不是錯誤', async () => {
-    const { model, stderr } = await repl(
-      [createEchoPlugin(), createPlanModePlugin()],
-      '/plan of\n/exit\n',
-      1,
-    );
+    const { model, stderr } = await repl('/plan of\n/exit\n', 1);
 
     expect(stderr).toBe('');
     expect(model.prompts).toHaveLength(1);
@@ -776,11 +779,7 @@ describe('/plan 這條路', () => {
   });
 
   it('/plan off 之後不開輪', async () => {
-    const { model, stdout } = await repl(
-      [createEchoPlugin(), createPlanModePlugin()],
-      '/plan off\n/exit\n',
-      1,
-    );
+    const { model, stdout } = await repl('/plan off\n/exit\n', 1);
 
     expect(stdout).toContain(PLAN_ALREADY_INACTIVE_MESSAGE);
     expect(model.prompts).toHaveLength(0);
