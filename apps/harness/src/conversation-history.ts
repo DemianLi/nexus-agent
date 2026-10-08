@@ -19,7 +19,7 @@
  * | `assistant/message` | 模型的回覆，連同推理（#527）；`interrupted` 的那則不收尾，由那一輪的中止標成「已停止」 |
  * | `tool/call` ／ `tool/result` | 工具卡開、收；那則結果的文字成功失敗都帶（成功是輸出、失敗是紅字，[#439](https://github.com/DemianLi/nexus-agent/issues/439)） |
  * | `turn/end` ／ `turn/failed` | 那一輪收掉（中止、失敗、完成）；沒結果的卡照即時那條規則收成失敗 |
- * | `turn/end`（`reason.kind: "interrupted"`） | 續接時補寫的收尾（#721）：上一個行程死在這一輪中間，畫面與完成同（`completed`），不論那一輪死前有沒有 `interrupt/raised`；補的 `tool/result`（`TOOL_OUTCOME_UNKNOWN`）的卡仍畫成 `UNFINISHED_TOOL_TEXT`，與補寫之前一字不差 |
+ * | `turn/end`（`reason.kind: "interrupted"`） | 續接時補寫的收尾（#721）：上一個行程死在這一輪中間，畫面與完成同（`completed`），不論那一輪死前有沒有 `interrupt/raised`；補的 `tool/result`（`TOOL_OUTCOME_UNKNOWN`）的卡仍畫成 `UNFINISHED_TOOL_TEXT`，與補寫之前一字不差；補的「還沒開始」（`TOOL_NOT_STARTED`，沒有 `tool/call`）沒有卡可收，不畫；舊檔形狀（補結在 end-seed 後面）的補結與收尾也不畫第二次 |
  * | `session/end-seed` | 舊檔（#721 之前）上一個行程停在一輪中間的話，那一輪在這裡收掉；新檔那一輪已由上一列收掉 |
  * | `deliverables/presented` | `custom` frame，`data` 同即時（{@link deliverablesData}） |
  * | `subagent/catalog` | 委派呼叫派出的子會話（#1023）：`custom` frame，**逐顆轉**，位置就是日誌上的位置（配對的 `tool/call` 之後、同一輪）；`data` 同即時（{@link subagentCatalogData}）；31 以前的日誌沒有這一顆 |
@@ -115,6 +115,7 @@ import {
   openTurnStart,
   replayConversation,
   sessionStatsUnit,
+  TOOL_NOT_STARTED,
   TOOL_OUTCOME_UNKNOWN,
   tokenUsageUnit,
   type ProjectionUnit,
@@ -970,6 +971,17 @@ export function historyFrames(
         );
         break;
       case 'tool/result': {
+        // 續接補寫的合成結果（#721）對不到一張開著的卡就不畫：
+        // - 「還沒開始」：回覆裡要了、行程在記 `tool/call` 之前死掉的呼叫，前面沒有 `tool-started`，沒有卡可收；
+        // - 舊檔形狀（開著的輪＋end-seed，補結接在 end-seed 後面）：那一輪與它的卡已在 end-seed 收掉，補結來得太晚。
+        // 補一顆 `tool-finished` 只會對一張不存在或已收的卡說話。
+        if (
+          (event.data.error?.code === TOOL_NOT_STARTED ||
+            event.data.error?.code === TOOL_OUTCOME_UNKNOWN) &&
+          !unsettled.has(event.data.callId)
+        ) {
+          break;
+        }
         unsettled.delete(event.data.callId);
         // **成功也帶文字**（#439）：抽字的規則與即時那條共用（`tool-result-text.ts`），
         // 兩邊各寫一份的話，同一張卡會「即時一個樣、重新整理另一個樣」。
@@ -1031,7 +1043,8 @@ export function historyFrames(
         } else if (event.data.reason?.kind === 'interrupted') {
           // 續接補寫的收尾（#721）：那一輪死了，不是停在核准點等人——死前就算記過 `interrupt/raised`
           // 也不能畫成「等人回覆」。畫面與舊檔在 end-seed 收掉的那一條一致。
-          close(event.time, { event: 'completed' });
+          // 舊檔形狀（補結接在 end-seed 後面）那一輪已在 end-seed 收掉，這顆不再收第二次。
+          if (turnOpen || suspended) close(event.time, { event: 'completed' });
         } else if (interrupted) {
           turnOpen = false;
           suspended = true;

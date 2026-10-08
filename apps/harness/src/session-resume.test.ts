@@ -19,7 +19,9 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { SESSION_LOG_FORMAT_VERSION, SessionAlreadyOwnedError } from '@nexus/core';
+import { AIMessage } from '@langchain/core/messages';
+
+import { SESSION_LOG_FORMAT_VERSION, SessionAlreadyOwnedError, toLoggedMessage } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
 import {
@@ -326,6 +328,112 @@ describe('尾巴', () => {
       data: { callId: 'dead-1', isError: true, error: { code: 'TOOL_OUTCOME_UNKNOWN' } },
     });
     expect(once[next + 3]).toMatchObject({ data: { reason: { kind: 'interrupted' } } });
+
+    await cli(['--workspace', workspace, '--resume', runDir]);
+    const twice = await readLog(logPath);
+    expect(
+      twice.filter(
+        (event) => event.type === 'turn/end' && event.data.reason?.kind === 'interrupted',
+      ),
+    ).toHaveLength(1);
+  });
+
+  /** 回覆要了兩個工具、只有第一個記了 `tool/call`，模型呼叫還開著——當掉的常態形狀。 */
+  const midBatchTail = (next: number) =>
+    [
+      { type: 'turn/start', data: { kind: 'message', text: '做兩件事' } },
+      { type: 'model/start', data: {} },
+      {
+        type: 'assistant/message',
+        data: {
+          modelCall: next + 1,
+          message: toLoggedMessage(
+            new AIMessage({
+              content: '我來',
+              tool_calls: [
+                { id: 'dead-1', name: 'write_file', args: {}, type: 'tool_call' },
+                { id: 'dead-2', name: 'read_file', args: {}, type: 'tool_call' },
+              ],
+            }),
+          ),
+        },
+      },
+      { type: 'tool/call', data: { callId: 'dead-1', name: 'write_file', arguments: '{}' } },
+    ].map((event, index) => ({ ...event, seq: next + index, time: 1 }));
+
+  /**
+   * 三種殘局一次補齊（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：記過 `tool/call` 的「結果不明」、
+   * 回覆裡要了卻沒記到 `tool/call` 的「還沒開始」、沒結尾的 `model/start`。順序是結果、`model/end`、`turn/end`，都在 `end-seed` 前面；
+   * 不變量不報（「還沒開始」的結果沒有前面的 `tool/call`，明文放行）；再接一次不重補。
+   */
+  it('當在一批工具中間：結果不明、還沒開始、model/end 與 turn/end 依序補齊，再接一次不重補', async () => {
+    const runDir = await firstRun();
+    const logPath = join(runDir, 'cli.jsonl');
+    const next = (await readLog(logPath)).length;
+    await appendFile(
+      logPath,
+      `${midBatchTail(next)
+        .map((event) => JSON.stringify(event))
+        .join('\n')}\n`,
+    );
+
+    const { stderr } = await cli(['--workspace', workspace, '--resume', runDir]);
+    expect(stderr).not.toContain('[不變量]');
+    const once = await readLog(logPath);
+    expect(once.map((event) => event.seq)).toEqual(once.map((_, index) => index));
+    expect(once.slice(next + 4, next + 8).map((event) => event.type)).toEqual([
+      'tool/result',
+      'tool/result',
+      'model/end',
+      'turn/end',
+    ]);
+    // 照回覆要的順序（dsh 的 `pendingCalls`）。
+    expect(once[next + 4]).toMatchObject({
+      data: { callId: 'dead-1', error: { code: 'TOOL_OUTCOME_UNKNOWN' } },
+    });
+    expect(once[next + 5]).toMatchObject({
+      data: { callId: 'dead-2', error: { code: 'TOOL_NOT_STARTED' } },
+    });
+    expect(once[next + 6]).toMatchObject({ data: { modelCall: next + 1, outcome: 'error' } });
+    expect(once[next + 8]).toMatchObject({ type: 'session/end-seed' });
+
+    await cli(['--workspace', workspace, '--resume', runDir]);
+    const twice = await readLog(logPath);
+    expect(
+      twice.filter(
+        (event) => event.type === 'turn/end' && event.data.reason?.kind === 'interrupted',
+      ),
+    ).toHaveLength(1);
+    expect(
+      twice.filter((event) => event.type === 'tool/result' && event.data.isError),
+    ).toHaveLength(2);
+  });
+
+  /**
+   * 舊檔的形狀：補寫還不存在的版本留下「開著的輪＋`session/end-seed`」，之後沒有新輪就停了。
+   * 新程式碼續接它：補結接在 end-seed **後面**（dsh 的掃描不在 end-seed 重設），不變量不報，再接不重補。
+   */
+  it('舊檔「開著的輪＋end-seed」：補結接在 end-seed 後面，不報違規，再接不重補', async () => {
+    const runDir = await firstRun();
+    const logPath = join(runDir, 'cli.jsonl');
+    const next = (await readLog(logPath)).length;
+    const tail = [
+      ...midBatchTail(next),
+      { type: 'session/end-seed', data: {}, seq: next + 4, time: 1 },
+    ];
+    await appendFile(logPath, `${tail.map((event) => JSON.stringify(event)).join('\n')}\n`);
+
+    const { stderr } = await cli(['--workspace', workspace, '--resume', runDir]);
+    expect(stderr).not.toContain('[不變量]');
+    const once = await readLog(logPath);
+    expect(once.map((event) => event.seq)).toEqual(once.map((_, index) => index));
+    expect(once.slice(next + 4, next + 9).map((event) => event.type)).toEqual([
+      'session/end-seed',
+      'tool/result',
+      'tool/result',
+      'model/end',
+      'turn/end',
+    ]);
 
     await cli(['--workspace', workspace, '--resume', runDir]);
     const twice = await readLog(logPath);

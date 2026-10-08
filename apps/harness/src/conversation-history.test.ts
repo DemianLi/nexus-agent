@@ -490,6 +490,79 @@ describe('日誌 → 畫面', () => {
     expect(state.status).toBe('idle');
   });
 
+  /**
+   * 補的「還沒開始」（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）：回覆要了、沒記到 `tool/call` 的呼叫，
+   * 補的 `tool/result` 前面沒有 `tool-started`，也就沒有卡。畫面不為它多畫一張、也不丟一顆對不到卡的 `tool-finished`；
+   * 另一個記過 `tool/call` 的照舊收成「沒有結果」。
+   */
+  it('補寫的「還沒開始」：不畫卡、不丟孤兒 tool-finished；結果不明的那張照舊', () => {
+    const notStarted = {
+      ...result('c2', 'x', true),
+      data: {
+        ...result('c2', 'x', true).data,
+        error: { name: 'ToolNotStartedError', code: 'TOOL_NOT_STARTED' },
+      },
+    } as Draft;
+    const unknown = {
+      ...result('c1', 'x', true),
+      data: {
+        ...result('c1', 'x', true).data,
+        error: { name: 'ToolOutcomeUnknownError', code: 'TOOL_OUTCOME_UNKNOWN' },
+      },
+    } as Draft;
+    const events = log(
+      human('跑'),
+      reply('我來', ['c1', 'c2']),
+      call('c1'),
+      unknown,
+      notStarted,
+      { type: 'turn/end', data: { reason: { kind: 'interrupted' } } },
+      { type: 'session/end-seed', data: {} },
+    );
+
+    const frames = historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES);
+    const finished = frames.filter(
+      (frame) =>
+        frame.method === 'tools' &&
+        (frame.params.data as { event?: unknown }).event === 'tool-finished',
+    );
+    expect(
+      finished.map((frame) => (frame.params.data as { tool_call_id?: unknown }).tool_call_id),
+    ).toEqual(['c1']);
+    const state = screen(events);
+    expect(state.entries.map(line)).toEqual([
+      'human:跑',
+      'ai:我來',
+      `tool:echo:failed:${UNFINISHED_TOOL_TEXT}`,
+    ]);
+    expect(state.status).toBe('idle');
+  });
+
+  /** 舊檔形狀「開著的輪＋end-seed」補結接在 end-seed 後面：end-seed 先把那一輪收掉，補的 `turn/end` 不能再收第二次。 */
+  it('舊檔形狀（end-seed 先收、補結在後）：收一次，不多出第二個收尾 frame', () => {
+    const events = log(
+      human('跑'),
+      call('c1'),
+      { type: 'session/end-seed', data: {} },
+      {
+        ...result('c1', 'x', true),
+        data: {
+          ...result('c1', 'x', true).data,
+          error: { name: 'ToolOutcomeUnknownError', code: 'TOOL_OUTCOME_UNKNOWN' },
+        },
+      } as Draft,
+      { type: 'turn/end', data: { reason: { kind: 'interrupted' } } },
+    );
+    const frames = historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES);
+    const completed = frames.filter(
+      (frame) =>
+        frame.method === 'lifecycle' &&
+        (frame.params.data as { event?: unknown }).event === 'completed',
+    );
+    expect(completed).toHaveLength(1);
+    expect(screen(events).status).toBe('idle');
+  });
+
   /** 死前記過 `interrupt/raised` 也一樣：那一輪死了，不是停在核准點等人（否則畫面會掛一張等人回覆的卡）。 */
   it('補寫的收尾：死前記過 interrupt/raised 也收成完成，不畫成等人回覆', () => {
     const state = screen(
