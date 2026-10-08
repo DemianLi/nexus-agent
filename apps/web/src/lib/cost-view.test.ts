@@ -44,6 +44,54 @@ describe('usageSections', () => {
     });
   });
 
+  it('新 server（有 uncachedInputTokens）：輸入只算未快取的，快取讀、快取寫另列，合計四項相加；inputTokens 怎麼改都不影響', () => {
+    const rows = (inputTokens: number) => {
+      const state = fold((s) => [
+        s.custom(TOKEN_USAGE, {
+          inputTokens,
+          uncachedInputTokens: 200,
+          cacheReadTokens: 700,
+          cacheWriteTokens: 100,
+          outputTokens: 50,
+        }),
+      ]);
+      return usageSections(state.tokenUsage, state.sessionStats).tokens;
+    };
+    expect(rows(1_000)).toEqual([
+      ['輸入', '200 token'],
+      ['快取讀', '700 token'],
+      ['快取寫', '100 token'],
+      ['輸出', '50 token'],
+      ['合計', '1,050 token'],
+    ]);
+    expect(rows(200)).toEqual(rows(1_000));
+  });
+
+  it('新 server 沒記快取：那兩列畫沒記，不畫 0，合計不加', () => {
+    const state = fold((s) => [
+      s.custom(TOKEN_USAGE, { inputTokens: 90, uncachedInputTokens: 100, outputTokens: 10 }),
+    ]);
+    expect(usageSections(state.tokenUsage, null).tokens).toEqual([
+      ['輸入', '100 token'],
+      ['快取讀', '沒記'],
+      ['快取寫', '沒記'],
+      ['輸出', '10 token'],
+      ['合計', '110 token'],
+    ]);
+  });
+
+  it('四桶任一大於 0 就有 token 那一段（只有快取讀也算）', () => {
+    const state = fold((s) => [
+      s.custom(TOKEN_USAGE, {
+        inputTokens: 0,
+        uncachedInputTokens: 0,
+        cacheReadTokens: 800,
+        outputTokens: 0,
+      }),
+    ]);
+    expect(usageSections(state.tokenUsage, null).tokens?.at(-1)).toEqual(['合計', '800 token']);
+  });
+
   it('entries 是空的時數字仍等於 frame 的值：數字不是從畫面加出來的', () => {
     const state = fold((s) => [
       s.custom(TOKEN_USAGE, { inputTokens: 100, outputTokens: 10 }),
