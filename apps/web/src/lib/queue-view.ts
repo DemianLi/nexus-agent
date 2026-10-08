@@ -110,9 +110,17 @@ export function isQueueParked(status: ConversationStatus, count: number): boolea
 /**
  * 輸入框送得出一句話嗎（Q2）。**純文字跑著也放行**：伺服器收下就排進佇列。停在核准點時輸入框被面板換掉（Q3、
  * §4.3），這裡照樣擋，免得別的路徑繞過去。
+ *
+ * **文字或附件至少一個就能送**（dsh `session-controller/src/types.ts:338`：「at least one non-whitespace text part or
+ * attachment」）：`hasAttachments` 為真時，空白文字也放行。斜線命令不帶附件，不走這一條。
  */
-export function canSendText(connected: boolean, status: ConversationStatus, line: string): boolean {
-  return connected && line.trim() !== '' && status !== 'awaiting-input';
+export function canSendText(
+  connected: boolean,
+  status: ConversationStatus,
+  line: string,
+  hasAttachments = false,
+): boolean {
+  return connected && (line.trim() !== '' || hasAttachments) && status !== 'awaiting-input';
 }
 
 /**

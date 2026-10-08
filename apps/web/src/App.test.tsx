@@ -3881,6 +3881,62 @@ describe('附件送出（#733、#732）', () => {
     expect(input().value).toBe('');
   });
 
+  it('只有附件、沒打字也送得出去：文字是空字串，附件照帶；沒附件沒文字仍送不出', async () => {
+    const { client, runStart } = withUploads();
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    const sendButton = () => screen.getByRole('button', { name: '送出' });
+
+    expect(sendButton().hasAttribute('disabled')).toBe(true);
+    addFiles([png('a.png'), pdf('b.pdf')]);
+    expect(input().value).toBe('');
+    await waitFor(() => expect(sendButton().hasAttribute('disabled')).toBe(false));
+    fireEvent.click(sendButton());
+
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    const [, text, options] = runStart.mock.calls[0]!;
+    expect(text).toBe('');
+    expect(options?.attachments).toEqual([
+      { type: 'image', mediaType: 'image/png', data: btoa('PNG'), name: 'a.png' },
+      { type: 'file', receiptId: 'r-b.pdf' },
+    ]);
+    await waitFor(() => expect(chips()).toHaveLength(0));
+    expect(sendButton().hasAttribute('disabled')).toBe(true);
+  });
+
+  it('只有附件時 Enter 也送；Cmd+Enter 是帶著附件插話，不是把佇列改成插話', async () => {
+    const { client, runStart } = withUploads();
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    addFiles([png('a.png')]);
+    fireEvent.keyDown(input(), { key: 'Enter' });
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(runStart.mock.calls[0]![1]).toBe('');
+
+    addFiles([png('b.png')]);
+    fireEvent.keyDown(input(), { key: 'Enter', metaKey: true, ctrlKey: true });
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(2));
+    expect(runStart.mock.calls[1]![2]?.attachments).toHaveLength(1);
+  });
+
+  it('被拒時只有附件的那句：附件留著，草稿維持空白', async () => {
+    const { client, runStart } = withUploads({
+      type: 'error',
+      id: 1,
+      error: 'invalid_argument',
+      message: '只有附件的那句被拒了（伺服器的話）',
+    });
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    addFiles([png('a.png')]);
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText(/只有附件的那句被拒了/u)).toBeTruthy();
+    expect(chips()).toHaveLength(1);
+    expect(input().value).toBe('');
+  });
+
   it('沒有附件：run.start 的參數跟以前一樣（沒有 attachments 這個鍵）', async () => {
     const { client, runStart, uploads } = withUploads();
     render(<App client={client} />);

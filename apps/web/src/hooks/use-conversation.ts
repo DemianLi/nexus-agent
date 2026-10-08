@@ -172,6 +172,7 @@ export interface Conversation {
    * 泡泡。斜線命令不看它。省略就是排隊。
    *
    * `attachments` 是已經準備好的附件（圖內嵌、檔案是收據，`lib/attachment-send.ts`），放進 `run.start`；斜線命令不看它。
+   * 文字可以是空的，只要附件至少一個（只有附件的一句話）。
    * 伺服器不收（`not_supported`）或目前的模型不收圖（`model_does_not_support_images`）時回 {@link SendRejected}，
    * 訊息是講給人聽的話。
    */
@@ -542,7 +543,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       attachments?: readonly PromptAttachment[],
     ): Promise<SendRejected | undefined> => {
       const trimmed = text.trim();
-      if (trimmed === '') {
+      const hasAttachments = attachments !== undefined && attachments.length > 0;
+      // 文字或附件至少一個；只有附件時文字是空字串，照樣送。
+      if (trimmed === '' && !hasAttachments) {
         return undefined;
       }
       if (trimmed === FEEDBACK_COMMAND_LINE) {

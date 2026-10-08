@@ -60,7 +60,7 @@ export function attachmentKind(file: Pick<File, 'type'>): DraftAttachment['kind'
  */
 export const MAX_MESSAGE_IMAGE_BYTES = 200 * 1024 * 1024;
 
-/** 單張圖的總像素上限，同 dsh 的 `DEFAULT_MAX_IMAGE_PIXELS`（`attachment-local/src/index.ts:40`）。讀得到尺寸時才擋。 */
+/** **每一張圖**的像素上限（寬×高），不是整句話的總量；同 dsh 的 `DEFAULT_MAX_IMAGE_PIXELS`（`attachment-local/src/index.ts:39-40`，「one submitted image」）。讀得到尺寸時才擋。 */
 export const MAX_IMAGE_PIXELS = 64_000_000;
 
 export interface Admission {
@@ -73,7 +73,7 @@ export interface Admission {
 /**
  * 前端先擋的上限（單張 20 MB、一句話 20 張、一句話圖片總量 200 MB）：新選進來的檔案逐個看，**超過的那一個不收進草稿**，
  * 並說原因；其餘照常收。超過就拒收、不縮圖（同 dsh）。不是白名單內的圖與一般檔案不受這三條管（檔案的大小由伺服器決定）。
- * 總像素要讀圖才知道，在送出時擋（`lib/attachment-send.ts`）。
+ * 每張圖的像素上限要讀圖才知道，在送出時逐張擋（`lib/attachment-send.ts`）。
  *
  * @param current - 草稿裡已經有的。
  */
