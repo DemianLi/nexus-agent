@@ -1,9 +1,11 @@
 import type { Event } from '@nexus/wire';
 import { emptyConversation, INBOX, reduceAll } from '@nexus/wire';
-import { cleanup, render, screen, within } from '@testing-library/react';
-import { afterEach, describe, expect, it } from 'vitest';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
+import { AttachmentImageContext, SentAttachments } from '@/components/sent-attachments';
 import { Transcript } from '@/components/transcript';
+import type { AttachmentImageSource } from '@/lib/attachment-image';
 import { axeViolations } from '@/test/axe';
 
 afterEach(cleanup);
@@ -127,5 +129,84 @@ describe('人的泡泡畫這一句帶的附件（#732）', () => {
       }),
     ]);
     expect(screen.queryByTestId('sent-attachments')).toBeNull();
+  });
+});
+
+describe('已送出的圖畫縮圖（#733）', () => {
+  const image = {
+    type: 'image' as const,
+    attachmentId: 'sha256:img',
+    mediaType: 'image/png' as const,
+    bytes: 221,
+    width: 96,
+    height: 96,
+    name: 'red.png',
+  };
+  const file = { type: 'file' as const, attachmentId: 'sha256:file', name: 'note.txt', bytes: 55 };
+
+  const mount = (read: AttachmentImageSource['read'] | undefined) =>
+    render(
+      <AttachmentImageContext.Provider value={read === undefined ? null : { read, dispose() {} }}>
+        <SentAttachments attachments={[image, file]} />
+      </AttachmentImageContext.Provider>,
+    );
+
+  it('讀回來換成縮圖，點縮圖開原圖；檔案不讀、仍是圖示標籤', async () => {
+    const read = vi.fn(async () => 'blob:red');
+    mount(read);
+    const chips = screen.getAllByTestId('sent-attachment');
+    await waitFor(() => expect(chips[0]!.getAttribute('data-thumbnail')).toBe('shown'));
+    expect(chips[0]!.querySelector('img')?.getAttribute('src')).toBe('blob:red');
+    expect(chips[0]!.textContent).toContain('red.png');
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(read).toHaveBeenCalledWith('sha256:img', 'image/png');
+    expect(chips[1]!.getAttribute('data-thumbnail')).toBe('none');
+    expect(chips[1]!.querySelector('img')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '看原圖：red.png' }));
+    expect(screen.getByRole('dialog')).toBeTruthy();
+    expect(screen.getByRole('img', { name: 'red.png' }).getAttribute('src')).toBe('blob:red');
+  });
+
+  it('讀不到：留著標籤（圖示、名字、大小），不畫壞圖', async () => {
+    const read = vi.fn(async () => undefined);
+    mount(read);
+    await waitFor(() => expect(read).toHaveBeenCalled());
+    const chip = screen.getAllByTestId('sent-attachment')[0]!;
+    expect(chip.getAttribute('data-thumbnail')).toBe('none');
+    expect(chip.querySelector('img')).toBeNull();
+    expect(chip.textContent).toContain('PNG · 221 B · 96×96');
+  });
+
+  it('沒有提供者：不讀、一律標籤', () => {
+    mount(undefined);
+    expect(screen.getAllByTestId('sent-attachment')[0]!.getAttribute('data-thumbnail')).toBe(
+      'none',
+    );
+  });
+  it('進到畫面才讀：還沒交會不讀，交會了才讀', async () => {
+    const callbacks: ((entries: { isIntersecting: boolean }[]) => void)[] = [];
+    const fire = (isIntersecting: boolean) => callbacks.forEach((cb) => cb([{ isIntersecting }]));
+    vi.stubGlobal(
+      'IntersectionObserver',
+      class {
+        constructor(callback: (entries: { isIntersecting: boolean }[]) => void) {
+          callbacks.push(callback);
+        }
+        observe() {}
+        disconnect() {}
+      },
+    );
+    try {
+      const read = vi.fn(async () => 'blob:red');
+      mount(read);
+      await act(async () => {});
+      expect(read).not.toHaveBeenCalled();
+      await act(async () => fire(false));
+      expect(read).not.toHaveBeenCalled();
+      await act(async () => fire(true));
+      await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
