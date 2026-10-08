@@ -41,10 +41,11 @@ pnpm workspace，Node >= 22。
 | 長期目標 | 一個會話記得住跨多輪的目標；開關是 `/goal` | `nexus-plugin-goal` |
 | Todo | 模型自己維護的工作清單 | `nexus-plugin-todo` |
 | 工作區指令 | 工作區的 `AGENTS.md` 當一則訊息送進每個 agent | `nexus-plugin-agent-instructions` |
+| 技能 | 工作區的 `skills/<name>/SKILL.md` 列進提示詞，模型需要時自己去讀；沒有技能就不加任何字 | `nexus-plugin-skills` |
 | 交付宣告 | 模型指名這一輪交付了哪些檔 | `nexus-plugin-present` |
 | 評分與回饋 | `/feedback` | `nexus-plugin-feedback` |
 
-**要自己疊一層 patch 才掛**：MCP、QuickJS 沙箱、skills、記憶、OpenTelemetry 遙測。每個套件的
+**要自己疊一層 patch 才掛**：MCP、QuickJS 沙箱、記憶、OpenTelemetry 遙測。每個套件的
 `src/index.ts` 檔頭寫著它自己的完整規格與偏離標註。人打的斜線命令不經過模型，由進入點解析發派。
 
 ## 跑起來

@@ -17,6 +17,8 @@
  *
  * 檔案工具（接縫 3）、摘要（接縫 4）、`task` 子代理（接縫 5）、skills／memory 的 middleware
  * 都還是呼叫 `deepagents` 匯出的建構函式，**這個檔只換「怎麼把它們疊起來」**。
+ * 唯一的例外是 skills：基座那顆對空清單也會接一大段說明、又不快取空結果，包了一層
+ * （`./skills-middleware.ts`，[#440](https://github.com/DemianLi/nexus-agent/issues/440)）。
  *
  * ## 照抄基座的組裝順序，不是照猜
  *
@@ -43,7 +45,6 @@
 import {
   createFilesystemMiddleware,
   createMemoryMiddleware,
-  createSkillsMiddleware,
   createSubAgentMiddleware,
   createSummarizationMiddleware,
 } from 'deepagents';
@@ -53,6 +54,7 @@ import type { AgentMiddleware } from 'langchain';
 
 import type { FoldedAgentParams } from './fold.js';
 import { createPatchToolCallsMiddleware } from './patch-tool-calls.js';
+import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
 
 /** 組裝一個 agent 要的東西：fold 的產物，加上選填的系統提示詞。 */
 export interface AssembleAgentParams extends FoldedAgentParams {
@@ -121,7 +123,9 @@ export function subagentDefaultMiddleware(
     createFilesystemMiddleware({ backend, ...(permissions !== undefined && { permissions }) }),
     createSummarizationMiddleware({ backend }),
     createPatchToolCallsMiddleware(),
-    ...(skills.length > 0 ? [createSkillsMiddleware({ backend, sources: [...skills] })] : []),
+    ...(skills.length > 0
+      ? [createSkillsMiddlewareQuietWhenEmpty({ backend, sources: [...skills] })]
+      : []),
   ] as unknown as AgentMiddleware[];
 }
 
@@ -186,7 +190,9 @@ export function assembleAgent(params: AssembleAgentParams) {
 
   const core = [
     // 選填的 root skills，排在檔案工具前面。
-    ...(skills.length > 0 ? [createSkillsMiddleware({ backend, sources: [...skills] })] : []),
+    ...(skills.length > 0
+      ? [createSkillsMiddlewareQuietWhenEmpty({ backend, sources: [...skills] })]
+      : []),
     createFilesystemMiddleware({ backend, permissions }),
     createSubAgentMiddleware({
       defaultModel: model as never,
