@@ -18,7 +18,12 @@ import {
 } from './session-persistence.js';
 import { SESSION_LOG_FORMAT_VERSION } from './session-store.js';
 import type { SessionEvent } from './session-log.js';
-import type { SessionStore, StoredSession, StoredSessionHeader } from './session-store.js';
+import type {
+  SessionHeaderBuildMetadata,
+  SessionStore,
+  StoredSession,
+  StoredSessionHeader,
+} from './session-store.js';
 
 /** 協調器只寫不讀：唯讀的兩個方法一被叫就是錯。 */
 const NO_READS: Pick<SessionStore, 'list' | 'open'> = {
@@ -467,7 +472,7 @@ describe('續接：只寫還沒存的後綴', () => {
 
     function resume(
       seed: readonly SessionEvent[],
-      buildMetadata: typeof metadata | undefined,
+      buildMetadata: SessionHeaderBuildMetadata | undefined,
     ): {
       sessions: SessionRegistry;
       stored: ReturnType<typeof fakeStored>;
@@ -536,7 +541,7 @@ describe('續接：只寫還沒存的後綴', () => {
     it('內容變了才再記一顆：換了版本就多一顆，end-seed 仍只有一顆', async () => {
       const first = resume(earlierTurn(), metadata);
       await first.flush();
-      const v3 = {
+      const v3: SessionHeaderBuildMetadata = {
         ...metadata,
         plugins: [{ name: 'file:///v3/plugin.mjs', id: 'versioned-probe', disabled: false }],
       };

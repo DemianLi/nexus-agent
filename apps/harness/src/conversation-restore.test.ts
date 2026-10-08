@@ -157,7 +157,7 @@ describe('CLI 的 --resume', () => {
     expect([await count('session/resumed'), await count('session/end-seed')]).toEqual([1, 1]);
     const resumed = (await readLog(log)).filter((event) => event.type === 'session/resumed');
     expect(resumed[0]?.ignorable).toBe(true);
-    const data = resumed[0]?.data as { plugins: { id?: string }[] };
+    const data = resumed[0]?.data as { plugins: readonly { id?: string }[] };
     expect(data.plugins.map((row) => row.id)).toContain('request-recorder');
 
     // 第三次說了話（清單沒變，緊接在上一顆後面，不另記）；再下一次續接前面隔了一輪，才是新的一段：再記一顆。
