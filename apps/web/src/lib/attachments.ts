@@ -34,16 +34,14 @@ export interface ComposerAttachments {
 }
 
 /**
- * 這個組裝收不收附件。**寫死 `false`，不在執行期探測**：web 與 serve 一起打包出貨，伺服器端的上傳與收圖
- * （[#732](https://github.com/DemianLi/nexus-agent/issues/732)）有沒有落地，是出貨時就知道的事，不需要執行期問；
- * 探測反而多一條「探測失敗算有還是沒有」的路。
+ * 這個組裝收不收附件。**寫死 `true`，不在執行期探測**：web 與 serve 一起打包出貨，伺服器端的上傳與收圖
+ * （[#732](https://github.com/DemianLi/nexus-agent/issues/732)）已經落地（`POST /threads/:id/uploads`、`run.start` 的
+ * `attachments`），是出貨時就知道的事，不需要執行期問；探測反而多一條「探測失敗算有還是沒有」的路。
  *
- * 伺服器端實作合進 develop 之後，**另開一張 PR 把這裡改成 `true`**（只改這一行與它的測試）。在那之前整個功能
- * （加入鈕、貼上、拖放、附件列）都不出現：沒有它，附件選進來也送不出去，貼上一張圖會變成一顆永遠送不出的晶片。
- * 萬一出貨時開了、伺服器卻回 `not_supported`，送出會失敗並說出原因、草稿與附件留著（見 `lib/attachment-send.ts`）。
+ * 萬一出貨時伺服器卻回 `not_supported`（手搭的組裝沒有附件儲存），送出會失敗並說出原因、草稿與附件留著（見 `lib/attachment-send.ts`）。
  */
 export function serverSupportsAttachments(): boolean {
-  return false;
+  return true;
 }
 
 /**
