@@ -50,6 +50,7 @@ import type {
   WireErrorCode,
   WireChannel,
   FeedbackMethod,
+  ModelMethod,
   WireFeedbackRating,
   DeliverableBytes,
   DeliverableMethod,
@@ -143,6 +144,7 @@ import type { GoalDriverPort } from './goal-driver.js';
 import { isTrustedWireRequest } from './request-trust.js';
 import { readProjectionChildSeeds } from './projection-children.js';
 import type { StoredThreadList } from './session-list.js';
+import type { ModelSelectionHost } from './model-selection-host.js';
 import type { PumpAgent, QueueAction } from './thread-pump.js';
 import { ThreadFeed } from './thread-feed.js';
 import { ThreadPump } from './thread-pump.js';
@@ -193,6 +195,11 @@ export interface ThreadAgent {
    * 沒掛 `@nexus/plugin-permission-presets` 的組裝就沒有，那時 `permission.catalog` 回 `not_supported`、`permissions` 投影缺席。
    */
   readonly permissionPresets?: { catalog(): PermissionCatalog };
+  /**
+   * 每會話模型選擇（[#723](https://github.com/DemianLi/nexus-agent/issues/723)），選配。沒帶 `--live`（假模型沒有型錄）的組裝就沒有，
+   * 那時 `model.catalog`／`model.select` 回 `not_supported`，web 據這個碼把模型座藏起來。
+   */
+  readonly modelSelection?: Pick<ModelSelectionHost, 'catalog' | 'state' | 'select'>;
   dispose(): Promise<void>;
   /**
    * 把這個 thread 的**每一份**會話日誌接上遙測、不變量配套入口與參與者，**必填**（[#668](https://github.com/DemianLi/nexus-agent/issues/668)）。
@@ -408,8 +415,6 @@ const JSON_MEDIA_TYPE = 'application/json';
 
 /** 契約已合、實作還沒做的 RPC method 回 `not_supported` 時的說明（#723、#633），實作落地時隨分支一起拿掉。 */
 const NOT_IMPLEMENTED = {
-  'model.catalog': '這個組裝還沒有每會話的模型選擇',
-  'model.select': '這個組裝還沒有每會話的模型選擇',
   'thread.pin': '這個組裝還沒有伺服器端的釘選',
   'thread.unpin': '這個組裝還沒有伺服器端的釘選',
   'thread.archive': '這個組裝還沒有伺服器端的封存',
@@ -599,6 +604,7 @@ interface ThreadState {
   readonly feedback: FeedbackService | undefined;
   readonly workspaceChanges: WorkspaceChanges | undefined;
   readonly permissionPresets: { catalog(): PermissionCatalog } | undefined;
+  readonly modelSelection: Pick<ModelSelectionHost, 'catalog' | 'state' | 'select'> | undefined;
   /**
    * 接回來那批事件的長度；沒續接就是 0（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
    *
@@ -664,6 +670,56 @@ const isString = (value: unknown): value is string => typeof value === 'string';
  * 回覆）歸 `@nexus/plugin-feedback`，這裡原樣交過去：瀏覽器指名的訊息 id 就是日誌記的那個，沒有要換的。
  * 子代理的回覆在它自己那一份日誌裡，這裡交的是 root 那一份，所以評不到。
  */
+/**
+ * `model.catalog`／`model.select`（#723）。業務失敗（選不上）走成功回應的 `ok: false`，`ErrorResponse` 只給「這條線收不了」。
+ *
+ * 照 dsh `selectModel`：型錄沒有那顆、或帶了沒宣告的強度，在記進日誌之前就拒，選擇不變。
+ */
+function modelResponse(
+  selection: ThreadState['modelSelection'],
+  id: number,
+  method: ModelMethod,
+  body: unknown,
+): unknown {
+  if (selection === undefined) {
+    return errorResponse(id, 'not_supported', '這個組裝沒有每會話的模型選擇（沒帶 --live）');
+  }
+  if (method === 'model.catalog') {
+    return successResponse(id, {
+      ok: true,
+      value: { catalog: selection.catalog(), selection: selection.state() },
+    });
+  }
+  const params = (body as { params?: unknown }).params;
+  const p =
+    typeof params === 'object' && params !== null ? (params as Record<string, unknown>) : {};
+  if (
+    typeof p.modelId !== 'string' ||
+    p.modelId.length === 0 ||
+    !(p.reasoningEffort === undefined || typeof p.reasoningEffort === 'string')
+  ) {
+    return errorResponse(
+      id,
+      'invalid_argument',
+      'model.select 的 modelId 要是非空字串、reasoningEffort 要是字串',
+    );
+  }
+  try {
+    return successResponse(id, {
+      ...selection.select({
+        modelId: p.modelId,
+        ...(typeof p.reasoningEffort === 'string' && { reasoningEffort: p.reasoningEffort }),
+      }),
+    });
+  } catch (error) {
+    return errorResponse(
+      id,
+      'invalid_argument',
+      error instanceof Error ? error.message : String(error),
+    );
+  }
+}
+
 function feedbackResponse(
   thread: ThreadState | undefined,
   id: number,
@@ -881,6 +937,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           feedback: threadAgent.feedback,
           workspaceChanges: threadAgent.workspaceChanges,
           permissionPresets: threadAgent.permissionPresets,
+          modelSelection: threadAgent.modelSelection,
           // **就是 seed 的長度**，不另外傳一個數字：兩個來源各記一次的話，有一天它們會不一樣，
           // 而那時錯的方向是「把重播的事件當成這個行程寫的」——靜靜讀到另一個工作區的同名檔。
           storedCount: threadAgent.rootSeed?.length ?? 0,
@@ -1089,14 +1146,19 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
       return json(feedbackResponse(thread, envelope.id, method, body));
     }
-    if (isModelMethod(method) || isThreadManagementMethod(method) || isSubagentListMethod(method)) {
-      // 每會話模型選擇（#723）、釘選／封存／改名（#633）與可點名的子代理清單（#328）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把
-      // 模型座、釘選封存改名與 `@` 子代理藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
-      // 契約在 `@nexus/wire` 的 `model-selection.ts`／`thread-management.ts`／`subagent-list.ts`；實作落地時把這個分支換成真的 handler。
+    if (isThreadManagementMethod(method) || isSubagentListMethod(method)) {
+      // 釘選／封存／改名（#633）與可點名的子代理清單（#328）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把
+      // 釘選封存改名與 `@` 子代理藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
+      // 契約在 `@nexus/wire` 的 `thread-management.ts`／`subagent-list.ts`；實作落地時把這個分支換成真的 handler。
       return json(errorResponse(envelope.id, 'not_supported', NOT_IMPLEMENTED[method]));
     }
     const thread = await threadOrError(threadId, envelope.id);
     if (thread instanceof Response) return thread;
+    if (isModelMethod(method)) {
+      // 每會話模型選擇（#723）：經 `threadFor`——選擇記在這條 thread 的日誌裡，web 打開一條 thread 才畫模型座。
+      // 沒有型錄的組裝（沒帶 `--live`）回 `not_supported`，web 據這個碼把模型座藏起來。
+      return json(modelResponse(thread.modelSelection, envelope.id, method, body));
+    }
     if (isPermissionMethod(method)) {
       // 權限組合目錄（#437）：整台共用的一份，掛在這條 thread 的組裝上讀（目錄在 `permission-presets` 的 `apply` 當下定了）。
       // 經 `threadFor`：web 打開一條 thread 才畫權限選單，那條 thread 的組裝本來就要建。沒有目錄的組裝（沒圍堵、那一列沒掛）

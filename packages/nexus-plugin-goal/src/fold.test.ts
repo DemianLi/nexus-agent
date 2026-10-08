@@ -548,6 +548,7 @@ describe('什麼推得動 roundsStarted', () => {
       'inbox/spliced',
       'request/header',
       'request/system',
+      'model/selection',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];
     // 反過來這一條才是絆索：多一種而沒有列進來，`Exhaustive` 就變成 `never`。

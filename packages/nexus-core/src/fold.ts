@@ -56,15 +56,20 @@ import {
   createSessionCheckpointMiddleware,
   SESSION_CHECKPOINT_PLUGIN_NAME,
 } from './session-checkpoint-policy.js';
+import type { SessionLog } from './session-log.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
+import { createModelSwapMiddleware } from './model-selection.js';
+import type { ModelSelectionController } from './model-selection.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
 import {
   REPEAT_REMINDER_PLUGIN_NAME,
   REPEAT_REMINDER_SERVICE,
   createRepeatReminder,
+  createStepNoticeMiddleware,
   resolveRepeatReminderSettings,
 } from './repeat-reminder.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
+import type { ModelContextLimits } from './summarization.js';
 import {
   createSummarizer,
   resolveSummarizationSettings,
@@ -368,6 +373,21 @@ export interface FoldOptions {
    * 只折進 root 的 middleware 陣列，見 {@link ./step-inbox.ts}。
    */
   stepInbox?: boolean;
+
+  /**
+   * 每會話模型選擇的控制器（[#723](https://github.com/DemianLi/nexus-agent/issues/723)）。省略即不掛，請求逐欄與沒有這一格時一樣。
+   *
+   * 給了會多三件事：root 的 middleware 疊最外面多一顆換模型的（{@link ./model-selection.ts | createModelSwapMiddleware}）；
+   * 換模型的通知借重複提醒的 `beforeModel` 附上，**重複提醒被關掉時才另掛一顆節點**（每一步多一個 super-step）；
+   * 都只折進 root，子代理的模型不歸它管。
+   */
+  modelSelection?: ModelSelectionController;
+
+  /**
+   * 一顆模型自己的窗口與輸出上限，查不到回 `undefined`。給了，摘要的 `tokens` 門檻逐步夾在當步模型撐得住的範圍內
+   * （{@link ./summarization.ts | effectiveTrigger}）。傳進來的是 `request.model`（換模型之後就是選中的那顆）。
+   */
+  modelLimits?: (model: unknown) => ModelContextLimits | undefined;
 }
 
 /**
@@ -536,6 +556,16 @@ export function foldRegistry(
     rootOnly(
       'stepInbox',
       same(options.stepInbox === true ? createStepInboxMiddleware() : undefined),
+    ),
+    // 換模型排在洋蔥最外面（#723）：摘要器、起訖、用量與 plugin middleware 看到的 `request.model` 都是這一步選中的那顆。
+    // 只折進 root，子代理的模型由 `subagent` 工具的選模型管。見 {@link ./model-selection.ts}。
+    rootOnly(
+      'modelSelection',
+      same(
+        options.modelSelection === undefined
+          ? undefined
+          : createModelSwapMiddleware(options.modelSelection),
+      ),
     ),
     // 同一步多顆工具呼叫的獨佔屏障（#711 第 2 步）排在圍堵外面：等待中的呼叫在通過屏障前**什麼都不做**，不能先被圍堵記一顆
     // `tool/call`（resume 重跑會記第二顆）。**各建一份**：紀錄在閉包裡，root 與每個子代理各有各的步。見 {@link ./tool-barrier.ts}。
@@ -1144,8 +1174,16 @@ function foldRepeatReminder(
   options: FoldOptions,
 ): AgentMiddleware | undefined {
   const settings = repeatReminderDisposition(registry, options);
-  if (settings === undefined) return undefined;
-  return createRepeatReminder(settings, registry.sessions);
+  const controller = options.modelSelection;
+  const notices =
+    controller === undefined ? undefined : (log: SessionLog) => controller.noticeFor(log);
+  if (settings === undefined) {
+    // 提醒關著：通知沒有節點可借，另掛一顆（多一個 super-step，只在有模型選擇的組裝上付）。
+    return notices === undefined
+      ? undefined
+      : createStepNoticeMiddleware(notices, registry.sessions);
+  }
+  return createRepeatReminder(settings, registry.sessions, notices);
 }
 
 /**
@@ -1243,7 +1281,8 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
     );
   // **一次組裝一本，root 與子代理共用**：放在工廠外面，每呼叫一次工廠才不會各建一本、把借錨切碎。
   const book = options.tokenAnchorBook ?? new TokenAnchorBook();
-  return () => createSummarizer(backend, settings, book, registry.sessions, pruning);
+  return () =>
+    createSummarizer(backend, settings, book, registry.sessions, pruning, options.modelLimits);
 }
 
 /**

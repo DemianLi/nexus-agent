@@ -24,6 +24,7 @@ import type {
   FeedbackService,
   InvariantError,
   InvariantTap,
+  ModelRoute,
   PluginEntry,
   PluginWarning,
   SessionEvent,
@@ -80,6 +81,8 @@ import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
 import type { CredentialService } from './credentials.js';
 import { createLiveModel } from './live-model.js';
+import { createModelSelectionHost, createModelSelectionPlugin } from './model-selection-host.js';
+import type { ModelSelectionHost } from './model-selection-host.js';
 import { createFileReferencePlugin } from './file-references.js';
 
 /** 一次呼叫解析出來的東西。`prompt` 缺席即 REPL。 */
@@ -725,6 +728,8 @@ export async function createCliAgent(
   warnings: readonly PluginWarning[];
   /** 這一次組裝收不收插話（#710），見 `stepInbox` 那一格。 */
   stepInbox: boolean;
+  /** 每會話模型選擇的組裝端（#723）；**沒帶 `--live` 是 `undefined`**（假模型沒有型錄）。 */
+  modelSelection: ModelSelectionHost | undefined;
 }> {
   const liveModel = invocation.liveModel ?? startupSetting(plugins, liveModelPlugin);
   const subagentToolFilter = startupSetting(plugins, backgroundSubagentsPlugin).toolFilter;
@@ -738,6 +743,8 @@ export async function createCliAgent(
           invocation.threadTitleLlm ?? startupSetting(plugins, threadTitleLlmPlugin),
           invocation.threadTitle ?? startupSetting(plugins, threadTitlePlugin),
           invocation.credentials,
+          // 標題沒有自己的 modelId 時沿用主請求走的模型（#723）。
+          { followMainRoute: true },
         )
       : undefined;
   // **channel 在這裡算一次，消費者共用。** 核准閘門由 `foldRegistry` 自己算
@@ -808,6 +815,11 @@ export async function createCliAgent(
           mode: sandboxMode.source,
           grants: sandboxMode,
         });
+  // **每會話模型選擇只在 `--live` 時有**（#723）：假模型沒有型錄可選。控制器由組裝點建、經 `createNexusAgent` 折進 root，
+  // 同一個 host 回傳給呼叫端（serve 的 `model.catalog`／`model.select` 用它驗型錄）。
+  const modelSelection = invocation.live
+    ? createModelSelectionHost({ liveModel, credentials: invocation.credentials })
+    : undefined;
   const {
     agent,
     commands,
@@ -859,7 +871,12 @@ export async function createCliAgent(
       ...plugins,
       // **`@` 引用那一句跟圍堵同一個條件**（#651）：沒有工作區時不提供列檔，使用者插不出 `@` 路徑，檔案工具讀的也不是磁碟。
       ...(workspaceRoot === undefined ? [] : [createFileReferencePlugin()]),
+      ...(modelSelection === undefined ? [] : [createModelSelectionPlugin(modelSelection)]),
     ],
+    ...(modelSelection !== undefined && {
+      modelSelection: modelSelection.controller,
+      modelLimits: modelSelection.limitsOf,
+    }),
     ...(backend !== undefined && { backend }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
     systemPrompt: SYSTEM_PROMPT,
@@ -949,6 +966,7 @@ export async function createCliAgent(
     dropped,
     warnings,
     stepInbox,
+    modelSelection,
   };
 }
 
@@ -964,8 +982,10 @@ function titleLlmFor(
   config: ThreadTitleLlmConfig,
   limits: ThreadTitleConfig,
   credentials: CredentialService | undefined,
+  options: { readonly followMainRoute: boolean } = { followMainRoute: false },
 ): AttachSessionTitleLlm {
   const modelId = config.modelId ?? liveModel.modelId;
+  const followedTitleModels = new Map<string, BaseChatModel>();
   if (findModelEntry(liveModel.models, modelId) === undefined) {
     const known = liveModel.models.map((entry) => entry.id).join('、');
     throw new Error(
@@ -979,6 +999,29 @@ function titleLlmFor(
     route: { provider: liveModel.baseUrl, model: modelId },
     config,
     limits,
+    // **標題自己指定了模型就不跟**（`config.modelId`）；沒指定才沿用觸發它的那次主請求走的（#723，照 dsh）。
+    // 主請求走預設、或路由不在型錄裡（續接的會話選過後來被拿掉的模型）時回 `undefined`，用上面預設那顆。
+    ...(options.followMainRoute &&
+      config.modelId === undefined && {
+        follow: (mainRoute: ModelRoute) => {
+          if (mainRoute.model === modelId) return undefined;
+          if (findModelEntry(liveModel.models, mainRoute.model) === undefined) return undefined;
+          let followed = followedTitleModels.get(mainRoute.model);
+          if (followed === undefined) {
+            followed = createLiveModel(
+              { ...liveModel, modelId: mainRoute.model },
+              'session-title',
+              credentials,
+              { maxOutputTokens: config.maxOutputTokens },
+            );
+            followedTitleModels.set(mainRoute.model, followed);
+          }
+          return {
+            model: followed,
+            route: { provider: liveModel.baseUrl, model: mainRoute.model },
+          };
+        },
+      }),
   });
 }
 

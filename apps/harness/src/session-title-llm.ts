@@ -56,6 +56,7 @@ import type {
 import { ensureFallbackTitle, fallbackThreadTitle, normalizeThreadTitle } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import { THREAD_TITLE_LLM_PLUGIN_NAME } from './settings/thread-title-llm.js';
+import type { ModelRoute } from '@nexus/core';
 import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
 
 /** 標題模型。只用得到 `invoke`：一次非串流的呼叫，CLI 與 web 走同一條。 */
@@ -172,6 +173,15 @@ export interface SessionTitleLlmOptions {
   readonly route: SessionTitleModelIdentity;
   readonly config: ThreadTitleLlmConfig;
   readonly limits: TitleLlmLimits;
+  /**
+   * 標題沒有自己的覆寫時，**沿用觸發它的那次主請求走的模型**（[#723](https://github.com/DemianLi/nexus-agent/issues/723)，
+   * PM 2026-10-08 決策：照 dsh，標題沒給覆寫就沿用主請求的路由）。拿 `model/start` 記的路由，換出這一次用的模型與記進
+   * `session/title` 的身分；回 `undefined` ＝ 用上面預設的那一組（路由認不出、或不在型錄裡）。
+   * 省略就一律用 {@link model}／{@link route}（沒有每會話選擇的組裝、或標題另外指定了模型）。
+   */
+  readonly follow?: (
+    mainRoute: ModelRoute,
+  ) => { readonly model: TitleModel; readonly route: SessionTitleModelIdentity } | undefined;
 }
 
 /**
@@ -207,14 +217,20 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
         ? event.data.text
         : undefined;
 
-    const run = async (message: TitleSourceMessage): Promise<void> => {
+    const run = async (
+      message: TitleSourceMessage,
+      mainRoute: ModelRoute | undefined,
+    ): Promise<void> => {
+      const followed = mainRoute === undefined ? undefined : options.follow?.(mainRoute);
+      const model = followed?.model ?? options.model;
+      const route = followed?.route ?? options.route;
       try {
         // 先確保退回標題已落地，同 dsh `runProvider` 的 `ensureFallback`。平常它在 `turn/start` 那一段已經寫了，這裡是
         // no-op；只有那一次寫失敗時才補。補不進去就跟模型失敗一樣講一聲、不送。
         ensureFallbackTitle(log, options.limits);
         const result = await generateThreadTitle({
-          model: options.model,
-          route: options.route,
+          model,
+          route,
           config: options.config,
           maxTitleBytes: options.limits.maxTitleBytes,
           messages: [message],
@@ -228,7 +244,7 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
           source: {
             kind: 'provider',
             provider: THREAD_TITLE_LLM_PLUGIN_NAME,
-            model: options.route,
+            model: route,
           },
         });
       } catch (error: unknown) {
@@ -238,7 +254,9 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
     };
 
     // 綁在接上這一刻的 context，見檔頭「在那一輪的 context 之外跑」。
-    const runOutsideTurn = AsyncResource.bind((message: TitleSourceMessage) => run(message));
+    const runOutsideTurn = AsyncResource.bind(
+      (message: TitleSourceMessage, mainRoute: ModelRoute | undefined) => run(message, mainRoute),
+    );
 
     const unsubscribe = log.subscribe((event) => {
       if (closed) return;
@@ -253,9 +271,12 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
       }
       if (event.type === 'model/start' && pending !== undefined) {
         const message = pending;
+        const mainRoute = event.data.route;
         pending = undefined;
         // 回呼裡不能 append，延到微任務（同 dsh 的 `defer`）。
-        running = Promise.resolve().then(() => (closed ? undefined : runOutsideTurn(message)));
+        running = Promise.resolve().then(() =>
+          closed ? undefined : runOutsideTurn(message, mainRoute),
+        );
       }
     });
 
