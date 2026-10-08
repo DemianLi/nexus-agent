@@ -12,7 +12,7 @@ import {
   SUBAGENT_MAX_TOKENS_TEXT,
   SUBAGENT_PARTIAL_TEXT,
 } from '@/lib/max-tokens-view';
-import { WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
+import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
 import { Transcript } from '@/components/transcript';
 import { axeViolations } from '@/test/axe';
 
@@ -149,7 +149,12 @@ describe('對話流裡的工具卡', () => {
     expect(card.getAttribute('data-state')).toBe('closed');
     view.rerender(
       <ToolCard
-        entry={tool({ ...ask, status: 'failed', error: `Error: ${WITHDRAWN_TOOL_REASON}` })}
+        entry={tool({
+          ...ask,
+          status: 'failed',
+          error: 'Error: tool call aborted before dispatch',
+          errorCode: ABORTED_BEFORE_DISPATCH_CODE,
+        })}
         beam={false}
       />,
     );
