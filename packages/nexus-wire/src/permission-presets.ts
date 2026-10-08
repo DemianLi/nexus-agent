@@ -1,8 +1,8 @@
 /**
  * 具名權限組合上線的形狀（[#437](https://github.com/DemianLi/nexus-agent/issues/437)）。
  *
- * **這一份只是契約**：型別、method 名字、`custom` frame 的格子、client 方法。server 端還沒實作，`permission.catalog`
- * 一律回 `not_supported`，`permissions` 這顆 frame 也還不會送；web 據前者把選單藏起來。
+ * **這一份只是契約**：型別、method 名字、client 方法。server 端還沒實作，`permission.catalog`
+ * 一律回 `not_supported`，`permissions` 這個投影也還不會送；web 據前者把選單藏起來。
  *
  * 照 dsh 的 `permission-presets`（`packages/interaction/permission-presets/src/{types,index}.ts`，`5badb150`）：
  *
@@ -10,7 +10,8 @@
  *   依宣告順序；每一組是 `{ value, name, description? }`。這份是整台共用的，與會話歷史無關。
  * - **目前是哪一組**：會話投影 `permissions`，整份值就是 `{ currentValue }`。值是 `options` 裡的某個 `value`，或
  *   {@link CUSTOM_PRESET}（沙箱與核准的實際值對不上任何一組，**只能顯示、不是切換目標**）。投影缺席＝這個組裝沒有權限組合，
- *   client 藏起選單。載體是 `custom` frame，名字 {@link PERMISSIONS}，折進 `ConversationState.permissions`。
+ *   client 藏起選單。載體是泛用的插件投影通道（`projection.ts`，#1026）：key 是 {@link PERMISSIONS_PROJECTION_KEY}，
+ *   讀 `ConversationState.projections.permissions.view`，不另開 frame 與折疊欄位——dsh 的 `permissions` 也是走它的 `sessionProjections`。
  * - **切換**不另開 RPC：dsh 的網頁選單送出的就是 `/permission <組名>` 那一行斜線命令（`index.ts:252-254`），這裡照做，
  *   走既有的 `slash.run`。不帶參數的 `/permission` 回報目前那一組與可選的組。
  *
@@ -71,18 +72,11 @@ export type PermissionCatalogResult = {
   readonly value: { readonly catalog: PermissionCatalog };
 };
 
-/** `custom` 事件的 `data.name`：這條會話目前是哪一組權限。 */
-export const PERMISSIONS = 'permissions';
+/** 投影的 key（`ConversationState.projections` 的鍵）：這條會話目前是哪一組權限。 */
+export const PERMISSIONS_PROJECTION_KEY = 'permissions';
 
-/** {@link PERMISSIONS} 的 `payload`：整份值（後到的取代先到的），同 dsh 的 `PermissionSelection`。 */
+/** 投影 {@link PERMISSIONS_PROJECTION_KEY} 的 `view`：整份值（後到的取代先到的），同 dsh 的 `PermissionSelection`。 */
 export interface PermissionSelection {
   /** 現在的有效值：目錄裡的一個 `value`，或 {@link CUSTOM_PRESET}。 */
   readonly currentValue: string;
-}
-
-// 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
-declare module './custom-frame.js' {
-  interface CustomFramePayloads {
-    [PERMISSIONS]: PermissionSelection;
-  }
 }

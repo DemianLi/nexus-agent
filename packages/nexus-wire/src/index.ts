@@ -143,7 +143,7 @@ export {
   CUSTOM_PRESET,
   isPermissionMethod,
   PERMISSION_METHODS,
-  PERMISSIONS,
+  PERMISSIONS_PROJECTION_KEY,
 } from './permission-presets.js';
 export type {
   DeliverableClient,
