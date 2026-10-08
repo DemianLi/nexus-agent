@@ -21,10 +21,9 @@
  */
 
 import type { QuestionItem, ToolEntry } from '@nexus/wire';
-import { UNFINISHED_TOOL_TEXT } from '@nexus/wire';
 
 import { markdownPlainText } from '@/lib/markdown/plain-text';
-import { WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
+import { endedWithoutAnswer } from '@/lib/question-view';
 
 /** 交出計劃的工具名（`@nexus/plugin-plan-mode` 的 `EXIT_PLAN_MODE_TOOL_NAME`）。 */
 export const EXIT_PLAN_MODE = 'exit_plan_mode';
@@ -139,7 +138,7 @@ export const LEGACY_PLAN_REJECTED_TEXT = `有人看過並拒絕了 "${EXIT_PLAN_
  * 這張 `exit_plan_mode` 卡的審核結果；還在等、或在問人之前就被擋掉的（不在計劃模式、沒有人可以回答）是
  * `undefined`。
  *
- * **只比結尾或包含**：失敗的卡上是 core 的錯誤前綴接那一句，前綴只有一個主人，這裡不拼它。
+ * **停止比碼，審核結果比結尾或包含**：失敗的卡上是 core 的錯誤前綴接那一句，前綴只有一個主人，這裡不拼它。
  */
 export function planOutcomeOf(entry: ToolEntry): PlanOutcome | undefined {
   if (entry.name !== EXIT_PLAN_MODE) return undefined;
@@ -147,7 +146,7 @@ export function planOutcomeOf(entry: ToolEntry): PlanOutcome | undefined {
   if (entry.status === 'done') return 'approved';
   if (entry.status !== 'failed') return undefined;
   const said = entry.error ?? entry.text ?? '';
-  if (said.endsWith(WITHDRAWN_TOOL_REASON) || said === UNFINISHED_TOOL_TEXT) return 'stopped';
+  if (endedWithoutAnswer(entry)) return 'stopped';
   if (said.endsWith(PLAN_REVIEW_DISMISSED_TEXT) || said.endsWith(LEGACY_PLAN_REJECTED_TEXT)) {
     return 'revise';
   }

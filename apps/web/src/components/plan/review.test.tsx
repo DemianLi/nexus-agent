@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { PlanReviewPanel, PlanToolCard } from '@/components/plan/review';
 import { PLAN_TAB_MISSING_TEXT, RightSidebarToggle } from '@/components/sidebar/right-sidebar';
 import { AUTO_OPENED_KEY, planDocument, planReviewOf } from '@/lib/plan-review';
+import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
 import type { PlanDocument } from '@/lib/plan-review';
 import { axeViolations } from '@/test/axe';
 import { WithRightSidebar, memoryStorage } from '@/test/right-sidebar';
@@ -256,17 +257,23 @@ describe('全文：窄螢幕', () => {
 
 describe('計劃卡', () => {
   it.each([
-    ['done', undefined, '已同意'],
+    ['done', undefined, undefined, '已同意'],
     [
       'failed',
       '使用者關掉了計劃審核，要自己說話。留在計劃模式，停在這裡，等使用者的訊息。',
+      undefined,
       '要求修改',
     ],
-    ['failed', 'tool call aborted before dispatch', '停止'],
-  ] as const)('結果 %s／%s：chip 寫「%s」', async (status, error, label) => {
+    // 停止比碼不比字（#667）。
+    ['failed', 'Error: tool call aborted before dispatch', ABORTED_BEFORE_DISPATCH_CODE, '停止'],
+  ] as const)('結果 %s／%s／%s：chip 寫「%s」', async (status, error, errorCode, label) => {
     await mount({
       panel: false,
-      card: toolEntry({ status, ...(error === undefined ? {} : { error }) }),
+      card: toolEntry({
+        status,
+        ...(error === undefined ? {} : { error }),
+        ...(errorCode === undefined ? {} : { errorCode }),
+      }),
     });
     const card = screen.getByTestId('plan-card');
     expect(within(card).getByTestId('plan-outcome').textContent).toBe(label);

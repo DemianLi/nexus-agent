@@ -15,7 +15,7 @@ import type {
   QuestionItem,
   ToolEntry,
 } from '@nexus/wire';
-import { UNFINISHED_TOOL_TEXT } from '@nexus/wire';
+import { UNFINISHED_TOOL_CODE } from '@nexus/wire';
 
 import { startsTurn } from '@/lib/turn-start';
 
@@ -26,26 +26,30 @@ export const ASK_USER_QUESTION = 'ask_user_question';
 export const STOPPED_QUESTION_TEXT = '已停止，請直接打字回覆';
 
 /**
- * 停止時 pump 替懸著的那顆呼叫寫進對話與日誌的結果，**理由那半句**（`@nexus/core` 的
- * `TOOL_ABORTED_BEFORE_DISPATCH_REASON`，`ThreadPump.#withdraw`）。卡上的紅字是 core 的 `Error: ` 前綴接這一句；
- * 前綴只有一個主人（`apps/harness/src/tool-error-prefix.test.ts`），所以這裡只抄理由、比結尾。web 不相依
- * `@nexus/core`，`question-view.test.ts` 讀那邊的原始碼對字。
+ * 停止時 pump 替懸著的那顆呼叫寫進結果的**錯誤碼**（`@nexus/core` 的 `TOOL_ABORTED_BEFORE_DISPATCH`）。
+ * 值照 dsh 的做法手寫（`ask-question-row.tsx`）：web 不相依 `@nexus/core`，由 harness 的
+ * `ask-user-wire.test.ts`（#667）用真的 `ask_user_question` 對即時與歷史兩顆 `tool-finished` 斷言這個字面值。
  */
-export const WITHDRAWN_TOOL_REASON = 'tool call aborted before dispatch';
+export const ABORTED_BEFORE_DISPATCH_CODE = 'ABORTED_BEFORE_DISPATCH';
+
+/**
+ * 這顆失敗的呼叫是不是因為**這一輪收掉時還沒有答案**：pump 收回時寫的碼，或折疊器替沒結果的卡補的碼
+ * （{@link UNFINISHED_TOOL_CODE}）。比碼不比字：卡上的文字是 core 的錯誤前綴接理由，前綴與措辭都不是 web 的事。
+ */
+export function endedWithoutAnswer(entry: ToolEntry): boolean {
+  return (
+    entry.status === 'failed' &&
+    (entry.errorCode === ABORTED_BEFORE_DISPATCH_CODE || entry.errorCode === UNFINISHED_TOOL_CODE)
+  );
+}
 
 /**
  * 這張卡是不是停在提問時被停止的那一張。
  *
- * 認的是**這一輪收掉時它還沒有答案**的兩種結果：pump 收回時寫的那一句，或折疊器替沒結果的卡補的那一句。卡上只有文字、
- * 沒有碼（`ToolEntry` 不帶 `error.code`），所以用字比對。一輪因為失敗（不是停止）而收掉時也會補同一句，分不出來；
- * 那時狀態列講的是失敗。
+ * 一輪因為失敗（不是停止）而收掉時也會補同一個碼，分不出來；那時狀態列講的是失敗。
  */
 export function isStoppedQuestion(entry: ToolEntry): boolean {
-  return (
-    entry.name === ASK_USER_QUESTION &&
-    entry.status === 'failed' &&
-    (entry.error?.endsWith(WITHDRAWN_TOOL_REASON) === true || entry.error === UNFINISHED_TOOL_TEXT)
-  );
+  return entry.name === ASK_USER_QUESTION && endedWithoutAnswer(entry);
 }
 
 /** 這一輪是不是停在提問上被停止的：輸入框提示字換成 {@link STOPPED_QUESTION_TEXT}。 */
