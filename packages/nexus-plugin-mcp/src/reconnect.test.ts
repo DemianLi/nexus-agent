@@ -7,7 +7,7 @@
  * 每台子行程帶一個獨一無二的記號參數，用 `pgrep -f` 只數自己的，所以同時跑的別的測試檔不會互相干擾。
  */
 
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
 import { writeFileSync } from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
@@ -36,6 +36,22 @@ afterEach(() => {
   warn.mockRestore();
 });
 
+/**
+ * 命令列含記號的行程。**不經 shell**：`sh -c "pgrep … || true"` 在 Linux 的 dash 上不會 exec，shell 自己的命令列也含記號，
+ * 會多數到一個（CI 上實際發生過）。`pgrep` 沒有任何命中時以 1 結束。
+ */
+function pidsOf(marker: string): number[] {
+  try {
+    return execFileSync('pgrep', ['-f', '--', marker])
+      .toString()
+      .split('\n')
+      .filter(Boolean)
+      .map(Number);
+  } catch {
+    return [];
+  }
+}
+
 /** 一台帶獨一無二記號的假 server；`pids()` 只數它自己的子行程。 */
 function server(
   overrides: Partial<McpPluginOptions> = {},
@@ -44,12 +60,7 @@ function server(
   const marker = `--marker-${randomUUID()}`;
   return {
     marker,
-    pids: () =>
-      execSync(`pgrep -f -- "${marker}" || true`)
-        .toString()
-        .split('\n')
-        .filter(Boolean)
-        .map(Number),
+    pids: () => pidsOf(marker),
     plugin: createMcpPlugin({
       serverName: 'srv',
       connection: {
@@ -92,7 +103,13 @@ function definitions(registry: PluginRegistry): string {
 }
 
 const killAll = (pids: number[]) => {
-  for (const pid of pids) process.kill(pid, 'SIGKILL');
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // 已經不在了。
+    }
+  }
 };
 
 describe('殺掉 stdio 子行程', () => {
