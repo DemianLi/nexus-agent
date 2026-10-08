@@ -62,7 +62,6 @@ const NUMBERS = [
   'usages',
   'inputTokens',
   'outputTokens',
-  'uncachedInputTokens',
   'cacheReadTokens',
   'cacheWriteTokens',
   // 有幾次用量報了快取讀／寫：跟 `usages` 一樣多才放進 view（缺席＝沒記，不是 0）。
@@ -89,8 +88,66 @@ interface Sp {
   readonly n: Readonly<Record<NumberKey, number>>;
   readonly tools: readonly TokenMeterToolRow[];
   readonly toolsOther?: TokenMeterToolsOther;
-  readonly models: readonly TokenMeterModelRow[];
-  readonly modelsOther?: TokenMeterModelsOther;
+  readonly models: readonly ModelAcc[];
+  readonly modelsOther?: ModelAcc;
+}
+
+/**
+ * 依模型的內部累計：view 的列加上「有幾次用量、其中幾次報了快取讀／寫」。**快取兩格缺席＝沒記**的規則跟段一樣
+ * （全報才放），所以每一列自己數。
+ */
+interface ModelAcc {
+  readonly model: string | null;
+  readonly steps: number;
+  readonly usages: number;
+  readonly inputTokens: number;
+  readonly outputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number;
+  readonly cacheReadReports: number;
+  readonly cacheWriteReports: number;
+}
+
+const NO_MODEL_ACC = Object.freeze({
+  steps: 0,
+  usages: 0,
+  inputTokens: 0,
+  outputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
+  cacheReadReports: 0,
+  cacheWriteReports: 0,
+});
+
+function addAcc(
+  left: Omit<ModelAcc, 'model'>,
+  right: Omit<ModelAcc, 'model'>,
+): Omit<ModelAcc, 'model'> {
+  return {
+    steps: left.steps + right.steps,
+    usages: left.usages + right.usages,
+    inputTokens: left.inputTokens + right.inputTokens,
+    outputTokens: left.outputTokens + right.outputTokens,
+    cacheReadTokens: left.cacheReadTokens + right.cacheReadTokens,
+    cacheWriteTokens: left.cacheWriteTokens + right.cacheWriteTokens,
+    cacheReadReports: left.cacheReadReports + right.cacheReadReports,
+    cacheWriteReports: left.cacheWriteReports + right.cacheWriteReports,
+  };
+}
+
+/** 內部累計 → view 的列：快取兩格只在這一列每一次用量都報了才放。 */
+function rowOf(acc: Omit<ModelAcc, 'model'>): Omit<TokenMeterModelsOther, never> {
+  return {
+    steps: acc.steps,
+    inputTokens: acc.inputTokens,
+    outputTokens: acc.outputTokens,
+    ...(acc.usages > 0 && acc.cacheReadReports === acc.usages
+      ? { cacheReadTokens: acc.cacheReadTokens }
+      : {}),
+    ...(acc.usages > 0 && acc.cacheWriteReports === acc.usages
+      ? { cacheWriteTokens: acc.cacheWriteTokens }
+      : {}),
+  };
 }
 
 const ZERO_NUMBERS = Object.freeze(
@@ -122,27 +179,19 @@ function addTool(sp: Sp, row: TokenMeterToolRow): Sp {
 }
 
 /** 依模型加一筆；名額滿了的新模型併進 `modelsOther`。 */
-function addModel(sp: Sp, row: TokenMeterModelRow): Sp {
+function addModel(sp: Sp, row: ModelAcc): Sp {
   const at = sp.models.findIndex((each) => each.model === row.model);
   if (at >= 0) {
     const models = sp.models.slice();
-    const was = models[at]!;
-    models[at] = {
-      model: was.model,
-      steps: was.steps + row.steps,
-      inputTokens: was.inputTokens + row.inputTokens,
-      outputTokens: was.outputTokens + row.outputTokens,
-    };
+    models[at] = { model: row.model, ...addAcc(models[at]!, row) };
     return { ...sp, models };
   }
   if (sp.models.length < TOKEN_METER_MODELS_CAP) return { ...sp, models: [...sp.models, row] };
-  const other = sp.modelsOther ?? { steps: 0, inputTokens: 0, outputTokens: 0 };
   return {
     ...sp,
     modelsOther: {
-      steps: other.steps + row.steps,
-      inputTokens: other.inputTokens + row.inputTokens,
-      outputTokens: other.outputTokens + row.outputTokens,
+      model: null,
+      ...addAcc(sp.modelsOther ?? { model: null, ...NO_MODEL_ACC }, row),
     },
   };
 }
@@ -163,13 +212,11 @@ function merge(a: Sp, b: Sp): Sp {
   }
   for (const row of b.models) out = addModel(out, row);
   if (b.modelsOther !== undefined) {
-    const other = out.modelsOther ?? { steps: 0, inputTokens: 0, outputTokens: 0 };
     out = {
       ...out,
       modelsOther: {
-        steps: other.steps + b.modelsOther.steps,
-        inputTokens: other.inputTokens + b.modelsOther.inputTokens,
-        outputTokens: other.outputTokens + b.modelsOther.outputTokens,
+        model: null,
+        ...addAcc(out.modelsOther ?? { model: null, ...NO_MODEL_ACC }, b.modelsOther),
       },
     };
   }
@@ -185,7 +232,7 @@ function toSpan(sp: Sp): TokenMeterSpan {
     unknownSteps: Math.max(0, n.steps - n.usages),
     inputTokens: n.inputTokens,
     outputTokens: n.outputTokens,
-    uncachedInputTokens: n.uncachedInputTokens,
+    uncachedInputTokens: n.inputTokens,
     ...(n.usages > 0 && n.cacheReadReports === n.usages
       ? { cacheReadTokens: n.cacheReadTokens }
       : {}),
@@ -208,8 +255,8 @@ function toSpan(sp: Sp): TokenMeterSpan {
     waitMs: n.waitMs,
     tools: sp.tools,
     ...(sp.toolsOther === undefined ? {} : { toolsOther: sp.toolsOther }),
-    models: sp.models,
-    ...(sp.modelsOther === undefined ? {} : { modelsOther: sp.modelsOther }),
+    models: sp.models.map((acc): TokenMeterModelRow => ({ model: acc.model, ...rowOf(acc) })),
+    ...(sp.modelsOther === undefined ? {} : { modelsOther: rowOf(sp.modelsOther) }),
   };
 }
 
@@ -307,19 +354,6 @@ export function initialTokenMeter(): TokenMeterState {
     links: [],
     linksOmitted: 0,
   };
-}
-
-/**
- * 一顆用量事件完整的 prompt：未快取、快取讀、快取寫三桶相加（[#724](https://github.com/DemianLi/nexus-agent/issues/724)）。
- * 格式 36 起日誌的 `inputTokens` 只是未快取那一桶；沒有快取兩格的舊日誌，三桶相加就是它本來的 `inputTokens`。
- * 這一層讀的是原始的 JSON 記錄，不相依 `@nexus/core`，所以自己加。
- */
-function promptTokensOfData(data: Readonly<Record<string, unknown>>): number {
-  const count = (key: string): number => {
-    const value = data[key];
-    return typeof value === 'number' ? value : 0;
-  };
-  return count('inputTokens') + count('cacheReadTokens') + count('cacheWriteTokens');
 }
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
@@ -457,7 +491,9 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
         : { ...counted, call: { ...counted.call, waited: counted.call.waited + waited } };
     }
     case 'model/usage': {
-      const input = promptTokensOfData(data);
+      // **未快取的輸入**（#724，照 dsh 的四桶互不重疊）：格式 36 起日誌的 `inputTokens` 本來就是它；舊日誌沒有快取兩格，
+      // `inputTokens` 就是整個 prompt（沒記快取，也就沒有可分的）。
+      const input = typeof data['inputTokens'] === 'number' ? data['inputTokens'] : 0;
       const output = typeof data['outputTokens'] === 'number' ? data['outputTokens'] : 0;
       const failed = data['outcome'] !== undefined;
       const cacheRead = data['cacheReadTokens'];
@@ -468,7 +504,6 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
             usages: 1,
             inputTokens: input,
             outputTokens: output,
-            uncachedInputTokens: typeof data['inputTokens'] === 'number' ? data['inputTokens'] : 0,
             cacheReadTokens: typeof cacheRead === 'number' ? cacheRead : 0,
             cacheWriteTokens: typeof cacheWrite === 'number' ? cacheWrite : 0,
             cacheReadReports: typeof cacheRead === 'number' ? 1 : 0,
@@ -476,7 +511,17 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
             failedInputTokens: failed ? input : 0,
             failedOutputTokens: failed ? output : 0,
           }),
-          { model: state.model, steps: 0, inputTokens: input, outputTokens: output },
+          {
+            model: state.model,
+            ...NO_MODEL_ACC,
+            usages: 1,
+            inputTokens: input,
+            outputTokens: output,
+            cacheReadTokens: typeof cacheRead === 'number' ? cacheRead : 0,
+            cacheWriteTokens: typeof cacheWrite === 'number' ? cacheWrite : 0,
+            cacheReadReports: typeof cacheRead === 'number' ? 1 : 0,
+            cacheWriteReports: typeof cacheWrite === 'number' ? 1 : 0,
+          },
         ),
       );
     }
@@ -488,16 +533,17 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
       const next = update(state, (sp) =>
         addModel(bump(sp, { steps: 1, failedSteps: failed ? 1 : 0, modelMs }), {
           model: state.model,
+          ...NO_MODEL_ACC,
           steps: 1,
-          inputTokens: 0,
-          outputTokens: 0,
         }),
       );
       return { ...next, call: null };
     }
     case 'compaction/summary': {
       const usage = isRecord(data['usage']) ? data['usage'] : undefined;
-      const input = usage !== undefined ? promptTokensOfData(usage) : 0;
+      // 生摘要那一次的輸入也是未快取那一桶（同上）。
+      const input =
+        usage !== undefined && typeof usage['inputTokens'] === 'number' ? usage['inputTokens'] : 0;
       const output =
         usage !== undefined && typeof usage['outputTokens'] === 'number'
           ? usage['outputTokens']

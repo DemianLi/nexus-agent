@@ -778,12 +778,9 @@ export function applyTrajectory(
       return onCall(state, data['modelCall'], (call) => ({
         ...call,
         usage: {
-          // 完整的 prompt：格式 36 起日誌的 `inputTokens` 只是未快取那桶，快取兩格另放（#724）；舊日誌沒有那兩格。
-          inputTokens:
-            (call.usage?.inputTokens ?? 0) +
-            Number(data['inputTokens'] ?? 0) +
-            Number(data['cacheReadTokens'] ?? 0) +
-            Number(data['cacheWriteTokens'] ?? 0),
+          // 未快取那一桶（#724，照 dsh 的四桶互不重疊）：格式 36 起日誌的 `inputTokens` 本來就是它，快取兩格另放；
+          // 舊日誌沒有那兩格，`inputTokens` 就是整個 prompt（沒記快取，也就沒有可分的）。
+          inputTokens: (call.usage?.inputTokens ?? 0) + Number(data['inputTokens'] ?? 0),
           outputTokens: (call.usage?.outputTokens ?? 0) + Number(data['outputTokens'] ?? 0),
           totalTokens: (call.usage?.totalTokens ?? 0) + Number(data['totalTokens'] ?? 0),
           uncachedInputTokens:

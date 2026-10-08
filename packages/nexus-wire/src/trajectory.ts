@@ -35,7 +35,8 @@ export const TRAJECTORY_PROJECTION = 'trajectory';
 export const REQUEST_SNAPSHOTS_PROJECTION = 'request-snapshots';
 
 /** `trajectory` 的 `stateVersion`：折疊語意或 view 形狀一變就升。 */
-export const TRAJECTORY_VERSION = 6;
+// 7：呼叫與一輪的 `inputTokens` 改成未快取的那一桶（#724），原本是含快取讀寫的完整 prompt。
+export const TRAJECTORY_VERSION = 7;
 /** `request-snapshots` 的 `stateVersion`。 */
 export const REQUEST_SNAPSHOTS_VERSION = 1;
 
@@ -160,13 +161,16 @@ export interface TrajectoryCall {
   /** 當時生效的 `request/header` 的位置。 */
   readonly header?: number;
   readonly usage?: {
-    /** 完整的 prompt（含快取讀寫），同以前。 */
+    /**
+     * **未快取的輸入**（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，照 dsh 的四桶互不重疊）；
+     * 完整的 prompt 是它加 {@link cacheReadTokens} 加 {@link cacheWriteTokens}。**v6 以前這一格是完整的 prompt**，版本升到 7。
+     */
     readonly inputTokens: number;
     readonly outputTokens: number;
     readonly totalTokens: number;
     /**
-     * [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，**選填**，沒升 {@link TRAJECTORY_VERSION}（#1021／#1022 的先例）：
-     * `uncachedInputTokens` 每次都有；快取讀、快取寫**缺席＝沒記**（供應商沒給細節、舊日誌），不是 0。
+     * [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶：`uncachedInputTokens` 每次都有、**永遠等於 {@link inputTokens}**
+     * （web 靠有沒有這一格分辨新舊 server）；快取讀、快取寫**缺席＝沒記**（供應商沒給細節、舊日誌），不是 0。
      */
     readonly uncachedInputTokens?: number;
     readonly cacheReadTokens?: number;
@@ -301,11 +305,11 @@ export interface TrajectoryDigest {
    */
   readonly subagentCount: number;
   readonly retryCount: number;
-  /** 完整的 prompt 加總（含快取讀寫）。 */
+  /** 未快取的輸入加總（含被摺掉的呼叫），口徑同呼叫的 `usage.inputTokens`（#724）；完整的 prompt 要加快取讀寫。 */
   readonly inputTokens: number;
   readonly outputTokens: number;
   /**
-   * 快取分桶的加總（含被摺掉的呼叫），規則同呼叫的 `usage`：`uncachedInputTokens` 每次都有；快取讀、快取寫只在**每一次
+   * 快取分桶的加總（含被摺掉的呼叫），規則同呼叫的 `usage`：`uncachedInputTokens` 每次都有、等於 `inputTokens`；快取讀、快取寫只在**每一次
    * 報了用量的呼叫都報了**才有，否則缺席（只有一部分呼叫報的數字當成總數，命中率的分母會是錯的）。
    */
   readonly uncachedInputTokens?: number;
