@@ -30,6 +30,7 @@
     "@langchain/core": "^1.2.9",
     "@langchain/mcp-adapters": "^2.0.0",
     "@nexus/core": "workspace:*",
+    "langchain": "^1.5.10",
     "zod": "^4.3.6"
   }
 }

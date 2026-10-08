@@ -1,7 +1,8 @@
 # @nexus/plugin-mcp
 
 把一台外部 [MCP](https://modelcontextprotocol.io/) server 的工具接進 agent，以
-`mcp__<serverName>__<rawName>` 的名字註冊到 `registry.tools`。
+`mcp__<serverName>__<rawName>` 的名字註冊到 `registry.tools`；server 的**使用指引**（`initialize` 回的
+`instructions`）接進系統提示詞，server 的**資源**（resources）經三支共用工具讀取。
 
 ## 用法
 
@@ -38,18 +39,19 @@ server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化�
 
 ## 設定
 
-| 欄位 | transport | 必填 | 說明 |
-| --- | --- | --- | --- |
-| `serverName` | 兩者 | 是 | 這台 server 的命名空間，`[A-Za-z0-9_-]{1,32}`；不合法在建 plugin 當場報錯 |
-| `connection.transport` | 兩者 | 是 | `"stdio"` 或 `"http"` |
-| `connection.command` | stdio | 是 | 要執行的程式 |
-| `connection.args` | stdio | 否 | 參數 |
-| `connection.env` | stdio | 否 | 額外的環境變數，疊在清洗過的父環境上（見下） |
-| `connection.cwd` | stdio | 否 | 子行程的工作目錄 |
-| `connection.url` | http | 是 | server 網址 |
-| `connection.headers` | http | 否 | 額外標頭（授權用） |
-| `toolCallTimeoutMs` | 兩者 | 否 | 一次 `tools/call` 的逾時，預設 60000 |
-| `failOnStartupError` | 兩者 | 否 | 掛上那一刻連不上、列不出工具或註冊不上時要不要讓這一列失敗，預設 `false`（見行為） |
+| 欄位                   | transport | 必填 | 說明                                                                                       |
+| ---------------------- | --------- | ---- | ------------------------------------------------------------------------------------------ |
+| `serverName`           | 兩者      | 是   | 這台 server 的命名空間，`[A-Za-z0-9_-]{1,32}`；不合法在建 plugin 當場報錯                  |
+| `connection.transport` | 兩者      | 是   | `"stdio"` 或 `"http"`                                                                      |
+| `connection.command`   | stdio     | 是   | 要執行的程式                                                                               |
+| `connection.args`      | stdio     | 否   | 參數                                                                                       |
+| `connection.env`       | stdio     | 否   | 額外的環境變數，疊在清洗過的父環境上（見下）                                               |
+| `connection.cwd`       | stdio     | 否   | 子行程的工作目錄                                                                           |
+| `connection.url`       | http      | 是   | server 網址                                                                                |
+| `connection.headers`   | http      | 否   | 額外標頭（授權用）                                                                         |
+| `toolCallTimeoutMs`    | 兩者      | 否   | 一次 `tools/call` 的逾時，預設 60000                                                       |
+| `failOnStartupError`   | 兩者      | 否   | 掛上那一刻連不上、列不出工具或註冊不上時要不要讓這一列失敗，預設 `false`（見行為）         |
+| `maxInstructionBytes`  | 兩者      | 否   | server 指引**連同出處標頭**的 UTF-8 位元組上限，預設 32768；超過算連線失敗（同上，不截斷） |
 
 秘密一律從呼叫端的環境變數來，不寫進程式碼、設定檔或測試 fixture（見
 [`docs/standards.md`](../../docs/standards.md)）。
@@ -93,6 +95,28 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 - **`apply` 中途失敗自己收拾。** 連線開了但註冊撞名時，plugin 先關掉 client 再收成警告或
   拋出——那時登記還沒發生，`lifecycle` 通道接不到它。
 
+## 指引與資源（[#431](https://github.com/DemianLi/nexus-agent/issues/431)、[#430](https://github.com/DemianLi/nexus-agent/issues/430)）
+
+照 dsh 的 `mcp-client` 與 `mcp-resources`（`packages/mcp/`，`5badb150`）：
+
+- **server 指引**：`initialize` 回的 `instructions` 去掉結尾空白後，加上出處標頭 `### MCP server: <serverName>`
+  接在系統提示詞後面（空白或沒有就不加）。**大括號原樣**，不做任何插值。上限 `maxInstructionBytes` 算的是
+  **加上標頭之後整串的 UTF-8 位元組數**（dsh `connection.ts:318-322`），超過就算這一列連線失敗，走 `failOnStartupError`
+  那條路（預設撤工具、收連線、警告）。文字在載入期定下來，之後每一輪逐位元組相同，不動 KV cache。
+- **資源**：所有 `mcp` 列共用三支工具，名字、描述、參數與 dsh 一字不差——`list_mcp_resources`、
+  `list_mcp_resource_templates`（`server`、選填 `cursor`）、`read_mcp_resource`（`server`、`uri`）。`list` 沒帶
+  `cursor` 時由 SDK 走完所有頁並合併（dsh README 同寫，`mcp-resources/README.md:36`），帶了 `cursor` 就只回那一頁、
+  `nextCursor` 原樣給模型；`read` 結果裡的二進位 `blob` 在給模型的文字換成一句
+  描述（完整內容留在工具的 artifact）。server 沒宣告資源能力時，`list` 得到空清單、`read` 拋 server 的錯。
+  協議在結果上加的 `_meta`、`ttlMs`、`cacheScope` 只在頂層從模型看的文字裡拿掉。
+- **提示詞另有一段 `## MCP resource servers`**，列出所有已登記的 server 名字，讓模型知道 `server` 參數能填什麼。
+- **連不上的那一列也登記**（照 dsh）：名字照列，叫它得到 dsh 那句 `mcp-client(<name>): server is disconnected`；問不存在的名字得到 `MCP resource server "<name>" is unavailable in this agent's scope`。寫了
+  `failOnStartupError: true` 而掉了的列不留任何東西。
+- **偏離**：dsh 的兩種提示詞是 `systemPrompt.section(...)`；我們沒有段落註冊點，提示詞是 middleware 一層層接的，
+  所以用 `wrapModelCall` 把文字**接**（不是取代）到 system message 後面，與 goal、plan-mode 同一條已登記的偏離。
+  dsh 的 `instructions()` 讀最近一次成功連線的快照、重連會換，我們不重連（見下），所以不會換。
+  Prompts（`prompts/*`）dsh 也不支援（「MCP prompt templates are unsupported」），這裡同樣不做。
+
 ## 明文限制
 
 照 dsh 的 `Known Limitations` 模式：這些是缺口，不是待補的功能。
@@ -102,7 +126,7 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   middleware are left untouched」。harness 管得住的是「MCP 讀來的資料經由內建 `write_file`
   寫進虛擬 FS」那條路。要圍堵 MCP server 本身只能從啟動它的方式下手（沙箱／容器），
   不在 Phase 2 範圍（[#34](https://github.com/DemianLi/nexus-agent/issues/34)）。
-- **只橋接工具。** Resources 與 Prompts 沒有 harness 消費端，延後。
+- **Prompts 不橋接。** dsh 也不支援 MCP prompt templates；工具、指引與資源見上一節。
 - **不重連。** 連線掉了之後那台 server 的工具留在註冊表上、呼叫會失敗，直到重新組裝
   agent；掛上時就連不上的那台，這一次組裝都沒有它的工具。dsh 有指數退避的重連監督與
   `notifications/tools/list_changed` 的重新同步，連上了就把工具補上；deepagents 建構後不可變，

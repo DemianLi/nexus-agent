@@ -434,6 +434,11 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   就記一行「[組裝] thread "…" 警告：…」，伺服器回來之後開的對話就有工具了。要它連不上就算掉，那一列的
   `config` 寫 `failOnStartupError: true`（掉了之後照上一條，到重啟為止不再連），見
   [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)。
+- **MCP 伺服器的使用指引與資源也進得來**（[#431](https://github.com/DemianLi/nexus-agent/issues/431)、
+  [#430](https://github.com/DemianLi/nexus-agent/issues/430)）：伺服器 `initialize` 回的 `instructions` 會加上
+  `### MCP server: <名字>` 接在系統提示詞後面，模型另有 `list_mcp_resources`、`list_mcp_resource_templates`、
+  `read_mcp_resource` 三支工具讀它的資源。指引連同標頭超過 `maxInstructionBytes`（預設 32768 位元組）那一列算連線失敗，
+  走上一條的 `failOnStartupError` 規則。細節見同一份 README。
 - **空檔與只有註解的檔會讓啟動失敗。** 要停用某一層請寫 `[]`——「我把它清空了」與「我把它
   寫壞了」在磁碟上長得一樣，所以不猜。
 - **patch 檔只有你自己動得了才會被接受。** 檔案本身與它每一層上層目錄都不能讓群組或其他人

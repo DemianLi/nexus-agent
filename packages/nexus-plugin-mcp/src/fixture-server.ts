@@ -10,11 +10,56 @@
  * [`fixture-tools.ts`](./fixture-tools.ts)；新協議的 stdio 那台是 [`modern-stdio-server.ts`](./modern-stdio-server.ts)。
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { ListResourcesRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerFixtureTools } from './fixture-tools.js';
+import {
+  LOGO_BASE64,
+  LOGO_URI,
+  memoText,
+  MEMO_URI,
+  NOTE_TEMPLATE,
+  PAGED_FIRST_URI,
+  PAGED_SECOND_URI,
+  PAGE_2_CURSOR,
+  instructionsRequested,
+  pagedRequested,
+  noteText,
+  resourcesRequested,
+} from './resource-fixtures.js';
 
-const server = new McpServer({ name: 'nexus-fixture', version: '0.0.0' });
+const instructions = instructionsRequested();
+const server = new McpServer(
+  { name: 'nexus-fixture', version: '0.0.0' },
+  {
+    ...(instructions !== undefined && { instructions }),
+    ...(pagedRequested() && { capabilities: { resources: {} } }),
+  },
+);
 registerFixtureTools(server);
+if (pagedRequested()) {
+  server.server.setRequestHandler(ListResourcesRequestSchema, (request) =>
+    request.params?.cursor === PAGE_2_CURSOR
+      ? { resources: [{ uri: PAGED_SECOND_URI, name: 'two' }] }
+      : { resources: [{ uri: PAGED_FIRST_URI, name: 'one' }], nextCursor: PAGE_2_CURSOR },
+  );
+}
+if (resourcesRequested()) {
+  server.registerResource('memo', MEMO_URI, { mimeType: 'text/plain' }, (uri) => ({
+    contents: [{ uri: uri.href, text: memoText() }],
+  }));
+  server.registerResource('logo', LOGO_URI, { mimeType: 'image/png' }, (uri) => ({
+    contents: [{ uri: uri.href, mimeType: 'image/png', blob: LOGO_BASE64 }],
+  }));
+  server.registerResource(
+    'note',
+    new ResourceTemplate(NOTE_TEMPLATE, { list: undefined }),
+    { mimeType: 'text/plain' },
+    (uri, variables) => ({
+      contents: [{ uri: uri.href, text: noteText(String(variables['id'])) }],
+    }),
+  );
+}
 
 await server.connect(new StdioServerTransport());

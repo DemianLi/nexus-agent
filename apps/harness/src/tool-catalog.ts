@@ -116,7 +116,7 @@ export const PACKAGE_MANIFEST: Readonly<Record<string, PackageExpectation>> = {
   'nexus-plugin-mcp': {
     kind: 'external',
     reason:
-      '工具由設定指到的外部 MCP server 決定，以 `mcp__<server>__<tool>` 註冊；沒有 server 就沒有工具。',
+      '工具由設定指到的外部 MCP server 決定，以 `mcp__<server>__<tool>` 註冊；另有三支所有 server 共用的資源工具（`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource`），只要有一列 mcp 掛上就在；沒有 mcp 列就沒有工具。',
   },
   'nexus-plugin-memory': { kind: 'none', reason: '只把記憶注入系統提示詞。' },
   'nexus-plugin-permission-presets': {
