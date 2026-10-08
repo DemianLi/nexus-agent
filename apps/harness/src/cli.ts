@@ -19,6 +19,7 @@
  * 不是第二條路徑。
  */
 import { parseArgs } from 'node:util';
+import { clearLine, cursorTo } from 'node:readline';
 import { createInterface } from 'node:readline/promises';
 import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -75,6 +76,7 @@ import {
   optionalEntriesOf,
   startupErrorFrom,
   startupWarning,
+  describeWarnings,
 } from './startup-audit.js';
 import { createInvariantLog } from './invariant-log.js';
 import { toAgentInvocation } from './messages.js';
@@ -406,6 +408,17 @@ interface Printer {
   readonly error: (line: string) => void;
 }
 
+/**
+ * REPL 的輸入行與非同步輸出之間的協調點（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)）。
+ *
+ * 組裝之後外掛執行期交出的話（例如 MCP 掉線重連）隨時會來，包括使用者正在提示字元後面打字的時候。直接寫標準錯誤，
+ * 那一行會被插進去、打到一半的字看起來斷成兩截。`runRepl` 在等輸入時把 `redraw` 設成「清掉這一行、印訊息、把提示字元
+ * 與已經打的字重畫回來」；沒在等輸入（跑一輪中）或不是 TTY 時，就照原樣直接印。
+ */
+export interface ReplLine {
+  redraw?: (print: () => void) => void;
+}
+
 const consolePrinter: Printer = {
   log: (line) => void console.log(line),
   error: (line) => void console.error(line),
@@ -697,6 +710,7 @@ function assertNoReplNameCollision(commands: Pick<CommandRegistrationPoint, 'fin
  *   **執行器在這裡建，一個 REPL 一個**——
  *   `@nexus/plugin-commands` 的配套入口就是靠「一次一個」這件事在檢查配對的。
  * @param titleLimits - 見 {@link runTurn}。
+ * @param line - 非同步輸出與輸入行的協調點，見 {@link ReplLine}；REPL 活著的期間它的 `redraw` 才有值。
  */
 export async function runRepl(
   agent: NexusAgent,
@@ -707,6 +721,7 @@ export async function runRepl(
   driver?: GoalDriverPort,
   roundCap?: number,
   titleLimits?: ThreadTitleLimits,
+  line?: ReplLine,
 ): Promise<void> {
   assertNoReplNameCollision(commands);
   const executor = createCommandExecutor({ commands, sessionLog });
@@ -714,14 +729,35 @@ export async function runRepl(
   // `Interface` 的型別沒有 `closed`（執行期有），所以自己記一份。
   let closed = false;
   rl.once('close', () => void (closed = true));
-  rl.prompt();
+  // 是否正停在提示字元等人打字：只有這時候插進來的輸出會弄亂輸入行。
+  let waiting = false;
+  rl.on('line', () => void (waiting = false));
+  const prompt = (): void => {
+    waiting = true;
+    rl.prompt();
+  };
+  if (line !== undefined) {
+    const output = io.output as NodeJS.WritableStream & { isTTY?: boolean };
+    line.redraw = (print) => {
+      if (!waiting || closed || output.isTTY !== true) {
+        print();
+        return;
+      }
+      clearLine(output, 0);
+      cursorTo(output, 0);
+      print();
+      // `preserveCursor`：把已經打的字與游標位置原樣畫回提示字元後面。
+      rl.prompt(true);
+    };
+  }
+  prompt();
 
   for await (const line of rl) {
     const text = line.trim();
     if (text === '/exit') break;
     if (HELP_LINE_PATTERN.test(text)) {
       for (const line of formatCommandHelp(commands.list())) printer.log(line);
-      if (!closed) rl.prompt();
+      if (!closed) prompt();
       continue;
     }
     if (text.length > 0) {
@@ -763,9 +799,10 @@ export async function runRepl(
     }
     // stdin 收在最後一行之後（管線餵進來時就是這樣）——那一刻 readline 已經關了，
     // 再問一次提示是 ERR_USE_AFTER_CLOSE。
-    if (!closed) rl.prompt();
+    if (!closed) prompt();
   }
 
+  if (line !== undefined) line.redraw = undefined;
   rl.close();
 }
 
@@ -869,6 +906,8 @@ async function runLaunched(
   printer: Printer,
   liveLaunch: LiveLaunch | undefined,
 ): Promise<void> {
+  // REPL 的輸入行與非同步輸出的協調點（見 {@link ReplLine}）：外掛執行期的警告與 REPL 都在這一次呼叫裡。
+  const replLine: ReplLine = {};
   // **清單只有一個來源：出貨的 `cordis.yml` 加上使用者那兩層**（#454、#455）。**它排在日誌
   // 之前，那是承重的**（#612）：落盤掛不掛由清單上 `session-persistence` 那一列講，而下面讀續接、
   // 解析日誌根都要先知道答案——關掉的時候一件都不該做。清單在這裡載也讓設定寫壞的那一類錯
@@ -1039,6 +1078,14 @@ async function runLaunched(
     )) {
       printer.error(line);
     }
+    // 組裝之後外掛執行期交出的話（例如 MCP 掉線重連的進度，#1099）接著印到標準錯誤。
+    built.onWarning((warning) => {
+      for (const text of describeWarnings(loaded, [warning])) {
+        const print = (): void => printer.error(`[外掛] ${text}`);
+        if (replLine.redraw === undefined) print();
+        else replLine.redraw(print);
+      }
+    });
     // **對話從日誌推回模型**（#306），在第一輪之前。放在 try 裡：灌不進去要放掉續接那把租約。
     restored =
       resumed === undefined
@@ -1187,6 +1234,7 @@ async function runLaunched(
         driver,
         invocation.maxGoalRounds,
         threadTitle,
+        replLine,
       );
     }
   } catch (error) {

@@ -68,6 +68,7 @@ import {
   type PluginEntry,
   type PluginOrigin,
   type PluginRegistry,
+  type PluginWarning,
   type SessionLog,
   type SessionRegistry,
   type SessionTelemetrySharingStatus,
@@ -843,6 +844,12 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
        * 外掛在 `apply` 裡交出的警告（#751，`registry.logger`），例如 MCP 連不上而照樣掛上。呼叫端跟掉了的列印在同一段。
        */
       warnings: registry.logger.warnings(),
+      /**
+       * 組裝完之後外掛**執行期**交出的警告（#1099，`registry.logger.bind()`），例如 MCP 掉線重連的進度。外掛不自己寫標準錯誤，
+       * 印在哪由呼叫端決定（CLI 與 serve）；`warnings` 是掛上那一刻的快照，這裡只收訂閱之後的。
+       */
+      onWarning: (listener: (warning: PluginWarning) => void) =>
+        registry.logger.exporter({ export: listener }),
       /**
        * 這一次組裝收不收插話（#710），見 {@link CreateNexusAgentOptions.stepInbox}。
        */

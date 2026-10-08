@@ -732,6 +732,8 @@ export async function createCliAgent(
   dropped: readonly AssemblyDrop[];
   /** 外掛在 `apply` 裡交出的警告（#751），例如 MCP 連不上而照樣掛上。 */
   warnings: readonly PluginWarning[];
+  /** 組裝之後外掛執行期交出的警告（#1099），例如 MCP 掉線重連的進度；回傳取消訂閱。印在哪由呼叫端決定。 */
+  onWarning: (listener: (warning: PluginWarning) => void) => () => void;
   /** 這一次組裝收不收插話（#710），見 `stepInbox` 那一格。 */
   stepInbox: boolean;
   /** 每會話模型選擇的組裝端（#723）；**沒帶 `--live` 是 `undefined`**（假模型沒有型錄）。 */
@@ -849,6 +851,7 @@ export async function createCliAgent(
     services,
     dropped,
     warnings,
+    onWarning,
     stepInbox,
   } = await createNexusAgent({
     model,
@@ -982,6 +985,7 @@ export async function createCliAgent(
     attachTitle,
     dropped,
     warnings,
+    onWarning,
     stepInbox,
     modelSelection,
   };

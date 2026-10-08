@@ -6,6 +6,7 @@
  * （[`mcp-fixture-server.ts`](./mcp-fixture-server.ts)）。所以同一份清單、同一個行程裡，量得到「伺服器恢復之後」。
  */
 
+import { execFileSync } from 'node:child_process';
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -149,6 +150,47 @@ describe('MCP 連不上、沒寫 failOnStartupError', () => {
     recover();
     await openThread('b');
     expect(lines.filter((line) => line.startsWith('[組裝] thread "b"'))).toEqual([]);
+  }, 60_000);
+});
+
+describe('MCP 掛上之後掉線', () => {
+  /**
+   * **執行期的話走產品路徑到伺服器日誌**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)）：外掛在 `apply` 裡綁好
+   * `registry.logger`，組裝之後掉線重連的進度由 serve 接 `exporter` 記成 `[外掛] thread "…"：…`，指名是哪顆外掛。
+   */
+  it('殺掉 MCP 子行程：伺服器日誌記下掉線與重連，指名外掛與那條對話', async () => {
+    const { env, recover } = homeWithLateServer(
+      '        reconnect:\n          initialDelayMs: 100\n          maxDelayMs: 200\n          maxAttempts: 5',
+    );
+    recover();
+    const { lines, openThread } = await serveWithLog(env);
+    await openThread('a');
+    const home = env[HARNESS_HOME_ENV] ?? '';
+    const alive = (): number[] => {
+      try {
+        return execFileSync('pgrep', ['-f', '--', join(home, 'late-server.mjs')])
+          .toString()
+          .split('\n')
+          .filter(Boolean)
+          .map(Number);
+      } catch {
+        return [];
+      }
+    };
+    const first = alive();
+    expect(first.length).toBeGreaterThan(0);
+    for (const pid of first) process.kill(pid, 'SIGKILL');
+    const heard = (needle: string) =>
+      lines.some(
+        (line) =>
+          line.startsWith('[外掛] thread "a"：mcp-late（@nexus/plugin-mcp）：') &&
+          line.includes(needle),
+      );
+    const start = Date.now();
+    while (!(heard('connection lost; reconnecting') && heard('reconnected (attempt 1/5)'))) {
+      if (Date.now() - start > 20_000) throw new Error(`等太久了：${lines.join('\n')}`);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    }
   }, 60_000);
 });
 
