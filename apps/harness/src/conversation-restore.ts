@@ -209,7 +209,7 @@ export async function restoreConversation(
 }
 
 const UNREPLAYABLE_TEXT: Readonly<Record<UnreplayableReason, string>> = {
-  'reply-missing': '日誌裡少了模型的回覆（格式 9 以前寫的日誌不記回覆）',
+  'reply-missing': '日誌裡有模型正常回來的呼叫，卻沒有記到回覆（多半是格式 9 以前寫的日誌）',
   'result-missing': '日誌裡少了工具結果的內容（格式 9 以前寫的日誌不記內容）',
   'summary-missing': '日誌裡少了壓縮的摘要（格式 9 以前寫的日誌不記摘要）',
   'compaction-misaligned': '壓縮的切點對不上推出來的對話，灌回去會切錯地方',

@@ -85,11 +85,14 @@ export const TOOL_NOT_STARTED_TEXT =
 /**
  * 推不出完整歷史的原因。
  *
- * - `reply-missing`：一輪正常收尾、中間沒有中斷，卻一則模型回覆都沒有；**或是整份日誌叫過模型**
- *   （`model/start`、`tool/call`）**卻一則回覆都沒有**。格式 8 以前的日誌不記回覆，正常收尾的每一輪都中
- *   第一道；每一輪都被中止、或唯一那一輪沒收尾的，第一道碰不到，由第二道接。9 以後只有回覆沒記進去、或
- *   每一次呼叫都沒產出看得見的內容時才會——從空的開始是安全的那一邊。**格式版本判不出這件事**：續寫的
- *   把手第一次寫入時把 header 的 `version` 蓋成這一版（`session-store.ts`），8 開頭、9 續寫的檔 header 是 9。
+ * - `reply-missing`：一輪正常收尾、中間沒有中斷，卻一則模型回覆都沒有；**或是整份日誌有模型「正常回來」的呼叫
+ *   （`model/end` 沒帶 `outcome`）、`tool/call`、或停在半路沒配到 `model/end` 的 `model/start`，卻一則回覆都沒有**。
+ *   格式 8 以前的日誌不記回覆，正常收尾的每一輪都中第一道；每一輪都被中止、或唯一那一輪沒收尾的，第一道碰不到，
+ *   由第二道接。9 以後只有回覆沒記進去才會。**格式版本判不出這件事**：續寫的把手第一次寫入時把 header 的
+ *   `version` 蓋成這一版（`session-store.ts`），8 開頭、9 續寫的檔 header 是 9。
+ *   **帶 `outcome` 的 `model/end`（`aborted`、`error`，#1022）不算**：那次呼叫沒有正常回來，本來就沒有回覆可記，
+ *   線上的圖狀態也沒有——使用者的話留著，下一次請求照樣帶它（#1190）。`outcome` 是 #1022 才開始寫的選填格，
+ *   舊日誌的 `model/end` 都沒有，所以放行不會誤放格式 8 以前漏記回覆的檔。
  * - `result-missing`：一顆 `tool/result` 沒帶 `message`——8 以前，或圍堵在回傳裡找不到那則訊息。
  * - `summary-missing`：一顆 `compaction/summary` 沒帶 `summary`——8 以前。
  * - `compaction-misaligned`：切點那一刻推出來的則數對不上 `messagesBefore + 1`，切下去會切錯地方。
@@ -178,6 +181,8 @@ export function replayConversation(
   let previous: SessionEvent | undefined;
   /** 第一顆「模型跑過」的事件，與整份日誌有沒有任何一則回覆。見 {@link UnreplayableReason}。 */
   let modelRan: number | undefined;
+  /** 開著、還沒配到 `model/end` 的那顆 `model/start`。行程死在呼叫中途時一直留到最後。 */
+  let openCall: number | undefined;
   let replied = false;
 
   const pendingCount = (): number =>
@@ -278,7 +283,13 @@ export function replayConversation(
     } else {
       switch (event.type) {
         case 'model/start': {
-          modelRan ??= event.seq;
+          openCall = event.seq;
+          break;
+        }
+        case 'model/end': {
+          // 沒正常回來的呼叫（`outcome`）沒有回覆可記，不算「模型跑過」。
+          if (openCall !== undefined && event.data.outcome === undefined) modelRan ??= openCall;
+          openCall = undefined;
           break;
         }
         case 'tool/call': {
@@ -323,6 +334,9 @@ export function replayConversation(
     }
     previous = event;
   }
+  // 停在半路的呼叫保守算跑過：續接時 `resumeClosingInterruptedTurn` 會先補一顆帶 `outcome` 的 `model/end`，
+  // 所以走續接進來的讀不到這一種；沒補過的舊檔照舊拒推。
+  modelRan ??= openCall;
   if (modelRan !== undefined && !replied) {
     return { kind: 'unreplayable', reason: 'reply-missing', seq: modelRan };
   }

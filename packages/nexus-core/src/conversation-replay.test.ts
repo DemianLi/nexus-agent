@@ -609,6 +609,79 @@ describe('推不出來', () => {
     });
   });
 
+  it('停在半路的呼叫（只有 model/start，沒配到 model/end）：推不出來', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '跑' });
+    const started = log.append('model/start', {});
+
+    expect(replayConversation(log.events)).toEqual({
+      kind: 'unreplayable',
+      reason: 'reply-missing',
+      seq: started.seq,
+    });
+  });
+
+  /**
+   * **#1190**：第一次模型呼叫就沒正常回來（使用者按了停止、或供應商拋錯），整份日誌因此一則回覆都沒有。
+   * 這不是格式 8 以前漏記，而是本來就沒有回覆；線上的圖狀態裡使用者那句話還在，下一次請求照樣帶它，
+   * 所以續接推回來也要有——整份拒推會讓續接後的模型少看到一句。
+   */
+  it.each([
+    ['使用者按了停止', 'aborted' as const],
+    ['供應商拋錯', 'error' as const],
+  ])('第一次呼叫就沒正常回來（%s）：使用者的話照樣推回來', (_, outcome) => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '第一句' });
+    const start = log.append('model/start', {});
+    log.append('model/end', { outcome, modelCall: start.seq });
+    log.append('turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } });
+    // 第二句還沒得到回覆就重啟：整份日誌一則回覆都沒有。
+    log.append('turn/start', { kind: 'message', text: '第二句' });
+
+    expect(shape(replayConversation(log.events))).toEqual(['human:第一句', 'human:第二句']);
+  });
+
+  it('之後有了回覆也一樣（不靠「後來有回覆」才放行）', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '第一句' });
+    const start = log.append('model/start', {});
+    log.append('model/end', { outcome: 'aborted', modelCall: start.seq });
+    log.append('turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } });
+    chat(log, '第二句', '好');
+
+    expect(shape(replayConversation(log.events))).toEqual(['human:第一句', 'human:第二句', 'ai:好']);
+  });
+
+  it('行程死在第一次呼叫中途，續接補的 model/end { outcome: error } 之後推得出來', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '跑' });
+    const start = log.append('model/start', {});
+    // `resumeClosingInterruptedTurn` 補寫的收尾（#721）。
+    log.append('model/end', { outcome: 'error', modelCall: start.seq });
+    log.append('turn/end', { reason: { kind: 'interrupted' } });
+    log.append('session/end-seed', {});
+
+    expect(shape(replayConversation(log.events))).toEqual(['human:跑']);
+  });
+
+  it('對照：有一次正常回來的呼叫卻沒有回覆，仍然推不出來（格式 8 以前漏記），帶 outcome 的呼叫不改變這件事', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '一' });
+    const aborted = log.append('model/start', {});
+    log.append('model/end', { outcome: 'aborted', modelCall: aborted.seq });
+    log.append('turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } });
+    log.append('turn/start', { kind: 'message', text: '二' });
+    const normal = log.append('model/start', {});
+    log.append('model/end', { modelCall: normal.seq });
+    log.append('turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } });
+
+    expect(replayConversation(log.events)).toEqual({
+      kind: 'unreplayable',
+      reason: 'reply-missing',
+      seq: normal.seq,
+    });
+  });
+
   it('對照：有回覆的日誌裡夾著一輪中止時一個字都沒出的，照樣推得出來', () => {
     const log = new SessionLog('replay');
     chat(log, '嗨', '你好');
