@@ -117,6 +117,55 @@ function loaderOf(
 
 const text = (id: string) => screen.getByTestId(id).textContent ?? '';
 
+describe('成本分頁：快取命中率（#724）', () => {
+  const withUsage = (usage: Record<string, number>) => {
+    const script = new Script();
+    return reduceAll(emptyConversation(), [
+      script.running(),
+      script.custom(TOKEN_USAGE, usage),
+      script.custom(SESSION_STATS, { turns: 1, steps: 1, llmMs: 1_000, toolMs: 0 }),
+    ]);
+  };
+  const cached = {
+    inputTokens: 0,
+    uncachedInputTokens: 200,
+    cacheReadTokens: 700,
+    cacheWriteTokens: 100,
+    outputTokens: 50,
+  };
+
+  it('有快取數字：會話總計畫一個命中率', async () => {
+    mount(withUsage(cached));
+    await act(async () => {});
+    expect(text('cost-totals')).toContain('快取命中率70.0%');
+  });
+
+  it('只記了一桶：畫沒記，不畫 0%', async () => {
+    const { cacheWriteTokens: _unrecorded, ...onlyRead } = cached;
+    mount(withUsage(onlyRead));
+    await act(async () => {});
+    expect(text('cost-totals')).toContain('快取命中率沒記');
+    expect(text('cost-totals')).not.toContain('0.0%');
+  });
+
+  it('server 不記快取：整列不畫', async () => {
+    mount(withUsage({ inputTokens: 5_000, uncachedInputTokens: 5_000, outputTokens: 500 }));
+    await act(async () => {});
+    expect(text('cost-totals')).toContain('5,500 token');
+    expect(text('cost-totals')).not.toContain('快取命中率');
+  });
+
+  it('口徑那一句只在畫了命中率時才有', async () => {
+    mount(withUsage(cached));
+    await act(async () => {});
+    expect(screen.getByTestId('cost-limits').textContent).toContain(COST_LIMITS.cache);
+    cleanup();
+    mount(withUsage({ inputTokens: 5_000, uncachedInputTokens: 5_000, outputTokens: 500 }));
+    await act(async () => {});
+    expect(screen.getByTestId('cost-limits').textContent).not.toContain(COST_LIMITS.cache);
+  });
+});
+
 describe('成本分頁：主對話', () => {
   it('累計、context、壓縮都照總帳與 frame；口徑與標語寫在畫面上', async () => {
     mount(conversation(false), loaderOf());
@@ -135,7 +184,8 @@ describe('成本分頁：主對話', () => {
     expect(text('cost-compactions')).toContain('1 次');
     expect(text('cost-headline')).toBe(COST_HEADLINE);
     const limits = within(screen.getByTestId('cost-limits')).getAllByRole('listitem');
-    expect(limits.map((item) => item.textContent)).toEqual(Object.values(COST_LIMITS));
+    const { cache: _cache, ...withoutCache } = COST_LIMITS;
+    expect(limits.map((item) => item.textContent)).toEqual(Object.values(withoutCache));
   });
 
   it('只有 frame、一則對話都沒載入（entries 為空）時數字仍照 frame', async () => {

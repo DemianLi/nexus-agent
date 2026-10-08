@@ -45,7 +45,7 @@ import type { SubagentUsageSlot } from '@/hooks/use-subagent-usages';
 import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot';
 import {
   COST_HEADLINE,
-  COST_LIMITS,
+  costLimits,
   COST_LIMITS_HEADING,
   compactionCount,
   contextRows,
@@ -190,14 +190,14 @@ function Subagents({
   );
 }
 
-function Limits() {
+function Limits({ tokenUsage }: { tokenUsage: WireTokenUsage | null }) {
   return (
     <section aria-labelledby="cost-limits" className="text-muted-foreground mt-2 px-2 text-tip">
       <h3 id="cost-limits" className="mb-1 font-medium">
         {COST_LIMITS_HEADING}
       </h3>
       <ul className="flex list-disc flex-col gap-1 pl-4" data-testid="cost-limits">
-        {Object.entries(COST_LIMITS).map(([key, text]) => (
+        {Object.entries(costLimits(tokenUsage)).map(([key, text]) => (
           <li key={key} data-limit={key}>
             {text}
           </li>
@@ -532,7 +532,7 @@ const CostView = memo(function CostView({
       {loadSubagentUsage !== undefined && (
         <Subagents names={names} load={loadSubagentUsage} visible={visible} />
       )}
-      <Limits />
+      <Limits tokenUsage={tokenUsage} />
     </section>
   );
 });

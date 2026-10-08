@@ -276,7 +276,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 
 **同一步平行跑的工具呼叫也有上限**：模型一步吐出很多顆工具呼叫時，同時在跑的最多 10 顆（照 dsh），
 其餘照模型給的順序等空位；一次性與背景子代理同一個值。要改就改清單裡 `agent-loop` 那一列的
-`config.maxParallelToolCalls`（至少 2，改了要重啟）。**只有宣告了「可以重疊」的工具才會跟別顆重疊**，
+`config.maxParallelToolCalls`（至少 1，`1` 就是串行，同 dsh；改了要重啟）。**只有宣告了「可以重疊」的工具才會跟別顆重疊**，
 其餘一顆一顆照模型給的順序跑，同時也擋住後面的（[#711](https://github.com/DemianLi/nexus-agent/issues/711) 第 2 步，照 dsh）：
 基座工具靠名字表，只有 `read_file`、`task`（與選配的 `subagent`）可以重疊，`grep`、`glob`、`ls`、`write_file`、`edit_file`、`execute`
 與沒宣告的外掛工具都是獨佔；外掛工具要重疊，在工具的 `metadata` 上寫 `concurrencySafe: true`（只有剛好是 `true` 才算）。
@@ -700,9 +700,9 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 **沒有 dsh 的對應物**（dsh 不跑 LangGraph），它是對著一次實測跑掉的執行校準出來的，換算成幾輪
 模型呼叫取決於這一次掛了哪些 middleware——預設組裝是 33 輪，再給 `--workspace` 是 32 輪。逐段
 實測見 `apps/harness/src/settings/recursion-limit.ts` 的檔頭。
-`agent-loop` 的 `10` 照 dsh（`maxParallelToolCalls`），**但最小只收 2，dsh 收 1**：LangGraph 的
-`maxConcurrency: 1` 跑完第一顆就靜靜收掉那一步，其餘工具呼叫沒跑也不報錯，理由與絆索在
-`apps/harness/src/settings/agent-loop.ts` 的檔頭。
+`agent-loop` 的 `10` 照 dsh（`maxParallelToolCalls`），最小 1（串行）也同 dsh，**但 1 不是靠 LangGraph 的 `maxConcurrency: 1`**：
+它跑完第一顆就靜靜收掉那一步，其餘工具呼叫沒跑也不報錯。上限 1 時 `maxConcurrency` 仍帶 2，串行由獨佔屏障做
+（每一顆都當獨佔）；理由與絆索在 `apps/harness/src/settings/agent-loop.ts` 的檔頭。
 
 ### 部署方的身分與 persona
 

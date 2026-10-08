@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { formatDuration, sessionUsageView, usageBuckets } from '@/lib/session-usage-view';
+import {
+  cacheHitRate,
+  cacheHitRateText,
+  formatDuration,
+  sessionUsageView,
+  usageBuckets,
+} from '@/lib/session-usage-view';
 
 const stats = { turns: 4, steps: 17, llmMs: 133_000, toolMs: 38_400 };
 
@@ -200,5 +206,44 @@ describe('usageBuckets（#724 收尾第 1 步）', () => {
       null,
     );
     expect(view?.label).toBe('800 token');
+  });
+});
+
+describe('cacheHitRate（#724）', () => {
+  const buckets = (over: Partial<ReturnType<typeof usageBuckets>>) => ({
+    input: 200,
+    cacheRead: 700,
+    cacheWrite: 100,
+    output: 50,
+    total: 1_050,
+    cacheInInput: false,
+    ...over,
+  });
+
+  it('新 server：快取讀 ÷ 三桶相加', () => {
+    expect(cacheHitRate(buckets({}))).toBeCloseTo(0.7);
+  });
+
+  it('舊 server：分母是 input（已含快取），不再加一次', () => {
+    expect(
+      cacheHitRate(buckets({ input: 1_000, cacheRead: 250, cacheWrite: 100, cacheInInput: true })),
+    ).toBeCloseTo(0.25);
+  });
+
+  it('沒記與不畫的分界', () => {
+    expect(cacheHitRate(buckets({ cacheRead: undefined }))).toBe('unrecorded');
+    expect(cacheHitRate(buckets({ cacheWrite: undefined }))).toBe('unrecorded');
+    expect(cacheHitRate(buckets({ cacheRead: undefined, cacheWrite: undefined }))).toBeUndefined();
+  });
+
+  it('整筆輸入是 0 除不了：不畫，不是 NaN 也不是 0%', () => {
+    expect(cacheHitRate(buckets({ input: 0, cacheRead: 0, cacheWrite: 0 }))).toBeUndefined();
+  });
+
+  it('寫成字：小數一位，沒記寫沒記', () => {
+    expect(cacheHitRateText(0.6243)).toBe('62.4%');
+    expect(cacheHitRateText(0)).toBe('0.0%');
+    expect(cacheHitRateText(1)).toBe('100.0%');
+    expect(cacheHitRateText('unrecorded')).toBe('沒記');
   });
 });
