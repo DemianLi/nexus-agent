@@ -27,8 +27,9 @@ import { uploadView } from '@/lib/upload-state';
 import type { UploadStates, UploadView } from '@/lib/upload-state';
 
 /**
- * 上傳中的進度條（#733）。`percent` 沒有（瀏覽器不知道總量）就畫不確定長度：整條淡淡地閃，不猜百分比；
- * 減少動態效果的人那條不動（`motion-safe`）。
+ * 上傳中的進度條（#733）。`percent` 沒有（瀏覽器不知道總量）就畫不確定長度：整條淡色，不猜百分比。**不加循環動畫**：
+ * 動效只能從 `styles/motion.css` 的清單裡挑，清單外的 infinite 動畫過不了 `check-built-css`；
+ * 「還在動」由標題的 `text-shimmer`（shadcn `attachment` 的 uploading 狀態，有 reduced-motion 停止規則）表達。
  */
 function UploadBar({ view, name }: { readonly view: UploadView; readonly name: string }) {
   const indeterminate = view.percent === undefined;
@@ -44,7 +45,7 @@ function UploadBar({ view, name }: { readonly view: UploadView; readonly name: s
       className="bg-muted mt-1 h-1 w-full overflow-hidden rounded-full"
     >
       <div
-        className={`bg-primary h-full rounded-full ${indeterminate ? 'w-full motion-safe:animate-pulse' : 'transition-[width] duration-(--duration-quick)'}`}
+        className={`bg-primary h-full rounded-full ${indeterminate ? 'w-full opacity-40' : 'transition-[width] duration-(--duration-quick)'}`}
         style={indeterminate ? undefined : { width: `${view.percent}%` }}
       />
     </div>
