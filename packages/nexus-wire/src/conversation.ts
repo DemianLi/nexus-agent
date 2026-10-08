@@ -44,6 +44,7 @@ import type {
 } from './inbox.js';
 import { COMPACTION } from './compaction.js';
 import { GOAL, GOAL_PHASES } from './goal.js';
+import { MESSAGE_DISCARD } from './message-discard.js';
 import type { WireGoal, WireGoalPhase } from './goal.js';
 import { PLAN_MODE } from './plan-mode.js';
 import { PROJECTION, PROJECTION_KEY_PATTERN } from './projection.js';
@@ -1009,6 +1010,7 @@ const CUSTOM_REDUCERS: {
   [TITLE]: reduceTitle,
   [SUBAGENT_STATUS]: reduceSubagentStatus,
   [SUBAGENT_CATALOG]: reduceSubagentCatalog,
+  [MESSAGE_DISCARD]: reduceMessageDiscard,
 };
 
 /**
@@ -1179,6 +1181,19 @@ function toWireGoal(value: unknown): WireGoal | undefined {
     createdAt,
     updatedAt,
   };
+}
+
+/**
+ * `message-discard` 的 `payload`（#520）：把 `messageId` 對應的 AI 回覆整格拿掉。先比 `messageId`、再比串流的 `id`；
+ * 找不到、重複送、或 `messageId` 不是非空字串，都是 no-op。只拿 AI 回覆，不碰同 id 的別種 entry。
+ */
+function reduceMessageDiscard(state: ConversationState, payload: object): ConversationState {
+  const { messageId } = payload as { messageId?: unknown };
+  if (typeof messageId !== 'string' || messageId === '') return state;
+  const entries = state.entries.filter(
+    (entry) => !(entry.kind === 'ai' && (entry.messageId === messageId || entry.id === messageId)),
+  );
+  return entries.length === state.entries.length ? state : { ...state, entries };
 }
 
 /** `goal` 的 `payload`：投影的整個值，整份換掉。`null` 是沒有目標；任何一格不對就整顆不收，留著前一份。 */

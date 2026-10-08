@@ -71,6 +71,11 @@ import type { GoalDriverPort } from './goal-driver.js';
 import type { AssemblyDrop, NexusAgentHandle } from './agent-factory.js';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
 import { CONTAINED_FILESYSTEM, sandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
+import {
+  PERMISSION_PRESETS_SERVICE,
+  permissionPresetsPlugin,
+} from '@nexus/plugin-permission-presets';
+import type { PermissionPresetsService } from '@nexus/plugin-permission-presets';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
 import type { CredentialService } from './credentials.js';
@@ -102,8 +107,9 @@ export interface CliInvocation {
    */
   readonly sandbox?: SandboxMode;
   /**
-   * 核准政策的起始那一格（`ask`／`never`，[#437](https://github.com/DemianLi/nexus-agent/issues/437)）。**只有續接會給**：
-   * 從日誌最後一顆 `approval/policy` 讀回來（`recordedApprovalPolicy`），沒給就是 `ask`，也就是 #437 以前的行為。
+   * 核准政策的起始那一格（`ask`／`never`，[#437](https://github.com/DemianLi/nexus-agent/issues/437)）。**只有續接會給，而且續接一定給**：從日誌最後一顆 `approval/policy` 讀回來（`recordedApprovalPolicy`），
+   * 日誌沒記就是 `ask`，也就是 #437 以前的行為。所以「給了沒有」同時就是「這是不是續接」，`permission-presets` 據此分辨新會話與續接。
+   * **新會話不給**：核准的起始值由 `sandbox` 推（全開＝`never`，其他＝`ask`）。
    * 沒有對應的命令列旗標——切換的入口是 `/permission`。
    */
   readonly approvalPolicy?: ApprovalPolicyValue;
@@ -134,7 +140,7 @@ export interface CliInvocation {
    * （#734）：它存在主機的私有目錄，續接用同一個 run 目錄當鑰匙。
    *
    * **不配 `--sandbox`**：模式從日誌來，兩個來源不管誰贏，另一個都是靜靜被丟掉——一個打了
-   * `--sandbox read-only` 的人可能落在 `workspace-write` 裡。要換就接起來之後 `/sandbox`，
+   * `--sandbox read-only` 的人可能落在 `workspace-write` 裡。要換就接起來之後 `/permission`，
    * 那一次會記進日誌。**不配 `--session-log`**：續接就寫回那個目錄，給兩個等於兩個寫入
    * 目的地。
    */
@@ -684,6 +690,11 @@ export async function createCliAgent(
    */
   workspaceChanges: WorkspaceChanges | undefined;
   /**
+   * 權限組合的目錄（#437）。有圍堵且 `permission-presets` 那一列掛上了才有；沒有時 wire 的 `permission.catalog` 回 `not_supported`、
+   * `permissions` 投影缺席，web 藏起選單。
+   */
+  permissionPresets: PermissionPresetsService | undefined;
+  /**
    * 這一次組裝的 goal 域，**沒掛時是 `undefined`**——出貨清單上有 goal，但一份 patch
    * 可以把那一列 `disabled: true` 關掉（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
    * 拿掉 `--plugins` 之後，這是剩下的那條路）。兩條進入點都拿它去組 {@link goalDriverPort}。
@@ -750,12 +761,12 @@ export async function createCliAgent(
   //
   // `undefined` 是「沒給 `--workspace`」，`createNexusAgent` 墊一顆 `TextOnlyStateBackend`。
   //
-  // **模式是傳一個來源進去，不是一個字面值**：fence 逐次呼叫問一次，所以 `/sandbox` 換掉
+  // **模式是傳一個來源進去，不是一個字面值**：fence 逐次呼叫問一次，所以 `/permission` 換掉
   // 控制器那一格之後，下一次檔案變更就照新那格判（理由見 `SandboxModeSource`）。
   //
   // **控制器建在這裡而不是模組層**，這決定了它的壽命：`serve.ts` 一條 thread 呼叫一次
   // `createCliAgent`，所以一條 thread 一格。建在模組層或工廠閉包裡的話兩條 thread 會共用
-  // 同一格——一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上，
+  // 同一格——一條 thread 的 `/permission read-only` 收緊到另一條 thread 的檔案工具上，
   // 而那是靜默的（見 `sandbox-mode.ts` 的模組註解）。
   const workspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
   // **有圍堵而 `sandbox-policy` 那一列沒掛：起不來**（#669，dsh 的方向）。fence 還在擋，模型卻不知道、也請不到升級，
@@ -763,14 +774,30 @@ export async function createCliAgent(
   if (workspaceRoot !== undefined && !startupEntryMounted(plugins, sandboxPolicyPlugin)) {
     throw new Error(
       '有 --workspace（檔案系統有圍堵），但清單上的 sandbox-policy 那一列沒有掛（不存在或被停用）。' +
-        '它負責把檔案政策講給模型、記進日誌、提供 /sandbox 與升級；關掉它而 fence 照舊在擋，模型不知道自己被擋、也請不到升級。' +
+        '它負責把檔案政策講給模型、記進日誌與提供升級；關掉它而 fence 照舊在擋，模型不知道自己被擋、也請不到升級。' +
+        '要嘛把那一列留著，要嘛不要給 --workspace。',
+    );
+  }
+  // **有圍堵而 `permission-presets` 那一列沒掛：同樣起不來。** `/sandbox` 已經拿掉（#437），`/permission` 是切沙箱與核准的唯一入口；
+  // 那一列不在，使用者就沒有任何辦法在會話中收緊或放寬。掛了但 `apply` 拋（組合表壞了、`defaultPreset` 與 `--sandbox` 矛盾）
+  // 則由 `startup-audit.ts` 的必掛名單接住——那一列的 id 在 `REQUIRED_ENTRY_IDS` 上。
+  if (workspaceRoot !== undefined && !startupEntryMounted(plugins, permissionPresetsPlugin)) {
+    throw new Error(
+      '有 --workspace（檔案系統有圍堵），但清單上的 permission-presets 那一列沒有掛（不存在或被停用）。' +
+        '它提供 /permission——切換檔案政策與核准政策的唯一入口；關掉它，會話中就沒有任何辦法改這兩顆旋鈕。' +
         '要嘛把那一列留著，要嘛不要給 --workspace。',
     );
   }
   const sandboxMode = new SandboxModeController(invocation.sandbox ?? 'workspace-write');
   // **核准政策的控制器也建在這裡**，理由同上（一條 thread 一格）。`approvals.policy` 把它的來源交給閘門與升級工具，
   // `approvalPolicy` 服務把控制器本身交給 `approval-gate` 那一列去接日誌；**與 `approvals.enabled`（入口有沒有人在）是兩件事**。
-  const approvalPolicy = new ApprovalPolicyController(invocation.approvalPolicy);
+  //
+  // **起始值：續接用日誌記的，新會話由 `--sandbox` 推**（偏離，登記在 `@nexus/plugin-permission-presets` 檔頭第 1 條）：
+  // 全開就是 `never`、其他是 `ask`，同 dsh 的 `DSH_PERMISSION_MODE`。**續接的呼叫端一定會把 `approvalPolicy` 給滿**
+  // （`cli.ts`、`serve.ts` 的合併：記著的，沒記就 `ask`）——否則一份只記了全開沙箱、沒記核准的舊日誌會在這裡被推成 `never`。
+  const approvalPolicy = new ApprovalPolicyController(
+    invocation.approvalPolicy ?? (invocation.sandbox === 'danger-full-access' ? 'never' : 'ask'),
+  );
   const backend =
     workspaceRoot === undefined
       ? undefined
@@ -808,7 +835,7 @@ export async function createCliAgent(
         channel,
         approvalPolicy,
         // **有沒有圍堵是一格獨立的事實，不是控制器在不在**（#669）：對應 dsh 的 `ctx.fs.sandboxMode`。`sandbox-policy` 那一列據它
-        // 分岔——有圍堵就掛控制器、`/sandbox`、升級；沒有就只貢獻那一句不宣稱圍堵的政策。兩個服務一起交，缺一個
+        // 分岔——有圍堵就掛控制器、升級；沒有就只貢獻那一句不宣稱圍堵的政策。兩個服務一起交，缺一個
         // 那一列載入當場拋（有圍堵卻缺控制器）。
         ...(workspaceRoot === undefined
           ? {}
@@ -818,6 +845,15 @@ export async function createCliAgent(
               workspaceRoot,
               fsContainment: CONTAINED_FILESYSTEM,
               sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot },
+              // 這一次是怎麼開始的（`permission-presets` 讀）：沒有續接的日誌就是新會話；`--sandbox` 有給才算明確。
+              //
+              // **「新會話」看 `approvalPolicy` 有沒有給，不看 `rootSeed`**：`serve` 的註冊表是 pump 建的、不經這個工廠，
+              // 它不傳 `rootSeed`；而兩條產品路徑的續接一律把 `approvalPolicy` 給滿（記著的，沒記就 `ask`），新會話一律不給。
+              permissionSeed: {
+                fresh: invocation.approvalPolicy === undefined,
+                sandboxExplicit:
+                  invocation.approvalPolicy === undefined && invocation.sandbox !== undefined,
+              },
             }),
       }),
       ...plugins,
@@ -906,6 +942,7 @@ export async function createCliAgent(
     telemetrySharing,
     feedback,
     workspaceChanges: services.get(WORKSPACE_CHANGES_SERVICE),
+    permissionPresets: services.get(PERMISSION_PRESETS_SERVICE),
     goals: services.get(GOALS_SERVICE),
     workspaceRoot,
     attachTitle,

@@ -484,7 +484,11 @@ function itemsOf(state: ConversationState): Item[] {
           target: undefined,
           entry,
           summary:
-            entry.cancelled === true ? '放棄回答這些問題' : `已回答 ${entry.answers.length} 題`,
+            entry.declined === true
+              ? '拒絕回答這些問題'
+              : entry.cancelled === true
+                ? '放棄回答這些問題'
+                : `已回答 ${entry.answers.length} 題`,
         });
       }
     } else if (entry.kind === 'compaction') {

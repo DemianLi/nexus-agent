@@ -575,7 +575,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
     // **訊息要活著到瀏覽器那端**（卡上寫的是「訊息指名兩個根」）。只斷言「拋了」的話，有人
     // 把 `threadOrError` 的錯包成一句通用的「thread 不可用」，這一條照樣綠，而多人共用主機上
     // 的維運者失去唯一改得動的線索。形狀同下面那條沙箱檢查：協定層回 `rejected`，不是拋。
-    const refused = await (await serveClient(second)).slashRun('alpha', '/sandbox');
+    const refused = await (await serveClient(second)).slashRun('alpha', '/permission');
     expect(refused).toMatchObject({ kind: 'rejected' });
     expect(JSON.stringify(refused)).toContain(workspace);
     expect(JSON.stringify(refused)).toContain(other);
@@ -635,19 +635,19 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const workspace = await tmp('nexus-serve-resume-ws-');
     const first = await start(root, ['--workspace', workspace]);
     const client = await serveClient(first);
-    await client.slashRun('alpha', '/sandbox read-only');
+    await client.slashRun('alpha', '/permission read-only');
     await stop(first);
 
     const bare = await start(root);
     // 建不起這條 thread 是協定層的錯（`wire-handler.ts` 的 `threadOrError`）：斜線命令回
     // `rejected`，不是拋。原因要講到 `--workspace`——那是人唯一改得動的東西。
-    const refused = await (await serveClient(bare)).slashRun('alpha', '/sandbox');
+    const refused = await (await serveClient(bare)).slashRun('alpha', '/permission');
     expect(refused).toMatchObject({ kind: 'rejected' });
     expect(JSON.stringify(refused)).toContain('--workspace');
     await stop(bare);
 
     const second = await start(root, ['--workspace', workspace]);
-    const reported = await (await serveClient(second)).slashRun('alpha', '/sandbox');
+    const reported = await (await serveClient(second)).slashRun('alpha', '/permission');
     await stop(second);
     // 前提：預設是 workspace-write，所以看得到 read-only 才證明是從日誌回來的。
     expect(JSON.stringify(reported)).toContain('read-only');
@@ -662,7 +662,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const root = await tmp('nexus-serve-resume-');
     const workspace = await tmp('nexus-serve-resume-ws-');
     const first = await start(root, ['--workspace', workspace]);
-    await (await serveClient(first)).slashRun('alpha', '/sandbox read-only');
+    await (await serveClient(first)).slashRun('alpha', '/permission read-only');
     await stop(first);
 
     // 逐行改，只動最後一顆的 `data.mode`（命令參數裡也有 `read-only`）。
@@ -678,7 +678,7 @@ describe('重開 server 之後接得回同一條 thread', () => {
     const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       const second = await start(root, ['--workspace', workspace]);
-      const reported = await (await serveClient(second)).slashRun('alpha', '/sandbox');
+      const reported = await (await serveClient(second)).slashRun('alpha', '/permission');
       await stop(second);
       // 前提：真的接回來了，那一格是日誌上的 bogus。
       expect(JSON.stringify(reported)).toContain('bogus');

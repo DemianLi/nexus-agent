@@ -1,9 +1,9 @@
 /**
  * 圍堵模式的 plugin：**講給模型聽、記進日誌、讓人切得動**。
  *
- * 提示句那一半是 dsh `sandbox:policy` 那條系統提示貢獻的對應物；另外兩半（`/sandbox`
+ * 提示句那一半是 dsh `sandbox:policy` 那條系統提示貢獻的對應物；另外兩半（`/permission`
  * 與 `sandbox/mode` 事件）的對應物是 dsh 的 `PermissionPresetService`。**那顆被切的格子
- * 本身住在 {@link ./sandbox-mode.ts | sandbox-mode.ts}**，連同「為什麼不做具名 preset」
+ * 本身住在 {@link ./sandbox-mode.ts | sandbox-mode.ts}**，連同「具名 preset 在哪裡」
  * 與「跨重啟為什麼交不出來」兩條登記。
  *
  * ## 為什麼這一句是承重的，不是裝飾
@@ -45,7 +45,7 @@
  * 的 `virtualPathOf`／`hostPathOf`，present、交付讀檔路由、`workspace-changes` 都走它）都假設虛擬路徑。
  * 改了 backend 就要一起改那一份，`apps/harness/src/virtual-path.test.ts` 會紅著提醒。為了一句提示詞
  * 去動擋寫入的那一層，換錯的代價比說錯一句話大。
- * 給人看的 `/sandbox` 輸出照舊報主機路徑：命令不進模型（`@nexus/core` 的 `commands.ts`），
+ * 給人看的 `/permission` 輸出報主機路徑：命令不進模型（`@nexus/core` 的 `commands.ts`），
  * 而人要的正是磁碟上的位址。
  *
  * ## 這個 plugin 是出貨清單上的一列；「有沒有圍堵」是組裝點另外交的一格事實
@@ -58,18 +58,18 @@
  *   在擋」當前提；現在每一句都限定在「受檔案沙箱管的可用操作」（dsh 的措辭），有沒有圍堵都為真。
  * - **看「有沒有圍堵」的是消費端，而且各自反應不同**（dsh `packages/fs/tool-fs/src/sandbox.ts:7` 稱之為 capability fact，
  *   `ctx.fs.sandboxMode`）。我們對應的事實是組裝點經 host 服務交的 {@link FS_CONTAINMENT_SERVICE}：**不拿 `sandboxPolicy`
- *   服務在不在當訊號**——那是控制器，不是事實。有圍堵：控制器、可寫根、`WORKSPACE_CAPABILITY`、`sandbox/mode`、升級、`/sandbox`
+ *   服務在不在當訊號**——那是控制器，不是事實。有圍堵：控制器、可寫根、`WORKSPACE_CAPABILITY`、`sandbox/mode`、升級
  *   全部掛上。沒有圍堵：只貢獻那一句話，其餘一樣都不掛（沒有東西可以切、可以升、可以記）。
  * - **有圍堵卻缺 `sandboxPolicy` 服務：載入當場拋**，訊息指名缺什麼（dsh 的 `tool-str-replace-editor` 有圍堵卻缺政策時同樣當場拋，
  *   `packages/fs/tool-str-replace-editor/src/index.ts:71-74`）。不把「沒有圍堵」與「有圍堵但缺件」併成同一種無聲退路。
  * - **有圍堵時整列被關掉：組裝點起不來**（`apps/harness/src/assembly-root.ts`），同上，因為這時 fence 還在擋、模型卻不知道、也請不到升級。
  *
- * ### 登記：沒有圍堵時 `/sandbox` 不註冊，dsh 是拋錯
+ * ### 登記：沒有圍堵時 `/permission` 不註冊，dsh 是拋錯
  *
  * dsh 的對應物是 permission-presets，它遇到不圍堵的 shell 是**載入就拋**、當設定錯誤（`packages/interaction/permission-presets/src/index.ts:219-220`）。
  * 我們照搬的話，這一列在沒有 `--workspace` 的 CLI 上也在，CLI 就起不來；要照 dsh 拋就得有「按入口參數關掉這一列」的覆寫，那是 #46 Out of
- * scope 的 profile 層。所以退到「不註冊」：淨效果與 dsh 出廠組合相同（沒有圍堵就沒有 `/sandbox`），但**這不是 dsh 的機制**。`/sandbox` 之後由
- * [#437](https://github.com/DemianLi/nexus-agent/issues/437) 的 `/permission` 取代，那張再決定這一格。
+ * scope 的 profile 層。所以退到「不註冊」：淨效果與 dsh 出廠組合相同（沒有圍堵就沒有 `/permission`），但**這不是 dsh 的機制**。`/permission` 由 `@nexus/plugin-permission-presets`
+ * （[#437](https://github.com/DemianLi/nexus-agent/issues/437)）註冊，它自己也在沒有圍堵時整顆不掛。
  *
  * ## 為什麼是 `wrapModelCall` 而不是 `beforeModel`
  *
@@ -86,12 +86,6 @@ import type { SandboxMode } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 
 import { registerSandboxEscalation } from './sandbox-escalation.js';
-import {
-  executeSandboxCommand,
-  SANDBOX_COMMAND_DESCRIPTION,
-  SANDBOX_COMMAND_HINT,
-  SANDBOX_COMMAND_NAME,
-} from './sandbox-mode.js';
 import type { SandboxModeController } from './sandbox-mode.js';
 
 /** 這個 middleware 的名字。排序斷言與錯誤訊息用得到。 */
@@ -173,7 +167,7 @@ export const SANDBOX_POLICY_SERVICE = 'sandboxPolicy';
 export interface SandboxPolicyService {
   /** 這次組裝那一格。 */
   readonly controller: SandboxModeController;
-  /** 可寫根在主機上的絕對路徑。只用在 `/sandbox` 報給人看；講給模型聽的那句不用它，理由見模組註解的登記。 */
+  /** 可寫根在主機上的絕對路徑。只用在 `/permission` 報給人看（`@nexus/plugin-permission-presets`）；講給模型聽的那句不用它，理由見模組註解的登記。 */
   readonly rootDir: string;
 }
 
@@ -237,7 +231,7 @@ function policyPromptMiddleware(
  * 掌管圍堵模式的 plugin：**把政策講給模型聽；有圍堵時，再把它記進日誌、讓人切得動它、讓模型請得到一次升級**。
  *
  * **出貨清單上的一列**（[#669](https://github.com/DemianLi/nexus-agent/issues/669)），有沒有圍堵由組裝點交的
- * {@link FS_CONTAINMENT_SERVICE} 決定，分岔的理由與 dsh 的對照見模組註解。**`/sandbox` 不能在沒有 fence 的組裝上出現**：
+ * {@link FS_CONTAINMENT_SERVICE} 決定，分岔的理由與 dsh 的對照見模組註解。**切換入口（`/permission`）不能在沒有 fence 的組裝上出現**：
  * 一個報告「目前的檔案政策」的命令，在整道 fence 不在路徑上的時候讓人以為自己切了什麼東西。
  *
  * **模組層級的一顆常數**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）：
@@ -249,7 +243,7 @@ export const sandboxPolicyPlugin: NexusPlugin = {
   // **沒有 `requires`**：相依只在有圍堵時成立，由下面的 `use()` 當場擋（`assertRequires` 是無條件的，沒有圍堵的組裝會被它誤殺）。
   apply(registry) {
     if (registry.services.get(FS_CONTAINMENT_SERVICE) === undefined) {
-      // **沒有圍堵：只講那一句**。控制器、可寫根、能力、日誌事件、升級、`/sandbox` 一樣都不掛——沒有東西可以切、可以升、可以記。
+      // **沒有圍堵：只講那一句**。控制器、可寫根、能力、日誌事件、升級一樣都不掛——沒有東西可以切、可以升、可以記。
       registry.middleware.use(
         createMiddleware(
           policyPromptMiddleware(() => UNCONTAINED_POLICY_MODE, { contained: false }),
@@ -264,7 +258,7 @@ export const sandboxPolicyPlugin: NexusPlugin = {
           '——沒有控制器就沒有東西可以回報政策、切換或升級。組裝點要把這兩個服務一起提供。',
       );
     }
-    const { controller, rootDir } = registry.services.use(SANDBOX_POLICY_SERVICE);
+    const { controller } = registry.services.use(SANDBOX_POLICY_SERVICE);
     const resolveMode = controller.source;
     // **這顆在，工作區就在**：`present` 據它回答「有沒有工作區」（#441），見 `@nexus/core` 的 `WORKSPACE_CAPABILITY`。
     registry.capabilities.provide(WORKSPACE_CAPABILITY);
@@ -280,12 +274,6 @@ export const sandboxPolicyPlugin: NexusPlugin = {
     });
     // **升級跟著 fence 掛**：沒有圍堵的組裝沒有東西可以升。它也是 read-only 那句「照升級指引做」成立的前提。
     registerSandboxEscalation(registry, controller);
-    registry.commands.register({
-      name: SANDBOX_COMMAND_NAME,
-      description: SANDBOX_COMMAND_DESCRIPTION,
-      input: { hint: SANDBOX_COMMAND_HINT },
-      handler: ({ rawInput }) => executeSandboxCommand(controller, rootDir, rawInput),
-    });
     registry.middleware.use(
       createMiddleware({
         ...policyPromptMiddleware(resolveMode, { contained: true }),
@@ -320,15 +308,9 @@ export function createSandboxPolicyPlugin(): PluginEntry {
  *
  * **組裝點要 `SandboxModeController`**：它由組裝點建、經 {@link SANDBOX_POLICY_SERVICE}
  * 注進來（偏離登記見 {@link SandboxPolicyService}），所以建構那一步在 app 那側。
- * `recordedSandboxMode` 與 {@link SANDBOX_COMMAND_NAME} 則是 `--resume` 與 serve 那兩條
- * 路上讀日誌用的。
+ * `recordedSandboxMode` 則是 `--resume` 與 serve 那兩條路上讀日誌用的。
  */
-export {
-  executeSandboxCommand,
-  recordedSandboxMode,
-  SANDBOX_COMMAND_NAME,
-  SandboxModeController,
-} from './sandbox-mode.js';
+export { recordedSandboxMode, SandboxModeController } from './sandbox-mode.js';
 
 /**
  * 升級那一半對外講的每一句話。

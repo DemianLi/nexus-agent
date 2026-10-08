@@ -31,6 +31,7 @@ export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'model/end',
   'model/start',
   'model/usage',
+  'permission/preset',
   'plan/mode',
   'request/header',
   'request/system',

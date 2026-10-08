@@ -235,3 +235,38 @@ describe('runStart 的 attachments', () => {
     expect('attachments' in (params[2] ?? {})).toBe(false);
   });
 });
+
+describe('subagent.list 與 run.start 的 mention（#328）', () => {
+  it('subagent.list 在 RPC 白名單裡，送到 /commands/:method，params 是空物件，回應原樣交出', async () => {
+    expect(isRpcMethod('subagent.list')).toBe(true);
+    const value = { subagents: [{ name: 'reviewer', description: '看變更' }] };
+    const { client, seen } = recording(() =>
+      Response.json({ type: 'success', id: 1, result: { ok: true, value } }),
+    );
+    const outcome = await client.subagentList('t');
+    expect(seen.map((s) => [s.url, s.body])).toEqual([
+      [
+        `http://agent.test${commandPath('t', 'subagent.list')}`,
+        { id: 1, method: 'subagent.list', params: {} },
+      ],
+    ]);
+    expect(outcome).toEqual({ kind: 'ok', result: { ok: true, value } });
+  });
+
+  it('server 沒實作：not_supported 以 rejected 交到呼叫端', async () => {
+    const outcome = await recording(notSupported).client.subagentList('t');
+    expect(outcome).toMatchObject({ kind: 'rejected', code: 'not_supported' });
+  });
+
+  it('mention 有值才放進 run.start 的 params；省略不放這個 key', async () => {
+    const { client, seen } = recording(() =>
+      Response.json({ type: 'success', id: 1, result: { run_id: 'r' } }),
+    );
+    const mention = { kind: 'subagent', name: 'reviewer' } as const;
+    await client.runStart('t', '請 reviewer 看', { mention });
+    await client.runStart('t', '沒點名');
+    const params = seen.map((s) => (s.body as { params: Record<string, unknown> }).params);
+    expect(params[0]?.['mention']).toEqual(mention);
+    expect('mention' in (params[1] ?? {})).toBe(false);
+  });
+});

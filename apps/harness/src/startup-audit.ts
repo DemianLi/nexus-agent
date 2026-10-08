@@ -73,6 +73,7 @@ export const REQUIRED_ENTRY_IDS: ReadonlySet<string> = new Set([
   'browser-session',
   'system-prompt',
   'background-subagents',
+  'permission-presets',
 ]);
 
 /** 帶 `--live` 時也必須在的那一列的 id，理由見檔頭。 */

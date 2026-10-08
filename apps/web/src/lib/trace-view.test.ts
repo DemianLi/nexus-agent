@@ -3,6 +3,7 @@ import {
   appendAnswers,
   appendDecision,
   appendQuestionCancel,
+  appendQuestionDecline,
   COMPACTION,
   DELIVERABLES_PRESENTED,
   emptyConversation,
@@ -261,6 +262,17 @@ describe('提問的答案', () => {
     const rows = only(cancelled);
     expect(kinds(rows)).toEqual(['input', 'tool', 'answer']);
     expect(rows[2]).toMatchObject({ summary: '放棄回答這些問題', target: undefined });
+  });
+
+  it('拒絕整組（MCP 反問，#1098）同樣自己長一列，寫「拒絕」，與放棄分開', () => {
+    const { state } = asked();
+    const declined = appendQuestionDecline(state, 'int-q');
+    expect(declined.entries.find((entry) => entry.kind === 'answer')).toMatchObject({
+      declined: true,
+    });
+    const rows = only(declined);
+    expect(kinds(rows)).toEqual(['input', 'tool', 'answer']);
+    expect(rows[2]).toMatchObject({ summary: '拒絕回答這些問題', target: undefined });
   });
 });
 

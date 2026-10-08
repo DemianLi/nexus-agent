@@ -26,7 +26,9 @@ import {
   appendAnswers,
   appendDecision,
   appendQuestionCancel,
+  appendQuestionDecline,
   cancelResponse,
+  declineResponse,
   emptyConversation,
   prependEntries,
   QUEUE_ITEM_NOT_FOUND,
@@ -219,6 +221,12 @@ export interface Conversation {
    * 一般提問面板的 ❌ **不走這條**，它停止這一輪（§4.3 寫明的例外）。認不得那顆 id、或那顆不是問答時，什麼都不做。
    */
   dismissQuestion(interruptId: string): Promise<void>;
+  /**
+   * **拒絕**指名的那一顆問答請求（送 `declined`，[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）：只有 MCP server
+   * 的反問有這個動作——明確說不給，與 {@link Conversation.dismissQuestion}（先不回答）、作答是 MCP 的 `decline`／`cancel`／`accept` 三種。
+   * 這一輪不停。認不得那顆 id、或那顆不是問答時，什麼都不做。
+   */
+  declineQuestion(interruptId: string): Promise<void>;
   /**
    * 按停止（`run.cancel`，[#276](https://github.com/DemianLi/nexus-agent/issues/276)）。
    *
@@ -678,6 +686,27 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     [threadId, note, advance],
   );
 
+  const declineQuestion = useCallback(
+    async (interruptId: string) => {
+      const pending = publisher.current.pendings.find(
+        (candidate) => candidate.interruptId === interruptId,
+      );
+      if (pending === undefined || pending.kind !== 'question') {
+        return;
+      }
+      // 同 `dismissQuestion`：線上不回聲，送出的那一刻自己寫進去。
+      advance((previous) => appendQuestionDecline(previous, interruptId));
+      note(
+        await clientRef.current.inputRespond(threadId, {
+          namespace: [...pending.namespace],
+          interrupt_id: pending.interruptId,
+          response: declineResponse(),
+        }),
+      );
+    },
+    [threadId, note, advance],
+  );
+
   const cancel = useCallback(async () => {
     note(await clientRef.current.runCancel(threadId));
   }, [threadId, note]);
@@ -816,6 +845,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     respond,
     answer,
     dismissQuestion,
+    declineQuestion,
     cancel,
     ratings: ratingsView.items,
     ratingsLoadFailed: ratingsView.status === 'failed',

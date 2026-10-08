@@ -61,9 +61,12 @@ export function SessionUsage({
             <Rows
               rows={[
                 ['輸入', usage.input],
+                ['快取讀', usage.cacheRead],
+                ['快取寫', usage.cacheWrite],
                 ['輸出', usage.output],
               ]}
             />
+            <p className="text-muted-foreground text-tip">{usage.cacheNote}</p>
             <p className="text-muted-foreground text-tip">
               每一次模型呼叫的帳加起來，所以比「目前大小」大很多。不含子代理與自動摘要那幾次。
             </p>

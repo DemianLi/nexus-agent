@@ -73,11 +73,12 @@ const BAD_BROWSER_SESSION = '- id: browser-session\n  config:\n    maxAgeDays: 0
 const BAD_TODO = "- id: todo\n  config:\n    allowParallelInProgress: '不是布林'\n";
 
 describe('必掛的列掉了：兩個入口都起不來', () => {
-  it('名單上是 browser-session、system-prompt 與 background-subagents，而且比的是條目 id', () => {
+  it('名單上是 browser-session、system-prompt、background-subagents 與 permission-presets，而且比的是條目 id', () => {
     expect([...REQUIRED_ENTRY_IDS]).toEqual([
       'browser-session',
       'system-prompt',
       'background-subagents',
+      'permission-presets',
     ]);
   });
 

@@ -85,14 +85,16 @@ describe('圍堵政策的協作者在有圍堵時是硬相依', () => {
       }),
       createSandboxPolicyPlugin(),
     ]);
-    expect(registry.commands.find('sandbox')).toBeDefined();
+    // `/sandbox` 拿掉了（#437）：唯一的切換入口是 `@nexus/plugin-permission-presets` 的 `/permission`。有圍堵也不註冊，
+    // 否則部署的人刪掉「全開」那一組也關不掉全開。
+    expect(registry.commands.find('sandbox')).toBeUndefined();
     // **同一顆，不是快照**：切換之後這顆 plugin 讀到的要跟著動。
     controller.switchTo('danger-full-access');
     expect(registry.services.use('sandboxPolicy').controller).toBe(controller);
     expect(registry.services.use('sandboxPolicy').controller.source()).toBe('danger-full-access');
   });
 
-  it('沒有圍堵：載得起來、只貢獻那一句（一顆 middleware），不註冊 /sandbox、不要控制器', async () => {
+  it('沒有圍堵：載得起來、只貢獻那一句（一顆 middleware），不要控制器', async () => {
     const { registry } = await loadPlugins([createSandboxPolicyPlugin()]);
     expect(registry.commands.find('sandbox')).toBeUndefined();
     expect(registry.middleware.list().map((entry) => entry.value)).toHaveLength(1);
