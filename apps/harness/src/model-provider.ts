@@ -23,10 +23,12 @@
  * 就依 `--live` 讀 `.env`、裝代理（#730、#746），選擇列若能把人帶進 live，就會在沒走過那一段的情況下拿不到 key。
  * 選擇列只在沒帶 `--live` 時，於 in-process 的提供者之間選。「改啟動順序，讓清單決定 live」是另一個決定。
  *
- * ## 內建的 `cli-script` 沒有列
- *
- * 出貨的預設提供者是程式碼裡的 `CLI_SCRIPT`，選擇列的預設值 {@link BUILTIN_PROVIDER} 指它，不需要清單上有一列。
- * 把它也寫成一列（腳本當 config）是卡上列的待決，這一版不做：`CLI_SCRIPT` 有工具呼叫，放進 YAML 沒有人會讀。
+ * ## 出貨的 `cli-script` 是清單上的一列
+
+出貨的預設提供者是 `cordis.yml` 上 id 為 `cli-script` 的那一列腳本提供者（`#settings/scripted-model`），腳本就是它的 config：
+`--dump-config` 看得到假模型，組裝讀的和印出來的是同一份資料，不再有一份只存在程式碼裡的腳本。選擇列的預設值
+{@link SHIPPED_PROVIDER} 指它。拿 patch 把那一列關掉或刪掉、選擇列卻沒改，就是載入期的明確錯誤，不會悄悄退回別的腳本。
+**標題那一顆不從這裡拿**：標題只在帶 `--live` 時掛（#658），假模型的腳本是一格一格吃的，多出來的標題呼叫會吃掉主回覆的那一格。
  *
  * @module
  */
@@ -38,8 +40,8 @@ import type { NexusPlugin, PluginEntry } from '@nexus/core';
 import { defaultModelPlugin } from './settings/default-model.js';
 import { startupSetting } from './settings/startup.js';
 
-/** 選擇列的預設值：程式碼裡內建的那份腳本，不對應清單上的任何一列。 */
-export const BUILTIN_PROVIDER = 'cli-script';
+/** 選擇列的預設值：出貨清單上那一列腳本提供者的 `id`（`cordis.yml` 的 `cli-script`）。 */
+export const SHIPPED_PROVIDER = 'cli-script';
 
 /**
  * 一個模型提供者：只講設定的列（`apply` 是空的），外加一支用驗過的設定建出模型的函式。
@@ -58,21 +60,16 @@ function isModelProvider(plugin: NexusPlugin<unknown>): plugin is ModelProviderP
  * 沒帶 `--live` 時這一次要用的模型：選擇列指到哪個提供者就用哪個。
  *
  * @param plugins - 這一次解析好的條目清單。
- * @param builtin - {@link BUILTIN_PROVIDER} 對應的模型，選擇列指到內建時才呼叫。
  * @returns 選到的提供者建出來的模型。
  * @throws {Error} 選擇列指到的 id 不在清單上、已停用、或那一列不是提供者；訊息指名選擇列與該 id。
  */
-export function resolveDefaultModel(
-  plugins: readonly PluginEntry[],
-  builtin: () => BaseChatModel,
-): BaseChatModel {
+export function resolveDefaultModel(plugins: readonly PluginEntry[]): BaseChatModel {
   const { provider } = startupSetting(plugins, defaultModelPlugin);
-  if (provider === BUILTIN_PROVIDER) return builtin();
   const entry = plugins.find((candidate) => candidate.id === provider);
   if (entry === undefined || entry.disabled === true) {
     throw new Error(
       `agent-default-model 的 provider "${provider}" 在清單上找不到${entry === undefined ? '' : '（那一列被停用了）'}。` +
-        `內建的是 "${BUILTIN_PROVIDER}"；要用別的，先在清單上 insert 一列提供者，id 就是這裡寫的名字。`,
+        `出貨的是 "${SHIPPED_PROVIDER}"（腳本提供者，在 cordis.yml 上）；要用別的，先在清單上 insert 一列提供者，id 就是這裡寫的名字。`,
     );
   }
   if (!isModelProvider(entry.plugin)) {

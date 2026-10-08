@@ -14,6 +14,7 @@ import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { CLI_PROBE_FILE } from './assembly-root.js';
 import { USAGE, parseCliArgs, runCli } from './cli.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { USER_PATCH_FILENAME, renderConfigDump } from './plugin-config.js';
@@ -73,6 +74,18 @@ describe('--dump-default-config 印的是出貨那一層', () => {
     expect(layered).toContain(path);
     expect(shipped).not.toContain(path);
     expect(shipped).not.toBe(layered);
+  });
+});
+
+describe('假模型是清單上的一列（#670）', () => {
+  it('--dump-config 印得出 cli-script 那一列與它的腳本；組裝用的就是這份資料', async () => {
+    const dump = await cliPrint(['--dump-config'], privateHome());
+    expect(dump).toContain('id: cli-script');
+    expect(dump).toContain('name: "#settings/scripted-model"');
+    // 腳本的內容是資料，印得出來：呼叫的工具名、寫的檔，跟 CLI 測試拿來確認 `--workspace` 的 `CLI_PROBE_FILE` 同一個字串。
+    expect(dump).toContain('name: echo');
+    expect(dump).toContain('name: write_file');
+    expect(dump).toContain(`file_path: ${CLI_PROBE_FILE}`);
   });
 });
 

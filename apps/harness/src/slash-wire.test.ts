@@ -33,7 +33,7 @@ import type { WireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
-import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
+import { TEST_BROWSER_AUTH, loopbackRequest, shippedModelRow, shippedPlugins } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -356,7 +356,12 @@ describe('序列', () => {
           }),
       },
     };
-    const wired = await wire([createEchoPlugin(), createCommandsInvariantPlugin(), slow]);
+    const wired = await wire([
+      createEchoPlugin(),
+      createCommandsInvariantPlugin(),
+      slow,
+      await shippedModelRow(),
+    ]);
     await wired.client.openEvents('t');
 
     const first = wired.client.slashRun('t', '/slow');

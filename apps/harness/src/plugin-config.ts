@@ -195,7 +195,7 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
   [
     '#settings/default-model',
     '這一列不裝任何東西，只講沒帶 `--live` 時用哪個模型提供者。關掉它不會讓模型沒有來源' +
-      '——`startupSetting` 把關掉的那一列當成沒有那一列，`provider` 於是回到內建的 `cli-script`，' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，`provider` 於是回到預設的 `cli-script`（出貨清單上的腳本提供者），' +
       '要用的提供者換不過去，只會讓這份設定讀起來像關掉了什麼。要換提供者是改它的 `provider`。',
   ],
   [
