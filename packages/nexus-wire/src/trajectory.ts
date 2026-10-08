@@ -160,9 +160,17 @@ export interface TrajectoryCall {
   /** 當時生效的 `request/header` 的位置。 */
   readonly header?: number;
   readonly usage?: {
+    /** 完整的 prompt（含快取讀寫），同以前。 */
     readonly inputTokens: number;
     readonly outputTokens: number;
     readonly totalTokens: number;
+    /**
+     * [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，**選填**，沒升 {@link TRAJECTORY_VERSION}（#1021／#1022 的先例）：
+     * `uncachedInputTokens` 每次都有；快取讀、快取寫**缺席＝沒記**（供應商沒給細節、舊日誌），不是 0。
+     */
+    readonly uncachedInputTokens?: number;
+    readonly cacheReadTokens?: number;
+    readonly cacheWriteTokens?: number;
   };
   /** 摘要器量這次請求得到的估算。 */
   readonly measure?: { readonly approxTokens: number; readonly messageCount: number };
@@ -293,8 +301,16 @@ export interface TrajectoryDigest {
    */
   readonly subagentCount: number;
   readonly retryCount: number;
+  /** 完整的 prompt 加總（含快取讀寫）。 */
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /**
+   * 快取分桶的加總（含被摺掉的呼叫），規則同呼叫的 `usage`：`uncachedInputTokens` 每次都有；快取讀、快取寫只在**每一次
+   * 報了用量的呼叫都報了**才有，否則缺席（只有一部分呼叫報的數字當成總數，命中率的分母會是錯的）。
+   */
+  readonly uncachedInputTokens?: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
 }
 
 /** 一輪的完整結構。 */

@@ -86,6 +86,13 @@ interface Carry {
   readonly retries: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /** 摺掉的呼叫裡報了用量的有幾次，以及其中報了快取讀、快取寫的有幾次（全報才放進 view）。 */
+  readonly usages: number;
+  readonly cacheReadCalls: number;
+  readonly cacheWriteCalls: number;
+  readonly uncachedInputTokens: number;
+  readonly cacheReadTokens: number;
+  readonly cacheWriteTokens: number;
   readonly inputs: number;
   readonly decisions: number;
   /** 摺掉的工具裡，摺掉當下已帶子代理連結的數目。 */
@@ -99,6 +106,12 @@ const NO_CARRY: Carry = {
   retries: 0,
   inputTokens: 0,
   outputTokens: 0,
+  usages: 0,
+  cacheReadCalls: 0,
+  cacheWriteCalls: 0,
+  uncachedInputTokens: 0,
+  cacheReadTokens: 0,
+  cacheWriteTokens: 0,
   inputs: 0,
   decisions: 0,
   subagents: 0,
@@ -114,6 +127,9 @@ type TurnState = Omit<
   | 'retryCount'
   | 'inputTokens'
   | 'outputTokens'
+  | 'uncachedInputTokens'
+  | 'cacheReadTokens'
+  | 'cacheWriteTokens'
   | 'durationMs'
   | 'elided'
 > & { readonly carry: Carry };
@@ -168,6 +184,19 @@ export function initialTrajectory(): TrajectoryState {
   };
 }
 
+/** 累加一格選填的快取桶：這一筆有報、而且（若已有累計）之前每一筆也都報了，才放。 */
+function bucket(
+  key: 'cacheReadTokens' | 'cacheWriteTokens',
+  previous: { readonly cacheReadTokens?: number; readonly cacheWriteTokens?: number } | undefined,
+  data: Readonly<Record<string, unknown>>,
+): Partial<Record<typeof key, number>> {
+  const reported = data[key];
+  if (typeof reported !== 'number') return {};
+  if (previous === undefined) return { [key]: reported };
+  const before = previous[key];
+  return before === undefined ? {} : { [key]: before + reported };
+}
+
 // ── 計數與摘要（view 才算） ─────────────────────────────────────────────────────────────
 
 function withCounts(turn: TurnState): TrajectoryTurn {
@@ -180,7 +209,26 @@ function withCounts(turn: TurnState): TrajectoryTurn {
   let retryCount = carry.retries;
   let inputTokens = carry.inputTokens;
   let outputTokens = carry.outputTokens;
+  let usages = carry.usages;
+  let cacheReadCalls = carry.cacheReadCalls;
+  let cacheWriteCalls = carry.cacheWriteCalls;
+  let uncachedInputTokens = carry.uncachedInputTokens;
+  let cacheReadTokens = carry.cacheReadTokens;
+  let cacheWriteTokens = carry.cacheWriteTokens;
   for (const call of turn.calls) {
+    const usage = call.usage;
+    if (usage !== undefined) {
+      usages += 1;
+      uncachedInputTokens += usage.uncachedInputTokens ?? 0;
+      if (usage.cacheReadTokens !== undefined) {
+        cacheReadCalls += 1;
+        cacheReadTokens += usage.cacheReadTokens;
+      }
+      if (usage.cacheWriteTokens !== undefined) {
+        cacheWriteCalls += 1;
+        cacheWriteTokens += usage.cacheWriteTokens;
+      }
+    }
     toolCount += call.tools.length;
     toolErrors += call.tools.filter((tool) => tool.status === 'error').length;
     subagentCount += call.tools.filter((tool) => tool.subagent !== undefined).length;
@@ -198,6 +246,9 @@ function withCounts(turn: TurnState): TrajectoryTurn {
     retryCount,
     inputTokens,
     outputTokens,
+    uncachedInputTokens,
+    ...(usages > 0 && cacheReadCalls === usages ? { cacheReadTokens } : {}),
+    ...(usages > 0 && cacheWriteCalls === usages ? { cacheWriteTokens } : {}),
     ...(turn.endTime === undefined ? {} : { durationMs: turn.endTime - turn.time }),
     ...(folded
       ? {
@@ -231,6 +282,11 @@ function digestOf(turn: TurnState): TrajectoryDigest {
     retryCount: full.retryCount,
     inputTokens: full.inputTokens,
     outputTokens: full.outputTokens,
+    ...(full.uncachedInputTokens === undefined
+      ? {}
+      : { uncachedInputTokens: full.uncachedInputTokens }),
+    ...(full.cacheReadTokens === undefined ? {} : { cacheReadTokens: full.cacheReadTokens }),
+    ...(full.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: full.cacheWriteTokens }),
   };
 }
 
@@ -653,6 +709,19 @@ function startCall(prior: TrajectoryState, event: SessionEvent): TrajectoryState
         retries: carry.retries + gone.retries.length,
         inputTokens: carry.inputTokens + (gone.usage?.inputTokens ?? 0),
         outputTokens: carry.outputTokens + (gone.usage?.outputTokens ?? 0),
+        ...(gone.usage === undefined
+          ? {}
+          : {
+              usages: carry.usages + 1,
+              uncachedInputTokens:
+                carry.uncachedInputTokens + (gone.usage.uncachedInputTokens ?? 0),
+              cacheReadCalls:
+                carry.cacheReadCalls + (gone.usage.cacheReadTokens === undefined ? 0 : 1),
+              cacheReadTokens: carry.cacheReadTokens + (gone.usage.cacheReadTokens ?? 0),
+              cacheWriteCalls:
+                carry.cacheWriteCalls + (gone.usage.cacheWriteTokens === undefined ? 0 : 1),
+              cacheWriteTokens: carry.cacheWriteTokens + (gone.usage.cacheWriteTokens ?? 0),
+            }),
       };
     }
     return { ...turn, calls: kept, carry };
@@ -717,6 +786,11 @@ export function applyTrajectory(
             Number(data['cacheWriteTokens'] ?? 0),
           outputTokens: (call.usage?.outputTokens ?? 0) + Number(data['outputTokens'] ?? 0),
           totalTokens: (call.usage?.totalTokens ?? 0) + Number(data['totalTokens'] ?? 0),
+          uncachedInputTokens:
+            (call.usage?.uncachedInputTokens ?? 0) + Number(data['inputTokens'] ?? 0),
+          // 快取兩格缺席＝沒記；同一次呼叫的多筆用量只要有一筆沒報就整格缺席（不拿一部分當總數）。
+          ...bucket('cacheReadTokens', call.usage, data),
+          ...bucket('cacheWriteTokens', call.usage, data),
         },
       }));
     case 'context/measure':

@@ -268,9 +268,10 @@ describe.each(CASES)('$label：用量投影', (entry) => {
     );
 
     // 3. 不另造總帳：root 逐項對得上 web 已有的 tokenUsage／sessionStats。
+    // 總帳的 inputTokens 是未快取那桶，對的是用量投影的 uncachedInputTokens（這條路徑的假端點不報快取，兩桶相等）。
     expect(live.tokenUsage).toEqual({
-      inputTokens: root.session.inputTokens,
-      uncachedInputTokens: root.session.inputTokens,
+      inputTokens: root.session.uncachedInputTokens,
+      uncachedInputTokens: root.session.uncachedInputTokens,
       outputTokens: root.session.outputTokens,
     });
     expect(live.sessionStats).toMatchObject({
