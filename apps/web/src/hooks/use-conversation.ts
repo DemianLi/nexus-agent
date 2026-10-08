@@ -169,12 +169,14 @@ export interface Conversation {
    *
    * **一句話送出去不畫任何東西**（#645）：伺服器收下就進送出佇列，開跑那一刻才由 `inbox` 的 `claimed` 畫人的泡泡。
    * 伺服器沒收下（回錯誤或這一趟就斷了）時回 {@link SendRejected}，呼叫端把草稿放回去並說出原因；斜線命令與
-   * `/feedback` 各自報自己的結果，一律回 `undefined`。
+   * `/feedback` 各自報自己的結果，回 `undefined`——**帶了附件的斜線命令除外**（#733）：命令沒收下（不收附件、被拒、
+   * 不認得）時回 {@link SendRejected}，草稿與附件留著。
    *
    * `mode` 是 `steer` 時送插話（#710）：跑著的這一輪下一步就送進模型，被領走時由 `inbox` 的 `claimedNextStep` 畫人的
    * 泡泡。斜線命令不看它。省略就是排隊。
    *
-   * `attachments` 是已經準備好的附件（圖內嵌、檔案是收據，`lib/attachment-send.ts`），放進 `run.start`；斜線命令不看它。
+   * `attachments` 是已經準備好的附件（圖內嵌、檔案是收據，`lib/attachment-send.ts`），放進 `run.start`；斜線命令則放進
+   * `slash.run`（命令有宣告收附件才收，否則伺服器回錯誤）。
    * 文字可以是空的，只要附件至少一個（只有附件的一句話）。
    * 伺服器不收（`not_supported`）或目前的模型不收圖（`model_does_not_support_images`）時回 {@link SendRejected}，
    * 訊息是講給人聽的話。
@@ -494,38 +496,52 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     setCommandError(result.type === 'error' ? result.message : undefined);
   }, []);
 
-  /** 斜線命令那一半。命令不進模型，也就不進 transcript。 */
+  /**
+   * 斜線命令那一半。命令不進模型，也就不進 transcript。
+   *
+   * 帶了附件（`attachments`）時，命令沒收下（被拒、不認得、命令回錯誤）回 {@link SendRejected}：呼叫端把草稿放回去、附件
+   * 留著；狀態列照舊畫同一句。沒帶附件時一律回 `undefined`，各自報自己的結果（#733）。
+   */
   const runSlash = useCallback(
-    async (line: string) => {
+    async (
+      line: string,
+      attachments?: readonly PromptAttachment[],
+    ): Promise<SendRejected | undefined> => {
       setSlashError(undefined);
       setSlashNotice(undefined);
       const turnsBefore = turnsStarted.current;
+      const kept = attachments !== undefined && attachments.length > 0;
+      const refuse = (message: string): SendRejected | undefined =>
+        kept ? { message } : undefined;
       let outcome: SlashRunOutcome;
       try {
-        outcome = await clientRef.current.slashRun(threadId, line);
+        outcome = await clientRef.current.slashRun(threadId, line, kept ? attachments : undefined);
       } catch (error) {
-        setSlashError(error instanceof Error ? error.message : String(error));
-        return;
+        const message = error instanceof Error ? error.message : String(error);
+        setSlashError(message);
+        return refuse(message);
       }
       if (outcome.kind === 'rejected') {
         // 這條線拒絕發派——跟 `run.start` 被拒是同一件事，所以走同一個欄位。
         setCommandError(outcome.message);
-        return;
+        return refuse(outcome.message);
       }
       setCommandError(undefined);
       if (outcome.kind === 'unknown') {
-        setSlashError(`不認得這個命令：${line}`);
-        return;
+        const message = `不認得這個命令：${line}`;
+        setSlashError(message);
+        return refuse(message);
       }
       if (outcome.kind === 'error') {
         setSlashError(outcome.text);
-        return;
+        return refuse(outcome.text);
       }
       // 命令回來之前伺服器已經排了一輪開跑（`/goal` 建好就自己續行）：那一輪的結果才是現況，回應晚到
       // 也不畫，否則它在那一輪收尾後留在狀態列（#947）。
-      if (turnsStarted.current !== turnsBefore) return;
+      if (turnsStarted.current !== turnsBefore) return undefined;
       // 成功而沒話說時什麼都不顯示，跟 CLI 一樣（`result.text` 是選配的）。
       setSlashNotice(outcome.text);
+      return undefined;
     },
     [threadId],
   );
@@ -571,8 +587,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         return undefined;
       }
       if (trimmed.startsWith('/')) {
-        await runSlash(trimmed);
-        return undefined;
+        return runSlash(trimmed, hasAttachments ? attachments : undefined);
       }
       setSlashError(undefined);
       setSlashNotice(undefined);
