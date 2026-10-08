@@ -146,17 +146,25 @@
 /*
  * 帶 \tag 的區塊公式：KaTeX 把編號絕對定位在右緣，公式放不下時編號疊在公式上、也捲不動。改成 flex：
  * 公式與編號並排，放不下就整塊橫向捲動；寬的時候兩邊的 auto 邊界讓公式大致置中、編號靠右。
+ *
+ * **新舊 class 名都寫**：KaTeX 0.18 把內部的 `.tag`／`.base` 改名為 `.katex-tag`／`.katex-base`（0.16 是舊名）。
+ * 只寫其中一個，換版時這三條會靜靜失效（編號疊回公式上、不能橫向捲動），畫面不報錯。`markdown-math.test.tsx`
+ * 用真的渲染結果鎖住「每條規則都對得到元素」。
  */
-.markdown .katex-display > .katex > .katex-html:has(> .tag) {
+.markdown .katex-display > .katex > .katex-html:has(> :is(.tag, .katex-tag)) {
   display: flex;
   align-items: baseline;
 }
 
-.markdown .katex-display > .katex > .katex-html:has(> .tag) > .base:first-child {
+.markdown
+  .katex-display
+  > .katex
+  > .katex-html:has(> :is(.tag, .katex-tag))
+  > :is(.base, .katex-base):first-child {
   margin-left: auto;
 }
 
-.markdown .katex-display > .katex > .katex-html > .tag {
+.markdown .katex-display > .katex > .katex-html > :is(.tag, .katex-tag) {
   position: static;
   margin-left: auto;
   padding-left: 1em;
