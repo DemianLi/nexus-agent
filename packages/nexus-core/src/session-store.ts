@@ -441,8 +441,19 @@ import type { SessionEvent } from './session-log.js';
  *
  * **讀舊檔**：35 以前沒有快取兩格，`inputTokens` 當未快取（它本來就是整個 prompt）、兩桶當「沒記」，總帳與壓力的數字跟以前一樣，
  * 不必逐版分辨。
+ *
+ * ## 37：每會話模型選擇（[#723](https://github.com/DemianLi/nexus-agent/issues/723)）
+ *
+ * 新增 `model/selection { modelId, reasoningEffort? }`（使用者替會話選了下一步起用的模型與強度），並讓 `model/start` 多一格選填的
+ * `route { model, effort? }`（這次請求實際走的路由）。
+ *
+ * **升版，`model/selection` 不標 `ignorable`**——它左右續接之後的行為：一台 36 的 runtime 略過它，續接時會悄悄用回部署預設那顆。
+ * `model/start.route` 單獨看是純附加的選填欄位，但它是續接「沒選過的會話」時沿用上一次路由的依據，所以跟著同一個版本。
+ *
+ * **讀舊檔**：36 以前沒有這兩樣，續接時走部署預設、不補寫歷史；舊日誌上沒有路由，所以第一次選了別顆之後也不附換模型的通知
+ * （沒有「上一次走的是誰」可比）。
  */
-export const SESSION_LOG_FORMAT_VERSION = 36;
+export const SESSION_LOG_FORMAT_VERSION = 37;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

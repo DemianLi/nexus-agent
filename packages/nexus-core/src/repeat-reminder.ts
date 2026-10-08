@@ -75,6 +75,7 @@ import { toLoggedMessage } from './logged-message.js';
 import { isMachineMessage } from './message-source.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
+import type { SessionLog } from './session-log.js';
 
 /** 提醒 middleware 的名字。錯誤訊息與排序斷言用得到。 */
 export const REPEAT_REMINDER_MIDDLEWARE_NAME = 'nexusRepeatToolReminder';
@@ -415,6 +416,7 @@ function pendingReminders(
 export function createRepeatReminder(
   settings: RepeatReminderSettings,
   sessions?: { forCall(config: unknown): SessionLookup },
+  notices?: StepNoticeSource,
 ): AgentMiddleware {
   const tracked = repeatReminderTracks(settings);
 
@@ -425,8 +427,9 @@ export function createRepeatReminder(
       runtime?: { readonly configurable?: unknown },
     ) => {
       const hits = pendingReminders(state.messages ?? [], settings, tracked);
-      if (hits.length === 0) return undefined;
-      const messages = hits.map(({ tool, count, canonical }) => {
+      const extra = stepNoticesFor(notices, sessions, runtime?.configurable);
+      if (hits.length === 0 && extra.length === 0) return undefined;
+      const reminders = hits.map(({ tool, count, canonical }) => {
         const text =
           count === settings.thresholds[0]
             ? GENTLE_REMINDER
@@ -440,8 +443,8 @@ export function createRepeatReminder(
           additional_kwargs: { [REPEAT_REMINDER_MARKER]: { tool, count } },
         });
       });
-      recordReminders(sessions, runtime?.configurable, messages);
-      return { messages };
+      recordReminders(sessions, runtime?.configurable, reminders);
+      return { messages: [...extra, ...reminders] };
     },
   }) as unknown as AgentMiddleware;
 }
@@ -540,3 +543,50 @@ export const repeatReminderPlugin: NexusPlugin<RepeatReminderConfig> = {
 };
 
 export default repeatReminderPlugin;
+
+/**
+ * 一步開頭要附的通知（user 角色，機器造的）。**只對 root 呼叫**；回空陣列＝這一步沒有。
+ *
+ * 借重複提醒那顆 `beforeModel` 的節點，不另開一個——每一顆 `beforeModel` 是圖裡的一個節點、每一步多一個 super-step
+ * （見 {@link createRepeatReminder}）。第一個使用者是換模型的通知（`model-selection.ts`）。通知自己負責寫日誌：
+ * 這裡只管併進 state。
+ */
+export type StepNoticeSource = (log: SessionLog) => readonly HumanMessage[];
+
+/** 問通知來源這一步有沒有東西要附；不是 root、接不上日誌、來源拋錯都是沒有（通知壞了不能扳倒模型呼叫）。 */
+function stepNoticesFor(
+  notices: StepNoticeSource | undefined,
+  sessions: { forCall(config: unknown): SessionLookup } | undefined,
+  configurable: unknown,
+): readonly HumanMessage[] {
+  if (notices === undefined || sessions === undefined) return [];
+  try {
+    const found = sessions.forCall({ configurable });
+    if (found.kind !== 'ok' || found.address.kind !== 'root') return [];
+    return notices(found.log);
+  } catch {
+    return [];
+  }
+}
+
+/** 重複提醒被關掉時，通知自己掛的那一顆（付一個 super-step）。名字另取，不冒充提醒。 */
+export const STEP_NOTICE_MIDDLEWARE_NAME = 'nexusStepNotices';
+
+/**
+ * 只放通知的 `beforeModel`。**只在重複提醒關著、又有通知來源時才掛**（`fold.ts`）；提醒開著的時候通知借它的節點。
+ *
+ * @param notices - 通知來源。
+ * @param sessions - 註冊表的 `sessions` 通道。
+ */
+export function createStepNoticeMiddleware(
+  notices: StepNoticeSource,
+  sessions: { forCall(config: unknown): SessionLookup },
+): AgentMiddleware {
+  return createMiddleware({
+    name: STEP_NOTICE_MIDDLEWARE_NAME,
+    beforeModel: (_state: unknown, runtime?: { readonly configurable?: unknown }) => {
+      const messages = stepNoticesFor(notices, sessions, runtime?.configurable);
+      return messages.length === 0 ? undefined : { messages: [...messages] };
+    },
+  }) as unknown as AgentMiddleware;
+}

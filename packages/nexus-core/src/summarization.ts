@@ -190,6 +190,69 @@ export interface SummarizationThreshold {
   readonly value: number;
 }
 
+/**
+ * 一顆模型自己的上限（[#723](https://github.com/DemianLi/nexus-agent/issues/723)）：窗口，與這顆每次請求送出去的輸出上限。
+ * 來自型錄（`apps/harness/src/model-catalog.ts`）。
+ */
+export interface ModelContextLimits {
+  readonly contextWindow: number;
+  /** 每次請求保留給輸出的 token 數（型錄的 `maxTokens`）。 */
+  readonly maxOutputTokens: number;
+}
+
+/** 窗口的幾成當上限：dsh 的 `thresholdRatio` 預設（`compaction-basic/src/config.ts`，`DEFAULT_THRESHOLD_RATIO`）。 */
+export const WINDOW_THRESHOLD_RATIO = 0.8;
+
+/**
+ * 這顆模型能撐的 `tokens` 門檻上限：`floor(min(窗口 × 0.8, 窗口 − 輸出上限))`，至少 1。
+ *
+ * 照 dsh `resolveCompactSpec`（`compaction-basic/src/config.ts:153-200`，`5badb15`）的 `min(contextWindow × thresholdRatio,
+ * contextWindow − 保留的輸出 − headroom)`，**少一項 headroom**（見 {@link effectiveTrigger} 的登記）。
+ */
+export function windowThreshold(limits: ModelContextLimits): number {
+  return Math.max(
+    1,
+    Math.floor(
+      Math.min(
+        limits.contextWindow * WINDOW_THRESHOLD_RATIO,
+        limits.contextWindow - limits.maxOutputTokens,
+      ),
+    ),
+  );
+}
+
+/**
+ * 這一步實際用的門檻：配置的 `tokens` 門檻，**夾在這顆模型撐得住的上限之下**（{@link windowThreshold}）；`messages` 門檻不動。
+ *
+ * ## 為什麼要逐步算
+ *
+ * 換模型之後窗口跟著換（#723）。dsh 的壓縮每次檢查都向路由後的模型問窗口（`compaction-basic/src/index.ts:305-318` 的
+ * `resolveModelInfo(target.provider, target.model)`），所以門檻跟著當步的模型走；我們照做。
+ *
+ * ## 與 dsh 的偏離（登記）
+ *
+ * - **配置的絕對值留著當上限，只往下夾。** dsh 的門檻只由窗口導出（沒有絕對值）。我們的 `100_000` 是量出來的（見
+ *   {@link DEFAULT_SUMMARIZATION}：最小那顆 131,007 塞得進、預設那顆 700k 偏保守），拿掉它預設模型的摘要時機會從 10 萬跳到 56 萬，
+ *   是另一個行為決定。所以窗口只負責「更小的窗口不會來不及」，**預設模型與 131k 級的模型門檻不變**。
+ * - **沒有 headroom。** dsh 的 `headroomTokens` 預設 65,536，是為百萬級窗口定的；套在 131k 的窗口上門檻會掉到 49,087，比我們量過
+ *   安全的 100,000 低一半，無謂地多摘要。輸出上限那一項（`窗口 − maxTokens`）已經守住「請求加回應不超過窗口」。
+ *
+ * @param trigger - 配置的門檻。
+ * @param limits - 這一步用的模型的上限；不知道（沒貼型錄的模型）就原樣回。
+ * @returns 沒有東西被夾時回**同一個陣列**。
+ */
+export function effectiveTrigger(
+  trigger: readonly SummarizationThreshold[],
+  limits: ModelContextLimits | undefined,
+): readonly SummarizationThreshold[] {
+  if (limits === undefined) return trigger;
+  const ceiling = windowThreshold(limits);
+  if (!trigger.some((each) => each.type === 'tokens' && each.value > ceiling)) return trigger;
+  return trigger.map((each) =>
+    each.type === 'tokens' && each.value > ceiling ? { type: 'tokens', value: ceiling } : each,
+  );
+}
+
 /** 舊訊息裡過大的工具**參數**要不要剪。剪工具**結果**是另一件事，見 [#149](https://github.com/DemianLi/nexus-agent/issues/149)。 */
 export interface SummarizationArgTruncation {
   /** 超過這個量就開始剪。 */
@@ -401,6 +464,7 @@ export function createSummarizer(
   book: TokenAnchorBook,
   sessions?: { forCall(config: unknown): SessionLookup },
   pruning: ToolResultPruneConfig | false = DEFAULT_TOOL_RESULT_PRUNE,
+  limitsOf?: (model: unknown) => ModelContextLimits | undefined,
 ): AgentMiddleware {
   const base = createSummarizationMiddleware({
     backend,
@@ -425,11 +489,16 @@ export function createSummarizer(
   // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。預算那層讀的是基座交下去的
   // 請求，不是進來的那份，也不碰回傳值。
   const logged = sessions === undefined ? quiet : withCompactionLog(quiet, sessions);
-  const budgeted = withTokenBudget(logged, settings.trigger, book, sessions);
+  const budgeted = withTokenBudget(logged, settings.trigger, book, sessions, limitsOf);
   if (pruning === false) return budgeted;
   return withToolResultPruning(
     budgeted,
-    (request) => isUnderCompactionPressure(request, settings.trigger, book),
+    (request) =>
+      isUnderCompactionPressure(
+        request,
+        effectiveTrigger(settings.trigger, limitsOf?.(request.model)),
+        book,
+      ),
     pruning,
   );
 }
@@ -669,17 +738,20 @@ function withTokenBudget(
   trigger: readonly SummarizationThreshold[],
   book: TokenAnchorBook,
   sessions?: { forCall(config: unknown): SessionLookup },
+  limitsOf?: (model: unknown) => ModelContextLimits | undefined,
 ): AgentMiddleware {
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 同 withCompactionLog。 */
   if (inner === undefined) return base;
-  const thresholds = trigger.map(({ type, value }) => ({ type, value }));
-  const budgets = trigger.filter((t) => t.type === 'tokens').map((t) => t.value);
-  const budget = budgets.length === 0 ? undefined : Math.min(...budgets);
   const byMessages = trigger.filter((t) => t.type === 'messages').map((t) => t.value);
   return {
     ...base,
     wrapModelCall: (request, handler) => {
+      // 門檻逐步算：換模型之後窗口跟著換（#723）。沒有夾住時 `effective` 就是 `trigger` 本身。
+      const effective = effectiveTrigger(trigger, limitsOf?.(request.model));
+      const thresholds = effective.map(({ type, value }) => ({ type, value }));
+      const budgets = effective.filter((t) => t.type === 'tokens').map((t) => t.value);
+      const budget = budgets.length === 0 ? undefined : Math.min(...budgets);
       const view = effectiveMessages(request.messages ?? [], request.state);
       const baseWillCatch = view.length > 0 && !byMessages.some((value) => view.length >= value);
       let thrown = false;

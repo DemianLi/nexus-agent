@@ -43,6 +43,7 @@
  * @module
  */
 
+import { taggedRouteOf } from '@nexus/core';
 import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
 import { SystemMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
@@ -260,10 +261,25 @@ export const systemPromptPlugin: NexusPlugin<SystemPromptConfig> = {
     // 在掛載當下算：寫壞的前後綴在這裡就拋，不會等到第一輪。
     const parts = composeSystemPromptParts(config, { ...variables });
     if (parts.head.length === 0 && parts.tail.length === 0) return;
+    // `{{model}}` 跟著這一步實際用的模型走（#723，dsh 在每一步的 `system-prompt/assemble` 重新代入 provider／model）：
+    // 只認明著貼過路由標籤的實例（組裝點建的模型實例都有），換模型之後提示詞才不會繼續說自己是原來那顆。
+    // 沒貼標籤的（測試替身、子代理自帶的模型）維持組裝時定的那份。同一個 id 只算一次。
+    const byModel = new Map<string, SystemPromptParts>();
+    const partsFor = (model: unknown): SystemPromptParts => {
+      const id = taggedRouteOf(model)?.model;
+      if (id === undefined || id === variables.model) return parts;
+      let cached = byModel.get(id);
+      if (cached === undefined) {
+        cached = composeSystemPromptParts(config, { ...variables, model: id });
+        byModel.set(id, cached);
+      }
+      return cached;
+    };
     registry.middleware.use(
       createMiddleware({
         name: SYSTEM_PROMPT_MIDDLEWARE_NAME,
-        wrapModelCall: (request, handler) => handler(applyParts(request, parts)),
+        wrapModelCall: (request, handler) =>
+          handler(applyParts(request, partsFor((request as { model?: unknown }).model))),
       }),
       // **排在其餘每一顆的內側**：洋蔥的外層先附加、內層後附加，後綴要排最後一段就得在所有會附加文字的
       // middleware（沙箱政策句、計劃模式、goal、子代理自帶的…）之後。前綴是前置，位置不影響它排在最前面。

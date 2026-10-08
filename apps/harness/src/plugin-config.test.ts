@@ -227,8 +227,21 @@ describe('出貨的 cordis.yml', () => {
     });
     // **子代理選模型**（#875）。出廠關著、清單空，同 dsh：打開得是使用者自己寫的決定，不是出貨值替他選。
     expect(byId.get('subagent-model-selection')).toEqual({ enabled: false, allowedModels: [] });
-    // **真實供應商那五格**（#545）。出貨那一列五格全寫出來，值必須就是 schema 的預設，同上面幾列。
-    expect(byId.get('live-model')).toEqual(liveModelConfigSchema.parse({}));
+    // **真實供應商那五格**（#545）。出貨那一列五格全寫出來，值就是 schema 的預設——**除了型錄多一筆**：出貨清單的第二顆是
+    // 看圖模型（#731 判定，每會話選擇 #723 才有東西可選），schema 的預設型錄仍只有預設那一顆。
+    const shippedLive = liveModelConfigSchema.parse({});
+    expect(byId.get('live-model')).toEqual({
+      ...shippedLive,
+      models: [
+        ...shippedLive.models,
+        {
+          id: 'meta/llama-3.2-11b-vision-instruct',
+          contextWindow: 131072,
+          maxTokens: 4096,
+          input: ['text', 'image'],
+        },
+      ],
+    });
     // **沒帶 `--live` 時的模型提供者**（#670）。出貨值指到清單上 id 為 `cli-script` 的那一列腳本提供者（下面 `cli-script`）。
     expect(byId.get('agent-default-model')).toEqual({ provider: 'cli-script' });
 
