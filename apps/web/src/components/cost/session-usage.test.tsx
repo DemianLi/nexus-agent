@@ -42,12 +42,36 @@ describe('會話累計用量（#574）', () => {
     expect(tokens.textContent).toContain('422,195 token');
     expect(tokens.textContent).toContain('輸入412,380 token');
     expect(tokens.textContent).toContain('輸出9,815 token');
+    // 這份資料沒帶快取兩格：畫沒記，不畫 0。
+    expect(tokens.textContent).toContain('快取讀沒記');
+    expect(tokens.textContent).toContain('快取寫沒記');
+    expect(tokens.textContent).not.toContain('快取讀0');
     expect(tokens.textContent).toContain('不含子代理與自動摘要');
     expect(screen.getByTestId('session-usage-time').textContent).toBe(
       '時間輪／模型呼叫4 輪／17 次模型時間2 分 13 秒工具時間38.4 秒',
     );
     expect(dialog.textContent).not.toContain('首字');
     expect(dialog.textContent).not.toContain('token/秒');
+  });
+
+  it('帶了快取兩格：寫數字，說明講已含在輸入裡', () => {
+    render(
+      <SessionUsage
+        tokenUsage={{
+          ...usage,
+          uncachedInputTokens: 112_380,
+          cacheReadTokens: 300_000,
+          cacheWriteTokens: 0,
+        }}
+        sessionStats={stats}
+      />,
+    );
+    fireEvent.click(chip());
+    const tokens = screen.getByTestId('session-usage-tokens');
+    expect(tokens.textContent).toContain('快取讀300,000 token');
+    expect(tokens.textContent).toContain('快取寫0 token');
+    expect(tokens.textContent).toContain('快取讀、快取寫已含在輸入裡');
+    expect(tokens.textContent).not.toContain('沒記');
   });
 
   it('沒有 token：只有時間那一段，也沒有分隔線', () => {
