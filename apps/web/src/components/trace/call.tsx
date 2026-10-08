@@ -9,7 +9,7 @@ import { useMemo } from 'react';
 import { ExpandableLine, SnapshotBlock } from '@/components/trace/lines';
 import { CALL_OUTCOME_LABEL, TRACE_CALL_UNLOADED_TEXT } from '@/lib/trace-view';
 import type { TraceRow } from '@/lib/trace-view';
-import { ABSENT, clockText, durationText, tokenText } from '@/lib/trajectory-view';
+import { ABSENT, clockText, durationText, tokenParts, tokenText } from '@/lib/trajectory-view';
 
 export const TRACE_SNAPSHOT_REASON_TEXT = {
   initial: '第一次記錄',
@@ -166,6 +166,7 @@ function SnapshotDetails({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) 
 
 /** 一次模型呼叫的段落：起訖、用量、模型與當時送出的設定。 */
 export function CallRow({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) {
+  const tokens = tokenParts(row);
   const details: [string, string][] = [
     ['開始', clockText(row.time)],
     ['結束', clockText(row.endTime)],
@@ -174,8 +175,17 @@ export function CallRow({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) {
       ? []
       : ([['結果', CALL_OUTCOME_LABEL[row.outcome]]] as [string, string][])),
     ['模型', row.model ?? ABSENT],
-    ['輸入 token', tokenText(row.inputTokens)],
-    ['輸出 token', tokenText(row.outputTokens)],
+    ['輸入 token', tokens.input],
+    ...(tokens.cache === undefined
+      ? []
+      : ([
+          ['快取讀 token', tokens.cache.read],
+          ['快取寫 token', tokens.cache.write],
+        ] as [string, string][])),
+    ['輸出 token', tokens.output],
+    ...(tokens.hitRate === undefined
+      ? []
+      : ([['快取命中率', tokens.hitRate]] as [string, string][])),
     ['這次叫的工具', `${row.toolCount} 個`],
     ['重試', `${row.retryCount} 次`],
     ['系統提示詞', snapshotText(row, 'system')],
@@ -196,7 +206,9 @@ export function CallRow({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) {
             )}
             {clockText(row.time)} · {durationText(row.durationMs)}
             {row.inputTokens !== undefined &&
-              ` · 輸入 ${tokenText(row.inputTokens)}／輸出 ${tokenText(row.outputTokens)}`}
+              ` · 輸入 ${tokens.input}／輸出 ${tokens.output}${
+                tokens.hitRate === undefined ? '' : ` · 快取命中 ${tokens.hitRate}`
+              }`}
           </span>
         ),
       }}

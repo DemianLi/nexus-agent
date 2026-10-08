@@ -410,7 +410,7 @@ function StructuredCost({
                 <div className="contents" data-field="subagentTokens">
                   <dt className="text-muted-foreground">含子代理的 token</dt>
                   <dd className="text-right">
-                    {exactTokens(withSubagents.input + withSubagents.output)}
+                    {exactTokens(withSubagents.total)}
                     {withSubagents.complete ? '' : '（下限）'}
                   </dd>
                 </div>

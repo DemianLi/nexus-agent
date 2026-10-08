@@ -24,17 +24,13 @@ import type {
 
 import { contextMeterView, percentText } from '@/lib/context-meter-view';
 import {
-  NOT_RECORDED,
+  cacheCountText,
   cacheHitRate,
   cacheHitRateText,
   exactTokens,
   formatDuration,
   usageBuckets,
 } from '@/lib/session-usage-view';
-
-function cacheText(count: number | undefined): string {
-  return count === undefined ? NOT_RECORDED : exactTokens(count);
-}
 
 export type CostRow = readonly [label: string, value: string];
 
@@ -104,8 +100,8 @@ export function usageSections(
             ...(buckets.cacheInInput
               ? []
               : ([
-                  ['快取讀', cacheText(buckets.cacheRead)],
-                  ['快取寫', cacheText(buckets.cacheWrite)],
+                  ['快取讀', cacheCountText(buckets.cacheRead)],
+                  ['快取寫', cacheCountText(buckets.cacheWrite)],
                 ] satisfies readonly CostRow[])),
             ['輸出', exactTokens(buckets.output)],
             ['合計', exactTokens(buckets.total)],
