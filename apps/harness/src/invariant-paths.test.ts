@@ -21,7 +21,7 @@ import { describe, expect, it } from 'vitest';
 
 import { runTurn } from './cli.js';
 import { createCliAgent } from './assembly-root.js';
-import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
+import { TEST_BROWSER_AUTH, loopbackRequest, shippedModelRow, shippedPlugins } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -127,6 +127,7 @@ describe('不變量接線：CLI 那條路', () => {
     // 拿它問「沒有人註冊時會怎樣」問的是另一個問題。
     const { dispose, sessions, attachInvariants } = await createCliAgent({ live: false }, [
       createEchoPlugin(),
+      await shippedModelRow(),
     ]);
     try {
       expect(attachInvariants(sessions)).toBeUndefined();

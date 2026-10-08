@@ -67,6 +67,22 @@ export function shippedPlugins(): Promise<readonly PluginEntry[]> {
 }
 
 /**
+ * 出貨清單上那一列假模型（id `cli-script`，腳本是它的 config，#670）。
+ *
+ * **給自己寫清單的測試**：直接餵 `createCliAgent` 一份手寫的條目（不是出貨清單）時，清單上沒有任何模型來源，
+ * `agent-default-model` 的預設值指的那一列不存在，組裝當場拋——以前這裡會悄悄退回程式碼裡的腳本，現在沒有那條退路。
+ * 要假模型就把這一列放進自己的清單，拿到的就是產品出貨的那份腳本。
+ *
+ * @returns 出貨的 `cli-script` 條目。
+ * @throws {Error} 出貨清單上找不到那一列——改了名，這裡要跟著改。
+ */
+export async function shippedModelRow(): Promise<PluginEntry> {
+  const row = (await shippedPlugins()).find((entry) => entry.id === 'cli-script');
+  if (row === undefined) throw new Error('出貨清單上沒有 cli-script 那一列');
+  return row;
+}
+
+/**
  * 在出貨清單上**換一顆腳本模型**：插一列腳本提供者（`#settings/scripted-model`，腳本當 config）、把
  * `agent-default-model` 指過去——同 dsh 的 headless e2e（`source-tool.built.e2e.ts:36-42`）與
  * `serve-scripted-provider.test.ts` 那份 patch 的形狀，只是這裡直接改條目、不經檔案。
@@ -78,7 +94,7 @@ export function shippedPlugins(): Promise<readonly PluginEntry[]> {
  * @param plugins - 底下那份清單，通常是 {@link shippedPlugins}。
  * @param turns - 腳本。
  * @returns 換好模型的清單，原清單不動。
- * @throws {Error} 清單上找不到選擇列——出貨清單改了名，這裡要跟著改，不要靜靜退回內建腳本。
+ * @throws {Error} 清單上找不到選擇列——出貨清單改了名，這裡要跟著改，不要靜靜退回出貨的腳本。
  */
 export function withScriptedModel(
   plugins: readonly PluginEntry[],

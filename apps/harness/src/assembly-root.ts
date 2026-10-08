@@ -29,7 +29,6 @@ import type {
   SessionEvent,
   SessionTelemetrySharingStatus,
 } from '@nexus/core';
-import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
 import { composeAttachSessions } from './session-attach.js';
 import type { AttachSessions } from './session-attach.js';
@@ -75,8 +74,6 @@ import type { SandboxMode } from './contained-backend.js';
 import type { CredentialService } from './credentials.js';
 import { createLiveModel } from './live-model.js';
 import { createFileReferencePlugin } from './file-references.js';
-import { ScriptedChatModel } from './scripted-model.js';
-import type { ScriptedTurn } from './scripted-model.js';
 
 /** 一次呼叫解析出來的東西。`prompt` 缺席即 REPL。 */
 export interface CliInvocation {
@@ -423,33 +420,8 @@ export function outsideWorkspace(
   return directory;
 }
 
-/**
- * 假模型的腳本：呼叫一次 echo 再回一句話。
- *
- * **它是對著出貨清單（`apps/harness/cordis.yml`）寫的。** 拿 patch 把 `echo` 那一列關掉或換掉
- * 就該一起換 `--live`——腳本裡的工具名那時多半不存在，假模型只會製造一個看不懂的失敗。
- * 腳本三輪，而第一句話就用掉兩輪（呼叫工具、拿到結果再回覆），所以假模型下的 REPL
- * 問到第三句就會用完（`ScriptedChatModel` 選擇當場失敗而不是靜默重播）；REPL 的正經
- * 用法是 `--live`。
- */
 /** 假模型腳本寫出去的那個檔。測試靠它確認檔案真的落在 `--workspace` 指的目錄底下。 */
 export const CLI_PROBE_FILE = '/cli.md';
-
-const CLI_SCRIPT: readonly ScriptedTurn[] = [
-  {
-    content: '先回聲一次，確認工具接得上。',
-    toolCalls: [{ name: ECHO_TOOL_NAME, args: { message: 'CLI 接線測試' } }],
-  },
-  {
-    // 再寫一個檔。**這一輪是給 `--workspace` 用的**：預設的虛擬 FS 底下它只是讓
-    // 「虛擬檔案系統：…」那行有東西可印，換成真實磁碟時它就是「檔案真的落在那個
-    // 目錄底下」的證據。少了它，`--workspace` 給了跟沒給在畫面上分不出來。
-    content: '再寫一個檔，確認檔案系統接得上。',
-    toolCalls: [{ name: 'write_file', args: { file_path: CLI_PROBE_FILE, content: 'CLI 寫的' } }],
-  },
-  { content: '工具回來了，這條線是通的。' },
-  { content: '假模型只會照腳本說話——要真的對話請用 --live。' },
-];
 
 /**
  * 組裝點傳給基座的那一句指引。**身分、persona 與工作目錄不在這裡**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）：
@@ -530,9 +502,8 @@ function createCliModel(
   plugins: readonly PluginEntry[],
 ): BaseChatModel {
   // **`--live` 是進 live 的唯一閘門**，不看選擇列（理由見 `model-provider.ts`）；沒帶它才由清單上的
-  // `agent-default-model` 在內建腳本與 patch 插進來的提供者之間選（#670）。
-  if (!live)
-    return resolveDefaultModel(plugins, () => new ScriptedChatModel({ turns: CLI_SCRIPT }));
+  // `agent-default-model` 在清單上的提供者之間選（#670）：出貨值指的是清單上那一列腳本提供者 `cli-script`。
+  if (!live) return resolveDefaultModel(plugins);
   return createLiveModel(liveModel, undefined, credentials);
 }
 

@@ -20,7 +20,7 @@ import { DISPOSE_FAILURE } from './cli-dispose-failure.fixture.js';
 import { documentedFixture } from './documented-fixture.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
-import { shippedPlugins } from './fixtures.js';
+import { shippedModelRow, shippedPlugins } from './fixtures.js';
 
 const shipped = await shippedPlugins();
 
@@ -257,6 +257,7 @@ describe('一次性模式', () => {
       'subagent-model-selection',
       'live-model',
       'default-model',
+      'scripted-model',
       'recursion-limit',
       'agent-loop',
     ]);
@@ -464,7 +465,7 @@ describe('CLI 的核准政策', () => {
 
     const { agent, dispose, sessionLog } = await createCliAgent(
       { live: false },
-      [createEchoPlugin(), gateWriteFile],
+      [createEchoPlugin(), gateWriteFile, await shippedModelRow()],
       undefined,
       { approvals: HEADLESS_APPROVALS },
     );

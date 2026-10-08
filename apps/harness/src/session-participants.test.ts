@@ -25,7 +25,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { runCli } from './cli.js';
 import { createCliAgent } from './assembly-root.js';
-import { loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
+import { loopbackRequest, shippedModelRow, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -158,7 +158,11 @@ describe('web 那條', () => {
   });
 
   it('每個 thread 的日誌各接一次——`wire-handler` 沒有把它丟掉', async () => {
-    const built = await createCliAgent({ live: false }, [createEchoPlugin(), createGoalPlugin()]);
+    const built = await createCliAgent({ live: false }, [
+      createEchoPlugin(),
+      createGoalPlugin(),
+      await shippedModelRow(),
+    ]);
     const goals = built.goals;
     if (goals === undefined) throw new Error('掛了 goal 就該拿得到服務');
     const handler = createWireHandler({
