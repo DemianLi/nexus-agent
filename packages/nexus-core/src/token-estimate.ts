@@ -97,6 +97,13 @@
  * @module
  */
 
+import {
+  fileHandleText,
+  fileModelPath,
+  IMAGE_TOKENS,
+  isFileBlock,
+  isImageBlock,
+} from './attachment-ref.js';
 import { modelNameOf } from './model-route.js';
 import { createHash } from 'node:crypto';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -313,6 +320,12 @@ function contentText(content: unknown): string {
     else if (block !== null && typeof block === 'object') {
       const { type, text: blockText } = block as { type?: unknown; text?: unknown };
       if (typeof type === 'string' && UNSENT_BLOCKS.has(type)) continue;
+      // 附件（#732）：檔案算**投影之後**那一行（組請求時就是換成這一行字，用的是同一個函式）；圖不是文字，由 {@link imageCount} 另算。
+      if (isFileBlock(block)) {
+        text += fileHandleText(block.attachment, fileModelPath(block.attachment));
+        continue;
+      }
+      if (isImageBlock(block)) continue;
       text += typeof blockText === 'string' ? blockText : JSON.stringify(block);
     }
   }
@@ -330,6 +343,11 @@ export function estimateTextTokens(text: string): number {
   return memoized(text, 'exact', o200k);
 }
 
+/** 內容裡有幾張圖。每張算 {@link IMAGE_TOKENS}，跟位元組數與像素數都無關。 */
+function imageCount(content: unknown): number {
+  return Array.isArray(content) ? (content as unknown[]).filter(isImageBlock).length : 0;
+}
+
 /** 一則訊息的 E。同一個物件只編一次。 */
 function messageTokens(message: BaseMessage): Counted {
   const cached = perMessage.get(message);
@@ -338,7 +356,11 @@ function messageTokens(message: BaseMessage): Counted {
   const calls = (message as { tool_calls?: readonly { name?: unknown; args?: unknown }[] })
     .tool_calls;
   for (const call of calls ?? []) text += String(call.name ?? '') + JSON.stringify(call.args ?? {});
-  const counted = withOverhead(countText(text));
+  const framed = withOverhead(countText(text));
+  const counted: Counted = {
+    tokens: framed.tokens + imageCount(message.content) * IMAGE_TOKENS,
+    excess: framed.excess,
+  };
   perMessage.set(message, counted);
   return counted;
 }

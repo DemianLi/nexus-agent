@@ -9,6 +9,7 @@ import o200k_base from 'gpt-tokenizer/encoding/o200k_base';
 import { Tiktoken } from 'js-tiktoken/lite';
 import o200kRanks from 'js-tiktoken/ranks/o200k_base';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { attachmentBlock, fileHandleText, fileModelPath, IMAGE_TOKENS } from './attachment-ref.js';
 import {
   estimateAnchoredTokens,
   estimateRequestTokens,
@@ -617,5 +618,56 @@ describe('逐位切詞的數字（#1102）', () => {
     const grown = estimateAnchoredTokens(request(after, model), book).tokens;
     // 300 位數字逐位算至少 300 個 token，不是 o200k 的 100。
     expect(grown - without).toBeGreaterThanOrEqual(300);
+  });
+});
+
+describe('附件區塊（#732）', () => {
+  const FILE_REF = { attachmentId: `sha256:${'ab'.repeat(32)}`, name: 'notes.txt', bytes: 2048 };
+  const IMAGE_REF = {
+    attachmentId: `sha256:${'cd'.repeat(32)}`,
+    mediaType: 'image/png' as const,
+    bytes: 9_000_000,
+    width: 4000,
+    height: 3000,
+  };
+  const withBlocks = (...blocks: readonly object[]) =>
+    new HumanMessage({ content: [{ type: 'text', text: '看這個' }, ...blocks] as never });
+  const baseline = estimateRequestTokens(request([withBlocks()]));
+
+  it('一張圖算固定的 IMAGE_TOKENS，跟位元組數與像素數無關', () => {
+    const one = estimateRequestTokens(
+      request([withBlocks(attachmentBlock({ type: 'image', ...IMAGE_REF }))]),
+    );
+    const small = estimateRequestTokens(
+      request([
+        withBlocks(
+          attachmentBlock({ type: 'image', ...IMAGE_REF, bytes: 10, width: 8, height: 8 }),
+        ),
+      ]),
+    );
+    expect(one - baseline).toBe(IMAGE_TOKENS);
+    expect(small).toBe(one);
+    const two = estimateRequestTokens(
+      request([
+        withBlocks(
+          attachmentBlock({ type: 'image', ...IMAGE_REF }),
+          attachmentBlock({ type: 'image', ...IMAGE_REF }),
+        ),
+      ]),
+    );
+    expect(two - baseline).toBe(2 * IMAGE_TOKENS);
+  });
+
+  it('不再把圖的區塊整塊 JSON.stringify：參照的 JSON 不進文字', () => {
+    const block = attachmentBlock({ type: 'image', ...IMAGE_REF });
+    const counted = estimateRequestTokens(request([withBlocks(block)])) - baseline - IMAGE_TOKENS;
+    expect(counted).toBe(0);
+  });
+
+  it('檔案算投影之後那一行字，不是參照的 JSON', () => {
+    const block = attachmentBlock({ type: 'file', ...FILE_REF });
+    const counted = estimateRequestTokens(request([withBlocks(block)])) - baseline;
+    expect(counted).toBe(estimateTextTokens(fileHandleText(FILE_REF, fileModelPath(FILE_REF))));
+    expect(counted).toBeGreaterThan(40);
   });
 });

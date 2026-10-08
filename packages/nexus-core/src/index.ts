@@ -200,6 +200,27 @@ export {
   OUTPUT_SCHEMA_MIDDLEWARE_NAME,
 } from './output-schema.js';
 
+export type {
+  AttachmentRef,
+  FileAttachmentRef,
+  FileBlock,
+  ImageAttachmentRef,
+  ImageBlock,
+  ImageMediaType,
+} from './attachment-ref.js';
+export {
+  ATTACHMENTS_MODEL_PREFIX,
+  attachmentBlock,
+  fileHandleText,
+  fileModelPath,
+  IMAGE_TOKENS,
+  isAttachmentRef,
+  isFileBlock,
+  isFileRef,
+  isImageBlock,
+  isImageRef,
+} from './attachment-ref.js';
+
 export type { LoggedMessage } from './logged-message.js';
 export { fromLoggedMessage, toLoggedMessage, loggedContentBlocks } from './logged-message.js';
 

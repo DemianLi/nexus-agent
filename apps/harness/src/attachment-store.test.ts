@@ -222,3 +222,74 @@ describe('模型讀得到（唯讀路由）', () => {
     expect((await route.read('/../staging/leftover')).error).toBeDefined();
   });
 });
+
+describe('存一張圖（#732）', () => {
+  const PNG = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAcAAAAFCAIAAAAG+GGPAAAAEklEQVR4nGP4z8CAibAIUUUUAKEvIt57lX2fAAAAAElFTkSuQmCC',
+    'base64',
+  );
+  const facts = { mediaType: 'image/png', width: 7, height: 5 } as const;
+
+  it('參照帶雜湊、位元組數、媒體類型與寬高；名字清成葉名，沒給就不記', async () => {
+    const ref = await store.saveImage({ data: PNG, ...facts, name: '../shot.png' });
+    expect(ref).toEqual({
+      attachmentId: `sha256:${sha(PNG)}`,
+      bytes: PNG.byteLength,
+      name: 'shot.png',
+      ...facts,
+    });
+    const unnamed = await store.saveImage({ data: PNG, ...facts });
+    expect('name' in unnamed).toBe(false);
+  });
+
+  it('位元組原樣讀得回；物件 0400、目錄 0700；不建檔名的硬連結（files/ 底下沒有它）', async () => {
+    const ref = await store.saveImage({ data: PNG, ...facts, name: 'shot.png' });
+    expect(Buffer.from(await store.readImage(ref))).toEqual(PNG);
+    const digest = sha(PNG);
+    const object = join(store.rootDir, 'file-objects', digest.slice(0, 2), digest);
+    expect(await mode(object)).toBe(0o400);
+    expect(await mode(join(store.rootDir, 'file-objects', digest.slice(0, 2)))).toBe(0o700);
+    expect(await readdir(store.filesDir)).toEqual([]);
+    expect(await readdir(join(store.rootDir, 'staging'))).toEqual([]);
+  });
+
+  it('同樣的位元組存兩次、或先當檔案再當圖：只有一份物件', async () => {
+    await store.save({ data: PNG, name: 'as-file.png' });
+    await store.saveImage({ data: PNG, ...facts });
+    await store.saveImage({ data: PNG, ...facts });
+    const digest = sha(PNG);
+    expect(await readdir(join(store.rootDir, 'file-objects', digest.slice(0, 2)))).toEqual([
+      digest,
+    ]);
+  });
+
+  it('讀的時候大小對不上參照（物件被截斷）：拋，不把來路不明的位元組交出去', async () => {
+    const ref = await store.saveImage({ data: PNG, ...facts });
+    const digest = sha(PNG);
+    const object = join(store.rootDir, 'file-objects', digest.slice(0, 2), digest);
+    const { chmod, writeFile } = await import('node:fs/promises');
+    await chmod(object, 0o600);
+    await writeFile(object, PNG.subarray(0, 10));
+    await expect(store.readImage(ref)).rejects.toThrow(/大小對不上/);
+  });
+
+  it('物件不在、參照不合格式：AttachmentError', async () => {
+    const ref = await store.saveImage({ data: PNG, ...facts });
+    await expect(
+      store.readImage({ ...ref, attachmentId: `sha256:${'0'.repeat(64)}` }),
+    ).rejects.toThrow(AttachmentError);
+    await expect(store.readImage({ ...ref, attachmentId: 'nope' })).rejects.toMatchObject({
+      code: 'INVALID_ATTACHMENT_REF',
+    });
+  });
+});
+
+describe('檔案現在還在不在（#732）', () => {
+  it('存完是 true；被清掉是 false；參照壞掉也是 false', async () => {
+    const ref = await store.save({ data: Buffer.from('x'), name: 'a.txt' });
+    expect(await store.hasFile(ref)).toBe(true);
+    expect(await store.hasFile({ ...ref, attachmentId: 'nope' })).toBe(false);
+    await rm(store.pathOf(ref));
+    expect(await store.hasFile(ref)).toBe(false);
+  });
+});
