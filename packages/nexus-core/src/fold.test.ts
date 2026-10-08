@@ -12,6 +12,7 @@ import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
+import { TOOL_BARRIER_MIDDLEWARE_NAME } from './tool-barrier.js';
 import { FS_TOOL_ERRORS_MIDDLEWARE_NAME } from './fs-tool-errors.js';
 import { READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
 import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
@@ -173,6 +174,7 @@ describe('middleware 註冊點', () => {
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'))),
     ]);
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -198,6 +200,7 @@ describe('middleware 註冊點', () => {
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'))),
     ]);
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
@@ -223,6 +226,7 @@ describe('middleware 註冊點', () => {
       fakePlugin('c', (r) => void r.middleware.use(fakeMiddleware('c'), { prepend: true })),
     ]);
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
@@ -249,6 +253,7 @@ describe('middleware 註冊點', () => {
       fakePlugin('d', (r) => void r.middleware.use(fakeMiddleware('d'), { last: true })),
     ]);
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'c',
@@ -294,6 +299,7 @@ describe('middleware 註冊點', () => {
       const list = subagent.middleware ?? [];
       const names = list.map((mw) => (mw as unknown as { name: string }).name);
       expect(names).toEqual([
+        TOOL_BARRIER_MIDDLEWARE_NAME,
         CONTAINMENT_MIDDLEWARE_NAME,
         TURN_CANCEL_MIDDLEWARE_NAME,
         'early',
@@ -352,17 +358,21 @@ describe('圍堵打底', () => {
    */
   it('**清單全空也有圍堵，而且在第 0 格**', async () => {
     const params = await fold([]);
-    expect(middlewareNames(params)[0]).toBe(CONTAINMENT_MIDDLEWARE_NAME);
+    // 屏障（#711 第 2 步）在圍堵外面一格，是唯一排在它前面的：等待中的呼叫通過屏障前不能被圍堵記一顆 `tool/call`。
+    expect(middlewareNames(params).slice(0, 2)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
+      CONTAINMENT_MIDDLEWARE_NAME,
+    ]);
   });
 
   it('**連 prepend 的 registry middleware 都在它裡面**——射程要蓋過每一個', async () => {
     const params = await fold([
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
     ]);
-    expect(middlewareNames(params).indexOf(CONTAINMENT_MIDDLEWARE_NAME)).toBe(0);
-    // 中止外層那顆緊貼圍堵（#276），所以 prepend 的那一顆落在第 2 格，仍在圍堵裡面。
-    expect(middlewareNames(params).indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBe(1);
-    expect(middlewareNames(params).indexOf('b')).toBe(2);
+    expect(middlewareNames(params).indexOf(CONTAINMENT_MIDDLEWARE_NAME)).toBe(1);
+    // 中止外層那顆緊貼圍堵（#276），所以 prepend 的那一顆落在第 3 格，仍在圍堵裡面。
+    expect(middlewareNames(params).indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBe(2);
+    expect(middlewareNames(params).indexOf('b')).toBe(3);
   });
 
   it('**每個 subagent 也有，而且同樣在第 0 格**——不注就是漏掉半棵樹', async () => {
@@ -377,7 +387,10 @@ describe('圍堵打底', () => {
       const names = (subagent.middleware ?? []).map(
         (mw) => (mw as unknown as { name: string }).name,
       );
-      expect(names[0]).toBe(CONTAINMENT_MIDDLEWARE_NAME);
+      expect(names.slice(0, 2)).toEqual([
+        TOOL_BARRIER_MIDDLEWARE_NAME,
+        CONTAINMENT_MIDDLEWARE_NAME,
+      ]);
     }
     // 兩個註冊的，外加 fold 補的 `general-purpose`——它也在上面那個迴圈裡。
     expect(registered(params)).toHaveLength(2);
@@ -388,8 +401,8 @@ describe('圍堵打底', () => {
     const params = await fold([
       fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('releaser'))),
     ]);
-    const rootOne = params.middleware[0];
-    const subOne = (registered(params)[0]?.middleware ?? [])[0];
+    const rootOne = params.middleware[1];
+    const subOne = (registered(params)[0]?.middleware ?? [])[1];
     expect(subOne).toBe(rootOne);
   });
 });
@@ -409,6 +422,7 @@ describe('「先讀後改」策略打底', () => {
     // 排在閘門**裡面**：閘門是安全邊界，這個是正確性的門，兩者不換位。排在其餘 registry
     // middleware **外面**：不然任何一個 plugin middleware 都可以在它之前把工具跑掉。
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
@@ -444,6 +458,7 @@ describe('「先讀後改」策略打底', () => {
       (mw) => (mw as unknown as { name: string }).name,
     );
     expect(names).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -492,7 +507,7 @@ describe('「先讀後改」策略打底', () => {
     expect(first).not.toBe(rootOne);
     expect(second).not.toBe(first);
     // 對照：圍堵是共用的，兩條放在一起才看得出這是選的、不是漏的。
-    expect(registered(params)[0]?.middleware?.[0]).toBe(params.middleware[0]);
+    expect(registered(params)[0]?.middleware?.[1]).toBe(params.middleware[1]);
   });
 
   it('明著關掉就一份都不建，root 與 subagent 都沒有', async () => {
@@ -534,7 +549,7 @@ describe('中止這一輪打底（#276）', () => {
    */
   it('清單全空也有：外層緊貼圍堵、在起訖紀錄器外面，內層在最後', async () => {
     const names = middlewareNames(await fold([]));
-    expect(names.indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBe(1);
+    expect(names.indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBe(2);
     expect(names.indexOf(TURN_CANCEL_MIDDLEWARE_NAME)).toBeLessThan(
       names.indexOf(MODEL_CALL_EVENTS_MIDDLEWARE_NAME),
     );
@@ -550,7 +565,7 @@ describe('中止這一輪打底（#276）', () => {
     ]);
     const sub = registered(params)[0]?.middleware ?? [];
     const names = sub.map((mw) => (mw as unknown as { name: string }).name);
-    expect(names[1]).toBe(TURN_CANCEL_MIDDLEWARE_NAME);
+    expect(names[2]).toBe(TURN_CANCEL_MIDDLEWARE_NAME);
     // 內層那顆排在 subagent 自帶的那些後面：它自帶的 middleware 讀到的也是原本的模型。
     expect(names.at(-1)).toBe(TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME);
     expect(names.indexOf('subagent-own')).toBeLessThan(names.length - 1);
@@ -674,6 +689,7 @@ describe('approvals 註冊點', () => {
       fakePlugin('b', (r) => void r.middleware.use(fakeMiddleware('b'), { prepend: true })),
     ]);
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
@@ -704,6 +720,7 @@ describe('approvals 註冊點', () => {
       (mw) => (mw as unknown as { name: string }).name,
     );
     expect(names).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -729,6 +746,7 @@ describe('approvals 註冊點', () => {
       (mw) => (mw as unknown as { name: string }).name,
     );
     expect(names).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -984,7 +1002,7 @@ describe('general-purpose 由 fold 註冊', () => {
     const researcher = params.subagents.find((subagent) => subagent.name === 'researcher');
     const names = subagentMiddlewareNames(gp);
     expect(names).toEqual(subagentMiddlewareNames(researcher));
-    expect(names[0]).toBe(CONTAINMENT_MIDDLEWARE_NAME);
+    expect(names.slice(0, 2)).toEqual([TOOL_BARRIER_MIDDLEWARE_NAME, CONTAINMENT_MIDDLEWARE_NAME]);
     expect(names).toContain(APPROVAL_GATE_MIDDLEWARE_NAME);
     expect(names).toContain(MODEL_USAGE_MIDDLEWARE_NAME);
     expect(names).toContain(SUMMARIZATION_MIDDLEWARE_NAME);
@@ -1299,6 +1317,7 @@ describe('摘要器打底', () => {
     // 位置只決定同名誰贏（`mergeMiddleware$1` 是以 name 為鍵的 Map，後設的覆蓋前設的）：
     // 排在所有 registry middleware 之前 ＝ 任何 plugin 掛一個同名的都蓋得過我們這份。
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
@@ -1334,6 +1353,7 @@ describe('摘要器打底', () => {
     // **自帶的排在後面 ＝ 自帶的贏。** 這是「打底」不是「強制」，跟同一個函式裡 `tools`
     // 那條軸線一致；摘要門檻是效能與正確性的預設值，不是安全邊界。閘門那一格沒動。
     expect(names).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -1475,6 +1495,7 @@ describe('提醒器打底', () => {
     // 摘要器是 `wrapModelCall`（模型節點內部）、提醒器是 `beforeModel`（模型節點之前），
     // 誰先跑由圖決定。這條釘的是「我們打底的三根都排在 registry middleware 之前」。
     expect(middlewareNames(params)).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       'b',
@@ -1511,6 +1532,7 @@ describe('提醒器打底', () => {
     // 自帶的排在後面 ＝ 自帶的贏，同 `tools` 那條軸線。提醒器是 fold 自己建的、不經過
     // `registry.middleware`，所以不打底的話那個 subagent 就完全沒有這道提醒。
     expect(names).toEqual([
+      TOOL_BARRIER_MIDDLEWARE_NAME,
       CONTAINMENT_MIDDLEWARE_NAME,
       TURN_CANCEL_MIDDLEWARE_NAME,
       APPROVAL_GATE_MIDDLEWARE_NAME,
@@ -2308,6 +2330,7 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
   ]);
   /** 逐個 agent 各建一份的：狀態在閉包裡，共用會串台。 */
   const FRESH_PER_AGENT = new Set([
+    TOOL_BARRIER_MIDDLEWARE_NAME,
     OBSERVATION_POLICY_MIDDLEWARE_NAME,
     SUMMARIZATION_MIDDLEWARE_NAME,
   ]);

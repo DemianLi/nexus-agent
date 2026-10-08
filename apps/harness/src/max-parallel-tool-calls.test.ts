@@ -15,7 +15,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { Annotation, END, MemorySaver, Send, START, StateGraph } from '@langchain/langgraph';
-import { BACKGROUND_SESSION_CONFIG_KEY } from '@nexus/core';
+import { BACKGROUND_SESSION_CONFIG_KEY, CONCURRENCY_SAFE_METADATA_KEY } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -46,7 +46,13 @@ function probe() {
       meter.inFlight -= 1;
       return `done ${i}`;
     },
-    { name: 'probe', description: '睡一下。', schema: z.object({ i: z.number() }) },
+    {
+      name: 'probe',
+      description: '睡一下。',
+      schema: z.object({ i: z.number() }),
+      // 宣告可重疊（#711 第 2 步）：沒宣告的工具是獨佔，一步裡會串行，量不到上限。
+      metadata: { [CONCURRENCY_SAFE_METADATA_KEY]: true },
+    },
   );
   return { meter, probeTool };
 }

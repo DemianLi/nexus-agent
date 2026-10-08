@@ -162,9 +162,12 @@ async function stopForInput(
 
 describe('停下來等人的那一輪，即時與重播畫得一樣', () => {
   /**
-   * **只寫「核准那張是執行中」的話，把每張卡都畫成執行中也會綠**；同一輪掛著一題問答，才分得出兩種等法真的分開畫。
+   * **只寫「核准那張是執行中」的話，把每張卡都畫成執行中也會綠**；所以同一輪還要有一題問答，才分得出兩種等法真的分開畫。
+   *
+   * **逐顆問（#711 第 2 步，同 dsh）**：問答與核准都沒宣告可重疊，是獨佔，同一步裡排在前面的先問，後面的在屏障上等、中斷時
+   * 一起退出，連卡都還沒開。所以這一輪只掛著問答那一顆；核准的卡要等問答答完、它重跑之後才出現。以前（沒有屏障）兩顆同時掛上。
    */
-  it('同一輪一題問答、一顆核准：問答是「等你回答」，核准是「執行中」', async () => {
+  it('同一輪一題問答、一顆核准：先問問答（等你回答），核准還沒開卡', async () => {
     const run = await stopForInput(
       [
         { content: '兩個都動。', toolCalls: [ASK, { name: 'danger', args: {} }] },
@@ -173,12 +176,10 @@ describe('停下來等人的那一輪，即時與重播畫得一樣', () => {
       [DANGER, createAskUserPlugin()],
     );
     try {
-      // 前提：兩顆都真的掛上了、日誌停在那一輪的收尾，而閘門上只有核准那顆。
-      expect(run.pump.pendings).toHaveLength(2);
+      expect(run.pump.pendings).toHaveLength(1);
       expect(run.pump.sessionLog.events.at(-1)?.type).toBe('turn/end');
-      expect([...run.pump.gatedTools]).toEqual(['danger']);
 
-      const expected = [`${ASK_USER_QUESTION_TOOL_NAME}:suspended`, 'danger:running'];
+      const expected = [`${ASK_USER_QUESTION_TOOL_NAME}:suspended`];
       expect(rootCards(run.live)).toEqual(expected);
       expect(rootCards(run.replay)).toEqual(expected);
       expect(run.replay.status).toBe('running');

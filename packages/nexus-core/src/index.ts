@@ -184,6 +184,14 @@ export {
   resolveToolName,
 } from './containment.js';
 
+export {
+  CONCURRENCY_SAFE_METADATA_KEY,
+  createToolBarrierMiddleware,
+  DEFAULT_PARALLEL_SAFE_TOOLS,
+  isConcurrencySafe,
+  TOOL_BARRIER_MIDDLEWARE_NAME,
+} from './tool-barrier.js';
+
 export type { OutputSchemaLookup } from './output-schema.js';
 export {
   createOutputSchemaMiddleware,

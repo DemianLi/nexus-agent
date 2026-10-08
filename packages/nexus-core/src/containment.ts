@@ -378,6 +378,9 @@ function recordToolCall(
  * 與校驗器自己的 bug 都在裡面。基座自己那幾個 middleware 永遠排在所有這些之前，接不到，
  * 那是 `createDeepAgent` 的組裝順序，不是這裡能決定的事。掛法見 `fold.ts`。
  *
+ * **唯一排在它外面的 core middleware 是同一步工具呼叫的屏障**（`tool-barrier.ts`，#711 第 2 步）：等待中的呼叫通過屏障前
+ * 必須什麼都不做，不能先被這裡記一顆 `tool/call`。屏障沒有失敗路徑，只會拋不帶酬載的 `GraphInterrupt`，是控制流，不需要圍堵接。
+ *
  * **一份實例走遍 root 與每個 subagent。** 它唯一的 closure 是 `sessions` 那個通道，而那是
  * 查詢不是狀態：該寫進哪一份日誌，每次從那一次呼叫的 `request` 現算，同 `model-usage.ts`。
  * `try/catch` 裡讀到的其餘一切也都來自那一次呼叫。

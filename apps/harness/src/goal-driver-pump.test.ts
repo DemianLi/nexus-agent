@@ -20,7 +20,11 @@ import {
 } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import type { GoalServices } from '@nexus/plugin-goal';
-import { fromLoggedMessage, REPEAT_REMINDER_MARKER } from '@nexus/core';
+import {
+  CONCURRENCY_SAFE_METADATA_KEY,
+  fromLoggedMessage,
+  REPEAT_REMINDER_MARKER,
+} from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { SessionEventMap, SessionLog } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
@@ -67,6 +71,8 @@ function noteTool() {
     name: 'take_note',
     description: '把一段文字記下來。',
     schema: z.object({ text: z.string().describe('要記下的內容') }),
+    // 宣告可重疊（#711 第 2 步）：「同一輪兩顆中斷」那條要兩顆同時掛出來；沒宣告的工具是獨佔，一次只問一顆。
+    metadata: { [CONCURRENCY_SAFE_METADATA_KEY]: true },
   });
 }
 

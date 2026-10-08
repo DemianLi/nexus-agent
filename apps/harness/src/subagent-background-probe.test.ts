@@ -416,8 +416,8 @@ describe('第 2 項：換了組裝路之後 fold 注進規格的東西還在不�
           'nexusTurnCancelModelSignal',
         ]),
       );
-      // 圍堵在第 0 格，中止最內層（fold 的位置契約）。
-      expect(specNames[0]).toBe('nexusToolFailureContainment');
+      // 屏障（#711 第 2 步）在最外，緊接著圍堵，中止最內層（fold 的位置契約）。
+      expect(specNames.slice(0, 2)).toEqual(['nexusToolBarrier', 'nexusToolFailureContainment']);
       expect(specNames.at(-1)).toBe('nexusTurnCancelModelSignal');
     } finally {
       await built.dispose();
