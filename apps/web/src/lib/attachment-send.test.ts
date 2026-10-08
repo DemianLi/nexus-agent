@@ -133,7 +133,7 @@ describe('prepareAttachments', () => {
     expect(outcome).toEqual({ kind: 'failed', message: '「b.pdf」上傳失敗：B 壞了' });
   });
 
-  describe('總像素（讀得到長寬才擋）', () => {
+  describe('單張圖的像素上限（逐張、讀得到長寬才擋）', () => {
     it('超過 64 百萬像素：說尺寸，什麼都不上傳', async () => {
       const { uploadFile } = uploader();
       const outcome = await prepareAttachments(
@@ -163,6 +163,32 @@ describe('prepareAttachments', () => {
         async () => undefined,
       );
       expect(unknown.kind).toBe('ok');
+    });
+
+    it('是每一張各自算，不加總：兩張各 40 百萬像素（合計超過 64）都收', async () => {
+      const outcome = await prepareAttachments(
+        { uploadFile: uploader().uploadFile },
+        't',
+        [item('a.png', 'image/png'), item('b.png', 'image/png')],
+        async () => ({ width: 8000, height: 5000 }),
+      );
+      expect(outcome.kind).toBe('ok');
+    });
+
+    it('多張裡只有一張超過：點名那一張', async () => {
+      const sizes = [
+        { width: 1000, height: 1000 },
+        { width: 8200, height: 7900 },
+      ];
+      let index = 0;
+      const outcome = await prepareAttachments(
+        { uploadFile: uploader().uploadFile },
+        't',
+        [item('small.png', 'image/png'), item('huge.png', 'image/png')],
+        async () => sizes[index++],
+      );
+      expect(outcome.kind === 'failed' && outcome.message).toContain('huge.png');
+      expect(outcome.kind === 'failed' && outcome.message).not.toContain('small.png');
     });
 
     it('只看白名單內的圖：檔案不讀尺寸', async () => {

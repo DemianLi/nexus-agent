@@ -395,7 +395,9 @@ export function Composer({
     if (event.key === 'Enter' && !event.shiftKey) {
       event.preventDefault();
       const accelerated = isAcceleratedEnter(event);
-      if (accelerated && draft.trim() === '' && onSteerQueue !== undefined) {
+      // 草稿空白但有附件：這一下是送出那份附件（插話），不是把佇列改成插話。
+      const hasAttachments = attachments !== undefined && attachments.items.length > 0;
+      if (accelerated && draft.trim() === '' && !hasAttachments && onSteerQueue !== undefined) {
         onSteerQueue();
         return;
       }

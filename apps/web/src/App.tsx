@@ -390,12 +390,14 @@ function ConversationView({
   const isModelLine = (line: string) =>
     modelSeat !== null &&
     parseModelLine(line, modelSeat.catalog, modelSeat.selection) !== undefined;
+  // 功能開著且草稿裡有附件：沒打字也送得出去（文字或附件至少一個）。
+  const hasDraftAttachments = serverSupportsAttachments() && draftAttachments.items.length > 0;
   const canSendLine = (line: string) =>
     isModelLine(line)
       ? conversation.connected
       : line.trim().startsWith('/')
         ? canRunSlash(conversation.connected, status, line, FEEDBACK_COMMAND_LINE)
-        : canSendText(conversation.connected, status, line);
+        : canSendText(conversation.connected, status, line, hasDraftAttachments);
   /**
    * 執行一行 `/model`。不是 `/model` 回 `undefined`（走一般流程）；打不開、找不到那顆回 `false`（那一行留在草稿，
    * 看得到為什麼）；其餘回 `true`。
