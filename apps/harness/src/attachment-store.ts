@@ -18,7 +18,8 @@
  * 1. **模型讀它走虛擬前綴 {@link ATTACHMENTS_PREFIX}，不是主機絕對路徑。** 同 `tool-result-stash.ts`：路徑是 `CompositeBackend`
  *    的一條唯讀路由（根是 `<root>/files`），圍欄看不到的主機路徑不出現在模型面前，續接之後同一個路徑照讀。dsh 的 `read_file`
  *    收到的是主機路徑（它的檔案工具不在工作區圍欄裡）；我們的 backend 有圍欄，所以走路由。基座表達不出的是「圍欄外的絕對路徑」。
- * 2. **這一刀沒有圖片的正規化／縮圖。** dsh 在收下時把圖轉成 8-bit sRGB 並縮小（`normalization.ts`）；那是圖片那一刀的事。
+ * 2. **圖片沒有正規化／縮圖。** dsh 在收下時把圖轉成 8-bit sRGB 並縮小到 2048×2048 以內、4 MB 上下（`normalization.ts`，靠 sharp）；
+ *    我們沒有影像函式庫，圖按收到的位元組原樣存（`saveImage`），超過上限的拒收而不縮（`image-intake.ts`）。送進模型的是原圖。
  * 3. **沒有逐會話目錄**：dsh 的附件根也是全域內容定址（`attachments/v1`），不按會話分。同一個使用者的不同會話讀得到彼此的
  *    附件（要知道內容雜湊才能點到單一檔，但 `ls` 列得出來）；多人共用主機的隔離靠 `0700`，不靠會話。
  *
@@ -26,9 +27,12 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { chmod, link, mkdir, open, unlink } from 'node:fs/promises';
+import { chmod, link, mkdir, open, readFile, stat, unlink } from 'node:fs/promises';
 import { constants } from 'node:fs';
 import { join } from 'node:path';
+
+import { ATTACHMENTS_MODEL_PREFIX } from '@nexus/core';
+import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType } from '@nexus/core';
 
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './owner-only.js';
@@ -40,7 +44,7 @@ export const ATTACHMENTS_DIR_NAME = 'attachments';
 export const ATTACHMENTS_LAYOUT_VERSION = 'v1';
 
 /** 模型讀附件的虛擬前綴（沒有結尾斜線；路由鍵加斜線，見 `agent-factory.ts`）。 */
-export const ATTACHMENTS_PREFIX = '/attachments';
+export const ATTACHMENTS_PREFIX = ATTACHMENTS_MODEL_PREFIX;
 
 /** 物件檔的權限：只讀，只有擁有者。 */
 const OBJECT_FILE_MODE = 0o400;
@@ -53,15 +57,7 @@ const ROOT_ROLE: PrivateFileRole = {
   why: '別人換得掉這個目錄底下的檔，模型就會讀到被換過的內容。',
 };
 
-/** 一份存好的檔案的參照；日誌與訊息只留這個。 */
-export interface FileAttachmentRef {
-  /** `sha256:<64 位十六進位>`，內容定址。 */
-  readonly attachmentId: string;
-  /** 清過的葉名。 */
-  readonly name: string;
-  /** 確切位元組數。 */
-  readonly bytes: number;
-}
+export type { FileAttachmentRef, ImageAttachmentRef };
 
 /** 附件相關的失敗；`code` 是穩定的，呼叫端據此分類。 */
 export class AttachmentError extends Error {
@@ -204,12 +200,7 @@ export class AttachmentStore {
       await this.#prepare();
       const staged = await this.#stage(input.data, input.signal, input.maxBytes);
       try {
-        const objectPath = join(
-          this.#root,
-          'file-objects',
-          staged.sha256.slice(0, 2),
-          staged.sha256,
-        );
+        const objectPath = this.#objectPath(staged.sha256);
         await this.#publish(staged.path, objectPath);
         // 去重走到這裡也要把模式收回唯讀：先寫的那一個如果被人 chmod 過，這裡恢復。
         await chmod(objectPath, OBJECT_FILE_MODE);
@@ -236,6 +227,91 @@ export class AttachmentStore {
         { cause: error },
       );
     }
+  }
+
+  /**
+   * 存一張圖，位元組原樣（這一版不縮圖、不轉檔，見檔頭偏離 2）。圖的事實（媒體類型、寬高）由呼叫端先驗好、傳進來。
+   * 物件跟檔案共用 `file-objects/`（內容定址，同樣的位元組只有一份），**不建檔名的硬連結**：模型不經檔案路徑讀圖。
+   *
+   * @param input.data - 完整的編碼後位元組。
+   * @param input.name - 顯示名；清成葉名，沒給就不記。
+   * @throws {AttachmentError} 存不下。
+   */
+  async saveImage(input: {
+    readonly data: Uint8Array;
+    readonly mediaType: ImageMediaType;
+    readonly width: number;
+    readonly height: number;
+    readonly name?: string | undefined;
+  }): Promise<ImageAttachmentRef> {
+    try {
+      await this.#prepare();
+      const staged = await this.#stage(input.data, undefined, undefined);
+      try {
+        const objectPath = this.#objectPath(staged.sha256);
+        await this.#publish(staged.path, objectPath);
+        await chmod(objectPath, OBJECT_FILE_MODE);
+      } finally {
+        await unlink(staged.path).catch(() => {});
+      }
+      return {
+        attachmentId: `sha256:${staged.sha256}`,
+        mediaType: input.mediaType,
+        bytes: staged.bytes,
+        width: input.width,
+        height: input.height,
+        ...(input.name === undefined ? {} : { name: fileLeafName(input.name) }),
+      };
+    } catch (error) {
+      if (error instanceof AttachmentError) throw error;
+      throw new AttachmentError(
+        `圖片存不下：${error instanceof Error ? error.message : String(error)}`,
+        'ATTACHMENT_STORE_FAILED',
+        { cause: error },
+      );
+    }
+  }
+
+  /**
+   * 讀一張存好的圖的位元組。大小跟參照對不上（物件被換過、被截斷）就拋，不把來路不明的位元組交出去。
+   *
+   * @throws {AttachmentError} 參照不合格式、物件不在、或大小對不上。
+   */
+  async readImage(ref: ImageAttachmentRef): Promise<Uint8Array> {
+    const sha256 = ATTACHMENT_ID_PATTERN.exec(ref.attachmentId)?.[1];
+    if (sha256 === undefined) {
+      throw new AttachmentError('附件參照不合格式', 'INVALID_ATTACHMENT_REF');
+    }
+    let data: Uint8Array;
+    try {
+      data = await readFile(this.#objectPath(sha256));
+    } catch (error) {
+      throw new AttachmentError(
+        `圖片讀不到：${error instanceof Error ? error.message : String(error)}`,
+        'ATTACHMENT_STORE_FAILED',
+        { cause: error },
+      );
+    }
+    if (data.byteLength !== ref.bytes) {
+      throw new AttachmentError(
+        `圖片的大小對不上參照（${String(data.byteLength)} ≠ ${String(ref.bytes)}）`,
+        'ATTACHMENT_STORE_FAILED',
+      );
+    }
+    return data;
+  }
+
+  /** 這份檔案的存放路徑現在讀不讀得到（儲存被清掉、被搬走時是 `false`）。參照不合格式也是 `false`。 */
+  async hasFile(ref: FileAttachmentRef): Promise<boolean> {
+    try {
+      return (await stat(this.pathOf(ref))).isFile();
+    } catch {
+      return false;
+    }
+  }
+
+  #objectPath(sha256: string): string {
+    return join(this.#root, 'file-objects', sha256.slice(0, 2), sha256);
   }
 
   async #stage(

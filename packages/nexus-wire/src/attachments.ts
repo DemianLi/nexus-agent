@@ -70,6 +70,15 @@ export const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
 export const MAX_IMAGES_PER_MESSAGE = 20;
 
 /**
+ * 一句話的圖片位元組總量上限（編碼前），同 dsh 的 `DEFAULT_MAX_MESSAGE_IMAGE_BYTES`（`attachment-local/src/index.ts:38`）：200 MB。
+ * 剛好是請求本文上限（300 MiB）裝得下的最大值（200 MiB 的 base64 約 267 MiB）。
+ */
+export const MAX_MESSAGE_IMAGE_BYTES = 200 * 1024 * 1024;
+
+/** 每張圖的像素上限（寬乘高），同 dsh 的 `DEFAULT_MAX_IMAGE_PIXELS`（`attachment-local/src/index.ts:40`）：6400 萬。 */
+export const MAX_IMAGE_PIXELS = 64_000_000;
+
+/**
  * 收圖檢查的錯誤碼：這個會話目前的模型宣告了輸入種類、而裡面沒有 `image`。同 dsh 的 `MODEL_DOES_NOT_SUPPORT_IMAGES`，
  * 碼的寫法照我們其他的（`turn_not_found` 那一族）。那句話不進佇列、日誌不多東西。
  */
