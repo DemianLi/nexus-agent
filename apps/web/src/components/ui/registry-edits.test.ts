@@ -34,6 +34,14 @@ describe('registry 檔的改動還在', () => {
     expect(source).toContain("from '@/lib/utils'");
   });
 
+  test('dropdown-menu 字級走階梯、浮層用 shadow-menu 不用 registry 原文的 border＋shadow-md（#633）', () => {
+    const source = code(read('./dropdown-menu.tsx'));
+    expect(source).not.toMatch(/\btext-(xs|sm|base|lg)\b/);
+    expect(source).toContain('shadow-menu');
+    expect(source).not.toMatch(/shadow-md|(?<![-\w])border(?![-\w])/);
+    expect(source).toContain("from '@/lib/utils'");
+  });
+
   test('alert-dialog 字級走階梯、按鈕走我們的 buttonVariants（#437）', () => {
     const source = code(read('./alert-dialog.tsx'));
     expect(source).not.toMatch(/\btext-(xs|sm|base|lg)\b/);

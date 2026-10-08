@@ -1,7 +1,10 @@
 import type { ThreadSearchOutcome, ThreadSummary } from '@nexus/wire';
+import { ChevronRight } from 'lucide-react';
 import { useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import { RenameField, ThreadRowMenu } from '@/components/sidebar/thread-row-menu';
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   SidebarGroup,
   SidebarGroupLabel,
@@ -20,6 +23,8 @@ import {
   SEARCH_DEBOUNCE_MS,
 } from '@/lib/thread-search';
 import type { ContentMatches } from '@/lib/thread-search';
+import { splitThreads } from '@/lib/thread-management';
+import type { ThreadActionResult, ThreadManagement, ThreadSections } from '@/lib/thread-management';
 import { ROW_STATUS_TEXT } from '@/lib/thread-status';
 import type { RowStatus } from '@/lib/thread-status';
 import { threadLabel, withCurrentTitle } from '@/lib/thread-title';
@@ -48,6 +53,10 @@ export { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/lib/thread-title';
  * **狀態點**（[#632](https://github.com/DemianLi/nexus-agent/issues/632)）：即時的，照全域下行翻，規則在
  * `lib/thread-status.ts`。等人回答（核准、提問、計劃審核）＞ 在跑 ＞ 跑完沒看，一列只畫最前面那一種；點旁邊有給
  * 報讀器的那一句。等人回答的三種照 dsh 把第二行的時間換成短的那一句。
+ *
+ * **釘選、封存、改名**（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：給了 `management` 才有——每一列多一顆
+ * 「⋯」選單，清單最前面多一區「已釘選」（最近釘的在前，不分時間組），最後多一區「已封存」（預設收著、顯示份數；搜尋有命中時
+ * 自動展開）。沒給就跟以前一樣，什麼都不多畫。規則與開關見 `lib/thread-management.ts`。
  */
 
 function labelOf(item: ThreadSummary): string {
@@ -64,6 +73,7 @@ export function ThreadList({
   currentTitle,
   onPick,
   search,
+  management,
 }: {
   readonly directory: ThreadDirectory;
   readonly currentThreadId: string;
@@ -72,6 +82,8 @@ export function ThreadList({
   readonly onPick: (threadId: string) => void;
   /** 按內容搜（`WireClient.searchThreads`）；沒給就只比標題。 */
   readonly search?: (query: string, signal: AbortSignal) => Promise<ThreadSearchOutcome>;
+  /** 釘選、封存、改名（#633）；沒給就沒有那些。 */
+  readonly management?: ThreadManagement;
 }) {
   const { listing, statusOf, refresh } = directory;
   const labelId = useId();
@@ -82,6 +94,8 @@ export function ThreadList({
 
   const [query, setQuery] = useState('');
   const needle = query.trim();
+  const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [archivedOpen, setArchivedOpen] = useState(false);
   // **被拒不記住**：`rejected` 分不出是沒開、查詢不合法還是搜尋失敗（線上只帶訊息），記住的話偶發失敗一次這一頁就再也不搜
   // 內容。所以每一次都問，被拒或失敗就那一次只比標題。
   // 伺服器回過一次「有」之前不畫骨架：出廠是關的，先畫的話每次搜都會閃一下，「搜不到」也晚一拍（同 #653 的選單）。
@@ -138,6 +152,31 @@ export function ThreadList({
   );
   // 只比了標題：沒接、被拒、失敗，或還不知道開沒開。
   const titleOnly = !searching || fellBack || !on;
+  // 沒有 `management` 時全部歸「其餘」：畫面跟以前一樣。
+  const sections =
+    management === undefined
+      ? { pinned: [], rest: view.items, archived: [] }
+      : splitThreads(view.items, management.pinnedIds, management.archivedIds);
+  const rowManagement = (item: ThreadSummary): RowManagement => {
+    const id = item.threadId;
+    return {
+      title: management?.titles.get(id),
+      pinned: management?.pinnedIds.includes(id) ?? false,
+      archived: management?.archivedIds.has(id) ?? false,
+      current: id === currentThreadId,
+      onPin: () => management!.onPin(id),
+      onUnpin: () => management!.onUnpin(id),
+      onArchive: () => management!.onArchive(id),
+      onUnarchive: () => management!.onUnarchive(id),
+      onRename: () => setRenamingId(id),
+      onCommitRename: async (title: string) => {
+        const failure = await management!.onRename(id, title);
+        if (failure === undefined) setRenamingId(null);
+        return failure;
+      },
+      onCancelRename: () => setRenamingId(null),
+    };
+  };
 
   return (
     <SidebarGroup role="group" aria-labelledby={labelId} className="text-body">
@@ -173,12 +212,26 @@ export function ThreadList({
               />
               {view.items.length > 0 && (
                 <ThreadGroupList
-                  items={view.items}
-                  snippets={view.snippets}
-                  query={needle}
-                  currentThreadId={currentThreadId}
-                  statusOf={statusOf}
-                  onPick={onPick}
+                  sections={sections}
+                  row={(item) => (
+                    <ThreadRow
+                      key={item.threadId}
+                      item={item}
+                      snippet={view.snippets.get(item.threadId)}
+                      query={needle}
+                      status={statusOf(item)}
+                      current={item.threadId === currentThreadId}
+                      onPick={onPick}
+                      {...(management === undefined
+                        ? {}
+                        : {
+                            management: rowManagement(item),
+                            renaming: renamingId === item.threadId,
+                          })}
+                    />
+                  )}
+                  archivedOpen={archivedOpen || needle !== ''}
+                  onArchivedOpenChange={setArchivedOpen}
                 />
               )}
               {pending && (
@@ -220,44 +273,51 @@ export function ThreadList({
   );
 }
 
-/** 分好組的清單：空白那一列在最前面、不帶組名，之後每組一個標題。 */
+/**
+ * 分好組的清單：已釘選在最前面，之後空白那一列（不帶組名），之後每個時間組一個標題，最後是已封存（收合）。
+ * 釘選與封存兩區只有給了 `management` 才會有列（`splitThreads`）。
+ */
 function ThreadGroupList({
-  items,
-  snippets,
-  query,
-  currentThreadId,
-  statusOf,
-  onPick,
+  sections,
+  row,
+  archivedOpen,
+  onArchivedOpenChange,
 }: {
-  readonly items: readonly ThreadSummary[];
-  /** 內容命中的片段（#760），按 thread 查。 */
-  readonly snippets: ReadonlyMap<string, string>;
-  /** 片段裡要標亮的那一段。 */
-  readonly query: string;
-  readonly currentThreadId: string;
-  readonly statusOf: ThreadDirectory['statusOf'];
-  readonly onPick: (threadId: string) => void;
+  readonly sections: ThreadSections;
+  readonly row: (item: ThreadSummary) => ReactNode;
+  readonly archivedOpen: boolean;
+  readonly onArchivedOpenChange: (open: boolean) => void;
 }) {
-  const { blank, groups } = groupThreads(items, Date.now());
-  const row = (item: ThreadSummary) => (
-    <ThreadRow
-      key={item.threadId}
-      item={item}
-      snippet={snippets.get(item.threadId)}
-      query={query}
-      status={statusOf(item)}
-      current={item.threadId === currentThreadId}
-      onPick={onPick}
-    />
-  );
+  const { blank, groups } = groupThreads(sections.rest, Date.now());
   return (
     <>
+      {sections.pinned.length > 0 && (
+        <BucketGroup label="已釘選" testId="thread-pinned">
+          {sections.pinned.map(row)}
+        </BucketGroup>
+      )}
       {blank.length > 0 && <SidebarMenu>{blank.map(row)}</SidebarMenu>}
       {groups.map(({ bucket, items: members }) => (
         <BucketGroup key={bucket} label={BUCKET_LABEL[bucket]}>
           {members.map(row)}
         </BucketGroup>
       ))}
+      {sections.archived.length > 0 && (
+        <Collapsible
+          open={archivedOpen}
+          onOpenChange={onArchivedOpenChange}
+          className="mt-2"
+          data-testid="thread-archived"
+        >
+          <CollapsibleTrigger className="text-muted-foreground flex min-h-11 w-full items-center gap-1 rounded-md px-2 text-tip font-medium outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring lg:min-h-8 [&[data-state=open]>svg]:rotate-90">
+            <ChevronRight aria-hidden className="size-3.5 shrink-0 transition-transform" />
+            已封存（{sections.archived.length}）
+          </CollapsibleTrigger>
+          <CollapsibleContent>
+            <SidebarMenu>{sections.archived.map(row)}</SidebarMenu>
+          </CollapsibleContent>
+        </Collapsible>
+      )}
     </>
   );
 }
@@ -265,13 +325,15 @@ function ThreadGroupList({
 function BucketGroup({
   label,
   children,
+  testId = 'thread-bucket',
 }: {
   readonly label: string;
   readonly children: ReactNode;
+  readonly testId?: string;
 }) {
   const labelId = useId();
   return (
-    <div role="group" aria-labelledby={labelId} className="mt-2" data-testid="thread-bucket">
+    <div role="group" aria-labelledby={labelId} className="mt-2" data-testid={testId}>
       <div id={labelId} className="text-muted-foreground px-2 pb-1 text-tip font-medium">
         {label}
       </div>
@@ -289,6 +351,22 @@ const DOT_CLASS: Record<Exclude<RowStatus, undefined>, string> = {
   completed: 'bg-success',
 };
 
+/** 一列上的管理（#633）：有它才畫「⋯」選單與改名輸入。 */
+interface RowManagement {
+  /** 使用者改過的標題。 */
+  readonly title: string | undefined;
+  readonly pinned: boolean;
+  readonly archived: boolean;
+  readonly current: boolean;
+  readonly onPin: () => ThreadActionResult;
+  readonly onUnpin: () => ThreadActionResult;
+  readonly onArchive: () => ThreadActionResult;
+  readonly onUnarchive: () => ThreadActionResult;
+  readonly onRename: () => void;
+  readonly onCommitRename: (title: string) => ThreadActionResult;
+  readonly onCancelRename: () => void;
+}
+
 function ThreadRow({
   item,
   snippet,
@@ -296,6 +374,8 @@ function ThreadRow({
   status,
   current,
   onPick,
+  management,
+  renaming = false,
 }: {
   readonly item: ThreadSummary;
   readonly snippet: string | undefined;
@@ -303,7 +383,22 @@ function ThreadRow({
   readonly status: RowStatus;
   readonly current: boolean;
   readonly onPick: (threadId: string) => void;
+  readonly management?: RowManagement;
+  /** 這一列正在改名：原地換成輸入框。 */
+  readonly renaming?: boolean;
 }) {
+  const label = management?.title ?? labelOf(item);
+  if (management !== undefined && renaming) {
+    return (
+      <SidebarMenuItem>
+        <RenameField
+          initial={label}
+          onCommit={management.onCommitRename}
+          onCancel={management.onCancelRename}
+        />
+      </SidebarMenuItem>
+    );
+  }
   const compact = status === undefined ? undefined : ROW_STATUS_TEXT[status].compact;
   return (
     <SidebarMenuItem>
@@ -313,10 +408,16 @@ function ThreadRow({
         isActive={current}
         disabled={current}
         onClick={() => onPick(item.threadId)}
-        className="h-auto min-h-11 flex-col items-start gap-0.5 lg:min-h-9"
+        className={cn(
+          'h-auto min-h-11 flex-col items-start gap-0.5 lg:min-h-9',
+          // 右邊留給「⋯」。
+          management !== undefined && 'pr-10 lg:pr-8',
+        )}
       >
         <span className="flex w-full min-w-0 items-center gap-2">
-          <span className="min-w-0 flex-1 truncate">{labelOf(item)}</span>
+          <span className="min-w-0 flex-1 truncate" data-testid="thread-title-text">
+            {label}
+          </span>
           {status !== undefined && (
             <span
               className="flex shrink-0 items-center"
@@ -361,6 +462,19 @@ function ThreadRow({
           </span>
         )}
       </SidebarMenuButton>
+      {management !== undefined && (
+        <ThreadRowMenu
+          label={label}
+          pinned={management.pinned}
+          archived={management.archived}
+          current={management.current}
+          onPin={management.onPin}
+          onUnpin={management.onUnpin}
+          onArchive={management.onArchive}
+          onUnarchive={management.onUnarchive}
+          onRename={management.onRename}
+        />
+      )}
     </SidebarMenuItem>
   );
 }

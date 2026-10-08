@@ -39,6 +39,8 @@ import { SM_BREAKPOINT, useMinWidth } from '@/hooks/use-min-width';
 import { MODEL_SELECTION_PROJECTION, useModelSeat } from '@/hooks/use-model-seat';
 import { PERMISSIONS_PROJECTION_KEY, usePermissionSeat } from '@/hooks/use-permission-seat';
 import { useThreadDirectory } from '@/hooks/use-thread-directory';
+import { useThreadManagement } from '@/hooks/use-thread-management';
+import type { ThreadManagement } from '@/lib/thread-management';
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { useThemePreference } from '@/hooks/use-theme-preference';
 import { agentBaseUrl, createAgentClient } from '@/lib/agent';
@@ -177,6 +179,8 @@ export function App({ client }: { client?: WireClient } = {}) {
   const [theme] = useThemePreference();
   // 清單與每一列的即時狀態（#632）也在 thread 外面：換一條不重開全域下行，「跑完沒看」不歸零。
   const directory = useThreadDirectory(wire, choice.threadId);
+  // 釘選、封存、改名（#633）也在 thread 外面：換一條不歸零。開關沒開時是 `undefined`，側欄什麼都不多畫。
+  const threadManagement = useThreadManagement();
   // 換 thread 有兩條路（「新對話」與從清單點一條），**後按的那一下贏**：「新對話」要先讀清單，讀回來之前人已經從清單
   // 點了別條的話，晚到的結果不能把人拉回去。讀清單期間再按一次「新對話」不另開一次（dsh `connectWorkspace` 的
   // `connecting`）——兩次讀到的是同一份清單，只會換一次。
@@ -218,6 +222,7 @@ export function App({ client }: { client?: WireClient } = {}) {
         key={choice.threadId}
         client={wire}
         directory={directory}
+        threadManagement={threadManagement}
         threadId={choice.threadId}
         notice={ORIGIN_NOTICE[choice.origin]}
         onNewConversation={newConversation}
@@ -235,6 +240,7 @@ export function App({ client }: { client?: WireClient } = {}) {
 function ConversationView({
   client,
   directory,
+  threadManagement,
   threadId,
   notice,
   onNewConversation,
@@ -242,6 +248,7 @@ function ConversationView({
 }: {
   readonly client: WireClient;
   readonly directory: ThreadDirectory;
+  readonly threadManagement: ThreadManagement | undefined;
   readonly threadId: string;
   readonly notice: string | undefined;
   readonly onNewConversation: (engaged: boolean) => void;
@@ -481,6 +488,7 @@ function ConversationView({
         onNewConversation={() => onNewConversation(engaged)}
         onPick={onSwitch}
         search={searchThreads}
+        {...(threadManagement === undefined ? {} : { management: threadManagement })}
       />
       {/* `SidebarInset` 就是 `<main>`。 */}
       {/* 基準寬 480：右側欄打開時會話區至少留這麼多，視窗再窄才輪到它讓（#640，見 `right-sidebar.tsx`）。 */}
