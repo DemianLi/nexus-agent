@@ -99,6 +99,13 @@ import { createSummarizationMiddleware } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
+import {
+  assumedFileLine,
+  hasAttachmentBlocks,
+  rewriteAttachmentBlocks,
+  summaryImageText,
+} from './attachment-projection.js';
+import { isFileBlock } from './attachment-ref.js';
 import { toLoggedMessage } from './logged-message.js';
 import { captureModelCall, withModelCall } from './model-call-scope.js';
 import { readModelUsage, type ModelUsage } from './model-usage.js';
@@ -484,7 +491,7 @@ export function createSummarizer(
     },
   }) as unknown as AgentMiddleware;
   // 貼著基座包：外面幾層看到的 `request.model` 與交下去的都是原本那顆，不會碰到替身。
-  const quiet = withQuietSummaryCall(base);
+  const quiet = withQuietSummaryCall(withAttachmentText(base));
   // 兩層各管一個方向，刻意不合成一層：剪刀改請求、日誌讀回傳，合起來寫會讓兩個獨立的
   // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。預算那層讀的是基座交下去的
   // 請求，不是進來的那份，也不碰回傳值。
@@ -511,6 +518,65 @@ export function createSummarizer(
  * 全部不送。
  */
 const SUMMARY_CALL_TAG = 'nostream';
+
+/**
+ * 摘要器看見的訊息裡，附件區塊換成文字（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。
+ *
+ * ## 病
+ *
+ * 基座把要摘要的訊息用 `getBufferString` 串成一段文字（`dist/langsmith-zm0ILQsV.js:3082`，歷史檔 `:3035` 也是），而它對不認得的
+ * 區塊只寫 `[<type>]`——`[nexus-file]`。使用者附過哪個檔、存在哪裡全部消失，摘要寫不出「使用者給了 report.csv」，
+ * 摘要之後模型也不知道去哪讀。歷史檔裡同理。
+ *
+ * ## 做法
+ *
+ * 進基座之前，把訊息裡的檔案區塊換成**組請求時同一行字**（{@link assumedFileLine}，假設讀得到），圖換成
+ * {@link summaryImageText}。基座再把請求交下去時（留下的那幾則給主模型），**換回原本那幾則**：留下的訊息裡有圖，
+ * 主模型還要看，那一步是 `ChatOpenAI` 子類（`apps/harness`）依模型能力投影，不是這裡。
+ *
+ * ## 與 dsh 的偏離（AGENTS.md 的規則）
+ *
+ * dsh 的摘要器把圖當圖重播給摘要模型（`packages/compaction/compaction-basic/src/summarizer.ts:105-152`，`5badb150`；
+ * 檔案換成 handle 那一行，與這裡相同）。我們的摘要輸入是基座的 `getBufferString` 範本、輸入是一段字串，表達不出
+ * 「一則帶圖的訊息」，所以圖退到文字佔位。檔案那一行逐字相同。
+ *
+ * @param base - 基座那顆摘要器。
+ * @returns 同名、同狀態、摘要輸入裡附件是文字的 middleware。沒有附件時請求原樣通過。
+ */
+function withAttachmentText(base: AgentMiddleware): AgentMiddleware {
+  const inner = base.wrapModelCall?.bind(base);
+  /* v8 ignore next -- 同 withCompactionLog。 */
+  if (inner === undefined) return base;
+  return {
+    ...base,
+    wrapModelCall: async (request, handler) => {
+      const messages = request.messages ?? [];
+      if (!messages.some(hasAttachmentBlocks)) return inner(request, handler);
+      const projected = await rewriteAttachmentBlocks(messages, (block) => ({
+        type: 'text',
+        text: isFileBlock(block)
+          ? assumedFileLine(block.attachment)
+          : summaryImageText(block.attachment),
+      }));
+      // 投影後的訊息 → 原本那則；基座交下去時（留下給主模型的那幾則）換回來。
+      const originals = new Map<BaseMessage, BaseMessage>();
+      for (const [index, message] of projected.entries()) {
+        const original = messages[index];
+        if (original !== undefined && message !== original) originals.set(message, original);
+      }
+      return inner({ ...request, messages: [...projected] }, (sent) =>
+        handler(
+          sent.messages === undefined
+            ? sent
+            : {
+                ...sent,
+                messages: sent.messages.map((message) => originals.get(message) ?? message),
+              },
+        ),
+      );
+    },
+  } as AgentMiddleware;
+}
 
 /**
  * 生摘要那一次呼叫報回的用量（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：外層 {@link withCompactionLog}

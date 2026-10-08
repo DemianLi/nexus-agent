@@ -92,6 +92,13 @@ export function attachmentBlock(ref: AttachmentRef): FileBlock | ImageBlock {
     : { type: 'nexus-image', attachment: attachment as ImageAttachmentRef };
 }
 
+/** 區塊還原成參照（{@link attachmentBlock} 的反向）；不是附件區塊回 `undefined`。 */
+export function attachmentRefOfBlock(block: unknown): AttachmentRef | undefined {
+  if (isFileBlock(block)) return { type: 'file', ...block.attachment };
+  if (isImageBlock(block)) return { type: 'image', ...block.attachment };
+  return undefined;
+}
+
 /** 這個內容區塊是不是檔案區塊。 */
 export function isFileBlock(block: unknown): block is FileBlock {
   return (

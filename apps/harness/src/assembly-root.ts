@@ -518,11 +518,14 @@ function createCliModel(
   liveModel: LiveModelConfig,
   credentials: CredentialService | undefined,
   plugins: readonly PluginEntry[],
+  attachments: AttachmentStore | undefined,
 ): BaseChatModel {
   // **`--live` 是進 live 的唯一閘門**，不看選擇列（理由見 `model-provider.ts`）；沒帶它才由清單上的
   // `agent-default-model` 在清單上的提供者之間選（#670）：出貨值指的是清單上那一列腳本提供者 `cli-script`。
   if (!live) return resolveDefaultModel(plugins);
-  return createLiveModel(liveModel, undefined, credentials);
+  return createLiveModel(liveModel, undefined, credentials, {
+    ...(attachments !== undefined && { attachments }),
+  });
 }
 
 export type NexusAgent = NexusAgentHandle['agent'];
@@ -736,7 +739,13 @@ export async function createCliAgent(
 }> {
   const liveModel = invocation.liveModel ?? startupSetting(plugins, liveModelPlugin);
   const subagentToolFilter = startupSetting(plugins, backgroundSubagentsPlugin).toolFilter;
-  const model = createCliModel(invocation.live, liveModel, invocation.credentials, plugins);
+  const model = createCliModel(
+    invocation.live,
+    liveModel,
+    invocation.credentials,
+    plugins,
+    invocation.attachments,
+  );
   // **標題模型是另一顆實例**：輸出上限換成標題那一列的，並表明用途，由 `createLiveModel` 決定要不要關推理
   // （`live-model.ts` 的 `LiveModelPurpose`）。`.env` 已經在入口（`runCli`／`runServe`）載入過了。
   const attachTitle =
@@ -821,7 +830,11 @@ export async function createCliAgent(
   // **每會話模型選擇只在 `--live` 時有**（#723）：假模型沒有型錄可選。控制器由組裝點建、經 `createNexusAgent` 折進 root，
   // 同一個 host 回傳給呼叫端（serve 的 `model.catalog`／`model.select` 用它驗型錄）。
   const modelSelection = invocation.live
-    ? createModelSelectionHost({ liveModel, credentials: invocation.credentials })
+    ? createModelSelectionHost({
+        liveModel,
+        credentials: invocation.credentials,
+        ...(invocation.attachments !== undefined && { attachments: invocation.attachments }),
+      })
     : undefined;
   const {
     agent,

@@ -39,8 +39,9 @@ import type {
 
 import type { CredentialService } from './credentials.js';
 import { createLiveModel } from './live-model.js';
-import { findModelEntry } from './model-catalog.js';
-import type { ModelEntry } from './model-catalog.js';
+import type { AttachmentSource } from './attachment-projection.js';
+import { acceptsImages, findModelEntry } from './model-catalog.js';
+import type { ImageSupport, ModelEntry } from './model-catalog.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 
 /** 今天能送到線上的推理等級（同 `subagent-model-selection.ts` 的 `SUPPORTED_EFFORTS`，那一份是它自己的清單）。 */
@@ -76,6 +77,11 @@ export interface ModelSelectionHost {
    * @throws 控制器還沒接上這條 thread 的日誌（組裝期之後不該發生）。
    */
   select(selection: ModelSelection): ModelSelectResult;
+  /**
+   * 這條 thread **下一個請求**用的那顆收不收圖（[#732](https://github.com/DemianLi/nexus-agent/issues/732) 的收圖檢查）：
+   * 使用者選的那顆，沒選過是預設。型錄沒有那一筆（續接的會話選過、後來被拿掉的）是 `'undeclared'`，不替它拒。
+   */
+  imageSupport(): ImageSupport;
 }
 
 /**
@@ -87,8 +93,10 @@ export interface ModelSelectionHost {
 export function createModelSelectionHost(options: {
   readonly liveModel: LiveModelConfig;
   readonly credentials: CredentialService | undefined;
+  /** 附件儲存（#732）：給了，這裡建的別顆實例也會在送出請求前投影附件。 */
+  readonly attachments?: AttachmentSource;
 }): ModelSelectionHost {
-  const { liveModel, credentials } = options;
+  const { liveModel, credentials, attachments } = options;
   const defaultRoute: ModelRoute = { model: liveModel.modelId };
   const instances = new Map<string, BaseChatModel>();
 
@@ -104,6 +112,7 @@ export function createModelSelectionHost(options: {
         // 使用者改選一顆型錄上有的就恢復。
         instance = createLiveModel({ ...liveModel, modelId: route.model }, undefined, credentials, {
           ...(route.effort === 'off' && { thinkingOff: true }),
+          ...(attachments !== undefined && { attachments }),
         });
         instances.set(key, instance);
       }
@@ -136,6 +145,11 @@ export function createModelSelectionHost(options: {
       if ('code' in route) return { ok: false, error: route };
       controller.select(route);
       return { ok: true, value: { selected: selection } };
+    },
+    imageSupport() {
+      const { selected } = controller.state();
+      const entry = findModelEntry(liveModel.models, (selected ?? defaultRoute).model);
+      return entry === undefined ? 'undeclared' : acceptsImages(entry);
     },
     validate(selection) {
       const entry = findModelEntry(liveModel.models, selection.modelId);

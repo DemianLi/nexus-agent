@@ -47,6 +47,8 @@ import type {
   ThreadSearchResponse,
   ThreadSearchResult,
   UplinkMethod,
+  ImageMediaType,
+  PromptAttachment,
   UploadResponse,
   WireErrorCode,
   WireChannel,
@@ -75,6 +77,7 @@ import {
   isPermissionMethod,
   isThreadManagementMethod,
   isSubagentListMethod,
+  MODEL_DOES_NOT_SUPPORT_IMAGES,
   uploadPath,
   UPLOAD_NAME_PARAM,
   isDeliverableMethod,
@@ -100,6 +103,7 @@ import {
   successResponse,
 } from '@nexus/wire';
 import type {
+  AttachmentRef,
   CommandRegistrationPoint,
   ProjectionRegistrationPoint,
   FeedbackCategory,
@@ -113,7 +117,8 @@ import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { AttachmentError } from './attachment-store.js';
-import type { AttachmentStore, FileAttachmentRef } from './attachment-store.js';
+import type { AttachmentStore, FileAttachmentRef, ImageAttachmentRef } from './attachment-store.js';
+import { admitImages, ImageIntakeError } from './image-intake.js';
 import { isBackgroundRunId } from './background-run-id.js';
 import { BackgroundSubagentError } from './background-subagents.js';
 import type { BackgroundSubagentControl } from './background-subagents.js';
@@ -203,7 +208,7 @@ export interface ThreadAgent {
    * 每會話模型選擇（[#723](https://github.com/DemianLi/nexus-agent/issues/723)），選配。沒帶 `--live`（假模型沒有型錄）的組裝就沒有，
    * 那時 `model.catalog`／`model.select` 回 `not_supported`，web 據這個碼把模型座藏起來。
    */
-  readonly modelSelection?: Pick<ModelSelectionHost, 'catalog' | 'state' | 'select'>;
+  readonly modelSelection?: ThreadModelSelection;
   dispose(): Promise<void>;
   /**
    * 把這個 thread 的**每一份**會話日誌接上遙測、不變量配套入口與參與者，**必填**（[#668](https://github.com/DemianLi/nexus-agent/issues/668)）。
@@ -647,6 +652,50 @@ function requestedChannels(body: EventStreamRequest): readonly WireChannel[] | u
  * `@nexus/plugin-commands` 的配套入口就是靠那件事在檢查 `command/run` 與
  * `command/done` 的配對。
  */
+/**
+ * `run.start` 的 `attachments` 逐件驗形狀（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。
+ *
+ * @returns 合格的陣列，或一句講哪一件不對的話。
+ */
+function promptAttachmentsOf(raw: readonly unknown[]): readonly PromptAttachment[] | string {
+  const shaped: PromptAttachment[] = [];
+  for (const [index, item] of raw.entries()) {
+    const entry = item as Record<string, unknown> | null;
+    const where = `attachments[${String(index)}]`;
+    if (entry === null || typeof entry !== 'object') return `${where} 要是物件`;
+    if (entry['type'] === 'file') {
+      if (typeof entry['receiptId'] !== 'string' || entry['receiptId'] === '') {
+        return `${where} 是檔案，要帶 receiptId`;
+      }
+      shaped.push({ type: 'file', receiptId: entry['receiptId'] });
+    } else if (entry['type'] === 'image') {
+      if (typeof entry['mediaType'] !== 'string' || typeof entry['data'] !== 'string') {
+        return `${where} 是圖片，要帶 mediaType 與 data（base64）`;
+      }
+      if (entry['name'] !== undefined && typeof entry['name'] !== 'string') {
+        return `${where} 的 name 要是字串`;
+      }
+      shaped.push({
+        type: 'image',
+        mediaType: entry['mediaType'] as ImageMediaType,
+        data: entry['data'],
+        ...(entry['name'] === undefined ? {} : { name: entry['name'] }),
+      });
+    } else {
+      return `${where} 的 type 要是 file 或 image`;
+    }
+  }
+  const receiptIds = shaped.flatMap((attachment) =>
+    attachment.type === 'file' ? [attachment.receiptId] : [],
+  );
+  if (new Set(receiptIds).size !== receiptIds.length) return '同一份收據不能在一句話裡用兩次';
+  return shaped;
+}
+
+/** wire 要的那一面。`imageSupport` 選填：只做型錄與選擇的替身不必實作，沒有就不做收圖檢查（同沒宣告）。 */
+type ThreadModelSelection = Pick<ModelSelectionHost, 'catalog' | 'state' | 'select'> &
+  Partial<Pick<ModelSelectionHost, 'imageSupport'>>;
+
 interface ThreadState {
   readonly pump: ThreadPump;
   readonly commands: Pick<CommandRegistrationPoint, 'find' | 'list'>;
@@ -654,7 +703,7 @@ interface ThreadState {
   readonly feedback: FeedbackService | undefined;
   readonly workspaceChanges: WorkspaceChanges | undefined;
   readonly permissionPresets: { catalog(): PermissionCatalog } | undefined;
-  readonly modelSelection: Pick<ModelSelectionHost, 'catalog' | 'state' | 'select'> | undefined;
+  readonly modelSelection: ThreadModelSelection | undefined;
   /**
    * 接回來那批事件的長度；沒續接就是 0（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
    *
@@ -1112,6 +1161,95 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     return json(response);
   }
 
+  /**
+   * 收下一句話帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：**全部通過才收，一張不行整句拒收**。
+   *
+   * 1. **收圖檢查**：這條 thread 下一個請求用的那顆宣告了輸入種類、而裡面沒有 `image` → `model_does_not_support_images`
+   *    （照 dsh `commands.ts:336-348`）；什麼都沒宣告照收。檢查在碰收據、解 base64 之前。
+   * 2. **收據**：必須是這條 thread 發的、沒用過的；同一句話不能用兩次。**收下的那一刻就從表裡拿掉**（同步，賽跑的第二個請求拿不到），
+   *    後面任何一步失敗再放回去——整句拒收，使用者可以修了重送，檔案不必重傳。
+   * 3. **圖**：四道上限與格式（`image-intake.ts`），通過才存進附件儲存。
+   *
+   * @returns 參照（照選取順序，只放參照），或要回給呼叫端的錯誤。
+   */
+  async function admitAttachments(
+    thread: ThreadState,
+    threadId: string,
+    id: number,
+    attachments: readonly PromptAttachment[],
+  ): Promise<readonly AttachmentRef[] | Response> {
+    const store = options.attachments;
+    /* v8 ignore next -- 呼叫端已擋過。 */
+    if (store === undefined)
+      return json(errorResponse(id, 'not_supported', '這個組裝沒有附件儲存'));
+    const images = attachments.filter(
+      (attachment): attachment is Extract<PromptAttachment, { type: 'image' }> =>
+        attachment.type === 'image',
+    );
+    if (images.length > 0 && thread.modelSelection?.imageSupport?.() === 'rejects') {
+      return json(
+        errorResponse(
+          id,
+          MODEL_DOES_NOT_SUPPORT_IMAGES,
+          '目前的模型不收圖片：換一顆能看圖的模型，或拿掉圖片再送',
+        ),
+      );
+    }
+    const own = receipts.get(threadId);
+    const taken: [string, FileAttachmentRef][] = [];
+    const restore = () => {
+      if (own === undefined) return;
+      for (const [receiptId, ref] of taken) own.set(receiptId, ref);
+    };
+    const resolved = new Map<PromptAttachment, FileAttachmentRef>();
+    for (const attachment of attachments) {
+      if (attachment.type !== 'file') continue;
+      const ref = own?.get(attachment.receiptId);
+      if (own === undefined || ref === undefined) {
+        restore();
+        return json(
+          errorResponse(
+            id,
+            'invalid_argument',
+            `收據 ${attachment.receiptId} 不存在、已經用過，或不是這條 thread 發的`,
+          ),
+        );
+      }
+      own.delete(attachment.receiptId);
+      taken.push([attachment.receiptId, ref]);
+      resolved.set(attachment, ref);
+    }
+    try {
+      const admittedImages = admitImages(images);
+      const saved = new Map<PromptAttachment, ImageAttachmentRef>();
+      for (const [index, image] of admittedImages.entries()) {
+        saved.set(
+          images[index]!,
+          await store.saveImage({
+            data: image.bytes,
+            mediaType: image.mediaType,
+            width: image.width,
+            height: image.height,
+            name: image.name,
+          }),
+        );
+      }
+      return attachments.map((attachment): AttachmentRef => {
+        const file = resolved.get(attachment);
+        if (file !== undefined) return { type: 'file', ...file };
+        return { type: 'image', ...saved.get(attachment)! };
+      });
+    } catch (error: unknown) {
+      restore();
+      if (error instanceof ImageIntakeError) {
+        return json(errorResponse(id, 'invalid_argument', error.message));
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      options.warn?.(`[附件] thread ${threadId} 的圖存不下：${reason}`);
+      return json(errorResponse(id, 'unknown_error', `圖存不下：${reason}`));
+    }
+  }
+
   function openStream(
     pump: ThreadPump,
     channels: readonly WireChannel[],
@@ -1316,8 +1454,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       }
       // **停在核准點時照收**（#637 的 Q4，同 dsh）：以前這裡回錯，因為基座會照跑新的一輪、把中斷靜靜丟掉。
       // 現在收下的這句進送出佇列，由 pump 停住，等中斷答完、那一輪收掉才跑（#629，`ThreadPump.#nextIndex`）。
-      // 附件（#732）：契約先合，實作還沒做。**帶了就整句拒絕**，不悄悄收下文字、丟掉附件——使用者以為檔案送出去了。
+      // 附件（#732）：先驗形狀（便宜、不碰任何東西），收據與圖的收下留到最後——前面任何一道擋掉這句話時，收據不該被用掉。
       const attachments = (params as { attachments?: unknown }).attachments;
+      let promptAttachments: readonly PromptAttachment[] = [];
       if (attachments !== undefined) {
         if (!Array.isArray(attachments)) {
           return json(
@@ -1325,7 +1464,16 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           );
         }
         if (attachments.length > 0) {
-          return json(errorResponse(command.id, 'not_supported', '這個組裝還不收附件'));
+          if (options.attachments === undefined) {
+            return json(
+              errorResponse(command.id, 'not_supported', '這個組裝沒有附件儲存，不收附件'),
+            );
+          }
+          const shaped = promptAttachmentsOf(attachments);
+          if (typeof shaped === 'string') {
+            return json(errorResponse(command.id, 'invalid_argument', shaped));
+          }
+          promptAttachments = shaped;
         }
       }
       // 點名子代理（#328 第 2 項）：同附件，契約先合、實作還沒做，**有值就整句拒絕**，不悄悄收下文字、丟掉點名。
@@ -1352,11 +1500,18 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       // **`run_id` 就是這一件在送出佇列裡的 id**：畫面據它對上自己送出的那一句（推送裡的 `claimed.id`，插話是
       // `claimedNextStep` 裡的那一件）。插話在這一輪不收時退成排隊，由 pump 決定，這裡不分。
       const runId = crypto.randomUUID();
+      let admitted: readonly AttachmentRef[] = [];
+      if (promptAttachments.length > 0) {
+        const outcome = await admitAttachments(thread, threadId, command.id, promptAttachments);
+        if (outcome instanceof Response) return outcome;
+        admitted = outcome;
+      }
       start(pump, {
         kind: 'message',
         text,
         id: runId,
         ...(mode === 'steer' ? { steer: true as const } : {}),
+        ...(admitted.length > 0 && { attachments: admitted }),
       });
       return json(successResponse(command.id, { run_id: runId }));
     }

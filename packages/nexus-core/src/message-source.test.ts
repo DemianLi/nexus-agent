@@ -8,6 +8,7 @@
 import { HumanMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 
+import { attachmentBlock } from './attachment-ref.js';
 import { replayConversation } from './conversation-replay.js';
 import {
   humanMessageForTurnStart,
@@ -62,6 +63,50 @@ describe('humanMessageForTurnStart', () => {
     const message = humanMessageForTurnStart({ kind: 'message', text: '嗨' });
     expect(messageSourceOf(message)).toBeUndefined();
     expect(isMachineMessage(message)).toBe(false);
+  });
+
+  const FILE = {
+    type: 'file' as const,
+    attachmentId: `sha256:${'a'.repeat(64)}`,
+    name: 'a.txt',
+    bytes: 3,
+  };
+  const IMAGE = {
+    type: 'image' as const,
+    attachmentId: `sha256:${'b'.repeat(64)}`,
+    mediaType: 'image/png' as const,
+    bytes: 9,
+    width: 1,
+    height: 1,
+  };
+
+  it('帶附件：內容是「附件區塊（選的順序）＋文字區塊」，參照原樣；沒附件仍是純字串', () => {
+    const message = humanMessageForTurnStart({
+      kind: 'message',
+      text: '看這個',
+      attachments: [IMAGE, FILE],
+    });
+    expect(message.content).toEqual([
+      attachmentBlock(IMAGE),
+      attachmentBlock(FILE),
+      { type: 'text', text: '看這個' },
+    ]);
+    // 區塊裡是參照（沒有 `type: 'file'` 那一欄），不是位元組。
+    expect(JSON.stringify(message.content)).not.toContain('"type":"file"');
+    expect(humanMessageForTurnStart({ kind: 'message', text: '嗨', attachments: [] }).content).toBe(
+      '嗨',
+    );
+    expect(humanMessageForTurnStart({ kind: 'message', text: '嗨' }).content).toBe('嗨');
+  });
+
+  it('只有附件沒有字：不放空文字區塊', () => {
+    const message = humanMessageForTurnStart({ kind: 'message', text: '', attachments: [FILE] });
+    expect(message.content).toHaveLength(1);
+    expect((message.content as { type: string }[])[0]!.type).toBe('nexus-file');
+  });
+
+  it('別種 kind 的 turn/start 不帶附件', () => {
+    expect(humanMessageForTurnStart(GOAL).content).toBe('續行');
   });
 
   it('resume 造不出訊息：大聲拋', () => {

@@ -104,6 +104,7 @@ export type {
   ImageMediaType,
   PromptAttachment,
   UploadReceipt,
+  WireAttachmentRef,
   UploadResponse,
 } from './attachments.js';
 export {
