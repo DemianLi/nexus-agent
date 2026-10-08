@@ -13,7 +13,7 @@
 | 區塊 | 來源 | 核對狀況 |
 | --- | --- | --- |
 | §二 dsh 的事件匯流排與事件清單 | 讀 `vendor/cordis/src/events.ts`（352 行，全文）、`packages/core/agent/src/runtime-types.ts` 的事件宣告、`packages/core/tools/src/index.ts` 與 `packages/llm/llm/src/index.ts` 的 waterfall 宣告、`docs/event-producer-consumer.zh.md`、`docs/tool-execution-pipeline.zh.md`、`docs/architecture.zh.md` | 第一手 |
-| §二 dsh 的迴圈**實作** | **沒讀**。`packages/core/agent-loop/src/agent.ts`（688 行）與 `index.ts`（893 行）我只讀了它們宣告的事件，沒讀迴圈怎麼走 | 見 §七 |
+| §二 dsh 的迴圈**實作** | 初稿沒讀；2026-10-08 補讀：`agent-loop/src/agent.ts`（全文）、`tool-calls.ts`、`inbox.ts`、`index.ts`（前 300 行與 `resume` 段，300–800 行的組裝段沒讀）、`interaction/user-approval/src/{index,types}.ts`、`core/session/src/repair.ts` 與 `deriveMessages()` | 第一手；結論在 §六；`assistant-stream.ts`、`runtime-context.ts`、持久化實作沒讀 |
 | §三 nexus 的 middleware 盤點 | `grep` 正式碼（排除測試與夾具）的 `createMiddleware` 與六種鉤子名 | 第一手的計數；**「每顆做什麼」只讀了檔名與 `step-inbox.ts` 的檔頭，分類是初步的** |
 | §三 #190 的偏離登記與索引 | `gh issue view 190`、`apps/harness/src/interception-index.test.ts` 檔頭 | 第一手 |
 | §四、§五 | 判斷，不是事實 | — |
@@ -124,11 +124,27 @@ dsh 宣告了 81 個 harness 事件（`event-producer-consumer.zh.md`），迴�
 
 ## 六、最難的設計決定（列出來，不替你決定）
 
-**D1 模型歷史的真相來源。** dsh 是會話日誌，`agent/request` 不能改訊息；nexus 今天是 LangGraph 的狀態加另一份會話日誌，`PrunedMemorySaver`（保留 1 份）是權宜之計。照 dsh 做，就要有一個從日誌推出訊息的投影（`deriveMessages()` 那種），而**今天靠 `wrapModelCall` 改寫訊息的插件**（`system-prompt`、`agent-instructions`、`file-references`、`plan-mode` 等，名單未逐檔核對）都要改成走「已記錄」的通道。**這是整份草稿最大的缺口**，也是不能靠橋接 middleware 輕鬆跨過去的一步。
+以下 D1–D3 已依 2026-10-08 補讀 dsh 迴圈實作更新（`references/deepseek-harness`，`5badb15009a`）。
 
-**D2 迴圈本體住哪裡。** 今天 pump 在圖外，圖在 LangGraph；`step-inbox.ts` 與 `turn-cancel.ts` 靠 `configurable` 把圖外的東西交進圖裡。事件化之後迴圈是 core 的 driver，這類載體應該消失。這是收益，也是範圍：driver 要自己寫。
+**D1 模型歷史的真相來源。** dsh 的答案是：**會話日誌是唯一真相，沒有第二份狀態，也沒有 checkpoint。**
+- 每一步請求都從 `session.deriveMessages()` 現推（`agent.ts:671`）。該函式走日誌裡標了 `surfaceOp` 的事件；壓縮是 `replace` 掉被蓋住的節點；結果有快取，只在尾端長出新節點時增量計算（`session/src/index.ts:856`）。
+- 送進模型的東西一律先 append 進日誌，才組請求：`user/message`、`system/message`、`request/header` 都在 `buildRequest` 之前寫入（`agent.ts:410-425`）。這是「model-visible ⟺ logged」在程式裡的落點。
+- `agent/request` 只能換 `LlmCallConfig`，不能改訊息（`agent.ts:576`，種子 config 是 deepFreeze 過的）。
+- 待處理輸入（inbox）也是日誌事件 `agent/inbox/spliced` 的折疊，不是記憶體佇列（`inbox.ts`），所以崩潰後排隊中的訊息還在。
 
-**D3 核准與中斷。** 今天的 HITL 用 LangGraph 的 `interrupt`／`resume`，核准可以跨行程重啟。dsh 的做法是 `tools/pre-execute` 裡的 async 等待。**dsh 在行程重啟後怎麼恢復一個等待中的核准，我沒查**（需要讀 `agent.ts` 與 `user-approval`）。這決定我們能不能放棄 `interrupt`。
+nexus 今天是 LangGraph 狀態加另一份會話日誌，`PrunedMemorySaver`（保留 1 份）是權宜之計。照 dsh 做，就是**拿掉 LangGraph 狀態那一份，歷史由日誌推導**，而**今天靠 `wrapModelCall` 改寫訊息的插件**（`system-prompt`、`agent-instructions`、`file-references`、`plan-mode` 等，名單未逐檔核對）都要改成走「已記錄」的通道。我看不出只要「重啟後任何狀態都能從日誌還原」這個性質就能折衷的路線。**這是整份草稿最大的缺口**，也是不能靠橋接 middleware 輕鬆跨過去的一步。
+
+**D2 迴圈本體住哪裡。** dsh 的迴圈是一個普通 class（`ReactLoopAgent`，`agent.ts` 約 690 行），不是圖：`turn()` 外層 `while` 循環 `step()`，每步是「準備請求 → 串流 → 寫 assistant 訊息 → 執行工具」；狀態只有 idle／running／maintenance 三個 phase，中止靠 `AbortController`。擴充點全是事件：`agent/pre-step`、`agent/request`、`agent/request-error`、`agent/turn-stopping`，工具端是 `tools/*`。工具排程獨立在 `tool-calls.ts`：獨占的工具當屏障，可並行的走有上限的滾動池，結果按模型順序提交；中止時沒啟動的呼叫補一筆合成錯誤結果，讓日誌保持可重播。
+
+今天 pump 在圖外，圖在 LangGraph；`step-inbox.ts` 與 `turn-cancel.ts` 靠 `configurable` 把圖外的東西交進圖裡。事件化之後迴圈是 core 的 driver，這類載體應該消失；`beforeModel`／`afterModel` 每步多一個圖節點的成本也隨之消失，在 dsh 裡它們是函式呼叫。這是收益，也是範圍：driver 要自己寫，尺寸大約是 dsh 這幾個檔的量級，不等於工期。
+
+**D3 核准與中斷。** dsh 的做法是 `approval.request()` 在 `tools/pre-execute` 內 `await` 一條 `approval/request` waterfall；**待核准請求不會跨重啟存活**：
+- 等待是記憶體裡的 Promise。`approval/asked` 與 `approval/decided` 只是「log-only audit」，不進模型對話，也不是狀態機（`user-approval/src/types.ts`）。
+- 預設失敗收斂：沒有 answerer、answerer 拋錯、回傳非詞彙內的值，都得到 `unavailable`；中止得到 `cancelled`；`never` 政策在 service 自己的路徑先決定，不依賴 listener 順序。
+- 要求必須在開著的 turn 裡發出（`hasOpenTurn`），因為 turn 是日誌的 commit／replay 邊界。
+- **重啟時**，`resume()` 讀日誌後用 `interruptedTurnClosers` 補收尾事件（`agent-loop/src/index.ts:855`、`session/src/repair.ts`）：缺結果的工具呼叫補合成錯誤、補 `step/end`、補 `turn/end(reason: interrupted)`。已啟動但沒結果的呼叫，錯誤文字明講「結果未知，只有唯讀或冪等才重試，有副作用先驗證外部狀態或問使用者」。所以重啟後，等待核准中的工具呼叫變成「已中斷、結果未知」，由模型決定怎麼辦，**使用者不會再看到那張核准卡**。
+
+對 nexus 的意義有兩面。我們的 async 核准 gate（`approvals` 註冊點，pre-execute waterfall）與 dsh 同形，搬過去不用發明新機制。但今天的 HITL 用 LangGraph 的 `interrupt`／`resume`，我們這邊的核准**是否**能跨行程重啟，這份草稿從沒驗過，需要確認；若現況確實可以，放棄 `interrupt` 就是**能力倒退**，必須按 AGENTS.md「偏離規則」登記，並且要問客戶（國家儀器中心）是否需要「核准卡在重啟後仍在」。另外 `approval/asked` 沒有配對 `decided` 的日誌（崩潰在等待中）要如何被稽核方理解，要和 10/12 之後的稽核規劃一起處理。
 
 **D4 子代理的事件歸屬。** 事件帶 agent 身分、監聽者自己過濾，或匯流排過濾？牽涉「同層報錯、跨層遮蔽」的既有規則。
 
@@ -138,7 +154,9 @@ dsh 宣告了 81 個 harness 事件（`event-producer-consumer.zh.md`），迴�
 
 ## 七、這份草稿沒有回答的
 
-- **沒讀 dsh 迴圈的實作**（`agent.ts`、`index.ts`）。事件宣告和文件我讀了，迴圈怎麼走、取消與錯誤怎麼收斂、D3 的答案，都還沒讀。**這是把草稿升成決議前最該補的一步。**
+- **dsh 迴圈實作只讀了一部分**。`agent.ts`、`tool-calls.ts`、`inbox.ts`、`user-approval` 已讀（§六 D1–D3）；`assistant-stream.ts`（串流重試與中途出錯）、`runtime-context.ts`（system prompt 投影）、`index.ts` 的組裝段（300–800 行）沒讀。
+- **dsh 日誌的持久化到什麼程度沒讀**：崩潰時最多掉幾個事件、事件是否逐筆落盤。這決定 nexus 能不能承諾「重啟不丟資料」，D1 若要採納，這一項要先查。
+- **nexus 現有核准是否真的跨重啟存活沒驗**（D3）。
 - **28 顆 middleware 每一顆做什麼、是否改寫訊息**，只有分類，沒有逐檔核對；§三 3-2 的表要在 S1 動工前重做。
 - **13 個插件各自用了 LangChain 的什麼**（`tool()` 還是 middleware），沒看。
 - **橋接 middleware 的語意落差**（`wrapModelCall` 對 `llm/stream`）沒驗。
@@ -149,4 +167,12 @@ dsh 宣告了 81 個 harness 事件（`event-producer-consumer.zh.md`），迴�
 
 1. **要不要正式推翻 #190？** 這決定這份草稿能不能升級成決議卡。
 2. **時序**：核心替換排在企業功能（10/12 之後的身分、角色、稽核）之前、之後，還是並行？D6 說兩者不互相依賴，但人力是共用的。
-3. **要不要先補讀 dsh 的迴圈實作**（§七 第一項），再決定 D1～D3？我建議是：它是升成決議前的前置，成本是一次讀 `agent.ts` 與 `user-approval`。
+3. **「會話日誌是唯一真相」這個前提要不要走？**（補讀迴圈實作後，D1 收斂成這一題。）要，就是拿掉 LangGraph 狀態那一份；不要，事件化只能停在 S1（工具事件），S2 之後走不下去。
+
+   **2026-10-08 demian 採納建議（方向拍板，不排期）：**
+   - **方向是走**：以會話日誌為唯一真相，最終拿掉 LangGraph 狀態那一份。
+   - **S0、S1 不依賴這個前提**，可先做。
+   - **S2 之前必須先過兩道檢查**：(a) 查清 dsh 日誌的持久化保證（崩潰時最多掉幾個事件、是否逐筆落盤）；(b) 拿錄下來的真實會話，驗證「從日誌推出的歷史」與 LangGraph 現在送給模型的訊息逐位元組相同，不同之處就是 D1 的真實工作量。
+   - **退回條件**：持久化保證比我們現在弱得多，或比對發現大量插件的訊息改寫無法記錄成事件，則退回只做 S1。
+   - 這是方向而非決議卡：#190 要不要推翻、時序（第 1、2 題）仍待決。
+4. **核准要不要跨重啟存活？**（D3）dsh 的答案是否；若客戶需要，這條是偏離，要自己設計並登記。
