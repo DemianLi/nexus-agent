@@ -40,6 +40,24 @@ describe('pendingSteers（#710）', () => {
     expect(pendingSteers(state)).toEqual([{ key: 'inbox:run-a', text: '改用 X' }]);
   });
 
+  it('帶附件的插話：附件參照跟著走；沒帶附件的不多長欄位', () => {
+    const image = {
+      type: 'image' as const,
+      attachmentId: 'sha256:img',
+      mediaType: 'image/png' as const,
+      bytes: 221,
+      width: 96,
+      height: 96,
+    };
+    const state = fold(
+      inboxFrame({ items: [], nextStep: [{ ...first, attachments: [image] }, second] }),
+    );
+    expect(pendingSteers(state)).toEqual([
+      { key: 'inbox:run-a', text: '改用 X', attachments: [image] },
+      { key: 'inbox:run-b', text: '那個檔先別動' },
+    ]);
+  });
+
   it('鍵就是領走之後那則人的話的 id：換成正式的是同一格', () => {
     const pending = fold(inboxFrame({ items: [], nextStep: [first, second] }));
     const claimed = reduceConversation(

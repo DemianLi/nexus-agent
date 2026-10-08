@@ -1,4 +1,4 @@
-import type { ConversationState, ConversationStatus } from '@nexus/wire';
+import type { ConversationState, ConversationStatus, WireAttachmentRef } from '@nexus/wire';
 
 import { queuedAgentText } from '@/lib/queue-view';
 
@@ -43,6 +43,8 @@ export interface PendingSteer {
   /** 同領走後那則人的話的 id。通知被領走時不長人的話，這一格就直接消失。 */
   readonly key: string;
   readonly text: string;
+  /** 這一句帶的附件參照（人排的才有）：領走前就畫標籤，不要等模型領走才冒出來。 */
+  readonly attachments?: readonly WireAttachmentRef[];
   /**
    * 不是人排的（背景子代理的結算通知、來信，#851、#861）時是那一句（`queuedAgentText`）：不畫成人的泡泡，`text` 是給
    * 模型的英文，不給人看。人排的沒有。
@@ -64,6 +66,7 @@ export function pendingSteers(state: ConversationState): readonly PendingSteer[]
       return {
         key: `inbox:${item.id}`,
         text: item.text,
+        ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
         ...(agentText === undefined ? {} : { agentText }),
       };
     });
