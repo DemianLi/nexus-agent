@@ -6,18 +6,19 @@
  * `permissions` / `approvals`）沒有名字可撞，走匿名追加。折疊成
  * `createDeepAgent` 參數的部分在 {@link ./fold.ts}。
  *
- * 外加九條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
+ * 外加十條**不折進 `createDeepAgent` 任何參數**的通道，所以它們不算進那九個：
  * {@link LifecycleRegistrationPoint} 回答「這些東西怎麼收掉」，
  * {@link TelemetryRegistrationPoint} 回答「送出去之前怎麼洗」，
  * {@link InvariantRegistrationPoint} 回答「這個會話發生的事有沒有破壞誰的約定」，
  * {@link CommandRegistrationPoint} 回答「人打得出哪些斜線命令」，
  * {@link SessionRegistrationPoint} 回答「誰拿得到這個會話的日誌」，
  * {@link ProjectionRegistrationPoint} 回答「web 看得到哪些從日誌折出來的狀態」（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)），
+ * {@link EventRegistrationPoint} 回答「誰在匯流排的哪個事件上掛了監聽者」（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)），
  * {@link ServiceRegistrationPoint} 回答「這次組裝的協作者從哪裡拿」（[#459](https://github.com/DemianLi/nexus-agent/issues/459)），
  * {@link PluginLogger} 回答「掛上的時候有什麼要跟人講」（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
- * 九個註冊點回答的是「這個 agent 由什麼組成」，七者正交。
+ * 九個註冊點回答的是「這個 agent 由什麼組成」，與上面那十條正交。
  *
- * **第九條是唯一一條沒有人往裡面註冊東西的**：{@link DisabledEntryView | disabledEntries}
+ * **第十條是唯一一條沒有人往裡面註冊東西的**：{@link DisabledEntryView | disabledEntries}
  * 回答「產生這個 registry 的那份清單說了什麼」，是唯讀視圖而不是註冊點
  * （[#456](https://github.com/DemianLi/nexus-agent/issues/456)）。它進得了這份清單是因為
  * 它確實是 `PluginRegistry` 的一個欄位，而那個數字有絆索在數（`registry-channel-count.test.ts`）。
@@ -34,6 +35,14 @@ import type { AgentMiddleware } from './base-types.js';
 import type { ApprovalChannel, PreToolListener } from './approval.js';
 import type { ApprovalPolicyController } from './approval-policy.js';
 import { normalizeCommandDefinition } from './commands.js';
+import { EventBus } from './events.js';
+import type {
+  EventDispatcher,
+  EventListenerInfo,
+  EventName,
+  EventOptions,
+  Events,
+} from './events.js';
 import type { CommandDefinition, CommandDescriptor } from './commands.js';
 import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
 import type { NamedEntry } from './entries.js';
@@ -681,6 +690,11 @@ export interface PluginLogger {
  * 折疊取代 waterfall。折疊丟掉的是「不呼叫 `next()` 就截斷底下所有規則」那個能力，**刻意
  * 丟的**——理由見 {@link ./session-telemetry.ts | SessionTelemetryRedactRule}。
  *
+ * **2026-10-09 起，「我們沒有事件匯流排」這個前提不成立了**（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)，
+ * [#190](https://github.com/DemianLi/nexus-agent/issues/190) 的推翻）：匯流排存在，只是事件表還是空的，這個偏離照舊以折疊
+ * 實作。要不要把它搬成 `session-telemetry/record` 的 waterfall 事件是後續的事，而且搬了也不該把「截斷底下的規則」找回來——
+ * 那一條刻意丟的理由跟匯流排有沒有無關。
+ *
  * （後端那一半原本也在這裡，配一張只收一個的具名表，登記的理由是「我們沒有 service
  * 註冊」。[#459](https://github.com/DemianLi/nexus-agent/issues/459) 落地之後那個前提沒了，
  * 所以那條偏離連同它的載體一起收掉。）
@@ -974,6 +988,41 @@ export interface DisabledEntryView {
   names(): readonly string[];
 }
 
+/**
+ * `events` 註冊點：掛事件匯流排上的監聽者（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)，事件契約草稿的 S0）。
+ *
+ * **插件只能掛，不能派發。** 派發面（`emit`／`serial`／`waterfall`）在 {@link InternalPluginRegistry.dispatch}，由宿主的
+ * 組裝點持有：dsh 的每個事件有一個固定的生產者（迴圈、工具管線…），讓任何插件都能派發別人的事件，終結性就取決於誰先派。
+ *
+ * **事件表在 `events.ts`，S0 是空的**，所以現在沒有任何名字可以掛；S1 以後每個事件跟它的第一個生產者同一張 PR 落地。
+ * 撤銷走 `effect`：插件 `apply` 之後拋錯，載入器的回滾會把它掛的監聽者一起撤掉；`dispose()` 之後整張表清空。
+ */
+export interface EventRegistrationPoint {
+  /**
+   * 掛一位監聽者。依掛上的順序跑；`prepend` 排到同一事件現有監聽者的前面。
+   *
+   * @param name - 事件名，必須是事件表裡的成員。
+   * @param listener - 監聽者，簽名由事件表決定。
+   * @param options - `prepend`。
+   * @returns 只撤這一筆的冪等 undo。
+   */
+  on<K extends EventName>(name: K, listener: Events[K], options?: EventOptions): () => void;
+  /**
+   * 掛一位只響一次的監聽者：第一次被呼叫時先撤掉自己。
+   *
+   * @param name - 事件名。
+   * @param listener - 監聽者。
+   * @param options - `prepend`。
+   * @returns 只撤這一筆的冪等 undo。
+   */
+  once<K extends EventName>(name: K, listener: Events[K], options?: EventOptions): () => void;
+  /**
+   * 現在掛著的每一位監聽者，給診斷與測試看。
+   * @returns 依事件名、再依執行順序。
+   */
+  listeners(): readonly EventListenerInfo[];
+}
+
 export interface PluginRegistry {
   readonly tools: ToolRegistrationPoint;
   readonly subagents: SubAgentRegistrationPoint;
@@ -991,6 +1040,7 @@ export interface PluginRegistry {
   readonly commands: CommandRegistrationPoint;
   readonly sessions: SessionRegistrationPoint;
   readonly projections: ProjectionRegistrationPoint;
+  readonly events: EventRegistrationPoint;
   /** 外掛在 `apply` 裡交出的警告，見 {@link PluginLogger}。 */
   readonly logger: PluginLogger;
   /** 這一次沒掛上的條目（明著被關掉的，加上掉了的），見 {@link DisabledEntryView}。**不算註冊點。** */
@@ -1004,6 +1054,11 @@ export interface PluginRegistry {
  * 指名是誰，而指名是這些錯誤訊息唯一的價值。
  */
 export interface InternalPluginRegistry extends PluginRegistry {
+  /**
+   * 事件匯流排的派發面（`emit`／`serial`／`waterfall`）。**只有宿主的組裝點拿得到**，plugin 的 `apply` 拿到的是窄的
+   * {@link PluginRegistry}，只能經 {@link PluginRegistry.events} 掛監聽者。S0 沒有任何生產者，所以現在沒有人派發。
+   */
+  readonly dispatch: EventDispatcher;
   /**
    * 把游標指向某個 plugin，回傳把它放掉的函式。
    * @param origin - 接下來的註冊要記在誰頭上。
@@ -1497,6 +1552,21 @@ export function createRegistry(): InternalPluginRegistry {
     takeDisposers: () => disposers.drain(),
   };
 
+  const eventBus = new EventBus();
+  const eventsPoint: EventRegistrationPoint = {
+    on: (name, listener, options) =>
+      effect('events.on()', (origin) => {
+        const undo = eventBus.on(name, listener, options, origin);
+        return () => void undo();
+      }),
+    once: (name, listener, options) =>
+      effect('events.once()', (origin) => {
+        const undo = eventBus.once(name, listener, options, origin);
+        return () => void undo();
+      }),
+    listeners: () => eventBus.listeners(),
+  };
+
   const warnings: PluginWarning[] = [];
   const loggerPoint: PluginLogger = {
     warn(message) {
@@ -1527,6 +1597,8 @@ export function createRegistry(): InternalPluginRegistry {
     commands: commandPoint,
     sessions: sessionPoint,
     projections: projectionPoint,
+    events: eventsPoint,
+    dispatch: eventBus,
     logger: loggerPoint,
     disabledEntries: {
       has: (pluginName) =>

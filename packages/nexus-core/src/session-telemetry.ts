@@ -74,6 +74,9 @@ export interface SessionTelemetryRecord {
  * （`CallbackManager` 是固定的一組生命週期回呼，而且是 async 的），**waterfall 這個
  * 形狀表達不出來**。退到最接近的：registry 上的註冊點加**依註冊順序的折疊**。
  *
+ * **（2026-10-09 補）** 「`apply` 沒有事件匯流排」這一句已經過期：[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)
+ * 之後有了（事件表仍是空的）。偏離的另一半不變——折疊丟掉截斷能力是刻意的，見下一段。
+ *
  * 折疊丟掉的正是那個截斷能力，**而且是刻意丟的**：對脫敏來說，「一條規則能悄悄關掉
  * 另一條部署掛的清洗」不是擴充性，是洩漏。
  */
