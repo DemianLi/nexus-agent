@@ -9,7 +9,7 @@ import type { UploadProgress, UploadXhr } from './client.js';
 
 import { createWireClient } from './client.js';
 import { isRpcMethod, commandPath } from './protocol.js';
-import { uploadPath } from './attachments.js';
+import { attachmentPath, uploadPath } from './attachments.js';
 
 interface Seen {
   readonly url: string;
@@ -216,6 +216,52 @@ describe('uploadFile', () => {
       Response.json({ type: 'success', result: { receiptId: 1 } }),
     ).client;
     await expect(odd.uploadFile('t', new Uint8Array())).rejects.toThrow('不認得的收據');
+  });
+});
+
+describe('readAttachment', () => {
+  const ID = `sha256:${'a'.repeat(64)}`;
+  const image = {
+    type: 'image',
+    attachmentId: ID,
+    mediaType: 'image/png',
+    bytes: 3,
+    width: 1,
+    height: 1,
+  } as const;
+
+  it('GET 在 thread 底下，attachmentId 整段 URL 編碼；回參照與 base64', async () => {
+    const { client, seen } = recording(() =>
+      Response.json({ type: 'success', result: { attachment: image, data: 'AQID' } }),
+    );
+    expect(await client.readAttachment('t 1', ID)).toEqual({
+      kind: 'ok',
+      result: { attachment: image, data: 'AQID' },
+    });
+    expect(attachmentPath('t 1', ID)).toBe(`/threads/t%201/attachments/sha256%3A${'a'.repeat(64)}`);
+    expect(seen[0]?.url).toBe(`http://agent.test${attachmentPath('t 1', ID)}`);
+    expect(seen[0]?.method).toBe('GET');
+    expect(seen[0]?.contentType).toBe('application/json');
+  });
+
+  it('attachment_not_found 與 not_supported 是 rejected 帶碼；載體層的失敗拋；看不懂的內容拋', async () => {
+    expect(
+      await recording(() =>
+        Response.json({ type: 'error', id: null, error: 'attachment_not_found', message: '沒有' }),
+      ).client.readAttachment('t', ID),
+    ).toEqual({ kind: 'rejected', code: 'attachment_not_found', message: '沒有' });
+    expect(await recording(notSupported).client.readAttachment('t', ID)).toMatchObject({
+      kind: 'rejected',
+      code: 'not_supported',
+    });
+    await expect(
+      recording(() => new Response('unauthorized', { status: 401 })).client.readAttachment('t', ID),
+    ).rejects.toThrow('讀圖被載體層擋下：401 unauthorized');
+    await expect(
+      recording(() =>
+        Response.json({ type: 'success', result: { attachment: { type: 'file' }, data: 1 } }),
+      ).client.readAttachment('t', ID),
+    ).rejects.toThrow('回了不認得的內容');
   });
 });
 

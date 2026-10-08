@@ -155,6 +155,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **送出時帶附件**（#732）：`run.start` 的 `attachments` 收「上傳收據」與「內嵌的圖（base64）」。收據收下就用掉（同一份不能用第二次；整句被拒時放回去）；圖在收下時驗過（PNG／JPEG／GIF／WebP，每張 20 MiB、每句 20 張／200 MiB、每張 6400 萬像素，只看檔頭不解碼）才存進同一個 `attachments/`（不縮圖、不轉檔）。**日誌、存檔點、軌跡裡只有參照**（雜湊、檔名、大小、圖的寬高）；位元組只在組請求的那一刻讀回來：檔案換成一行字（路徑與「用檔案工具讀」的說明），圖換成 `image_url`。目前的模型在型錄宣告了純文字（`input` 沒有 `image`）時，帶圖的送出回 `model_does_not_support_images`；會話中途換成純文字模型，之前送過的圖在請求裡變成一行佔位字。沒宣告 `input` 的模型照送圖。圖的位元組每次呼叫模型都從磁碟重讀、重編 base64，沒有快取；`attachments/` 被清掉的話，帶它的舊訊息在請求裡變成「已不在儲存裡，請重新附上」的一行。
 
+**讀圖**（#733）：`GET /threads/:id/attachments/:attachmentId`（`attachmentId` 是 `sha256:<hex>`，整段 URL 編碼；同會話 cookie 認證）回 `{ attachment, data }`（參照加 base64，照 dsh `session.attachment`）。**授權是「這條 thread 的日誌引用過它」，不是知道 id**：附件儲存是整個 harness home 共用、內容定址的，所以別條 thread、沒引用過的 id、檔案（只收圖）、壞編號、沒載入的 thread 一律 `attachment_not_found`，不細分。只讀已經載入的 thread（記憶體裡那份日誌，含還沒落盤的），不為了讀圖建 thread。日誌引用了但位元組不在了（`attachments/` 被清）是 `unknown_error`。
+
 **外溢門檻可調、可關**：一則工具結果超過 `spill-policy` 那一列的 `maxInlineTokens`（出貨 12500，估算 token）時，全文存進上面那個暫存目錄，模型只收到頭尾預覽和一句帶路徑的通知（`Full formatted result stored at: …`），要全文就用 `read_file` 照路徑讀；`read_file` 自己的結果不外溢。日誌記的是這份預覽，不是全文，所以全文只在暫存目錄的保留期內讀得回。把 `maxInlineTokens` 刪掉（或把那一列標成 `disabled: true`）就停用；停用之後超過 80,000 字元的結果仍由基座換成預覽，那一條關不掉。暫存目錄寫不進去、或沒有會話日誌時不外溢，原樣交給模型。
 
 **搜尋結果看筆數、不看字數**：`grep` 命中超過 `tool-fs-search` 那一列的 `grepMaxMatches`（出貨 250）、`glob` 或 `ls` 超過 `globMaxResults`（出貨 100）時，模型只收到前段，結尾一句帶路徑的定位（`Full grep result stored at: …`），完整結果存進上面那個暫存目錄，用 `read_file` 照路徑讀。`grep` 只管逐行命中（`content`）那種輸出，`count`／`files_with_matches` 照原樣。暫存目錄寫不進去、或沒有會話日誌時照樣只留前段，結尾改講沒存到，搜尋不算失敗。把那一列標成 `disabled: true` 就回到基座原樣：超過 80,000 字元由工具自己截掉，原文不留。
