@@ -407,6 +407,17 @@ describe('被拒時把 server 的錯誤碼交給呼叫端（#764）', () => {
     });
   });
 
+  it('server 的錯誤缺 `error` 欄位時沒有碼，不拿字串頂；上行與 GET 兩條路都一樣', async () => {
+    const client = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async () => Response.json({ type: 'error', id: 1, message: '沒說碼' }),
+    });
+    for (const outcome of [await client.slashList('t'), await client.listThreads()]) {
+      expect(outcome).toEqual({ kind: 'rejected', message: '沒說碼' });
+      expect(outcome).not.toHaveProperty('code');
+    }
+  });
+
   it('client 自己合成的拒絕（回饋的回應看不懂）沒有碼，不假造一個', async () => {
     const client = createWireClient({
       baseUrl: 'http://agent.test',
