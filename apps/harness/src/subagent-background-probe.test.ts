@@ -51,7 +51,11 @@ import {
 } from '@nexus/core';
 import { createAskUserPlugin, DELEGATED_CALLER_MESSAGE } from '@nexus/plugin-ask-user';
 import type { SandboxMode } from '@nexus/core';
-import { createSandboxPolicyPlugin, SandboxModeController } from '@nexus/plugin-sandbox-policy';
+import {
+  CONTAINED_FILESYSTEM,
+  createSandboxPolicyPlugin,
+  SandboxModeController,
+} from '@nexus/plugin-sandbox-policy';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import {
   createFilesystemMiddleware,
@@ -610,7 +614,10 @@ describe('第 3 項：沙箱快照在背景路徑上', () => {
     const run = await assemble(
       turns,
       [
-        createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: dir } }),
+        createHostServicesPlugin({
+          fsContainment: CONTAINED_FILESYSTEM,
+          sandboxPolicy: { controller, rootDir: dir },
+        }),
         WORKER,
         createSandboxPolicyPlugin(),
       ],
@@ -731,7 +738,10 @@ describe('第 3 項：沙箱快照在背景路徑上', () => {
       const run = await assembleWithPump(
         [...twoTurns(`/${delegated}-a.txt`, `/${delegated}-b.txt`)],
         [
-          createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: dir } }),
+          createHostServicesPlugin({
+            fsContainment: CONTAINED_FILESYSTEM,
+            sandboxPolicy: { controller, rootDir: dir },
+          }),
           WORKER,
           createSandboxPolicyPlugin(),
         ],

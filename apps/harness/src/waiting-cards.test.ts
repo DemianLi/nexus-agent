@@ -1,6 +1,6 @@
 /**
  * **手搭組裝（#670）**：這一檔留在手搭（`createNexusAgent`），產品組裝（`createCliAgent`）組不出來：核准閘門那幾條由測試握著
- * 一顆 `SandboxModeController`（`createHostServicesPlugin({ sandboxPolicy: { controller, … } })`，同時把 `controller.source` 與 grants 交給
+ * 一顆 `SandboxModeController`（`createHostServicesPlugin({ fsContainment: CONTAINED_FILESYSTEM, sandboxPolicy: { controller, … } })`，同時把 `controller.source` 與 grants 交給
  * 閘門），產品的控制器建在組裝點裡，測試拿不到（同 `subagent-sandbox.test.ts`）。
  *
  * 停下來等人的那一輪，**即時與重播畫得一樣**——[#317](https://github.com/DemianLi/nexus-agent/issues/317) 的驗收。
@@ -25,6 +25,7 @@ import type { PluginEntry } from '@nexus/core';
 import { createHostServicesPlugin } from '@nexus/core';
 import { ASK_USER_QUESTION_TOOL_NAME, createAskUserPlugin } from '@nexus/plugin-ask-user';
 import {
+  CONTAINED_FILESYSTEM,
   createSandboxPolicyPlugin,
   SANDBOX_ESCALATION_TOOL_NAME,
   SandboxModeController,
@@ -212,6 +213,7 @@ describe('停下來等人的那一輪，即時與重播畫得一樣', () => {
       (root) => [
         createHostServicesPlugin({
           channel: { kind: 'human' },
+          fsContainment: CONTAINED_FILESYSTEM,
           sandboxPolicy: { controller: escalationController, rootDir: root },
         }),
         createSandboxPolicyPlugin(),

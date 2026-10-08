@@ -1,7 +1,7 @@
 # 出貨的預設 plugin 清單。
 #
-# 這份檔案是「零設定的 nexus 由什麼組成」的來源（#454）；例外是組裝點在程式碼裡掛的三顆：host-services、
-# sandbox-policy（有 `--workspace` 才掛）、workspace-changes（serve 且有 `--workspace` 才掛），它們不在清單上（#669 後續）。使用者要改的話不是編輯它，
+# 這份檔案是「零設定的 nexus 由什麼組成」的來源（#454）；例外是組裝點在程式碼裡掛的兩顆：host-services、
+# workspace-changes（serve 且有 `--workspace` 才掛），它們不在清單上（#669 第 4 步會把後者搬進來）。使用者要改的話不是編輯它，
 # 而是在 `$NEXUS_AGENT_HOME/cordis.patch.yml`（預設 `~/.nexus-agent/`）或 `--patch <檔>`
 # 裡按 `id` 覆寫、停用、插入——patch 是整份替換 `config`，不是深層合併，所以覆寫的時候要
 # 把想保留的欄位一起重述。
@@ -604,6 +604,22 @@
   name: '#settings/agent-loop'
   config:
     maxParallelToolCalls: 10
+
+# ── 檔案政策（#669）──────────────────────────────────────────────────────────
+#
+# **檔案政策那一句，永遠由這一列講。** 對應 dsh 的 `sandbox-policy`：不論有沒有 `--workspace` 都掛，
+# 差別只在**講什麼、帶不帶控制器**——
+#
+# - **有 `--workspace`（檔案系統有圍堵）**：註冊 `/sandbox` 命令、升級流程、`sandbox/mode` 事件，並講目前的檔案政策。
+#   組裝點會一起交出 `fsContainment` 與 `sandboxPolicy` 兩個服務；缺 `sandboxPolicy` 這一列載入當場拋。
+# - **沒有 `--workspace`**：只貢獻一句不宣稱圍堵的政策，不註冊命令、不寫事件。以前這裡是整顆不掛，
+#   那是「沒有圍堵就什麼都不講」，模型只能從工具行為猜自己能不能改檔。
+#
+# **有圍堵時這一列關不掉**：組裝點起動時檢查，有 `--workspace` 而這一列不在（或被停用）就起不來——fence 還在擋，
+# 模型卻不知道、也請不到升級，看起來像關了護欄其實沒有。沒有圍堵時關掉它是合法的（只是少了那一句）。
+# 沒有 `Config`：沒有可設的欄位，模式由 `--sandbox` 決定。
+- id: sandbox-policy
+  name: '@nexus/plugin-sandbox-policy'
 
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #

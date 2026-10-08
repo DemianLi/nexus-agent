@@ -42,7 +42,11 @@ import {
   unaskedRefusal,
 } from '@nexus/plugin-sandbox-policy';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
-import { createSandboxPolicyPlugin, sandboxPolicySentence } from '@nexus/plugin-sandbox-policy';
+import {
+  CONTAINED_FILESYSTEM,
+  createSandboxPolicyPlugin,
+  sandboxPolicySentence,
+} from '@nexus/plugin-sandbox-policy';
 import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
@@ -174,6 +178,7 @@ describe('子代理的沙箱模式', () => {
       plugins: [
         createHostServicesPlugin({
           channel: { kind: 'human' },
+          fsContainment: CONTAINED_FILESYSTEM,
           sandboxPolicy: { controller, rootDir: root },
         }),
         WORKER,
@@ -280,14 +285,15 @@ describe('子代理的沙箱模式', () => {
     }
   });
 
-  it('沒掛沙箱 plugin 的組裝（沒給 `--workspace`），子代理請求裡沒有政策句', async () => {
+  it('沒給 `--workspace` 的組裝，子代理請求照樣帶那一句不宣稱圍堵的政策句（#669）', async () => {
     const run = await runUnfenced([delegate, { content: '子代理收工。' }, { content: '根收工。' }]);
     try {
       const subagentPrompts = run.model.prompts.filter(isSubagentPrompt);
       expect(subagentPrompts).toHaveLength(1);
-      expect(
-        subagentPrompts[0]?.find((message) => message.getType() === 'system')?.text ?? '',
-      ).not.toContain('目前的檔案政策');
+      const system =
+        subagentPrompts[0]?.find((message) => message.getType() === 'system')?.text ?? '';
+      expect(system).toContain('目前的檔案政策：workspace-write');
+      expect(system).not.toContain('圍堵');
     } finally {
       await run.close();
     }

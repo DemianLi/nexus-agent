@@ -68,7 +68,7 @@ import { createNexusAgent } from './agent-factory.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import type { AssemblyDrop, NexusAgentHandle } from './agent-factory.js';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
-import { createSandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
+import { CONTAINED_FILESYSTEM, sandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
 import type { CredentialService } from './credentials.js';
@@ -749,6 +749,15 @@ export async function createCliAgent(
   // 同一格——一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上，
   // 而那是靜默的（見 `sandbox-mode.ts` 的模組註解）。
   const workspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
+  // **有圍堵而 `sandbox-policy` 那一列沒掛：起不來**（#669，dsh 的方向）。fence 還在擋，模型卻不知道、也請不到升級，
+  // 看起來像關掉了護欄其實護欄還在。不加進 `PROTECTED_ENTRY_NAMES`：沒有圍堵時關掉它是合法的（只剩那一句政策）。
+  if (workspaceRoot !== undefined && !startupEntryMounted(plugins, sandboxPolicyPlugin)) {
+    throw new Error(
+      '有 --workspace（檔案系統有圍堵），但清單上的 sandbox-policy 那一列沒有掛（不存在或被停用）。' +
+        '它負責把檔案政策講給模型、記進日誌、提供 /sandbox 與升級；關掉它而 fence 照舊在擋，模型不知道自己被擋、也請不到升級。' +
+        '要嘛把那一列留著，要嘛不要給 --workspace。',
+    );
+  }
   const sandboxMode = new SandboxModeController(invocation.sandbox ?? 'workspace-write');
   const backend =
     workspaceRoot === undefined
@@ -790,15 +799,17 @@ export async function createCliAgent(
       // `apply` 當下就讀，排後面它們會拿不到。載入是一趟到底的，不會回頭等。
       createHostServicesPlugin({
         channel,
+        // **有沒有圍堵是一格獨立的事實，不是控制器在不在**（#669）：對應 dsh 的 `ctx.fs.sandboxMode`。`sandbox-policy` 那一列據它
+        // 分岔——有圍堵就掛控制器、`/sandbox`、升級；沒有就只貢獻那一句不宣稱圍堵的政策。兩個服務一起交，缺一個
+        // 那一列載入當場拋（有圍堵卻缺控制器）。
         ...(workspaceRoot === undefined
           ? {}
-          : { sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot } }),
+          : {
+              fsContainment: CONTAINED_FILESYSTEM,
+              sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot },
+            }),
       }),
       ...plugins,
-      // **有圍堵才講**。沒有 `--workspace` 的組裝一格圍堵都沒有，那時候講「目前的檔案
-      // 政策是 workspace-write」是對模型說謊——它會以為根外被擋著，而整道 fence 不在
-      // 路徑上。理由與 dsh 的 `ctx.fs.sandboxMode === undefined` 就不貢獻同一條。
-      ...(workspaceRoot === undefined ? [] : [createSandboxPolicyPlugin()]),
       // **`@` 引用那一句跟圍堵同一個條件**（#651）：沒有工作區時不提供列檔，使用者插不出 `@` 路徑，檔案工具讀的也不是磁碟。
       ...(workspaceRoot === undefined ? [] : [createFileReferencePlugin()]),
       ...(workspaceChanges === undefined ? [] : [workspaceChanges]),

@@ -16,6 +16,7 @@ import { mkdtemp, readFile, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
+import { sandboxPolicySentence } from '@nexus/plugin-sandbox-policy';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { parseCliArgs, runTurn } from './cli.js';
@@ -118,9 +119,73 @@ describe('模型知不知道自己在哪一格', () => {
     expect(prompt).not.toContain('workspace-write');
   });
 
-  it('**沒有 --workspace 就一個字都不講**——那種組裝一格圍堵都沒有', async () => {
+  it('沒有 --workspace 照樣講那一句政策，但不宣稱有誰在擋，也不長出 /sandbox', async () => {
+    // #669：以前這裡是「一個字都不講」——沒有圍堵就什麼都不貢獻。dsh 是政策段落無條件貢獻、措辭不宣稱能力，
+    // 所以改成：句子在，但句子裡沒有「改不動」「直接放行」這類把 fence 當前提的話。
     const prompt = await promptOf({}, root);
 
+    expect(prompt).toContain('目前的檔案政策：workspace-write');
+    expect(prompt).not.toContain('改不動任何檔案');
+    expect(prompt).not.toContain('直接放行');
+    expect(prompt).not.toContain('圍堵');
+  });
+
+  it('有 --workspace 與沒有，句子差在哪一格而不是在說不說', async () => {
+    const withFence = await promptOf({ workspace: root }, root);
+    const without = await promptOf({}, root);
+
+    // 預設兩邊講同一格（出廠值 workspace-write），所以同一句話兩邊都在——模型對「能不能改檔」的說法在兩種組裝下不自相矛盾。
+    const sentence = sandboxPolicySentence('workspace-write');
+    expect(withFence).toContain(sentence);
+    expect(without).toContain(sentence);
+  });
+});
+
+describe('sandbox-policy 是清單上的一列（#669）', () => {
+  let root: string;
+
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), 'nexus-sandbox-'));
+  });
+
+  afterEach(async () => {
+    await rm(root, { recursive: true, force: true });
+  });
+
+  const withoutRow = (mode: 'disabled' | 'absent') =>
+    mode === 'disabled'
+      ? shipped.map((entry) =>
+          entry.id === 'sandbox-policy' ? { ...entry, disabled: true as const } : entry,
+        )
+      : shipped.filter((entry) => entry.id !== 'sandbox-policy');
+
+  it('出貨清單上真的有這一列', () => {
+    expect(shipped.some((entry) => entry.id === 'sandbox-policy')).toBe(true);
+  });
+
+  it.each(['disabled', 'absent'] as const)(
+    '有 --workspace 而這一列%s：起不來，訊息指名是哪一列',
+    async (mode) => {
+      await expect(
+        createCliAgent({ live: false, workspace: root }, withoutRow(mode), root),
+      ).rejects.toThrow('sandbox-policy');
+    },
+  );
+
+  it('沒有 --workspace 時關掉這一列是合法的：起得來，只是少了那一句', async () => {
+    const { agent, dispose, model, sessionLog } = await createCliAgent(
+      { live: false },
+      withoutRow('disabled'),
+      root,
+    );
+    try {
+      await runTurn(agent, '嗨。', silent, sessionLog);
+    } finally {
+      await dispose();
+    }
+    const prompt = systemPrompt(
+      (model as unknown as { lastPrompt: readonly BaseMessage[] }).lastPrompt,
+    );
     expect(prompt).not.toContain('目前的檔案政策');
   });
 });
