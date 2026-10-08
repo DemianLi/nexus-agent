@@ -550,9 +550,11 @@
             enable_thinking:
               $var: thinking.enabled
       # 看圖模型（#731 判定，2026-10-08）：**穩定收得了使用者訊息裡的圖**（5/5），工具結果後面接圖不穩（見 `.docs/model-inventory.md`
-      # 「收圖實測」），所以只宣告 `input: [text, image]` 給「使用者訊息帶圖」用。窗口 131,072（廠商公布值，一張圖約 3,166 token）；
-      # **`maxTokens: 4096` 沒量過，是保守值**（比預設那顆的 16384 小，不會被端點以輸出上限拒絕）。不推理，所以不寫
-      # `reasoningEfforts`／`compat`——每會話選擇（#723）不會給它強度列。
+      # 「收圖實測」），所以只宣告 `input: [text, image]` 給「使用者訊息帶圖」用。不推理，所以不寫 `reasoningEfforts`／`compat`——
+      # 每會話選擇（#723）不會給它強度列。
+      # **窗口與輸出上限在真端點量過一次（2026-10-09，`say hi`，非串流）**：`max_tokens` 4096、8192、16384 都回 200；131072 回 400，
+      # 訊息寫 "maximum context length is 131072 tokens"，所以窗口 131,072 是端點自己報的。`maxTokens` 取 4096 是**選擇不是上限**：
+      # 端點收到 16384，但這顆是看圖用的小模型，輸出給大了只會多吃窗口；要改大先看摘要門檻（窗口 − 輸出上限）還夠不夠。
       - id: 'meta/llama-3.2-11b-vision-instruct'
         contextWindow: 131072
         maxTokens: 4096
