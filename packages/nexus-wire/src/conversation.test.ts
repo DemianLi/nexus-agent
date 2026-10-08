@@ -577,6 +577,24 @@ describe('判別式', () => {
     expect(approvalAt(state, 0).actions.map((action) => action.name)).toEqual(['alpha']);
   });
 
+  /**
+   * **缺席即核准只對基座 HITL 的形狀成立**（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）。
+   * `@langchain/mcp-adapters` 2.0.0 的 elicitation 中斷酬載沒有 `kind`、只有 `type: 'mcp_elicitation'`；只看 `kind` 缺席就當核准的話，
+   * 打開 `elicitation` 之後它會被畫成一張空的核准卡，按鈕送出 `{decisions:[…]}`，而對面等的是 `{responses:…}`——誤放行，不會有人報錯。
+   */
+  it('`kind` 缺席、也沒有 `actionRequests`（例如 `type: "mcp_elicitation"`）：明著壞掉，不畫核准卡', () => {
+    seq = 0;
+    const state = reduceAll(emptyConversation(), [
+      frame('input.requested', ['tools:a'], {
+        interrupt_id: 'e-1',
+        payload: { type: 'mcp_elicitation', server: 'srv', tool: 'ask', requests: {} },
+      }),
+    ]);
+    expect(state.status).toBe('failed');
+    expect(state.error).toContain('actionRequests');
+    expect(state.pendings).toEqual([]);
+  });
+
   it('`kind: "question"` 折成問答，欄位一格不掉', () => {
     seq = 0;
     const state = reduceAll(emptyConversation(), [questionRequested()]);

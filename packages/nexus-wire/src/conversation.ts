@@ -2132,8 +2132,8 @@ interface InputRequestedData {
  *
  * ## 三支，不是兩支
  *
- * - `kind` **缺席** → 當核准。這是向後相容：五個既有測試檔用基座的 `interruptOn` 造
- *   payload，那條路發的中斷沒有這個欄位。
+ * - `kind` **缺席** 且酬載帶 `actionRequests` 陣列 → 當核准。這是向後相容：五個既有測試檔用基座的 `interruptOn` 造
+ *   payload，那條路發的中斷沒有這個欄位。**缺席又沒有 `actionRequests` 的不是核准**，明著壞掉（#1098）。
  * - `kind` 是**認得的值** → 照它折。
  * - `kind` **有值但認不得** → **明著壞掉**（`status: 'failed'`）。
  *
@@ -2157,7 +2157,10 @@ function reduceInputRequested(
   const kind = data.payload?.kind;
   const common = { interruptId: data.interrupt_id, namespace };
   let incoming: PendingInput;
-  if (kind === undefined || kind === APPROVAL_PENDING_KIND) {
+  // **缺席即核准只收基座 HITL 的形狀**（有 `actionRequests` 陣列）。沒有 `kind` 也沒有 `actionRequests` 的酬載（例如 adapter 的
+  // `type: 'mcp_elicitation'`，#1098）不是核准，畫成核准卡會讓按鈕送出對面不等的形狀；落到下面「認不得」那一支明著壞掉。
+  const hitlShaped = Array.isArray(data.payload?.actionRequests);
+  if (kind === APPROVAL_PENDING_KIND || (kind === undefined && hitlShaped)) {
     incoming = {
       ...common,
       kind: APPROVAL_PENDING_KIND,
@@ -2170,6 +2173,14 @@ function reduceInputRequested(
       kind: QUESTION_PENDING_KIND,
       questions: data.payload?.questions ?? [],
       ...(data.payload?.origin === undefined ? {} : { origin: data.payload.origin }),
+    };
+  } else if (kind === undefined) {
+    return {
+      ...state,
+      status: 'failed',
+      error:
+        '這顆中斷沒有 kind，酬載裡也沒有 actionRequests（核准的形狀），這一版認不得它是什麼。' +
+        '把它當核准畫出來會讓人按到送錯形狀的按鈕，所以這裡停下來。',
     };
   } else {
     return {
