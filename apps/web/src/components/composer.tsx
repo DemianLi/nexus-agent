@@ -18,6 +18,10 @@
  * **同一個 `@` 選單也列會話與子代理**（#713，規則見 `lib/session-mention.ts`）：檔案、會話一起問、各回各的，分三段畫；
  * 選了會話就把伺服器編好的引用文字原樣插進草稿。`@/` 與 `@"` 開頭只問檔案。
  *
+ * **`@` 選單最上面可以再有一段「委派給」**（#328 第 2 項，規則見 `lib/agent-mention.ts`）：**給了 `agentMention` 才有**。
+ * 選了不進草稿——`@` 那一段拿掉，換成輸入框上方一顆標記；一句話最多一個，再選取代前一個；標記整顆刪（×、游標在最前面按退格）。
+ * 選單的清單是同步算的、不問伺服器，所以只有「委派給」一段也開得起來（沒給檔案與會話來源時）。
+ *
  * **外觀與動效是 nexus 的**：浮層 250／150、縮放 .97／.99（§7，在 `ui/popover.tsx`）；送出鍵是實心主按鈕，
  * 按壓 .96（`styles/motion.css`）。
  */
@@ -25,6 +29,7 @@
 import {
   ArrowUp,
   Bot,
+  Check,
   ChevronRight,
   File,
   Folder,
@@ -40,6 +45,7 @@ import type {
   SlashDescriptor,
 } from '@nexus/wire';
 
+import { AgentMentionChip } from '@/components/agent-mention-chip';
 import { AttachmentRail } from '@/components/attachment-rail';
 import { DropOverlay } from '@/components/drop-overlay';
 import { Button } from '@/components/ui/button';
@@ -52,6 +58,8 @@ import {
 } from '@/components/ui/input-group';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { Skeleton } from '@/components/ui/skeleton';
+import { agentRows, applyAgentPick } from '@/lib/agent-mention';
+import type { AgentMentionState } from '@/lib/agent-mention';
 import type { ComposerAttachments } from '@/lib/attachments';
 import { applyMentionPick, detectMention } from '@/lib/file-mention';
 import {
@@ -107,6 +115,7 @@ export function Composer({
   sessionReferences,
   attachments,
   seats,
+  agentMention,
 }: {
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
@@ -160,6 +169,11 @@ export function Composer({
    * 不傳，這裡不留空位。
    */
   readonly seats?: ReactNode;
+  /**
+   * `@子代理` 提及（#328 第 2 項）：清單、目前選的那一個、選與取消。**沒給就沒有**——`@` 選單沒有「委派給」那一段、
+   * 輸入框上方也沒有標記。清單要穩定（它在查詢的 effect 依賴裡）。
+   */
+  readonly agentMention?: AgentMentionState;
 }) {
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -189,7 +203,9 @@ export function Composer({
   const generation = useRef(0);
   const asking =
     mention !== null &&
-    (fileReferences !== undefined || sessionReferences !== undefined) &&
+    (fileReferences !== undefined ||
+      sessionReferences !== undefined ||
+      agentMention !== undefined) &&
     !sameHit(mention, dismissed);
   const mentionQuery = mention?.query;
   const mentionQuoted = mention?.quoted ?? false;
@@ -197,10 +213,15 @@ export function Composer({
   // 會話只在打普通的字時問：`@/…` 是路徑、`@"…` 是有空白的路徑（都只查檔案）。
   const wantSessions =
     sessionReferences !== undefined && !mentionQuoted && !(mentionQuery ?? '').startsWith('/');
+  // 委派給：同會話一樣只在打普通的字時列（`@/…`、`@"…` 是路徑）。清單是同步的，沒有「不可用」。
+  const agents = agentMention?.agents;
+  const wantAgents =
+    agents !== undefined && !mentionQuoted && !(mentionQuery ?? '').startsWith('/');
   // 這一次想問的來源都確定不可用（伺服器說過沒有工作區、沒接落盤）：選單整個不開，也不再查。
   const mentionOff =
     (fileReferences === undefined || menu.availability.file === 'unavailable') &&
-    (!wantSessions || menu.availability.session === 'unavailable');
+    (!wantSessions || menu.availability.session === 'unavailable') &&
+    !wantAgents;
   // 一個來源回來說不可用，不該讓另一個還在飛的請求重來：effect 只讀這一份，不把可用與否放進依賴。
   const availability = useRef(menu.availability);
   useLayoutEffect(() => {
@@ -219,7 +240,17 @@ export function Composer({
     const askSessions = wantSessions && availability.current.session !== 'unavailable';
     if (askFiles) sources.push('file');
     if (askSessions) sources.push('session');
+    if (wantAgents) sources.push('agent');
     dispatchMenu({ type: 'hit', generation: mine, sources });
+    // 同步的來源一問就回；放在非同步的那兩個發出去之前，順序不影響結果（各自帶號）。
+    if (wantAgents) {
+      dispatchMenu({
+        type: 'settled',
+        generation: mine,
+        source: 'agent',
+        rows: agentRows(agents, mentionQuery),
+      });
+    }
     // 取消掉的那一次不用另外擋：取消之後不是緊接著新的一號，就是收起來，reducer 兩種都會丟掉它回來的東西。
     // 兩個來源各問各的：一個失敗、不可用或慢，都不拖累另一個。
     if (askFiles) {
@@ -250,6 +281,8 @@ export function Composer({
     mentionStart,
     mentionOff,
     wantSessions,
+    wantAgents,
+    agents,
     fileReferences,
     sessionReferences,
   ]);
@@ -310,6 +343,14 @@ export function Composer({
 
   function pickMention(row: MentionRow, action: 'pick' | 'drill') {
     if (mention === null) return;
+    if (row.source === 'agent') {
+      // 不進草稿：`@` 那一段拿掉、標記換成這一個（取代前一個）。
+      const result = applyAgentPick(draft, mention);
+      agentMention?.onSelect(row.agent);
+      pendingCaret.current = result.caret;
+      edit(result.draft, result.caret);
+      return;
+    }
     if (row.source !== 'file') {
       // 會話與子代理沒有往下鑽，Tab 也是選定；插進去的是伺服器編好的引用文字。
       const result = applySessionPick(draft, mention, row.candidate);
@@ -366,6 +407,16 @@ export function Composer({
   function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
     if (event.nativeEvent.isComposing || event.keyCode === 229) return;
     if (mentionOpen && mentionKey(event)) return;
+    // 游標在最前面（`selectionEnd` 是 0，起點就一定是 0）、沒選一段字時退格：整顆刪掉標記。
+    if (
+      event.key === 'Backspace' &&
+      agentMention?.selected !== undefined &&
+      event.currentTarget.selectionEnd === 0
+    ) {
+      event.preventDefault();
+      agentMention.onSelect(undefined);
+      return;
+    }
     if (open && active !== undefined) {
       switch (event.key) {
         case 'ArrowDown':
@@ -420,6 +471,14 @@ export function Composer({
             <label className="sr-only" htmlFor="prompt">
               要說的話
             </label>
+            {agentMention?.selected !== undefined && (
+              <InputGroupAddon align="block-start" className="min-w-0 pb-0">
+                <AgentMentionChip
+                  agent={agentMention.selected}
+                  onRemove={() => agentMention.onSelect(undefined)}
+                />
+              </InputGroupAddon>
+            )}
             {attachments !== undefined && attachments.items.length > 0 && (
               <InputGroupAddon align="block-start" className="min-w-0 pb-0">
                 <AttachmentRail items={attachments.items} onRemove={attachments.onRemove} />
@@ -551,6 +610,7 @@ export function Composer({
               loading={menu.status === 'pending'}
               listRef={setList}
               onHover={(index) => dispatchMenu({ type: 'hover', index })}
+              selectedAgentId={agentMention?.selected?.id}
               onPick={(row) => {
                 // 還在查的時候點舊列不算（同 Enter）。
                 if (menu.status === 'ready') pickMention(row, 'pick');
@@ -595,8 +655,13 @@ export function Composer({
   );
 }
 
-/** 段的標題（Q4：檔案、會話、子代理）。 */
-const SECTION_HEADINGS = { file: '檔案', session: '會話', subagent: '子代理' } as const;
+/** 段的標題（Q4：檔案、會話、子代理；#328：最上面可以再有「委派給」）。 */
+const SECTION_HEADINGS = {
+  agent: '委派給',
+  file: '檔案',
+  session: '會話',
+  subagent: '子代理',
+} as const;
 
 /**
  * `@` 選單的列（#653、#713）：檔案寫名字加父目錄，資料夾右邊一個「Tab」提示與箭頭（按 Tab 往下鑽）；會話寫標題，
@@ -610,6 +675,7 @@ function MentionList({
   listRef,
   onHover,
   onPick,
+  selectedAgentId,
 }: {
   readonly rows: readonly MentionRow[];
   readonly highlight: number | null;
@@ -617,11 +683,32 @@ function MentionList({
   readonly listRef: (element: HTMLDivElement | null) => void;
   readonly onHover: (index: number) => void;
   readonly onPick: (row: MentionRow) => void;
+  /** 標記上現在是哪一個：選單上那一列右邊畫勾。 */
+  readonly selectedAgentId?: string | undefined;
 }) {
   const active = highlight === null ? undefined : rows[highlight];
   const sectioned = rows.some((row) => row.source !== 'file');
   const item = (row: MentionRow) => {
     const key = mentionRowKey(row);
+    if (row.source === 'agent') {
+      return (
+        <CommandItem
+          key={key}
+          value={key}
+          onSelect={() => onPick(row)}
+          className="gap-2 rounded-lg px-3 py-2"
+        >
+          <Bot aria-hidden className="text-muted-foreground" />
+          <span className="flex min-w-0 flex-1 items-baseline">
+            <span className="min-w-0 truncate text-body">{row.name}</span>
+            <span className="text-muted-foreground ml-2 min-w-0 truncate text-tip">{row.hint}</span>
+          </span>
+          {selectedAgentId === row.agent.id && (
+            <Check aria-label="目前選的" className="text-muted-foreground size-3.5 shrink-0" />
+          )}
+        </CommandItem>
+      );
+    }
     if (row.source === 'file') {
       const directory = row.candidate.kind === 'directory';
       const Icon = directory ? Folder : File;
