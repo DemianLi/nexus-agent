@@ -94,7 +94,7 @@ const CASES = [
 type Case = (typeof CASES)[number];
 
 /** 子代理：叫一次工具再收尾，日誌上才有它自己的 `tool/call`（那一顆的 `callId` 不是父的）。 */
-function workerPlugin(): PluginEntry {
+function workerPlugin(model?: ScriptedChatModel): PluginEntry {
   return {
     plugin: {
       name: 'worker-host',
@@ -103,12 +103,13 @@ function workerPlugin(): PluginEntry {
           name: 'worker',
           description: '幹活的。',
           systemPrompt: '你是 worker。',
-          model: new ScriptedChatModel({
-            turns: [
-              { content: '', toolCalls: [{ name: 'noop', id: 'inner-call', args: {} }] },
-              { content: '做完' },
-            ],
-          }) as never,
+          model: (model ??
+            new ScriptedChatModel({
+              turns: [
+                { content: '', toolCalls: [{ name: 'noop', id: 'inner-call', args: {} }] },
+                { content: '做完' },
+              ],
+            })) as never,
         });
         registry.tools.register(
           tool(() => '好', { name: 'noop', description: '什麼都不做。', schema: z.object({}) }),
@@ -129,11 +130,11 @@ function rootTurns(entry: Case, warmup: boolean): ScriptedTurn[] {
   ];
 }
 
-async function build(entry: Case, root: string, warmup = false) {
+async function build(entry: Case, root: string, warmup = false, worker?: ScriptedChatModel) {
   return createNexusAgent({
     model: new ScriptedChatModel({ turns: rootTurns(entry, warmup) }),
     checkpointer: new MemorySaver(),
-    plugins: [workerPlugin()],
+    plugins: [workerPlugin(worker)],
     backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
     ...(entry.background && { backgroundSubagents: {} }),
     onInvariantViolation: (error) => reported.push(`不變量：${error.message}`),
@@ -154,10 +155,13 @@ function childDone(sessions: SessionRegistry): boolean {
 }
 
 /** 真的組裝＋pump＋JSONL 落盤跑一次，讀回磁碟上的每一份。 */
-async function runAndRead(entry: Case): Promise<readonly LoadedSessionLog[]> {
+async function runAndRead(
+  entry: Case,
+  worker?: ScriptedChatModel,
+): Promise<readonly LoadedSessionLog[]> {
   const workspace = join(dir, 'workspace');
   const store = createJsonlSessionStore({ rootDir: join(dir, 'logs') });
-  const built = await build(entry, workspace, true);
+  const built = await build(entry, workspace, true, worker);
   const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'link-root');
   const detach = built.attachSession(pump.sessions);
   const persistence = attachSessionPersistence(pump.sessions, store);
@@ -352,7 +356,13 @@ describe.each(CASES)('$label：子日誌記不記得它收到的那一句話', (
       ? '背景：輸入由 turn/start 記，子日誌不多出 user/message'
       : '前景：出生就記一顆來源 user 的 user/message，落在它的第一次叫模型與叫工具之前，照日誌推得出同一句',
     async () => {
-      const logs = await runAndRead(entry);
+      const worker = new ScriptedChatModel({
+        turns: [
+          { content: '', toolCalls: [{ name: 'noop', id: 'inner-call', args: {} }] },
+          { content: '做完' },
+        ],
+      });
+      const logs = await runAndRead(entry, worker);
       const child = logs.find((log) => log.header.parentSession !== undefined)!;
       const inputs = child.events.filter((event) => event.type === 'user/message');
       if (entry.mode === 'continuable') {
@@ -369,6 +379,9 @@ describe.each(CASES)('$label：子日誌記不記得它收到的那一句話', (
           (event) => event.type === 'model/start' || event.type === 'tool/call',
         );
         expect(firstWork).toBeGreaterThan(at);
+        // 子代理的模型**真的收到**的第一串訊息：人類訊息就是那一句，沒有被改寫成 `task` 的那一步加料。
+        const received = worker.prompts[0]!.filter((message) => message.getType() === 'human');
+        expect(received.map((message) => message.content)).toEqual(['幹活']);
         // 照日誌推這個子代理第一次叫模型的歷史，開頭就是那一句話。
         const replayed = replayConversation(child.events.slice(0, firstWork));
         expect(replayed.kind).toBe('replayed');

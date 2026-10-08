@@ -361,6 +361,21 @@ describe('歸屬不看位置', () => {
     expect(turn.unattributed).toBe(0);
   });
 
+  it('前景子代理日誌開頭那句話（出生就記，#1159）落在第一輪之前，不被畫成輪中輸入', () => {
+    const log = new SessionLog('child');
+    log.append('user/message', {
+      message: toLoggedMessage(new HumanMessage('幹活')),
+      source: { kind: 'user' },
+    });
+    const start = log.append('model/start', {});
+    log.append('assistant/message', reply(start.seq, 'ok'));
+    log.append('model/end', { modelCall: start.seq });
+    const view = foldAll(log.events);
+    expect(view.turns).toHaveLength(1);
+    expect(view.turns[0]?.inputs).toEqual([]);
+    expect(view.turns[0]?.unattributed).toBe(0);
+  });
+
   it('輪外的佇列變動不歸任何一輪', () => {
     const log = new SessionLog('t');
     log.append('inbox/spliced', { target: 'next-turn', start: 0, inserted: [] });

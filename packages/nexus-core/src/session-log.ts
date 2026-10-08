@@ -660,6 +660,10 @@ export interface SessionEventMap {
    *   pump 領走插話的那條路**（`apps/harness/src/thread-pump.ts`），緊跟在領走那顆 `inbox/spliced` 後面、那次模型呼叫
    *   的 `model/start` 之前。goal 的直接人類授權認它（dsh `packages/goal/tool-goal/src/authority.ts:82-83`），所以外掛
    *   與工具不能寫這一種：上面兩個生產者都寫死 `plugin`。
+   *   **子代理日誌上的 `user` 不是人**（[#1159](https://github.com/DemianLi/nexus-agent/issues/1159)）：前景子代理出生時，註冊表
+   *   在它自己的日誌開頭寫一顆 `user`，內容是父模型寫的委派指示（`registry.ts` 的 `expectSpawn`），同 dsh
+   *   `child.followup(createUserMessage({content: prompt, source: {kind: 'user'}}))`；背景子代理插話的 `user` 也在子日誌上。
+   *   這不構成授權：goal 的三顆工具 `rootOnly`，授權只讀 root 那一份日誌。**讀 `user` 當「有人在場」的人，要先確定讀的是 root。**
    *
    * - **`session-reference`：引用別的會話時附上的快照**（[#713](https://github.com/DemianLi/nexus-agent/issues/713)），照 dsh 的
    *   `user/message` 帶 `source: {kind: 'session-reference', form: 'recall', version: 1, references}`。緊跟在引用它的那句人話後面
