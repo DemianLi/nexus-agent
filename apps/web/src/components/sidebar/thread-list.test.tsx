@@ -7,6 +7,7 @@ import { ThreadList } from '@/components/sidebar/thread-list';
 import { SidebarProvider } from '@/components/ui/sidebar';
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { SEARCH_DEBOUNCE_MS } from '@/lib/thread-search';
+import type { ThreadManagement } from '@/lib/thread-management';
 import { axeViolations } from '@/test/axe';
 
 /**
@@ -246,5 +247,218 @@ describe('退回只比標題', () => {
     await wait(SEARCH_DEBOUNCE_MS);
     expect(fake.calls).toHaveLength(2);
     expect(screen.queryByText('內容搜尋失敗，這一次只比了標題。')).toBeNull();
+  });
+});
+
+describe('釘選、封存、改名（#633）', () => {
+  // 外面的假計時器會讓 `findBy*` 與 axe 的非同步等不到；這一組不靠計時器。
+  beforeEach(() => vi.useRealTimers());
+
+  function managed(overrides: Partial<ThreadManagement> = {}) {
+    const calls: string[] = [];
+    const management: ThreadManagement = {
+      pinnedIds: [],
+      archivedIds: new Set(),
+      titles: new Map(),
+      onPin: async (id) => void calls.push(`pin ${id}`),
+      onUnpin: async (id) => void calls.push(`unpin ${id}`),
+      onArchive: async (id) => void calls.push(`archive ${id}`),
+      onUnarchive: async (id) => void calls.push(`unarchive ${id}`),
+      onRename: async (id, title) => void calls.push(`rename ${id} ${title}`),
+      ...overrides,
+    };
+    return { management, calls };
+  }
+
+  function renderManaged(management: ThreadManagement | undefined, currentThreadId = 'now') {
+    render(
+      <SidebarProvider>
+        <nav aria-label="以前的會話">
+          <ThreadList
+            directory={DIRECTORY}
+            currentThreadId={currentThreadId}
+            currentTitle={null}
+            onPick={() => undefined}
+            {...(management === undefined ? {} : { management })}
+          />
+        </nav>
+      </SidebarProvider>,
+    );
+  }
+
+  /** Radix 的選單在 jsdom 裡用鍵盤打開最穩。 */
+  const openMenu = (title: string) => {
+    fireEvent.keyDown(screen.getByRole('button', { name: `「${title}」的選項` }), { key: 'Enter' });
+    return screen.getByRole('menu');
+  };
+  const menuItems = () => screen.getAllByRole('menuitem').map((item) => item.textContent);
+
+  it('沒給 management：沒有選單、沒有釘選與封存兩區', () => {
+    renderManaged(undefined);
+    expect(screen.queryByRole('button', { name: /的選項/u })).toBeNull();
+    expect(screen.queryByTestId('thread-pinned')).toBeNull();
+    expect(screen.queryByTestId('thread-archived')).toBeNull();
+  });
+
+  it('每一列都有選單；一般的列可以釘選、改名、封存', () => {
+    renderManaged(managed().management);
+    expect(screen.getAllByRole('button', { name: /的選項/u })).toHaveLength(3);
+    openMenu('幫我改登入頁');
+    expect(menuItems()).toEqual(['釘選', '重新命名', '封存']);
+  });
+
+  it('點選項叫對應的動作，帶這一列的 id', async () => {
+    const { management, calls } = managed();
+    renderManaged(management);
+    openMenu('讀規格');
+    fireEvent.click(screen.getByRole('menuitem', { name: '釘選' }));
+    openMenu('讀規格');
+    fireEvent.click(screen.getByRole('menuitem', { name: '封存' }));
+    await act(async () => undefined);
+    expect(calls).toEqual(['pin b', 'archive b']);
+  });
+
+  it('釘選的在最前面的「已釘選」，順序是最近釘的在前，且不再出現在時間組裡；選項換成取消釘選', () => {
+    renderManaged(managed({ pinnedIds: ['c', 'a'] }).management);
+    const pinned = screen.getByTestId('thread-pinned');
+    expect(within(pinned).getByText('已釘選')).toBeTruthy();
+    expect(
+      within(pinned)
+        .getAllByRole('button', { name: /^(?!.*的選項)/u })
+        .map((button) => button.textContent),
+    ).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining('整理部署腳本'),
+        expect.stringContaining('幫我改登入頁'),
+      ]),
+    );
+    const order = within(pinned)
+      .getAllByTestId('thread-title-text')
+      .map((node) => node.textContent);
+    expect(order).toEqual(['整理部署腳本', '幫我改登入頁']);
+    const buckets = within(screen.getByTestId('thread-bucket'));
+    expect(buckets.queryByText('整理部署腳本')).toBeNull();
+    expect(buckets.getByText('讀規格')).toBeTruthy();
+    openMenu('整理部署腳本');
+    expect(menuItems()).toEqual(['取消釘選', '重新命名', '封存']);
+  });
+
+  it('封存的收在最後的「已封存（n）」，預設收著；展開才看得到，選項是取消封存（沒有釘選）', () => {
+    renderManaged(managed({ archivedIds: new Set(['b']) }).management);
+    const archived = screen.getByTestId('thread-archived');
+    const toggle = within(archived).getByRole('button', { name: '已封存（1）' });
+    expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    expect(screen.queryByText('讀規格')).toBeNull();
+    fireEvent.click(toggle);
+    expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByText('讀規格')).toBeTruthy();
+    openMenu('讀規格');
+    expect(menuItems()).toEqual(['重新命名', '取消封存']);
+  });
+
+  it('搜尋時封存區自動展開，命中的封存會話看得到', () => {
+    renderManaged(managed({ archivedIds: new Set(['b']) }).management);
+    expect(screen.queryByText('讀規格')).toBeNull();
+    type('規格');
+    expect(screen.getByText('讀規格')).toBeTruthy();
+  });
+
+  it('目前這條不給封存', () => {
+    renderManaged(managed().management, 'a');
+    openMenu('幫我改登入頁');
+    expect(menuItems()).toEqual(['釘選', '重新命名']);
+  });
+
+  it('動作失敗：說原因', async () => {
+    const { management } = managed({ onPin: async () => '伺服器說不行' });
+    renderManaged(management);
+    openMenu('讀規格');
+    fireEvent.click(screen.getByRole('menuitem', { name: '釘選' }));
+    await act(async () => undefined);
+    // toast 住在 `Toaster`，這裡沒掛；只驗不拋錯、選單收起。
+    expect(screen.queryByRole('menu')).toBeNull();
+  });
+
+  describe('改名', () => {
+    const startRename = (title: string) => {
+      openMenu(title);
+      fireEvent.click(screen.getByRole('menuitem', { name: '重新命名' }));
+      return screen.getByRole('textbox', { name: '重新命名會話' }) as HTMLInputElement;
+    };
+
+    it('原地換成輸入框、帶現在的標題；Enter 送出標準化後的標題，輸入框收起', async () => {
+      const { management, calls } = managed();
+      renderManaged(management);
+      const field = startRename('讀規格');
+      expect(field.value).toBe('讀規格');
+      fireEvent.change(field, { target: { value: '  讀   新規格 ' } });
+      fireEvent.keyDown(field, { key: 'Enter' });
+      await act(async () => undefined);
+      expect(calls).toEqual(['rename b 讀 新規格']);
+      expect(screen.queryByRole('textbox', { name: '重新命名會話' })).toBeNull();
+    });
+
+    it('Esc 放棄；沒改或清空也算放棄，都不叫動作', async () => {
+      const { management, calls } = managed();
+      renderManaged(management);
+      let field = startRename('讀規格');
+      fireEvent.change(field, { target: { value: '別的' } });
+      fireEvent.keyDown(field, { key: 'Escape' });
+      expect(screen.queryByRole('textbox', { name: '重新命名會話' })).toBeNull();
+      field = startRename('讀規格');
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(screen.queryByRole('textbox', { name: '重新命名會話' })).toBeNull();
+      field = startRename('讀規格');
+      fireEvent.change(field, { target: { value: '   ' } });
+      fireEvent.keyDown(field, { key: 'Enter' });
+      await act(async () => undefined);
+      expect(calls).toEqual([]);
+    });
+
+    it('選字中的 Enter 不送出', async () => {
+      const { management, calls } = managed();
+      renderManaged(management);
+      const field = startRename('讀規格');
+      fireEvent.change(field, { target: { value: '新名' } });
+      fireEvent.keyDown(field, { key: 'Enter', isComposing: true });
+      await act(async () => undefined);
+      expect(calls).toEqual([]);
+    });
+
+    it('失敗：輸入框和人打的字留著，說原因；改字之後原因消失，可以再送', async () => {
+      let failing = true;
+      const { management, calls } = managed({
+        onRename: async (id, title) => {
+          if (failing) return '標題太長了';
+          calls.push(`rename ${id} ${title}`);
+          return undefined;
+        },
+      });
+      renderManaged(management);
+      const field = startRename('讀規格');
+      fireEvent.change(field, { target: { value: '很長的標題' } });
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect((await screen.findByRole('alert')).textContent).toBe('標題太長了');
+      expect(field.value).toBe('很長的標題');
+      failing = false;
+      fireEvent.change(field, { target: { value: '短一點' } });
+      expect(screen.queryByRole('alert')).toBeNull();
+      fireEvent.keyDown(field, { key: 'Enter' });
+      await act(async () => undefined);
+      expect(calls).toEqual(['rename b 短一點']);
+    });
+
+    it('改過的標題蓋過清單上的', () => {
+      renderManaged(managed({ titles: new Map([['b', '我取的名字']]) }).management);
+      expect(screen.getByText('我取的名字')).toBeTruthy();
+      expect(screen.queryByText('讀規格')).toBeNull();
+    });
+  });
+
+  it('axe：選單關著與打開時沒有違規', async () => {
+    renderManaged(managed({ pinnedIds: ['c'], archivedIds: new Set(['b']) }).management);
+    expect(await axeViolations(document.body)).toEqual([]);
+    // 選單住在 portal 裡、不在側欄的地標內（正式環境也一樣）：`region` 是整頁規則，單掃選單本身。
+    expect(await axeViolations(openMenu('幫我改登入頁'))).toEqual([]);
   });
 });

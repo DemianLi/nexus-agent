@@ -5,6 +5,7 @@ import { ThreadList } from '@/components/sidebar/thread-list';
 import { Button } from '@/components/ui/button';
 import { Sidebar, SidebarContent, SidebarHeader, useSidebar } from '@/components/ui/sidebar';
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
+import type { ThreadManagement } from '@/lib/thread-management';
 
 /**
  * 左側欄（inventory 列 1、2、6）：1024 以上是桌面側欄，以下收成抽屜（`hooks/use-mobile.ts`）。
@@ -19,6 +20,7 @@ export function AppSidebar({
   onNewConversation,
   onPick,
   search,
+  management,
 }: {
   readonly directory: ThreadDirectory;
   readonly currentThreadId: string;
@@ -27,6 +29,8 @@ export function AppSidebar({
   readonly onPick: (threadId: string) => void;
   /** 按內容搜以前的會話（#760），原樣交給 `ThreadList`。 */
   readonly search?: (query: string, signal: AbortSignal) => Promise<ThreadSearchOutcome>;
+  /** 釘選、封存、改名（#633），原樣交給 `ThreadList`；沒給就沒有。 */
+  readonly management?: ThreadManagement;
 }) {
   const { isMobile, openMobile, setOpenMobile, state } = useSidebar();
   const visible = isMobile ? openMobile : state === 'expanded';
@@ -70,6 +74,7 @@ export function AppSidebar({
               onPick(threadId);
             }}
             {...(search === undefined ? {} : { search })}
+            {...(management === undefined ? {} : { management })}
           />
         )}
       </SidebarContent>

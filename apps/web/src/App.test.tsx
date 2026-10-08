@@ -86,6 +86,13 @@ vi.mock('@/lib/attachments', async (importOriginal) => ({
   serverSupportsAttachments: () => attachmentGate.on,
 }));
 
+// 側欄的釘選、封存、改名開關今天寫死 false（#633）：要測的那幾條自己打開。
+const managementGate = vi.hoisted(() => ({ on: false }));
+vi.mock('@/lib/thread-management', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/thread-management')>()),
+  threadManagementEnabled: () => managementGate.on,
+}));
+
 // App 會把 thread id 記進 `localStorage`；每條一份新的，不然下一條測試就成了「接回上一次」。
 beforeEach(() => {
   vi.stubGlobal('localStorage', memoryStorage());
@@ -93,6 +100,7 @@ beforeEach(() => {
 
 afterEach(() => {
   attachmentGate.on = false;
+  managementGate.on = false;
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -2056,6 +2064,88 @@ describe('以前的會話', () => {
     fireEvent.click(screen.getByRole('button', { name: '開關側欄' }));
     await openList();
     await waitFor(() => expect(reads).toBe(2));
+  });
+
+  describe('釘選、封存、改名（#633）', () => {
+    const readable = (fake: ReturnType<typeof fakeClient>) =>
+      listing(fake, async () => ({ kind: 'ok', result: LISTED }));
+
+    it('開關關著：每一列都沒有選項鈕，也沒有已釘選與已封存兩區', async () => {
+      seq = 0;
+      render(<App client={readable(fakeClient([]))} />);
+      const list = await openList();
+      await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(2));
+      expect(within(list).queryByRole('button', { name: /的選項/u })).toBeNull();
+      expect(screen.queryByTestId('thread-pinned')).toBeNull();
+      expect(screen.queryByTestId('thread-archived')).toBeNull();
+    });
+
+    it('開關開著：釘選把那一列搬進「已釘選」，換到別條之後還在；封存收進「已封存」；改名蓋過標題', async () => {
+      managementGate.on = true;
+      seq = 0;
+      render(<App client={readable(fakeClient([]))} />);
+      let list = await openList();
+      const optionsOf = (title: string) =>
+        within(list).findByRole('button', { name: `「${title}」的選項` });
+      const menuOf = async (title: string) => {
+        fireEvent.keyDown(await optionsOf(title), { key: 'Enter' });
+      };
+
+      await menuOf(UNTITLED_THREAD_LABEL);
+      fireEvent.click(screen.getByRole('menuitem', { name: '釘選' }));
+      const pinned = await screen.findByTestId('thread-pinned');
+      expect(within(pinned).getByText(UNTITLED_THREAD_LABEL)).toBeTruthy();
+
+      // 換到別條：整個對話畫面重掛，釘選留在 App 這一層。
+      fireEvent.click(within(list).getByRole('button', { name: /^幫我改登入頁/u }));
+      await waitFor(() => expect(stored()).toBe('跑著的那條'));
+      // 整個畫面重掛了，側欄是新的那一份。
+      list = await openList();
+      expect(
+        within(await screen.findByTestId('thread-pinned')).getByText(UNTITLED_THREAD_LABEL),
+      ).toBeTruthy();
+
+      await menuOf(UNTITLED_THREAD_LABEL);
+      fireEvent.click(screen.getByRole('menuitem', { name: '取消釘選' }));
+      await waitFor(() => expect(screen.queryByTestId('thread-pinned')).toBeNull());
+
+      await menuOf(UNTITLED_THREAD_LABEL);
+      fireEvent.click(screen.getByRole('menuitem', { name: '封存' }));
+      const archived = await screen.findByTestId('thread-archived');
+      expect(within(archived).getByRole('button', { name: '已封存（1）' })).toBeTruthy();
+
+      await menuOf('幫我改登入頁');
+      fireEvent.click(screen.getByRole('menuitem', { name: '重新命名' }));
+      const field = screen.getByRole('textbox', { name: '重新命名會話' });
+      fireEvent.change(field, { target: { value: '登入頁重做' } });
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(await within(list).findByText('登入頁重做')).toBeTruthy();
+    });
+
+    it('釘選的那條被封存就不再釘著：取消封存後回到時間組，不回已釘選（封存的不能釘）', async () => {
+      managementGate.on = true;
+      seq = 0;
+      render(<App client={readable(fakeClient([]))} />);
+      const list = await openList();
+      const pickItem = async (title: string, item: string) => {
+        fireEvent.keyDown(await within(list).findByRole('button', { name: `「${title}」的選項` }), {
+          key: 'Enter',
+        });
+        fireEvent.click(screen.getByRole('menuitem', { name: item }));
+      };
+      await pickItem(UNTITLED_THREAD_LABEL, '釘選');
+      await screen.findByTestId('thread-pinned');
+      await pickItem(UNTITLED_THREAD_LABEL, '封存');
+      await waitFor(() => expect(screen.queryByTestId('thread-pinned')).toBeNull());
+      fireEvent.click(
+        within(await screen.findByTestId('thread-archived')).getByRole('button', {
+          name: '已封存（1）',
+        }),
+      );
+      await pickItem(UNTITLED_THREAD_LABEL, '取消封存');
+      await waitFor(() => expect(screen.queryByTestId('thread-archived')).toBeNull());
+      expect(screen.queryByTestId('thread-pinned')).toBeNull();
+    });
   });
 
   it('點一條就切過去：開那一條、記下來、講一聲切過去了，上一條的話不留', async () => {
