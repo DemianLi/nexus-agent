@@ -121,11 +121,11 @@ export type UplinkResult = CommandResponse | WireErrorResponse;
  */
 export type SlashListOutcome =
   | { readonly kind: 'ok'; readonly commands: readonly SlashDescriptor[] }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /** `slash.run` 的結果：三個命令自己的值，加上這條線拒絕發派的那一個。 */
 export type SlashRunOutcome =
-  SlashRunResult | { readonly kind: 'rejected'; readonly message: string };
+  SlashRunResult | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /**
  * 回饋三個 method 的結果。**`rejected` 與業務失敗是兩件事**，理由同 {@link SlashListOutcome}：
@@ -134,7 +134,7 @@ export type SlashRunOutcome =
  */
 export type FeedbackOutcome<T> =
   | { readonly kind: 'ok'; readonly result: T }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /**
  * `GET /threads` 的結果。`rejected` 是這台 server 列不了（例如組裝時沒接落盤），**不是空清單**，
@@ -142,12 +142,12 @@ export type FeedbackOutcome<T> =
  */
 export type ThreadListOutcome =
   | { readonly kind: 'ok'; readonly result: ThreadListResult }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /** `searchThreads` 的結果。`rejected` 是協定層的失敗（這個部署沒開、查詢不合法、索引壞了），見 `THREAD_SEARCH_PATH`。 */
 export type ThreadSearchOutcome =
   | { readonly kind: 'ok'; readonly result: ThreadSearchResult }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 export interface WireClient {
   /**
@@ -324,7 +324,7 @@ async function* knownFeedFrames(
 /** `GET /threads/:id/file-references` 的結果。`rejected` 是這條 thread 起不來、或索引建不起來。 */
 export type FileReferenceListOutcome =
   | { readonly kind: 'ok'; readonly result: FileReferenceListResult }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /** 線上回來的候選得先驗過，理由同 {@link readDescriptors}。 */
 function readFileReferences(result: unknown): FileReferenceListResult {
@@ -361,7 +361,7 @@ function readTrajectoryTurn(result: unknown): TrajectoryTurnDetail {
 /** `GET /threads/:id/session-references` 的結果。`rejected` 是讀不了存放處。 */
 export type SessionReferenceListOutcome =
   | { readonly kind: 'ok'; readonly result: SessionReferenceListResult }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /** 線上回來的候選得先驗過，理由同 {@link readDescriptors}。 */
 function readSessionReferences(result: unknown): SessionReferenceListResult {
@@ -410,7 +410,7 @@ function readSessionReferences(result: unknown): SessionReferenceListResult {
 /** `GET /threads/:id/history` 的結果。`rejected` 是這條 thread 起不來、或參數不對。 */
 export type ThreadHistoryOutcome =
   | { readonly kind: 'ok'; readonly result: ThreadHistoryResult }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /** `GET /threads/:id/trajectory/turn` 的結果。 */
 export type TrajectoryTurnOutcome =
@@ -526,6 +526,28 @@ function readRunResult(result: unknown): SlashRunResult {
   throw new Error(`slash.run 回了不認得的 kind "${String(kind)}"`);
 }
 
+/**
+ * 把 server 回的協定錯誤**原樣**交給呼叫端：碼（`error`）與可直接顯示的中文原因（`message`）。
+ *
+ * 照 dsh 的 client 失敗形狀（`ConnectionRpcFailure`，`packages/client/connection/src/rpc.ts`）：
+ * 失敗帶 `code` 與 `message`，呼叫端按碼分支、按 `message` 顯示，**不比對 `message` 的字串**。
+ * `code` 在型別上是選填的（[#764](https://github.com/DemianLi/nexus-agent/issues/764) 先加成選填，
+ * 讓只讀 `message` 的呼叫端與測試替身照樣編得過）。
+ *
+ * **只在 server 真的送了字串碼的時候才帶 `code`**，缺欄位就不放這個鍵，不拿 `"undefined"` 之類的字串頂。
+ * 參數刻意收鬆（`unknown`）：`UplinkResult` 在 `type === 'error'` 之後不會收窄（`WireErrorResponse`
+ * 是對帶索引簽名的交集做 `Omit`，具名鍵 `message` 在那一步掉了），所以上行與 GET 兩條路共用這一個讀法。
+ */
+type RejectedSource = { readonly error?: unknown; readonly message?: unknown };
+
+function rejectedOf(failure: RejectedSource) {
+  return {
+    kind: 'rejected' as const,
+    ...(typeof failure.error === 'string' ? { code: failure.error } : {}),
+    message: typeof failure.message === 'string' ? failure.message : '對方拒絕了，但沒有說明原因',
+  };
+}
+
 export function createWireClient(options: WireClientOptions): WireClient {
   const base = options.baseUrl.replace(/\/+$/, '');
   const doFetch = options.fetch ?? globalThis.fetch;
@@ -563,7 +585,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
     }
     const body = (await response.json()) as ThreadHistoryResponse;
     return body.type === 'error'
-      ? { kind: 'rejected', message: body.message }
+      ? rejectedOf(body)
       : { kind: 'ok', result: readHistory(body.result) };
   }
 
@@ -602,7 +624,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
     command: FeedbackCommand,
   ): Promise<FeedbackOutcome<T>> {
     const response = await sendCommand(threadId, command.method, command);
-    if (response.type === 'error') return { kind: 'rejected', message: response.message };
+    if (response.type === 'error') return rejectedOf(response as RejectedSource);
     const result: unknown = response.result;
     if (typeof (result as { ok?: unknown } | null)?.ok !== 'boolean') {
       return { kind: 'rejected', message: `回饋的回應看不懂：${JSON.stringify(result)}` };
@@ -742,7 +764,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
         method: 'slash.list',
       });
       return response.type === 'error'
-        ? { kind: 'rejected', message: response.message }
+        ? rejectedOf(response as RejectedSource)
         : { kind: 'ok', commands: readDescriptors(response.result) };
     },
 
@@ -753,7 +775,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
         params: { line },
       });
       return response.type === 'error'
-        ? { kind: 'rejected', message: response.message }
+        ? rejectedOf(response as RejectedSource)
         : readRunResult(response.result);
     },
 
@@ -768,7 +790,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       }
       const body = (await response.json()) as ThreadListResponse;
       return body.type === 'error'
-        ? { kind: 'rejected', message: body.message }
+        ? rejectedOf(body)
         : { kind: 'ok', result: readThreadList(body.result) };
     },
 
@@ -779,7 +801,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       }
       const body = (await response.json()) as ThreadSearchResponse;
       return body.type === 'error'
-        ? { kind: 'rejected', message: body.message }
+        ? rejectedOf(body)
         : { kind: 'ok', result: readThreadSearch(body.result) };
     },
 
@@ -828,7 +850,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       }
       const body = (await response.json()) as FileReferenceListResponse;
       return body.type === 'error'
-        ? { kind: 'rejected', message: body.message }
+        ? rejectedOf(body)
         : { kind: 'ok', result: readFileReferences(body.result) };
     },
 
@@ -845,7 +867,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       }
       const body = (await response.json()) as SessionReferenceListResponse;
       return body.type === 'error'
-        ? { kind: 'rejected', message: body.message }
+        ? rejectedOf(body)
         : { kind: 'ok', result: readSessionReferences(body.result) };
     },
   };
