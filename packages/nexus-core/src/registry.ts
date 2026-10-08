@@ -644,13 +644,38 @@ export interface PluginWarning {
   readonly message: string;
 }
 
+/** {@link PluginLogger.exporter} 登記的接收端，形狀照 dsh 的 `Exporter`（`export(message)`）。 */
+export interface PluginWarningExporter {
+  /**
+   * 收一則警告。
+   * @param warning - 是誰交的與說了什麼。
+   */
+  export(warning: PluginWarning): void;
+}
+
+/** {@link PluginLogger.bind} 交出的 logger：origin 已經綁好，執行期也能叫。 */
+export interface BoundPluginLogger {
+  /**
+   * 交出一則警告。
+   * @param message - 給人看的一句話，不必自己寫是誰。
+   */
+  warn(message: string): void;
+}
+
 /**
  * `logger` 通道：外掛在 `apply` 裡**交出一句給人看的話**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)），
  * 照 dsh 的 `ctx.logger`。例子是 MCP 連不上：那一列照樣掛上、那台伺服器沒有工具，要讓人知道。
  *
- * **只收 `apply` 裡的呼叫**，同其他註冊點：沒有 origin 就講不出是誰說的。呼叫端（產品路徑上是 CLI 與 serve）在組裝完
- * 之後讀 {@link warnings}，跟掉了的列印在同一段。所以這一格收的是**掛上那一刻**的話，不是執行期的記錄；dsh 的
- * logger 兩者都收，我們執行期沒有要講的（MCP 不重連，見 `@nexus/plugin-mcp`）。
+ * **誰說的在 `apply` 那一刻定下來**，同其他註冊點：沒有 origin 就講不出是誰說的，所以 {@link PluginLogger.warn} 只收
+ * `apply` 裡的呼叫。要在執行期講話（例如 MCP 掉線重連，[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)）
+ * 就在 `apply` 裡呼叫 {@link PluginLogger.bind} 拿一支**綁好 origin 的 logger**，之後隨時可以叫。話不由外掛自己寫到
+ * 標準錯誤，而是交給呼叫端：組裝完讀 {@link PluginLogger.warnings}（掛上那一刻的），再用 {@link PluginLogger.exporter}
+ * 接後面的（執行期的）；印在哪由 CLI 與 serve 決定。
+ *
+ * **對 dsh `ctx.logger` 的偏離（一處）**：dsh 每個 plugin 各有一份 `ctx`，`ctx.logger.warn()` 的「是誰」跟著 ctx 走，執行期也叫得動；
+ * 接收端是 `ctx.logger.exporter({ export })`，另有 1000 則的緩衝——這三樣這裡一字照辦（`exporter`、`export`、1000）。我們只有
+ * 一份共用的 registry，「是誰」只在 `apply` 的註冊視窗裡有（`current`），執行期無從得知，所以表達不出 `ctx.logger.warn()` 在執行期
+ * 直接叫；退到最接近的 {@link PluginLogger.bind}：在 `apply` 裡把 origin 綁進一支 logger，之後拿它叫。
  *
  * **它與九個註冊點不同軸**，理由同 lifecycle：產物不進 `createDeepAgent` 的參數。也不跟著回滾：一列 `apply` 失敗
  * 撤掉的是它註冊的東西，它講過的話照樣交出去——那可能正是它為什麼失敗。
@@ -661,6 +686,20 @@ export interface PluginLogger {
    * @param message - 給人看的一句話，不必自己寫是誰（讀的一方從 origin 補）。
    */
   warn(message: string): void;
+  /**
+   * 拿一支**綁好 origin 的 logger**，只能在 `apply` 裡呼叫（同 {@link PluginLogger.warn}）。回傳的 `warn` 之後在任何時候
+   * 都能叫，講出來的話記的是綁定的那位外掛——執行期的話靠它。
+   * @returns 綁好 origin 的 logger。
+   */
+  bind(): BoundPluginLogger;
+  /**
+   * 登記一個**接收端**，收**從現在起**交出的警告（`apply` 裡的與綁定 logger 執行期的都算），照 dsh 的
+   * `ctx.logger.exporter()`；之前的用 {@link PluginLogger.warnings} 讀。接收端拋的錯被吞掉，不影響講話的那一方。
+   * 印在哪由登記的一方（CLI 與 serve）決定。
+   * @param exporter - 每則警告呼叫一次 `export`。
+   * @returns 取消登記。
+   */
+  exporter(exporter: PluginWarningExporter): () => void;
   /**
    * 目前交出的警告，依順序。
    * @returns 每一則連同是誰交的。
@@ -1215,7 +1254,7 @@ export function createRegistry(): InternalPluginRegistry {
    * 新增註冊方法就沒有第二個地方要記得改。**mutation 先跑、成功了才推堆疊**：驗證拋錯的註冊
    * 什麼都沒留下，也就沒有 undo 可推。
    *
-   * 不經這裡的有兩個：`logger.warn` 不回傳 undo；`sessions.bind` 是組裝點的一步，在
+   * 不經這裡的有兩個：`logger.warn`／`bind`／`exporter` 不回傳 undo；`sessions.bind` 是組裝點的一步，在
    * `enter` 之外呼叫（見 {@link SessionRegistrationPoint.bind}），不屬於任何 plugin 的註冊。
    *
    * @param what - 方法名，註冊者不在時拋的訊息用。
@@ -1567,10 +1606,39 @@ export function createRegistry(): InternalPluginRegistry {
     listeners: () => eventBus.listeners(),
   };
 
+  /** `warnings()` 留的筆數上限，同 dsh `LoggerService.bufferSize`。 */
+  const WARNING_BUFFER_SIZE = 1000;
   const warnings: PluginWarning[] = [];
+  const exporters = new Set<PluginWarningExporter>();
+  const say = (origin: PluginOrigin, message: string): void => {
+    const warning: PluginWarning = { origin, message };
+    warnings.push(warning);
+    // 只留最近 1000 則，同 dsh `LoggerService.bufferSize`：執行期的話不設上限會隨掉線次數一直長。
+    if (warnings.length > WARNING_BUFFER_SIZE)
+      warnings.splice(0, warnings.length - WARNING_BUFFER_SIZE);
+    for (const exporter of [...exporters]) {
+      try {
+        exporter.export(warning);
+      } catch {
+        // 聽的一方壞了，不該讓講話的一方跟著拋。
+      }
+    }
+  };
   const loggerPoint: PluginLogger = {
-    warn(message) {
-      warnings.push({ origin: requireOrigin('logger.warn()'), message });
+    warn: (message) => {
+      say(requireOrigin('logger.warn()'), message);
+    },
+    bind() {
+      const origin = requireOrigin('logger.bind()');
+      return {
+        warn: (message) => {
+          say(origin, message);
+        },
+      };
+    },
+    exporter(exporter) {
+      exporters.add(exporter);
+      return () => void exporters.delete(exporter);
     },
     warnings: () => [...warnings],
   };

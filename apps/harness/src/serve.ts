@@ -782,6 +782,12 @@ async function startServer(
       for (const line of describeWarnings(loaded, built.warnings)) {
         log(`[組裝] thread "${threadId}" 警告：${line}`);
       }
+      // 組裝之後這條 thread 的外掛執行期交出的話（例如 MCP 掉線重連的進度，#1099）同樣逐條記；組裝收掉時註冊表一起沒了。
+      built.onWarning((warning) => {
+        for (const line of describeWarnings(loaded, [warning])) {
+          log(`[外掛] thread "${threadId}"：${line}`);
+        }
+      });
       // **對話從日誌推回模型**（#306），同 CLI 的 `--resume`，在這條 thread 的第一輪之前。灌不進去就讓它
       // 起不來（理由見 `conversation-restore.ts`）：剛建好的 agent 與續接那把租約都要收掉，下一次請求才重試得了。
       if (resumed !== undefined) {

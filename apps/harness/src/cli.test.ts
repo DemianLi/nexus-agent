@@ -14,6 +14,7 @@ import type { PluginEntry } from '@nexus/core';
 import { z } from 'zod';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { FIRST_PLUGIN_NAME, SECOND_PLUGIN_NAME } from './cli-collision.fixture.js';
+import type { ReplLine } from './cli.js';
 import { APPROVAL_DISCLOSURE, exitCodeFor, parseCliArgs, runCli, runRepl, runTurn } from './cli.js';
 import { CLI_PROBE_FILE, createCliAgent } from './assembly-root.js';
 import { DISPOSE_FAILURE } from './cli-dispose-failure.fixture.js';
@@ -643,6 +644,92 @@ describe('REPL', () => {
     );
 
     expect(stdout()).toContain('回聲：嗨');
+  });
+
+  /**
+   * **非同步輸出不能弄亂輸入行**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)）：組裝之後外掛執行期交出的話
+   * （MCP 掉線重連的進度）隨時會來，包括人正在提示字元後面打字的時候。停在提示字元且輸出是 TTY 時，`redraw` 要先清掉這一行、
+   * 印訊息、再把提示字元連同已經打的字畫回來；其餘情況（不是 TTY、沒在等輸入）照原樣直接印。
+   */
+  describe('非同步輸出與輸入行', () => {
+    /** 一條假 TTY：`isTTY` 為真，收下 readline 寫進去的所有轉義序列。 */
+    function terminal(isTTY: boolean) {
+      const output = Object.assign(new PassThrough(), { isTTY });
+      let written = '';
+      output.on('data', (chunk: Buffer) => void (written += chunk.toString()));
+      return { output, written: () => written };
+    }
+    const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
+
+    async function start(isTTY: boolean) {
+      const { output, written } = terminal(isTTY);
+      const input = new PassThrough();
+      const line: ReplLine = {};
+      const repl = await replAgent();
+      const done = runRepl(
+        repl.agent,
+        { input, output },
+        recorder().printer,
+        new SessionLog('t'),
+        repl.commands,
+        undefined,
+        undefined,
+        undefined,
+        line,
+      );
+      await settle();
+      return { input, line, written, done };
+    }
+
+    it('停在提示字元、輸出是 TTY：清掉這一行、印訊息、把提示字元與已打的字畫回來', async () => {
+      const { input, line, written, done } = await start(true);
+      input.write('abc'); // 打到一半，沒按 Enter
+      await settle();
+      const before = written().length;
+      const order: string[] = [];
+      line.redraw?.(() => {
+        order.push(`印訊息時畫面：${JSON.stringify(written().slice(before))}`);
+      });
+      const after = written().slice(before);
+      // 先清行（`ESC[2K`）再移到行首（`ESC[1G`），印訊息之後才重畫提示字元，且帶回 `abc`。
+      expect(order[0]).toContain('\\u001b[2K');
+      expect(order[0]).toContain('\\u001b[1G');
+      expect(after.indexOf('> abc')).toBeGreaterThan(after.indexOf('\u001b[1G'));
+      expect(after).toContain('> abc');
+      input.end('\n/exit\n');
+      await done;
+    });
+
+    it('輸出不是 TTY：不碰轉義序列，只呼叫印的那一段', async () => {
+      const { input, line, written, done } = await start(false);
+      const before = written().length;
+      let printed = 0;
+      line.redraw?.(() => void (printed += 1));
+      expect(printed).toBe(1);
+      expect(written().slice(before)).toBe('');
+      input.end('/exit\n');
+      await done;
+    });
+
+    it('跑一輪的期間（沒在等輸入）：直接印，不畫提示字元', async () => {
+      const { input, line, written, done } = await start(true);
+      input.write('說點什麼\n'); // 送出之後那一輪還在跑，提示字元還沒回來
+      const before = written().length;
+      let printed = 0;
+      line.redraw?.(() => void (printed += 1));
+      expect(printed).toBe(1);
+      expect(written().slice(before)).not.toContain('> ');
+      input.end('/exit\n');
+      await done;
+    });
+
+    it('REPL 收掉之後 redraw 不再有值', async () => {
+      const { input, line, done } = await start(true);
+      expect(line.redraw).toBeDefined();
+      input.end('/exit\n');
+      await done;
+      expect(line.redraw).toBeUndefined();
+    });
   });
 
   it('stdin 收掉就結束——沒有 /exit 也不會卡住', async () => {

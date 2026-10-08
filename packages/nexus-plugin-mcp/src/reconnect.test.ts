@@ -16,8 +16,7 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { PluginRegistry } from '@nexus/core';
 import { loadPlugins } from '@nexus/core';
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { MockInstance } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import { createMcpPlugin } from './index.js';
 import type { McpPluginOptions } from './index.js';
 import { RELEASE_NOTE } from './fixture-tools.js';
@@ -27,14 +26,6 @@ import { modelToolNames } from './tool-names.js';
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
 const FAST = { initialDelayMs: 40, maxDelayMs: 160, maxAttempts: 5 } as const;
 const TOOL = 'mcp__srv__fetch_release_note';
-
-let warn: MockInstance<typeof console.warn>;
-beforeEach(() => {
-  warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-});
-afterEach(() => {
-  warn.mockRestore();
-});
 
 /**
  * 命令列含記號的行程。**不經 shell**：`sh -c "pgrep … || true"` 在 Linux 的 dash 上不會 exec，shell 自己的命令列也含記號，
@@ -83,8 +74,9 @@ async function waitFor(check: () => Promise<boolean> | boolean, ms = 10_000): Pr
   }
 }
 
-/** 到目前為止往日誌講過的話。 */
-const logged = (): string[] => warn.mock.calls.map((call) => String(call[0]));
+/** 到目前為止這個 registry 的 logger 收到的話（只取訊息，不看是誰說的）。 */
+const loggedBy = (registry: PluginRegistry): string[] =>
+  registry.logger.warnings().map(({ message }) => message);
 
 function invoke(registry: PluginRegistry, name: string, args: unknown = { topic: 'x' }) {
   const found = registry.tools.resolve(name)?.value;
@@ -151,11 +143,15 @@ describe('殺掉 stdio 子行程', () => {
       expect(pidsAfter).toHaveLength(1);
       expect(pidsAfter[0]).not.toBe(pidsBefore[0]);
 
-      const messages = warn.mock.calls.map((call) => String(call[0]));
+      const messages = loggedBy(registry);
       expect(
         messages.some((m) => m.includes('connection lost; reconnecting in 40ms (attempt 1/5)')),
       ).toBe(true);
       expect(messages.some((m) => m.includes('reconnected (attempt 1/5)'))).toBe(true);
+      // 話記的是這顆外掛說的（`apply` 裡綁定的 origin），不是匿名的。
+      expect(new Set(registry.logger.warnings().map(({ origin }) => origin.name))).toEqual(
+        new Set(['mcp']),
+      );
     } finally {
       await dispose();
     }
@@ -181,7 +177,7 @@ describe('殺掉 stdio 子行程', () => {
       expect(s.pids()).toEqual([]);
       expect(registry.tools.resolve(TOOL)).toBeDefined();
       await expect(invoke(registry, TOOL)).rejects.toThrow('reconnection was given up');
-      expect(logged().some((m) => m.includes('reconnect is disabled'))).toBe(true);
+      expect(loggedBy(registry).some((m) => m.includes('reconnect is disabled'))).toBe(true);
     } finally {
       await dispose();
     }
@@ -220,11 +216,13 @@ describe('殺掉 stdio 子行程', () => {
 
       writeFileSync(flag, '');
       killAll(s.pids());
-      await waitFor(() => logged().some((m) => m.includes('giving up after 2 consecutive')));
+      await waitFor(() =>
+        loggedBy(registry).some((m) => m.includes('giving up after 2 consecutive')),
+      );
       expect(seen()).toEqual(['other_tool']);
       expect(registry.tools.resolve(TOOL)).toBeDefined();
       await expect(invoke(registry, TOOL)).rejects.toThrow('reconnection was given up');
-      const attempts = logged().filter((m) => m.includes('connection attempt failed'));
+      const attempts = loggedBy(registry).filter((m) => m.includes('connection attempt failed'));
       expect(attempts).toHaveLength(2);
     } finally {
       await dispose();

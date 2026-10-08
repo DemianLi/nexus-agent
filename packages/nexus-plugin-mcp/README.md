@@ -92,8 +92,8 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   清單上，但呼叫會失敗**（`mcp-client(<名字>): server is disconnected`）。連回來之後同一批工具物件又叫得動，工具定義逐位元組
   不變，提示詞前綴不會因重連失效。**放棄之後**那台的工具從每次模型請求的工具清單拿掉（註冊表上仍在，呼叫得到「已放棄重連」），
   要等重新組裝（`serve` 的下一條對話、或重啟）才恢復。`reconnect.enabled: false` 關掉自動重連（工具照列、呼叫失敗，直到
-  重新組裝）。重連的進度——掉線、第 n 次嘗試、放棄、連回來——往 `console.warn` 講（`serve` 就是伺服器日誌）；不能走
-  `registry.logger`，它只在 `apply` 裡呼叫得動。偵測有兩個來源：SDK client 的 `onclose`（子行程被殺立刻觸發），與工具／資源呼叫
+  重新組裝）。重連的進度——掉線、第 n 次嘗試、放棄、連回來——交給 `registry.logger`（在 `apply` 裡 `bind()`
+  綁好是誰，組裝之後也叫得動；外掛不自己寫標準錯誤，CLI 印到標準錯誤、`serve` 記進伺服器日誌，都帶 `[外掛]` 前綴）。偵測有兩個來源：SDK client 的 `onclose`（子行程被殺立刻觸發），與工具／資源呼叫
   失敗且錯誤是 `Not connected`／`Connection closed`（沒掛 `onclose` 的傳輸也能觸發）。
 - **`failOnStartupError: true` 讓這一列失敗。** 同樣三件事改成在 `apply` 裡拋：清單上的這一列
   掉了（啟動時的警告指名它），手搭清單則整個載入失敗。`serve` 啟動時就掉了的列之後每條對話都
