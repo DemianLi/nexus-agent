@@ -18,6 +18,11 @@
  * **單選自動跳只認指標選取**（§8、WCAG 3.2.2）：滑鼠、觸控、VoiceOver 點兩下選了才跳，先停 200 讓勾選看得到；
  * 鍵盤（方向鍵、數字鍵）改選取不跳，要按 Enter。說明句放在題目描述裡事先告知。
  *
+ * **MCP server 的反問**（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）：`pending.origin` 有值才多這三樣，沒有就跟
+ * 以前一樣。①面板最上面講**是哪台 server 的哪支工具在問、用什麼有效參數**——一個不說來源的問答卡，讓人不知道自己在回答誰；
+ * ②操作列下面多一列「拒絕」（明確說不給）與「取消」（先不回答），MCP 的 `decline`／`cancel`，與作答的 `accept` 並列，**都不停止這一輪**
+ * （名稱列的 ❌ 才是停止，§4.3）；③參數原文照畫在可捲動的區塊裡，不截斷（人要看得到將被同意的是什麼）。
+ *
  * **草稿不暫存**（#231 第 8 項）：收起不會丟（換手層保持掛載），關掉分頁再回來就沒了。dsh 也把草稿標成 transient。
  */
 
@@ -27,6 +32,7 @@ import type { FormEvent } from 'react';
 import type { PendingQuestion } from '@nexus/wire';
 
 import { Surface } from '@/components/surface';
+import { Button } from '@/components/ui/button';
 import { MarkdownText } from '@/components/markdown-text';
 import {
   Questionnaire,
@@ -85,11 +91,18 @@ export function QuestionPanel({
   pending,
   busy,
   onAnswer,
+  onDecline,
+  onDismiss,
 }: {
   pending: PendingQuestion;
   busy: boolean;
   onAnswer: (answers: QuestionAnswer[]) => void;
+  /** MCP 反問的「拒絕」；沒給就不畫。 */
+  onDecline?: () => void;
+  /** MCP 反問的「取消」（先不回答）；沒給就不畫。 */
+  onDismiss?: () => void;
 }) {
+  const origin = pending.origin;
   const ids = pending.questions.map((question) => question.id);
   const [item, setItem] = useState(ids[0] ?? '');
   const [dir, setDir] = useState<'next' | 'prev'>();
@@ -113,8 +126,19 @@ export function QuestionPanel({
     onAnswer(readAnswers(event.currentTarget, pending));
   };
 
+  // 操作列。有來源時外面再包一層釘住的容器、多一列拒絕／取消，這裡的列自己就不釘（`sticky`＝是不是最外層）。
+  const actions = (sticky: boolean) => (
+    <QuestionnaireActions className={sticky ? 'bg-stage sticky bottom-0 pb-4' : undefined}>
+      <QuestionnairePrevious>上一題</QuestionnairePrevious>
+      <QuestionnaireSkip>跳過</QuestionnaireSkip>
+      <QuestionnaireNext>下一題</QuestionnaireNext>
+      <QuestionnaireSubmit disabled={busy}>送出答案</QuestionnaireSubmit>
+    </QuestionnaireActions>
+  );
+
   return (
     <Surface tone="stage" className="max-h-[55svh] overflow-auto px-4 pt-4">
+      {origin !== undefined && <OriginBlock origin={origin} />}
       <Questionnaire
         item={item}
         onItemChange={go}
@@ -214,13 +238,76 @@ export function QuestionPanel({
           );
         })}
         {/* 題目長到要捲時，上下題與送出仍然看得到：釘在捲動區底部（實跑 1280／375 都被擠出畫面）。 */}
-        <QuestionnaireActions className="bg-stage sticky bottom-0 pb-4">
-          <QuestionnairePrevious>上一題</QuestionnairePrevious>
-          <QuestionnaireSkip>跳過</QuestionnaireSkip>
-          <QuestionnaireNext>下一題</QuestionnaireNext>
-          <QuestionnaireSubmit disabled={busy}>送出答案</QuestionnaireSubmit>
-        </QuestionnaireActions>
+        {origin === undefined || (onDecline === undefined && onDismiss === undefined) ? (
+          actions(true)
+        ) : (
+          <div className="bg-stage sticky bottom-0 flex flex-col gap-2 pb-4">
+            {actions(false)}
+            <div className="flex justify-end gap-2" data-testid="origin-actions">
+              {onDecline !== undefined && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 sm:min-h-0"
+                  disabled={busy}
+                  onClick={onDecline}
+                >
+                  拒絕
+                </Button>
+              )}
+              {onDismiss !== undefined && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="min-h-11 sm:min-h-0"
+                  disabled={busy}
+                  onClick={onDismiss}
+                >
+                  取消
+                </Button>
+              )}
+            </div>
+          </div>
+        )}
       </Questionnaire>
     </Surface>
+  );
+}
+
+/** 參數轉成可讀的文字；循環參照之類轉不了的退回 `String`（來源是 server 給的純 JSON，正常不會發生）。 */
+function argumentsText(value: unknown): string {
+  try {
+    return JSON.stringify(value, null, 2) ?? String(value);
+  } catch {
+    return String(value);
+  }
+}
+
+/** 這組問題是哪台 MCP server 的哪支工具在問（#1098）：最上面，題目之前。 */
+function OriginBlock({ origin }: { origin: NonNullable<PendingQuestion['origin']> }) {
+  return (
+    <div
+      data-testid="question-origin"
+      className="border-border text-body mb-3 flex flex-col gap-2 rounded-lg border px-3 py-2"
+    >
+      <p className="font-medium">
+        MCP 伺服器「<code className="font-mono">{origin.server}</code>」的工具「
+        <code className="font-mono">{origin.tool}</code>」在問你
+      </p>
+      <div className="flex flex-col gap-1">
+        <p className="text-muted-foreground text-tip">呼叫參數</p>
+        <pre
+          data-testid="question-origin-arguments"
+          tabIndex={0}
+          aria-label="呼叫參數"
+          className="bg-chip max-h-32 min-w-0 overflow-auto rounded-lg p-2 font-mono text-tip break-words whitespace-pre-wrap"
+        >
+          {argumentsText(origin.arguments)}
+        </pre>
+      </div>
+      <p className="text-muted-foreground text-tip">
+        這是外部伺服器在問，不是模型。拒絕＝明確不給；取消＝先不回答。兩者都不會停止這一輪。
+      </p>
+    </div>
   );
 }

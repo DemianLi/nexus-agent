@@ -630,6 +630,8 @@ function ConversationView({
                   pending={pending}
                   busy={!conversation.connected}
                   onAnswer={(answers) => void conversation.answer(pending.interruptId, answers)}
+                  onDecline={() => void conversation.declineQuestion(pending.interruptId)}
+                  onDismiss={() => void conversation.dismissQuestion(pending.interruptId)}
                 />
               ) : (
                 <ApprovalCard
