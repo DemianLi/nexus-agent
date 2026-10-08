@@ -368,6 +368,13 @@ export interface FoldOptions {
    * 只折進 root 的 middleware 陣列，見 {@link ./step-inbox.ts}。
    */
   stepInbox?: boolean;
+
+  /**
+   * 同一步的工具呼叫一顆一顆串行（[#711](https://github.com/DemianLi/nexus-agent/issues/711) 收尾）：每一顆都當獨佔，不看宣告。
+   * 對應 dsh 的 `maxParallelToolCalls: 1`。省略即照宣告重疊。由組裝點按 `#settings/agent-loop` 的上限是不是 1 給；
+   * root 與每個子代理的屏障都吃它。見 {@link ./tool-barrier.ts | createToolBarrierMiddleware}。
+   */
+  serialToolCalls?: boolean;
 }
 
 /**
@@ -539,7 +546,9 @@ export function foldRegistry(
     ),
     // 同一步多顆工具呼叫的獨佔屏障（#711 第 2 步）排在圍堵外面：等待中的呼叫在通過屏障前**什麼都不做**，不能先被圍堵記一顆
     // `tool/call`（resume 重跑會記第二顆）。**各建一份**：紀錄在閉包裡，root 與每個子代理各有各的步。見 {@link ./tool-barrier.ts}。
-    perAgent('toolBarrier', () => createToolBarrierMiddleware()),
+    perAgent('toolBarrier', () =>
+      createToolBarrierMiddleware(undefined, options.serialToolCalls === true),
+    ),
     // 圍堵在第 0 格：它要包住下面每一個，包含子代理 `spec.middleware` 自己帶的那些。
     shared('containment', containment),
     // 緊貼圍堵：在它裡面（換過的結果圍堵才記得到碼），在起訖紀錄器外面（中止之後被擋下的那次呼叫不算一步）。

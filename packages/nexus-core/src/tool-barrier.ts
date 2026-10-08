@@ -139,10 +139,15 @@ function owningMessage(
  * 造屏障 middleware。**一個 agent 一份**：紀錄在閉包裡。
  *
  * @param safeNames - 用名字宣告可以重疊的工具；省略即 {@link DEFAULT_PARALLEL_SAFE_TOOLS}。
+ * @param serial - 為真時**每一顆都當獨佔**（不看宣告），同一步的呼叫一顆一顆照模型給的順序跑。這是上限設 1 的實作
+ *   （[#711](https://github.com/DemianLi/nexus-agent/issues/711) 收尾）：dsh 的 `maxParallelToolCalls: 1` 就是串行
+ *   （`agent-loop/README.zh.md:48`），而 LangGraph 的 `maxConcurrency: 1` 會把第一顆之後的呼叫靜靜丟掉（見
+ *   `settings/agent-loop.ts` 檔頭偏離 0），所以串行改由這道屏障承擔，`maxConcurrency` 另外墊在 2 以上。
  * @returns 可以放進 middleware 陣列、排在圍堵外面的實例。
  */
 export function createToolBarrierMiddleware(
   safeNames: ReadonlySet<string> = DEFAULT_PARALLEL_SAFE_TOOLS,
+  serial = false,
 ): AgentMiddleware {
   const steps = new Map<string, StepRecord>();
 
@@ -185,11 +190,13 @@ export function createToolBarrierMiddleware(
       // 這個位置在之前的 attempt 已經跑完（resume 不會重跑它，來到這裡只可能是同一個 id 的再次呼叫）：不設屏障。
       if (slot.status === 'complete') return handler(request);
 
-      const safe = isConcurrencySafe(
-        (request as unknown as ToolBarrierRequest).tool,
-        request.toolCall.name,
-        safeNames,
-      );
+      const safe =
+        !serial &&
+        isConcurrencySafe(
+          (request as unknown as ToolBarrierRequest).tool,
+          request.toolCall.name,
+          safeNames,
+        );
       slot.status = 'running';
       slot.safe = safe;
       slot.entered.resolve();

@@ -95,6 +95,7 @@ import { DEFAULT_RECURSION_LIMIT, RECURSION_LIMIT_SERVICE } from './settings/rec
 import {
   DEFAULT_MAX_PARALLEL_TOOL_CALLS,
   MAX_PARALLEL_TOOL_CALLS_SERVICE,
+  MIN_LANGGRAPH_MAX_CONCURRENCY,
 } from './settings/agent-loop.js';
 import { SEARCH_RESULT_LIMITS_SERVICE } from './settings/tool-fs-search.js';
 
@@ -589,6 +590,20 @@ function maxParallelToolCallsFor(registry: PluginRegistry): number {
 }
 
 /**
+ * 帶進 LangGraph `maxConcurrency` 的值：上限，但**至少 2**。上限 1 的串行由屏障承擔
+ * （{@link serialToolCallsFor}），而 LangGraph 的 `maxConcurrency: 1` 會把第一顆之後的呼叫靜靜丟掉，
+ * 見 `settings/agent-loop.ts` 檔頭偏離 0。
+ */
+function maxConcurrencyFor(registry: PluginRegistry): number {
+  return Math.max(MIN_LANGGRAPH_MAX_CONCURRENCY, maxParallelToolCallsFor(registry));
+}
+
+/** 上限是 1 ＝ 串行：屏障把每一顆都當獨佔（dsh 的 `maxParallelToolCalls: 1`）。 */
+function serialToolCallsFor(registry: PluginRegistry): boolean {
+  return maxParallelToolCallsFor(registry) === 1;
+}
+
+/**
  * 搜尋結果的筆數上限（[#735](https://github.com/DemianLi/nexus-agent/issues/735)）：`#settings/tool-fs-search` 那一列
  * 提供了服務才掛，見那一列的檔頭。完整結果存進工具結果暫存（同外溢層那一份存檔服務）；沒有暫存（eval、spike、沒有會話
  * 日誌的組裝）時照 dsh 只留前段、註明沒存到。
@@ -729,6 +744,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       }),
       ...(options.modelUsage !== undefined && { modelUsage: options.modelUsage }),
       ...(options.stepInbox === true && { stepInbox: true }),
+      ...(serialToolCallsFor(registry) && { serialToolCalls: true }),
     });
 
     // **推導出來的型別沒有塌**：`assembleAgent` 回 `createAgent` 的型別，`invoke()` 的 `messages` 仍然是
@@ -744,7 +760,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       recursionLimit: recursionLimitFor(registry, options),
       // 每步的工具呼叫各是一個 pregel task，`maxConcurrency` 就是同時起跑的上限（#711）；一次性 `task` 子代理經執行脈絡
       // 繼承同一個值（實測）。
-      maxConcurrency: maxParallelToolCallsFor(registry),
+      maxConcurrency: maxConcurrencyFor(registry),
     });
 
     // 接上去但還沒收掉的協調器。**組裝點自己記著**，因為呼叫端可能只叫 `dispose()`
@@ -777,7 +793,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       }).withConfig({
         recursionLimit: recursionLimitFor(registry, options),
         // 平行工具呼叫上限同理（#711）：背景圖不在 root 那次 invoke 的執行脈絡裡，繼承不到，要自己帶。
-        maxConcurrency: maxParallelToolCallsFor(registry),
+        maxConcurrency: maxConcurrencyFor(registry),
       });
     };
 
