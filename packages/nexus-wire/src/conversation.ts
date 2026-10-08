@@ -35,6 +35,8 @@ import { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 import type { WireContextMeasure, WireContextPressure } from './context-pressure.js';
 import type { CustomFrameName } from './custom-frame.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
+import { IMAGE_MEDIA_TYPES } from './attachments.js';
+import type { WireAttachmentRef } from './attachments.js';
 import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, isSettleReason } from './inbox.js';
 import type {
   WireQueuedInput,
@@ -85,6 +87,11 @@ export interface HumanEntry {
    * `@<label>`，畫面據它把那一段畫成點得開的引用。沒有引用就不給這一格。
    */
   readonly references?: readonly WireSessionReference[];
+  /**
+   * 這一句帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：**參照，不是位元組**，照使用者選取的順序。
+   * 圖與檔案由 `type` 判別。沒有附件就不給這一格（空陣列與沒給是同一件事）。
+   */
+  readonly attachments?: readonly WireAttachmentRef[];
 }
 
 /**
@@ -1342,6 +1349,54 @@ function referencesField(
       };
 }
 
+/** 一份附件參照長得對不對（`@nexus/core` 的 `AttachmentRef` 另寫一份，同 `WireAttachmentRef`）。 */
+function isWireAttachmentRef(value: unknown): value is WireAttachmentRef {
+  if (typeof value !== 'object' || value === null) return false;
+  const ref = value as Record<string, unknown>;
+  const count = (n: unknown) => typeof n === 'number' && Number.isSafeInteger(n) && n >= 0;
+  if (typeof ref['attachmentId'] !== 'string' || ref['attachmentId'] === '') return false;
+  if (!count(ref['bytes'])) return false;
+  if (ref['type'] === 'file') return typeof ref['name'] === 'string' && ref['name'] !== '';
+  if (ref['type'] === 'image') {
+    return (
+      typeof ref['mediaType'] === 'string' &&
+      (IMAGE_MEDIA_TYPES as readonly string[]).includes(ref['mediaType']) &&
+      count(ref['width']) &&
+      count(ref['height']) &&
+      (ref['name'] === undefined || typeof ref['name'] === 'string')
+    );
+  }
+  return false;
+}
+
+/** 一句話帶的附件長得對不對。沒給（`undefined`）合法，給了就每一份都要合格。 */
+function isWireAttachments(value: unknown): value is readonly WireAttachmentRef[] | undefined {
+  return value === undefined || (Array.isArray(value) && value.every(isWireAttachmentRef));
+}
+
+/** 有附件才帶這一格：空陣列與沒給是同一件事。只留認得的欄位，不把多出來的東西原樣轉手。 */
+function attachmentsField(
+  attachments: readonly WireAttachmentRef[] | undefined,
+): { readonly attachments: readonly WireAttachmentRef[] } | Record<string, never> {
+  if (attachments === undefined || attachments.length === 0) return {};
+  return {
+    attachments: attachments.map((ref): WireAttachmentRef => {
+      const { attachmentId, bytes } = ref;
+      return ref.type === 'file'
+        ? { type: 'file', attachmentId, name: ref.name, bytes }
+        : {
+            type: 'image',
+            attachmentId,
+            mediaType: ref.mediaType,
+            bytes,
+            width: ref.width,
+            height: ref.height,
+            ...(ref.name === undefined ? {} : { name: ref.name }),
+          };
+    }),
+  };
+}
+
 /**
  * `inbox` 的 `payload`：兩條清單**整份換掉**。任何一件不對、`claimed`／`claimedNextStep` 不對，就整顆不收，不收一半——
  * 少一件的清單分不出是開跑了還是被刪了，而且看起來正常。
@@ -1379,13 +1434,19 @@ function reduceInbox(
   }
   const humans: (HumanEntry | NoticeEntry | AgentMessageEntry)[] = [];
   for (const claim of claims) {
-    const { id, text, references, source } = (claim ?? {}) as {
+    const { id, text, references, attachments, source } = (claim ?? {}) as {
       id?: unknown;
       text?: unknown;
       references?: unknown;
+      attachments?: unknown;
       source?: unknown;
     };
-    if (typeof id !== 'string' || typeof text !== 'string' || !isWireReferences(references)) {
+    if (
+      typeof id !== 'string' ||
+      typeof text !== 'string' ||
+      !isWireReferences(references) ||
+      !isWireAttachments(attachments)
+    ) {
       return state;
     }
     // 不是人送的（#840、#849）：執行期的記帳，不畫人的泡泡。認得的來源之外的一律當成人畫——舊的一側沒有這一格。
@@ -1424,6 +1485,7 @@ function reduceInbox(
       text,
       inboxId: id,
       ...referencesField(references),
+      ...attachmentsField(attachments),
       ...timeField('startedAt', time),
     });
   }
@@ -1577,6 +1639,8 @@ interface MessageData {
   readonly message?: string;
   /** 歷史重播的人話帶的 `@` 引用（#713），即時那條走 `inbox` 的 `claimed`。 */
   readonly references?: unknown;
+  /** 歷史重播的人話帶的附件參照（#732），即時那條走 `inbox` 的 `claimed`。 */
+  readonly attachments?: unknown;
 }
 
 function reduceMessage(
@@ -1604,11 +1668,13 @@ function reduceMessage(
         // `status` 不動——這一句已經說過了，不是剛開跑的那一句（那一句走 `inbox` 的 `claimed`）。
         // 引用長得不對就當沒有：這一則人話還是要畫，只是少了引用的標記。
         const references = isWireReferences(data.references) ? data.references : undefined;
+        const attachments = isWireAttachments(data.attachments) ? data.attachments : undefined;
         const entry: HumanEntry = {
           kind: 'human',
           id,
           text: '',
           ...referencesField(references),
+          ...attachmentsField(attachments),
           ...timeField('startedAt', time),
         };
         return { ...state, entries: [...state.entries, entry] };
