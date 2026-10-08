@@ -19,6 +19,7 @@ import type {
   ErrorResponse,
   Event,
   EventStreamRequest,
+  Extensible,
   InputRespondOne,
   RunStartParams,
 } from '@langchain/protocol';
@@ -305,8 +306,22 @@ export type WireErrorCode =
   | typeof SUBAGENT_AT_CAPACITY
   | typeof SUBAGENT_CLOSED;
 
-/** 協定的 `ErrorResponse`，錯誤碼換成 {@link WireErrorCode}。 */
-export type WireErrorResponse = Omit<ErrorResponse, 'error'> & { error: WireErrorCode };
+/**
+ * 協定的 `ErrorResponse`，錯誤碼換成 {@link WireErrorCode}。
+ *
+ * **不能寫成 `Omit<ErrorResponse, 'error'> & {...}`**（[#1166](https://github.com/DemianLi/nexus-agent/issues/1166)）：
+ * `ErrorResponse` 是 `Extensible & {...}`，`Extensible` 帶 `string` 索引簽名，`Omit` 的 `keyof` 因此是 `string`，
+ * `Pick` 只剩索引簽名，`type`、`id`、`message` 這些具名鍵全掉了——`UplinkResult` 在 `type === 'error'` 之後不收窄，
+ * `message` 讀出來是 `any`。所以具名鍵照 `ErrorResponse` 逐個列出，只把 `error` 換掉；索引簽名留著（協定允許額外欄位）。
+ */
+export type WireErrorResponse = Extensible & {
+  type: 'error';
+  id: ErrorResponse['id'];
+  error: WireErrorCode;
+  message: string;
+  stacktrace?: string;
+  meta?: ErrorResponse['meta'];
+};
 
 /**
  * 評分與評語（[#278](https://github.com/DemianLi/nexus-agent/issues/278)、
