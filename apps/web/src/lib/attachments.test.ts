@@ -53,8 +53,8 @@ describe('草稿附件的純函式', () => {
     expect(attachmentDetail({ name: 'Makefile', size: 100 })).toBe('100 B');
   });
 
-  it('伺服器收不收附件：連線協定（#732）合進來之前一律不收', () => {
-    expect(serverSupportsAttachments()).toBe(false);
+  it('伺服器收不收附件：上傳與 run.start 的 attachments 都落地了（#732），出貨就開', () => {
+    expect(serverSupportsAttachments()).toBe(true);
   });
 
   it('整頁拖放只認檔案：文字、連結不算', () => {
