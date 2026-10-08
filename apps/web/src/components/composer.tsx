@@ -447,7 +447,12 @@ export function Composer({
                 onAddFiles(files);
               }}
             />
-            <InputGroupAddon align="block-end" className="px-2 pb-2">
+            {/* 有座位時底列放不下就換行（`flex-wrap`）：375 寬、一輪在跑時有加入鈕、模型座、權限座、用量表、停止、送出六顆，
+              塞不下會讓送出鈕超出框（實機量到 18px）。只在有座位時開，沒座位時行為與以前相同。 */}
+            <InputGroupAddon
+              align="block-end"
+              className={`px-2 pb-2 ${seats === undefined ? '' : 'flex-wrap'}`}
+            >
               {onAddFiles !== undefined && (
                 <>
                   <input

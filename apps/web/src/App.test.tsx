@@ -3,6 +3,7 @@ import type {
   ModelCatalogResult,
   ModelSelectResult,
   ModelSelection,
+  PermissionCatalogResult,
   SlashDescriptor,
   SessionReferenceCandidate,
   SlashRunOutcome,
@@ -3613,5 +3614,199 @@ describe('模型座（#723）', () => {
 
       await waitFor(() => expect(selected).toEqual([{ modelId: 'model-b' }]));
     });
+  });
+});
+
+describe('權限座（#437）', () => {
+  beforeEach(stubCmdkLayout);
+
+  const CATALOG: PermissionCatalogResult = {
+    ok: true,
+    value: {
+      catalog: {
+        options: [
+          { value: 'read-only', name: '唯讀', description: '只能讀，改東西要問' },
+          { value: 'workspace-write', name: '可寫工作區' },
+          { value: 'danger-full-access', name: '全開' },
+        ],
+        defaultOptions: [{ value: 'workspace-write', name: '可寫工作區' }],
+        defaultPreset: 'workspace-write',
+      },
+    },
+  };
+
+  const seat = () => screen.queryByTestId('permission-seat');
+  const permissionFrame = (
+    downlink: ReturnType<typeof fakeClient>['downlink'],
+    currentValue: string,
+  ): Event =>
+    downlink.customFrame(PROJECTION, {
+      key: 'permissions',
+      version: 1,
+      view: { currentValue },
+    });
+
+  /** 接上權限目錄的假 client；`current` 不是 `undefined` 就在一開始推那顆投影。 */
+  async function withPermissions(
+    current: string | undefined,
+    events: readonly Event[] = [frame('lifecycle', [], { event: 'completed', graph_name: 'root' })],
+  ) {
+    seq = 0;
+    const fake = fakeClient(events);
+    const client: WireClient = {
+      ...fake.client,
+      permissionCatalog: async () => ({ kind: 'ok', result: CATALOG }),
+    };
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    if (current !== undefined) {
+      fake.downlink.push(fake.opened[0]!, [permissionFrame(fake.downlink, current)]);
+      await screen.findByTestId('permission-seat');
+    }
+    return fake;
+  }
+
+  const pickOption = async (name: string) => {
+    fireEvent.click(await screen.findByTestId('permission-seat'));
+    const list = await screen.findByRole('listbox');
+    fireEvent.click(within(list).getByText(name));
+  };
+
+  it.each([
+    ['not_supported', { kind: 'rejected', code: 'not_supported', message: '還沒實作' }],
+    ['其他拒絕', { kind: 'rejected', message: '這條線收不了' }],
+  ] as const)('目錄回 %s：沒有權限座，即使投影到了', async (_case, outcome) => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const permissionCatalog = vi.fn(async () => outcome);
+    render(<App client={{ ...fake.client, permissionCatalog }} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    await waitFor(() => expect(permissionCatalog).toHaveBeenCalled());
+    fake.downlink.push(fake.opened[0]!, [permissionFrame(fake.downlink, 'workspace-write')]);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(seat()).toBeNull();
+  });
+
+  it('投影沒有送來（這個組裝沒有權限組合）：沒有權限座', async () => {
+    await withPermissions(undefined);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(seat()).toBeNull();
+  });
+
+  it('座位寫目前的組（無障礙名稱含目前的值），投影換了就跟著換', async () => {
+    const fake = await withPermissions('workspace-write');
+    const button = screen.getByTestId('permission-seat');
+    expect(button.getAttribute('aria-label')).toBe('權限：可寫工作區，點開切換');
+    expect(button.getAttribute('data-warning')).toBe('false');
+
+    fake.downlink.push(fake.opened[0]!, [permissionFrame(fake.downlink, 'read-only')]);
+    await waitFor(() =>
+      expect(screen.getByTestId('permission-seat').getAttribute('aria-label')).toBe(
+        '權限：唯讀，點開切換',
+      ),
+    );
+  });
+
+  it('`custom`（對不上任何一組）寫「自訂」，清單裡沒有哪一列打勾', async () => {
+    await withPermissions('custom');
+    expect(screen.getByTestId('permission-seat').getAttribute('aria-label')).toBe(
+      '權限：自訂，點開切換',
+    );
+    fireEvent.click(screen.getByTestId('permission-seat'));
+    const list = await screen.findByRole('listbox');
+    expect(within(list).getAllByRole('option')).toHaveLength(3);
+    expect(list.querySelector('[data-checked="true"]')).toBeNull();
+  });
+
+  it('選另一組：送 `/permission <組名>`；座位等伺服器推新值才換', async () => {
+    const { slashed } = await withPermissions('workspace-write');
+
+    await pickOption('唯讀');
+
+    await waitFor(() => expect(slashed).toEqual(['/permission read-only']));
+    expect(screen.getByTestId('permission-seat').getAttribute('aria-label')).toBe(
+      '權限：可寫工作區，點開切換',
+    );
+  });
+
+  it('選目前這一組：什麼都不送', async () => {
+    const { slashed } = await withPermissions('workspace-write');
+    await pickOption('可寫工作區');
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(slashed).toEqual([]);
+  });
+
+  it('命令失敗：原因由斜線命令的那一套顯示，座位不自己改', async () => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const client: WireClient = {
+      ...fake.client,
+      permissionCatalog: async () => ({ kind: 'ok', result: CATALOG }),
+      slashRun: async () => ({ kind: 'error', text: '這一組在設定裡被拿掉了' }),
+    };
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    fake.downlink.push(fake.opened[0]!, [permissionFrame(fake.downlink, 'workspace-write')]);
+    await pickOption('唯讀');
+
+    expect(await screen.findByText('這一組在設定裡被拿掉了')).toBeTruthy();
+    expect(screen.getByTestId('permission-seat').getAttribute('aria-label')).toContain(
+      '可寫工作區',
+    );
+  });
+
+  describe('全開要先確認', () => {
+    it('選「全開」先跳確認，還沒送；取消就不送', async () => {
+      const { slashed } = await withPermissions('workspace-write');
+
+      await pickOption('全開');
+
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText('切換到「全開」？')).toBeTruthy();
+      expect(within(dialog).getByText(/不再跳出核准請求/u)).toBeTruthy();
+      expect(slashed).toEqual([]);
+      // 預設落在取消：不小心按 Enter 不會切過去。
+      expect(document.activeElement?.textContent).toBe('取消');
+
+      fireEvent.click(within(dialog).getByRole('button', { name: '取消' }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+      expect(slashed).toEqual([]);
+    });
+
+    it('按「切換」才送 `/permission danger-full-access`', async () => {
+      const { slashed } = await withPermissions('workspace-write');
+
+      await pickOption('全開');
+      const dialog = await screen.findByRole('alertdialog');
+      fireEvent.click(within(dialog).getByRole('button', { name: '切換' }));
+
+      await waitFor(() => expect(slashed).toEqual(['/permission danger-full-access']));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    });
+
+    it('其他組不問、直接送；目前就是全開時座位換警示色', async () => {
+      const fake = await withPermissions('danger-full-access');
+      expect(screen.getByTestId('permission-seat').getAttribute('data-warning')).toBe('true');
+
+      await pickOption('唯讀');
+
+      await waitFor(() => expect(fake.slashed).toEqual(['/permission read-only']));
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
+  });
+
+  it('一輪在跑時清單停用，寫明原因，選了也不送', async () => {
+    const { slashed } = await withPermissions('workspace-write', [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+    ]);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+
+    fireEvent.click(screen.getByTestId('permission-seat'));
+    const list = await screen.findByRole('listbox');
+    expect(screen.getByTestId('picker-locked').textContent).toBe('這一輪結束後才能切換。');
+    fireEvent.click(within(list).getByText('唯讀'));
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(slashed).toEqual([]);
+    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });

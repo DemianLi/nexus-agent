@@ -52,6 +52,8 @@ export function PickerSeat({
   popoverLabel,
   searchPlaceholder = '搜尋…',
   testId,
+  warning = false,
+  locked,
 }: {
   readonly icon: ReactNode;
   /** 圖示旁的字：目前的值。 */
@@ -67,6 +69,10 @@ export function PickerSeat({
   readonly popoverLabel: string;
   readonly searchPlaceholder?: string;
   readonly testId: string;
+  /** 目前的值是要留意的那一種（例如權限的「全開」）：座位換警示色。 */
+  readonly warning?: boolean;
+  /** 現在選不了（例如一輪還在跑）：清單照開、每一列停用，底下寫這一句原因。 */
+  readonly locked?: string;
 }) {
   const rows = groups.reduce((sum, group) => sum + group.items.length, 0);
   return (
@@ -76,7 +82,8 @@ export function PickerSeat({
           <PopoverTrigger
             aria-label={accessibleName}
             data-testid={testId}
-            className="hover:bg-chip-hover active:bg-chip-pressed flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-full px-2 text-tip text-muted-foreground transition-colors duration-(--duration-quick) lg:h-9 lg:min-w-9"
+            data-warning={warning}
+            className={`hover:bg-chip-hover active:bg-chip-pressed flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-full px-2 text-tip transition-colors duration-(--duration-quick) lg:h-9 lg:min-w-9 ${warning ? 'text-warning' : 'text-muted-foreground'}`}
           >
             <span aria-hidden className="flex size-4 items-center justify-center">
               {icon}
@@ -113,6 +120,7 @@ export function PickerSeat({
                     key={item.id}
                     value={`${item.label} ${item.id}`}
                     data-checked={item.checked}
+                    disabled={locked !== undefined}
                     onSelect={() => {
                       onPick(group, item);
                     }}
@@ -131,6 +139,14 @@ export function PickerSeat({
               </CommandGroup>
             ))}
           </CommandList>
+          {locked !== undefined && (
+            <p
+              className="text-muted-foreground border-t px-3 py-2 text-tip"
+              data-testid="picker-locked"
+            >
+              {locked}
+            </p>
+          )}
         </Command>
       </PopoverContent>
     </Popover>
