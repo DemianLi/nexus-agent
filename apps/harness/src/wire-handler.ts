@@ -552,6 +552,24 @@ function parsePath(
   return undefined;
 }
 
+/**
+ * 這個請求的本文要怎麼讀（照 dsh `client/connection` 的 `requestBodyMode`，`http-bridge.ts`）：
+ * `buffered` 先收完整份、有總量上限（JSON 路由）；`streaming` 不聚合、不受那個上限管，由路由自己負責落地與取消。
+ * 今天只有上傳是 `streaming`——位元組不是 JSON，不該為了它在行程裡先留一份整檔。
+ *
+ * @param method - HTTP 方法。
+ * @param pathname - 請求路徑（不含 query）。
+ */
+export function wireRequestBodyMode(method: string, pathname: string): 'buffered' | 'streaming' {
+  if (method !== 'POST') return 'buffered';
+  try {
+    return parsePath(pathname)?.kind === 'upload' ? 'streaming' : 'buffered';
+  } catch {
+    // `decodeURIComponent` 遇到壞的百分號編碼會拋；那個請求之後會被當成 404，本文照 buffered 收。
+    return 'buffered';
+  }
+}
+
 const NUMERIC = /^\d+$/;
 
 /** 查詢字串裡的一個非負整數座標，照 dsh `present-open.ts` 的 `coordinate`。 */

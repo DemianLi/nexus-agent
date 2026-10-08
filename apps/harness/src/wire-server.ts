@@ -11,7 +11,16 @@
 import { createServer } from 'node:http';
 import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { Readable } from 'node:stream';
 import type { WireHandler } from './wire-handler.js';
+import { wireRequestBodyMode } from './wire-handler.js';
+
+/**
+ * 先收完整份的路由（JSON 路由）的本文上限：300 MiB，照 dsh `client/connection/src/http-bridge.ts` 的
+ * `DEFAULT_MAX_REQUEST_BODY_BYTES`。**串流路由（今天只有上傳）不受這個上限管**——儲存配額由路由自己負責，
+ * 這版不做（dsh 預設也沒有）。見 `docs/operations.md`。
+ */
+export const DEFAULT_MAX_REQUEST_BODY_BYTES = 300 * 1024 * 1024;
 
 export interface WireServer {
   readonly url: string;
@@ -23,15 +32,29 @@ export interface StartWireServerOptions {
   /** 預設 0——由作業系統挑一個空的，測試因此可以平行跑。 */
   readonly port?: number;
   readonly host?: string;
+  /** 先收完整份的路由的本文上限（位元組）。預設 {@link DEFAULT_MAX_REQUEST_BODY_BYTES}；超過回 413。串流路由不受管。 */
+  readonly maxRequestBodyBytes?: number;
   /** 一個請求處理失敗時往哪裡講（見 {@link startWireServer} 的最後一道防線）。預設 `console.warn`。 */
   readonly warn?: (error: Error) => void;
 }
 
-async function toRequest(incoming: IncomingMessage, origin: string): Promise<Request> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of incoming) {
-    chunks.push(chunk as Buffer);
+/** 先收完整份的路由，本文超過上限。 */
+class RequestBodyTooLarge extends Error {
+  constructor(readonly limit: number) {
+    super(`request body exceeds ${String(limit)} bytes`);
   }
+}
+
+interface ParsedRequest {
+  readonly request: Request;
+  readonly streaming: boolean;
+}
+
+async function toRequest(
+  incoming: IncomingMessage,
+  origin: string,
+  maxBodyBytes: number,
+): Promise<ParsedRequest> {
   const headers = new Headers();
   for (const [name, value] of Object.entries(incoming.headers)) {
     if (typeof value === 'string') {
@@ -44,11 +67,35 @@ async function toRequest(incoming: IncomingMessage, origin: string): Promise<Req
   // 請求行可以是 absolute-form（`GET http://evil/threads HTTP/1.1`），直接接在 origin 後面會拼出一個
   // 解析不了的網址。它帶的 authority 不算數——信任看 `Host` 標頭（`request-trust.ts`）。
   const target = new URL(incoming.url ?? '/', 'http://x');
-  return new Request(`${origin}${target.pathname}${target.search}`, {
-    method,
-    headers,
-    ...(hasBody ? { body: Buffer.concat(chunks) } : {}),
-  });
+  const url = `${origin}${target.pathname}${target.search}`;
+  if (!hasBody) return { request: new Request(url, { method, headers }), streaming: false };
+
+  // **串流路由（上傳）不聚合**：位元組一路從 socket 流到路由手上，行程裡不留整份檔案。
+  // 路由自己負責落地、取消與配額；這裡不套總量上限（照 dsh 的 `requestBodyMode: 'streaming'`）。
+  if (wireRequestBodyMode(method, target.pathname) === 'streaming') {
+    const body = Readable.toWeb(incoming) as unknown as ReadableStream<Uint8Array>;
+    return {
+      request: new Request(url, { method, headers, body, duplex: 'half' } as RequestInit),
+      streaming: true,
+    };
+  }
+
+  // 先收完整份：宣告的長度就超過上限的，一個位元組都不讀；沒宣告（或說謊）的，累計超過就停。
+  const declared = Number(incoming.headers['content-length']);
+  if (Number.isFinite(declared) && declared > maxBodyBytes) {
+    throw new RequestBodyTooLarge(maxBodyBytes);
+  }
+  const chunks: Buffer[] = [];
+  let received = 0;
+  for await (const chunk of incoming) {
+    received += (chunk as Buffer).byteLength;
+    if (received > maxBodyBytes) throw new RequestBodyTooLarge(maxBodyBytes);
+    chunks.push(chunk as Buffer);
+  }
+  return {
+    request: new Request(url, { method, headers, body: Buffer.concat(chunks) }),
+    streaming: false,
+  };
 }
 
 async function writeResponse(response: Response, outgoing: ServerResponse): Promise<void> {
@@ -85,6 +132,7 @@ async function writeResponse(response: Response, outgoing: ServerResponse): Prom
 export async function startWireServer(options: StartWireServerOptions): Promise<WireServer> {
   const host = options.host ?? '127.0.0.1';
   const warn = options.warn ?? ((error: Error) => console.warn(error));
+  const maxBodyBytes = options.maxRequestBodyBytes ?? DEFAULT_MAX_REQUEST_BODY_BYTES;
   const handle = async (incoming: IncomingMessage, outgoing: ServerResponse): Promise<void> => {
     const address = server.address() as AddressInfo;
     const origin = `http://${host}:${address.port}`;
@@ -101,9 +149,37 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
       aborted.abort();
       live = undefined;
     });
-    const request = await toRequest(incoming, origin);
-    live = new Request(request, { signal: aborted.signal });
+    let parsed: ParsedRequest;
+    try {
+      parsed = await toRequest(incoming, origin, maxBodyBytes);
+    } catch (error: unknown) {
+      if (!(error instanceof RequestBodyTooLarge)) throw error;
+      // 413：回完就斷線——對方可能還在傳一份我們不收的本文，留著這條連線只會讓它被拿去當下一個請求的開頭。
+      outgoing.writeHead(413, { 'content-type': 'text/plain', connection: 'close' });
+      outgoing.end('request body too large', () => incoming.destroy());
+      return;
+    }
+    const { request, streaming } = parsed;
+    live = new Request(request, {
+      signal: aborted.signal,
+      ...(streaming ? { duplex: 'half' } : {}),
+    } as RequestInit);
     const response = await options.handler.handle(live);
+    if (streaming) {
+      // 串流本文路由回應時本文可能還沒讀完（早退的 415、錯誤）：這條連線不能再當 keep-alive 用，
+      // 回完就把沒讀完的請求端砍掉（照 dsh 的串流模式）。
+      const headers = new Headers(response.headers);
+      headers.set('connection', 'close');
+      await writeResponse(
+        new Response(response.body, { status: response.status, headers }),
+        outgoing,
+      );
+      if (!incoming.readableEnded) {
+        if (outgoing.writableFinished) incoming.destroy();
+        else outgoing.once('finish', () => incoming.destroy());
+      }
+      return;
+    }
     await writeResponse(response, outgoing);
   };
   // **最後一道防線**，照 dsh `packages/host/webserver/src/index.ts`（`ddefc45`）：一個請求的失敗只收在那個
