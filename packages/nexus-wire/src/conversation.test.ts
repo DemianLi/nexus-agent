@@ -5,7 +5,9 @@ import {
   appendAnswers,
   appendDecision,
   appendQuestionCancel,
+  appendQuestionDecline,
   cancelResponse,
+  declineResponse,
   emptyConversation,
   isApprovalPending,
   isBackgroundSubagentMeta,
@@ -673,6 +675,47 @@ describe('問答的回答', () => {
       { kind: 'answer', id: 'answer-q-1', answers: [], cancelled: true },
     ]);
     expect(cancelResponse()).toEqual({ cancelled: true });
+  });
+
+  it('MCP 反問（#1098）：origin 原樣帶到待答卡上；沒有就省略這個 key（模型自己問的照舊）', () => {
+    seq = 0;
+    const origin = {
+      kind: 'mcp-elicitation',
+      server: 'files',
+      tool: 'delete_all',
+      arguments: { path: '/tmp/x' },
+    };
+    const asked = reduceAll(emptyConversation(), [
+      frame('input.requested', ['tools:a'], {
+        interrupt_id: 'q-mcp',
+        payload: { kind: 'question', questions: [{ id: 'ok', question: '確定嗎？' }], origin },
+      }),
+      questionRequested('q-plain'),
+    ]);
+    const [mcp, plain] = asked.pendings;
+    expect(mcp?.kind === 'question' && mcp.origin).toEqual(origin);
+    expect(plain !== undefined && 'origin' in plain).toBe(false);
+  });
+
+  it('**拒絕、放棄、接受是三種不同的紀錄與回覆**（#1098）：拒絕不是每題跳過，也不是放棄', () => {
+    seq = 0;
+    const asked = reduceAll(emptyConversation(), [questionRequested()]);
+    const declined = appendQuestionDecline(asked, 'q-1');
+    expect(declined.pendings).toEqual([]);
+    expect(declined.status).toBe('running');
+    expect(declined.entries).toEqual([
+      { kind: 'answer', id: 'answer-q-1', answers: [], declined: true },
+    ]);
+    expect(declineResponse()).toEqual({ declined: true });
+    // 與放棄、接受互不相同：舊 server 收到 `declined` 之外的形狀照常運作。
+    expect(declineResponse()).not.toEqual(cancelResponse());
+    expect(declineResponse()).not.toEqual(answerResponse([]));
+    // 送錯形狀時原樣回傳：核准那顆不收「拒絕整組問題」。
+    const approval = reduceAll(emptyConversation(), [
+      inputRequested(['alpha'], undefined, 'int-1'),
+    ]);
+    expect(appendQuestionDecline(approval, 'int-1')).toEqual(approval);
+    expect(appendQuestionDecline(asked, 'nope')).toEqual(asked);
   });
 
   it('兩條路都認人：核准那顆不收答案，問答那顆不收決定', () => {

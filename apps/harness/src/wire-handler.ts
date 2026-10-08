@@ -70,6 +70,7 @@ import {
   fileReferencesPath,
   isModelMethod,
   isPermissionMethod,
+  isThreadManagementMethod,
   uploadPath,
   isDeliverableMethod,
   isFeedbackMethod,
@@ -398,11 +399,16 @@ export interface WireHandler {
 
 const JSON_MEDIA_TYPE = 'application/json';
 
-/** 契約已合、實作還沒做的 RPC method 回 `not_supported` 時的說明（#723、#437），實作落地時隨分支一起拿掉。 */
+/** 契約已合、實作還沒做的 RPC method 回 `not_supported` 時的說明（#723、#437、#633），實作落地時隨分支一起拿掉。 */
 const NOT_IMPLEMENTED = {
   'model.catalog': '這個組裝還沒有每會話的模型選擇',
   'model.select': '這個組裝還沒有每會話的模型選擇',
   'permission.catalog': '這個組裝還沒有具名的權限組合',
+  'thread.pin': '這個組裝還沒有伺服器端的釘選',
+  'thread.unpin': '這個組裝還沒有伺服器端的釘選',
+  'thread.archive': '這個組裝還沒有伺服器端的封存',
+  'thread.unarchive': '這個組裝還沒有伺服器端的封存',
+  'thread.rename': '這個組裝還沒有伺服器端的改名',
 } as const;
 
 /** 搜尋失敗怎麼上線。`disabled` 同 dsh 的 `SESSION_QUERY_SEARCH_DISABLED`：web 收到就退回只比標題。 */
@@ -1074,8 +1080,8 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
       return json(feedbackResponse(thread, envelope.id, method, body));
     }
-    if (isModelMethod(method) || isPermissionMethod(method)) {
-      // 每會話模型選擇（#723）與權限組合目錄（#437）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把
+    if (isModelMethod(method) || isPermissionMethod(method) || isThreadManagementMethod(method)) {
+      // 每會話模型選擇（#723）、權限組合目錄（#437）與釘選／封存／改名（#633）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把
       // 模型座與權限選單藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
       // 契約在 `@nexus/wire` 的 `model-selection.ts`／`permission-presets.ts`；實作落地時把這個分支換成真的 handler。
       return json(errorResponse(envelope.id, 'not_supported', NOT_IMPLEMENTED[method]));

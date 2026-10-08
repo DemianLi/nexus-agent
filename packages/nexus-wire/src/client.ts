@@ -25,6 +25,19 @@ import type {
   PermissionCatalogResult,
   PermissionCommand,
 } from './permission-presets.js';
+import type {
+  ThreadArchiveCommand,
+  ThreadArchiveResult,
+  ThreadManagementCommand,
+  ThreadPinCommand,
+  ThreadPinResult,
+  ThreadRenameCommand,
+  ThreadRenameResult,
+  ThreadUnarchiveCommand,
+  ThreadUnarchiveResult,
+  ThreadUnpinCommand,
+  ThreadUnpinResult,
+} from './thread-management.js';
 import type { TrajectoryTurnDetail, TrajectoryTurnQuery } from './trajectory.js';
 import type {
   FileReferenceCandidate,
@@ -267,6 +280,24 @@ export interface WireClient {
    * 就藏起選單。
    */
   permissionCatalog(threadId: string): Promise<CommandOutcome<PermissionCatalogResult>>;
+  /**
+   * 釘選這條 thread（`thread.pin`，[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。契約見 `thread-management.ts`：
+   * 回**整個釘選集合**（最近釘的在前），封存的不能釘（`thread_archived`）。`rejected` 的 `code` 是 `not_supported` 就藏起這個動作。
+   */
+  threadPin(threadId: string): Promise<CommandOutcome<ThreadPinResult>>;
+  /** 取消釘選（`thread.unpin`）。冪等，不會失敗；回整個釘選集合。 */
+  threadUnpin(threadId: string): Promise<CommandOutcome<ThreadUnpinResult>>;
+  /**
+   * 封存這條 thread（`thread.archive`）。還在跑而沒帶 `stopActivity` 回 `thread_active`；帶了就先停掉它的工作。回整個封存集合。
+   */
+  threadArchive(
+    threadId: string,
+    options?: { readonly stopActivity?: boolean },
+  ): Promise<CommandOutcome<ThreadArchiveResult>>;
+  /** 取消封存（`thread.unarchive`）。冪等，不會失敗；回整個封存集合。 */
+  threadUnarchive(threadId: string): Promise<CommandOutcome<ThreadUnarchiveResult>>;
+  /** 改這條 thread 的標題（`thread.rename`）。回受理後的標題與事件 `seq`；標題不合法回 `title_invalid`，標題不變。 */
+  threadRename(threadId: string, title: string): Promise<CommandOutcome<ThreadRenameResult>>;
   /**
    * 上傳一個檔案，換一張收據（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。契約見 `attachments.ts`：收據只在這條
    * thread 有效，送訊息時放進 `run.start` 的 `attachments`。**排在 {@link openEvents} 兌現之後**（這條 thread 會為它建起來）。
@@ -665,7 +696,8 @@ export function createWireClient(options: WireClientOptions): WireClient {
       | SubagentInterruptCommand
       | FeedbackCommand
       | ModelCommand
-      | PermissionCommand,
+      | PermissionCommand
+      | ThreadManagementCommand,
   ): Promise<UplinkResult> {
     // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的端點慣例
     // （`packages/api/gateway/src/index.ts:134`，`<namespace>/<method>`）。
@@ -694,7 +726,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
   /** 同 {@link sendFeedback} 的拆法，給回 `{ ok, … }` 的其他命令；`label` 只用在「看不懂」的訊息裡。 */
   async function sendOkCommand<T>(
     threadId: string,
-    command: FeedbackCommand | ModelCommand | PermissionCommand,
+    command: FeedbackCommand | ModelCommand | PermissionCommand | ThreadManagementCommand,
     label: string,
   ): Promise<CommandOutcome<T>> {
     const response = await sendCommand(threadId, command.method, command);
@@ -829,6 +861,48 @@ export function createWireClient(options: WireClientOptions): WireClient {
         params: {},
       };
       return sendOkCommand<PermissionCatalogResult>(threadId, command, '權限目錄');
+    },
+
+    async threadPin(threadId) {
+      const command: ThreadPinCommand = { id: nextCommandId++, method: 'thread.pin', params: {} };
+      return sendOkCommand<ThreadPinResult>(threadId, command, '釘選');
+    },
+
+    async threadUnpin(threadId) {
+      const command: ThreadUnpinCommand = {
+        id: nextCommandId++,
+        method: 'thread.unpin',
+        params: {},
+      };
+      return sendOkCommand<ThreadUnpinResult>(threadId, command, '取消釘選');
+    },
+
+    async threadArchive(threadId, options) {
+      const command: ThreadArchiveCommand = {
+        id: nextCommandId++,
+        method: 'thread.archive',
+        // 省略就不放這個 key：舊的 server 與預設（不停活動）一致。
+        params: options?.stopActivity === undefined ? {} : { stopActivity: options.stopActivity },
+      };
+      return sendOkCommand<ThreadArchiveResult>(threadId, command, '封存');
+    },
+
+    async threadUnarchive(threadId) {
+      const command: ThreadUnarchiveCommand = {
+        id: nextCommandId++,
+        method: 'thread.unarchive',
+        params: {},
+      };
+      return sendOkCommand<ThreadUnarchiveResult>(threadId, command, '取消封存');
+    },
+
+    async threadRename(threadId, title) {
+      const command: ThreadRenameCommand = {
+        id: nextCommandId++,
+        method: 'thread.rename',
+        params: { title },
+      };
+      return sendOkCommand<ThreadRenameResult>(threadId, command, '改名');
     },
 
     async uploadFile(threadId, body, name, signal) {
