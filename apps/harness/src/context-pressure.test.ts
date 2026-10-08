@@ -447,7 +447,12 @@ describe('會話總帳不含生摘要的那一次（#574）', () => {
       outputTokens: 1,
       totalTokens: 1001 + summaryAt,
     });
-    const expected = { inputTokens: inputs[0]! + inputs[1]!, outputTokens: 2 };
+    const expectedInput = inputs[0]! + inputs[1]!;
+    const expected = {
+      inputTokens: expectedInput,
+      uncachedInputTokens: expectedInput,
+      outputTokens: 2,
+    };
     expect(reduceAll(emptyConversation(), run.frames).tokenUsage).toEqual(expected);
     expect(reduceAll(emptyConversation(), historyPage(run.root).events).tokenUsage).toEqual(
       expected,

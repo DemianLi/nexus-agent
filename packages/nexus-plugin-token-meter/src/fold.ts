@@ -296,6 +296,19 @@ export function initialTokenMeter(): TokenMeterState {
   };
 }
 
+/**
+ * 一顆用量事件完整的 prompt：未快取、快取讀、快取寫三桶相加（[#724](https://github.com/DemianLi/nexus-agent/issues/724)）。
+ * 格式 36 起日誌的 `inputTokens` 只是未快取那一桶；沒有快取兩格的舊日誌，三桶相加就是它本來的 `inputTokens`。
+ * 這一層讀的是原始的 JSON 記錄，不相依 `@nexus/core`，所以自己加。
+ */
+function promptTokensOfData(data: Readonly<Record<string, unknown>>): number {
+  const count = (key: string): number => {
+    const value = data[key];
+    return typeof value === 'number' ? value : 0;
+  };
+  return count('inputTokens') + count('cacheReadTokens') + count('cacheWriteTokens');
+}
+
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === 'object' && value !== null && !Array.isArray(value);
 
@@ -431,7 +444,7 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
         : { ...counted, call: { ...counted.call, waited: counted.call.waited + waited } };
     }
     case 'model/usage': {
-      const input = typeof data['inputTokens'] === 'number' ? data['inputTokens'] : 0;
+      const input = promptTokensOfData(data);
       const output = typeof data['outputTokens'] === 'number' ? data['outputTokens'] : 0;
       const failed = data['outcome'] !== undefined;
       return update(state, (sp) =>
@@ -464,8 +477,7 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
     }
     case 'compaction/summary': {
       const usage = isRecord(data['usage']) ? data['usage'] : undefined;
-      const input =
-        usage !== undefined && typeof usage['inputTokens'] === 'number' ? usage['inputTokens'] : 0;
+      const input = usage !== undefined ? promptTokensOfData(usage) : 0;
       const output =
         usage !== undefined && typeof usage['outputTokens'] === 'number'
           ? usage['outputTokens']

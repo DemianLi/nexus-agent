@@ -95,6 +95,109 @@ describe('readModelUsage', () => {
   });
 });
 
+/**
+ * 快取桶（[#724](https://github.com/DemianLi/nexus-agent/issues/724)）：LangChain 的 `input_tokens` 是完整的 prompt，
+ * 快取讀寫在 `input_token_details`；我們記的 `inputTokens` 是扣掉兩桶之後的未快取那一格。
+ */
+describe('readModelUsage：快取桶', () => {
+  it('有快取讀：inputTokens 扣掉它，快取讀單獨記，總量照供應商報的', () => {
+    expect(
+      readModelUsage(
+        reply({
+          input_tokens: 1000,
+          output_tokens: 20,
+          total_tokens: 1020,
+          input_token_details: { cache_read: 900 },
+        }),
+      ),
+    ).toEqual({ inputTokens: 100, outputTokens: 20, totalTokens: 1020, cacheReadTokens: 900 });
+  });
+
+  it('兩桶都報：各自扣掉，加總要對上（total − output ＝ prompt）', () => {
+    expect(
+      readModelUsage(
+        reply({
+          input_tokens: 194,
+          output_tokens: 2,
+          total_tokens: 196,
+          input_token_details: { cache_read: 64, cache_creation: 100 },
+        }),
+      ),
+    ).toEqual({
+      inputTokens: 30,
+      outputTokens: 2,
+      totalTokens: 196,
+      cacheReadTokens: 64,
+      cacheWriteTokens: 100,
+    });
+  });
+
+  it('報了 0 就是 0，不是缺席', () => {
+    expect(
+      readModelUsage(
+        reply({
+          input_tokens: 10,
+          output_tokens: 1,
+          total_tokens: 11,
+          input_token_details: { cache_read: 0 },
+        }),
+      ),
+    ).toEqual({ inputTokens: 10, outputTokens: 1, totalTokens: 11, cacheReadTokens: 0 });
+  });
+
+  it.each([
+    ['沒有 input_token_details', undefined],
+    ['空的 input_token_details', {}],
+    ['LangChain 在 prompt_tokens_details 缺席時建出的 undefined', { cache_read: undefined }],
+    ['兩格都是 undefined', { cache_read: undefined, cache_creation: undefined }],
+    ['null', { cache_read: null }],
+  ])('%s：沒報就沒有 key，inputTokens 仍是整個 prompt', (_label, details) => {
+    const usage = readModelUsage(
+      reply({
+        input_tokens: 500,
+        output_tokens: 5,
+        total_tokens: 505,
+        ...(details === undefined ? {} : { input_token_details: details }),
+      }),
+    );
+    expect(usage).toEqual({ inputTokens: 500, outputTokens: 5, totalTokens: 505 });
+    expect(usage).not.toHaveProperty('cacheReadTokens');
+    expect(usage).not.toHaveProperty('cacheWriteTokens');
+  });
+
+  it.each([
+    ['快取讀比整個 prompt 大', { cache_read: 600 }, 500],
+    ['兩桶加起來比整個 prompt 大', { cache_read: 300, cache_creation: 300 }, 500],
+    ['快取讀是負數', { cache_read: -1 }, 500],
+    ['快取讀是小數', { cache_read: 1.5 }, 500],
+    ['快取讀是字串', { cache_read: '10' }, 500],
+  ])('%s：自相矛盾就整筆不要', (_label, details, input) => {
+    expect(
+      readModelUsage(
+        reply({
+          input_tokens: input,
+          output_tokens: 5,
+          total_tokens: input + 5,
+          input_token_details: details,
+        }),
+      ),
+    ).toBeUndefined();
+  });
+
+  it('兩桶都報但總量對不上 prompt：整筆不要', () => {
+    expect(
+      readModelUsage(
+        reply({
+          input_tokens: 194,
+          output_tokens: 2,
+          total_tokens: 300,
+          input_token_details: { cache_read: 64, cache_creation: 100 },
+        }),
+      ),
+    ).toBeUndefined();
+  });
+});
+
 describe('這顆 middleware 記得進去的時候', () => {
   it('報了就記一筆，數字原樣', async () => {
     const log = new SessionLog('s');

@@ -709,7 +709,12 @@ export function applyTrajectory(
       return onCall(state, data['modelCall'], (call) => ({
         ...call,
         usage: {
-          inputTokens: (call.usage?.inputTokens ?? 0) + Number(data['inputTokens'] ?? 0),
+          // 完整的 prompt：格式 36 起日誌的 `inputTokens` 只是未快取那桶，快取兩格另放（#724）；舊日誌沒有那兩格。
+          inputTokens:
+            (call.usage?.inputTokens ?? 0) +
+            Number(data['inputTokens'] ?? 0) +
+            Number(data['cacheReadTokens'] ?? 0) +
+            Number(data['cacheWriteTokens'] ?? 0),
           outputTokens: (call.usage?.outputTokens ?? 0) + Number(data['outputTokens'] ?? 0),
           totalTokens: (call.usage?.totalTokens ?? 0) + Number(data['totalTokens'] ?? 0),
         },

@@ -386,6 +386,7 @@ export {
   MODEL_USAGE_MIDDLEWARE_NAME,
   MODEL_USAGE_PLUGIN_NAME,
   modelUsagePlugin,
+  promptTokensOf,
   readModelUsage,
 } from './model-usage.js';
 export type { CheckpointSessions } from './session-checkpoint-policy.js';

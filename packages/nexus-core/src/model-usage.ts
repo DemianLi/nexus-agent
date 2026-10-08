@@ -85,17 +85,47 @@ export const MODEL_USAGE_MIDDLEWARE_NAME = 'nexusModelUsage';
 /**
  * 一次模型呼叫報回來的 token 帳目。
  *
- * **三個數字都是供應商報的，沒有一個是我們算的。** `totalTokens` 不由
+ * **數字都是供應商報的，沒有一個是我們編的。** `totalTokens` 不由
  * `inputTokens + outputTokens` 補——照 {@link ../../../apps/harness/src/scripted-model.ts |
  * ScriptedUsage} 檔頭那條原則：「成本算得出來」與「成本是我們捏的」要分得開。
+ *
+ * ## 四桶互不重疊（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，照 dsh）
+ *
+ * `inputTokens` 是**未快取**的輸入，快取讀與快取寫另放；這次請求完整的 prompt 是三桶相加（{@link promptTokensOf}）。
+ * dsh `TokenUsage` 同形（`packages/llm/llm/src/types.ts:170-187`）：供應商把快取併進 prompt 總數的，由 adapter 減出來——
+ * 我們的 adapter 就是這裡（{@link validateUsage}）。
+ *
+ * **要減哪幾桶：OpenAI 相容端點的 `prompt_tokens` 兩桶都含。** 出處：OpenAI 的 prompt caching 指南範例把未快取輸入算成
+ * `inputTokens - cachedTokens - cacheWriteTokens`（<https://developers.openai.com/api/docs/guides/prompt-caching>，2026-10-09 讀）；
+ * OpenRouter 的用量範例 `prompt_tokens` 194、`cache_write_tokens` 100、`total_tokens` 196（= 194 + 2 個輸出），寫快取那段在 prompt
+ * 之內（<https://openrouter.ai/docs/use-cases/usage-accounting>）。dsh 經 pi-ai 對 OpenAI 相容端點同樣是 input 減掉兩桶。
+ *
+ * **缺席是「沒記」，不是 0。** 供應商沒報快取細節（或 LangChain 在整個 `prompt_tokens_details` 缺席時建出的
+ * `{ cache_read: undefined }`）就不放 key，`inputTokens` 仍是整個 prompt。舊日誌（格式 35 以前）全是這一種。
  */
 export interface ModelUsage {
-  /** 這次請求的 prompt token 數。含快取讀取的部分，那是 LangChain 的語義。 */
+  /** 這次請求**未快取**的輸入 token 數。沒報快取細節時就是整個 prompt。 */
   readonly inputTokens: number;
   /** 這次回應的 token 數。 */
   readonly outputTokens: number;
   /** 供應商報的完整總量。 */
   readonly totalTokens: number;
+  /** 命中快取、從快取讀出來的輸入 token 數。缺席＝沒報。 */
+  readonly cacheReadTokens?: number;
+  /** 寫進快取的輸入 token 數。缺席＝沒報。 */
+  readonly cacheWriteTokens?: number;
+}
+
+/**
+ * 這次請求完整的 prompt 有多大：未快取、快取讀、快取寫三桶相加。壓力、「目前大小」、舊 `inputTokens`（含快取）的讀者都用它；
+ * 沒報快取的桶當 0 加。
+ */
+export function promptTokensOf(usage: {
+  readonly inputTokens: number;
+  readonly cacheReadTokens?: number | undefined;
+  readonly cacheWriteTokens?: number | undefined;
+}): number {
+  return usage.inputTokens + (usage.cacheReadTokens ?? 0) + (usage.cacheWriteTokens ?? 0);
 }
 
 /**
@@ -142,34 +172,66 @@ export function readModelUsage(message: unknown): ModelUsage | undefined {
     input_tokens: input,
     output_tokens: output,
     total_tokens: total,
+    input_token_details: details,
   } = metadata as Record<string, unknown>;
-  return validateUsage(input, output, total);
+  const { cache_read: cacheRead, cache_creation: cacheWrite } =
+    typeof details === 'object' && details !== null
+      ? (details as Record<string, unknown>)
+      : ({} as Record<string, unknown>);
+  return validateUsage(input, output, total, { cacheRead, cacheWrite });
 }
 
 /**
- * 三個數字驗得過就成一筆帳目，驗不過整筆不要——{@link readModelUsage} 的兩道檢查，給「數字不是從訊息上讀的」那條路
+ * 數字驗得過就成一筆帳目，驗不過整筆不要——{@link readModelUsage} 的檢查，給「數字不是從訊息上讀的」那條路
  * 共用：adapter 在串流裡看到的用量（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）同一把尺。
  *
- * @param input - prompt token 數。
+ * 快取兩桶（#724）照 dsh `turn-usage.ts` 的 `normalizeUsage`：
+ *
+ * - 快取值是 `undefined` 或 `null` ＝ 供應商沒報，不放 key；有值就得是一個數量，不是就整筆不要。
+ * - 兩桶加起來不得超過 prompt（超過就是自相矛盾）；`inputTokens` 回傳的是減掉兩桶之後的未快取那格。
+ * - **兩桶都報時 `total - output` 要恰好等於 prompt**，否則整筆不要（只報一桶時不強制，維持原本的 `>=`）。
+ *
+ * @param input - 供應商報的 prompt token 數，**含**快取兩桶。
  * @param output - 回應 token 數。
  * @param total - 供應商報的完整總量。
- * @returns 驗得過的帳目，或 `undefined`。
+ * @param cache - 快取讀、快取寫（還沒驗）；省略＝沒報。
+ * @returns 驗得過的帳目（`inputTokens` 已減掉快取），或 `undefined`。
  */
 export function validateUsage(
   input: unknown,
   output: unknown,
   total: unknown,
+  cache: { readonly cacheRead?: unknown; readonly cacheWrite?: unknown } = {},
 ): ModelUsage | undefined {
   if (!isCount(input) || !isCount(output) || !isCount(total)) return undefined;
+  const reported = (value: unknown): boolean => value !== undefined && value !== null;
+  const hasRead = reported(cache.cacheRead);
+  const hasWrite = reported(cache.cacheWrite);
+  if (hasRead && !isCount(cache.cacheRead)) return undefined;
+  if (hasWrite && !isCount(cache.cacheWrite)) return undefined;
+  const cacheRead = hasRead ? (cache.cacheRead as number) : undefined;
+  const cacheWrite = hasWrite ? (cache.cacheWrite as number) : undefined;
   const prompt = total - output;
   if (!isCount(prompt) || prompt < input) return undefined;
-  return { inputTokens: input, outputTokens: output, totalTokens: total };
+  const cached = (cacheRead ?? 0) + (cacheWrite ?? 0);
+  if (cached > input) return undefined;
+  if (hasRead && hasWrite && prompt !== input) return undefined;
+  return {
+    inputTokens: input - cached,
+    outputTokens: output,
+    totalTokens: total,
+    ...(cacheRead === undefined ? {} : { cacheReadTokens: cacheRead }),
+    ...(cacheWrite === undefined ? {} : { cacheWriteTokens: cacheWrite }),
+  };
 }
 
 /** adapter 回報的用量（還沒驗）過同一把尺。 */
 function validateAttempt(reported: AttemptUsage | undefined): ModelUsage | undefined {
   if (reported === undefined) return undefined;
-  return validateUsage(reported.inputTokens, reported.outputTokens, reported.totalTokens);
+  return validateUsage(reported.inputTokens, reported.outputTokens, reported.totalTokens, {
+    cacheRead: reported.cacheReadTokens,
+    cacheWrite: reported.cacheWriteTokens,
+  });
 }
 
 /**

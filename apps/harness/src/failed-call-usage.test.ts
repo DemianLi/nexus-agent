@@ -37,6 +37,8 @@ type Ending =
   | 'break-after-usage'
   /** 同上，但前面每一顆片段都帶 `"usage": null`——真的 OpenAI 相容端點開了 `include_usage` 之後就是這樣。 */
   | 'break-after-usage-null-chunks'
+  /** 同 `break-after-usage`，但用量帶快取細節（`prompt_tokens_details`，#724）。 */
+  | 'break-after-usage-cached'
   /** 正文之後斷線，供應商還沒報用量。 */
   | 'break-before-usage'
   /** 正文、用量之後不收尾，等使用者按停止。 */
@@ -46,6 +48,14 @@ type Ending =
 
 /** 假端點報的那組數字：三個兩兩不同，且 `total` 刻意不等於 `input + output`（我們不替供應商加總）。 */
 const REPORTED = { prompt_tokens: 321, completion_tokens: 45, total_tokens: 400 };
+
+/** 帶快取細節的那組：`prompt_tokens` 含兩桶，所以 `total - completion` 要正好等於它。 */
+const REPORTED_CACHED = {
+  prompt_tokens: 321,
+  completion_tokens: 45,
+  total_tokens: 366,
+  prompt_tokens_details: { cached_tokens: 200, cache_write_tokens: 50 },
+};
 
 let server: ReturnType<typeof createServer>;
 let baseUrl: string;
@@ -63,7 +73,13 @@ function finish(res: ServerResponse, how: Ending): void {
   res.write(
     chunk({ choices: [{ index: 0, delta: { content: '說到一半' }, finish_reason: null }] }),
   );
-  if (how.includes('after-usage')) res.write(chunk({ choices: [], usage: REPORTED }));
+  if (how.includes('after-usage'))
+    res.write(
+      chunk({
+        choices: [],
+        usage: how === 'break-after-usage-cached' ? REPORTED_CACHED : REPORTED,
+      }),
+    );
   if (how.startsWith('break')) {
     // 等寫出去的位元組到了對面再砍，不然「用量那一顆」可能還在送出緩衝裡就被丟掉。
     setTimeout(() => res.socket?.destroy(), 60);
@@ -145,7 +161,37 @@ async function runTurn(stopAfterText: boolean) {
 const eventsOf = <T extends keyof SessionEventMap>(events: readonly SessionEvent[], type: T) =>
   events.filter((event) => event.type === type).map((event) => event.data as SessionEventMap[T]);
 
-const LEDGER = { inputTokens: 321, outputTokens: 45 };
+const LEDGER = { inputTokens: 321, uncachedInputTokens: 321, outputTokens: 45 };
+
+describe('失敗的呼叫也帶快取桶（#724）', () => {
+  it('嗅探從 prompt_tokens_details 讀快取讀寫：日誌扣出未快取那桶，總帳四桶，即時與歷史一致', async () => {
+    ending = 'break-after-usage-cached';
+    const { frames, root } = await runTurn(false);
+
+    const usage = eventsOf(root, 'model/usage');
+    expect(usage).toHaveLength(1);
+    expect(usage[0]).toMatchObject({
+      inputTokens: 71,
+      outputTokens: 45,
+      totalTokens: 366,
+      cacheReadTokens: 200,
+      cacheWriteTokens: 50,
+      outcome: 'error',
+    });
+    const ledger = {
+      inputTokens: 321,
+      uncachedInputTokens: 71,
+      outputTokens: 45,
+      cacheReadTokens: 200,
+      cacheWriteTokens: 50,
+    };
+    expect(deriveTokenUsage(root)).toEqual(ledger);
+    expect(reduceAll(emptyConversation(), frames).tokenUsage).toEqual(ledger);
+    expect(reduceAll(emptyConversation(), historyPage(root).events).tokenUsage).toEqual(ledger);
+    // 「目前大小」是完整的 prompt，不因分桶而變。
+    expect(reduceAll(emptyConversation(), frames).contextPressure?.inputTokens).toBe(321);
+  }, 30_000);
+});
 
 describe('供應商報了用量、呼叫之後沒有正常回來', () => {
   it('斷線：記一筆 error 的 model/usage（數字原樣），model/end 同樣標 error，總帳加上它，即時與歷史一致', async () => {
@@ -219,7 +265,11 @@ describe('供應商沒報用量：未知，不是 0', () => {
 
     expect(eventsOf(root, 'model/usage')).toEqual([]);
     expect(eventsOf(root, 'model/end')).toEqual([expect.objectContaining({ outcome: 'error' })]);
-    expect(deriveTokenUsage(root)).toEqual({ inputTokens: 0, outputTokens: 0 });
+    expect(deriveTokenUsage(root)).toEqual({
+      inputTokens: 0,
+      uncachedInputTokens: 0,
+      outputTokens: 0,
+    });
     expect(reduceAll(emptyConversation(), frames).tokenUsage).toBeNull();
   }, 30_000);
 

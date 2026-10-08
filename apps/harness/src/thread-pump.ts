@@ -2243,6 +2243,8 @@ export class ThreadPump {
       input.kind === 'resume'
         ? // **逐 id 派送，不是裸值。** 鍵是那顆 `XXH3(checkpoint_ns)`，基座只把值送給
           // 那一顆 task；裸值會廣播給每一顆待決的 task（見 `PumpInput` 的 `interruptId`）。
+          // **這也是工具屏障（#711 第 2 步）的承重點**：中斷時排在後面、一起退出的呼叫，resume 時會重跑並掛出自己的卡；
+          // 改成裸值，答前一顆的那個決定就會被重跑的那一顆讀走，一個決定蓋住兩顆。
           new Command({ resume: { [input.interruptId]: input.response } })
         : { messages: [humanMessageForTurnStart(turnStartOf(input))] };
 

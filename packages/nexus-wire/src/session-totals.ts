@@ -22,8 +22,9 @@
  *
  * ## 總量由讀的那一側加
  *
- * 只送輸入、輸出兩格，不送總量：dsh 的 `StatsPills` 也是自己把各桶加起來（`:241-242`）。我們的 `inputTokens` 含快取
- * 讀取，所以兩格相加就是整筆帳。
+ * 不送總量：dsh 的 `StatsPills` 也是自己把各桶加起來（`:241-242`）。舊欄位 `inputTokens` 含快取（未快取、快取讀、快取寫三桶相加），
+ * 所以它加 `outputTokens` 就是整筆帳；另有四桶的欄位（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，見 {@link WireTokenUsage}），
+ * 日誌沒記快取的部分缺席而不是 0。
  *
  * ## 與 dsh 的偏離
  *
@@ -50,7 +51,8 @@ export interface WireTokenUsage {
   /** root 每一次回應的 token 數加總。 */
   readonly outputTokens: number;
   /**
-   * 以下三格是 [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，**選填、過渡期**：照 dsh 的投影名
+   * 以下三格是 [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，**選填**（server 從格式 36 起送 `uncachedInputTokens`，
+   * 快取兩格看日誌有沒有報過）：照 dsh 的投影名
    * （`packages/llm/token-meter/src/usage-projection.ts:21-25`，`5badb150`），四桶互不重疊——未快取的輸入、快取讀、快取寫、輸出。
    * **舊的 `inputTokens` 語義不動**（照舊含快取讀取），web 換到新欄位之後才拿掉它。
    *

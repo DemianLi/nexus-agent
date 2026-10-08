@@ -426,8 +426,19 @@ import type { SessionEvent } from './session-log.js';
  * 新增的**種類**：舊 runtime 讀到不認得的種類就該拒絕，由版本號管相容，不要靠「略過了應該沒事」。
  *
  * **讀舊檔**：34 以前沒有這一顆，續接時由目前的沙箱與核准值推導現在是哪一組，不補寫歷史；新會話在起始時把推出來的那一組釘進去。
+ *
+ * ## 36：`model/usage` 的輸入分桶（[#724](https://github.com/DemianLi/nexus-agent/issues/724)）
+ *
+ * `model/usage` 與 `compaction/summary.usage` 的 `inputTokens` 改成**未快取**的輸入，新增選填的 `cacheReadTokens`、`cacheWriteTokens`
+ * （缺席＝沒記），四桶互不重疊，照 dsh 的 `TokenUsage`。完整的 prompt 是三桶相加。
+ *
+ * **升版，不標 `ignorable`——而且這次非升不可**：事件種類沒變，**欄位的語意變了**。一台 35 的 runtime 讀新檔，會把未快取的 `inputTokens`
+ * 當成整個 prompt，總帳與上下文壓力都少算快取的那一段，而且不會有任何東西報錯。同 13、15、17 那條門檻，dsh 對核心事件語意改變也升版（#507）。
+ *
+ * **讀舊檔**：35 以前沒有快取兩格，`inputTokens` 當未快取（它本來就是整個 prompt）、兩桶當「沒記」，總帳與壓力的數字跟以前一樣，
+ * 不必逐版分辨。
  */
-export const SESSION_LOG_FORMAT_VERSION = 35;
+export const SESSION_LOG_FORMAT_VERSION = 36;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

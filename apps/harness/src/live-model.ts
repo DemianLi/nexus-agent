@@ -860,8 +860,10 @@ export function withEmptyAssistantContent(baseFetch: typeof fetch = fetch): type
 const USAGE_TAP_MAX_LINE_CHARS = 1_000_000;
 
 /**
- * 從一行 SSE 資料讀供應商的用量（OpenAI 相容：`usage.prompt_tokens`／`completion_tokens`／`total_tokens`）。
+ * 從一行 SSE 資料讀供應商的用量（OpenAI 相容：`usage.prompt_tokens`／`completion_tokens`／`total_tokens`，快取細節在
+ * `prompt_tokens_details.cached_tokens`／`cache_write_tokens`，#724）。
  * 不是 `data:` 行、沒有 `"usage"`、JSON 壞掉、`usage` 為 `null` 或缺欄一律 `undefined`——**不補 0**。
+ * 快取細節缺欄或 `null` 就不放那個 key（沒報），不補 0；`prompt_tokens` 含這兩桶，減法在 `validateUsage`。
  */
 function usageOfSseLine(line: string): AttemptUsage | undefined {
   if (!line.startsWith('data:') || !line.includes('"usage"')) return undefined;
@@ -877,9 +879,20 @@ function usageOfSseLine(line: string): AttemptUsage | undefined {
     prompt_tokens: input,
     completion_tokens: output,
     total_tokens: total,
+    prompt_tokens_details: details,
   } = usage as Record<string, unknown>;
   if (input === undefined || output === undefined || total === undefined) return undefined;
-  return { inputTokens: input, outputTokens: output, totalTokens: total };
+  const { cached_tokens: cacheRead, cache_write_tokens: cacheWrite } =
+    typeof details === 'object' && details !== null
+      ? (details as Record<string, unknown>)
+      : ({} as Record<string, unknown>);
+  return {
+    inputTokens: input,
+    outputTokens: output,
+    totalTokens: total,
+    ...(cacheRead === undefined || cacheRead === null ? {} : { cacheReadTokens: cacheRead }),
+    ...(cacheWrite === undefined || cacheWrite === null ? {} : { cacheWriteTokens: cacheWrite }),
+  };
 }
 
 /**

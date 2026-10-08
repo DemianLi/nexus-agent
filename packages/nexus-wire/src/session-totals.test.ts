@@ -52,6 +52,46 @@ describe('tokenUsage', () => {
   });
 });
 
+describe('tokenUsage：快取分桶（#724）', () => {
+  const buckets = {
+    ...usage,
+    uncachedInputTokens: 22_000,
+    cacheReadTokens: 390_000,
+    cacheWriteTokens: 10_000,
+  };
+
+  it('三個選填格有就帶過去，缺席就沒有那個 key（沒記，不是 0）', () => {
+    expect(fold(custom(TOKEN_USAGE, buckets)).tokenUsage).toEqual(buckets);
+    const partial = fold(
+      custom(TOKEN_USAGE, { ...usage, uncachedInputTokens: 422_000 }),
+    ).tokenUsage;
+    expect(partial).toEqual({ ...usage, uncachedInputTokens: 422_000 });
+    expect(partial).not.toHaveProperty('cacheReadTokens');
+    expect(partial).not.toHaveProperty('cacheWriteTokens');
+    // 舊 server 只送兩格：照舊。
+    expect(fold(custom(TOKEN_USAGE, usage)).tokenUsage).toEqual(usage);
+  });
+
+  it('報了 0 就是 0，不被當成缺席丟掉', () => {
+    expect(fold(custom(TOKEN_USAGE, { ...usage, cacheReadTokens: 0 })).tokenUsage).toHaveProperty(
+      'cacheReadTokens',
+      0,
+    );
+  });
+
+  it('選填格有一格不是數量，整顆不收（不收一半），不動已經有的', () => {
+    for (const key of ['uncachedInputTokens', 'cacheReadTokens', 'cacheWriteTokens']) {
+      for (const value of [-1, 0.5, '3', null]) {
+        const payload = { ...usage, [key]: value };
+        expect(fold(custom(TOKEN_USAGE, payload)).tokenUsage).toBeNull();
+        expect(fold(custom(TOKEN_USAGE, buckets), custom(TOKEN_USAGE, payload)).tokenUsage).toEqual(
+          buckets,
+        );
+      }
+    }
+  });
+});
+
 describe('sessionStats', () => {
   it('一顆都沒有是 null', () => {
     expect(emptyConversation().sessionStats).toBeNull();
