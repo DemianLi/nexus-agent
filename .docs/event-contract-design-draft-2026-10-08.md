@@ -174,6 +174,6 @@ nexus 今天是 LangGraph 狀態加另一份會話日誌，`PrunedMemorySaver`�
    - **S0、S1 不依賴這個前提**，可先做。
    - **S2 之前必須先過兩道檢查**：(a) [#1158](https://github.com/DemianLi/nexus-agent/issues/1158)：查清 dsh 日誌的持久化保證（崩潰時最多掉幾個事件、是否逐筆落盤）；(b) [#1159](https://github.com/DemianLi/nexus-agent/issues/1159)：拿錄下來的真實會話，驗證「從日誌推出的歷史」與 LangGraph 現在送給模型的訊息逐位元組相同，不同之處就是 D1 的真實工作量。
    - **退回條件**：持久化保證比我們現在弱得多，或比對發現大量插件的訊息改寫無法記錄成事件，則退回只做 S1。
-   - **兩道檢查的結論**：(a) [`session-log-durability-comparison-2026-10-08.md`](session-log-durability-comparison-2026-10-08.md)——退回條件未觸發；(b) [`log-derived-history-vs-wire-2026-10-08.md`](log-derived-history-vs-wire-2026-10-08.md)——退回條件未觸發：17 個場景（含 4 個出貨組裝）、59 次主模型呼叫裡，49 次在校正三處機械差異後逐位元組相同，其餘 10 次都只差一則訊息，來自核心的工具結果剪刀與舊工具參數截斷（只改請求、不寫日誌，需要補事件；參數截斷 dsh 沒有對應機制）；**串流路徑**、子代理、核准續接等沒有量。
+   - **兩道檢查的結論**：(a) [`session-log-durability-comparison-2026-10-08.md`](session-log-durability-comparison-2026-10-08.md)——退回條件未觸發；(b) [`log-derived-history-vs-wire-2026-10-08.md`](log-derived-history-vs-wire-2026-10-08.md)——退回條件未觸發：23 個場景（含 CLI 非串流與 serve 串流兩條出貨組裝）、79 次主模型呼叫裡，64 次在校正三處機械差異後逐位元組相同；其餘 15 次都只差一則訊息，其中 14 次來自核心的工具結果剪刀與舊工具參數截斷（只改請求、不寫日誌，需要補事件；參數截斷 dsh 沒有對應機制），1 次是空的助手訊息在送出前被丟掉（推導時丟掉即可）；子代理、核准續接、真供應商的串流分塊等沒有量。
    - 這是方向而非決議卡：#190 要不要推翻、時序（第 1、2 題）仍待決。
 4. **核准要不要跨重啟存活？**（D3）dsh 的答案是否；若客戶需要，這條是偏離，要自己設計並登記。
