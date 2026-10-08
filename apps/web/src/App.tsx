@@ -182,8 +182,9 @@ export function App({ client }: { client?: WireClient } = {}) {
   const [theme] = useThemePreference();
   // 清單與每一列的即時狀態（#632）也在 thread 外面：換一條不重開全域下行，「跑完沒看」不歸零。
   const directory = useThreadDirectory(wire, choice.threadId);
-  // 釘選、封存、改名（#633）也在 thread 外面：換一條不歸零。開關沒開時是 `undefined`，側欄什麼都不多畫。
-  const threadManagement = useThreadManagement();
+  // 釘選、封存、改名（#633）也在 thread 外面：換一條不歸零。列表沒帶兩個集合（server 還沒實作）時是 `undefined`，
+  // 側欄什麼都不多畫。
+  const threadManagement = useThreadManagement(wire, directory);
   // 換 thread 有兩條路（「新對話」與從清單點一條），**後按的那一下贏**：「新對話」要先讀清單，讀回來之前人已經從清單
   // 點了別條的話，晚到的結果不能把人拉回去。讀清單期間再按一次「新對話」不另開一次（dsh `connectWorkspace` 的
   // `connecting`）——兩次讀到的是同一份清單，只會換一次。

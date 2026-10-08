@@ -86,13 +86,6 @@ vi.mock('@/lib/attachments', async (importOriginal) => ({
   serverSupportsAttachments: () => attachmentGate.on,
 }));
 
-// 側欄的釘選、封存、改名開關今天寫死 false（#633）：要測的那幾條自己打開。
-const managementGate = vi.hoisted(() => ({ on: false }));
-vi.mock('@/lib/thread-management', async (importOriginal) => ({
-  ...(await importOriginal<typeof import('@/lib/thread-management')>()),
-  threadManagementEnabled: () => managementGate.on,
-}));
-
 // App 會把 thread id 記進 `localStorage`；每條一份新的，不然下一條測試就成了「接回上一次」。
 beforeEach(() => {
   vi.stubGlobal('localStorage', memoryStorage());
@@ -100,7 +93,6 @@ beforeEach(() => {
 
 afterEach(() => {
   attachmentGate.on = false;
-  managementGate.on = false;
   cleanup();
   vi.unstubAllGlobals();
   vi.restoreAllMocks();
@@ -2155,12 +2147,97 @@ describe('以前的會話', () => {
   });
 
   describe('釘選、封存、改名（#633）', () => {
-    const readable = (fake: ReturnType<typeof fakeClient>) =>
-      listing(fake, async () => ({ kind: 'ok', result: LISTED }));
+    /**
+     * 有狀態的假 server：兩個集合與標題都在這裡，五支動作照 dsh 的規則改它、回整份集合，列表每次讀都帶最新的。
+     * `rules` 讓個別測試改寫某一支的回應（例如別的分頁同時動了集合）。
+     */
+    function managed(
+      initial: { pinned?: string[]; archived?: string[] } = {},
+      rules: Partial<{
+        pin: (id: string, state: { pinned: string[]; archived: string[] }) => string[];
+      }> = {},
+    ) {
+      const state = {
+        pinned: [...(initial.pinned ?? [])],
+        archived: [...(initial.archived ?? [])],
+        titles: new Map<string, string>(),
+      };
+      const calls: string[] = [];
+      let lists = 0;
+      const ok = <V,>(value: V) => ({ kind: 'ok' as const, result: { ok: true as const, value } });
+      const failed = (code: string, message?: string) => ({
+        kind: 'ok' as const,
+        result: {
+          ok: false as const,
+          error: { code, ...(message === undefined ? {} : { message }) },
+        },
+      });
+      const client = {
+        ...listing(fakeClient([]), async () => {
+          lists += 1;
+          return {
+            kind: 'ok',
+            result: {
+              ...LISTED,
+              items: LISTED.items.map((item) =>
+                state.titles.has(item.threadId)
+                  ? { ...item, title: state.titles.get(item.threadId)! }
+                  : item,
+              ),
+              pinnedThreadIds: [...state.pinned],
+              archivedThreadIds: [...state.archived],
+            },
+          };
+        }),
+        threadPin: async (id: string) => {
+          calls.push(`pin ${id}`);
+          if (state.archived.includes(id)) return failed('thread_archived');
+          state.pinned = rules.pin?.(id, state) ?? [
+            id,
+            ...state.pinned.filter((other) => other !== id),
+          ];
+          return ok({ pinnedThreadIds: [...state.pinned] });
+        },
+        threadUnpin: async (id: string) => {
+          calls.push(`unpin ${id}`);
+          state.pinned = state.pinned.filter((other) => other !== id);
+          return ok({ pinnedThreadIds: [...state.pinned] });
+        },
+        threadArchive: async (id: string) => {
+          calls.push(`archive ${id}`);
+          if (id === '跑著的那條') return failed('thread_active');
+          // dsh：封存的那一刻它就不在釘選裡。回應只帶封存集合。
+          state.pinned = state.pinned.filter((other) => other !== id);
+          if (!state.archived.includes(id)) state.archived.push(id);
+          return ok({ archivedThreadIds: [...state.archived] });
+        },
+        threadUnarchive: async (id: string) => {
+          calls.push(`unarchive ${id}`);
+          state.archived = state.archived.filter((other) => other !== id);
+          return ok({ archivedThreadIds: [...state.archived] });
+        },
+        threadRename: async (id: string, title: string) => {
+          calls.push(`rename ${id} ${title}`);
+          if (title.includes('壞')) return failed('title_invalid', '標題裡不能有「壞」。');
+          state.titles.set(id, title);
+          return ok({ title, seq: 9 });
+        },
+      } as unknown as WireClient;
+      return { client, state, calls, lists: () => lists };
+    }
 
-    it('開關關著：每一列都沒有選項鈕，也沒有已釘選與已封存兩區', async () => {
+    const menuOf = async (list: HTMLElement, title: string) => {
+      fireEvent.keyDown(await within(list).findByRole('button', { name: `「${title}」的選項` }), {
+        key: 'Enter',
+      });
+    };
+    const choose = (item: string) => fireEvent.click(screen.getByRole('menuitem', { name: item }));
+
+    it('列表沒帶兩個集合（server 還沒實作）：每一列都沒有選項鈕，也沒有已釘選與已封存兩區', async () => {
       seq = 0;
-      render(<App client={readable(fakeClient([]))} />);
+      render(
+        <App client={listing(fakeClient([]), async () => ({ kind: 'ok', result: LISTED }))} />,
+      );
       const list = await openList();
       await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(2));
       expect(within(list).queryByRole('button', { name: /的選項/u })).toBeNull();
@@ -2168,71 +2245,183 @@ describe('以前的會話', () => {
       expect(screen.queryByTestId('thread-archived')).toBeNull();
     });
 
-    it('開關開著：釘選把那一列搬進「已釘選」，換到別條之後還在；封存收進「已封存」；改名蓋過標題', async () => {
-      managementGate.on = true;
+    it.each([
+      ['只帶釘選', { pinnedThreadIds: [] }],
+      ['只帶封存', { archivedThreadIds: [] }],
+    ])('缺一格就當沒有：%s', async (_case, sets) => {
       seq = 0;
-      render(<App client={readable(fakeClient([]))} />);
-      let list = await openList();
-      const optionsOf = (title: string) =>
-        within(list).findByRole('button', { name: `「${title}」的選項` });
-      const menuOf = async (title: string) => {
-        fireEvent.keyDown(await optionsOf(title), { key: 'Enter' });
-      };
+      render(
+        <App
+          client={listing(fakeClient([]), async () => ({
+            kind: 'ok',
+            result: { ...LISTED, ...sets },
+          }))}
+        />,
+      );
+      const list = await openList();
+      await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(2));
+      expect(within(list).queryByRole('button', { name: /的選項/u })).toBeNull();
+    });
 
-      await menuOf(UNTITLED_THREAD_LABEL);
-      fireEvent.click(screen.getByRole('menuitem', { name: '釘選' }));
+    it('列表讀失敗：什麼都不多畫', async () => {
+      seq = 0;
+      render(
+        <App
+          client={listing(fakeClient([]), async () => ({ kind: 'rejected', message: '讀不到' }))}
+        />,
+      );
+      await openList();
+      expect(screen.queryByRole('button', { name: /的選項/u })).toBeNull();
+    });
+
+    it('支援時走完整流程：釘選、取消釘選、封存、取消封存、改名，畫面跟著 server，換到別條之後還在', async () => {
+      seq = 0;
+      const server = managed();
+      render(<App client={server.client} />);
+      let list = await openList();
+
+      await menuOf(list, UNTITLED_THREAD_LABEL);
+      choose('釘選');
       const pinned = await screen.findByTestId('thread-pinned');
       expect(within(pinned).getByText(UNTITLED_THREAD_LABEL)).toBeTruthy();
+      expect(server.state.pinned).toEqual(['目標那條']);
 
-      // 換到別條：整個對話畫面重掛，釘選留在 App 這一層。
+      // 換到別條：整個對話畫面重掛，列表重抓，釘選仍是 server 的那一份。
       fireEvent.click(within(list).getByRole('button', { name: /^幫我改登入頁/u }));
       await waitFor(() => expect(stored()).toBe('跑著的那條'));
-      // 整個畫面重掛了，側欄是新的那一份。
       list = await openList();
       expect(
         within(await screen.findByTestId('thread-pinned')).getByText(UNTITLED_THREAD_LABEL),
       ).toBeTruthy();
 
-      await menuOf(UNTITLED_THREAD_LABEL);
-      fireEvent.click(screen.getByRole('menuitem', { name: '取消釘選' }));
+      await menuOf(list, UNTITLED_THREAD_LABEL);
+      choose('取消釘選');
       await waitFor(() => expect(screen.queryByTestId('thread-pinned')).toBeNull());
+      expect(server.state.pinned).toEqual([]);
 
-      await menuOf(UNTITLED_THREAD_LABEL);
-      fireEvent.click(screen.getByRole('menuitem', { name: '封存' }));
+      await menuOf(list, UNTITLED_THREAD_LABEL);
+      choose('封存');
       const archived = await screen.findByTestId('thread-archived');
       expect(within(archived).getByRole('button', { name: '已封存（1）' })).toBeTruthy();
+      fireEvent.click(within(archived).getByRole('button', { name: '已封存（1）' }));
+      await menuOf(list, UNTITLED_THREAD_LABEL);
+      choose('取消封存');
+      await waitFor(() => expect(screen.queryByTestId('thread-archived')).toBeNull());
+      expect(server.state.archived).toEqual([]);
 
-      await menuOf('幫我改登入頁');
-      fireEvent.click(screen.getByRole('menuitem', { name: '重新命名' }));
+      await menuOf(list, '幫我改登入頁');
+      choose('重新命名');
       const field = screen.getByRole('textbox', { name: '重新命名會話' });
-      fireEvent.change(field, { target: { value: '登入頁重做' } });
+      fireEvent.change(field, { target: { value: '  登入頁   重做 ' } });
       fireEvent.keyDown(field, { key: 'Enter' });
-      expect(await within(list).findByText('登入頁重做')).toBeTruthy();
+      expect(await within(list).findByText('登入頁 重做')).toBeTruthy();
+      // 送出的是正規化後的標題；之後重抓列表，標題來自列表（server）。
+      expect(server.calls).toContain('rename 跑著的那條 登入頁 重做');
+      await waitFor(() => expect(server.lists()).toBeGreaterThan(2));
+      expect(within(list).getByText('登入頁 重做')).toBeTruthy();
     });
 
-    it('釘選的那條被封存就不再釘著：取消封存後回到時間組，不回已釘選（封存的不能釘）', async () => {
-      managementGate.on = true;
+    it('一開始 server 就帶了釘選與封存：列表照畫（已釘選在最上、封存收起來）', async () => {
       seq = 0;
-      render(<App client={readable(fakeClient([]))} />);
+      const server = managed({ pinned: ['目標那條'], archived: ['跑著的那條'] });
+      render(<App client={server.client} />);
+      await openList();
+      const pinned = await screen.findByTestId('thread-pinned');
+      expect(within(pinned).getByText(UNTITLED_THREAD_LABEL)).toBeTruthy();
+      expect(
+        within(await screen.findByTestId('thread-archived')).getByRole('button', {
+          name: '已封存（1）',
+        }),
+      ).toBeTruthy();
+    });
+
+    it('集合以 server 回的整份為準：別的分頁同時釘了一條，這邊跟著出現，不是本機自己加一條', async () => {
+      seq = 0;
+      // 這一次釘選，server 回的集合裡多了別的分頁剛釘的「跑著的那條」，而且排在前面。
+      const server = managed({}, { pin: (id) => ['跑著的那條', id] });
+      render(<App client={server.client} />);
       const list = await openList();
-      const pickItem = async (title: string, item: string) => {
-        fireEvent.keyDown(await within(list).findByRole('button', { name: `「${title}」的選項` }), {
-          key: 'Enter',
-        });
-        fireEvent.click(screen.getByRole('menuitem', { name: item }));
-      };
-      await pickItem(UNTITLED_THREAD_LABEL, '釘選');
+      await menuOf(list, UNTITLED_THREAD_LABEL);
+      choose('釘選');
+      const pinned = await screen.findByTestId('thread-pinned');
+      await waitFor(() =>
+        expect(
+          within(pinned)
+            .getAllByTestId('thread-title-text')
+            .map((row) => row.textContent),
+        ).toEqual(['幫我改登入頁', UNTITLED_THREAD_LABEL]),
+      );
+    });
+
+    it('封存釘選的那條：釘選集合重抓 server 的，不在本機推（server 規則是封存順手取消釘選）', async () => {
+      seq = 0;
+      const server = managed({ pinned: ['目標那條'] });
+      render(<App client={server.client} />);
+      const list = await openList();
       await screen.findByTestId('thread-pinned');
-      await pickItem(UNTITLED_THREAD_LABEL, '封存');
-      await waitFor(() => expect(screen.queryByTestId('thread-pinned')).toBeNull());
+      const before = server.lists();
+      await menuOf(list, UNTITLED_THREAD_LABEL);
+      choose('封存');
+      await screen.findByTestId('thread-archived');
+      // 回應只帶封存集合，所以封存之後重抓了列表。
+      await waitFor(() => expect(server.lists()).toBeGreaterThan(before));
+      expect(screen.queryByTestId('thread-pinned')).toBeNull();
+      expect(server.state.pinned).toEqual([]);
+      // 取消封存：server 不會把它放回釘選，畫面也不放回去。
       fireEvent.click(
         within(await screen.findByTestId('thread-archived')).getByRole('button', {
           name: '已封存（1）',
         }),
       );
-      await pickItem(UNTITLED_THREAD_LABEL, '取消封存');
+      await menuOf(list, UNTITLED_THREAD_LABEL);
+      choose('取消封存');
       await waitFor(() => expect(screen.queryByTestId('thread-archived')).toBeNull());
       expect(screen.queryByTestId('thread-pinned')).toBeNull();
+    });
+
+    it.each([['封存跑著的那條', '幫我改登入頁', '封存', '這條會話還在跑，先停掉它再封存。']])(
+      'server 拒絕：%s，說出原因、畫面不變',
+      async (_case, title, item, message) => {
+        seq = 0;
+        const server = managed();
+        render(<App client={server.client} />);
+        const list = await openList();
+        await menuOf(list, title);
+        choose(item);
+        expect(await screen.findByText(message)).toBeTruthy();
+        expect(screen.queryByTestId('thread-archived')).toBeNull();
+      },
+    );
+
+    it('封存的會話不能釘：server 回 thread_archived，說出原因', async () => {
+      seq = 0;
+      const server = managed({ archived: ['目標那條'] });
+      render(<App client={server.client} />);
+      const list = await openList();
+      fireEvent.click(
+        within(await screen.findByTestId('thread-archived')).getByRole('button', {
+          name: '已封存（1）',
+        }),
+      );
+      await menuOf(list, UNTITLED_THREAD_LABEL);
+      // 封存的那一列選單裡沒有「釘選」（畫面不給），所以直接驗 hook 的說法在文字庫裡：見 lib 測試。
+      expect(screen.queryByRole('menuitem', { name: '釘選' })).toBeNull();
+    });
+
+    it('改名被 server 拒絕（標題不合法）：用 server 的說明，標題不變', async () => {
+      seq = 0;
+      const server = managed();
+      render(<App client={server.client} />);
+      const list = await openList();
+      await menuOf(list, '幫我改登入頁');
+      choose('重新命名');
+      const field = screen.getByRole('textbox', { name: '重新命名會話' });
+      fireEvent.change(field, { target: { value: '壞標題' } });
+      fireEvent.keyDown(field, { key: 'Enter' });
+      expect(await screen.findByText('標題裡不能有「壞」。')).toBeTruthy();
+      // server 沒改標題，輸入框還開著讓人改。
+      expect(server.state.titles.size).toBe(0);
+      expect(screen.getByRole('textbox', { name: '重新命名會話' })).toBeTruthy();
     });
   });
 
