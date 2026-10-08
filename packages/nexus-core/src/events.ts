@@ -19,11 +19,12 @@
  * **派發當下取監聽者的快照**：派發途中新掛上的監聽者不參與這一次；途中撤銷的仍在這一次的名單上（同 dsh，
  * `dispatch` 先 `.map` 出一份陣列）。
  *
- * ## 對 dsh 的一處偏離：撤銷只撤自己那一筆
+ * ## 撤銷只撤自己那一筆（同 dsh，不是偏離）
  *
- * dsh 的 `unregister` 找「第一個 callback 相同」的紀錄就拿掉。同一個函式被兩位註冊者各掛一次時，A 的撤銷會拿掉 B 的那筆。
- * 我們的註冊表有一條不能破的約定：**撤銷只撤自己那一次註冊，冪等**（`entries.ts`，載入器的回滾靠它，#677）。
- * 所以這裡每一筆註冊是一個獨立的紀錄，以身分撤銷。**表達得出來，也沒有理由退**；這是為了不讓回滾誤傷別人。
+ * dsh 的 `unregister` 是依 callback 找第一筆拿掉，乍看會在「同一個函式被兩位註冊者各掛一次」時誤傷別人。但 dsh 的 `on()` 在登記
+ * 之前先做 `listener = this.ctx.reflect.bind(listener)`（`vendor/cordis/src/reflect.ts` 的 `bind` 每次都回一個新的 `Proxy`），所以
+ * 每一次註冊存進表裡的 callback 本來就各不相同，「依 callback 撤」實際上就是「依身分撤」。我們的註冊表也有同一條約定：
+ * **撤銷只撤自己那一次註冊，冪等**（`entries.ts`，載入器的回滾靠它，#677）。這裡每一筆註冊是一個獨立的紀錄，以身分撤銷，結果相同。
  *
  * ## 不做的事
  *
@@ -177,7 +178,7 @@ export class EventBus implements EventSubscriber, EventDispatcher {
     if (hook.prepend) hooks.unshift(hook);
     else hooks.push(hook);
     return () => {
-      // 以這一筆紀錄的身分撤，不是以 callback：見檔頭的偏離。
+      // 以這一筆紀錄的身分撤，不是以 callback：見檔頭（dsh 靠 reflect.bind 讓每筆各有一支，結果相同）。
       const at = hooks.indexOf(hook);
       if (at < 0) return false;
       hooks.splice(at, 1);

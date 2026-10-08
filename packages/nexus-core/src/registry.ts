@@ -16,7 +16,7 @@
  * {@link EventRegistrationPoint} 回答「誰在匯流排的哪個事件上掛了監聽者」（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)），
  * {@link ServiceRegistrationPoint} 回答「這次組裝的協作者從哪裡拿」（[#459](https://github.com/DemianLi/nexus-agent/issues/459)），
  * {@link PluginLogger} 回答「掛上的時候有什麼要跟人講」（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
- * 九個註冊點回答的是「這個 agent 由什麼組成」，七者正交。
+ * 九個註冊點回答的是「這個 agent 由什麼組成」，與上面那十條正交。
  *
  * **第十條是唯一一條沒有人往裡面註冊東西的**：{@link DisabledEntryView | disabledEntries}
  * 回答「產生這個 registry 的那份清單說了什麼」，是唯讀視圖而不是註冊點

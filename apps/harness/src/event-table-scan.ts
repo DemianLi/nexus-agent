@@ -7,6 +7,9 @@
  *
  * **只掃產品碼**（排除 `*.test.ts`）：測試為了驗機制而宣告的 `test/*` 事件不是事件表的一部分。
  *
+ * **名字假設**：整棵樹裡任何叫 `Events` 的 interface 都被當成事件表。今天沒有同名的別的東西；哪天（例如 `apps/web`）出現無關的同名
+ * interface，這裡會誤報，到時候要把掃描限制在 `@nexus/core` 的宣告與它的 `declare module` 區塊。
+ *
  * 掃描看**語法**不看型別：`interface Events` 出現在兩種地方——`events.ts` 自己的宣告，與 `declare module '…' { interface Events {…} }`
  * 區塊。兩者都算。
  */
