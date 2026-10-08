@@ -8,8 +8,10 @@
  *
  * ## 四桶（[#724](https://github.com/DemianLi/nexus-agent/issues/724)）
  *
- * 照 dsh 的 `usage-projection.ts:21-25`：未快取輸入、輸出、快取讀、快取寫，**互不重疊**，完整的輸入是三桶相加（{@link TokenUsageTotals.inputTokens}）。
- * `model/usage` 的 `inputTokens` 從格式 36 起就是未快取的那一格（見 `model-usage.ts` 的 `ModelUsage`），所以這裡直接加。
+ * 照 dsh 的 `usage-projection.ts:21-25`：未快取輸入、輸出、快取讀、快取寫，**互不重疊**；{@link TokenUsageTotals.inputTokens} 就是未快取那一桶，
+ * 完整的輸入由讀的人三桶相加（dsh 的 `StatsPills` 也是自己加）。`model/usage` 的 `inputTokens` 從格式 36 起就是未快取的那一格
+ * （見 `model-usage.ts` 的 `ModelUsage`），所以這裡直接加。**2026-10-09 起 `inputTokens` 的語義換成 dsh 的**（#724 收尾，web 已改讀
+ * 四桶）：以前它是三桶相加的完整 prompt，現在是未快取；要完整 prompt 的人自己把三桶相加。
  *
  * - **快取兩桶缺席是「沒記」，不是 0**：只要日誌上有一顆報了那一桶，總帳才帶那一格（那一顆報的是 0 也算有報）。舊日誌與供應商不報
  *   快取細節的呼叫沒有它——算命中率的人要把「沒記」與「0」分開，**混著的會話分母裡有不知道快取多少的呼叫**，命中率只是下限。
@@ -44,10 +46,8 @@ import type { SessionEvent } from './session-log.js';
 
 /** 整份日誌的總帳。沒有任何一顆 `model/usage` 之前數字格都是 0，快取兩格缺席。 */
 export interface TokenUsageTotals {
-  /** 每一次呼叫的完整 prompt token 數加總：未快取、快取讀、快取寫三桶相加（舊欄位的語義，web 換完之前照舊送）。 */
+  /** 未快取的輸入 token 加總（每顆 `model/usage` 的 `inputTokens`），照 dsh；完整 prompt 是它加上快取兩桶。 */
   readonly inputTokens: number;
-  /** 其中未快取的那一桶加總（每顆 `model/usage` 的 `inputTokens`）。 */
-  readonly uncachedInputTokens: number;
   /** 每一次回應的 token 數加總。 */
   readonly outputTokens: number;
   /** 快取讀的加總。**缺席＝日誌上沒有任何一顆報過**，不是 0。 */
@@ -63,9 +63,9 @@ export interface TokenUsageTotals {
  */
 export const tokenUsageUnit = {
   key: 'tokenUsage',
-  // 2：分四桶（#724）。投影的形狀變了（多三格），狀態版本跟著升。
-  stateVersion: 2,
-  init: (): TokenUsageTotals => ({ inputTokens: 0, uncachedInputTokens: 0, outputTokens: 0 }),
+  // 2：分四桶（#724）。3：`inputTokens` 的語義換成未快取（#724 收尾）、拿掉並行的 `uncachedInputTokens`。
+  stateVersion: 3,
+  init: (): TokenUsageTotals => ({ inputTokens: 0, outputTokens: 0 }),
   apply: (state: TokenUsageTotals, event: SessionEvent): TokenUsageTotals => {
     if (event.type !== 'model/usage') return state;
     const { inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens } = event.data;
@@ -79,9 +79,7 @@ export const tokenUsageUnit = {
       return state;
     }
     return {
-      inputTokens:
-        state.inputTokens + inputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0),
-      uncachedInputTokens: state.uncachedInputTokens + inputTokens,
+      inputTokens: state.inputTokens + inputTokens,
       outputTokens: state.outputTokens + outputTokens,
       ...(cacheReadTokens === undefined && state.cacheReadTokens === undefined
         ? {}

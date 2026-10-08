@@ -62,6 +62,12 @@ const NUMBERS = [
   'usages',
   'inputTokens',
   'outputTokens',
+  'uncachedInputTokens',
+  'cacheReadTokens',
+  'cacheWriteTokens',
+  // 有幾次用量報了快取讀／寫：跟 `usages` 一樣多才放進 view（缺席＝沒記，不是 0）。
+  'cacheReadReports',
+  'cacheWriteReports',
   'failedInputTokens',
   'failedOutputTokens',
   'summaries',
@@ -179,6 +185,13 @@ function toSpan(sp: Sp): TokenMeterSpan {
     unknownSteps: Math.max(0, n.steps - n.usages),
     inputTokens: n.inputTokens,
     outputTokens: n.outputTokens,
+    uncachedInputTokens: n.uncachedInputTokens,
+    ...(n.usages > 0 && n.cacheReadReports === n.usages
+      ? { cacheReadTokens: n.cacheReadTokens }
+      : {}),
+    ...(n.usages > 0 && n.cacheWriteReports === n.usages
+      ? { cacheWriteTokens: n.cacheWriteTokens }
+      : {}),
     failedInputTokens: n.failedInputTokens,
     failedOutputTokens: n.failedOutputTokens,
     summaries: n.summaries,
@@ -447,12 +460,19 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
       const input = promptTokensOfData(data);
       const output = typeof data['outputTokens'] === 'number' ? data['outputTokens'] : 0;
       const failed = data['outcome'] !== undefined;
+      const cacheRead = data['cacheReadTokens'];
+      const cacheWrite = data['cacheWriteTokens'];
       return update(state, (sp) =>
         addModel(
           bump(sp, {
             usages: 1,
             inputTokens: input,
             outputTokens: output,
+            uncachedInputTokens: typeof data['inputTokens'] === 'number' ? data['inputTokens'] : 0,
+            cacheReadTokens: typeof cacheRead === 'number' ? cacheRead : 0,
+            cacheWriteTokens: typeof cacheWrite === 'number' ? cacheWrite : 0,
+            cacheReadReports: typeof cacheRead === 'number' ? 1 : 0,
+            cacheWriteReports: typeof cacheWrite === 'number' ? 1 : 0,
             failedInputTokens: failed ? input : 0,
             failedOutputTokens: failed ? output : 0,
           }),

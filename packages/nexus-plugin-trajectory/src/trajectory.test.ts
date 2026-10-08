@@ -500,6 +500,135 @@ describe('窗口與上限', () => {
   });
 });
 
+describe('快取分桶（#724）', () => {
+  const usageOf = (
+    log: SessionLog,
+    modelCall: number,
+    inputTokens: number,
+    extra: { cacheReadTokens?: number; cacheWriteTokens?: number } = {},
+  ) =>
+    log.append('model/usage', {
+      inputTokens,
+      outputTokens: 1,
+      totalTokens: inputTokens + 1,
+      modelCall,
+      ...extra,
+    });
+
+  it('呼叫的 usage：inputTokens 仍是完整 prompt，另帶未快取、快取讀寫三格', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    const start = log.append('model/start', {});
+    usageOf(log, start.seq, 30, { cacheReadTokens: 64, cacheWriteTokens: 100 });
+    const turn = foldAll(log.events).turns[0]!;
+    expect(turn.calls[0]?.usage).toEqual({
+      inputTokens: 194,
+      outputTokens: 1,
+      totalTokens: 31,
+      uncachedInputTokens: 30,
+      cacheReadTokens: 64,
+      cacheWriteTokens: 100,
+    });
+    expect(turn).toMatchObject({
+      inputTokens: 194,
+      uncachedInputTokens: 30,
+      cacheReadTokens: 64,
+      cacheWriteTokens: 100,
+    });
+  });
+
+  it('沒報快取細節（舊日誌、供應商沒給）：兩格缺席而不是 0，未快取桶就是整個 prompt', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    const start = log.append('model/start', {});
+    usageOf(log, start.seq, 500);
+    const turn = foldAll(log.events).turns[0]!;
+    expect(turn.calls[0]?.usage).not.toHaveProperty('cacheReadTokens');
+    expect(turn.calls[0]?.usage).not.toHaveProperty('cacheWriteTokens');
+    expect(turn.calls[0]?.usage?.uncachedInputTokens).toBe(500);
+    expect(turn).not.toHaveProperty('cacheReadTokens');
+    expect(turn.uncachedInputTokens).toBe(500);
+  });
+
+  it('一輪裡只要有一次報了用量的呼叫沒報快取，整輪那一格就缺席；沒有用量的呼叫不算', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    const a = log.append('model/start', {});
+    usageOf(log, a.seq, 10, { cacheReadTokens: 90 });
+    const b = log.append('model/start', {});
+    usageOf(log, b.seq, 40);
+    log.append('model/start', {}); // 沒有 model/usage 的呼叫：不拖累別人
+    const turn = foldAll(log.events).turns[0]!;
+    expect(turn).not.toHaveProperty('cacheReadTokens');
+    expect(turn.uncachedInputTokens).toBe(50);
+
+    const clean = new SessionLog('t');
+    clean.append('turn/start', { kind: 'message', text: 'x' });
+    const c = clean.append('model/start', {});
+    usageOf(clean, c.seq, 10, { cacheReadTokens: 90 });
+    clean.append('model/start', {});
+    expect(foldAll(clean.events).turns[0]?.cacheReadTokens).toBe(90);
+  });
+
+  it('呼叫超過上限被摺掉：桶照樣算進整輪，全報的規則跟著摺掉的呼叫走', () => {
+    const total = TRAJECTORY_TURN_CALLS_CAP + 5;
+    const build = (lastReports: boolean) => {
+      const log = new SessionLog('t');
+      log.append('turn/start', { kind: 'message', text: 'x' });
+      for (let i = 0; i < total; i += 1) {
+        const start = log.append('model/start', {});
+        usageOf(log, start.seq, 2, i === total - 1 && !lastReports ? {} : { cacheReadTokens: 3 });
+      }
+      return foldAll(log.events).turns[0]!;
+    };
+    const allReported = build(true);
+    expect(allReported.elided?.calls).toBe(5);
+    expect(allReported).toMatchObject({
+      uncachedInputTokens: 2 * total,
+      cacheReadTokens: 3 * total,
+      inputTokens: 5 * total,
+    });
+    // 最新那一次沒報：摺掉的 5 次報了，整輪仍然缺席。
+    expect(build(false)).not.toHaveProperty('cacheReadTokens');
+  });
+
+  it('同一次呼叫的兩筆用量：先報後沒報也是缺席（不拿一部分當總數）', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    const start = log.append('model/start', {});
+    usageOf(log, start.seq, 10, { cacheReadTokens: 90 });
+    usageOf(log, start.seq, 5);
+    const usage = foldAll(log.events).turns[0]?.calls[0]?.usage;
+    expect(usage).toMatchObject({ inputTokens: 105, uncachedInputTokens: 15 });
+    expect(usage).not.toHaveProperty('cacheReadTokens');
+
+    // 反過來（先沒報、後報）同樣缺席。
+    const reversed = new SessionLog('t');
+    reversed.append('turn/start', { kind: 'message', text: 'x' });
+    const second = reversed.append('model/start', {});
+    usageOf(reversed, second.seq, 5);
+    usageOf(reversed, second.seq, 10, { cacheReadTokens: 90 });
+    expect(foldAll(reversed.events).turns[0]?.calls[0]?.usage).not.toHaveProperty(
+      'cacheReadTokens',
+    );
+  });
+
+  it('摘要（digest）帶同樣的三格', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: 'x' });
+    const start = log.append('model/start', {});
+    usageOf(log, start.seq, 30, { cacheReadTokens: 64, cacheWriteTokens: 100 });
+    log.append('turn/end', {});
+    for (let i = 0; i < TRAJECTORY_DETAIL_TURNS + 1; i += 1) simpleTurn(log, `y${i}`);
+    const digest = foldWindowed(log.events).digests[0]!;
+    expect(digest).toMatchObject({
+      uncachedInputTokens: 30,
+      cacheReadTokens: 64,
+      cacheWriteTokens: 100,
+    });
+  });
+});
+
 describe('單輪上限：摺掉的東西不讓計數變小', () => {
   it('呼叫超過上限：留最新的，更早的折進 elided，用量與重試照樣算進總數', () => {
     const log = new SessionLog('t');

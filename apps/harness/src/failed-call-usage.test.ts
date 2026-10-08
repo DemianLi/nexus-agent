@@ -161,7 +161,9 @@ async function runTurn(stopAfterText: boolean) {
 const eventsOf = <T extends keyof SessionEventMap>(events: readonly SessionEvent[], type: T) =>
   events.filter((event) => event.type === type).map((event) => event.data as SessionEventMap[T]);
 
-const LEDGER = { inputTokens: 321, uncachedInputTokens: 321, outputTokens: 45 };
+/** 日誌折出來的總帳（`inputTokens` 是未快取那桶）；線上多一格永遠等於它的 `uncachedInputTokens`（新舊 server 的標記）。 */
+const LEDGER = { inputTokens: 321, outputTokens: 45 };
+const WIRE_LEDGER = { ...LEDGER, uncachedInputTokens: 321 };
 
 describe('失敗的呼叫也帶快取桶（#724）', () => {
   it('嗅探從 prompt_tokens_details 讀快取讀寫：日誌扣出未快取那桶，總帳四桶，即時與歷史一致', async () => {
@@ -179,15 +181,15 @@ describe('失敗的呼叫也帶快取桶（#724）', () => {
       outcome: 'error',
     });
     const ledger = {
-      inputTokens: 321,
-      uncachedInputTokens: 71,
+      inputTokens: 71,
       outputTokens: 45,
       cacheReadTokens: 200,
       cacheWriteTokens: 50,
     };
+    const wire = { ...ledger, uncachedInputTokens: 71 };
     expect(deriveTokenUsage(root)).toEqual(ledger);
-    expect(reduceAll(emptyConversation(), frames).tokenUsage).toEqual(ledger);
-    expect(reduceAll(emptyConversation(), historyPage(root).events).tokenUsage).toEqual(ledger);
+    expect(reduceAll(emptyConversation(), frames).tokenUsage).toEqual(wire);
+    expect(reduceAll(emptyConversation(), historyPage(root).events).tokenUsage).toEqual(wire);
     // 「目前大小」是完整的 prompt，不因分桶而變。
     expect(reduceAll(emptyConversation(), frames).contextPressure?.inputTokens).toBe(321);
   }, 30_000);
@@ -214,8 +216,10 @@ describe('供應商報了用量、呼叫之後沒有正常回來', () => {
     expect(eventsOf(root, 'model/end')).toEqual([{ modelCall: start.seq, outcome: 'error' }]);
 
     expect(deriveTokenUsage(root)).toEqual(LEDGER);
-    expect(reduceAll(emptyConversation(), frames).tokenUsage).toEqual(LEDGER);
-    expect(reduceAll(emptyConversation(), historyPage(root).events).tokenUsage).toEqual(LEDGER);
+    expect(reduceAll(emptyConversation(), frames).tokenUsage).toEqual(WIRE_LEDGER);
+    expect(reduceAll(emptyConversation(), historyPage(root).events).tokenUsage).toEqual(
+      WIRE_LEDGER,
+    );
 
     // 「目前大小」：失敗的那份請求也是一筆樣本（同 dsh 的 `contextPressure`，連 `assistant/attempt` 的用量也取樣），
     // 即時與歷史兩條路拿到同一個數。
@@ -253,8 +257,10 @@ describe('供應商報了用量、呼叫之後沒有正常回來', () => {
     ]);
     expect(eventsOf(root, 'model/end')).toEqual([expect.objectContaining({ outcome: 'aborted' })]);
     expect(deriveTokenUsage(root)).toEqual(LEDGER);
-    expect(reduceAll(emptyConversation(), frames).tokenUsage).toEqual(LEDGER);
-    expect(reduceAll(emptyConversation(), historyPage(root).events).tokenUsage).toEqual(LEDGER);
+    expect(reduceAll(emptyConversation(), frames).tokenUsage).toEqual(WIRE_LEDGER);
+    expect(reduceAll(emptyConversation(), historyPage(root).events).tokenUsage).toEqual(
+      WIRE_LEDGER,
+    );
   }, 30_000);
 });
 
@@ -265,11 +271,7 @@ describe('供應商沒報用量：未知，不是 0', () => {
 
     expect(eventsOf(root, 'model/usage')).toEqual([]);
     expect(eventsOf(root, 'model/end')).toEqual([expect.objectContaining({ outcome: 'error' })]);
-    expect(deriveTokenUsage(root)).toEqual({
-      inputTokens: 0,
-      uncachedInputTokens: 0,
-      outputTokens: 0,
-    });
+    expect(deriveTokenUsage(root)).toEqual({ inputTokens: 0, outputTokens: 0 });
     expect(reduceAll(emptyConversation(), frames).tokenUsage).toBeNull();
   }, 30_000);
 

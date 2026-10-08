@@ -437,6 +437,106 @@ describe('窗口與上限：總數不因摺掉而變小', () => {
   });
 });
 
+describe('快取分桶（#724）', () => {
+  /** 格式 36 起的用量：`inputTokens` 是未快取那桶，快取兩格各自選填。 */
+  const bucketed = (
+    inputTokens: number,
+    extra: { cacheReadTokens?: number; cacheWriteTokens?: number } = {},
+  ) => ({
+    inputTokens,
+    outputTokens: 1,
+    totalTokens: inputTokens + 1 + (extra.cacheReadTokens ?? 0) + (extra.cacheWriteTokens ?? 0),
+    ...extra,
+  });
+  const oneCall = (time: number, data: unknown): Draft[] => [
+    [time, 'model/start', {}],
+    [time + 1, 'model/usage', data],
+    [time + 2, 'model/end', {}],
+  ];
+
+  it('兩桶都報：三桶相加就是 inputTokens（完整 prompt），未快取桶、讀、寫各自加總', () => {
+    const view = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        ...oneCall(1, bucketed(30, { cacheReadTokens: 64, cacheWriteTokens: 100 })),
+        ...oneCall(10, bucketed(5, { cacheReadTokens: 200, cacheWriteTokens: 0 })),
+        [20, 'turn/end', {}],
+      ),
+    );
+    const turn = view.turns[0]!;
+    // 手算：未快取 30＋5、讀 64＋200、寫 100＋0；完整 prompt 194＋205。
+    expect([turn.uncachedInputTokens, turn.cacheReadTokens, turn.cacheWriteTokens]).toEqual([
+      35, 264, 100,
+    ]);
+    expect(turn.inputTokens).toBe(399);
+    expect(view.session).toMatchObject({
+      uncachedInputTokens: 35,
+      cacheReadTokens: 264,
+      cacheWriteTokens: 100,
+      inputTokens: 399,
+    });
+  });
+
+  it('快取寫是 0 也是「報了」：key 在、值是 0；沒報才缺席', () => {
+    const wrote0 = fold(
+      log(...oneCall(1, bucketed(10, { cacheReadTokens: 20, cacheWriteTokens: 0 }))),
+    );
+    expect(wrote0.outside).toMatchObject({ cacheReadTokens: 20, cacheWriteTokens: 0 });
+    const readOnly = fold(log(...oneCall(1, bucketed(10, { cacheReadTokens: 20 }))));
+    expect(readOnly.outside.cacheReadTokens).toBe(20);
+    expect(readOnly.outside).not.toHaveProperty('cacheWriteTokens');
+  });
+
+  it('沒有快取細節（舊日誌、供應商沒給）：未快取桶就是整個 prompt，快取兩格缺席而不是 0', () => {
+    const view = fold(log(...oneCall(1, usage(500, 5))));
+    expect(view.outside.uncachedInputTokens).toBe(500);
+    expect(view.outside).not.toHaveProperty('cacheReadTokens');
+    expect(view.outside).not.toHaveProperty('cacheWriteTokens');
+    // 還沒有任何用量事件：同樣缺席。
+    expect(fold([]).session).not.toHaveProperty('cacheReadTokens');
+    expect(fold([]).session.uncachedInputTokens).toBe(0);
+  });
+
+  it('一段裡只要有一次呼叫沒報就整格缺席；全報的那一輪仍然有，會話總計因混了而缺席', () => {
+    const view = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        ...oneCall(1, bucketed(10, { cacheReadTokens: 90 })),
+        ...oneCall(10, usage(40, 1)), // 這一次沒報快取
+        [20, 'turn/end', {}],
+        [30, 'turn/start', { kind: 'message' }],
+        ...oneCall(31, bucketed(7, { cacheReadTokens: 3 })),
+        [40, 'turn/end', {}],
+      ),
+    );
+    expect(view.turns[0]).not.toHaveProperty('cacheReadTokens');
+    // 未快取桶不受影響：沒報細節的那次整個 prompt 就是未快取。
+    expect(view.turns[0]?.uncachedInputTokens).toBe(50);
+    expect(view.turns[1]?.cacheReadTokens).toBe(3);
+    expect(view.session).not.toHaveProperty('cacheReadTokens');
+    expect(view.session.uncachedInputTokens).toBe(57);
+  });
+
+  it('窗口外併成的 earlier 照同一條規則：全報才有', () => {
+    const drafts: Draft[] = [];
+    const turns = TOKEN_METER_TURNS_KEEP + 3;
+    for (let i = 0; i < turns; i += 1) {
+      const at = i * 10;
+      drafts.push([at, 'turn/start', { kind: 'message' }]);
+      drafts.push(...oneCall(at + 1, bucketed(10, { cacheReadTokens: 5 })));
+      drafts.push([at + 5, 'turn/end', {}]);
+    }
+    const view = fold(log(...drafts));
+    // 23 輪：最近 20 輪在窗口裡，更早的 3 輪併成一列（每輪 10／5）。
+    expect(view.earlier?.turns).toBe(3);
+    expect(view.earlier).toMatchObject({ uncachedInputTokens: 30, cacheReadTokens: 15 });
+    expect(view.session).toMatchObject({
+      uncachedInputTokens: 10 * turns,
+      cacheReadTokens: 5 * turns,
+    });
+  });
+});
+
 describe('投影通道', () => {
   it('單元宣告 children: true，插件註冊的就是它', () => {
     expect(tokenMeterUnit.children).toBe(true);
