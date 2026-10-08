@@ -163,7 +163,8 @@ describe('切回以前的 thread，畫面照日誌重播', () => {
           expect.objectContaining({ method: 'custom' }),
         ],
         firstSeq: 0,
-        throughSeq: -1,
+        // 日誌上只有接上時釘進去的核准政策起始值（`approval/policy`，#437）一顆，它不產生任何畫面上的 frame。
+        throughSeq: 0,
         hasMore: false,
         legacy: false,
       },

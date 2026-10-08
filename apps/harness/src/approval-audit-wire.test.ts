@@ -680,8 +680,13 @@ describe('CLI 那條產品路徑', () => {
       )
       .map((event) => event.type);
     expect(order).toEqual(['tool/call', 'approval/asked', 'approval/decided', 'tool/result']);
-    const [asked, decided] = events.filter((event) => event.type.startsWith('approval/'));
+    const asked = events.find((event) => event.type === 'approval/asked');
+    const decided = events.find((event) => event.type === 'approval/decided');
     expect(asked?.data).toMatchObject({ toolName: 'echo', callId: 'cli-echo' });
     expect(decided?.data).toEqual({ id: (asked?.data as { id: string }).id, outcome: 'rejected' });
+    // 入口沒有人在（`approvals.enabled: false`）與核准政策是兩件事（#437）：這條路上政策仍是起始的 `ask`，被擋的原因在管道。
+    expect(
+      events.filter((event) => event.type === 'approval/policy').map((event) => event.data),
+    ).toEqual([{ policy: 'ask' }]);
   }, 60000);
 });

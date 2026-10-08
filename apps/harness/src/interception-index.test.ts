@@ -219,7 +219,9 @@ const INDEX: readonly InterceptionRow[] = [
       '同 dsh（只有 `ask` 才進核准服務）。**dsh 沒有而我們多的一格**：核准拒絕的 `tool/result` 帶碼' +
       '（`APPROVAL_REJECTED_BY_USER`／`APPROVAL_POLICY_NEVER`／`APPROVAL_NO_CHANNEL`／`TOOL_DENIED_BY_LISTENER`），' +
       '依據是 #1018 Q2 拍板的「拒絕帶原因碼」（卡上說 dsh 也帶，是讀錯：dsh 的核准拒絕結果沒有 info），載體用 dsh 的 `deny.info` 那一格。' +
-      '**還沒有的**：`cancelled` 只在停在核准點按停止時寫（pump 的 `#withdraw`）；沒有 `approval/policy`（要不要照 dsh 補是另一個決定）；' +
+      '**還沒有的**：`cancelled` 只在停在核准點按停止時寫（pump 的 `#withdraw`）；' +
+      "**政策事件**（#437）：`approval/policy` 記政策（`ask`／`never`）的起始值與每次切換，子代理日誌補一顆 `source: 'delegation'`；" +
+      '但日誌上 `approval/decided` 的 `rejected` 仍分不出人拒與政策拒，那一次呼叫要看 `tool/result` 的碼；' +
       '`request_sandbox_escalation` 在本體裡的政策／無管道拒絕不寫 `approval/*`（只有人那條路會）。',
     frequencyDelta: UNMEASURED,
   },
@@ -339,8 +341,8 @@ function productSources(dir: string): string[] {
  *
  * 1. **有**：`approval/asked`、`approval/decided` 兩顆事件種類都宣告了（#1029）。這是翻面後的樣子——原本寫的是
  *    「完全沒有任何 `approval/` 開頭的名字」，它在那兩顆落地的那天紅了，紅的地方正是要重寫的那一欄。
- * 2. **還沒有**：`approval/policy`（dsh 用它記政策切換）。紀錄差的「還沒有的」一句靠它撐著：哪天它出現了，
- *    這條紅，回去改那一句（政策進了日誌，`tool/result` 的碼就不再是分人拒與政策拒的唯一依據）。
+ * 2. **有**：`approval/policy`（#437，dsh 用它記政策切換）。翻面後的樣子——原本這一條寫「還沒有」，它在這顆落地的那天紅了，
+ *    紅的地方正是要重寫的那一句。
  *
  * 掃的是種類的**寫法**（聯集的 `| 'approval/…'`，或映射／宣告合併裡的 `'approval/…':` 鍵）而不是整個檔案，
  * 所以散文裡提到事件名不會誤觸。**掃的範圍不只 `session-log.ts`**（#679）：照 dsh，擁有者套件可以用
@@ -352,9 +354,11 @@ const RECORD_ANCHOR = {
   cell: 4,
   path: 'packages/nexus-core/src/session-log.ts',
   /** 事件種類的鍵（映射／宣告合併的寫法）。 */
-  present: [/^\s*'approval\/asked'\s*:/mu, /^\s*'approval\/decided'\s*:/mu],
-  /** 還沒有的種類：聯集的一項，或映射／宣告合併裡的一個鍵。 */
-  absent: [/\|\s*'approval\/policy'/u, /^\s*'approval\/policy'\s*:/mu],
+  present: [
+    /^\s*'approval\/asked'\s*:/mu,
+    /^\s*'approval\/decided'\s*:/mu,
+    /^\s*'approval\/policy'\s*:/mu,
+  ],
 } as const;
 
 /**
@@ -418,7 +422,7 @@ describe('攔截時刻索引', () => {
     ).toEqual([...listed].sort());
   });
 
-  it(`第 ${RECORD_ANCHOR.cell} 格的紀錄差靠「兩顆核准事件有、approval/policy 還沒有」撐著`, () => {
+  it(`第 ${RECORD_ANCHOR.cell} 格的紀錄差靠「核准的問、答、政策三顆事件都有」撐著`, () => {
     const row = INDEX.find((candidate) => candidate.cell === RECORD_ANCHOR.cell);
     // 這一列的紀錄差是量過的，不能退回 `undefined`（那等於宣稱沒有紀錄面的缺口）。
     expect(row?.recordDelta).toBeTypeOf('string');
@@ -432,15 +436,8 @@ describe('攔截時刻索引', () => {
     for (const pattern of RECORD_ANCHOR.present) {
       expect(
         declared,
-        `第 ${RECORD_ANCHOR.cell} 列的紀錄差說核准的問與答各有一顆事件，但 ${String(pattern)} 在 SessionEventMap 裡找不到`,
+        `第 ${RECORD_ANCHOR.cell} 列的紀錄差說核准的問、答與政策各有一顆事件，但 ${String(pattern)} 在 SessionEventMap 裡找不到`,
       ).toMatch(pattern);
-    }
-    for (const pattern of RECORD_ANCHOR.absent) {
-      expect(
-        declared,
-        `SessionEventType（${RECORD_ANCHOR.path} 或某個 declare module '@nexus/core' 區塊）` +
-          `多了 approval/policy，第 ${RECORD_ANCHOR.cell} 列紀錄差的「還沒有的」一句要跟著重寫`,
-      ).not.toMatch(pattern);
     }
   });
 });

@@ -72,9 +72,10 @@
 
 import { tool } from '@langchain/core/tools';
 import { interrupt } from '@langchain/langgraph';
-import type { ApprovalChannel, NexusPlugin } from '@nexus/core';
+import type { ApprovalChannel, ApprovalPolicySource, NexusPlugin } from '@nexus/core';
 import {
   APPROVAL_INTERRUPT_KIND,
+  APPROVAL_POLICY_SERVICE,
   APPROVAL_REJECTED_BY_USER,
   approvalDenied,
   CHANNEL_SERVICE,
@@ -153,8 +154,12 @@ export const MISSING_TARGET_REFUSAL =
 export const BLANK_JUSTIFICATION_REFUSAL =
   'justification 是空的——一張沒有理由的升級核准卡是壞掉的請求，所以沒有去問人。';
 
-/** 沒有人可問的三種原因：核准管道的兩格非人，加上組裝點根本沒提供管道。 */
-export type UnaskedReason = Exclude<ApprovalChannel['kind'], 'human'> | 'no-service';
+/**
+ * 沒有人可問的原因：核准管道的兩格非人、組裝點根本沒提供管道，加上**核准政策是 `never`**
+ * （[#437](https://github.com/DemianLi/nexus-agent/issues/437)：有人在，但使用者選了不問）。
+ */
+export type UnaskedReason =
+  Exclude<ApprovalChannel['kind'], 'human'> | 'no-service' | 'approval-never';
 
 /**
  * 加寬、但沒有人可問的那句話。**三種原因各說各的**，同核准閘門的紀律（`approval.ts` 的
@@ -175,6 +180,11 @@ export function unaskedRefusal(reason: UnaskedReason, requested: SandboxMode): s
       return (
         `${head}但這次組裝沒有 checkpointer，核准之後接不回來，所以沒有去問人。` +
         '這不是有人拒絕了它——是沒有可用的核准管道。'
+      );
+    case 'approval-never':
+      return (
+        `${head}但這個 session 的核准政策是不問（never），所以沒有去問人。` +
+        '這不是有人拒絕了它——是沒有人被問到。'
       );
     case 'no-service':
       return (
@@ -237,10 +247,12 @@ interface EscalationVerdict {
 /**
  * @param controller - 這次組裝那一格。
  * @param channel - 這次組裝有沒有人可以按核准；組裝點沒提供時是 `undefined`，當作沒有人可問。
+ * @param approvalPolicy - 核准政策的來源（#437），**每次問人之前讀一次**；`never` 就不問。沒有提供時當作 `ask`。
  */
 function createEscalationTool(
   controller: SandboxModeController,
   channel: ApprovalChannel | undefined,
+  approvalPolicy: ApprovalPolicySource | undefined,
 ) {
   return tool(
     async (args: z.infer<typeof escalationSchema>, runtime: ToolRuntimeLike) => {
@@ -268,9 +280,12 @@ function createEscalationTool(
           ? 'policy-never'
           : channel === undefined
             ? 'no-service'
-            : channel.kind === 'human'
-              ? undefined
-              : channel.kind;
+            : channel.kind !== 'human'
+              ? channel.kind
+              : // 升級的核准是這個政策管的核准：切到 `never` 之後，這條路也要跟著回絕，不然只改了閘門、模型換條路還是問得到人。
+                approvalPolicy?.() === 'never'
+                ? 'approval-never'
+                : undefined;
       if (unasked !== undefined) return refuse(unaskedRefusal(unasked, requested));
 
       // `interrupt` 用拋例外傳播，**不能包在 try/catch 裡**
@@ -338,6 +353,12 @@ export function registerSandboxEscalation(
   registry: Parameters<NexusPlugin['apply']>[0],
   controller: SandboxModeController,
 ): void {
-  registry.tools.register(createEscalationTool(controller, registry.services.get(CHANNEL_SERVICE)));
+  registry.tools.register(
+    createEscalationTool(
+      controller,
+      registry.services.get(CHANNEL_SERVICE),
+      registry.services.get(APPROVAL_POLICY_SERVICE)?.source,
+    ),
+  );
   controller.enableEscalation(SANDBOX_ESCALATION_HINT);
 }

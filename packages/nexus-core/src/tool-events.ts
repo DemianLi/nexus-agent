@@ -101,10 +101,11 @@ export const TOOL_NOT_STARTED = 'TOOL_NOT_STARTED';
  * 「拒絕帶原因碼」——這是產品要求，不是 dsh 的做法（#1029 卡上說 dsh 的拒絕帶 `error{name,code,reason}`，那是讀錯：
  * dsh 的核准拒絕結果沒有這一格）。載體是 dsh `PreToolDecision` 的 `deny.info?: ToolErrorInfo`
  * （「structured error identity」，dsh 自己沒用在核准上）：槽是 dsh 的，填法是我們的，所以不是新機制。
- * 之後若要照 dsh 補 `approval/policy` 事件來分人拒與政策拒，是另一個決定（demian 定），補了這四個碼也不必拿掉。
+ * `approval/policy` 事件後來補上了（#437）：它記的是政策這顆旋鈕的值（`ask`／`never`），日誌上 `approval/decided` 的 `rejected` 兩種拒絕仍同值，所以這四個碼照舊是分人拒與政策拒的依據。
  *
  * - {@link APPROVAL_REJECTED_BY_USER}：有人看過並按了拒絕。
- * - {@link APPROVAL_POLICY_NEVER}：這個 session 關掉了核准，確定性拒絕，沒有人被問到。
+ * - {@link APPROVAL_POLICY_NEVER}：確定性拒絕，沒有人被問到。兩種原因共用這個碼：入口沒有人在（`approvals.enabled: false`，CLI／評測），
+ *   或使用者把核准政策選成不問（`never`，#437）；兩種的話不同，分辨看 `tool/result.message`。
  * - {@link APPROVAL_NO_CHANNEL}：沒有可用的核准管道（沒有 checkpointer），沒有人被問到。
  * - {@link TOOL_DENIED_BY_LISTENER}：某位 pre-execute listener 直接回了 `deny`（沒有問人）。哪一位看 `tool/result.message`。
  */

@@ -505,6 +505,8 @@ describe('什麼推得動 roundsStarted', () => {
     // 記一顆，理由同 `model/usage`。
     // `inbox/spliced`（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）：不推。它是人送出、還沒開跑的
     // 那幾句的變動；那一件真的開跑時有自己的 `turn/start`，推的是那一顆。續行走佇列（#638）之後也一樣。
+    // `approval/policy`（[#437](https://github.com/DemianLi/nexus-agent/issues/437)）：不推。核准政策的起始值與切換，
+    // 不是一輪的開始；同 `sandbox/mode`（住在別的套件、這張表看不到）。
     // `request/header`／`request/system`（[#1020](https://github.com/DemianLi/nexus-agent/issues/1020)）：不推。
     // 模型被叫那一刻的設定與系統提示詞快照，變了才記、一次呼叫最多各一顆，理由同 `model/start`。
     // `session/title`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）：不推。它跟在一顆人打的
@@ -523,6 +525,7 @@ describe('什麼推得動 roundsStarted', () => {
       'interrupt/raised',
       'approval/asked',
       'approval/decided',
+      'approval/policy',
       'goal/change',
       'model/usage',
       'model/start',

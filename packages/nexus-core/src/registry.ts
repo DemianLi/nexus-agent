@@ -32,6 +32,7 @@ import type { AnyBackendProtocol, SubAgent } from 'deepagents';
 import type { ZodType } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import type { ApprovalChannel, PreToolListener } from './approval.js';
+import type { ApprovalPolicyController } from './approval-policy.js';
 import { normalizeCommandDefinition } from './commands.js';
 import type { CommandDefinition, CommandDescriptor } from './commands.js';
 import { AnonymousEntries, CapabilitySet, NamedEntries } from './entries.js';
@@ -281,6 +282,13 @@ export interface NexusServices {
    * 組裝點用的；產品路徑由組裝點明著算一次提供出來。
    */
   channel: ApprovalChannel;
+  /**
+   * 這個組裝的核准政策控制器（`ask`／`never`，[#437](https://github.com/DemianLi/nexus-agent/issues/437)）。名字見
+   * {@link ./approval-policy.ts | APPROVAL_POLICY_SERVICE}。**組裝點提供**：核准政策的 session 開關歸組裝點，plugin 只能讀與切。
+   *
+   * **沒人提供時消費者當作 `ask`**（手搭的測試組裝）；產品路徑一律提供，閘門讀的是同一顆。
+   */
+  approvalPolicy: ApprovalPolicyController;
   /**
    * 工具實際讀寫的那一個 backend（[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。名字見
    * {@link ./fs-service.ts | FS_SERVICE}。值是一格 fold 之後才填的把手，**被叫時才讀**；理由見那個模組的偏離登記。
