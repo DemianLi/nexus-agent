@@ -549,14 +549,25 @@
           chatTemplateKwargs:
             enable_thinking:
               $var: thinking.enabled
-      # 看圖模型（#731 判定，2026-10-08）：**穩定收得了使用者訊息裡的圖**（5/5），工具結果後面接圖不穩（見 `.docs/model-inventory.md`
-      # 「收圖實測」），所以只宣告 `input: [text, image]` 給「使用者訊息帶圖」用。不推理，所以不寫 `reasoningEfforts`／`compat`——
-      # 每會話選擇（#723）不會給它強度列。
-      # **窗口與輸出上限在真端點量過一次（2026-10-09，`say hi`，非串流）**：`max_tokens` 4096、8192、16384 都回 200；131072 回 400，
-      # 訊息寫 "maximum context length is 131072 tokens"，所以窗口 131,072 是端點自己報的。`maxTokens` 取 4096 是**選擇不是上限**：
-      # 端點收到 16384，但這顆是看圖用的小模型，輸出給大了只會多吃窗口；要改大先看摘要門檻（窗口 − 輸出上限）還夠不夠。
+      # `meta/llama-3.2-11b-vision-instruct`：**宣告純文字，不收圖**（#732 真模型實跑，2026-10-09）。#731 判它「穩定收得了使用者訊息裡的圖」，
+      # 那次量的請求**沒帶 `tools`**；產品每一輪都帶 `tools`，而這顆在請求帶 `tools` 時，使用者訊息裡的圖一律 400：
+      #   `The number of image tokens (0) must be the same as the number of images (1)`（`https://integrate.api.nvidia.com/v1`，NVIDIA）。
+      # 直接請求隔離過六種組合：圖在文字前／後、有無 system 都無關，**只有「帶 tools」會觸發**（不帶 tools 兩種順序都唸對）。
+      # 宣告收圖的話，使用者會在一輪跑到一半才撞上 400；宣告純文字，收件時就回 `model_does_not_support_images`。
+      # 窗口與輸出上限在真端點量過一次（2026-10-09，`say hi`，非串流）：`max_tokens` 4096、8192、16384 都回 200；131072 回 400，
+      # 訊息寫 "maximum context length is 131072 tokens"。`maxTokens` 取 4096 是**選擇不是上限**。
       - id: 'meta/llama-3.2-11b-vision-instruct'
         contextWindow: 131072
+        maxTokens: 4096
+        input: [text]
+      # 看圖模型（#732 實跑判定，2026-10-09）：**帶 `tools` 也收得了使用者訊息裡的圖**——產品路徑（`runServe --live`＋`run.start` 帶內嵌圖）
+      # 回出「紅色實心圓、藍底」的描述；直接請求帶 `tools`＋圖也回 200。代價是慢：同一個請求單次約 68–76 秒（11b 約 1 秒；
+      # 純文字約 25–34 秒），所以預設逾時 90 秒的只剩一點餘裕——慢是這顆的特性，不是擋下的理由。
+      # **窗口只有 32,768**（真端點量過：`max_tokens` 131072 回 400，訊息寫 "maximum context length is 32768 tokens"；16384 收），
+      # 比 11b 小得多。`maxTokens` 取 4096 同樣是選擇不是上限。一張圖約 1600 token（256×256 的圖：帶圖 1844、同請求無圖 242）；
+      # 這個數字隨圖的大小分塊，不是常數，見 `attachment-ref.ts` 的 `IMAGE_TOKENS`（那是 11b 在 640×220 圖上量的）。
+      - id: 'meta/llama-3.2-90b-vision-instruct'
+        contextWindow: 32768
         maxTokens: 4096
         input: [text, image]
 

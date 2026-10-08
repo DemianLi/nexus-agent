@@ -305,10 +305,16 @@ describe('startupSetting', () => {
           tokenizer: { digits: 'single' },
           compat: { chatTemplateKwargs: { enable_thinking: { $var: 'thinking.enabled' } } },
         },
-        // 看圖模型（#731 判定、#723 的第二個可選項）。`maxTokens` 與窗口的出處見 `cordis.yml` 的註解（2026-10-09 真端點量過）。
+        // 11b 宣告純文字（帶 tools 就拒圖）、90b 才收圖（#732 實跑）。`maxTokens` 與窗口的出處見 `cordis.yml` 的註解（2026-10-09 真端點量過）。
         {
           id: 'meta/llama-3.2-11b-vision-instruct',
           contextWindow: 131072,
+          maxTokens: 4096,
+          input: ['text'],
+        },
+        {
+          id: 'meta/llama-3.2-90b-vision-instruct',
+          contextWindow: 32768,
           maxTokens: 4096,
           input: ['text', 'image'],
         },
