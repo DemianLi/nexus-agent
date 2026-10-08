@@ -165,6 +165,15 @@ import { toolTextConfigSchema } from './settings/tool-text.js';
 import type { ToolTextConfig } from './settings/tool-text.js';
 // 讀這些種類（#679 第 4 步：由各自的 owner 套件用宣告合併補進 `SessionEventMap`）；沒有執行期的引用。
 import { classifyTurnFailure } from './live-model.js';
+import {
+  answerElicitation,
+  declineAll,
+  parseMcpElicitation,
+  questionPayloadOf,
+  systemAnswerReasonOf,
+  urlKeysOf,
+} from './mcp-elicitation.js';
+import type { McpElicitation, SystemAnswerReason } from './mcp-elicitation.js';
 import type {} from '@nexus/plugin-goal';
 import type {} from '@nexus/plugin-todo';
 import type {} from '@nexus/plugin-plan-mode';
@@ -380,6 +389,14 @@ export type PumpInput =
        */
       readonly interruptId: string;
       readonly response: unknown;
+      /**
+       * 這一次回答**不是人答的，是系統代答**（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)，MCP 反問的
+       * `url` 模式與子代理）：這一輪裡記一顆 `interrupt/system-answered`。人答的路不帶。
+       */
+      readonly systemAnswered?: {
+        readonly reason: SystemAnswerReason;
+        readonly keys: readonly string[];
+      };
     }
   | ({ readonly kind: 'goal' } & GoalRoundRequest)
   | {
@@ -462,10 +479,15 @@ export interface PendingInterrupt {
    * {@link ThreadPump.subscribe} 補送它，重新整理的網頁因此拿得回面板。
    */
   readonly request: Event;
+  /**
+   * 這顆是 MCP server 的反問時，驗過形狀的原酬載（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）。
+   * 廣播出去的是翻成問答卡的那一份，人的回覆要靠它翻回 adapter 要的 `{ responses }`（{@link answerElicitation}）。
+   */
+  readonly elicitation?: McpElicitation;
 }
 
 /** 基座把中斷發在 `updates` 上的那一顆的 data 形狀。 */
-interface InterruptEntry {
+export interface InterruptEntry {
   readonly id: string;
   readonly value: unknown;
 }
@@ -490,7 +512,7 @@ function interruptEntriesOf(values: unknown): readonly InterruptEntry[] {
   );
 }
 
-function asInterruptEntries(data: unknown): readonly InterruptEntry[] {
+export function asInterruptEntries(data: unknown): readonly InterruptEntry[] {
   // `updates` 的 data 是 `{ node, values }`，中斷那一顆的 values 才是中斷清單。
   return interruptEntriesOf((data as { values?: unknown } | null)?.values);
 }
@@ -1053,6 +1075,20 @@ export class ThreadPump {
    */
   readonly #approvalOpen = new Set<string>();
   /**
+   * MCP 反問的中斷 id → 它是不是子代理發的（#1098）。**第一次看到時的 namespace 定案**：前景子代理的中斷先以
+   * `["tools:<父呼叫>"]` 出現，隨後同一顆又在 root 層（`[]`）出現一次；只看後面那一顆會把子代理的反問當成 root 的、送給人。
+   */
+  readonly #elicitationOrigins = new Map<string, boolean>();
+  /**
+   * 這一輪裡要由系統代答的反問，等這一輪收尾後逐顆 resume（#1098）。**不放進 {@link ThreadPump.#pending}**：沒有人要答，
+   * 下行也不該看到一張沒人按的卡。
+   */
+  #systemAnswers: {
+    interruptId: string;
+    elicitation: McpElicitation;
+    reason: SystemAnswerReason;
+  }[] = [];
+  /**
    * 最後一顆背景子代理現況的 frame（#867），**帶著它原本的號**。新接上的下行在註冊當下先收到它，見 {@link ThreadPump.subscribe}。
    * 沒有背景派出、或從沒變過就是 `undefined`。
    */
@@ -1595,8 +1631,34 @@ export class ThreadPump {
     //
     // 說話與續行**不碰**掛著的中斷：它們停在隊裡等（#629）。以前這裡整個清掉當止血，那等於
     // 讓繞過上行那道擋的呼叫端把中斷靜靜丟掉——正是這張卡要修的事換一扇門進來。
-    if (input.kind === 'resume' && this.#pending.delete(input.interruptId)) {
-      this.#tell({ type: 'input-withdrawn', interruptId: input.interruptId });
+    if (input.kind === 'resume') {
+      const elicitation = this.#pending.get(input.interruptId)?.elicitation;
+      if (elicitation !== undefined) {
+        // MCP 反問：人回的是問答卡的形狀，這裡翻成 adapter 要的 `{ responses }`。**翻不動就在收下之前拒絕**，掛著的那顆
+        // 不動，人可以再答一次。`url` 模式的 key 一律回絕，記成系統代答。
+        let response: unknown;
+        try {
+          response = answerElicitation(elicitation, input.response);
+        } catch (error: unknown) {
+          return Promise.reject(error instanceof Error ? error : new Error(String(error)));
+        }
+        const urlKeys = urlKeysOf(elicitation);
+        input = {
+          ...input,
+          response,
+          ...(urlKeys.length === 0
+            ? {}
+            : { systemAnswered: { reason: 'url-mode' as const, keys: urlKeys } }),
+        };
+        if (urlKeys.length > 0) {
+          this.#warn?.(
+            `[MCP] thread ${this.#threadId}：server "${elicitation.server}" 的工具 "${elicitation.tool}" 要求開網址授權，這一版不支援，已代為回絕`,
+          );
+        }
+      }
+      if (this.#pending.delete(input.interruptId)) {
+        this.#tell({ type: 'input-withdrawn', interruptId: input.interruptId });
+      }
     }
     return input.kind === 'resume'
       ? this.#schedule(() => this.#runOnce(input), true, { resumes: true })
@@ -2245,6 +2307,20 @@ export class ThreadPump {
     this.#sessions.root.append('turn/start', turnStartOf(input));
     // 人的決定落在它回答的那一輪裡（審計要在輪內，#1029）。
     if (input.kind === 'resume') this.#noteApprovalDecided(input.interruptId, input.response);
+    // 答了就忘掉它是誰發的：同一個 task 的下一次反問會帶著**同一個 id** 再度中斷（id 是 task 的雜湊），留著會把新的一顆當成
+    // 看過的、不排代答，那一輪就永遠停在中斷上。
+    if (input.kind === 'resume') this.#elicitationOrigins.delete(input.interruptId);
+    if (input.kind === 'resume' && input.systemAnswered !== undefined) {
+      this.#sessions.root.append(
+        'interrupt/system-answered',
+        {
+          interruptId: input.interruptId,
+          reason: input.systemAnswered.reason,
+          keys: input.systemAnswered.keys,
+        },
+        { ignorable: true },
+      );
+    }
     // 領走：落在 `turn/start` 之後、叫模型之前，所以帶 `claimed` 的那顆推送一定比這一輪模型與工具的任何 frame 早。
     // 比它早的只有 `turn/start` 的訂閱者當場合成的 `custom`（清空待辦），同 dsh 的先後。
     //
@@ -2355,6 +2431,7 @@ export class ThreadPump {
       // 按了停止但這一輪沒有收成中止（停止撞上核准點、或早就跑完了）：請求作廢，排著的照常。
       if (current.stopped) this.#parkIfStopped();
       else this.#stopRequested = false;
+      this.#answerForSystem(current.stopped);
     } catch (error) {
       // **認的是中止訊號已經觸發**，不是錯誤長什麼樣：被切斷的模型請求拋什麼要看供應商與抽法，
       // 而 `TurnCancelledError` 是我們自己的類別（沿 `MiddlewareError` 拆到底再認），兩個都不比對
@@ -2376,6 +2453,7 @@ export class ThreadPump {
       throw failure;
     } finally {
       if (this.#current === current) this.#current = undefined;
+      this.#systemAnswers = [];
       // 一輪裡的判定在這一輪裡就落定了：圍堵在 `wrapToolCall` 回傳之前寫，而圖要等每一顆工具回傳
       // 才走得完，串流才收得了尾。剩下的是已經由日誌收掉的那幾顆（本體沒被呼叫到、或本體拋錯走
       // `tool-error` 的）與沒接日誌的組裝轉發過的，留著只佔記憶體。**哪天有一層在回傳之後才非同步
@@ -2501,6 +2579,77 @@ export class ThreadPump {
     this.#sessions.root.append('approval/decided', { id, outcome }, { ignorable: true });
   }
 
+  /**
+   * 一顆 MCP server 的反問（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）。
+   *
+   * - 要問人的（root 發的、至少一個 `form`）：酬載換成問答卡（`kind: 'question'`＋`origin`）廣播，掛進 `#pending`，
+   *   並把原酬載記在上面，回覆時靠它翻回去（{@link ThreadPump.submit}）。
+   * - 不問人的（子代理發的、或全是 `url`）：**不廣播、不掛**，收進 {@link ThreadPump.#systemAnswers}，這一輪收尾後逐顆回絕。
+   *
+   * **同一顆中斷會被看到不只一次**：前景子代理的先以 `["tools:…"]` 出現，隨後又在 root 層出現（見
+   * {@link ThreadPump.#elicitationOrigins}）；`interrupt/raised` 與代答排程都只做第一次。
+   */
+  *#translateElicitation(
+    entry: InterruptEntry,
+    elicitation: McpElicitation,
+    raw: RawProtocolEvent,
+  ): Generator<Event> {
+    const known = this.#elicitationOrigins.get(entry.id);
+    const isSubagent = known ?? raw.params.namespace.length > 0;
+    this.#elicitationOrigins.set(entry.id, isSubagent);
+    if (known === undefined)
+      this.#sessions.root.append('interrupt/raised', { interruptId: entry.id });
+    const reason = systemAnswerReasonOf(elicitation, isSubagent);
+    if (reason !== undefined) {
+      if (known === undefined) {
+        this.#systemAnswers.push({ interruptId: entry.id, elicitation, reason });
+        this.#warn?.(
+          reason === 'subagent'
+            ? `[MCP] thread ${this.#threadId}：子代理呼叫 server "${elicitation.server}" 的工具 "${elicitation.tool}" 時被反問，子代理背後沒有人，已代為回絕`
+            : `[MCP] thread ${this.#threadId}：server "${elicitation.server}" 的工具 "${elicitation.tool}" 要求開網址授權，這一版不支援，已代為回絕`,
+        );
+      }
+      return;
+    }
+    const request = this.#seal({
+      method: 'input.requested',
+      params: {
+        namespace: raw.params.namespace,
+        timestamp: raw.params.timestamp,
+        data: { interrupt_id: entry.id, payload: questionPayloadOf(elicitation) },
+      },
+    } as Event);
+    this.#pending.set(entry.id, {
+      interruptId: entry.id,
+      actionCount: 0,
+      gatedTools: [],
+      request,
+      elicitation,
+    });
+    this.#tell({ type: 'input-requested', event: request });
+    yield request;
+  }
+
+  /**
+   * 這一輪收尾了：把要由系統代答的反問逐顆回絕（{@link ThreadPump.#translateElicitation}）。**走 {@link ThreadPump.submit}**，
+   * 所以排隊、日誌（`turn/start` resume 加 `interrupt/system-answered`）與人答的路是同一條。被停止的那一輪不接著跑——人說了停。
+   */
+  #answerForSystem(stopped: boolean): void {
+    const answers = this.#systemAnswers;
+    this.#systemAnswers = [];
+    if (stopped || this.#closed) return;
+    for (const { interruptId, elicitation, reason } of answers) {
+      this.submit({
+        kind: 'resume',
+        interruptId,
+        response: declineAll(elicitation),
+        systemAnswered: { reason, keys: Object.keys(elicitation.requests) },
+      }).catch(() => {
+        // 失敗已經進了日誌（`turn/failed`），這個 promise 沒有別人在等。
+      });
+    }
+  }
+
   /** 一顆原始封包 → 零到多顆線上的封包。 */
   *#translate(raw: RawProtocolEvent): Generator<Event> {
     if (raw.method === 'updates' && raw.params.node === '__interrupt__') {
@@ -2508,6 +2657,11 @@ export class ThreadPump {
       // `input.requested`。這裡補上那一顆——順帶讓 `updates` 整條留在白名單外，
       // 它每一顆都夾著完整序列化的訊息。
       for (const entry of asInterruptEntries(raw.params.data)) {
+        const elicitation = parseMcpElicitation(entry.value);
+        if (elicitation !== undefined) {
+          yield* this.#translateElicitation(entry, elicitation, raw);
+          continue;
+        }
         // **先記日誌、再蓋號**，同以前的先後：日誌的訂閱者同步送出的 frame 要拿比這顆小的號，否則這顆廣播出去時
         // 會被折疊器當成重複丟掉。
         this.#sessions.root.append('interrupt/raised', { interruptId: entry.id });

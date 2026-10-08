@@ -22,8 +22,14 @@ import { ToolMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
 import type { Connection } from '@langchain/mcp-adapters';
-import { scrubbedParentEnv } from '@nexus/core';
-import type { AgentMiddleware, NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
+import { CHANNEL_SERVICE, scrubbedParentEnv } from '@nexus/core';
+import type {
+  AgentMiddleware,
+  ApprovalChannel,
+  NexusPlugin,
+  PluginEntry,
+  PluginRegistry,
+} from '@nexus/core';
 import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
@@ -122,6 +128,15 @@ export const mcpConfigSchema = z.strictObject({
    * 之後失敗次數歸零）、`maxAttempts`（10）。**只管掛上之後才掉的線**；掛上那一刻就連不上的列不重連（見 `supervisor.ts` 檔頭偏離 5）。
    */
   reconnect: reconnectSchema.default(() => reconnectSchema.parse({})),
+  /**
+   * 要不要接住 server 執行到一半的反問（elicitation，[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）。**超出 dsh**：
+   * dsh 的 client 宣告的 capabilities 是 `{}`（`packages/mcp/mcp-client/src/connection.ts:261`，`5badb15009`），沒有這個功能。
+   *
+   * `true`（預設）**不等於一定開**：只有這次組裝有人可以回答（`channel.kind === 'human'`，同 `ask_user_question`）才開，其餘照舊關著，
+   * 那次呼叫落成普通的工具錯誤。**組裝期決定、不留到呼叫時**——elicitation 是連線握手時就宣告給 server 的 client 能力，
+   * 呼叫時才決定做不到。寫 `false` 是明著關掉。
+   */
+  elicitation: z.boolean().default(true),
 });
 
 /** 驗過的設定。 */
@@ -165,8 +180,11 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     const { serverName } = config;
     // 名字先佔住，在連線之前：重名是設定寫錯，不是伺服器不在，照 dsh 讓這一列失敗、不收成警告。
     registry.services.provide(`mcp:server:${serverName}`, { serverName });
+    // 有人可以回答才宣告 elicitation 能力；沒人提供 channel 就是沒有答題者（同 ask-user，#669）。
+    const channel: ApprovalChannel | undefined = registry.services.get(CHANNEL_SERVICE);
+    const elicitation = config.elicitation && channel?.kind === 'human';
     const client = new MultiServerMCPClient({
-      mcpServers: { [serverName]: toAdapterConnection(config) },
+      mcpServers: { [serverName]: toAdapterConnection(config, elicitation) },
       // 名字由 `publicToolName` 一個地方說了算，所以 adapter 這邊的前綴全部關掉。
       // 開著的話會有兩份拼名字的邏輯，而其中一份不做正規化。
       prefixToolNameWithServerName: false,
@@ -476,7 +494,7 @@ function textOf(content: ToolMessage['content']): string {
 }
 
 /** 把我們的連線設定翻成 adapter 收的形狀。 */
-function toAdapterConnection(config: McpConfig): Connection {
+function toAdapterConnection(config: McpConfig, elicitation: boolean): Connection {
   const timeout = config.toolCallTimeoutMs;
   const connection = config.connection;
   if (connection.transport === 'stdio') {
@@ -490,10 +508,10 @@ function toAdapterConnection(config: McpConfig): Connection {
       // （`getDefaultEnvironment()`，六個名字）決定，語系與代理都到不了子行程。
       env: { ...scrubbedParentEnv(), ...connection.env },
       ...(connection.cwd !== undefined && { cwd: connection.cwd }),
-      // 2.0.0 的現代協定 server 要問使用者（elicitation）時，預設走 LangGraph interrupt，等一次 resume。nexus 沒有這條
-      // resume 路徑（ask-user 是另一套），開著會讓那一輪停在沒人接的 interrupt 上。關掉之後 adapter 把這種呼叫當工具失敗，
+      // 2.0.0 的現代協定 server 要問使用者（elicitation）時走 LangGraph interrupt，等一次 resume。**有人可以回答才開**
+      // （{@link McpConfig.elicitation}）：沒人的話開著會讓那一輪停在沒人接的 interrupt 上；關掉之後 adapter 把這種呼叫當工具失敗，
       // 走一般的錯誤出口。舊協定 server 要問的話需要 `onElicitation`，我們不給，所以它不會宣告這個能力。
-      elicitation: false,
+      elicitation,
       defaultToolTimeout: timeout,
     };
   }
@@ -501,7 +519,7 @@ function toAdapterConnection(config: McpConfig): Connection {
     transport: 'http',
     url: connection.url,
     ...(connection.headers !== undefined && { headers: { ...connection.headers } }),
-    elicitation: false,
+    elicitation,
     defaultToolTimeout: timeout,
   };
 }

@@ -523,6 +523,7 @@ describe('什麼推得動 roundsStarted', () => {
       'turn/end',
       'turn/failed',
       'interrupt/raised',
+      'interrupt/system-answered',
       'approval/asked',
       'approval/decided',
       'approval/policy',

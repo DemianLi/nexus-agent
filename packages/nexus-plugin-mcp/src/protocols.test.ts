@@ -138,10 +138,17 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
         'mcp__srv__nullable_args',
         'mcp__srv__snapshot',
       ]);
-      // 新協議那兩台多了兩支只有它們才有的；舊協議 HTTP 掛的是整組舊工具。
+      // 新協議那兩台多了只有它們才有的（`protocol_info`、問使用者的幾支）；舊協議 HTTP 掛的是整組舊工具。
       expect(names.slice(5)).toEqual(
         target.modern
-          ? ['mcp__srv__protocol_info', 'mcp__srv__ask']
+          ? [
+              'mcp__srv__protocol_info',
+              'mcp__srv__ask',
+              'mcp__srv__ask_form',
+              'mcp__srv__ask_url',
+              'mcp__srv__ask_twice',
+              'mcp__srv__ask_mixed',
+            ]
           : ['mcp__srv__read_env', 'mcp__srv__fetch_url'],
       );
     });

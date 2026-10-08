@@ -149,12 +149,15 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   時不拋，回一則 `status: 'error'` 的訊息、文字是 server 的原文；1.x 是拋 `ToolException`。plugin 在每個
   工具外面把前者改回拋，錯誤才走圍堵（`containment.ts`）那條出口，模型看到 `Error: 工具 … 執行失敗：<原文>`
   ——Chat Completions 轉換器只送 content，前綴不在文字裡模型就分不出這是失敗（照 dsh 的 `throw new Error(text)`）。
-- **不處理 server 的 elicitation（向使用者追問）。** 2.0.0 對現代協定的 server 預設開啟，問到時走 LangGraph
-  interrupt、等一次 resume；nexus 沒有這條 resume 路徑，所以每個連線一律 `elicitation: false`，這種呼叫
-  當作工具失敗。舊協定的 server 要問需要 `onElicitation`，我們不給，所以它不會宣告這個能力。這一條有人守
-  （#1095）：新協議（`2026-07-28`）的測試 server 起了 stdio 與 HTTP 兩台——`toAdapterConnection` 的兩個分支各有一行
-  `elicitation: false`——server 端量到 client 沒宣告 elicitation，問使用者的工具落成帶 `Error: ` 前綴的工具失敗；
-  把任一行改成 `true` 都有測試紅。
+- **server 的 elicitation（執行到一半向使用者追問）只在有人可以回答時才開**（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)）。
+  2.0.0 的現代協定 server 要問時走 LangGraph interrupt、等一次 resume。**連線握手時就得宣告能力**，所以是組裝期決定：
+  設定 `elicitation`（預設 `true`）加上這次組裝的 `channel.kind === 'human'`（同 `ask_user_question`）才開；沒有人在的入口
+  （`--print`、沒有 channel 的測試組裝）維持關閉，這種呼叫落成帶 `Error: ` 前綴的工具失敗。**超出 dsh**：dsh 的 client 宣告
+  `capabilities: {}`（`connection.ts:261`）。舊協定的 server 要問需要 `onElicitation`，我們不給，所以它不會宣告這個能力。
+  中斷發出去之後怎麼問人、怎麼回，在 `apps/harness` 的 `mcp-elicitation.ts`：`form` 變成問答卡（帶 `origin`），
+  `url` 與子代理（前景、背景）一律由系統回絕並記 `interrupt/system-answered`。「關著」這條有人守（#1095）：新協議（`2026-07-28`）
+  的測試 server 起了 stdio 與 HTTP 兩台，server 端量到沒有 channel 時 client 沒宣告 elicitation；
+  把任一行改成恆為 `true` 都有測試紅。
 - **工具的參數 schema 原樣送給模型。** 2.0.0 不再簡化 server 公告的 JSON Schema，`anyOf`、可為 null 與
   `$schema` 都會帶到供應商。收不收由供應商決定。實跑（#1074、#1095）：NVIDIA 端點上六個家族共七顆模型
   （OpenAI、NVIDIA、Meta、智譜、Poolside、DeepSeek）都收，沒有被拒收的；**沒有驗到 NVIDIA 以外的端點**，
