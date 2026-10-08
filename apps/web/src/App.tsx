@@ -1,4 +1,4 @@
-import type { ConversationEntry, WireClient } from '@nexus/wire';
+import type { ConversationEntry, SlashDescriptor, WireClient } from '@nexus/wire';
 import { X } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
@@ -7,6 +7,7 @@ import { AppSidebar } from '@/components/sidebar/app-sidebar';
 import { ApprovalCard } from '@/components/approval-card';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
+import { ModelSeat, MODEL_SELECT_FAILED } from '@/components/model-seat';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
@@ -34,6 +35,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/s
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useConversation } from '@/hooks/use-conversation';
 import { SM_BREAKPOINT, useMinWidth } from '@/hooks/use-min-width';
+import { MODEL_SELECTION_PROJECTION, useModelSeat } from '@/hooks/use-model-seat';
 import { useThreadDirectory } from '@/hooks/use-thread-directory';
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { useThemePreference } from '@/hooks/use-theme-preference';
@@ -57,6 +59,7 @@ import {
   STEER_UNAVAILABLE_TEXT,
 } from '@/lib/steer-queue';
 import { serverSupportsAttachments } from '@/lib/attachments';
+import { MODEL_COMMAND, parseModelLine } from '@/lib/model-selection';
 import { pendingSteers } from '@/lib/steer-view';
 import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
@@ -106,7 +109,16 @@ const ORIGIN_NOTICE: Readonly<Record<ThreadChoice['origin'], string | undefined>
 };
 
 /** 光打名字就另有動作的命令（`/feedback` 開回饋框，見 `use-conversation` 的 `send`）。 */
-const DECORATED_COMMANDS: ReadonlySet<string> = new Set([FEEDBACK_COMMAND_LINE.slice(1)]);
+const DECORATED_COMMANDS: ReadonlySet<string> = new Set([
+  FEEDBACK_COMMAND_LINE.slice(1),
+  MODEL_COMMAND,
+]);
+
+/** `/` 選單裡的 `/model`：客戶端自己攔（#723），模型座存在時才加進去。 */
+const MODEL_SLASH: SlashDescriptor = {
+  name: MODEL_COMMAND,
+  description: '切換模型與推理強度（從下一步生效）。',
+};
 
 /**
  * 送出框裡那句灰字。
@@ -232,6 +244,13 @@ function ConversationView({
   readonly onSwitch: (threadId: string) => void;
 }) {
   const conversation = useConversation({ client, threadId });
+  // 模型座（#723）：伺服器沒實作（`not_supported`）或還在讀就是 `null`，座位與 `/model` 一起沒有。
+  const modelSeat = useModelSeat(
+    client,
+    threadId,
+    conversation.state.projections[MODEL_SELECTION_PROJECTION],
+  );
+  const [modelOpen, setModelOpen] = useState(false);
   // 改動的摘要與比較都快取到這條 thread 的畫面卸掉（換 thread 整個重掛，#443）。
   const changes = useMemo(
     () => createChangesStores({ threadId, baseUrl: agentBaseUrl() }),
@@ -352,11 +371,44 @@ function ConversationView({
   // 輸入框被面板換掉（Q3、§4.3），那道閘照樣擋。斜線命令一輪沒收尾時照舊擋——伺服器那側也擋——只打 `/feedback`
   // 例外：它不起一輪，只開回饋對話框，而那個框送的 `feedback.record` 任何時候都收（#267 的 Q10）。
   const status = conversation.state.status;
+  // `/model` 客戶端自己攔（#723）：它不起一輪、不進日誌，只改「下一步用哪顆」，所以跑著也能打，只要連著。
+  const isModelLine = (line: string) =>
+    modelSeat !== null &&
+    parseModelLine(line, modelSeat.catalog, modelSeat.selection) !== undefined;
   const canSendLine = (line: string) =>
-    line.trim().startsWith('/')
-      ? canRunSlash(conversation.connected, status, line, FEEDBACK_COMMAND_LINE)
-      : canSendText(conversation.connected, status, line);
+    isModelLine(line)
+      ? conversation.connected
+      : line.trim().startsWith('/')
+        ? canRunSlash(conversation.connected, status, line, FEEDBACK_COMMAND_LINE)
+        : canSendText(conversation.connected, status, line);
+  /**
+   * 執行一行 `/model`。不是 `/model` 回 `undefined`（走一般流程）；打不開、找不到那顆回 `false`（那一行留在草稿，
+   * 看得到為什麼）；其餘回 `true`。
+   */
+  const runModelLine = (line: string): boolean | undefined => {
+    if (modelSeat === null) return undefined;
+    const parsed = parseModelLine(line, modelSeat.catalog, modelSeat.selection);
+    if (parsed === undefined) return undefined;
+    if (parsed.kind === 'open') {
+      setModelOpen(true);
+      return true;
+    }
+    if (parsed.kind === 'unknown') {
+      toast.error(MODEL_SELECT_FAILED, { description: `型錄上找不到「${parsed.query}」。` });
+      return false;
+    }
+    void modelSeat.select(parsed.selection).then((failure) => {
+      if (failure !== undefined) toast.error(MODEL_SELECT_FAILED, { description: failure });
+    });
+    return true;
+  };
   const canSend = canSendLine(draft);
+  const hasModelSeat = modelSeat !== null;
+  const commands = useMemo(
+    () =>
+      hasModelSeat ? [...conversation.slashCommands, MODEL_SLASH] : conversation.slashCommands,
+    [hasModelSeat, conversation.slashCommands],
+  );
   // 佇列裡焦點要去的那一列不在了：輸入框看得到就交給它，被面板換掉時交給面板（同 `PendingSwap` 的落點）。
   const focusBelowQueue = useCallback(() => {
     const composer = composerRef.current;
@@ -615,6 +667,12 @@ function ConversationView({
                     return;
                   }
                   const text = draft;
+                  const modelRan = runModelLine(text);
+                  if (modelRan !== undefined) {
+                    // 打開座位或換好了就清掉；找不到那顆（`false`）留著讓人改。
+                    if (modelRan) setDraft('');
+                    return;
+                  }
                   setDraft('');
                   // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。
                   const mode = resolveSubmitMode(conversation.state.status, gesture);
@@ -625,9 +683,16 @@ function ConversationView({
                     toast.error('這一句沒送出去', { description: rejected.message });
                   });
                 }}
-                commands={conversation.slashCommands}
+                commands={commands}
                 fileReferences={fileReferences}
                 sessionReferences={sessionReferences}
+                {...(modelSeat === null
+                  ? {}
+                  : {
+                      seats: (
+                        <ModelSeat seat={modelSeat} open={modelOpen} onOpenChange={setModelOpen} />
+                      ),
+                    })}
                 {...(serverSupportsAttachments()
                   ? {
                       attachments: {
@@ -643,6 +708,8 @@ function ConversationView({
                   if (!canSendLine(line)) {
                     return false;
                   }
+                  const modelRan = runModelLine(line);
+                  if (modelRan !== undefined) return modelRan;
                   void conversation.send(line);
                   return true;
                 }}

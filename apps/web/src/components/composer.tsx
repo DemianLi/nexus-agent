@@ -106,6 +106,7 @@ export function Composer({
   fileReferences,
   sessionReferences,
   attachments,
+  seats,
 }: {
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
@@ -154,6 +155,11 @@ export function Composer({
    * 不是只藏按鈕（只藏按鈕的話，貼一張圖會變成一顆永遠送不出的晶片）。伺服器不收附件時呼叫端不要給。
    */
   readonly attachments?: ComposerAttachments;
+  /**
+   * 底列的選擇座位（#723 模型、#437 權限）：放在加入鈕與送出提示之間。**沒給就沒有**——伺服器還沒實作的座位由呼叫端
+   * 不傳，這裡不留空位。
+   */
+  readonly seats?: ReactNode;
 }) {
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -469,8 +475,14 @@ export function Composer({
                   </Button>
                 </>
               )}
+              {seats}
+              {/* 有座位時窄螢幕不寫這句：一輪在跑時底列有加入鈕、座位、用量表、停止、送出五顆，375 寬已經塞不下（實機量到
+                  送出鈕超出框 12px）；手機的軟鍵盤也沒有 Enter／Cmd+Enter 可提示。 */}
               {/* `gap-0`：外殼是 flex、預設 `gap-2`，寬螢幕那一段會被隔開一大截（實機截圖量到）。 */}
-              <InputGroupText className="gap-0 pl-2 text-tip" data-testid="send-hint">
+              <InputGroupText
+                className={`gap-0 pl-2 text-tip ${seats === undefined ? '' : 'max-sm:hidden'}`}
+                data-testid="send-hint"
+              >
                 {sendHint.text}
                 {sendHint.wide !== undefined && (
                   <span className="hidden sm:inline">{sendHint.wide}</span>
