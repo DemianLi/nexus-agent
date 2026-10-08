@@ -532,7 +532,15 @@ export interface SlashListCommand {
 export interface SlashRunCommand {
   readonly id: number;
   readonly method: 'slash.run';
-  readonly params: { readonly line: string };
+  readonly params: {
+    readonly line: string;
+    /**
+     * 這一行帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)，形狀同 `run.start` 的 `attachments`：檔案收據與內嵌圖）。
+     * 只有宣告了 `input.attachments` 的命令收（見 {@link SlashDescriptor}）；沒宣告的命令帶了就回 `error`，附件沒被收下、收據還在。
+     * 沒實作附件的 server 對非空的 `attachments` 回 `not_supported`。
+     */
+    readonly attachments?: readonly PromptAttachment[];
+  };
 }
 
 export type SlashCommand = SlashListCommand | SlashRunCommand;

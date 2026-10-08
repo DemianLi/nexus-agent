@@ -107,6 +107,7 @@ describe('`/permission` 是切換的唯一入口', () => {
         rawInput,
         signal,
         sessionLog: built.sessionLog,
+        attachments: [],
         steer: noSteer,
       });
     try {
@@ -149,6 +150,7 @@ describe('`/permission` 是切換的唯一入口', () => {
         rawInput: 'read-only',
         signal: new AbortController().signal,
         sessionLog: built.sessionLog,
+        attachments: [],
         steer: noSteer,
       });
       const added = built.sessionLog.events.slice(before).map((event) => event.type);
@@ -170,6 +172,7 @@ describe('`/permission` 是切換的唯一入口', () => {
           rawInput,
           signal: new AbortController().signal,
           sessionLog: built.sessionLog,
+          attachments: [],
           steer: noSteer,
         });
         expect(result?.kind).toBe('error');

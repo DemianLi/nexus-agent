@@ -392,8 +392,14 @@ export interface WireClient {
    * 所以它沒有「之後走下行」的那一半。
    *
    * @param line - 完整的候選行，**原文原樣**。
+   * @param attachments - 這一行帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)，同 `runStart` 的 `attachments`）。
+   *   只有 descriptor 上 `input.attachments` 為真的命令收；省略或空陣列＝不帶。
    */
-  slashRun(threadId: string, line: string): Promise<SlashRunOutcome>;
+  slashRun(
+    threadId: string,
+    line: string,
+    attachments?: readonly PromptAttachment[],
+  ): Promise<SlashRunOutcome>;
   /**
    * 這台 server 以前的 thread（[#302](https://github.com/DemianLi/nexus-agent/issues/302)）。**不綁 thread**，
    * 也不替任何一條 thread 建 agent——server 那側照 dsh 的 `session/list` 是冷讀。
@@ -672,11 +678,20 @@ function readDescriptors(result: unknown): readonly SlashDescriptor[] {
     if (typeof descriptor?.name !== 'string' || typeof descriptor.description !== 'string') {
       throw new Error('slash.list 回了不認得的 descriptor');
     }
-    const hint = (descriptor.input as { hint?: unknown } | undefined)?.hint;
+    const input = descriptor.input as { hint?: unknown; attachments?: unknown } | undefined;
+    const hint = input?.hint;
     return Object.freeze({
       name: descriptor.name,
       description: descriptor.description,
-      ...(typeof hint === 'string' ? { input: Object.freeze({ hint }) } : {}),
+      ...(typeof hint === 'string'
+        ? {
+            input: Object.freeze({
+              hint,
+              // 只有「收」這一種說法（同 core 的 `normalizeCommandDefinition`）。
+              ...(input?.attachments === true ? { attachments: true } : {}),
+            }),
+          }
+        : {}),
     });
   });
 }
@@ -1149,11 +1164,15 @@ export function createWireClient(options: WireClientOptions): WireClient {
         : { kind: 'ok', commands: readDescriptors(response.result) };
     },
 
-    async slashRun(threadId, line) {
+    async slashRun(threadId, line, attachments) {
       const response = await sendCommand(threadId, 'slash.run', {
         id: nextCommandId++,
         method: 'slash.run',
-        params: { line },
+        // 省略或空陣列都不放這個 key：舊的 server 也收得下。
+        params: {
+          line,
+          ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
+        },
       });
       return response.type === 'error' ? rejectedOf(response) : readRunResult(response.result);
     },

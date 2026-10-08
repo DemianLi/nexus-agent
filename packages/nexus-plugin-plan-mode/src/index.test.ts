@@ -65,6 +65,7 @@ async function runPlan(
   return definition.handler({
     commandId: 'cmd-test',
     rawInput,
+    attachments: [],
     signal: new AbortController().signal,
     sessionLog: firstLogOf.get(commands) ?? new SessionLog('unattached'),
     steer,

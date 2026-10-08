@@ -27,7 +27,13 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import type { CommandRegistrationPoint, CommandResult, SessionLog } from '@nexus/core';
+import { isAttachmentRef } from '@nexus/core';
+import type {
+  AttachmentRef,
+  CommandRegistrationPoint,
+  CommandResult,
+  SessionLog,
+} from '@nexus/core';
 
 /** 語法上是命令、但還沒查過註冊表的一行。 */
 export interface ParsedCommand {
@@ -35,6 +41,44 @@ export interface ParsedCommand {
   readonly name: string;
   /** 命令名之後的原文，**含分隔的空白**。 */
   readonly rawInput: string;
+}
+
+/** 命令請宿主接著送的一句話：文字，加上它帶的附件參照（#732，沒有就不給這一格）。 */
+export interface CommandSteer {
+  readonly text: string;
+  readonly attachments?: readonly AttachmentRef[];
+}
+
+/**
+ * 宿主收附件時拒絕的理由（收據不存在、圖超過上限、目前的模型不收圖……）。**丟這個，執行器就把這次執行落定成 `error`**，訊息原樣
+ * 當結果文字，handler 不會跑；丟別的錯誤則照 handler 拋錯處理（落定成 `error` 之後往外拋）。
+ */
+export class CommandAttachmentRejected extends Error {
+  /** @param message - 直接呈現給人的理由。 */
+  constructor(message: string) {
+    super(message);
+    this.name = 'CommandAttachmentRejected';
+  }
+}
+
+/** 宿主收下附件的結果：參照，加上「這次執行沒成功時把收據放回去」。 */
+export interface CommandAdmittedAttachments {
+  /** 收下之後的參照，照選取順序。 */
+  readonly attachments: readonly AttachmentRef[];
+  /**
+   * 命令落定成 `error`（回的或拋的）時呼叫，把用掉的收據放回去——輸入框留著草稿與附件，使用者不必重傳。
+   * 成功時不呼叫（收據就此用掉）。
+   */
+  readonly rollback: () => void;
+}
+
+/** 一次執行帶來的、還沒收下的附件。 */
+export interface CommandAttachmentSubmission {
+  /**
+   * 收下它們（驗形狀與上限、存檔、用掉收據）。**只有執行器確認命令宣告收附件之後才呼叫**——不收附件的命令，什麼都不該被寫。
+   * 拒絕就丟 {@link CommandAttachmentRejected}。
+   */
+  readonly admit: () => Promise<CommandAdmittedAttachments>;
 }
 
 /** 一次落定的執行：配對 id、正規化過的結果，與命令請宿主接著送的話。 */
@@ -47,7 +91,7 @@ export interface CommandExecution {
    * **結果是 `error` 時一律是空的**：命令失敗了，它半路說要送的話一起作廢。
    * **宿主不理這一格的話，那些話就靜靜沒有了**——所以兩個宿主（REPL 與 `serve`）都要讀它。
    */
-  readonly steers: readonly string[];
+  readonly steers: readonly CommandSteer[];
 }
 
 /**
@@ -167,11 +211,17 @@ export interface CommandExecutor {
    *
    * @param line - 完整的候選命令行。
    * @param signal - 發派它的那次請求擁有的取消訊號。
+   * @param submission - 這一行帶的附件（#732），沒有就省略。**命令沒宣告 `input.attachments` 就落定成 `error`**（在 handler 與收下之前），
+   *   照 dsh 的 `execute`：這一行已經記了 `command/run`。
    * @returns 落定的執行，或語法／名字不認得時的 `undefined`。
    * @throws handler 自己拋的錯誤，或執行前後被中止。**兩種都已經在日誌裡落定成
    *   `kind: 'error'`** 才往外拋。
    */
-  execute(line: string, signal: AbortSignal): Promise<CommandExecution | undefined>;
+  execute(
+    line: string,
+    signal: AbortSignal,
+    submission?: CommandAttachmentSubmission,
+  ): Promise<CommandExecution | undefined>;
 }
 
 /**
@@ -196,7 +246,7 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
   function settle(
     commandId: string,
     result: CommandResult,
-    steers: readonly string[],
+    steers: readonly CommandSteer[],
   ): CommandExecution {
     sessionLog.append('command/done', {
       commandId,
@@ -230,7 +280,7 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
   }
 
   return {
-    async execute(line, signal) {
+    async execute(line, signal, submission) {
       const parsed = parseCommand(line);
       if (parsed === undefined) return undefined;
       const definition = commands.find(parsed.name);
@@ -248,16 +298,62 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
         source: { kind: 'user' },
       });
 
-      const steers: string[] = [];
+      // 附件（#732）。照 dsh 的 `execute`：命令沒宣告收附件，就在收下之前、handler 之前落定成 `error`——沒有任何東西被寫。
+      let admitted: CommandAdmittedAttachments | undefined;
+      if (submission !== undefined) {
+        if (definition.input?.attachments !== true) {
+          return settle(
+            commandId,
+            { kind: 'error', text: `命令 "/${parsed.name}" 不收附件。` },
+            [],
+          );
+        }
+        try {
+          const pending = submission.admit();
+          // 發派它的請求中止時不再等：但收下可能已經用掉收據，所以晚到的結果要放回去。
+          pending.then(
+            (late) => {
+              if (signal.aborted) late.rollback();
+            },
+            () => undefined,
+          );
+          admitted = await withAbort(pending, signal);
+        } catch (error: unknown) {
+          if (error instanceof CommandAttachmentRejected) {
+            return settle(commandId, { kind: 'error', text: error.message }, []);
+          }
+          settleThrown(commandId, parsed.name, error);
+          throw error;
+        }
+      }
+      const attachments: readonly AttachmentRef[] = Object.freeze([
+        ...(admitted?.attachments ?? []),
+      ]);
+      const admittedIds = new Set(attachments.map((ref) => ref.attachmentId));
+
+      const steers: CommandSteer[] = [];
       let open = true;
-      const steer = (text: string): void => {
+      const steer = (text: string, steerAttachments?: readonly AttachmentRef[]): void => {
         // 命令結束後宿主已經不看這一格了：靜靜收下等於靜靜丟掉。
         if (!open) throw new Error(`命令 "/${parsed.name}" 已經結束，不能再 steer。`);
         if (typeof text !== 'string' || text.trim().length === 0) {
           throw new TypeError(`命令 "/${parsed.name}" 的 steer 要是非空字串。`);
         }
+        // 帶附件的 steer 只能帶這次呼叫收下的那幾份：host 不替 handler 憑空造參照。
+        if (steerAttachments !== undefined) {
+          for (const ref of steerAttachments) {
+            if (!isAttachmentRef(ref) || !admittedIds.has(ref.attachmentId)) {
+              throw new TypeError(`命令 "/${parsed.name}" 的 steer 只能帶這次呼叫收下的附件。`);
+            }
+          }
+        }
         options.acceptSteer?.(text);
-        steers.push(text);
+        steers.push({
+          text,
+          ...(steerAttachments === undefined || steerAttachments.length === 0
+            ? {}
+            : { attachments: Object.freeze([...steerAttachments]) }),
+        });
       };
 
       let result: CommandResult;
@@ -265,6 +361,7 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
         const returned = definition.handler({
           commandId,
           rawInput: parsed.rawInput,
+          attachments,
           signal,
           sessionLog,
           steer,
@@ -272,10 +369,13 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
         result = normalizeResult(parsed.name, await withAbort(Promise.resolve(returned), signal));
       } catch (error: unknown) {
         open = false;
+        admitted?.rollback();
         settleThrown(commandId, parsed.name, error);
         throw error;
       }
       open = false;
+      // 命令沒成功：收據放回去，輸入框的草稿與附件留著。
+      if (result.kind === 'error') admitted?.rollback();
       return settle(commandId, result, steers);
     },
   };

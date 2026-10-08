@@ -7,8 +7,9 @@
 
 import { describe, expect, it, vi } from 'vitest';
 import { SessionLog, createRegistry } from '@nexus/core';
-import type { CommandDefinition, PluginOrigin, SessionEvent } from '@nexus/core';
-import { createCommandExecutor, parseCommand } from './index.js';
+import type { AttachmentRef, CommandDefinition, PluginOrigin, SessionEvent } from '@nexus/core';
+import { CommandAttachmentRejected, createCommandExecutor, parseCommand } from './index.js';
+import type { CommandAttachmentSubmission } from './index.js';
 
 const origin: PluginOrigin = { id: 'alpha#0', name: 'alpha' };
 
@@ -252,7 +253,7 @@ describe('steer', () => {
     );
 
     const execution = await executor.execute('/plan', signal);
-    expect(execution?.steers).toEqual(['第一句', '第二句']);
+    expect(execution?.steers).toEqual([{ text: '第一句' }, { text: '第二句' }]);
     expect(events.map((event) => event.type)).toEqual(['command/run', 'command/done']);
     expect(events[1]?.data).toEqual({
       commandId: execution?.commandId,
@@ -329,5 +330,205 @@ describe('steer', () => {
     );
     await executor.execute('/plan', signal);
     expect(() => late?.()).toThrow('已經結束');
+  });
+});
+
+/**
+ * 附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。**斷言的是順序與沒被碰的東西**：沒宣告的命令，收下（`admit`）
+ * 一次都不該被呼叫；error 要把收據放回去；`steer` 只能帶這次收下的。
+ */
+describe('附件', () => {
+  const sha = (c: string) => `sha256:${c.repeat(64)}`;
+  const image: AttachmentRef = {
+    type: 'image',
+    attachmentId: sha('a'),
+    mediaType: 'image/png',
+    bytes: 3,
+    width: 1,
+    height: 1,
+  };
+  const file: AttachmentRef = { type: 'file', attachmentId: sha('b'), name: 'a.txt', bytes: 1 };
+
+  /** 一個假的收下：記錄呼叫與放回。 */
+  function submission(attachments: readonly AttachmentRef[] = [image, file]) {
+    const calls = { admit: 0, rollback: 0 };
+    const value: CommandAttachmentSubmission = {
+      admit: async () => {
+        calls.admit += 1;
+        return {
+          attachments,
+          rollback: () => {
+            calls.rollback += 1;
+          },
+        };
+      },
+    };
+    return { value, calls };
+  }
+  const accepting = (handler: CommandDefinition['handler']): CommandDefinition => ({
+    name: 'goal',
+    description: '目標',
+    input: { hint: '[<目標>]', attachments: true },
+    handler,
+  });
+
+  it('宣告收附件：handler 收到收下之後的參照（照選取順序、凍過），成功時不放回', async () => {
+    let seen: readonly AttachmentRef[] | undefined;
+    const { executor, signal } = harness(
+      accepting((invocation) => {
+        seen = invocation.attachments;
+        return { kind: 'success' };
+      }),
+    );
+    const { value, calls } = submission();
+    const execution = await executor.execute('/goal 目標', signal, value);
+    expect(execution?.result).toEqual({ kind: 'success' });
+    expect(seen).toEqual([image, file]);
+    expect(Object.isFrozen(seen)).toBe(true);
+    expect(calls).toEqual({ admit: 1, rollback: 0 });
+  });
+
+  it('沒帶附件：handler 收到空陣列', async () => {
+    let seen: readonly AttachmentRef[] | undefined;
+    const { executor, signal } = harness(
+      accepting((invocation) => {
+        seen = invocation.attachments;
+        return { kind: 'success' };
+      }),
+    );
+    await executor.execute('/goal 目標', signal);
+    expect(seen).toEqual([]);
+  });
+
+  it('**沒宣告的命令**：在收下與 handler 之前落定成 error，日誌有一對，沒有任何東西被收', async () => {
+    const handler = vi.fn(() => ({ kind: 'success' as const }));
+    const { executor, events, signal } = harness(ok('plan', handler));
+    const { value, calls } = submission();
+    const execution = await executor.execute('/plan x', signal, value);
+    expect(execution?.result).toEqual({ kind: 'error', text: '命令 "/plan" 不收附件。' });
+    expect(handler).not.toHaveBeenCalled();
+    expect(calls).toEqual({ admit: 0, rollback: 0 });
+    expect(events.map((event) => event.type)).toEqual(['command/run', 'command/done']);
+    expect(events[1]?.data).toMatchObject({ kind: 'error', text: '命令 "/plan" 不收附件。' });
+  });
+
+  it('宣告 attachments:false 等於沒宣告', async () => {
+    const { executor, signal } = harness({
+      name: 'x',
+      description: 'x',
+      input: { hint: 'h', attachments: false },
+      handler: () => ({ kind: 'success' }),
+    });
+    const { value, calls } = submission();
+    const execution = await executor.execute('/x', signal, value);
+    expect(execution?.result.kind).toBe('error');
+    expect(calls.admit).toBe(0);
+  });
+
+  it('宿主拒收（CommandAttachmentRejected）：訊息就是結果文字，handler 沒跑，不往外拋', async () => {
+    const handler = vi.fn(() => ({ kind: 'success' as const }));
+    const { executor, events, signal } = harness(accepting(handler));
+    const value: CommandAttachmentSubmission = {
+      admit: async () => {
+        throw new CommandAttachmentRejected('目前的模型不收圖片');
+      },
+    };
+    const execution = await executor.execute('/goal x', signal, value);
+    expect(execution?.result).toEqual({ kind: 'error', text: '目前的模型不收圖片' });
+    expect(handler).not.toHaveBeenCalled();
+    expect(events.map((event) => event.type)).toEqual(['command/run', 'command/done']);
+  });
+
+  it('收下時的別種錯誤：落定成 error 之後往外拋', async () => {
+    const { executor, events, signal } = harness(accepting(() => ({ kind: 'success' })));
+    const value: CommandAttachmentSubmission = {
+      admit: async () => {
+        throw new Error('磁碟壞了');
+      },
+    };
+    await expect(executor.execute('/goal x', signal, value)).rejects.toThrow('磁碟壞了');
+    expect(events[1]?.data).toMatchObject({ kind: 'error', text: '磁碟壞了' });
+  });
+
+  it('**命令回 error 或拋錯：收據放回去**（輸入框留著草稿與附件）', async () => {
+    const erroring = harness(accepting(() => ({ kind: 'error', text: '不成立' })));
+    const a = submission();
+    await erroring.executor.execute('/goal x', erroring.signal, a.value);
+    expect(a.calls).toEqual({ admit: 1, rollback: 1 });
+
+    const throwing = harness(
+      accepting(() => {
+        throw new Error('炸了');
+      }),
+    );
+    const b = submission();
+    await expect(throwing.executor.execute('/goal x', throwing.signal, b.value)).rejects.toThrow(
+      '炸了',
+    );
+    expect(b.calls).toEqual({ admit: 1, rollback: 1 });
+  });
+
+  it('steer 帶附件：交給宿主的是 { text, attachments }；空陣列等於沒帶；error 時作廢', async () => {
+    const { executor, signal } = harness(
+      accepting(({ steer, attachments }) => {
+        steer('帶圖', attachments);
+        steer('不帶', []);
+        return { kind: 'success' };
+      }),
+    );
+    const execution = await executor.execute('/goal x', signal, submission().value);
+    expect(execution?.steers).toEqual([
+      { text: '帶圖', attachments: [image, file] },
+      { text: '不帶' },
+    ]);
+  });
+
+  it('**steer 只能帶這次收下的附件**：憑空造的參照與形狀壞的都拋，目標命令落定成 error', async () => {
+    const forged: AttachmentRef = { ...file, attachmentId: sha('c') };
+    const { executor, events, signal } = harness(
+      accepting(({ steer }) => {
+        steer('偷渡', [forged]);
+        return { kind: 'success' };
+      }),
+    );
+    await expect(executor.execute('/goal x', signal, submission().value)).rejects.toThrow(
+      '只能帶這次呼叫收下的附件',
+    );
+    expect(events[1]?.data).toMatchObject({ kind: 'error' });
+  });
+
+  it('沒帶附件的呼叫 steer 帶附件：一樣拋（沒有收下的東西可以帶）', async () => {
+    const { executor, signal } = harness(
+      accepting(({ steer }) => {
+        steer('x', [image]);
+        return { kind: 'success' };
+      }),
+    );
+    await expect(executor.execute('/goal x', signal)).rejects.toThrow('只能帶這次呼叫收下的附件');
+  });
+
+  it('發派的請求在收下期間中止：往外拋，晚到的收下結果把收據放回去', async () => {
+    const controller = new AbortController();
+    const { executor } = harness(accepting(() => ({ kind: 'success' })));
+    let resolveAdmit: (() => void) | undefined;
+    const calls = { rollback: 0 };
+    const value: CommandAttachmentSubmission = {
+      admit: () =>
+        new Promise((resolve) => {
+          resolveAdmit = () =>
+            resolve({
+              attachments: [image],
+              rollback: () => {
+                calls.rollback += 1;
+              },
+            });
+        }),
+    };
+    const pending = executor.execute('/goal x', controller.signal, value);
+    controller.abort(new Error('關掉了'));
+    await expect(pending).rejects.toThrow('關掉了');
+    resolveAdmit?.();
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(calls.rollback).toBe(1);
   });
 });

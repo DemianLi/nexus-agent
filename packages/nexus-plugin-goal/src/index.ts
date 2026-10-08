@@ -80,6 +80,8 @@ export type { GoalCommand } from './command.js';
 export {
   commandHint,
   executeGoalCommand,
+  GOAL_ATTACHMENTS_ONLY_MESSAGE,
+  GOAL_ATTACHMENTS_TEXT,
   GOAL_CLEARED_MESSAGE,
   GOAL_COMMAND_DESCRIPTION,
   GOAL_COMMAND_HINT,
@@ -316,9 +318,16 @@ function applyGoal(registry: PluginRegistry, config: GoalConfig, seams: GoalSeam
   registry.commands.register({
     name: GOAL_COMMAND_NAME,
     description: GOAL_COMMAND_DESCRIPTION,
-    input: { hint: GOAL_COMMAND_HINT },
-    handler: ({ rawInput, sessionLog }) =>
-      executeGoalCommand(servicesHere.get(sessionLog), servicesHere.size, rawInput),
+    // 收附件（#732）：隨目標走，見 `GOAL_COMMAND_HINT` 的說明。
+    input: { hint: GOAL_COMMAND_HINT, attachments: true },
+    handler: ({ rawInput, sessionLog, attachments, steer }) =>
+      executeGoalCommand(
+        servicesHere.get(sessionLog),
+        servicesHere.size,
+        rawInput,
+        attachments,
+        steer,
+      ),
   });
 }
 

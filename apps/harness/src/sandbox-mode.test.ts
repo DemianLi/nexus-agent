@@ -101,6 +101,7 @@ describe('一次切換搬得動兩個消費者', () => {
         rawInput: ' read-only',
         signal: new AbortController().signal,
         sessionLog: built.sessionLog,
+        attachments: [],
         steer: noSteer,
       });
       expect(switched?.text).toContain('從 workspace-write 換成 read-only');
@@ -192,6 +193,7 @@ describe('組裝起來之後', () => {
         rawInput: ' read-only',
         signal,
         sessionLog: first.sessionLog,
+        attachments: [],
         steer: noSteer,
       });
 
@@ -200,6 +202,7 @@ describe('組裝起來之後', () => {
         rawInput: '',
         signal,
         sessionLog: second.sessionLog,
+        attachments: [],
         steer: noSteer,
       });
 
