@@ -515,14 +515,14 @@ describe('快取分桶（#724）', () => {
       ...extra,
     });
 
-  it('呼叫的 usage：inputTokens 仍是完整 prompt，另帶未快取、快取讀寫三格', () => {
+  it('呼叫的 usage：inputTokens 只算未快取（等於 uncachedInputTokens），另帶快取讀寫兩格', () => {
     const log = new SessionLog('t');
     log.append('turn/start', { kind: 'message', text: 'x' });
     const start = log.append('model/start', {});
     usageOf(log, start.seq, 30, { cacheReadTokens: 64, cacheWriteTokens: 100 });
     const turn = foldAll(log.events).turns[0]!;
     expect(turn.calls[0]?.usage).toEqual({
-      inputTokens: 194,
+      inputTokens: 30,
       outputTokens: 1,
       totalTokens: 31,
       uncachedInputTokens: 30,
@@ -530,7 +530,7 @@ describe('快取分桶（#724）', () => {
       cacheWriteTokens: 100,
     });
     expect(turn).toMatchObject({
-      inputTokens: 194,
+      inputTokens: 30,
       uncachedInputTokens: 30,
       cacheReadTokens: 64,
       cacheWriteTokens: 100,
@@ -586,7 +586,8 @@ describe('快取分桶（#724）', () => {
     expect(allReported).toMatchObject({
       uncachedInputTokens: 2 * total,
       cacheReadTokens: 3 * total,
-      inputTokens: 5 * total,
+      // 完整 prompt 是三桶相加；inputTokens 只是未快取那桶（摺掉的呼叫也一樣）。
+      inputTokens: 2 * total,
     });
     // 最新那一次沒報：摺掉的 5 次報了，整輪仍然缺席。
     expect(build(false)).not.toHaveProperty('cacheReadTokens');
@@ -599,7 +600,7 @@ describe('快取分桶（#724）', () => {
     usageOf(log, start.seq, 10, { cacheReadTokens: 90 });
     usageOf(log, start.seq, 5);
     const usage = foldAll(log.events).turns[0]?.calls[0]?.usage;
-    expect(usage).toMatchObject({ inputTokens: 105, uncachedInputTokens: 15 });
+    expect(usage).toMatchObject({ inputTokens: 15, uncachedInputTokens: 15 });
     expect(usage).not.toHaveProperty('cacheReadTokens');
 
     // 反過來（先沒報、後報）同樣缺席。
