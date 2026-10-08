@@ -4597,17 +4597,99 @@ describe('附件送出（#733、#732）', () => {
     });
   });
 
-  it('斜線命令不帶附件，附件留在草稿裡', async () => {
-    const fake = withUploads();
-    render(<App client={fake.client} />);
-    await screen.findByPlaceholderText('說點什麼…');
+  describe('斜線命令帶附件（#733）', () => {
+    type SlashCall = { line: string; attachments: Parameters<WireClient['slashRun']>[2] };
+    function withSlash(run: (line: string) => SlashRunOutcome) {
+      const fake = withUploads();
+      const calls: SlashCall[] = [];
+      const client: WireClient = {
+        ...fake.client,
+        slashRun: async (_threadId, line, attachments) => {
+          calls.push({ line, attachments });
+          return run(line);
+        },
+      };
+      return { ...fake, client, calls };
+    }
 
-    addFiles([pdf('b.pdf')]);
-    send('/plan');
-    await waitFor(() => expect(fake.slashed).toEqual(['/plan']));
-    expect(fake.runStart).not.toHaveBeenCalled();
-    expect(fake.uploads).toEqual([]);
-    expect(chips()).toHaveLength(1);
+    it('命令收下：附件（檔案先換成收據）放進 slash.run，不走 run.start；草稿與附件都清掉', async () => {
+      const { client, calls, runStart, uploads } = withSlash(() => ({
+        kind: 'success',
+        command_id: 'c',
+      }));
+      render(<App client={client} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      addFiles([pdf('note.pdf'), png('a.png')]);
+      send('/goal 照附件做');
+
+      await waitFor(() => expect(calls).toHaveLength(1));
+      expect(calls[0]).toEqual({
+        line: '/goal 照附件做',
+        attachments: [
+          { type: 'file', receiptId: 'r-note.pdf' },
+          { type: 'image', mediaType: 'image/png', data: btoa('PNG'), name: 'a.png' },
+        ],
+      });
+      expect(uploads).toHaveLength(1);
+      expect(runStart).not.toHaveBeenCalled();
+      await waitFor(() => expect(chips()).toHaveLength(0));
+      expect(input().value).toBe('');
+    });
+
+    it('命令回錯誤（不收附件）：錯誤畫出來，草稿文字與附件卡都還在', async () => {
+      const { client, calls } = withSlash(() => ({
+        kind: 'error',
+        text: 'Command "/model" does not accept attachments.',
+      }));
+      render(<App client={client} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      addFiles([pdf('b.pdf')]);
+      send('/other 試試');
+
+      expect(await screen.findAllByText(/does not accept attachments/u)).not.toHaveLength(0);
+      expect(calls).toHaveLength(1);
+      await waitFor(() => expect(input().value).toBe('/other 試試'));
+      expect(chips()).toHaveLength(1);
+    });
+
+    it('不認得的命令：同樣說出來、草稿與附件留著', async () => {
+      const { client } = withSlash(() => ({ kind: 'unknown' }));
+      render(<App client={client} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      addFiles([pdf('b.pdf')]);
+      send('/nope');
+
+      expect(await screen.findAllByText(/不認得這個命令：\/nope/u)).not.toHaveLength(0);
+      await waitFor(() => expect(input().value).toBe('/nope'));
+      expect(chips()).toHaveLength(1);
+    });
+
+    it('沒帶附件的命令：照舊，slash.run 不帶附件', async () => {
+      const { client, calls } = withSlash(() => ({ kind: 'success', command_id: 'c' }));
+      render(<App client={client} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      send('/plan');
+
+      await waitFor(() => expect(calls).toEqual([{ line: '/plan', attachments: undefined }]));
+    });
+
+    it('光打 /feedback 只開回饋框：不上傳、不送出，附件留在草稿裡', async () => {
+      const { client, calls, uploads } = withSlash(() => ({ kind: 'success', command_id: 'c' }));
+      render(<App client={client} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      addFiles([pdf('b.pdf')]);
+      send('/feedback');
+
+      await screen.findByRole('dialog');
+      expect(calls).toEqual([]);
+      expect(uploads).toEqual([]);
+      expect(chips()).toHaveLength(1);
+    });
   });
 
   it('超過上限的圖不收進草稿，並說原因', async () => {

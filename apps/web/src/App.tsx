@@ -727,9 +727,10 @@ function ConversationView({
                   if (mentioned !== undefined) setMentionedAgent(undefined);
                   // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。
                   const mode = resolveSubmitMode(conversation.state.status, gesture);
-                  // 只有功能開著才帶附件；`/` 開頭的是命令，不帶（附件留在草稿裡）。
+                  // 只有功能開著才帶附件；`/` 開頭的命令也帶（#733：命令有宣告收附件才收，其餘伺服器回錯誤、草稿與附件留著），
+                  // 只有光打 `/feedback`（開回饋框、不送出）不帶，附件留在草稿裡。
                   const items =
-                    serverSupportsAttachments() && !text.trim().startsWith('/')
+                    serverSupportsAttachments() && text.trim() !== FEEDBACK_COMMAND_LINE
                       ? draftAttachments.items
                       : [];
                   void (async () => {
