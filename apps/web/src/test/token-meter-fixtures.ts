@@ -64,7 +64,15 @@ const NUMERIC = [
   'waitMs',
 ] as const;
 
-const BUCKETS = ['uncachedInputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const;
+const BUCKETS = [
+  'uncachedInputTokens',
+  'cacheReadTokens',
+  'cacheWriteTokens',
+  'failedCacheReadTokens',
+  'failedCacheWriteTokens',
+  'summaryCacheReadTokens',
+  'summaryCacheWriteTokens',
+] as const;
 
 /** 逐欄相加：投影保證 `session ＝ outside ＋ earlier ＋ Σ turns`，夾具照這條造 `session`。 */
 export function sumSpans(spans: readonly TokenMeterSpan[]): TokenMeterSpan {
