@@ -101,6 +101,8 @@ export {
 } from './deliverables.js';
 export type { CustomFrameData, CustomFrameName, CustomFramePayloads } from './custom-frame.js';
 export type {
+  AttachmentReadResponse,
+  AttachmentReadResult,
   ImageMediaType,
   PromptAttachment,
   UploadReceipt,
@@ -108,6 +110,7 @@ export type {
   UploadResponse,
 } from './attachments.js';
 export {
+  ATTACHMENT_NOT_FOUND,
   IMAGE_MEDIA_TYPES,
   MAX_IMAGE_BYTES,
   MAX_IMAGE_PIXELS,
@@ -115,6 +118,7 @@ export {
   MAX_MESSAGE_IMAGE_BYTES,
   MODEL_DOES_NOT_SUPPORT_IMAGES,
   UPLOAD_NAME_PARAM,
+  attachmentPath,
   uploadPath,
 } from './attachments.js';
 export type {

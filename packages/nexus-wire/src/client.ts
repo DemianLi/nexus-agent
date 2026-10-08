@@ -10,8 +10,14 @@
  * upstream traffic remains on HTTP.」
  */
 
-import { UPLOAD_NAME_PARAM, uploadPath } from './attachments.js';
-import type { PromptAttachment, UploadReceipt, UploadResponse } from './attachments.js';
+import { UPLOAD_NAME_PARAM, attachmentPath, uploadPath } from './attachments.js';
+import type {
+  AttachmentReadResponse,
+  AttachmentReadResult,
+  PromptAttachment,
+  UploadReceipt,
+  UploadResponse,
+} from './attachments.js';
 import type {
   ModelCatalogCommand,
   ModelCatalogResult,
@@ -213,6 +219,11 @@ export type CommandOutcome<T> =
 /** `uploadFile` 的結果。`rejected` 是這條線收不了（含 `not_supported`：這個組裝沒有附件儲存），見 `attachments.ts`。 */
 export type UploadOutcome =
   | { readonly kind: 'ok'; readonly receipt: UploadReceipt }
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
+
+/** `readAttachment` 的結果。`rejected` 的 `code` 是 `attachment_not_found`（日誌沒引用過）或 `not_supported`（沒有附件儲存）。 */
+export type AttachmentReadOutcome =
+  | { readonly kind: 'ok'; readonly result: AttachmentReadResult }
   | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /**
@@ -456,6 +467,17 @@ export interface WireClient {
     query: string,
     signal?: AbortSignal,
   ): Promise<SessionReferenceListOutcome>;
+  /**
+   * 讀一張這條 thread 引用過的圖（[#733](https://github.com/DemianLi/nexus-agent/issues/733)）。契約見 `attachmentPath`。
+   *
+   * @param attachmentId - 參照上的 `attachmentId`（`sha256:<hex>`）。
+   * @param signal - 中止這一次。
+   */
+  readAttachment(
+    threadId: string,
+    attachmentId: string,
+    signal?: AbortSignal,
+  ): Promise<AttachmentReadOutcome>;
 }
 
 /** 全域下行上認得的那幾顆；不認得的跳過（`THREAD_FEED_PATH`：那條線之後會多出新種類）。 */
@@ -1226,6 +1248,30 @@ export function createWireClient(options: WireClientOptions): WireClient {
       return body.type === 'error'
         ? rejectedOf(body)
         : { kind: 'ok', result: readSessionReferences(body.result) };
+    },
+
+    async readAttachment(threadId, attachmentId, signal) {
+      const response = await doFetch(`${base}${attachmentPath(threadId, attachmentId)}`, {
+        method: 'GET',
+        // 同 `listThreads`，見 `THREADS_PATH`。
+        headers: { 'content-type': 'application/json' },
+        ...(signal === undefined ? {} : { signal }),
+      });
+      if (!response.ok) {
+        throw new Error(`讀圖被載體層擋下：${response.status} ${await response.text()}`);
+      }
+      const body = (await response.json()) as AttachmentReadResponse;
+      if (body.type === 'error') return rejectedOf(body);
+      const { attachment, data } = body.result as Partial<AttachmentReadResult>;
+      if (
+        typeof data !== 'string' ||
+        attachment === undefined ||
+        attachment.type !== 'image' ||
+        typeof attachment.attachmentId !== 'string'
+      ) {
+        throw new Error('GET /threads/:id/attachments/:attachmentId 回了不認得的內容');
+      }
+      return { kind: 'ok', result: { attachment, data } };
     },
   };
 }

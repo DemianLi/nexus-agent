@@ -318,6 +318,89 @@ describe('內嵌的圖', () => {
   });
 });
 
+describe('讀圖路由（#733）', () => {
+  /** 送一張圖，回它的 `attachmentId`。 */
+  async function sendImage(
+    c: ReturnType<typeof connect>,
+    thread: string = THREAD,
+  ): Promise<string> {
+    const result = await c.client.runStart(thread, '圖', { attachments: [IMAGE] });
+    expect(result).toMatchObject({ type: 'success' });
+    await settled(c.events, 1);
+    const start = c.events().find((e) => e.type === 'turn/start');
+    const [ref] = (start?.data as unknown as { attachments: { attachmentId: string }[] })
+      .attachments;
+    return ref!.attachmentId;
+  }
+
+  it('這條 thread 日誌引用過的圖：回參照與位元組，位元組與送進去的一致', async () => {
+    const c = connect('vision');
+    try {
+      const attachmentId = await sendImage(c);
+      const outcome = await c.client.readAttachment(THREAD, attachmentId);
+      expect(outcome).toMatchObject({
+        kind: 'ok',
+        result: {
+          attachment: { type: 'image', attachmentId, mediaType: 'image/png', name: 's.png' },
+          data: PNG_7X5,
+        },
+      });
+    } finally {
+      await c.handler.close();
+    }
+  });
+
+  it('沒被這條 thread 引用的一律 attachment_not_found：別條 thread、沒引用過的 id、檔案不是圖、壞編號', async () => {
+    const c = connect('vision');
+    try {
+      const attachmentId = await sendImage(c);
+      // 檔案：就算這條 thread 引用過，這條路只收圖。
+      const receipt = await upload(c.client, 'hi', 'a.txt');
+      await c.client.runStart(THREAD, '檔', {
+        attachments: [{ type: 'file', receiptId: receipt.receiptId }],
+      });
+      await settled(c.events, 2);
+      const fileId = (
+        c
+          .events()
+          .filter((e) => e.type === 'turn/start')
+          .at(-1)!.data as unknown as { attachments: { attachmentId: string }[] }
+      ).attachments[0]!.attachmentId;
+
+      // 別條 thread：存在、載入了，但日誌沒引用過這張圖（附件儲存是共用的，光知道 id 不能換位元組）。
+      // 放在最後建：`connect` 的 `events()` 看的是最後一次接線的那條 thread。
+      const other = await c.client.uploadFile('other-thread', new Uint8Array([1]), 'x.txt');
+      expect(other.kind).toBe('ok');
+      const notFound = { kind: 'rejected', code: 'attachment_not_found' };
+      expect(await c.client.readAttachment('other-thread', attachmentId)).toMatchObject(notFound);
+      expect(await c.client.readAttachment(THREAD, `sha256:${'0'.repeat(64)}`)).toMatchObject(
+        notFound,
+      );
+      expect(await c.client.readAttachment(THREAD, fileId)).toMatchObject(notFound);
+      expect(await c.client.readAttachment(THREAD, 'not-an-id')).toMatchObject(notFound);
+      // 沒載入過的 thread 不為了讀圖建起來。
+      expect(await c.client.readAttachment('never-opened', attachmentId)).toMatchObject(notFound);
+    } finally {
+      await c.handler.close();
+    }
+  });
+
+  it('引用了但位元組不見了（儲存被清掉）：unknown_error，不是 not_found', async () => {
+    const c = connect('vision');
+    try {
+      const attachmentId = await sendImage(c);
+      await rm(join(attachmentsRootOf(home), 'file-objects'), { recursive: true, force: true });
+      await rm(join(attachmentsRootOf(home)), { recursive: true, force: true });
+      expect(await c.client.readAttachment(THREAD, attachmentId)).toMatchObject({
+        kind: 'rejected',
+        code: 'unknown_error',
+      });
+    } finally {
+      await c.handler.close();
+    }
+  });
+});
+
 describe('不支援附件的組裝', () => {
   it('沒有附件儲存：帶附件整句 not_supported', async () => {
     const live = config('vision');
@@ -351,6 +434,10 @@ describe('不支援附件的組裝', () => {
       expect(await client.runStart(THREAD, '圖', { attachments: [IMAGE] })).toMatchObject({
         type: 'error',
         error: 'not_supported',
+      });
+      expect(await client.readAttachment(THREAD, `sha256:${'0'.repeat(64)}`)).toMatchObject({
+        kind: 'rejected',
+        code: 'not_supported',
       });
     } finally {
       await handler.close();

@@ -101,7 +101,7 @@ export type PromptAttachment =
  * 送進模型的一件附件在線上的樣子：**參照**，不是位元組（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。
  * 排著的與領走的訊息（`WireQueuedInput`、`WireClaimedInput`）與歷史裡人的那一句都帶這個，畫面據它畫附件列。
  * 結構上是 `@nexus/core` 的 `AttachmentRef`，這裡另寫一份（同 `inbox.ts` 的 `WireQueuedInput`）。
- * `attachmentId` 是內容定址的 `sha256:<hex>`；讀圖的路由是下一張卡。
+ * `attachmentId` 是內容定址的 `sha256:<hex>`；讀圖走 {@link attachmentPath}。
  */
 export type WireAttachmentRef =
   | {
@@ -134,4 +134,43 @@ export type UploadResponse =
  */
 export function uploadPath(threadId: string): string {
   return `/threads/${encodeURIComponent(threadId)}/uploads`;
+}
+
+/**
+ * 讀圖失敗的錯誤碼：這條 thread 的日誌沒有引用過這個 `attachmentId`（含編號長得不對、thread 沒載入）。**不細分**——
+ * 「不存在」與「存在但不是你這條 thread 的」對呼叫端是同一件事，免得拿它來探測別條 thread 有什麼。碼的寫法照
+ * `subagent_not_found` 那一族。
+ */
+export const ATTACHMENT_NOT_FOUND = 'attachment_not_found';
+
+/** {@link attachmentPath} 成功的結果：圖的參照與它的位元組（標準 base64）。 */
+export interface AttachmentReadResult {
+  /** 存下來的參照（媒體類型、寬高、位元組數、顯示名）。 */
+  readonly attachment: Extract<WireAttachmentRef, { readonly type: 'image' }>;
+  /** 圖片位元組的標準 base64。 */
+  readonly data: string;
+}
+
+/** {@link attachmentPath} 的回應封包。 */
+export type AttachmentReadResponse =
+  { readonly type: 'success'; readonly result: AttachmentReadResult } | ErrorResponse;
+
+/**
+ * 讀一張圖的路徑，`GET`（[#733](https://github.com/DemianLi/nexus-agent/issues/733)）。
+ *
+ * **只回這條 thread 的日誌引用過的圖**（排著的、領走的、輪中插話、模型訊息裡的圖片區塊），其餘一律
+ * {@link ATTACHMENT_NOT_FOUND}。照 dsh 的 `session.attachment`（`packages/api/session-controller/src/commands.ts:391-425`，
+ * `5badb150`）：靠「日誌引用過它」授權，而不是靠「知道 id」——附件儲存是整個 `NEXUS_AGENT_HOME` 共用的、內容定址的，
+ * 光是 id 不該換得到位元組。dsh 的檢查是 `referencedImage`（同檔 `:682`），逐種事件找圖片區塊。
+ *
+ * 回的形狀照 dsh：參照加 base64（不是原始位元組）。**只收圖**，檔案不走這條（模型用 `read_file` 讀、人的下載另議）。
+ * 只讀已經載入的 thread，不為了讀圖建一條新的：圖是附在人的訊息上的，畫面有那則訊息時這條 thread 本來就建起來了。
+ * 這個組裝沒有附件儲存：`not_supported`。
+ *
+ * @param threadId - thread id，就是 root 會話的 id。
+ * @param attachmentId - `sha256:<hex>`，路徑上整段 URL 編碼。
+ * @returns 路徑。
+ */
+export function attachmentPath(threadId: string, attachmentId: string): string {
+  return `/threads/${encodeURIComponent(threadId)}/attachments/${encodeURIComponent(attachmentId)}`;
 }
