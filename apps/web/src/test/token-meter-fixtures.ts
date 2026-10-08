@@ -64,10 +64,18 @@ const NUMERIC = [
   'waitMs',
 ] as const;
 
+const BUCKETS = ['uncachedInputTokens', 'cacheReadTokens', 'cacheWriteTokens'] as const;
+
 /** 逐欄相加：投影保證 `session ＝ outside ＋ earlier ＋ Σ turns`，夾具照這條造 `session`。 */
 export function sumSpans(spans: readonly TokenMeterSpan[]): TokenMeterSpan {
   const total: Record<string, number> = {};
   for (const key of NUMERIC) total[key] = spans.reduce((sum, item) => sum + item[key], 0);
+  // 快取分桶（#724）是選填：每一段都有才有，只要有一段缺席整格就不放（缺席＝沒記，不當 0 加）。
+  for (const key of BUCKETS) {
+    if (spans.length > 0 && spans.every((item) => item[key] !== undefined)) {
+      total[key] = spans.reduce((sum, item) => sum + (item[key] ?? 0), 0);
+    }
+  }
   return span(total as Partial<TokenMeterSpan>);
 }
 

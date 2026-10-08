@@ -1,4 +1,4 @@
-import type { ConversationState } from '@nexus/wire';
+import type { ConversationState, TokenMeterSpan } from '@nexus/wire';
 import {
   TOKEN_METER_PROJECTION,
   TOKEN_METER_VERSION,
@@ -81,6 +81,116 @@ function sample() {
   ];
   return { script, view: meterView({ turns, outside, earlier, totalTurns: 6 }) };
 }
+
+describe('成本分頁：有用量投影的四桶與命中率（#724）', () => {
+  /** 兩輪，各自帶四桶；`inputTokens` 由呼叫端決定是完整 prompt 還是只算未快取。 */
+  function bucketed(inputOf: (turn: 'a' | 'b') => number, over: Partial<TokenMeterSpan> = {}) {
+    const script = new Script();
+    const a = meterTurn(0, {
+      seq: 100,
+      steps: 1,
+      inputTokens: inputOf('a'),
+      uncachedInputTokens: 200,
+      cacheReadTokens: 700,
+      cacheWriteTokens: 100,
+      outputTokens: 50,
+      ...over,
+    });
+    const b = meterTurn(1, {
+      seq: 200,
+      steps: 1,
+      inputTokens: inputOf('b'),
+      uncachedInputTokens: 100,
+      cacheReadTokens: 0,
+      cacheWriteTokens: 0,
+      outputTokens: 10,
+    });
+    // 輪外沒有任何呼叫：四桶都是 0（一個呼叫都沒有，「每次都報了」成立），不是缺席。
+    const outside = span({ uncachedInputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0 });
+    return { script, view: meterView({ turns: [a, b], outside, totalTurns: 2 }) };
+  }
+  const turnAt = (seq: number) =>
+    document.querySelector(`[data-testid=cost-turn][data-seq="${seq}"]`)!;
+  const field = (root: Element, name: string) => root.querySelector(`[data-field="${name}"]`);
+
+  it('會話總計與每一輪都畫四桶與命中率：總計 800 ÷ 1,100（兩輪加起來算，不是 70% 與 0% 的平均）', async () => {
+    const { script, view } = bucketed((turn) => (turn === 'a' ? 1_000 : 100));
+    mount(withMeter(base(script), script, view));
+    await act(async () => {});
+    const totals = screen.getByTestId('cost-totals');
+    expect(numberIn(field(totals, 'uncachedInputTokens'))).toBe(300);
+    expect(numberIn(field(totals, 'cacheReadTokens'))).toBe(700);
+    expect(numberIn(field(totals, 'cacheWriteTokens'))).toBe(100);
+    expect(numberIn(field(totals, 'tokensTotalBuckets'))).toBe(1_160);
+    expect(field(totals, 'cacheHitRate')?.querySelector('dd')?.textContent).toBe('63.6%');
+    const first = turnAt(100);
+    const second = turnAt(200);
+    expect(field(first, 'cacheHitRate')?.querySelector('dd')?.textContent).toBe('70.0%');
+    // 第二輪記了、一次都沒命中：0.0%，不是沒記。
+    expect(field(second, 'cacheHitRate')?.querySelector('dd')?.textContent).toBe('0.0%');
+  });
+
+  it('span 的 inputTokens 從完整 prompt 改成只算未快取：整個分頁的字一個都不變', async () => {
+    const full = bucketed((turn) => (turn === 'a' ? 1_000 : 100));
+    mount(withMeter(base(full.script), full.script, full.view));
+    await act(async () => {});
+    const before = text('right-sidebar-panel-cost');
+    cleanup();
+    const uncachedOnly = bucketed((turn) => (turn === 'a' ? 200 : 100), {});
+    // session 也是只算未快取的版本：夾具照 sumSpans 把 inputTokens 加起來。
+    mount(withMeter(base(uncachedOnly.script), uncachedOnly.script, uncachedOnly.view));
+    await act(async () => {});
+    expect(text('right-sidebar-panel-cost')).toBe(before);
+  });
+
+  it('快取桶缺席的那一輪：寫沒記，不畫 0%；別輪照常；合計那一輪標下限', async () => {
+    const { script, view } = bucketed((turn) => (turn === 'a' ? 1_000 : 100), {
+      cacheWriteTokens: undefined,
+    });
+    mount(withMeter(base(script), script, view));
+    await act(async () => {});
+    const first = turnAt(100);
+    expect(field(first, 'cacheWriteTokens')?.querySelector('dd')?.textContent).toBe('沒記');
+    expect(field(first, 'cacheHitRate')?.querySelector('dd')?.textContent).toBe('沒記');
+    expect(field(first, 'tokensTotalBuckets')?.querySelector('dd')?.textContent).toContain(
+      '（下限）',
+    );
+    // 會話總計：有一輪缺，整段缺席（夾具照投影的規則），也是沒記。
+    const totals = screen.getByTestId('cost-totals');
+    expect(field(totals, 'cacheHitRate')?.querySelector('dd')?.textContent).toBe('沒記');
+  });
+
+  it('舊 server 的投影（沒有三格）：照舊畫輸入含快取，沒有命中率', async () => {
+    const { script, view } = sample();
+    mount(withMeter(base(script), script, view));
+    await act(async () => {});
+    expect(document.querySelector('[data-field="cacheHitRate"]')).toBeNull();
+    expect(document.querySelector('[data-field="cacheReadTokens"]')).toBeNull();
+  });
+
+  it('含子代理的 token：各自四桶相加', async () => {
+    const { script, view } = bucketed((turn) => (turn === 'a' ? 1_000 : 100));
+    const root = { ...view, links: [meterLink('a')] };
+    const subView = meterView({
+      outside: span({
+        steps: 1,
+        inputTokens: 500,
+        uncachedInputTokens: 50,
+        cacheReadTokens: 400,
+        cacheWriteTokens: 50,
+        outputTokens: 5,
+      }),
+    });
+    let state = withMeter(base(script), script, root);
+    state = withSubagentMeter(state, script, 'a', subView);
+    mount(state);
+    await act(async () => {});
+    // 主對話 1,160 ＋ 子代理 505。
+    expect(
+      numberIn(screen.getByTestId('cost-totals').querySelector('[data-field="subagentTokens"]')),
+    ).toBe(1_665);
+  });
+});
 
 describe('成本分頁：有用量投影', () => {
   it('標語與口徑換成第 1 版；累計逐格等於 view.session；不再讀 sessionStats、不呼叫子代理 loader', async () => {

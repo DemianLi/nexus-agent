@@ -35,7 +35,14 @@ import type {
   TokenMeterView,
 } from '@nexus/wire';
 
-import { exactTokens, formatDuration } from '@/lib/session-usage-view';
+import {
+  cacheCountText,
+  cacheHitRate,
+  cacheHitRateText,
+  exactTokens,
+  formatDuration,
+  usageBuckets,
+} from '@/lib/session-usage-view';
 import { UNKNOWN_SUBAGENT_LABEL } from '@/lib/subagent-view';
 import {
   TURN_END_LABEL,
@@ -92,6 +99,10 @@ export const COST_STRUCTURED_LIMITS = {
 /** 畫面上有、但投影的口徑表沒有的欄位（由其他欄位算出來的）。 */
 export const DERIVED_CALIBER: Readonly<Record<string, string>> = {
   tokensTotal: '輸入加輸出：整筆帳（輸入已含快取讀取）。',
+  tokensTotalBuckets:
+    '輸入（未快取）、快取讀、快取寫、輸出四項相加：整筆帳。有一個快取桶沒記時，合計不含那一項，是下限。',
+  cacheHitRate:
+    '快取讀 ÷（未快取＋快取讀＋快取寫），這一段加起來算，不是各次呼叫比例的平均；有一個快取桶沒記就寫「沒記」，不寫 0%。',
   subagentTokens:
     '主對話加上每個列得出來的子代理的 token 加總；有子代理還沒有數字、或有呼叫沒報用量時是下限。',
 };
@@ -112,17 +123,35 @@ export function signedDuration(ms: number): string {
 const tokenValue = (count: number, lowerBound: boolean): string =>
   `${exactTokens(count)}${lowerBound ? '（下限）' : ''}`;
 
+/** 快取桶：沒記寫「沒記」（不加下限記號：那不是少算，是沒有這個數字）。 */
+const cacheValue = (count: number | undefined, lowerBound: boolean): string =>
+  count === undefined ? cacheCountText(count) : tokenValue(count, lowerBound);
+
 /**
  * 一段事件的數字換成列。一輪（`turn`）才有殘差。**零值的選填格不畫**（沒有失敗、沒有重試、沒有摘要就不佔版面），
  * 但 token 與呼叫數永遠畫：0 是真的答案。
  */
 export function spanRows(span: TokenMeterSpan, turn?: TokenMeterTurn): readonly FieldRow[] {
   const lower = span.unknownSteps > 0;
-  const rows: FieldRow[] = [
-    ['inputTokens', '輸入', tokenValue(span.inputTokens, lower)],
-    ['outputTokens', '輸出', tokenValue(span.outputTokens, lower)],
-    ['tokensTotal', '合計', tokenValue(span.inputTokens + span.outputTokens, lower)],
-  ];
+  // 四桶互不重疊，**不讀 `inputTokens`**（#724）：它之後會改成只算未快取，畫面的數字不能跟著動。投影沒給未快取那一格
+  // （舊 server）就退回 `inputTokens`（完整 prompt，含快取），跟以前一樣。
+  const buckets = usageBuckets(span);
+  const hitRate = cacheHitRate(buckets);
+  const cacheMissing = buckets.cacheRead === undefined || buckets.cacheWrite === undefined;
+  const rows: FieldRow[] = buckets.cacheInInput
+    ? [
+        ['inputTokens', '輸入', tokenValue(buckets.input, lower)],
+        ['outputTokens', '輸出', tokenValue(buckets.output, lower)],
+        ['tokensTotal', '合計', tokenValue(buckets.total, lower)],
+      ]
+    : [
+        ['uncachedInputTokens', '輸入', tokenValue(buckets.input, lower)],
+        ['cacheReadTokens', '快取讀', cacheValue(buckets.cacheRead, lower)],
+        ['cacheWriteTokens', '快取寫', cacheValue(buckets.cacheWrite, lower)],
+        ['outputTokens', '輸出', tokenValue(buckets.output, lower)],
+        ['tokensTotalBuckets', '合計', tokenValue(buckets.total, lower || cacheMissing)],
+      ];
+  if (hitRate !== undefined) rows.push(['cacheHitRate', '快取命中率', cacheHitRateText(hitRate)]);
   if (span.failedInputTokens > 0 || span.failedOutputTokens > 0) {
     rows.push(
       ['failedInputTokens', '其中失敗或中止的輸入', exactTokens(span.failedInputTokens)],
@@ -301,21 +330,27 @@ export function costSubagents(
 export function tokensWithSubagents(
   root: TokenMeterView,
   subagents: readonly CostSubagent[],
-): { readonly input: number; readonly output: number; readonly complete: boolean } {
-  let input = root.session.inputTokens;
-  let output = root.session.outputTokens;
-  let complete = root.session.unknownSteps === 0 && root.linksOmitted === 0;
+): { readonly total: number; readonly complete: boolean } {
+  // 每一份各自用四桶加起來（不讀 `inputTokens`，見 `spanRows`）；有快取桶沒記的，加起來就不含那一項，所以是下限。
+  const countable = (span: TokenMeterSpan): boolean => {
+    const buckets = usageBuckets(span);
+    return span.unknownSteps === 0 && (buckets.cacheInInput || cacheKnown(buckets));
+  };
+  let total = usageBuckets(root.session).total;
+  let complete = countable(root.session) && root.linksOmitted === 0;
   for (const subagent of subagents) {
     if (subagent.view === undefined) {
       complete = false;
       continue;
     }
-    input += subagent.view.session.inputTokens;
-    output += subagent.view.session.outputTokens;
-    if (subagent.view.session.unknownSteps > 0) complete = false;
+    total += usageBuckets(subagent.view.session).total;
+    if (!countable(subagent.view.session)) complete = false;
   }
-  return { input, output, complete };
+  return { total, complete };
 }
+
+const cacheKnown = (buckets: ReturnType<typeof usageBuckets>): boolean =>
+  buckets.cacheRead !== undefined && buckets.cacheWrite !== undefined;
 
 /** 對不到名字的前景子代理的稱呼（背景的對不到時沿用 `UNKNOWN_SUBAGENT_LABEL`）。 */
 export const FOREGROUND_SUBAGENT_LABEL = '子代理';

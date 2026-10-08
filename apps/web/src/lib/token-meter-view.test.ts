@@ -1,3 +1,4 @@
+import type { TokenMeterSpan } from '@nexus/wire';
 import {
   TOKEN_METER_CALIBER,
   TOKEN_METER_PROJECTION,
@@ -205,6 +206,87 @@ describe('spanRows：每一格都帶口徑表的鍵', () => {
   });
 });
 
+describe('spanRows：四桶（#724）', () => {
+  const buckets = (over: Partial<TokenMeterSpan> = {}) =>
+    span({
+      steps: 2,
+      inputTokens: 1_000,
+      uncachedInputTokens: 200,
+      cacheReadTokens: 700,
+      cacheWriteTokens: 100,
+      outputTokens: 50,
+      ...over,
+    });
+  const byField = (rows: ReturnType<typeof spanRows>) =>
+    Object.fromEntries(rows.map(([f, , v]) => [f, v]));
+
+  it('有未快取那一格：輸入只算未快取，快取讀、快取寫另列，合計四項相加，帶命中率', () => {
+    const rows = spanRows(buckets());
+    expect(rows.slice(0, 6).map(([f, l, v]) => [f, l, v])).toEqual([
+      ['uncachedInputTokens', '輸入', '200 token'],
+      ['cacheReadTokens', '快取讀', '700 token'],
+      ['cacheWriteTokens', '快取寫', '100 token'],
+      ['outputTokens', '輸出', '50 token'],
+      ['tokensTotalBuckets', '合計', '1,050 token'],
+      ['cacheHitRate', '快取命中率', '70.0%'],
+    ]);
+  });
+
+  it('span 的 inputTokens 改成只算未快取：畫面逐格不變（#724 的釘子）', () => {
+    const full = spanRows(buckets({ inputTokens: 1_000 }));
+    const uncachedOnly = spanRows(buckets({ inputTokens: 200 }));
+    expect(uncachedOnly).toEqual(full);
+    // 逐輪也一樣：turn 是 span 加上起訖。
+    const turn = meterTurn(0, buckets({ inputTokens: 1_000 }));
+    expect(costTurnRows(meterView({ turns: [turn] }), new Set()).at(0)?.fields).toEqual(
+      costTurnRows(meterView({ turns: [{ ...turn, inputTokens: 200 }] }), new Set()).at(0)?.fields,
+    );
+  });
+
+  it('快取桶缺席（有呼叫沒報細節）：那一列寫沒記、合計不含它並標下限、命中率寫沒記，不是 0', () => {
+    const only = byField(spanRows(buckets({ cacheWriteTokens: undefined })));
+    expect(only.cacheReadTokens).toBe('700 token');
+    expect(only.cacheWriteTokens).toBe('沒記');
+    expect(only.tokensTotalBuckets).toBe('950 token（下限）');
+    expect(only.cacheHitRate).toBe('沒記');
+    const neither = byField(
+      spanRows(buckets({ cacheReadTokens: undefined, cacheWriteTokens: undefined })),
+    );
+    expect(neither.cacheReadTokens).toBe('沒記');
+    expect(neither.cacheWriteTokens).toBe('沒記');
+    expect('cacheHitRate' in neither).toBe(false);
+  });
+
+  it('記了、一次都沒命中：命中率 0.0%，快取讀寫 0 照寫', () => {
+    const rows = byField(spanRows(buckets({ cacheReadTokens: 0, cacheWriteTokens: 300 })));
+    expect(rows.cacheReadTokens).toBe('0 token');
+    expect(rows.cacheHitRate).toBe('0.0%');
+  });
+
+  it('有呼叫沒報用量：四桶那幾格都標下限', () => {
+    const rows = byField(spanRows(buckets({ unknownSteps: 1 })));
+    expect(rows.uncachedInputTokens).toBe('200 token（下限）');
+    expect(rows.cacheReadTokens).toBe('700 token（下限）');
+    expect(rows.tokensTotalBuckets).toBe('1,050 token（下限）');
+  });
+
+  it('舊 server（沒有未快取那一格）：照舊讀 inputTokens，不畫快取列、不畫命中率', () => {
+    const rows = spanRows(span({ steps: 1, inputTokens: 100, outputTokens: 10 }));
+    expect(rows.map(([f]) => f).slice(0, 3)).toEqual([
+      'inputTokens',
+      'outputTokens',
+      'tokensTotal',
+    ]);
+    expect(rows.some(([f]) => f === 'cacheHitRate')).toBe(false);
+  });
+
+  it('每一格都找得到口徑，而且口徑不在投影的口徑表裡的（畫面自己算的）有自己的句子', () => {
+    for (const [field] of spanRows(buckets())) {
+      expect(caliberOf(field), field).toBeTypeOf('string');
+    }
+  });
+});
+
 describe('其他格式', () => {
   it('signedDuration：負數寫負號', () => {
     expect(signedDuration(-1200)).toBe('−1.2 秒');
@@ -356,8 +438,7 @@ describe('子代理：從 root 的 links 接回 subagentProjections', () => {
       }),
     });
     expect(tokensWithSubagents(root, [some(50), some(5)])).toEqual({
-      input: 155,
-      output: 12,
+      total: 167,
       complete: true,
     });
     expect(tokensWithSubagents(root, [some(50, 1)]).complete).toBe(false);
@@ -369,12 +450,45 @@ describe('子代理：從 root 的 links 接回 subagentProjections', () => {
       view: undefined,
     };
     expect(tokensWithSubagents(root, [some(50), pending])).toMatchObject({
-      input: 150,
+      total: 161,
       complete: false,
     });
     expect(tokensWithSubagents({ ...root, linksOmitted: 2 }, [some(50)]).complete).toBe(false);
     expect(
       tokensWithSubagents(meterView({ outside: span({ unknownSteps: 1 }) }), []).complete,
+    ).toBe(false);
+  });
+
+  it('四桶：各自四項相加，不讀 inputTokens；有快取桶沒記就是下限', () => {
+    const four = (inputTokens: number, over: Partial<TokenMeterSpan> = {}) =>
+      span({
+        inputTokens,
+        uncachedInputTokens: 20,
+        cacheReadTokens: 70,
+        cacheWriteTokens: 10,
+        outputTokens: 5,
+        ...over,
+      });
+    const sub = (id: string, outside: TokenMeterSpan) => ({
+      runId: id,
+      callId: `c-${id}`,
+      mode: 'continuable' as const,
+      turn: undefined,
+      view: meterView({ outside }),
+    });
+    const root = (inputTokens: number) => meterView({ outside: four(inputTokens), links: [] });
+    // root 105、子代理 105：inputTokens 是完整 prompt 或只算未快取，合計都一樣。
+    expect(tokensWithSubagents(root(100), [sub('a', four(100))])).toEqual({
+      total: 210,
+      complete: true,
+    });
+    expect(tokensWithSubagents(root(20), [sub('a', four(20))])).toEqual({
+      total: 210,
+      complete: true,
+    });
+    expect(
+      tokensWithSubagents(root(100), [sub('a', four(100, { cacheWriteTokens: undefined }))])
+        .complete,
     ).toBe(false);
   });
 });
