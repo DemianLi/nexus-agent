@@ -286,6 +286,12 @@ export interface NexusServices {
    * {@link ./fs-service.ts | FS_SERVICE}。值是一格 fold 之後才填的把手，**被叫時才讀**；理由見那個模組的偏離登記。
    */
   fs: FsService;
+  /**
+   * 工作區根（`--workspace` 解析過的絕對路徑）。名字見 {@link ./sandbox.ts | WORKSPACE_ROOT_SERVICE}。
+   *
+   * **沒有工作區就沒人提供**：`services.get()` 回 `undefined` 就是「這次組裝沒有工作區」，要用根的 plugin 據此不合格。
+   */
+  workspaceRoot: string;
 }
 
 /** 已經宣告過型別的服務名。空表時是 `never`，那時只有寬的多載可用。 */

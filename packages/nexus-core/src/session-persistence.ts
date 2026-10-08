@@ -306,6 +306,21 @@ export function attachSessionPersistence(
     });
     coordinators.push(coordinator);
     byLog.set(log, coordinator);
+    // **續接的 root 記下這一次實際載入的清單**（#1138）：header 沿用最初那一份，這一顆補上「後來是誰接手的」。
+    // 協調器已經接上，所以這一筆會跟著落盤。前一顆是同樣內容的 `session/resumed` 就不疊——空轉的續接不讓日誌長。
+    if (resumed !== undefined && options.buildMetadata !== undefined) {
+      const data = {
+        build: options.buildMetadata.build,
+        plugins: options.buildMetadata.plugins,
+        ...(options.buildMetadata.configHash !== undefined && {
+          configHash: options.buildMetadata.configHash,
+        }),
+      };
+      const tail = log.events.at(-1);
+      if (tail?.type !== 'session/resumed' || JSON.stringify(tail.data) !== JSON.stringify(data)) {
+        log.append('session/resumed', data, { ignorable: true });
+      }
+    }
   });
   // **耐久檢查點的後端那一側**（#599）：同 dsh 的 jsonl 後端在 `session/flush` 上掛 listener、
   // 按 session 找自己的寫把手。不是這一組接上的日誌就不理——那一份不歸這裡寫。

@@ -1,6 +1,7 @@
 /**
  * **腳本模型提供者**（[#670](https://github.com/DemianLi/nexus-agent/issues/670)）：把一份固定的回合腳本當成
- * 一個可以被 `agent-default-model` 選到的提供者。出貨的 `cordis.yml` 不放這一列，測試與部署方用 patch `insert`：
+ * 一個可以被 `agent-default-model` 選到的提供者。出貨的 `cordis.yml` 放一列 id 為 `cli-script` 的（假模型的預設腳本，
+ * 就是它的 config）；測試與部署方要換成別的腳本，用 patch `insert` 另一列再把選擇列指過去：
  *
  * ```yaml
  * - id: my-script

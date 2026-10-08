@@ -44,6 +44,7 @@ import type { SandboxMode } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
 import {
   BLANK_JUSTIFICATION_REFUSAL,
+  CONTAINED_FILESYSTEM,
   createSandboxPolicyPlugin,
   escalationReason,
   MISSING_TARGET_REFUSAL,
@@ -183,7 +184,12 @@ describe('升級', () => {
               hasCheckpointer: options.checkpointer !== false,
             }),
           }),
-          ...(options.plugin === false ? {} : { sandboxPolicy: { controller, rootDir: root } }),
+          ...(options.plugin === false
+            ? {}
+            : {
+                fsContainment: CONTAINED_FILESYSTEM,
+                sandboxPolicy: { controller, rootDir: root },
+              }),
         }),
         ...(options.permissive === true ? [permissiveGate()] : []),
         ...(options.plugin === false ? [] : [createSandboxPolicyPlugin()]),

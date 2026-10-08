@@ -46,7 +46,11 @@ describe('searchThreads', () => {
       fetch: async () =>
         Response.json({ type: 'error', id: null, error: 'not_supported', message: '沒開' }),
     });
-    expect(await refused.searchThreads('x')).toEqual({ kind: 'rejected', message: '沒開' });
+    expect(await refused.searchThreads('x')).toEqual({
+      kind: 'rejected',
+      code: 'not_supported',
+      message: '沒開',
+    });
     const blocked = createWireClient({
       baseUrl: 'http://agent.test',
       fetch: async () => new Response('unauthorized', { status: 401 }),

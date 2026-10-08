@@ -41,6 +41,7 @@ import type { InboxSplice, SubagentSettleReason } from './inbox.js';
 import { KNOWN_SESSION_EVENT_TYPES } from './known-event-types.js';
 import type { LoggedMessage } from './logged-message.js';
 import type { RequestHeader, RequestSnapshotReason } from './request-snapshot.js';
+import type { SessionHeaderBuildMetadata } from './session-store.js';
 import type { SubagentCatalogData } from './subagent-catalog.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
@@ -916,6 +917,22 @@ export interface SessionEventMap {
    * 要在這裡重設——見 {@link currentTurnStart} 與 core、todo、commands 三份配套入口。
    */
   'session/end-seed': Record<string, never>;
+  /**
+   * 這一次續接**實際載入**的建置版本、插件清單與設定雜湊（[#1138](https://github.com/DemianLi/nexus-agent/issues/1138)
+   * 量到的缺口 2）——形狀同 header 的那三格（{@link SessionHeaderBuildMetadata}），**不帶 `config`**，理由同
+   * `StoredSessionPluginRow`。
+   *
+   * **為什麼需要它**：header 只記建立當下那一份，續接不回填（`build` 的規則），所以換成新版插件之後續接的
+   * thread，header 仍把它列成舊版的使用者。header 不動，這一顆補上「後來是誰接手的」：最後一顆
+   * `session/resumed` 是這份日誌目前跑的清單，沒有就是 header 那份。
+   *
+   * **寫在 `session/end-seed` 之後**，由 `attachSessionPersistence` 在續接的 root 接上時寫；新建的會話不寫
+   * （header 就是它）。前一顆已經是同樣內容的 `session/resumed` 就不再疊——空轉的續接不讓日誌長。
+   *
+   * 標 `ignorable`：純資訊性、不進模型也不左右重建，舊 runtime 略過它是對的（#507，所以不升格式版本）。
+   * **不鏡像到會話遙測**（`isMirroredEvent`）：裡面有本機的模組路徑與只能在同一台機器上比的設定雜湊。
+   */
+  'session/resumed': SessionHeaderBuildMetadata;
 }
 
 /** 日誌裡的一筆。凍過的，拿到之後改不動。 */
@@ -1215,7 +1232,11 @@ export class SessionLog implements SessionLogView {
       const snapshot = snapshotJsonValue(event, `seed 第 ${index} 顆`, new Set());
       this.#events.push(deepFreeze(snapshot) as SessionEvent);
     }
-    if (this.#events.at(-1)?.type === 'session/end-seed') return;
+    // 末尾的 `session/resumed` 是上一次續接寫在 end-seed 之後的，不算「有新東西」：算的話每次空轉的續接
+    // 都多疊一顆 end-seed。
+    let last = this.#events.length - 1;
+    while (last >= 0 && this.#events[last]?.type === 'session/resumed') last -= 1;
+    if (this.#events[last]?.type === 'session/end-seed') return;
     this.#events.push(
       deepFreeze({
         type: 'session/end-seed',

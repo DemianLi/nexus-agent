@@ -33,7 +33,7 @@ import type { WireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
-import { TEST_BROWSER_AUTH, loopbackRequest, shippedPlugins } from './fixtures.js';
+import { TEST_BROWSER_AUTH, loopbackRequest, shippedModelRow, shippedPlugins } from './fixtures.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -302,7 +302,11 @@ describe('序列', () => {
     // 是在 `submit` 裡同步就翻的，正是為了這一刻）。
     await wired.client.runStart('t', '把這句話回聲一次。');
     const rejected = await wired.client.slashRun('t', `/${PLAN_COMMAND_NAME}`);
-    expect(rejected).toEqual({ kind: 'rejected', message: expect.stringContaining('正在跑') });
+    expect(rejected).toEqual({
+      kind: 'rejected',
+      code: 'invalid_argument',
+      message: expect.stringContaining('正在跑'),
+    });
     // 被拒的那一次不進日誌：它從來沒有進過 handler。
     expect(commandEvents(wired.log())).toEqual([]);
   });
@@ -325,6 +329,7 @@ describe('序列', () => {
     const rejected = await wired.client.slashRun('t', `/${PLAN_COMMAND_NAME}`);
     expect(rejected).toEqual({
       kind: 'rejected',
+      code: 'invalid_argument',
       message: expect.stringContaining('停在核准點'),
     });
   });
@@ -351,13 +356,22 @@ describe('序列', () => {
           }),
       },
     };
-    const wired = await wire([createEchoPlugin(), createCommandsInvariantPlugin(), slow]);
+    const wired = await wire([
+      createEchoPlugin(),
+      createCommandsInvariantPlugin(),
+      slow,
+      await shippedModelRow(),
+    ]);
     await wired.client.openEvents('t');
 
     const first = wired.client.slashRun('t', '/slow');
     await started;
     const second = await wired.client.slashRun('t', '/slow');
-    expect(second).toEqual({ kind: 'rejected', message: expect.stringContaining('已經有一個') });
+    expect(second).toEqual({
+      kind: 'rejected',
+      code: 'invalid_argument',
+      message: expect.stringContaining('已經有一個'),
+    });
 
     // 被擋住的時候 `run.start` 也一樣——`/plan` 那格 pending intent 不能跟飛行中那一輪
     // 的 `beforeAgent` 賽跑，所以這道閘是雙向的。

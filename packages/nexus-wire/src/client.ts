@@ -10,6 +10,21 @@
  * upstream traffic remains on HTTP.」
  */
 
+import { UPLOAD_NAME_PARAM, uploadPath } from './attachments.js';
+import type { PromptAttachment, UploadReceipt, UploadResponse } from './attachments.js';
+import type {
+  ModelCatalogCommand,
+  ModelCatalogResult,
+  ModelCommand,
+  ModelSelectCommand,
+  ModelSelectResult,
+  ModelSelection,
+} from './model-selection.js';
+import type {
+  PermissionCatalogCommand,
+  PermissionCatalogResult,
+  PermissionCommand,
+} from './permission-presets.js';
 import type { TrajectoryTurnDetail, TrajectoryTurnQuery } from './trajectory.js';
 import type {
   FileReferenceCandidate,
@@ -121,20 +136,31 @@ export type UplinkResult = CommandResponse | WireErrorResponse;
  */
 export type SlashListOutcome =
   | { readonly kind: 'ok'; readonly commands: readonly SlashDescriptor[] }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /** `slash.run` 的結果：三個命令自己的值，加上這條線拒絕發派的那一個。 */
 export type SlashRunOutcome =
-  SlashRunResult | { readonly kind: 'rejected'; readonly message: string };
+  SlashRunResult | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /**
  * 回饋三個 method 的結果。**`rejected` 與業務失敗是兩件事**，理由同 {@link SlashListOutcome}：
  * `rejected` 是這條線收不了（這個組裝沒掛回饋、封包壞了），業務失敗在 `result` 裡
  * （`{ ok: false, error: { code } }`）。
  */
-export type FeedbackOutcome<T> =
+export type FeedbackOutcome<T> = CommandOutcome<T>;
+
+/**
+ * 回 `{ ok, … }` 這一類結果的命令（回饋、模型選擇、權限目錄）的結果。`rejected` 是這條線收不了——**含 `not_supported`**：
+ * 這台 server 還沒實作那一支，web 據這個碼把功能藏起來；業務失敗在 `result` 裡（`{ ok: false, error }`）。
+ */
+export type CommandOutcome<T> =
   | { readonly kind: 'ok'; readonly result: T }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
+
+/** `uploadFile` 的結果。`rejected` 是這條線收不了（含 `not_supported`：這個組裝沒有附件儲存），見 `attachments.ts`。 */
+export type UploadOutcome =
+  | { readonly kind: 'ok'; readonly receipt: UploadReceipt }
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /**
  * `GET /threads` 的結果。`rejected` 是這台 server 列不了（例如組裝時沒接落盤），**不是空清單**，
@@ -142,12 +168,12 @@ export type FeedbackOutcome<T> =
  */
 export type ThreadListOutcome =
   | { readonly kind: 'ok'; readonly result: ThreadListResult }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /** `searchThreads` 的結果。`rejected` 是協定層的失敗（這個部署沒開、查詢不合法、索引壞了），見 `THREAD_SEARCH_PATH`。 */
 export type ThreadSearchOutcome =
   | { readonly kind: 'ok'; readonly result: ThreadSearchResult }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 export interface WireClient {
   /**
@@ -169,7 +195,11 @@ export interface WireClient {
   runStart(
     threadId: string,
     text: string,
-    options?: { readonly mode?: RunStartMode },
+    options?: {
+      readonly mode?: RunStartMode;
+      /** 這句話帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：先上傳的檔案收據與內嵌的圖，順序就是選取的順序。 */
+      readonly attachments?: readonly PromptAttachment[];
+    },
   ): Promise<UplinkResult>;
   /**
    * 回答**一顆**核准請求。
@@ -218,6 +248,39 @@ export interface WireClient {
     threadId: string,
     params: FeedbackDeleteCommand['params'],
   ): Promise<FeedbackOutcome<FeedbackDeleteResult>>;
+  /**
+   * 讀型錄與這條 thread 目前的模型選擇（`model.catalog`，[#723](https://github.com/DemianLi/nexus-agent/issues/723)）。
+   * 契約見 `model-selection.ts`。**還沒實作的 server 回 `rejected`，`code` 是 `not_supported`**——web 據此藏起模型座。
+   */
+  modelCatalog(threadId: string): Promise<CommandOutcome<ModelCatalogResult>>;
+  /**
+   * 選模型與推理強度（`model.select`）。從下一步生效，跑著的那步不換。型錄沒有那顆或強度沒宣告：`result` 是
+   * `{ ok: false, error: { code: 'model_unavailable' } }`，選擇不變。
+   */
+  selectModel(
+    threadId: string,
+    selection: ModelSelection,
+  ): Promise<CommandOutcome<ModelSelectResult>>;
+  /**
+   * 讀權限組合的目錄（`permission.catalog`，[#437](https://github.com/DemianLi/nexus-agent/issues/437)）。契約見
+   * `permission-presets.ts`。切換不在這裡：送 `/permission <組名>` 那一行斜線命令。`rejected` 的 `code` 是 `not_supported`
+   * 就藏起選單。
+   */
+  permissionCatalog(threadId: string): Promise<CommandOutcome<PermissionCatalogResult>>;
+  /**
+   * 上傳一個檔案，換一張收據（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。契約見 `attachments.ts`：收據只在這條
+   * thread 有效，送訊息時放進 `run.start` 的 `attachments`。**排在 {@link openEvents} 兌現之後**（這條 thread 會為它建起來）。
+   *
+   * @param body - 檔案的位元組。
+   * @param name - 顯示用的檔名；省略由 server 取預設。
+   * @param signal - 中止這一次。
+   */
+  uploadFile(
+    threadId: string,
+    body: Blob | Uint8Array,
+    name?: string,
+    signal?: AbortSignal,
+  ): Promise<UploadOutcome>;
   /** 讀回這條 thread 目前的評分（`feedback.list`，[#382](https://github.com/DemianLi/nexus-agent/issues/382)）。 */
   feedbackList(threadId: string): Promise<FeedbackOutcome<FeedbackListResult>>;
   /** 記一則對整個會話的評語（`feedback.record`）——回饋對話框只打 `/feedback` 時送這個。 */
@@ -324,7 +387,7 @@ async function* knownFeedFrames(
 /** `GET /threads/:id/file-references` 的結果。`rejected` 是這條 thread 起不來、或索引建不起來。 */
 export type FileReferenceListOutcome =
   | { readonly kind: 'ok'; readonly result: FileReferenceListResult }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /** 線上回來的候選得先驗過，理由同 {@link readDescriptors}。 */
 function readFileReferences(result: unknown): FileReferenceListResult {
@@ -361,7 +424,7 @@ function readTrajectoryTurn(result: unknown): TrajectoryTurnDetail {
 /** `GET /threads/:id/session-references` 的結果。`rejected` 是讀不了存放處。 */
 export type SessionReferenceListOutcome =
   | { readonly kind: 'ok'; readonly result: SessionReferenceListResult }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /** 線上回來的候選得先驗過，理由同 {@link readDescriptors}。 */
 function readSessionReferences(result: unknown): SessionReferenceListResult {
@@ -410,7 +473,7 @@ function readSessionReferences(result: unknown): SessionReferenceListResult {
 /** `GET /threads/:id/history` 的結果。`rejected` 是這條 thread 起不來、或參數不對。 */
 export type ThreadHistoryOutcome =
   | { readonly kind: 'ok'; readonly result: ThreadHistoryResult }
-  | { readonly kind: 'rejected'; readonly message: string };
+  | { readonly kind: 'rejected'; readonly code?: string; readonly message: string };
 
 /** `GET /threads/:id/trajectory/turn` 的結果。 */
 export type TrajectoryTurnOutcome =
@@ -526,6 +589,28 @@ function readRunResult(result: unknown): SlashRunResult {
   throw new Error(`slash.run 回了不認得的 kind "${String(kind)}"`);
 }
 
+/**
+ * 把 server 回的協定錯誤**原樣**交給呼叫端：碼（`error`）與可直接顯示的中文原因（`message`）。
+ *
+ * 照 dsh 的 client 失敗形狀（`ConnectionRpcFailure`，`packages/client/connection/src/rpc.ts`）：
+ * 失敗帶 `code` 與 `message`，呼叫端按碼分支、按 `message` 顯示，**不比對 `message` 的字串**。
+ * `code` 在型別上是選填的（[#764](https://github.com/DemianLi/nexus-agent/issues/764) 先加成選填，
+ * 讓只讀 `message` 的呼叫端與測試替身照樣編得過）。
+ *
+ * **只在 server 真的送了字串碼的時候才帶 `code`**，缺欄位就不放這個鍵，不拿 `"undefined"` 之類的字串頂。
+ * 參數收成 `unknown` 欄位：上行（`UplinkResult` 收窄到 `type === 'error'` 之後）與 GET（解析來的 JSON 本體，沒有型別）
+ * 兩條路共用這一個讀法。上行那條早先要靠型別轉換才過，是 `WireErrorResponse` 掉了具名鍵（[#1166](https://github.com/DemianLi/nexus-agent/issues/1166)，已修）。
+ */
+type RejectedSource = { readonly error?: unknown; readonly message?: unknown };
+
+function rejectedOf(failure: RejectedSource) {
+  return {
+    kind: 'rejected' as const,
+    ...(typeof failure.error === 'string' ? { code: failure.error } : {}),
+    message: typeof failure.message === 'string' ? failure.message : '對方拒絕了，但沒有說明原因',
+  };
+}
+
 export function createWireClient(options: WireClientOptions): WireClient {
   const base = options.baseUrl.replace(/\/+$/, '');
   const doFetch = options.fetch ?? globalThis.fetch;
@@ -563,7 +648,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
     }
     const body = (await response.json()) as ThreadHistoryResponse;
     return body.type === 'error'
-      ? { kind: 'rejected', message: body.message }
+      ? rejectedOf(body)
       : { kind: 'ok', result: readHistory(body.result) };
   }
 
@@ -578,7 +663,9 @@ export function createWireClient(options: WireClientOptions): WireClient {
       | QueueUpdateCommand
       | SubagentSendCommand
       | SubagentInterruptCommand
-      | FeedbackCommand,
+      | FeedbackCommand
+      | ModelCommand
+      | PermissionCommand,
   ): Promise<UplinkResult> {
     // 路徑與封包各講一次 method，server 端不合就拒——照 dsh 的端點慣例
     // （`packages/api/gateway/src/index.ts:134`，`<namespace>/<method>`）。
@@ -601,11 +688,20 @@ export function createWireClient(options: WireClientOptions): WireClient {
     threadId: string,
     command: FeedbackCommand,
   ): Promise<FeedbackOutcome<T>> {
+    return sendOkCommand<T>(threadId, command, '回饋');
+  }
+
+  /** 同 {@link sendFeedback} 的拆法，給回 `{ ok, … }` 的其他命令；`label` 只用在「看不懂」的訊息裡。 */
+  async function sendOkCommand<T>(
+    threadId: string,
+    command: FeedbackCommand | ModelCommand | PermissionCommand,
+    label: string,
+  ): Promise<CommandOutcome<T>> {
     const response = await sendCommand(threadId, command.method, command);
-    if (response.type === 'error') return { kind: 'rejected', message: response.message };
+    if (response.type === 'error') return rejectedOf(response);
     const result: unknown = response.result;
     if (typeof (result as { ok?: unknown } | null)?.ok !== 'boolean') {
-      return { kind: 'rejected', message: `回饋的回應看不懂：${JSON.stringify(result)}` };
+      return { kind: 'rejected', message: `${label}的回應看不懂：${JSON.stringify(result)}` };
     }
     return { kind: 'ok', result: result as T };
   }
@@ -661,6 +757,10 @@ export function createWireClient(options: WireClientOptions): WireClient {
           input: { messages: [{ role: 'human', content: text }] },
           // 省略就不放這個 key：排隊是預設，舊的 server 也收得下。
           ...(options?.mode === undefined ? {} : { mode: options.mode }),
+          // 省略或空陣列都不放這個 key：舊的 server 也收得下。
+          ...(options?.attachments === undefined || options.attachments.length === 0
+            ? {}
+            : { attachments: options.attachments }),
         },
       });
     },
@@ -704,6 +804,59 @@ export function createWireClient(options: WireClientOptions): WireClient {
       });
     },
 
+    async modelCatalog(threadId) {
+      const command: ModelCatalogCommand = {
+        id: nextCommandId++,
+        method: 'model.catalog',
+        params: {},
+      };
+      return sendOkCommand<ModelCatalogResult>(threadId, command, '模型型錄');
+    },
+
+    async selectModel(threadId, selection) {
+      const command: ModelSelectCommand = {
+        id: nextCommandId++,
+        method: 'model.select',
+        params: selection,
+      };
+      return sendOkCommand<ModelSelectResult>(threadId, command, '模型選擇');
+    },
+
+    async permissionCatalog(threadId) {
+      const command: PermissionCatalogCommand = {
+        id: nextCommandId++,
+        method: 'permission.catalog',
+        params: {},
+      };
+      return sendOkCommand<PermissionCatalogResult>(threadId, command, '權限目錄');
+    },
+
+    async uploadFile(threadId, body, name, signal) {
+      const search =
+        name === undefined ? '' : `?${new URLSearchParams({ [UPLOAD_NAME_PARAM]: name })}`;
+      const response = await doFetch(`${base}${uploadPath(threadId)}${search}`, {
+        method: 'POST',
+        // 不是 JSON：原始位元組。這個 content-type 也不是 simple request，跨來源會發 server 從不回答的 preflight，見 `attachments.ts`。
+        headers: { 'content-type': 'application/octet-stream' },
+        body: body as NonNullable<RequestInit['body']>,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      if (!response.ok) {
+        throw new Error(`上傳被載體層擋下：${response.status} ${await response.text()}`);
+      }
+      const parsed = (await response.json()) as UploadResponse;
+      if (parsed.type === 'error') return rejectedOf(parsed);
+      const { receiptId, name: stored, bytes } = parsed.result as Partial<UploadReceipt>;
+      if (
+        typeof receiptId !== 'string' ||
+        typeof stored !== 'string' ||
+        typeof bytes !== 'number'
+      ) {
+        throw new Error('POST /threads/:id/uploads 回了不認得的收據');
+      }
+      return { kind: 'ok', receipt: { receiptId, name: stored, bytes } };
+    },
+
     async feedbackPut(threadId, params) {
       return sendFeedback<FeedbackPutResult>(threadId, {
         id: nextCommandId++,
@@ -742,7 +895,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
         method: 'slash.list',
       });
       return response.type === 'error'
-        ? { kind: 'rejected', message: response.message }
+        ? rejectedOf(response)
         : { kind: 'ok', commands: readDescriptors(response.result) };
     },
 
@@ -752,9 +905,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
         method: 'slash.run',
         params: { line },
       });
-      return response.type === 'error'
-        ? { kind: 'rejected', message: response.message }
-        : readRunResult(response.result);
+      return response.type === 'error' ? rejectedOf(response) : readRunResult(response.result);
     },
 
     async listThreads() {
@@ -768,7 +919,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       }
       const body = (await response.json()) as ThreadListResponse;
       return body.type === 'error'
-        ? { kind: 'rejected', message: body.message }
+        ? rejectedOf(body)
         : { kind: 'ok', result: readThreadList(body.result) };
     },
 
@@ -779,7 +930,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       }
       const body = (await response.json()) as ThreadSearchResponse;
       return body.type === 'error'
-        ? { kind: 'rejected', message: body.message }
+        ? rejectedOf(body)
         : { kind: 'ok', result: readThreadSearch(body.result) };
     },
 
@@ -828,7 +979,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       }
       const body = (await response.json()) as FileReferenceListResponse;
       return body.type === 'error'
-        ? { kind: 'rejected', message: body.message }
+        ? rejectedOf(body)
         : { kind: 'ok', result: readFileReferences(body.result) };
     },
 
@@ -845,7 +996,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       }
       const body = (await response.json()) as SessionReferenceListResponse;
       return body.type === 'error'
-        ? { kind: 'rejected', message: body.message }
+        ? rejectedOf(body)
         : { kind: 'ok', result: readSessionReferences(body.result) };
     },
   };

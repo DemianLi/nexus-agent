@@ -101,6 +101,51 @@ export {
 } from './deliverables.js';
 export type { CustomFrameData, CustomFrameName, CustomFramePayloads } from './custom-frame.js';
 export type {
+  ImageMediaType,
+  PromptAttachment,
+  UploadReceipt,
+  UploadResponse,
+} from './attachments.js';
+export {
+  IMAGE_MEDIA_TYPES,
+  MAX_IMAGE_BYTES,
+  MAX_IMAGES_PER_MESSAGE,
+  MODEL_DOES_NOT_SUPPORT_IMAGES,
+  UPLOAD_NAME_PARAM,
+  uploadPath,
+} from './attachments.js';
+export type {
+  ModelCatalog,
+  ModelCatalogCommand,
+  ModelCatalogModel,
+  ModelCatalogResult,
+  ModelCommand,
+  ModelMethod,
+  ModelReasoning,
+  ModelReasoningEffort,
+  ModelSelectCommand,
+  ModelSelection,
+  ModelSelectionState,
+  ModelSelectResult,
+  ModelUnavailable,
+} from './model-selection.js';
+export { isModelMethod, MODEL_METHODS } from './model-selection.js';
+export type {
+  PermissionCatalog,
+  PermissionCatalogCommand,
+  PermissionCatalogResult,
+  PermissionCommand,
+  PermissionMethod,
+  PermissionSelection,
+  PresetOption,
+} from './permission-presets.js';
+export {
+  CUSTOM_PRESET,
+  isPermissionMethod,
+  PERMISSION_METHODS,
+  PERMISSIONS_PROJECTION_KEY,
+} from './permission-presets.js';
+export type {
   DeliverableClient,
   DeliverableClientOptions,
   DeliverableOutcome,
@@ -274,6 +319,7 @@ export {
 } from './conversation.js';
 
 export type {
+  CommandOutcome,
   FeedbackOutcome,
   FileReferenceListOutcome,
   OpenEventsOptions,
@@ -284,6 +330,7 @@ export type {
   TrajectoryTurnOutcome,
   ThreadListOutcome,
   ThreadSearchOutcome,
+  UploadOutcome,
   UplinkResult,
   WireClient,
   WireClientOptions,

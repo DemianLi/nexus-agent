@@ -121,9 +121,24 @@ async function readKey(home: string): Promise<Buffer> {
   return Buffer.from(record.secret, 'base64url');
 }
 
-/** 跑一次 `--dump-config`，印出來的 YAML 讀回成條目清單。 */
-async function dumpEntries(home: string, patch: string): Promise<ConfigEntry[]> {
+/**
+ * 跑一次 `--dump-config`，印出來的 YAML 讀回成條目清單。**要跟被量的入口同一個**：serve 多疊一層專屬出貨清單
+ * （`cordis.serve.yml`，#669），header 記的是各入口自己啟動會掛的那份。
+ */
+async function dumpEntries(
+  home: string,
+  patch: string,
+  via: 'cli' | 'serve' = 'cli',
+): Promise<ConfigEntry[]> {
   const printed: string[] = [];
+  if (via === 'serve') {
+    await runServe({
+      argv: ['--dump-config', '--patch', patch, '--port', '0'],
+      log: (line) => printed.push(line),
+      env: { [HARNESS_HOME_ENV]: home },
+    });
+    return parseYaml(printed.join('\n')) as ConfigEntry[];
+  }
   await runCli({
     argv: ['--dump-config', '--patch', patch],
     env: { [HARNESS_HOME_ENV]: home },
@@ -522,7 +537,7 @@ describe('serve：寫上磁碟的 header', () => {
     expect(raw).not.toContain(CANARY);
     const header = JSON.parse(raw) as Record<string, unknown>;
     expectBuildShape(header);
-    const dumped = await dumpEntries(home, patch);
+    const dumped = await dumpEntries(home, patch, 'serve');
     expect(JSON.stringify(dumped)).toContain(CANARY);
     expect(header['plugins']).toEqual(pluginRowsOf(dumped));
     expect(header['configHash']).toBe(configHashOf(dumped, await readKey(home)));

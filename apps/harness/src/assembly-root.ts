@@ -29,7 +29,6 @@ import type {
   SessionEvent,
   SessionTelemetrySharingStatus,
 } from '@nexus/core';
-import { ECHO_TOOL_NAME } from '@nexus/plugin-echo';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
 import { composeAttachSessions } from './session-attach.js';
 import type { AttachSessions } from './session-attach.js';
@@ -63,20 +62,18 @@ import {
 } from './harness-home.js';
 import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/plugin-goal';
 import type { GoalServices } from '@nexus/plugin-goal';
-import { createWorkspaceChanges, WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
+import { WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createNexusAgent } from './agent-factory.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import type { AssemblyDrop, NexusAgentHandle } from './agent-factory.js';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
-import { createSandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
+import { CONTAINED_FILESYSTEM, sandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
 import type { CredentialService } from './credentials.js';
 import { createLiveModel } from './live-model.js';
 import { createFileReferencePlugin } from './file-references.js';
-import { ScriptedChatModel } from './scripted-model.js';
-import type { ScriptedTurn } from './scripted-model.js';
 
 /** 一次呼叫解析出來的東西。`prompt` 缺席即 REPL。 */
 export interface CliInvocation {
@@ -423,33 +420,8 @@ export function outsideWorkspace(
   return directory;
 }
 
-/**
- * 假模型的腳本：呼叫一次 echo 再回一句話。
- *
- * **它是對著出貨清單（`apps/harness/cordis.yml`）寫的。** 拿 patch 把 `echo` 那一列關掉或換掉
- * 就該一起換 `--live`——腳本裡的工具名那時多半不存在，假模型只會製造一個看不懂的失敗。
- * 腳本三輪，而第一句話就用掉兩輪（呼叫工具、拿到結果再回覆），所以假模型下的 REPL
- * 問到第三句就會用完（`ScriptedChatModel` 選擇當場失敗而不是靜默重播）；REPL 的正經
- * 用法是 `--live`。
- */
 /** 假模型腳本寫出去的那個檔。測試靠它確認檔案真的落在 `--workspace` 指的目錄底下。 */
 export const CLI_PROBE_FILE = '/cli.md';
-
-const CLI_SCRIPT: readonly ScriptedTurn[] = [
-  {
-    content: '先回聲一次，確認工具接得上。',
-    toolCalls: [{ name: ECHO_TOOL_NAME, args: { message: 'CLI 接線測試' } }],
-  },
-  {
-    // 再寫一個檔。**這一輪是給 `--workspace` 用的**：預設的虛擬 FS 底下它只是讓
-    // 「虛擬檔案系統：…」那行有東西可印，換成真實磁碟時它就是「檔案真的落在那個
-    // 目錄底下」的證據。少了它，`--workspace` 給了跟沒給在畫面上分不出來。
-    content: '再寫一個檔，確認檔案系統接得上。',
-    toolCalls: [{ name: 'write_file', args: { file_path: CLI_PROBE_FILE, content: 'CLI 寫的' } }],
-  },
-  { content: '工具回來了，這條線是通的。' },
-  { content: '假模型只會照腳本說話——要真的對話請用 --live。' },
-];
 
 /**
  * 組裝點傳給基座的那一句指引。**身分、persona 與工作目錄不在這裡**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）：
@@ -530,9 +502,8 @@ function createCliModel(
   plugins: readonly PluginEntry[],
 ): BaseChatModel {
   // **`--live` 是進 live 的唯一閘門**，不看選擇列（理由見 `model-provider.ts`）；沒帶它才由清單上的
-  // `agent-default-model` 在內建腳本與 patch 插進來的提供者之間選（#670）。
-  if (!live)
-    return resolveDefaultModel(plugins, () => new ScriptedChatModel({ turns: CLI_SCRIPT }));
+  // `agent-default-model` 在清單上的提供者之間選（#670）：出貨值指的是清單上那一列腳本提供者 `cli-script`。
+  if (!live) return resolveDefaultModel(plugins);
   return createLiveModel(liveModel, undefined, credentials);
 }
 
@@ -600,11 +571,6 @@ export interface CreateCliAgentSession {
  */
 export async function createCliAgent(
   invocation: Pick<CliInvocation, 'live' | 'workspace' | 'sandbox' | 'recursionLimit'> & {
-    /**
-     * 記每一輪改了哪些檔（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）。**只有 serve 開**：dsh 由
-     * web-app bundle 掛，CLI 沒有人讀摘要。沒給 `--workspace` 時開了也不掛——那正是 dsh 的「不合格」。
-     */
-    readonly workspaceChanges?: boolean;
     /**
      * 真實供應商的五個連線值（[#545](https://github.com/DemianLi/nexus-agent/issues/545)）。
      * 兩條產品路徑都傳：CLI 與 serve 在起動期從同一份清單解一次（serve 的這個函式一條 thread
@@ -701,7 +667,10 @@ export async function createCliAgent(
   telemetrySharing: SessionTelemetrySharingStatus | undefined;
   /** 評分與評語的規則。serve 那條交給 wire-handler；CLI 那條只用得到 `/feedback`（走命令面）。 */
   feedback: FeedbackService | undefined;
-  /** 每一輪的改動摘要，serve 交給 wire-handler 的兩條路由。沒開或沒有工作區時是 `undefined`。 */
+  /**
+   * 每一輪的改動摘要，serve 交給 wire-handler 的兩條路由。**沒有 `workspace-changes` 那一列（CLI 不載 serve 專屬層、或被停用）
+   * 或沒有工作區時是 `undefined`**——兩條路由對這三種成因的反應相同。
+   */
   workspaceChanges: WorkspaceChanges | undefined;
   /**
    * 這一次組裝的 goal 域，**沒掛時是 `undefined`**——出貨清單上有 goal，但一份 patch
@@ -778,6 +747,15 @@ export async function createCliAgent(
   // 同一格——一條 thread 的 `/sandbox read-only` 收緊到另一條 thread 的檔案工具上，
   // 而那是靜默的（見 `sandbox-mode.ts` 的模組註解）。
   const workspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
+  // **有圍堵而 `sandbox-policy` 那一列沒掛：起不來**（#669，dsh 的方向）。fence 還在擋，模型卻不知道、也請不到升級，
+  // 看起來像關掉了護欄其實護欄還在。不加進 `PROTECTED_ENTRY_NAMES`：沒有圍堵時關掉它是合法的（只剩那一句政策）。
+  if (workspaceRoot !== undefined && !startupEntryMounted(plugins, sandboxPolicyPlugin)) {
+    throw new Error(
+      '有 --workspace（檔案系統有圍堵），但清單上的 sandbox-policy 那一列沒有掛（不存在或被停用）。' +
+        '它負責把檔案政策講給模型、記進日誌、提供 /sandbox 與升級；關掉它而 fence 照舊在擋，模型不知道自己被擋、也請不到升級。' +
+        '要嘛把那一列留著，要嘛不要給 --workspace。',
+    );
+  }
   const sandboxMode = new SandboxModeController(invocation.sandbox ?? 'workspace-write');
   const backend =
     workspaceRoot === undefined
@@ -789,11 +767,6 @@ export async function createCliAgent(
           mode: sandboxMode.source,
           grants: sandboxMode,
         });
-  // **一條 thread 一份**：服務答的是這一次組裝的 root，所以條目建在這裡，同上面的控制器。
-  const workspaceChanges =
-    invocation.workspaceChanges === true && workspaceRoot !== undefined
-      ? createWorkspaceChanges({ root: workspaceRoot })
-      : undefined;
   const {
     agent,
     commands,
@@ -819,18 +792,22 @@ export async function createCliAgent(
       // `apply` 當下就讀，排後面它們會拿不到。載入是一趟到底的，不會回頭等。
       createHostServicesPlugin({
         channel,
+        // **有沒有圍堵是一格獨立的事實，不是控制器在不在**（#669）：對應 dsh 的 `ctx.fs.sandboxMode`。`sandbox-policy` 那一列據它
+        // 分岔——有圍堵就掛控制器、`/sandbox`、升級；沒有就只貢獻那一句不宣稱圍堵的政策。兩個服務一起交，缺一個
+        // 那一列載入當場拋（有圍堵卻缺控制器）。
         ...(workspaceRoot === undefined
           ? {}
-          : { sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot } }),
+          : {
+              // **工作區根也是一格 host 服務**（#669 第 4 步）：`workspace-changes` 等要根的列在 `apply` 當下讀它，沒有就不合格
+              // （照 dsh 的 `eligible`）；以前是組裝點把根塞進那一列的 Config，那一列就進不了出貨清單。
+              workspaceRoot,
+              fsContainment: CONTAINED_FILESYSTEM,
+              sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot },
+            }),
       }),
       ...plugins,
-      // **有圍堵才講**。沒有 `--workspace` 的組裝一格圍堵都沒有，那時候講「目前的檔案
-      // 政策是 workspace-write」是對模型說謊——它會以為根外被擋著，而整道 fence 不在
-      // 路徑上。理由與 dsh 的 `ctx.fs.sandboxMode === undefined` 就不貢獻同一條。
-      ...(workspaceRoot === undefined ? [] : [createSandboxPolicyPlugin()]),
       // **`@` 引用那一句跟圍堵同一個條件**（#651）：沒有工作區時不提供列檔，使用者插不出 `@` 路徑，檔案工具讀的也不是磁碟。
       ...(workspaceRoot === undefined ? [] : [createFileReferencePlugin()]),
-      ...(workspaceChanges === undefined ? [] : [workspaceChanges]),
     ],
     ...(backend !== undefined && { backend }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),

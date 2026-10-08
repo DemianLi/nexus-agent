@@ -108,6 +108,7 @@ export {
   SANDBOX_MODES,
   virtualPathOf,
   WORKSPACE_CAPABILITY,
+  WORKSPACE_ROOT_SERVICE,
 } from './sandbox.js';
 
 export type { NamedEntry, DuplicateErrorFactory } from './entries.js';

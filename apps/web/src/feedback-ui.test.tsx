@@ -15,6 +15,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { App } from '@/App';
 import { TRACE_REPLY_UNPLACED_TEXT } from '@/components/trace/panel';
 import { FEEDBACK_COPY } from '@/lib/feedback';
+import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
 
 /**
  * 評分與 `/feedback` 的畫面（[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。
@@ -106,6 +107,7 @@ function fakeClient(
   const records: FeedbackRecordCommand['params'][] = [];
   const slashed: string[] = [];
   const client: WireClient = {
+    ...UNWIRED_WIRE_CONTRACT,
     // 列檔（#651）沒有接。
     fileReferences: async () => ({ kind: 'rejected', message: '這一檔沒有接列檔' }),
     // 列會話候選（#713）沒有接。

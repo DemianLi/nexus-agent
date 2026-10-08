@@ -381,12 +381,34 @@ import type { SessionEvent } from './session-log.js';
  *   它們不進模型、不左右任何折疊，一台 32 的舊 runtime 讀回這份日誌時略過它們，畫面與新 runtime 只差側欄那一格。**沒有這兩顆
  *   就是沒記**（這一版以前寫的），讀的人標「—」，不是「沒有人被問過」。同批：核准拒絕的 `tool/result.error` 多了
  *   `APPROVAL_REJECTED_BY_USER` 等碼（`tool-events.ts`），`error` 本來就是選填，舊讀方照收。
+ * - **`session/resumed`**（[#1138](https://github.com/DemianLi/nexus-agent/issues/1138)）：續接時實際載入的建置版本、插件清單與設定雜湊
+ *   （形狀同 header 的那三格）。新增的**種類**、帶 `ignorable: true`。**不升**：判準同上——它不進模型、不左右任何折疊，
+ *   一台 32 的舊 runtime 讀回這份日誌時略過它，只少了「後來是哪一版接手的」。**沒有這一顆就是沒記**（這一版以前續接的），
+ *   讀的人拿 header 那份當答案，並知道它只是建立當下的。header 本身不動。
  * - **`turn/failed.error`**（[#434](https://github.com/DemianLi/nexus-agent/issues/434)）：`turn/failed` 多一個選填的 `error`
  *   （`{ message, code, status? }`，失敗的分類）。**不升**：判準同上——一台 32 的舊 runtime 讀回這份日誌，`turn/failed` 的每個讀者
  *   （goal 續行、歷史、統計、遙測…）只認「有這顆事件」或讀 `message`，多一個不認得的欄位照舊投影。**沒有這一格就是沒記**
  *   （這一版以前寫的），讀的人標「—」，不是 `UNKNOWN`；`UNKNOWN` 是「記了、而且不是供應商的錯」。
+ *
+ * ## 33：續接把當掉那一輪的收尾寫回日誌（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）
+ *
+ * 續接時（{@link ./interrupted-turn.ts | resumeClosingInterruptedTurn}）日誌尾巴停在一輪開著，就在 `session/end-seed` **之前**補寫：
+ * 沒配到結果的呼叫各一顆錯誤 `tool/result`、開著的 `model/start` 各一顆 `model/end {outcome:'error'}`、最後一顆 `turn/end {reason:{kind:'interrupted'}}`。
+ * 照 dsh 的 `interruptedTurnClosers`（見該檔檔頭）。
+ *
+ * **升的理由是已有種類的語意變了，不是新增了種類**（判準見 32 的「什麼時候要升版」）：
+ *
+ * - `tool/result` 現在可以**沒有前面的 `tool/call`**：回覆裡要了、行程在記 `tool/call` 之前死掉的呼叫，補的結果帶 `TOOL_NOT_STARTED`
+ *   （dsh 的不變量同樣明文放行）。一台 32 的舊 runtime 的不變量會把它報成違規。
+ * - `turn/end` 之後才接 `session/end-seed` 成了常態；舊 runtime 重建對話時在 end-seed 處把「開著的呼叫」補成結果不明，
+ *   讀到新檔時那些呼叫已有真的結果，它得靠對得上才不重複補——這個對法左右模型看到的歷史，屬於「會左右重建」那一類。
+ *
+ * **讀舊檔**：32 以前的檔尾巴沒有補結，照舊靠重建當下在記憶體補（`closer()`）；新程式碼續接它們時會把補結寫在 end-seed **後面**
+ * （dsh 的 `repair.ts` 掃描遇到 end-seed 不重設，所以這個形狀是它本來就允許的），之後再續接不會重複補（冪等）。
+ * 數字影響：被當掉收尾的輪現在在檔上是 `interrupted` 而不是「開著」，`session-stats`、`eval/session-scan`、`eval/session-draft` 與 web 歷史
+ * 對「當掉的輪」的計數會從「沒收尾」移到「被中斷」，見 PR 內文。
  */
-export const SESSION_LOG_FORMAT_VERSION = 32;
+export const SESSION_LOG_FORMAT_VERSION = 33;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

@@ -28,7 +28,7 @@ import { StateBackend } from 'deepagents';
 import type { FileData } from 'deepagents';
 import { z } from 'zod';
 import { BrowserAuth } from './browser-auth.js';
-import { loadPluginConfig } from './plugin-config.js';
+import { loadPluginConfig, serveShippedConfigPath } from './plugin-config.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedModelPlugin } from './settings/scripted-model.js';
 import type { AttachSessions } from './session-attach.js';
@@ -67,6 +67,43 @@ export function shippedPlugins(): Promise<readonly PluginEntry[]> {
 }
 
 /**
+ * **serve 的**出貨清單：出貨那一層加上 serve 專屬層（`cordis.serve.yml`，#669 第 4 步），跟 `serve` 零設定時組出來的那一份相同。
+ * 要測「serve 才有的列」（每一輪的改動紀錄）用這一份；CLI 的測試用 {@link shippedPlugins}。同樣只讀出貨層、不疊 patch，同樣一列都不能掉。
+ *
+ * @returns serve 的出貨清單。
+ */
+let shippedServe: Promise<readonly PluginEntry[]> | undefined;
+export function shippedServePlugins(): Promise<readonly PluginEntry[]> {
+  shippedServe ??= loadPluginConfig({ shippedLayers: [serveShippedConfigPath()] }).then(
+    ({ plugins, dropped, ignoredConfig }) => {
+      const problems = [
+        ...dropped.map((drop) => drop.message),
+        ...ignoredConfig.map((row) => `${row.id} 寫了沒有作用的 config`),
+      ];
+      if (problems.length > 0) throw new Error(`serve 出貨清單有列沒掛上：${problems.join('；')}`);
+      return plugins;
+    },
+  );
+  return shippedServe;
+}
+
+/**
+ * 出貨清單上那一列假模型（id `cli-script`，腳本是它的 config，#670）。
+ *
+ * **給自己寫清單的測試**：直接餵 `createCliAgent` 一份手寫的條目（不是出貨清單）時，清單上沒有任何模型來源，
+ * `agent-default-model` 的預設值指的那一列不存在，組裝當場拋——以前這裡會悄悄退回程式碼裡的腳本，現在沒有那條退路。
+ * 要假模型就把這一列放進自己的清單，拿到的就是產品出貨的那份腳本。
+ *
+ * @returns 出貨的 `cli-script` 條目。
+ * @throws {Error} 出貨清單上找不到那一列——改了名，這裡要跟著改。
+ */
+export async function shippedModelRow(): Promise<PluginEntry> {
+  const row = (await shippedPlugins()).find((entry) => entry.id === 'cli-script');
+  if (row === undefined) throw new Error('出貨清單上沒有 cli-script 那一列');
+  return row;
+}
+
+/**
  * 在出貨清單上**換一顆腳本模型**：插一列腳本提供者（`#settings/scripted-model`，腳本當 config）、把
  * `agent-default-model` 指過去——同 dsh 的 headless e2e（`source-tool.built.e2e.ts:36-42`）與
  * `serve-scripted-provider.test.ts` 那份 patch 的形狀，只是這裡直接改條目、不經檔案。
@@ -78,7 +115,7 @@ export function shippedPlugins(): Promise<readonly PluginEntry[]> {
  * @param plugins - 底下那份清單，通常是 {@link shippedPlugins}。
  * @param turns - 腳本。
  * @returns 換好模型的清單，原清單不動。
- * @throws {Error} 清單上找不到選擇列——出貨清單改了名，這裡要跟著改，不要靜靜退回內建腳本。
+ * @throws {Error} 清單上找不到選擇列——出貨清單改了名，這裡要跟著改，不要靜靜退回出貨的腳本。
  */
 export function withScriptedModel(
   plugins: readonly PluginEntry[],

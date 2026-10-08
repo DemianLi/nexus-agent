@@ -336,8 +336,11 @@ export HTTP_PROXY=http://127.0.0.1:7890
 
 零設定的 CLI 與 serve 掛哪些 plugin，由**出貨的 `apps/harness/cordis.yml`** 決定
 （[#454](https://github.com/DemianLi/nexus-agent/issues/454)）。那份檔案進版控，是「這個
-agent 由什麼組成」的來源。例外是組裝點在程式碼裡掛的三顆（host-services，以及有 `--workspace` 才掛的
-sandbox-policy 與 workspace-changes），它們不在清單上，patch 指不到。
+agent 由什麼組成」的來源。例外是組裝點在程式碼裡掛的一顆（host-services）。**`serve` 另有一層專屬的出貨清單**
+（`apps/harness/cordis.serve.yml`），疊在上面那份之後，放 serve 才有的列（今天是 `workspace-changes`：每一輪改了哪些檔；
+沒給 `--workspace` 它什麼都不做）；CLI 不載那一層。 `sandbox-policy` 是清單上的一列：有 `--workspace` 時
+它是檔案政策的全部（`/sandbox`、升級、`sandbox/mode`），**這時關掉它啟動會失敗**（fence 還在擋，模型卻不知道）；沒有
+`--workspace` 時它只講一句不宣稱圍堵的政策，關掉合法。
 
 要改它不是去編輯那份檔案，而是疊一層自己的 patch。**三層，後面的蓋前面的**：
 
@@ -389,7 +392,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   設定驗不過、模組載不起來、外掛掛上去時拋錯的那一列掉了：啟動時印一段「警告：N 列沒有掛上」指名它與原因，
   其餘照樣起來，掉了的列算沒掛（跟寫 `disabled: true` 一樣）。**必掛的只有 `browser-session` 與 `system-prompt`**（後者掉了，模型拿到的提示詞就不是部署方寫的那份），它們掉了整個起不來，訊息連
   其他掉了的列一起列——CLI 也一樣，因為兩個入口共用這份清單；帶 `--live` 時 `live-model` 掉了也整個起不來，
-  不會退回預設那個對外的端點。啟動程式自己加的那幾顆外掛（沙箱圍堵與工作區改動紀錄那些，不在清單上）掛上去時拋錯，
+  不會退回預設那個對外的端點。啟動程式自己加的外掛（交協作者的 host-services，不在清單上）掛上去時拋錯，
   照舊整個起不來。
   **警告只印在啟動時**：CLI 印到標準錯誤，`serve` 印到伺服器日誌、在印出網址之前。`serve` 啟動時掉了的列，
   之後每條對話都直接算沒掛，不再重試，到重啟為止；啟動時沒掉、某一條對話組裝時才掉的列，只在那條對話裡不掛，
@@ -470,7 +473,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數） | 有（三格） | **關不掉** |
 | `tool-text` | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截） | 有（一格） | **關不掉** |
 | `live-model` | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理） | 有（五格） | **關不掉** |
-| `agent-default-model` | 沒帶 `--live` 時用哪個模型提供者（出貨值 `cli-script` 是內建的腳本） | 有（一格） | **關不掉** |
+| `agent-default-model` | 沒帶 `--live` 時用哪個模型提供者（出貨值 `cli-script` 是清單上的腳本提供者那一列） | 有（一格） | **關不掉** |
 | `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
 | `agent-loop` | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆 | 有（一格） | **關不掉** |
 
@@ -491,7 +494,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   另建一顆標題用的（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
 
 **換模型提供者**（[#670](https://github.com/DemianLi/nexus-agent/issues/670)，照 dsh 的 `agent-default-model`）：沒帶 `--live`
-時模型由 `agent-default-model` 那一列的 `provider` 選。出貨值 `cli-script` 是程式碼裡內建的腳本；要換就在 patch 裡
+時模型由 `agent-default-model` 那一列的 `provider` 選。出貨值 `cli-script` 是 `cordis.yml` 上的一列腳本提供者（`#settings/scripted-model`，假模型的預設腳本就是它的 `config.turns`，`--dump-config` 看得到）；要換就在 patch 裡
 `insert` 一列提供者（目前有 `#settings/scripted-model`，腳本當 `config.turns`），再把那一列的 `provider` 寫成提供者的 `id`。
 **`--live` 不看這一列**——它是進 live 的唯一閘門，因為 `.env` 與代理在載入清單之前就依它處理好了。指到的 id 找不到、
 被停用、或那一列不是提供者，啟動時當場拋。這是給測試與嵌入方用的接縫，不是換真實供應商的辦法（那是 `live-model`）。
@@ -691,7 +694,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 pnpm --filter @nexus/harness run cli -- --dump-config
 ```
 
-`serve` 也收同一個旗標。它印出**啟動會掛的那份清單**（不含上面說的那三顆由程式碼掛的），而且一個 plugin 都不載、不開
+`serve` 也收同一個旗標。它印出**啟動會掛的那份清單**（不含上面說的那顆由程式碼掛的；`serve` 的包含專屬那一層），而且一個 plugin 都不載、不開
 server、不綁 port：
 
 ```yaml

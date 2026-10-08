@@ -1,5 +1,8 @@
 import type {
   Event,
+  ModelCatalogResult,
+  ModelSelectResult,
+  ModelSelection,
   SlashDescriptor,
   SessionReferenceCandidate,
   SlashRunOutcome,
@@ -17,6 +20,7 @@ import {
   GOAL,
   MODEL_USAGE,
   PLAN_MODE,
+  PROJECTION,
   SESSION_STATS,
   SUBAGENT_STATUS,
   TITLE,
@@ -43,12 +47,13 @@ import {
 } from '@/App';
 import { NO_DECISION_REASON } from '@/components/approval-card';
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/sidebar/thread-list';
-import { STOPPED_QUESTION_TEXT, WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
+import { ABORTED_BEFORE_DISPATCH_CODE, STOPPED_QUESTION_TEXT } from '@/lib/question-view';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/lib/steer-view';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
 import { fakeDownlink } from '@/test/downlink';
+import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
 
 /**
  * 一份活在記憶體裡的 `Storage`。
@@ -217,6 +222,7 @@ function fakeClient(
   const cancels: string[] = [];
   const downlink = fakeDownlink();
   const client: WireClient = {
+    ...UNWIRED_WIRE_CONTRACT,
     ...UNWIRED_FILE_REFERENCES,
     ...SILENT_THREAD_FEED,
     ...UNWIRED_THREAD_SEARCH,
@@ -269,6 +275,26 @@ function approvalFrame(
 }
 
 describe('對話介面', () => {
+  it('伺服器不收附件時沒有加入鈕，貼上檔案照瀏覽器本來的行為（#733）', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    render(<App client={client} />);
+
+    const prompt = await screen.findByLabelText('要說的話');
+    expect(screen.queryByRole('button', { name: '加入附件' })).toBeNull();
+    const proceeded = fireEvent.paste(prompt, {
+      clipboardData: {
+        files: [new File(['x'], 'a.png', { type: 'image/png' })],
+        types: ['Files'],
+        getData: () => '',
+      },
+    });
+    expect(proceeded).toBe(true);
+    expect(screen.queryByTestId('draft-attachment')).toBeNull();
+  });
+
   it('把折出來的訊息、工具與子代理歸屬畫出來', async () => {
     seq = 0;
     const { client } = fakeClient([
@@ -637,6 +663,7 @@ describe('對話介面', () => {
 
   it('連不上就說連不上，不是一片空白', async () => {
     const client: WireClient = {
+      ...UNWIRED_WIRE_CONTRACT,
       ...UNWIRED_FILE_REFERENCES,
       ...SILENT_THREAD_FEED,
       ...UNWIRED_THREAD_SEARCH,
@@ -1014,7 +1041,7 @@ describe('計劃模式標籤（#900）', () => {
   beforeEach(stubCmdkLayout);
 
   const planFrame = (downlink: ReturnType<typeof fakeClient>['downlink'], active: boolean): Event =>
-    downlink.pushedFrame('custom', 'plan', { name: PLAN_MODE, payload: { active } });
+    downlink.customFrame(PLAN_MODE, { active });
 
   const chip = () => screen.queryByRole('button', { name: '退出計劃模式' });
 
@@ -1124,7 +1151,7 @@ describe('目標列（#945）', () => {
   const goalFrame = (
     downlink: ReturnType<typeof fakeClient>['downlink'],
     goal: WireGoal | null,
-  ): Event => downlink.pushedFrame('custom', 'goal', { name: GOAL, payload: { goal } });
+  ): Event => downlink.customFrame(GOAL, { goal });
   const bar = () => screen.queryByTestId('goal-bar');
 
   async function mounted() {
@@ -1189,7 +1216,7 @@ describe('目標列（#945）', () => {
     const { downlink, opened } = await mounted();
     downlink.push(opened[0]!, [
       goalFrame(downlink, wireGoal()),
-      downlink.pushedFrame('custom', 'plan', { name: PLAN_MODE, payload: { active: true } }),
+      downlink.customFrame(PLAN_MODE, { active: true }),
     ]);
     await waitFor(() => expect(bar()).toBeTruthy());
     const chip = await screen.findByTestId('plan-chip');
@@ -1452,6 +1479,9 @@ describe('提問面板', () => {
   });
 });
 
+/** pump 收回時卡上的那一句（紅字是給模型看的英文）；碼才是 web 比的東西。 */
+const WITHDRAWN_TEXT = 'Error: tool call aborted before dispatch';
+
 /** 停在提問時按了停止：這一輪的 frame 照 pump 收回時發的順序（`ThreadPump.#withdraw`）。 */
 function stoppedQuestionFrames(): Event[] {
   const input = JSON.stringify({
@@ -1473,7 +1503,8 @@ function stoppedQuestionFrames(): Event[] {
       event: 'tool-finished',
       tool_call_id: 'ask-1',
       failed: true,
-      message: `Error: ${WITHDRAWN_TOOL_REASON}`,
+      message: WITHDRAWN_TEXT,
+      code: ABORTED_BEFORE_DISPATCH_CODE,
     }),
     frame('lifecycle', [], { event: 'completed', graph_name: 'root', aborted: true }),
   ];
@@ -1493,7 +1524,7 @@ describe('停在提問時停止之後', () => {
     expect(within(card).getByText('哪一天？')).toBeTruthy();
     expect(within(card).getByText('週一：早上')).toBeTruthy();
     // 那句紅字是給模型看的英文；停止不是失敗（#276）。
-    expect(within(card).queryByText(`Error: ${WITHDRAWN_TOOL_REASON}`)).toBeNull();
+    expect(within(card).queryByText(WITHDRAWN_TEXT)).toBeNull();
     expect(within(card).queryByText('失敗')).toBeNull();
   });
 
@@ -3306,6 +3337,281 @@ describe('背景子代理的輸入框接線（#869）', () => {
     expect(section.textContent).not.toContain('Your parent agent id');
     expect(subagentHistory).toHaveBeenCalledExactlyOnceWith(fake.opened[0], 'bg-1', {
       maxMessages: 40,
+    });
+  });
+});
+
+describe('模型座（#723）', () => {
+  beforeEach(stubCmdkLayout);
+
+  const CATALOG: ModelCatalogResult = {
+    ok: true,
+    value: {
+      catalog: {
+        default: { modelId: 'model-a' },
+        models: [
+          { id: 'model-a', name: 'Alpha' },
+          {
+            id: 'model-b',
+            name: 'Beta',
+            reasoning: {
+              efforts: [
+                { id: 'low', name: '低' },
+                { id: 'high', name: '高' },
+              ],
+              defaultEffort: 'low',
+            },
+          },
+        ],
+      },
+      selection: { lastUsed: null, next: null },
+    },
+  };
+
+  /** 接上模型型錄的假 client；`select` 記下每一次選擇，回 `result`。 */
+  function withModels(
+    result: ModelSelectResult | ((selection: ModelSelection) => ModelSelectResult) = (
+      selection,
+    ) => ({
+      ok: true,
+      value: { selected: selection },
+    }),
+    catalog: ModelCatalogResult = CATALOG,
+  ) {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const selected: ModelSelection[] = [];
+    const client: WireClient = {
+      ...fake.client,
+      modelCatalog: async () => ({ kind: 'ok', result: catalog }),
+      selectModel: async (_threadId, selection) => {
+        selected.push(selection);
+        return { kind: 'ok', result: typeof result === 'function' ? result(selection) : result };
+      },
+    };
+    return { ...fake, client, selected };
+  }
+
+  const seat = () => screen.queryByTestId('model-seat');
+  const typeLine = (value: string) =>
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value } });
+  const submit = () => fireEvent.keyDown(screen.getByLabelText('要說的話'), { key: 'Enter' });
+  const pickOption = async (name: string) => {
+    const list = await screen.findByRole('listbox');
+    fireEvent.click(within(list).getByText(name));
+  };
+
+  it.each([
+    ['not_supported', { kind: 'rejected', code: 'not_supported', message: '還沒實作' }],
+    ['其他拒絕', { kind: 'rejected', message: '這條線收不了' }],
+  ] as const)('伺服器回 %s 時沒有模型座、`/` 選單也沒有 /model', async (_case, outcome) => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const modelCatalog = vi.fn(async () => outcome);
+    render(<App client={{ ...fake.client, modelCatalog }} />);
+
+    await waitFor(() => expect(modelCatalog).toHaveBeenCalled());
+    await screen.findByPlaceholderText('說點什麼…');
+    expect(seat()).toBeNull();
+    typeLine('/');
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+    // 沒有 /model 時，打 /model 就是一般的斜線命令：走伺服器，不被客戶端攔。
+    typeLine('/model');
+    submit();
+    await waitFor(() => expect(fake.slashed).toEqual(['/model']));
+  });
+
+  it('讀型錄時拋錯也不畫模型座', async () => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const modelCatalog = vi.fn(async () => {
+      throw new Error('fetch failed');
+    });
+    render(<App client={{ ...fake.client, modelCatalog }} />);
+    await waitFor(() => expect(modelCatalog).toHaveBeenCalled());
+    await screen.findByPlaceholderText('說點什麼…');
+    expect(seat()).toBeNull();
+  });
+
+  it('座位寫目前的模型（無障礙名稱含目前的值），沒選過就是部署預設', async () => {
+    const { client } = withModels();
+    render(<App client={client} />);
+
+    const button = await screen.findByTestId('model-seat');
+    expect(button.getAttribute('aria-label')).toBe('模型：Alpha，點開切換');
+    expect(button.textContent).toBe('Alpha');
+  });
+
+  it('點開選另一顆：送 { modelId }，成功後座位換成新的', async () => {
+    const { client, selected } = withModels();
+    render(<App client={client} />);
+
+    fireEvent.click(await screen.findByTestId('model-seat'));
+    await pickOption('Beta');
+
+    await waitFor(() => expect(selected).toEqual([{ modelId: 'model-b' }]));
+    await waitFor(() =>
+      expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toBe(
+        '模型：Beta · 低，點開切換',
+      ),
+    );
+    expect(screen.queryByRole('listbox')).toBeNull();
+  });
+
+  it('有宣告推理強度的模型多一段強度；沒宣告的沒有', async () => {
+    const { client, selected } = withModels();
+    render(<App client={client} />);
+
+    fireEvent.click(await screen.findByTestId('model-seat'));
+    const alphaList = await screen.findByRole('listbox');
+    expect(within(alphaList).queryByText('推理強度')).toBeNull();
+    fireEvent.click(within(alphaList).getByText('Beta'));
+    await waitFor(() => expect(selected).toHaveLength(1));
+
+    fireEvent.click(await screen.findByTestId('model-seat'));
+    const betaList = await screen.findByRole('listbox');
+    expect(within(betaList).getByText('推理強度')).toBeTruthy();
+    fireEvent.click(within(betaList).getByText('高'));
+    await waitFor(() =>
+      expect(selected).toEqual([
+        { modelId: 'model-b' },
+        { modelId: 'model-b', reasoningEffort: 'high' },
+      ]),
+    );
+    await waitFor(() =>
+      expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toContain('Beta · 高'),
+    );
+  });
+
+  it('選不上（model_unavailable）：說出來，座位不變', async () => {
+    const { client, selected } = withModels({
+      ok: false,
+      error: { code: 'model_unavailable', modelId: 'model-b' },
+    });
+    render(<App client={client} />);
+
+    fireEvent.click(await screen.findByTestId('model-seat'));
+    await pickOption('Beta');
+
+    await waitFor(() => expect(selected).toHaveLength(1));
+    expect(await screen.findByText(/這顆模型現在選不了/u)).toBeTruthy();
+    expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toBe(
+      '模型：Alpha，點開切換',
+    );
+  });
+
+  it('伺服器推來的投影（別的分頁選的）蓋過先前的選擇', async () => {
+    const { client, downlink, opened } = withModels();
+    render(<App client={client} />);
+    await screen.findByTestId('model-seat');
+
+    downlink.push(opened[0]!, [
+      downlink.customFrame(PROJECTION, {
+        key: 'model-selection',
+        version: 1,
+        view: {
+          lastUsed: { modelId: 'model-a' },
+          next: { modelId: 'model-b', reasoningEffort: 'high' },
+        },
+      }),
+    ]);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toBe(
+        '模型：Beta · 高，點開切換',
+      ),
+    );
+  });
+
+  it('自己剛選的先頂著；投影之後再推來的以伺服器為準', async () => {
+    const { client, downlink, opened, selected } = withModels();
+    render(<App client={client} />);
+
+    fireEvent.click(await screen.findByTestId('model-seat'));
+    await pickOption('Beta');
+    await waitFor(() => expect(selected).toHaveLength(1));
+    await waitFor(() =>
+      expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toContain('Beta'),
+    );
+
+    // 別的分頁把它改回 Alpha：伺服器講的比這個分頁記得的新。
+    downlink.push(opened[0]!, [
+      downlink.customFrame(PROJECTION, {
+        key: 'model-selection',
+        version: 1,
+        view: { lastUsed: { modelId: 'model-b' }, next: { modelId: 'model-a' } },
+      }),
+    ]);
+    await waitFor(() =>
+      expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toBe(
+        '模型：Alpha，點開切換',
+      ),
+    );
+  });
+
+  describe('/model', () => {
+    it('`/` 選單列出 /model；選它打開座位並清掉那一行', async () => {
+      const { client } = withModels();
+      render(<App client={client} />);
+      await screen.findByTestId('model-seat');
+
+      typeLine('/mod');
+      await pickOption('/model');
+
+      await screen.findByRole('dialog', { name: '選模型' });
+      expect((screen.getByLabelText('要說的話') as HTMLTextAreaElement).value).toBe('');
+    });
+
+    it('`/model Beta high` 直接換，不送給模型、不進佇列', async () => {
+      const { client, selected, sent, slashed } = withModels();
+      render(<App client={client} />);
+      await screen.findByTestId('model-seat');
+
+      typeLine('/model Beta high');
+      submit();
+
+      await waitFor(() =>
+        expect(selected).toEqual([{ modelId: 'model-b', reasoningEffort: 'high' }]),
+      );
+      expect((screen.getByLabelText('要說的話') as HTMLTextAreaElement).value).toBe('');
+      expect(sent).toEqual([]);
+      expect(slashed).toEqual([]);
+    });
+
+    it('找不到那顆：說出來，那一行留在草稿裡，不選', async () => {
+      const { client, selected } = withModels();
+      render(<App client={client} />);
+      await screen.findByTestId('model-seat');
+
+      typeLine('/model nope');
+      submit();
+
+      expect(await screen.findByText('型錄上找不到「nope」。')).toBeTruthy();
+      expect((screen.getByLabelText('要說的話') as HTMLTextAreaElement).value).toBe('/model nope');
+      expect(selected).toEqual([]);
+    });
+
+    it('一輪還在跑時也能換（從下一步生效）', async () => {
+      seq = 0;
+      const running = fakeClient([
+        frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ]);
+      const selected: ModelSelection[] = [];
+      const client: WireClient = {
+        ...running.client,
+        modelCatalog: async () => ({ kind: 'ok', result: CATALOG }),
+        selectModel: async (_threadId, selection) => {
+          selected.push(selection);
+          return { kind: 'ok', result: { ok: true, value: { selected: selection } } };
+        },
+      };
+      render(<App client={client} />);
+      await screen.findByTestId('model-seat');
+      await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+
+      typeLine('/model beta');
+      submit();
+
+      await waitFor(() => expect(selected).toEqual([{ modelId: 'model-b' }]));
     });
   });
 });

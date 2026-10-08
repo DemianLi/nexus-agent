@@ -23,4 +23,14 @@ describe('registry 檔的改動還在', () => {
     };
     expect({ ...pkg.dependencies, ...pkg.devDependencies }).not.toHaveProperty('next-themes');
   });
+
+  test('attachment 不用我們沒有的工具類，字級走階梯（#733）', () => {
+    const source = code(read('./attachment.tsx'));
+    // `scrollbar-none`、`scroll-fade-x`、`shimmer`：registry 的 CSS 才有，我們沒有——寫了不會報錯，只是靜靜沒有樣式。
+    expect(source).not.toMatch(/scrollbar-none|scroll-fade-x/);
+    expect(source).not.toMatch(/(?<![-\w])shimmer/);
+    expect(source).not.toMatch(/\btext-(xs|sm|base|lg)\b/);
+    expect(source).toContain('text-shimmer');
+    expect(source).toContain("from '@/lib/utils'");
+  });
 });

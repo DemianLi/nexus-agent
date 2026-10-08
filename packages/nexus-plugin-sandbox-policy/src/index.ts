@@ -48,13 +48,28 @@
  * 給人看的 `/sandbox` 輸出照舊報主機路徑：命令不進模型（`@nexus/core` 的 `commands.ts`），
  * 而人要的正是磁碟上的位址。
  *
- * ## 這個 plugin 只在真的有圍堵時才掛
+ * ## 這個 plugin 是出貨清單上的一列；「有沒有圍堵」是組裝點另外交的一格事實
  *
- * dsh 的 `ctx.fs.sandboxMode` 在沒掛圍堵 backend 時是 `undefined`，於是升級欄位不宣告、
- * 政策段落也不貢獻。我們這側對應的事實是 `--workspace`：沒給就沒有
- * `ContainedFilesystemBackend`，檔案跑在基座的 `StateBackend` 裡，**一格圍堵都沒有**。
- * 那種組裝底下講「目前的檔案政策：workspace-write」是**對模型說謊**——它會以為根外被擋著，
- * 而其實整道 fence 不在路徑上。所以掛不掛這個 plugin 由組裝點判，不是由這個檔案判。
+ * [#669](https://github.com/DemianLi/nexus-agent/issues/669) 之前，組裝點在程式碼裡判「有 `--workspace` 才掛」。現在它是
+ * `apps/harness/cordis.yml` 的一列（`sandbox-policy`），掛不掛不再由組裝點的條件判，**分支搬進這個 plugin**，照 dsh：
+ *
+ * - **政策段落無條件貢獻**（dsh `packages/sandbox/sandbox-policy/src/index.ts:141-150`，`477b4f4`），措辭刻意不宣稱掛了哪些能力
+ *   （同檔 `:41`）。**所以我們那句話改成不宣稱圍堵**——以前說「改不動任何檔案」「工作區根之下的變更直接放行」，是把「有一道 fence
+ *   在擋」當前提；現在每一句都限定在「受檔案沙箱管的可用操作」（dsh 的措辭），有沒有圍堵都為真。
+ * - **看「有沒有圍堵」的是消費端，而且各自反應不同**（dsh `packages/fs/tool-fs/src/sandbox.ts:7` 稱之為 capability fact，
+ *   `ctx.fs.sandboxMode`）。我們對應的事實是組裝點經 host 服務交的 {@link FS_CONTAINMENT_SERVICE}：**不拿 `sandboxPolicy`
+ *   服務在不在當訊號**——那是控制器，不是事實。有圍堵：控制器、可寫根、`WORKSPACE_CAPABILITY`、`sandbox/mode`、升級、`/sandbox`
+ *   全部掛上。沒有圍堵：只貢獻那一句話，其餘一樣都不掛（沒有東西可以切、可以升、可以記）。
+ * - **有圍堵卻缺 `sandboxPolicy` 服務：載入當場拋**，訊息指名缺什麼（dsh 的 `tool-str-replace-editor` 有圍堵卻缺政策時同樣當場拋，
+ *   `packages/fs/tool-str-replace-editor/src/index.ts:71-74`）。不把「沒有圍堵」與「有圍堵但缺件」併成同一種無聲退路。
+ * - **有圍堵時整列被關掉：組裝點起不來**（`apps/harness/src/assembly-root.ts`），同上，因為這時 fence 還在擋、模型卻不知道、也請不到升級。
+ *
+ * ### 登記：沒有圍堵時 `/sandbox` 不註冊，dsh 是拋錯
+ *
+ * dsh 的對應物是 permission-presets，它遇到不圍堵的 shell 是**載入就拋**、當設定錯誤（`packages/interaction/permission-presets/src/index.ts:219-220`）。
+ * 我們照搬的話，這一列在沒有 `--workspace` 的 CLI 上也在，CLI 就起不來；要照 dsh 拋就得有「按入口參數關掉這一列」的覆寫，那是 #46 Out of
+ * scope 的 profile 層。所以退到「不註冊」：淨效果與 dsh 出廠組合相同（沒有圍堵就沒有 `/sandbox`），但**這不是 dsh 的機制**。`/sandbox` 之後由
+ * [#437](https://github.com/DemianLi/nexus-agent/issues/437) 的 `/permission` 取代，那張再決定這一格。
  *
  * ## 為什麼是 `wrapModelCall` 而不是 `beforeModel`
  *
@@ -88,34 +103,56 @@ export const SANDBOX_POLICY_MIDDLEWARE_NAME = 'nexusSandboxPolicy';
 const DELEGATION_TOOL_NAME = 'task';
 
 /**
- * 一格模式對模型講的那一段話。
+ * 一格模式對模型講的那一段話，**照 dsh 的措辭：每一句只講「受檔案沙箱管的操作」**
+ * （`packages/sandbox/sandbox-policy/src/index.ts` 的 `renderPolicyContext`，`5badb15`）。
  *
- * **不收可寫根的主機路徑**：`workspace-write` 那一句用工具的位址空間指名它（`/`），理由見模組註解的登記。
+ * 這個限定是句子「不宣稱圍堵」的來源：沒有圍堵的組裝上，沒有任何操作受沙箱管，句子照樣為真，
+ * 不會暗示根外被擋著。以前的措辭（「改不動任何檔案」「直接放行」）把一道 fence 當前提，沒有圍堵時是謊。
+ *
+ * **登記：可寫根用工具的位址空間指名（`/`），不給主機路徑**，理由見模組註解的登記。**沒有圍堵時不帶根**
+ * （沒有一個「可寫根」可指名；也不能叫模型別傳主機路徑，那是 `virtualMode` 圍堵才有的位址規則）。
+ *
+ * **措辭上的偏離：不抄 dsh 的「Some platform temporary areas may also be writable」那半句。** 那是 dsh 沙箱的機制
+ * （它真的會放行某些暫存區），不是平台的事實；我們的 `ContainedFilesystemBackend` 只認可寫根，這半句在我們這裡不成立，
+ * 抄了會讓模型去寫 `/tmp` 然後被擋。基礎建設不同、事實不同，所以這是措辭的偏離，不是機制的偏離。
  *
  * @param mode - 這一刻的圍堵強度。
+ * @param options - `contained`：這次組裝有沒有圍堵（預設有）。決定 `workspace-write` 帶不帶可寫根。
  * @returns 接到 system prompt 後面的那段話。
  */
-export function sandboxPolicySentence(mode: SandboxMode): string {
+export function sandboxPolicySentence(
+  mode: SandboxMode,
+  options: { readonly contained?: boolean } = {},
+): string {
+  const contained = options.contained ?? true;
   switch (mode) {
     case 'read-only':
       return (
-        '目前的檔案政策：read-only。這個組裝的檔案工具改不動任何檔案。' +
-        '**不要只憑這一條就拒絕使用者要的修改**：照常去呼叫工具，被擋下來時照它回的拒絕與升級指引決定下一步。'
+        '目前的檔案政策：read-only。受檔案沙箱管的可用操作，在這個常態模式下不能變更檔案。' +
+        '**不要只因這個政策就拒絕必要的修改**：照常去呼叫可用的工具，照它回的拒絕與升級指引決定下一步。'
       );
     case 'workspace-write':
       return (
-        '目前的檔案政策：workspace-write。檔案工具的路徑一律從 `/` 寫起，`/` 就是工作區根' +
-        '（例如 `/src/index.ts`、`/notes/todo.md`）；工作區根之下的變更直接放行，不會另外問人。' +
-        '不要把磁碟上的絕對路徑傳給檔案工具，那會被當成工作區根底下的一條子路徑。'
+        '目前的檔案政策：workspace-write。受檔案沙箱管的可用操作可以變更' +
+        (contained
+          ? '工作區根之下的檔案（檔案工具的路徑一律從 `/` 寫起，`/` 就是工作區根，例如 `/src/index.ts`、`/notes/todo.md`；' +
+            '不要把磁碟上的絕對路徑傳給檔案工具，那會被當成工作區根底下的一條子路徑）。'
+          : '工作區之下的檔案。')
       );
     case 'danger-full-access':
-      return '目前的檔案政策：danger-full-access。這道圍堵不限制檔案變更。';
+      return '目前的檔案政策：danger-full-access。受檔案沙箱管的可用操作，檔案變更不受限制。';
   }
 }
 
 /**
- * 圍堵政策這個服務的名字。**硬相依**：宣告在 {@link sandboxPolicyPlugin} 的 `requires` 上，
- * 沒人提供就載入失敗——沒有控制器的話這顆 plugin 一件事都做不了。
+ * 沒有圍堵的組裝講哪一格：出廠值。沒有 `--workspace` 就沒有 `--sandbox` 可給（`--sandbox` 要配 `--workspace`），
+ * 也沒有控制器可切，所以只有這一格。
+ */
+export const UNCONTAINED_POLICY_MODE: SandboxMode = 'workspace-write';
+
+/**
+ * 圍堵政策這個服務的名字。**有圍堵時是硬相依**：{@link FS_CONTAINMENT_SERVICE} 在而它不在，{@link sandboxPolicyPlugin}
+ * 載入當場拋。沒有圍堵時不需要它。
  */
 export const SANDBOX_POLICY_SERVICE = 'sandboxPolicy';
 
@@ -140,21 +177,68 @@ export interface SandboxPolicyService {
   readonly rootDir: string;
 }
 
+/**
+ * 「這次組裝的檔案系統有圍堵」這一格事實的服務名，對應 dsh 的 `ctx.fs.sandboxMode`（capability fact，
+ * `packages/fs/tool-fs/src/sandbox.ts:7`）：**有就是有圍堵，沒有就是沒有**。由組裝點經 host 服務交，與
+ * {@link SANDBOX_POLICY_SERVICE}（控制器）分開——訊號不能是控制器在不在。
+ */
+export const FS_CONTAINMENT_SERVICE = 'fsContainment';
+
+/** 圍堵這件事實。**內容只是個標記**：誰在擋、擋在哪是 {@link SandboxPolicyService} 的事。 */
+export interface FsContainment {
+  readonly kind: 'contained-filesystem';
+}
+
+/** 組裝點交 {@link FS_CONTAINMENT_SERVICE} 時用的那顆值（組裝點與手掛測試共用，免得各自拼字面量）。 */
+export const CONTAINED_FILESYSTEM: FsContainment = { kind: 'contained-filesystem' };
+
 declare module '@nexus/core' {
   interface NexusServices {
     /** 圍堵政策的協作者。見 {@link SANDBOX_POLICY_SERVICE}。 */
     sandboxPolicy: SandboxPolicyService;
+    /** 檔案系統有圍堵這件事實。見 {@link FS_CONTAINMENT_SERVICE}。 */
+    fsContainment: FsContainment;
   }
 }
 
 /**
- * 掌管圍堵模式的 plugin：**把政策講給模型聽、把它記進日誌、讓人切得動它、讓模型
- * 請得到一次升級**。
+ * 把一格模式講成一段話、接到 system prompt 後面的 middleware。
  *
- * **只在掛了 `ContainedFilesystemBackend` 的組裝上掛它**，理由見模組註解——而那條理由
- * 現在管到三樣東西而不只提示句。**`/sandbox` 也一樣不能在沒有 fence 的組裝上出現**：
- * 一個報告「目前的檔案政策：workspace-write」的命令，在整道 fence 不在路徑上的時候，
- * 說的謊跟那句提示一模一樣，而且它還讓人以為自己切了什麼東西。
+ * **用 `concat` 不用取代**，兩條入口（`systemMessage` 在、不在）見 plan-mode 那段註解。
+ *
+ * @param resolveMode - 每次模型呼叫問一次。
+ */
+function policyPromptMiddleware(
+  resolveMode: () => SandboxMode,
+  options: { readonly contained: boolean },
+) {
+  return {
+    name: SANDBOX_POLICY_MIDDLEWARE_NAME,
+    wrapModelCall: (
+      request: Parameters<Parameters<typeof createMiddleware>[0]['wrapModelCall'] & object>[0],
+      handler: Parameters<Parameters<typeof createMiddleware>[0]['wrapModelCall'] & object>[1],
+    ) => {
+      // 子代理也走這裡（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在 `wrapToolCall` 包的 ALS 之內，
+      // `controller.source` 先讀快照。同 dsh 讀子代理自己 session 上那顆 `sandbox/mode { source: 'delegation' }`。
+      const sentence = sandboxPolicySentence(resolveMode(), options);
+      // 兩條路是同一件事的兩個入口，照抄 plan-mode 那段註解：`systemMessage` 在的時候接在它後面，不在的時候由
+      // `systemPrompt` 這個字串欄位承接。基座兩個都讀，給錯那一個等於沒講。
+      const { systemMessage } = request;
+      return handler(
+        systemMessage === undefined
+          ? { ...request, systemPrompt: sentence }
+          : { ...request, systemMessage: systemMessage.concat(`\n${sentence}`) },
+      );
+    },
+  };
+}
+
+/**
+ * 掌管圍堵模式的 plugin：**把政策講給模型聽；有圍堵時，再把它記進日誌、讓人切得動它、讓模型請得到一次升級**。
+ *
+ * **出貨清單上的一列**（[#669](https://github.com/DemianLi/nexus-agent/issues/669)），有沒有圍堵由組裝點交的
+ * {@link FS_CONTAINMENT_SERVICE} 決定，分岔的理由與 dsh 的對照見模組註解。**`/sandbox` 不能在沒有 fence 的組裝上出現**：
+ * 一個報告「目前的檔案政策」的命令，在整道 fence 不在路徑上的時候讓人以為自己切了什麼東西。
  *
  * **模組層級的一顆常數**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）：
  * 控制器與可寫根走 {@link SANDBOX_POLICY_SERVICE} 注入，所以同一顆可以被好幾次組裝各
@@ -162,66 +246,60 @@ declare module '@nexus/core' {
  */
 export const sandboxPolicyPlugin: NexusPlugin = {
   name: 'sandbox-policy',
-  // **真正擋下來的是下面那行 `use()`**，不是這條宣告：`assertRequires` 跑在每個 `apply`
-  // 之後，而 `use()` 在 `apply` 當下就拋。這條是照 dsh 的 `inject` 把相依寫明著——它同時
-  // 是把 `use()` 改成 `get()` 那天的第二道網。
-  requires: [SANDBOX_POLICY_SERVICE],
+  // **沒有 `requires`**：相依只在有圍堵時成立，由下面的 `use()` 當場擋（`assertRequires` 是無條件的，沒有圍堵的組裝會被它誤殺）。
   apply(registry) {
-    const { controller, rootDir } = registry.services.use(SANDBOX_POLICY_SERVICE);
-    const resolveMode = controller.source;
-    {
-      // **這顆在，工作區就在**：它只在有圍堵的組裝裡掛。`present` 據它回答「有沒有工作區」（#441），
-      // 見 `@nexus/core` 的 `WORKSPACE_CAPABILITY`。
-      registry.capabilities.provide(WORKSPACE_CAPABILITY);
-      // **root 接控制器**：起始值與之後每一次切換都記。**子代理只記一顆委派那一刻拍下的那一格**
-      // （#326，照 dsh `appendDelegatedPolicyOverrides`）：root 之後再切，子代理照舊，所以 root 的日誌
-      // 答不出子代理跑在哪一格。子代理的日誌在它第一次 `forCall` 時才開，那一刻在 `task` 的 handler
-      // 裡、讀得到快照；不在任何一次委派裡被開的話不寫——拿 root 當下那格去補，寫的就是錯的值。
-      registry.sessions.join((subject) => {
-        if (subject.address.kind === 'root') return controller.attach(subject.log);
-        const mode = controller.delegatedMode;
-        if (mode !== undefined) subject.log.append('sandbox/mode', { mode, source: 'delegation' });
-        return undefined;
-      });
-      // **升級跟著 fence 掛**，同上面那條理由：沒有圍堵的組裝沒有東西可以升。它也是
-      // read-only 那句「照升級指引做」成立的前提——這個 plugin 在，那句話就不是空頭支票。
-      registerSandboxEscalation(registry, controller);
-      registry.commands.register({
-        name: SANDBOX_COMMAND_NAME,
-        description: SANDBOX_COMMAND_DESCRIPTION,
-        input: { hint: SANDBOX_COMMAND_HINT },
-        handler: ({ rawInput }) => executeSandboxCommand(controller, rootDir, rawInput),
-      });
+    if (registry.services.get(FS_CONTAINMENT_SERVICE) === undefined) {
+      // **沒有圍堵：只講那一句**。控制器、可寫根、能力、日誌事件、升級、`/sandbox` 一樣都不掛——沒有東西可以切、可以升、可以記。
       registry.middleware.use(
-        createMiddleware({
-          name: SANDBOX_POLICY_MIDDLEWARE_NAME,
-          wrapModelCall: (request, handler) => {
-            // 子代理也走這裡（#327），而且講的是**委派那一格**：子代理整個跑在 `task` 的 handler 裡、在下面那顆
-            // `wrapToolCall` 包的 ALS 之內，`controller.source` 先讀快照。同 dsh 讀子代理自己 session 上那顆
-            // `sandbox/mode { source: 'delegation' }`。
-            const sentence = sandboxPolicySentence(resolveMode());
-            // 兩條路是同一件事的兩個入口，照抄 plan-mode 那段註解：`systemMessage` 在的
-            // 時候接在它後面，不在的時候由 `systemPrompt` 這個字串欄位承接。基座兩個都讀，
-            // 給錯那一個等於沒講。
-            const { systemMessage } = request;
-            return handler(
-              systemMessage === undefined
-                ? { ...request, systemPrompt: sentence }
-                : { ...request, systemMessage: systemMessage.concat(`\n${sentence}`) },
-            );
-          },
-          // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
-          // handler，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
-          // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），
-          // 但子代理手上沒有 `task`（基座的子代理 stack 沒有委派工具），所以這一半只在 root 上作用——拍照本來就是
-          // 父代理那側的事。
-          wrapToolCall: (request, handler) =>
-            resolveToolName(request) === DELEGATION_TOOL_NAME
-              ? controller.delegate(() => handler(request))
-              : handler(request),
-        }),
+        createMiddleware(
+          policyPromptMiddleware(() => UNCONTAINED_POLICY_MODE, { contained: false }),
+        ),
+      );
+      return;
+    }
+    // 有圍堵卻沒有控制器：當場拋，訊息指名缺什麼。
+    if (registry.services.get(SANDBOX_POLICY_SERVICE) === undefined) {
+      throw new Error(
+        `sandbox-policy：檔案系統有圍堵（${FS_CONTAINMENT_SERVICE} 服務在），卻沒有 ${SANDBOX_POLICY_SERVICE} 服務` +
+          '——沒有控制器就沒有東西可以回報政策、切換或升級。組裝點要把這兩個服務一起提供。',
       );
     }
+    const { controller, rootDir } = registry.services.use(SANDBOX_POLICY_SERVICE);
+    const resolveMode = controller.source;
+    // **這顆在，工作區就在**：`present` 據它回答「有沒有工作區」（#441），見 `@nexus/core` 的 `WORKSPACE_CAPABILITY`。
+    registry.capabilities.provide(WORKSPACE_CAPABILITY);
+    // **root 接控制器**：起始值與之後每一次切換都記。**子代理只記一顆委派那一刻拍下的那一格**
+    // （#326，照 dsh `appendDelegatedPolicyOverrides`）：root 之後再切，子代理照舊，所以 root 的日誌
+    // 答不出子代理跑在哪一格。子代理的日誌在它第一次 `forCall` 時才開，那一刻在 `task` 的 handler
+    // 裡、讀得到快照；不在任何一次委派裡被開的話不寫——拿 root 當下那格去補，寫的就是錯的值。
+    registry.sessions.join((subject) => {
+      if (subject.address.kind === 'root') return controller.attach(subject.log);
+      const mode = controller.delegatedMode;
+      if (mode !== undefined) subject.log.append('sandbox/mode', { mode, source: 'delegation' });
+      return undefined;
+    });
+    // **升級跟著 fence 掛**：沒有圍堵的組裝沒有東西可以升。它也是 read-only 那句「照升級指引做」成立的前提。
+    registerSandboxEscalation(registry, controller);
+    registry.commands.register({
+      name: SANDBOX_COMMAND_NAME,
+      description: SANDBOX_COMMAND_DESCRIPTION,
+      input: { hint: SANDBOX_COMMAND_HINT },
+      handler: ({ rawInput }) => executeSandboxCommand(controller, rootDir, rawInput),
+    });
+    registry.middleware.use(
+      createMiddleware({
+        ...policyPromptMiddleware(resolveMode, { contained: true }),
+        // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
+        // handler，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
+        // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），
+        // 但子代理手上沒有 `task`（基座的子代理 stack 沒有委派工具），所以這一半只在 root 上作用——拍照本來就是
+        // 父代理那側的事。
+        wrapToolCall: (request, handler) =>
+          resolveToolName(request) === DELEGATION_TOOL_NAME
+            ? controller.delegate(() => handler(request))
+            : handler(request),
+      }),
+    );
   },
 };
 

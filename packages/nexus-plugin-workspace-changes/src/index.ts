@@ -9,13 +9,16 @@
  * 只有這兩份。有改的話，root 日誌寫一顆 `workspace/changes`，摘要與逐檔比較留在記錄器裡，經
  * {@link WorkspaceChanges} 服務到會話結束。模型看不到任何東西：這一條只寫日誌，web 讀。
  *
- * ## 掛法：只在 serve、只在有 `--workspace` 的時候
+ * ## 掛法：出貨清單的 serve 專屬層，一列；不合格由工作區根缺席表達
  *
  * - dsh 由 web-app bundle 出廠掛（`packages/bundle/web-app/cordis.patch.yml:300`），終端機那側不掛；我們同樣
- *   只在 serve 掛（`createCliAgent` 的 `workspaceChanges` 選項），CLI 沒有人讀摘要。
- * - dsh 的 `eligible` 看會話 header 的 `cwd`；我們的「沒有工作區」＝沒給 `--workspace`，而 Config 要的正是那個根。
- *   所以**不合格由缺席表達**：組裝點只在有根的時候把這個 plugin 放進清單，沒有執行期判斷。
- * - dsh 跳過子代理的會話；我們在 `sessions.join` 只接 root 那一份。
+ *   只在 serve 掛，做法是 `apps/harness/cordis.serve.yml`（疊在 `cordis.yml` 之上的 serve 專屬出貨層，
+ *   [#669](https://github.com/DemianLi/nexus-agent/issues/669)），CLI 不載那一層，沒有人讀摘要。
+ * - dsh 的 `eligible` 看會話 header 的 `cwd`，沒有就不記（`src/index.ts:58-61`）；我們的「沒有工作區」＝沒給 `--workspace`，
+ *   組裝點只在有根的時候經 host 服務交 {@link WORKSPACE_ROOT_SERVICE}。**這一列在 `apply` 當下讀它，沒有就什麼都不註冊**
+ *   （不提供 {@link WORKSPACE_CHANGES_SERVICE}、不掛 middleware、不接會話），消費者據此當作沒有改動紀錄。
+ *   以前是組裝點「有根才把這個 plugin 放進清單」，現在分支搬進 plugin，這一列才進得了清單。
+ * - dsh 跳過子代理的會話；我們在 `sessions.join` 只接 root 那一份（見偏離 5：子代理改的檔算進 root 這一輪）。
  *
  * ## 與 dsh 的偏離
  *
@@ -31,22 +34,16 @@
  *    dsh 的主路徑是 git 快照，子代理在這一輪裡改的檔本來就會出現在 root 的摘要裡；只有快照蓋不到的路徑、
  *    與「沒有 git」那條模式漏掉它們。所以子代理的檔案工具呼叫也在本體前擷取，記在 root 的記錄器上——
  *    結果在每一條路上都與 dsh 主路徑一樣。
- * 6. **Config 多三格資料**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。dsh 的 `Config` 只有五個
- *    上限（`src/index.ts:50-56`，`ddefc45`），我們逐格照抄，另外多了 `root`、`tempRoot`、`git` 三格：
- *    - `root`：dsh 每一份會話各自從 header 的 `cwd` 拿根（`src/index.ts:58-61` 的 `eligible`），**一顆 plugin
- *      服務得了整台 Host 的每一份會話**；我們的根是 `--workspace` 解析出來的一個值。退到最接近的實作：
- *      根是資料，寫在 Config 裡。
- *
- *      **這一條的前提換過一次，結論沒換。** 原本寫的是「會話本身不帶它」——
- *      [#504](https://github.com/DemianLi/nexus-agent/issues/504) 之後不成立了：格式 13 起
- *      `StoredSessionHeader` 有 `workspaceRoot` 那一格。但那一格在**持久化那一側**，
- *      `SessionLog` 不帶 header（`session-store.ts` 的檔頭：header 不進 `SessionEventMap`），
- *      而 plugin 手上只有日誌——所以「每份會話各自從自己的 header 拿根」對一顆 plugin 而言
- *      仍然表達不出來。另一半也還在：dsh 那顆 plugin 服務整台 Host，我們的 `createCliAgent`
- *      **每條 thread 各跑一次**，一次組裝本來就只有一個根。
+ * 6. **Config 多兩格資料**（[#459](https://github.com/DemianLi/nexus-agent/issues/459)）。dsh 的 `Config` 只有五個
+ *    上限（`src/index.ts:50-56`，`ddefc45`），我們逐格照抄，另外多了 `tempRoot`、`git` 兩格：
  *    - `tempRoot`：dsh 寫死 `tmpdir()`（`src/index.ts:134`）。
  *    - `git`：dsh 經 `subprocess` 能力找執行檔（`src/index.ts:74`），我們沒有那個服務（偏離 1），所以「用哪一個
  *      執行檔／當成沒有 git」攤成資料。
+ *
+ *    **根不在 Config 裡了**（[#669](https://github.com/DemianLi/nexus-agent/issues/669)）：原本 `root` 是第三格，理由是
+ *    dsh 每一份會話各自從 header 的 `cwd` 拿根而我們表達不出來，退到「根是資料」。現在根改走 {@link WORKSPACE_ROOT_SERVICE}
+ *    由組裝點交——仍不是 dsh 的「會話 header」，但讓這一列進得了出貨清單（Config 裡不再有組裝點才知道的值）。
+ *    **一次組裝只有一個根**這一點不變：dsh 那顆 plugin 服務整台 Host，我們的 `createCliAgent` 每條 thread 各跑一次。
  * 7. **`warn`／`info` 退成預設回呼**。dsh 講話走 `ctx.logger`（`src/index.ts:123`、`:136`）；我們的
  *    {@link PluginRegistry} 十五個註冊點沒有說話管道。**退的是載體不是紀律**：「沒有 git 只講一次 `info`、
  *    每一次失敗 `warn`」照抄，只有承載它的東西換成 `console.*`。它們是函式不是資料，所以**不進 Config**，
@@ -61,7 +58,7 @@ import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 import { z } from 'zod';
 
-import { isLogicalTurnStart } from '@nexus/core';
+import { isLogicalTurnStart, WORKSPACE_ROOT_SERVICE } from '@nexus/core';
 import type { NexusPlugin, PluginEntry, PluginRegistry, SessionLog } from '@nexus/core';
 import type { WorkspaceChangesSummary, WorkspaceFileDiff } from './types.js';
 
@@ -107,7 +104,7 @@ export const WORKSPACE_CHANGES_LIMITS: WorkspaceChangesLimits = {
 };
 
 /**
- * 設定，**全是資料**：五個上限逐格照 dsh 的 `Config`，另外三格見檔頭偏離 6。
+ * 設定，**全是資料**：五個上限逐格照 dsh 的 `Config`，另外兩格見檔頭偏離 6。
  *
  * 上限的合法性**不在這裡驗**，在 {@link workspaceChangesPlugin} 的 `apply` 裡驗，照 dsh
  * （`src/index.ts:95-100`，`ddefc45`）——訊息原文照抄，而 schema 驗的話那句話就換了出處。
@@ -117,8 +114,6 @@ export const WORKSPACE_CHANGES_LIMITS: WorkspaceChangesLimits = {
  * 載入一樣失敗，差的只有訊息出處；絆索見 `index.test.ts` 上限那一條。
  */
 export const workspaceChangesConfigSchema = z.strictObject({
-  /** 工作區根（`--workspace` 解析過的那個）。見檔頭偏離 6。 */
-  root: z.string(),
   timeoutMs: z.number().default(WORKSPACE_CHANGES_LIMITS.timeoutMs),
   outputMaxBytes: z.number().default(WORKSPACE_CHANGES_LIMITS.outputMaxBytes),
   maxFiles: z.number().default(WORKSPACE_CHANGES_LIMITS.maxFiles),
@@ -213,6 +208,10 @@ function applyWorkspaceChanges(
       throw new Error(`workspace-changes requires a positive integer ${field}`);
     }
   }
+  // **不合格＝沒有工作區根**（照 dsh 的 `eligible`，見檔頭「掛法」）：上限先驗（設定寫壞不因為這一次用不到就放過），
+  // 然後沒有根就什麼都不註冊。
+  const root = registry.services.get(WORKSPACE_ROOT_SERVICE);
+  if (root === undefined) return;
   const info =
     seams.info ??
     ((message: string) => {
@@ -254,7 +253,7 @@ function applyWorkspaceChanges(
   registry.sessions.join((subject) => {
     // 照 dsh 的 `eligible`：子代理的會話不記。
     if (subject.address.kind !== 'root') return;
-    const recorder = new TurnRecorder(subject.log, config.root, { ...env, git: git() });
+    const recorder = new TurnRecorder(subject.log, root, { ...env, git: git() });
     recorders.set(subject.log, recorder);
     current = recorder;
     // 接上當下已經在的事件（續接的 seed）會先重播一遍。**重播出來的輪不拍快照**：一份有 N 輪的 thread

@@ -20,7 +20,7 @@ import { DISPOSE_FAILURE } from './cli-dispose-failure.fixture.js';
 import { documentedFixture } from './documented-fixture.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
-import { shippedPlugins } from './fixtures.js';
+import { shippedModelRow, shippedPlugins } from './fixtures.js';
 
 const shipped = await shippedPlugins();
 
@@ -146,7 +146,7 @@ describe('一次性模式', () => {
     expect(stdout()).not.toContain('模型：');
   });
 
-  it('預設清單是十二顆功能 ＋ 八列 core 設定 ＋ 十五列 harness 設定 ＋ 八個配套入口', async () => {
+  it('預設清單是十四顆功能 ＋ 八列 core 設定 ＋ 十五列 harness 設定 ＋ 八個配套入口', async () => {
     // **這條是絆索，所以它翻面而不是變寬。** 原本是 `toEqual(['echo'])`——一條在守
     // 「不替誰決定該裝什麼」的線。[#120](https://github.com/DemianLi/nexus-agent/issues/120)
     // 讓計劃模式進來，理由寫在 `apps/harness/cordis.yml` 的註解上（命令沒進預設清單就等於
@@ -178,6 +178,10 @@ describe('一次性模式', () => {
     expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual([
       'echo',
       'agent-instructions',
+      // **`skills` 進來的理由是它本來就在，只是沒有人掛**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：
+      // 工作區的 `skills/<name>/SKILL.md` 不進清單就永遠看不到。沒有 skill 的時候一個字都不加（組裝點包了一層，
+      // 見 `packages/nexus-core/src/skills-middleware.ts`），多的只是啟動時掃一次 `/skills/`。
+      'skills',
       'plan-mode',
       'goal',
       'todo',
@@ -257,8 +261,13 @@ describe('一次性模式', () => {
       'subagent-model-selection',
       'live-model',
       'default-model',
+      'scripted-model',
       'recursion-limit',
       'agent-loop',
+      // **`sandbox-policy` 進來的理由是它本來就在產品路徑上，只是藏在組裝點的條件裡**
+      // （[#669](https://github.com/DemianLi/nexus-agent/issues/669) 第 3 步）：`--dump-config` 印不出來、patch 關不掉。
+      // 不論有沒有 `--workspace` 都掛：有圍堵時註冊 `/sandbox`、升級與 `sandbox/mode`，沒有圍堵時只講一句不宣稱圍堵的政策。
+      'sandbox-policy',
     ]);
     // 八個配套入口裡有 `@nexus/plugin-workspace-changes` 的，**那個功能本身不在這份清單裡**：它要工作區的根，
     // 只由 serve 經 `createCliAgent` 掛（#443），同 dsh 只在 web-app bundle 掛。
@@ -464,7 +473,7 @@ describe('CLI 的核准政策', () => {
 
     const { agent, dispose, sessionLog } = await createCliAgent(
       { live: false },
-      [createEchoPlugin(), gateWriteFile],
+      [createEchoPlugin(), gateWriteFile, await shippedModelRow()],
       undefined,
       { approvals: HEADLESS_APPROVALS },
     );

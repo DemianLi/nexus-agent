@@ -1,4 +1,8 @@
 /**
+ * **手搭組裝（#670）**：這一檔留在手搭（`createNexusAgent`），而且不會搬：它是一支**探針**，量的就是組裝內部——
+ * 用 `vi.mock` 攔 `createDeepAgent` 收到的 `SubAgent` 規格、自己用 `compileBackground` 編背景圖，再用閘門排 root 與背景的順序。
+ * 這些在產品組裝（`createCliAgent`）外面看不到；沙箱那幾條還由測試握著 `SandboxModeController`，產品的控制器建在組裝點裡。
+ *
  * 背景續行子代理的探針（[#738](https://github.com/DemianLi/nexus-agent/issues/738)，地圖 #737 的第一張）。
  *
  * 規格是 #708：子代理活在 `task` 那一次呼叫**以外**，派出去當場回編號，之後收到訊息再開新的一輪。這支檔案不實作它、
@@ -47,7 +51,11 @@ import {
 } from '@nexus/core';
 import { createAskUserPlugin, DELEGATED_CALLER_MESSAGE } from '@nexus/plugin-ask-user';
 import type { SandboxMode } from '@nexus/core';
-import { createSandboxPolicyPlugin, SandboxModeController } from '@nexus/plugin-sandbox-policy';
+import {
+  CONTAINED_FILESYSTEM,
+  createSandboxPolicyPlugin,
+  SandboxModeController,
+} from '@nexus/plugin-sandbox-policy';
 import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
 import {
   createFilesystemMiddleware,
@@ -606,7 +614,10 @@ describe('第 3 項：沙箱快照在背景路徑上', () => {
     const run = await assemble(
       turns,
       [
-        createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: dir } }),
+        createHostServicesPlugin({
+          fsContainment: CONTAINED_FILESYSTEM,
+          sandboxPolicy: { controller, rootDir: dir },
+        }),
         WORKER,
         createSandboxPolicyPlugin(),
       ],
@@ -727,7 +738,10 @@ describe('第 3 項：沙箱快照在背景路徑上', () => {
       const run = await assembleWithPump(
         [...twoTurns(`/${delegated}-a.txt`, `/${delegated}-b.txt`)],
         [
-          createHostServicesPlugin({ sandboxPolicy: { controller, rootDir: dir } }),
+          createHostServicesPlugin({
+            fsContainment: CONTAINED_FILESYSTEM,
+            sandboxPolicy: { controller, rootDir: dir },
+          }),
           WORKER,
           createSandboxPolicyPlugin(),
         ],

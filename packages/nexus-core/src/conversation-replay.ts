@@ -43,15 +43,22 @@
  * 沒記過的說還沒開始、要就重試。字逐字照抄。一批結果在下一則訊息進來時還沒到齊也照這樣補——state 在
  * 那個位置也會有一則（基座補的），一則對一則照樣成立。
  *
- * **續接時記過 `tool/call` 的那種寫回日誌，沒記過的維持在記憶體裡補**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）。
- * dsh 續接時把補的事件寫回日誌（`packages/core/agent-loop/src/index.ts:855-856`，`477b4f4`），冷讀時才只在記憶體裡補
- * （`packages/session-query/session-query/src/cold-read.ts`）。我們的寫回在 {@link ./interrupted-turn.ts}：當掉那一輪沒配到結果
- * 的 `tool/call` 補一顆結果不明的 `tool/result`，最後補 `turn/end {interrupted}`；寫回之後這裡讀到的是日誌上那一顆，
- * 句子同一句。**偏離只剩一條**：沒記過 `tool/call` 的那種，一顆 `tool/result` 在我們的配對不變量上是違規
- * （`invariant.ts`），所以還是只補在記憶體裡。停在核准點的那一輪在我們的日誌上是**收掉的**（`interrupt/raised` 之後有
- * `turn/end`），本來就不是「開著的最後一輪」，不在寫回的射程。
+ * **續接時當掉那一輪的補結寫回日誌**（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）。
+dsh 續接時把補的事件寫回日誌（`packages/core/agent-loop/src/index.ts:855-856`，`477b4f4`），冷讀時才只在記憶體裡補
+（`packages/session-query/session-query/src/cold-read.ts`）。我們的寫回在 {@link ./interrupted-turn.ts}：當掉那一輪
+沒配到結果的呼叫各補一顆錯誤 `tool/result`（記過 `tool/call` 的說結果不明，沒記過的說還沒開始），開著的 `model/start`
+補 `model/end`，最後補 `turn/end {interrupted}`；寫回之後這裡讀到的是日誌上那些，句子同一句。
+**沒記過 `tool/call` 的那種也寫回了**（卡上原本留的一條偏離，理由是我們的配對不變量；dsh 對合成的「還沒開始」結果明文放行，
+`packages/core/session/src/invariant.ts:142-145`，不變量現在也放行，見 `invariant.ts`）。**記憶體裡補的 {@link closer} 還在**，
+管的是另一種：一輪**收掉了**、結果卻沒到齊的那一批（停在核准點的輪，在我們的日誌上是收掉的——`interrupt/raised` 之後有
+`turn/end`；以及舊檔），那種不在「開著的最後一輪」，不在寫回的射程。
  *
- * 推出來的是確定的，同一份日誌推幾次都一樣，所以留在記憶體裡的那一種也不會漂。
+ * **補結可能落在 `session/end-seed` 之後**（舊檔「開著的輪＋end-seed、之後沒有新輪」，照 dsh 的掃描在 end-seed 不重設，
+ * 補結接在 end-seed 後面，見 `interrupted-turn.ts`）。所以 end-seed 不能立刻把還沒配齊的那一批補完——補寫的結果可能緊跟在後面，
+ * 補了兩次模型就會讀到兩顆同一個 callId 的結果。那一批留到下一則訊息進來（或整份推完）才補，這個時候後面有沒有補寫的結果就已經
+ * 清楚了；對沒有補寫的舊檔，補出來的是同一組句子，只是晚一步。
+ *
+推出來的是確定的，同一份日誌推幾次都一樣，所以留在記憶體裡的那一種也不會漂。
  *
  * ## 推不出來就整串不灌
  *
@@ -126,7 +133,7 @@ interface PendingBatch {
 }
 
 /** 一則回覆要了哪幾次呼叫，照順序。沒有 id 的配不到結果，不算。 */
-function requestedCalls(message: BaseMessage): PendingBatch['calls'] {
+export function requestedCalls(message: BaseMessage): PendingBatch['calls'] {
   if (!AIMessage.isInstance(message)) return [];
   return (message.tool_calls ?? []).flatMap((call) =>
     call.id === undefined ? [] : [{ id: call.id, name: call.name }],
@@ -187,9 +194,13 @@ export function replayConversation(
     flush();
     raw.push(message);
   };
-  /** 這個生命週期到此為止：換成那時灌回去的那一串。 */
-  const settle = (): void => {
-    flush();
+  /**
+   * 這個生命週期到此為止：換成那時灌回去的那一串。
+   *
+   * @param keepBatch - end-seed 傳 `true`：還沒配齊的那一批留著，補寫的結果可能接在 end-seed 之後，見檔頭。
+   */
+  const settle = (keepBatch = false): void => {
+    if (!keepBatch) flush();
     if (summary !== undefined) raw = [summary.message, ...raw.slice(summary.cutoff)];
     summary = undefined;
   };
@@ -300,7 +311,7 @@ export function replayConversation(
           break;
         }
         case 'session/end-seed': {
-          settle();
+          settle(true);
           turn = undefined;
           break;
         }

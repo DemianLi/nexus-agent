@@ -14,9 +14,11 @@ import { PassThrough } from 'node:stream';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { CLI_PROBE_FILE } from './assembly-root.js';
 import { USAGE, parseCliArgs, runCli } from './cli.js';
+import { ConfigSchemaIncompleteError } from './config-schema-dump.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { USER_PATCH_FILENAME, renderConfigDump } from './plugin-config.js';
+import { USER_PATCH_FILENAME, renderConfigDump, serveShippedConfigPath } from './plugin-config.js';
 import { parseServeArgs, runServe } from './serve.js';
 
 const temporary: string[] = [];
@@ -76,6 +78,18 @@ describe('--dump-default-config 印的是出貨那一層', () => {
   });
 });
 
+describe('假模型是清單上的一列（#670）', () => {
+  it('--dump-config 印得出 cli-script 那一列與它的腳本；組裝用的就是這份資料', async () => {
+    const dump = await cliPrint(['--dump-config'], privateHome());
+    expect(dump).toContain('id: cli-script');
+    expect(dump).toContain('name: "#settings/scripted-model"');
+    // 腳本的內容是資料，印得出來：呼叫的工具名、寫的檔，跟 CLI 測試拿來確認 `--workspace` 的 `CLI_PROBE_FILE` 同一個字串。
+    expect(dump).toContain('name: echo');
+    expect(dump).toContain('name: write_file');
+    expect(dump).toContain(`file_path: ${CLI_PROBE_FILE}`);
+  });
+});
+
 describe('覆寫檔壞了：--dump-config 印不出來，--dump-default-config 照印', () => {
   it('權限是別人也寫得動（0666）', async () => {
     const home = privateHome();
@@ -121,7 +135,88 @@ describe('覆寫檔壞了：--dump-config 印不出來，--dump-default-config �
 
     // **回 undefined 才代表沒起 server**：有起來的話它回的是 `{ url, close }`。
     expect(result).toBeUndefined();
-    expect(printed.join('\n')).toBe(renderConfigDump({}).trimEnd());
+    // serve 的出貨層多一個專屬檔（#669），所以對的是帶 serve 層的那份。
+    expect(printed.join('\n')).toBe(
+      renderConfigDump({ shippedLayers: [serveShippedConfigPath()] }).trimEnd(),
+    );
+  });
+});
+
+/**
+ * **dump 分入口**（[#669](https://github.com/DemianLi/nexus-agent/issues/669) 第 4 步）：每一輪改了哪些檔那一列在 serve 專屬的出貨層，
+ * 所以 `serve --dump-config` 印得到、`cli --dump-config` 印不到——dump 印的要是「這個入口啟動會掛的樹」。
+ * 三個旗標（`--dump-config`、`--dump-default-config`、`--dump-config-schema`）兩個入口各一條。
+ */
+describe('dump 跟著入口走：serve 多一層專屬出貨清單', () => {
+  async function servePrint(argv: readonly string[], home: string): Promise<string> {
+    const printed: string[] = [];
+    const result = await runServe({
+      argv: [...argv, '--port', '0'],
+      log: (line) => printed.push(line),
+      env: { [HARNESS_HOME_ENV]: home },
+    });
+    expect(result).toBeUndefined();
+    return printed.join('\n');
+  }
+
+  it('--dump-config：serve 印得到 workspace-changes（標著來源是 cordis.serve.yml），CLI 印不到', async () => {
+    const home = privateHome();
+    const serve = await servePrint(['--dump-config'], home);
+    const cli = await cliPrint(['--dump-config'], home);
+    expect(serve).toMatch(/id: workspace-changes$/m);
+    expect(serve).toContain(`# == ${serveShippedConfigPath()}`);
+    expect(cli).not.toMatch(/id: workspace-changes$/m);
+    expect(cli).not.toContain('cordis.serve.yml');
+  });
+
+  it('--dump-default-config：同樣分入口', async () => {
+    const home = privateHome();
+    expect(await servePrint(['--dump-default-config'], home)).toMatch(/id: workspace-changes$/m);
+    expect(await cliPrint(['--dump-default-config'], home)).not.toMatch(/id: workspace-changes$/m);
+  });
+
+  it('--dump-config-schema：serve 的規格表有 workspace-changes 的欄位，CLI 的沒有', async () => {
+    const home = privateHome();
+    // 規格表有幾條「轉不出來」的警告（既有的，與這一層無關），輸出印完才拋 `ConfigSchemaIncompleteError`；文件本身可用。
+    const swallow = async (print: () => Promise<string>): Promise<string> => {
+      try {
+        return await print();
+      } catch (error) {
+        if (error instanceof ConfigSchemaIncompleteError) return captured.join('\n');
+        throw error;
+      }
+    };
+    const captured: string[] = [];
+    const serve = await swallow(async () => {
+      const result = await runServe({
+        argv: ['--dump-config-schema', '--port', '0'],
+        log: (line) => captured.push(line),
+        env: { [HARNESS_HOME_ENV]: home },
+      });
+      expect(result).toBeUndefined();
+      return captured.join('\n');
+    });
+    captured.length = 0;
+    const cli = await swallow(async () => {
+      await runCli({
+        argv: ['--dump-config-schema'],
+        env: { [HARNESS_HOME_ENV]: home },
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer: { log: (line) => captured.push(line), error: () => undefined },
+      });
+      return captured.join('\n');
+    });
+    expect(serve).toContain('diffTimeoutMs');
+    expect(cli).not.toContain('diffTimeoutMs');
+  });
+
+  it('home 的 patch 照樣能停用 serve 層那一列，dump 標出是誰改的', async () => {
+    const home = privateHome();
+    const path = writeHomePatch(home, '- id: workspace-changes\n  disabled: true\n', 0o600);
+    const serve = await servePrint(['--dump-config'], home);
+    expect(serve).toContain(`patched by ${path}`);
+    expect(serve).toContain('disabled: true');
   });
 });
 

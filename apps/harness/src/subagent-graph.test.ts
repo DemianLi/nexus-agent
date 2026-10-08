@@ -14,7 +14,6 @@ import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
-import { createSkillsPlugin } from '@nexus/plugin-skills';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -71,7 +70,7 @@ async function assemble(model: ScriptedChatModel, root: string) {
     model,
     checkpointer: new MemorySaver(),
     backend: new ContainedFilesystemBackend({ rootDir: root }),
-    plugins: [...shipped, createSkillsPlugin({ sources: ['/skills/'] }), crew],
+    plugins: [...shipped, crew],
   });
 }
 

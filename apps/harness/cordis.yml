@@ -1,7 +1,8 @@
 # 出貨的預設 plugin 清單。
 #
-# 這份檔案是「零設定的 nexus 由什麼組成」的來源（#454）；例外是組裝點在程式碼裡掛的三顆：host-services、
-# sandbox-policy（有 `--workspace` 才掛）、workspace-changes（serve 且有 `--workspace` 才掛），它們不在清單上（#669 後續）。使用者要改的話不是編輯它，
+# 這份檔案是「零設定的 nexus 由什麼組成」的來源（#454）；例外只剩組裝點在程式碼裡掛的一顆：
+# host-services（它交的是協作者，不是功能），它不在清單上。**serve 另有一個專屬的出貨層** `cordis.serve.yml`（#669），疊在這份之後、
+# 只有 serve 載，放 serve 才有的列（今天只有 workspace-changes）；CLI 的 `--dump-config` 印不到它。使用者要改的話不是編輯它，
 # 而是在 `$NEXUS_AGENT_HOME/cordis.patch.yml`（預設 `~/.nexus-agent/`）或 `--patch <檔>`
 # 裡按 `id` 覆寫、停用、插入——patch 是整份替換 `config`，不是深層合併，所以覆寫的時候要
 # 把想保留的欄位一起重述。
@@ -18,7 +19,7 @@
 #             （#104 的偏離標註）。
 #
 # 疊完之後這台機器上實際長什麼樣，用 `--dump-config` 看（cli 與 serve 都收）：它印出啟動
-# 會掛的那份清單（上面三顆由程式碼掛的不在內），每一段前面標明那幾列來自哪個檔、被哪幾層改過；指到不存在 id 的 patch
+# 會掛的那份清單（上面由程式碼掛的那一顆不在內；serve 的包含 `cordis.serve.yml` 那一層），每一段前面標明那幾列來自哪個檔、被哪幾層改過；指到不存在 id 的 patch
 # 會連同它那一層的標籤報到 stderr。用法見 docs/operations.md 的「plugin 清單」一節。
 #
 # 要事先知道某一列收哪些欄位（寫覆寫檔用），用 `--dump-config-schema`：印出一份 JSON Schema，
@@ -46,6 +47,17 @@
 # 提供方就載不到」同形。
 - id: agent-instructions
   name: '@nexus/plugin-agent-instructions'
+
+# 技能（#440）：工作區的 `skills/<name>/SKILL.md` 讓模型看得到、需要時自己去讀。來源預設
+# 是 backend 命名空間下的 `/skills/`，要加別的目錄在 `sources` 列出（依序即優先序）。
+#
+# **沒有 skill 就一個字都不加**（照 dsh：目錄訊息清單為空且從沒發佈過就不出現，
+# `packages/skill/tool-skill/src/index.ts:237`）：沒給 `--workspace`、或工作區沒有 `skills/`，
+# 送給模型的 system prompt 與沒掛這一列逐位元組相同，空結果也只掃一次。基座的 skills
+# middleware 做不到這一點（對空清單照樣接約 2000 字、又每一輪重掃），所以組裝點包了一層，
+# 偏離登記在 `packages/nexus-core/src/skills-middleware.ts` 檔頭。
+- id: skills
+  name: '@nexus/plugin-skills'
 
 # **例外一：計劃模式**（#120）。它註冊的是一個**人打得到的命令**，而命令沒進出貨清單就
 # 等於不存在——`/plan` 會被 `parseCommand` 判成「名字不認得」，照原樣掉回模型，變成一行
@@ -539,8 +551,8 @@
               $var: thinking.enabled
 
 # 沒帶 `--live` 時用哪個模型提供者（#670）。照 dsh `agent-default-model`（`packages/bundle/base/cordis.patch.yml:82-86`）：
-# 選擇是一列，提供者各是一列。**出貨值 `cli-script` 是程式碼裡內建的那份腳本，沒有對應的列**；要換就在 patch 裡
-# `insert` 一列提供者（例如 `#settings/scripted-model`，腳本當 config）、再把這一列的 `provider` 指到它的 `id`，
+# 選擇是一列，提供者各是一列。**出貨值 `cli-script` 就是下面那一列腳本提供者的 `id`**；要換就在 patch 裡
+# `insert` 一列別的提供者（例如另一份 `#settings/scripted-model`，腳本當 config）、再把這一列的 `provider` 指到它的 `id`，
 # 形狀照 dsh 的 headless e2e（`apps/cli/tests/profiles/headless/tests/source-tool.built.e2e.ts:36-42`）。
 #
 # **帶了 `--live` 時這一列不看**：`--live` 是進 live 的唯一閘門，因為 `.env` 與代理在載入清單之前就依它處理好了。
@@ -549,6 +561,32 @@
   name: '#settings/default-model'
   config:
     provider: cli-script
+
+# 出貨的假模型：沒帶 `--live` 時的預設提供者（#670）。**腳本就是這一列的 config**，所以 `--dump-config` 看得到它，
+# 組裝用的和印出來的是同一份資料，不再有一份只存在程式碼裡的腳本。
+#
+# 它是對著這份清單寫的：拿 patch 把 `echo` 那一列關掉或換掉，就該一起換 `--live` 或換掉這一列的 `turns`——
+# 腳本裡的工具名那時多半不存在，假模型只會製造一個看不懂的失敗。腳本四輪，而第一句話就用掉三輪
+# （呼叫 echo、呼叫 write_file、拿到結果再回覆），第二句拿到最後一輪，所以假模型下的 REPL 問到第三句就會用完
+# （`ScriptedChatModel` 當場失敗而不是靜默重播）；REPL 的正經用法是 `--live`。第二輪寫的檔（`/cli.md`）是給 `--workspace` 用的：預設的虛擬 FS 底下它只是讓
+# 「虛擬檔案系統：…」那行有東西可印，換成真實磁碟時它就是「檔案真的落在那個目錄底下」的證據（`CLI_PROBE_FILE`）。
+- id: cli-script
+  name: '#settings/scripted-model'
+  config:
+    turns:
+      - content: 先回聲一次，確認工具接得上。
+        toolCalls:
+          - name: echo
+            args:
+              message: CLI 接線測試
+      - content: 再寫一個檔，確認檔案系統接得上。
+        toolCalls:
+          - name: write_file
+            args:
+              file_path: /cli.md
+              content: CLI 寫的
+      - content: 工具回來了，這條線是通的。
+      - content: 假模型只會照腳本說話——要真的對話請用 --live。
 
 # agent 迴圈的 super-step 上限（#457／#529）。**dsh 對這個值沒有意見**——它不跑 LangGraph，
 # `recursionLimit` 在 `bundle/*` 的 patches 與 `core/agent-loop` 全樹零命中（`ddefc45`）。所以這一列
@@ -579,6 +617,22 @@
   config:
     maxParallelToolCalls: 10
 
+# ── 檔案政策（#669）──────────────────────────────────────────────────────────
+#
+# **檔案政策那一句，永遠由這一列講。** 對應 dsh 的 `sandbox-policy`：不論有沒有 `--workspace` 都掛，
+# 差別只在**講什麼、帶不帶控制器**——
+#
+# - **有 `--workspace`（檔案系統有圍堵）**：註冊 `/sandbox` 命令、升級流程、`sandbox/mode` 事件，並講目前的檔案政策。
+#   組裝點會一起交出 `fsContainment` 與 `sandboxPolicy` 兩個服務；缺 `sandboxPolicy` 這一列載入當場拋。
+# - **沒有 `--workspace`**：只貢獻一句不宣稱圍堵的政策，不註冊命令、不寫事件。以前這裡是整顆不掛，
+#   那是「沒有圍堵就什麼都不講」，模型只能從工具行為猜自己能不能改檔。
+#
+# **有圍堵時這一列關不掉**：組裝點起動時檢查，有 `--workspace` 而這一列不在（或被停用）就起不來——fence 還在擋，
+# 模型卻不知道、也請不到升級，看起來像關了護欄其實沒有。沒有圍堵時關掉它是合法的（只是少了那一句）。
+# 沒有 `Config`：沒有可設的欄位，模式由 `--sandbox` 決定。
+- id: sandbox-policy
+  name: '@nexus/plugin-sandbox-policy'
+
 # ── 配套入口 ──────────────────────────────────────────────────────────────────
 #
 # 只掛**有檢查的**配套入口，一共八個，不是只有 `@nexus/core`（#107 拍板）。#107 當時是二十個
@@ -597,7 +651,7 @@
 # `@nexus/plugin-goal`（耐久 goal 串，#126）、`@nexus/plugin-todo`（耐久待辦快照的形狀
 # 與歸屬，#132）、`@nexus/plugin-present`（每一筆交付對得上一次成功的 `present`，#441）、
 # `@nexus/plugin-workspace-changes`（每一筆改動紀錄落在跑過工具的一輪裡，#443；那個功能
-# 本身不在這份清單裡，只由 serve 掛）、`@nexus/plugin-sandbox-policy`（每一顆 `sandbox/mode`
+# 本身不在這份清單裡，在 serve 專屬的 `cordis.serve.yml`）、`@nexus/plugin-sandbox-policy`（每一顆 `sandbox/mode`
 # 帶的都是認得的模式，#699）。
 #
 # **代價是每一次執行多八個條目、八次 `apply`**，換到的是這份清單與
