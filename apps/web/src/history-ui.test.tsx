@@ -10,6 +10,7 @@ import {
   RETRY_EARLIER_LABEL,
 } from '@/components/earlier-pager';
 import { fakeDownlink } from '@/test/downlink';
+import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
 
 /**
  * 切回以前的 thread，畫面照日誌重播（[#306](https://github.com/DemianLi/nexus-agent/issues/306) 的畫面那一刀）。
@@ -145,6 +146,7 @@ function fakeClient(
   const rejected = async () => ({ kind: 'rejected' as const, message: '這一檔沒有接' });
   const downlink = fakeDownlink();
   const client: WireClient = {
+    ...UNWIRED_WIRE_CONTRACT,
     // 列檔（#651）沒有接。
     fileReferences: rejected,
     // 列會話候選（#713）沒有接。

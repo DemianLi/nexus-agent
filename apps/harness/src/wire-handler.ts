@@ -68,6 +68,9 @@ import {
   encodeSseFrame,
   errorResponse,
   fileReferencesPath,
+  isModelMethod,
+  isPermissionMethod,
+  uploadPath,
   isDeliverableMethod,
   isFeedbackMethod,
   isQueueUpdateMethod,
@@ -395,6 +398,13 @@ export interface WireHandler {
 
 const JSON_MEDIA_TYPE = 'application/json';
 
+/** 契約已合、實作還沒做的 RPC method 回 `not_supported` 時的說明（#723、#437），實作落地時隨分支一起拿掉。 */
+const NOT_IMPLEMENTED = {
+  'model.catalog': '這個組裝還沒有每會話的模型選擇',
+  'model.select': '這個組裝還沒有每會話的模型選擇',
+  'permission.catalog': '這個組裝還沒有具名的權限組合',
+} as const;
+
 /** 搜尋失敗怎麼上線。`disabled` 同 dsh 的 `SESSION_QUERY_SEARCH_DISABLED`：web 收到就退回只比標題。 */
 const SEARCH_ERROR_CODES: Record<ThreadSearchErrorKind, WireErrorCode> = {
   invalid: 'invalid_argument',
@@ -433,7 +443,7 @@ function historyQueryOf(search: URLSearchParams): ThreadHistoryQuery | Response 
 }
 
 /**
- * `/threads/:id/stream`、`/threads/:id/history`、`/threads/:id/subagents/:runId/history`、`/threads/:id/file-references`、`/threads/:id/session-references`、
+ * `/threads/:id/stream`、`/threads/:id/uploads`、`/threads/:id/history`、`/threads/:id/subagents/:runId/history`、`/threads/:id/file-references`、`/threads/:id/session-references`、
  * `/threads/:id/changes/{summary,diff}` 或
  * `/threads/:id/commands/:method`，都不是就 undefined。
  */
@@ -446,6 +456,7 @@ function parsePath(
   | { readonly kind: 'trajectory-turn'; readonly threadId: string }
   | { readonly kind: 'file-references'; readonly threadId: string }
   | { readonly kind: 'session-references'; readonly threadId: string }
+  | { readonly kind: 'upload'; readonly threadId: string }
   | { readonly kind: 'changes-summary'; readonly threadId: string }
   | { readonly kind: 'changes-diff'; readonly threadId: string }
   | { readonly kind: 'command'; readonly threadId: string; readonly method: string }
@@ -477,6 +488,9 @@ function parsePath(
   }
   if (segments.length === 3 && pathname === sessionReferencesPath(threadId)) {
     return { kind: 'session-references', threadId };
+  }
+  if (segments.length === 3 && pathname === uploadPath(threadId)) {
+    return { kind: 'upload', threadId };
   }
   if (segments.length === 4 && segments[2] === 'changes') {
     if (pathname === changesSummaryPath(threadId)) return { kind: 'changes-summary', threadId };
@@ -1060,6 +1074,12 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
       return json(feedbackResponse(thread, envelope.id, method, body));
     }
+    if (isModelMethod(method) || isPermissionMethod(method)) {
+      // 每會話模型選擇（#723）與權限組合目錄（#437）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把
+      // 模型座與權限選單藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
+      // 契約在 `@nexus/wire` 的 `model-selection.ts`／`permission-presets.ts`；實作落地時把這個分支換成真的 handler。
+      return json(errorResponse(envelope.id, 'not_supported', NOT_IMPLEMENTED[method]));
+    }
     const thread = await threadOrError(threadId, envelope.id);
     if (thread instanceof Response) return thread;
     if (isSlashMethod(method)) {
@@ -1094,6 +1114,18 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       }
       // **停在核准點時照收**（#637 的 Q4，同 dsh）：以前這裡回錯，因為基座會照跑新的一輪、把中斷靜靜丟掉。
       // 現在收下的這句進送出佇列，由 pump 停住，等中斷答完、那一輪收掉才跑（#629，`ThreadPump.#nextIndex`）。
+      // 附件（#732）：契約先合，實作還沒做。**帶了就整句拒絕**，不悄悄收下文字、丟掉附件——使用者以為檔案送出去了。
+      const attachments = (params as { attachments?: unknown }).attachments;
+      if (attachments !== undefined) {
+        if (!Array.isArray(attachments)) {
+          return json(
+            errorResponse(command.id, 'invalid_argument', 'run.start 的 attachments 要是陣列'),
+          );
+        }
+        if (attachments.length > 0) {
+          return json(errorResponse(command.id, 'not_supported', '這個組裝還不收附件'));
+        }
+      }
       const text = firstHumanText(params.input);
       if (text === undefined) {
         return json(
@@ -1965,6 +1997,15 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         return openFeed(request.signal);
       }
       const route = parsePath(pathname);
+      if (route?.kind === 'upload') {
+        // 上傳（#732）：契約先合，實作還沒做。位元組不是 JSON，所以不走下面那道 `application/json` 閘門，換成
+        // `application/octet-stream`（同樣不是 simple request，見 `@nexus/wire` 的 `attachments.ts`）。
+        if (request.method !== 'POST') return new Response('not found', { status: 404 });
+        if (mediaType !== 'application/octet-stream') {
+          return new Response('content type must be application/octet-stream', { status: 415 });
+        }
+        return json(errorResponse(null, 'not_supported', '這個組裝沒有附件儲存，不收上傳'));
+      }
       if (route?.kind === 'history') {
         if (request.method !== 'GET') return new Response('not found', { status: 404 });
         // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
