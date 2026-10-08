@@ -27,7 +27,7 @@ import { parseArgs } from 'node:util';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { THREADS_PATH } from '@nexus/wire';
-import { TokenAnchorBook } from '@nexus/core';
+import { recordedApprovalPolicy, TokenAnchorBook } from '@nexus/core';
 import { singleDigitModelIds } from './model-catalog.js';
 import type {
   PluginEntry,
@@ -715,8 +715,14 @@ async function startServer(
               `接回來的模式一個位元組都影響不到。`,
           );
         }
-        const effective =
-          resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
+        // 核准政策同樣從日誌來（#437）；#437 以前的日誌沒有，照 `ask` 起算，也就是以前的行為。
+        const resumedApprovalPolicy =
+          resumed === undefined ? undefined : recordedApprovalPolicy(resumed.events);
+        const effective = {
+          ...invocation,
+          ...(resumedSandbox !== undefined && { sandbox: resumedSandbox }),
+          ...(resumedApprovalPolicy !== undefined && { approvalPolicy: resumedApprovalPolicy }),
+        };
         // 子代理選模型的政策（#875）：沒有歷史的新會話從設定取樣一次，有歷史的只讀日誌那一份。
         const modelSelectionPolicy = modelSelectionPolicyFor({
           resumedEvents: resumed?.events,

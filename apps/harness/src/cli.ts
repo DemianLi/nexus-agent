@@ -24,6 +24,7 @@ import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { CommandDescriptor, CommandRegistrationPoint, SessionEventMap } from '@nexus/core';
+import { recordedApprovalPolicy } from '@nexus/core';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { RUN_DURABILITY } from './pruned-memory-saver.js';
 import { liveModelPlugin } from './settings/live-model.js';
@@ -946,8 +947,13 @@ async function runLaunched(
   // 日誌記著模式，就表示上一次有 fence（沒給 `--workspace` 一顆都不寫）。這一次不給的話
   // 檔案跑在虛擬 FS、fence 不在路徑上，接回來的 `read-only` 會**靜靜蒸發**——與
   // `--sandbox 要配 --workspace` 同一個理由，所以也同樣在什麼都還沒起來之前擋下。
-  const effective =
-    resumedSandbox === undefined ? invocation : { ...invocation, sandbox: resumedSandbox };
+  const resumedApprovalPolicy =
+    resumed === undefined ? undefined : recordedApprovalPolicy(resumed.events);
+  const effective = {
+    ...invocation,
+    ...(resumedSandbox !== undefined && { sandbox: resumedSandbox }),
+    ...(resumedApprovalPolicy !== undefined && { approvalPolicy: resumedApprovalPolicy }),
+  };
 
   // **續接那個把手在讀之前就拿了寫租約**，要到日誌掛上之後才有人收（`persistence.dispose`）。
   // 這中間任何一步拋錯都要先放掉它（try 一路包到掛上日誌之前，連同三個 attach）：CLI 行程會退出、kernel 會放，但同一個行程裡的呼叫端

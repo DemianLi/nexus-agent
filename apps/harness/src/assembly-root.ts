@@ -47,6 +47,8 @@ import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
 import { createSessionTitleLlm } from './session-title-llm.js';
 import type { AttachSessionTitleLlm } from './session-title-llm.js';
 import {
+  ApprovalPolicyController,
+  type ApprovalPolicyValue,
   createHostServicesPlugin,
   SessionRegistry,
   deriveApprovalChannel,
@@ -99,6 +101,12 @@ export interface CliInvocation {
    * 要它不放行就切到 `read-only`。
    */
   readonly sandbox?: SandboxMode;
+  /**
+   * 核准政策的起始那一格（`ask`／`never`，[#437](https://github.com/DemianLi/nexus-agent/issues/437)）。**只有續接會給**：
+   * 從日誌最後一顆 `approval/policy` 讀回來（`recordedApprovalPolicy`），沒給就是 `ask`，也就是 #437 以前的行為。
+   * 沒有對應的命令列旗標——切換的入口是 `/permission`。
+   */
+  readonly approvalPolicy?: ApprovalPolicyValue;
   /**
    * 會話日誌落盤的根目錄，**換位置用**。這一次的每一份日誌寫進它底下的一個 run 目錄；
    * 省略即 harness home 底下的 `sessions`（{@link harnessSessionsDir}）。
@@ -570,7 +578,10 @@ export interface CreateCliAgentSession {
  * @throws 清單載入失敗、fold 前置條件不成立，或基座擋下這份組裝。
  */
 export async function createCliAgent(
-  invocation: Pick<CliInvocation, 'live' | 'workspace' | 'sandbox' | 'recursionLimit'> & {
+  invocation: Pick<
+    CliInvocation,
+    'live' | 'workspace' | 'sandbox' | 'approvalPolicy' | 'recursionLimit'
+  > & {
     /**
      * 真實供應商的五個連線值（[#545](https://github.com/DemianLi/nexus-agent/issues/545)）。
      * 兩條產品路徑都傳：CLI 與 serve 在起動期從同一份清單解一次（serve 的這個函式一條 thread
@@ -757,6 +768,9 @@ export async function createCliAgent(
     );
   }
   const sandboxMode = new SandboxModeController(invocation.sandbox ?? 'workspace-write');
+  // **核准政策的控制器也建在這裡**，理由同上（一條 thread 一格）。`approvals.policy` 把它的來源交給閘門與升級工具，
+  // `approvalPolicy` 服務把控制器本身交給 `approval-gate` 那一列去接日誌；**與 `approvals.enabled`（入口有沒有人在）是兩件事**。
+  const approvalPolicy = new ApprovalPolicyController(invocation.approvalPolicy);
   const backend =
     workspaceRoot === undefined
       ? undefined
@@ -792,6 +806,7 @@ export async function createCliAgent(
       // `apply` 當下就讀，排後面它們會拿不到。載入是一趟到底的，不會回頭等。
       createHostServicesPlugin({
         channel,
+        approvalPolicy,
         // **有沒有圍堵是一格獨立的事實，不是控制器在不在**（#669）：對應 dsh 的 `ctx.fs.sandboxMode`。`sandbox-policy` 那一列據它
         // 分岔——有圍堵就掛控制器、`/sandbox`、升級；沒有就只貢獻那一句不宣稱圍堵的政策。兩個服務一起交，缺一個
         // 那一列載入當場拋（有圍堵卻缺控制器）。
@@ -821,7 +836,7 @@ export async function createCliAgent(
     checkpointer,
     ...(onInvariantViolation !== undefined && { onInvariantViolation }),
     ...(invariantTap !== undefined && { invariantTap }),
-    ...(approvals !== undefined && { approvals }),
+    approvals: { ...approvals, policy: approvalPolicy.source },
     ...(invocation.optionalEntries !== undefined && {
       optionalEntries: invocation.optionalEntries,
     }),

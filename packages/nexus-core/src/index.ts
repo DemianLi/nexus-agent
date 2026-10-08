@@ -49,6 +49,19 @@ export type {
   QuestionReply,
 } from './approval.js';
 export {
+  APPROVAL_POLICIES,
+  APPROVAL_POLICY_SERVICE,
+  ApprovalPolicyController,
+  DEFAULT_APPROVAL_POLICY,
+  isApprovalPolicy,
+  recordedApprovalPolicy,
+} from './approval-policy.js';
+export type {
+  ApprovalPolicySource,
+  ApprovalPolicySwitchOutcome,
+  ApprovalPolicyValue,
+} from './approval-policy.js';
+export {
   APPROVAL_GATE_MIDDLEWARE_NAME,
   APPROVAL_GATE_PLUGIN_NAME,
   approvalGatePlugin,

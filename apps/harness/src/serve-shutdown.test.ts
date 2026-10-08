@@ -112,7 +112,12 @@ describe('serve 收到 SIGINT', () => {
     const events = await threadLog(root, 'alpha');
     expect(events.map((event) => event.seq)).toEqual(events.map((_, index) => index));
     // 人送出的話先進送出佇列（#637）：第一顆是送進來的那一顆，緊接著開跑。
-    expect(events.slice(0, 2).map((event) => event.type)).toEqual(['inbox/spliced', 'turn/start']);
+    // 在它前面是接上日誌時釘進去的核准政策起始值（#437）。
+    expect(events.slice(0, 3).map((event) => event.type)).toEqual([
+      'approval/policy',
+      'inbox/spliced',
+      'turn/start',
+    ]);
     expect(events.at(-1)?.type).toBe('turn/end');
 
     // 重開：同一個目錄、同一條 thread，歷史裡有那句話與回覆。
@@ -144,7 +149,7 @@ describe('serve 收到 SIGINT', () => {
     // 它在送進來的當下就落在第一顆 `inbox/spliced` 裡，比開跑的 `turn/start` 還早；就算只來得及寫下這一顆，
     // 重開之後它也停在佇列裡，不會丟。
     const events = await threadLog(root, 'beta');
-    expect(events[0]).toMatchObject({
+    expect(events.find((event) => event.type !== 'approval/policy')).toMatchObject({
       type: 'inbox/spliced',
       data: { inserted: [{ text: '把這句話回聲一次。' }] },
     });

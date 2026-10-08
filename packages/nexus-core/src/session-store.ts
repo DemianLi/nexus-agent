@@ -407,8 +407,18 @@ import type { SessionEvent } from './session-log.js';
  * （dsh 的 `repair.ts` 掃描遇到 end-seed 不重設，所以這個形狀是它本來就允許的），之後再續接不會重複補（冪等）。
  * 數字影響：被當掉收尾的輪現在在檔上是 `interrupted` 而不是「開著」，`session-stats`、`eval/session-scan`、`eval/session-draft` 與 web 歷史
  * 對「當掉的輪」的計數會從「沒收尾」移到「被中斷」，見 PR 內文。
+ *
+ * ## 34：核准政策進日誌（[#437](https://github.com/DemianLi/nexus-agent/issues/437)）
+ *
+ * 新增 `approval/policy { policy: 'ask' | 'never', source? }`（root 起始值與每次切換；子代理日誌一顆 `source: 'delegation'`）。
+ *
+ * **升版，而且不標 `ignorable`**——它是新增的**種類**，但判準（見 32 的「什麼時候要升版」）看的是舊 runtime 略過它會不會讀錯：
+ * 它**左右續接之後的行為**（記著 `never` 的日誌，被一台 33 的 runtime 略過後會當 `ask` 續接，也就是本來被回絕的事開始去問人）。
+ * 同 `sandbox/mode`，也同 dsh（它的 `approval/policy` 沒有略過旗標）：舊 runtime 該拒絕讀。
+ *
+ * **讀舊檔**：33 以前沒有這一顆，續接時照 `ask` 起算，也就是以前的行為，不補寫歷史。
  */
-export const SESSION_LOG_FORMAT_VERSION = 33;
+export const SESSION_LOG_FORMAT_VERSION = 34;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
