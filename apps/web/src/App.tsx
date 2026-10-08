@@ -74,6 +74,8 @@ import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
 import { prepareAttachments } from '@/lib/attachment-send';
 import { useDraftAttachments } from '@/lib/use-draft-attachments';
 import { useUploads } from '@/lib/use-uploads';
+import { createAttachmentImageSource } from '@/lib/attachment-image';
+import { AttachmentImageContext } from '@/components/sent-attachments';
 
 /**
  * 接回上一次那條 thread 時講的話。
@@ -349,6 +351,12 @@ function ConversationView({
   });
   // 上傳的進度與取消（#733）：卡片上的進度條、取消鈕。
   const uploads = useUploads();
+  // 已送出的圖讀回來畫縮圖（#733）：一條 thread 一份，換 thread 整個重掛，卸載時放掉 blob URL。
+  const imageSource = useMemo(
+    () => createAttachmentImageSource(client, threadId),
+    [client, threadId],
+  );
+  useEffect(() => () => imageSource.dispose(), [imageSource]);
   // `@子代理` 提及（#328 第 2 項）：這一輪委派給誰，一句話最多一個。清單由 server 給（`subagent.list`），
   // 沒實作、被拒或空的就是 `null`：整個功能不出現。送出時放進 `run.start` 的 `mention`，不轉成文字塞進 `input`。
   const agents = useAgentMention(client, threadId);
@@ -564,29 +572,31 @@ function ConversationView({
           </div>
         ) : (
           <SessionReferenceContext.Provider value={sessionLinks}>
-            <SubagentControlContext.Provider value={subagentControl}>
-              <Transcript
-                state={conversation.state}
-                isFresh={isFresh}
-                changes={changes}
-                deliverableDownload={deliverableDownload}
-                feedback={{
-                  ratings: conversation.ratings,
-                  busy: !conversation.connected,
-                  loadFailed: conversation.ratingsLoadFailed,
-                  onSeed: conversation.seedRatings,
-                  onRate: (messageId, rating) => void conversation.rate(messageId, rating),
-                }}
-                {...(conversation.history === undefined
-                  ? {}
-                  : {
-                      earlier: {
-                        ...conversation.history,
-                        onLoad: () => void conversation.loadEarlier(),
-                      },
-                    })}
-              />
-            </SubagentControlContext.Provider>
+            <AttachmentImageContext.Provider value={imageSource}>
+              <SubagentControlContext.Provider value={subagentControl}>
+                <Transcript
+                  state={conversation.state}
+                  isFresh={isFresh}
+                  changes={changes}
+                  deliverableDownload={deliverableDownload}
+                  feedback={{
+                    ratings: conversation.ratings,
+                    busy: !conversation.connected,
+                    loadFailed: conversation.ratingsLoadFailed,
+                    onSeed: conversation.seedRatings,
+                    onRate: (messageId, rating) => void conversation.rate(messageId, rating),
+                  }}
+                  {...(conversation.history === undefined
+                    ? {}
+                    : {
+                        earlier: {
+                          ...conversation.history,
+                          onLoad: () => void conversation.loadEarlier(),
+                        },
+                      })}
+                />
+              </SubagentControlContext.Provider>
+            </AttachmentImageContext.Provider>
           </SessionReferenceContext.Provider>
         )}
 
