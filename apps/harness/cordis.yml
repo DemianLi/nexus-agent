@@ -610,7 +610,7 @@
 # **最小是 2，不是 dsh 的 1（串行）**：LangGraph 的 `maxConcurrency: 1` 跑完第一顆就靜靜收掉那一步，其餘工具呼叫
 # 沒跑、也不報錯（基座的缺陷，理由與絆索在 `src/settings/agent-loop.ts` 檔頭）。
 # 組裝期讀一次、帶進 LangGraph 的 `maxConcurrency`，一次性與背景子代理吃同一個值；改值要重啟（dsh 是熱重載，#46 不接）。
-# **還沒有「平行安全／獨佔」的分類**（#711 第 2 步）：今天每顆都可以重疊，只是最多這麼多顆。
+# 這個值只管「可以重疊的那一類」最多幾顆；哪些工具可以重疊由工具自己宣告（`metadata.concurrencySafe`，#711 第 2 步）。
 # **這一列關不掉**，理由同 `recursion-limit`：關掉會落回內建的 10，讀起來卻像解除了上限。
 - id: agent-loop
   name: '#settings/agent-loop'

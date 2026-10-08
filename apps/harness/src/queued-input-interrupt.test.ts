@@ -20,7 +20,7 @@
  */
 
 import { tool } from '@langchain/core/tools';
-import { TOOL_ABORTED_BEFORE_DISPATCH_TEXT } from '@nexus/core';
+import { TOOL_ABORTED_BEFORE_DISPATCH_TEXT, CONCURRENCY_SAFE_METADATA_KEY } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionLog } from '@nexus/core';
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
@@ -69,7 +69,13 @@ function toolsPlugin(probe: Probe): PluginEntry {
                 probe.danger += 1;
                 return DANGER_DONE;
               },
-              { name, description: '要核准。', schema: z.object({}) },
+              {
+                name,
+                description: '要核准。',
+                schema: z.object({}),
+                // 宣告可重疊（#711 第 2 步）：這份測試要的是同一輪兩顆中斷同時掛出來；沒宣告的工具是獨佔，一次只問一顆。
+                metadata: { [CONCURRENCY_SAFE_METADATA_KEY]: true },
+              },
             ),
           );
         }

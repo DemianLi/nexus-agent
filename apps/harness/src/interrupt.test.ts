@@ -228,7 +228,7 @@ describe('一批裡混著核准與拒絕', () => {
     expect(requested).toContain('bad_tool');
   });
 
-  it('兩個都要核准 → 一次暫停帶兩顆中斷，一個決定套到兩顆上', async () => {
+  it('兩個都要核准 → 一次暫停帶一顆中斷（逐顆問），一個決定套到兩顆上', async () => {
     // **這是裸 resume 值的行為，產品路徑走的線已經不是這樣了**：上行逐
     // `interrupt_id` 送 `Command({ resume: { [id]: 決定 } })`，基座據鍵逐 task 派送，
     // 所以經過線只答一顆就只有一顆跑（`fanout-wire.test.ts`，
@@ -246,8 +246,11 @@ describe('一批裡混著核准與拒絕', () => {
     });
     const config = { configurable: { thread_id: 'two-gated' } };
 
+    // **一次一顆**（#711 第 2 步）：這兩個工具沒宣告可重疊，是獨佔，排在後面的 `bad_tool` 等前面的收尾，前面的在核准點中斷時它
+    // 一起退出、什麼都不做。以前（沒有屏障）是同一步兩顆中斷同時掛出來；現在同 dsh，逐顆問。裸 resume 值照舊：退出的那顆
+    // resume 時重跑，讀到的還是同一個物件，所以一個決定仍蓋住兩顆。
     const paused = await agent.invoke(toAgentInvocation('動手'), config);
-    expect((paused.__interrupt__ as unknown[] | undefined)?.length).toBe(2);
+    expect((paused.__interrupt__ as unknown[] | undefined)?.length).toBe(1);
     expect(ran).toEqual([]);
 
     const after = await agent.invoke(
@@ -258,7 +261,7 @@ describe('一批裡混著核准與拒絕', () => {
     expect(ran).toEqual(['ok_tool', 'bad_tool']);
   });
 
-  it('**一顆拒絕蓋住同一輪的兩顆中斷**——兩個都沒跑，各拿各的拒絕（上一條的反面）', async () => {
+  it('**一顆拒絕蓋住同一輪的兩顆呼叫**——兩個都沒跑，各拿各的拒絕（上一條的反面）', async () => {
     // **上一條的反面**：同一個成因（每次呼叫各自去讀同一個 resume 物件的 `decisions[0]`，
     // 機制寫在上一條）在拒絕側的樣子——人只按了一次拒絕，兩顆中斷都走到 `denial(...)`。
     // 線上那一側同一輪兩顆中斷怎麼折疊是另一件事，這裡不下結論。
@@ -268,8 +271,9 @@ describe('一批裡混著核准與拒絕', () => {
     });
     const config = { configurable: { thread_id: 'two-gated-reject' } };
 
+    // 一次一顆，見上一條（#711 第 2 步）；裸 resume 值的那個拒絕仍蓋住退出後重跑的第二顆。
     const paused = await agent.invoke(toAgentInvocation('動手'), config);
-    expect((paused.__interrupt__ as unknown[] | undefined)?.length).toBe(2);
+    expect((paused.__interrupt__ as unknown[] | undefined)?.length).toBe(1);
     expect(ran).toEqual([]);
 
     const after = await agent.invoke(

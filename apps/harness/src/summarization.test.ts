@@ -183,6 +183,7 @@ describe('同名取代是唯一的縫', () => {
         'subAgentMiddleware',
         'SummarizationMiddleware',
         'patchToolCallsMiddleware',
+        'nexusToolBarrier',
         'nexusToolFailureContainment',
         // 中止這一輪的外層那顆（#276）：緊貼圍堵，在起訖紀錄器外面。
         'nexusTurnCancel',

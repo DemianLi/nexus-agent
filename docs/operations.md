@@ -276,8 +276,11 @@ export HTTP_PROXY=http://127.0.0.1:7890
 
 **同一步平行跑的工具呼叫也有上限**：模型一步吐出很多顆工具呼叫時，同時在跑的最多 10 顆（照 dsh），
 其餘照模型給的順序等空位；一次性與背景子代理同一個值。要改就改清單裡 `agent-loop` 那一列的
-`config.maxParallelToolCalls`（至少 2，改了要重啟）。**今天每一顆都可以跟別顆重疊**——dsh 只讓宣告了
-平行安全的工具重疊、其餘一顆一顆跑，那一半還沒做（[#711](https://github.com/DemianLi/nexus-agent/issues/711)）。
+`config.maxParallelToolCalls`（至少 2，改了要重啟）。**只有宣告了「可以重疊」的工具才會跟別顆重疊**，
+其餘一顆一顆照模型給的順序跑，同時也擋住後面的（[#711](https://github.com/DemianLi/nexus-agent/issues/711) 第 2 步，照 dsh）：
+基座工具靠名字表，只有 `read_file`、`task`（與選配的 `subagent`）可以重疊，`grep`、`glob`、`ls`、`write_file`、`edit_file`、`execute`
+與沒宣告的外掛工具都是獨佔；外掛工具要重疊，在工具的 `metadata` 上寫 `concurrencySafe: true`（只有剛好是 `true` 才算）。
+**要核准的工具因此一次只問一顆**：同一步裡排前面的先問，後面的等它答完才開卡。
 
 **目標自己往下走與否，CLI 與 `serve` 的預設相反**（[#445](https://github.com/DemianLi/nexus-agent/issues/445)）。
 開著的時候，一個 active 的目標在每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的
