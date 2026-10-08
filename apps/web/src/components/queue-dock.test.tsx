@@ -492,3 +492,42 @@ it('可近用：展開的兩件與編輯中都沒有 axe 違規', async () => {
   fireEvent.click(screen.getByRole('button', { name: '編輯：一' }));
   expect(await axeViolations(container)).toEqual([]);
 });
+
+describe('排著的那一句帶附件（#732）', () => {
+  const withFiles = (id: string, text: string): WireQueuedInput => ({
+    ...item(id, text),
+    attachments: [
+      { type: 'file', attachmentId: 'sha256:f', name: 'note.txt', bytes: 55 },
+      {
+        type: 'image',
+        attachmentId: 'sha256:i',
+        mediaType: 'image/png',
+        bytes: 221,
+        width: 96,
+        height: 96,
+        name: 'red.png',
+      },
+    ],
+  });
+
+  it('有附件的一列多一個迴紋針與件數，名字在 aria-label 與 title；沒附件的列不畫', () => {
+    mount([withFiles('a', '看這個')]);
+    settle();
+    const badge = screen.getByTestId('queue-attachments');
+    expect(badge.textContent).toBe('2');
+    expect(badge.getAttribute('aria-label')).toBe('帶 2 個附件：note.txt、red.png');
+    expect(badge.getAttribute('title')).toBe('note.txt、red.png');
+    cleanup();
+    mount([item('b', '沒附件')]);
+    settle();
+    expect(screen.queryByTestId('queue-attachments')).toBeNull();
+  });
+
+  it('只有附件、沒有字：預覽寫附件的名字，不留空白列；操作鈕的名字也用它', () => {
+    mount([withFiles('a', '')]);
+    settle();
+    const row = document.querySelector('[data-queue-item="a"]') as HTMLElement;
+    expect(within(row).getByText('note.txt、red.png')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '刪除：note.txt、red.png' })).toBeTruthy();
+  });
+});
