@@ -228,7 +228,11 @@ describe('CLI 的 --resume', () => {
    * 線上的圖狀態也留著使用者那句話，所以續接之後的第一次請求要帶它。修之前整份拒推，模型只看到續接後的新話。
    */
   it.each([
-    ['按了停止', 'aborted' as const, { kind: 'aborted', cause: { kind: 'user' } }],
+    [
+      '按了停止',
+      'aborted' as const,
+      { kind: 'aborted' as const, cause: { kind: 'user' as const } },
+    ],
     ['供應商拋錯', 'error' as const, undefined],
   ])('第一次呼叫就沒正常回來（%s）：使用者那句話回來了', async (_, outcome, reason) => {
     // 只有 header 的空日誌，再補上沒回覆的那一輪。
