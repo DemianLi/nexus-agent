@@ -1309,13 +1309,19 @@ function reduceSessionStats(state: ConversationState, payload: object): Conversa
   return { ...state, sessionStats: { turns, steps, llmMs, toolMs } };
 }
 
-/** 排著的一件長得對不對：`@nexus/core` 的 `QueuedInput`，`source` 是人或背景子代理的結算通知。 */
+/** 排著的一件長得對不對：`@nexus/core` 的 `QueuedInput`，`source` 是人或背景子代理的結算通知；帶了 `attachments` 就要形狀合格。 */
 function isQueuedInput(value: unknown): value is WireQueuedInput {
   if (typeof value !== 'object' || value === null) return false;
-  const { id, text, source } = value as { id?: unknown; text?: unknown; source?: unknown };
+  const { id, text, source, attachments } = value as {
+    id?: unknown;
+    text?: unknown;
+    source?: unknown;
+    attachments?: unknown;
+  };
   return (
     typeof id === 'string' &&
     typeof text === 'string' &&
+    isWireAttachments(attachments) &&
     typeof source === 'object' &&
     source !== null &&
     isQueuedSourceKind((source as { kind?: unknown }).kind)
@@ -1490,13 +1496,15 @@ function reduceInbox(
     });
   }
   const queued = (list: readonly WireQueuedInput[]) =>
-    list.map(({ id, text, source }) => ({
+    list.map(({ id, text, source, attachments }) => ({
       id,
       text,
       source:
         source.kind === 'subagent-settled' && isSettleReason(source.reason)
           ? { kind: source.kind, reason: source.reason }
           : { kind: source.kind },
+      // 排著的件帶的附件（#732）：空陣列與沒給一樣不帶這一格。
+      ...attachmentsField(attachments),
     }));
   const inbox = queued(items);
   const inboxNextStep = queued(nextStep ?? []);
