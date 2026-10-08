@@ -43,3 +43,7 @@
 ## 新增 shadcn 元件
 
 照規格 §4.1：`shadcn add … --overwrite`，跑 `prettier --write`，把 `from 'cn'` 改成 `@/lib/utils`，檔頭記來源 URL 與版本，把改過且「改回去畫面不會報錯」的地方補進 `ui/registry-edits.test.ts`。AI Elements 一律不裝。
+
+## 測試與說明文件裡的類別名
+
+Tailwind 會掃整個專案找 class，所以**測試檔與 `apps/web/*.md` 裡寫到的類別名也會被編成規則**。`src/index.css` 用 `@source not` 排除了它們，`pnpm build` 最後的 `check-built-css` 會量產物確認；新增別種會寫類別名的檔案（例如別的資料夾的 `.md`），要一併排除，否則建置會失敗。
