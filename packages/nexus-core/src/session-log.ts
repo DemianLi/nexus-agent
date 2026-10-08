@@ -414,6 +414,20 @@ export interface SessionEventMap {
   /** 掛上了一顆等人回答的中斷。 */
   'interrupt/raised': { readonly interruptId: string };
   /**
+   * 一顆中斷（或其中幾個 key）**不是人答的，是系統代答的**（[#1098](https://github.com/DemianLi/nexus-agent/issues/1098)，MCP 反問）。
+   *
+   * 日誌上人的回答只有「那一輪是 `turn/start { kind: 'resume' }`」這一個痕跡，分不出是誰按的；代答的那一輪要讓讀的人看得出
+   * 這不是人的決定。`reason` 是為什麼不問人（`url-mode`：網址授權一律回絕；`subagent`：子代理背後沒有人），`keys` 是被代答的
+   * 反問 key（`interrupt/raised` 只記 id，反問的內容不進日誌）。代答一律是回絕，沒有代人同意的路。
+   *
+   * 寫在回答它的那一輪裡（`turn/start` 之後），同 `approval/decided`。標 `ignorable`：純資訊，不進模型、不左右重建（#507）。
+   */
+  'interrupt/system-answered': {
+    readonly interruptId: string;
+    readonly reason: string;
+    readonly keys: readonly string[];
+  };
+  /**
    * 核准閘門把一個問題擺到了人面前（或確定沒有人可以問）——**只做審計，不進模型、不左右任何折疊**
    * （[#1029](https://github.com/DemianLi/nexus-agent/issues/1029)，翻了 [#220](https://github.com/DemianLi/nexus-agent/issues/220)
    * 的「認帳不做」：側欄是第一個消費者）。

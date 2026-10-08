@@ -52,6 +52,7 @@ import { AsyncResource } from 'node:async_hooks';
 import { randomUUID } from 'node:crypto';
 
 import { HumanMessage } from '@langchain/core/messages';
+import { Command } from '@langchain/langgraph';
 import {
   BACKGROUND_SESSION_CONFIG_KEY,
   STEP_INBOX_CONFIG_KEY,
@@ -73,7 +74,9 @@ import type {
 import { BACKGROUND_RUN_PREFIX, agentMessageText } from './background-run-id.js';
 import { classifyTurnFailure } from './live-model.js';
 import { RUN_DURABILITY } from './pruned-memory-saver.js';
-import { markProjectionsHandled } from './thread-pump.js';
+import { declineAll, parseMcpElicitation } from './mcp-elicitation.js';
+import type { McpElicitation } from './mcp-elicitation.js';
+import { asInterruptEntries, markProjectionsHandled } from './thread-pump.js';
 import type { RunProjections } from './thread-pump.js';
 
 /** host 對背景圖的全部要求：給我一個可抽的 v3 run。`AgentHandle.compileSubagent` 編出來的圖照 pump 的做法轉型過來。 */
@@ -995,9 +998,11 @@ export class BackgroundSubagentHost {
 
   async #drive(log: SessionLog, job: Job, round: RunningRound): Promise<void> {
     const cancel = round.controller.signal;
-    const run = await this.#agentFor(job.subagent, job.choice).streamEvents(
-      { messages: [new HumanMessage(job.text)] } as never,
-      {
+    let input: unknown = { messages: [new HumanMessage(job.text)] };
+    // 背景子代理背後沒有人：MCP server 反問（#1098）一律回絕，讓它的工具照常收尾，而不是停在一顆沒人會答的中斷上。
+    // 上限防的是一支一直反問的工具；超過就照原樣收（中斷留在存檔點，同沒有這一層之前）。
+    for (let answered = 0; ; answered += 1) {
+      const run = await this.#agentFor(job.subagent, job.choice).streamEvents(input as never, {
         version: 'v3',
         // 存檔點只在這一輪結束時存一份（#1106），理由見 `pruned-memory-saver.ts`。
         durability: RUN_DURABILITY,
@@ -1010,10 +1015,35 @@ export class BackgroundSubagentHost {
           [TURN_CANCEL_CONFIG_KEY]: cancel,
           [STEP_INBOX_CONFIG_KEY]: this.#stepInboxFor(log, round),
         },
-      },
-    );
-    // 在第一顆封包之前：投影裡的 promise 一建立就可能被 reject（#346）。
-    markProjectionsHandled(run);
-    for await (const _event of run) void _event;
+      });
+      // 在第一顆封包之前：投影裡的 promise 一建立就可能被 reject（#346）。
+      markProjectionsHandled(run);
+      const asks = new Map<string, McpElicitation>();
+      for await (const event of run) {
+        const raw = event as { method?: string; params?: { node?: string; data?: unknown } };
+        if (raw.method !== 'updates' || raw.params?.node !== '__interrupt__') continue;
+        for (const entry of asInterruptEntries(raw.params.data)) {
+          const elicitation = parseMcpElicitation(entry.value);
+          if (elicitation !== undefined) asks.set(entry.id, elicitation);
+        }
+      }
+      if (asks.size === 0 || cancel.aborted || answered >= MAX_SYSTEM_ANSWER_ROUNDS) return;
+      const resume: Record<string, unknown> = {};
+      for (const [interruptId, elicitation] of asks) {
+        resume[interruptId] = declineAll(elicitation);
+        log.append(
+          'interrupt/system-answered',
+          { interruptId, reason: 'subagent', keys: Object.keys(elicitation.requests) },
+          { ignorable: true },
+        );
+        this.#warn?.(
+          `[MCP] 背景子代理 ${job.runId} 呼叫 server "${elicitation.server}" 的工具 "${elicitation.tool}" 時被反問，背後沒有人，已代為回絕`,
+        );
+      }
+      input = new Command({ resume });
+    }
   }
 }
+
+/** 背景子代理的工具一直反問時，最多代答幾輪。 */
+const MAX_SYSTEM_ANSWER_ROUNDS = 8;

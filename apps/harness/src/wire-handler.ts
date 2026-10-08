@@ -119,6 +119,7 @@ import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { CommandAttachmentRejected, createCommandExecutor } from '@nexus/plugin-commands';
 import { AttachmentError } from './attachment-store.js';
+import { answerElicitation } from './mcp-elicitation.js';
 import { referencedImage } from './attachment-reference.js';
 import type { AttachmentStore, FileAttachmentRef, ImageAttachmentRef } from './attachment-store.js';
 import { admitImages, ImageIntakeError } from './image-intake.js';
@@ -1628,6 +1629,21 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           `這顆中斷要 ${pending.actionCount} 筆決定，收到 ${Array.isArray(decisions) ? decisions.length : 0} 筆`,
         ),
       );
+    }
+    if (pending.elicitation !== undefined) {
+      // MCP 反問（#1098）：回覆要能翻成 adapter 的 `{ responses }`。翻不動就在這裡退回，**不是**讓 `start` 吞掉 pump 的拒絕——
+      // 那樣呼叫端拿到成功、卡片卻原地不動。
+      try {
+        answerElicitation(pending.elicitation, params.response);
+      } catch (error: unknown) {
+        return json(
+          errorResponse(
+            command.id,
+            'invalid_argument',
+            error instanceof Error ? error.message : String(error),
+          ),
+        );
+      }
     }
     return json(
       successResponse(command.id, {
