@@ -223,6 +223,34 @@ describe('CLI 的 --resume', () => {
     expect(stdout).not.toContain('[不變量]');
   });
 
+  /**
+   * **#1190**：第一次模型呼叫就沒正常回來（按了停止、或供應商拋錯），整份日誌一則回覆都沒有。這不是舊格式漏記，
+   * 線上的圖狀態也留著使用者那句話，所以續接之後的第一次請求要帶它。修之前整份拒推，模型只看到續接後的新話。
+   */
+  it.each([
+    ['按了停止', 'aborted' as const, { kind: 'aborted', cause: { kind: 'user' } }],
+    ['供應商拋錯', 'error' as const, undefined],
+  ])('第一次呼叫就沒正常回來（%s）：使用者那句話回來了', async (_, outcome, reason) => {
+    // 只有 header 的空日誌，再補上沒回覆的那一輪。
+    await cli(['--session-log', logs], '/exit\n');
+    const [entry] = await readdir(logs);
+    const runDir = join(logs, entry!);
+    await appendTail(join(runDir, 'cli.jsonl'), [
+      { type: 'turn/start', data: { kind: 'message', text: '第一句，沒得到回覆' } },
+      { type: 'model/start', data: {} },
+      { type: 'model/end', data: { outcome, modelCall: 1 } },
+      reason === undefined
+        ? { type: 'turn/failed', data: { message: '供應商掛了' } }
+        : { type: 'turn/end', data: { reason } },
+    ]);
+    seenRequests.length = 0;
+
+    const stdout = await cli(['--resume', runDir], '還在嗎\n/exit\n');
+
+    expect(shape(seenRequests[0] ?? [])).toEqual(['human:第一句，沒得到回覆', 'human:還在嗎']);
+    expect(stdout).toContain('對話照日誌推回模型（1 則）');
+  });
+
   it('舊格式（一輪叫過模型卻沒有回覆）：不灌半截，模型從空的開始，講原因', async () => {
     const runDir = await firstRun();
     await appendTail(join(runDir, 'cli.jsonl'), [
@@ -235,7 +263,7 @@ describe('CLI 的 --resume', () => {
     const stdout = await cli(['--resume', runDir], '還在嗎\n/exit\n');
 
     expect(shape(seenRequests[0] ?? [])).toEqual(['human:還在嗎']);
-    expect(stdout).toContain('對話從空的開始：日誌裡少了模型的回覆');
+    expect(stdout).toContain('對話從空的開始：日誌裡有模型正常回來的呼叫，卻沒有記到回覆');
   });
 });
 

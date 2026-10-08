@@ -131,6 +131,8 @@ SR5 的原因是 `restoreConversation` 拿到 `reply-missing`，不灌狀態，�
 
 ### 整份日誌叫過模型卻沒有任何回覆：推導函式整份拒推（新，續接今天就受影響）
 
+> **已修（[#1190](https://github.com/DemianLi/nexus-agent/issues/1190)）**：下表描述的是修之前的行為。修法是第二道檢查不再把帶 `outcome` 的 `model/end`（`aborted`、`error`）算成「模型正常回來」，所以沒正常回來的呼叫不再讓整份日誌拒推；格式 8 以前漏記回覆的日誌（`model/end` 沒有 `outcome`）仍然拒推。上面 ST4、SR5、SS7 與另補的 SR6（第一次呼叫 500 失敗）在修之後都變成相同。
+
 | 項目 | 內容 |
 | --- | --- |
 | 現象 | ST4（根）與 SS7（背景子代理）：第一次模型呼叫進行中被中止，日誌有 `model/start`、`model/end`、`turn/end`，沒有 `assistant/message`。再說一句時，實際請求是 `[user 第一句, user 第二句]`，推導函式回 `unreplayable: reply-missing` |
@@ -189,7 +191,7 @@ SR5 的原因是 `restoreConversation` 拿到 `reply-missing`，不灌狀態，�
 - **dsh 的 `compaction/prune` 怎麼被投影與重放**，我只確認了事件存在與檔頭；沒有讀它的消費端。
 - **其他供應商**（Anthropic 區塊、cache_control）下的系統訊息形狀沒有量；差異清單裡系統區塊那一項，只在用區塊邊界的端點才有影響。
 - **效能與體積**：把剪刀、摘要、截斷的結果寫進日誌會讓日誌多多大，沒估。
-- **沒有修任何東西。** `reply-missing` 的放寬、前景子日誌補輸入事件都只是方向，沒有寫過、沒有驗過修法。
+- **這份文件本身沒有修任何東西。** `reply-missing` 已由 #1190 修掉（見 §三）；前景子日誌補輸入事件只是方向，沒有寫過、沒有驗過修法。
 - **SR1、SR3 有循環性**（§二）：它們驗的是灌回之後請求端沒再改動，不是推導本身。
 
 ## 七、探針留存
