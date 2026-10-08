@@ -79,7 +79,8 @@ export const tokenUsageUnit = {
       return state;
     }
     return {
-      inputTokens: state.inputTokens + inputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0),
+      inputTokens:
+        state.inputTokens + inputTokens + (cacheReadTokens ?? 0) + (cacheWriteTokens ?? 0),
       uncachedInputTokens: state.uncachedInputTokens + inputTokens,
       outputTokens: state.outputTokens + outputTokens,
       ...(cacheReadTokens === undefined && state.cacheReadTokens === undefined
