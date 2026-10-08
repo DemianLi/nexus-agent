@@ -16,6 +16,9 @@
 /* 建置工具的註解會寫到 class 名（例如 `.animate-spin`），不讓 Tailwind 把它們當成要產出的 utility。 */
 @source not '../scripts';
 @source not '../tokengen';
+/* 測試裡的範例字串與說明文件提到的類別名也不要編成規則（裸的 `.container`、`.shadow` 會套到不相干的元素；`scripts/check-built-css.mjs` 量產物確認）。 */
+@source not './**/*.test.{ts,tsx}';
+@source not '../*.md';
 
 /*
  * 現行規則見 `.docs/web-ui-spec.md` §5–§7；兩段 `@theme` 從原型 tag `proto-375-design-language` 搬來（#401）。

@@ -10,9 +10,12 @@
  * 另外兩條同一類的無聲失效：
  * - 宣告裡引用的 `motion-*` keyframes 都真的存在（§10：`@theme` 的 collapsible 引用 `styles/motion.css` 的 keyframes）。
  * - 沒有外部網址（完全內網：字型等資源一律打包）。
+ * - 產物裡沒有只來自測試檔或說明文件的 class：Tailwind 預設掃整個專案，測試裡的範例字串（`bg-red-500`、`container`…）
+ *   與說明文件裡提到的類別名都會被編成真的規則，裸的 `.container`、`.shadow` 這類還會套用到不相干的元素。
+ *   `src/index.css` 用 `@source not` 排除，這裡量產物確認真的排除了。
  */
 
-import { readdirSync, readFileSync } from 'node:fs';
+import { readdirSync, readFileSync, statSync } from 'node:fs';
 
 /**
  * `@keyframes` 允許清單。新增或刪掉 keyframes 時，同一個 PR 改這裡（§12）。
@@ -295,6 +298,42 @@ for (const f of files)
     /(url\(\s*["']?|@import\s+["'])(https?:)?\/\/[^)"']+/g,
   ))
     failures.push(`${f}：外部網址 ${match}`);
+
+// 只來自測試檔或說明文件的 class（`@source not` 失效或新增了沒排除的檔案時才會有）
+const APP = new URL('../', import.meta.url);
+function walk(dir, keep, out = []) {
+  for (const name of readdirSync(dir)) {
+    if (['node_modules', 'dist', 'scripts', 'tokengen'].includes(name)) continue;
+    const isDir = statSync(new URL(name, dir)).isDirectory();
+    const url = new URL(isDir ? `${name}/` : name, dir);
+    if (isDir) walk(url, keep, out);
+    else if (keep(name)) out.push(url);
+  }
+  return out;
+}
+const classTokens = (urls) =>
+  new Set(urls.flatMap((u) => readFileSync(u, 'utf8').split(/[\s"'`]+/)).filter(Boolean));
+const productSource = walk(
+  new URL('src/', APP),
+  (n) => /\.(tsx?|css)$/.test(n) && !/\.test\.tsx?$/.test(n),
+);
+const onlyInDocs = walk(APP, (n) => /\.test\.tsx?$|\.md$/.test(n));
+const productTokens = classTokens([...productSource, new URL('index.html', APP)]);
+const docTokens = classTokens(onlyInDocs);
+const unescape = (cls) => cls.replace(/\\(.)/g, '$1');
+const leaked = new Set();
+// Tailwind 的規則以那個 class 起頭（`.container{…}`、`.hover\\:bg-x:hover{…}`）；第三方的像 `.katex .accent`，class 在後面，不算。
+for (const rule of rules) {
+  const raw = /^\.((?:\\.|[\w-])+)/.exec(rule.selector)?.[1];
+  if (raw === undefined) continue;
+  const cls = unescape(raw);
+  if (docTokens.has(cls) && !productTokens.has(cls)) leaked.add(cls);
+}
+if (leaked.size > 0)
+  failures.push(
+    `產物裡有只來自測試檔或說明文件的 class（${leaked.size} 個：${[...leaked].join('、')}）：` +
+      '`src/index.css` 的 `@source not` 要排除這些檔案',
+  );
 
 if (failures.length > 0) {
   console.error(`check-built-css：${failures.length} 條失敗`);
