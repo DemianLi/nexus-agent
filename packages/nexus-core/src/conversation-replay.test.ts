@@ -649,7 +649,11 @@ describe('推不出來', () => {
     log.append('turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } });
     chat(log, '第二句', '好');
 
-    expect(shape(replayConversation(log.events))).toEqual(['human:第一句', 'human:第二句', 'ai:好']);
+    expect(shape(replayConversation(log.events))).toEqual([
+      'human:第一句',
+      'human:第二句',
+      'ai:好',
+    ]);
   });
 
   it('行程死在第一次呼叫中途，續接補的 model/end { outcome: error } 之後推得出來', () => {
