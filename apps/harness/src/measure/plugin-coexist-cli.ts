@@ -14,11 +14,13 @@
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { fitSlope, measureAccumulation, verifyCoexistence } from './plugin-coexist.js';
+import { probeRealPlugin, shippedConfig } from './plugin-coexist-real.js';
 import type { Ext, LoadMode } from './plugin-coexist.js';
 
 const command = process.argv[2];
 const { values } = parseArgs({
   args: process.argv.slice(3),
+  allowPositionals: true,
   options: {
     mode: { type: 'string', default: 'dir' },
     ext: { type: 'string', default: 'ts' },
@@ -59,6 +61,23 @@ if (command === 'verify') {
       codePerUpdateMb: fitSlope(samples, (s) => s.codeSpaceMb),
     }),
   );
+} else if (command === 'real') {
+  // 用法：real <套件名>...；設定取自出貨的 cordis.yml，沒有那一列的選配套件用下面的最小設定。
+  const optional: Record<string, Record<string, unknown>> = {
+    mcp: {
+      serverName: 'probe',
+      connection: { transport: 'stdio', command: 'node', args: ['-e', '0'] },
+    },
+    'telemetry-otel': { mode: 'disabled' },
+    'workspace-changes': { root: process.cwd() },
+  };
+  const hostServices: Record<string, Record<string, unknown>> = {
+    'system-prompt': { systemPromptVariables: { model: 'probe-model', cwd: '/' } },
+  };
+  for (const pkg of process.argv.slice(3)) {
+    const config = (await shippedConfig(pkg)) ?? optional[pkg];
+    console.log(JSON.stringify(await probeRealPlugin(pkg, config, hostServices[pkg])));
+  }
 } else if (command === 'matrix') {
   const runs: string[][] = [];
   for (const mode of ['dir', 'query']) {
@@ -91,6 +110,6 @@ if (command === 'verify') {
     if (child.status !== 0) process.stderr.write(child.stderr);
   }
 } else {
-  console.error('用法：verify | memory [...] | matrix [--updates N]');
+  console.error('用法：verify | real <套件名>... | memory [...] | matrix [--updates N]');
   process.exitCode = 2;
 }
