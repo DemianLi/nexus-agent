@@ -112,6 +112,11 @@ export interface SessionUsageView {
 /** 快取那兩格缺席時畫的字（缺席＝沒記，不是 0）。 */
 export const NOT_RECORDED = '沒記';
 
+/** 快取桶的數字寫成字：缺席寫 {@link NOT_RECORDED}（不是 0）。 */
+export function cacheCountText(count: number | undefined): string {
+  return count === undefined ? NOT_RECORDED : exactTokens(count);
+}
+
 /** 精確的 token 數，千分位：`412,380 token`。 */
 export function exactTokens(count: number): string {
   return `${count.toLocaleString('en-US')} token`;

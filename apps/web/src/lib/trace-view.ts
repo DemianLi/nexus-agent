@@ -229,6 +229,10 @@ export type TraceRow =
       readonly model?: string;
       readonly inputTokens?: number;
       readonly outputTokens?: number;
+      /** 快取分桶（#724）；缺席＝沒記，投影沒給這幾格（舊 server）整組缺席。 */
+      readonly uncachedInputTokens?: number;
+      readonly cacheReadTokens?: number;
+      readonly cacheWriteTokens?: number;
       readonly toolCount: number;
       readonly retryCount: number;
       /** 這次呼叫沒有正常回來的方式（投影的 `TrajectoryCall.outcome`）；沒有這一格 ＝ 正常回來，或舊日誌。 */
@@ -295,6 +299,13 @@ export interface TurnHead {
   readonly retryCount: number;
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /**
+   * 快取分桶的加總（#724），規則同 `TrajectoryDigest`：缺席＝沒記。**併續接時兩段都有才相加**，只一段有的數字當成總數，
+   * 命中率的分母會是錯的。
+   */
+  readonly uncachedInputTokens?: number;
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
   /** 單輪上限摺掉的呼叫與工具數；沒摺過沒有這兩格。計數仍含它們。 */
   readonly elidedCalls?: number;
   readonly elidedTools?: number;
@@ -659,6 +670,28 @@ function logicalNumbers(view: TrajectoryView): ReadonlyMap<number, number> {
   return numbers;
 }
 
+interface BucketFields {
+  readonly uncachedInputTokens?: number | undefined;
+  readonly cacheReadTokens?: number | undefined;
+  readonly cacheWriteTokens?: number | undefined;
+}
+
+/** 三格快取分桶：缺席的不放進去（列只放有的原始值，`sameRow` 逐欄 `===`）。 */
+function bucketFields(source: BucketFields): BucketFields {
+  return {
+    ...(source.uncachedInputTokens === undefined
+      ? {}
+      : { uncachedInputTokens: source.uncachedInputTokens }),
+    ...(source.cacheReadTokens === undefined ? {} : { cacheReadTokens: source.cacheReadTokens }),
+    ...(source.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: source.cacheWriteTokens }),
+  };
+}
+
+/** 併續接時的桶：兩段都有才加，缺一段就是沒記。 */
+function addBucket(left: number | undefined, right: number | undefined): number | undefined {
+  return left === undefined || right === undefined ? undefined : left + right;
+}
+
 function headOf(digest: TrajectoryDigest, number: number): TurnHead {
   return {
     number,
@@ -671,6 +704,7 @@ function headOf(digest: TrajectoryDigest, number: number): TurnHead {
     retryCount: digest.retryCount,
     inputTokens: digest.inputTokens,
     outputTokens: digest.outputTokens,
+    ...bucketFields(digest),
     ...(digest.end === undefined ? {} : { end: digest.end }),
     ...(digest.failureCode === undefined ? {} : { failureCode: digest.failureCode }),
     ...(digest.endTime === undefined ? {} : { endTime: digest.endTime }),
@@ -693,6 +727,11 @@ function mergeHead(first: TurnHead, resume: TurnHead): TurnHead {
     retryCount: first.retryCount + resume.retryCount,
     inputTokens: first.inputTokens + resume.inputTokens,
     outputTokens: first.outputTokens + resume.outputTokens,
+    ...bucketFields({
+      uncachedInputTokens: addBucket(first.uncachedInputTokens, resume.uncachedInputTokens),
+      cacheReadTokens: addBucket(first.cacheReadTokens, resume.cacheReadTokens),
+      cacheWriteTokens: addBucket(first.cacheWriteTokens, resume.cacheWriteTokens),
+    }),
     ...(resume.end === undefined ? {} : { end: resume.end }),
     ...(resume.failureCode === undefined ? {} : { failureCode: resume.failureCode }),
     ...(resume.endTime === undefined
@@ -829,7 +868,11 @@ function callRowOf(
     ...(call.model === undefined ? {} : { model: call.model }),
     ...(call.usage === undefined
       ? {}
-      : { inputTokens: call.usage.inputTokens, outputTokens: call.usage.outputTokens }),
+      : {
+          inputTokens: call.usage.inputTokens,
+          outputTokens: call.usage.outputTokens,
+          ...bucketFields(call.usage),
+        }),
     ...options.snapshotParts(call),
   };
 }

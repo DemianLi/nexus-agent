@@ -32,6 +32,13 @@ import type {
   WireProjection,
 } from '@nexus/wire';
 
+import {
+  NOT_RECORDED,
+  cacheHitRate,
+  cacheHitRateText,
+  usageBuckets,
+} from '@/lib/session-usage-view';
+
 /** 沒記的欄位顯示成這個。 */
 export const ABSENT = '—';
 
@@ -120,6 +127,58 @@ export function durationText(ms: number | undefined): string {
 export function tokenText(count: number | undefined): string {
   return count === undefined ? ABSENT : count.toLocaleString('en-US');
 }
+
+/** 觀測分頁一處用量要畫的字（呼叫的 `usage`、一輪的加總都走這條，規則同成本分頁與頂列）。 */
+export interface TokenFacts {
+  readonly inputTokens?: number | undefined;
+  readonly outputTokens?: number | undefined;
+  readonly uncachedInputTokens?: number | undefined;
+  readonly cacheReadTokens?: number | undefined;
+  readonly cacheWriteTokens?: number | undefined;
+}
+
+export interface TokenParts {
+  /** 輸入：新 server 是未快取的那一桶，舊 server 是 `inputTokens`（含快取）；沒報用量是 {@link ABSENT}。 */
+  readonly input: string;
+  readonly output: string;
+  /** 兩格快取：新 server 才有（缺席畫「沒記」）；舊 server 沒有這兩格。 */
+  readonly cache?: { readonly read: string; readonly write: string };
+  /** 命中率（一位小數或「沒記」）；不該畫（沒有快取資料、分母是 0、舊 server 沒報用量）沒有這一格。 */
+  readonly hitRate?: string;
+}
+
+export function tokenParts(facts: TokenFacts): TokenParts {
+  // 沒報用量（呼叫沒有 `usage`）時 `inputTokens` 缺席；報了就一定有，未快取那一格只是它的選填明細。
+  if (facts.inputTokens === undefined)
+    return { input: ABSENT, output: tokenText(facts.outputTokens) };
+  // 四桶互不重疊，**不讀 `inputTokens`**（#724）：它之後改成只算未快取，畫面的數字不能跟著動。
+  const buckets = usageBuckets({
+    inputTokens: facts.inputTokens ?? 0,
+    outputTokens: facts.outputTokens ?? 0,
+    ...(facts.uncachedInputTokens === undefined
+      ? {}
+      : { uncachedInputTokens: facts.uncachedInputTokens }),
+    ...(facts.cacheReadTokens === undefined ? {} : { cacheReadTokens: facts.cacheReadTokens }),
+    ...(facts.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: facts.cacheWriteTokens }),
+  });
+  const rate = cacheHitRate(buckets);
+  return {
+    input: tokenText(buckets.input),
+    output: tokenText(buckets.output),
+    ...(buckets.cacheInInput
+      ? {}
+      : {
+          cache: {
+            read: cacheTokenText(buckets.cacheRead),
+            write: cacheTokenText(buckets.cacheWrite),
+          },
+        }),
+    ...(rate === undefined ? {} : { hitRate: cacheHitRateText(rate) }),
+  };
+}
+
+const cacheTokenText = (count: number | undefined): string =>
+  count === undefined ? NOT_RECORDED : tokenText(count);
 
 /** 一輪是怎麼開始的。 */
 export const TURN_KIND_LABEL: Readonly<Record<TrajectoryTurnKind, string>> = {

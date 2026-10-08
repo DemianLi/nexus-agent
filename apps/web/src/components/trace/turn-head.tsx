@@ -7,7 +7,7 @@ import {
   clockText,
   durationText,
   failureCodeText,
-  tokenText,
+  tokenParts,
 } from '@/lib/trajectory-view';
 
 /** 停在中斷點的那一輪，標頭的結束狀態寫它停在哪，不寫「完成」。「停在核准點」與成本分頁同一句。 */
@@ -41,6 +41,7 @@ function EndFact({ head }: { head: TurnHead }) {
 
 /** 一輪的數字（呼叫、工具、重試、token）；摺掉的部分仍算在計數裡，所以另外講。 */
 export function HeadFacts({ head, noEnd = false }: { head: TurnHead; noEnd?: boolean }) {
+  const tokens = tokenParts(head);
   return (
     <>
       <span>{clockText(head.time)}</span>
@@ -56,8 +57,11 @@ export function HeadFacts({ head, noEnd = false }: { head: TurnHead; noEnd?: boo
       )}
       {head.retryCount > 0 && <span>重試 {head.retryCount} 次</span>}
       <span>
-        輸入 {tokenText(head.inputTokens)}／輸出 {tokenText(head.outputTokens)}
+        輸入 {tokens.input}／輸出 {tokens.output}
       </span>
+      {tokens.hitRate !== undefined && (
+        <span data-testid="trace-cache-hit">快取命中 {tokens.hitRate}</span>
+      )}
     </>
   );
 }
