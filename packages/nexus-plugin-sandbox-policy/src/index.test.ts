@@ -32,12 +32,13 @@ describe('政策那句話本身', () => {
     }
   });
 
-  it('workspace-write：有圍堵帶可寫根（`/`）與暫存區半句，沒有圍堵不帶根、不教路徑規則', () => {
+  it('workspace-write：有圍堵帶可寫根（`/`），沒有圍堵不帶根、不教路徑規則；兩邊都不說暫存區可寫', () => {
     const contained = sandboxPolicySentence('workspace-write', { contained: true });
     const uncontained = sandboxPolicySentence('workspace-write', { contained: false });
     expect(contained).toContain('`/` 就是工作區根');
-    expect(contained).toContain('平台的暫存區也可能可寫');
-    expect(uncontained).toContain('平台的暫存區也可能可寫');
+    // 不抄 dsh 的暫存區半句：我們的 backend 只認可寫根，說了會讓模型去寫 `/tmp` 然後被擋。
+    expect(contained).not.toContain('暫存區');
+    expect(uncontained).not.toContain('暫存區');
     expect(uncontained).not.toContain('`/`');
     expect(uncontained).not.toContain('磁碟上的絕對路徑');
   });

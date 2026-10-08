@@ -110,8 +110,11 @@ const DELEGATION_TOOL_NAME = 'task';
  * 不會暗示根外被擋著。以前的措辭（「改不動任何檔案」「直接放行」）把一道 fence 當前提，沒有圍堵時是謊。
  *
  * **登記：可寫根用工具的位址空間指名（`/`），不給主機路徑**，理由見模組註解的登記。**沒有圍堵時不帶根**
- * （沒有一個「可寫根」可指名；也不能叫模型別傳主機路徑，那是 `virtualMode` 圍堵才有的位址規則）。「平台暫存區也可能可寫」照 dsh 抄那半句，
- * 是個「可能」，不是我們量到的承諾。
+ * （沒有一個「可寫根」可指名；也不能叫模型別傳主機路徑，那是 `virtualMode` 圍堵才有的位址規則）。
+ *
+ * **措辭上的偏離：不抄 dsh 的「Some platform temporary areas may also be writable」那半句。** 那是 dsh 沙箱的機制
+ * （它真的會放行某些暫存區），不是平台的事實；我們的 `ContainedFilesystemBackend` 只認可寫根，這半句在我們這裡不成立，
+ * 抄了會讓模型去寫 `/tmp` 然後被擋。基礎建設不同、事實不同，所以這是措辭的偏離，不是機制的偏離。
  *
  * @param mode - 這一刻的圍堵強度。
  * @param options - `contained`：這次組裝有沒有圍堵（預設有）。決定 `workspace-write` 帶不帶可寫根。
@@ -134,8 +137,7 @@ export function sandboxPolicySentence(
         (contained
           ? '工作區根之下的檔案（檔案工具的路徑一律從 `/` 寫起，`/` 就是工作區根，例如 `/src/index.ts`、`/notes/todo.md`；' +
             '不要把磁碟上的絕對路徑傳給檔案工具，那會被當成工作區根底下的一條子路徑）。'
-          : '工作區之下的檔案。') +
-        '平台的暫存區也可能可寫。'
+          : '工作區之下的檔案。')
       );
     case 'danger-full-access':
       return '目前的檔案政策：danger-full-access。受檔案沙箱管的可用操作，檔案變更不受限制。';
