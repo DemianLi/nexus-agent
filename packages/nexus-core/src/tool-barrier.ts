@@ -25,7 +25,7 @@
  * - **核准中斷是偏離 dsh 的新設計**（PM 2026-10-08 在 #711 拍板的第 3 條）：dsh 的核准在 `prepare` 裡、照模型順序逐顆 await；我們的核准是
  *   工具呼叫裡的 `interrupt()`，LangGraph 的語意是那一顆拋出之後整個 superstep 等其他 task 收完才交出中斷。屏障上等待的呼叫若
  *   一直等前面那顆 exclusive「跑完」，superstep 收不完、中斷交不出去，死鎖；若等它「結束（含中斷）」就往下跑，順序被打破。
- *   所以前面那顆**中斷**時，等它的呼叫**一起退出**——拋一顆空的 `GraphInterrupt`。實測（`tool-barrier.test.ts`）：它沒有寫 `INTERRUPT`
+ *   所以前面那顆**中斷**時，等它的呼叫**一起退出**——拋一顆空的 `GraphInterrupt`。實測（`apps/harness/src/tool-barrier.test.ts`）：它沒有寫 `INTERRUPT`
  *   也沒有任何寫入，resume 時被當成沒跑過的 task 重跑；沒有卡、不要求回答、不再次中斷、`tool/call` 只記真的開跑那一次。
  *   dsh 沒有對應物，因為它的核准不在圖裡。
  *
@@ -126,8 +126,7 @@ function owningMessage(
   if (!Array.isArray(messages)) return undefined;
   for (let at = messages.length - 1; at >= 0; at -= 1) {
     const message = messages[at] as
-      | { id?: string; tool_calls?: readonly { id?: string }[] }
-      | undefined;
+      { id?: string; tool_calls?: readonly { id?: string }[] } | undefined;
     const calls = message?.tool_calls ?? [];
     if (!calls.some((call) => call.id === callId)) continue;
     const ids = calls.map((call) => call.id ?? '');

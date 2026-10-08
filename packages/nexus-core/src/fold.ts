@@ -32,6 +32,7 @@ import type { ToolFilter } from './subagent-tool-filter.js';
 import type { ApprovalChannel } from './approval.js';
 import { deriveApprovalChannel } from './approval.js';
 import { createContainmentMiddleware } from './containment.js';
+import { createToolBarrierMiddleware } from './tool-barrier.js';
 import { createOutputSchemaMiddleware } from './output-schema.js';
 import { createFsToolErrorsMiddleware, recordBackendOutcomes } from './fs-tool-errors.js';
 import { FS_SERVICE, settleFsService } from './fs-service.js';
@@ -536,6 +537,9 @@ export function foldRegistry(
       'stepInbox',
       same(options.stepInbox === true ? createStepInboxMiddleware() : undefined),
     ),
+    // 同一步多顆工具呼叫的獨佔屏障（#711 第 2 步）排在圍堵外面：等待中的呼叫在通過屏障前**什麼都不做**，不能先被圍堵記一顆
+    // `tool/call`（resume 重跑會記第二顆）。**各建一份**：紀錄在閉包裡，root 與每個子代理各有各的步。見 {@link ./tool-barrier.ts}。
+    perAgent('toolBarrier', () => createToolBarrierMiddleware()),
     // 圍堵在第 0 格：它要包住下面每一個，包含子代理 `spec.middleware` 自己帶的那些。
     shared('containment', containment),
     // 緊貼圍堵：在它裡面（換過的結果圍堵才記得到碼），在起訖紀錄器外面（中止之後被擋下的那次呼叫不算一步）。

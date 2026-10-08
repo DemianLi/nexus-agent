@@ -11,6 +11,7 @@
  */
 
 import { tool } from '@langchain/core/tools';
+import { CONCURRENCY_SAFE_METADATA_KEY } from '@nexus/core';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
 import type { Event, ThreadFeedFrame } from '@nexus/wire';
@@ -41,6 +42,8 @@ function gated(names: readonly string[]): PluginEntry {
               name,
               description: `要核准的 ${name}`,
               schema: z.object({}),
+              // 宣告可重疊（#711 第 2 步）：這份測試要的是同一輪兩顆中斷同時掛出來；沒宣告的工具是獨佔，一次只問一顆。
+              metadata: { [CONCURRENCY_SAFE_METADATA_KEY]: true },
             }),
           );
         }
