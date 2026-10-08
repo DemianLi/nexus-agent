@@ -12,63 +12,104 @@
  *
  * dsh 在續接時拿到寫所有權、冷讀，`interruptedTurnClosers(persisted)` 算補結，`handle.append(closers)` 寫回，
  * 再以 `persisted + closers` 當 seed（`packages/core/agent-loop/src/index.ts:848-863`，`477b4f4`）。補結是最後那一輪
- * 沒配到的呼叫各一顆錯誤 `tool/result`，最後補 `turn/end {kind:'interrupted'}`（`packages/core/session/src/repair.ts:159-162`）。
- * 語意修復歸 agent 層、不歸存放層，所以這裡是一個獨立的 helper，不放進 `SessionStore.resume`。
+ * 沒配到的呼叫各一顆錯誤 `tool/result`，有開著的步補 `step/end`，最後補 `turn/end {kind:'interrupted'}`
+ * （`packages/core/session/src/repair.ts:159-162`）。語意修復歸 agent 層、不歸存放層，所以這裡是一個獨立的 helper，
+ * 不放進 `SessionStore.resume`。
  *
- * ## 只補**記過 `tool/call`** 的那種
+ * ## 補哪些（卡上三題 PM 2026-10-08 拍板，一律照 dsh）
  *
- * 回覆要了、還沒記到 `tool/call` 的那次，一顆 `tool/result` 在我們的配對不變量上是違規（`invariant.ts`），
- * 那條偏離（{@link ./conversation-replay.ts}）不動：它們維持在記憶體裡補。dsh 對合成的「還沒開始」結果明文放行
- * 配對檢查（`packages/core/session/src/invariant.ts:142-145`），要不要一併寫回是卡上交給 demian 的另一題。
- *
- * ## 還沒決定的三件事（卡上交給 demian，這裡**沒有替他定**）
- *
- * - **`session/end-seed` 之後才補。** dsh 的掃描遇到 end-seed 不重設（`repair.ts:107-109`），舊檔「開著的輪＋end-seed、
- *   之後沒有新輪」的尾巴會補在 end-seed 之後，撞上我們不變量在 end-seed 的重設。這一版**照現有不變量，在 end-seed
- *   重設**：那種舊檔尾巴不補（新檔不會有這個形狀，補結一律排在 end-seed 前面）。
- * - **開著的 `model/start` 不補 `model/end`。** dsh 補 `step/end`，但這一對不是 dsh 的 step。
- * - **「還沒開始」那條偏離**，見上。
+ * - **沒配到結果的呼叫都補**：記過 `tool/call` 的說結果不明，回覆裡要了、還沒記到 `tool/call` 的說還沒開始
+ *   （dsh 的 `ToolCallRecovery`：呼叫由回覆登記，`tool/call` 只標「開始了」）。不變量對合成的「還沒開始」結果明文放行
+ *   （dsh `packages/core/session/src/invariant.ts:142-145`，我們的 `invariant.ts` 同）。
+ * - **開著的 `model/start` 補 `model/end`**，對應 dsh 補 `step/end`。這一對不是 dsh 的 step（`session-log.ts` 的 `model/start`），
+ *   但「每一個進入的呼叫恰好一顆結尾」同一條規則（`model/end` 的檔頭）。`outcome` 用 `'error'`（#1022 的詞彙裡表示失敗的那一格；
+ *   行程死了不是使用者按的停止，所以不是 `'aborted'`），`modelCall` 指回那顆 `model/start`。
+ * - **掃描遇到 `session/end-seed` 不重設**（dsh `repair.ts:107-109`）。dsh 的日誌**會**有「開著的輪後面接 end-seed」
+ *   （fork seed 先接 end-seed、再接補結，`fork.ts:21-29`），不變量對 end-seed 不設限（`invariant.ts:155-156`）。我們的舊檔
+ *   「開著的輪＋end-seed、之後沒有新輪」（#934 之前續接過、又沒有新輪就停了）因此會補，補結接在 end-seed **後面**；
+ *   新檔的補結一律在 end-seed 前面（續接當下先補、再接 seed）。舊檔「開著的輪＋end-seed＋新 `turn/start` …」的新一輪
+ *   自己收了尾，掃描由那顆 `turn/start` 重設，所以不補。「只掃最後一顆 end-seed 之後」那條沒有採：理由是舊檔的形狀，
+ *   不是基礎建設表達不出來。
  *
  * @module
  */
 
-import { toLoggedMessage } from './logged-message.js';
-import { closer } from './conversation-replay.js';
-import { TOOL_OUTCOME_UNKNOWN } from './tool-events.js';
+import { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
+import { closer, requestedCalls } from './conversation-replay.js';
+import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN } from './tool-events.js';
 import type { SessionEvent } from './session-log.js';
 import type { ResumedStoredSession, SessionStore } from './session-store.js';
 
 /**
- * 一份已存日誌的尾巴如果停在一輪開著，算出補結：**記過 `tool/call` 沒配到結果**的各一顆錯誤 `tool/result`
- * （說結果不明，字逐字照 dsh），最後一顆 `turn/end {reason:{kind:'interrupted'}}`。
+ * 一份已存日誌的尾巴如果停在一輪開著，算出補結：**沒配到結果的呼叫**各一顆錯誤 `tool/result`（記過 `tool/call` 的說
+ * 結果不明，還沒記到的說還沒開始，字逐字照 dsh）、**開著的 `model/start`** 各一顆 `model/end {outcome:'error'}`，最後一顆
+ * `turn/end {reason:{kind:'interrupted'}}`。順序照 dsh：結果、步的收尾、輪的收尾。
  *
- * 掃描照 dsh：`turn/start`、`turn/end` 重設（我們的 `turn/failed` 也是收工）；`session/end-seed` 在這一版也重設，
- * 見檔頭。`seq` 接在最後一顆後面、`time` 沿用最後一顆真事件的，所以補結不會捏造一個晚於崩潰的時刻。
+ * 掃描照 dsh：`turn/start`、`turn/end` 重設（我們的 `turn/failed` 也是收工）；**`session/end-seed` 不重設**，見檔頭。
+ * `seq` 接在最後一顆後面、`time` 沿用最後一顆真事件的，所以補結不會捏造一個晚於崩潰的時刻。
  *
  * @param events - 讀回來的全部事件，照 `seq` 排。
  * @returns 要接在後面的補結；已平衡（沒有開著的輪）就是空陣列。
  */
 export function interruptedTurnClosers(events: readonly SessionEvent[]): SessionEvent[] {
   let open = false;
-  /** 記過 `tool/call`、還沒配到結果的呼叫，照記下的順序。 */
-  const pending = new Map<string, string>();
+  /** 這一輪的回覆要過、還沒配到結果的呼叫，照要的順序（dsh 的 `ToolCallRecovery.pendingCalls`）。 */
+  const unanswered = new Map<string, string>();
+  /** 其中記過 `tool/call` 的：決定補哪一句。 */
+  const started = new Set<string>();
+  /** 還開著的 `model/start` 的 `seq`，照開的順序。 */
+  const openModelStarts: number[] = [];
+  const reset = (): void => {
+    unanswered.clear();
+    started.clear();
+    openModelStarts.length = 0;
+  };
   for (const event of events) {
     switch (event.type) {
       case 'turn/start':
         open = true;
-        pending.clear();
+        reset();
         break;
       case 'turn/end':
       case 'turn/failed':
-      case 'session/end-seed':
         open = false;
-        pending.clear();
+        reset();
+        break;
+      case 'model/start':
+        if (open) {
+          // 新一次模型呼叫開始，代表上一批已經結清（或被基座在記憶體裡補掉了）：同 dsh 的 `step/end` 清掉待結的呼叫。
+          unanswered.clear();
+          started.clear();
+          openModelStarts.push(event.seq);
+        }
+        break;
+      case 'model/end': {
+        if (!open) break;
+        const at =
+          event.data.modelCall === undefined
+            ? openModelStarts.length - 1
+            : openModelStarts.indexOf(event.data.modelCall);
+        if (at >= 0) openModelStarts.splice(at, 1);
+        break;
+      }
+      case 'assistant/message':
+        if (open) {
+          for (const call of requestedCalls(fromLoggedMessage(event.data.message))) {
+            unanswered.set(call.id, call.name);
+          }
+        }
         break;
       case 'tool/call':
-        if (open) pending.set(event.data.callId, event.data.name);
+        if (open) {
+          started.add(event.data.callId);
+          // 舊格式沒有 `assistant/message`：只看得到 `tool/call` 的呼叫也要補。
+          if (!unanswered.has(event.data.callId))
+            unanswered.set(event.data.callId, event.data.name);
+        }
         break;
       case 'tool/result':
-        pending.delete(event.data.callId);
+        unanswered.delete(event.data.callId);
+        started.delete(event.data.callId);
         break;
       default:
         break;
@@ -79,8 +120,8 @@ export function interruptedTurnClosers(events: readonly SessionEvent[]): Session
 
   let seq = last.seq + 1;
   const closers: SessionEvent[] = [];
-  for (const [callId, name] of pending) {
-    const message = closer({ id: callId, name }, true);
+  for (const [callId, name] of unanswered) {
+    const wasStarted = started.has(callId);
     closers.push({
       type: 'tool/result',
       seq: seq++,
@@ -88,9 +129,19 @@ export function interruptedTurnClosers(events: readonly SessionEvent[]): Session
       data: {
         callId,
         isError: true,
-        error: { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN },
-        message: toLoggedMessage(message),
+        error: wasStarted
+          ? { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN }
+          : { name: 'ToolNotStartedError', code: TOOL_NOT_STARTED },
+        message: toLoggedMessage(closer({ id: callId, name }, wasStarted)),
       },
+    });
+  }
+  for (const modelCall of openModelStarts) {
+    closers.push({
+      type: 'model/end',
+      seq: seq++,
+      time: last.time,
+      data: { modelCall, outcome: 'error' },
     });
   }
   closers.push({
