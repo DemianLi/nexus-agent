@@ -210,3 +210,42 @@ describe('已送出的圖畫縮圖（#733）', () => {
     }
   });
 });
+
+describe('排著的插話畫附件（#710）', () => {
+  const nextStep = (text: string): Event =>
+    ({
+      type: 'event',
+      event_id: 't:nextstep',
+      method: 'custom',
+      params: {
+        namespace: [],
+        timestamp: 0,
+        data: {
+          name: INBOX,
+          payload: {
+            items: [],
+            nextStep: [{ id: 's', text, source: { kind: 'user' }, attachments }],
+          },
+        },
+      },
+    }) as Event;
+
+  it('還沒被領走：附件標籤畫在淡一階的泡泡上方，底下一句仍是下一步送進模型', () => {
+    show([nextStep('改看這張')]);
+    const bubble = document.querySelector('[data-pending-steer]')!;
+    const chips = within(bubble as HTMLElement).getAllByTestId('sent-attachment');
+    expect(chips.map((chip) => chip.textContent)).toEqual([
+      'red.png' + 'PNG · 221 B · 96×96',
+      'note.txt' + 'TXT · 55 B',
+    ]);
+    expect(bubble.textContent).toContain('改看這張');
+    expect(bubble.textContent).toContain('插話・');
+  });
+
+  it('只有附件、沒有字：不畫空泡泡，標籤與說明還在', () => {
+    show([nextStep('')]);
+    const bubble = document.querySelector('[data-pending-steer]')!;
+    expect(within(bubble as HTMLElement).getAllByTestId('sent-attachment')).toHaveLength(2);
+    expect(bubble.querySelector('[data-slot="bubble"]')).toBeNull();
+  });
+});

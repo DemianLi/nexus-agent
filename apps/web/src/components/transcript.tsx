@@ -27,6 +27,7 @@ import type {
   AnswerEntry,
   ConversationEntry,
   ConversationState,
+  WireAttachmentRef,
   WireFeedbackItem,
   WireFeedbackRating,
 } from '@nexus/wire';
@@ -366,15 +367,27 @@ function useFinishedReply(entries: readonly ConversationEntry[], isFresh: (id: s
  * 還沒被領走的插話（#710）：跟人的泡泡同一個樣子，淡一階，底下一句什麼時候送進模型（`pendingSteerText`）。被領走時
  * 同一格換成正式的泡泡，那一句跟著消失。
  */
-function PendingSteerBubble({ text, caption }: { text: string; caption: string }) {
+function PendingSteerBubble({
+  text,
+  attachments,
+  caption,
+}: {
+  text: string;
+  attachments: readonly WireAttachmentRef[] | undefined;
+  caption: string;
+}) {
   return (
     <Message align="end" data-pending-steer="">
       <MessageContent>
-        <Bubble variant="secondary" align="end" className="opacity-70">
-          <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
-            {mentionDisplayText(text)}
-          </BubbleContent>
-        </Bubble>
+        {/* 帶的附件（#710）：跟領走後那則人的話同一個位置（泡泡上方），換成正式的時不跳位。 */}
+        <SentAttachments attachments={attachments} />
+        {text.trim() !== '' && (
+          <Bubble variant="secondary" align="end" className="opacity-70">
+            <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
+              {mentionDisplayText(text)}
+            </BubbleContent>
+          </Bubble>
+        )}
         <MessageFooter className="px-0">{caption}</MessageFooter>
       </MessageContent>
     </Message>
@@ -501,7 +514,11 @@ export function Transcript({
         steer.agentText !== undefined ? (
           <SettledNotice pending caption={pendingAgentText(steer.agentText, state.status)} />
         ) : (
-          <PendingSteerBubble text={steer.text} caption={pendingSteerText(state.status)} />
+          <PendingSteerBubble
+            text={steer.text}
+            attachments={steer.attachments}
+            caption={pendingSteerText(state.status)}
+          />
         ),
     });
   }
