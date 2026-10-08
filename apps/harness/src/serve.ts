@@ -796,6 +796,7 @@ async function startServer(
         feedback,
         workspaceChanges,
         permissionPresets,
+        modelSelection: threadModelSelection,
         goals,
         workspaceRoot,
         attachTitle,
@@ -817,6 +818,8 @@ async function startServer(
         ...(workspaceChanges !== undefined && { workspaceChanges }),
         // 權限組合的目錄（#437）：沒圍堵就缺席，`permission.catalog` 回 `not_supported`。
         ...(permissionPresets !== undefined && { permissionPresets }),
+        // 每會話模型選擇（#723）：沒帶 `--live` 就缺席，`model.catalog`／`model.select` 回 `not_supported`。
+        ...(threadModelSelection !== undefined && { modelSelection: threadModelSelection }),
         // 交付讀檔方法的錨（#452）：沒給 `--workspace` 就缺席，兩支方法一律 no-anchor。
         // **這個值由 `createCliAgent` 算、從這裡原樣轉交**，呼叫端不再寫一次 `resolve(cwd, ...)`。
         ...(workspaceRoot !== undefined && { workspaceRoot }),

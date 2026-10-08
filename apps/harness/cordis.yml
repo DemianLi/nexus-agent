@@ -549,6 +549,14 @@
           chatTemplateKwargs:
             enable_thinking:
               $var: thinking.enabled
+      # 看圖模型（#731 判定，2026-10-08）：**穩定收得了使用者訊息裡的圖**（5/5），工具結果後面接圖不穩（見 `.docs/model-inventory.md`
+      # 「收圖實測」），所以只宣告 `input: [text, image]` 給「使用者訊息帶圖」用。窗口 131,072（廠商公布值，一張圖約 3,166 token）；
+      # **`maxTokens: 4096` 沒量過，是保守值**（比預設那顆的 16384 小，不會被端點以輸出上限拒絕）。不推理，所以不寫
+      # `reasoningEfforts`／`compat`——每會話選擇（#723）不會給它強度列。
+      - id: 'meta/llama-3.2-11b-vision-instruct'
+        contextWindow: 131072
+        maxTokens: 4096
+        input: [text, image]
 
 # 沒帶 `--live` 時用哪個模型提供者（#670）。照 dsh `agent-default-model`（`packages/bundle/base/cordis.patch.yml:82-86`）：
 # 選擇是一列，提供者各是一列。**出貨值 `cli-script` 就是下面那一列腳本提供者的 `id`**；要換就在 patch 裡

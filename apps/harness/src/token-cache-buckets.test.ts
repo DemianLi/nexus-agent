@@ -206,8 +206,9 @@ describe('快取桶走完產品路徑', () => {
 });
 
 describe('舊日誌（格式 35 以前）照舊讀', () => {
-  it('格式版本是 36，而且舊的 model/usage（沒有快取兩格）折出來的數字跟以前一樣', () => {
-    expect(SESSION_LOG_FORMAT_VERSION).toBe(36);
+  it('格式版本不低於 36，而且舊的 model/usage（沒有快取兩格）折出來的數字跟以前一樣', () => {
+    // 36 是分四桶的那一版；之後只會更大（模型選擇是 37）。
+    expect(SESSION_LOG_FORMAT_VERSION).toBeGreaterThanOrEqual(36);
     const old = [
       {
         type: 'model/usage',

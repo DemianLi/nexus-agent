@@ -35,6 +35,7 @@
  * 20 萬字元以上的一則話，推的一側要自己判）。
  */
 
+import type { ModelRoute } from './model-route.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
 import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
 import type { GoalId } from './goal.js';
@@ -519,8 +520,23 @@ export interface SessionEventMap {
    * **這不是 dsh 的 `step/start`，名字是故意換的**：dsh 的一步包含它派發的工具，`step/end` 在
    * 工具之後；這一對只包模型那一段，工具事件落在 `model/end` **之後**。顆數對得上（一步一次
    * 模型請求），時刻對不上。理由見 `model-calls.ts`。
+   *
+   * **`route`：這次請求實際走的模型與強度**（[#723](https://github.com/DemianLi/nexus-agent/issues/723)）。照 dsh 的
+   * `requestHeader().config`：換模型的通知拿「最近一次請求走的路由」跟這一步選定的比，續接沒選過的會話也先沿用它，再沒有才讀
+   * 部署預設。認不出路由的呼叫（沒貼標籤、也沒報名字的模型替身）不放這一格；格式 37 以前的日誌沒有它。選填、不影響別的讀者。
    */
-  'model/start': Record<string, never>;
+  'model/start': { readonly route?: ModelRoute };
+  /**
+   * 使用者替這條會話選了下一步起用的模型與推理強度（[#723](https://github.com/DemianLi/nexus-agent/issues/723)）。
+   *
+   * 照 dsh 的 `model/selection`（`packages/api/session-controller/src/agent.ts:333-336`，`5badb15`）：通過型錄驗證之後才寫，**記意圖**；
+   * 實際走了哪一顆由後面每次請求的 `model/start.route` 說。**選擇從下一步生效，跑著的那一步不換。**
+   * `reasoningEffort` 缺席＝預設行為（`'default'` 在寫入前就正規化掉）。
+   *
+   * **不標 `ignorable`、格式 37**：它左右續接之後走哪一顆模型，一台 36 的 runtime 略過它會悄悄換回別顆。**不進模型**
+   * （換模型的通知是另一顆 `user/message`）。
+   */
+  'model/selection': { readonly modelId: string; readonly reasoningEffort?: string };
   /**
    * 配對的那次模型呼叫結束了——**完成、拋錯、中止都記**（在 `finally` 裡），同 dsh 那條「每一
    * 個進入的步恰好一顆 `step/end`」。

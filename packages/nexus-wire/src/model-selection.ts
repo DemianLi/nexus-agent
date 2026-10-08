@@ -32,6 +32,13 @@
  * @module
  */
 
+/**
+ * 選擇變更的即時推送走泛用的會話投影通道（#1026），key 是這一個、view 是 {@link ModelSelectionState}
+ * （PM 2026-10-08 決策：照 dsh 的 `modelSelection` 投影，不另造 frame）。web 讀 `state.projections['model-selection'].view`。
+ * `model.catalog` 回應裡的 `selection` 保留，當作開頁時的第一筆。
+ */
+export const MODEL_SELECTION_PROJECTION_KEY = 'model-selection';
+
 /** 這個檔定義的兩支 method。 */
 export const MODEL_METHODS = ['model.catalog', 'model.select'] as const;
 

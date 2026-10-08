@@ -129,7 +129,7 @@ export type {
   ModelSelectResult,
   ModelUnavailable,
 } from './model-selection.js';
-export { isModelMethod, MODEL_METHODS } from './model-selection.js';
+export { isModelMethod, MODEL_METHODS, MODEL_SELECTION_PROJECTION_KEY } from './model-selection.js';
 export type {
   ThreadArchiveCommand,
   ThreadArchiveError,

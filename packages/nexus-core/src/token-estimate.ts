@@ -97,6 +97,7 @@
  * @module
  */
 
+import { modelNameOf } from './model-route.js';
 import { createHash } from 'node:crypto';
 import type { BaseMessage } from '@langchain/core/messages';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
@@ -396,14 +397,6 @@ export function estimateRequestTokens(
   for (const message of request.messages ?? []) add(messageTokens(message));
   if (Array.isArray(request.tools)) for (const tool of request.tools) add(toolTokens(tool));
   return options.singleDigits === true ? tokens + excess : tokens;
-}
-
-/** 模型的名字：`ChatOpenAI` 叫 `model`，舊的叫 `modelName`。認不出就是 `undefined`。 */
-function modelNameOf(model: unknown): string | undefined {
-  if (model === null || typeof model !== 'object') return undefined;
-  const { model: name, modelName } = model as { model?: unknown; modelName?: unknown };
-  if (typeof name === 'string') return name;
-  return typeof modelName === 'string' ? modelName : undefined;
 }
 
 /** 一則 AI 訊息的實數，與報它的模型。不是 AI 訊息、或沒有正的實數，就是 `undefined`。 */
