@@ -73,6 +73,7 @@ import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
 import { prepareAttachments } from '@/lib/attachment-send';
 import { useDraftAttachments } from '@/lib/use-draft-attachments';
+import { useUploads } from '@/lib/use-uploads';
 
 /**
  * 接回上一次那條 thread 時講的話。
@@ -346,6 +347,8 @@ function ConversationView({
   const draftAttachments = useDraftAttachments((messages) => {
     toast.error('有附件沒加進來', { description: messages.join('\n') });
   });
+  // 上傳的進度與取消（#733）：卡片上的進度條、取消鈕。
+  const uploads = useUploads();
   // `@子代理` 提及（#328 第 2 項）：這一輪委派給誰，一句話最多一個。清單由 server 給（`subagent.list`），
   // 沒實作、被拒或空的就是 `null`：整個功能不出現。送出時放進 `run.start` 的 `mention`，不轉成文字塞進 `input`。
   const agents = useAgentMention(client, threadId);
@@ -726,8 +729,21 @@ function ConversationView({
                     }
                     setSendingAttachments(true);
                     try {
-                      const prepared = await prepareAttachments(client, threadId, items);
-                      if (prepared.kind === 'failed') return { message: prepared.message };
+                      const prepared = await prepareAttachments(
+                        client,
+                        threadId,
+                        items,
+                        undefined,
+                        uploads.begin(),
+                      );
+                      if (prepared.kind === 'cancelled') {
+                        uploads.settle('cancelled');
+                        return { message: '附件還在，再按送出會重新上傳。', cancelled: true };
+                      }
+                      if (prepared.kind === 'failed') {
+                        uploads.settle('failed');
+                        return { message: prepared.message };
+                      }
                       const rejected = await conversation.send(
                         text,
                         mode,
@@ -736,7 +752,12 @@ function ConversationView({
                       );
                       // 收下了才移掉這一批；送出期間才加進來的留著。沒收下就全留著，連同草稿。
                       if (rejected === undefined) {
-                        draftAttachments.removeMany(items.map((item) => item.id));
+                        const ids = items.map((item) => item.id);
+                        draftAttachments.removeMany(ids);
+                        uploads.forget(ids);
+                      } else {
+                        // 上傳都成功了，是伺服器沒收下這一句：卡片沒有哪裡出錯。
+                        uploads.settle();
                       }
                       return rejected;
                     } finally {
@@ -748,7 +769,11 @@ function ConversationView({
                     setDraft((current) => (current === '' ? text : current));
                     if (mentioned !== undefined)
                       setMentionedAgent((current) => current ?? mentioned);
-                    toast.error('這一句沒送出去', { description: rejected.message });
+                    if ('cancelled' in rejected) {
+                      toast('已取消上傳', { description: rejected.message });
+                    } else {
+                      toast.error('這一句沒送出去', { description: rejected.message });
+                    }
                   });
                 }}
                 commands={commands}
@@ -797,6 +822,8 @@ function ConversationView({
                         items: draftAttachments.items,
                         onAdd: draftAttachments.add,
                         onRemove: draftAttachments.remove,
+                        uploads: uploads.states,
+                        onCancelUpload: uploads.cancel,
                       },
                     }
                   : {})}

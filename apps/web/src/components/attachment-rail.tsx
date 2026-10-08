@@ -21,15 +21,48 @@ import {
   AttachmentTitle,
 } from '@/components/ui/attachment';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
-import { attachmentDetail } from '@/lib/attachments';
+import { attachmentDetail, formatBytes } from '@/lib/attachments';
 import type { DraftAttachment } from '@/lib/attachments';
+import { uploadView } from '@/lib/upload-state';
+import type { UploadStates, UploadView } from '@/lib/upload-state';
+
+/**
+ * 上傳中的進度條（#733）。`percent` 沒有（瀏覽器不知道總量）就畫不確定長度：整條淡色，不猜百分比。**不加循環動畫**：
+ * 動效只能從 `styles/motion.css` 的清單裡挑，清單外的 infinite 動畫過不了 `check-built-css`；
+ * 「還在動」由標題的 `text-shimmer`（shadcn `attachment` 的 uploading 狀態，有 reduced-motion 停止規則）表達。
+ */
+function UploadBar({ view, name }: { readonly view: UploadView; readonly name: string }) {
+  const indeterminate = view.percent === undefined;
+  return (
+    <div
+      role="progressbar"
+      aria-label={`上傳 ${name}`}
+      aria-valuemin={0}
+      aria-valuemax={100}
+      {...(indeterminate ? {} : { 'aria-valuenow': view.percent })}
+      aria-valuetext={view.text}
+      data-testid="upload-progress"
+      className="bg-muted mt-1 h-1 w-full overflow-hidden rounded-full"
+    >
+      <div
+        className={`bg-primary h-full rounded-full ${indeterminate ? 'w-full opacity-40' : 'transition-[width] duration-(--duration-quick)'}`}
+        style={indeterminate ? undefined : { width: `${view.percent}%` }}
+      />
+    </div>
+  );
+}
 
 export function AttachmentRail({
   items,
   onRemove,
+  uploads,
+  onCancelUpload,
 }: {
   readonly items: readonly DraftAttachment[];
   readonly onRemove: (id: string) => void;
+  /** 每張卡的上傳狀態（#733）；沒有紀錄的卡照常畫。 */
+  readonly uploads?: UploadStates | undefined;
+  readonly onCancelUpload?: (() => void) | undefined;
 }) {
   const [opened, setOpened] = useState<string | null>(null);
   const preview = items.find((item) => item.id === opened);
@@ -37,44 +70,77 @@ export function AttachmentRail({
   return (
     <>
       <AttachmentGroup className="w-full" aria-label="附件" data-testid="attachment-rail">
-        {items.map((item) => (
-          <Attachment
-            key={item.id}
-            size="sm"
-            className="max-w-56"
-            data-testid="draft-attachment"
-            data-kind={item.kind}
-          >
-            <AttachmentMedia variant={item.kind === 'image' ? 'image' : 'icon'}>
-              {item.kind === 'image' && item.previewUrl !== undefined ? (
-                <button
-                  type="button"
-                  aria-label={`看原圖：${item.file.name}`}
-                  className="size-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-                  onClick={() => setOpened(item.id)}
-                >
-                  <img src={item.previewUrl} alt="" className="size-full object-cover" />
-                </button>
-              ) : (
-                <FileText aria-hidden />
-              )}
-            </AttachmentMedia>
-            <AttachmentContent>
-              <AttachmentTitle title={item.file.name}>{item.file.name}</AttachmentTitle>
-              <AttachmentDescription>{attachmentDetail(item.file)}</AttachmentDescription>
-            </AttachmentContent>
-            <AttachmentActions>
-              <AttachmentAction
-                type="button"
-                aria-label={`移除 ${item.file.name}`}
-                className="opacity-0 group-hover/attachment:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
-                onClick={() => onRemove(item.id)}
-              >
-                <X />
-              </AttachmentAction>
-            </AttachmentActions>
-          </Attachment>
-        ))}
+        {items.map((item) => {
+          const phase = uploads?.get(item.id);
+          const view = uploadView(phase, formatBytes);
+          const busy = phase?.kind === 'uploading' || phase?.kind === 'done';
+          return (
+            <Attachment
+              key={item.id}
+              size="sm"
+              className="max-w-56"
+              data-testid="draft-attachment"
+              data-kind={item.kind}
+              {...(phase === undefined || phase.kind === 'done'
+                ? {}
+                : {
+                    state:
+                      phase.kind === 'uploading'
+                        ? 'uploading'
+                        : phase.reason === 'failed'
+                          ? 'error'
+                          : 'idle',
+                  })}
+              data-upload={phase?.kind ?? 'none'}
+            >
+              <AttachmentMedia variant={item.kind === 'image' ? 'image' : 'icon'}>
+                {item.kind === 'image' && item.previewUrl !== undefined ? (
+                  <button
+                    type="button"
+                    aria-label={`看原圖：${item.file.name}`}
+                    className="size-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                    onClick={() => setOpened(item.id)}
+                  >
+                    <img src={item.previewUrl} alt="" className="size-full object-cover" />
+                  </button>
+                ) : (
+                  <FileText aria-hidden />
+                )}
+              </AttachmentMedia>
+              <AttachmentContent>
+                <AttachmentTitle title={item.file.name}>{item.file.name}</AttachmentTitle>
+                <AttachmentDescription>
+                  {view?.text ?? attachmentDetail(item.file)}
+                </AttachmentDescription>
+                {view?.phase === 'uploading' && <UploadBar view={view} name={item.file.name} />}
+              </AttachmentContent>
+              <AttachmentActions>
+                {phase?.kind === 'uploading' ? (
+                  // 上傳中不能移除（這一句正在帶著它）；能做的是取消。取消是整句取消，見 `lib/upload-state.ts`。
+                  <AttachmentAction
+                    type="button"
+                    aria-label={`取消上傳 ${item.file.name}`}
+                    data-testid="upload-cancel"
+                    onClick={() => onCancelUpload?.()}
+                  >
+                    <X />
+                  </AttachmentAction>
+                ) : (
+                  !busy && (
+                    <AttachmentAction
+                      type="button"
+                      aria-label={`移除 ${item.file.name}`}
+                      className="opacity-0 group-hover/attachment:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100"
+                      onClick={() => onRemove(item.id)}
+                    >
+                      <X />
+                    </AttachmentAction>
+                  )
+                )}
+              </AttachmentActions>
+            </Attachment>
+          );
+        })}
       </AttachmentGroup>
       <Dialog open={preview !== undefined} onOpenChange={(open) => !open && setOpened(null)}>
         <DialogContent className="sm:max-w-2xl">

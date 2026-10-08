@@ -10,6 +10,8 @@
 import { IMAGE_MEDIA_TYPES, MAX_IMAGE_BYTES, MAX_IMAGES_PER_MESSAGE } from '@nexus/wire';
 import type { ImageMediaType } from '@nexus/wire';
 
+import type { UploadStates } from '@/lib/upload-state';
+
 /** 一個草稿附件。 */
 export interface DraftAttachment {
   readonly id: string;
@@ -25,6 +27,10 @@ export interface ComposerAttachments {
   readonly items: readonly DraftAttachment[];
   readonly onAdd: (files: File[]) => void;
   readonly onRemove: (id: string) => void;
+  /** 每張卡的上傳狀態（#733）；沒有紀錄的卡照常畫。 */
+  readonly uploads?: UploadStates | undefined;
+  /** 取消這一句還在跑的上傳（卡片上的取消鈕）。 */
+  readonly onCancelUpload?: (() => void) | undefined;
 }
 
 /**
