@@ -1,4 +1,9 @@
 /**
+ * **手搭組裝（#670）**：這一檔留在手搭（`createNexusAgent`），產品組裝（`createCliAgent`）組不出來。兩個原因，都查過：
+ * 一是背景子代理的規格帶**自己的假模型**（`model`），root 與背景那一輪各吃各的腳本，產品組裝的模型來源只有一列提供者；
+ * 二是沙箱那幾條由測試握著 `SandboxModeController`（`createHostServicesPlugin({ sandboxPolicy: { controller, … } })`），
+ * 要在背景那一輪跑到一半時對它 `switchTo`；產品的控制器建在組裝點裡，測試拿不到（同 `subagent-sandbox.test.ts`）。
+ *
  * 背景派出的委派工具 `subagent`（[#831](https://github.com/DemianLi/nexus-agent/issues/831)）的驗收。
  *
  * 產品路徑：真的組裝（`createNexusAgent({ backgroundSubagents })`）、真的 deepagents `task`（前景改派）、

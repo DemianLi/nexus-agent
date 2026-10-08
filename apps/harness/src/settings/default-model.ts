@@ -23,7 +23,7 @@ import type { NexusPlugin, PluginRegistry } from '@nexus/core';
 /** 這一列在訊息裡叫什麼。 */
 export const DEFAULT_MODEL_PLUGIN_NAME = 'default-model';
 
-/** 一格。`provider` 是提供者那一列的 `id`，或內建的 `cli-script`。 */
+/** 一格。`provider` 是提供者那一列的 `id`；出貨值 `cli-script` 是 `cordis.yml` 上的腳本提供者那一列。 */
 export const defaultModelConfigSchema = z.strictObject({
   provider: z.string().min(1).default('cli-script'),
 });

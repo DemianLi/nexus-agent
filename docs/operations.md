@@ -470,7 +470,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數） | 有（三格） | **關不掉** |
 | `tool-text` | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截） | 有（一格） | **關不掉** |
 | `live-model` | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理） | 有（五格） | **關不掉** |
-| `agent-default-model` | 沒帶 `--live` 時用哪個模型提供者（出貨值 `cli-script` 是內建的腳本） | 有（一格） | **關不掉** |
+| `agent-default-model` | 沒帶 `--live` 時用哪個模型提供者（出貨值 `cli-script` 是清單上的腳本提供者那一列） | 有（一格） | **關不掉** |
 | `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
 | `agent-loop` | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆 | 有（一格） | **關不掉** |
 
@@ -491,7 +491,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   另建一顆標題用的（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）。
 
 **換模型提供者**（[#670](https://github.com/DemianLi/nexus-agent/issues/670)，照 dsh 的 `agent-default-model`）：沒帶 `--live`
-時模型由 `agent-default-model` 那一列的 `provider` 選。出貨值 `cli-script` 是程式碼裡內建的腳本；要換就在 patch 裡
+時模型由 `agent-default-model` 那一列的 `provider` 選。出貨值 `cli-script` 是 `cordis.yml` 上的一列腳本提供者（`#settings/scripted-model`，假模型的預設腳本就是它的 `config.turns`，`--dump-config` 看得到）；要換就在 patch 裡
 `insert` 一列提供者（目前有 `#settings/scripted-model`，腳本當 `config.turns`），再把那一列的 `provider` 寫成提供者的 `id`。
 **`--live` 不看這一列**——它是進 live 的唯一閘門，因為 `.env` 與代理在載入清單之前就依它處理好了。指到的 id 找不到、
 被停用、或那一列不是提供者，啟動時當場拋。這是給測試與嵌入方用的接縫，不是換真實供應商的辦法（那是 `live-model`）。

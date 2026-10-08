@@ -1,4 +1,9 @@
 /**
+ * **手搭組裝（#670）**：這一檔**沒有搬到產品組裝**（`createCliAgent`）。這是判斷，不是「組不出來」：它的案例是把 `plan-mode`
+ * 單獨掛上、逐一換建構選項（`startActive`、`guidance`）看 prompt 與日誌，沒有握著什麼產品拿不到的東西；搬的成本是整檔改寫
+ * （八處 `createNexusAgent`，每個案例要用 patch 換 `plan-mode` 那一列的 config），這一張收尾不做。計劃審核走真的線的那一份已經在
+ * `plan-review-wire.test.ts`。要搬就另開一張。
+ *
  * 計劃模式的**行為**驗收（[#116](https://github.com/DemianLi/nexus-agent/issues/116)）。
  *
  * `packages/nexus-plugin-plan-mode` 那邊的薄測試看的是 registry 的內容；這裡看的是
