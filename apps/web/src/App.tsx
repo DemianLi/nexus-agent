@@ -36,6 +36,7 @@ import { SidebarInset, SidebarProvider, SidebarTrigger } from '@/components/ui/s
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 import { useConversation } from '@/hooks/use-conversation';
 import { SM_BREAKPOINT, useMinWidth } from '@/hooks/use-min-width';
+import { useAgentMention } from '@/hooks/use-agent-mention';
 import { MODEL_SELECTION_PROJECTION, useModelSeat } from '@/hooks/use-model-seat';
 import { PERMISSIONS_PROJECTION_KEY, usePermissionSeat } from '@/hooks/use-permission-seat';
 import { useThreadDirectory } from '@/hooks/use-thread-directory';
@@ -62,7 +63,7 @@ import {
   STEER_QUEUE_PLACEHOLDER,
   STEER_UNAVAILABLE_TEXT,
 } from '@/lib/steer-queue';
-import { agentMentionEnabled, FAKE_AGENTS } from '@/lib/agent-mention';
+import { toMention } from '@/lib/agent-mention';
 import type { MentionAgent } from '@/lib/agent-mention';
 import { serverSupportsAttachments } from '@/lib/attachments';
 import { MODEL_COMMAND, parseModelLine } from '@/lib/model-selection';
@@ -344,8 +345,9 @@ function ConversationView({
   const draftAttachments = useDraftAttachments((messages) => {
     toast.error('有附件沒加進來', { description: messages.join('\n') });
   });
-  // `@子代理` 提及（#328 第 2 項）：這一輪委派給誰，一句話最多一個。開關關著時永遠是 `undefined`、不傳給輸入框。
-  // 送出時怎麼帶上它等連線契約，現在只管畫面：送出就清掉，不轉成文字塞進 `input`。
+  // `@子代理` 提及（#328 第 2 項）：這一輪委派給誰，一句話最多一個。清單由 server 給（`subagent.list`），
+  // 沒實作、被拒或空的就是 `null`：整個功能不出現。送出時放進 `run.start` 的 `mention`，不轉成文字塞進 `input`。
+  const agents = useAgentMention(client, threadId);
   const [mentionedAgent, setMentionedAgent] = useState<MentionAgent | undefined>(undefined);
   // 附件送出中（上傳、編碼、等伺服器收下）：這段時間不收第二次送出。
   const [sendingAttachments, setSendingAttachments] = useState(false);
@@ -717,12 +719,20 @@ function ConversationView({
                       ? draftAttachments.items
                       : [];
                   void (async () => {
-                    if (items.length === 0) return conversation.send(text, mode);
+                    const mention = mentioned === undefined ? undefined : toMention(mentioned);
+                    if (items.length === 0) {
+                      return conversation.send(text, mode, undefined, mention);
+                    }
                     setSendingAttachments(true);
                     try {
                       const prepared = await prepareAttachments(client, threadId, items);
                       if (prepared.kind === 'failed') return { message: prepared.message };
-                      const rejected = await conversation.send(text, mode, prepared.attachments);
+                      const rejected = await conversation.send(
+                        text,
+                        mode,
+                        prepared.attachments,
+                        mention,
+                      );
                       // 收下了才移掉這一批；送出期間才加進來的留著。沒收下就全留著，連同草稿。
                       if (rejected === undefined) {
                         draftAttachments.removeMany(items.map((item) => item.id));
@@ -771,10 +781,10 @@ function ConversationView({
                         </>
                       ),
                     })}
-                {...(agentMentionEnabled()
+                {...(agents !== null
                   ? {
                       agentMention: {
-                        agents: FAKE_AGENTS,
+                        agents,
                         selected: mentionedAgent,
                         onSelect: setMentionedAgent,
                       },

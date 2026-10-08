@@ -10,6 +10,7 @@ import type {
   AnswerEntry,
   ConversationState,
   PromptAttachment,
+  SubagentMention,
   SlashDescriptor,
   QueueSteerAction,
   QueueUpdateAction,
@@ -40,7 +41,7 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createAgentClient } from '@/lib/agent';
-import { attachmentRejectionText } from '@/lib/attachment-send';
+import { sendRejectionText } from '@/lib/attachment-send';
 import { createConversationStore } from '@/lib/conversation-store';
 import type { ConversationStore } from '@/lib/conversation-store';
 import { FEEDBACK_COMMAND_LINE, FEEDBACK_COPY } from '@/lib/feedback';
@@ -177,11 +178,15 @@ export interface Conversation {
    * 文字可以是空的，只要附件至少一個（只有附件的一句話）。
    * 伺服器不收（`not_supported`）或目前的模型不收圖（`model_does_not_support_images`）時回 {@link SendRejected}，
    * 訊息是講給人聽的話。
+   *
+   * `mention` 是這一句點名派的子代理（#328 第 2 項），放進 `run.start`；斜線命令不看它。伺服器不收（`not_supported`）
+   * 或名字不在清單上（`invalid_argument`）時同樣回 {@link SendRejected}，草稿與標記由呼叫端留著。
    */
   send(
     text: string,
     mode?: RunStartMode,
     attachments?: readonly PromptAttachment[],
+    mention?: SubagentMention,
   ): Promise<SendRejected | undefined>;
   /**
    * 退出計劃模式（#900）：送 `/plan off`，走跟打字送出同一條 `slash.run`。**結果由呼叫端自己畫**——回 `undefined` 是
@@ -549,6 +554,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       text: string,
       mode?: RunStartMode,
       attachments?: readonly PromptAttachment[],
+      mention?: SubagentMention,
     ): Promise<SendRejected | undefined> => {
       const trimmed = text.trim();
       const hasAttachments = attachments !== undefined && attachments.length > 0;
@@ -576,6 +582,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         const options = {
           ...(mode === 'steer' ? { mode } : {}),
           ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
+          ...(mention === undefined ? {} : { mention }),
         };
         result =
           Object.keys(options).length === 0
@@ -585,7 +592,11 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         return { message: error instanceof Error ? error.message : String(error) };
       }
       if (result.type === 'error') {
-        return { message: attachmentRejectionText(result.error) ?? result.message };
+        return {
+          message:
+            sendRejectionText(result.error, hasAttachments, mention !== undefined) ??
+            result.message,
+        };
       }
       setCommandError(undefined);
       return undefined;
