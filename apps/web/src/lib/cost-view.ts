@@ -23,7 +23,14 @@ import type {
 } from '@nexus/wire';
 
 import { contextMeterView, percentText } from '@/lib/context-meter-view';
-import { NOT_RECORDED, exactTokens, formatDuration, usageBuckets } from '@/lib/session-usage-view';
+import {
+  NOT_RECORDED,
+  cacheHitRate,
+  cacheHitRateText,
+  exactTokens,
+  formatDuration,
+  usageBuckets,
+} from '@/lib/session-usage-view';
 
 function cacheText(count: number | undefined): string {
   return count === undefined ? NOT_RECORDED : exactTokens(count);
@@ -49,6 +56,8 @@ export const COST_LIMITS = {
     '這裡的 token 只是主對話那一份總帳：不含任何子代理（背景的在下面分列，前景的目前沒有數字）、不含生摘要的那一次、不含生標題的那一次；失敗或中止的呼叫算在裡面，但供應商沒報用量的不在（燒了多少不知道，所以是下限）。',
   input:
     '合計是各項相加就是整筆帳：這台 server 有分快取時，輸入只算未快取的部分，快取讀、快取寫另列；沒分的話輸入含快取讀取。',
+  cache:
+    '快取命中率是快取讀佔整筆輸入的比例（快取讀 ÷ 未快取、快取讀、快取寫相加），整段帳加起來算，不是各輪比例的平均；有一個快取桶沒記就寫「沒記」，不寫 0%；兩個都沒記就不畫。',
   time: '模型耗時含重試退避與失敗呼叫的時間；工具耗時不含等人核准。',
   loaded:
     '壓縮次數與背景子代理的分列只算已載入的對話：更早的在對話裡上捲、載入之後才會出現在這裡。',
@@ -56,6 +65,16 @@ export const COST_LIMITS = {
   absent:
     '沒有金額（端點不回報單價）、沒有完成率（沒有任務成功的判準），也沒有逐輪與工具次數：這幾項要有用量投影才畫得出來，這台伺服器沒給。',
 } as const;
+
+/**
+ * 要畫的口徑清單。**`cache` 那一句只在畫了命中率時才有**（{@link cacheHitRate} 不是 `undefined`）：沒有快取數字的 server 上
+ * 多一句講不存在的東西，只是雜訊。
+ */
+export function costLimits(tokenUsage: WireTokenUsage | null): Readonly<Record<string, string>> {
+  if (cacheHitRate(usageBuckets(tokenUsage)) !== undefined) return COST_LIMITS;
+  const { cache: _unused, ...rest } = COST_LIMITS;
+  return rest;
+}
 
 export interface UsageSections {
   /** token 那一段；一次都沒有回報用量（輸入輸出都是 0）就沒有。 */
@@ -75,6 +94,7 @@ export function usageSections(
   const buckets = usageBuckets(tokenUsage);
   const hasTokens = buckets.total > 0;
   const hasStats = sessionStats !== null && sessionStats.steps > 0;
+  const hitRate = cacheHitRate(buckets);
   return {
     ...(hasTokens
       ? {
@@ -89,6 +109,9 @@ export function usageSections(
                 ] satisfies readonly CostRow[])),
             ['輸出', exactTokens(buckets.output)],
             ['合計', exactTokens(buckets.total)],
+            ...(hitRate === undefined
+              ? []
+              : ([['快取命中率', cacheHitRateText(hitRate)]] satisfies readonly CostRow[])),
           ] satisfies readonly CostRow[],
         }
       : {}),

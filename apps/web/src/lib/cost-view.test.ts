@@ -63,6 +63,7 @@ describe('usageSections', () => {
       ['快取寫', '100 token'],
       ['輸出', '50 token'],
       ['合計', '1,050 token'],
+      ['快取命中率', '70.0%'],
     ]);
     expect(rows(200)).toEqual(rows(1_000));
   });
@@ -89,7 +90,59 @@ describe('usageSections', () => {
         outputTokens: 0,
       }),
     ]);
-    expect(usageSections(state.tokenUsage, null).tokens?.at(-1)).toEqual(['合計', '800 token']);
+    expect(usageSections(state.tokenUsage, null).tokens?.at(-2)).toEqual(['合計', '800 token']);
+  });
+
+  describe('快取命中率（#724）', () => {
+    const rateRow = (usage: Record<string, number>) => {
+      const state = fold((s) => [s.custom(TOKEN_USAGE, usage)]);
+      return usageSections(state.tokenUsage, null).tokens?.filter(
+        ([label]) => label === '快取命中率',
+      );
+    };
+    const base = { inputTokens: 0, uncachedInputTokens: 200, outputTokens: 50 };
+
+    it('快取讀 ÷（未快取＋快取讀＋快取寫），小數一位', () => {
+      expect(rateRow({ ...base, cacheReadTokens: 700, cacheWriteTokens: 100 })).toEqual([
+        ['快取命中率', '70.0%'],
+      ]);
+      expect(rateRow({ ...base, cacheReadTokens: 1, cacheWriteTokens: 0 })).toEqual([
+        ['快取命中率', '0.5%'],
+      ]);
+    });
+
+    it('記了、一次都沒命中：寫 0.0%（跟沒記分開）', () => {
+      expect(rateRow({ ...base, cacheReadTokens: 0, cacheWriteTokens: 300 })).toEqual([
+        ['快取命中率', '0.0%'],
+      ]);
+    });
+
+    it('任一快取桶沒記：寫沒記，不算、不寫 0%', () => {
+      expect(rateRow({ ...base, cacheReadTokens: 700 })).toEqual([['快取命中率', '沒記']]);
+      expect(rateRow({ ...base, cacheWriteTokens: 100 })).toEqual([['快取命中率', '沒記']]);
+    });
+
+    it('兩個快取桶都沒記（server 不記快取）：整列不畫', () => {
+      expect(rateRow(base)).toEqual([]);
+    });
+
+    it('舊 server（沒有 uncachedInputTokens）：分母是 inputTokens，它本來就含兩格快取', () => {
+      expect(
+        rateRow({
+          inputTokens: 1_000,
+          cacheReadTokens: 250,
+          cacheWriteTokens: 100,
+          outputTokens: 5,
+        }),
+      ).toEqual([['快取命中率', '25.0%']]);
+    });
+
+    it('inputTokens 怎麼改，新 server 的命中率都不變', () => {
+      const usage = { ...base, cacheReadTokens: 700, cacheWriteTokens: 100 };
+      expect(rateRow({ ...usage, inputTokens: 1_000 })).toEqual(
+        rateRow({ ...usage, inputTokens: 200 }),
+      );
+    });
   });
 
   it('entries 是空的時數字仍等於 frame 的值：數字不是從畫面加出來的', () => {

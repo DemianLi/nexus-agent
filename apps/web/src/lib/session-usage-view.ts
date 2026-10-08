@@ -65,6 +65,29 @@ export function usageBuckets(tokenUsage: WireTokenUsage | null): UsageBuckets {
   return { input, cacheRead, cacheWrite, output, total: input + output, cacheInInput: true };
 }
 
+/**
+ * 快取命中率（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，PM 拍板要畫）：快取讀 ÷（未快取＋快取讀＋快取寫），
+ * 是整段帳加起來的比例，不是各次呼叫比例的平均。分母就是整筆輸入（舊 server 的 `inputTokens` 本來就含兩格快取）。
+ *
+ * - `undefined`：不畫。兩個快取桶都沒記（server 根本不記快取），或整筆輸入是 0（除不了）。
+ * - `'unrecorded'`：**只記了其中一桶**，另一桶沒記，分母不完整，寫「沒記」，**不寫 0%**——0% 是「記了、一次都沒命中」。
+ * - `number`：0 到 1。
+ */
+export type CacheHitRate = number | 'unrecorded' | undefined;
+
+export function cacheHitRate(buckets: UsageBuckets): CacheHitRate {
+  const { cacheRead, cacheWrite } = buckets;
+  if (cacheRead === undefined && cacheWrite === undefined) return undefined;
+  if (cacheRead === undefined || cacheWrite === undefined) return 'unrecorded';
+  const prompt = buckets.cacheInInput ? buckets.input : buckets.input + cacheRead + cacheWrite;
+  return prompt > 0 ? cacheRead / prompt : undefined;
+}
+
+/** 命中率寫成字：小數一位（`62.4%`）；沒記寫 {@link NOT_RECORDED}。 */
+export function cacheHitRateText(rate: Exclude<CacheHitRate, undefined>): string {
+  return rate === 'unrecorded' ? NOT_RECORDED : `${(rate * 100).toFixed(1)}%`;
+}
+
 export interface SessionUsageView {
   /** 收著時那顆上的字。 */
   readonly label: string;
