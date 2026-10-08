@@ -33,7 +33,11 @@ import type {
   MessageFeedbackRating,
 } from '@nexus/core/src/feedback.ts';
 
-import type { MODEL_DOES_NOT_SUPPORT_IMAGES, PromptAttachment } from './attachments.js';
+import type {
+  ATTACHMENT_NOT_FOUND,
+  MODEL_DOES_NOT_SUPPORT_IMAGES,
+  PromptAttachment,
+} from './attachments.js';
 import { isDeliverableMethod } from './deliverables.js';
 import { isModelMethod } from './model-selection.js';
 import type { ModelMethod } from './model-selection.js';
@@ -328,7 +332,8 @@ export type WireErrorCode =
   | typeof SUBAGENT_NOT_FOUND
   | typeof SUBAGENT_AT_CAPACITY
   | typeof SUBAGENT_CLOSED
-  | typeof MODEL_DOES_NOT_SUPPORT_IMAGES;
+  | typeof MODEL_DOES_NOT_SUPPORT_IMAGES
+  | typeof ATTACHMENT_NOT_FOUND;
 
 /**
  * 協定的 `ErrorResponse`，錯誤碼換成 {@link WireErrorCode}。

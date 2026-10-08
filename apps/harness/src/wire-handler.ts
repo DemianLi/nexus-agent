@@ -50,6 +50,7 @@ import type {
   ImageMediaType,
   PromptAttachment,
   UploadResponse,
+  AttachmentReadResponse,
   WireErrorCode,
   WireChannel,
   FeedbackMethod,
@@ -79,6 +80,7 @@ import {
   isSubagentListMethod,
   MODEL_DOES_NOT_SUPPORT_IMAGES,
   uploadPath,
+  ATTACHMENT_NOT_FOUND,
   UPLOAD_NAME_PARAM,
   isDeliverableMethod,
   isFeedbackMethod,
@@ -117,6 +119,7 @@ import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import { AttachmentError } from './attachment-store.js';
+import { referencedImage } from './attachment-reference.js';
 import type { AttachmentStore, FileAttachmentRef, ImageAttachmentRef } from './attachment-store.js';
 import { admitImages, ImageIntakeError } from './image-intake.js';
 import { isBackgroundRunId } from './background-run-id.js';
@@ -498,7 +501,7 @@ function historyQueryOf(search: URLSearchParams): ThreadHistoryQuery | Response 
 }
 
 /**
- * `/threads/:id/stream`、`/threads/:id/uploads`、`/threads/:id/history`、`/threads/:id/subagents/:runId/history`、`/threads/:id/file-references`、`/threads/:id/session-references`、
+ * `/threads/:id/stream`、`/threads/:id/uploads`、`/threads/:id/attachments/:attachmentId`、`/threads/:id/history`、`/threads/:id/subagents/:runId/history`、`/threads/:id/file-references`、`/threads/:id/session-references`、
  * `/threads/:id/changes/{summary,diff}` 或
  * `/threads/:id/commands/:method`，都不是就 undefined。
  */
@@ -512,6 +515,7 @@ function parsePath(
   | { readonly kind: 'file-references'; readonly threadId: string }
   | { readonly kind: 'session-references'; readonly threadId: string }
   | { readonly kind: 'upload'; readonly threadId: string }
+  | { readonly kind: 'attachment'; readonly threadId: string; readonly attachmentId: string }
   | { readonly kind: 'changes-summary'; readonly threadId: string }
   | { readonly kind: 'changes-diff'; readonly threadId: string }
   | { readonly kind: 'command'; readonly threadId: string; readonly method: string }
@@ -546,6 +550,9 @@ function parsePath(
   }
   if (segments.length === 3 && pathname === uploadPath(threadId)) {
     return { kind: 'upload', threadId };
+  }
+  if (segments.length === 4 && segments[2] === 'attachments' && segments[3] !== undefined) {
+    return { kind: 'attachment', threadId, attachmentId: decodeURIComponent(segments[3]) };
   }
   if (segments.length === 4 && segments[2] === 'changes') {
     if (pathname === changesSummaryPath(threadId)) return { kind: 'changes-summary', threadId };
@@ -1159,6 +1166,41 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       result: { receiptId, name: ref.name, bytes: ref.bytes },
     };
     return json(response);
+  }
+
+  /**
+   * `GET /threads/:id/attachments/:attachmentId`（[#733](https://github.com/DemianLi/nexus-agent/issues/733)）：契約見 `@nexus/wire` 的
+   * `attachmentPath`。**授權＝這條 thread 的日誌引用過它**（`referencedImage`，照 dsh `session.attachment`），不是知道 id。
+   * 讀記憶體裡那份 root 日誌（含還沒落盤的），**只讀已經載入的 thread**：沒載入的一律 `attachment_not_found`，不為了讀圖建 thread。
+   * 沒引用、編號不合格式、thread 不存在不細分（見 `ATTACHMENT_NOT_FOUND`）；引用了但位元組讀不回來（儲存被清掉、大小對不上）是 `unknown_error`。
+   */
+  async function handleAttachment(threadId: string, attachmentId: string): Promise<Response> {
+    const store = options.attachments;
+    if (store === undefined) {
+      return json(errorResponse(null, 'not_supported', '這個組裝沒有附件儲存，不能讀圖'));
+    }
+    const notFound = () =>
+      json(errorResponse(null, ATTACHMENT_NOT_FOUND, '這條 thread 沒有引用過這張圖'));
+    const existing = threads.get(threadId);
+    const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
+    if (thread === undefined) return notFound();
+    const ref = referencedImage(thread.pump.sessionLog.events, attachmentId);
+    if (ref === undefined) return notFound();
+    try {
+      const bytes = await store.readImage(ref);
+      const response: AttachmentReadResponse = {
+        type: 'success',
+        result: {
+          attachment: { type: 'image', ...ref },
+          data: Buffer.from(bytes).toString('base64'),
+        },
+      };
+      return json(response);
+    } catch (error: unknown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      options.warn?.(`[讀圖] thread ${threadId} 的圖 ${attachmentId} 讀不回來：${reason}`);
+      return json(errorResponse(null, 'unknown_error', `圖讀不回來：${reason}`));
+    }
   }
 
   /**
@@ -2367,6 +2409,11 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           return new Response('content type must be application/octet-stream', { status: 415 });
         }
         return handleUpload(route.threadId, searchParams, request);
+      }
+      if (route?.kind === 'attachment') {
+        if (request.method !== 'GET') return new Response('not found', { status: 404 });
+        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+        return handleAttachment(route.threadId, route.attachmentId);
       }
       if (route?.kind === 'history') {
         if (request.method !== 'GET') return new Response('not found', { status: 404 });
