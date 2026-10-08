@@ -121,6 +121,82 @@ describe('每步平行工具呼叫上限（#711）', { timeout: 30_000 }, () => 
     expect(order).toEqual(expected);
   });
 
+  it('寫 1（串行，同 dsh）：即使工具宣告可重疊，在途也只有 1 顆，照模型給的順序一顆一顆跑完，不丟任何一顆', async () => {
+    const { meter, order, expected } = await rootBurst(6, [row(1)]);
+    // 判準是「剛好 1」且「6 顆都有結果」：LangGraph 的 maxConcurrency 1 會丟掉第一顆之後的，這裡 maxConcurrency 墊在 2。
+    expect(meter.max).toBe(1);
+    expect(meter.starts).toEqual([0, 1, 2, 3, 4, 5]);
+    expect(order).toEqual(expected);
+  });
+
+  it('寫 1 時子代理也串行（一次性 task 子代理的屏障各一份）', async () => {
+    const { meter, probeTool } = probe();
+    const { agent, dispose } = await createNexusAgent({
+      model: new ScriptedChatModel({
+        turns: [
+          {
+            content: '',
+            toolCalls: [
+              { name: 'task', args: { description: '跑', subagent_type: 'general-purpose' } },
+            ],
+          },
+          { content: '', toolCalls: burst(5, 100, 's') },
+          { content: '子代理收工。' },
+          { content: '好。' },
+        ],
+      }),
+      plugins: [
+        { plugin: { name: 'probe', apply: (r) => void r.tools.register(probeTool) } },
+        row(1),
+      ],
+    });
+    try {
+      await agent.invoke(toAgentInvocation('派人。'));
+    } finally {
+      await dispose();
+    }
+    expect(meter.starts).toEqual([100, 101, 102, 103, 104]);
+    expect(meter.max).toBe(1);
+  });
+
+  it('不寫 1 時屏障照宣告重疊（對照：寫 2 在途剛好 2，不是被串行吃掉）', async () => {
+    const { meter } = await rootBurst(6, [row(2)]);
+    expect(meter.max).toBe(2);
+  });
+
+  it('同一步兩顆 task 仍會重疊（#711 驗收：task 宣告可重疊，兩個子代理的工具呼叫在時間上交疊）', async () => {
+    const { meter, probeTool } = probe();
+    const { agent, dispose } = await createNexusAgent({
+      model: new ScriptedChatModel({
+        turns: [
+          // root：一步吐兩顆 task。
+          {
+            content: '',
+            toolCalls: [
+              { name: 'task', args: { description: '甲', subagent_type: 'general-purpose' } },
+              { name: 'task', args: { description: '乙', subagent_type: 'general-purpose' } },
+            ],
+          },
+          // 兩個子代理各自的第一次模型呼叫（誰先拿到哪一格不重要，兩顆探針各一個編號），睡 20–30 毫秒，
+          // 所以串行的話第二個子代理要等第一個整個收工才開始，在途最多 1；重疊的話兩顆探針同時在途。
+          { content: '', toolCalls: [{ name: 'probe', args: { i: 0 }, id: 'sub-a' }] },
+          { content: '', toolCalls: [{ name: 'probe', args: { i: 1 }, id: 'sub-b' }] },
+          { content: '甲收工。' },
+          { content: '乙收工。' },
+          { content: '都好。' },
+        ],
+      }),
+      plugins: [{ plugin: { name: 'probe', apply: (r) => void r.tools.register(probeTool) } }],
+    });
+    try {
+      await agent.invoke(toAgentInvocation('派兩個人。'));
+    } finally {
+      await dispose();
+    }
+    expect([...meter.starts].sort()).toEqual([0, 1]);
+    expect(meter.max).toBe(2);
+  });
+
   it('state 裡 ToolMessage 的順序等於 tool_calls 的順序（完成順序刻意錯開）', async () => {
     const { order, expected } = await rootBurst(12, [row(4)]);
     expect(order).toEqual(expected);
@@ -212,18 +288,18 @@ describe('每步平行工具呼叫上限（#711）', { timeout: 30_000 }, () => 
   });
 
   describe('那一列', () => {
-    it('0、1、負數、小數、多寫欄位：載入時就擋；1 的訊息講得出為什麼', () => {
-      for (const bad of [0, 1, -1, 1.5]) {
+    it('0、負數、小數、多寫欄位：載入時就擋；1 收下（串行，同 dsh）', () => {
+      for (const bad of [0, -1, 1.5]) {
         expect(
           () => agentLoopConfigSchema.parse({ maxParallelToolCalls: bad }),
           String(bad),
         ).toThrow();
       }
-      expect(() => agentLoopConfigSchema.parse({ maxParallelToolCalls: 1 })).toThrow(
-        /silently drops/,
-      );
       expect(() => agentLoopConfigSchema.parse({ maxParallelToolCalls: 10, typo: 1 })).toThrow();
       expect(agentLoopConfigSchema.parse({})).toEqual({ maxParallelToolCalls: 10 });
+      expect(agentLoopConfigSchema.parse({ maxParallelToolCalls: 1 })).toEqual({
+        maxParallelToolCalls: 1,
+      });
       expect(agentLoopConfigSchema.parse({ maxParallelToolCalls: 2 })).toEqual({
         maxParallelToolCalls: 2,
       });
