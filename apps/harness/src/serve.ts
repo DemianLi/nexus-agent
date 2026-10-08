@@ -69,6 +69,7 @@ import { BrowserAuth } from './browser-auth.js';
 import { loadOrCreateBrowserSessionSecret } from './browser-session-secret.js';
 import { resolveSessionHeaderMetadata } from './session-header-metadata.js';
 import { createProcessShutdown } from './process-shutdown.js';
+import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
 import { HARNESS_HOME_ENV, resolveHarnessHome } from './harness-home.js';
 import { createInvariantLog } from './invariant-log.js';
 import { createWebStaticHandler } from './web-static.js';
@@ -580,6 +581,8 @@ async function startServer(
     browserSession.maxAgeDays,
   );
   const webDist = options.webDist ?? resolveWebDist();
+  // 上傳的檔案存在 harness home 底下、會話日誌之外（#732）。只解析路徑，第一次上傳才建目錄。
+  const attachmentStore = new AttachmentStore(attachmentsRootOf(resolveHarnessHome(env)));
 
   // **會話根按目錄分，一個專案一格**——照 dsh 的 `projectDir(root, cwd)`
   // （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 拍板的第 3 件）。一條
@@ -636,6 +639,8 @@ async function startServer(
 
   const handler = createWireHandler({
     auth,
+    // 附件儲存（#732）：上傳路徑存進這裡；每條 thread 的 agent 另外掛一條唯讀路由給模型讀（見下面 `attachments`）。
+    attachments: attachmentStore,
     deliverableLimits,
     toolTextLimits,
     threadTitleLimits: threadTitle,
@@ -744,6 +749,8 @@ async function startServer(
             threadTitle,
             threadTitleLlm,
             optionalEntries,
+            // 附件（#732）：模型讀上傳檔案的唯讀路由；儲存是這台 server 一份，每條 thread 的 agent 各掛一條路由。
+            attachments: attachmentStore,
             // 會話鑰匙：這台 server 的專案日誌目錄加 thread id——重開之後同一條 thread 回到同一個目錄
             // （`resumeThread` 用的也是這兩個）。沒有會話日誌就不能續接，暫存維持記憶體。
             ...(sessionStore !== undefined && {

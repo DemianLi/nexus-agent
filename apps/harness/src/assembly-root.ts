@@ -43,6 +43,7 @@ import { findModelEntry, singleDigitModelIds } from './model-catalog.js';
 import { resolveDefaultModel } from './model-provider.js';
 import type { ModelSelectionPolicy } from './model-selection-policy.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
+import type { AttachmentStore } from './attachment-store.js';
 import type { ToolResultStashOptions } from './tool-result-stash.js';
 import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
 import { createSessionTitleLlm } from './session-title-llm.js';
@@ -636,6 +637,8 @@ export async function createCliAgent(
      * 同一個會話」的既有身分。省略就是記憶體暫存（沒有會話日誌的組裝、手搭的呼叫端）。
      */
     readonly toolResultStash?: ToolResultStashOptions;
+    /** 附件儲存（#732），原樣交給 `createNexusAgent`。只有 serve 傳；省略就不掛附件那條唯讀路由。 */
+    readonly attachments?: AttachmentStore;
     /**
      * 工具結果外溢層的預算（[#719](https://github.com/DemianLi/nexus-agent/issues/719)），原樣交給 `createNexusAgent`。
      * 從 `spill-policy` 那一列解；省略就是不掛。存處是上面的 `toolResultStash`，沒給它就不會外溢。
@@ -929,6 +932,7 @@ export async function createCliAgent(
     ...(invocation.toolResultStash !== undefined && {
       toolResultStash: invocation.toolResultStash,
     }),
+    ...(invocation.attachments !== undefined && { attachments: invocation.attachments }),
     ...(invocation.spillPolicy !== undefined && { spillPolicy: invocation.spillPolicy }),
   });
   // 註冊表跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。**subagent 的
