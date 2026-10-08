@@ -8,6 +8,7 @@ import { ApprovalCard } from '@/components/approval-card';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
 import { ModelSeat, MODEL_SELECT_FAILED } from '@/components/model-seat';
+import { PermissionSeat } from '@/components/permission-seat';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
@@ -36,6 +37,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 import { useConversation } from '@/hooks/use-conversation';
 import { SM_BREAKPOINT, useMinWidth } from '@/hooks/use-min-width';
 import { MODEL_SELECTION_PROJECTION, useModelSeat } from '@/hooks/use-model-seat';
+import { PERMISSIONS_PROJECTION_KEY, usePermissionSeat } from '@/hooks/use-permission-seat';
 import { useThreadDirectory } from '@/hooks/use-thread-directory';
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { useThemePreference } from '@/hooks/use-theme-preference';
@@ -60,6 +62,7 @@ import {
 } from '@/lib/steer-queue';
 import { serverSupportsAttachments } from '@/lib/attachments';
 import { MODEL_COMMAND, parseModelLine } from '@/lib/model-selection';
+import { permissionLocked } from '@/lib/permission-presets';
 import { pendingSteers } from '@/lib/steer-view';
 import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
@@ -251,6 +254,13 @@ function ConversationView({
     conversation.state.projections[MODEL_SELECTION_PROJECTION],
   );
   const [modelOpen, setModelOpen] = useState(false);
+  // 權限座（#437）：目錄回 `not_supported` 或投影沒送來就是 `null`，座位整個沒有。
+  const permissionSeat = usePermissionSeat(
+    client,
+    threadId,
+    conversation.state.projections[PERMISSIONS_PROJECTION_KEY],
+  );
+  const [permissionOpen, setPermissionOpen] = useState(false);
   // 改動的摘要與比較都快取到這條 thread 的畫面卸掉（換 thread 整個重掛，#443）。
   const changes = useMemo(
     () => createChangesStores({ threadId, baseUrl: agentBaseUrl() }),
@@ -686,11 +696,32 @@ function ConversationView({
                 commands={commands}
                 fileReferences={fileReferences}
                 sessionReferences={sessionReferences}
-                {...(modelSeat === null
+                {...(modelSeat === null && permissionSeat === null
                   ? {}
                   : {
                       seats: (
-                        <ModelSeat seat={modelSeat} open={modelOpen} onOpenChange={setModelOpen} />
+                        <>
+                          {modelSeat !== null && (
+                            <ModelSeat
+                              seat={modelSeat}
+                              open={modelOpen}
+                              onOpenChange={setModelOpen}
+                            />
+                          )}
+                          {permissionSeat !== null && (
+                            <PermissionSeat
+                              seat={permissionSeat}
+                              open={permissionOpen}
+                              onOpenChange={setPermissionOpen}
+                              locked={permissionLocked(
+                                conversation.connected,
+                                status === 'running' || status === 'awaiting-input',
+                              )}
+                              // 成功的回話與失敗的原因由斜線命令那一套顯示（狀態列），這裡不另開一條。
+                              onSwitch={(line) => void conversation.send(line)}
+                            />
+                          )}
+                        </>
                       ),
                     })}
                 {...(serverSupportsAttachments()
