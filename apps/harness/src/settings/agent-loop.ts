@@ -12,13 +12,16 @@
  *
  * ## 跟 dsh 不同的三件事
  *
- * 0. **最小值是 2，不收 1。**（偏離登記：哪一條——dsh 的下限 1，`1` 就是串行，`README.zh.md:48`；為什麼表達不出來——
- *    LangGraph `pregel/runner.js` 的 `_executeTasksWithRetry` 迴圈條件是「還沒起跑過，或還有在跑的」
- *    （`@langchain/langgraph` 1.4.12 第 136 行，最新的 1.4.18 同一行沒變）。`maxConcurrency: 1` 時第一顆跑完、在跑的
- *    清空，迴圈就出去了：那一步其餘的工具呼叫**沒跑、沒有 ToolMessage、不報錯**，那一輪靜靜收掉。2 以上不會清空
- *    （每收一顆還剩 k−1 顆在跑，下一圈補滿）。退到什麼——schema 下限 2，`1` 在載入期就擋並說明原因。）出廠值 10 不受影響。
- *    `max-parallel-tool-calls.test.ts` 有一條直接對基座的絆索：它紅了就是上游修好了，下限放回 1、補回串行那條測試。
- *    串行要另做載體（例如工具呼叫層的依序鎖）的話，那跟 #711 第 2 步「獨佔的工具一顆一顆照順序跑」是同一個設計，不在這一步做。
+ * 0. **上限 1 由屏障承擔，LangGraph 的 `maxConcurrency` 墊在 2 以上。**（偏離登記：哪一條——dsh 的下限 1，`1` 就是串行，
+ *    `README.zh.md:48`；為什麼 `maxConcurrency: 1` 表達不出來——LangGraph `pregel/runner.js` 的 `_executeTasksWithRetry` 迴圈
+ *    條件是「還沒起跑過，或還有在跑的」（`@langchain/langgraph` 1.4.12 第 136 行，最新的 1.4.18 同一行沒變）。
+ *    `maxConcurrency: 1` 時第一顆跑完、在跑的清空，迴圈就出去了：那一步其餘的工具呼叫**沒跑、沒有 ToolMessage、不報錯**，
+ *    那一輪靜靜收掉。2 以上不會清空（每收一顆還剩 k−1 顆在跑，下一圈補滿）。退到什麼——上限 1 時 `maxConcurrency` 仍帶 2
+ *    （{@link MIN_LANGGRAPH_MAX_CONCURRENCY}），**串行由 #711 第 2 步的獨佔屏障做**：`fold` 的 `serialToolCalls` 讓每一顆
+ *    都當獨佔，同一步的呼叫一顆一顆照模型給的順序跑，前面的落定後面的才開始。）出廠值 10 不受影響。
+ *    `max-parallel-tool-calls.test.ts` 有一條直接對基座的絆索：它紅了就是上游修好了，`maxConcurrency` 的墊底可以拿掉。
+ *    **兩個機制的邊界**：屏障是一個 agent 一份（root 與每個子代理各自串行），上限 1 管的是「同一步的呼叫」，不是全樹同時只有一顆
+ *    在跑——兩顆 `task` 派出去的兩個子代理，各自的工具呼叫仍可以同時進行（dsh 的 agent-loop 也是每個 agent 各一個）。
  *
  * 1. **組裝期讀一次，改值要重啟。** dsh 的 Config 是 `Volatile<number>`，每個工具組開始時讀一次
  *    （`tool-calls.ts:132`）。`maxConcurrency` 每次 invoke 都能傳，所以這不是基座表達不出來，缺的是設定層的熱重載——
@@ -48,17 +51,19 @@ export const MAX_PARALLEL_TOOL_CALLS_SERVICE = 'maxParallelToolCalls';
 /** 每步同時在跑的工具呼叫上限的內建值，同 dsh 的 `DEFAULT_MAX_PARALLEL_TOOL_CALLS`。 */
 export const DEFAULT_MAX_PARALLEL_TOOL_CALLS = 10;
 
-/** 這一格收的最小值。dsh 是 1；為什麼是 2 見檔頭「跟 dsh 不同」第 0 條。 */
-export const MIN_MAX_PARALLEL_TOOL_CALLS = 2;
+/** 這一格收的最小值，同 dsh：`1` 就是串行，由屏障做，見檔頭「跟 dsh 不同」第 0 條。 */
+export const MIN_MAX_PARALLEL_TOOL_CALLS = 1;
 
-/** 一格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。整數且至少 2：0、1、負數、小數在載入期就擋。 */
+/** 帶進 LangGraph `maxConcurrency` 的下限：1 會把第一顆之後的呼叫靜靜丟掉，見檔頭第 0 條。 */
+export const MIN_LANGGRAPH_MAX_CONCURRENCY = 2;
+
+/** 一格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。整數且至少 1：0、負數、小數在載入期就擋。 */
 export const agentLoopConfigSchema = z.strictObject({
   maxParallelToolCalls: z
     .number()
     .int()
     .min(MIN_MAX_PARALLEL_TOOL_CALLS, {
-      message:
-        'maxParallelToolCalls must be at least 2: LangGraph maxConcurrency 1 silently drops every tool call after the first in a step',
+      message: 'maxParallelToolCalls must be an integer of at least 1 (1 means serial)',
     })
     .default(DEFAULT_MAX_PARALLEL_TOOL_CALLS),
 });
