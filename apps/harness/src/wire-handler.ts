@@ -47,6 +47,7 @@ import type {
   ThreadSearchResponse,
   ThreadSearchResult,
   UplinkMethod,
+  UploadResponse,
   WireErrorCode,
   WireChannel,
   FeedbackMethod,
@@ -75,6 +76,7 @@ import {
   isThreadManagementMethod,
   isSubagentListMethod,
   uploadPath,
+  UPLOAD_NAME_PARAM,
   isDeliverableMethod,
   isFeedbackMethod,
   isQueueUpdateMethod,
@@ -110,6 +112,8 @@ import { FEEDBACK_CATEGORIES, ProjectionDetailError } from '@nexus/core';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createCommandExecutor } from '@nexus/plugin-commands';
+import { AttachmentError } from './attachment-store.js';
+import type { AttachmentStore, FileAttachmentRef } from './attachment-store.js';
 import { isBackgroundRunId } from './background-run-id.js';
 import { BackgroundSubagentError } from './background-subagents.js';
 import type { BackgroundSubagentControl } from './background-subagents.js';
@@ -398,6 +402,17 @@ export interface WireHandlerOptions {
    * 缺席就是不講，測試不必為它接線。
    */
   warn?(message: string): void;
+  /**
+   * 附件儲存（`POST /threads/:id/uploads`，[#732](https://github.com/DemianLi/nexus-agent/issues/732)），選配。
+   *
+   * **缺席就是這個組裝沒有附件儲存**（手搭的組裝、沒有 harness home 的測試）：上傳路徑回 `not_supported`，web 據這個碼把附件列藏起來。
+   */
+  readonly attachments?: AttachmentStore;
+  /**
+   * 單次上傳的位元組上限，選填；超過回 `invalid_argument`、什麼都不留。**省略就沒有上限**，同 dsh 的 `file-upload`
+   * （`http-route.ts` 串流收、沒有上限）：位元組串流進暫存檔、不聚合，吃的是磁碟不是記憶體。
+   */
+  readonly maxUploadBytes?: number;
 }
 
 /** wire 只需要知道「這個請求帶的會話有沒有效」。`BrowserAuth` 滿足它。 */
@@ -412,6 +427,23 @@ export interface WireHandler {
 }
 
 const JSON_MEDIA_TYPE = 'application/json';
+
+/** 請求本文轉成依序的位元組塊，給附件儲存串流收（沒有 body 就是空的）。 */
+async function* requestBodyChunks(
+  body: ReadableStream<Uint8Array> | null,
+): AsyncGenerator<Uint8Array> {
+  if (body === null) return;
+  const reader = body.getReader();
+  try {
+    for (;;) {
+      const chunk = await reader.read();
+      if (chunk.done) return;
+      yield chunk.value;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
 
 /** 契約已合、實作還沒做的 RPC method 回 `not_supported` 時的說明（#723、#633），實作落地時隨分支一起拿掉。 */
 const NOT_IMPLEMENTED = {
@@ -835,6 +867,12 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   const ready = new Map<string, ThreadState>();
   /** 全部 thread 共用的那條下行（#632）。每條 pump 一建好就接上，見 `thread-feed.ts`。 */
   const feed = new ThreadFeed();
+  /**
+   * 上傳收據（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：thread → 收據 id → 存好的檔案參照。
+   * **收據只在收下它的那條 thread 有效**（查表以 thread 為鍵，拿別條 thread 的收據查不到），行程重開就失效——沒送出去的上傳不續命。
+   * 收據是不透明的隨機 id，不是內容雜湊：知道某個檔的雜湊不等於有權把它掛進這條 thread 的訊息。
+   */
+  const receipts = new Map<string, Map<string, FileAttachmentRef>>();
 
   function threadFor(threadId: string): Promise<ThreadState> {
     const existing = threads.get(threadId);
@@ -1005,6 +1043,55 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const reason = error instanceof Error ? error.message : String(error);
       return json(errorResponse(id, 'unknown_error', `這條 thread 建不起來：${reason}`));
     }
+  }
+
+  /**
+   * `POST /threads/:id/uploads`（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：契約見 `@nexus/wire` 的 `attachments.ts`。
+   * body 是原始位元組，**串流進附件儲存**（不聚合），回一張收據。沒開過的 thread 為它建起來（收據要綁在一條 thread 上）。
+   */
+  async function handleUpload(
+    threadId: string,
+    search: URLSearchParams,
+    request: Request,
+  ): Promise<Response> {
+    const store = options.attachments;
+    if (store === undefined) {
+      return json(errorResponse(null, 'not_supported', '這個組裝沒有附件儲存，不收上傳'));
+    }
+    const thread = await threadOrError(threadId, null);
+    if (thread instanceof Response) return thread;
+    let ref: FileAttachmentRef;
+    try {
+      ref = await store.save({
+        data: requestBodyChunks(request.body),
+        name: search.get(UPLOAD_NAME_PARAM) ?? undefined,
+        signal: request.signal,
+        maxBytes: options.maxUploadBytes,
+      });
+    } catch (error: unknown) {
+      if (error instanceof AttachmentError && error.code === 'ATTACHMENT_TOO_LARGE') {
+        return json(errorResponse(null, 'invalid_argument', error.message));
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      options.warn?.(`[上傳] thread ${threadId} 的上傳沒存成：${reason}`);
+      return json(errorResponse(null, 'unknown_error', `上傳沒存成：${reason}`));
+    }
+    // 存的期間這條 thread 被收掉了（`close()`）：收據進不了表，回錯而不是發一張沒人認的收據。
+    if (ready.get(threadId) !== thread) {
+      return json(errorResponse(null, 'unknown_error', '這條 thread 在上傳完成前已經關閉'));
+    }
+    const receiptId = crypto.randomUUID();
+    let own = receipts.get(threadId);
+    if (own === undefined) {
+      own = new Map();
+      receipts.set(threadId, own);
+    }
+    own.set(receiptId, ref);
+    const response: UploadResponse = {
+      type: 'success',
+      result: { receiptId, name: ref.name, bytes: ref.bytes },
+    };
+    return json(response);
   }
 
   function openStream(
@@ -2106,7 +2193,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         if (mediaType !== 'application/octet-stream') {
           return new Response('content type must be application/octet-stream', { status: 415 });
         }
-        return json(errorResponse(null, 'not_supported', '這個組裝沒有附件儲存，不收上傳'));
+        return handleUpload(route.threadId, searchParams, request);
       }
       if (route?.kind === 'history') {
         if (request.method !== 'GET') return new Response('not found', { status: 404 });
@@ -2165,6 +2252,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const opened = [...threads.values()];
       threads.clear();
       ready.clear();
+      receipts.clear();
       // 還在建的那些也要等——`createAgent` 已經開了資源，只是還沒交出來。
       const settled = await Promise.all(opened.map((thread) => thread.catch(() => undefined)));
       for (const thread of settled) {

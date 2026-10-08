@@ -90,6 +90,8 @@ import type {
 } from './background-subagents.js';
 import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 import { TextOnlyStateBackend } from './binary-read.js';
+import { ATTACHMENTS_PREFIX } from './attachment-store.js';
+import type { AttachmentStore } from './attachment-store.js';
 import { createToolResultStash } from './tool-result-stash.js';
 import type { StashRoute } from './tool-result-stash.js';
 import type { ToolResultStashOptions } from './tool-result-stash.js';
@@ -141,6 +143,11 @@ export interface CreateNexusAgentOptions {
    * 沒人清的檔。細節與偏離見 `tool-result-stash.ts` 的檔頭。
    */
   readonly toolResultStash?: ToolResultStashOptions;
+  /**
+   * 附件儲存（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：給了就把它的 `files` 目錄以唯讀路由掛在
+   * {@link ATTACHMENTS_PREFIX} 底下，模型用 `read_file` 讀使用者上傳的檔案。**省略就不掛**（CLI、eval、spike）。
+   */
+  readonly attachments?: AttachmentStore;
   /**
    * 工具結果外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）：一則結果超過 `maxInlineTokens`，
    * 全文存進 {@link toolResultStash} 的主機目錄，模型只收到頭尾預覽加路徑。**省略就不掛**；**沒有
@@ -477,15 +484,24 @@ export const TOOL_RESULT_STASH_PREFIX = '/large_tool_results';
  * @param stash - 主機暫存的根與會話鑰匙；省略就是記憶體。
  * @returns 同一個 backend，外面包一層只有這一條路由的 `CompositeBackend`。
  */
-function withToolResultStash(backend: AnyBackendProtocol, stash?: StashRoute): AnyBackendProtocol {
+function withToolResultStash(
+  backend: AnyBackendProtocol,
+  stash?: StashRoute,
+  attachments?: AnyBackendProtocol,
+): AnyBackendProtocol {
   // **路由鍵要有結尾斜線**（[#354](https://github.com/DemianLi/nexus-agent/issues/354)），理由同
   // {@link withConversationHistory}。少了它，照確切路徑 `read_file` 仍讀得到，但在這個目錄底下
   // `ls` 列出 `/large_tool_result// (directory)`、`grep` 回 No matches（實測）。代價同歷史那一格：
   // 預設組裝裡 state 的 `files` 是共用的，模型在根目錄看得到 `/call_<id>.txt`——斜線之前也看得到，
   // 只是形狀是 `//call_<id>.txt`（`tool-result-stash.test.ts` 的 state 那條記著）。
   // 給了 `stash` 之後，暫存不再放在對話狀態裡，那一格只剩退回記憶體時才會出現。
+  //
+  // **附件那一格（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）掛在同一個 composite 上，不另包一層**：巢狀的
+  // `CompositeBackend` 會藏住內層的路由前綴（根目錄 `ls` 看不到它），見 `tool-result-stash.ts` 那一條的實測。它是唯讀路由，
+  // 根是附件儲存的 `files` 子目錄（`attachment-store.ts`），模型用 `read_file` 讀上傳的檔案。
   return new CompositeBackend(backend, {
     [`${TOOL_RESULT_STASH_PREFIX}/`]: stash === undefined ? new TextOnlyStateBackend() : stash,
+    ...(attachments === undefined ? {} : { [`${ATTACHMENTS_PREFIX}/`]: attachments }),
   });
 }
 
@@ -675,7 +691,11 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         fs: createFsService({
           // 這兩格是組裝點在 fold 之前包的（`withToolResultStash`／`withConversationHistory`），不在工作區磁碟上；
           // 交付的讀端只認磁碟，`present` 靠這份清單拒掉它們（#951）。
-          offWorkspacePrefixes: [TOOL_RESULT_STASH_PREFIX, CONVERSATION_HISTORY_PREFIX],
+          offWorkspacePrefixes: [
+            TOOL_RESULT_STASH_PREFIX,
+            CONVERSATION_HISTORY_PREFIX,
+            ...(options.attachments === undefined ? [] : [ATTACHMENTS_PREFIX]),
+          ],
         }),
       },
       'fs',
@@ -720,7 +740,11 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     const params = foldRegistry(registry, {
       defaultBackend: withConversationHistory(
         // 墊底的虛擬 FS 讀到二進位檔照 dsh 拒絕（#642），路由那兩格同一種。
-        withToolResultStash(options.backend ?? new TextOnlyStateBackend(), stashRoute),
+        withToolResultStash(
+          options.backend ?? new TextOnlyStateBackend(),
+          stashRoute,
+          options.attachments === undefined ? undefined : await options.attachments.readOnlyRoute(),
+        ),
       ),
       ...(options.spillPolicy !== undefined &&
         stashRoute !== undefined && {

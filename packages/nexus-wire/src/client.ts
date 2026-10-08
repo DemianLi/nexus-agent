@@ -114,6 +114,45 @@ export interface WireClientOptions {
   readonly baseUrl: string;
   /** 注入用；預設是全域的 `fetch`。 */
   readonly fetch?: typeof globalThis.fetch;
+  /**
+   * 上傳要取進度時用的 `XMLHttpRequest` 工廠（[#732](https://github.com/DemianLi/nexus-agent/issues/732)），注入用。
+   * 預設：沒注入 {@link fetch} 又有全域 `XMLHttpRequest` 時用它（瀏覽器）；否則上傳走 `fetch`、只在送完時報一次進度。
+   * `fetch` 拿不到上傳進度，這是瀏覽器的限制，dsh 的 `file-upload` 同樣用 XHR（`client/runtime.ts`）。
+   */
+  readonly createXhr?: () => UploadXhr;
+}
+
+/** 上傳進度：已送出的位元組與總量。`total` 在不知道長度時缺席。 */
+export interface UploadProgress {
+  readonly loaded: number;
+  readonly total?: number;
+}
+
+/** XHR 進度事件裡我們用到的欄位（wire 套件沒有 DOM 型別庫，真的 `ProgressEvent` 滿足它）。 */
+export interface UploadProgressEvent {
+  readonly loaded: number;
+  readonly total: number;
+  readonly lengthComputable: boolean;
+}
+
+/**
+ * 事件處理函式的型別。**用方法簽名取出來是刻意的**：方法參數是雙變的，真的 `XMLHttpRequest` 的處理函式收的是完整
+ * `ProgressEvent`，用屬性函式型別寫會因為參數逆變而不收它。
+ */
+type UploadHandler<E> = { handler(event: E): void }['handler'];
+
+/** {@link WireClientOptions.createXhr} 要的那一小塊 `XMLHttpRequest`；真的 `XMLHttpRequest` 滿足它。 */
+export interface UploadXhr {
+  readonly upload: { onprogress: UploadHandler<UploadProgressEvent> | null };
+  readonly status: number;
+  readonly responseText: string;
+  onload: UploadHandler<unknown> | null;
+  onerror: UploadHandler<unknown> | null;
+  onabort: UploadHandler<unknown> | null;
+  open(method: string, url: string): void;
+  setRequestHeader(name: string, value: string): void;
+  send(body: Blob): void;
+  abort(): void;
 }
 
 export interface OpenEventsOptions {
@@ -310,15 +349,20 @@ export interface WireClient {
    * 上傳一個檔案，換一張收據（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。契約見 `attachments.ts`：收據只在這條
    * thread 有效，送訊息時放進 `run.start` 的 `attachments`。**排在 {@link openEvents} 兌現之後**（這條 thread 會為它建起來）。
    *
+   * 簽名照 dsh `file-upload` 的 `upload(sessionId, body, name, signal, onProgress)`（`client/contract.ts`）。
+   *
    * @param body - 檔案的位元組。
    * @param name - 顯示用的檔名；省略由 server 取預設。
-   * @param signal - 中止這一次。
+   * @param signal - 中止這一次：Promise 以 `signal.reason`（`AbortError`）拒絕，server 端收到的是斷線、什麼都不留。
+   * @param onProgress - 進度觀察者。**`loaded` 單調不減；`total` 只在知道長度時才有**——`Blob` 在有 `XMLHttpRequest` 的瀏覽器
+   *   由 `lengthComputable` 決定，沒有 XHR（Node、注入了 `fetch`）時只在送完那一刻報一次，且 `loaded === total`。
    */
   uploadFile(
     threadId: string,
     body: Blob | Uint8Array,
     name?: string,
     signal?: AbortSignal,
+    onProgress?: (progress: UploadProgress) => void,
   ): Promise<UploadOutcome>;
   /** 讀回這條 thread 目前的評分（`feedback.list`，[#382](https://github.com/DemianLi/nexus-agent/issues/382)）。 */
   feedbackList(threadId: string): Promise<FeedbackOutcome<FeedbackListResult>>;
@@ -664,6 +708,61 @@ function rejectedOf(failure: RejectedSource) {
   };
 }
 
+/** 全域有 `XMLHttpRequest`（瀏覽器）就給工廠，沒有（Node）就是 `undefined`。 */
+function defaultXhr(): (() => UploadXhr) | undefined {
+  const ctor = (globalThis as { XMLHttpRequest?: new () => UploadXhr }).XMLHttpRequest;
+  return ctor === undefined ? undefined : () => new ctor();
+}
+
+/** 用 XHR 送一個 Blob 並回報進度；`signal` 中止就 `abort()` 並以 `signal.reason` 拒絕（同 `fetch` 的行為）。 */
+function uploadWithXhr(
+  xhr: UploadXhr,
+  url: string,
+  body: Blob,
+  signal: AbortSignal | undefined,
+  onProgress: (progress: UploadProgress) => void,
+): Promise<{ readonly ok: boolean; readonly status: number; text(): Promise<string> }> {
+  return new Promise((resolve, reject) => {
+    if (signal?.aborted === true) {
+      reject(signal.reason);
+      return;
+    }
+    let loadedSoFar = 0;
+    const onAbort = (): void => {
+      xhr.abort();
+    };
+    const cleanup = (): void => signal?.removeEventListener('abort', onAbort);
+    xhr.upload.onprogress = (event) => {
+      // 單調不減：瀏覽器偶爾會回報比上一次小的值（重送、重導），畫面的進度條不該倒退。
+      loadedSoFar = Math.max(loadedSoFar, event.loaded);
+      onProgress({
+        loaded: loadedSoFar,
+        ...(event.lengthComputable ? { total: event.total } : {}),
+      });
+    };
+    xhr.onload = () => {
+      cleanup();
+      resolve({
+        ok: xhr.status >= 200 && xhr.status < 300,
+        status: xhr.status,
+        text: async () => xhr.responseText,
+      });
+    };
+    xhr.onerror = () => {
+      cleanup();
+      reject(new TypeError('上傳的連線失敗'));
+    };
+    xhr.onabort = () => {
+      cleanup();
+      reject(signal?.reason ?? new DOMException('上傳被中止', 'AbortError'));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    xhr.open('POST', url);
+    xhr.setRequestHeader('content-type', 'application/octet-stream');
+    xhr.send(body);
+  });
+}
+
 export function createWireClient(options: WireClientOptions): WireClient {
   const base = options.baseUrl.replace(/\/+$/, '');
   const doFetch = options.fetch ?? globalThis.fetch;
@@ -944,20 +1043,36 @@ export function createWireClient(options: WireClientOptions): WireClient {
       return sendOkCommand<ThreadRenameResult>(threadId, command, '改名');
     },
 
-    async uploadFile(threadId, body, name, signal) {
+    async uploadFile(threadId, body, name, signal, onProgress) {
       const search =
         name === undefined ? '' : `?${new URLSearchParams({ [UPLOAD_NAME_PARAM]: name })}`;
-      const response = await doFetch(`${base}${uploadPath(threadId)}${search}`, {
-        method: 'POST',
-        // 不是 JSON：原始位元組。這個 content-type 也不是 simple request，跨來源會發 server 從不回答的 preflight，見 `attachments.ts`。
-        headers: { 'content-type': 'application/octet-stream' },
-        body: body as NonNullable<RequestInit['body']>,
-        ...(signal === undefined ? {} : { signal }),
-      });
-      if (!response.ok) {
-        throw new Error(`上傳被載體層擋下：${response.status} ${await response.text()}`);
+      const url = `${base}${uploadPath(threadId)}${search}`;
+      const size = body instanceof Uint8Array ? body.byteLength : body.size;
+      // 要進度、body 是 Blob、又有 XHR 可用：走 XHR（`fetch` 量不到上傳進度）。否則走 `fetch`，送完報一次。
+      const makeXhr = options.createXhr ?? (options.fetch === undefined ? defaultXhr() : undefined);
+      let reply: { readonly ok: boolean; readonly status: number; text(): Promise<string> };
+      if (
+        onProgress !== undefined &&
+        makeXhr !== undefined &&
+        typeof Blob !== 'undefined' &&
+        body instanceof Blob
+      ) {
+        reply = await uploadWithXhr(makeXhr(), url, body, signal, onProgress);
+      } else {
+        const response = await doFetch(url, {
+          method: 'POST',
+          // 不是 JSON：原始位元組。這個 content-type 也不是 simple request，跨來源會發 server 從不回答的 preflight，見 `attachments.ts`。
+          headers: { 'content-type': 'application/octet-stream' },
+          body: body as NonNullable<RequestInit['body']>,
+          ...(signal === undefined ? {} : { signal }),
+        });
+        onProgress?.({ loaded: size, total: size });
+        reply = response;
       }
-      const parsed = (await response.json()) as UploadResponse;
+      if (!reply.ok) {
+        throw new Error(`上傳被載體層擋下：${reply.status} ${await reply.text()}`);
+      }
+      const parsed = JSON.parse(await reply.text()) as UploadResponse;
       if (parsed.type === 'error') return rejectedOf(parsed);
       const { receiptId, name: stored, bytes } = parsed.result as Partial<UploadReceipt>;
       if (
