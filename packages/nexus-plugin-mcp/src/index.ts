@@ -27,8 +27,14 @@ import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { projectNonText } from './project-content.js';
+import { ensureHub } from './hub.js';
+import type { McpResourceRequest, McpSource } from './hub.js';
 
 export { publicToolName, SERVER_NAME_PATTERN } from './names.js';
+export { MCP_HUB_SERVICE, RESOURCE_TOOL_NAMES } from './hub.js';
+
+/** 帶出處標頭的 server 指引預設上限（UTF-8 位元組），照 dsh 的 `maxInstructionBytes`。 */
+export const DEFAULT_MAX_INSTRUCTION_BYTES = 32_768;
 
 /** 一次 `tools/call` 的預設逾時，照 dsh 的 `toolCallTimeoutMs`。 */
 export const DEFAULT_TOOL_CALL_TIMEOUT_MS = 60_000;
@@ -99,6 +105,12 @@ export const mcpConfigSchema = z.strictObject({
    * `477b4f4`）。
    */
   failOnStartupError: z.boolean().default(false),
+  /**
+   * server 指引（`initialize` 回的 `instructions`）連同出處標頭 `### MCP server: <name>` 的 UTF-8 位元組上限，
+   * 照 dsh 的 `maxInstructionBytes`，預設 {@link DEFAULT_MAX_INSTRUCTION_BYTES}。**超過就算這一列連線失敗**（走
+   * `failOnStartupError` 那條：預設撤掉工具、收連線、交出警告，寫 `true` 就拋），不截斷——截一半的指引比沒有更糟。
+   */
+  maxInstructionBytes: z.number().int().positive().default(DEFAULT_MAX_INSTRUCTION_BYTES),
 });
 
 /** 驗過的設定。 */
@@ -157,6 +169,8 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     });
 
     const registered: (() => void)[] = [];
+    let unregisterSource: (() => void) | undefined;
+    let closed = false;
     try {
       for (const tool of await client.getTools()) {
         // 改的是**註冊給模型看的**名字。`tools/call` 送上線的是 adapter 在建這個工具時
@@ -166,6 +180,13 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
         throwOnToolError(tool);
         registered.push(registry.tools.register(tool as StructuredTool));
       }
+      // 指引與資源走同一條已經連上的 SDK client，不再經 `MultiServerMCPClient` 開新連線。放在 `try` 裡：
+      // 超過上限的指引算連線失敗，要跟列不出工具走同一個出口（撤工具、收連線、警告或拋）。
+      const sdk = await client.getClient(serverName);
+      const instructions = instructionsOf(sdk?.getInstructions(), config);
+      unregisterSource = ensureHub(registry).add(
+        resourceSource(serverName, instructions, config.toolCallTimeoutMs, sdk, () => closed),
+      );
     } catch (error) {
       // **模型看到的是整台伺服器的工具或一個都沒有**，照 dsh：註冊到一半撞了，已經註冊的撤掉（撤銷是冪等的，
       // 之後載入器因為別的理由再撤一次也沒事）。
@@ -180,10 +201,20 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
         `MCP 伺服器 "${serverName}" 連不上、列不出工具或工具註冊不上，這一次沒有它的工具` +
           `（要讓這一列失敗就寫 failOnStartupError: true）：${reason}`,
       );
+      // 照 dsh：資源 provider 的登記不看連線成敗，名字照列、呼叫時才報不可用。**沒有 `failOnStartupError` 的這一列
+      // 才登記**——寫了 `true` 的那一列拋出去，不留任何東西在 hub 裡。
+      const hubUndo = ensureHub(registry).add(
+        resourceSource(serverName, '', config.toolCallTimeoutMs, undefined, () => true),
+      );
+      registry.lifecycle.onDispose(hubUndo);
       return;
     }
 
-    registry.lifecycle.onDispose(() => client.close());
+    registry.lifecycle.onDispose(() => {
+      closed = true;
+      unregisterSource?.();
+      return client.close();
+    });
   },
 };
 
@@ -197,6 +228,67 @@ export default mcpPlugin;
  */
 export function createMcpPlugin(options: McpPluginOptions): PluginEntry {
   return { plugin: mcpPlugin, config: options };
+}
+
+/** SDK client 上，這個檔會用到的那幾個方法；結構型別，不直接依賴 `@modelcontextprotocol/client`。 */
+interface SdkClient {
+  getInstructions(): string | undefined;
+  listResources(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
+  listResourceTemplates(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
+  readResource(params: { uri: string }, options?: RequestOptions): Promise<unknown>;
+}
+
+interface RequestOptions {
+  signal?: AbortSignal;
+  timeout?: number;
+}
+
+/**
+ * 帶出處標頭的 server 指引，照 dsh（`mcp-client/src/connection.ts:318-322`）：空白就沒有；有就是
+ * `### MCP server: <name>\n\n<內容>`，**位元組數**（不是字數）超過上限就拋。大括號原樣。
+ */
+function instructionsOf(raw: string | undefined, config: McpConfig): string {
+  const text = raw?.trimEnd() ?? '';
+  if (text.trim() === '') return '';
+  const attributed = `### MCP server: ${config.serverName}\n\n${text}`;
+  if (Buffer.byteLength(attributed) > config.maxInstructionBytes) {
+    throw new Error(
+      `server instructions exceed maxInstructionBytes (${String(config.maxInstructionBytes)})`,
+    );
+  }
+  return attributed;
+}
+
+/** 一台 server 登記進 hub 的那一份；`client` 是 `undefined` 或 `isClosed()` 時，叫它都是固定的「不可用」。 */
+function resourceSource(
+  serverName: string,
+  instructions: string,
+  timeout: number,
+  client: SdkClient | undefined,
+  isClosed: () => boolean,
+): McpSource {
+  return {
+    serverName,
+    instructions,
+    request(request: McpResourceRequest, signal: AbortSignal | undefined): Promise<unknown> {
+      if (client === undefined || isClosed()) {
+        return Promise.reject(new Error(`MCP server "${serverName}" is unavailable`));
+      }
+      const options: RequestOptions = { timeout, ...(signal !== undefined && { signal }) };
+      switch (request.method) {
+        case 'resources/list':
+          return client.listResources(cursorParams(request.cursor), options);
+        case 'resources/templates/list':
+          return client.listResourceTemplates(cursorParams(request.cursor), options);
+        case 'resources/read':
+          return client.readResource({ uri: request.uri }, options);
+      }
+    },
+  };
+}
+
+function cursorParams(cursor: string | undefined): { cursor: string } | undefined {
+  return cursor === undefined ? undefined : { cursor };
 }
 
 /**

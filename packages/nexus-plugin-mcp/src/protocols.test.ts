@@ -23,6 +23,7 @@ import { FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
 import { startLegacyHttp, startModernHttp } from './http-fixtures.js';
 import type { HttpFixture } from './http-fixtures.js';
 import type { ProtocolInfo } from './modern-tools.js';
+import { modelToolNames } from './tool-names.js';
 
 const MODERN_STDIO_SERVER = fileURLToPath(new URL('./modern-stdio-server.ts', import.meta.url));
 
@@ -129,7 +130,7 @@ async function protocolInfo(mounted: Mounted): Promise<ProtocolInfo> {
 describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
   it('工具以 mcp__<server>__<raw> 註冊', async () => {
     await withServer(target, async ({ registry }) => {
-      const names = [...registry.tools.effective().keys()];
+      const names = modelToolNames(registry);
       expect(names.slice(0, 5)).toEqual([
         'mcp__srv__fetch_release_note',
         expect.stringMatching(/^mcp__srv__legacy_ping_[0-9a-f]{12}$/),
@@ -152,7 +153,7 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
       const result = await tool(mounted, 'fetch_release_note').invoke({ topic: '發行說明' });
       expect(String(result)).toContain(RELEASE_NOTE);
       // 名字被正規化過的那一支：server 認得的仍是 `legacy.ping`。
-      const renamed = [...registry.tools.effective().keys()].find((name) =>
+      const renamed = modelToolNames(registry).find((name) =>
         name.startsWith('mcp__srv__legacy_ping_'),
       );
       expect(String(await registry.tools.resolve(renamed ?? '')?.value.invoke({}))).toContain(
@@ -290,7 +291,7 @@ describe.each(TARGETS.filter((target) => target.transport === 'http'))(
       http.failRpcMethod('tools/list');
       const { registry, dispose } = await loadPlugins([httpRunning(http).plugin]);
       try {
-        expect(registry.tools.effective().size).toBe(0);
+        expect(modelToolNames(registry)).toEqual([]);
         expect(registry.logger.warnings()).toHaveLength(1);
         expect(registry.logger.warnings()[0]?.message).toMatch(
           /^MCP 伺服器 "srv" 連不上、列不出工具或工具註冊不上/u,
@@ -360,7 +361,7 @@ describe('HTTP 連不上', () => {
       createMcpPlugin({ serverName: 'srv', connection: { transport: 'http', url } }),
     ]);
     try {
-      expect(registry.tools.effective().size).toBe(0);
+      expect(modelToolNames(registry)).toEqual([]);
       expect(registry.logger.warnings()).toHaveLength(1);
       expect(registry.logger.warnings()[0]?.message).toMatch(/^MCP 伺服器 "srv" 連不上/u);
     } finally {

@@ -6,15 +6,45 @@
  * 由測試以 `node --import tsx <這個檔>` 啟動；不進 `index.ts` 的匯出。
  */
 
-import { McpServer } from '@modelcontextprotocol/server';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { registerModernTools } from './modern-tools.js';
+import {
+  LOGO_BASE64,
+  LOGO_URI,
+  MEMO_TEXT,
+  MEMO_URI,
+  NOTE_TEMPLATE,
+  instructionsRequested,
+  noteText,
+  resourcesRequested,
+} from './resource-fixtures.js';
 
 serveStdio(() => {
+  const instructions = instructionsRequested();
   const server = new McpServer(
     { name: 'nexus-modern-fixture', version: '0.0.0' },
-    { capabilities: { tools: {} } },
+    {
+      capabilities: { tools: {}, ...(resourcesRequested() && { resources: {} }) },
+      ...(instructions !== undefined && { instructions }),
+    },
   );
   registerModernTools(server);
+  if (resourcesRequested()) {
+    server.registerResource('memo', MEMO_URI, { mimeType: 'text/plain' }, (uri) => ({
+      contents: [{ uri: uri.href, text: MEMO_TEXT }],
+    }));
+    server.registerResource('logo', LOGO_URI, { mimeType: 'image/png' }, (uri) => ({
+      contents: [{ uri: uri.href, mimeType: 'image/png', blob: LOGO_BASE64 }],
+    }));
+    server.registerResource(
+      'note',
+      new ResourceTemplate(NOTE_TEMPLATE, { list: undefined }),
+      { mimeType: 'text/plain' },
+      (uri, variables) => ({
+        contents: [{ uri: uri.href, text: noteText(String(variables['id'])) }],
+      }),
+    );
+  }
   return server;
 });

@@ -10,11 +10,41 @@
  * [`fixture-tools.ts`](./fixture-tools.ts)；新協議的 stdio 那台是 [`modern-stdio-server.ts`](./modern-stdio-server.ts)。
  */
 
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { registerFixtureTools } from './fixture-tools.js';
+import {
+  LOGO_BASE64,
+  LOGO_URI,
+  MEMO_TEXT,
+  MEMO_URI,
+  NOTE_TEMPLATE,
+  instructionsRequested,
+  noteText,
+  resourcesRequested,
+} from './resource-fixtures.js';
 
-const server = new McpServer({ name: 'nexus-fixture', version: '0.0.0' });
+const instructions = instructionsRequested();
+const server = new McpServer(
+  { name: 'nexus-fixture', version: '0.0.0' },
+  instructions === undefined ? undefined : { instructions },
+);
 registerFixtureTools(server);
+if (resourcesRequested()) {
+  server.registerResource('memo', MEMO_URI, { mimeType: 'text/plain' }, (uri) => ({
+    contents: [{ uri: uri.href, text: MEMO_TEXT }],
+  }));
+  server.registerResource('logo', LOGO_URI, { mimeType: 'image/png' }, (uri) => ({
+    contents: [{ uri: uri.href, mimeType: 'image/png', blob: LOGO_BASE64 }],
+  }));
+  server.registerResource(
+    'note',
+    new ResourceTemplate(NOTE_TEMPLATE, { list: undefined }),
+    { mimeType: 'text/plain' },
+    (uri, variables) => ({
+      contents: [{ uri: uri.href, text: noteText(String(variables['id'])) }],
+    }),
+  );
+}
 
 await server.connect(new StdioServerTransport());

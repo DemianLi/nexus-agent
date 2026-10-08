@@ -24,6 +24,7 @@ import {
 } from './index.js';
 import { FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
 import { publicToolName } from './names.js';
+import { modelToolNames } from './tool-names.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
 
@@ -143,7 +144,7 @@ describe('接上一台真的 MCP server', () => {
   it('工具以 mcp__<server>__<raw> 註冊，能力也宣告了', async () => {
     const { registry, dispose } = await loadPlugins([fixturePlugin()]);
     try {
-      expect([...registry.tools.effective().keys()]).toEqual([
+      expect(modelToolNames(registry)).toEqual([
         'mcp__fixture__fetch_release_note',
         expect.stringMatching(/^mcp__fixture__legacy_ping_[0-9a-f]{12}$/),
         'mcp__fixture__fail',
@@ -165,7 +166,7 @@ describe('接上一台真的 MCP server', () => {
       expect(String(result)).toContain(RELEASE_NOTE);
 
       // 名字被正規化過的那一支同樣呼叫得到：server 那端認得的仍是 `legacy.ping`。
-      const renamed = [...registry.tools.effective().keys()].find((name) =>
+      const renamed = modelToolNames(registry).find((name) =>
         name.startsWith('mcp__fixture__legacy_ping_'),
       );
       const pong = await registry.tools.resolve(renamed ?? '')?.value.invoke({});
@@ -258,7 +259,7 @@ describe('接上一台真的 MCP server', () => {
   it('連不上：照樣掛上、沒有那台的工具、交出一則警告，子行程收掉了', async () => {
     const { registry, dispose } = await loadPlugins([missingServer()]);
     try {
-      expect(registry.tools.effective().size).toBe(0);
+      expect(modelToolNames(registry)).toEqual([]);
       expect(registry.logger.warnings()).toHaveLength(1);
       expect(registry.logger.warnings()[0]).toMatchObject({
         origin: { name: 'mcp' },
@@ -297,7 +298,7 @@ describe('接上一台真的 MCP server', () => {
     };
     const { registry, dispose } = await loadPlugins([squatter, fixturePlugin()]);
     try {
-      expect([...registry.tools.effective().keys()]).toEqual(['mcp__fixture__snapshot']);
+      expect(modelToolNames(registry)).toEqual(['mcp__fixture__snapshot']);
       expect(registry.tools.resolve('mcp__fixture__snapshot')?.origin.name).toBe('squatter');
       expect(registry.logger.warnings()[0]?.message).toMatch(/squatter/u);
     } finally {
