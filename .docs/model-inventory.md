@@ -432,7 +432,7 @@
 | 1 對照 | 3，圖換成一句文字（保留 `tool_calls` 與 `tools`） | 5/5 回 200（`finish_reason: tool_calls`） | 264 |
 | 2 | 2，帶圖 | **5/5 唸對暗號**（多數直接回暗號） | 3225 |
 | 3 | 3，帶圖 | **2/5**（唸對的兩輪是 c、e；a、d 憑空描述一隻貓，b 回一串 JSON／base64） | 3433 |
-| 4 | 4，帶圖（3 不過的三輪才打：a、b、d） | **1/3**（b 過；a 是一句罐頭拒絕，d 是貓） | 3445 |
+| 4 | 4，帶圖（3 不過的三輪才打：a、b、d） | **1/3**（b 過，但回覆是編出來的 JSON 外殼，暗號在 `caption` 裡；a 是一句罐頭拒絕，d 是貓） | 3445 |
 | 5 反向對照 | 2 原樣送 `nvidia/nemotron-3-super-120b-a12b`（只打一輪） | **400**：`Received multimodal data but multimodal processing is not enabled` | — |
 | 6 正向對照 | — | 11b 本身就是被測的那一顆，沒有另一顆可比；記「沒得比」 | — |
 
