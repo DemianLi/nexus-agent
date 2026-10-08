@@ -72,6 +72,12 @@ function ledgers(run: { frames: Event[]; root: SessionEvent[] }) {
   };
 }
 
+/** 線上的總帳 = 日誌折出來的，多一格永遠等於 `inputTokens` 的 `uncachedInputTokens`（新舊 server 的標記）。 */
+const onWire = <T extends { inputTokens: number }>(core: T) => ({
+  ...core,
+  uncachedInputTokens: core.inputTokens,
+});
+
 const cached = (extra: Partial<ScriptedUsage> = {}): ScriptedUsage => ({
   inputTokens: 1000,
   outputTokens: 20,
@@ -93,20 +99,16 @@ describe('快取桶走完產品路徑', () => {
     // 沒報快取寫就不放那個 key。
     for (const data of usageEvents(run.root)) expect(data).not.toHaveProperty('cacheWriteTokens');
 
-    const expected = {
-      inputTokens: 1000 + 1200,
-      uncachedInputTokens: 300,
-      outputTokens: 40,
-      cacheReadTokens: 1900,
-    };
+    // inputTokens 是未快取那桶（100＋200）；完整 prompt 是三桶相加（1000＋1200）。
+    const expected = { inputTokens: 300, outputTokens: 40, cacheReadTokens: 1900 };
     const { live, page, lastPage, derived } = ledgers(run);
     expect(derived).toEqual(expected);
-    expect(live).toEqual(expected);
-    expect(page).toEqual(expected);
-    expect(lastPage).toEqual(expected);
+    expect(live).toEqual(onWire(expected));
+    expect(page).toEqual(onWire(expected));
+    expect(lastPage).toEqual(onWire(expected));
   }, 30_000);
 
-  it('兩桶都報：寫快取也進帳，inputTokens 仍是三桶相加', async () => {
+  it('兩桶都報：寫快取也進帳，inputTokens 是扣掉兩桶之後的未快取那桶', async () => {
     const run = await runTurns([
       {
         content: '好。',
@@ -121,16 +123,15 @@ describe('快取桶走完產品路徑', () => {
       }),
     ]);
     const expected = {
-      inputTokens: 194,
-      uncachedInputTokens: 30,
+      inputTokens: 30,
       outputTokens: 20,
       cacheReadTokens: 64,
       cacheWriteTokens: 100,
     };
     const { live, page, derived } = ledgers(run);
     expect(derived).toEqual(expected);
-    expect(live).toEqual(expected);
-    expect(page).toEqual(expected);
+    expect(live).toEqual(onWire(expected));
+    expect(page).toEqual(onWire(expected));
   }, 30_000);
 
   it.each([
@@ -140,7 +141,7 @@ describe('快取桶走完產品路徑', () => {
       { cacheDetailsUndefined: true as const },
     ],
   ])(
-    '%s：記錄沒有快取 key，總帳也沒有，inputTokens 仍是整個 prompt',
+    '%s：記錄沒有快取 key，總帳也沒有，inputTokens 是整個 prompt（沒有快取可扣）',
     async (_label, extra) => {
       const run = await runTurns([
         { content: '好。', usage: { inputTokens: 500, outputTokens: 5, ...extra } },
@@ -150,10 +151,12 @@ describe('快取桶走完產品路徑', () => {
       expect(data).not.toHaveProperty('cacheReadTokens');
       expect(data).not.toHaveProperty('cacheWriteTokens');
 
-      const expected = { inputTokens: 500, uncachedInputTokens: 500, outputTokens: 5 };
+      const expected = { inputTokens: 500, outputTokens: 5 };
       const { live, page, derived } = ledgers(run);
+      expect(derived).toEqual(expected);
+      expect(live).toEqual(onWire(expected));
+      expect(page).toEqual(onWire(expected));
       for (const totals of [derived, live, page]) {
-        expect(totals).toEqual(expected);
         expect(totals).not.toHaveProperty('cacheReadTokens');
         expect(totals).not.toHaveProperty('cacheWriteTokens');
       }
@@ -173,11 +176,7 @@ describe('快取桶走完產品路徑', () => {
       const run = await runTurns([{ content: '好。', usage }]);
       expect(usageEvents(run.root)).toEqual([]);
       expect(stateOf(run.frames).tokenUsage).toBeNull();
-      expect(deriveTokenUsage(run.root)).toEqual({
-        inputTokens: 0,
-        uncachedInputTokens: 0,
-        outputTokens: 0,
-      });
+      expect(deriveTokenUsage(run.root)).toEqual({ inputTokens: 0, outputTokens: 0 });
     },
     30_000,
   );
@@ -193,15 +192,17 @@ describe('快取桶走完產品路徑', () => {
     expect(stateOf(historyPage(withCache.root).events).contextPressure?.inputTokens).toBe(1000);
   }, 30_000);
 
-  it('web 讀的 inputTokens 語義沒變：總帳的 inputTokens 是三桶相加（舊欄位）', async () => {
+  it('總帳的 inputTokens 是未快取那桶；三桶相加才是完整 prompt，也就是壓力那格的數', async () => {
     const run = await runTurns([{ content: '好。', usage: cached({ cacheWriteTokens: 50 }) }]);
     // 1000 是完整 prompt：未快取 50＋讀 900＋寫 50。
-    expect(stateOf(run.frames).tokenUsage).toMatchObject({
-      inputTokens: 1000,
+    const state = stateOf(run.frames);
+    expect(state.tokenUsage).toMatchObject({
+      inputTokens: 50,
       uncachedInputTokens: 50,
       cacheReadTokens: 900,
       cacheWriteTokens: 50,
     });
+    expect(state.contextPressure?.inputTokens).toBe(1000);
   }, 30_000);
 });
 
@@ -223,8 +224,8 @@ describe('舊日誌（格式 35 以前）照舊讀', () => {
         data: { inputTokens: 900, outputTokens: 10, totalTokens: 910 },
       },
     ] as unknown as SessionEvent[];
-    const expected = { inputTokens: 1600, uncachedInputTokens: 1600, outputTokens: 40 };
+    const expected = { inputTokens: 1600, outputTokens: 40 };
     expect(deriveTokenUsage(old)).toEqual(expected);
-    expect(stateOf(historyPage(old).events).tokenUsage).toEqual(expected);
+    expect(stateOf(historyPage(old).events).tokenUsage).toEqual(onWire(expected));
   });
 });

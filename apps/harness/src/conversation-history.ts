@@ -637,7 +637,6 @@ export class SessionTotals {
     if (
       usage.inputTokens !== sent.inputTokens ||
       usage.outputTokens !== sent.outputTokens ||
-      usage.uncachedInputTokens !== sent.uncachedInputTokens ||
       usage.cacheReadTokens !== sent.cacheReadTokens ||
       usage.cacheWriteTokens !== sent.cacheWriteTokens
     ) {
@@ -673,7 +672,8 @@ export function tokenUsageData(usage: TokenUsageTotals): {
     payload: {
       inputTokens: usage.inputTokens,
       outputTokens: usage.outputTokens,
-      uncachedInputTokens: usage.uncachedInputTokens,
+      // 永遠等於 `inputTokens`，每次都送：web 靠這一格分辨新舊 server（只看有沒有，不看大小）。見 `WireTokenUsage`。
+      uncachedInputTokens: usage.inputTokens,
       // 缺席＝日誌上沒有任何一顆報過，不放 key（不是 0）。
       ...(usage.cacheReadTokens === undefined ? {} : { cacheReadTokens: usage.cacheReadTokens }),
       ...(usage.cacheWriteTokens === undefined ? {} : { cacheWriteTokens: usage.cacheWriteTokens }),

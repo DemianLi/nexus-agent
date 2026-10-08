@@ -18,14 +18,13 @@ describe('會話總帳', () => {
   it('每一顆 model/usage 的輸入、輸出各自加總', () => {
     expect(deriveTokenUsage([usage(1000, 20), usage(1500, 35), usage(2100, 8)])).toEqual({
       inputTokens: 4600,
-      uncachedInputTokens: 4600,
       outputTokens: 63,
     });
   });
 
   it('沒有 model/usage 就是 0，快取兩格缺席', () => {
     const empty = deriveTokenUsage([ev('turn/start', { kind: 'message', text: '嗨' })]);
-    expect(empty).toEqual({ inputTokens: 0, uncachedInputTokens: 0, outputTokens: 0 });
+    expect(empty).toEqual({ inputTokens: 0, outputTokens: 0 });
     expect(empty).not.toHaveProperty('cacheReadTokens');
     expect(empty).not.toHaveProperty('cacheWriteTokens');
   });
@@ -35,7 +34,6 @@ describe('會話總帳', () => {
     const odd = ev('model/usage', { inputTokens: 10, outputTokens: 5, totalTokens: 999 });
     expect(deriveTokenUsage([odd])).toEqual({
       inputTokens: 10,
-      uncachedInputTokens: 10,
       outputTokens: 5,
     });
   });
@@ -56,10 +54,9 @@ describe('會話總帳', () => {
         ...(write === undefined ? {} : { cacheWriteTokens: write }),
       });
 
-    it('inputTokens 是三桶相加，未快取與兩個快取桶各自累計', () => {
+    it('inputTokens 只是未快取那一桶（照 dsh），兩個快取桶各自累計', () => {
       expect(deriveTokenUsage([cached(100, 10, 900, 0), cached(50, 5, 450, 200)])).toEqual({
-        inputTokens: 100 + 900 + 50 + 450 + 200,
-        uncachedInputTokens: 150,
+        inputTokens: 100 + 50,
         outputTokens: 15,
         cacheReadTokens: 1350,
         cacheWriteTokens: 200,
@@ -74,8 +71,7 @@ describe('會話總帳', () => {
 
     it('有一顆報過，那一格就出現，沒報的呼叫不當 0 加', () => {
       expect(deriveTokenUsage([usage(10, 1), cached(20, 2, 80)])).toEqual({
-        inputTokens: 10 + 20 + 80,
-        uncachedInputTokens: 30,
+        inputTokens: 10 + 20,
         outputTokens: 3,
         cacheReadTokens: 80,
       });
@@ -87,15 +83,14 @@ describe('會話總帳', () => {
 
     it('只有快取桶有東西的那顆（未快取與輸出是 0）照樣加', () => {
       expect(deriveTokenUsage([cached(0, 0, 500)])).toEqual({
-        inputTokens: 500,
-        uncachedInputTokens: 0,
+        inputTokens: 0,
         outputTokens: 0,
         cacheReadTokens: 500,
       });
     });
 
-    it('狀態版本是 2', () => {
-      expect(tokenUsageUnit.stateVersion).toBe(2);
+    it('狀態版本是 3（inputTokens 換成未快取的語義）', () => {
+      expect(tokenUsageUnit.stateVersion).toBe(3);
     });
   });
 });

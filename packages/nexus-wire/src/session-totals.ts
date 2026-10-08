@@ -22,9 +22,8 @@
  *
  * ## 總量由讀的那一側加
  *
- * 不送總量：dsh 的 `StatsPills` 也是自己把各桶加起來（`:241-242`）。舊欄位 `inputTokens` 含快取（未快取、快取讀、快取寫三桶相加），
- * 所以它加 `outputTokens` 就是整筆帳；另有四桶的欄位（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，見 {@link WireTokenUsage}），
- * 日誌沒記快取的部分缺席而不是 0。
+ * 不送總量：dsh 的 `StatsPills` 也是自己把各桶加起來（`:241-242`）。四桶互不重疊（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，見 {@link WireTokenUsage}）：
+ * `inputTokens` 是未快取輸入（照 dsh），整筆帳要把快取讀、快取寫與 `outputTokens` 一起加；日誌沒記快取的部分缺席而不是 0。
  *
  * ## 與 dsh 的偏離
  *
@@ -46,17 +45,21 @@ export const SESSION_STATS = 'sessionStats';
 
 /** {@link TOKEN_USAGE} 的 `payload`，也是 `ConversationState.tokenUsage`。 */
 export interface WireTokenUsage {
-  /** root 每一次模型呼叫的 prompt token 數加總，**含快取讀取**。 */
+  /**
+   * root 每一次模型呼叫的**未快取**輸入 token 加總，照 dsh 的 `tokenUsage` 投影（四桶互不重疊）。
+   * **2026-10-09 起的語義**（#724 收尾）：以前它含快取讀取（完整 prompt），web 已改讀四桶（#1206）之後換成這個。
+   */
   readonly inputTokens: number;
   /** root 每一次回應的 token 數加總。 */
   readonly outputTokens: number;
   /**
-   * 以下三格是 [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，**選填**（server 從格式 36 起送 `uncachedInputTokens`，
-   * 快取兩格看日誌有沒有報過）：照 dsh 的投影名
+   * 以下三格是 [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，照 dsh 的投影名
    * （`packages/llm/token-meter/src/usage-projection.ts:21-25`，`5badb150`），四桶互不重疊——未快取的輸入、快取讀、快取寫、輸出。
-   * **舊的 `inputTokens` 語義不動**（照舊含快取讀取），web 換到新欄位之後才拿掉它。
    *
-   * **缺席是「沒記」，不是 0**：寫下這些的 server 才會送；舊日誌、供應商沒報快取細節的呼叫都沒有，畫面要把「沒記」與「0」分開
+   * `uncachedInputTokens` **永遠等於 {@link inputTokens}，server 每次都送**：它是 web 分辨「新 server（四桶）」與「舊 server
+   * （`inputTokens` 含快取）」的標記，只看有沒有這一格、不看大小（0 也算新）。型別上選填是為了讀舊 server 的資料。
+   *
+   * **快取兩格缺席是「沒記」，不是 0**：舊日誌、供應商沒報快取細節的呼叫都沒有，畫面要把「沒記」與「0」分開
    * （快取命中率的分母不能混進沒記的）。
    */
   readonly uncachedInputTokens?: number;
