@@ -26,6 +26,7 @@ import {
   withTrajectory,
 } from '@/test/trajectory-fixtures';
 import {
+  COST_STRUCTURED_LIMITS,
   DERIVED_CALIBER,
   METER_END_LABEL,
   caliberOf,
@@ -197,7 +198,24 @@ describe('spanRows：每一格都帶口徑表的鍵', () => {
       retryWaitMs: 1,
       toolErrors: 1,
       waitMs: 1,
+      // 新 server 的形狀：失敗與生摘要也畫快取兩格（#724）。
+      uncachedInputTokens: 1,
+      cacheReadTokens: 1,
+      cacheWriteTokens: 1,
+      failedCacheReadTokens: 1,
+      failedCacheWriteTokens: 1,
+      summaryCacheReadTokens: 1,
+      summaryCacheWriteTokens: 1,
     });
+    const drawn = spanRows(everything, everything).map(([field]) => field);
+    expect(drawn).toEqual(
+      expect.arrayContaining([
+        'failedCacheReadTokens',
+        'failedCacheWriteTokens',
+        'summaryCacheReadTokens',
+        'summaryCacheWriteTokens',
+      ]),
+    );
     for (const [field] of spanRows(everything, everything)) {
       expect(caliberOf(field), field).toBeTypeOf('string');
     }
@@ -548,5 +566,127 @@ describe('子代理叫什麼', () => {
       new Map(),
     );
     expect(titles.get('r')).toBe('子代理');
+  });
+});
+
+describe('失敗、生摘要、依模型也列三桶（#724）', () => {
+  const fieldsOf = (rows: ReturnType<typeof spanRows>) =>
+    Object.fromEntries(rows.map(([f, , v]) => [f, v]));
+  const base = {
+    steps: 3,
+    failedSteps: 1,
+    uncachedInputTokens: 200,
+    inputTokens: 200,
+    outputTokens: 20,
+  };
+
+  it('失敗的輸入是未快取的，快取讀寫各一格；缺席寫「沒記」，不是 0', () => {
+    const rows = spanRows(
+      span({
+        ...base,
+        failedInputTokens: 30,
+        failedOutputTokens: 3,
+        failedCacheReadTokens: 70,
+      }),
+    );
+    expect(rows.find(([f]) => f === 'failedInputTokens')?.[1]).toBe(
+      '其中失敗或中止的輸入（未快取）',
+    );
+    const byField = fieldsOf(rows);
+    expect(byField.failedInputTokens).toBe('30 token');
+    expect(byField.failedCacheReadTokens).toBe('70 token');
+    expect(byField.failedCacheWriteTokens).toBe('沒記');
+    expect(byField.failedOutputTokens).toBe('3 token');
+  });
+
+  it('失敗的呼叫全走快取（未快取是 0）也畫出來；沒有失敗就一格都不畫', () => {
+    const cachedOnly = fieldsOf(
+      spanRows(span({ ...base, failedCacheReadTokens: 500, failedCacheWriteTokens: 0 })),
+    );
+    expect(cachedOnly.failedInputTokens).toBe('0 token');
+    expect(cachedOnly.failedCacheReadTokens).toBe('500 token');
+    expect(cachedOnly.failedCacheWriteTokens).toBe('0 token');
+    const none = spanRows(span(base)).map(([f]) => f);
+    expect(none.some((f) => f.startsWith('failed') && f !== 'failedSteps')).toBe(false);
+  });
+
+  it('生摘要另列：未快取、快取讀、快取寫、輸出；沒報的快取格寫「沒記」', () => {
+    const byField = fieldsOf(
+      spanRows(
+        span({
+          ...base,
+          summaries: 2,
+          summaryInputTokens: 40,
+          summaryOutputTokens: 9,
+          summaryCacheReadTokens: 800,
+        }),
+      ),
+    );
+    expect(byField.summaryInputTokens).toBe('40 token');
+    expect(byField.summaryCacheReadTokens).toBe('800 token');
+    expect(byField.summaryCacheWriteTokens).toBe('沒記');
+    expect(byField.summaryOutputTokens).toBe('9 token');
+  });
+
+  it('生摘要的快取讀沒報、寫有報：各自判斷，讀畫「沒記」、寫畫數字', () => {
+    const byField = fieldsOf(
+      spanRows(span({ ...base, summaries: 1, summaryInputTokens: 4, summaryCacheWriteTokens: 12 })),
+    );
+    expect(byField.summaryCacheReadTokens).toBe('沒記');
+    expect(byField.summaryCacheWriteTokens).toBe('12 token');
+  });
+
+  it('舊 server（沒有未快取那一格）：失敗與摘要照舊，不畫快取兩格', () => {
+    const rows = spanRows(
+      span({
+        steps: 2,
+        inputTokens: 400,
+        failedInputTokens: 30,
+        failedOutputTokens: 3,
+        summaries: 1,
+        summaryInputTokens: 900,
+        summaryOutputTokens: 90,
+        failedCacheReadTokens: 5,
+      }),
+    );
+    const fields = rows.map(([f]) => f);
+    expect(fields).not.toContain('failedCacheReadTokens');
+    expect(fields).not.toContain('summaryCacheReadTokens');
+    expect(rows.find(([f]) => f === 'failedInputTokens')?.[1]).toBe('其中失敗或中止的輸入');
+  });
+
+  it('依模型的列：新 server 列出快取讀寫（缺席寫「沒記」），其他模型同；舊 server 照舊', () => {
+    const { models } = distributionRows(
+      span({
+        uncachedInputTokens: 10,
+        models: [
+          {
+            model: 'm-a',
+            steps: 2,
+            inputTokens: 1000,
+            outputTokens: 10,
+            cacheReadTokens: 7000,
+            cacheWriteTokens: 0,
+          },
+          { model: 'm-b', steps: 1, inputTokens: 5, outputTokens: 1, cacheReadTokens: 3 },
+        ],
+        modelsOther: { steps: 3, inputTokens: 7, outputTokens: 1 },
+      }),
+    );
+    expect(models.map(([, text]) => text)).toEqual([
+      '2 次・輸入 1,000／快取讀 7,000／快取寫 0／輸出 10',
+      '1 次・輸入 5／快取讀 3／快取寫 沒記／輸出 1',
+      '3 次・輸入 7／快取讀 沒記／快取寫 沒記／輸出 1',
+    ]);
+    const legacy = distributionRows(
+      span({ models: [{ model: 'm-a', steps: 2, inputTokens: 1000, outputTokens: 10 }] }),
+    );
+    expect(legacy.models[0]?.[1]).toBe('2 次・輸入 1,000／輸出 10');
+  });
+
+  it('口徑兩句不再說輸入含快取讀取', () => {
+    expect(COST_STRUCTURED_LIMITS.scope).toContain('輸入只算未快取');
+    expect(COST_STRUCTURED_LIMITS.scope).not.toContain('含失敗與中止的呼叫、含快取讀取');
+    expect(DERIVED_CALIBER.tokensTotal).toContain('舊 server');
   });
 });

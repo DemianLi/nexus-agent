@@ -41,6 +41,7 @@ import {
   cacheHitRateText,
   exactTokens,
   formatDuration,
+  NOT_RECORDED,
   usageBuckets,
 } from '@/lib/session-usage-view';
 import { UNKNOWN_SUBAGENT_LABEL } from '@/lib/subagent-view';
@@ -87,7 +88,7 @@ export const COST_STRUCTURED_HEADLINE =
 
 export const COST_STRUCTURED_LIMITS = {
   scope:
-    '這裡的 token 是供應商報的：含失敗與中止的呼叫、含快取讀取；不含生摘要的那一次（另列）、不含產生會話標題的那一次。供應商沒報用量的呼叫不是 0，有這種呼叫時 token 是下限。',
+    '這裡的 token 是供應商報的：含失敗與中止的呼叫；輸入只算未快取的，快取讀、快取寫另列（完整的輸入是三項相加，舊 server 的輸入則已含快取讀取）；不含生摘要的那一次（另列）、不含產生會話標題的那一次。供應商沒報用量的呼叫不是 0，有這種呼叫時 token 是下限。',
   time: '時間分三段加一格殘差：模型（扣掉重試退避）、工具（平行的取聯集）、等待（重試退避加核准等待）；殘差是三段都沒覆蓋到的，可能是負的，那代表前提被破壞。',
   window:
     '逐輪只列最近的幾輪，更早的併成一列；每一輪的「在觀測分頁看這一輪」只在觀測分頁還有那一輪的資料時能按。',
@@ -98,7 +99,8 @@ export const COST_STRUCTURED_LIMITS = {
 
 /** 畫面上有、但投影的口徑表沒有的欄位（由其他欄位算出來的）。 */
 export const DERIVED_CALIBER: Readonly<Record<string, string>> = {
-  tokensTotal: '輸入加輸出：整筆帳（輸入已含快取讀取）。',
+  tokensTotal:
+    '輸入加輸出：整筆帳（舊 server 才有這一格：它的輸入已含快取讀取，新 server 改列四項合計）。',
   tokensTotalBuckets:
     '輸入（未快取）、快取讀、快取寫、輸出四項相加：整筆帳。有一個快取桶沒記時，合計不含那一項，是下限。',
   cacheHitRate:
@@ -152,21 +154,62 @@ export function spanRows(span: TokenMeterSpan, turn?: TokenMeterTurn): readonly 
         ['tokensTotalBuckets', '合計', tokenValue(buckets.total, lower || cacheMissing)],
       ];
   if (hitRate !== undefined) rows.push(['cacheHitRate', '快取命中率', cacheHitRateText(hitRate)]);
-  if (span.failedInputTokens > 0 || span.failedOutputTokens > 0) {
-    rows.push(
-      ['failedInputTokens', '其中失敗或中止的輸入', exactTokens(span.failedInputTokens)],
-      ['failedOutputTokens', '其中失敗或中止的輸出', exactTokens(span.failedOutputTokens)],
-    );
+  // 失敗與生摘要的輸入跟主帳同一個口徑：新 server 是未快取的，快取讀寫各一格（缺席寫「沒記」，不是 0；摘要的另列、
+  // 不在主帳的快取裡）；舊 server（沒有未快取那一格）的輸入含快取，沒有快取兩格。
+  const split = !buckets.cacheInInput;
+  const failedCache =
+    (span.failedCacheReadTokens ?? 0) > 0 || (span.failedCacheWriteTokens ?? 0) > 0;
+  if (span.failedInputTokens > 0 || span.failedOutputTokens > 0 || (split && failedCache)) {
+    rows.push([
+      'failedInputTokens',
+      split ? '其中失敗或中止的輸入（未快取）' : '其中失敗或中止的輸入',
+      exactTokens(span.failedInputTokens),
+    ]);
+    if (split) {
+      rows.push(
+        [
+          'failedCacheReadTokens',
+          '其中失敗或中止的快取讀',
+          cacheCountText(span.failedCacheReadTokens),
+        ],
+        [
+          'failedCacheWriteTokens',
+          '其中失敗或中止的快取寫',
+          cacheCountText(span.failedCacheWriteTokens),
+        ],
+      );
+    }
+    rows.push(['failedOutputTokens', '其中失敗或中止的輸出', exactTokens(span.failedOutputTokens)]);
   }
   if (span.summaries > 0) {
     rows.push(['summaries', '生摘要', `${span.summaries} 次`]);
     if (span.summariesUnknown > 0) {
       rows.push(['summariesUnknown', '其中沒報用量的', `${span.summariesUnknown} 次`]);
     }
-    rows.push(
-      ['summaryInputTokens', '生摘要的輸入（另列）', exactTokens(span.summaryInputTokens)],
-      ['summaryOutputTokens', '生摘要的輸出（另列）', exactTokens(span.summaryOutputTokens)],
-    );
+    rows.push([
+      'summaryInputTokens',
+      split ? '生摘要的輸入（未快取，另列）' : '生摘要的輸入（另列）',
+      exactTokens(span.summaryInputTokens),
+    ]);
+    if (split) {
+      rows.push(
+        [
+          'summaryCacheReadTokens',
+          '生摘要的快取讀（另列）',
+          cacheCountText(span.summaryCacheReadTokens),
+        ],
+        [
+          'summaryCacheWriteTokens',
+          '生摘要的快取寫（另列）',
+          cacheCountText(span.summaryCacheWriteTokens),
+        ],
+      );
+    }
+    rows.push([
+      'summaryOutputTokens',
+      '生摘要的輸出（另列）',
+      exactTokens(span.summaryOutputTokens),
+    ]);
   }
   rows.push(['steps', '模型呼叫', `${span.steps} 次`]);
   if (span.failedSteps > 0)
@@ -194,24 +237,31 @@ export function spanRows(span: TokenMeterSpan, turn?: TokenMeterTurn): readonly 
   return rows;
 }
 
+/** 快取桶在一行字裡的寫法：沒記寫「沒記」，不是 0。 */
+const cacheNumber = (count: number | undefined): string =>
+  count === undefined ? NOT_RECORDED : count.toLocaleString('en-US');
+
 /** 依模型、依工具的分佈（會話總計那一段用）。 */
 export function distributionRows(span: TokenMeterSpan): {
   readonly models: readonly (readonly [label: string, value: string])[];
   readonly tools: readonly (readonly [label: string, value: string])[];
 } {
+  // 新 server 的輸入是未快取的，快取讀寫各自列出（缺席寫「沒記」）；舊 server（沒有未快取那一格）的輸入含快取，照舊。
+  const split = span.uncachedInputTokens !== undefined;
+  const modelUsage = (row: {
+    readonly steps: number;
+    readonly inputTokens: number;
+    readonly outputTokens: number;
+    readonly cacheReadTokens?: number;
+    readonly cacheWriteTokens?: number;
+  }): string =>
+    split
+      ? `${row.steps} 次・輸入 ${row.inputTokens.toLocaleString('en-US')}／快取讀 ${cacheNumber(row.cacheReadTokens)}／快取寫 ${cacheNumber(row.cacheWriteTokens)}／輸出 ${row.outputTokens.toLocaleString('en-US')}`
+      : `${row.steps} 次・輸入 ${row.inputTokens.toLocaleString('en-US')}／輸出 ${row.outputTokens.toLocaleString('en-US')}`;
   const models = span.models.map(
-    (row) =>
-      [
-        row.model ?? '（沒有請求快照，模型不明）',
-        `${row.steps} 次・輸入 ${row.inputTokens.toLocaleString('en-US')}／輸出 ${row.outputTokens.toLocaleString('en-US')}`,
-      ] as const,
+    (row) => [row.model ?? '（沒有請求快照，模型不明）', modelUsage(row)] as const,
   );
-  if (span.modelsOther !== undefined) {
-    models.push([
-      '其他模型',
-      `${span.modelsOther.steps} 次・輸入 ${span.modelsOther.inputTokens.toLocaleString('en-US')}／輸出 ${span.modelsOther.outputTokens.toLocaleString('en-US')}`,
-    ]);
-  }
+  if (span.modelsOther !== undefined) models.push(['其他模型', modelUsage(span.modelsOther)]);
   const tools = span.tools.map(
     (row) =>
       [row.name, `${row.calls} 次${row.errors > 0 ? `（${row.errors} 次失敗）` : ''}`] as const,
