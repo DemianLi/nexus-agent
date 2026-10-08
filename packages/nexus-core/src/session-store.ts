@@ -389,6 +389,10 @@ import type { SessionEvent } from './session-log.js';
  *   （`{ message, code, status? }`，失敗的分類）。**不升**：判準同上——一台 32 的舊 runtime 讀回這份日誌，`turn/failed` 的每個讀者
  *   （goal 續行、歷史、統計、遙測…）只認「有這顆事件」或讀 `message`，多一個不認得的欄位照舊投影。**沒有這一格就是沒記**
  *   （這一版以前寫的），讀的人標「—」，不是 `UNKNOWN`；`UNKNOWN` 是「記了、而且不是供應商的錯」。
+ * - **前景子代理日誌的第一顆 `user/message`**（[#1159](https://github.com/DemianLi/nexus-agent/issues/1159)）：基座 `task` 派出的前景子代理，
+ *   子日誌出生時多寫一顆來源 `user` 的 `user/message`，內容是它收到的那句話（`task` 的 `description`）。**不升**：沒有新種類、沒有新欄位，
+ *   舊 runtime 讀它就是一顆平常的 `user/message`，且前景子代理是 one-shot，沒有續接這回事。**沒有這一顆就是沒記**（這一版以前寫的前景子日誌）：
+ *   從那種日誌推子代理的歷史會缺開頭那句話，讀的人要從父日誌 `tool/call` 的 `description` 補，不能當成「沒有輸入」。
  *
  * ## 33：續接把當掉那一輪的收尾寫回日誌（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）
  *
@@ -437,8 +441,19 @@ import type { SessionEvent } from './session-log.js';
  *
  * **讀舊檔**：35 以前沒有快取兩格，`inputTokens` 當未快取（它本來就是整個 prompt）、兩桶當「沒記」，總帳與壓力的數字跟以前一樣，
  * 不必逐版分辨。
+ *
+ * ## 37：每會話模型選擇（[#723](https://github.com/DemianLi/nexus-agent/issues/723)）
+ *
+ * 新增 `model/selection { modelId, reasoningEffort? }`（使用者替會話選了下一步起用的模型與強度），並讓 `model/start` 多一格選填的
+ * `route { model, effort? }`（這次請求實際走的路由）。
+ *
+ * **升版，`model/selection` 不標 `ignorable`**——它左右續接之後的行為：一台 36 的 runtime 略過它，續接時會悄悄用回部署預設那顆。
+ * `model/start.route` 單獨看是純附加的選填欄位，但它是續接「沒選過的會話」時沿用上一次路由的依據，所以跟著同一個版本。
+ *
+ * **讀舊檔**：36 以前沒有這兩樣，續接時走部署預設、不補寫歷史；舊日誌上沒有路由，所以第一次選了別顆之後也不附換模型的通知
+ * （沒有「上一次走的是誰」可比）。
  */
-export const SESSION_LOG_FORMAT_VERSION = 36;
+export const SESSION_LOG_FORMAT_VERSION = 37;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

@@ -380,6 +380,32 @@ export {
 } from './projections.js';
 export type { TokenUsageTotals } from './token-usage.js';
 export { deriveTokenUsage, tokenUsageUnit } from './token-usage.js';
+export {
+  MODEL_SELECTION_MIDDLEWARE_NAME,
+  MODEL_SELECTION_NOTICE_KIND,
+  ModelSelectionController,
+  createModelSwapMiddleware,
+  modelSwitchNoticeText,
+  pendingNotice,
+  recordedRoute,
+  recordedSelection,
+} from './model-selection.js';
+export type { ModelSelectionOptions } from './model-selection.js';
+export {
+  modelNameOf,
+  normalizeEffort,
+  normalizeRoute,
+  routeOfModel,
+  sameModel,
+  sameRoute,
+  tagModelRoute,
+  taggedRouteOf,
+} from './model-route.js';
+export type { ModelRoute } from './model-route.js';
+export { STEP_NOTICE_MIDDLEWARE_NAME, createStepNoticeMiddleware } from './repeat-reminder.js';
+export type { StepNoticeSource } from './repeat-reminder.js';
+export { WINDOW_THRESHOLD_RATIO, effectiveTrigger, windowThreshold } from './summarization.js';
+export type { ModelContextLimits } from './summarization.js';
 export type { ModelUsage } from './model-usage.js';
 export {
   createModelUsageRecorder,

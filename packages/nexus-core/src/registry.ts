@@ -48,6 +48,7 @@ import { toolCallSessionAddress } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
 import type { SessionRegistry } from './session-registry.js';
 import type { SessionLog } from './session-log.js';
+import type { LoggedMessage } from './logged-message.js';
 import { appendSubagentCatalog } from './subagent-catalog.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 import type { FeedbackService } from './feedback.js';
@@ -904,6 +905,14 @@ export interface SpawnLink {
   readonly parent: SessionLog;
   /** 派它的那一顆 `tool/call` 的 `callId`。 */
   readonly callId: string;
+  /**
+   * 子代理收到的那一句話（`task` 的 `description`，圍堵已經包成日誌的訊息形狀）。子日誌**出生**的那一刻當成它的第一顆
+   * `user/message` 寫進去，來源 `user`，同 dsh 的 `child.followup(createUserMessage({content: prompt, source: {kind: 'user'}}))`。
+   * 缺席（呼叫沒帶字串型的 `description`）就不寫，日誌跟以前一樣沒有輸入。
+   *
+   * **這裡收現成的訊息而不是字串**：這個檔對領域套件只能 `import type`（`kernel-boundary.test.ts`），建 `HumanMessage` 是圍堵的事。
+   */
+  readonly input?: LoggedMessage;
 }
 
 /**
@@ -1443,6 +1452,19 @@ export function createRegistry(): InternalPluginRegistry {
           return;
         }
         expectedSpawns.delete(address.runId);
+        // 前景子代理的輸入：基座的 `task` 把 `description` 原樣當子圖的第一則 `HumanMessage`，日誌上卻沒有任何一顆事件
+        // 記它，從日誌推這個子代理的歷史就缺了開頭那一句（#1159）。出生當下寫，落在它的第一次 `model/start` 之前。
+        // 同 `recordToolCall`：記不進去不殺這次呼叫。
+        if (link.input !== undefined) {
+          try {
+            log.append('user/message', {
+              message: link.input,
+              source: { kind: 'user' },
+            });
+          } catch {
+            // 日誌不收這一句：子代理照跑，歷史缺開頭，與修之前相同。
+          }
+        }
         appendSubagentCatalog(link.parent, {
           childId: log.sessionId,
           callId: link.callId,

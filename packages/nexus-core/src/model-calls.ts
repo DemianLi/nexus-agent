@@ -83,6 +83,8 @@ import type { AgentMiddleware } from './base-types.js';
 import { runInRetryScope } from './llm-retry.js';
 import { toLoggedMessage } from './logged-message.js';
 import { noteModelCallReplied, runInModelCall, withModelCall } from './model-call-scope.js';
+import { routeOfModel } from './model-route.js';
+import type { ModelRoute } from './model-route.js';
 import type { ModelCallOutcome, SessionLog } from './session-log.js';
 import type { SessionLookup } from './registry.js';
 import { isSyntheticStopReply, modelCallAborted } from './turn-cancel.js';
@@ -90,10 +92,10 @@ import { isSyntheticStopReply, modelCallAborted } from './turn-cancel.js';
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
 export const MODEL_CALL_EVENTS_MIDDLEWARE_NAME = 'nexusModelCallEvents';
 
-/** 記 `model/start`，回它的 `seq`；記不進去回 `undefined`。 */
-function tryAppendStart(log: SessionLog): number | undefined {
+/** 記 `model/start`（帶這次請求走的路由，認得出來才帶），回它的 `seq`；記不進去回 `undefined`。 */
+function tryAppendStart(log: SessionLog, route: ModelRoute | undefined): number | undefined {
   try {
-    return log.append('model/start', {}).seq;
+    return log.append('model/start', route === undefined ? {} : { route }).seq;
   } catch {
     return undefined;
   }
@@ -141,7 +143,7 @@ export function createModelCallRecorder(sessions: {
       });
       if (found.kind !== 'ok') return handler(request);
       const { log } = found;
-      const modelCall = tryAppendStart(log);
+      const modelCall = tryAppendStart(log, routeOfModel(request.model));
       if (modelCall === undefined) return handler(request);
       // 沒有正常回來的方式（#1022）：拋錯、或使用者按了停止。正常回來沒有。
       let outcome: ModelCallOutcome | undefined;

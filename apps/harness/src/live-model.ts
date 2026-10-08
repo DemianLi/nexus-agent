@@ -1,7 +1,12 @@
 import { ContextOverflowError } from '@langchain/core/errors';
 import { MiddlewareError } from 'langchain';
 import { ChatOpenAI } from '@langchain/openai';
-import { beginAttemptReport, noteFailedAttempt, noteRequestStart } from '@nexus/core';
+import {
+  beginAttemptReport,
+  noteFailedAttempt,
+  noteRequestStart,
+  tagModelRoute,
+} from '@nexus/core';
 import type { AttemptUsage, LlmFailure } from '@nexus/core';
 
 import { resolveHarnessHome } from './harness-home.js';
@@ -1012,7 +1017,7 @@ export function createLiveModel(
   // 請求時的那一次負責受管檔在兩個請求之間被拿掉的情況。
   if (credentials.resolve(LIVE_API_KEY_ENV) === undefined) throw new Error(missingKeyMessage());
 
-  return new ChatOpenAI({
+  const instance = new ChatOpenAI({
     model: config.modelId,
     // `fetch` 疊三層（再加最內層貼著底層 fetch 的串流用量回報，#1022，只旁讀不改位元組）：最內層是 #592（送出前換掉空的助手內容），中間是 #516（串流內回報的錯誤
     // 翻成 HTTP 錯誤回應，才進得了重試射程），外層是 #521（第一則事件之後的閒置逾時）。外層收到的
@@ -1052,6 +1057,14 @@ export function createLiveModel(
         modelKwargs: thinkingOffBody(entry),
       }),
   });
+  // 對話那一顆（含子代理）貼路由標籤（#723）：`model/start.route`、換模型通知與系統提示詞的 `{{model}}` 讀它。標題等別的用途不貼——
+  // 它們不是對話的請求，不該冒充「最近一次請求走的路由」。
+  return purpose === undefined
+    ? tagModelRoute(instance, {
+        model: config.modelId,
+        ...(overrides.thinkingOff === true && { effort: 'off' }),
+      })
+    : instance;
 }
 
 /**

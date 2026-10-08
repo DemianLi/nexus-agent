@@ -63,6 +63,8 @@ import {
   type InvariantSelection,
   type InvariantTap,
   type DroppedEntry,
+  type ModelContextLimits,
+  type ModelSelectionController,
   type PluginEntry,
   type PluginOrigin,
   type PluginRegistry,
@@ -220,6 +222,13 @@ export interface CreateNexusAgentOptions {
    * 的話，永遠沒有人領。
    */
   readonly stepInbox?: boolean;
+  /**
+   * 每會話模型選擇的控制器（[#723](https://github.com/DemianLi/nexus-agent/issues/723)），原樣轉給 `FoldOptions.modelSelection`。
+   * 省略即不掛：請求逐欄與沒有這一格時一樣（假模型與評估路徑都不給）。控制器由 `model-selection-host.ts` 建。
+   */
+  readonly modelSelection?: ModelSelectionController;
+  /** 一顆模型自己的窗口與輸出上限，原樣轉給 `FoldOptions.modelLimits`；只在 {@link modelSelection} 給了時有意義。 */
+  readonly modelLimits?: (model: unknown) => ModelContextLimits | undefined;
   /**
    * 背景派出的委派工具 `subagent`（[#831](https://github.com/DemianLi/nexus-agent/issues/831)，地圖
    * [#737](https://github.com/DemianLi/nexus-agent/issues/737)）。**省略就完全不變**：沒有這顆 middleware，
@@ -729,6 +738,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       }),
       ...(options.modelUsage !== undefined && { modelUsage: options.modelUsage }),
       ...(options.stepInbox === true && { stepInbox: true }),
+      ...(options.modelSelection !== undefined && { modelSelection: options.modelSelection }),
+      ...(options.modelLimits !== undefined && { modelLimits: options.modelLimits }),
     });
 
     // **推導出來的型別沒有塌**：`assembleAgent` 回 `createAgent` 的型別，`invoke()` 的 `messages` 仍然是

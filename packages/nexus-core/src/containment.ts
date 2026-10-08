@@ -78,8 +78,7 @@
  * `FilesystemMiddleware` 會把過大的結果換成預覽，這一層看不到——那條偏離寫在 `tool/result` 那裡。
  */
 
-import { ToolMessage } from '@langchain/core/messages';
-import type { HumanMessage } from '@langchain/core/messages';
+import { HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { isGraphBubbleUp } from '@langchain/langgraph';
 import { createMiddleware, MiddlewareError, ToolInvocationError } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
@@ -332,10 +331,22 @@ function recordToolCall(
     return undefined;
   }
   const runId = spawnedSubagentRunId(where);
+  // 子代理的輸入：`task` 與前景的 `subagent`（會被改寫成 `task`）都以 `description` 當那一句話。
+  const { args } = request.toolCall;
+  const description: unknown =
+    typeof args === 'object' && args !== null
+      ? (args as Record<string, unknown>)['description']
+      : undefined;
   const release =
     runId === undefined || sessions.expectSpawn === undefined
       ? () => {}
-      : sessions.expectSpawn(runId, { parent: log, callId });
+      : sessions.expectSpawn(runId, {
+          parent: log,
+          callId,
+          ...(typeof description === 'string' && {
+            input: toLoggedMessage(new HumanMessage(description)),
+          }),
+        });
   const settle: SettleToolCall = (outcome, message, injected, meta) => {
     try {
       log.append('tool/result', {
