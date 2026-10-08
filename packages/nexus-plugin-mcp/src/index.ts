@@ -186,10 +186,11 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     const registered: (() => void)[] = [];
     let supervisor: Supervisor<Generation> | undefined;
     let unregisterSource: (() => void) | undefined;
-    // 進度（掉線、第 n 次重連、放棄、連回來）往 `console.warn` 講，照 `session-log.ts`、`sessions.ts` 等執行期通報的慣例（伺服器的
-    // stderr 就是 `serve` 的日誌）。**不能走 `registry.logger`**：它只在 `apply` 裡呼叫得動（要指名是誰交的警告），而重連發生在組裝之後。
+    // 進度（掉線、第 n 次重連、放棄、連回來）交給 `registry.logger`：`bind()` 在 `apply` 裡把「是誰」綁進去，重連發生在組裝之後
+    // 也叫得動。外掛不自己寫標準錯誤，印在哪由 CLI 與 serve 決定。
+    const logger = registry.logger.bind();
     const report = (message: string): void => {
-      console.warn(message);
+      logger.warn(message);
     };
     try {
       const first = new Map<string, ToolCall>();

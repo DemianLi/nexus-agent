@@ -786,6 +786,81 @@ describe('registry.logger', () => {
     expect(() => createRegistry().logger.warn('沒有人')).toThrow(/logger\.warn\(\)/u);
   });
 
+  /** 執行期的話（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)）：`apply` 裡綁好 origin，之後隨時叫得動。 */
+  it('`bind()` 在 `apply` 裡綁好 origin，`apply` 結束之後還能講，記得是誰說的', async () => {
+    let later: (() => void) | undefined;
+    const { registry, dispose } = await loadPlugins([
+      fakePlugin('other', () => undefined),
+      fakePlugin('runtime', (r) => {
+        const log = r.logger.bind();
+        later = () => {
+          log.warn('跑起來之後才說的');
+        };
+      }),
+    ]);
+    later?.();
+    await dispose();
+    expect(registry.logger.warnings()).toEqual([
+      { origin: { id: 'runtime#0', name: 'runtime' }, message: '跑起來之後才說的' },
+    ]);
+  });
+
+  it('`bind()` 與 `warn()` 一樣，`apply` 之外拋', () => {
+    expect(() => createRegistry().logger.bind()).toThrow(/logger\.bind\(\)/u);
+  });
+
+  it('`exporter` 只收登記之後的話（`apply` 裡的與執行期的都算），可以取消，接收端拋錯不影響講話的一方', async () => {
+    const heard: string[] = [];
+    let say: (() => void) | undefined;
+    const { registry, dispose } = await loadPlugins([
+      fakePlugin('talker', (r) => {
+        r.logger.warn('掛上那一刻');
+        const log = r.logger.bind();
+        say = () => {
+          log.warn('執行期');
+        };
+      }),
+    ]);
+    await dispose();
+    const stop = registry.logger.exporter({
+      export: (w) => {
+        heard.push(w.message);
+      },
+    });
+    registry.logger.exporter({
+      export: () => {
+        throw new Error('我是壞掉的接收端');
+      },
+    });
+    say?.();
+    stop();
+    say?.();
+    expect(heard).toEqual(['執行期']);
+    expect(registry.logger.warnings().map(({ message }) => message)).toEqual([
+      '掛上那一刻',
+      '執行期',
+      '執行期',
+    ]);
+  });
+
+  it('`warnings()` 只留最近 1000 則（照 dsh `LoggerService.bufferSize`）', async () => {
+    let say: ((message: string) => void) | undefined;
+    const { registry, dispose } = await loadPlugins([
+      fakePlugin('noisy', (r) => {
+        const log = r.logger.bind();
+        say = (message) => {
+          log.warn(message);
+        };
+      }),
+    ]);
+    await dispose();
+    for (let i = 0; i < 1005; i += 1) say?.(`m${String(i)}`);
+    const kept = registry.logger.warnings();
+    expect(kept).toHaveLength(1000);
+    expect(kept[0]?.message).toBe('m5');
+    expect(kept.at(-1)?.message).toBe('m1004');
+  });
+
   /** 一列 `apply` 失敗撤掉的是它註冊的東西，講過的話照樣交出去——那可能正是它為什麼失敗。 */
   it('逐列掉模式下 `apply` 拋錯的那一列，講過的話還在', async () => {
     const { registry, dispose, dropped } = await loadPlugins(
