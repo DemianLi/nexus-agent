@@ -158,6 +158,34 @@ describe('殺掉 stdio 子行程', () => {
     expect(s.pids()).toEqual([]);
   }, 30_000);
 
+  /**
+   * **接收端壞了不能打斷重連**：重連的進度經 `registry.logger` 交給宿主的接收端，而 `report` 就在 `Supervisor.schedule` 裡、排計時器
+   * **之前**呼叫。接收端拋錯若一路傳出來，`down()`（SDK 的 `onclose` 回呼）在排計時器之前就拋了，這台 server 再也不會重連。
+   */
+  it('宿主的接收端拋錯：照樣重連，不被打斷', async () => {
+    const s = server();
+    const { registry, dispose } = await loadPlugins([s.plugin]);
+    try {
+      registry.logger.exporter({
+        export: () => {
+          throw new Error('接收端壞了');
+        },
+      });
+      killAll(s.pids());
+      await waitFor(async () => {
+        try {
+          await invoke(registry, TOOL);
+          return true;
+        } catch {
+          return false;
+        }
+      });
+      expect(String(await invoke(registry, TOOL))).toContain(RELEASE_NOTE);
+    } finally {
+      await dispose();
+    }
+  }, 30_000);
+
   it('殺了立刻關閉：之後不再起新的子行程', async () => {
     const s = server({ reconnect: { initialDelayMs: 200, maxDelayMs: 400, maxAttempts: 5 } });
     const { dispose } = await loadPlugins([s.plugin]);

@@ -1620,7 +1620,8 @@ export function createRegistry(): InternalPluginRegistry {
       try {
         exporter.export(warning);
       } catch {
-        // 聽的一方壞了，不該讓講話的一方跟著拋。
+        // dsh 的 `exporter.export` 不攔；這裡攔是因為 plugin-mcp 的重連監督者在**排計時器之前**就呼叫 logger（`Supervisor.schedule`
+        // 的 `report`），接收端的例外會從 SDK 的 `onclose` 回呼一路傳出，重連再也排不上（`reconnect.test.ts`「宿主的接收端拋錯」）。
       }
     }
   };
