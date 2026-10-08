@@ -36,8 +36,9 @@
 export const TOKEN_METER_PROJECTION = 'token-meter';
 
 /** `token-meter` 的 `stateVersion`：折疊語意或 view 形狀一變就升。 */
-// 沒因 #724 升版：`TokenMeterSpan` 多的三格都是選填，舊 web 讀不到就不畫（#1021／#1022 加選填欄位的先例）。
-export const TOKEN_METER_VERSION = 1;
+// 2：所有 `*InputTokens`（段、依模型的列、失敗、生摘要）改成未快取的那一桶（#724），原本是含快取讀寫的完整 prompt。
+// 1 的快取三格是選填，沒升版（#1021／#1022 加選填欄位的先例）；這次是同名欄位換了意思，所以升。
+export const TOKEN_METER_VERSION = 2;
 
 /** 帶逐輪列的最近幾輪；更早的併進 `earlier`。 */
 export const TOKEN_METER_TURNS_KEEP = 20;
@@ -63,8 +64,12 @@ export interface TokenMeterModelRow {
   readonly model: string | null;
   /** 結束了的呼叫（完成、失敗、中止都算）。 */
   readonly steps: number;
+  /** 未快取的輸入（#724）；完整的 prompt 是它加下面兩格。 */
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /** 快取讀、快取寫（#724）：這個模型的每一次用量都報了才有，**缺席＝沒記**，不是 0（規則同 {@link TokenMeterSpan.cacheReadTokens}）。 */
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
 }
 
 /** 依工具名超過名額、被併起來的那幾種工具。 */
@@ -76,8 +81,12 @@ export interface TokenMeterToolsOther {
 /** 依模型超過名額、被併起來的那幾個模型。 */
 export interface TokenMeterModelsOther {
   readonly steps: number;
+  /** 未快取的輸入，口徑同 {@link TokenMeterModelRow.inputTokens}。 */
   readonly inputTokens: number;
   readonly outputTokens: number;
+  /** 併進來的所有用量都報了才有，缺席＝沒記。 */
+  readonly cacheReadTokens?: number;
+  readonly cacheWriteTokens?: number;
 }
 
 /**
@@ -91,16 +100,19 @@ export interface TokenMeterSpan {
   readonly failedSteps: number;
   /** 其中沒有任何 `model/usage` 的——燒了多少不知道，**不是 0**。 */
   readonly unknownSteps: number;
-  /** 供應商報的輸入 token 加總，成功＋失敗，**含快取讀取**，不含生摘要那一次。 */
+  /**
+   * 供應商報的**未快取**輸入 token 加總，成功＋失敗，不含生摘要那一次（[#724](https://github.com/DemianLi/nexus-agent/issues/724)，
+   * 照 dsh 四桶互不重疊）。**v1 這一格是含快取讀寫的完整 prompt**，版本升到 2；完整的 prompt 要加快取讀、快取寫。
+   * 下面的 `failedInputTokens`、`summaryInputTokens` 與依模型的列同口徑。
+   */
   readonly inputTokens: number;
   readonly outputTokens: number;
   /**
    * 以下三格是 [#724](https://github.com/DemianLi/nexus-agent/issues/724) 的快取分桶，照 dsh 的投影名
    * （`packages/llm/token-meter/src/usage-projection.ts:21-25`，`5badb150`），四桶互不重疊。
-   * **{@link inputTokens} 的意思不變**（完整 prompt，含快取），分桶是另外的欄位：
-   * 未快取＋快取讀＋快取寫＝{@link inputTokens}（兩個快取桶都有時）。
    *
-   * `uncachedInputTokens`：每次呼叫報的未快取輸入加總，**server 每次都送**（沒有快取細節的呼叫，整個 prompt 就是未快取）。
+   * `uncachedInputTokens`：**永遠等於 {@link inputTokens}**，server 每次都送。留著它是因為 web 靠「有沒有這一格」分辨
+   * 新舊 server（舊 server 的 `inputTokens` 含快取）；同總帳的 `uncachedInputTokens`。
    */
   readonly uncachedInputTokens?: number;
   /**
@@ -109,14 +121,14 @@ export interface TokenMeterSpan {
    */
   readonly cacheReadTokens?: number;
   readonly cacheWriteTokens?: number;
-  /** {@link inputTokens} 裡，失敗或中止的呼叫報的那一份。 */
+  /** {@link inputTokens} 裡，失敗或中止的呼叫報的那一份（未快取）。 */
   readonly failedInputTokens: number;
   readonly failedOutputTokens: number;
   /** 生摘要的次數（`compaction/summary`）。 */
   readonly summaries: number;
   /** 其中沒報用量的。 */
   readonly summariesUnknown: number;
-  /** 生摘要那一次報的用量加總，**另列**，不在 {@link inputTokens} 裡。 */
+  /** 生摘要那一次報的未快取輸入加總，**另列**，不在 {@link inputTokens} 裡。 */
   readonly summaryInputTokens: number;
   readonly summaryOutputTokens: number;
   /** 重試的次數（`llm/retry-started`）與實際等了多久的加總。 */
@@ -210,20 +222,21 @@ export const TOKEN_METER_CALIBER: Readonly<Record<string, string>> = {
   failedSteps: '沒有正常回來的呼叫（拋錯或使用者按了停止）。',
   unknownSteps: '有結束但供應商沒報用量的呼叫：燒了多少不知道，不是 0，所以 token 是下限。',
   inputTokens:
-    '供應商報的輸入 token，含快取讀取；成功與失敗的呼叫都算；不含生摘要那一次、不含產生會話標題的那一次；沒報的呼叫不在裡面。',
+    '供應商報的輸入 token，只算沒走快取的那一桶（快取讀、快取寫另列，完整的 prompt 要三桶相加）；成功與失敗的呼叫都算；不含生摘要那一次、不含產生會話標題的那一次；沒報的呼叫不在裡面。',
   outputTokens:
     '供應商報的輸出 token；成功與失敗的呼叫都算；不含生摘要那一次、不含產生會話標題的那一次；沒報的呼叫不在裡面。',
   uncachedInputTokens:
-    '上面輸入 token 裡沒有走快取的那一桶（供應商沒給快取細節的呼叫，整個 prompt 都算在這裡）。',
+    '等於上面的輸入 token（沒走快取的那一桶；供應商沒給快取細節的呼叫，整個 prompt 都算在這裡）。留這一格是讓畫面分辨新舊 server。',
   cacheReadTokens:
-    '上面輸入 token 裡從快取讀到的那一桶；這一段只要有一次呼叫沒報快取細節就整格缺席（不是 0）。',
-  cacheWriteTokens: '上面輸入 token 裡寫進快取的那一桶；缺席的規則同快取讀。',
-  failedInputTokens: '上面輸入 token 裡，失敗或中止的呼叫報的那一份（已含在上面）。',
+    '從快取讀到的輸入 token，與上面的輸入 token 互不重疊；這一段只要有一次呼叫沒報快取細節就整格缺席（不是 0）。',
+  cacheWriteTokens: '寫進快取的輸入 token，與上面的輸入 token 互不重疊；缺席的規則同快取讀。',
+  failedInputTokens:
+    '上面輸入 token（沒走快取的那一桶）裡，失敗或中止的呼叫報的那一份（已含在上面）。',
   failedOutputTokens: '上面輸出 token 裡，失敗或中止的呼叫報的那一份（已含在上面）。',
   summaries: '壓縮上下文時生摘要的次數。',
   summariesUnknown: '生摘要時供應商沒報用量的次數。',
   summaryInputTokens:
-    '生摘要那一次報的輸入 token，另列，不在輸入 token 裡、也不進 root 的 token 總帳。',
+    '生摘要那一次報的輸入 token（同樣只算沒走快取的那一桶），另列，不在輸入 token 裡、也不進 root 的 token 總帳。',
   summaryOutputTokens: '生摘要那一次報的輸出 token，另列，同上。',
   retries: '模型呼叫的重試次數。',
   retryWaitMs:

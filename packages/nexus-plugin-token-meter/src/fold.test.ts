@@ -10,6 +10,7 @@ import { createProjectionFold, deriveSessionStats, deriveTokenUsage } from '@nex
 import type { SessionEvent } from '@nexus/core';
 import {
   TOKEN_METER_LINKS_CAP,
+  TOKEN_METER_MODELS_CAP,
   TOKEN_METER_TOOL_NAMES_CAP,
   TOKEN_METER_TURNS_KEEP,
 } from '@nexus/wire';
@@ -454,7 +455,7 @@ describe('快取分桶（#724）', () => {
     [time + 2, 'model/end', {}],
   ];
 
-  it('兩桶都報：三桶相加就是 inputTokens（完整 prompt），未快取桶、讀、寫各自加總', () => {
+  it('兩桶都報：inputTokens 只算未快取桶（等於 uncachedInputTokens），讀、寫各自加總，三桶相加才是完整 prompt', () => {
     const view = fold(
       log(
         [0, 'turn/start', { kind: 'message' }],
@@ -464,16 +465,17 @@ describe('快取分桶（#724）', () => {
       ),
     );
     const turn = view.turns[0]!;
-    // 手算：未快取 30＋5、讀 64＋200、寫 100＋0；完整 prompt 194＋205。
+    // 手算：未快取 30＋5、讀 64＋200、寫 100＋0；完整 prompt 194＋205＝399。
     expect([turn.uncachedInputTokens, turn.cacheReadTokens, turn.cacheWriteTokens]).toEqual([
       35, 264, 100,
     ]);
-    expect(turn.inputTokens).toBe(399);
+    expect(turn.inputTokens).toBe(35);
+    expect(turn.inputTokens + turn.cacheReadTokens! + turn.cacheWriteTokens!).toBe(399);
     expect(view.session).toMatchObject({
       uncachedInputTokens: 35,
       cacheReadTokens: 264,
       cacheWriteTokens: 100,
-      inputTokens: 399,
+      inputTokens: 35,
     });
   });
 
@@ -533,6 +535,89 @@ describe('快取分桶（#724）', () => {
     expect(view.session).toMatchObject({
       uncachedInputTokens: 10 * turns,
       cacheReadTokens: 5 * turns,
+    });
+  });
+});
+
+describe('快取分桶：依模型的列、失敗、生摘要（#724）', () => {
+  const withCache = (inputTokens: number, cacheReadTokens?: number, extra: object = {}) => ({
+    inputTokens,
+    outputTokens: 1,
+    totalTokens: inputTokens + 1 + (cacheReadTokens ?? 0),
+    ...(cacheReadTokens === undefined ? {} : { cacheReadTokens }),
+    ...extra,
+  });
+  const oneCall = (time: number, data: unknown, end: unknown = {}): Draft[] => [
+    [time, 'model/start', {}],
+    [time + 1, 'model/usage', data],
+    [time + 2, 'model/end', end],
+  ];
+
+  it('依模型的列：inputTokens 只算未快取，快取讀寫另放；某個模型有一次沒報就只有它缺席', () => {
+    const view = fold(
+      log(
+        [0, 'request/header', header('m-a')],
+        ...oneCall(1, { ...withCache(10, 90), cacheWriteTokens: 0 }),
+        ...oneCall(10, { ...withCache(5, 40), cacheWriteTokens: 2 }),
+        [20, 'request/header', header('m-b')],
+        ...oneCall(21, withCache(7, 3)),
+        ...oneCall(30, usage(50, 1)), // m-b 這一次沒報快取
+      ),
+    );
+    const rows = new Map(view.outside.models.map((row) => [row.model, row]));
+    expect(rows.get('m-a')).toEqual({
+      model: 'm-a',
+      steps: 2,
+      inputTokens: 15,
+      outputTokens: 2,
+      cacheReadTokens: 130,
+      cacheWriteTokens: 2,
+    });
+    // m-b：讀只有一次報，寫都沒報 → 兩格都缺席；未快取桶不受影響（沒報細節的那次整個 prompt 就是未快取）。
+    expect(rows.get('m-b')).toEqual({ model: 'm-b', steps: 2, inputTokens: 57, outputTokens: 2 });
+  });
+
+  it('名額滿了併進 modelsOther：同樣的規則，全部併進來的都報了才有快取格', () => {
+    const drafts: Draft[] = [];
+    const count = TOKEN_METER_MODELS_CAP + 2;
+    for (let i = 0; i < count; i += 1) {
+      drafts.push([i * 10, 'request/header', header(`m-${String(i)}`)]);
+      drafts.push(...oneCall(i * 10 + 1, { ...withCache(10, 5), cacheWriteTokens: 1 }));
+    }
+    const view = fold(log(...drafts));
+    expect(view.outside.models).toHaveLength(TOKEN_METER_MODELS_CAP);
+    expect(view.outside.modelsOther).toEqual({
+      steps: 2,
+      inputTokens: 20,
+      outputTokens: 2,
+      cacheReadTokens: 10,
+      cacheWriteTokens: 2,
+    });
+    const mixed = fold(
+      log(...drafts, [900, 'request/header', header('m-extra')], ...oneCall(901, usage(9, 1))),
+    );
+    expect(mixed.outside.modelsOther).toMatchObject({ steps: 3, inputTokens: 29 });
+    expect(mixed.outside.modelsOther).not.toHaveProperty('cacheReadTokens');
+  });
+
+  it('失敗那份與生摘要那一次也只算未快取桶', () => {
+    const view = fold(
+      log(
+        [0, 'turn/start', { kind: 'message' }],
+        ...oneCall(1, { ...withCache(10, 90), outcome: 'error' }, { outcome: 'error' }),
+        [
+          10,
+          'compaction/summary',
+          { usage: { inputTokens: 300, outputTokens: 40, cacheReadTokens: 700 } },
+        ],
+        [20, 'turn/end', {}],
+      ),
+    );
+    expect(view.turns[0]).toMatchObject({
+      inputTokens: 10,
+      failedInputTokens: 10,
+      summaryInputTokens: 300,
+      cacheReadTokens: 90,
     });
   });
 });
