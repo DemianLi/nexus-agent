@@ -389,6 +389,10 @@ import type { SessionEvent } from './session-log.js';
  *   （`{ message, code, status? }`，失敗的分類）。**不升**：判準同上——一台 32 的舊 runtime 讀回這份日誌，`turn/failed` 的每個讀者
  *   （goal 續行、歷史、統計、遙測…）只認「有這顆事件」或讀 `message`，多一個不認得的欄位照舊投影。**沒有這一格就是沒記**
  *   （這一版以前寫的），讀的人標「—」，不是 `UNKNOWN`；`UNKNOWN` 是「記了、而且不是供應商的錯」。
+ * - **前景子代理日誌的第一顆 `user/message`**（[#1159](https://github.com/DemianLi/nexus-agent/issues/1159)）：基座 `task` 派出的前景子代理，
+ *   子日誌出生時多寫一顆來源 `user` 的 `user/message`，內容是它收到的那句話（`task` 的 `description`）。**不升**：沒有新種類、沒有新欄位，
+ *   舊 runtime 讀它就是一顆平常的 `user/message`，且前景子代理是 one-shot，沒有續接這回事。**沒有這一顆就是沒記**（這一版以前寫的前景子日誌）：
+ *   從那種日誌推子代理的歷史會缺開頭那句話，讀的人要從父日誌 `tool/call` 的 `description` 補，不能當成「沒有輸入」。
  *
  * ## 33：續接把當掉那一輪的收尾寫回日誌（[#721](https://github.com/DemianLi/nexus-agent/issues/721)）
  *
