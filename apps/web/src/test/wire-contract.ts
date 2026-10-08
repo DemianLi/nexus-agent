@@ -17,4 +17,5 @@ export const UNWIRED_WIRE_CONTRACT = {
   threadArchive: async () => NOT_SUPPORTED,
   threadUnarchive: async () => NOT_SUPPORTED,
   threadRename: async () => NOT_SUPPORTED,
+  subagentList: async () => NOT_SUPPORTED,
 };
