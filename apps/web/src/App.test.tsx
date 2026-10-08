@@ -271,6 +271,26 @@ function approvalFrame(
 }
 
 describe('對話介面', () => {
+  it('伺服器不收附件時沒有加入鈕，貼上檔案照瀏覽器本來的行為（#733）', async () => {
+    seq = 0;
+    const { client } = fakeClient([
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    render(<App client={client} />);
+
+    const prompt = await screen.findByLabelText('要說的話');
+    expect(screen.queryByRole('button', { name: '加入附件' })).toBeNull();
+    const proceeded = fireEvent.paste(prompt, {
+      clipboardData: {
+        files: [new File(['x'], 'a.png', { type: 'image/png' })],
+        types: ['Files'],
+        getData: () => '',
+      },
+    });
+    expect(proceeded).toBe(true);
+    expect(screen.queryByTestId('draft-attachment')).toBeNull();
+  });
+
   it('把折出來的訊息、工具與子代理歸屬畫出來', async () => {
     seq = 0;
     const { client } = fakeClient([

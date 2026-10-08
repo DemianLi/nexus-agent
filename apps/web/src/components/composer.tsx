@@ -22,7 +22,16 @@
  * 按壓 .96（`styles/motion.css`）。
  */
 
-import { ArrowUp, Bot, ChevronRight, File, Folder, MessageSquare, Square } from 'lucide-react';
+import {
+  ArrowUp,
+  Bot,
+  ChevronRight,
+  File,
+  Folder,
+  MessageSquare,
+  Paperclip,
+  Square,
+} from 'lucide-react';
 import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode, RefObject } from 'react';
 import type {
@@ -31,6 +40,8 @@ import type {
   SlashDescriptor,
 } from '@nexus/wire';
 
+import { AttachmentRail } from '@/components/attachment-rail';
+import { DropOverlay } from '@/components/drop-overlay';
 import { Button } from '@/components/ui/button';
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
 import {
@@ -41,6 +52,7 @@ import {
 } from '@/components/ui/input-group';
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
 import { Skeleton } from '@/components/ui/skeleton';
+import type { ComposerAttachments } from '@/lib/attachments';
 import { applyMentionPick, detectMention } from '@/lib/file-mention';
 import {
   MENTION_MENU_CLOSED,
@@ -54,6 +66,7 @@ import type { MentionRow, MentionSource } from '@/lib/mention-menu';
 import { applySessionPick } from '@/lib/session-mention';
 import { applySlashPick, detectSlash, slashCandidates } from '@/lib/slash-trigger';
 import { isAcceleratedEnter } from '@/lib/submit-mode';
+import { useFileDrop } from '@/lib/use-file-drop';
 import type { SendHint, SubmitGesture } from '@/lib/submit-mode';
 
 /** 一個片段：`/` 或 `@` 的位置、游標、中間的字。 */
@@ -92,6 +105,7 @@ export function Composer({
   meter,
   fileReferences,
   sessionReferences,
+  attachments,
 }: {
   readonly draft: string;
   readonly onDraftChange: (draft: string) => void;
@@ -135,6 +149,11 @@ export function Composer({
     query: string,
     signal: AbortSignal,
   ) => Promise<SessionReferenceListOutcome>;
+  /**
+   * 草稿附件（#733）：輸入框底下的一排、底列的加入鈕、貼上、整頁拖放。**沒給就沒有這個功能**——四個入口一起沒有，
+   * 不是只藏按鈕（只藏按鈕的話，貼一張圖會變成一顆永遠送不出的晶片）。伺服器不收附件時呼叫端不要給。
+   */
+  readonly attachments?: ComposerAttachments;
 }) {
   const ownRef = useRef<HTMLTextAreaElement>(null);
   const anchorRef = useRef<HTMLDivElement>(null);
@@ -144,6 +163,10 @@ export function Composer({
   const [highlight, setHighlight] = useState(0);
   // 選了之後要把游標放回去的位置：草稿由呼叫端更新，要等它畫出來才放得進去。
   const pendingCaret = useRef<number | null>(null);
+  const fileInput = useRef<HTMLInputElement>(null);
+  const onAddFiles = attachments?.onAdd;
+  // 沒給 `attachments` 時整頁拖放什麼都不掛（拖進來的檔案維持瀏覽器自己的行為）。
+  const dropping = useFileDrop(onAddFiles !== undefined, (files) => onAddFiles?.(files));
 
   const at = Math.min(caret, draft.length);
   // 先判 `@` 再判 `/`（dsh `detectTrigger`）：`@/` 是一段路徑，不是命令。
@@ -375,139 +398,181 @@ export function Composer({
   }
 
   return (
-    <Popover
-      open={open || mentionOpen}
-      onOpenChange={(next) => {
-        if (!next) setDismissed(span);
-      }}
-    >
-      {/* anchor 自己包一層：`asChild` 會把 InputGroup 的 `data-slot` 蓋掉。 */}
-      <PopoverAnchor ref={anchorRef}>
-        <InputGroup className="rounded-3xl">
-          <label className="sr-only" htmlFor="prompt">
-            要說的話
-          </label>
-          <InputGroupTextarea
-            ref={textarea}
-            id="prompt"
-            rows={1}
-            className="text-body max-h-48 min-h-12 px-4"
-            value={draft}
-            placeholder={placeholder}
-            aria-controls={open || mentionOpen ? ids.list : undefined}
-            aria-activedescendant={open || mentionOpen ? ids.option : undefined}
-            onChange={(event) => {
-              edit(event.target.value, event.target.selectionStart);
-            }}
-            onSelect={(event) => {
-              setCaret(event.currentTarget.selectionStart);
-            }}
-            onKeyDown={onKeyDown}
-          />
-          <InputGroupAddon align="block-end" className="px-2 pb-2">
-            {/* `gap-0`：外殼是 flex、預設 `gap-2`，寬螢幕那一段會被隔開一大截（實機截圖量到）。 */}
-            <InputGroupText className="gap-0 pl-2 text-tip" data-testid="send-hint">
-              {sendHint.text}
-              {sendHint.wide !== undefined && (
-                <span className="hidden sm:inline">{sendHint.wide}</span>
-              )}
-            </InputGroupText>
-            {meter}
-            <div className="ml-auto flex items-center gap-2">
-              {stoppable && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  size="icon"
-                  className="size-11 rounded-full lg:size-9"
-                  aria-label="停止"
-                  disabled={stopDisabled}
-                  onClick={onStop}
-                >
-                  <Square className="fill-current" />
-                </Button>
-              )}
-              <Button
-                type="button"
-                size="icon"
-                className="size-11 rounded-full lg:size-9"
-                aria-label="送出"
-                disabled={!canSend}
-                onClick={() => onSubmit('enter')}
-              >
-                <ArrowUp />
-              </Button>
-            </div>
-          </InputGroupAddon>
-        </InputGroup>
-      </PopoverAnchor>
-      <PopoverContent
-        side="top"
-        align="start"
-        className="w-(--radix-popover-trigger-width) p-1"
-        aria-label={mentionOpen ? '@ 選單' : '命令選單'}
-        // 焦點一直留在輸入框：打開、關掉都不搬；點輸入框本身不算點外面。**底列另一顆浮層的按鈕算外面**（用量表，
-        // #528）：它也在輸入框裡，不收的話兩個浮層疊在同一個位置（真 Chrome 量過）。
-        onOpenAutoFocus={(event) => event.preventDefault()}
-        onCloseAutoFocus={(event) => event.preventDefault()}
-        onInteractOutside={(event) => {
-          const target = event.target;
-          if (
-            target instanceof Element &&
-            anchorRef.current?.contains(target) &&
-            target.closest('[data-slot="popover-trigger"]') === null
-          ) {
-            event.preventDefault();
-          }
+    <>
+      {dropping && <DropOverlay />}
+      <Popover
+        open={open || mentionOpen}
+        onOpenChange={(next) => {
+          if (!next) setDismissed(span);
         }}
       >
-        {mentionOpen ? (
-          <MentionList
-            rows={menu.rows}
-            highlight={menu.highlight}
-            loading={menu.status === 'pending'}
-            listRef={setList}
-            onHover={(index) => dispatchMenu({ type: 'hover', index })}
-            onPick={(row) => {
-              // 還在查的時候點舊列不算（同 Enter）。
-              if (menu.status === 'ready') pickMention(row, 'pick');
-            }}
-          />
-        ) : (
-          <Command
-            shouldFilter={false}
-            value={active?.name ?? ''}
-            onValueChange={(name) => {
-              const index = candidates.findIndex((command) => command.name === name);
-              if (index !== -1) setHighlight(index);
-            }}
-            className="bg-transparent"
-          >
-            <CommandList
-              ref={setList}
-              label="命令"
-              // 點選項時焦點不離開輸入框。
-              onMouseDown={(event) => event.preventDefault()}
-            >
-              {candidates.map((command) => (
-                <CommandItem
-                  key={command.name}
-                  value={command.name}
-                  onSelect={() => pick(command)}
-                  className="flex-col items-start gap-0.5 rounded-lg px-3 py-2"
+        {/* anchor 自己包一層：`asChild` 會把 InputGroup 的 `data-slot` 蓋掉。 */}
+        <PopoverAnchor ref={anchorRef}>
+          <InputGroup className="rounded-3xl">
+            <label className="sr-only" htmlFor="prompt">
+              要說的話
+            </label>
+            {attachments !== undefined && attachments.items.length > 0 && (
+              <InputGroupAddon align="block-start" className="min-w-0 pb-0">
+                <AttachmentRail items={attachments.items} onRemove={attachments.onRemove} />
+              </InputGroupAddon>
+            )}
+            <InputGroupTextarea
+              ref={textarea}
+              id="prompt"
+              rows={1}
+              className="text-body max-h-48 min-h-12 px-4"
+              value={draft}
+              placeholder={placeholder}
+              aria-controls={open || mentionOpen ? ids.list : undefined}
+              aria-activedescendant={open || mentionOpen ? ids.option : undefined}
+              onChange={(event) => {
+                edit(event.target.value, event.target.selectionStart);
+              }}
+              onSelect={(event) => {
+                setCaret(event.currentTarget.selectionStart);
+              }}
+              onKeyDown={onKeyDown}
+              onPaste={(event) => {
+                // 剪貼簿裡有檔案（截圖、在檔案管理員複製的檔案）就收成附件，不貼文字；純文字照舊交給瀏覽器。
+                const files = Array.from(event.clipboardData.files);
+                if (onAddFiles === undefined || files.length === 0) return;
+                event.preventDefault();
+                onAddFiles(files);
+              }}
+            />
+            <InputGroupAddon align="block-end" className="px-2 pb-2">
+              {onAddFiles !== undefined && (
+                <>
+                  <input
+                    ref={fileInput}
+                    type="file"
+                    multiple
+                    hidden
+                    tabIndex={-1}
+                    data-testid="attachment-input"
+                    onChange={(event) => {
+                      onAddFiles(Array.from(event.target.files ?? []));
+                      // 同一個檔案選第二次也要觸發 change。
+                      event.target.value = '';
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-11 shrink-0 rounded-full lg:size-9"
+                    aria-label="加入附件"
+                    onClick={() => fileInput.current?.click()}
+                  >
+                    <Paperclip />
+                  </Button>
+                </>
+              )}
+              {/* `gap-0`：外殼是 flex、預設 `gap-2`，寬螢幕那一段會被隔開一大截（實機截圖量到）。 */}
+              <InputGroupText className="gap-0 pl-2 text-tip" data-testid="send-hint">
+                {sendHint.text}
+                {sendHint.wide !== undefined && (
+                  <span className="hidden sm:inline">{sendHint.wide}</span>
+                )}
+              </InputGroupText>
+              {meter}
+              <div className="ml-auto flex items-center gap-2">
+                {stoppable && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="icon"
+                    className="size-11 rounded-full lg:size-9"
+                    aria-label="停止"
+                    disabled={stopDisabled}
+                    onClick={onStop}
+                  >
+                    <Square className="fill-current" />
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  size="icon"
+                  className="size-11 rounded-full lg:size-9"
+                  aria-label="送出"
+                  disabled={!canSend}
+                  onClick={() => onSubmit('enter')}
                 >
-                  <span className="font-mono text-body">
-                    /{command.name}
-                    {command.input === undefined ? '' : ` ${command.input.hint}`}
-                  </span>
-                  <span className="text-muted-foreground text-tip">{command.description}</span>
-                </CommandItem>
-              ))}
-            </CommandList>
-          </Command>
-        )}
-      </PopoverContent>
-    </Popover>
+                  <ArrowUp />
+                </Button>
+              </div>
+            </InputGroupAddon>
+          </InputGroup>
+        </PopoverAnchor>
+        <PopoverContent
+          side="top"
+          align="start"
+          className="w-(--radix-popover-trigger-width) p-1"
+          aria-label={mentionOpen ? '@ 選單' : '命令選單'}
+          // 焦點一直留在輸入框：打開、關掉都不搬；點輸入框本身不算點外面。**底列另一顆浮層的按鈕算外面**（用量表，
+          // #528）：它也在輸入框裡，不收的話兩個浮層疊在同一個位置（真 Chrome 量過）。
+          onOpenAutoFocus={(event) => event.preventDefault()}
+          onCloseAutoFocus={(event) => event.preventDefault()}
+          onInteractOutside={(event) => {
+            const target = event.target;
+            if (
+              target instanceof Element &&
+              anchorRef.current?.contains(target) &&
+              target.closest('[data-slot="popover-trigger"]') === null
+            ) {
+              event.preventDefault();
+            }
+          }}
+        >
+          {mentionOpen ? (
+            <MentionList
+              rows={menu.rows}
+              highlight={menu.highlight}
+              loading={menu.status === 'pending'}
+              listRef={setList}
+              onHover={(index) => dispatchMenu({ type: 'hover', index })}
+              onPick={(row) => {
+                // 還在查的時候點舊列不算（同 Enter）。
+                if (menu.status === 'ready') pickMention(row, 'pick');
+              }}
+            />
+          ) : (
+            <Command
+              shouldFilter={false}
+              value={active?.name ?? ''}
+              onValueChange={(name) => {
+                const index = candidates.findIndex((command) => command.name === name);
+                if (index !== -1) setHighlight(index);
+              }}
+              className="bg-transparent"
+            >
+              <CommandList
+                ref={setList}
+                label="命令"
+                // 點選項時焦點不離開輸入框。
+                onMouseDown={(event) => event.preventDefault()}
+              >
+                {candidates.map((command) => (
+                  <CommandItem
+                    key={command.name}
+                    value={command.name}
+                    onSelect={() => pick(command)}
+                    className="flex-col items-start gap-0.5 rounded-lg px-3 py-2"
+                  >
+                    <span className="font-mono text-body">
+                      /{command.name}
+                      {command.input === undefined ? '' : ` ${command.input.hint}`}
+                    </span>
+                    <span className="text-muted-foreground text-tip">{command.description}</span>
+                  </CommandItem>
+                ))}
+              </CommandList>
+            </Command>
+          )}
+        </PopoverContent>
+      </Popover>
+    </>
   );
 }
 
