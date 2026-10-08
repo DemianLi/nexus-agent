@@ -22,13 +22,13 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 # 有這些異動才值得掃 TypeScript。三個非 TypeScript 的檔名是刻意的窄例外（「測試會讀這個檔」）：
-# `docs/operations.md`、`apps/harness/cordis.yml`、`apps/harness/src/*.patch.yml`。
+# `docs/operations.md`、`apps/harness/cordis.yml`、`apps/harness/cordis.serve.yml`、`apps/harness/src/*.patch.yml`。
 # 別放寬成所有 `.md` 或所有 `.yml`：「純文件的 PR 不會卡住」是設計。
 TS_RE = re.compile(
     r'\.(ts|tsx|mts|cts)$'
     r'|^package\.json$|^pnpm-lock\.yaml$|^tsconfig.*\.json$'
     r'|^docs/operations\.md$'
-    r'|^apps/harness/cordis\.yml$'
+    r'|^apps/harness/cordis(\.serve)?\.yml$'
     r'|^apps/harness/src/.*\.patch\.yml$'
 )
 
@@ -45,7 +45,7 @@ FULL_RES = [
         r'^\.github/(workflows|scripts)/',
         # 測試「讀」而不是 import 的檔：import 圖看不到它們（見 ci.yml 的說明）。
         r'^docs/operations\.md$',
-        r'^apps/harness/(cordis\.yml|package\.json|vitest\.config\..*|tsconfig.*\.json|eslint\.config\..*)$',
+        r'^apps/harness/(cordis(\.serve)?\.yml|package\.json|vitest\.config\..*|tsconfig.*\.json|eslint\.config\..*)$',
         r'^apps/harness/src/(test-home\.setup\.ts|.*\.patch\.yml|.*\.fixture\.ts)$',
         r'^apps/web/(package\.json|vite\.config\..*|vitest\.config\..*|tsconfig.*\.json|eslint\.config\..*)$',
     )

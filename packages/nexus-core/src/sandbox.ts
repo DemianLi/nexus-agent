@@ -71,6 +71,19 @@ export function isSandboxMode(raw: string): raw is SandboxMode {
 export const WORKSPACE_CAPABILITY = 'workspace';
 
 /**
+ * 工作區根這個 host 服務的名字（[#669](https://github.com/DemianLi/nexus-agent/issues/669) 第 4 步）。值是 `--workspace`
+ * 解析過的絕對路徑，**沒有工作區就不提供**（`services.get()` 回 `undefined`）。
+ *
+ * 要它是因為「有沒有工作區、根在哪」原本只有組裝點知道，要用的 plugin 只能靠組裝點把根塞進自己的 `Config`
+ * （`workspace-changes` 的 `root`）——那一列就進不了出貨清單。照 dsh：dsh 的 `eligible` 看會話 header 的 `cwd`
+ * （`packages/deliverables/workspace-changes/src/index.ts:58-61`，`ddefc45`），沒有 `cwd` 就不合格、什麼都不做；
+ * 我們的 header `cwd` 記的是行程目錄不是工作區根（見 {@link WORKSPACE_CAPABILITY}），所以退到最接近的實作：
+ * 由組裝點經 host 服務交一格根，**不合格由服務缺席表達**。與 {@link WORKSPACE_CAPABILITY} 的分工：那一個答「有沒有」、
+ * 在 plugin 的 `apply` 之後才知道；這一個答「在哪」、組裝點最前面就提供，`apply` 當下讀得到。
+ */
+export const WORKSPACE_ROOT_SERVICE = 'workspaceRoot';
+
+/**
  * 把模型給檔案工具的路徑換成工作區位址空間裡的絕對路徑：補前導 `/`、正規化、去尾斜線。
  *
  * **為什麼有這一份。** 這條規則的主人是基座 `FilesystemBackend` 在 `virtualMode` 下的 `resolvePath`

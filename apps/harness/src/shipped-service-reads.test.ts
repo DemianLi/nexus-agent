@@ -27,9 +27,10 @@ import { GOALS_SERVICE } from '@nexus/plugin-goal';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
-import { shippedPlugins } from './fixtures.js';
+import { shippedServePlugins } from './fixtures.js';
 
-const shipped = await shippedPlugins();
+// serve 的出貨清單（出貨層加專屬層）是 CLI 那份的超集：量這份兩個入口的列都涵蓋到（#669 第 4 步起 `workspace-changes` 在專屬層）。
+const shipped = await shippedServePlugins();
 
 /**
  * 組裝點交協作者的那幾個條目的 plugin 名：`assembly-root.ts` 的 `host-services`，`agent-factory.ts` 的
@@ -119,6 +120,12 @@ describe('出貨清單在 apply 當下讀的服務', () => {
     // 前提：真的量到了讀取（`system-prompt` 那一列讀 `systemPromptVariables`，#720）。空陣列也「全部合格」。
     expect(reads.map((read) => read.service)).toContain('systemPromptVariables');
     expect(straysOf(reads)).toEqual([]);
+    // serve 專屬層那一列讀的是組裝點交的工作區根（#669）：在 `apply` 當下讀，提供者是 host-services。
+    expect(reads).toContainEqual({
+      reader: 'workspace-changes',
+      service: 'workspaceRoot',
+      provider: 'host-services',
+    });
   }, 20000);
 
   /**

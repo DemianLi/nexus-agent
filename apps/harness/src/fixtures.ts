@@ -28,7 +28,7 @@ import { StateBackend } from 'deepagents';
 import type { FileData } from 'deepagents';
 import { z } from 'zod';
 import { BrowserAuth } from './browser-auth.js';
-import { loadPluginConfig } from './plugin-config.js';
+import { loadPluginConfig, serveShippedConfigPath } from './plugin-config.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { scriptedModelPlugin } from './settings/scripted-model.js';
 import type { AttachSessions } from './session-attach.js';
@@ -64,6 +64,27 @@ export function shippedPlugins(): Promise<readonly PluginEntry[]> {
     return plugins;
   });
   return shipped;
+}
+
+/**
+ * **serve 的**出貨清單：出貨那一層加上 serve 專屬層（`cordis.serve.yml`，#669 第 4 步），跟 `serve` 零設定時組出來的那一份相同。
+ * 要測「serve 才有的列」（每一輪的改動紀錄）用這一份；CLI 的測試用 {@link shippedPlugins}。同樣只讀出貨層、不疊 patch，同樣一列都不能掉。
+ *
+ * @returns serve 的出貨清單。
+ */
+let shippedServe: Promise<readonly PluginEntry[]> | undefined;
+export function shippedServePlugins(): Promise<readonly PluginEntry[]> {
+  shippedServe ??= loadPluginConfig({ shippedLayers: [serveShippedConfigPath()] }).then(
+    ({ plugins, dropped, ignoredConfig }) => {
+      const problems = [
+        ...dropped.map((drop) => drop.message),
+        ...ignoredConfig.map((row) => `${row.id} 寫了沒有作用的 config`),
+      ];
+      if (problems.length > 0) throw new Error(`serve 出貨清單有列沒掛上：${problems.join('；')}`);
+      return plugins;
+    },
+  );
+  return shippedServe;
 }
 
 /**

@@ -336,8 +336,9 @@ export HTTP_PROXY=http://127.0.0.1:7890
 
 零設定的 CLI 與 serve 掛哪些 plugin，由**出貨的 `apps/harness/cordis.yml`** 決定
 （[#454](https://github.com/DemianLi/nexus-agent/issues/454)）。那份檔案進版控，是「這個
-agent 由什麼組成」的來源。例外是組裝點在程式碼裡掛的兩顆（host-services，以及 serve 且有 `--workspace` 才掛的
-workspace-changes），它們不在清單上，patch 指不到。`sandbox-policy` 是清單上的一列：有 `--workspace` 時
+agent 由什麼組成」的來源。例外是組裝點在程式碼裡掛的一顆（host-services）。**`serve` 另有一層專屬的出貨清單**
+（`apps/harness/cordis.serve.yml`），疊在上面那份之後，放 serve 才有的列（今天是 `workspace-changes`：每一輪改了哪些檔；
+沒給 `--workspace` 它什麼都不做）；CLI 不載那一層。 `sandbox-policy` 是清單上的一列：有 `--workspace` 時
 它是檔案政策的全部（`/sandbox`、升級、`sandbox/mode`），**這時關掉它啟動會失敗**（fence 還在擋，模型卻不知道）；沒有
 `--workspace` 時它只講一句不宣稱圍堵的政策，關掉合法。
 
@@ -391,7 +392,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   設定驗不過、模組載不起來、外掛掛上去時拋錯的那一列掉了：啟動時印一段「警告：N 列沒有掛上」指名它與原因，
   其餘照樣起來，掉了的列算沒掛（跟寫 `disabled: true` 一樣）。**必掛的只有 `browser-session` 與 `system-prompt`**（後者掉了，模型拿到的提示詞就不是部署方寫的那份），它們掉了整個起不來，訊息連
   其他掉了的列一起列——CLI 也一樣，因為兩個入口共用這份清單；帶 `--live` 時 `live-model` 掉了也整個起不來，
-  不會退回預設那個對外的端點。啟動程式自己加的那幾顆外掛（工作區改動紀錄那些，不在清單上）掛上去時拋錯，
+  不會退回預設那個對外的端點。啟動程式自己加的外掛（交協作者的 host-services，不在清單上）掛上去時拋錯，
   照舊整個起不來。
   **警告只印在啟動時**：CLI 印到標準錯誤，`serve` 印到伺服器日誌、在印出網址之前。`serve` 啟動時掉了的列，
   之後每條對話都直接算沒掛，不再重試，到重啟為止；啟動時沒掉、某一條對話組裝時才掉的列，只在那條對話裡不掛，
@@ -693,7 +694,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 pnpm --filter @nexus/harness run cli -- --dump-config
 ```
 
-`serve` 也收同一個旗標。它印出**啟動會掛的那份清單**（不含上面說的那兩顆由程式碼掛的），而且一個 plugin 都不載、不開
+`serve` 也收同一個旗標。它印出**啟動會掛的那份清單**（不含上面說的那顆由程式碼掛的；`serve` 的包含專屬那一層），而且一個 plugin 都不載、不開
 server、不綁 port：
 
 ```yaml

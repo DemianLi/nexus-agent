@@ -1,0 +1,18 @@
+# serve 專屬的出貨清單（#669 第 4 步）。
+#
+# 疊在 `cordis.yml` 之後、使用者的 patch 之前，**只有 `serve` 載**；CLI 不載它，`--dump-config` 也跟著入口走
+# （`serve --dump-config` 印得到這裡的列，`cli --dump-config` 印不到）。
+# 照 dsh：web-app bundle 疊在 base 上（`packages/bundle/web-app/cordis.patch.yml`，`477b4f4`）。登記：我們沒有
+# profile／組合包（#46 Out of scope），所以是「第二個出貨檔」而不是 preset；這一層只追加列，改列與停用仍是 patch 的事。
+#
+# 欄位與覆寫方式同 `cordis.yml` 檔頭。
+
+# 每一輪改了工作區哪些檔（#443、#669）：輪開始與收尾拍工作樹快照，比出這一輪的改動，摘要留在 server 上，
+# web 的「改動卡」拿 `workspace/changes` 事件的 seq 去兩條路由要。模型看不到任何東西。
+#
+# **不合格由工作區根缺席表達**：沒給 `--workspace` 就沒有 `workspaceRoot` 服務，這一列什麼都不註冊（照 dsh 的 `eligible`，
+# 沒有 `cwd` 就不記），所以可以放心留著；子代理的會話也不記，改的檔算進 root 那一輪。
+# **關掉這一列**（patch 寫 `disabled: true`）與沒給 `--workspace` 的效果相同：不寫 `workspace/changes`、改動卡兩條路由回
+# 「沒有這份紀錄」。上限（`timeoutMs` 等）見 `--dump-config-schema`。
+- id: workspace-changes
+  name: '@nexus/plugin-workspace-changes'
