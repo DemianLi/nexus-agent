@@ -535,8 +535,8 @@ function readRunResult(result: unknown): SlashRunResult {
  * 讓只讀 `message` 的呼叫端與測試替身照樣編得過）。
  *
  * **只在 server 真的送了字串碼的時候才帶 `code`**，缺欄位就不放這個鍵，不拿 `"undefined"` 之類的字串頂。
- * 參數刻意收鬆（`unknown`）：`UplinkResult` 在 `type === 'error'` 之後不會收窄（`WireErrorResponse`
- * 是對帶索引簽名的交集做 `Omit`，具名鍵 `message` 在那一步掉了），所以上行與 GET 兩條路共用這一個讀法。
+ * 參數收成 `unknown` 欄位：上行（`UplinkResult` 收窄到 `type === 'error'` 之後）與 GET（解析來的 JSON 本體，沒有型別）
+ * 兩條路共用這一個讀法。上行那條早先要靠型別轉換才過，是 `WireErrorResponse` 掉了具名鍵（[#1166](https://github.com/DemianLi/nexus-agent/issues/1166)，已修）。
  */
 type RejectedSource = { readonly error?: unknown; readonly message?: unknown };
 
@@ -624,7 +624,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
     command: FeedbackCommand,
   ): Promise<FeedbackOutcome<T>> {
     const response = await sendCommand(threadId, command.method, command);
-    if (response.type === 'error') return rejectedOf(response as RejectedSource);
+    if (response.type === 'error') return rejectedOf(response);
     const result: unknown = response.result;
     if (typeof (result as { ok?: unknown } | null)?.ok !== 'boolean') {
       return { kind: 'rejected', message: `回饋的回應看不懂：${JSON.stringify(result)}` };
@@ -764,7 +764,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
         method: 'slash.list',
       });
       return response.type === 'error'
-        ? rejectedOf(response as RejectedSource)
+        ? rejectedOf(response)
         : { kind: 'ok', commands: readDescriptors(response.result) };
     },
 
@@ -774,9 +774,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
         method: 'slash.run',
         params: { line },
       });
-      return response.type === 'error'
-        ? rejectedOf(response as RejectedSource)
-        : readRunResult(response.result);
+      return response.type === 'error' ? rejectedOf(response) : readRunResult(response.result);
     },
 
     async listThreads() {

@@ -1,8 +1,9 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it } from 'vitest';
 import { createWireClient } from './client.js';
+import type { UplinkResult } from './client.js';
 import { WIRE_CHANNELS, errorResponse, successResponse } from './protocol.js';
 import { encodeSseFrame } from './sse.js';
-import type { Event } from './protocol.js';
+import type { Event, WireErrorCode, WireErrorResponse } from './protocol.js';
 
 /**
  * 瀏覽器那一端。
@@ -426,5 +427,28 @@ describe('被拒時把 server 的錯誤碼交給呼叫端（#764）', () => {
     const outcome = await client.feedbackList('t');
     expect(outcome.kind).toBe('rejected');
     expect(outcome).not.toHaveProperty('code');
+  });
+});
+
+/**
+ * 型別層的釘子（[#1166](https://github.com/DemianLi/nexus-agent/issues/1166)）：`WireErrorResponse` 曾經對帶索引簽名的交集做
+ * `Omit`，具名鍵全掉了，`UplinkResult` 在 `type === 'error'` 之後不收窄、`message` 讀出 `any`。
+ * 這一組由 `pnpm -r run typecheck` 檢；跑起來只是無害的空操作。
+ */
+describe('WireErrorResponse 的型別', () => {
+  it('具名鍵還在：message 是 string、error 是 WireErrorCode、type 是字面量 error', () => {
+    expectTypeOf<WireErrorResponse['message']>().toEqualTypeOf<string>();
+    expectTypeOf<WireErrorResponse['error']>().toEqualTypeOf<WireErrorCode>();
+    expectTypeOf<WireErrorResponse['type']>().toEqualTypeOf<'error'>();
+  });
+
+  it('UplinkResult 在 type === error 之後收窄，message 是 string 不是 any', () => {
+    const narrow = (result: UplinkResult) => {
+      if (result.type === 'error') {
+        expectTypeOf(result.message).toEqualTypeOf<string>();
+      }
+    };
+    expect(typeof narrow).toBe('function');
+    expect(errorResponse(1, 'invalid_argument', '壞了').message).toBe('壞了');
   });
 });
