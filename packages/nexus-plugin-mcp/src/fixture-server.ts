@@ -10,6 +10,7 @@
  * [`fixture-tools.ts`](./fixture-tools.ts)；新協議的 stdio 那台是 [`modern-stdio-server.ts`](./modern-stdio-server.ts)。
  */
 
+import { existsSync } from 'node:fs';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { ListResourcesRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
@@ -28,6 +29,10 @@ import {
   noteText,
   resourcesRequested,
 } from './resource-fixtures.js';
+
+// 重連測試用：這個檔案存在時一啟動就退出，模擬「server 起不來」（掛上之後才建檔，讓重連的每一次嘗試都失敗）。
+const exitIfFile = process.env['FIXTURE_EXIT_IF_FILE'];
+if (exitIfFile !== undefined && existsSync(exitIfFile)) process.exit(1);
 
 const instructions = instructionsRequested();
 const server = new McpServer(

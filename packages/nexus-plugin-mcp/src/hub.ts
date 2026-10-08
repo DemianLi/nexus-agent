@@ -15,8 +15,8 @@
  *    （`mcp-client/src/server-context.ts`、`mcp-resources/src/index.ts`）。我們的提示詞是 middleware 一層層接出來的，
  *    沒有段落註冊點，所以退到 `wrapModelCall` 把文字接到 system message 後面（同 plan-mode、sandbox-policy，
  *    與 goal 登記過的同一條偏離）。**`concat` 不取代**，記憶與摘要器也在這份 system message 上加東西。
- * 2. **提示詞只在載入期定下來**：dsh 的 `instructions()` 讀「最近一次成功連線」的快照，重連會換；我們不重連
- *    （`index.ts` 檔頭的偏離），所以文字在登記那一刻就定了，每一輪逐位元組相同（不吃 KV cache）。disposal 才會移掉。
+ * 2. **提示詞只在載入期定下來**：dsh 的 `instructions()` 讀「最近一次成功連線」的快照，重連成功會換；我們重連
+ *    之後不換（`supervisor.ts` 檔頭偏離 3），所以文字在登記那一刻就定了，每一輪逐位元組相同（不吃 KV cache）。disposal 才會移掉。
  * 3. **起不來的那一列也登記**：dsh 的 provider 登記不看連線成敗，呼叫時才報 `server is disconnected`；這裡一樣——名字照列、
  *    工具照在，叫它得到同一句（`mcp-client(<name>): server is disconnected`，dsh `connection.ts:128,361`）。
  *

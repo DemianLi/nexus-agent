@@ -6,6 +6,7 @@
  * [`modern-stdio-server.ts`](./modern-stdio-server.ts)）都靠環境變數決定要不要宣告這兩樣：
  *
  * - `FIXTURE_INSTRUCTIONS`：整段當作 `initialize` 回的 `instructions`；沒設就不回。
+ * - `FIXTURE_EXIT_IF_FILE=<路徑>`（只有舊協議那台）：啟動時該檔案存在就立刻退出，重連測試用來讓每一次重連嘗試都失敗。
  * - `FIXTURE_PAGED=1`（只有舊協議那台）：宣告 `resources` 能力，`resources/list` 分兩頁，用來量「沒帶 cursor 由 SDK 收齊、
  *   帶了 cursor 只回那一頁」。
  * - `FIXTURE_RESOURCES=1`：宣告 `resources` 能力，掛一份文字、一份二進位、一個模板。沒設就**沒有**這個能力。
