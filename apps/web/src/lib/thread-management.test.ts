@@ -1,7 +1,12 @@
 import type { ThreadSummary } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { normalizeTitle, splitThreads, threadManagementEnabled } from '@/lib/thread-management';
+import {
+  explainThreadFailure,
+  normalizeTitle,
+  readSets,
+  splitThreads,
+} from '@/lib/thread-management';
 
 const thread = (threadId: string): ThreadSummary => ({
   threadId,
@@ -13,9 +18,32 @@ const thread = (threadId: string): ThreadSummary => ({
 const ITEMS = ['a', 'b', 'c', 'd'].map(thread);
 const ids = (items: readonly ThreadSummary[]) => items.map((item) => item.threadId);
 
-describe('開關', () => {
-  it('今天是關的：伺服器端還沒接上（#633）', () => {
-    expect(threadManagementEnabled()).toBe(false);
+describe('readSets', () => {
+  it('兩格都有才算 server 支援，回整份；順序不動', () => {
+    expect(
+      readSets({ items: [], unreadable: 0, pinnedThreadIds: ['b', 'a'], archivedThreadIds: ['c'] }),
+    ).toEqual({
+      pinned: ['b', 'a'],
+      archived: ['c'],
+    });
+  });
+
+  it('缺一格、都沒有、沒有列表：當沒有', () => {
+    expect(readSets({ items: [], unreadable: 0, pinnedThreadIds: [] })).toBeUndefined();
+    expect(readSets({ items: [], unreadable: 0, archivedThreadIds: [] })).toBeUndefined();
+    expect(readSets({ items: [], unreadable: 0 })).toBeUndefined();
+    expect(readSets(undefined)).toBeUndefined();
+  });
+});
+
+describe('explainThreadFailure', () => {
+  it('四個碼各一句人話；標題不合法優先用 server 的說明', () => {
+    expect(explainThreadFailure({ code: 'thread_not_found' })).toContain('找不到');
+    expect(explainThreadFailure({ code: 'thread_archived' })).toBe('封存的會話不能釘選。');
+    expect(explainThreadFailure({ code: 'thread_active' })).toContain('還在跑');
+    expect(explainThreadFailure({ code: 'title_invalid', message: '太長了' })).toBe('太長了');
+    expect(explainThreadFailure({ code: 'title_invalid' })).toBe('這個標題不合法。');
+    expect(explainThreadFailure({ code: '別的碼' })).toBe('這個動作沒成功。');
   });
 });
 
