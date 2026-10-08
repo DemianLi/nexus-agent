@@ -12,7 +12,7 @@ import { registerModernTools } from './modern-tools.js';
 import {
   LOGO_BASE64,
   LOGO_URI,
-  MEMO_TEXT,
+  memoText,
   MEMO_URI,
   NOTE_TEMPLATE,
   instructionsRequested,
@@ -32,7 +32,7 @@ serveStdio(() => {
   registerModernTools(server);
   if (resourcesRequested()) {
     server.registerResource('memo', MEMO_URI, { mimeType: 'text/plain' }, (uri) => ({
-      contents: [{ uri: uri.href, text: MEMO_TEXT }],
+      contents: [{ uri: uri.href, text: memoText() }],
     }));
     server.registerResource('logo', LOGO_URI, { mimeType: 'image/png' }, (uri) => ({
       contents: [{ uri: uri.href, mimeType: 'image/png', blob: LOGO_BASE64 }],

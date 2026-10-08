@@ -17,11 +17,13 @@
  *    與 goal 登記過的同一條偏離）。**`concat` 不取代**，記憶與摘要器也在這份 system message 上加東西。
  * 2. **提示詞只在載入期定下來**：dsh 的 `instructions()` 讀「最近一次成功連線」的快照，重連會換；我們不重連
  *    （`index.ts` 檔頭的偏離），所以文字在登記那一刻就定了，每一輪逐位元組相同（不吃 KV cache）。disposal 才會移掉。
- * 3. **起不來的那一列也登記**：dsh 的 provider 登記不看連線成敗，呼叫時才報 `disconnected`；這裡一樣——名字照列、
- *    工具照在，叫它得到一句固定的「不可用」。
+ * 3. **起不來的那一列也登記**：dsh 的 provider 登記不看連線成敗，呼叫時才報 `server is disconnected`；這裡一樣——名字照列、
+ *    工具照在，叫它得到同一句（`mcp-client(<name>): server is disconnected`，dsh `connection.ts:128,361`）。
  *
- * 其餘照 dsh：三支工具的名字、描述、參數一字不差；`list` 是**單頁**，`cursor` 原樣交給 server，下一頁怎麼翻由模型
- * 帶 `nextCursor` 再叫一次；`read` 的二進位 `blob` 在給模型的文字裡換成一句描述。
+ * 其餘照 dsh：三支工具的名字、描述、參數、找不到 server 的錯誤訊息一字不差；`list` 沒帶 `cursor` 時由 SDK 的
+ * `Client.listResources()` 自己走完所有頁並合併（`@modelcontextprotocol/client` 2.x，dsh README 同寫「Without a cursor,
+ * the MCP SDK collects the server's pages」，`mcp-resources/README.md:36`），帶了 `cursor` 就只要那一頁並原樣回
+ * `nextCursor`；`read` 的二進位 `blob` 在給模型的文字裡換成一句描述。
  *
  * @module
  */
@@ -125,7 +127,8 @@ export function ensureHub(registry: PluginRegistry): McpHub {
   try {
     const find = (server: string): McpSource => {
       const source = sources.get(server);
-      if (source === undefined) throw new Error(`MCP resource server "${server}" is unavailable`);
+      if (source === undefined)
+        throw new Error(`MCP resource server "${server}" is unavailable in this agent's scope`);
       return source;
     };
     const resourceTool = (

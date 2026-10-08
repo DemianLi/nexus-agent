@@ -203,7 +203,7 @@ describe.each(TARGETS)('$label：指引與資源', (target) => {
       expect(await systemTextOf(registry)).not.toContain('字');
       await expect(
         resourceTool(registry, 'list_mcp_resources').invoke({ server: 'srv' }),
-      ).rejects.toThrow('MCP server "srv" is unavailable');
+      ).rejects.toThrow('mcp-client(srv): server is disconnected');
     } finally {
       await dispose();
     }
@@ -234,7 +234,7 @@ describe.each(TARGETS)('$label：指引與資源', (target) => {
     const list = resourceTool(registry, 'list_mcp_resources');
     await dispose();
     await expect(list.invoke({ server: 'srv' })).rejects.toThrow(
-      'MCP resource server "srv" is unavailable',
+      'MCP resource server "srv" is unavailable in this agent\'s scope',
     );
     expect(await systemTextOf(registry)).toBe('基底提示詞');
   });
@@ -271,7 +271,7 @@ describe.each(TARGETS)('$label：指引與資源', (target) => {
       ).rejects.toThrow();
       await expect(
         resourceTool(registry, 'read_mcp_resource').invoke({ server: 'nope', uri: MEMO_URI }),
-      ).rejects.toThrow('MCP resource server "nope" is unavailable');
+      ).rejects.toThrow('MCP resource server "nope" is unavailable in this agent\'s scope');
     } finally {
       await dispose();
     }
@@ -288,7 +288,7 @@ describe('連不上的那一列', () => {
       expect(await systemTextOf(registry)).toContain('["down","up"]');
       await expect(
         resourceTool(registry, 'list_mcp_resources').invoke({ server: 'down' }),
-      ).rejects.toThrow('MCP server "down" is unavailable');
+      ).rejects.toThrow('mcp-client(down): server is disconnected');
       expect(
         await resourceTool(registry, 'read_mcp_resource').invoke({ server: 'up', uri: MEMO_URI }),
       ).toContain(MEMO_TEXT);
@@ -341,6 +341,31 @@ describe('hub：翻頁與中止訊號原樣交給 server', () => {
       expect(seen[0]?.signal).toBeDefined();
       expect(seen[1]?.request).toEqual({ method: 'resources/templates/list' });
       expect(seen[1]?.request).not.toHaveProperty('cursor');
+    } finally {
+      await dispose();
+    }
+  });
+});
+
+describe('分頁：沒帶 cursor 收齊所有頁，帶了只回那一頁', () => {
+  it('真的 server 分兩頁', async () => {
+    const { registry, dispose } = await loadPlugins([
+      row(TARGETS[0] as Target, { FIXTURE_PAGED: '1' }),
+    ]);
+    try {
+      const list = resourceTool(registry, 'list_mcp_resources');
+      const parse = (text: unknown) => {
+        const body = String(text);
+        return JSON.parse(body.slice(body.indexOf('\n') + 1)) as {
+          resources: { uri: string }[];
+          nextCursor?: string;
+        };
+      };
+      const all = parse(await list.invoke({ server: 'srv' }));
+      expect(all.resources.map((r) => r.uri)).toEqual(['page://one', 'page://two']);
+      expect(all).not.toHaveProperty('nextCursor');
+      const second = parse(await list.invoke({ server: 'srv', cursor: 'p2' }));
+      expect(second.resources.map((r) => r.uri)).toEqual(['page://two']);
     } finally {
       await dispose();
     }

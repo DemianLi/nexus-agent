@@ -259,7 +259,7 @@ function instructionsOf(raw: string | undefined, config: McpConfig): string {
   return attributed;
 }
 
-/** 一台 server 登記進 hub 的那一份；`client` 是 `undefined` 或 `isClosed()` 時，叫它都是固定的「不可用」。 */
+/** 一台 server 登記進 hub 的那一份；`client` 是 `undefined` 或 `isClosed()` 時，叫它都是 dsh 那句 `server is disconnected`。 */
 function resourceSource(
   serverName: string,
   instructions: string,
@@ -272,7 +272,7 @@ function resourceSource(
     instructions,
     request(request: McpResourceRequest, signal: AbortSignal | undefined): Promise<unknown> {
       if (client === undefined || isClosed()) {
-        return Promise.reject(new Error(`MCP server "${serverName}" is unavailable`));
+        return Promise.reject(new Error(`mcp-client(${serverName}): server is disconnected`));
       }
       const options: RequestOptions = { timeout, ...(signal !== undefined && { signal }) };
       switch (request.method) {
