@@ -124,6 +124,13 @@ export interface TokenMeterSpan {
   /** {@link inputTokens} 裡，失敗或中止的呼叫報的那一份（未快取）。 */
   readonly failedInputTokens: number;
   readonly failedOutputTokens: number;
+  /**
+   * 失敗或中止的呼叫報的快取讀、快取寫（[#724](https://github.com/DemianLi/nexus-agent/issues/724)），已含在 {@link cacheReadTokens}、
+   * {@link cacheWriteTokens} 裡。**缺席＝沒記，不是 0**：規則同它們——失敗的呼叫裡只要有一次報了用量卻沒報這一格就整格缺席，
+   * 沒有失敗的呼叫（沒有東西可加）也缺席。
+   */
+  readonly failedCacheReadTokens?: number;
+  readonly failedCacheWriteTokens?: number;
   /** 生摘要的次數（`compaction/summary`）。 */
   readonly summaries: number;
   /** 其中沒報用量的。 */
@@ -131,6 +138,13 @@ export interface TokenMeterSpan {
   /** 生摘要那一次報的未快取輸入加總，**另列**，不在 {@link inputTokens} 裡。 */
   readonly summaryInputTokens: number;
   readonly summaryOutputTokens: number;
+  /**
+   * 生摘要那一次報的快取讀、快取寫（#724），**另列**，不在 {@link cacheReadTokens} 裡。**缺席＝沒記，不是 0**：報了用量的摘要裡
+   * 只要有一次沒報這一格就整格缺席，沒有報用量的摘要也缺席。摘要會重播整段前綴，大半走快取，所以只看
+   * {@link summaryInputTokens}（未快取）會比實際小很多。
+   */
+  readonly summaryCacheReadTokens?: number;
+  readonly summaryCacheWriteTokens?: number;
   /** 重試的次數（`llm/retry-started`）與實際等了多久的加總。 */
   readonly retries: number;
   readonly retryWaitMs: number;
@@ -233,11 +247,18 @@ export const TOKEN_METER_CALIBER: Readonly<Record<string, string>> = {
   failedInputTokens:
     '上面輸入 token（沒走快取的那一桶）裡，失敗或中止的呼叫報的那一份（已含在上面）。',
   failedOutputTokens: '上面輸出 token 裡，失敗或中止的呼叫報的那一份（已含在上面）。',
+  failedCacheReadTokens:
+    '上面快取讀裡，失敗或中止的呼叫報的那一份（已含在上面）；失敗的呼叫只要有一次沒報快取細節就整格缺席（不是 0）。',
+  failedCacheWriteTokens:
+    '上面快取寫裡，失敗或中止的呼叫報的那一份（已含在上面）；缺席的規則同失敗的快取讀。',
   summaries: '壓縮上下文時生摘要的次數。',
   summariesUnknown: '生摘要時供應商沒報用量的次數。',
   summaryInputTokens:
     '生摘要那一次報的輸入 token（同樣只算沒走快取的那一桶），另列，不在輸入 token 裡、也不進 root 的 token 總帳。',
   summaryOutputTokens: '生摘要那一次報的輸出 token，另列，同上。',
+  summaryCacheReadTokens:
+    '生摘要那一次從快取讀到的輸入 token，另列，不在上面的快取讀裡；摘要會重播整段前綴，大半走快取，所以這一格才是摘要輸入的主體。報了用量的摘要只要有一次沒報就整格缺席（不是 0）。',
+  summaryCacheWriteTokens: '生摘要那一次寫進快取的輸入 token，另列；缺席的規則同摘要的快取讀。',
   retries: '模型呼叫的重試次數。',
   retryWaitMs:
     '重試實際等的退避時間，包在該次模型呼叫的起訖之內，所以從模型時間扣掉；畫面把它和核准等待合成「等待」時要相加。',
