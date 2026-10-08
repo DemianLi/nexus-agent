@@ -38,6 +38,8 @@ import { isDeliverableMethod } from './deliverables.js';
 import { isModelMethod } from './model-selection.js';
 import type { ModelMethod } from './model-selection.js';
 import { isPermissionMethod } from './permission-presets.js';
+import { isThreadManagementMethod } from './thread-management.js';
+import type { ThreadListSets, ThreadManagementMethod } from './thread-management.js';
 import type { PermissionMethod } from './permission-presets.js';
 import type { TrajectoryTurnDetail } from './trajectory.js';
 import type { DeliverableMethod } from './deliverables.js';
@@ -467,7 +469,8 @@ export type RpcMethod =
   | FeedbackMethod
   | DeliverableMethod
   | ModelMethod
-  | PermissionMethod;
+  | PermissionMethod
+  | ThreadManagementMethod;
 
 export function isRpcMethod(value: unknown): value is RpcMethod {
   return (
@@ -479,7 +482,8 @@ export function isRpcMethod(value: unknown): value is RpcMethod {
     isFeedbackMethod(value) ||
     isDeliverableMethod(value) ||
     isModelMethod(value) ||
-    isPermissionMethod(value)
+    isPermissionMethod(value) ||
+    isThreadManagementMethod(value)
   );
 }
 
@@ -577,11 +581,12 @@ export interface ThreadSummary {
 }
 
 /** `GET /threads` 的結果。 */
-export interface ThreadListResult {
+export interface ThreadListResult extends Partial<ThreadListSets> {
   /** 由新到舊。 */
   readonly items: readonly ThreadSummary[];
   /** header 讀不懂、或格式版本比這台 server 新而沒列的份數。 */
   readonly unreadable: number;
+  // 另有選填的 `pinnedThreadIds`、`archivedThreadIds`（#633，見 `thread-management.ts`）：沒有實作釘選與封存的 server 不送。
 }
 
 /**

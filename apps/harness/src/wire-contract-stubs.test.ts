@@ -9,7 +9,13 @@
  */
 
 import { MemorySaver } from '@langchain/langgraph';
-import { createWireClient, MODEL_METHODS, PERMISSION_METHODS, uploadPath } from '@nexus/wire';
+import {
+  createWireClient,
+  MODEL_METHODS,
+  PERMISSION_METHODS,
+  THREAD_MANAGEMENT_METHODS,
+  uploadPath,
+} from '@nexus/wire';
 import { createDeepAgent, StateBackend } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 
@@ -52,19 +58,31 @@ function connect() {
 const NOT_SUPPORTED = { kind: 'rejected', code: 'not_supported' } as const;
 
 describe('每一支未實作的方法都回 not_supported', () => {
-  it('RPC：model.catalog、model.select、permission.catalog，而且不為它們建 agent', async () => {
+  it('RPC：model、permission、thread 管理的每一支，而且不為它們建 agent', async () => {
     const { client, handler, created } = connect();
     try {
       // 清單與契約同步：新增一支 method 而沒有登記到這裡，這條先紅。
-      expect([...MODEL_METHODS, ...PERMISSION_METHODS].sort()).toEqual([
+      expect(
+        [...MODEL_METHODS, ...PERMISSION_METHODS, ...THREAD_MANAGEMENT_METHODS].sort(),
+      ).toEqual([
         'model.catalog',
         'model.select',
         'permission.catalog',
+        'thread.archive',
+        'thread.pin',
+        'thread.rename',
+        'thread.unarchive',
+        'thread.unpin',
       ]);
       const outcomes = [
         await client.modelCatalog('t'),
         await client.selectModel('t', { modelId: 'm', reasoningEffort: 'high' }),
         await client.permissionCatalog('t'),
+        await client.threadPin('t'),
+        await client.threadUnpin('t'),
+        await client.threadArchive('t', { stopActivity: true }),
+        await client.threadUnarchive('t'),
+        await client.threadRename('t', '新標題'),
       ];
       for (const outcome of outcomes) expect(outcome).toMatchObject(NOT_SUPPORTED);
       for (const outcome of outcomes) {

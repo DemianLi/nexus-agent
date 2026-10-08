@@ -131,6 +131,26 @@ export type {
 } from './model-selection.js';
 export { isModelMethod, MODEL_METHODS } from './model-selection.js';
 export type {
+  ThreadArchiveCommand,
+  ThreadArchiveError,
+  ThreadArchiveResult,
+  ThreadListSets,
+  ThreadManagementCommand,
+  ThreadManagementMethod,
+  ThreadNotFound,
+  ThreadPinCommand,
+  ThreadPinError,
+  ThreadPinResult,
+  ThreadRenameCommand,
+  ThreadRenameError,
+  ThreadRenameResult,
+  ThreadUnarchiveCommand,
+  ThreadUnarchiveResult,
+  ThreadUnpinCommand,
+  ThreadUnpinResult,
+} from './thread-management.js';
+export { isThreadManagementMethod, THREAD_MANAGEMENT_METHODS } from './thread-management.js';
+export type {
   PermissionCatalog,
   PermissionCatalogCommand,
   PermissionCatalogResult,
@@ -292,6 +312,7 @@ export type {
   PendingApproval,
   PendingInput,
   PendingQuestion,
+  QuestionOrigin,
   PlanReviewIntent,
   QuestionItem,
   ToolEntry,
@@ -307,7 +328,9 @@ export {
   answerResponse,
   appendAnswers,
   appendQuestionCancel,
+  appendQuestionDecline,
   cancelResponse,
+  declineResponse,
   appendDecision,
   emptyConversation,
   isApprovalPending,
