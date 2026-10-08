@@ -15,7 +15,6 @@ import { PassThrough } from 'node:stream';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { PluginEntry } from '@nexus/core';
 import { createMiddleware } from 'langchain';
-import { createSkillsPlugin } from '@nexus/plugin-skills';
 import { HARNESS_IDENTITY_SENTENCE } from '@nexus/plugin-system-prompt';
 import Ajv2020 from 'ajv/dist/2020.js';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -198,7 +197,7 @@ describe('掛了 skills 與 task 的組裝', () => {
     const { agent, dispose } = await createNexusAgent({
       model,
       backend: new ContainedFilesystemBackend({ rootDir: root }),
-      plugins: [...shipped, createSkillsPlugin({ sources: ['/skills/'] }), lateAppender, crew],
+      plugins: [...shipped, lateAppender, crew],
     });
     try {
       await agent.invoke(toAgentInvocation('叫 writer 去做事。'));

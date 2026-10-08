@@ -307,8 +307,15 @@ const PRE_STEP_OTHER_CARRIERS: readonly string[] = ['packages/nexus-plugin-plan-
  * 每次 invoke 開頭改圖裡的狀態、不寫日誌，這個差距與接縫 6 同批登記在 PR 內文，不在這份索引的軸上。
  *
  * 它從基座時代就是 `beforeAgent` 載體，只是住在 `node_modules`，這一條掃描看不到；搬進我們的樹才現形。
+ *
+ * `skills-middleware.ts`（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：包基座的 skills middleware，
+ * `beforeAgent` 只是把基座那顆的「掃一次 skill 目錄」轉過去、並在掃到空的之後不再轉。它**不注入、不提交待辦**
+ * （注入發生在 `wrapModelCall`，而且空的時候連那個也放行），所以不佔 pre-step。同樣是基座時代就有、搬進樹才現形。
  */
-const PRE_STEP_NOT_OCCUPANTS: readonly string[] = ['packages/nexus-core/src/patch-tool-calls.ts'];
+const PRE_STEP_NOT_OCCUPANTS: readonly string[] = [
+  'packages/nexus-core/src/patch-tool-calls.ts',
+  'packages/nexus-core/src/skills-middleware.ts',
+];
 
 /** 遞迴列出產品原始碼的 `.ts`。 */
 function productSources(dir: string): string[] {

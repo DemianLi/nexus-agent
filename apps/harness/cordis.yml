@@ -48,6 +48,17 @@
 - id: agent-instructions
   name: '@nexus/plugin-agent-instructions'
 
+# 技能（#440）：工作區的 `skills/<name>/SKILL.md` 讓模型看得到、需要時自己去讀。來源預設
+# 是 backend 命名空間下的 `/skills/`，要加別的目錄在 `sources` 列出（依序即優先序）。
+#
+# **沒有 skill 就一個字都不加**（照 dsh：目錄訊息清單為空且從沒發佈過就不出現，
+# `packages/skill/tool-skill/src/index.ts:237`）：沒給 `--workspace`、或工作區沒有 `skills/`，
+# 送給模型的 system prompt 與沒掛這一列逐位元組相同，空結果也只掃一次。基座的 skills
+# middleware 做不到這一點（對空清單照樣接約 2000 字、又每一輪重掃），所以組裝點包了一層，
+# 偏離登記在 `packages/nexus-core/src/skills-middleware.ts` 檔頭。
+- id: skills
+  name: '@nexus/plugin-skills'
+
 # **例外一：計劃模式**（#120）。它註冊的是一個**人打得到的命令**，而命令沒進出貨清單就
 # 等於不存在——`/plan` 會被 `parseCommand` 判成「名字不認得」，照原樣掉回模型，變成一行
 # 沒人懂的純文字。「不替誰決定該裝什麼」在這裡撞上「那就誰也用不到」，後者比較貴。
