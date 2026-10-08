@@ -45,6 +45,8 @@ import type {
 import { COMPACTION } from './compaction.js';
 import { GOAL, GOAL_PHASES } from './goal.js';
 import type { WireGoal, WireGoalPhase } from './goal.js';
+import { PERMISSIONS } from './permission-presets.js';
+import type { PermissionSelection } from './permission-presets.js';
 import { PLAN_MODE } from './plan-mode.js';
 import { PROJECTION, PROJECTION_KEY_PATTERN } from './projection.js';
 import type { WireProjection } from './projection.js';
@@ -585,6 +587,13 @@ export interface ConversationState {
    */
   readonly planMode: PlanModePayload | null;
   /**
+   * 這條會話目前是哪一組權限（[#437](https://github.com/DemianLi/nexus-agent/issues/437)）：最後一顆 `permissions` frame 的整份值。
+   * **`null` 是「沒收到過」，不是「沒有權限組合」**——兩者在線上分不開，client 看 `permission.catalog` 有沒有 `not_supported` 決定要不要
+   * 畫選單，這一格只決定選單上選中哪一組（dsh 的投影缺席＝沒有權限服務，我們把那一半放在目錄上）。形狀與切換見 `permission-presets.ts`。
+   * 它是「現在」的事，所以 {@link prependEntries} 不動它。
+   */
+  readonly permissions: PermissionSelection | null;
+  /**
    * 插件投影（#1026）：`key` → 最後一顆該 key 的 `projection` frame 的整份值。**所有插件共用這一格**，新增一個投影不改
    * 這個檔。沒有收到過的 key 就不在裡面；插件關掉（`disabled`）就不會有它的 key。往前翻頁不動它，規則見 `projection.ts`。
    */
@@ -648,6 +657,7 @@ export function emptyConversation(): ConversationState {
     contextPressure: null,
     todos: null,
     planMode: null,
+    permissions: null,
     projections: {},
     subagentProjections: {},
     goal: null,
@@ -936,6 +946,7 @@ const CUSTOM_REDUCERS: {
   [CONTEXT_MEASURE]: reduceContextMeasure,
   [TODOS]: reduceTodos,
   [PLAN_MODE]: reducePlanMode,
+  [PERMISSIONS]: reducePermissions,
   [PROJECTION]: reduceProjection,
   [COMPACTION]: reduceCompaction,
   [GOAL]: reduceGoal,
@@ -1132,6 +1143,13 @@ function reducePlanMode(state: ConversationState, payload: object): Conversation
   const { active } = payload as { active?: unknown };
   if (typeof active !== 'boolean') return state;
   return { ...state, planMode: { active } };
+}
+
+/** `permissions` 的 `payload`：投影的整個值，整份換掉。`currentValue` 不是非空字串就整顆不收，留著前一份。 */
+function reducePermissions(state: ConversationState, payload: object): ConversationState {
+  const { currentValue } = payload as { currentValue?: unknown };
+  if (typeof currentValue !== 'string' || currentValue === '') return state;
+  return { ...state, permissions: { currentValue } };
 }
 
 /**

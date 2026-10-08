@@ -33,7 +33,12 @@ import type {
   MessageFeedbackRating,
 } from '@nexus/core/src/feedback.ts';
 
+import type { MODEL_DOES_NOT_SUPPORT_IMAGES, PromptAttachment } from './attachments.js';
 import { isDeliverableMethod } from './deliverables.js';
+import { isModelMethod } from './model-selection.js';
+import type { ModelMethod } from './model-selection.js';
+import { isPermissionMethod } from './permission-presets.js';
+import type { PermissionMethod } from './permission-presets.js';
 import type { TrajectoryTurnDetail } from './trajectory.js';
 import type { DeliverableMethod } from './deliverables.js';
 
@@ -109,7 +114,15 @@ export type RunStartMode = (typeof RUN_START_MODES)[number];
 export interface RunStartCommand {
   readonly id: number;
   readonly method: 'run.start';
-  readonly params: RunStartParams & { readonly mode?: RunStartMode };
+  readonly params: RunStartParams & {
+    readonly mode?: RunStartMode;
+    /**
+     * 這句話帶的檔案收據（[#732](https://github.com/DemianLi/nexus-agent/issues/732)，形狀見 `attachments.ts`）。
+     * 協定的 `RunStartParams` 沒有這一格，dsh 的對應物是 prompt 內容裡的 `{ type: 'file', receiptId }` 區塊。
+     * 沒實作的 server 對非空的 `attachments` 回 `not_supported`。
+     */
+    readonly attachments?: readonly PromptAttachment[];
+  };
 }
 
 /** 上行收得下的 method。其餘一律 404，見決策 6 的未採納清單。 */
@@ -304,7 +317,8 @@ export type WireErrorCode =
   | typeof STEER_UNAVAILABLE
   | typeof SUBAGENT_NOT_FOUND
   | typeof SUBAGENT_AT_CAPACITY
-  | typeof SUBAGENT_CLOSED;
+  | typeof SUBAGENT_CLOSED
+  | typeof MODEL_DOES_NOT_SUPPORT_IMAGES;
 
 /**
  * 協定的 `ErrorResponse`，錯誤碼換成 {@link WireErrorCode}。
@@ -451,7 +465,9 @@ export type RpcMethod =
   | typeof SUBAGENT_SEND_METHOD
   | typeof SUBAGENT_INTERRUPT_METHOD
   | FeedbackMethod
-  | DeliverableMethod;
+  | DeliverableMethod
+  | ModelMethod
+  | PermissionMethod;
 
 export function isRpcMethod(value: unknown): value is RpcMethod {
   return (
@@ -461,7 +477,9 @@ export function isRpcMethod(value: unknown): value is RpcMethod {
     isQueueUpdateMethod(value) ||
     isSubagentMethod(value) ||
     isFeedbackMethod(value) ||
-    isDeliverableMethod(value)
+    isDeliverableMethod(value) ||
+    isModelMethod(value) ||
+    isPermissionMethod(value)
   );
 }
 
