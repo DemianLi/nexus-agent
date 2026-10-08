@@ -50,6 +50,8 @@ interface Session {
   readonly threadId: string;
   readonly client: WireClient;
   events: AsyncGenerator<Event, void, undefined>;
+  /** 下行收到的每一顆 frame，照順序。 */
+  readonly frames: Event[];
   state: ConversationState;
   /** root 那份會話日誌。 */
   log(): readonly SessionEvent[];
@@ -94,6 +96,7 @@ async function open(threadId: string): Promise<Session> {
     threadId,
     client,
     events,
+    frames: [],
     state: emptyConversation(),
     log: () =>
       sessions
@@ -108,6 +111,7 @@ async function until(session: Session, done: (session: Session) => boolean): Pro
   while (!done(session)) {
     const next = await session.events.next();
     if (next.done === true) break;
+    session.frames.push(next.value);
     session.state = reduceConversation(session.state, next.value);
   }
 }
@@ -275,6 +279,51 @@ describe('計劃審核在線上', () => {
       reason: { kind: 'aborted', cause: { kind: 'user' } },
     });
     expect(recordedPlanMode(session.log()) ?? true).toBe(true);
+    await session.close();
+  });
+
+  /**
+   * **停在計劃審核時按停止：碼跨線**（[#667](https://github.com/DemianLi/nexus-agent/issues/667) 的 `ask_user_question` 那條，
+   * 計劃審核同一條路）。計劃卡的「停止」chip 比的是 `tool-finished` 的 `code`，不是文字，所以這一條**用字面值斷言**：
+   * pump 對掛著的 `exit_plan_mode` 改送別的碼時，這裡會紅，而不是讓畫面靜靜比不到。即時與重新整理（歷史重播）
+   * 兩顆 `tool-finished` 都要帶同一個碼，卡上的 `errorCode` 也是它。
+   */
+  it('停在計劃審核時按停止：即時與重新整理那顆 `tool-finished` 都帶同一個碼', async () => {
+    const STOPPED_ON_REVIEW = 'ABORTED_BEFORE_DISPATCH';
+    const session = await open('review-stop-code');
+    await pendingReview(session);
+    // 同上一條：停穩之後按，走的才是收回那條路。
+    await vi.waitFor(() => {
+      expect(session.log().some((event) => event.type === 'turn/end')).toBe(true);
+    });
+    await session.client.runCancel(session.threadId);
+    await until(session, (s) => s.state.status === 'stopped');
+
+    const finishedOf = (frames: readonly Event[]) =>
+      frames
+        .filter(
+          (frame) =>
+            frame.method === 'tools' &&
+            (frame.params.data as { event?: unknown }).event === 'tool-finished',
+        )
+        .map((frame) => frame.params.data as Record<string, unknown>);
+    const planCardOf = (state: ConversationState) =>
+      state.entries.filter(
+        (entry) => entry.kind === 'tool' && entry.name === EXIT_PLAN_MODE_TOOL_NAME,
+      );
+
+    const live = finishedOf(session.frames);
+    expect(live.at(-1)).toMatchObject({ failed: true, code: STOPPED_ON_REVIEW });
+    expect(planCardOf(session.state).at(-1)).toMatchObject({
+      status: 'failed',
+      errorCode: STOPPED_ON_REVIEW,
+    });
+
+    const history = historyFrames(session.log(), DEFAULT_TOOL_TEXT_MAX_BYTES);
+    expect(finishedOf(history).at(-1)).toMatchObject({ failed: true, code: STOPPED_ON_REVIEW });
+    expect(
+      planCardOf(history.reduce(reduceConversation, emptyConversation())).at(-1),
+    ).toMatchObject({ status: 'failed', errorCode: STOPPED_ON_REVIEW });
     await session.close();
   });
 });
