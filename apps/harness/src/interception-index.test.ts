@@ -7,7 +7,7 @@
  *
  * ## 為什麼是這裡，而不是 `registry.ts` 的檔頭
  *
- * 最直覺的家是 `PluginRegistry` 的十八個欄位。**那是錯的軸**：第 2、6、7 格全擠在
+ * 最直覺的家是 `PluginRegistry` 的十九個欄位。**那是錯的軸**：第 2、6、7 格全擠在
  * `middleware` 一個欄位，第 3 格落在 `apps/harness` 根本沒有欄位，而第 6／7 格的**位置**
  * 是 `fold.ts` 決定的、不由註冊順序決定——欄位這一軸連「排在第幾個」都表達不出來。
  * #190 記著同型的坑：grep `lifecycle` 找生命週期鉤子會落到關機 disposer 上。
@@ -107,6 +107,8 @@ import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
+import { scanEventTableTree } from './event-table-scan.js';
+
 /** 這個 repo 的根。從 `apps/harness/src/` 往上三層。 */
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -117,9 +119,25 @@ const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
  */
 const UNMEASURED = '（未量）';
 
+/**
+ * 「這一格現在**沒有**由任何事件佔住」——見 {@link InterceptionRow.eventOccupant}。
+ *
+ * 事件匯流排在 S0 落地（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)），但事件表是空的、沒有生產者，所以
+ * 九格都還由 middleware 佔著。**這是 [#190](https://github.com/DemianLi/nexus-agent/issues/190) 偏離登記「推翻」的那一刀**：
+ * 登記的前提（基礎建設表達不出事件匯流排）不再成立，這份索引從此多一個軸，S1 起逐格往下填。
+ */
+const NO_EVENT = '（尚無）';
+
 interface InterceptionRow {
   /** #190 那張表的格號。 */
   readonly cell: number;
+  /**
+   * **現在由哪個事件佔住這一格**（#1217 起）：事件表上的事件名，或 {@link NO_EVENT}。
+   *
+   * 必填，而且填的名字必須真的宣告在事件表上（見下面「事件佔用」那條斷言）——**不替沒有生產者的格子寫上一個預期的事件名**。
+   * 一格可以同時有 middleware 佔用者與事件：遷移途中兩者並存（草稿 §五的絞殺式），事件那一側才是終點。
+   */
+  readonly eventOccupant: string;
   /** dsh 的時刻名，**逐字**。這是 grep 的入口，也是下面斷言要在佔用者身上找的字串。 */
   readonly moment: string;
   /** dsh 給這個時刻的權限。 */
@@ -153,6 +171,7 @@ interface InterceptionRow {
 const INDEX: readonly InterceptionRow[] = [
   {
     cell: 2,
+    eventOccupant: NO_EVENT,
     moment: 'agent/pre-step',
     permission: '讀／改這一步要送出的訊息批次，可 `jumpTo: "end"` 收掉這一輪',
     occupants: [
@@ -180,6 +199,7 @@ const INDEX: readonly InterceptionRow[] = [
   },
   {
     cell: 3,
+    eventOccupant: NO_EVENT,
     moment: 'agent/turn-stopping',
     permission: 'awaited 通知，聽者可以要求再跑一步（`agent.steer()`）',
     occupants: ['apps/harness/src/goal-driver.ts'],
@@ -192,6 +212,7 @@ const INDEX: readonly InterceptionRow[] = [
   },
   {
     cell: 4,
+    eventOccupant: NO_EVENT,
     moment: 'tools/pre-execute',
     permission: 'waterfall，allow／deny／ask',
     occupants: ['packages/nexus-core/src/approval.ts'],
@@ -227,6 +248,7 @@ const INDEX: readonly InterceptionRow[] = [
   },
   {
     cell: 6,
+    eventOccupant: NO_EVENT,
     moment: 'tools/execute',
     permission: '環繞 waterfall（超時／重試／指標）',
     occupants: [
@@ -253,6 +275,7 @@ const INDEX: readonly InterceptionRow[] = [
   },
   {
     cell: 7,
+    eventOccupant: NO_EVENT,
     moment: 'tools/post-execute',
     permission: '檢查／變換 waterfall，可 `additionalContexts`',
     occupants: ['packages/nexus-core/src/output-schema.ts'],
@@ -380,6 +403,16 @@ function declaredEventKeyBlocks(source: string): string[] {
   return blocks;
 }
 
+/** 寫了事件名、但事件表上沒有這個事件的列（格號）。不替沒有生產者的格子寫上預期的名字：事件跟它的第一個生產者同一張 PR 落地。 */
+function rowsNamingUndeclaredEvents(
+  rows: readonly InterceptionRow[],
+  declared: ReadonlySet<string>,
+): number[] {
+  return rows
+    .filter((row) => row.eventOccupant !== NO_EVENT && !declared.has(row.eventOccupant))
+    .map((row) => row.cell);
+}
+
 describe('攔截時刻索引', () => {
   it(`剛好 ${EXPECTED_ROWS} 列，${EXPECTED_SITES} 個佔用位址`, () => {
     // 兩個數字都釘死，因為這條測試的失敗模式是**沒東西可掃**：只驗「每一列都對」的話，
@@ -387,6 +420,15 @@ describe('攔截時刻索引', () => {
     expect(INDEX).toHaveLength(EXPECTED_ROWS);
     expect(INDEX.flatMap((row) => row.occupants)).toHaveLength(EXPECTED_SITES);
     expect(new Set(INDEX.map((row) => row.moment)).size).toBe(EXPECTED_ROWS);
+  });
+
+  it('事件佔用：填的不是「尚無」就必須是事件表上真的有的名字；S0 事件表是空的，所以九格都還沒有', () => {
+    const declared = new Set(scanEventTableTree(REPO_ROOT).map((event) => event.name));
+    expect(rowsNamingUndeclaredEvents(INDEX, declared)).toEqual([]);
+    expect(INDEX.map((row) => row.eventOccupant)).toEqual(INDEX.map(() => NO_EVENT));
+    // 正向對照：一個編造的名字確實被這條規矩擋下來，不是因為空表而永遠綠。
+    const invented = { ...INDEX[0]!, eventOccupant: 'x/not-declared' };
+    expect(rowsNamingUndeclaredEvents([invented], declared)).toEqual([invented.cell]);
   });
 
   it.each(INDEX.map((row) => [row.cell, row.moment, row] as const))(

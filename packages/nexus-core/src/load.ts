@@ -162,7 +162,7 @@ export async function loadPlugins(
     await disposeAll(registry).catch(() => {});
     throw error;
   }
-  return { registry, entries, dropped: [], dispose: () => disposeAll(registry) };
+  return { registry, entries, dropped: [], dispose: () => disposeLoaded(registry) };
 }
 
 /** 掛上了、還可能因 `requires` 連鎖掉的一列。 */
@@ -255,7 +255,7 @@ async function loadPerEntry(
       config,
     })),
     dropped,
-    dispose: () => disposeAll(registry),
+    dispose: () => disposeLoaded(registry),
   };
 }
 
@@ -274,6 +274,21 @@ async function runOwn(disposers: readonly Disposer[]): Promise<string> {
     }
   }
   return reasons.length === 0 ? '' : `；收掉它開的資源時也失敗了：${reasons.join('；')}`;
+}
+
+/**
+ * 載入成功的那一份交給呼叫端的 `dispose`：{@link disposeAll}，跑完（不論有沒有失敗）再清空事件的監聽者（#1217）。
+ *
+ * **清空只在這裡，不在 {@link disposeAll} 裡**：載入失敗的路徑也呼叫 {@link disposeAll}，而那條路徑刻意「註冊內容留著、活資源
+ * 不留」（診斷要有東西可看）。監聽者是註冊內容，不是活資源——失敗時留著，成功載入的 handle 關掉時才一起收。清理都跑過了才清，
+ * 所以清理途中派發的事件還聽得到。
+ */
+async function disposeLoaded(registry: InternalPluginRegistry): Promise<void> {
+  try {
+    await disposeAll(registry);
+  } finally {
+    registry.dispatch.clear();
+  }
 }
 
 /**

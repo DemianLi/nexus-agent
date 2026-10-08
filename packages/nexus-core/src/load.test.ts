@@ -302,6 +302,16 @@ describe('requires', () => {
   });
 });
 
+declare module './events.js' {
+  interface Events {
+    /**
+     * 回滾測試用。
+     * @mode emit
+     */
+    'test/load-rollback'(): void;
+  }
+}
+
 describe('每個註冊點的回滾', () => {
   /**
    * 每個點各放一樣東西，然後 throw。**任何一個註冊方法沒把 undo 記進註冊者的堆疊，這裡就會留下孤兒。**
@@ -338,6 +348,8 @@ describe('每個註冊點的回滾', () => {
       handler: () => ({ kind: 'success', text: '好' }),
     });
     registry.sessions.join(() => undefined);
+    registry.events.on('test/load-rollback', () => undefined);
+    registry.events.once('test/load-rollback', () => undefined, { prepend: true });
     registry.tools.register(fakeTool('grep'), { scope: 'researcher' });
     throw new Error('半路壞掉');
   });
@@ -364,6 +376,7 @@ describe('每個註冊點的回滾', () => {
     expect(registry.invariants.companions()).toEqual([]);
     expect(registry.commands.list()).toEqual([]);
     expect(registry.sessions.installers()).toEqual([]);
+    expect(registry.events.listeners()).toEqual([]);
   });
 
   it('服務位子回滾之後是真的空出來，別的 plugin 掛得上去', async () => {
