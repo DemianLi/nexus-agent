@@ -299,6 +299,43 @@ describe('inbox', () => {
         ]);
       });
 
+      it('排著的件（items／nextStep）的 attachments 帶進 state.inbox 與 state.inboxNextStep；空陣列不帶', () => {
+        const state = fold(
+          inboxFrame({
+            items: [
+              { ...first, attachments: [file, image] },
+              { ...second, attachments: [] },
+              { id: 'q-none', text: '沒附件', source: { kind: 'user' } },
+            ],
+            nextStep: [{ id: 'q-step', text: '', source: { kind: 'user' }, attachments: [image] }],
+          }),
+        );
+        expect(state.inbox).toEqual([
+          { id: first.id, text: first.text, source: { kind: 'user' }, attachments: [file, image] },
+          { id: second.id, text: second.text, source: { kind: 'user' } },
+          { id: 'q-none', text: '沒附件', source: { kind: 'user' } },
+        ]);
+        expect(state.inboxNextStep).toEqual([
+          { id: 'q-step', text: '', source: { kind: 'user' }, attachments: [image] },
+        ]);
+      });
+
+      it('排著的件 attachments 形狀不對：整顆不收（items 與 nextStep 都是）', () => {
+        const before = fold(inboxFrame({ items: [first] }));
+        for (const bad of ['x', [null], [{ ...file, bytes: -1 }]]) {
+          for (const payload of [
+            { items: [{ ...second, attachments: bad }] },
+            { items: [], nextStep: [{ ...second, attachments: bad }] },
+          ]) {
+            const after = reduceConversation(before, inboxFrame(payload));
+            expect([after.inbox, after.entries], JSON.stringify(payload)).toEqual([
+              before.inbox,
+              before.entries,
+            ]);
+          }
+        }
+      });
+
       it('形狀不對：整顆不收，同 references', () => {
         const before = fold(inboxFrame({ items: [first] }));
         for (const attachments of [
