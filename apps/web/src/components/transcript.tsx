@@ -31,6 +31,7 @@ import type {
   WireFeedbackRating,
 } from '@nexus/wire';
 
+import { SentAttachments } from '@/components/sent-attachments';
 import { ReferencedText } from '@/components/session-reference';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { ChangesCard } from '@/components/changes/card';
@@ -192,11 +193,15 @@ export function Entry({
     return (
       <Message align="end">
         <MessageContent>
-          <Bubble variant="secondary" align="end">
-            <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
-              <ReferencedText text={entry.text} references={entry.references} />
-            </BubbleContent>
-          </Bubble>
+          {/* 這一句帶的附件（#732）：標籤排在泡泡上方；只有附件、沒有字的那一句不畫空泡泡。 */}
+          <SentAttachments attachments={entry.attachments} />
+          {entry.text.trim() !== '' && (
+            <Bubble variant="secondary" align="end">
+              <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
+                <ReferencedText text={entry.text} references={entry.references} />
+              </BubbleContent>
+            </Bubble>
+          )}
         </MessageContent>
       </Message>
     );

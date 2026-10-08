@@ -4,7 +4,16 @@ import type {
   QueueUpdateAction,
   WireQueuedInput,
 } from '@nexus/wire';
-import { Check, ChevronDown, ListEnd, Pencil, SendHorizontal, Trash2, X } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  ListEnd,
+  Paperclip,
+  Pencil,
+  SendHorizontal,
+  Trash2,
+  X,
+} from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { toast } from 'sonner';
@@ -26,6 +35,7 @@ import {
   queuedAgentText,
   queuePreview,
 } from '@/lib/queue-view';
+import { attachmentsPreview } from '@/lib/sent-attachments';
 import { mentionDisplayText } from '@/lib/session-mention';
 import {
   canSteerRows,
@@ -228,8 +238,11 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
     const isEditing = editing?.id === item.id && !leaving;
     // 排著的仍是原文：引用換成 `@標題` 再畫，編輯框才拿原文。
     const shown = mentionDisplayText(item.text);
-    const preview = queuePreview(shown);
-    const label = labelPreview(shown);
+    // 只有附件、沒有字的那一句：預覽寫附件的名字，不留一列空白（#732）。
+    const attachmentCount = item.attachments?.length ?? 0;
+    const attachmentNames = attachmentsPreview(item.attachments);
+    const preview = queuePreview(shown.trim() === '' ? attachmentNames : shown);
+    const label = labelPreview(shown.trim() === '' ? attachmentNames : shown);
     return (
       <li
         key={item.id}
@@ -288,6 +301,17 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
             >
               {preview}
             </span>
+            {attachmentCount > 0 && (
+              <span
+                className="text-muted-foreground flex min-h-11 shrink-0 items-center gap-1 text-tip lg:min-h-8"
+                data-testid="queue-attachments"
+                title={attachmentNames}
+                aria-label={`帶 ${attachmentCount} 個附件：${attachmentNames}`}
+              >
+                <Paperclip aria-hidden className="size-3.5" />
+                {attachmentCount}
+              </span>
+            )}
             <Button
               type="button"
               variant="ghost"
