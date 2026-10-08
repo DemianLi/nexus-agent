@@ -14,7 +14,7 @@ import { describe, expect, test } from 'vitest';
  * 2. **字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`**：不用 `text-xs`／`text-sm`／`text-base`…，也不寫 `text-[…px]`。
  * 3. **圓角只走階梯**（`rounded-sm`…`rounded-3xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
  * 4. **不硬寫顏色字面值**：`#fff`、`rgb(…)`、沒有 `var(…)` 的 `oklch(…)`／`color-mix(…)`。從 token 推出來的（`oklch(from var(--primary) …)`）可以。
- * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`，或 `bg-card`＋`shadow-material`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
+ * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`、`bg-card`＋`shadow-material`＋`rounded-3xl`，或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
  *
  * **例外只能列在 {@link ALLOWED}**，每一條寫明理由；列了卻再也沒有命中的條目會報錯，所以例外只會變少、不會悄悄留著。
  * 沒量的：間距與寬高的任意值（`max-h-[300px]`、`top-[50%]` 都是版面值，不是系統值）、`styles/*.css`（那裡就是 token 層）。
@@ -101,6 +101,9 @@ function rulesBroken(text: string): { rule: Rule; what: string }[] {
   ) {
     found.push({ rule: '表面', what: 'bg-card shadow-material rounded-3xl' });
   }
+  if (utilities.has('bg-card') && utilities.has('border') && utilities.has('rounded-3xl')) {
+    found.push({ rule: '表面', what: 'bg-card border rounded-3xl' });
+  }
   for (const token of text.split(/\s+/)) {
     const u = utility(token);
     if (RAW_PALETTE.test(u)) found.push({ rule: '色板', what: u });
@@ -136,6 +139,11 @@ const ALLOWED: readonly Allowed[] = [
     file: 'components/surface.tsx',
     what: 'bg-card shadow-material rounded-3xl',
     why: '`Surface` 的 raised 配方本身：全站唯一該寫這串的地方',
+  },
+  {
+    file: 'components/surface.tsx',
+    what: 'bg-card border rounded-3xl',
+    why: '`Surface` 的 docked 配方本身：全站唯一該寫這串的地方',
   },
   {
     file: 'components/empty-hero.tsx',
@@ -318,7 +326,8 @@ describe('判準', () => {
     ]);
     expect(rules('bg-stage sticky bottom-0 pb-4')).toEqual([]);
     expect(rules('bg-card shadow-material rounded-lg')).toEqual([]);
-    expect(rules('bg-card border rounded-3xl p-1')).toEqual([]);
+    expect(rules('bg-card border rounded-3xl p-1')).toEqual(['表面:bg-card border rounded-3xl']);
+    expect(rules('bg-card border rounded-lg')).toEqual([]);
   });
 
   test('註解裡寫到類別名不算', () => {

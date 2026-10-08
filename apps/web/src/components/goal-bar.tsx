@@ -1,6 +1,7 @@
 import type { WireGoal } from '@nexus/wire';
 import { Target } from 'lucide-react';
 
+import { Surface } from '@/components/surface';
 import { goalBarView } from '@/lib/goal-bar';
 
 /**
@@ -17,11 +18,12 @@ export function GoalBar({ goal }: { readonly goal: WireGoal | null }) {
   const view = goalBarView(goal);
   if (view === undefined) return null;
   return (
-    <div
+    <Surface
+      tone="docked"
       role="group"
       aria-label={view.label}
       data-testid="goal-bar"
-      className="bg-card text-muted-foreground mb-2 min-w-0 rounded-3xl border px-3 py-2 text-tip"
+      className="text-muted-foreground mb-2 min-w-0 px-3 py-2 text-tip"
     >
       <div className="flex min-w-0 items-center gap-2">
         <Target aria-hidden className="size-4 shrink-0" />
@@ -40,6 +42,6 @@ export function GoalBar({ goal }: { readonly goal: WireGoal | null }) {
           {view.blockedReason}
         </p>
       )}
-    </div>
+    </Surface>
   );
 }

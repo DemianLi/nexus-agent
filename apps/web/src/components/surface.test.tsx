@@ -34,6 +34,17 @@ describe('Surface（卡片與內層 stage 的共用底）', () => {
     );
   });
 
+  it('docked：貼在輸入框上方的卡片，用 border 不用陰影，內距由呼叫端給', () => {
+    const { container } = render(
+      <Surface tone="docked" className="mb-2 p-1">
+        內容
+      </Surface>,
+    );
+    expect(classes(container.firstElementChild)).toEqual(
+      ['bg-card', 'border', 'rounded-3xl', 'mb-2', 'p-1'].sort(),
+    );
+  });
+
   it('as 選元素：ul／li／section／pre', () => {
     for (const tag of ['ul', 'ol', 'li', 'section', 'p', 'pre'] as const) {
       const { container, unmount } = render(
