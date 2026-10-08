@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  agentMentionEnabled,
   agentRows,
+  agentsFromKinds,
   applyAgentPick,
-  FAKE_AGENTS,
+  toMention,
   type MentionAgent,
 } from '@/lib/agent-mention';
 
@@ -16,14 +16,22 @@ const agents: readonly MentionAgent[] = [
   { id: 'c', name: 'tester', description: '補測試，順便 EXPLORE 邊界' },
 ];
 
-describe('開關', () => {
-  it('今天寫死 false：整個功能不出現', () => {
-    expect(agentMentionEnabled()).toBe(false);
+describe('server 的種類換成選單用的', () => {
+  it('註冊的名字就是身分，說明照帶，順序不動', () => {
+    expect(
+      agentsFromKinds([
+        { name: 'explorer', description: '探索' },
+        { name: 'reviewer', description: '審查' },
+      ]),
+    ).toEqual([
+      { id: 'explorer', name: 'explorer', description: '探索' },
+      { id: 'reviewer', name: 'reviewer', description: '審查' },
+    ]);
+    expect(agentsFromKinds([])).toEqual([]);
   });
 
-  it('假資料的 id 與名字各自不重複', () => {
-    expect(new Set(FAKE_AGENTS.map((agent) => agent.id)).size).toBe(FAKE_AGENTS.length);
-    expect(new Set(FAKE_AGENTS.map((agent) => agent.name)).size).toBe(FAKE_AGENTS.length);
+  it('選中的換成 run.start 的 mention：只有種類與名字，沒有說明', () => {
+    expect(toMention(agents[1]!)).toEqual({ kind: 'subagent', name: 'reviewer' });
   });
 });
 

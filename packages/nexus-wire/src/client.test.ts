@@ -53,6 +53,44 @@ const FRAME = {
   params: { namespace: [], timestamp: 0, data: { event: 'running', graph_name: 'root' } },
 } as Event;
 
+describe('GET /threads 的釘選與封存集合（#633）', () => {
+  const row = { threadId: 'a', updatedAt: 1, running: false, blank: false };
+  const listWith = async (extra: Record<string, unknown>) => {
+    // GET 沒有 body，`stub` 的 JSON.parse 吃不下，直接給 fetch 替身。
+    const client = createWireClient({
+      baseUrl: 'http://agent.test/',
+      fetch: async () =>
+        Response.json({ type: 'success', result: { items: [row], unreadable: 0, ...extra } }),
+    });
+    const outcome = await client.listThreads();
+    if (outcome.kind !== 'ok') throw new Error('應該是 ok');
+    return outcome.result;
+  };
+
+  it('兩格都是字串陣列就原樣帶出來，順序不動', async () => {
+    const result = await listWith({ pinnedThreadIds: ['b', 'a'], archivedThreadIds: ['c'] });
+    expect(result.pinnedThreadIds).toEqual(['b', 'a']);
+    expect(result.archivedThreadIds).toEqual(['c']);
+  });
+
+  it('空陣列也帶：空集合不是缺席', async () => {
+    const result = await listWith({ pinnedThreadIds: [], archivedThreadIds: [] });
+    expect(result.pinnedThreadIds).toEqual([]);
+    expect(result.archivedThreadIds).toEqual([]);
+  });
+
+  it('沒送、或不是字串陣列的那一格就省略（不帶 key），另一格不受影響', async () => {
+    const absent = await listWith({});
+    expect(absent).not.toHaveProperty('pinnedThreadIds');
+    expect(absent).not.toHaveProperty('archivedThreadIds');
+    for (const bad of [null, 'a', 3, { 0: 'a' }, ['a', 1], [null]]) {
+      const result = await listWith({ pinnedThreadIds: bad, archivedThreadIds: ['c'] });
+      expect(result).not.toHaveProperty('pinnedThreadIds');
+      expect(result.archivedThreadIds).toEqual(['c']);
+    }
+  });
+});
+
 describe('瀏覽器端的 client', () => {
   it('上行走路徑指名的 method，而且封包裡也帶同一個', async () => {
     const { calls, client } = stub(() => Response.json(successResponse(1, { run_id: 'r1' })));
