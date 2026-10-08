@@ -49,6 +49,7 @@ import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/lib/steer-view';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
 import { fakeDownlink } from '@/test/downlink';
+import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
 
 /**
  * 一份活在記憶體裡的 `Storage`。
@@ -217,6 +218,7 @@ function fakeClient(
   const cancels: string[] = [];
   const downlink = fakeDownlink();
   const client: WireClient = {
+    ...UNWIRED_WIRE_CONTRACT,
     ...UNWIRED_FILE_REFERENCES,
     ...SILENT_THREAD_FEED,
     ...UNWIRED_THREAD_SEARCH,
@@ -637,6 +639,7 @@ describe('對話介面', () => {
 
   it('連不上就說連不上，不是一片空白', async () => {
     const client: WireClient = {
+      ...UNWIRED_WIRE_CONTRACT,
       ...UNWIRED_FILE_REFERENCES,
       ...SILENT_THREAD_FEED,
       ...UNWIRED_THREAD_SEARCH,
