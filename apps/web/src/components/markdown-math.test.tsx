@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
 import { cleanup, render } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -227,5 +230,29 @@ describe('串流中不畫 TeX', () => {
     const settled = render(<MarkdownText text={doc} />);
     expect(live.container.innerHTML).toBe(settled.container.innerHTML);
     expect(live.container.querySelector('.katex')).not.toBeNull();
+  });
+});
+
+/**
+ * 帶 `\tag` 的區塊公式的版面規則（`styles/markdown.css`）。KaTeX 0.18 把內部的 `.tag`／`.base` 改名成
+ * `.katex-tag`／`.katex-base`；規則的選擇器對不到元素時畫面不報錯，只是編號疊回公式上、不能橫向捲動。
+ * 所以這裡用真的渲染結果檢查：**每一條規則至少對得到輸出裡的一個元素**，換 KaTeX 版本時改名改漏會在這裡紅。
+ */
+describe('帶 \\tag 的區塊公式樣式對得到 KaTeX 的輸出', () => {
+  const css = readFileSync(join(import.meta.dirname, '../styles/markdown.css'), 'utf8');
+  // 只取 `.katex-html` 上與編號有關的規則（選擇器含 `tag`）；註解拿掉，註解裡講到類別名不算。
+  const rules = [...css.replace(/\/\*[\s\S]*?\*\//g, '').matchAll(/([^{}]+)\{[^{}]*\}/g)]
+    .map((match) => match[1]!.replace(/\s+/g, ' ').trim())
+    .filter((selector) => selector.includes('katex-html') && /tag/.test(selector));
+
+  it('量具有抓到那三條規則（不是空過）', () => {
+    expect(rules).toHaveLength(3);
+  });
+
+  it.each([0, 1, 2])('第 %i 條規則的選擇器對得到元素', (index) => {
+    const { container } = render(<MarkdownText text={'$$\nx = y + z \\tag{1}\n$$'} />);
+    // 先確認渲染出來真的有編號：沒有的話下面對不到是公式沒帶 \tag，不是選擇器壞了。
+    expect(container.querySelector('.katex-html')?.textContent).toContain('(1)');
+    expect(container.querySelector(rules[index]!)).not.toBeNull();
   });
 });
