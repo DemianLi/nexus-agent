@@ -235,7 +235,7 @@ describe('串流中不畫 TeX', () => {
 
 /**
  * 帶 `\tag` 的區塊公式的版面規則（`styles/markdown.css`）。KaTeX 0.18 把內部的 `.tag`／`.base` 改名成
- * `.katex-tag`／`.katex-base`；規則的選擇器對不到元素時畫面不報錯，只是編號疊回公式上、不能橫向捲動。
+ * `.katex-tag`／`.katex-base`（我們已升到 0.18，舊名不再寫）；規則的選擇器對不到元素時畫面不報錯，只是編號疊回公式上、不能橫向捲動。
  * 所以這裡用真的渲染結果檢查：**每一條規則至少對得到輸出裡的一個元素**，換 KaTeX 版本時改名改漏會在這裡紅。
  */
 describe('帶 \\tag 的區塊公式樣式對得到 KaTeX 的輸出', () => {
@@ -247,6 +247,12 @@ describe('帶 \\tag 的區塊公式樣式對得到 KaTeX 的輸出', () => {
 
   it('量具有抓到那三條規則（不是空過）', () => {
     expect(rules).toHaveLength(3);
+  });
+
+  it('只寫新名：沒有沒帶 katex- 前綴的 .tag／.base（0.16 的舊名）', () => {
+    expect(rules.filter((selector) => /(?<![-\w])\.(tag|base)(?![-\w])/.test(selector))).toEqual(
+      [],
+    );
   });
 
   it.each([0, 1, 2])('第 %i 條規則的選擇器對得到元素', (index) => {
