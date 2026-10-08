@@ -69,10 +69,24 @@ const NUMBERS = [
   'cacheWriteReports',
   'failedInputTokens',
   'failedOutputTokens',
+  // 失敗那份的快取兩桶（#724）：`failedUsages` 是失敗的呼叫裡報了用量的次數，兩格 `Reports` 數有幾次報了快取讀／寫——
+  // 跟 `usages` 同規則：全報才放進 view，缺席＝沒記。
+  'failedUsages',
+  'failedCacheReadTokens',
+  'failedCacheWriteTokens',
+  'failedCacheReadReports',
+  'failedCacheWriteReports',
   'summaries',
   'summariesUnknown',
   'summaryInputTokens',
   'summaryOutputTokens',
+  // 生摘要那份的快取兩桶：`summaryUsages` 是有報用量的摘要次數（不是 `summaries`，那一格含沒報的）。摘要會重播整段前綴，
+  // 大半走快取，所以這兩格才是它的主體。
+  'summaryUsages',
+  'summaryCacheReadTokens',
+  'summaryCacheWriteTokens',
+  'summaryCacheReadReports',
+  'summaryCacheWriteReports',
   'retries',
   'retryWaitMs',
   'modelMs',
@@ -223,6 +237,16 @@ function merge(a: Sp, b: Sp): Sp {
   return out;
 }
 
+/** 一格快取桶：有用量、而且每一次用量都報了才放進 view，否則整格缺席（沒記，不是 0）。 */
+function allReported<K extends NumberKey>(
+  usages: number,
+  reports: number,
+  key: K,
+  n: Readonly<Record<NumberKey, number>>,
+): Partial<Record<K, number>> {
+  return usages > 0 && reports === usages ? ({ [key]: n[key] } as Record<K, number>) : {};
+}
+
 /** 內部數字 → view 的一段。 */
 function toSpan(sp: Sp): TokenMeterSpan {
   const { n } = sp;
@@ -241,10 +265,14 @@ function toSpan(sp: Sp): TokenMeterSpan {
       : {}),
     failedInputTokens: n.failedInputTokens,
     failedOutputTokens: n.failedOutputTokens,
+    ...allReported(n.failedUsages, n.failedCacheReadReports, 'failedCacheReadTokens', n),
+    ...allReported(n.failedUsages, n.failedCacheWriteReports, 'failedCacheWriteTokens', n),
     summaries: n.summaries,
     summariesUnknown: n.summariesUnknown,
     summaryInputTokens: n.summaryInputTokens,
     summaryOutputTokens: n.summaryOutputTokens,
+    ...allReported(n.summaryUsages, n.summaryCacheReadReports, 'summaryCacheReadTokens', n),
+    ...allReported(n.summaryUsages, n.summaryCacheWriteReports, 'summaryCacheWriteTokens', n),
     retries: n.retries,
     retryWaitMs: n.retryWaitMs,
     modelMs: n.modelMs,
@@ -510,6 +538,11 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
             cacheWriteReports: typeof cacheWrite === 'number' ? 1 : 0,
             failedInputTokens: failed ? input : 0,
             failedOutputTokens: failed ? output : 0,
+            failedUsages: failed ? 1 : 0,
+            failedCacheReadTokens: failed && typeof cacheRead === 'number' ? cacheRead : 0,
+            failedCacheWriteTokens: failed && typeof cacheWrite === 'number' ? cacheWrite : 0,
+            failedCacheReadReports: failed && typeof cacheRead === 'number' ? 1 : 0,
+            failedCacheWriteReports: failed && typeof cacheWrite === 'number' ? 1 : 0,
           }),
           {
             model: state.model,
@@ -548,12 +581,19 @@ export function applyTokenMeter(state: TokenMeterState, event: SessionEvent): To
         usage !== undefined && typeof usage['outputTokens'] === 'number'
           ? usage['outputTokens']
           : 0;
+      const cacheRead = usage?.['cacheReadTokens'];
+      const cacheWrite = usage?.['cacheWriteTokens'];
       return update(state, (sp) =>
         bump(sp, {
           summaries: 1,
           summariesUnknown: usage === undefined ? 1 : 0,
           summaryInputTokens: input,
           summaryOutputTokens: output,
+          summaryUsages: usage === undefined ? 0 : 1,
+          summaryCacheReadTokens: typeof cacheRead === 'number' ? cacheRead : 0,
+          summaryCacheWriteTokens: typeof cacheWrite === 'number' ? cacheWrite : 0,
+          summaryCacheReadReports: typeof cacheRead === 'number' ? 1 : 0,
+          summaryCacheWriteReports: typeof cacheWrite === 'number' ? 1 : 0,
         }),
       );
     }

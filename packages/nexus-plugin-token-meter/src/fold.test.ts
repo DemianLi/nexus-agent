@@ -620,6 +620,137 @@ describe('快取分桶：依模型的列、失敗、生摘要（#724）', () => 
       cacheReadTokens: 90,
     });
   });
+
+  describe('失敗那份與生摘要那份各自帶快取兩桶（缺席＝沒記，不是 0）', () => {
+    const failed = { outcome: 'error' } as const;
+
+    it('失敗的呼叫全都報了：失敗那份帶讀寫，且已含在總快取桶裡；成功的呼叫不進失敗桶', () => {
+      const view = fold(
+        log(
+          [0, 'turn/start', { kind: 'message' }],
+          ...oneCall(1, { ...withCache(10, 90), cacheWriteTokens: 4 }), // 成功
+          ...oneCall(10, { ...withCache(5, 20, failed), cacheWriteTokens: 1 }, failed),
+          ...oneCall(20, { ...withCache(6, 30, failed), cacheWriteTokens: 2 }, failed),
+          [30, 'turn/end', {}],
+        ),
+      );
+      expect(view.turns[0]).toMatchObject({
+        cacheReadTokens: 140, // 90+20+30
+        cacheWriteTokens: 7, // 4+1+2
+        failedInputTokens: 11,
+        failedCacheReadTokens: 50, // 20+30
+        failedCacheWriteTokens: 3, // 1+2
+      });
+    });
+
+    it('失敗的呼叫有一次沒報某一格：那一格整格缺席，另一格不受影響；沒有失敗的呼叫兩格都缺席', () => {
+      const mixed = fold(
+        log(
+          [0, 'turn/start', { kind: 'message' }],
+          ...oneCall(1, { ...withCache(5, 20, failed), cacheWriteTokens: 1 }, failed),
+          ...oneCall(10, withCache(6, 30, failed), failed), // 讀有報、寫沒報
+          [20, 'turn/end', {}],
+        ),
+      );
+      expect(mixed.turns[0]).toMatchObject({ failedCacheReadTokens: 50 });
+      expect(mixed.turns[0]).not.toHaveProperty('failedCacheWriteTokens');
+      const none = fold(
+        log(
+          [0, 'turn/start', { kind: 'message' }],
+          ...oneCall(1, { ...withCache(5, 20), cacheWriteTokens: 1 }),
+          [20, 'turn/end', {}],
+        ),
+      );
+      expect(none.turns[0]).not.toHaveProperty('failedCacheReadTokens');
+      expect(none.turns[0]).not.toHaveProperty('failedCacheWriteTokens');
+    });
+
+    it('生摘要：報了用量的帶讀寫、另列不進總快取桶；有一次沒報某格就缺席；沒報用量的摘要不拖累別次', () => {
+      const summary = (u?: object) =>
+        [10, 'compaction/summary', u === undefined ? {} : { usage: u }] as const;
+      const all = fold(
+        log(
+          [0, 'turn/start', { kind: 'message' }],
+          [
+            5,
+            'compaction/summary',
+            {
+              usage: {
+                inputTokens: 300,
+                outputTokens: 40,
+                cacheReadTokens: 700,
+                cacheWriteTokens: 9,
+              },
+            },
+          ],
+          summary(), // 沒報用量
+          [20, 'turn/end', {}],
+        ),
+      );
+      expect(all.turns[0]).toMatchObject({
+        summaries: 2,
+        summariesUnknown: 1,
+        summaryInputTokens: 300,
+        summaryCacheReadTokens: 700,
+        summaryCacheWriteTokens: 9,
+      });
+      expect(all.turns[0]).not.toHaveProperty('cacheReadTokens');
+      const partial = fold(
+        log(
+          [0, 'turn/start', { kind: 'message' }],
+          [
+            5,
+            'compaction/summary',
+            {
+              usage: {
+                inputTokens: 300,
+                outputTokens: 40,
+                cacheReadTokens: 700,
+                cacheWriteTokens: 9,
+              },
+            },
+          ],
+          summary({ inputTokens: 10, outputTokens: 1, cacheReadTokens: 5 }), // 寫沒報
+          [20, 'turn/end', {}],
+        ),
+      );
+      expect(partial.turns[0]).toMatchObject({ summaryCacheReadTokens: 705 });
+      expect(partial.turns[0]).not.toHaveProperty('summaryCacheWriteTokens');
+      const unknownOnly = fold(
+        log([0, 'turn/start', { kind: 'message' }], summary(), [20, 'turn/end', {}]),
+      );
+      expect(unknownOnly.turns[0]).not.toHaveProperty('summaryCacheReadTokens');
+    });
+
+    it('跨輪、跨窗口合併：總計與較早的一格也遵守同一個規則', () => {
+      const view = fold(
+        log(
+          [0, 'turn/start', { kind: 'message' }],
+          ...oneCall(1, { ...withCache(5, 20, failed), cacheWriteTokens: 1 }, failed),
+          [
+            5,
+            'compaction/summary',
+            { usage: { inputTokens: 3, outputTokens: 1, cacheReadTokens: 7, cacheWriteTokens: 2 } },
+          ],
+          [20, 'turn/end', {}],
+          [30, 'turn/start', { kind: 'message' }],
+          ...oneCall(31, { ...withCache(6, 30, failed), cacheWriteTokens: 2 }, failed),
+          [
+            35,
+            'compaction/summary',
+            { usage: { inputTokens: 4, outputTokens: 1, cacheReadTokens: 8, cacheWriteTokens: 3 } },
+          ],
+          [50, 'turn/end', {}],
+        ),
+      );
+      expect(view.session).toMatchObject({
+        failedCacheReadTokens: 50,
+        failedCacheWriteTokens: 3,
+        summaryCacheReadTokens: 15,
+        summaryCacheWriteTokens: 5,
+      });
+    });
+  });
 });
 
 describe('投影通道', () => {
