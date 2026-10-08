@@ -154,6 +154,7 @@ export type {
   CommandRegistrationPoint,
   SessionRegistrationPoint,
   ProjectionRegistrationPoint,
+  EventRegistrationPoint,
   SessionLookup,
   SpawnLink,
   Disposer,
@@ -162,6 +163,16 @@ export type {
   ScopeKey,
 } from './registry.js';
 export { createRegistry } from './registry.js';
+export type {
+  DispatchMode,
+  EventDispatcher,
+  EventListenerInfo,
+  EventName,
+  EventOptions,
+  EventSubscriber,
+  Events,
+} from './events.js';
+export { EventBus, isBailed } from './events.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
 export type { FsService, FsServiceOptions } from './fs-service.js';

@@ -189,3 +189,13 @@ nexus 今天是 LangGraph 狀態加另一份會話日誌，`PrunedMemorySaver`�
    - 空的助手訊息推導時丟掉（dsh 也這樣）。
    - `reply-missing`（#1190）與前景子日誌輸入（#1207）已修，不在這份前置裡。
    - 這一項不排期，跟 S2 一起排。
+
+### S0 落地記錄（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)）
+
+- 匯流排本體在 `packages/nexus-core/src/events.ts`：`emit`／`serial`／`waterfall`，語意逐條照 dsh 的 `events.ts`（派發當下取快照、waterfall 最後一個參數是最內層 `next`、不呼叫 `next()` 即否決、`prepend`、`once`）。一處偏離：撤銷只撤自己那一筆（dsh 是「第一個 callback 相同」的，會誤傷別的註冊者；我們的回滾約定不容許）。
+- 事件表是空的 `Events` interface；閘門（JSDoc、`@mode`、`@param`、waterfall 最後一個參數叫 `next`）在 `apps/harness/src/event-table-scan.ts` 與 `event-table.test.ts`，有合成原始碼的正向對照，因為真實的表今天是空的。
+- 草稿 §4-2「declaration merging 在 pnpm 隔離下可不可行沒驗過」：**實測可行**（2026-10-09），釘成 `events-augmentation.test.ts`。
+- `registry.events` 是第 19 條通道（只能 `on`／`once`／`listeners`）；派發面在 `InternalPluginRegistry.dispatch`，只有宿主拿得到。屬性不能叫 `dispatcher`：`no-bare-dispatcher.test.ts`（#746）擋這個識別字。
+- 收尾：載入器回滾（apply 掛完才拋錯）撤掉監聽者；成功載入的 handle 的 `dispose()` 在清理跑完後清空整張表。載入**失敗**路徑的 `disposeAll` 不清——那條路徑刻意「註冊內容留著、活資源不留」。
+- #190 翻面：`registry.ts` 與 `session-telemetry*.ts` 三處「我們沒有事件匯流排」註明前提已過期（偏離本身另議）；`interception-index.test.ts` 每列多 `eventOccupant`，S0 一律「（尚無）」，填別的名字必須真的宣告在事件表上。
+- `registry-channel-count.test.ts`：18→19，`cn()` 放寬到 29。`.docs/plugin-architecture-gap-survey.md` 與 `development-plan*.md` 的通道數散文本來就已落後（寫的是 17 與「九加八」），沒有在這張卡補。

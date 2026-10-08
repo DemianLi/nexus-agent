@@ -162,7 +162,7 @@ export class SessionTelemetryCoordinator {
     this.#deliver(record);
     this.#cursor = event.seq;
     // turn 的終結事件兼任 dsh 的 `session/flush`：語意一樣（turn 邊界），來源不同
-    // （日誌事件本身，因為我們沒有事件匯流排可以另發一條）。
+    // （日誌事件本身，因為當時我們沒有事件匯流排可以另發一條；#1217 之後匯流排在了，但事件表還是空的，這裡照舊）。
     //
     // **自己一格圍堵**：這一筆已經交出去、游標也推進了，flush 只是提示。跟捕獲共用同
     // 一格的話，一個會拋的 `flush()` 會讓 warn 說「捕獲步驟失敗」——而那筆其實成功了，

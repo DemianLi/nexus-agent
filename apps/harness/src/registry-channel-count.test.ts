@@ -74,7 +74,7 @@ const CHANNELS = {
   approvals: true,
   skills: true,
   memory: true,
-  // 七條不折進任何參數的正交通道。
+  // 十條不折進任何參數的正交通道（其中最後一條 `disabledEntries` 是唯讀視圖）。
   lifecycle: true,
   telemetry: true,
   invariants: true,
@@ -82,6 +82,8 @@ const CHANNELS = {
   sessions: true,
   // 插件宣告的會話投影（[#1026](https://github.com/DemianLi/nexus-agent/issues/1026)）：產物不進圖，pump 與歷史路由讀它。
   projections: true,
+  // 事件匯流排上掛監聽者的出口（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)）：派發面在 `InternalPluginRegistry.dispatch`，不在這份欄位集合裡。
+  events: true,
   services: true,
   // 外掛在 `apply` 裡交出警告的出口（[#751](https://github.com/DemianLi/nexus-agent/issues/751)）。
   logger: true,
@@ -94,7 +96,7 @@ const CHANNELS = {
 /** 折進 `createDeepAgent` 參數的那幾個。`registry.ts` 檔頭的「九個註冊點」。 */
 const FOLDED_CHANNELS = 9;
 /** 不折進任何參數的正交通道。`registry.ts` 檔頭的「外加八條」。 */
-const ORTHOGONAL_CHANNELS = 9;
+const ORTHOGONAL_CHANNELS = 10;
 /** 兩者相加，也就是 `PluginRegistry` 的欄位數。 */
 const TOTAL_CHANNELS = FOLDED_CHANNELS + ORTHOGONAL_CHANNELS;
 
@@ -103,12 +105,13 @@ const DIGITS = ['零', '一', '二', '三', '四', '五', '六', '七', '八', '
 /**
  * 把數字寫成散文裡的樣子。
  *
- * 只認得 0–19，因為通道數走不到那之外還不改這個檔案的話，這條絆索的前提早就變了。
+ * 只認得 0–29（#1217 讓通道數走到十九，差一的那一邊是二十，所以認得的範圍跟著放寬），因為通道數走不到那之外還不改這個檔案的話，這條絆索的前提早就變了。
  * **超出範圍拋，不回一個對不上的字串**——靜靜地讓每一條斷言都紅，會把人指向散文而不是這裡。
  */
 function cn(value: number): string {
   if (value < 10) return DIGITS[value]!;
   if (value < 20) return value === 10 ? '十' : `十${DIGITS[value - 10]!}`;
+  if (value < 30) return value === 20 ? '二十' : `二十${DIGITS[value - 20]!}`;
   throw new Error(
     `通道數 ${value} 超出 cn() 認得的範圍。補齊它，順便重讀一次這個檔案的檔頭：` +
       `散文那幾處的期望值是從這裡算出來的。`,
