@@ -30,6 +30,7 @@ import {
   TOKEN_USAGE,
 } from '@nexus/wire';
 import {
+  act,
   cleanup,
   configure,
   fireEvent,
@@ -4421,6 +4422,179 @@ describe('附件送出（#733、#732）', () => {
     await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
     await waitFor(() => expect(chips()).toHaveLength(1));
     expect(chips()[0]!.textContent).toContain('late.pdf');
+  });
+
+  describe('上傳進度與取消（#733）', () => {
+    type Progress = (progress: { loaded: number; total?: number }) => void;
+
+    /** 上傳會一直掛著、自己報進度，收到 abort 才結束的假 client；`finish` 讓目前掛著的那次成功。 */
+    function hanging() {
+      const base = withUploads();
+      const report: Progress[] = [];
+      const finishers: (() => void)[] = [];
+      let starts = 0;
+      const client: WireClient = {
+        ...base.client,
+        uploadFile: ((
+          threadId: string,
+          body: Blob | Uint8Array,
+          name?: string,
+          signal?: AbortSignal,
+          onProgress?: Progress,
+        ) => {
+          starts += 1;
+          if (onProgress !== undefined) report.push(onProgress);
+          return new Promise((resolve, reject) => {
+            signal?.addEventListener('abort', () =>
+              reject(new DOMException('aborted', 'AbortError')),
+            );
+            finishers.push(() => resolve(base.client.uploadFile(threadId, body, name, signal)));
+          });
+        }) as WireClient['uploadFile'],
+      };
+      return {
+        ...base,
+        client,
+        report: (progress: { loaded: number; total?: number }) =>
+          act(() => report.at(-1)?.(progress)),
+        finish: () => act(async () => finishers.at(-1)?.()),
+        starts: () => starts,
+      };
+    }
+
+    const bar = () => screen.getByRole('progressbar', { name: '上傳 b.pdf' });
+
+    it('上傳中卡片畫進度條，跟著進度回呼走；傳完後收下，卡片離開草稿', async () => {
+      const { client, runStart, report, finish } = hanging();
+      render(<App client={client} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      addFiles([pdf('b.pdf')]);
+      // 沒送出之前沒有進度條：附件還沒開始上傳。
+      expect(screen.queryByRole('progressbar')).toBeNull();
+      send('帶檔案');
+      await waitFor(() => expect(bar()).toBeTruthy());
+      expect(bar().hasAttribute('aria-valuenow')).toBe(false);
+
+      report({ loaded: 30, total: 100 });
+      expect(bar().getAttribute('aria-valuenow')).toBe('30');
+      report({ loaded: 80, total: 100 });
+      expect(bar().getAttribute('aria-valuenow')).toBe('80');
+      expect(screen.queryByRole('button', { name: '移除 b.pdf' })).toBeNull();
+
+      await finish();
+      await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+      await waitFor(() => expect(chips()).toHaveLength(0));
+      expect(screen.queryByRole('progressbar')).toBeNull();
+    });
+
+    it('取消：卡片回到未上傳，這一句不送，草稿與附件都在；不當成錯誤', async () => {
+      const { client, runStart } = hanging();
+      render(<App client={client} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      addFiles([pdf('b.pdf')]);
+      send('帶檔案');
+      fireEvent.click(await screen.findByRole('button', { name: '取消上傳 b.pdf' }));
+
+      await waitFor(() => expect(chips()[0]!.textContent).toContain('未上傳（已取消）'));
+      expect(screen.queryByRole('progressbar')).toBeNull();
+      // sonner 的 toast 是全域的、跨測試留著：斷言這一條才有的說明，不斷言共用的標題；
+      // 不是錯誤，看的是那一條 toast 自己的種類（`toast.error` 會帶 `data-type="error"`）。
+      const note = (await screen.findAllByText('附件還在，再按送出會重新上傳。'))[0]!;
+      expect(note.closest('[data-sonner-toast]')?.getAttribute('data-type')).not.toBe('error');
+      expect(runStart).not.toHaveBeenCalled();
+      await waitFor(() => expect(input().value).toBe('帶檔案'));
+      expect(chips()).toHaveLength(1);
+      expect(screen.getByRole('button', { name: '移除 b.pdf' })).toBeTruthy();
+    });
+
+    it('取消後重試：再按送出重新上傳，這一次傳完就送出；進度從頭算', async () => {
+      const { client, runStart, report, finish, starts } = hanging();
+      render(<App client={client} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      addFiles([pdf('b.pdf')]);
+      send('帶檔案');
+      report({ loaded: 90, total: 100 });
+      fireEvent.click(await screen.findByRole('button', { name: '取消上傳 b.pdf' }));
+      await waitFor(() => expect(chips()[0]!.textContent).toContain('未上傳（已取消）'));
+      await waitFor(() => expect(input().value).toBe('帶檔案'));
+
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(false),
+      );
+      fireEvent.click(screen.getByRole('button', { name: '送出' }));
+      await waitFor(() => expect(starts()).toBe(2));
+      await waitFor(() => expect(bar()).toBeTruthy());
+      expect(bar().hasAttribute('aria-valuenow')).toBe(false);
+      expect(chips()[0]!.textContent).not.toContain('未上傳');
+
+      await finish();
+      await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+      expect(runStart.mock.calls[0]![2]?.attachments).toEqual([
+        { type: 'file', receiptId: 'r-b.pdf' },
+      ]);
+      await waitFor(() => expect(chips()).toHaveLength(0));
+    });
+
+    it('取消是整句取消：同一句裡的另一個檔案也回到未上傳', async () => {
+      const { client, runStart } = hanging();
+      render(<App client={client} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      addFiles([pdf('b.pdf'), pdf('c.pdf')]);
+      send('兩個檔案');
+      await waitFor(() => expect(screen.getAllByRole('progressbar')).toHaveLength(2));
+      fireEvent.click(screen.getByRole('button', { name: '取消上傳 c.pdf' }));
+
+      await waitFor(() =>
+        expect(chips().map((chip) => chip.getAttribute('data-upload'))).toEqual(['idle', 'idle']),
+      );
+      expect(runStart).not.toHaveBeenCalled();
+    });
+
+    it('上傳失敗的卡寫「未上傳（上傳失敗）」；再送時又變回上傳中', async () => {
+      const { client, runStart } = withUploads();
+      let failing = true;
+      const flaky: WireClient = {
+        ...client,
+        uploadFile: async (threadId, body, name, signal) =>
+          failing
+            ? { kind: 'rejected', message: '磁碟滿了' }
+            : client.uploadFile(threadId, body, name, signal),
+      };
+      render(<App client={flaky} />);
+      await screen.findByPlaceholderText('說點什麼…');
+      addFiles([pdf('b.pdf')]);
+      send('帶檔案');
+      await waitFor(() => expect(chips()[0]!.textContent).toContain('未上傳（上傳失敗）'));
+      expect(chips()[0]!.getAttribute('data-state')).toBe('error');
+
+      failing = false;
+      await waitFor(() => expect(input().value).toBe('帶檔案'));
+      fireEvent.click(screen.getByRole('button', { name: '送出' }));
+      await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    });
+
+    it('上傳成功、伺服器沒收下這一句：卡片照常畫（不寫上傳失敗），附件還在', async () => {
+      const { client, runStart } = withUploads({
+        type: 'error',
+        id: 1,
+        error: 'invalid_argument',
+        message: '這句被拒了（伺服器的話）',
+      });
+      render(<App client={client} />);
+      await screen.findByPlaceholderText('說點什麼…');
+      addFiles([pdf('b.pdf')]);
+      send('帶檔案');
+      await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+      expect(await screen.findByText(/這句被拒了/u)).toBeTruthy();
+      expect(chips()).toHaveLength(1);
+      expect(chips()[0]!.getAttribute('data-upload')).toBe('none');
+      expect(chips()[0]!.textContent).toContain('PDF');
+      expect(screen.getByRole('button', { name: '移除 b.pdf' })).toBeTruthy();
+    });
   });
 
   it('斜線命令不帶附件，附件留在草稿裡', async () => {
