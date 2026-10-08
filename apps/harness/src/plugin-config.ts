@@ -48,10 +48,11 @@ import { lstatSync, readFileSync, realpathSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
-import { resolveEntriesPerEntry } from '@nexus/core';
+import { NEXUS_CORE_VERSION, resolveEntriesPerEntry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 
 import { resolveHarnessHome } from './harness-home.js';
+import { assertPluginCompatible, PluginCompatibilityError } from './plugin-compatibility.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -675,7 +676,16 @@ export function shippedConfigPath(): string {
  * @throws {PluginConfigError} 模組檔別人動得了、模組載不起來，或它匯出的東西不是一顆 plugin。
  */
 export async function resolveEntryModule(entry: ConfigEntry): Promise<PluginEntry> {
-  if (entry.name.startsWith('file:')) assertPrivateModule(entry);
+  if (entry.name.startsWith('file:')) {
+    assertPrivateModule(entry);
+    // **import 之前**判：不相容的模組主體一行都沒跑（#1137）。掉的只有這一列，訊息指名 `套件@版本`、範圍與執行中的版本。
+    try {
+      assertPluginCompatible(fileURLToPath(entry.name), NEXUS_CORE_VERSION);
+    } catch (error) {
+      if (!(error instanceof PluginCompatibilityError)) throw error;
+      throw new PluginConfigError(`條目 ${describeEntry(entry)} 不相容：${error.message}`);
+    }
+  }
   let module: Record<string, unknown>;
   try {
     module = (await import(entry.name)) as Record<string, unknown>;

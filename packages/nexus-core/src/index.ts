@@ -5,6 +5,8 @@
  * `apps/harness`，而且只有那一個地方。
  */
 
+export { NEXUS_CORE_VERSION } from './version.js';
+
 export type {
   EntryManifest,
   NexusPlugin,
