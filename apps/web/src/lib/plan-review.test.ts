@@ -2,7 +2,7 @@
 import { readFileSync } from 'node:fs';
 
 import type { QuestionItem, ToolEntry } from '@nexus/wire';
-import { UNFINISHED_TOOL_TEXT } from '@nexus/wire';
+import { UNFINISHED_TOOL_CODE, UNFINISHED_TOOL_TEXT } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -19,7 +19,7 @@ import {
   submittedPlanOf,
   wasAutoOpened,
 } from '@/lib/plan-review';
-import { WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
+import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
 import { memoryStorage } from '@/test/right-sidebar';
 
 /** 計劃審核（#654）的規則：認得審核、標題與摘要、從工具卡讀結果、自動打開過哪幾份。 */
@@ -134,9 +134,23 @@ describe('審核結果', () => {
     expect(planOutcomeOf(failed(LEGACY_PLAN_REJECTED_TEXT))).toBe('revise');
   });
 
-  it('這一輪被停掉：收回的那一句、折疊器補的那一句', () => {
-    expect(planOutcomeOf(failed(WITHDRAWN_TOOL_REASON))).toBe('stopped');
-    expect(planOutcomeOf(tool({ status: 'failed', error: UNFINISHED_TOOL_TEXT }))).toBe('stopped');
+  it('這一輪被停掉：收回的那個碼、折疊器補的那個碼（比碼不比字）', () => {
+    expect(
+      planOutcomeOf(
+        tool({
+          status: 'failed',
+          error: 'Error: tool call aborted before dispatch',
+          errorCode: ABORTED_BEFORE_DISPATCH_CODE,
+        }),
+      ),
+    ).toBe('stopped');
+    expect(
+      planOutcomeOf(
+        tool({ status: 'failed', error: UNFINISHED_TOOL_TEXT, errorCode: UNFINISHED_TOOL_CODE }),
+      ),
+    ).toBe('stopped');
+    // 同樣的字、沒有碼：不算停止。
+    expect(planOutcomeOf(failed('tool call aborted before dispatch'))).toBeUndefined();
   });
 
   it('還在等、問人之前就被擋掉的：沒有結果', () => {

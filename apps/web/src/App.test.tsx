@@ -43,7 +43,7 @@ import {
 } from '@/App';
 import { NO_DECISION_REASON } from '@/components/approval-card';
 import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/sidebar/thread-list';
-import { STOPPED_QUESTION_TEXT, WITHDRAWN_TOOL_REASON } from '@/lib/question-view';
+import { ABORTED_BEFORE_DISPATCH_CODE, STOPPED_QUESTION_TEXT } from '@/lib/question-view';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/lib/steer-view';
 import { axeViolations } from '@/test/axe';
@@ -1452,6 +1452,9 @@ describe('提問面板', () => {
   });
 });
 
+/** pump 收回時卡上的那一句（紅字是給模型看的英文）；碼才是 web 比的東西。 */
+const WITHDRAWN_TEXT = 'Error: tool call aborted before dispatch';
+
 /** 停在提問時按了停止：這一輪的 frame 照 pump 收回時發的順序（`ThreadPump.#withdraw`）。 */
 function stoppedQuestionFrames(): Event[] {
   const input = JSON.stringify({
@@ -1473,7 +1476,8 @@ function stoppedQuestionFrames(): Event[] {
       event: 'tool-finished',
       tool_call_id: 'ask-1',
       failed: true,
-      message: `Error: ${WITHDRAWN_TOOL_REASON}`,
+      message: WITHDRAWN_TEXT,
+      code: ABORTED_BEFORE_DISPATCH_CODE,
     }),
     frame('lifecycle', [], { event: 'completed', graph_name: 'root', aborted: true }),
   ];
@@ -1493,7 +1497,7 @@ describe('停在提問時停止之後', () => {
     expect(within(card).getByText('哪一天？')).toBeTruthy();
     expect(within(card).getByText('週一：早上')).toBeTruthy();
     // 那句紅字是給模型看的英文；停止不是失敗（#276）。
-    expect(within(card).queryByText(`Error: ${WITHDRAWN_TOOL_REASON}`)).toBeNull();
+    expect(within(card).queryByText(WITHDRAWN_TEXT)).toBeNull();
     expect(within(card).queryByText('失敗')).toBeNull();
   });
 
