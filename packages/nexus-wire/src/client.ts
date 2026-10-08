@@ -540,8 +540,22 @@ function readThreadList(result: unknown): ThreadListResult {
   if (!Array.isArray(items) || typeof unreadable !== 'number') {
     throw new Error('GET /threads 的結果裡沒有 items 陣列或 unreadable 數');
   }
+  // 釘選與封存兩個全域集合（#633）：各自選填、各自驗，是字串陣列才帶（整份，不逐筆挑）；不是就省略，
+  // 沒有實作的 server 不送，web 以「兩格都在」當支援的判準。
+  const { pinnedThreadIds, archivedThreadIds } = result as {
+    pinnedThreadIds?: unknown;
+    archivedThreadIds?: unknown;
+  };
+  const stringArray = (value: unknown): readonly string[] | undefined =>
+    Array.isArray(value) && value.every((id: unknown) => typeof id === 'string')
+      ? Object.freeze([...(value as string[])])
+      : undefined;
+  const pinned = stringArray(pinnedThreadIds);
+  const archived = stringArray(archivedThreadIds);
   return {
     unreadable,
+    ...(pinned === undefined ? {} : { pinnedThreadIds: pinned }),
+    ...(archived === undefined ? {} : { archivedThreadIds: archived }),
     items: items.map((entry: unknown): ThreadSummary => {
       const row = entry as Record<string, unknown> | null;
       if (
