@@ -15,21 +15,26 @@
 
 import type { FileReferenceListOutcome, SessionReferenceListOutcome } from '@nexus/wire';
 
+import type { AgentMentionRow } from '@/lib/agent-mention';
 import { mentionRows } from '@/lib/file-mention';
 import type { FileMentionRow } from '@/lib/file-mention';
 import { sessionRows } from '@/lib/session-mention';
 import type { SessionMentionRow } from '@/lib/session-mention';
 
 /** 選單上的一列。 */
-export type MentionRow = FileMentionRow | SessionMentionRow;
+export type MentionRow = AgentMentionRow | FileMentionRow | SessionMentionRow;
 
-export type MentionSource = 'file' | 'session';
+/**
+ * 問的來源。`agent`（#328 的「委派給」）是**同步**的：清單在輸入框手上、不問伺服器，所以一問就回，永遠可用。
+ */
+export type MentionSource = 'file' | 'session' | 'agent';
 
-/** 選單分三段的順序（Q4）。 */
-export const MENTION_SECTIONS = ['file', 'session', 'subagent'] as const;
+/** 選單分段的順序：委派給（#328，有開才有）、檔案、會話、子代理（#713 Q4）。 */
+export const MENTION_SECTIONS = ['agent', 'file', 'session', 'subagent'] as const;
 
 /** 一列的身分：cmdk 的 `value`、選中時跟著走都用它。三種來源不會撞（檔案路徑、會話 id 各有前綴）。 */
 export function mentionRowKey(row: MentionRow): string {
+  if (row.source === 'agent') return `agent:${row.agent.id}`;
   return row.source === 'file'
     ? `file:${row.candidate.path}`
     : `session:${row.candidate.sessionId}`;
@@ -71,6 +76,12 @@ export type MentionMenuEvent =
       readonly source: 'session';
       readonly outcome: SessionReferenceListOutcome;
     }
+  | {
+      readonly type: 'settled';
+      readonly generation: number;
+      readonly source: 'agent';
+      readonly rows: readonly AgentMentionRow[];
+    }
   | { readonly type: 'failed'; readonly generation: number; readonly source?: MentionSource }
   | { readonly type: 'close' }
   | { readonly type: 'move'; readonly dir: 1 | -1 }
@@ -81,7 +92,7 @@ export const MENTION_MENU_CLOSED: MentionMenuState = {
   status: 'closed',
   rows: [],
   highlight: null,
-  availability: { file: 'unknown', session: 'unknown' },
+  availability: { file: 'unknown', session: 'unknown', agent: 'unknown' },
   asked: [],
   arrived: {},
   fresh: false,
@@ -116,9 +127,9 @@ function sectionOf(row: MentionRow): number {
   return MENTION_SECTIONS.indexOf(row.source);
 }
 
-/** 目前回來的列併成一份：檔案、會話、子代理三段，段內照伺服器給的先後。 */
+/** 目前回來的列併成一份：委派給、檔案、會話、子代理四段，段內照伺服器給的先後。 */
 function merge(arrived: MentionMenuState['arrived']): readonly MentionRow[] {
-  const rows = [...(arrived.file ?? []), ...(arrived.session ?? [])];
+  const rows = [...(arrived.agent ?? []), ...(arrived.file ?? []), ...(arrived.session ?? [])];
   return rows
     .map((row, index) => ({ row, index }))
     .sort((left, right) => sectionOf(left.row) - sectionOf(right.row) || left.index - right.index)
@@ -183,6 +194,7 @@ export function reduceMentionMenu(
     }
     case 'settled': {
       if (state.status === 'closed' || event.generation !== state.generation) return state;
+      if (event.source === 'agent') return arrive(state, 'agent', event.rows, 'available');
       if (event.source === 'session') {
         if (event.outcome.kind === 'rejected')
           return arrive(state, 'session', [], state.availability.session);
@@ -224,7 +236,9 @@ export function reduceMentionMenu(
 /** 畫不畫得出來：至少有一個來源確定可用，而且在查（有沒有列都畫：沒有就畫骨架）或有列可選。 */
 export function mentionMenuOpen(state: MentionMenuState): boolean {
   const known =
-    state.availability.file === 'available' || state.availability.session === 'available';
+    state.availability.file === 'available' ||
+    state.availability.session === 'available' ||
+    state.availability.agent === 'available';
   return known && state.status !== 'closed';
 }
 

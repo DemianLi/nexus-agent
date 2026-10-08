@@ -62,6 +62,8 @@ import {
   STEER_QUEUE_PLACEHOLDER,
   STEER_UNAVAILABLE_TEXT,
 } from '@/lib/steer-queue';
+import { agentMentionEnabled, FAKE_AGENTS } from '@/lib/agent-mention';
+import type { MentionAgent } from '@/lib/agent-mention';
 import { serverSupportsAttachments } from '@/lib/attachments';
 import { MODEL_COMMAND, parseModelLine } from '@/lib/model-selection';
 import { permissionLocked } from '@/lib/permission-presets';
@@ -342,6 +344,9 @@ function ConversationView({
   const draftAttachments = useDraftAttachments((messages) => {
     toast.error('有附件沒加進來', { description: messages.join('\n') });
   });
+  // `@子代理` 提及（#328 第 2 項）：這一輪委派給誰，一句話最多一個。開關關著時永遠是 `undefined`、不傳給輸入框。
+  // 送出時怎麼帶上它等連線契約，現在只管畫面：送出就清掉，不轉成文字塞進 `input`。
+  const [mentionedAgent, setMentionedAgent] = useState<MentionAgent | undefined>(undefined);
   // 附件送出中（上傳、編碼、等伺服器收下）：這段時間不收第二次送出。
   const [sendingAttachments, setSendingAttachments] = useState(false);
   // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
@@ -701,6 +706,9 @@ function ConversationView({
                     return;
                   }
                   setDraft('');
+                  // `/` 開頭的是命令，不帶提及（留著，同附件）；否則這一句送出就用掉它。
+                  const mentioned = text.trim().startsWith('/') ? undefined : mentionedAgent;
+                  if (mentioned !== undefined) setMentionedAgent(undefined);
                   // 跑著時 Cmd/Ctrl+Enter 是插話（#710）：這一輪不停，那句下一步送進模型。
                   const mode = resolveSubmitMode(conversation.state.status, gesture);
                   // 只有功能開著才帶附件；`/` 開頭的是命令，不帶（附件留在草稿裡）。
@@ -727,6 +735,8 @@ function ConversationView({
                     if (rejected === undefined) return;
                     // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。
                     setDraft((current) => (current === '' ? text : current));
+                    if (mentioned !== undefined)
+                      setMentionedAgent((current) => current ?? mentioned);
                     toast.error('這一句沒送出去', { description: rejected.message });
                   });
                 }}
@@ -761,6 +771,15 @@ function ConversationView({
                         </>
                       ),
                     })}
+                {...(agentMentionEnabled()
+                  ? {
+                      agentMention: {
+                        agents: FAKE_AGENTS,
+                        selected: mentionedAgent,
+                        onSelect: setMentionedAgent,
+                      },
+                    }
+                  : {})}
                 {...(serverSupportsAttachments()
                   ? {
                       attachments: {

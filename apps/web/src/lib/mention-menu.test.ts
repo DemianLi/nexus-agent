@@ -155,7 +155,11 @@ describe('兩個來源', () => {
       settled(1, { kind: 'ok', result: { available: false } }),
       sessionSettled(1, sessionsOk(session('s1'))),
     );
-    expect(state.availability).toEqual({ file: 'unavailable', session: 'available' });
+    expect(state.availability).toEqual({
+      file: 'unavailable',
+      session: 'available',
+      agent: 'unknown',
+    });
     expect(mentionMenuOpen(state)).toBe(true);
     expect(keys(state)).toEqual(['session:s1']);
   });
@@ -235,5 +239,79 @@ describe('兩個來源', () => {
 
   it('只有檔案時 hit 不帶 sources 也照舊只問檔案', () => {
     expect(run(hit(1)).asked).toEqual(['file']);
+  });
+});
+
+describe('委派給（#328，同步來源）', () => {
+  const keys = (state: MentionMenuState) => state.rows.map((row) => mentionRowKey(row));
+  const sessionCandidate = (sessionId: string): SessionReferenceCandidate => ({
+    sessionId,
+    label: sessionId,
+    sameWorkspace: true,
+    createdAt: 1,
+    updatedAt: 2,
+    mention: `@[${sessionId}](nexus-session:x)`,
+  });
+  const agentRow = (id: string, name = id) => ({
+    source: 'agent' as const,
+    agent: { id, name, description: '' },
+    name,
+    hint: '',
+  });
+  const agentHit = (generation: number): MentionMenuEvent => ({
+    type: 'hit',
+    generation,
+    sources: ['agent'],
+  });
+  const agentSettled = (generation: number, ...ids: string[]): MentionMenuEvent => ({
+    type: 'settled',
+    generation,
+    source: 'agent',
+    rows: ids.map((id) => agentRow(id)),
+  });
+
+  it('只問委派給時，一回來選單就開（不需要檔案或會話確定可用）', () => {
+    const state = run(agentHit(1), agentSettled(1, 'a', 'b'));
+    expect(mentionMenuOpen(state)).toBe(true);
+    expect(state.availability).toEqual({ file: 'unknown', session: 'unknown', agent: 'available' });
+    expect(keys(state)).toEqual(['agent:a', 'agent:b']);
+  });
+
+  it('與檔案、會話一起問：委派給排最上面，段內照給的先後', () => {
+    const state = run(
+      { type: 'hit', generation: 1, sources: ['file', 'session', 'agent'] },
+      settled(1, ok(file('/a.ts'))),
+      {
+        type: 'settled',
+        generation: 1,
+        source: 'session',
+        outcome: { kind: 'ok', result: { available: true, candidates: [sessionCandidate('s1')] } },
+      },
+      agentSettled(1, 'x'),
+    );
+    expect(keys(state)).toEqual(['agent:x', 'file:/a.ts', 'session:s1']);
+  });
+
+  it('檔案還沒回來時委派給先畫；後到的檔案併進去，選中的那一列跟著自己走', () => {
+    let state = run(
+      { type: 'hit', generation: 1, sources: ['file', 'agent'] },
+      agentSettled(1, 'x', 'y'),
+      { type: 'move', dir: 1 },
+    );
+    expect(mentionPickable(state)?.name).toBe('y');
+    state = reduceMentionMenu(state, settled(1, ok(file('/a.ts'))));
+    expect(keys(state)).toEqual(['agent:x', 'agent:y', 'file:/a.ts']);
+    expect(mentionPickable(state)?.name).toBe('y');
+  });
+
+  it('過期的結果丟掉；回來是空的而且沒有別的來源在等，就收起來', () => {
+    expect(run(agentHit(1), agentHit(2), agentSettled(1, 'old')).rows).toHaveLength(0);
+    const empty = run(agentHit(1), agentSettled(1));
+    expect(empty.status).toBe('closed');
+    expect(mentionMenuOpen(empty)).toBe(false);
+  });
+
+  it('列的身分帶來源前綴，不會跟檔案或會話撞', () => {
+    expect(mentionRowKey(agentRow('same'))).toBe('agent:same');
   });
 });
