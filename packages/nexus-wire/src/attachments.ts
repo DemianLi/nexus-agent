@@ -1,8 +1,9 @@
 /**
  * 檔案上傳與送出時帶收據的形狀（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）。
  *
- * **這一份只是契約**：路徑、收據的型別、送訊息帶收據的欄位、client 方法。server 端還沒實作，上傳路徑回
- * `not_supported`，`run.start` 帶了 {@link PromptAttachment} 也回 `not_supported`；web 據這個碼把附件列藏起來。
+ * **契約**：路徑、收據的型別、送訊息帶收據的欄位、client 方法。**上傳路徑 server 端已實作**（`apps/harness` 的
+ * `attachment-store.ts` 與 `wire-handler.ts`）：沒有附件儲存的組裝仍回 `not_supported`，web 據這個碼把附件列藏起來。
+ * `run.start` 帶 {@link PromptAttachment} 的收下還沒做，那時一律回 `not_supported`。
  *
  * 照 dsh 的 `file-upload`（`packages/client/file-upload/src/{protocol,types,http-route}.ts`，`5badb150`）：
  *
@@ -19,9 +20,12 @@
  *   （{@link MODEL_DOES_NOT_SUPPORT_IMAGES}），什麼都沒宣告時照收（dsh `commands.ts:336-348`）。web 收到就顯示出來，輸入框的草稿與
  *   附件留著。**型錄不給 web 看「收不收圖」**，同 dsh 的 wire 型錄沒有這一格。
  *
- * ## 這一版沒有的
+ * ## 進度與取消
  *
- * - **沒有進度與串流上傳**：用 `fetch` 送一整個 `Blob`／`Uint8Array`。要上傳進度的呼叫端自己用 `uploadPath` 打 XHR。
+ * `WireClient.uploadFile(threadId, body, name?, signal?, onProgress?)`，簽名與 `onProgress({ loaded, total? })` 的形狀照 dsh 的
+ * `file-upload`（`client/contract.ts`）。瀏覽器的 `fetch` 量不到上傳進度，所以 `Blob` 在有 `XMLHttpRequest` 時走 XHR
+ * （`lengthComputable` 才帶 `total`），其餘（Node、測試）走 `fetch`、送完報一次。`signal` 中止就斷線，server 端把暫存檔收掉、
+ * 什麼都不留。dsh 另有「串流 body 轉給 Worker 增量送」的路，我們沒做：web 的附件都是使用者選的檔案（`Blob`）。
  *
  * ## 與 dsh 的偏離
  *

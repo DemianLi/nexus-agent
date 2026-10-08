@@ -5,6 +5,8 @@
 
 import { describe, expect, it } from 'vitest';
 
+import type { UploadProgress, UploadXhr } from './client.js';
+
 import { createWireClient } from './client.js';
 import { isRpcMethod, commandPath } from './protocol.js';
 import { uploadPath } from './attachments.js';
@@ -214,6 +216,190 @@ describe('uploadFile', () => {
       Response.json({ type: 'success', result: { receiptId: 1 } }),
     ).client;
     await expect(odd.uploadFile('t', new Uint8Array())).rejects.toThrow('不認得的收據');
+  });
+});
+
+/** 假的 XHR：記下呼叫，測試手動觸發進度、完成、失敗。 */
+class FakeXhr implements UploadXhr {
+  readonly upload: UploadXhr['upload'] = { onprogress: null };
+  status = 0;
+  responseText = '';
+  onload: UploadXhr['onload'] = null;
+  onerror: UploadXhr['onerror'] = null;
+  onabort: UploadXhr['onabort'] = null;
+  opened: [string, string] | undefined;
+  headers: Record<string, string> = {};
+  sent: Blob | undefined;
+  aborted = false;
+  open(method: string, url: string): void {
+    this.opened = [method, url];
+  }
+  setRequestHeader(name: string, value: string): void {
+    this.headers[name] = value;
+  }
+  send(body: Blob): void {
+    this.sent = body;
+  }
+  abort(): void {
+    this.aborted = true;
+    this.onabort?.({});
+  }
+  progress(loaded: number, total?: number): void {
+    this.upload.onprogress?.({
+      loaded,
+      total: total ?? 0,
+      lengthComputable: total !== undefined,
+    });
+  }
+  finish(status: number, body: string): void {
+    this.status = status;
+    this.responseText = body;
+    this.onload?.({});
+  }
+}
+
+const RECEIPT = JSON.stringify({
+  type: 'success',
+  result: { receiptId: 'r1', name: 'a.txt', bytes: 3 },
+});
+
+describe('uploadFile 的進度與取消（#732，簽名照 dsh file-upload）', () => {
+  it('沒有 XHR（注入了 fetch）：送完報一次，loaded === total', async () => {
+    const { client } = recording(() => Response.json(JSON.parse(RECEIPT) as object));
+    const seen: UploadProgress[] = [];
+    await client.uploadFile('t', new Uint8Array([1, 2, 3]), 'a.txt', undefined, (p) =>
+      seen.push(p),
+    );
+    expect(seen).toEqual([{ loaded: 3, total: 3 }]);
+  });
+
+  it('Blob＋XHR：走 XHR（不走 fetch），進度單調不減、total 只在知道長度時才有', async () => {
+    const xhr = new FakeXhr();
+    let fetched = 0;
+    const client = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async () => {
+        fetched += 1;
+        return new Response('不該被叫到', { status: 500 });
+      },
+      createXhr: () => xhr,
+    });
+    const seen: UploadProgress[] = [];
+    const pending = client.uploadFile(
+      't',
+      new Blob([new Uint8Array(10)]),
+      'a.txt',
+      undefined,
+      (p) => seen.push(p),
+    );
+    xhr.progress(4, 10);
+    xhr.progress(2, 10); // 瀏覽器偶爾回報比上一次小的值：不倒退
+    xhr.progress(7); // 不知道長度：沒有 total
+    xhr.finish(200, RECEIPT);
+    expect(await pending).toEqual({
+      kind: 'ok',
+      receipt: { receiptId: 'r1', name: 'a.txt', bytes: 3 },
+    });
+    expect(seen).toEqual([{ loaded: 4, total: 10 }, { loaded: 4, total: 10 }, { loaded: 7 }]);
+    expect(fetched).toBe(0);
+    expect(xhr.opened).toEqual(['POST', `http://agent.test${uploadPath('t')}?name=a.txt`]);
+    expect(xhr.headers['content-type']).toBe('application/octet-stream');
+  });
+
+  it('XHR 路上的失敗與非 2xx 跟 fetch 路同一種：載體層的錯拋、協定錯誤是 rejected', async () => {
+    const run = async (answer: (xhr: FakeXhr) => void) => {
+      const xhr = new FakeXhr();
+      const client = createWireClient({
+        baseUrl: 'http://agent.test',
+        createXhr: () => xhr,
+        fetch: globalThis.fetch,
+      });
+      const pending = client.uploadFile(
+        't',
+        new Blob([new Uint8Array(1)]),
+        undefined,
+        undefined,
+        () => {},
+      );
+      answer(xhr);
+      return pending;
+    };
+    await expect(run((xhr) => xhr.finish(401, 'unauthorized'))).rejects.toThrow(
+      '上傳被載體層擋下：401 unauthorized',
+    );
+    await expect(run((xhr) => xhr.onerror?.({}))).rejects.toThrow('上傳的連線失敗');
+    expect(
+      await run((xhr) =>
+        xhr.finish(
+          200,
+          JSON.stringify({ type: 'error', id: null, error: 'not_supported', message: '不收' }),
+        ),
+      ),
+    ).toEqual({ kind: 'rejected', code: 'not_supported', message: '不收' });
+  });
+
+  it('中止：XHR 路 abort() 並以 signal.reason 拒絕；已經中止的 signal 連 XHR 都不開', async () => {
+    const xhr = new FakeXhr();
+    const client = createWireClient({
+      baseUrl: 'http://agent.test',
+      createXhr: () => xhr,
+      fetch: globalThis.fetch,
+    });
+    const controller = new AbortController();
+    const pending = client.uploadFile(
+      't',
+      new Blob([new Uint8Array(1)]),
+      'a.txt',
+      controller.signal,
+      () => {},
+    );
+    const reason = new Error('使用者取消');
+    controller.abort(reason);
+    await expect(pending).rejects.toBe(reason);
+    expect(xhr.aborted).toBe(true);
+
+    const second = new FakeXhr();
+    const already = new AbortController();
+    already.abort(reason);
+    await expect(
+      createWireClient({
+        baseUrl: 'http://agent.test',
+        createXhr: () => second,
+        fetch: globalThis.fetch,
+      }).uploadFile('t', new Blob([]), undefined, already.signal, () => {}),
+    ).rejects.toBe(reason);
+    expect(second.opened).toBeUndefined();
+  });
+
+  it('中止：fetch 路把 signal 交給 fetch', async () => {
+    let received: AbortSignal | undefined;
+    const client = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async (_input, init) => {
+        received = init?.signal ?? undefined;
+        return Response.json(JSON.parse(RECEIPT) as object);
+      },
+    });
+    const controller = new AbortController();
+    await client.uploadFile('t', new Uint8Array(1), undefined, controller.signal);
+    expect(received).toBe(controller.signal);
+  });
+
+  it('沒要進度、或 body 不是 Blob：即使有 XHR 也走 fetch', async () => {
+    const xhr = new FakeXhr();
+    let fetched = 0;
+    const client = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async () => {
+        fetched += 1;
+        return Response.json(JSON.parse(RECEIPT) as object);
+      },
+      createXhr: () => xhr,
+    });
+    await client.uploadFile('t', new Blob([new Uint8Array(1)]), 'a.txt');
+    await client.uploadFile('t', new Uint8Array(1), 'a.txt', undefined, () => {});
+    expect(fetched).toBe(2);
+    expect(xhr.opened).toBeUndefined();
   });
 });
 

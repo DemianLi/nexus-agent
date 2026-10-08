@@ -151,6 +151,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **工具結果暫存回得來**：過大的工具結果原文存在主機的私有目錄（預設 `<harness home>/tool-results/`，目錄 0700、檔案 0600，按會話分目錄），續接時預覽指的路徑照樣讀得到。保留天數與位置在 `tool-result-stash` 那一列設定（`cleanupPeriodDays` 預設 30，`0` 表示不清）；根目錄寫不進去時退回記憶體暫存並講一聲。
 
+**上傳的檔案存在 harness home**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)，只有 `serve`）：`POST /threads/:id/uploads` 把檔案的原始位元組存到 `<harness home>/attachments/v1/`，內容定址、同樣的內容只存一份；目錄 0700、檔案唯讀（0400），檔名清成葉名。回一張收據，只在收下它的那條 thread 有效、行程重開就失效。模型用 `read_file` 讀 `/attachments/<雜湊前兩碼>/<雜湊>/<檔名>`（唯讀路由，不是主機路徑）。沒有保留期清理，也沒有單檔大小上限（照 dsh `file-upload`）：位元組串流進暫存檔不吃記憶體，吃的是磁碟；要清就自己刪 `attachments/` 底下沒有被會話引用的檔。
+
 **外溢門檻可調、可關**：一則工具結果超過 `spill-policy` 那一列的 `maxInlineTokens`（出貨 12500，估算 token）時，全文存進上面那個暫存目錄，模型只收到頭尾預覽和一句帶路徑的通知（`Full formatted result stored at: …`），要全文就用 `read_file` 照路徑讀；`read_file` 自己的結果不外溢。日誌記的是這份預覽，不是全文，所以全文只在暫存目錄的保留期內讀得回。把 `maxInlineTokens` 刪掉（或把那一列標成 `disabled: true`）就停用；停用之後超過 80,000 字元的結果仍由基座換成預覽，那一條關不掉。暫存目錄寫不進去、或沒有會話日誌時不外溢，原樣交給模型。
 
 **搜尋結果看筆數、不看字數**：`grep` 命中超過 `tool-fs-search` 那一列的 `grepMaxMatches`（出貨 250）、`glob` 或 `ls` 超過 `globMaxResults`（出貨 100）時，模型只收到前段，結尾一句帶路徑的定位（`Full grep result stored at: …`），完整結果存進上面那個暫存目錄，用 `read_file` 照路徑讀。`grep` 只管逐行命中（`content`）那種輸出，`count`／`files_with_matches` 照原樣。暫存目錄寫不進去、或沒有會話日誌時照樣只留前段，結尾改講沒存到，搜尋不算失敗。把那一列標成 `disabled: true` 就回到基座原樣：超過 80,000 字元由工具自己截掉，原文不留。
