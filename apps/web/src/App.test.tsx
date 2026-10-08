@@ -1460,6 +1460,94 @@ describe('提問面板', () => {
     expect(responded).toHaveLength(0);
   });
 
+  describe('MCP 反問（#1098）', () => {
+    function elicitationFrame(interruptId = 'q-mcp'): Event {
+      return frame('input.requested', ['tools:a'], {
+        interrupt_id: interruptId,
+        payload: {
+          kind: 'question',
+          questions: [
+            { id: 'ok', question: '確定刪除嗎？', options: [{ label: '是' }, { label: '否' }] },
+          ],
+          origin: {
+            kind: 'mcp-elicitation',
+            server: 'files',
+            tool: 'delete_dir',
+            arguments: { path: '/tmp/x' },
+          },
+        },
+      });
+    }
+    const elicitationPanel = () => screen.findByRole('region', { name: '有 1 個問題要你回答' });
+
+    it('面板說出是哪台 server、哪支工具、什麼參數；模型自己問的那種沒有這一塊', async () => {
+      seq = 0;
+      const { client } = fakeClient([elicitationFrame()]);
+      render(<App client={client} />);
+      const panel = await elicitationPanel();
+      expect(within(panel).getByTestId('question-origin').textContent).toContain(
+        'MCP 伺服器「files」的工具「delete_dir」在問你',
+      );
+      expect(within(panel).getByTestId('question-origin-arguments').textContent).toContain(
+        '/tmp/x',
+      );
+    });
+
+    it('拒絕送 {declined:true}、取消送 {cancelled:true}，面板收掉、這一輪不停（沒有 run.cancel）', async () => {
+      seq = 0;
+      const first = fakeClient([elicitationFrame('q-1')]);
+      const view = render(<App client={first.client} />);
+      let panel = await elicitationPanel();
+      fireEvent.click(within(panel).getByRole('button', { name: '拒絕' }));
+      await waitFor(() => expect(first.responded).toHaveLength(1));
+      expect(first.responded[0]).toEqual({
+        namespace: ['tools:a'],
+        interrupt_id: 'q-1',
+        response: { declined: true },
+      });
+      expect(first.cancels).toHaveLength(0);
+      await waitFor(() =>
+        expect(screen.queryByRole('region', { name: '有 1 個問題要你回答' })).toBeNull(),
+      );
+      view.unmount();
+      cleanup();
+
+      seq = 0;
+      const second = fakeClient([elicitationFrame('q-2')]);
+      render(<App client={second.client} />);
+      panel = await elicitationPanel();
+      fireEvent.click(within(panel).getByRole('button', { name: '取消' }));
+      await waitFor(() => expect(second.responded).toHaveLength(1));
+      expect(second.responded[0]).toEqual({
+        namespace: ['tools:a'],
+        interrupt_id: 'q-2',
+        response: { cancelled: true },
+      });
+      expect(second.cancels).toHaveLength(0);
+    });
+
+    it('作答照舊送 {answers}；模型自己問的面板沒有拒絕與取消', async () => {
+      seq = 0;
+      const { client, responded } = fakeClient([elicitationFrame('q-3')]);
+      render(<App client={client} />);
+      const panel = await elicitationPanel();
+      fireEvent.click(within(panel).getByRole('radio', { name: '是' }));
+      fireEvent.click(within(panel).getByRole('button', { name: '送出答案' }));
+      await waitFor(() => expect(responded).toHaveLength(1));
+      expect((responded[0] as { response: { answers: unknown[] } }).response.answers).toHaveLength(
+        1,
+      );
+      cleanup();
+
+      seq = 0;
+      const plain = fakeClient([questionFrame('q-4')]);
+      render(<App client={plain.client} />);
+      const plainPanel = await questionPanel();
+      expect(within(plainPanel).queryByRole('button', { name: '拒絕' })).toBeNull();
+      expect(within(plainPanel).queryByRole('button', { name: '取消' })).toBeNull();
+    });
+  });
+
   it('兩種中斷同時掛著時先來先處理，答掉核准那顆才輪到提問，各送各的形狀', async () => {
     seq = 0;
     const { client, responded } = fakeClient([

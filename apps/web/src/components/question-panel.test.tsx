@@ -318,3 +318,112 @@ describe('題目帶 detail（認不出來的計劃審核也走這裡，#652；�
     expect(await axeViolations(document.body)).toEqual([]);
   });
 });
+
+/** MCP server 反問（#1098）：來源、拒絕、取消。 */
+describe('MCP 反問（#1098）', () => {
+  const ORIGIN = {
+    kind: 'mcp-elicitation' as const,
+    server: 'files',
+    tool: 'delete_dir',
+    arguments: { path: '/tmp/x', recursive: true },
+  };
+  const asked = (): PendingQuestion => ({ ...question([DAY]), origin: ORIGIN });
+
+  function renderAsked(
+    props: {
+      onDecline?: () => void;
+      onDismiss?: () => void;
+      busy?: boolean;
+      pending?: PendingQuestion;
+    } = {},
+  ) {
+    // `main` 是地標：axe 的 region 規則要求內容在地標裡（真的畫面裡由換手層的 region 擔任）。
+    render(
+      <main>
+        <QuestionPanel
+          pending={props.pending ?? asked()}
+          busy={props.busy ?? false}
+          onAnswer={() => {}}
+          {...(props.onDecline === undefined ? {} : { onDecline: props.onDecline })}
+          {...(props.onDismiss === undefined ? {} : { onDismiss: props.onDismiss })}
+        />
+      </main>,
+    );
+  }
+
+  it('最上面講是哪台 server 的哪支工具在問，參數原文照畫（排版過的 JSON）', () => {
+    renderAsked();
+    const block = screen.getByTestId('question-origin');
+    expect(block.textContent).toContain('MCP 伺服器「files」的工具「delete_dir」在問你');
+    expect(screen.getByTestId('question-origin-arguments').textContent).toBe(
+      JSON.stringify(ORIGIN.arguments, null, 2),
+    );
+    // 在題目之前。
+    expect(
+      block.compareDocumentPosition(document.querySelector('fieldset')!) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it('拒絕與取消各叫各的，都不是作答；答案那條路照舊', () => {
+    const onDecline = vi.fn();
+    const onDismiss = vi.fn();
+    const answers: QuestionAnswer[][] = [];
+    render(
+      <QuestionPanel
+        pending={asked()}
+        busy={false}
+        onAnswer={(a) => answers.push(a)}
+        onDecline={onDecline}
+        onDismiss={onDismiss}
+      />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '拒絕' }));
+    expect(onDecline).toHaveBeenCalledTimes(1);
+    expect(onDismiss).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: '取消' }));
+    expect(onDismiss).toHaveBeenCalledTimes(1);
+    expect(answers).toEqual([]);
+    fireEvent.click(radio('週一'));
+    fireEvent.click(screen.getByRole('button', { name: '送出答案' }));
+    expect(answers).toEqual([[{ id: 'day', selected: ['週一'] }]]);
+  });
+
+  it('連線斷了（busy）：拒絕與取消都停用', () => {
+    renderAsked({ onDecline: () => {}, onDismiss: () => {}, busy: true });
+    expect(screen.getByRole('button', { name: '拒絕' }).hasAttribute('disabled')).toBe(true);
+    expect(screen.getByRole('button', { name: '取消' }).hasAttribute('disabled')).toBe(true);
+  });
+
+  it('模型自己問的（沒有 origin）：沒有來源區塊，就算給了處理函式也沒有拒絕與取消；操作列照舊釘在底部', () => {
+    renderAsked({ pending: question([DAY]), onDecline: () => {}, onDismiss: () => {} });
+    expect(screen.queryByTestId('question-origin')).toBeNull();
+    expect(screen.queryByRole('button', { name: '拒絕' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '取消' })).toBeNull();
+    expect(document.querySelector('[data-slot="questionnaire-actions"]')?.className).toContain(
+      'sticky',
+    );
+  });
+
+  it('有 origin 但沒給處理函式：只有來源區塊，沒有那兩顆（舊接法不會多出按不動的鈕）', () => {
+    renderAsked();
+    expect(screen.getByTestId('question-origin')).toBeTruthy();
+    expect(screen.queryByTestId('origin-actions')).toBeNull();
+  });
+
+  it('參數轉不成 JSON（循環）也不炸，退回字串', () => {
+    const loop: Record<string, unknown> = {};
+    loop.self = loop;
+    renderAsked({ pending: { ...asked(), origin: { ...ORIGIN, arguments: loop } } });
+    expect(screen.getByTestId('question-origin-arguments').textContent).toBe('[object Object]');
+  });
+
+  it('axe：有來源與拒絕、取消的面板（亮、暗）', async () => {
+    renderAsked({ onDecline: () => {}, onDismiss: () => {} });
+    expect(await axeViolations(document.body)).toEqual([]);
+    cleanup();
+    document.documentElement.classList.add('dark');
+    renderAsked({ onDecline: () => {}, onDismiss: () => {} });
+    expect(await axeViolations(document.body)).toEqual([]);
+  });
+});
