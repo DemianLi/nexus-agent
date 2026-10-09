@@ -16,7 +16,7 @@
  *
  * 選這個載體而不是 `additional_kwargs` 加組請求時的投影：附件的投影（`attachment-projection.ts`）只在真模型那一層，
  * 腳本模型與沒帶 `--live` 的組裝看不到；而點名要的只是一段固定的字，不需要讀儲存。代價是歷史、搜尋這些讀訊息文字的地方會讀到這一段，
- * 所以 {@link isMentionHintBlock} 讓歷史把它認出來、剝掉，並從它讀回點名（插話那條路沒有 `turn/start`，只有訊息）。
+ * 所以 {@link isMentionHintBlock} 讓歷史與 `thread.search` 把它認出來、剝掉，歷史並從它讀回點名（插話那條路沒有 `turn/start`，只有訊息）。
  *
  * @module
  */
