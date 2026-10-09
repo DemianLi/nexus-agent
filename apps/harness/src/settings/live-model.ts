@@ -59,7 +59,7 @@
  *   （`openai@7.5.0` 的 `client.js`，`fetchWithTimeout`）。計時器在 fetch 回來時清掉，而 #516 那層
  *   在 fetch 裡讀完第一則事件才回。這一段在重試射程內。
  * - **第一則事件之後，段與段之間**：`live-model.ts` 的 `withStreamIdleTimeout`，每一段重新計時，
- *   時間到不重試（已經送到畫面上的字作廢不了）。
+ *   時間到整次重打（偏離五）。
  *
  * 非串流（CLI 的 `invoke`）那條，SDK 讀整份 body 時計時器還在，所以是整個請求的逾時。
  * 名字不照抄 `streamIdleTimeoutMs`，因為第一段語意仍不同：它從請求開始算到第一則事件，中間收到
@@ -113,6 +113,15 @@
  * `chat_template_kwargs`（今天的送法）。沒有量過兩者等價——這台機器沒有 key，量不了——所以保留今天的送法，見
  * `model-catalog.ts` 檔頭。量測與寫法在 `live-model.ts` 的 `DEFAULT_LIVE_MODEL_ENTRY`。
  *
+ * ## 偏離五：串流中段的失敗整次重打，預算比 dsh 保守（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）
+ *
+ * dsh 的 `TIMEOUT`、`TRANSPORT`、`SERVER` 都在預設可重試碼裡（`packages/llm/llm/src/retry-policy.ts:18`），中段失敗照樣整次重打，
+ * 靠的是 `assistant/attempt` 這個載體宣告「那一次作廢」。我們同向：`@nexus/core` 的 `stream-retry.ts` 整次重打、日誌多一顆
+ * `assistant/attempt`、web 收到 `message-discard` 擦掉作廢的那一則。**預算不照抄**：dsh 預設 5 次、500 毫秒起、上限 10 秒；
+ * 這裡預設 2 次、1 秒起（1 秒、2 秒），因為每次重打都重付整個回覆的費用（輸入端有快取，輸出端沒有）。欄位有上限：次數
+ * {@link MAX_STREAM_RETRY_MAX}、起點 {@link MAX_STREAM_RETRY_BASE_MS} 毫秒；退避是純倍增、沒有 dsh 的 `maxDelayMs` 與抖動。
+ * 第一則事件**之前**的失敗不歸這一格管（SDK 層已經照 `maxRetries` 重試過，這裡再接就是乘法）。
+ *
  * ## 這一列關不掉
  *
  * `disabled: true` 在載入期當場拋，理由同起動期那幾列：`startupSetting` 把關掉的那一列當成
@@ -149,6 +158,15 @@ export const MAX_LIVE_TIMEOUT_MS = 2_147_483_647;
 /** 重試次數的上限，見檔頭「偏離二」。 */
 export const MAX_LIVE_RETRIES = 10;
 
+/** 出廠的串流中段重打次數，見檔頭「偏離五」。 */
+export const DEFAULT_STREAM_RETRY_MAX = 2;
+/** 出廠的串流中段重打退避起點（毫秒），之後每次加倍。 */
+export const DEFAULT_STREAM_RETRY_BASE_MS = 1_000;
+/** 串流中段重打次數的上限：每一次都重付整個回覆的費用，見檔頭「偏離五」。 */
+export const MAX_STREAM_RETRY_MAX = 5;
+/** 串流中段重打退避起點的上限（毫秒）。5 次 × 30 秒起點，累計等待最多 15.5 分鐘。 */
+export const MAX_STREAM_RETRY_BASE_MS = 30_000;
+
 /**
  * 是不是一個 HTTP(S) 的根：擋帳密、query、fragment。規則照 dsh，見檔頭「端點的規則照 dsh」。
  *
@@ -171,7 +189,7 @@ function isHttpRoot(value: string): boolean {
   );
 }
 
-/** 五格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
+/** 六格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
 export const liveModelConfigSchema = z
   .strictObject({
     /** OpenAI 相容端點的根。 */
@@ -187,6 +205,29 @@ export const liveModelConfigSchema = z
     timeoutMs: z.number().int().min(1).max(MAX_LIVE_TIMEOUT_MS).default(DEFAULT_LIVE_TIMEOUT_MS),
     /** 被限流時最多重試幾次。 */
     maxRetries: z.number().int().min(0).max(MAX_LIVE_RETRIES).default(DEFAULT_LIVE_MAX_RETRIES),
+    /**
+     * 串流**第一則事件之後**才出錯（中段錯誤、斷線、停住）的整次重打，見檔頭「偏離五」與 `@nexus/core` 的 `stream-retry.ts`。
+     * `maxRetries: 0` 就是不重打，回到只打一次。
+     */
+    streamRetry: z
+      .strictObject({
+        maxRetries: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_STREAM_RETRY_MAX)
+          .default(DEFAULT_STREAM_RETRY_MAX),
+        baseDelayMs: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_STREAM_RETRY_BASE_MS)
+          .default(DEFAULT_STREAM_RETRY_BASE_MS),
+      })
+      .default(() => ({
+        maxRetries: DEFAULT_STREAM_RETRY_MAX,
+        baseDelayMs: DEFAULT_STREAM_RETRY_BASE_MS,
+      })),
   })
   .superRefine((config, context) => {
     if (findModelEntry(config.models, config.modelId) !== undefined) return;

@@ -74,6 +74,7 @@ import {
   type SessionTelemetrySharingStatus,
   type RepeatReminderSettings,
   type SearchOverflowOptions,
+  type StreamRetryOptions,
   type SummarizationSettings,
   type TokenAnchorBook,
   type ToolResultPruneConfig,
@@ -222,6 +223,11 @@ export interface CreateNexusAgentOptions {
    * 形狀與理由見 `@nexus/core` 的 `model-usage.ts`。
    */
   readonly modelUsage?: boolean;
+  /**
+   * 串流第一則事件之後才出錯的整次重打預算（[#520](https://github.com/DemianLi/nexus-agent/issues/520)），原樣轉給
+   * `FoldOptions.streamRetry`。省略（或 `maxRetries` 為 0）就不重打。產品路徑由 `settings/live-model.ts` 的 `streamRetry` 給。
+   */
+  readonly streamRetry?: StreamRetryOptions;
   /**
    * 掛不掛插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)）。省略即不掛。**只有 serve 開**：
    * 插話由 web 的 pump 經 `configurable` 送進圖裡，CLI 一行一輪沒有插話。開了之後每一步多一個 super-step，
@@ -777,6 +783,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         observationPolicy: options.observationPolicy,
       }),
       ...(options.modelUsage !== undefined && { modelUsage: options.modelUsage }),
+      ...(options.streamRetry !== undefined && { streamRetry: options.streamRetry }),
       ...(options.stepInbox === true && { stepInbox: true }),
       ...(serialToolCallsFor(registry) && { serialToolCalls: true }),
       ...(options.modelSelection !== undefined && { modelSelection: options.modelSelection }),

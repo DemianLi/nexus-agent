@@ -119,6 +119,7 @@ import {
   channelOfMethod,
   DELEGATION_TOOL_NAMES,
   eventId,
+  MESSAGE_DISCARD,
   SessionReferenceError,
   SUBAGENT_STATUS,
 } from '@nexus/wire';
@@ -839,6 +840,11 @@ interface CurrentRun {
   reasoning: string;
   /** root 有一則回覆講到一半。 */
   replyOpen: boolean;
+  /**
+   * 講到一半那則回覆所屬的模型呼叫（它的 `model/start` 的 `seq`，#1021）。整次重打時下一次嘗試的 `message-start` 到來，
+   * 作廢的那則要記回這一次，見 {@link ThreadPump.#abandonSupersededReply}。
+   */
+  replyModelCall: number | undefined;
   /**
    * root 上最近一則**還沒落進日誌**的回覆，給新接上的下行補送（[#953](https://github.com/DemianLi/nexus-agent/issues/953)
    * 第二刀）。跟 {@link partial} 分開：它撐到 `assistant/message` 落盤才放掉，不是撐到 `message-finish`（量過，
@@ -2536,6 +2542,7 @@ export class ThreadPump {
       partial: '',
       reasoning: '',
       replyOpen: false,
+      replyModelCall: undefined,
       reply: undefined,
       stopped: false,
       maxTokens: false,
@@ -2587,6 +2594,7 @@ export class ThreadPump {
       // **在第一顆封包之前**：投影裡的 promise 一建立就可能被 reject，晚掛就漏（#346）。
       markProjectionsHandled(run);
       for await (const raw of run) {
+        this.#abandonSupersededReply(current, raw);
         trackRootReply(current, raw);
         trackUnsettledReply(current, raw);
         for (const event of this.#translate(raw)) {
@@ -2641,6 +2649,53 @@ export class ThreadPump {
       this.#earlyVerdicts.clear();
       this.#bodyStarted.clear();
     }
+  }
+
+  /**
+   * 串流中段出錯、整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)，`@nexus/core` 的 `stream-retry.ts`）時，
+   * 上一次嘗試吐了一半的 root 回覆作廢：新的一則 `message-start` 到來，而上一則還沒收尾（沒有 `message-finish`）。
+   *
+   * 做兩件事，**都在新那則的 frame 廣播之前**：①日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型，`ignorable`），
+   * ②送一顆 `message-discard` 讓畫面把上一則擦掉。判準是「另一則 root 的 `message-start` 來得比上一則的 `message-finish` 早」
+   * ——正常流程一則回覆一定先收尾才開下一則，所以不會誤判。
+   *
+   * **只管 root。** 子代理的回覆在更深的 namespace、各有各的 `message-start`；它們的重打（共用同一個 slot）不擦已經畫出去的字，
+   * 代價是畫面上多一則斷尾的子代理回覆，跟重打之前一樣。
+   *
+   * 順手記下這一則回覆屬於哪次呼叫（下一次作廢時要用）。
+   */
+  #abandonSupersededReply(current: CurrentRun, raw: RawProtocolEvent): void {
+    if (raw.method !== 'messages' || raw.params.namespace.length > 1) return;
+    const data = raw.params.data as { event?: string; role?: string } | null;
+    if (data?.event !== 'message-start' || data.role === 'human') return;
+    const previous = current.reply;
+    if (current.replyOpen && previous !== undefined && previous.finish === undefined) {
+      const reasoning = current.reasoning;
+      const text = current.partial;
+      const liveId = (previous.start as { id?: unknown }).id;
+      const abandoned = new AIMessage({
+        ...(typeof liveId === 'string' && liveId !== '' ? { id: liveId } : {}),
+        content:
+          reasoning.trim() === ''
+            ? text
+            : [
+                { type: 'reasoning', reasoning },
+                ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+              ],
+      });
+      try {
+        this.#sessions.root.append(
+          'assistant/attempt',
+          withModelCall({ message: toLoggedMessage(abandoned) }, current.replyModelCall),
+          { ignorable: true },
+        );
+      } catch {
+        // 紀錄是附帶的：寫不進去不能讓重打的那一輪跟著失敗，畫面照樣擦。
+      }
+      this.#presentCustom({ name: MESSAGE_DISCARD, payload: { messageId: previous.key } });
+      current.reply = undefined;
+    }
+    current.replyModelCall = lastModelCall(this.#sessions.root);
   }
 
   /**

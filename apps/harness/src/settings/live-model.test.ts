@@ -50,6 +50,8 @@ import {
   liveModelPlugin,
   MAX_LIVE_RETRIES,
   MAX_LIVE_TIMEOUT_MS,
+  MAX_STREAM_RETRY_BASE_MS,
+  MAX_STREAM_RETRY_MAX,
 } from './live-model.js';
 import type { LiveModelConfig } from './live-model.js';
 import { startupSetting } from './startup.js';
@@ -75,6 +77,7 @@ const OVERRIDE: Omit<LiveModelConfig, 'baseUrl'> = {
   models: [OVERRIDE_ENTRY],
   timeoutMs: 4321,
   maxRetries: 2,
+  streamRetry: { maxRetries: 4, baseDelayMs: 50 },
 };
 
 /** 覆寫那一筆在標題請求上關推理的 body。 */
@@ -99,7 +102,27 @@ describe('live-model 的 schema', () => {
       models: [DEFAULT_LIVE_MODEL_ENTRY],
       timeoutMs: DEFAULT_LIVE_TIMEOUT_MS,
       maxRetries: DEFAULT_LIVE_MAX_RETRIES,
+      streamRetry: { maxRetries: 2, baseDelayMs: 1_000 },
     });
+  });
+
+  /** #520：串流中段整次重打的預算。出廠值寫成字面值，上限是為了不讓一次呼叫安靜太久。 */
+  it('streamRetry：出廠 2 次、1 秒起；0 次合法（等於關掉）；超過上限、小數、未知欄位都拒', () => {
+    const parse = (streamRetry: unknown) => liveModelConfigSchema.parse({ streamRetry });
+    expect(parse({}).streamRetry).toEqual({ maxRetries: 2, baseDelayMs: 1_000 });
+    expect(parse({ maxRetries: 0 }).streamRetry).toEqual({ maxRetries: 0, baseDelayMs: 1_000 });
+    expect(parse({ maxRetries: MAX_STREAM_RETRY_MAX }).streamRetry.maxRetries).toBe(5);
+    expect(parse({ baseDelayMs: MAX_STREAM_RETRY_BASE_MS }).streamRetry.baseDelayMs).toBe(30_000);
+    for (const bad of [
+      { maxRetries: MAX_STREAM_RETRY_MAX + 1 },
+      { maxRetries: -1 },
+      { maxRetries: 1.5 },
+      { baseDelayMs: MAX_STREAM_RETRY_BASE_MS + 1 },
+      { baseDelayMs: -1 },
+      { jitter: 0.2 },
+    ]) {
+      expect(() => parse(bad), JSON.stringify(bad)).toThrow();
+    }
   });
 
   it('出廠那一筆是量過的字面值，關推理的寫法是 #650 量過的那一種', () => {
@@ -423,6 +446,7 @@ async function writeOverridePatch(baseUrl: string): Promise<string> {
       `    modelId: '${OVERRIDE.modelId}'`,
       `    timeoutMs: ${String(OVERRIDE.timeoutMs)}`,
       `    maxRetries: ${String(OVERRIDE.maxRetries)}`,
+      `    streamRetry: ${JSON.stringify(OVERRIDE.streamRetry)}`,
       // YAML 是 JSON 的超集，`models` 整份取代出廠那一筆。
       `    models: ${JSON.stringify(OVERRIDE.models)}`,
       '',

@@ -370,6 +370,13 @@ export type {
 export { createModelCallIndexer, indexModelCalls, toolCallIds } from './model-call-index.js';
 export type { ModelCallIndex, ModelCallIndexer, ModelCallRecord } from './model-call-index.js';
 export { noteFailedAttempt, noteRequestStart, runInRetryScope } from './llm-retry.js';
+export {
+  createStreamRetryMiddleware,
+  noteStreamFailure,
+  streamFailureReporter,
+  STREAM_RETRY_MIDDLEWARE_NAME,
+} from './stream-retry.js';
+export type { StreamFailure, StreamRetryOptions } from './stream-retry.js';
 export { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,

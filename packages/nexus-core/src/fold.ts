@@ -50,6 +50,8 @@ import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
 import type { MiddlewareRegistration, PluginRegistry, RootOnlyRefusal } from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
+import { createStreamRetryMiddleware } from './stream-retry.js';
+import type { StreamRetryOptions } from './stream-retry.js';
 import { createRequestSnapshotRecorder } from './request-snapshot.js';
 import { createModelUsageRecorder, MODEL_USAGE_PLUGIN_NAME } from './model-usage.js';
 import {
@@ -382,6 +384,12 @@ export interface FoldOptions {
   serialToolCalls?: boolean;
 
   /**
+   * 串流第一則事件之後才出錯的模型呼叫，整次重打的預算（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）。省略或 `maxRetries`
+   * 為 0 就不掛這一顆。由組裝點按 `live-model` 的設定給；root 與每個子代理的模型呼叫都吃它。見 {@link ./stream-retry.ts}。
+   */
+  streamRetry?: StreamRetryOptions;
+
+  /**
    * 每會話模型選擇的控制器（[#723](https://github.com/DemianLi/nexus-agent/issues/723)）。省略即不掛，請求逐欄與沒有這一格時一樣。
    *
    * 給了會多三件事：root 的 middleware 疊最外面多一顆換模型的（{@link ./model-selection.ts | createModelSwapMiddleware}）；
@@ -506,6 +514,11 @@ export function foldRegistry(
   const modelUsage = foldModelUsage(registry, options);
   // 同上，無狀態、一份走遍。位置緊貼用量記錄器，理由見 {@link ./model-calls.ts}。
   const modelCalls = createModelCallRecorder(registry.sessions);
+  // 串流中段出錯的整次重打（#520）：排在起訖與用量記錄器外面，每一次嘗試各是一對起訖。無狀態、一份走遍。
+  const streamRetry =
+    options.streamRetry === undefined || options.streamRetry.maxRetries <= 0
+      ? undefined
+      : createStreamRetryMiddleware(options.streamRetry);
   // 請求快照（#1020）：同上，無狀態、一份走遍；基準住在日誌上。排在最內層，見 {@link ./request-snapshot.ts}。
   const requestSnapshot = createRequestSnapshotRecorder(registry.sessions);
   // 耐久檢查點（#599）：同上，無狀態、一份走遍 root 與每個子代理。位置緊貼用量記錄器內側，
@@ -621,6 +634,9 @@ export function foldRegistry(
     subagentOnly('delegation', same(subagentDelegation)),
     // 起訖排在用量外層、plugin middleware 外層：一個自己重試模型的 plugin，重試幾次都只算一步——同 dsh 的
     // `llm/retry` 在一步之內。摘要器不管排哪都在它外面，見 `model-calls.ts`。
+    // 串流中段出錯的整次重打（#520）在起訖與用量外面：每次嘗試各有自己的 `model/start`／`model/end` 與用量，失敗那次帶
+    // `outcome: 'error'`。見 {@link ./stream-retry.ts}。
+    shared('streamRetry', streamRetry),
     shared('modelCalls', modelCalls),
     shared('modelUsage', modelUsage),
     // 耐久檢查點排在起訖紀錄器內側：排空時 `model/start` 已經記下，同 dsh「記好的請求前綴」；在其餘 plugin

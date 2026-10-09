@@ -535,6 +535,11 @@
     modelId: 'nvidia/nemotron-3-super-120b-a12b'
     timeoutMs: 90000
     maxRetries: 6
+    # 串流吐了內容之後才出錯（中段錯誤、斷線、停住）的整次重打（#520）：2 次、1 秒起（1 秒、2 秒），`maxRetries: 0` 關掉。
+    # 預算比 dsh 保守，因為每次重打都重付整個回覆的費用。登記在 `src/settings/live-model.ts` 的檔頭「偏離五」。
+    streamRetry:
+      maxRetries: 2
+      baseDelayMs: 1000
     models:
       - id: 'nvidia/nemotron-3-super-120b-a12b'
         contextWindow: 700045

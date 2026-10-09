@@ -6,6 +6,7 @@ import {
   beginAttemptReport,
   noteFailedAttempt,
   noteRequestStart,
+  streamFailureReporter,
   tagModelRoute,
 } from '@nexus/core';
 import type { AttemptUsage, LlmFailure } from '@nexus/core';
@@ -112,8 +113,9 @@ export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
  * （`meta/muse-glimmer-30b`），掛住的那兩個在 90 秒仍是零位元組。
  *
  * **在串流上它管兩段**（[#521](https://github.com/DemianLi/nexus-agent/issues/521)）：連線到第一則事件
- * 由 SDK 的計時器管、在重試射程內；第一則事件之後每一段的閒置由 {@link withStreamIdleTimeout} 管、
- * 不重試。同 dsh 只有一個 `streamIdleTimeoutMs`（預設 300 秒）。
+ * 由 SDK 的計時器管、在 SDK 重試射程內；第一則事件之後每一段的閒置由 {@link withStreamIdleTimeout} 管、
+ * 逾時整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)，`@nexus/core` 的 `stream-retry.ts`，預算在
+ * `settings/live-model.ts` 的 `streamRetry`）。同 dsh 只有一個 `streamIdleTimeoutMs`（預設 300 秒）。
  *
  * **最壞情況是它乘上重試次數**：開了線卻不吐位元組，每一次都等滿，90 秒 × (6 + 1) = 630 秒，再加上
  * 退避的 63–126 秒（`settings/live-model.ts` 的偏離二）。**這是 dsh 的形狀，不是缺陷**：dsh 的
@@ -404,6 +406,9 @@ function* causeLinks(error: unknown): Generator<object> {
  */
 export const INBAND_PEEK_MAX_CHARS = 65_536;
 
+/** 第一則事件之後監看串流內錯誤時，單一事件最多緩衝幾個字元；超過就放棄監看（見 {@link createInbandWatcher}）。 */
+export const INBAND_WATCH_MAX_CHARS = 1_048_576;
+
 /** SSE 的事件邊界。`\r\n\r\n` 不含 `\n\n`，所以兩個都要認。 */
 const SSE_EVENT_BOUNDARY = /\r\n\r\n|\n\n/;
 
@@ -511,24 +516,27 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  *    `agent/request-error`），所以它是在整條串流跑完之後才判 `finish.kind === 'error'`
  *    （`core/agent-loop/src/agent.ts:444`）—— **中段才出錯的串流 dsh 照樣重試**。
  *
- * **第三層我們退掉了，而理由不是「重試中段錯誤不值得」。** dsh 付得起那個代價，是因為它
- * 有第一級的載體表示「那一次作廢、這是新的一次」：`assistant/attempt` 事件與
- * `assistantStreamRevision`（`core/agent-loop/src/agent.ts:381-384`、`:446-447`）。
- * **我們沒有那個載體** —— 已經送到畫面上的字沒有地方宣告作廢。所以這裡只涵蓋
- * **第一則事件**就是錯誤的那一類，也就是 #516 實際觀察到的長相。
+ * **第三層 #516 時退掉了，[#520](https://github.com/DemianLi/nexus-agent/issues/520) 補上了。** 退掉的理由不是「重試中段錯誤
+ * 不值得」，而是 dsh 付得起那個代價是因為它有第一級的載體表示「那一次作廢、這是新的一次」：`assistant/attempt` 事件與
+ * `assistantStreamRevision`（`core/agent-loop/src/agent.ts:381-384`、`:446-447`），我們當時沒有——已經送到畫面上的字沒有
+ * 地方宣告作廢。#520 補的載體是日誌的 `assistant/attempt`（不進模型）加線上的 `message-discard` 自訂 frame，重打本身是
+ * `@nexus/core` 的 `stream-retry.ts`（`wrapModelCall`，排在記錄器外面，每次嘗試各是一對 `model/start`／`model/end`）。
+ * **這一層對第一則事件之前的失敗仍然是翻成 HTTP 錯誤交給 SDK 重試**；第一則事件之後的失敗只做一件事——**回報**
+ * （{@link createInbandWatcher}），由 core 那一顆決定重不重打。兩邊的預算互不相乘：回報只在第一則事件之後才發生。
  *
  * ## 邊界：第一則事件，不是「串流錯誤」
  *
  * 涵蓋的是**串流的第一則 SSE 事件**。判準刻意是事件而不是「第一次網路讀取拿到的位元組」——
  * 後者會隨網路分段漂移（loopback 上整份 body 會被併成一段，量出來的覆蓋率是假的）。
  *
- * **明確未涵蓋**，而且有測試釘住這件事：
+ * **這一層（翻成 HTTP 錯誤、交 SDK 重試）不涵蓋、而且有測試釘住**：
  *
  * - 吐了內容之後中段才出錯（第 2 則以後的事件是 error）。
  * - 串流中途斷掉（`ERR_INCOMPLETE_CHUNKED_ENCODING`）。
  *
- * 這兩類今天的行為不變：當場失敗、零重試。要涵蓋它們得買下第三層，那是另一張卡。吐了內容之後
- * **停住**（不是斷掉）也在射程外，那一類由外層的 {@link withStreamIdleTimeout} 接成逾時，同樣不重試。
+ * 這兩類在這一層的行為不變：錯誤照原樣往下交、`ChatOpenAI` 只打一次（`live-model.test.ts` 的 `mid503`／`truncated`）。
+ * 它們的整次重打在**更上面一層**（#520，見上），端到端的測試在 `stream-retry.test.ts`。吐了內容之後**停住**
+ * （不是斷掉）由外層的 {@link withStreamIdleTimeout} 接成逾時，同樣歸那一層重打。
  *
  * **掛住的連線也不歸這一層管，而那是量出來的不是推的。** 嗅探迴圈在 fetch 裡面 await
  * `read()`，所以「開了線卻不吐位元組」看起來會從重試射程外被搬進射程內。實測兩側的請求數
@@ -548,6 +556,8 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  */
 export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof fetch {
   return async (input, init) => {
+    // 抓這一次嘗試的範圍；串流是在 fetch 回來之後才被讀的。
+    const report = streamFailureReporter();
     const response = await baseFetch(input, init);
     const contentType = response.headers.get('content-type') ?? '';
     if (!response.ok || response.body === null || !contentType.includes('text/event-stream')) {
@@ -586,6 +596,16 @@ export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof 
       return new Response(JSON.stringify(envelope), { status: inbandStatus(envelope), headers });
     }
 
+    // 第一則事件之後的串流內錯誤：只監看、不改位元組（#520）。嗅探到上限還沒收尾的病態串流不監看。
+    const firstBoundary = SSE_EVENT_BOUNDARY.exec(buffered);
+    const watch =
+      ended || firstBoundary === null
+        ? undefined
+        : createInbandWatcher(
+            report,
+            buffered.slice(firstBoundary.index + firstBoundary[0].length),
+          );
+
     // 沒事：把嗅掉的那幾段原樣接回去。**接的是原始位元組**，不是解碼後再編碼回來的字串。
     const relayed = new ReadableStream<Uint8Array>({
       start(controller) {
@@ -600,6 +620,7 @@ export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof 
           controller.close();
           return;
         }
+        watch?.(decoder.decode(next.value, { stream: true }));
         controller.enqueue(next.value);
       },
       cancel(reason) {
@@ -615,6 +636,55 @@ export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof 
 }
 
 /**
+ * 監看**第一則事件之後**的串流內錯誤，發現了就回報給重試那一層（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）。
+ *
+ * **只看、不改**：位元組原樣往下交，SDK 照今天的方式自己解析、自己拋 `APIError`；這裡只是在旁邊多解一份，認出錯誤信封就
+ * `report` 一次（失敗的種類取信封的狀態碼，重打有沒有用套 {@link retryDecision}，跟第一則事件那條同一支判準）。
+ * 不能像第一則事件那樣翻成 HTTP 錯誤回應——內容已經往下送了，回應早就回出去了。
+ *
+ * 解不開的、不是錯誤信封的事件一律當內容放行。單一事件超過 {@link INBAND_WATCH_MAX_CHARS} 個字元就放棄監看（正常事件
+ * 只有幾百字元，那是病態串流；放棄的代價只是這一次的串流內錯誤不重試，回到 #520 之前的行為）。
+ *
+ * @param report - 這一次嘗試的回報函式。
+ * @param rest - 第一則事件之後、嗅探時已經多讀進來的字元。
+ * @returns 餵解碼後文字進去的函式。
+ */
+function createInbandWatcher(
+  report: (failure: { code: string; retryable: boolean }) => void,
+  rest: string,
+): (text: string) => void {
+  let pending = '';
+  let watching = true;
+  const scan = (text: string): void => {
+    if (!watching) return;
+    pending += text;
+    for (let boundary = SSE_EVENT_BOUNDARY.exec(pending); boundary !== null;) {
+      const event = pending.slice(0, boundary.index);
+      pending = pending.slice(boundary.index + boundary[0].length);
+      // 便宜的前置篩：正常的內容事件不含 `"error"`，不用付 JSON.parse 的錢。
+      if (event.includes('"error"')) {
+        const envelope = firstEventError(event, true);
+        if (envelope !== undefined) {
+          const status = inbandStatus(envelope);
+          const code = (envelope.error as Record<string, unknown>).code;
+          report({ code: String(status), retryable: retryDecision({ status, code }) === 'retry' });
+          watching = false;
+          pending = '';
+          return;
+        }
+      }
+      boundary = SSE_EVENT_BOUNDARY.exec(pending);
+    }
+    if (pending.length > INBAND_WATCH_MAX_CHARS) {
+      watching = false;
+      pending = '';
+    }
+  };
+  scan(rest);
+  return scan;
+}
+
+/**
  * 串流吐了內容之後停住：{@link withStreamIdleTimeout} 等不到下一段位元組。
  *
  * **名字刻意不是 `AbortError`**：openai SDK 的串流迭代器碰到 `AbortError` 會當成正常結束直接
@@ -626,10 +696,7 @@ export class StreamIdleTimeoutError extends Error {
 
   /** @param timeoutMs - 等了多久。 */
   constructor(readonly timeoutMs: number) {
-    super(
-      `串流閒置逾時：模型吐出內容之後 ${timeoutMs} 毫秒沒有再送任何東西。` +
-        '已經送到畫面上的部分作廢不了，所以這一次不重試。',
-    );
+    super(`串流閒置逾時：模型吐出內容之後 ${timeoutMs} 毫秒沒有再送任何東西。`);
   }
 }
 
@@ -656,10 +723,10 @@ export class StreamIdleTimeoutError extends Error {
  *
  * ## 偏離登記
  *
- * 1. **中段逾時不重試**。dsh 的 `TIMEOUT` 在預設可重試碼裡（`llm/src/retry-policy.ts:18`），由步級
- *    掛點重試整條串流。我們退掉的理由跟 {@link withInbandStreamErrors} 的第三層同一個：沒有載體宣告
- *    「已經送到畫面上的字作廢」。所以這裡拋 {@link StreamIdleTimeoutError}，跟串流中途斷掉走同一條路：
- *    當場失敗、只打一次。**第一則事件之前的逾時照舊重試**（SDK 的計時器，在重試射程內）。
+ * 1. **中段逾時由 core 的 `stream-retry.ts` 整次重打**（#520；#521 時是「不重試」，因為當時沒有載體宣告「已經送到畫面上的字
+ *    作廢」）。dsh 的 `TIMEOUT` 在預設可重試碼裡（`llm/src/retry-policy.ts:18`），由步級掛點重試整條串流；這裡拋
+ *    {@link StreamIdleTimeoutError} 的同時向重試那一顆回報 `TIMEOUT`，跟串流中途斷掉（`TRANSPORT`）走同一條路。重打的預算
+ *    比 dsh 保守，見 `settings/live-model.ts` 的偏離四。**第一則事件之前的逾時照舊歸 SDK 的計時器與重試。**
  * 2. **位元組級，不是 chunk 級**。dsh 等的是解析好的一個 chunk；我們在 `fetch` 這一層只看得到位元組，
  *    所以 SSE 的 keep-alive 註解行（`: ping`）也會重新計時。供應商要是只送 keep-alive 不送內容，這一層
  *    擋不到。退到位元組級是因為這是手上最靠近 adapter 的一格（同 {@link withInbandStreamErrors}）。
@@ -680,6 +747,7 @@ export function withStreamIdleTimeout(
     }
 
     // 當場鎖住 reader，理由同 withInbandStreamErrors。
+    const report = streamFailureReporter();
     const reader = response.body.getReader();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const watched = new ReadableStream<Uint8Array>({
@@ -688,11 +756,24 @@ export function withStreamIdleTimeout(
           timer = setTimeout(() => reject(new StreamIdleTimeoutError(timeoutMs)), timeoutMs);
         });
         try {
-          const next = await Promise.race([reader.read(), idle]);
+          // **回報只針對「讀上游」這一步**（#520）：SDK 收手之後我們這一側再 `enqueue`／`close` 會撞上「Controller is already
+          // closed」，那是下游已經不要了，不是上游斷了——算進去會把一個本來不該重打的失敗標成可重打。
+          let next: Awaited<ReturnType<typeof reader.read>>;
+          try {
+            next = await Promise.race([reader.read(), idle]);
+          } catch (error: unknown) {
+            if (error instanceof StreamIdleTimeoutError) {
+              report({ code: 'TIMEOUT', retryable: true });
+            } else if (!(error instanceof Error && error.name === 'AbortError')) {
+              // 使用者中止的 AbortError 不回報——那是我們自己要的，不重打。
+              report({ code: 'TRANSPORT', retryable: retryDecision(error) === 'retry' });
+            }
+            throw error;
+          }
           if (next.done) controller.close();
           else controller.enqueue(next.value);
         } catch (error: unknown) {
-          // 逾時要把底下那條連線放掉；其他錯誤（含使用者中止的 AbortError）原樣往下交，行為同今天。
+          // 逾時要把底下那條連線放掉；錯誤本身一律原樣往下交，失敗分類同今天。
           if (error instanceof StreamIdleTimeoutError) void reader.cancel(error).catch(() => {});
           controller.error(error);
         } finally {
