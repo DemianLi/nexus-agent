@@ -1,0 +1,62 @@
+name: Smoke（真模型）
+
+# 每晚真模型冒煙回歸（#436）。照 dsh `.github/workflows/e2e.yml`，另開一份流程檔、不放進 ci.yml：帶金鑰的測試與不帶金鑰的檢查
+# 觸發時機與憑證都不同。**不設成必過、不列進 gate**（ci.yml 開頭的規矩管的是合併前的檢查，這份不在合併路徑上）。
+#
+# 觸發：手動、每晚、push 到 main。**不在 pull_request 上跑**——這是 dsh 文件寫的收斂退法（只拿掉合併請求，
+# 保留合進主線、每晚、手動；dsh `.agents/notes/implemented/testing/2026-06-19-real-api-e2e-ci.md:74`）。dsh 寫它是為了縮小金鑰外露的
+# 範圍；我們用的理由是額度：端點是 NVIDIA 的免費額度，不像 dsh 自己就是供應商。
+#
+# 安全：
+# - 觸發條件永遠不要改成 `pull_request_target`。它在 base repo 的脈絡下帶著 secret 跑，又能檢出不可信的 fork 程式碼，是金鑰外洩的標準路徑。
+# - 專案是公開的，GitHub 設定裡「把機密送給分叉的合併請求」保持關閉。
+# - 金鑰只出現在「預檢」與「跑冒煙」這兩步的 env，不給 checkout、setup、install。不印出、不開 `set -x`。
+#
+# 排程只在預設分支（develop）上跑；repo 六十天沒有動靜，GitHub 會自動停掉排程，push 與手動是備援。
+# 失敗通知：GitHub 預設通知最後改過這份 cron 的人，沒有另外接。
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+  schedule:
+    # 18:17 UTC = 02:17 Asia/Taipei，避開整點的排程尖峰。
+    - cron: '17 18 * * *'
+
+concurrency:
+  group: smoke-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: smoke
+    runs-on: ubuntu-latest
+    # 最壞情況：三個案例各撞滿首事件逾時 180 秒加閒置 90 秒（#1251），加上安裝，30 分鐘內一定收。
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: ./.github/actions/setup
+
+      # 預檢：冒煙缺金鑰時會直接拋，但 secret 沒設好、或被當成空字串帶進來，要在這裡就講清楚，
+      # 不要讓人去翻測試輸出。沒設就 exit 1（dsh `e2e.yml:88-104`）。
+      - name: 預檢（要有 NVIDIA_API_KEY）
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${NVIDIA_API_KEY:-}" ]; then
+            echo "::error::NVIDIA_API_KEY 是空的。到 repo 的 Settings → Secrets and variables → Actions 設定同名 secret。"
+            exit 1
+          fi
+          echo "NVIDIA_API_KEY 已設定。"
+
+      # 本文與標頭只在 serve 與代理之間流動；代理只記方法、路徑與狀態碼。摘要寫進 $GITHUB_STEP_SUMMARY。
+      - name: 冒煙（真 NVIDIA 端點，最多 20 個請求）
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
+        run: pnpm --filter @nexus/harness run smoke

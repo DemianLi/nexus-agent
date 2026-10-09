@@ -894,6 +894,18 @@ pnpm --filter @nexus/harness run eval:compare --samples 2
 取樣數的乘積**，跑滿是小時級。量過的結論與模型盤點在
 [`.docs/model-inventory.md`](../.docs/model-inventory.md)。
 
+### 每晚真模型冒煙回歸（#436）
+
+`eval:compare` 要人手動跑；端點改了、模型下架了，沒有人跑就看不到。`.github/workflows/smoke.yml` 補這個洞：
+
+- **觸發**：手動（Actions 頁面 → Smoke（真模型））、每晚 18:17 UTC、push 到 `main`。**不在合併請求上跑**（額度；照 dsh 文件的收斂退法）。**不設成必過**，不在 `gate` 的路徑上。
+- **跑什麼**：真 `runServe --live` 打真的 NVIDIA 端點，三個案例——讀檔再寫檔（含逐字串流）、多輪、串流中途取消。驗證從外面重讀檔案、哨兵檔逐位元組比對，不看 agent 自己怎麼說。
+- **請求上限 20**：`live-model` 的 `baseUrl` 換成本機計數代理，在出口數；第 21 個不轉出去、整組判失敗。代理的計數會跟會話日誌對帳（`model/start`＋標題請求＋重試），對不上就是量具壞了。
+- **金鑰**：repo secret `NVIDIA_API_KEY`（只有 repo 管理者能放）。流程檔的預檢步驟沒設就 `exit 1`；冒煙缺金鑰時**直接拋、不跳過**，免得「全部跳過」被當成通過。
+- **過程違反量測**（藍圖規則 5／T7-08）：外部檢查判成功的案例，另拿會話日誌對 `src/smoke/violations.ts` 事先寫好的清單。**只報數、不判失敗**：摘要裡寫「判成功 N 件，其中過程違反 M 件」。
+- **本機跑**：`NVIDIA_API_KEY=… pnpm --filter @nexus/harness run smoke`（不要把金鑰寫進指令列歷史；從 `.env` 讀進環境變數）。
+- **失敗通知**：GitHub 預設通知最後改過這份 cron 的人，沒有另外接。排程只在預設分支跑，六十天沒有動靜會被 GitHub 自動停掉。
+
 `eval:compare` 與 `eval:survey` 每次執行都會逐筆寫進一份結果檔，預設在
 `apps/harness/eval-results/`（不進版控），`--out <目錄>` 可以改。檔案是 JSON Lines：第一行記
 這一輪的條件（commit 與工作樹有沒有未提交的改動、題庫版本、評分程式版本、取樣溫度與 topP、
