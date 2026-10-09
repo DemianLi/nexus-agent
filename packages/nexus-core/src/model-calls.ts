@@ -27,7 +27,7 @@
  *
  * 這一格是 dsh `step` 的對應物——**同一個詞、不同的邊界**：我們的「一次呼叫」只包模型那一段（見上），工具在它外面，
  * 所以工具歸它靠 `callId` 而不是時刻。上面登記的三處偏離逐項重核過：`model/start` 不是 `step/start`（載體是
- * `wrapModelCall`，沒變）、脈絡溢出算兩次呼叫（現在兩次各有各的識別，不再只是顆數）、拋錯的呼叫沒有 `assistant/attempt`（沒變）。
+ * `wrapModelCall`，沒變）、脈絡溢出算兩次呼叫（現在兩次各有各的識別，不再只是顆數）、拋錯的呼叫在串流中途失敗、又整次重打時有 `assistant/attempt`（#520，由 pump 寫，見 `session-log.ts`）；其餘拋錯的仍然沒有（沒變）。
  *
  * ## 鉤子與位置都是選的
  *
@@ -63,7 +63,7 @@
  * 那一則**：外層只剩改請求不改回覆的那幾顆（摘要器、計劃模式的提示詞、基座那幾顆），改寫解不開
  * 參數的那顆與清掉截斷回覆裡呼叫的那顆（{@link ./max-tokens.ts}）都在內側。
  *
- * **拋錯的呼叫不記**：那次沒有回覆可記（dsh 那一次記的是 `assistant/attempt`，我們沒有，見
+ * **拋錯的呼叫不記**：那次沒有回覆可記（dsh 那一次記的是 `assistant/attempt`；我們只在串流中途失敗又整次重打時由 pump 補一顆，見
  * `session-log.ts`）。**但 `model/end` 帶 `outcome`**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：
  * 拋錯是 `error`、使用者按了停止是 `aborted`，讓「這次燒了多少不知道」讀得出來。子代理那一層被中止時回的空訊息也不記——它是 {@link ./turn-cancel.ts} 合成來
  * 讓子代理的圖收尾的，不是模型的回覆；dsh 那側被中止、沒有看得見內容的那一步沒有 `assistant/message`。

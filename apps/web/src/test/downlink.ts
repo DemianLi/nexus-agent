@@ -153,6 +153,18 @@ export function fakeDownlink() {
     return id;
   }
 
+  /** 排進一件來源種類這一版不認得的件（新版 harness 才有的種類，#1247）：排在隊尾。回給呼叫端的是項目 id。 */
+  function acceptUnknownSource(threadId: string, text: string, kind: string): string {
+    runs += 1;
+    const id = `unknown-${runs}`;
+    // 線上形狀比型別寬：這一版的聯集沒有這個種類，所以斷言過去。
+    const item = { id, text, source: { kind } } as unknown as WireQueuedInput;
+    const queue = [...(queues.get(threadId) ?? []), item];
+    queues.set(threadId, queue);
+    push(threadId, [inboxFrame({ items: queue, nextStep: steers.get(threadId) ?? [] })]);
+    return id;
+  }
+
   /**
    * 伺服器收下一句插話（`run.start` 帶 `mode: 'steer'`，#710），這一輪還收插話：排進 `next-step`，推一顆
    * `inbox`。回給呼叫端的 `run_id` 就是項目 id。什麼時候被領走由測試自己叫 {@link claimSteers}。
@@ -226,6 +238,7 @@ export function fakeDownlink() {
     accept,
     acceptSteer,
     acceptGoal,
+    acceptUnknownSource,
     claimSteers,
     closeSteer,
     update,

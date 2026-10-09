@@ -896,6 +896,8 @@ export async function createCliAgent(
       modelSelection: modelSelection.controller,
       modelLimits: modelSelection.limitsOf,
     }),
+    // 串流中段失敗的整次重打（#520）。只有真模型的 fetch 層會回報失敗，腳本模型照給也無事發生。
+    streamRetry: liveModel.streamRetry,
     ...(backend !== undefined && { backend }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
     systemPrompt: SYSTEM_PROMPT,

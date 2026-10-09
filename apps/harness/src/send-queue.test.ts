@@ -20,6 +20,7 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { goalId, SessionLog } from '@nexus/core';
 import type { InboxSplice, PluginEntry, SessionEvent } from '@nexus/core';
+import type { GoalView } from '@nexus/plugin-goal';
 import type { Event, InboxPayload } from '@nexus/wire';
 import {
   createWireClient,
@@ -35,6 +36,7 @@ import { createNexusAgent } from './agent-factory.js';
 import { historyPage } from './conversation-history.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import type { GoalDriverPort } from './goal-driver.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
@@ -540,6 +542,86 @@ describe('按停止之後：排著的停住，下一次送出才喚醒', () => {
       ]);
     } finally {
       await run.close();
+    }
+  });
+
+  /**
+   * 照 dsh：刪掉續行預約只把「取消了」記下來，**暫停在 pump 閒下來時才做**（`goal-round-driver/src/index.ts:258-283`）。
+   * 刪的當下還有別的輪在跑（折回來的預約排在人的件後面）就要等它們全跑完，那幾輪期間目標仍是 active。
+   */
+  it('刪掉續行預約：還有別的輪在跑就等它們收尾、閒下來才暫停目標', async () => {
+    const holdB = gate();
+    const holdA = gate();
+    const seed = new SessionLog('queue-root');
+    seed.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [{ id: 'b', text: 'B', source: { kind: 'user' } }],
+    });
+    seed.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 1,
+      inserted: [
+        {
+          id: 'g',
+          text: '續行',
+          source: { kind: 'goal', goalId: goalId('goal-1'), revision: 1, round: 1 },
+        },
+      ],
+    });
+    let goal: GoalView = {
+      id: goalId('goal-1'),
+      revision: 1,
+      objective: '把 CI 修綠',
+      phase: 'active',
+      maxGoalRounds: 8,
+      roundsStarted: 0,
+      createdAt: 10,
+      updatedAt: 10,
+      activation: 'armed',
+    };
+    const paused: number[] = [];
+    let flushes = 0;
+    const port: GoalDriverPort = {
+      goal: () => goal,
+      block: () => undefined,
+      pause: (ref) => {
+        paused.push(ref.revision);
+        goal = { ...goal, phase: 'paused', revision: goal.revision + 1 };
+      },
+      disarm: () => undefined,
+      // 假目標沒有輪次計數：該暫停卻沒暫停的話排程器會無限續行。排了幾次之後收回授權，讓回歸是紅的而不是掛住。
+      flush: () => {
+        flushes += 1;
+        if (flushes > 3) goal = { ...goal, activation: 'disarmed' };
+        return Promise.resolve();
+      },
+      warn: () => undefined,
+    };
+    const agent = scriptedAgent([{ hold: holdB.opened }, { hold: holdA.opened }]);
+    const pump = new ThreadPump(agent, 'queue-root', port, seed.events);
+    try {
+      queued(pump.submit({ kind: 'message', text: 'A', id: 'a' }));
+      await until(() => marks(pump.sessionLog.events).includes('start:message:B'));
+
+      // B 跑著、A 還排在後面：刪掉預約，目標此刻不動。
+      expect(pump.updateQueue('g', { kind: 'remove' })).toBe('updated');
+      expect(paused).toEqual([]);
+      expect(goal.phase).toBe('active');
+
+      holdB.open();
+      await until(() => marks(pump.sessionLog.events).includes('start:message:A'));
+      // A 還在跑，一樣不暫停。
+      expect(paused).toEqual([]);
+
+      holdA.open();
+      await pump.whenIdle();
+      await until(() => paused.length > 0);
+      // 暫停帶的是預約當時的修訂。
+      expect(paused).toEqual([1]);
+      expect(goal.phase).toBe('paused');
+    } finally {
+      pump.close();
     }
   });
 

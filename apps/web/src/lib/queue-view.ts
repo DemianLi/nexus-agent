@@ -87,9 +87,22 @@ export function isGoalContinuation(item: Pick<WireQueuedInput, 'source'>): boole
   return item.source.kind === 'goal';
 }
 
-/** 能改成插話的件：目標續行的預約不能（伺服器回 `steer_unavailable`），整批插話與「有沒有東西可插」都先濾掉它。 */
+/** 不認得的來源種類在佇列列上的名字（新版 harness 加的種類，wire 收成 `unrecognized`）：不是人說的，不知道是什麼，不照抄文字。 */
+export const UNRECOGNIZED_SOURCE_TEXT = '系統排入的訊息';
+
+/** 這一件的來源 wire 不認得（#1247）：照 dsh 當非人的件收下，web 用通用標籤畫、不出插話鈕。 */
+export function isUnrecognizedSource(item: Pick<WireQueuedInput, 'source'>): boolean {
+  return item.source.kind === 'unrecognized';
+}
+
+/** 不認得的來源，原本寫的是什麼種類（給提示文字用）；認得的來源回 `undefined`。 */
+export function unrecognizedSourceKind(item: Pick<WireQueuedInput, 'source'>): string | undefined {
+  return item.source.kind === 'unrecognized' ? item.source.original : undefined;
+}
+
+/** 能改成插話的件：目標續行的預約不能（伺服器回 `steer_unavailable`）、不認得來源的件不知道能不能，整批插話與「有沒有東西可插」都先濾掉它們。 */
 export function steerableItems(items: readonly WireQueuedInput[]): readonly WireQueuedInput[] {
-  return items.filter((item) => !isGoalContinuation(item));
+  return items.filter((item) => !isGoalContinuation(item) && !isUnrecognizedSource(item));
 }
 
 /** 不是人排的那一件在佇列列上寫什麼；人排的沒有。 */

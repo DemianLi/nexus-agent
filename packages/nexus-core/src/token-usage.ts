@@ -22,6 +22,7 @@
  * - **沒有重試的替換槽。** dsh 的一步可能落好幾次 `assistant/attempt`，同一個 `(turn, step)` 後到的取代先到的，
  *   `llm/retry-started` 再把槽關掉讓重試那次另外加。我們的 `model/usage` 由 `wrapModelCall` 記一顆
  *   （`model-usage.ts`），SDK 自己的重試在它底下、看不見，所以一次呼叫**至多**一顆，沒有東西要取代。
+ *   串流中段整次重打（#520）排在記錄器外面，每次嘗試各是一次呼叫、各有自己的 `model/usage`，所以失敗那次的用量照樣在帳上。
  *   **代價**：重試掉的中間幾次（它們也可能在串流裡報過用量）不在帳上，只有最後那一次算數。
  * - **失敗與中止的呼叫也進帳**（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）：供應商在串流裡報過用量、
  *   之後斷線或被使用者停止的那次呼叫，記成一顆帶 `outcome` 的 `model/usage`，這一道加總照加（那些 token 真的花掉了），
