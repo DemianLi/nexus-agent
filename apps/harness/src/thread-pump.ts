@@ -1251,6 +1251,12 @@ export class ThreadPump {
    * 一輪續行真的開跑就歸零。
    */
   #goalDropStreak = 0;
+  /**
+   * 被人從佇列上刪掉或改掉的續行預約，等 pump 閒下來再暫停目標（#638）。照 dsh：`agent/inbox/discarded` 只把
+   * `attempt.cancelled` 立起來，暫停在 `agent/status` 翻成 idle 時才做（`goal-round-driver/src/index.ts:258-283`）。
+   * 刪的當下若還有別的輪在跑，目標在那幾輪期間仍然 active——現在就暫停會讓那幾輪中途被 `goal/change` 攪動。
+   */
+  #cancelledGoalRounds: Extract<QueuedInputSource, { kind: 'goal' }>[] = [];
 
   /**
    * @param agent - 這條 thread 的 agent。
@@ -2023,6 +2029,7 @@ export class ThreadPump {
     // 它們擋的是**多算一次**（連 `flush()` 都省下來），而且 `#queue` 那個保證一旦鬆動，
     // 這兩句就是唯一擋得住的東西。**不要把它們讀成有測試釘住的因果。**
     if (this.running) return;
+    this.#pauseCancelledGoalRounds();
     void (async () => {
       try {
         const round = await driveGoalRound(() => this.#sessions.root.events, driver);
@@ -2108,6 +2115,12 @@ export class ThreadPump {
     return !this.#inbox['next-turn'].some(
       (other) => other.id !== item.id && other.source.kind !== 'goal',
     );
+  }
+
+  /** 閒下來才暫停那些被取消的續行預約（{@link ThreadPump.#cancelledGoalRounds}）；還在跑就什麼都不做，等下一次問。 */
+  #pauseCancelledGoalRounds(): void {
+    if (this.running) return;
+    for (const source of this.#cancelledGoalRounds.splice(0)) this.#pauseForCancelledRound(source);
   }
 
   /**
@@ -2411,7 +2424,9 @@ export class ThreadPump {
       const [job] = at < 0 ? [] : this.#queue.splice(at, 1);
       job?.resolve();
       this.#noteStatus();
-      this.#pauseForCancelledRound(item.source);
+      // 暫停等閒下來：這一刻就閒著的話下一行馬上做，還有別的輪在跑就留給那幾輪收尾後的 `#driveGoalRound`。
+      this.#cancelledGoalRounds.push(item.source);
+      this.#pauseCancelledGoalRounds();
       this.#kick();
       return 'updated';
     }

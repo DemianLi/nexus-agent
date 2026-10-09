@@ -90,8 +90,10 @@ describe('inbox', () => {
       { items: [null] },
       { items: [{ ...first, text: 1 }] },
       { items: [{ id: 'run-c', text: '目標續行' }] },
-      // 用另一件的 id：拿 `first` 改的話，正規化之後跟原本那份長得一樣，比不出有沒有收。
-      { items: [{ ...second, source: { kind: 'someone-else' } }] },
+      // 來源種類不是非空字串，才是形狀不對（認不得的種類本身照收，見下面）。
+      { items: [{ ...second, source: { kind: 1 } }] },
+      { items: [{ ...second, source: { kind: '' } }] },
+      { items: [{ ...second, source: {} }] },
       { items: [], claimed: null },
       { items: [], claimed: { id: first.id } },
       { items: [], claimed: { id: 1, text: first.text } },
@@ -557,12 +559,44 @@ describe('inbox：背景子代理的結算通知不是人話（#840）', () => {
     ).toEqual([goal]);
   });
 
-  it('認不得的來源整顆不收', () => {
-    const before = fold(inboxFrame({ items: [first] }));
-    const after = reduceConversation(
-      before,
-      inboxFrame({ items: [{ ...first, source: { kind: 'someone-else' } }] }),
+  it('認不得的來源種類照收，當成非人的件：同一份裡人的件還在，順序不變（照 dsh）', () => {
+    const odd = {
+      id: 'run-x',
+      text: '新版加的種類',
+      source: { kind: 'cron', schedule: '* * * * *' },
+    };
+    const state = fold(inboxFrame({ items: [first, odd, second] }));
+    expect(state.inbox.map((item) => item.id)).toEqual(['run-a', 'run-x', 'run-b']);
+    expect(state.inbox.map((item) => item.source)).toEqual([
+      { kind: 'user' },
+      { kind: 'unrecognized', original: 'cron' },
+      { kind: 'user' },
+    ]);
+    // 插話那一條一樣收。
+    expect(
+      fold(inboxFrame({ items: [], nextStep: [first, odd] })).inboxNextStep.map(
+        (item) => item.source,
+      ),
+    ).toEqual([{ kind: 'user' }, { kind: 'unrecognized', original: 'cron' }]);
+  });
+
+  it('認不得的來源被領走：不畫人的泡泡，清單照換', () => {
+    const odd = { id: 'run-x', text: '新版加的種類', source: { kind: 'cron' } };
+    const state = fold(
+      inboxFrame({ items: [odd, first] }),
+      inboxFrame({
+        items: [first],
+        claimed: { id: 'run-x', text: '新版加的種類', source: { kind: 'cron' } },
+      }),
     );
-    expect(after.inbox).toEqual(before.inbox);
+    expect(state.entries).toEqual([]);
+    expect(state.inbox.map((item) => item.id)).toEqual(['run-a']);
+  });
+
+  it('沒有 source 的舊式 claimed 照舊畫成人的話（舊的一側沒有這一格）', () => {
+    const state = fold(inboxFrame({ items: [], claimed: { id: 'run-a', text: '先讀設定' } }));
+    expect(state.entries).toEqual([
+      { kind: 'human', id: 'inbox:run-a', text: '先讀設定', inboxId: 'run-a' },
+    ]);
   });
 });
