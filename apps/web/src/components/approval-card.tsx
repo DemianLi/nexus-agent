@@ -32,6 +32,7 @@ import { ChevronDown } from 'lucide-react';
 import type { PendingApproval } from '@nexus/wire';
 
 import { Surface } from '@/components/surface';
+import type { PendingAsker } from '@/lib/approval-asker';
 import { Button } from '@/components/ui/button';
 import { RowTrigger } from '@/components/row-trigger';
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
@@ -43,7 +44,7 @@ const LABELS: Record<string, string> = { approve: '全部核准', reject: '全�
 export const NO_DECISION_REASON =
   '這顆中斷沒有共同可用的決定：送出不在清單上的決定會讓這一輪整個失敗，所以這裡不放允許與不允許。';
 
-function Actions({ pending }: { pending: PendingApproval }) {
+function Actions({ pending, asker }: { pending: PendingApproval; asker?: PendingAsker }) {
   return (
     // 可捲動，所以要能用鍵盤捲：進 Tab 順序並給名稱（§8）。
     <Surface
@@ -53,6 +54,13 @@ function Actions({ pending }: { pending: PendingApproval }) {
       aria-label="要執行的內容"
       className="flex max-h-[40svh] flex-col gap-3 overflow-auto p-3"
     >
+      {/* 前景子代理要核准（#328）：誰在問、它在做什麼（委派卡上寫的 `description`）；root 自己問的沒有這一行。 */}
+      {asker !== undefined && (
+        <p className="text-muted-foreground text-tip" data-testid="approval-asker">
+          <span className="text-foreground font-medium">{asker.label}</span>要執行這個操作
+          {asker.description !== undefined && <>，它在做：{asker.description}</>}
+        </p>
+      )}
       {pending.actions.map((action, index) => (
         <div key={`${action.name}-${index}`} className="flex flex-col gap-1.5">
           <p className="text-body">
@@ -73,8 +81,11 @@ export function ApprovalCard({
   busy,
   onDecide,
   onStop,
+  asker,
 }: {
   pending: PendingApproval;
+  /** 前景子代理在問時給（`pendingAsker`）；沒給就是 root 自己問的。 */
+  asker?: PendingAsker;
   busy: boolean;
   onDecide: (decision: string) => void;
   /** 停止這一輪：**只在**交集為空時出現（#376 第 12 條），那時這是唯一的出口。 */
@@ -93,7 +104,7 @@ export function ApprovalCard({
             原始中斷內容
           </RowTrigger>
           <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
-            <Actions pending={pending} />
+            <Actions pending={pending} {...(asker === undefined ? {} : { asker })} />
           </CollapsibleContent>
         </Collapsible>
         <div className="flex justify-end p-2">
@@ -112,7 +123,7 @@ export function ApprovalCard({
   }
   return (
     <div className="flex flex-col" data-testid="approval-card">
-      <Actions pending={pending} />
+      <Actions pending={pending} {...(asker === undefined ? {} : { asker })} />
       <div className="flex justify-end gap-2 p-2">
         {/* 不允許在左、允許在右。 */}
         {[...pending.allowedDecisions].reverse().map((decision) => (

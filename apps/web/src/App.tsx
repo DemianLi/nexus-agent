@@ -65,6 +65,7 @@ import {
   STEER_QUEUE_PLACEHOLDER,
   STEER_UNAVAILABLE_TEXT,
 } from '@/lib/steer-queue';
+import { pendingAsker } from '@/lib/approval-asker';
 import { toMention } from '@/lib/agent-mention';
 import type { MentionAgent } from '@/lib/agent-mention';
 import { serverSupportsAttachments } from '@/lib/attachments';
@@ -631,12 +632,14 @@ function ConversationView({
           )}
           <PendingSwap
             pendings={pendings}
+            askerOf={(pending) => pendingAsker(conversation.state, pending)?.label}
             composerRef={composerRef}
             // **按 `kind` 分派到兩個元件，不是一個元件內部分支**（#231 第 4 項）：送出的形狀
             // 完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而認不得的 `kind` 根本到不了
             // 這裡——折疊器那一層就把它翻成 `failed` 了，理由見 `reduceInputRequested`。
             // 計劃審核（#654）是問答中斷的一種：認得 `intent` 才換成審核面板，其餘照一般提問。
             renderPanel={(pending) => {
+              const asker = pendingAsker(conversation.state, pending);
               const review =
                 pending.kind === 'question' ? planReviewOf(pending.questions) : undefined;
               if (pending.kind === 'question' && review !== undefined) {
@@ -666,6 +669,7 @@ function ConversationView({
               ) : (
                 <ApprovalCard
                   pending={pending}
+                  {...(asker === undefined ? {} : { asker })}
                   busy={!conversation.connected}
                   onDecide={(decision) => void conversation.respond(pending.interruptId, decision)}
                   onStop={() => {
