@@ -8,6 +8,9 @@
  *   子代理自己的日誌（#871）再接，這裡不另外存。
  * - 停止「不認得／沒在跑」是被接受的 no-op，回應看不出停成沒有，**狀態只看 `subagentStatus`**（#870）：按下去鈕變
  *   「停止中…」，狀態翻成閒著或收線就恢復；十秒還沒翻也恢復（停止是冪等的，沒翻代表那一下沒碰到任何一輪）。
+ * - **伺服器重開之後**（#1271）：叫得醒的子代理在快照裡是閒著，送話就會把它從日誌接回來。受理之後到它真的跑起來之前，
+ *   送出鈕維持「送出中…」；回「叫不醒」（`subagent_not_found`）就把這張卡當收線，回「叫醒失敗」（`unknown_error`）
+ *   話留在輸入框裡可以再送。wire 沒有新欄位，全靠既有的快照與錯誤碼。
  * - 沒有提供者（單獨畫 Transcript 的測試）就不畫這一區。
  * - **子代理自己的對話**（#861）：面板打開時用 `subagentHistory` 讀一次（只有歷史、沒有 live），折成獨立的對話畫在輸入框上方；
  *   狀態從跑著翻成閒著／收線時、送出之後各再讀一次，也可以手動重新讀。單則項目怎麼畫由外面給（`renderEntry`），這裡不 import
@@ -81,6 +84,12 @@ export const SubagentControlContext = createContext<SubagentControl | null>(null
 /** 停止鈕「停止中…」最久撐多久；之後恢復成可按（狀態沒翻代表那一下沒碰到任何一輪）。 */
 const STOPPING_MAX_MS = 10_000;
 
+/**
+ * 對閒著的送話受理後，送出鈕「送出中…」最久撐多久（#1271）。正常會在快照翻成跑著時就結束；沒翻（那一輪快到快照沒拍到、
+ * 或卡住）就放手，不讓輸入框一直鎖著。
+ */
+const WAKING_MAX_MS = 10_000;
+
 const NETWORK_FAILED = '沒送出去：連線出了問題，請再試一次。';
 
 /**
@@ -104,12 +113,25 @@ export function useSubagentControl({
     readonly byRun: ReadonlyMap<string, readonly string[]>;
   }>({ threadId, byRun: new Map() });
   const current = echoes.threadId === threadId ? echoes.byRun : EMPTY;
+  // 送話回「叫不醒」（`subagent_not_found`）的編號：之後照收線畫（#1271）。快照本來就不列它們，但「不在快照裡」跟
+  // 「還沒收到快照」在快照遲到時分不開，所以記下來，跟回聲一樣換 thread 就清。
+  const [gone, setGone] = useState<{
+    readonly threadId: string;
+    readonly runs: ReadonlySet<string>;
+  }>({ threadId, runs: new Set() });
+  const goneRuns = gone.threadId === threadId ? gone.runs : NO_RUNS;
 
   const send = useCallback(
     async (runId: string, text: string): Promise<SubagentSendOutcome> => {
       try {
         const result = await client.subagentSend(threadId, runId, text);
         if (result.type === 'error') {
+          if (result.error === 'subagent_not_found') {
+            setGone((previous) => ({
+              threadId,
+              runs: new Set([...(previous.threadId === threadId ? previous.runs : NO_RUNS), runId]),
+            }));
+          }
           return { ok: false, message: subagentSendError(result.error, result.message) };
         }
       } catch {
@@ -159,17 +181,18 @@ export function useSubagentControl({
       connected,
       renderEntry,
       history,
-      stateOf: (runId) => subagentRunState(status, runId),
+      stateOf: (runId) => (goneRuns.has(runId) ? 'closed' : subagentRunState(status, runId)),
       echoesOf: (runId) => current.get(runId) ?? NONE,
       send,
       interrupt,
     }),
-    [connected, renderEntry, history, status, current, send, interrupt],
+    [connected, renderEntry, history, status, goneRuns, current, send, interrupt],
   );
 }
 
 const EMPTY: ReadonlyMap<string, readonly string[]> = new Map();
 const NONE: readonly string[] = [];
+const NO_RUNS: ReadonlySet<string> = new Set();
 
 /** 委派卡標頭上的小狀態字（跑著／閒著／已收線）。沒有提供者或還不知道就不畫。 */
 export function SubagentStateLabel({ runId }: { readonly runId: string }) {
@@ -194,6 +217,8 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
   const state = control.stateOf(runId);
   const [text, setText] = useState('');
   const [sending, setSending] = useState(false);
+  // 對閒著的送話受理之後、它真的跑起來之前（#1271）：冷的要先從日誌接回來，這段期間快照還是閒著。
+  const [waking, setWaking] = useState(false);
   const [error, setError] = useState<string>();
   const [stopping, setStopping] = useState(false);
   const alive = useRef(true);
@@ -214,6 +239,17 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
     const timer = setTimeout(() => setStopping(false), STOPPING_MAX_MS);
     return () => clearTimeout(timer);
   }, [stopping, state]);
+
+  // 叫醒：看到跑著（或收線）就完成；一直沒翻就在上限之後放手，跟停止同一個理由。
+  useEffect(() => {
+    if (!waking) return;
+    if (state === 'running' || state === 'closed') {
+      setWaking(false);
+      return;
+    }
+    const timer = setTimeout(() => setWaking(false), WAKING_MAX_MS);
+    return () => clearTimeout(timer);
+  }, [waking, state]);
 
   // 子代理自己的對話：打開讀一次；跑著翻成閒著或收線、送出之後各再讀一次（只有歷史，沒有 live）。
   const [tick, setTick] = useState(0);
@@ -241,10 +277,12 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
       ? control.echoesOf(runId)
       : unmatchedEchoes(control.echoesOf(runId).slice(settled), history.conversation.entries);
 
+  const busy = sending || waking;
   const submit = (event: FormEvent) => {
     event.preventDefault();
     const body = text.trim();
-    if (body === '' || !sendable || sending) return;
+    if (body === '' || !sendable || busy) return;
+    const wasIdle = state === 'idle';
     setSending(true);
     setError(undefined);
     void control.send(runId, body).then((outcome) => {
@@ -253,6 +291,7 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
       if (outcome.ok) {
         setText('');
         setTick((value) => value + 1);
+        if (wasIdle) setWaking(true);
       } else setError(outcome.message);
     });
   };
@@ -297,7 +336,7 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
             setText(event.target.value);
             if (error !== undefined) setError(undefined);
           }}
-          disabled={!sendable || sending}
+          disabled={!sendable || busy}
           placeholder={placeholder}
           aria-label="對背景子代理說話"
           className="min-h-11 basis-full sm:min-h-9 sm:flex-1 sm:basis-0"
@@ -306,11 +345,11 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
           type="submit"
           size="sm"
           className="ml-auto min-h-11 min-w-11 sm:ml-0 sm:min-h-9"
-          disabled={!sendable || sending || text.trim() === ''}
+          disabled={!sendable || busy || text.trim() === ''}
           aria-label="送出給背景子代理"
         >
           <Send aria-hidden />
-          {sending ? '送出中…' : '送出'}
+          {busy ? '送出中…' : '送出'}
         </Button>
         <Button
           type="button"

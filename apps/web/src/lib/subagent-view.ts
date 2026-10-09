@@ -153,17 +153,24 @@ export function canStopSubagent(state: SubagentRunState): boolean {
   return state === 'running' || state === 'unknown';
 }
 
-/** `subagent.send` 被拒時講給人聽的一句（#869 Q1）。不認得的碼退回伺服器的 `message`。 */
+/**
+ * `subagent.send` 被拒時講給人聽的一句（#869 Q1；冷叫醒的三句是 #1271 PM 定的文案）。不認得的碼退回伺服器的 `message`。
+ *
+ * - `subagent_not_found`：叫不醒（伺服器重開後舊格式、檔案不在或壞了），呼叫端接著把這張卡當收線。
+ * - `unknown_error`：`subagent.send` 只有「叫醒本身失敗」會回它（租約被別的行程握著、日誌壞了），原因在 `message`，可以再送。
+ */
 export function subagentSendError(code: string, message: string): string {
   switch (code) {
     case 'subagent_not_found':
-      return '找不到這個子代理，它可能已經結束。';
+      return '這個子代理無法再叫醒，只能查看它的對話。';
     case 'subagent_at_capacity':
-      return '同時運作的子代理已滿，請等其中一個做完再試。';
+      return '背景子代理同時執行的數量已滿，等其他子代理結束後再送。';
     case 'subagent_closed':
       return '這條對話正在關閉，沒辦法再送話。';
     case 'invalid_argument':
       return '內容不能是空白。';
+    case 'unknown_error':
+      return `叫醒失敗：${message.replace(/[。.]\s*$/, '')}。可以再送一次。`;
     default:
       return `沒送出去：${message}`;
   }
