@@ -603,6 +603,25 @@ describe('對話介面', () => {
       expect((input as HTMLTextAreaElement).placeholder).toBe('說點什麼…');
     });
 
+    it('佇列裡有不認得來源的件（#1247）：整份 inbox 不丟，通用標籤、沒有插話鈕，整批插話只動人排的', async () => {
+      const { fake, input } = await runningWithQueue(['第一句']);
+      fake.downlink.acceptUnknownSource(fake.opened[0]!, 'future instruction', 'future-kind');
+      const dock = screen.getByTestId('queue-dock');
+      await waitFor(() => expect(dock.textContent).toContain('2 則排著的訊息'));
+      fireEvent.click(within(dock).getByRole('button', { name: '2 則排著的訊息' }));
+      expect(await within(dock).findByTestId('queue-generic-label')).toBeTruthy();
+      expect(within(dock).getByText('第一句')).toBeTruthy();
+      expect(dock.textContent).not.toContain('future instruction');
+      expect(within(dock).queryByRole('button', { name: /^插話：系統排入/u })).toBeNull();
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      await waitFor(() =>
+        expect(document.querySelectorAll('[data-pending-steer]')).toHaveLength(1),
+      );
+      expect(document.querySelector('[data-pending-steer]')?.textContent).toContain('第一句');
+      await waitFor(() => expect(screen.getByTestId('queue-generic-label')).toBeTruthy());
+      expect(screen.queryByText('這一輪已經不收插話了，那一則照舊排著')).toBeNull();
+    });
+
     it('窄螢幕（640 以下）提示字不講快捷鍵，手勢照樣生效', async () => {
       vi.stubGlobal('matchMedia', (query: string) => ({
         matches: /\(min-width:\s*(\d+)px\)/.test(query)
