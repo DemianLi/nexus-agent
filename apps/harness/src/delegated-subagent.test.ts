@@ -18,7 +18,11 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
-import { SUBAGENT_DELEGATION_CONTEXT, TOOL_ERROR_PREFIX } from '@nexus/core';
+import {
+  FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
+  SUBAGENT_DELEGATION_CONTEXT,
+  TOOL_ERROR_PREFIX,
+} from '@nexus/core';
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   createAskUserPlugin,
@@ -95,7 +99,11 @@ async function until(predicate: () => boolean, ms = 5000): Promise<void> {
 }
 
 /** 真的組裝跑一輪到收尾——serve 那條路的形狀。 */
-async function runOnce(turns: readonly ScriptedTurn[], plugins: readonly PluginEntry[]) {
+async function runOnce(
+  turns: readonly ScriptedTurn[],
+  plugins: readonly PluginEntry[],
+  stopAt: 'done' | 'input' = 'done',
+) {
   const root = await mkdtemp(join(tmpdir(), 'nexus-delegated-'));
   const model = new ScriptedChatModel({ turns });
   const built = await createNexusAgent({
@@ -114,11 +122,12 @@ async function runOnce(turns: readonly ScriptedTurn[], plugins: readonly PluginE
   })();
 
   await pump.submit({ kind: 'message', text: '委派' });
-  await until(() => frames.some(isRootDone));
+  await until(() => (stopAt === 'input' ? pump.awaitingInput : frames.some(isRootDone)));
   await pump.whenIdle();
 
   return {
     pump,
+    frames,
     model,
     close: async () => {
       line.abort();
@@ -221,7 +230,9 @@ describe('委派聲明：子代理每次模型請求都有，root 的沒有', ()
 
           for (const prompt of subagentPrompts) {
             const text = systemText(prompt);
-            expect(occurrences(text, SUBAGENT_DELEGATION_CONTEXT)).toBe(1);
+            expect(occurrences(text, FOREGROUND_SUBAGENT_DELEGATION_CONTEXT)).toBe(1);
+            // 前景的核准交給使用者：不能再講「會自動被拒絕」那句（背景才是）。
+            expect(text).not.toContain(SUBAGENT_DELEGATION_CONTEXT);
             expect(text).toContain(ownPrompt);
           }
           for (const prompt of rootPrompts) {
@@ -238,10 +249,11 @@ describe('委派聲明：子代理每次模型請求都有，root 的沒有', ()
 
 /**
  * **真的會停下來問人的工具**，不只是測試用的 `danger`：閘門不看名字，產品裡掛 `ask`、在閘門之前沒被別層擋下的每一顆，
- * 在子代理裡都拿到 `policy-never` 那句。`exit_plan_mode` 以前也掛 `ask`，#652 照 dsh 改走提問通道、不再過閘門；
- * 它在子代理裡照樣先被計劃模式那層擋下，見下一組。
+ * 前景子代理叫到時都停在核准點等人（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，翻了 #324 的「`policy-never`」）；
+ * 中斷帶子代理的 namespace，人拒絕之後子代理收到拒絕的訊息、照常收尾。`exit_plan_mode` 以前也掛 `ask`，#652 照 dsh 改走提問通道、
+ * 不再過閘門；它在子代理裡照樣先被計劃模式那層擋下，見下一組。
  */
-describe('產品裡掛 `ask` 的工具在子代理裡也不停下來', () => {
+describe('產品裡掛 `ask` 的工具在前景子代理裡停下來等人', () => {
   const cases = [
     {
       name: 'submit_record',
@@ -262,15 +274,30 @@ describe('產品裡掛 `ask` 的工具在子代理裡也不停下來', () => {
             { content: '根收工。' },
           ],
           [WORKER, plugin],
+          'input',
         );
         try {
+          expect(run.pump.awaitingInput).toBe(true);
+          expect(run.pump.pendings).toHaveLength(1);
+          expect([...run.pump.gatedTools]).toContain(name);
+          const request = run.frames.filter((frame) => frame.method === 'input.requested');
+          expect(request).toHaveLength(1);
+          expect(request[0]?.params.namespace.length).toBeGreaterThan(0);
+          expect(JSON.stringify(request[0]?.params.data)).toContain(reason);
+
+          await run.pump.submit({
+            kind: 'resume',
+            interruptId: run.pump.pendings[0]!.interruptId,
+            response: { decisions: [{ type: 'reject' }] },
+          });
+          await run.pump.whenIdle();
           expect(run.pump.awaitingInput).toBe(false);
           const refusal = run.model.prompts
             .filter(isSubagentPrompt)
             .flat()
             .find((message) => message.getType() === 'tool');
-          expect(refusal?.text).toContain(reason);
-          expect(refusal?.text).toContain('沒有人被問到');
+          expect(refusal?.text).toContain('拒絕');
+          expect(refusal?.text).not.toContain('沒有人被問到');
         } finally {
           await run.close();
         }

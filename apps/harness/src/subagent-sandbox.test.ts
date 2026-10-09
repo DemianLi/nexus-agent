@@ -435,7 +435,7 @@ describe('子代理的沙箱模式', () => {
 
   /**
    * **子代理的加寬請求不問人**（#700）。問人搬進工具本體之後，本體讀的核准管道是 root 那一份（有人在），
-   * 所以子代理那一格要由本體自己認出來：委派快照有值就當成 `policy-never`（#324）。斷言**沒有中斷**，
+   * 所以子代理那一格要由本體自己認出來：委派快照有值就拒（#324；#328 第 1 項後理由是 `delegated`，不再說政策關掉了——前景子代理的一般核准會問人，升級不會）。斷言**沒有中斷**，
    * 不只比文字——控制器在委派裡的 `grant` 本來就不做事，只比文字的話拿掉那一格照樣綠，人卻被問到了。
    */
   it('子代理叫升級、真的加寬：被拒、沒有中斷、grant 沒發，拒絕說的是沒有人被問到', async () => {
@@ -450,7 +450,7 @@ describe('子代理的沙箱模式', () => {
       expect(run.pump.pendings).toHaveLength(0);
       expect(run.controller.peekGrant()).toBeUndefined();
       const [refused] = subagentToolTexts(run.model);
-      expect(refused).toBe(`Error: ${unaskedRefusal('policy-never', 'workspace-write')}`);
+      expect(refused).toBe(`Error: ${unaskedRefusal('delegated', 'workspace-write')}`);
       expect(refused).toContain('沒有人被問到');
     } finally {
       await run.close();

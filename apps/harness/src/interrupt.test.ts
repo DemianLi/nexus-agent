@@ -424,93 +424,86 @@ function subagentRefusal(model: ScriptedChatModel): BaseMessage | undefined {
 }
 
 /**
- * **這兩條在 [#324](https://github.com/DemianLi/nexus-agent/issues/324) 翻了面。** 以前釘的是「中斷冒到 root、
- * 等人按」；照 dsh，子代理的核准政策在委派時釘成 `never`（`child-agent.ts:220-247`），子代理不停下來等人。
- * 現在釘的是：**不中斷**、工具沒跑、子代理收到 `policy-never` 那句、root 的 `task` 照常收尾。
+ * **這幾條在 [#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項翻回來**（[#324](https://github.com/DemianLi/nexus-agent/issues/324)
+ * 曾翻成「照 dsh 不停下來」）。前景子代理叫到要核准的工具會把中斷冒到 root 等人按：核准之後工具真的跑、拒絕只拒那一次呼叫（子代理收到
+ * 拒絕的訊息、照常收尾），root 的 `task` 都照常完成。背景子代理維持一律回絕，見 `subagent-background-probe.test.ts` 與
+ * `background-delegation.test.ts`。
  *
- * **閘門照樣要逐個注進去，這兩條仍然量它**：子代理不繼承 root 的 plugin middleware，不注的話 `danger` 在
- * 子代理裡會直接執行，`ran` 紅。腳本的輪數剛好：多一輪（例如又停下來）會當場拋。
+ * **閘門照樣要逐個注進去，這幾條仍然量它**：子代理不繼承 root 的 plugin middleware，不注的話 `danger` 在
+ * 子代理裡會直接執行，`ran` 紅。
  */
 describe('subagent 裡的閘門', () => {
-  it('子代理呼叫 gated 工具 → 不中斷、工具沒跑，子代理收到「沒有人被問到」，root 照常收尾', async () => {
-    const model = new ScriptedChatModel({
-      turns: [
-        {
-          content: '委派。',
-          toolCalls: [{ name: 'task', args: { description: '幹活', subagent_type: 'worker' } }],
-        },
-        { content: '子代理動手。', toolCalls: [{ name: 'danger', args: {} }] },
-        { content: '子代理收工。' },
-        { content: '根收工。' },
-      ],
-    });
+  const delegatePlugin: PluginEntry = {
+    plugin: {
+      name: 'delegate',
+      apply(registry) {
+        // 刻意不自帶 `tools`——什麼都不帶的 subagent 沿用 root 那組，`danger`
+        // 因此在子代理裡也叫得到，而閘門是不是跟著下去正是這一條要問的事。
+        // **這一條在換機制之後更吃重**：subagent 不繼承 root 的 plugin middleware
+        // （`SubAgentBase.middleware` 是「append after default_middleware」），
+        // 閘門是 fold 逐個注進去的。沒注就是默默地失去核准，而它紅在這裡。
+        registry.subagents.register({ name: 'worker', description: '幹活的。' });
+      },
+    },
+  };
 
+  const delegateTurns = (subagentType: string) => [
+    {
+      content: '委派。',
+      toolCalls: [{ name: 'task', args: { description: '幹活', subagent_type: subagentType } }],
+    },
+    { content: '子代理動手。', toolCalls: [{ name: 'danger', args: {} }] },
+    { content: '子代理收工。' },
+    { content: '根收工。' },
+  ];
+
+  async function pausedInSubagent(subagentType: string) {
+    const model = new ScriptedChatModel({ turns: delegateTurns(subagentType) });
     const { agent } = await createNexusAgent({
       model,
       checkpointer: new MemorySaver(),
-      plugins: [
-        spyPlugin(['danger']),
-        {
-          plugin: {
-            name: 'delegate',
-            apply(registry) {
-              // 刻意不自帶 `tools`——什麼都不帶的 subagent 沿用 root 那組，`danger`
-              // 因此在子代理裡也叫得到，而閘門是不是跟著下去正是這一條要問的事。
-              // **這一條在換機制之後更吃重**：subagent 不繼承 root 的 plugin middleware
-              // （`SubAgentBase.middleware` 是「append after default_middleware」），
-              // 閘門是 fold 逐個注進去的。沒注就是默默地失去核准，而它紅在這裡。
-              registry.subagents.register({ name: 'worker', description: '幹活的。' });
-            },
-          },
-        },
-        gatePlugin(['danger']),
-      ],
+      plugins: [spyPlugin(['danger']), delegatePlugin, gatePlugin(['danger'])],
     });
-    const config = { configurable: { thread_id: 'subagent' } };
+    const config = { configurable: { thread_id: `subagent-${subagentType}` } };
+    const paused = await agent.invoke(toAgentInvocation('委派'), config);
+    return { model, agent, config, paused };
+  }
 
-    const result = await agent.invoke(toAgentInvocation('委派'), config);
+  for (const subagentType of ['worker', 'general-purpose']) {
+    it(`${subagentType}：呼叫 gated 工具 → 中斷冒到 root，工具還沒跑；核准 → 工具真的跑、root 收尾`, async () => {
+      const { model, agent, config, paused } = await pausedInSubagent(subagentType);
 
-    expect(result.__interrupt__).toBeUndefined();
-    expect(ran).toEqual([]);
-    // 閘門真的判過，而且走的是 `policy-never` 那句——不是別的理由擋下，也不是有人拒絕。
-    expect(subagentRefusal(model)?.text).toContain('danger 要人看過');
-    expect(subagentRefusal(model)?.text).toContain('沒有人被問到');
-    expect((result.messages as BaseMessage[]).at(-1)?.text).toBe('根收工。');
-  });
+      // 前提：真的停在核准上，而且停的是 `danger`（不是別的中斷）。
+      expect(paused.__interrupt__).toHaveLength(1);
+      expect(paused.__interrupt__?.[0]?.value).toMatchObject({
+        kind: 'approval',
+        actionRequests: [{ name: 'danger', description: 'danger 要人看過' }],
+      });
+      expect(ran).toEqual([]);
 
-  /**
-   * **沒有人註冊的那一個。** `general-purpose` 以前是基座自己補的：它那次
-   * `mergeMiddlewareStack(..., { appendNew: false })` 把名字不撞內建的 middleware 全部丟掉，
-   * 閘門就在其中——`task` 的描述對模型列著它，而叫它等於繞過核准。上一條是它的對照組。
-   */
-  it('general-purpose 裡呼叫 gated 工具 → 一樣不中斷、工具沒跑，root 照常收尾', async () => {
-    const model = new ScriptedChatModel({
-      turns: [
-        {
-          content: '委派。',
-          toolCalls: [
-            { name: 'task', args: { description: '幹活', subagent_type: 'general-purpose' } },
-          ],
-        },
-        { content: '子代理動手。', toolCalls: [{ name: 'danger', args: {} }] },
-        { content: '子代理收工。' },
-        { content: '根收工。' },
-      ],
+      const done = await agent.invoke(
+        new Command({ resume: { decisions: [{ type: 'approve' }] } }),
+        config,
+      );
+      expect(done.__interrupt__).toBeUndefined();
+      expect(ran).toEqual(['danger']);
+      expect(subagentRefusal(model)?.text).toContain('danger 跑過了');
+      expect((done.messages as BaseMessage[]).at(-1)?.text).toBe('根收工。');
     });
 
-    const { agent } = await createNexusAgent({
-      model,
-      checkpointer: new MemorySaver(),
-      plugins: [spyPlugin(['danger']), gatePlugin(['danger'])],
+    it(`${subagentType}：拒絕 → 只拒那一次，工具沒跑，子代理收到拒絕、照常收尾，root 的 task 完成`, async () => {
+      const { model, agent, config } = await pausedInSubagent(subagentType);
+
+      const done = await agent.invoke(
+        new Command({ resume: { decisions: [{ type: 'reject' }] } }),
+        config,
+      );
+      expect(done.__interrupt__).toBeUndefined();
+      expect(ran).toEqual([]);
+      // 子代理收到的是「人拒絕」那句，不是「沒有人被問到」。
+      expect(subagentRefusal(model)?.text).toContain('拒絕');
+      expect(subagentRefusal(model)?.text).not.toContain('沒有人被問到');
+      expect((done.messages as BaseMessage[]).at(-1)?.text).toBe('根收工。');
     });
-    const config = { configurable: { thread_id: 'general-purpose' } };
-
-    const result = await agent.invoke(toAgentInvocation('委派'), config);
-
-    expect(result.__interrupt__).toBeUndefined();
-    expect(ran).toEqual([]);
-    expect(subagentRefusal(model)?.text).toContain('danger 要人看過');
-    expect(subagentRefusal(model)?.text).toContain('沒有人被問到');
-    expect((result.messages as BaseMessage[]).at(-1)?.text).toBe('根收工。');
-  });
+  }
 });

@@ -32,6 +32,7 @@ import type { NamedEntry } from './entries.js';
 import { rawArgumentsOf } from './invalid-tool-args.js';
 import { formatOrigin, type NexusPlugin } from './plugin.js';
 import type { ApprovalOutcome } from './session-log.js';
+import { isBackgroundAddress } from './session-address.js';
 import {
   APPROVAL_NO_CHANNEL,
   APPROVAL_POLICY_NEVER,
@@ -491,10 +492,14 @@ export const approvalGatePlugin: NexusPlugin = {
     if (controller === undefined) return;
     registry.sessions.join((subject) => {
       if (subject.address.kind === 'root') return controller.attach(subject.log);
-      // 子代理：委派時一律釘成 `never`（照 dsh `child-agent.ts:254-275`，fold 為它另建的閘門管道固定 `policy-never`，#324），
+      // 背景子代理：委派時一律釘成 `never`（照 dsh `child-agent.ts:254-275`，編背景圖時換上的閘門管道固定 `policy-never`，#324／#737），
       // 日誌上補一顆讓讀的人答得出。第一次開啟時寫一次；這一份日誌之後沒有人會切它。
       // 背景續行的子代理被叫醒時日誌是從磁碟讀回來的，已經有這一顆就不再寫。
-      if (!subject.log.events.some((event) => event.type === 'approval/policy')) {
+      // **前景子代理不寫**（#328 第 1 項）：它用 root 當下的政策，記了 `never` 是假話；root 的切換已經記在 root 日誌上。
+      if (
+        isBackgroundAddress(subject.address) &&
+        !subject.log.events.some((event) => event.type === 'approval/policy')
+      ) {
         subject.log.append('approval/policy', { policy: 'never', source: 'delegation' });
       }
       return undefined;

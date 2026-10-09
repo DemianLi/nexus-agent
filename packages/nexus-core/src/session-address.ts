@@ -112,6 +112,17 @@ function checkpointNamespace(config: unknown): string | undefined {
   return typeof namespace === 'string' && namespace.length > 0 ? namespace : undefined;
 }
 
+/** 背景子代理編號的前綴：`bg-` 加隨機（`BackgroundSubagentHost.start` 產的）。前景子代理的 `runId` 是 LangGraph 的命名空間，不會長這樣。 */
+export const BACKGROUND_RUN_PREFIX = 'bg-';
+
+/**
+ * 這個地址是不是背景子代理的。**前景與背景的子代理都是 `kind: 'subagent'`**，要分開（例如核准：前景把中斷冒到人面前，背景背後沒有人，#328）
+ * 就看這個。
+ */
+export function isBackgroundAddress(address: SessionAddress): boolean {
+  return address.kind === 'subagent' && address.runId.startsWith(BACKGROUND_RUN_PREFIX);
+}
+
 /**
  * 挖出背景身分鍵。
  *

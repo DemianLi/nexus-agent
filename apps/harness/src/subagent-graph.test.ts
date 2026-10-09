@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
+import { FOREGROUND_SUBAGENT_DELEGATION_CONTEXT, SUBAGENT_DELEGATION_CONTEXT } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -122,7 +123,12 @@ describe('漂移絆索：同一份規格，task 那條路與背景圖，模型�
       if (name === 'general-purpose') expect(task.system).toContain('web-research');
 
       expect(compiled.tools).toEqual(task.tools);
-      expect(compiled.system).toBe(task.system);
+      // 唯一刻意的差別是委派聲明（#328 第 1 項）：前景說核准交給使用者，背景說會自動被拒絕。其餘逐字相同。
+      expect(task.system).toContain(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT);
+      expect(compiled.system).toContain(SUBAGENT_DELEGATION_CONTEXT);
+      expect(compiled.system.replace(SUBAGENT_DELEGATION_CONTEXT, '')).toBe(
+        task.system.replace(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT, ''),
+      );
     });
   }
 });

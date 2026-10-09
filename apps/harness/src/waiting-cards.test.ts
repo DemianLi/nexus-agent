@@ -5,9 +5,10 @@
  *
  * 停下來等人的那一輪，**即時與重播畫得一樣**——[#317](https://github.com/DemianLi/nexus-agent/issues/317) 的驗收。
  *
- * 兩種等法：本體拋了中斷的（問答）是「等你回答」；停在核准閘門上的本體沒被呼叫到，照 dsh 是「執行中」。子代理
- * 照 dsh 不停下來等人（[#324](https://github.com/DemianLi/nexus-agent/issues/324)），所以停下來的只有 root 自己的
- * 工具；最後一條釘住子代理那條路不再停。日誌分不出這兩種，重播靠 pump 交進來的閘門工具名分（`conversation-history.ts` 的 `historyFrames`）。
+ * 兩種等法：本體拋了中斷的（問答）是「等你回答」；停在核准閘門上的本體沒被呼叫到，照 dsh 是「執行中」。背景子代理
+ * 照 dsh 不停下來等人（[#324](https://github.com/DemianLi/nexus-agent/issues/324)）；**前景子代理會**（[#328](https://github.com/DemianLi/nexus-agent/issues/328)
+ * 第 1 項），它底下的委派卡維持「執行中」，最後一條釘住即時與重播在這條路上畫得一樣。日誌分不出這兩種，重播靠 pump 交進來的
+ * 閘門工具名分（`conversation-history.ts` 的 `historyFrames`）。
  *
  * 每條都拿同一次真的組裝跑出來的即時畫面，與它寫下的日誌重播出來的畫面對照，**而且兩邊各自寫明期望值**——只比兩邊
  * 相等的話，兩邊一起錯也會綠。重播只讀 root 那份日誌，子代理的卡不在裡面（`conversation-history.ts` 的 `frame`），
@@ -255,11 +256,11 @@ describe('停下來等人的那一輪，即時與重播畫得一樣', () => {
   }, 20000);
 
   /**
-   * **[#324](https://github.com/DemianLi/nexus-agent/issues/324) 翻了面。** 以前子代理停在核准點，root 的 `task`
-   * 兩邊都是「等你回答」；照 dsh，子代理的核准政策在委派時釘成 `never`，子代理不停下來等人，這一輪根本沒停。
-   * 留著它，是為了釘住「子代理叫到要核准的工具」這條路不再產生等人的卡。
+   * **[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項翻回來**（[#324](https://github.com/DemianLi/nexus-agent/issues/324) 曾翻成不停）。
+   * 前景子代理叫到要核准的工具會停在核准點；root 的 `task` 即時與重播都還是「執行中」（子代理在它底下等人），
+   * 中斷帶的是子代理的 namespace，畫面靠它認出是哪個子代理在問。
    */
-  it('子代理叫到要核准的工具：不停下來，root 的 `task` 兩邊都是完成', async () => {
+  it('前景子代理叫到要核准的工具：停下來，root 的 `task` 兩邊畫得一樣', async () => {
     const run = await stopForInput(
       [
         {
@@ -273,13 +274,17 @@ describe('停下來等人的那一輪，即時與重播畫得一樣', () => {
       [DANGER, WORKER],
     );
     try {
-      expect(run.pump.awaitingInput).toBe(false);
-      expect(run.pump.pendings).toHaveLength(0);
-      expect(run.pump.sessionLog.events.at(-1)?.type).toBe('turn/end');
-      expect([...run.pump.gatedTools]).toEqual([]);
+      expect(run.pump.awaitingInput).toBe(true);
+      expect(run.pump.pendings).toHaveLength(1);
+      // 閘門上的工具名，加上它底下停著的委派卡（重播靠名字讓那張卡維持執行中）。
+      expect([...run.pump.gatedTools]).toEqual(['danger', 'task', 'subagent']);
 
-      expect(rootCards(run.live)).toEqual(['task:done']);
-      expect(rootCards(run.replay)).toEqual(['task:done']);
+      expect(rootCards(run.live)).toEqual(['task:running']);
+      expect(rootCards(run.replay)).toEqual(['task:running']);
+      // 中斷帶的是子代理的 namespace（畫面靠它認出是誰在問），而且只有一顆：root 層的第二次露面被吞掉。
+      const requests = run.frames.filter((frame) => frame.method === 'input.requested');
+      expect(requests).toHaveLength(1);
+      expect(requests[0]?.params.namespace.length).toBeGreaterThan(0);
     } finally {
       await run.close();
     }

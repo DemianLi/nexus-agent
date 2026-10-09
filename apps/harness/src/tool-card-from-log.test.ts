@@ -278,11 +278,11 @@ describe('產品路徑：本體沒被呼叫到的呼叫，web 上有一張卡', 
   }, 20000);
 
   /**
-   * **[#324](https://github.com/DemianLi/nexus-agent/issues/324) 翻了面。** 以前子代理停在核准點、按停止收卡；照 dsh，
-   * 子代理的核准政策在委派時釘成 `never`，它不停下來。`danger` 的本體沒被呼叫到，卡從子代理日誌的 `tool/call` 開、
-   * 由它的 `tool/result` 收成失敗，紅字是 `policy-never` 那句；root 的 `task` 照常完成。
+   * **[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項翻回來**（#324 曾翻成不停）。前景子代理叫到要核准的工具會停在核准點：
+   * `danger` 的本體沒被呼叫到，卡從子代理日誌的 `tool/call` 開、掛在那個子代理底下、執行中；人拒絕之後由它的 `tool/result` 收成失敗，
+   * 紅字是人拒絕那句；root 的 `task` 照常完成。
    */
-  it('子代理叫到要核准的工具：不停下來，卡掛在子代理底下、失敗、紅字是「沒有人被問到」', async () => {
+  it('前景子代理叫到要核准的工具：卡掛在子代理底下，人拒絕後失敗、紅字是人拒絕', async () => {
     const run = await assemble(
       [
         DELEGATE,
@@ -294,15 +294,29 @@ describe('產品路徑：本體沒被呼叫到的呼叫，web 上有一張卡', 
     );
     try {
       await run.say('派出去');
+      // 前提：真的停在核准上，而且是子代理在問（中斷帶子代理的 namespace）。
+      expect(run.pump.awaitingInput).toBe(true);
+      const waiting = toolEntries(run.frames).find((card) => card.name === 'danger');
+      expect(waiting).toMatchObject({
+        status: 'running',
+        attribution: { kind: 'subagent', name: 'worker' },
+      });
+
+      const done = run.frames.filter(isRootDone).length;
+      await run.pump.submit({
+        kind: 'resume',
+        interruptId: run.pump.pendings[0]!.interruptId,
+        response: { decisions: [{ type: 'reject' }] },
+      });
+      await until(() => run.frames.filter(isRootDone).length > done);
       expect(run.pump.awaitingInput).toBe(false);
-      expect(baseToolFrames(run.frames, 'danger')).toEqual([]);
       const cards = toolEntries(run.frames);
       const danger = cards.find((card) => card.name === 'danger');
       expect(danger).toMatchObject({
         status: 'failed',
         attribution: { kind: 'subagent', name: 'worker' },
       });
-      expect(danger?.error).toMatch(/沒有人被問到/);
+      expect(danger?.error).toMatch(/有人看過並拒絕了 "danger"/);
       expect(cards.find((card) => card.name === 'task')).toMatchObject({ status: 'done' });
     } finally {
       await run.close();

@@ -2339,8 +2339,11 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
     OBSERVATION_POLICY_MIDDLEWARE_NAME,
     SUMMARIZATION_MIDDLEWARE_NAME,
   ]);
-  /** 同名但是另一顆：子代理的核准閘門管道固定 `policy-never`。 */
-  const OTHER_INSTANCE = new Set([APPROVAL_GATE_MIDDLEWARE_NAME]);
+  /**
+   * 同名但是另一顆。**現在沒有了**：前景子代理的核准閘門跟 root 同一顆（#328 第 1 項，翻了 #324 的「管道固定 `policy-never`」）；
+   * 背景圖的 `policy-never` 那顆在編圖時換上（`compileSubagentGraph` 的 `approvalGate`），不在 fold 的產物裡。
+   */
+  const OTHER_INSTANCE = new Set<string>();
 
   type Named = { name: string };
   const nameOf = (middleware: unknown): string => (middleware as Named).name;

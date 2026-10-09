@@ -9,9 +9,9 @@
  * 權限範圍在啟動時就固定、需要核准的操作會自動被拒、被拒了不要重試而是在回覆裡交代。它**刻意不放進
  * 系統提示詞**，讓父子的系統提示詞保持一致。字照翻成中文，見 {@link SUBAGENT_DELEGATION_CONTEXT}。
  *
- * 這句話在我們這裡字面為真，靠的是 fold 替子代理另建的那顆核准閘門（管道固定 `policy-never`，見
- * {@link ./fold.ts} 的 `foldSubAgents`）與問答工具的 `rootOnly`。三件是同一張卡的三面，拿掉任何一件，
- * 另外兩件講的就不是實話。
+ * 這句話對**背景**子代理字面為真，靠的是編圖時換上的那顆核准閘門（管道固定 `policy-never`，見
+ * {@link ./fold.ts} 的 `createBackgroundApprovalGate`）、換上的這顆預設聲明與問答工具的 `rootOnly`。
+ * **前景**子代理的核准交給使用者（#328 第 1 項），fold 放的是 {@link FOREGROUND_SUBAGENT_DELEGATION_CONTEXT}。
  *
  * ## 載體
  *
@@ -43,13 +43,27 @@ export const SUBAGENT_DELEGATION_CONTEXT =
   '在回覆裡說明這個限制，讓委派你的 agent 處理。';
 
 /**
- * 建一顆把 {@link SUBAGENT_DELEGATION_CONTEXT} 接進系統訊息的 middleware。
+ * 前景子代理看到的那一段（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項）：前景時主對話停著等，需要核准的操作交給使用者決定，
+ * 不再是自動拒絕，所以不能沿用 dsh 那句。「被拒了不要重試」留著——使用者拒絕與自動拒絕對子代理是同一件事。
+ * 問答工具與沙箱升級在子代理裡仍然確定性回絕（各自的句子會講），這一句只管核准閘門。
+ */
+export const FOREGROUND_SUBAGENT_DELEGATION_CONTEXT =
+  '你是被委派的子代理：你的權限範圍在啟動時就固定了，無法在這個 session 裡擴大——' +
+  '需要核准的操作會交給使用者決定，在使用者回答之前你會等著。操作被拒絕時，不要重試被拒絕的操作；' +
+  '任務需要超出這個範圍時，在回覆裡說明這個限制，讓委派你的 agent 處理。';
+
+/**
+ * 建一顆把委派聲明接進系統訊息的 middleware。
  *
  * 無狀態，一份實例走遍每個子代理。
  *
+ * @param context - 要接的那一段。預設 {@link SUBAGENT_DELEGATION_CONTEXT}（背景子代理：背後沒有人）；fold 替前景子代理傳
+ * {@link FOREGROUND_SUBAGENT_DELEGATION_CONTEXT}。
  * @returns 只放進子代理清單的那一顆。
  */
-export function createSubagentDelegationMiddleware(): AgentMiddleware {
+export function createSubagentDelegationMiddleware(
+  context: string = SUBAGENT_DELEGATION_CONTEXT,
+): AgentMiddleware {
   return createMiddleware({
     name: SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
@@ -57,15 +71,15 @@ export function createSubagentDelegationMiddleware(): AgentMiddleware {
       if (systemMessage !== undefined) {
         return handler({
           ...request,
-          systemMessage: systemMessage.concat(`\n${SUBAGENT_DELEGATION_CONTEXT}`),
+          systemMessage: systemMessage.concat(`\n${context}`),
         });
       }
       return handler({
         ...request,
         systemPrompt:
           typeof systemPrompt === 'string' && systemPrompt !== ''
-            ? `${systemPrompt}\n${SUBAGENT_DELEGATION_CONTEXT}`
-            : SUBAGENT_DELEGATION_CONTEXT,
+            ? `${systemPrompt}\n${context}`
+            : context,
       });
     },
   });

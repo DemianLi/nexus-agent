@@ -48,7 +48,9 @@ import {
   compileSubagentGraph,
   foldRegistry,
   formatOrigin,
+  createBackgroundApprovalGate,
   createRegistry,
+  createSubagentDelegationMiddleware,
   isFeedbackEvent,
   loadPlugins,
   MESSAGE_FEEDBACK_SERVICE,
@@ -862,6 +864,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
      * @returns 編好的圖。
      * @throws 沒有這個子代理、規格不合。
      */
+    const backgroundApprovalGate = createBackgroundApprovalGate(registry);
     const compileSubagent = (
       name: string,
       checkpointer: NonNullable<AgentCheckpointer>,
@@ -876,6 +879,10 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         ...(model !== undefined && { model }),
         // 背景子代理的模型在委派那一刻定了（`delegationBaseline`），不跟著使用者後來換的模型走（#328，照 dsh）。
         follow: false,
+        // 背景子代理背後沒有人（#328 第 1 項只開前景）：換成 `policy-never` 的閘門，要核准的操作確定性回絕，不發中斷（#737，照 dsh）。
+        approvalGate: backgroundApprovalGate,
+        // 聲明同理換回背景那句：fold 放進規格的是前景用的（核准交給使用者），背景背後沒有人。
+        delegation: createSubagentDelegationMiddleware(),
       }).withConfig({
         recursionLimit: recursionLimitFor(registry, options),
         // 平行工具呼叫上限同理（#711）：背景圖不在 root 那次 invoke 的執行脈絡裡，繼承不到，要自己帶。

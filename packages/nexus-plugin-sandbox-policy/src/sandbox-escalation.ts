@@ -36,7 +36,8 @@
  * | --- | --- | --- |
  * | 沒指名檔案、理由空白 | {@link MISSING_TARGET_REFUSAL}、{@link BLANK_JUSTIFICATION_REFUSAL} | 沒有 |
  * | 不加寬 | {@link nonWideningRefusal} | 沒有 |
- * | 子代理、這個 session 關掉了人工核准 | {@link unaskedRefusal}（`policy-never`） | 沒有 |
+ * | 子代理 | {@link unaskedRefusal}（`delegated`） | 沒有 |
+ * | 這個 session 關掉了人工核准 | {@link unaskedRefusal}（`policy-never`） | 沒有 |
  * | 沒有 checkpointer | {@link unaskedRefusal}（`no-channel`） | 沒有 |
  * | 組裝點沒提供核准管道 | {@link unaskedRefusal}（`no-service`） | 沒有 |
  * | 被拒 | 人給的理由，或 {@link rejectedRefusal} | 有 |
@@ -45,9 +46,10 @@
  * `ask_user_question` 退到 `{ kind: 'human' }`。dsh 的 `cancelled` 在我們這側**沒有對應物**（`approval.ts`
  * 的 `ApprovalChannel` 那段記過）；dsh 的「沒有 agent 可以路由」也沒有——我們每一次工具呼叫都在某個 agent 裡。
  *
- * **子代理怎麼拒**：照 #324，子代理的核准政策在委派時釘成 `policy-never`（dsh 把 `'never'` 帶進子代理，
- * 那條在 `ask` 裡回 `rejected`），所以本體在委派快照裡（{@link SandboxModeController.delegatedMode} 有值）
- * 就當成 `policy-never`。判在加寬**之後**，同 dsh 的先後：不加寬的請求在子代理裡照樣拿到不加寬那句。
+ * **子代理怎麼拒**：照 #324，子代理不問人升級（dsh 把核准政策 `'never'` 帶進子代理，那條在 `ask` 裡回 `rejected`）；
+ * 本體在委派快照裡（{@link SandboxModeController.delegatedMode} 有值）就拒。[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項
+ * 之後前景子代理的**一般**核准會交給使用者，升級卻不跟：控制器在委派裡 `grant` 不做事（下一節），人核准了也認領不到，
+ * 問了就是騙人。所以理由不再是「政策關掉了」，是 {@link UnaskedReason} 的 `delegated`。判在加寬**之後**，同 dsh 的先後：不加寬的請求在子代理裡照樣拿到不加寬那句。
  * 不用 `rootOnly` 的拒絕樁，因為樁會把整顆工具換掉、連加寬都不判。
  *
  * ## 偏離：grant 綁目標、跨兩顆呼叫
@@ -63,7 +65,7 @@
  * 下一顆打到同一個檔、而且被擋下的變更。要有時效是另一顆機制，今天沒做。
  *
  * **subagent 拿不到 grant**（[#326](https://github.com/DemianLi/nexus-agent/issues/326)）：子代理的升級在本體裡
- * 被當成 `policy-never` 拒掉（上一節）；root 手上那顆也認領不到——控制器在委派裡 `grant` 不做事、`peekGrant`
+ * 被當成 `delegated` 拒掉（上一節）；root 手上那顆也認領不到——控制器在委派裡 `grant` 不做事、`peekGrant`
  * 回空、`recordDenial` 不寫（見 `sandbox-mode.ts`）。本體判「加寬」讀 `controller.current`，在子代理裡就是
  * 委派那一刻拍下的那一格。
  *
@@ -159,7 +161,7 @@ export const BLANK_JUSTIFICATION_REFUSAL =
  * （[#437](https://github.com/DemianLi/nexus-agent/issues/437)：有人在，但使用者選了不問）。
  */
 export type UnaskedReason =
-  Exclude<ApprovalChannel['kind'], 'human'> | 'no-service' | 'approval-never';
+  Exclude<ApprovalChannel['kind'], 'human'> | 'no-service' | 'approval-never' | 'delegated';
 
 /**
  * 加寬、但沒有人可問的那句話。**三種原因各說各的**，同核准閘門的紀律（`approval.ts` 的
@@ -185,6 +187,11 @@ export function unaskedRefusal(reason: UnaskedReason, requested: SandboxMode): s
       return (
         `${head}但這個 session 的核准政策是不問（never），所以沒有去問人。` +
         '這不是有人拒絕了它——是沒有人被問到。'
+      );
+    case 'delegated':
+      return (
+        `${head}但子代理拿不到升級的核准——升級只在主對話生效，所以沒有去問人。` +
+        '這不是有人拒絕了它——是沒有人被問到。需要的話，在回覆裡說明，讓委派你的 agent 處理。'
       );
     case 'no-service':
       return (
@@ -274,10 +281,10 @@ function createEscalationTool(
       if (!isStrictlyWider(current, requested)) {
         return refuse(nonWideningRefusal(requested, current));
       }
-      // 子代理的核准政策釘成 `policy-never`（#324），見模組註解「子代理怎麼拒」。
+      // 子代理不問人升級（#324／#328），見模組註解「子代理怎麼拒」。
       const unasked: UnaskedReason | undefined =
         controller.delegatedMode !== undefined
-          ? 'policy-never'
+          ? 'delegated'
           : channel === undefined
             ? 'no-service'
             : channel.kind !== 'human'

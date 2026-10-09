@@ -19,7 +19,13 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry, SessionLog } from '@nexus/core';
-import { createHostServicesPlugin, SessionRegistry, TOOL_ERROR_PREFIX } from '@nexus/core';
+import {
+  createHostServicesPlugin,
+  FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
+  SessionRegistry,
+  SUBAGENT_DELEGATION_CONTEXT,
+  TOOL_ERROR_PREFIX,
+} from '@nexus/core';
 import {
   ASK_USER_QUESTION_TOOL_NAME,
   createAskUserPlugin,
@@ -75,6 +81,14 @@ const delegate = (runInBackground: boolean | undefined, description = '幹活') 
     subagent_type: 'worker',
     ...(runInBackground !== undefined && { run_in_background: runInBackground }),
   });
+
+/** 一次模型請求裡所有 system 訊息的文字。 */
+function systemTextOf(prompt: readonly BaseMessage[]): string {
+  return prompt
+    .filter((message) => message.getType() === 'system')
+    .map((message) => JSON.stringify(message.content))
+    .join('\n');
+}
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();
@@ -1066,6 +1080,70 @@ describe('背景路徑上的 #326：沙箱快照', () => {
     return { controller, run };
   }
 
+  /**
+   * **兩條委派入口的核准待遇不同**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項）：產品的 `subagent` 工具帶 `run_in_background: false` 時改派給基座 `task`，
+   * 那是前景，子代理要核准的操作冒到人面前（root 這一輪停在中斷上）；背景 start 背後沒有人，確定性回絕。
+   */
+  describe('子代理要核准的操作：前景改派問人，背景 start 回絕', () => {
+    const gated: PluginEntry = {
+      plugin: {
+        name: 'gated',
+        apply(registry) {
+          registry.tools.register(
+            tool(() => '做完了', { name: 'danger', description: '要核准。', schema: z.object({}) }),
+          );
+          registry.approvals.gate((exec, next) =>
+            exec.name === 'danger' ? { kind: 'ask', reason: '危險' } : next(),
+          );
+        },
+      },
+    };
+
+    async function openGated(runInBackground: boolean) {
+      return await assemble({
+        rootTurns: [delegate(runInBackground), { content: '根收尾' }],
+        workerTurns: [call('danger', {}), { content: '子代理收工' }],
+        background: {},
+        plugins: [createHostServicesPlugin({ channel: { kind: 'human' } }), gated],
+      });
+    }
+
+    it('前景改派：root 停在子代理冒出來的核准上，沒有自動拒絕', async () => {
+      const run = await openGated(false);
+      try {
+        const result = await run.say();
+        expect('__interrupt__' in result).toBe(true);
+        const state = (await run.built.agent.getState({
+          configurable: { thread_id: 'thread-1' },
+        })) as { tasks: readonly { interrupts: readonly unknown[] }[] };
+        expect(state.tasks.flatMap((task) => task.interrupts)).not.toEqual([]);
+        // 子代理被告知的是前景那句：核准交給使用者。
+        const system = systemTextOf(run.workerModel.prompts[0] ?? []);
+        expect(system).toContain(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT);
+      } finally {
+        await run.close();
+      }
+    });
+
+    it('背景 start：自動回絕、沒有中斷，被告知的是背景那句', async () => {
+      const run = await openGated(true);
+      try {
+        const result = await run.say();
+        expect('__interrupt__' in result).toBe(false);
+        await until(() => run.backgroundLogs().length === 1);
+        const [log] = run.backgroundLogs();
+        await run.backgroundDone(log!);
+        await until(() => run.workerModel.prompts.length === 2);
+        expect(toolTexts(run.workerModel.prompts.at(-1)!).at(-1)).toContain('沒有人被問到');
+        const system = systemTextOf(run.workerModel.prompts[0] ?? []);
+        expect(system).toContain(SUBAGENT_DELEGATION_CONTEXT);
+        expect(system).not.toContain(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT);
+      } finally {
+        await run.close();
+      }
+    });
+  });
+
   for (const [label, runInBackground] of [
     ['前景改派', false],
     ['背景 start', true],
@@ -1088,7 +1166,7 @@ describe('背景路徑上的 #326：沙箱快照', () => {
         expect('__interrupt__' in result).toBe(false);
         expect(controller.peekGrant()).toBeUndefined();
         const refused = toolTexts(run.workerModel.prompts.at(-1)!).at(-1);
-        expect(refused).toBe(`Error: ${unaskedRefusal('policy-never', 'workspace-write')}`);
+        expect(refused).toBe(`Error: ${unaskedRefusal('delegated', 'workspace-write')}`);
       } finally {
         await run.close();
       }
