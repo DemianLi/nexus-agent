@@ -8,11 +8,20 @@
  * **零憑證、零外部連線**。
  */
 
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { tool } from '@langchain/core/tools';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { foldInbox, mentionHintText, replayConversation } from '@nexus/core';
-import type { PluginEntry, SubagentMentionRef } from '@nexus/core';
+import {
+  foldInbox,
+  mentionHintText,
+  replayConversation,
+  SESSION_LOG_FORMAT_VERSION,
+} from '@nexus/core';
+import type { PluginEntry, SessionEvent, SubagentMentionRef } from '@nexus/core';
 import type { Event, InboxPayload } from '@nexus/wire';
 import { INBOX } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -20,6 +29,7 @@ import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
 import { historyFrames } from './conversation-history.js';
+import { openJsonlSessionStore } from './jsonl-session-store.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -259,5 +269,68 @@ describe('排著的一件', () => {
       'text:新文字',
       `text:${mentionHintText(MENTION)}`,
     ]);
+  }, 20000);
+});
+
+describe('落盤再讀回', () => {
+  it('turn/start、佇列項、插話訊息裡的點名都經得起 JSONL 往返：讀回的事件與寫出去的逐位相同，重放與折佇列看到同一份', async () => {
+    const hold = gate();
+    const run = await assemble([POKE, { content: '一' }, { content: '二' }], async () => {
+      await hold.opened;
+    });
+    const first = run.pump.submit({ kind: 'message', text: '第一句', id: 'm1', mention: MENTION });
+    await until(() => run.pump.sessionLog.events.some((e) => e.type === 'model/start'));
+    // 第一輪停在工具裡：這一句排隊，另一句插話。
+    void run.pump.submit({ kind: 'message', text: '排著', id: 'm2', mention: OTHER });
+    void run.pump.submit({ kind: 'message', text: '插話', id: 's1', steer: true, mention: OTHER });
+    await until(() =>
+      run.pump.sessionLog.events.some(
+        (e) => e.type === 'inbox/spliced' && e.data.inserted.some((item) => item.id === 's1'),
+      ),
+    );
+    hold.open();
+    await first;
+    await run.pump.whenIdle();
+
+    const events = [...run.pump.sessionLog.events];
+    const dir = await mkdtemp(join(tmpdir(), 'nexus-mention-roundtrip-'));
+    try {
+      const store = openJsonlSessionStore({ directory: dir });
+      const stored = store.create({
+        version: SESSION_LOG_FORMAT_VERSION,
+        id: 'mention-roundtrip',
+        createdAt: 1,
+        cwd: '/tmp',
+      });
+      await stored.append(events);
+      await stored.close();
+      const back = await openJsonlSessionStore({ directory: dir })
+        .open('mention-roundtrip', 'read')
+        .then((reader) => reader.read());
+
+      expect(JSON.parse(JSON.stringify(back))).toEqual(JSON.parse(JSON.stringify(events)));
+      const starts = back.filter((e) => e.type === 'turn/start');
+      expect(starts.map((e) => (e.data as { mention?: unknown }).mention)).toContainEqual(MENTION);
+
+      // 讀回來的重放：每則人話的內容逐位等於現場重放（含提示區塊）。
+      const humanContents = (list: readonly SessionEvent[]) => {
+        const replay = replayConversation(list);
+        if (replay.kind !== 'replayed') throw new Error('日誌重放不出來');
+        return replay.messages
+          .filter((m) => m.getType() === 'human')
+          .map((m) => JSON.stringify(m.content));
+      };
+      expect(humanContents(back)).toEqual(humanContents(events));
+      expect(humanContents(back).join('\n')).toContain(mentionHintText(OTHER).slice(0, 20));
+      // 折佇列：被領走之前的任何一刻都看得到點名（取排進去那一刻的日誌）。
+      const queuedAt = back.findIndex(
+        (e) => e.type === 'inbox/spliced' && e.data.inserted.some((item) => item.id === 'm2'),
+      );
+      expect(
+        foldInbox(back.slice(0, queuedAt + 1))['next-turn'].map((item) => item.mention),
+      ).toEqual([OTHER]);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   }, 20000);
 });

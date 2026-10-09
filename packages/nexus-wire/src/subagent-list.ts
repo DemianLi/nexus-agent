@@ -1,12 +1,13 @@
 /**
  * 「使用者可以點名派哪一種子代理」上線的形狀（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）。
  *
- * **這一份只是契約**：型別、method 名字、client 方法。server 端還沒實作，`subagent.list` 一律回 `not_supported`，
- * `run.start` 帶非空的 `mention` 也一樣；web 據那個碼把 `@` 子代理的入口藏起來。實作落地時這裡的形狀盡量不動。
+ * 契約在這個檔：型別、method 名字、client 方法；server 端（`apps/harness` 的 `wire-handler.ts`）已實作：
  *
- * **（2026-10-09 起 server 端已實作）**：`subagent.list` 回這個組裝的 `task` 實際收的子代理（`general-purpose` 在前，其餘依註冊順序），
- * `run.start` 的 `mention` 驗形狀與名字（不在清單上回 `invalid_argument`，那句話不進佇列）。點名之後在線上長在三個地方：
- * 排著的那一件（`WireQueuedInput.mention`）、領走時畫人話泡泡的 `claimed`、歷史重播的人話（`HumanEntry.mention`）。
+ * - `subagent.list` 回這個組裝的 `task` 實際收的子代理（`general-purpose` 在前，其餘依註冊順序）。**手搭的組裝沒有清單時回 `not_supported`**，
+ *   `run.start` 帶 `mention` 也一樣；web 據那個碼把 `@` 子代理的入口藏起來。
+ * - `run.start` 的 `mention` 驗形狀與名字（不在清單上回 `invalid_argument`，那句話不進佇列）。點名之後在線上長在三個地方：
+ *   排著的那一件（`WireQueuedInput.mention`）、領走時畫人話泡泡的 `claimed`／`claimedNextStep`、歷史重播的人話（`HumanEntry.mention`）；
+ *   壞掉的點名一律當沒有（見 {@link mentionField}）。送出的 `text` 不含點名字樣。
  *
  * ## 與 dsh 的關係：dsh 沒有，為什麼做
  *
