@@ -241,12 +241,13 @@ describe('讀不到的時候', () => {
     expect(asked).toEqual([0, 0]);
   });
 
-  it('還在讀：報讀器聽得到', async () => {
+  it('還在讀：分頁裡寫「正在讀取改動…」，不開 live region（#1290：跟著內容一起掛上去的報讀器常常不唸）', async () => {
     await renderCard(() => new Promise<Response>(() => {}));
     await click(rows()[0]!);
-    expect(within(screen.getByRole('tabpanel')).getByRole('status').textContent).toBe(
-      '正在讀取改動…',
-    );
+    const panel = screen.getByRole('tabpanel');
+    const loading = within(panel).getByText('正在讀取改動…');
+    expect(within(panel).queryByRole('status')).toBeNull();
+    expect(loading.closest('[data-busy]')).not.toBeNull();
   });
 });
 

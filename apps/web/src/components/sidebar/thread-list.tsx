@@ -236,23 +236,33 @@ export function ThreadList({
                 />
               )}
               {pending && (
-                // 標題對得上的先畫，內容那一半還在問：沒有列時兩列骨架，有列時一列（dsh）。
-                <div role="status" aria-label="正在搜內容" className="px-2 pt-1">
+                // 標題對得上的先畫，內容那一半還在問：沒有列時兩列骨架，有列時一列（dsh）。骨架是畫給看得見的人的，
+                // 讀屏聽下面那一格的「正在搜內容…」。
+                <div aria-hidden className="px-2 pt-1" data-testid="thread-search-pending">
                   {(view.items.length === 0 ? [0, 1] : [0]).map((index) => (
-                    <div key={index} aria-hidden className="flex flex-col gap-1.5 py-1.5">
+                    <div key={index} className="flex flex-col gap-1.5 py-1.5">
                       <Skeleton className="h-3.5 w-3/5" />
                       <Skeleton className="h-3 w-4/5" />
                     </div>
                   ))}
                 </div>
               )}
-              {!pending && view.items.length === 0 && (
-                <p className="text-muted-foreground px-2" role="status">
-                  {titleOnly
-                    ? `沒有標題含「${needle}」的會話。`
-                    : `沒有標題或內容含「${needle}」的會話。`}
-                </p>
-              )}
+              {/* 搜尋結果的那一格（規格 §8 的例外）：人自己打的字、焦點留在搜尋框，結果在別處，沒有結果不唸就不知道。
+                  **搜尋框在它就在、內容之後才填**：連同內容一起掛上去的 live region，報讀器常常不唸——只標題的搜尋打第一個字
+                  就可能沒有結果，所以不能等有搜尋字才掛。沒有搜尋字（列出全部）與有結果時是空的（列就在下面，往下走就讀得到）。 */}
+              <p
+                className={`text-muted-foreground px-2 ${!pending && view.items.length === 0 ? '' : 'sr-only'}`}
+                role="status"
+                data-testid="thread-search-status"
+              >
+                {pending
+                  ? '正在搜內容…'
+                  : view.items.length > 0
+                    ? ''
+                    : titleOnly
+                      ? `沒有標題含「${needle}」的會話。`
+                      : `沒有標題或內容含「${needle}」的會話。`}
+              </p>
               {view.hasMore && (
                 <p className="text-muted-foreground px-2 pt-1 text-tip">
                   還有更多沒列出來，多打幾個字可以縮小範圍。

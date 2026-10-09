@@ -12,7 +12,7 @@ import { goalBarView } from '@/lib/goal-bar';
  *   建立目標在 `/goal` 斜線命令，不在這條上。
  * - **有目標且沒完成才畫**（`complete` 與沒有目標都不畫）。
  * - **目標內容單行截短**，全文在 `title` 與整列的無障礙名稱。`blocked` 的理由直接顯示在列上。
- * - 不掛 `role="status"`：全站的 live region 只有狀態列一個，目標每變一次就唸一次太吵。
+ * - 不掛 `role="status"`：代理的現況只由狀態列唸（§8），目標每變一次就唸一次太吵。
  */
 export function GoalBar({ goal }: { readonly goal: WireGoal | null }) {
   const view = goalBarView(goal);
