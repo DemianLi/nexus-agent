@@ -9,12 +9,17 @@
  *   是 shiki 文件指定的 innerHTML 用法。
  * - **純文字**：不認得的語言、lazy 文法還在載、還沒捲進可視範圍。
  *
- * 外觀是 nexus 自己的（`.md-code`，`src/styles/markdown.css`）；dsh 的複製按鈕與行號不在這張卡的範圍。
+ * 外觀是 nexus 自己的（`.md-code`，`src/styles/markdown.css`）；dsh 的行號不在這張卡的範圍。
+ *
+ * **複製鈕只給 markdown 的 fence**（`copyable`，[#1305](https://github.com/DemianLi/nexus-agent/issues/1305)）：
+ * 複製的是區塊內的原始碼（不含圍欄），跟回覆的複製鈕共用 {@link CopyButton}。工具卡的參數不帶。
+ * 串流中不畫按鈕（不是畫成透明——鍵盤會按得到），但頭列照留，講完時按鈕補進來不推動底下的字。
  */
 
 import { Fragment, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 
+import { CopyButton } from '@/components/copy-button';
 import { useViewportHighlighting } from '@/hooks/use-viewport-highlighting';
 import {
   StreamingHighlightSession,
@@ -64,12 +69,15 @@ export function CodeBlock({
   code,
   lang,
   streaming,
+  copyable = false,
 }: {
   readonly code: string;
   /** info string 的第一段（同 dsh 的 `/^[\w-]+/`）；不認得的就是純文字。 */
   readonly lang: string | undefined;
   /** 這一塊還在長。 */
   readonly streaming: boolean;
+  /** 畫「複製程式碼」：markdown 的 fence 才帶。 */
+  readonly copyable?: boolean;
 }) {
   const rootRef = useRef<HTMLDivElement>(null);
   const highlighting = useViewportHighlighting(rootRef, lang);
@@ -169,7 +177,25 @@ export function CodeBlock({
 
   return (
     <div ref={rootRef} className="md-code" data-streaming={streaming || undefined}>
-      {lang !== undefined && <div className="md-code-lang">{lang}</div>}
+      {copyable ? (
+        <div className="md-code-head">
+          {lang !== undefined && <div className="md-code-lang">{lang}</div>}
+          {!streaming && (
+            <CopyButton
+              text={code}
+              label="複製程式碼"
+              copied={{ title: '已複製程式碼' }}
+              failed={{
+                title: '沒辦法複製程式碼',
+                description: '瀏覽器不讓這個頁面寫剪貼簿，請手動選取程式碼。',
+              }}
+              className="ms-auto size-7"
+            />
+          )}
+        </div>
+      ) : (
+        lang !== undefined && <div className="md-code-lang">{lang}</div>
+      )}
       {body}
     </div>
   );
