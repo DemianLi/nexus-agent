@@ -199,10 +199,10 @@ describe('對它說話', () => {
   });
 
   it.each([
-    ['subagent_not_found', '找不到這個子代理'],
-    ['subagent_at_capacity', '已滿'],
+    ['subagent_at_capacity', '背景子代理同時執行的數量已滿，等其他子代理結束後再送。'],
     ['subagent_closed', '正在關閉'],
     ['invalid_argument', '不能是空白'],
+    ['unknown_error', '叫醒失敗：被拒。可以再送一次。'],
   ])('被拒（%s）：卡內一行紅字，輸入的話還在', async (code, snippet) => {
     const { client } = fakeClient({ subagentSend: vi.fn(async () => refused(code)) });
     render(<Harness client={client} status={{ 'bg-1': 'running' }} />);
@@ -215,6 +215,67 @@ describe('對它說話', () => {
     expect(document.querySelector('[data-subagent-echo]')).toBeNull();
     fireEvent.change(input(), { target: { value: '嗨嗨' } });
     expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('叫不醒（subagent_not_found）：講一句，接著照收線畫——輸入框停用、標頭寫已收線，話不再能送（#1271）', async () => {
+    const { client } = fakeClient({
+      subagentSend: vi.fn(async () => refused('subagent_not_found', '日誌不在')),
+    });
+    render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    fireEvent.change(input(), { target: { value: '還記得嗎' } });
+    fireEvent.submit(input().closest('form')!);
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      '這個子代理無法再叫醒，只能查看它的對話。',
+    );
+    expect(input().disabled).toBe(true);
+    expect(input().placeholder).toContain('結束');
+    expect(document.querySelector('[data-subagent-state]')?.textContent).toBe('已收線');
+    expect(stopButton().disabled).toBe(true);
+    // 收合再展開也還是收線（記在提供者那一層）。
+    open();
+    open();
+    expect(input().disabled).toBe(true);
+    expect(client.subagentSend).toHaveBeenCalledTimes(1);
+  });
+
+  it('叫不醒只影響那一個：同一條對話裡的別的子代理照常', async () => {
+    const other = {
+      ...delegation({ ...BACKGROUND, runId: 'bg-2' }),
+      id: 'tool-e',
+      callId: 'call-e',
+    };
+    const { client } = fakeClient({
+      subagentSend: vi.fn(async (_t: string, runId: string) =>
+        runId === 'bg-1' ? refused('subagent_not_found') : ok,
+      ),
+    });
+    function Two() {
+      const control = useSubagentControl({
+        client,
+        threadId: 't1',
+        status: { 'bg-1': 'idle', 'bg-2': 'idle' },
+        connected: true,
+        renderEntry: renderStub,
+      });
+      return (
+        <SubagentControlContext.Provider value={control}>
+          <Transcript
+            state={{ ...emptyConversation(), entries: [delegation(BACKGROUND), other] }}
+            isFresh={() => false}
+          />
+        </SubagentControlContext.Provider>
+      );
+    }
+    render(<Two />);
+    fireEvent.click(within(screen.getAllByTestId('tool-entry')[0]!).getAllByRole('button')[0]!);
+    fireEvent.change(input(), { target: { value: '嗨' } });
+    fireEvent.submit(input().closest('form')!);
+    await screen.findByRole('alert');
+    const labels = [...document.querySelectorAll('[data-subagent-state]')].map(
+      (n) => n.textContent,
+    );
+    expect(labels).toEqual(['已收線', '閒著']);
   });
 
   it('連線出問題（拋錯）也講一句，不吞掉', async () => {
@@ -251,6 +312,80 @@ describe('對它說話', () => {
     open();
     open();
     expect(document.querySelectorAll('[data-subagent-echo]')).toHaveLength(1);
+  });
+});
+
+describe('叫醒閒著的（#1271）', () => {
+  const sendButton = () =>
+    screen.getByRole('button', { name: '送出給背景子代理' }) as HTMLButtonElement;
+
+  it('受理之後送出鈕維持「送出中…」、輸入框停用，快照翻成跑著才恢復', async () => {
+    const { client } = fakeClient();
+    const view = render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    fireEvent.change(input(), { target: { value: '還記得暗號嗎' } });
+    fireEvent.submit(input().closest('form')!);
+    await waitFor(() => expect(document.querySelector('[data-subagent-echo]')).not.toBeNull());
+    expect(input().value).toBe('');
+    expect(sendButton().textContent).toContain('送出中…');
+    expect(input().disabled).toBe(true);
+    view.rerender(<Harness client={client} status={{ 'bg-1': 'running' }} />);
+    await waitFor(() => expect(sendButton().textContent).not.toContain('送出中'));
+    expect(input().disabled).toBe(false);
+  });
+
+  it('翻成收線也算結束，不一直鎖著', async () => {
+    const { client } = fakeClient();
+    const view = render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    fireEvent.change(input(), { target: { value: '嗨' } });
+    fireEvent.submit(input().closest('form')!);
+    // 先等受理（回聲出現），才分得出是「等叫醒」而不是「還在送」。
+    await waitFor(() => expect(document.querySelector('[data-subagent-echo]')).not.toBeNull());
+    expect(sendButton().textContent).toContain('送出中…');
+    view.rerender(<Harness client={client} status={{}} />);
+    await waitFor(() => expect(sendButton().textContent).not.toContain('送出中'));
+  });
+
+  it('一直沒翻成跑著：十秒後放手，不報錯', async () => {
+    vi.useFakeTimers();
+    const { client } = fakeClient();
+    render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    fireEvent.change(input(), { target: { value: '嗨' } });
+    fireEvent.submit(input().closest('form')!);
+    await act(async () => undefined);
+    expect(sendButton().textContent).toContain('送出中…');
+    await act(async () => void vi.advanceTimersByTime(9_900));
+    expect(sendButton().textContent).toContain('送出中…');
+    await act(async () => void vi.advanceTimersByTime(200));
+    expect(sendButton().textContent).not.toContain('送出中');
+    expect(input().disabled).toBe(false);
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('對跑著的送話不等：受理就恢復（它本來就在跑，下一步就收得到）', async () => {
+    const { client } = fakeClient();
+    render(<Harness client={client} status={{ 'bg-1': 'running' }} />);
+    open();
+    fireEvent.change(input(), { target: { value: '嗨' } });
+    fireEvent.submit(input().closest('form')!);
+    await waitFor(() => expect(document.querySelector('[data-subagent-echo]')).not.toBeNull());
+    expect(sendButton().textContent).not.toContain('送出中');
+  });
+
+  it('叫醒被拒：不進入等待，話留著', async () => {
+    const { client } = fakeClient({
+      subagentSend: vi.fn(async () => refused('subagent_at_capacity')),
+    });
+    render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    fireEvent.change(input(), { target: { value: '嗨' } });
+    fireEvent.submit(input().closest('form')!);
+    await screen.findByRole('alert');
+    expect(sendButton().textContent).not.toContain('送出中');
+    expect(input().value).toBe('嗨');
+    expect(input().disabled).toBe(false);
   });
 });
 
@@ -543,7 +678,8 @@ describe('子代理自己的對話（#861）', () => {
   it('本地回聲：歷史已經有的不再畫（重複），還沒寫進日誌的留著', async () => {
     const subagentHistory = vi.fn(async () => conversation());
     const { client } = fakeClient({ subagentHistory });
-    render(<Harness client={client} status={{ 'bg-1': 'idle' }} />);
+    // 跑著：送出受理就恢復（閒著的話要等它跑起來，連送兩句會被擋，#1271）。
+    render(<Harness client={client} status={{ 'bg-1': 'running' }} />);
     open();
     await waitFor(() => expect(entryKinds()).toHaveLength(4));
     // 「先看 A」歷史裡已有；「再看 B」還沒。

@@ -142,6 +142,21 @@ describe('背景子代理的狀態與輸入框（#869）', () => {
     expect(lines.join('')).not.toContain('x');
     expect(subagentSendError('internal_error', '壞了')).toContain('壞了');
   });
+
+  it('冷叫醒的三句照 PM 定的文案（#1271）；叫醒失敗帶原因，不疊兩個句號', () => {
+    expect(subagentSendError('subagent_at_capacity', 'x')).toBe(
+      '背景子代理同時執行的數量已滿，等其他子代理結束後再送。',
+    );
+    expect(subagentSendError('subagent_not_found', 'x')).toBe(
+      '這個子代理無法再叫醒，只能查看它的對話。',
+    );
+    expect(subagentSendError('unknown_error', '租約被別的行程握著')).toBe(
+      '叫醒失敗：租約被別的行程握著。可以再送一次。',
+    );
+    expect(subagentSendError('unknown_error', '日誌壞了。')).toBe(
+      '叫醒失敗：日誌壞了。可以再送一次。',
+    );
+  });
 });
 
 describe('委派卡上的模型那一行（#889）', () => {
