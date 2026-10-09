@@ -19,6 +19,8 @@
  * @module
  */
 
+import { ESCALATION_TITLE, SANDBOX_ESCALATION_TOOL } from '@/lib/sandbox-escalation';
+
 /** 工具卡的呈現類別。 */
 export type ToolVariant = 'search' | 'read' | 'bash' | 'write' | 'edit' | 'code' | 'others';
 
@@ -76,7 +78,8 @@ const TOOL_TITLES: Readonly<Record<string, string>> = {
   ask_user_question: '提問',
   // #441：harness 那半還沒合；工具名照 dsh `tool-present`，合進來時 `tool-view.test.ts` 會從原始碼讀到它。
   present: '交付檔案',
-  request_sandbox_escalation: '申請放寬沙箱',
+  // 同核准面板的名稱（#1292）：同一件事只有一種說法，改字只改 `lib/sandbox-escalation.ts`。
+  [SANDBOX_ESCALATION_TOOL]: ESCALATION_TITLE,
   submit_record: '提交紀錄',
 };
 
