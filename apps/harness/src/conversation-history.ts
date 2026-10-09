@@ -94,6 +94,7 @@ import {
   TOKEN_USAGE,
   UNFINISHED_TOOL_TEXT,
   WORKSPACE_CHANGES,
+  mentionField,
 } from '@nexus/wire';
 import type {
   AttachmentRef,
@@ -103,6 +104,7 @@ import type {
   SessionEvent,
   SessionEventMap,
   SessionStatsState,
+  SubagentMentionRef,
   SubagentSettleReason,
   TokenUsageTotals,
   UnreplayableReason,
@@ -113,7 +115,9 @@ import {
   foldInbox,
   isLogicalTurnStart,
   isMaxTokensFinish,
+  isMentionHintBlock,
   loggedContentBlocks,
+  mentionOfHintBlock,
   loggedMessageId,
   openTurnStart,
   promptTokensOf,
@@ -163,14 +167,32 @@ function attachmentsOf(message: LoggedMessage | undefined): readonly AttachmentR
   });
 }
 
-/** 一則訊息的文字：區塊中的 text 接起來（推理另走 {@link reasoningOf}）。 */
+/**
+ * 一則人的訊息點名的子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：內容裡那個固定的提示區塊讀回來。
+ * 輪中插話沒有 `turn/start`，點名只留在訊息裡。
+ */
+function mentionOf(message: LoggedMessage | undefined): ReturnType<typeof mentionOfHintBlock> {
+  if (!message) return undefined;
+  for (const block of loggedContentBlocks(message.data.content)) {
+    const found = mentionOfHintBlock(block);
+    if (found !== undefined) return found;
+  }
+  return undefined;
+}
+
+/**
+ * 一則訊息的文字：區塊中的 text 接起來（推理另走 {@link reasoningOf}）。
+ * **點名的提示區塊不算**（#328 第 2 項）：那是給模型看的，不是使用者打的字，泡泡上不畫。
+ */
 function textOf(message: LoggedMessage | undefined): string {
   if (!message) return '';
   const blocks = loggedContentBlocks(message.data.content);
   return blocks
     .map((block: unknown) => {
       const typed = block as { type?: unknown; text?: unknown } | null;
-      return typed?.type === 'text' && typeof typed.text === 'string' ? typed.text : '';
+      return typed?.type === 'text' && typeof typed.text === 'string' && !isMentionHintBlock(block)
+        ? typed.text
+        : '';
     })
     .join('');
 }
@@ -459,7 +481,7 @@ export function inboxData(
   const shown = (text: string, source: QueuedInput['source']) =>
     source.kind === 'agent-message' ? agentMessageBody(source.senderSessionId, text) : text;
   const wire = (items: readonly QueuedInput[]) =>
-    items.map(({ id, text, source, attachments }) => ({
+    items.map(({ id, text, source, attachments, mention }) => ({
       id,
       text: shown(text, source),
       source:
@@ -467,11 +489,13 @@ export function inboxData(
           ? { kind: source.kind, reason: source.reason }
           : { kind: source.kind },
       ...attachmentsField(attachments),
+      ...mentionField(mention),
     }));
-  const claim = ({ id, text, references, source, attachments }: ClaimedInput) => ({
+  const claim = ({ id, text, references, source, attachments, mention }: ClaimedInput) => ({
     id,
     text: shown(text, source),
     ...attachmentsField(attachments),
+    ...mentionField(mention),
     ...(source.kind === 'user'
       ? {}
       : source.kind === 'goal'
@@ -782,6 +806,7 @@ function message(
   references?: readonly WireSessionReference[],
   attachments?: readonly AttachmentRef[],
   startTime = time,
+  mention?: SubagentMentionRef,
 ): Event[] {
   const ids = role === 'ai' ? { run_id: key } : { id: key };
   return [
@@ -792,6 +817,7 @@ function message(
       ...(messageId !== undefined && { id: messageId }),
       ...(references !== undefined && references.length > 0 && { references }),
       ...attachmentsField(attachments),
+      ...mentionField(mention),
     }),
     ...(reasoning === ''
       ? []
@@ -826,8 +852,8 @@ export interface AwaitingInput {
  *
  * ## 停下來等人的那一輪：兩種等法畫法不同，同即時
  *
- * 即時那條只把**本體拋了問答中斷**的那顆畫成「等你回答」（`thread-pump.ts` 的 `classifyToolData`）。子代理照 dsh
- * 不停下來等人（#324），所以 `task` 不會停在這裡。停在核准上的那顆一直是「執行中」——照 dsh：它的工具卡沒有
+ * 即時那條只把**本體拋了問答中斷**的那顆畫成「等你回答」（`thread-pump.ts` 的 `classifyToolData`）。前景子代理的核准
+ * 冒到人面前（#328 第 1 項）時 `task` 也停在這裡，同樣維持「執行中」。停在核准上的那顆一直是「執行中」——照 dsh：它的工具卡沒有
  * 「等人」那一格，核准的等待由接管輸入框的核准面板表示（#317）。核准有兩種來處，即時那條都不改卡：停在核准閘門上的
  * 那顆本體沒被呼叫到，卡從日誌 `tool/call` 開；`request_sandbox_escalation` 在本體裡問人
  * （[#700](https://github.com/DemianLi/nexus-agent/issues/700)），基座發的那顆帶核准中斷的 `tool-error` 由 pump 丟掉
@@ -931,6 +957,8 @@ export function historyFrames(
               '',
               referencesAfter(events, index),
               event.data.attachments,
+              event.time,
+              event.data.mention,
             ),
           );
         }
@@ -971,6 +999,8 @@ export function historyFrames(
               '',
               referencesAfter(events, index),
               attachmentsOf(event.data.message),
+              event.time,
+              mentionOf(event.data.message),
             ),
           );
         }
@@ -1087,6 +1117,9 @@ export function historyFrames(
         } else if (event.data.reason?.kind === 'max-tokens') {
           // 撞到輸出上限（#433）：同即時那條，pump 在收尾 frame 上補 `maxTokens`。
           close(event.time, { event: 'completed', maxTokens: true });
+        } else if (event.data.reason?.kind === 'blocked') {
+          // 被準入閘門擋下（#633，封存的會話）：一個請求都沒發，也不是失敗。同即時那條，收尾 frame 補 `blocked`。
+          close(event.time, { event: 'completed', blocked: true });
         } else if (event.data.reason?.kind === 'interrupted') {
           // 續接補寫的收尾（#721）：那一輪死了，不是停在核准點等人——死前就算記過 `interrupt/raised`
           // 也不能畫成「等人回覆」。畫面與舊檔在 end-seed 收掉的那一條一致。

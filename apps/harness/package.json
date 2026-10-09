@@ -18,6 +18,7 @@
     "lint": "eslint .",
     "serve": "tsx src/serve.ts",
     "serve:live": "tsx src/serve.ts --live",
+    "smoke": "vitest run --config vitest.smoke.config.ts",
     "spike": "tsx src/spike/cli.ts",
     "spike:live": "tsx src/spike/cli.ts --live",
     "test": "vitest run",

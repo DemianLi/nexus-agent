@@ -133,6 +133,8 @@ export type {
   DisabledEntryView,
   ToolRegistrationPoint,
   SubAgentRegistrationPoint,
+  NexusSubAgent,
+  CreateRegistryOptions,
   CapabilityRegistrationPoint,
   ServiceRegistrationPoint,
   NexusServices,
@@ -362,7 +364,13 @@ export {
 } from './invalid-tool-args.js';
 
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
-export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+export {
+  createBackgroundApprovalGate,
+  foldRegistry,
+  ROOT_ONLY_NOTICE,
+  rootOnlyRefusal,
+  TOOL_ORDER_REST,
+} from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
 export { beginAttemptReport, lastModelCall, withModelCall } from './model-call-scope.js';
 export type { AttemptUsage } from './model-call-scope.js';
@@ -388,12 +396,15 @@ export {
   DEFAULT_STREAM_RETRY_JITTER_RATIO,
   DEFAULT_STREAM_RETRY_MAX_DELAY_MS,
   streamFailureReporter,
+  streamRetrySignalOf,
   STREAM_RETRY_MIDDLEWARE_NAME,
+  STREAM_RETRY_SIGNAL,
 } from './stream-retry.js';
-export type { StreamFailure, StreamRetryOptions } from './stream-retry.js';
+export type { StreamFailure, StreamRetryOptions, StreamRetrySignal } from './stream-retry.js';
 export { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,
+  FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
   SUBAGENT_DELEGATION_CONTEXT,
   SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
 } from './subagent-delegation.js';
@@ -405,6 +416,13 @@ export {
   SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
   toolKept,
 } from './subagent-tool-filter.js';
+export type { ArchiveGate } from './archive-gate.js';
+export {
+  ARCHIVE_GATE_CONFIG_KEY,
+  archiveGateOf,
+  isTurnBlocked,
+  TurnBlockedError,
+} from './archive-gate.js';
 export type { StepInbox } from './step-inbox.js';
 export {
   createStepInboxMiddleware,
@@ -443,6 +461,7 @@ export {
   ProjectionDetailError,
   PROJECTION_KEY_PATTERN,
 } from './projections.js';
+export type { SubagentModelPin } from './model-selection.js';
 export type { TokenUsageTotals } from './token-usage.js';
 export { deriveTokenUsage, tokenUsageUnit } from './token-usage.js';
 export {
@@ -450,6 +469,8 @@ export {
   MODEL_SELECTION_NOTICE_KIND,
   ModelSelectionController,
   createModelSwapMiddleware,
+  createSubagentModelFollowMiddleware,
+  SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
   modelSwitchNoticeText,
   pendingNotice,
   recordedRoute,
@@ -488,6 +509,13 @@ export {
   sessionCheckpointPlugin,
 } from './session-checkpoint-policy.js';
 export type { MessageSource } from './message-source.js';
+export type { SubagentMentionRef } from './subagent-mention.js';
+export {
+  isMentionHintBlock,
+  mentionHintBlock,
+  mentionHintText,
+  mentionOfHintBlock,
+} from './subagent-mention.js';
 export {
   humanMessageForTurnStart,
   userContent,
@@ -709,7 +737,9 @@ export {
 export type { SubagentGraph, SubagentGraphOptions, SubagentGraphParams } from './subagent-graph.js';
 export type { SessionAddress } from './session-address.js';
 export {
+  BACKGROUND_RUN_PREFIX,
   BACKGROUND_SESSION_CONFIG_KEY,
+  isBackgroundAddress,
   sessionAddressKey,
   spawnedSubagentRunId,
   toolCallSessionAddress,

@@ -454,6 +454,8 @@ function endOf(reason: unknown, paused: boolean): TokenMeterEnd {
         return 'max-tokens';
       case 'interrupted':
         return 'interrupted';
+      case 'blocked':
+        return 'blocked';
       default:
         break;
     }

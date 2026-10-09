@@ -1,8 +1,8 @@
 /**
  * 會話的釘選、封存與改名上線的形狀（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
  *
- * **這一份只是契約**：型別、method 名字、client 方法。server 端還沒實作，五支 method 一律回 `not_supported`，
- * web 據那個碼把這幾個動作藏起來（或退回瀏覽器本地）；實作落地時這裡的形狀盡量不動。
+ * **契約**：型別、method 名字、client 方法。**五支 server 端都已實作**（#633：釘選與封存是第一張，改名是第二張）。釘選與封存要整理檔，沒接落盤的
+ * server 回 `not_supported`，web 據那個碼把這幾個動作藏起來（或退回瀏覽器本地）；改名寫在會話日誌上，不依賴整理檔。
  *
  * 照 dsh 的 `workspace-controller` 與 `session-controller`（`packages/api/workspace-controller/src/{commands,types}.ts`、
  * `packages/api/session-controller/src/{commands,types}.ts`，`5badb150`）：
@@ -11,10 +11,12 @@
  *   呼叫端拿它整份取代本地的；釘選集合**最近釘的在前**。
  * - **取消是冪等的**：`unpin`／`unarchive` 對不在集合裡的 id（甚至不存在的會話）不是錯誤，輸掉與別的分頁的賽跑就是 no-op（dsh 原文）。
  * - **封存的會話不能釘**（dsh `WorkspaceArchivedSessionPinError`）。
- * - **封存撞上正在跑的會話：拒絕**（dsh `workspace/session-active`），除非帶 `stopActivity`，那就先停掉它的工作再封存；停是發出去就算，
- *   不等停穩，回應在封存集合落定時回。
+ * - **封存撞上正在跑的會話：拒絕**（dsh `workspace/session-active`，帶著 `activity`：哪幾類工作還在跑），除非帶 `stopActivity`——
+ *   那就**先**把封存寫下去、**再**去停它的工作；停是發出去就算，不等停穩，回應在封存集合落定時回。封存的會話不跑模型（dsh 的
+ *   `ArchivedSessionGate`）：之後喚醒它的任何輸入（人送的、排著的、目標續行、子代理結算）仍會開一輪，但以 `blocked` 收、一個模型請求都不發，直到取消封存。
  * - **改名**把使用者的標題追加成日誌事件，回受理後的標題與事件的 `seq`（dsh `SessionRenameValue { title, seq }`）。標題不合法
- *   （dsh `session/title-invalid`）：回 `title_invalid`，標題不變。
+ *   （dsh `session/title-invalid`）：回 `title_invalid`，標題不變。標題是正規化後的（去控制字元、空白收成一格、截到 `maxTitleBytes`），
+ *   **釘住**：之後的自動標題不會蓋過它。
  *
  * ## 與 dsh 的偏離
  *
@@ -108,8 +110,26 @@ export type ThreadNotFound = { readonly code: 'thread_not_found' };
 /** 釘選失敗的原因：沒有這條會話，或它已經封存（封存的會話不能釘）。 */
 export type ThreadPinError = ThreadNotFound | { readonly code: 'thread_archived' };
 
-/** 封存失敗的原因：沒有這條會話，或它還在跑而且沒帶 `stopActivity`（dsh `workspace/session-active`）。 */
-export type ThreadArchiveError = ThreadNotFound | { readonly code: 'thread_active' };
+/**
+ * 一條會話還有哪幾類工作在跑（dsh `SessionActivity` 的四個擁有者是 turn／job／subagent／schedule，我們對得上的是兩類）：
+ *
+ * - `turn`：有一輪在跑或排著，**含停在等人回答**（核准、提問發生在一輪的工具執行當中，照 dsh 算在跑）。送出佇列裡排著而沒被
+ *   「停止」停住的輸入——人送的、目標續行的預約、子代理結算或寫來的話——都是一件待開的輪，歸這一類；
+ * - `subagent`：背景子代理還在跑。
+ *
+ * dsh 的 `job`（背景工作）與 `schedule`（排程）我們沒有對應物，有了再加成員。
+ */
+export const THREAD_ACTIVITY_KINDS = ['turn', 'subagent'] as const;
+
+export type ThreadActivityKind = (typeof THREAD_ACTIVITY_KINDS)[number];
+
+/**
+ * 封存失敗的原因：沒有這條會話，或它還在跑而且沒帶 `stopActivity`（dsh `workspace/session-active`）。
+ * `activity` 照 dsh：它的 `session-active` 錯誤也帶著各 provider 回報的 activity，這裡同樣帶，讓畫面講得出「為什麼不能封存」。選填：舊的 server 沒有。
+ */
+export type ThreadArchiveError =
+  | ThreadNotFound
+  | { readonly code: 'thread_active'; readonly activity?: readonly ThreadActivityKind[] };
 
 /** 改名失敗的原因：沒有這條會話，或標題不合法（dsh `session/title-invalid`）。 */
 export type ThreadRenameError =

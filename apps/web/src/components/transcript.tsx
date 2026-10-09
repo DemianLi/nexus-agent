@@ -27,11 +27,13 @@ import type {
   AnswerEntry,
   ConversationEntry,
   ConversationState,
+  SubagentMention,
   WireAttachmentRef,
   WireFeedbackItem,
   WireFeedbackRating,
 } from '@nexus/wire';
 
+import { DelegatedChip } from '@/components/delegated-chip';
 import { SentAttachments } from '@/components/sent-attachments';
 import { ReferencedText } from '@/components/session-reference';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
@@ -63,8 +65,10 @@ import { decisionText } from '@/lib/decision-view';
 import { transcriptItems } from '@/lib/deliverables-view';
 import { registerTranscriptScroller } from '@/lib/transcript-locate';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
+import { RetryNotice } from '@/components/retry-notice';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
+import { BLOCKED_HINT_TEXT } from '@/lib/archived-view';
 import { settledNoticeText } from '@/lib/queue-view';
 import { pairAnswers } from '@/lib/question-view';
 import { agentMessageCaption, subagentLabel, subagentNames as namesOf } from '@/lib/subagent-view';
@@ -196,12 +200,20 @@ export function Entry({
         <MessageContent>
           {/* 這一句帶的附件（#732）：標籤排在泡泡上方；只有附件、沒有字的那一句不畫空泡泡。 */}
           <SentAttachments attachments={entry.attachments} />
+          {/* 這一句點名派的子代理（#328 第 2 項）：chip 在泡泡上方；`text` 不含點名字樣，標記從 `mention` 畫。 */}
+          {entry.mention !== undefined && <DelegatedChip name={entry.mention.name} />}
           {entry.text.trim() !== '' && (
             <Bubble variant="secondary" align="end">
               <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
                 <ReferencedText text={entry.text} references={entry.references} />
               </BubbleContent>
             </Bubble>
+          )}
+          {/* 被準入閘門擋下的那一句（封存的會話，#633）：泡泡照畫，底下一句中性的提示（不是錯誤、不畫紅）：話沒有送給模型。 */}
+          {entry.blocked === true && (
+            <MessageFooter className="px-0" data-testid="blocked-hint">
+              {BLOCKED_HINT_TEXT}
+            </MessageFooter>
           )}
         </MessageContent>
       </Message>
@@ -370,10 +382,12 @@ function useFinishedReply(entries: readonly ConversationEntry[], isFresh: (id: s
 function PendingSteerBubble({
   text,
   attachments,
+  mention,
   caption,
 }: {
   text: string;
   attachments: readonly WireAttachmentRef[] | undefined;
+  mention: SubagentMention | undefined;
   caption: string;
 }) {
   return (
@@ -381,6 +395,7 @@ function PendingSteerBubble({
       <MessageContent>
         {/* 帶的附件（#710）：跟領走後那則人的話同一個位置（泡泡上方），換成正式的時不跳位。 */}
         <SentAttachments attachments={attachments} />
+        {mention !== undefined && <DelegatedChip name={mention.name} />}
         {text.trim() !== '' && (
           <Bubble variant="secondary" align="end" className="opacity-70">
             <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
@@ -506,6 +521,10 @@ export function Transcript({
       ),
     };
   });
+  // 串流中段出錯、正在等著整次重打（#520）：接在這一輪的最後，下一則回覆一開始就收掉（折疊器清成 `null`）。
+  if (state.retry !== null) {
+    items.push({ id: 'llm-retry', node: <RetryNotice retry={state.retry} /> });
+  }
   // 還沒被領走的插話接在最後（#710）：鍵跟領走後那則人的話同一個，換成正式的是同一格換內容。
   for (const steer of pendingSteers(state)) {
     items.push({
@@ -517,6 +536,7 @@ export function Transcript({
           <PendingSteerBubble
             text={steer.text}
             attachments={steer.attachments}
+            mention={steer.mention}
             caption={pendingSteerText(state.status)}
           />
         ),

@@ -36,6 +36,7 @@
  */
 
 import type { WireAttachmentRef } from './attachments.js';
+import type { SubagentMention } from './subagent-list.js';
 
 /** `custom` 事件的 `data.name`：送出佇列現在是這一份。 */
 export const INBOX = 'inbox';
@@ -67,10 +68,10 @@ export interface AgentMessagePayload {
 }
 
 /**
- * 一個背景子代理怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：結算通知的原因，四種。
+ * 一個背景子代理怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：結算通知的原因，五種。
  * 畫面據它配字，**不解析給模型看的英文句**。與 `@nexus/core` 的 `SubagentSettleReason` 同一組（harness 有測試釘住兩邊一致）。
  */
-export const SETTLE_REASONS = ['completed', 'aborted', 'max-tokens', 'error'] as const;
+export const SETTLE_REASONS = ['completed', 'aborted', 'max-tokens', 'error', 'refusal'] as const;
 
 /** {@link SETTLE_REASONS} 的一員。 */
 export type WireSettleReason = (typeof SETTLE_REASONS)[number];
@@ -104,6 +105,8 @@ export interface WireQueuedInput {
   readonly source: WireQueuedInputSource;
   /** 這一件帶的附件（[#732](https://github.com/DemianLi/nexus-agent/issues/732)），照選取順序，只放參照。沒有就不給這一格。 */
   readonly attachments?: readonly WireAttachmentRef[];
+  /** 這一件點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）。沒有就不給這一格。 */
+  readonly mention?: SubagentMention;
 }
 
 /** {@link WireQueuedInput.source}：判別欄，加結算通知的原因（#884）；摘要與寄件人留在日誌上。 */
@@ -153,6 +156,8 @@ export interface WireClaimedInput {
   readonly references?: readonly WireSessionReference[];
   /** 這句話帶的附件（#732），照選取順序，只放參照；畫面據它在人的泡泡上畫附件列。沒有就不給這一格。 */
   readonly attachments?: readonly WireAttachmentRef[];
+  /** 這句話點名派哪一個子代理（#328 第 2 項）；畫面據它在人的泡泡上畫點名的標記。沒有就不給這一格。 */
+  readonly mention?: SubagentMention;
   /**
    * 這一件不是人送的時才帶（#840、#849）：`subagent-settled` 是背景子代理結算的通知，`agent-message` 是背景子代理用 `send_message` 寫來的話。**沒帶就是人**，舊的一側照舊。
    * 有帶的不畫人的泡泡——那是執行期的記帳，不是使用者說的話；`subagent-settled` 長 `NoticeEntry`（#851），`agent-message`

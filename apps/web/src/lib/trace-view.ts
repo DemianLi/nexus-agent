@@ -151,11 +151,13 @@ export const CALL_OUTCOME_LABEL = { error: '失敗', aborted: '已中止' } as c
 
 export const TRACE_CALL_UNLOADED_TEXT = '這次呼叫的內文不在目前載入的對話裡。';
 
-export type EndingReason = 'stopped' | 'max-tokens' | 'failed';
+export type EndingReason = 'stopped' | 'max-tokens' | 'blocked' | 'failed';
 
 export const ENDING_LABEL: Readonly<Record<EndingReason, string>> = {
   stopped: '已停止',
   'max-tokens': '輸出上限',
+  /** 封存的會話收到話：這一輪開了又立刻收尾，沒有送給模型（#633）。不是失敗，不畫紅。 */
+  blocked: '已擋下（會話已封存）',
   failed: '失敗',
 };
 
@@ -418,6 +420,10 @@ function itemsOf(state: ConversationState): Item[] {
         entry,
         summary: leadLine(mentionDisplayText(entry.text)),
       });
+      // 被準入閘門擋下（封存的會話，#633）：這一輪開了又立刻收，沒有模型呼叫，軌跡上就只有這句話和這一列收尾。
+      if (entry.blocked === true) {
+        rows.push(endingRow(entry.id, 'blocked', ENDING_LABEL.blocked, { target: entry.id }));
+      }
     } else if (entry.kind === 'notice') {
       rows.push({
         kind: 'notice',

@@ -82,6 +82,7 @@ import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
 import type { CredentialService } from './credentials.js';
 import { createLiveModel } from './live-model.js';
+import { subagentDefinitionValidator } from './subagent-definition.js';
 import { createModelSelectionHost, createModelSelectionPlugin } from './model-selection-host.js';
 import type { ModelSelectionHost } from './model-selection-host.js';
 import { createFileReferencePlugin } from './file-references.js';
@@ -703,6 +704,8 @@ export async function createCliAgent(
    * `permissions` 投影缺席，web 藏起選單。
    */
   permissionPresets: PermissionPresetsService | undefined;
+  /** 使用者可以點名派的子代理（`subagent.list`，#328 第 2 項）：`task` 實際收的那份。serve 交給 wire-handler。 */
+  subagentKinds: readonly { readonly name: string; readonly description: string }[];
   /**
    * 這一次組裝的 goal 域，**沒掛時是 `undefined`**——出貨清單上有 goal，但一份 patch
    * 可以把那一列 `disabled: true` 關掉（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
@@ -853,6 +856,7 @@ export async function createCliAgent(
     warnings,
     onWarning,
     stepInbox,
+    subagentKinds,
   } = await createNexusAgent({
     model,
     // 沒傳就在這裡按型錄建一本（#1102）：fold 自己 new 的那本不認得哪些模型逐位切詞。
@@ -895,6 +899,8 @@ export async function createCliAgent(
     ...(modelSelection !== undefined && {
       modelSelection: modelSelection.controller,
       modelLimits: modelSelection.limitsOf,
+      // 子代理定義的 `model`／`reasoningEffort` 在註冊那一刻對型錄驗（#328 第 3 項）；沒有每會話選擇（假模型）就沒有型錄，驗證函式走預設的全拒。
+      validateSubagent: subagentDefinitionValidator(liveModel.models),
     }),
     // 串流中段失敗的整次重打（#520）。只有真模型的 fetch 層會回報失敗，腳本模型照給也無事發生。
     streamRetry: liveModel.streamRetry,
@@ -982,6 +988,7 @@ export async function createCliAgent(
     feedback,
     workspaceChanges: services.get(WORKSPACE_CHANGES_SERVICE),
     permissionPresets: services.get(PERMISSION_PRESETS_SERVICE),
+    subagentKinds,
     goals: services.get(GOALS_SERVICE),
     workspaceRoot,
     attachTitle,

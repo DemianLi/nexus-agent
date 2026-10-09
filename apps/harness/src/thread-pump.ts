@@ -76,12 +76,16 @@ import {
   createProjectionFold,
   foldInbox,
   humanMessageForTurnStart,
+  ARCHIVE_GATE_CONFIG_KEY,
   INTERRUPTED_REPLY_MARKER,
+  isTurnBlocked,
+  TurnBlockedError,
   isTurnCancelled,
   lastModelCall,
   MAX_TOKENS_TURN_END,
   SessionRegistry,
   spliceInbox,
+  streamRetrySignalOf,
   STEP_INBOX_CONFIG_KEY,
   TOOL_ABORTED,
   TOOL_ABORTED_BEFORE_DISPATCH,
@@ -97,6 +101,7 @@ import {
   withModelCall,
   type ApprovalOutcome,
   type AttachmentRef,
+  type SubagentMentionRef,
   type InboxSplice,
   type InboxState,
   type ProjectionFold,
@@ -119,6 +124,8 @@ import {
   channelOfMethod,
   DELEGATION_TOOL_NAMES,
   eventId,
+  LLM_RETRY,
+  LLM_RETRY_STARTED,
   MESSAGE_DISCARD,
   SessionReferenceError,
   SUBAGENT_STATUS,
@@ -284,6 +291,8 @@ export interface PumpAgent {
         readonly [TURN_CANCEL_CONFIG_KEY]?: AbortSignal;
         /** 插話的領取口（#710）。圖裡沒掛那顆 middleware 就沒人讀，見 `@nexus/core` 的 `step-inbox.ts`。 */
         readonly [STEP_INBOX_CONFIG_KEY]?: StepInbox;
+        /** 準入閘門（#633）：每次模型呼叫之前問，回 `true` 就擋下。只有接了整理檔的組裝才放。 */
+        readonly [ARCHIVE_GATE_CONFIG_KEY]?: () => boolean;
       };
     },
   ): Promise<AsyncIterable<RawProtocolEvent> & RunProjections>;
@@ -309,6 +318,7 @@ function pumpInputOf(item: QueuedInput): PumpInput {
         kind: 'message',
         text: item.text,
         ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
+        ...(item.mention === undefined ? {} : { mention: item.mention }),
       };
     case 'subagent-settled':
       return {
@@ -388,6 +398,11 @@ export type PumpInput =
        * 已經收過收據、驗過圖。空陣列與省略同義，進佇列前正規化成省略。
        */
       readonly attachments?: readonly AttachmentRef[];
+      /**
+       * 這句話點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）；呼叫端（`run.start`）已驗過名字在清單上。
+       * 進佇列、`turn/start`、插話的 `HumanMessage` 都帶著它，形狀見 `@nexus/core` 的 `subagent-mention.ts`。
+       */
+      readonly mention?: SubagentMentionRef;
     }
   | {
       readonly kind: 'resume';
@@ -761,6 +776,7 @@ function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
         ...(input.attachments === undefined || input.attachments.length === 0
           ? {}
           : { attachments: input.attachments }),
+        ...(input.mention === undefined ? {} : { mention: input.mention }),
       };
     case 'resume':
       return { kind: 'resume' };
@@ -791,14 +807,21 @@ function actionCountOf(value: unknown): number {
   return Array.isArray(requests) ? requests.length : 0;
 }
 
-/** 這顆中斷停在核准上的工具名。問答那一種沒有 `actionRequests`，是空的。見 {@link PendingInterrupt.gatedTools}。 */
-function gatedToolsOf(value: unknown): string[] {
+/**
+ * 這顆中斷停在核准上的工具名。問答那一種沒有 `actionRequests`，是空的。見 {@link PendingInterrupt.gatedTools}。
+ *
+ * @param nested - 中斷是前景子代理發的（namespace 不空，[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項）。那時 root 上**停著的是委派
+ *   的那一張卡**（`task`／`subagent`，它的本體就是這個子代理）：它跟核准閘門上的工具一樣維持「執行中」，不畫成「等你回答」，所以委派工具名也算進去
+ *   （即時那條 {@link isApprovalSuspension} 不改卡，重播靠這份名字認）。同樣認名字不認 callId：同一步另一顆同名的委派卡也會維持執行中，它本來就在跑。
+ */
+function gatedToolsOf(value: unknown, nested = false): string[] {
   const requests = (value as { actionRequests?: unknown } | null)?.actionRequests;
   if (!Array.isArray(requests)) return [];
-  return requests.flatMap((request: unknown) => {
+  const names = requests.flatMap((request: unknown) => {
     const name = (request as { name?: unknown } | null)?.name;
     return typeof name === 'string' ? [name] : [];
   });
+  return nested ? [...names, ...DELEGATION_TOOL_NAMES] : names;
 }
 
 /** 改、刪送出佇列裡的一件（#637），或把它改成插話（#710）。照 dsh 的 `updateQueue` 的三種 action。 */
@@ -814,6 +837,9 @@ const GOAL_DROP_LIMIT = 3;
 
 /** 人按了停止——`turn/end` 帶的那一格。見 `session-log.ts` 的 `turn/end`。 */
 const ABORTED_BY_USER: TurnEndReason = { kind: 'aborted', cause: { kind: 'user' } };
+
+/** 被準入閘門擋下的一輪（#633），見 {@link ThreadPump.#runOnce} 的 catch。 */
+const BLOCKED: TurnEndReason = { kind: 'blocked' };
 
 /**
  * 派子代理的那顆工具的名字。
@@ -841,11 +867,6 @@ interface CurrentRun {
   /** root 有一則回覆講到一半。 */
   replyOpen: boolean;
   /**
-   * 講到一半那則回覆所屬的模型呼叫（它的 `model/start` 的 `seq`，#1021）。整次重打時下一次嘗試的 `message-start` 到來，
-   * 作廢的那則要記回這一次，見 {@link ThreadPump.#abandonSupersededReply}。
-   */
-  replyModelCall: number | undefined;
-  /**
    * root 上最近一則**還沒落進日誌**的回覆，給新接上的下行補送（[#953](https://github.com/DemianLi/nexus-agent/issues/953)
    * 第二刀）。跟 {@link partial} 分開：它撐到 `assistant/message` 落盤才放掉，不是撐到 `message-finish`（量過，
    * `message-finish` 先到 pump、日誌後寫，中間那段重新整理拿不到歷史、線上也沒有，回覆就憑空消失）；而且不收人話。
@@ -855,6 +876,8 @@ interface CurrentRun {
   stopped: boolean;
   /** 同 {@link stopped}，標的是撞到輸出上限（#433）。 */
   maxTokens: boolean;
+  /** 準入閘門擋下了這一輪的某一步（#633）。收尾 frame 據它標 `blocked`，日誌據錯誤的類別收成 `blocked`。 */
+  blocked: boolean;
   /**
    * 這一輪不再收插話了（#710）：圖在收尾時沒有插話可領（`@nexus/core` 的 `StepInbox.finish`），或串流已經抽完。
    * 之後到的插話排 `next-turn`，見 {@link ThreadPump.#acceptsSteer}。
@@ -1035,8 +1058,8 @@ function isRootTerminal(raw: RawProtocolEvent): boolean {
 /**
  * checkpoint 上最後一則帶工具呼叫的 AI 訊息裡，**還沒配到結果的那幾顆**。
  *
- * 停在核准點時就是那幾顆等核准的。子代理照 dsh 不停下來等人
- * （[#324](https://github.com/DemianLi/nexus-agent/issues/324)），所以 `task` 不會是其中一顆。
+ * 停在核准點時就是那幾顆等核准的。前景子代理的核准冒到人面前（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項），
+ * 那時 `task` 也是其中一顆沒配到結果的——`gatedToolsOf` 的 `nested` 把委派工具名併進等核准的名單，卡維持「執行中」。
  */
 function danglingToolCalls(values: unknown): { readonly id: string; readonly name: string }[] {
   const messages = (values as { messages?: unknown } | null)?.messages;
@@ -1069,6 +1092,8 @@ export class ThreadPump {
   readonly #titleLimits: ThreadTitleLimits;
   /** 這台 server 講話的地方，見建構子的 `warn`。 */
   readonly #warn: ((message: string) => void) | undefined;
+  /** 封存的閘門（#633）：放進圖的 `configurable`，每次模型呼叫之前問。見 {@link ThreadPump.#runOnce} 的 catch。 */
+  readonly #isArchived: (() => boolean) | undefined;
   readonly #subscribers = new Set<Subscriber>();
   readonly #sessions: SessionRegistry;
   /**
@@ -1100,6 +1125,15 @@ export class ThreadPump {
    * `["tools:<父呼叫>"]` 出現，隨後同一顆又在 root 層（`[]`）出現一次；只看後面那一顆會把子代理的反問當成 root 的、送給人。
    */
   readonly #elicitationOrigins = new Map<string, boolean>();
+  /**
+   * 核准問題的中斷 id：已經以子代理的 namespace 露過面、等著它在 root 層的第二次露面被吞掉（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項）。
+   *
+   * **前景子代理的核准中斷會被看到兩次**（實測，同 #1098 的 MCP 反問）：先以 `["tools:<父呼叫>"]` 出現，隨後同一顆又在 root 層（`[]`）出現。
+   * 兩次都照原樣處理的話，`interrupt/raised` 記兩筆、下行收到兩顆 `input.requested`，而且 {@link ThreadPump.#pending} 被第二次（root 的
+   * namespace）蓋掉，畫面就認不出是哪個子代理在問。所以第一次（子代理的）定案，root 層那次吞掉並忘掉這個 id。
+   * 沒等到 root 層那次露面的 id 會留在這裡（實測兩次露面的 id 相同）；同一顆中斷之後再露面仍是先以子代理的 namespace 出現，所以留著的不會誤吞別的東西。
+   */
+  readonly #nestedApprovals = new Set<string>();
   /**
    * 這一輪裡要由系統代答的反問，等這一輪收尾後逐顆 resume（#1098）。**不放進 {@link ThreadPump.#pending}**：沒有人要答，
    * 下行也不該看到一張沒人按的卡。
@@ -1280,6 +1314,9 @@ export class ThreadPump {
    * @param projectionChildSeeds - 上一個行程留下的子代理日誌（#1028），見 `projection-children.ts`。
    * @param projectionFlushMs - 插件投影 frame 的合併視窗毫秒（`projection-flush` 那一列，#1071）。值由 `serve.ts` 在起動期解出來、
    *   經 `createWireHandler` 傳進來。**省略即合併器的預設 100**，同 `toolText`。
+   * @param isArchived - 這條 thread 封存了沒有（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，`thread-organization.ts`）。
+   *   **省略即沒有封存這回事**（沒接整理檔的組裝）。封存的 thread 不跑模型步驟：每一步送出請求之前問一次，擋下的那一輪以 `blocked` 收，
+   *   見 {@link ThreadPump.#runOnce} 的 catch。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -1295,8 +1332,10 @@ export class ThreadPump {
     projections: readonly ProjectionUnit[] = [],
     projectionChildSeeds?: ProjectionChildren,
     projectionFlushMs?: number,
+    isArchived?: () => boolean,
   ) {
     this.#agent = agent;
+    this.#isArchived = isArchived;
     this.#projectionOut = new ProjectionCoalescer(
       (data) => this.#presentCustom(data),
       projectionFlushMs,
@@ -1632,6 +1671,7 @@ export class ThreadPump {
         ...(input.attachments === undefined || input.attachments.length === 0
           ? {}
           : { attachments: input.attachments }),
+        ...(input.mention === undefined ? {} : { mention: input.mention }),
       };
       const steer = input.steer === true;
       const intoStep = steer && this.#acceptsSteer();
@@ -2117,6 +2157,39 @@ export class ThreadPump {
     );
   }
 
+  /**
+   * 目標續行的那一輪被準入閘門擋下：**把目標擋下**（`prompt-rejected`），照 dsh 的 `goal-round-driver`（`src/index.ts:403-415`，
+   * `5badb15009a`）——它的 pre-step 先 `await next()`（下游就是封存閘門），拿到 `reject` 且目標還是 active／armed，就
+   * `goals.block(…, { code: 'prompt-rejected', message: 'Goal round was rejected before entering its step.' })`。
+   * 排程器因此不認識封存，也不空轉：目標不是 active 了就不排。**解除封存不會自動恢復**，要人 `/goal resume`。
+   *
+   * 對的是目標本身（id 吻合、active、armed）而不是預約的修訂號：開跑那一刻目標的修訂可能已因這一輪而前進。
+   * 擋下失敗（目標剛好被別人改了）只講一聲。
+   */
+  #blockGoalOfRejectedRound(claimed: QueuedInput | undefined): void {
+    const source = claimed?.source;
+    if (source === undefined || source.kind !== 'goal' || this.#driver === undefined) return;
+    try {
+      const goal = this.#driver.goal();
+      if (
+        goal === undefined ||
+        goal.id !== source.goalId ||
+        goal.phase !== 'active' ||
+        goal.activation !== 'armed'
+      ) {
+        return;
+      }
+      this.#driver.block(
+        { id: goal.id, revision: goal.revision },
+        { code: 'prompt-rejected', message: 'Goal round was rejected before entering its step.' },
+      );
+    } catch (error: unknown) {
+      this.#driver.warn(
+        `擋下目標失敗（續行那一輪被準入閘門擋下）：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   /** 閒下來才暫停那些被取消的續行預約（{@link ThreadPump.#cancelledGoalRounds}）；還在跑就什麼都不做，等下一次問。 */
   #pauseCancelledGoalRounds(): void {
     if (this.running) return;
@@ -2366,7 +2439,7 @@ export class ThreadPump {
       if (job.text !== undefined) {
         // **id 就是佇列裡那一件的 id**：日誌、checkpoint、推回模型的那一則是同一則，reducer 照 id 對得上。
         const message = new HumanMessage({
-          content: userContent(job.text.text, job.text.attachments) as never,
+          content: userContent(job.text.text, job.text.attachments, job.text.mention) as never,
           id: job.text.id,
         });
         this.#sessions.root.append('user/message', {
@@ -2557,10 +2630,10 @@ export class ThreadPump {
       partial: '',
       reasoning: '',
       replyOpen: false,
-      replyModelCall: undefined,
       reply: undefined,
       stopped: false,
       maxTokens: false,
+      blocked: false,
       closed: false,
       opening:
         referenced === undefined || referenced.references.length === 0
@@ -2582,6 +2655,25 @@ export class ThreadPump {
     };
     this.#current = current;
     try {
+      // **輪頭先問一次，人話不進圖**（#633）：圖的輸入只要送進去，基座就把它存進存檔點——就算第一次模型呼叫被閘門擋下、圖拋錯也一樣
+      // （實測，見 `goal-driver-pump.test.ts`）。dsh 的 `user/message` 要等放行才寫，被擋下的話不在之後的對話裡，所以輪頭的擋要在
+      // 把輸入交給圖**之前**。`resume` 沒有人話可漏，留給圖裡的閘門（它要讓掛著的核准照常走到下一次模型呼叫才知道）。
+      // 輪頭放行、取到串流之前才封存的那個縫：閘門仍在圖裡每次模型呼叫前擋，只是那一句話已進了存檔點（已知的小縫）。
+      if (input.kind !== 'resume' && this.#isArchived?.() === true) {
+        current.blocked = true;
+        // 圖沒跑，基座不會發收尾 frame：自己補一顆，形狀同 `#translate` 把圖的 `failed` 換成的那一顆。
+        this.#broadcast(
+          this.#seal({
+            method: 'lifecycle',
+            params: {
+              namespace: [],
+              timestamp: Date.now(),
+              data: { event: 'completed', graph_name: 'root', blocked: true },
+            },
+          } as unknown as Event),
+        );
+        throw new TurnBlockedError();
+      }
       // 退回標題（#647）：這條會話還沒有標題就從第一則合格的人話推一個。**在領走之後**，所以是開跑的那一刻、用開跑的
       // 那份文字，同 dsh 的 `user/message` 開跑時才落。**寫不進去只講一聲，這一輪照跑**，同 dsh `onUserMessage` 的
       // catch：標題是附帶的，不值得賠上使用者那一輪。自己包一層、又放在外層 try 裡面，兩件都保住。
@@ -2604,12 +2696,20 @@ export class ThreadPump {
           // 工具（實測），見 `@nexus/core` 的 `turn-cancel.ts`。
           [TURN_CANCEL_CONFIG_KEY]: current.controller.signal,
           [STEP_INBOX_CONFIG_KEY]: stepInbox,
+          // 封存的會話不跑模型步驟（#633）：每一步送出請求之前問一次，擋下的那一輪以 `blocked` 收，見下面的 catch。
+          ...(this.#isArchived !== undefined && {
+            [ARCHIVE_GATE_CONFIG_KEY]: () => {
+              const archived = this.#isArchived!();
+              if (archived) current.blocked = true;
+              return archived;
+            },
+          }),
         },
       });
       // **在第一顆封包之前**：投影裡的 promise 一建立就可能被 reject，晚掛就漏（#346）。
       markProjectionsHandled(run);
       for await (const raw of run) {
-        this.#abandonSupersededReply(current, raw);
+        this.#applyStreamRetrySignal(current, raw);
         trackRootReply(current, raw);
         trackUnsettledReply(current, raw);
         for (const event of this.#translate(raw)) {
@@ -2635,6 +2735,17 @@ export class ThreadPump {
       else this.#stopRequested = false;
       this.#answerForSystem(current.stopped);
     } catch (error) {
+      // **被準入閘門擋下**（#633，封存的會話）：一個模型請求都沒發，這一輪以 `blocked` 收。**認的是類別**（沿 `MiddlewareError` 拆到底），
+      // 理由同下面的中止。在中止之前判不會搶：中止的訊號一舉起來，閘門那一側先讓路給中止（`turn-cancel.ts`），兩者不會同時成立。
+      //
+      // **被領走的輸入沒有進對話**，照 dsh（`agent.ts:419-423` 的 `user/message` 要等放行才寫）：人話在輪頭就擋下、沒交給圖，
+      // 之後的輪不會看到它。`turn/start` 帶著文字，所以日誌與歷史仍留著使用者打了什麼。
+      if (isTurnBlocked(error)) {
+        this.#sessions.root.append('turn/end', { reason: BLOCKED });
+        this.#stopRequested = false;
+        this.#blockGoalOfRejectedRound(claimed);
+        return;
+      }
       // **認的是中止訊號已經觸發**，不是錯誤長什麼樣：被切斷的模型請求拋什麼要看供應商與抽法，
       // 而 `TurnCancelledError` 是我們自己的類別（沿 `MiddlewareError` 拆到底再認），兩個都不比對
       // 訊息（#276）。
@@ -2667,31 +2778,49 @@ export class ThreadPump {
   }
 
   /**
-   * 串流中段出錯、整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)，`@nexus/core` 的 `stream-retry.ts`）時，
-   * 上一次嘗試吐了一半的 root 回覆作廢：新的一則 `message-start` 到來，而上一則還沒收尾（沒有 `message-finish`）。
+   * 串流中段出錯、整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）時，`@nexus/core` 的 `stream-retry.ts`
+   * 在**失敗當下**用 `config.writer` 送來一顆 {@link StreamRetrySignal}。它和字片段在同一條輸出佇列上，所以讀到它的時候失敗那次的
+   * 片段一個都不會再來（順序的依據與常駐測試見該檔檔頭與 `stream-retry.test.ts`）。
    *
-   * 做兩件事，**都在新那則的 frame 廣播之前**：①日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型，`ignorable`），
-   * ②送一顆 `message-discard` 讓畫面把上一則擦掉。判準是「另一則 root 的 `message-start` 來得比上一則的 `message-finish` 早」
-   * ——正常流程一則回覆一定先收尾才開下一則，所以不會誤判。
+   * - `scheduled`：①作廢 root 還沒收尾的回覆（`assistant/attempt` ＋ `message-discard`，{@link ThreadPump.#discardOpenReply}），
+   *   ②送 `llm-retry`（畫面據此畫「N 秒後重試」）。**兩者在同一刻**，同 dsh 在失敗當下記 `assistant/attempt`。
+   * - `started`：退避等完、下一次嘗試要開始，送 `llm-retry-started`。取消沒有專屬 frame：退避中按停止，這一輪直接收尾。
    *
-   * **只管 root。** 子代理的回覆在更深的 namespace、各有各的 `message-start`；它們的重打（共用同一個 slot）不擦已經畫出去的字，
-   * 代價是畫面上多一則斷尾的子代理回覆，跟重打之前一樣。
-   *
-   * 順手記下這一則回覆屬於哪次呼叫（下一次作廢時要用）。
+   * **只管 root。** 圖裡 `custom` 的 namespace 是空的才是 root；子代理在更深的 namespace，它們的重打（共用同一個 slot）不擦已經畫出去的字，
+   * 代價是畫面上多一則斷尾的子代理回覆，跟重打之前一樣。**圖自己發的其餘 `custom` 仍然一律不上線**（{@link ThreadPump.#translate}）：
+   * 這裡只認 {@link streamRetrySignalOf} 認得的形狀，其餘原樣略過。
    */
-  #abandonSupersededReply(current: CurrentRun, raw: RawProtocolEvent): void {
-    if (raw.method !== 'messages' || raw.params.namespace.length > 1) return;
-    const data = raw.params.data as { event?: string; role?: string } | null;
-    if (data?.event !== 'message-start' || data.role === 'human') return;
-    if (current.replyOpen) this.#discardOpenReply(current);
-    current.replyModelCall = lastModelCall(this.#sessions.root);
+  #applyStreamRetrySignal(current: CurrentRun, raw: RawProtocolEvent): void {
+    if (raw.method !== 'custom' || raw.params.namespace.length !== 0) return;
+    const signal = streamRetrySignalOf((raw.params.data as { payload?: unknown } | null)?.payload);
+    if (signal === undefined) return;
+    if (signal.phase === 'started') {
+      this.#presentCustom({
+        name: LLM_RETRY_STARTED,
+        payload: { retryId: signal.retryId, retry: signal.retry },
+      });
+      return;
+    }
+    this.#discardOpenReply(current, signal.modelCall);
+    this.#presentCustom({
+      name: LLM_RETRY,
+      payload: {
+        retryId: signal.retryId,
+        retry: signal.retry,
+        maxRetries: signal.maxRetries,
+        delayMs: signal.delayMs,
+        code: signal.code,
+      },
+    });
   }
 
   /**
    * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型，`ignorable`），線上送
    * `message-discard` 讓畫面把它擦掉，並把這一則從「講到一半」的追蹤裡拿掉。沒有講到一半的就什麼都不做。
+   *
+   * @param modelCall - 失敗的那次呼叫的 `model/start` 的 `seq`（通知帶來的）；日誌沒接上就沒有。
    */
-  #discardOpenReply(current: CurrentRun): void {
+  #discardOpenReply(current: CurrentRun, modelCall: number | undefined): void {
     const previous = current.reply;
     if (!current.replyOpen || previous === undefined || previous.finish !== undefined) return;
     const reasoning = current.reasoning;
@@ -2710,7 +2839,7 @@ export class ThreadPump {
     try {
       this.#sessions.root.append(
         'assistant/attempt',
-        withModelCall({ message: toLoggedMessage(abandoned) }, current.replyModelCall),
+        withModelCall({ message: toLoggedMessage(abandoned) }, modelCall),
         { ignorable: true },
       );
     } catch {
@@ -2721,21 +2850,6 @@ export class ThreadPump {
     current.partial = '';
     current.reasoning = '';
     current.replyOpen = false;
-  }
-
-  /**
-   * 講到一半的那則回覆，所屬的那次呼叫是不是**已經失敗收尾**（`model/end` 帶 `outcome: 'error'`）。是的話，這一則是一次死掉的
-   * 嘗試：它只可能在等重打的退避裡被留在畫面上——使用者在那時按停止，不能把它當「被我打斷的半段」存回對話。
-   */
-  #openReplyBelongsToFailedCall(current: CurrentRun): boolean {
-    const call = current.replyModelCall;
-    if (call === undefined) return false;
-    return this.#sessions.root.events.some(
-      (event) =>
-        event.type === 'model/end' &&
-        (event.data as SessionEventMap['model/end']).modelCall === call &&
-        (event.data as SessionEventMap['model/end']).outcome === 'error',
-    );
   }
 
   /**
@@ -2757,11 +2871,8 @@ export class ThreadPump {
    * 一側照樣拿得到這半段。它落在被切斷那次呼叫的 `model/end` 之後——寫入點看到的是拋錯，不是回覆。
    */
   async #keepInterruptedReply(current: CurrentRun): Promise<void> {
-    // 整次重打的退避期間被停止（#520）：那則是上一次失敗的嘗試，同 dsh——失敗當下就記成 `assistant/attempt`，停止時不留。
-    if (current.replyOpen && this.#openReplyBelongsToFailedCall(current)) {
-      this.#discardOpenReply(current);
-      return;
-    }
+    // 整次重打的退避期間被停止（#520）：上一次失敗的嘗試在失敗當下就作廢了（{@link ThreadPump.#applyStreamRetrySignal}），
+    // 這裡看到的 `replyOpen` 一定是這一輪真的被我打斷的那則。
     const reasoning = current.reasoning.trim() === '' ? '' : current.reasoning;
     const text = current.partial.trim() === '' ? '' : current.partial;
     if (!current.replyOpen || (reasoning === '' && text === '')) return;
@@ -2941,6 +3052,8 @@ export class ThreadPump {
           yield* this.#translateElicitation(entry, elicitation, raw);
           continue;
         }
+        if (raw.params.namespace.length === 0 && this.#nestedApprovals.delete(entry.id)) continue;
+        if (raw.params.namespace.length > 0) this.#nestedApprovals.add(entry.id);
         // **先記日誌、再蓋號**，同以前的先後：日誌的訂閱者同步送出的 frame 要拿比這顆小的號，否則這顆廣播出去時
         // 會被折疊器當成重複丟掉。
         this.#sessions.root.append('interrupt/raised', { interruptId: entry.id });
@@ -2958,7 +3071,7 @@ export class ThreadPump {
         this.#pending.set(entry.id, {
           interruptId: entry.id,
           actionCount: actionCountOf(entry.value),
-          gatedTools: gatedToolsOf(entry.value),
+          gatedTools: gatedToolsOf(entry.value, raw.params.namespace.length > 0),
           request,
         });
         this.#tell({ type: 'input-requested', event: request });
@@ -2987,6 +3100,20 @@ export class ThreadPump {
           namespace: raw.params.namespace,
           timestamp: raw.params.timestamp,
           data: { ...(raw.params.data as object), aborted: true },
+        },
+      } as Event);
+      return;
+    }
+
+    if (current !== undefined && current.blocked && isRootTerminal(raw)) {
+      // **被準入閘門擋下（#633）一樣只加分類**：閘門拋的錯讓基座發了 `failed`，但這不是失敗——一個請求都沒發、沒有東西壞掉。
+      // 換成帶 `blocked` 的 `completed`，不帶錯誤字串，畫面不會畫成失敗；怎麼講「這句話沒有送給模型」是畫面的事。
+      yield this.#seal({
+        method: raw.method,
+        params: {
+          namespace: raw.params.namespace,
+          timestamp: raw.params.timestamp,
+          data: { event: 'completed', graph_name: 'root', blocked: true },
         },
       } as Event);
       return;

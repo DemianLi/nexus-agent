@@ -59,8 +59,12 @@ import {
   withReturnGuidance,
 } from './background-subagents.js';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
-import { describeSubagentModels, resolveModelSelection } from './subagent-model-selection.js';
-import type { ModelSelectionConfig } from './subagent-model-selection.js';
+import {
+  baselineChoice,
+  describeSubagentModels,
+  resolveModelSelection,
+} from './subagent-model-selection.js';
+import type { DelegationBaseline, ModelSelectionConfig } from './subagent-model-selection.js';
 import type { BackgroundAgent, BackgroundSubagentControl } from './background-subagents.js';
 
 /** 模型看到的工具名（dsh 的預設名，`toolName: 'subagent'`）。 */
@@ -100,6 +104,12 @@ export interface BackgroundSubagentsOptions {
    * 由 serve 在 `createAgent` 時取樣／讀回後傳進來；工具面在整個會話內不變（dsh：定義靜態，catalog 變動不改 prompt 前綴）。
    */
   readonly modelSelection?: ModelSelectionConfig;
+  /**
+   * 這一次委派的基線（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：定義釘的模型與強度、父代理**此刻**的選擇、部署預設。
+   * 組裝點從會話的控制器與 registry 的定義導出；省略（沒連真實供應商，沒有每會話選擇）＝沿用預設實例。背景子代理在**委派那一刻**
+   * 取這一次、之後固定（照 dsh：子代理建立時取父代理當下的選擇）。
+   */
+  readonly delegationBaseline?: (subagent: string) => DelegationBaseline | undefined;
 }
 
 const subagentSchema = z.object({
@@ -194,6 +204,7 @@ export class BackgroundDelegation {
       ...(port.onSettled !== undefined && { onSettled: port.onSettled }),
       ...(port.onMessage !== undefined && { onMessage: port.onMessage }),
       ...(port.onStatus !== undefined && { onStatus: port.onStatus }),
+      ...(port.isArchived !== undefined && { isArchived: port.isArchived }),
       ...(this.#options.maxActive !== undefined && { maxActive: this.#options.maxActive }),
       ...(sandbox !== undefined && {
         enter: <T>(log: SessionLog, run: () => T): T => sandbox.delegateFromLog(log, run),
@@ -282,19 +293,28 @@ export class BackgroundDelegation {
    */
   #listSubagentModelsTool() {
     const selection = this.#options.modelSelection!;
-    return tool(({ model }: { model?: string }) => describeSubagentModels(selection, { model }), {
-      name: LIST_SUBAGENT_MODELS_TOOL_NAME,
-      description:
-        'List the models a subagent may use, without changing your own. Call with no arguments to list the authorized ' +
-        'models, or with `model` to see the reasoning efforts of that exact model. Use the returned ids with the ' +
-        '`model` and `reasoning_effort` fields of the subagent tool.',
-      schema: z.object({
-        model: z
-          .string()
-          .optional()
-          .describe('Exact model id to inspect. Omit to list the authorized models.'),
-      }),
-    });
+    // 標「主對話目前用的」要讀此刻的選擇（#328）：會話換了模型，政策查的也是那顆。傳空名字＝沒有哪個定義釘東西，基線只剩父代理。
+    return tool(
+      ({ model }: { model?: string }) =>
+        describeSubagentModels(
+          selection,
+          { model },
+          this.#options.delegationBaseline?.('')?.parent.model,
+        ),
+      {
+        name: LIST_SUBAGENT_MODELS_TOOL_NAME,
+        description:
+          'List the models a subagent may use, without changing your own. Call with no arguments to list the authorized ' +
+          'models, or with `model` to see the reasoning efforts of that exact model. Use the returned ids with the ' +
+          '`model` and `reasoning_effort` fields of the subagent tool.',
+        schema: z.object({
+          model: z
+            .string()
+            .optional()
+            .describe('Exact model id to inspect. Omit to list the authorized models.'),
+        }),
+      },
+    );
   }
 
   /**
@@ -449,12 +469,16 @@ export class BackgroundDelegation {
           );
         }
         let choice: ModelChoice | undefined;
+        const baseline = this.#options.delegationBaseline?.(subagentType);
         if (selection !== undefined) {
-          const resolved = resolveModelSelection(selection, requested);
+          const resolved = resolveModelSelection(selection, requested, baseline);
           if (!resolved.ok) {
             return toolRefusal(resolved.error, { callId, name: SUBAGENT_TOOL_NAME });
           }
           choice = resolved.choice;
+        } else if (baseline !== undefined) {
+          // 沒開模型自己挑：走基線，定義釘的 ?? 父代理此刻的（#328）。
+          choice = baselineChoice(baseline);
         }
 
         if (background === false) {

@@ -37,6 +37,8 @@ import type { CustomFrameName } from './custom-frame.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
 import { IMAGE_MEDIA_TYPES } from './attachments.js';
 import type { WireAttachmentRef } from './attachments.js';
+import { mentionField } from './subagent-list.js';
+import type { SubagentMention } from './subagent-list.js';
 import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, isSettleReason } from './inbox.js';
 import type {
   WireQueuedInput,
@@ -46,6 +48,8 @@ import type {
 } from './inbox.js';
 import { COMPACTION } from './compaction.js';
 import { GOAL, GOAL_PHASES } from './goal.js';
+import { LLM_RETRY, LLM_RETRY_STARTED, toWireLlmRetry } from './llm-retry.js';
+import type { WireLlmRetry } from './llm-retry.js';
 import { MESSAGE_DISCARD } from './message-discard.js';
 import type { WireGoal, WireGoalPhase } from './goal.js';
 import { PLAN_MODE } from './plan-mode.js';
@@ -92,6 +96,18 @@ export interface HumanEntry {
    * 圖與檔案由 `type` 判別。沒有附件就不給這一格（空陣列與沒給是同一件事）。
    */
   readonly attachments?: readonly WireAttachmentRef[];
+  /**
+   * 這一句點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：畫面據它在人的泡泡上畫點名的標記。
+   * `text` 不含點名（送出時 `@` 那一段就從草稿拿掉了）。即時走 `inbox` 的 `claimed`，歷史重播走同一格，冷載入一樣畫得出來。沒有點名就不給這一格。
+   */
+  readonly mention?: SubagentMention;
+  /**
+   * 這一句被準入閘門擋下了（封存的會話，[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：一個模型請求都沒發，話沒有送給模型。
+   * 讀的是 root 收尾 `lifecycle` 上 pump 補的 `blocked`，同 {@link AiEntry.maxTokens} 由收尾 frame 標；歷史重播補的是同一顆 frame，
+   * 所以冷載入一樣標得出來。**只在這句人話是整份最後一格時標**——後面有任何條目（這一輪已經有回覆或工具、結算通知、代理來信），話是送出去了的，
+   * 或被擋下的不是它，就不標（收尾原因看軌跡）。
+   */
+  readonly blocked?: true;
 }
 
 /**
@@ -669,6 +685,12 @@ export interface ConversationState {
    * `subagent-status.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
    */
   readonly subagentStatus: Readonly<Record<string, SubagentRunStatus>> | null;
+  /**
+   * 這一輪正在等著重打（#520）：最後一顆 `llm-retry` frame 的整份，`null` ＝ 沒有。**一輪開始、一輪收尾、下一則 root 回覆開始、
+   * `llm-retry-started` 到來都會清成 `null`**（後面幾條是保險，frame 掉了也不卡一行倒數）。不進歷史，重新整理之後是 `null`。
+   * 規則見 `llm-retry.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
+   */
+  readonly retry: WireLlmRetry | null;
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -693,6 +715,7 @@ export function emptyConversation(): ConversationState {
     inboxNextStep: [],
     title: null,
     subagentStatus: null,
+    retry: null,
   };
 }
 
@@ -724,9 +747,11 @@ function trackTurn(previous: ConversationState, next: ConversationState): Conver
   if (next === previous) return next;
   const wasActive = isTurnActive(previous.status);
   if (!wasActive && next.status === 'running') {
-    return { ...next, turnStart: previous.entries.length };
+    return { ...next, turnStart: previous.entries.length, retry: null };
   }
   if (!wasActive || isTurnActive(next.status)) return next;
+  // 一輪收尾（含退避中按停止）：「N 秒後重試」不能留到下一輪。
+  if (next.retry !== null) next = { ...next, retry: null };
   for (let at = next.entries.length - 1; at >= next.turnStart; at -= 1) {
     const entry = next.entries[at];
     if (entry === undefined || !isTailCandidate(entry)) continue;
@@ -901,7 +926,11 @@ function reduceFrame(state: ConversationState, event: Event): ConversationState 
 
   switch (event.method) {
     case 'messages':
-      return reduceMessage(advanced, namespace, event.params.data, time);
+      return clearRetryOnReply(
+        reduceMessage(advanced, namespace, event.params.data, time),
+        namespace,
+        event.params.data,
+      );
     case 'tools':
       return reduceTool(advanced, namespace, event.params.data, time);
     case 'lifecycle':
@@ -913,6 +942,17 @@ function reduceFrame(state: ConversationState, event: Event): ConversationState 
     default:
       return advanced;
   }
+}
+
+/** 下一則 root 回覆開始了：重打已經開跑，「N 秒後重試」不再成立（#520）。子代理與人話不算。 */
+function clearRetryOnReply(
+  state: ConversationState,
+  namespace: readonly string[],
+  data: unknown,
+): ConversationState {
+  if (state.retry === null || namespace.length > 1) return state;
+  const { event, role } = (data ?? {}) as { event?: unknown; role?: unknown };
+  return event === 'message-start' && role !== 'human' ? { ...state, retry: null } : state;
 }
 
 /**
@@ -1018,6 +1058,8 @@ const CUSTOM_REDUCERS: {
   [SUBAGENT_STATUS]: reduceSubagentStatus,
   [SUBAGENT_CATALOG]: reduceSubagentCatalog,
   [MESSAGE_DISCARD]: reduceMessageDiscard,
+  [LLM_RETRY]: reduceLlmRetry,
+  [LLM_RETRY_STARTED]: reduceLlmRetryStarted,
 };
 
 /**
@@ -1203,6 +1245,24 @@ function reduceMessageDiscard(state: ConversationState, payload: object): Conver
   return entries.length === state.entries.length ? state : { ...state, entries };
 }
 
+/** `llm-retry` 的 `payload`（#520）：整份換掉，`retryId` 不同也直接換。任何一格不對就整顆不收，留著前一份。 */
+function reduceLlmRetry(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
+  const next = toWireLlmRetry(payload, time);
+  return next === undefined ? state : { ...state, retry: next };
+}
+
+/** `llm-retry-started` 的 `payload`（#520）：`retryId` 對得上才清；對不上（或本來就沒有）是 no-op。 */
+function reduceLlmRetryStarted(state: ConversationState, payload: object): ConversationState {
+  const { retryId } = payload as { retryId?: unknown };
+  return state.retry !== null && state.retry.retryId === retryId
+    ? { ...state, retry: null }
+    : state;
+}
+
 /** `goal` 的 `payload`：投影的整個值，整份換掉。`null` 是沒有目標；任何一格不對就整顆不收，留著前一份。 */
 function reduceGoal(state: ConversationState, payload: object): ConversationState {
   const { goal } = payload as { goal?: unknown };
@@ -1318,6 +1378,8 @@ interface RawQueuedInput {
   readonly text: string;
   readonly source: Readonly<Record<string, unknown>> & { readonly kind: string };
   readonly attachments?: readonly WireAttachmentRef[];
+  /** 沒驗：{@link mentionField} 投影時才驗，壞的當沒有。 */
+  readonly mention?: unknown;
 }
 
 /** 排著的一件長得對不對：`id`、`text` 是字串，`source` 是帶非空字串 `kind` 的物件；帶了 `attachments` 就要形狀合格。 */
@@ -1483,12 +1545,13 @@ function reduceInbox(
   }
   const humans: (HumanEntry | NoticeEntry | AgentMessageEntry)[] = [];
   for (const claim of claims) {
-    const { id, text, references, attachments, source } = (claim ?? {}) as {
+    const { id, text, references, attachments, source, mention } = (claim ?? {}) as {
       id?: unknown;
       text?: unknown;
       references?: unknown;
       attachments?: unknown;
       source?: unknown;
+      mention?: unknown;
     };
     if (
       typeof id !== 'string' ||
@@ -1541,16 +1604,19 @@ function reduceInbox(
       inboxId: id,
       ...referencesField(references),
       ...attachmentsField(attachments),
+      ...mentionField(mention),
       ...timeField('startedAt', time),
     });
   }
   const queued = (list: readonly RawQueuedInput[]): WireQueuedInput[] =>
-    list.map(({ id, text, source, attachments }) => ({
+    list.map(({ id, text, source, attachments, mention }) => ({
       id,
       text,
       source: queuedSource(source),
       // 排著的件帶的附件（#732）：空陣列與沒給一樣不帶這一格。
       ...attachmentsField(attachments),
+      // 點名（#328 第 2 項）：壞的當沒有。
+      ...mentionField(mention),
     }));
   const inbox = queued(items);
   const inboxNextStep = queued(nextStep ?? []);
@@ -1695,6 +1761,8 @@ interface MessageData {
   readonly references?: unknown;
   /** 歷史重播的人話帶的附件參照（#732），即時那條走 `inbox` 的 `claimed`。 */
   readonly attachments?: unknown;
+  /** 歷史重播的人話帶的點名（#328 第 2 項），即時那條走 `inbox` 的 `claimed`。 */
+  readonly mention?: unknown;
 }
 
 function reduceMessage(
@@ -1729,6 +1797,7 @@ function reduceMessage(
           text: '',
           ...referencesField(references),
           ...attachmentsField(attachments),
+          ...mentionField(data.mention),
           ...timeField('startedAt', time),
         };
         return { ...state, entries: [...state.entries, entry] };
@@ -2036,6 +2105,28 @@ interface LifecycleData {
   readonly aborted?: boolean;
   /** 這一輪撞到了輸出上限。同 `aborted` 由 pump 補，見 {@link AiEntry.maxTokens}。 */
   readonly maxTokens?: boolean;
+  /**
+   * 這一輪被準入閘門擋下（封存的會話，[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。同 `aborted` 由 pump 補，
+   * 帶在 `completed` 上；狀態照一輪正常收尾回 `idle`，沒有錯誤，並把這一輪的人話標上 {@link HumanEntry.blocked}。
+   */
+  readonly blocked?: boolean;
+}
+
+/**
+ * 這一輪被擋下的人話標上 {@link HumanEntry.blocked}：**只在人話是整份最後一格時標**。被擋下的輪沒有輸出，人話送出去後後面不會再有東西；
+ * 後面有任何條目（回覆、工具、結算通知、代理來信）就表示這句話不是這次被擋下的那一句，或這一輪做過事、話是送出去了的——不標。
+ * （例：上一輪的人話後面接著結算通知再被擋下，被擋的是通知喚醒的那一輪，不是那句人話。）
+ *
+ * @param entries - 目前的條目。
+ * @returns 標過的條目；沒有可標的原樣。
+ */
+function markBlocked(entries: readonly ConversationEntry[]): readonly ConversationEntry[] {
+  const at = entries.length - 1;
+  const human = entries[at];
+  if (human?.kind !== 'human') return entries;
+  const next = [...entries];
+  next[at] = { ...human, blocked: true };
+  return next;
 }
 
 /**
@@ -2154,7 +2245,12 @@ function reduceLifecycle(
     return {
       ...state,
       status: 'idle',
-      entries: data.maxTokens === true ? markMaxTokens(settled, state.turnStart) : settled,
+      entries:
+        data.blocked === true
+          ? markBlocked(settled)
+          : data.maxTokens === true
+            ? markMaxTokens(settled, state.turnStart)
+            : settled,
     };
   }
   return state;

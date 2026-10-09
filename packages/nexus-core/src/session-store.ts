@@ -475,8 +475,37 @@ import type { SessionEvent } from './session-log.js';
  *
  * **讀舊檔**：38 以前沒有這個來源，續行是直接開的一輪，不補寫歷史。日誌裡**排著沒領走的預約**（行程死在預約與開跑之間）：
  * 重啟後折回來和人排的一樣停住，領走時驗證不過（授權不持久，重啟後一定是 `disarmed`）就丟掉、不開那一輪。
+ *
+ * ## 40：`turn/end` 多一種原因 `blocked`（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）
+ *
+ * 封存的會話不跑模型：每一步送出模型請求之前問一次準入閘門，被擋下的那一輪以 `reason: { kind: 'blocked' }` 收尾、一個請求都沒發
+ * （見 {@link ./session-log.ts | TurnEndReason}）。背景子代理被擋下的輪同樣以它收尾。
+ *
+ * **升版，不標 `ignorable`**——`turn/end` 是既有種類，新增的是**欄位值的成員**，而且舊 runtime 照舊讀會讀錯：39 的讀方只認
+ * `aborted`／`max-tokens`（goal 續行的判準），對不認得的 `reason.kind` 一律當一輪正常做完，於是一輪**什麼都沒做**的收尾被讀成做完了，
+ * 歷史也不會標出來。拒絕讀（由版本號在讀檔那一步擋下）才是對的方向。
+ *
+ * **讀舊檔**：39 以前沒有這個原因，不補寫歷史。
+ *
+ * ## 41：`session/title` 的 `source` 多一種 `user`（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）
+ *
+ * 使用者改名：追加一顆 `session/title`，`source: { kind: 'user' }`、`messageSeqs: []`，**釘住**這個標題（見 {@link ./session-log.ts | SessionTitleSource}）。
+ * 40 以前的檔直接讀：那時沒有人工改名，一顆 `user` 都沒有就是當時的樣子。
+ *
+ * 升版照新增詞彙的慣例（同 18、19），不是非升不可：40 讀到 `user` 標題照樣拿最後一顆（列表、歷史讀的就是文字），一字不差。釘住由寫標題的人
+ * 守：退回標題只在沒有標題時寫，模型標題在寫入前看到最後一顆是 `user` 就放棄（見 `apps/harness/src/session-title.ts` 的 `titlePinnedByUser`）。
+ *
+ * ## 42：訊息點名子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）
+ *
+ * 人送出的一句話可以點名派哪一個子代理（`run.start` 的 `mention`）。`inbox/spliced` 裡那一件（`QueuedInput`）與 `turn/start`（`kind: 'message'`）各多一格選填的
+ * `mention { kind: 'subagent', name }`；輪中插話被領走時記的 `user/message` 的 `HumanMessage` 內容在文字之後多一個固定的文字區塊（見 `subagent-mention.ts`）。
+ *
+ * **升版，不標 `ignorable`**——同 38：這個欄位**左右續接之後的行為**。一台 41 的 runtime 讀到新檔會把 `mention` 略過，排著的項目被折回來重跑時，
+ * 模型收到的是一句沒有點名的話，沒有任何東西報錯。
+ *
+ * **讀舊檔**：41 以前沒有這一格，等於沒有點名，不補寫歷史。
  */
-export const SESSION_LOG_FORMAT_VERSION = 39;
+export const SESSION_LOG_FORMAT_VERSION = 42;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

@@ -21,6 +21,14 @@ export const GOAL_PHASE_TEXT = {
   complete: '目標：已完成',
 } as const satisfies Record<WireGoalPhase, string>;
 
+/**
+ * `prompt-rejected`：目標續行的那一輪在進模型之前被準入閘門擋下（今天的唯一來源是會話已封存，[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
+ * server 給的 `message` 是英文固定句，這裡換成講得出下一步的中文：**取消封存不會自己接回來**，要人 `/goal resume`。
+ * 用詞與輸入框上方的封存橫幅、泡泡下的提示一致（「會話已封存」）。
+ */
+export const PROMPT_REJECTED_TEXT =
+  '續行的那一輪被擋下了（會話已封存）。取消封存後請輸入 /goal resume。';
+
 export interface GoalBarView {
   /** 階段字，例如「目標：未完成」。 */
   readonly phase: string;
@@ -40,7 +48,8 @@ export function goalBarView(goal: WireGoal | null): GoalBarView | undefined {
   const phase = GOAL_PHASE_TEXT[goal.phase];
   const rounds =
     goal.roundsStarted > 0 ? `第 ${goal.roundsStarted}／${goal.maxGoalRounds} 輪` : undefined;
-  const blockedReason = goal.phase === 'blocked' ? goal.blockedReason?.message : undefined;
+  const reason = goal.phase === 'blocked' ? goal.blockedReason : undefined;
+  const blockedReason = reason?.code === 'prompt-rejected' ? PROMPT_REJECTED_TEXT : reason?.message;
   return {
     phase,
     objective: goal.objective,

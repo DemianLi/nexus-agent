@@ -34,6 +34,7 @@ export function PendingSwap({
   composerRef,
   renderPanel,
   renderActions,
+  askerOf,
 }: {
   readonly pendings: readonly PendingInput[];
   /** 輸入框：沒有待決時畫它，有待決時藏起來。 */
@@ -44,6 +45,8 @@ export function PendingSwap({
   readonly renderPanel: (pending: PendingInput) => ReactNode;
   /** 名稱那一列最右邊的按鈕（提問面板的 ❌）。 */
   readonly renderActions?: (pending: PendingInput) => ReactNode;
+  /** 這顆中斷是哪個前景子代理在問（#328）；名稱列與狀態列都要講，兩個子代理平行時才分得開。 */
+  readonly askerOf?: (pending: PendingInput) => string | undefined;
 }) {
   const pending = pendings[0];
   const target = pending?.interruptId ?? COMPOSER;
@@ -60,10 +63,14 @@ export function PendingSwap({
   const label =
     panel === undefined
       ? undefined
-      : pendingLabel(panel, {
-          index: Math.max(0, index),
-          total: Math.max(1, pendings.length),
-        });
+      : pendingLabel(
+          panel,
+          {
+            index: Math.max(0, index),
+            total: Math.max(1, pendings.length),
+          },
+          askerOf?.(panel),
+        );
 
   useEffect(() => {
     if (!leaving) return;

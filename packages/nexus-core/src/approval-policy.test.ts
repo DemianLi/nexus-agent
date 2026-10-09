@@ -118,8 +118,15 @@ describe('approval-gate 那一列把控制器接上每一份日誌', () => {
       sessions: { join: (installer: SessionInstaller) => void installers.push(installer) },
     } as unknown as PluginRegistry;
     approvalGatePlugin.apply(registry);
-    const subjectFor = (log: SessionLog, kind: 'root' | 'subagent') =>
-      ({ log, address: { kind } }) as unknown as Parameters<SessionInstaller>[0];
+    const subjectFor = (log: SessionLog, kind: 'root' | 'subagent' | 'foreground') =>
+      ({
+        log,
+        address:
+          kind === 'root'
+            ? { kind }
+            : // 背景子代理的編號以 `bg-` 開頭；前景的是 LangGraph 的命名空間（#328 第 1 項）。
+              { kind: 'subagent', runId: kind === 'subagent' ? 'bg-0123456789ab' : 'tools:abc' },
+      }) as unknown as Parameters<SessionInstaller>[0];
     return { installers, subjectFor };
   }
 
@@ -133,7 +140,7 @@ describe('approval-gate 那一列把控制器接上每一份日誌', () => {
     expect(policiesOf(log)).toEqual([{ policy: 'never' }, { policy: 'ask' }]);
   });
 
-  it('子代理：一顆 never、source=delegation，不管 root 現在是哪一格；再開一次不重寫', () => {
+  it('背景子代理：一顆 never、source=delegation，不管 root 現在是哪一格；再開一次不重寫', () => {
     const controller = new ApprovalPolicyController('ask');
     const { installers, subjectFor } = mount(controller);
     const log = new SessionLog('root/child');
@@ -144,6 +151,16 @@ describe('approval-gate 那一列把控制器接上每一份日誌', () => {
     // root 之後切換，子代理的日誌不動。
     controller.switchTo('never');
     expect(policiesOf(log)).toHaveLength(1);
+  });
+
+  it('前景子代理（#328 第 1 項）：什麼都不寫——它用 root 當下的政策，記 never 是假話', () => {
+    const controller = new ApprovalPolicyController('ask');
+    const { installers, subjectFor } = mount(controller);
+    const log = new SessionLog('root/tools:abc');
+    installers[0]?.(subjectFor(log, 'foreground'));
+    expect(policiesOf(log)).toEqual([]);
+    controller.switchTo('never');
+    expect(policiesOf(log)).toEqual([]);
   });
 
   it('沒有人提供控制器（手搭的測試組裝）：什麼都不接', () => {

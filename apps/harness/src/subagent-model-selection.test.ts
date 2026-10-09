@@ -35,8 +35,13 @@ import { createLiveModel } from './live-model.js';
 import type { ModelEntry } from './model-catalog.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
-import { describeSubagentModels, resolveModelSelection } from './subagent-model-selection.js';
-import type { ModelSelectionConfig } from './subagent-model-selection.js';
+import {
+  baselineChoice,
+  describeSubagentModels,
+  effectiveRoute,
+  resolveModelSelection,
+} from './subagent-model-selection.js';
+import type { DelegationBaseline, ModelSelectionConfig } from './subagent-model-selection.js';
 
 const entry = (id: string, extra: Partial<ModelEntry> = {}): ModelEntry => ({
   id,
@@ -118,6 +123,161 @@ describe('resolveModelSelection', () => {
   it('空字串兩格都拒絕', () => {
     expect(resolve({ model: '' })).toMatchObject({ ok: false });
     expect(resolve({ reasoning_effort: '' })).toMatchObject({ ok: false });
+  });
+});
+
+/**
+ * 委派基線（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：定義釘的、父代理此刻的選擇，與模型這次的要求怎麼疊。
+ * 合併順序照 dsh `requestedAgentOptions`（`tool-subagent/src/model-selection.ts:99-128`）；政策查的是疊完的有效路由（`:139-152`）。
+ */
+describe('有效路由：要求 > 定義釘的 > 父代理當下的', () => {
+  const baseline = (
+    parent: DelegationBaseline['parent'],
+    pin?: DelegationBaseline['pin'],
+    defaultModelId = 'strong',
+  ): DelegationBaseline => ({ parent, defaultModelId, ...(pin !== undefined && { pin }) });
+
+  it('什麼都沒釘、沒要求：就是父代理此刻的路由（含強度）', () => {
+    expect(effectiveRoute(baseline({ model: 'cheap', effort: 'off' }), {})).toEqual({
+      model: 'cheap',
+      effort: 'off',
+    });
+  });
+
+  it('釘了別顆模型：用釘的；父代理的強度不跟過去（強度是那顆模型的事）', () => {
+    expect(
+      effectiveRoute(baseline({ model: 'strong', effort: 'off' }, { model: 'cheap' }), {}),
+    ).toEqual({ model: 'cheap' });
+  });
+
+  it('釘的模型就是父代理那顆：父代理的強度照舊沿用', () => {
+    expect(
+      effectiveRoute(baseline({ model: 'cheap', effort: 'off' }, { model: 'cheap' }), {}),
+    ).toEqual({ model: 'cheap', effort: 'off' });
+  });
+
+  it('只釘強度：父代理當下的模型換這個強度，蓋過父代理的強度', () => {
+    expect(
+      effectiveRoute(
+        baseline({ model: 'cheap', effort: 'default' }, { reasoningEffort: 'off' }),
+        {},
+      ),
+    ).toEqual({ model: 'cheap', effort: 'off' });
+  });
+
+  it('要求換了模型、沒給強度：釘的強度丟掉，用新模型的預設（dsh 的 routeChanged）', () => {
+    const pinned = baseline({ model: 'strong' }, { model: 'cheap', reasoningEffort: 'off' });
+    expect(effectiveRoute(pinned, { model: 'silent' })).toEqual({ model: 'silent' });
+    // 要求的就是釘的那顆＝沒換路由，釘的強度留著。
+    expect(effectiveRoute(pinned, { model: 'cheap' })).toEqual({ model: 'cheap', effort: 'off' });
+  });
+
+  it('要求給了強度：蓋過釘的；default 是明著要預設，不是沒給', () => {
+    const pinned = baseline({ model: 'strong' }, { model: 'cheap', reasoningEffort: 'off' });
+    expect(effectiveRoute(pinned, { reasoning_effort: 'default' })).toEqual({ model: 'cheap' });
+    expect(
+      effectiveRoute(baseline({ model: 'cheap', effort: 'off' }), { reasoning_effort: 'default' }),
+    ).toEqual({
+      model: 'cheap',
+    });
+  });
+});
+
+describe('resolveModelSelection 帶基線', () => {
+  const all = config(['strong', 'cheap', 'plain', 'silent']);
+  const base = (
+    parent: DelegationBaseline['parent'],
+    pin?: DelegationBaseline['pin'],
+  ): DelegationBaseline => ({
+    parent,
+    defaultModelId: 'strong',
+    ...(pin !== undefined && { pin }),
+  });
+
+  it('沒要求：走基線，不查政策——釘的模型不在授權清單、父代理選了清單外的都照走（只管模型自己挑的）', () => {
+    expect(resolveModelSelection(config([]), {}, base({ model: 'cheap' }))).toEqual({
+      ok: true,
+      choice: { model: 'cheap' },
+    });
+    expect(
+      resolveModelSelection(
+        config([]),
+        {},
+        base({ model: 'strong' }, { model: 'secret', reasoningEffort: 'off' }),
+      ),
+    ).toEqual({ ok: true, choice: { model: 'secret', effort: 'off' } });
+  });
+
+  it('沒要求、基線就是部署預設：不另建實例（choice 是 undefined）', () => {
+    expect(resolveModelSelection(all, {}, base({ model: 'strong' }))).toEqual({
+      ok: true,
+      choice: undefined,
+    });
+    expect(baselineChoice(base({ model: 'strong' }))).toBeUndefined();
+    // 預設那顆但帶了強度，就不是預設實例。
+    expect(baselineChoice(base({ model: 'strong', effort: 'off' }))).toEqual({
+      model: 'strong',
+      effort: 'off',
+    });
+  });
+
+  it('只給強度：有效模型是釘的那顆（沒釘才是父代理的），它不在清單裡就拒絕', () => {
+    const outcome = resolveModelSelection(
+      config(['strong', 'cheap']),
+      { reasoning_effort: 'off' },
+      base({ model: 'strong' }, { model: 'secret' }),
+    );
+    expect(outcome.ok).toBe(false);
+    expect(outcome.ok ? '' : outcome.error).toMatch(/"secret".*不在.*授權/);
+    // 父代理換到清單外的模型，沒釘模型：同理。
+    const parentOutside = resolveModelSelection(
+      config(['strong']),
+      { reasoning_effort: 'off' },
+      base({ model: 'cheap' }),
+    );
+    expect(parentOutside.ok).toBe(false);
+  });
+
+  it('只給強度：在清單裡就收，選擇是（有效模型，這個強度）', () => {
+    expect(
+      resolveModelSelection(
+        all,
+        { reasoning_effort: 'off' },
+        base({ model: 'strong' }, { model: 'cheap' }),
+      ),
+    ).toEqual({ ok: true, choice: { model: 'cheap', effort: 'off' } });
+  });
+
+  it('要求的模型就是釘的那顆、沒給強度：釘的強度留著', () => {
+    expect(
+      resolveModelSelection(
+        all,
+        { model: 'cheap' },
+        base({ model: 'strong' }, { model: 'cheap', reasoningEffort: 'off' }),
+      ),
+    ).toEqual({ ok: true, choice: { model: 'cheap', effort: 'off' } });
+  });
+
+  it('要求換了模型、沒給強度：釘的強度丟掉；換回部署預設就是繼承', () => {
+    const pinned = base({ model: 'strong' }, { model: 'cheap', reasoningEffort: 'off' });
+    expect(resolveModelSelection(all, { model: 'silent' }, pinned)).toEqual({
+      ok: true,
+      choice: { model: 'silent' },
+    });
+    expect(resolveModelSelection(all, { model: 'strong' }, pinned)).toEqual({
+      ok: true,
+      choice: undefined,
+    });
+  });
+
+  it('給強度 default 且沒給模型：回到有效模型的預設強度', () => {
+    expect(
+      resolveModelSelection(
+        all,
+        { reasoning_effort: 'default' },
+        { parent: { model: 'strong', effort: 'off' }, defaultModelId: 'silent' },
+      ),
+    ).toEqual({ ok: true, choice: { model: 'strong' } });
   });
 });
 

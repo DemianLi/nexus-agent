@@ -321,7 +321,7 @@ export interface WireClient {
   modelCatalog(threadId: string): Promise<CommandOutcome<ModelCatalogResult>>;
   /**
    * 列這個組裝可以點名派的子代理種類（`subagent.list`，[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）。
-   * 契約見 `subagent-list.ts`。**還沒實作的 server 回 `rejected`，`code` 是 `not_supported`**——web 據此藏起 `@` 子代理的入口。
+   * 契約見 `subagent-list.ts`。**沒有清單的組裝（手搭的）回 `rejected`，`code` 是 `not_supported`**——web 據此藏起 `@` 子代理的入口。
    */
   subagentList(threadId: string): Promise<CommandOutcome<SubagentListResult>>;
   /**

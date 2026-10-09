@@ -36,6 +36,7 @@
  */
 
 import type { AttachmentRef } from './attachment-ref.js';
+import type { SubagentMentionRef } from './subagent-mention.js';
 import type { ModelRoute } from './model-route.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
 import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
@@ -176,7 +177,7 @@ export type SessionEventType = keyof SessionEventMap;
 export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
 
 /**
- * 一輪為什麼沒有正常結束。三種：
+ * 一輪為什麼沒有正常結束。四種：
  *
  * - **`aborted`**：被中止。原因兩種：`user`（人按了停止）與 `parent`（父代理用 `interrupt_agent` 只停這個背景
  *   子代理當下那一輪，[#838](https://github.com/DemianLi/nexus-agent/issues/838)，dsh 同名，
@@ -192,13 +193,22 @@ export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unava
  *   它由續接那一刻的 agent 層寫，不是那一輪自己寫的：行程活著的時候沒有人寫得出它。**讀者把它當「這一輪不是正常
  *   結束」**；goal 續行不看它（續接回來的授權從 `disarmed` 起，且 `currentTurnStart` 不往 end-seed 之前找）。
  *
- * dsh 另有 `completed`、`blocked`、`error`、`forked`：正常結束在我們這側是不放
+ * - **`blocked`**：這一輪的某一步在送出模型請求**之前**被準入閘門擋下，一個請求都沒發
+ *   （[#633](https://github.com/DemianLi/nexus-agent/issues/633)，封存的會話：dsh 的 `ArchivedSessionGate` 在 `agent/pre-step`
+ *   回 `reject`，迴圈把那一輪以 `{ kind: 'blocked' }` 收掉，`packages/core/agent-loop/src/agent.ts:316-319`，`5badb15009a`）。
+ *   **被領走的輸入沒有進對話**：dsh 的 `user/message` 要到 pre-step 放行之後才寫（`agent.ts:419-423`），`consumed-work.ts` 明說
+ *   「被擋下的那一輪把領走的訊息丟掉了，它帶走的工作不會再跑」。我們的 `turn/start` 照既有的登記帶著那句話的文字，所以日誌與歷史
+ *   仍看得到使用者打了什麼；只有模型的對話狀態沒有它。**讀者把它當「這一輪沒有做事」**：goal 續行看到它不是看 `reason`，而是
+ *   那一輪的目標預約被擋就把目標擋下（`prompt-rejected`，照 dsh `goal-round-driver/src/index.ts:403-415`）。
+ *
+ * dsh 另有 `completed`、`error`、`forked`：正常結束在我們這側是不放
  * `reason`，拋錯是另一顆 `turn/failed`，其餘沒有生產者。
  */
 export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: { readonly kind: 'user' | 'parent' } }
   | { readonly kind: 'max-tokens' }
-  | { readonly kind: 'interrupted' };
+  | { readonly kind: 'interrupted' }
+  | { readonly kind: 'blocked' };
 
 /**
  * 一次模型呼叫沒有正常回來的方式（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）。
@@ -235,10 +245,13 @@ export interface SessionTitleModelIdentity {
  * - `fallback`：第一則合格的人話照規則截出來的（#647）。
  * - `provider`：模型依第一則合格的人話產生的（#650）。`provider` 是產生器的身分，`model` 是那一次走的路由。
  *
- * dsh 另有 `user`（改名，會釘住），歸 #633，有了生產者再加。
+ * - `user`：使用者改的名（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，dsh `rename` 寫的那一種）。**釘住這個標題**：
+ *   之後不會再有自動產生的標題蓋過它（退回標題本來就只在沒有標題時寫；模型標題在寫入前看到最後一顆是 `user` 就放棄）。`messageSeqs`
+ *   是空陣列——沒有哪幾則人話推出它。
  */
 export type SessionTitleSource =
   | { readonly kind: 'fallback' }
+  | { readonly kind: 'user' }
   | {
       readonly kind: 'provider';
       readonly provider: string;
@@ -338,6 +351,13 @@ export interface SessionEventMap {
          * **格式 38 起才有**，而且不標 `ignorable`：一台 37 的 runtime 讀到會把它略過，排著的項目被折回來重跑時附件就悄悄不見了。
          */
         readonly attachments?: readonly AttachmentRef[];
+        /**
+         * 這句話點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項，`run.start` 的 `mention`）。沒有點名就整個不放這個 key。
+         * 送進模型的 `HumanMessage` 由它和 `text` 造（同 `attachments`），形狀見 `subagent-mention.ts`。
+         *
+         * **格式 42 起才有**，而且不標 `ignorable`：一台 41 的 runtime 讀到會把它略過，排著的項目被折回來重跑時點名就悄悄不見了。
+         */
+        readonly mention?: SubagentMentionRef;
       }
     | { readonly kind: 'resume' }
     | {
@@ -615,10 +635,12 @@ export interface SessionEventMap {
    * `llm/retry`（`packages/llm/llm-retry/src/types.ts:9`）：排定時先寫，再開始等。**只記排定、不記完成**——
    * 成敗看後面的 `model/end`／`turn/failed`；預算用盡的那一次不排，所以不寫。
    *
-   * 落在一次模型呼叫的 `model/start`／`model/end` 之間（重試包在那一對之內），一次呼叫的所有重試共用一個
-   * `retryId`。**不進模型**：推模型歷史的一側不讀。
+   * SDK 層的重試（#712）落在一次模型呼叫的 `model/start`／`model/end` 之間（重試包在那一對之內），一次呼叫的所有重試共用一個
+   * `retryId`。**串流中段出錯的整次重打（#520，`stream-retry.ts`）的在兩對之間**：失敗那一對已經收尾、下一對還沒開，由 `modelCall`
+   * 指回失敗的那次；所有讀的人靠 `modelCall` 歸屬、不靠落在哪一對之間（`indexModelCalls`、軌跡投影、token-meter 都是；
+   * token-meter 的 `llm/retry-started` 在呼叫之外不扣牆鐘，因為退避本來就不在起訖之內）。**不進模型**：推模型歷史的一側不讀。
    *
-   * 欄位比 dsh 少，理由與計數的壽命見 {@link ./llm-retry.ts}：沒有 `delayMs`（接縫看不到退避）、沒有
+   * 欄位比 dsh 少，理由與計數的壽命見 {@link ./llm-retry.ts}：SDK 層沒有 `delayMs`（接縫看不到退避）、沒有
    * `turn`（由 `seq` 推）。`step` 的對應物是 `modelCall`（#1021）：所屬那次呼叫的 `model/start` 的 `seq`。
    */
   'llm/retry': {
@@ -627,6 +649,12 @@ export interface SessionEventMap {
     readonly retry: number;
     readonly maxRetries: number;
     readonly failure: LlmFailure;
+    /**
+     * 排定要等多久（毫秒，已含抖動）。**只有串流中段出錯的重打有**（[#520](https://github.com/DemianLi/nexus-agent/issues/520)，
+     * `stream-retry.ts` 自己算退避）；**SDK 層（#712，`llm-retry.ts`）沒有這一格**——`onFailedAttempt` 在 `p-retry` 算退避之前就被叫，
+     * 事前不可知，那一側的實際等待看配對的 `llm/retry-started.waitedMs`。
+     */
+    readonly delayMs?: number;
     /**
      * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
      * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
@@ -693,8 +721,9 @@ export interface SessionEventMap {
    * （`packages/core/session/src/types.ts`，`5badb15009a`）：「一次沒有落進對話的模型嘗試」，留下它吐了什麼，不編造模型可見的歷史。
    *
    * **不進模型**，用 `{ ignorable: true }` 寫（純資訊性的新種類不升格式版本，#507）；推模型歷史的一側不讀。**由 pump 寫**
-   * ——只有它握有那半段文字（同 `assistant/message` 的 `interrupted`），落在下一次嘗試的 `model/start` 之後、第一個片段之前。
-   * 失敗那次本身的起訖是它自己的一對 `model/start`／`model/end`（`outcome: 'error'`），`modelCall` 指回那一對。
+   * ——只有它握有那半段文字（同 `assistant/message` 的 `interrupted`），在**失敗當下**收到 `stream-retry.ts` 的通知時寫：落在失敗那一對
+   * `model/start`／`model/end`（`outcome: 'error'`）與配對的 `llm/retry` 之後、下一次嘗試的 `model/start` 之前（等退避時按停止也有這一顆）。
+   * `modelCall` 指回失敗那一對。
    *
    * 畫面據它送一顆 `message-discard`（`@nexus/wire`，酬載是 `messageId`）擦掉那則回覆。dsh 的是精確的計時串流記錄
    * （`AssistantStreamRecord[]`），我們留的是被擦掉的那則的文字與推理——我們的日誌沒有逐片段的串流記錄。

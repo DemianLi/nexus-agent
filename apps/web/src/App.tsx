@@ -12,6 +12,7 @@ import { PermissionSeat } from '@/components/permission-seat';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
+import { ArchivedBanner } from '@/components/archived-banner';
 import { GoalBar } from '@/components/goal-bar';
 import { PlanChip } from '@/components/plan/chip';
 import { PlanReviewPanel, usePlanLibrary } from '@/components/plan/review';
@@ -41,6 +42,7 @@ import { MODEL_SELECTION_PROJECTION, useModelSeat } from '@/hooks/use-model-seat
 import { PERMISSIONS_PROJECTION_KEY, usePermissionSeat } from '@/hooks/use-permission-seat';
 import { useThreadDirectory } from '@/hooks/use-thread-directory';
 import { useThreadManagement } from '@/hooks/use-thread-management';
+import { isArchivedThread } from '@/lib/archived-view';
 import type { ThreadManagement } from '@/lib/thread-management';
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { useThemePreference } from '@/hooks/use-theme-preference';
@@ -63,6 +65,7 @@ import {
   STEER_QUEUE_PLACEHOLDER,
   STEER_UNAVAILABLE_TEXT,
 } from '@/lib/steer-queue';
+import { pendingAsker } from '@/lib/approval-asker';
 import { toMention } from '@/lib/agent-mention';
 import type { MentionAgent } from '@/lib/agent-mention';
 import { serverSupportsAttachments } from '@/lib/attachments';
@@ -447,7 +450,9 @@ function ConversationView({
     });
     return true;
   };
-  const canSend = canSendLine(draft) && !sendingAttachments;
+  // 封存的會話不給送（#633）：橫幅在輸入框上方，送出鈕停用。伺服器端也擋，這一道是第一道。
+  const archived = isArchivedThread(threadManagement?.archivedIds, threadId);
+  const canSend = canSendLine(draft) && !sendingAttachments && !archived;
   const hasModelSeat = modelSeat !== null;
   const commands = useMemo(
     () =>
@@ -622,14 +627,19 @@ function ConversationView({
             onUpdate={conversation.updateQueue}
             onFocusFallback={focusBelowQueue}
           />
+          {archived && threadManagement !== undefined && (
+            <ArchivedBanner onRestore={() => threadManagement.onUnarchive(threadId)} />
+          )}
           <PendingSwap
             pendings={pendings}
+            askerOf={(pending) => pendingAsker(conversation.state, pending)?.label}
             composerRef={composerRef}
             // **按 `kind` 分派到兩個元件，不是一個元件內部分支**（#231 第 4 項）：送出的形狀
             // 完全不同（`{decisions:[…]}` 對 `{answers:[…]}`），而認不得的 `kind` 根本到不了
             // 這裡——折疊器那一層就把它翻成 `failed` 了，理由見 `reduceInputRequested`。
             // 計劃審核（#654）是問答中斷的一種：認得 `intent` 才換成審核面板，其餘照一般提問。
             renderPanel={(pending) => {
+              const asker = pendingAsker(conversation.state, pending);
               const review =
                 pending.kind === 'question' ? planReviewOf(pending.questions) : undefined;
               if (pending.kind === 'question' && review !== undefined) {
@@ -659,6 +669,7 @@ function ConversationView({
               ) : (
                 <ApprovalCard
                   pending={pending}
+                  {...(asker === undefined ? {} : { asker })}
                   busy={!conversation.connected}
                   onDecide={(decision) => void conversation.respond(pending.interruptId, decision)}
                   onStop={() => {

@@ -356,9 +356,11 @@ describe('邊角', () => {
         [1, 'turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } }],
         [2, 'turn/start', { kind: 'message' }],
         [3, 'turn/end', { reason: { kind: 'max-tokens' } }],
+        [4, 'turn/start', { kind: 'message' }],
+        [5, 'turn/end', { reason: { kind: 'blocked' } }],
       ),
     );
-    expect(view.turns.map((turn) => turn.end)).toEqual(['aborted', 'max-tokens']);
+    expect(view.turns.map((turn) => turn.end)).toEqual(['aborted', 'max-tokens', 'blocked']);
   });
 
   it('停在核准點、還沒 resume：end 是 paused', () => {

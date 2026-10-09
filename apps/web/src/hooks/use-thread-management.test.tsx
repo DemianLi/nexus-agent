@@ -153,7 +153,7 @@ describe('回得慢的舊回應不蓋新的', () => {
         .mockResolvedValueOnce(ok({ archivedThreadIds: ['a', 'b'] })),
     };
     const { hook } = setup(client, okListing(listed([], [])));
-    let first!: Promise<string | undefined>;
+    let first!: ReturnType<NonNullable<typeof hook.result.current>['onArchive']>;
     act(() => {
       first = hook.result.current!.onArchive('a');
     });
@@ -190,7 +190,7 @@ describe('回得慢的舊回應不蓋新的', () => {
 });
 
 describe('改名', () => {
-  it('送出正規化後的標題，先用 server 受理的標題頂著並重抓列表；列表來了就換成列表上的', async () => {
+  it('送出正規化後的標題，用 server 受理的標題頂著、不重抓列表（落盤是非同步的，重抓回來是舊標題）', async () => {
     const client = { threadRename: vi.fn(async () => ok({ title: '受理後的', seq: 3 })) };
     const { hook, refresh } = setup(client, okListing(listed([], [])));
     await act(async () => {
@@ -198,8 +198,23 @@ describe('改名', () => {
     });
     expect(client.threadRename).toHaveBeenCalledWith('t1', '登入頁 重做');
     expect(hook.result.current?.titles.get('t1')).toBe('受理後的');
-    expect(refresh).toHaveBeenCalledTimes(1);
-    hook.rerender({ listing: okListing(listed([], [])) });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('落盤前來的列表還是舊標題：頂著的標題不被蓋回去；列表追上之後才放手', async () => {
+    const client = { threadRename: vi.fn(async () => ok({ title: '新標題', seq: 3 })) };
+    const stale = (title: string) =>
+      okListing({
+        ...listed([], []),
+        items: [{ threadId: 't1', updatedAt: 1, running: false, blank: false, title }],
+      });
+    const { hook } = setup(client, stale('舊標題'));
+    await act(async () => {
+      await hook.result.current!.onRename('t1', '新標題');
+    });
+    hook.rerender({ listing: stale('舊標題') });
+    expect(hook.result.current?.titles.get('t1')).toBe('新標題');
+    hook.rerender({ listing: stale('新標題') });
     expect(hook.result.current?.titles.size).toBe(0);
   });
 
@@ -247,18 +262,44 @@ describe('失敗', () => {
     expect(hook.result.current?.pinnedIds).toEqual(['a']);
   });
 
-  it('封存失敗不重抓、集合不變', async () => {
-    const client = {
-      threadArchive: vi.fn(async () => ({
-        kind: 'ok' as const,
-        result: { ok: false as const, error: { code: 'thread_active' } },
-      })),
-    };
+  it.each([
+    ['帶活動', { code: 'thread_active', activity: ['turn', 'subagent'] }, ['turn', 'subagent']],
+    ['舊 server 沒帶活動', { code: 'thread_active' }, []],
+  ])(
+    '封存還在跑的：%s，回「要先問」而不是錯誤文字；不重抓、集合不變',
+    async (_case, error, activity) => {
+      const client = {
+        threadArchive: vi.fn(async () => ({
+          kind: 'ok' as const,
+          result: { ok: false as const, error },
+        })),
+      };
+      const { hook, refresh } = setup(client, okListing(listed([], [])));
+      await act(async () => {
+        expect(await hook.result.current!.onArchive('t')).toEqual({ needsStop: activity });
+      });
+      expect(refresh).not.toHaveBeenCalled();
+      expect(hook.result.current?.archivedIds.size).toBe(0);
+    },
+  );
+
+  it('封存帶 stopActivity：原樣交給 client，成功就更新集合並重抓', async () => {
+    const client = { threadArchive: vi.fn(async () => ok({ archivedThreadIds: ['t'] })) };
     const { hook, refresh } = setup(client, okListing(listed([], [])));
     await act(async () => {
-      expect(await hook.result.current!.onArchive('t')).toContain('還在跑');
+      expect(await hook.result.current!.onArchive('t', { stopActivity: true })).toBeUndefined();
     });
-    expect(refresh).not.toHaveBeenCalled();
-    expect(hook.result.current?.archivedIds.size).toBe(0);
+    expect(client.threadArchive).toHaveBeenCalledWith('t', { stopActivity: true });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect([...hook.result.current!.archivedIds]).toEqual(['t']);
+  });
+
+  it('沒要停掉時不帶 options（舊 server 看得懂的原樣）', async () => {
+    const client = { threadArchive: vi.fn(async () => ok({ archivedThreadIds: ['t'] })) };
+    const { hook } = setup(client, okListing(listed([], [])));
+    await act(async () => {
+      await hook.result.current!.onArchive('t');
+    });
+    expect(client.threadArchive).toHaveBeenCalledWith('t', undefined);
   });
 });

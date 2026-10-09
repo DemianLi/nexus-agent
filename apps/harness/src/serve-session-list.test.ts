@@ -110,6 +110,9 @@ describe('GET /threads', () => {
     expect(listed).toEqual({
       kind: 'ok',
       result: {
+        // 釘選與封存兩個集合跟著列表走（#633）；沒人釘過就是空的。
+        pinnedThreadIds: [],
+        archivedThreadIds: [],
         unreadable: 0,
         items: [
           expect.objectContaining({
@@ -251,7 +254,10 @@ describe('GET /threads', () => {
 
   it('還沒有任何 thread：一份空清單', async () => {
     const server = await start(await tmp());
-    expect(await list(server)).toEqual({ kind: 'ok', result: { items: [], unreadable: 0 } });
+    expect(await list(server)).toEqual({
+      kind: 'ok',
+      result: { pinnedThreadIds: [], archivedThreadIds: [], items: [], unreadable: 0 },
+    });
   });
 
   /**

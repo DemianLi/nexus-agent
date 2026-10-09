@@ -169,7 +169,7 @@ export interface TokenMeterSpan {
 
 /** 一輪是怎麼結束的；還沒結束就沒有這一格。`paused` ＝ 停在核准點、還沒等到 resume。 */
 export type TokenMeterEnd =
-  'completed' | 'aborted' | 'max-tokens' | 'interrupted' | 'failed' | 'paused';
+  'completed' | 'aborted' | 'max-tokens' | 'interrupted' | 'blocked' | 'failed' | 'paused';
 
 /** 一個邏輯輪（`resume` 併回前一輪）。 */
 export interface TokenMeterTurn extends TokenMeterSpan {

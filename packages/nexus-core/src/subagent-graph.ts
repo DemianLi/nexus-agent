@@ -43,6 +43,9 @@ import type { AgentMiddleware } from 'langchain';
 import { mergeMiddlewareStack, subagentDefaultMiddleware } from './agent-assembly.js';
 import type { AgentCheckpointer } from './base-types.js';
 import type { FoldedAgentParams } from './fold.js';
+import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
+import { SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME } from './model-selection.js';
+import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
 
 /** 編一個子代理要看的 fold 產物：規格清單、模型、backend、全域的 deny 規則。 */
@@ -63,6 +66,22 @@ export interface SubagentGraphOptions {
    * 省略＝同今天（規格的，沒有就用組裝點的）。呼叫端每張圖各給各的實例：重試與逾時的包裝是每個實例一份，共用會讓兩張圖悄悄混在一起。
    */
   readonly model?: SubAgent['model'];
+  /**
+   * 這張圖要不要跟隨會話選擇（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）。省略＝只有沒指定 {@link model} 時才跟。
+   * 給 `false`＝一律不跟：背景子代理的模型在委派那一刻就定了（路由由呼叫端算好，經 {@link model} 或沿用預設實例傳進來），之後使用者
+   * 換模型不影響已經派出去的——照 dsh，子代理建立時取父代理當下的選擇、之後固定。
+   */
+  readonly follow?: boolean;
+  /**
+   * 這張圖的核准閘門（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項）：換掉規格裡同名的那一顆（fold 放進去的是前景用的，
+   * 跟 root 同一顆、會把中斷冒到人面前）。背景子代理背後沒有人，呼叫端傳 {@link ./fold.ts | createBackgroundApprovalGate}。**省略＝規格自己的那顆**。
+   */
+  readonly approvalGate?: AgentMiddleware;
+  /**
+   * 這張圖的委派聲明：同上，換掉規格裡同名的那一顆（前景那句說「核准交給使用者」，背景不是）。呼叫端傳
+   * `createSubagentDelegationMiddleware()`（預設那句：需要核准的操作會自動被拒）。**省略＝規格自己的那顆**。
+   */
+  readonly delegation?: AgentMiddleware;
 }
 
 /**
@@ -110,6 +129,7 @@ export function compileSubagentGraph(
     }
   }
   const model = options.model ?? declarative.model ?? params.model;
+  const follows = options.follow ?? options.model === undefined;
   if (model === undefined) throw new Error(`子代理 "${name}" 沒有模型：規格與組裝點都沒給`);
   const tools = declarative.tools;
   if (tools === undefined) {
@@ -133,7 +153,18 @@ export function compileSubagentGraph(
     tools: tools as never,
     middleware: mergeMiddlewareByName(
       defaults,
-      (declarative.middleware ?? []) as AgentMiddleware[],
+      // 呼叫端替這一張圖指定了模型（#876／#709：模型在委派時自己挑的）就不跟隨：挑的勝過定義釘的與父代理當下的（dsh
+      // `requestedAgentOptions`：request 蓋過 configured），跟隨的那顆每次叫模型都會換掉它。`follow: false` 則是呼叫端明說不跟。
+      ((declarative.middleware ?? []) as AgentMiddleware[])
+        .filter((each) => follows || each.name !== SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME)
+        // 原位換掉，不改順序：閘門的位置有唯一正確答案（見 fold 的 middleware 疊）。
+        .map((each) =>
+          options.approvalGate !== undefined && each.name === APPROVAL_GATE_MIDDLEWARE_NAME
+            ? options.approvalGate
+            : options.delegation !== undefined && each.name === SUBAGENT_DELEGATION_MIDDLEWARE_NAME
+              ? options.delegation
+              : each,
+        ),
     ),
     name: declarative.name,
     checkpointer: options.checkpointer,

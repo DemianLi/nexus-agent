@@ -535,6 +535,40 @@ describe('排著的那一句帶附件（#732）', () => {
   });
 });
 
+describe('排著的那一句點名了子代理（#328 第 2 項）', () => {
+  const mentioned = (id: string, text: string): WireQueuedInput => ({
+    ...item(id, text),
+    mention: { kind: 'subagent', name: 'general-purpose' },
+  });
+
+  it('點名的一列有 chip「委派給 general-purpose」；沒點名的不畫', () => {
+    mount([mentioned('a', '整理 README')]);
+    settle();
+    const rowA = document.querySelector('[data-queue-item="a"]') as HTMLElement;
+    expect(within(rowA).getByTestId('delegated-chip').textContent).toBe('委派給 general-purpose');
+    cleanup();
+    mount([item('b', '一般的')]);
+    settle();
+    expect(screen.queryByTestId('delegated-chip')).toBeNull();
+  });
+
+  it('編輯時點名還畫在編輯框旁邊（編輯只改字，不動點名）', () => {
+    mount([mentioned('a', '整理 README')]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '編輯：整理 README' }));
+    const row = document.querySelector('[data-queue-item="a"]') as HTMLElement;
+    expect(within(row).getByLabelText('改這一則排著的訊息')).toBeTruthy();
+    expect(within(row).getByTestId('delegated-chip').textContent).toBe('委派給 general-purpose');
+  });
+
+  it('只有點名、沒有字的一列不留空白預覽', () => {
+    mount([mentioned('a', '')]);
+    settle();
+    const row = document.querySelector('[data-queue-item="a"]') as HTMLElement;
+    expect(within(row).getByTestId('delegated-chip')).toBeTruthy();
+  });
+});
+
 describe('目標續行的預約（#638）', () => {
   const goal: WireQueuedInput = {
     id: 'g',

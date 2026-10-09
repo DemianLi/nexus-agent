@@ -13,9 +13,16 @@ import type { ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { MemorySaver } from '@langchain/langgraph';
 import type { SessionEventMap } from '@nexus/core';
-import { emptyConversation, MESSAGE_DISCARD, reduceConversation } from '@nexus/wire';
+import {
+  emptyConversation,
+  LLM_RETRY,
+  LLM_RETRY_STARTED,
+  MESSAGE_DISCARD,
+  reduceConversation,
+} from '@nexus/wire';
 import type { AiEntry, Event } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { STREAM_RETRY_SIGNAL } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
@@ -35,7 +42,12 @@ type Act =
   /** 吐兩個字之後停住。 */
   | 'stall'
   /** 第一則事件就是 503 的錯誤（第一則事件之前，歸 SDK 層管）。 */
-  | 'first503';
+  | 'first503'
+  /** 一口氣吐 {@link DENSE} 個字片段、緊接著送 503 的錯誤事件（順序測試用：失敗那次有一大串片段排在佇列裡）。 */
+  | 'dense503';
+
+/** `dense503` 吐幾個字片段。 */
+const DENSE = 300;
 
 /** 每個 chunk 帶所屬請求的編號當 id：兩次嘗試的 id 不同，作廢記號指對了哪一則才分得出來。 */
 const chunk = (id: string, delta: Record<string, unknown>, finish: string | null = null): string =>
@@ -72,6 +84,13 @@ async function scriptedOpenAi(script: readonly Act[]) {
       res.end('data: [DONE]\n\n');
       return;
     }
+    if (act === 'dense503') {
+      let burst = '';
+      for (let i = 0; i < DENSE; i += 1) burst += chunk(id, { content: `字${String(i)}` });
+      res.write(burst + envelope(503));
+      res.end('data: [DONE]\n\n');
+      return;
+    }
     res.write(chunk(id, { content: '甲' }));
     res.write(chunk(id, { content: '乙' }));
     if (act === 'stall') return;
@@ -99,11 +118,64 @@ async function scriptedOpenAi(script: readonly Act[]) {
 
 interface RunOptions {
   /** 預算；省略就是不給（等於不重打）。 */
-  readonly streamRetry?: { maxRetries: number; baseDelayMs: number };
+  readonly streamRetry?: { maxRetries: number; baseDelayMs: number; jitterRatio?: number };
   /** SDK 層的重試次數（第一則事件之前的失敗）。 */
   readonly sdkRetries?: number;
+  /** 慢消費者：pump 每讀到一個圖事件就多等這麼久（毫秒），讓字片段在佇列裡積壓。 */
+  readonly slowMs?: number;
+  /** 在真事件之前先注入 pump 的假原始事件（測 pump 不該聽的 `custom`）。 */
+  readonly inject?: readonly object[];
   /** 這一輪跑著的時候同時跑的東西（例如在特定時刻按停止）。 */
   readonly during?: (pump: ThreadPump) => Promise<void>;
+}
+
+/**
+ * 把 agent 的 `streamEvents` 包一層：回來的 run 每讀一個事件就多等 `slowMs`。pump 是這條串流唯一的消費者，所以這等於一個慢消費者；
+ * 沒給就原樣。
+ */
+function slowed(
+  agent: object,
+  slowMs: number | undefined,
+  inject: readonly object[] = [],
+): PumpAgent {
+  if (slowMs === undefined && inject.length === 0) return agent as PumpAgent;
+  return new Proxy(agent, {
+    get(target, key, receiver) {
+      const value: unknown = Reflect.get(target, key, receiver);
+      if (key !== 'streamEvents') return typeof value === 'function' ? value.bind(target) : value;
+      return async (...args: unknown[]) => {
+        const run = (await (value as (...a: unknown[]) => Promise<object>).apply(
+          target,
+          args,
+        )) as AsyncIterable<unknown>;
+        return new Proxy(run, {
+          get(inner, innerKey, innerReceiver) {
+            if (innerKey !== Symbol.asyncIterator) {
+              const member: unknown = Reflect.get(inner, innerKey, innerReceiver);
+              return typeof member === 'function' ? member.bind(inner) : member;
+            }
+            return () => {
+              const iterator = inner[Symbol.asyncIterator]();
+              const queued = [...inject];
+              return {
+                async next() {
+                  // 先吐注入的假事件（圖外來的 `custom`），再交給真的。
+                  const fake = queued.shift();
+                  if (fake !== undefined) return { done: false, value: fake };
+                  const result = await iterator.next();
+                  if (slowMs !== undefined)
+                    await new Promise((resolve) => setTimeout(resolve, slowMs));
+                  return result;
+                },
+                return: (value?: unknown) =>
+                  iterator.return?.(value) ?? Promise.resolve({ done: true, value }),
+              };
+            };
+          },
+        });
+      };
+    },
+  }) as PumpAgent;
 }
 
 /** 起一個 pump 跑一輪，回頭交出日誌、線上 frame 與 `submit` 拋出的東西。 */
@@ -114,6 +186,7 @@ async function runTurn(script: readonly Act[], options: RunOptions = {}) {
       liveModelConfigSchema.parse({
         baseUrl: upstream.baseUrl,
         timeoutMs: 400,
+        streamIdleTimeoutMs: 400,
         maxRetries: options.sdkRetries ?? 0,
       }),
     ),
@@ -121,7 +194,10 @@ async function runTurn(script: readonly Act[], options: RunOptions = {}) {
     plugins: [],
     ...(options.streamRetry !== undefined && { streamRetry: options.streamRetry }),
   });
-  const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'stream-retry');
+  const pump = new ThreadPump(
+    slowed(built.agent, options.slowMs, options.inject) as PumpAgent,
+    'stream-retry',
+  );
   const detach = built.attachSession(pump.sessions);
   const frames: Event[] = [];
   const line = new AbortController();
@@ -154,6 +230,23 @@ function shownReplies(frames: readonly Event[]): AiEntry[] {
   let state = emptyConversation();
   for (const frame of frames) state = reduceConversation(state, frame);
   return state.entries.filter((entry): entry is AiEntry => entry.kind === 'ai');
+}
+
+/** 某個名字的 `custom` frame。 */
+const customNamed = (frames: readonly Event[], name: string): Event[] =>
+  frames.filter(
+    (frame) =>
+      frame.method === 'custom' && (frame.params.data as { name?: string } | null)?.name === name,
+  );
+
+/** 折到某一顆 frame 為止（含）。 */
+function foldUpTo(frames: readonly Event[], last: Event) {
+  let state = emptyConversation();
+  for (const frame of frames) {
+    state = reduceConversation(state, frame);
+    if (frame === last) break;
+  }
+  return state;
 }
 
 const BUDGET = { maxRetries: 2, baseDelayMs: 20 } as const;
@@ -234,6 +327,130 @@ describe('串流第一則事件之後才出錯（#520）', () => {
     30_000,
   );
 
+  it('失敗當下就擦：作廢記號與 llm-retry 排在失敗那次的最後一個片段之後、第二次的 message-start 之前；退避期間畫面是空的、有倒數', async () => {
+    const run = await runTurn(['mid503', 'ok'], {
+      streamRetry: { maxRetries: 2, baseDelayMs: 200, jitterRatio: 0 },
+    });
+    expect(run.thrown).toBeUndefined();
+    const discards = customNamed(run.frames, MESSAGE_DISCARD);
+    const retries = customNamed(run.frames, LLM_RETRY);
+    const started = customNamed(run.frames, LLM_RETRY_STARTED);
+    expect([discards.length, retries.length, started.length]).toEqual([1, 1, 1]);
+    const deltas = run.frames.filter(
+      (frame) =>
+        frame.method === 'messages' &&
+        (frame.params.data as { event?: string }).event === 'content-block-delta',
+    );
+    const starts = run.frames.filter(
+      (frame) =>
+        frame.method === 'messages' &&
+        (frame.params.data as { event?: string }).event === 'message-start',
+    );
+    // 失敗那次的字（甲乙）全在擦除之前；擦除 → 倒數 → 重打開始 → 第二次的 message-start。
+    expect(deltas[1]!.seq!).toBeLessThan(discards[0]!.seq!);
+    expect(discards[0]!.seq!).toBeLessThan(retries[0]!.seq!);
+    expect(retries[0]!.seq!).toBeLessThan(started[0]!.seq!);
+    expect(started[0]!.seq!).toBeLessThan(starts[1]!.seq!);
+    const payload = (retries[0]!.params.data as { payload: Record<string, unknown> }).payload;
+    expect(payload).toMatchObject({ retry: 1, maxRetries: 2, delayMs: 200, code: 'SERVER' });
+    expect(typeof payload['retryId']).toBe('string');
+    expect((started[0]!.params.data as { payload: unknown }).payload).toEqual({
+      retryId: payload['retryId'],
+      retry: 1,
+    });
+    // 退避期間（折到 llm-retry 為止）：畫面沒有那則斷尾的回覆，有一格倒數。
+    const waiting = foldUpTo(run.frames, retries[0]!);
+    expect(waiting.entries.filter((entry) => entry.kind === 'ai')).toEqual([]);
+    expect(waiting.retry).toMatchObject({ retry: 1, maxRetries: 2, delayMs: 200, code: 'SERVER' });
+    // 重打開始（llm-retry-started）就清掉；最後也沒有殘留。
+    expect(foldUpTo(run.frames, started[0]!).retry).toBeNull();
+    // 日誌：llm/retry 在失敗那對起訖之後、帶 delayMs 與失敗碼；assistant/attempt 在它後面。
+    const types = run.events.map((event) => event.type);
+    const at = (type: string): number => types.indexOf(type as never);
+    expect(at('model/end')).toBeLessThan(at('llm/retry'));
+    expect(at('llm/retry')).toBeLessThan(at('assistant/attempt'));
+    expect(at('llm/retry-started')).toBeLessThan(types.lastIndexOf('model/start'));
+    const retryEvent = run.events.find((event) => event.type === 'llm/retry')!;
+    const firstStart = run.events.find((event) => event.type === 'model/start')!;
+    expect(retryEvent.data).toMatchObject({
+      retry: 1,
+      maxRetries: 2,
+      delayMs: 200,
+      modelCall: firstStart.seq,
+      failure: { code: 'SERVER', status: 503 },
+    });
+    expect(retryEvent.ignorable).not.toBe(true);
+  }, 30_000);
+
+  it.each([
+    ['密集片段加慢消費者', 'dense503', 4],
+    ['密集片段、消費者不慢', 'dense503', undefined],
+  ] as const)(
+    '順序回歸（%s）：失敗那次的全部字片段都排在作廢記號之前，擦掉之後不會有字再把它畫回來',
+    async (_label, act, slowMs) => {
+      const run = await runTurn([act, 'ok'], {
+        streamRetry: { maxRetries: 1, baseDelayMs: 5, jitterRatio: 0 },
+        ...(slowMs === undefined ? {} : { slowMs }),
+      });
+      expect(run.thrown).toBeUndefined();
+      const discards = customNamed(run.frames, MESSAGE_DISCARD);
+      expect(discards).toHaveLength(1);
+      const first = run.frames.find(
+        (frame) =>
+          frame.method === 'messages' &&
+          (frame.params.data as { event?: string }).event === 'message-start',
+      )!;
+      const key =
+        (first.params.data as { run_id?: string; id?: string }).run_id ??
+        (first.params.data as { id: string }).id;
+      const firstDeltas = run.frames.filter((frame) => {
+        if (frame.method !== 'messages') return false;
+        const data = frame.params.data as { event?: string; run_id?: string; id?: string };
+        return data.event === 'content-block-delta' && (data.run_id ?? data.id) === key;
+      });
+      // 一口氣吐了 DENSE 個字：一個都沒掉，也沒有一個排在作廢記號之後。
+      expect(firstDeltas.length).toBe(DENSE);
+      expect(Math.max(...firstDeltas.map((frame) => frame.seq!))).toBeLessThan(discards[0]!.seq!);
+      // 折完畫面只剩第二次的回覆。
+      expect(shownReplies(run.frames).map((entry) => entry.text)).toEqual(['丙丁']);
+    },
+    60_000,
+  );
+
+  it('不是 root 的通知、記號不對的 custom：pump 不聽（不作廢、不送 llm-retry、不寫日誌）', async () => {
+    const real = {
+      kind: STREAM_RETRY_SIGNAL,
+      phase: 'scheduled',
+      retryId: 'x',
+      retry: 1,
+      maxRetries: 2,
+      delayMs: 1000,
+      code: 'SERVER',
+    };
+    const custom = (namespace: string[], payload: unknown): object => ({
+      type: 'event',
+      seq: 0,
+      method: 'custom',
+      params: { namespace, timestamp: 0, data: { payload } },
+    });
+    const run = await runTurn(['ok'], {
+      inject: [
+        custom(['tools:abc'], real), // 子代理（namespace 非空）送的：不聽
+        custom([], { ...real, kind: 'something-else' }), // 別人用 config.writer 寫的：不聽
+        custom([], { hello: 'world' }),
+      ],
+    });
+    expect(run.thrown).toBeUndefined();
+    expect(customNamed(run.frames, LLM_RETRY)).toHaveLength(0);
+    expect(customNamed(run.frames, LLM_RETRY_STARTED)).toHaveLength(0);
+    expect(customNamed(run.frames, MESSAGE_DISCARD)).toHaveLength(0);
+    // 圖自己發的 `custom` 沒有一顆原樣上線。
+    const wire = JSON.stringify(run.frames);
+    expect(wire).not.toContain('something-else');
+    expect(wire).not.toContain('world');
+    expect(run.events.filter((event) => event.type === 'assistant/attempt')).toHaveLength(0);
+  }, 30_000);
+
   it('預算用完還是失敗：打了 1 + 2 次，每一次作廢都留下記號，最後一次的錯誤照原樣往外拋', async () => {
     const run = await runTurn(['mid503', 'mid503', 'mid503'], { streamRetry: BUDGET });
     expect(run.hits).toBe(3);
@@ -291,6 +508,14 @@ describe('串流第一則事件之後才出錯（#520）', () => {
     expect(run.events.filter((event) => event.type === 'assistant/attempt')).toHaveLength(1);
     expect(run.events.filter((event) => event.type === 'assistant/message')).toHaveLength(0);
     expect(shownReplies(run.frames)).toEqual([]);
+    // 失敗當下就擦過、倒數出去過；退避被停止所以沒有重打的通知、日誌也沒有 retry-started；收尾之後畫面上不留倒數。
+    expect(customNamed(run.frames, MESSAGE_DISCARD)).toHaveLength(1);
+    expect(customNamed(run.frames, LLM_RETRY)).toHaveLength(1);
+    expect(customNamed(run.frames, LLM_RETRY_STARTED)).toHaveLength(0);
+    expect(run.events.filter((event) => event.type === 'llm/retry-started')).toHaveLength(0);
+    let folded = emptyConversation();
+    for (const frame of run.frames) folded = reduceConversation(folded, frame);
+    expect(folded.retry).toBeNull();
   }, 30_000);
 
   it('第一則事件就是錯誤的：歸 SDK 層，不跟串流重試相乘', async () => {

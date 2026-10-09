@@ -53,7 +53,12 @@ import type {
   SessionTitleModelIdentity,
 } from '@nexus/core';
 
-import { ensureFallbackTitle, fallbackThreadTitle, normalizeThreadTitle } from './session-title.js';
+import {
+  ensureFallbackTitle,
+  fallbackThreadTitle,
+  normalizeThreadTitle,
+  titlePinnedByUser,
+} from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import { THREAD_TITLE_LLM_PLUGIN_NAME } from './settings/thread-title-llm.js';
 import type { ModelRoute } from '@nexus/core';
@@ -207,6 +212,8 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
     let closed = false;
     let pending: TitleSourceMessage | undefined;
     const controller = new AbortController();
+    // 正在跑的那一次自己的中止柄：使用者改名時只撤它（#633，dsh `supersede`），拆掉時由上面的 `controller` 統一撤。
+    let active: AbortController | undefined;
     let running: Promise<void> | undefined;
 
     // 合格的人話：`turn/start {kind:'message'}`、清完不是空的。同退回標題那一條（`session-title.ts`）。
@@ -224,10 +231,14 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
       const followed = mainRoute === undefined ? undefined : options.follow?.(mainRoute);
       const model = followed?.model ?? options.model;
       const route = followed?.route ?? options.route;
+      const own = new AbortController();
+      active = own;
       try {
         // 先確保退回標題已落地，同 dsh `runProvider` 的 `ensureFallback`。平常它在 `turn/start` 那一段已經寫了，這裡是
         // no-op；只有那一次寫失敗時才補。補不進去就跟模型失敗一樣講一聲、不送。
         ensureFallbackTitle(log, options.limits);
+        // 開跑前就已經被釘住：不花這一次模型呼叫。
+        if (titlePinnedByUser(log.events)) return;
         const result = await generateThreadTitle({
           model,
           route,
@@ -235,9 +246,11 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
           maxTitleBytes: options.limits.maxTitleBytes,
           messages: [message],
           log,
-          signal: controller.signal,
+          signal: AbortSignal.any([controller.signal, own.signal]),
         });
         if (closed) return;
+        // 使用者在模型回來之前改了名：釘住的標題不被蓋過（#633，dsh `rename` 撤掉進行中的產生）。
+        if (titlePinnedByUser(log.events)) return;
         log.append('session/title', {
           title: result.title,
           messageSeqs: result.messageSeqs,
@@ -248,8 +261,11 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
           },
         });
       } catch (error: unknown) {
-        if (closed) return;
+        // 被改名撤掉的那一次不算失敗，不講話。
+        if (closed || titlePinnedByUser(log.events)) return;
         warn(`模型產生的標題沒寫成，留著退回標題：${String(error)}`);
+      } finally {
+        if (active === own) active = undefined;
       }
     };
 
@@ -260,6 +276,12 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
 
     const unsubscribe = log.subscribe((event) => {
       if (closed) return;
+      if (event.type === 'session/title' && event.data.source.kind === 'user') {
+        // 使用者改名：撤掉還沒開跑的和跑到一半的產生。之後的人話不再排（上面的 `titled` 已經有標題）。
+        pending = undefined;
+        active?.abort(new Error('user rename superseded automatic title generation'));
+        return;
+      }
       const text = eligibleText(event);
       if (text !== undefined) {
         // 第一則合格的人話、而且還沒有標題：排一次。同 dsh 的 `count === 1 && get(session) === undefined`。

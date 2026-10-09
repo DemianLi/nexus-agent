@@ -76,6 +76,11 @@ interface CallScope {
 interface CallProbe {
   log: SessionLog | undefined;
   modelCall: number | undefined;
+  /**
+   * 再外一層放的格子。**格子會巢狀**：串流重試（`stream-retry.ts`）在每次嘗試外放一格，它的外面還有摘要器放的那一格——
+   * 起訖紀錄器只填最近的一格的話，外層的摘要器就永遠問不到識別（`context/measure` 全部掉成沒歸屬的）。所以往外一路填到底。
+   */
+  readonly parent: CallProbe | undefined;
 }
 
 const scopes = new AsyncLocalStorage<CallScope>();
@@ -96,8 +101,7 @@ export function runInModelCall<T>(
   call: () => T | Promise<T>,
 ): Promise<T> {
   lastCalls.set(log, { modelCall, replied: false });
-  const probe = probes.getStore();
-  if (probe !== undefined) {
+  for (let probe = probes.getStore(); probe !== undefined; probe = probe.parent) {
     probe.log = log;
     probe.modelCall = modelCall;
   }
@@ -185,12 +189,28 @@ export interface CapturedModelCall {
 export async function captureModelCall<T>(
   call: () => T | Promise<T>,
 ): Promise<{ readonly result: T; readonly call: CapturedModelCall }> {
-  const probe: CallProbe = { log: undefined, modelCall: undefined };
-  const result = await probes.run(probe, call);
-  return {
-    result,
-    call: { of: (log) => (probe.log === log ? probe.modelCall : undefined) },
-  };
+  const { outcome, call: captured } = await captureModelCallSettled(call);
+  if (outcome.status === 'rejected') throw outcome.reason;
+  return { result: outcome.value, call: captured };
+}
+
+/**
+ * {@link captureModelCall}，但**拋了也回報**：交回 `call` 落定的結果（成功或拒絕），與它裡面最近開的那次呼叫的識別。
+ * 給要在失敗之後寫「這一次失敗的呼叫」的外層用（串流重試的 `llm/retry`，`stream-retry.ts`）：呼叫拋出去之後，起訖紀錄器
+ * 內側的 `AsyncLocalStorage` 已經不在了，只有外層放的格子還記得。
+ */
+export async function captureModelCallSettled<T>(
+  call: () => T | Promise<T>,
+): Promise<{ readonly outcome: PromiseSettledResult<T>; readonly call: CapturedModelCall }> {
+  const probe: CallProbe = { log: undefined, modelCall: undefined, parent: probes.getStore() };
+  const outcome = await probes.run(probe, async (): Promise<PromiseSettledResult<T>> => {
+    try {
+      return { status: 'fulfilled', value: await call() };
+    } catch (reason: unknown) {
+      return { status: 'rejected', reason };
+    }
+  });
+  return { outcome, call: { of: (log) => (probe.log === log ? probe.modelCall : undefined) } };
 }
 
 /** 把識別放進一筆事件的資料；沒有識別就一個 key 都不加（`undefined` 欄位會讓日誌拒收，見 `snapshotJsonValue`）。 */

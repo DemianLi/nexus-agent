@@ -19,11 +19,15 @@ import { tool as makeTool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepagents';
+import { modelCallLimitMiddleware } from 'langchain';
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import type { EventDispatcher } from './events.js';
 import { createApprovalGateMiddleware } from './approval.js';
 import type { ApprovalPolicySource } from './approval-policy.js';
-import { createSubagentDelegationMiddleware } from './subagent-delegation.js';
+import {
+  createSubagentDelegationMiddleware,
+  FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
+} from './subagent-delegation.js';
 import {
   assertToolFilter,
   createSubagentToolFilterMiddleware,
@@ -49,7 +53,12 @@ import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './obser
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
-import type { MiddlewareRegistration, PluginRegistry, RootOnlyRefusal } from './registry.js';
+import type {
+  MiddlewareRegistration,
+  NexusSubAgent,
+  PluginRegistry,
+  RootOnlyRefusal,
+} from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
 import { createStreamRetryMiddleware } from './stream-retry.js';
 import type { StreamRetryOptions } from './stream-retry.js';
@@ -61,7 +70,10 @@ import {
 } from './session-checkpoint-policy.js';
 import type { SessionLog } from './session-log.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
-import { createModelSwapMiddleware } from './model-selection.js';
+import {
+  createModelSwapMiddleware,
+  createSubagentModelFollowMiddleware,
+} from './model-selection.js';
 import type { ModelSelectionController } from './model-selection.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
 import {
@@ -409,7 +421,8 @@ export interface FoldOptions {
    *
    * 給了會多三件事：root 的 middleware 疊最外面多一顆換模型的（{@link ./model-selection.ts | createModelSwapMiddleware}）；
    * 換模型的通知借重複提醒的 `beforeModel` 附上，**重複提醒被關掉時才另掛一顆節點**（每一步多一個 super-step）；
-   * 都只折進 root，子代理的模型不歸它管。
+   * root 的換模型只折進 root；**子代理另有一顆跟隨的**（{@link ./model-selection.ts | createSubagentModelFollowMiddleware}，#328 第 3 項）：
+   * 每次叫模型前換成定義釘住的、沒釘就是父代理當下選擇的那顆（照 dsh 子代理沿用父代理當下路由）。
    */
   modelSelection?: ModelSelectionController;
 
@@ -514,21 +527,14 @@ export function foldRegistry(
   const turnCancel = createTurnCancelGuard();
   const turnCancelModelSignal = createTurnCancelModelSignal();
   const approvalGate = foldApprovalGate(registry, options);
-  // **子代理另建一顆，管道固定 `policy-never`**（#324）：照 dsh 委派時把子代理的核准政策釘成 `never`
-  // （`packages/subagent/subagent/src/child-agent.ts:220-247`），不管 root 的管道是什麼。組裝時就分開，
-  // 不在執行期查身分——分得開就沒有「查不到是誰」那幾種情況。listener 同一組：判斷「要不要問」不因
-  // 誰叫而變，變的是問不問得到人。無狀態，一份走遍每個子代理。
-  //
-  // dsh 另把 `approval/policy: never`（`source: 'delegation'`）寫進子代理的日誌（`child-agent.ts:267-279`）；我們同樣記
-  // （#437，翻了以前「root 也不記所以子代理不記」的偏離）：由 `approvalGatePlugin` 在子代理日誌開啟時寫，見 `approval.ts`。
-  // 子代理每次被擋仍寫一對 `approval/asked`＋`approval/decided`（`rejected`）進自己的日誌（#1029），碼是
-  // `APPROVAL_POLICY_NEVER`。
-  const subagentApprovalGate = createApprovalGateMiddleware(
-    registry.approvals.listeners(),
-    { kind: 'policy-never' },
-    registry.sessions,
+  // **前景子代理共用 root 這一顆閘門**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，翻了 #324）：前景時主對話本來就停著等，
+  // 子代理要核准的操作把中斷冒到使用者面前（基座的 `task` 在同一次呼叫裡跑子圖，中斷會往上傳；#1098 的 MCP 反問已經走這條），
+  // 政策與管道就是 root 當下的（`options.approvals.policy` 每次要問人之前問一次，#437）。沒有人的入口、沒有存檔點、政策 `never`
+  // 時一樣確定性回絕，理由說的是真正的原因。**背景子代理不走這裡**：它們背後沒有人，圖由 {@link createBackgroundApprovalGate}
+  // 那一顆（管道固定 `policy-never`，#324／#737 照 dsh `child-agent.ts:220-247`）在編圖時換掉。
+  const subagentDelegation = createSubagentDelegationMiddleware(
+    FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
   );
-  const subagentDelegation = createSubagentDelegationMiddleware();
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(registry, options);
   // **一份實例走遍 root 與每個 subagent**，或在明著關掉時沒有。它無狀態，見
@@ -540,7 +546,7 @@ export function foldRegistry(
   const streamRetry =
     options.streamRetry === undefined || options.streamRetry.maxRetries <= 0
       ? undefined
-      : createStreamRetryMiddleware(options.streamRetry);
+      : createStreamRetryMiddleware(options.streamRetry, registry.sessions);
   // 請求快照（#1020）：同上，無狀態、一份走遍；基準住在日誌上。排在最內層，見 {@link ./request-snapshot.ts}。
   const requestSnapshot = createRequestSnapshotRecorder(registry.sessions);
   // 耐久檢查點（#599）：同上，無狀態、一份走遍 root 與每個子代理。位置緊貼用量記錄器內側，
@@ -600,13 +606,35 @@ export function foldRegistry(
       same(options.stepInbox === true ? createStepInboxMiddleware() : undefined),
     ),
     // 換模型排在洋蔥最外面（#723）：摘要器、起訖、用量與 plugin middleware 看到的 `request.model` 都是這一步選中的那顆。
-    // 只折進 root，子代理的模型由 `subagent` 工具的選模型管。見 {@link ./model-selection.ts}。
-    rootOnly(
-      'modelSelection',
-      same(
+    // root 的每一步快照一次；子代理另給一顆（#328 第 3 項）：沒釘模型就跟父代理**當下**的選擇，釘了就用定義釘的，見
+    // {@link ./model-selection.ts | createSubagentModelFollowMiddleware}。背景圖若是 `subagent` 工具替這一次委派挑了模型，
+    // `compileSubagentGraph` 會把這一顆濾掉（模型自己挑的勝過一切，dsh `requestedAgentOptions`）。
+    {
+      name: 'modelSelection',
+      root: same(
         options.modelSelection === undefined
           ? undefined
           : createModelSwapMiddleware(options.modelSelection),
+      ),
+      subagent: make((spec) =>
+        options.modelSelection === undefined
+          ? undefined
+          : createSubagentModelFollowMiddleware(options.modelSelection, {
+              ...(typeof spec.model === 'string' && { model: spec.model }),
+              ...(spec.reasoningEffort !== undefined && { reasoningEffort: spec.reasoningEffort }),
+            }),
+      ),
+    },
+    // 子代理一次執行最多叫幾次模型（#328 第 3 項，dsh 沒有）：到了就收尾。只給子代理，root 的上限是遞迴上限（#858）。
+    subagentOnly(
+      'subagentMaxTurns',
+      make((spec) =>
+        spec.maxTurns === undefined
+          ? undefined
+          : (modelCallLimitMiddleware({
+              runLimit: spec.maxTurns,
+              exitBehavior: 'end',
+            }) as unknown as AgentMiddleware),
       ),
     ),
     // 同一步多顆工具呼叫的獨佔屏障（#711 第 2 步）排在圍堵外面：等待中的呼叫在通過屏障前**什麼都不做**，不能先被圍堵記一顆
@@ -644,8 +672,8 @@ export function foldRegistry(
     // 「先跳核准卡、再被拒」。拒絕在問人之前，同 dsh（hooks／permission／sandbox 先於 approval）。核准本身沒有搬上去。
     shared('toolPreExecute', toolPreExecute),
     // 閘門排在子代理自帶的那些之前——同「全域勝」那條軸線：子代理自己掛的 middleware 繞不過它。
-    // 子代理那一欄是另一顆，管道固定 `policy-never`（#324）。
-    { name: 'approvalGate', root: same(approvalGate), subagent: same(subagentApprovalGate) },
+    // 前景子代理用同一顆（#328 第 1 項）；背景圖編圖時換成 `policy-never` 那顆（{@link createBackgroundApprovalGate}）。
+    { name: 'approvalGate', root: same(approvalGate), subagent: same(approvalGate) },
     // **各建一份，不共用**：觀測紀錄在 closure 裡，共用等於讓 root 讀過的檔變成這個 subagent 也可以直接改。
     // 理由見 {@link foldObservationPolicy}。
     perAgent('observationPolicy', () => observationPolicy?.()),
@@ -992,6 +1020,25 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
 }
 
 /**
+ * 背景子代理的核准閘門：管道固定 `policy-never`（[#324](https://github.com/DemianLi/nexus-agent/issues/324)、[#737](https://github.com/DemianLi/nexus-agent/issues/737)），
+ * 要人看過的操作一律確定性回絕，不發中斷。照 dsh 委派時把子代理的核准政策釘成 `never`
+ * （`packages/subagent/subagent/src/child-agent.ts:220-247`）；背景子代理被叫醒時主對話沒有在等，沒有人可以按。
+ *
+ * **由 {@link ./subagent-graph.ts | compileSubagentGraph} 的呼叫端在編背景圖時傳進去**，換掉 fold 放進子代理規格的那一顆（前景用的、跟 root 同一顆）。
+ * 組裝時就分開，不在執行期查身分——分得開就沒有「查不到是誰」那幾種情況。listener 與審計通道同一組：判斷「要不要問」不因誰叫而變，
+ * 變的是問不問得到人。無狀態，一份走遍每張背景圖。
+ *
+ * @param registry - 載入完的註冊表（listener 與審計通道從這裡來）。
+ */
+export function createBackgroundApprovalGate(registry: PluginRegistry): AgentMiddleware {
+  return createApprovalGateMiddleware(
+    registry.approvals.listeners(),
+    { kind: 'policy-never' },
+    registry.sessions,
+  );
+}
+
+/**
  * root 的 middleware 疊：把槽位表（{@link MiddlewareSlot}）展成一份清單——圍堵在最前，`prepend` 的接著，
  * 核准閘門再接著，其餘依註冊順序。**子代理那一疊從同一張表導出**（{@link foldSubagentMiddleware}），
  * 下面每一條位置的理由兩邊共用。
@@ -1056,7 +1103,7 @@ function foldMiddleware(slots: readonly MiddlewareSlot[]): AgentMiddleware[] {
  */
 function foldSubagentMiddleware(
   slots: readonly MiddlewareSlot[],
-  spec: SubAgent,
+  spec: NexusSubAgent,
 ): AgentMiddleware[] {
   return slots.flatMap((slot) => takeFrom(slot.subagent, spec));
 }
@@ -1087,7 +1134,7 @@ interface MiddlewareSlot {
   /** root 取什麼。 */
   readonly root: SlotTake<[]>;
   /** 每個子代理取什麼；`spec` 是那個子代理的規格。 */
-  readonly subagent: SlotTake<[spec: SubAgent]>;
+  readonly subagent: SlotTake<[spec: NexusSubAgent]>;
 }
 
 /** 一列在一個 agent 身上產出的東西：一顆、一批，或什麼都沒有。 */
@@ -1137,7 +1184,7 @@ function rootOnly(name: string, root: SlotTake<[]>): MiddlewareSlot {
 }
 
 /** 只給子代理。 */
-function subagentOnly(name: string, subagent: SlotTake<[spec: SubAgent]>): MiddlewareSlot {
+function subagentOnly(name: string, subagent: SlotTake<[spec: NexusSubAgent]>): MiddlewareSlot {
   return { name, root: NONE, subagent };
 }
 
@@ -1678,8 +1725,13 @@ function foldSubAgents(
 
     const permissions = [...context.permissions, ...(spec.permissions ?? [])];
 
+    // 我們自己的三格不交給基座：`maxTurns`、`reasoningEffort` 它不認得；`model` 是字串時是**型錄 id**，基座會當
+    // `provider:model` 去 `initChatModel`，所以拿掉，由跟隨的 middleware 每次叫模型前換成那條路由的實例（沒有控制器時，
+    // 註冊那一刻就拒絕字串 model，走不到這裡）。給實例的 `model` 原樣留著。
+    const { maxTurns: _maxTurns, reasoningEffort: _reasoningEffort, ...declared } = spec;
+    if (typeof declared.model === 'string') delete declared.model;
     const next: SubAgent = {
-      ...spec,
+      ...declared,
       tools: orderTools(merged, context.toolOrder),
       // 從同一張槽位表導出（#664）：每一個位置的理由寫在 {@link foldRegistry} 那一列上，那裡也決定了
       // 哪些共用一份、哪些逐個建、哪些只給子代理。

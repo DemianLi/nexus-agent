@@ -18,18 +18,18 @@
 [#437](https://github.com/DemianLi/nexus-agent/issues/437)。把「檔案政策」與「核准政策」兩顆旋鈕捆成使用者看得懂的具名組合，
 **是切換它們的唯一入口**（舊的 `/sandbox` 拿掉了）。出廠三組，名字與值照 dsh：
 
-| 組 | 檔案政策 | 核准政策 |
-| --- | --- | --- |
-| `read-only` | `read-only` | `ask`（要改動時先問你） |
-| `workspace-write`（預設） | `workspace-write` | `ask` |
-| `danger-full-access` | `danger-full-access` | `never`（不問：要人點頭的事一律直接回絕） |
+| 組                        | 檔案政策             | 核准政策                                  |
+| ------------------------- | -------------------- | ----------------------------------------- |
+| `read-only`               | `read-only`          | `ask`（要改動時先問你）                   |
+| `workspace-write`（預設） | `workspace-write`    | `ask`                                     |
+| `danger-full-access`      | `danger-full-access` | `never`（不問：要人點頭的事一律直接回絕） |
 
 - **現在是哪一組是推導出來的**：兩顆旋鈕實際的值對上哪一組就是哪一組，對不上任何一組顯示 `custom`（只能顯示，不是切換目標）。
 - **`--sandbox` 同時決定核准的起始值**：`--sandbox danger-full-access` 是「全開＋不問」。**這是行為改變**：以前它只放寬檔案、核准照舊會問。
   續接（`--resume`、重開 server 接回同一條 thread）一律用日誌裡記的值，日誌沒記核准的舊會話照 `ask`。
 - **日誌上多一顆 `permission/preset`**（格式 35）：只記使用者選了哪一組（意圖），執行仍由 `sandbox/mode` 與 `approval/policy` 各自控制。
   新會話接線當下釘一顆起始組合。
-- **子代理**：核准一律 `never`；組合名只在父代理是 `danger-full-access` 時帶下去。
+- **子代理**：背景子代理的核准一律 `never`；前景子代理跟主對話**當下**的核准政策走（要核准的操作停下來問人，詳見「前景子代理的核准」）；組合名只在父代理是 `danger-full-access` 時帶下去，兩種一樣。
 - **web**：目錄走 RPC `permission.catalog`，目前是哪一組走會話投影 `permissions`（`{ currentValue }`）；切換送的就是 `/permission <組名>` 這一行。
 - **設定**：清單上 `permission-presets` 那一列。`presets` 整份替換、每組必填 `sandbox` 與 `approval`；`defaultPreset` 選填，
   與明確給的 `--sandbox` 矛盾時啟動失敗。有 `--workspace` 時這一列關不掉（會話中就沒有任何辦法改兩顆旋鈕），沒有 `--workspace` 時它什麼都不註冊。
@@ -182,6 +182,25 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 
 ## 瀏覽器會話的安全約束
 
+**側欄的釘選與封存**（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）存在伺服器端，換瀏覽器、重新整理之後都還在：
+`$NEXUS_AGENT_HOME/thread-organization.json`（目錄 `0700`、檔案 `0600`，按 home 分，跟會話日誌同一個「有落盤才有」的條件）。
+這份檔只有兩串 id（釘選最近釘的在前、封存依封存順序），**不含對話內容**。
+
+- **封存的會話不跑模型**（照 dsh 的 `ArchivedSessionGate`）：每一次模型呼叫之前都問，不只輪頭。往封存的會話送話、排著的輸入、
+  目標續行、背景子代理的結算與來信，仍會開一輪，但**一個模型請求都不發**，這一輪以 `turn/end { reason: { kind: 'blocked' } }`
+  收（日誌格式 40）。被擋下的那句話**不進模型的對話**，取消封存之後模型看不到它（日誌的 `turn/start.text` 與畫面歷史仍留著
+  使用者打了什麼）。背景子代理的每一步同樣過閘門：被擋下的子代理輪在它自己的日誌上以 `blocked` 收，結算原因是 `refusal`。
+- **封存會讓進行中的目標停下，取消封存不會自己接回來**：目標續行那一輪被擋下，目標轉成 `blocked`（`prompt-rejected`，同 dsh 的
+  目標驅動器：它不認得封存，只看到這一輪在進入 step 之前被拒絕）。取消封存之後要打 `/goal resume` 才會繼續。
+- **封存時還在跑的會話**（有一輪在跑、或背景子代理還在跑）：不帶 `stopActivity` 會被拒絕（`thread_active`，附 `activity`
+  是哪幾類）；帶了就先記下封存、再停掉那一輪與全部背景子代理（不等停穩）。
+- **改名**（`thread.rename`）把使用者的標題追加成會話日誌上的一顆 `session/title`（`source: user`），**釘住**：之後的退回標題與模型標題都不會蓋過它。
+  標題照設定的 `maxTitleBytes` 正規化，正規化完是空的回 `title_invalid`。**寫在日誌上，所以沒落盤的 server 上改名只活到這個行程結束**；
+  只在磁碟上的會話改名時會被重新打開。列表讀的是落盤的那份，改名到列表上看得見有短暫的落盤延遲，開著的頁面從即時的標題推送看得到。
+- **檔壞了 serve 起不來**：版本不對、JSON 壞、欄位型別不對、兩個集合有重複或互相重疊，或權限讓別人讀得到（會要你 `chmod 600`），
+  啟動就失敗，**不會覆寫它**。要重設就刪掉這個檔再重啟——釘選與封存會全部清空。
+- **一個 home 只該有一個 serve 在寫它。** 兩個 serve 行程共用同一個 `NEXUS_AGENT_HOME`，後寫的會蓋掉先寫的；多人共用主機時各人用各自的 home。
+
 **網頁與 API 都要瀏覽器會話。** `serve` 印出來的網址帶著這個行程的 token，開一次就換到一顆 cookie
 （`HttpOnly`、`SameSite=Strict`、30 天，serve 重啟之後照樣有效），沒有 cookie 的請求一律 401。
 綁 `127.0.0.1` 擋不住同一台機器上的其他使用者，這顆 cookie 才擋得住。
@@ -299,6 +318,24 @@ export HTTP_PROXY=http://127.0.0.1:7890
 但那是准許不是保證。額外那條「連續 N 輪沒進展就停」刻意沒做，理由在
 `apps/harness/src/goal-driver.ts` 的檔頭。
 
+## 前景子代理的核准
+
+**前景子代理要核准的操作，卡片送到使用者面前**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，**dsh 沒有**：dsh 委派時把子代理的核准政策釘成 `never`，
+`packages/subagent/subagent/src/child-agent.ts:220-247`）。為什麼做：前景時主對話本來就停著等這個子代理，Claude Code 的前景子代理也是這樣；要核准的事一律回絕，
+子代理能做的事就比主對話少得多。這翻了 #324 的決定，**僅限前景**。
+
+- **政策與管道跟主對話當下的一樣**：核准政策（`ask`／`never`，#437）每次要問人之前讀一次，所以主對話中途切到 `never`，子代理下一次要核准的操作就確定性回絕。
+  入口沒有人（一次性模式、沒有存檔點）時同主對話：回絕，理由說的是「沒有人被問到」。
+- **畫面怎麼認出是哪個子代理在問**：`input.requested` 的 `namespace` 第一段是基座給那次委派呼叫的，與 `task`／`subagent` 那張卡折出來的子代理對得上；
+  卡片上看得到工具名與理由。同一顆中斷只會送一次（基座會在子代理層與 root 層各露面一次，後一次吞掉）。
+- **拒絕只拒那一次**：子代理收到「有人看過並拒絕了 …」的工具結果，照常往下；它再叫一次就是一顆新的問題。**按停止**收回所有待答的問題，這一輪收尾。
+- **root 上委派的那張卡維持「執行中」**（子代理在它底下等人），即時與重新整理後的重播一樣。
+- **背景子代理不變**：背後沒有人在等，要核准的操作一律回絕（`policy-never`，#737，照 dsh）；它的日誌上有 `approval/policy { never, source: 'delegation' }`，前景子代理的日誌沒有這一顆（它用主對話的）。
+- **子代理被告知的話也分兩版**：前景說「需要核准的操作會交給使用者決定」，背景仍是 dsh 那句「會自動被拒絕」（`FOREGROUND_SUBAGENT_DELEGATION_CONTEXT`／`SUBAGENT_DELEGATION_CONTEXT`）。問答工具與沙箱升級在子代理裡仍確定性回絕，不受這一項影響——升級的核准子代理認領不到（一次性 grant 一律不給子代理，照 dsh），問了等於騙人；回絕的理由因此是 `delegated`（「子代理拿不到升級的核准」），不再說「這個 session 關掉了人工核准」。前景只有一條路：基座的 `task`（產品的 `subagent` 工具帶 `run_in_background: false` 時改派給它）。
+- **審計**：`approval/asked`／`approval/decided` 仍記在 root 日誌上（與 `interrupt/raised` 同一份，軌跡靠 id 配對），`callId` 對得上子代理日誌裡那顆 `tool/call`。
+  日誌格式沒有變。
+- **重開行程**：沒有為子代理另開一條路，行為同主對話的核准（這個行程裡掛著的中斷重開過就不在了，畫面上那幾張卡照即時規則收成失敗）。**沒有實測過子代理這一條**。
+
 ## 背景子代理
 
 **`serve` 出廠就是背景續行**（[#841](https://github.com/DemianLi/nexus-agent/issues/841)，照 dsh base bundle 的做法）：模型看到的委派工具是
@@ -335,12 +372,36 @@ export HTTP_PROXY=http://127.0.0.1:7890
 `list_subagent_models`（無參數列授權清單，帶 `model` 看那顆的推理等級）；沒有政策時兩者都不出現，模型硬帶那兩格也會被拒絕，不靜靜忽略。
 規則：
 
-- **都不給＝沿用主對話的模型**。給了任何一格，「有效路由」（有給 `model` 就是它，否則是主對話那顆）都必須在授權清單裡。
-- **只有背景委派（預設）能指定**；`run_in_background: false` 走基座的 `task`，模型在組裝期寫死，帶 `model`／`reasoning_effort` 會被拒絕。
+- **都不給＝走基線**（定義釘的，沒釘就是主對話**此刻**的選擇，見下一節），基線不受授權清單管。給了任何一格，「有效路由」（有給 `model` 就是它，否則是基線的模型）都必須在授權清單裡。
+- **只有背景委派（預設）能指定**；`run_in_background: false` 走基座的 `task`，這一次呼叫不收模型的指定，帶 `model`／`reasoning_effort` 會被拒絕（前景用哪顆見下一節）。
 - **推理等級只有 `off` 與 `default`**，而且必須是型錄條目宣告過的名字；`off` 會把型錄寫的關閉方式帶進這個子代理的每次請求，
   `default` 等於沒給。型錄宣告了別的等級也先拒絕（沒有量過線上寫法，不猜）。
 - **一個編號的模型與推理等級從派出到收線不變**：`send_message` 追加指示沿用同一份，不能換。
 - 建不出那顆模型（端點設定、憑證）時，工具結果講原因，主對話那一輪不受影響。
+
+### 子代理定義裡的模型與上限（#328 第 3 項）
+
+寫 plugin 的人在 `registry.subagents.register()` 的定義上可以多給三格（`NexusSubAgent`）：
+
+| 欄位              | 意思                                                                  |
+| ----------------- | --------------------------------------------------------------------- |
+| `model`           | 型錄 id（字串）：這個子代理一律用它。也可以給模型實例（不經型錄）。   |
+| `reasoningEffort` | 推理強度（`off`／`default`）；沒給 `model` 時套在主對話當下的模型上。 |
+| `maxTurns`        | 一次執行最多叫幾次模型，正整數；到了就收尾。                          |
+
+**註冊當下就驗**：`model` 不在型錄、`reasoningEffort` 不是那顆模型宣告過而且今天實作的等級、`maxTurns` 不是正整數，
+都在組裝時失敗，訊息指名註冊的 plugin 與子代理，不等到委派。沒連真實供應商的組裝沒有型錄，字串 `model` 與 `reasoningEffort` 一律拒絕。
+出廠沒有任何 plugin 註冊子代理，所以這一節只對自己寫子代理的部署方有影響；**沒有設定列**。
+
+**沒設定的子代理走哪顆模型（行為改變）：** 以前前景子代理（`task`、`general-purpose`）一律用部署預設那顆，使用者在會話裡換了模型也不跟。
+現在是 **定義釘的 > 主對話此刻的選擇（#723）> 部署預設**：
+
+- **前景子代理逐次跟隨**：每次叫模型前現算，所以子代理跑到一半使用者換了模型，下一次叫模型就換過去。沒選過的會話與以前逐位相同。
+- **背景子代理在委派那一刻定下**，之後使用者換模型不影響已經派出去的（照 dsh：子代理建立時取父代理當下的選擇，之後固定）。
+- 模型在委派時自己挑的（`model`／`reasoning_effort` 兩格）蓋過定義釘的；兩者撞在一起照 dsh `requestedAgentOptions`
+  （`tool-subagent/src/model-selection.ts:99-128`）：要求 > 定義釘的 > 父代理；要求換了路由又沒給強度，定義釘的強度丟掉。
+- **授權清單只管模型自己挑的**：定義釘的與沿用主對話的都不查清單。只給 `reasoning_effort` 時，有效模型是釘的（沒釘才是主對話的）那顆，
+  它要在清單裡（dsh `assertAllowedModelSelection`，`:139-152`）。
 
 ### 子代理的工具允許／拒絕清單（#707）
 
@@ -497,26 +558,26 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 
 今天有十七列：
 
-| id | 管什麼 | 有 `config` 嗎 | 關得掉嗎 |
-| --- | --- | --- | --- |
-| `repeat-reminder` | 連續重複同參數呼叫同一個工具時提醒模型 | 有（四格） | 關得掉 |
-| `tool-result-pruner` | 摘要之前先剪掉過長工具結果的中段 | 有（三格） | 關得掉 |
-| `summarization` | 壓力達標時把舊訊息摘要成一則，歷史 offload 到 backend | 有（四格） | 關得掉 |
-| `observation-policy` | 先讀後改：沒讀過的檔不准改 | **沒有** | 關得掉 |
-| `model-usage` | 每一次模型呼叫的 token 帳目記進會話日誌 | **沒有** | 關得掉 |
-| `session-checkpoint-policy` | 模型請求與工具動手之前（root 與子代理都是），先把會話日誌排空到磁碟 | **沒有** | 關得掉 |
-| `approval-gate` | 核准閘門 | **沒有** | **關不掉** |
-| `session-persistence` | 會話日誌落盤本身，以及它的批次窗口（毫秒） | 有（一格） | 關得掉（＝不落盤） |
-| `thread-title` | 會話標題的三個上限（退回標題的詞數與位元組，以及任何來源的標題的位元組） | 有（三格） | **關不掉** |
-| `thread-title-llm` | `--live` 時由模型依第一句話產生會話標題 | 有（五格，另有選配的 `modelId`） | 關得掉（＝只剩退回標題） |
-| `thread-search` | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開** | 有（一格） | 關得掉（＝搜尋一律失敗） |
-| `browser-session` | 瀏覽器 cookie 的絕對有效期 | 有（一格） | **關不掉** |
-| `deliverable-files` | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數） | 有（三格） | **關不掉** |
-| `tool-text` | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截） | 有（一格） | **關不掉** |
-| `live-model` | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理） | 有（五格） | **關不掉** |
-| `agent-default-model` | 沒帶 `--live` 時用哪個模型提供者（出貨值 `cli-script` 是清單上的腳本提供者那一列） | 有（一格） | **關不掉** |
-| `recursion-limit` | agent 迴圈的 super-step 上限 | 有（一格） | **關不掉** |
-| `agent-loop` | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆 | 有（一格） | **關不掉** |
+| id                          | 管什麼                                                                                                                         | 有 `config` 嗎                   | 關得掉嗎                 |
+| --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------------------------ |
+| `repeat-reminder`           | 連續重複同參數呼叫同一個工具時提醒模型                                                                                         | 有（四格）                       | 關得掉                   |
+| `tool-result-pruner`        | 摘要之前先剪掉過長工具結果的中段                                                                                               | 有（三格）                       | 關得掉                   |
+| `summarization`             | 壓力達標時把舊訊息摘要成一則，歷史 offload 到 backend                                                                          | 有（四格）                       | 關得掉                   |
+| `observation-policy`        | 先讀後改：沒讀過的檔不准改                                                                                                     | **沒有**                         | 關得掉                   |
+| `model-usage`               | 每一次模型呼叫的 token 帳目記進會話日誌                                                                                        | **沒有**                         | 關得掉                   |
+| `session-checkpoint-policy` | 模型請求與工具動手之前（root 與子代理都是），先把會話日誌排空到磁碟                                                            | **沒有**                         | 關得掉                   |
+| `approval-gate`             | 核准閘門                                                                                                                       | **沒有**                         | **關不掉**               |
+| `session-persistence`       | 會話日誌落盤本身，以及它的批次窗口（毫秒）                                                                                     | 有（一格）                       | 關得掉（＝不落盤）       |
+| `thread-title`              | 會話標題的三個上限（退回標題的詞數與位元組，以及任何來源的標題的位元組）                                                       | 有（三格）                       | **關不掉**               |
+| `thread-title-llm`          | `--live` 時由模型依第一句話產生會話標題                                                                                        | 有（五格，另有選配的 `modelId`） | 關得掉（＝只剩退回標題） |
+| `thread-search`             | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開**                                                                             | 有（一格）                       | 關得掉（＝搜尋一律失敗） |
+| `browser-session`           | 瀏覽器 cookie 的絕對有效期                                                                                                     | 有（一格）                       | **關不掉**               |
+| `deliverable-files`         | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數）                                                             | 有（三格）                       | **關不掉**               |
+| `tool-text`                 | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截）                                             | 有（一格）                       | **關不掉**               |
+| `live-model`                | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理） | 有（五格）                       | **關不掉**               |
+| `agent-default-model`       | 沒帶 `--live` 時用哪個模型提供者（出貨值 `cli-script` 是清單上的腳本提供者那一列）                                             | 有（一格）                       | **關不掉**               |
+| `recursion-limit`           | agent 迴圈的 super-step 上限                                                                                                   | 有（一格）                       | **關不掉**               |
+| `agent-loop`                | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆                                                                               | 有（一格）                       | **關不掉**               |
 
 **最後十列裡，九列是「不裝功能、只講設定」的那一型；`session-persistence` 例外，它代表落盤本身**
 （[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**十列的擁有者分兩邊**：`session-persistence` 住在
@@ -539,6 +600,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 `insert` 一列提供者（目前有 `#settings/scripted-model`，腳本當 `config.turns`），再把那一列的 `provider` 寫成提供者的 `id`。
 **`--live` 不看這一列**——它是進 live 的唯一閘門，因為 `.env` 與代理在載入清單之前就依它處理好了。指到的 id 找不到、
 被停用、或那一列不是提供者，啟動時當場拋。這是給測試與嵌入方用的接縫，不是換真實供應商的辦法（那是 `live-model`）。
+
 - **`recursion-limit` 與 `agent-loop` 相反，它們的消費點在組裝期**（`agent-factory`），跟前七列同一個位置，所以它們
   跟前七列完全同形（`apply` 提供一顆服務、組裝點去讀）。**CLI 的 `--recursion-limit` 仍然贏過
   這一列**——程式路徑上直接傳的參數贏過這份清單，那條規則對它照樣適用。
@@ -588,14 +650,23 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 - **`baseUrl` 要是 `http:` 或 `https:` 的網址，不能帶帳密、query 或 fragment**（照 dsh）。`http:` 放行，
   所以指向內網的明文端點是合法的——**key 會以明文送過去**，那是部署自己的判斷。
 - **`maxRetries` 上限 10**：退避是指數成長而且沒有上限，10 次的累計等待已經是 17–34 分鐘。
-  `timeoutMs` 在串流上管兩段：連線到第一則事件（逾時會重試），以及之後每一段之間的閒置（逾時整次重打，見下一條 `streamRetry`）。上限是 2 147 483 647（同 `windowMs` 的理由）。**最壞情況是它乘上
-  重試次數**：開了線卻一個位元組都不吐時，每一次都等滿，預設 90 秒 × 7 次，再加退避。
+  **逾時拆兩格**（[#1251](https://github.com/DemianLi/nexus-agent/issues/1251)，同 dsh 的 `timeoutMs`／`streamIdleTimeoutMs`）：
+  `timeoutMs`（預設 180000）管連線到第一則事件，逾時會重試；視覺模型要先吃圖才吐第一則事件（`meta/llama-3.2-90b-vision-instruct` 實測 133 秒），所以比閒置那格寬。
+  `streamIdleTimeoutMs`（預設 90000）管第一則事件之後每一段之間的閒置，逾時整次重打（見下一條 `streamRetry`）；dsh 預設 300 秒，我們維持 90 秒，因為每次重打都重付整個回覆。
+  兩格上限都是 2 147 483 647（同 `windowMs` 的理由），**互不連動**：只改 `timeoutMs` 不會動到閒置，舊設定裡寫過 `timeoutMs` 且想保留舊行為的，把同一個值也寫到 `streamIdleTimeoutMs`。
+  **最壞情況：端點開了線卻一個位元組都不吐，一輪要二十多分鐘才失敗。** 每一次都等滿 `timeoutMs`，次數是 `maxRetries`（出廠 6）加第一次共 7 次，
+  所以是 180 秒 × 7 = 21 分鐘，再加 6 次退避（1、2、4、8、16、32 秒，帶隨機，合計 63–126 秒），大約 22–23 分鐘；
+  拆開之前是 90 秒 × 7 加退避，約 12 分鐘。乘數只有 SDK 重試這一層：`@langchain/openai` 底層 client 的 `maxRetries` 寫死 0，
+  下一條的 `streamRetry` 只管第一則事件**之後**，兩層不相乘（`live-model.test.ts` 實測請求數都是 `maxRetries + 1`）。
+  要讓它更快失敗，調的是 `timeoutMs`（或 `maxRetries`）；代價是視覺模型的首事件長尾（`meta/llama-3.2-90b-vision-instruct` 逐一實測最長 133 秒）會被撞到，
+  `timeoutMs` 低於 133000 就會砍到它。
 - **`streamRetry`：串流吐了內容之後才出錯的整次重打**（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）。管三類：串流中段的
   錯誤事件、連線中途斷掉、吐了內容之後停住（上一條的閒置逾時）。第一則事件之前的失敗歸 `maxRetries`，不乘在一起。四個欄位：
   `maxRetries`（預設 2，`0` 關掉）、`baseDelayMs`（預設 1000，之後每次加倍）、`maxDelayMs`（單次等待封頂，預設 10000）、
   `jitterRatio`（抖動，預設 0.1）。退避的形狀照 dsh；次數與起點比 dsh（5 次、500 毫秒）保守，**因為每一次重打都重付整個回覆的費用**。
-  重打時上一次吐了一半的回覆在畫面上被擦掉，日誌留一顆 `assistant/attempt`（不進模型），失敗那次的 `model/end` 帶
-  `outcome: error`、用量照記。請求本身有問題的錯誤（例如串流內的 400）不重打。**子代理的回覆也會重打，但已經畫出去的子代理字
+  決定重打的**當下**，上一次吐了一半的回覆在畫面上被擦掉（`message-discard`），畫面收到 `llm-retry`（第幾次、等多久、失敗碼，用來畫
+  「N 秒後重試」）；日誌留一顆 `assistant/attempt`（不進模型）與 `llm/retry`（帶 `delayMs`）、`llm/retry-started`，失敗那次的 `model/end` 帶
+  `outcome: error`、用量照記。退避期間按停止：輪次以中止收尾、不再重打。請求本身有問題的錯誤（例如串流內的 400）不重打。**子代理的回覆也會重打，但已經畫出去的子代理字
   不會被擦**（畫面上多一則斷尾的回覆）。
 - **關推理的寫法在型錄那一筆**（[#650](https://github.com/DemianLi/nexus-agent/issues/650)、原本的 `thinkingOffBody`）：
   `off` 那一級加 `compat.chatTemplateKwargs`（`$var: thinking.enabled` 在 `off` 解成 `false`）。它只有標題呼叫會
@@ -618,8 +689,8 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   沒有推理資訊的模型，型錄回應不帶強度，web 不畫強度列。
 - **跟著選擇走的**：摘要門檻（夾在當步那顆的窗口之內，`min(窗口×0.8, 窗口−輸出上限)`，配置的 `100_000` 仍是上限，所以預設那顆與 131k 級的門檻不變）、
   系統提示詞的 `{{model}}`、token 估算的錨（按模型名字認）、標題（沒有自己的 `modelId` 時沿用觸發它的那次主請求走的）。
-- **不跟著選擇走的**：子代理仍用部署預設那顆（要換得由 `subagent` 工具明著指定，見「子代理選模型的政策」）。dsh 的子代理沿用父代理當下的路由；
-  我們的子代理實例在組裝期建好，這是登記的差異，併進 #328 第 3 項一起定（和 #875 的取樣政策、每個子代理個別設定的優先序）。
+- **子代理也跟著選擇走**（#328 第 3 項）：沒設定的子代理沿用主對話此刻的選擇，前景逐次跟隨、背景在委派那一刻定下，定義也可以釘住自己的模型，
+  細節與優先序見「子代理定義裡的模型與上限」；模型在委派時自己挑的見「子代理選模型的政策」。
 - **選擇變更的即時推送**走會話投影通道（key `model-selection`，view 是 `{ lastUsed, next }`），多個分頁同步。
 
 **`thread-title-llm`**（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）只在 `--live` 時才跑：每條新
@@ -735,7 +806,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 ```yaml
 - id: system-prompt
   config:
-    includeHarnessIdentity: true   # 最前面那句 "You are an AI agent powered by nexus-agent."
+    includeHarnessIdentity: true # 最前面那句 "You are an AI agent powered by nexus-agent."
     personaPrefix: 'You are a helpful assistant powered by the {{model}} model.'
     personaSuffix: 'Your working directory is {{cwd}}.'
 ```
@@ -764,10 +835,10 @@ server、不綁 port：
 ```yaml
 # == /path/to/apps/harness/cordis.yml
 - id: echo
-  name: "@nexus/plugin-echo"
+  name: '@nexus/plugin-echo'
 # == /path/to/apps/harness/cordis.yml, patched by /home/you/.nexus-agent/cordis.patch.yml
 - id: todo
-  name: "@nexus/plugin-todo"
+  name: '@nexus/plugin-todo'
   disabled: true
 ```
 
@@ -866,6 +937,18 @@ pnpm --filter @nexus/harness run eval:compare --samples 2
 取樣數的乘積**，跑滿是小時級。量過的結論與模型盤點在
 [`.docs/model-inventory.md`](../.docs/model-inventory.md)。
 
+### 每晚真模型冒煙回歸（#436）
+
+`eval:compare` 要人手動跑；端點改了、模型下架了，沒有人跑就看不到。`.github/workflows/smoke.yml` 補這個洞：
+
+- **觸發**：手動（Actions 頁面 → Smoke（真模型））、每晚 18:17 UTC、push 到 `main`。**不在合併請求上跑**（額度；照 dsh 文件的收斂退法）。**不設成必過**，不在 `gate` 的路徑上。
+- **跑什麼**：真 `runServe --live` 打真的 NVIDIA 端點，三個案例——讀檔再寫檔（含逐字串流）、多輪、串流中途取消。驗證從外面重讀檔案、哨兵檔逐位元組比對，不看 agent 自己怎麼說。
+- **請求上限 20**：`live-model` 的 `baseUrl` 換成本機計數代理，在出口數；第 21 個不轉出去、整組判失敗。代理的計數會跟會話日誌對帳（`model/start`＋標題請求＋重試），對不上就是量具壞了。
+- **金鑰**：repo secret `NVIDIA_API_KEY`（只有 repo 管理者能放）。流程檔的預檢步驟沒設就 `exit 1`；冒煙缺金鑰時**直接拋、不跳過**，免得「全部跳過」被當成通過。
+- **過程違反量測**（藍圖規則 5／T7-08）：外部檢查判成功的案例，另拿會話日誌對 `src/smoke/violations.ts` 事先寫好的清單。**只報數、不判失敗**：摘要裡寫「判成功 N 件，其中過程違反 M 件」。
+- **本機跑**：`NVIDIA_API_KEY=… pnpm --filter @nexus/harness run smoke`（不要把金鑰寫進指令列歷史；從 `.env` 讀進環境變數）。
+- **失敗通知**：GitHub 預設通知最後改過這份 cron 的人，沒有另外接。排程只在預設分支跑，六十天沒有動靜會被 GitHub 自動停掉。
+
 `eval:compare` 與 `eval:survey` 每次執行都會逐筆寫進一份結果檔，預設在
 `apps/harness/eval-results/`（不進版控），`--out <目錄>` 可以改。檔案是 JSON Lines：第一行記
 這一輪的條件（commit 與工作樹有沒有未提交的改動、題庫版本、評分程式版本、取樣溫度與 topP、
@@ -898,3 +981,14 @@ CI 那條（`pnpm --filter @nexus/harness exec vitest run src/eval`）同時擋�
 這七題上的分數**當上限、不當實力**（設定與題目是同一批挑的），要拿它挑改動就得在新題上驗過；
 LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
 [`apps/harness/docs/eval-measurement.md`](../apps/harness/docs/eval-measurement.md)。
+
+## 點名子代理
+
+使用者可以在一句話裡點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項，**dsh 沒有**：dsh 派子代理的只有模型，沒有使用者派工的入口；Claude Code 允許使用者 `@` 子代理，這是 demian 2026-10-08 的指示）。
+
+- **清單**：`subagent.list` 回 `task` 實際收的那份——`general-purpose` 在前，其餘依註冊順序，各帶說明。手搭的組裝沒有清單時回 `not_supported`，web 據此藏起 `@` 的入口。
+- **送出**：`run.start` 的選填 `params.mention: { kind: 'subagent', name }`。形狀不對、名字不在清單上都回 `invalid_argument`，那句話不進佇列（排在收下附件之前，不會用掉收據）。
+- **對模型的作用**：點名**沒有新的執行路徑**，只是在使用者那句話之後多接一個文字區塊（「使用者點名要你把這句話交給子代理 "名字" 處理：請用委派工具…」，字在 `@nexus/core` 的 `subagent-mention.ts`），派不派、怎麼派仍走 `task`／`subagent` 工具與它們的所有規則（核准、模型選擇、深度）。模型可以不聽，所以這是「請求」不是「保證」；真模型的對照見該 PR 內文。
+- **日誌**：`turn/start`（`kind: 'message'`）與佇列項各多一格選填 `mention`，輪中插話則留在 `user/message` 的內容區塊裡。**格式 42，不標 `ignorable`**——舊 runtime 略過它，排著的項目被折回來重跑時點名就悄悄不見了。
+- **線上**：排著的件（`WireQueuedInput.mention`）、領走時的 `claimed`／`claimedNextStep`、歷史重播的人話（`HumanEntry.mention`）都帶它；`text` 不含點名也不含提示區塊（歷史把提示區塊剝掉，從它讀回點名）。
+- **會被看到提示區塊的地方**：送進模型的訊息、摘要器的輸入（摘要裡可能帶到點名的字，沒有處理）。泡泡、佇列、標題（讀的是 `turn/start.text`）、`thread.search` 的全文（跟歷史同一個判準剝掉提示區塊）不受影響：搜提示裡的字（「子代理」「委派工具」）不會命中被點名的話，搜使用者自己打的字照常命中。
