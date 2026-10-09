@@ -12,7 +12,7 @@ import { mkdtemp, readFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { SessionEvent } from '@nexus/core';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { foldTurn, serveClient } from './fixtures.js';
 import { projectKey } from './jsonl-session-store.js';
 import { runServe } from './serve.js';
@@ -21,6 +21,7 @@ import type { RunningServe } from './serve.js';
 let running: RunningServe | undefined;
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   await running?.close();
   running = undefined;
 });
@@ -86,6 +87,8 @@ async function listedTitle(server: RunningServe, threadId: string): Promise<stri
 describe('serve 上的改名', () => {
   it('改名之後列表讀得到、再說話退回標題不蓋過它、重啟之後還在，日誌上是 source:user', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-serve-rename-'));
+    // 不變量的違規預設走 `console.error`（`invariants.ts`）：一顆 `source:user` 的 `session/title` 不該讓任何一條報。
+    const violations = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const first = await start(root);
     await driveTurn(first, 'alpha', '請幫我整理這份文件');
     const client = await serveClient(first);
@@ -118,5 +121,6 @@ describe('serve 上的改名', () => {
       'user:我取的名字',
       'user:第二個名字',
     ]);
+    expect(violations).not.toHaveBeenCalled();
   });
 });

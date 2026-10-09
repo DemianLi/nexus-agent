@@ -464,6 +464,22 @@ describe('使用者改名釘住標題（#633）', () => {
     await t.detach();
   });
 
+  it('模型還沒回來時改名：進行中的那一次被中止（dsh supersede），不講話', async () => {
+    const t = attached(hangUntilAborted);
+    t.startTurn(FIRST);
+    await until(() => t.calls.length === 1);
+    expect(t.calls[0]!.signal?.aborted).toBe(false);
+    renameThreadTitle(t.log, '我取的名字', 80);
+    expect(t.calls[0]!.signal?.aborted).toBe(true);
+    await settle();
+    expect(t.warnings).toEqual([]);
+    expect(titleEvents(t.log.events).map((event) => event.data.source.kind)).toEqual([
+      'fallback',
+      'user',
+    ]);
+    await t.detach();
+  });
+
   it('開跑前就已經改名：不花這一次模型呼叫', async () => {
     const t = attached(() => stopReply());
     t.log.append('turn/start', { kind: 'message', text: FIRST });

@@ -586,6 +586,18 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
       blockedReason: { code: 'prompt-rejected' },
     });
 
+    // 還封存著就 `/goal resume`：驅動器排一顆續行，輪頭又被擋下，目標再轉 blocked（prompt-rejected）——不空轉、不叫模型。
+    const view = rigged.goals!.serviceFor(root)!.get()!;
+    rigged.goals!.serviceFor(root)!.resume({ id: view.id, revision: view.revision });
+    await until(() => endKinds(root).filter((kind) => kind === 'blocked').length === 2);
+    await settle(150);
+    expect(root.events.filter((event) => event.type === 'turn/start')).toHaveLength(2);
+    expect(rigged.rootModel.prompts).toHaveLength(0);
+    expect(rigged.goals!.serviceFor(root)?.get()).toMatchObject({
+      phase: 'blocked',
+      blockedReason: { code: 'prompt-rejected' },
+    });
+
     expect(await rigged.client.threadUnarchive('t1')).toMatchObject({ result: { ok: true } });
     await settle(250);
     expect(rigged.rootModel.prompts).toHaveLength(0);
