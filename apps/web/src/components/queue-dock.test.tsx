@@ -10,6 +10,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { QueueDock } from '@/components/queue-dock';
 import type { QueueUpdateRejected } from '@/hooks/use-conversation';
 import {
+  GOAL_CONTINUATION_TEXT,
+  GOAL_CONTINUATION_WARNING,
   QUEUE_GONE_TEXT,
   QUEUE_LEAVE_MS,
   QUEUE_PARKED_TEXT,
@@ -529,5 +531,72 @@ describe('排著的那一句帶附件（#732）', () => {
     const row = document.querySelector('[data-queue-item="a"]') as HTMLElement;
     expect(within(row).getByText('note.txt、red.png')).toBeTruthy();
     expect(screen.getByRole('button', { name: '刪除：note.txt、red.png' })).toBeTruthy();
+  });
+});
+
+describe('目標續行的預約（#638）', () => {
+  const goal: WireQueuedInput = {
+    id: 'g',
+    text: 'Continue working toward the goal. (給模型的提示詞)',
+    source: { kind: 'goal' },
+  };
+  const rowOf = (id: string) => document.querySelector(`[data-queue-item="${id}"]`) as HTMLElement;
+
+  it('畫成「目標續行」，不照抄給模型的提示詞；有編輯、刪除，沒有插話鈕；後果寫在那一列上', () => {
+    mount([goal]);
+    settle();
+    const row = rowOf('g');
+    expect(row.getAttribute('data-queue-goal')).toBe('true');
+    expect(within(row).getByTestId('queue-goal-label').textContent).toBe(GOAL_CONTINUATION_TEXT);
+    expect(row.textContent).not.toContain('Continue working');
+    expect(within(row).getByTestId('queue-goal-warning').textContent).toBe(
+      GOAL_CONTINUATION_WARNING,
+    );
+    expect(row.querySelector('[data-queue-action="edit"]')).not.toBeNull();
+    expect(row.querySelector('[data-queue-action="remove"]')).not.toBeNull();
+    expect(row.querySelector('[data-queue-action="steer"]')).toBeNull();
+    expect(screen.queryByRole('button', { name: /插話/u })).toBeNull();
+  });
+
+  it('編輯、刪除鈕的名字與提示都帶著後果', () => {
+    mount([goal]);
+    settle();
+    const remove = screen.getByRole('button', {
+      name: `刪除：目標續行（${GOAL_CONTINUATION_WARNING}）`,
+    });
+    expect(remove.getAttribute('title')).toBe(`刪除（${GOAL_CONTINUATION_WARNING}）`);
+    const edit = screen.getByRole('button', {
+      name: `編輯：目標續行（${GOAL_CONTINUATION_WARNING}）`,
+    });
+    expect(edit.getAttribute('title')).toBe(`編輯（${GOAL_CONTINUATION_WARNING}）`);
+  });
+
+  it('人排的那一列照舊：沒有後果那句、有插話鈕；並排時各是各的', () => {
+    mount([item('a', '我說的'), goal]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+    const human = rowOf('a');
+    expect(human.getAttribute('data-queue-goal')).toBeNull();
+    expect(within(human).queryByTestId('queue-goal-warning')).toBeNull();
+    expect(human.querySelector('[data-queue-action="steer"]')).not.toBeNull();
+    expect(rowOf('g').querySelector('[data-queue-action="steer"]')).toBeNull();
+  });
+
+  it('刪除照常送 remove；編輯時後果那句還在，存下送 edit', async () => {
+    const { onUpdate } = mount([goal]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: /^編輯：目標續行/u }));
+    expect(within(rowOf('g')).getByTestId('queue-goal-warning')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '取消編輯' }));
+    fireEvent.click(screen.getByRole('button', { name: /^刪除：目標續行/u }));
+    await flush();
+    expect(onUpdate).toHaveBeenCalledWith('g', { kind: 'remove' });
+  });
+
+  it('沒有無障礙違規', async () => {
+    mount([goal]);
+    settle();
+    vi.useRealTimers();
+    expect(await axeViolations(screen.getByTestId('queue-dock'))).toEqual([]);
   });
 });

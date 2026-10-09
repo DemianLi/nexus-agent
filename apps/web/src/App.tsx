@@ -53,7 +53,7 @@ import { createTrajectoryPuller } from '@/lib/trajectory-pull';
 import { newConversationTarget, readThreadListing } from '@/lib/new-conversation';
 import { isPlanReview, planReviewOf } from '@/lib/plan-review';
 import { STOPPED_QUESTION_TEXT, stoppedOnQuestion } from '@/lib/question-view';
-import { canRunSlash, canSendText } from '@/lib/queue-view';
+import { canRunSlash, canSendText, steerableItems } from '@/lib/queue-view';
 import { recallThread, rememberThread } from '@/lib/remembered-thread';
 import type { ThreadChoice } from '@/lib/remembered-thread';
 import {
@@ -395,18 +395,20 @@ function ConversationView({
       conversation.connected,
       conversation.state.status,
       draft,
-      conversation.state.inbox.length,
+      steerableItems(conversation.state.inbox).length,
     ) && !steeringAll.current;
   const steerQueue = () => {
     if (steeringAll.current) return;
     steeringAll.current = true;
-    void steerAll(conversation.state.inbox, conversation.updateQueue).then((outcome) => {
-      steeringAll.current = false;
-      if (outcome.kind === 'stopped') toast(STEER_UNAVAILABLE_TEXT);
-      else if (outcome.kind === 'failed') {
-        toast.error(STEER_FAILED_TEXT, { description: outcome.message });
-      }
-    });
+    void steerAll(steerableItems(conversation.state.inbox), conversation.updateQueue).then(
+      (outcome) => {
+        steeringAll.current = false;
+        if (outcome.kind === 'stopped') toast(STEER_UNAVAILABLE_TEXT);
+        else if (outcome.kind === 'failed') {
+          toast.error(STEER_FAILED_TEXT, { description: outcome.message });
+        }
+      },
+    );
   };
   // **送出分兩道閘**（#645 Q2）。純文字跑著也送得出去：伺服器收下就排進送出佇列，開跑時才畫人的話。停在核准點時
   // 輸入框被面板換掉（Q3、§4.3），那道閘照樣擋。斜線命令一輪沒收尾時照舊擋——伺服器那側也擋——只打 `/feedback`

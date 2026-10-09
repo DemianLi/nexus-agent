@@ -4,6 +4,10 @@ import { describe, expect, it } from 'vitest';
 
 import {
   canRunSlash,
+  GOAL_CONTINUATION_TEXT,
+  GOAL_CONTINUATION_WARNING,
+  isGoalContinuation,
+  steerableItems,
   canSendText,
   AGENT_MESSAGE_QUEUED_TEXT,
   isAgentMessage,
@@ -163,5 +167,30 @@ describe('settledNoticeText（#884）', () => {
     expect(settledNoticeText('exploded')).toBe('背景子代理已結束');
     expect(settledNoticeText(7)).toBe('背景子代理已結束');
     expect(SETTLED_NOTICE_UNKNOWN_TEXT).not.toBe(SETTLED_NOTICE_TEXT.completed);
+  });
+});
+
+describe('目標續行的預約（#638）', () => {
+  const human: WireQueuedInput = { id: 'h', text: '我說的', source: { kind: 'user' } };
+  const goal: WireQueuedInput = { id: 'g', text: '給模型的續行提示詞', source: { kind: 'goal' } };
+
+  it('只有 source.kind 是 goal 的才算；文字像不像不看', () => {
+    expect(isGoalContinuation(goal)).toBe(true);
+    expect(isGoalContinuation(human)).toBe(false);
+    const lookalike: WireQueuedInput = { ...human, text: GOAL_CONTINUATION_TEXT };
+    expect(isGoalContinuation(lookalike)).toBe(false);
+  });
+
+  it('整批插話只收人排的：目標續行濾掉，順序不變', () => {
+    expect(steerableItems([human, goal, { ...human, id: 'h2' }]).map((item) => item.id)).toEqual([
+      'h',
+      'h2',
+    ]);
+    expect(steerableItems([goal])).toEqual([]);
+  });
+
+  it('措辭釘死：名字與後果各一句', () => {
+    expect(GOAL_CONTINUATION_TEXT).toBe('目標續行');
+    expect(GOAL_CONTINUATION_WARNING).toBe('刪除或編輯會暫停目標');
   });
 });

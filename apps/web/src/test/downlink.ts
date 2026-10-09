@@ -140,6 +140,19 @@ export function fakeDownlink() {
     return id;
   }
 
+  /** 排程器放一件目標續行的預約（#638）：`source.kind` 是 `goal`，排在隊尾，不是人說的。回給呼叫端的是項目 id。 */
+  function acceptGoal(threadId: string, text: string): string {
+    runs += 1;
+    const id = `goal-${runs}`;
+    const queue = [
+      ...(queues.get(threadId) ?? []),
+      { id, text, source: { kind: 'goal' as const } },
+    ];
+    queues.set(threadId, queue);
+    push(threadId, [inboxFrame({ items: queue, nextStep: steers.get(threadId) ?? [] })]);
+    return id;
+  }
+
   /**
    * 伺服器收下一句插話（`run.start` 帶 `mode: 'steer'`，#710），這一輪還收插話：排進 `next-step`，推一顆
    * `inbox`。回給呼叫端的 `run_id` 就是項目 id。什麼時候被領走由測試自己叫 {@link claimSteers}。
@@ -187,6 +200,10 @@ export function fakeDownlink() {
         return { type: 'error', id: 4, error: STEER_UNAVAILABLE, message: '這一輪不收插話了' };
       }
       const moved = queue.find((item) => item.id === params.item_id)!;
+      // 目標續行的預約不能改成插話（#638）：照 harness 回 `steer_unavailable`。
+      if (moved.source.kind === 'goal') {
+        return { type: 'error', id: 4, error: STEER_UNAVAILABLE, message: '目標續行不能改成插話' };
+      }
       const rest = queue.filter((item) => item.id !== params.item_id);
       const nextStep = [...(steers.get(threadId) ?? []), moved];
       queues.set(threadId, rest);
@@ -208,6 +225,7 @@ export function fakeDownlink() {
     push,
     accept,
     acceptSteer,
+    acceptGoal,
     claimSteers,
     closeSteer,
     update,
