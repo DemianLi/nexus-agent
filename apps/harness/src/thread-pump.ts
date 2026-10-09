@@ -119,6 +119,7 @@ import {
   channelOfMethod,
   DELEGATION_TOOL_NAMES,
   eventId,
+  MESSAGE_DISCARD,
   SessionReferenceError,
   SUBAGENT_STATUS,
 } from '@nexus/wire';
@@ -839,6 +840,11 @@ interface CurrentRun {
   reasoning: string;
   /** root 有一則回覆講到一半。 */
   replyOpen: boolean;
+  /**
+   * 講到一半那則回覆所屬的模型呼叫（它的 `model/start` 的 `seq`，#1021）。整次重打時下一次嘗試的 `message-start` 到來，
+   * 作廢的那則要記回這一次，見 {@link ThreadPump.#abandonSupersededReply}。
+   */
+  replyModelCall: number | undefined;
   /**
    * root 上最近一則**還沒落進日誌**的回覆，給新接上的下行補送（[#953](https://github.com/DemianLi/nexus-agent/issues/953)
    * 第二刀）。跟 {@link partial} 分開：它撐到 `assistant/message` 落盤才放掉，不是撐到 `message-finish`（量過，
@@ -2551,6 +2557,7 @@ export class ThreadPump {
       partial: '',
       reasoning: '',
       replyOpen: false,
+      replyModelCall: undefined,
       reply: undefined,
       stopped: false,
       maxTokens: false,
@@ -2602,6 +2609,7 @@ export class ThreadPump {
       // **在第一顆封包之前**：投影裡的 promise 一建立就可能被 reject，晚掛就漏（#346）。
       markProjectionsHandled(run);
       for await (const raw of run) {
+        this.#abandonSupersededReply(current, raw);
         trackRootReply(current, raw);
         trackUnsettledReply(current, raw);
         for (const event of this.#translate(raw)) {
@@ -2659,6 +2667,78 @@ export class ThreadPump {
   }
 
   /**
+   * 串流中段出錯、整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)，`@nexus/core` 的 `stream-retry.ts`）時，
+   * 上一次嘗試吐了一半的 root 回覆作廢：新的一則 `message-start` 到來，而上一則還沒收尾（沒有 `message-finish`）。
+   *
+   * 做兩件事，**都在新那則的 frame 廣播之前**：①日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型，`ignorable`），
+   * ②送一顆 `message-discard` 讓畫面把上一則擦掉。判準是「另一則 root 的 `message-start` 來得比上一則的 `message-finish` 早」
+   * ——正常流程一則回覆一定先收尾才開下一則，所以不會誤判。
+   *
+   * **只管 root。** 子代理的回覆在更深的 namespace、各有各的 `message-start`；它們的重打（共用同一個 slot）不擦已經畫出去的字，
+   * 代價是畫面上多一則斷尾的子代理回覆，跟重打之前一樣。
+   *
+   * 順手記下這一則回覆屬於哪次呼叫（下一次作廢時要用）。
+   */
+  #abandonSupersededReply(current: CurrentRun, raw: RawProtocolEvent): void {
+    if (raw.method !== 'messages' || raw.params.namespace.length > 1) return;
+    const data = raw.params.data as { event?: string; role?: string } | null;
+    if (data?.event !== 'message-start' || data.role === 'human') return;
+    if (current.replyOpen) this.#discardOpenReply(current);
+    current.replyModelCall = lastModelCall(this.#sessions.root);
+  }
+
+  /**
+   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型，`ignorable`），線上送
+   * `message-discard` 讓畫面把它擦掉，並把這一則從「講到一半」的追蹤裡拿掉。沒有講到一半的就什麼都不做。
+   */
+  #discardOpenReply(current: CurrentRun): void {
+    const previous = current.reply;
+    if (!current.replyOpen || previous === undefined || previous.finish !== undefined) return;
+    const reasoning = current.reasoning;
+    const text = current.partial;
+    const liveId = (previous.start as { id?: unknown }).id;
+    const abandoned = new AIMessage({
+      ...(typeof liveId === 'string' && liveId !== '' ? { id: liveId } : {}),
+      content:
+        reasoning.trim() === ''
+          ? text
+          : [
+              { type: 'reasoning', reasoning },
+              ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+            ],
+    });
+    try {
+      this.#sessions.root.append(
+        'assistant/attempt',
+        withModelCall({ message: toLoggedMessage(abandoned) }, current.replyModelCall),
+        { ignorable: true },
+      );
+    } catch {
+      // 紀錄是附帶的：寫不進去不能讓重打的那一輪跟著失敗，畫面照樣擦。
+    }
+    this.#presentCustom({ name: MESSAGE_DISCARD, payload: { messageId: previous.key } });
+    current.reply = undefined;
+    current.partial = '';
+    current.reasoning = '';
+    current.replyOpen = false;
+  }
+
+  /**
+   * 講到一半的那則回覆，所屬的那次呼叫是不是**已經失敗收尾**（`model/end` 帶 `outcome: 'error'`）。是的話，這一則是一次死掉的
+   * 嘗試：它只可能在等重打的退避裡被留在畫面上——使用者在那時按停止，不能把它當「被我打斷的半段」存回對話。
+   */
+  #openReplyBelongsToFailedCall(current: CurrentRun): boolean {
+    const call = current.replyModelCall;
+    if (call === undefined) return false;
+    return this.#sessions.root.events.some(
+      (event) =>
+        event.type === 'model/end' &&
+        (event.data as SessionEventMap['model/end']).modelCall === call &&
+        (event.data as SessionEventMap['model/end']).outcome === 'error',
+    );
+  }
+
+  /**
    * 模型講到一半被切斷：把使用者看到的那半段寫回對話，帶 {@link INTERRUPTED_REPLY_MARKER}
    * （#265 的 Q11）。一個字都沒送出就不寫——同 dsh，沒有看得見的內容就不算一則回覆。
    *
@@ -2677,6 +2757,11 @@ export class ThreadPump {
    * 一側照樣拿得到這半段。它落在被切斷那次呼叫的 `model/end` 之後——寫入點看到的是拋錯，不是回覆。
    */
   async #keepInterruptedReply(current: CurrentRun): Promise<void> {
+    // 整次重打的退避期間被停止（#520）：那則是上一次失敗的嘗試，同 dsh——失敗當下就記成 `assistant/attempt`，停止時不留。
+    if (current.replyOpen && this.#openReplyBelongsToFailedCall(current)) {
+      this.#discardOpenReply(current);
+      return;
+    }
     const reasoning = current.reasoning.trim() === '' ? '' : current.reasoning;
     const text = current.partial.trim() === '' ? '' : current.partial;
     if (!current.replyOpen || (reasoning === '' && text === '')) return;
