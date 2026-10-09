@@ -3,7 +3,8 @@
  * shadcn CLI 4.21.0 `shadcn add input-group textarea command popover --overwrite`。裝進來就是我們的原始碼，
  * 不靠重跑 `shadcn add` 更新。
  * 改過的地方（照原型 tag `proto-375-design-language`）：border＋`shadow-xs` 換成 `bg-card`＋`shadow-material`、
- * 圓角 `rounded-lg`（§5）；focus 用外框線、錯誤用 inset 陰影。另外點 addon 的空白處時，registry 只找 `input`
+ * 圓角 `rounded-lg`（§5）；focus 用外框線、錯誤用 inset 陰影。外框要明寫 `outline-solid`：群組自帶的 `outline-none`
+ * 會把 `--tw-outline-style` 設成 none，只寫 `outline-2` 時樣式沿用 none、整圈畫不出來（#1279 實機量到）。另外點 addon 的空白處時，registry 只找 `input`
  * 來 focus，這裡連 `textarea` 一起找（輸入框用的是 textarea）。
  */
 import * as React from 'react';
@@ -30,7 +31,7 @@ function InputGroup({ className, ...props }: React.ComponentProps<'div'>) {
         'has-[>[data-align=block-end]]:h-auto has-[>[data-align=block-end]]:flex-col has-[>[data-align=block-end]]:[&>input]:pt-3',
 
         // Focus state.
-        'has-[[data-slot=input-group-control]:focus-visible]:outline-2 has-[[data-slot=input-group-control]:focus-visible]:outline-offset-2 has-[[data-slot=input-group-control]:focus-visible]:outline-ring',
+        'has-[[data-slot=input-group-control]:focus-visible]:outline-solid has-[[data-slot=input-group-control]:focus-visible]:outline-2 has-[[data-slot=input-group-control]:focus-visible]:outline-offset-2 has-[[data-slot=input-group-control]:focus-visible]:outline-ring',
 
         // Error state.
         'has-[[data-slot][aria-invalid=true]]:shadow-[inset_0_0_0_1px_var(--destructive)]',

@@ -15,10 +15,11 @@
  * 就不畫預覽鈕，`download` 沒給就不畫下載鈕，複製路徑一直都在——它不需要讀檔。
  */
 
-import { Check, ChevronDown, ChevronUp, Copy, Eye, FileText } from 'lucide-react';
+import { Check, Copy, Eye, FileText } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
+import { Chevron } from '@/components/chevron';
 import { Surface } from '@/components/surface';
 import { DownloadIconButton } from '@/components/deliverable/download-button';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
@@ -145,7 +146,7 @@ export function DeliverablesCard({
           onClick={() => setExpanded((value) => !value)}
         >
           {expanded ? '收起' : `顯示全部 ${files.length} 個`}
-          {expanded ? <ChevronUp /> : <ChevronDown />}
+          <Chevron open={expanded} />
         </Button>
       )}
     </section>

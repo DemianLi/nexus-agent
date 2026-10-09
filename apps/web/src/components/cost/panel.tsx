@@ -31,13 +31,15 @@ import type {
   WireSessionStats,
   WireTokenUsage,
 } from '@nexus/wire';
-import { ChevronDown, LocateFixed, RefreshCw } from 'lucide-react';
+import { LocateFixed, RefreshCw } from 'lucide-react';
 import { memo } from 'react';
 
+import { Chevron } from '@/components/chevron';
+import { RowTrigger } from '@/components/row-trigger';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import type { PanelBodyProps } from '@/lib/right-sidebar-api';
 import { Button } from '@/components/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import { Rows } from '@/components/cost/usage-rows';
 import { useStableNames } from '@/hooks/use-stable-names';
 import { useSubagentUsages } from '@/hooks/use-subagent-usages';
@@ -274,10 +276,10 @@ function Distributions({ meter }: { meter: TokenMeterView }) {
   if (models.length === 0 && tools.length === 0) return null;
   return (
     <Collapsible data-testid="cost-distributions">
-      <CollapsibleTrigger className="text-muted-foreground flex min-h-11 w-full items-center justify-between px-2 text-tip lg:min-h-9">
+      <RowTrigger fit="bare" className="text-muted-foreground justify-between text-tip lg:min-h-9">
         依模型、依工具
-        <ChevronDown aria-hidden className="size-4" />
-      </CollapsibleTrigger>
+        <Chevron />
+      </RowTrigger>
       <CollapsibleContent className="space-y-2 px-2 pb-2 text-body">
         {models.length > 0 && <Rows rows={models} />}
         {tools.length > 0 && <Rows rows={tools} />}
@@ -324,12 +326,15 @@ function Calibers({ rows }: { rows: readonly FieldRow[] }) {
   const fields = new Map<string, string>();
   for (const [field, label] of rows) if (!fields.has(field)) fields.set(field, label);
   return (
-    <Collapsible data-testid="cost-calibers" className="mt-2 px-2">
-      <CollapsibleTrigger className="text-muted-foreground flex min-h-11 w-full items-center justify-between text-tip font-medium lg:min-h-9">
+    <Collapsible data-testid="cost-calibers" className="mt-2">
+      <RowTrigger
+        fit="bare"
+        className="text-muted-foreground justify-between text-tip font-medium lg:min-h-9"
+      >
         每個數字的口徑（{fields.size} 項）
-        <ChevronDown aria-hidden className="size-4" />
-      </CollapsibleTrigger>
-      <CollapsibleContent>
+        <Chevron />
+      </RowTrigger>
+      <CollapsibleContent className="px-2">
         <ul className="text-muted-foreground flex list-disc flex-col gap-1 pb-2 pl-4 text-tip">
           {[...fields].map(([field, label]) => (
             <li key={field} data-caliber={field}>

@@ -10,10 +10,11 @@
  * 不做 `changes.open`（在 Host 上開檔，#443 決議 1）。
  */
 
-import { ChevronDown, ChevronUp, FileDiff } from 'lucide-react';
+import { FileDiff } from 'lucide-react';
 import { useEffect, useState, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
 
+import { Chevron } from '@/components/chevron';
 import { Surface } from '@/components/surface';
 import { Counts, FileCounts } from '@/components/changes/counts';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
@@ -25,7 +26,7 @@ export const COLLAPSED_ROWS = 3;
 
 /** 可以點的標頭與列：跟工具卡的標頭同一套 chip 階梯。 */
 const PRESSABLE =
-  'hover:bg-chip-hover active:bg-chip-pressed focus-visible:ring-ring/50 rounded-lg text-left outline-none transition-colors duration-(--duration-quick) focus-visible:ring-[3px]';
+  'hover:bg-chip-hover active:bg-chip-pressed rounded-lg text-left transition-colors duration-(--duration-quick)';
 
 export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesStores }) {
   const { summary: store } = changes;
@@ -83,7 +84,7 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
               onClick={() => setExpanded((value) => !value)}
             >
               {expanded ? '收起' : `顯示全部 ${files.length} 個`}
-              {expanded ? <ChevronUp /> : <ChevronDown />}
+              <Chevron open={expanded} />
             </Button>
           )}
           {unlisted > 0 && (

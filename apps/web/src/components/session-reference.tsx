@@ -46,7 +46,7 @@ export function ReferencedText({
               key={index}
               type="button"
               data-session-reference={sessionId}
-              className={`${CHIP} hover:bg-foreground/20 focus-visible:ring-ring cursor-pointer transition-colors outline-none focus-visible:ring-2`}
+              className={`${CHIP} hover:bg-foreground/20 cursor-pointer transition-colors`}
               title="切到這條會話"
               onClick={() => links.open(sessionId)}
             >

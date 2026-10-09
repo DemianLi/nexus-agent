@@ -1,7 +1,8 @@
 import type { ConversationStatus, WireTodoItem } from '@nexus/wire';
-import { ChevronDown, ListTodo } from 'lucide-react';
+import { ListTodo } from 'lucide-react';
 import { useState } from 'react';
 
+import { Chevron } from '@/components/chevron';
 import { Surface } from '@/components/surface';
 import { RowTrigger } from '@/components/row-trigger';
 import { TodoList } from '@/components/todo/list';
@@ -51,10 +52,7 @@ export function TodoPanel({
               </span>
             )}
           </span>
-          <ChevronDown
-            aria-hidden
-            className="size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
-          />
+          <Chevron />
         </RowTrigger>
         <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
           <div className="m-1 mt-0 max-h-60 overflow-y-auto" data-testid="todo-panel-scroll">

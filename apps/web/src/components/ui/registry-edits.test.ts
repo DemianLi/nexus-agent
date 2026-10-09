@@ -11,6 +11,12 @@ const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf
 const code = (source: string) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
 describe('registry 檔的改動還在', () => {
+  test('input-group 的焦點外框明寫 outline-solid：自帶的 outline-none 會把樣式記成 none（#1279）', () => {
+    expect(code(read('./input-group.tsx'))).toContain(
+      'has-[[data-slot=input-group-control]:focus-visible]:outline-solid',
+    );
+  });
+
   test('message-scroller 的 item 沒有 content-visibility（會把陰影與光暈切成直角，§9）', () => {
     expect(code(read('./message-scroller.tsx'))).not.toMatch(/content-visibility/);
   });

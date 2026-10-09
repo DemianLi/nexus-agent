@@ -1,7 +1,9 @@
-import { Brain, ChevronDown } from 'lucide-react';
+import { Brain } from 'lucide-react';
 
+import { Chevron } from '@/components/chevron';
+import { RowTrigger } from '@/components/row-trigger';
 import { MarkdownText } from '@/components/markdown-text';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import { reasoningSummary } from '@/lib/reasoning-view';
 
 /**
@@ -19,7 +21,7 @@ export function ReasoningRow({ text, running }: { text: string; running: boolean
   const summary = reasoningSummary(text, running);
   return (
     <Collapsible data-testid="reasoning-row" data-running={running || undefined}>
-      <CollapsibleTrigger className="group text-muted-foreground hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-xl px-2 text-left text-tip transition-colors duration-(--duration-quick)">
+      <RowTrigger fit="bare" className="text-muted-foreground text-tip">
         <Brain aria-hidden className="size-4 shrink-0" />
         <span className={running ? 'text-shimmer shrink-0' : 'shrink-0'}>
           {running ? '思考中' : '思考過程'}
@@ -50,11 +52,8 @@ export function ReasoningRow({ text, running }: { text: string; running: boolean
             )}
           </>
         )}
-        <ChevronDown
-          aria-hidden
-          className="ml-auto size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
-        />
-      </CollapsibleTrigger>
+        <Chevron className="ml-auto" />
+      </RowTrigger>
       <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
         <div className="text-muted-foreground pt-1 pr-2 pb-2 pl-8 text-tip">
           <MarkdownText text={text} streaming={running} />

@@ -9,12 +9,17 @@ import { describe, expect, test } from 'vitest';
  * 元件的 className 越過它就報錯。守的是**原始碼裡的字串字面值**（className、cva 的各段、`cn(...)` 的參數都是字串），
  * 做法同 `border-shadow.test.ts`；先把註解拿掉，註解裡講到類別名不算。
  *
- * 五條：
+ * 八條：
  * 1. **不用 Tailwind 預設色板**（`text-red-500`、`bg-white`、`bg-black/50`…）：顏色只走語意 token（`bg-card`、`text-destructive`…）。
  * 2. **字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`**：不用 `text-xs`／`text-sm`／`text-base`…，也不寫 `text-[…px]`。
  * 3. **圓角只走階梯**（`rounded-sm`…`rounded-3xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
  * 4. **不硬寫顏色字面值**：`#fff`、`rgb(…)`、沒有 `var(…)` 的 `oklch(…)`／`color-mix(…)`。從 token 推出來的（`oklch(from var(--primary) …)`）可以。
  * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`、`bg-card`＋`shadow-material`＋`rounded-3xl`，或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
+ * 6. **展開箭頭用 `Chevron`**（#1279）：同一個字串裡有 `transition-transform`＋`rotate-*`，或跟著 `data-state=open` 轉的 `rotate-*`，就是又手寫了一顆。
+ * 7. **可展開列用 `RowTrigger`**（#1279）：同一個字串裡有 `hover:bg-chip-hover`＋`active:bg-chip-pressed`＋`w-full`＋`text-left`，就是又手寫了一列。
+ * 8. **`ui/` 以外不寫 `focus-visible:ring-*`**（#1279）：`theme.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
+ *    再配上 `outline-none` 就是**完全看不到焦點**（#1279 之前有六處）。要改外框位置用 `focus-visible:-outline-offset-2` 之類，不要換成 ring。
+ *    `ui/` 的 registry 原文不在這條：那裡的 ring 由 `theme.css` 統一處理。
  *
  * **例外只能列在 {@link ALLOWED}**，每一條寫明理由；列了卻再也沒有命中的條目會報錯，所以例外只會變少、不會悄悄留著。
  * 沒量的：間距與寬高的任意值（`max-h-[300px]`、`top-[50%]` 都是版面值，不是系統值）、`styles/*.css`（那裡就是 token 層）。
@@ -86,7 +91,10 @@ const HEX_WHOLE = /^#[0-9a-fA-F]{3,8}$/;
 const HEX_IN_CLASS = /-\[#[0-9a-fA-F]{3,8}\]/;
 const COLOR_FUNCTION = /\b(?:oklch|oklab|rgba?|hsla?|hwb|lab|lch|color-mix)\(/;
 
-type Rule = '色板' | '字級' | '圓角' | '色碼' | '表面';
+type Rule = '色板' | '字級' | '圓角' | '色碼' | '表面' | '箭頭' | '可展開列' | '焦點';
+
+const ROTATE = /^-?rotate-\d+$/;
+const ROTATE_ON_OPEN = /state=open\]?\]?(?:>[^:]*)?:-?rotate-\d+$/;
 
 function rulesBroken(text: string): { rule: Rule; what: string }[] {
   const found: { rule: Rule; what: string }[] = [];
@@ -104,8 +112,27 @@ function rulesBroken(text: string): { rule: Rule; what: string }[] {
   if (utilities.has('bg-card') && utilities.has('border') && utilities.has('rounded-3xl')) {
     found.push({ rule: '表面', what: 'bg-card border rounded-3xl' });
   }
+  const tokens = new Set(text.split(/\s+/));
+  if (utilities.has('transition-transform') && [...utilities].some((u) => ROTATE.test(u))) {
+    found.push({ rule: '箭頭', what: 'transition-transform rotate-*' });
+  }
+  if (
+    tokens.has('hover:bg-chip-hover') &&
+    tokens.has('active:bg-chip-pressed') &&
+    utilities.has('w-full') &&
+    utilities.has('text-left')
+  ) {
+    found.push({
+      rule: '可展開列',
+      what: 'hover:bg-chip-hover active:bg-chip-pressed w-full text-left',
+    });
+  }
   for (const token of text.split(/\s+/)) {
     const u = utility(token);
+    if (ROTATE_ON_OPEN.test(token)) found.push({ rule: '箭頭', what: token });
+    if (/(?:^|:)focus-visible:/.test(token) && /^ring(?:-|$)/.test(u)) {
+      found.push({ rule: '焦點', what: token });
+    }
     if (RAW_PALETTE.test(u)) found.push({ rule: '色板', what: u });
     else if (RAW_TEXT_SIZE.test(u)) found.push({ rule: '字級', what: u });
     else if (RAW_RADIUS.test(u)) found.push({ rule: '圓角', what: u });
@@ -130,6 +157,16 @@ interface Allowed {
  */
 const ALLOWED: readonly Allowed[] = [
   // 自己的元件。
+  {
+    file: 'components/chevron.tsx',
+    what: 'group-data-[state=open]:rotate-180',
+    why: '`Chevron` 本身：全站唯一該寫展開箭頭旋轉的地方',
+  },
+  {
+    file: 'components/row-trigger.tsx',
+    what: 'hover:bg-chip-hover active:bg-chip-pressed w-full text-left',
+    why: '`RowTrigger` 本身：全站唯一該寫可展開列配方的地方',
+  },
   {
     file: 'components/surface.tsx',
     what: 'bg-stage shadow-stage',
@@ -228,12 +265,14 @@ interface Violation {
 function scan(files: string[]): Violation[] {
   const found: Violation[] = [];
   for (const file of files) {
+    const inRegistry = relative(SRC, file).startsWith('components/ui/');
     const source = withoutComments(readFileSync(file, 'utf8'));
     for (const match of source.matchAll(/(['"`])((?:(?!\1)[^\\\n]|\\.)*)\1/g)) {
       const broken = rulesBroken(match[2] ?? '');
       if (broken.length === 0) continue;
       const line = source.slice(0, match.index).split('\n').length;
       for (const { rule, what } of broken) {
+        if (rule === '焦點' && inRegistry) continue;
         found.push({ file: relative(SRC, file), line, rule, what });
       }
     }
@@ -343,5 +382,47 @@ describe('判準', () => {
     expect(withoutComments("const c = 'https://x.test/a';").includes('https://x.test/a')).toBe(
       true,
     );
+  });
+
+  test('展開箭頭：手寫的旋轉轉場與跟著 data-state 轉的都擋；不轉場、不跟展開走的旋轉不擋', () => {
+    expect(
+      rules(
+        'size-4 transition-transform duration-(--duration-fast) group-data-[state=open]:rotate-180',
+      ),
+    ).toEqual(['箭頭:transition-transform rotate-*', '箭頭:group-data-[state=open]:rotate-180']);
+    expect(rules('[&[data-state=open]>svg]:rotate-90')).toEqual([
+      '箭頭:[&[data-state=open]>svg]:rotate-90',
+    ]);
+    expect(rules('transition-transform rotate-180')).toEqual([
+      '箭頭:transition-transform rotate-*',
+    ]);
+    expect(rules('group-data-[side=right]:rotate-180')).toEqual([]);
+    expect(rules('transition-transform scale-95')).toEqual([]);
+  });
+
+  test('可展開列：四樣湊齊才算，按鈕的 hover 底色不算', () => {
+    expect(
+      rules('group hover:bg-chip-hover active:bg-chip-pressed flex w-full rounded-xl text-left'),
+    ).toEqual(['可展開列:hover:bg-chip-hover active:bg-chip-pressed w-full text-left']);
+    expect(rules('hover:bg-chip-hover active:bg-chip-pressed size-11 rounded-full')).toEqual([]);
+    expect(rules('hover:bg-chip-hover active:bg-chip-pressed rounded-lg text-left')).toEqual([]);
+  });
+
+  test('焦點：focus-visible 下的 ring 都擋，outline 與非焦點的 ring 不擋', () => {
+    expect(rules('outline-none focus-visible:ring-2')).toEqual(['焦點:focus-visible:ring-2']);
+    expect(rules('focus-visible:ring-ring/50 focus-visible:ring-[3px]')).toEqual([
+      '焦點:focus-visible:ring-ring/50',
+      '焦點:focus-visible:ring-[3px]',
+    ]);
+    expect(rules('group-focus-visible:ring-2')).toEqual([]);
+    expect(rules('focus-visible:-outline-offset-2 ring-ring ring-2')).toEqual([]);
+  });
+
+  test('焦點那條不管 ui/ 的 registry 原文：那裡的 ring 由 theme.css 統一處理', () => {
+    const registry = scan(files.filter((f) => relative(SRC, f).startsWith('components/ui/')));
+    expect(registry.filter((v) => v.rule === '焦點')).toEqual([]);
+    expect(
+      readFileSync(join(SRC, 'components/ui/input.tsx'), 'utf8').includes('focus-visible:ring-'),
+    ).toBe(true);
   });
 });

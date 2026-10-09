@@ -345,7 +345,8 @@ function ResizeHandle() {
       aria-valuemax={room === undefined ? width : Math.max(width, clampPanelWidth(room, room))}
       aria-valuenow={width}
       tabIndex={0}
-      className="hover:bg-border focus-visible:bg-ring absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize outline-none transition-colors duration-(--duration-quick)"
+      data-focus="custom"
+      className="hover:bg-border focus-visible:bg-ring absolute inset-y-0 -left-1 z-10 w-2 cursor-col-resize transition-colors duration-(--duration-quick)"
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -638,7 +639,7 @@ function TabChip({
         aria-keyshortcuts="Delete"
         tabIndex={selected ? 0 : -1}
         title={detail}
-        className="focus-visible:ring-ring/50 flex h-full min-w-0 items-center gap-2 rounded-lg pr-1 pl-3 text-body outline-none focus-visible:ring-[3px]"
+        className="flex h-full min-w-0 items-center gap-2 rounded-lg pr-1 pl-3 text-body focus-visible:-outline-offset-2"
         onClick={onSelect}
         onKeyDown={onKeyDown}
       >
