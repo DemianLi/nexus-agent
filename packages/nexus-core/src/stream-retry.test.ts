@@ -8,14 +8,16 @@ import {
   createStreamRetryMiddleware,
   noteStreamFailure,
   streamFailureReporter,
+  streamRetryDelayMs,
 } from './stream-retry.js';
+import type { StreamRetryOptions } from './stream-retry.js';
 import { TURN_CANCEL_CONFIG_KEY } from './turn-cancel.js';
 
 type Handler = (request: unknown) => Promise<unknown>;
 
 /** 把 middleware 的 `wrapModelCall` 當函式叫。`signal` 是這一輪的中止訊號（有的話）。 */
 function callWith(
-  options: { maxRetries: number; baseDelayMs: number },
+  options: StreamRetryOptions,
   handler: Handler,
   signal?: AbortSignal,
 ): Promise<unknown> {
@@ -163,7 +165,7 @@ describe('退避與中止', () => {
 
   it('退避是 base、2×base、4×base……', async () => {
     const stamps: number[] = [];
-    const run = callWith({ maxRetries: 3, baseDelayMs: 100 }, async () => {
+    const run = callWith({ maxRetries: 3, baseDelayMs: 100, jitterRatio: 0 }, async () => {
       stamps.push(Date.now());
       noteStreamFailure(RETRYABLE);
       throw new Error('斷了');
@@ -212,5 +214,31 @@ describe('退避與中止', () => {
       ),
     ).rejects.toThrow('被切斷');
     expect(calls).toBe(1);
+  });
+});
+
+describe('退避的形狀（照 dsh 的 retry-policy.ts:14-17）', () => {
+  const at = (random: number) => () => random;
+
+  it('倍增，單次封頂在 maxDelayMs（預設 10 秒）', () => {
+    const options = { maxRetries: 9, baseDelayMs: 1_000, jitterRatio: 0 };
+    expect([0, 1, 2, 3, 4, 5].map((n) => streamRetryDelayMs(options, n))).toEqual([
+      1_000, 2_000, 4_000, 8_000, 10_000, 10_000,
+    ]);
+    expect(streamRetryDelayMs({ ...options, maxDelayMs: 3_000 }, 3)).toBe(3_000);
+  });
+
+  it('抖動對稱：亂數 0 → 乘 1 - ratio，亂數 0.5 → 不變，亂數趨近 1 → 乘 1 + ratio；預設抖動 0.1', () => {
+    const base = { maxRetries: 1, baseDelayMs: 1_000, jitterRatio: 0.2 };
+    expect(streamRetryDelayMs({ ...base, random: at(0) }, 0)).toBe(800);
+    expect(streamRetryDelayMs({ ...base, random: at(0.5) }, 0)).toBe(1_000);
+    expect(streamRetryDelayMs({ ...base, random: at(0.999999) }, 0)).toBe(1_200);
+    const { jitterRatio: _omitted, ...withDefault } = base;
+    expect(streamRetryDelayMs({ ...withDefault, random: at(0) }, 0)).toBe(900);
+  });
+
+  it('抖動是套在封頂之後：封頂的那幾次一樣有抖動，不會超過 maxDelayMs × (1 + ratio)', () => {
+    const options = { maxRetries: 9, baseDelayMs: 1_000, maxDelayMs: 2_000, jitterRatio: 0.1 };
+    expect(streamRetryDelayMs({ ...options, random: at(0.999999) }, 6)).toBe(2_200);
   });
 });

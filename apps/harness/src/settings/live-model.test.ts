@@ -50,8 +50,6 @@ import {
   liveModelPlugin,
   MAX_LIVE_RETRIES,
   MAX_LIVE_TIMEOUT_MS,
-  MAX_STREAM_RETRY_BASE_MS,
-  MAX_STREAM_RETRY_MAX,
 } from './live-model.js';
 import type { LiveModelConfig } from './live-model.js';
 import { startupSetting } from './startup.js';
@@ -77,7 +75,7 @@ const OVERRIDE: Omit<LiveModelConfig, 'baseUrl'> = {
   models: [OVERRIDE_ENTRY],
   timeoutMs: 4321,
   maxRetries: 2,
-  streamRetry: { maxRetries: 4, baseDelayMs: 50 },
+  streamRetry: { maxRetries: 4, baseDelayMs: 50, maxDelayMs: 500, jitterRatio: 0 },
 };
 
 /** 覆寫那一筆在標題請求上關推理的 body。 */
@@ -102,23 +100,34 @@ describe('live-model 的 schema', () => {
       models: [DEFAULT_LIVE_MODEL_ENTRY],
       timeoutMs: DEFAULT_LIVE_TIMEOUT_MS,
       maxRetries: DEFAULT_LIVE_MAX_RETRIES,
-      streamRetry: { maxRetries: 2, baseDelayMs: 1_000 },
+      streamRetry: { maxRetries: 2, baseDelayMs: 1_000, maxDelayMs: 10_000, jitterRatio: 0.1 },
     });
   });
 
-  /** #520：串流中段整次重打的預算。出廠值寫成字面值，上限是為了不讓一次呼叫安靜太久。 */
-  it('streamRetry：出廠 2 次、1 秒起；0 次合法（等於關掉）；超過上限、小數、未知欄位都拒', () => {
+  /** #520：串流中段整次重打的預算。出廠值寫成字面值；退避的形狀（封頂、抖動）照 dsh 的 `retry-policy.ts:14-17`。 */
+  it('streamRetry：出廠 2 次、1 秒起、封頂 10 秒、抖動 0.1；0 次合法（等於關掉）；小數、負數、抖動過界、未知欄位都拒', () => {
     const parse = (streamRetry: unknown) => liveModelConfigSchema.parse({ streamRetry });
-    expect(parse({}).streamRetry).toEqual({ maxRetries: 2, baseDelayMs: 1_000 });
-    expect(parse({ maxRetries: 0 }).streamRetry).toEqual({ maxRetries: 0, baseDelayMs: 1_000 });
-    expect(parse({ maxRetries: MAX_STREAM_RETRY_MAX }).streamRetry.maxRetries).toBe(5);
-    expect(parse({ baseDelayMs: MAX_STREAM_RETRY_BASE_MS }).streamRetry.baseDelayMs).toBe(30_000);
+    expect(parse({}).streamRetry).toEqual({
+      maxRetries: 2,
+      baseDelayMs: 1_000,
+      maxDelayMs: 10_000,
+      jitterRatio: 0.1,
+    });
+    expect(parse({ maxRetries: 0 }).streamRetry.maxRetries).toBe(0);
+    expect(parse({ maxRetries: 50 }).streamRetry.maxRetries).toBe(50);
+    expect(parse({ jitterRatio: 0 }).streamRetry.jitterRatio).toBe(0);
+    expect(parse({ jitterRatio: 1 }).streamRetry.jitterRatio).toBe(1);
+    expect(parse({ maxDelayMs: MAX_LIVE_TIMEOUT_MS }).streamRetry.maxDelayMs).toBe(
+      MAX_LIVE_TIMEOUT_MS,
+    );
     for (const bad of [
-      { maxRetries: MAX_STREAM_RETRY_MAX + 1 },
       { maxRetries: -1 },
       { maxRetries: 1.5 },
-      { baseDelayMs: MAX_STREAM_RETRY_BASE_MS + 1 },
       { baseDelayMs: -1 },
+      { baseDelayMs: MAX_LIVE_TIMEOUT_MS + 1 },
+      { maxDelayMs: MAX_LIVE_TIMEOUT_MS + 1 },
+      { jitterRatio: 1.1 },
+      { jitterRatio: -0.1 },
       { jitter: 0.2 },
     ]) {
       expect(() => parse(bad), JSON.stringify(bad)).toThrow();

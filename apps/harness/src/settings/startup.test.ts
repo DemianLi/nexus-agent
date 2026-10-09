@@ -295,7 +295,7 @@ describe('startupSetting', () => {
       modelId: 'nvidia/nemotron-3-super-120b-a12b',
       timeoutMs: 90000,
       maxRetries: 6,
-      streamRetry: { maxRetries: 2, baseDelayMs: 1000 },
+      streamRetry: { maxRetries: 2, baseDelayMs: 1000, maxDelayMs: 10000, jitterRatio: 0.1 },
       models: [
         {
           id: 'nvidia/nemotron-3-super-120b-a12b',

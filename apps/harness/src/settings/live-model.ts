@@ -113,14 +113,15 @@
  * `chat_template_kwargs`（今天的送法）。沒有量過兩者等價——這台機器沒有 key，量不了——所以保留今天的送法，見
  * `model-catalog.ts` 檔頭。量測與寫法在 `live-model.ts` 的 `DEFAULT_LIVE_MODEL_ENTRY`。
  *
- * ## 偏離五：串流中段的失敗整次重打，預算比 dsh 保守（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）
+ * ## 偏離五：串流中段的失敗整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）
  *
- * dsh 的 `TIMEOUT`、`TRANSPORT`、`SERVER` 都在預設可重試碼裡（`packages/llm/llm/src/retry-policy.ts:18`），中段失敗照樣整次重打，
+ * dsh 的 `TIMEOUT`、`TRANSPORT`、`SERVER` 都在預設可重試碼裡（`packages/llm/llm/src/retry-policy.ts:18-24`），中段失敗照樣整次重打，
  * 靠的是 `assistant/attempt` 這個載體宣告「那一次作廢」。我們同向：`@nexus/core` 的 `stream-retry.ts` 整次重打、日誌多一顆
- * `assistant/attempt`、web 收到 `message-discard` 擦掉作廢的那一則。**預算不照抄**：dsh 預設 5 次、500 毫秒起、上限 10 秒；
- * 這裡預設 2 次、1 秒起（1 秒、2 秒），因為每次重打都重付整個回覆的費用（輸入端有快取，輸出端沒有）。欄位有上限：次數
- * {@link MAX_STREAM_RETRY_MAX}、起點 {@link MAX_STREAM_RETRY_BASE_MS} 毫秒；退避是純倍增、沒有 dsh 的 `maxDelayMs` 與抖動。
- * 第一則事件**之前**的失敗不歸這一格管（SDK 層已經照 `maxRetries` 重試過，這裡再接就是乘法）。
+ * `assistant/attempt`、web 收到 `message-discard` 擦掉作廢的那一則。**退避的形狀照 dsh**：倍增、`maxDelayMs` 封頂 10 秒、
+ * `jitterRatio` 0.1（`:14-17`，`5badb15009a`），次數沒有另設上限（同 dsh，安全靠單次等待有界）。**只有兩個起始值不照抄**：
+ * 預設 2 次、1 秒起（dsh 是 5 次、500 毫秒），因為每次重打都重付整個回覆的費用；那是 #520 卡上 2026-10-06 拍板的，欄位都能調。
+ * 第一則事件**之前**的失敗不歸這一格管：SDK 層用 `maxRetries`（偏離二，p-retry 的退避，**不是同一套**——那一層 `AsyncCaller`
+ * 只收次數、退避寫死，帶不進 dsh 的上限與抖動）已經重試過，這裡再接就是乘法。
  *
  * ## 這一列關不掉
  *
@@ -137,6 +138,7 @@
 
 import { z } from 'zod';
 
+import { DEFAULT_STREAM_RETRY_JITTER_RATIO, DEFAULT_STREAM_RETRY_MAX_DELAY_MS } from '@nexus/core';
 import type { NexusPlugin, PluginRegistry } from '@nexus/core';
 
 import {
@@ -162,10 +164,6 @@ export const MAX_LIVE_RETRIES = 10;
 export const DEFAULT_STREAM_RETRY_MAX = 2;
 /** 出廠的串流中段重打退避起點（毫秒），之後每次加倍。 */
 export const DEFAULT_STREAM_RETRY_BASE_MS = 1_000;
-/** 串流中段重打次數的上限：每一次都重付整個回覆的費用，見檔頭「偏離五」。 */
-export const MAX_STREAM_RETRY_MAX = 5;
-/** 串流中段重打退避起點的上限（毫秒）。5 次 × 30 秒起點，累計等待最多 15.5 分鐘。 */
-export const MAX_STREAM_RETRY_BASE_MS = 30_000;
 
 /**
  * 是不是一個 HTTP(S) 的根：擋帳密、query、fragment。規則照 dsh，見檔頭「端點的規則照 dsh」。
@@ -211,22 +209,30 @@ export const liveModelConfigSchema = z
      */
     streamRetry: z
       .strictObject({
-        maxRetries: z
-          .number()
-          .int()
-          .min(0)
-          .max(MAX_STREAM_RETRY_MAX)
-          .default(DEFAULT_STREAM_RETRY_MAX),
+        /** 最多重打幾次（不含第一次）。沒有另外的上限，同 dsh：安全靠的是下面單次等待有界。 */
+        maxRetries: z.number().int().min(0).default(DEFAULT_STREAM_RETRY_MAX),
+        /** 第一次重打前等多久（毫秒），之後每次加倍。 */
         baseDelayMs: z
           .number()
           .int()
           .min(0)
-          .max(MAX_STREAM_RETRY_BASE_MS)
+          .max(MAX_LIVE_TIMEOUT_MS)
           .default(DEFAULT_STREAM_RETRY_BASE_MS),
+        /** 單次等待的上限（毫秒），照 dsh 的 `maxDelayMs`。 */
+        maxDelayMs: z
+          .number()
+          .int()
+          .min(0)
+          .max(MAX_LIVE_TIMEOUT_MS)
+          .default(DEFAULT_STREAM_RETRY_MAX_DELAY_MS),
+        /** 抖動比例，照 dsh 的 `jitterRatio`。 */
+        jitterRatio: z.number().min(0).max(1).default(DEFAULT_STREAM_RETRY_JITTER_RATIO),
       })
       .default(() => ({
         maxRetries: DEFAULT_STREAM_RETRY_MAX,
         baseDelayMs: DEFAULT_STREAM_RETRY_BASE_MS,
+        maxDelayMs: DEFAULT_STREAM_RETRY_MAX_DELAY_MS,
+        jitterRatio: DEFAULT_STREAM_RETRY_JITTER_RATIO,
       })),
   })
   .superRefine((config, context) => {

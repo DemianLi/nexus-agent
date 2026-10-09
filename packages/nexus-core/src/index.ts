@@ -373,6 +373,9 @@ export { noteFailedAttempt, noteRequestStart, runInRetryScope } from './llm-retr
 export {
   createStreamRetryMiddleware,
   noteStreamFailure,
+  streamRetryDelayMs,
+  DEFAULT_STREAM_RETRY_JITTER_RATIO,
+  DEFAULT_STREAM_RETRY_MAX_DELAY_MS,
   streamFailureReporter,
   STREAM_RETRY_MIDDLEWARE_NAME,
 } from './stream-retry.js';

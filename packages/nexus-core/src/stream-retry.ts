@@ -25,12 +25,18 @@
  *
  * dsh 的 `TIMEOUT`、`TRANSPORT` 都在預設可重試碼裡（`packages/llm/llm/src/retry-policy.ts:18-24`），由步級掛點重試整次請求；
  * 第一級載體 `assistant/attempt` 表示「那一次作廢」（`core/agent-loop/src/agent.ts:466-476`、`:489-493`；以上皆 `5badb15009a`）。
- * 這裡同向：整次重打、失敗那次作廢。**失敗當下就記成 attempt 並撤掉**（dsh），我們做不到「當下」：畫面的擦除與 `assistant/attempt`
- * 由 pump 在下一次嘗試的第一則 `message-start` 到來時送（見 `thread-pump.ts` 的 `#abandonSupersededReply`）；等退避時被停止的
- * 那一種，pump 在收尾時補送（`#keepInterruptedReply`），所以兩種時機在結果上對得上 dsh。
+ * 這裡同向：整次重打、失敗那次作廢。
  *
- * - **預算先保守**：預設最多 2 次、退避 1 秒／2 秒（dsh 預設 5 次、500 毫秒起、上限 10 秒、抖動 0.1，`retry-policy.ts:14-17`）。每次重試都重付整個回覆的費用，
- *   所以不照抄；欄位有上限，見 `apps/harness/src/settings/live-model.ts`。
+ * **擦除的時機是偏離**：dsh 在失敗當下、同一個迴圈裡就把那次記成 attempt 並撤掉，因為消費串流與決定重試是同一條控制流。我們的重試
+ * 決定在圖裡的 middleware，畫面的字卻是 pump 從另一條佇列（`streamEvents`）讀到的，兩條之間沒有先後保證——middleware 這邊
+ * 一說「失敗了」就擦，失敗那次排在佇列裡還沒被 pump 讀到的片段會在擦除之後才到，把剛擦掉的那則又畫回來。同一條佇列上唯一保證
+ * 排在失敗那次的全部片段之後的，是下一次嘗試的第一則 `message-start`，所以 pump 在那一刻送 `assistant/attempt` 與
+ * `message-discard`（`thread-pump.ts` 的 `#abandonSupersededReply`）；等退避時被停止的那一種，pump 在收尾時補送
+ * （`#keepInterruptedReply`），結果上對得上 dsh。這個「沒有先後保證」是從兩條通道的結構推的，沒有構造出競態。
+ *
+ * - **次數與起點先保守**：預設最多 2 次、1 秒起（卡上 2026-10-06 拍板；dsh 預設 5 次、500 毫秒起，`retry-policy.ts:14-15`）。每次重試都重付
+ *   整個回覆的費用，所以不照抄。**退避的形狀照 dsh**：倍增、單次封頂 10 秒、抖動 0.1（`:16-17`），欄位見
+ *   `apps/harness/src/settings/live-model.ts`。
  * - **退避聽中止訊號**：等待中按停止就立刻收，不再打一次。
  *
  * @module
@@ -52,12 +58,38 @@ export interface StreamFailure {
   readonly retryable: boolean;
 }
 
-/** 重試預算。 */
+/** dsh 的預設退避上限（`retry-policy.ts:16`）：本機排程的單次等待最多 10 秒。 */
+export const DEFAULT_STREAM_RETRY_MAX_DELAY_MS = 10_000;
+/** dsh 的預設抖動（`retry-policy.ts:17`）：每次等待乘上 1 ± 0.1 的隨機倍數。 */
+export const DEFAULT_STREAM_RETRY_JITTER_RATIO = 0.1;
+
+/** 重試預算。退避的形狀照 dsh：指數倍增、有上限、對稱抖動（`packages/llm/llm/src/retry-policy.ts:14-17`，`5badb15009a`）。 */
 export interface StreamRetryOptions {
   /** 最多重打幾次（不含第一次）。0 就是不重試。 */
   readonly maxRetries: number;
   /** 第一次重打前等多久（毫秒）；之後每次加倍。 */
   readonly baseDelayMs: number;
+  /** 單次等待的上限（毫秒）。省略取 {@link DEFAULT_STREAM_RETRY_MAX_DELAY_MS}。 */
+  readonly maxDelayMs?: number;
+  /** 抖動比例，0–1：每次等待乘上 `1 ± jitterRatio` 內的隨機倍數。省略取 {@link DEFAULT_STREAM_RETRY_JITTER_RATIO}。 */
+  readonly jitterRatio?: number;
+  /** 抖動用的亂數來源（`[0, 1)`）。省略取 `Math.random`；測試用它定住結果。 */
+  readonly random?: () => number;
+}
+
+/**
+ * 第 `attempt` 次重打（從 0 起算）之前要等多久：`base × 2^attempt` 封頂在 `maxDelayMs`，再乘上抖動倍數。
+ *
+ * @param options - 預算。
+ * @param attempt - 已經失敗了幾次減一（第一次重打前是 0）。
+ * @returns 毫秒。
+ */
+export function streamRetryDelayMs(options: StreamRetryOptions, attempt: number): number {
+  const maxDelayMs = options.maxDelayMs ?? DEFAULT_STREAM_RETRY_MAX_DELAY_MS;
+  const jitter = options.jitterRatio ?? DEFAULT_STREAM_RETRY_JITTER_RATIO;
+  const random = options.random ?? Math.random;
+  const local = Math.min(options.baseDelayMs * 2 ** attempt, maxDelayMs);
+  return Math.max(0, Math.round(local * (1 + (random() * 2 - 1) * jitter)));
 }
 
 interface AttemptScope {
@@ -144,7 +176,7 @@ export function createStreamRetryMiddleware(options: StreamRetryOptions): AgentM
         const retriable = scope.failure?.retryable === true && attempt < options.maxRetries;
         if (!retriable) throw outcome.reason;
         // 退避：1 倍、2 倍、4 倍……；這一輪已經中止、或等待中按了停止，原本的錯誤照樣往外拋，不再打（`sleep` 兩種都認）。
-        const waited = await sleep(options.baseDelayMs * 2 ** attempt, signal);
+        const waited = await sleep(streamRetryDelayMs(options, attempt), signal);
         if (!waited) throw outcome.reason;
       }
     },
