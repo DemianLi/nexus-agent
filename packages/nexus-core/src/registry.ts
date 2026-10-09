@@ -928,20 +928,6 @@ export interface SessionRegistrationPoint {
    */
   forCall(config: unknown): SessionLookup;
   /**
-   * {@link forCall} 的另一個入口：**身分已經算好了**，只差查日誌。
-   *
-   * 給拿不到 config 的消費者——事件匯流排的監聽者拿到的是 `exec.agent`（`SessionAddress | undefined`），
-   * 而不是 LangChain 的 config（[#1272](https://github.com/DemianLi/nexus-agent/issues/1272)）。
-   * `forCall(config)` 就是 `forAddress(toolCallSessionAddress(config))`，**只有這一份實作**，兩個入口不會漂移：
-   * 四種結果的先後（沒綁 → 綁了不只一張 → 認不出身分 → 找到）與 `open()` 替子代理生日誌的副作用都一樣。
-   *
-   * 這是**形狀差異**不是偏離：dsh 的監聽者經 `Scoped<Agent>` 拿到 session，我們沒有那個物件，經位址查。
-   *
-   * @param address - `exec.agent`；`undefined` ＝ 這次呼叫不在圖裡（認不出身分）。
-   * @returns 同 {@link forCall}。
-   */
-  forAddress(address: SessionAddress | undefined): SessionLookup;
-  /**
    * **耐久檢查點**：把 {@link forCall} 交出去的那一份日誌排空到耐久
    * （[#599](https://github.com/DemianLi/nexus-agent/issues/599)）。這是 dsh 的
    * `ctx.sessions.flush(session)` 在 plugin 手上的那一面，見 {@link SessionRegistry.flush}。
@@ -1574,10 +1560,10 @@ export function createRegistry(options: CreateRegistryOptions = {}): InternalPlu
     join: (installer) =>
       effect('sessions.join()', (origin) => sessionInstallers.append(installer, origin)),
     installers: () => [...sessionInstallers.entries()],
-    forCall: (config) => sessionPoint.forAddress(toolCallSessionAddress(config)),
-    forAddress(address) {
+    forCall(config) {
       if (boundSessions.size === 0) return { kind: 'not-attached' };
       if (boundSessions.size > 1) return { kind: 'ambiguous', count: boundSessions.size };
+      const address = toolCallSessionAddress(config);
       if (address === undefined) return { kind: 'unknown-caller' };
       const [sessions] = boundSessions;
       // `open` 而不是 `get`：subagent 的日誌在第一次有人要寫的時候才出生，理由見

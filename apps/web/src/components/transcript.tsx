@@ -198,8 +198,8 @@ export function Entry({
     return (
       <Message align="end">
         <MessageContent>
-          {/* 這一句帶的附件（#732）：標籤排在泡泡上方；只有附件、沒有字的那一句不畫空泡泡。 */}
-          <SentAttachments attachments={entry.attachments} />
+          {/* 這一句帶的附件（#732）：標籤排在泡泡上方；只有附件、沒有字的那一句不畫空泡泡。模型已看不到的那幾件另有標記（#1270）。 */}
+          <SentAttachments attachments={entry.attachments} omitted={entry.omittedAttachments} />
           {/* 這一句點名派的子代理（#328 第 2 項）：chip 在泡泡上方；`text` 不含點名字樣，標記從 `mention` 畫。 */}
           {entry.mention !== undefined && <DelegatedChip name={entry.mention.name} />}
           {entry.text.trim() !== '' && (

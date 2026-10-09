@@ -25,7 +25,8 @@
  * 3. **模式狀態活得過什麼**：同一條 thread 的下一輪、以及一次真的壓縮。跨重啟那一條在
  *    `session-resume.test.ts`。
  * 4. **拒絕在核准之前的證據**：模式外的呼叫拿到的是「不在計劃模式」，不是核准的措辭（第 2 組最後一條）。
- *    拒絕的載體是 `tools/pre-execute` 的監聽者（#1272），位置由 `fold.ts` 保證；逐字等價的差分在
+ *    現在翻面了（#1276）：拒絕只在 `exit_plan_mode` 的工具本體裡，同 dsh，所以掛全攔核准閘門時模型先看到核准的措辭。
+ *    曾經有一層排在閘門之前的拒絕（#1272 搬上事件匯流排、#1276 拿掉）；兩段行為的差分在
  *    `plan-mode-refusal-differential.test.ts`。
  * 5. **`/plan` 這條路**：人打的那一行到底有沒有讓下一輪的 prompt 變得不一樣
  *    （[#120](https://github.com/DemianLi/nexus-agent/issues/120)）。
@@ -37,7 +38,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
-import { SessionRegistry } from '@nexus/core';
+import { APPROVAL_POLICY_NEVER, SessionRegistry } from '@nexus/core';
 import type { PluginEntry, QuestionInterruptItem, QuestionReply, SessionEvent } from '@nexus/core';
 import { CANCELLED_MESSAGE } from '@nexus/plugin-ask-user';
 import {
@@ -480,14 +481,15 @@ describe('exit_plan_mode 的結局', () => {
   });
 
   /**
-   * **不在模式裡的時候：說的是模式，不是核准。**
+   * **不在模式裡、又掛著全攔的核准閘門：模型先看到核准的措辭**（[#1276](https://github.com/DemianLi/nexus-agent/issues/1276) 翻面）。
    *
-   * 這一條是「模式外拒絕排在核准閘門之前」的證據。plan-mode 自己不再掛閘門，所以這裡掛一位**什麼工具都要核准**的探針
-   * （`approval.patch.yml` 那一類組裝會長這樣）。拒絕若排到核准閘門**之後**（#1272 以前靠 middleware 的 `prepend`，
-   * 現在靠 `tools/pre-execute` 的槽位），這次呼叫會先撞上探針、在 headless 底下拿到「沒有人被問到」——而真正的原因是
-   * 「你不在計劃模式」。
+   * 以前這一條釘的是相反的事：「說的是不在計劃模式，不是核准的措辭」，靠一層排在核准閘門之前的拒絕（先是 middleware 的
+   * `prepend`，#1272 之後是 `tools/pre-execute` 的監聽者）。dsh 沒有那一層——它只在 `exit_plan_mode` 的工具本體裡檢查，
+   * 而核准 listener 先於本體——demian 2026-10-09 決定照 dsh 拿掉。所以這裡掛一位**什麼工具都要核准**的探針
+   * （`approval.patch.yml` 那一類組裝會長這樣），headless 底下呼叫先撞上探針，拿到「沒有人被問到」；本體的
+   * 「不在計劃模式」要等核准放行才會走到。**絆索翻面不是刪**：以後有人再把拒絕排回閘門之前，這一條會紅。
    */
-  it('模式外呼叫 → 說的是「不在計劃模式」，不是核准的措辭', async () => {
+  it('模式外呼叫 + 全攔核准閘門 → 先看到核准的措辭，不是「不在計劃模式」', async () => {
     const askEverything: PluginEntry = {
       plugin: {
         name: 'probe-ask-everything',
@@ -513,12 +515,15 @@ describe('exit_plan_mode 的結局', () => {
     }
 
     const refusal = lastToolMessage(result.messages as BaseMessage[]);
-    expect(refusal?.text).toContain(NOT_IN_PLAN_MODE_MESSAGE);
-    expect(refusal?.text).not.toContain('是沒有人被問到');
-    // **日誌上記的是錯誤、不帶碼**（#273）：模式外 dsh 拋的是一般 `Error`。這是 `tools/pre-execute` 的 `deny`
-    // （`toolRefusal`、不往下叫）那條路，所以圍堵讀的是那則拒絕訊息。
+    expect(refusal?.text).toContain('是沒有人被問到');
+    expect(refusal?.text).not.toContain(NOT_IN_PLAN_MODE_MESSAGE);
+    // 日誌上記的是錯誤：核准閘門的拒絕帶碼（`APPROVAL_POLICY_NEVER`），不是模式外那種不帶碼的一般 `Error`。
     expect(exitVerdicts(sessions.root.events)).toEqual([
-      { callId: expect.any(String), isError: true },
+      {
+        callId: expect.any(String),
+        isError: true,
+        error: expect.objectContaining({ code: APPROVAL_POLICY_NEVER }),
+      },
     ]);
   });
 });

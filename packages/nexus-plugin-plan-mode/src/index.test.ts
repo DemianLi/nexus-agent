@@ -116,8 +116,8 @@ function earlierEvents(active: boolean): readonly SessionEvent[] {
 /**
  * **`exit_plan_mode` 工具本體那兩條沒生效的出口**（[#273](https://github.com/DemianLi/nexus-agent/issues/273)）。
  *
- * root 上模式外的那條由 `tools/pre-execute` 的監聽者擋（#1272），驗收在 `apps/harness/src/plan-mode.test.ts`。頭兩條
- * 在真的組裝裡到不了：沒接日誌就沒有日誌可記，subagent 那一份又會先被那位監聽者擋掉。
+ * root 上模式外的那條也是本體擋的（#1276 以前有一層排在核准閘門之前的拒絕，拿掉了），驗收在
+ * `apps/harness/src/plan-mode.test.ts`。頭兩條在真的組裝裡不容易單獨量到，所以這裡直接叫本體。
  * 後兩條（#652）在問人之前就擋，所以不用真的圖也量得到。
  */
 describe('exit_plan_mode 沒有生效時', () => {
@@ -237,9 +237,8 @@ describe('createPlanModePlugin', () => {
   });
 
   /**
-   * **`prepend` 的理由換了**（[#1272](https://github.com/DemianLi/nexus-agent/issues/1272)）。以前它是模式外拒絕擋在核准閘門
-   * 前面的唯一手段；現在那一層是 `tools/pre-execute` 的監聽者，位置由 `fold.ts` 決定。`prepend` 剩下的用處是
-   * 指引站在記憶 plugin 外面（`concat` 之後記憶才接上去）。行為不變，所以斷言不變。
+   * **`prepend` 剩下的用處**：指引站在記憶 plugin 外面（`concat` 之後記憶才接上去）。以前它還是模式外拒絕擋在核准閘門
+   * 前面的手段；那一層拿掉了（[#1276](https://github.com/DemianLi/nexus-agent/issues/1276)），模式外拒絕只在工具本體裡。
    */
   it('middleware 是 prepend 的', async () => {
     const { registry } = await loadPlugins([createPlanModePlugin()]);
@@ -247,8 +246,8 @@ describe('createPlanModePlugin', () => {
     expect(registry.middleware.list()[0]?.value.prepend).toBe(true);
   });
 
-  /** 模式外拒絕搬到事件匯流排之後，middleware 只剩模型呼叫那一件。 */
-  it('middleware 沒有 wrapToolCall；模式外拒絕是 tools/pre-execute 上恰好一位監聽者', async () => {
+  /** 照 dsh：模式外拒絕只在工具本體裡。middleware 只剩模型呼叫那一件，事件匯流排上也沒有 plan-mode 的監聽者。 */
+  it('middleware 沒有 wrapToolCall，也沒有掛任何事件監聽者', async () => {
     const { registry } = await loadPlugins([createPlanModePlugin()]);
     const middleware = registry.middleware.list()[0]?.value.middleware as unknown as Record<
       string,
@@ -257,87 +256,7 @@ describe('createPlanModePlugin', () => {
 
     expect(middleware.wrapToolCall).toBeUndefined();
     expect(typeof middleware.wrapModelCall).toBe('function');
-    expect(
-      registry.events
-        .listeners()
-        .filter((listener) => listener.name === 'tools/pre-execute')
-        .map((listener) => listener.origin?.name),
-    ).toEqual(['plan-mode']);
-  });
-});
-
-/**
- * 監聽者本身（S1b）：直接派發 `tools/pre-execute`，不經 agent。**逐位元組等價**的證據在
- * `apps/harness` 的 `plan-mode-refusal-differential.test.ts`；這裡看的是三個分岔各給什麼決定。
- */
-describe('tools/pre-execute 監聽者', () => {
-  const exec = (
-    name: string,
-    agent: { kind: 'root' } | { kind: 'subagent'; runId: string } | undefined,
-  ) => ({
-    callId: 'call-1',
-    name,
-    args: Object.freeze({}),
-    agent,
-  });
-  const allow = () => Promise.resolve({ kind: 'allow' as const });
-
-  async function mount(startActive: boolean, bind: boolean) {
-    const { registry } = await loadPlugins([createPlanModePlugin({ startActive })]);
-    if (bind) registry.sessions.bind(new SessionRegistry('plan'));
-    return registry;
-  }
-
-  it('別的工具：放行，不查模式', async () => {
-    const registry = await mount(false, true);
-
-    expect(
-      await registry.dispatch.waterfall('tools/pre-execute', exec('echo', { kind: 'root' }), allow),
-    ).toEqual({ kind: 'allow' });
-  });
-
-  it('exit_plan_mode：root 在模式外 → 拒絕，理由就是 NOT_IN_PLAN_MODE_MESSAGE', async () => {
-    const registry = await mount(false, true);
-
-    expect(
-      await registry.dispatch.waterfall(
-        'tools/pre-execute',
-        exec(EXIT_PLAN_MODE_TOOL_NAME, { kind: 'root' }),
-        allow,
-      ),
-    ).toEqual({ kind: 'deny', reason: NOT_IN_PLAN_MODE_MESSAGE });
-  });
-
-  it('exit_plan_mode：子代理 → 拒絕（它的 session 從沒進過計劃模式）', async () => {
-    const registry = await mount(true, true);
-
-    expect(
-      await registry.dispatch.waterfall(
-        'tools/pre-execute',
-        exec(EXIT_PLAN_MODE_TOOL_NAME, { kind: 'subagent', runId: 'tools:spawn-1' }),
-        allow,
-      ),
-    ).toEqual({ kind: 'deny', reason: NOT_IN_PLAN_MODE_MESSAGE });
-  });
-
-  it('exit_plan_mode：沒接日誌、認不出身分 → 退回 startActive（開放行、關拒絕）', async () => {
-    const on = await mount(true, false);
-    const off = await mount(false, false);
-
-    expect(
-      await on.dispatch.waterfall(
-        'tools/pre-execute',
-        exec(EXIT_PLAN_MODE_TOOL_NAME, undefined),
-        allow,
-      ),
-    ).toEqual({ kind: 'allow' });
-    expect(
-      await off.dispatch.waterfall(
-        'tools/pre-execute',
-        exec(EXIT_PLAN_MODE_TOOL_NAME, undefined),
-        allow,
-      ),
-    ).toEqual({ kind: 'deny', reason: NOT_IN_PLAN_MODE_MESSAGE });
+    expect(registry.events.listeners()).toEqual([]);
   });
 });
 
