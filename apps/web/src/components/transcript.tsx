@@ -67,6 +67,7 @@ import { transcriptItems } from '@/lib/deliverables-view';
 import { registerTranscriptScroller } from '@/lib/transcript-locate';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { RetryNotice } from '@/components/retry-notice';
+import { useScrollButtonClearance } from '@/hooks/use-scroll-button-clearance';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
 import { BLOCKED_HINT_TEXT } from '@/lib/archived-view';
@@ -544,12 +545,19 @@ export function Transcript({
   }
   const announced = useFinishedReply(state.entries, isFresh);
   const autoLoad = useEarlierAutoLoad(earlier);
+  const viewport = useRef<HTMLDivElement>(null);
+  useScrollButtonClearance(viewport);
 
   return (
     <MessageScrollerProvider autoScroll>
       <ScrollerRegistration />
       <MessageScroller className="min-h-0 flex-1">
-        <MessageScrollerViewport aria-label="對話訊息" preserveScrollOnPrepend {...autoLoad}>
+        <MessageScrollerViewport
+          ref={viewport}
+          aria-label="對話訊息"
+          preserveScrollOnPrepend
+          {...autoLoad}
+        >
           {/* 在 content 外面，prepend 保位才動得了手（見 `earlier-pager.tsx`）。 */}
           {earlier?.hasMore === true && <EarlierPager earlier={earlier} />}
           <MessageScrollerContent
@@ -568,7 +576,11 @@ export function Transcript({
             ))}
           </MessageScrollerContent>
         </MessageScrollerViewport>
-        <MessageScrollerButton className="rounded-full" behavior={scrollBehavior()}>
+        {/* 壓到對話裡的輸入區（子代理面板）就藏起來（#1295，`use-scroll-button-clearance.ts`）。 */}
+        <MessageScrollerButton
+          className="rounded-full data-[obscuring]:invisible"
+          behavior={scrollBehavior()}
+        >
           <ArrowDown />
           <span className="sr-only">捲到最新的訊息</span>
         </MessageScrollerButton>

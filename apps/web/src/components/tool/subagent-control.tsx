@@ -329,7 +329,12 @@ function Panel({ runId, control }: { readonly runId: string; readonly control: S
           ))}
         </ul>
       )}
-      <form onSubmit={submit} className="flex flex-wrap items-center gap-2">
+      {/* 「跳到最新」浮鈕會讓開這一列（#1295）。 */}
+      <form
+        onSubmit={submit}
+        className="flex flex-wrap items-center gap-2"
+        data-scroll-button-avoid=""
+      >
         <Input
           value={text}
           onChange={(event) => {

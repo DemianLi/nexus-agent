@@ -12,6 +12,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { SubagentControlContext, useSubagentControl } from '@/components/tool/subagent-control';
 import { Transcript } from '@/components/transcript';
+import { SCROLL_BUTTON_AVOID, SCROLL_BUTTON_OBSCURING } from '@/hooks/use-scroll-button-clearance';
 
 /**
  * 委派卡上對背景子代理說話與單獨停止（[#869](https://github.com/DemianLi/nexus-agent/issues/869)）。
@@ -739,5 +740,52 @@ describe('子代理自己的對話（#861）', () => {
     expect(document.querySelector('[data-subagent-conversation]')?.textContent).not.toContain(
       '舊的',
     );
+  });
+});
+
+describe('「跳到最新」浮鈕讓開這一列（#1295）', () => {
+  /** jsdom 沒有版面：框的位置自己給。 */
+  const box = (top: number, left = 100, width = 200, height = 40) =>
+    ({
+      top,
+      left,
+      width,
+      height,
+      right: left + width,
+      bottom: top + height,
+      x: left,
+      y: top,
+    }) as DOMRect;
+
+  it('輸入列標了要讓；浮鈕壓到它就藏，捲開就回來，浮鈕自己有焦點時不藏', () => {
+    vi.useFakeTimers({ toFake: ['requestAnimationFrame', 'cancelAnimationFrame'] });
+    render(<Harness client={fakeClient().client} status={{ 'bg-1': 'idle' }} />);
+    open();
+    const form = input().closest('form')!;
+    expect(form.hasAttribute(SCROLL_BUTTON_AVOID)).toBe(true);
+
+    const viewport = document.querySelector<HTMLElement>(
+      '[data-slot="message-scroller-viewport"]',
+    )!;
+    const button = document.querySelector<HTMLElement>('[data-slot="message-scroller-button"]')!;
+    expect(button.className).toContain('data-[obscuring]:invisible');
+    vi.spyOn(button, 'getBoundingClientRect').mockReturnValue(box(600, 172, 32, 32));
+    const formBox = vi.spyOn(form, 'getBoundingClientRect');
+
+    const scrollTo = (top: number) => {
+      formBox.mockReturnValue(box(top));
+      fireEvent.scroll(viewport);
+      vi.advanceTimersToNextFrame();
+    };
+
+    scrollTo(590);
+    expect(button.hasAttribute(SCROLL_BUTTON_OBSCURING)).toBe(true);
+    scrollTo(300);
+    expect(button.hasAttribute(SCROLL_BUTTON_OBSCURING)).toBe(false);
+    button.focus();
+    scrollTo(590);
+    expect(button.hasAttribute(SCROLL_BUTTON_OBSCURING)).toBe(false);
+    vi.useRealTimers();
+    vi.restoreAllMocks();
   });
 });
