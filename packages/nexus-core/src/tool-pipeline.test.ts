@@ -153,6 +153,41 @@ describe('tools/pre-execute 的生產者', () => {
     expect(Object.isFrozen(execs[0])).toBe(true);
   });
 
+  it('`exec.args` 是深凍結的複本：監聽者改不動，handler 收到的參數不變', async () => {
+    const bus = new EventBus();
+    let attempted: unknown;
+    bus.on('tools/pre-execute', (exec, next) => {
+      const args = exec.args as { path: string; nested: { n: number } };
+      try {
+        args.path = '被改了';
+        attempted = 'no-throw';
+      } catch (error) {
+        attempted = error;
+      }
+      expect(() => {
+        args.nested.n = 2;
+      }).toThrow(TypeError);
+      expect(Object.isFrozen(args)).toBe(true);
+      expect(Object.isFrozen(args.nested)).toBe(true);
+      return next();
+    });
+    const wrap = wrapperOf(createToolPreExecuteMiddleware(bus));
+    const request = requestFor() as {
+      toolCall: { args: { path: string; nested?: { n: number } } };
+    };
+    request.toolCall.args = { path: '/a', nested: { n: 1 } };
+    let received: unknown;
+    await wrap(request, async (inner) => {
+      received = (inner as typeof request).toolCall.args;
+      return 'x';
+    });
+    expect(attempted).toBeInstanceOf(TypeError);
+    // 複本不是原物件，原物件沒被凍、沒被改。
+    expect(received).toBe(request.toolCall.args);
+    expect(received).toEqual({ path: '/a', nested: { n: 1 } });
+    expect(Object.isFrozen(received)).toBe(false);
+  });
+
   it('核准的中斷穿過去：handler 拋 GraphInterrupt，不被吞', async () => {
     const bus = new EventBus();
     bus.on('tools/pre-execute', (_exec, next) => next());

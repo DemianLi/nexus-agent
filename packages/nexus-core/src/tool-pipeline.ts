@@ -15,7 +15,7 @@
  * | --- | --- | --- |
  * | `tools/pre-execute` | {@link createToolPreExecuteMiddleware} | **緊貼核准閘門外側**：plan-mode 這類 `prepend: true` 的 plugin 今天就在閘門外側，派發點放內側會變成「先跳核准卡再被拒」 |
  * | `tools/post-execute` | {@link createToolPostExecuteMiddleware} | 輸出校驗等貼著工具本體的那幾顆外側（dsh 在 post-execute 之前驗輸出）、plugin middleware 內側 |
- * | `tools/execute` | {@link createToolExecuteMiddleware} | 最內層，環繞工具本體 |
+ * | `tools/execute` | {@link createToolExecuteMiddleware} | 環繞工具本體：在 `invalidToolArgs` 內側，只有 `max-tokens.ts` 對 `task` 結果的替換還在它內側（dsh 在前景 `task` 本體裡拋，替換在 execute 裡才對得上） |
  * | `tools/result` | `containment.ts` | 圍堵：只有它同時看得到內層拋出的錯與回來的結果；在記 `tool/result` 之前派發（同 dsh 的 `notifyResult` 先於迴圈的 `appendToolResult`） |
  *
  * **核准閘門沒有搬**（demian 2026-10-09）：`approvalGate` 仍是自己的 middleware，問人的那條 waterfall 還在 `approvals` 註冊點。
@@ -46,6 +46,11 @@
  * 5. **`tools/execute` 的 `next()` 只能呼叫一次**（匯流排的 `next` 是共用的一支，見 `events.ts`），所以 dsh 那種「重試包住 next」
  *    表達不出來。短路（不呼叫 `next()`、回自己的結果）可以。
  * 6. **`tools/pre-execute` 沒有 `ask`／`cancel`**：範圍，不是表達不出來。
+ * 7. **結果內容是文字視圖，不是 `ContentBlock[]`**（範圍，不是表達不出來）：`PipelineResult.content` 是 `ToolMessage` 的文字，
+ *    非文字區塊（圖片之類）看不到；`replace` 換掉的是整則訊息的內容，會把區塊壓成純文字。S1a 沒有消費者，先給最小的視圖；
+ *    哪天有消費者要碰區塊，換成 dsh 的區塊形狀。
+ * 8. **`tools/post-execute` 只有 `accept`／`replace`**（範圍，不是表達不出來）：沒有 dsh 的 `block` 與 `additionalContexts`，
+ *    等到有消費者要用再加。
  *
  * @module
  */
@@ -72,7 +77,7 @@ export interface PipelineExecution {
   readonly callId: string;
   /** 工具名。 */
   readonly name: string;
-  /** 解析後的參數，**唯讀**：模型可見的內容只能走已記錄的通道，監聽者不能改它。 */
+  /** 解析後的參數：**深凍結的複本**，監聽者改不動——模型可見的內容只能走已記錄的通道，不能在這裡悄悄改參數。 */
   readonly args: unknown;
   /** 誰在呼叫：root 或某個子代理（`runId`）；認不出來（不在圖裡）是 `undefined`。 */
   readonly agent: SessionAddress | undefined;
@@ -169,12 +174,43 @@ export interface PipelineRequest {
   readonly runtime?: { readonly configurable?: unknown };
 }
 
-/** 由 `wrapToolCall` 的請求造出監聽者看的 {@link PipelineExecution}（凍結）。 */
+/** 遞迴凍結。 */
+function deepFreeze<T>(value: T): T {
+  if (typeof value === 'object' && value !== null && !Object.isFrozen(value)) {
+    Object.freeze(value);
+    for (const child of Object.values(value)) deepFreeze(child);
+  }
+  return value;
+}
+
+/**
+ * 給監聽者的參數：一份**深凍結的複本**，不是請求裡那個活物件。
+ *
+ * 請求裡的 `args` 就是狀態裡那則 AI 訊息的 `tool_calls[i].args`；`Object.freeze(exec)` 只凍一層，若把它原樣放進去，
+ * 監聽者一改，工具會用改過的參數跑、對話狀態跟著變，而圍堵在更外層已經用原參數記了 `tool/call`——日誌與模型看到的就分岔了。
+ * 這一步只在有監聽者時才做（`exec` 只在那時造），沒人聽的呼叫不付這個成本。
+ *
+ * 複製失敗（參數裡有函式之類結構化複製收不了的東西）退回 JSON 來回；再失敗就只凍一層淺複本，盡力而為。
+ */
+function frozenArgsCopy(args: unknown): unknown {
+  if (typeof args !== 'object' || args === null) return args;
+  try {
+    return deepFreeze(structuredClone(args));
+  } catch {
+    try {
+      return deepFreeze(JSON.parse(JSON.stringify(args)) as unknown);
+    } catch {
+      return Object.freeze({ ...args });
+    }
+  }
+}
+
+/** 由 `wrapToolCall` 的請求造出監聽者看的 {@link PipelineExecution}（凍結，參數是深凍結的複本）。 */
 export function toolExecutionOf(request: PipelineRequest): PipelineExecution {
   return Object.freeze({
     callId: request.toolCall.id ?? '',
     name: request.toolCall.name,
-    args: request.toolCall.args,
+    args: frozenArgsCopy(request.toolCall.args),
     agent: toolCallSessionAddress({ configurable: request.runtime?.configurable }),
   });
 }

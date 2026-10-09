@@ -209,7 +209,7 @@ describe('同名取代是唯一的縫', () => {
         // 解不開的工具參數（#281）：`wrapToolCall` 在核准與每個 plugin 的內側、改寫在每個
         // `wrapModelCall` 的內側，所以排在 plugin middleware 之後、綁訊號那顆之前。
         'nexusInvalidToolArgs',
-        // `tools/execute` 的生產者（#1248）：`wrapToolCall` 的最內層，環繞工具本體。
+        // `tools/execute` 的生產者（#1248）：環繞工具本體，在解不開參數那顆內側、撞到輸出上限那顆（只對 `task`）外側。
         'nexusToolExecute',
         // 撞到輸出上限（#433）：貼在修補的內側，清掉被切斷的回覆裡的工具呼叫。
         'nexusMaxTokens',
