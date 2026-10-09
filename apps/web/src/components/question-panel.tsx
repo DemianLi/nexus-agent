@@ -31,6 +31,7 @@ import type { FormEvent } from 'react';
 
 import type { PendingQuestion } from '@nexus/wire';
 
+import { MonoBlock } from '@/components/mono-block';
 import { Surface } from '@/components/surface';
 import { Button } from '@/components/ui/button';
 import { MarkdownText } from '@/components/markdown-text';
@@ -296,14 +297,14 @@ function OriginBlock({ origin }: { origin: NonNullable<PendingQuestion['origin']
       </p>
       <div className="flex flex-col gap-1">
         <p className="text-muted-foreground text-tip">呼叫參數</p>
-        <pre
+        <MonoBlock
           data-testid="question-origin-arguments"
           tabIndex={0}
           aria-label="呼叫參數"
-          className="bg-chip max-h-32 min-w-0 overflow-auto rounded-lg p-2 font-mono text-tip break-words whitespace-pre-wrap"
+          className="max-h-32"
         >
           {argumentsText(origin.arguments)}
-        </pre>
+        </MonoBlock>
       </div>
       <p className="text-muted-foreground text-tip">
         這是外部伺服器在問，不是模型。拒絕＝明確不給；取消＝先不回答。兩者都不會停止這一輪。

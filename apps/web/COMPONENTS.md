@@ -21,6 +21,11 @@
 - **表面**：卡片與內層底用 `Surface`，不手寫 `bg-stage shadow-stage`、`bg-card shadow-material rounded-3xl`、`bg-card border rounded-3xl`。
 - **展開箭頭**：用 `Chevron`，不手寫 `transition-transform … rotate-180`（或跟著 `data-state=open` 轉的 `rotate-*`）。
 - **可展開列**：用 `RowTrigger`，不手寫 `hover:bg-chip-hover active:bg-chip-pressed … w-full … text-left`。
+- **對話泡泡**：用 `ChatBubble`，不手寫 `rounded-3xl px-4 py-2.5`。
+- **程式碼小框**：用 `MonoBlock`，不手寫 `bg-chip … rounded-lg p-2 font-mono`。
+- **多行輸入**：`ui/` 以外不寫原生 `<textarea`，用 `ui/textarea` 的 `Textarea`。
+- **時長**：走 `motion.css` 的 token（`duration-(--duration-fast)`、`animation-duration-(--duration-overlay)`），不寫 `duration-200` 這種數字。這條連 `ui/` 一起管。
+- **高亮**：程式標出來的那一格（例如「看這一輪」的 `data-revealed`）在 `theme.css` 畫外框，不用 `ring-*`。被程式聚焦的元素 `:focus-visible` 時，ring 會被清掉。
 - **焦點外框**：`ui/` 以外不寫 `focus-visible:ring-*`。全域已經畫 outline，`theme.css` 把 ring 清掉了，寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在 `theme.css` 的 layer 外，`outline-none` 擋不掉；文字輸入框（`input`、`textarea`）不畫，它們用邊框變色或群組外框；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
 - **圓角**：走階梯（`rounded-md`…`rounded-3xl`、`rounded-full`）或有名字的 `rounded-row`。不寫 `rounded-[20px]`。
 - 需要一個系統裡沒有的值 → **先在規格與 `index.css` 加一階**（有名字、有理由），不要寫任意值。
@@ -40,7 +45,7 @@
 - **兩處以上手寫同一份配方**（不只是名字像）才抽；只有一處就留在原地。
 - 只抽**共通的部分**，差異用 `className` 補（例：`RowTrigger` 只含底色、最小高度、圓角、過渡，圖示與間距由呼叫端給）。
 - 抽完要證明**畫面沒變**：展開成的 class 集合與原本逐項相等，再加實機前後比對。
-- 已抽的：`RowTrigger`（可展開列；`fit="card"` 嵌在卡片裡、用 `rounded-row` 同心，`fit="bare"` 自己就是一列）、`Chevron`（展開箭頭，跟著外層的 `data-state` 轉，或用 `open` 直接給）、`Surface`（`raised` 浮起來的卡片、`stage` 內層底、`docked` 貼在輸入框上方的平邊線卡片，用 `as` 選元素）。新的卡片或內層底用 `Surface`，手寫整組配方會被護欄擋下。
+- 已抽的：`RowTrigger`（可展開列；`fit="card"` 嵌在卡片裡、用 `rounded-row` 同心，`fit="bare"` 自己就是一列）、`Chevron`（展開箭頭，跟著外層的 `data-state` 轉，或用 `open` 直接給）、`ChatBubble`（對話裡的文字泡泡，人的話靠右、子代理寄來的話靠左）、`MonoBlock`（夾在說明文字裡的等寬字小框，平的 `bg-chip`；工具輸出那種有標題、有細線的內層底是 `Surface tone="stage"`，不是它）、`Surface`（`raised` 浮起來的卡片、`stage` 內層底、`docked` 貼在輸入框上方的平邊線卡片，用 `as` 選元素）。新的卡片或內層底用 `Surface`，手寫整組配方會被護欄擋下。
 - 還沒抽的：`pending-swap`（走 `ui/Card` 覆寫，是 shadcn 元件的用法）。
 
 ## 新增 shadcn 元件
