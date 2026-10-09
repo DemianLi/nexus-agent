@@ -30,6 +30,7 @@ import {
   DEFAULT_LIVE_MAX_RETRIES,
   DEFAULT_LIVE_MODEL_ENTRY,
   DEFAULT_LIVE_MODEL_ID,
+  DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS,
   DEFAULT_LIVE_TIMEOUT_MS,
   LIVE_API_KEY_ENV,
   createLiveModel,
@@ -74,6 +75,7 @@ const OVERRIDE: Omit<LiveModelConfig, 'baseUrl'> = {
   modelId: OVERRIDE_ENTRY.id,
   models: [OVERRIDE_ENTRY],
   timeoutMs: 4321,
+  streamIdleTimeoutMs: 8765,
   maxRetries: 2,
   streamRetry: { maxRetries: 4, baseDelayMs: 50, maxDelayMs: 500, jitterRatio: 0 },
 };
@@ -99,6 +101,7 @@ describe('live-model 的 schema', () => {
       modelId: DEFAULT_LIVE_MODEL_ID,
       models: [DEFAULT_LIVE_MODEL_ENTRY],
       timeoutMs: DEFAULT_LIVE_TIMEOUT_MS,
+      streamIdleTimeoutMs: DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS,
       maxRetries: DEFAULT_LIVE_MAX_RETRIES,
       streamRetry: { maxRetries: 2, baseDelayMs: 1_000, maxDelayMs: 10_000, jitterRatio: 0.1 },
     });
@@ -244,6 +247,28 @@ describe('live-model 的 schema', () => {
     expect(liveModelConfigSchema.parse({ timeoutMs: 2_147_483_647 }).timeoutMs).toBe(2_147_483_647);
     expect(() => liveModelConfigSchema.parse({ timeoutMs: 2_147_483_648 })).toThrow();
     expect(() => liveModelConfigSchema.parse({ timeoutMs: 0 })).toThrow();
+    // 閒置那格（#1251）同一個上限。
+    expect(
+      liveModelConfigSchema.parse({ streamIdleTimeoutMs: 2_147_483_647 }).streamIdleTimeoutMs,
+    ).toBe(2_147_483_647);
+    expect(() => liveModelConfigSchema.parse({ streamIdleTimeoutMs: 2_147_483_648 })).toThrow();
+    expect(() => liveModelConfigSchema.parse({ streamIdleTimeoutMs: 0 })).toThrow();
+  });
+
+  /** #1251：兩格出廠值寫成字面值，各自獨立——只設一格不動另一格，不連動。 */
+  it('逾時拆兩格：出廠首事件 180 秒、閒置 90 秒；只設一格不動另一格', () => {
+    expect(liveModelConfigSchema.parse({})).toMatchObject({
+      timeoutMs: 180_000,
+      streamIdleTimeoutMs: 90_000,
+    });
+    expect(liveModelConfigSchema.parse({ timeoutMs: 5_000 })).toMatchObject({
+      timeoutMs: 5_000,
+      streamIdleTimeoutMs: 90_000,
+    });
+    expect(liveModelConfigSchema.parse({ streamIdleTimeoutMs: 5_000 })).toMatchObject({
+      timeoutMs: 180_000,
+      streamIdleTimeoutMs: 5_000,
+    });
   });
 
   it('重試次數 0 到 10——退避沒有上限，所以次數要有', () => {
@@ -454,6 +479,7 @@ async function writeOverridePatch(baseUrl: string): Promise<string> {
       `    baseUrl: '${baseUrl}'`,
       `    modelId: '${OVERRIDE.modelId}'`,
       `    timeoutMs: ${String(OVERRIDE.timeoutMs)}`,
+      `    streamIdleTimeoutMs: ${String(OVERRIDE.streamIdleTimeoutMs)}`,
       `    maxRetries: ${String(OVERRIDE.maxRetries)}`,
       `    streamRetry: ${JSON.stringify(OVERRIDE.streamRetry)}`,
       // YAML 是 JSON 的超集，`models` 整份取代出廠那一筆。

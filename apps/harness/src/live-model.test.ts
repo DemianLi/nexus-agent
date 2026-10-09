@@ -1168,7 +1168,7 @@ describe('閒置計時器的收尾（#521）', () => {
   });
 });
 
-/** 工廠建出來的 client 真的帶著閒置計時，而且用的是設定裡的 `timeoutMs`。 */
+/** 工廠建出來的 client 真的帶著閒置計時，而且用的是設定裡的 `streamIdleTimeoutMs`（#1251 從 `timeoutMs` 拆出來）。 */
 describe('createLiveModel 真的掛上了閒置逾時（#521）', () => {
   const original = process.env[LIVE_API_KEY_ENV];
   const originalFetch = globalThis.fetch;
@@ -1179,7 +1179,7 @@ describe('createLiveModel 真的掛上了閒置逾時（#521）', () => {
     else process.env[LIVE_API_KEY_ENV] = original;
   });
 
-  it('吐一則事件就停：用 config.timeoutMs 逾時', async () => {
+  it('吐一則事件就停：用 config.streamIdleTimeoutMs 逾時', async () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     // 底層 fetch 是工廠建出來那一刻的全域 fetch，所以先換掉再建工廠。
     globalThis.fetch = (() =>
@@ -1194,7 +1194,7 @@ describe('createLiveModel 真的掛上了閒置逾時（#521）', () => {
         ),
       )) as typeof fetch;
 
-    const wired = createLiveModel({ ...DEFAULTS, timeoutMs: 80 }).clientConfig.fetch;
+    const wired = createLiveModel({ ...DEFAULTS, streamIdleTimeoutMs: 80 }).clientConfig.fetch;
     const response = await wired!(`${DEFAULT_LIVE_BASE_URL}/chat/completions`, { method: 'POST' });
     const reader = response.body!.getReader();
     await reader.read();

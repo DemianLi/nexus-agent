@@ -50,22 +50,31 @@
  * **10 是挑的，不是量的**：算式是量得到的，「一次呼叫最多安靜多久還算可以接受」不是。挑在
  * 半小時這個量級，是因為再往上一格，一次呼叫就可能安靜超過一小時才浮出錯誤。
  *
- * ## 偏離三：逾時語意不同，所以欄位名不照抄
+ * ## 偏離三：逾時拆兩格，第一格語意與 dsh 不同所以欄位名不照抄
  *
- * dsh 的 `streamIdleTimeoutMs` 是串流**閒置**逾時，每一段重新計時。我們的 `timeoutMs` 同一個值管兩段
- * （[#521](https://github.com/DemianLi/nexus-agent/issues/521)）：
+ * dsh 的 `llm-pi-ai` 有兩格：`timeoutMs`（SDK 請求逾時）與 `streamIdleTimeoutMs`（串流閒置，預設 300 秒；
+ * `llm-pi-ai/src/config.ts:160-166`、`:342-343`、`:47`，`5badb15`）。我們原本只有一個 `timeoutMs` 同一個值管
+ * 兩段（[#521](https://github.com/DemianLi/nexus-agent/issues/521)），[#1251](https://github.com/DemianLi/nexus-agent/issues/1251)
+ * 拆回兩格，欄位名與 dsh 一致：
  *
- * - **連線到第一則事件**：`ChatOpenAI` 的 `timeout`，交給 openai SDK 的 `setTimeout(abort, ms)`
- *   （`openai@7.5.0` 的 `client.js`，`fetchWithTimeout`）。計時器在 fetch 回來時清掉，而 #516 那層
- *   在 fetch 裡讀完第一則事件才回。這一段在重試射程內。
- * - **第一則事件之後，段與段之間**：`live-model.ts` 的 `withStreamIdleTimeout`，每一段重新計時，
- *   時間到整次重打（偏離五）。
+ * - **`timeoutMs`（預設 180 秒）= 連線到第一則事件**：`ChatOpenAI` 的 `timeout`，交給 openai SDK 的
+ *   `setTimeout(abort, ms)`（`openai@7.5.0` 的 `client.js`，`fetchWithTimeout`）。計時器在 fetch 回來時清掉，
+ *   而 #516 那層在 fetch 裡讀完第一則事件才回。這一段在重試射程內。視覺模型要先吃圖才吐第一則事件
+ *   （`meta/llama-3.2-90b-vision-instruct` 實測 133 秒），所以比閒置那格寬。
+ * - **`streamIdleTimeoutMs`（預設 90 秒）= 第一則事件之後，段與段之間**：`live-model.ts` 的
+ *   `withStreamIdleTimeout`，每一段重新計時，時間到整次重打（偏離五）。值是 demian 拍板的 90 秒，比 dsh 的
+ *   300 秒緊，理由在 `DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS`。
  *
- * 非串流（CLI 的 `invoke`）那條，SDK 讀整份 body 時計時器還在，所以是整個請求的逾時。
- * 名字不照抄 `streamIdleTimeoutMs`，因為第一段語意仍不同：它從請求開始算到第一則事件，中間收到
- * 位元組（例如標頭）也不重新計時，dsh 則每一段都重新計時。上限照 dsh 的 `MAX_TIMER_DELAY_MS`
- * （`packages/util/timeout/src/index.ts:25`），理由相同：超過 2 147 483 647 的延遲 Node 會當成
- * 1 毫秒，「調得很寬」會變成「立刻逾時」。
+ * **舊設定怎麼辦**：`timeoutMs` 這個名字保留，語意縮成只管第一段。兩格各有預設，沒有「只設一格另一格跟著走」的
+ * 隱含連動（連動會讓「只想放寬首事件」的人順便放寬了閒置，反之亦然）。出廠的 `cordis.yml` 沒寫 `timeoutMs`
+ * 以外的值，所以只有自己在 `cordis.yml` 寫過 `timeoutMs` 的人會遇到差異：首事件那一側照他寫的值，閒置那一側
+ * 變成 90 秒——寫的值小於 90 秒的人閒置變寬，大於 90 秒的人閒置變緊；要維持舊行為就把同一個值也寫到
+ * `streamIdleTimeoutMs`。
+ *
+ * 非串流（CLI 的 `invoke`）那條，SDK 讀整份 body 時計時器還在，所以 `timeoutMs` 是整個請求的逾時。
+ * `timeoutMs` 的名字雖然與 dsh 同名，語意仍不同：它從請求開始算到第一則事件，中間收到位元組（例如標頭）也不重新
+ * 計時。兩格的上限照 dsh 的 `MAX_TIMER_DELAY_MS`（`packages/util/timeout/src/index.ts:25`），理由相同：超過
+ * 2 147 483 647 的延遲 Node 會當成 1 毫秒，「調得很寬」會變成「立刻逾時」。
  *
  * ## 型錄：輸出上限、窗口、收不收圖、怎麼關推理都跟著模型走（#729）
  *
@@ -146,6 +155,7 @@ import {
   DEFAULT_LIVE_MAX_RETRIES,
   DEFAULT_LIVE_MODEL_ENTRY,
   DEFAULT_LIVE_MODEL_ID,
+  DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS,
   DEFAULT_LIVE_TIMEOUT_MS,
 } from '../live-model.js';
 import { findModelEntry, modelCatalogSchema } from '../model-catalog.js';
@@ -187,7 +197,7 @@ function isHttpRoot(value: string): boolean {
   );
 }
 
-/** 六格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
+/** 七格。`strictObject`：多寫一個欄位是打錯字，不是擴充點。 */
 export const liveModelConfigSchema = z
   .strictObject({
     /** OpenAI 相容端點的根。 */
@@ -199,8 +209,15 @@ export const liveModelConfigSchema = z
     modelId: z.string().min(1).default(DEFAULT_LIVE_MODEL_ID),
     /** 模型型錄，**整份取代**，見檔頭「型錄」。省略即出廠那一筆。 */
     models: modelCatalogSchema.default(() => [structuredClone(DEFAULT_LIVE_MODEL_ENTRY)]),
-    /** 單一請求的逾時（毫秒）。 */
+    /** 連線到第一則事件的逾時（毫秒），見檔頭「偏離三」。 */
     timeoutMs: z.number().int().min(1).max(MAX_LIVE_TIMEOUT_MS).default(DEFAULT_LIVE_TIMEOUT_MS),
+    /** 第一則事件之後，兩段位元組之間的閒置逾時（毫秒），見檔頭「偏離三」。 */
+    streamIdleTimeoutMs: z
+      .number()
+      .int()
+      .min(1)
+      .max(MAX_LIVE_TIMEOUT_MS)
+      .default(DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS),
     /** 被限流時最多重試幾次。 */
     maxRetries: z.number().int().min(0).max(MAX_LIVE_RETRIES).default(DEFAULT_LIVE_MAX_RETRIES),
     /**

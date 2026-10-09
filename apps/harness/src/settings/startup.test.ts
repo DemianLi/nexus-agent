@@ -293,7 +293,8 @@ describe('startupSetting', () => {
     expect(startupSetting(plugins, liveModelPlugin)).toEqual({
       baseUrl: 'https://integrate.api.nvidia.com/v1',
       modelId: 'nvidia/nemotron-3-super-120b-a12b',
-      timeoutMs: 90000,
+      timeoutMs: 180000,
+      streamIdleTimeoutMs: 90000,
       maxRetries: 6,
       streamRetry: { maxRetries: 2, baseDelayMs: 1000, maxDelayMs: 10000, jitterRatio: 0.1 },
       models: [

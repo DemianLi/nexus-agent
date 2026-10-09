@@ -186,6 +186,7 @@ async function runTurn(script: readonly Act[], options: RunOptions = {}) {
       liveModelConfigSchema.parse({
         baseUrl: upstream.baseUrl,
         timeoutMs: 400,
+        streamIdleTimeoutMs: 400,
         maxRetries: options.sdkRetries ?? 0,
       }),
     ),
