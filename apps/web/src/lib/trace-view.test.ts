@@ -277,6 +277,30 @@ describe('提問的答案', () => {
 });
 
 describe('收尾', () => {
+  it('被擋下（封存的會話）：人的那句後面跟一列「已擋下」，不是失敗；沒被擋下的人話沒有（#633）', () => {
+    const script = new Script();
+    const blocked = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('h1', '封存之後說的話'),
+      script.blocked(),
+    ]);
+    const rows = only(blocked);
+    expect(kinds(rows)).toEqual(['input', 'ending']);
+    expect(rows[1]).toMatchObject({
+      reason: 'blocked',
+      summary: ENDING_LABEL.blocked,
+      target: rows[0]!.target,
+    });
+    expect(blocked.status).toBe('idle');
+
+    const normal = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('h2', '正常說的話'),
+      script.completed(),
+    ]);
+    expect(kinds(only(normal))).toEqual(['input']);
+  });
+
   it('撞到輸出上限、被打斷、出錯各一列，跟在那則回覆後面', () => {
     const script = new Script();
     const capped = reduceAll(emptyConversation(), [

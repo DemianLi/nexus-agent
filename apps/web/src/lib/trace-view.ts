@@ -420,6 +420,10 @@ function itemsOf(state: ConversationState): Item[] {
         entry,
         summary: leadLine(mentionDisplayText(entry.text)),
       });
+      // 被準入閘門擋下（封存的會話，#633）：這一輪開了又立刻收，沒有模型呼叫，軌跡上就只有這句話和這一列收尾。
+      if (entry.blocked === true) {
+        rows.push(endingRow(entry.id, 'blocked', ENDING_LABEL.blocked, { target: entry.id }));
+      }
     } else if (entry.kind === 'notice') {
       rows.push({
         kind: 'notice',
