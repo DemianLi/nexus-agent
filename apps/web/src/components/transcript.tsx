@@ -66,6 +66,7 @@ import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { RetryNotice } from '@/components/retry-notice';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
+import { BLOCKED_HINT_TEXT } from '@/lib/archived-view';
 import { settledNoticeText } from '@/lib/queue-view';
 import { pairAnswers } from '@/lib/question-view';
 import { agentMessageCaption, subagentLabel, subagentNames as namesOf } from '@/lib/subagent-view';
@@ -203,6 +204,12 @@ export function Entry({
                 <ReferencedText text={entry.text} references={entry.references} />
               </BubbleContent>
             </Bubble>
+          )}
+          {/* 被準入閘門擋下的那一句（封存的會話，#633）：泡泡照畫，底下一句中性的提示（不是錯誤、不畫紅）：話沒有送給模型。 */}
+          {entry.blocked === true && (
+            <MessageFooter className="px-0" data-testid="blocked-hint">
+              {BLOCKED_HINT_TEXT}
+            </MessageFooter>
           )}
         </MessageContent>
       </Message>

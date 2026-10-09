@@ -39,6 +39,11 @@ export class Script {
     return this.frame('lifecycle', { event: 'completed', graph_name: 'root', maxTokens: true });
   }
 
+  /** 被準入閘門擋下而收尾（封存的會話，`blocked` 由 pump 補，#633）。 */
+  blocked(): Event {
+    return this.frame('lifecycle', { event: 'completed', graph_name: 'root', blocked: true });
+  }
+
   /** 人的話。 */
   human(id: string, text: string): Event[] {
     return [
