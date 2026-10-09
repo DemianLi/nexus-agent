@@ -131,7 +131,6 @@ export function createModelSelectionHost(options: {
         : {
             contextWindow: entry.contextWindow,
             maxOutputTokens: entry.maxTokens,
-            ...(entry.imageBudget !== undefined && { imageBudget: entry.imageBudget }),
           };
     },
     catalog() {

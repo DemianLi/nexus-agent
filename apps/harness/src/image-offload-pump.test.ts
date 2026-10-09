@@ -1,7 +1,8 @@
 /**
  * **圖片額度與 `image/offload` 在 pump 裡的走法**（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)，#732 第 8 項）。
- * 真的 `createNexusAgent`＋`ThreadPump`，模型是腳本（`ScriptedChatModel`），型錄額度由 `modelLimits` 給 `maxImages: 1`
- * （90b 端點實測的上限）。量的是**決定怎麼記、怎麼沿用、續接後還在**；佔位字進線上 body 那一層由 `attachment-chat-openai.test.ts` 量。
+ * 真的 `createNexusAgent`＋`ThreadPump`，模型是腳本（`ScriptedChatModel`），額度 `maxImages: 1`（90b 端點實測的上限）由腳本模型自己執行——
+ * 跟真 adapter 一樣，請求進來先量、超額拋 `IMAGE_OFFLOAD_REQUIRED`，由上層接住、下決定、再送一次。量的是**決定怎麼記、怎麼沿用、續接後還在，
+ * 以及失敗的那一次嘗試不算一次模型呼叫、不花重試**；佔位字進線上 body 與真 adapter 的拋碼由 `attachment-chat-openai.test.ts` 量。
  *
  * **零憑證、零外部連線**。
  */
@@ -24,8 +25,6 @@ import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';
 import { restoreConversation } from './conversation-restore.js';
 import { historyFrames } from './conversation-history.js';
-import { liveModelConfigSchema } from './settings/live-model.js';
-import { createModelSelectionHost } from './model-selection-host.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -76,7 +75,10 @@ async function assemble(
   onPoke?: () => void,
   seed?: readonly SessionEvent[],
 ) {
-  const model = new ScriptedChatModel({ turns });
+  const model = new ScriptedChatModel({
+    turns,
+    ...(maxImages === undefined ? {} : { imageBudget: { maxImages } }),
+  });
   const built = await createNexusAgent({
     model,
     checkpointer: new MemorySaver(),
@@ -84,12 +86,8 @@ async function assemble(
     observationPolicy: false,
     plugins: onPoke === undefined ? [] : [pokePlugin(onPoke)],
     ...(onPoke === undefined ? {} : { stepInbox: true }),
-    // `modelSelection` 與 `modelLimits` 在 serve 是一起給的；這裡只要額度那一格，所以直接給 `modelLimits`。
-    modelLimits: () => ({
-      contextWindow: 32_768,
-      maxOutputTokens: 4096,
-      ...(maxImages === undefined ? {} : { imageBudget: { maxImages } }),
-    }),
+    // 有型錄（`modelLimits`）才掛這兩顆 middleware；額度本身在腳本模型上，不在這裡。
+    modelLimits: () => ({ contextWindow: 32_768, maxOutputTokens: 4096 }),
   });
   const pump = new ThreadPump(
     built.agent as unknown as PumpAgent,
@@ -154,8 +152,19 @@ describe('超出圖片額度', () => {
     const second = humans(run.model.prompts[1]!);
     expect(imageFlags(second[0])).toEqual([true]);
     expect(imageFlags(second[1])).toEqual([false]);
-    // 只叫了該叫的次數：沒有為了省圖多叫一次（也就沒有花重試額度）。
+    // 該叫的次數：第二輪被額度擋下一次（拋 `IMAGE_OFFLOAD_REQUIRED`），但那一次沒有送出任何東西——
+    // 不算一次模型呼叫（只有兩對 `model/start`／`model/end`、`model/end` 都沒帶 `outcome`）、不花重試額度（沒有 `llm/retry*`）。
     expect(run.model.prompts).toHaveLength(2);
+    expect(run.model.rejectedImageRequests).toBe(1);
+    expect(events.filter((e) => e.type === 'model/start')).toHaveLength(2);
+    expect(events.filter((e) => e.type === 'model/end').map((e) => e.data.outcome)).toEqual([
+      undefined,
+      undefined,
+    ]);
+    expect(events.filter((e) => e.type === 'llm/retry' || e.type === 'llm/retry-started')).toEqual(
+      [],
+    );
+    expect(events.some((e) => e.type === 'turn/failed')).toBe(false);
 
     // 沒圖的第三輪：沿用，不再記。
     await run.pump.submit({ kind: 'message', text: '只是問個問題', id: 'm3' });
@@ -243,6 +252,7 @@ describe('超出圖片額度', () => {
       await run.pump.whenIdle();
     }
     expect(offloadEvents(run.pump.sessionLog.events)).toHaveLength(0);
+    expect(run.model.rejectedImageRequests).toBe(0);
     expect(humans(run.model.prompts[2]!).map((m) => imageFlags(m))).toEqual([
       [false],
       [false],
@@ -404,33 +414,4 @@ describe('重啟續接（日誌帶回來、對話照日誌灌回）', () => {
         .filter((flags) => flags.length > 0),
     ).toEqual([[true], [true], [false]]);
   }, 20000);
-});
-
-describe('型錄的 imageBudget 經 limitsOf 到 middleware', () => {
-  it('limitsOf 把條目的 imageBudget 帶出去；沒宣告的那顆沒有這一格', () => {
-    const entry = (id: string, imageBudget?: { maxImages?: number; maxBytes?: number }) => ({
-      id,
-      contextWindow: 32_768,
-      maxTokens: 4096,
-      input: ['text', 'image'] as ('text' | 'image')[],
-      ...(imageBudget === undefined ? {} : { imageBudget }),
-    });
-    const host = createModelSelectionHost({
-      liveModel: liveModelConfigSchema.parse({
-        modelId: 'limited',
-        models: [entry('limited', { maxImages: 1, maxBytes: 4096 }), entry('free')],
-      }),
-      credentials: undefined,
-    });
-    expect(host.limitsOf({ model: 'limited' })).toEqual({
-      contextWindow: 32_768,
-      maxOutputTokens: 4096,
-      imageBudget: { maxImages: 1, maxBytes: 4096 },
-    });
-    expect(host.limitsOf({ model: 'free' })).toEqual({
-      contextWindow: 32_768,
-      maxOutputTokens: 4096,
-    });
-    expect(host.limitsOf({ model: 'not-in-catalog' })).toBeUndefined();
-  });
 });

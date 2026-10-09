@@ -4,7 +4,7 @@
  * 掛進真的組裝之後（pump 蓋記號、日誌落盤、續接）的行為在 `apps/harness/src/image-offload-pump.test.ts`。
  */
 
-import { AIMessage, HumanMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { describe, expect, it } from 'vitest';
@@ -12,9 +12,14 @@ import { describe, expect, it } from 'vitest';
 import type { ImageAttachmentRef } from './attachment-ref.js';
 import {
   applyImageOffload,
+  assertImageBudget,
   base64Length,
   createImageOffloadMiddleware,
+  createImageOffloadRecoveryMiddleware,
   hasImageBlock,
+  IMAGE_OFFLOAD_REQUIRED_CODE,
+  ImageOffloadRequiredError,
+  imageOffloadRequiredOf,
   imageOccurrences,
   imageOriginOf,
   offloadedImagesOf,
@@ -203,100 +208,218 @@ describe('applyImageOffload', () => {
   });
 });
 
-describe('createImageOffloadMiddleware', () => {
-  type Hook = (
-    request: never,
-    handler: (request: { messages: readonly BaseMessage[] }) => Promise<unknown>,
-  ) => Promise<unknown>;
-
-  function setup(budget: { maxImages?: number; maxBytes?: number } | undefined, found?: 'ok') {
-    const log = new SessionLog('s');
-    const lookup: SessionLookup =
-      found === undefined || found === 'ok'
-        ? { kind: 'ok', address: { kind: 'root' } as never, log }
-        : { kind: 'not-attached' };
-    const seen: unknown[] = [];
-    const middleware = createImageOffloadMiddleware({
-      sessions: { forCall: () => lookup },
-      budgetOf: () => budget,
-    }) as unknown as { wrapModelCall: Hook };
-    const call = (messages: readonly BaseMessage[]) =>
-      middleware.wrapModelCall(
-        {
-          model: new FakeListChatModel({ responses: ['好'] }),
-          messages,
-          runtime: { configurable: { checkpoint_ns: 'model_request:x' } },
-        } as never,
-        async (request) => {
-          seen.push(request.messages);
-          return 'ok';
-        },
-      );
-    return { log, call, seen };
-  }
-
-  it('沒有圖的請求原樣通過、不讀日誌', async () => {
-    const run = setup({ maxImages: 1 });
-    const messages = [new HumanMessage('字')];
-    await run.call(messages);
-    expect(run.seen[0]).toBe(messages);
-    expect(run.log.events).toHaveLength(0);
+describe('assertImageBudget／ImageOffloadRequiredError（adapter 那一側：只量、不決定）', () => {
+  it('額度內、沒宣告額度：什麼都不做', () => {
+    const messages = [human([ref('a')], 5), human([ref('b')], 7)];
+    expect(() => assertImageBudget(messages, { maxImages: 2 })).not.toThrow();
+    expect(() => assertImageBudget(messages, {})).not.toThrow();
   });
 
-  it('超額：記一筆 image/offload，送出去的請求最舊的圖已省略；下一次不重記', async () => {
-    const run = setup({ maxImages: 1 });
+  it('超額：拋 IMAGE_OFFLOAD_REQUIRED，offloadImages 就是 requiredImageOffload 算的量', () => {
+    const messages = [human([ref('a')], 5), human([ref('b')], 7), human([ref('c')], 8)];
+    let caught: unknown;
+    try {
+      assertImageBudget(messages, { maxImages: 1 });
+    } catch (error) {
+      caught = error;
+    }
+    expect(caught).toBeInstanceOf(ImageOffloadRequiredError);
+    expect(caught).toMatchObject({ code: IMAGE_OFFLOAD_REQUIRED_CODE, offloadImages: 2 });
+    expect(IMAGE_OFFLOAD_REQUIRED_CODE).toBe('IMAGE_OFFLOAD_REQUIRED');
+    // 位元組那一格也量：每張 300 位元組 → base64 400，額度 500 只容得下一張。
+    expect(() => assertImageBudget(messages, { maxBytes: 500 })).toThrow(
+      expect.objectContaining({ offloadImages: 2 }),
+    );
+  });
+
+  it('已經標成省略的不再算', () => {
+    const [a] = applyImageOffload([human([ref('a')], 5)], new Map([[5, new Set([0])]]));
+    expect(() => assertImageBudget([a!, human([ref('b')], 7)], { maxImages: 1 })).not.toThrow();
+  });
+
+  it('imageOffloadRequiredOf 沿 cause 鏈找；別的錯誤回 undefined', () => {
+    const inner = new ImageOffloadRequiredError(3);
+    expect(imageOffloadRequiredOf(inner)).toBe(inner);
+    expect(imageOffloadRequiredOf(new Error('包一層', { cause: inner }))).toBe(inner);
+    expect(imageOffloadRequiredOf(new Error('別的'))).toBeUndefined();
+    expect(imageOffloadRequiredOf('字串')).toBeUndefined();
+  });
+});
+
+type Hook = (
+  request: never,
+  handler: (request: { messages: readonly BaseMessage[] }) => Promise<unknown>,
+) => Promise<unknown>;
+
+/**
+ * 洋蔥：標記層（外）→ 接住層（內）→ 假 adapter（照真的：先量額度、超額拋、否則記下收到的請求）。
+ * `attempts` 是假 adapter 被叫的次數（含被擋下的）；`seen` 是它放行的請求。
+ */
+function chain(
+  budget: { maxImages?: number; maxBytes?: number } | undefined,
+  lookup?: SessionLookup,
+) {
+  const log = new SessionLog('s');
+  const resolved: SessionLookup = lookup ?? { kind: 'ok', address: { kind: 'root' } as never, log };
+  const deps = { sessions: { forCall: () => resolved } };
+  const outer = createImageOffloadMiddleware(deps) as unknown as { wrapModelCall: Hook };
+  const inner = createImageOffloadRecoveryMiddleware(deps) as unknown as { wrapModelCall: Hook };
+  const seen: (readonly BaseMessage[])[] = [];
+  let attempts = 0;
+  const adapter = async (request: { messages: readonly BaseMessage[] }) => {
+    attempts += 1;
+    if (budget !== undefined) assertImageBudget(request.messages, budget);
+    seen.push(request.messages);
+    return 'ok';
+  };
+  const call = (messages: readonly BaseMessage[]) => {
+    const request = {
+      model: new FakeListChatModel({ responses: ['好'] }),
+      messages,
+      runtime: { configurable: { checkpoint_ns: 'model_request:x' } },
+    } as never;
+    return outer.wrapModelCall(request, (next) => inner.wrapModelCall(next as never, adapter));
+  };
+  return { log, call, seen, attempts: () => attempts };
+}
+
+describe('createImageOffloadMiddleware（標記層：只套日誌上已經下的決定）', () => {
+  it('沒有圖的請求原樣通過、不讀日誌', async () => {
+    const lookups: unknown[] = [];
+    const middleware = createImageOffloadMiddleware({
+      sessions: {
+        forCall: () => {
+          lookups.push(1);
+          return { kind: 'not-attached' };
+        },
+      },
+    }) as unknown as { wrapModelCall: Hook };
+    const messages = [new HumanMessage('字')];
+    const seen: unknown[] = [];
+    await middleware.wrapModelCall({ messages } as never, async (r) => {
+      seen.push(r.messages);
+      return 'ok';
+    });
+    expect(seen[0]).toBe(messages);
+    expect(lookups).toHaveLength(0);
+  });
+
+  it('日誌上已有的決定照樣標上去；自己從不下新決定', async () => {
+    const run = chain(undefined);
+    run.log.append('image/offload', { targets: [{ seq: 5, imageIndexes: [0] }] });
+    const messages = [human([ref('a')], 5), human([ref('b')], 7), human([ref('c')], 8)];
+    await run.call(messages);
+    expect(run.log.events).toHaveLength(1);
+    expect(run.seen[0]!.map(flags)).toEqual([[true], [false], [false]]);
+    expect(flags(messages[0])).toEqual([false]);
+  });
+
+  it('沒接 session：不標、不拋', async () => {
+    const run = chain(undefined, { kind: 'not-attached' });
+    const messages = [human([ref('a')], 5), human([ref('b')], 7)];
+    await run.call(messages);
+    expect(run.seen[0]).toBe(messages);
+  });
+});
+
+describe('createImageOffloadRecoveryMiddleware（接住 adapter 的拋碼：下決定、再送一次）', () => {
+  it('超額：adapter 拋一次，記一筆 image/offload，再送的請求最舊的圖已省略；下一次呼叫標記層直接套、不再拋也不重記', async () => {
+    const run = chain({ maxImages: 1 });
     const messages = [human([ref('a')], 5), human([ref('b')], 7)];
     await run.call(messages);
     expect(run.log.events.map((e) => [e.type, e.data])).toEqual([
       ['image/offload', { targets: [{ seq: 5, imageIndexes: [0] }] }],
     ]);
-    const sent = run.seen[0] as BaseMessage[];
-    expect(sent.map(flags)).toEqual([[true], [false]]);
+    expect(run.attempts()).toBe(2);
+    expect(run.seen).toHaveLength(1);
+    expect(run.seen[0]!.map(flags)).toEqual([[true], [false]]);
     expect(flags(messages[0])).toEqual([false]);
 
     await run.call(messages);
+    expect(run.attempts()).toBe(3);
     expect(run.log.events).toHaveLength(1);
-    expect((run.seen[1] as BaseMessage[]).map(flags)).toEqual([[true], [false]]);
+    expect(run.seen[1]!.map(flags)).toEqual([[true], [false]]);
   });
 
-  it('額度內：不記、請求原樣', async () => {
-    const run = setup({ maxImages: 2 });
+  it('額度內：adapter 不拋，一次送出、不記', async () => {
+    const run = chain({ maxImages: 2 });
     const messages = [human([ref('a')], 5), human([ref('b')], 7)];
     await run.call(messages);
+    expect(run.attempts()).toBe(1);
     expect(run.log.events).toHaveLength(0);
     expect(run.seen[0]).toBe(messages);
   });
 
-  it('沒宣告額度：不檢查；但日誌上已有的決定照樣沿用', async () => {
-    const run = setup(undefined);
-    run.log.append('image/offload', { targets: [{ seq: 5, imageIndexes: [0] }] });
-    const messages = [human([ref('a')], 5), human([ref('b')], 7), human([ref('c')], 8)];
-    await run.call(messages);
-    expect(run.log.events).toHaveLength(1);
-    expect((run.seen[0] as BaseMessage[]).map(flags)).toEqual([[true], [false], [false]]);
+  it('一次要省多張：一筆 image/offload 帶全部目標、只再送一次', async () => {
+    const run = chain({ maxImages: 1 });
+    await run.call([human([ref('a')], 5), human([ref('b')], 7), human([ref('c')], 8)]);
+    expect(run.log.events.map((e) => e.data)).toEqual([
+      {
+        targets: [
+          { seq: 5, imageIndexes: [0] },
+          { seq: 7, imageIndexes: [0] },
+        ],
+      },
+    ]);
+    expect(run.attempts()).toBe(2);
   });
 
-  it('額度比能選的還緊（沒有記號的圖）：能省的省、其餘照送，不拋', async () => {
-    const run = setup({ maxImages: 1 });
-    const messages = [human([ref('a')]), human([ref('b')])];
-    await run.call(messages);
-    expect(run.log.events).toHaveLength(0);
-    expect(run.seen[0]).toBe(messages);
-  });
-
-  it('沒接 session：不省略、不拋', async () => {
+  it('不是這個碼的錯誤原樣往外拋，什麼都不記', async () => {
     const log = new SessionLog('s');
-    const seen: unknown[] = [];
-    const middleware = createImageOffloadMiddleware({
-      sessions: { forCall: () => ({ kind: 'not-attached' }) },
-      budgetOf: () => ({ maxImages: 1 }),
+    const middleware = createImageOffloadRecoveryMiddleware({
+      sessions: { forCall: () => ({ kind: 'ok', address: { kind: 'root' } as never, log }) },
     }) as unknown as { wrapModelCall: Hook };
-    const messages = [human([ref('a')], 5), human([ref('b')], 7)];
-    await middleware.wrapModelCall({ model: {}, messages } as never, async (request) => {
-      seen.push(request.messages);
-      return 'ok';
-    });
-    expect(seen[0]).toBe(messages);
+    const boom = new Error('別的失敗');
+    await expect(
+      middleware.wrapModelCall({ messages: [human([ref('a')], 5)] } as never, async () => {
+        throw boom;
+      }),
+    ).rejects.toBe(boom);
     expect(log.events).toHaveLength(0);
+  });
+
+  it('沒有記號的圖選不到：原錯誤往外（走一般失敗路徑），不亂記', async () => {
+    const run = chain({ maxImages: 1 });
+    await expect(run.call([human([ref('a')]), human([ref('b')])])).rejects.toMatchObject({
+      code: IMAGE_OFFLOAD_REQUIRED_CODE,
+      offloadImages: 1,
+    });
+    expect(run.log.events).toHaveLength(0);
+    expect(run.attempts()).toBe(1);
+  });
+
+  it('能省的省、省完仍超額就往外拋：每圈至少多省一張所以一定會停', async () => {
+    const run = chain({ maxImages: 1 });
+    await expect(
+      run.call([human([ref('a')], 5), human([ref('b')]), human([ref('c')])]),
+    ).rejects.toMatchObject({ code: IMAGE_OFFLOAD_REQUIRED_CODE, offloadImages: 1 });
+    expect(run.log.events.map((e) => e.data)).toEqual([
+      { targets: [{ seq: 5, imageIndexes: [0] }] },
+    ]);
+    expect(run.attempts()).toBe(2);
+  });
+
+  it('選到了卻標不上（標記層只標人話訊息）：不記沒有效果的決定、不轉圈，原錯誤往外', async () => {
+    const run = chain({ maxImages: 1 });
+    const tool = stampImageOrigin(
+      new ToolMessage({
+        content: [{ type: 'nexus-image', attachment: ref('a') }] as never,
+        tool_call_id: 't1',
+      }),
+      5,
+    );
+    await expect(run.call([tool, human([ref('b')], 7)])).rejects.toMatchObject({
+      code: IMAGE_OFFLOAD_REQUIRED_CODE,
+    });
+    expect(run.attempts()).toBe(1);
+    expect(run.log.events).toHaveLength(0);
+  });
+
+  it('沒接 session：決定記不下來，原錯誤往外', async () => {
+    const run = chain({ maxImages: 1 }, { kind: 'not-attached' });
+    await expect(run.call([human([ref('a')], 5), human([ref('b')], 7)])).rejects.toMatchObject({
+      code: IMAGE_OFFLOAD_REQUIRED_CODE,
+    });
+    expect(run.attempts()).toBe(1);
   });
 });
