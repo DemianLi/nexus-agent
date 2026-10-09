@@ -1309,8 +1309,19 @@ function reduceSessionStats(state: ConversationState, payload: object): Conversa
   return { ...state, sessionStats: { turns, steps, llmMs, toolMs } };
 }
 
-/** 排著的一件長得對不對：`@nexus/core` 的 `QueuedInput`，`source` 是人或背景子代理的結算通知；帶了 `attachments` 就要形狀合格。 */
-function isQueuedInput(value: unknown): value is WireQueuedInput {
+/**
+ * 線上送來的一件排著的話，**還沒歸類來源**：`source.kind` 只要求是非空字串（種類由 {@link queuedSource} 歸）。
+ * 認不得的種類照收（#638 後續：照 dsh，不丟那一件也不丟整份），所以這裡不驗種類。
+ */
+interface RawQueuedInput {
+  readonly id: string;
+  readonly text: string;
+  readonly source: Readonly<Record<string, unknown>> & { readonly kind: string };
+  readonly attachments?: readonly WireAttachmentRef[];
+}
+
+/** 排著的一件長得對不對：`id`、`text` 是字串，`source` 是帶非空字串 `kind` 的物件；帶了 `attachments` 就要形狀合格。 */
+function isQueuedInput(value: unknown): value is RawQueuedInput {
   if (typeof value !== 'object' || value === null) return false;
   const { id, text, source, attachments } = value as {
     id?: unknown;
@@ -1324,23 +1335,44 @@ function isQueuedInput(value: unknown): value is WireQueuedInput {
     isWireAttachments(attachments) &&
     typeof source === 'object' &&
     source !== null &&
-    isQueuedSourceKind((source as { kind?: unknown }).kind)
+    typeof (source as { kind?: unknown }).kind === 'string' &&
+    (source as { kind: string }).kind !== ''
   );
 }
 
 /**
- * 認得的佇列來源，**逐種列在一張以聯集為鍵的表上**：`WireQueuedInputSource` 多一種，這張表當場編不過；少一種（多出的鍵）也一樣。
+ * 認得的佇列來源怎麼投影，**逐種列在一張以聯集為鍵的表上**：`WireQueuedInputSource` 多一種，這張表當場編不過；少一種（多出的鍵）也一樣。
  * 以前是手寫的 `||` 串，#1242 加了 `goal` 沒跟著改，含 goal 件的 `inbox` frame 整顆被丟（#1243）。
+ * 表上沒有的種類由 {@link queuedSource} 歸到 `unrecognized`，照 dsh 收下。
  */
-const QUEUED_SOURCE_KINDS: Readonly<Record<WireQueuedInputSource['kind'], true>> = {
-  user: true,
-  'subagent-settled': true,
-  'agent-message': true,
-  goal: true,
+const QUEUED_SOURCE_PROJECTORS: {
+  readonly [K in WireQueuedInputSource['kind']]: (
+    source: Readonly<Record<string, unknown>>,
+  ) => Extract<WireQueuedInputSource, { kind: K }>;
+} = {
+  user: () => ({ kind: 'user' }),
+  'subagent-settled': (source) =>
+    isSettleReason(source['reason'])
+      ? { kind: 'subagent-settled', reason: source['reason'] }
+      : { kind: 'subagent-settled' },
+  'agent-message': () => ({ kind: 'agent-message' }),
+  goal: () => ({ kind: 'goal' }),
+  // 線上直接送這個名字的話，原話不明，退回名字本身。
+  unrecognized: (source) => ({
+    kind: 'unrecognized',
+    original: typeof source['original'] === 'string' ? source['original'] : 'unrecognized',
+  }),
 };
 
-function isQueuedSourceKind(kind: unknown): kind is WireQueuedInputSource['kind'] {
-  return typeof kind === 'string' && Object.hasOwn(QUEUED_SOURCE_KINDS, kind);
+/** 把線上的 `source` 歸成 {@link WireQueuedInputSource}：認得的照表投影（只帶認得的欄位），不認得的收成 `unrecognized` 並留下原種類。 */
+function queuedSource(source: RawQueuedInput['source']): WireQueuedInputSource {
+  if (!Object.hasOwn(QUEUED_SOURCE_PROJECTORS, source.kind)) {
+    return { kind: 'unrecognized', original: source.kind };
+  }
+  const project = QUEUED_SOURCE_PROJECTORS[source.kind as WireQueuedInputSource['kind']] as (
+    source: Readonly<Record<string, unknown>>,
+  ) => WireQueuedInputSource;
+  return project(source);
 }
 
 /** 一句話 `@` 的會話長得對不對。沒給（`undefined`）合法，給了就每一條都要是兩個字串。 */
@@ -1483,6 +1515,10 @@ function reduceInbox(
     }
     // 目標續行的預約開跑（#638）：給模型的提示詞，畫面不長任何一格。
     if (sourceKind === 'goal') continue;
+    // 不認得的來源（新版 harness 加的種類）：不是人說的話，**不畫人的泡泡**；沒有來源（舊的一側）與 `user` 才是人。
+    if (typeof sourceKind === 'string' && sourceKind !== 'user' && sourceKind !== 'agent-message') {
+      continue;
+    }
     if (sourceKind === 'agent-message') {
       const { senderSessionId, runId } = source as { senderSessionId?: unknown; runId?: unknown };
       // 寄件人缺了就整顆不收：沒有寄件人的「某某說」畫不出來，又不能悄悄當成人話。
@@ -1508,14 +1544,11 @@ function reduceInbox(
       ...timeField('startedAt', time),
     });
   }
-  const queued = (list: readonly WireQueuedInput[]) =>
+  const queued = (list: readonly RawQueuedInput[]): WireQueuedInput[] =>
     list.map(({ id, text, source, attachments }) => ({
       id,
       text,
-      source:
-        source.kind === 'subagent-settled' && isSettleReason(source.reason)
-          ? { kind: source.kind, reason: source.reason }
-          : { kind: source.kind },
+      source: queuedSource(source),
       // 排著的件帶的附件（#732）：空陣列與沒給一樣不帶這一格。
       ...attachmentsField(attachments),
     }));
