@@ -194,11 +194,11 @@ export function PlanCard({ entry, plan }: { entry: ToolEntry; plan: PlanDocument
       data-testid="plan-card"
       data-outcome={outcome}
     >
-      <div className="text-muted-foreground flex min-h-9 items-center gap-2 px-3 pt-1 text-tip">
+      <div className="text-muted-foreground flex min-h-9 items-center gap-2 px-3 pt-1 text-ui">
         <ScrollText aria-hidden className="size-4 shrink-0" />
         <span className="flex-1">計劃</span>
         {outcome !== undefined && (
-          <span className="bg-chip rounded-full px-3 py-1" data-testid="plan-outcome">
+          <span className="bg-chip rounded-full px-3 py-1 text-tip" data-testid="plan-outcome">
             {PLAN_OUTCOME_LABEL[outcome]}
           </span>
         )}

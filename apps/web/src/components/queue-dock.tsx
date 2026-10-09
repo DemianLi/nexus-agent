@@ -455,7 +455,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
         >
           <RowTrigger
             disabled={editing !== undefined || busy !== undefined}
-            className="text-muted-foreground gap-2 text-tip disabled:cursor-default lg:min-h-9"
+            className="text-muted-foreground gap-2 text-ui disabled:cursor-default lg:min-h-9"
           >
             <ListEnd aria-hidden className="size-4 shrink-0" />
             <span className="min-w-0 flex-1 truncate">{queueHeading(live.length)}</span>

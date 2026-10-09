@@ -83,7 +83,7 @@ export function PickerSeat({
             aria-label={accessibleName}
             data-testid={testId}
             data-warning={warning}
-            className={`hover:bg-chip-hover active:bg-chip-pressed flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-full px-2 text-tip transition-colors duration-(--duration-quick) lg:h-9 lg:min-w-9 ${warning ? 'text-warning' : 'text-muted-foreground'}`}
+            className={`hover:bg-chip-hover active:bg-chip-pressed flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-full px-2 text-ui transition-colors duration-(--duration-quick) lg:h-9 lg:min-w-9 ${warning ? 'text-warning' : 'text-muted-foreground'}`}
           >
             <span aria-hidden className="flex size-4 items-center justify-center">
               {icon}

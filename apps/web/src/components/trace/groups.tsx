@@ -80,7 +80,7 @@ export function TurnGroup({
         <Button
           type="button"
           variant="ghost"
-          className="min-h-11 w-full text-tip lg:min-h-9"
+          className="min-h-11 w-full text-ui lg:min-h-9"
           data-testid="trace-more-rows"
           onClick={() => setShown((count) => count + ROW_PAGE)}
         >
@@ -150,7 +150,7 @@ export function Digests({
   }, [reveal, ready, shown, open, onRevealed]);
   return (
     <Collapsible className="mb-4" data-testid="trace-digests" open={open} onOpenChange={setOpen}>
-      <RowTrigger fit="bare" className="text-tip">
+      <RowTrigger fit="bare" className="text-ui">
         <span className="text-muted-foreground">
           更早的 {digests.length + omitted} 輪（只有摘要）
         </span>
@@ -166,7 +166,7 @@ export function Digests({
           <Button
             type="button"
             variant="ghost"
-            className="mb-1 min-h-11 w-full text-tip lg:min-h-9"
+            className="mb-1 min-h-11 w-full text-ui lg:min-h-9"
             data-testid="trace-more-digests"
             onClick={() => setShown((count) => count + DIGEST_PAGE)}
           >
