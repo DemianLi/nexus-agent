@@ -2668,34 +2668,59 @@ export class ThreadPump {
     if (raw.method !== 'messages' || raw.params.namespace.length > 1) return;
     const data = raw.params.data as { event?: string; role?: string } | null;
     if (data?.event !== 'message-start' || data.role === 'human') return;
-    const previous = current.reply;
-    if (current.replyOpen && previous !== undefined && previous.finish === undefined) {
-      const reasoning = current.reasoning;
-      const text = current.partial;
-      const liveId = (previous.start as { id?: unknown }).id;
-      const abandoned = new AIMessage({
-        ...(typeof liveId === 'string' && liveId !== '' ? { id: liveId } : {}),
-        content:
-          reasoning.trim() === ''
-            ? text
-            : [
-                { type: 'reasoning', reasoning },
-                ...(text === '' ? [] : [{ type: 'text' as const, text }]),
-              ],
-      });
-      try {
-        this.#sessions.root.append(
-          'assistant/attempt',
-          withModelCall({ message: toLoggedMessage(abandoned) }, current.replyModelCall),
-          { ignorable: true },
-        );
-      } catch {
-        // 紀錄是附帶的：寫不進去不能讓重打的那一輪跟著失敗，畫面照樣擦。
-      }
-      this.#presentCustom({ name: MESSAGE_DISCARD, payload: { messageId: previous.key } });
-      current.reply = undefined;
-    }
+    if (current.replyOpen) this.#discardOpenReply(current);
     current.replyModelCall = lastModelCall(this.#sessions.root);
+  }
+
+  /**
+   * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型，`ignorable`），線上送
+   * `message-discard` 讓畫面把它擦掉，並把這一則從「講到一半」的追蹤裡拿掉。沒有講到一半的就什麼都不做。
+   */
+  #discardOpenReply(current: CurrentRun): void {
+    const previous = current.reply;
+    if (!current.replyOpen || previous === undefined || previous.finish !== undefined) return;
+    const reasoning = current.reasoning;
+    const text = current.partial;
+    const liveId = (previous.start as { id?: unknown }).id;
+    const abandoned = new AIMessage({
+      ...(typeof liveId === 'string' && liveId !== '' ? { id: liveId } : {}),
+      content:
+        reasoning.trim() === ''
+          ? text
+          : [
+              { type: 'reasoning', reasoning },
+              ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+            ],
+    });
+    try {
+      this.#sessions.root.append(
+        'assistant/attempt',
+        withModelCall({ message: toLoggedMessage(abandoned) }, current.replyModelCall),
+        { ignorable: true },
+      );
+    } catch {
+      // 紀錄是附帶的：寫不進去不能讓重打的那一輪跟著失敗，畫面照樣擦。
+    }
+    this.#presentCustom({ name: MESSAGE_DISCARD, payload: { messageId: previous.key } });
+    current.reply = undefined;
+    current.partial = '';
+    current.reasoning = '';
+    current.replyOpen = false;
+  }
+
+  /**
+   * 講到一半的那則回覆，所屬的那次呼叫是不是**已經失敗收尾**（`model/end` 帶 `outcome: 'error'`）。是的話，這一則是一次死掉的
+   * 嘗試：它只可能在等重打的退避裡被留在畫面上——使用者在那時按停止，不能把它當「被我打斷的半段」存回對話。
+   */
+  #openReplyBelongsToFailedCall(current: CurrentRun): boolean {
+    const call = current.replyModelCall;
+    if (call === undefined) return false;
+    return this.#sessions.root.events.some(
+      (event) =>
+        event.type === 'model/end' &&
+        (event.data as SessionEventMap['model/end']).modelCall === call &&
+        (event.data as SessionEventMap['model/end']).outcome === 'error',
+    );
   }
 
   /**
@@ -2717,6 +2742,11 @@ export class ThreadPump {
    * 一側照樣拿得到這半段。它落在被切斷那次呼叫的 `model/end` 之後——寫入點看到的是拋錯，不是回覆。
    */
   async #keepInterruptedReply(current: CurrentRun): Promise<void> {
+    // 整次重打的退避期間被停止（#520）：那則是上一次失敗的嘗試，同 dsh——失敗當下就記成 `assistant/attempt`，停止時不留。
+    if (current.replyOpen && this.#openReplyBelongsToFailedCall(current)) {
+      this.#discardOpenReply(current);
+      return;
+    }
     const reasoning = current.reasoning.trim() === '' ? '' : current.reasoning;
     const text = current.partial.trim() === '' ? '' : current.partial;
     if (!current.replyOpen || (reasoning === '' && text === '')) return;

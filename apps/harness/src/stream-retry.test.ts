@@ -37,9 +37,10 @@ type Act =
   /** 第一則事件就是 503 的錯誤（第一則事件之前，歸 SDK 層管）。 */
   | 'first503';
 
-const chunk = (delta: Record<string, unknown>, finish: string | null = null): string =>
+/** 每個 chunk 帶所屬請求的編號當 id：兩次嘗試的 id 不同，作廢記號指對了哪一則才分得出來。 */
+const chunk = (id: string, delta: Record<string, unknown>, finish: string | null = null): string =>
   `data: ${JSON.stringify({
-    id: 'c',
+    id,
     object: 'chat.completion.chunk',
     created: 0,
     model: 'fake',
@@ -55,6 +56,7 @@ async function scriptedOpenAi(script: readonly Act[]) {
   const server = createServer((req, res: ServerResponse) => {
     const act = script[hits] ?? 'ok';
     hits += 1;
+    const id = `chatcmpl-${hits}`;
     req.resume();
     res.writeHead(200, { 'content-type': 'text/event-stream' });
     if (act === 'first503') {
@@ -62,16 +64,16 @@ async function scriptedOpenAi(script: readonly Act[]) {
       res.end('data: [DONE]\n\n');
       return;
     }
-    res.write(chunk({ role: 'assistant', content: '' }));
+    res.write(chunk(id, { role: 'assistant', content: '' }));
     if (act === 'ok') {
-      res.write(chunk({ content: '丙' }));
-      res.write(chunk({ content: '丁' }));
-      res.write(chunk({}, 'stop'));
+      res.write(chunk(id, { content: '丙' }));
+      res.write(chunk(id, { content: '丁' }));
+      res.write(chunk(id, {}, 'stop'));
       res.end('data: [DONE]\n\n');
       return;
     }
-    res.write(chunk({ content: '甲' }));
-    res.write(chunk({ content: '乙' }));
+    res.write(chunk(id, { content: '甲' }));
+    res.write(chunk(id, { content: '乙' }));
     if (act === 'stall') return;
     if (act === 'cut') {
       setTimeout(() => res.socket?.destroy(), 30);
@@ -100,6 +102,8 @@ interface RunOptions {
   readonly streamRetry?: { maxRetries: number; baseDelayMs: number };
   /** SDK 層的重試次數（第一則事件之前的失敗）。 */
   readonly sdkRetries?: number;
+  /** 這一輪跑著的時候同時跑的東西（例如在特定時刻按停止）。 */
+  readonly during?: (pump: ThreadPump) => Promise<void>;
 }
 
 /** 起一個 pump 跑一輪，回頭交出日誌、線上 frame 與 `submit` 拋出的東西。 */
@@ -126,10 +130,11 @@ async function runTurn(script: readonly Act[], options: RunOptions = {}) {
       frames.push(frame);
   })();
   try {
-    const thrown = await pump.submit({ kind: 'message', text: '說點什麼' }).then(
+    const turn = pump.submit({ kind: 'message', text: '說點什麼' }).then(
       () => undefined,
       (error: unknown) => error,
     );
+    const [thrown] = await Promise.all([turn, options.during?.(pump)]);
     return {
       thrown,
       frames,
@@ -212,12 +217,19 @@ describe('串流第一則事件之後才出錯（#520）', () => {
       expect(starts).toHaveLength(2);
       expect(starts[0]!.seq!).toBeLessThan(discards[0]!.seq!);
       expect(discards[0]!.seq!).toBeLessThan(starts[1]!.seq!);
-      const firstKey = (starts[0]!.params.data as { run_id?: string; id?: string }).run_id;
-      expect(
-        (discards[0]!.params.data as { payload: { messageId: string } }).payload.messageId,
-      ).toBe(firstKey ?? (starts[0]!.params.data as { id: string }).id);
+      const keyOf = (frame: Event): string => {
+        const data = frame.params.data as { run_id?: string; id?: string };
+        return data.run_id ?? data.id!;
+      };
+      const discarded = (discards[0]!.params.data as { payload: { messageId: string } }).payload
+        .messageId;
+      // 兩次嘗試是兩個不同的 id；作廢指的是第一則，不是存活的那一則。
+      expect(keyOf(starts[0]!)).not.toBe(keyOf(starts[1]!));
+      expect(discarded).toBe(keyOf(starts[0]!));
+      expect(discarded).not.toBe(keyOf(starts[1]!));
       const shown = shownReplies(run.frames);
       expect(shown.map((entry) => entry.text)).toEqual(['丙丁']);
+      expect(shown.map((entry) => entry.id)).toEqual([keyOf(starts[1]!)]);
     },
     30_000,
   );
@@ -249,6 +261,36 @@ describe('串流第一則事件之後才出錯（#520）', () => {
     });
     expect(zero.hits).toBe(1);
     expect(zero.thrown).toBeInstanceOf(Error);
+  }, 30_000);
+
+  it('等重打的退避時按了停止：不再打，輪次收成中止，失敗那次的半段記成 attempt、不存回對話', async () => {
+    const run = await runTurn(['mid503', 'ok'], {
+      // 退避拉到 30 秒：按停止時一定還在等。
+      streamRetry: { maxRetries: 2, baseDelayMs: 30_000 },
+      during: async (pump) => {
+        // 等到第一次嘗試失敗收尾（model/end 帶 error），這時就在退避裡。
+        for (let waited = 0; waited < 10_000; waited += 20) {
+          const failed = pump.sessions.root.events.some(
+            (event) =>
+              event.type === 'model/end' &&
+              (event.data as SessionEventMap['model/end']).outcome === 'error',
+          );
+          if (failed) break;
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+        expect(pump.cancel()).toBe('run');
+      },
+    });
+    // 一路上只打過一次，輪次以中止收尾，不是失敗。
+    expect(run.hits).toBe(1);
+    const ends = run.events.filter((event) => event.type === 'turn/end');
+    expect(ends).toHaveLength(1);
+    expect(ends[0]!.data).toMatchObject({ reason: { kind: 'aborted', cause: { kind: 'user' } } });
+    expect(run.events.filter((event) => event.type === 'turn/failed')).toHaveLength(0);
+    // 失敗那次的半段：記成 attempt、畫面擦掉；不是被打斷的回覆（那會進對話歷史，下一輪模型看得到）。
+    expect(run.events.filter((event) => event.type === 'assistant/attempt')).toHaveLength(1);
+    expect(run.events.filter((event) => event.type === 'assistant/message')).toHaveLength(0);
+    expect(shownReplies(run.frames)).toEqual([]);
   }, 30_000);
 
   it('第一則事件就是錯誤的：歸 SDK 層，不跟串流重試相乘', async () => {

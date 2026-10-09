@@ -514,11 +514,11 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  *    所以退到手上最靠近 adapter 的一格：建 client 的這個工廠。
  * 3. **重試掛在迴圈的步級掛點**（`llm/src/retry-policy.ts:5`、`llm-retry/src/index.ts` 聽
  *    `agent/request-error`），所以它是在整條串流跑完之後才判 `finish.kind === 'error'`
- *    （`core/agent-loop/src/agent.ts:444`）—— **中段才出錯的串流 dsh 照樣重試**。
+ *    （`core/agent-loop/src/agent.ts:489-493`，`5badb15009a`）—— **中段才出錯的串流 dsh 照樣重試**。
  *
  * **第三層 #516 時退掉了，[#520](https://github.com/DemianLi/nexus-agent/issues/520) 補上了。** 退掉的理由不是「重試中段錯誤
  * 不值得」，而是 dsh 付得起那個代價是因為它有第一級的載體表示「那一次作廢、這是新的一次」：`assistant/attempt` 事件與
- * `assistantStreamRevision`（`core/agent-loop/src/agent.ts:381-384`、`:446-447`），我們當時沒有——已經送到畫面上的字沒有
+ * `assistantStreamRevision`（`core/agent-loop/src/agent.ts:116`、`:426-429`，`5badb15009a`），我們當時沒有——已經送到畫面上的字沒有
  * 地方宣告作廢。#520 補的載體是日誌的 `assistant/attempt`（不進模型）加線上的 `message-discard` 自訂 frame，重打本身是
  * `@nexus/core` 的 `stream-retry.ts`（`wrapModelCall`，排在記錄器外面，每次嘗試各是一對 `model/start`／`model/end`）。
  * **這一層對第一則事件之前的失敗仍然是翻成 HTTP 錯誤交給 SDK 重試**；第一則事件之後的失敗只做一件事——**回報**

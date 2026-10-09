@@ -23,10 +23,13 @@
  *
  * ## 照 dsh 與偏離
  *
- * dsh 的 `TIMEOUT`、`TRANSPORT` 都在預設可重試碼裡（`packages/llm/llm/src/retry-policy.ts`），由步級掛點重試整次請求；第一級
- * 載體 `assistant/attempt` 表示「那一次作廢」（`core/agent-loop/src/agent.ts`）。這裡同向：整次重打、失敗那次作廢。
+ * dsh 的 `TIMEOUT`、`TRANSPORT` 都在預設可重試碼裡（`packages/llm/llm/src/retry-policy.ts:18-24`），由步級掛點重試整次請求；
+ * 第一級載體 `assistant/attempt` 表示「那一次作廢」（`core/agent-loop/src/agent.ts:466-476`、`:489-493`；以上皆 `5badb15009a`）。
+ * 這裡同向：整次重打、失敗那次作廢。**失敗當下就記成 attempt 並撤掉**（dsh），我們做不到「當下」：畫面的擦除與 `assistant/attempt`
+ * 由 pump 在下一次嘗試的第一則 `message-start` 到來時送（見 `thread-pump.ts` 的 `#abandonSupersededReply`）；等退避時被停止的
+ * 那一種，pump 在收尾時補送（`#keepInterruptedReply`），所以兩種時機在結果上對得上 dsh。
  *
- * - **預算先保守**：預設最多 2 次、退避 1 秒／2 秒（dsh 預設 5 次、500 毫秒起、上限 10 秒）。每次重試都重付整個回覆的費用，
+ * - **預算先保守**：預設最多 2 次、退避 1 秒／2 秒（dsh 預設 5 次、500 毫秒起、上限 10 秒、抖動 0.1，`retry-policy.ts:14-17`）。每次重試都重付整個回覆的費用，
  *   所以不照抄；欄位有上限，見 `apps/harness/src/settings/live-model.ts`。
  * - **退避聽中止訊號**：等待中按停止就立刻收，不再打一次。
  *
