@@ -22,6 +22,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import { Textarea } from '@/components/ui/textarea';
 import { CATEGORIES, CATEGORY_LABEL, FEEDBACK_COPY } from '@/lib/feedback';
 
 export interface FeedbackDraft {
@@ -81,9 +82,9 @@ export function FeedbackDialog({
             </Button>
           ))}
         </div>
-        <textarea
+        <Textarea
           ref={detailRef}
-          className="border-input bg-background min-h-24 rounded-md border px-3 py-2 text-body"
+          className="max-h-64 min-h-24"
           aria-label={FEEDBACK_COPY.detail}
           placeholder={FEEDBACK_COPY.hint}
           value={text}

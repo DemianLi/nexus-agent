@@ -9,7 +9,7 @@ import { describe, expect, test } from 'vitest';
  * 元件的 className 越過它就報錯。守的是**原始碼裡的字串字面值**（className、cva 的各段、`cn(...)` 的參數都是字串），
  * 做法同 `border-shadow.test.ts`；先把註解拿掉，註解裡講到類別名不算。
  *
- * 八條：
+ * 十二條：
  * 1. **不用 Tailwind 預設色板**（`text-red-500`、`bg-white`、`bg-black/50`…）：顏色只走語意 token（`bg-card`、`text-destructive`…）。
  * 2. **字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`**：不用 `text-xs`／`text-sm`／`text-base`…，也不寫 `text-[…px]`。
  * 3. **圓角只走階梯**（`rounded-sm`…`rounded-3xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
@@ -20,6 +20,12 @@ import { describe, expect, test } from 'vitest';
  * 8. **`ui/` 以外不寫 `focus-visible:ring-*`**（#1279）：`theme.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
  *    再配上 `outline-none` 就是**完全看不到焦點**（#1279 之前有六處）。要改外框位置用 `focus-visible:-outline-offset-2` 之類，不要換成 ring。
  *    `ui/` 的 registry 原文不在這條：那裡的 ring 由 `theme.css` 統一處理。
+ * 9. **對話泡泡用 `ChatBubble`**（#1280）：同一個字串裡有 `rounded-3xl`＋`px-4`＋`py-2.5`，就是又手寫了一個泡泡。
+ * 10. **程式碼小框用 `MonoBlock`**（#1280）：同一個字串裡有 `bg-chip`＋`rounded-lg`＋`p-2`＋`font-mono`，就是又手寫了一塊。
+ * 11. **`ui/` 以外不寫原生 `<textarea`**（#1280）：用 `ui/textarea` 的 `Textarea`（邊框、焦點、手機字級都在那裡）。
+ *     輸入框裡的是 `InputGroupTextarea`，也在 `ui/`。這條掃 JSX，不是字串字面值。
+ * 12. **時長走 `motion.css` 的 token**（#1280）：不寫 `duration-200`、`animation-duration-350` 這種數字，寫
+ *     `duration-(--duration-fast)`。這條連 `ui/` 一起管：registry 原文寫死的時長已經換成 token。
  *
  * **例外只能列在 {@link ALLOWED}**，每一條寫明理由；列了卻再也沒有命中的條目會報錯，所以例外只會變少、不會悄悄留著。
  * 沒量的：間距與寬高的任意值（`max-h-[300px]`、`top-[50%]` 都是版面值，不是系統值）、`styles/*.css`（那裡就是 token 層）。
@@ -91,10 +97,23 @@ const HEX_WHOLE = /^#[0-9a-fA-F]{3,8}$/;
 const HEX_IN_CLASS = /-\[#[0-9a-fA-F]{3,8}\]/;
 const COLOR_FUNCTION = /\b(?:oklch|oklab|rgba?|hsla?|hwb|lab|lch|color-mix)\(/;
 
-type Rule = '色板' | '字級' | '圓角' | '色碼' | '表面' | '箭頭' | '可展開列' | '焦點';
+type Rule =
+  | '色板'
+  | '字級'
+  | '圓角'
+  | '色碼'
+  | '表面'
+  | '箭頭'
+  | '可展開列'
+  | '焦點'
+  | '泡泡'
+  | '程式碼小框'
+  | '輸入框'
+  | '時長';
 
 const ROTATE = /^-?rotate-\d+$/;
 const ROTATE_ON_OPEN = /state=open\]?\]?(?:>[^:]*)?:-?rotate-\d+$/;
+const RAW_DURATION = /^(?:animation-)?duration-\d/;
 
 function rulesBroken(text: string): { rule: Rule; what: string }[] {
   const found: { rule: Rule; what: string }[] = [];
@@ -127,8 +146,20 @@ function rulesBroken(text: string): { rule: Rule; what: string }[] {
       what: 'hover:bg-chip-hover active:bg-chip-pressed w-full text-left',
     });
   }
+  if (utilities.has('rounded-3xl') && utilities.has('px-4') && utilities.has('py-2.5')) {
+    found.push({ rule: '泡泡', what: 'rounded-3xl px-4 py-2.5' });
+  }
+  if (
+    utilities.has('bg-chip') &&
+    utilities.has('rounded-lg') &&
+    utilities.has('p-2') &&
+    utilities.has('font-mono')
+  ) {
+    found.push({ rule: '程式碼小框', what: 'bg-chip rounded-lg p-2 font-mono' });
+  }
   for (const token of text.split(/\s+/)) {
     const u = utility(token);
+    if (RAW_DURATION.test(u)) found.push({ rule: '時長', what: u });
     if (ROTATE_ON_OPEN.test(token)) found.push({ rule: '箭頭', what: token });
     if (/(?:^|:)focus-visible:/.test(token) && /^ring(?:-|$)/.test(u)) {
       found.push({ rule: '焦點', what: token });
@@ -166,6 +197,16 @@ const ALLOWED: readonly Allowed[] = [
     file: 'components/row-trigger.tsx',
     what: 'hover:bg-chip-hover active:bg-chip-pressed w-full text-left',
     why: '`RowTrigger` 本身：全站唯一該寫可展開列配方的地方',
+  },
+  {
+    file: 'components/chat-bubble.tsx',
+    what: 'rounded-3xl px-4 py-2.5',
+    why: '`ChatBubble` 本身：全站唯一該寫對話泡泡配方的地方',
+  },
+  {
+    file: 'components/mono-block.tsx',
+    what: 'bg-chip rounded-lg p-2 font-mono',
+    why: '`MonoBlock` 本身：全站唯一該寫程式碼小框配方的地方',
   },
   {
     file: 'components/surface.tsx',
@@ -267,6 +308,12 @@ function scan(files: string[]): Violation[] {
   for (const file of files) {
     const inRegistry = relative(SRC, file).startsWith('components/ui/');
     const source = withoutComments(readFileSync(file, 'utf8'));
+    if (!inRegistry) {
+      for (const match of source.matchAll(/<textarea\b/g)) {
+        const line = source.slice(0, match.index).split('\n').length;
+        found.push({ file: relative(SRC, file), line, rule: '輸入框', what: '<textarea' });
+      }
+    }
     for (const match of source.matchAll(/(['"`])((?:(?!\1)[^\\\n]|\\.)*)\1/g)) {
       const broken = rulesBroken(match[2] ?? '');
       if (broken.length === 0) continue;
@@ -416,6 +463,38 @@ describe('判準', () => {
     ]);
     expect(rules('group-focus-visible:ring-2')).toEqual([]);
     expect(rules('focus-visible:-outline-offset-2 ring-ring ring-2')).toEqual([]);
+  });
+
+  test('泡泡：三樣湊齊才算，只有圓角或內距的不算', () => {
+    expect(rules('bg-chip text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap')).toEqual([
+      '泡泡:rounded-3xl px-4 py-2.5',
+    ]);
+    expect(rules('rounded-3xl px-4 py-2')).toEqual([]);
+    expect(rules('rounded-xl px-4 py-2.5')).toEqual([]);
+  });
+
+  test('程式碼小框：四樣湊齊才算，chip 底的標籤與別的等寬字不算', () => {
+    expect(
+      rules('bg-chip max-h-32 min-w-0 overflow-auto rounded-lg p-2 font-mono text-tip'),
+    ).toEqual(['程式碼小框:bg-chip rounded-lg p-2 font-mono']);
+    expect(rules('bg-chip rounded-full px-3 py-1 text-tip')).toEqual([]);
+    expect(rules('max-h-[150px] overflow-auto px-3 pt-1 pb-2 font-mono text-tip')).toEqual([]);
+  });
+
+  test('時長：數字的 duration 與 animation-duration 都擋，連同 variant 前綴；token 與 delay 不擋', () => {
+    expect(rules('transition-colors duration-200')).toEqual(['時長:duration-200']);
+    expect(rules('data-[state=open]:animation-duration-350')).toEqual([
+      '時長:animation-duration-350',
+    ]);
+    expect(rules('duration-(--duration-fast) animation-duration-(--duration-overlay)')).toEqual([]);
+    expect(rules('delay-50 data-[state=closed]:delay-0')).toEqual([]);
+  });
+
+  test('輸入框：ui/ 以外的原生 textarea 擋，ui/ 本身不擋', () => {
+    expect(all.filter((v) => v.rule === '輸入框')).toEqual([]);
+    expect(
+      readFileSync(join(SRC, 'components/ui/textarea.tsx'), 'utf8').includes('<textarea'),
+    ).toBe(true);
   });
 
   test('焦點那條不管 ui/ 的 registry 原文：那裡的 ring 由 theme.css 統一處理', () => {

@@ -54,6 +54,19 @@
   :focus-visible {
     outline-offset: 2px;
   }
+
+  /*
+   * 被排除的那幾種在 base layer 各自給值，不然會掉回瀏覽器預設的藍框（#1279 拿掉舊規則時漏了，#1280 補回）：
+   * - 程式搬焦點的容器不畫。
+   * - 文字輸入框照舊畫我們的外框；registry 的 `Input`／`Textarea` 自帶 `outline-none`（utility 贏過 base），所以它們仍只有邊框變色。
+   */
+  [tabindex='-1']:focus-visible {
+    outline: none;
+  }
+
+  :is(input, textarea):focus-visible {
+    outline: 2px solid var(--ring);
+  }
 }
 
 :focus-visible:not([tabindex='-1'], input, textarea, [data-focus='custom']) {
@@ -88,4 +101,14 @@ body {
 [data-slot='message-scroller-item'][data-located] {
   background-color: var(--chip);
   border-radius: 1.5rem;
+}
+
+/*
+ * 「看這一輪」（成本分頁跳到觀測分頁的某一輪）：那一組或那一則摘要掛 `data-revealed`（`trace/panel.tsx`，約 3 秒）。
+ * 用外框不用 ring：摘要那一則本身會被程式聚焦，它 `:focus-visible` 時，上面清 ring 的那條會把高亮一起清掉（#1279 記下、#1280 修）。
+ * 寫在 layer 外，`[tabindex='-1']` 不畫外框的那條（base layer）蓋不掉它。
+ */
+[data-revealed] {
+  outline: 2px solid var(--ring);
+  border-radius: var(--radius-md);
 }

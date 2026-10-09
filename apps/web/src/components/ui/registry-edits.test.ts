@@ -17,6 +17,15 @@ describe('registry 檔的改動還在', () => {
     );
   });
 
+  test.each(['./dialog.tsx', './alert-dialog.tsx', './sheet.tsx', './tooltip.tsx'])(
+    '%s 的進出場時長走 motion.css 的 token，不寫數字（#1280）',
+    (path) => {
+      const source = code(read(path));
+      expect(source).toMatch(/animation-duration-\(--duration-[a-z-]+\)/);
+      expect(source).not.toMatch(/(?<![-\w])(?:animation-)?duration-\d/);
+    },
+  );
+
   test('message-scroller 的 item 沒有 content-visibility（會把陰影與光暈切成直角，§9）', () => {
     expect(code(read('./message-scroller.tsx'))).not.toMatch(/content-visibility/);
   });

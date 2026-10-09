@@ -55,4 +55,16 @@ describe('焦點外框', () => {
   test('registry 自帶的 ring 仍在 layer 外清掉，兩圈不會疊在一起', () => {
     expect(unlayered(css)).toMatch(/:focus-visible\s*\{\s*--tw-ring-shadow:\s*0 0 #0000;?\s*\}/);
   });
+
+  test('被排除的在 base layer 各自給值，不掉回瀏覽器預設的藍框：容器不畫、文字輸入框照舊畫（utility 的 outline-none 蓋得掉）', () => {
+    const base = /@layer base\s*\{([\s\S]*?)\n\}/.exec(css)?.[1] ?? '';
+    expect(base).toMatch(/\[tabindex='-1'\]:focus-visible\s*\{\s*outline:\s*none;?\s*\}/);
+    expect(base).toMatch(
+      /:is\(input, textarea\):focus-visible\s*\{\s*outline:\s*2px solid var\(--ring\);?\s*\}/,
+    );
+  });
+
+  test('「看這一輪」的高亮是 layer 外的外框：摘要那一則被程式聚焦時，清 ring 那條與 tabindex=-1 不畫外框那條都吃不掉它', () => {
+    expect(unlayered(css)).toMatch(/\[data-revealed\]\s*\{\s*outline:\s*2px solid var\(--ring\);/);
+  });
 });
