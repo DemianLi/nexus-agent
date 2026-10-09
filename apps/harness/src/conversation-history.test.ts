@@ -318,6 +318,8 @@ describe('日誌 → 畫面', () => {
     expect(state.status).toBe('idle');
     expect(state.error).toBeUndefined();
     expect(state.entries.map(line)).toEqual(['human:封存之後的話']);
+    // 冷載入一樣標得出來：折疊器把被擋的人話標上 blocked，畫面據此講「沒有送給模型」。
+    expect(state.entries[0]).toMatchObject({ kind: 'human', blocked: true });
     const frames = historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES);
     const closing = frames
       .filter((frame) => frame.method === 'lifecycle')
