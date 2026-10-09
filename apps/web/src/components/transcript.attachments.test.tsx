@@ -1,9 +1,13 @@
 import type { Event } from '@nexus/wire';
-import { emptyConversation, INBOX, reduceAll } from '@nexus/wire';
+import { emptyConversation, IMAGE_OFFLOAD, INBOX, reduceAll } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { AttachmentImageContext, SentAttachments } from '@/components/sent-attachments';
+import {
+  AttachmentImageContext,
+  OMITTED_EXPLANATION,
+  SentAttachments,
+} from '@/components/sent-attachments';
 import { Transcript } from '@/components/transcript';
 import type { AttachmentImageSource } from '@/lib/attachment-image';
 import { axeViolations } from '@/test/axe';
@@ -247,5 +251,75 @@ describe('排著的插話畫附件（#710）', () => {
     const bubble = document.querySelector('[data-pending-steer]')!;
     expect(within(bubble as HTMLElement).getAllByTestId('sent-attachment')).toHaveLength(2);
     expect(bubble.querySelector('[data-slot="bubble"]')).toBeNull();
+  });
+});
+
+describe('模型已看不到的附件（#1270）', () => {
+  /** server 每記一筆 `image/offload` 推的 frame：即時的條目靠 `inboxId` 認、歷史的靠 `seq`。 */
+  const offload = (items: readonly unknown[]): Event =>
+    ({
+      type: 'event',
+      event_id: `t:offload:${String(seq++)}`,
+      method: 'custom',
+      params: { namespace: [], timestamp: 0, data: { name: IMAGE_OFFLOAD, payload: { items } } },
+    }) as Event;
+
+  const omittedFlags = () =>
+    screen.getAllByTestId('sent-attachment').map((chip) => chip.getAttribute('data-omitted'));
+
+  it('即時：frame 到了，那一件標「模型已看不到」，其它件不標；檔案的位置也算一格', async () => {
+    show([claimed('請看附件', attachments), offload([{ seq: 1, inboxId: 'q', positions: [0] }])]);
+    expect(omittedFlags()).toEqual(['true', 'false']);
+    const notes = screen.getAllByTestId('sent-attachment-omitted');
+    expect(notes).toHaveLength(1);
+    expect(notes[0]!.textContent).toBe('模型已看不到');
+    expect(screen.getAllByTestId('sent-attachment')[0]!.contains(notes[0]!)).toBe(true);
+    // 名字與大小照畫：標記是加上去的，不是取代。
+    expect(screen.getAllByTestId('sent-attachment')[0]!.textContent).toContain(
+      'PNG · 221 B · 96×96',
+    );
+    expect(await axeViolations(document.body)).toEqual([]);
+  });
+
+  it('沒有 frame：一件都不標', () => {
+    show([claimed('請看附件', attachments)]);
+    expect(omittedFlags()).toEqual(['false', 'false']);
+    expect(screen.queryByTestId('sent-attachment-omitted')).toBeNull();
+  });
+
+  it('冷載入（重新整理後）：歷史的人話帶著 omittedAttachments，標記還在', () => {
+    show([
+      frame({
+        event: 'message-start',
+        role: 'human',
+        id: 'h1',
+        run_id: 'r1',
+        attachments,
+        omittedAttachments: [0],
+      }),
+    ]);
+    expect(omittedFlags()).toEqual(['true', 'false']);
+  });
+
+  it('點開那一行：說明為什麼模型看不到、圖本身還在；不是警示色', () => {
+    show([claimed('請看附件', attachments), offload([{ seq: 1, inboxId: 'q', positions: [0] }])]);
+    const note = screen.getByRole('button', { name: '模型已看不到：red.png，點開看原因' });
+    expect(note.className).not.toMatch(/destructive|warning/);
+    fireEvent.click(note);
+    expect(screen.getByText(OMITTED_EXPLANATION)).toBeTruthy();
+  });
+
+  it('被省略的圖照樣讀縮圖、點得開原圖', async () => {
+    const read = vi.fn(async () => 'blob:red');
+    render(
+      <AttachmentImageContext.Provider value={{ read, dispose() {} }}>
+        <SentAttachments attachments={attachments as never} omitted={[0]} />
+      </AttachmentImageContext.Provider>,
+    );
+    const chip = screen.getAllByTestId('sent-attachment')[0]!;
+    await waitFor(() => expect(chip.getAttribute('data-thumbnail')).toBe('shown'));
+    expect(read).toHaveBeenCalledWith('sha256:img', 'image/png');
+    fireEvent.click(screen.getByRole('button', { name: '看原圖：red.png' }));
+    expect(screen.getByRole('img', { name: 'red.png' }).getAttribute('src')).toBe('blob:red');
   });
 });
