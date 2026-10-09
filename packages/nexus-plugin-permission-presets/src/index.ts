@@ -13,8 +13,8 @@
  *   只在兩組捆著同樣的值時分勝負。
  * - **`permissions` 投影只推現在的值**（`{ currentValue }`），目錄（`permission.catalog`）整台共用。
  * - **新會話把起始組合釘進日誌**（dsh `pinInitialPermission`），讓一份沒人切過的日誌也答得出現在是哪一組。
- * - **子代理**：核准一律釘 `never`（`@nexus/core` 的 `approval-gate` 那一列做）；組合名只在父代理是 `danger-full-access` 時帶下去
- *   （dsh `child-agent.ts:252`、`:277`）。
+ * - **子代理**：背景子代理核准一律釘 `never`（編背景圖時換上的閘門，`@nexus/core` 的 `createBackgroundApprovalGate`）；**前景子代理跟 root 當下的核准政策走**
+ *   （[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，dsh 沒有）。組合名只在父代理是 `danger-full-access` 時帶下去（dsh `child-agent.ts:252`、`:277`），兩種子代理一樣。
  *
  * ## 偏離（登記）
  *

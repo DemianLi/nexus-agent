@@ -23,7 +23,10 @@ import { modelCallLimitMiddleware } from 'langchain';
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import { createApprovalGateMiddleware } from './approval.js';
 import type { ApprovalPolicySource } from './approval-policy.js';
-import { createSubagentDelegationMiddleware } from './subagent-delegation.js';
+import {
+  createSubagentDelegationMiddleware,
+  FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
+} from './subagent-delegation.js';
 import {
   assertToolFilter,
   createSubagentToolFilterMiddleware,
@@ -502,21 +505,12 @@ export function foldRegistry(
   const turnCancel = createTurnCancelGuard();
   const turnCancelModelSignal = createTurnCancelModelSignal();
   const approvalGate = foldApprovalGate(registry, options);
-  // **子代理另建一顆，管道固定 `policy-never`**（#324）：照 dsh 委派時把子代理的核准政策釘成 `never`
-  // （`packages/subagent/subagent/src/child-agent.ts:220-247`），不管 root 的管道是什麼。組裝時就分開，
-  // 不在執行期查身分——分得開就沒有「查不到是誰」那幾種情況。listener 同一組：判斷「要不要問」不因
-  // 誰叫而變，變的是問不問得到人。無狀態，一份走遍每個子代理。
-  //
-  // dsh 另把 `approval/policy: never`（`source: 'delegation'`）寫進子代理的日誌（`child-agent.ts:267-279`）；我們同樣記
-  // （#437，翻了以前「root 也不記所以子代理不記」的偏離）：由 `approvalGatePlugin` 在子代理日誌開啟時寫，見 `approval.ts`。
-  // 子代理每次被擋仍寫一對 `approval/asked`＋`approval/decided`（`rejected`）進自己的日誌（#1029），碼是
-  // `APPROVAL_POLICY_NEVER`。
-  const subagentApprovalGate = createApprovalGateMiddleware(
-    registry.approvals.listeners(),
-    { kind: 'policy-never' },
-    registry.sessions,
-  );
-  const subagentDelegation = createSubagentDelegationMiddleware();
+  // **前景子代理共用 root 這一顆閘門**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，翻了 #324）：前景時主對話本來就停著等，
+  // 子代理要核准的操作把中斷冒到使用者面前（基座的 `task` 在同一次呼叫裡跑子圖，中斷會往上傳；#1098 的 MCP 反問已經走這條），
+  // 政策與管道就是 root 當下的（`options.approvals.policy` 每次要問人之前問一次，#437）。沒有人的入口、沒有存檔點、政策 `never`
+  // 時一樣確定性回絕，理由說的是真正的原因。**背景子代理不走這裡**：它們背後沒有人，圖由 {@link createBackgroundApprovalGate}
+  // 那一顆（管道固定 `policy-never`，#324／#737 照 dsh `child-agent.ts:220-247`）在編圖時換掉。
+  const subagentDelegation = createSubagentDelegationMiddleware(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT);
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(registry, options);
   // **一份實例走遍 root 與每個 subagent**，或在明著關掉時沒有。它無狀態，見
@@ -651,8 +645,8 @@ export function foldRegistry(
       ),
     ),
     // 閘門排在子代理自帶的那些之前——同「全域勝」那條軸線：子代理自己掛的 middleware 繞不過它。
-    // 子代理那一欄是另一顆，管道固定 `policy-never`（#324）。
-    { name: 'approvalGate', root: same(approvalGate), subagent: same(subagentApprovalGate) },
+    // 前景子代理用同一顆（#328 第 1 項）；背景圖編圖時換成 `policy-never` 那顆（{@link createBackgroundApprovalGate}）。
+    { name: 'approvalGate', root: same(approvalGate), subagent: same(approvalGate) },
     // **各建一份，不共用**：觀測紀錄在 closure 裡，共用等於讓 root 讀過的檔變成這個 subagent 也可以直接改。
     // 理由見 {@link foldObservationPolicy}。
     perAgent('observationPolicy', () => observationPolicy?.()),
@@ -989,6 +983,25 @@ function foldApprovalGate(registry: PluginRegistry, options: FoldOptions): Agent
     channel,
     registry.sessions,
     options.approvals?.policy,
+  );
+}
+
+/**
+ * 背景子代理的核准閘門：管道固定 `policy-never`（[#324](https://github.com/DemianLi/nexus-agent/issues/324)、[#737](https://github.com/DemianLi/nexus-agent/issues/737)），
+ * 要人看過的操作一律確定性回絕，不發中斷。照 dsh 委派時把子代理的核准政策釘成 `never`
+ * （`packages/subagent/subagent/src/child-agent.ts:220-247`）；背景子代理被叫醒時主對話沒有在等，沒有人可以按。
+ *
+ * **由 {@link ./subagent-graph.ts | compileSubagentGraph} 的呼叫端在編背景圖時傳進去**，換掉 fold 放進子代理規格的那一顆（前景用的、跟 root 同一顆）。
+ * 組裝時就分開，不在執行期查身分——分得開就沒有「查不到是誰」那幾種情況。listener 與審計通道同一組：判斷「要不要問」不因誰叫而變，
+ * 變的是問不問得到人。無狀態，一份走遍每張背景圖。
+ *
+ * @param registry - 載入完的註冊表（listener 與審計通道從這裡來）。
+ */
+export function createBackgroundApprovalGate(registry: PluginRegistry): AgentMiddleware {
+  return createApprovalGateMiddleware(
+    registry.approvals.listeners(),
+    { kind: 'policy-never' },
+    registry.sessions,
   );
 }
 

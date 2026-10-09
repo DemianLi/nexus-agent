@@ -799,14 +799,21 @@ function actionCountOf(value: unknown): number {
   return Array.isArray(requests) ? requests.length : 0;
 }
 
-/** 這顆中斷停在核准上的工具名。問答那一種沒有 `actionRequests`，是空的。見 {@link PendingInterrupt.gatedTools}。 */
-function gatedToolsOf(value: unknown): string[] {
+/**
+ * 這顆中斷停在核准上的工具名。問答那一種沒有 `actionRequests`，是空的。見 {@link PendingInterrupt.gatedTools}。
+ *
+ * @param nested - 中斷是前景子代理發的（namespace 不空，[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項）。那時 root 上**停著的是委派
+ *   的那一張卡**（`task`／`subagent`，它的本體就是這個子代理）：它跟核准閘門上的工具一樣維持「執行中」，不畫成「等你回答」，所以委派工具名也算進去
+ *   （即時那條 {@link isApprovalSuspension} 不改卡，重播靠這份名字認）。同樣認名字不認 callId：同一步另一顆同名的委派卡也會維持執行中，它本來就在跑。
+ */
+function gatedToolsOf(value: unknown, nested = false): string[] {
   const requests = (value as { actionRequests?: unknown } | null)?.actionRequests;
   if (!Array.isArray(requests)) return [];
-  return requests.flatMap((request: unknown) => {
+  const names = requests.flatMap((request: unknown) => {
     const name = (request as { name?: unknown } | null)?.name;
     return typeof name === 'string' ? [name] : [];
   });
+  return nested ? [...names, ...DELEGATION_TOOL_NAMES] : names;
 }
 
 /** 改、刪送出佇列裡的一件（#637），或把它改成插話（#710）。照 dsh 的 `updateQueue` 的三種 action。 */
@@ -1043,8 +1050,8 @@ function isRootTerminal(raw: RawProtocolEvent): boolean {
 /**
  * checkpoint 上最後一則帶工具呼叫的 AI 訊息裡，**還沒配到結果的那幾顆**。
  *
- * 停在核准點時就是那幾顆等核准的。子代理照 dsh 不停下來等人
- * （[#324](https://github.com/DemianLi/nexus-agent/issues/324)），所以 `task` 不會是其中一顆。
+ * 停在核准點時就是那幾顆等核准的。前景子代理的核准冒到人面前（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項），
+ * 那時 `task` 也是其中一顆沒配到結果的——`gatedToolsOf` 的 `nested` 把委派工具名併進等核准的名單，卡維持「執行中」。
  */
 function danglingToolCalls(values: unknown): { readonly id: string; readonly name: string }[] {
   const messages = (values as { messages?: unknown } | null)?.messages;
@@ -1110,6 +1117,15 @@ export class ThreadPump {
    * `["tools:<父呼叫>"]` 出現，隨後同一顆又在 root 層（`[]`）出現一次；只看後面那一顆會把子代理的反問當成 root 的、送給人。
    */
   readonly #elicitationOrigins = new Map<string, boolean>();
+  /**
+   * 核准問題的中斷 id：已經以子代理的 namespace 露過面、等著它在 root 層的第二次露面被吞掉（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項）。
+   *
+   * **前景子代理的核准中斷會被看到兩次**（實測，同 #1098 的 MCP 反問）：先以 `["tools:<父呼叫>"]` 出現，隨後同一顆又在 root 層（`[]`）出現。
+   * 兩次都照原樣處理的話，`interrupt/raised` 記兩筆、下行收到兩顆 `input.requested`，而且 {@link ThreadPump.#pending} 被第二次（root 的
+   * namespace）蓋掉，畫面就認不出是哪個子代理在問。所以第一次（子代理的）定案，root 層那次吞掉並忘掉這個 id。
+   * 沒等到 root 層那次露面的 id 會留在這裡（實測兩次露面的 id 相同）；同一顆中斷之後再露面仍是先以子代理的 namespace 出現，所以留著的不會誤吞別的東西。
+   */
+  readonly #nestedApprovals = new Set<string>();
   /**
    * 這一輪裡要由系統代答的反問，等這一輪收尾後逐顆 resume（#1098）。**不放進 {@link ThreadPump.#pending}**：沒有人要答，
    * 下行也不該看到一張沒人按的卡。
@@ -3027,6 +3043,8 @@ export class ThreadPump {
           yield* this.#translateElicitation(entry, elicitation, raw);
           continue;
         }
+        if (raw.params.namespace.length === 0 && this.#nestedApprovals.delete(entry.id)) continue;
+        if (raw.params.namespace.length > 0) this.#nestedApprovals.add(entry.id);
         // **先記日誌、再蓋號**，同以前的先後：日誌的訂閱者同步送出的 frame 要拿比這顆小的號，否則這顆廣播出去時
         // 會被折疊器當成重複丟掉。
         this.#sessions.root.append('interrupt/raised', { interruptId: entry.id });
@@ -3044,7 +3062,7 @@ export class ThreadPump {
         this.#pending.set(entry.id, {
           interruptId: entry.id,
           actionCount: actionCountOf(entry.value),
-          gatedTools: gatedToolsOf(entry.value),
+          gatedTools: gatedToolsOf(entry.value, raw.params.namespace.length > 0),
           request,
         });
         this.#tell({ type: 'input-requested', event: request });

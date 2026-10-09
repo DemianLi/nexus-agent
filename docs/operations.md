@@ -29,7 +29,7 @@
   續接（`--resume`、重開 server 接回同一條 thread）一律用日誌裡記的值，日誌沒記核准的舊會話照 `ask`。
 - **日誌上多一顆 `permission/preset`**（格式 35）：只記使用者選了哪一組（意圖），執行仍由 `sandbox/mode` 與 `approval/policy` 各自控制。
   新會話接線當下釘一顆起始組合。
-- **子代理**：核准一律 `never`；組合名只在父代理是 `danger-full-access` 時帶下去。
+- **子代理**：背景子代理的核准一律 `never`；前景子代理跟主對話**當下**的核准政策走（要核准的操作停下來問人，詳見「前景子代理的核准」）；組合名只在父代理是 `danger-full-access` 時帶下去，兩種一樣。
 - **web**：目錄走 RPC `permission.catalog`，目前是哪一組走會話投影 `permissions`（`{ currentValue }`）；切換送的就是 `/permission <組名>` 這一行。
 - **設定**：清單上 `permission-presets` 那一列。`presets` 整份替換、每組必填 `sandbox` 與 `approval`；`defaultPreset` 選填，
   與明確給的 `--sandbox` 矛盾時啟動失敗。有 `--workspace` 時這一列關不掉（會話中就沒有任何辦法改兩顆旋鈕），沒有 `--workspace` 時它什麼都不註冊。
@@ -317,6 +317,23 @@ export HTTP_PROXY=http://127.0.0.1:7890
 講的是這一次實際的狀態。模型從第 `blockedAfterConsecutiveRounds` 輪（預設 3）起可以把自己標成 blocked 而退出迴圈，
 但那是准許不是保證。額外那條「連續 N 輪沒進展就停」刻意沒做，理由在
 `apps/harness/src/goal-driver.ts` 的檔頭。
+
+## 前景子代理的核准
+
+**前景子代理要核准的操作，卡片送到使用者面前**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，**dsh 沒有**：dsh 委派時把子代理的核准政策釘成 `never`，
+`packages/subagent/subagent/src/child-agent.ts:220-247`）。為什麼做：前景時主對話本來就停著等這個子代理，Claude Code 的前景子代理也是這樣；要核准的事一律回絕，
+子代理能做的事就比主對話少得多。這翻了 #324 的決定，**僅限前景**。
+
+- **政策與管道跟主對話當下的一樣**：核准政策（`ask`／`never`，#437）每次要問人之前讀一次，所以主對話中途切到 `never`，子代理下一次要核准的操作就確定性回絕。
+  入口沒有人（一次性模式、沒有存檔點）時同主對話：回絕，理由說的是「沒有人被問到」。
+- **畫面怎麼認出是哪個子代理在問**：`input.requested` 的 `namespace` 第一段是基座給那次委派呼叫的，與 `task`／`subagent` 那張卡折出來的子代理對得上；
+  卡片上看得到工具名與理由。同一顆中斷只會送一次（基座會在子代理層與 root 層各露面一次，後一次吞掉）。
+- **拒絕只拒那一次**：子代理收到「有人看過並拒絕了 …」的工具結果，照常往下；它再叫一次就是一顆新的問題。**按停止**收回所有待答的問題，這一輪收尾。
+- **root 上委派的那張卡維持「執行中」**（子代理在它底下等人），即時與重新整理後的重播一樣。
+- **背景子代理不變**：背後沒有人在等，要核准的操作一律回絕（`policy-never`，#737，照 dsh）；它的日誌上有 `approval/policy { never, source: 'delegation' }`，前景子代理的日誌沒有這一顆（它用主對話的）。
+- **審計**：`approval/asked`／`approval/decided` 仍記在 root 日誌上（與 `interrupt/raised` 同一份，軌跡靠 id 配對），`callId` 對得上子代理日誌裡那顆 `tool/call`。
+  日誌格式沒有變。
+- **重開行程**：沒有為子代理另開一條路，行為同主對話的核准（這個行程裡掛著的中斷重開過就不在了，畫面上那幾張卡照即時規則收成失敗）。**沒有實測過子代理這一條**。
 
 ## 背景子代理
 

@@ -44,6 +44,7 @@ import type { PluginEntry, SubagentGraphParams } from '@nexus/core';
 import {
   compileSubagentGraph,
   createHostServicesPlugin,
+  FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
   SUBAGENT_DELEGATION_CONTEXT,
   toolCallSessionAddress,
   BACKGROUND_SESSION_CONFIG_KEY,
@@ -448,12 +449,24 @@ describe('第 2 項：換了組裝路之後 fold 注進規格的東西還在不�
       [WORKER, createSubmitRecordPlugin()],
     );
     try {
-      const result = await runBackground(compileBackground(run.spec('worker'), run.params), '幹活');
+      // 走產品的 `compileSubagent`：背景圖的核准閘門在編圖時換成 `policy-never` 那顆（#328 第 1 項：fold 放進規格的是前景用的，跟 root 同一顆）。
+      const graph = run.built.compileSubagent(
+        'worker',
+        new MemorySaver(),
+      ) as unknown as BackgroundGraph;
+      const result = await runBackground(graph, '幹活');
       expect(result.__interrupt__).toBeUndefined();
       expect(run.pump.awaitingInput).toBe(false);
       const [refusal] = toolTexts(result.messages);
       expect(refusal).toContain('這一列要寫出去，先讓人看過');
       expect(refusal).toContain('沒有人被問到');
+      // 委派聲明也換回背景那句（「會自動被拒絕」）：fold 放進規格的是前景那句（核准交給使用者），對背景是假話。
+      const bgPrompt = run.model.prompts.find((prompt) =>
+        prompt.some((message) => message.getType() === 'human' && message.text === '幹活'),
+      );
+      const system = bgPrompt?.find((message) => message.getType() === 'system')?.text ?? '';
+      expect(system).toContain(SUBAGENT_DELEGATION_CONTEXT);
+      expect(system).not.toContain(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT);
     } finally {
       await run.close();
     }

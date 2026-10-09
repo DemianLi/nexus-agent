@@ -826,8 +826,8 @@ export interface AwaitingInput {
  *
  * ## 停下來等人的那一輪：兩種等法畫法不同，同即時
  *
- * 即時那條只把**本體拋了問答中斷**的那顆畫成「等你回答」（`thread-pump.ts` 的 `classifyToolData`）。子代理照 dsh
- * 不停下來等人（#324），所以 `task` 不會停在這裡。停在核准上的那顆一直是「執行中」——照 dsh：它的工具卡沒有
+ * 即時那條只把**本體拋了問答中斷**的那顆畫成「等你回答」（`thread-pump.ts` 的 `classifyToolData`）。前景子代理的核准
+ * 冒到人面前（#328 第 1 項）時 `task` 也停在這裡，同樣維持「執行中」。停在核准上的那顆一直是「執行中」——照 dsh：它的工具卡沒有
  * 「等人」那一格，核准的等待由接管輸入框的核准面板表示（#317）。核准有兩種來處，即時那條都不改卡：停在核准閘門上的
  * 那顆本體沒被呼叫到，卡從日誌 `tool/call` 開；`request_sandbox_escalation` 在本體裡問人
  * （[#700](https://github.com/DemianLi/nexus-agent/issues/700)），基座發的那顆帶核准中斷的 `tool-error` 由 pump 丟掉

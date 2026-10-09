@@ -130,16 +130,26 @@ interface Session {
 async function open(
   threadId: string,
   turns: readonly ScriptedTurn[],
-  options: { readonly approvalsEnabled?: boolean; readonly plugins?: readonly PluginEntry[] } = {},
+  options: {
+    readonly approvalsEnabled?: boolean;
+    /** root 的核准政策來源（#437）；省略＝預設 `ask`。 */
+    readonly policy?: () => 'ask' | 'never';
+    readonly plugins?: readonly PluginEntry[];
+  } = {},
 ): Promise<Session> {
   const store = createJsonlSessionStore({ rootDir: join(dir, 'logs') });
   const built = await createNexusAgent({
     model: new ScriptedChatModel({ turns }),
     checkpointer: new MemorySaver(),
     plugins: [spyPlugin(), gatePlugin(), createTrajectoryPlugin(), ...(options.plugins ?? [])],
-    ...(options.approvalsEnabled === undefined
+    ...(options.approvalsEnabled === undefined && options.policy === undefined
       ? {}
-      : { approvals: { enabled: options.approvalsEnabled } }),
+      : {
+          approvals: {
+            ...(options.approvalsEnabled !== undefined && { enabled: options.approvalsEnabled }),
+            ...(options.policy !== undefined && { policy: options.policy }),
+          },
+        }),
   });
   let registry: SessionRegistry | undefined;
   const handler = createWireHandler({
@@ -545,7 +555,7 @@ describe('不必問人就確定的：閘門在圖內一次寫一對', () => {
     ).toEqual([]);
   });
 
-  it('子代理的閘門一律 policy-never：這一對寫進子代理自己的日誌，不寫進 root', async () => {
+  it('前景子代理跟 root 的政策走（#328 第 1 項）：root 是 never 時子代理也確定性回絕，這一對寫進子代理自己的日誌，不寫進 root', async () => {
     const worker: PluginEntry = {
       plugin: {
         name: 'worker-host',
@@ -580,7 +590,7 @@ describe('不必問人就確定的：閘門在圖內一次寫一對', () => {
         { content: '根收尾' },
         { content: '再收' },
       ],
-      { plugins: [worker] },
+      { plugins: [worker], policy: () => 'never' },
     );
     await until(session, settled(2));
 

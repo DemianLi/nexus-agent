@@ -353,7 +353,13 @@ export {
 } from './invalid-tool-args.js';
 
 export type { ApprovalPolicy, FoldOptions, FoldedAgentParams } from './fold.js';
-export { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
+export {
+  createBackgroundApprovalGate,
+  foldRegistry,
+  ROOT_ONLY_NOTICE,
+  rootOnlyRefusal,
+  TOOL_ORDER_REST,
+} from './fold.js';
 export { createModelCallRecorder, MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
 export { beginAttemptReport, lastModelCall, withModelCall } from './model-call-scope.js';
 export type { AttemptUsage } from './model-call-scope.js';
@@ -387,6 +393,7 @@ export type { StreamFailure, StreamRetryOptions, StreamRetrySignal } from './str
 export { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,
+  FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
   SUBAGENT_DELEGATION_CONTEXT,
   SUBAGENT_DELEGATION_MIDDLEWARE_NAME,
 } from './subagent-delegation.js';
@@ -712,7 +719,9 @@ export {
 export type { SubagentGraph, SubagentGraphOptions, SubagentGraphParams } from './subagent-graph.js';
 export type { SessionAddress } from './session-address.js';
 export {
+  BACKGROUND_RUN_PREFIX,
   BACKGROUND_SESSION_CONFIG_KEY,
+  isBackgroundAddress,
   sessionAddressKey,
   spawnedSubagentRunId,
   toolCallSessionAddress,
