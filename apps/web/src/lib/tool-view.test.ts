@@ -1,7 +1,11 @@
 // @vitest-environment node
+import { readFileSync } from 'node:fs';
 import { describe, expect, it } from 'vitest';
 
 import { catalogToolNames } from '@/test/tool-catalog';
+
+import { pendingLabel } from '@/lib/pending-label';
+import { ESCALATION_TITLE, SANDBOX_ESCALATION_TOOL } from '@/lib/sandbox-escalation';
 
 import {
   INPUT_MAX_CHARS,
@@ -83,6 +87,22 @@ describe('classifyTool', () => {
   ])('背景子代理的管理工具 %s 有自己的標題', (name, title) => {
     expect(isKnownTool(name)).toBe(true);
     expect(toolTitle(name)).toBe(title);
+  });
+
+  it('沙箱升級的工具卡與核准面板同一種說法，共用 `ESCALATION_TITLE`（#1292）', () => {
+    expect(toolTitle(SANDBOX_ESCALATION_TOOL)).toBe(ESCALATION_TITLE);
+    const pending = {
+      kind: 'approval',
+      interruptId: 'a',
+      namespace: [],
+      actions: [{ name: SANDBOX_ESCALATION_TOOL, args: {} }],
+      allowedDecisions: ['approve', 'reject'],
+    } as unknown as Parameters<typeof pendingLabel>[0];
+    expect(pendingLabel(pending, { index: 0, total: 1 })).toBe(`等待核准：${ESCALATION_TITLE}`);
+    // 釘的是「共用」不是「字一樣」：表上引用常數，不再自己寫一份字面。
+    const source = readFileSync(new URL('./tool-view.ts', import.meta.url), 'utf8');
+    expect(source).toContain('[SANDBOX_ESCALATION_TOOL]: ESCALATION_TITLE');
+    expect(source).not.toContain(`'${ESCALATION_TITLE}'`);
   });
 
   it('不認得的工具（例如 MCP 的）走通用卡', () => {
