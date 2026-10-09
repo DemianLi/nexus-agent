@@ -269,7 +269,7 @@ export class SandboxModeController implements SandboxGrantLedger {
    * 發一顆 grant：**只蓋一個目標、只蓋一次**。
    *
    * **在子代理裡什麼都不做**，下面四個同一條：一次性 grant 一律不給子代理（照 dsh），而 grant 與
-   * denial 各只有一格、是 root 的。子代理的升級在工具本體裡就被拒（當成 `policy-never`，#700），走不到這裡；
+   * denial 各只有一格、是 root 的。子代理的升級在工具本體裡就被拒（`delegated`，#700／#328），走不到這裡；
    * 擋在這裡是 fail-closed 的那一層。
    *
    * @param grant - 核准來的模式與模型指名的那個檔。
