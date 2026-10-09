@@ -1,6 +1,6 @@
 /**
- * `@nexus/plugin-present`——模型宣告**這一輪交付了哪些檔案**：一顆 `present` 工具，最終結果成功之後
- * 寫一筆 `deliverables/presented` 進呼叫它的那一份會話日誌。
+ * `@nexus/plugin-present`——模型宣告**這一輪交付了哪些檔案**：一顆 `present` 工具，`tools/result` 說最終結果
+ * 不是錯誤時寫一筆 `deliverables/presented` 進呼叫它的那一份會話日誌。
  *
  * 形狀照 dsh 的 `packages/deliverables/tool-present/`（`477b4f4`）：模型看到的描述、參數說明與
  * `Presented <path>` 的結果逐字照抄；拒絕的字句也照抄，**但不是每一句都有**——dsh 那句
@@ -9,19 +9,22 @@
  * `maxFiles`（預設 8）個；**只記路徑與說明，不讀、不複製內容**。dsh 的 standard preset 掛它，
  * 所以它在出貨清單裡。
  *
- * ## 什麼時候寫：`tools/result` 說結果不是錯誤，而且配對的 `tool/result` 已經落定
+ * ## 什麼時候寫：`tools/result` 說結果不是錯誤的那一刻
  *
  * 照 dsh：工具本體只把這次要交付什麼記在一張以呼叫為鍵的表上（`pending`），等 `tools/result`
  * 通知（post-execute 鉤子都跑完之後那一顆）說結果不是錯誤才 `append`。**不在本體裡直接寫**（`todo_write` 那條路）：
  * 那樣的話一次被外層改判成錯誤的呼叫照樣留下一筆交付，dsh 有一條測試專門擋它。表的鍵帶著呼叫者的
  * {@link SessionAddress}：這顆監聽者是 root 與每個子代理共用的一份，callId 在兩邊撞號時不能取走對方那一筆。
  *
- * **寫的時刻偏離 dsh（#1286）：排在配對的 `tool/result` 之後。** `tools/result` 由圍堵在記 `tool/result`
- * **之前**派發，dsh 因此是交付先、`tool/result` 後。我們的日誌不變式（#441、#452，`invariant.ts`）與下游（web 的卡片收尾、
- * 歷史重放、遙測）都依「交付在配對的成功結果之後」這個次序，改它是另一個決定（格式版本、折疊器），不是搬載體該順手做的。
- * 所以監聽者同步取走表上那一筆之後 `await Promise.resolve()` 一次：派發與圍堵同步記 `tool/result` 之間沒有任何 `await`，
- * 下一個 microtask 醒來時結果已經在日誌上。**不是「表達不出來」，是保留既有契約，待決**（要不要照 dsh 的次序另算）。
- * 醒來之後再從日誌尾端確認那顆 `tool/result` 真的在、而且不是錯誤——圍堵記它失敗是被吞掉的，那時不能留一筆沒有配對結果的交付。
+ * **同步寫，次序同 dsh（#1286）：`tool/call → deliverables/presented → tool/result`。** `tools/result` 由圍堵在記
+ * `tool/result` **之前**派發（`containment.ts` 的 `notifyToolResult`），而 dsh 的 `notifyResult` 也先於迴圈的
+ * `appendToolResult`，所以交付落在配對的 `tool/result` 之前。監聽者在圍堵的呼叫堆疊上被叫、不在任何日誌發佈回呼裡，
+ * 同步 `append` 不會撞 `SessionLog` 的重入防護，不需要排 microtask。（#1286 之前是訂閱自己那份日誌、等 `tool/result`
+ * 發佈後排一個 microtask 才寫，所以落在它**之後**；舊日誌仍是那個次序，讀它的人與日誌不變式兩種都收。）
+ *
+ * **表的鍵是最近似的，不是 dsh 的鍵。** dsh 的 `pending` 是 `WeakMap<ToolExecution, …>`，以那一次執行物件為鍵；
+ * 我們的圍堵沒有 `ToolExecution` 物件，只有 `PipelineExecution` 的視圖，每次派發都是新造的，認不出同一次執行，
+ * 所以退到「呼叫者位址＋`callId`」。這是 #1286 登記的鍵偏離。
  *
  * 監聽者是 `EventDispatcher.observe` 派發的：它拋或 reject 都只回報、不影響那次呼叫。
  *
@@ -260,20 +263,6 @@ function pendingKey(address: SessionAddress | undefined, callId: string): string
 }
 
 /**
- * 日誌上這個 `callId` 最後一顆 `tool/result` 在不在、是不是成功。從尾端往回找：剛落定的那一顆就在尾端。
- * @param log - 呼叫者那一份日誌。
- * @param callId - 呼叫。
- */
-function hasSucceeded(log: SessionLog, callId: string): boolean {
-  const events = log.events;
-  for (let index = events.length - 1; index >= 0; index -= 1) {
-    const event = events[index];
-    if (event?.type === 'tool/result' && event.data.callId === callId) return !event.data.isError;
-  }
-  return false;
-}
-
-/**
  * present plugin。
  *
  * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
@@ -291,15 +280,13 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
       { readonly log: SessionLog; readonly files: PresentedFile[] }
     >();
     registry.lifecycle.onDispose(() => pending.clear());
-    registry.events.on('tools/result', async (exec, result) => {
+    registry.events.on('tools/result', (exec, result) => {
       const key = pendingKey(exec.agent, exec.callId);
       const entry = pending.get(key);
       if (entry === undefined) return;
       pending.delete(key);
       if (result.isError) return;
-      // 還在圍堵派發的路上，`tool/result` 要等圍堵接著同步記下去。見檔頭。
-      await Promise.resolve();
-      if (!hasSucceeded(entry.log, exec.callId)) return;
+      // 同步寫，照 dsh：`tools/result` 由圍堵在記 `tool/result` 之前派發，所以交付先、結果後。見檔頭。
       entry.log.append('deliverables/presented', { callId: exec.callId, files: entry.files });
     });
     registry.tools.register(
@@ -401,7 +388,7 @@ declare module '@nexus/core' {
      *
      * 照 dsh 的同名事件（`packages/deliverables/tool-present/src/types.ts`，`ddefc45`）：寫進**呼叫者
      * 自己那一份**日誌，子代理宣告的留在子代理那份——主代理要交付，得自己再叫一次 `present`（dsh README
-     * 原話）。寫的時刻見檔頭：配對的 `tool/result` 之後。
+     * 原話）。寫的時刻見檔頭：配對的 `tool/result` 之前（同步，同 dsh）。
      *
      * ## 對 dsh 的偏離：沒有 `turn`
      *

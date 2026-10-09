@@ -133,13 +133,12 @@ function subagentConfig(callId: string) {
 
 /**
  * 照圍堵落定的順序做：先派發 `tools/result`（宿主端的隔離派發），再**同步**記 `tool/result`。兩步之間沒有任何 `await`
- * ——`containment.ts` 的 `notifyToolResult` 與 `settle` 就是這樣接著的，下面測的「交付排在下一個 microtask」靠它。
+ * ——`containment.ts` 的 `notifyToolResult` 與 `settle` 就是這樣接著的。交付在派發當下同步寫，所以落在 `tool/result` 之前（#1286，同 dsh）。
  * @param mounted - 掛好的組裝。
  * @param log - 呼叫者那一份日誌。
  * @param config - 這次呼叫的 config（位址從它算，同圍堵的 `exec.agent`）。
  * @param callId - 這顆結果是哪個呼叫的。
  * @param isError - 圍堵最後把這次判成錯誤與否。
- * @param options.skipRecord - 只派發、不記 `tool/result`（模擬圍堵記日誌失敗被吞掉）。
  */
 function settle(
   mounted: Mounted,
@@ -147,7 +146,6 @@ function settle(
   config: { toolCall: { id: string } },
   callId: string,
   isError: boolean,
-  options: { skipRecord?: boolean } = {},
 ): void {
   mounted.registry.dispatch.observe(
     'tools/result',
@@ -160,7 +158,7 @@ function settle(
     },
     { kind: 'message', content: '', isError },
   );
-  if (options.skipRecord !== true) log.append('tool/result', { callId, isError });
+  log.append('tool/result', { callId, isError });
 }
 
 /**
@@ -182,9 +180,6 @@ async function callThrough(
   });
   const result = await mounted.tool.invoke({ files } as never, config as never);
   if (verdict !== 'pending') settle(mounted, log, config, callId, verdict === 'error');
-  // 交付排在下一個 microtask。
-  await Promise.resolve();
-  await Promise.resolve();
   return result;
 }
 
@@ -233,7 +228,7 @@ describe('模型看到的描述', () => {
 });
 
 describe('成功的那一次', () => {
-  it('回 dsh 的 `Presented <path>`，而且結果落定成功之後才寫一筆交付', async () => {
+  it('回 dsh 的 `Presented <path>`，而且 `tools/result` 說成功的當下同步寫一筆交付（在 `tool/result` 之前）', async () => {
     const root = await workspace();
     await writeFile(join(root, '報告.docx'), Uint8Array.of(80, 75, 0, 255));
     await mkdir(join(root, 'out'));
@@ -252,16 +247,16 @@ describe('成功的那一次', () => {
     expect(deliveries(log)).toEqual([]);
 
     settle(mounted, log, rootConfig('c1'), 'c1', false);
-    // 派發與記 `tool/result` 同步做完，交付還排在下一個 microtask。
-    expect(deliveries(log)).toEqual([]);
-    await Promise.resolve();
+    // 派發與記 `tool/result` 同步做完，交付也在裡面：不需要讓出任何 microtask。
     const [delivery] = deliveries(log);
     // `description` 沒給的那一個整個不放 key。
     expect(delivery?.data).toEqual({ callId: 'c1', files });
     expect(delivery?.data.files[1]).not.toHaveProperty('description');
-    // 落在配對的 `tool/result` 之後。
-    const resultSeq = log.events.find((event) => event.type === 'tool/result')?.seq ?? Infinity;
-    expect(delivery!.seq).toBeGreaterThan(resultSeq);
+    // 落在配對的 `tool/call` 之後、`tool/result` 之前（dsh 的次序）。
+    const callSeq = log.events.find((event) => event.type === 'tool/call')?.seq ?? Infinity;
+    const resultSeq = log.events.find((event) => event.type === 'tool/result')?.seq ?? -Infinity;
+    expect(delivery!.seq).toBeGreaterThan(callSeq);
+    expect(delivery!.seq).toBeLessThan(resultSeq);
     // 只看目錄，不讀內容。
     expect(read).not.toHaveBeenCalled();
     expect(readRaw).not.toHaveBeenCalled();
@@ -284,13 +279,10 @@ describe('成功的那一次', () => {
     const log = mounted.sessions.root;
     await callThrough(mounted, log, [{ path: 'a' }], rootConfig('mine'), 'pending');
     settle(mounted, log, rootConfig('someone-else'), 'someone-else', false);
-    await Promise.resolve();
     expect(deliveries(log)).toEqual([]);
     settle(mounted, log, rootConfig('mine'), 'mine', false);
-    await Promise.resolve();
     // 同一個 callId 再來一顆也不重寫：表上那一筆在第一顆就取走了。
     settle(mounted, log, rootConfig('mine'), 'mine', false);
-    await Promise.resolve();
     expect(deliveries(log).map((event) => event.data.callId)).toEqual(['mine']);
   });
 
@@ -303,7 +295,6 @@ describe('成功的那一次', () => {
     await callThrough(mounted, log, [{ path: 'a' }], rootConfig('again'), 'pending');
     await callThrough(mounted, log, [{ path: 'a' }], rootConfig('again'), 'pending');
     settle(mounted, log, rootConfig('again'), 'again', false);
-    await Promise.resolve();
     expect(deliveries(log).map((event) => event.data.callId)).toEqual(['again']);
   });
 
@@ -315,7 +306,6 @@ describe('成功的那一次', () => {
     await callThrough(mounted, log, [{ path: 'a' }], rootConfig('late'), 'pending');
     for (const entry of mounted.registry.lifecycle.disposers()) await entry.value();
     settle(mounted, log, rootConfig('late'), 'late', false);
-    await Promise.resolve();
     expect(deliveries(log)).toEqual([]);
   });
 
@@ -343,11 +333,9 @@ describe('成功的那一次', () => {
     await callThrough(mounted, rootLog, [{ path: 'a' }], rootConfig('same'), 'pending');
     await callThrough(mounted, found.log, [{ path: 'b' }], subConfig, 'pending');
     settle(mounted, found.log, subConfig, 'same', false);
-    await Promise.resolve();
     expect(deliveries(rootLog)).toEqual([]);
     expect(deliveries(found.log).map((event) => event.data.files[0]?.path)).toEqual(['b']);
     settle(mounted, rootLog, rootConfig('same'), 'same', false);
-    await Promise.resolve();
     expect(deliveries(rootLog).map((event) => event.data.files[0]?.path)).toEqual(['a']);
     expect(deliveries(found.log)).toHaveLength(1);
   });
@@ -361,22 +349,9 @@ describe('成功的那一次', () => {
     expect(deliveries(log)).toEqual([]);
     // 沒有再進本體就落定一顆成功的：表上沒有東西可寫。
     settle(mounted, log, rootConfig('retry'), 'retry', false);
-    await Promise.resolve();
     expect(deliveries(log)).toEqual([]);
     await callThrough(mounted, log, [{ path: 'a' }], rootConfig('retry'));
     expect(deliveries(log).map((event) => event.data.callId)).toEqual(['retry']);
-  });
-
-  it('派發說成功、但日誌上沒有配對的 tool/result（圍堵記失敗被吞掉）：不留孤兒交付', async () => {
-    const root = await workspace();
-    await writeFile(join(root, 'a'), 'a');
-    const mounted = mount({ root });
-    const log = mounted.sessions.root;
-    await callThrough(mounted, log, [{ path: 'a' }], rootConfig('orphan'), 'pending');
-    settle(mounted, log, rootConfig('orphan'), 'orphan', false, { skipRecord: true });
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(deliveries(log)).toEqual([]);
   });
 
   it('只有一位 tools/result 監聽者', () => {

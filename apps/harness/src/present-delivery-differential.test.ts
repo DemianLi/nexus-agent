@@ -1,12 +1,14 @@
 /**
  * **差分測試**（[#1286](https://github.com/DemianLi/nexus-agent/issues/1286)）：`present` 的交付寫入從「訂閱自己那份日誌、
- * 等同 `callId` 的 `tool/result`」搬到 `tools/result` 的一位監聽者，**日誌必須逐筆相同、順序相同**。
+ * 等同 `callId` 的 `tool/result`」搬到 `tools/result` 的一位監聽者。**三種事件各自的內容逐筆相同，只有次序從
+ * `call → result → presented` 變成 dsh 的 `call → presented → result`。**
  *
- * 這個檔先在搬之前的實作上跑綠，搬完一字不改仍綠。期望值是寫死的字面值，不從實作裡算。
+ * 這個檔在 `0eee059e` 先立在搬之前的實作上跑綠（舊次序）；搬完之後**只翻了「預期次序」那幾格**（每一組 `presented` 與同
+ * `callId` 的 `result` 對調），案例、夾具、比對的欄位一字未動。期望值是寫死的字面值，不從實作裡算。前四顆 commit 是
+ * 討論會議 session 的方案 A（保留舊次序）；A 改 B 的決議見 #1286 的 PM 留言。
  *
  * 比的是整份日誌上跟工具呼叫有關的那幾種事件（`tool/call`、`tool/result`、`deliverables/presented`）的**次序**與
- * 各自的 `callId`／判定／檔案，而不只是「有沒有交付」——搬完之後排進 microtask 的時刻提早了幾行
- * （從日誌發佈 `tool/result` 的那一刻，移到圍堵派發 `tools/result` 的那一刻），平行呼叫之間的相對次序是它最可能走樣的地方。
+ * 各自的 `callId`／判定／檔案，而不只是「有沒有交付」——平行呼叫之間的相對次序是它最可能走樣的地方。
  *
  * 案例：
  *
@@ -15,7 +17,8 @@
  * - `present` 與別的工具平行；
  * - 本體拒絕（找不到檔）→ 沒有交付；
  * - 外層 middleware 把本體的成功改判成錯誤 → 沒有交付；
- * - root 與子代理用**同一個 `callId`** 各叫一次 `present` → 各自那份日誌各一筆，不串。
+ * - root 與子代理用**同一個 `callId`** 各叫一次 `present` → 各自那份日誌各一筆，不串；
+ * - 背景子代理叫 `present` → 交付寫進它自己那份（它自己編的圖，要確認也走得到 `tools/result` 的派發）。
  */
 
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
@@ -191,19 +194,19 @@ const present = (id: string, path: string) => ({
 });
 
 describe('present 交付寫入：日誌逐筆相同', () => {
-  it('單次成功：call → result → presented', async () => {
+  it('單次成功：call → presented → result（dsh 的次序）', async () => {
     const seen = await run([
       { content: '交付。', toolCalls: [present('p1', 'report.md')] },
       { content: '好了。' },
     ]);
     expect(seen.root).toEqual([
       ['call', 'p1', PRESENT_TOOL_NAME],
-      ['result', 'p1', false],
       ['presented', 'p1', 'report.md'],
+      ['result', 'p1', false],
     ]);
   });
 
-  it('同一則訊息裡平行叫兩次：每次的交付都在自己的 result 之後', async () => {
+  it('同一則訊息裡平行叫兩次：每次的交付都在自己的 result 之前', async () => {
     const seen = await run([
       {
         content: '交付。',
@@ -263,8 +266,8 @@ describe('present 交付寫入：日誌逐筆相同', () => {
     expect(seen.subagents).toEqual([
       [
         ['call', 'dup', PRESENT_TOOL_NAME],
-        ['result', 'dup', false],
         ['presented', 'dup', 'report.md'],
+        ['result', 'dup', false],
       ],
     ]);
     expect(seen.root).toEqual(EXPECTED_ROOT_DUP);
@@ -298,16 +301,16 @@ describe('present 交付寫入：日誌逐筆相同', () => {
  */
 const EXPECTED_PARALLEL: unknown[] = [
   ['call', 'p1', PRESENT_TOOL_NAME],
-  ['result', 'p1', false],
   ['presented', 'p1', 'report.md'],
+  ['result', 'p1', false],
   ['call', 'p2', PRESENT_TOOL_NAME],
-  ['result', 'p2', false],
   ['presented', 'p2', 'notes.md'],
+  ['result', 'p2', false],
 ];
 const EXPECTED_WITH_LS: unknown[] = [
   ['call', 'p1', PRESENT_TOOL_NAME],
-  ['result', 'p1', false],
   ['presented', 'p1', 'report.md'],
+  ['result', 'p1', false],
   ['call', 'l1', 'ls'],
   ['result', 'l1', false],
 ];
@@ -315,14 +318,14 @@ const EXPECTED_ROOT_DUP: unknown[] = [
   ['call', 'task-1', 'task'],
   ['result', 'task-1', false],
   ['call', 'dup', PRESENT_TOOL_NAME],
-  ['result', 'dup', false],
   ['presented', 'dup', 'notes.md'],
+  ['result', 'dup', false],
 ];
 
 const EXPECTED_BACKGROUND: unknown[][] = [
   [
     ['call', 'bg-p1', PRESENT_TOOL_NAME],
-    ['result', 'bg-p1', false],
     ['presented', 'bg-p1', 'report.md'],
+    ['result', 'bg-p1', false],
   ],
 ];

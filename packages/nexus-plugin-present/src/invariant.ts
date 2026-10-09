@@ -6,8 +6,11 @@
  * 而這個套件擁有一條機械判得出來的跨筆關係，所以寫實的：
  *
  * 1. **有配對的呼叫**：同一份日誌裡，前面有一顆同 `callId` 的 `tool/call`，工具名是 `present`。
- * 2. **那次呼叫成功了**：它最後一顆 `tool/result` 在這一筆之前，而且 `isError` 為否。這一條就是
- *    檔頭那個「落定成功才寫」的時刻——一筆落在結果之前、或跟著一次失敗的，都是有人繞過了工具。
+ * 2. **那次呼叫沒有失敗**：配對的 `tool/result` 要是有，不論在這一筆之前或之後，`isError` 都要為否。
+ *    工具在 `tools/result` 說結果不是錯誤的當下同步寫（#1286，同 dsh），所以新日誌的次序是
+ *    `tool/call → deliverables/presented → tool/result`；#1286 之前的日誌是交付在結果之後。**兩種次序都合法**——
+ *    次序不是這條不變量要擋的；要擋的是「跟著一次失敗的」，那是有人繞過了工具。結果還沒落定（沒有 `tool/result`）
+ *    也合法：新次序下交付寫的時候結果本來就還沒記。
  * 3. **一次呼叫只交付一次**。
  * 4. **形狀**：`files` 非空，每個 `path` 是去掉空白後非空的字串，`description` 有的話是字串。
  *
@@ -60,7 +63,7 @@ function validateFiles(files: unknown, seq: number, fail: InvariantFailure): voi
 export const presentDeliveryInvariant: InvariantInstaller = (subject, fail) => {
   /** 每個 `callId` 叫的是哪顆工具。 */
   const calls = new Map<string, string>();
-  /** 每個 `callId` 最後一顆結果是不是錯誤。 */
+  /** 每個 `callId` 最後一顆結果是不是錯誤（結果還沒到就沒有這個 key）。 */
   const results = new Map<string, boolean>();
   /** 已經交付過的 `callId`。 */
   const delivered = new Set<string>();
@@ -72,6 +75,10 @@ export const presentDeliveryInvariant: InvariantInstaller = (subject, fail) => {
         break;
       case 'tool/result':
         results.set(event.data.callId, event.data.isError);
+        // 新次序：交付先到，結果後到。後到的結果是錯誤，就是跟著一次失敗的交付。
+        if (event.data.isError && delivered.has(event.data.callId)) {
+          fail(`${event.data.callId} 已經交付了，但那次呼叫的 tool/result（seq ${event.seq}）是錯誤`);
+        }
         break;
       case 'deliverables/presented': {
         const { callId, files } = event.data;
@@ -81,13 +88,8 @@ export const presentDeliveryInvariant: InvariantInstaller = (subject, fail) => {
             `deliverables/presented（seq ${event.seq}）的 ${callId} 前面沒有一顆 present 的 tool/call`,
           );
         }
-        const isError = results.get(callId);
-        if (isError === undefined) {
-          fail(
-            `deliverables/presented（seq ${event.seq}）的 ${callId} 還沒有 tool/result 就交付了`,
-          );
-        }
-        if (isError === true) {
+        // 沒有結果（`undefined`）合法：新次序下交付寫的時候結果還沒記。
+        if (results.get(callId) === true) {
           fail(`deliverables/presented（seq ${event.seq}）的 ${callId} 那次呼叫的結果是錯誤`);
         }
         if (delivered.has(callId)) {
