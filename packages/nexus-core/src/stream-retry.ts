@@ -27,12 +27,29 @@
  * 第一級載體 `assistant/attempt` 表示「那一次作廢」（`core/agent-loop/src/agent.ts:466-476`、`:489-493`；以上皆 `5badb15009a`）。
  * 這裡同向：整次重打、失敗那次作廢。
  *
- * **擦除的時機是偏離**：dsh 在失敗當下、同一個迴圈裡就把那次記成 attempt 並撤掉，因為消費串流與決定重試是同一條控制流。我們的重試
- * 決定在圖裡的 middleware，畫面的字卻是 pump 從另一條佇列（`streamEvents`）讀到的，兩條之間沒有先後保證——middleware 這邊
- * 一說「失敗了」就擦，失敗那次排在佇列裡還沒被 pump 讀到的片段會在擦除之後才到，把剛擦掉的那則又畫回來。同一條佇列上唯一保證
- * 排在失敗那次的全部片段之後的，是下一次嘗試的第一則 `message-start`，所以 pump 在那一刻送 `assistant/attempt` 與
- * `message-discard`（`thread-pump.ts` 的 `#abandonSupersededReply`）；等退避時被停止的那一種，pump 在收尾時補送
- * （`#keepInterruptedReply`），結果上對得上 dsh。這個「沒有先後保證」是從兩條通道的結構推的，沒有構造出競態。
+ * ## 失敗當下就通知 pump（擦除、`llm/retry`、倒數）
+ *
+ * 決定重試的那一刻，middleware 做三件事：①日誌寫 `llm/retry`（帶 `delayMs`），②用 `config.writer` 送一顆
+ * {@link StreamRetrySignal} 給 pump，③才開始退避；退避完、重打之前寫 `llm/retry-started` 並再送一顆。pump 收到第一顆就把
+ * 還沒收尾的 root 回覆作廢（`assistant/attempt` ＋ `message-discard`）並送 `llm-retry` frame，同 dsh 在失敗當下記
+ * `assistant/attempt`（`core/agent-loop/src/agent.ts:466-476`、`:489-493`，`5badb15009a`）。
+ *
+ * **載體是 `config.writer`，不是 `dispatchCustomEvent`**。後者走 callback 的 `handleCustomEvent`，langgraph 1.4.19 裡沒有任何
+ * handler 把它轉成串流 chunk（只有 `pregel/timeout.js:77` 碰它），在 v3 `streamEvents` 上浮不出來（實測 0 次）；`writer`
+ * （`pregel/index.js:1086-1094`）則直接 `stream.push`。
+ *
+ * **順序有保證**（`@langchain/core` 1.2.9、`@langchain/langgraph` 1.4.19）：字片段與 `writer` 的 chunk 落在**同一條**輸出佇列。
+ * 字片段：`chat_models.js:243` 對每個串流事件先 `await runManager.handleChatModelStreamEvent`、再 yield；
+ * `callbacks/manager.js:179-188` 用 `consumeCallback` 跑 handler，`singletons/callbacks.js` 在 `wait === true` 時當場 await，
+ * 而 `messages-v2.js:85` 的 `awaitHandlers = true`；`messages-v2.js:104-113` 的 `emit` 落到 `pregel/index.js:1065` 的 `stream.push`。
+ * `writer` 同樣落到 `stream.push`（`index.js:1086-1094`），`stream.js:74-77` 同步 `enqueue`。消費側是單一 for-await
+ * （`index.js:1169`）接 `stream/mux.js:302-321` 的 `pump`，依序蓋 `seq`、推進 mux，`run` 的迭代器就是依到達順序讀它
+ * （`stream/run-stream.js:106`）。失敗那次的最後一個字片段在模型呼叫拋錯之前就入列了，middleware 的 catch 在那之後才推
+ * `writer`，所以 pump 讀到通知時，失敗那次的片段一個都不會再來。這條不是從版本號推的：`apps/harness/src/stream-retry.test.ts`
+ * 有常駐的順序測試（密集片段加慢消費者），升級 langgraph 改了順序它會紅；探針 200 次（密集 300 片段、慢消費者、中段 503 與
+ * 斷線）零亂序。
+ *
+ * 這取代了第一版的做法（等下一次嘗試的第一則 `message-start` 到來才擦，畫面在退避期間凍著半截字，也沒有地方放倒數）。
  *
  * - **次數與起點先保守**：預設最多 2 次、1 秒起（卡上 2026-10-06 拍板；dsh 預設 5 次、500 毫秒起，`retry-policy.ts:14-15`）。每次重試都重付
  *   整個回覆的費用，所以不照抄。**退避的形狀照 dsh**：倍增、單次封頂 10 秒、抖動 0.1（`:16-17`），欄位見
@@ -42,9 +59,15 @@
  * @module
  */
 
+import { randomUUID } from 'node:crypto';
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { getConfig } from '@langchain/langgraph';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { captureModelCallSettled, withModelCall } from './model-call-scope.js';
+import type { CapturedModelCall } from './model-call-scope.js';
+import type { SessionLookup } from './registry.js';
+import type { LlmFailure, SessionLog } from './session-log.js';
 import { turnCancelSignalOf } from './turn-cancel.js';
 
 /** middleware 的名字。 */
@@ -56,6 +79,68 @@ export interface StreamFailure {
   readonly code: string;
   /** 重打會不會有用。供應商說「請求本身有問題」（例如 400）的不重試。 */
   readonly retryable: boolean;
+  /** 供應商給的 HTTP 狀態（串流內的錯誤信封帶得出來時）。寫進 `llm/retry` 的 `failure.status`。 */
+  readonly status?: number;
+}
+
+/** 圖裡 `config.writer` 送出的通知的記號。pump 認它，其餘的 `custom` 一律不上線。 */
+export const STREAM_RETRY_SIGNAL = 'nexus/stream-retry';
+
+/**
+ * middleware 在決定重試與重打開始時送給 pump 的通知（走 `config.writer`，順序理由見檔頭）。
+ *
+ * - `scheduled`：這一次失敗了、排定了重試，還沒開始等。pump 據此作廢 root 還沒收尾的回覆、送 `llm-retry`。
+ * - `started`：退避等完、下一次嘗試就要開始。
+ */
+export type StreamRetrySignal =
+  | {
+      readonly kind: typeof STREAM_RETRY_SIGNAL;
+      readonly phase: 'scheduled';
+      readonly retryId: string;
+      /** 第幾次重試，從 1 起算。 */
+      readonly retry: number;
+      readonly maxRetries: number;
+      readonly delayMs: number;
+      /** 失敗的種類（同 `llm/retry.failure.code`）。 */
+      readonly code: string;
+      /** 失敗的那次呼叫的 `model/start` 的 `seq`；日誌沒接上就沒有。 */
+      readonly modelCall?: number;
+    }
+  | {
+      readonly kind: typeof STREAM_RETRY_SIGNAL;
+      readonly phase: 'started';
+      readonly retryId: string;
+      readonly retry: number;
+      readonly modelCall?: number;
+    };
+
+/** 把 `config.writer` 送出的東西認回 {@link StreamRetrySignal}；不是（或形狀不對）就是 `undefined`。 */
+export function streamRetrySignalOf(payload: unknown): StreamRetrySignal | undefined {
+  if (typeof payload !== 'object' || payload === null) return undefined;
+  const value = payload as Record<string, unknown>;
+  if (value['kind'] !== STREAM_RETRY_SIGNAL) return undefined;
+  const { retryId, retry, modelCall } = value;
+  if (typeof retryId !== 'string' || retryId === '' || typeof retry !== 'number') return undefined;
+  if (modelCall !== undefined && typeof modelCall !== 'number') return undefined;
+  const call = modelCall === undefined ? {} : { modelCall };
+  if (value['phase'] === 'started') {
+    return { kind: STREAM_RETRY_SIGNAL, phase: 'started', retryId, retry, ...call };
+  }
+  const { maxRetries, delayMs, code } = value;
+  if (value['phase'] !== 'scheduled') return undefined;
+  if (typeof maxRetries !== 'number' || typeof delayMs !== 'number' || typeof code !== 'string') {
+    return undefined;
+  }
+  return {
+    kind: STREAM_RETRY_SIGNAL,
+    phase: 'scheduled',
+    retryId,
+    retry,
+    maxRetries,
+    delayMs,
+    code,
+    ...call,
+  };
 }
 
 /** dsh 的預設退避上限（`retry-policy.ts:16`）：本機排程的單次等待最多 10 秒。 */
@@ -104,17 +189,14 @@ const scopes = new AsyncLocalStorage<AttemptScope>();
  * @param call - 這一次嘗試。
  * @returns 嘗試的結果，加上期間回報過的失敗（沒有就是 `undefined`）。
  */
-async function runInAttempt<T>(
-  call: () => Promise<T>,
-): Promise<{ readonly scope: AttemptScope; readonly outcome: PromiseSettledResult<T> }> {
+async function runInAttempt<T>(call: () => Promise<T>): Promise<{
+  readonly scope: AttemptScope;
+  readonly outcome: PromiseSettledResult<T>;
+  readonly captured: CapturedModelCall;
+}> {
   const scope: AttemptScope = { failure: undefined };
-  const outcome = await scopes.run(scope, () =>
-    call().then(
-      (value): PromiseSettledResult<T> => ({ status: 'fulfilled', value }),
-      (reason: unknown): PromiseSettledResult<T> => ({ status: 'rejected', reason }),
-    ),
-  );
-  return { scope, outcome };
+  const { outcome, call: captured } = await scopes.run(scope, () => captureModelCallSettled(call));
+  return { scope, outcome, captured };
 }
 
 /**
@@ -157,27 +239,113 @@ function sleep(ms: number, signal: AbortSignal | undefined): Promise<boolean> {
   });
 }
 
+/** 送一顆通知給 pump（`config.writer`）。範圍外（沒有圖、沒開 `custom`）是空操作；送不出去不能扳倒重試。 */
+function signal(payload: StreamRetrySignal): void {
+  try {
+    (getConfig() as { writer?: (chunk: unknown) => void } | undefined)?.writer?.(payload);
+  } catch {
+    // 通知是附帶的：沒有圖脈絡（單測、直接叫 handler）就算了。
+  }
+}
+
+/** 記一顆事件；記不進去不能扳倒重試（同 `model-calls.ts`）。 */
+function tryAppend(write: () => void): void {
+  try {
+    write();
+  } catch {
+    // 見上。
+  }
+}
+
+/** 失敗的穩定描述：碼與狀態是 adapter 回報的，原話取自拋出來的錯誤。 */
+function failureOf(reported: StreamFailure, reason: unknown): LlmFailure {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return {
+    message,
+    code: reported.code,
+    ...(reported.status !== undefined && { status: reported.status }),
+  };
+}
+
 /**
  * 建那顆 middleware。無狀態：每次呼叫的嘗試計數與範圍都在呼叫自己的閉包裡。
  *
  * @param options - 預算。
+ * @param sessions - 註冊表的 `sessions` 通道，用來問「這次呼叫該寫進哪一份日誌」。
  * @returns 可以放進 middleware 陣列的實例。
  */
-export function createStreamRetryMiddleware(options: StreamRetryOptions): AgentMiddleware {
+export function createStreamRetryMiddleware(
+  options: StreamRetryOptions,
+  sessions: { forCall(config: unknown): SessionLookup },
+): AgentMiddleware {
   return createMiddleware({
     name: STREAM_RETRY_MIDDLEWARE_NAME,
     wrapModelCall: async (request, handler) => {
-      const signal = turnCancelSignalOf({
-        configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
-      });
+      const configurable = (request as { runtime?: { configurable?: unknown } }).runtime
+        ?.configurable;
+      const signalAbort = turnCancelSignalOf({ configurable });
+      const found = sessions.forCall({ configurable });
+      const log: SessionLog | undefined = found.kind === 'ok' ? found.log : undefined;
+      // 一次呼叫的所有重試共用一個，同 dsh 的 `retryId`。
+      const retryId = randomUUID();
       for (let attempt = 0; ; attempt += 1) {
-        const { scope, outcome } = await runInAttempt(() => Promise.resolve(handler(request)));
+        const { scope, outcome, captured } = await runInAttempt(() =>
+          Promise.resolve(handler(request)),
+        );
         if (outcome.status === 'fulfilled') return outcome.value;
-        const retriable = scope.failure?.retryable === true && attempt < options.maxRetries;
-        if (!retriable) throw outcome.reason;
+        const reported = scope.failure;
+        const retriable = reported?.retryable === true && attempt < options.maxRetries;
+        if (reported === undefined || !retriable) throw outcome.reason;
+        const retry = attempt + 1;
+        const delayMs = streamRetryDelayMs(options, attempt);
+        // 失敗的是哪一次呼叫：起訖紀錄器在裡面，這裡只能從放的格子裡問（拋了也問得到）。
+        const modelCall = log === undefined ? undefined : captured.of(log);
+        const code = reported.code;
+        if (log !== undefined) {
+          tryAppend(() =>
+            log.append(
+              'llm/retry',
+              withModelCall(
+                {
+                  retryId,
+                  retry,
+                  maxRetries: options.maxRetries,
+                  failure: failureOf(reported, outcome.reason),
+                  delayMs,
+                },
+                modelCall,
+              ),
+            ),
+          );
+        }
+        const callField = modelCall === undefined ? {} : { modelCall };
+        signal({
+          kind: STREAM_RETRY_SIGNAL,
+          phase: 'scheduled',
+          retryId,
+          retry,
+          maxRetries: options.maxRetries,
+          delayMs,
+          code,
+          ...callField,
+        });
         // 退避：1 倍、2 倍、4 倍……；這一輪已經中止、或等待中按了停止，原本的錯誤照樣往外拋，不再打（`sleep` 兩種都認）。
-        const waited = await sleep(streamRetryDelayMs(options, attempt), signal);
+        // 取消之後不寫 `llm/retry-started`，同 `llm-retry.ts` 的規矩。
+        const waitStart = Date.now();
+        const waited = await sleep(delayMs, signalAbort);
         if (!waited) throw outcome.reason;
+        if (log !== undefined) {
+          tryAppend(() =>
+            log.append(
+              'llm/retry-started',
+              withModelCall(
+                { retryId, retry, waitedMs: Math.max(0, Date.now() - waitStart) },
+                modelCall,
+              ),
+            ),
+          );
+        }
+        signal({ kind: STREAM_RETRY_SIGNAL, phase: 'started', retryId, retry, ...callField });
       }
     },
   }) as unknown as AgentMiddleware;

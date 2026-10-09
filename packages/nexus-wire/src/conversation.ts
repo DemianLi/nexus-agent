@@ -46,6 +46,8 @@ import type {
 } from './inbox.js';
 import { COMPACTION } from './compaction.js';
 import { GOAL, GOAL_PHASES } from './goal.js';
+import { LLM_RETRY, LLM_RETRY_STARTED, toWireLlmRetry } from './llm-retry.js';
+import type { WireLlmRetry } from './llm-retry.js';
 import { MESSAGE_DISCARD } from './message-discard.js';
 import type { WireGoal, WireGoalPhase } from './goal.js';
 import { PLAN_MODE } from './plan-mode.js';
@@ -669,6 +671,12 @@ export interface ConversationState {
    * `subagent-status.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
    */
   readonly subagentStatus: Readonly<Record<string, SubagentRunStatus>> | null;
+  /**
+   * 這一輪正在等著重打（#520）：最後一顆 `llm-retry` frame 的整份，`null` ＝ 沒有。**一輪開始、一輪收尾、下一則 root 回覆開始、
+   * `llm-retry-started` 到來都會清成 `null`**（後面幾條是保險，frame 掉了也不卡一行倒數）。不進歷史，重新整理之後是 `null`。
+   * 規則見 `llm-retry.ts`。它是「現在」的事，所以 {@link prependEntries} 不動它。
+   */
+  readonly retry: WireLlmRetry | null;
 }
 
 const ROOT: Attribution = { kind: 'root' };
@@ -693,6 +701,7 @@ export function emptyConversation(): ConversationState {
     inboxNextStep: [],
     title: null,
     subagentStatus: null,
+    retry: null,
   };
 }
 
@@ -724,9 +733,11 @@ function trackTurn(previous: ConversationState, next: ConversationState): Conver
   if (next === previous) return next;
   const wasActive = isTurnActive(previous.status);
   if (!wasActive && next.status === 'running') {
-    return { ...next, turnStart: previous.entries.length };
+    return { ...next, turnStart: previous.entries.length, retry: null };
   }
   if (!wasActive || isTurnActive(next.status)) return next;
+  // 一輪收尾（含退避中按停止）：「N 秒後重試」不能留到下一輪。
+  if (next.retry !== null) next = { ...next, retry: null };
   for (let at = next.entries.length - 1; at >= next.turnStart; at -= 1) {
     const entry = next.entries[at];
     if (entry === undefined || !isTailCandidate(entry)) continue;
@@ -901,7 +912,11 @@ function reduceFrame(state: ConversationState, event: Event): ConversationState 
 
   switch (event.method) {
     case 'messages':
-      return reduceMessage(advanced, namespace, event.params.data, time);
+      return clearRetryOnReply(
+        reduceMessage(advanced, namespace, event.params.data, time),
+        namespace,
+        event.params.data,
+      );
     case 'tools':
       return reduceTool(advanced, namespace, event.params.data, time);
     case 'lifecycle':
@@ -913,6 +928,17 @@ function reduceFrame(state: ConversationState, event: Event): ConversationState 
     default:
       return advanced;
   }
+}
+
+/** 下一則 root 回覆開始了：重打已經開跑，「N 秒後重試」不再成立（#520）。子代理與人話不算。 */
+function clearRetryOnReply(
+  state: ConversationState,
+  namespace: readonly string[],
+  data: unknown,
+): ConversationState {
+  if (state.retry === null || namespace.length > 1) return state;
+  const { event, role } = (data ?? {}) as { event?: unknown; role?: unknown };
+  return event === 'message-start' && role !== 'human' ? { ...state, retry: null } : state;
 }
 
 /**
@@ -1018,6 +1044,8 @@ const CUSTOM_REDUCERS: {
   [SUBAGENT_STATUS]: reduceSubagentStatus,
   [SUBAGENT_CATALOG]: reduceSubagentCatalog,
   [MESSAGE_DISCARD]: reduceMessageDiscard,
+  [LLM_RETRY]: reduceLlmRetry,
+  [LLM_RETRY_STARTED]: reduceLlmRetryStarted,
 };
 
 /**
@@ -1201,6 +1229,24 @@ function reduceMessageDiscard(state: ConversationState, payload: object): Conver
     (entry) => !(entry.kind === 'ai' && (entry.messageId === messageId || entry.id === messageId)),
   );
   return entries.length === state.entries.length ? state : { ...state, entries };
+}
+
+/** `llm-retry` 的 `payload`（#520）：整份換掉，`retryId` 不同也直接換。任何一格不對就整顆不收，留著前一份。 */
+function reduceLlmRetry(
+  state: ConversationState,
+  payload: object,
+  time: number | undefined,
+): ConversationState {
+  const next = toWireLlmRetry(payload, time);
+  return next === undefined ? state : { ...state, retry: next };
+}
+
+/** `llm-retry-started` 的 `payload`（#520）：`retryId` 對得上才清；對不上（或本來就沒有）是 no-op。 */
+function reduceLlmRetryStarted(state: ConversationState, payload: object): ConversationState {
+  const { retryId } = payload as { retryId?: unknown };
+  return state.retry !== null && state.retry.retryId === retryId
+    ? { ...state, retry: null }
+    : state;
 }
 
 /** `goal` 的 `payload`：投影的整個值，整份換掉。`null` 是沒有目標；任何一格不對就整顆不收，留著前一份。 */

@@ -1,7 +1,7 @@
 /**
  * 「這則回覆作廢」上線的形狀（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）。
  *
- * **契約**：型別與折疊形狀。生產者是 harness 的 `ThreadPump`（`#abandonSupersededReply`）：串流中段出錯、整次重打時，新一則 root `message-start` 到來而上一則還沒收尾，就在它之前送這一顆。
+ * **契約**：型別與折疊形狀。生產者是 harness 的 `ThreadPump`（`#applyStreamRetrySignal`）：串流中段出錯、決定整次重打的**當下**（`@nexus/core` 的 `stream-retry.ts` 用 `config.writer` 通知，與字片段同一條佇列、順序有保證），在 `llm-retry` frame 之前送這一顆。
  *
  * 要解的事：一則回覆吐了一半才出錯、重試後第二次成功，線上會是兩則並存，第一則沒有 `message-finish`、也沒有任何作廢記號。
  * 畫面不知道該把第一則擦掉。載體是協定的 `custom` 事件，`data.name` 是 {@link MESSAGE_DISCARD}。

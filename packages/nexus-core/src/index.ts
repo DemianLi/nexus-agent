@@ -377,9 +377,11 @@ export {
   DEFAULT_STREAM_RETRY_JITTER_RATIO,
   DEFAULT_STREAM_RETRY_MAX_DELAY_MS,
   streamFailureReporter,
+  streamRetrySignalOf,
   STREAM_RETRY_MIDDLEWARE_NAME,
+  STREAM_RETRY_SIGNAL,
 } from './stream-retry.js';
-export type { StreamFailure, StreamRetryOptions } from './stream-retry.js';
+export type { StreamFailure, StreamRetryOptions, StreamRetrySignal } from './stream-retry.js';
 export { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,

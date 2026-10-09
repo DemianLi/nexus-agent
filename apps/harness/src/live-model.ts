@@ -9,7 +9,7 @@ import {
   streamFailureReporter,
   tagModelRoute,
 } from '@nexus/core';
-import type { AttemptUsage, LlmFailure } from '@nexus/core';
+import type { AttemptUsage, LlmFailure, StreamFailure } from '@nexus/core';
 
 import { AttachmentChatOpenAI } from './attachment-chat-openai.js';
 import { projectAttachments } from './attachment-projection.js';
@@ -650,7 +650,7 @@ export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof 
  * @returns 餵解碼後文字進去的函式。
  */
 function createInbandWatcher(
-  report: (failure: { code: string; retryable: boolean }) => void,
+  report: (failure: StreamFailure) => void,
   rest: string,
 ): (text: string) => void {
   let pending = '';
@@ -667,7 +667,11 @@ function createInbandWatcher(
         if (envelope !== undefined) {
           const status = inbandStatus(envelope);
           const code = (envelope.error as Record<string, unknown>).code;
-          report({ code: String(status), retryable: retryDecision({ status, code }) === 'retry' });
+          report({
+            code: status === 429 ? 'RATE_LIMIT' : 'SERVER',
+            retryable: retryDecision({ status, code }) === 'retry',
+            status,
+          });
           watching = false;
           pending = '';
           return;
