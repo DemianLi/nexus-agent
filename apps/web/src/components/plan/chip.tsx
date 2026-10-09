@@ -11,8 +11,8 @@ import { PLAN_CHIP_LABEL, PLAN_CHIP_TEXT, planChipView } from '@/lib/plan-chip';
  * - **不是樂觀更新**：按下去送 `/plan off`，成功了也不自己拿掉，等線上的值翻回關著，標籤才消失。送出期間停用、防連按。
  * - **失敗時標籤留著**，旁邊一句帶原因的字（斜線命令被拒、不認得、回錯誤）。下一次按再試時先收掉上一句。
  * - **跑著、停在核准點、斷線時停用**，原因放在 `title`，不讓人按下去才收到一句拒絕。
- * - **報讀**：按鈕名稱是「退出計劃模式」；失敗那句掛在 `aria-describedby`。不掛 `role="status"`：全站的 live region
- *   只有狀態列一個。
+ * - **報讀**：按鈕名稱是「退出計劃模式」；失敗那句掛在 `aria-describedby`。不掛 `role="status"`：代理的現況
+ *   只由狀態列唸（§8）。
  */
 export function PlanChip({
   planMode,

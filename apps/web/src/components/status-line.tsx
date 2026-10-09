@@ -4,7 +4,8 @@
  * `awaiting-input` **不是結束**：基座在中斷時照樣發 `lifecycle completed / root`，
  * 折疊器因此不讓那顆把狀態翻回 idle。按鈕在換手層的面板上，這一行只說它在等人。
  *
- * **全站唯一的 `role="status"`**（§8）：待決、串流、失敗都由它唸。執行中配 working orb 與 shimmer（§7），
+ * **代理的現況只由它唸**（§8）：待決、串流、失敗都是這一格 `role="status"`。別處的 `role="status"` 只有 §8 例外清單上那兩格
+ * （`styles/live-region.test.ts` 守著）。執行中配 working orb 與 shimmer（§7），
  * orb 旁已有同義文字所以 `aria-hidden`；reduced-motion 下兩者都停在一格，字照樣在。
  *
  * **連線也由這一行講**（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）：下行斷了寫在這裡，旁邊一顆

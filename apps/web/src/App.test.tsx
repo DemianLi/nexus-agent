@@ -3339,7 +3339,10 @@ describe('@ 引用別的會話', () => {
       }),
     };
     render(<App client={running} />);
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+    // 側欄有會話時，搜尋框旁邊常駐一格 status（#1290）：狀態列限在 main 裡找。
+    await waitFor(() =>
+      expect(within(screen.getByRole('main')).getByRole('status').textContent).toContain('執行中'),
+    );
     const box = screen.getByLabelText<HTMLTextAreaElement>('要說的話');
 
     fireEvent.change(box, { target: { value: `排一句 ${mine.mention}` } });
@@ -3702,7 +3705,10 @@ describe('會話標題（#655）', () => {
       fake.downlink.lifecycleFrame('running'),
       fake.downlink.lifecycleFrame('completed'),
     ]);
-    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
+    // 側欄有會話時，搜尋框旁邊常駐一格 status（#1290）：狀態列限在 main 裡找。
+    await waitFor(() =>
+      expect(within(screen.getByRole('main')).getByRole('status').textContent).toContain('就緒'),
+    );
     fake.downlink.push(fake.opened[0]!, [fake.downlink.titleFrame('修好登入頁的錯誤')]);
     await waitFor(() => expect(heading().textContent).toBe('修好登入頁的錯誤'));
     await waitFor(() => expect(document.title).toBe('修好登入頁的錯誤 — nexus-agent'));

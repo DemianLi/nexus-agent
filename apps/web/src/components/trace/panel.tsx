@@ -39,6 +39,7 @@ import {
   TRACE_LIMITS,
   TRACE_STRUCTURED_HEADLINE,
   TRACE_STRUCTURED_LIMITS,
+  TRACE_TARGET_MISSING_TEXT,
   traceModel,
   turnSeqOfMessage,
 } from '@/lib/trace-view';
@@ -51,6 +52,8 @@ import { trajectoryOf } from '@/lib/trajectory-view';
 export const TRACE_EMPTY_TEXT = '尚無資料';
 
 export const TRACE_LOCATED_TEXT = '已在對話裡定位';
+/** 同一句要再唸一次時，清空到填回去之間隔多久（毫秒）。太短報讀器會當成沒變。 */
+export const REANNOUNCE_MS = 100;
 export const TRACE_LIMITS_HEADING = '這一版的限制';
 export const TRACE_REVEALED_TEXT = '已捲到那一輪';
 export const TRACE_REVEAL_MISSING_TEXT = '觀測分頁已經沒有那一輪的資料';
@@ -234,12 +237,19 @@ const Timeline = memo(function Timeline({
     const timer = setTimeout(() => setRevealedSeq(undefined), REVEAL_HIGHLIGHT_MS);
     return () => clearTimeout(timer);
   }, [revealedSeq]);
+  // 定位的結果也由下面那一格唸（#1290：列底下那句「不在目前載入的對話裡」只是畫面上的字，不再自己開一格 live region）。
+  // 連按兩次同一個結果時句子沒變、DOM 沒變，報讀器不會再唸：先清空，隔一下再填回去。
+  const relocate = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => () => clearTimeout(relocate.current), []);
   const onLocate = useCallback(
     (row: TraceRow) => {
       if (row.target === undefined) return;
       const found = locate(row.target);
       setMissing(found ? undefined : row.key);
-      setAnnounced(found ? TRACE_LOCATED_TEXT : '');
+      clearTimeout(relocate.current);
+      setAnnounced('');
+      const text = found ? TRACE_LOCATED_TEXT : TRACE_TARGET_MISSING_TEXT;
+      relocate.current = setTimeout(() => setAnnounced(text), REANNOUNCE_MS);
     },
     [locate],
   );

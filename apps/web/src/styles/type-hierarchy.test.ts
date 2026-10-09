@@ -1,9 +1,10 @@
 // @vitest-environment node
-import { readdirSync, readFileSync, statSync } from 'node:fs';
-import { join, relative } from 'node:path';
+import { readFileSync } from 'node:fs';
+import { relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import ts from 'typescript';
 import { describe, expect, test } from 'vitest';
+
+import { jsxAttributes, tsxFiles } from '@/test/jsx-scan';
 
 /**
  * 字級的主次（[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)，規則在 `COMPONENTS.md`「字級的主次」）：
@@ -13,19 +14,10 @@ import { describe, expect, test } from 'vitest';
  * `text-tip`／`text-micro` 就紅。「是不是標題」判不出來，靠 review。registry 元件的預設字級（`xs` 按鈕、側欄、cmdk、附件）
  * 是 registry 原文的改動，守在 `components/ui/registry-edits.test.ts`。
  *
- * 掃的是 JSX 的語法樹，不是 regex：開頭標籤常常跨行，class 字串裡有 `has-[>svg]`，props 裡有 `=>`，掃到 `>` 為止會漏也會誤抓。
- * 先用字串預篩：含 `text-tip` 或 `text-micro` 的檔才 parse，不 parse 整棵樹。
+ * 掃 JSX 語法樹（`@/test/jsx-scan`）；先用字串預篩，含 `text-tip` 或 `text-micro` 的檔才 parse。
  */
 
 const SRC = fileURLToPath(new URL('..', import.meta.url));
-
-function sourceFiles(dir: string): string[] {
-  return readdirSync(dir).flatMap((name) => {
-    const path = join(dir, name);
-    if (statSync(path).isDirectory()) return sourceFiles(path);
-    return /\.tsx$/.test(name) && !/\.test\.tsx$/.test(name) ? [path] : [];
-  });
-}
 
 /** 一按就有事的元件：按鈕、可展開列與其他觸發鈕、選單項。 */
 const CONTROLS = new Set([
@@ -43,22 +35,6 @@ const CONTROLS = new Set([
 
 const SMALL = /(?:^|:)text-(?:tip|micro)$/;
 
-/** `className` 值裡所有字串字面值的文字（含 `cn(...)` 的參數、樣板字串的固定段、三元的兩邊）。 */
-function literalText(node: ts.Node): string[] {
-  if (ts.isStringLiteral(node) || ts.isNoSubstitutionTemplateLiteral(node)) return [node.text];
-  if (ts.isTemplateExpression(node)) {
-    return [
-      node.head.text,
-      ...node.templateSpans.flatMap((span) => [...literalText(span.expression), span.literal.text]),
-    ];
-  }
-  const out: string[] = [];
-  node.forEachChild((child) => {
-    out.push(...literalText(child));
-  });
-  return out;
-}
-
 interface Hit {
   readonly file: string;
   readonly line: number;
@@ -67,29 +43,14 @@ interface Hit {
 }
 
 function smallControls(file: string, source: string): Hit[] {
-  const sf = ts.createSourceFile(file, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TSX);
-  const hits: Hit[] = [];
-  const visit = (node: ts.Node) => {
-    if (ts.isJsxOpeningElement(node) || ts.isJsxSelfClosingElement(node)) {
-      const tag = node.tagName.getText(sf);
-      if (CONTROLS.has(tag)) {
-        for (const attr of node.attributes.properties) {
-          if (!ts.isJsxAttribute(attr) || attr.name.getText(sf) !== 'className') continue;
-          if (attr.initializer === undefined) continue;
-          for (const text of literalText(attr.initializer)) {
-            for (const token of text.split(/\s+/)) {
-              if (!SMALL.test(token)) continue;
-              const { line } = sf.getLineAndCharacterOfPosition(attr.getStart(sf));
-              hits.push({ file: relative(SRC, file), line: line + 1, tag, what: token });
-            }
-          }
-        }
-      }
-    }
-    node.forEachChild(visit);
-  };
-  visit(sf);
-  return hits;
+  return jsxAttributes(file, source, 'className')
+    .filter((attr) => CONTROLS.has(attr.tag))
+    .flatMap((attr) =>
+      attr.texts
+        .flatMap((text) => text.split(/\s+/))
+        .filter((token) => SMALL.test(token))
+        .map((what) => ({ file: relative(SRC, file), line: attr.line, tag: attr.tag, what })),
+    );
 }
 
 function scan(files: readonly string[]): Hit[] {
@@ -99,7 +60,7 @@ function scan(files: readonly string[]): Hit[] {
   });
 }
 
-const files = sourceFiles(SRC);
+const files = tsxFiles(SRC);
 
 describe('可點的元件不縮成小字（#1281）', () => {
   test('按鈕、觸發鈕、選單項自己的 className 沒有 text-tip／text-micro', () => {

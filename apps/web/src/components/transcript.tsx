@@ -21,7 +21,7 @@
  */
 
 import { Activity, ArrowDown, ThumbsDown, ThumbsUp } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import type {
   AnswerEntry,
@@ -111,6 +111,9 @@ function RatingButtons({
   const rating = feedback.ratings.get(messageId)?.rating;
   const likeLabel = rating === 'positive' ? FEEDBACK_COPY.likeActive : FEEDBACK_COPY.like;
   const dislikeLabel = rating === 'negative' ? FEEDBACK_COPY.dislikeActive : FEEDBACK_COPY.dislike;
+  // 載入失敗那句掛在兩顆鈕的描述上（同 `plan/chip`），不開 live region（#1290）：它是背景載入失敗，不是人剛做的事的結果。
+  const loadFailedId = useId();
+  const describedBy = feedback.loadFailed ? loadFailedId : undefined;
   return (
     <div className="flex items-center gap-1" data-testid="rating-buttons">
       <Button
@@ -121,6 +124,7 @@ function RatingButtons({
         title={likeLabel}
         aria-label={likeLabel}
         aria-pressed={rating === 'positive'}
+        aria-describedby={describedBy}
         disabled={feedback.busy}
         onPointerEnter={feedback.onSeed}
         onFocus={feedback.onSeed}
@@ -136,6 +140,7 @@ function RatingButtons({
         title={dislikeLabel}
         aria-label={dislikeLabel}
         aria-pressed={rating === 'negative'}
+        aria-describedby={describedBy}
         disabled={feedback.busy}
         onPointerEnter={feedback.onSeed}
         onFocus={feedback.onSeed}
@@ -156,7 +161,7 @@ function RatingButtons({
         </Button>
       )}
       {feedback.loadFailed && (
-        <span className="text-muted-foreground text-tip" role="status">
+        <span id={loadFailedId} className="text-muted-foreground text-tip">
           {FEEDBACK_COPY.load}
         </span>
       )}

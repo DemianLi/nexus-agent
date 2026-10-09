@@ -221,11 +221,8 @@ export const TraceRowView = memo(
           )}
         </div>
         {missing && (
-          <p
-            role="status"
-            className="text-muted-foreground px-2 pb-2 text-tip"
-            data-testid="trace-missing"
-          >
+          // 只畫給看得見的人；讀屏由面板那一格 live region 唸同一句（#1290）。
+          <p className="text-muted-foreground px-2 pb-2 text-tip" data-testid="trace-missing">
             {TRACE_TARGET_MISSING_TEXT}
           </p>
         )}

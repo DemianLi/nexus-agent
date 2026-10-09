@@ -71,7 +71,7 @@ const box = () => screen.getByRole('searchbox', { name: '搜尋以前的會話' 
 const type = (value: string) => fireEvent.change(box(), { target: { value } });
 const wait = (ms: number) => act(() => vi.advanceTimersByTime(ms));
 const rows = () => screen.queryAllByRole('button').map((button) => button.textContent);
-const skeleton = () => screen.queryByRole('status', { name: '正在搜內容' });
+const skeleton = () => screen.queryByTestId('thread-search-pending');
 const snippetOf = (name: RegExp) =>
   within(screen.getByRole('button', { name })).queryByTestId('thread-snippet');
 
@@ -188,6 +188,30 @@ describe('有開內容搜尋', () => {
     expect(skeleton()).toBeNull();
   });
 
+  it('結果那一格：搜尋框在它就在、內容之後才填（同一個節點），骨架讀屏看不到（#1290）', async () => {
+    const fake = searcher();
+    renderList(fake.search);
+    // 還沒打字就掛著、是空的：打下去才掛的那種，報讀器常常不唸。
+    const live = screen.getByRole('status');
+    expect(live.textContent).toBe('');
+    type('部署');
+    await wait(SEARCH_DEBOUNCE_MS);
+    await fake.answer(0, []);
+    expect(screen.getByRole('status')).toBe(live);
+    type('規格');
+    expect(skeleton()!.getAttribute('aria-hidden')).toBe('true');
+    expect(screen.getByRole('status')).toBe(live);
+    expect(live.textContent).toBe('正在搜內容…');
+    await wait(SEARCH_DEBOUNCE_MS);
+    await fake.answer(1, [['b', '…規格…']]);
+    // 有結果：列就在下面，這一格是空的。
+    expect(screen.getByRole('status')).toBe(live);
+    expect(live.textContent).toBe('');
+    type('');
+    expect(screen.getByRole('status')).toBe(live);
+    expect(live.textContent).toBe('');
+  });
+
   it('兩邊都沒有：講「標題或內容」', async () => {
     const fake = searcher();
     renderList(fake.search);
@@ -227,10 +251,12 @@ describe('退回只比標題', () => {
     expect(screen.queryByText('這個部署沒開')).toBeNull();
     expect(rows()).toEqual([expect.stringContaining('整理部署腳本')]);
     expect(box().placeholder).toBe('搜尋標題');
+    const live = screen.getByRole('status');
     type('沒這個字');
-    // 沒回過「有」：不畫骨架，「搜不到」照 #610 馬上講。
+    // 沒回過「有」：不畫骨架，「搜不到」照 #610 馬上講——填進早就掛著的那一格（#1290）。
     expect(skeleton()).toBeNull();
-    expect(screen.getByRole('status').textContent).toBe('沒有標題含「沒這個字」的會話。');
+    expect(screen.getByRole('status')).toBe(live);
+    expect(live.textContent).toBe('沒有標題含「沒這個字」的會話。');
     await wait(SEARCH_DEBOUNCE_MS);
     expect(fake.calls).toHaveLength(2);
   });
