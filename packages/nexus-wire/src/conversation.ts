@@ -1328,10 +1328,19 @@ function isQueuedInput(value: unknown): value is WireQueuedInput {
   );
 }
 
+/**
+ * 認得的佇列來源，**逐種列在一張以聯集為鍵的表上**：`WireQueuedInputSource` 多一種，這張表當場編不過；少一種（多出的鍵）也一樣。
+ * 以前是手寫的 `||` 串，#1242 加了 `goal` 沒跟著改，含 goal 件的 `inbox` frame 整顆被丟（#1243）。
+ */
+const QUEUED_SOURCE_KINDS: Readonly<Record<WireQueuedInputSource['kind'], true>> = {
+  user: true,
+  'subagent-settled': true,
+  'agent-message': true,
+  goal: true,
+};
+
 function isQueuedSourceKind(kind: unknown): kind is WireQueuedInputSource['kind'] {
-  return (
-    kind === 'user' || kind === 'subagent-settled' || kind === 'agent-message' || kind === 'goal'
-  );
+  return typeof kind === 'string' && Object.hasOwn(QUEUED_SOURCE_KINDS, kind);
 }
 
 /** 一句話 `@` 的會話長得對不對。沒給（`undefined`）合法，給了就每一條都要是兩個字串。 */
