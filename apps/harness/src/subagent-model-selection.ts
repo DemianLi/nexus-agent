@@ -4,8 +4,8 @@
  *
  * 照 dsh `tool-subagent/src/model-selection.ts` 與 `list-models.ts`（`477b4f4`）：
  *
- * - **都沒給＝繼承**，不查政策（dsh 的 `hasDelegationModelRequest` 先擋掉）。
- * - **只要給了任何一格，有效路由就必須在授權清單裡**——包括只給 `reasoning_effort` 的時候（有效路由是 root 那顆）：dsh 的
+ * - **都沒給＝走基線**（定義釘的，沒釘就是主對話此刻的選擇，見 {@link DelegationBaseline}），不查政策（dsh 的 `hasDelegationModelRequest` 先擋掉）。
+ * - **只要給了任何一格，有效路由就必須在授權清單裡**——包括只給 `reasoning_effort` 的時候（有效路由是基線的模型：定義釘的，沒釘就是主對話此刻那顆）：dsh 的
  *   `assertAllowedModelSelection` 用的是「有效路由」，不是「有沒有給 model」。
  * - **換了路由卻沒給推理等級＝用新模型的預設**；給了就必須是那顆型錄條目宣告過的名字。
  *
@@ -28,7 +28,7 @@ import type { ModelEntry } from './model-catalog.js';
 export interface ModelSelectionConfig {
   /** 授權清單（型錄 id），來自日誌上記著的政策（#875）。 */
   readonly allowedModels: readonly string[];
-  /** root 用的那顆（型錄 id）：只給 `reasoning_effort` 時就是它。 */
+  /** 部署預設那顆（型錄 id）：沒有 {@link DelegationBaseline} 時基線就是它；解出來等於它又沒有額外推理設定，等於沿用預設實例。 */
   readonly rootModelId: string;
   /** 型錄（`live-model` 的 `models`）。 */
   readonly catalog: readonly ModelEntry[];
@@ -38,6 +38,70 @@ export interface ModelSelectionConfig {
 export interface ModelSelectionRequest {
   readonly model?: string;
   readonly reasoning_effort?: string;
+}
+
+/**
+ * 一次委派的**基線**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：沒有模型自己的要求時這個子代理會走哪條路由。
+ *
+ * 照 dsh `requestedAgentOptions`（`tool-subagent/src/model-selection.ts:99-128`，`5badb15`）的合併，**越後面越近**：
+ * 父代理當下的選擇 → 定義釘的（`pin`，dsh 的 `agentOptions`）→ 模型這次要求的（`request`）。
+ */
+export interface DelegationBaseline {
+  /** 父代理**此刻**的路由（#723 的選擇，沒選過是最近一次請求走的，再沒有是部署預設）。 */
+  readonly parent: { readonly model: string; readonly effort?: string };
+  /** 部署預設的模型 id：解出來就是它、又沒有額外推理設定時，等於沿用預設實例，不另建。 */
+  readonly defaultModelId: string;
+  /** 定義釘的兩格（`NexusSubAgent.model`／`reasoningEffort`）；沒有定義釘東西就省略。 */
+  readonly pin?: { readonly model?: string; readonly reasoningEffort?: string };
+}
+
+/**
+ * 沒有模型要求時的有效路由；有要求時疊上去。**純函式，合併順序就是 dsh 的**：
+ *
+ * - 基線模型＝定義釘的 ?? 父代理當下的。
+ * - 基線強度＝定義釘的；沒釘強度、而基線模型就是父代理的那顆，沿用父代理的強度（dsh：子代理沿用父代理「相容的」欄位）；其餘用新模型的預設。
+ * - 要求給了模型且**換了路由**、又沒給強度：定義釘的強度丟掉（dsh 的 `routeChanged && 沒給強度`），用新模型的預設。
+ * - 要求給了強度：蓋過一切。`default` 是明著要預設，不是沒給。
+ */
+export function effectiveRoute(
+  baseline: DelegationBaseline,
+  request: ModelSelectionRequest,
+): { readonly model: string; readonly effort?: string } {
+  const pinModel = baseline.pin?.model;
+  const baselineModel = pinModel ?? baseline.parent.model;
+  const inheritsParentEffort = pinModel === undefined || pinModel === baseline.parent.model;
+  const baselineEffort =
+    baseline.pin?.reasoningEffort ?? (inheritsParentEffort ? baseline.parent.effort : undefined);
+  const model = request.model ?? baselineModel;
+  const routeChanged = request.model !== undefined && request.model !== baselineModel;
+  const effort =
+    request.reasoning_effort !== undefined
+      ? request.reasoning_effort
+      : routeChanged
+        ? undefined
+        : baselineEffort;
+  return { model, ...(effort !== undefined && effort !== 'default' && { effort }) };
+}
+
+/** 路由是不是部署預設那顆、又沒有額外推理設定（是＝沿用預設實例）。 */
+function isDefaultRoute(
+  route: { readonly model: string; readonly effort?: string },
+  baseline: DelegationBaseline,
+): boolean {
+  return route.model === baseline.defaultModelId && route.effort === undefined;
+}
+
+/**
+ * 模型沒有要求（沒開選模型、或這次沒給）時，這個子代理要用的選擇：定義釘的，沒釘就是父代理**此刻**的。
+ * 背景子代理在委派那一刻取這一次、之後固定（照 dsh：子代理建立時取父代理當下的選擇）。
+ *
+ * @returns `undefined`＝沿用預設實例。
+ */
+export function baselineChoice(baseline: DelegationBaseline): ModelChoice | undefined {
+  const route = effectiveRoute(baseline, {});
+  return isDefaultRoute(route, baseline)
+    ? undefined
+    : { model: route.model, ...(route.effort !== undefined && { effort: route.effort }) };
 }
 
 /** 今天實作的推理等級，見檔頭。 */
@@ -61,19 +125,30 @@ function allowedList(config: ModelSelectionConfig): string {
 /**
  * 把模型填的兩格解成要交給 host 的選擇。
  *
- * @returns `choice` 是 `undefined`＝沿用 root 的（都沒給、或解出來等於 root 的預設）；失敗的 `error` 是講給模型聽的，
+ * @returns `choice` 是 `undefined`＝沿用預設實例（解出來是部署預設那顆、又沒有額外推理設定）；失敗的 `error` 是講給模型聽的，
  *   讓它能自己改正（含授權清單）。
  */
 export function resolveModelSelection(
   config: ModelSelectionConfig,
   request: ModelSelectionRequest,
+  /** 省略＝沒有定義釘的、父代理就是部署預設（#877 當時的形狀）。 */
+  baseline: DelegationBaseline = {
+    parent: { model: config.rootModelId },
+    defaultModelId: config.rootModelId,
+  },
 ): ModelSelectionOutcome {
   const { model, reasoning_effort: effort } = request;
-  if (model === undefined && effort === undefined) return { ok: true, choice: undefined };
+  // 都沒給＝不查政策（dsh `hasDelegationModelRequest` 先擋掉）：走基線，定義釘的與父代理當下的都不受清單管。
+  if (model === undefined && effort === undefined) {
+    return { ok: true, choice: baselineChoice(baseline) };
+  }
   if (model === '') return { ok: false, error: '`model` 不能是空字串' };
   if (effort === '') return { ok: false, error: '`reasoning_effort` 不能是空字串' };
 
-  const effective = model ?? config.rootModelId;
+  // 有效路由：定義釘的 ?? 父代理當下的，疊上模型這次要的。**政策查的是它**（dsh `assertAllowedModelSelection`：只給強度時，
+  // 有效模型是定義釘的或父代理的那顆，也要在清單裡）。
+  const route = effectiveRoute(baseline, request);
+  const effective = route.model;
   if (!config.allowedModels.includes(effective)) {
     return {
       ok: false,
@@ -112,13 +187,15 @@ export function resolveModelSelection(
     if (effort !== 'default') resolvedEffort = effort;
   }
 
-  // 解出來就是 root 的那顆、沒有額外推理設定：等於繼承，不為它另建一個實例。
-  if (effective === config.rootModelId && resolvedEffort === undefined) {
+  // 模型這次給了強度＝驗過的那個（`default` 解成沒有）；沒給＝有效路由上合併出來的（定義釘的或父代理沿用的）。
+  const finalEffort = effort !== undefined ? resolvedEffort : route.effort;
+  // 解出來就是部署預設那顆、沒有額外推理設定：等於沿用預設實例，不為它另建一個。
+  if (effective === baseline.defaultModelId && finalEffort === undefined) {
     return { ok: true, choice: undefined };
   }
   return {
     ok: true,
-    choice: { model: effective, ...(resolvedEffort !== undefined && { effort: resolvedEffort }) },
+    choice: { model: effective, ...(finalEffort !== undefined && { effort: finalEffort }) },
   };
 }
 
@@ -131,10 +208,12 @@ export function resolveModelSelection(
 export function describeSubagentModels(
   config: ModelSelectionConfig,
   request: { readonly model?: string },
+  /** 主對話**此刻**用的模型（#723 的選擇）；省略＝部署預設。清單裡標的就是它。 */
+  currentModelId: string = config.rootModelId,
 ): string {
   if (request.model === undefined) {
     return config.allowedModels
-      .map((id) => (id === config.rootModelId ? `${id}（主對話目前用的）` : id))
+      .map((id) => (id === currentModelId ? `${id}（主對話目前用的）` : id))
       .join('\n');
   }
   if (request.model === '') throw new Error('`model` 不能是空字串');

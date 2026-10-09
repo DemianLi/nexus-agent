@@ -181,25 +181,42 @@ export interface ToolRegistrationPoint {
   scopes(): string[];
 }
 
+/**
+ * 我們的 subagent 定義：deepagents 的 `SubAgent` 加兩格 dsh 沒有的（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）。
+ *
+ * - **`model` 是字串時是型錄 id**（不是 `initChatModel` 的 `provider:model`）：註冊時對型錄驗證，認不得當場拋錯；每次叫模型前
+ *   由 {@link ./model-selection.ts | createSubagentModelFollowMiddleware} 換成那條路由的實例。給實例（`LanguageModelLike`）則原樣交給基座，不驗證。
+ *   沒給＝沿用父代理**當下**的選擇（#723，照 dsh 子代理沿用父代理當下路由）。
+ * - **`reasoningEffort`**：這個子代理的推理強度（型錄宣告過的等級名）。只給它沒給 `model`＝父代理當下那顆模型，換這個強度。
+ *   dsh 的 `agentOptions` 有 reasoningEffort；**我們另外有** {@link maxTurns}，dsh 沒有。
+ * - **`maxTurns`**：這個子代理一次執行最多叫幾次模型，到了就收尾（`modelCallLimitMiddleware`，`exitBehavior: 'end'`）。dsh 沒有；
+ *   做它是因為 Claude Code 的子代理定義有 `maxTurns`，而沒有上限的子代理打轉時只能靠 root 的遞迴上限兜底。
+ */
+export type NexusSubAgent = SubAgent & {
+  readonly maxTurns?: number;
+  readonly reasoningEffort?: string;
+};
+
 /** `subagents` 註冊點：同名報錯。只有全域一層——deepagents 的 subagent 不巢狀。 */
 export interface SubAgentRegistrationPoint {
   /**
    * 註冊一個 subagent。
    * @param subagent - subagent 定義，名字取自它的 `name`。
    * @returns 只撤銷這一次註冊的冪等 undo。
+   * @throws 定義不合（`maxTurns` 不是正整數、`model` 認不得、`reasoningEffort` 不是那顆模型的等級）：照註冊點的規矩，錯誤指名註冊者。
    */
-  register(subagent: SubAgent): () => void;
+  register(subagent: NexusSubAgent): () => void;
   /**
    * 讀一個 subagent。
    * @param name - subagent 名。
    * @returns 該筆，或不存在時的 `undefined`。
    */
-  get(name: string): NamedEntry<SubAgent> | undefined;
+  get(name: string): NamedEntry<NexusSubAgent> | undefined;
   /**
    * 依註冊順序走訪。
    * @returns 名字與該筆。
    */
-  entries(): IterableIterator<[string, NamedEntry<SubAgent>]>;
+  entries(): IterableIterator<[string, NamedEntry<NexusSubAgent>]>;
 }
 
 /** `capabilities` 註冊點：宣告能力。重複提供冪等、不報錯。 */
@@ -1169,14 +1186,31 @@ function placementOf(
   return { prepend, last };
 }
 
+/** `maxTurns` 要是正整數；不合當場拋（不看型錄，所以不靠 {@link CreateRegistryOptions.validateSubagent}）。 */
+function assertMaxTurns(subagent: NexusSubAgent): void {
+  const { maxTurns } = subagent;
+  if (maxTurns !== undefined && (!Number.isSafeInteger(maxTurns) || maxTurns < 1)) {
+    throw new Error(`maxTurns 要是正整數，拿到 ${String(maxTurns)}`);
+  }
+}
+
+/** {@link createRegistry} 的選項。 */
+export interface CreateRegistryOptions {
+  /**
+   * 註冊 subagent 的當下驗它的定義（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：認不得的 `model` 與 `reasoningEffort`
+   * 在 `register()` 裡就拋，而不是等到委派才炸。registry 自己沒有型錄，所以由組裝點傳進來。拋出的錯誤照註冊點的規矩指名註冊者。
+   */
+  readonly validateSubagent?: (subagent: NexusSubAgent) => void;
+}
+
 /**
  * 建一個空的 registry。
  * @returns 尚未進入任何 plugin 的 registry。
  */
-export function createRegistry(): InternalPluginRegistry {
+export function createRegistry(options: CreateRegistryOptions = {}): InternalPluginRegistry {
   const globalLayer: Layer = { tools: new NamedEntries(duplicateToolError(undefined)) };
   const scopedLayers = new Map<ScopeKey, Layer>();
-  const subagents = new NamedEntries<SubAgent>(
+  const subagents = new NamedEntries<NexusSubAgent>(
     (name, existing, incoming) =>
       new Error(
         `已經有名為 "${name}" 的 subagent：${formatOrigin(existing)} 註冊過，` +
@@ -1358,7 +1392,18 @@ export function createRegistry(): InternalPluginRegistry {
 
   const subagentPoint: SubAgentRegistrationPoint = {
     register: (subagent) =>
-      effect('subagents.register()', (origin) => subagents.insert(subagent.name, subagent, origin)),
+      effect('subagents.register()', (origin) => {
+        try {
+          assertMaxTurns(subagent);
+          options.validateSubagent?.(subagent);
+        } catch (error) {
+          throw new Error(
+            `${formatOrigin(origin)} 註冊的 subagent "${subagent.name}" 不合：${error instanceof Error ? error.message : String(error)}`,
+            { cause: error },
+          );
+        }
+        return subagents.insert(subagent.name, subagent, origin);
+      }),
     get: (name) => subagents.get(name),
     entries: () => subagents.entries(),
   };

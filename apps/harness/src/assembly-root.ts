@@ -82,6 +82,7 @@ import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
 import type { CredentialService } from './credentials.js';
 import { createLiveModel } from './live-model.js';
+import { subagentDefinitionValidator } from './subagent-definition.js';
 import { createModelSelectionHost, createModelSelectionPlugin } from './model-selection-host.js';
 import type { ModelSelectionHost } from './model-selection-host.js';
 import { createFileReferencePlugin } from './file-references.js';
@@ -895,6 +896,8 @@ export async function createCliAgent(
     ...(modelSelection !== undefined && {
       modelSelection: modelSelection.controller,
       modelLimits: modelSelection.limitsOf,
+      // 子代理定義的 `model`／`reasoningEffort` 在註冊那一刻對型錄驗（#328 第 3 項）；沒有每會話選擇（假模型）就沒有型錄，驗證函式走預設的全拒。
+      validateSubagent: subagentDefinitionValidator(liveModel.models),
     }),
     // 串流中段失敗的整次重打（#520）。只有真模型的 fetch 層會回報失敗，腳本模型照給也無事發生。
     streamRetry: liveModel.streamRetry,

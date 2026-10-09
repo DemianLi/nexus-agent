@@ -18,7 +18,9 @@ import {
 } from './model-route.js';
 import {
   createModelSwapMiddleware,
+  createSubagentModelFollowMiddleware,
   ModelSelectionController,
+  SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
   modelSwitchNoticeText,
   pendingNotice,
   recordedRoute,
@@ -254,6 +256,79 @@ describe('換模型的 middleware', () => {
     expect(subject.takeStepRoute()).toEqual({ model: 'a' });
     subject.select({ model: 'b' });
     expect(subject.takeStepRoute()).toEqual({ model: 'b' });
+  });
+});
+
+describe('子代理跟隨的 middleware（#328 第 3 項）', () => {
+  const hook = (
+    subject: ModelSelectionController,
+    pin: Parameters<typeof createSubagentModelFollowMiddleware>[1],
+  ) => {
+    const middleware = createSubagentModelFollowMiddleware(subject, pin);
+    expect(middleware.name).toBe(SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME);
+    return (middleware as { wrapModelCall?: unknown }).wrapModelCall as (
+      request: { model: unknown },
+      handler: (request: { model: unknown }) => unknown,
+    ) => unknown;
+  };
+  const run = (call: ReturnType<typeof hook>, model: unknown = { name: 'built-in' }) => {
+    const request = { model };
+    let seen: { model: unknown } | undefined;
+    call(request, (given) => (seen = given as typeof seen));
+    return { request, seen: seen! };
+  };
+
+  it('沒選過、沒釘：什麼都不換，handler 收到同一個 request 物件', () => {
+    const { subject } = controller();
+    const { request, seen } = run(hook(subject, {}));
+    expect(seen).toBe(request);
+  });
+
+  it('沒釘：跟父代理此刻的選擇，之後再換也跟——每次叫模型現算，不快照', () => {
+    const first = { name: 'first' };
+    const second = { name: 'second' };
+    const { subject } = controller({ first, second });
+    const call = hook(subject, {});
+    subject.select({ model: 'first' });
+    expect(run(call).seen.model).toBe(first);
+    subject.select({ model: 'second' });
+    expect(run(call).seen.model).toBe(second);
+  });
+
+  it('不碰 root 那一步的快照：子代理叫模型不會消耗 takeStepRoute', () => {
+    const other = { name: 'other' };
+    const { subject, log } = controller({ other });
+    started(log, { model: 'default-model' });
+    subject.select({ model: 'other' });
+    subject.noticeFor(log); // root 這一步的開頭快照 = other
+    run(hook(subject, {}));
+    run(hook(subject, {}));
+    expect(subject.takeStepRoute()).toEqual({ model: 'other' });
+  });
+
+  it('釘了模型：用釘的，不管父代理選了什麼', () => {
+    const pinned = { name: 'pinned' };
+    const chosen = { name: 'chosen' };
+    const { subject, made } = controller({ pinned, chosen });
+    subject.select({ model: 'chosen' });
+    expect(run(hook(subject, { model: 'pinned' })).seen.model).toBe(pinned);
+    expect(made).toContain('pinned/');
+    expect(made).not.toContain('chosen/');
+  });
+
+  it('釘了模型與強度：路由帶強度；只釘強度：父代理當下的模型換這個強度', () => {
+    const { subject, made } = controller({ x: {}, y: {} });
+    run(hook(subject, { model: 'x', reasoningEffort: 'off' }));
+    expect(made.at(-1)).toBe('x/off');
+    subject.select({ model: 'y', effort: 'default' });
+    run(hook(subject, { reasoningEffort: 'off' }));
+    expect(made.at(-1)).toBe('y/off');
+  });
+
+  it('解出來是預設實例（instanceFor 回 undefined）：不換', () => {
+    const { subject } = controller({});
+    const { request, seen } = run(hook(subject, { model: 'default-model' }));
+    expect(seen).toBe(request);
   });
 });
 

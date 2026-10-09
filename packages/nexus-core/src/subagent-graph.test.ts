@@ -12,6 +12,7 @@ import type { SubAgent } from 'deepagents';
 import { createMiddleware } from 'langchain';
 import { describe, expect, it } from 'vitest';
 
+import { SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME } from './model-selection.js';
 import { compileSubagentGraph, mergeMiddlewareByName } from './subagent-graph.js';
 import type { SubagentGraphParams } from './subagent-graph.js';
 
@@ -98,6 +99,63 @@ describe('compileSubagentGraph 的邊界', () => {
       { configurable: { thread_id: 't' } },
     );
     expect(result.messages.at(-1)?.content).toBe('規格自己的');
+  });
+});
+
+describe('跟隨會話選擇的 middleware（#328 第 3 項）', () => {
+  /** 跟隨那顆換成記號：圖真的叫模型時，看 `wrapModelCall` 有沒有被走到。 */
+  const follower = () => {
+    const calls: string[] = [];
+    const middleware = createMiddleware({
+      name: SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+      wrapModelCall: (request, handler) => {
+        calls.push('follow');
+        return handler(request);
+      },
+    });
+    return { middleware, calls };
+  };
+  const compile = (extra: { model?: FakeListChatModel; follow?: boolean }) => {
+    const { middleware, calls } = follower();
+    const graph = compileSubagentGraph(paramsWith({ middleware: [middleware] }), 'worker', {
+      ...options(),
+      ...extra,
+    });
+    return {
+      calls,
+      run: () =>
+        graph.invoke(
+          { messages: [{ role: 'user', content: '嗨' }] },
+          { configurable: { thread_id: 't' } },
+        ),
+    };
+  };
+
+  it('預設會跟：沒指定模型也沒說不跟，跟隨那顆留在疊裡', async () => {
+    const built = compile({});
+    await built.run();
+    expect(built.calls).toEqual(['follow']);
+  });
+
+  it('呼叫端指定了這張圖的模型：跟隨那顆被濾掉（挑的勝過一切）', async () => {
+    const built = compile({ model: new FakeListChatModel({ responses: ['挑的'] }) });
+    await built.run();
+    expect(built.calls).toEqual([]);
+  });
+
+  it('follow: false：沒指定模型也不跟（背景子代理在委派那一刻定了模型）', async () => {
+    const built = compile({ follow: false });
+    await built.run();
+    expect(built.calls).toEqual([]);
+  });
+
+  it('follow: true 蓋過「指定了模型就不跟」', async () => {
+    const built = compile({
+      model: new FakeListChatModel({ responses: ['挑的'] }),
+      follow: true,
+    });
+    await built.run();
+    expect(built.calls).toEqual(['follow']);
   });
 });
 
