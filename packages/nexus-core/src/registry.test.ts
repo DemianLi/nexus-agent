@@ -237,6 +237,52 @@ describe('subagents 註冊點', () => {
   });
 });
 
+describe('subagents 註冊點：#328 第 3 項的定義欄位', () => {
+  it('maxTurns 只收正整數；不合當場拋，指名註冊者與子代理', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.subagents.register({ ...fakeSubAgent('ok'), maxTurns: 3 });
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      expect(() =>
+        registry.subagents.register({ ...fakeSubAgent(`bad${bad}`), maxTurns: bad }),
+      ).toThrow(/alpha#0 \(alpha\).*"bad.*maxTurns/);
+    }
+    leave();
+    expect(registry.subagents.get('ok')?.value.maxTurns).toBe(3);
+  });
+
+  it('validateSubagent 拋的錯被接住、補上註冊者與名字再拋；沒拋就照常登記', () => {
+    const seen: string[] = [];
+    const registry = createRegistry({
+      validateSubagent: (subagent) => {
+        seen.push(subagent.name);
+        if (subagent.model === 'nope') throw new Error('model 不在型錄');
+      },
+    });
+    const leave = registry.enter(first);
+    registry.subagents.register({ ...fakeSubAgent('fine'), model: 'known' });
+    expect(() => registry.subagents.register({ ...fakeSubAgent('broken'), model: 'nope' })).toThrow(
+      /alpha#0 \(alpha\).*"broken".*model 不在型錄/,
+    );
+    leave();
+    expect(seen).toEqual(['fine', 'broken']);
+    expect([...registry.subagents.entries()].map(([name]) => name)).toEqual(['fine']);
+  });
+
+  it('沒給 validateSubagent：不驗 model／強度（core 不認得型錄）', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    expect(() =>
+      registry.subagents.register({
+        ...fakeSubAgent('x'),
+        model: 'anything',
+        reasoningEffort: 'off',
+      }),
+    ).not.toThrow();
+    leave();
+  });
+});
+
 describe('capabilities 註冊點', () => {
   it('同一能力被兩個 plugin 提供不報錯，對照表兩邊都在', () => {
     const registry = createRegistry();

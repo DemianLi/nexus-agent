@@ -19,6 +19,7 @@ import { tool as makeTool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepagents';
+import { modelCallLimitMiddleware } from 'langchain';
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
 import { createApprovalGateMiddleware } from './approval.js';
 import type { ApprovalPolicySource } from './approval-policy.js';
@@ -48,7 +49,12 @@ import { createObservationPolicy, OBSERVATION_POLICY_PLUGIN_NAME } from './obser
 import type { NamedEntry } from './entries.js';
 import { formatOrigin } from './plugin.js';
 import type { PluginOrigin } from './plugin.js';
-import type { MiddlewareRegistration, PluginRegistry, RootOnlyRefusal } from './registry.js';
+import type {
+  MiddlewareRegistration,
+  NexusSubAgent,
+  PluginRegistry,
+  RootOnlyRefusal,
+} from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
 import { createStreamRetryMiddleware } from './stream-retry.js';
 import type { StreamRetryOptions } from './stream-retry.js';
@@ -60,7 +66,10 @@ import {
 } from './session-checkpoint-policy.js';
 import type { SessionLog } from './session-log.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
-import { createModelSwapMiddleware } from './model-selection.js';
+import {
+  createModelSwapMiddleware,
+  createSubagentModelFollowMiddleware,
+} from './model-selection.js';
 import type { ModelSelectionController } from './model-selection.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
 import {
@@ -394,7 +403,8 @@ export interface FoldOptions {
    *
    * 給了會多三件事：root 的 middleware 疊最外面多一顆換模型的（{@link ./model-selection.ts | createModelSwapMiddleware}）；
    * 換模型的通知借重複提醒的 `beforeModel` 附上，**重複提醒被關掉時才另掛一顆節點**（每一步多一個 super-step）；
-   * 都只折進 root，子代理的模型不歸它管。
+   * root 的換模型只折進 root；**子代理另有一顆跟隨的**（{@link ./model-selection.ts | createSubagentModelFollowMiddleware}，#328 第 3 項）：
+   * 每次叫模型前換成定義釘住的、沒釘就是父代理當下選擇的那顆（照 dsh 子代理沿用父代理當下路由）。
    */
   modelSelection?: ModelSelectionController;
 
@@ -578,13 +588,35 @@ export function foldRegistry(
       same(options.stepInbox === true ? createStepInboxMiddleware() : undefined),
     ),
     // 換模型排在洋蔥最外面（#723）：摘要器、起訖、用量與 plugin middleware 看到的 `request.model` 都是這一步選中的那顆。
-    // 只折進 root，子代理的模型由 `subagent` 工具的選模型管。見 {@link ./model-selection.ts}。
-    rootOnly(
-      'modelSelection',
-      same(
+    // root 的每一步快照一次；子代理另給一顆（#328 第 3 項）：沒釘模型就跟父代理**當下**的選擇，釘了就用定義釘的，見
+    // {@link ./model-selection.ts | createSubagentModelFollowMiddleware}。背景圖若是 `subagent` 工具替這一次委派挑了模型，
+    // `compileSubagentGraph` 會把這一顆濾掉（模型自己挑的勝過一切，dsh `requestedAgentOptions`）。
+    {
+      name: 'modelSelection',
+      root: same(
         options.modelSelection === undefined
           ? undefined
           : createModelSwapMiddleware(options.modelSelection),
+      ),
+      subagent: make((spec) =>
+        options.modelSelection === undefined
+          ? undefined
+          : createSubagentModelFollowMiddleware(options.modelSelection, {
+              ...(typeof spec.model === 'string' && { model: spec.model }),
+              ...(spec.reasoningEffort !== undefined && { reasoningEffort: spec.reasoningEffort }),
+            }),
+      ),
+    },
+    // 子代理一次執行最多叫幾次模型（#328 第 3 項，dsh 沒有）：到了就收尾。只給子代理，root 的上限是遞迴上限（#858）。
+    subagentOnly(
+      'subagentMaxTurns',
+      make((spec) =>
+        spec.maxTurns === undefined
+          ? undefined
+          : (modelCallLimitMiddleware({
+              runLimit: spec.maxTurns,
+              exitBehavior: 'end',
+            }) as unknown as AgentMiddleware),
       ),
     ),
     // 同一步多顆工具呼叫的獨佔屏障（#711 第 2 步）排在圍堵外面：等待中的呼叫在通過屏障前**什麼都不做**，不能先被圍堵記一顆
@@ -1025,7 +1057,7 @@ function foldMiddleware(slots: readonly MiddlewareSlot[]): AgentMiddleware[] {
  */
 function foldSubagentMiddleware(
   slots: readonly MiddlewareSlot[],
-  spec: SubAgent,
+  spec: NexusSubAgent,
 ): AgentMiddleware[] {
   return slots.flatMap((slot) => takeFrom(slot.subagent, spec));
 }
@@ -1056,7 +1088,7 @@ interface MiddlewareSlot {
   /** root 取什麼。 */
   readonly root: SlotTake<[]>;
   /** 每個子代理取什麼；`spec` 是那個子代理的規格。 */
-  readonly subagent: SlotTake<[spec: SubAgent]>;
+  readonly subagent: SlotTake<[spec: NexusSubAgent]>;
 }
 
 /** 一列在一個 agent 身上產出的東西：一顆、一批，或什麼都沒有。 */
@@ -1106,7 +1138,7 @@ function rootOnly(name: string, root: SlotTake<[]>): MiddlewareSlot {
 }
 
 /** 只給子代理。 */
-function subagentOnly(name: string, subagent: SlotTake<[spec: SubAgent]>): MiddlewareSlot {
+function subagentOnly(name: string, subagent: SlotTake<[spec: NexusSubAgent]>): MiddlewareSlot {
   return { name, root: NONE, subagent };
 }
 
@@ -1647,8 +1679,13 @@ function foldSubAgents(
 
     const permissions = [...context.permissions, ...(spec.permissions ?? [])];
 
+    // 我們自己的三格不交給基座：`maxTurns`、`reasoningEffort` 它不認得；`model` 是字串時是**型錄 id**，基座會當
+    // `provider:model` 去 `initChatModel`，所以拿掉，由跟隨的 middleware 每次叫模型前換成那條路由的實例（沒有控制器時，
+    // 註冊那一刻就拒絕字串 model，走不到這裡）。給實例的 `model` 原樣留著。
+    const { maxTurns: _maxTurns, reasoningEffort: _reasoningEffort, ...declared } = spec;
+    if (typeof declared.model === 'string') delete declared.model;
     const next: SubAgent = {
-      ...spec,
+      ...declared,
       tools: orderTools(merged, context.toolOrder),
       // 從同一張槽位表導出（#664）：每一個位置的理由寫在 {@link foldRegistry} 那一列上，那裡也決定了
       // 哪些共用一份、哪些逐個建、哪些只給子代理。

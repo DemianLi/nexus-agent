@@ -48,6 +48,7 @@ import {
   compileSubagentGraph,
   foldRegistry,
   formatOrigin,
+  createRegistry,
   isFeedbackEvent,
   loadPlugins,
   MESSAGE_FEEDBACK_SERVICE,
@@ -65,6 +66,7 @@ import {
   type DroppedEntry,
   type ModelContextLimits,
   type ModelSelectionController,
+  type NexusSubAgent,
   type PluginEntry,
   type PluginOrigin,
   type PluginRegistry,
@@ -83,6 +85,8 @@ import type { SystemPromptVariables } from '@nexus/plugin-system-prompt';
 import { CompositeBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BackgroundDelegation } from './background-delegation.js';
+import { subagentDefinitionValidator } from './subagent-definition.js';
+import type { DelegationBaseline } from './subagent-model-selection.js';
 import type { BackgroundSubagentsOptions } from './background-delegation.js';
 import { recordedModelSelectionPolicy } from './model-selection-policy.js';
 import type {
@@ -258,6 +262,12 @@ export interface CreateNexusAgentOptions {
    * 所以續接不會第二次寫）。取樣在呼叫端（serve 的 `createAgent`）——這裡只負責「日誌上有一顆」。
    */
   readonly modelSelectionPolicy?: { readonly allowedModels: readonly string[] };
+  /**
+   * 註冊 subagent 的當下驗它的定義（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：`model` 是字串時要在型錄裡、`reasoningEffort` 要是
+   * 那顆模型宣告過而且今天實作的等級，認不得當場拋錯（指名註冊者），不等到委派。型錄由組裝點傳進來（`subagentDefinitionValidator`）；
+   * **省略＝沒有型錄**：字串 `model` 與 `reasoningEffort` 一律拒絕，只收 `maxTurns` 與給實例的 `model`。
+   */
+  readonly validateSubagent?: (subagent: NexusSubAgent) => void;
   /** checkpointer。有 plugin 宣告要核准的工具卻沒給，fold 會報錯。 */
   readonly checkpointer?: AgentCheckpointer;
   /** 長期記憶用的 store。 */
@@ -675,10 +685,38 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       'backgroundSubagents 需要 checkpointer：沒有存檔點，背景子代理的第二輪就看不到第一輪',
     );
   }
+  // 背景委派的基線（#328 第 3 項）：定義釘的 ?? 父代理**此刻**的選擇。定義要等 registry 載完才讀得到，所以閉包讀這個參照。
+  const loaded: { registry?: PluginRegistry } = {};
+  const controller = options.modelSelection;
+  const delegationBaseline =
+    controller === undefined
+      ? undefined
+      : (subagent: string): DelegationBaseline => {
+          const definition = loaded.registry?.subagents.get(subagent)?.value;
+          const pinModel = typeof definition?.model === 'string' ? definition.model : undefined;
+          const pinEffort = definition?.reasoningEffort;
+          const parent = controller.next();
+          return {
+            parent: {
+              model: parent.model,
+              ...(parent.effort !== undefined && { effort: parent.effort }),
+            },
+            defaultModelId: controller.defaultRoute.model,
+            ...((pinModel !== undefined || pinEffort !== undefined) && {
+              pin: {
+                ...(pinModel !== undefined && { model: pinModel }),
+                ...(pinEffort !== undefined && { reasoningEffort: pinEffort }),
+              },
+            }),
+          };
+        };
   const delegation =
     options.backgroundSubagents === undefined
       ? undefined
-      : new BackgroundDelegation(options.backgroundSubagents);
+      : new BackgroundDelegation({
+          ...options.backgroundSubagents,
+          ...(delegationBaseline !== undefined && { delegationBaseline }),
+        });
 
   // **放在最前面**：出貨清單的 `system-prompt` 在自己的 `apply` 當下就讀變數（#720）。
   const plugins: readonly PluginEntry[] = [
@@ -713,7 +751,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
   const optional = options.optionalEntries;
   const { registry, dispose, dropped } = await loadPlugins(
     plugins,
-    undefined,
+    createRegistry({
+      validateSubagent: options.validateSubagent ?? subagentDefinitionValidator(undefined),
+    }),
     optional === undefined
       ? {}
       : {
@@ -723,6 +763,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           afterApply: (loading) => void assertNoBaseToolNameCollision(loading),
         },
   );
+  loaded.registry = registry;
   const assemblyDrops = optional === undefined ? [] : pairWithEntries(plugins, dropped);
 
   try {
@@ -833,6 +874,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       return compileSubagentGraph(params, name, {
         checkpointer,
         ...(model !== undefined && { model }),
+        // 背景子代理的模型在委派那一刻定了（`delegationBaseline`），不跟著使用者後來換的模型走（#328，照 dsh）。
+        follow: false,
       }).withConfig({
         recursionLimit: recursionLimitFor(registry, options),
         // 平行工具呼叫上限同理（#711）：背景圖不在 root 那次 invoke 的執行脈絡裡，繼承不到，要自己帶。

@@ -133,6 +133,8 @@ export type {
   DisabledEntryView,
   ToolRegistrationPoint,
   SubAgentRegistrationPoint,
+  NexusSubAgent,
+  CreateRegistryOptions,
   CapabilityRegistrationPoint,
   ServiceRegistrationPoint,
   NexusServices,
@@ -441,6 +443,7 @@ export {
   ProjectionDetailError,
   PROJECTION_KEY_PATTERN,
 } from './projections.js';
+export type { SubagentModelPin } from './model-selection.js';
 export type { TokenUsageTotals } from './token-usage.js';
 export { deriveTokenUsage, tokenUsageUnit } from './token-usage.js';
 export {
@@ -448,6 +451,8 @@ export {
   MODEL_SELECTION_NOTICE_KIND,
   ModelSelectionController,
   createModelSwapMiddleware,
+  createSubagentModelFollowMiddleware,
+  SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
   modelSwitchNoticeText,
   pendingNotice,
   recordedRoute,

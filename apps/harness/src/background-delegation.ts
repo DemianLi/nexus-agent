@@ -59,8 +59,12 @@ import {
   withReturnGuidance,
 } from './background-subagents.js';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
-import { describeSubagentModels, resolveModelSelection } from './subagent-model-selection.js';
-import type { ModelSelectionConfig } from './subagent-model-selection.js';
+import {
+  baselineChoice,
+  describeSubagentModels,
+  resolveModelSelection,
+} from './subagent-model-selection.js';
+import type { DelegationBaseline, ModelSelectionConfig } from './subagent-model-selection.js';
 import type { BackgroundAgent, BackgroundSubagentControl } from './background-subagents.js';
 
 /** 模型看到的工具名（dsh 的預設名，`toolName: 'subagent'`）。 */
@@ -100,6 +104,12 @@ export interface BackgroundSubagentsOptions {
    * 由 serve 在 `createAgent` 時取樣／讀回後傳進來；工具面在整個會話內不變（dsh：定義靜態，catalog 變動不改 prompt 前綴）。
    */
   readonly modelSelection?: ModelSelectionConfig;
+  /**
+   * 這一次委派的基線（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：定義釘的模型與強度、父代理**此刻**的選擇、部署預設。
+   * 組裝點從會話的控制器與 registry 的定義導出；省略（沒連真實供應商，沒有每會話選擇）＝沿用預設實例。背景子代理在**委派那一刻**
+   * 取這一次、之後固定（照 dsh：子代理建立時取父代理當下的選擇）。
+   */
+  readonly delegationBaseline?: (subagent: string) => DelegationBaseline | undefined;
 }
 
 const subagentSchema = z.object({
@@ -450,12 +460,16 @@ export class BackgroundDelegation {
           );
         }
         let choice: ModelChoice | undefined;
+        const baseline = this.#options.delegationBaseline?.(subagentType);
         if (selection !== undefined) {
-          const resolved = resolveModelSelection(selection, requested);
+          const resolved = resolveModelSelection(selection, requested, baseline);
           if (!resolved.ok) {
             return toolRefusal(resolved.error, { callId, name: SUBAGENT_TOOL_NAME });
           }
           choice = resolved.choice;
+        } else if (baseline !== undefined) {
+          // 沒開模型自己挑：走基線，定義釘的 ?? 父代理此刻的（#328）。
+          choice = baselineChoice(baseline);
         }
 
         if (background === false) {

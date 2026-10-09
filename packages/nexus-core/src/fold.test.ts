@@ -21,6 +21,11 @@ import { OBSERVATION_POLICY_MIDDLEWARE_NAME, observationPolicyPlugin } from './o
 import { OUTPUT_SCHEMA_MIDDLEWARE_NAME } from './output-schema.js';
 import { foldRegistry, ROOT_ONLY_NOTICE, rootOnlyRefusal, TOOL_ORDER_REST } from './fold.js';
 import { MODEL_CALL_EVENTS_MIDDLEWARE_NAME } from './model-calls.js';
+import {
+  MODEL_SELECTION_MIDDLEWARE_NAME,
+  ModelSelectionController,
+  SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+} from './model-selection.js';
 import { REQUEST_SNAPSHOT_MIDDLEWARE_NAME } from './request-snapshot.js';
 import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
 import { SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME } from './subagent-tool-filter.js';
@@ -2451,5 +2456,79 @@ describe('root 與每個子代理的 middleware 疊對齊', () => {
     for (const name of OTHER_INSTANCE) {
       expect(new Set(seen.get(name)).size, name).toBe(1);
     }
+  });
+});
+
+describe('子代理定義的 model／maxTurns／reasoningEffort（#328 第 3 項）', () => {
+  const controller = () =>
+    new ModelSelectionController({ defaultRoute: { model: 'm' }, instanceFor: () => undefined });
+  const worker = (extra: Record<string, unknown>) =>
+    fakePlugin('host', (r) => void r.subagents.register({ ...fakeSubAgent('worker'), ...extra }));
+  const stackOf = (params: { subagents: SubAgent[] }, name: string) =>
+    middlewareNames({
+      middleware: [...(params.subagents.find((sub) => sub.name === name)?.middleware ?? [])],
+    });
+
+  it('有控制器：每個子代理（含 general-purpose）都有跟隨那顆，root 是換模型那顆而不是跟隨', async () => {
+    const params = await fold([worker({})], { modelSelection: controller() });
+    expect(stackOf(params, 'worker')).toContain(SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME);
+    expect(stackOf(params, GENERAL_PURPOSE_SUBAGENT.name)).toContain(
+      SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+    );
+    expect(middlewareNames(params)).toContain(MODEL_SELECTION_MIDDLEWARE_NAME);
+    expect(middlewareNames(params)).not.toContain(SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME);
+    expect(stackOf(params, 'worker')).not.toContain(MODEL_SELECTION_MIDDLEWARE_NAME);
+  });
+
+  it('沒有控制器：兩顆都不折（沒開選模型的組裝與今天逐位相同）', async () => {
+    const params = await fold([worker({})]);
+    expect(stackOf(params, 'worker')).not.toContain(SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME);
+    expect(middlewareNames(params)).not.toContain(MODEL_SELECTION_MIDDLEWARE_NAME);
+  });
+
+  it('字串 model、maxTurns、reasoningEffort 不交給基座：基座看到的規格沒有這三格', async () => {
+    const params = await fold([worker({ model: 'cheap', maxTurns: 3, reasoningEffort: 'off' })], {
+      modelSelection: controller(),
+    });
+    const handed = params.subagents.find((sub) => sub.name === 'worker') as unknown as Record<
+      string,
+      unknown
+    >;
+    expect('model' in handed).toBe(false);
+    expect('maxTurns' in handed).toBe(false);
+    expect('reasoningEffort' in handed).toBe(false);
+  });
+
+  it('給實例的 model 原樣留給基座', async () => {
+    const instance = { invoke: () => 0 };
+    const params = await fold([worker({ model: instance })], { modelSelection: controller() });
+    expect(
+      (params.subagents.find((sub) => sub.name === 'worker') as { model?: unknown }).model,
+    ).toBe(instance);
+  });
+
+  it('maxTurns 只折進給了它的那個子代理，root 與別的子代理沒有', async () => {
+    const plugins = [
+      worker({ maxTurns: 3 }),
+      fakePlugin('other', (r) => void r.subagents.register(fakeSubAgent('other'))),
+    ];
+    const params = await fold(plugins);
+    expect(stackOf(params, 'worker')).toContain('ModelCallLimitMiddleware');
+    expect(stackOf(params, 'other')).not.toContain('ModelCallLimitMiddleware');
+    expect(middlewareNames(params)).not.toContain('ModelCallLimitMiddleware');
+  });
+
+  it('釘住的值進跟隨那顆：兩個子代理各用各的，不共用一份', async () => {
+    const plugins = [
+      worker({ model: 'cheap' }),
+      fakePlugin('other', (r) => void r.subagents.register(fakeSubAgent('other'))),
+    ];
+    const params = await fold(plugins, { modelSelection: controller() });
+    const pick = (name: string) =>
+      (params.subagents.find((sub) => sub.name === name)?.middleware ?? []).find(
+        (mw) => (mw as { name: string }).name === SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+      );
+    expect(pick('worker')).toBeDefined();
+    expect(pick('worker')).not.toBe(pick('other'));
   });
 });

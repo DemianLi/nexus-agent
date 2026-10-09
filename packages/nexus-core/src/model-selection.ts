@@ -237,3 +237,53 @@ export function createModelSwapMiddleware(controller: ModelSelectionController):
     },
   }) as unknown as AgentMiddleware;
 }
+
+/** 子代理跟隨會話選擇的 middleware 名字；背景圖有自己指定的模型時要把它濾掉（`compileSubagentGraph`）。 */
+export const SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME = 'nexusSubagentModelFollow';
+
+/** 一個子代理定義自己釘住的那兩格（見 `NexusSubAgent`）。 */
+export interface SubagentModelPin {
+  /** 型錄 id。省略＝父代理當下那顆。 */
+  readonly model?: string;
+  /** 推理強度。省略＝換了模型就用新模型的預設；沒換模型就沿用父代理當下的強度。 */
+  readonly reasoningEffort?: string;
+}
+
+/**
+ * 子代理的換模型 middleware（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：每次叫模型前，把 `request.model` 換成這個子代理**此刻**該用的那顆。
+ *
+ * 路由的優先序：**定義自己釘的（`pin`）> 父代理當下的選擇（{@link ModelSelectionController.next}，#723）> 部署預設**。
+ * 前兩者之間照 dsh `requestedAgentOptions`（`tool-subagent/src/model-selection.ts:99-128`）的合併：釘了 `model` 沒釘強度＝新模型的預設強度
+ * （dsh 的 `routeChanged && 沒給強度` 把設定的強度丟掉）；只釘強度＝父代理當下的模型換這個強度。
+ *
+ * 與 {@link createModelSwapMiddleware} 的差別：**不碰那一步的快照**（`takeStepRoute` 是 root 每步一次的消耗品，子代理一步可以叫很多次模型，
+ * 也可能與 root 同時在跑），直接讀 {@link ModelSelectionController.next} 現算。
+ *
+ * 選中的就是預設那顆（`instanceFor` 回 `undefined`）時什麼都不換，請求逐欄與沒有這顆 middleware 時一樣。
+ *
+ * @param controller - 這條會話的控制器（子代理圖與 root 同一次組裝，同一個）。
+ * @param pin - 定義釘住的兩格；省略＝純跟隨。
+ */
+export function createSubagentModelFollowMiddleware(
+  controller: ModelSelectionController,
+  pin: SubagentModelPin = {},
+): AgentMiddleware {
+  return createMiddleware({
+    name: SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+    wrapModelCall: (request, handler) => {
+      const parent = controller.next();
+      const route: ModelRoute =
+        pin.model !== undefined
+          ? {
+              model: pin.model,
+              ...(pin.reasoningEffort !== undefined && { effort: pin.reasoningEffort }),
+            }
+          : pin.reasoningEffort !== undefined
+            ? { model: parent.model, effort: pin.reasoningEffort }
+            : parent;
+      const instance = controller.instanceFor(route);
+      if (instance === undefined || instance === request.model) return handler(request);
+      return handler({ ...request, model: instance });
+    },
+  }) as unknown as AgentMiddleware;
+}
