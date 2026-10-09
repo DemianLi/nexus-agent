@@ -77,7 +77,9 @@ export const presentDeliveryInvariant: InvariantInstaller = (subject, fail) => {
         results.set(event.data.callId, event.data.isError);
         // 新次序：交付先到，結果後到。後到的結果是錯誤，就是跟著一次失敗的交付。
         if (event.data.isError && delivered.has(event.data.callId)) {
-          fail(`${event.data.callId} 已經交付了，但那次呼叫的 tool/result（seq ${event.seq}）是錯誤`);
+          fail(
+            `${event.data.callId} 已經交付了，但那次呼叫的 tool/result（seq ${event.seq}）是錯誤`,
+          );
         }
         break;
       case 'deliverables/presented': {
