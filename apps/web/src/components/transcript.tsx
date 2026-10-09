@@ -27,11 +27,13 @@ import type {
   AnswerEntry,
   ConversationEntry,
   ConversationState,
+  SubagentMention,
   WireAttachmentRef,
   WireFeedbackItem,
   WireFeedbackRating,
 } from '@nexus/wire';
 
+import { DelegatedChip } from '@/components/delegated-chip';
 import { SentAttachments } from '@/components/sent-attachments';
 import { ReferencedText } from '@/components/session-reference';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
@@ -198,6 +200,8 @@ export function Entry({
         <MessageContent>
           {/* 這一句帶的附件（#732）：標籤排在泡泡上方；只有附件、沒有字的那一句不畫空泡泡。 */}
           <SentAttachments attachments={entry.attachments} />
+          {/* 這一句點名派的子代理（#328 第 2 項）：chip 在泡泡上方；`text` 不含點名字樣，標記從 `mention` 畫。 */}
+          {entry.mention !== undefined && <DelegatedChip name={entry.mention.name} />}
           {entry.text.trim() !== '' && (
             <Bubble variant="secondary" align="end">
               <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
@@ -378,10 +382,12 @@ function useFinishedReply(entries: readonly ConversationEntry[], isFresh: (id: s
 function PendingSteerBubble({
   text,
   attachments,
+  mention,
   caption,
 }: {
   text: string;
   attachments: readonly WireAttachmentRef[] | undefined;
+  mention: SubagentMention | undefined;
   caption: string;
 }) {
   return (
@@ -389,6 +395,7 @@ function PendingSteerBubble({
       <MessageContent>
         {/* 帶的附件（#710）：跟領走後那則人的話同一個位置（泡泡上方），換成正式的時不跳位。 */}
         <SentAttachments attachments={attachments} />
+        {mention !== undefined && <DelegatedChip name={mention.name} />}
         {text.trim() !== '' && (
           <Bubble variant="secondary" align="end" className="opacity-70">
             <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
@@ -529,6 +536,7 @@ export function Transcript({
           <PendingSteerBubble
             text={steer.text}
             attachments={steer.attachments}
+            mention={steer.mention}
             caption={pendingSteerText(state.status)}
           />
         ),

@@ -20,6 +20,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { toast } from 'sonner';
 
+import { DelegatedChip } from '@/components/delegated-chip';
 import { Surface } from '@/components/surface';
 import { Button } from '@/components/ui/button';
 import { RowTrigger } from '@/components/row-trigger';
@@ -276,10 +277,18 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
         className={cn(
           'animate-in fade-in-0 flex min-w-0 items-start gap-2 rounded-row px-3 py-1 text-body transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden',
           goal && 'flex-wrap',
+          // 點名的 chip 窄螢幕時換到最後一行（`order-last`），不跟預覽與三顆鈕搶一行。
+          item.mention !== undefined && 'max-sm:flex-wrap',
         )}
       >
         {isEditing ? (
           <>
+            {/* 編輯只改字：點名保留（伺服器那邊 `queue.update` 的 edit 不動 `mention`），所以編輯框旁邊還畫著。 */}
+            {item.mention !== undefined && (
+              <span className="flex min-h-9 shrink-0 items-center max-sm:order-last max-sm:min-h-0 max-sm:basis-full max-sm:pb-1">
+                <DelegatedChip name={item.mention.name} />
+              </span>
+            )}
             <Textarea
               autoFocus
               aria-label="改這一則排著的訊息"
@@ -328,6 +337,11 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
                   className="text-muted-foreground mt-2.5 size-4 shrink-0 lg:mt-2"
                 />
               )
+            )}
+            {item.mention !== undefined && !system && (
+              <span className="flex min-h-11 shrink-0 items-center lg:min-h-8 max-sm:order-last max-sm:min-h-0 max-sm:basis-full max-sm:pb-1 max-sm:pl-6">
+                <DelegatedChip name={item.mention.name} />
+              </span>
             )}
             <span
               className={cn(
