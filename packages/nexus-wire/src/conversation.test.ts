@@ -945,6 +945,20 @@ describe('被準入閘門擋下', () => {
     expect(state.status).toBe('idle');
   });
 
+  it('人話後面接著結算通知（被擋下的是通知喚醒的那一輪）：那句人話不標', () => {
+    const notice = {
+      kind: 'notice' as const,
+      id: 'n',
+      source: 'subagent-settled' as const,
+      summary: '背景子代理已完成',
+    };
+    const state = reduceAll(
+      { ...emptyConversation(), entries: [human('h', '早就送出去的話'), notice] },
+      [closing({ blocked: true })],
+    );
+    expect(state.entries.some((entry) => entry.kind === 'human' && entry.blocked)).toBe(false);
+  });
+
   it('只標最後一則人話：前面的輪不動；blocked 之後再正常送一句，後一句不被標', () => {
     const afterBlocked = reduceAll(
       { ...emptyConversation(), entries: [human('h1', '正常的'), human('h2', '被擋的')] },
