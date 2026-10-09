@@ -534,6 +534,7 @@ describe('什麼推得動 roundsStarted', () => {
       'llm/retry',
       'llm/retry-started',
       'assistant/message',
+      'assistant/attempt',
       'user/message',
       'compaction/summary',
       'subagent/model-selection-policy',
