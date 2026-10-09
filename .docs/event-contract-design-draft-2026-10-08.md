@@ -227,3 +227,12 @@ demian 2026-10-09：**`approvals` 先不搬**，做 S1。S1 拆兩張：S1a（�
 ### S1b 的後續：拿掉那一層（[#1276](https://github.com/DemianLi/nexus-agent/issues/1276)）
 
 demian 2026-10-09 決定：照 dsh，拿掉閘門之前的模式外拒絕，只留 `exit_plan_mode` 工具本體的檢查。`tools/pre-execute` 上 plan-mode 的監聽者與 #1272 為它加的 `SessionRegistrationPoint.forAddress` 一併拿掉（沒有消費者就不留 API）。事件、生產者、事件表閘門不動，`tools/pre-execute` 目前沒有任何監聽者。行為有意改變兩格：掛全攔核准閘門時先看到核准的措辭；沒接日誌且 `startActive` 關著時看到本體的「還沒接上」。**S1b 因此沒有留下任何已搬上匯流排的消費者**——第一顆消費者要另找。
+
+### S1c：第一顆留在匯流排上的消費者（[#1286](https://github.com/DemianLi/nexus-agent/issues/1286)）
+
+挑的是 `@nexus/plugin-present` 的交付寫入：dsh 的 `tool-present` 在本體只記一張以呼叫為鍵的表，等 `tools/result` 通知結果不是錯誤才寫 `deliverables/presented`。我們原本沒有 `tools/result`，登記的偏離是「訂閱自己那份日誌、等同 `callId` 的 `tool/result`」，連帶每次呼叫一個訂閱、一個 `callId` 只留一個、收掉時退訂、寫要排 microtask 躲重入四樣補丁。`tools/result` 落地後這個偏離的理由不在了，搬回 dsh 的形狀：`pending` 表加一位 `tools/result` 監聽者。
+
+- **表的鍵帶位址**：監聽者是 root 與所有子代理共用的一份（D4，沒有 `Scoped<Agent>`），dsh 的表是每個 `Scoped` agent 各一張；我們以「`SessionAddress`＋`callId`」為鍵，兩邊 callId 撞號時不會互取對方那一筆。單元測試有同一 `callId` 兩邊都在等的案例，鍵拿掉會紅。
+- **次序偏離 dsh（選 A，待決）**：`tools/result` 在記 `tool/result` 之前派發，dsh 因此是交付先、結果後。我們的不變式（#441、#452）與下游依「交付在配對的成功結果之後」，所以監聽者同步取走表上那一筆後 `await Promise.resolve()`，醒來時圍堵已同步記完 `tool/result`；醒來後再從日誌尾端確認那顆結果在、而且成功。**不是「表達不出來」，是保留既有契約**；照 dsh 的次序（選 B：改不變式、格式版本、折疊器）另算。
+- **證據**：差分測試（`apps/harness/src/present-delivery-differential.test.ts`）先在搬之前的實作上跑綠、搬完一字不改仍綠。**它量不到兩次呼叫的 microtask 交錯**——這個組裝裡同一則訊息的幾次工具呼叫是一次落定一次才輪到下一次（實測）；交錯的次序由 plugin 單元測試裡手排的順序負責。
+- **S1b 的結果**：#1276 拿掉 plan-mode 的監聽者之後，匯流排上沒有任何消費者；這一顆是第一顆。`tools/pre-execute`、`tools/execute`、`tools/post-execute` 仍然沒有監聽者。

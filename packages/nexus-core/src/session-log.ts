@@ -146,9 +146,11 @@ import type { ToolErrorInfo } from './tool-events.js';
  * 裡讀出來）。見 [#305](https://github.com/DemianLi/nexus-agent/issues/305)。
  *
  * `deliverables/presented` 走 `todo/write` 那條（模型工具問 `forCall` 拿到自己那一份），**但不在工具
- * 本體裡寫**：本體只記下這次要交付什麼，等同一份日誌上配對的 `tool/result` 落定成功，才排到下一個
- * tick 寫。照 dsh 的 `ctx.on('tools/result')`——被外層改判成錯誤的結果不發布交付。所以它永遠落在
- * 配對的 `tool/result` **之後**。見 [#441](https://github.com/DemianLi/nexus-agent/issues/441)。
+ * 本體裡寫**：本體只記下這次要交付什麼，等 `tools/result` 說結果不是錯誤（照 dsh 的 `ctx.on('tools/result')`），
+ * 再排到下一個 microtask 寫——被外層改判成錯誤的結果不發布交付。`tools/result` 在圍堵記 `tool/result` **之前**派發，
+ * 排一個 microtask 就是為了讓它永遠落在配對的 `tool/result` **之後**（dsh 是之前，我們的次序是既有契約，見
+ * `@nexus/plugin-present` 檔頭）。見 [#441](https://github.com/DemianLi/nexus-agent/issues/441)、
+ * [#1286](https://github.com/DemianLi/nexus-agent/issues/1286)。
  *
  * `context/measure` 走 `compaction/summary` 那條（摘要器外面包的一層，fold 逐個 agent 建），也寫得進
  * subagent 那份；web 只讀 root 那份。見 [#528](https://github.com/DemianLi/nexus-agent/issues/528)。

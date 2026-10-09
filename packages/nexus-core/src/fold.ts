@@ -414,6 +414,7 @@ export interface FoldOptions {
    *
    * 省略時掛在這四個事件上的監聽者沒有生產者，不會被問到。產品路徑只有 `apps/harness/src/agent-factory.ts`
    * 呼叫 `foldRegistry`，且傳了 `registry.dispatch`；自己折 registry 的測試或量測要載入有監聽者的 plugin 時也得傳。
+   * 沒傳而載了 `@nexus/plugin-present` 的組裝，`present` 會叫得動卻靜靜不交付（它的交付寫入掛在 `tools/result` 上，#1286）。
    */
   events?: EventDispatcher;
 

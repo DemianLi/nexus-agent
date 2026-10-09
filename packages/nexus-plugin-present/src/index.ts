@@ -9,23 +9,27 @@
  * `maxFiles`（預設 8）個；**只記路徑與說明，不讀、不複製內容**。dsh 的 standard preset 掛它，
  * 所以它在出貨清單裡。
  *
- * ## 什麼時候寫：配對的 `tool/result` 落定成功之後
+ * ## 什麼時候寫：`tools/result` 說結果不是錯誤，而且配對的 `tool/result` 已經落定
  *
- * dsh 在工具本體裡只把這次要交付什麼記在一張表上，等 `tools/result` 通知（post-execute 鉤子都跑完之後
- * 那一顆）說結果不是錯誤才 `append`。我們的對應物是圍堵寫的那顆 `tool/result`：它在最外層，看得到
- * 內層每一顆 middleware 最後把結果判成什麼。所以本體訂閱自己那一份日誌，看到同一個 `callId` 的
- * `tool/result`、`isError` 為否，才寫。**不在本體裡直接寫**（`todo_write` 那條路）：那樣的話一次被
- * 外層改判成錯誤的呼叫照樣留下一筆交付，dsh 有一條測試專門擋它。
+ * 照 dsh：工具本體只把這次要交付什麼記在一張以呼叫為鍵的表上（`pending`），等 `tools/result`
+ * 通知（post-execute 鉤子都跑完之後那一顆）說結果不是錯誤才 `append`。**不在本體裡直接寫**（`todo_write` 那條路）：
+ * 那樣的話一次被外層改判成錯誤的呼叫照樣留下一筆交付，dsh 有一條測試專門擋它。表的鍵帶著呼叫者的
+ * {@link SessionAddress}：這顆監聽者是 root 與每個子代理共用的一份，callId 在兩邊撞號時不能取走對方那一筆。
  *
- * 寫要**排到下一個 microtask**：日誌不准在自己的回呼裡重入（`SessionLog.append` 的防護）。訂閱者是
- * async 函式，`await` 一次之後才寫；它若拋，日誌把 reject 收成一行 warn，不會變成殺掉行程的
- * unhandled rejection。
+ * **寫的時刻偏離 dsh（#1286）：排在配對的 `tool/result` 之後。** `tools/result` 由圍堵在記 `tool/result`
+ * **之前**派發，dsh 因此是交付先、`tool/result` 後。我們的日誌不變式（#441、#452，`invariant.ts`）與下游（web 的卡片收尾、
+ * 歷史重放、遙測）都依「交付在配對的成功結果之後」這個次序，改它是另一個決定（格式版本、折疊器），不是搬載體該順手做的。
+ * 所以監聽者同步取走表上那一筆之後 `await Promise.resolve()` 一次：派發與圍堵同步記 `tool/result` 之間沒有任何 `await`，
+ * 下一個 microtask 醒來時結果已經在日誌上。**不是「表達不出來」，是保留既有契約，待決**（要不要照 dsh 的次序另算）。
+ * 醒來之後再從日誌尾端確認那顆 `tool/result` 真的在、而且不是錯誤——圍堵記它失敗是被吞掉的，那時不能留一筆沒有配對結果的交付。
  *
- * **等結果的那個訂閱一個 `callId` 只留一個。** 圍堵對控制流例外（中斷）是原樣往外拋、不寫
- * `tool/result` 的（`containment.ts` 的 `isGraphBubbleUp`），而 resume 之後同一個 `callId` 會再進來一次。
- * 本體要是在那之前跑過，舊的訂閱還掛著，結果落定時兩個一起觸發就交付兩次。今天核准閘門擋在本體之前，
- * 產品路徑上碰不到——這是一個沒人守的前提，所以新的一次先退掉舊的；組裝收掉時全部退掉，不留在
- * 活得跟行程一樣長的日誌上。
+ * 監聽者是 `EventDispatcher.observe` 派發的：它拋或 reject 都只回報、不影響那次呼叫。
+ *
+ * **一個呼叫只留一筆。** 圍堵對控制流例外（中斷）是原樣往外拋、不派發 `tools/result` 也不寫 `tool/result` 的，而 resume 之後
+ * 同一個 `callId` 會再進來一次；表是覆寫，所以舊的一筆不會讓結果落定時交付兩次。組裝收掉時整張表清空。
+ *
+ * **前提：宿主端要把 `events` 交給 `foldRegistry`**（產品路徑只有 `agent-factory.ts`，它交 `registry.dispatch`）。
+ * 沒交的組裝不派發 `tools/result`，這顆工具就靜靜不交付。
  *
  * ## 寫進哪一份：呼叫者自己那一份
  *
@@ -78,10 +82,18 @@
 import { posix } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
-import type { NexusPlugin, PluginEntry, PluginRegistry, PresentedFile } from '@nexus/core';
+import type {
+  NexusPlugin,
+  PluginEntry,
+  PluginRegistry,
+  PresentedFile,
+  SessionAddress,
+  SessionLog,
+} from '@nexus/core';
 import {
   FS_SERVICE,
   toolCallIdOf,
+  toolCallSessionAddress,
   toolRefusal,
   virtualPathOf,
   WORKSPACE_CAPABILITY,
@@ -240,6 +252,27 @@ async function inspect(backend: AnyBackendProtocol, path: string): Promise<Inspe
   return found.is_dir === true ? 'not-file' : 'file';
 }
 
+/** 等結果的那張表的鍵：呼叫者的位址加 `callId`。位址認不出來時本體已經拒了，不會走到這裡。 */
+function pendingKey(address: SessionAddress | undefined, callId: string): string {
+  const who =
+    address === undefined ? '?' : address.kind === 'root' ? 'root' : `sub:${address.runId}`;
+  return `${who}\u0000${callId}`;
+}
+
+/**
+ * 日誌上這個 `callId` 最後一顆 `tool/result` 在不在、是不是成功。從尾端往回找：剛落定的那一顆就在尾端。
+ * @param log - 呼叫者那一份日誌。
+ * @param callId - 呼叫。
+ */
+function hasSucceeded(log: SessionLog, callId: string): boolean {
+  const events = log.events;
+  for (let index = events.length - 1; index >= 0; index -= 1) {
+    const event = events[index];
+    if (event?.type === 'tool/result' && event.data.callId === callId) return !event.data.isError;
+  }
+  return false;
+}
+
 /**
  * present plugin。
  *
@@ -252,11 +285,22 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
   Config: presentConfigSchema,
   apply(registry: PluginRegistry, config: PresentConfig): void {
     const { maxFiles } = config;
-    /** 還在等結果的訂閱，依 `callId`。見檔頭「一個 `callId` 只留一個」。 */
-    const waiting = new Map<string, () => void>();
-    registry.lifecycle.onDispose(() => {
-      for (const unsubscribe of waiting.values()) unsubscribe();
-      waiting.clear();
+    /** 等 `tools/result` 的交付，依「呼叫者是誰＋`callId`」。見檔頭。 */
+    const pending = new Map<
+      string,
+      { readonly log: SessionLog; readonly files: PresentedFile[] }
+    >();
+    registry.lifecycle.onDispose(() => pending.clear());
+    registry.events.on('tools/result', async (exec, result) => {
+      const key = pendingKey(exec.agent, exec.callId);
+      const entry = pending.get(key);
+      if (entry === undefined) return;
+      pending.delete(key);
+      if (result.isError) return;
+      // 還在圍堵派發的路上，`tool/result` 要等圍堵接著同步記下去。見檔頭。
+      await Promise.resolve();
+      if (!hasSucceeded(entry.log, exec.callId)) return;
+      entry.log.append('deliverables/presented', { callId: exec.callId, files: entry.files });
     });
     registry.tools.register(
       tool(
@@ -305,18 +349,10 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
               ...(file.description !== undefined && { description: file.description }),
             });
           }
-          const { log } = found;
-          waiting.get(callId)?.();
-          const unsubscribe = log.subscribe(async (event) => {
-            if (event.type !== 'tool/result' || event.data.callId !== callId) return;
-            unsubscribe();
-            if (waiting.get(callId) === unsubscribe) waiting.delete(callId);
-            if (event.data.isError) return;
-            // 還在日誌的發佈回呼裡，現在寫會撞重入防護。見檔頭。
-            await Promise.resolve();
-            log.append('deliverables/presented', { callId, files });
+          pending.set(pendingKey(toolCallSessionAddress(config), callId), {
+            log: found.log,
+            files,
           });
-          waiting.set(callId, unsubscribe);
           return presentedText(files);
         },
         {
