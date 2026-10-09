@@ -12,7 +12,7 @@
  * @module
  */
 
-import type { ThreadListResult, ThreadSummary } from '@nexus/wire';
+import type { ThreadActivityKind, ThreadListResult, ThreadSummary } from '@nexus/wire';
 
 /** 列表帶的兩個集合；兩格都有才算 server 支援釘選與封存，缺一格就當沒有。 */
 export function readSets(
@@ -46,6 +46,30 @@ export function explainThreadFailure(error: {
 /** 五個動作都回失敗的原因（講給人聽的話）；成功回 `undefined`。 */
 export type ThreadActionResult = Promise<string | undefined>;
 
+/**
+ * 封存還在跑的會話，server 要人先說「要停掉」（`thread_active`）：這不是錯誤，是要多問一句。`activity` 是它在跑的是什麼；
+ * 舊的 server 沒帶就是空的。確認之後再送一次 `stopActivity: true`（server 先寫封存、再停跑著的工作）。
+ */
+export interface ArchiveNeedsStop {
+  readonly needsStop: readonly ThreadActivityKind[];
+}
+
+/** 封存的結果：失敗的原因、要多問一句、或成功（`undefined`）。 */
+export type ArchiveAnswer = Promise<string | ArchiveNeedsStop | undefined>;
+
+/** 確認框的內文：講出它在跑什麼，以及停掉的後果。 */
+export function explainArchiveStop(label: string, activity: readonly ThreadActivityKind[]): string {
+  const what =
+    activity.includes('turn') && activity.includes('subagent')
+      ? '正在回答，背景子代理也還在跑'
+      : activity.includes('subagent')
+        ? '還有背景子代理在跑'
+        : activity.includes('turn')
+          ? '正在回答'
+          : '正在執行';
+  return `「${label}」${what}。要停掉再封存嗎？`;
+}
+
 export interface ThreadManagement {
   /** 釘選的會話 id，最近釘的在前。 */
   readonly pinnedIds: readonly string[];
@@ -54,7 +78,10 @@ export interface ThreadManagement {
   readonly titles: ReadonlyMap<string, string>;
   readonly onPin: (threadId: string) => ThreadActionResult;
   readonly onUnpin: (threadId: string) => ThreadActionResult;
-  readonly onArchive: (threadId: string) => ThreadActionResult;
+  readonly onArchive: (
+    threadId: string,
+    options?: { readonly stopActivity?: boolean },
+  ) => ArchiveAnswer;
   readonly onUnarchive: (threadId: string) => ThreadActionResult;
   readonly onRename: (threadId: string, title: string) => ThreadActionResult;
 }
