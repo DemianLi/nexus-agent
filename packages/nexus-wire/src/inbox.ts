@@ -122,6 +122,17 @@ export type WireQueuedInputSource =
        * （預約的文字必須逐字等於目前目標的續行提示詞，改過的就不是那一輪了），見 `thread-pump.ts` 的 `updateQueue`。
        */
       readonly kind: 'goal';
+    }
+  | {
+      /**
+       * 折疊器不認得的來源種類（比如新版 harness 加了一種、這一側還沒跟上）。**照 dsh 的做法收下**：dsh 的 client 不驗佇列件的
+       * 來源種類，`MessageSource` 是可合併擴充的聯集、「consumers fall through unknown kinds」（`packages/llm/llm/src/message.ts`），
+       * `ui-chat` 的 inbox 節點只比對 `=== 'user'`。所以這一件**照列、當成非人的件**，不丟那一件、不丟整份。
+       * 畫面用通用標籤，不給插話鈕（它不是人說的話，也不知道能不能轉成插話）。
+       */
+      readonly kind: 'unrecognized';
+      /** 線上實際送來的那個種類。 */
+      readonly original: string;
     };
 
 /** 一句話裡 `@` 的一條會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：`text` 裡對應的那段是 `@<label>`。 */
@@ -174,6 +185,7 @@ export type WireClaimedSource =
        */
       readonly kind: 'goal';
     };
+// 被領走的件若是不認得的來源，折疊器同樣不畫人的泡泡（見 {@link WireQueuedInputSource} 的 `unrecognized`），所以這裡沒有對應的成員。
 
 /** {@link INBOX} 的 `payload`。 */
 export interface InboxPayload {
