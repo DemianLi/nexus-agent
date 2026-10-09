@@ -26,6 +26,7 @@
  */
 
 import type { AttachmentRef } from './attachment-ref.js';
+import type { GoalId } from './goal.js';
 
 /**
  * 一個背景子代理怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：結算通知的原因，四種。
@@ -39,8 +40,7 @@ export type SubagentSettleReason = 'completed' | 'aborted' | 'max-tokens' | 'err
 export type InboxTarget = 'next-turn' | 'next-step';
 
 /**
- * 一件排著的輸入是誰送的。dsh 分人（`{kind:'user'}`）與目標續行（`{kind:'goal', …}`）；**這一版有人與背景子代理的結算通知**，
- * 續行走佇列是 [#638](https://github.com/DemianLi/nexus-agent/issues/638)。開跑時 `turn/start` 的 `kind` 由它決定。
+ * 一件排著的輸入是誰送的。dsh 分人（`{kind:'user'}`）與目標續行（`{kind:'goal', …}`）；**這一版有人、背景子代理的結算通知與目標續行**（#638）。開跑時 `turn/start` 的 `kind` 由它決定。
  *
  * 加成員要在 pump 的 `pumpInputOf`（`apps/harness/src/thread-pump.ts`）補一支，不補就編不過。goal 成員要帶 `goalId`、
  * `revision`、`round`，因為 `turn/start` 的 goal 那幾格全部必填。
@@ -59,6 +59,17 @@ export type QueuedInputSource =
       /** 背景子代理用 `send_message` 寫給主對話的話（[#849](https://github.com/DemianLi/nexus-agent/issues/849)）：agent 寫的，不是人說的。 */
       readonly kind: 'agent-message';
       readonly senderSessionId: string;
+    }
+  | {
+      /**
+       * 目標續行（[#638](https://github.com/DemianLi/nexus-agent/issues/638)）：排程器為下一輪預約的一件，不是人說的話。
+       * 照 dsh 的 `GoalMessageSource`（`goal-round-driver/src/index.ts`，`5badb15009a`）：三格全必填，因為開跑時 `turn/start`
+       * 的 goal 那幾格全部必填，而且領走時要拿它對照目標「現在」的修訂與輪數判這份預約還有沒有效。
+       */
+      readonly kind: 'goal';
+      readonly goalId: GoalId;
+      readonly revision: number;
+      readonly round: number;
     };
 
 /**

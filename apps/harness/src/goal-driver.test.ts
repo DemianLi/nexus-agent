@@ -166,6 +166,7 @@ describe('到頂之後記的那顆 blocker', () => {
       goal: () => goal,
       block: (_ref, reason) => void blocked.push(reason.code),
       disarm: () => {},
+      pause: () => {},
       flush: () => Promise.resolve(),
       warn: () => {},
     };
@@ -323,6 +324,7 @@ describe('上一輪撞到輸出上限、被中止或拋錯', () => {
       goal: () => goal,
       block: () => {},
       disarm: () => void disarmed.push(1),
+      pause: () => {},
       flush: () => Promise.resolve(),
       warn: () => {},
     };

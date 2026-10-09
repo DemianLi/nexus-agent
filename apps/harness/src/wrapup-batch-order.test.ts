@@ -226,6 +226,7 @@ describe('自主收尾與另一顆工具同批時，收尾指示插在兩顆結�
       goal: () => goals.serviceFor(late.log as SessionLog)?.get(),
       block: (ref, reason) => void goals.serviceFor(late.log as SessionLog)?.block(ref, reason),
       disarm: () => void goals.serviceFor(late.log as SessionLog)?.disarm(),
+      pause: (ref) => void goals.serviceFor(late.log as SessionLog)?.pause(ref),
       flush: () => Promise.resolve(),
       warn: () => {},
     };

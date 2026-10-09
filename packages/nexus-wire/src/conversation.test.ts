@@ -1384,6 +1384,25 @@ describe('時刻（#1030）', () => {
     for (const entry of state.entries) expect(entry).not.toHaveProperty('settledAt');
   });
 
+  it('續行預約（goal 來源）被領走不畫任何條目：它不是人說的話，那一輪另有自己的畫法（#638）', () => {
+    at = 0;
+    const state = reduceAll(emptyConversation(), [
+      custom(
+        INBOX,
+        {
+          items: [],
+          claimed: {
+            id: 'g1',
+            text: '續行第 1 輪',
+            source: { kind: 'goal' },
+          },
+        },
+        10,
+      ),
+    ]);
+    expect(state.entries).toEqual([]);
+  });
+
   it('人按的決定與答案不帶時刻：它們不是從線上來的', () => {
     at = 0;
     const asked = reduceAll(emptyConversation(), [

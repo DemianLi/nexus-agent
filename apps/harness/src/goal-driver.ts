@@ -275,6 +275,11 @@ export interface GoalDriverPort {
   goal(): GoalView | undefined;
   /** 記一顆 blocker。 */
   block(ref: GoalRef, reason: GoalBlockReason): void;
+  /**
+   * 暫停目標（續行預約被人從佇列上刪掉或改掉時用，[#638](https://github.com/DemianLi/nexus-agent/issues/638)）。
+   * 帶預約當時的修訂：目標之後被 resume 過（修訂變了）就不該又被暫停，呼叫端先比過，服務自己也會拒絕對不上的修訂。
+   */
+  pause(ref: GoalRef): void;
   /** 收回續行授權，**不動耐久的相位**。耐久檢查點失敗、上一輪撞到輸出上限、被中止或拋錯時用。 */
   disarm(): void;
   /** 排隊前的耐久檢查點。沒有落盤時是 no-op。 */

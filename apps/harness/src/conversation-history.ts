@@ -474,20 +474,22 @@ export function inboxData(
     ...attachmentsField(attachments),
     ...(source.kind === 'user'
       ? {}
-      : source.kind === 'agent-message'
-        ? {
-            source: {
-              kind: source.kind,
-              senderSessionId: source.senderSessionId,
-              runId: runIdOfSession(source.senderSessionId),
-            },
-          }
-        : {
-            source: {
-              kind: source.kind,
-              ...(source.reason === undefined ? {} : { reason: source.reason }),
-            },
-          }),
+      : source.kind === 'goal'
+        ? { source: { kind: source.kind } }
+        : source.kind === 'agent-message'
+          ? {
+              source: {
+                kind: source.kind,
+                senderSessionId: source.senderSessionId,
+                runId: runIdOfSession(source.senderSessionId),
+              },
+            }
+          : {
+              source: {
+                kind: source.kind,
+                ...(source.reason === undefined ? {} : { reason: source.reason }),
+              },
+            }),
     ...(references === undefined || references.length === 0
       ? {}
       : { references: references.map(({ sessionId, label }) => ({ sessionId, label })) }),

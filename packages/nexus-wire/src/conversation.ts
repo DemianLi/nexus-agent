@@ -1470,6 +1470,8 @@ function reduceInbox(
       });
       continue;
     }
+    // 目標續行的預約開跑（#638）：給模型的提示詞，畫面不長任何一格。
+    if (sourceKind === 'goal') continue;
     if (sourceKind === 'agent-message') {
       const { senderSessionId, runId } = source as { senderSessionId?: unknown; runId?: unknown };
       // 寄件人缺了就整顆不收：沒有寄件人的「某某說」畫不出來，又不能悄悄當成人話。
