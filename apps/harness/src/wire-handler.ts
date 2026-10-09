@@ -57,6 +57,8 @@ import type {
   WireChannel,
   FeedbackMethod,
   ModelMethod,
+  SubagentKind,
+  SubagentMention,
   WireFeedbackRating,
   DeliverableBytes,
   DeliverableMethod,
@@ -80,6 +82,7 @@ import {
   isPermissionMethod,
   isThreadManagementMethod,
   isSubagentListMethod,
+  isSubagentMention,
   MODEL_DOES_NOT_SUPPORT_IMAGES,
   uploadPath,
   ATTACHMENT_NOT_FOUND,
@@ -220,6 +223,11 @@ export interface ThreadAgent {
    * 沒掛 `@nexus/plugin-permission-presets` 的組裝就沒有，那時 `permission.catalog` 回 `not_supported`、`permissions` 投影缺席。
    */
   readonly permissionPresets?: { catalog(): PermissionCatalog };
+  /**
+   * 使用者可以點名派的子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項），選配：`task` 實際收的那份（`createNexusAgent` 的 `subagentKinds`）。
+   * **缺席就是這個組裝沒有清單**（手搭的組裝）：`subagent.list` 回 `not_supported`，`run.start` 帶 `mention` 也一樣。
+   */
+  readonly subagentKinds?: readonly SubagentKind[];
   /**
    * 每會話模型選擇（[#723](https://github.com/DemianLi/nexus-agent/issues/723)），選配。沒帶 `--live`（假模型沒有型錄）的組裝就沒有，
    * 那時 `model.catalog`／`model.select` 回 `not_supported`，web 據這個碼把模型座藏起來。
@@ -482,11 +490,6 @@ async function* requestBodyChunks(
   }
 }
 
-/** 契約已合、實作還沒做的 RPC method 回 `not_supported` 時的說明（#328 的子代理清單），實作落地時隨分支一起拿掉。 */
-const NOT_IMPLEMENTED = {
-  'subagent.list': '這個組裝還沒有可點名的子代理清單',
-} as const;
-
 /** 搜尋失敗怎麼上線。`disabled` 同 dsh 的 `SESSION_QUERY_SEARCH_DISABLED`：web 收到就退回只比標題。 */
 const SEARCH_ERROR_CODES: Record<ThreadSearchErrorKind, WireErrorCode> = {
   invalid: 'invalid_argument',
@@ -743,6 +746,7 @@ interface ThreadState {
   readonly feedback: FeedbackService | undefined;
   readonly workspaceChanges: WorkspaceChanges | undefined;
   readonly permissionPresets: { catalog(): PermissionCatalog } | undefined;
+  readonly subagentKinds: readonly SubagentKind[] | undefined;
   readonly modelSelection: ThreadModelSelection | undefined;
   /**
    * 接回來那批事件的長度；沒續接就是 0（[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
@@ -800,6 +804,41 @@ function optional(value: unknown, check: (candidate: unknown) => boolean): boole
 }
 
 const isString = (value: unknown): value is string => typeof value === 'string';
+
+/**
+ * `run.start` 的 `mention`（#328 第 2 項）：省略＝沒點名；有值就要形狀合格、名字在這個組裝的子代理清單上。
+ * 沒有清單的組裝（手搭的）回 `not_supported`，同 `subagent.list`。
+ */
+function mentionOf(
+  id: number,
+  kinds: readonly SubagentKind[] | undefined,
+  raw: unknown,
+): SubagentMention | undefined | Response {
+  if (raw === undefined) return undefined;
+  if (kinds === undefined) {
+    return json(errorResponse(id, 'not_supported', '這個組裝沒有可點名的子代理清單'));
+  }
+  if (!isSubagentMention(raw)) {
+    return json(
+      errorResponse(
+        id,
+        'invalid_argument',
+        'run.start 的 mention 要是 { kind: "subagent", name }，name 為非空字串',
+      ),
+    );
+  }
+  if (!kinds.some((kind) => kind.name === raw.name)) {
+    const known = kinds.map((kind) => kind.name).join('、');
+    return json(
+      errorResponse(
+        id,
+        'invalid_argument',
+        `沒有叫 "${raw.name}" 的子代理可以點名（可點名的有：${known}）`,
+      ),
+    );
+  }
+  return { kind: 'subagent', name: raw.name };
+}
 
 /**
  * 四個回饋 method 的回應（[#278](https://github.com/DemianLi/nexus-agent/issues/278)、
@@ -1090,6 +1129,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           feedback: threadAgent.feedback,
           workspaceChanges: threadAgent.workspaceChanges,
           permissionPresets: threadAgent.permissionPresets,
+          subagentKinds: threadAgent.subagentKinds,
           modelSelection: threadAgent.modelSelection,
           // **就是 seed 的長度**，不另外傳一個數字：兩個來源各記一次的話，有一天它們會不一樣，
           // 而那時錯的方向是「把重播的事件當成這個行程寫的」——靜靜讀到另一個工作區的同名檔。
@@ -1528,13 +1568,23 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       // 的 agent；為了封存一條還沒開起來的 thread 把它建起來（連 MCP 子行程）是反的。
       return handleThreadOrganization(threadId, method, envelope.id, body);
     }
-    if (isSubagentListMethod(method)) {
-      // 可點名的子代理清單（#328）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把 `@` 子代理藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
-      // 契約在 `@nexus/wire` 的 `thread-management.ts`／`subagent-list.ts`；實作落地時把這個分支換成真的 handler。
-      return json(errorResponse(envelope.id, 'not_supported', NOT_IMPLEMENTED[method]));
-    }
     const thread = await threadOrError(threadId, envelope.id);
     if (thread instanceof Response) return thread;
+    if (isSubagentListMethod(method)) {
+      // 可點名的子代理清單（#328 第 2 項，契約在 `@nexus/wire` 的 `subagent-list.ts`）：經 `threadFor`——清單是這條 thread 的組裝的事實
+      // （`task` 實際收的那份），web 打開一條 thread 才畫 `@` 選單。手搭的組裝沒有清單就回 `not_supported`，web 據這個碼把入口藏起來。
+      if (thread.subagentKinds === undefined) {
+        return json(errorResponse(envelope.id, 'not_supported', '這個組裝沒有可點名的子代理清單'));
+      }
+      return json(
+        successResponse(envelope.id, {
+          ok: true,
+          value: {
+            subagents: thread.subagentKinds.map(({ name, description }) => ({ name, description })),
+          },
+        }),
+      );
+    }
     if (isModelMethod(method)) {
       // 每會話模型選擇（#723）：經 `threadFor`——選擇記在這條 thread 的日誌裡，web 打開一條 thread 才畫模型座。
       // 沒有型錄的組裝（沒帶 `--live`）回 `not_supported`，web 據這個碼把模型座藏起來。
@@ -1596,11 +1646,14 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const parsedAttachments = attachmentsParam(command.id, 'run.start', params);
       if (parsedAttachments instanceof Response) return parsedAttachments;
       const promptAttachments = parsedAttachments;
-      // 點名子代理（#328 第 2 項）：同附件，契約先合、實作還沒做，**有值就整句拒絕**，不悄悄收下文字、丟掉點名。
-      const mention = (params as { mention?: unknown }).mention;
-      if (mention !== undefined) {
-        return json(errorResponse(command.id, 'not_supported', '這個組裝還不能點名子代理'));
-      }
+      // 點名子代理（#328 第 2 項）：形狀與名字在這裡驗，**排在收下附件之前**——被擋下的話不該用掉收據。名字不在 `subagent.list` 的
+      // 清單上就整句拒絕（那句話不進佇列），不悄悄收下文字、丟掉點名。
+      const mention = mentionOf(
+        command.id,
+        thread.subagentKinds,
+        (params as { mention?: unknown }).mention,
+      );
+      if (mention instanceof Response) return mention;
       const text = firstHumanText(params.input);
       if (text === undefined) {
         return json(
@@ -1632,6 +1685,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         id: runId,
         ...(mode === 'steer' ? { steer: true as const } : {}),
         ...(admitted.length > 0 && { attachments: admitted }),
+        ...(mention !== undefined && { mention }),
       });
       return json(successResponse(command.id, { run_id: runId }));
     }

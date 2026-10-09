@@ -73,6 +73,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 
 import {
   fromLoggedMessage,
+  isMentionHintBlock,
   replayConversation,
   SessionCorruptionError,
   SessionFormatUnsupportedError,
@@ -185,9 +186,29 @@ export interface SearchDocument {
   readonly text: string;
 }
 
+/**
+ * 訊息的文字，扣掉點名子代理時接在後面的提示區塊（[#328](https://github.com/DemianLi/nexus-agent/issues/328)）。
+ * 那段是給模型看的固定字，不是使用者打的；不扣掉，搜「子代理」「委派」會命中每一句被點名的話。
+ * 與歷史的 `textOf` 同一個判準（`isMentionHintBlock`）。
+ */
+function textWithoutMentionHint(message: BaseMessage): string {
+  const content = message.content;
+  if (!Array.isArray(content) || !content.some((block) => isMentionHintBlock(block))) {
+    return message.text;
+  }
+  return content
+    .map((block: unknown) => {
+      const typed = block as { type?: unknown; text?: unknown } | null;
+      return typed?.type === 'text' && typeof typed.text === 'string' && !isMentionHintBlock(block)
+        ? typed.text
+        : '';
+    })
+    .join('');
+}
+
 /** 一則訊息裡搜得到的字：文字區塊，回覆再加上要叫的工具。各段去頭尾、空的丟掉，同 dsh `extraction.ts:85-87`。 */
 function messageText(message: BaseMessage): string {
-  const parts = [message.text];
+  const parts = [textWithoutMentionHint(message)];
   if (AIMessage.isInstance(message)) {
     for (const call of message.tool_calls ?? []) parts.push(call.name, JSON.stringify(call.args));
   }

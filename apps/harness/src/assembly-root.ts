@@ -704,6 +704,8 @@ export async function createCliAgent(
    * `permissions` 投影缺席，web 藏起選單。
    */
   permissionPresets: PermissionPresetsService | undefined;
+  /** 使用者可以點名派的子代理（`subagent.list`，#328 第 2 項）：`task` 實際收的那份。serve 交給 wire-handler。 */
+  subagentKinds: readonly { readonly name: string; readonly description: string }[];
   /**
    * 這一次組裝的 goal 域，**沒掛時是 `undefined`**——出貨清單上有 goal，但一份 patch
    * 可以把那一列 `disabled: true` 關掉（[#455](https://github.com/DemianLi/nexus-agent/issues/455)
@@ -854,6 +856,7 @@ export async function createCliAgent(
     warnings,
     onWarning,
     stepInbox,
+    subagentKinds,
   } = await createNexusAgent({
     model,
     // 沒傳就在這裡按型錄建一本（#1102）：fold 自己 new 的那本不認得哪些模型逐位切詞。
@@ -985,6 +988,7 @@ export async function createCliAgent(
     feedback,
     workspaceChanges: services.get(WORKSPACE_CHANGES_SERVICE),
     permissionPresets: services.get(PERMISSION_PRESETS_SERVICE),
+    subagentKinds,
     goals: services.get(GOALS_SERVICE),
     workspaceRoot,
     attachTitle,

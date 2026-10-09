@@ -37,6 +37,8 @@ import type { CustomFrameName } from './custom-frame.js';
 import { DELIVERABLES_PRESENTED } from './deliverables.js';
 import { IMAGE_MEDIA_TYPES } from './attachments.js';
 import type { WireAttachmentRef } from './attachments.js';
+import { mentionField } from './subagent-list.js';
+import type { SubagentMention } from './subagent-list.js';
 import { AGENT_MESSAGE, INBOX, SETTLE_NOTICE, isSettleReason } from './inbox.js';
 import type {
   WireQueuedInput,
@@ -94,6 +96,11 @@ export interface HumanEntry {
    * 圖與檔案由 `type` 判別。沒有附件就不給這一格（空陣列與沒給是同一件事）。
    */
   readonly attachments?: readonly WireAttachmentRef[];
+  /**
+   * 這一句點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：畫面據它在人的泡泡上畫點名的標記。
+   * `text` 不含點名（送出時 `@` 那一段就從草稿拿掉了）。即時走 `inbox` 的 `claimed`，歷史重播走同一格，冷載入一樣畫得出來。沒有點名就不給這一格。
+   */
+  readonly mention?: SubagentMention;
   /**
    * 這一句被準入閘門擋下了（封存的會話，[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：一個模型請求都沒發，話沒有送給模型。
    * 讀的是 root 收尾 `lifecycle` 上 pump 補的 `blocked`，同 {@link AiEntry.maxTokens} 由收尾 frame 標；歷史重播補的是同一顆 frame，
@@ -1371,6 +1378,8 @@ interface RawQueuedInput {
   readonly text: string;
   readonly source: Readonly<Record<string, unknown>> & { readonly kind: string };
   readonly attachments?: readonly WireAttachmentRef[];
+  /** 沒驗：{@link mentionField} 投影時才驗，壞的當沒有。 */
+  readonly mention?: unknown;
 }
 
 /** 排著的一件長得對不對：`id`、`text` 是字串，`source` 是帶非空字串 `kind` 的物件；帶了 `attachments` 就要形狀合格。 */
@@ -1536,12 +1545,13 @@ function reduceInbox(
   }
   const humans: (HumanEntry | NoticeEntry | AgentMessageEntry)[] = [];
   for (const claim of claims) {
-    const { id, text, references, attachments, source } = (claim ?? {}) as {
+    const { id, text, references, attachments, source, mention } = (claim ?? {}) as {
       id?: unknown;
       text?: unknown;
       references?: unknown;
       attachments?: unknown;
       source?: unknown;
+      mention?: unknown;
     };
     if (
       typeof id !== 'string' ||
@@ -1594,16 +1604,19 @@ function reduceInbox(
       inboxId: id,
       ...referencesField(references),
       ...attachmentsField(attachments),
+      ...mentionField(mention),
       ...timeField('startedAt', time),
     });
   }
   const queued = (list: readonly RawQueuedInput[]): WireQueuedInput[] =>
-    list.map(({ id, text, source, attachments }) => ({
+    list.map(({ id, text, source, attachments, mention }) => ({
       id,
       text,
       source: queuedSource(source),
       // 排著的件帶的附件（#732）：空陣列與沒給一樣不帶這一格。
       ...attachmentsField(attachments),
+      // 點名（#328 第 2 項）：壞的當沒有。
+      ...mentionField(mention),
     }));
   const inbox = queued(items);
   const inboxNextStep = queued(nextStep ?? []);
@@ -1748,6 +1761,8 @@ interface MessageData {
   readonly references?: unknown;
   /** 歷史重播的人話帶的附件參照（#732），即時那條走 `inbox` 的 `claimed`。 */
   readonly attachments?: unknown;
+  /** 歷史重播的人話帶的點名（#328 第 2 項），即時那條走 `inbox` 的 `claimed`。 */
+  readonly mention?: unknown;
 }
 
 function reduceMessage(
@@ -1782,6 +1797,7 @@ function reduceMessage(
           text: '',
           ...referencesField(references),
           ...attachmentsField(attachments),
+          ...mentionField(data.mention),
           ...timeField('startedAt', time),
         };
         return { ...state, entries: [...state.entries, entry] };

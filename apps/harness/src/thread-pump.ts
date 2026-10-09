@@ -101,6 +101,7 @@ import {
   withModelCall,
   type ApprovalOutcome,
   type AttachmentRef,
+  type SubagentMentionRef,
   type InboxSplice,
   type InboxState,
   type ProjectionFold,
@@ -317,6 +318,7 @@ function pumpInputOf(item: QueuedInput): PumpInput {
         kind: 'message',
         text: item.text,
         ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
+        ...(item.mention === undefined ? {} : { mention: item.mention }),
       };
     case 'subagent-settled':
       return {
@@ -396,6 +398,11 @@ export type PumpInput =
        * 已經收過收據、驗過圖。空陣列與省略同義，進佇列前正規化成省略。
        */
       readonly attachments?: readonly AttachmentRef[];
+      /**
+       * 這句話點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）；呼叫端（`run.start`）已驗過名字在清單上。
+       * 進佇列、`turn/start`、插話的 `HumanMessage` 都帶著它，形狀見 `@nexus/core` 的 `subagent-mention.ts`。
+       */
+      readonly mention?: SubagentMentionRef;
     }
   | {
       readonly kind: 'resume';
@@ -769,6 +776,7 @@ function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
         ...(input.attachments === undefined || input.attachments.length === 0
           ? {}
           : { attachments: input.attachments }),
+        ...(input.mention === undefined ? {} : { mention: input.mention }),
       };
     case 'resume':
       return { kind: 'resume' };
@@ -1663,6 +1671,7 @@ export class ThreadPump {
         ...(input.attachments === undefined || input.attachments.length === 0
           ? {}
           : { attachments: input.attachments }),
+        ...(input.mention === undefined ? {} : { mention: input.mention }),
       };
       const steer = input.steer === true;
       const intoStep = steer && this.#acceptsSteer();
@@ -2430,7 +2439,7 @@ export class ThreadPump {
       if (job.text !== undefined) {
         // **id 就是佇列裡那一件的 id**：日誌、checkpoint、推回模型的那一則是同一則，reducer 照 id 對得上。
         const message = new HumanMessage({
-          content: userContent(job.text.text, job.text.attachments) as never,
+          content: userContent(job.text.text, job.text.attachments, job.text.mention) as never,
           id: job.text.id,
         });
         this.#sessions.root.append('user/message', {

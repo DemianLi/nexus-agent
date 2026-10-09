@@ -981,3 +981,14 @@ CI 那條（`pnpm --filter @nexus/harness exec vitest run src/eval`）同時擋�
 這七題上的分數**當上限、不當實力**（設定與題目是同一批挑的），要拿它挑改動就得在新題上驗過；
 LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
 [`apps/harness/docs/eval-measurement.md`](../apps/harness/docs/eval-measurement.md)。
+
+## 點名子代理
+
+使用者可以在一句話裡點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項，**dsh 沒有**：dsh 派子代理的只有模型，沒有使用者派工的入口；Claude Code 允許使用者 `@` 子代理，這是 demian 2026-10-08 的指示）。
+
+- **清單**：`subagent.list` 回 `task` 實際收的那份——`general-purpose` 在前，其餘依註冊順序，各帶說明。手搭的組裝沒有清單時回 `not_supported`，web 據此藏起 `@` 的入口。
+- **送出**：`run.start` 的選填 `params.mention: { kind: 'subagent', name }`。形狀不對、名字不在清單上都回 `invalid_argument`，那句話不進佇列（排在收下附件之前，不會用掉收據）。
+- **對模型的作用**：點名**沒有新的執行路徑**，只是在使用者那句話之後多接一個文字區塊（「使用者點名要你把這句話交給子代理 "名字" 處理：請用委派工具…」，字在 `@nexus/core` 的 `subagent-mention.ts`），派不派、怎麼派仍走 `task`／`subagent` 工具與它們的所有規則（核准、模型選擇、深度）。模型可以不聽，所以這是「請求」不是「保證」；真模型的對照見該 PR 內文。
+- **日誌**：`turn/start`（`kind: 'message'`）與佇列項各多一格選填 `mention`，輪中插話則留在 `user/message` 的內容區塊裡。**格式 42，不標 `ignorable`**——舊 runtime 略過它，排著的項目被折回來重跑時點名就悄悄不見了。
+- **線上**：排著的件（`WireQueuedInput.mention`）、領走時的 `claimed`／`claimedNextStep`、歷史重播的人話（`HumanEntry.mention`）都帶它；`text` 不含點名也不含提示區塊（歷史把提示區塊剝掉，從它讀回點名）。
+- **會被看到提示區塊的地方**：送進模型的訊息、摘要器的輸入（摘要裡可能帶到點名的字，沒有處理）。泡泡、佇列、標題（讀的是 `turn/start.text`）、`thread.search` 的全文（跟歷史同一個判準剝掉提示區塊）不受影響：搜提示裡的字（「子代理」「委派工具」）不會命中被點名的話，搜使用者自己打的字照常命中。

@@ -10,7 +10,13 @@ import { appendFile, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
-import { SESSION_LOG_FORMAT_VERSION, SessionLog, toLoggedMessage } from '@nexus/core';
+import {
+  mentionHintText,
+  SESSION_LOG_FORMAT_VERSION,
+  SessionLog,
+  toLoggedMessage,
+  userContent,
+} from '@nexus/core';
 import type { SessionEvent, SessionStore } from '@nexus/core';
 import {
   THREAD_SEARCH_QUERY_MAX_LENGTH,
@@ -143,6 +149,30 @@ describe('搜得到哪幾則（searchDocuments）', () => {
     expect(all).not.toContain('不該搜到');
   });
 
+  it('點名子代理：提示區塊不收，只收使用者自己打的字（開場與輪中插話兩條路）', () => {
+    const mention = { kind: 'subagent', name: 'reviewer' } as const;
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '請看這份差異', mention });
+    log.append('assistant/message', { message: reply('好') });
+    log.append('user/message', {
+      message: toLoggedMessage(
+        new HumanMessage({ content: userContent('順便看測試', [], mention) as never }),
+      ),
+      source: { kind: 'user' },
+    });
+    log.append('assistant/message', { message: reply('也看了') });
+    log.append('turn/end', {});
+
+    expect(searchDocuments(log.events).map((document) => document.text)).toEqual([
+      '請看這份差異',
+      '好',
+      '順便看測試',
+      '也看了',
+    ]);
+    expect(JSON.stringify(searchDocuments(log.events))).not.toContain(mentionHintText(mention));
+    expect(JSON.stringify(searchDocuments(log.events))).not.toContain('system-reminder');
+  });
+
   it('壓縮：被換掉的那幾則不收，換上去的摘要收（同 dsh 只查 current）', () => {
     const log = new SessionLog('t');
     chat(log, '一', 'A');
@@ -255,6 +285,23 @@ describe('ThreadSearch', () => {
     expect(await ids(engine, '100%')).toEqual(['pct']);
     expect(await ids(engine, 'snake_case')).toEqual(['under']);
     expect(await ids(engine, '找不到的字')).toEqual([]);
+    engine.close();
+  });
+
+  it('點名過的話：搜提示裡的字不命中，搜使用者自己打的字仍然命中', async () => {
+    const directory = await dir();
+    const mention = { kind: 'subagent', name: 'reviewer' } as const;
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '請看這份差異有沒有問題', mention });
+    log.append('assistant/message', { message: reply('看完了') });
+    log.append('turn/end', {});
+    await writeThread(directory, 'mentioned', log.events);
+    const engine = search(directory);
+
+    expect(await ids(engine, '差異有沒有問題')).toEqual(['mentioned']);
+    for (const hint of ['委派工具', '子代理', 'subagent_type', 'system-reminder', 'reviewer']) {
+      expect(await ids(engine, hint), hint).toEqual([]);
+    }
     engine.close();
   });
 

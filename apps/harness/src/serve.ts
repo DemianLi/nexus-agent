@@ -830,6 +830,7 @@ async function startServer(
         feedback,
         workspaceChanges,
         permissionPresets,
+        subagentKinds,
         modelSelection: threadModelSelection,
         goals,
         workspaceRoot,
@@ -852,6 +853,8 @@ async function startServer(
         ...(workspaceChanges !== undefined && { workspaceChanges }),
         // 權限組合的目錄（#437）：沒圍堵就缺席，`permission.catalog` 回 `not_supported`。
         ...(permissionPresets !== undefined && { permissionPresets }),
+        // 可點名的子代理（#328 第 2 項）：`subagent.list` 與 `run.start` 的 `mention` 驗證讀這一份。
+        subagentKinds,
         // 每會話模型選擇（#723）：沒帶 `--live` 就缺席，`model.catalog`／`model.select` 回 `not_supported`。
         ...(threadModelSelection !== undefined && { modelSelection: threadModelSelection }),
         // 交付讀檔方法的錨（#452）：沒給 `--workspace` 就缺席，兩支方法一律 no-anchor。

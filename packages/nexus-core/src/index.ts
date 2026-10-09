@@ -498,6 +498,13 @@ export {
   sessionCheckpointPlugin,
 } from './session-checkpoint-policy.js';
 export type { MessageSource } from './message-source.js';
+export type { SubagentMentionRef } from './subagent-mention.js';
+export {
+  isMentionHintBlock,
+  mentionHintBlock,
+  mentionHintText,
+  mentionOfHintBlock,
+} from './subagent-mention.js';
 export {
   humanMessageForTurnStart,
   userContent,

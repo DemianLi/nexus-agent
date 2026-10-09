@@ -27,6 +27,7 @@
 
 import type { AttachmentRef } from './attachment-ref.js';
 import type { GoalId } from './goal.js';
+import type { SubagentMentionRef } from './subagent-mention.js';
 
 /**
  * 一個背景子代理怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：結算通知的原因，五種。
@@ -92,6 +93,11 @@ export interface QueuedInput {
    * 改文字（`updateQueue` 的 `edit`）時原樣保留。**格式 38 起才有**，不標 `ignorable`（見 `session-store.ts`）。
    */
   readonly attachments?: readonly AttachmentRef[];
+  /**
+   * 這一件點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）。沒有就整個不放這個 key。
+   * 改文字（`updateQueue` 的 `edit`）時原樣保留。**格式 42 起才有**，不標 `ignorable`（見 `session-store.ts`）。
+   */
+  readonly mention?: SubagentMentionRef;
 }
 
 /** 一次變動。形狀照 dsh 的 `agent/inbox/spliced`。 */

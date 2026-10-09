@@ -34,6 +34,8 @@ import type { BaseMessage } from '@langchain/core/messages';
 
 import { attachmentBlock } from './attachment-ref.js';
 import type { AttachmentRef, FileBlock, ImageBlock } from './attachment-ref.js';
+import { mentionHintBlock } from './subagent-mention.js';
+import type { SubagentMentionRef } from './subagent-mention.js';
 import type { SessionEventMap } from './session-log.js';
 
 /** 來源在 `additional_kwargs` 上的鍵。 */
@@ -101,15 +103,22 @@ export function turnStartSource(data: SessionEventMap['turn/start']): MessageSou
  *
  * 存進圖與日誌的是**參照**（{@link attachmentBlock}）；變成模型看得到的字或圖是組請求時的事（`apps/harness` 的
  * `attachment-projection.ts`）。
+ *
+ * **點名**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）不是參照，是一個固定的文字區塊，接在文字之後（`subagent-mention.ts`）；
+ * 沒有點名的訊息跟以前逐位元組相同。
  */
 export function userContent(
   text: string,
   attachments?: readonly AttachmentRef[],
+  mention?: SubagentMentionRef,
 ): string | (FileBlock | ImageBlock | { readonly type: 'text'; readonly text: string })[] {
-  if (attachments === undefined || attachments.length === 0) return text;
+  const hasAttachments = attachments !== undefined && attachments.length > 0;
+  if (!hasAttachments && mention === undefined) return text;
   return [
-    ...attachments.map(attachmentBlock),
+    ...(hasAttachments ? attachments.map(attachmentBlock) : []),
     ...(text === '' ? [] : [{ type: 'text' as const, text }]),
+    // 點名（#328 第 2 項）：接在使用者那句話**之後**，見 `subagent-mention.ts`。
+    ...(mention === undefined ? [] : [mentionHintBlock(mention)]),
   ];
 }
 
@@ -125,6 +134,7 @@ export function humanMessageForTurnStart(data: SessionEventMap['turn/start']): H
     content: userContent(
       data.text,
       data.kind === 'message' ? data.attachments : undefined,
+      data.kind === 'message' ? data.mention : undefined,
     ) as never,
     ...(source === undefined ? {} : { additional_kwargs: sourceKwargs(source) }),
   });

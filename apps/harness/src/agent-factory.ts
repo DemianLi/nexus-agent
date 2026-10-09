@@ -1122,6 +1122,14 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           : Object.assign(detach, { background: closeHost.control });
       },
       compileSubagent,
+      /**
+       * 使用者可以點名派的子代理（`subagent.list`，[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：**就是 `task` 實際收的那份**
+       * （fold 過的規格，`general-purpose` 在前、其餘依註冊順序），選單、`run.start` 的 `mention` 驗證、模型實際派得到的是同一份名單。
+       */
+      subagentKinds: (params.subagents ?? []).map(({ name, description }) => ({
+        name,
+        description,
+      })),
       async dispose() {
         // 遙測先收：後端很可能是某個 plugin 開的，plugin 的 disposer 一跑它就沒了，
         // 那時再送 `shutdown` 標記等於送進一個已經關掉的東西。
