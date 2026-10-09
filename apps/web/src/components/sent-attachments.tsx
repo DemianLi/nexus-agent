@@ -79,7 +79,7 @@ function OmittedNote({ name }: { readonly name: string }) {
       <PopoverTrigger
         aria-label={`${OMITTED_LABEL}：${name}，點開看原因`}
         data-testid="sent-attachment-omitted"
-        className="text-muted-foreground hover:text-foreground mt-0.5 flex min-h-6 max-w-full items-center gap-1 text-tip transition-colors duration-(--duration-quick)"
+        className="text-muted-foreground hover:text-foreground mt-0.5 flex min-h-6 max-w-full items-center gap-1 text-ui transition-colors duration-(--duration-quick)"
       >
         <EyeOff aria-hidden className="size-3 shrink-0" />
         <span className="truncate">{OMITTED_LABEL}</span>

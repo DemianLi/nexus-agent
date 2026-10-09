@@ -91,7 +91,7 @@ function Section({
 }) {
   return (
     <section className="space-y-1.5 px-2 py-3" data-testid={testId} aria-label={title}>
-      <h3 className="text-muted-foreground text-tip font-medium">{title}</h3>
+      <h3 className="text-muted-foreground text-ui font-medium">{title}</h3>
       {children}
     </section>
   );
@@ -276,7 +276,7 @@ function Distributions({ meter }: { meter: TokenMeterView }) {
   if (models.length === 0 && tools.length === 0) return null;
   return (
     <Collapsible data-testid="cost-distributions">
-      <RowTrigger fit="bare" className="text-muted-foreground justify-between text-tip lg:min-h-9">
+      <RowTrigger fit="bare" className="text-muted-foreground justify-between text-ui lg:min-h-9">
         依模型、依工具
         <Chevron />
       </RowTrigger>
@@ -329,7 +329,7 @@ function Calibers({ rows }: { rows: readonly FieldRow[] }) {
     <Collapsible data-testid="cost-calibers" className="mt-2">
       <RowTrigger
         fit="bare"
-        className="text-muted-foreground justify-between text-tip font-medium lg:min-h-9"
+        className="text-muted-foreground justify-between text-ui font-medium lg:min-h-9"
       >
         每個數字的口徑（{fields.size} 項）
         <Chevron />

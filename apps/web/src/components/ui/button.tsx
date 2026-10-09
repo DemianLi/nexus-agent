@@ -3,6 +3,7 @@
  * shadcn CLI 4.21.0 `shadcn add button --overwrite`。裝進來就是我們的原始碼，不靠重跑 `shadcn add` 更新。
  * 改過的地方（照原型 tag `proto-375-design-language`）：圓角 `rounded-full`、disabled `.6`、
  * default／outline／secondary／ghost 換成 primary-hover／chip 階梯與 `shadow-material`（邊緣畫在陰影裡）。
+ * `xs` 的字級是 `text-ui`（13）不是 `text-tip`：可點的字不小於 13（#1281，`COMPONENTS.md` 的字級規則）。
  */
 import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
@@ -26,7 +27,7 @@ const buttonVariants = cva(
       },
       size: {
         default: 'h-9 px-4 py-2 has-[>svg]:px-3',
-        xs: "h-6 gap-1 rounded-full px-2 text-tip has-[>svg]:px-1.5 [&_svg:not([class*='size-'])]:size-3",
+        xs: "h-6 gap-1 rounded-full px-2 text-ui has-[>svg]:px-1.5 [&_svg:not([class*='size-'])]:size-3",
         sm: 'h-8 gap-1.5 rounded-full px-3 has-[>svg]:px-2.5',
         lg: 'h-10 rounded-full px-6 has-[>svg]:px-4',
         icon: 'size-9',

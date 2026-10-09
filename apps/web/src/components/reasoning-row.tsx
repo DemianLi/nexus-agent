@@ -21,7 +21,7 @@ export function ReasoningRow({ text, running }: { text: string; running: boolean
   const summary = reasoningSummary(text, running);
   return (
     <Collapsible data-testid="reasoning-row" data-running={running || undefined}>
-      <RowTrigger fit="bare" className="text-muted-foreground text-tip">
+      <RowTrigger fit="bare" className="text-muted-foreground text-ui">
         <Brain aria-hidden className="size-4 shrink-0" />
         <span className={running ? 'text-shimmer shrink-0' : 'shrink-0'}>
           {running ? '思考中' : '思考過程'}

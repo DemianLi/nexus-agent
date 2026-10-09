@@ -40,7 +40,7 @@ export function ContextMeter({
         aria-label={contextMeterLabel(view)}
         data-testid="context-meter"
         data-warning={view.warning}
-        className={`hover:bg-chip-hover active:bg-chip-pressed flex h-11 shrink-0 items-center gap-1.5 rounded-full px-2 text-tip tabular-nums transition-colors duration-(--duration-quick) lg:h-9 ${tone}`}
+        className={`hover:bg-chip-hover active:bg-chip-pressed flex h-11 shrink-0 items-center gap-1.5 rounded-full px-2 text-ui tabular-nums transition-colors duration-(--duration-quick) lg:h-9 ${tone}`}
       >
         <svg aria-hidden viewBox="0 0 16 16" className="size-4 -rotate-90">
           <circle cx="8" cy="8" r={RADIUS} fill="none" strokeWidth="2" className="stroke-border" />

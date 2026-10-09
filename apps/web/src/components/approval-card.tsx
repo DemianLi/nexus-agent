@@ -95,7 +95,7 @@ export function ApprovalCard({
       <div className="flex flex-col gap-2" data-testid="approval-card">
         <p className="text-destructive px-3 text-body">{NO_DECISION_REASON}</p>
         <Collapsible>
-          <RowTrigger className="text-muted-foreground gap-2 text-tip lg:min-h-9">
+          <RowTrigger className="text-muted-foreground gap-2 text-ui lg:min-h-9">
             <Chevron />
             原始中斷內容
           </RowTrigger>

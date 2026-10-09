@@ -168,7 +168,7 @@ function FilePicker({
           type="button"
           variant="outline"
           size="sm"
-          className="max-w-full min-w-0 justify-between font-mono text-tip"
+          className="max-w-full min-w-0 justify-between font-mono text-ui"
           aria-label={`選擇要看的檔案，現在是 ${file.display}`}
           data-testid="review-file"
         >
@@ -193,7 +193,7 @@ function FilePicker({
                 className="gap-3"
               >
                 <Check className={cn('size-4', at === index ? 'opacity-100' : 'opacity-0')} />
-                <span className="min-w-0 flex-1 font-mono text-tip">
+                <span className="min-w-0 flex-1 font-mono text-ui">
                   <PathLabel display={entry.display} />
                 </span>
                 <FileCounts file={entry} />

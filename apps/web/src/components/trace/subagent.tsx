@@ -197,7 +197,7 @@ export function SubagentCalls({ runId }: { runId: string }) {
                   type="button"
                   variant="ghost"
                   size="sm"
-                  className="min-h-11 text-tip lg:min-h-8"
+                  className="min-h-11 text-ui lg:min-h-8"
                   onClick={() => pullSeq(digest.seq)}
                 >
                   {SUBAGENT_CALLS_RELOAD_LABEL}

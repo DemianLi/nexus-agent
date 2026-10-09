@@ -297,7 +297,7 @@ const Timeline = memo(function Timeline({
           <Button
             type="button"
             variant="ghost"
-            className="mb-3 min-h-11 w-full text-tip lg:min-h-9"
+            className="mb-3 min-h-11 w-full text-ui lg:min-h-9"
             data-testid="trace-more-turns"
             onClick={() => setShown((count) => count + TURN_PAGE)}
           >

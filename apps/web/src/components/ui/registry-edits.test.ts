@@ -57,6 +57,28 @@ describe('registry 檔的改動還在', () => {
     expect(source).toContain("from '@/lib/utils'");
   });
 
+  test('按鈕與下拉選單沒有小字，xs 按鈕是 text-ui（#1281：可點的字不小於 13）', () => {
+    for (const path of ['./button.tsx', './dropdown-menu.tsx']) {
+      expect(code(read(path)), path).not.toMatch(/text-(?:tip|micro)\b/);
+    }
+    expect(code(read('./button.tsx'))).toMatch(/xs: "h-6 [^"]*\btext-ui\b/);
+  });
+
+  test('側欄的群組標題與 sm 選單鈕、cmdk 的群組標題是 text-ui（#1281：標題與可點的字不小於 13）', () => {
+    const sidebar = code(read('./sidebar.tsx'));
+    expect(sidebar).toMatch(/data-sidebar="group-label"[\s\S]{0,200}\btext-ui\b/);
+    expect(sidebar).toContain("sm: 'h-7 text-ui'");
+    expect(sidebar).toContain("size === 'sm' && 'text-ui'");
+    expect(code(read('./command.tsx'))).toContain('[&_[cmdk-group-heading]]:text-ui');
+  });
+
+  test('附件 sm／xs 的檔名是 text-ui，說明那一行是 text-tip（#1281）', () => {
+    const source = code(read('./attachment.tsx'));
+    expect(source).toMatch(/sm: 'gap-2\.5 text-ui /);
+    expect(source).toMatch(/xs: 'gap-1\.5 rounded-lg text-ui /);
+    expect(source).toMatch(/data-slot="attachment-description"[\s\S]{0,200}\btext-tip\b/);
+  });
+
   test('alert-dialog 字級走階梯、按鈕走我們的 buttonVariants（#437）', () => {
     const source = code(read('./alert-dialog.tsx'));
     expect(source).not.toMatch(/\btext-(xs|sm|base|lg)\b/);

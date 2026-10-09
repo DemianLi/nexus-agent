@@ -36,6 +36,8 @@ describe('cn 認得我們的字級名', () => {
 
   test('同是字級的才互相取代：後面的贏，預設階與任意值也算', () => {
     expect(cn('text-tip', 'text-body')).toBe('text-body');
+    // Button 本體是 `text-body`，呼叫端給 `text-ui` 要蓋過去（#1281）。
+    expect(cn('text-body', 'text-ui')).toBe('text-ui');
     expect(cn('text-sm', 'text-tip')).toBe('text-tip');
     expect(cn('text-body', 'lg:text-tip')).toBe('text-body lg:text-tip');
   });

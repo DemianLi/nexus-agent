@@ -64,7 +64,7 @@ export function Line({
 /** 不能展開的一列（決定、收尾、沒有摘要可看的壓縮之類）。 */
 export function StaticLine(props: Parameters<typeof Line>[0]) {
   return (
-    <p className="flex min-h-11 w-full min-w-0 items-center gap-2 px-2 text-tip">
+    <p className="flex min-h-11 w-full min-w-0 items-center gap-2 px-2 text-ui">
       <Line {...props} />
     </p>
   );
@@ -79,7 +79,7 @@ export function ExpandableLine({
 }) {
   return (
     <Collapsible>
-      <RowTrigger fit="bare" className="text-tip">
+      <RowTrigger fit="bare" className="text-ui">
         <Line {...line} />
         <Chevron className="text-muted-foreground ml-auto" />
       </RowTrigger>
@@ -102,7 +102,7 @@ export function SnapshotBlock({
 }) {
   return (
     <Collapsible className="mt-1" data-testid={testId}>
-      <RowTrigger fit="bare" className="text-tip">
+      <RowTrigger fit="bare" className="text-ui">
         <span className="min-w-0 truncate font-medium">{title}</span>
         <Chevron className="text-muted-foreground ml-auto" />
       </RowTrigger>
