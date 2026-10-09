@@ -239,7 +239,12 @@ const INDEX: readonly InterceptionRow[] = [
       '**`approval/request` 是第十條縫，不在 #190 那九個時刻名裡**，所以它沒有自己的列；' +
       '記在這一列是因為第 4 格是我們這側**唯一的提問者**' +
       '（例如 `packages/nexus-plugin-submit-record/src/index.ts` 的 `approvals.gate`，`submit_record` 回 `ask`；' +
-      'plan-mode 以前也掛一位，#652 照 dsh 改走提問通道，不在這裡了）。',
+      'plan-mode 以前也掛一位，#652 照 dsh 改走提問通道，不在這裡了）。' +
+      '**這個事件已經有第一位監聽者（#1272，S1b）：plan-mode 的 `exit_plan_mode` 模式外拒絕**，從它 middleware 的 `wrapToolCall` ' +
+      '搬到 `tools/pre-execute` 上，所以它不再是第 6 格 `tools/execute` 的佔用者。它**不列進這一列的 `occupants`**：' +
+      '那份清單放的是這一格 dsh 的佔用者（核准）還在哪些 middleware 上，而 **dsh 沒有這一層**——dsh 只在 `exit_plan_mode` 的工具本體裡檢查' +
+      '（`execute` 拋 `is only available in plan mode`），這是 nexus 在本體檢查外面多加的一層，搬載體保留它的行為' +
+      '（拒絕在核准閘門之前，掛全攔的核准閘門時模型仍看到「不在計劃模式」）。是否拿掉這一層、只留本體檢查是行為決定，等 demian。',
     recordDelta:
       '**核准的問與答各有一顆事件（#1029，翻了 #220 的「認帳不做」）。** 照 dsh 每次 request 追加 ' +
       '`approval/asked` ＋ `approval/decided`（`user-approval/src/types.ts:44-58`，log-only audit，帶 id／' +
@@ -267,7 +272,6 @@ const INDEX: readonly InterceptionRow[] = [
       'packages/nexus-core/src/fold.ts',
       'packages/nexus-core/src/invalid-tool-args.ts',
       'packages/nexus-core/src/turn-cancel.ts',
-      'packages/nexus-plugin-plan-mode/src/index.ts',
       'packages/nexus-core/src/output-schema.ts',
       // 檔案工具的失敗標成錯誤（#293）：dsh 在工具本體裡拋，我們貼著本體換狀態。
       'packages/nexus-core/src/fs-tool-errors.ts',
@@ -306,7 +310,7 @@ const INDEX: readonly InterceptionRow[] = [
 const EXPECTED_ROWS = 5;
 
 /** 佔用位址的總數（列可能共用檔案，第 6 與第 7 格就共用 `output-schema.ts`）。 */
-const EXPECTED_SITES = 15;
+const EXPECTED_SITES = 14;
 
 /**
  * 第 2 列的承重事實：全樹的產品程式碼裡，`beforeAgent:` 的實作**恰好就是這一列列出的那些**。
