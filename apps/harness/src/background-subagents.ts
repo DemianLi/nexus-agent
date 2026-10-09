@@ -54,6 +54,7 @@ import { randomUUID } from 'node:crypto';
 import { HumanMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
+  ARCHIVE_GATE_CONFIG_KEY,
   BACKGROUND_SESSION_CONFIG_KEY,
   STEP_INBOX_CONFIG_KEY,
   TURN_CANCEL_CONFIG_KEY,
@@ -161,6 +162,12 @@ export interface BackgroundParentPort {
   readonly onMessage?: (message: BackgroundAgentMessage) => void;
   /** 背景子代理的現況變了（#867）：整份，不是差量。 */
   readonly onStatus?: (items: readonly BackgroundSubagentStatus[]) => void;
+  /**
+   * 主對話的 thread 現在是不是封存了（#633）。**每一輪的每一次模型呼叫之前都問**（同 dsh `ArchivedSessionGate`
+   * 沿 lineage 往上看 root）：是就不呼叫模型，這一輪以 `turn/end {reason:{kind:'blocked'}}` 收、結算原因是 `refusal`。
+   * 沒給就從不擋。
+   */
+  readonly isArchived?: () => boolean;
 }
 
 /** 一個背景子代理此刻的狀態（#867），見 {@link BackgroundSubagentHost.statuses}。 */
@@ -170,8 +177,8 @@ export interface BackgroundSubagentStatus {
 }
 
 /**
- * 一行摘要，逐字照 dsh 的 `settlementSummary`。dsh 還有一支 `refusal`（`declined the task`，pre-step 的 hook 拒絕丟掉
- * 已領走的輸入）：我們沒有那條路，所以沒有這一格。
+ * 一行摘要，逐字照 dsh 的 `settlementSummary`（`subagent/src/continuation-messages.ts`）。`refusal`（`declined the task`）是
+ * pre-step 拒絕丟掉已領走的輸入：我們的生產者是封存的會話把背景子代理的輪擋下（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
  */
 export function settlementSummary(runId: string, reason: BackgroundStopReason): string {
   const subject = `Background subagent ${runId}`;
@@ -184,6 +191,8 @@ export function settlementSummary(runId: string, reason: BackgroundStopReason): 
       return `${subject} ran out of room before it finished.`;
     case 'error':
       return `${subject} failed before it finished.`;
+    case 'refusal':
+      return `${subject} declined the task.`;
   }
 }
 
@@ -258,6 +267,8 @@ export interface BackgroundSubagentHostOptions {
    * 它拋錯只講一聲（`warn`），不影響輪次。
    */
   readonly onStatus?: (items: readonly BackgroundSubagentStatus[]) => void;
+  /** {@link BackgroundParentPort.isArchived}。 */
+  readonly isArchived?: () => boolean;
 }
 
 /** {@link BackgroundSubagentError} 的分類：wire 層照它回不同的錯誤碼，不靠比對訊息。 */
@@ -361,6 +372,8 @@ interface RunningRound {
   readonly outcome: Promise<BackgroundRoundOutcome>;
   readonly steers: Steer[];
   closed: boolean;
+  /** 封存閘門擋下過這一輪的模型呼叫（#633）：這一輪以 `blocked` 收、結算原因是 `refusal`。 */
+  blocked: boolean;
 }
 
 /** 一句話在子代理日誌裡開一輪時的 `turn/start`：人說的是 `message`，agent 寫的是 `agent-message`（記寄件人）。 */
@@ -407,6 +420,7 @@ export class BackgroundSubagentHost {
   readonly #enter: NonNullable<BackgroundSubagentHostOptions['enter']>;
   readonly #warn: ((message: string) => void) | undefined;
   readonly #onSettled: BackgroundSubagentHostOptions['onSettled'];
+  readonly #isArchived: (() => boolean) | undefined;
   readonly #onMessage: BackgroundSubagentHostOptions['onMessage'];
   readonly #onStatus: BackgroundSubagentHostOptions['onStatus'];
   /** 上一次送出去的現況（序列化），沒變就不重送。起頭是 `undefined`：建構完那一刻一定送一份（可以是空的）。 */
@@ -439,6 +453,7 @@ export class BackgroundSubagentHost {
     // **出口綁在建構這一刻的非同步環境**：`onMessage` 是從子代理的工具呼叫裡被叫的，而出口會排程主對話的一輪——
     // 不綁的話那一輪繼承子代理的 LangGraph／日誌路由環境，主對話的回覆就記到子代理的日誌名下（#849 的 live 實跑抓到）。
     // `onSettled` 本來就從迴圈的環境叫，一起綁只是讓兩個出口的規矩一致。
+    this.#isArchived = options.isArchived;
     this.#onSettled =
       options.onSettled === undefined ? undefined : AsyncResource.bind(options.onSettled);
     this.#onMessage =
@@ -923,23 +938,37 @@ export class BackgroundSubagentHost {
     let log: SessionLog | undefined;
     // 這一輪自己的中止控制器：`interrupt` 只舉它。跑完（不論怎麼結束）就丟。
     const controller = new AbortController();
-    const running: RunningRound = { controller, outcome: job.outcome, steers: [], closed: false };
+    const running: RunningRound = {
+      controller,
+      outcome: job.outcome,
+      steers: [],
+      closed: false,
+      blocked: false,
+    };
     this.#running.set(job.runId, running);
     try {
       log = this.#sessions.open({ kind: 'subagent', runId: job.runId });
       log.append('turn/start', job.turn);
       await this.#enter(log, () => this.#drive(log!, job, running));
       // 被父代理中斷的那一輪收成 aborted/parent；沒被中斷就是正常結束。
+      // 中止先判（閘門本身也讓中止優先，見 `turn-cancel.ts`），所以 `blocked` 與 `aborted` 不會同時成立。
+      const blocked = running.blocked && !controller.signal.aborted;
       log.append(
         'turn/end',
-        controller.signal.aborted ? { reason: { kind: 'aborted', cause: { kind: 'parent' } } } : {},
+        controller.signal.aborted
+          ? { reason: { kind: 'aborted', cause: { kind: 'parent' } } }
+          : blocked
+            ? { reason: { kind: 'blocked' } }
+            : {},
       );
       // 中止先判，蓋過輸出上限，同 dsh（`agent-loop/src/agent.ts:349-355`）。
       stop = controller.signal.aborted
         ? 'aborted'
-        : turnReachedMaxTokens(log.events)
-          ? 'max-tokens'
-          : 'completed';
+        : blocked
+          ? 'refusal'
+          : turnReachedMaxTokens(log.events)
+            ? 'max-tokens'
+            : 'completed';
       outcome = { ok: true };
     } catch (error) {
       stop = 'error';
@@ -1046,6 +1075,13 @@ export class BackgroundSubagentHost {
           [BACKGROUND_SESSION_CONFIG_KEY]: job.runId,
           [TURN_CANCEL_CONFIG_KEY]: cancel,
           [STEP_INBOX_CONFIG_KEY]: this.#stepInboxFor(log, round),
+          ...(this.#isArchived !== undefined && {
+            [ARCHIVE_GATE_CONFIG_KEY]: () => {
+              const archived = this.#isArchived!();
+              if (archived) round.blocked = true;
+              return archived;
+            },
+          }),
         },
       });
       // 在第一顆封包之前：投影裡的 promise 一建立就可能被 reject（#346）。

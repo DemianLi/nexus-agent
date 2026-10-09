@@ -25,7 +25,7 @@ export const QUEUE_GONE_TEXT = '這一則可能已經開始跑了';
 
 /**
  * 背景子代理結算通知在畫面上的那一句（#851、#884）。伺服器排進來的文字是給模型的英文，不是人說的話，畫面不照抄、
- * 也不去解析它：配字靠線上帶的結算原因（`reason`），哪個子代理留在日誌。四種原因各一句，措辭跟同一件事在別處的說法
+ * 也不去解析它：配字靠線上帶的結算原因（`reason`），哪個子代理留在日誌。五種原因各一句，措辭跟同一件事在別處的說法
  * 一致：被停止同「（已停止）」、超出上限同 `max-tokens-view.ts` 的「已達輸出上限」。
  * 鍵用 `satisfies Record<WireSettleReason, …>`：wire 多一種原因，這裡編不過。
  */
@@ -34,6 +34,7 @@ export const SETTLED_NOTICE_TEXT = {
   aborted: '背景子代理已被停止',
   'max-tokens': '背景子代理已達輸出上限，沒寫完',
   error: '背景子代理失敗了',
+  refusal: '背景子代理沒有開工（會話已封存）',
 } as const satisfies Record<WireSettleReason, string>;
 
 /**

@@ -2082,6 +2082,11 @@ interface LifecycleData {
   readonly aborted?: boolean;
   /** 這一輪撞到了輸出上限。同 `aborted` 由 pump 補，見 {@link AiEntry.maxTokens}。 */
   readonly maxTokens?: boolean;
+  /**
+   * 這一輪被準入閘門擋下（封存的會話，[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：一個模型請求都沒發。
+   * 同 `aborted` 由 pump 補，帶在 `completed` 上；折疊照一輪正常收尾處理，沒有回覆、沒有錯誤。
+   */
+  readonly blocked?: boolean;
 }
 
 /**

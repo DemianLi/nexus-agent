@@ -553,6 +553,8 @@ function endOf(reason: unknown): TrajectoryEnd {
       return 'max-tokens';
     case 'interrupted':
       return 'interrupted';
+    case 'blocked':
+      return 'blocked';
     default:
       return 'completed';
   }

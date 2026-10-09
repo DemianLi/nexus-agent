@@ -152,11 +152,12 @@ describe('不是人排的那一類（#861）', () => {
 });
 
 describe('settledNoticeText（#884）', () => {
-  it('四種原因各一句，措辭釘死：不是都寫「已完成」', () => {
+  it('五種原因各一句，措辭釘死：不是都寫「已完成」', () => {
     expect(settledNoticeText('completed')).toBe('背景子代理已完成');
     expect(settledNoticeText('aborted')).toBe('背景子代理已被停止');
     expect(settledNoticeText('max-tokens')).toBe('背景子代理已達輸出上限，沒寫完');
     expect(settledNoticeText('error')).toBe('背景子代理失敗了');
+    expect(settledNoticeText('refusal')).toBe('背景子代理沒有開工（會話已封存）');
   });
 
   it('wire 認得的每一種原因都有自己的一句，而且四句互不相同、都不是中性那句', () => {

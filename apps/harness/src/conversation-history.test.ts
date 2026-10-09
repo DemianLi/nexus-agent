@@ -308,6 +308,23 @@ describe('日誌 → 畫面', () => {
     expect(replies.map((entry) => entry.kind === 'ai' && entry.maxTokens)).toEqual([true]);
   });
 
+  /** 封存的會話（#633）：一個請求都沒發。話還在畫面上（`turn/start` 帶文字），也不是失敗，收尾 frame 補 `blocked`。 */
+  it('被準入閘門擋下（封存）：話留著、狀態是就緒、不是失敗；收尾 frame 帶 blocked', () => {
+    const events = log(human('封存之後的話'), {
+      type: 'turn/end',
+      data: { reason: { kind: 'blocked' } },
+    });
+    const state = screen(events);
+    expect(state.status).toBe('idle');
+    expect(state.error).toBeUndefined();
+    expect(state.entries.map(line)).toEqual(['human:封存之後的話']);
+    const frames = historyFrames(events, DEFAULT_TOOL_TEXT_MAX_BYTES);
+    const closing = frames
+      .filter((frame) => frame.method === 'lifecycle')
+      .map((frame) => frame.params.data);
+    expect(closing.at(-1)).toMatchObject({ event: 'completed', blocked: true });
+  });
+
   it('一輪失敗：狀態是失敗，下一輪跑完就回到就緒', () => {
     const failed = log(human('跑'), { type: 'turn/failed', data: { message: '供應商掛了' } });
     expect(screen(failed).status).toBe('failed');

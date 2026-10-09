@@ -1045,6 +1045,10 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
             pump.receiveAgentMessage({ text: message.text, senderSessionId: message.sessionId }),
           // 現況變了（#867）：整份送下行，新接上的下行補送最後一份。
           onStatus: (items) => pump.notifySubagentStatus(items),
+          // 背景子代理的每一步也過封存閘門（#633，dsh 沿 lineage 看 root）。
+          ...(options.threadOrganization !== undefined && {
+            isArchived: () => options.threadOrganization!.isArchived(threadId),
+          }),
         });
         // **接在最後，理由同 `cli.ts`**：上面那個口接的三件事是觀察者，落盤不改變任何人看得到什麼，
         // 所以順序在功能上沒有差別；排最後是為了讓讀的人看到的因果跟實際一致。
@@ -2027,8 +2031,6 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         }
         case 'thread.unarchive':
           await organization.unarchive(threadId);
-          // 封存期間不排的目標續行補問一次；這條 thread 沒建過就沒有東西要補。
-          ready.get(threadId)?.pump.liftArchive();
           return json(
             successResponse(id, {
               ok: true,

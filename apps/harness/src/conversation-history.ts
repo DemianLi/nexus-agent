@@ -1087,6 +1087,9 @@ export function historyFrames(
         } else if (event.data.reason?.kind === 'max-tokens') {
           // 撞到輸出上限（#433）：同即時那條，pump 在收尾 frame 上補 `maxTokens`。
           close(event.time, { event: 'completed', maxTokens: true });
+        } else if (event.data.reason?.kind === 'blocked') {
+          // 被準入閘門擋下（#633，封存的會話）：一個請求都沒發，也不是失敗。同即時那條，收尾 frame 補 `blocked`。
+          close(event.time, { event: 'completed', blocked: true });
         } else if (event.data.reason?.kind === 'interrupted') {
           // 續接補寫的收尾（#721）：那一輪死了，不是停在核准點等人——死前就算記過 `interrupt/raised`
           // 也不能畫成「等人回覆」。畫面與舊檔在 end-seed 收掉的那一條一致。

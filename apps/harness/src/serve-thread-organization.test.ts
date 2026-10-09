@@ -57,10 +57,11 @@ async function readEvents(root: string, threadId: string): Promise<readonly Sess
     .map((line) => JSON.parse(line) as SessionEvent);
 }
 
-async function canceledSplices(root: string, threadId: string): Promise<number> {
+async function blockedEnds(root: string, threadId: string): Promise<number> {
   return (await readEvents(root, threadId)).filter(
     (event) =>
-      event.type === 'inbox/spliced' && (event.data as { outcome?: string }).outcome === 'canceled',
+      event.type === 'turn/end' &&
+      (event.data as { reason?: { kind?: string } }).reason?.kind === 'blocked',
   ).length;
 }
 
@@ -160,7 +161,7 @@ describe('serve 上的釘選與封存', () => {
     expect(await sets(second)).toEqual({ pinned: ['alpha'], archived: [] });
   });
 
-  it('封存的會話冷啟動也不跑模型：新的話被丟掉、日誌沒有新的 turn/start；取消封存就恢復', async () => {
+  it('封存的會話冷啟動也不跑模型：新的話開一輪以 blocked 收、模型看不到它；取消封存就恢復', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-serve-org-gate-'));
     const first = await start(root);
     await driveTurn(first, 'alpha', '先講一句');
@@ -174,11 +175,15 @@ describe('serve 上的釘選與封存', () => {
     const client = await serveClient(second);
     const events = await client.openEvents('alpha');
     await client.runStart('alpha', '封存之後的話');
-    // 正向訊號：那句話被丟掉並記成 canceled——等到它出現，「沒有新的 turn/start」才是丟掉了，而不是還沒輪到。
-    await until(async () => (await canceledSplices(root, 'alpha')) === 1);
+    // 正向訊號：日誌上出現 blocked 的 turn/end——等到它，之後才數「模型沒被叫」是真的擋下，而不是還沒輪到。
+    await until(async () => (await blockedEnds(root, 'alpha')) === 1);
     await events.return?.(undefined);
     await stop(second);
-    expect(await turnStarts(root, 'alpha')).toBe(1);
+    expect(await turnStarts(root, 'alpha')).toBe(2);
+    expect(await blockedEnds(root, 'alpha')).toBe(1);
+    expect((await readEvents(root, 'alpha')).some((event) => event.type === 'turn/failed')).toBe(
+      false,
+    );
 
     const third = await start(root);
     expect(await (await serveClient(third)).threadUnarchive('alpha')).toMatchObject({
@@ -186,6 +191,7 @@ describe('serve 上的釘選與封存', () => {
     });
     await driveTurn(third, 'alpha', '恢復之後的話');
     await stop(third);
-    expect(await turnStarts(root, 'alpha')).toBe(2);
+    expect(await turnStarts(root, 'alpha')).toBe(3);
+    expect(await blockedEnds(root, 'alpha')).toBe(1);
   });
 });

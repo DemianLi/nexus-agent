@@ -396,6 +396,13 @@ export {
   SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME,
   toolKept,
 } from './subagent-tool-filter.js';
+export type { ArchiveGate } from './archive-gate.js';
+export {
+  ARCHIVE_GATE_CONFIG_KEY,
+  archiveGateOf,
+  isTurnBlocked,
+  TurnBlockedError,
+} from './archive-gate.js';
 export type { StepInbox } from './step-inbox.js';
 export {
   createStepInboxMiddleware,

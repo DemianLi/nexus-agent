@@ -42,6 +42,13 @@ async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   }
 }
 
+/** 日誌上每一顆 `turn/end` 的收尾種類（沒帶 reason ＝ `done`）。 */
+function endKinds(log: SessionLog): string[] {
+  return log.events
+    .filter((event) => event.type === 'turn/end')
+    .map((event) => (event.data as { reason?: { kind: string } }).reason?.kind ?? 'done');
+}
+
 async function settle(ms = 60): Promise<void> {
   await new Promise((resolve) => setTimeout(resolve, ms));
 }
@@ -445,12 +452,48 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
       reason: { kind: 'aborted', cause: { kind: 'parent' } },
     });
     expect(rigged.workerModel.prompts).toHaveLength(1);
-    // 子代理收尾會通知主對話（結算喚醒）：封存的會話不為它開輪，根模型仍只被叫過兩次。
-    await settle(250);
+    // 子代理收尾會通知主對話（結算喚醒）：喚醒開出來的那一輪被閘門擋下（blocked），根模型仍只被叫過兩次。
+    await until(() => endKinds(rigged.sessions().root).includes('blocked'));
     expect(rigged.rootModel.prompts).toHaveLength(2);
   }, 20000);
 
-  it('閒著的 thread 直接封存；封存之後送話：不開輪、模型一次都不再被叫；取消封存之後恢復', async () => {
+  it('背景子代理的每一步也過閘門（血統）：封存落在它兩步之間，下一步不叫模型，那一輪以 blocked 收、結算原因是 refusal', async () => {
+    const rigged = await assemble(
+      [delegate, { content: '派出去了，等通知。' }],
+      [gateCall('w-gate'), { content: '不該被讀到。' }],
+    );
+    await rigged.client.runStart('t1', '委派');
+    await until(() => rigged.entered.gate === 1);
+    await until(() => rigged.rootModel.prompts.length >= 2);
+    const child = rigged
+      .sessions()
+      .list()
+      .find((entry) => entry.address.kind === 'subagent')!;
+    // 直接動集合（不經 wire 的活動檢查）：模擬封存剛好落在子代理兩次模型呼叫之間。
+    await rigged.threadOrganization.archive('t1', {
+      known: () => Promise.resolve(true),
+      activity: () => [],
+      stop: () => Promise.resolve(),
+    });
+    rigged.release();
+    await until(() => endKinds(child.log).length === 1);
+    expect(endKinds(child.log)).toEqual(['blocked']);
+    expect(child.log.events.some((event) => event.type === 'turn/failed')).toBe(false);
+    expect(rigged.workerModel.prompts).toHaveLength(1);
+    // 結算通知照送，原因是 refusal；根這邊喚醒的那一輪同樣被擋下。
+    await until(() => endKinds(rigged.sessions().root).includes('blocked'));
+    expect(rigged.rootModel.prompts).toHaveLength(2);
+    const settled = rigged
+      .sessions()
+      .root.events.find(
+        (event) =>
+          event.type === 'turn/start' &&
+          (event.data as { kind: string }).kind === 'subagent-settled',
+      );
+    expect((settled?.data as { reason?: string } | undefined)?.reason).toBe('refusal');
+  }, 20000);
+
+  it('閒著的 thread 直接封存；封存之後送話：開一輪以 blocked 收、模型一次都不再被叫；取消封存之後恢復', async () => {
     const rigged = await assemble([{ content: '第一輪。' }, { content: '恢復了。' }]);
     await rigged.client.runStart('t1', '第一句');
     await until(() => rigged.rootModel.prompts.length === 1);
@@ -458,8 +501,14 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
 
     expect(await rigged.client.threadArchive('t1')).toMatchObject({ result: { ok: true } });
     await rigged.client.runStart('t1', '封存之後的話');
-    await settle(200);
+    await until(() => endKinds(rigged.sessions().root).includes('blocked'));
     expect(rigged.rootModel.prompts).toHaveLength(1);
+    expect(
+      rigged
+        .sessions()
+        .root.events.filter((event) => event.type === 'turn/start')
+        .map((event) => (event.data as { text?: string }).text),
+    ).toEqual(['第一句', '封存之後的話']);
 
     expect(await rigged.client.threadUnarchive('t1')).toMatchObject({ result: { ok: true } });
     await rigged.client.runStart('t1', '恢復之後的話');
@@ -468,7 +517,7 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
       .map((message) => message.text)
       .join('\n');
     expect(lastPrompt).toContain('恢復之後的話');
-    // 封存期間那句話是被丟掉的，不是排著等恢復。
+    // 封存期間那句話被擋下、沒進對話（照 dsh）：模型看不到它。
     expect(lastPrompt).not.toContain('封存之後的話');
   }, 20000);
 
@@ -493,20 +542,26 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
     rigged.release();
   }, 20000);
 
-  it('目標續行：封存期間不排；經 wire 取消封存之後第 1 輪自己開始（handler 補問排程器）', async () => {
+  it('目標續行：封存期間輪被擋下，目標轉 blocked；取消封存不會自己續行（要 /goal resume）', async () => {
     const rigged = await assemble([{ content: '續行一輪。' }], undefined, { withGoal: true });
     await rigged.client.slashList('t1'); // 建出 thread
     await until(() => rigged.sessions() !== undefined);
     expect(await rigged.client.threadArchive('t1')).toMatchObject({ result: { ok: true } });
     const root = rigged.sessions().root;
     rigged.goals!.serviceFor(root)?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
-    await settle(250);
+    await until(() => endKinds(root).includes('blocked'));
     expect(rigged.rootModel.prompts).toHaveLength(0);
-    expect(root.events.filter((event) => event.type === 'turn/start')).toHaveLength(0);
+    expect(rigged.goals!.serviceFor(root)?.get()).toMatchObject({
+      phase: 'blocked',
+      blockedReason: { code: 'prompt-rejected' },
+    });
 
     expect(await rigged.client.threadUnarchive('t1')).toMatchObject({ result: { ok: true } });
-    await until(() => rigged.rootModel.prompts.length === 1);
-    const starts = root.events.filter((event) => event.type === 'turn/start');
-    expect(starts.map((event) => (event.data as { kind: string }).kind)).toEqual(['goal']);
+    await settle(250);
+    expect(rigged.rootModel.prompts).toHaveLength(0);
+    expect(rigged.goals!.serviceFor(root)?.get()).toMatchObject({
+      phase: 'blocked',
+      blockedReason: { code: 'prompt-rejected' },
+    });
   }, 20000);
 });

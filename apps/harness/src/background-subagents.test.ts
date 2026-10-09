@@ -1875,6 +1875,14 @@ describe('close 中止進行中的輪（#841）', () => {
     expect(settled.map((each) => each.summary)).toEqual([settlementSummary(runId, 'aborted')]);
   });
 
+  it('settlementSummary：五種原因各一句，refusal 逐字照 dsh', () => {
+    expect(settlementSummary('r1', 'refusal')).toBe('Background subagent r1 declined the task.');
+    const texts = (['completed', 'aborted', 'max-tokens', 'error', 'refusal'] as const).map(
+      (reason) => settlementSummary('r1', reason),
+    );
+    expect(new Set(texts).size).toBe(5);
+  });
+
   it('剛派出去、迴圈還沒撿起來就關閉：這一輪不開跑，交回沒跑成', async () => {
     const { host, started } = setup();
     const { outcome } = host.start({ subagent: 'w', text: '還沒開始' });

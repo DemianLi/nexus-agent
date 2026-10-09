@@ -194,6 +194,7 @@ export class BackgroundDelegation {
       ...(port.onSettled !== undefined && { onSettled: port.onSettled }),
       ...(port.onMessage !== undefined && { onMessage: port.onMessage }),
       ...(port.onStatus !== undefined && { onStatus: port.onStatus }),
+      ...(port.isArchived !== undefined && { isArchived: port.isArchived }),
       ...(this.#options.maxActive !== undefined && { maxActive: this.#options.maxActive }),
       ...(sandbox !== undefined && {
         enter: <T>(log: SessionLog, run: () => T): T => sandbox.delegateFromLog(log, run),

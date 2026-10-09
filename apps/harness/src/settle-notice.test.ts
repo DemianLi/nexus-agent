@@ -504,7 +504,7 @@ describe('通知長成畫面上的一格，即時與歷史一致（#851）', () 
 });
 
 describe('通知帶上怎麼收的，即時、排隊中與歷史一致（#884）', () => {
-  const REASONS = ['completed', 'aborted', 'max-tokens', 'error'] as const;
+  const REASONS = ['completed', 'aborted', 'max-tokens', 'error', 'refusal'] as const;
   const noticeReasons = (frames: readonly Event[]) =>
     reduceAll(emptyConversation(), frames).entries.flatMap((entry) =>
       entry.kind === 'notice' ? [entry.reason ?? 'none'] : [],
@@ -605,6 +605,7 @@ describe('通知帶上怎麼收的，即時、排隊中與歷史一致（#884）
       'aborted',
       'max-tokens',
       'error',
+      'refusal',
     ] satisfies readonly SubagentSettleReason[];
     expect([...fromWire].sort()).toEqual([...fromCore].sort());
     const exhaustive = (reason: SubagentSettleReason): WireSettleReason => reason;
