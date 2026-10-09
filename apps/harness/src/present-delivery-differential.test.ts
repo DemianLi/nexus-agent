@@ -32,6 +32,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createCliAgent } from './assembly-root.js';
 import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
+import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
 const shipped = await shippedPlugins();
@@ -46,6 +47,34 @@ const WORKER: PluginEntry = {
     name: 'worker-source',
     apply(registry) {
       registry.subagents.register({ name: 'worker', description: '幹活的。' });
+    },
+  },
+};
+
+/**
+ * 背景子代理：自己編一張圖、由圖外的迴圈拉起來（#738），要確認它的工具呼叫也走得到 `tools/result` 的派發。
+ * 它自己的模型腳本：叫一次 `present`，再收工。
+ */
+const BACKGROUND_WORKER: PluginEntry = {
+  plugin: {
+    name: 'background-worker-source',
+    apply(registry) {
+      registry.subagents.register({
+        name: 'worker',
+        description: '幹活的。',
+        systemPrompt: '你是 worker。',
+        model: new ScriptedChatModel({
+          turns: [
+            {
+              content: '交付。',
+              toolCalls: [
+                { id: 'bg-p1', name: PRESENT_TOOL_NAME, args: { files: [{ path: 'report.md' }] } },
+              ],
+            },
+            { content: '做完了。' },
+          ],
+        }) as never,
+      });
     },
   },
 };
@@ -99,7 +128,7 @@ interface Seen {
 
 async function run(
   turns: readonly ScriptedTurn[],
-  options: { files?: readonly string[]; extra?: PluginEntry[] } = {},
+  options: { files?: readonly string[]; extra?: PluginEntry[]; background?: boolean } = {},
 ): Promise<Seen> {
   const root = await mkdtemp(join(tmpdir(), 'nexus-present-diff-'));
   roots.push(root);
@@ -107,8 +136,15 @@ async function run(
     await writeFile(join(root, name), `# ${name}`);
   }
   const built = await createCliAgent(
-    { live: false, workspace: root },
-    withScriptedModel([...shipped, WORKER, ...(options.extra ?? [])], turns),
+    {
+      live: false,
+      workspace: root,
+      ...(options.background === true && { backgroundSubagents: { maxActive: 2 } }),
+    },
+    withScriptedModel(
+      [...shipped, ...(options.background === true ? [] : [WORKER]), ...(options.extra ?? [])],
+      turns,
+    ),
     root,
     {},
   );
@@ -118,7 +154,22 @@ async function run(
     await built.agent.invoke(toAgentInvocation('交付吧。'), {
       configurable: { thread_id: 'present-diff' },
     });
+    if (options.background === true) {
+      // 背景子代理在圖外跑：等它那一份日誌上出現 present 的結果（最多 8 秒）。
+      const settled = () =>
+        sessions
+          .list()
+          .some(
+            (entry) =>
+              entry.address.kind === 'subagent' &&
+              entry.log.events.some((event) => event.type === 'tool/result'),
+          );
+      for (let waited = 0; !settled() && waited < 8000; waited += 10) {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+    }
     // 交付排在下一個 microtask，這裡讓尾巴落定。
+    await new Promise((resolve) => setImmediate(resolve));
     await new Promise((resolve) => setImmediate(resolve));
     return {
       root: trail(sessions.root.events),
@@ -218,6 +269,26 @@ describe('present 交付寫入：日誌逐筆相同', () => {
     ]);
     expect(seen.root).toEqual(EXPECTED_ROOT_DUP);
   });
+
+  it('背景子代理叫 present：交付寫進它自己那份（serve 預設就是背景）', async () => {
+    const seen = await run(
+      [
+        {
+          content: '委派。',
+          toolCalls: [
+            {
+              id: 'bg-task',
+              name: 'subagent',
+              args: { description: '交付', subagent_type: 'worker', run_in_background: true },
+            },
+          ],
+        },
+        { content: '根收尾。' },
+      ],
+      { extra: [BACKGROUND_WORKER], background: true },
+    );
+    expect(seen.subagents).toEqual(EXPECTED_BACKGROUND);
+  });
 });
 
 /**
@@ -246,4 +317,12 @@ const EXPECTED_ROOT_DUP: unknown[] = [
   ['call', 'dup', PRESENT_TOOL_NAME],
   ['result', 'dup', false],
   ['presented', 'dup', 'notes.md'],
+];
+
+const EXPECTED_BACKGROUND: unknown[][] = [
+  [
+    ['call', 'bg-p1', PRESENT_TOOL_NAME],
+    ['result', 'bg-p1', false],
+    ['presented', 'bg-p1', 'report.md'],
+  ],
 ];
