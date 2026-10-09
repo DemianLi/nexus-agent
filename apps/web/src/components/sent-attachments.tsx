@@ -6,10 +6,14 @@
  * 讀回來換成縮圖，點縮圖開原圖；**讀不到（沒有提供者、沒有附件儲存、日誌沒引用、網路壞了）就留著標籤**，不畫壞圖。
  * 檔案沒有縮圖，一律是標籤（讀圖路由只給圖）。
  * 一排會折行、單張標籤截斷，所以 375 寬也不撐開頁面。
+ *
+ * **模型已看不到的那幾件**（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）：縮圖照畫、照樣點得開原圖，角落疊一個
+ * 中性的小圖示，標籤底下多一行「模型已看不到」。那一行點開是 popover 說明為什麼（同 `context-meter`：手機上沒有 hover）。
+ * 不用警示色：圖沒壞，只是模型那邊換成了佔位字。即時發生時不另外跳通知，標記出現就夠了。
  */
 
 import type { WireAttachmentRef } from '@nexus/wire';
-import { FileText, Image as ImageIcon } from 'lucide-react';
+import { EyeOff, FileText, Image as ImageIcon } from 'lucide-react';
 import { createContext, useContext, useEffect, useRef, useState } from 'react';
 
 import {
@@ -21,6 +25,7 @@ import {
   AttachmentTitle,
 } from '@/components/ui/attachment';
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { AttachmentImageSource } from '@/lib/attachment-image';
 import { sentAttachmentViews } from '@/lib/sent-attachments';
 import type { SentAttachmentView } from '@/lib/sent-attachments';
@@ -63,6 +68,29 @@ function useThumbnail(
   return url;
 }
 
+/** 標籤底下那一行：點開說明這一件為什麼模型看不到。 */
+export const OMITTED_LABEL = '模型已看不到';
+export const OMITTED_EXPLANATION =
+  '為了不超過這個模型的圖片上限，這張較舊的圖已從模型的上下文移除；圖本身還在。';
+
+function OmittedNote({ name }: { readonly name: string }) {
+  return (
+    <Popover>
+      <PopoverTrigger
+        aria-label={`${OMITTED_LABEL}：${name}，點開看原因`}
+        data-testid="sent-attachment-omitted"
+        className="text-muted-foreground hover:text-foreground mt-0.5 flex min-h-6 max-w-full items-center gap-1 text-tip transition-colors duration-(--duration-quick)"
+      >
+        <EyeOff aria-hidden className="size-3 shrink-0" />
+        <span className="truncate">{OMITTED_LABEL}</span>
+      </PopoverTrigger>
+      <PopoverContent side="top" align="start" className="text-body w-64">
+        {OMITTED_EXPLANATION}
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function Chip({
   view,
   attachment,
@@ -87,6 +115,7 @@ function Chip({
         data-testid="sent-attachment"
         data-kind={view.kind}
         data-thumbnail={url === undefined ? 'none' : 'shown'}
+        data-omitted={view.omitted}
       >
         <AttachmentMedia variant={url === undefined ? 'icon' : 'image'}>
           {url !== undefined ? (
@@ -103,10 +132,19 @@ function Chip({
           ) : (
             <FileText aria-hidden />
           )}
+          {view.omitted && (
+            <span
+              aria-hidden
+              className="bg-background/80 text-muted-foreground pointer-events-none absolute right-0.5 bottom-0.5 flex size-3.5 items-center justify-center rounded-full"
+            >
+              <EyeOff className="size-2.5" />
+            </span>
+          )}
         </AttachmentMedia>
         <AttachmentContent>
           <AttachmentTitle title={view.name}>{view.name}</AttachmentTitle>
           <AttachmentDescription>{view.detail}</AttachmentDescription>
+          {view.omitted && <OmittedNote name={view.name} />}
         </AttachmentContent>
       </Attachment>
     </div>
@@ -115,10 +153,13 @@ function Chip({
 
 export function SentAttachments({
   attachments,
+  omitted,
 }: {
   readonly attachments: readonly WireAttachmentRef[] | undefined;
+  /** `HumanEntry.omittedAttachments`（#1270）。排著、還沒被領走的那幾句還沒進過模型，不會有。 */
+  readonly omitted?: readonly number[];
 }) {
-  const views = sentAttachmentViews(attachments);
+  const views = sentAttachmentViews(attachments, omitted);
   const [opened, setOpened] = useState<{ readonly name: string; readonly url: string } | null>(
     null,
   );

@@ -51,6 +51,21 @@ describe('已送出的附件標籤（#732）', () => {
     expect(sentAttachmentViews([])).toEqual([]);
   });
 
+  it('模型已看不到（#1270）：照位置對應，不是只數圖；沒給就全部看得到，超出範圍的位置不影響', () => {
+    const refs = [file('a.txt', 1), image({ name: 'old.png' }), image({ name: 'new.png' })];
+    expect(sentAttachmentViews(refs, [1]).map((view) => view.omitted)).toEqual([
+      false,
+      true,
+      false,
+    ]);
+    expect(sentAttachmentViews(refs).map((view) => view.omitted)).toEqual([false, false, false]);
+    expect(sentAttachmentViews(refs, [7]).map((view) => view.omitted)).toEqual([
+      false,
+      false,
+      false,
+    ]);
+  });
+
   it('預覽：附件的名字用頓號接起來（排著那一列只有附件、沒有字時用）', () => {
     expect(attachmentsPreview([image({ name: 'red.png' }), file('note.txt', 55)])).toBe(
       'red.png、note.txt',

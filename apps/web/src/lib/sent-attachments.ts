@@ -19,6 +19,8 @@ export interface SentAttachmentView {
   readonly name: string;
   /** 第二行：`副檔名 · 大小`；圖沒有副檔名就用媒體型別（`image/jpeg` → `JPEG`），圖另帶 `寬×高`。 */
   readonly detail: string;
+  /** 模型已看不到這一件（#1270）：為了不超過圖片上限被換成佔位字，附件本身還在、縮圖照樣讀得到。 */
+  readonly omitted: boolean;
 }
 
 /** `image/jpeg` → `JPEG`。 */
@@ -28,9 +30,12 @@ function mediaLabel(mediaType: string): string {
 
 export function sentAttachmentViews(
   refs: readonly WireAttachmentRef[] | undefined,
+  /** `HumanEntry.omittedAttachments`：對的是 `refs` 的位置，不是只數圖。 */
+  omittedPositions: readonly number[] = [],
 ): readonly SentAttachmentView[] {
   return (refs ?? []).map((ref, index) => {
     const key = `${index}:${ref.attachmentId}`;
+    const omitted = omittedPositions.includes(index);
     if (ref.type === 'file') {
       const extension = fileExtension(ref.name);
       const size = formatBytes(ref.bytes);
@@ -39,6 +44,7 @@ export function sentAttachmentViews(
         kind: 'file',
         name: ref.name,
         detail: extension === undefined ? size : `${extension} · ${size}`,
+        omitted,
       };
     }
     const name = ref.name ?? '圖片';
@@ -49,6 +55,7 @@ export function sentAttachmentViews(
       kind: 'image',
       name,
       detail: `${label} · ${formatBytes(ref.bytes)} · ${ref.width}×${ref.height}`,
+      omitted,
     };
   });
 }
