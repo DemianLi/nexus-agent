@@ -4,8 +4,8 @@
  *
  * 照 dsh `tool-subagent/src/model-selection.ts` 與 `list-models.ts`（`477b4f4`）：
  *
- * - **都沒給＝繼承**，不查政策（dsh 的 `hasDelegationModelRequest` 先擋掉）。
- * - **只要給了任何一格，有效路由就必須在授權清單裡**——包括只給 `reasoning_effort` 的時候（有效路由是 root 那顆）：dsh 的
+ * - **都沒給＝走基線**（定義釘的，沒釘就是主對話此刻的選擇，見 {@link DelegationBaseline}），不查政策（dsh 的 `hasDelegationModelRequest` 先擋掉）。
+ * - **只要給了任何一格，有效路由就必須在授權清單裡**——包括只給 `reasoning_effort` 的時候（有效路由是基線的模型：定義釘的，沒釘就是主對話此刻那顆）：dsh 的
  *   `assertAllowedModelSelection` 用的是「有效路由」，不是「有沒有給 model」。
  * - **換了路由卻沒給推理等級＝用新模型的預設**；給了就必須是那顆型錄條目宣告過的名字。
  *
@@ -28,7 +28,7 @@ import type { ModelEntry } from './model-catalog.js';
 export interface ModelSelectionConfig {
   /** 授權清單（型錄 id），來自日誌上記著的政策（#875）。 */
   readonly allowedModels: readonly string[];
-  /** root 用的那顆（型錄 id）：只給 `reasoning_effort` 時就是它。 */
+  /** 部署預設那顆（型錄 id）：沒有 {@link DelegationBaseline} 時基線就是它；解出來等於它又沒有額外推理設定，等於沿用預設實例。 */
   readonly rootModelId: string;
   /** 型錄（`live-model` 的 `models`）。 */
   readonly catalog: readonly ModelEntry[];
@@ -125,7 +125,7 @@ function allowedList(config: ModelSelectionConfig): string {
 /**
  * 把模型填的兩格解成要交給 host 的選擇。
  *
- * @returns `choice` 是 `undefined`＝沿用 root 的（都沒給、或解出來等於 root 的預設）；失敗的 `error` 是講給模型聽的，
+ * @returns `choice` 是 `undefined`＝沿用預設實例（解出來是部署預設那顆、又沒有額外推理設定）；失敗的 `error` 是講給模型聽的，
  *   讓它能自己改正（含授權清單）。
  */
 export function resolveModelSelection(
@@ -208,10 +208,12 @@ export function resolveModelSelection(
 export function describeSubagentModels(
   config: ModelSelectionConfig,
   request: { readonly model?: string },
+  /** 主對話**此刻**用的模型（#723 的選擇）；省略＝部署預設。清單裡標的就是它。 */
+  currentModelId: string = config.rootModelId,
 ): string {
   if (request.model === undefined) {
     return config.allowedModels
-      .map((id) => (id === config.rootModelId ? `${id}（主對話目前用的）` : id))
+      .map((id) => (id === currentModelId ? `${id}（主對話目前用的）` : id))
       .join('\n');
   }
   if (request.model === '') throw new Error('`model` 不能是空字串');

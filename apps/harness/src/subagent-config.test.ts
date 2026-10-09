@@ -37,6 +37,8 @@ interface Seen {
   readonly role: 'root' | 'worker';
   /** 這個角色的第幾次請求（從 1 起算）。 */
   readonly nth: number;
+  /** 這次請求訊息串裡最後一則工具結果的文字（沒有是 `undefined`）。 */
+  readonly toolResult?: string;
 }
 
 type Reply = { text: string } | { call: { id: string; name: string; arguments: string } };
@@ -55,7 +57,13 @@ async function fakeEndpoint(answer: (seen: Seen) => Reply, onRequest?: (seen: Se
       };
       const system = JSON.stringify((body.messages ?? []).find((m) => m.role === 'system'));
       const role = system.includes(WORKER_PROMPT) ? 'worker' : 'root';
-      const seen: Seen = { model: body.model, role, nth: ++counts[role] };
+      const lastTool = (body.messages ?? []).findLast((m) => m.role === 'tool');
+      const seen: Seen = {
+        model: body.model,
+        role,
+        nth: ++counts[role],
+        ...(lastTool !== undefined && { toolResult: JSON.stringify(lastTool.content) }),
+      };
       requests.push(seen);
       onRequest?.(seen);
       const reply = answer(seen);
@@ -159,13 +167,14 @@ const workerPlugin = (definition: Partial<NexusSubAgent>): PluginEntry => ({
 async function assemble(
   baseUrl: string,
   definition: Partial<NexusSubAgent>,
-  options: { background?: boolean } = {},
+  options: { background?: boolean; policy?: boolean } = {},
 ) {
   const built = await createCliAgent(
     {
       live: true,
       liveModel: configFor(baseUrl),
       ...(options.background === true && { backgroundSubagents: { maxActive: 2 } }),
+      ...(options.policy === true && { modelSelectionPolicy: { allowedModels: [A, B] } }),
     },
     [...shipped, workerPlugin(definition)],
     undefined,
@@ -308,7 +317,69 @@ describe('定義釘的 model 與 maxTurns', () => {
   }, 60_000);
 });
 
+describe('maxTurns 的計數不外漏到下一次委派', () => {
+  // 前景子代理的 state 鍵會併回父代理（deepagents 的 EXCLUDED_STATE_KEYS 之外），`modelCallLimitMiddleware` 的計數也在 state 裡：
+  // 外漏的話第二次委派一開始就已經到上限。
+  it('同一輪派兩次、再開一輪派第三次：每次都叫滿 2 次', async () => {
+    const endpoint = await fakeEndpoint((seen) => {
+      if (seen.role === 'root') {
+        // 第 1、2、4 次根請求派子代理，第 3、5 次收尾。
+        return [1, 2, 4].includes(seen.nth) ? delegateForeground : { text: '根收尾。' };
+      }
+      return seen.nth >= 12 ? { text: '放棄。' } : listFiles;
+    });
+    const run = await assemble(endpoint.baseUrl, { maxTurns: 2 });
+    try {
+      await run.say('第一輪');
+      expect(endpoint.models('worker')).toHaveLength(4);
+      await run.say('第二輪');
+      expect(endpoint.models('worker')).toHaveLength(6);
+    } finally {
+      await run.close();
+      await endpoint.close();
+    }
+  }, 60_000);
+});
+
+describe('list_subagent_models 標的是主對話此刻用的那顆', () => {
+  it('會話換到 B 之後，清單把 B 標成目前用的，而不是部署預設 A', async () => {
+    const endpoint = await fakeEndpoint((seen) =>
+      seen.role === 'root' && seen.nth === 1
+        ? { call: { id: 'call-list', name: 'list_subagent_models', arguments: '{}' } }
+        : { text: '根收尾。' },
+    );
+    const run = await assemble(endpoint.baseUrl, {}, { background: true, policy: true });
+    try {
+      run.host.controller.select({ model: B });
+      await run.say('列出');
+      const second = endpoint.requests.find((seen) => seen.role === 'root' && seen.nth === 2);
+      expect(second?.toolResult).toContain(`${B}（主對話目前用的）`);
+      expect(second?.toolResult).not.toContain(`${A}（主對話目前用的）`);
+    } finally {
+      await run.close();
+      await endpoint.close();
+    }
+  }, 60_000);
+});
+
 describe('背景子代理在委派那一刻定了模型', () => {
+  it('定義釘了 model：背景子代理用釘的，會話停在別顆也一樣', async () => {
+    const endpoint = await fakeEndpoint((seen) => {
+      if (seen.role === 'root') return seen.nth === 1 ? delegateBackground : { text: '根收尾。' };
+      return { text: '做完。' };
+    });
+    const run = await assemble(endpoint.baseUrl, { model: B }, { background: true });
+    try {
+      await run.say('委派');
+      await until(() => endpoint.models('worker').length === 1);
+      expect(endpoint.models('worker')).toEqual([B]);
+      expect(endpoint.models('root')).toEqual([A, A]);
+    } finally {
+      await run.close();
+      await endpoint.close();
+    }
+  }, 60_000);
+
   it('會話在 B 時派出去：那顆子代理打 B', async () => {
     const endpoint = await fakeEndpoint((seen) => {
       if (seen.role === 'root') return seen.nth === 1 ? delegateBackground : { text: '根收尾。' };

@@ -293,19 +293,28 @@ export class BackgroundDelegation {
    */
   #listSubagentModelsTool() {
     const selection = this.#options.modelSelection!;
-    return tool(({ model }: { model?: string }) => describeSubagentModels(selection, { model }), {
-      name: LIST_SUBAGENT_MODELS_TOOL_NAME,
-      description:
-        'List the models a subagent may use, without changing your own. Call with no arguments to list the authorized ' +
-        'models, or with `model` to see the reasoning efforts of that exact model. Use the returned ids with the ' +
-        '`model` and `reasoning_effort` fields of the subagent tool.',
-      schema: z.object({
-        model: z
-          .string()
-          .optional()
-          .describe('Exact model id to inspect. Omit to list the authorized models.'),
-      }),
-    });
+    // 標「主對話目前用的」要讀此刻的選擇（#328）：會話換了模型，政策查的也是那顆。傳空名字＝沒有哪個定義釘東西，基線只剩父代理。
+    return tool(
+      ({ model }: { model?: string }) =>
+        describeSubagentModels(
+          selection,
+          { model },
+          this.#options.delegationBaseline?.('')?.parent.model,
+        ),
+      {
+        name: LIST_SUBAGENT_MODELS_TOOL_NAME,
+        description:
+          'List the models a subagent may use, without changing your own. Call with no arguments to list the authorized ' +
+          'models, or with `model` to see the reasoning efforts of that exact model. Use the returned ids with the ' +
+          '`model` and `reasoning_effort` fields of the subagent tool.',
+        schema: z.object({
+          model: z
+            .string()
+            .optional()
+            .describe('Exact model id to inspect. Omit to list the authorized models.'),
+        }),
+      },
+    );
   }
 
   /**
