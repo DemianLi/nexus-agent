@@ -234,5 +234,5 @@ demian 2026-10-09 決定：照 dsh，拿掉閘門之前的模式外拒絕，只�
 
 - **表的鍵帶位址**：監聽者是 root 與所有子代理共用的一份（D4，沒有 `Scoped<Agent>`），dsh 的表是每個 `Scoped` agent 各一張；我們以「`SessionAddress`＋`callId`」為鍵，兩邊 callId 撞號時不會互取對方那一筆。單元測試有同一 `callId` 兩邊都在等的案例，鍵拿掉會紅。
 - **次序偏離 dsh（選 A，待決）**：`tools/result` 在記 `tool/result` 之前派發，dsh 因此是交付先、結果後。我們的不變式（#441、#452）與下游依「交付在配對的成功結果之後」，所以監聽者同步取走表上那一筆後 `await Promise.resolve()`，醒來時圍堵已同步記完 `tool/result`；醒來後再從日誌尾端確認那顆結果在、而且成功。**不是「表達不出來」，是保留既有契約**；照 dsh 的次序（選 B：改不變式、格式版本、折疊器）另算。
-- **證據**：差分測試（`apps/harness/src/present-delivery-differential.test.ts`）先在搬之前的實作上跑綠、搬完一字不改仍綠。**它量不到兩次呼叫的 microtask 交錯**——這個組裝裡同一則訊息的幾次工具呼叫是一次落定一次才輪到下一次（實測）；交錯的次序由 plugin 單元測試裡手排的順序負責。
+- **證據**：差分測試（`apps/harness/src/present-delivery-differential.test.ts`）先在搬之前的實作上跑綠、搬完一字不改仍綠。**它量不到兩次呼叫的 microtask 交錯**——`present` 沒宣告 `concurrencySafe`，工具屏障（`tool-barrier.ts`）把它當獨佔，同一個 agent 裡它跟別的工具、跟自己都不重疊，所以交錯在結構上不會發生（與 `maxParallelToolCalls` 無關）；這一點由屏障保證，不是 `present` 自己的性質，將來若宣告成可重疊，plugin 單元測試裡手排的順序是第二道。
 - **S1b 的結果**：#1276 拿掉 plan-mode 的監聽者之後，匯流排上沒有任何消費者；這一顆是第一顆。`tools/pre-execute`、`tools/execute`、`tools/post-execute` 仍然沒有監聽者。

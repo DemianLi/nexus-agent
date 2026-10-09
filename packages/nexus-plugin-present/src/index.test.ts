@@ -46,9 +46,9 @@ const roots: string[] = [];
 /** `tools/result` 的監聽者失敗（派發面把它們吞掉回報）：每個案例結束時必須是空的。 */
 const observerFailures: unknown[] = [];
 afterEach(async () => {
-  expect(observerFailures.splice(0)).toEqual([]);
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
   vi.restoreAllMocks();
+  expect(observerFailures.splice(0)).toEqual([]);
 });
 
 /** 一個真的工作區目錄。 */

@@ -3,8 +3,9 @@
  * （[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)，事件契約草稿的 S1a）。
  *
  * 事件名與時刻照 dsh 的 `packages/core/tools/src/index.ts`（`5badb15009a`，`docs/tool-execution-pipeline.zh.md`）：
- * 允許／拒絕 → 環繞派發 → 接受／替換結果 → 觀察凍結的最終結果。**這個檔案只放契約與生產者**；消費者今天一顆都沒有搬過來
- * （S1b），所以沒有任何監聽者時，每顆工具呼叫的行為與位元組都跟這個檔案不存在時一樣。
+ * 允許／拒絕 → 環繞派發 → 接受／替換結果 → 觀察凍結的最終結果。**這個檔案只放契約與生產者**；消費者目前只有一顆：
+ * `@nexus/plugin-present` 的交付寫入掛在 `tools/result`（[#1286](https://github.com/DemianLi/nexus-agent/issues/1286)，S1c）。
+ * 其餘三個事件沒有監聽者，所以沒有任何監聽者時，每顆工具呼叫的行為與位元組都跟這個檔案不存在時一樣。
  *
  * ## 生產者在洋蔥的三個位置，加圍堵
  *

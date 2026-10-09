@@ -292,9 +292,9 @@ describe('present 交付寫入：日誌逐筆相同', () => {
 });
 
 /**
- * 平行叫的兩次，日誌上仍是一次接一次：圍堵在 `tool/call` 之後才進本體，而這個組裝裡同一則訊息的幾次呼叫是
- * 一次落定一次才輪到下一次（實測）。所以這一格量不到「兩次的 microtask 交錯」——那要在 plugin 單元測試裡用
- * 手排的順序量。
+ * 平行叫的兩次，日誌上仍是一次接一次：`present` 沒宣告 `concurrencySafe`，工具屏障（`tool-barrier.ts`，#711）把它當獨佔——
+ * 前面的落定它才開始、它落定後面的才開始，**跟別的工具、跟自己都一樣**，與 `maxParallelToolCalls` 設多少無關。所以同一個
+ * agent 裡兩次 `present` 的 microtask 不可能交錯；這一格量的是「次序不變」，不是交錯。
  */
 const EXPECTED_PARALLEL: unknown[] = [
   ['call', 'p1', PRESENT_TOOL_NAME],
