@@ -4,7 +4,8 @@
  *
  * `@nexus/plugin-present` 自己的測試走 registry 那一層，證得了工具檢查什麼、什麼時候寫；證不了的是：
  *
- * 1. 圍堵真的替它寫了那顆 `tool/result`，而交付落在它之後——「結果落定成功才寫」在真的呼叫順序上成立。
+ * 1. 圍堵真的替它寫了那顆 `tool/result`，而交付落在它之前（`tools/result` 在記 `tool/result` 之前派發，#1286，同 dsh）——
+ *    「`tools/result` 說成功才寫」在真的呼叫順序上成立。
  * 2. **即時與重新整理產出同一顆 `custom` frame**：web 開著看到的，重新整理之後還在。
  * 3. **子代理的交付兩條路都不送**：它寫進子代理那一份，而歷史只讀 root——即時送了的話，重新整理就不見了。
  * 4. 沒有工作區（沒掛 sandbox-policy）時，工具在、叫了被拒。
@@ -251,7 +252,7 @@ function eventsOf(sessions: SessionRegistry, type: SessionEvent['type']): Sessio
 }
 
 describe('present 在真的圖上', () => {
-  it('root 交付成功：即時與重新整理同一顆 custom frame，落在那張工具卡收尾之後', async () => {
+  it('root 交付成功：即時與重新整理同一顆 custom frame，落在那張工具卡收尾之前', async () => {
     const outcome = await run(
       [
         {
@@ -284,26 +285,37 @@ describe('present 在真的圖上', () => {
     };
     expect(live).toEqual([expected]);
     expect(deliveriesIn(outcome.history)).toEqual([expected]);
-    // 卡片是成功的，而交付落在它收尾之後——結果落定成功才寫。
+    // 卡片是成功的，而交付落在它收尾之前——`tools/result` 說成功才寫，而它先於圍堵記 `tool/result`（#1286）。
     expectSucceeded(outcome.live, PRESENT_TOOL_NAME);
-    const order = (frames: readonly Event[]) =>
-      frames
-        .filter(
+    // 線上與歷史：這顆 `present` 的交付 frame 在它那張卡的 `tool-finished` 之前（後面還有別的 `custom`，如用量，所以不看最後一格）。
+    const position = (frames: readonly Event[]) => {
+      const data = (frame: Event) =>
+        frame.params.data as { name?: string; event?: string; tool_call_id?: string };
+      return {
+        delivery: frames.findIndex(
+          (frame) => frame.method === 'custom' && data(frame).name === DELIVERABLES_PRESENTED,
+        ),
+        // 取最後一顆：即時這條有兩顆（圖自己串流出來的內層那顆，與日誌 `tool/result` 的判定那顆），判定那顆在後。
+        finished: frames.findLastIndex(
           (frame) =>
-            frame.method === 'custom' ||
-            (frame.method === 'tools' &&
-              (frame.params.data as { event?: string }).event === 'tool-finished'),
-        )
-        .map((frame) => frame.method);
-    expect(order(outcome.live).at(-1)).toBe('custom');
-    expect(order(outcome.history).at(-1)).toBe('custom');
-    // 日誌上：交付在配對的 `tool/result` 之後。
+            frame.method === 'tools' &&
+            data(frame).event === 'tool-finished' &&
+            data(frame).tool_call_id === callId,
+        ),
+      };
+    };
+    for (const frames of [outcome.live, outcome.history]) {
+      const { delivery, finished } = position(frames);
+      expect(delivery).toBeGreaterThanOrEqual(0);
+      expect(finished).toBeGreaterThan(delivery);
+    }
+    // 日誌上：交付在配對的 `tool/result` 之前。
     const events = outcome.sessions.root.events;
     const resultSeq = events.find(
       (event) => event.type === 'tool/result' && event.data.callId === callId,
     )?.seq;
     const delivery = events.find((event) => event.type === 'deliverables/presented');
-    expect(delivery?.seq).toBeGreaterThan(resultSeq ?? Infinity);
+    expect(delivery?.seq).toBeLessThan(resultSeq ?? -Infinity);
     expect(outcome.violations).toEqual([]);
     // **折疊器把它折成獨立的一格**（#441 第二刀，由原本「不讀它」那條翻面）：即時與歷史各折出同一格，
     // 落在那張 `present` 工具卡之後；拿掉這一格，剩下的畫面（包括決定評分按鈕位置的輪尾）跟沒有這顆

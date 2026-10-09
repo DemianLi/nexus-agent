@@ -1112,7 +1112,7 @@ export interface PluginRegistry {
 export interface InternalPluginRegistry extends PluginRegistry {
   /**
    * 事件匯流排的派發面（`emit`／`serial`／`waterfall`）。**只有宿主的組裝點拿得到**，plugin 的 `apply` 拿到的是窄的
-   * {@link PluginRegistry}，只能經 {@link PluginRegistry.events} 掛監聽者。S0 沒有任何生產者，所以現在沒有人派發。
+   * {@link PluginRegistry}，只能經 {@link PluginRegistry.events} 掛監聽者。生產者在 `tool-pipeline.ts`（S1a）與圍堵，由 `agent-factory.ts` 把這一份交給 `foldRegistry`。
    */
   readonly dispatch: EventDispatcher;
   /**

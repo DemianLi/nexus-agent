@@ -1,8 +1,8 @@
 /**
  * 交付的配套入口：**每一筆交付都對得上一次成功的 `present` 呼叫**，外加形狀。
  *
- * 擋的是「有別的生產者繞過工具往日誌寫交付」——工具只在配對的結果成功之後才寫，所以合法的日誌裡
- * 交付永遠落在一顆成功的 `tool/result` 之後。
+ * 擋的是「有別的生產者繞過工具往日誌寫交付」——工具只在 `tools/result` 說結果不是錯誤時才寫（#1286 起同步寫，
+ * 交付在配對的 `tool/result` 之前；更早的日誌在它之後），所以兩種次序都合法，錯誤的結果不合法。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -46,7 +46,16 @@ function presented(log: SessionLog, callId: string, isError = false): void {
 const FILES = [{ path: 'a.md', description: '說明' }, { path: 'b.md' }];
 
 describe('合法的日誌', () => {
-  it('成功的呼叫之後交付一次：零違規', () => {
+  it('新次序（#1286，同 dsh）：呼叫、交付、結果：零違規', () => {
+    const log = new SessionLog('new-order');
+    const violations = watch(log);
+    log.append('tool/call', { callId: 'c1', name: PRESENT_TOOL_NAME, arguments: '{}' });
+    log.append('deliverables/presented', { callId: 'c1', files: FILES });
+    log.append('tool/result', { callId: 'c1', isError: false });
+    expect(violations).toEqual([]);
+  });
+
+  it('舊日誌（#1286 之前）：成功的呼叫之後交付一次，零違規', () => {
     const log = new SessionLog('ok');
     const violations = watch(log);
     presented(log, 'c1');
@@ -78,23 +87,44 @@ describe('配對', () => {
     ]);
   });
 
-  it('結果還沒落定就交付', () => {
+  it('結果還沒落定就交付：合法（新次序下交付寫的時候結果本來就還沒記）', () => {
     const log = new SessionLog('early');
     const violations = watch(log);
     log.append('tool/call', { callId: 'c1', name: PRESENT_TOOL_NAME, arguments: '{}' });
     log.append('deliverables/presented', { callId: 'c1', files: FILES });
+    expect(violations).toEqual([]);
+  });
+
+  it('交付之後來的結果是錯誤（新次序）', () => {
+    const log = new SessionLog('failed-after');
+    const violations = watch(log);
+    log.append('tool/call', { callId: 'c1', name: PRESENT_TOOL_NAME, arguments: '{}' });
+    log.append('deliverables/presented', { callId: 'c1', files: FILES });
+    log.append('tool/result', { callId: 'c1', isError: true });
     expect(violations.map((error) => error.message)).toEqual([
-      expect.stringContaining('還沒有 tool/result 就交付了'),
+      expect.stringContaining('那次呼叫的 tool/result'),
     ]);
   });
 
-  it('那次呼叫的結果是錯誤', () => {
+  it('那次呼叫的結果是錯誤（舊次序：結果在交付之前）', () => {
     const log = new SessionLog('failed');
     const violations = watch(log);
     presented(log, 'c1', true);
     log.append('deliverables/presented', { callId: 'c1', files: FILES });
     expect(violations.map((error) => error.message)).toEqual([
       expect.stringContaining('那次呼叫的結果是錯誤'),
+    ]);
+  });
+
+  it('同一次呼叫交付兩次（新次序：兩次都在結果之前）', () => {
+    const log = new SessionLog('twice-new');
+    const violations = watch(log);
+    log.append('tool/call', { callId: 'c1', name: PRESENT_TOOL_NAME, arguments: '{}' });
+    log.append('deliverables/presented', { callId: 'c1', files: FILES });
+    log.append('deliverables/presented', { callId: 'c1', files: FILES });
+    log.append('tool/result', { callId: 'c1', isError: false });
+    expect(violations.map((error) => error.message)).toEqual([
+      expect.stringContaining('已經交付過一次'),
     ]);
   });
 

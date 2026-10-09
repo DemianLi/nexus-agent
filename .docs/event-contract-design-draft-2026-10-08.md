@@ -227,3 +227,13 @@ demian 2026-10-09：**`approvals` 先不搬**，做 S1。S1 拆兩張：S1a（�
 ### S1b 的後續：拿掉那一層（[#1276](https://github.com/DemianLi/nexus-agent/issues/1276)）
 
 demian 2026-10-09 決定：照 dsh，拿掉閘門之前的模式外拒絕，只留 `exit_plan_mode` 工具本體的檢查。`tools/pre-execute` 上 plan-mode 的監聽者與 #1272 為它加的 `SessionRegistrationPoint.forAddress` 一併拿掉（沒有消費者就不留 API）。事件、生產者、事件表閘門不動，`tools/pre-execute` 目前沒有任何監聽者。行為有意改變兩格：掛全攔核准閘門時先看到核准的措辭；沒接日誌且 `startActive` 關著時看到本體的「還沒接上」。**S1b 因此沒有留下任何已搬上匯流排的消費者**——第一顆消費者要另找。
+
+### S1c：第一顆留在匯流排上的消費者（[#1286](https://github.com/DemianLi/nexus-agent/issues/1286)）
+
+挑的是 `@nexus/plugin-present` 的交付寫入：dsh 的 `tool-present` 在本體只記一張以呼叫為鍵的表，等 `tools/result` 通知結果不是錯誤才寫 `deliverables/presented`。我們原本沒有 `tools/result`，登記的偏離是「訂閱自己那份日誌、等同 `callId` 的 `tool/result`」，連帶每次呼叫一個訂閱、一個 `callId` 只留一個、收掉時退訂、寫要排 microtask 躲重入四樣補丁。`tools/result` 落地後這個偏離的理由不在了，搬回 dsh 的形狀：`pending` 表加一位 `tools/result` 監聽者。
+
+- **表的鍵帶位址**：監聽者是 root 與所有子代理共用的一份（D4，沒有 `Scoped<Agent>`），dsh 的表是每個 `Scoped` agent 各一張；我們以「`SessionAddress`＋`callId`」為鍵，兩邊 callId 撞號時不會互取對方那一筆。單元測試有同一 `callId` 兩邊都在等的案例，鍵拿掉會紅。
+- **次序照 dsh（選 B，demian 2026-10-09 決定）**：`tools/result` 在記 `tool/result` 之前派發，dsh 因此是 `tool/call → deliverables/presented → tool/result`，我們跟。監聽者**同步**寫，不排 microtask（監聽者在圍堵的呼叫堆疊上、不在日誌發佈回呼裡，不撞 `SessionLog` 的重入防護；差分測試與單元測試實測沒撞，沒有退到微任務，所以沒有這一條偏離）。日誌不變式翻面：交付要在 `present` 的 `tool/call` 之後，配對的 `tool/result` 不論前後都不能是錯誤，一次呼叫至多一次，舊日誌（交付在結果之後）照樣過。格式版本不升：讀者盤點（#1286 卡上留言）零個依賴次序；降版方向舊 runtime 的不變式只會多報一行假違規，不會拒讀（`packages/nexus-core/src/invariants.ts:245-249`：違規只走 `onViolation`，預設 `console.error`；`:50` 拋出的 `InvariantError` 由 runner 接住，不回流到日誌）。此前方案 A（保留舊次序、`await Promise.resolve()` 加日誌尾端守衛）由討論會議 session 做過前四顆 commit，改成 B 時拿掉。
+- **鍵偏離（登記）**：dsh 的表以 `ToolExecution` 物件為鍵；我們的圍堵每次派發都用 `toolExecutionOf` 新造一份凍結視圖，認不出同一次執行，退到「位址＋`callId`」。
+- **證據**：差分測試（`apps/harness/src/present-delivery-differential.test.ts`）先在搬之前的實作上跑綠（舊次序，`0eee059e`）；搬完只翻了預期次序那幾格，案例與夾具不動。**它量不到兩次呼叫的 microtask 交錯**——`present` 沒宣告 `concurrencySafe`，工具屏障（`tool-barrier.ts`）把它當獨佔，同一個 agent 裡它跟別的工具、跟自己都不重疊，所以交錯在結構上不會發生（與 `maxParallelToolCalls` 無關）；這一點由屏障保證，不是 `present` 自己的性質，將來若宣告成可重疊，plugin 單元測試裡手排的順序是第二道。
+- **S1b 的結果**：#1276 拿掉 plan-mode 的監聽者之後，匯流排上沒有任何消費者；這一顆是第一顆。`tools/pre-execute`、`tools/execute`、`tools/post-execute` 仍然沒有監聽者。

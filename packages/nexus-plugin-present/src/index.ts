@@ -1,6 +1,6 @@
 /**
- * `@nexus/plugin-present`——模型宣告**這一輪交付了哪些檔案**：一顆 `present` 工具，最終結果成功之後
- * 寫一筆 `deliverables/presented` 進呼叫它的那一份會話日誌。
+ * `@nexus/plugin-present`——模型宣告**這一輪交付了哪些檔案**：一顆 `present` 工具，`tools/result` 說最終結果
+ * 不是錯誤時寫一筆 `deliverables/presented` 進呼叫它的那一份會話日誌。
  *
  * 形狀照 dsh 的 `packages/deliverables/tool-present/`（`477b4f4`）：模型看到的描述、參數說明與
  * `Presented <path>` 的結果逐字照抄；拒絕的字句也照抄，**但不是每一句都有**——dsh 那句
@@ -9,23 +9,30 @@
  * `maxFiles`（預設 8）個；**只記路徑與說明，不讀、不複製內容**。dsh 的 standard preset 掛它，
  * 所以它在出貨清單裡。
  *
- * ## 什麼時候寫：配對的 `tool/result` 落定成功之後
+ * ## 什麼時候寫：`tools/result` 說結果不是錯誤的那一刻
  *
- * dsh 在工具本體裡只把這次要交付什麼記在一張表上，等 `tools/result` 通知（post-execute 鉤子都跑完之後
- * 那一顆）說結果不是錯誤才 `append`。我們的對應物是圍堵寫的那顆 `tool/result`：它在最外層，看得到
- * 內層每一顆 middleware 最後把結果判成什麼。所以本體訂閱自己那一份日誌，看到同一個 `callId` 的
- * `tool/result`、`isError` 為否，才寫。**不在本體裡直接寫**（`todo_write` 那條路）：那樣的話一次被
- * 外層改判成錯誤的呼叫照樣留下一筆交付，dsh 有一條測試專門擋它。
+ * 照 dsh：工具本體只把這次要交付什麼記在一張以呼叫為鍵的表上（`pending`），等 `tools/result`
+ * 通知（post-execute 鉤子都跑完之後那一顆）說結果不是錯誤才 `append`。**不在本體裡直接寫**（`todo_write` 那條路）：
+ * 那樣的話一次被外層改判成錯誤的呼叫照樣留下一筆交付，dsh 有一條測試專門擋它。表的鍵帶著呼叫者的
+ * {@link SessionAddress}：這顆監聽者是 root 與每個子代理共用的一份，callId 在兩邊撞號時不能取走對方那一筆。
  *
- * 寫要**排到下一個 microtask**：日誌不准在自己的回呼裡重入（`SessionLog.append` 的防護）。訂閱者是
- * async 函式，`await` 一次之後才寫；它若拋，日誌把 reject 收成一行 warn，不會變成殺掉行程的
- * unhandled rejection。
+ * **同步寫，次序同 dsh（#1286）：`tool/call → deliverables/presented → tool/result`。** `tools/result` 由圍堵在記
+ * `tool/result` **之前**派發（`containment.ts` 的 `notifyToolResult`），而 dsh 的 `notifyResult` 也先於迴圈的
+ * `appendToolResult`，所以交付落在配對的 `tool/result` 之前。監聽者在圍堵的呼叫堆疊上被叫、不在任何日誌發佈回呼裡，
+ * 同步 `append` 不會撞 `SessionLog` 的重入防護，不需要排 microtask。（#1286 之前是訂閱自己那份日誌、等 `tool/result`
+ * 發佈後排一個 microtask 才寫，所以落在它**之後**；舊日誌仍是那個次序，讀它的人與日誌不變式兩種都收。）
  *
- * **等結果的那個訂閱一個 `callId` 只留一個。** 圍堵對控制流例外（中斷）是原樣往外拋、不寫
- * `tool/result` 的（`containment.ts` 的 `isGraphBubbleUp`），而 resume 之後同一個 `callId` 會再進來一次。
- * 本體要是在那之前跑過，舊的訂閱還掛著，結果落定時兩個一起觸發就交付兩次。今天核准閘門擋在本體之前，
- * 產品路徑上碰不到——這是一個沒人守的前提，所以新的一次先退掉舊的；組裝收掉時全部退掉，不留在
- * 活得跟行程一樣長的日誌上。
+ * **表的鍵是最近似的，不是 dsh 的鍵。** dsh 的 `pending` 是 `WeakMap<ToolExecution, …>`，以那一次執行物件為鍵；
+ * 我們的圍堵沒有 `ToolExecution` 物件，只有 `PipelineExecution` 的視圖，每次派發都是新造的，認不出同一次執行，
+ * 所以退到「呼叫者位址＋`callId`」。這是 #1286 登記的鍵偏離。
+ *
+ * 監聽者是 `EventDispatcher.observe` 派發的：它拋或 reject 都只回報、不影響那次呼叫。
+ *
+ * **一個呼叫只留一筆。** 圍堵對控制流例外（中斷）是原樣往外拋、不派發 `tools/result` 也不寫 `tool/result` 的，而 resume 之後
+ * 同一個 `callId` 會再進來一次；表是覆寫，所以舊的一筆不會讓結果落定時交付兩次。組裝收掉時整張表清空。
+ *
+ * **前提：宿主端要把 `events` 交給 `foldRegistry`**（產品路徑只有 `agent-factory.ts`，它交 `registry.dispatch`）。
+ * 沒交的組裝不派發 `tools/result`，這顆工具就靜靜不交付。
  *
  * ## 寫進哪一份：呼叫者自己那一份
  *
@@ -78,10 +85,18 @@
 import { posix } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
-import type { NexusPlugin, PluginEntry, PluginRegistry, PresentedFile } from '@nexus/core';
+import type {
+  NexusPlugin,
+  PluginEntry,
+  PluginRegistry,
+  PresentedFile,
+  SessionAddress,
+  SessionLog,
+} from '@nexus/core';
 import {
   FS_SERVICE,
   toolCallIdOf,
+  toolCallSessionAddress,
   toolRefusal,
   virtualPathOf,
   WORKSPACE_CAPABILITY,
@@ -240,6 +255,13 @@ async function inspect(backend: AnyBackendProtocol, path: string): Promise<Inspe
   return found.is_dir === true ? 'not-file' : 'file';
 }
 
+/** 等結果的那張表的鍵：呼叫者的位址加 `callId`。位址認不出來時本體已經拒了，不會走到這裡。 */
+function pendingKey(address: SessionAddress | undefined, callId: string): string {
+  const who =
+    address === undefined ? '?' : address.kind === 'root' ? 'root' : `sub:${address.runId}`;
+  return `${who}\u0000${callId}`;
+}
+
 /**
  * present plugin。
  *
@@ -252,11 +274,20 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
   Config: presentConfigSchema,
   apply(registry: PluginRegistry, config: PresentConfig): void {
     const { maxFiles } = config;
-    /** 還在等結果的訂閱，依 `callId`。見檔頭「一個 `callId` 只留一個」。 */
-    const waiting = new Map<string, () => void>();
-    registry.lifecycle.onDispose(() => {
-      for (const unsubscribe of waiting.values()) unsubscribe();
-      waiting.clear();
+    /** 等 `tools/result` 的交付，依「呼叫者是誰＋`callId`」。見檔頭。 */
+    const pending = new Map<
+      string,
+      { readonly log: SessionLog; readonly files: PresentedFile[] }
+    >();
+    registry.lifecycle.onDispose(() => pending.clear());
+    registry.events.on('tools/result', (exec, result) => {
+      const key = pendingKey(exec.agent, exec.callId);
+      const entry = pending.get(key);
+      if (entry === undefined) return;
+      pending.delete(key);
+      if (result.isError) return;
+      // 同步寫，照 dsh：`tools/result` 由圍堵在記 `tool/result` 之前派發，所以交付先、結果後。見檔頭。
+      entry.log.append('deliverables/presented', { callId: exec.callId, files: entry.files });
     });
     registry.tools.register(
       tool(
@@ -305,18 +336,10 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
               ...(file.description !== undefined && { description: file.description }),
             });
           }
-          const { log } = found;
-          waiting.get(callId)?.();
-          const unsubscribe = log.subscribe(async (event) => {
-            if (event.type !== 'tool/result' || event.data.callId !== callId) return;
-            unsubscribe();
-            if (waiting.get(callId) === unsubscribe) waiting.delete(callId);
-            if (event.data.isError) return;
-            // 還在日誌的發佈回呼裡，現在寫會撞重入防護。見檔頭。
-            await Promise.resolve();
-            log.append('deliverables/presented', { callId, files });
+          pending.set(pendingKey(toolCallSessionAddress(config), callId), {
+            log: found.log,
+            files,
           });
-          waiting.set(callId, unsubscribe);
           return presentedText(files);
         },
         {
@@ -365,7 +388,7 @@ declare module '@nexus/core' {
      *
      * 照 dsh 的同名事件（`packages/deliverables/tool-present/src/types.ts`，`ddefc45`）：寫進**呼叫者
      * 自己那一份**日誌，子代理宣告的留在子代理那份——主代理要交付，得自己再叫一次 `present`（dsh README
-     * 原話）。寫的時刻見檔頭：配對的 `tool/result` 之後。
+     * 原話）。寫的時刻見檔頭：配對的 `tool/result` 之前（同步，同 dsh）。
      *
      * ## 對 dsh 的偏離：沒有 `turn`
      *
