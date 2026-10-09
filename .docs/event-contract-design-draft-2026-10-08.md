@@ -211,4 +211,15 @@ demian 2026-10-09：**`approvals` 先不搬**，做 S1。S1 拆兩張：S1a（�
 - **沒有監聽者 ＝ 直通**，而且物件身分是承重件：沒人替換時 handler 回的原物件原樣交回（`tool-events.ts` 的錯誤碼掛在以訊息為鍵的 `WeakMap` 上，複製就斷）。
 - **偏離 dsh（逐條登記在 #1248 與 `tool-pipeline.ts` 檔頭）**：(1) `tools/execute` 換不了 `exec.signal`——LangChain `ToolNode` 的 `baseHandler` 用 closure 裡的 `config.signal`，不讀 `request.runtime.signal`；(2) `Command` 結果表達不出 `replace`，只走 `tools/result`；(3) 拋出來的錯不經過 `tools/post-execute`（拋錯翻成訊息是最外層圍堵的事）；(4) resume 會讓 `tools/pre-execute` 對同一個 `callId` 跑兩次，監聽者必須冪等；(5) `tools/execute` 的 `next()` 只能呼叫一次，所以沒有重試；(6) `tools/pre-execute` 沒有 `ask`／`cancel`（範圍）；(7) 結果內容是文字視圖、不是 `ContentBlock[]`（範圍；`replace` 會把區塊壓成純文字）；(8) `tools/post-execute` 只有 `accept`／`replace`，沒有 `block`／`additionalContexts`（範圍）。另：`exec.args` 給監聽者的是深凍結的複本，不是請求裡那個活物件（那就是狀態裡 AI 訊息的 `tool_calls[i].args`，讓監聽者改等於悄悄改了模型可見的歷史）。
 - **閘門**：`event-table.test.ts` 的「S0 空表」改成釘住這四個名字，並新增「每個事件在產品碼裡都有人派發」（`scanEventProducersTree`）；`interception-index.test.ts` 只填派發點真的在的第 6、7 格，**第 4 格（核准）維持「尚無」**。
-- **還沒做、S1b 才碰**：搬第一顆消費者並做 live A/B（模型可見的行為要逐位元組相同）；`approval/request` 與 `tools/pre-execute` 的 `ask` 接起來；失敗路徑進 `tools/post-execute`（要把「拋錯翻成訊息」搬進來，等到有消費者）。
+- **還沒做**：`approval/request` 與 `tools/pre-execute` 的 `ask` 接起來；失敗路徑進 `tools/post-execute`（要把「拋錯翻成訊息」搬進來，等到有消費者）。第一顆消費者見下面 S1b。
+
+### S1b 落地記錄（[#1272](https://github.com/DemianLi/nexus-agent/issues/1272)）
+
+第一顆消費者：plan-mode 的 `exit_plan_mode` 模式外拒絕，從 `createPlanModeMiddleware` 的 `wrapToolCall` 搬到 `tools/pre-execute` 的一位監聽者。
+
+- **先讀 dsh 讀出來的事實**：這個拒絕在 dsh 不是任何攔截事件的監聽者，只在 `exit_plan_mode` 的工具本體裡（`execute` 拋 `is only available in plan mode`，`packages/plan/plan-mode/src/index.ts`，`d743267`）。所以 plan-mode 檔頭與索引原本寫的「dsh `tools/execute` 位置的佔用者」不準：那是 nexus 在本體檢查外面多加的一層，理由是順序（掛全攔核准閘門時，模型要看到「不在計劃模式」而不是「沒有人被問到」）。搬載體**保留**這個行為，登記為偏離；是否拿掉這一層只留本體檢查是行為決定，等 demian。
+- **身分**：監聽者只有 `exec.agent`，而 `active()` 要的是 `forCall` 的四種結果（後三種都退回 `fallback()`）。`SessionRegistrationPoint` 新增 `forAddress(address | undefined)`，`forCall(config)` 改成 `forAddress(toolCallSessionAddress(config))`，只有一份實作。用 `attachedHere` 去推 lookup 結果在「沒接日誌＋子代理＋`startActive`」那格會跟今天不同，所以不推。形狀差異（dsh 經 `Scoped<Agent>`，我們經位址查），不是偏離。
+- **證據**：`plan-mode-refusal-differential.test.ts` 先在 develop 上跑綠並 commit，搬完一字不改仍綠；突變（監聽者一律放行、非 ok 一律當不在模式）各讓它變紅。live A/B（真模型、模式關著、誘導呼叫）兩邊 `tool/result` 的文字與 `isError` 逐字相同，只差隨機的 call id。**live A/B 分不出「監聽者擋的」與「本體擋的」**（兩者同一句），那一層由差分測試的「全攔核准閘門」與「沒接日誌」兩格負責。
+- **槽位**：拒絕原在 `plugins.prepended`，現在在 `toolPreExecute`（`plugins.prepended` → `toolFilter` → `toolPreExecute` → `approvalGate`），與核准閘門的先後不變；`toolFilter` 只遮基座工具、碰不到 `exit_plan_mode`，另一顆 `prepend: true` 的 `background-delegation` 只接手 `subagent`。
+- **`events` 選項**：產品路徑只有 `agent-factory.ts` 呼叫 `foldRegistry`，且傳了 `registry.dispatch`；自己折 registry 的測試／量測要載入有監聽者的 plugin 時得自己傳（已寫進 `FoldOptions.events` 的 JSDoc）。
+- **索引**：第 6 格拿掉 plan-mode 這個佔用者（`EXPECTED_SITES` 15→14）；第 4 格仍是「尚無」，註記第一位監聽者在這個事件上。
