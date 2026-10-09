@@ -25,7 +25,7 @@
  *   後者跑的是真的 agent 迴圈——同意之後日誌上多一顆 `plan/mode`（落在工具結果之後）、下一步的
  *   prompt 沒有指引。
  * - **工具撞名**歸 `PluginRegistry` 的註冊期擋（同一個 `exit_plan_mode` 註冊兩次當場拋）。
- * - **middleware 的順序**（`prepend` 要排在核准閘門之前，別人的閘門才攔不到模式外的呼叫）歸 `fold.ts`
+ * - **模式外拒絕的順序**（`tools/pre-execute` 要排在核准閘門之前，別人的閘門才攔不到模式外的呼叫）歸 `fold.ts`
  *   與它的測試。
  *
  * ## 檢得到的那一條：`/plan` 的方向
