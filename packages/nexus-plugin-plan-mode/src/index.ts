@@ -24,7 +24,7 @@
  * | 零件 | dsh | 這裡 |
  * | --- | --- | --- |
  * | 指引 | `plan:policy` 提示詞段落，順序 500，未激活不貢獻文本 | {@link PLAN_MODE_MIDDLEWARE_NAME} 的 `wrapModelCall`，未啟用時原樣穿過 |
- * | 退出工具 | `exit_plan_mode`，兩種狀態都在 schema 裡，模式外執行會失敗 | {@link EXIT_PLAN_MODE_TOOL_NAME}，同樣一律註冊、模式外拒絕（本體一句、外面再由 `tools/pre-execute` 的一位監聽者先擋，見 `apply`） |
+ * | 退出工具 | `exit_plan_mode`，兩種狀態都在 schema 裡，模式外執行會失敗 | {@link EXIT_PLAN_MODE_TOOL_NAME}，同樣一律註冊、模式外拒絕（只在本體裡，同 dsh；沒有排在核准閘門之前的另一層，#1276） |
  * | 模式狀態 | `plan/mode` 會話事件 ＋ `planProjectionDefinition` 這個帶版本的會話投影 | `plan/mode` 會話事件 ＋ 這個 plugin 在 root 那份日誌上的折疊；送上線給畫面的那一份是 pump 另外合成的 `custom` 事件，只有 `active`，見 `@nexus/wire` 的 `plan-mode.ts`（[#895](https://github.com/DemianLi/nexus-agent/issues/895)） |
  *
  * ## 交出計劃走提問通道——曾經走核准，已照 dsh 改回（[#652](https://github.com/DemianLi/nexus-agent/issues/652)）
@@ -175,7 +175,6 @@ import type {
   QuestionReply,
   SessionEvent,
   SessionLog,
-  SessionLookup,
   SessionSubject,
 } from '@nexus/core';
 import { CHANNEL_SERVICE, QUESTION_INTERRUPT_KIND, toolCallIdOf, toolRefusal } from '@nexus/core';
@@ -374,7 +373,7 @@ function trackPlanMode(subject: SessionSubject, startActive: boolean): PlanModeS
  * **排著的待關先丟掉再判**（見檔頭「兩值」那節最後一段）。
  *
  * @param session - 執行器交來的那份日誌上的計劃模式；那份日誌沒接計劃模式時是 `undefined`。
- * @param attachedCount - 這次組裝接著幾份 root 日誌；多於一份時拒絕（模型呼叫 middleware 與 `tools/pre-execute` 監聽者的退路也不猜，見下面 `fallback`）。
+ * @param attachedCount - 這次組裝接著幾份 root 日誌；多於一份時拒絕（middleware 的退路也不猜，見下面 `fallback`）。
  * @param pendingExits - `exit_plan_mode` 同意之後排著、還沒交出去的待關。
  * @param rawInput - 命令名之後的原文。
  * @param steer - 宿主替命令保管的「命令結束後送一句話」（`CommandInvocation.steer`）。
@@ -416,8 +415,9 @@ function planCommandResult(
  * system prompt 上加東西，取代會把它們吃掉（`dynamicSystemPromptMiddleware`
  * 正是取代，所以刻意不用它）。模式沒生效時原樣穿過，**一個 token 都不多**。
  *
- * **模式外擋掉 `exit_plan_mode` 已經不在這裡**（[#1272](https://github.com/DemianLi/nexus-agent/issues/1272)，S1b）：
- * 它原本是這個 middleware 的 `wrapToolCall`，搬到 `tools/pre-execute` 的一位監聽者（見 `apply`）。
+ * **模式外擋掉 `exit_plan_mode` 不在這裡**：照 dsh，只在工具本體裡檢查。這個 middleware 以前還有一個 `wrapToolCall`
+ * 把這件事擋在核准閘門之前（nexus 自己加的一層，dsh 沒有），[#1276](https://github.com/DemianLi/nexus-agent/issues/1276) 拿掉了：
+ * 掛著全攔的核准閘門時，模型現在先看到核准的措辭；沒接日誌時看到本體的「還沒接上」。
  *
  * 以前還有 `stateSchema`、`beforeAgent` 與 `afterAgent` 三件：模式住在 graph state 時，
  * 前者宣告那一格、後兩者在圖外的命令與圖內的 state 之間搬值。模式搬進日誌之後三件都沒有
@@ -570,20 +570,14 @@ function createExitPlanModeTool(
 /**
  * 建一個計劃模式 plugin。
  *
- * 五個註冊點，各有各的理由：
+ *  四個註冊點，各有各的理由：
  *
  * - **`sessions`**：接上 root 那份日誌、折它的 `plan/mode`。**只管 root**，同 goal：模式是
  *   人對這個會話選的，subagent 沒有人可以選。
- * - **`middleware`（`prepend: true`）**：只剩 `wrapModelCall`——待關交出去與指引夾進 system prompt。
- *   `prepend` 讓它站在記憶 plugin 外面（`concat` 之後記憶才接上去）。**它不再是模式外拒絕的載體**，
- *   所以排在核准閘門之前不再靠它（見下一條）。
- * - **`events`（`tools/pre-execute`）**：模式外擋掉 `exit_plan_mode`（[#1272](https://github.com/DemianLi/nexus-agent/issues/1272)，S1b）。
- *   **排在核准閘門之前是必要的，不是偏好**，而位置現在由 `fold.ts` 的槽位表保證（`tools/pre-execute` 緊貼閘門外側）：
- *   別人的閘門可能把所有工具都攔下來（`approval.patch.yml` 那一類組裝）；拒絕在閘門內側的話，一次模式外的
- *   `exit_plan_mode` 會先撞上那位——headless 入口回的是「沒有人被問到」，而真正的原因是「你不在計劃模式」。
- *   順序決定模型看到哪一句。**dsh 沒有這一層**（它只在工具本體裡檢查），這是 nexus 的保留行為，登記在 #1272。
- *   **組裝點必須把 `registry.dispatch` 傳給 `foldRegistry`**（`events` 選項），否則這位監聽者沒有生產者，拒絕靜靜消失、
- *   模式外的呼叫會一路跑到工具本體（本體仍有同一句檢查，所以模型看到的字多半一樣，但不是在閘門之前）。
+ * - **`middleware`（`prepend: true`）**：只有 `wrapModelCall`——待關交出去與指引夾進 system prompt。
+ *   `prepend` 讓它站在記憶 plugin 外面（`concat` 之後記憶才接上去）。**它不擋 `exit_plan_mode`**：模式外的拒絕
+ *   只在工具本體裡，同 dsh；掛著全攔核准閘門（`approval.patch.yml` 那一類組裝）時，模型先看到核准的措辭
+ *   （[#1276](https://github.com/DemianLi/nexus-agent/issues/1276)，曾經有一層排在閘門之前的拒絕，#1272 搬上事件匯流排、#1276 拿掉）。
  * - **`tools`**：`exit_plan_mode` 走 `registry.tools.register()`，**不用
  *   `AgentMiddleware` 自帶的 `tools`**。那條路繞過 `toolOrder`——`fold.ts` 的
  *   `orderTools` 只排 `registry.tools.effective()` 裡的東西，而工具呈現順序是我們
@@ -646,11 +640,11 @@ export const planModePlugin: NexusPlugin<PlanModeConfig> = {
     //   別人的模式夾。
     const fallback = (): boolean =>
       attachedHere.length === 1 ? (attachedHere[0] as PlanModeSession).active() : startActive;
-    const activeFor = (found: SessionLookup): boolean => {
+    const active = (config: unknown): boolean => {
+      const found = registry.sessions.forCall(config);
       if (found.kind !== 'ok') return fallback();
       return sessionsHere.get(found.log)?.active() ?? false;
     };
-    const active = (config: unknown): boolean => activeFor(registry.sessions.forCall(config));
     // 只認得出來、而且是這個 plugin 接著的 root 那份：子代理的模型呼叫交不出 root 的待關。
     const settle = (config: unknown): void => {
       const found = registry.sessions.forCall(config);
@@ -663,16 +657,6 @@ export const planModePlugin: NexusPlugin<PlanModeConfig> = {
     const channel: ApprovalChannel = registry.services.get(CHANNEL_SERVICE) ?? { kind: 'human' };
 
     registry.middleware.use(createPlanModeMiddleware(guidance, active, settle), { prepend: true });
-    // 模式外擋掉 `exit_plan_mode`（#1272，S1b）。**位置不是偏好**：`tools/pre-execute` 緊貼核准閘門外側（`fold.ts` 槽位表），
-    // 所以掛了一顆什麼都要問的閘門（`approval.patch.yml` 那一類組裝），模型看到的仍是「不在計劃模式」、不是核准的措辭。
-    // dsh 沒有這一層：它只在工具本體裡檢查（`exit_plan_mode` 的 `execute` 拋 `is only available in plan mode`），
-    // 這是 nexus 在本體檢查外面加的一層，搬載體保留它原本的行為（偏離，登記在 #1272）。
-    // 純查詢、不寫日誌，所以 resume 之後對同一個 `callId` 再跑一次也無妨（事件契約要求冪等）。
-    registry.events.on('tools/pre-execute', (exec, next) => {
-      if (exec.name !== EXIT_PLAN_MODE_TOOL_NAME) return next();
-      if (activeFor(registry.sessions.forAddress(exec.agent))) return next();
-      return Promise.resolve({ kind: 'deny', reason: NOT_IN_PLAN_MODE_MESSAGE });
-    });
     registry.tools.register(
       createExitPlanModeTool(
         (config) => {

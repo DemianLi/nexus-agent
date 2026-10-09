@@ -223,3 +223,7 @@ demian 2026-10-09：**`approvals` 先不搬**，做 S1。S1 拆兩張：S1a（�
 - **槽位**：拒絕原在 `plugins.prepended`，現在在 `toolPreExecute`（`plugins.prepended` → `toolFilter` → `toolPreExecute` → `approvalGate`），與核准閘門的先後不變；`toolFilter` 只遮基座工具、碰不到 `exit_plan_mode`，另一顆 `prepend: true` 的 `background-delegation` 只接手 `subagent`。
 - **`events` 選項**：產品路徑只有 `agent-factory.ts` 呼叫 `foldRegistry`，且傳了 `registry.dispatch`；自己折 registry 的測試／量測要載入有監聽者的 plugin 時得自己傳（已寫進 `FoldOptions.events` 的 JSDoc）。
 - **索引**：第 6 格拿掉 plan-mode 這個佔用者（`EXPECTED_SITES` 15→14）；第 4 格仍是「尚無」，註記第一位監聽者在這個事件上。
+
+### S1b 的後續：拿掉那一層（[#1276](https://github.com/DemianLi/nexus-agent/issues/1276)）
+
+demian 2026-10-09 決定：照 dsh，拿掉閘門之前的模式外拒絕，只留 `exit_plan_mode` 工具本體的檢查。`tools/pre-execute` 上 plan-mode 的監聽者與 #1272 為它加的 `SessionRegistrationPoint.forAddress` 一併拿掉（沒有消費者就不留 API）。事件、生產者、事件表閘門不動，`tools/pre-execute` 目前沒有任何監聽者。行為有意改變兩格：掛全攔核准閘門時先看到核准的措辭；沒接日誌且 `startActive` 關著時看到本體的「還沒接上」。**S1b 因此沒有留下任何已搬上匯流排的消費者**——第一顆消費者要另找。

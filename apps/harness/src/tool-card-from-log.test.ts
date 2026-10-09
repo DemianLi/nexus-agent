@@ -25,7 +25,6 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { TOOL_ABORTED_BEFORE_DISPATCH_TEXT, toLoggedMessage } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
-import { createPlanModePlugin, NOT_IN_PLAN_MODE_MESSAGE } from '@nexus/plugin-plan-mode';
 import type { ConversationState, Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -195,25 +194,6 @@ describe('產品路徑：本體沒被呼叫到的呼叫，web 上有一張卡', 
       const [card] = toolEntries(run.frames);
       expect(card).toMatchObject({ name: 'edit_file', status: 'failed' });
       expect(card?.error).toMatch(/得先讀過它/);
-    } finally {
-      await run.close();
-    }
-  }, 20000);
-
-  it('plan-mode：模式外叫 `exit_plan_mode`，失敗、紅字是 plugin 那一句', async () => {
-    const run = await assemble(
-      [
-        { content: '', toolCalls: [{ name: 'exit_plan_mode', args: { plan: '計劃' } }] },
-        { content: '收工。' },
-      ],
-      [createPlanModePlugin()],
-    );
-    try {
-      await run.say('交計劃');
-      expect(baseToolFrames(run.frames)).toEqual([]);
-      expect(toolEntries(run.frames)).toMatchObject([
-        { name: 'exit_plan_mode', status: 'failed', error: `Error: ${NOT_IN_PLAN_MODE_MESSAGE}` },
-      ]);
     } finally {
       await run.close();
     }

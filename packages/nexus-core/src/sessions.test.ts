@@ -8,7 +8,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createRegistry } from './registry.js';
-import { toolCallSessionAddress } from './session-address.js';
 import { SessionLog } from './session-log.js';
 import { SessionRegistry } from './session-registry.js';
 import { createSessionRunner } from './sessions.js';
@@ -310,63 +309,6 @@ describe('forCall', () => {
     undo();
     expect(registry.sessions.forCall(atRoot)).toEqual({ kind: 'not-attached' });
   });
-});
-
-/**
- * **`forAddress` 與 `forCall` 是同一份實作的兩個入口**（[#1272](https://github.com/DemianLi/nexus-agent/issues/1272)）。
- *
- * 事件監聽者拿到的是算好的 `exec.agent`，不是 config。四種結果各比一次：`forCall(config)` 與
- * `forAddress(toolCallSessionAddress(config))` 逐項相等（包括「沒綁」與「綁了不只一張」先於「認不出身分」的先後）。
- */
-describe('forAddress', () => {
-  const configs = {
-    root: { configurable: { checkpoint_ns: 'tools:self' } },
-    subagent: { configurable: { checkpoint_ns: 'tools:parent|tools:self' } },
-    unknown: {},
-  };
-
-  it('沒綁：連認不出身分的也是 not-attached，不是 unknown-caller', () => {
-    const registry = createRegistry();
-    expect(registry.sessions.forAddress(undefined)).toEqual({ kind: 'not-attached' });
-    expect(registry.sessions.forAddress({ kind: 'root' })).toEqual({ kind: 'not-attached' });
-  });
-
-  it('綁了兩張：連認不出身分的也是 ambiguous', () => {
-    const registry = createRegistry();
-    registry.sessions.bind(new SessionRegistry('t1'));
-    registry.sessions.bind(new SessionRegistry('t2'));
-    expect(registry.sessions.forAddress(undefined)).toEqual({ kind: 'ambiguous', count: 2 });
-  });
-
-  it('綁了一張：undefined 是 unknown-caller，root 與子代理找得到', () => {
-    const registry = createRegistry();
-    const sessions = new SessionRegistry('t');
-    registry.sessions.bind(sessions);
-    expect(registry.sessions.forAddress(undefined)).toEqual({ kind: 'unknown-caller' });
-    expect(registry.sessions.forAddress({ kind: 'root' })).toEqual({
-      kind: 'ok',
-      address: { kind: 'root' },
-      log: sessions.root,
-    });
-    const found = registry.sessions.forAddress({ kind: 'subagent', runId: 'tools:parent' });
-    expect(found.kind === 'ok' && found.log).toBe(
-      sessions.get({ kind: 'subagent', runId: 'tools:parent' }),
-    );
-  });
-
-  for (const bound of [0, 1, 2]) {
-    for (const [name, config] of Object.entries(configs)) {
-      it(`${bound} 張註冊表、${name}：forCall(config) ＝ forAddress(toolCallSessionAddress(config))`, () => {
-        const registry = createRegistry();
-        for (let index = 0; index < bound; index++) {
-          registry.sessions.bind(new SessionRegistry(`t${index}`));
-        }
-        const viaCall = registry.sessions.forCall(config);
-        const viaAddress = registry.sessions.forAddress(toolCallSessionAddress(config));
-        expect(viaAddress).toEqual(viaCall);
-      });
-    }
-  }
 });
 
 /**
