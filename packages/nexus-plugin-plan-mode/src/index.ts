@@ -374,7 +374,7 @@ function trackPlanMode(subject: SessionSubject, startActive: boolean): PlanModeS
  * **排著的待關先丟掉再判**（見檔頭「兩值」那節最後一段）。
  *
  * @param session - 執行器交來的那份日誌上的計劃模式；那份日誌沒接計劃模式時是 `undefined`。
- * @param attachedCount - 這次組裝接著幾份 root 日誌；多於一份時拒絕（middleware 的退路也不猜，見下面 `fallback`）。
+ * @param attachedCount - 這次組裝接著幾份 root 日誌；多於一份時拒絕（模型呼叫 middleware 與 `tools/pre-execute` 監聽者的退路也不猜，見下面 `fallback`）。
  * @param pendingExits - `exit_plan_mode` 同意之後排著、還沒交出去的待關。
  * @param rawInput - 命令名之後的原文。
  * @param steer - 宿主替命令保管的「命令結束後送一句話」（`CommandInvocation.steer`）。
@@ -617,7 +617,7 @@ export const planModePlugin: NexusPlugin<PlanModeConfig> = {
     // 一次，串台就是一個 thread 的 `/plan` 開到另一個 thread 的模式上，**而且不會拋**。
     //
     // 命令問的是執行器交來的那份日誌（`CommandInvocation.sessionLog`，#688），查下面那張表；
-    // 陣列留著給 middleware 的退路與「接了幾份」用：「剛好一份」是組裝點的假設，`attachSession`
+    // 陣列留著給 middleware 與監聽者的退路（`fallback`）與「接了幾份」用：「剛好一份」是組裝點的假設，`attachSession`
     // 被呼叫兩次時由命令當場說出來（`planAmbiguousMessage`），跟 goal 同。兩者同生同滅。
     const attachedHere: PlanModeSession[] = [];
     const sessionsHere = new Map<SessionLog, PlanModeSession>();

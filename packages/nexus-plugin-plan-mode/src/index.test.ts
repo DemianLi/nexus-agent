@@ -116,8 +116,8 @@ function earlierEvents(active: boolean): readonly SessionEvent[] {
 /**
  * **`exit_plan_mode` 工具本體那兩條沒生效的出口**（[#273](https://github.com/DemianLi/nexus-agent/issues/273)）。
  *
- * root 上模式外的那條由 middleware 擋，驗收在 `apps/harness/src/plan-mode.test.ts`。頭兩條
- * 在真的組裝裡到不了：沒接日誌就沒有日誌可記，subagent 那一份又會先被 middleware 擋掉。
+ * root 上模式外的那條由 `tools/pre-execute` 的監聽者擋（#1272），驗收在 `apps/harness/src/plan-mode.test.ts`。頭兩條
+ * 在真的組裝裡到不了：沒接日誌就沒有日誌可記，subagent 那一份又會先被那位監聽者擋掉。
  * 後兩條（#652）在問人之前就擋，所以不用真的圖也量得到。
  */
 describe('exit_plan_mode 沒有生效時', () => {

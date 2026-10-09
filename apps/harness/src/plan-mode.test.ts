@@ -24,7 +24,9 @@
  *    （[#652](https://github.com/DemianLi/nexus-agent/issues/652)），結局要分得開。
  * 3. **模式狀態活得過什麼**：同一條 thread 的下一輪、以及一次真的壓縮。跨重啟那一條在
  *    `session-resume.test.ts`。
- * 4. **`prepend` 的證據**：模式外的呼叫拿到的是「不在計劃模式」，不是核准的措辭（第 2 組最後一條）。
+ * 4. **拒絕在核准之前的證據**：模式外的呼叫拿到的是「不在計劃模式」，不是核准的措辭（第 2 組最後一條）。
+ *    拒絕的載體是 `tools/pre-execute` 的監聽者（#1272），位置由 `fold.ts` 保證；逐字等價的差分在
+ *    `plan-mode-refusal-differential.test.ts`。
  * 5. **`/plan` 這條路**：人打的那一行到底有沒有讓下一輪的 prompt 變得不一樣
  *    （[#120](https://github.com/DemianLi/nexus-agent/issues/120)）。
  */
@@ -480,9 +482,9 @@ describe('exit_plan_mode 的結局', () => {
   /**
    * **不在模式裡的時候：說的是模式，不是核准。**
    *
-   * 這一條是 `prepend: true` 的證據。plan-mode 自己不再掛閘門，所以這裡掛一位**什麼工具都要核准**的探針
-   * （`approval.patch.yml` 那一類組裝會長這樣）。少了 `prepend`，`fold` 會把計劃模式的 middleware 排到
-   * 核准閘門**之後**，這次呼叫會先撞上探針、在 headless 底下拿到「沒有人被問到」——而真正的原因是
+   * 這一條是「模式外拒絕排在核准閘門之前」的證據。plan-mode 自己不再掛閘門，所以這裡掛一位**什麼工具都要核准**的探針
+   * （`approval.patch.yml` 那一類組裝會長這樣）。拒絕若排到核准閘門**之後**（#1272 以前靠 middleware 的 `prepend`，
+   * 現在靠 `tools/pre-execute` 的槽位），這次呼叫會先撞上探針、在 headless 底下拿到「沒有人被問到」——而真正的原因是
    * 「你不在計劃模式」。
    */
   it('模式外呼叫 → 說的是「不在計劃模式」，不是核准的措辭', async () => {
@@ -513,8 +515,8 @@ describe('exit_plan_mode 的結局', () => {
     const refusal = lastToolMessage(result.messages as BaseMessage[]);
     expect(refusal?.text).toContain(NOT_IN_PLAN_MODE_MESSAGE);
     expect(refusal?.text).not.toContain('是沒有人被問到');
-    // **日誌上記的是錯誤、不帶碼**（#273）：模式外 dsh 拋的是一般 `Error`。這是 middleware
-    // 自己回結果、不往下叫的那條路，所以圍堵讀的是 middleware 那則訊息。
+    // **日誌上記的是錯誤、不帶碼**（#273）：模式外 dsh 拋的是一般 `Error`。這是 `tools/pre-execute` 的 `deny`
+    // （`toolRefusal`、不往下叫）那條路，所以圍堵讀的是那則拒絕訊息。
     expect(exitVerdicts(sessions.root.events)).toEqual([
       { callId: expect.any(String), isError: true },
     ]);
