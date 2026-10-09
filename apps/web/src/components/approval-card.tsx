@@ -25,9 +25,13 @@
  * 按鈕只有 `pending.allowedDecisions` 裡的那些，而那份清單是**逐筆交集**（見
  * `@nexus/wire` 的 `intersectDecisions`）：基座對不在某一筆清單裡的決定是當場拋，
  * 一顆多出來的按鈕按下去是整場 run 死。
+ *
+ * **沙箱升級**（`request_sandbox_escalation`，#1292）畫 harness 送的那句描述（模式、理由、只蓋這一次），不畫工具名與參數 JSON；
+ * 升到全開多一句警告。沒有描述就照一般的畫（`lib/sandbox-escalation.ts`）。
  */
 
 import type { PendingApproval } from '@nexus/wire';
+import { ShieldAlert } from 'lucide-react';
 
 import { Chevron } from '@/components/chevron';
 import { Surface } from '@/components/surface';
@@ -35,6 +39,7 @@ import type { PendingAsker } from '@/lib/approval-asker';
 import { Button } from '@/components/ui/button';
 import { RowTrigger } from '@/components/row-trigger';
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
+import { FULL_ACCESS_NOTE, escalationView } from '@/lib/sandbox-escalation';
 
 /** 封閉詞彙的中文字面。認不得的原樣顯示——寧可露出來，不要吞掉。 */
 const LABELS: Record<string, string> = { approve: '全部核准', reject: '全部拒絕' };
@@ -60,17 +65,41 @@ function Actions({ pending, asker }: { pending: PendingApproval; asker?: Pending
           {asker.description !== undefined && <>，它在做：{asker.description}</>}
         </p>
       )}
-      {pending.actions.map((action, index) => (
-        <div key={`${action.name}-${index}`} className="flex flex-col gap-1.5">
-          <p className="text-body">
-            要執行 <code className="font-mono font-medium">{action.name}</code>
-          </p>
-          <pre className="text-muted-foreground font-mono text-tip whitespace-pre-wrap">
-            {/* 參數解不開的那顆，酬載帶的是模型吐的原字串（#281）：原樣顯示，不再包一層引號。 */}
-            {typeof action.args === 'string' ? action.args : JSON.stringify(action.args, null, 2)}
-          </pre>
-        </div>
-      ))}
+      {pending.actions.map((action, index) => {
+        const escalation = escalationView(action);
+        if (escalation !== undefined) {
+          return (
+            <div
+              key={`${action.name}-${index}`}
+              className="flex flex-col gap-1.5"
+              data-testid="approval-escalation"
+            >
+              {/* 描述裡有檔案路徑：長路徑沒有空格，不斷行會撐破窄螢幕。 */}
+              <p className="text-body wrap-anywhere">{escalation.reason}</p>
+              {escalation.fullAccess && (
+                <p
+                  className="text-warning flex items-start gap-1.5 text-body"
+                  data-testid="approval-full-access"
+                >
+                  <ShieldAlert aria-hidden className="mt-0.5 size-4 shrink-0" />
+                  {FULL_ACCESS_NOTE}
+                </p>
+              )}
+            </div>
+          );
+        }
+        return (
+          <div key={`${action.name}-${index}`} className="flex flex-col gap-1.5">
+            <p className="text-body">
+              要執行 <code className="font-mono font-medium">{action.name}</code>
+            </p>
+            <pre className="text-muted-foreground font-mono text-tip whitespace-pre-wrap">
+              {/* 參數解不開的那顆，酬載帶的是模型吐的原字串（#281）：原樣顯示，不再包一層引號。 */}
+              {typeof action.args === 'string' ? action.args : JSON.stringify(action.args, null, 2)}
+            </pre>
+          </div>
+        );
+      })}
     </Surface>
   );
 }
