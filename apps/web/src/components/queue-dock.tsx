@@ -11,6 +11,7 @@ import {
   Paperclip,
   Pencil,
   SendHorizontal,
+  Target,
   Trash2,
   X,
 } from 'lucide-react';
@@ -23,10 +24,14 @@ import { Button } from '@/components/ui/button';
 import { RowTrigger } from '@/components/row-trigger';
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import { Textarea } from '@/components/ui/textarea';
+import { cn } from '@/lib/utils';
 import type { QueueUpdateRejected } from '@/hooks/use-conversation';
 import { useSettledQueue } from '@/hooks/use-settled-queue';
 import type { QueueRow } from '@/hooks/use-settled-queue';
 import {
+  GOAL_CONTINUATION_TEXT,
+  GOAL_CONTINUATION_WARNING,
+  isGoalContinuation,
   isQueueParked,
   QUEUE_GONE_TEXT,
   QUEUE_PARKED_TEXT,
@@ -242,14 +247,22 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
     const attachmentCount = item.attachments?.length ?? 0;
     const attachmentNames = attachmentsPreview(item.attachments);
     const preview = queuePreview(shown.trim() === '' ? attachmentNames : shown);
-    const label = labelPreview(shown.trim() === '' ? attachmentNames : shown);
+    // 目標續行的預約（#638）：文字是給模型的提示詞，畫面寫「目標續行」；編輯、刪除都會暫停目標，講在那一列上；沒有插話鈕。
+    const goal = isGoalContinuation(item);
+    const label = goal
+      ? GOAL_CONTINUATION_TEXT
+      : labelPreview(shown.trim() === '' ? attachmentNames : shown);
     return (
       <li
         key={item.id}
         data-queue-item={item.id}
+        data-queue-goal={goal || undefined}
         data-leaving={leaving || undefined}
         aria-hidden={leaving || undefined}
-        className="animate-in fade-in-0 flex min-w-0 items-start gap-2 rounded-row px-3 py-1 text-body transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden"
+        className={cn(
+          'animate-in fade-in-0 flex min-w-0 items-start gap-2 rounded-row px-3 py-1 text-body transition-opacity duration-(--duration-quick) motion-reduce:animate-none motion-reduce:transition-none data-[leaving]:opacity-0 motion-reduce:data-[leaving]:hidden',
+          goal && 'flex-wrap',
+        )}
       >
         {isEditing ? (
           <>
@@ -289,17 +302,28 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
           </>
         ) : (
           <>
-            {live.length === 1 && (
-              <ListEnd
+            {goal ? (
+              <Target
                 aria-hidden
                 className="text-muted-foreground mt-2.5 size-4 shrink-0 lg:mt-2"
               />
+            ) : (
+              live.length === 1 && (
+                <ListEnd
+                  aria-hidden
+                  className="text-muted-foreground mt-2.5 size-4 shrink-0 lg:mt-2"
+                />
+              )
             )}
             <span
-              className="min-h-11 min-w-0 flex-1 truncate py-2.5 lg:min-h-8 lg:py-1.5"
-              title={preview}
+              className={cn(
+                'min-h-11 min-w-0 flex-1 truncate py-2.5 lg:min-h-8 lg:py-1.5',
+                goal && 'text-muted-foreground',
+              )}
+              title={goal ? GOAL_CONTINUATION_TEXT : preview}
+              data-testid={goal ? 'queue-goal-label' : undefined}
             >
-              {preview}
+              {goal ? GOAL_CONTINUATION_TEXT : preview}
             </span>
             {attachmentCount > 0 && (
               <span
@@ -318,8 +342,10 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
               size="icon"
               className="size-11 shrink-0 lg:size-8"
               data-queue-action="edit"
-              aria-label={`編輯：${label}`}
-              title="編輯"
+              aria-label={
+                goal ? `編輯：${label}（${GOAL_CONTINUATION_WARNING}）` : `編輯：${label}`
+              }
+              title={goal ? `編輯（${GOAL_CONTINUATION_WARNING}）` : '編輯'}
               disabled={locked || leaving}
               onClick={() => setEditing({ id: item.id, text: item.text })}
             >
@@ -331,27 +357,39 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
               size="icon"
               className="size-11 shrink-0 lg:size-8"
               data-queue-action="remove"
-              aria-label={`刪除：${label}`}
-              title="刪除"
+              aria-label={
+                goal ? `刪除：${label}（${GOAL_CONTINUATION_WARNING}）` : `刪除：${label}`
+              }
+              title={goal ? `刪除（${GOAL_CONTINUATION_WARNING}）` : '刪除'}
               disabled={locked || leaving}
               onClick={() => void update(item.id, { kind: 'remove' })}
             >
               <Trash2 />
             </Button>
-            <Button
-              type="button"
-              variant="ghost"
-              size="icon"
-              className="size-11 shrink-0 lg:size-8"
-              data-queue-action="steer"
-              aria-label={`${STEER_ROW_LABEL}：${label}`}
-              title={steerable ? STEER_ROW_LABEL : STEER_ROW_UNAVAILABLE_TEXT}
-              disabled={locked || leaving || !steerable}
-              onClick={() => void update(item.id, STEER_ACTION)}
-            >
-              <SendHorizontal />
-            </Button>
+            {!goal && (
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-11 shrink-0 lg:size-8"
+                data-queue-action="steer"
+                aria-label={`${STEER_ROW_LABEL}：${label}`}
+                title={steerable ? STEER_ROW_LABEL : STEER_ROW_UNAVAILABLE_TEXT}
+                disabled={locked || leaving || !steerable}
+                onClick={() => void update(item.id, STEER_ACTION)}
+              >
+                <SendHorizontal />
+              </Button>
+            )}
           </>
+        )}
+        {goal && (
+          <p
+            className="text-muted-foreground basis-full pb-1 pl-6 text-tip"
+            data-testid="queue-goal-warning"
+          >
+            {GOAL_CONTINUATION_WARNING}
+          </p>
         )}
       </li>
     );

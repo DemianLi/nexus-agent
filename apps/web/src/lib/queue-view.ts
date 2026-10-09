@@ -73,6 +73,25 @@ export function isQueuedByAgent(item: Pick<WireQueuedInput, 'source'>): boolean 
   return isSettledNotice(item) || isAgentMessage(item);
 }
 
+/** 目標續行的預約在佇列列上的名字（#638）：它不是人說的話，文字是給模型的續行提示詞，畫面不照抄。 */
+export const GOAL_CONTINUATION_TEXT = '目標續行';
+
+/**
+ * 動這一件的後果，**講在那一列上**（#638）：harness 把刪掉它當成「不要再續行了」，所以暫停目標；改它的文字等同刪掉
+ * （預約的文字必須逐字等於目前目標的續行提示詞）。不是「跳過這一輪」，人要先知道。
+ */
+export const GOAL_CONTINUATION_WARNING = '刪除或編輯會暫停目標';
+
+/** 這一件是不是目標續行的預約（#638）：排程器放的，不是人排的。 */
+export function isGoalContinuation(item: Pick<WireQueuedInput, 'source'>): boolean {
+  return item.source.kind === 'goal';
+}
+
+/** 能改成插話的件：目標續行的預約不能（伺服器回 `steer_unavailable`），整批插話與「有沒有東西可插」都先濾掉它。 */
+export function steerableItems(items: readonly WireQueuedInput[]): readonly WireQueuedInput[] {
+  return items.filter((item) => !isGoalContinuation(item));
+}
+
 /** 不是人排的那一件在佇列列上寫什麼；人排的沒有。 */
 export function queuedAgentText(item: Pick<WireQueuedInput, 'source'>): string | undefined {
   if (item.source.kind === 'subagent-settled') return settledNoticeText(item.source.reason);

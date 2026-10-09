@@ -580,6 +580,29 @@ describe('對話介面', () => {
       expect((input as HTMLTextAreaElement).placeholder).toBe('說點什麼…');
     });
 
+    it('佇列裡有目標續行的預約（#638）：整批插話只動人排的，預約留著、沒有插話鈕、不跳「不收插話」', async () => {
+      const { fake, input } = await runningWithQueue(['第一句']);
+      fake.downlink.acceptGoal(fake.opened[0]!, 'Continue working toward the goal.');
+      const dock = screen.getByTestId('queue-dock');
+      await waitFor(() => expect(dock.textContent).toContain('2 則排著的訊息'));
+      fireEvent.click(within(dock).getByRole('button', { name: '2 則排著的訊息' }));
+      expect(await within(dock).findByTestId('queue-goal-label')).toBeTruthy();
+      expect(within(dock).queryByRole('button', { name: /^插話：目標續行/u })).toBeNull();
+      expect((input as HTMLTextAreaElement).placeholder).toBe(
+        'Cmd/Ctrl+Enter 把排著的全部改成插話',
+      );
+      fireEvent.keyDown(input, { key: 'Enter', ctrlKey: true });
+      await waitFor(() =>
+        expect(document.querySelectorAll('[data-pending-steer]')).toHaveLength(1),
+      );
+      expect(document.querySelector('[data-pending-steer]')?.textContent).toContain('第一句');
+      // 預約還在隊裡，沒被插話帶走，也沒有「不收插話」的提示。
+      await waitFor(() => expect(screen.getByTestId('queue-goal-label')).toBeTruthy());
+      expect(screen.queryByText('這一輪已經不收插話了，那一則照舊排著')).toBeNull();
+      // 只剩預約：沒有可插的件，空白 Cmd/Ctrl+Enter 的提示收回。
+      expect((input as HTMLTextAreaElement).placeholder).toBe('說點什麼…');
+    });
+
     it('窄螢幕（640 以下）提示字不講快捷鍵，手勢照樣生效', async () => {
       vi.stubGlobal('matchMedia', (query: string) => ({
         matches: /\(min-width:\s*(\d+)px\)/.test(query)
