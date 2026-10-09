@@ -17,6 +17,46 @@ function pending(args: unknown): PendingApproval {
   } as unknown as PendingApproval;
 }
 
+describe('前景子代理在問（#328）', () => {
+  it('給了 asker：卡上寫誰在問、它在做什麼；沒給（root 自己問）沒有這一行', () => {
+    const { rerender } = render(
+      <ApprovalCard
+        pending={pending({ file: 'a' })}
+        asker={{ label: '子代理「explore」', description: '整理 README' }}
+        busy={false}
+        onDecide={() => {}}
+        onStop={() => {}}
+      />,
+    );
+    const line = screen.getByTestId('approval-asker');
+    expect(line.textContent).toBe('子代理「explore」要執行這個操作，它在做：整理 README');
+    rerender(
+      <ApprovalCard
+        pending={pending({ file: 'a' })}
+        busy={false}
+        onDecide={() => {}}
+        onStop={() => {}}
+      />,
+    );
+    expect(screen.queryByTestId('approval-asker')).toBeNull();
+  });
+
+  it('委派卡沒有說明：只寫誰在問', () => {
+    render(
+      <ApprovalCard
+        pending={pending({})}
+        asker={{ label: '子代理「explore」' }}
+        busy={false}
+        onDecide={() => {}}
+        onStop={() => {}}
+      />,
+    );
+    expect(screen.getByTestId('approval-asker').textContent).toBe(
+      '子代理「explore」要執行這個操作',
+    );
+  });
+});
+
 describe('核准卡上的參數', () => {
   it('參數解不開的那顆，酬載帶的是原字串：原樣顯示，不包一層引號（#281）', () => {
     render(

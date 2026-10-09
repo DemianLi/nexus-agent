@@ -16,6 +16,7 @@ import type { ConversationState } from '@nexus/wire';
 
 import { AgentOrb } from '@/components/agent-orb';
 import { Button } from '@/components/ui/button';
+import { pendingAsker } from '@/lib/approval-asker';
 import { pendingLabel } from '@/lib/pending-label';
 
 /** 斷線那一行怎麼講。 */
@@ -125,7 +126,11 @@ export function StatusLine({
     // 帶跨面板進度「（1／2）」——兩種中斷混著掛時，進度讓人知道後面還有幾個。
     return (
       <p className="text-body" role="status">
-        {pendingLabel(pending, { index: 0, total: state.pendings.length })}
+        {pendingLabel(
+          pending,
+          { index: 0, total: state.pendings.length },
+          pendingAsker(state, pending)?.label,
+        )}
       </p>
     );
   }

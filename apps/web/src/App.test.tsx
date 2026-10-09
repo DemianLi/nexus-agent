@@ -273,7 +273,7 @@ function approvalFrame(
   actions: readonly { name: string; allowed: readonly string[] }[],
   interruptId = 'int-1',
 ): Event {
-  return frame('input.requested', ['tools:a'], {
+  return frame('input.requested', [], {
     interrupt_id: interruptId,
     payload: {
       actionRequests: actions.map((action) => ({ name: action.name, args: { n: action.name } })),
@@ -768,7 +768,7 @@ describe('核准請求', () => {
     await waitFor(() => expect(responded.length).toBe(1));
     // **兩筆決定，不是一筆**：基座逐 index 配對，長度不符會殺掉整場 run。
     expect(responded[0]).toEqual({
-      namespace: ['tools:a'],
+      namespace: [],
       interrupt_id: 'int-1',
       response: { decisions: [{ type: 'approve' }, { type: 'approve' }] },
     });
@@ -851,7 +851,7 @@ describe('核准請求', () => {
     fireEvent.click(within(first).getByRole('button', { name: '全部核准' }));
     await waitFor(() => expect(responded.length).toBe(1));
     expect(responded[0]).toEqual({
-      namespace: ['tools:a'],
+      namespace: [],
       interrupt_id: 'int-1',
       response: { decisions: [{ type: 'approve' }] },
     });
@@ -1583,6 +1583,77 @@ describe('提問面板', () => {
     });
   });
 
+  it('兩個前景子代理平行各自要核准（#328）：面板與狀態列講出是誰在問，各答各的，答對的那個 namespace', async () => {
+    seq = 0;
+    const delegate = (callId: string, namespace: string, type: string, description: string) =>
+      frame('tools', [namespace], {
+        event: 'tool-started',
+        tool_call_id: callId,
+        tool_name: 'task',
+        input: JSON.stringify({ subagent_type: type, description }),
+      });
+    const ask = (id: string, namespace: string) =>
+      frame('input.requested', [namespace], {
+        interrupt_id: id,
+        payload: {
+          actionRequests: [{ name: 'write_file', args: { path: id } }],
+          reviewConfigs: [{ actionName: 'write_file', allowedDecisions: ['approve', 'reject'] }],
+        },
+      });
+    const { client, responded } = fakeClient([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      delegate('c1', 'tools:u1', 'explore', '整理 README'),
+      delegate('c2', 'tools:u2', 'writer', '寫測試'),
+      ask('int-1', 'tools:u1'),
+      ask('int-2', 'tools:u2'),
+    ]);
+    render(<App client={client} />);
+
+    const first = await screen.findByRole('region', {
+      name: '等待核准：write_file（子代理「explore」要的）（1／2）',
+    });
+    expect(screen.getByRole('status').textContent).toBe(
+      '等待核准：write_file（子代理「explore」要的）（1／2）',
+    );
+    expect(within(first).getByTestId('approval-asker').textContent).toBe(
+      '子代理「explore」要執行這個操作，它在做：整理 README',
+    );
+    fireEvent.click(within(first).getByRole('button', { name: '全部核准' }));
+    await waitFor(() => expect(responded).toHaveLength(1));
+    expect(responded[0]).toMatchObject({ namespace: ['tools:u1'], interrupt_id: 'int-1' });
+
+    // 第一顆答掉之後才輪到第二顆，講的是另一個子代理。
+    const second = await screen.findByRole('region', {
+      name: '等待核准：write_file（子代理「writer」要的）',
+    });
+    expect(within(second).getByTestId('approval-asker').textContent).toContain('子代理「writer」');
+    fireEvent.click(within(second).getByRole('button', { name: '全部拒絕' }));
+    await waitFor(() => expect(responded).toHaveLength(2));
+    expect(responded[1]).toMatchObject({ namespace: ['tools:u2'], interrupt_id: 'int-2' });
+  });
+
+  it('重新整理後子代理的核准還掛著、委派卡接不回（#328）：只說「子代理」，不編名字，答得出去', async () => {
+    seq = 0;
+    // 即時那條線沒重播、歷史讀的是 root 的日誌：state.subagents 是空的，但 namespace 非空（root 自己問的是 []）。
+    const { client, responded } = fakeClient([
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      frame('input.requested', ['tools:gone'], {
+        interrupt_id: 'int-9',
+        payload: {
+          actionRequests: [{ name: 'write_file', args: { path: 'x' } }],
+          reviewConfigs: [{ actionName: 'write_file', allowedDecisions: ['approve', 'reject'] }],
+        },
+      }),
+    ]);
+    render(<App client={client} />);
+
+    const panel = await screen.findByRole('region', { name: '等待核准：write_file（子代理要的）' });
+    expect(within(panel).getByTestId('approval-asker').textContent).toBe('子代理要執行這個操作');
+    fireEvent.click(within(panel).getByRole('button', { name: '全部核准' }));
+    await waitFor(() => expect(responded).toHaveLength(1));
+    expect(responded[0]).toMatchObject({ namespace: ['tools:gone'], interrupt_id: 'int-9' });
+  });
+
   it('兩種中斷同時掛著時先來先處理，答掉核准那顆才輪到提問，各送各的形狀', async () => {
     seq = 0;
     const { client, responded } = fakeClient([
@@ -1601,7 +1672,7 @@ describe('提問面板', () => {
       expect(responded).toHaveLength(1);
     });
     expect(responded[0]).toEqual({
-      namespace: ['tools:a'],
+      namespace: [],
       interrupt_id: 'int-1',
       response: { decisions: [{ type: 'approve' }] },
     });
@@ -1904,7 +1975,7 @@ describe('記住這條 thread', () => {
       fireEvent.click(within(panel).getByRole('button', { name: '全部核准' }));
       await waitFor(() => expect(fake.responded).toHaveLength(1));
       expect(fake.responded[0]).toEqual({
-        namespace: ['tools:a'],
+        namespace: [],
         interrupt_id: 'int-7',
         response: { decisions: [{ type: 'approve' }] },
       });
