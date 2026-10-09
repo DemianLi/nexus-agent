@@ -21,7 +21,7 @@
 - **表面**：卡片與內層底用 `Surface`，不手寫 `bg-stage shadow-stage`、`bg-card shadow-material rounded-3xl`、`bg-card border rounded-3xl`。
 - **展開箭頭**：用 `Chevron`，不手寫 `transition-transform … rotate-180`（或跟著 `data-state=open` 轉的 `rotate-*`）。
 - **可展開列**：用 `RowTrigger`，不手寫 `hover:bg-chip-hover active:bg-chip-pressed … w-full … text-left`。
-- **焦點外框**：`ui/` 以外不寫 `focus-visible:ring-*`。全域已經畫 outline，`theme.css` 把 ring 清掉了，寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在 `theme.css` 的 layer 外，`outline-none` 擋不掉；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
+- **焦點外框**：`ui/` 以外不寫 `focus-visible:ring-*`。全域已經畫 outline，`theme.css` 把 ring 清掉了，寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在 `theme.css` 的 layer 外，`outline-none` 擋不掉；文字輸入框（`input`、`textarea`）不畫，它們用邊框變色或群組外框；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
 - **圓角**：走階梯（`rounded-md`…`rounded-3xl`、`rounded-full`）或有名字的 `rounded-row`。不寫 `rounded-[20px]`。
 - 需要一個系統裡沒有的值 → **先在規格與 `index.css` 加一階**（有名字、有理由），不要寫任意值。
 

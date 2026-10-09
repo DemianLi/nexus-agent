@@ -42,8 +42,12 @@
  *   而它們自帶的 ring 又被下面那條清掉——放在 base layer 時兩邊抵消，**鍵盤 Tab 走一輪有一半的元件看不到焦點**（#1279 量到 67 個裡 34 個）。
  *   沒有 layer 的樣式贏過 utilities，所以 `outline-none` 擋不掉它。
  * - **offset 留在 base layer**：外框被 `overflow-hidden` 裁掉的地方（縮圖、分頁）用 `focus-visible:-outline-offset-2` 畫進裡面，要讓 utility 贏。
- * - **不畫外框的只有三種**：程式把焦點搬到面板或題目容器（`tabindex=-1`，Radix 選單項也是，它們用底色標目前那一項）；
- *   輸入框群組裡的輸入框（外框畫在整個群組上，`ui/input-group.tsx`）；自己畫了別的焦點樣子、標了 `data-focus="custom"` 的（例如右側欄的拖曳把手整條變色）。
+ * - **不畫外框的只有三種**：
+ *   - 程式把焦點搬到面板或題目容器（`tabindex=-1`；Radix 選單項也是，它們用底色標目前那一項）。
+ *   - **文字輸入框**（`input`、`textarea`）：滑鼠點進去也算 `:focus-visible`，而它們自己有焦點樣子——registry 的 `Input`／`Textarea`
+ *     是邊框變 `border-ring`，輸入框群組是整個群組畫外框（`ui/input-group.tsx`）。再畫一圈會變成邊框加外框的雙圈。
+ *     本專案沒有原生的 checkbox／radio（勾選框都是 Radix 的按鈕），所以整類排除不會漏掉別種控制項。
+ *   - 自己畫了別的焦點樣子、標了 `data-focus="custom"` 的（例如右側欄的拖曳把手整條變色）。
  * - registry 自帶的 `focus-visible:ring-[3px]` 在 layer 外關掉，兩圈才不會疊在一起。
  */
 @layer base {
@@ -52,7 +56,7 @@
   }
 }
 
-:focus-visible:not([tabindex='-1'], [data-slot='input-group-control'], [data-focus='custom']) {
+:focus-visible:not([tabindex='-1'], input, textarea, [data-focus='custom']) {
   outline: 2px solid var(--ring);
 }
 

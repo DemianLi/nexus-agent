@@ -37,11 +37,12 @@ describe('焦點外框', () => {
     expect(outside).toMatch(/:focus-visible[^{]*\{\s*outline:\s*2px solid var\(--ring\);?\s*\}/);
   });
 
-  test('只排除程式搬焦點的容器、輸入框群組裡的輸入框、自己畫焦點樣子的', () => {
+  test('只排除程式搬焦點的容器、文字輸入框（自己有焦點樣子，滑鼠點也算 focus-visible）、自己畫焦點樣子的', () => {
     const selector = /(:focus-visible:not\(([^)]*)\))\s*\{\s*outline:/.exec(unlayered(css))?.[2];
     expect(selector?.split(',').map((s) => s.trim())).toEqual([
       "[tabindex='-1']",
-      "[data-slot='input-group-control']",
+      'input',
+      'textarea',
       "[data-focus='custom']",
     ]);
   });
