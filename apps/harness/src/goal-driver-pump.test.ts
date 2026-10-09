@@ -1083,8 +1083,18 @@ describe('封存的會話（#633）', () => {
   it('目標續行：這一輪被擋下，目標轉 blocked（prompt-rejected），取消封存也不自己續行', async () => {
     // 第一輪（人的）放行並建好目標；之後封存：續行輪被擋下。
     let archived = false;
+    // 預算給大：被擋下的輪一次就跑完（不叫模型），目標若沒被擋下轉成 blocked，就會在預算內一直開空輪。
     const { pump, port, state, violations, stop } = await build({
-      turns: [...CREATE_TURNS, QUIET],
+      turns: [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 50 } },
+          ],
+        },
+        { content: '建好了。' },
+        QUIET,
+      ],
       threadId: 'archived-goal',
       withDriver: true,
       isArchived: () => archived,
@@ -1096,8 +1106,9 @@ describe('封存的會話（#633）', () => {
     // 建好目標後、續行輪領走之前封存。
     archived = true;
     await settle(pump);
-    expect(startKinds(pump.sessionLog)[0]).toBe('message');
-    expect(endKinds(pump.sessionLog).at(-1)).toBe('blocked');
+    // 剛好一顆續行輪被擋下，沒有空轉。
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    expect(endKinds(pump.sessionLog)).toEqual(['done', 'blocked']);
     expect(port.goal()).toMatchObject({
       phase: 'blocked',
       blockedReason: { code: 'prompt-rejected' },
@@ -1116,7 +1127,7 @@ describe('封存的會話（#633）', () => {
     await stop();
   });
 
-  it('停在核准點的那一輪收到答覆時已經封存：不叫模型，這一輪以 blocked 收', async () => {
+  it('停在核准點的那一輪收到答覆時已經封存：核准過的工具照跑（dsh 的閘門在步前），下一次叫模型才被擋，這一輪以 blocked 收', async () => {
     let archived = false;
     const { pump, state, stop } = await build({
       turns: [
@@ -1145,6 +1156,9 @@ describe('封存的會話（#633）', () => {
     expect(pump.pendings).toHaveLength(0);
     expect(startKinds(pump.sessionLog)).toEqual(['message', 'resume']);
     expect(endKinds(pump.sessionLog).at(-1)).toBe('blocked');
+    // 核准是在叫模型之前就給的：dsh 的一步是「叫模型→跑工具」，`ArchivedSessionGate` 掛在步前，所以掛著的核准照樣落地。
+    const results = pump.sessionLog.events.filter((event) => event.type === 'tool/result');
+    expect(results).toHaveLength(1);
     await stop();
   });
 });

@@ -949,7 +949,10 @@ export class BackgroundSubagentHost {
     try {
       log = this.#sessions.open({ kind: 'subagent', runId: job.runId });
       log.append('turn/start', job.turn);
-      await this.#enter(log, () => this.#drive(log!, job, running));
+      // **輪頭先問，話不進圖**（#633，同 `ThreadPump.#runOnce` 的輪頭檢查）：子代理那一層被閘門擋下時不拋、回合成的空訊息讓圖正常收尾，
+      // 存檔點一定會存，所以這一句話交進圖就留在它的對話裡。封存的會話一開輪就擋，這一句連圖都不進。
+      if (this.#isArchived?.() === true) running.blocked = true;
+      else await this.#enter(log, () => this.#drive(log!, job, running));
       // 被父代理中斷的那一輪收成 aborted/parent；沒被中斷就是正常結束。
       // 中止先判（閘門本身也讓中止優先，見 `turn-cancel.ts`），所以 `blocked` 與 `aborted` 不會同時成立。
       const blocked = running.blocked && !controller.signal.aborted;

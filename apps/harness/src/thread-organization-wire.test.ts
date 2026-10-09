@@ -353,6 +353,7 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
     const goals = options.withGoal === true ? built.services.use(GOALS_SERVICE) : undefined;
     const threadOrganization = await ThreadOrganization.open(join(dir, 'home'));
     let sessions: SessionRegistry | undefined;
+    let attachment: ReturnType<ReturnType<typeof composeAttachSessions>> | undefined;
     const { client, raw } = rig({
       threadOrganization,
       storedThreadKnown: async () => false,
@@ -362,7 +363,8 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
         dispose: () => built.dispose(),
         attachSessions: (registry, backgroundPort) => {
           sessions = registry;
-          return composeAttachSessions(built)(registry, backgroundPort);
+          attachment = composeAttachSessions(built)(registry, backgroundPort);
+          return attachment;
         },
         ...(goals !== undefined && {
           goalDriver: (log: () => SessionLog): GoalDriverPort => ({
@@ -386,6 +388,7 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
       workerModel,
       threadOrganization,
       sessions: () => sessions!,
+      background: () => attachment!.background!,
     };
   }
 
@@ -455,6 +458,43 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
     // 子代理收尾會通知主對話（結算喚醒）：喚醒開出來的那一輪被閘門擋下（blocked），根模型仍只被叫過兩次。
     await until(() => endKinds(rigged.sessions().root).includes('blocked'));
     expect(rigged.rootModel.prompts).toHaveLength(2);
+  }, 20000);
+
+  it('封存之後背景子代理才開的輪：話不進它的對話——取消封存後下一輪，子代理的模型只看到新的那句', async () => {
+    const rigged = await assemble(
+      [
+        delegate,
+        { content: '派出去了。' },
+        ...Array.from({ length: 6 }, () => ({ content: '收到。' })),
+      ],
+      [{ content: '第一輪做完。' }, { content: '第二輪做完。' }],
+    );
+    await rigged.client.runStart('t1', '委派');
+    await until(() => rigged.workerModel.prompts.length === 1);
+    const child = rigged
+      .sessions()
+      .list()
+      .find((entry) => entry.address.kind === 'subagent')!;
+    const runId = (child.address as { runId: string }).runId;
+    await until(() => endKinds(child.log).length === 1);
+    await settle(100);
+
+    await rigged.threadOrganization.archive('t1', {
+      known: () => Promise.resolve(true),
+      activity: () => [],
+      stop: () => Promise.resolve(),
+    });
+    rigged.background().sendFromUser(runId, '封存之後的話');
+    await until(() => endKinds(child.log).length === 2);
+    expect(endKinds(child.log)).toEqual(['done', 'blocked']);
+    expect(rigged.workerModel.prompts).toHaveLength(1);
+
+    await rigged.threadOrganization.unarchive('t1');
+    rigged.background().sendFromUser(runId, '恢復之後的話');
+    await until(() => rigged.workerModel.prompts.length === 2);
+    const seen = (rigged.workerModel.prompts[1] ?? []).map((message) => message.text).join('\n');
+    expect(seen).toContain('恢復之後的話');
+    expect(seen).not.toContain('封存之後的話');
   }, 20000);
 
   it('背景子代理的每一步也過閘門（血統）：封存落在它兩步之間，下一步不叫模型，那一輪以 blocked 收、結算原因是 refusal', async () => {
@@ -548,9 +588,11 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
     await until(() => rigged.sessions() !== undefined);
     expect(await rigged.client.threadArchive('t1')).toMatchObject({ result: { ok: true } });
     const root = rigged.sessions().root;
-    rigged.goals!.serviceFor(root)?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    rigged.goals!.serviceFor(root)?.create({ objective: '把 CI 修綠', maxGoalRounds: 50 });
     await until(() => endKinds(root).includes('blocked'));
     expect(rigged.rootModel.prompts).toHaveLength(0);
+    // 預算給大：目標若沒被擋下轉成 blocked，這裡會看到不只一顆空輪（沒有空轉）。
+    expect(root.events.filter((event) => event.type === 'turn/start')).toHaveLength(1);
     expect(rigged.goals!.serviceFor(root)?.get()).toMatchObject({
       phase: 'blocked',
       blockedReason: { code: 'prompt-rejected' },
