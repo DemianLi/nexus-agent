@@ -1,5 +1,5 @@
 /**
- * 契約先合、實作還沒做的幾塊（#633 釘選封存改名、#328 子代理清單、#732 上傳與收據）：**每一支未實作的方法都回 `not_supported`**。
+ * 契約先合、實作還沒做（或沒接落盤時）的幾塊（#633 釘選封存、#328 子代理清單、#732 上傳與收據）：**每一支未實作的方法都回 `not_supported`**。
  *
  * web 據這個碼把功能藏起來，所以「還沒做」必須是這個碼，不是 404、不是空結果、不是 `invalid_argument`。實作落地時，
  * 對應的那條在這裡換成真的行為測試——這條測試紅了就是有人實作了一半、忘了來更新契約這一側。
@@ -69,12 +69,12 @@ describe('每一支未實作的方法都回 not_supported', () => {
         'thread.unarchive',
         'thread.unpin',
       ]);
+      // `thread.rename` 不在這裡：它寫在會話日誌上、不依賴整理檔，已有真的行為測試（`thread-rename-wire.test.ts`）。
       const outcomes = [
         await client.threadPin('t'),
         await client.threadUnpin('t'),
         await client.threadArchive('t', { stopActivity: true }),
         await client.threadUnarchive('t'),
-        await client.threadRename('t', '新標題'),
         await client.subagentList('t'),
       ];
       for (const outcome of outcomes) expect(outcome).toMatchObject(NOT_SUPPORTED);

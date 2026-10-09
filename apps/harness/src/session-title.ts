@@ -133,6 +133,51 @@ export function normalizeThreadTitle(input: string, maxBytes: number): string {
   return truncateUtf8(cleanTitleText(input), maxBytes).trimEnd();
 }
 
+/** 使用者的標題正規化完是空的：唯一一個怪輸入的改名失敗（dsh `SessionTitleInvalidError`）。 */
+export class ThreadTitleInvalidError extends Error {
+  override readonly name = 'ThreadTitleInvalidError';
+}
+
+/**
+ * 這份日誌的標題被使用者釘住了嗎：最後一顆 `session/title` 的來源是 `user`（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
+ * 釘住的標題不會再被自動產生的蓋過——模型標題寫入前問這一句（dsh `onUserMessage` 的 `source.kind === 'user'` 與 `rename` 的 `supersede`；
+ * 我們沒有「排著的任務」可以撤，所以在落筆前問）。
+ */
+export function titlePinnedByUser(events: readonly SessionEvent[]): boolean {
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    const event = events[at]!;
+    if (event.type === 'session/title') return event.data.source.kind === 'user';
+  }
+  return false;
+}
+
+/**
+ * 使用者改名：正規化（同模型標題那一支，{@link normalizeThreadTitle}），追加一顆 `source: user` 的 `session/title`，**釘住**。
+ * 照 dsh `SessionTitleService.rename`：`messageSeqs` 是空的（沒有哪幾則人話推出它），後來的自動標題不會蓋過。
+ *
+ * 寫的是這條會話現在的日誌，不要求在一輪之外（模型標題也是這樣寫）；一輪在跑時改名，那顆事件落在那一輪中間，讀的人拿最後一顆。
+ *
+ * @param log - root 那一份。
+ * @param title - 使用者打的字。
+ * @param maxBytes - 標題的 UTF-8 位元組上限（清單上 `#settings/thread-title` 的 `maxTitleBytes`）。
+ * @returns 受理後的標題與那一顆事件的 `seq`。
+ * @throws {@link ThreadTitleInvalidError} 正規化完是空的。
+ */
+export function renameThreadTitle(
+  log: SessionLog,
+  title: string,
+  maxBytes: number,
+): { readonly title: string; readonly seq: number } {
+  const normalized = normalizeThreadTitle(title, maxBytes);
+  if (normalized === '') throw new ThreadTitleInvalidError('標題要有看得見的字');
+  const event = log.append('session/title', {
+    title: normalized,
+    messageSeqs: [],
+    source: { kind: 'user' },
+  });
+  return { title: normalized, seq: event.seq };
+}
+
 /** 第一則合格的人話推出來的標題，與那一顆 `turn/start` 的 `seq`。一則都沒有是 `undefined`。 */
 function firstFallback(
   events: readonly SessionEvent[],
@@ -190,10 +235,9 @@ declare module '@nexus/core' {
      *
      * 照 dsh 的 `session/title`（`packages/session/session-title/src/types.ts`，`477b4f4`）：
      *
-     * - `messageSeqs` 是推出這個標題用到的那幾則人話。dsh 指的是 `user/message`，我們對到的是
+     * - `messageSeqs` 是推出這個標題用到的那幾則人話（`user` 來源是空的）。dsh 指的是 `user/message`，我們對到的是
      *   `turn/start {kind:'message'}`——人打的字在我們的日誌上只在那裡。
-     * - `source` 見 {@link SessionTitleSource}。dsh 另有 `user`（改名，會釘住），有了生產者再加成員，同
-     *   {@link TurnEndReason}。
+     * - `source` 見 {@link SessionTitleSource}。`user`（改名，會釘住）是 #633 加的。
      */
     'session/title': {
       readonly title: string;

@@ -34,7 +34,7 @@ import { DEFAULT_LIVE_MODEL_ENTRY, DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } fro
 import { loadDefaultPlugins } from './plugin-config.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
-import { ensureFallbackTitle } from './session-title.js';
+import { ensureFallbackTitle, renameThreadTitle } from './session-title.js';
 import {
   createSessionTitleLlm,
   frameTitleMessages,
@@ -437,6 +437,45 @@ describe('拒收：warn 一行，退回標題留著，沒有模型標題', () =>
     expect(t.warnings).toHaveLength(1);
     expect(t.calls[0]!.signal?.aborted).toBe(true);
     expect(titleEvents(t.log.events).map((event) => event.data.source.kind)).toEqual(['fallback']);
+    await t.detach();
+  });
+});
+
+describe('使用者改名釘住標題（#633）', () => {
+  it('模型還沒回來時改名：模型標題不蓋過，也不講話', async () => {
+    let release: () => void = () => undefined;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const t = attached(async () => {
+      await gate;
+      return stopReply();
+    });
+    t.startTurn(FIRST);
+    await until(() => t.calls.length === 1);
+    renameThreadTitle(t.log, '我取的名字', 80);
+    release();
+    await settle();
+    expect(titleEvents(t.log.events).map((event) => event.data.source.kind)).toEqual([
+      'fallback',
+      'user',
+    ]);
+    expect(t.warnings).toEqual([]);
+    await t.detach();
+  });
+
+  it('開跑前就已經改名：不花這一次模型呼叫', async () => {
+    const t = attached(() => stopReply());
+    t.log.append('turn/start', { kind: 'message', text: FIRST });
+    ensureFallbackTitle(t.log, LIMITS);
+    renameThreadTitle(t.log, '我取的名字', 80);
+    t.log.append('model/start', {});
+    await settle();
+    expect(t.calls).toHaveLength(0);
+    expect(titleEvents(t.log.events).map((event) => event.data.source.kind)).toEqual([
+      'fallback',
+      'user',
+    ]);
     await t.detach();
   });
 });

@@ -230,23 +230,11 @@ describe('沒有 agent 的 thread：形狀與錯誤碼', () => {
     expect(bareListed.result.archivedThreadIds).toBeUndefined();
   });
 
-  it('沒接整理檔：四個命令都是 not_supported；thread.rename 在這張 PR 還是 not_supported', async () => {
+  it('沒接整理檔：四個命令都是 not_supported（改名不依賴整理檔，見 thread-rename-wire.test.ts）', async () => {
     const { raw } = rig({ createAgent: stubAgent });
     for (const method of ['thread.pin', 'thread.unpin', 'thread.archive', 'thread.unarchive']) {
       expect(await raw('a', method)).toMatchObject({ type: 'error', error: 'not_supported' });
     }
-    expect(await raw('a', 'thread.rename', { title: '新名字' })).toMatchObject({
-      type: 'error',
-      error: 'not_supported',
-    });
-    // 就算接了整理檔，rename 也還沒做。
-    const withOrg = rig({
-      createAgent: stubAgent,
-      threadOrganization: await ThreadOrganization.open(dir),
-    });
-    expect(await withOrg.raw('a', 'thread.rename', { title: '新名字' })).toMatchObject({
-      error: 'not_supported',
-    });
   });
 
   it('儲存體讀不動、或寫不進去：協定層錯誤（unknown_error），不是 thread_not_found', async () => {

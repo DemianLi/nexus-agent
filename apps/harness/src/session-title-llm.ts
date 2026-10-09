@@ -53,7 +53,12 @@ import type {
   SessionTitleModelIdentity,
 } from '@nexus/core';
 
-import { ensureFallbackTitle, fallbackThreadTitle, normalizeThreadTitle } from './session-title.js';
+import {
+  ensureFallbackTitle,
+  fallbackThreadTitle,
+  normalizeThreadTitle,
+  titlePinnedByUser,
+} from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
 import { THREAD_TITLE_LLM_PLUGIN_NAME } from './settings/thread-title-llm.js';
 import type { ModelRoute } from '@nexus/core';
@@ -228,6 +233,8 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
         // 先確保退回標題已落地，同 dsh `runProvider` 的 `ensureFallback`。平常它在 `turn/start` 那一段已經寫了，這裡是
         // no-op；只有那一次寫失敗時才補。補不進去就跟模型失敗一樣講一聲、不送。
         ensureFallbackTitle(log, options.limits);
+        // 開跑前就已經被釘住：不花這一次模型呼叫。
+        if (titlePinnedByUser(log.events)) return;
         const result = await generateThreadTitle({
           model,
           route,
@@ -238,6 +245,8 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
           signal: controller.signal,
         });
         if (closed) return;
+        // 使用者在模型回來之前改了名：釘住的標題不被蓋過（#633，dsh `rename` 撤掉進行中的產生）。
+        if (titlePinnedByUser(log.events)) return;
         log.append('session/title', {
           title: result.title,
           messageSeqs: result.messageSeqs,

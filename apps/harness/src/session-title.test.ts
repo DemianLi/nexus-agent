@@ -12,7 +12,10 @@ import {
   assertThreadTitleLimits,
   ensureFallbackTitle,
   fallbackThreadTitle,
+  renameThreadTitle,
+  ThreadTitleInvalidError,
   threadTitleOf,
+  titlePinnedByUser,
 } from './session-title.js';
 
 const LIMITS = { maxWords: 5, maxBytes: 40 };
@@ -138,5 +141,57 @@ describe('threadTitleOf', () => {
     expect(derived).toBe('fix the login bug on');
     ensureFallbackTitle(log, LIMITS);
     expect(titles(log)[0]?.data.title).toBe(derived);
+  });
+});
+
+describe('使用者改名（#633）', () => {
+  it('正規化後追加一顆 source:user 的 session/title，messageSeqs 空；回受理後的標題與那一顆的 seq', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '第一句話' });
+    ensureFallbackTitle(log, LIMITS);
+    const accepted = renameThreadTitle(log, '  我的\u202E  新\u0007名字 ', 80);
+    expect(accepted.title).toBe('我的 新名字');
+    const last = titles(log).at(-1)!;
+    expect(last.seq).toBe(accepted.seq);
+    expect(last.data).toEqual({ title: '我的 新名字', messageSeqs: [], source: { kind: 'user' } });
+    expect(threadTitleOf(log.events, LIMITS)).toBe('我的 新名字');
+  });
+
+  it('標題照 maxTitleBytes 截，不切在字的中間', () => {
+    const log = new SessionLog('t');
+    const accepted = renameThreadTitle(log, '一二三四五六七八九十', 12);
+    expect(accepted.title).toBe('一二三四');
+    expect(Buffer.byteLength(accepted.title, 'utf8')).toBeLessThanOrEqual(12);
+  });
+
+  it('正規化完是空的（空白、只有控制字元）：拋 ThreadTitleInvalidError，日誌一個字節都沒動', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '第一句話' });
+    ensureFallbackTitle(log, LIMITS);
+    const before = log.events.length;
+    expect(() => renameThreadTitle(log, '   \u0007\u200B  ', 80)).toThrow(ThreadTitleInvalidError);
+    expect(() => renameThreadTitle(log, '', 80)).toThrow(ThreadTitleInvalidError);
+    expect(log.events).toHaveLength(before);
+  });
+
+  it('釘住：最後一顆是 user 才算；再改一次以最後一顆為準；退回標題在有標題之後不再寫', () => {
+    const log = new SessionLog('t');
+    expect(titlePinnedByUser(log.events)).toBe(false);
+    log.append('turn/start', { kind: 'message', text: '第一句話' });
+    ensureFallbackTitle(log, LIMITS);
+    expect(titlePinnedByUser(log.events)).toBe(false);
+    renameThreadTitle(log, '甲', 80);
+    expect(titlePinnedByUser(log.events)).toBe(true);
+    log.append('turn/start', { kind: 'message', text: '第二句話' });
+    ensureFallbackTitle(log, LIMITS);
+    expect(titles(log).map((event) => event.data.source.kind)).toEqual(['fallback', 'user']);
+    renameThreadTitle(log, '乙', 80);
+    expect(threadTitleOf(log.events, LIMITS)).toBe('乙');
+    // 沒有任何人話就先改名也行：之後的第一句不會用退回標題蓋過它。
+    const early = new SessionLog('e');
+    renameThreadTitle(early, '先取名', 80);
+    early.append('turn/start', { kind: 'message', text: '第一句話' });
+    ensureFallbackTitle(early, LIMITS);
+    expect(titles(early).map((event) => event.data.title)).toEqual(['先取名']);
   });
 });

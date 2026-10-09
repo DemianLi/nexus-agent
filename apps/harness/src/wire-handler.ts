@@ -148,9 +148,13 @@ import {
   deliverableFilesConfigSchema,
   type DeliverableFilesConfig,
 } from './settings/deliverable-files.js';
-import type { ThreadTitleLimits } from './session-title.js';
+import { renameThreadTitle, ThreadTitleInvalidError } from './session-title.js';
 import type { AttachSessionTitleLlm } from './session-title-llm.js';
-import { threadTitleConfigSchema } from './settings/thread-title.js';
+import {
+  DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES,
+  threadTitleConfigSchema,
+} from './settings/thread-title.js';
+import type { ThreadTitleLimits } from './session-title.js';
 import { normalizeThreadSearchQuery, ThreadSearchError } from './thread-search.js';
 import type { ThreadSearchErrorKind } from './thread-search.js';
 import { toolTextConfigSchema } from './settings/tool-text.js';
@@ -414,7 +418,10 @@ export interface WireHandlerOptions {
    * 退回標題的兩個上限（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）。消費點與 {@link toolTextLimits}
    * 一樣是這個閉包底下的兩個：即時那條（pump 寫標題），重播那條（18 以前的日誌當場推）。省略即 schema 的預設。
    */
-  readonly threadTitleLimits?: ThreadTitleLimits;
+  readonly threadTitleLimits?: ThreadTitleLimits & {
+    /** 使用者改名與模型標題的位元組上限（`#settings/thread-title`）；省略即預設。 */
+    readonly maxTitleBytes?: number;
+  };
   /**
    * 插件投影 frame 的合併視窗毫秒（`projection-flush` 那一列，[#1071](https://github.com/DemianLi/nexus-agent/issues/1071)）。
    * 每條 thread 的 pump 吃同一個數字。省略即合併器的預設。
@@ -475,9 +482,8 @@ async function* requestBodyChunks(
   }
 }
 
-/** 契約已合、實作還沒做的 RPC method 回 `not_supported` 時的說明（#633 的改名、#328 的子代理清單），實作落地時隨分支一起拿掉。 */
+/** 契約已合、實作還沒做的 RPC method 回 `not_supported` 時的說明（#328 的子代理清單），實作落地時隨分支一起拿掉。 */
 const NOT_IMPLEMENTED = {
-  'thread.rename': '這個組裝還沒有伺服器端的改名',
   'subagent.list': '這個組裝還沒有可點名的子代理清單',
 } as const;
 
@@ -947,7 +953,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
   // 「即時一個樣、重新整理另一個樣」——那正是 `tool-result-text.ts` 存在的理由。
   const toolTextLimits: ToolTextConfig = options.toolTextLimits ?? toolTextConfigSchema.parse({});
   // 同上：兩個消費點共用同一份，寫的標題與推的標題才會一字不差。
-  const threadTitleLimits: ThreadTitleLimits =
+  const threadTitleLimits: NonNullable<WireHandlerOptions['threadTitleLimits']> =
     options.threadTitleLimits ?? threadTitleConfigSchema.parse({});
   /**
    * **存的是 promise 不是狀態**，而且是同步就存進去的。
@@ -1513,14 +1519,17 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
       return json(feedbackResponse(thread, envelope.id, method, body));
     }
-    if (isThreadManagementMethod(method) && method !== 'thread.rename') {
+    if (method === 'thread.rename') {
+      // 改名（#633 第二張）：照 dsh 要這條會話是活的，所以**經 `threadFor`**（先確認它存在，免得為一個不存在的 id 建 agent）。
+      return handleRename(threadId, envelope.id, body);
+    }
+    if (isThreadManagementMethod(method)) {
       // 釘選與封存（#633 第一張）：**不經 `threadFor`**，同 `run.cancel`——整理的是一個 id 在兩個全域集合裡的位置，不是這條 thread
       // 的 agent；為了封存一條還沒開起來的 thread 把它建起來（連 MCP 子行程）是反的。
       return handleThreadOrganization(threadId, method, envelope.id, body);
     }
-    if (isThreadManagementMethod(method) || isSubagentListMethod(method)) {
-      // 改名（#633 第二張）與可點名的子代理清單（#328）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把
-      // 改名與 `@` 子代理藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
+    if (isSubagentListMethod(method)) {
+      // 可點名的子代理清單（#328）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把 `@` 子代理藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
       // 契約在 `@nexus/wire` 的 `thread-management.ts`／`subagent-list.ts`；實作落地時把這個分支換成真的 handler。
       return json(errorResponse(envelope.id, 'not_supported', NOT_IMPLEMENTED[method]));
     }
@@ -2056,6 +2065,49 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       // 寫不進去、儲存體讀不動：這條線收不了，不是業務失敗。
       const reason = error instanceof Error ? error.message : String(error);
       return json(errorResponse(id, 'unknown_error', `釘選與封存沒做成：${reason}`));
+    }
+  }
+
+  /**
+   * `thread.rename`（[#633](https://github.com/DemianLi/nexus-agent/issues/633) 第二張）。照 dsh `SessionController.rename`：
+   * 標題正規化，追加成這條會話日誌上的一顆 `session/title`（`source: user`，**釘住**），回受理後的標題與事件的 `seq`；
+   * 正規化完是空的 → `title_invalid`（成功回應裡的業務失敗，標題不變）。
+   *
+   * dsh 要這條會話**活著**（`resolveAgent`）；我們的「活著」是 `threadFor`（只在磁碟上的會重開）。不存在 → `thread_not_found`。
+   * 寫在日誌上，所以沒落盤的 server 上改名只活到這個行程結束，同這個 server 上其他所有日誌事件。
+   */
+  async function handleRename(threadId: string, id: number, body: unknown): Promise<Response> {
+    const params = (body as { params?: unknown }).params;
+    const title =
+      typeof params === 'object' && params !== null
+        ? (params as { title?: unknown }).title
+        : undefined;
+    if (typeof title !== 'string') {
+      return json(errorResponse(id, 'invalid_argument', 'thread.rename 的 title 要是字串'));
+    }
+    if (!(await threadKnown(threadId))) {
+      return json(successResponse(id, { ok: false, error: { code: 'thread_not_found' } }));
+    }
+    const thread = await threadOrError(threadId, id);
+    if (thread instanceof Response) return thread;
+    try {
+      const accepted = renameThreadTitle(
+        thread.pump.sessionLog,
+        title,
+        threadTitleLimits.maxTitleBytes ?? DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES,
+      );
+      return json(successResponse(id, { ok: true, value: accepted }));
+    } catch (error) {
+      if (error instanceof ThreadTitleInvalidError) {
+        return json(
+          successResponse(id, {
+            ok: false,
+            error: { code: 'title_invalid', message: error.message },
+          }),
+        );
+      }
+      const reason = error instanceof Error ? error.message : String(error);
+      return json(errorResponse(id, 'unknown_error', `改名沒做成：${reason}`));
     }
   }
 
