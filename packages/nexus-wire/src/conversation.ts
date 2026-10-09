@@ -94,6 +94,12 @@ export interface HumanEntry {
    * 圖與檔案由 `type` 判別。沒有附件就不給這一格（空陣列與沒給是同一件事）。
    */
   readonly attachments?: readonly WireAttachmentRef[];
+  /**
+   * 這一句被準入閘門擋下了（封存的會話，[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：一個模型請求都沒發，話沒有送給模型。
+   * 讀的是 root 收尾 `lifecycle` 上 pump 補的 `blocked`，同 {@link AiEntry.maxTokens} 由收尾 frame 標；歷史重播補的是同一顆 frame，
+   * 所以冷載入一樣標得出來。**只標沒有做任何事的那一輪**——擋下之前這一輪已經有回覆或工具，話是送出去了的，就不標（收尾原因看軌跡）。
+   */
+  readonly blocked?: true;
 }
 
 /**
@@ -2083,10 +2089,31 @@ interface LifecycleData {
   /** 這一輪撞到了輸出上限。同 `aborted` 由 pump 補，見 {@link AiEntry.maxTokens}。 */
   readonly maxTokens?: boolean;
   /**
-   * 這一輪被準入閘門擋下（封存的會話，[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：一個模型請求都沒發。
-   * 同 `aborted` 由 pump 補，帶在 `completed` 上；折疊照一輪正常收尾處理，沒有回覆、沒有錯誤。
+   * 這一輪被準入閘門擋下（封存的會話，[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。同 `aborted` 由 pump 補，
+   * 帶在 `completed` 上；狀態照一輪正常收尾回 `idle`，沒有錯誤，並把這一輪的人話標上 {@link HumanEntry.blocked}。
    */
   readonly blocked?: boolean;
+}
+
+/**
+ * 這一輪被擋下的人話標上 {@link HumanEntry.blocked}：整份裡最後一則人話。（「這一輪最後一則人話，找不到就用整份最後一則」與它是同一個答案：
+ * 這一輪有人話的話，它必然是整份最後一則；人話在 `running` 之前就畫了、落在 `turnStart` 之前時，也是它。）
+ * **它後面已經有回覆或工具的不標**——那一輪做過事，話是送出去了的。
+ *
+ * @param entries - 目前的條目。
+ * @returns 標過的條目；沒有可標的原樣。
+ */
+function markBlocked(entries: readonly ConversationEntry[]): readonly ConversationEntry[] {
+  let at = entries.length - 1;
+  while (at >= 0 && entries[at]?.kind !== 'human') at -= 1;
+  const human = entries[at];
+  if (human?.kind !== 'human') return entries;
+  if (entries.slice(at + 1).some((entry) => entry.kind === 'ai' || entry.kind === 'tool')) {
+    return entries;
+  }
+  const next = [...entries];
+  next[at] = { ...human, blocked: true };
+  return next;
 }
 
 /**
@@ -2205,7 +2232,12 @@ function reduceLifecycle(
     return {
       ...state,
       status: 'idle',
-      entries: data.maxTokens === true ? markMaxTokens(settled, state.turnStart) : settled,
+      entries:
+        data.blocked === true
+          ? markBlocked(settled)
+          : data.maxTokens === true
+            ? markMaxTokens(settled, state.turnStart)
+            : settled,
     };
   }
   return state;

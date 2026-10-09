@@ -909,6 +909,74 @@ describe('撞到輸出上限', () => {
   });
 });
 
+/**
+ * 被準入閘門擋下（封存的會話，#633）：pump 在 root 收尾的 `completed` 上補 `blocked`，折疊器把這一輪的人話標上 `blocked`。
+ * 歷史重播補的是同一顆 frame，所以走同一條路。
+ */
+describe('被準入閘門擋下', () => {
+  const human = (id: string, text: string) => ({ kind: 'human' as const, id, text });
+  const closing = (extra: Record<string, unknown> = {}) =>
+    frame('lifecycle', [], { event: 'completed', graph_name: 'root', ...extra });
+
+  it('輪頭擋（沒有 running，圖沒跑）：人話標 blocked，狀態回 idle、沒有錯誤', () => {
+    const state = reduceAll({ ...emptyConversation(), entries: [human('h', '封存之後的話')] }, [
+      closing({ blocked: true }),
+    ]);
+    expect(state.status).toBe('idle');
+    expect(state.error).toBeUndefined();
+    expect(state.entries).toEqual([{ ...human('h', '封存之後的話'), blocked: true }]);
+  });
+
+  it('輪中擋之前這一輪沒做事（人話畫在 running 之前，落在 turnStart 之前）：照樣標', () => {
+    const state = reduceAll({ ...emptyConversation(), entries: [human('h', '話')] }, [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      closing({ blocked: true }),
+    ]);
+    expect(state.entries).toEqual([{ ...human('h', '話'), blocked: true }]);
+  });
+
+  it('這一輪已經有回覆：話是送出去了的，不標', () => {
+    const state = reduceAll({ ...emptyConversation(), entries: [human('h', '話')] }, [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      ...text('a', ['model_request:1'], '做了一半'),
+      closing({ blocked: true }),
+    ]);
+    expect(state.entries.some((entry) => entry.kind === 'human' && entry.blocked)).toBe(false);
+    expect(state.status).toBe('idle');
+  });
+
+  it('只標最後一則人話：前面的輪不動；blocked 之後再正常送一句，後一句不被標', () => {
+    const afterBlocked = reduceAll(
+      { ...emptyConversation(), entries: [human('h1', '正常的'), human('h2', '被擋的')] },
+      [closing({ blocked: true })],
+    );
+    expect(afterBlocked.entries.map((entry) => entry.kind === 'human' && entry.blocked)).toEqual([
+      undefined,
+      true,
+    ]);
+    const next = reduceAll(
+      { ...afterBlocked, entries: [...afterBlocked.entries, human('h3', '取消封存之後')] },
+      [
+        frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+        ...text('b', ['model_request:2'], '收到'),
+        closing(),
+      ],
+    );
+    expect(
+      next.entries.flatMap((entry) => (entry.kind === 'human' ? [[entry.id, entry.blocked]] : [])),
+    ).toEqual([
+      ['h1', undefined],
+      ['h2', true],
+      ['h3', undefined],
+    ]);
+  });
+
+  it('對照：沒帶 blocked 一則都不標', () => {
+    const state = reduceAll({ ...emptyConversation(), entries: [human('h', '話')] }, [closing()]);
+    expect(state.entries).toEqual([human('h', '話')]);
+  });
+});
+
 describe('背景子代理的歸屬（#832）', () => {
   const key = { kind: 'background-subagent', runId: 'bg-abc123def456', subagentType: 'worker' };
   const dispatch = (callId: string) =>
