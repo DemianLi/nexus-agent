@@ -1329,7 +1329,9 @@ function isQueuedInput(value: unknown): value is WireQueuedInput {
 }
 
 function isQueuedSourceKind(kind: unknown): kind is WireQueuedInputSource['kind'] {
-  return kind === 'user' || kind === 'subagent-settled' || kind === 'agent-message';
+  return (
+    kind === 'user' || kind === 'subagent-settled' || kind === 'agent-message' || kind === 'goal'
+  );
 }
 
 /** 一句話 `@` 的會話長得對不對。沒給（`undefined`）合法，給了就每一條都要是兩個字串。 */

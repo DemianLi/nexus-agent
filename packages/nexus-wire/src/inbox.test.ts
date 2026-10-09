@@ -91,7 +91,7 @@ describe('inbox', () => {
       { items: [{ ...first, text: 1 }] },
       { items: [{ id: 'run-c', text: '目標續行' }] },
       // 用另一件的 id：拿 `first` 改的話，正規化之後跟原本那份長得一樣，比不出有沒有收。
-      { items: [{ ...second, source: { kind: 'goal' } }] },
+      { items: [{ ...second, source: { kind: 'someone-else' } }] },
       { items: [], claimed: null },
       { items: [], claimed: { id: first.id } },
       { items: [], claimed: { id: 1, text: first.text } },
@@ -541,6 +541,20 @@ describe('inbox：背景子代理的結算通知不是人話（#840）', () => {
         expect(reduceConversation(once, record(bad) as never).entries).toEqual(once.entries);
       }
     });
+  });
+
+  it('目標續行的預約（goal 來源）留得住，而且不吞同一份裡人的件（#638）', () => {
+    const goal = { id: 'g1', text: '續行第 1 輪', source: { kind: 'goal' } } as const;
+    expect(fold(inboxFrame({ items: [goal] })).inbox).toEqual([goal]);
+    expect(fold(inboxFrame({ items: [first, goal, second] })).inbox).toEqual([first, goal, second]);
+    // 來源上多帶的欄位（目標編號、修訂、輪數留在日誌上）不外流。
+    expect(
+      fold(
+        inboxFrame({
+          items: [{ ...goal, source: { kind: 'goal', goalId: 'x', revision: 1, round: 1 } }],
+        }),
+      ).inbox,
+    ).toEqual([goal]);
   });
 
   it('認不得的來源整顆不收', () => {
