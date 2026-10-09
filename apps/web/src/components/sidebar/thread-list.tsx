@@ -4,6 +4,7 @@ import { useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { RenameField, ThreadRowMenu } from '@/components/sidebar/thread-row-menu';
+import type { RowMenuProps } from '@/components/sidebar/thread-row-menu';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   SidebarGroup,
@@ -166,7 +167,7 @@ export function ThreadList({
       current: id === currentThreadId,
       onPin: () => management!.onPin(id),
       onUnpin: () => management!.onUnpin(id),
-      onArchive: () => management!.onArchive(id),
+      onArchive: (options) => management!.onArchive(id, options),
       onUnarchive: () => management!.onUnarchive(id),
       onRename: () => setRenamingId(id),
       onCommitRename: async (title: string) => {
@@ -360,7 +361,7 @@ interface RowManagement {
   readonly current: boolean;
   readonly onPin: () => ThreadActionResult;
   readonly onUnpin: () => ThreadActionResult;
-  readonly onArchive: () => ThreadActionResult;
+  readonly onArchive: RowMenuProps['onArchive'];
   readonly onUnarchive: () => ThreadActionResult;
   readonly onRename: () => void;
   readonly onCommitRename: (title: string) => ThreadActionResult;

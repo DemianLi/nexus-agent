@@ -153,7 +153,7 @@ describe('回得慢的舊回應不蓋新的', () => {
         .mockResolvedValueOnce(ok({ archivedThreadIds: ['a', 'b'] })),
     };
     const { hook } = setup(client, okListing(listed([], [])));
-    let first!: Promise<string | undefined>;
+    let first!: ReturnType<NonNullable<typeof hook.result.current>['onArchive']>;
     act(() => {
       first = hook.result.current!.onArchive('a');
     });
@@ -247,18 +247,44 @@ describe('失敗', () => {
     expect(hook.result.current?.pinnedIds).toEqual(['a']);
   });
 
-  it('封存失敗不重抓、集合不變', async () => {
-    const client = {
-      threadArchive: vi.fn(async () => ({
-        kind: 'ok' as const,
-        result: { ok: false as const, error: { code: 'thread_active' } },
-      })),
-    };
+  it.each([
+    ['帶活動', { code: 'thread_active', activity: ['turn', 'subagent'] }, ['turn', 'subagent']],
+    ['舊 server 沒帶活動', { code: 'thread_active' }, []],
+  ])(
+    '封存還在跑的：%s，回「要先問」而不是錯誤文字；不重抓、集合不變',
+    async (_case, error, activity) => {
+      const client = {
+        threadArchive: vi.fn(async () => ({
+          kind: 'ok' as const,
+          result: { ok: false as const, error },
+        })),
+      };
+      const { hook, refresh } = setup(client, okListing(listed([], [])));
+      await act(async () => {
+        expect(await hook.result.current!.onArchive('t')).toEqual({ needsStop: activity });
+      });
+      expect(refresh).not.toHaveBeenCalled();
+      expect(hook.result.current?.archivedIds.size).toBe(0);
+    },
+  );
+
+  it('封存帶 stopActivity：原樣交給 client，成功就更新集合並重抓', async () => {
+    const client = { threadArchive: vi.fn(async () => ok({ archivedThreadIds: ['t'] })) };
     const { hook, refresh } = setup(client, okListing(listed([], [])));
     await act(async () => {
-      expect(await hook.result.current!.onArchive('t')).toContain('還在跑');
+      expect(await hook.result.current!.onArchive('t', { stopActivity: true })).toBeUndefined();
     });
-    expect(refresh).not.toHaveBeenCalled();
-    expect(hook.result.current?.archivedIds.size).toBe(0);
+    expect(client.threadArchive).toHaveBeenCalledWith('t', { stopActivity: true });
+    expect(refresh).toHaveBeenCalledTimes(1);
+    expect([...hook.result.current!.archivedIds]).toEqual(['t']);
+  });
+
+  it('沒要停掉時不帶 options（舊 server 看得懂的原樣）', async () => {
+    const client = { threadArchive: vi.fn(async () => ok({ archivedThreadIds: ['t'] })) };
+    const { hook } = setup(client, okListing(listed([], [])));
+    await act(async () => {
+      await hook.result.current!.onArchive('t');
+    });
+    expect(client.threadArchive).toHaveBeenCalledWith('t', undefined);
   });
 });
