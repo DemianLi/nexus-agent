@@ -510,7 +510,9 @@ export function foldRegistry(
   // 政策與管道就是 root 當下的（`options.approvals.policy` 每次要問人之前問一次，#437）。沒有人的入口、沒有存檔點、政策 `never`
   // 時一樣確定性回絕，理由說的是真正的原因。**背景子代理不走這裡**：它們背後沒有人，圖由 {@link createBackgroundApprovalGate}
   // 那一顆（管道固定 `policy-never`，#324／#737 照 dsh `child-agent.ts:220-247`）在編圖時換掉。
-  const subagentDelegation = createSubagentDelegationMiddleware(FOREGROUND_SUBAGENT_DELEGATION_CONTEXT);
+  const subagentDelegation = createSubagentDelegationMiddleware(
+    FOREGROUND_SUBAGENT_DELEGATION_CONTEXT,
+  );
   const summarizer = foldSummarizer(registry, options);
   const repeatReminder = foldRepeatReminder(registry, options);
   // **一份實例走遍 root 與每個 subagent**，或在明著關掉時沒有。它無狀態，見
