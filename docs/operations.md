@@ -42,6 +42,35 @@
 **沒有 `--workspace` 的組裝不會有 `/permission`、那句話，也不會有升級工具**：一格圍堵都沒有的時候
 講「目前是 workspace-write」是說謊。
 
+### 這道 fence 管不到的
+
+[#1291](https://github.com/DemianLi/nexus-agent/issues/1291)。先講結論：**檔案 fence 與三個權限組合是防「失手」的政策圍欄，
+不是擋惡意模型的安全邊界。** 它防的是模型手滑把檔寫到工作區外、或在 `read-only` 下改了東西；一個存心繞過的模型、
+或任何能在你機器上跑程式的路徑，不在它的設計範圍內（`apps/harness/src/contained-backend.ts` 檔頭同一個說法：policy fence，
+不是 kernel boundary）。下面三條是今天實測到的邊界，不是待補清單。
+
+**1. 讀取面幾乎沒有圍堵。** fence 只圍變更（寫、改、刪、上傳）；讀走 deepagents 基座，策略歸 `permissions`，
+而出貨的設定**沒有任何一條 deny 規則**。所以：
+
+- **工作區裡的目錄 symlink 讀得穿到根外。** `read`、`ls` 經一條指向根外目錄的 symlink 看得到那邊的檔案——基座的
+  `O_NOFOLLOW` 只管路徑的最後一段，祖先目錄照跟。這是目前唯一讀得出去的路。
+- 其餘三種讀法今天被擋，擋的是基座不是我們：最後一段是檔案 symlink → `ELOOP`；路徑含 `..` 或以 `~` 開頭 →
+  `Path traversal not allowed`；主機絕對路徑（如 `/etc/hosts`）被當成工作區底下的子路徑 → `ENOENT`，讀不到真的那個檔。
+- 這四條由 `apps/harness/src/contained-backend.test.ts` 的「讀取面的今日實況」釘住：文件與實際漂開時測試會先紅。
+  基座哪天補上目錄 symlink 的圍堵，第一條會紅——那時該回來改這一節，不是把測試翻回去。
+- 想擋讀，現在唯一的辦法是在 `permissions` 自己加 deny 規則，或把 agent 跑在你信得過的隔離環境裡。
+
+**2. 以 stdio 起的 MCP server 子行程不在 fence 底下。** 它們是外部程序，走自己的檔案系統，既不經過 `permissions` 也不經過
+backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MCP 讀來的資料經由內建 `write_file` 寫進工作區」那一條。
+要圍堵 MCP server 本身，只能從**啟動它的方式**下手（例如把 server 跑在容器裡，`command` 指向 `docker run …`）；我們沒有
+包一層沙箱，也不打算在不改設計的前提下假裝有。細節見 [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)
+的「明文限制」。
+
+**3. 三個組合是政策，不是隔離。** `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
+動手；它們不涵蓋子行程與網路，對讀也幾乎沒有作用（見第 1 條）。`danger-full-access` 放行 symlink 逃逸，但基座字面的 `..`
+檢查仍在，所以它也不是 dsh 那種真正的不設防（偏離登記在 `contained-backend.ts` 檔頭）。**執行期的提示詞與 `/permission` 的輸出不會講這些**：它們描述的是「檔案工具現在擋不擋」，
+並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界。
+
 ## 會話日誌
 
 **預設落盤到 harness home 底下的 `sessions`**（`$NEXUS_AGENT_HOME/sessions`，沒設就是 `~/.nexus-agent/sessions`），
