@@ -177,6 +177,17 @@ export type {
   Events,
 } from './events.js';
 export { EventBus, isBailed } from './events.js';
+export type {
+  PipelineExecution,
+  PipelinePostDecision,
+  PipelinePreDecision,
+  PipelineResult,
+} from './tool-pipeline.js';
+export {
+  createToolExecuteMiddleware,
+  createToolPostExecuteMiddleware,
+  createToolPreExecuteMiddleware,
+} from './tool-pipeline.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
 export type { FsService, FsServiceOptions } from './fs-service.js';

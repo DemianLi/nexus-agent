@@ -12,7 +12,13 @@ import type { CreateDeepAgentParams, SubAgent } from 'deepagents';
 import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
 import { CONTAINMENT_MIDDLEWARE_NAME } from './containment.js';
+import { EventBus } from './events.js';
 import { TOOL_BARRIER_MIDDLEWARE_NAME } from './tool-barrier.js';
+import {
+  TOOL_EXECUTE_MIDDLEWARE_NAME,
+  TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
+  TOOL_PRE_EXECUTE_MIDDLEWARE_NAME,
+} from './tool-pipeline.js';
 import { FS_TOOL_ERRORS_MIDDLEWARE_NAME } from './fs-tool-errors.js';
 import { READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
 import { INVALID_TOOL_ARGS_MIDDLEWARE_NAME } from './invalid-tool-args.js';
@@ -409,6 +415,56 @@ describe('圍堵打底', () => {
     const rootOne = params.middleware[1];
     const subOne = (registered(params)[0]?.middleware ?? [])[1];
     expect(subOne).toBe(rootOne);
+  });
+});
+
+describe('工具事件的三顆生產者（#1248）', () => {
+  const names = (list: readonly unknown[]): string[] =>
+    list.map((mw) => (mw as { name: string }).name);
+
+  it('給了 events 才掛：pre 緊貼閘門外側、post 在輸出校驗外側、execute 在 invalidToolArgs 內側', async () => {
+    const params = await fold(
+      [fakePlugin('a', (r) => void r.middleware.use(fakeMiddleware('a')))],
+      { events: new EventBus() },
+    );
+    const list = names(params.middleware);
+    const at = (name: string): number => list.indexOf(name);
+    // pre：緊貼閘門外側（相鄰、在前）。
+    expect(at(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME)).toBe(at(APPROVAL_GATE_MIDDLEWARE_NAME) - 1);
+    // post：plugin middleware 的內側、輸出校驗的外側。
+    expect(at(TOOL_POST_EXECUTE_MIDDLEWARE_NAME)).toBeGreaterThan(at('a'));
+    expect(at(TOOL_POST_EXECUTE_MIDDLEWARE_NAME)).toBe(at(OUTPUT_SCHEMA_MIDDLEWARE_NAME) - 1);
+    // execute：解不開參數那顆的內側，緊貼。
+    expect(at(TOOL_EXECUTE_MIDDLEWARE_NAME)).toBe(at(INVALID_TOOL_ARGS_MIDDLEWARE_NAME) + 1);
+  });
+
+  it('沒給 events 一顆都不掛（行為與沒有這一格時一樣）', async () => {
+    const params = await fold([]);
+    expect(names(params.middleware)).not.toContain(TOOL_PRE_EXECUTE_MIDDLEWARE_NAME);
+    expect(names(params.middleware)).not.toContain(TOOL_POST_EXECUTE_MIDDLEWARE_NAME);
+    expect(names(params.middleware)).not.toContain(TOOL_EXECUTE_MIDDLEWARE_NAME);
+  });
+
+  it('每個子代理也有，且與 root 共用同一份實例（身分從每次請求現算）', async () => {
+    const params = await fold(
+      [fakePlugin('team', (r) => void r.subagents.register(fakeSubAgent('releaser')))],
+      { events: new EventBus() },
+    );
+    for (const subagent of params.subagents) {
+      const list = subagent.middleware ?? [];
+      for (const name of [
+        TOOL_PRE_EXECUTE_MIDDLEWARE_NAME,
+        TOOL_POST_EXECUTE_MIDDLEWARE_NAME,
+        TOOL_EXECUTE_MIDDLEWARE_NAME,
+      ]) {
+        const inSub = list.find((mw) => (mw as unknown as { name: string }).name === name);
+        const inRoot = params.middleware.find(
+          (mw) => (mw as unknown as { name: string }).name === name,
+        );
+        expect(inSub).toBeDefined();
+        expect(inSub).toBe(inRoot);
+      }
+    }
   });
 });
 

@@ -82,6 +82,7 @@ import { HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { isGraphBubbleUp } from '@langchain/langgraph';
 import { createMiddleware, MiddlewareError, ToolInvocationError } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import type { EventDispatcher } from './events.js';
 import { rawArgumentsOf } from './invalid-tool-args.js';
 import { toLoggedMessage } from './logged-message.js';
 import type { SessionLookup, SpawnLink } from './registry.js';
@@ -97,6 +98,7 @@ import {
   toolRefusal,
 } from './tool-events.js';
 import type { ToolErrorInfo, ToolOutcome } from './tool-events.js';
+import { notifyToolResult } from './tool-pipeline.js';
 import { runInToolMetaSlot } from './tool-result-meta.js';
 
 /** 圍堵 middleware 的名字。錯誤訊息與排序斷言用得到。 */
@@ -399,11 +401,23 @@ function recordToolCall(
  * **中斷不是落定。** 核准閘門的 `interrupt()` 從這裡往外拋，那次呼叫只留下一顆 `tool/call`；
  * resume 之後它以同一個 `callId` 再進來一次，再記一對。見 `session-log.ts` 的 `tool/call`。
  *
+ * ## 順便派發 `tools/result`（[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）
+ *
+ * 給了 `events` 就在**記 `tool/result` 之前**派發 `tools/result`（同 dsh：`notifyResult` 先於迴圈的 `appendToolResult`）。
+ * 成功回來的、內層回的錯誤訊息、這一層接住拋錯翻出來的訊息，都走同一個出口；不管有沒有接會話、記不記得進去都派發。
+ * 監聽者的失敗全部隔離（`notifyToolResult`），不會把一次已經有結果的呼叫翻成別的。
+ *
  * @param sessions - 註冊表的 `sessions` 通道。**省略就不記**——單元測試與相容用的 re-export
  *   走這條；產品組裝由 `fold.ts` 傳進來。
+ * @param events - 宿主持有的派發面。**省略就不派發**，行為與沒有這一格時一樣。
+ * @param reportObserverFailure - `tools/result` 的某位監聽者壞了往哪裡講；省略即 `console.warn`。
  * @returns 可以放進 `middleware` 陣列的 middleware。
  */
-export function createContainmentMiddleware(sessions?: ToolEventSessions): AgentMiddleware {
+export function createContainmentMiddleware(
+  sessions?: ToolEventSessions,
+  events?: EventDispatcher,
+  reportObserverFailure?: (message: string) => void,
+): AgentMiddleware {
   return createMiddleware({
     name: CONTAINMENT_MIDDLEWARE_NAME,
     wrapToolCall: async (request, handler) => {
@@ -426,6 +440,9 @@ export function createContainmentMiddleware(sessions?: ToolEventSessions): Agent
         // **未知工具不在這裡猜**：碼由最內層在交給基座查名字的那一刻標（`invalid-tool-args.ts`，#1024）。
         // 這一格的 `request.tool` 對動態加給模型的工具（`subagent`）也是 `undefined`，拿它當判準會把
         // 外層回的合法拒絕記成 `UNKNOWN_TOOL`。
+        if (events !== undefined) {
+          notifyToolResult(events, request as RecordableRequest, result, reportObserverFailure);
+        }
         settle?.(
           readToolOutcome(result, request.toolCall.id ?? ''),
           readToolResultMessage(result, request.toolCall.id ?? ''),
@@ -447,6 +464,9 @@ export function createContainmentMiddleware(sessions?: ToolEventSessions): Agent
           { callId: request.toolCall.id ?? '', name: toolName },
         );
         const kind = classifyThrownToolError(error);
+        if (events !== undefined) {
+          notifyToolResult(events, request as RecordableRequest, message, reportObserverFailure);
+        }
         settle?.(
           kind === undefined ? { isError: true } : { isError: true, error: kind },
           message,

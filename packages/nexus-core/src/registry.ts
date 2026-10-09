@@ -747,7 +747,7 @@ export interface PluginLogger {
  * 丟的**——理由見 {@link ./session-telemetry.ts | SessionTelemetryRedactRule}。
  *
  * **2026-10-09 起，「我們沒有事件匯流排」這個前提不成立了**（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)，
- * [#190](https://github.com/DemianLi/nexus-agent/issues/190) 的推翻）：匯流排存在，只是事件表還是空的，這個偏離照舊以折疊
+ * [#190](https://github.com/DemianLi/nexus-agent/issues/190) 的推翻）：匯流排存在（事件表上有工具四事件，#1248，但沒有遙測的），這個偏離照舊以折疊
  * 實作。要不要把它搬成 `session-telemetry/record` 的 waterfall 事件是後續的事，而且搬了也不該把「截斷底下的規則」找回來——
  * 那一條刻意丟的理由跟匯流排有沒有無關。
  *
@@ -1050,7 +1050,7 @@ export interface DisabledEntryView {
  * **插件只能掛，不能派發。** 派發面（`emit`／`serial`／`waterfall`）在 {@link InternalPluginRegistry.dispatch}，由宿主的
  * 組裝點持有：dsh 的每個事件有一個固定的生產者（迴圈、工具管線…），讓任何插件都能派發別人的事件，終結性就取決於誰先派。
  *
- * **事件表在 `events.ts`，S0 是空的**，所以現在沒有任何名字可以掛；S1 以後每個事件跟它的第一個生產者同一張 PR 落地。
+ * **事件表是 `events.ts` 的 `Events` interface，各處用 declaration merging 擴充**：S0 是空的，S1a（[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）落了工具四事件（`tool-pipeline.ts`）；每個事件跟它的第一個生產者同一張 PR 落地。
  * 撤銷走 `effect`：插件 `apply` 之後拋錯，載入器的回滾會把它掛的監聽者一起撤掉；`dispose()` 之後整張表清空。
  */
 export interface EventRegistrationPoint {

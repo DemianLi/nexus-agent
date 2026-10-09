@@ -199,3 +199,16 @@ nexus 今天是 LangGraph 狀態加另一份會話日誌，`PrunedMemorySaver`�
 - 收尾：載入器回滾（apply 掛完才拋錯）撤掉監聽者；成功載入的 handle 的 `dispose()` 在清理跑完後清空整張表。載入**失敗**路徑的 `disposeAll` 不清——那條路徑刻意「註冊內容留著、活資源不留」。
 - #190 翻面：`registry.ts` 與 `session-telemetry*.ts` 三處「我們沒有事件匯流排」註明前提已過期（偏離本身另議）；`interception-index.test.ts` 每列多 `eventOccupant`，S0 一律「（尚無）」，填別的名字必須真的宣告在事件表上。
 - `registry-channel-count.test.ts`：18→19，`cn()` 放寬到 29。`.docs/plugin-architecture-gap-survey.md` 與 `development-plan*.md` 的通道數散文本來就已落後（寫的是 17 與「九加八」），沒有在這張卡補。
+
+### S1a 落地記錄（[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）
+
+demian 2026-10-09：**`approvals` 先不搬**，做 S1。S1 拆兩張：S1a（這張）是四個事件與它們的生產者，**不搬任何消費者**；S1b 搬第一顆消費者（候選：plan-mode 的 `exit_plan_mode` 拒絕）。兩者證據不同——「沒有監聽者就沒有任何改變」與「搬一顆消費者行為等價」混在一起，兩者都證不乾淨。
+
+- **事件**（`packages/nexus-core/src/tool-pipeline.ts`）：`tools/pre-execute`、`tools/execute`、`tools/post-execute` 三條 waterfall，`tools/result` 一條 emit 類。簽名只用自己的形狀（`PipelineExecution`、`PipelineResult`、決定用 `kind` 為鍵），不帶 LangChain 型別。`tools/pre-execute` 的決定就是核准鏈的 `PreToolDecision` 去掉 `ask`——核准搬過來時放回 `ask`，形狀不用改。
+- **生產者在洋蔥的位置**（fold 槽位表）：pre 緊貼核准閘門外側（plan-mode 的 `prepend: true` 今天就在閘門外側，放內側會變成「先跳核准卡、再被拒」）；post 在輸出校驗等貼著本體那幾顆外側、plugin middleware 內側（dsh 在 post-execute 之前驗輸出）；execute 在 `invalidToolArgs` 內側。`tools/result` 由圍堵派發，在記 `tool/result` 之前（同 dsh 的 `notifyResult`）。`foldRegistry` 收 `events`（宿主的 `registry.dispatch`），省略就一顆都不掛。
+- **D4（子代理身分）**：`exec.agent` 是 `SessionAddress`（root 或子代理的 `runId`），來源與圍堵相同；三顆生產者 root 與子代理共用一份實例，監聽者自己過濾，沒有 `Scoped<Agent>`。
+- **`EventDispatcher.observe`**（對 S0 的小擴充）：隔離的 emit。`emit` 照 dsh 是同步拋錯就中斷並往外拋，圍堵若直接用，一位壞掉的觀察者會把成功的呼叫翻成錯誤；dsh 是生產端逐一隔離，我們收進派發面。
+- **沒有監聽者 ＝ 直通**，而且物件身分是承重件：沒人替換時 handler 回的原物件原樣交回（`tool-events.ts` 的錯誤碼掛在以訊息為鍵的 `WeakMap` 上，複製就斷）。
+- **偏離 dsh（逐條登記在 #1248 與 `tool-pipeline.ts` 檔頭）**：(1) `tools/execute` 換不了 `exec.signal`——LangChain `ToolNode` 的 `baseHandler` 用 closure 裡的 `config.signal`，不讀 `request.runtime.signal`；(2) `Command` 結果表達不出 `replace`，只走 `tools/result`；(3) 拋出來的錯不經過 `tools/post-execute`（拋錯翻成訊息是最外層圍堵的事）；(4) resume 會讓 `tools/pre-execute` 對同一個 `callId` 跑兩次，監聽者必須冪等；(5) `tools/execute` 的 `next()` 只能呼叫一次，所以沒有重試；(6) `tools/pre-execute` 沒有 `ask`／`cancel`（範圍）；(7) 結果內容是文字視圖、不是 `ContentBlock[]`（範圍；`replace` 會把區塊壓成純文字）；(8) `tools/post-execute` 只有 `accept`／`replace`，沒有 `block`／`additionalContexts`（範圍）。另：`exec.args` 給監聽者的是深凍結的複本，不是請求裡那個活物件（那就是狀態裡 AI 訊息的 `tool_calls[i].args`，讓監聽者改等於悄悄改了模型可見的歷史）。
+- **閘門**：`event-table.test.ts` 的「S0 空表」改成釘住這四個名字，並新增「每個事件在產品碼裡都有人派發」（`scanEventProducersTree`）；`interception-index.test.ts` 只填派發點真的在的第 6、7 格，**第 4 格（核准）維持「尚無」**。
+- **還沒做、S1b 才碰**：搬第一顆消費者並做 live A/B（模型可見的行為要逐位元組相同）；`approval/request` 與 `tools/pre-execute` 的 `ask` 接起來；失敗路徑進 `tools/post-execute`（要把「拋錯翻成訊息」搬進來，等到有消費者）。

@@ -21,6 +21,7 @@ import { CompositeBackend, GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import type { AnyBackendProtocol, FilesystemPermission, SubAgent } from 'deepagents';
 import { modelCallLimitMiddleware } from 'langchain';
 import type { AgentCheckpointer, AgentMiddleware, AgentModel, AgentStore } from './base-types.js';
+import type { EventDispatcher } from './events.js';
 import { createApprovalGateMiddleware } from './approval.js';
 import type { ApprovalPolicySource } from './approval-policy.js';
 import {
@@ -94,6 +95,11 @@ import {
 import type { SummarizationSettings } from './summarization.js';
 import { TokenAnchorBook } from './token-estimate.js';
 import { toolCallIdOf, toolRefusal } from './tool-events.js';
+import {
+  createToolExecuteMiddleware,
+  createToolPostExecuteMiddleware,
+  createToolPreExecuteMiddleware,
+} from './tool-pipeline.js';
 import {
   resolveToolResultPruneConfig,
   TOOL_RESULT_PRUNE_SERVICE,
@@ -396,6 +402,15 @@ export interface FoldOptions {
   serialToolCalls?: boolean;
 
   /**
+   * 宿主持有的事件派發面（`registry.dispatch`，[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）。省略即不掛
+   * 工具事件的生產者，工具呼叫的行為與沒有這一格時一樣。
+   *
+   * 給了會多四件事：`tools/pre-execute`（核准閘門外側）、`tools/post-execute`、`tools/execute` 三顆 middleware 進槽位表，
+   * 圍堵多派發 `tools/result`。**沒有任何監聽者時全部是直通**，連請求物件都不造。位置與理由見 {@link ./tool-pipeline.ts}。
+   */
+  events?: EventDispatcher;
+
+  /**
    * 串流第一則事件之後才出錯的模型呼叫，整次重打的預算（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）。省略或 `maxRetries`
    * 為 0 就不掛這一顆。由組裝點按 `live-model` 的設定給；root 與每個子代理的模型呼叫都吃它。見 {@link ./stream-retry.ts}。
    */
@@ -499,7 +514,14 @@ export function foldRegistry(
   const outputSchema = createOutputSchemaMiddleware((tool) => registry.tools.outputSchemaOf(tool));
   // **一份實例走遍 root 與每個 subagent。** 它無狀態，見 {@link ./containment.ts}。
   // 它也是工具事件的生產者（#264），所以要拿得到 `sessions` 那個通道。
-  const containment = createContainmentMiddleware(registry.sessions);
+  const containment = createContainmentMiddleware(registry.sessions, options.events);
+  // 工具事件的三顆生產者（#1248）：一份實例走遍 root 與每個子代理，無狀態；呼叫者身分從每次請求現算。
+  const toolPreExecute =
+    options.events === undefined ? undefined : createToolPreExecuteMiddleware(options.events);
+  const toolPostExecute =
+    options.events === undefined ? undefined : createToolPostExecuteMiddleware(options.events);
+  const toolExecute =
+    options.events === undefined ? undefined : createToolExecuteMiddleware(options.events);
   // **中止這一輪的兩顆，也是一份實例走遍 root 與每個子代理**：訊號每次從那一次呼叫的
   // `configurable` 現讀。位置一外一內，理由見 {@link ./turn-cancel.ts}。
   const turnCancel = createTurnCancelGuard();
@@ -646,6 +668,9 @@ export function foldRegistry(
           : createSubagentToolFilterMiddleware(hiddenBaseTools),
       ),
     ),
+    // `tools/pre-execute`（#1248）緊貼閘門外側：`prepend: true` 的 plugin（plan-mode 的拒絕）今天就在閘門外側，派發點放內側會變成
+    // 「先跳核准卡、再被拒」。拒絕在問人之前，同 dsh（hooks／permission／sandbox 先於 approval）。核准本身沒有搬上去。
+    shared('toolPreExecute', toolPreExecute),
     // 閘門排在子代理自帶的那些之前——同「全域勝」那條軸線：子代理自己掛的 middleware 繞不過它。
     // 前景子代理用同一顆（#328 第 1 項）；背景圖編圖時換成 `policy-never` 那顆（{@link createBackgroundApprovalGate}）。
     { name: 'approvalGate', root: same(approvalGate), subagent: same(approvalGate) },
@@ -680,6 +705,9 @@ export function foldRegistry(
     ),
     // 以 `last` 掛的（#720）：在其餘每一顆會往 system prompt 附加文字的內側（連子代理自帶的也在它外側），所以它附加的仍是最後一段。
     { name: 'plugins.last', root: same(plugins.last), subagent: same(subagentPlugins.last) },
+    // `tools/post-execute`（#1248）在輸出校驗等貼著工具本體的那幾顆外側（dsh 在 post-execute 之前驗輸出）、在每一個 plugin
+    // middleware 內側：plugin 與圍堵看到的是替換過的那則。
+    shared('toolPostExecute', toolPostExecute),
     // 輸出校驗在每一個 plugin middleware 的內側：看到的是工具原本的輸出，不是外層改過的版本（dsh 在
     // `tools/post-execute` 之前驗）。解不開參數的那顆在它更內側，換上的樁回的是錯誤，這裡照規矩不驗。
     // 見 {@link ./output-schema.ts}。
@@ -694,6 +722,9 @@ export function foldRegistry(
     // 解不開的參數：`wrapToolCall` 在核准與每個 plugin 的內側（dsh 執行時才驗參數），改寫在其餘 `wrapModelCall`
     // 的內側（外面看到的都是改寫過的那則）。root 與子代理同一顆（#269 的 Q7）。見 {@link ./invalid-tool-args.ts}。
     shared('invalidToolArgs', invalidToolArgs),
+    // `tools/execute`（#1248）環繞工具本體，排在解不開參數那顆的內側（樁回的錯誤它看得到）、撞到輸出上限那顆的外側：後者的
+    // `wrapToolCall` 只對 `task` 把結果換成 dsh 那句錯誤，dsh 是在前景 `task` 本體裡拋，所以那個替換在 execute 的內側才對得上。
+    shared('toolExecute', toolExecute),
     // 撞到輸出上限：清工具呼叫排在修補的內側（被切斷的那顆不會先被修成 `{}` 參數），外面每一顆看到的都是清過的；
     // 子代理的截斷要記進同一份載體給父圖的 `task` 讀。見 {@link ./max-tokens.ts}。
     shared('maxTokens', maxTokens),

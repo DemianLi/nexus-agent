@@ -19,6 +19,10 @@
  * **不是** post-execute」。所以這一份的第一產物是**佔用者身上那幾行 JSDoc**，索引是閱讀面，
  * 下面那條斷言是絆索。
  *
+ * **（2026-10-09 補，#1248）** 匯流排上有了 `tools/pre-execute`／`tools/execute`／`tools/post-execute`／`tools/result` 之後，
+ * 這三個名字也會 grep 到 `packages/nexus-core/src/tool-pipeline.ts`：那是**事件的生產者與宣告**，不是這一格的 middleware 佔用者，
+ * 所以不列進 `occupants`；「現在由哪個事件佔住」另有一欄（`eventOccupant`）。
+ *
  * ## 每一列三件事，不是一個判決
  *
  * #190 開圖時寫「每格收成 (a)/(b)/(c) 三選一」，兩張子卡答完發現**最有資訊量的兩格都是
@@ -52,7 +56,8 @@
  *    進了日誌，生產者是第 6 列的圍堵（圖裡的 middleware，不是入口點）。**第 9 格照舊沒有列**：
  *    dsh 那格是只觀察的 `mode: 'emit'` 通知，佔住它的是**聽者**，而我們這側讀 `tool/result`
  *    的只有遙測協調器——它照單全收每一顆事件，不是為這一格掛的。`goal-driver.ts` 檔頭那條
- *    婉拒 #180 停損的理由跟著改寫了：量得到了，結論沒變。
+ *    婉拒 #180 停損的理由跟著改寫了：量得到了，結論沒變。**（2026-10-09 補，#1248）** 匯流排上的 `tools/result`
+ *    有了生產者（圍堵，在記日誌之前派發），但今天零監聽者，遙測協調器讀的仍是日誌事件，所以「第 9 格沒有聽者」這句話仍成立。
  * 4. **第 4 格核准的審計事件**——dsh 每次 request 一對 `approval/asked` ＋
  *    `approval/decided`；我們 #1029 起也有（人那條由 pump 寫、不必問人的由閘門寫），逐條在第 4 列的紀錄差。
  *    這一條原本是「認帳不做」（[#220](https://github.com/DemianLi/nexus-agent/issues/220)），#1018 Q2 翻案。
@@ -122,9 +127,13 @@ const UNMEASURED = '（未量）';
 /**
  * 「這一格現在**沒有**由任何事件佔住」——見 {@link InterceptionRow.eventOccupant}。
  *
- * 事件匯流排在 S0 落地（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)），但事件表是空的、沒有生產者，所以
- * 九格都還由 middleware 佔著。**這是 [#190](https://github.com/DemianLi/nexus-agent/issues/190) 偏離登記「推翻」的那一刀**：
- * 登記的前提（基礎建設表達不出事件匯流排）不再成立，這份索引從此多一個軸，S1 起逐格往下填。
+ * 事件匯流排在 S0 落地（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)）。**這是 [#190](https://github.com/DemianLi/nexus-agent/issues/190)
+ * 偏離登記「推翻」的那一刀**：登記的前提（基礎建設表達不出事件匯流排）不再成立，這份索引從此多一個軸，逐格往下填。
+ *
+ * S1a（[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）落了工具四事件，**填的只有派發點真的在這一格的**：
+ * 第 6 格（`tools/execute`）與第 7 格（`tools/post-execute`）。**第 4 格（`tools/pre-execute`）仍是「尚無」**——事件宣告了、
+ * 也有生產者，但這一格的佔用者是核准（`approval.ts`），它還在自己的 middleware 與 `approvals` 註冊點上、沒有搬（demian 2026-10-09），
+ * 填了就是說核准已經在匯流排上。其餘各格沒有生產者，一律「尚無」。
  */
 const NO_EVENT = '（尚無）';
 
@@ -217,6 +226,8 @@ const INDEX: readonly InterceptionRow[] = [
     permission: 'waterfall，allow／deny／ask',
     occupants: ['packages/nexus-core/src/approval.ts'],
     permissionDelta:
+      '**事件 `tools/pre-execute` 已宣告也有生產者（#1248，在這一格的閘門外側），但核准沒有搬上去，所以這一列的事件佔用仍是「尚無」**：' +
+      '匯流排上的 `PreToolDecision` 沒有 `ask`，監聽者只能 allow／deny；問人仍走 `approvals` 註冊點。' +
       '**三格決策詞彙對得上，`ask` 的去向對不上。** dsh 的 `ask` 送進一條**可組合的應答者' +
       ' waterfall**（`approval/request`，' +
       '`references/deepseek-harness/packages/interaction/user-approval/src/types.ts:85`）：回一個' +
@@ -248,7 +259,7 @@ const INDEX: readonly InterceptionRow[] = [
   },
   {
     cell: 6,
-    eventOccupant: NO_EVENT,
+    eventOccupant: 'tools/execute',
     moment: 'tools/execute',
     permission: '環繞 waterfall（超時／重試／指標）',
     occupants: [
@@ -275,7 +286,7 @@ const INDEX: readonly InterceptionRow[] = [
   },
   {
     cell: 7,
-    eventOccupant: NO_EVENT,
+    eventOccupant: 'tools/post-execute',
     moment: 'tools/post-execute',
     permission: '檢查／變換 waterfall，可 `additionalContexts`',
     occupants: ['packages/nexus-core/src/output-schema.ts'],
@@ -422,10 +433,16 @@ describe('攔截時刻索引', () => {
     expect(new Set(INDEX.map((row) => row.moment)).size).toBe(EXPECTED_ROWS);
   });
 
-  it('事件佔用：填的不是「尚無」就必須是事件表上真的有的名字；S0 事件表是空的，所以九格都還沒有', () => {
+  it('事件佔用：填的不是「尚無」就必須是事件表上真的有的名字；S1a 只填派發點真的在的第 6、7 格，核准那格（4）仍是「尚無」', () => {
     const declared = new Set(scanEventTableTree(REPO_ROOT).map((event) => event.name));
     expect(rowsNamingUndeclaredEvents(INDEX, declared)).toEqual([]);
-    expect(INDEX.map((row) => row.eventOccupant)).toEqual(INDEX.map(() => NO_EVENT));
+    expect(Object.fromEntries(INDEX.map((row) => [row.cell, row.eventOccupant]))).toEqual({
+      2: NO_EVENT,
+      3: NO_EVENT,
+      4: NO_EVENT,
+      6: 'tools/execute',
+      7: 'tools/post-execute',
+    });
     // 正向對照：一個編造的名字確實被這條規矩擋下來，不是因為空表而永遠綠。
     const invented = { ...INDEX[0]!, eventOccupant: 'x/not-declared' };
     expect(rowsNamingUndeclaredEvents([invented], declared)).toEqual([invented.cell]);

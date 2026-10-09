@@ -35,10 +35,17 @@
  *
  * ## 事件表
  *
- * 事件表是下面的 {@link Events} interface，**S0 是空的**：沒有生產者的事件宣告出來就是沒人送的死事件，所以 S1 以後每個
- * 事件跟它的第一個生產者同一張 PR 落地。插件靠 TypeScript 的 declaration merging 擴充它——`declare module '@nexus/core'
- * { interface Events { 'my/event'(…): void } }`。**每個成員必須有 JSDoc，並標 `@mode emit | serial | waterfall`**，
- * 由 `event-table.test.ts` 掃整棵樹檢查（照 dsh 的規矩）。
+ * 事件表是下面的 {@link Events} interface，**本體永遠是空的**，成員全靠 declaration merging 長出來——`declare module
+ * '@nexus/core' { interface Events { 'my/event'(…): void } }`（核心自己用 `declare module './events.js'`）。沒有生產者的事件
+ * 宣告出來就是沒人送的死事件，所以**每個事件跟它的第一個生產者同一張 PR 落地**：S0 時表是空的，S1a
+ * （[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）落了工具四事件（`tool-pipeline.ts`）。**每個成員必須有 JSDoc，
+ * 並標 `@mode emit | serial | waterfall`**，由 `event-table.test.ts` 掃整棵樹檢查（照 dsh 的規矩），並檢查每個事件在產品碼裡都有人派發。
+ *
+ * ## 第四種派發：`observe`（隔離的 emit）
+ *
+ * `emit` 照 dsh 是「同步拋錯中斷後面的監聽者並往外拋」。**純觀察的事件**（`tools/result`：結果已定、監聽者不能改任何東西）用
+ * {@link EventDispatcher.observe}：每位監聽者各自包住，失敗交給 `onError`，其餘照跑，派發永不拋。dsh 是在生產端逐一隔離，
+ * 我們收進派發面。
  *
  * @module
  */
@@ -107,6 +114,22 @@ export interface EventDispatcher {
    * @param args - 給每位監聽者的參數。
    */
   emit<K extends EventName>(name: K, ...args: Args<K>): void;
+  /**
+   * 隔離的 `emit`：給**觀察用**的事件（結果已定、監聽者不能改任何東西）。每位監聽者各自包住——同步拋錯與 promise 拒絕都
+   * 交給 `onError`，**其餘監聽者照跑，派發本身永不拋**。
+   *
+   * 跟 {@link EventDispatcher.emit} 的分別是失敗的去向：`emit` 照 dsh 是「同步拋錯中斷後面並往外拋」，用在生產者本來就想知道
+   * 監聽者壞了的地方；`observe` 用在**生產者不能被觀察者拖下水**的地方（例如把一次成功的工具呼叫翻成失敗）。dsh 是在生產端
+   * （`notifyResult`）逐一隔離，我們把這件事收進派發面，每個觀察類事件的生產者不必各寫一遍。
+   * @param name - 事件名。
+   * @param onError - 某位監聽者拋錯或 reject 時呼叫；它自己拋出來的也會被吞掉。
+   * @param args - 給每位監聽者的參數。
+   */
+  observe<K extends EventName>(
+    name: K,
+    onError: (error: unknown, listener: EventListenerInfo) => void,
+    ...args: Args<K>
+  ): void;
   /**
    * 依序派發，遇到 bail 值就停。
    * @param name - 事件名。
@@ -214,6 +237,29 @@ export class EventBus implements EventSubscriber, EventDispatcher {
 
   emit<K extends EventName>(name: K, ...args: Args<K>): void {
     for (const callback of this.#snapshot(name)) callback(...(args as unknown as never[]));
+  }
+
+  observe<K extends EventName>(
+    name: K,
+    onError: (error: unknown, listener: EventListenerInfo) => void,
+    ...args: Args<K>
+  ): void {
+    for (const hook of [...(this.#hooks.get(name) ?? [])]) {
+      const info: EventListenerInfo = { name, origin: hook.origin, prepend: hook.prepend };
+      const report = (error: unknown): void => {
+        try {
+          onError(error, info);
+        } catch {
+          // 回報自己壞了也不能拖累生產者。
+        }
+      };
+      try {
+        const returned = hook.callback(...(args as unknown as never[]));
+        void Promise.resolve(returned).catch(report);
+      } catch (error) {
+        report(error);
+      }
+    }
   }
 
   async serial<K extends EventName>(name: K, ...args: Args<K>): Awaitable<Result<K>> {
