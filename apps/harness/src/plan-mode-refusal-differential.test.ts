@@ -159,7 +159,7 @@ describe('plan-mode 模式外拒絕：搬載體前後，模型看到的逐字相
     expect(seen.toolMessages).toEqual([REFUSED]);
   });
 
-  it('接了兩份（ambiguous）：不猜，退回 startActive——開 → 放行，本體說挑不出來', async () => {
+  it('接了兩份（ambiguous）：不猜，退回 startActive——開 → 放行，本體回 not-root（同一句「不在計劃模式」）', async () => {
     const seen = await run({ startActive: true, attached: 2 });
     expect(seen.toolMessages).toEqual([REFUSED]);
   });
