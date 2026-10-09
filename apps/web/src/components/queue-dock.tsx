@@ -5,6 +5,7 @@ import type {
   WireQueuedInput,
 } from '@nexus/wire';
 import {
+  Bot,
   Check,
   ChevronDown,
   ListEnd,
@@ -37,6 +38,9 @@ import {
   QUEUE_PARKED_TEXT,
   queueHeading,
   isQueuedByAgent,
+  isUnrecognizedSource,
+  UNRECOGNIZED_SOURCE_TEXT,
+  unrecognizedSourceKind,
   queuedAgentText,
   queuePreview,
 } from '@/lib/queue-view';
@@ -249,14 +253,24 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
     const preview = queuePreview(shown.trim() === '' ? attachmentNames : shown);
     // 目標續行的預約（#638）：文字是給模型的提示詞，畫面寫「目標續行」；編輯、刪除都會暫停目標，講在那一列上；沒有插話鈕。
     const goal = isGoalContinuation(item);
+    // 不認得的來源（#1247，新版 harness 加的種類）：不是人說的，也不知道能不能插話，通用標籤、不照抄文字、沒有插話鈕。
+    const generic = isUnrecognizedSource(item);
+    const system = goal || generic;
+    const SystemIcon = goal ? Target : Bot;
     const label = goal
       ? GOAL_CONTINUATION_TEXT
-      : labelPreview(shown.trim() === '' ? attachmentNames : shown);
+      : generic
+        ? UNRECOGNIZED_SOURCE_TEXT
+        : labelPreview(shown.trim() === '' ? attachmentNames : shown);
+    const systemTitle = generic
+      ? `${UNRECOGNIZED_SOURCE_TEXT}（來源：${unrecognizedSourceKind(item) ?? ''}）`
+      : label;
     return (
       <li
         key={item.id}
         data-queue-item={item.id}
         data-queue-goal={goal || undefined}
+        data-queue-generic={generic || undefined}
         data-leaving={leaving || undefined}
         aria-hidden={leaving || undefined}
         className={cn(
@@ -302,8 +316,8 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
           </>
         ) : (
           <>
-            {goal ? (
-              <Target
+            {system ? (
+              <SystemIcon
                 aria-hidden
                 className="text-muted-foreground mt-2.5 size-4 shrink-0 lg:mt-2"
               />
@@ -318,12 +332,12 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
             <span
               className={cn(
                 'min-h-11 min-w-0 flex-1 truncate py-2.5 lg:min-h-8 lg:py-1.5',
-                goal && 'text-muted-foreground',
+                system && 'text-muted-foreground',
               )}
-              title={goal ? GOAL_CONTINUATION_TEXT : preview}
-              data-testid={goal ? 'queue-goal-label' : undefined}
+              title={system ? systemTitle : preview}
+              data-testid={goal ? 'queue-goal-label' : generic ? 'queue-generic-label' : undefined}
             >
-              {goal ? GOAL_CONTINUATION_TEXT : preview}
+              {system ? label : preview}
             </span>
             {attachmentCount > 0 && (
               <span
@@ -366,7 +380,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
             >
               <Trash2 />
             </Button>
-            {!goal && (
+            {!system && (
               <Button
                 type="button"
                 variant="ghost"
