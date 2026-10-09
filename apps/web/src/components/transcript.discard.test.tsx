@@ -1,4 +1,10 @@
-import { emptyConversation, MESSAGE_DISCARD, reduceAll } from '@nexus/wire';
+import {
+  emptyConversation,
+  LLM_RETRY,
+  LLM_RETRY_STARTED,
+  MESSAGE_DISCARD,
+  reduceAll,
+} from '@nexus/wire';
 import type { ConversationState, Event } from '@nexus/wire';
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -86,5 +92,69 @@ describe('作廢的回覆（#520）', () => {
     const state = fold((s) => [s.openAi('a'), s.delta('a', '斷尾的半截'), s.failed('x', '失敗')]);
     view(state);
     expect(screen.getByText(/斷尾的半截/u)).toBeTruthy();
+  });
+});
+
+describe('等著重打的倒數行（#520）', () => {
+  const retryFrame = (s: Script, over: Record<string, unknown> = {}) =>
+    s.custom(LLM_RETRY, {
+      retryId: 'r1',
+      retry: 1,
+      maxRetries: 2,
+      delayMs: 3000,
+      code: 'TIMEOUT',
+      ...over,
+    });
+  const rowText = () => screen.queryByTestId('llm-retry')?.textContent ?? null;
+
+  it('作廢之後、下一則回覆開始之前：輪尾有一行倒數，作廢的字不在', () => {
+    const state = fold((s) => [
+      s.openAi('a'),
+      s.delta('a', '第一次吐的半截'),
+      s.custom(MESSAGE_DISCARD, { messageId: 'a' }),
+      retryFrame(s),
+    ]);
+    view(state);
+    expect(rowText()).toContain('逾時，3 秒後重試（第 1／2 次）');
+    expect(screen.queryByText(/第一次吐的半截/u)).toBeNull();
+  });
+
+  it('下一則回覆開始：倒數行收掉，重打的字接著畫', () => {
+    const state = fold((s) => [
+      s.openAi('a'),
+      s.custom(MESSAGE_DISCARD, { messageId: 'a' }),
+      retryFrame(s),
+      s.custom(LLM_RETRY_STARTED, { retryId: 'r1', retry: 1 }),
+      ...s.ai('b', { text: '重打後的回覆' }),
+    ]);
+    view(state);
+    expect(rowText()).toBeNull();
+    expect(screen.getByText('重打後的回覆')).toBeTruthy();
+  });
+
+  it('退避中按了停止：這一輪收尾就收掉，不留一行過期的倒數', () => {
+    const state = fold((s) => [
+      s.openAi('a'),
+      s.custom(MESSAGE_DISCARD, { messageId: 'a' }),
+      retryFrame(s),
+      s.stopped(),
+    ]);
+    view(state);
+    expect(rowText()).toBeNull();
+  });
+
+  it('沒有在重試：不畫那一行', () => {
+    view(fold((s) => [...s.ai('a', { text: '正常的回覆' }), s.completed()]));
+    expect(rowText()).toBeNull();
+  });
+
+  it('同一個 retryId 的下一次嘗試：畫成第 2 次', () => {
+    const state = fold((s) => [
+      retryFrame(s),
+      s.custom(LLM_RETRY_STARTED, { retryId: 'r1', retry: 1 }),
+      retryFrame(s, { retry: 2, delayMs: 2000, code: 'TRANSPORT' }),
+    ]);
+    view(state);
+    expect(rowText()).toContain('連線失敗，2 秒後重試（第 2／2 次）');
   });
 });
