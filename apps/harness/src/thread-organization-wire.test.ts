@@ -230,23 +230,11 @@ describe('沒有 agent 的 thread：形狀與錯誤碼', () => {
     expect(bareListed.result.archivedThreadIds).toBeUndefined();
   });
 
-  it('沒接整理檔：四個命令都是 not_supported；thread.rename 在這張 PR 還是 not_supported', async () => {
+  it('沒接整理檔：四個命令都是 not_supported（改名不依賴整理檔，見 thread-rename-wire.test.ts）', async () => {
     const { raw } = rig({ createAgent: stubAgent });
     for (const method of ['thread.pin', 'thread.unpin', 'thread.archive', 'thread.unarchive']) {
       expect(await raw('a', method)).toMatchObject({ type: 'error', error: 'not_supported' });
     }
-    expect(await raw('a', 'thread.rename', { title: '新名字' })).toMatchObject({
-      type: 'error',
-      error: 'not_supported',
-    });
-    // 就算接了整理檔，rename 也還沒做。
-    const withOrg = rig({
-      createAgent: stubAgent,
-      threadOrganization: await ThreadOrganization.open(dir),
-    });
-    expect(await withOrg.raw('a', 'thread.rename', { title: '新名字' })).toMatchObject({
-      error: 'not_supported',
-    });
   });
 
   it('儲存體讀不動、或寫不進去：協定層錯誤（unknown_error），不是 thread_not_found', async () => {
@@ -593,6 +581,18 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
     expect(rigged.rootModel.prompts).toHaveLength(0);
     // 預算給大：目標若沒被擋下轉成 blocked，這裡會看到不只一顆空輪（沒有空轉）。
     expect(root.events.filter((event) => event.type === 'turn/start')).toHaveLength(1);
+    expect(rigged.goals!.serviceFor(root)?.get()).toMatchObject({
+      phase: 'blocked',
+      blockedReason: { code: 'prompt-rejected' },
+    });
+
+    // 還封存著就 `/goal resume`：驅動器排一顆續行，輪頭又被擋下，目標再轉 blocked（prompt-rejected）——不空轉、不叫模型。
+    const view = rigged.goals!.serviceFor(root)!.get()!;
+    rigged.goals!.serviceFor(root)!.resume({ id: view.id, revision: view.revision });
+    await until(() => endKinds(root).filter((kind) => kind === 'blocked').length === 2);
+    await settle(150);
+    expect(root.events.filter((event) => event.type === 'turn/start')).toHaveLength(2);
+    expect(rigged.rootModel.prompts).toHaveLength(0);
     expect(rigged.goals!.serviceFor(root)?.get()).toMatchObject({
       phase: 'blocked',
       blockedReason: { code: 'prompt-rejected' },

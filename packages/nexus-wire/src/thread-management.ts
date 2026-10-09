@@ -1,8 +1,8 @@
 /**
  * 會話的釘選、封存與改名上線的形狀（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
  *
- * **契約**：型別、method 名字、client 方法。**釘選與封存四支 server 端已實作**（#633 第一張）；`thread.rename` 還沒（第二張），
- * 沒實作的、或沒接落盤的 server 回 `not_supported`，web 據那個碼把這幾個動作藏起來（或退回瀏覽器本地）。
+ * **契約**：型別、method 名字、client 方法。**五支 server 端都已實作**（#633：釘選與封存是第一張，改名是第二張）。釘選與封存要整理檔，沒接落盤的
+ * server 回 `not_supported`，web 據那個碼把這幾個動作藏起來（或退回瀏覽器本地）；改名寫在會話日誌上，不依賴整理檔。
  *
  * 照 dsh 的 `workspace-controller` 與 `session-controller`（`packages/api/workspace-controller/src/{commands,types}.ts`、
  * `packages/api/session-controller/src/{commands,types}.ts`，`5badb150`）：
@@ -13,9 +13,10 @@
  * - **封存的會話不能釘**（dsh `WorkspaceArchivedSessionPinError`）。
  * - **封存撞上正在跑的會話：拒絕**（dsh `workspace/session-active`，帶著 `activity`：哪幾類工作還在跑），除非帶 `stopActivity`——
  *   那就**先**把封存寫下去、**再**去停它的工作；停是發出去就算，不等停穩，回應在封存集合落定時回。封存的會話不跑模型（dsh 的
- *   `ArchivedSessionGate`）：之後喚醒它的任何輸入（人送的、排著的、目標續行、子代理結算）都不開那一輪，直到取消封存。
+ *   `ArchivedSessionGate`）：之後喚醒它的任何輸入（人送的、排著的、目標續行、子代理結算）仍會開一輪，但以 `blocked` 收、一個模型請求都不發，直到取消封存。
  * - **改名**把使用者的標題追加成日誌事件，回受理後的標題與事件的 `seq`（dsh `SessionRenameValue { title, seq }`）。標題不合法
- *   （dsh `session/title-invalid`）：回 `title_invalid`，標題不變。
+ *   （dsh `session/title-invalid`）：回 `title_invalid`，標題不變。標題是正規化後的（去控制字元、空白收成一格、截到 `maxTitleBytes`），
+ *   **釘住**：之後的自動標題不會蓋過它。
  *
  * ## 與 dsh 的偏離
  *

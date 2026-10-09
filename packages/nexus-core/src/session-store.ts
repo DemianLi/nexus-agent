@@ -486,8 +486,16 @@ import type { SessionEvent } from './session-log.js';
  * 歷史也不會標出來。拒絕讀（由版本號在讀檔那一步擋下）才是對的方向。
  *
  * **讀舊檔**：39 以前沒有這個原因，不補寫歷史。
+ *
+ * ## 41：`session/title` 的 `source` 多一種 `user`（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）
+ *
+ * 使用者改名：追加一顆 `session/title`，`source: { kind: 'user' }`、`messageSeqs: []`，**釘住**這個標題（見 {@link ./session-log.ts | SessionTitleSource}）。
+ * 40 以前的檔直接讀：那時沒有人工改名，一顆 `user` 都沒有就是當時的樣子。
+ *
+ * 升版照新增詞彙的慣例（同 18、19），不是非升不可：40 讀到 `user` 標題照樣拿最後一顆（列表、歷史讀的就是文字），一字不差。釘住由寫標題的人
+ * 守：退回標題只在沒有標題時寫，模型標題在寫入前看到最後一顆是 `user` 就放棄（見 `apps/harness/src/session-title.ts` 的 `titlePinnedByUser`）。
  */
-export const SESSION_LOG_FORMAT_VERSION = 40;
+export const SESSION_LOG_FORMAT_VERSION = 41;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

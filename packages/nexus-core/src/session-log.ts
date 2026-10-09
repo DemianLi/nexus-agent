@@ -244,10 +244,13 @@ export interface SessionTitleModelIdentity {
  * - `fallback`：第一則合格的人話照規則截出來的（#647）。
  * - `provider`：模型依第一則合格的人話產生的（#650）。`provider` 是產生器的身分，`model` 是那一次走的路由。
  *
- * dsh 另有 `user`（改名，會釘住），歸 #633，有了生產者再加。
+ * - `user`：使用者改的名（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，dsh `rename` 寫的那一種）。**釘住這個標題**：
+ *   之後不會再有自動產生的標題蓋過它（退回標題本來就只在沒有標題時寫；模型標題在寫入前看到最後一顆是 `user` 就放棄）。`messageSeqs`
+ *   是空陣列——沒有哪幾則人話推出它。
  */
 export type SessionTitleSource =
   | { readonly kind: 'fallback' }
+  | { readonly kind: 'user' }
   | {
       readonly kind: 'provider';
       readonly provider: string;
