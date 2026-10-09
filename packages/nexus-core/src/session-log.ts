@@ -47,6 +47,7 @@ import type { LoggedMessage } from './logged-message.js';
 import type { RequestHeader, RequestSnapshotReason } from './request-snapshot.js';
 import type { SessionHeaderBuildMetadata } from './session-store.js';
 import type { SubagentCatalogData } from './subagent-catalog.js';
+import type { SubagentDescriptorData } from './subagent-descriptor.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
 /**
@@ -941,6 +942,18 @@ export interface SessionEventMap {
    * **它不進模型**，同 dsh 的 log-only：推模型歷史的一側不讀它。web 的工具卡讀它（`@nexus/wire` 的 `SUBAGENT_CATALOG`）。
    */
   'subagent/catalog': SubagentCatalogData;
+  /**
+   * 子代理**自己的日誌**上的身分與可續接的組成（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)）：哪一種規格、指定的模型與推理等級。
+   * 照 dsh 的同名事件（`packages/subagent/subagent/src/descriptor.ts`，`5badb15009a`），欄位與沒抄的幾格見 {@link ./subagent-descriptor.ts}。
+   *
+   * 行程重啟之後 host 的記憶體沒了，冷復活（有人對這個編號 `subagent.send`）只靠這一顆加上 header 的 `parentSession` 重建；
+   * 沒有這一顆的子日誌（44 以前、前景子代理）分不出身分，不能復活。
+   *
+   * 只由 `BackgroundSubagentHost.start` 寫：開好子日誌之後、第一個 `turn/start` 之前，是這份日誌的**第一顆**；折疊取第一顆為準。
+   * **不進模型**（log-only，推模型歷史的一側不讀它）、**不標 `ignorable`**（格式 44）：一台 43 的 runtime 看不懂它，也就不該以為自己讀得懂
+   * 這份子日誌。
+   */
+  'subagent/descriptor': SubagentDescriptorData;
   /**
    * 模型要叫一次工具，**在它進任何一層之前記**——照 dsh 在核准之前就記
    * （`packages/core/agent-loop/src/tool-calls.ts:168`，`c291e79`），所以被核准閘門擋掉的

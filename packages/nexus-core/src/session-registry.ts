@@ -51,6 +51,18 @@ import { SessionLog } from './session-log.js';
 import type { SessionEvent, SessionLogOptions } from './session-log.js';
 import { sessionAddressKey } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
+import type { StoredSession } from './session-store.js';
+
+/**
+ * 一份會話是從落盤接回來的（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)，背景子代理冷復活）：上一個行程留下的事件，加上往原檔
+ * 續寫的把手。對應 root 的 `rootSeed` 加 `resumedRoot`，差別是這一份由**執行期**要求、不是建構時給：行程啟動時還不知道哪個子代理會被叫醒。
+ */
+export interface SessionResume {
+  /** 上一個行程留下的全部事件（照 `seq` 排）；日誌以它們為 seed，結尾補一顆 `session/end-seed`。 */
+  readonly events: readonly SessionEvent[];
+  /** 往原檔續寫的把手（`SessionStore.resume` 交出來的那個）；歸接上它的持久化協調器收。 */
+  readonly stored: StoredSession;
+}
 
 /** 註冊表裡的一份會話。 */
 export interface SessionEntry {
@@ -58,6 +70,8 @@ export interface SessionEntry {
   readonly address: SessionAddress;
   /** 它的日誌。**寫得動**——同 `registry.sessions` 那條路交出去的東西。 */
   readonly log: SessionLog;
+  /** 這一份是從落盤接回來的才有；持久化協調器據此往原檔續寫而不是新建。 */
+  readonly resume?: SessionResume;
 }
 
 /** 一位訂閱者。**每一份會話叫一次**，包含訂閱當下已經在的那些。 */
@@ -84,8 +98,9 @@ export interface SessionRegistryOptions {
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。見
    * {@link SessionLogOptions.seed}。
    *
-   * **只有 root 有**：subagent 的日誌是這個行程第一次有人要寫的時候才出生的，上一個行程
-   * 的那些 spawn 已經跑完了，它們的檔案留在原處不接回來。
+   * **建構時只有 root 有**：subagent 的日誌是這個行程第一次有人要寫的時候才出生的，上一個行程
+   * 的那些 spawn 已經跑完了，它們的檔案留在原處不接回來——**除非有人叫醒它**：背景子代理的冷復活
+   * （[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)）在執行期用 {@link SessionRegistry.open} 的 `resume` 把那一份接回來。
    */
   readonly rootSeed?: readonly SessionEvent[];
 }
@@ -129,13 +144,20 @@ export class SessionRegistry {
    * 的下一件事通常就是往裡面寫，那一筆必須已經在每一位訂閱者的射程內。
    *
    * @param address - 誰要的。
+   * @param resume - 從落盤接回來（背景子代理冷復活，#1271）：日誌以上一個行程的事件為 seed，並把續寫把手帶給訂閱者。只在**開新的那一次**
+   *   有意義——這個身分已經有日誌了還硬要接回來，是呼叫端的 bug（同一份落盤會有兩個寫者），所以拋，不靜靜忽略。
    * @returns 它的日誌。
    */
-  open(address: SessionAddress): SessionLog {
+  open(address: SessionAddress, resume?: SessionResume): SessionLog {
     const key = sessionAddressKey(address);
     const existing = this.#entries.get(key);
-    if (existing !== undefined) return existing.log;
-    const entry = this.#create(address);
+    if (existing !== undefined) {
+      if (resume !== undefined) {
+        throw new Error(`會話 "${existing.log.sessionId}" 已經開著，不能再從落盤接回來`);
+      }
+      return existing.log;
+    }
+    const entry = this.#create(address, resume);
     for (const observer of [...this.#observers]) observer(entry);
     return entry.log;
   }
@@ -219,15 +241,16 @@ export class SessionRegistry {
   }
 
   /** 開一份並登記，不通知任何人（通知的時機歸 {@link open}）。 */
-  #create(address: SessionAddress): SessionEntry {
+  #create(address: SessionAddress, resume?: SessionResume): SessionEntry {
+    const seed =
+      resume !== undefined ? resume.events : address.kind === 'root' ? this.#rootSeed : undefined;
     const entry: SessionEntry = {
       address,
       log: new SessionLog(
         this.#sessionIdFor(address),
-        address.kind === 'root' && this.#rootSeed !== undefined
-          ? { ...this.#logOptions, seed: this.#rootSeed }
-          : this.#logOptions,
+        seed !== undefined ? { ...this.#logOptions, seed } : this.#logOptions,
       ),
+      ...(resume !== undefined && { resume }),
     };
     this.#entries.set(sessionAddressKey(address), entry);
     return entry;

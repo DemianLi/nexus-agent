@@ -52,8 +52,11 @@ afterEach(async () => {
   for (const handler of opened.splice(0)) await handler.close();
 });
 
-function rig(createAgent: Parameters<typeof createWireHandler>[0]['createAgent']) {
-  const handler = createWireHandler({ auth: TEST_BROWSER_AUTH, createAgent });
+function rig(
+  createAgent: Parameters<typeof createWireHandler>[0]['createAgent'],
+  extra: Partial<Parameters<typeof createWireHandler>[0]> = {},
+) {
+  const handler = createWireHandler({ auth: TEST_BROWSER_AUTH, createAgent, ...extra });
   opened.push(handler);
   const fetch = async (input: Parameters<typeof globalThis.fetch>[0], init?: RequestInit) =>
     handler.handle(loopbackRequest(input as string, init));
@@ -92,7 +95,7 @@ describe('替身控制面：wire 這一層', () => {
     const control: BackgroundSubagentControl = {
       sendFromUser: (runId, text) => {
         calls.push(`send:${runId}:${text}`);
-        if (reject !== undefined) throw reject;
+        return reject === undefined ? Promise.resolve() : Promise.reject(reject);
       },
       interrupt: (runId) => {
         calls.push(`interrupt:${runId}`);
@@ -153,11 +156,50 @@ describe('替身控制面：wire 這一層', () => {
     }
   });
 
+  it('叫醒失敗（resume-failed）沒有專屬的碼：unknown_error，原因照帶', async () => {
+    const { control } = recorder(
+      new BackgroundSubagentError('resume-failed', '租約被別的行程握著'),
+    );
+    const { client } = stubbed(control);
+    await client.slashList('t1');
+    expect(await client.subagentSend('t1', 'bg-x', '嗨')).toMatchObject({
+      type: 'error',
+      error: 'unknown_error',
+      message: '租約被別的行程握著',
+    });
+  });
+
+  it('只在磁碟上、還沒載入的 thread：send 把它建起來再投遞（重啟之後冷的子代理靠這個叫醒）；interrupt 照舊不建', async () => {
+    const { calls, control } = recorder();
+    let built = 0;
+    const { client } = rig(
+      async () => {
+        built += 1;
+        return {
+          agent: {} as PumpAgent,
+          commands: emptyCommandPoint(),
+          dispose: async () => {},
+          attachSessions: () => ({ detach: async () => {}, background: control }),
+        };
+      },
+      { storedThreadKnown: async (threadId) => threadId === 'on-disk' },
+    );
+    expect(await client.subagentInterrupt('on-disk', 'bg-live')).toMatchObject(ACCEPTED);
+    expect(built).toBe(0);
+    expect(await client.subagentSend('on-disk', 'bg-live', '醒醒')).toMatchObject(ACCEPTED);
+    expect(built).toBe(1);
+    expect(calls).toEqual(['send:bg-live:醒醒']);
+    // 磁碟上也沒有的 thread 不建。
+    expect(await client.subagentSend('nowhere', 'bg-live', '醒醒')).toMatchObject({
+      type: 'error',
+      error: SUBAGENT_NOT_FOUND,
+    });
+    expect(built).toBe(1);
+  });
+
   it('不是型別化的拒絕（程式錯）不被吞成業務錯誤碼', async () => {
     const control: BackgroundSubagentControl = {
-      sendFromUser: () => {
-        throw new Error('壞掉了');
-      },
+      sendFromUser: () => Promise.reject(new Error('壞掉了')),
       interrupt: () => false,
       hasRunning: () => false,
       interruptAll: () => 0,

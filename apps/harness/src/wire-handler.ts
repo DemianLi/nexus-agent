@@ -1531,11 +1531,15 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       return json(successResponse(envelope.id, { accepted: true }));
     }
     if (isSubagentMethod(method)) {
-      // 對單一背景子代理傳話、單獨停（#865）：**不經 `threadFor`**，同 `run.cancel`——host 是這條 thread 的 agent 的，
-      // 沒建過的 thread 沒有任何背景子代理，不為了回「沒有」建一個 agent。重啟後的 thread 同樣沒有：host 的編號表在記憶體裡
-      // （`send_message` 同一個限制）。
+      // 對單一背景子代理傳話、單獨停（#865）。
+      //
+      // - `subagent.interrupt`：**不經 `threadFor`**，同 `run.cancel`——host 是這條 thread 的 agent 的，沒建過的 thread 沒有任何
+      //   常駐的背景子代理，不為了回「沒有」建一個 agent；冷的子代理 interrupt 本來就是 no-op（dsh）。
+      // - `subagent.send`：**經 `threadFor`**（#1271）。重啟之後 host 的編號表在記憶體裡沒了，冷的子代理要這條 thread 的 agent
+      //   建起來、host 冷讀 root 日誌上的 `subagent/catalog`，才叫得醒（dsh：只有送話才把冷的接回來）。磁碟上沒有這條 thread 的
+      //   不建——那時就是找不到，不為它建一個 agent。
       const existing = threads.get(threadId);
-      const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
+      let thread = existing === undefined ? undefined : await existing.catch(() => undefined);
       if (method === SUBAGENT_SEND_METHOD && options.threadOrganization?.isArchived(threadId)) {
         // 封存的會話不跑模型（#633）：人對背景子代理說話會開一輪，那是這條會話的後代在跑模型（dsh 的閘門沿 subagent 血緣往上找）。
         return json(
@@ -1546,7 +1550,16 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           ),
         );
       }
-      return handleSubagentCommand(thread?.background, method, envelope.id, body);
+      if (
+        method === SUBAGENT_SEND_METHOD &&
+        thread === undefined &&
+        (await threadKnown(threadId))
+      ) {
+        const built = await threadOrError(threadId, envelope.id);
+        if (built instanceof Response) return built;
+        thread = built;
+      }
+      return await handleSubagentCommand(thread?.background, method, envelope.id, body);
     }
     if (isDeliverableMethod(method)) {
       return handleDeliverableCommand(threadId, method, envelope.id, body);
@@ -1906,12 +1919,12 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    * `SUBAGENT_SEND_METHOD`。**授權就是進得到這裡的會話認證**：host 只認得這條 thread 自己派出去的編號，所以「只能對直接
    * parent 派出去的子代理動手」是結構保證，這裡不另做一道。
    */
-  function handleSubagentCommand(
+  async function handleSubagentCommand(
     background: BackgroundSubagentControl | undefined,
     method: 'subagent.send' | 'subagent.interrupt',
     id: number,
     body: unknown,
-  ): Response {
+  ): Promise<Response> {
     const params = (body as { params?: unknown }).params as
       { run_id?: unknown; text?: unknown } | null | undefined;
     if (typeof params?.run_id !== 'string' || params.run_id === '') {
@@ -1932,9 +1945,13 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       return json(errorResponse(id, SUBAGENT_NOT_FOUND, `沒有編號 ${params.run_id} 的背景子代理`));
     }
     try {
-      background.sendFromUser(params.run_id, params.text);
+      // 冷的先接回來再投遞（#1271）；已常駐的立刻過。
+      await background.sendFromUser(params.run_id, params.text);
     } catch (error) {
       if (!(error instanceof BackgroundSubagentError)) throw error;
+      // 叫醒本身失敗（租約被別的行程握著、日誌壞了……）沒有專屬的碼：它不是「找不到」「名額滿」「已關閉」，原因寫在 message。
+      if (error.code === 'resume-failed')
+        return json(errorResponse(id, 'unknown_error', error.message));
       const code =
         error.code === 'not-found'
           ? SUBAGENT_NOT_FOUND

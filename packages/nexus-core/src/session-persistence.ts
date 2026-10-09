@@ -275,7 +275,8 @@ export function attachSessionPersistence(
   const coordinators: SessionPersistenceCoordinator[] = [];
   /** 同一批協調器，按日誌找——耐久檢查點問的是「這一份」，不是全部（#599）。 */
   const byLog = new Map<SessionLog, SessionPersistenceCoordinator>();
-  const unobserve = sessions.observe(({ address, log }) => {
+  const unobserve = sessions.observe((entry) => {
+    const { address, log } = entry;
     const header: StoredSessionHeader = {
       version: SESSION_LOG_FORMAT_VERSION,
       id: log.sessionId,
@@ -296,7 +297,13 @@ export function attachSessionPersistence(
       ...(address.kind === 'root' &&
         options.rootModelEntryId !== undefined && { modelEntryId: options.rootModelEntryId }),
     };
-    const resumed = address.kind === 'root' ? options.resumedRoot : undefined;
+    // 接回來的有兩種：root 由入口在建構時給（`resumedRoot`），子代理冷復活（#1271）由執行期開日誌時帶在 entry 上。
+    const resumed =
+      entry.resume !== undefined
+        ? { stored: entry.resume.stored, storedCount: entry.resume.events.length }
+        : address.kind === 'root'
+          ? options.resumedRoot
+          : undefined;
     const coordinator = new SessionPersistenceCoordinator({
       log,
       stored: resumed?.stored ?? store.create(header),

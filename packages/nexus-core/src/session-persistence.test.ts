@@ -662,3 +662,64 @@ describe('可忽略旗標（#507）', () => {
     expect(stored.written[1]?.ignorable).toBe(true);
   });
 });
+
+describe('子代理冷復活：執行期接回來的日誌往原檔續寫（#1271）', () => {
+  it('帶 resume 開的子代理不 create，走續寫的把手：只寫還沒存的後綴，第一筆是 end-seed', async () => {
+    const earlier = new SessionLog('root-r/bg-1');
+    earlier.append('turn/start', { kind: 'message', text: '重啟前' });
+    earlier.append('turn/end', {});
+    const sessions = new SessionRegistry('root-r');
+    const resumed = fakeStored();
+    const created: string[] = [];
+    const store: SessionStore = {
+      ...NO_READS,
+      create(header) {
+        created.push(header.id);
+        return fakeStored();
+      },
+      resume() {
+        return Promise.reject(new Error('協調器不該自己去續接'));
+      },
+    };
+    const persistence = attachSessionPersistence(sessions, store);
+    const log = sessions.open(
+      { kind: 'subagent', runId: 'bg-1' },
+      { events: earlier.events, stored: resumed },
+    );
+    log.append('turn/start', { kind: 'message', text: '重啟後' });
+    await persistence.flush();
+
+    expect(resumed.written.map((event) => [event.seq, event.type])).toEqual([
+      [2, 'session/end-seed'],
+      [3, 'turn/start'],
+    ]);
+    // 這個子代理沒有替它 `create` 新的一份；root 是這個行程新出生的，照常 create。
+    expect(created).toEqual(['root-r']);
+    await persistence.dispose();
+  });
+
+  it('沒帶 resume 的子代理照舊 create；兩種並存互不干擾', async () => {
+    const earlier = new SessionLog('root-r/bg-1');
+    earlier.append('turn/start', { kind: 'message', text: '重啟前' });
+    const sessions = new SessionRegistry('root-r');
+    const created: string[] = [];
+    const store: SessionStore = {
+      ...NO_READS,
+      create(header) {
+        created.push(header.id);
+        return fakeStored();
+      },
+      resume() {
+        return Promise.reject(new Error('協調器不該自己去續接'));
+      },
+    };
+    const persistence = attachSessionPersistence(sessions, store);
+    sessions.open(
+      { kind: 'subagent', runId: 'bg-1' },
+      { events: earlier.events, stored: fakeStored() },
+    );
+    sessions.open({ kind: 'subagent', runId: 'bg-new' }).append('model/start', {});
+    await persistence.dispose();
+    expect(created).toEqual(['root-r', 'root-r/bg-new']);
+  });
+});

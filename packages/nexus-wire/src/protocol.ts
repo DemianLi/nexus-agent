@@ -283,8 +283,14 @@ export const STEER_UNAVAILABLE = 'steer_unavailable';
  * 人說的那句話目前**不回播到主串流**：它寫在子代理自己的日誌裡，主對話日誌沒有對應的事件（今天不加）。
  *
  * `run_id` 是背景派出時回給模型的編號（`bg-…`），**只認這條 thread 派出去的**：host 屬於這條 thread，別條的編號在這裡
- * 就是不存在——直接 parent 的鄰接是結構保證，授權就是這條線已有的會話認證。這條 thread 沒開過、或這份組裝沒有背景派出：
- * 一樣是 {@link SUBAGENT_NOT_FOUND}（`subagent.interrupt` 則是 no-op），不為了回這個錯建一個 agent。
+ * 就是不存在——直接 parent 的鄰接是結構保證，授權就是這條線已有的會話認證。這份組裝沒有背景派出：
+ * 一樣是 {@link SUBAGENT_NOT_FOUND}（`subagent.interrupt` 則是 no-op）。
+ *
+ * **重啟之後的冷子代理（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)，缺口源自 #737）**：`subagent.send` 對一條只在磁碟上、
+ * 還沒載入的 thread 會把它建起來（`subagent.interrupt` 仍不建），載體冷讀 root 日誌認得重啟之前派出的子代理；對冷的送話就是叫醒它，
+ * 之後同一般投遞。叫醒失敗（別的行程握著寫入把手、日誌壞了……）回 `unknown_error`，原因寫在 message，子代理仍是冷的、可以再送。
+ * 並存名額在重建之前佔：滿了回 {@link SUBAGENT_AT_CAPACITY}，沒去握租約。叫不醒的（舊日誌沒有身分）回 {@link SUBAGENT_NOT_FOUND}，
+ * message 說明原因。磁碟上也沒有這條 thread：{@link SUBAGENT_NOT_FOUND}，不建 agent。`subagent.interrupt` 對冷的是被接受的 no-op（dsh）。
  *
  * **都是我們加在自己 wire 上的命令**，理由同 {@link RUN_CANCEL_METHOD}。
  */

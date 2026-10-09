@@ -59,7 +59,9 @@ import {
   STEP_INBOX_CONFIG_KEY,
   TURN_CANCEL_CONFIG_KEY,
   appendSubagentCatalog,
+  appendSubagentDescriptor,
   fromLoggedMessage,
+  subagentLinks,
   toLoggedMessage,
   turnReachedMaxTokens,
 } from '@nexus/core';
@@ -72,6 +74,7 @@ import type {
   ToolErrorInfo,
 } from '@nexus/core';
 
+import type { ColdChildStore, ColdInspection, ColdResumed } from './background-cold.js';
 import { BACKGROUND_RUN_PREFIX, agentMessageText } from './background-run-id.js';
 import { classifyTurnFailure } from './live-model.js';
 import { RUN_DURABILITY } from './pruned-memory-saver.js';
@@ -90,6 +93,14 @@ export interface BackgroundAgent {
       readonly configurable: Readonly<Record<string, unknown>>;
     },
   ): Promise<AsyncIterable<unknown> & RunProjections>;
+  /**
+   * 把對話灌回這條 thread 的 graph state（冷復活，#1271）。**選填**：只有冷復活用得到，沒有它的圖（測試替身）叫不醒冷的子代理，
+   * 叫醒時回 `resume-failed`。產品的圖是 `ReactAgent`，一定有。
+   */
+  updateState?(
+    config: { readonly configurable: { readonly thread_id: string } },
+    values: Record<string, unknown>,
+  ): Promise<unknown>;
 }
 
 /** 一輪的下場。**永遠是回傳值，不會 reject**——拋錯已記成 `turn/failed`。 */
@@ -224,6 +235,11 @@ export interface BackgroundSubagentListing {
   /** 子代理的種類名（規格名）。 */
   readonly label: string;
   readonly status: 'running' | 'inactive';
+  /**
+   * 補充說明（#1271）：重啟之前派出的、叫不醒的（舊版寫的日誌、檔不在了……）會在這裡寫原因；叫得醒的與這個行程派的都沒有。
+   * 叫不醒的仍然列出來，免得它像是被吞掉了。
+   */
+  readonly note?: string;
 }
 
 export interface BackgroundSubagentHostOptions {
@@ -269,10 +285,16 @@ export interface BackgroundSubagentHostOptions {
   readonly onStatus?: (items: readonly BackgroundSubagentStatus[]) => void;
   /** {@link BackgroundParentPort.isArchived}。 */
   readonly isArchived?: () => boolean;
+  /**
+   * 冷復活的存放處（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)）。**給了**：建構時從 root 日誌上的 `subagent/catalog`
+   * 找出重啟之前派出的 continuable 子代理，唯讀冷讀它們的身分；叫得醒的列為 `idle`，收到話（{@link BackgroundSubagentHost.resume}）
+   * 才接回來。**沒給**＝不認得重啟之前的子代理（cli 的 REPL、沒落盤的 server）。
+   */
+  readonly cold?: ColdChildStore;
 }
 
 /** {@link BackgroundSubagentError} 的分類：wire 層照它回不同的錯誤碼，不靠比對訊息。 */
-export type BackgroundSubagentErrorCode = 'closed' | 'not-found' | 'at-capacity';
+export type BackgroundSubagentErrorCode = 'closed' | 'not-found' | 'at-capacity' | 'resume-failed';
 
 /**
  * 往背景子代理送話或查它時被拒的原因，帶**型別化的碼**。訊息是給模型／人看的那句話，原樣不變；碼是給程式分流的
@@ -313,6 +335,7 @@ export function backgroundRefusalInfo(error: BackgroundSubagentError): ToolError
     case 'closed':
       return { name: 'SubagentError', code: 'DRAINING' };
     case 'not-found':
+    case 'resume-failed':
       return undefined;
   }
 }
@@ -322,8 +345,11 @@ export function backgroundRefusalInfo(error: BackgroundSubagentError): ToolError
  * 同一個 host 的兩個動作，不另外存狀態。
  */
 export interface BackgroundSubagentControl {
-  /** {@link BackgroundSubagentHost.sendFromUser}。同步接受或拋 {@link BackgroundSubagentError}，不等那一輪跑完。 */
-  readonly sendFromUser: (runId: string, text: string) => void;
+  /**
+   * {@link BackgroundSubagentHost.resume} 之後 {@link BackgroundSubagentHost.sendFromUser}：冷的先接回來（#1271）。接受或拋
+   * {@link BackgroundSubagentError}，不等那一輪跑完。
+   */
+  readonly sendFromUser: (runId: string, text: string) => Promise<void>;
   /** {@link BackgroundSubagentHost.interrupt}。 */
   readonly interrupt: (runId: string) => boolean;
   /** {@link BackgroundSubagentHost.hasRunning}（封存要問「還有沒有背景子代理在跑」，#633）。 */
@@ -421,6 +447,16 @@ export class BackgroundSubagentHost {
   readonly #warn: ((message: string) => void) | undefined;
   readonly #onSettled: BackgroundSubagentHostOptions['onSettled'];
   readonly #isArchived: (() => boolean) | undefined;
+  readonly #cold: ColdChildStore | undefined;
+  /**
+   * 重啟之前派出的 continuable 子代理（#1271）：編號 → 唯讀冷讀的結果。叫醒（{@link BackgroundSubagentHost.resume}）之後從這裡搬進
+   * `#known`。只有 `resumable` 的列進 {@link BackgroundSubagentHost.statuses}；叫不醒的只在 {@link BackgroundSubagentHost.list} 露面。
+   */
+  readonly #coldChildren = new Map<string, ColdInspection>();
+  /** 冷讀掃完了（成功與否都算）。{@link BackgroundSubagentHost.resume} 先等它：掃完之前不知道哪些叫得醒。 */
+  readonly #coldScanned: Promise<void>;
+  /** 正在叫醒的：編號 → 同一件事（重複的叫醒共用一次）。算在並存上限裡——名額在重建**之前**佔，同 dsh 的 `ActivationPool.reserve`。 */
+  readonly #waking = new Map<string, Promise<void>>();
   readonly #onMessage: BackgroundSubagentHostOptions['onMessage'];
   readonly #onStatus: BackgroundSubagentHostOptions['onStatus'];
   /** 上一次送出去的現況（序列化），沒變就不重送。起頭是 `undefined`：建構完那一刻一定送一份（可以是空的）。 */
@@ -465,10 +501,52 @@ export class BackgroundSubagentHost {
       throw new Error(`背景子代理的並存上限要是 ≥ 1 的整數，收到 ${String(maxActive)}`);
     }
     this.#maxActive = maxActive;
+    this.#cold = options.cold;
     // 迴圈在**這裡**起：它的環境就是建構這一刻的環境。
     this.#loop = this.#run();
     // 接上的當下就送一份現況，**即使是空的**：沒收過＝不知道，收過而沒有這個編號＝收線，web 靠這個分開兩者（#867）。
-    this.#publishStatus();
+    // 有重啟之前的子代理要冷讀時**等讀完再送**：先送空的會讓叫得醒的那些被畫成收線，下一份才翻回來。
+    const pending = this.#scanCold();
+    if (pending === undefined) {
+      this.#coldScanned = Promise.resolve();
+      this.#publishStatus();
+    } else {
+      this.#coldScanned = pending.finally(() => {
+        this.#publishStatus();
+      });
+    }
+  }
+
+  /**
+   * 重啟之前派出的 continuable 子代理：讀 root 日誌上的 `subagent/catalog`（父端的權威，同 dsh），逐個唯讀冷讀它們的身分。
+   * **不復活任何一個**。沒有存放處、或 root 日誌上沒有要讀的，回 `undefined`（同步，不多一拍）。
+   */
+  #scanCold(): Promise<void> | undefined {
+    const cold = this.#cold;
+    if (cold === undefined) return undefined;
+    const parentId = this.rootSessionId;
+    const prefix = `${parentId}/`;
+    const targets = subagentLinks(this.#sessions.root.events)
+      .filter((link) => link.mode === 'continuable' && link.childId.startsWith(prefix))
+      .map((link) => ({ childId: link.childId, runId: link.childId.slice(prefix.length) }))
+      .filter(({ runId }) => runId.startsWith(BACKGROUND_RUN_PREFIX));
+    if (targets.length === 0) return undefined;
+    return (async () => {
+      for (const { childId, runId } of targets) {
+        if (this.#closed) return;
+        if (this.#known.has(runId) || this.#coldChildren.has(runId)) continue;
+        let inspection: ColdInspection;
+        try {
+          inspection = await cold.inspect(childId, parentId);
+        } catch (error) {
+          inspection = {
+            kind: 'unresumable',
+            reason: `冷讀失敗：${error instanceof Error ? error.message : String(error)}`,
+          };
+        }
+        this.#coldChildren.set(runId, inspection);
+      }
+    })();
   }
 
   /**
@@ -584,7 +662,19 @@ export class BackgroundSubagentHost {
   /** 控制面（給 wire 用）：兩個動作都不回那一輪的下場，也不 reject。 */
   get control(): BackgroundSubagentControl {
     return {
-      sendFromUser: (runId, text) => void this.sendFromUser({ runId, text }),
+      sendFromUser: (runId, text) => {
+        const deliver = (): void => void this.sendFromUser({ runId, text });
+        // 常駐的（以及沒有冷復活的）**同步受理**，不多等一拍：插話與中斷的先後照呼叫的先後。只有冷的要等接回來。
+        if (this.#cold === undefined || this.#known.has(runId)) {
+          try {
+            deliver();
+            return Promise.resolve();
+          } catch (error) {
+            return Promise.reject(error);
+          }
+        }
+        return this.resume(runId).then(deliver);
+      },
       interrupt: (runId) => this.interrupt(runId),
       hasRunning: () => this.hasRunning(),
       interruptAll: () => this.interruptAll(),
@@ -697,7 +787,17 @@ export class BackgroundSubagentHost {
     let runId: string;
     do runId = `${BACKGROUND_RUN_PREFIX}${randomUUID().replaceAll('-', '').slice(0, 12)}`;
     while (this.#known.has(runId));
-    const childId = this.#sessions.open({ kind: 'subagent', runId }).sessionId;
+    const child = this.#sessions.open({ kind: 'subagent', runId });
+    const childId = child.sessionId;
+    // 身分記在子代理自己的日誌（#1271）：重啟之後只靠這一顆加 header 的 `parentSession` 重建。**記不進去就派出失敗**——
+    // 派出成功卻默默不能續接，比派出失敗難查得多。
+    appendSubagentDescriptor(child, {
+      subagent: input.subagent,
+      ...(input.choice !== undefined && {
+        model: input.choice.model,
+        ...(input.choice.effort !== undefined && { effort: input.choice.effort }),
+      }),
+    });
     const { callId, ...first } = input;
     const outcome = this.submit({ runId, ...first });
     if (callId !== undefined) {
@@ -760,14 +860,19 @@ export class BackgroundSubagentHost {
    * 只看有沒有輪次，被中斷後暫停的排著的輪次也算；這裡是給「停止這一輪」鈕與輸入框用的，暫停的不算在跑。
    */
   statuses(): readonly BackgroundSubagentStatus[] {
-    return [...this.#known.keys()].map((runId) => ({
+    // 重啟之前派出的、叫得醒的排在前面（它們比這個行程派的早）；叫不醒的不列，web 把缺席當收線，`subagent.send` 回找不到（#1271）。
+    const cold = [...this.#coldChildren]
+      .filter(([, inspection]) => inspection.kind === 'resumable')
+      .map(([runId]) => ({ runId, status: 'idle' as const }));
+    const warm = [...this.#known.keys()].map((runId) => ({
       runId,
       status:
         this.#busy.has(runId) ||
         (!this.#paused.has(runId) && this.#queue.some((job) => job.runId === runId))
-          ? 'running'
-          : 'idle',
+          ? ('running' as const)
+          : ('idle' as const),
     }));
+    return [...cold, ...warm];
   }
 
   #publishStatus(): void {
@@ -797,16 +902,126 @@ export class BackgroundSubagentHost {
    */
   list(): readonly BackgroundSubagentListing[] {
     const active = this.#activeRunIds();
-    return [...this.#known].map(([runId, label]) => ({
+    // 重啟之前派出的列在前面。叫不醒的也列（附原因），免得它像是被吞掉了；它們一律不在跑（#1271）。
+    const cold = [...this.#coldChildren].map(([runId, inspection]): BackgroundSubagentListing => {
+      const waking = this.#waking.has(runId);
+      return inspection.kind === 'resumable'
+        ? { runId, label: inspection.subagent, status: waking ? 'running' : 'inactive' }
+        : {
+            runId,
+            label: 'unknown',
+            status: 'inactive',
+            note: `cannot be resumed: ${inspection.reason}`,
+          };
+    });
+    const warm = [...this.#known].map(([runId, label]): BackgroundSubagentListing => ({
       runId,
       label,
       status: active.has(runId) ? 'running' : 'inactive',
     }));
+    return [...cold, ...warm];
   }
 
-  /** 存活的背景子代理：有輪次排著或正在跑的編號。 */
+  /** 存活的背景子代理：有輪次排著或正在跑的編號，加上正在叫醒的（名額在重建之前佔，#1271）。 */
   #activeRunIds(): Set<string> {
-    return new Set([...this.#queue.map((job) => job.runId), ...this.#busy]);
+    return new Set([...this.#queue.map((job) => job.runId), ...this.#busy, ...this.#waking.keys()]);
+  }
+
+  /**
+   * 讓一個重啟之前派出的背景子代理**常駐**（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)），之後 {@link send}／{@link sendFromUser}
+   * 才收得到話。照 dsh：只有送話才把冷的接回來，列出（{@link list}、{@link statuses}）與 {@link interrupt} 都不復活。
+   *
+   * 已經常駐的（這個行程派的、或叫醒過的）立刻回。步驟與順序：
+   *
+   * 1. 名額先佔（滿了拒絕，**在重建之前**，同 dsh 的 `ActivationPool.reserve`；佔著期間算存活，所以併發的叫醒搶不到同一格）。
+   * 2. 拿寫租約、補當掉那一輪的收尾（`ColdChildStore.resume`）。
+   * 3. 按日誌上的身分編圖，**對話從日誌重播灌回去**（`restore`）——跟 root 的續接同一個既有偏離，見 `background-cold.ts`。
+   * 4. 日誌以上一個行程的事件為 seed 開在註冊表上，持久化協調器往原檔續寫。
+   *
+   * 任何一步失敗都放掉租約再拋；子代理仍是冷的，之後可以再試。
+   *
+   * @throws {BackgroundSubagentError} `closed`；`not-found`（沒有這個編號，或是叫不醒的——訊息說明原因）；`at-capacity`；
+   *   `resume-failed`（租約被別的行程握著、日誌壞了、規格已不存在、對話灌不回去……）。
+   */
+  async resume(runId: string): Promise<void> {
+    if (this.#closed) throw new BackgroundSubagentError('closed', '背景子代理的載體已經關閉');
+    if (this.#known.has(runId)) return;
+    const waking = this.#waking.get(runId);
+    if (waking !== undefined) return waking;
+    // 等掃完才知道哪些叫得醒；沒有存放處時 `#coldScanned` 立刻 resolve，`#coldChildren` 是空的，落到下面的找不到。
+    await this.#coldScanned;
+    if (this.#closed) throw new BackgroundSubagentError('closed', '背景子代理的載體已經關閉');
+    // 掃描期間有別的呼叫把它叫醒了。
+    if (this.#known.has(runId)) return;
+    const inflight = this.#waking.get(runId);
+    if (inflight !== undefined) return inflight;
+    const inspection = this.#coldChildren.get(runId);
+    if (inspection === undefined) return;
+    if (inspection.kind === 'unresumable') {
+      throw new BackgroundSubagentError(
+        'not-found',
+        `背景子代理 ${runId} 是重啟之前派出的，叫不醒：${inspection.reason}`,
+      );
+    }
+    const full = this.#capacityRefusal(runId);
+    if (full !== undefined) throw new BackgroundSubagentError('at-capacity', full);
+    const activation = this.#activate(runId, inspection).finally(() => {
+      this.#waking.delete(runId);
+    });
+    this.#waking.set(runId, activation);
+    return activation;
+  }
+
+  async #activate(
+    runId: string,
+    scanned: Extract<ColdInspection, { kind: 'resumable' }>,
+  ): Promise<void> {
+    let inspection = scanned;
+    const cold = this.#cold!;
+    const parentId = this.rootSessionId;
+    const childId = `${parentId}/${runId}`;
+    const failed = (error: unknown): BackgroundSubagentError =>
+      error instanceof BackgroundSubagentError
+        ? error
+        : new BackgroundSubagentError(
+            'resume-failed',
+            `背景子代理 ${runId} 叫不醒：${error instanceof Error ? error.message : String(error)}`,
+          );
+    let resumed: ColdResumed;
+    try {
+      resumed = await cold.resume(childId, parentId);
+    } catch (error) {
+      throw failed(error);
+    }
+    // 之後任何一步失敗都要放掉租約：交給註冊表之前是這裡的事。
+    const release = async (): Promise<void> => {
+      await resumed.stored.close().catch(() => undefined);
+    };
+    try {
+      if (this.#closed) throw new BackgroundSubagentError('closed', '背景子代理的載體已經關閉');
+      // 以接回來的那份日誌為準（冷讀到現在可能變了）；這時候才叫不醒的，照實說原因。
+      const { inspection: actual } = resumed;
+      if (actual.kind === 'unresumable') throw new Error(actual.reason);
+      inspection = actual;
+      const agent = this.#agentFor(inspection.subagent, inspection.choice);
+      const replay = await cold.restore(agent, childId, resumed.events);
+      if (replay.kind === 'unreplayable') {
+        this.#warn?.(
+          `[背景子代理] ${runId} 的對話無法從日誌推回（${replay.reason}），它從空的對話開始，但日誌上的歷史都還在`,
+        );
+      }
+      this.#sessions.open(
+        { kind: 'subagent', runId },
+        { events: resumed.events, stored: resumed.stored },
+      );
+    } catch (error) {
+      await release();
+      throw failed(error);
+    }
+    this.#known.set(runId, inspection.subagent);
+    if (inspection.choice !== undefined) this.#choices.set(runId, inspection.choice);
+    this.#coldChildren.delete(runId);
+    this.#publishStatus();
   }
 
   /**
@@ -846,6 +1061,8 @@ export class BackgroundSubagentHost {
     }
     this.#publishStatus();
     this.#wake?.();
+    // 正在叫醒的會在重建的下一步看到 `#closed`、放掉租約再拋；等它們收完，租約才不會晚於 `close()` 才放。
+    await Promise.allSettled([...this.#waking.values()]);
     await this.#loop;
   }
 

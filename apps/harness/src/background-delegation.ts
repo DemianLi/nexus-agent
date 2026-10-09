@@ -59,6 +59,7 @@ import {
   withReturnGuidance,
 } from './background-subagents.js';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
+import type { ColdChildStore } from './background-cold.js';
 import {
   baselineChoice,
   describeSubagentModels,
@@ -110,6 +111,11 @@ export interface BackgroundSubagentsOptions {
    * 取這一次、之後固定（照 dsh：子代理建立時取父代理當下的選擇）。
    */
   readonly delegationBaseline?: (subagent: string) => DelegationBaseline | undefined;
+  /**
+   * 重啟之前派出的背景子代理怎麼冷復活（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)）。省略＝這份組裝沒有落盤，
+   * 重啟之前的子代理不認得（cli 的 REPL、`--no-session-log` 的 server）。
+   */
+  readonly cold?: ColdChildStore;
 }
 
 const subagentSchema = z.object({
@@ -206,6 +212,7 @@ export class BackgroundDelegation {
       ...(port.onStatus !== undefined && { onStatus: port.onStatus }),
       ...(port.isArchived !== undefined && { isArchived: port.isArchived }),
       ...(this.#options.maxActive !== undefined && { maxActive: this.#options.maxActive }),
+      ...(this.#options.cold !== undefined && { cold: this.#options.cold }),
       ...(sandbox !== undefined && {
         enter: <T>(log: SessionLog, run: () => T): T => sandbox.delegateFromLog(log, run),
       }),
@@ -273,7 +280,13 @@ export class BackgroundDelegation {
         const entries = host.list();
         return entries.length === 0
           ? '(no subagents)'
-          : entries.map((entry) => `${entry.runId} [${entry.status}] — ${entry.label}`).join('\n');
+          : entries
+              .map(
+                (entry) =>
+                  `${entry.runId} [${entry.status}] — ${entry.label}` +
+                  (entry.note === undefined ? '' : ` (${entry.note})`),
+              )
+              .join('\n');
       },
       {
         name: LIST_AGENTS_TOOL_NAME,
@@ -362,11 +375,16 @@ export class BackgroundDelegation {
    */
   #sendMessageTool() {
     return tool(
-      ({ agent_id, message }: { agent_id: string; message: string }, config?: unknown): string => {
+      async (
+        { agent_id, message }: { agent_id: string; message: string },
+        config?: unknown,
+      ): Promise<string> => {
         const host = this.#host;
         if (host === undefined) throw new Error('背景子代理還沒接上會話，傳不了');
         const address = toolCallSessionAddress(config);
         if (address?.kind === 'root') {
+          // 重啟之前派出的冷子代理，先接回來再投遞（#1271，dsh 的 send 就是在這裡復活它）；已常駐的立刻過。
+          await host.resume(agent_id);
           void host.send({ runId: agent_id, message });
         } else if (address !== undefined && isBackgroundAddress(address)) {
           host.sendToParent({
