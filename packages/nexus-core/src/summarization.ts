@@ -106,6 +106,7 @@ import {
   summaryImageText,
 } from './attachment-projection.js';
 import { isFileBlock } from './attachment-ref.js';
+import type { ImageBudget } from './image-offload.js';
 import { toLoggedMessage } from './logged-message.js';
 import { captureModelCall, withModelCall } from './model-call-scope.js';
 import { readModelUsage, type ModelUsage } from './model-usage.js';
@@ -205,6 +206,8 @@ export interface ModelContextLimits {
   readonly contextWindow: number;
   /** 每次請求保留給輸出的 token 數（型錄的 `maxTokens`）。 */
   readonly maxOutputTokens: number;
+  /** 這顆模型一次請求的圖片額度（型錄的 `imageBudget`，#1270）。省略＝不檢查。 */
+  readonly imageBudget?: ImageBudget;
 }
 
 /** 窗口的幾成當上限：dsh 的 `thresholdRatio` 預設（`compaction-basic/src/config.ts`，`DEFAULT_THRESHOLD_RATIO`）。 */

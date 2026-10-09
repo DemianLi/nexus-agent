@@ -504,8 +504,18 @@ import type { SessionEvent } from './session-log.js';
  * 模型收到的是一句沒有點名的話，沒有任何東西報錯。
  *
  * **讀舊檔**：41 以前沒有這一格，等於沒有點名，不補寫歷史。
+ *
+ * ## 43：`image/offload`——把最舊的幾張圖永久從之後的請求省略（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）
+ *
+ * 看圖模型的請求超過型錄宣告的圖片額度（`imageBudget`）時，每次叫模型前記一筆 `image/offload { targets: [{ seq, imageIndexes }] }`，最舊的幾張換成佔位字，
+ * 之後每一次請求都沿用（見 {@link ./session-log.ts | SessionEventMap} 的 `image/offload`）。
+ *
+ * **升版，不標 `ignorable`**——它左右之後模型看到什麼：一台 42 的 runtime 會拒絕讀這種新檔（不認得又沒標可忽略），那是對的方向；略過它，
+ * 模型就又看到已經省略的圖，請求再度超額，沒有任何東西說為什麼。
+ *
+ * **讀舊檔**：42 以前沒有這一種，等於沒省略過，不補寫歷史。
  */
-export const SESSION_LOG_FORMAT_VERSION = 42;
+export const SESSION_LOG_FORMAT_VERSION = 43;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

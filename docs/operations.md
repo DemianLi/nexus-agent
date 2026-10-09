@@ -155,6 +155,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **送出時帶附件**（#732）：`run.start` 的 `attachments` 收「上傳收據」與「內嵌的圖（base64）」。收據收下就用掉（同一份不能用第二次；整句被拒時放回去）；圖在收下時驗過（PNG／JPEG／GIF／WebP，每張 20 MiB、每句 20 張／200 MiB、每張 6400 萬像素，只看檔頭不解碼）才存進同一個 `attachments/`（不縮圖、不轉檔）。**日誌、存檔點、軌跡裡只有參照**（雜湊、檔名、大小、圖的寬高）；位元組只在組請求的那一刻讀回來：檔案換成一行字（路徑與「用檔案工具讀」的說明），圖換成 `image_url`。目前的模型在型錄宣告了純文字（`input` 沒有 `image`）時，帶圖的送出回 `model_does_not_support_images`；會話中途換成純文字模型，之前送過的圖在請求裡變成一行佔位字。沒宣告 `input` 的模型照送圖。圖的位元組每次呼叫模型都從磁碟重讀、重編 base64，沒有快取；`attachments/` 被清掉的話，帶它的舊訊息在請求裡變成「已不在儲存裡，請重新附上」的一行。
 
+**圖片額度與 `image/offload`**（#1270，#732 第 8 項）：型錄的 `imageBudget { maxImages?, maxBytes? }`（張數、圖片 base64 總長度；單位不是 token）宣告這顆模型一次請求收得下多少圖，**沒寫就不檢查**。每次叫模型之前（只有 root 的 middleware）算請求裡還留著的圖，超額就把**最舊的**幾張記成一筆 `image/offload { targets: [{ seq, imageIndexes }] }`（`seq` 是產出那則人話的 `turn/start`／輪中插話 `user/message` 事件），並在這次請求裡換成一行佔位字（`[image omitted to fit request image limits; …]`，請使用者重新附上）。**之後每次請求都沿用，重啟續接之後也一樣**（日誌格式 43、不可忽略：略過它就是舊圖又被送出去）。這不是重試，不花供應商的重試額度，也不多叫一次模型。圖本身還在附件儲存裡，畫面看得到，只是模型看不到。出貨型錄只有 90b 宣告了：端點每次請求最多一張圖（`maxImages: 1`，真端點實測，見 `cordis.yml`），所以第二張圖進來時第一張就被省略。畫面端的線上形狀：人話的 `omittedAttachments`（`attachments` 裡被省略的位置）與 `image-offload` custom frame，見 `@nexus/wire` 的 `image-offload.ts`。沒有來源記號的圖（今天沒有生產者）算進額度但選不到；省略到最少張數之後仍超出時，請求照常送出，由端點回錯。
+
 **斜線命令帶附件**（#732）：命令用 `input.attachments: true` 宣告收附件（`slash.list` 的 descriptor 上看得到），`slash.run` 的 `attachments`（形狀同 `run.start`）才會被收下。**收下的時機在執行器確認命令宣告之後、handler 之前**：沒宣告的命令帶了附件，這次執行落定成 `error`（日誌有 `command/run`＋`command/done` 一對），收據與儲存一個字不動；不是命令的一行（`kind: 'unknown'`）同樣什麼都不收，輸入框可以當一般訊息送。命令回 `error`（或拋錯、發派的請求中止）時用掉的收據放回去，輸入框留著草稿與附件。`/goal` 是第一個宣告的：`/goal create|edit <目標>` 帶附件時，附件跟著開出來的那一輪訊息（`turn/start.attachments`），固定的一句 `Reference attachments for the goal objective.` 是那一輪的文字；其他子命令（`status`／`pause`／`resume`／`clear`）帶附件回 `error`，沒有目標文字只有附件也回 `error`。
 
 **讀圖**（#733）：`GET /threads/:id/attachments/:attachmentId`（`attachmentId` 是 `sha256:<hex>`，整段 URL 編碼；同會話 cookie 認證）回 `{ attachment, data }`（參照加 base64，照 dsh `session.attachment`）。**授權是「這條 thread 的日誌引用過它」，不是知道 id**：附件儲存是整個 harness home 共用、內容定址的，所以別條 thread、沒引用過的 id、檔案（只收圖）、壞編號、沒載入的 thread 一律 `attachment_not_found`，不細分。只讀已經載入的 thread（記憶體裡那份日誌，含還沒落盤的），不為了讀圖建 thread。日誌引用了但位元組不在了（`attachments/` 被清）是 `unknown_error`。
@@ -643,9 +645,9 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 - **`models` 是模型型錄，`modelId` 必須在裡面**，不在就起不來（訊息指名那一列與那個 id）。每一筆帶 `id`、
   `contextWindow`（窗口）、`maxTokens`（這顆每一次請求送出去的輸出上限）、選配的 `input`（收哪些種類，
   `[text]` 或 `[text, image]`；這是對端點的宣告，不是檢查——宣告收圖而端點不收，請求當下才被供應商拒絕）、
-  `reasoningEfforts`（`off:` 是不推理）與 `compat`（關推理的 chat template 參數）。**寫 `models` 是整份取代**，
+  `reasoningEfforts`（`off:` 是不推理）、`imageBudget`（一次請求收得下的圖，見「圖片額度與 `image/offload`」，沒寫不檢查）與 `compat`（關推理的 chat template 參數）。**寫 `models` 是整份取代**，
   不是逐筆合併：想只改預設那一筆的 `maxTokens`，要把整筆連 `reasoningEfforts` 與 `compat` 一起重述。
-  出貨型錄有三筆：預設那顆；`meta/llama-3.2-11b-vision-instruct`（宣告純文字：#732 實跑量到它在**請求帶 `tools`** 時，圖在**整段對話的第一則使用者訊息**就 400「The number of image tokens (0) must be the same as the number of images (1)」（前面已有一輪往返再帶圖就正常），產品每一輪都帶 `tools`，而型錄表達不出「第一則不收」，所以寧可收件時就拒圖，也不讓最常見的路——新對話第一句帶圖——跑到一半撞 400；代價是已有歷史時它其實看得到圖卻被擋）；與看圖模型 `meta/llama-3.2-90b-vision-instruct`（帶 `tools` 也收得了圖，單次約 68–76 秒，**窗口只有 32,768**，2026-10-09 真端點量過：`max_tokens` 131072 回 400「maximum context length is 32768」）。`maxTokens` 取 4096 是選擇不是上限。**新增一筆之前先確認它吃得下自己的 `maxTokens`**——出貨那顆模型是拿「吃不吃得下
+  出貨型錄有三筆：預設那顆；`meta/llama-3.2-11b-vision-instruct`（宣告純文字：#732 實跑量到它在**請求帶 `tools`** 時，圖在**整段對話的第一則使用者訊息**就 400「The number of image tokens (0) must be the same as the number of images (1)」（前面已有一輪往返再帶圖就正常），產品每一輪都帶 `tools`，而型錄表達不出「第一則不收」，所以寧可收件時就拒圖，也不讓最常見的路——新對話第一句帶圖——跑到一半撞 400；代價是已有歷史時它其實看得到圖卻被擋）；與看圖模型 `meta/llama-3.2-90b-vision-instruct`（帶 `tools` 也收得了圖，單次約 68–76 秒，**每次請求最多一張圖**（`imageBudget.maxImages: 1`，#1270 量到 2 張起回 400），**窗口只有 32,768**，2026-10-09 真端點量過：`max_tokens` 131072 回 400「maximum context length is 32768」）。`maxTokens` 取 4096 是選擇不是上限。**新增一筆之前先確認它吃得下自己的 `maxTokens`**——出貨那顆模型是拿「吃不吃得下
   16384」當淘汰門檻選出來的，吃不下的模型會**每一次**呼叫都失敗，沒有任何東西會擋你。
 - **`baseUrl` 要是 `http:` 或 `https:` 的網址，不能帶帳密、query 或 fragment**（照 dsh）。`http:` 放行，
   所以指向內網的明文端點是合法的——**key 會以明文送過去**，那是部署自己的判斷。

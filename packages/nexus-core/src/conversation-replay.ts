@@ -69,6 +69,7 @@ import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 
 import { fromLoggedMessage } from './logged-message.js';
+import { stampImageOrigin } from './image-offload.js';
 import { humanMessageForTurnStart } from './message-source.js';
 import { isModelVisibleEvent } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
@@ -215,6 +216,8 @@ export function replayConversation(
       : message;
   /** 這一則出自這一顆，見 {@link ReplayOptions.origin}。 */
   const from = <M extends BaseMessage>(message: M, event: SessionEvent): M => {
+    // 含圖的訊息蓋上出自哪顆事件（#1270）：`image/offload` 的決定記的是「哪顆事件的第幾張圖」，續接後要靠它認回來。沒有圖的訊息不動。
+    stampImageOrigin(message, event.seq);
     options.origin?.(message, event);
     return message;
   };

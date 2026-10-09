@@ -128,7 +128,11 @@ export function createModelSelectionHost(options: {
       const entry = findModelEntry(liveModel.models, id);
       return entry === undefined
         ? undefined
-        : { contextWindow: entry.contextWindow, maxOutputTokens: entry.maxTokens };
+        : {
+            contextWindow: entry.contextWindow,
+            maxOutputTokens: entry.maxTokens,
+            ...(entry.imageBudget !== undefined && { imageBudget: entry.imageBudget }),
+          };
     },
     catalog() {
       return {

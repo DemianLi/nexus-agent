@@ -9,7 +9,7 @@
  * ## 規則
  *
  * - **檔案**：一行 {@link fileHandleText}。路徑讀得到（儲存裡還在）用「可讀」的措辭，讀不到用「無法存取，不要聲稱讀過」。
- * - **圖**：型錄宣告了 `input` 而沒有 `image`（`'rejects'`）→ 佔位字（{@link textOnlyImageText}）；其餘（收圖、沒宣告）→ `image_url`
+ * - **圖**：被圖片額度省略的（`block.offloaded`）→ 佔位字（`offloadedImageText`），先於下面兩條；型錄宣告了 `input` 而沒有 `image`（`'rejects'`）→ 佔位字（{@link textOnlyImageText}）；其餘（收圖、沒宣告）→ `image_url`
  *   data URL。沒宣告時照送，同 dsh（它的 `projectImagesForTextModel` 只在**明確**宣告純文字時才換）。圖的位元組讀不到
  *   （儲存被清掉、被換過）→ 佔位字（{@link unavailableImageText}），那一步不因此失敗。
  *
@@ -25,6 +25,7 @@
 import {
   fileHandleText,
   fileModelPath,
+  offloadedImageText,
   rewriteAttachmentBlocks,
   textOnlyImageText,
   unavailableImageText,
@@ -64,6 +65,8 @@ export function projectAttachments(
       };
     }
     const ref = block.attachment;
+    // 被圖片額度省略的（`image/offload`，#1270）：不讀位元組，也不管這顆收不收圖——佔位字是這個出現永久的樣子。
+    if (block.offloaded === true) return { type: 'text', text: offloadedImageText(ref) };
     if (imageSupport === 'rejects') return { type: 'text', text: textOnlyImageText(ref) };
     try {
       const bytes = await source.readImage(ref);

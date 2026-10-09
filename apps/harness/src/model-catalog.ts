@@ -13,6 +13,10 @@
  *   `token-estimate.ts` 的偏離），不分模型。我們的估算以 o200k 為底，而出廠預設模型把數字逐位切詞，數字為主的內容
  *   會少估到一半。dsh 表達得出來的做法（固定密度加錨）在同一批資料上更差，所以這是我們才有的缺口，記在條目上、跟 id
  *   同一筆（理由同下面的 `compat`：換模型時要一起換）。
+ * - **多一格 `imageBudget`（#1270）。** dsh 的圖片請求額度住在 adapter 的部署 profile（`maxRequestImageBytes`，
+ *   `packages/llm/llm-pi-ai/src/adapter.ts:370`，`5badb150`），是一個部署一份；我們沒有 profile 這一層，而端點的收圖上限是
+ *   **每顆模型各自的**（`meta/llama-3.2-90b-vision-instruct` 每次請求最多一張），跟 id 同一筆、換模型時一起換。形狀照
+ *   `LlmImageRequestBudget`（`maxImages`、`maxBytes`），單位是張數與位元組。
  * - **`compat` 只收 `chatTemplateKwargs`。** dsh 的 `compat` 是 pi-ai 的一整組線上相容開關（系統提示放哪個角色、
  *   哪個欄位限制輸出、思考怎麼送……）；我們沒有 pi-ai 那一層，只有一個要送 chat template 參數的需求。值裡只認
  *   `{ $var: 'thinking.enabled' }` 這一個佔位符（dsh 有三個：另兩個是 `thinking.effort`、`thinking.budget`，
@@ -56,6 +60,17 @@ export const modelEntrySchema = z.strictObject({
    * 沒寫就是「沒宣告」，不當成收圖，見 {@link acceptsImages}。
    */
   input: z.array(z.enum(inputKinds)).optional(),
+  /**
+   * 一次請求收得下的圖有多少（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)，照 dsh `LlmImageRequestBudget`）。
+   * 單位是**張數與位元組**（圖片 base64 的總長度），不是 token。**沒寫就是沒宣告＝不檢查**（同 dsh 的「absent leaves … unbounded」）：
+   * 超額時最舊的圖被換成佔位字並記一筆 `image/offload`，之後每次請求都沿用。只有量過端點的才宣告，量法與數字寫在條目旁的註解。
+   */
+  imageBudget: z
+    .strictObject({
+      maxImages: z.number().int().positive().optional(),
+      maxBytes: z.number().int().positive().optional(),
+    })
+    .optional(),
   /**
    * 可選的推理等級：鍵是給人選的名字，值是線上的寫法，`null` 是沒有線上寫法（`off:`）；`false` 是這顆不推理。
    * 沒寫就是沒宣告。

@@ -62,6 +62,7 @@ import { SUBAGENT_CATALOG } from './subagent-catalog.js';
 import type { SubagentCatalogPayload } from './subagent-catalog.js';
 import { SUBAGENT_STATUS } from './subagent-status.js';
 import type { SubagentRunStatus } from './subagent-status.js';
+import { IMAGE_OFFLOAD } from './image-offload.js';
 import { TITLE } from './title.js';
 import { TODOS } from './todos.js';
 import type { WireTodoItem } from './todos.js';
@@ -96,6 +97,12 @@ export interface HumanEntry {
    * 圖與檔案由 `type` 判別。沒有附件就不給這一格（空陣列與沒給是同一件事）。
    */
   readonly attachments?: readonly WireAttachmentRef[];
+  /**
+   * {@link attachments} 裡被請求的圖片額度省略的那幾格的位置（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)，0 起算、遞增）：
+   * 模型從此看不到那幾張圖（換成了一行佔位字），圖還在附件儲存裡、人看得到。畫面據它在縮圖上標「模型已看不到」。
+   * 冷載入由歷史的 `message-start` 帶來，即時由 {@link IMAGE_OFFLOAD} 累加。沒有被省略的就不給這一格。形狀與認條目的規則見 `image-offload.ts`。
+   */
+  readonly omittedAttachments?: readonly number[];
   /**
    * 這一句點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）：畫面據它在人的泡泡上畫點名的標記。
    * `text` 不含點名（送出時 `@` 那一段就從草稿拿掉了）。即時走 `inbox` 的 `claimed`，歷史重播走同一格，冷載入一樣畫得出來。沒有點名就不給這一格。
@@ -1055,6 +1062,7 @@ const CUSTOM_REDUCERS: {
   [SETTLE_NOTICE]: reduceSettleNotice,
   [AGENT_MESSAGE]: reduceAgentMessage,
   [TITLE]: reduceTitle,
+  [IMAGE_OFFLOAD]: reduceImageOffload,
   [SUBAGENT_STATUS]: reduceSubagentStatus,
   [SUBAGENT_CATALOG]: reduceSubagentCatalog,
   [MESSAGE_DISCARD]: reduceMessageDiscard,
@@ -1154,6 +1162,65 @@ function reduceSubagentStatus(state: ConversationState, payload: object): Conver
     subagentStatus[runId] = status;
   }
   return { ...state, subagentStatus };
+}
+
+/**
+ * 一句人話的 `omittedAttachments`：只收落在 `attachments` 範圍內的非負整數，遞增去重；留不下任何一格就不給這一格。
+ * 沒有附件的條目不可能有被省略的附件。
+ */
+function omittedField(
+  attachments: readonly WireAttachmentRef[] | undefined,
+  positions: unknown,
+): { readonly omittedAttachments: readonly number[] } | Record<string, never> {
+  if (attachments === undefined || !Array.isArray(positions)) return {};
+  const kept = [
+    ...new Set(
+      (positions as unknown[]).filter(
+        (position): position is number =>
+          typeof position === 'number' &&
+          Number.isSafeInteger(position) &&
+          position >= 0 &&
+          position < attachments.length,
+      ),
+    ),
+  ].sort((a, b) => a - b);
+  return kept.length === 0 ? {} : { omittedAttachments: kept };
+}
+
+/**
+ * `image-offload` 的 `payload`（#1270）：把每一項的 `positions` 併進對應那句人話的 `omittedAttachments`。條目先用 `inboxId` 找、
+ * 找不到再用 `history-<seq>` 找（見 `image-offload.ts`）；找不到的項略過。**任何一項形狀不對就整顆不收**，不收一半。
+ */
+function reduceImageOffload(state: ConversationState, payload: object): ConversationState {
+  const { items } = payload as { items?: unknown };
+  if (!Array.isArray(items)) return state;
+  const parsed: { seq: number; inboxId: string | undefined; positions: unknown[] }[] = [];
+  for (const item of items as unknown[]) {
+    const { seq, inboxId, positions } = (item ?? {}) as {
+      seq?: unknown;
+      inboxId?: unknown;
+      positions?: unknown;
+    };
+    if (!isSeq(seq) || (inboxId !== undefined && typeof inboxId !== 'string')) return state;
+    if (!Array.isArray(positions)) return state;
+    parsed.push({ seq, inboxId, positions: positions as unknown[] });
+  }
+  let entries = state.entries;
+  for (const { seq, inboxId, positions } of parsed) {
+    entries = entries.map((entry) => {
+      if (entry.kind !== 'human') return entry;
+      const hit =
+        (inboxId !== undefined && entry.inboxId === inboxId) ||
+        entry.id === `history-${String(seq)}`;
+      if (!hit) return entry;
+      const merged = omittedField(entry.attachments, [
+        ...(entry.omittedAttachments ?? []),
+        ...positions,
+      ]);
+      return 'omittedAttachments' in merged ? { ...entry, ...merged } : entry;
+    });
+  }
+  return entries === state.entries ? state : { ...state, entries };
 }
 
 /**
@@ -1761,6 +1828,8 @@ interface MessageData {
   readonly references?: unknown;
   /** 歷史重播的人話帶的附件參照（#732），即時那條走 `inbox` 的 `claimed`。 */
   readonly attachments?: unknown;
+  /** 歷史重播的人話帶的被圖片額度省略的附件位置（#1270），即時那條走 {@link IMAGE_OFFLOAD}。 */
+  readonly omittedAttachments?: unknown;
   /** 歷史重播的人話帶的點名（#328 第 2 項），即時那條走 `inbox` 的 `claimed`。 */
   readonly mention?: unknown;
 }
@@ -1797,6 +1866,7 @@ function reduceMessage(
           text: '',
           ...referencesField(references),
           ...attachmentsField(attachments),
+          ...omittedField(attachments, data.omittedAttachments),
           ...mentionField(data.mention),
           ...timeField('startedAt', time),
         };
