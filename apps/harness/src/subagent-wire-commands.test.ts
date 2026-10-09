@@ -98,6 +98,8 @@ describe('替身控制面：wire 這一層', () => {
         calls.push(`interrupt:${runId}`);
         return runId === 'bg-live';
       },
+      hasRunning: () => false,
+      interruptAll: () => 0,
     };
     return { calls, control };
   }
@@ -157,6 +159,8 @@ describe('替身控制面：wire 這一層', () => {
         throw new Error('壞掉了');
       },
       interrupt: () => false,
+      hasRunning: () => false,
+      interruptAll: () => 0,
     };
     const { client } = stubbed(control);
     await client.slashList('t1');

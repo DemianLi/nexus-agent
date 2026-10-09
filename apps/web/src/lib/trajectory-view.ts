@@ -200,6 +200,7 @@ export const TURN_END_LABEL: Readonly<Record<TrajectoryEnd, string>> = {
   aborted: '已停止',
   'max-tokens': '輸出上限',
   interrupted: '意外中斷',
+  blocked: '已擋下（會話已封存）',
   failed: '失敗',
 };
 

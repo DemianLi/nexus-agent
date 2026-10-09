@@ -50,7 +50,8 @@ import {
 } from './assembly-root.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
-import { listStoredThreads, readStoredSubagentSession } from './session-list.js';
+import { isListedThread, listStoredThreads, readStoredSubagentSession } from './session-list.js';
+import { ThreadOrganization } from './thread-organization.js';
 import {
   attachSessionPersistence,
   resumeClosingInterruptedTurn,
@@ -581,6 +582,12 @@ async function startServer(
     browserSession.maxAgeDays,
   );
   const webDist = options.webDist ?? resolveWebDist();
+  // 釘選與封存兩個集合（#633）：home 底下一個檔，**啟動時就讀**——壞檔（版本、格式、權限）讓 serve 起不來，不覆寫，
+  // 跟上面那把瀏覽器密鑰同一個處置。沒落盤時不開：釘選一條重啟就消失的 thread 沒有意義，見下面 `createWireHandler` 的註解。
+  const threadOrganization =
+    sessionLogDir === undefined
+      ? undefined
+      : await ThreadOrganization.open(resolveHarnessHome(env));
   // 上傳的檔案存在 harness home 底下、會話日誌之外（#732）。只解析路徑，第一次上傳才建目錄。
   const attachmentStore = new AttachmentStore(attachmentsRootOf(resolveHarnessHome(env)));
 
@@ -659,6 +666,20 @@ async function startServer(
           // 背景子代理自己的落盤日誌（#871）：唯讀冷讀，規則見 `readStoredSubagentSession`。
           readSubagentSession: (threadId: string, runId: string) =>
             readStoredSubagentSession(sessionStore, threadId, runId),
+          // 釘選與封存的存放處，與它的存在檢查（#633）：只讀 header 一份，不掃整個目錄；可見規則同列表（`isListedThread`），
+          // **能釘的一定列得出來**。只有「找不到」是 `false`；壞檔、版本太新照拋——壞掉的磁碟不是「沒有這條」。
+          ...(threadOrganization !== undefined && {
+            threadOrganization,
+            storedThreadKnown: async (threadId: string) => {
+              try {
+                const stored = await sessionStore.open(threadId, 'read');
+                return isListedThread(stored.header, cwd);
+              } catch (error) {
+                if (error instanceof SessionNotFoundError) return false;
+                throw error;
+              }
+            },
+          }),
         }),
     // `@` 引用別的會話的候選（#713）：冷讀整個會話根，跨專案。落盤關掉就不給，路由那時回 `available: false`。
     ...(sessionReferenceCandidates !== undefined && {

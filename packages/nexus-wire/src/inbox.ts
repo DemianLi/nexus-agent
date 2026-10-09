@@ -67,10 +67,10 @@ export interface AgentMessagePayload {
 }
 
 /**
- * 一個背景子代理怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：結算通知的原因，四種。
+ * 一個背景子代理怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：結算通知的原因，五種。
  * 畫面據它配字，**不解析給模型看的英文句**。與 `@nexus/core` 的 `SubagentSettleReason` 同一組（harness 有測試釘住兩邊一致）。
  */
-export const SETTLE_REASONS = ['completed', 'aborted', 'max-tokens', 'error'] as const;
+export const SETTLE_REASONS = ['completed', 'aborted', 'max-tokens', 'error', 'refusal'] as const;
 
 /** {@link SETTLE_REASONS} 的一員。 */
 export type WireSettleReason = (typeof SETTLE_REASONS)[number];

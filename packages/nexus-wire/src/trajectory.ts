@@ -78,7 +78,8 @@ export type TrajectoryTurnKind =
   'message' | 'resume' | 'agent-message' | 'subagent-settled' | 'goal' | 'run';
 
 /** 一輪怎麼結束的；還沒結束就沒有這一格。 */
-export type TrajectoryEnd = 'completed' | 'aborted' | 'max-tokens' | 'interrupted' | 'failed';
+export type TrajectoryEnd =
+  'completed' | 'aborted' | 'max-tokens' | 'interrupted' | 'blocked' | 'failed';
 
 /** 一次重試。第一次嘗試本身沒有事件，所以 `retry` 從 1 起。 */
 export interface TrajectoryRetry {

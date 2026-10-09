@@ -74,6 +74,8 @@ import { RunnableBinding } from '@langchain/core/runnables';
 import { bindModelConfig } from './model-binding.js';
 import { Command, isCommand } from '@langchain/langgraph';
 import { createMiddleware, MiddlewareError } from 'langchain';
+
+import { archiveGateOf, TurnBlockedError } from './archive-gate.js';
 import type { AgentMiddleware } from './base-types.js';
 import { toolCallSessionAddress } from './session-address.js';
 import {
@@ -151,6 +153,22 @@ export function isTurnCancelled(error: unknown): boolean {
 function inSubagent(request: unknown): boolean {
   const configurable = (request as { runtime?: { configurable?: unknown } }).runtime?.configurable;
   return toolCallSessionAddress({ configurable })?.kind === 'subagent';
+}
+
+/** middleware 拿到的 request 上讀 `configurable`。 */
+function requestConfigurable(request: unknown): unknown {
+  return (request as { runtime?: { configurable?: unknown } }).runtime?.configurable;
+}
+
+/**
+ * 被準入閘門擋在這裡。**root 拋 {@link TurnBlockedError}，子代理回空訊息**，理由與 {@link stopHere} 相同。
+ * 子代理那則空訊息帶的記號也一樣（只活在子代理的狀態裡，讀的人已經認得）；誰被擋下由放閘門的人記。
+ */
+function blockHere(request: unknown): AIMessage {
+  if (inSubagent(request)) {
+    return new AIMessage({ content: '', additional_kwargs: { [INTERRUPTED_REPLY_MARKER]: true } });
+  }
+  throw new TurnBlockedError();
 }
 
 /**
@@ -321,6 +339,10 @@ export function createTurnCancelGuard(): AgentMiddleware {
       // 中止之後的下一次模型呼叫就是「這一步之後」：擋在這裡，圖停在剛落定的那批工具結果後面，
       // 對話狀態一致（AI 帶 tool_calls、每一顆都配到結果）。
       if (signalOfRequest(request)?.aborted) return stopHere(request);
+      // 準入閘門（#633，封存的會話）：中止先判，蓋過閘門——人按了停止的那一輪是被中止，不是被擋下。
+      if (archiveGateOf({ configurable: requestConfigurable(request) })?.() === true) {
+        return blockHere(request);
+      }
       return handler(request);
     },
   }) as unknown as AgentMiddleware;

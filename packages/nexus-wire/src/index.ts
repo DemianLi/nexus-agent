@@ -139,6 +139,7 @@ export type {
 export { isModelMethod, MODEL_METHODS, MODEL_SELECTION_PROJECTION_KEY } from './model-selection.js';
 export type {
   ThreadArchiveCommand,
+  ThreadActivityKind,
   ThreadArchiveError,
   ThreadArchiveResult,
   ThreadListSets,
@@ -156,7 +157,11 @@ export type {
   ThreadUnpinCommand,
   ThreadUnpinResult,
 } from './thread-management.js';
-export { isThreadManagementMethod, THREAD_MANAGEMENT_METHODS } from './thread-management.js';
+export {
+  isThreadManagementMethod,
+  THREAD_ACTIVITY_KINDS,
+  THREAD_MANAGEMENT_METHODS,
+} from './thread-management.js';
 export type {
   SubagentKind,
   SubagentListCommand,

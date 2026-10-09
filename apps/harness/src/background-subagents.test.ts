@@ -1875,6 +1875,42 @@ describe('close 中止進行中的輪（#841）', () => {
     expect(settled.map((each) => each.summary)).toEqual([settlementSummary(runId, 'aborted')]);
   });
 
+  it('封存的主對話（#633）：一開輪就擋，話不進圖、圖一次都沒叫；那一輪以 blocked 收，結算原因是 refusal', async () => {
+    const sessions = new SessionRegistry('root-1');
+    const settlements: BackgroundSettlement[] = [];
+    let called = 0;
+    const agent: BackgroundAgent = {
+      async streamEvents() {
+        called += 1;
+        return (async function* () {})() as never;
+      },
+    };
+    const host = new BackgroundSubagentHost({
+      sessions,
+      compile: () => agent,
+      isArchived: () => true,
+      onSettled: (settlement) => settlements.push(settlement),
+    });
+    const { runId, outcome } = host.start({ subagent: 'w', text: '幹活' });
+    expect(await outcome).toEqual({ ok: true });
+    await host.close();
+    expect(called).toBe(0);
+    const log = sessions.get({ kind: 'subagent', runId })!;
+    expect(log.events.filter((event) => event.type === 'turn/end').map((e) => e.data)).toEqual([
+      { reason: { kind: 'blocked' } },
+    ]);
+    expect(settlements.map((each) => each.reason)).toEqual(['refusal']);
+    expect(settlements.map((each) => each.summary)).toEqual([settlementSummary(runId, 'refusal')]);
+  });
+
+  it('settlementSummary：五種原因各一句，refusal 逐字照 dsh', () => {
+    expect(settlementSummary('r1', 'refusal')).toBe('Background subagent r1 declined the task.');
+    const texts = (['completed', 'aborted', 'max-tokens', 'error', 'refusal'] as const).map(
+      (reason) => settlementSummary('r1', reason),
+    );
+    expect(new Set(texts).size).toBe(5);
+  });
+
   it('剛派出去、迴圈還沒撿起來就關閉：這一輪不開跑，交回沒跑成', async () => {
     const { host, started } = setup();
     const { outcome } = host.start({ subagent: 'w', text: '還沒開始' });

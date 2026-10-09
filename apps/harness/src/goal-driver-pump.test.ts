@@ -101,6 +101,8 @@ async function build(options: {
   readonly portOverrides?: Partial<GoalDriverPort>;
   /** 上一個行程留下的 root 日誌（重啟折回佇列用）。 */
   readonly rootSeed?: readonly SessionEvent[];
+  /** 封存的閘門（#633）；省略＝從不封存。 */
+  readonly isArchived?: () => boolean;
 }): Promise<{
   pump: ThreadPump;
   goals: GoalServices;
@@ -133,6 +135,15 @@ async function build(options: {
     options.threadId,
     options.withDriver ? port : undefined,
     options.rootSeed,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    [],
+    undefined,
+    undefined,
+    options.isArchived,
   );
   late.log = pump.sessionLog;
   // 先接伴生、再接參與者，同 `composeAttachSessions` 的順序。順序不承重（不變量 runner 接上時會重播日誌，
@@ -940,6 +951,214 @@ describe('續行走送出佇列（#638）', () => {
     expect(
       splicesOf(pump.sessionLog).filter((splice) => splice.outcome === 'canceled'),
     ).toHaveLength(1);
+    await stop();
+  });
+});
+
+describe('封存的會話（#633）', () => {
+  /** 日誌上每一顆 `turn/end` 的收尾原因種類（沒帶 reason ＝ 正常收）。 */
+  function endKinds(log: SessionLog): string[] {
+    return log.events
+      .filter((event) => event.type === 'turn/end')
+      .map((event) => (event.data as { reason?: { kind: string } }).reason?.kind ?? 'done');
+  }
+
+  it('人送的話：開一輪、以 blocked 收，模型一次都不被叫，沒有 turn/failed', async () => {
+    const { pump, state, stop } = await build({
+      turns: [{ content: '不該被叫到。' }],
+      threadId: 'archived-human',
+      withDriver: false,
+      isArchived: () => true,
+    });
+    await pump.submit({ kind: 'message', text: '你好' });
+    await settle(pump);
+    expect(state.prompts).toHaveLength(0);
+    expect(startKinds(pump.sessionLog)).toEqual(['message']);
+    expect(endKinds(pump.sessionLog)).toEqual(['blocked']);
+    expect(pump.sessionLog.events.some((event) => event.type === 'turn/failed')).toBe(false);
+    expect(pump.running).toBe(false);
+    await stop();
+  });
+
+  it('線上：被擋下的輪收尾 frame 是 completed 帶 blocked——輪頭擋與輪中擋兩條路都一樣，不是 failed', async () => {
+    // 輪頭擋（圖沒跑）與輪中擋（圖拋錯、基座發 failed 被換掉）各一次。
+    for (const mode of ['head', 'mid'] as const) {
+      let calls: () => number = () => 0;
+      const { pump, state, stop } = await build({
+        turns:
+          mode === 'head'
+            ? [{ content: '不該被叫到。' }]
+            : [
+                { content: '', toolCalls: [{ name: 'take_note', args: { text: 'x' } }] },
+                { content: '不該被讀到。' },
+              ],
+        threadId: `archived-live-${mode}`,
+        withDriver: false,
+        extraPlugins: [
+          {
+            plugin: {
+              name: 'note-fixture',
+              apply(registration) {
+                registration.tools.register(noteTool());
+              },
+            },
+          },
+        ],
+        isArchived: () => (mode === 'head' ? true : calls() >= 1),
+      });
+      calls = () => state.prompts.length;
+      const controller = new AbortController();
+      const terminals: unknown[] = [];
+      const reading = (async () => {
+        for await (const frame of pump.subscribe(['lifecycle'], controller.signal)) {
+          const data = (frame as { params: { data: { graph_name?: string; event?: string } } })
+            .params.data;
+          if (data.graph_name === 'root' && (data.event === 'completed' || data.event === 'failed'))
+            terminals.push(data);
+        }
+      })();
+      await pump.submit({ kind: 'message', text: '你好' });
+      await settle(pump);
+      controller.abort();
+      await reading.catch(() => undefined);
+      expect(terminals).toEqual([{ event: 'completed', graph_name: 'root', blocked: true }]);
+      await stop();
+    }
+  });
+
+  it('被擋下的那句話不在模型的對話裡：取消封存後下一輪，模型只看到新的那句', async () => {
+    let archived = true;
+    const { pump, state, stop } = await build({
+      turns: [{ content: '收到。' }],
+      threadId: 'archived-then-lifted',
+      withDriver: false,
+      isArchived: () => archived,
+    });
+    await pump.submit({ kind: 'message', text: '被擋下的話' });
+    await settle(pump);
+    expect(state.prompts).toHaveLength(0);
+
+    archived = false;
+    await pump.submit({ kind: 'message', text: '新的一句' });
+    await settle(pump);
+    expect(state.prompts).toHaveLength(1);
+    const seen = JSON.stringify(state.prompts[0]);
+    expect(seen).toContain('新的一句');
+    expect(seen).not.toContain('被擋下的話');
+    expect(endKinds(pump.sessionLog)).toEqual(['blocked', 'done']);
+    await stop();
+  });
+
+  it('每一次模型呼叫之前都問，不只輪頭：跑到一半封存，下一步不叫模型、這一輪以 blocked 收', async () => {
+    // 模型叫過一次之後才封存：第二步（工具結果回來之後）被擋下。輪頭那一問與第一步都在模型被叫之前，放行。
+    let calls: () => number = () => 0;
+    const { pump, state, stop } = await build({
+      turns: [
+        { content: '', toolCalls: [{ name: 'take_note', args: { text: '先記一下' } }] },
+        { content: '不該被讀到。' },
+      ],
+      threadId: 'archived-midturn',
+      withDriver: false,
+      extraPlugins: [
+        {
+          plugin: {
+            name: 'note-fixture',
+            apply(registration) {
+              registration.tools.register(noteTool());
+            },
+          },
+        },
+      ],
+      isArchived: () => calls() >= 1,
+    });
+    calls = () => state.prompts.length;
+    await pump.submit({ kind: 'message', text: '記一筆' });
+    await settle(pump);
+    expect(state.prompts).toHaveLength(1);
+    expect(endKinds(pump.sessionLog)).toEqual(['blocked']);
+    expect(pump.running).toBe(false);
+    await stop();
+  });
+
+  it('目標續行：這一輪被擋下，目標轉 blocked（prompt-rejected），取消封存也不自己續行', async () => {
+    // 第一輪（人的）放行並建好目標；之後封存：續行輪被擋下。
+    let archived = false;
+    // 預算給大：被擋下的輪一次就跑完（不叫模型），目標若沒被擋下轉成 blocked，就會在預算內一直開空輪。
+    const { pump, port, state, violations, stop } = await build({
+      turns: [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 50 } },
+          ],
+        },
+        { content: '建好了。' },
+        QUIET,
+      ],
+      threadId: 'archived-goal',
+      withDriver: true,
+      isArchived: () => archived,
+      portOverrides: {},
+    });
+    // 人的那一輪結束時就封存：續行輪一開始就被擋。
+    const originalSubmit = pump.submit.bind(pump);
+    await originalSubmit({ kind: 'message', text: '把 CI 修綠' });
+    // 建好目標後、續行輪領走之前封存。
+    archived = true;
+    await settle(pump);
+    // 剛好一顆續行輪被擋下，沒有空轉。
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    expect(endKinds(pump.sessionLog)).toEqual(['done', 'blocked']);
+    expect(port.goal()).toMatchObject({
+      phase: 'blocked',
+      blockedReason: { code: 'prompt-rejected' },
+    });
+    const promptsWhileArchived = state.prompts.length;
+
+    // 取消封存不會自己續行：目標停在 blocked，要使用者 `/goal resume`。
+    archived = false;
+    await settle(pump);
+    expect(state.prompts).toHaveLength(promptsWhileArchived);
+    expect(port.goal()).toMatchObject({
+      phase: 'blocked',
+      blockedReason: { code: 'prompt-rejected' },
+    });
+    expect(violations).toEqual([]);
+    await stop();
+  });
+
+  it('停在核准點的那一輪收到答覆時已經封存：核准過的工具照跑（dsh 的閘門在步前），下一次叫模型才被擋，這一輪以 blocked 收', async () => {
+    let archived = false;
+    const { pump, state, stop } = await build({
+      turns: [
+        { content: '', toolCalls: [{ name: 'take_note', args: { text: '先記一下' } }] },
+        { content: '不該被讀到。' },
+      ],
+      threadId: 'archived-resume',
+      withDriver: false,
+      gated: true,
+      isArchived: () => archived,
+    });
+    await pump.submit({ kind: 'message', text: '記一筆' });
+    await settle(pump);
+    const pending = pump.pendings[0];
+    expect(pending).toBeDefined();
+    expect(state.prompts).toHaveLength(1);
+
+    archived = true;
+    await pump.submit({
+      kind: 'resume',
+      interruptId: pending?.interruptId ?? '',
+      response: [{ type: 'approve', args: { text: '一筆' } }],
+    });
+    await settle(pump);
+    expect(state.prompts).toHaveLength(1);
+    expect(pump.pendings).toHaveLength(0);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'resume']);
+    expect(endKinds(pump.sessionLog).at(-1)).toBe('blocked');
+    // 核准是在叫模型之前就給的：dsh 的一步是「叫模型→跑工具」，`ArchivedSessionGate` 掛在步前，所以掛著的核准照樣落地。
+    const results = pump.sessionLog.events.filter((event) => event.type === 'tool/result');
+    expect(results).toHaveLength(1);
     await stop();
   });
 });

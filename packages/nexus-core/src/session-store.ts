@@ -475,8 +475,19 @@ import type { SessionEvent } from './session-log.js';
  *
  * **讀舊檔**：38 以前沒有這個來源，續行是直接開的一輪，不補寫歷史。日誌裡**排著沒領走的預約**（行程死在預約與開跑之間）：
  * 重啟後折回來和人排的一樣停住，領走時驗證不過（授權不持久，重啟後一定是 `disarmed`）就丟掉、不開那一輪。
+ *
+ * ## 40：`turn/end` 多一種原因 `blocked`（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）
+ *
+ * 封存的會話不跑模型：每一步送出模型請求之前問一次準入閘門，被擋下的那一輪以 `reason: { kind: 'blocked' }` 收尾、一個請求都沒發
+ * （見 {@link ./session-log.ts | TurnEndReason}）。背景子代理被擋下的輪同樣以它收尾。
+ *
+ * **升版，不標 `ignorable`**——`turn/end` 是既有種類，新增的是**欄位值的成員**，而且舊 runtime 照舊讀會讀錯：39 的讀方只認
+ * `aborted`／`max-tokens`（goal 續行的判準），對不認得的 `reason.kind` 一律當一輪正常做完，於是一輪**什麼都沒做**的收尾被讀成做完了，
+ * 歷史也不會標出來。拒絕讀（由版本號在讀檔那一步擋下）才是對的方向。
+ *
+ * **讀舊檔**：39 以前沒有這個原因，不補寫歷史。
  */
-export const SESSION_LOG_FORMAT_VERSION = 39;
+export const SESSION_LOG_FORMAT_VERSION = 40;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

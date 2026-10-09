@@ -76,7 +76,10 @@ import {
   createProjectionFold,
   foldInbox,
   humanMessageForTurnStart,
+  ARCHIVE_GATE_CONFIG_KEY,
   INTERRUPTED_REPLY_MARKER,
+  isTurnBlocked,
+  TurnBlockedError,
   isTurnCancelled,
   lastModelCall,
   MAX_TOKENS_TURN_END,
@@ -287,6 +290,8 @@ export interface PumpAgent {
         readonly [TURN_CANCEL_CONFIG_KEY]?: AbortSignal;
         /** 插話的領取口（#710）。圖裡沒掛那顆 middleware 就沒人讀，見 `@nexus/core` 的 `step-inbox.ts`。 */
         readonly [STEP_INBOX_CONFIG_KEY]?: StepInbox;
+        /** 準入閘門（#633）：每次模型呼叫之前問，回 `true` 就擋下。只有接了整理檔的組裝才放。 */
+        readonly [ARCHIVE_GATE_CONFIG_KEY]?: () => boolean;
       };
     },
   ): Promise<AsyncIterable<RawProtocolEvent> & RunProjections>;
@@ -818,6 +823,9 @@ const GOAL_DROP_LIMIT = 3;
 /** 人按了停止——`turn/end` 帶的那一格。見 `session-log.ts` 的 `turn/end`。 */
 const ABORTED_BY_USER: TurnEndReason = { kind: 'aborted', cause: { kind: 'user' } };
 
+/** 被準入閘門擋下的一輪（#633），見 {@link ThreadPump.#runOnce} 的 catch。 */
+const BLOCKED: TurnEndReason = { kind: 'blocked' };
+
 /**
  * 派子代理的那顆工具的名字。
  *
@@ -853,6 +861,8 @@ interface CurrentRun {
   stopped: boolean;
   /** 同 {@link stopped}，標的是撞到輸出上限（#433）。 */
   maxTokens: boolean;
+  /** 準入閘門擋下了這一輪的某一步（#633）。收尾 frame 據它標 `blocked`，日誌據錯誤的類別收成 `blocked`。 */
+  blocked: boolean;
   /**
    * 這一輪不再收插話了（#710）：圖在收尾時沒有插話可領（`@nexus/core` 的 `StepInbox.finish`），或串流已經抽完。
    * 之後到的插話排 `next-turn`，見 {@link ThreadPump.#acceptsSteer}。
@@ -1067,6 +1077,8 @@ export class ThreadPump {
   readonly #titleLimits: ThreadTitleLimits;
   /** 這台 server 講話的地方，見建構子的 `warn`。 */
   readonly #warn: ((message: string) => void) | undefined;
+  /** 封存的閘門（#633）：放進圖的 `configurable`，每次模型呼叫之前問。見 {@link ThreadPump.#runOnce} 的 catch。 */
+  readonly #isArchived: (() => boolean) | undefined;
   readonly #subscribers = new Set<Subscriber>();
   readonly #sessions: SessionRegistry;
   /**
@@ -1278,6 +1290,9 @@ export class ThreadPump {
    * @param projectionChildSeeds - 上一個行程留下的子代理日誌（#1028），見 `projection-children.ts`。
    * @param projectionFlushMs - 插件投影 frame 的合併視窗毫秒（`projection-flush` 那一列，#1071）。值由 `serve.ts` 在起動期解出來、
    *   經 `createWireHandler` 傳進來。**省略即合併器的預設 100**，同 `toolText`。
+   * @param isArchived - 這條 thread 封存了沒有（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，`thread-organization.ts`）。
+   *   **省略即沒有封存這回事**（沒接整理檔的組裝）。封存的 thread 不跑模型步驟：每一步送出請求之前問一次，擋下的那一輪以 `blocked` 收，
+   *   見 {@link ThreadPump.#runOnce} 的 catch。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -1293,8 +1308,10 @@ export class ThreadPump {
     projections: readonly ProjectionUnit[] = [],
     projectionChildSeeds?: ProjectionChildren,
     projectionFlushMs?: number,
+    isArchived?: () => boolean,
   ) {
     this.#agent = agent;
+    this.#isArchived = isArchived;
     this.#projectionOut = new ProjectionCoalescer(
       (data) => this.#presentCustom(data),
       projectionFlushMs,
@@ -2115,6 +2132,39 @@ export class ThreadPump {
     );
   }
 
+  /**
+   * 目標續行的那一輪被準入閘門擋下：**把目標擋下**（`prompt-rejected`），照 dsh 的 `goal-round-driver`（`src/index.ts:403-415`，
+   * `5badb15009a`）——它的 pre-step 先 `await next()`（下游就是封存閘門），拿到 `reject` 且目標還是 active／armed，就
+   * `goals.block(…, { code: 'prompt-rejected', message: 'Goal round was rejected before entering its step.' })`。
+   * 排程器因此不認識封存，也不空轉：目標不是 active 了就不排。**解除封存不會自動恢復**，要人 `/goal resume`。
+   *
+   * 對的是目標本身（id 吻合、active、armed）而不是預約的修訂號：開跑那一刻目標的修訂可能已因這一輪而前進。
+   * 擋下失敗（目標剛好被別人改了）只講一聲。
+   */
+  #blockGoalOfRejectedRound(claimed: QueuedInput | undefined): void {
+    const source = claimed?.source;
+    if (source === undefined || source.kind !== 'goal' || this.#driver === undefined) return;
+    try {
+      const goal = this.#driver.goal();
+      if (
+        goal === undefined ||
+        goal.id !== source.goalId ||
+        goal.phase !== 'active' ||
+        goal.activation !== 'armed'
+      ) {
+        return;
+      }
+      this.#driver.block(
+        { id: goal.id, revision: goal.revision },
+        { code: 'prompt-rejected', message: 'Goal round was rejected before entering its step.' },
+      );
+    } catch (error: unknown) {
+      this.#driver.warn(
+        `擋下目標失敗（續行那一輪被準入閘門擋下）：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   /** 閒下來才暫停那些被取消的續行預約（{@link ThreadPump.#cancelledGoalRounds}）；還在跑就什麼都不做，等下一次問。 */
   #pauseCancelledGoalRounds(): void {
     if (this.running) return;
@@ -2558,6 +2608,7 @@ export class ThreadPump {
       reply: undefined,
       stopped: false,
       maxTokens: false,
+      blocked: false,
       closed: false,
       opening:
         referenced === undefined || referenced.references.length === 0
@@ -2579,6 +2630,25 @@ export class ThreadPump {
     };
     this.#current = current;
     try {
+      // **輪頭先問一次，人話不進圖**（#633）：圖的輸入只要送進去，基座就把它存進存檔點——就算第一次模型呼叫被閘門擋下、圖拋錯也一樣
+      // （實測，見 `goal-driver-pump.test.ts`）。dsh 的 `user/message` 要等放行才寫，被擋下的話不在之後的對話裡，所以輪頭的擋要在
+      // 把輸入交給圖**之前**。`resume` 沒有人話可漏，留給圖裡的閘門（它要讓掛著的核准照常走到下一次模型呼叫才知道）。
+      // 輪頭放行、取到串流之前才封存的那個縫：閘門仍在圖裡每次模型呼叫前擋，只是那一句話已進了存檔點（已知的小縫）。
+      if (input.kind !== 'resume' && this.#isArchived?.() === true) {
+        current.blocked = true;
+        // 圖沒跑，基座不會發收尾 frame：自己補一顆，形狀同 `#translate` 把圖的 `failed` 換成的那一顆。
+        this.#broadcast(
+          this.#seal({
+            method: 'lifecycle',
+            params: {
+              namespace: [],
+              timestamp: Date.now(),
+              data: { event: 'completed', graph_name: 'root', blocked: true },
+            },
+          } as unknown as Event),
+        );
+        throw new TurnBlockedError();
+      }
       // 退回標題（#647）：這條會話還沒有標題就從第一則合格的人話推一個。**在領走之後**，所以是開跑的那一刻、用開跑的
       // 那份文字，同 dsh 的 `user/message` 開跑時才落。**寫不進去只講一聲，這一輪照跑**，同 dsh `onUserMessage` 的
       // catch：標題是附帶的，不值得賠上使用者那一輪。自己包一層、又放在外層 try 裡面，兩件都保住。
@@ -2601,6 +2671,14 @@ export class ThreadPump {
           // 工具（實測），見 `@nexus/core` 的 `turn-cancel.ts`。
           [TURN_CANCEL_CONFIG_KEY]: current.controller.signal,
           [STEP_INBOX_CONFIG_KEY]: stepInbox,
+          // 封存的會話不跑模型步驟（#633）：每一步送出請求之前問一次，擋下的那一輪以 `blocked` 收，見下面的 catch。
+          ...(this.#isArchived !== undefined && {
+            [ARCHIVE_GATE_CONFIG_KEY]: () => {
+              const archived = this.#isArchived!();
+              if (archived) current.blocked = true;
+              return archived;
+            },
+          }),
         },
       });
       // **在第一顆封包之前**：投影裡的 promise 一建立就可能被 reject，晚掛就漏（#346）。
@@ -2632,6 +2710,17 @@ export class ThreadPump {
       else this.#stopRequested = false;
       this.#answerForSystem(current.stopped);
     } catch (error) {
+      // **被準入閘門擋下**（#633，封存的會話）：一個模型請求都沒發，這一輪以 `blocked` 收。**認的是類別**（沿 `MiddlewareError` 拆到底），
+      // 理由同下面的中止。在中止之前判不會搶：中止的訊號一舉起來，閘門那一側先讓路給中止（`turn-cancel.ts`），兩者不會同時成立。
+      //
+      // **被領走的輸入沒有進對話**，照 dsh（`agent.ts:419-423` 的 `user/message` 要等放行才寫）：人話在輪頭就擋下、沒交給圖，
+      // 之後的輪不會看到它。`turn/start` 帶著文字，所以日誌與歷史仍留著使用者打了什麼。
+      if (isTurnBlocked(error)) {
+        this.#sessions.root.append('turn/end', { reason: BLOCKED });
+        this.#stopRequested = false;
+        this.#blockGoalOfRejectedRound(claimed);
+        return;
+      }
       // **認的是中止訊號已經觸發**，不是錯誤長什麼樣：被切斷的模型請求拋什麼要看供應商與抽法，
       // 而 `TurnCancelledError` 是我們自己的類別（沿 `MiddlewareError` 拆到底再認），兩個都不比對
       // 訊息（#276）。
@@ -2984,6 +3073,20 @@ export class ThreadPump {
           namespace: raw.params.namespace,
           timestamp: raw.params.timestamp,
           data: { ...(raw.params.data as object), aborted: true },
+        },
+      } as Event);
+      return;
+    }
+
+    if (current !== undefined && current.blocked && isRootTerminal(raw)) {
+      // **被準入閘門擋下（#633）一樣只加分類**：閘門拋的錯讓基座發了 `failed`，但這不是失敗——一個請求都沒發、沒有東西壞掉。
+      // 換成帶 `blocked` 的 `completed`，不帶錯誤字串，畫面不會畫成失敗；怎麼講「這句話沒有送給模型」是畫面的事。
+      yield this.#seal({
+        method: raw.method,
+        params: {
+          namespace: raw.params.namespace,
+          timestamp: raw.params.timestamp,
+          data: { event: 'completed', graph_name: 'root', blocked: true },
         },
       } as Event);
       return;

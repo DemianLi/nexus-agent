@@ -29,10 +29,14 @@ import type { AttachmentRef } from './attachment-ref.js';
 import type { GoalId } from './goal.js';
 
 /**
- * 一個背景子代理怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：結算通知的原因，四種。
+ * 一個背景子代理怎麼收的（[#884](https://github.com/DemianLi/nexus-agent/issues/884)）：結算通知的原因，五種。
  * 給模型看的那句英文（`summary`）由它決定，畫面的字也由它決定——畫面不解析英文句，認這個列舉。
+ *
+ * `refusal`（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：子代理那一輪被準入閘門擋下（它所屬的會話封存了），
+ * 領走的輸入丟掉、一個請求都沒發——任務是被**拒絕**，不是做完了、也不是被停。照 dsh：`toStopReason` 與 `epochStopReason` 把 turn 的
+ * `blocked` 收成 `refusal`（`subagent-in-process-driver/src/index.ts:50-66`、`subagent/src/lifecycle.ts:248-251`，`5badb15009a`）。
  */
-export type SubagentSettleReason = 'completed' | 'aborted' | 'max-tokens' | 'error';
+export type SubagentSettleReason = 'completed' | 'aborted' | 'max-tokens' | 'error' | 'refusal';
 
 /**
  * 收件匣的哪一條清單，同 dsh 的 `InboxTarget`。格式 20 以前的日誌只有 `next-turn`（見 `session-store.ts`）。

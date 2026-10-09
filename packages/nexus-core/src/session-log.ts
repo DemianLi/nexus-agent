@@ -176,7 +176,7 @@ export type SessionEventType = keyof SessionEventMap;
 export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unavailable';
 
 /**
- * 一輪為什麼沒有正常結束。三種：
+ * 一輪為什麼沒有正常結束。四種：
  *
  * - **`aborted`**：被中止。原因兩種：`user`（人按了停止）與 `parent`（父代理用 `interrupt_agent` 只停這個背景
  *   子代理當下那一輪，[#838](https://github.com/DemianLi/nexus-agent/issues/838)，dsh 同名，
@@ -192,13 +192,22 @@ export type ApprovalOutcome = 'allowed-once' | 'rejected' | 'cancelled' | 'unava
  *   它由續接那一刻的 agent 層寫，不是那一輪自己寫的：行程活著的時候沒有人寫得出它。**讀者把它當「這一輪不是正常
  *   結束」**；goal 續行不看它（續接回來的授權從 `disarmed` 起，且 `currentTurnStart` 不往 end-seed 之前找）。
  *
- * dsh 另有 `completed`、`blocked`、`error`、`forked`：正常結束在我們這側是不放
+ * - **`blocked`**：這一輪的某一步在送出模型請求**之前**被準入閘門擋下，一個請求都沒發
+ *   （[#633](https://github.com/DemianLi/nexus-agent/issues/633)，封存的會話：dsh 的 `ArchivedSessionGate` 在 `agent/pre-step`
+ *   回 `reject`，迴圈把那一輪以 `{ kind: 'blocked' }` 收掉，`packages/core/agent-loop/src/agent.ts:316-319`，`5badb15009a`）。
+ *   **被領走的輸入沒有進對話**：dsh 的 `user/message` 要到 pre-step 放行之後才寫（`agent.ts:419-423`），`consumed-work.ts` 明說
+ *   「被擋下的那一輪把領走的訊息丟掉了，它帶走的工作不會再跑」。我們的 `turn/start` 照既有的登記帶著那句話的文字，所以日誌與歷史
+ *   仍看得到使用者打了什麼；只有模型的對話狀態沒有它。**讀者把它當「這一輪沒有做事」**：goal 續行看到它不是看 `reason`，而是
+ *   那一輪的目標預約被擋就把目標擋下（`prompt-rejected`，照 dsh `goal-round-driver/src/index.ts:403-415`）。
+ *
+ * dsh 另有 `completed`、`error`、`forked`：正常結束在我們這側是不放
  * `reason`，拋錯是另一顆 `turn/failed`，其餘沒有生產者。
  */
 export type TurnEndReason =
   | { readonly kind: 'aborted'; readonly cause: { readonly kind: 'user' | 'parent' } }
   | { readonly kind: 'max-tokens' }
-  | { readonly kind: 'interrupted' };
+  | { readonly kind: 'interrupted' }
+  | { readonly kind: 'blocked' };
 
 /**
  * 一次模型呼叫沒有正常回來的方式（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）。
