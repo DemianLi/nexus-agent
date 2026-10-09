@@ -480,6 +480,18 @@ describe('使用者改名釘住標題（#633）', () => {
     await t.detach();
   });
 
+  it('已排進微任務、還沒開跑時改名：開跑前那道守衛擋下，不花模型呼叫', async () => {
+    const t = attached(() => stopReply());
+    t.log.append('turn/start', { kind: 'message', text: FIRST });
+    ensureFallbackTitle(t.log, LIMITS);
+    t.log.append('model/start', {});
+    renameThreadTitle(t.log, '我取的名字', 80);
+    await settle();
+    expect(t.calls).toHaveLength(0);
+    expect(t.warnings).toEqual([]);
+    await t.detach();
+  });
+
   it('開跑前就已經改名：不花這一次模型呼叫', async () => {
     const t = attached(() => stopReply());
     t.log.append('turn/start', { kind: 'message', text: FIRST });
