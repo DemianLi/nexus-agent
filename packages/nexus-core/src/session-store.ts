@@ -514,8 +514,18 @@ import type { SessionEvent } from './session-log.js';
  * 模型就又看到已經省略的圖，請求再度超額，沒有任何東西說為什麼。
  *
  * **讀舊檔**：42 以前沒有這一種，等於沒省略過，不補寫歷史。
+ *
+ * ## 44：`subagent/descriptor`——背景子代理記下自己是誰，重啟後才叫得醒（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)）
+ *
+ * 背景子代理的子日誌第一顆記 `subagent/descriptor { version, mode: 'continuable', subagent, model?, effort? }`（照 dsh 的同名事件，見
+ * `subagent-descriptor.ts`）。行程重啟之後冷復活（有人對舊編號 `subagent.send`）靠它重建；沒有這一顆的子日誌（43 以前、前景子代理）仍可讀、
+ * 仍可唯讀冷讀，只是**分不出身分，不能復活**——讀的人照「不能復活」表態，不是壞檔。
+ *
+ * **升版，不標 `ignorable`**：一台 43 的 runtime 看不懂它，不該以為自己讀得懂這份子日誌。
+ *
+ * **讀舊檔**：43 以前沒有，不補寫歷史（補了也不知道當時用的是哪一顆模型）。
  */
-export const SESSION_LOG_FORMAT_VERSION = 43;
+export const SESSION_LOG_FORMAT_VERSION = 44;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

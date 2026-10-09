@@ -52,12 +52,14 @@ async function assembleOneThread(patches: readonly string[]): Promise<unknown> {
 
 describe('serve 讀背景續行那一列', () => {
   it('出貨預設：續行開著，上限 8', async () => {
-    expect(await assembleOneThread([])).toEqual({ maxActive: 8 });
+    // 落盤開著（出貨預設）就帶冷復活的存放處（#1271）。
+    expect(await assembleOneThread([])).toEqual({ maxActive: 8, cold: expect.any(Object) });
   });
 
   it('patch 改上限：組裝點收到那個值（3 不是 8，量得出這一列真的在講話）', async () => {
     expect(await assembleOneThread(['src/settings/background-limit.patch.yml'])).toEqual({
       maxActive: 3,
+      cold: expect.any(Object),
     });
   });
 

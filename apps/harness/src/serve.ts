@@ -50,6 +50,7 @@ import {
 } from './assembly-root.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
+import { createColdChildStore } from './background-cold.js';
 import { isListedThread, listStoredThreads, readStoredSubagentSession } from './session-list.js';
 import { ThreadOrganization } from './thread-organization.js';
 import {
@@ -763,7 +764,11 @@ async function startServer(
             ...(modelSelectionPolicy !== undefined && { modelSelectionPolicy }),
             // 背景續行（#841）：只有 serve 有可以叫醒的一輪，見 `createCliAgent` 那一格。
             ...(backgroundSubagents.backgroundMode === 'continuable' && {
-              backgroundSubagents: { maxActive: backgroundSubagents.maxActiveSubagents },
+              backgroundSubagents: {
+                maxActive: backgroundSubagents.maxActiveSubagents,
+                // 重啟之前派出的背景子代理，收到話才接回來（#1271）；落盤關掉（#612）就沒有東西可接。
+                ...(sessionStore !== undefined && { cold: createColdChildStore(sessionStore) }),
+              },
             }),
             liveModel,
             ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),

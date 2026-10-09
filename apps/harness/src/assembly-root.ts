@@ -30,6 +30,7 @@ import type {
   SessionEvent,
   SessionTelemetrySharingStatus,
 } from '@nexus/core';
+import type { ColdChildStore } from './background-cold.js';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
 import { composeAttachSessions } from './session-attach.js';
 import type { AttachSessions } from './session-attach.js';
@@ -653,7 +654,11 @@ export async function createCliAgent(
      * 從 `background-subagents` 那一列解。**只有 serve 傳**：REPL 一行一輪、一次性模式答完就退出，背景子代理做完沒有
      * 可以叫醒的一輪，結果就送不回來。
      */
-    readonly backgroundSubagents?: { readonly maxActive: number };
+    readonly backgroundSubagents?: {
+      readonly maxActive: number;
+      /** 重啟之前派出的背景子代理怎麼冷復活（#1271）；省略＝這台沒落盤，不認得重啟之前的。只有 serve 傳。 */
+      readonly cold?: ColdChildStore;
+    };
     /**
      * 這個會話允許子代理挑哪些模型（[#875](https://github.com/DemianLi/nexus-agent/issues/875)），原樣交給 `createNexusAgent`：
      * 組裝點在 root 日誌還沒有政策事件時把它寫進去。**只有 serve 傳**（新會話從設定取樣、續接讀日誌那一顆）。
@@ -930,6 +935,9 @@ export async function createCliAgent(
     ...(invocation.backgroundSubagents !== undefined && {
       backgroundSubagents: {
         maxActive: invocation.backgroundSubagents.maxActive,
+        ...(invocation.backgroundSubagents.cold !== undefined && {
+          cold: invocation.backgroundSubagents.cold,
+        }),
         // 這個會話的授權清單（#877）：有政策才給，`subagent` 才多選模型的兩格與 `list_subagent_models`。
         ...(invocation.modelSelectionPolicy !== undefined && {
           modelSelection: {
