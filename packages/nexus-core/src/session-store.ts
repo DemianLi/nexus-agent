@@ -494,8 +494,18 @@ import type { SessionEvent } from './session-log.js';
  *
  * 升版照新增詞彙的慣例（同 18、19），不是非升不可：40 讀到 `user` 標題照樣拿最後一顆（列表、歷史讀的就是文字），一字不差。釘住由寫標題的人
  * 守：退回標題只在沒有標題時寫，模型標題在寫入前看到最後一顆是 `user` 就放棄（見 `apps/harness/src/session-title.ts` 的 `titlePinnedByUser`）。
+ *
+ * ## 42：訊息點名子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項）
+ *
+ * 人送出的一句話可以點名派哪一個子代理（`run.start` 的 `mention`）。`inbox/spliced` 裡那一件（`QueuedInput`）與 `turn/start`（`kind: 'message'`）各多一格選填的
+ * `mention { kind: 'subagent', name }`；輪中插話被領走時記的 `user/message` 的 `HumanMessage` 內容在文字之後多一個固定的文字區塊（見 `subagent-mention.ts`）。
+ *
+ * **升版，不標 `ignorable`**——同 38：這個欄位**左右續接之後的行為**。一台 41 的 runtime 讀到新檔會把 `mention` 略過，排著的項目被折回來重跑時，
+ * 模型收到的是一句沒有點名的話，沒有任何東西報錯。
+ *
+ * **讀舊檔**：41 以前沒有這一格，等於沒有點名，不補寫歷史。
  */
-export const SESSION_LOG_FORMAT_VERSION = 41;
+export const SESSION_LOG_FORMAT_VERSION = 42;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

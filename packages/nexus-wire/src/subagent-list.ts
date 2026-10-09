@@ -4,6 +4,10 @@
  * **這一份只是契約**：型別、method 名字、client 方法。server 端還沒實作，`subagent.list` 一律回 `not_supported`，
  * `run.start` 帶非空的 `mention` 也一樣；web 據那個碼把 `@` 子代理的入口藏起來。實作落地時這裡的形狀盡量不動。
  *
+ * **（2026-10-09 起 server 端已實作）**：`subagent.list` 回這個組裝的 `task` 實際收的子代理（`general-purpose` 在前，其餘依註冊順序），
+ * `run.start` 的 `mention` 驗形狀與名字（不在清單上回 `invalid_argument`，那句話不進佇列）。點名之後在線上長在三個地方：
+ * 排著的那一件（`WireQueuedInput.mention`）、領走時畫人話泡泡的 `claimed`、歷史重播的人話（`HumanEntry.mention`）。
+ *
  * ## 與 dsh 的關係：dsh 沒有，為什麼做
  *
  * dsh 只有**已經生出來的子會話**的目錄投影（`subagentCatalog`，列 id、createdAt、mode、label；
@@ -57,4 +61,23 @@ export interface SubagentMention {
   readonly kind: 'subagent';
   /** {@link SubagentKind.name}。 */
   readonly name: string;
+}
+
+/**
+ * 線上送來的值是不是一個合格的點名：`kind` 是 `'subagent'`、`name` 是非空字串。多出來的欄位不擋（前向相容），但 {@link mentionField} 不轉手。
+ */
+export function isSubagentMention(value: unknown): value is SubagentMention {
+  if (typeof value !== 'object' || value === null) return false;
+  const { kind, name } = value as { kind?: unknown; name?: unknown };
+  return kind === 'subagent' && typeof name === 'string' && name !== '';
+}
+
+/**
+ * 有合格的點名才帶 `mention` 這一格，只留認得的欄位。**不合格就當沒有**：點名只用來畫泡泡上的標記，壞掉的不該害整件話被丟掉
+ * （附件不同，附件是話的內容）。
+ */
+export function mentionField(
+  value: unknown,
+): { readonly mention: SubagentMention } | Record<string, never> {
+  return isSubagentMention(value) ? { mention: { kind: 'subagent', name: value.name } } : {};
 }

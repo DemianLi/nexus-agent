@@ -1,5 +1,5 @@
 /**
- * 契約先合、實作還沒做（或沒接落盤時）的幾塊（#633 釘選封存、#328 子代理清單、#732 上傳與收據）：**每一支未實作的方法都回 `not_supported`**。
+ * 契約先合、實作還沒做（或沒接落盤時）的幾塊（#633 釘選封存、#328 手搭組裝沒有子代理清單時、#732 上傳與收據）：**每一支未實作的方法都回 `not_supported`**。
  *
  * web 據這個碼把功能藏起來，所以「還沒做」必須是這個碼，不是 404、不是空結果、不是 `invalid_argument`。實作落地時，
  * 對應的那條在這裡換成真的行為測試——這條測試紅了就是有人實作了一半、忘了來更新契約這一側。
@@ -57,7 +57,7 @@ function connect() {
 const NOT_SUPPORTED = { kind: 'rejected', code: 'not_supported' } as const;
 
 describe('每一支未實作的方法都回 not_supported', () => {
-  it('RPC：thread 管理與子代理清單的每一支，而且不為它們建 agent', async () => {
+  it('RPC：thread 管理的每一支，而且不為它們建 agent', async () => {
     const { client, handler, created } = connect();
     try {
       // 清單與契約同步：新增一支 method 而沒有登記到這裡，這條先紅。
@@ -75,13 +75,23 @@ describe('每一支未實作的方法都回 not_supported', () => {
         await client.threadUnpin('t'),
         await client.threadArchive('t', { stopActivity: true }),
         await client.threadUnarchive('t'),
-        await client.subagentList('t'),
       ];
       for (const outcome of outcomes) expect(outcome).toMatchObject(NOT_SUPPORTED);
       for (const outcome of outcomes) {
         expect(outcome.kind === 'rejected' && outcome.message !== '').toBe(true);
       }
       expect(created()).toBe(0);
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it('subagent.list：手搭的組裝沒有清單就回 not_supported（有清單的真行為在 subagent-mention-wire.test.ts）', async () => {
+    const { client, handler } = connect();
+    try {
+      const outcome = await client.subagentList('t');
+      expect(outcome).toMatchObject(NOT_SUPPORTED);
+      expect(outcome.kind === 'rejected' && outcome.message !== '').toBe(true);
     } finally {
       await handler.close();
     }
@@ -156,7 +166,7 @@ describe('每一支未實作的方法都回 not_supported', () => {
     }
   });
 
-  it('run.start 帶 mention（點名子代理）：整句拒絕，不收下文字；沒帶照常收', async () => {
+  it('run.start 帶 mention（點名子代理）：手搭的組裝沒有清單，整句拒絕、不收下文字；沒帶照常收（有清單的真行為在 subagent-mention-wire.test.ts）', async () => {
     const { client, handler } = connect();
     try {
       const response = await client.runStart('t', '請 reviewer 看一下', {

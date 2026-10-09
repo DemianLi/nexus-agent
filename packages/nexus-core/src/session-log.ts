@@ -36,6 +36,7 @@
  */
 
 import type { AttachmentRef } from './attachment-ref.js';
+import type { SubagentMentionRef } from './subagent-mention.js';
 import type { ModelRoute } from './model-route.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
 import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
@@ -350,6 +351,13 @@ export interface SessionEventMap {
          * **格式 38 起才有**，而且不標 `ignorable`：一台 37 的 runtime 讀到會把它略過，排著的項目被折回來重跑時附件就悄悄不見了。
          */
         readonly attachments?: readonly AttachmentRef[];
+        /**
+         * 這句話點名派哪一個子代理（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 2 項，`run.start` 的 `mention`）。沒有點名就整個不放這個 key。
+         * 送進模型的 `HumanMessage` 由它和 `text` 造（同 `attachments`），形狀見 `subagent-mention.ts`。
+         *
+         * **格式 42 起才有**，而且不標 `ignorable`：一台 41 的 runtime 讀到會把它略過，排著的項目被折回來重跑時點名就悄悄不見了。
+         */
+        readonly mention?: SubagentMentionRef;
       }
     | { readonly kind: 'resume' }
     | {
