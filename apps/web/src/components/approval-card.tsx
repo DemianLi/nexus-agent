@@ -27,10 +27,9 @@
  * 一顆多出來的按鈕按下去是整場 run 死。
  */
 
-import { ChevronDown } from 'lucide-react';
-
 import type { PendingApproval } from '@nexus/wire';
 
+import { Chevron } from '@/components/chevron';
 import { Surface } from '@/components/surface';
 import type { PendingAsker } from '@/lib/approval-asker';
 import { Button } from '@/components/ui/button';
@@ -97,10 +96,7 @@ export function ApprovalCard({
         <p className="text-destructive px-3 text-body">{NO_DECISION_REASON}</p>
         <Collapsible>
           <RowTrigger className="text-muted-foreground gap-2 text-tip lg:min-h-9">
-            <ChevronDown
-              className="size-4 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
-              aria-hidden
-            />
+            <Chevron />
             原始中斷內容
           </RowTrigger>
           <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">

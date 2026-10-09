@@ -29,9 +29,10 @@
 
 import { DELEGATION_TOOL_NAMES, isBackgroundSubagentMeta } from '@nexus/wire';
 import type { AnswerEntry, Attribution, QuestionItem, ToolEntry } from '@nexus/wire';
-import { Check, ChevronDown, Hand, X } from 'lucide-react';
+import { Check, Hand, X } from 'lucide-react';
 import { useMemo, useState } from 'react';
 
+import { Chevron } from '@/components/chevron';
 import { Surface } from '@/components/surface';
 import { AgentOrb } from '@/components/agent-orb';
 import { Counts } from '@/components/changes/counts';
@@ -308,11 +309,7 @@ export function ToolCard({
           <Badge variant={failed ? 'destructive' : 'secondary'} className="shrink-0">
             {stopped ? '已停止' : TOOL_STATUS_LABEL[entry.status]}
           </Badge>
-          <ChevronDown
-            aria-hidden
-            data-motion-rotate
-            className="text-muted-foreground size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
-          />
+          <Chevron className="text-muted-foreground" />
         </RowTrigger>
         <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
           <div className="m-1 mt-0 flex flex-col gap-2">

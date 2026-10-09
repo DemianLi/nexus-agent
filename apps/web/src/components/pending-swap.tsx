@@ -13,11 +13,11 @@
  *   關完才 `hidden`。Esc＝收起（不是停止），焦點落到展開鈕上（§8）。核准面板 Esc 不做事。
  */
 
-import { ChevronDown } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import type { ReactNode, RefObject } from 'react';
 import type { PendingInput } from '@nexus/wire';
 
+import { Chevron } from '@/components/chevron';
 import { Card } from '@/components/ui/card';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import { pendingLabel } from '@/lib/pending-label';
@@ -154,11 +154,7 @@ function PendingPanel({
           className="hover:bg-chip-hover active:bg-chip-pressed flex size-11 shrink-0 items-center justify-center rounded-full transition-colors duration-(--duration-quick) lg:size-8"
           aria-label={open ? '收起這些問題' : '展開這些問題'}
         >
-          <ChevronDown
-            aria-hidden
-            data-motion-rotate
-            className={`size-4 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) ${open ? 'rotate-180' : ''}`}
-          />
+          <Chevron open={open} />
         </CollapsibleTrigger>
       )}
       {actions}

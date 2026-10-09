@@ -5,12 +5,14 @@
 
 import { useEffect, useRef, useState } from 'react';
 
+import { Chevron } from '@/components/chevron';
+import { RowTrigger } from '@/components/row-trigger';
 import { PullControl, TRACE_PULL_SUMMARY_ONLY_TEXT } from '@/components/trace/pull-control';
 import { TraceRowView } from '@/components/trace/row';
-import { Chevron, LINE } from '@/components/trace/lines';
+
 import { HeadFacts, TurnHeader } from '@/components/trace/turn-head';
 import { Button } from '@/components/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import type { TraceDigest, TraceRow, TraceTurn } from '@/lib/trace-view';
 import type { PullStatus } from '@/lib/trajectory-pull';
 import { TURN_KIND_LABEL } from '@/lib/trajectory-view';
@@ -148,12 +150,12 @@ export function Digests({
   }, [reveal, ready, shown, open, onRevealed]);
   return (
     <Collapsible className="mb-4" data-testid="trace-digests" open={open} onOpenChange={setOpen}>
-      <CollapsibleTrigger className={LINE}>
+      <RowTrigger fit="bare" className="text-tip">
         <span className="text-muted-foreground">
           更早的 {digests.length + omitted} 輪（只有摘要）
         </span>
-        <Chevron />
-      </CollapsibleTrigger>
+        <Chevron className="text-muted-foreground ml-auto" />
+      </RowTrigger>
       <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
         {omitted > 0 && (
           <p className="text-muted-foreground px-2 pb-1 text-tip" data-testid="trace-omitted">

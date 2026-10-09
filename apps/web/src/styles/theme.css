@@ -36,20 +36,24 @@
 }
 
 /*
- * 焦點外框：2px 文字色、offset 2px。
- * outline 放進 base layer：元件自己寫 `outline-none`（例如外框改畫在外層群組）時要讓它贏。
- * registry 自帶的 `focus-visible:ring-[3px]` 在 layer 外關掉：沒有 layer 的樣式贏過 utilities，兩圈才不會疊在一起。
+ * 焦點外框：2px 文字色、offset 2px。全站只有這一種焦點樣子（#1279）。
+ *
+ * - **外框本身寫在 layer 外**：registry 的 `Button`、`Input`、`Textarea`、側欄選單鈕……都自帶 `outline-none`／`outline-hidden`，
+ *   而它們自帶的 ring 又被下面那條清掉——放在 base layer 時兩邊抵消，**鍵盤 Tab 走一輪有一半的元件看不到焦點**（#1279 量到 67 個裡 34 個）。
+ *   沒有 layer 的樣式贏過 utilities，所以 `outline-none` 擋不掉它。
+ * - **offset 留在 base layer**：外框被 `overflow-hidden` 裁掉的地方（縮圖、分頁）用 `focus-visible:-outline-offset-2` 畫進裡面，要讓 utility 贏。
+ * - **不畫外框的只有三種**：程式把焦點搬到面板或題目容器（`tabindex=-1`，Radix 選單項也是，它們用底色標目前那一項）；
+ *   輸入框群組裡的輸入框（外框畫在整個群組上，`ui/input-group.tsx`）；自己畫了別的焦點樣子、標了 `data-focus="custom"` 的（例如右側欄的拖曳把手整條變色）。
+ * - registry 自帶的 `focus-visible:ring-[3px]` 在 layer 外關掉，兩圈才不會疊在一起。
  */
 @layer base {
   :focus-visible {
-    outline: 2px solid var(--ring);
     outline-offset: 2px;
   }
+}
 
-  /* 程式把焦點搬到面板或題目容器（tabIndex=-1）時不畫外框：那不是可操作的元件。 */
-  [tabindex='-1']:focus-visible {
-    outline: none;
-  }
+:focus-visible:not([tabindex='-1'], [data-slot='input-group-control'], [data-focus='custom']) {
+  outline: 2px solid var(--ring);
 }
 
 :focus-visible {

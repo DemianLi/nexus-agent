@@ -98,7 +98,7 @@ export function AttachmentRail({
                   <button
                     type="button"
                     aria-label={`看原圖：${item.file.name}`}
-                    className="size-full cursor-zoom-in outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+                    className="size-full cursor-zoom-in focus-visible:-outline-offset-2"
                     onClick={() => setOpened(item.id)}
                   >
                     <img src={item.previewUrl} alt="" className="size-full object-cover" />

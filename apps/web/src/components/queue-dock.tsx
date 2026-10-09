@@ -7,7 +7,6 @@ import type {
 import {
   Bot,
   Check,
-  ChevronDown,
   ListEnd,
   Paperclip,
   Pencil,
@@ -20,6 +19,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { KeyboardEvent } from 'react';
 import { toast } from 'sonner';
 
+import { Chevron } from '@/components/chevron';
 import { DelegatedChip } from '@/components/delegated-chip';
 import { Surface } from '@/components/surface';
 import { Button } from '@/components/ui/button';
@@ -459,10 +459,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
           >
             <ListEnd aria-hidden className="size-4 shrink-0" />
             <span className="min-w-0 flex-1 truncate">{queueHeading(live.length)}</span>
-            <ChevronDown
-              aria-hidden
-              className="size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
-            />
+            <Chevron />
           </RowTrigger>
           {hint}
           <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">

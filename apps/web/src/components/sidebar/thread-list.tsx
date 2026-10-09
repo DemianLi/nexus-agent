@@ -1,8 +1,8 @@
 import type { ThreadSearchOutcome, ThreadSummary } from '@nexus/wire';
-import { ChevronRight } from 'lucide-react';
 import { useEffect, useId, useState } from 'react';
 import type { ReactNode } from 'react';
 
+import { Chevron } from '@/components/chevron';
 import { RenameField, ThreadRowMenu } from '@/components/sidebar/thread-row-menu';
 import type { RowMenuProps } from '@/components/sidebar/thread-row-menu';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
@@ -310,8 +310,8 @@ function ThreadGroupList({
           className="mt-2"
           data-testid="thread-archived"
         >
-          <CollapsibleTrigger className="text-muted-foreground flex min-h-11 w-full items-center gap-1 rounded-md px-2 text-tip font-medium outline-hidden focus-visible:ring-2 focus-visible:ring-sidebar-ring lg:min-h-8 [&[data-state=open]>svg]:rotate-90">
-            <ChevronRight aria-hidden className="size-3.5 shrink-0 transition-transform" />
+          <CollapsibleTrigger className="group text-muted-foreground flex min-h-11 w-full items-center gap-1 rounded-md px-2 text-tip font-medium lg:min-h-8">
+            <Chevron className="size-3.5" />
             已封存（{sections.archived.length}）
           </CollapsibleTrigger>
           <CollapsibleContent>

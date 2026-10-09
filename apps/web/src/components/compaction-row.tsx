@@ -1,8 +1,10 @@
 import type { CompactionEntry } from '@nexus/wire';
-import { ChevronDown, FoldVertical } from 'lucide-react';
+import { FoldVertical } from 'lucide-react';
 
+import { Chevron } from '@/components/chevron';
+import { RowTrigger } from '@/components/row-trigger';
 import { MarkdownText } from '@/components/markdown-text';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import {
   COMPACTION_SUMMARY_MAX_REM,
   COMPACTION_UNSAVED_TEXT,
@@ -44,13 +46,10 @@ export function CompactionRow({ entry }: { readonly entry: CompactionEntry }) {
   }
   return (
     <Collapsible data-testid="compaction-row" className={frame}>
-      <CollapsibleTrigger className="group hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-xl px-3 text-left transition-colors duration-(--duration-quick) lg:min-h-9">
+      <RowTrigger fit="bare" className="px-3 lg:min-h-9">
         {line}
-        <ChevronDown
-          aria-hidden
-          className="size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
-        />
-      </CollapsibleTrigger>
+        <Chevron />
+      </RowTrigger>
       <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
         <div
           data-testid="compaction-summary"

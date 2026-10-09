@@ -3,25 +3,14 @@
  * 其他 `trace-*` 檔都從這裡取，所以這裡不依賴它們。
  */
 
-import { ChevronDown } from 'lucide-react';
 import type { ComponentType, ReactNode } from 'react';
 
 import type { Attribution } from '@nexus/wire';
 
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
+import { Chevron } from '@/components/chevron';
+import { RowTrigger } from '@/components/row-trigger';
+import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
 import { cn } from '@/lib/utils';
-
-export const LINE =
-  'group hover:bg-chip-hover active:bg-chip-pressed flex min-h-11 w-full min-w-0 items-center gap-2 rounded-xl px-2 text-left text-tip transition-colors duration-(--duration-quick)';
-
-export function Chevron() {
-  return (
-    <ChevronDown
-      aria-hidden
-      className="text-muted-foreground ml-auto size-4 shrink-0 transition-transform duration-(--duration-fast) ease-(--ease-smooth-out) group-data-[state=open]:rotate-180"
-    />
-  );
-}
 
 function attributionLabel(attribution: Attribution | undefined): string | undefined {
   if (attribution === undefined || attribution.kind === 'root') return undefined;
@@ -90,10 +79,10 @@ export function ExpandableLine({
 }) {
   return (
     <Collapsible>
-      <CollapsibleTrigger className={LINE}>
+      <RowTrigger fit="bare" className="text-tip">
         <Line {...line} />
-        <Chevron />
-      </CollapsibleTrigger>
+        <Chevron className="text-muted-foreground ml-auto" />
+      </RowTrigger>
       <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
         <div className="pt-1 pr-2 pb-2 pl-8 text-body">{children}</div>
       </CollapsibleContent>
@@ -113,10 +102,10 @@ export function SnapshotBlock({
 }) {
   return (
     <Collapsible className="mt-1" data-testid={testId}>
-      <CollapsibleTrigger className={LINE}>
+      <RowTrigger fit="bare" className="text-tip">
         <span className="min-w-0 truncate font-medium">{title}</span>
-        <Chevron />
-      </CollapsibleTrigger>
+        <Chevron className="text-muted-foreground ml-auto" />
+      </RowTrigger>
       <CollapsibleContent className="overflow-hidden">
         <div className="pt-1 pb-2 pl-2">{children}</div>
       </CollapsibleContent>
