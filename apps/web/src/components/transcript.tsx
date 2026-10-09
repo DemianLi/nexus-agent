@@ -63,6 +63,7 @@ import { decisionText } from '@/lib/decision-view';
 import { transcriptItems } from '@/lib/deliverables-view';
 import { registerTranscriptScroller } from '@/lib/transcript-locate';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
+import { RetryNotice } from '@/components/retry-notice';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
 import { settledNoticeText } from '@/lib/queue-view';
@@ -506,6 +507,10 @@ export function Transcript({
       ),
     };
   });
+  // 串流中段出錯、正在等著整次重打（#520）：接在這一輪的最後，下一則回覆一開始就收掉（折疊器清成 `null`）。
+  if (state.retry !== null) {
+    items.push({ id: 'llm-retry', node: <RetryNotice retry={state.retry} /> });
+  }
   // 還沒被領走的插話接在最後（#710）：鍵跟領走後那則人的話同一個，換成正式的是同一格換內容。
   for (const steer of pendingSteers(state)) {
     items.push({
