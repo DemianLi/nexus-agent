@@ -144,6 +144,57 @@ describe('ContainedFilesystemBackend 的 fence', () => {
   });
 });
 
+/**
+ * 讀取面今天實際長什麼樣（[#1291](https://github.com/DemianLi/nexus-agent/issues/1291)）。
+ *
+ * fence 只圍變更；讀走 deepagents 基座的 `read`，所以「讀得出根外嗎」的答案是基座給的，
+ * 不是我們寫的。這一組把四種讀法**照量到的樣子**釘住——不新增讀取圍堵，也不是在背書：
+ * 只有目錄 symlink 那一條是讀穿的，其餘三條被擋，而擋的人是基座。
+ *
+ * 兩個用途。一是 `docs/operations.md`「讀取面的已知限制」寫的是這四條，文件說的與實際會漂開，
+ * 這裡讓它漂不起來；二是升版絆索：基座哪天把目錄 symlink 補上圍堵，第一條會紅，紅了該回頭改
+ * 文件那一節，不是把測試翻回去。
+ *
+ * 讀的策略歸 `permissions`（出貨設定零條 deny 規則），不歸這個 class——見 contained-backend.ts 檔頭。
+ */
+describe('讀取面的今日實況（文件「已知限制」的對照）', () => {
+  it('目錄 symlink：讀穿到根外（唯一讀得出去的那條）', async () => {
+    const backend = contained(terrain.root);
+
+    // `escape` 是根裡指向根外目錄的 symlink；基座的 O_NOFOLLOW 只管最後一段，祖先目錄照跟。
+    expect(await backend.read(terrain.escapePath)).toMatchObject({ content: SECRET });
+    // 不是只有 read：同一條祖先 symlink 讓 ls 也列得出根外。
+    const listing = await backend.ls('/escape');
+    expect(listing.files?.map((f) => f.path)).toContain('/escape/secret.txt');
+  });
+
+  it('檔案 symlink：最後一段是 symlink 就 ELOOP，讀不出內容', async () => {
+    await symlink(terrain.secretFile, join(terrain.root, 'filelink.txt'));
+    const result = await contained(terrain.root).read('/filelink.txt');
+
+    expect(result.error).toContain('ELOOP');
+    expect(result.content).toBeUndefined();
+  });
+
+  it('".."：基座回「Path traversal not allowed」，連根外的檔案都沒去碰', async () => {
+    const backend = contained(terrain.root);
+
+    for (const path of ['/../outside/secret.txt', '/escape/../../outside/secret.txt']) {
+      const result = await backend.read(path);
+      expect(result.error).toContain('Path traversal not allowed');
+      expect(result.content).toBeUndefined();
+    }
+  });
+
+  it('主機絕對路徑：被當成根底下的子路徑，ENOENT——讀不到真的那個檔', async () => {
+    // `secretFile` 是主機上的真實絕對路徑。虛擬模式把它接在根底下，不是當成主機位置。
+    const result = await contained(terrain.root).read(terrain.secretFile);
+
+    expect(result.error).toContain('ENOENT');
+    expect(result.content).toBeUndefined();
+  });
+});
+
 describe('三個 mode', () => {
   it('read-only 擋掉所有變更', async () => {
     const backend = contained(terrain.root, 'read-only');
