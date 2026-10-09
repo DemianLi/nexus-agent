@@ -1,7 +1,7 @@
 import type { WireGoal } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { GOAL_PHASE_TEXT, goalBarView } from '@/lib/goal-bar';
+import { GOAL_PHASE_TEXT, goalBarView, PROMPT_REJECTED_TEXT } from '@/lib/goal-bar';
 
 const goal = (patch: Partial<WireGoal> = {}): WireGoal => ({
   id: 'g1',
@@ -45,6 +45,25 @@ describe('goalBarView（#945）', () => {
     expect(goalBarView(goal({ phase: 'paused', blockedReason: reason }))?.blockedReason).toBe(
       undefined,
     );
+  });
+
+  it('`prompt-rejected`（封存擋下續行）換成中文，並講出下一步 `/goal resume`；別的碼照 server 的話', () => {
+    const rejected = goalBarView(
+      goal({
+        phase: 'blocked',
+        blockedReason: {
+          code: 'prompt-rejected',
+          message: 'Goal round was rejected before entering its step.',
+        },
+      }),
+    );
+    expect(rejected?.blockedReason).toBe(PROMPT_REJECTED_TEXT);
+    expect(PROMPT_REJECTED_TEXT).toContain('/goal resume');
+    expect(rejected?.label).toContain('取消封存後請輸入 /goal resume');
+    expect(
+      goalBarView(goal({ phase: 'blocked', blockedReason: { code: 'other', message: '別的理由' } }))
+        ?.blockedReason,
+    ).toBe('別的理由');
   });
 
   it('無障礙名稱帶階段、目標全文、輪數與理由', () => {

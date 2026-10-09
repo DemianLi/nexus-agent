@@ -1,9 +1,9 @@
-import type { CommandOutcome, ThreadListResult, WireClient } from '@nexus/wire';
+import type { CommandOutcome, ThreadActivityKind, ThreadListResult, WireClient } from '@nexus/wire';
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { explainThreadFailure, normalizeTitle, readSets } from '@/lib/thread-management';
-import type { ThreadActionResult, ThreadManagement } from '@/lib/thread-management';
+import type { ThreadActionResult, ArchiveAnswer, ThreadManagement } from '@/lib/thread-management';
 
 /** 這份列表之後、下一份列表之前，動作回應裡的整份集合與 server 受理的標題。 */
 interface Overlay {
@@ -15,7 +15,13 @@ interface Overlay {
 
 const NO_TITLES: ReadonlyMap<string, string> = new Map();
 
-type Outcome<V> = { readonly value: V } | { readonly message: string };
+type Outcome<V> =
+  | { readonly value: V }
+  | {
+      readonly message: string;
+      /** 業務失敗的原始內容（線路層失敗沒有）；封存要從這裡讀 `thread_active` 的 `activity`。 */
+      readonly error?: { readonly code: string; readonly activity?: readonly ThreadActivityKind[] };
+    };
 
 /**
  * 一支動作的結果換成「值或一句人話」。`rejected` 是這條線收不了（含沒實作的 `not_supported`），業務失敗在 `result` 裡。
@@ -24,7 +30,14 @@ async function settle<V>(
   call: () => Promise<
     CommandOutcome<
       | { readonly ok: true; readonly value: V }
-      | { readonly ok: false; readonly error: { readonly code: string; readonly message?: string } }
+      | {
+          readonly ok: false;
+          readonly error: {
+            readonly code: string;
+            readonly message?: string;
+            readonly activity?: readonly ThreadActivityKind[];
+          };
+        }
     >
   >,
 ): Promise<Outcome<V>> {
@@ -41,7 +54,7 @@ async function settle<V>(
   }
   return outcome.result.ok
     ? { value: outcome.result.value }
-    : { message: explainThreadFailure(outcome.result.error) };
+    : { message: explainThreadFailure(outcome.result.error), error: outcome.result.error };
 }
 
 /**
@@ -89,11 +102,15 @@ export function useThreadManagement(
     [patch],
   );
   const archiveCall = useCallback(
-    async (call: () => ReturnType<typeof client.threadArchive>): ThreadActionResult => {
+    async (call: () => ReturnType<typeof client.threadArchive>): ArchiveAnswer => {
       tickets.current.archived += 1;
       const mine = tickets.current.archived;
       const result = await settle(call);
-      if ('message' in result) return result.message;
+      if ('message' in result) {
+        return result.error?.code === 'thread_active'
+          ? { needsStop: result.error.activity ?? [] }
+          : result.message;
+      }
       if (mine === tickets.current.archived) {
         patch((previous) => ({ ...previous, archived: result.value.archivedThreadIds }));
       }
@@ -111,8 +128,13 @@ export function useThreadManagement(
     [client, pinCall],
   );
   const onArchive = useCallback(
-    async (threadId: string) => {
-      const failure = await archiveCall(() => client.threadArchive(threadId));
+    async (threadId: string, options?: { readonly stopActivity?: boolean }) => {
+      const failure = await archiveCall(() =>
+        client.threadArchive(
+          threadId,
+          options?.stopActivity === true ? { stopActivity: true } : undefined,
+        ),
+      );
       // 回應只帶封存集合；封存順手取消釘選是 server 的規則，釘選集合重抓列表才拿得到。
       if (failure === undefined) refresh();
       return failure;
@@ -120,7 +142,11 @@ export function useThreadManagement(
     [client, archiveCall, refresh],
   );
   const onUnarchive = useCallback(
-    (threadId: string) => archiveCall(() => client.threadUnarchive(threadId)),
+    async (threadId: string) => {
+      const answer = await archiveCall(() => client.threadUnarchive(threadId));
+      // 取消封存不會回 `thread_active`；型別上收窄掉。
+      return typeof answer === 'object' ? undefined : answer;
+    },
     [client, archiveCall],
   );
   const onRename = useCallback(

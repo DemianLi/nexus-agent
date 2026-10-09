@@ -2208,15 +2208,20 @@ describe('以前的會話', () => {
       const calls: string[] = [];
       let lists = 0;
       const ok = <V,>(value: V) => ({ kind: 'ok' as const, result: { ok: true as const, value } });
-      const failed = (code: string, message?: string) => ({
+      const failed = (code: string, message?: string, activity?: readonly string[]) => ({
         kind: 'ok' as const,
         result: {
           ok: false as const,
-          error: { code, ...(message === undefined ? {} : { message }) },
+          error: {
+            code,
+            ...(message === undefined ? {} : { message }),
+            ...(activity === undefined ? {} : { activity }),
+          },
         },
       });
+      const fake = fakeClient([]);
       const client = {
-        ...listing(fakeClient([]), async () => {
+        ...listing(fake, async () => {
           lists += 1;
           return {
             kind: 'ok',
@@ -2246,9 +2251,11 @@ describe('以前的會話', () => {
           state.pinned = state.pinned.filter((other) => other !== id);
           return ok({ pinnedThreadIds: [...state.pinned] });
         },
-        threadArchive: async (id: string) => {
-          calls.push(`archive ${id}`);
-          if (id === '跑著的那條') return failed('thread_active');
+        threadArchive: async (id: string, options?: { stopActivity?: boolean }) => {
+          calls.push(`archive ${id}${options?.stopActivity === true ? ' stop' : ''}`);
+          if (id === '跑著的那條' && options?.stopActivity !== true) {
+            return failed('thread_active', undefined, ['turn']);
+          }
           // dsh：封存的那一刻它就不在釘選裡。回應只帶封存集合。
           state.pinned = state.pinned.filter((other) => other !== id);
           if (!state.archived.includes(id)) state.archived.push(id);
@@ -2266,7 +2273,7 @@ describe('以前的會話', () => {
           return ok({ title, seq: 9 });
         },
       } as unknown as WireClient;
-      return { client, state, calls, lists: () => lists };
+      return { client, state, calls, sent: fake.sent, lists: () => lists };
     }
 
     const menuOf = async (list: HTMLElement, title: string) => {
@@ -2422,19 +2429,94 @@ describe('以前的會話', () => {
       expect(screen.queryByTestId('thread-pinned')).toBeNull();
     });
 
-    it.each([['封存跑著的那條', '幫我改登入頁', '封存', '這條會話還在跑，先停掉它再封存。']])(
-      'server 拒絕：%s，說出原因、畫面不變',
-      async (_case, title, item, message) => {
-        seq = 0;
-        const server = managed();
-        render(<App client={server.client} />);
-        const list = await openList();
-        await menuOf(list, title);
-        choose(item);
-        expect(await screen.findByText(message)).toBeTruthy();
-        expect(screen.queryByTestId('thread-archived')).toBeNull();
-      },
-    );
+    it('封存還在跑的會話：先問「要停掉再封存嗎」，先不要就什麼都沒變', async () => {
+      seq = 0;
+      const server = managed();
+      render(<App client={server.client} />);
+      const list = await openList();
+      await menuOf(list, '幫我改登入頁');
+      choose('封存');
+      const dialog = await screen.findByRole('alertdialog');
+      expect(within(dialog).getByText(/「幫我改登入頁」正在回答。要停掉再封存嗎？/u)).toBeTruthy();
+      fireEvent.click(within(dialog).getByRole('button', { name: '先不要' }));
+      await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+      expect(server.calls.filter((call) => call.startsWith('archive'))).toEqual([
+        'archive 跑著的那條',
+      ]);
+      expect(screen.queryByTestId('thread-archived')).toBeNull();
+    });
+
+    it('封存還在跑的會話：確認之後帶 stopActivity 再送一次，會話移到已封存', async () => {
+      seq = 0;
+      const server = managed();
+      render(<App client={server.client} />);
+      const list = await openList();
+      await menuOf(list, '幫我改登入頁');
+      choose('封存');
+      fireEvent.click(
+        within(await screen.findByRole('alertdialog')).getByRole('button', { name: '停掉並封存' }),
+      );
+      await waitFor(() => expect(screen.getByTestId('thread-archived')).toBeTruthy());
+      expect(server.calls.filter((call) => call.startsWith('archive'))).toEqual([
+        'archive 跑著的那條',
+        'archive 跑著的那條 stop',
+      ]);
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
+
+    it('封存時 server 說找不到：說出原因、不問', async () => {
+      seq = 0;
+      const server = managed();
+      server.client.threadArchive = (async () => ({
+        kind: 'ok' as const,
+        result: { ok: false as const, error: { code: 'thread_not_found' } },
+      })) as unknown as WireClient['threadArchive'];
+      render(<App client={server.client} />);
+      const list = await openList();
+      await menuOf(list, '幫我改登入頁');
+      choose('封存');
+      expect(await screen.findByText('找不到這條會話（可能已經被刪掉）。')).toBeTruthy();
+      expect(screen.queryByRole('alertdialog')).toBeNull();
+    });
+
+    it('打開封存的會話：輸入框上方有「此會話已封存」橫幅，送出鈕停用、Enter 不送；取消封存之後橫幅消失、能送', async () => {
+      seq = 0;
+      const server = managed({ archived: ['目標那條'] });
+      render(<App client={server.client} />);
+      await openList();
+      fireEvent.click(
+        within(await screen.findByTestId('thread-archived')).getByRole('button', {
+          name: '已封存（1）',
+        }),
+      );
+      // 現在這條是新生的，沒有橫幅。
+      expect(screen.queryByTestId('archived-banner')).toBeNull();
+      fireEvent.click(
+        within(screen.getByTestId('thread-archived')).getByText(UNTITLED_THREAD_LABEL),
+      );
+      const banner = await screen.findByTestId('archived-banner');
+      expect(within(banner).getByText('此會話已封存')).toBeTruthy();
+      const box = screen.getByLabelText('要說的話');
+      fireEvent.change(box, { target: { value: '還能說嗎' } });
+      expect((screen.getByRole('button', { name: '送出' }) as HTMLButtonElement).disabled).toBe(
+        true,
+      );
+      fireEvent.keyDown(box, { key: 'Enter' });
+      expect(server.sent).toEqual([]);
+      // 草稿留著，不因為擋住而被清掉。
+      expect((box as HTMLTextAreaElement).value).toBe('還能說嗎');
+
+      fireEvent.click(within(banner).getByRole('button', { name: '取消封存' }));
+      await waitFor(() => expect(screen.queryByTestId('archived-banner')).toBeNull());
+      expect(server.calls).toContain('unarchive 目標那條');
+      await waitFor(() =>
+        expect((screen.getByRole('button', { name: '送出' }) as HTMLButtonElement).disabled).toBe(
+          false,
+        ),
+      );
+      fireEvent.keyDown(box, { key: 'Enter' });
+      await waitFor(() => expect(server.sent).toEqual(['還能說嗎']));
+    });
 
     it('封存的會話不能釘：server 回 thread_archived，說出原因', async () => {
       seq = 0;

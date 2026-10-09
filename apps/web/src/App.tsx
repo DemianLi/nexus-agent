@@ -12,6 +12,7 @@ import { PermissionSeat } from '@/components/permission-seat';
 import { EmptyHero } from '@/components/empty-hero';
 import { FeedbackDialog } from '@/components/feedback-dialog';
 import { PendingSwap } from '@/components/pending-swap';
+import { ArchivedBanner } from '@/components/archived-banner';
 import { GoalBar } from '@/components/goal-bar';
 import { PlanChip } from '@/components/plan/chip';
 import { PlanReviewPanel, usePlanLibrary } from '@/components/plan/review';
@@ -41,6 +42,7 @@ import { MODEL_SELECTION_PROJECTION, useModelSeat } from '@/hooks/use-model-seat
 import { PERMISSIONS_PROJECTION_KEY, usePermissionSeat } from '@/hooks/use-permission-seat';
 import { useThreadDirectory } from '@/hooks/use-thread-directory';
 import { useThreadManagement } from '@/hooks/use-thread-management';
+import { isArchivedThread } from '@/lib/archived-view';
 import type { ThreadManagement } from '@/lib/thread-management';
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { useThemePreference } from '@/hooks/use-theme-preference';
@@ -447,7 +449,9 @@ function ConversationView({
     });
     return true;
   };
-  const canSend = canSendLine(draft) && !sendingAttachments;
+  // 封存的會話不給送（#633）：橫幅在輸入框上方，送出鈕停用。伺服器端也擋，這一道是第一道。
+  const archived = isArchivedThread(threadManagement?.archivedIds, threadId);
+  const canSend = canSendLine(draft) && !sendingAttachments && !archived;
   const hasModelSeat = modelSeat !== null;
   const commands = useMemo(
     () =>
@@ -622,6 +626,9 @@ function ConversationView({
             onUpdate={conversation.updateQueue}
             onFocusFallback={focusBelowQueue}
           />
+          {archived && threadManagement !== undefined && (
+            <ArchivedBanner onRestore={() => threadManagement.onUnarchive(threadId)} />
+          )}
           <PendingSwap
             pendings={pendings}
             composerRef={composerRef}

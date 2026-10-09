@@ -10,7 +10,19 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import { SidebarInput, SidebarMenuAction } from '@/components/ui/sidebar';
-import type { ThreadActionResult } from '@/lib/thread-management';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
+import { explainArchiveStop } from '@/lib/thread-management';
+import type { ArchiveAnswer, ThreadActionResult } from '@/lib/thread-management';
+import type { ThreadActivityKind } from '@nexus/wire';
 
 /**
  * 會話列的管理：「⋯」選單（釘選、改名、封存）與行內改名輸入（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
@@ -31,7 +43,7 @@ export interface RowMenuProps {
   readonly current: boolean;
   readonly onPin: () => ThreadActionResult;
   readonly onUnpin: () => ThreadActionResult;
-  readonly onArchive: () => ThreadActionResult;
+  readonly onArchive: (options?: { readonly stopActivity?: boolean }) => ArchiveAnswer;
   readonly onUnarchive: () => ThreadActionResult;
   readonly onRename: () => void;
 }
@@ -50,8 +62,32 @@ function report(action: string, result: ThreadActionResult): void {
   );
 }
 
+/** 封存一條會話；它還在跑時 server 要人先說「要停掉」，那一句交給 `onNeedsStop` 去問（確認框）。 */
+function archive(
+  props: RowMenuProps,
+  options: { readonly stopActivity?: boolean } | undefined,
+  onNeedsStop: (activity: readonly ThreadActivityKind[]) => void,
+): void {
+  void props.onArchive(options).then(
+    (answer) => {
+      if (answer === undefined) return;
+      if (typeof answer === 'string') toast.error('封存失敗', { description: answer });
+      else onNeedsStop(answer.needsStop);
+    },
+    (error: unknown) => {
+      toast.error('封存失敗', {
+        description: error instanceof Error ? error.message : String(error),
+      });
+    },
+  );
+}
+
 export function ThreadRowMenu(props: RowMenuProps) {
   const { label, pinned, archived, current } = props;
+  // 封存還在跑的會話要多問一句；`undefined` 是沒有在問，陣列是 server 說它在跑什麼（舊 server 沒帶就是空的）。
+  const [confirmStop, setConfirmStop] = useState<readonly ThreadActivityKind[] | undefined>(
+    undefined,
+  );
   // 選「改名」之後選單關閉會把焦點還給「⋯」，蓋掉輸入框剛要到的焦點；那一次不還。
   const renaming = useRef(false);
   return (
@@ -101,13 +137,37 @@ export function ThreadRowMenu(props: RowMenuProps) {
           </DropdownMenuItem>
         ) : (
           !current && (
-            <DropdownMenuItem onSelect={() => report('封存', props.onArchive())}>
+            <DropdownMenuItem onSelect={() => archive(props, undefined, setConfirmStop)}>
               <Archive aria-hidden />
               封存
             </DropdownMenuItem>
           )
         )}
       </DropdownMenuContent>
+      <AlertDialog
+        open={confirmStop !== undefined}
+        onOpenChange={(open) => {
+          if (!open) setConfirmStop(undefined);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>這條會話還在執行</AlertDialogTitle>
+            <AlertDialogDescription>
+              {explainArchiveStop(label, confirmStop ?? [])}
+              封存會先停掉它正在做的事，之後可以從「已封存」取消封存。
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>先不要</AlertDialogCancel>
+            <AlertDialogAction
+              onClick={() => archive(props, { stopActivity: true }, () => undefined)}
+            >
+              停掉並封存
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </DropdownMenu>
   );
 }
