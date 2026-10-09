@@ -147,7 +147,7 @@ function RatingButtons({
         <Button
           type="button"
           variant="ghost"
-          className="text-muted-foreground h-7 gap-1.5 px-2 text-tip"
+          className="text-muted-foreground h-7 gap-1.5 px-2 text-ui"
           data-testid="turn-trace"
           onClick={(event) => sidebar.revealReply(messageId, event.currentTarget)}
         >

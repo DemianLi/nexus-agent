@@ -41,7 +41,7 @@ export function TodoPanel({
       <Surface tone="docked" data-testid="todo-panel" className="mb-2 p-1">
         <RowTrigger
           aria-label={todoPanelLabel(summary)}
-          className="text-muted-foreground gap-2 text-tip lg:min-h-9"
+          className="text-muted-foreground gap-2 text-ui lg:min-h-9"
         >
           <ListTodo aria-hidden className="size-4 shrink-0" />
           <span className="flex min-w-0 flex-1 gap-1.5">

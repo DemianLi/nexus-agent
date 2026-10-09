@@ -310,7 +310,7 @@ function ThreadGroupList({
           className="mt-2"
           data-testid="thread-archived"
         >
-          <CollapsibleTrigger className="group text-muted-foreground flex min-h-11 w-full items-center gap-1 rounded-md px-2 text-tip font-medium lg:min-h-8">
+          <CollapsibleTrigger className="group text-muted-foreground flex min-h-11 w-full items-center gap-1 rounded-md px-2 text-ui font-medium lg:min-h-8">
             <Chevron className="size-3.5" />
             已封存（{sections.archived.length}）
           </CollapsibleTrigger>
@@ -335,7 +335,7 @@ function BucketGroup({
   const labelId = useId();
   return (
     <div role="group" aria-labelledby={labelId} className="mt-2" data-testid={testId}>
-      <div id={labelId} className="text-muted-foreground px-2 pb-1 text-tip font-medium">
+      <div id={labelId} className="text-muted-foreground px-2 pb-1 text-ui font-medium">
         {label}
       </div>
       <SidebarMenu>{children}</SidebarMenu>

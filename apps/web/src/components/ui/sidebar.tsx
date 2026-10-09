@@ -7,6 +7,7 @@
  * - cookie 寫入包 try/catch。
  * - `md:` 全換成 `lg:`：斷點是 1024（`hooks/use-mobile.ts`），不換的話 768–1023 會先畫出桌面側欄。
  * - floating 變體的 `border`＋`shadow-sm` 換成 `shadow-material`（§5）。
+ * - 群組標題與 `sm` 尺寸的選單鈕用 `text-ui`（13），不用 `text-tip`：標題與可點的字不小於 13（#1281）；角落的計數 badge 仍是 `text-tip`。
  */
 import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
@@ -405,7 +406,7 @@ function SidebarGroupLabel({
       data-slot="sidebar-group-label"
       data-sidebar="group-label"
       className={cn(
-        'flex h-8 shrink-0 items-center rounded-md px-2 text-tip font-medium text-sidebar-foreground/70 ring-sidebar-ring outline-hidden transition-[margin,opacity] duration-(--resize-dur) ease-(--ease-smooth-out) focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0',
+        'flex h-8 shrink-0 items-center rounded-md px-2 text-ui font-medium text-sidebar-foreground/70 ring-sidebar-ring outline-hidden transition-[margin,opacity] duration-(--resize-dur) ease-(--ease-smooth-out) focus-visible:ring-2 [&>svg]:size-4 [&>svg]:shrink-0',
         'group-data-[collapsible=icon]:-mt-8 group-data-[collapsible=icon]:opacity-0',
         className,
       )}
@@ -481,7 +482,7 @@ const sidebarMenuButtonVariants = cva(
       },
       size: {
         default: 'h-8 text-body',
-        sm: 'h-7 text-tip',
+        sm: 'h-7 text-ui',
         lg: 'h-12 text-body group-data-[collapsible=icon]:p-0!',
       },
     },
@@ -674,7 +675,7 @@ function SidebarMenuSubButton({
       className={cn(
         'flex h-7 min-w-0 -translate-x-px items-center gap-2 overflow-hidden rounded-md px-2 text-sidebar-foreground ring-sidebar-ring outline-hidden hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0 [&>svg]:text-sidebar-accent-foreground',
         'data-[active=true]:bg-sidebar-accent data-[active=true]:text-sidebar-accent-foreground',
-        size === 'sm' && 'text-tip',
+        size === 'sm' && 'text-ui',
         size === 'md' && 'text-body',
         'group-data-[collapsible=icon]:hidden',
         className,

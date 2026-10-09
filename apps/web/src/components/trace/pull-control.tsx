@@ -25,7 +25,7 @@ export function PullControl({ status, onPull }: { status: PullStatus; onPull: ()
         type="button"
         variant="ghost"
         size="sm"
-        className="min-h-11 text-tip lg:min-h-8"
+        className="min-h-11 text-ui lg:min-h-8"
         disabled={status.kind === 'loading'}
         onClick={onPull}
       >

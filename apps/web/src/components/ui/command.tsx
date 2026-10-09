@@ -2,7 +2,8 @@
  * 來源：shadcn registry `command`（style new-york，https://ui.shadcn.com/r/styles/new-york-v4/command.json），
  * shadcn CLI 4.21.0 `shadcn add input-group textarea command popover --overwrite`。裝進來就是我們的原始碼，
  * 不靠重跑 `shadcn add` 更新。
- * 改過的地方：`CommandDialog` 預設的英文標題與說明換成中文（§8）。
+ * 改過的地方：`CommandDialog` 預設的英文標題與說明換成中文（§8）；群組標題用 `text-ui`（13，#1281：標題不小於 13），
+ * 快捷鍵提示仍是 `text-tip`。
  */
 import * as React from 'react';
 import { Command as CommandPrimitive } from 'cmdk';
@@ -108,7 +109,7 @@ function CommandGroup({
     <CommandPrimitive.Group
       data-slot="command-group"
       className={cn(
-        'overflow-hidden p-1 text-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-tip [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground',
+        'overflow-hidden p-1 text-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-ui [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground',
         className,
       )}
       {...props}

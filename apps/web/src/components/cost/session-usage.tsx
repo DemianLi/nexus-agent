@@ -36,7 +36,7 @@ export function SessionUsage({
       <PopoverTrigger
         aria-label={view.ariaLabel}
         data-testid="session-usage"
-        className="hover:bg-chip-hover active:bg-chip-pressed text-muted-foreground flex h-11 shrink-0 items-center gap-1.5 rounded-full px-2 text-tip tabular-nums transition-colors duration-(--duration-quick) lg:h-9"
+        className="hover:bg-chip-hover active:bg-chip-pressed text-muted-foreground flex h-11 shrink-0 items-center gap-1.5 rounded-full px-2 text-ui tabular-nums transition-colors duration-(--duration-quick) lg:h-9"
       >
         <Coins aria-hidden className="size-4" />
         {view.label}

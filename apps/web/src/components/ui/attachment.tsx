@@ -1,7 +1,8 @@
 /**
  * 來源：shadcn registry `attachment`（style new-york，https://ui.shadcn.com/r/styles/new-york-v4/attachment.json），
  * 2026-10-08 取得。裝進來就是我們的原始碼，不靠重跑 `shadcn add` 更新。
- * 改動（`registry-edits.test.ts` 守著）：`cn` 與 `Button` 改走 `@/`；`text-sm`／`text-xs` 換成字級階梯 `text-body`／`text-tip`；
+ * 改動（`registry-edits.test.ts` 守著）：`cn` 與 `Button` 改走 `@/`；`text-sm`／`text-xs` 換成字級階梯 `text-body`／`text-tip`，
+ * 其中 `sm`／`xs` 的標題（檔名）再升成 `text-ui`（#1281：卡片標題不小於 13），說明那一行仍是 `text-tip`；
  * `shimmer` 換成我們的 `text-shimmer`；`scroll-fade-x`、`scrollbar-none` 我們的 CSS 沒有這兩個工具類（寫了也沒有樣式），
  * 捲軸改用 `[scrollbar-width:none]`，邊緣淡出拿掉。
  */
@@ -19,8 +20,8 @@ const attachmentVariants = cva(
       size: {
         default:
           'gap-2 text-body has-data-[slot=attachment-content]:px-2.5 has-data-[slot=attachment-content]:py-2 has-data-[slot=attachment-media]:p-2',
-        sm: 'gap-2.5 text-tip has-data-[slot=attachment-content]:px-2 has-data-[slot=attachment-content]:py-1.5 has-data-[slot=attachment-media]:p-1.5',
-        xs: 'gap-1.5 rounded-lg text-tip has-data-[slot=attachment-content]:px-1.5 has-data-[slot=attachment-content]:py-1 has-data-[slot=attachment-media]:p-1',
+        sm: 'gap-2.5 text-ui has-data-[slot=attachment-content]:px-2 has-data-[slot=attachment-content]:py-1.5 has-data-[slot=attachment-media]:p-1.5',
+        xs: 'gap-1.5 rounded-lg text-ui has-data-[slot=attachment-content]:px-1.5 has-data-[slot=attachment-content]:py-1 has-data-[slot=attachment-media]:p-1',
       },
       orientation: {
         horizontal: 'min-w-40 items-center',

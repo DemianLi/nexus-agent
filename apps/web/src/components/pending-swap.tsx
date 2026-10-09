@@ -145,7 +145,7 @@ function PendingPanel({
   const trigger = useRef<HTMLButtonElement>(null);
 
   const head = (
-    <div className="text-muted-foreground flex min-h-11 items-center gap-2 px-3 py-1 text-tip lg:min-h-9">
+    <div className="text-muted-foreground flex min-h-11 items-center gap-2 px-3 py-1 text-ui lg:min-h-9">
       <span className="size-1.5 shrink-0 rounded-full bg-(--brand)" aria-hidden />
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {collapsible && (

@@ -1,6 +1,6 @@
 # nexus web 介面規格：P0 元件、設計 token、動效與無障礙
 
-**狀態**：規格已拍板（2026-09-18），**待實作**。來源是地圖 [#372 web 介面重做](https://github.com/DemianLi/nexus-agent/issues/372) 的八張卡；原型定版在 tag [`proto-375-design-language`](https://github.com/DemianLi/nexus-agent/tree/proto-375-design-language)（`61cc564`）。
+**狀態**：規格拍板於 2026-09-18，P0 已照這份實作，現在的介面就是它；之後的收斂見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)（token 與積木）、[#1278](https://github.com/DemianLi/nexus-agent/issues/1278)（設計系統地圖）。這份是現行規格：值或規則改了，回寫這裡。來源是地圖 [#372 web 介面重做](https://github.com/DemianLi/nexus-agent/issues/372) 的八張卡；原型定版在 tag [`proto-375-design-language`](https://github.com/DemianLi/nexus-agent/tree/proto-375-design-language)（`61cc564`）。
 
 **用途**：交給實作的那一份。讀完這份就知道 P0 要做什麼、每個元件從哪裡拿、token 與動效的規則、無障礙要做到哪、原型哪些可以直接搬、實作必須帶哪些測試。**怎麼切實作卡不在這份**（地圖把它排在終點之外）。
 
@@ -163,13 +163,15 @@
 **形狀**
 - 圓角重綁 Tailwind 階梯：`sm` 6、`md` 8、`lg` 12、`xl` 14、`2xl` 16、`3xl` 24；按鈕 `rounded-full`。不用 superellipse。
 - **邊緣畫在陰影裡**：同一元素不同時用 `border` 與陰影；細線 1px；registry 元件裝進來時把 `border` 換成陰影 token。亮色＝外環＋投影，暗色＝inset 疊層。
+  - **例外：貼在輸入框上方的卡片用細線**（`Surface tone="docked"`：待辦、送出佇列、目標列）。它們不是浮在對話裡，是接在輸入框上的一排，所以用 `border` 畫平的 1px 細線、不用陰影；亮色下平線比浮起來的投影安靜，暗色兩者幾乎一樣。出處 `apps/web/src/components/surface.tsx` 檔頭；`design-system.test.ts` 只准 `Surface` 本身寫這組配方。
 - 邊框光的靜態補償（亮色線 2px、光暈 brand 60% 28px、呼吸下限 .55；暗色 1.5px、30% 24px、.3）沿用原型值。
 
 **字型**
 - 介面 **Google Sans Flex**；等寬 **Google Sans Code**，只用在程式碼、工具輸入輸出、終端機；中文兩者都退 **Noto Sans TC**（所以介面上的中文實際是 Noto Sans TC）。
 - 三套都用 `@fontsource-variable/*` 打包（OFL，自帶 unicode-range 切片；原型建置 120 檔 5.2 MB，零外部請求）。
 - 字級 UI 13、內文 14／23、tooltip 12、微標籤 11（`@theme` 的 `text-ui`／`text-body`／`text-tip`／`text-micro`）；**字重只用 400／500**（`semibold`、`bold` 落在 500）。
-- **只走這四階，不用 Tailwind 預設的 `text-xs`／`text-sm`**（#1141）：`text-xs`（12／16）一律寫成 `text-tip`（尺寸與行高相同，畫面不變）；`text-sm`（14／20）一律寫成 `text-body`（字級相同、行高 20 → 23）。`ui/` 的 registry 原文也照改（它們裝進來就是我們的原始碼）。例外：`text-base`、`text-lg` 沒有對應的階，registry 原文裡的（輸入框手機尺寸防 iOS 放大、dialog 標題等）保留。`text-ui`（13）與 `text-micro`（11）還沒有地方用，留給之後真的需要的元件；要用第五個尺寸，先在這裡加一階，不要寫任意值。
+- **只走這四階，不用 Tailwind 預設的 `text-xs`／`text-sm`**（#1141）：`text-xs`（12／16）一律寫成 `text-tip`（尺寸與行高相同，畫面不變）；`text-sm`（14／20）一律寫成 `text-body`（字級相同、行高 20 → 23）。`ui/` 的 registry 原文也照改（它們裝進來就是我們的原始碼）。例外：`text-base`、`text-lg` 沒有對應的階，registry 原文裡的（輸入框手機尺寸防 iOS 放大、dialog 標題等）保留。要用第五個尺寸，先在這裡加一階，不要寫任意值。
+- **主次**（[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)）：**可以點的與當標題的小字用 `text-ui`（13）**（`xs` 按鈕、小字的可展開列、輸入框底列的膠囊鈕、群組與區段標題、卡片標頭）；**小字說明、附註、時間、計數用 `text-tip`（12）**（tooltip、`Badge`、快捷鍵、工具名與摘要、等寬的輸出）；內文 `text-body`（14）與本來就是 14 的按鈕、選單項不變。逐處怎麼判與護欄見 [`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「字級的主次」。`text-micro`（11）還沒有地方用，先留著。
 
 **互動狀態**
 - 焦點外框 `outline: 2px solid` 文字色、`offset 2px`；registry 的 `ring-[3px]` 關掉。

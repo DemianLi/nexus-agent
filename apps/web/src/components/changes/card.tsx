@@ -67,7 +67,7 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
               onPress={openAt === undefined ? undefined : () => openAt(index)}
               className="flex w-full items-baseline gap-3 px-2 py-1.5"
             >
-              <span className="min-w-0 flex-1 font-mono text-tip break-all">{file.display}</span>
+              <span className="min-w-0 flex-1 font-mono text-ui break-all">{file.display}</span>
               <FileCounts file={file} />
             </Pressable>
           </li>
