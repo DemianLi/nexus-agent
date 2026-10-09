@@ -315,6 +315,10 @@ export interface BackgroundSubagentControl {
   readonly sendFromUser: (runId: string, text: string) => void;
   /** {@link BackgroundSubagentHost.interrupt}。 */
   readonly interrupt: (runId: string) => boolean;
+  /** {@link BackgroundSubagentHost.hasRunning}（封存要問「還有沒有背景子代理在跑」，#633）。 */
+  readonly hasRunning: () => boolean;
+  /** {@link BackgroundSubagentHost.interruptAll}（封存帶 `stopActivity` 時全停，#633）。 */
+  readonly interruptAll: () => number;
 }
 
 /**
@@ -567,6 +571,8 @@ export class BackgroundSubagentHost {
     return {
       sendFromUser: (runId, text) => void this.sendFromUser({ runId, text }),
       interrupt: (runId) => this.interrupt(runId),
+      hasRunning: () => this.hasRunning(),
+      interruptAll: () => this.interruptAll(),
     };
   }
 
@@ -704,6 +710,32 @@ export class BackgroundSubagentHost {
     round.controller.abort();
     this.#publishStatus();
     return true;
+  }
+
+  /**
+   * 現在有沒有背景子代理在跑（或排著而沒被中斷暫停）：{@link statuses} 裡有沒有 `running`。給封存問「還有沒有工作」
+   * （[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。
+   */
+  hasRunning(): boolean {
+    return this.statuses().some((item) => item.status === 'running');
+  }
+
+  /**
+   * 全部停下（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，封存帶 `stopActivity`；dsh 的 `workspace/session-stop`
+   * 請 subagent 擁有者停它的後代）。**同 {@link interrupt}，同步、不等停穩**：跑著的每一輪舉起合作式中止，排著的輪次一併暫停到
+   * 下一次 `submit`——只舉中止不夠，被中止那一輪的收尾會讓下一個排著的輪次接著跑。
+   *
+   * @returns 動到幾個子代理（跑著的與排著的合計）。
+   */
+  interruptAll(): number {
+    const targets = new Set([...this.#busy, ...this.#queue.map((job) => job.runId)]);
+    for (const runId of targets) {
+      this.#paused.add(runId);
+      const round = this.#running.get(runId);
+      if (round !== undefined && !round.controller.signal.aborted) round.controller.abort();
+    }
+    if (targets.size > 0) this.#publishStatus();
+    return targets.size;
   }
 
   /**

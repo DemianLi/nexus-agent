@@ -101,6 +101,8 @@ async function build(options: {
   readonly portOverrides?: Partial<GoalDriverPort>;
   /** 上一個行程留下的 root 日誌（重啟折回佇列用）。 */
   readonly rootSeed?: readonly SessionEvent[];
+  /** 封存的閘門（#633）；省略＝從不封存。 */
+  readonly isArchived?: () => boolean;
 }): Promise<{
   pump: ThreadPump;
   goals: GoalServices;
@@ -133,6 +135,15 @@ async function build(options: {
     options.threadId,
     options.withDriver ? port : undefined,
     options.rootSeed,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    [],
+    undefined,
+    undefined,
+    options.isArchived,
   );
   late.log = pump.sessionLog;
   // 先接伴生、再接參與者，同 `composeAttachSessions` 的順序。順序不承重（不變量 runner 接上時會重播日誌，
@@ -940,6 +951,62 @@ describe('續行走送出佇列（#638）', () => {
     expect(
       splicesOf(pump.sessionLog).filter((splice) => splice.outcome === 'canceled'),
     ).toHaveLength(1);
+    await stop();
+  });
+});
+
+describe('封存的會話（#633）', () => {
+  /** 日誌上被丟掉（`canceled`）的佇列項數。 */
+  function canceledSplices(log: SessionLog): number {
+    return log.events.filter(
+      (event) =>
+        event.type === 'inbox/spliced' &&
+        (event.data as { outcome?: string }).outcome === 'canceled',
+    ).length;
+  }
+
+  it('人送的話：不開輪、模型一次都不被叫，日誌上沒有 turn/start，那一件記成 canceled', async () => {
+    const { pump, state, stop } = await build({
+      turns: [{ content: '不該被叫到。' }],
+      threadId: 'archived-human',
+      withDriver: false,
+      isArchived: () => true,
+    });
+    await pump.submit({ kind: 'message', text: '你好' });
+    await settle(pump);
+    expect(state.prompts).toHaveLength(0);
+    expect(startKinds(pump.sessionLog)).toEqual([]);
+    expect(canceledSplices(pump.sessionLog)).toBe(1);
+    await stop();
+  });
+
+  it('目標續行：封存期間一輪都不排（連預約都不放，不空轉）；取消封存補問一次，續行恢復', async () => {
+    // 第一次被問（人那一輪領走時）還沒封存；之後封存；最後取消封存。
+    let phase: 'first' | 'archived' | 'lifted' = 'first';
+    const { pump, state, violations, stop } = await build({
+      turns: [...CREATE_TURNS, QUIET],
+      threadId: 'archived-goal',
+      withDriver: true,
+      isArchived: () => {
+        if (phase === 'first') {
+          phase = 'archived';
+          return false;
+        }
+        return phase === 'archived';
+      },
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message']);
+    expect(state.prompts).toHaveLength(2);
+    // 沒有排了又丟的空轉。
+    expect(canceledSplices(pump.sessionLog)).toBe(0);
+
+    phase = 'lifted';
+    pump.liftArchive();
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    expect(violations).toEqual([]);
     await stop();
   });
 });

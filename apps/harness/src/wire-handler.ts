@@ -43,7 +43,9 @@ import type {
   TrajectoryTurnDetail,
   TrajectoryTurnResponse,
   ThreadHistoryResult,
+  ThreadActivityKind,
   ThreadListResponse,
+  ThreadManagementMethod,
   ThreadSearchResponse,
   ThreadSearchResult,
   UplinkMethod,
@@ -161,6 +163,12 @@ import type { ModelSelectionHost } from './model-selection-host.js';
 import type { PumpAgent, QueueAction } from './thread-pump.js';
 import { ThreadFeed } from './thread-feed.js';
 import { ThreadPump } from './thread-pump.js';
+import {
+  ThreadActiveError,
+  ThreadArchivedPinError,
+  ThreadUnknownError,
+} from './thread-organization.js';
+import type { ThreadOrganization } from './thread-organization.js';
 
 /**
  * 一個 thread 的 agent 與它的清理函式。
@@ -322,6 +330,19 @@ export interface WireHandlerOptions {
    */
   listThreads?(signal: AbortSignal): Promise<StoredThreadList>;
   /**
+   * 釘選與封存的存放處（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，`thread-organization.ts`），選配。
+   *
+   * **缺席就是沒接**（沒落盤的組裝：釘選一條重啟就消失的 thread 沒有意義）：`thread.pin`／`unpin`／`archive`／`unarchive` 回
+   * `not_supported`，`GET /threads` 不送那兩個集合，web 據這個碼把動作藏起來。給了就要同時給 {@link storedThreadKnown}。
+   */
+  readonly threadOrganization?: ThreadOrganization;
+  /**
+   * 落盤的會話裡有沒有這一條（釘選與封存的存在檢查，同 dsh 的 `sessionKnown`：活著的，或存放處裡有）。實作是 `serve.ts` 用
+   * `SessionStore.open(id, 'read')` 讀 header，並用列表的可見規則（`isListedThread`）過濾——**能釘的一定列得出來**。
+   * **儲存體讀不動要拋，不要回 `false`**：壞掉的磁碟不是「沒有這條」。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
+   */
+  storedThreadKnown?(threadId: string): Promise<boolean>;
+  /**
    * 讀一個背景子代理自己的落盤日誌（唯讀冷讀，[#871](https://github.com/DemianLi/nexus-agent/issues/871)）：`undefined`＝
    * 沒有這一份。**實作要自己確認它屬於 `threadId`**（header 的 `parentSession`），不然別條 thread 的編號讀得到。缺席＝沒開落盤，
    * 路由那時只讀得到載入著的 thread 記憶體裡的日誌。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
@@ -454,12 +475,8 @@ async function* requestBodyChunks(
   }
 }
 
-/** 契約已合、實作還沒做的 RPC method 回 `not_supported` 時的說明（#723、#633），實作落地時隨分支一起拿掉。 */
+/** 契約已合、實作還沒做的 RPC method 回 `not_supported` 時的說明（#633 的改名、#328 的子代理清單），實作落地時隨分支一起拿掉。 */
 const NOT_IMPLEMENTED = {
-  'thread.pin': '這個組裝還沒有伺服器端的釘選',
-  'thread.unpin': '這個組裝還沒有伺服器端的釘選',
-  'thread.archive': '這個組裝還沒有伺服器端的封存',
-  'thread.unarchive': '這個組裝還沒有伺服器端的封存',
   'thread.rename': '這個組裝還沒有伺服器端的改名',
   'subagent.list': '這個組裝還沒有可點名的子代理清單',
 } as const;
@@ -1005,6 +1022,10 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
             options.warn,
           ),
           options.projectionFlushMs,
+          // 封存的閘門（#633）：每次問都讀記憶體裡的集合，取消封存立刻生效。
+          options.threadOrganization === undefined
+            ? undefined
+            : () => options.threadOrganization!.isArchived(threadId),
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
@@ -1465,6 +1486,16 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       // （`send_message` 同一個限制）。
       const existing = threads.get(threadId);
       const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
+      if (method === SUBAGENT_SEND_METHOD && options.threadOrganization?.isArchived(threadId)) {
+        // 封存的會話不跑模型（#633）：人對背景子代理說話會開一輪，那是這條會話的後代在跑模型（dsh 的閘門沿 subagent 血緣往上找）。
+        return json(
+          errorResponse(
+            envelope.id,
+            SUBAGENT_CLOSED,
+            '這條會話已封存，背景子代理不收新的話；先取消封存',
+          ),
+        );
+      }
       return handleSubagentCommand(thread?.background, method, envelope.id, body);
     }
     if (isDeliverableMethod(method)) {
@@ -1478,9 +1509,14 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const thread = existing === undefined ? undefined : await existing.catch(() => undefined);
       return json(feedbackResponse(thread, envelope.id, method, body));
     }
+    if (isThreadManagementMethod(method) && method !== 'thread.rename') {
+      // 釘選與封存（#633 第一張）：**不經 `threadFor`**，同 `run.cancel`——整理的是一個 id 在兩個全域集合裡的位置，不是這條 thread
+      // 的 agent；為了封存一條還沒開起來的 thread 把它建起來（連 MCP 子行程）是反的。
+      return handleThreadOrganization(threadId, method, envelope.id, body);
+    }
     if (isThreadManagementMethod(method) || isSubagentListMethod(method)) {
-      // 釘選／封存／改名（#633）與可點名的子代理清單（#328）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把
-      // 釘選封存改名與 `@` 子代理藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
+      // 改名（#633 第二張）與可點名的子代理清單（#328）：**契約先合，實作還沒做**，一律 `not_supported`，web 據這個碼把
+      // 改名與 `@` 子代理藏起來。**不經 `threadFor`**，同 `run.cancel`：沒有東西可回，不為了回「還沒做」建一個 agent。
       // 契約在 `@nexus/wire` 的 `thread-management.ts`／`subagent-list.ts`；實作落地時把這個分支換成真的 handler。
       return json(errorResponse(envelope.id, 'not_supported', NOT_IMPLEMENTED[method]));
     }
@@ -1895,6 +1931,132 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     return json(successResponse(id, { accepted: true }));
   }
 
+  /** 這條會話存不存在：這個行程裡開過的，或落盤的。落盤那一半見 {@link WireHandlerOptions.storedThreadKnown}。 */
+  async function threadKnown(threadId: string): Promise<boolean> {
+    if (threads.has(threadId)) return true;
+    return (await options.storedThreadKnown?.(threadId)) ?? false;
+  }
+
+  /**
+   * 這條會話現在還有什麼在跑（封存沒帶 `stopActivity` 時問）。**只看建好的**（`ready`）：還在建的 thread 還沒有任何一輪；
+   * 沒建過的（重啟之後只在磁碟上的）更沒有。`turn` 含停在等人回答與排著而沒被停住的輸入（`ThreadPump.agentRunning`）。
+   */
+  function activityOf(threadId: string): ThreadActivityKind[] {
+    const thread = ready.get(threadId);
+    if (thread === undefined) return [];
+    const kinds: ThreadActivityKind[] = [];
+    if (thread.pump.agentRunning) kinds.push('turn');
+    if (thread.background?.hasRunning() === true) kinds.push('subagent');
+    return kinds;
+  }
+
+  /**
+   * 封存帶 `stopActivity`：封存已經寫下去之後，請這條會話的工作停下，**走使用者自己按停止的那幾條路**（照 dsh 的
+   * `workspace/session-stop`：「through the same cancel paths the user's own stop actions use」）——這一輪合作式中止
+   * （停在核准點的收回）、背景子代理全部中斷並暫停。不等停穩。
+   */
+  function stopActivityOf(threadId: string): void {
+    const thread = ready.get(threadId);
+    if (thread === undefined) return;
+    thread.pump.cancel();
+    thread.background?.interruptAll();
+  }
+
+  /**
+   * `thread.pin`／`unpin`／`archive`／`unarchive`（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）。回應的形狀見
+   * `@nexus/wire` 的 `thread-management.ts`：業務失敗走成功回應的 `{ ok: false, error }`，`not_supported` 只給「這台 server 沒接」。
+   */
+  async function handleThreadOrganization(
+    threadId: string,
+    method: Exclude<ThreadManagementMethod, 'thread.rename'>,
+    id: number,
+    body: unknown,
+  ): Promise<Response> {
+    const organization = options.threadOrganization;
+    if (organization === undefined) {
+      return json(
+        errorResponse(
+          id,
+          'not_supported',
+          '這台 server 沒有接釘選與封存的存放處（沒落盤：清單上 session-persistence 那一列沒掛上）',
+        ),
+      );
+    }
+    try {
+      switch (method) {
+        case 'thread.pin':
+          await organization.pin(threadId, () => threadKnown(threadId));
+          return json(
+            successResponse(id, {
+              ok: true,
+              value: { pinnedThreadIds: [...organization.pinnedThreadIds] },
+            }),
+          );
+        case 'thread.unpin':
+          await organization.unpin(threadId);
+          return json(
+            successResponse(id, {
+              ok: true,
+              value: { pinnedThreadIds: [...organization.pinnedThreadIds] },
+            }),
+          );
+        case 'thread.archive': {
+          const params = (body as { params?: unknown }).params;
+          const stopActivity =
+            typeof params === 'object' && params !== null
+              ? (params as { stopActivity?: unknown }).stopActivity
+              : undefined;
+          if (stopActivity !== undefined && typeof stopActivity !== 'boolean') {
+            return json(
+              errorResponse(id, 'invalid_argument', 'thread.archive 的 stopActivity 要是布林'),
+            );
+          }
+          await organization.archive(threadId, {
+            ...(stopActivity === true && { stopActivity: true }),
+            known: () => threadKnown(threadId),
+            activity: () => activityOf(threadId),
+            stop: () => stopActivityOf(threadId),
+            warn: (message) => options.warn?.(message),
+          });
+          return json(
+            successResponse(id, {
+              ok: true,
+              value: { archivedThreadIds: [...organization.archivedThreadIds] },
+            }),
+          );
+        }
+        case 'thread.unarchive':
+          await organization.unarchive(threadId);
+          // 封存期間不排的目標續行補問一次；這條 thread 沒建過就沒有東西要補。
+          ready.get(threadId)?.pump.liftArchive();
+          return json(
+            successResponse(id, {
+              ok: true,
+              value: { archivedThreadIds: [...organization.archivedThreadIds] },
+            }),
+          );
+      }
+    } catch (error) {
+      if (error instanceof ThreadUnknownError) {
+        return json(successResponse(id, { ok: false, error: { code: 'thread_not_found' } }));
+      }
+      if (error instanceof ThreadArchivedPinError) {
+        return json(successResponse(id, { ok: false, error: { code: 'thread_archived' } }));
+      }
+      if (error instanceof ThreadActiveError) {
+        return json(
+          successResponse(id, {
+            ok: false,
+            error: { code: 'thread_active', activity: [...error.activity] },
+          }),
+        );
+      }
+      // 寫不進去、儲存體讀不動：這條線收不了，不是業務失敗。
+      const reason = error instanceof Error ? error.message : String(error);
+      return json(errorResponse(id, 'unknown_error', `釘選與封存沒做成：${reason}`));
+    }
+  }
+
   /**
    * `GET /threads`。**不經 `threadFor`**：一條 thread 都不為列表建（同 `run.cancel` 的理由，而且這裡更嚴——
    * 列的正是還沒開起來的那些）。讀不動整個目錄是協定層的錯，同 `threadOrError` 的分寸。
@@ -1916,9 +2078,15 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       const reason = error instanceof Error ? error.message : String(error);
       return json(errorResponse(null, 'unknown_error', `以前的 thread 列不出來：${reason}`));
     }
+    const organization = options.threadOrganization;
     const response: ThreadListResponse = {
       type: 'success',
       result: {
+        // 釘選與封存兩個集合跟著列表走（#633）：開頁面就拿得到，不必為了畫側欄先打五支 RPC。沒接整理檔的 server 不送。
+        ...(organization !== undefined && {
+          pinnedThreadIds: [...organization.pinnedThreadIds],
+          archivedThreadIds: [...organization.archivedThreadIds],
+        }),
         unreadable: stored.unreadable,
         items: stored.items.map((item) => ({
           ...item,

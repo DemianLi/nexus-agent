@@ -1067,6 +1067,8 @@ export class ThreadPump {
   readonly #titleLimits: ThreadTitleLimits;
   /** 這台 server 講話的地方，見建構子的 `warn`。 */
   readonly #warn: ((message: string) => void) | undefined;
+  /** 封存的閘門（#633）：每次要開一輪、要排目標續行之前問。見 {@link ThreadPump.#runQueued}。 */
+  readonly #isArchived: (() => boolean) | undefined;
   readonly #subscribers = new Set<Subscriber>();
   readonly #sessions: SessionRegistry;
   /**
@@ -1278,6 +1280,8 @@ export class ThreadPump {
    * @param projectionChildSeeds - 上一個行程留下的子代理日誌（#1028），見 `projection-children.ts`。
    * @param projectionFlushMs - 插件投影 frame 的合併視窗毫秒（`projection-flush` 那一列，#1071）。值由 `serve.ts` 在起動期解出來、
    *   經 `createWireHandler` 傳進來。**省略即合併器的預設 100**，同 `toolText`。
+   * @param isArchived - 這條 thread 封存了沒有（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，`thread-organization.ts`）。
+   *   **省略即沒有封存這回事**（沒接整理檔的組裝）。封存的 thread 不開新的一輪，見 {@link ThreadPump.#runQueued}。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -1293,8 +1297,10 @@ export class ThreadPump {
     projections: readonly ProjectionUnit[] = [],
     projectionChildSeeds?: ProjectionChildren,
     projectionFlushMs?: number,
+    isArchived?: () => boolean,
   ) {
     this.#agent = agent;
+    this.#isArchived = isArchived;
     this.#projectionOut = new ProjectionCoalescer(
       (data) => this.#presentCustom(data),
       projectionFlushMs,
@@ -1775,6 +1781,14 @@ export class ThreadPump {
   }
 
   /**
+   * 取消封存了（[#633](https://github.com/DemianLi/nexus-agent/issues/633)）：封存期間不排的目標續行補問一次。
+   * 排程器照常看日誌決定要不要續（目標不是 active、授權不在就什麼都不排），所以多問無害。
+   */
+  liftArchive(): void {
+    this.#scheduleGoalDrive();
+  }
+
+  /**
    * 排一件事到這條 thread 的序列上：一輪 run，或一次收回（{@link ThreadPump.cancel}）。
    *
    * 收回走同一條序列，是因為它也要讀寫 checkpoint、也要寫一輪日誌——跟一輪 run 並行的話，
@@ -2020,6 +2034,9 @@ export class ThreadPump {
   #driveGoalRound(): void {
     const driver = this.#driver;
     if (driver === undefined || this.#closed) return;
+    // 封存的會話不排續行（#633）：排了也會在領走時被丟掉，丟掉之後排程器又問一次——空轉。取消封存時由
+    // {@link ThreadPump.liftArchive} 補問。
+    if (this.#isArchived?.() === true) return;
     // **有人在排隊就讓行**，而且送出去之前還會再問一次（下面那一句）。
     //
     // **這兩道今天量不出行為差異，而且那件事要講清楚**：`#queue` 已經把所有輸入序列化
@@ -2181,6 +2198,23 @@ export class ThreadPump {
     const item = this.#inbox['next-turn'][0];
     if (item === undefined || item.id !== id) {
       throw new Error(`送出佇列與排程走散了：輪到 "${id}"，佇列第一件是 "${item?.id ?? '（空）'}"`);
+    }
+    if (this.#isArchived?.() === true) {
+      // **封存的會話不跑模型**（#633，照 dsh 的 `ArchivedSessionGate`：`agent/pre-step` 回 `reject`，這一輪以 `blocked` 收、沒有請求）。
+      // 所有能喚醒這條 thread 開新一輪的輸入——人送的、佇列裡排著的、目標續行的預約、子代理結算與寫來的話——都經過這一支，
+      // 所以這一處就是整條 thread 的閘門；`#runOnce` 的另一個入口是答覆核准（`resume`），封存時不會有人掛著等答。
+      //
+      // **偏離（登記）**：dsh 開一輪、以 `turn/end {reason:{kind:'blocked'}}` 收，被領走的訊息作廢。我們沿用上面目標預約失效那一支的
+      // 做法——**丟掉這一件、不開輪**（`inbox/spliced` 帶 `canceled`）：`TurnEndReason` 沒有 `blocked`，新增一個成員要動的讀者
+      // （軌跡、用量、歷史、goal 續行、web）比這張卡的範圍大，而被擋下的輸入落得到的位置——日誌上那顆 `canceled`——兩邊相同。
+      this.#spliceInbox({
+        target: 'next-turn',
+        start: 0,
+        removedCount: 1,
+        inserted: [],
+        outcome: 'canceled',
+      });
+      return;
     }
     if (item.source.kind === 'goal' && !this.#goalReservationValid(item)) {
       // 預約失效：丟掉它、不開這一輪（dsh pre-step 的 `reject`）。這一件結束之後 `#next` 的收尾會再問一次排程器，
