@@ -1668,6 +1668,13 @@ export class ThreadPump {
     //
     // 說話與續行**不碰**掛著的中斷：它們停在隊裡等（#629）。以前這裡整個清掉當止血，那等於
     // 讓繞過上行那道擋的呼叫端把中斷靜靜丟掉——正是這張卡要修的事換一扇門進來。
+    if (input.kind === 'resume' && this.#isArchived?.() === true) {
+      // 封存的會話不跑模型（#633），答覆核准也一樣：`#runOnce` 的 resume 會接著叫模型。封存帶 `stopActivity` 時，封存寫下去到
+      // `cancel()` 落地之間有一小段，停在核准點的那一輪可能剛好在這段裡收到人的答覆——把答覆當成收回：掛著的核准全部撤掉、
+      // 寫成一輪帶 aborted 的收尾（跟人按停止一樣），不去叫模型。
+      this.cancel();
+      return Promise.resolve();
+    }
     if (input.kind === 'resume') {
       const elicitation = this.#pending.get(input.interruptId)?.elicitation;
       if (elicitation !== undefined) {
@@ -2202,7 +2209,11 @@ export class ThreadPump {
     if (this.#isArchived?.() === true) {
       // **封存的會話不跑模型**（#633，照 dsh 的 `ArchivedSessionGate`：`agent/pre-step` 回 `reject`，這一輪以 `blocked` 收、沒有請求）。
       // 所有能喚醒這條 thread 開新一輪的輸入——人送的、佇列裡排著的、目標續行的預約、子代理結算與寫來的話——都經過這一支，
-      // 所以這一處就是整條 thread 的閘門；`#runOnce` 的另一個入口是答覆核准（`resume`），封存時不會有人掛著等答。
+      // 所以這一處就是整條 thread 的閘門；`#runOnce` 的另一個入口是答覆核准（`resume`），在 {@link ThreadPump.submit} 收下的當下就擋
+      // （改成收回）。
+      //
+      // **`#driveGoalRound` 開頭的那道閘門是承重的**：這一支丟件**不累加** `#goalDropStreak`，所以少了那道閘門，「預約→領走即丟→
+      // 收尾再問排程器→再預約」會不讓出事件迴圈地空轉，`GOAL_DROP_LIMIT` 那張安全網接不住它。
       //
       // **偏離（登記）**：dsh 開一輪、以 `turn/end {reason:{kind:'blocked'}}` 收，被領走的訊息作廢。我們沿用上面目標預約失效那一支的
       // 做法——**丟掉這一件、不開輪**（`inbox/spliced` 帶 `canceled`）：`TurnEndReason` 沒有 `blocked`，新增一個成員要動的讀者

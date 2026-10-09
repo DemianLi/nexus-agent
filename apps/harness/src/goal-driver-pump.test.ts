@@ -1009,4 +1009,38 @@ describe('封存的會話（#633）', () => {
     expect(violations).toEqual([]);
     await stop();
   });
+
+  it('停在核准點的那一輪收到答覆時已經封存：不叫模型，答覆當成收回（掛著的核准撤掉、一輪帶 aborted 的收尾）', async () => {
+    let archived = false;
+    const { pump, state, stop } = await build({
+      turns: [
+        { content: '', toolCalls: [{ name: 'take_note', args: { text: '先記一下' } }] },
+        { content: '不該被讀到。' },
+      ],
+      threadId: 'archived-resume',
+      withDriver: false,
+      gated: true,
+      isArchived: () => archived,
+    });
+    await pump.submit({ kind: 'message', text: '記一筆' });
+    await settle(pump);
+    const pending = pump.pendings[0];
+    expect(pending).toBeDefined();
+    expect(state.prompts).toHaveLength(1);
+
+    // 封存寫下去了，但停止還沒落地：人的核准答覆這時到。
+    archived = true;
+    await pump.submit({
+      kind: 'resume',
+      interruptId: pending?.interruptId ?? '',
+      response: [{ type: 'approve', args: { text: '一筆' } }],
+    });
+    await settle(pump);
+    expect(state.prompts).toHaveLength(1);
+    expect(pump.pendings).toHaveLength(0);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'resume']);
+    const ends = pump.sessionLog.events.filter((event) => event.type === 'turn/end');
+    expect((ends.at(-1)?.data as { reason: { kind: string } }).reason.kind).toBe('aborted');
+    await stop();
+  });
 });

@@ -49,13 +49,31 @@ async function driveTurn(server: RunningServe, threadId: string, prompt: string)
   await events.return?.(undefined);
 }
 
-async function turnStarts(root: string, threadId: string): Promise<number> {
+async function readEvents(root: string, threadId: string): Promise<readonly SessionEvent[]> {
   const body = await readFile(join(root, projectKey(process.cwd()), `${threadId}.jsonl`), 'utf8');
   return body
     .split('\n')
     .filter((line) => line.length > 0)
-    .map((line) => JSON.parse(line) as SessionEvent)
-    .filter((event) => event.type === 'turn/start').length;
+    .map((line) => JSON.parse(line) as SessionEvent);
+}
+
+async function canceledSplices(root: string, threadId: string): Promise<number> {
+  return (await readEvents(root, threadId)).filter(
+    (event) =>
+      event.type === 'inbox/spliced' && (event.data as { outcome?: string }).outcome === 'canceled',
+  ).length;
+}
+
+async function until(predicate: () => Promise<boolean>, ms = 5000): Promise<void> {
+  const start = Date.now();
+  while (!(await predicate())) {
+    if (Date.now() - start > ms) throw new Error('等太久了');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+async function turnStarts(root: string, threadId: string): Promise<number> {
+  return (await readEvents(root, threadId)).filter((event) => event.type === 'turn/start').length;
 }
 
 async function sets(server: RunningServe) {
@@ -156,7 +174,8 @@ describe('serve 上的釘選與封存', () => {
     const client = await serveClient(second);
     const events = await client.openEvents('alpha');
     await client.runStart('alpha', '封存之後的話');
-    await new Promise((resolve) => setTimeout(resolve, 300));
+    // 正向訊號：那句話被丟掉並記成 canceled——等到它出現，「沒有新的 turn/start」才是丟掉了，而不是還沒輪到。
+    await until(async () => (await canceledSplices(root, 'alpha')) === 1);
     await events.return?.(undefined);
     await stop(second);
     expect(await turnStarts(root, 'alpha')).toBe(1);

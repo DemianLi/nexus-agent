@@ -16,7 +16,8 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
-import type { PluginEntry, SessionRegistry } from '@nexus/core';
+import type { PluginEntry, SessionLog, SessionRegistry } from '@nexus/core';
+import { createGoalPlugin, GOALS_SERVICE } from '@nexus/plugin-goal';
 import { createWireClient, SUBAGENT_CLOSED } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -26,6 +27,7 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 import { emptyCommandPoint, loopbackRequest, TEST_BROWSER_AUTH } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
+import type { GoalDriverPort } from './goal-driver.js';
 import { composeAttachSessions } from './session-attach.js';
 import { THREAD_ORGANIZATION_FILE, ThreadOrganization } from './thread-organization.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -295,6 +297,7 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
   async function assemble(
     rootTurns: readonly ScriptedTurn[],
     workerTurns?: readonly ScriptedTurn[],
+    options: { readonly withGoal?: boolean } = {},
   ) {
     let release: () => void = () => undefined;
     const gate = new Promise<void>((resolve) => {
@@ -331,10 +334,16 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
     const built = await createNexusAgent({
       model: rootModel,
       checkpointer: new MemorySaver(),
-      plugins: [plugin],
+      plugins: [
+        plugin,
+        ...(options.withGoal === true
+          ? [createGoalPlugin({ now: () => 100, newGoalId: () => 'goal-1' })]
+          : []),
+      ],
       backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
       backgroundSubagents: {},
     });
+    const goals = options.withGoal === true ? built.services.use(GOALS_SERVICE) : undefined;
     const threadOrganization = await ThreadOrganization.open(join(dir, 'home'));
     let sessions: SessionRegistry | undefined;
     const { client, raw } = rig({
@@ -348,11 +357,22 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
           sessions = registry;
           return composeAttachSessions(built)(registry, backgroundPort);
         },
+        ...(goals !== undefined && {
+          goalDriver: (log: () => SessionLog): GoalDriverPort => ({
+            goal: () => goals.serviceFor(log())?.get(),
+            block: (ref, reason) => goals.serviceFor(log())?.block(ref, reason),
+            disarm: () => void goals.serviceFor(log())?.disarm(),
+            pause: (ref) => void goals.serviceFor(log())?.pause(ref),
+            flush: () => Promise.resolve(),
+            warn: () => undefined,
+          }),
+        }),
       }),
     });
     return {
       client,
       raw,
+      goals,
       release,
       entered,
       rootModel,
@@ -425,6 +445,9 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
       reason: { kind: 'aborted', cause: { kind: 'parent' } },
     });
     expect(rigged.workerModel.prompts).toHaveLength(1);
+    // 子代理收尾會通知主對話（結算喚醒）：封存的會話不為它開輪，根模型仍只被叫過兩次。
+    await settle(250);
+    expect(rigged.rootModel.prompts).toHaveLength(2);
   }, 20000);
 
   it('閒著的 thread 直接封存；封存之後送話：不開輪、模型一次都不再被叫；取消封存之後恢復', async () => {
@@ -468,5 +491,22 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
       error: SUBAGENT_CLOSED,
     });
     rigged.release();
+  }, 20000);
+
+  it('目標續行：封存期間不排；經 wire 取消封存之後第 1 輪自己開始（handler 補問排程器）', async () => {
+    const rigged = await assemble([{ content: '續行一輪。' }], undefined, { withGoal: true });
+    await rigged.client.slashList('t1'); // 建出 thread
+    await until(() => rigged.sessions() !== undefined);
+    expect(await rigged.client.threadArchive('t1')).toMatchObject({ result: { ok: true } });
+    const root = rigged.sessions().root;
+    rigged.goals!.serviceFor(root)?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    await settle(250);
+    expect(rigged.rootModel.prompts).toHaveLength(0);
+    expect(root.events.filter((event) => event.type === 'turn/start')).toHaveLength(0);
+
+    expect(await rigged.client.threadUnarchive('t1')).toMatchObject({ result: { ok: true } });
+    await until(() => rigged.rootModel.prompts.length === 1);
+    const starts = root.events.filter((event) => event.type === 'turn/start');
+    expect(starts.map((event) => (event.data as { kind: string }).kind)).toEqual(['goal']);
   }, 20000);
 });
