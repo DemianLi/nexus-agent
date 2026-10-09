@@ -39,6 +39,7 @@ import { ReferencedText } from '@/components/session-reference';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { ChatBubble } from '@/components/chat-bubble';
 import { ChangesCard } from '@/components/changes/card';
+import { CopyButton } from '@/components/copy-button';
 import { CompactionRow } from '@/components/compaction-row';
 import { DeliverablesCard } from '@/components/deliverable/card';
 import { EarlierPager, earlierLoadedNotice, useEarlierAutoLoad } from '@/components/earlier-pager';
@@ -170,6 +171,22 @@ function RatingButtons({
   );
 }
 
+/** 一則回覆的「複製回覆」（#1305）：複製的是 markdown 原文，貼進信件或文件時格式還在。 */
+function ReplyCopyButton({ text }: { text: string }) {
+  return (
+    <CopyButton
+      text={text}
+      label="複製回覆"
+      copied={{ title: '已複製回覆' }}
+      failed={{
+        title: '沒辦法複製回覆',
+        description: '瀏覽器不讓這個頁面寫剪貼簿，請手動選取文字。',
+      }}
+      className="size-7"
+    />
+  );
+}
+
 /** 決定紀錄（列 22）：置中的一顆 chip，不是對話的一則。 */
 function Marker({ children, testId }: { children: string; testId: string }) {
   return (
@@ -296,6 +313,9 @@ export function Entry({
   // 就是模型在動的訊號，不必再疊一顆帶游標的空泡泡。沒有推理的照舊。
   // 撞到輸出上限而沒字的那則（只在寫工具參數時被切斷）只畫底下那行提示，不畫空泡泡（#608）。
   const bubble = hasText || (reasoning === undefined && entry.maxTokens !== true);
+  // 複製鈕講完才有（#1305）：串流中不畫，不是畫成透明——鍵盤會按得到。跟評分脫鉤，沒有評分外掛也在。
+  const copyable = hasText && !entry.streaming;
+  const ratable = feedback !== undefined && isRatable(entry);
   return (
     <Message
       align="start"
@@ -332,8 +352,11 @@ export function Entry({
           <MessageFooter className="px-0">{MAX_TOKENS_NOTICE}</MessageFooter>
         )}
         {entry.error !== undefined && <p className="text-destructive text-tip">{entry.error}</p>}
-        {feedback !== undefined && isRatable(entry) && (
-          <RatingButtons messageId={entry.messageId} feedback={feedback} />
+        {(copyable || ratable) && (
+          <div className="flex items-center gap-1">
+            {copyable && <ReplyCopyButton text={entry.text} />}
+            {ratable && <RatingButtons messageId={entry.messageId} feedback={feedback} />}
+          </div>
         )}
       </MessageContent>
     </Message>

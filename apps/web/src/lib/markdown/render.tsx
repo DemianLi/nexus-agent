@@ -139,7 +139,9 @@ function renderCode(node: Md.Code, key: Key, context: MarkdownRenderContext): Re
     // 講完時 ```math fence 畫成區塊 TeX（同 dsh）；dsh 取字時看得到程式碼區塊結尾的換行，這裡補上。
     return renderDisplayMath(`${node.value}\n`, key);
   }
-  return <CodeBlock key={key} code={node.value} lang={lang} streaming={context.streaming} />;
+  return (
+    <CodeBlock key={key} code={node.value} lang={lang} streaming={context.streaming} copyable />
+  );
 }
 
 function renderNode(node: Md.RootContent, key: Key, context: MarkdownRenderContext): ReactNode {
