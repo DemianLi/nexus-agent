@@ -78,6 +78,65 @@ describe('emit：同步、不等、回傳值丟掉', () => {
   });
 });
 
+describe('observe：隔離的 emit（#1248），給生產者不能被觀察者拖下水的事件', () => {
+  it('同步拋錯、promise 拒絕都交給 onError，其餘監聽者照跑，observe 自己不拋', async () => {
+    const bus = new EventBus();
+    const seen: string[] = [];
+    const errors: string[] = [];
+    bus.on('test/emit', () => {
+      throw new Error('同步壞');
+    });
+    bus.on('test/emit', () => Promise.reject(new Error('非同步壞')));
+    bus.on('test/emit', (label) => seen.push(label));
+    expect(() =>
+      bus.observe('test/emit', (error) => errors.push((error as Error).message), 'x'),
+    ).not.toThrow();
+    await new Promise((resolve) => setImmediate(resolve));
+    expect(seen).toEqual(['x']);
+    expect(errors).toEqual(['同步壞', '非同步壞']);
+  });
+
+  it('onError 帶出是哪一位壞了（origin、prepend）；onError 自己拋也被吞掉', () => {
+    const bus = new EventBus();
+    const origin = { plugin: 'p', index: 0 } as never;
+    bus.on(
+      'test/emit',
+      () => {
+        throw new Error('壞');
+      },
+      { prepend: true },
+      origin,
+    );
+    const infos: unknown[] = [];
+    expect(() =>
+      bus.observe(
+        'test/emit',
+        (_error, listener) => {
+          infos.push(listener);
+          throw new Error('回報也壞');
+        },
+        'x',
+      ),
+    ).not.toThrow();
+    expect(infos).toEqual([{ name: 'test/emit', origin, prepend: true }]);
+  });
+
+  it('派發當下取快照：途中新掛上的不參與這一次', () => {
+    const bus = new EventBus();
+    const seen: string[] = [];
+    bus.on('test/emit', () => {
+      bus.on('test/emit', () => seen.push('新的'));
+      seen.push('舊的');
+    });
+    bus.observe('test/emit', () => undefined, 'x');
+    expect(seen).toEqual(['舊的']);
+  });
+
+  it('沒有監聽者就什麼都不做', () => {
+    expect(() => new EventBus().observe('test/emit', () => undefined, 'x')).not.toThrow();
+  });
+});
+
 describe('serial：依序 await，遇到 bail 值就停', () => {
   it('回傳第一個 bail 值，後面的不跑', async () => {
     const bus = new EventBus();

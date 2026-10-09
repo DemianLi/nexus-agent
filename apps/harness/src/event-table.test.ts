@@ -2,15 +2,24 @@
  * 事件表的閘門（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)，S0）：每個宣告在 `Events` 上的事件要有 JSDoc、
  * 標 `@mode emit | serial | waterfall`、每個參數有 `@param`、waterfall 的最後一個參數叫 `next`。照 dsh 的規矩。
  *
- * **S0 的事件表是空的**，所以對真實的樹來說這條閘門今天是空轉的——空轉的閘門等於沒有，所以它有一組**正向對照**：
- * 拿合成的原始碼餵同一個掃描器，每一種違規各一條，確認它真的報得出來。S1 加第一個事件的那天，真實的樹那條才開始有東西可驗。
+ * S0 的事件表是空的，那時這條閘門對真實的樹是空轉的，所以它有一組**正向對照**：拿合成的原始碼餵同一個掃描器，每一種違規
+ * 各一條，確認它真的報得出來。S1a（[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）落了第一批事件之後，真實的樹那條開始有東西可驗；
+ * 正向對照留著，因為「閘門對著現在的樹是綠的」不能證明它報得出違規。
+ *
+ * **每個事件跟它的第一個生產者同一張 PR 落地**（S0 的規矩）：沒有生產者的宣告是沒人送的死事件。最後一條閘門就是這條——
+ * 事件表上的每個名字，產品碼裡都要有一處 `emit`／`serial`／`waterfall`／`observe` 以字串字面量派發它。
  */
 
 import { fileURLToPath } from 'node:url';
 
 import { describe, expect, it } from 'vitest';
 
-import { scanEventTable, scanEventTableTree } from './event-table-scan.js';
+import {
+  scanEventProducers,
+  scanEventProducersTree,
+  scanEventTable,
+  scanEventTableTree,
+} from './event-table-scan.js';
 
 const REPO_ROOT = fileURLToPath(new URL('../../../', import.meta.url));
 
@@ -78,7 +87,42 @@ describe('真實的樹', () => {
     ).toEqual([]);
   });
 
-  it('S0：事件表是空的（S1 的第一個事件落地時，這一條跟著改成它的名字）', () => {
-    expect(scanEventTableTree(REPO_ROOT).map((event) => event.name)).toEqual([]);
+  it('S1a：事件表上正好是工具四事件（再多一個，要在這裡改名字並說它的生產者是誰）', () => {
+    expect(scanEventTableTree(REPO_ROOT).map((event) => event.name)).toEqual([
+      'tools/pre-execute',
+      'tools/execute',
+      'tools/post-execute',
+      'tools/result',
+    ]);
+  });
+
+  it('每個事件都有生產者：事件表上的名字，產品碼裡有一處以字串字面量派發它', () => {
+    const producers = scanEventProducersTree(REPO_ROOT);
+    const dead = scanEventTableTree(REPO_ROOT)
+      .map((event) => event.name)
+      .filter((name) => (producers.get(name) ?? []).length === 0);
+    expect(dead).toEqual([]);
+  });
+
+  it('工具事件的派發模式對得上宣告：pre／execute／post 是 waterfall，result 是 emit 類（observe）', () => {
+    const modes = new Map(scanEventTableTree(REPO_ROOT).map((event) => [event.name, event.mode]));
+    expect(modes.get('tools/pre-execute')).toBe('waterfall');
+    expect(modes.get('tools/execute')).toBe('waterfall');
+    expect(modes.get('tools/post-execute')).toBe('waterfall');
+    expect(modes.get('tools/result')).toBe('emit');
+  });
+});
+
+describe('生產者掃描器本身（正向對照）', () => {
+  it('四個派發方法、字串字面量的事件名都認得；變數當事件名不算', () => {
+    const text = `
+      bus.emit('a/one', 1);
+      bus.serial('a/two');
+      await events.waterfall('a/three', exec, () => x);
+      events.observe('a/four', onError, exec);
+      dispatch.emit(name, 1);
+      other.send('a/five');
+    `;
+    expect(scanEventProducers(text)).toEqual(['a/one', 'a/two', 'a/three', 'a/four']);
   });
 });

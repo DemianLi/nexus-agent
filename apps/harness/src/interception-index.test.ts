@@ -122,9 +122,13 @@ const UNMEASURED = '（未量）';
 /**
  * 「這一格現在**沒有**由任何事件佔住」——見 {@link InterceptionRow.eventOccupant}。
  *
- * 事件匯流排在 S0 落地（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)），但事件表是空的、沒有生產者，所以
- * 九格都還由 middleware 佔著。**這是 [#190](https://github.com/DemianLi/nexus-agent/issues/190) 偏離登記「推翻」的那一刀**：
- * 登記的前提（基礎建設表達不出事件匯流排）不再成立，這份索引從此多一個軸，S1 起逐格往下填。
+ * 事件匯流排在 S0 落地（[#1217](https://github.com/DemianLi/nexus-agent/issues/1217)）。**這是 [#190](https://github.com/DemianLi/nexus-agent/issues/190)
+ * 偏離登記「推翻」的那一刀**：登記的前提（基礎建設表達不出事件匯流排）不再成立，這份索引從此多一個軸，逐格往下填。
+ *
+ * S1a（[#1248](https://github.com/DemianLi/nexus-agent/issues/1248)）落了工具四事件，**填的只有派發點真的在這一格的**：
+ * 第 6 格（`tools/execute`）與第 7 格（`tools/post-execute`）。**第 4 格（`tools/pre-execute`）仍是「尚無」**——事件宣告了、
+ * 也有生產者，但這一格的佔用者是核准（`approval.ts`），它還在自己的 middleware 與 `approvals` 註冊點上、沒有搬（demian 2026-10-09），
+ * 填了就是說核准已經在匯流排上。其餘各格沒有生產者，一律「尚無」。
  */
 const NO_EVENT = '（尚無）';
 
@@ -217,6 +221,8 @@ const INDEX: readonly InterceptionRow[] = [
     permission: 'waterfall，allow／deny／ask',
     occupants: ['packages/nexus-core/src/approval.ts'],
     permissionDelta:
+      '**事件 `tools/pre-execute` 已宣告也有生產者（#1248，在這一格的閘門外側），但核准沒有搬上去，所以這一列的事件佔用仍是「尚無」**：' +
+      '匯流排上的 `PreToolDecision` 沒有 `ask`，監聽者只能 allow／deny；問人仍走 `approvals` 註冊點。' +
       '**三格決策詞彙對得上，`ask` 的去向對不上。** dsh 的 `ask` 送進一條**可組合的應答者' +
       ' waterfall**（`approval/request`，' +
       '`references/deepseek-harness/packages/interaction/user-approval/src/types.ts:85`）：回一個' +
@@ -248,7 +254,7 @@ const INDEX: readonly InterceptionRow[] = [
   },
   {
     cell: 6,
-    eventOccupant: NO_EVENT,
+    eventOccupant: 'tools/execute',
     moment: 'tools/execute',
     permission: '環繞 waterfall（超時／重試／指標）',
     occupants: [
@@ -275,7 +281,7 @@ const INDEX: readonly InterceptionRow[] = [
   },
   {
     cell: 7,
-    eventOccupant: NO_EVENT,
+    eventOccupant: 'tools/post-execute',
     moment: 'tools/post-execute',
     permission: '檢查／變換 waterfall，可 `additionalContexts`',
     occupants: ['packages/nexus-core/src/output-schema.ts'],
@@ -422,10 +428,16 @@ describe('攔截時刻索引', () => {
     expect(new Set(INDEX.map((row) => row.moment)).size).toBe(EXPECTED_ROWS);
   });
 
-  it('事件佔用：填的不是「尚無」就必須是事件表上真的有的名字；S0 事件表是空的，所以九格都還沒有', () => {
+  it('事件佔用：填的不是「尚無」就必須是事件表上真的有的名字；S1a 只填派發點真的在的第 6、7 格，核准那格（4）仍是「尚無」', () => {
     const declared = new Set(scanEventTableTree(REPO_ROOT).map((event) => event.name));
     expect(rowsNamingUndeclaredEvents(INDEX, declared)).toEqual([]);
-    expect(INDEX.map((row) => row.eventOccupant)).toEqual(INDEX.map(() => NO_EVENT));
+    expect(Object.fromEntries(INDEX.map((row) => [row.cell, row.eventOccupant]))).toEqual({
+      2: NO_EVENT,
+      3: NO_EVENT,
+      4: NO_EVENT,
+      6: 'tools/execute',
+      7: 'tools/post-execute',
+    });
     // 正向對照：一個編造的名字確實被這條規矩擋下來，不是因為空表而永遠綠。
     const invented = { ...INDEX[0]!, eventOccupant: 'x/not-declared' };
     expect(rowsNamingUndeclaredEvents([invented], declared)).toEqual([invented.cell]);

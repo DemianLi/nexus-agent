@@ -739,6 +739,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         ? undefined
         : createToolResultStash(options.toolResultStash);
     const params = foldRegistry(registry, {
+      // 工具事件（#1248）：宿主持有的派發面。沒有監聽者時三顆生產者與圍堵的派發都是直通。
+      events: registry.dispatch,
       defaultBackend: withConversationHistory(
         // 墊底的虛擬 FS 讀到二進位檔照 dsh 拒絕（#642），路由那兩格同一種。
         withToolResultStash(

@@ -187,6 +187,8 @@ describe('同名取代是唯一的縫', () => {
         'nexusToolFailureContainment',
         // 中止這一輪的外層那顆（#276）：緊貼圍堵，在起訖紀錄器外面。
         'nexusTurnCancel',
+        // `tools/pre-execute` 的生產者（#1248）：緊貼核准閘門外側，被拒的呼叫不會先跳核准卡。
+        'nexusToolPreExecute',
         'nexusApprovalGate',
         'nexusFileObservationPolicy',
         'nexusRepeatToolReminder',
@@ -196,6 +198,8 @@ describe('同名取代是唯一的縫', () => {
         'nexusModelUsage',
         // 耐久檢查點（#599）：緊貼用量記錄器內側。
         'nexusSessionCheckpoint',
+        // `tools/post-execute` 的生產者（#1248）：在輸出校驗等貼著工具本體的那幾顆外側、plugin middleware 內側。
+        'nexusToolPostExecute',
         // 輸出 schema 校驗（#252）：fold 打底，每一個 plugin middleware 的內側。
         'nexusToolOutputSchema',
         // 檔案工具的失敗標成錯誤（#293）：有 backend 就有，貼著工具本體。
@@ -205,6 +209,8 @@ describe('同名取代是唯一的縫', () => {
         // 解不開的工具參數（#281）：`wrapToolCall` 在核准與每個 plugin 的內側、改寫在每個
         // `wrapModelCall` 的內側，所以排在 plugin middleware 之後、綁訊號那顆之前。
         'nexusInvalidToolArgs',
+        // `tools/execute` 的生產者（#1248）：`wrapToolCall` 的最內層，環繞工具本體。
+        'nexusToolExecute',
         // 撞到輸出上限（#433）：貼在修補的內側，清掉被切斷的回覆裡的工具呼叫。
         'nexusMaxTokens',
         // 請求快照（#1020）：模型呼叫上的 callback，緊貼綁訊號那顆外面（兩顆併成同一層綁定，見 `model-binding.ts`）。

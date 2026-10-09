@@ -125,13 +125,7 @@ function walk(dir: string, out: string[]): void {
   }
 }
 
-/**
- * 掃整棵樹的產品碼：`packages/*\/src` 與 `apps/*\/src`。
- *
- * @param root - repo 根。
- * @returns 所有宣告在事件表上的成員。
- */
-export function scanEventTableTree(root: string): DeclaredEvent[] {
+function productFiles(root: string): string[] {
   const files: string[] = [];
   for (const group of ['packages', 'apps']) {
     for (const pkg of readdirSync(join(root, group), { withFileTypes: true })) {
@@ -144,5 +138,62 @@ export function scanEventTableTree(root: string): DeclaredEvent[] {
       }
     }
   }
-  return files.flatMap((path) => scanEventTable(relative(root, path), readFileSync(path, 'utf8')));
+  return files;
+}
+
+/**
+ * 掃整棵樹的產品碼：`packages/*\/src` 與 `apps/*\/src`。
+ *
+ * @param root - repo 根。
+ * @returns 所有宣告在事件表上的成員。
+ */
+export function scanEventTableTree(root: string): DeclaredEvent[] {
+  return productFiles(root).flatMap((path) =>
+    scanEventTable(relative(root, path), readFileSync(path, 'utf8')),
+  );
+}
+
+/** 派發面的四個方法；第一個參數是事件名。 */
+const DISPATCH_METHODS = new Set(['emit', 'serial', 'waterfall', 'observe']);
+
+/**
+ * 掃一份原始碼裡的**生產者**：`<任何>.emit|serial|waterfall|observe('事件名', …)` 的呼叫。
+ *
+ * 看語法不看型別，所以只認事件名是**字串字面量**的呼叫。`observe` 的第一個參數也是事件名（第二個才是 `onError`）。
+ *
+ * @param text - 原始碼。
+ * @returns 派發到的事件名（可重複）。
+ */
+export function scanEventProducers(text: string): string[] {
+  const sf = ts.createSourceFile('probe.ts', text, ts.ScriptTarget.Latest, true);
+  const found: string[] = [];
+  const visit = (node: ts.Node): void => {
+    if (
+      ts.isCallExpression(node) &&
+      ts.isPropertyAccessExpression(node.expression) &&
+      DISPATCH_METHODS.has(node.expression.name.text)
+    ) {
+      const first = node.arguments[0];
+      if (first !== undefined && ts.isStringLiteralLike(first)) found.push(first.text);
+    }
+    ts.forEachChild(node, visit);
+  };
+  visit(sf);
+  return found;
+}
+
+/**
+ * 整棵樹產品碼裡每個事件名有哪些檔案派發它（排除測試）。
+ *
+ * @param root - repo 根。
+ * @returns 事件名 → 派發它的檔案（repo 相對路徑）。
+ */
+export function scanEventProducersTree(root: string): Map<string, string[]> {
+  const producers = new Map<string, string[]>();
+  for (const path of productFiles(root)) {
+    for (const name of new Set(scanEventProducers(readFileSync(path, 'utf8')))) {
+      producers.set(name, [...(producers.get(name) ?? []), relative(root, path)]);
+    }
+  }
+  return producers;
 }
