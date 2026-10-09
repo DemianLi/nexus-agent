@@ -105,24 +105,39 @@ export const DEFAULT_LIVE_MODEL_ID = 'nvidia/nemotron-3-super-120b-a12b';
 export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
 
 /**
- * 單一請求的逾時上限。
+ * 「連線到第一則事件」的逾時上限（SDK 的 `timeout`）。
  *
  * **這不是調校，是止血。** 這個端點的失敗模式是**永遠不回來**（[#57](https://github.com/DemianLi/nexus-agent/issues/57)），
  * 而尺寸比較是一連串請求 —— 沒有上限的話，中間掛住一次換來的是整輪比較沒有結果，
- * 而不是「那一格失敗」。90 秒是量出來的：實測最慢的成功回應是 43 秒
- * （`meta/muse-glimmer-30b`），掛住的那兩個在 90 秒仍是零位元組。
+ * 而不是「那一格失敗」。
  *
- * **在串流上它管兩段**（[#521](https://github.com/DemianLi/nexus-agent/issues/521)）：連線到第一則事件
- * 由 SDK 的計時器管、在 SDK 重試射程內；第一則事件之後每一段的閒置由 {@link withStreamIdleTimeout} 管、
- * 逾時整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)，`@nexus/core` 的 `stream-retry.ts`，預算在
- * `settings/live-model.ts` 的 `streamRetry`）。同 dsh 只有一個 `streamIdleTimeoutMs`（預設 300 秒）。
+ * **為什麼是 180 秒，不是原本的 90 秒**（[#1251](https://github.com/DemianLi/nexus-agent/issues/1251)）：
+ * 原本一個旋鈕同時管「到第一則事件」與「段與段之間」，90 秒是照後者量的（最慢的成功回應 43 秒，掛住的兩個在
+ * 90 秒仍是零位元組）。但視覺模型吐第一則事件前會先吃圖：`meta/llama-3.2-90b-vision-instruct` 實測首事件
+ * 133 秒，被 90 秒砍掉。兩段的性質不同——首事件前的等待含排隊與預處理（吃圖），本來就長；吐字之後的停頓才是
+ * 「掛住」的訊號——所以拆開，各自有各自的值。
  *
- * **最壞情況是它乘上重試次數**：開了線卻不吐位元組，每一次都等滿，90 秒 × (6 + 1) = 630 秒，再加上
+ * **範圍**：連線到第一則事件，由 SDK 的計時器管、在 SDK 重試射程內（{@link DEFAULT_LIVE_MAX_RETRIES}）。
+ * 第一則事件**之後**每一段的閒置歸 {@link DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS} 與 {@link withStreamIdleTimeout}，
+ * 逾時整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)，`@nexus/core` 的 `stream-retry.ts`，
+ * 預算在 `settings/live-model.ts` 的 `streamRetry`）。
+ *
+ * **最壞情況是它乘上重試次數**：開了線卻不吐位元組，每一次都等滿，180 秒 × (6 + 1) = 1260 秒，再加上
  * 退避的 63–126 秒（`settings/live-model.ts` 的偏離二）。**這是 dsh 的形狀，不是缺陷**：dsh 的
  * `TIMEOUT` 在預設可重試碼裡（`llm/src/retry-policy.ts:18`），5 次重試 × 300 秒閒置 ≈ 30 分鐘。
  * #521 查過之後照 dsh 保留逾時重試——一次偶發的慢本來就該重試。
  */
-export const DEFAULT_LIVE_TIMEOUT_MS = 90_000;
+export const DEFAULT_LIVE_TIMEOUT_MS = 180_000;
+
+/**
+ * 串流的閒置逾時：第一則事件之後，兩段位元組之間最多等多久（毫秒）。
+ *
+ * 值沿用原本單一旋鈕的 90 秒（demian 拍板，#521），所以沒碰過 `timeoutMs` 的設定在這一側行為不變。
+ * dsh 的 `streamIdleTimeoutMs` 預設是 300 秒（`packages/llm/llm-pi-ai/src/config.ts:47`，`5badb15`）；
+ * 我們維持 90 秒是因為這個端點掛住的樣子就是吐了內容之後不再有位元組，而每一次重打都重付整個回覆的費用，
+ * 等 300 秒才發現太貴。要放寬改 `streamIdleTimeoutMs`，與 `timeoutMs` 互不牽動。
+ */
+export const DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS = 90_000;
 
 /**
  * 被端點限流時，最多重試幾次。
@@ -720,8 +735,9 @@ export class StreamIdleTimeoutError extends Error {
  *
  * dsh 的 adapter 用 `idleWatchdog`（`packages/util/timeout/src/index.ts:126`，`46a7f68`）：每次
  * `next()` 重新計時，時間到就是 `TIMEOUT`（`llm-pi-ai/src/adapter.ts:355`、`:414-415`），預設
- * `streamIdleTimeoutMs` 300 秒。這裡照做，值沿用同一個 `timeoutMs`（demian 拍板，90 秒）：一個旋鈕
- * 同時管「到第一則事件」與「段與段之間」，同 dsh 只有一個 `streamIdleTimeoutMs`。
+ * `streamIdleTimeoutMs` 300 秒。這裡照做，值是 live-model 列自己的 `streamIdleTimeoutMs`
+ * （預設 {@link DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS} 90 秒，demian 拍板）；「到第一則事件」另有
+ * `timeoutMs`（#1251 拆開，同 dsh 的 `timeoutMs`／`streamIdleTimeoutMs` 兩格，`llm-pi-ai/src/config.ts:160-166`）。
  *
  * **只在有人讀的時候計時**：`pull` 才計時，下游讀得慢不算上游閒置——同 dsh 只在 `next()` 裡計時。
  *
@@ -1127,7 +1143,7 @@ export function createLiveModel(
       },
       fetch: ((base) => (purpose === undefined ? withRequestStartNotice(base) : base))(
         withStreamIdleTimeout(
-          config.timeoutMs,
+          config.streamIdleTimeoutMs,
           withInbandStreamErrors(withEmptyAssistantContent(withStreamUsageReport())),
         ),
       ),

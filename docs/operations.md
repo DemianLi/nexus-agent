@@ -588,8 +588,11 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 - **`baseUrl` 要是 `http:` 或 `https:` 的網址，不能帶帳密、query 或 fragment**（照 dsh）。`http:` 放行，
   所以指向內網的明文端點是合法的——**key 會以明文送過去**，那是部署自己的判斷。
 - **`maxRetries` 上限 10**：退避是指數成長而且沒有上限，10 次的累計等待已經是 17–34 分鐘。
-  `timeoutMs` 在串流上管兩段：連線到第一則事件（逾時會重試），以及之後每一段之間的閒置（逾時整次重打，見下一條 `streamRetry`）。上限是 2 147 483 647（同 `windowMs` 的理由）。**最壞情況是它乘上
-  重試次數**：開了線卻一個位元組都不吐時，每一次都等滿，預設 90 秒 × 7 次，再加退避。
+  **逾時拆兩格**（[#1251](https://github.com/DemianLi/nexus-agent/issues/1251)，同 dsh 的 `timeoutMs`／`streamIdleTimeoutMs`）：
+  `timeoutMs`（預設 180000）管連線到第一則事件，逾時會重試；視覺模型要先吃圖才吐第一則事件（`meta/llama-3.2-90b-vision-instruct` 實測 133 秒），所以比閒置那格寬。
+  `streamIdleTimeoutMs`（預設 90000）管第一則事件之後每一段之間的閒置，逾時整次重打（見下一條 `streamRetry`）；dsh 預設 300 秒，我們維持 90 秒，因為每次重打都重付整個回覆。
+  兩格上限都是 2 147 483 647（同 `windowMs` 的理由），**互不連動**：只改 `timeoutMs` 不會動到閒置，舊設定裡寫過 `timeoutMs` 且想保留舊行為的，把同一個值也寫到 `streamIdleTimeoutMs`。**最壞情況是它乘上
+  重試次數**：開了線卻一個位元組都不吐時，每一次都等滿，預設 180 秒 × 7 次，再加退避。
 - **`streamRetry`：串流吐了內容之後才出錯的整次重打**（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）。管三類：串流中段的
   錯誤事件、連線中途斷掉、吐了內容之後停住（上一條的閒置逾時）。第一則事件之前的失敗歸 `maxRetries`，不乘在一起。四個欄位：
   `maxRetries`（預設 2，`0` 關掉）、`baseDelayMs`（預設 1000，之後每次加倍）、`maxDelayMs`（單次等待封頂，預設 10000）、

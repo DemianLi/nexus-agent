@@ -7,7 +7,7 @@
  * 那一輪照樣掛著，測試不會紅。
  *
  * 模型用的是 **`createLiveModel` 本身**（不是測試自己組的 `ChatOpenAI`），所以工廠有沒有把那一層
- * 接上、接的是不是設定裡的 `timeoutMs`，也一起在射程裡。
+ * 接上、接的是不是設定裡的 `streamIdleTimeoutMs`，也一起在射程裡。
  *
  * **零憑證**：對手方是本機的假 SSE 端點；金鑰是假的，只為了過工廠的「缺 key 當場失敗」。
  */
@@ -67,7 +67,11 @@ describe('供應商吐一段就停住（#521）', () => {
     const upstream = await stallingOpenAi();
     const built = await createNexusAgent({
       model: createLiveModel(
-        liveModelConfigSchema.parse({ baseUrl: upstream.baseUrl, timeoutMs: 300, maxRetries: 2 }),
+        liveModelConfigSchema.parse({
+          baseUrl: upstream.baseUrl,
+          streamIdleTimeoutMs: 300,
+          maxRetries: 2,
+        }),
       ),
       checkpointer: new MemorySaver(),
       plugins: [],
