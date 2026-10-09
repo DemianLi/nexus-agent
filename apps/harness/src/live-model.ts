@@ -3,6 +3,7 @@ import { MiddlewareError } from 'langchain';
 import { ChatOpenAI } from '@langchain/openai';
 import type { ChatOpenAIFields } from '@langchain/openai';
 import {
+  assertImageBudget,
   beginAttemptReport,
   noteFailedAttempt,
   noteRequestStart,
@@ -12,6 +13,7 @@ import {
 import type { AttemptUsage, LlmFailure, StreamFailure } from '@nexus/core';
 
 import { AttachmentChatOpenAI } from './attachment-chat-openai.js';
+import type { RequestGuard } from './attachment-chat-openai.js';
 import { projectAttachments } from './attachment-projection.js';
 import type { AttachmentSource } from './attachment-projection.js';
 import { resolveHarnessHome } from './harness-home.js';
@@ -1090,6 +1092,17 @@ export function withStreamUsageReport(baseFetch: typeof fetch = fetch): typeof f
 export type LiveModelPurpose = 'session-title';
 
 /**
+ * 這一列型錄條目的圖片額度檢查（#1270）：宣告了 `imageBudget` 且收圖才有；純文字模型的圖在投影裡就是文字佔位，不佔額度，不量。
+ * 超額由 {@link assertImageBudget} 拋 `IMAGE_OFFLOAD_REQUIRED`，上層接住。額度跟著 adapter 走（照 dsh：額度住在 adapter 的部署設定），
+ * 換模型就是換一顆 adapter、換一份額度。
+ */
+export function imageBudgetGuard(entry: ModelEntry): RequestGuard | undefined {
+  const budget = entry.imageBudget;
+  if (budget === undefined || acceptsImages(entry) === 'rejects') return undefined;
+  return (messages) => assertImageBudget(messages, budget);
+}
+
+/**
  * 真實供應商的 model。
  *
  * key **每次請求前才向憑證服務取**（`credentials.ts`），缺少時直接失敗，沒有預設值也不 fallback
@@ -1172,8 +1185,10 @@ export function createLiveModel(
   const instance =
     attachments === undefined
       ? new ChatOpenAI(fields)
-      : new AttachmentChatOpenAI(fields, (messages) =>
-          projectAttachments(messages, attachments, acceptsImages(entry)),
+      : new AttachmentChatOpenAI(
+          fields,
+          (messages) => projectAttachments(messages, attachments, acceptsImages(entry)),
+          imageBudgetGuard(entry),
         );
   // 對話那一顆（含子代理）貼路由標籤（#723）：`model/start.route`、換模型通知與系統提示詞的 `{{model}}` 讀它。標題等別的用途不貼——
   // 它們不是對話的請求，不該冒充「最近一次請求走的路由」。

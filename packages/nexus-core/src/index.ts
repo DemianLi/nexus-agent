@@ -234,10 +234,16 @@ export type {
 } from './image-offload.js';
 export {
   applyImageOffload,
+  assertImageBudget,
   base64Length,
   createImageOffloadMiddleware,
+  createImageOffloadRecoveryMiddleware,
   hasImageBlock,
   IMAGE_OFFLOAD_MIDDLEWARE_NAME,
+  IMAGE_OFFLOAD_RECOVERY_MIDDLEWARE_NAME,
+  IMAGE_OFFLOAD_REQUIRED_CODE,
+  ImageOffloadRequiredError,
+  imageOffloadRequiredOf,
   IMAGE_ORIGIN_KEY,
   imageOccurrences,
   imageOriginOf,

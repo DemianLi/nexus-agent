@@ -777,7 +777,7 @@ export interface SessionEventMap {
    * ## 為什麼有這一種
    *
    * 看圖模型的請求有張數與位元組的額度（型錄的 `imageBudget`），圖一多請求就超過端點收得下的量。dsh 的做法（`packages/compaction/
-   * compaction-image-offload`，`5badb15009a`）：超額時**記一筆這個決定**，把**最舊的**幾張換成佔位字，之後每一次請求都沿用。我們照做。
+   * compaction-image-offload`，`5badb15009a`）：adapter 量到超額就以 `IMAGE_OFFLOAD_REQUIRED` 失敗（帶還要省略幾張），上層接住、**記一筆這個決定**、把**最舊的**幾張換成佔位字再送一次，之後每一次請求都沿用。我們照做（見 `image-offload.ts` 檔頭）。
    *
    * ## 欄位
    *
@@ -788,7 +788,7 @@ export interface SessionEventMap {
    * ## 它是 dsh 唯一「進模型的效果要另寫解譯器」的事件
    *
    * 不產出訊息（所以不在 {@link ModelVisibleEventType} 裡），但左右之後模型看到什麼（`known-event-types.ts:84-87`，
-   * {@link MESSAGE_PROJECTION_EVENT_TYPES}）。解譯者是每次叫模型前的 `createImageOffloadMiddleware`（`image-offload.ts`）：
+   * {@link MESSAGE_PROJECTION_EVENT_TYPES}）。解譯者是每次叫模型前的 `createImageOffloadMiddleware`（`image-offload.ts`；下決定的是接住 adapter 拋碼的 `createImageOffloadRecoveryMiddleware`）：
    * 它從日誌讀出所有 `image/offload`、把落在請求裡的圖標成已省略；續接時訊息由 {@link ./conversation-replay.ts | replayConversation}
    * 推回來並蓋上來源 `seq`，同一條路徑讓被省略的圖維持被省略。
    *

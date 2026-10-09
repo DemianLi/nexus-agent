@@ -85,7 +85,10 @@ import {
 } from './repeat-reminder.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
 import type { ModelContextLimits } from './summarization.js';
-import { createImageOffloadMiddleware } from './image-offload.js';
+import {
+  createImageOffloadMiddleware,
+  createImageOffloadRecoveryMiddleware,
+} from './image-offload.js';
 import {
   createSummarizer,
   resolveSummarizationSettings,
@@ -630,16 +633,14 @@ export function foldRegistry(
       ),
     },
     // 圖片額度與 `image/offload`（#1270）緊貼換模型之後、摘要器外面：摘要器的門檻估算、起訖紀錄與請求快照看到的都是省略過的請求。
-    // 只折進 root：圖由人送出、住在 root 的日誌上。沒給 `modelLimits`（查不到每顆模型的額度）就整顆不掛，請求與以前逐位元組相同。
+    // 這一顆只把日誌上**已經下的決定**標在請求上；新的決定由 adapter 量到超額、上層接住下（見下面 `imageOffloadRecovery`）。
+    // 只折進 root：圖由人送出、住在 root 的日誌上。沒給 `modelLimits`（沒有型錄，也就沒有誰宣告得了圖片額度）就整顆不掛，請求與以前逐位元組相同；沒有圖的請求原樣通過、不讀日誌。
     rootOnly(
       'imageOffload',
       same(
         options.modelLimits === undefined
           ? undefined
-          : createImageOffloadMiddleware({
-              sessions: registry.sessions,
-              budgetOf: (model) => options.modelLimits?.(model)?.imageBudget,
-            }),
+          : createImageOffloadMiddleware({ sessions: registry.sessions }),
       ),
     ),
     // 子代理一次執行最多叫幾次模型（#328 第 3 項，dsh 沒有）：到了就收尾。只給子代理，root 的上限是遞迴上限（#858）。
@@ -745,6 +746,17 @@ export function foldRegistry(
     // 撞到輸出上限：清工具呼叫排在修補的內側（被切斷的那顆不會先被修成 `{}` 參數），外面每一顆看到的都是清過的；
     // 子代理的截斷要記進同一份載體給父圖的 `task` 讀。見 {@link ./max-tokens.ts}。
     shared('maxTokens', maxTokens),
+    // `image/offload` 的接住端（#1270）：adapter 在請求轉換前量到圖超過額度，以 `IMAGE_OFFLOAD_REQUIRED` 失敗；這一顆接住、下決定、再送一次。
+    // **排在起訖紀錄器、用量記錄器、串流重打的內側**（它們在上面）：失敗的那一次沒送出任何東西，不算一次模型呼叫、不花重試額度、不記 `llm/retry`。
+    // 只折進 root，同 `imageOffload`。見 {@link ./image-offload.ts}。
+    rootOnly(
+      'imageOffloadRecovery',
+      same(
+        options.modelLimits === undefined
+          ? undefined
+          : createImageOffloadRecoveryMiddleware({ sessions: registry.sessions }),
+      ),
+    ),
     // 請求快照（#1020）緊貼最內層、在中止訊號外面：它也包 `request.model`，排在這裡外面每一顆看到的仍是原本的模型。
     // 記錄點其實在模型被叫的那一刻（callback），不靠這個位置——deepagents 自己還有幾顆在我們這串後面，見 {@link ./request-snapshot.ts}。
     shared('requestSnapshot', requestSnapshot),

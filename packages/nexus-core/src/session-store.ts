@@ -507,7 +507,7 @@ import type { SessionEvent } from './session-log.js';
  *
  * ## 43：`image/offload`——把最舊的幾張圖永久從之後的請求省略（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）
  *
- * 看圖模型的請求超過型錄宣告的圖片額度（`imageBudget`）時，每次叫模型前記一筆 `image/offload { targets: [{ seq, imageIndexes }] }`，最舊的幾張換成佔位字，
+ * 看圖模型的請求超過型錄宣告的圖片額度（`imageBudget`）時（adapter 在送出之前量到、以 `IMAGE_OFFLOAD_REQUIRED` 失敗，上層接住），記一筆 `image/offload { targets: [{ seq, imageIndexes }] }`，最舊的幾張換成佔位字，
  * 之後每一次請求都沿用（見 {@link ./session-log.ts | SessionEventMap} 的 `image/offload`）。
  *
  * **升版，不標 `ignorable`**——它左右之後模型看到什麼：一台 42 的 runtime 會拒絕讀這種新檔（不認得又沒標可忽略），那是對的方向；略過它，

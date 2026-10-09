@@ -4,6 +4,8 @@ import { AIMessage, AIMessageChunk } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { CallbackManagerForLLMRun } from '@langchain/core/callbacks/manager';
 import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
+import { assertImageBudget } from '@nexus/core';
+import type { ImageBudget } from '@nexus/core';
 
 /**
  * bindTools 會產生新實例，游標與綁定記錄要留在本體與副本共用的物件上。
@@ -18,6 +20,8 @@ export interface ScriptedModelState {
   boundTools?: readonly unknown[];
   lastPrompt: readonly BaseMessage[];
   prompts: (readonly BaseMessage[])[];
+  /** 被圖片額度擋下的嘗試次數（#1270）。省略＝沒擋過。 */
+  rejectedImageRequests?: number;
 }
 
 /** 腳本裡的一次工具呼叫。 */
@@ -112,6 +116,11 @@ interface ScriptedChatModelOptions extends BaseChatModelParams {
   readonly turns: readonly ScriptedTurn[];
   /** bindTools 產生的副本要與本體共用這份狀態，否則每次綁定都會從第一輪重來。 */
   readonly shared?: ScriptedModelState;
+  /**
+   * 圖片額度（#1270）：跟真 adapter 一樣，**請求進來先量，超額就拋 `IMAGE_OFFLOAD_REQUIRED`**——拋在記 prompt 與取腳本之前，
+   * 所以被拒的嘗試不佔一輪腳本、不進 `prompts`，只進 {@link ScriptedChatModel.rejectedImageRequests}。
+   */
+  readonly imageBudget?: ImageBudget;
 }
 
 /**
@@ -125,11 +134,13 @@ interface ScriptedChatModelOptions extends BaseChatModelParams {
 export class ScriptedChatModel extends BaseChatModel {
   private readonly turns: readonly ScriptedTurn[];
   private readonly shared: ScriptedModelState;
+  private readonly imageBudget: ImageBudget | undefined;
 
   constructor(options: ScriptedChatModelOptions) {
-    const { turns, shared, ...rest } = options;
+    const { turns, shared, imageBudget, ...rest } = options;
     super(rest);
     this.turns = turns;
+    this.imageBudget = imageBudget;
     this.shared = shared ?? { turn: 0, boundToolNames: [], lastPrompt: [], prompts: [] };
   }
 
@@ -177,7 +188,11 @@ export class ScriptedChatModel extends BaseChatModel {
       const name = (candidate as { name?: unknown }).name;
       return typeof name === 'string' ? name : '<anonymous>';
     });
-    return new ScriptedChatModel({ turns: this.turns, shared: this.shared });
+    return new ScriptedChatModel({
+      turns: this.turns,
+      shared: this.shared,
+      ...(this.imageBudget !== undefined && { imageBudget: this.imageBudget }),
+    });
   }
 
   /** 腳本用完就代表 agent 迴圈跑得比預期多，直接失敗比靜默重播容易查。 */
@@ -193,7 +208,20 @@ export class ScriptedChatModel extends BaseChatModel {
     return turn;
   }
 
+  /** 被圖片額度擋下的嘗試次數：拋在記 prompt 之前，所以不在 {@link ScriptedChatModel.prompts} 裡。 */
+  get rejectedImageRequests(): number {
+    return this.shared.rejectedImageRequests ?? 0;
+  }
+
   private record(messages: BaseMessage[]): void {
+    if (this.imageBudget !== undefined) {
+      try {
+        assertImageBudget(messages, this.imageBudget);
+      } catch (error) {
+        this.shared.rejectedImageRequests = this.rejectedImageRequests + 1;
+        throw error;
+      }
+    }
     this.shared.lastPrompt = messages;
     this.shared.prompts.push(messages);
   }
