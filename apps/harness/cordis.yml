@@ -585,10 +585,18 @@
       # **窗口只有 32,768**（真端點量過：`max_tokens` 131072 回 400，訊息寫 "maximum context length is 32768 tokens"；16384 收），
       # 比 11b 小得多。`maxTokens` 取 4096 同樣是選擇不是上限。一張圖約 1600 token（256×256 的圖：帶圖 1844、同請求無圖 242）；
       # 這個數字隨圖的大小分塊，不是常數，見 `attachment-ref.ts` 的 `IMAGE_TOKENS`（那是 11b 在 640×220 圖上量的）。
+      # **一次請求最多一張圖**（#1270 真端點實測，2026-10-09，`/v1/chat/completions` 直打、純色 256×256 PNG、`max_tokens: 32`、`temperature: 0`）：
+      # 1 張回 200（`prompt_tokens` 1682，答「紅色。」）；2、4、6、8、10 張**都回 400**，訊息是 "At most 1 image(s) may be provided in one
+      # request. You can set `--limit-mm-per-prompt` to increase this limit if the model supports it."——這是端點伺服器自己宣告的上限（vLLM 的
+      # `--limit-mm-per-prompt`），不是窗口塞不下：2 張才約 3,400 token，離 32,768 很遠。所以**這個數字不用留空間給文字與輸出**，
+      # 上限就是 1。沒有「第 N 張描述開始不準」這回事——第 2 張起整個請求就被拒。超過額度的舊圖由 `image/offload` 換成佔位字（對話裡
+      # 有過第二張圖就會用到，不再是回 400 然後整個對話卡死）。
       - id: 'meta/llama-3.2-90b-vision-instruct'
         contextWindow: 32768
         maxTokens: 4096
         input: [text, image]
+        imageBudget:
+          maxImages: 1
 
 # 沒帶 `--live` 時用哪個模型提供者（#670）。照 dsh `agent-default-model`（`packages/bundle/base/cordis.patch.yml:82-86`）：
 # 選擇是一列，提供者各是一列。**出貨值 `cli-script` 就是下面那一列腳本提供者的 `id`**；要換就在 patch 裡

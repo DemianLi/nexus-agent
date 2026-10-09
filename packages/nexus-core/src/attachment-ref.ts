@@ -82,6 +82,11 @@ export interface FileBlock {
 export interface ImageBlock {
   readonly type: 'nexus-image';
   readonly attachment: ImageAttachmentRef;
+  /**
+   * 這個出現被省略了（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)，`image/offload`）：組請求時換成佔位字
+   * （{@link offloadedImageText}），不讀位元組、不算 token。**只存在於每次叫模型前現算出來的請求副本上**，日誌與存檔點裡的區塊沒有這一格。
+   */
+  readonly offloaded?: true;
 }
 
 /** 一個參照放進訊息內容時的區塊。 */

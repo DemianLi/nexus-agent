@@ -97,6 +97,7 @@ import {
   TURN_CANCEL_CONFIG_KEY,
   toLoggedMessage,
   turnReachedMaxTokens,
+  stampImageOrigin,
   userContent,
   withModelCall,
   type ApprovalOutcome,
@@ -135,6 +136,7 @@ import type { CustomFrameData, SubagentStatusPayload } from '@nexus/wire';
 // 讀的事件種類（`todo/write`）照 dsh 由擁有者套件宣告；這一行讓編譯單位看得到那個套件補的鍵，不靠測試檔順手 import（#679）。
 import type {} from '@nexus/plugin-todo';
 import { RootGoal } from './goal-wire.js';
+import { imageOffloadData } from './image-offload-wire.js';
 import {
   compactionData,
   contextMeasureData,
@@ -1125,6 +1127,11 @@ export class ThreadPump {
    * `["tools:<父呼叫>"]` 出現，隨後同一顆又在 root 層（`[]`）出現一次；只看後面那一顆會把子代理的反問當成 root 的、送給人。
    */
   readonly #elicitationOrigins = new Map<string, boolean>();
+  /**
+   * 這一次行程裡開跑的人話：日誌事件的 `seq` → 送出佇列那一件的 id（#1270）。`image/offload` 通知畫面時，同一句人話在客戶端手上可能是
+   * 即時長出來的（`inbox:<id>`）也可能是歷史載入的（`history-<seq>`），所以兩個都給；重啟前的那些不在表裡，只給 `seq`。
+   */
+  readonly #inboxIdBySeq = new Map<number, string>();
   /**
    * 核准問題的中斷 id：已經以子代理的 namespace 露過面、等著它在 root 層的第二次露面被吞掉（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項）。
    *
@@ -2442,11 +2449,13 @@ export class ThreadPump {
           content: userContent(job.text.text, job.text.attachments, job.text.mention) as never,
           id: job.text.id,
         });
-        this.#sessions.root.append('user/message', {
+        const logged = this.#sessions.root.append('user/message', {
           message: toLoggedMessage(message),
           source: userMessageSourceOf(job.text.source),
         });
-        messages.push(message);
+        // 圖的來源記號（#1270）：`image/offload` 靠「出自哪顆事件」定位這則訊息裡的圖；記在記完事件之後才知道 seq。沒有圖時不動。
+        this.#inboxIdBySeq.set(logged.seq, job.text.id);
+        messages.push(stampImageOrigin(message, logged.seq));
       }
       const snapshot = prepared[index];
       if (snapshot !== undefined) {
@@ -2577,7 +2586,8 @@ export class ThreadPump {
     if (referenced !== undefined && input.kind === 'message') {
       input = { ...input, text: referenced.text };
     }
-    this.#sessions.root.append('turn/start', turnStartOf(input));
+    const turnStart = this.#sessions.root.append('turn/start', turnStartOf(input));
+    if (claimed !== undefined) this.#inboxIdBySeq.set(turnStart.seq, claimed.id);
     // 人的決定落在它回答的那一輪裡（審計要在輪內，#1029）。
     if (input.kind === 'resume') this.#noteApprovalDecided(input.interruptId, input.response);
     // 答了就忘掉它是誰發的：同一個 task 的下一次反問會帶著**同一個 id** 再度中斷（id 是 task 的雜湊），留著會把新的一顆當成
@@ -2622,7 +2632,12 @@ export class ThreadPump {
           // **這也是工具屏障（#711 第 2 步）的承重點**：中斷時排在後面、一起退出的呼叫，resume 時會重跑並掛出自己的卡；
           // 改成裸值，答前一顆的那個決定就會被重跑的那一顆讀走，一個決定蓋住兩顆。
           new Command({ resume: { [input.interruptId]: input.response } })
-        : { messages: [humanMessageForTurnStart(turnStartOf(input))] };
+        : // 蓋上這顆 `turn/start` 的 seq（#1270）：重放（`replayConversation`）蓋的是同一顆事件的 seq，所以續接前後同一張圖是同一個身分。
+          {
+            messages: [
+              stampImageOrigin(humanMessageForTurnStart(turnStartOf(input)), turnStart.seq),
+            ],
+          };
 
     // 一輪一個中止控制器，照 dsh（`packages/core/agent-loop/src/agent.ts:149-155`）。
     const current: CurrentRun = {
@@ -3313,6 +3328,10 @@ export class ThreadPump {
     } else if (event.type === 'session/title' && entry.address.kind === 'root') {
       // 標題（#647）：只收 root 的，同 dsh 的 `title` 投影。
       this.#presentCustom(titleData(event.data.title));
+    } else if (event.type === 'image/offload' && entry.address.kind === 'root') {
+      // 圖片額度省略（#1270）：只收 root 的（圖由人送出、住在 root 的日誌上）。與歷史那一側共用 {@link imageOffloadData}。
+      const data = imageOffloadData(event, entry.log.events, (seq) => this.#inboxIdBySeq.get(seq));
+      if (data !== undefined) this.#presentCustom(data);
     } else if (event.type === 'subagent/catalog' && entry.address.kind === 'root') {
       // 子代理目錄（#1023）：只收 root 的，同 dsh 的 `subagentCatalog`；與歷史那一側共用 {@link subagentCatalogData}。
       this.#presentCustom(subagentCatalogData(event.data));

@@ -119,6 +119,7 @@ import {
   loggedContentBlocks,
   mentionOfHintBlock,
   loggedMessageId,
+  offloadedImagesOf,
   openTurnStart,
   promptTokensOf,
   replayConversation,
@@ -133,6 +134,7 @@ import {
 import type {} from '@nexus/plugin-todo';
 import { agentMessageBody, runIdOfSession } from './background-run-id.js';
 import { goalData, RootGoal } from './goal-wire.js';
+import { omittedPositionsOf } from './image-offload-wire.js';
 import { childProjectionData } from './projection-children.js';
 import type { ProjectionChildren } from './projection-children.js';
 import { projectionData } from './projection-wire.js';
@@ -807,6 +809,7 @@ function message(
   attachments?: readonly AttachmentRef[],
   startTime = time,
   mention?: SubagentMentionRef,
+  omittedAttachments?: readonly number[],
 ): Event[] {
   const ids = role === 'ai' ? { run_id: key } : { id: key };
   return [
@@ -817,6 +820,9 @@ function message(
       ...(messageId !== undefined && { id: messageId }),
       ...(references !== undefined && references.length > 0 && { references }),
       ...attachmentsField(attachments),
+      // 被圖片額度省略的附件位置（#1270），整份日誌到 `throughSeq` 的最終狀態。
+      ...(omittedAttachments !== undefined &&
+        omittedAttachments.length > 0 && { omittedAttachments }),
       ...mentionField(mention),
     }),
     ...(reasoning === ''
@@ -874,8 +880,11 @@ export function historyFrames(
   events: readonly SessionEvent[],
   toolTextMaxBytes: number,
   awaitingInput?: AwaitingInput,
+  offloadedImages?: ReadonlyMap<number, ReadonlySet<number>>,
 ): Event[] {
   const frames: Event[] = [];
+  /** 被圖片額度省略的圖（#1270）：`seq` → 圖序號。一頁從輪首切，比這一頁新的 `image/offload` 由呼叫端用整份日誌算好交進來。 */
+  const offloaded = offloadedImages ?? offloadedImagesOf(events);
   let turnOpen = false;
   let interrupted = false;
   /**
@@ -959,6 +968,7 @@ export function historyFrames(
               event.data.attachments,
               event.time,
               event.data.mention,
+              omittedPositionsOf(event.data.attachments ?? [], offloaded.get(event.seq)),
             ),
           );
         }
@@ -1001,6 +1011,7 @@ export function historyFrames(
               attachmentsOf(event.data.message),
               event.time,
               mentionOf(event.data.message),
+              omittedPositionsOf(attachmentsOf(event.data.message), offloaded.get(event.seq)),
             ),
           );
         }
@@ -1396,6 +1407,7 @@ export function historyPage(
         [...carried, ...window.slice(cut, end)],
         toolTextMaxBytes,
         end === events.length ? awaitingInput : undefined,
+        offloadedImagesOf(window),
       ),
       ...tailFrames,
     ],

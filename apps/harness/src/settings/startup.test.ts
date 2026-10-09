@@ -319,6 +319,8 @@ describe('startupSetting', () => {
           contextWindow: 32768,
           maxTokens: 4096,
           input: ['text', 'image'],
+          // 端點每次請求最多一張圖（#1270 實測，見 `cordis.yml`）。
+          imageBudget: { maxImages: 1 },
         },
       ],
     });

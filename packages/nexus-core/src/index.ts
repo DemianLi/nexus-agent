@@ -226,10 +226,31 @@ export {
   OUTPUT_SCHEMA_MIDDLEWARE_NAME,
 } from './output-schema.js';
 
+export type {
+  ImageBudget,
+  ImageOccurrence,
+  ImageOffloadDeps,
+  ImageOffloadTarget,
+} from './image-offload.js';
+export {
+  applyImageOffload,
+  base64Length,
+  createImageOffloadMiddleware,
+  hasImageBlock,
+  IMAGE_OFFLOAD_MIDDLEWARE_NAME,
+  IMAGE_ORIGIN_KEY,
+  imageOccurrences,
+  imageOriginOf,
+  offloadedImagesOf,
+  requiredImageOffload,
+  selectImagesToOffload,
+  stampImageOrigin,
+} from './image-offload.js';
 export type { ProjectedBlock } from './attachment-projection.js';
 export {
   assumedFileLine,
   hasAttachmentBlocks,
+  offloadedImageText,
   rewriteAttachmentBlocks,
   summaryImageText,
   textOnlyImageText,
@@ -648,6 +669,7 @@ export {
   isLogicalTurnStart,
   isModelVisibleEvent,
   isUnreadableSessionEvent,
+  MESSAGE_PROJECTION_EVENT_TYPES,
   MODEL_VISIBLE_EVENT_TYPES,
   SessionLog,
 } from './session-log.js';

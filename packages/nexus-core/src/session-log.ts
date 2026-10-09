@@ -772,6 +772,40 @@ export interface SessionEventMap {
     readonly source: UserMessageSource;
   };
   /**
+   * 把幾張圖永久從之後每一次模型請求裡省略（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)，#732 第 8 項）。
+   *
+   * ## 為什麼有這一種
+   *
+   * 看圖模型的請求有張數與位元組的額度（型錄的 `imageBudget`），圖一多請求就超過端點收得下的量。dsh 的做法（`packages/compaction/
+   * compaction-image-offload`，`5badb15009a`）：超額時**記一筆這個決定**，把**最舊的**幾張換成佔位字，之後每一次請求都沿用。我們照做。
+   *
+   * ## 欄位
+   *
+   * 逐字照 dsh `image/offload`：`targets` 非空；每一格 `seq` 是**會產出訊息的那一顆事件**的 `seq`（`turn/start`、`user/message`、
+   * `tool/result`），`imageIndexes` 是那則訊息裡圖片區塊由前往後的位置（**含已被省略的**，所以同一張圖的編號不因別張被省略而移動），
+   * 嚴格遞增。一格代表「這則訊息的這幾張」，不是「這個附件」：同一個檔附在兩句話裡是兩個獨立的出現。
+   *
+   * ## 它是 dsh 唯一「進模型的效果要另寫解譯器」的事件
+   *
+   * 不產出訊息（所以不在 {@link ModelVisibleEventType} 裡），但左右之後模型看到什麼（`known-event-types.ts:84-87`，
+   * {@link MESSAGE_PROJECTION_EVENT_TYPES}）。解譯者是每次叫模型前的 `createImageOffloadMiddleware`（`image-offload.ts`）：
+   * 它從日誌讀出所有 `image/offload`、把落在請求裡的圖標成已省略；續接時訊息由 {@link ./conversation-replay.ts | replayConversation}
+   * 推回來並蓋上來源 `seq`，同一條路徑讓被省略的圖維持被省略。
+   *
+   * **升版，不標 `ignorable`**（格式 43）：一台 42 的 runtime 讀到這一筆會拒絕重建（不認得又沒標可忽略），那是對的方向——略過它，
+   * 模型就又看到本來已經省略的圖，請求再度超額，沒有任何東西說為什麼。
+   *
+   * 不帶圖的內容與位元組：只有位置，不含像素或檔名。
+   */
+  'image/offload': {
+    readonly targets: readonly {
+      /** 產出那則訊息的事件的 `seq`。 */
+      readonly seq: number;
+      /** 那則訊息裡被省略的圖片區塊位置（由前往後、含已省略者），非空、嚴格遞增。 */
+      readonly imageIndexes: readonly number[];
+    }[];
+  };
+  /**
    * 壓縮真的發生了一次：舊訊息被換成一份摘要。**一次摘要一筆**。
    *
    * ## 這是 dsh 三顆事件的哪一顆，以及另外兩顆為什麼不在
@@ -1150,9 +1184,10 @@ export function isUnreadableSessionEvent(event: {
  * 加一種會進模型的事件要同時動三處，缺一處都編不過：這個聯集、{@link MODEL_VISIBLE_EVENT_TYPES}
  * 那張表、replay 守衛之內的 `switch`（它的 `default` 是 `satisfies never`）。
  *
- * `image/offload`（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）在 dsh 不是產訊息的那一類，
- * 而是進模型的**效果**要另寫解譯器的事件（`known-event-types.ts:84-87`）。它落地時寫明走哪一支：
- * 讀碼推得，續接時推回歷史要重現那次省略，不然重啟後模型又看到原本那張圖。
+ * `image/offload`（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）在 dsh 不是產訊息的那一類，
+ * 而是進模型的**效果**要另寫解譯器的事件（`known-event-types.ts:84-87`）。它走的是另一份子聯集
+ * {@link MESSAGE_PROJECTION_EVENT_TYPES}，**不在這裡**：它不替模型多出一則訊息，replay 對它沒有 case。續接時被省略的圖維持被省略，
+ * 靠的是 replay 替推回來的訊息蓋上來源 `seq`、解譯者在每次叫模型前讀日誌（見 `image-offload.ts`）。
  */
 export type ModelVisibleEventType =
   'turn/start' | 'assistant/message' | 'tool/result' | 'user/message' | 'compaction/summary';
@@ -1183,6 +1218,21 @@ export function isModelVisibleEvent(
 ): event is SessionEvent<ModelVisibleEventType> {
   return Object.hasOwn(MODEL_VISIBLE_EVENT_TABLE, event.type);
 }
+
+/**
+ * **不產出訊息、卻左右模型看到什麼的事件**（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)），對應 dsh 的
+ * `MESSAGE_PROJECTION_EVENT_TYPES`（`packages/core/session/src/known-event-types.ts:84-87`，`5badb15009a`）：「進模型的效果要另外
+ * 寫解譯器」的那一類。今天只有 `image/offload`。
+ *
+ * 跟 {@link ModelVisibleEventType} 的差別：那一份是**替模型多出一則訊息**的事件，replay 對它們窮舉；這一份**改變已經存在的訊息**
+ * 怎麼送出去，解譯者各自負責（見 `image/offload` 的說明）。兩份都不能標 `ignorable`。
+ */
+export const MESSAGE_PROJECTION_EVENT_TYPES = [
+  'image/offload',
+] as const satisfies readonly SessionEventType[];
+
+/** {@link MESSAGE_PROJECTION_EVENT_TYPES} 的成員。 */
+export type MessageProjectionEventType = (typeof MESSAGE_PROJECTION_EVENT_TYPES)[number];
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   if (typeof value !== 'object' || value === null) return false;
@@ -1429,7 +1479,11 @@ export class SessionLog implements SessionLogView {
   ): SessionEvent<T> {
     // 會進模型的種類不能標可忽略：略過它就是模型看到的對話少一截，正是「靜靜讀錯」那一類。同 dsh 的論證——
     // 模型看得到的內容只走產訊息的那幾種，所以危險的不認得事件就是這幾種與左右重建的非訊息事件（版本機制筆記）。
-    if (options.ignorable === true && Object.hasOwn(MODEL_VISIBLE_EVENT_TABLE, type)) {
+    if (
+      options.ignorable === true &&
+      (Object.hasOwn(MODEL_VISIBLE_EVENT_TABLE, type) ||
+        (MESSAGE_PROJECTION_EVENT_TYPES as readonly string[]).includes(type))
+    ) {
       throw new TypeError(`會話事件 "${type}" 會進模型，不能標可忽略（#507）`);
     }
     // 先驗再推進：拷不動的話這一筆整個不算，日誌不會留下半筆。

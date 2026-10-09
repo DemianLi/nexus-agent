@@ -343,9 +343,15 @@ export function estimateTextTokens(text: string): number {
   return memoized(text, 'exact', o200k);
 }
 
-/** 內容裡有幾張圖。每張算 {@link IMAGE_TOKENS}，跟位元組數與像素數都無關。 */
+/**
+ * 內容裡有幾張圖。每張算 {@link IMAGE_TOKENS}，跟位元組數與像素數都無關。**被省略的不算**（#1270）：組請求時它們是一行佔位字，
+ * 佔位字那一行的 token 不計（比 3,166 小兩個數量級）。
+ */
 function imageCount(content: unknown): number {
-  return Array.isArray(content) ? (content as unknown[]).filter(isImageBlock).length : 0;
+  return Array.isArray(content)
+    ? (content as unknown[]).filter((block) => isImageBlock(block) && block.offloaded !== true)
+        .length
+    : 0;
 }
 
 /** 一則訊息的 E。同一個物件只編一次。 */

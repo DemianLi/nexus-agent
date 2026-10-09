@@ -192,6 +192,32 @@ describe('投影的內容', () => {
     expect(userBlocks()[1]!.text).toContain('Do not claim to have seen it');
   });
 
+  it('被圖片額度省略的圖（#1270）：換成佔位字，不讀位元組；收圖、純文字、沒宣告都一樣', async () => {
+    const omitted = new HumanMessage({
+      content: [
+        { type: 'nexus-image', attachment: IMAGE, offloaded: true },
+        { type: 'text', text: '請看' },
+      ] as never,
+    });
+    for (const support of ['accepts', 'rejects', 'undeclared'] as const) {
+      let reads = 0;
+      await model(
+        support,
+        source({
+          readImage: async () => {
+            reads += 1;
+            return BYTES;
+          },
+        }),
+      ).invoke([omitted]);
+      expect(userBlocks().map((b) => b.type)).toEqual(['text', 'text']);
+      expect(userBlocks()[0]!.text).toBe(
+        '[image omitted to fit request image limits; image (sha256:dddddddd, 7x5). No local copy is available; ask the user to attach it again if needed.]',
+      );
+      expect(reads).toBe(0);
+    }
+  });
+
   it('沒有附件的訊息原樣通過（同一個陣列，不複製）', async () => {
     const plain = [new HumanMessage('嗨')];
     expect(await projectAttachments(plain, source(), 'accepts')).toBe(plain);

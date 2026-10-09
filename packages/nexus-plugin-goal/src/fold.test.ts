@@ -511,6 +511,8 @@ describe('什麼推得動 roundsStarted', () => {
     // 模型被叫那一刻的設定與系統提示詞快照，變了才記、一次呼叫最多各一顆，理由同 `model/start`。
     // `session/title`（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）：不推。它跟在一顆人打的
     // `turn/start` 後面，推的是那一顆。
+    // `image/offload`（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）：不推。每次叫模型之前，圖片額度超出時記的省略決定，
+    // 不是一輪的開始，理由同 `context/measure`。
     // `session/title-llm-request`（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）：不推。LLM 標題在背景
     // 跑、寫在一輪之外，不是一輪的開始。
     //
@@ -536,6 +538,7 @@ describe('什麼推得動 roundsStarted', () => {
       'assistant/message',
       'assistant/attempt',
       'user/message',
+      'image/offload',
       'compaction/summary',
       'subagent/model-selection-policy',
       'subagent/catalog',

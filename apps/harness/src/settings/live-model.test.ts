@@ -226,6 +226,24 @@ describe('live-model 的 schema', () => {
     expect(() => parse({})).toThrow();
   });
 
+  it('imageBudget（#1270）：maxImages／maxBytes 都是正整數、可只寫一格；別的格或 0 是打錯字；沒寫就是沒宣告', () => {
+    const parse = (imageBudget: unknown) =>
+      liveModelConfigSchema.parse({ models: [{ ...DEFAULT_LIVE_MODEL_ENTRY, imageBudget }] });
+    expect(parse({ maxImages: 1 }).models[0]?.imageBudget).toEqual({ maxImages: 1 });
+    expect(parse({ maxBytes: 4096 }).models[0]?.imageBudget).toEqual({ maxBytes: 4096 });
+    expect(parse({ maxImages: 2, maxBytes: 8192 }).models[0]?.imageBudget).toEqual({
+      maxImages: 2,
+      maxBytes: 8192,
+    });
+    expect(() => parse({ maxImages: 0 })).toThrow();
+    expect(() => parse({ maxImages: 1.5 })).toThrow();
+    expect(() => parse({ maxBytes: -1 })).toThrow();
+    expect(() => parse({ maxPixels: 100 })).toThrow();
+    expect(
+      liveModelConfigSchema.parse({ models: [DEFAULT_LIVE_MODEL_ENTRY] }).models[0],
+    ).not.toHaveProperty('imageBudget');
+  });
+
   it('eval 用的入口：型錄外的 id 合成一筆，輸出上限沿用出廠那一筆', () => {
     const config = liveModelConfigForModel('openai/gpt-oss-20b');
     expect(config.modelId).toBe('openai/gpt-oss-20b');

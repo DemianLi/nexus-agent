@@ -63,6 +63,16 @@ export function summaryImageText(ref: ImageAttachmentRef): string {
   return `[image${name} (sha256:${digest}, ${String(ref.width)}x${String(ref.height)}) was attached here; its pixels are not part of this text.]`;
 }
 
+/**
+ * 圖因為請求的圖片額度而被省略時的佔位字（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)）。照 dsh `offloadedImageText`
+ * （`packages/llm/llm/src/content.ts:108`）沒有本機路徑的那一支：我們不替模型準備圖的唯讀副本，所以只說「請使用者重新附上」。
+ */
+export function offloadedImageText(ref: ImageAttachmentRef): string {
+  const digest = ref.attachmentId.slice('sha256:'.length, 'sha256:'.length + 8);
+  const name = ref.name === undefined ? '' : ` ${JSON.stringify(ref.name)}`;
+  return `[image omitted to fit request image limits; image${name} (sha256:${digest}, ${String(ref.width)}x${String(ref.height)}). No local copy is available; ask the user to attach it again if needed.]`;
+}
+
 /** 圖的位元組讀不到時（儲存被清掉、被截斷）的佔位字：請使用者重新附上，不要聲稱看過。 */
 export function unavailableImageText(ref: ImageAttachmentRef): string {
   const digest = ref.attachmentId.slice('sha256:'.length, 'sha256:'.length + 8);

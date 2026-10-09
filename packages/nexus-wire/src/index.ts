@@ -274,6 +274,8 @@ export { GOAL, GOAL_PHASES } from './goal.js';
 export { PLAN_MODE } from './plan-mode.js';
 export { PROJECTION, PROJECTION_KEY_PATTERN } from './projection.js';
 export { TITLE } from './title.js';
+export { IMAGE_OFFLOAD } from './image-offload.js';
+export type { ImageOffloadItem, ImageOffloadPayload } from './image-offload.js';
 export { TODOS } from './todos.js';
 export type { WireSessionStats, WireTokenUsage } from './session-totals.js';
 export { SESSION_STATS, TOKEN_USAGE } from './session-totals.js';

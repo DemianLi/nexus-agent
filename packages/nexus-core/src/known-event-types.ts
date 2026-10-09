@@ -25,6 +25,7 @@ export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'feedback/message-put',
   'feedback/record',
   'goal/change',
+  'image/offload',
   'inbox/spliced',
   'interrupt/raised',
   'interrupt/system-answered',

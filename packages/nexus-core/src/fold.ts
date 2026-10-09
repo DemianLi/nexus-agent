@@ -85,6 +85,7 @@ import {
 } from './repeat-reminder.js';
 import type { RepeatReminderSettings } from './repeat-reminder.js';
 import type { ModelContextLimits } from './summarization.js';
+import { createImageOffloadMiddleware } from './image-offload.js';
 import {
   createSummarizer,
   resolveSummarizationSettings,
@@ -625,6 +626,19 @@ export function foldRegistry(
             }),
       ),
     },
+    // 圖片額度與 `image/offload`（#1270）緊貼換模型之後、摘要器外面：摘要器的門檻估算、起訖紀錄與請求快照看到的都是省略過的請求。
+    // 只折進 root：圖由人送出、住在 root 的日誌上。沒給 `modelLimits`（查不到每顆模型的額度）就整顆不掛，請求與以前逐位元組相同。
+    rootOnly(
+      'imageOffload',
+      same(
+        options.modelLimits === undefined
+          ? undefined
+          : createImageOffloadMiddleware({
+              sessions: registry.sessions,
+              budgetOf: (model) => options.modelLimits?.(model)?.imageBudget,
+            }),
+      ),
+    ),
     // 子代理一次執行最多叫幾次模型（#328 第 3 項，dsh 沒有）：到了就收尾。只給子代理，root 的上限是遞迴上限（#858）。
     subagentOnly(
       'subagentMaxTurns',
