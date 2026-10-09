@@ -21,3 +21,12 @@ export function catalogToolNames(): readonly string[] {
   }
   return names;
 }
+
+/** 一個工具在目錄裡的那一節（`### `name`` 到下一個 `### ` 為止），含它的參數 schema。找不到就拋。 */
+export function catalogToolSection(name: string): string {
+  const text = readFileSync(CATALOG, 'utf8');
+  const start = text.indexOf(`### \`${name}\``);
+  if (start < 0) throw new Error(`工具目錄裡沒有 ${name}`);
+  const end = text.indexOf('\n### ', start + 1);
+  return text.slice(start, end < 0 ? undefined : end);
+}
