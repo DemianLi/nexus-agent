@@ -481,6 +481,8 @@ describe('什麼推得動 roundsStarted', () => {
     //
     // `subagent/catalog`（#1023）：不推。它記的是一次工具呼叫派出了子代理，一輪裡派幾個有幾顆，同 `tool/call`。
     //
+    // `subagent/descriptor`（#1271）：不推。它在子代理自己的日誌上，記那個子代理是誰（規格、模型），不是一輪的開始。
+    //
     // `tool/call`／`tool/result`（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）：
     // 不推，理由同 `model/usage` 而且更直接——一輪裡叫幾次工具，是 `recursionLimit` 在管的
     // 那件事，一輪可以叫幾十次。讓它去推輪次，`maxGoalRounds` 就變成工具呼叫次數的上限。
@@ -542,6 +544,7 @@ describe('什麼推得動 roundsStarted', () => {
       'compaction/summary',
       'subagent/model-selection-policy',
       'subagent/catalog',
+      'subagent/descriptor',
       'tool/call',
       'tool/result',
       'session/end-seed',

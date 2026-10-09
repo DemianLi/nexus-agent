@@ -165,3 +165,40 @@ describe('耐久檢查點的入口（#599）', () => {
     expect(asked).toBe(0);
   });
 });
+
+describe('SessionRegistry：子代理從落盤接回來（#1271）', () => {
+  const stored = {} as never;
+  function earlierOf(address: SessionAddress) {
+    const origin = new SessionRegistry('thread-1');
+    const log = origin.open(address);
+    log.append('turn/start', { kind: 'message', text: '重啟前' });
+    log.append('turn/end', {});
+    return log.events;
+  }
+
+  it('以上一個行程的事件為 seed；訂閱者在 open() 回傳前就拿到 resume 把手', () => {
+    const sessions = new SessionRegistry('thread-1');
+    const seen: SessionEntry[] = [];
+    sessions.observe((entry) => seen.push(entry));
+    const events = earlierOf(WORKER);
+    const log = sessions.open(WORKER, { events, stored });
+    expect(log.events.slice(0, 2).map((event) => event.type)).toEqual(['turn/start', 'turn/end']);
+    expect(log.events.at(-1)?.type).toBe('session/end-seed');
+    const entry = seen.find((each) => each.address.kind === 'subagent');
+    expect(entry?.resume).toEqual({ events, stored });
+    // root 沒有 resume，行為同改動之前。
+    expect(seen.find((each) => each.address.kind === 'root')?.resume).toBeUndefined();
+  });
+
+  it('這個身分已經開著還硬要接回來是呼叫端的 bug：拋，不靜靜忽略（同一份落盤會有兩個寫者）', () => {
+    const sessions = new SessionRegistry('thread-1');
+    sessions.open(WORKER);
+    expect(() => sessions.open(WORKER, { events: earlierOf(OTHER), stored })).toThrow(/已經開著/);
+  });
+
+  it('沒帶 resume 的 open 不受影響：開過的回同一份、新的是空的', () => {
+    const sessions = new SessionRegistry('thread-1');
+    expect(sessions.open(OTHER).events).toEqual([]);
+    expect(sessions.open(OTHER)).toBe(sessions.open(OTHER));
+  });
+});

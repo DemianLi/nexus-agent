@@ -779,6 +779,17 @@ export type {
   SessionRegistryOptions,
 } from './session-registry.js';
 export { SessionRegistry } from './session-registry.js';
+export type { SessionResume } from './session-registry.js';
+export type {
+  SubagentDescriptorData,
+  SubagentDescriptorFold,
+  SubagentDescriptorInput,
+} from './subagent-descriptor.js';
+export {
+  appendSubagentDescriptor,
+  foldSubagentDescriptor,
+  SUBAGENT_DESCRIPTOR_VERSION,
+} from './subagent-descriptor.js';
 export type { SubagentCatalogData, SubagentCatalogMode, SubagentLink } from './subagent-catalog.js';
 export { appendSubagentCatalog, subagentLinkOf, subagentLinks } from './subagent-catalog.js';
 
