@@ -55,7 +55,10 @@ async function attemptsFor(
   options: { idleMs?: number; consume?: (response: Response) => Promise<void> } = {},
 ): Promise<number> {
   const wrapped = withStreamIdleTimeout(options.idleMs ?? 5_000, withInbandStreamErrors(upstream));
-  const middleware = createStreamRetryMiddleware({ maxRetries: 1, baseDelayMs: 1 }) as unknown as {
+  const middleware = createStreamRetryMiddleware(
+    { maxRetries: 1, baseDelayMs: 1 },
+    { forCall: () => ({ kind: 'not-attached' }) },
+  ) as unknown as {
     wrapModelCall: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
   };
   let calls = 0;

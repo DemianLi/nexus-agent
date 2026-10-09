@@ -615,10 +615,12 @@ export interface SessionEventMap {
    * `llm/retry`（`packages/llm/llm-retry/src/types.ts:9`）：排定時先寫，再開始等。**只記排定、不記完成**——
    * 成敗看後面的 `model/end`／`turn/failed`；預算用盡的那一次不排，所以不寫。
    *
-   * 落在一次模型呼叫的 `model/start`／`model/end` 之間（重試包在那一對之內），一次呼叫的所有重試共用一個
-   * `retryId`。**不進模型**：推模型歷史的一側不讀。
+   * SDK 層的重試（#712）落在一次模型呼叫的 `model/start`／`model/end` 之間（重試包在那一對之內），一次呼叫的所有重試共用一個
+   * `retryId`。**串流中段出錯的整次重打（#520，`stream-retry.ts`）的在兩對之間**：失敗那一對已經收尾、下一對還沒開，由 `modelCall`
+   * 指回失敗的那次；所有讀的人靠 `modelCall` 歸屬、不靠落在哪一對之間（`indexModelCalls`、軌跡投影、token-meter 都是；
+   * token-meter 的 `llm/retry-started` 在呼叫之外不扣牆鐘，因為退避本來就不在起訖之內）。**不進模型**：推模型歷史的一側不讀。
    *
-   * 欄位比 dsh 少，理由與計數的壽命見 {@link ./llm-retry.ts}：沒有 `delayMs`（接縫看不到退避）、沒有
+   * 欄位比 dsh 少，理由與計數的壽命見 {@link ./llm-retry.ts}：SDK 層沒有 `delayMs`（接縫看不到退避）、沒有
    * `turn`（由 `seq` 推）。`step` 的對應物是 `modelCall`（#1021）：所屬那次呼叫的 `model/start` 的 `seq`。
    */
   'llm/retry': {
@@ -627,6 +629,12 @@ export interface SessionEventMap {
     readonly retry: number;
     readonly maxRetries: number;
     readonly failure: LlmFailure;
+    /**
+     * 排定要等多久（毫秒，已含抖動）。**只有串流中段出錯的重打有**（[#520](https://github.com/DemianLi/nexus-agent/issues/520)，
+     * `stream-retry.ts` 自己算退避）；**SDK 層（#712，`llm-retry.ts`）沒有這一格**——`onFailedAttempt` 在 `p-retry` 算退避之前就被叫，
+     * 事前不可知，那一側的實際等待看配對的 `llm/retry-started.waitedMs`。
+     */
+    readonly delayMs?: number;
     /**
      * 所屬那次模型呼叫，值是它的 `model/start` 的 `seq`（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)，見 `model-call-scope.ts`）。
      * 舊日誌與寫入點不在呼叫範圍裡時沒有這一格——讀的人標「—」，不是推位置。
@@ -693,8 +701,9 @@ export interface SessionEventMap {
    * （`packages/core/session/src/types.ts`，`5badb15009a`）：「一次沒有落進對話的模型嘗試」，留下它吐了什麼，不編造模型可見的歷史。
    *
    * **不進模型**，用 `{ ignorable: true }` 寫（純資訊性的新種類不升格式版本，#507）；推模型歷史的一側不讀。**由 pump 寫**
-   * ——只有它握有那半段文字（同 `assistant/message` 的 `interrupted`），落在下一次嘗試的 `model/start` 之後、第一個片段之前。
-   * 失敗那次本身的起訖是它自己的一對 `model/start`／`model/end`（`outcome: 'error'`），`modelCall` 指回那一對。
+   * ——只有它握有那半段文字（同 `assistant/message` 的 `interrupted`），在**失敗當下**收到 `stream-retry.ts` 的通知時寫：落在失敗那一對
+   * `model/start`／`model/end`（`outcome: 'error'`）與配對的 `llm/retry` 之後、下一次嘗試的 `model/start` 之前（等退避時按停止也有這一顆）。
+   * `modelCall` 指回失敗那一對。
    *
    * 畫面據它送一顆 `message-discard`（`@nexus/wire`，酬載是 `messageId`）擦掉那則回覆。dsh 的是精確的計時串流記錄
    * （`AssistantStreamRecord[]`），我們留的是被擦掉的那則的文字與推理——我們的日誌沒有逐片段的串流記錄。

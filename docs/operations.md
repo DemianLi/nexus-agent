@@ -594,8 +594,9 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   錯誤事件、連線中途斷掉、吐了內容之後停住（上一條的閒置逾時）。第一則事件之前的失敗歸 `maxRetries`，不乘在一起。四個欄位：
   `maxRetries`（預設 2，`0` 關掉）、`baseDelayMs`（預設 1000，之後每次加倍）、`maxDelayMs`（單次等待封頂，預設 10000）、
   `jitterRatio`（抖動，預設 0.1）。退避的形狀照 dsh；次數與起點比 dsh（5 次、500 毫秒）保守，**因為每一次重打都重付整個回覆的費用**。
-  重打時上一次吐了一半的回覆在畫面上被擦掉，日誌留一顆 `assistant/attempt`（不進模型），失敗那次的 `model/end` 帶
-  `outcome: error`、用量照記。請求本身有問題的錯誤（例如串流內的 400）不重打。**子代理的回覆也會重打，但已經畫出去的子代理字
+  決定重打的**當下**，上一次吐了一半的回覆在畫面上被擦掉（`message-discard`），畫面收到 `llm-retry`（第幾次、等多久、失敗碼，用來畫
+  「N 秒後重試」）；日誌留一顆 `assistant/attempt`（不進模型）與 `llm/retry`（帶 `delayMs`）、`llm/retry-started`，失敗那次的 `model/end` 帶
+  `outcome: error`、用量照記。退避期間按停止：輪次以中止收尾、不再重打。請求本身有問題的錯誤（例如串流內的 400）不重打。**子代理的回覆也會重打，但已經畫出去的子代理字
   不會被擦**（畫面上多一則斷尾的回覆）。
 - **關推理的寫法在型錄那一筆**（[#650](https://github.com/DemianLi/nexus-agent/issues/650)、原本的 `thinkingOffBody`）：
   `off` 那一級加 `compat.chatTemplateKwargs`（`$var: thinking.enabled` 在 `off` 解成 `false`）。它只有標題呼叫會

@@ -82,6 +82,7 @@ import {
   MAX_TOKENS_TURN_END,
   SessionRegistry,
   spliceInbox,
+  streamRetrySignalOf,
   STEP_INBOX_CONFIG_KEY,
   TOOL_ABORTED,
   TOOL_ABORTED_BEFORE_DISPATCH,
@@ -119,6 +120,8 @@ import {
   channelOfMethod,
   DELEGATION_TOOL_NAMES,
   eventId,
+  LLM_RETRY,
+  LLM_RETRY_STARTED,
   MESSAGE_DISCARD,
   SessionReferenceError,
   SUBAGENT_STATUS,
@@ -840,11 +843,6 @@ interface CurrentRun {
   reasoning: string;
   /** root 有一則回覆講到一半。 */
   replyOpen: boolean;
-  /**
-   * 講到一半那則回覆所屬的模型呼叫（它的 `model/start` 的 `seq`，#1021）。整次重打時下一次嘗試的 `message-start` 到來，
-   * 作廢的那則要記回這一次，見 {@link ThreadPump.#abandonSupersededReply}。
-   */
-  replyModelCall: number | undefined;
   /**
    * root 上最近一則**還沒落進日誌**的回覆，給新接上的下行補送（[#953](https://github.com/DemianLi/nexus-agent/issues/953)
    * 第二刀）。跟 {@link partial} 分開：它撐到 `assistant/message` 落盤才放掉，不是撐到 `message-finish`（量過，
@@ -2557,7 +2555,6 @@ export class ThreadPump {
       partial: '',
       reasoning: '',
       replyOpen: false,
-      replyModelCall: undefined,
       reply: undefined,
       stopped: false,
       maxTokens: false,
@@ -2609,7 +2606,7 @@ export class ThreadPump {
       // **在第一顆封包之前**：投影裡的 promise 一建立就可能被 reject，晚掛就漏（#346）。
       markProjectionsHandled(run);
       for await (const raw of run) {
-        this.#abandonSupersededReply(current, raw);
+        this.#applyStreamRetrySignal(current, raw);
         trackRootReply(current, raw);
         trackUnsettledReply(current, raw);
         for (const event of this.#translate(raw)) {
@@ -2667,31 +2664,49 @@ export class ThreadPump {
   }
 
   /**
-   * 串流中段出錯、整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)，`@nexus/core` 的 `stream-retry.ts`）時，
-   * 上一次嘗試吐了一半的 root 回覆作廢：新的一則 `message-start` 到來，而上一則還沒收尾（沒有 `message-finish`）。
+   * 串流中段出錯、整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）時，`@nexus/core` 的 `stream-retry.ts`
+   * 在**失敗當下**用 `config.writer` 送來一顆 {@link StreamRetrySignal}。它和字片段在同一條輸出佇列上，所以讀到它的時候失敗那次的
+   * 片段一個都不會再來（順序的依據與常駐測試見該檔檔頭與 `stream-retry.test.ts`）。
    *
-   * 做兩件事，**都在新那則的 frame 廣播之前**：①日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型，`ignorable`），
-   * ②送一顆 `message-discard` 讓畫面把上一則擦掉。判準是「另一則 root 的 `message-start` 來得比上一則的 `message-finish` 早」
-   * ——正常流程一則回覆一定先收尾才開下一則，所以不會誤判。
+   * - `scheduled`：①作廢 root 還沒收尾的回覆（`assistant/attempt` ＋ `message-discard`，{@link ThreadPump.#discardOpenReply}），
+   *   ②送 `llm-retry`（畫面據此畫「N 秒後重試」）。**兩者在同一刻**，同 dsh 在失敗當下記 `assistant/attempt`。
+   * - `started`：退避等完、下一次嘗試要開始，送 `llm-retry-started`。取消沒有專屬 frame：退避中按停止，這一輪直接收尾。
    *
-   * **只管 root。** 子代理的回覆在更深的 namespace、各有各的 `message-start`；它們的重打（共用同一個 slot）不擦已經畫出去的字，
-   * 代價是畫面上多一則斷尾的子代理回覆，跟重打之前一樣。
-   *
-   * 順手記下這一則回覆屬於哪次呼叫（下一次作廢時要用）。
+   * **只管 root。** 圖裡 `custom` 的 namespace 是空的才是 root；子代理在更深的 namespace，它們的重打（共用同一個 slot）不擦已經畫出去的字，
+   * 代價是畫面上多一則斷尾的子代理回覆，跟重打之前一樣。**圖自己發的其餘 `custom` 仍然一律不上線**（{@link ThreadPump.#translate}）：
+   * 這裡只認 {@link streamRetrySignalOf} 認得的形狀，其餘原樣略過。
    */
-  #abandonSupersededReply(current: CurrentRun, raw: RawProtocolEvent): void {
-    if (raw.method !== 'messages' || raw.params.namespace.length > 1) return;
-    const data = raw.params.data as { event?: string; role?: string } | null;
-    if (data?.event !== 'message-start' || data.role === 'human') return;
-    if (current.replyOpen) this.#discardOpenReply(current);
-    current.replyModelCall = lastModelCall(this.#sessions.root);
+  #applyStreamRetrySignal(current: CurrentRun, raw: RawProtocolEvent): void {
+    if (raw.method !== 'custom' || raw.params.namespace.length !== 0) return;
+    const signal = streamRetrySignalOf((raw.params.data as { payload?: unknown } | null)?.payload);
+    if (signal === undefined) return;
+    if (signal.phase === 'started') {
+      this.#presentCustom({
+        name: LLM_RETRY_STARTED,
+        payload: { retryId: signal.retryId, retry: signal.retry },
+      });
+      return;
+    }
+    this.#discardOpenReply(current, signal.modelCall);
+    this.#presentCustom({
+      name: LLM_RETRY,
+      payload: {
+        retryId: signal.retryId,
+        retry: signal.retry,
+        maxRetries: signal.maxRetries,
+        delayMs: signal.delayMs,
+        code: signal.code,
+      },
+    });
   }
 
   /**
    * 作廢 root 那則講到一半的回覆：日誌記一顆 `assistant/attempt`（吐了什麼、屬於哪次呼叫；不進模型，`ignorable`），線上送
    * `message-discard` 讓畫面把它擦掉，並把這一則從「講到一半」的追蹤裡拿掉。沒有講到一半的就什麼都不做。
+   *
+   * @param modelCall - 失敗的那次呼叫的 `model/start` 的 `seq`（通知帶來的）；日誌沒接上就沒有。
    */
-  #discardOpenReply(current: CurrentRun): void {
+  #discardOpenReply(current: CurrentRun, modelCall: number | undefined): void {
     const previous = current.reply;
     if (!current.replyOpen || previous === undefined || previous.finish !== undefined) return;
     const reasoning = current.reasoning;
@@ -2710,7 +2725,7 @@ export class ThreadPump {
     try {
       this.#sessions.root.append(
         'assistant/attempt',
-        withModelCall({ message: toLoggedMessage(abandoned) }, current.replyModelCall),
+        withModelCall({ message: toLoggedMessage(abandoned) }, modelCall),
         { ignorable: true },
       );
     } catch {
@@ -2721,21 +2736,6 @@ export class ThreadPump {
     current.partial = '';
     current.reasoning = '';
     current.replyOpen = false;
-  }
-
-  /**
-   * 講到一半的那則回覆，所屬的那次呼叫是不是**已經失敗收尾**（`model/end` 帶 `outcome: 'error'`）。是的話，這一則是一次死掉的
-   * 嘗試：它只可能在等重打的退避裡被留在畫面上——使用者在那時按停止，不能把它當「被我打斷的半段」存回對話。
-   */
-  #openReplyBelongsToFailedCall(current: CurrentRun): boolean {
-    const call = current.replyModelCall;
-    if (call === undefined) return false;
-    return this.#sessions.root.events.some(
-      (event) =>
-        event.type === 'model/end' &&
-        (event.data as SessionEventMap['model/end']).modelCall === call &&
-        (event.data as SessionEventMap['model/end']).outcome === 'error',
-    );
   }
 
   /**
@@ -2757,11 +2757,8 @@ export class ThreadPump {
    * 一側照樣拿得到這半段。它落在被切斷那次呼叫的 `model/end` 之後——寫入點看到的是拋錯，不是回覆。
    */
   async #keepInterruptedReply(current: CurrentRun): Promise<void> {
-    // 整次重打的退避期間被停止（#520）：那則是上一次失敗的嘗試，同 dsh——失敗當下就記成 `assistant/attempt`，停止時不留。
-    if (current.replyOpen && this.#openReplyBelongsToFailedCall(current)) {
-      this.#discardOpenReply(current);
-      return;
-    }
+    // 整次重打的退避期間被停止（#520）：上一次失敗的嘗試在失敗當下就作廢了（{@link ThreadPump.#applyStreamRetrySignal}），
+    // 這裡看到的 `replyOpen` 一定是這一輪真的被我打斷的那則。
     const reasoning = current.reasoning.trim() === '' ? '' : current.reasoning;
     const text = current.partial.trim() === '' ? '' : current.partial;
     if (!current.replyOpen || (reasoning === '' && text === '')) return;

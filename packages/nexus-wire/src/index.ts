@@ -165,6 +165,8 @@ export type {
 } from './subagent-list.js';
 export { isSubagentListMethod, SUBAGENT_LIST_METHOD } from './subagent-list.js';
 export type { MessageDiscardPayload } from './message-discard.js';
+export { LLM_RETRY, LLM_RETRY_STARTED } from './llm-retry.js';
+export type { LlmRetryPayload, LlmRetryStartedPayload, WireLlmRetry } from './llm-retry.js';
 export { MESSAGE_DISCARD } from './message-discard.js';
 export type {
   PermissionCatalog,
