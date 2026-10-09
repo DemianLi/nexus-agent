@@ -53,7 +53,7 @@ export function TurnGroup({
   const rows = hiddenRows === 0 ? turn.rows : turn.rows.slice(hiddenRows);
   return (
     <section
-      className={`border-border mb-4 border-l pl-1 ${revealed ? 'ring-ring rounded-md ring-2' : ''}`}
+      className="border-border mb-4 border-l pl-1"
       data-testid="trace-turn"
       data-legacy={turn.legacy ? '' : undefined}
       data-seq={turn.seq}
@@ -177,7 +177,6 @@ export function Digests({
           {visible.map((digest) => (
             <li
               key={digest.key}
-              className={`outline-none ${revealedSeq === digest.seq ? 'ring-ring rounded-md ring-2' : ''}`}
               data-testid="trace-digest"
               data-number={digest.number}
               data-seq={digest.seq}

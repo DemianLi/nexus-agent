@@ -37,6 +37,7 @@ import { DelegatedChip } from '@/components/delegated-chip';
 import { SentAttachments } from '@/components/sent-attachments';
 import { ReferencedText } from '@/components/session-reference';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
+import { ChatBubble } from '@/components/chat-bubble';
 import { ChangesCard } from '@/components/changes/card';
 import { CompactionRow } from '@/components/compaction-row';
 import { DeliverablesCard } from '@/components/deliverable/card';
@@ -203,11 +204,9 @@ export function Entry({
           {/* 這一句點名派的子代理（#328 第 2 項）：chip 在泡泡上方；`text` 不含點名字樣，標記從 `mention` 畫。 */}
           {entry.mention !== undefined && <DelegatedChip name={entry.mention.name} />}
           {entry.text.trim() !== '' && (
-            <Bubble variant="secondary" align="end">
-              <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
-                <ReferencedText text={entry.text} references={entry.references} />
-              </BubbleContent>
-            </Bubble>
+            <ChatBubble>
+              <ReferencedText text={entry.text} references={entry.references} />
+            </ChatBubble>
           )}
           {/* 被準入閘門擋下的那一句（封存的會話，#633）：泡泡照畫，底下一句中性的提示（不是錯誤、不畫紅）：話沒有送給模型。 */}
           {entry.blocked === true && (
@@ -397,11 +396,7 @@ function PendingSteerBubble({
         <SentAttachments attachments={attachments} />
         {mention !== undefined && <DelegatedChip name={mention.name} />}
         {text.trim() !== '' && (
-          <Bubble variant="secondary" align="end" className="opacity-70">
-            <BubbleContent className="text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">
-              {mentionDisplayText(text)}
-            </BubbleContent>
-          </Bubble>
+          <ChatBubble className="opacity-70">{mentionDisplayText(text)}</ChatBubble>
         )}
         <MessageFooter className="px-0">{caption}</MessageFooter>
       </MessageContent>
@@ -428,15 +423,15 @@ function SettledNotice({ caption, pending }: { caption: string; pending?: boolea
 }
 
 /**
- * 背景子代理寄來的話（#861）：一則引言式的小卡，上面一行「某某 說」，下面是它寫的話。**不是人的泡泡**（靠左、
- * 用 chip 底色，不是靠右的 secondary），也不是模型的回覆；文字是子代理寫的，原樣照畫，不解析。
+ * 背景子代理寄來的話（#861）：一則引言式的小卡，上面一行「某某 說」，下面是它寫的話。**不是人的泡泡**（同一種泡泡但靠左，
+ * 人的話靠右），也不是模型的回覆；文字是子代理寫的，原樣照畫，不解析。
  */
 function AgentMessageCard({ caption, text }: { caption: string; text: string }) {
   return (
     <Message align="start" data-agent-message="">
       <MessageContent>
         <p className="text-muted-foreground px-1 pb-1 text-tip">{caption}</p>
-        <div className="bg-chip text-body rounded-3xl px-4 py-2.5 whitespace-pre-wrap">{text}</div>
+        <ChatBubble align="start">{text}</ChatBubble>
       </MessageContent>
     </Message>
   );

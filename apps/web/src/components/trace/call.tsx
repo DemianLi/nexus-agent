@@ -6,6 +6,7 @@
 import { Cpu } from 'lucide-react';
 import { useMemo } from 'react';
 
+import { MonoBlock } from '@/components/mono-block';
 import { ExpandableLine, SnapshotBlock } from '@/components/trace/lines';
 import { CALL_OUTCOME_LABEL, TRACE_CALL_UNLOADED_TEXT } from '@/lib/trace-view';
 import type { TraceRow } from '@/lib/trace-view';
@@ -35,9 +36,6 @@ function snapshotText(
   }
   return row.headerTools === undefined ? '已記錄' : `工具 ${row.headerTools} 個`;
 }
-
-const SNAPSHOT_PRE =
-  'bg-chip max-h-72 min-w-0 overflow-auto rounded-lg p-2 font-mono text-tip break-words whitespace-pre-wrap';
 
 interface ParsedHeader {
   readonly config: readonly (readonly [string, string])[];
@@ -112,7 +110,7 @@ function HeaderBody({ json, diff }: { json: string; diff: string | undefined }) 
               {tool.description !== '' && (
                 <p className="mb-1 break-words whitespace-pre-wrap">{tool.description}</p>
               )}
-              {tool.rest !== '' && <pre className={SNAPSHOT_PRE}>{tool.rest}</pre>}
+              {tool.rest !== '' && <MonoBlock className="max-h-72">{tool.rest}</MonoBlock>}
             </SnapshotBlock>
           </li>
         ))}
@@ -140,7 +138,7 @@ function SnapshotDetails({ row }: { row: Extract<TraceRow, { kind: 'call' }> }) 
               {TRACE_SYSTEM_TRUNCATED_TEXT}
             </p>
           )}
-          <pre className={SNAPSHOT_PRE}>{row.systemText}</pre>
+          <MonoBlock className="max-h-72">{row.systemText}</MonoBlock>
         </SnapshotBlock>
       )}
       {row.headerJson !== undefined && (
