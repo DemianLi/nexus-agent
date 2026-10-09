@@ -33,6 +33,49 @@ function view(state: ConversationState) {
   return render(<Transcript state={state} isFresh={() => false} />);
 }
 
+describe('被擋下的人話（封存的會話，#633）', () => {
+  it('泡泡照畫，底下一句中性的提示；沒被擋下的人話沒有', () => {
+    const script = new Script();
+    const blocked = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('h1', '封存之後說的話'),
+      script.blocked(),
+    ]);
+    const { unmount } = view(blocked);
+    expect(screen.getByText('封存之後說的話')).toBeTruthy();
+    expect(screen.getByTestId('blocked-hint').textContent).toBe('已封存，這句話沒有送給模型');
+    // 不是錯誤：沒有紅色警示語意。
+    expect(screen.queryByRole('alert')).toBeNull();
+    unmount();
+
+    const normal = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('h2', '正常說的話'),
+      script.completed(),
+    ]);
+    view(normal);
+    expect(screen.queryByTestId('blocked-hint')).toBeNull();
+  });
+
+  it('被擋下之後解封再說一句：後一句沒有提示，前一句的提示還在（歷史不被改寫）', () => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('h1', '第一句被擋'),
+      script.blocked(),
+      script.running(),
+      ...script.human('h2', '第二句送出去了'),
+      ...script.ai('a', { text: '收到' }),
+      script.completed(),
+    ]);
+    view(state);
+    expect(screen.getAllByTestId('blocked-hint')).toHaveLength(1);
+    expect(
+      state.entries.filter((entry) => entry.kind === 'human' && entry.blocked === true),
+    ).toHaveLength(1);
+  });
+});
+
 describe('作廢的回覆（#520）', () => {
   it('吐到一半的那則被作廢：字與推理都從畫面消失，只剩人的那一句', () => {
     const state = fold((s) => [
