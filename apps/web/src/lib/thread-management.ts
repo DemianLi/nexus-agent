@@ -74,7 +74,7 @@ export interface ThreadManagement {
   /** 釘選的會話 id，最近釘的在前。 */
   readonly pinnedIds: readonly string[];
   readonly archivedIds: ReadonlySet<string>;
-  /** server 剛受理的標題，按 id；蓋過清單上的標題，直到下一份列表（重抓）來了為止。 */
+  /** server 受理的標題，按 id；蓋過清單上的標題，直到列表自己追上（列上的標題等於它）為止。 */
   readonly titles: ReadonlyMap<string, string>;
   readonly onPin: (threadId: string) => ThreadActionResult;
   readonly onUnpin: (threadId: string) => ThreadActionResult;

@@ -5,12 +5,11 @@ import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { explainThreadFailure, normalizeTitle, readSets } from '@/lib/thread-management';
 import type { ThreadActionResult, ArchiveAnswer, ThreadManagement } from '@/lib/thread-management';
 
-/** 這份列表之後、下一份列表之前，動作回應裡的整份集合與 server 受理的標題。 */
+/** 這份列表之後、下一份列表之前，動作回應裡的整份集合。 */
 interface Overlay {
   readonly base: ThreadListResult | undefined;
   readonly pinned?: readonly string[];
   readonly archived?: readonly string[];
-  readonly titles: ReadonlyMap<string, string>;
 }
 
 const NO_TITLES: ReadonlyMap<string, string> = new Map();
@@ -76,15 +75,17 @@ export function useThreadManagement(
   useLayoutEffect(() => {
     baseRef.current = base;
   });
-  const [overlay, setOverlay] = useState<Overlay>({ base: undefined, titles: NO_TITLES });
+  const [overlay, setOverlay] = useState<Overlay>({ base: undefined });
   // 新一份列表來了，蓋在上面的就作廢：列表是 server 剛講的話。
   const current = overlay.base === base ? overlay : undefined;
   const tickets = useRef({ pinned: 0, archived: 0 });
+  // server 受理過的標題，按 id；跨列表留著（見 `onRename`）。
+  const [renamed, setRenamed] = useState<ReadonlyMap<string, string>>(NO_TITLES);
 
   const patch = useCallback((update: (previous: Overlay) => Overlay) => {
     setOverlay((previous) => {
       const at = baseRef.current;
-      return update(previous.base === at ? previous : { base: at, titles: NO_TITLES });
+      return update(previous.base === at ? previous : { base: at });
     });
   }, []);
 
@@ -155,20 +156,23 @@ export function useThreadManagement(
       if (title === undefined) return '標題不能是空的。';
       const result = await settle(() => client.threadRename(threadId, title));
       if ('message' in result) return result.message;
-      // 先用 server 受理的標題頂著，重抓的列表來了就換成列表上的。
-      patch((previous) => ({
-        ...previous,
-        titles: new Map(previous.titles).set(threadId, result.value.title),
-      }));
-      refresh();
+      // 用 server 受理的標題頂著，**不重抓列表**：`GET /threads` 讀的是落盤的那份，落盤是非同步的，這時候重抓回來的多半
+      // 還是舊標題，會把剛改好的蓋回去。頂著的標題留到列表自己追上（列上的標題等於它）為止；目前這條的標題另走即時推送。
+      setRenamed((previous) => new Map(previous).set(threadId, result.value.title));
       return undefined;
     },
-    [client, patch, refresh],
+    [client],
   );
 
   const pinned = current?.pinned ?? sets?.pinned;
   const archived = current?.archived ?? sets?.archived;
-  const titles = current?.titles ?? NO_TITLES;
+  // 列表已經追上的（列上的標題等於我們頂著的）不再蓋；列表上沒有那一列的留著。
+  const titles = useMemo(() => {
+    if (renamed.size === 0) return NO_TITLES;
+    const listed = new Map((base?.items ?? []).map((item) => [item.threadId, item.title]));
+    const pending = [...renamed].filter(([id, title]) => listed.get(id) !== title);
+    return pending.length === 0 ? NO_TITLES : new Map(pending);
+  }, [renamed, base]);
   const archivedIds = useMemo(() => new Set(archived), [archived]);
 
   return useMemo(

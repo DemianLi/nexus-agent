@@ -190,7 +190,7 @@ describe('回得慢的舊回應不蓋新的', () => {
 });
 
 describe('改名', () => {
-  it('送出正規化後的標題，先用 server 受理的標題頂著並重抓列表；列表來了就換成列表上的', async () => {
+  it('送出正規化後的標題，用 server 受理的標題頂著、不重抓列表（落盤是非同步的，重抓回來是舊標題）', async () => {
     const client = { threadRename: vi.fn(async () => ok({ title: '受理後的', seq: 3 })) };
     const { hook, refresh } = setup(client, okListing(listed([], [])));
     await act(async () => {
@@ -198,8 +198,23 @@ describe('改名', () => {
     });
     expect(client.threadRename).toHaveBeenCalledWith('t1', '登入頁 重做');
     expect(hook.result.current?.titles.get('t1')).toBe('受理後的');
-    expect(refresh).toHaveBeenCalledTimes(1);
-    hook.rerender({ listing: okListing(listed([], [])) });
+    expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('落盤前來的列表還是舊標題：頂著的標題不被蓋回去；列表追上之後才放手', async () => {
+    const client = { threadRename: vi.fn(async () => ok({ title: '新標題', seq: 3 })) };
+    const stale = (title: string) =>
+      okListing({
+        ...listed([], []),
+        items: [{ threadId: 't1', updatedAt: 1, running: false, blank: false, title }],
+      });
+    const { hook } = setup(client, stale('舊標題'));
+    await act(async () => {
+      await hook.result.current!.onRename('t1', '新標題');
+    });
+    hook.rerender({ listing: stale('舊標題') });
+    expect(hook.result.current?.titles.get('t1')).toBe('新標題');
+    hook.rerender({ listing: stale('新標題') });
     expect(hook.result.current?.titles.size).toBe(0);
   });
 
