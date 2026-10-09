@@ -1,6 +1,6 @@
 # nexus web 介面規格：P0 元件、設計 token、動效與無障礙
 
-**狀態**：規格拍板於 2026-09-18，P0 已照這份實作，現在的介面就是它；之後的收斂見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)（token 與積木）、[#1278](https://github.com/DemianLi/nexus-agent/issues/1278)（設計系統地圖）。這份是現行規格：值或規則改了，回寫這裡。來源是地圖 [#372 web 介面重做](https://github.com/DemianLi/nexus-agent/issues/372) 的八張卡；原型定版在 tag [`proto-375-design-language`](https://github.com/DemianLi/nexus-agent/tree/proto-375-design-language)（`61cc564`）。
+**狀態**：規格拍板於 2026-09-18，P0 已照這份實作（§11 末尾仍有還沒驗過的項目）；之後的收斂見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)（token 與積木）、[#1278](https://github.com/DemianLi/nexus-agent/issues/1278)（設計系統地圖）。這份是現行規格：值或規則改了，回寫這裡。來源是地圖 [#372 web 介面重做](https://github.com/DemianLi/nexus-agent/issues/372) 的八張卡；原型定版在 tag [`proto-375-design-language`](https://github.com/DemianLi/nexus-agent/tree/proto-375-design-language)（`61cc564`）。
 
 **用途**：交給實作的那一份。讀完這份就知道 P0 要做什麼、每個元件從哪裡拿、token 與動效的規則、無障礙要做到哪、原型哪些可以直接搬、實作必須帶哪些測試。**怎麼切實作卡不在這份**（地圖把它排在終點之外）。
 

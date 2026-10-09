@@ -6,16 +6,15 @@ import ts from 'typescript';
 import { describe, expect, test } from 'vitest';
 
 /**
- * 字級的主次（[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)，規則在 `COMPONENTS.md`「字級」）：
+ * 字級的主次（[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)，規則在 `COMPONENTS.md`「字級的主次」）：
  * **可以點的、當標題的用 `text-ui`（13）；小字說明、附註、時間、計數用 `text-tip`（12）；內文 `text-body`（14）不變。**
  *
- * 這裡只守機械判得出來的那一半：
- * 1. **可點的元件不縮成小字**：下面 {@link CONTROLS} 這些 JSX 元素自己的 `className` 裡出現 `text-tip`／`text-micro` 就紅。
- *    「是不是標題」判不出來，靠 review。
- * 2. **registry 元件的預設字級**：按鈕與下拉選單沒有小字；`xs` 按鈕、側欄 `sm` 選單鈕與群組標題、cmdk 群組標題是 `text-ui`。
+ * 這裡只守機械判得出來的那一半：**可點的元件不縮成小字**——下面 {@link CONTROLS} 這些 JSX 元素自己的 `className` 裡出現
+ * `text-tip`／`text-micro` 就紅。「是不是標題」判不出來，靠 review。registry 元件的預設字級（`xs` 按鈕、側欄、cmdk、附件）
+ * 是 registry 原文的改動，守在 `components/ui/registry-edits.test.ts`。
  *
  * 掃的是 JSX 的語法樹，不是 regex：開頭標籤常常跨行，class 字串裡有 `has-[>svg]`，props 裡有 `=>`，掃到 `>` 為止會漏也會誤抓。
- * 先用字串預篩（含 `text-tip` 或 `text-micro` 的檔才 parse），全樹 parse 一次要好幾秒。
+ * 先用字串預篩：含 `text-tip` 或 `text-micro` 的檔才 parse，不 parse 整棵樹。
  */
 
 const SRC = fileURLToPath(new URL('..', import.meta.url));
@@ -100,12 +99,6 @@ function scan(files: readonly string[]): Hit[] {
   });
 }
 
-/** 拿掉註解：檔頭講到類別名不算。 */
-const code = (path: string) =>
-  readFileSync(join(SRC, path), 'utf8')
-    .replace(/\/\*[\s\S]*?\*\//g, '')
-    .replace(/^\s*\/\/.*$/gm, '');
-
 const files = sourceFiles(SRC);
 
 describe('可點的元件不縮成小字（#1281）', () => {
@@ -140,22 +133,5 @@ describe('可點的元件不縮成小字（#1281）', () => {
     ).toEqual([]);
     expect(hits(`<p className="text-tip" />`)).toEqual([]);
     expect(hits(`<Button className="text-tipx" />`)).toEqual([]);
-  });
-});
-
-describe('registry 元件的預設字級（#1281）', () => {
-  test('按鈕與下拉選單沒有小字：xs 按鈕也是 text-ui', () => {
-    for (const path of ['components/ui/button.tsx', 'components/ui/dropdown-menu.tsx']) {
-      expect(code(path), path).not.toMatch(/text-(?:tip|micro)\b/);
-    }
-    expect(code('components/ui/button.tsx')).toMatch(/xs: "h-6 [^"]*\btext-ui\b/);
-  });
-
-  test('側欄的群組標題與 sm 選單鈕、cmdk 的群組標題是 text-ui', () => {
-    const sidebar = code('components/ui/sidebar.tsx');
-    expect(sidebar).toMatch(/data-sidebar="group-label"[\s\S]{0,200}\btext-ui\b/);
-    expect(sidebar).toContain("sm: 'h-7 text-ui'");
-    expect(sidebar).toContain("size === 'sm' && 'text-ui'");
-    expect(code('components/ui/command.tsx')).toContain('[&_[cmdk-group-heading]]:text-ui');
   });
 });
