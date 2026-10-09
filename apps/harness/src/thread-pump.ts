@@ -175,6 +175,7 @@ import {
 } from './mcp-elicitation.js';
 import type { McpElicitation, SystemAnswerReason } from './mcp-elicitation.js';
 import type {} from '@nexus/plugin-goal';
+import { renderGoalRoundPrompt } from '@nexus/plugin-goal';
 import type {} from '@nexus/plugin-todo';
 import type {} from '@nexus/plugin-plan-mode';
 import type {} from '@nexus/plugin-present';
@@ -318,6 +319,14 @@ function pumpInputOf(item: QueuedInput): PumpInput {
       };
     case 'agent-message':
       return { kind: 'agent-message', text: item.text, senderSessionId: source.senderSessionId };
+    case 'goal':
+      return {
+        kind: 'goal',
+        text: item.text,
+        goalId: source.goalId,
+        revision: source.revision,
+        round: source.round,
+      };
     default: {
       const unhandled: never = source;
       throw new Error(`送出佇列的來源 ${JSON.stringify(unhandled)} 沒有對應的輸入種類`);
@@ -343,6 +352,9 @@ function userMessageSourceOf(source: QueuedInputSource): UserMessageSource {
       };
     case 'agent-message':
       return { kind: 'agent-message', form: 'relay', senderSessionId: source.senderSessionId };
+    case 'goal':
+      // 目標續行只走 `next-turn`（開一輪），不是插話；`updateQueue` 也不收把它改成插話。走到這裡是寫的那一側壞了。
+      throw new Error('目標續行不能作為輪中插話被領走');
     default: {
       const unhandled: never = source;
       throw new Error(`送出佇列的來源 ${JSON.stringify(unhandled)} 沒有對應的 user/message 來源`);
@@ -796,6 +808,9 @@ export type QueueAction =
 
 const settled = (): void => undefined;
 
+/** 續行預約連續失效幾次就停用續行，見 `ThreadPump.#goalDropStreak`。 */
+const GOAL_DROP_LIMIT = 3;
+
 /** 人按了停止——`turn/end` 帶的那一格。見 `session-log.ts` 的 `turn/end`。 */
 const ABORTED_BY_USER: TurnEndReason = { kind: 'aborted', cause: { kind: 'user' } };
 
@@ -1224,6 +1239,12 @@ export class ThreadPump {
   readonly #driver: GoalDriverPort | undefined;
   /** 已經排了一次延後的「問排程器」，等它跑。一串 `goal/change` 只問一次。 */
   #goalDriveScheduled = false;
+  /**
+   * 連續幾次領走時發現預約已經失效、丟掉重排（#638）。預約的失效條件（修訂、輪數、授權、人排在前面）每次都由日誌與目前的
+   * 視圖算出來，照理一次丟掉之後重排的就是有效的；這一格擋的是兩邊算法走散時的空轉——到頂就停用續行並說一聲。
+   * 一輪續行真的開跑就歸零。
+   */
+  #goalDropStreak = 0;
 
   /**
    * @param agent - 這條 thread 的 agent。
@@ -2002,14 +2023,113 @@ export class ThreadPump {
         // 再問一次：`flush()` 期間人可能已經送了東西進來。`driveGoalRound` 自己看不到
         // 排隊——它只讀日誌，而排隊中的那一筆還沒寫下任何事件——所以這是唯一看得到的地方。
         if (round === undefined || this.#closed || this.running) return;
-        void this.submit({ kind: 'goal', ...round }).catch(() => {
-          // 那一輪自己的失敗已經進了日誌（`turn/failed`），而 `submit` 回的 promise
-          // 沒有別人在等——不接住的話它是一顆 unhandled rejection，會殺掉整個行程。
-        });
+        this.#reserveGoalRound(driver, round);
       } catch (error: unknown) {
         driver.warn(`排下一輪時出事：${error instanceof Error ? error.message : String(error)}`);
       }
     })();
+  }
+
+  /**
+   * 把排程器排出來的一輪**預約進送出佇列**（[#638](https://github.com/DemianLi/nexus-agent/issues/638)）：`next-turn` 的尾巴，
+   * `source` 是 `goal`。照 dsh（`goal-round-driver/src/index.ts` 的 `drive`：`agent.followup(message)`，`5badb15009a`），所以它
+   * 列得出、改得動刪得掉、和人送的一樣照 FIFO 開跑；開跑時 {@link ThreadPump.#runQueued} 先驗這份預約還有沒有效。
+   *
+   * **預約的狀態不另外記**：有沒有一件預約在排，看的是佇列裡有沒有 `goal` 來源的件——dsh 的 `RoundAttempt` 是行程內的
+   * 狀態，重啟就歸零；我們的在日誌上，重啟折回來還在，所以領走時的驗證（授權不持久，重啟後一定是 `disarmed`）是那一頭的守門員。
+   * 已經有一件在排就不再預約，避免兩份。
+   *
+   * 排不進去（日誌壞了、範圍錯）就把目標擋住，代碼 `queue-failed`，同 dsh 的 `ctx.goals.block`。
+   */
+  #reserveGoalRound(driver: GoalDriverPort, round: GoalRoundRequest): void {
+    if (this.#inbox['next-turn'].some((item) => item.source.kind === 'goal')) return;
+    const item: QueuedInput = {
+      id: crypto.randomUUID(),
+      text: round.text,
+      source: {
+        kind: 'goal',
+        goalId: round.goalId,
+        revision: round.revision,
+        round: round.round,
+      },
+    };
+    try {
+      this.#spliceInbox({
+        target: 'next-turn',
+        start: this.#inbox['next-turn'].length,
+        inserted: [item],
+      });
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      driver.warn(`續行第 ${String(round.round)} 輪排不進送出佇列：${message}`);
+      try {
+        driver.block(
+          { id: round.goalId, revision: round.revision },
+          {
+            code: 'queue-failed',
+            message: `Could not queue goal round ${String(round.round)}: ${message}`,
+          },
+        );
+      } catch (blockError: unknown) {
+        driver.warn(`連記 queue-failed 的 blocker 都失敗了：${String(blockError)}`);
+      }
+      return;
+    }
+    // 沒有人等這一件的結果：排程的 promise 收線時會 reject，接住免得變成沒人接的 rejection。
+    this.#schedule(() => this.#runQueued(item.id), false, { itemId: item.id }).catch(() => {});
+  }
+
+  /**
+   * 領走時驗一份續行預約還有沒有效，照 dsh 的 `validReservation`（`goal-round-driver/src/index.ts`）：目標還是同一個、同一個修訂、
+   * 相位 active、授權 armed、輪數正好是下一輪、提示詞逐字等於「現在」算出來的那份，而且**沒有人排在它後面**
+   * （dsh 的 `competingQueued`：人的輸入優先於一份預約）。
+   */
+  #goalReservationValid(item: QueuedInput): boolean {
+    const source = item.source;
+    if (source.kind !== 'goal') return true;
+    const goal = this.#driver?.goal();
+    if (
+      goal === undefined ||
+      goal.id !== source.goalId ||
+      goal.revision !== source.revision ||
+      goal.phase !== 'active' ||
+      goal.activation !== 'armed' ||
+      source.round !== goal.roundsStarted + 1 ||
+      item.text !== renderGoalRoundPrompt(goal, source.round)
+    ) {
+      return false;
+    }
+    return !this.#inbox['next-turn'].some(
+      (other) => other.id !== item.id && other.source.kind !== 'goal',
+    );
+  }
+
+  /**
+   * 一份續行預約被刪掉或被改掉（人在佇列上動了它）：**暫停目標**，照 dsh 的 `agent/status` idle 處理（那一段在
+   * `goal-round-driver/src/index.ts`，註解 "Fence the pause to the exact dropped attempt's ref"）。不暫停的話，刪掉預約只會讓
+   * 排程器下一個 idle 馬上再排一份——一件刪不掉的東西。**用預約的修訂釘住**：暫停之後馬上又 resume（修訂會變）的話，
+   * 不能把剛 resume 的目標又暫停。
+   */
+  #pauseForCancelledRound(source: Extract<QueuedInputSource, { kind: 'goal' }>): void {
+    const driver = this.#driver;
+    const goal = driver?.goal();
+    if (
+      driver === undefined ||
+      goal === undefined ||
+      goal.id !== source.goalId ||
+      goal.revision !== source.revision ||
+      goal.phase !== 'active' ||
+      goal.activation !== 'armed'
+    ) {
+      return;
+    }
+    try {
+      driver.pause({ id: goal.id, revision: goal.revision });
+    } catch (error: unknown) {
+      driver.warn(
+        `刪掉續行預約之後暫停目標失敗：${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
   }
 
   /**
@@ -2045,6 +2165,31 @@ export class ThreadPump {
     if (item === undefined || item.id !== id) {
       throw new Error(`送出佇列與排程走散了：輪到 "${id}"，佇列第一件是 "${item?.id ?? '（空）'}"`);
     }
+    if (item.source.kind === 'goal' && !this.#goalReservationValid(item)) {
+      // 預約失效：丟掉它、不開這一輪（dsh pre-step 的 `reject`）。這一件結束之後 `#next` 的收尾會再問一次排程器，
+      // 目標若還是 active 且授權著就重新預約——**空轉的擋法**見 {@link ThreadPump.#goalDropStreak}。
+      this.#spliceInbox({
+        target: 'next-turn',
+        start: 0,
+        removedCount: 1,
+        inserted: [],
+        outcome: 'canceled',
+      });
+      this.#goalDropStreak += 1;
+      if (this.#goalDropStreak >= GOAL_DROP_LIMIT) {
+        this.#goalDropStreak = 0;
+        this.#driver?.warn(`續行預約連續 ${String(GOAL_DROP_LIMIT)} 次領走時失效，停用續行`);
+        try {
+          this.#driver?.disarm();
+        } catch (error: unknown) {
+          this.#driver?.warn(
+            `停用續行失敗：${error instanceof Error ? error.message : String(error)}`,
+          );
+        }
+      }
+      return;
+    }
+    if (item.source.kind === 'goal') this.#goalDropStreak = 0;
     await this.#runOnce(pumpInputOf(item), item);
   }
 
@@ -2245,6 +2390,25 @@ export class ThreadPump {
     if (target === undefined) return 'not-found';
     const index = this.#inbox[target].findIndex((item) => item.id === itemId);
     const item = this.#inbox[target][index]!;
+    // 續行預約（#638）：改它的文字＝刪掉它（提示詞必須逐字等於目前目標的那一份，改過的就不是那一輪了，領走時一定失效），
+    // 所以兩者都是「取消這一輪並暫停目標」；不收轉成插話——續行不是人的插話。
+    if (item.source.kind === 'goal') {
+      if (action.kind === 'steer') return 'steer-unavailable';
+      this.#spliceInbox({
+        target,
+        start: index,
+        removedCount: 1,
+        inserted: [],
+        outcome: 'canceled',
+      });
+      const at = this.#queue.findIndex((job) => job.itemId === itemId);
+      const [job] = at < 0 ? [] : this.#queue.splice(at, 1);
+      job?.resolve();
+      this.#noteStatus();
+      this.#pauseForCancelledRound(item.source);
+      this.#kick();
+      return 'updated';
+    }
     if (action.kind === 'edit') {
       this.#spliceInbox({
         target,
@@ -2288,7 +2452,22 @@ export class ThreadPump {
     this.#stopRequested = false;
     for (let at = this.#queue.length - 1; at >= 0; at -= 1) {
       const job = this.#queue[at]!;
-      if (job.answers || job.itemId !== undefined) continue;
+      if (job.answers) continue;
+      if (job.itemId !== undefined) {
+        // 排在佇列上的續行預約（#638）也一樣拿掉：人的件停住等下一次送出，預約不是人的——停住它等人再送的話，那時
+        // 跑的是一份過期的輪次。**不暫停目標**（#265 的 Q8：目標狀態不動）；授權由排程器的 `turn-aborted` 收回。
+        // dsh 同：idle 時撤回還排著的預約（`agent.inbox.remove(attempt.messageId)`，`9a8d21dfe75`）。
+        const list = this.#inbox['next-turn'];
+        const itemAt = list.findIndex((item) => item.id === job.itemId);
+        if (itemAt < 0 || list[itemAt]!.source.kind !== 'goal') continue;
+        this.#spliceInbox({
+          target: 'next-turn',
+          start: itemAt,
+          removedCount: 1,
+          inserted: [],
+          outcome: 'canceled',
+        });
+      }
       this.#queue.splice(at, 1);
       job.resolve();
     }

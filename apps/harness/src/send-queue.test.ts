@@ -459,8 +459,8 @@ describe('按停止之後：排著的停住，下一次送出才喚醒', () => {
   });
 
   /**
-   * 排程器今天排不出這一格：續行只在 `running` 為假時送，送了就當場開跑，排不到別人後面。所以直接對 `submit` 送
-   * ——它是公開的入口，#638 讓續行走佇列之後這一格就是產品路徑。
+   * 直接對 `submit` 送 `goal` 輸入：這是不經佇列件（沒有 `itemId`）的那一條路；續行走佇列的預約（#638）另有一條，
+   * 見下一則。
    */
   it('排著的續行那一輪在停止落定時丟掉，不停住：喚醒之後不跑一份過期的輪次', async () => {
     const hold = gate();
@@ -488,6 +488,54 @@ describe('按停止之後：排著的停住，下一次送出才喚醒', () => {
       expect(run.marks().filter((mark) => mark.startsWith('start:'))).toEqual([
         'start:message:A',
         'start:message:B',
+        'start:message:C',
+      ]);
+    } finally {
+      await run.close();
+    }
+  });
+
+  /** 續行預約是佇列裡的一件（#638）：和 `submit` 直送的那種不同，停止落定時要連它的 `inbox/spliced` 一起撤回。 */
+  it('佇列上排著的續行預約在停止落定時撤回（canceled），不暫停、不停住：喚醒之後不跑它', async () => {
+    const hold = gate();
+    const seed = new SessionLog('queue-root');
+    const item = (id: string, text: string, source: InboxSplice['inserted'][number]['source']) => ({
+      id,
+      text,
+      source,
+    });
+    seed.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [item('b', 'B', { kind: 'user' })],
+    });
+    seed.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 1,
+      inserted: [
+        item('g', '續行', { kind: 'goal', goalId: goalId('goal-1'), revision: 1, round: 1 }),
+      ],
+    });
+    // 折回來的件是停住的：送一句喚醒，B 先跑（卡在 hold），它跑著時按停止。
+    const run = open(scriptedAgent([{ hold: hold.opened, abortable: true }]), seed.events);
+    try {
+      expect(run.pump.inbox.map((queuedItem) => queuedItem.id)).toEqual(['b', 'g']);
+      queued(run.pump.submit({ kind: 'message', text: 'A', id: 'a' }));
+      await until(() => run.marks().includes('start:message:B'));
+      expect(run.pump.cancel()).toBe('run');
+      await until(() => !run.pump.running);
+
+      const cancels = splices(run.pump.sessionLog.events).filter(
+        (splice) => splice.outcome === 'canceled',
+      );
+      expect(cancels).toHaveLength(1);
+      expect(run.pump.inbox.map((queuedItem) => queuedItem.id)).toEqual(['a']);
+
+      await run.pump.submit({ kind: 'message', text: 'C', id: 'c' });
+      await run.pump.whenIdle();
+      expect(run.marks().filter((mark) => mark.startsWith('start:'))).toEqual([
+        'start:message:B',
+        'start:message:A',
         'start:message:C',
       ]);
     } finally {

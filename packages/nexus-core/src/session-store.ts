@@ -463,8 +463,20 @@ import type { SessionEvent } from './session-log.js';
  * 一台 37 的 runtime 讀到新檔會把 `attachments` 略過：排著的項目被折回來重跑時附件悄悄消失，模型收到一句缺了檔案的話，沒有任何東西報錯。
  *
  * **讀舊檔**：37 以前沒有這一格，等於沒有附件，不補寫歷史。
+ *
+ * ## 39：目標續行走送出佇列（[#638](https://github.com/DemianLi/nexus-agent/issues/638)）
+ *
+ * `inbox/spliced` 裡的 `QueuedInput.source` 多一種成員 `{ kind: 'goal', goalId, revision, round }`：排程器為下一輪預約的一件，
+ * 以前續行直接開一輪、不經佇列。開跑時 `turn/start` 照舊是 `kind: 'goal'`（那一顆沒變）。
+ *
+ * **升版，不標 `ignorable`**——`inbox/spliced` 是既有種類，新增的是**欄位值的成員**，舊 runtime 不能略過這一顆（略過就是佇列折錯）。
+ * 一台 38 的 runtime 折到新檔時，佇列裡還排著的一件預約它認不得來源：`pumpInputOf` 對不認得的來源大聲拋，這條 thread 起不來——
+ * 這是對的方向（拒絕讀），但要由版本號擋在讀檔那一步，而不是等到續接後第一次領走才炸。
+ *
+ * **讀舊檔**：38 以前沒有這個來源，續行是直接開的一輪，不補寫歷史。日誌裡**排著沒領走的預約**（行程死在預約與開跑之間）：
+ * 重啟後折回來和人排的一樣停住，領走時驗證不過（授權不持久，重啟後一定是 `disarmed`）就丟掉、不開那一輪。
  */
-export const SESSION_LOG_FORMAT_VERSION = 38;
+export const SESSION_LOG_FORMAT_VERSION = 39;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

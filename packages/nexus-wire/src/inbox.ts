@@ -98,7 +98,7 @@ export interface WireQueuedInput {
   readonly id: string;
   readonly text: string;
   /**
-   * 誰送的。人，或背景子代理結算的通知（#840：執行期的記帳，不是人說的話）；目標續行走佇列是 #638。
+   * 誰送的。人、背景子代理結算的通知（#840：執行期的記帳，不是人說的話），或目標續行的預約（#638）。
    * 只放判別欄與結算通知的原因，摘要與寄件人留在日誌上。
    */
   readonly source: WireQueuedInputSource;
@@ -114,7 +114,15 @@ export type WireQueuedInputSource =
       /** 怎麼收的（#884）：排隊中那一行與開跑之後的通知畫同一句。選填，舊日誌沒有。 */
       readonly reason?: WireSettleReason;
     }
-  | { readonly kind: 'agent-message' };
+  | { readonly kind: 'agent-message' }
+  | {
+      /**
+       * 目標續行排在佇列上的預約（[#638](https://github.com/DemianLi/nexus-agent/issues/638)）：排程器放的，不是人說的話。
+       * 只放判別欄，目標編號與輪數留在日誌上。**刪掉它＝暫停目標**，不是跳過這一輪；改它的文字等同刪掉
+       * （預約的文字必須逐字等於目前目標的續行提示詞，改過的就不是那一輪了），見 `thread-pump.ts` 的 `updateQueue`。
+       */
+      readonly kind: 'goal';
+    };
 
 /** 一句話裡 `@` 的一條會話（[#713](https://github.com/DemianLi/nexus-agent/issues/713)）：`text` 裡對應的那段是 `@<label>`。 */
 export interface WireSessionReference {
@@ -157,6 +165,14 @@ export type WireClaimedSource =
       readonly senderSessionId: string;
       /** 寄件的背景子代理的編號。 */
       readonly runId: string;
+    }
+  | {
+      /**
+       * 目標續行的預約開跑了（[#638](https://github.com/DemianLi/nexus-agent/issues/638)）。**畫面不為它長任何一格**
+       * （reducer 跳過）：續行的提示詞是給模型的，不是人說的話；沒有這個判別欄的話，舊的一側會把「認得的來源之外的一律當成人畫」，
+       * 一大段續行提示詞變成人的泡泡。
+       */
+      readonly kind: 'goal';
     };
 
 /** {@link INBOX} 的 `payload`。 */

@@ -1075,6 +1075,7 @@ export function goalDriverPort(
     goal: () => goals?.serviceFor(log())?.get(),
     block: (ref, reason) => void goals?.serviceFor(log())?.block(ref, reason),
     disarm: () => void goals?.serviceFor(log())?.disarm(),
+    pause: (ref) => void goals?.serviceFor(log())?.pause(ref),
     flush,
     warn: (message) => warn(`[續行] ${message}`),
   };

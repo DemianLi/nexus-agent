@@ -26,7 +26,8 @@ import {
   REPEAT_REMINDER_MARKER,
 } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
-import type { SessionEventMap, SessionLog } from '@nexus/core';
+import { SessionLog as SessionLogClass } from '@nexus/core';
+import type { InboxSplice, SessionEvent, SessionEventMap, SessionLog } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -54,6 +55,7 @@ function portFor(
       goals.serviceFor(log())?.block(ref, reason);
     },
     disarm: () => void goals.serviceFor(log())?.disarm(),
+    pause: (ref) => void goals.serviceFor(log())?.pause(ref),
     flush: () => Promise.resolve(),
     warn: (message) => void warnings.push(message),
     ...overrides,
@@ -97,6 +99,8 @@ async function build(options: {
   /** 多掛的條目（例如一顆會被重複提醒追蹤的工具）。 */
   readonly extraPlugins?: readonly PluginEntry[];
   readonly portOverrides?: Partial<GoalDriverPort>;
+  /** 上一個行程留下的 root 日誌（重啟折回佇列用）。 */
+  readonly rootSeed?: readonly SessionEvent[];
 }): Promise<{
   pump: ThreadPump;
   goals: GoalServices;
@@ -128,6 +132,7 @@ async function build(options: {
     agent as unknown as PumpAgent,
     options.threadId,
     options.withDriver ? port : undefined,
+    options.rootSeed,
   );
   late.log = pump.sessionLog;
   // 先接伴生、再接參與者，同 `composeAttachSessions` 的順序。順序不承重（不變量 runner 接上時會重播日誌，
@@ -742,6 +747,199 @@ describe('掛了旗標', () => {
     await settle(pump);
     expect(startKinds(pump.sessionLog)).toEqual(['message']);
     expect(port.warnings).toEqual([]);
+    await stop();
+  });
+});
+
+/** 日誌上每一次佇列變動。 */
+function splicesOf(log: SessionLog): InboxSplice[] {
+  return log.events.flatMap((event) => (event.type === 'inbox/spliced' ? [event.data] : []));
+}
+
+/**
+ * 續行預約一排進佇列就在下一個 microtask 動手。
+ *
+ * 預約的排入、排程的 job 與 kick 都在同一段同步程式裡：監聽回呼裡排的 microtask 比 kick 的早，所以動手時 job 已在
+ * 排程裡、但那一件還沒被領走驗證——這是唯一不靠計時就能插進「預約之後、領走之前」的辦法。
+ */
+function atReservation(
+  pump: ThreadPump,
+  act: (item: { readonly id: string }) => void,
+): { readonly fired: () => boolean } {
+  let fired = false;
+  pump.watch(() => {
+    const item = pump.inbox.find((queued) => queued.source.kind === 'goal');
+    if (item === undefined || fired) return;
+    fired = true;
+    queueMicrotask(() => act(item));
+  });
+  return { fired: () => fired };
+}
+
+describe('續行走送出佇列（#638）', () => {
+  it('預約是 next-turn 尾巴一件 goal 來源，領走時不帶 canceled，一輪照開', async () => {
+    const { pump, stop } = await build({
+      turns: [...CREATE_TURNS, QUIET],
+      threadId: 'queue-path',
+      withDriver: true,
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    const all = splicesOf(pump.sessionLog);
+    const reserveAt = all.findIndex((splice) =>
+      splice.inserted.some((item) => item.source.kind === 'goal'),
+    );
+    expect(reserveAt).toBeGreaterThanOrEqual(0);
+    const reserve = all[reserveAt]!;
+    expect(reserve.target).toBe('next-turn');
+    expect(reserve.inserted[0]?.source).toMatchObject({ kind: 'goal', round: 1, revision: 1 });
+    // 預約之後的下一次變動就是領走它：拿掉一件、不帶 canceled。
+    const claim = all[reserveAt + 1]!;
+    expect(claim).toMatchObject({ target: 'next-turn', start: 0, removedCount: 1, inserted: [] });
+    expect(claim.outcome).toBeUndefined();
+    expect(all.some((splice) => splice.outcome === 'canceled')).toBe(false);
+    expect(pump.inbox).toEqual([]);
+    await stop();
+  });
+
+  it('預約排著時刪掉它：這一輪不開，目標暫停（不然排程器馬上再排一份）', async () => {
+    const { pump, port, stop } = await build({
+      turns: [...CREATE_TURNS, QUIET],
+      threadId: 'queue-delete',
+      withDriver: true,
+    });
+    let result: string | undefined;
+    const hook = atReservation(pump, (item) => {
+      result = pump.updateQueue(item.id, { kind: 'remove' });
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(hook.fired()).toBe(true);
+    expect(result).toBe('updated');
+    expect(startKinds(pump.sessionLog)).toEqual(['message']);
+    expect(port.goal()).toMatchObject({ phase: 'paused' });
+    expect(
+      splicesOf(pump.sessionLog).filter((splice) => splice.outcome === 'canceled'),
+    ).toHaveLength(1);
+    expect(pump.inbox).toEqual([]);
+    await stop();
+  });
+
+  it('預約排著時改它的字：等同刪掉（取消那一輪、暫停目標），不轉成別的輸入', async () => {
+    const { pump, port, stop } = await build({
+      turns: [...CREATE_TURNS, QUIET],
+      threadId: 'queue-edit',
+      withDriver: true,
+    });
+    let result: string | undefined;
+    atReservation(pump, (item) => {
+      result = pump.updateQueue(item.id, { kind: 'edit', text: '我自己改的續行' });
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(result).toBe('updated');
+    expect(startKinds(pump.sessionLog)).toEqual(['message']);
+    expect(port.goal()).toMatchObject({ phase: 'paused' });
+    // 沒有任何一件以改過的字重新插回去。
+    expect(
+      splicesOf(pump.sessionLog).some((splice) =>
+        splice.inserted.some((item) => item.text === '我自己改的續行'),
+      ),
+    ).toBe(false);
+    await stop();
+  });
+
+  it('預約不能改成插話：steer-unavailable，預約照常開跑', async () => {
+    const { pump, stop } = await build({
+      turns: [...CREATE_TURNS, QUIET],
+      threadId: 'queue-steer',
+      withDriver: true,
+    });
+    let result: string | undefined;
+    atReservation(pump, (item) => {
+      result = pump.updateQueue(item.id, { kind: 'steer' });
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(result).toBe('steer-unavailable');
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal']);
+    expect(pump.nextStep).toEqual([]);
+    await stop();
+  });
+
+  it('人排在預約後面：領走時預約失效被丟掉，人的那句先跑，之後重新預約再續行', async () => {
+    const { pump, port, stop } = await build({
+      turns: [...CREATE_TURNS, { content: '收到插隊。' }, QUIET],
+      threadId: 'queue-compete',
+      withDriver: true,
+    });
+    atReservation(pump, () => {
+      void pump.submit({ kind: 'message', text: '先看這個' }).catch(() => undefined);
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'message', 'goal']);
+    const dropped = splicesOf(pump.sessionLog).filter((splice) => splice.outcome === 'canceled');
+    expect(dropped).toHaveLength(1);
+    expect(port.warnings).toEqual([]);
+    expect(pump.inbox).toEqual([]);
+    await stop();
+  });
+
+  it('預約排著時授權被收回：領走時失效，不開那一輪、也不再排', async () => {
+    const { pump, port, stop } = await build({
+      turns: [...CREATE_TURNS, QUIET],
+      threadId: 'queue-disarmed',
+      withDriver: true,
+    });
+    atReservation(pump, () => port.disarm());
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+
+    expect(startKinds(pump.sessionLog)).toEqual(['message']);
+    expect(
+      splicesOf(pump.sessionLog).filter((splice) => splice.outcome === 'canceled'),
+    ).toHaveLength(1);
+    expect(pump.inbox).toEqual([]);
+    await stop();
+  });
+
+  it('重啟折回來的預約：授權不持久，領走時一定失效，不開那一輪', async () => {
+    const seed = new SessionLogClass('seed-root');
+    seed.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [
+        {
+          id: 'stale-goal',
+          text: '續行第 1 輪',
+          source: { kind: 'goal', goalId: 'goal-9' as never, revision: 1, round: 1 },
+        },
+      ],
+    });
+    const { pump, stop } = await build({
+      turns: [{ content: '好。' }],
+      threadId: 'queue-restart',
+      withDriver: true,
+      rootSeed: seed.events,
+    });
+    // 折回來列得出、停住不自己跑。
+    expect(pump.inbox.map((item) => item.id)).toEqual(['stale-goal']);
+    expect(pump.running).toBe(false);
+
+    await pump.submit({ kind: 'message', text: '你好' });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message']);
+    expect(pump.inbox).toEqual([]);
+    expect(
+      splicesOf(pump.sessionLog).filter((splice) => splice.outcome === 'canceled'),
+    ).toHaveLength(1);
     await stop();
   });
 });

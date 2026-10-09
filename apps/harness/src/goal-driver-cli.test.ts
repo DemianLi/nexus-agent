@@ -73,6 +73,7 @@ async function build(turns: readonly ScriptedTurn[]): Promise<{
     goal: () => goals.serviceFor(sessions.root)?.get(),
     block: (ref, reason) => void goals.serviceFor(sessions.root)?.block(ref, reason),
     disarm: () => void goals.serviceFor(sessions.root)?.disarm(),
+    pause: (ref) => void goals.serviceFor(sessions.root)?.pause(ref),
     flush: () => Promise.resolve(),
     warn: (message) => void warnings.push(message),
   };

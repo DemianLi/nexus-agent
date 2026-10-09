@@ -14,7 +14,7 @@
 
 import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
-import { createHostServicesPlugin } from '@nexus/core';
+import { createHostServicesPlugin, hasUnansweredInterrupt } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
@@ -358,6 +358,8 @@ describe('整條路：root', () => {
     expect(dataOf(r, 'interrupt/system-answered')).toEqual([
       { interruptId: raised[0]?.['interruptId'], reason: 'url-mode', keys: ['auth'] },
     ]);
+    // 「答了沒有」以 `turn/start{resume}` 判（不看 system-answered）：代答之後這條日誌不能還算有未答的中斷。
+    expect(hasUnansweredInterrupt(r.pump.sessionLog.events)).toBe(false);
     // 代答是回絕那一輪的 resume，落在 system-answered 之前。
     const types = typesOf(r);
     expect(types.indexOf('turn/start', types.indexOf('interrupt/raised'))).toBeLessThan(

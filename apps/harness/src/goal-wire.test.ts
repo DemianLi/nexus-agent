@@ -76,6 +76,7 @@ async function build(
     goal: () => goals.serviceFor(late.log as SessionLog)?.get(),
     block: (ref, reason) => void goals.serviceFor(late.log as SessionLog)?.block(ref, reason),
     disarm: () => void goals.serviceFor(late.log as SessionLog)?.disarm(),
+    pause: (ref) => void goals.serviceFor(late.log as SessionLog)?.pause(ref),
     flush: () => Promise.resolve(),
     warn: (message) => void warnings.push(message),
   };
