@@ -407,6 +407,10 @@ export interface FoldOptions {
    *
    * 給了會多四件事：`tools/pre-execute`（核准閘門外側）、`tools/post-execute`、`tools/execute` 三顆 middleware 進槽位表，
    * 圍堵多派發 `tools/result`。**沒有任何監聽者時全部是直通**，連請求物件都不造。位置與理由見 {@link ./tool-pipeline.ts}。
+   *
+   * **省略會讓已經搬上匯流排的消費者靜靜失效**（[#1272](https://github.com/DemianLi/nexus-agent/issues/1272)）：plan-mode 的
+   * 模式外拒絕是 `tools/pre-execute` 上的監聽者，沒有生產者就不會被問到。產品路徑只有 `apps/harness/src/agent-factory.ts`
+   * 呼叫 `foldRegistry`，且傳了 `registry.dispatch`；自己折 registry 的測試或量測要載入有監聽者的 plugin 時也得傳。
    */
   events?: EventDispatcher;
 

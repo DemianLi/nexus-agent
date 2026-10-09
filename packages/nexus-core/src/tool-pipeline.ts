@@ -13,7 +13,7 @@
  *
  * | 事件 | 生產者 | 位置 |
  * | --- | --- | --- |
- * | `tools/pre-execute` | {@link createToolPreExecuteMiddleware} | **緊貼核准閘門外側**：plan-mode 這類 `prepend: true` 的 plugin 今天就在閘門外側，派發點放內側會變成「先跳核准卡再被拒」 |
+ * | `tools/pre-execute` | {@link createToolPreExecuteMiddleware} | **緊貼核准閘門外側**：第一位監聽者是 plan-mode 的模式外拒絕（#1272，原本是 `prepend: true` 的 middleware、一樣在閘門外側），派發點放內側會變成「先跳核准卡再被拒」 |
  * | `tools/post-execute` | {@link createToolPostExecuteMiddleware} | 輸出校驗等貼著工具本體的那幾顆外側（dsh 在 post-execute 之前驗輸出）、plugin middleware 內側 |
  * | `tools/execute` | {@link createToolExecuteMiddleware} | 環繞工具本體：在 `invalidToolArgs` 內側，只有 `max-tokens.ts` 對 `task` 結果的替換還在它內側（dsh 在前景 `task` 本體裡拋，替換在 execute 裡才對得上） |
  * | `tools/result` | `containment.ts` | 圍堵：只有它同時看得到內層拋出的錯與回來的結果；在記 `tool/result` 之前派發（同 dsh 的 `notifyResult` 先於迴圈的 `appendToolResult`） |
