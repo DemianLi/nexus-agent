@@ -13,6 +13,7 @@ import {
   GOAL_CONTINUATION_TEXT,
   GOAL_CONTINUATION_WARNING,
   QUEUE_GONE_TEXT,
+  UNRECOGNIZED_SOURCE_TEXT,
   QUEUE_LEAVE_MS,
   QUEUE_PARKED_TEXT,
   QUEUE_SETTLE_MS,
@@ -598,5 +599,38 @@ describe('目標續行的預約（#638）', () => {
     settle();
     vi.useRealTimers();
     expect(await axeViolations(screen.getByTestId('queue-dock'))).toEqual([]);
+  });
+});
+
+describe('不認得來源的佇列件（#1247）', () => {
+  const future: WireQueuedInput = {
+    id: 'f',
+    text: 'internal instruction for the model',
+    source: { kind: 'unrecognized', original: 'future-kind' },
+  };
+  const rowOf = (id: string) => document.querySelector(`[data-queue-item="${id}"]`) as HTMLElement;
+
+  it('畫成通用標籤，不照抄文字；來源種類在提示文字裡；有編輯、刪除，沒有插話鈕，也沒有暫停目標那句', () => {
+    mount([future]);
+    settle();
+    const row = rowOf('f');
+    expect(row.getAttribute('data-queue-generic')).toBe('true');
+    const label = within(row).getByTestId('queue-generic-label');
+    expect(label.textContent).toBe(UNRECOGNIZED_SOURCE_TEXT);
+    expect(label.getAttribute('title')).toBe(`${UNRECOGNIZED_SOURCE_TEXT}（來源：future-kind）`);
+    expect(row.textContent).not.toContain('internal instruction');
+    expect(row.querySelector('[data-queue-action="edit"]')).not.toBeNull();
+    expect(row.querySelector('[data-queue-action="remove"]')).not.toBeNull();
+    expect(row.querySelector('[data-queue-action="steer"]')).toBeNull();
+    expect(within(row).queryByTestId('queue-goal-warning')).toBeNull();
+    expect(row.getAttribute('data-queue-goal')).toBeNull();
+  });
+
+  it('跟人排的並排：人的那列照舊有插話鈕，件數兩件都算', () => {
+    mount([item('a', '我說的'), future]);
+    settle();
+    fireEvent.click(screen.getByRole('button', { name: '2 則排著的訊息' }));
+    expect(rowOf('a').querySelector('[data-queue-action="steer"]')).not.toBeNull();
+    expect(rowOf('f').querySelector('[data-queue-action="steer"]')).toBeNull();
   });
 });

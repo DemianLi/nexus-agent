@@ -7,6 +7,9 @@ import {
   GOAL_CONTINUATION_TEXT,
   GOAL_CONTINUATION_WARNING,
   isGoalContinuation,
+  isUnrecognizedSource,
+  UNRECOGNIZED_SOURCE_TEXT,
+  unrecognizedSourceKind,
   steerableItems,
   canSendText,
   AGENT_MESSAGE_QUEUED_TEXT,
@@ -192,5 +195,32 @@ describe('目標續行的預約（#638）', () => {
   it('措辭釘死：名字與後果各一句', () => {
     expect(GOAL_CONTINUATION_TEXT).toBe('目標續行');
     expect(GOAL_CONTINUATION_WARNING).toBe('刪除或編輯會暫停目標');
+  });
+});
+
+describe('不認得來源的佇列件（#1247）', () => {
+  const human: WireQueuedInput = { id: 'h', text: '我說的', source: { kind: 'user' } };
+  const future: WireQueuedInput = {
+    id: 'f',
+    text: 'something for the model',
+    source: { kind: 'unrecognized', original: 'future-kind' },
+  };
+
+  it('只有 source.kind 是 unrecognized 的才算，原種類取得出來', () => {
+    expect(isUnrecognizedSource(future)).toBe(true);
+    expect(isUnrecognizedSource(human)).toBe(false);
+    expect(unrecognizedSourceKind(future)).toBe('future-kind');
+    expect(unrecognizedSourceKind(human)).toBeUndefined();
+  });
+
+  it('整批插話只收人排的：不認得來源的也濾掉，跟目標續行並排也一樣', () => {
+    const goal: WireQueuedInput = { id: 'g', text: 'x', source: { kind: 'goal' } };
+    expect(steerableItems([human, future, goal]).map((item) => item.id)).toEqual(['h']);
+    expect(steerableItems([future])).toEqual([]);
+  });
+
+  it('通用標籤措辭釘死，不是「目標續行」', () => {
+    expect(UNRECOGNIZED_SOURCE_TEXT).toBe('系統排入的訊息');
+    expect(UNRECOGNIZED_SOURCE_TEXT).not.toBe(GOAL_CONTINUATION_TEXT);
   });
 });
