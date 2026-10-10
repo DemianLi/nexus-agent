@@ -73,8 +73,9 @@ export function DeliverablesCard({
       className="@container flex flex-col gap-2"
       data-testid="deliverables"
     >
-      {/* 兩欄看的是會話區多寬，不是視窗多寬：右側欄打開時寬視窗裡的會話區可能只剩 480（#640）。 */}
-      <ul className="grid gap-2 @xl:grid-cols-2">
+      {/* 兩欄看的是會話區多寬，不是視窗多寬：右側欄打開時寬視窗裡的會話區可能只剩 480（#640）。
+          只有一個檔就不切兩欄：切了只佔半欄、檔名被截半，右半邊卻是空的（#1364）。 */}
+      <ul className={shown.length > 1 ? 'grid gap-2 @xl:grid-cols-2' : 'grid gap-2'}>
         {shown.map((file) => (
           <Surface
             as="li"
