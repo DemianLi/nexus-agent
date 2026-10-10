@@ -14,7 +14,8 @@
  * - 串流進來、不聚合：上傳不吃記憶體。
  * - **讀與去重都重算雜湊**（`ATTACHMENT_CORRUPT`，[#1338](https://github.com/DemianLi/nexus-agent/issues/1338)）：
  *   物件路徑就是雜湊，所以讀圖時重算一次、去重碰到既有物件時重算一次，對不上就拋，不把來路不明的位元組交出去、
- *   也不讓壞物件「認領」新上傳。沒有行程內的「已驗過」快取（dsh 也沒有）；別名硬連結與物件同一個 inode，不另驗。
+ *   也不讓壞物件「認領」新上傳。沒有行程內的「已驗過」快取（dsh 也沒有）；別名硬連結不重算內容，只比 inode：跟物件不同
+ *   （物件被刪掉重建過）就原子地換掉（[#1352](https://github.com/DemianLi/nexus-agent/issues/1352)）。
  *
  * ## 偏離（依 AGENTS.md 登記）
  *
@@ -30,7 +31,7 @@
  */
 
 import { createHash, randomBytes } from 'node:crypto';
-import { chmod, link, mkdir, open, readFile, stat, unlink } from 'node:fs/promises';
+import { chmod, link, mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { constants, createReadStream } from 'node:fs';
 import { join } from 'node:path';
 
@@ -218,7 +219,7 @@ export class AttachmentStore {
         };
         const aliasDir = join(this.filesDir, staged.sha256.slice(0, 2), staged.sha256);
         await this.#mkdirPrivate(aliasDir);
-        await this.#publish(objectPath, join(aliasDir, name));
+        await this.#publishAlias(objectPath, join(aliasDir, name));
         input.signal?.throwIfAborted();
         return ref;
       } finally {
@@ -376,6 +377,32 @@ export class AttachmentStore {
     } catch (error) {
       if (!isCode(error, 'EEXIST')) throw error;
       if (expectedSha256 !== undefined) await this.#verifyObject(target, expectedSha256);
+    }
+  }
+
+  /**
+   * 建檔名別名（物件的硬連結，[#1352](https://github.com/DemianLi/nexus-agent/issues/1352)）。別名已存在就比對它跟物件的
+   * `dev`＋`ino`：同一個 inode 是去重，什麼都不做；不同（物件被刪掉重建過，別名還指著舊的）就先連到暫存名、再 `rename`
+   * 蓋過去，別名一直都在，不會有一段時間讀不到。只比 inode、不重算內容：物件剛在同一次 `save` 裡驗過。
+   *
+   * 這是偏離 1 的產物：dsh 沒有檔名別名（讀檔走 sha 並且會驗），所以沒有對應做法可抄。
+   */
+  async #publishAlias(objectPath: string, aliasPath: string): Promise<void> {
+    try {
+      await link(objectPath, aliasPath);
+      return;
+    } catch (error) {
+      if (!isCode(error, 'EEXIST')) throw error;
+    }
+    const [object, alias] = await Promise.all([stat(objectPath), stat(aliasPath)]);
+    if (object.dev === alias.dev && object.ino === alias.ino) return;
+    const temp = join(this.#root, 'staging', randomBytes(12).toString('hex'));
+    await link(objectPath, temp);
+    try {
+      await rename(temp, aliasPath);
+    } catch (error) {
+      await unlink(temp).catch(() => {});
+      throw error;
     }
   }
 
