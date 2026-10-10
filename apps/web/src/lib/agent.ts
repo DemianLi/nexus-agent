@@ -11,10 +11,12 @@
 import type { WireClient } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
 
+import { clockedFetch } from '@/lib/server-clock';
+
 export interface AgentClientOptions {
   /** 預設同源（空字串＝相對路徑），開發時用 `VITE_AGENT_BASE_URL` 指到 harness。 */
   readonly baseUrl?: string;
-  /** 注入用；預設是全域的 `fetch`。 */
+  /** 注入用；預設是全域的 `fetch` 包一層、順手記下回應的 `Date` 標頭（{@link clockedFetch}，換算時鐘差用）。 */
   readonly fetch?: typeof globalThis.fetch;
 }
 
@@ -27,6 +29,6 @@ export function agentBaseUrl(): string {
 export function createAgentClient(options: AgentClientOptions = {}): WireClient {
   return createWireClient({
     baseUrl: options.baseUrl ?? agentBaseUrl(),
-    ...(options.fetch === undefined ? {} : { fetch: options.fetch }),
+    fetch: options.fetch ?? clockedFetch(),
   });
 }

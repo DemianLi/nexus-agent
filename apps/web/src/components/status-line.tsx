@@ -11,14 +11,44 @@
  * **連線也由這一行講**（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）：下行斷了寫在這裡，旁邊一顆
  * 「立刻重連」；接回來短暫寫「已重新連線」。dsh 另有一顆 `ConnectionIndicator`，掛在設定列，我們沒有設定列，
  * 所以放進既有的狀態列（UI 形狀，不是執行語意）。按鈕放在 live region 外面，免得每次重唸都唸到它。
+ *
+ * **執行中帶經過時間**（[#1308](https://github.com/DemianLi/nexus-agent/issues/1308)）：從 server 記下的這一輪開始時刻起算
+ * （`lib/running-turn.ts`），用回應的 `Date` 標頭換算兩邊的時鐘差（`lib/server-clock.ts`），所以重新整理不歸零。每秒跳，
+ * **放在 live region 外面、而且 `aria-hidden`**：放裡面的話報讀器每秒重唸一次。只跟著「執行中」出現——停在核准點時這一格唸的是
+ * 面板名稱；核准後續接，時間從第一段接著算，含等人的那段（同觀測分頁的牆鐘）。
  */
 
 import type { ConversationState } from '@nexus/wire';
+import { useEffect, useState } from 'react';
 
 import { AgentOrb } from '@/components/agent-orb';
 import { Button } from '@/components/ui/button';
 import { pendingAsker } from '@/lib/approval-asker';
 import { pendingLabel } from '@/lib/pending-label';
+import { elapsedText, runningTurnStart } from '@/lib/running-turn';
+import { serverClock } from '@/lib/server-clock';
+
+/** 經過時間每隔多久重算一次。 */
+export const ELAPSED_TICK_MS = 1000;
+
+/** 這一輪跑了多久：起點與 server 現在的時刻都在 server 時鐘上；任一個答不出就不畫。 */
+function RunningElapsed({ since }: { since: number | undefined }) {
+  const [now, setNow] = useState(() => serverClock.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(serverClock.now()), ELAPSED_TICK_MS);
+    return () => clearInterval(timer);
+  }, []);
+  if (since === undefined || now === undefined) return null;
+  return (
+    <span
+      aria-hidden
+      data-testid="running-elapsed"
+      className="text-tip text-muted-foreground tabular-nums"
+    >
+      {elapsedText(now - since)}
+    </span>
+  );
+}
 
 /** 斷線那一行怎麼講。 */
 function lostText(
@@ -137,10 +167,13 @@ export function StatusLine({
   }
   if (state.status === 'running') {
     return (
-      <p className="text-muted-foreground flex items-center gap-1.5 text-body" role="status">
-        <AgentOrb state="working" size={20} decorative />
-        <span className="text-shimmer">執行中…</span>
-      </p>
+      <div className="flex items-center gap-2">
+        <p className="text-muted-foreground flex items-center gap-1.5 text-body" role="status">
+          <AgentOrb state="working" size={20} decorative />
+          <span className="text-shimmer">執行中…</span>
+        </p>
+        <RunningElapsed since={runningTurnStart(state)} />
+      </div>
     );
   }
   if (recovered) {
