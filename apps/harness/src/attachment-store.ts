@@ -400,9 +400,10 @@ export class AttachmentStore {
     await link(objectPath, temp);
     try {
       await rename(temp, aliasPath);
-    } catch (error) {
+    } finally {
+      // 成功時暫存名已經不在（`unlink` 只拿到 ENOENT，吞掉）。但 `stat` 之後別的上傳搶先把別名修好、兩者已是同一個
+      // inode 時，POSIX 規定 `rename` 什麼都不做、直接回成功，暫存名會留在 `staging/`，所以不論成敗都收一次。
       await unlink(temp).catch(() => {});
-      throw error;
     }
   }
 

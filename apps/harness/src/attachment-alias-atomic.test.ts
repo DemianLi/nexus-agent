@@ -3,12 +3,13 @@
  * 絕不「先刪別名、再建」——那樣中間有一段時間模型讀這個路徑會讀不到。檔案系統的呼叫順序用包一層的 `fs/promises` 記下來。
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const calls: string[] = [];
+let renameDoesNothing = false;
 
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
@@ -24,6 +25,8 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     },
     rename: async (from: string, to: string) => {
       calls.push(`rename ${to}`);
+      // 模擬 POSIX「兩邊已經是同一個 inode 時 rename 什麼都不做、回成功」：暫存名會留著。
+      if (renameDoesNothing) return;
       return actual.rename(from, to);
     },
   };
@@ -38,6 +41,7 @@ beforeEach(async () => {
   home = await mkdtemp(join('/var/tmp', 'nexus-alias-'));
   store = new AttachmentStore(attachmentsRootOf(home));
   calls.length = 0;
+  renameDoesNothing = false;
 });
 
 afterEach(async () => {
@@ -64,5 +68,18 @@ describe('別名換新是原子的（#1352）', () => {
       (call, index) => index < renameAt && call.startsWith('link ') && call.includes('/staging/'),
     );
     expect(tempLinkAt).toBeGreaterThanOrEqual(0);
+  });
+
+  it('rename 什麼都不做（兩邊碰巧已是同一個 inode）時，暫存名也不會留在 staging/', async () => {
+    const body = Buffer.from('hello world');
+    const ref = await store.save({ data: body, name: 'a.txt' });
+    const digest = ref.attachmentId.slice('sha256:'.length);
+    await rm(join(store.rootDir, 'file-objects', digest.slice(0, 2), digest));
+    renameDoesNothing = true;
+
+    await store.save({ data: body, name: 'a.txt' });
+
+    expect(calls.some((call) => call.startsWith('rename '))).toBe(true);
+    expect(await readdir(join(store.rootDir, 'staging'))).toEqual([]);
   });
 });
