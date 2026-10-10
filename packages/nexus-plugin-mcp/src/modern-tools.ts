@@ -18,9 +18,12 @@ import { z } from 'zod';
 import {
   CITE_LINKS,
   CITE_TEXT,
+  EMBED_URI,
   FAILURE_TEXT,
   RELEASE_NOTE,
   SNAPSHOT_PNG,
+  STRUCTURED_ROW,
+  filler,
 } from './fixture-tools.js';
 
 /** `ask` 問使用者的問題。 */
@@ -225,5 +228,68 @@ export function registerModernTools(server: McpServer): void {
         ...CITE_LINKS.map((link) => ({ type: 'resource_link' as const, ...link })),
       ],
     }),
+  );
+
+  // 與舊協議那台同名同行為（#1320）。
+  const sizeArg = z.object({ kb: z.number().describe('內容大小（KB）') });
+  server.registerTool(
+    'embed_blob',
+    { description: '回一份內嵌的二進位資源。', inputSchema: sizeArg },
+    ({ kb }): CallToolResult => ({
+      content: [
+        { type: 'text', text: '資源已附上。' },
+        {
+          type: 'resource',
+          resource: { uri: EMBED_URI, mimeType: 'application/octet-stream', blob: filler(kb) },
+        },
+      ],
+    }),
+  );
+  server.registerTool(
+    'embed_text',
+    { description: '回一份內嵌的文字資源。', inputSchema: sizeArg },
+    ({ kb }): CallToolResult => ({
+      content: [
+        { type: 'text', text: '資源已附上。' },
+        {
+          type: 'resource',
+          resource: {
+            uri: 'file:///reports/q3.txt',
+            mimeType: 'text/plain',
+            text: filler(kb, 'x'),
+          },
+        },
+      ],
+    }),
+  );
+  server.registerTool(
+    'big_image',
+    { description: '回一張很大的圖。', inputSchema: sizeArg },
+    ({ kb }): CallToolResult => ({
+      content: [
+        { type: 'text', text: '圖在下面。' },
+        { type: 'image', data: filler(kb), mimeType: 'image/png' },
+      ],
+    }),
+  );
+  server.registerTool(
+    'structured',
+    {
+      description: '回結構化內容（structuredContent），另附一句文字摘要。',
+      inputSchema: sizeArg,
+      outputSchema: z.object({
+        rows: z.array(z.object({ id: z.number(), label: z.string(), note: z.string() })),
+      }),
+    },
+    ({ kb }): CallToolResult => {
+      const rows = Array.from({ length: Math.ceil((kb * 1024) / 70) }, (_, index) => ({
+        ...STRUCTURED_ROW,
+        id: index,
+      }));
+      return {
+        content: [{ type: 'text', text: `共 ${String(rows.length)} 列。` }],
+        structuredContent: { rows },
+      };
+    },
   );
 }
