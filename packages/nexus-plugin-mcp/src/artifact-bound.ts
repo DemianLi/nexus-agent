@@ -83,18 +83,32 @@ function sizeOf(entry: unknown): number {
 
 function omitted(entry: unknown, bytes: number): OmittedArtifact {
   const record = isRecord(entry) ? entry : {};
-  const inner = isRecord(record['resource'])
-    ? record['resource']
-    : isRecord(record['data'])
-      ? record['data']
-      : {};
-  const uri = inner['uri'];
-  const mimeType = inner['mimeType'];
+  const { uri, mimeType } = locate(record);
   return {
     type: 'mcp_omitted',
     originalType: typeof record['type'] === 'string' ? record['type'] : 'unknown',
     bytes: Number.isFinite(bytes) ? bytes : -1,
-    ...(typeof uri === 'string' && { uri }),
+    ...(uri !== undefined && { uri }),
+    ...(mimeType !== undefined && { mimeType }),
+  };
+}
+
+/**
+ * 從 artifact 條目找出 URI 與 MIME。adapter 2.0.0 會產出三種形狀：
+ * - `{ type: 'resource', resource: { uri, mimeType, … } }`（預設只放 artifact 的內嵌資源）；
+ * - `{ type: 'mcp_content', data: { type: 'resource_link', uri, … } }`（`data` 是 MCP 原始區塊，連結的 URI 在頂層）；
+ * - `{ type: 'mcp_content', data: { type: 'resource', resource: { uri, mimeType, … } } }`（內嵌資源被 `enhancedArtifacts` 再包一層，
+ *   URI 在 `data.resource` 底下，`content.js` 的 `convertCallToolResult`）。
+ * 依序往下找第一個帶字串 `uri` 的物件。
+ */
+function locate(record: Record<string, unknown>): { uri?: string; mimeType?: string } {
+  const data = isRecord(record['data']) ? record['data'] : undefined;
+  const candidates = [record['resource'], data?.['resource'], data].filter(isRecord);
+  const found = candidates.find((candidate) => typeof candidate['uri'] === 'string');
+  if (found === undefined) return {};
+  const mimeType = found['mimeType'];
+  return {
+    uri: found['uri'] as string,
     ...(typeof mimeType === 'string' && { mimeType }),
   };
 }

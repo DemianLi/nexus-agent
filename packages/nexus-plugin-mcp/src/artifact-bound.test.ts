@@ -45,15 +45,38 @@ describe('artifact 進日誌前的上限（#1320）', () => {
     expect(JSON.stringify(placeholder)).not.toContain('AAAA');
   });
 
-  it('adapter 的 `mcp_content` 包著內嵌資源時，URI 從 data.resource 之外的 data 取', () => {
+  // adapter 2.0.0 `convertCallToolResult`：`enhancedArtifacts` 把內嵌資源原始區塊整個放進 `data`，所以 URI 在 `data.resource` 底下。
+  it('adapter 的 `mcp_content` 包著內嵌資源時，URI 與 MIME 從 data.resource 取', () => {
     const entry = {
       type: 'mcp_content',
-      data: { type: 'resource', uri: 'file:///x', mimeType: 'text/plain', text: big() },
+      data: {
+        type: 'resource',
+        resource: { uri: 'file:///x', mimeType: 'text/plain', text: big() },
+      },
     };
     expect(boundArtifacts([entry])?.[0]).toMatchObject({
+      type: 'mcp_omitted',
+      originalType: 'mcp_content',
       uri: 'file:///x',
       mimeType: 'text/plain',
     });
+  });
+
+  it('`mcp_content` 包著超大的 resource_link 區塊：URI 在 data 頂層', () => {
+    const entry = {
+      type: 'mcp_content',
+      data: { type: 'resource_link', uri: 'https://a/big', mimeType: 'text/csv', name: big() },
+    };
+    expect(boundArtifacts([entry])?.[0]).toMatchObject({
+      uri: 'https://a/big',
+      mimeType: 'text/csv',
+    });
+  });
+
+  it('找不到 URI 時占位不帶 uri 與 mimeType', () => {
+    const [placeholder] = boundArtifacts([{ type: 'mcp_meta', data: { note: big() } }]) ?? [];
+    expect(placeholder).not.toHaveProperty('uri');
+    expect(placeholder).not.toHaveProperty('mimeType');
   });
 
   it('剛好在上限：保留；多一位元組：換掉', () => {
