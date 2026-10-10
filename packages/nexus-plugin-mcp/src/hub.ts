@@ -29,6 +29,14 @@
  *    server 也登記），所以 {@link CITATION_PROMPT} 跟 {@link hubPromptText} 的其他文字一起出現或一起不出現。工具結果那一半
  *    （結果含 resource link 才在結尾加一句）在 `project-content.ts`。
  *
+ * 5. **超出 dsh：同一段多兩條規則**（[#1345](https://github.com/DemianLi/nexus-agent/issues/1345)）。dsh 沒有任何一段要求「只講結果
+ *    裡有的事實」或「查無要先明說」，`search.ts:315-323` 只管引用。[#1329](https://github.com/DemianLi/nexus-agent/issues/1329)
+ *    用真模型每組 24 次量出：結果只有連結時模型有 10/24 編出流程、查無資料時有 20/24 先反問而不是說查無（明說查無 5/24）。
+ *    產品是查資料的聊天機器人（[#949](https://github.com/DemianLi/nexus-agent/issues/949)），這兩種最傷信任，所以補在
+ *    {@link CITATION_PROMPT}：只講結果裡有的、讀不到內容就明說並附連結、查無先明說再問。放在 MCP 段而不放 persona
+ *    （`cordis.yml` 的 `personaPrefix`／`personaSuffix` 是 dsh web-app profile 的出貨值，這兩條只跟 MCP 結果有關，沒掛 MCP 就不出現）。
+ *    **這是對模型的請求，不是保證**，效果見 #1345 的盲標比較。
+ *
  * 其餘照 dsh：三支工具的名字、描述、參數、找不到 server 的錯誤訊息一字不差；`list` 沒帶 `cursor` 時由 SDK 的
  * `Client.listResources()` 自己走完所有頁並合併（`@modelcontextprotocol/client` 2.x，dsh README 同寫「Without a cursor,
  * the MCP SDK collects the server's pages」，`mcp-resources/README.md:36`），帶了 `cursor` 就只要那一頁並原樣回
@@ -105,12 +113,17 @@ function isRoot(holder: unknown, root: unknown): boolean {
 }
 
 /**
- * 提示詞裡的引用要求（偏離 4）。比照 dsh `search.ts:315-323` 的語氣，多一個「說出是哪個 server」。
+ * 提示詞裡的引用要求（偏離 4）與「只講結果裡有的事實」要求（偏離 5）。比照 dsh `search.ts:315-323` 的語氣，多一個「說出是哪個 server」。
  */
 export const CITATION_PROMPT =
   '## MCP citations\n\n' +
   'When your answer uses the result of an MCP tool, say which MCP server (the system) it came from, ' +
-  'and cite the relevant resource links in that result as markdown links.';
+  'and cite the relevant resource links in that result as markdown links. ' +
+  'State only facts that appear in the tool result. ' +
+  'If the result gives only titles or links and no content, say you could not read the content and give the links; ' +
+  'do not describe what those documents presumably say or fill in a typical process. ' +
+  'If the result says nothing was found, say so first, naming what you looked for; ' +
+  'you may then ask one clarifying question, but do not ask instead of saying nothing was found.';
 
 /** 提示詞要接在 system message 後面的文字；沒有任何 server 登記時是空字串。 */
 export function hubPromptText(sources: Iterable<McpSource>): string {

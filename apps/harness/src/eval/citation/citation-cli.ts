@@ -22,10 +22,12 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { serveClient, foldTurn } from '../../fixtures.js';
 import { runServe } from '../../serve.js';
+import { packBlind, unpackLabels } from './blind.js';
+import type { BlindKey } from './blind.js';
 import { GROUPS, MODE_ENV, QUESTIONS, SERVER_NAME } from './fixture.js';
 import type { Group } from './fixture.js';
 import { disagreements, renderByQuestion, renderSummary } from './report.js';
-import type { Labels, RunRecord } from './report.js';
+import type { Label, Labels, RunRecord } from './report.js';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SERVER_FILE = join(HERE, 'fixture-server.ts');
@@ -265,6 +267,44 @@ async function summarizeOnly(argv: readonly string[]): Promise<void> {
   }
 }
 
+/**
+ * `--blind-pack --baseline <runs.jsonl> --new <runs.jsonl> --out <目錄> [--seed N]`：兩批混在一起洗牌，
+ * 寫出 `blind-items.json`（給標的人，沒有版本、id、耗時）與 `blind-key.json`（對照表，標完才用）。
+ * `--blind-unpack --labels <blind-labels.json> --key <blind-key.json> --out <目錄>`：依版本拆成 `labels.<版本>.json`。
+ */
+async function blindMode(argv: readonly string[]): Promise<void> {
+  const flag = (name: string): string | undefined => {
+    const index = argv.indexOf(name);
+    return index === -1 ? undefined : argv[index + 1];
+  };
+  const need = (name: string): string => {
+    const value = flag(name);
+    if (value === undefined) throw new Error(`${name} 需要一個值`);
+    return value;
+  };
+  const out = need('--out');
+  await mkdir(out, { recursive: true });
+  if (argv.includes('--blind-pack')) {
+    const sets = [
+      { version: 'baseline', records: await readRuns(need('--baseline')) },
+      { version: 'new', records: await readRuns(need('--new')) },
+    ];
+    const { items, key } = packBlind(sets, Number(flag('--seed') ?? '1345'));
+    await writeFile(join(out, 'blind-items.json'), JSON.stringify(items, null, 1));
+    await writeFile(join(out, 'blind-key.json'), JSON.stringify(key, null, 1));
+    console.log(
+      `已打包 ${items.length} 筆：${join(out, 'blind-items.json')}（對照表另存 blind-key.json，標完前別看）`,
+    );
+    return;
+  }
+  const labels = JSON.parse(await readFile(need('--labels'), 'utf8')) as Record<string, Label>;
+  const key = JSON.parse(await readFile(need('--key'), 'utf8')) as BlindKey;
+  for (const [version, byId] of Object.entries(unpackLabels(labels, key))) {
+    await writeFile(join(out, `labels.${version}.json`), JSON.stringify(byId, null, 1));
+    console.log(`labels.${version}.json：${Object.keys(byId).length} 筆`);
+  }
+}
+
 async function readRuns(path: string): Promise<RunRecord[]> {
   try {
     return (await readFile(path, 'utf8'))
@@ -279,6 +319,9 @@ async function readRuns(path: string): Promise<RunRecord[]> {
 
 async function main(): Promise<void> {
   if (process.argv.includes('--summarize')) return summarizeOnly(process.argv.slice(2));
+  if (process.argv.includes('--blind-pack') || process.argv.includes('--blind-unpack')) {
+    return blindMode(process.argv.slice(2));
+  }
   const options = parseArgs(process.argv.slice(2));
   if (process.env['NVIDIA_API_KEY'] === undefined) {
     throw new Error('環境裡沒有 NVIDIA_API_KEY：先 `set -a; source <主 checkout>/.env; set +a`');

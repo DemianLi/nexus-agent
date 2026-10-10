@@ -70,6 +70,18 @@ describe('彙總', () => {
     expect(s.fabricatedManual).toMatchObject({ k: 0, n: 3 });
   });
 
+  it('明說查無、明說讀不到內容：各自單獨計數', () => {
+    const labels = {
+      a1: { fabricated: false, saidNothingFound: true },
+      a2: { fabricated: false, saidCannotRead: true },
+      a3: { fabricated: false, saidNothingFound: true, saidCannotRead: true },
+    };
+    const s = summarizeGroup(records, 'B', labels);
+    expect(s.saidNothingFound).toMatchObject({ k: 2, n: 3 });
+    expect(s.saidCannotRead).toMatchObject({ k: 2, n: 3 });
+    expect(renderSummary(records, labels, ['B'])).toContain('明說查無（人工判）');
+  });
+
   it('只標了一部分就不報人工判', () => {
     const s = summarizeGroup(records, 'B', { a1: { fabricated: false } });
     expect(s.fabricatedManual).toBeUndefined();
