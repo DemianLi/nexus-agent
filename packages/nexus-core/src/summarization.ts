@@ -860,7 +860,9 @@ function withCompactionLog(
  *
  * 1. **交給基座之前**，把日誌上記過的縮短換上去（{@link applyRecordedArgTruncations}）。記過的就一直是縮短的——基座每次從原文重算，
  *    正常情形下算出來一樣，但摘要把有效串縮短之後切點會重置，不換的話「這個參數這次是縮短還是原文」就要看基座的狀態，而不是日誌。
- *    這是 #1302 剪刀同款的黏性（那邊是自己的剪刀、這邊是別人的），**唯一的行為差**是那種少見的情形下，縮短過的不會再回到原文。
+ *    這是 #1302 剪刀同款的黏性（那邊是自己的剪刀、這邊是別人的）。**行為差有兩處**：(a) 摘要把有效串縮短、切點重置的少見情形下，縮短過的不會再回到原文；
+ *    (b) 基座看到的有效串已經是短的，`countTotalTokens` 變小，所以 `truncateArgs.trigger` 設成 `tokens` 型時，新的長參數會比以前**晚一點**才被截
+ *    （預設是 `messages` 型，不受影響）。
  * 2. **基座把請求交下去的那一刻**，拿交下去的串跟交進去的串比（{@link newlyTruncatedArgs}），新縮短的記一筆 `compaction/truncate-args`。
  *    包的是傳給基座的 `handler`，理由與 {@link withCompactionLog} 同：記在那次模型呼叫之前，而且在同一次呼叫的 `compaction/summary` 之後。
  *

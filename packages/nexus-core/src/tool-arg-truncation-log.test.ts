@@ -300,6 +300,46 @@ describe('createSummarizer 接上真的基座', () => {
     expect(truncations(log)).toHaveLength(1);
   });
 
+  /**
+   * 基座的 `modified` 旗標是迴圈外的一個變數：長參數那則一被截斷，它後面（切點之前）的每一則助手訊息都被整則重建，丟掉 `response_metadata`。
+   * 這裡一次跨過一串，把這個行為釘住——日誌記的只有**真的變短的參數**，被連累重建的鄰居不記（它們的參數沒變）。
+   * 夾具的 SV7 在 serve 上量這件事對 wire 是中性的。
+   */
+  it('一次跨過一串：長參數後面的助手訊息被基座整則重建，日誌只記變短的那一個', async () => {
+    const plain = (text: string): AIMessage =>
+      new AIMessage({ content: text, response_metadata: { output_version: 'v1' } });
+    const { log, sent, call } = setup((l) => ({ kind: 'ok', address: { kind: 'root' }, log: l }));
+    const messages = [
+      new HumanMessage('寫檔'),
+      writeCall('call_w', original),
+      toolDone('call_w'),
+      plain('寫好了'),
+      new HumanMessage('二'),
+      plain('二的回覆'),
+      new HumanMessage('三'),
+      plain('三的回覆'),
+      new HumanMessage('四'),
+    ];
+    await call(messages);
+    const metaOf = (message: BaseMessage) => Object.keys((message as AIMessage).response_metadata);
+    const ais = sent[0]!.filter((m) => AIMessage.isInstance(m));
+    expect(String(argOf(sent[0]!))).toContain('argument truncated');
+    // 基座重建：長參數那則與它後面、切點之前的兩則，`response_metadata` 都沒了；切點之後（最後保留的兩則裡的那則）原樣。
+    expect(ais.map(metaOf)).toEqual([[], [], [], ['output_version']]);
+    const events = truncations(log);
+    expect(events).toHaveLength(1);
+    expect(events[0]!.data.calls.map((c) => c.callId)).toEqual(['call_w']);
+    // 下一次請求：記過的預先換上去，基座看不到長參數、沒有東西被截斷，鄰居與被換過的那則都保有原本的 `response_metadata`。
+    await call(messages);
+    expect(sent[1]!.filter((m) => AIMessage.isInstance(m)).map(metaOf)).toEqual([
+      ['output_version'],
+      ['output_version'],
+      ['output_version'],
+      ['output_version'],
+    ]);
+    expect(truncations(log)).toHaveLength(1);
+  });
+
   it('日誌上記著、基座這次不縮（還沒到門檻）：照日誌換上去，不重記——重啟之後就是這一格', async () => {
     const { log, sent, call } = setup((l) => ({ kind: 'ok', address: { kind: 'root' }, log: l }));
     recordInto(log, 'call_w', { content: { originalChars: 300, value: `abc${MARKER}` } });

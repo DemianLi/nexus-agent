@@ -341,6 +341,55 @@ describe('已知差異：每一類對應一張卡', () => {
   }, 90_000);
 });
 
+describe('截斷視窗裡有鄰居（#1303）', () => {
+  /**
+   * 基座的 `truncateArgs` 用一個迴圈外的 `modified` 旗標：只要某次呼叫有參數**新被截斷**，切點之前、排在它後面的**每一則**助手訊息
+   * （連沒有長參數的、連沒有工具呼叫的）都被整則重建，丟掉 `response_metadata`。預設的門檻（每次只跨過兩則）下，新被截斷的幾乎就是
+   * 切點前最後一則助手訊息，旗標波及不到別人；所以這一格把截斷的訊息數門檻拉到 10，讓一次呼叫同時跨過一大串：長參數那則被截斷、
+   * 它後面的幾則帶文字的回覆被整則重建（探針量過：那幾則 `response_metadata` 是空的）。推導端從不重建鄰居，線上的 wire 還是要逐位元組相同。
+   * serve 走串流（v1 訊息），是兩條轉換路徑差得最多的那一條。
+   */
+  const BATCH_TRUNCATION = [
+    '- id: summarization',
+    '  config:',
+    '    trigger:',
+    '      - { type: tokens, value: 50000 }',
+    '    keep: { type: messages, value: 2 }',
+    '    truncateArgs:',
+    '      trigger: { type: messages, value: 10 }',
+    '      keep: { type: messages, value: 2 }',
+    '    historyPathPrefix: /conversation_history',
+  ].join('\n');
+
+  it('SV7 serve：一次跨過一串訊息，長參數後面的帶文字回覆被基座整則重建，推導與線上仍逐位元組相同', async () => {
+    const writeTo = (id: string, path: string, chars: string): Reply => ({
+      content: `寫 ${path}。`,
+      tools: [{ id, name: 'write_file', args: { file_path: path, content: big(chars, 2_000) } }],
+    });
+    const run = await runServePhases(
+      [['寫檔', '二', '三', '四', '五', '再寫一個', '七', '八', '九']],
+      mainOnly((k) => {
+        if (k === 0) return writeTo('call_w1', '/a.txt', 'abc');
+        // 「再寫一個」是第 6 句：k 從 0 起，前面 5 句各一次主呼叫，第一句多一次（工具結果之後）。
+        if (k === 6) return writeTo('call_w2', '/b.txt', 'xyz');
+        return { content: `回覆 ${String(k)}。` };
+      }),
+      BATCH_TRUNCATION,
+    );
+    const truncations = run.events.filter((e) => e.type === 'compaction/truncate-args');
+    const keys = truncations.flatMap((e) =>
+      (e as SessionEvent<'compaction/truncate-args'>).data.calls.flatMap((c) =>
+        Object.keys(c.args).map((arg) => `${c.callId}/${arg}`),
+      ),
+    );
+    // 前提：兩個參數都被截斷過、各記一次，而且是先後兩次（第二次的那一刻第一個已經是預先換上去的）。
+    expect(keys.sort()).toEqual(['call_w1/content', 'call_w2/content']);
+    expect(truncations).toHaveLength(2);
+    expect(JSON.stringify(run.mainBodies.at(-1)!.messages)).toContain(TRUNCATE_MARKER);
+    await expectDerivedHistory('SV7', run, [], 10);
+  }, 90_000);
+});
+
 describe('手挑組裝的邊界（#1300）', () => {
   /**
    * 空的助手訊息推導時丟掉，是跟 `live-model.ts` 的 `withEmptyAssistantContent`（`fetch` 層）對齊——出貨的 `--live` CLI 與 serve
