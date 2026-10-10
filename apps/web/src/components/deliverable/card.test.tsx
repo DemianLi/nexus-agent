@@ -3,9 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   COLLAPSED_COUNT,
+  DELIVERABLE_ACTIONS,
+  DELIVERABLE_ROW,
   DeliverablesCard,
   fallbackDescription,
 } from '@/components/deliverable/card';
+import { Control, type RightSidebarControl } from '@/components/sidebar/right-sidebar-context';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { axeViolations } from '@/test/axe';
 
@@ -104,6 +107,44 @@ describe('交付卡片', () => {
     cleanup();
     render(<DeliverablesCard files={located([REPORT, NOTES])} />);
     expect(list()).toContain('@xl:grid-cols-2');
+  });
+
+  it('窄列把三顆鈕移到檔名下面，寬列才放右邊；DOM 順序不跟著換（#1367）', () => {
+    const classes = (s: string) => s.split(/\s+/);
+    // 量的是列自己的寬，不是視窗：兩欄、375 寬時列都窄，單檔的 1024 才寬。具名容器免得被外層的 @container 截走。
+    expect(classes(DELIVERABLE_ROW)).toEqual(
+      expect.arrayContaining([
+        'grid-cols-[auto_minmax(0,1fr)]',
+        '@sm/deliverable:grid-cols-[auto_minmax(0,1fr)_auto]',
+      ]),
+    );
+    expect(classes(DELIVERABLE_ACTIONS)).toEqual(
+      expect.arrayContaining([
+        'col-start-2',
+        '@sm/deliverable:col-start-3',
+        '@sm/deliverable:row-start-1',
+      ]),
+    );
+    // 預覽鈕要有右側欄才畫；這裡只需要 `api.openDeliverable` 在。
+    const control = { api: { openDeliverable: () => {} } } as unknown as RightSidebarControl;
+    render(
+      <Control.Provider value={control}>
+        <DeliverablesCard files={located([REPORT])} download={{ download: vi.fn() }} />
+      </Control.Provider>,
+    );
+    const [row] = rows();
+    expect(classes(row!.className)).toContain('@container/deliverable');
+    const grid = row!.firstElementChild!;
+    expect(grid.className).toBe(DELIVERABLE_ROW);
+    const actions = grid.lastElementChild!;
+    expect(actions.className).toBe(DELIVERABLE_ACTIONS);
+    // 鈕在文字後面、順序是預覽 → 下載 → 複製：Tab 走的就是這個順序。
+    expect(
+      within(row!)
+        .getAllByRole('button')
+        .map((b) => b.getAttribute('aria-label')),
+    ).toEqual(['預覽：out/report.pdf', '下載：out/report.pdf', '複製路徑：out/report.pdf']);
+    expect(within(actions as HTMLElement).getAllByRole('button')).toHaveLength(3);
   });
 
   it(`超過 ${COLLAPSED_COUNT} 個先收起，展開再收回`, () => {
