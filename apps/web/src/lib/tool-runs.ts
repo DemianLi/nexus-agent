@@ -4,8 +4,11 @@
  * 查多個內部系統時一輪會冒出一長串工具卡，人在意的是答案。**只收全部已完成的連續段**：
  *
  * - **可收的工具**：成功完成（`done`）。停在提問或核准點上被停止的卡是 `failed`（`question-view.ts` 的 `endedWithoutAnswer`），
- *   自然不收。以下三種即使完成了也不收：
+ *   自然不收。以下幾種即使完成了也不收：
  *   - 計劃卡：另一種卡，計劃本身是要人看的。
+ *   - 提問卡（[#1327](https://github.com/DemianLi/nexus-agent/issues/1327)）：本地那一則答案 `transcriptItems` 拿掉了，人選了什麼
+ *     只寫在這張卡上，收起來等於把人說的話藏進折疊裡。MCP server 的反問（elicitation，#1098）走提問面板、掛在 MCP 工具上，
+ *     答案不畫在任何一張卡上（`pairAnswers` 只配 `ask_user_question`），沒有同樣的問題。
  *   - 背景委派卡：工具早就 `done`，子代理還在跑，卡上有對它說話與停止。
  *   - 交付卡（`present`）：卡上列的是交給人的檔案，收起來等於把交付物藏起來。工具結果在卡上畫圖片或附件的，查過目前沒有
  *     （`tool/card.tsx`、`tool/result.tsx` 沒有 `<img>`）。
@@ -29,6 +32,7 @@ import { DELEGATION_TOOL_NAMES, isBackgroundSubagentMeta } from '@nexus/wire';
 import type { TranscriptItem } from '@/lib/deliverables-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
 import { PRESENT } from '@/lib/present-view';
+import { ASK_USER_QUESTION } from '@/lib/question-view';
 import { toolTitle } from '@/lib/tool-view';
 
 /** 一段至少幾顆工具才收。 */
@@ -51,7 +55,9 @@ export function toolRunId(firstEntryId: string): string {
 
 function collapsibleTool(entry: ToolEntry): boolean {
   if (entry.status !== 'done') return false;
-  if (entry.name === EXIT_PLAN_MODE || entry.name === PRESENT) return false;
+  if (entry.name === EXIT_PLAN_MODE || entry.name === PRESENT || entry.name === ASK_USER_QUESTION) {
+    return false;
+  }
   if (DELEGATION_TOOL_NAMES.includes(entry.name) && isBackgroundSubagentMeta(entry.meta)) {
     return false;
   }
