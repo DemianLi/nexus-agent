@@ -29,6 +29,7 @@ import { CodeBlock } from '@/components/markdown/code-block';
 
 import type { PositionedBlock } from './incremental';
 import { renderTexToReact } from './katex';
+import { cjkCellFit } from './cjk-cells';
 import { numericColumns } from './numeric-columns';
 import { inlineText } from './plain-text';
 
@@ -320,12 +321,20 @@ function renderTableRow(
   for (let index = 0; index < length; index++) {
     const cell = row.children[index];
     const alignValue = align?.[index];
+    // 短中文值不斷行、長中文描述給最小寬度（#1332，`cjk-cells.ts`）。
+    const fit = cell === undefined ? undefined : cjkCellFit(inlineText(cell));
+    const className = [
+      numeric[index] === true ? 'md-num' : undefined,
+      fit === undefined ? undefined : `md-cjk-${fit}`,
+    ]
+      .filter((name) => name !== undefined)
+      .join(' ');
     cells.push(
       createElement(
         cellTag,
         {
           key: index,
-          className: numeric[index] === true ? 'md-num' : undefined,
+          className: className === '' ? undefined : className,
           style: alignValue == null ? undefined : { textAlign: alignValue },
         },
         ...(cell === undefined ? [] : renderChildren(cell.children, context)),

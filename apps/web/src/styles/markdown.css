@@ -138,6 +138,17 @@
     text-align: end;
   }
   /*
+   * 中文格子（#1332，判定見 `lib/markdown/cjk-cells.ts`）：中文欄的最小寬度只有一個字，表格比框寬時人名被拆成一字一行。
+   * 短值（人名、部門、狀態）整格不斷行；長描述給 10em 的最小寬度照常換行（一行約八九個字；實測 8em 一行六七個字太碎、
+   * 12em 多撐寬表格）。只掛在含中日文字的格子上，數字、英文、網址維持上面的 break-word。
+   */
+  .markdown .md-cjk-short {
+    white-space: nowrap;
+  }
+  .markdown .md-cjk-prose {
+    min-width: 10em;
+  }
+  /*
    * 整列 hover（#1330）：中性的 muted 疊一半（同 `bg-muted/50`），比表頭的 chip 淺，不會看成又一列表頭。
    * 包在 (hover: hover) 裡跟 Tailwind 的 `hover:` 一樣：觸控點一下不會把底色卡住。
    */
