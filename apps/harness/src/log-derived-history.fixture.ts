@@ -18,9 +18,6 @@
  * 逐呼叫一筆 {@link Verdict}：
  *
  * - `kinds`：差在哪一類（{@link DifferenceKind}），用**內容**判，不只看序號——同一個序號換了一種差異要看得出來。
- * - `derivation`：用哪一種推導才對得上。`summary-after-reply` 是「壓縮摘要事件記在觸發它的那次回覆**之後**，要重放到
- *   摘要事件、再丟掉最後一則回覆才對得上」，它**也算已知差異**（#1301）：地圖要的是摘要排在用到它的呼叫之前，
- *   那時這個推導方式就用不到了。
  * - `systemMatches`：線上系統訊息的文字（區塊串起來）是否等於日誌 `request/system`。探針當年沒比這一格。
  *
  * ## 兩個具名的正規化（不是默默抹掉）
@@ -227,13 +224,9 @@ export const TRUNCATE_MARKER = 'argument truncated';
  */
 export type DifferenceKind = 'prune' | 'truncate' | 'empty-assistant' | 'other';
 
-/** 用哪一種推導才對得上：`before-start` 是預設，`summary-after-reply` 見檔頭。 */
-export type Derivation = 'before-start' | 'summary-after-reply';
-
 export interface Verdict {
   /** 第幾次主呼叫（從 0 起）。 */
   readonly call: number;
-  readonly derivation: Derivation;
   /** 排序後去重的差異種類；空陣列＝逐位元組相同。 */
   readonly kinds: readonly DifferenceKind[];
   /** 線上系統訊息的文字（區塊串起來）等於日誌 `request/system`。 */
@@ -339,7 +332,6 @@ export async function compareToLog(
     if (replay.kind !== 'replayed') {
       out.push({
         call: index,
-        derivation: 'before-start',
         kinds: ['other'],
         systemMatches: false,
         detail: `無法重放：${replay.reason}@${String(replay.seq)}`,
@@ -356,37 +348,9 @@ export async function compareToLog(
       .at(-1);
     const logged = system === undefined ? undefined : (system.data as { system: string }).system;
 
-    // 摘要事件記在觸發它的那次回覆之後（#1301）：那次呼叫送出去的請求已經是摘要過的，
-    // 要重放到摘要事件、再丟掉最後一則（那次呼叫的回覆）才對得上。
-    const end = events.find(
-      (event) =>
-        event.type === 'model/end' &&
-        (event.data as { modelCall?: number }).modelCall === start.seq,
-    );
-    const nextStart = starts[index + 1];
-    const summary = events.find(
-      (event) =>
-        event.type === 'compaction/summary' &&
-        event.seq > start.seq &&
-        (end === undefined || event.seq > end.seq) &&
-        (nextStart === undefined || event.seq < nextStart.seq),
-    );
-    let derivation: Derivation = 'before-start';
-    let messages = replay.messages;
-    if (summary !== undefined) {
-      const alt = replayConversation(
-        events.filter((event) => event.seq <= summary.seq),
-        { toolResultAsSeen },
-      );
-      if (alt.kind === 'replayed') {
-        derivation = 'summary-after-reply';
-        messages = alt.messages.slice(0, -1);
-      }
-    }
-
     const derivedWire = await wireOf([
       ...(logged === undefined ? [] : [new SystemMessage(logged)]),
-      ...messages,
+      ...replay.messages,
     ]);
     const actualAll = body.messages.map(stripModelName);
     const systemMatches =
@@ -397,7 +361,6 @@ export async function compareToLog(
     const { kinds, detail } = classify(actualAll.slice(1), derivedWire.slice(1));
     out.push({
       call: index,
-      derivation,
       kinds,
       systemMatches,
       ...(detail !== undefined && { detail }),

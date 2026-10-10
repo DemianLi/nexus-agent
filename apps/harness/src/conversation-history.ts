@@ -26,7 +26,7 @@
  * | `workspace/changes` | `custom` frame，`data` 同即時（{@link workspaceChangesData}）；它指到的摘要可能已經不在 |
  * | `model/usage` ／ `context/measure` | 用量表（#528）：**一頁各一顆，是到這一頁結尾為止最新的那一筆**，`data` 同即時（{@link modelUsageData}、{@link contextMeasureData}） |
  *
- * | `compaction/summary` | 壓縮過這件事（#896）：`custom` frame，**逐顆轉**，位置就是日誌上的位置（在觸發它的那次呼叫的回覆之後）；`data` 同即時（{@link compactionData}） |
+ * | `compaction/summary` | 壓縮過這件事（#896）：`custom` frame，**逐顆轉**，位置就是日誌上的位置（格式 45 起在用到它的那次呼叫的回覆之前；44 以前的舊日誌在回覆之後）；`data` 同即時（{@link compactionData}） |
  *
  * | `plan/mode` | 計劃模式（#895）：**只在最新一頁送一顆，是到 `throughSeq` 為止目前的值**，日誌上一顆都沒有就不送；`data` 同即時（{@link planModeData}） |
  *

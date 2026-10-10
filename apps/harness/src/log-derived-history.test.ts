@@ -13,7 +13,7 @@
  *
  * - 分類一律回「沒有差異」：所有帶差異種類的場景（S8、S9、SH3、SH4、SV6）。S6 只列推導方式、不列種類，這個突變碰不到它。
  * - 分類一律回「有差異」：兩個對照場景與全部已知差異場景。
- * - 不偵測摘要事件的順序：S6、S8、SH3、SH4、SV6（有 `summary-after-reply` 的那幾個）。
+ * - 不偵測摘要事件的順序（#1301 之前）：S6、S8、SH3、SH4、SV6。#1301 把摘要事件改排在用到它的呼叫之前之後，這個突變改成「把摘要事件搬回回覆之後」，紅的是 S6。
  * - 重放時把系統訊息改一個字：所有場景（系統訊息相符的斷言）。
  * - SR2 比的是「重啟 vs 不重啟」，不經過比對器，上面四個突變碰不到它；它另有自己的前提斷言與突變（讓重啟那邊拿錯一次呼叫去比）。
  *
@@ -42,7 +42,6 @@ import {
 } from './log-derived-history.fixture.js';
 import type {
   Body,
-  Derivation,
   DifferenceKind,
   Reply,
   Run,
@@ -51,43 +50,34 @@ import type {
 } from './log-derived-history.fixture.js';
 
 /** 每一類差異由哪張卡負責。`other` 沒有卡：出現就是新問題。 */
-const CARD_OF: Readonly<Record<DifferenceKind | 'summary-after-reply', string>> = {
+const CARD_OF: Readonly<Record<DifferenceKind, string>> = {
   prune: '#1302（工具結果剪刀進日誌）',
   truncate: '#1303（舊工具參數截斷進日誌）',
   'empty-assistant': '#1300（已修；再出現是退步）',
-  'summary-after-reply': '#1301（摘要事件排在用到它的呼叫之前）',
   other: '（沒有對應的卡——新問題）',
 };
 
-/** 一格已知差異。`derivation` 預設 `before-start`，`kinds` 預設沒有。 */
+/** 一格已知差異。 */
 interface Known {
   readonly call: number;
-  readonly derivation?: Derivation;
   readonly kinds?: readonly DifferenceKind[];
 }
 
-/** 觀察到的、不是「逐位元組相同且用預設推導」的那些格，形狀同 {@link Known}。 */
+/** 觀察到的、不是「逐位元組相同」的那些格，形狀同 {@link Known}。 */
 const observedOf = (verdicts: readonly Verdict[]): Known[] =>
-  verdicts
-    .filter((v) => v.kinds.length > 0 || v.derivation !== 'before-start')
-    .map((v) => ({
-      call: v.call,
-      ...(v.derivation !== 'before-start' && { derivation: v.derivation }),
-      ...(v.kinds.length > 0 && { kinds: v.kinds }),
-    }));
+  verdicts.filter((v) => v.kinds.length > 0).map((v) => ({ call: v.call, kinds: v.kinds }));
 
 const explain = (verdicts: readonly Verdict[]): string => {
   const lines = verdicts
-    .filter((v) => v.kinds.length > 0 || v.derivation !== 'before-start' || !v.systemMatches)
+    .filter((v) => v.kinds.length > 0 || !v.systemMatches)
     .map(
       (v) =>
-        `呼叫 ${String(v.call)}：推導=${v.derivation} 種類=[${v.kinds.join(',')}] 系統訊息${v.systemMatches ? '相符' : '不符'}` +
+        `呼叫 ${String(v.call)}：種類=[${v.kinds.join(',')}] 系統訊息${v.systemMatches ? '相符' : '不符'}` +
         (v.detail === undefined ? '' : `\n  ${v.detail}`),
     );
   const cards = new Set<string>();
   for (const v of verdicts) {
     for (const kind of v.kinds) cards.add(CARD_OF[kind]);
-    if (v.derivation === 'summary-after-reply') cards.add(CARD_OF['summary-after-reply']);
   }
   return `\n${lines.join('\n')}\n對應的卡：${[...cards].join('；') || '無'}`;
 };
@@ -245,15 +235,7 @@ describe('已知差異：每一類對應一張卡', () => {
       },
     );
     expect(run.events.filter((e) => e.type === 'compaction/summary').length).toBeGreaterThan(0);
-    await expectDerivedHistory(
-      'S6',
-      run,
-      [
-        { call: 4, derivation: 'summary-after-reply' },
-        { call: 7, derivation: 'summary-after-reply' },
-      ],
-      7,
-    );
+    await expectDerivedHistory('S6', run, [], 7);
   }, 90_000);
 
   it('S8 工具結果剪刀（#1302）', async () => {
@@ -277,7 +259,7 @@ describe('已知差異：每一類對應一張卡', () => {
       'S8',
       run,
       [
-        { call: 1, derivation: 'summary-after-reply', kinds: ['prune'] },
+        { call: 1, kinds: ['prune'] },
         { call: 2, kinds: ['prune'] },
         { call: 3, kinds: ['prune'] },
       ],
@@ -317,15 +299,7 @@ describe('已知差異：每一類對應一張卡', () => {
     expect(run.mainBodies.some((b) => JSON.stringify(b.messages).includes(PRUNE_MARKER))).toBe(
       true,
     );
-    await expectDerivedHistory(
-      'SH3',
-      run,
-      [
-        { call: 1, derivation: 'summary-after-reply', kinds: ['prune'] },
-        { call: 2, derivation: 'summary-after-reply' },
-      ],
-      5,
-    );
+    await expectDerivedHistory('SH3', run, [{ call: 1, kinds: ['prune'] }], 5);
   }, 90_000);
 
   it('SH4 出貨 CLI：舊工具參數截斷（門檻調低）', async () => {
@@ -338,7 +312,6 @@ describe('已知差異：每一類對應一張卡', () => {
       'SH4',
       run,
       [
-        { call: 1, derivation: 'summary-after-reply' },
         { call: 2, kinds: ['truncate'] },
         { call: 3, kinds: ['truncate'] },
         { call: 4, kinds: ['truncate'] },
@@ -370,7 +343,7 @@ describe('已知差異：每一類對應一張卡', () => {
       'SV6',
       run,
       [
-        { call: 1, derivation: 'summary-after-reply', kinds: ['prune'] },
+        { call: 1, kinds: ['prune'] },
         { call: 2, kinds: ['truncate'] },
         { call: 3, kinds: ['truncate'] },
         { call: 4, kinds: ['truncate'] },
