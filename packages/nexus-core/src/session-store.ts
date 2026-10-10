@@ -547,8 +547,17 @@ import type { SessionEvent } from './session-log.js';
  * 略過它推出來的歷史會比實際送出去的長，而且沒有任何東西說為什麼。
  *
  * **讀舊檔**：45 以前沒有這一筆，照舊讀得回來，不補寫（補了也不知道當時剪成什麼）。沒有剪過的會話，日誌與以前位元組相同。
+ *
+ * ## 47：`compaction/truncate-args`（[#1303](https://github.com/DemianLi/nexus-agent/issues/1303)）
+ *
+ * 基座摘要器的 `truncateArgs` 把舊的 `write_file`／`edit_file` 長參數縮成「開頭 20 字＋標記」，只改請求、不寫日誌。現在基座把請求交下去的那一刻
+ * 拿交下去的串跟進來的串比，縮短了的記一筆 `compaction/truncate-args { calls: [{ callId, args: { 參數名: { originalChars, value } } }] }`，
+ * 每個參數只記一次、之後每次請求都沿用。dsh 沒有這個行為，形狀退到 `compaction/prune` 的鄰居（見事件宣告的偏離登記）。
+ *
+ * **升版，不標 `ignorable`**：一台 46 的 runtime 讀到這一筆會拒絕重建。**讀舊檔**：46 以前沒有這一筆，照舊讀得回來，不補寫。
+ * 沒有被縮短的會話，日誌與以前位元組相同。
  */
-export const SESSION_LOG_FORMAT_VERSION = 46;
+export const SESSION_LOG_FORMAT_VERSION = 47;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
