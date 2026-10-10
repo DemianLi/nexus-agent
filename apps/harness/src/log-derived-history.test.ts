@@ -11,7 +11,7 @@
  *
  * 比對器本身被這些突變守住（#1299 實測，改壞夾具後各自會紅哪些）：
  *
- * - 分類一律回「沒有差異」：所有帶差異種類的場景（S8、S9、SH3、SH4、SV6）。S6 只列推導方式、不列種類，這個突變碰不到它。
+ * - 分類一律回「沒有差異」：#1302、#1303 修好之後，所有場景的已知清單都是空的，這個突變只剩比對器本身的單元測試會紅。
  * - 分類一律回「有差異」：兩個對照場景與全部已知差異場景。
  * - 不偵測摘要事件的順序（#1301 之前）：S6、S8、SH3、SH4、SV6。#1301 把摘要事件改排在用到它的呼叫之前之後，這個突變改成「把摘要事件搬回回覆之後」，紅的是 S6。
  * - 重放時把系統訊息改一個字：所有場景（系統訊息相符的斷言）。
@@ -51,8 +51,8 @@ import type {
 
 /** 每一類差異由哪張卡負責。`other` 沒有卡：出現就是新問題。 */
 const CARD_OF: Readonly<Record<DifferenceKind, string>> = {
-  prune: '#1302（工具結果剪刀進日誌）',
-  truncate: '#1303（舊工具參數截斷進日誌）',
+  prune: '#1302（已修；再出現是退步）',
+  truncate: '#1303（已修；再出現是退步）',
   'empty-assistant': '#1300（已修；再出現是退步）',
   other: '（沒有對應的卡——新問題）',
 };
@@ -186,6 +186,7 @@ describe('對照場景：預期逐位元組相同', () => {
     await expectDerivedHistory('C1', run, [], 2);
     // 剪刀沒動的會話，日誌不多寫事件（#1302）。
     expect(run.events.some((e) => e.type === 'compaction/prune')).toBe(false);
+    expect(run.events.some((e) => e.type === 'compaction/truncate-args')).toBe(false);
   }, 60_000);
 
   it('serve，同一輪併發兩個工具呼叫（串流）', async () => {
@@ -204,6 +205,7 @@ describe('對照場景：預期逐位元組相同', () => {
     );
     await expectDerivedHistory('C2', run, [], 3);
     expect(run.events.some((e) => e.type === 'compaction/prune')).toBe(false);
+    expect(run.events.some((e) => e.type === 'compaction/truncate-args')).toBe(false);
   }, 90_000);
 
   it('SV5 serve：輸出撞上限帶工具呼叫 → 空的助手訊息推導時丟掉（#1300 已修）', async () => {
@@ -268,7 +270,7 @@ describe('已知差異：每一類對應一張卡', () => {
     ).toBe('model/start');
   }, 90_000);
 
-  it('S9 舊工具參數截斷（#1303）', async () => {
+  it('S9 舊工具參數截斷（#1303 已修：縮短進日誌，推導與線上逐位元組相同）', async () => {
     const script: Script = (i) => (i === 0 ? writeCall('call_w') : {});
     const run = await runAssembly('寫檔\n二\n三\n四\n/exit\n', script, [], {
       trigger: [{ type: 'messages', value: 1000 }],
@@ -282,16 +284,20 @@ describe('已知差異：每一類對應一張卡', () => {
     expect(run.mainBodies.some((b) => JSON.stringify(b.messages).includes(TRUNCATE_MARKER))).toBe(
       true,
     );
-    await expectDerivedHistory(
-      'S9',
-      run,
-      [
-        { call: 2, kinds: ['truncate'] },
-        { call: 3, kinds: ['truncate'] },
-        { call: 4, kinds: ['truncate'] },
-      ],
-      5,
-    );
+    await expectDerivedHistory('S9', run, [], 5);
+    // 位置與只記一次（#1303）：縮短記在用到它的那次 `model/start` 之前，之後的請求沿用——四次呼叫只有一筆、一個參數。
+    const truncations = run.events.filter((e) => e.type === 'compaction/truncate-args');
+    expect(truncations).toHaveLength(1);
+    const { calls } = (truncations[0] as SessionEvent<'compaction/truncate-args'>).data;
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.callId).toBe('call_w');
+    expect(Object.keys(calls[0]!.args)).toEqual(['content']);
+    expect(calls[0]!.args.content!.originalChars).toBe(6_000);
+    expect(calls[0]!.args.content!.value).toContain(TRUNCATE_MARKER);
+    const after = run.events.filter((e) => e.seq > truncations[0]!.seq);
+    expect(
+      after.find((e) => e.type === 'model/start' || e.type === 'assistant/message')?.type,
+    ).toBe('model/start');
   }, 90_000);
 
   it('SH3 出貨 CLI：剪刀（門檻調低）', async () => {
@@ -309,16 +315,7 @@ describe('已知差異：每一類對應一張卡', () => {
     expect(run.mainBodies.some((b) => JSON.stringify(b.messages).includes(TRUNCATE_MARKER))).toBe(
       true,
     );
-    await expectDerivedHistory(
-      'SH4',
-      run,
-      [
-        { call: 2, kinds: ['truncate'] },
-        { call: 3, kinds: ['truncate'] },
-        { call: 4, kinds: ['truncate'] },
-      ],
-      5,
-    );
+    await expectDerivedHistory('SH4', run, [], 5);
   }, 90_000);
 
   it('SV6 serve：大結果與長參數，剪刀與截斷同時在場', async () => {
@@ -340,16 +337,56 @@ describe('已知差異：每一類對應一張卡', () => {
       ),
       LOW_SUMMARIZATION,
     );
-    await expectDerivedHistory(
-      'SV6',
-      run,
-      [
-        { call: 2, kinds: ['truncate'] },
-        { call: 3, kinds: ['truncate'] },
-        { call: 4, kinds: ['truncate'] },
-      ],
-      5,
+    await expectDerivedHistory('SV6', run, [], 5);
+  }, 90_000);
+});
+
+describe('截斷視窗裡有鄰居（#1303）', () => {
+  /**
+   * 基座的 `truncateArgs` 用一個迴圈外的 `modified` 旗標：只要某次呼叫有參數**新被截斷**，切點之前、排在它後面的**每一則**助手訊息
+   * （連沒有長參數的、連沒有工具呼叫的）都被整則重建，丟掉 `response_metadata`。預設的門檻（每次只跨過兩則）下，新被截斷的幾乎就是
+   * 切點前最後一則助手訊息，旗標波及不到別人；所以這一格把截斷的訊息數門檻拉到 10，讓一次呼叫同時跨過一大串：長參數那則被截斷、
+   * 它後面的幾則帶文字的回覆被整則重建（探針量過：那幾則 `response_metadata` 是空的）。推導端從不重建鄰居，線上的 wire 還是要逐位元組相同。
+   * serve 走串流（v1 訊息），是兩條轉換路徑差得最多的那一條。
+   */
+  const BATCH_TRUNCATION = [
+    '- id: summarization',
+    '  config:',
+    '    trigger:',
+    '      - { type: tokens, value: 50000 }',
+    '    keep: { type: messages, value: 2 }',
+    '    truncateArgs:',
+    '      trigger: { type: messages, value: 10 }',
+    '      keep: { type: messages, value: 2 }',
+    '    historyPathPrefix: /conversation_history',
+  ].join('\n');
+
+  it('SV7 serve：一次跨過一串訊息，長參數後面的帶文字回覆被基座整則重建，推導與線上仍逐位元組相同', async () => {
+    const writeTo = (id: string, path: string, chars: string): Reply => ({
+      content: `寫 ${path}。`,
+      tools: [{ id, name: 'write_file', args: { file_path: path, content: big(chars, 2_000) } }],
+    });
+    const run = await runServePhases(
+      [['寫檔', '二', '三', '四', '五', '再寫一個', '七', '八', '九']],
+      mainOnly((k) => {
+        if (k === 0) return writeTo('call_w1', '/a.txt', 'abc');
+        // 「再寫一個」是第 6 句：k 從 0 起，前面 5 句各一次主呼叫，第一句多一次（工具結果之後）。
+        if (k === 6) return writeTo('call_w2', '/b.txt', 'xyz');
+        return { content: `回覆 ${String(k)}。` };
+      }),
+      BATCH_TRUNCATION,
     );
+    const truncations = run.events.filter((e) => e.type === 'compaction/truncate-args');
+    const keys = truncations.flatMap((e) =>
+      (e as SessionEvent<'compaction/truncate-args'>).data.calls.flatMap((c) =>
+        Object.keys(c.args).map((arg) => `${c.callId}/${arg}`),
+      ),
+    );
+    // 前提：兩個參數都被截斷過、各記一次，而且是先後兩次（第二次的那一刻第一個已經是預先換上去的）。
+    expect(keys.sort()).toEqual(['call_w1/content', 'call_w2/content']);
+    expect(truncations).toHaveLength(2);
+    expect(JSON.stringify(run.mainBodies.at(-1)!.messages)).toContain(TRUNCATE_MARKER);
+    await expectDerivedHistory('SV7', run, [], 10);
   }, 90_000);
 });
 
@@ -426,6 +463,36 @@ describe('重啟後續接', () => {
       verdicts.filter((v) => v.kinds.includes('other') || v.kinds.includes('prune')),
       `剪法推不出來${explain(verdicts)}`,
     ).toEqual([]);
+  }, 180_000);
+
+  /**
+   * #1303：縮短在重啟之前記下，重啟之後仍沿用——不重記，日誌推得出每一次請求（包括重啟後的第一次）。
+   * 灌回 graph state 的是原文（`applyArgTruncations` 省略），下一次請求由 `withArgTruncationLog` 照日誌換上去。
+   */
+  it('SR5 縮短記下之後重啟：沿用不重記，重啟後的請求也推得出來', async () => {
+    const script = () => mainOnly((k) => (k === 0 ? writeCall('call_w') : {}));
+    const texts = ['寫檔', '二', '三', '重啟點之後的一句', '再一句'];
+    const restart = await runServePhases(
+      [texts.slice(0, 3), texts.slice(3)],
+      script(),
+      LOW_SUMMARIZATION,
+    );
+    const resumedAt = restart.events.find((e) => e.type === 'session/end-seed');
+    expect(resumedAt, '應該有一次續接').toBeDefined();
+    const truncations = restart.events.filter((e) => e.type === 'compaction/truncate-args');
+    expect(truncations.length, '重啟前就該縮短過').toBeGreaterThan(0);
+    expect(truncations[0]!.seq).toBeLessThan(resumedAt!.seq);
+    // 每個參數只記一次：重啟沒有讓它再記一遍。
+    const keys = truncations.flatMap((e) =>
+      (e as SessionEvent<'compaction/truncate-args'>).data.calls.flatMap((c) =>
+        Object.keys(c.args).map((arg) => `${c.callId}/${arg}`),
+      ),
+    );
+    expect(new Set(keys).size).toBe(keys.length);
+    // 重啟後送出去的請求仍帶截斷標記，而且每一次請求都推得出來。
+    expect(JSON.stringify(restart.mainBodies.at(-1)!.messages)).toContain(TRUNCATE_MARKER);
+    const verdicts = await compareToLog(restart.events, restart.mainBodies);
+    expect(observedOf(verdicts), `縮短推不出來${explain(verdicts)}`).toEqual([]);
   }, 180_000);
 
   /**

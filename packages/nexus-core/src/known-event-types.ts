@@ -20,6 +20,7 @@ export const KNOWN_SESSION_EVENT_TYPES: ReadonlySet<string> = new Set([
   'command/run',
   'compaction/prune',
   'compaction/summary',
+  'compaction/truncate-args',
   'context/measure',
   'deliverables/presented',
   'feedback/message-delete',
