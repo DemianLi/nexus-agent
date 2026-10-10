@@ -19,10 +19,11 @@ import { loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMcpPlugin } from './index.js';
-import { FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
+import { CITE_LINKS, CITE_TEXT, FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
 import { startLegacyHttp, startModernHttp } from './http-fixtures.js';
 import type { HttpFixture } from './http-fixtures.js';
 import type { ProtocolInfo } from './modern-tools.js';
+import { CITE_RESOURCE_LINKS } from './project-content.js';
 import { modelToolNames } from './tool-names.js';
 
 const MODERN_STDIO_SERVER = fileURLToPath(new URL('./modern-stdio-server.ts', import.meta.url));
@@ -148,8 +149,9 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
               'mcp__srv__ask_url',
               'mcp__srv__ask_twice',
               'mcp__srv__ask_mixed',
+              'mcp__srv__cite_sources',
             ]
-          : ['mcp__srv__read_env', 'mcp__srv__fetch_url'],
+          : ['mcp__srv__read_env', 'mcp__srv__fetch_url', 'mcp__srv__cite_sources'],
       );
     });
   });
@@ -191,6 +193,25 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
         { type: 'text', text: '畫面之前' },
         { type: 'text', text: '[image unavailable: image/png; no attachment store is mounted]' },
         { type: 'text', text: '畫面之後' },
+      ]);
+    });
+  });
+
+  it('回 resource_link 的工具：名稱加網址，結尾有引用提示（#1319）', async () => {
+    await withServer(target, async (mounted) => {
+      const message = (await tool(mounted, 'cite_sources').invoke({
+        type: 'tool_call',
+        id: 'call_cite',
+        name: 'mcp__srv__cite_sources',
+        args: {},
+      })) as ToolMessage;
+      expect(message.content).toEqual([
+        { type: 'text', text: CITE_TEXT },
+        ...CITE_LINKS.map((link) => ({
+          type: 'text',
+          text: `Resource link: ${link.name} (${link.uri})`,
+        })),
+        { type: 'text', text: CITE_RESOURCE_LINKS },
       ]);
     });
   });

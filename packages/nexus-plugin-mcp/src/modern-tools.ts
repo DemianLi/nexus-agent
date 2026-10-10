@@ -15,7 +15,13 @@
 import { acceptedContent, inputRequired, inputResponse } from '@modelcontextprotocol/server';
 import type { CallToolResult, InputRequiredResult, McpServer } from '@modelcontextprotocol/server';
 import { z } from 'zod';
-import { FAILURE_TEXT, RELEASE_NOTE, SNAPSHOT_PNG } from './fixture-tools.js';
+import {
+  CITE_LINKS,
+  CITE_TEXT,
+  FAILURE_TEXT,
+  RELEASE_NOTE,
+  SNAPSHOT_PNG,
+} from './fixture-tools.js';
 
 /** `ask` 問使用者的問題。 */
 export const ASK_MESSAGE = '要不要繼續？';
@@ -207,5 +213,17 @@ export function registerModernTools(server: McpServer): void {
       }
       return { content: [{ type: 'text', text: `server 收到：${answered}` }] };
     },
+  );
+
+  // 與舊協議那台同名同行為（#1319）。
+  server.registerTool(
+    'cite_sources',
+    { description: '查內部知識庫，回一句說明與兩條資料連結。', inputSchema: z.object({}) },
+    (): CallToolResult => ({
+      content: [
+        { type: 'text', text: CITE_TEXT },
+        ...CITE_LINKS.map((link) => ({ type: 'resource_link' as const, ...link })),
+      ],
+    }),
   );
 }

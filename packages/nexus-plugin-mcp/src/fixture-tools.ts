@@ -21,6 +21,22 @@ export const FAILURE_TEXT = 'upstream exploded: 503';
 export const SNAPSHOT_PNG =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==';
 
+/**
+ * `cite_sources` 回的兩條 resource link（[#1319](https://github.com/DemianLi/nexus-agent/issues/1319)）：一條帶 `title`、一條不帶，
+ * URI 是 http 網址。模型能拿來標出處的，就是這兩個名字加網址。
+ */
+export const CITE_LINKS = [
+  {
+    name: '請假辦法（第 42 號公告）',
+    title: '員工請假辦法',
+    uri: 'https://wiki.example.test/policy/42',
+  },
+  { name: 'Q3 營收報表', uri: 'https://bi.example.test/reports/q3' },
+] as const;
+
+/** `cite_sources` 回的那一句正文。 */
+export const CITE_TEXT = '查到兩筆相關資料。';
+
 /** 把這一組工具掛到一台舊協議的 server 上。 */
 export function registerFixtureTools(server: McpServer): void {
   server.registerTool(
@@ -109,5 +125,17 @@ export function registerFixtureTools(server: McpServer): void {
         return { content: [{ type: 'text', text: `error ${String(error)}` }] };
       }
     },
+  );
+
+  // 回 `resource_link`（#1319）：內部系統查到資料時，最自然的回法是一句正文加幾條連結。
+  server.registerTool(
+    'cite_sources',
+    { description: '查內部知識庫，回一句說明與兩條資料連結。', inputSchema: {} },
+    () => ({
+      content: [
+        { type: 'text', text: CITE_TEXT },
+        ...CITE_LINKS.map((link) => ({ type: 'resource_link' as const, ...link })),
+      ],
+    }),
   );
 }
