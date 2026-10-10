@@ -10,6 +10,8 @@
  * 新的編號。不然人改過字再送，而第一次其實已經到了，改過的字就會無聲無息地被丟掉。
  */
 
+import { UplinkTransportError } from '@nexus/wire';
+
 /** 上次沒送出去的那一句，和它用過的編號。 */
 export interface PendingRequest {
   readonly id: string;
@@ -60,15 +62,16 @@ export function requestIdFor(pending: PendingRequest | undefined, sentence: Sent
  * - 狀態碼 502、504：代理收到了請求、上游沒回好，504 時上游多半已經收到、只是逾時。
  * - 其他非 2xx（harness 自己回的 4xx、500、503）是明說了不收。
  *
- * 狀態碼只在 wire 丟的訊息裡（`sendCommand` 的「上行被載體層擋下：<狀態碼> <內文>」），所以從訊息讀；格式由
- * `request-id.test.ts` 用真的 wire client 釘住。
+ * 狀態碼讀 wire 丟的 {@link UplinkTransportError} 的 `status`，不解析 `message`
+ * （[#1355](https://github.com/DemianLi/nexus-agent/issues/1355)）。
  */
 export function mayHaveArrived(error: unknown): boolean {
   if (error instanceof TypeError || error instanceof SyntaxError) return true;
-  return error instanceof Error && GATEWAY_REJECTION.test(error.message);
+  return error instanceof UplinkTransportError && GATEWAY_STATUSES.has(error.status);
 }
 
-const GATEWAY_REJECTION = /^上行被載體層擋下：50[24](?:\s|$)/u;
+/** 代理收到了、上游沒回好的狀態碼。 */
+const GATEWAY_STATUSES: ReadonlySet<number> = new Set([502, 504]);
 
 function sameSentence(a: Sentence, b: Sentence): boolean {
   return (
