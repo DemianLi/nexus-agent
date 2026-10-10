@@ -823,6 +823,9 @@ export interface SessionEventMap {
    * 那種東西。一顆誠實的事件勝過三顆撐不起語義的。**代價明寫**：壓縮失敗在日誌裡是
    * 沉默的，不是一顆帶 `error` 的 `end`。
    *
+   * **位置：在用到它的那次 `model/start` 之前**（格式 45，#1301；以前記在那次呼叫的回覆之後）。摘要生好、基座把摘要過的
+   * 請求交下去的那一刻記，所以呼叫本身失敗了，這顆也已經在日誌上（dsh 同：壓縮在組請求之前落地、是耐久的）。
+   *
    * ## 欄位
    *
    * **`filePath` 是 [#66](https://github.com/DemianLi/nexus-agent/issues/66) 那個 fail-open
@@ -857,6 +860,13 @@ export interface SessionEventMap {
     readonly filePath: string | null;
     /** 換上去的那則摘要訊息。 */
     readonly summary?: LoggedMessage;
+    /**
+     * 這顆記在用到它的那次 `model/start` **之前**（格式 45，[#1301](https://github.com/DemianLi/nexus-agent/issues/1301)），
+     * 照 dsh：摘要在組請求之前落地。**有這一格＝新順序**，推導端據此檢查則數：那一刻 graph state 還沒有這次呼叫的回覆，
+     * 推出來的恰好是 `messagesBefore` 則；沒有這一格是舊順序（記在那次呼叫的回覆之後），是 `messagesBefore + 1`。
+     * **逐顆判，不看檔頭的格式版本**：續寫舊檔時 header 的版本會被蓋成新的（`session-store.ts`），同一份檔會同時有兩種。
+     */
+    readonly beforeCall?: true;
     /**
      * 生這份摘要的那一次模型呼叫報的用量（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)），照 dsh 的
      * `compaction/summary.usage`（選填）。**不進 `model/usage`、不進總帳**：基座直接 `request.model.invoke` 生摘要，
