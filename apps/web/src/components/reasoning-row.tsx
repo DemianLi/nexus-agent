@@ -56,8 +56,8 @@ export function ReasoningRow({ text, running }: { text: string; running: boolean
       </RowTrigger>
       <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
         {/* 左線（#1307，比對文件 C4）：跟縮排的子代理回覆同一個 `border-border border-l`，落在腦圖示的中線（列的 `px-2` 加圖示半寬），
-            字仍對齊「思考過程」的字頭。不做高度動畫：展開收合的動效歸 `CollapsibleContent`。 */}
-        <div className="text-muted-foreground border-border ml-4 border-l pt-1 pr-2 pb-2 pl-4 text-tip">
+            字仍對齊「思考過程」的字頭（`ml-4`＋1px 線＋`pl-[15px]`＝原本的 `pl-8`）。不做高度動畫：展開收合的動效歸 `CollapsibleContent`。 */}
+        <div className="text-muted-foreground border-border ml-4 border-l pt-1 pr-2 pb-2 pl-[15px] text-tip">
           <MarkdownText text={text} streaming={running} />
         </div>
       </CollapsibleContent>
