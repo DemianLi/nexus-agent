@@ -23,6 +23,10 @@
  * ②操作列下面多一列「拒絕」（明確說不給）與「取消」（先不回答），MCP 的 `decline`／`cancel`，與作答的 `accept` 並列，**都不停止這一輪**
  * （名稱列的 ❌ 才是停止，§4.3）；③參數原文照畫在可捲動的區塊裡，不截斷（人要看得到將被同意的是什麼）。
  *
+ * **換題時高度用過渡跟上**（§7「面板高度差 resize 300」，[#1306](https://github.com/DemianLi/nexus-agent/issues/1306)）：
+ * `useResizeTransition` 掛在外框上，先量再過渡；reduced-motion 直接到位。**「（推薦）」字尾畫成小標**，送出的值不變
+ * （`lib/recommended-option.ts`）。
+ *
  * **草稿不暫存**（#231 第 8 項）：收起不會丟（換手層保持掛載），關掉分頁再回來就沒了。dsh 也把草稿標成 transient。
  */
 
@@ -32,6 +36,7 @@ import type { FormEvent } from 'react';
 import type { PendingQuestion } from '@nexus/wire';
 
 import { MonoBlock } from '@/components/mono-block';
+import { Badge } from '@/components/ui/badge';
 import { Surface } from '@/components/surface';
 import { Button } from '@/components/ui/button';
 import { MarkdownText } from '@/components/markdown-text';
@@ -52,6 +57,8 @@ import {
   QuestionnaireSubmit,
   QuestionnaireTitle,
 } from '@/components/ui/questionnaire';
+import { useResizeTransition } from '@/hooks/use-resize-transition';
+import { RECOMMENDED_BADGE, splitRecommended } from '@/lib/recommended-option';
 
 export type QuestionAnswer = { id: string; selected: string[]; custom?: string };
 
@@ -109,6 +116,10 @@ export function QuestionPanel({
   const [dir, setDir] = useState<'next' | 'prev'>();
   const current = Math.max(0, ids.indexOf(item));
 
+  // 換題時面板高度用過渡跟上（§7 resize 300，#1306）。
+  const surface = useRef<HTMLElement>(null);
+  useResizeTransition(surface, item);
+
   const advance = useRef<ReturnType<typeof setTimeout>>(undefined);
   useEffect(() => () => clearTimeout(advance.current), []);
 
@@ -138,7 +149,11 @@ export function QuestionPanel({
   );
 
   return (
-    <Surface tone="stage" className="max-h-[55svh] overflow-auto px-4 pt-4">
+    <Surface
+      ref={surface}
+      tone="stage"
+      className="motion-resize max-h-[55svh] overflow-auto px-4 pt-4"
+    >
       {origin !== undefined && <OriginBlock origin={origin} />}
       <Questionnaire
         item={item}
@@ -214,7 +229,7 @@ export function QuestionPanel({
                         advance.current = setTimeout(() => go(next), AUTO_ADVANCE_MS);
                       }}
                     >
-                      {option.label}
+                      <ChoiceLabel label={option.label} />
                       {option.description !== undefined && (
                         <QuestionnaireChoiceDescription>
                           {option.description}
@@ -272,6 +287,24 @@ export function QuestionPanel({
         )}
       </Questionnaire>
     </Surface>
+  );
+}
+
+/**
+ * 選項的標籤：模型加的「（推薦）」字尾畫成小標（#1306）。小標只是畫面，對輔助技術仍唸原字尾——`value` 也還是整個標籤，
+ * 送出的答案跟以前一字不差。
+ */
+function ChoiceLabel({ label }: { label: string }) {
+  const { text, recommended } = splitRecommended(label);
+  if (!recommended) return label;
+  return (
+    <span className="flex flex-wrap items-center gap-x-2 gap-y-1">
+      <span>{text}</span>
+      <Badge variant="secondary" aria-hidden data-testid="recommended-badge">
+        {RECOMMENDED_BADGE}
+      </Badge>
+      <span className="sr-only">（{RECOMMENDED_BADGE}）</span>
+    </span>
   );
 }
 
