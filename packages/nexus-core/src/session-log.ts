@@ -35,6 +35,7 @@
  * 20 萬字元以上的一則話，推的一側要自己判）。
  */
 
+import type { MessageContent } from '@langchain/core/messages';
 import type { AttachmentRef } from './attachment-ref.js';
 import type { SubagentMentionRef } from './subagent-mention.js';
 import type { ModelRoute } from './model-route.js';
@@ -809,6 +810,99 @@ export interface SessionEventMap {
     }[];
   };
   /**
+   * 工具結果剪刀剪了幾顆（[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)，格式 46）：這幾顆工具結果從這次起，模型看到的是
+   * 剪成「頭＋標記＋尾」之後的內容。**每顆工具結果只記一次，之後的每次請求都沿用**——照 dsh 的 `compaction/prune`：落盤的替換，
+   * 永久有效，不是每次重算。
+   *
+   * ## 為什麼記內容，不記規則
+   *
+   * 2026-10-09 拍板的理由是「歷史要能只從日誌推導，不能依賴程式碼版本」：剪刀的門檻、頭尾長度、標記字都是設定與程式碼，改了就推不回
+   * 當時送出去的那份。所以記**剪過的內容本身**（`content`）。代價是日誌多一份剪過的內容（上界是門檻之內，預設約 5,000 個 code point），
+   * 且每顆只記一次（見下）。
+   *
+   * ## 與 dsh 的差別（偏離登記）
+   *
+   * dsh 先記一顆 `compaction/prune`（影子價格：`shadowedRange`、`shadowedSeqs`、`shadowedTokenCount`），緊接著 append 一顆替換用的
+   * `tool/result`（`surfaceOp: replace`、`sourceEventSeqs: [原 seq]`）。**我們沒有 surface 那一軸**（沒有 `surfaceOp`），替換不能掛在事件上，
+   * 所以兩顆合成一顆：這一筆自己帶替換的內容，以 `callId` 指向被替換的那顆 `tool/result`（請求端的剪刀看到的是訊息、不是事件，
+   * 沒有 `seq` 可指）。影子價格沒有——我們沒有可注入的 token meter（`tool-result-pruner.ts` 檔頭），省下的量讀者要自己從
+   * `originalChars` 與 `content` 算。
+   *
+   * ## 位置與讀法
+   *
+   * 記在用到它的那次 `model/start` **之前**（承 #1301 定下的規則：改寫請求的事件排在用到它的呼叫之前），而且在同一次呼叫的
+   * `compaction/summary` 之前——剪刀跑在摘要器外面。**不產出訊息**（所以不在 {@link ModelVisibleEventType} 裡），但左右模型看到什麼
+   * （{@link MESSAGE_PROJECTION_EVENT_TYPES}）。解譯者有兩個：請求端是剪刀本身（`tool-result-pruner.ts`，每次呼叫前讀日誌、把記過的
+   * 換上去、再剪新的）；推導端是 {@link ./conversation-replay.ts | replayConversation} 的 `applyPrunes` 選項。
+   * **續接灌回 graph state 的那一串不套用**（state 裡留原文，剪刀下一次請求會照日誌換上），所以預設不套。
+   *
+   * **升版，不標 `ignorable`**（格式 46）：一台 45 的 runtime 讀到這一筆會拒絕重建。略過它，推出來的歷史就比實際送出去的長，
+   * 而且沒有任何東西說為什麼。**讀舊檔**：45 以前沒有這一筆，照舊讀得回來；沒有剪過的會話，日誌與以前位元組相同。
+   *
+   * ⚠️ 剪過的內容原樣進遙測，同 `tool/result`。
+   */
+  'compaction/prune': {
+    readonly results: readonly {
+      /** 被剪的工具結果的 `tool_call_id`。 */
+      readonly callId: string;
+      /**
+       * 剪之前的文字總量（Unicode code point，非文字區塊不算）。**兼作對得上的檢查**：套用時這個數字與那則訊息現在的文字量不相等，
+       * 就不換——有的供應商會重用 `tool_call_id`，或訊息在這之間被別人改過，不能把另一顆結果的剪法套上去。
+       */
+      readonly originalChars: number;
+      /** 剪過的內容，模型實際看到的那一份（字串，或保留了非文字區塊的複合區塊陣列）。 */
+      readonly content: MessageContent;
+    }[];
+  };
+  /**
+   * 舊的 `write_file`／`edit_file` 呼叫的長參數被縮短了（[#1303](https://github.com/DemianLi/nexus-agent/issues/1303)，格式 47）：這幾個參數從這次起，
+   * 模型看到的是縮短後的字串（開頭 20 個字加標記）。**每個參數只記一次，之後的每次請求都沿用。**
+   *
+   * ## 這是誰做的事
+   *
+   * 基座（`deepagents@1.13.1`）的摘要 middleware 在每次請求前對有效串重算 `truncateArgs`：訊息數到 `trigger`、在 `keep` 之前的助手訊息，
+   * `write_file`／`edit_file` 的字串參數超過 `maxLength` 的，換成 `substring(0, 20) + truncationText`。只改請求，state 與日誌是完整參數。
+   * 我們不擁有那段程式碼，所以這一筆**不是規則的紀錄，是觀察**：基座把請求交下去的那一刻，拿交下去的串跟進來的串逐個工具呼叫比，
+   * 參數字串變短的就記。因此門檻、名單、標記字改了，日誌照樣對。
+   *
+   * ## 為什麼記內容，不記規則
+   *
+   * 同 `compaction/prune`：歷史要能只從日誌推導，不能依賴程式碼版本。代價是每個被縮短的參數多一份縮短後的字串（約 50 個字），
+   * 而不是原本的幾千字；原文本來就在 `assistant/message` 上。
+   *
+   * ## 與 dsh 的差別（偏離登記）
+   *
+   * **dsh 沒有這個行為**：在 `references/deepseek-harness`（`d7432673886`）搜 `truncateArgs`、`truncate-args`、`argument truncated`、
+   * `compaction/truncate` 零命中，沒有形狀可抄。形狀退到最接近的鄰居 `compaction/prune`（#1302）：事件自己帶替換的內容、不掛 surface、
+   * 以 id 指到被改的那一個——只是這裡指的是 `tool_calls[i]` 的某個參數（`callId` ＋ 參數名），不是整顆 `tool/result`。
+   * 不用 `seq` 的理由同 `compaction/prune`：請求端看到的是訊息，不是事件。
+   *
+   * ## 位置與讀法
+   *
+   * 記在用到它的那次 `model/start` **之前**（承 #1301），在同一次呼叫的 `compaction/summary` 之後（基座先摘要、再交下去；兩者互不依賴，
+   * 讀者以 `callId` 套用，順序無關）。**不產出訊息**，但左右模型看到什麼（{@link MESSAGE_PROJECTION_EVENT_TYPES}）。解譯者有兩個：
+   * 請求端是摘要器外面那一層（`summarization.ts` 的 `withArgTruncationLog`，每次呼叫前讀日誌、把記過的換上去再交給基座，基座交下去時記新的）；
+   * 推導端是 {@link ./conversation-replay.ts | replayConversation} 的 `applyArgTruncations` 選項（預設不套，理由同 `applyPrunes`）。
+   *
+   * **升版，不標 `ignorable`**（格式 47）：一台 46 的 runtime 讀到這一筆會拒絕重建；略過它，推出來的歷史比實際送出去的長。
+   * **讀舊檔**：46 以前沒有這一筆，照舊讀得回來；沒有被縮短的會話，日誌與以前位元組相同。
+   *
+   * ⚠️ 縮短後的字串原樣進遙測，同 `tool/result`。
+   */
+  'compaction/truncate-args': {
+    readonly calls: readonly {
+      /** 被縮短的工具呼叫的 `id`（`tool_calls[i].id`）。 */
+      readonly callId: string;
+      /**
+       * 這個呼叫被縮短的參數，鍵是參數名。**`originalChars` 兼作對得上的檢查**：套用時它與那個參數現在的長度（UTF-16 code unit，
+       * 同基座的 `value.length > maxLength`）不相等就不換——供應商可能重用工具呼叫 id，不能把另一個呼叫的縮短套上去。
+       */
+      readonly args: Readonly<
+        Record<string, { readonly originalChars: number; readonly value: string }>
+      >;
+    }[];
+  };
+  /**
    * 壓縮真的發生了一次：舊訊息被換成一份摘要。**一次摘要一筆**。
    *
    * ## 這是 dsh 三顆事件的哪一顆，以及另外兩顆為什麼不在
@@ -1247,13 +1341,15 @@ export function isModelVisibleEvent(
 /**
  * **不產出訊息、卻左右模型看到什麼的事件**（[#1270](https://github.com/DemianLi/nexus-agent/issues/1270)），對應 dsh 的
  * `MESSAGE_PROJECTION_EVENT_TYPES`（`packages/core/session/src/known-event-types.ts:84-87`，`5badb15009a`）：「進模型的效果要另外
- * 寫解譯器」的那一類。今天只有 `image/offload`。
+ * 寫解譯器」的那一類。今天有 `image/offload`、`compaction/prune` 與 `compaction/truncate-args`。
  *
  * 跟 {@link ModelVisibleEventType} 的差別：那一份是**替模型多出一則訊息**的事件，replay 對它們窮舉；這一份**改變已經存在的訊息**
- * 怎麼送出去，解譯者各自負責（見 `image/offload` 的說明）。兩份都不能標 `ignorable`。
+ * 怎麼送出去，解譯者各自負責（見 `image/offload`、`compaction/prune` 的說明）。兩份都不能標 `ignorable`。
  */
 export const MESSAGE_PROJECTION_EVENT_TYPES = [
   'image/offload',
+  'compaction/prune',
+  'compaction/truncate-args',
 ] as const satisfies readonly SessionEventType[];
 
 /** {@link MESSAGE_PROJECTION_EVENT_TYPES} 的成員。 */

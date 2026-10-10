@@ -710,6 +710,237 @@ describe('壓縮（摘要事件在呼叫之前）', () => {
 });
 
 /**
+ * **工具結果剪刀的剪法**（#1302，格式 46）：`compaction/prune` 記了哪幾顆工具結果剪成什麼。`applyPrunes` 開著，推出來的是模型實際收到的
+ * 那一份；省略（續接灌回 graph state 用的）仍是原文，剪刀下一次請求會照日誌換上去。
+ */
+describe('工具結果剪刀的剪法（applyPrunes）', () => {
+  const ORIGINAL = '字'.repeat(300);
+
+  /** 叫一次工具、得到一顆大結果，然後記下剪法。 */
+  function pruned(log: SessionLog, originalChars = 300): void {
+    log.append('turn/start', { kind: 'message', text: '查' });
+    log.append('assistant/message', { message: asking('好', [['c1', 'grep']]) });
+    tool(log, 'c1', 'grep', ORIGINAL);
+    log.append('compaction/prune', {
+      results: [{ callId: 'c1', originalChars, content: '頭…尾' }],
+    });
+    log.append('assistant/message', { message: reply('找到了') });
+    log.append('turn/end', {});
+  }
+
+  it('預設不套：仍是原文', () => {
+    const log = new SessionLog('replay');
+    pruned(log);
+    expect(shape(replayConversation(log.events))).toEqual([
+      'human:查',
+      'ai:好',
+      `tool:c1:${ORIGINAL}`,
+      'ai:找到了',
+    ]);
+  });
+
+  it('applyPrunes：被剪的那顆換成記下的內容，其餘不動', () => {
+    const log = new SessionLog('replay');
+    pruned(log);
+    expect(shape(replayConversation(log.events, { applyPrunes: true }))).toEqual([
+      'human:查',
+      'ai:好',
+      'tool:c1:頭…尾',
+      'ai:找到了',
+    ]);
+  });
+
+  it('文字量對不上（同一個 callId 是另一顆結果）不換', () => {
+    const log = new SessionLog('replay');
+    pruned(log, 299);
+    expect(shape(replayConversation(log.events, { applyPrunes: true }))[2]).toBe(
+      `tool:c1:${ORIGINAL}`,
+    );
+  });
+
+  it('只用 `model/start` 之前的日誌推：剪法還沒記的那一次請求仍是原文', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '查' });
+    log.append('assistant/message', { message: asking('好', [['c1', 'grep']]) });
+    tool(log, 'c1', 'grep', ORIGINAL);
+    const before = log.events;
+    log.append('compaction/prune', {
+      results: [{ callId: 'c1', originalChars: 300, content: '頭…尾' }],
+    });
+    log.append('model/start', {});
+
+    expect(shape(replayConversation(before, { applyPrunes: true }))[2]).toBe(`tool:c1:${ORIGINAL}`);
+    expect(shape(replayConversation(log.events.slice(0, -1), { applyPrunes: true }))[2]).toBe(
+      'tool:c1:頭…尾',
+    );
+  });
+
+  it('壓縮的切點仍是原始串的座標：剪法不改則數，摘要之後被剪的結果照樣換', () => {
+    const log = new SessionLog('replay');
+    chat(log, '一', 'A');
+    log.append('turn/start', { kind: 'message', text: '查' });
+    log.append('assistant/message', { message: asking('好', [['c1', 'grep']]) });
+    tool(log, 'c1', 'grep', ORIGINAL);
+    log.append('compaction/prune', {
+      results: [{ callId: 'c1', originalChars: 300, content: '頭…尾' }],
+    });
+    log.append('compaction/summary', {
+      cutoffIndex: 2,
+      messagesBefore: 5,
+      filePath: null,
+      summary: summaryMessage('摘要'),
+      beforeCall: true,
+    });
+    log.append('assistant/message', { message: reply('找到了') });
+
+    expect(shape(replayConversation(log.events, { applyPrunes: true }))).toEqual([
+      'human:摘要',
+      'human:查',
+      'ai:好',
+      'tool:c1:頭…尾',
+      'ai:找到了',
+    ]);
+  });
+
+  it('沒有 compaction/prune 時 applyPrunes 與不套逐則相同', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '查' });
+    log.append('assistant/message', { message: asking('好', [['c1', 'grep']]) });
+    tool(log, 'c1', 'grep', ORIGINAL);
+    log.append('assistant/message', { message: reply('找到了') });
+    log.append('turn/end', {});
+    expect(shape(replayConversation(log.events, { applyPrunes: true }))).toEqual(
+      shape(replayConversation(log.events)),
+    );
+  });
+});
+
+/**
+ * **舊工具呼叫參數的縮短**（#1303，格式 47）：`compaction/truncate-args` 記了哪幾個參數縮成什麼。`applyArgTruncations` 開著，推出來的是
+ * 模型實際收到的那一份；省略（續接灌回 graph state 用的）仍是原文，請求端下一次請求會照日誌換上去。
+ */
+describe('舊工具呼叫參數的縮短（applyArgTruncations）', () => {
+  const ORIGINAL = 'abc'.repeat(100);
+  const SHORT = 'abc...(argument truncated)';
+
+  const argsOf = (replay: ConversationReplay, index: number): unknown => {
+    if (replay.kind !== 'replayed') throw new Error(`推不出來：${replay.reason}`);
+    return (replay.messages[index] as AIMessage).tool_calls?.[0]?.args;
+  };
+
+  /** 寫一次檔、得到結果，然後記下縮短。 */
+  function truncated(log: SessionLog, originalChars = 300): void {
+    log.append('turn/start', { kind: 'message', text: '寫' });
+    log.append('assistant/message', {
+      message: toLoggedMessage(
+        new AIMessage({
+          content: '好',
+          tool_calls: [
+            {
+              id: 'c1',
+              name: 'write_file',
+              args: { file_path: '/a.txt', content: ORIGINAL },
+              type: 'tool_call' as const,
+            },
+          ],
+        }),
+      ),
+    });
+    tool(log, 'c1', 'write_file', '寫好了');
+    log.append('compaction/truncate-args', {
+      calls: [{ callId: 'c1', args: { content: { originalChars, value: SHORT } } }],
+    });
+    log.append('assistant/message', { message: reply('完成') });
+    log.append('turn/end', {});
+  }
+
+  it('預設不套：仍是原文', () => {
+    const log = new SessionLog('replay');
+    truncated(log);
+    expect(argsOf(replayConversation(log.events), 1)).toEqual({
+      file_path: '/a.txt',
+      content: ORIGINAL,
+    });
+  });
+
+  it('applyArgTruncations：被縮短的參數換成記下的字串，其餘參數與其他訊息不動', () => {
+    const log = new SessionLog('replay');
+    truncated(log);
+    const replay = replayConversation(log.events, { applyArgTruncations: true });
+    expect(argsOf(replay, 1)).toEqual({ file_path: '/a.txt', content: SHORT });
+    expect(shape(replay)).toEqual(['human:寫', 'ai:好', 'tool:c1:寫好了', 'ai:完成']);
+  });
+
+  it('長度對不上（同一個 callId 是另一個呼叫）不換', () => {
+    const log = new SessionLog('replay');
+    truncated(log, 299);
+    expect(argsOf(replayConversation(log.events, { applyArgTruncations: true }), 1)).toEqual({
+      file_path: '/a.txt',
+      content: ORIGINAL,
+    });
+  });
+
+  it('只用 `model/start` 之前的日誌推：縮短還沒記的那一次請求仍是原文', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '寫' });
+    log.append('assistant/message', {
+      message: toLoggedMessage(
+        new AIMessage({
+          content: '好',
+          tool_calls: [
+            {
+              id: 'c1',
+              name: 'write_file',
+              args: { content: ORIGINAL },
+              type: 'tool_call' as const,
+            },
+          ],
+        }),
+      ),
+    });
+    tool(log, 'c1', 'write_file', '寫好了');
+    const before = log.events;
+    log.append('compaction/truncate-args', {
+      calls: [{ callId: 'c1', args: { content: { originalChars: 300, value: SHORT } } }],
+    });
+    log.append('model/start', {});
+
+    expect(argsOf(replayConversation(before, { applyArgTruncations: true }), 1)).toEqual({
+      content: ORIGINAL,
+    });
+    expect(
+      argsOf(replayConversation(log.events.slice(0, -1), { applyArgTruncations: true }), 1),
+    ).toEqual({ content: SHORT });
+  });
+
+  it('與 applyPrunes 各管各的：同開時兩邊都換，只開一個只換那一個', () => {
+    const log = new SessionLog('replay');
+    truncated(log);
+    log.append('compaction/prune', {
+      results: [{ callId: 'c1', originalChars: 3, content: '短' }],
+    });
+    const both = replayConversation(log.events, { applyPrunes: true, applyArgTruncations: true });
+    expect(argsOf(both, 1)).toEqual({ file_path: '/a.txt', content: SHORT });
+    expect(shape(both)[2]).toBe('tool:c1:短');
+    const onlyArgs = replayConversation(log.events, { applyArgTruncations: true });
+    expect(argsOf(onlyArgs, 1)).toEqual({ file_path: '/a.txt', content: SHORT });
+    expect(shape(onlyArgs)[2]).toBe('tool:c1:寫好了');
+  });
+
+  it('沒有 compaction/truncate-args 時 applyArgTruncations 與不套逐則相同', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '查' });
+    log.append('assistant/message', { message: asking('好', [['c1', 'grep']]) });
+    tool(log, 'c1', 'grep', '找到了');
+    log.append('assistant/message', { message: reply('完成') });
+    log.append('turn/end', {});
+    expect(replayConversation(log.events, { applyArgTruncations: true })).toEqual(
+      replayConversation(log.events),
+    );
+  });
+});
+
+/**
  * 沒有內容也沒有工具呼叫的助手訊息（#1300，照 dsh `surface.ts:136-142`）：推導時丟掉，
  * 但壓縮切點的座標仍算它——它在 graph state 裡有一格。
  */

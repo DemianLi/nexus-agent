@@ -94,7 +94,8 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ContextOverflowError } from '@langchain/core/errors';
-import type { BaseMessage } from '@langchain/core/messages';
+import { ToolMessage } from '@langchain/core/messages';
+import type { BaseMessage, MessageContent } from '@langchain/core/messages';
 import { createSummarizationMiddleware } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
@@ -113,8 +114,18 @@ import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
 import { estimateAnchoredTokens } from './token-estimate.js';
 import type { EstimatedRequest, TokenAnchorBook } from './token-estimate.js';
+import {
+  applyRecordedArgTruncations,
+  newlyTruncatedArgs,
+  recordedArgTruncationsOf,
+} from './tool-arg-truncation-log.js';
+import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
-import type { ToolResultPruneConfig } from './tool-result-pruner.js';
+import type {
+  PruneRequest,
+  ToolResultPruneConfig,
+  ToolResultPruneLog,
+} from './tool-result-pruner.js';
 
 /**
  * 基座那個 middleware 的名字。
@@ -496,7 +507,9 @@ export function createSummarizer(
   // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。預算那層讀的是基座交下去的
   // 請求，不是進來的那份，也不碰回傳值。
   const logged = sessions === undefined ? quiet : withCompactionLog(quiet, sessions);
-  const budgeted = withTokenBudget(logged, settings.trigger, book, sessions, limitsOf);
+  // 基座的 `truncateArgs` 是它自己的事，這一層只在交給它之前換上記過的、在它交下去時記新的（#1303）。
+  const truncationLogged = sessions === undefined ? logged : withArgTruncationLog(logged, sessions);
+  const budgeted = withTokenBudget(truncationLogged, settings.trigger, book, sessions, limitsOf);
   if (pruning === false) return budgeted;
   return withToolResultPruning(
     budgeted,
@@ -507,7 +520,57 @@ export function createSummarizer(
         book,
       ),
     pruning,
+    sessions === undefined ? undefined : pruneLogOf(sessions),
   );
+}
+
+/**
+ * 剪刀的日誌接口（[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)）：讀出這次請求所屬那份日誌上記過的剪法，記下新剪的。
+ *
+ * **只記這次請求真正送得出去的那一段**：`request.messages` 是 graph state 的原始串，摘要之前的舊訊息還在裡面，但模型看不到
+ * （{@link effectiveMessages}）。剪刀對整串動手，這裡只把落在有效串裡的記下來——日誌要證明的是「模型看到的那一份」，
+ * 不是 state 裡每一顆大結果的剪法。記不進去吃掉，同 {@link withCompactionLog}。
+ *
+ * @param sessions - 註冊表的 `sessions` 通道。
+ * @returns 接口。
+ */
+function pruneLogOf(sessions: { forCall(config: unknown): SessionLookup }): ToolResultPruneLog {
+  const lookup = (request: PruneRequest): SessionLookup =>
+    sessions.forCall({
+      configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+    });
+  return {
+    recorded(request) {
+      try {
+        const found = lookup(request);
+        return found.kind === 'ok' ? recordedPrunesOf(found.log.events) : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    record(request, results) {
+      try {
+        const found = lookup(request);
+        if (found.kind !== 'ok') return;
+        const sendable = new Set<string>();
+        for (const message of effectiveMessages(request.messages ?? [], request.state)) {
+          if (ToolMessage.isInstance(message)) sendable.add(message.tool_call_id);
+        }
+        const kept = results.filter((result) => sendable.has(result.callId));
+        if (kept.length === 0) return;
+        found.log.append('compaction/prune', {
+          results: kept.map((result) => ({
+            callId: result.callId,
+            originalChars: result.originalChars,
+            // 純 JSON：日誌收不下 `undefined` 的欄位（同 `toLoggedMessage`）。
+            content: JSON.parse(JSON.stringify(result.content)) as MessageContent,
+          })),
+        });
+      } catch {
+        // 記不進去不能反過來把模型呼叫殺掉。
+      }
+    },
+  };
 }
 
 /**
@@ -785,6 +848,66 @@ function withCompactionLog(
           return handler(sent);
         }),
       );
+    },
+  } as AgentMiddleware;
+}
+
+/**
+ * 舊工具呼叫參數的縮短寫進日誌（[#1303](https://github.com/DemianLi/nexus-agent/issues/1303)）。
+ *
+ * 基座每次請求前對有效串重算 `truncateArgs`，把 `keep` 之前的助手訊息裡 `write_file`／`edit_file` 的長字串參數縮成「開頭 20 字＋標記」，
+ * 只改請求、不寫日誌。這一層做兩件事，**都不重寫基座的規則**：
+ *
+ * 1. **交給基座之前**，把日誌上記過的縮短換上去（{@link applyRecordedArgTruncations}）。記過的就一直是縮短的——基座每次從原文重算，
+ *    正常情形下算出來一樣，但摘要把有效串縮短之後切點會重置，不換的話「這個參數這次是縮短還是原文」就要看基座的狀態，而不是日誌。
+ *    這是 #1302 剪刀同款的黏性（那邊是自己的剪刀、這邊是別人的）。**行為差有兩處**：(a) 摘要把有效串縮短、切點重置的少見情形下，縮短過的不會再回到原文；
+ *    (b) 基座看到的有效串已經是短的，`countTotalTokens` 變小，所以 `truncateArgs.trigger` 設成 `tokens` 型時，新的長參數會比以前**晚一點**才被截
+ *    （預設是 `messages` 型，不受影響）。
+ * 2. **基座把請求交下去的那一刻**，拿交下去的串跟交進去的串比（{@link newlyTruncatedArgs}），新縮短的記一筆 `compaction/truncate-args`。
+ *    包的是傳給基座的 `handler`，理由與 {@link withCompactionLog} 同：記在那次模型呼叫之前，而且在同一次呼叫的 `compaction/summary` 之後。
+ *
+ * 記不進去吃掉，同 {@link withCompactionLog}：這一層是同名取代，漏出去的錯會把摘要器本身拔掉。
+ *
+ * @param base - 外一層（已包過 {@link withCompactionLog}）。
+ * @param sessions - 註冊表的 `sessions` 通道。
+ * @returns 同名、同狀態、多一層紀錄的 middleware。
+ */
+function withArgTruncationLog(
+  base: AgentMiddleware,
+  sessions: { forCall(config: unknown): SessionLookup },
+): AgentMiddleware {
+  const inner = base.wrapModelCall?.bind(base);
+  /* v8 ignore next -- 基座那顆一定有 wrapModelCall；沒有的話包了也沒意義，原樣回去。 */
+  if (inner === undefined) return base;
+  return {
+    ...base,
+    wrapModelCall: (request, handler) => {
+      let before: readonly BaseMessage[] = request.messages ?? [];
+      let lookup: SessionLookup | undefined;
+      try {
+        lookup = sessions.forCall({
+          configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+        });
+        if (lookup.kind === 'ok') {
+          before = applyRecordedArgTruncations(before, recordedArgTruncationsOf(lookup.log.events));
+        }
+      } catch {
+        lookup = undefined;
+      }
+      const found = lookup;
+      const forwarded =
+        before === request.messages ? request : { ...request, messages: [...before] };
+      return inner(forwarded as typeof request, (sent) => {
+        try {
+          if (found?.kind === 'ok') {
+            const calls = newlyTruncatedArgs(before, sent.messages ?? []);
+            if (calls.length > 0) found.log.append('compaction/truncate-args', { calls });
+          }
+        } catch {
+          // 記不進去不能反過來把摘要器殺掉。
+        }
+        return handler(sent);
+      });
     },
   } as AgentMiddleware;
 }
