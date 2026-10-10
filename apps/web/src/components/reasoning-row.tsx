@@ -13,7 +13,7 @@ import { reasoningSummary } from '@/lib/reasoning-view';
  * 比工具卡輕：沒有卡片底，一列小字。一輪有好幾步時每一步都有一列，做成卡片會變成一面卡片牆。
  *
  * - 收合時一行摘要：串流中是最新一行，講完是第一行（`reasoningSummary`）。
- * - 展開用正文的 `MarkdownText`，外層縮成 `text-tip`（`.markdown` 的字級都是 `em`）。
+ * - 展開用正文的 `MarkdownText`，外層縮成 `text-tip`（`.markdown` 的字級都是 `em`），左邊一條細線標出這段是推理（#1307）。
  * - **摘要不進可存取名稱**（`aria-hidden`）：它每來一顆 chunk 就變一次，焦點停在按鈕上時報讀器會跟著重唸。
  *   全文展開後照樣讀得到；推理也不進 polite 區唸（狀態列已經唸「執行中」）。
  */
@@ -55,7 +55,9 @@ export function ReasoningRow({ text, running }: { text: string; running: boolean
         <Chevron className="ml-auto" />
       </RowTrigger>
       <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
-        <div className="text-muted-foreground pt-1 pr-2 pb-2 pl-8 text-tip">
+        {/* 左線（#1307，比對文件 C4）：跟縮排的子代理回覆同一個 `border-border border-l`，落在腦圖示的中線（列的 `px-2` 加圖示半寬），
+            字仍對齊「思考過程」的字頭。不做高度動畫：展開收合的動效歸 `CollapsibleContent`。 */}
+        <div className="text-muted-foreground border-border ml-4 border-l pt-1 pr-2 pb-2 pl-4 text-tip">
           <MarkdownText text={text} streaming={running} />
         </div>
       </CollapsibleContent>

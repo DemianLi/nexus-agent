@@ -1,10 +1,12 @@
 import type { ThreadSearchOutcome, ThreadSummary } from '@nexus/wire';
-import { useEffect, useId, useState } from 'react';
+import { X } from 'lucide-react';
+import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 
 import { Chevron } from '@/components/chevron';
 import { RenameField, ThreadRowMenu } from '@/components/sidebar/thread-row-menu';
 import type { RowMenuProps } from '@/components/sidebar/thread-row-menu';
+import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 import {
   SidebarGroup,
@@ -32,6 +34,9 @@ import { threadLabel, withCurrentTitle } from '@/lib/thread-title';
 import { cn } from '@/lib/utils';
 
 export { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/lib/thread-title';
+
+/** 搜尋框裡 × 的名稱（#1307）。 */
+export const CLEAR_SEARCH_LABEL = '清除搜尋';
 
 /**
  * 以前的會話——[#302](https://github.com/DemianLi/nexus-agent/issues/302)。照 dsh 的 `session/list`：
@@ -94,6 +99,7 @@ export function ThreadList({
   }, [refresh]);
 
   const [query, setQuery] = useState('');
+  const searchRef = useRef<HTMLInputElement>(null);
   const needle = query.trim();
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [archivedOpen, setArchivedOpen] = useState(false);
@@ -197,20 +203,44 @@ export function ThreadList({
             <p className="text-muted-foreground px-2">這個專案還沒有以前的會話。</p>
           ) : (
             <>
-              <SidebarInput
-                type="search"
-                aria-label="搜尋以前的會話"
-                placeholder={on ? '搜尋會話' : '搜尋標題'}
-                value={query}
-                onChange={(event) => setQuery(sanitizeSearchQuery(event.target.value))}
-                onKeyDown={(event) => {
-                  if (event.key === 'Escape' && query !== '') {
-                    event.preventDefault();
-                    setQuery('');
-                  }
-                }}
-                className="mb-1 h-11 lg:h-8"
-              />
+              {/* 有字才有 ×（#1307，比對文件 C6）：按下清空、焦點留在搜尋框，接著打字。Esc 照舊也是清空。
+                  瀏覽器自己的 search 清除鈕藏起來：它沒有名字、Tab 走不到，兩顆 × 並排也不對。 */}
+              <div className="relative mb-1">
+                <SidebarInput
+                  ref={searchRef}
+                  type="search"
+                  aria-label="搜尋以前的會話"
+                  placeholder={on ? '搜尋會話' : '搜尋標題'}
+                  value={query}
+                  onChange={(event) => setQuery(sanitizeSearchQuery(event.target.value))}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Escape' && query !== '') {
+                      event.preventDefault();
+                      setQuery('');
+                    }
+                  }}
+                  className={cn(
+                    'h-11 lg:h-8 [&::-webkit-search-cancel-button]:appearance-none',
+                    query !== '' && 'pr-11 lg:pr-8',
+                  )}
+                />
+                {query !== '' && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="text-muted-foreground absolute top-1/2 right-1 size-9 -translate-y-1/2 lg:right-0.5 lg:size-7"
+                    title={CLEAR_SEARCH_LABEL}
+                    aria-label={CLEAR_SEARCH_LABEL}
+                    onClick={() => {
+                      setQuery('');
+                      searchRef.current?.focus();
+                    }}
+                  >
+                    <X />
+                  </Button>
+                )}
+              </div>
               {view.items.length > 0 && (
                 <ThreadGroupList
                   sections={sections}
