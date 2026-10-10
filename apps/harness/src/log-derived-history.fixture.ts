@@ -45,8 +45,8 @@ import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { SessionRegistry, replayConversation } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
-import { emptyConversation } from '@nexus/wire';
-import type { ConversationState } from '@nexus/wire';
+import { emptyConversation, reduceConversation } from '@nexus/wire';
+import type { ConversationState, Event as WireEvent } from '@nexus/wire';
 
 import { createNexusAgent } from './agent-factory.js';
 import type { CreateNexusAgentOptions } from './agent-factory.js';
@@ -78,6 +78,12 @@ export interface Reply {
   content?: string;
   tools?: { id: string; name: string; args: unknown }[];
   finish?: string;
+  /** 先睡這麼多毫秒才回（讓「模型呼叫進行中」有一段可以按停、插話的時間）。 */
+  delay?: number;
+  /** 串流專用：推理內容（`reasoning_content` 片段）。 */
+  reasoning?: string;
+  /** 串流專用：內容、推理、並行工具呼叫的參數都拆成小片，且並行工具的片段交錯。 */
+  chunky?: boolean;
 }
 
 /** 腳本：第幾次請求（含標題、摘要這類不帶工具的）與它的 body → 回什麼。 */
@@ -108,11 +114,13 @@ export async function fakeEndpoint(script: Script, stream: boolean): Promise<Fak
   const server = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (chunk: Buffer) => chunks.push(chunk));
-    req.on('end', () => {
+    req.on('end', async () => {
       const body = JSON.parse(Buffer.concat(chunks).toString('utf8')) as Body;
       const index = bodies.length;
       bodies.push(body);
       const reply = script(index, body);
+      if (reply.delay !== undefined)
+        await new Promise((resolve) => setTimeout(resolve, reply.delay));
       const id = `chatcmpl-${index}-${Math.random().toString(36).slice(2)}`;
       const finish = reply.finish ?? (reply.tools === undefined ? 'stop' : 'tool_calls');
       const text = reply.content ?? (reply.tools === undefined ? '好。' : '');
@@ -148,6 +156,102 @@ export async function fakeEndpoint(script: Script, stream: boolean): Promise<Fak
       const frame = (payload: Record<string, unknown>) =>
         `data: ${JSON.stringify({ id, object: 'chat.completion.chunk', created: 0, model: DEFAULT_LIVE_MODEL_ID, ...payload })}\n\n`;
       res.writeHead(200, { 'content-type': 'text/event-stream' });
+      if (reply.chunky === true) {
+        const pieces = (str: string, n: number) =>
+          Array.from({ length: Math.ceil(str.length / n) }, (_, k) =>
+            str.slice(k * n, (k + 1) * n),
+          );
+        if (reply.reasoning !== undefined) {
+          for (const [k, piece] of pieces(reply.reasoning, 3).entries()) {
+            res.write(
+              frame({
+                choices: [
+                  {
+                    index: 0,
+                    delta: { ...(k === 0 && { role: 'assistant' }), reasoning_content: piece },
+                  },
+                ],
+              }),
+            );
+          }
+        }
+        for (const [k, piece] of pieces(text, 2).entries()) {
+          res.write(
+            frame({
+              choices: [
+                { index: 0, delta: { ...(k === 0 && { role: 'assistant' }), content: piece } },
+              ],
+            }),
+          );
+        }
+        const split = calls.map((call) => ({ call, args: pieces(call.function.arguments, 5) }));
+        const rounds = Math.max(0, ...split.map((c) => c.args.length));
+        // 並行工具呼叫的參數片段交錯送：第 0 輪各送一個開頭（id 與名字），之後輪流送參數片。
+        for (let round = 0; round <= rounds; round++) {
+          for (const [i, c] of split.entries()) {
+            if (round === 0) {
+              res.write(
+                frame({
+                  choices: [
+                    {
+                      index: 0,
+                      delta: {
+                        tool_calls: [
+                          {
+                            index: i,
+                            id: c.call.id,
+                            type: 'function',
+                            function: { name: c.call.function.name, arguments: '' },
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                }),
+              );
+            } else if (c.args[round - 1] !== undefined) {
+              res.write(
+                frame({
+                  choices: [
+                    {
+                      index: 0,
+                      delta: {
+                        tool_calls: [{ index: i, function: { arguments: c.args[round - 1] } }],
+                      },
+                    },
+                  ],
+                }),
+              );
+            }
+          }
+        }
+        res.write(frame({ choices: [{ index: 0, delta: {}, finish_reason: finish }] }));
+        res.write(
+          frame({
+            choices: [],
+            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+          }),
+        );
+        res.end('data: [DONE]\n\n');
+        return;
+      }
+      if (reply.reasoning !== undefined) {
+        res.write(
+          frame({
+            choices: [
+              {
+                index: 0,
+                delta: { role: 'assistant', reasoning_content: reply.reasoning.slice(0, 5) },
+              },
+            ],
+          }),
+        );
+        res.write(
+          frame({
+            choices: [{ index: 0, delta: { reasoning_content: reply.reasoning.slice(5) } }],
+          }),
+        );
+      }
       res.write(
         frame({ choices: [{ index: 0, delta: { role: 'assistant', content: text.slice(0, 1) } }] }),
       );
@@ -515,7 +619,6 @@ export async function runServePhases(
   const logs = await mkdtemp(join(tmpdir(), 'nexus-lh-logs-'));
   const patch = join(home, 'patch.yml');
   writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra), { mode: 0o600 });
-  const { reduceConversation } = await import('@nexus/wire');
   try {
     for (const texts of phases) {
       let running: RunningServe | undefined;
@@ -553,4 +656,134 @@ export async function runServePhases(
     await upstream.close();
   }
   return finish(readJsonl(join(logs, projectKey(process.cwd()), 'alpha.jsonl')), upstream.bodies);
+}
+
+// ---------------------------------------------------------------------------
+// 驅動式的 serve 跑法：子代理、核准、中止、插話、重啟（#1343）
+// ---------------------------------------------------------------------------
+
+export type ServeClient = Awaited<ReturnType<typeof serveClient>>;
+
+/** 一份落盤的日誌：`file` 是相對日誌目錄的路徑（子代理的檔名帶 `%2f`），`events` 照 `seq`。 */
+export interface LogFile {
+  readonly file: string;
+  readonly events: SessionEvent[];
+}
+
+/** 驅動一台 serve 的人：說話、答核准、按停，並等 UI 狀態達標。 */
+export interface DriverCtx {
+  readonly client: ServeClient;
+  readonly bodies: Body[];
+  state(): ConversationState;
+  /** 持續讀下行直到 `until(state)` 成立；逾時拋。 */
+  fold(until: (state: ConversationState) => boolean, ms?: number): Promise<void>;
+}
+
+export interface DriverRun {
+  /** 日誌目錄裡的每一份日誌（root 與各子代理）。 */
+  readonly logs: LogFile[];
+  readonly bodies: Body[];
+  readonly mainBodies: Body[];
+}
+
+/** root 的日誌：檔名沒有 `%2f`。 */
+export const rootLogOf = (run: DriverRun): LogFile => {
+  const root = run.logs.find((log) => !log.file.includes('%2f'));
+  if (root === undefined)
+    throw new Error(`找不到 root 日誌：${run.logs.map((l) => l.file).join(', ')}`);
+  return root;
+};
+
+/** 子代理的日誌：檔名有 `%2f`（背景的是 `%2fbg-…`，前景的是 `%2ftools%3a…`）。 */
+export const childLogsOf = (run: DriverRun): LogFile[] =>
+  run.logs.filter((log) => log.file.includes('%2f'));
+
+function readAllLogs(root: string): LogFile[] {
+  const out: LogFile[] = [];
+  const walk = (dir: string) => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.isDirectory()) walk(join(dir, entry.name));
+      else if (entry.name.endsWith('.jsonl')) {
+        out.push({
+          file: join(dir, entry.name).slice(root.length),
+          events: readJsonl(join(dir, entry.name)),
+        });
+      }
+    }
+  };
+  walk(root);
+  return out;
+}
+
+/** 睡一下。給「等某件事在背景發生」用；能用 `fold` 等狀態的就不要用它。 */
+export const settle = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
+/** 收尾的 AI 訊息至少有 `n` 則。 */
+export const aiDone = (n: number) => (state: ConversationState) =>
+  state.entries.filter((entry) => entry.kind === 'ai' && !entry.streaming).length >= n;
+
+/** 回到 idle、而且畫面上已經有東西。 */
+export const idleWithContent = (state: ConversationState) =>
+  state.status === 'idle' && state.entries.length > 0;
+
+/**
+ * 比 {@link runServePhases} 更自由的 serve 跑法：`drivers` 每一個是一台 serve 的生命，由呼叫端自己決定說什麼、答什麼、
+ * 何時按停；多個 driver 共用同一個日誌目錄，就是重啟後續接。回的是**整個日誌目錄**（含子代理）。
+ *
+ * 主呼叫分不出是 root 還是子代理的：呼叫端的腳本要自己在 prompt 裡放記號，比對時用 {@link Body} 的第一則使用者訊息分流。
+ */
+export async function runServeDriver(
+  drivers: ((ctx: DriverCtx) => Promise<void>) | readonly ((ctx: DriverCtx) => Promise<void>)[],
+  script: Script,
+  patchExtra = '',
+): Promise<DriverRun> {
+  const list = typeof drivers === 'function' ? [drivers] : drivers;
+  const upstream = await fakeEndpoint(script, true);
+  const home = await mkdtemp(join(tmpdir(), 'nexus-lh-home-'));
+  const logs = await mkdtemp(join(tmpdir(), 'nexus-lh-logs-'));
+  const patch = join(home, 'patch.yml');
+  writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra), { mode: 0o600 });
+  try {
+    for (const driver of list) {
+      let running: RunningServe | undefined;
+      try {
+        running = (await runServe({
+          argv: ['--port', '0', '--live', '--session-log', logs, '--patch', patch],
+          log: () => undefined,
+          env: { [HARNESS_HOME_ENV]: home },
+        })) as RunningServe;
+        const client = await serveClient(running);
+        const events: AsyncGenerator<WireEvent, void, undefined> = await client.openEvents('alpha');
+        let state = emptyConversation();
+        const fold: DriverCtx['fold'] = async (until, ms = 20_000) => {
+          const deadline = Date.now() + ms;
+          while (!until(state)) {
+            const left = deadline - Date.now();
+            if (left <= 0) throw new Error('fold 等太久了');
+            const next = await Promise.race([
+              events.next(),
+              new Promise<'timeout'>((resolve) => setTimeout(() => resolve('timeout'), left)),
+            ]);
+            if (next === 'timeout') throw new Error('fold 等太久了');
+            if (next.done === true) throw new Error('下行在達標之前斷了');
+            state = reduceConversation(state, next.value);
+          }
+        };
+        await driver({ client, bodies: upstream.bodies, state: () => state, fold });
+        // 讓最後一批事件落盤。
+        await settle(600);
+        await events.return?.(undefined);
+      } finally {
+        await running?.close();
+      }
+    }
+  } finally {
+    await upstream.close();
+  }
+  return {
+    logs: readAllLogs(logs),
+    bodies: upstream.bodies,
+    mainBodies: upstream.bodies.filter(hasTools),
+  };
 }
