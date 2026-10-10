@@ -125,6 +125,14 @@ describe.each(TARGETS)('$label：指引與資源', (target) => {
       expect(text).toContain(CITATION_PROMPT);
       expect(text).toContain('say which MCP server (the system) it came from');
       expect(text).toContain('cite the relevant resource links in that result as markdown links');
+      // #1345：只講結果裡有的事實、讀不到內容要明說、查無要先明說再問。
+      expect(text).toContain('State only facts that appear in the tool result.');
+      expect(text).toContain('say you could not read the content and give the links');
+      expect(text).toContain(
+        'do not describe what those documents presumably say or fill in a typical process',
+      );
+      expect(text).toContain('say so first, naming what you looked for');
+      expect(text).toContain('do not ask instead of saying nothing was found');
     } finally {
       await dispose();
     }

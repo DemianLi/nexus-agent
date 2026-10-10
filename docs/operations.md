@@ -545,6 +545,10 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `## MCP citations`，要模型說出答案用到哪個 MCP server、並把結果裡的連結用 markdown 連結標出來；只有**結果含 resource link
   時**，工具結果結尾才多一句引用提示。**這是對模型的請求，不是保證**：模型可能不照做，也可能只標連結不講系統名。server 回的結果沒有
   連結（只有文字）時，今天沒有任何東西能標出處——要等結構化來源（地圖 [#1318](https://github.com/DemianLi/nexus-agent/issues/1318) 的階段 B）。
+- **同一段 `## MCP citations` 多兩條規則：只講結果裡有的事實、查無要先明說**（[#1345](https://github.com/DemianLi/nexus-agent/issues/1345)，
+  超出 dsh）：結果只有標題或連結時要明說讀不到內容並附連結，不描述文件「應該」寫了什麼；結果說查無時先講查了什麼、什麼也沒找到，
+  之後才可以問一個澄清問題。起因是 [#1329](https://github.com/DemianLi/nexus-agent/issues/1329) 的量測（B 組編流程 10/24、
+  C 組先反問 20/24）。放在 MCP 段不放 persona，所以沒掛 MCP 時不出現。**同樣是請求不是保證**，效果與限制記在 #1345。
 - **MCP 工具結果的原始資料不進會話日誌**（[#1320](https://github.com/DemianLi/nexus-agent/issues/1320)）：server 回的內嵌資源與
   `structuredContent` 模型看不到，但 adapter 把它們放在訊息的 `artifact`、會跟著進日誌（實測 3 MB 的資源就是約 3.1 MB 的
   `tool/result`，磁碟與記憶體都吃）。單條超過 8 KiB 的換成 `{ type: 'mcp_omitted', originalType, bytes, uri?, mimeType? }`，
