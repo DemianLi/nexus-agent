@@ -120,9 +120,10 @@ describe('MCP 工具在 agent 迴圈裡', () => {
     }
   });
 
-  // #1095：新協議的 server 要問使用者時，nexus 沒有續行路徑，所以每條連線寫了 `elicitation: false`。這條走真的組裝與
-  // 真的 agent 迴圈：那一次呼叫落成**普通的工具失敗**——`status: 'error'`、`Error: ` 前綴——模型看得到、這一輪照常收尾，
-  // 不停在一個沒人接的 interrupt 上。把設定改成 `true`，這裡拿到的就不是工具失敗，而是一個 interrupt。
+  // #1095：新協議的 server 要問使用者時，沒有人可以回答的組裝不宣告 elicitation（#1241 之後設定預設是 `true`，但要
+  // `channel.kind === 'human'` 才真的開；這裡的組裝沒給 channel）。這條走真的組裝與真的 agent 迴圈：那一次呼叫落成
+  // **普通的工具失敗**——`status: 'error'`、`Error: ` 前綴——模型看得到、這一輪照常收尾，不停在一個沒人接的 interrupt 上。
+  // 拿掉 `index.ts` 的 `channel?.kind === 'human'` 那一格，下面兩條都紅（2026-10-11 實測），紅法各不同，見下一段。
   // 兩種組裝都要：沒有存檔點時，打開 elicitation 會得到 MISSING_CHECKPOINTER 的失敗；有存檔點（serve 的組裝）時，
   // 打開它會讓那一輪停在 interrupt 上等一次沒人會送的 resume——後者才是卡上要防的事，所以不能只測前者。
   it.each([
