@@ -545,6 +545,10 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `## MCP citations`，要模型說出答案用到哪個 MCP server、並把結果裡的連結用 markdown 連結標出來；只有**結果含 resource link
   時**，工具結果結尾才多一句引用提示。**這是對模型的請求，不是保證**：模型可能不照做，也可能只標連結不講系統名。server 回的結果沒有
   連結（只有文字）時，今天沒有任何東西能標出處——要等結構化來源（地圖 [#1318](https://github.com/DemianLi/nexus-agent/issues/1318) 的階段 B）。
+- **MCP 工具結果的原始資料不進會話日誌**（[#1320](https://github.com/DemianLi/nexus-agent/issues/1320)）：server 回的內嵌資源與
+  `structuredContent` 模型看不到，但 adapter 把它們放在訊息的 `artifact`、會跟著進日誌（實測 3 MB 的資源就是約 3.1 MB 的
+  `tool/result`，磁碟與記憶體都吃）。單條超過 8 KiB 的換成 `{ type: 'mcp_omitted', originalType, bytes, uri?, mimeType? }`，
+  所以事後從日誌回放看不到那份原始內容，只看到它存在過、多大、哪個 URI。瀏覽器那一側本來就收不到（串流與歷史端點只送結果文字）。
 - **MCP 伺服器掛上之後掉了線會自動重連**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)，照 dsh）：500 ms
   起每次連續失敗加倍、上限 30 秒，連續失敗 10 次放棄，連上之後撐過 30 秒失敗次數歸零；斷線期間工具照列但呼叫失敗，連回來之後同一批
   工具又叫得動、定義不變。放棄之後那台的工具對模型隱藏，到下一次組裝才恢復。進度往伺服器日誌（stderr）寫。`reconnect.enabled: false`

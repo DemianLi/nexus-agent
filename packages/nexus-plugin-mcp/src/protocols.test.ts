@@ -19,7 +19,7 @@ import { loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createMcpPlugin } from './index.js';
-import { CITE_LINKS, CITE_TEXT, FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
+import { CITE_LINKS, CITE_TEXT, EMBED_URI, FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
 import { startLegacyHttp, startModernHttp } from './http-fixtures.js';
 import type { HttpFixture } from './http-fixtures.js';
 import type { ProtocolInfo } from './modern-tools.js';
@@ -128,6 +128,14 @@ async function protocolInfo(mounted: Mounted): Promise<ProtocolInfo> {
   return JSON.parse(String(await tool(mounted, 'protocol_info').invoke({}))) as ProtocolInfo;
 }
 
+/** #1320 的四支原始資料工具，跟在最後。 */
+const BIG_TOOLS = [
+  'mcp__srv__embed_blob',
+  'mcp__srv__embed_text',
+  'mcp__srv__big_image',
+  'mcp__srv__structured',
+];
+
 describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
   it('工具以 mcp__<server>__<raw> 註冊', async () => {
     await withServer(target, async ({ registry }) => {
@@ -150,8 +158,9 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
               'mcp__srv__ask_twice',
               'mcp__srv__ask_mixed',
               'mcp__srv__cite_sources',
+              ...BIG_TOOLS,
             ]
-          : ['mcp__srv__read_env', 'mcp__srv__fetch_url', 'mcp__srv__cite_sources'],
+          : ['mcp__srv__read_env', 'mcp__srv__fetch_url', 'mcp__srv__cite_sources', ...BIG_TOOLS],
       );
     });
   });
@@ -213,6 +222,32 @@ describe.each(TARGETS)('$label：同一組行為斷言', (target) => {
         })),
         { type: 'text', text: CITE_RESOURCE_LINKS },
       ]);
+    });
+  });
+
+  it('artifact：超過上限的內嵌資源與結構值換成占位，resource_link 原樣（#1320）', async () => {
+    await withServer(target, async (mounted) => {
+      const call = async (name: string, args: Record<string, unknown>) =>
+        (await tool(mounted, name).invoke({
+          type: 'tool_call',
+          id: `call_${name}`,
+          name: `mcp__srv__${name}`,
+          args,
+        })) as ToolMessage;
+
+      const blob = await call('embed_blob', { kb: 256 });
+      expect(JSON.stringify(blob.artifact)).not.toContain('AAAA');
+      expect(JSON.stringify(blob.artifact)).toContain(EMBED_URI);
+      expect(JSON.stringify(blob.artifact)).toContain('mcp_omitted');
+      expect(JSON.stringify(blob).length).toBeLessThan(4 * 1024);
+
+      const rows = await call('structured', { kb: 64 });
+      expect(JSON.stringify(rows.artifact)).not.toContain('結構化資料的一列');
+      expect(JSON.stringify(rows).length).toBeLessThan(4 * 1024);
+
+      const cite = await call('cite_sources', {});
+      expect(JSON.stringify(cite.artifact)).toContain(CITE_LINKS[0]?.uri);
+      expect(JSON.stringify(cite.artifact)).not.toContain('mcp_omitted');
     });
   });
 
