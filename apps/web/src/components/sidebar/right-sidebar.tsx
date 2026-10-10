@@ -45,7 +45,7 @@ import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/
 import { useIsMobile } from '@/hooks/use-mobile';
 import { basename } from '@/lib/present-view';
 import {
-  findTranscriptItem,
+  findOrExpandTranscriptItem,
   focusTranscriptItem,
   revealTranscriptItem,
 } from '@/lib/transcript-locate';
@@ -163,7 +163,8 @@ export function RightSidebarProvider({
         update((current) => openTab(current, { kind: 'trace' }));
       },
       locate: (entryId) => {
-        const item = findTranscriptItem(entryId);
+        // 收在一段工具呼叫裡的（#1309）先展開再捲過去。
+        const item = findOrExpandTranscriptItem(entryId);
         if (item === undefined) return false;
         revealTranscriptItem(item);
         if (isMobile) {

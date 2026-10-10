@@ -17,7 +17,7 @@ import { TRACE_LOCATE_LABEL } from '@/components/trace/row';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';
-import { LOCATED_MS } from '@/lib/transcript-locate';
+import { LOCATED_MS, registerRunExpander } from '@/lib/transcript-locate';
 import { TRACE_HEADLINE, TRACE_LIMITS, TRACE_TARGET_MISSING_TEXT } from '@/lib/trace-view';
 import { axeViolations } from '@/test/axe';
 import { Script } from '@/test/conversation-frames';
@@ -272,6 +272,29 @@ describe('觀測分頁：在對話裡定位', () => {
     act(() => void vi.advanceTimersByTime(LOCATED_MS));
     expect(item.hasAttribute('data-located')).toBe(false);
     expect(screen.getByText(TRACE_LOCATED_TEXT)).toBeTruthy();
+  });
+
+  it('那一則收在一段工具呼叫裡（#1309）：先請對話區展開那一段，再捲過去', async () => {
+    const asked: string[] = [];
+    let item: HTMLElement | undefined;
+    const unregister = registerRunExpander((id) => {
+      asked.push(id);
+      // 對話區展開時同步畫出那一格（`flushSync`）；替身直接放一格。
+      item = transcriptItem(id);
+      return true;
+    });
+    try {
+      mount(conversation());
+      await act(async () => {});
+      vi.useFakeTimers();
+      fireEvent.click(locateButton(2));
+      expect(asked).toEqual(['tool-c1']);
+      expect(revealed()).toEqual([item]);
+      expect(item?.hasAttribute('data-located')).toBe(true);
+      expect(screen.queryByTestId('trace-missing')).toBeNull();
+    } finally {
+      unregister();
+    }
   });
 
   it('找不到那一則（沒載入）：什麼都不捲，在那一列底下講原因，說法沿用計劃分頁', async () => {
