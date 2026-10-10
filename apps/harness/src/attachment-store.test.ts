@@ -343,6 +343,61 @@ describe('存一張圖（#732）', () => {
   });
 });
 
+describe('檔名別名跟著物件（#1352）', () => {
+  const body = Buffer.from('hello world, original');
+  const objectOf = (ref: { attachmentId: string }) => {
+    const digest = ref.attachmentId.slice('sha256:'.length);
+    return join(attachmentsRootOfStore(), 'file-objects', digest.slice(0, 2), digest);
+  };
+  const attachmentsRootOfStore = () => store.rootDir;
+
+  /** 把物件刪掉（模擬人工修復的第一步）；別名還在、指著舊的 inode。 */
+  const removeObject = async (ref: { attachmentId: string }) => {
+    await rm(objectOf(ref));
+  };
+
+  it('物件被刪掉重建、別名還指著舊 inode：重傳同名檔案後別名換成新物件的內容', async () => {
+    const ref = await store.save({ data: body, name: 'a.txt' });
+    const object = objectOf(ref);
+    // 先把物件原地寫壞，別名與物件是同一個 inode，所以別名也讀到壞內容。
+    await chmod(object, 0o600);
+    await writeFile(object, Buffer.from('HELLO WORLD, DAMAGED!'));
+    await chmod(object, 0o400);
+    expect((await readFile(store.pathOf(ref))).toString()).toBe('HELLO WORLD, DAMAGED!');
+    await removeObject(ref);
+
+    await store.save({ data: body, name: 'a.txt' });
+
+    expect(await readFile(store.pathOf(ref))).toEqual(body);
+    expect((await stat(store.pathOf(ref))).ino).toBe((await stat(object)).ino);
+    expect(await mode(store.pathOf(ref))).toBe(0o400);
+    expect(await readdir(join(store.rootDir, 'staging'))).toEqual([]);
+  });
+
+  it('別名本來就跟物件同一個 inode：不動它（inode 與 mtime 都不變）', async () => {
+    const ref = await store.save({ data: body, name: 'a.txt' });
+    const before = await stat(store.pathOf(ref));
+    await store.save({ data: body, name: 'a.txt' });
+    const after = await stat(store.pathOf(ref));
+    expect(after.ino).toBe(before.ino);
+    expect(after.mtimeMs).toBe(before.mtimeMs);
+    expect(await readdir(join(store.rootDir, 'staging'))).toEqual([]);
+  });
+
+  it('只有不同名的別名會被換；同一份內容下別的檔名各自照舊', async () => {
+    const a = await store.save({ data: body, name: 'a.txt' });
+    const b = await store.save({ data: body, name: 'b.txt' });
+    await removeObject(a);
+    await store.save({ data: body, name: 'a.txt' });
+    const object = objectOf(a);
+    expect((await stat(store.pathOf(a))).ino).toBe((await stat(object)).ino);
+    // b.txt 還指著舊 inode 而且內容還是對的：這次沒重傳它，不動。
+    expect((await stat(store.pathOf(b))).ino).not.toBe((await stat(object)).ino);
+    await store.save({ data: body, name: 'b.txt' });
+    expect((await stat(store.pathOf(b))).ino).toBe((await stat(object)).ino);
+  });
+});
+
 describe('檔案現在還在不在（#732）', () => {
   it('存完是 true；被清掉是 false；參照壞掉也是 false', async () => {
     const ref = await store.save({ data: Buffer.from('x'), name: 'a.txt' });
