@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { transcriptItems } from '@/lib/deliverables-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
 import { PRESENT } from '@/lib/present-view';
+import { ASK_USER_QUESTION } from '@/lib/question-view';
 import type { GroupedItem } from '@/lib/tool-runs';
 import { MIN_TOOLS, groupToolRuns, toolRunId, toolRunOf, toolRunSummary } from '@/lib/tool-runs';
 import { Script } from '@/test/conversation-frames';
@@ -197,7 +198,7 @@ describe('groupToolRuns：只收全部完成的連續段（#1309）', () => {
     ]);
   });
 
-  it('答完的提問：本地那一則答案（`transcriptItems` 已拿掉）不切開，提問卡完成後跟前後連成一段', () => {
+  it('答完的提問卡不收、切開連續段（#1327）：「完成、完成、提問、完成」收成一段＋提問卡＋不收的單顆', () => {
     const turn = new Turn();
     turn.step();
     turn.step();
@@ -211,9 +212,14 @@ describe('groupToolRuns：只收全部完成的連續段（#1309）', () => {
       script.started('c8', 'read_file', {}),
       script.finished('c8', 'ok'),
     ];
+    // 本地那一則答案 `transcriptItems` 已拿掉，人選了什麼只寫在提問卡上：卡要露在外面。
     expect(shape(reduceAll(answered, rest))).toEqual([
       'human',
-      '[think read_file:done think read_file:done think ask_user_question:done think read_file:done]',
+      '[think read_file:done think read_file:done]',
+      'think',
+      'ask_user_question:done',
+      'think',
+      'read_file:done',
     ]);
   });
 
@@ -227,6 +233,7 @@ describe('groupToolRuns：只收全部完成的連續段（#1309）', () => {
   it.each([
     ['計劃卡', EXIT_PLAN_MODE, undefined],
     ['交付卡（present）', PRESENT, undefined],
+    ['提問卡', ASK_USER_QUESTION, undefined],
     [
       '背景委派卡',
       'task',
