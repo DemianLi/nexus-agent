@@ -328,7 +328,7 @@ export async function compareToLog(
   for (const [index, start] of starts.entries()) {
     const body = mainBodies[index]!;
     const prefix = events.filter((event) => event.seq < start.seq);
-    const replay = replayConversation(prefix, { toolResultAsSeen });
+    const replay = replayConversation(prefix, { toolResultAsSeen, applyPrunes: true });
     if (replay.kind !== 'replayed') {
       out.push({
         call: index,

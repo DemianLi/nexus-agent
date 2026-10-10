@@ -60,28 +60,21 @@
  *   「低于压力的对话绝不被碰」是那一層的性質，不是剪刀自己的。
  *
  * ## 兩筆偏離登記（AGENTS.md 的規則）
- *
- * **一、剪在請求上，不是剪在日誌上。** dsh 是**落盤**的：它 append 一則新的 `tool/result`
- * 取代表層節點，並在它前面緊貼一顆 `compaction/prune` 影子價格事件，用注入的
- * `tokenMeter` 替被遮蔽的節點計價，讓純消費者不必自己記狀態就能扣掉。我們沒有那條路，
- * **而 2026-09-05 起擋住它的理由換了一條**：會話日誌現在落得了盤
- * （[#172](https://github.com/DemianLi/nexus-agent/issues/172)、
- * [#174](https://github.com/DemianLi/nexus-agent/issues/174)），所以「不落盤」不再是原因。
- * 今天缺的是另外兩樣：
- *
- * - **事件詞彙對不上。** 我們的日誌刻意不記訊息內容（`session-log.ts` 檔頭：兩條路的
- *   顆粒度不一樣），所以沒有一則「取代表層節點的 `tool/result`」可寫——要寫得先擴詞彙，
- *   而詞彙一擴就是一次帶格式版本的遷移。
- * - **沒有可注入的 token meter**，所以影子價格那一顆也記不出來。
- *
- * 結論沒變，理由整條換掉。所以我們**只改這一次請求看到的訊息**：
- *
- * - 好處是**原文沒有消失**，它還在圖的狀態裡；下一輪從完整原文重新剪一次。
- * - 代價是**沒有事件、沒有影子價格、省下的量每一輪都要重付一次**，而不是落一次地就算數。
- * - 這正是 [#149](https://github.com/DemianLi/nexus-agent/issues/149) 卡上那個
- *   ❌「原文留日誌供回放」的誠實對應：**不是做到了，也不是丟了。**
- *
- * **二、掛點不是我們選的，是唯一的。** 剪必須發生在基座摘要器**外面**才救得到那次模型
+
+**一、剪的是請求，不是 session 的訊息節點；但決定落盤了（[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)，日誌格式 46）。**
+dsh 先 append 一顆 `compaction/prune` 影子價格事件，緊接著 append 一顆替換用的 `tool/result`（`surfaceOp: replace`、`sourceEventSeqs`），
+替換永久有效。我們**沒有 surface 那一軸**（沒有 `surfaceOp`，替換不能掛在事件上），也**沒有可注入的 token meter**（影子價格記不出來）。
+退到最接近的實作：**一顆 `compaction/prune` 事件自己帶替換的內容**（`results: [{ callId, originalChars, content }]`，見 `session-log.ts`）；
+`callId` 指向被替換的 `tool/result`，因為請求端的剪刀看到的是訊息、不是事件，沒有 `seq` 可指。
+
+- **每顆結果只記一次，之後每次請求都沿用**（{@link withToolResultPruning}）：先把日誌上記過的換上去，再在壓力到了時剪還沒記過的、當場記。
+  這是對 dsh「替換永久有效」的對應，也是**與以前唯一的行為差別**——以前每次從原文重算、壓力退了（摘要之後常見）原文會回來，現在不會。
+- **記內容，不記規則**：2026-10-09 拍板的理由是歷史要能只從日誌推導、不能依賴程式碼版本。門檻、頭尾長度、標記字改了，已剪的仍是當時剪成的樣子。
+- **原文沒有消失**：圖的狀態與 `tool/result` 事件仍是原文；只有送給模型的那一份是剪過的。續接灌回 graph state 的那一串也是原文
+  （`replayConversation` 的 `applyPrunes` 預設關），下一次請求由這裡照日誌換上去。
+- 沒剪的會話，日誌與以前位元組相同。沒有日誌（組裝沒接註冊表）時退回以前的每次重算。
+
+**二、掛點不是我們選的，是唯一的。** 剪必須發生在基座摘要器**外面**才救得到那次模型
  * 呼叫，而基座的 `mergeMiddlewareStack` 回的是
  * `[...預設（同名就地取代）, ...新名字的, ...tail]`——`SummarizationMiddleware` 在**預設**
  * 那段，新名字的一律排在它**後面**（也就是更內層）。**沒有任何一個陣列位置能讓一個新
@@ -115,6 +108,15 @@ import { z } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry } from './registry.js';
+import {
+  applyRecordedPrunes,
+  codePointLength,
+  isTextBlock,
+  measureToolResultContent,
+} from './tool-result-prune-log.js';
+import type { ContentPart, RecordedPrunes } from './tool-result-prune-log.js';
+
+export { codePointLength, measureToolResultContent };
 
 /** 每一段被剪掉的中段換成這個標記。結構照抄 dsh 的 `PRUNE_MARKER`，字面走中文。 */
 export const TOOL_RESULT_PRUNE_MARKER = '\n\n[... 工具結果中段已剪除 ...]\n\n';
@@ -135,20 +137,6 @@ export const DEFAULT_TOOL_RESULT_PRUNE: ToolResultPruneConfig = {
   headChars: 4096,
   tailChars: 1024,
 };
-
-/**
- * 數 Unicode code point，不是 UTF-16 code unit。
- *
- * `'😀'.length` 是 2 但只有一個 code point；用 `.length` 去切會劈開代理對，剪出來的尾巴
- * 開頭會是一個孤兒 surrogate。字素叢集（emoji ＋ 修飾符）還是可能被切開，dsh 也一樣，
- * 那是它明文接受的代價。
- *
- * @param text - 要量的文字。
- * @returns code point 數。
- */
-export function codePointLength(text: string): number {
-  return Array.from(text).length;
-}
 
 /**
  * 驗一份預算，順便擋掉「剪完比門檻還大」。
@@ -182,33 +170,6 @@ function assertPositiveInteger(name: string, value: number): void {
 function assertNonNegativeInteger(name: string, value: number): void {
   if (!Number.isInteger(value) || value < 0)
     throw new Error(`工具結果預算的 ${name} 是 ${String(value)}，要非負整數。`);
-}
-
-/**
- * 一則工具結果的內容：字串，或 LangChain 的複合區塊陣列。
- *
- * 走陣列那條時，只有 `type === 'text'` 的區塊算進預算、也只有它們會被剪；圖片之類的
- * **原序留著**（dsh 的 `measureContent`／`pruneContent` 同款）。
- */
-type ContentPart = Extract<BaseMessage['content'], readonly unknown[]>[number];
-type TextBlock = ContentPart & { type: 'text'; text: string };
-
-function isTextBlock(block: ContentPart): block is TextBlock {
-  const candidate = block as { type?: unknown; text?: unknown };
-  return candidate.type === 'text' && typeof candidate.text === 'string';
-}
-
-/**
- * 量一則內容裡的文字總量。
- *
- * @param content - 工具結果的內容。
- * @returns 文字區塊的 code point 總數；非文字區塊算 0。
- */
-export function measureToolResultContent(content: BaseMessage['content']): number {
-  if (typeof content === 'string') return codePointLength(content);
-  let chars = 0;
-  for (const block of content) if (isTextBlock(block)) chars += codePointLength(block.text);
-  return chars;
 }
 
 /**
@@ -323,6 +284,34 @@ export function resolveToolResultPruneConfig(
 }
 
 /**
+ * 剪刀跟會話日誌的接口（[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)）：讀出日誌上記過的剪法，記下新剪的。
+ * 組裝在 {@link ./summarization.ts} 的 `createSummarizer`（那裡有會話註冊表與「這次請求真正送出去的是哪一段」）。
+ */
+export interface ToolResultPruneLog {
+  /** 這次請求所屬那份日誌上記過的剪法；**找不到日誌**（沒接註冊表、認不出呼叫者）是 `undefined`，剪刀退回每次重算。 */
+  recorded(request: PruneRequest): RecordedPrunes | undefined;
+  /** 把這次新剪的記進日誌。記不進去自己吃掉：記不進去不能反過來把模型呼叫殺掉。 */
+  record(request: PruneRequest, results: readonly NewlyPruned[]): void;
+}
+
+/** 這次新剪的一顆：被剪的結果的 `tool_call_id`、剪之前的文字量、剪過的內容。 */
+export interface NewlyPruned {
+  readonly callId: string;
+  readonly originalChars: number;
+  readonly content: BaseMessage['content'];
+}
+
+/** 剪刀看到的請求。 */
+export interface PruneRequest {
+  readonly messages?: readonly BaseMessage[];
+  readonly state?: unknown;
+  readonly systemMessage?: unknown;
+  readonly tools?: unknown;
+  readonly model?: unknown;
+  readonly runtime?: unknown;
+}
+
+/**
  * 把一把剪刀包在摘要器外面。
  *
  * 基座那顆是一個普通物件（`name` / `stateSchema` / `wrapModelCall` ／其餘鉤子皆為
@@ -335,22 +324,26 @@ export function resolveToolResultPruneConfig(
  * **「壓力到了沒」由呼叫端給。** 判準是摘要器自己的門檻（dsh 的 `compaction-basic` 壓力
  * 達標才 `pruneSession()`），那是摘要那一側的知識；這個檔只管怎麼剪。
  *
+ * ## 有日誌時：剪過就永遠是剪過的（#1302，照 dsh）
+ *
+ * 每次呼叫先把日誌上記過的剪法換上去（{@link applyRecordedPrunes}，不看壓力、不重算），再在壓力到了時剪**還沒記過**的，剪出來的
+ * 當場記一筆 `compaction/prune`（**在這次請求往下交之前**，所以排在這次的 `compaction/summary` 與 `model/start` 之前）。
+ * 於是日誌就是模型看到的那一份的唯一來源：門檻、頭尾長度改了、壓力退了（摘要之後常見），已經剪過的仍是當時剪成的樣子。
+ * **行為上與以前的差別只有一處**：以前壓力退了之後原文會回來（剪刀每次從原文重算、壓力不到就不碰），現在不會。
+ * 沒有日誌（`log` 省略、或找不到那份日誌）時退回以前的每次重算。
+ *
  * @param base - 基座那顆摘要器。
  * @param underPressure - 這次請求到了壓縮門檻沒有。收的是整份請求：`tokens` 門檻要估 system 與工具定義那一截
  *   （[#588](https://github.com/DemianLi/nexus-agent/issues/588)）。
  * @param config - 預算，來自 {@link resolveToolResultPruneConfig}。
+ * @param log - 日誌接口；省略即不記、每次重算。
  * @returns 同名、同狀態、外面多一層前處理的 middleware。
  */
 export function withToolResultPruning(
   base: AgentMiddleware,
-  underPressure: (request: {
-    readonly messages?: readonly BaseMessage[];
-    readonly state?: unknown;
-    readonly systemMessage?: unknown;
-    readonly tools?: unknown;
-    readonly model?: unknown;
-  }) => boolean,
+  underPressure: (request: PruneRequest) => boolean,
   config: ToolResultPruneConfig,
+  log?: ToolResultPruneLog,
 ): AgentMiddleware {
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 基座那顆一定有 wrapModelCall；沒有的話包了也沒意義，原樣回去。 */
@@ -358,13 +351,38 @@ export function withToolResultPruning(
   return {
     ...base,
     wrapModelCall: async (request, handler) => {
-      const messages = request.messages ?? [];
-      if (!underPressure(request)) return inner(request, handler);
-      const { prunedCount, messages: pruned } = pruneToolResults(messages, config);
-      if (prunedCount === 0) return inner(request, handler);
-      return inner({ ...request, messages: [...pruned] }, handler);
+      const original = request.messages ?? [];
+      let messages: readonly BaseMessage[] = original;
+      const recorded = log?.recorded(request as PruneRequest);
+      if (recorded !== undefined) messages = applyRecordedPrunes(messages, recorded);
+      if (underPressure(request as PruneRequest)) {
+        const { prunedCount, messages: pruned } = pruneToolResults(messages, config);
+        if (prunedCount > 0) {
+          if (log !== undefined && recorded !== undefined) {
+            log.record(request as PruneRequest, newlyPruned(messages, pruned));
+          }
+          messages = pruned;
+        }
+      }
+      if (messages === original) return inner(request, handler);
+      return inner({ ...request, messages: [...messages] }, handler);
     },
   } as AgentMiddleware;
+}
+
+/** 前後兩串逐則比，列出被剪的那些工具結果。 */
+function newlyPruned(before: readonly BaseMessage[], after: readonly BaseMessage[]): NewlyPruned[] {
+  const out: NewlyPruned[] = [];
+  for (const [index, message] of before.entries()) {
+    const next = after[index];
+    if (next === undefined || next === message || !ToolMessage.isInstance(message)) continue;
+    out.push({
+      callId: message.tool_call_id,
+      originalChars: measureToolResultContent(message.content),
+      content: next.content,
+    });
+  }
+  return out;
 }
 
 /**

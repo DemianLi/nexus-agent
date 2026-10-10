@@ -94,7 +94,8 @@
 
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { ContextOverflowError } from '@langchain/core/errors';
-import type { BaseMessage } from '@langchain/core/messages';
+import { ToolMessage } from '@langchain/core/messages';
+import type { BaseMessage, MessageContent } from '@langchain/core/messages';
 import { createSummarizationMiddleware } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
@@ -113,8 +114,13 @@ import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
 import { estimateAnchoredTokens } from './token-estimate.js';
 import type { EstimatedRequest, TokenAnchorBook } from './token-estimate.js';
+import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
-import type { ToolResultPruneConfig } from './tool-result-pruner.js';
+import type {
+  PruneRequest,
+  ToolResultPruneConfig,
+  ToolResultPruneLog,
+} from './tool-result-pruner.js';
 
 /**
  * 基座那個 middleware 的名字。
@@ -507,7 +513,57 @@ export function createSummarizer(
         book,
       ),
     pruning,
+    sessions === undefined ? undefined : pruneLogOf(sessions),
   );
+}
+
+/**
+ * 剪刀的日誌接口（[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)）：讀出這次請求所屬那份日誌上記過的剪法，記下新剪的。
+ *
+ * **只記這次請求真正送得出去的那一段**：`request.messages` 是 graph state 的原始串，摘要之前的舊訊息還在裡面，但模型看不到
+ * （{@link effectiveMessages}）。剪刀對整串動手，這裡只把落在有效串裡的記下來——日誌要證明的是「模型看到的那一份」，
+ * 不是 state 裡每一顆大結果的剪法。記不進去吃掉，同 {@link withCompactionLog}。
+ *
+ * @param sessions - 註冊表的 `sessions` 通道。
+ * @returns 接口。
+ */
+function pruneLogOf(sessions: { forCall(config: unknown): SessionLookup }): ToolResultPruneLog {
+  const lookup = (request: PruneRequest): SessionLookup =>
+    sessions.forCall({
+      configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+    });
+  return {
+    recorded(request) {
+      try {
+        const found = lookup(request);
+        return found.kind === 'ok' ? recordedPrunesOf(found.log.events) : undefined;
+      } catch {
+        return undefined;
+      }
+    },
+    record(request, results) {
+      try {
+        const found = lookup(request);
+        if (found.kind !== 'ok') return;
+        const sendable = new Set<string>();
+        for (const message of effectiveMessages(request.messages ?? [], request.state)) {
+          if (ToolMessage.isInstance(message)) sendable.add(message.tool_call_id);
+        }
+        const kept = results.filter((result) => sendable.has(result.callId));
+        if (kept.length === 0) return;
+        found.log.append('compaction/prune', {
+          results: kept.map((result) => ({
+            callId: result.callId,
+            originalChars: result.originalChars,
+            // 純 JSON：日誌收不下 `undefined` 的欄位（同 `toLoggedMessage`）。
+            content: JSON.parse(JSON.stringify(result.content)) as MessageContent,
+          })),
+        });
+      } catch {
+        // 記不進去不能反過來把模型呼叫殺掉。
+      }
+    },
+  };
 }
 
 /**

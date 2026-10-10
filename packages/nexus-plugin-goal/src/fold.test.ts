@@ -481,6 +481,8 @@ describe('什麼推得動 roundsStarted', () => {
     //
     // `subagent/catalog`（#1023）：不推。它記的是一次工具呼叫派出了子代理，一輪裡派幾個有幾顆，同 `tool/call`。
     //
+    // `compaction/prune`（#1302）：不推。它記的是工具結果剪刀剪了哪幾顆，跟壓縮一樣是上下文的處置，跟目標推進到哪裡無關。
+    //
     // `subagent/descriptor`（#1271）：不推。它在子代理自己的日誌上，記那個子代理是誰（規格、模型），不是一輪的開始。
     //
     // `tool/call`／`tool/result`（[#264](https://github.com/DemianLi/nexus-agent/issues/264)）：
@@ -542,6 +544,7 @@ describe('什麼推得動 roundsStarted', () => {
       'user/message',
       'image/offload',
       'compaction/summary',
+      'compaction/prune',
       'subagent/model-selection-policy',
       'subagent/catalog',
       'subagent/descriptor',
