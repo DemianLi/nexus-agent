@@ -22,8 +22,12 @@
  *   後叫的快，日誌是快、慢，state 是慢、快）。所以一批結果先收著，照 `tool_calls` 的順序放。goal 收尾
  *   注入的那則 `user/message` 跟著它那顆結果搬——圍堵在同一個回呼裡連著寫這兩顆（`containment.ts`），
  *   state 裡它也緊跟在那則 ToolMessage 後面。
- * - **壓縮**：切點直接用在推出來的串上，**對不上就整串不灌**。`compaction/summary` 落在它那次呼叫的
- *   回覆之後（摘要器包在記回覆那一層外面），所以那一刻推出來的應該恰好是 `messagesBefore + 1` 則（實測）。
+ * - **壓縮**：切點直接用在推出來的串上，**對不上就整串不灌**。`compaction/summary` 有兩種順序，**逐顆事件判**
+ *   （帶 `beforeCall: true` 的是新的，格式 45，[#1301](https://github.com/DemianLi/nexus-agent/issues/1301)）：
+ *   新的記在用到它的 `model/start` 之前，那一刻 state 還沒有這次呼叫的回覆，推出來的恰好是 `messagesBefore` 則；
+ *   舊的記在那次呼叫的回覆之後（摘要器包在記回覆那一層外面），恰好是 `messagesBefore + 1` 則（實測）。兩種各自嚴格，
+ *   不放寬成兩種都收（那等於拿掉對不齊的唯一防線）；同一份檔可以兩種都有（續寫舊檔時 header 的版本會被蓋掉）。
+ *   兩種的切法相同：之後進來的訊息（包括那次呼叫的回覆）都接在切點之後。
  *
  * 第三件（80,000 字元以上的工具結果，模型看到的是基座換過的預覽）要知道組裝怎麼設，交給呼叫端，見
  * {@link ReplayOptions.toolResultAsSeen}。
@@ -126,7 +130,7 @@ export const TOOL_NOT_STARTED_TEXT =
  *   舊日誌的 `model/end` 都沒有，所以放行不會誤放格式 8 以前漏記回覆的檔。
  * - `result-missing`：一顆 `tool/result` 沒帶 `message`——8 以前，或圍堵在回傳裡找不到那則訊息。
  * - `summary-missing`：一顆 `compaction/summary` 沒帶 `summary`——8 以前。
- * - `compaction-misaligned`：切點那一刻推出來的則數對不上 `messagesBefore + 1`，切下去會切錯地方。
+ * - `compaction-misaligned`：切點那一刻推出來的則數對不上（新順序 `messagesBefore`、舊順序 `messagesBefore + 1`），切下去會切錯地方。
  */
 export type UnreplayableReason =
   'reply-missing' | 'result-missing' | 'summary-missing' | 'compaction-misaligned';
@@ -305,7 +309,9 @@ export function replayConversation(
           if (logged === undefined) {
             return { kind: 'unreplayable', reason: 'summary-missing', seq: event.seq };
           }
-          if (raw.length + pendingCount() !== messagesBefore + 1 || cutoffIndex > messagesBefore) {
+          // 新順序（`beforeCall`）記在這次呼叫的回覆之前，舊順序記在之後，所以差一則。
+          const expected = event.data.beforeCall === true ? messagesBefore : messagesBefore + 1;
+          if (raw.length + pendingCount() !== expected || cutoffIndex > messagesBefore) {
             return { kind: 'unreplayable', reason: 'compaction-misaligned', seq: event.seq };
           }
           summary = { message: from(fromLoggedMessage(logged), event), cutoff: cutoffIndex };

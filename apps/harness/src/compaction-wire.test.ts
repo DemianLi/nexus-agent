@@ -5,7 +5,8 @@
  * 真的圖、真的 pump、真的摘要器（`createNexusAgent` 的 `summarization`），模型是腳本；門檻調小讓它在幾輪內壓縮。
  * 每個檢查點都比兩條路：即時的 frame 與歷史路由各折一次，壓縮那一格要相等。規則：
  *
- * 1. root 日誌每記一顆 `compaction/summary` 就長一格，位置在觸發它的那次呼叫的回覆**之後**（日誌就是這個順序）。
+ * 1. root 日誌每記一顆 `compaction/summary` 就長一格，位置在用到它的那次呼叫的回覆**之前**（日誌就是這個順序，格式 45；
+ *    以前在回覆之後，#1301）。
  * 2. `cutoff` 是日誌的 `cutoffIndex`；`saved` 看 `filePath` 是不是 `null`。
  * 3. 摘要全文已拿掉面向模型的外框，套工具結果文字的位元組上限。
  * 4. 子代理自己的壓縮不進來。
@@ -125,7 +126,7 @@ const untimed = (entries: readonly CompactionEntry[]) =>
   entries.map(({ startedAt: _startedAt, ...rest }) => rest);
 
 describe('壓縮過這件事在即時與重新整理之後都一樣', () => {
-  it('每一次壓縮長一格，兩條路的內容與順序相同；位置在觸發它的回覆之後', async () => {
+  it('每一次壓縮長一格，兩條路的內容與順序相同；位置在用到它的回覆之前', async () => {
     const { frames, events } = await run(chatter(), { messages: 14 });
     const logged = events.filter((event) => event.type === 'compaction/summary');
     // 前提：真的壓縮過不止一次，下面的「相同」才有東西可比。
@@ -142,11 +143,11 @@ describe('壓縮過這件事在即時與重新整理之後都一樣', () => {
     // 被壓掉的原文寫成檔了。
     expect(live.every((entry) => entry.saved)).toBe(true);
 
-    // 順序：兩條路長出同一串，而且每一格壓縮的前一格是 AI 的回覆（摘要器包在記回覆那層外面）。
+    // 順序：兩條路長出同一串，而且每一格壓縮的下一格是 AI 的回覆（那則回覆是看著壓縮後的串寫的）。
     const liveKinds = kindsOf(frames);
     expect(kindsOf(historyPage(events).events)).toEqual(liveKinds);
     liveKinds.forEach((kind, index) => {
-      if (kind === 'compaction') expect(liveKinds[index - 1]).toBe('ai');
+      if (kind === 'compaction') expect(liveKinds[index + 1]).toBe('ai');
     });
   }, 60000);
 

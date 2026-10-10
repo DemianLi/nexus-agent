@@ -239,6 +239,15 @@ describe('接在註冊表上', () => {
   });
 
   /**
+   * **格式 45 守衛（#1301）：`compaction/summary` 的 `beforeCall` 從這一版開始。** 舊版讀到有這個欄位的日誌，會拿
+   * `messagesBefore + 1` 去對一筆其實是 `messagesBefore` 的事件，整串推不出來——所以寫出 `beforeCall` 的版本必須
+   * 讓舊版的 `SessionFormatUnsupportedError` 擋下。有人把版本號改回去，這條當場紅。
+   */
+  it('寫得出 compaction/summary 的 beforeCall 的版本，至少是 45', () => {
+    expect(SESSION_LOG_FORMAT_VERSION).toBeGreaterThanOrEqual(45);
+  });
+
+  /**
    * 工作區根（[#504](https://github.com/DemianLi/nexus-agent/issues/504)）。**缺席與空字串
    * 不是同一件事**：續接的守衛對「沒記」放行、對記下來的值逐字比，所以沒給的時候那一格
    * 必須整個不在，不能是 `undefined` 以外的任何東西。

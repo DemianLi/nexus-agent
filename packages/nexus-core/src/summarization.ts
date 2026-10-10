@@ -585,6 +585,8 @@ function withAttachmentText(base: AgentMiddleware): AgentMiddleware {
  */
 interface SummaryUsageCell {
   usage: ModelUsage | undefined;
+  /** 生摘要的模型呼叫完成過幾次。{@link withCompactionLog} 靠它認得「交下去的這一份剛摘要過」。 */
+  summaries: number;
 }
 const summaryUsageCells = new AsyncLocalStorage<SummaryUsageCell>();
 
@@ -663,7 +665,10 @@ function quietInvoke<T extends object>(model: T, cell: SummaryUsageCell | undefi
         });
         // 摘要的用量（#1022）：回來的那則訊息上讀，驗不過就是沒有。拋錯的那次連 `compaction/summary` 都不記，
         // 用量也就跟著沒有（見 withCompactionLog 的說明）。
-        if (cell !== undefined) cell.usage = readModelUsage(result);
+        if (cell !== undefined) {
+          cell.usage = readModelUsage(result);
+          cell.summaries += 1;
+        }
         return result;
       };
     },
@@ -671,39 +676,66 @@ function quietInvoke<T extends object>(model: T, cell: SummaryUsageCell | undefi
 }
 
 /**
- * 把「壓縮發生過」記進這次呼叫所屬的那一份會話日誌。
+ * 把「壓縮發生過」記進這次呼叫所屬的那一份會話日誌——**記在用到它的那次 `model/start` 之前**
+ * （[#1301](https://github.com/DemianLi/nexus-agent/issues/1301)）。
+ *
+ * ## 為什麼是在「交下去」的那一刻記
+ *
+ * 基座生完摘要、**呼叫 `handler` 之前**，摘要、切點、歷史檔路徑都已經定了；但它交出摘要事件的方式只有一個：
+ * 整個 `performSummarization` 走完（含 `await handler(...)`，也就是那次模型呼叫）之後
+ * `return new Command({ update: { _summarizationEvent: {...} } })`（`dist/langsmith-zm0ILQsV.js:3181`）。
+ * 讀回傳值就只能記在那次呼叫的回覆之後，而日誌要能「只取 `model/start` 之前的事件就推出那次請求的歷史」
+ * （S2 的前置，地圖 [#1298](https://github.com/DemianLi/nexus-agent/issues/1298)），摘要必須在前面。
+ * 所以這裡包的是**傳給基座的 `handler`**：基座把摘要過的請求交下去的那一刻，事件的欄位自己算出來：
+ *
+ * - **認得「剛摘要過」**：{@link quietInvoke} 的替身每完成一次生摘要的 `invoke` 就把格子的 `summaries` 加一；
+ *   `handler` 被叫到時 `summaries` 比記過的多，這一份就是剛摘要過的，`sent.messages[0]` 是摘要。基座把請求交下去有
+ *   好幾處（沒摘要、切不出東西、壓縮工具結果、摘要、溢出後重摘），只有摘要那兩處前面有一次生摘要的呼叫。
+ * - **`cutoffIndex`**：基座的 `stateCutoffIndex = 上一次的切點 + 這次在有效串裡的切點 - 1`（沒有上一次就是切點本身，
+ *   `summarizeMessages`）；有效串是 {@link effectiveMessages}，這次在有效串裡的切點＝有效串長度 −（交下去的長度 − 1）。
+ * - **`filePath`**：從摘要文字讀（{@link summaryFilePathOf}）。基座寫歷史檔失敗時摘要文字沒有那句，就是 `null`（#66）。
+ * - **`messagesBefore`**：`request.messages.length`，同以前；只是那時的 graph state 還沒有這次呼叫的回覆，所以推導端的
+ *   則數檢查是 `messagesBefore`，不是舊順序的 `messagesBefore + 1`（`conversation-replay.ts`），事件帶 `beforeCall: true` 標明。
+ *
+ * **這幾個欄位是反推的，會跟基座的 `Command` 對不上就是基座改了內部**：`summarization.test.ts` 的差分測試拿真的基座，
+ * 每條路徑（第一次、第二次、歷史檔失敗、預算觸發、真的溢出後重摘）逐欄比日誌與 `_summarizationEvent`。
+ *
+ * ## 摘要記了，那次呼叫卻失敗
+ *
+ * 以前拋錯的那次連 `compaction/summary` 都不記；現在它在呼叫之前，呼叫失敗了事件也已經在日誌上。這是 dsh 的行為：
+ * 壓縮在 `agent/pre-step`（組請求之前）落地，事件是耐久的，之後的請求失敗不會收回它
+ * （`packages/compaction/compaction-basic/src/index.ts`，`d7432673886`）。我們的 graph state 在那種情形沒有
+ * `_summarizationEvent`（`Command` 沒回來），下一次呼叫基座會從沒摘要過的狀態重摘，日誌上就有兩顆摘要、中間沒有新訊息；
+ * 推導以後面那顆為準（切點都是原始串的座標），結果相同。
+ *
+ * ## 範圍怎麼表示：與 dsh 的偏離
+ *
+ * dsh 在摘要事件後面緊接一顆 `user/message {surfaceOp: replace}`，用 `shadowedRange`／`shadowedSeqs` 蓋住被壓的範圍。
+ * **我們沒有 surface 這一軸**（`conversation-replay.ts` 檔頭），表達不出「蓋住一段 seq」。退到最接近的：仍是一顆
+ * `compaction/summary`，範圍用原始訊息串的切點 `cutoffIndex` 表達，推導端據此切。
  *
  * ## 為什麼是包住它，而不是一顆新 middleware
  *
- * 基座交出摘要事件的方式**只有一個**：`performSummarization` 成功走完之後
- * `return new Command({ update: { _summarizationEvent: {...}, _summarizationSessionId } })`
- * （`dist/langsmith-zm0ILQsV.js:3181`）。那是一個**回傳值**，不是鉤子、不是廣播。所以：
- *
- * - 一顆新名字的 middleware 一定排在 `SummarizationMiddleware` 後面（更內層，見
- *   {@link SUMMARIZATION_MIDDLEWARE_NAME}），它連那次呼叫都看不到，更別說回傳值。
- * - 從 `request.state._summarizationEvent` 讀是**上一輪**留下的殘值，而 `filePath` 這一格
- *   只在剛生出來的那一份上有意義（要的是「這次寫成功了沒」）。
- * - 事後讀 `agent.getState(config)` 要求呼叫端有 checkpointer，而 `eval/runner.ts` 沒有。
- *
- * 包住它三個問題一起沒有：拿到的是當下、是完整的、而且不要求 checkpointer。
+ * 一顆新名字的 middleware 一定排在 `SummarizationMiddleware` 後面（更內層，見 {@link SUMMARIZATION_MIDDLEWARE_NAME}），
+ * 看不到基座交下去之前的那一刻。
  *
  * ## subagent 那側**寫得進去**，而這是 #143 卡上決定 3 的反面
  *
  * 卡上原本判斷 subagent 的壓縮紀錄結構上取不到，依據是 `EXCLUDED_STATE_KEYS`（`:3263`）
  * 把 `_summarizationEvent` 擋在「傳進／傳出 subagent」兩個方向之外。**那條擋的是 root 的
  * 快照讀得到什麼，不是這裡。** 我們不經過 root 的 state：`foldSummarizer` 逐個 agent 建
- * 一份摘要器，subagent 那份的 `wrapModelCall` 就在 subagent 自己的圖裡跑，回傳值當場拿到，
- * 再用 `checkpoint_ns` 問這次呼叫屬於哪一份日誌——跟 `model/usage` 同一把鑰匙。
+ * 一份摘要器，subagent 那份的 `wrapModelCall` 就在 subagent 自己的圖裡跑，再用 `checkpoint_ns` 問這次呼叫
+ * 屬於哪一份日誌——跟 `model/usage` 同一把鑰匙。
  *
  * ## 它不准拋
  *
  * `model/usage` 那顆坐在 request path 上就已經不准拋了；**這裡更嚴，因為這一層是同名
  * 取代**：從這裡漏出去的錯不只是掉一行日誌，是把摘要器本身連根拔掉。所以 `forCall` 的
- * 三種非 `ok` 與 `append` 自己拋（`snapshotJsonValue` 對非純 JSON 是當場拋的）全部吃掉。
+ * 三種非 `ok` 與 `append` 自己拋（`snapshotJsonValue` 對非純 JSON 是當場拋的）全部吃掉，`handler` 照常被叫。
  *
  * @param base - 基座那顆摘要器。
  * @param sessions - 註冊表的 `sessions` 通道。
- * @returns 同名、同狀態、多一層事後紀錄的 middleware。
+ * @returns 同名、同狀態、交下去之前多一層紀錄的 middleware。
  */
 function withCompactionLog(
   base: AgentMiddleware,
@@ -714,35 +746,80 @@ function withCompactionLog(
   if (inner === undefined) return base;
   return {
     ...base,
-    wrapModelCall: async (request, handler) => {
-      const cell: SummaryUsageCell = { usage: undefined };
-      const response = await summaryUsageCells.run(cell, () => inner(request, handler));
-      const event = readSummarizationEvent(response);
-      if (event === undefined) return response;
-      try {
-        // `runtime.configurable` 就是 `forCall` 要的那份——包回一層 `configurable` 是因為
-        // 它收的是 handler 的 config 形狀，不是 configurable 本身。同 model-usage.ts。
-        const found = sessions.forCall({
-          configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
-        });
-        if (found.kind !== 'ok') return response;
-        found.log.append('compaction/summary', {
-          cutoffIndex: event.cutoffIndex,
-          messagesBefore: (request.messages ?? []).length,
-          filePath: event.filePath,
-          // 推模型歷史要拿它換掉被壓掉的那一段（#305）。基座一定給；沒給就整個不放 key。
-          ...(event.summaryMessage === undefined
-            ? {}
-            : { summary: toLoggedMessage(event.summaryMessage) }),
-          // 生這份摘要的那一次報的用量（#1022）：沒報、報得對不起來就不放 key。**不進 `model/usage`**。
-          ...(cell.usage === undefined ? {} : { usage: cell.usage }),
-        });
-      } catch {
-        // 記不進去不能反過來把摘要器殺掉。見上面最後一段。
-      }
-      return response;
+    wrapModelCall: (request, handler) => {
+      const cell: SummaryUsageCell = { usage: undefined, summaries: 0 };
+      let logged = 0;
+      const effective = effectiveMessages(request.messages ?? [], request.state);
+      const previousCutoff = previousCutoffOf(request.state);
+      return summaryUsageCells.run(cell, () =>
+        inner(request, (sent) => {
+          // 生摘要的呼叫完成過、而且這一份還沒記過：這一份就是剛摘要過的。
+          if (cell.summaries > logged) {
+            logged = cell.summaries;
+            try {
+              const summary = sent.messages?.[0];
+              if (summary !== undefined && isSummarizationMessage(summary)) {
+                // `runtime.configurable` 就是 `forCall` 要的那份——包回一層 `configurable` 是因為
+                // 它收的是 handler 的 config 形狀，不是 configurable 本身。同 model-usage.ts。
+                const found = sessions.forCall({
+                  configurable: (request as { runtime?: { configurable?: unknown } }).runtime
+                    ?.configurable,
+                });
+                if (found.kind === 'ok') {
+                  const local = effective.length - ((sent.messages ?? []).length - 1);
+                  found.log.append('compaction/summary', {
+                    cutoffIndex: previousCutoff === undefined ? local : previousCutoff + local - 1,
+                    messagesBefore: (request.messages ?? []).length,
+                    filePath: summaryFilePathOf(summary),
+                    summary: toLoggedMessage(summary),
+                    // 生這份摘要的那一次報的用量（#1022）：沒報、報得對不上就不放 key。**不進 `model/usage`**。
+                    ...(cell.usage === undefined ? {} : { usage: cell.usage }),
+                    beforeCall: true,
+                  });
+                }
+              }
+            } catch {
+              // 記不進去不能反過來把摘要器殺掉。見上面最後一段。
+            }
+          }
+          return handler(sent);
+        }),
+      );
     },
   } as AgentMiddleware;
+}
+
+/** 基座的摘要訊息：`buildSummaryMessage` 蓋的 `lc_source`。 */
+function isSummarizationMessage(message: BaseMessage): boolean {
+  return (
+    (message.additional_kwargs as { lc_source?: unknown } | undefined)?.lc_source ===
+    'summarization'
+  );
+}
+
+/** 上一次壓縮的切點（`request.state._summarizationEvent.cutoffIndex`）。沒有、或不是數字就是 `undefined`，同基座。 */
+function previousCutoffOf(state: unknown): number | undefined {
+  const event = (state as { readonly _summarizationEvent?: unknown } | null | undefined)
+    ?._summarizationEvent;
+  if (event === null || typeof event !== 'object') return undefined;
+  const { cutoffIndex } = event as { readonly cutoffIndex?: unknown };
+  return typeof cutoffIndex === 'number' ? cutoffIndex : undefined;
+}
+
+/**
+ * 摘要文字裡寫的歷史檔路徑。基座的 `buildSummaryMessage`：寫成功時有一句
+ * 「The full conversation history has been saved to <路徑> should you need to refer back to it for details.」，
+ * 寫失敗（`filePath` 是 `null`）時整句沒有。**錨在開頭**，免得摘要本文裡剛好有同樣的句子。
+ *
+ * @param message - 基座的摘要訊息。
+ * @returns 路徑；沒有那一句就是 `null`。
+ */
+export function summaryFilePathOf(message: BaseMessage): string | null {
+  const match =
+    /^\s*You are in the middle of a conversation that has been summarized\.\s+The full conversation history has been saved to (.+?) should you need to refer back/s.exec(
+      message.text,
+    );
+  return match?.[1] ?? null;
 }
 
 /**
