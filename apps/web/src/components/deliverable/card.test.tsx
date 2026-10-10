@@ -96,6 +96,16 @@ describe('交付卡片', () => {
     expect(toastSpy.error).toHaveBeenCalledOnce();
   });
 
+  it('只有一個檔不切兩欄，兩個以上才切（#1364）', () => {
+    const list = () => screen.getByRole('region').querySelector('ul')!.className.split(/\s+/);
+    render(<DeliverablesCard files={located([REPORT])} />);
+    expect(list()).toContain('grid');
+    expect(list()).not.toContain('@xl:grid-cols-2');
+    cleanup();
+    render(<DeliverablesCard files={located([REPORT, NOTES])} />);
+    expect(list()).toContain('@xl:grid-cols-2');
+  });
+
   it(`超過 ${COLLAPSED_COUNT} 個先收起，展開再收回`, () => {
     const files = Array.from({ length: 6 }, (_, i) => ({ path: `f${i}.txt` }));
     render(<DeliverablesCard files={located(files)} />);

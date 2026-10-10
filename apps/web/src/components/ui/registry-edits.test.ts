@@ -30,6 +30,16 @@ describe('registry 檔的改動還在', () => {
     expect(code(read('./message-scroller.tsx'))).not.toMatch(/content-visibility/);
   });
 
+  test('message-scroller 自動捲動時只把捲軸變透明，不改捲軸寬（#1363）', () => {
+    const source = code(read('./message-scroller.tsx'));
+    // `scrollbar-none`／`scrollbar-thin`／`scrollbar-auto` 與 `[scrollbar-width:…]`、`[scrollbar-gutter:…]` 都會改內容寬度。
+    expect(source).not.toMatch(
+      /data-autoscrolling:(?:scrollbar-(?:none|thin|auto|gutter)|\[scrollbar-(?:width|gutter))/,
+    );
+    expect(source).toContain('data-autoscrolling:[scrollbar-color:transparent_transparent]');
+    expect(source).toContain('scrollbar-gutter-stable');
+  });
+
   test('sonner 不靠 next-themes（主題由呼叫端給，§6）', () => {
     expect(code(read('./sonner.tsx'))).not.toMatch(/next-themes/);
     const pkg = JSON.parse(read('../../../package.json')) as {

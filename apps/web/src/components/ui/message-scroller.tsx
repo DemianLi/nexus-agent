@@ -7,6 +7,8 @@
  * - 拿掉 `scroll-fade-b`：建置出的 CSS 裡沒有這個 utility（§9），寫著也沒作用。
  * - item 拿掉 `[content-visibility:auto]` 與 `contain-intrinsic-size`：paint containment 會把卡片陰影與光暈切成直角（§9）；
  *   500 則的捲動量測寫在 #404 的 PR。
+ * - viewport 自動捲動時的捲軸只換成透明（`scrollbar-color`），不再用 `scrollbar-none`：`scrollbar-width: none` 連 gutter 一起拿掉，
+ *   內容寬度多出捲軸那幾 px、折行跟著變、高度一變又觸發貼底捲動，窄欄時停不下來（#1363）。**自動捲動的開始與結束都不能改內容寬度。**
  * 依賴 `@shadcn/react` 的 primitive：viewport 預設 `role="region"`、content 預設 `role="log"`。
  */
 import * as React from 'react';
@@ -51,7 +53,7 @@ function MessageScrollerViewport({
     <MessageScrollerPrimitive.Viewport
       data-slot="message-scroller-viewport"
       className={cn(
-        'size-full min-h-0 min-w-0 scrollbar-thin scrollbar-gutter-stable overflow-y-auto overscroll-contain contain-content data-autoscrolling:scrollbar-none data-pending-scroll:invisible',
+        'size-full min-h-0 min-w-0 scrollbar-thin scrollbar-gutter-stable overflow-y-auto overscroll-contain contain-content data-autoscrolling:[scrollbar-color:transparent_transparent] data-pending-scroll:invisible',
         className,
       )}
       {...props}
