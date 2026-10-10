@@ -51,6 +51,7 @@ import { RatingsController } from '@/lib/feedback-ratings';
 import { PLAN_EXIT_LINE } from '@/lib/plan-chip';
 import type { RatingsView } from '@/lib/feedback-ratings';
 import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
+import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 
 /** 回饋對話框開給誰：一則回覆（按了讚或踩），或整個會話（只打了 `/feedback`）。 */
 export type FeedbackTarget =
@@ -75,6 +76,11 @@ export interface UseConversationOptions {
 /** 一句話伺服器沒收下（#645 Q4）。 */
 export interface SendRejected {
   readonly message: string;
+  /**
+   * 不確定伺服器有沒有收到（#1335）：`run.start` 這一趟在網路層斷了，請求可能已經到了、只是回條沒回來。只有 `run.start`
+   * 會設——它帶請求編號，原樣重送不會排兩次；斜線命令沒有編號，斷了也不設。
+   */
+  readonly uncertain?: true;
 }
 
 /**
@@ -183,12 +189,17 @@ export interface Conversation {
    *
    * `mention` 是這一句點名派的子代理（#328 第 2 項），放進 `run.start`；斜線命令不看它。伺服器不收（`not_supported`）
    * 或名字不在清單上（`invalid_argument`）時同樣回 {@link SendRejected}，草稿與標記由呼叫端留著。
+   *
+   * `requestId` 是這一句的請求編號（#1335，`lib/request-id.ts`）：**每一次 `run.start` 都帶**，沒給就這一次現產一個。
+   * 草稿沒送出去時呼叫端要留著它，原樣重送同一句時傳回來——第一次其實已經到了的話，伺服器認得、不再排。斜線命令不看它
+   * （`slash.run` 沒有編號，見 `docs/operations.md`）。
    */
   send(
     text: string,
     mode?: RunStartMode,
     attachments?: readonly PromptAttachment[],
     mention?: SubagentMention,
+    requestId?: string,
   ): Promise<SendRejected | undefined>;
   /**
    * 退出計劃模式（#900）：送 `/plan off`，走跟打字送出同一條 `slash.run`。**結果由呼叫端自己畫**——回 `undefined` 是
@@ -571,6 +582,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       mode?: RunStartMode,
       attachments?: readonly PromptAttachment[],
       mention?: SubagentMention,
+      requestId?: string,
     ): Promise<SendRejected | undefined> => {
       const trimmed = text.trim();
       const hasAttachments = attachments !== undefined && attachments.length > 0;
@@ -593,18 +605,17 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setSlashNotice(undefined);
       let result: UplinkResult;
       try {
-        // 排隊不帶 `mode`、沒有附件不帶 `attachments`：都是預設，送出的封包跟以前一樣。
-        const options = {
+        // 排隊不帶 `mode`、沒有附件不帶 `attachments`：都是預設。編號每一次都帶（#1335）。
+        result = await clientRef.current.runStart(threadId, trimmed, {
+          requestId: requestId ?? newRequestId(),
           ...(mode === 'steer' ? { mode } : {}),
           ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
           ...(mention === undefined ? {} : { mention }),
-        };
-        result =
-          Object.keys(options).length === 0
-            ? await clientRef.current.runStart(threadId, trimmed)
-            : await clientRef.current.runStart(threadId, trimmed, options);
+        });
       } catch (error) {
-        return { message: error instanceof Error ? error.message : String(error) };
+        const message = error instanceof Error ? error.message : String(error);
+        // 請求可能已經到了（網路層斷了、閘道 502／504）就標不確定；伺服器明說不收的照舊（#1335）。
+        return mayHaveArrived(error) ? { message, uncertain: true } : { message };
       }
       if (result.type === 'error') {
         return {

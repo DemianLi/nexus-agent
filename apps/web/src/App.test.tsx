@@ -242,6 +242,8 @@ function fakeClient(
   const slashed: string[] = [];
   const opened: string[] = [];
   const cancels: string[] = [];
+  /** 收過的請求編號（thread＋編號）→ 那一件的 `run_id`。 */
+  const requested = new Map<string, string>();
   const downlink = fakeDownlink();
   const client: WireClient = {
     ...UNWIRED_WIRE_CONTRACT,
@@ -260,9 +262,16 @@ function fakeClient(
       return downlink.open(threadId, events);
     },
     // 收下就照伺服器的順序推「排著」與「領走」，人的話由後者畫（#645）。
-    runStart: async (threadId, text) => {
+    // 認得收過的請求編號（#1335，照 harness 的 `findPromptRequest`）：只比編號，回原本那一件的 `run_id`，不再排。
+    runStart: async (threadId, text, options) => {
+      const key =
+        options?.requestId === undefined ? undefined : `${threadId}\n${options.requestId}`;
+      const seen = key === undefined ? undefined : requested.get(key);
+      if (seen !== undefined) return { type: 'success', id: 1, result: { run_id: seen } };
       sent.push(text);
-      return { type: 'success', id: 1, result: { run_id: downlink.accept(threadId, text) } };
+      const runId = downlink.accept(threadId, text);
+      if (key !== undefined) requested.set(key, runId);
+      return { type: 'success', id: 1, result: { run_id: runId } };
     },
     inputRespond: async (_threadId, params) => {
       responded.push(params);
@@ -1409,6 +1418,254 @@ describe('上行被拒絕的時候', () => {
 
     expect(await screen.findByText('第一句收不了')).toBeTruthy();
     expect(input.value).toBe('第二句');
+  });
+
+  it.each([
+    ['連不上', new TypeError('連不上（#1335 toast）')],
+    ['回條的 JSON 斷在半路', new SyntaxError('JSON 斷了（#1335 toast）')],
+    ['閘道逾時 504', new Error('上行被載體層擋下：504 逾時了（#1335 toast）')],
+  ])(
+    '可能已經到了（%s）：不說沒送出去，說不確定、原樣重送不會重複（#1335）',
+    async (_case, error) => {
+      seq = 0;
+      const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+      const runStart = async (): Promise<UplinkResult> => {
+        throw error;
+      };
+      render(<App client={{ ...fake.client, runStart }} />);
+
+      await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+      const input = screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+      fireEvent.change(input, { target: { value: '一句話' } });
+      fireEvent.click(screen.getByRole('button', { name: '送出' }));
+
+      const card = await toastWith(`原樣再按一次送出，不會重複。（${error.message}）`);
+      expect(card.getAttribute('data-type')).toBe('warning');
+      expect(card.textContent).toContain('不確定這一句有沒有送到');
+      expect(card.textContent).not.toContain('沒送出去');
+      await waitFor(() => expect(input.value).toBe('一句話'));
+    },
+  );
+
+  it.each([
+    [
+      '伺服器回錯誤',
+      async (): Promise<UplinkResult> => ({
+        type: 'error',
+        id: 1,
+        error: 'invalid_argument',
+        message: '明說不收（#1335 toast）',
+      }),
+      '明說不收（#1335 toast）',
+    ],
+    [
+      '載體層擋下（狀態碼不是 2xx）',
+      async (): Promise<UplinkResult> => {
+        throw new Error('上行被載體層擋下：403 擋了（#1335 toast）');
+      },
+      '上行被載體層擋下：403 擋了（#1335 toast）',
+    ],
+    [
+      '伺服器暫時不收 503',
+      async (): Promise<UplinkResult> => {
+        throw new Error('上行被載體層擋下：503 忙（#1335 toast）');
+      },
+      '上行被載體層擋下：503 忙（#1335 toast）',
+    ],
+  ])('伺服器明說不收（%s）：照舊說這一句沒送出去（#1335）', async (_case, runStart, message) => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    render(<App client={{ ...fake.client, runStart }} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    const input = screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '一句話' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+
+    const card = await toastWith(message);
+    expect(card.getAttribute('data-type')).toBe('error');
+    expect(card.textContent).toContain('這一句沒送出去');
+    expect(card.textContent).not.toContain('不確定');
+  });
+});
+
+/**
+ * 說明是 `text` 的那一條 toast。sonner 的 toast 是全域的、跨測試留著，所以 `text` 要是這一條測試才有的字；同一句也可能畫在
+ * 狀態列上，只取 toast 裡的那一個。
+ */
+async function toastWith(text: string): Promise<Element> {
+  return waitFor(() => {
+    const card = screen
+      .getAllByText(text)
+      .map((element) => element.closest('[data-sonner-toast]'))
+      .find((found) => found !== null);
+    if (card === undefined || card === null) throw new Error(`沒有說明是「${text}」的 toast`);
+    return card;
+  });
+}
+
+describe('重送同一句話（請求編號，#1335）', () => {
+  /**
+   * 回條斷在半路：伺服器其實收下了（推了 `inbox`、畫了人的泡泡），呼叫端卻拿到例外，畫面說「沒送出去」、草稿放回去。
+   * `dropFirst` 讓前幾次 `run.start` 照常送到假伺服器、回應丟掉。
+   */
+  function setup(dropFirst = 1) {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    let drops = dropFirst;
+    const runStart = vi.fn(async (...args: Parameters<WireClient['runStart']>) => {
+      const result = await fake.client.runStart(...args);
+      if (drops > 0) {
+        drops -= 1;
+        // 瀏覽器的 fetch 斷在網路層丟的是 `TypeError`。
+        throw new TypeError('Failed to fetch');
+      }
+      return result;
+    });
+    render(<App client={{ ...fake.client, runStart }} />);
+    const requestIds = () =>
+      runStart.mock.calls.map(([, , options]) => options?.requestId as string | undefined);
+    return { fake, runStart, requestIds };
+  }
+  const input = () => screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+  const send = (text: string) => {
+    fireEvent.change(input(), { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+  };
+
+  it('回條斷掉後原樣重送：帶同一個編號，伺服器只排一次，畫面只有一則', async () => {
+    const { fake, runStart, requestIds } = setup();
+    await screen.findByPlaceholderText('說點什麼…');
+
+    send('一句話');
+    await waitFor(() => expect(input().value).toBe('一句話'));
+    // 第一次其實到了：人的泡泡已經畫出來。輸入框裡放回去的那一句不算。
+    await waitFor(() => expect(fake.sent).toEqual(['一句話']));
+    const shown = () => screen.getAllByText('一句話', { ignore: 'script, style, textarea' }).length;
+    expect(shown()).toBe(1);
+
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(input().value).toBe(''));
+    const [first, second] = requestIds();
+    expect(first).toEqual(expect.any(String));
+    expect(second).toBe(first);
+    expect(fake.sent).toEqual(['一句話']);
+    expect(shown()).toBe(1);
+  });
+
+  it('改了字再送是新的一句：換新編號（不然改過的字會被伺服器當成重送丟掉）', async () => {
+    const { runStart, requestIds } = setup();
+    await screen.findByPlaceholderText('說點什麼…');
+
+    send('一句話');
+    await waitFor(() => expect(input().value).toBe('一句話'));
+    send('一句話，改過');
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(2));
+    const [first, second] = requestIds();
+    expect(second).not.toBe(first);
+  });
+
+  it('頭尾空白不算改：trim 之後一樣就沿用', async () => {
+    const { runStart, requestIds } = setup();
+    await screen.findByPlaceholderText('說點什麼…');
+
+    send('一句話');
+    await waitFor(() => expect(input().value).toBe('一句話'));
+    send('  一句話\n');
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(2));
+    const [first, second] = requestIds();
+    expect(second).toBe(first);
+  });
+
+  it('收下之後再送同樣的字是新的一句：換新編號', async () => {
+    const { fake, runStart, requestIds } = setup(0);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    send('好');
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(input().value).toBe(''));
+    send('好');
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(2));
+    const [first, second] = requestIds();
+    expect(second).not.toBe(first);
+    await waitFor(() => expect(fake.sent).toEqual(['好', '好']));
+  });
+
+  it('重送收下之後，同樣的字再送一次是新的一句：不沿用重送用過的編號', async () => {
+    const { fake, runStart, requestIds } = setup();
+    await screen.findByPlaceholderText('說點什麼…');
+
+    send('再一次');
+    await waitFor(() => expect(input().value).toBe('再一次'));
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(input().value).toBe(''));
+
+    send('再一次');
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(3));
+    const [first, second, third] = requestIds();
+    expect(second).toBe(first);
+    expect(third).not.toBe(first);
+    await waitFor(() => expect(fake.sent).toEqual(['再一次', '再一次']));
+  });
+
+  it('沒放回去（人已經在打下一句）時，下一句帶新編號', async () => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    let fail: (error: Error) => void = () => undefined;
+    const runStart = vi.fn((...args: Parameters<WireClient['runStart']>): Promise<UplinkResult> =>
+      runStart.mock.calls.length === 1
+        ? new Promise((_resolve, reject) => {
+            fail = reject;
+          })
+        : fake.client.runStart(...args),
+    );
+    render(<App client={{ ...fake.client, runStart }} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    send('第一句');
+    fireEvent.change(input(), { target: { value: '第二句' } });
+    fail(new Error('fetch failed'));
+    // sonner 的 toast 是全域的、跨測試留著：不斷言 toast，等呼叫端處理完（輸入框留著第二句）。
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(input().value).toBe('第二句');
+
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(2));
+    const [first, second] = runStart.mock.calls.map(([, , options]) => options?.requestId);
+    expect(second).toEqual(expect.any(String));
+    expect(second).not.toBe(first);
+  });
+
+  it('不同的兩句話各有各的編號', async () => {
+    const { runStart, requestIds } = setup(0);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    send('第一句');
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    send('第二句');
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(2));
+    const [first, second] = requestIds();
+    expect(first).toEqual(expect.any(String));
+    expect(second).toEqual(expect.any(String));
+    expect(second).not.toBe(first);
+  });
+
+  it('斜線命令不帶編號：走 slash.run，不碰 run.start', async () => {
+    seq = 0;
+    stubCmdkLayout();
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })], {
+      commands: [{ name: 'compact', description: '壓縮' }],
+    });
+    const runStart = vi.fn(fake.client.runStart);
+    render(<App client={{ ...fake.client, runStart }} />);
+    await screen.findByPlaceholderText('說點什麼…');
+
+    send('/compact');
+    await waitFor(() => expect(fake.slashed).toEqual(['/compact']));
+    expect(runStart).not.toHaveBeenCalled();
   });
 });
 
@@ -4514,13 +4771,13 @@ describe('附件送出（#733、#732）', () => {
     expect(input().value).toBe('');
   });
 
-  it('沒有附件：run.start 的參數跟以前一樣（沒有 attachments 這個鍵）', async () => {
+  it('沒有附件：run.start 沒有 attachments 這個鍵（只多了請求編號，#1335）', async () => {
     const { client, runStart, uploads } = withUploads();
     render(<App client={client} />);
     await screen.findByPlaceholderText('說點什麼…');
     send('只有字');
     await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
-    expect(runStart.mock.calls[0]!.length).toBe(2);
+    expect(Object.keys(runStart.mock.calls[0]![2] as object)).toEqual(['requestId']);
     expect(uploads).toEqual([]);
   });
 
@@ -4552,6 +4809,42 @@ describe('附件送出（#733、#732）', () => {
     expect(await screen.findByText(new RegExp(shown, 'u'))).toBeTruthy();
     await waitFor(() => expect(input().value).toBe('這句會被拒'));
     expect(chips()).toHaveLength(2);
+  });
+
+  it('沒送出去後原樣重送沿用編號（收據會重新上傳，比的是草稿附件）；增減附件是新的一句（#1335）', async () => {
+    const { client, runStart, uploads } = withUploads({
+      type: 'error',
+      id: 1,
+      error: 'invalid_argument',
+      message: '帶附件的這句沒收下（#1335）',
+    });
+    render(<App client={client} />);
+    await screen.findByPlaceholderText('說點什麼…');
+    const ids = () => runStart.mock.calls.map(([, , options]) => options?.requestId);
+
+    addFiles([png('a.png'), pdf('b.pdf')]);
+    send('帶附件');
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(input().value).toBe('帶附件'));
+
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(2));
+    expect(uploads.map((upload) => upload.name)).toEqual(['b.pdf', 'b.pdf']);
+    expect(ids()[1]).toBe(ids()[0]);
+
+    await waitFor(() => expect(input().value).toBe('帶附件'));
+    addFiles([pdf('c.pdf')]);
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(3));
+    expect(ids()[2]).not.toBe(ids()[1]);
+
+    await waitFor(() => expect(input().value).toBe('帶附件'));
+    fireEvent.click(screen.getAllByRole('button', { name: /移除/u })[0]!);
+    await waitFor(() => expect(chips()).toHaveLength(2));
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(4));
+    expect(ids()[3]).not.toBe(ids()[2]);
+    expect(ids()[3]).not.toBe(ids()[0]);
   });
 
   it('上傳失敗：這句不送，說原因，草稿與附件留著；再按一次會重傳', async () => {
@@ -4846,6 +5139,24 @@ describe('附件送出（#733、#732）', () => {
       expect(input().value).toBe('');
     });
 
+    it('帶附件的命令斷在網路層：照舊說沒送出去，不說原樣重送不會重複（命令沒有請求編號，#1335）', async () => {
+      const { client, calls } = withSlash(() => {
+        throw new TypeError('命令斷了（#1335 toast）');
+      });
+      render(<App client={client} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      addFiles([pdf('b.pdf')]);
+      send('/goal 斷線');
+
+      const card = await toastWith('命令斷了（#1335 toast）');
+      expect(card.getAttribute('data-type')).toBe('error');
+      expect(card.textContent).toContain('這一句沒送出去');
+      expect(card.textContent).not.toContain('不會重複');
+      expect(calls).toHaveLength(1);
+      await waitFor(() => expect(input().value).toBe('/goal 斷線'));
+    });
+
     it('命令回錯誤（不收附件）：錯誤畫出來，草稿文字與附件卡都還在', async () => {
       const { client, calls } = withSlash(() => ({
         kind: 'error',
@@ -5006,16 +5317,19 @@ describe('@子代理 提及（#328）', () => {
     const [, text, options] = runStart.mock.calls[0]!;
     // 提及走 `mention` 欄位，不轉成文字塞進 input。
     expect(text).toBe('請看 這個檔案');
-    expect(options).toEqual({ mention: { kind: 'subagent', name: 'reviewer' } });
+    expect(options).toEqual({
+      mention: { kind: 'subagent', name: 'reviewer' },
+      requestId: expect.any(String),
+    });
     expect(chip()).toBeNull();
   });
 
-  it('沒選就沒有 mention 欄位：封包跟以前一樣', async () => {
+  it('沒選就沒有 mention 欄位：只帶請求編號（#1335）', async () => {
     const { runStart } = await ready();
     type('一句話');
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
     await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
-    expect(runStart.mock.calls[0]!.length).toBe(2);
+    expect(Object.keys(runStart.mock.calls[0]![2] as object)).toEqual(['requestId']);
   });
 
   it('取代前一個：送出的是最後選的那個', async () => {
@@ -5026,7 +5340,10 @@ describe('@子代理 提及（#328）', () => {
     type('甲');
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
     await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
-    expect(runStart.mock.calls[0]![2]).toEqual({ mention: { kind: 'subagent', name: 'reviewer' } });
+    expect(runStart.mock.calls[0]![2]).toEqual({
+      mention: { kind: 'subagent', name: 'reviewer' },
+      requestId: expect.any(String),
+    });
   });
 
   it('server 對 mention 回 not_supported：說的是子代理不是附件，草稿與標記都留著', async () => {
@@ -5080,6 +5397,33 @@ describe('@子代理 提及（#328）', () => {
     settle({ type: 'error', id: 1, error: 'invalid_argument', message: '這條 thread 收不了' });
     expect(await screen.findByText('這條 thread 收不了')).toBeTruthy();
     expect(chip()?.textContent).toBe('@explorer');
+  });
+
+  it('沒送出去後換了點名的對象是新的一句：換新編號；什麼都沒改就沿用（#1335）', async () => {
+    const { runStart } = await ready(supported, {
+      type: 'error',
+      id: 1,
+      error: 'invalid_argument',
+      message: '點名的這句沒收下（#1335）',
+    });
+    const ids = () => runStart.mock.calls.map(([, , options]) => options?.requestId);
+    await pick('@');
+    type('乙');
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(chip()?.textContent).toBe('@explorer'));
+
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(2));
+    expect(ids()[1]).toBe(ids()[0]);
+
+    await waitFor(() => expect(chip()?.textContent).toBe('@explorer'));
+    await pick('@', 1);
+    expect(chip()?.textContent).toBe('@reviewer');
+    type('乙');
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(runStart).toHaveBeenCalledTimes(3));
+    expect(ids()[2]).not.toBe(ids()[1]);
   });
 
   it('以 / 開頭的命令不帶也不用掉標記', async () => {

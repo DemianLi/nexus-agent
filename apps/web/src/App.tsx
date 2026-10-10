@@ -75,6 +75,8 @@ import { pendingSteers } from '@/lib/steer-view';
 import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
 import { prepareAttachments } from '@/lib/attachment-send';
+import { requestIdFor } from '@/lib/request-id';
+import type { PendingRequest, Sentence } from '@/lib/request-id';
 import { useDraftAttachments } from '@/lib/use-draft-attachments';
 import { useUploads } from '@/lib/use-uploads';
 import { createAttachmentImageSource } from '@/lib/attachment-image';
@@ -366,6 +368,8 @@ function ConversationView({
   const [mentionedAgent, setMentionedAgent] = useState<MentionAgent | undefined>(undefined);
   // 附件送出中（上傳、編碼、等伺服器收下）：這段時間不收第二次送出。
   const [sendingAttachments, setSendingAttachments] = useState(false);
+  // 上次沒送出去的那一句和它的請求編號（#1335）：原樣重送時沿用，伺服器才認得是同一句；收下了就丟掉。
+  const pendingRequest = useRef<PendingRequest | undefined>(undefined);
   // 關掉之後留著最後那一份：退場動效那 150ms 裡框裡的字不能先消失。
   const lastDialog = useRef(conversation.feedbackDialog);
   // **每打開一次就是一張新表單**（跟以前關掉就卸掉一樣）：同一則關掉再開，草稿不留。
@@ -746,10 +750,18 @@ function ConversationView({
                     serverSupportsAttachments() && text.trim() !== FEEDBACK_COMMAND_LINE
                       ? draftAttachments.items
                       : [];
+                  // 跟上次沒送出去的那一句完全相同才沿用它的編號；改過字、換了點名、增減附件都是新的一句（#1335）。
+                  const sentence: Sentence = {
+                    text,
+                    mention: mentioned?.name,
+                    attachmentIds: items.map((item) => item.id),
+                  };
+                  const requestId = requestIdFor(pendingRequest.current, sentence);
+                  pendingRequest.current = undefined;
                   void (async () => {
                     const mention = mentioned === undefined ? undefined : toMention(mentioned);
                     if (items.length === 0) {
-                      return conversation.send(text, mode, undefined, mention);
+                      return conversation.send(text, mode, undefined, mention, requestId);
                     }
                     setSendingAttachments(true);
                     try {
@@ -773,6 +785,7 @@ function ConversationView({
                         mode,
                         prepared.attachments,
                         mention,
+                        requestId,
                       );
                       // 收下了才移掉這一批；送出期間才加進來的留著。沒收下就全留著，連同草稿。
                       if (rejected === undefined) {
@@ -789,12 +802,19 @@ function ConversationView({
                     }
                   })().then((rejected) => {
                     if (rejected === undefined) return;
+                    // 「沒送出去」可能其實到了、只是回條斷了：留著編號，原樣重送這一句時帶同一個。
+                    pendingRequest.current = { id: requestId, sentence };
                     // 沒收下（#645 Q4）：草稿放回去——人已經開始打下一句的話不蓋掉——並說出原因。
                     setDraft((current) => (current === '' ? text : current));
                     if (mentioned !== undefined)
                       setMentionedAgent((current) => current ?? mentioned);
                     if ('cancelled' in rejected) {
                       toast('已取消上傳', { description: rejected.message });
+                    } else if (rejected.uncertain === true) {
+                      // 斷在網路層：可能其實到了。不說「沒送出去」，說原樣重送是安全的（#1335）。
+                      toast.warning('不確定這一句有沒有送到', {
+                        description: `原樣再按一次送出，不會重複。（${rejected.message}）`,
+                      });
                     } else {
                       toast.error('這一句沒送出去', { description: rejected.message });
                     }
