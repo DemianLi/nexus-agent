@@ -427,3 +427,68 @@ describe('MCP 反問（#1098）', () => {
     expect(await axeViolations(document.body)).toEqual([]);
   });
 });
+
+describe('「（推薦）」小標與換題高度（#1306）', () => {
+  const PICK: QuestionItem = {
+    id: 'pick',
+    question: '用哪個方案？',
+    options: [
+      { label: '方案甲（推薦）', description: '最快' },
+      { label: '方案乙(推薦)' },
+      { label: '方案丙' },
+    ],
+  };
+
+  it('字尾畫成小標，畫面上的標籤不再帶字尾；沒有字尾的不畫', () => {
+    renderPanel(question([PICK]));
+    const badges = screen.getAllByTestId('recommended-badge');
+    expect(badges.map((badge) => badge.textContent)).toEqual(['推薦', '推薦']);
+    const [first] = document.querySelectorAll('[data-slot="questionnaire-choice-label"]');
+    expect(first?.firstElementChild?.firstElementChild?.textContent).toBe('方案甲');
+    expect(
+      radio('方案丙')
+        .closest('[data-slot="questionnaire-choice"]')
+        ?.querySelector('[data-testid="recommended-badge"]'),
+    ).toBeNull();
+  });
+
+  it('輔助技術仍唸原字尾：選項名稱跟以前一樣', () => {
+    renderPanel(question([PICK]));
+    expect(screen.getByRole('radio', { name: /^方案甲（推薦）/ })).not.toBeNull();
+    expect(screen.getByRole('radio', { name: '方案乙（推薦）' })).not.toBeNull();
+  });
+
+  it('送出的答案仍是整個標籤，一字不差（全形、半形都是）', () => {
+    const answers = renderPanel(question([PICK, { ...PICK, id: 'again' }]));
+    fireEvent.click(screen.getByRole('radio', { name: /^方案甲/ }));
+    fireEvent.click(screen.getByRole('button', { name: '下一題' }));
+    // 其他題的 fieldset 是 `hidden`，`getAllByRole` 只抓得到當前這一題的。
+    fireEvent.click(screen.getByRole('radio', { name: /^方案乙/ }));
+    fireEvent.submit(screen.getByRole('progressbar').closest('form')!);
+    expect(answers).toEqual([
+      [
+        { id: 'pick', selected: ['方案甲（推薦）'] },
+        { id: 'again', selected: ['方案乙(推薦)'] },
+      ],
+    ]);
+  });
+
+  it('外框掛 motion-resize；換題時高度不同就過渡（jsdom 沒有版面：舊高量 100、新高量 240）', () => {
+    vi.spyOn(HTMLElement.prototype, 'offsetHeight', 'get').mockReturnValue(100);
+    vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue({
+      height: 240,
+    } as DOMRect);
+    try {
+      renderPanel(question([DAY, NAME]));
+      const surface = screen.getByRole('progressbar').closest('.motion-resize') as HTMLElement;
+      expect(surface).not.toBeNull();
+      expect(surface.hasAttribute('data-resizing')).toBe(false);
+      fireEvent.click(radio('週一'));
+      fireEvent.click(screen.getByRole('button', { name: '下一題' }));
+      expect(surface.hasAttribute('data-resizing')).toBe(true);
+      expect(surface.style.height).toBe('240px');
+    } finally {
+      vi.restoreAllMocks();
+    }
+  });
+});
