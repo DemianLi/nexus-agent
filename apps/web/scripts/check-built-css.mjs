@@ -13,6 +13,8 @@
  * - 產物裡沒有只來自測試檔或說明文件的 class：Tailwind 預設掃整個專案，測試裡的範例字串（`bg-red-500`、`container`…）
  *   與說明文件裡提到的類別名都會被編成真的規則，裸的 `.container`、`.shadow` 這類還會套用到不相干的元素。
  *   `src/index.css` 用 `@source not` 排除，這裡量產物確認真的排除了。
+ * - 自動捲動不改內容寬度（#1363）：選擇器帶 `[data-autoscrolling]` 的規則不准宣告會動到捲軸佔位的屬性。
+ *   `scrollbar-width: none` 會連 `scrollbar-gutter: stable` 留的位置一起拿掉，窄欄時折行變、高度變、又觸發貼底捲動。
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -291,6 +293,16 @@ for (const rule of rules)
   for (const [, value] of declarations(rule.body))
     for (const [name] of value.matchAll(/\bmotion-[a-z-]+\b/g))
       if (!keyframes.has(name)) failures.push(`${rule.selector} 引用了不存在的 @keyframes ${name}`);
+
+// 自動捲動不改內容寬度（#1363）
+const GUTTER_PROPERTIES =
+  /^(scrollbar-width|scrollbar-gutter|overflow|overflow-y|overflow-x|padding|padding-inline|padding-right|padding-left|width)$/;
+for (const rule of rules) {
+  if (!/\[data-autoscrolling\b/.test(rule.selector)) continue;
+  for (const [name, value] of declarations(rule.body))
+    if (GUTTER_PROPERTIES.test(name))
+      failures.push(`${rule.selector} 在自動捲動時改了 ${name}: ${value}，會改內容寬度（#1363）`);
+}
 
 // 外部網址
 for (const f of files)
