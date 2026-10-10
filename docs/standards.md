@@ -14,6 +14,12 @@
 - **修 bug 先寫測試** — 測試要能在修好之前重現該 bug，否則無從證明它修好了。
 - **沒有測試的套件不得通過 gate** — CI 對 `packages/*` 跑 `pnpm --filter ./packages/* run test`（功能分支 → `develop` 的 PR 只跑異動到的 plugin 套件，`develop → main` 全跑），vitest 找不到測試檔就是紅燈。不要用 `passWithNoTests`，也不要改成 `--if-present` 把它繞過去。這個 gate 的價值就在於它會因為缺測試而失敗。
 
+測試與護欄也會說謊：宣稱的比實際觀察的多、或期望值跟被測物是同一個來源，綠燈就什麼都沒證明。三條（照 dsh `docs/testing.md`「Verify the world, not the self-report」與「A guard only guards if the regression fails it」）：
+
+- **期望值不取自被測物。** 驗證器或測試的「期望」要來自另一個來源 — 獨立重算、固定字面值、從外面重讀 — 不是被測函式自己吐出來再拿來比。沒動過的東西，斷言位元組相同。例：`attachment-store.test.ts` 的參照期望值用測試自己的 `createHash` 算，不拿 `save()` 回的 `attachmentId` 去比 `save()`。
+- **護欄要證明會紅。** 新加或改動護欄（防回歸的測試、型別絆索、驗證器）時，PR 內文寫明「引入了什麼回歸、哪幾條測試紅、已還原」，而且真的做過，不是推論。紅的數量是 0 不算：那通常是指令沒跑起來，或測的不是那條路。例：[#214](https://github.com/DemianLi/nexus-agent/pull/214) 對兩條絆索各做突變，四個突變四個都紅，不然一條 `@ts-expect-error` 綠著，分不出「擋住了」與「那行根本沒被檢查」。
+- **斷言要看得到被宣稱的東西。** 測試名或註解宣稱「攔下 X」時，斷言要能分辨「攔下了」與「X 本來就沒發生」；分不出，就是這條測試對那件事什麼都沒說。例：[#117](https://github.com/DemianLi/nexus-agent/pull/117) 的「記憶與指引共存」那條抓不到取代式的實作 — 計劃模式的 middleware 站在記憶外面，整個換掉 `systemMessage` 它照樣綠 — 量到之後把這個限制寫進註解，另外釘真正擋得住的那條。
+
 等 Phase 1 有真正的 plugin 實作之後，再回頭評估要不要加量化門檻。
 
 ## 秘密與環境變數
