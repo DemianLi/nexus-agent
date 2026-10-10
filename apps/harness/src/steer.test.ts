@@ -319,6 +319,33 @@ describe('真的組裝：跑著的這一輪收插話', () => {
     }
   }, 20000);
 
+  it('插話被領走之後重送同一個請求編號（#1335）：認得，回原本那一件，不再排', async () => {
+    const run = await assemble([POKE, { content: '收到' }], {
+      onPoke: () =>
+        void run.pump.submit({
+          kind: 'message',
+          text: '改用 X',
+          id: 's1',
+          steer: true,
+          requestId: 'req-steer',
+        }),
+    });
+    try {
+      await run.pump.submit({ kind: 'message', text: '開始', id: 'm1', requestId: 'req-start' });
+      await run.pump.whenIdle();
+      // 兩種都領走了：一輪開頭那句在 `turn/start`、插話在 `user/message`；收件匣上已經沒有它們。
+      expect(run.pump.nextStep).toEqual([]);
+      expect(run.pump.findPromptRequest('req-start')).toBe('m1');
+      expect(run.pump.findPromptRequest('req-steer')).toBe('s1');
+      const sources = run.pump.sessionLog.events.flatMap((event) =>
+        event.type === 'user/message' ? [event.data.source] : [],
+      );
+      expect(sources).toEqual([{ kind: 'user', requestId: 'req-steer' }]);
+    } finally {
+      await run.close();
+    }
+  }, 20000);
+
   it('推送：插進來、領走各一顆，領走那顆帶 claimedNextStep；即時折疊畫出人的泡泡', async () => {
     const run = await assemble([POKE, { content: '收到' }], {
       onPoke: () => void run.pump.submit(steer('改用 X', 's1')),

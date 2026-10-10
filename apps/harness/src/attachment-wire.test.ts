@@ -224,6 +224,54 @@ describe('檔案收據', () => {
     }
   });
 
+  it('帶請求編號重送同一句（#1335）：認得、回原本的 run_id，**不是**撞上「收據用過」', async () => {
+    const { client, handler, events } = connect('vision');
+    try {
+      const receipt = await upload(client, 'x', 'a.txt');
+      const attachments: PromptAttachment[] = [{ type: 'file', receiptId: receipt.receiptId }];
+      const first = await client.runStart(THREAD, '一', { attachments, requestId: 'req-1' });
+      expect(first).toMatchObject({ type: 'success' });
+      await settled(events, 1);
+      const before = events().length;
+      // 重送帶的是同一批收據，第一次就用掉了：查編號排在收據之前，所以認得、不報錯。
+      const again = await client.runStart(THREAD, '一', { attachments, requestId: 'req-1' });
+      expect(again).toMatchObject({
+        type: 'success',
+        result: { run_id: (first as { result: { run_id: string } }).result.run_id },
+      });
+      expect(events().length).toBe(before);
+      // 沒帶編號的重送照舊撞上收據用過。
+      expect(await client.runStart(THREAD, '一', { attachments })).toMatchObject({
+        type: 'error',
+        error: 'invalid_argument',
+      });
+    } finally {
+      await handler.close();
+    }
+  });
+
+  it('同一個請求編號同時到兩次（#1335）：第二個等第一個落定，回原本的 run_id，只開一輪', async () => {
+    const { client, handler, events } = connect('vision');
+    try {
+      const receipt = await upload(client, 'x', 'a.txt');
+      const attachments: PromptAttachment[] = [{ type: 'file', receiptId: receipt.receiptId }];
+      const [a, b] = await Promise.all([
+        client.runStart(THREAD, '一', { attachments, requestId: 'req-1' }),
+        client.runStart(THREAD, '一', { attachments, requestId: 'req-1' }),
+      ]);
+      expect(a).toMatchObject({ type: 'success' });
+      expect(b).toMatchObject({ type: 'success' });
+      expect((b as { result: { run_id: string } }).result.run_id).toBe(
+        (a as { result: { run_id: string } }).result.run_id,
+      );
+      await settled(events, 1);
+      await new Promise((resolve) => setTimeout(resolve, 50));
+      expect(events().filter((event) => event.type === 'turn/start')).toHaveLength(1);
+    } finally {
+      await handler.close();
+    }
+  });
+
   it('全有全無：一張圖不行整句拒收，收據放回去，修了重送就成', async () => {
     const { client, handler, events } = connect('vision');
     try {

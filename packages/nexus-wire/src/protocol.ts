@@ -136,8 +136,30 @@ export interface RunStartCommand {
      * 名字不在 `subagent.list` 上回 `invalid_argument`。
      */
     readonly mention?: SubagentMention;
+    /**
+     * 客戶端給這一次送出的請求編號（[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)），**選填**。
+     * 照 dsh `session.prompt` 的 `requestId`（`packages/api/session-controller/src/types.ts:340`，`d7432673886`）：
+     * 帶了的話，伺服器先查這個編號收過沒有，收過就**不再排第二次**。
+     *
+     * **為什麼需要**：請求到了伺服器、回應卻斷在半路時，客戶端分不出「沒送到」還是「送到了、只是沒收到回條」，使用者
+     * 會再按一次送出；沒有編號的話伺服器分不出這是同一句，模型就會看到兩次同樣的話。
+     *
+     * **用法**：每一句話送出時產生一個新編號（UUID 之類，客戶端自己保證唯一），**同一句話重送沿用同一個編號**；不同的話
+     * 用不同的編號。只比編號、不比內容（同 dsh）：同編號不同文字的第二次也當成同一句。
+     *
+     * **回應**：第一次與重送都回 `{ run_id }`，**重送回的是原本那一件的 `run_id`**，所以客戶端據它對上自己已經畫出來的那一句，
+     * 不必多畫一則。認得的範圍是這條 thread 的三個階段：還排著、已經領走開了一輪、已經落進日誌（含伺服器重啟之後）；
+     * 排著的那一句被使用者刪掉之後，同一個編號再送就是新的一句。
+     *
+     * **形狀**：非空字串，至多 {@link REQUEST_ID_MAX_LENGTH} 個字元，其餘回 `invalid_argument`。省略＝維持現狀（每次都排一次），
+     * 舊客戶端不受影響。沒實作的舊 server 會略過這一格。
+     */
+    readonly request_id?: string;
   };
 }
+
+/** `run.start` 的 `request_id` 最長幾個字元。夠放 UUID；擋的是把整段文字當編號塞進日誌的客戶端 bug。 */
+export const REQUEST_ID_MAX_LENGTH = 200;
 
 /** 上行收得下的 method。其餘一律 404，見決策 6 的未採納清單。 */
 export const UPLINK_METHODS = ['run.start', 'input.respond'] as const;

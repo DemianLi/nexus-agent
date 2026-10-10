@@ -1041,3 +1041,17 @@ LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
 - **日誌**：`turn/start`（`kind: 'message'`）與佇列項各多一格選填 `mention`，輪中插話則留在 `user/message` 的內容區塊裡。**格式 42，不標 `ignorable`**——舊 runtime 略過它，排著的項目被折回來重跑時點名就悄悄不見了。
 - **線上**：排著的件（`WireQueuedInput.mention`）、領走時的 `claimed`／`claimedNextStep`、歷史重播的人話（`HumanEntry.mention`）都帶它；`text` 不含點名也不含提示區塊（歷史把提示區塊剝掉，從它讀回點名）。
 - **會被看到提示區塊的地方**：送進模型的訊息、摘要器的輸入（摘要裡可能帶到點名的字，沒有處理）。泡泡、佇列、標題（讀的是 `turn/start.text`）、`thread.search` 的全文（跟歷史同一個判準剝掉提示區塊）不受影響：搜提示裡的字（「子代理」「委派工具」）不會命中被點名的話，搜使用者自己打的字照常命中。
+
+## 重送同一句話（請求編號）
+
+`run.start` 可以帶一格選填的 `request_id`（[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)，**照 dsh**：`session.prompt` 的 `requestId`，`packages/api/session-controller/src/commands.ts:330`）。請求到了伺服器、回應卻斷在半路時，客戶端分不出「沒送到」還是「送到了、沒收到回條」，使用者會再按一次送出；沒有編號的話伺服器分不出是同一句，模型就看到兩次同樣的話。
+
+- **協定**：`params.request_id`，非空字串、至多 200 個字元（`REQUEST_ID_MAX_LENGTH`），其餘回 `invalid_argument`。**省略＝維持現狀**（每次都排一次），舊客戶端不受影響；舊 server 會略過這一格。客戶端每句話送出時產生一個新編號（UUID 即可），**同一句話重送沿用同一個編號**。wire client 的 `runStart(thread, text, { requestId })` 已接上。
+- **回應**：第一次與重送都是 `{ run_id }`。**重送回的是原本那一件的 `run_id`**，客戶端據它對上自己已經畫出來的那一句，不必多畫一則。**偏離 dsh**（登記）：dsh 回 `{ accepted: true }`；我們的 `run_id` 兼作送出佇列的項目 id，畫面靠它對人，`{ accepted: true }` 表達不出來。
+- **認得的範圍**：這條 thread 上三個階段都認得——還排著（收件匣那一件的 `source.requestId`）、已經領走開了一輪（`turn/start` 的 `requestId`＋`runId`）、輪中插話被領走（`user/message` 的 `source.requestId`），重啟之後從日誌折回來照樣認得。**排著的那一句被使用者刪掉之後**，同一個編號再送就是新的一句（dsh 同）。
+- **只比編號、不比內容**（同 dsh）：同編號不同文字的第二次也回原本那一件，新的字不進佇列。要把內容也綁進去（同編號不同內容回錯）是 OpenBitFun 的做法、不是 dsh 的；除非能說出「同編號不同內容」實際怎麼發生，否則不加。
+- **查編號排在一切會用掉東西的檢查之前**：重送帶的是同一批附件收據，第一次就用掉了，晚一步查的話重送會先撞上「收據已用過」而不是被認出來。同一個編號同時到兩次（收第一次在等附件）時，第二個等第一個落定再判。
+- **日誌**：`inbox/spliced` 的那一件、`turn/start`（`kind: 'message'`）、`user/message` 的 `source` 各多選填的 `requestId`（`turn/start` 另有 `runId`）。**格式 48，不標 `ignorable`**——舊 runtime 略過它，重啟之後重送同一個編號就會排第二次，沒有任何東西報錯。沒帶 `request_id` 的送出，日誌與以前位元組相同。
+- **`slash.run` 沒有同批**：dsh 也只有 `session.prompt` 帶 `requestId`，命令沒有；而且命令的回應是執行結果（`command/done` 的文字），不是一個可以原樣回的 `run_id`，要認重送就得另外把結果存下來。命令有自己的擋法（一次只跑一個、`run` 跑著或停在核准點就拒），重送若撞上這些會得到明確的錯誤；**但命令已經跑完、thread 閒著時重送，命令會再執行一次**——這是已知缺口，今天沒有編號可認。
+- **不在這裡**：`input.respond` 重送「已成功但回應丟了」的核准，客戶端分不出是「已經答過」還是「根本沒有這顆」，這是另一個問題（卡 [#1335](https://github.com/DemianLi/nexus-agent/issues/1335) 的「不在這張卡」）。
+
