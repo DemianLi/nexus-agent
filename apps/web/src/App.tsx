@@ -810,6 +810,11 @@ function ConversationView({
                       setMentionedAgent((current) => current ?? mentioned);
                     if ('cancelled' in rejected) {
                       toast('已取消上傳', { description: rejected.message });
+                    } else if (rejected.uncertain === true) {
+                      // 斷在網路層：可能其實到了。不說「沒送出去」，說原樣重送是安全的（#1335）。
+                      toast.warning('不確定這一句有沒有送到', {
+                        description: `原樣再按一次送出，不會重複。（${rejected.message}）`,
+                      });
                     } else {
                       toast.error('這一句沒送出去', { description: rejected.message });
                     }

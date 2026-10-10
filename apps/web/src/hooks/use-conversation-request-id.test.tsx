@@ -77,4 +77,27 @@ describe('send 的請求編號（#1335）', () => {
     });
     expect(started[0]!.options).toEqual({ requestId: 'req-2', mode: 'steer' });
   });
+
+  it.each([
+    ['連不上（TypeError）', new TypeError('Failed to fetch'), true],
+    ['回條的 JSON 斷在半路（SyntaxError）', new SyntaxError('Unexpected end of JSON input'), true],
+    ['載體層擋下（一般 Error）', new Error('上行被載體層擋下：403 no'), false],
+  ])('run.start 丟出例外，%s：不確定有沒有到才標 uncertain', async (_case, error, uncertain) => {
+    const { client } = setup();
+    const failing = {
+      ...client,
+      runStart: async () => {
+        throw error;
+      },
+    } as WireClient;
+    const { result } = renderHook(() => useConversation({ client: failing, threadId: 't' }));
+    await waitFor(() => expect(result.current.connected).toBe(true));
+    let rejected: Awaited<ReturnType<typeof result.current.send>>;
+    await act(async () => {
+      rejected = await result.current.send('一句話');
+    });
+    expect(rejected!).toEqual(
+      uncertain ? { message: error.message, uncertain: true } : { message: error.message },
+    );
+  });
 });

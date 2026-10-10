@@ -76,6 +76,11 @@ export interface UseConversationOptions {
 /** 一句話伺服器沒收下（#645 Q4）。 */
 export interface SendRejected {
   readonly message: string;
+  /**
+   * 不確定伺服器有沒有收到（#1335）：`run.start` 這一趟在網路層斷了，請求可能已經到了、只是回條沒回來。只有 `run.start`
+   * 會設——它帶請求編號，原樣重送不會排兩次；斜線命令沒有編號，斷了也不設。
+   */
+  readonly uncertain?: true;
 }
 
 /**
@@ -608,7 +613,12 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
           ...(mention === undefined ? {} : { mention }),
         });
       } catch (error) {
-        return { message: error instanceof Error ? error.message : String(error) };
+        const message = error instanceof Error ? error.message : String(error);
+        // 連不上、回條讀到一半斷了是 `TypeError`，回條的 JSON 斷在半路是 `SyntaxError`：請求可能已經到了。狀態碼不是 2xx
+        // （wire 丟的「上行被載體層擋下」）是一般的 `Error`：伺服器明說了不收（#1335）。
+        return error instanceof TypeError || error instanceof SyntaxError
+          ? { message, uncertain: true }
+          : { message };
       }
       if (result.type === 'error') {
         return {

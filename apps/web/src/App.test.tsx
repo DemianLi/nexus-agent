@@ -1419,7 +1419,79 @@ describe('上行被拒絕的時候', () => {
     expect(await screen.findByText('第一句收不了')).toBeTruthy();
     expect(input.value).toBe('第二句');
   });
+
+  it.each([
+    ['連不上', new TypeError('連不上（#1335 toast）')],
+    ['回條的 JSON 斷在半路', new SyntaxError('JSON 斷了（#1335 toast）')],
+  ])('斷在網路層（%s）：不說沒送出去，說不確定、原樣重送不會重複（#1335）', async (_case, error) => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const runStart = async (): Promise<UplinkResult> => {
+      throw error;
+    };
+    render(<App client={{ ...fake.client, runStart }} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    const input = screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '一句話' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+
+    const card = await toastWith(`原樣再按一次送出，不會重複。（${error.message}）`);
+    expect(card.getAttribute('data-type')).toBe('warning');
+    expect(card.textContent).toContain('不確定這一句有沒有送到');
+    expect(card.textContent).not.toContain('沒送出去');
+    await waitFor(() => expect(input.value).toBe('一句話'));
+  });
+
+  it.each([
+    [
+      '伺服器回錯誤',
+      async (): Promise<UplinkResult> => ({
+        type: 'error',
+        id: 1,
+        error: 'invalid_argument',
+        message: '明說不收（#1335 toast）',
+      }),
+      '明說不收（#1335 toast）',
+    ],
+    [
+      '載體層擋下（狀態碼不是 2xx）',
+      async (): Promise<UplinkResult> => {
+        throw new Error('上行被載體層擋下：403 擋了（#1335 toast）');
+      },
+      '上行被載體層擋下：403 擋了（#1335 toast）',
+    ],
+  ])('伺服器明說不收（%s）：照舊說這一句沒送出去（#1335）', async (_case, runStart, message) => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    render(<App client={{ ...fake.client, runStart }} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    const input = screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '一句話' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+
+    const card = await toastWith(message);
+    expect(card.getAttribute('data-type')).toBe('error');
+    expect(card.textContent).toContain('這一句沒送出去');
+    expect(card.textContent).not.toContain('不確定');
+  });
 });
+
+/**
+ * 說明是 `text` 的那一條 toast。sonner 的 toast 是全域的、跨測試留著，所以 `text` 要是這一條測試才有的字；同一句也可能畫在
+ * 狀態列上，只取 toast 裡的那一個。
+ */
+async function toastWith(text: string): Promise<Element> {
+  return waitFor(() => {
+    const card = screen
+      .getAllByText(text)
+      .map((element) => element.closest('[data-sonner-toast]'))
+      .find((found) => found !== null);
+    if (card === undefined || card === null) throw new Error(`沒有說明是「${text}」的 toast`);
+    return card;
+  });
+}
 
 describe('重送同一句話（請求編號，#1335）', () => {
   /**
@@ -1434,7 +1506,8 @@ describe('重送同一句話（請求編號，#1335）', () => {
       const result = await fake.client.runStart(...args);
       if (drops > 0) {
         drops -= 1;
-        throw new Error('fetch failed');
+        // 瀏覽器的 fetch 斷在網路層丟的是 `TypeError`。
+        throw new TypeError('Failed to fetch');
       }
       return result;
     });
@@ -5053,6 +5126,24 @@ describe('附件送出（#733、#732）', () => {
       expect(runStart).not.toHaveBeenCalled();
       await waitFor(() => expect(chips()).toHaveLength(0));
       expect(input().value).toBe('');
+    });
+
+    it('帶附件的命令斷在網路層：照舊說沒送出去，不說原樣重送不會重複（命令沒有請求編號，#1335）', async () => {
+      const { client, calls } = withSlash(() => {
+        throw new TypeError('命令斷了（#1335 toast）');
+      });
+      render(<App client={client} />);
+      await screen.findByPlaceholderText('說點什麼…');
+
+      addFiles([pdf('b.pdf')]);
+      send('/goal 斷線');
+
+      const card = await toastWith('命令斷了（#1335 toast）');
+      expect(card.getAttribute('data-type')).toBe('error');
+      expect(card.textContent).toContain('這一句沒送出去');
+      expect(card.textContent).not.toContain('不會重複');
+      expect(calls).toHaveLength(1);
+      await waitFor(() => expect(input().value).toBe('/goal 斷線'));
     });
 
     it('命令回錯誤（不收附件）：錯誤畫出來，草稿文字與附件卡都還在', async () => {
