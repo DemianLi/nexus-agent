@@ -29,17 +29,19 @@
 | 層 | 列數 | 完成 | 部分 | 缺口 | 已拍板未落地 | 待拍板 | 判過不做 | dsh 也沒有 | web 只列 | 完成度 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | E 執行環境 | 14 | 6 | 1 | 0 | 0 | 0 | 5 | 2 | 0 | 92.9% |
-| T 工具介面 | 29 | 13 | 1 | 3 | 2 | 1 | 4 | 5 | 0 | 67.5% |
+| T 工具介面 | 29 | 13 | 1 | 3 | 2 | 0 | 5 | 5 | 0 | 71.1% |
 | C 上下文與記憶 | 16 | 7 | 2 | 1 | 2 | 1 | 1 | 2 | 0 | 61.5% |
 | L 生命週期與編排 | 26 | 9 | 4 | 4 | 1 | 0 | 3 | 4 | 1 | 61.1% |
 | O 可觀測與維運 | 18 | 4 | 3 | 1 | 0 | 1 | 4 | 4 | 1 | 61.1% |
 | V 驗證與評估 | 12 | 5 | 1 | 1 | 0 | 0 | 0 | 4 | 1 | 78.6% |
 | G 治理與安全 | 18 | 8 | 2 | 1 | 0 | 2 | 2 | 3 | 0 | 69.2% |
-| **合計** | **133** | **52** | **14** | **11** | **5** | **5** | **19** | **24** | **3** | **67.8%** |
+| **合計** | **133** | **52** | **14** | **11** | **5** | **4** | **20** | **24** | **3** | **68.6%** |
 
 ※ 標記的兩列（C-16、L-26）來自覆蓋檢查，沒有經過對抗式驗證，見「方法與限制」。
 
-- **整體 67.8%**，以 87 列計分。E 最高，達 92.9%：圍堵那一整組都完成了，其餘各列不是判過不做，就是 dsh 也沒有。C、L、O 三層最低，都在 61% 左右。
+※※ 2026-10-10：T-28 由待拍板改判為判過不做（Creator 模式不做，見〈2026-10-10 判決〉一節），所以 T 層的待拍板 1 → 0、判過不做 4 → 5，T 層完成度 67.5% → 71.1%，合計的待拍板 5 → 4、判過不做 19 → 20、完成度 67.8% → 68.6%。其餘各列維持 2026-09-26 的判定。
+
+- **整體 68.6%**，以 86 列計分（2026-09-26 原為 67.8%／87 列；T-28 改判後重算，見〈2026-10-10 判決〉）。E 最高，達 92.9%：圍堵那一整組都完成了，其餘各列不是判過不做，就是 dsh 也沒有。C、L、O 三層最低，都在 61% 左右。
 - **缺口 11 條，其中 8 條有卡**。它們集中在四塊：
   - 子代理：T-04 逐 agent allow/deny、L-14 逐個選模型，兩條都掛在 #328；L-13 續行與 send_message 沒有卡。
   - MCP 的後半：T-06 resources（#430）、T-07 server instructions（#431）。
@@ -50,11 +52,11 @@
   - C-16 系統提示詞寫死在 `apps/harness/src/cli.ts:603`，內容是「你是 nexus-agent 的命令列助手」。serve 共用同一個 `createCliAgent`，所以 **web 會話裡的模型也被告知自己是命令列助手**。部署方沒有地方設 persona。
   - L-26 模型選擇：部署預設模型有（`#settings/live-model`），每會話換模型與推理強度沒有。
 - **已拍板未落地 5 條**，決議都在 09-19：T-11 skills 預設（#440）、T-23 工具 schema 目錄（#442）、C-11 跨會話引用、C-12 `@file`（基準之後開了 #651／#653）、L-09 goal 續行在 serve 預設開（#445）。L-09 的現況：`apps/harness/src/serve.ts:135` 與 `cli.ts:277` 都還是 `default: false`；#445 與 #638（讓續行走送出佇列）都還開著。
-- **待拍板 5 條**：T-28 plugin 開發者工具、C-07 圖片省略、O-17 `--dump-config` 系列、G-09 憑證儲存、G-17 互動式憑證取得。G-09 與 G-17 同屬 dsh 的 `packages/credentials/` 一族，建議一起判。
+- **待拍板 4 條**（原 5 條；T-28 plugin 開發者工具於 2026-10-10 改判為判過不做，見〈2026-10-10 判決〉）：C-07 圖片省略、O-17 `--dump-config` 系列、G-09 憑證儲存、G-17 互動式憑證取得。G-09 與 G-17 同屬 dsh 的 `packages/credentials/` 一族，建議一起判。
 
 ## 每層一句話
 
-- **E**：圍堵、三種模式、升級、政策句、先讀後改、子代理繼承都完成。程式碼執行只有選配的 quickjs。shell 與行程隔離、MCP stdio、腳本執行期、逐會話工作區都判過不做。
+- **E**：圍堵、三種模式、升級、政策句、先讀後改、子代理繼承都完成。程式碼執行只有選配的 quickjs（模型寫程式、程式裡呼叫工具的 PTC 那半，2026-10-10 判過不做）。shell 與行程隔離、MCP stdio、腳本執行期、逐會話工作區都判過不做。
 - **T**：工具註冊、校驗、逾時、MCP 工具（選配）、問使用者、present、HTTP＋SSE、會話續接、斜線命令、檔案工具與 meta 都完成。缺逐 agent 的 allow/deny、MCP resources、server instructions。skills 預設與工具 schema 目錄已拍板未落地。會話標題只做了一半，LLM 生成標題的 #650 在基準之後才開。
 - **C**：AGENTS.md、摘要（#446 拆分）、修剪、壓力量表、重複提醒、計劃指引都完成。缺摘要 prompt 的品質要求（#432）。外溢與系統提示詞身分只做了一半。跨會話引用與 `@file` 已拍板未落地，圖片省略待拍板。
 - **L**：迴圈、取消與續接、max-tokens（#433）、停損、子代理派生、深度上限、headless、送出佇列、閒置逾時都完成。以下四條只做了一半：
@@ -131,6 +133,18 @@
 | PR #656（關 #655）會話標頭與分頁顯示標題 | web，只列 |
 | #657 LLM 標題可以走另一顆模型 | T-20 的 LLM 那半；dsh 的 provider／model 覆寫 |
 
+## 2026-10-10 判決：Creator、PTC、逐會話選組合（不做）
+
+[#1297](https://github.com/DemianLi/nexus-agent/issues/1297)。2026-10-10 demian 決定 [#714](https://github.com/DemianLi/nexus-agent/issues/714)（T-28，Creator 模式）、[#718](https://github.com/DemianLi/nexus-agent/issues/718)（E-08 的 PTC 那半）、[#739](https://github.com/DemianLi/nexus-agent/issues/739)（T-29，逐會話選 plugin 組合）**三張都不做**，推翻 2026-09-26 拍板的「整套 Creator 模式」。決定與理由寫在三張卡各自最後一則留言，這一節只摘要：
+
+- **理由是產品定位**（[#949](https://github.com/DemianLi/nexus-agent/issues/949)，demian 原話：這是聊天機器人，幫忙查資料、接入企業內部系統，不是對個人電腦或個人工作的程式與寫作需求）。dsh 出廠四套組合 standard、ptc、minimal、cordis（Creator）：minimal 靠持續開著的 shell，跟著決策 3 不出；ptc 的執行環境同樣走 `ctx.sandbox`（被決策 3 延後），而且程式能呼叫的工具要另外保證每個子呼叫都走完核准、圍堵與日誌；Creator 是 plugin 開發者的工作流，在多人共用的內網主機上讓模型改 plugin 組合風險不小。三套都不出，只剩 standard，就不需要「每個會話選組合」。
+- **不受影響**：每會話換模型（L-26、[#723](https://github.com/DemianLi/nexus-agent/issues/723)）是獨立的選擇，照常做。
+- **重開條件（三張一起重開，任一成立）**：
+  1. 決策 3 重開，例如要註冊 `execute`；
+  2. 產品定位改變，例如要支援個人工作流、讓使用者自己擴充 plugin；
+  3. 實測顯示多系統查詢的「來回模型」成本是瓶頸（只影響 PTC）。
+- **這份盤點受影響的列**：T-28 由待拍板改判為判過不做（所以上面的統計表與「待拍板」清單少一條，T 層完成度 67.5% → 71.1%、整體 67.8% → 68.6%、計分列數 87 → 86）；T-29 維持判過不做（不再有「因 #714 重開」這個附註）；E-08 **判定維持「部分」**——選配的 `@nexus/plugin-quickjs` 純計算那半是做出來的事實，不能因為另一半不做就把整列改成判過不做——缺的 PTC 那半記為判過不做。其餘各列維持 2026-09-26 的判定，基準之後的變動不重算。
+
 ## 清單
 
 **缺口 — 11**
@@ -145,7 +159,7 @@
 - L-25　每步平行工具呼叫上限（盤點後開 #711）
 - O-04　模型失敗分類碼進日誌（含清單缺口 5；併入：每次重試與其失敗原因進日誌）（#434；盤點後開 #712 管重試進日誌那一半，帶碼那一半在 #434）
 - V-06　持續回歸：真模型、定期（併 09-19 清單缺口 7）（#436；盤點後在 #436 留言補充；2026-09-26 拍板暫緩，重開條件寫在卡上）
-- G-05　具名權限預設（沙箱＋核准捆成一組；合併清單缺口 8）（#437；盤點後在 #437 留言補充；2026-09-26 拍板照 dsh 做、排後面，要在 #739 拆出的管理組合工具上線之前做完）
+- G-05　具名權限預設（沙箱＋核准捆成一組；合併清單缺口 8）（#437；盤點後在 #437 留言補充；2026-09-26 拍板照 dsh 做、排後面，~~要在 #739 拆出的管理組合工具上線之前做完~~（2026-10-10 #739 判不做，沒有管理組合工具，這個先後條件作廢））
 
 **已拍板未落地 — 5**
 
@@ -155,9 +169,9 @@
 - C-12　@file 引用補全（file-reference-local，清單第 14 項）（decisions-2026-09-19 第 6 題、調研筆記第 9 列；基準之後開了 #651（harness 那半，已由 PR #676 合進 develop）、#653（web 那半，開著））
 - L-09　長期目標＋自動續行（goal-driver）（#180、#445、#638）
 
-**待拍板 — 5**
+**待拍板 — 4**
 
-- T-28　plugin 開發者工具（tool-cordis、cordis-inspect-providers、tool-plugin-manager）（盤點後開 #714；2026-09-26 拍板整套 Creator 模式，先由 #739 重判 T-29）
+- ~~T-28　plugin 開發者工具（tool-cordis、cordis-inspect-providers、tool-plugin-manager）（盤點後開 #714；2026-09-26 拍板整套 Creator 模式，先由 #739 重判 T-29）~~　→ **判過不做**（改判，不再算待拍板）：2026-10-10 demian 決定不做（出處：[#714](https://github.com/DemianLi/nexus-agent/issues/714)、[#718](https://github.com/DemianLi/nexus-agent/issues/718)、[#739](https://github.com/DemianLi/nexus-agent/issues/739) 各卡最後一則決定留言；產品定位依據 [#949](https://github.com/DemianLi/nexus-agent/issues/949)）；重開條件（三張一起重開，任一成立）：決策 3 重開（例如要註冊 `execute`）；產品定位改變（例如要支援個人工作流、讓使用者自己擴充 plugin）；實測顯示多系統查詢的「來回模型」成本是瓶頸（只影響 PTC）
 - C-07　圖片省略（image-offload）與圖片不送模型（#642）（#642；盤點後開 #715；2026-09-26 拍板照 dsh 做：收圖實測 #731 先做，實作 #732、#733，送圖等 #723）
 - O-17　組裝設定可查（--dump-config）（#46、#454；盤點後開 #716；2026-09-26 拍板兩種都照 dsh 做：#740、#741）
 - G-09　憑證儲存（不寫進行程環境）（盤點後開 #717，與 G-17 同一張；2026-09-26 拍板照 dsh 做，實作 #730）
@@ -165,7 +179,7 @@
 
 **部分 — 14**
 
-- E-08　程式碼執行（#615、#503；盤點後開 #718；2026-09-26 #718 併進 #739 一起判）
+- E-08　程式碼執行（#615、#503；盤點後開 #718；2026-09-26 #718 併進 #739 一起判）　→ **判定維持「部分」，缺的 PTC 那半（程式裡能呼叫工具）判過不做**：2026-10-10 demian 決定不做（出處：[#714](https://github.com/DemianLi/nexus-agent/issues/714)、[#718](https://github.com/DemianLi/nexus-agent/issues/718)、[#739](https://github.com/DemianLi/nexus-agent/issues/739) 各卡最後一則決定留言；產品定位依據 [#949](https://github.com/DemianLi/nexus-agent/issues/949)）；重開條件（三張一起重開，任一成立）：決策 3 重開（例如要註冊 `execute`）；產品定位改變（例如要支援個人工作流、讓使用者自己擴充 plugin）；實測顯示多系統查詢的「來回模型」成本是瓶頸（只影響 PTC）
 - T-20　會話標題（含 LLM 生成標題 session-title-llm）（基準之後由 PR #658 做完（#650 已關），走另一顆模型的選配在 #657）
 - C-05　大輸出外溢（spill）（#151、#170、#538；盤點後開 #719；2026-09-26 拍板後另開 #734、#735、#736）
 - C-16※　系統提示詞的身分與 persona（部署方可設的前後綴、{{model}}／{{cwd}}）（盤點後開 #720；2026-09-26 拍板三句用英文、開頭句不自稱寫程式）
@@ -197,7 +211,7 @@
 | E-05 | 先讀後改（沒讀過的檔不准改） | **完成** | 有 | 有-預設 | #514 |
 | E-06 | 子代理繼承沙箱（委派那一刻的模式） | **完成** | 有 | 有-預設 | #326、#327 |
 | E-07 | 行程隔離（bwrap／Seatbelt）＋shell／subprocess／terminal | **判過不做** | 判過不做：決策 3 延後到有容器方案 | 沒有 | 決策 3（development-plan.md §7）、#443 |
-| E-08 | 程式碼執行 | **部分** | 部分；偏離已登記 | 有-選配 | #615、#503；盤點後開 #718；2026-09-26 併進 #739；下方細節「偏離已登記」轉述的理由不成立，程式檔頭的更正見 #743 |
+| E-08 | 程式碼執行 | **部分** | 部分；偏離已登記 | 有-選配 | #615、#503；盤點後開 #718；2026-09-26 併進 #739；下方細節「偏離已登記」轉述的理由不成立，程式檔頭的更正見 #743；**2026-10-10 PTC 那半判過不做**（判定維持部分，因為選配的 quickjs 純計算那半是做出來的）：2026-10-10 demian 決定不做（出處：[#714](https://github.com/DemianLi/nexus-agent/issues/714)、[#718](https://github.com/DemianLi/nexus-agent/issues/718)、[#739](https://github.com/DemianLi/nexus-agent/issues/739) 各卡最後一則決定留言；產品定位依據 [#949](https://github.com/DemianLi/nexus-agent/issues/949)）；重開條件（三張一起重開，任一成立）：決策 3 重開（例如要註冊 `execute`）；產品定位改變（例如要支援個人工作流、讓使用者自己擴充 plugin）；實測顯示多系統查詢的「來回模型」成本是瓶頸（只影響 PTC） |
 | E-09 | 瀏覽器操作／電腦操作／SSH | **dsh 也沒有** | 框架要、dsh 也沒有（出廠意義上） | 沒有 | — |
 | E-10 | microVM／容器隔離 | **dsh 也沒有** | 框架要、dsh 也沒有 | 沒有 | 決策 3（development-plan.md §7） |
 | E-11 | MCP stdio 子行程（跑在 fence 外） | **判過不做**（改判） | 同形 | 有-選配（額外能力；acp-app 那條路跟著 ACP 判過不做） | #503、#430、#431 |
@@ -236,6 +250,7 @@
 - **E-08 程式碼執行**
   - dsh：出廠預設（base 掛 `ptc-runtime`（dsh-ptc-runtime-node：每次開一個新的 Node 行程，套用與 bash 相同的平台沙箱）；模型直接拿到 `run_code` 只在 web-app 的 ptc preset（`tool-presentation` `mode: ptc`）。base／standard／cordis 的 workflow-ptc 也用它，那部分歸 L 層）　`dsh:packages/bundle/base/cordis.patch.yml:389`、`dsh:packages/ptc-runtime/ptc-runtime-node/README.md:12`、`dsh:packages/bundle/web-app/presets/ptc.patch.yml:144`
   - 我們：`@nexus/plugin-quickjs` 的 `run_javascript`：行程內的 WASM 直譯器，有 timeout、memory、stack 上限。**不在零設定產品路徑上**：出貨清單只有它的 invariant 配套；#503 拿掉 `--plugins` 之後，要在 `cordis.patch.yml` 用 `insert` 插一列才會掛。**偏離已登記**：dsh 沒有「JS 直譯器」這個接縫，我們用 WASM 直譯器換掉跑任意指令。09-19 引的 `development-plan.md:271` 已漂到 :284。#627（09-25）讓失敗回報成工具錯誤（會話日誌裡是 `isError: true`）。　`packages/nexus-plugin-quickjs/src/index.ts:62`、`packages/nexus-plugin-quickjs/src/index.ts:81`、`apps/harness/cordis.yml:400`
+  - 2026-10-10 判決（PTC 那半判過不做）：2026-10-10 demian 決定不做（出處：[#714](https://github.com/DemianLi/nexus-agent/issues/714)、[#718](https://github.com/DemianLi/nexus-agent/issues/718)、[#739](https://github.com/DemianLi/nexus-agent/issues/739) 各卡最後一則決定留言；產品定位依據 [#949](https://github.com/DemianLi/nexus-agent/issues/949)）；重開條件（三張一起重開，任一成立）：決策 3 重開（例如要註冊 `execute`）；產品定位改變（例如要支援個人工作流、讓使用者自己擴充 plugin）；實測顯示多系統查詢的「來回模型」成本是瓶頸（只影響 PTC）。判定仍是「部分」：選配的 `run_javascript`（純計算，無外部函式可叫）是做出來的事實，不因另一半不做而抹掉；dsh 出廠 `ptc-runtime` 那個「程式裡能呼叫工具」的模式（web-app 的 ptc 組合）我們不做，所以上面「偏離已登記」那條不會再有「要不要補 PTC」的後續。
   - 否定搜尋：
     - nexus: git grep -n "'@nexus/plugin-quickjs'\|@nexus/plugin-quickjs'" -- apps/harness/cordis.yml apps/harness/src ':!**/*.test.ts'  → 0 筆（出貨清單與組裝點都沒掛功能本身，只有 /invariant 配套）
 - **E-09 瀏覽器操作／電腦操作／SSH**
@@ -309,8 +324,8 @@
 | T-25 | 讀檔續讀提示與一頁上限（#594、#602）（新） | **完成** | （09-19 未列；2026-09-23 量測發現，#594） | 有-預設 | #594、#602、PR #603、PR #628 |
 | T-26 | 工具結果結構化 meta（#617）（新） | **完成** | （09-19 未列） | 有-預設 | #617、PR #619、#630 |
 | T-27 | 待辦工具 todo_write（新） | **完成** | （09-19 T 表未列；調研筆記第 45 列「有」） | 有-預設 | #132、PR #139 |
-| T-28 | plugin 開發者工具（tool-cordis、cordis-inspect-providers、tool-plugin-manager）（新） | **待拍板** | （09-19 只在工作筆記記下 cordis preset 的 tool-cordis，未判） | 沒有 | 盤點後開 #714；2026-09-26 拍板整套 Creator 模式，被 #739 擋著 |
-| T-29 | 每個會話選 agent preset（agent-preset-registry、四個 preset）（新） | **判過不做**（改判） | （09-19 只在工作筆記記下 preset 機制，未判） | 沒有：出貨清單一份套用到每個會話；resume-guards.ts 明寫我們沒有 preset。登記出處：調研筆記 §三第 29 列、§三小計（企業級與分散式 13 個，定位差異）；#46 Out of scope 排除 profile 層與 web UI 改設定 | #46；2026-09-26 因 #714 拍板整套 Creator 模式重開，決策卡 #739（#718 併入） |
+| T-28 | plugin 開發者工具（tool-cordis、cordis-inspect-providers、tool-plugin-manager）（新） | **判過不做**（改判） | （09-19 只在工作筆記記下 cordis preset 的 tool-cordis，未判） | 沒有 | 盤點後開 #714；2026-09-26 拍板整套 Creator 模式後被 #739 擋著；2026-10-10 demian 決定不做（出處：[#714](https://github.com/DemianLi/nexus-agent/issues/714)、[#718](https://github.com/DemianLi/nexus-agent/issues/718)、[#739](https://github.com/DemianLi/nexus-agent/issues/739) 各卡最後一則決定留言；產品定位依據 [#949](https://github.com/DemianLi/nexus-agent/issues/949)）；重開條件（三張一起重開，任一成立）：決策 3 重開（例如要註冊 `execute`）；產品定位改變（例如要支援個人工作流、讓使用者自己擴充 plugin）；實測顯示多系統查詢的「來回模型」成本是瓶頸（只影響 PTC） |
+| T-29 | 每個會話選 agent preset（agent-preset-registry、四個 preset）（新） | **判過不做**（改判） | （09-19 只在工作筆記記下 preset 機制，未判） | 沒有：出貨清單一份套用到每個會話；resume-guards.ts 明寫我們沒有 preset。登記出處：調研筆記 §三第 29 列、§三小計（企業級與分散式 13 個，定位差異）；#46 Out of scope 排除 profile 層與 web UI 改設定 | #46；2026-09-26 因 #714 拍板整套 Creator 模式重開，決策卡 #739（#718 併入）；2026-10-10 重判仍不做：2026-10-10 demian 決定不做（出處：[#714](https://github.com/DemianLi/nexus-agent/issues/714)、[#718](https://github.com/DemianLi/nexus-agent/issues/718)、[#739](https://github.com/DemianLi/nexus-agent/issues/739) 各卡最後一則決定留言；產品定位依據 [#949](https://github.com/DemianLi/nexus-agent/issues/949)）；重開條件（三張一起重開，任一成立）：決策 3 重開（例如要註冊 `execute`）；產品定位改變（例如要支援個人工作流、讓使用者自己擴充 plugin）；實測顯示多系統查詢的「來回模型」成本是瓶頸（只影響 PTC） |
 | T-30 | Office 轉 PDF 預覽（office-to-pdf／document）（新） | **判過不做** | （09-19 表未列；決議第 11 題） | 沒有 | 決議 09-19 第 11 題、#640 |
 
 <details><summary>逐列依據</summary>
@@ -438,12 +453,14 @@
   - dsh：只在 cordis preset：`tool-cordis`（唯讀檢視 Host／Client API），web-app 477b4f4 新增 host 側 `cordis-inspect-providers` 供它讀；`tool-plugin-manager` 在 base／standard／ptc 都是 disabled，cordis preset 在 ddefc45 是開著、477b4f4 改成 `!ctx.get('profileContext')` 條件式。web 預設 preset 是 standard，所以預設會話沒有這幾顆　`dsh:packages/bundle/web-app/presets/cordis.patch.yml:142`、`dsh:packages/bundle/web-app/cordis.patch.yml:151`、`dsh:packages/bundle/web-app/presets/cordis.patch.yml:154`
   - 我們：模型沒有檢視或改組合的工具；人這側只有 `--dump-config` 印出疊完的清單　`apps/harness/src/cli.ts:280`
   - 驗證改判（待拍板 → 待拍板）：判定維持待拍板，但列上 dsh 那側有兩處錯漏。其一，`base:plugin-manager(disabled)` 不對：base :20-22 的 plugin-manager 服務寫的是 `disabled: !!js "!ctx.get('profileContext')"`；而 apps/cli/src/profile-boot.ts:298 開 profile 時一定提供 profileContext，所以這個服務出廠是開的。真正 disabled 的是 :16-18 的 tool-plugin-manager（`/tools` 那列）。
+  - 2026-10-10 改判（待拍板 → 判過不做）：2026-10-10 demian 決定不做（出處：[#714](https://github.com/DemianLi/nexus-agent/issues/714)、[#718](https://github.com/DemianLi/nexus-agent/issues/718)、[#739](https://github.com/DemianLi/nexus-agent/issues/739) 各卡最後一則決定留言；產品定位依據 [#949](https://github.com/DemianLi/nexus-agent/issues/949)）；重開條件（三張一起重開，任一成立）：決策 3 重開（例如要註冊 `execute`）；產品定位改變（例如要支援個人工作流、讓使用者自己擴充 plugin）；實測顯示多系統查詢的「來回模型」成本是瓶頸（只影響 PTC）。範圍是 `tool-cordis`、`cordis-inspect-providers`、`tool-plugin-manager` 與教模型寫 plugin 的技能整套都不做，也不做 A–C 的折衷（唯讀檢視、管理工具）。#437 先行這個前提已完成，但不是不做的理由，不做是因為產品定位。
   - 否定搜尋：
     - nexus: git grep -n -I -i -- '<p>' -- apps/harness/src packages apps/web/src ':!**/node_modules/**'（排除 *.test.ts／*.test.tsx），<p> 逐一為 plugin_manager、install_plugin、cordis_inspect、inspect_api、plugin-manager → 全部 0 筆
 - **T-29 每個會話選 agent preset（agent-preset-registry、四個 preset）**
   - dsh：web-app 出廠：`agent-preset-registry`（477b4f4 取代 `agent-presets`，`default: standard`），四個 `preset-*` 由 `presets/*.patch.yml` 插入；web-app 把 agent 平面整批停用、每個會話掛一個 preset；web 編輯器存的修改會蓋掉 preset 的 plugins　`dsh:packages/bundle/web-app/cordis.patch.yml:560`、`dsh:packages/bundle/web-app/cordis.patch.yml:432`、`dsh:packages/bundle/web-app/presets/standard.patch.yml:2`
   - 我們：出貨清單只有一份，套用到每一個會話；`resume-guards.ts` 明寫我們沒有 preset。部署設定層地圖 #46 還開著，但它管的是組合設定化，沒有涵蓋逐會話選組合　`apps/harness/src/resume-guards.ts:28`、`apps/harness/cordis.yml:3`
   - 驗證改判（待拍板 → 判過不做）：列上說「09-19 只在工作筆記記下 preset 機制，未判」，但其實有登記。調研筆記 §三第 29 列的 `preset`（「按會話從 preset 檔組裝 agent」）描述的正是這個能力。§三小計第 201 行把 preset 列進企業級與分散式，結論速查第 35 行寫「企業級與分散式 13 個套件：定位差異，不是缺口」。這跟同層 T-14（ACP／SDK，出處是調研筆記 §三小計）、G-09（credentials，同一份小計，判過不做、附前提重核）是同一種出處，所以類別應該是「判過不做」。另外 #46 的 Out of scope（gh 核過）排除了「profile 層」與「從 web UI 改設定」，也支持目前不做。
+  - 2026-10-10 重判（判過不做，維持）：2026-09-26 因 #714 重開的這條，由 #739 判定**仍不做**：2026-10-10 demian 決定不做（出處：[#714](https://github.com/DemianLi/nexus-agent/issues/714)、[#718](https://github.com/DemianLi/nexus-agent/issues/718)、[#739](https://github.com/DemianLi/nexus-agent/issues/739) 各卡最後一則決定留言；產品定位依據 [#949](https://github.com/DemianLi/nexus-agent/issues/949)）；重開條件（三張一起重開，任一成立）：決策 3 重開（例如要註冊 `execute`）；產品定位改變（例如要支援個人工作流、讓使用者自己擴充 plugin）；實測顯示多系統查詢的「來回模型」成本是瓶頸（只影響 PTC）。三套非 standard 的組合都不出，只剩一套就不需要逐會話選機制；每會話換模型（L-26、#723）不受影響。
   - 否定搜尋：
     - nexus: git grep -n -I -i preset -- apps/harness/src packages apps/web/src ':!**/node_modules/**'（排除測試）→ 18 筆，全是引用 dsh 的註解（sandbox 權限 preset、present 檔頭、fold 對照），沒有 preset 機制
 - **T-30 Office 轉 PDF 預覽（office-to-pdf／document）**
@@ -556,7 +573,7 @@
     - git grep -n -i -E "persona|personaPrefix|personaSuffix|includeHarnessIdentity|includeRuntimeContext" 70357bb -- apps packages → 0 筆
     - git grep -n -i -E "systemPrompt|system-prompt|SYSTEM_PROMPT|persona" 70357bb -- apps/harness/cordis.yml → 0 筆
     - git grep -n -E "\{\{(model|cwd)\}\}|working directory is|工作目錄是" 70357bb -- apps packages → 0 筆
-  - dsh 另有一個 `persona` 條目，只能掛在 preset 裡，用來替逐會話的 preset 換 persona。覆蓋檢查把它歸到 T-29（逐會話選 preset，判過不做）；這一列只管部署層的身分與 persona。
+  - dsh 另有一個 `persona` 條目，只能掛在 preset 裡，用來替逐會話的 preset 換 persona。覆蓋檢查把它歸到 T-29（逐會話選 preset，判過不做；2026-10-10 #739 確認不做，出處與重開條件見〈2026-10-10 判決〉）；這一列只管部署層的身分與 persona。
   - ※ 覆蓋檢查新增：證據過了主線核對，但沒有經過對抗式驗證。
 
 </details>
@@ -923,7 +940,7 @@
 | G-02 | 外部內容標成「資料不是指令」 | **判過不做** | 跟著 T 層 web 那列、C 層跨會話引用那列一起判 | 不適用 | decisions-2026-09-19 第 1、5 題 |
 | G-03 | 內容過濾、通用 prompt injection 防護 | **dsh 也沒有** | 框架要、dsh 也沒有 | 沒有 | — |
 | G-04 | 核准閘門 | **完成** | 有 | 有-預設 | #111、#324、#517 |
-| G-05 | 具名權限預設（沙箱＋核准捆成一組；合併清單缺口 8） | **缺口** | 已知缺口（sandbox-mode.ts:21-27 登記「還沒做」，沒有卡） | 沒有 | #437；盤點後在 #437 留言補充；2026-09-26 拍板照 dsh 做、排後面，要在 #739 拆出的管理組合工具上線之前做完 |
+| G-05 | 具名權限預設（沙箱＋核准捆成一組；合併清單缺口 8） | **缺口** | 已知缺口（sandbox-mode.ts:21-27 登記「還沒做」，沒有卡） | 沒有 | #437；盤點後在 #437 留言補充；2026-09-26 拍板照 dsh 做、排後面，~~要在 #739 拆出的管理組合工具上線之前做完~~（2026-10-10 #739 判不做，沒有管理組合工具，這個先後條件作廢） |
 | G-07 | DNS rebinding／跨站圍欄 | **完成** | 有 | 有-僅 serve | #387 |
 | G-08 | 瀏覽器會話認證（行程 token 換簽章 cookie，每個請求都要；合併清單「#387 重開條件」前提重核） | **完成** | 判過：#387 登記偏離（request-trust.ts:29）；重開條件看內網部署是否共用主機 | 有-僅 serve | #387、#424、#529 |
 | G-09 | 憑證儲存（不寫進行程環境） | **待拍板**（改判） | 判過：定位差異（筆記 §三小計的 credentials） | 沒有（09-19 那次「判過：定位差異」沒有決議出處，而且與同一份筆記移出 web 的判準相衝突） | 盤點後開 #717，與 G-17 同一張；2026-09-26 拍板照 dsh 做，實作 #730 |
@@ -1086,7 +1103,7 @@
   - 七位層 agent 認領了 149 個。
   - 其餘 40 個由覆蓋檢查逐一歸類：18 個已被某列涵蓋、11 個屬 web UI、6 個是基礎建設、3 個屬供應商或帳號、2 個需要新列。
   - 那 2 條新列就是 C-16 與 L-26，標 ※。它們只經過單一 agent 判定，加上主線親核（`cli.ts:603` 的寫死提示詞與四條否定搜尋），**沒有經過對抗式驗證**。
-  - dsh 的 `persona` 條目只能掛在 preset 裡，做的是逐會話換 persona，所以歸 T-29（判過不做）。C-16 只管部署層的身分與 persona，兩者不衝突。
+  - dsh 的 `persona` 條目只能掛在 preset 裡，做的是逐會話換 persona，所以歸 T-29（判過不做；2026-10-10 #739 確認不做，出處與重開條件見〈2026-10-10 判決〉）。C-16 只管部署層的身分與 persona，兩者不衝突。
 - **主線最後定奪了三件事**：
   - 只把 E-12、T-09 併進 G-10。驗證者另外判成重複的 6 列，其實只是部分重疊，所以保留並收窄範圍：T-19／O-16、V-04／O-10、L-19／T-14。
   - G-06 依歸屬表搬到 E 層，ID 不變。驗證者原本判它是 E-02 的重複，但它講的是 danger-full-access 的強度，E-02 講的是模式本身，兩者不同。
