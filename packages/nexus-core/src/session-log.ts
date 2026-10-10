@@ -295,7 +295,15 @@ export interface SessionReferenceSourceEntry {
 /** `user/message` 是誰塞的，見 {@link SessionEventMap} 的 `user/message`。 */
 export type UserMessageSource =
   | { readonly kind: 'plugin'; readonly plugin: string }
-  | { readonly kind: 'user' }
+  | {
+      readonly kind: 'user';
+      /**
+       * 客戶端給這句話的請求編號（`run.start` 的 `request_id`，[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)），
+       * 就是 dsh 的 `rpcId`。只有輪中插話被領走時記的這一顆帶得到它（一輪開頭那句在 `turn/start`）。客戶端沒帶就整個不放
+       * 這個 key。**格式 48 起才有**。
+       */
+      readonly requestId?: string;
+    }
   | {
       readonly kind: 'session-reference';
       /** 從別的會話日誌裡抬出來的素材（dsh 的 `recall` 形式）。 */
@@ -362,6 +370,17 @@ export interface SessionEventMap {
          * **格式 42 起才有**，而且不標 `ignorable`：一台 41 的 runtime 讀到會把它略過，排著的項目被折回來重跑時點名就悄悄不見了。
          */
         readonly mention?: SubagentMentionRef;
+        /**
+         * 客戶端給這句話的請求編號（`run.start` 的 `request_id`，[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)）。
+         * 照 dsh 落在 `user/message` 的 `source.rpcId`（`packages/api/session-controller/src/commands.ts:331-335`，`d7432673886`）；
+         * 我們一輪開頭那句人話記在這裡（見本事件的偏離），所以放在這一顆。客戶端沒帶就整個不放這個 key。
+         *
+         * **和 `runId` 一起寫、一起缺**：重送認出這個編號時要回原本那一件的 `run_id`，而領走之後佇列項目就不在收件匣上了。
+         * **格式 48 起才有**，不標 `ignorable`：一台 47 的 runtime 會略過它，重啟之後同一個編號再送就排第二次，沒有任何東西報錯。
+         */
+        readonly requestId?: string;
+        /** 這句話在送出佇列裡的 id，也就是 `run.start` 回給客戶端的 `run_id`；只在帶 `requestId` 時才寫。 */
+        readonly runId?: string;
       }
     | { readonly kind: 'resume' }
     | {

@@ -556,8 +556,20 @@ import type { SessionEvent } from './session-log.js';
  *
  * **升版，不標 `ignorable`**：一台 46 的 runtime 讀到這一筆會拒絕重建。**讀舊檔**：46 以前沒有這一筆，照舊讀得回來，不補寫。
  * 沒有被縮短的會話，日誌與以前位元組相同。
+ *
+ * ## 48：訊息帶客戶端的請求編號（[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)）
+ *
+ * `run.start` 可以帶一格選填的 `request_id`（照 dsh `session.prompt` 的 `requestId`，記在訊息來源的 `rpcId`）。重送同一個編號時
+ * 伺服器認得「這一句已經收過了」，不再排第二次，回原本那一件的 `run_id`。編號記在三個地方，涵蓋一句話的三個階段：
+ * 排著時在 `inbox/spliced` 裡那一件（`QueuedInput.source.requestId`）；開了一輪之後在 `turn/start`（`kind: 'message'`，
+ * `requestId` 加 `runId`）；輪中插話被領走時在 `user/message` 的 `source.requestId`。
+ *
+ * **升版，不標 `ignorable`**——同 38、42：這些欄位**左右續接之後的行為**。一台 47 的 runtime 讀到新檔會把它們略過，重啟之後客戶端
+ * 重送同一個編號，那一句就排第二次，模型看到兩次同樣的話，沒有任何東西報錯——正是這個欄位要擋的事。
+ *
+ * **讀舊檔**：47 以前沒有這幾格，等於沒帶編號，不補寫歷史。客戶端沒帶 `request_id` 的送出，日誌與以前位元組相同。
  */
-export const SESSION_LOG_FORMAT_VERSION = 47;
+export const SESSION_LOG_FORMAT_VERSION = 48;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

@@ -102,11 +102,12 @@ export type {
   InboxSplice,
   InboxState,
   InboxTarget,
+  PromptRequestMatch,
   QueuedInput,
   QueuedInputSource,
   SubagentSettleReason,
 } from './inbox.js';
-export { EMPTY_INBOX, foldInbox, spliceInbox } from './inbox.js';
+export { EMPTY_INBOX, findPromptRequest, foldInbox, spliceInbox } from './inbox.js';
 
 export type {
   SandboxDenial,

@@ -94,6 +94,7 @@ import {
   isRunCancelMethod,
   isSubagentMethod,
   QUEUE_ITEM_NOT_FOUND,
+  REQUEST_ID_MAX_LENGTH,
   RUN_START_MODES,
   STEER_UNAVAILABLE,
   SUBAGENT_AT_CAPACITY,
@@ -784,6 +785,14 @@ interface ThreadState {
    * 所以在這裡明著擋。
    */
   slashInFlight: boolean;
+  /**
+   * 正在收的 `run.start`，依客戶端的請求編號（`request_id`，[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)）：
+   * 值是那一件進了佇列之後的 `run_id`，沒進（被擋下）就是 `undefined`。
+   *
+   * **為什麼要有**：收一句話中間有 `await`（附件的收據與圖），編號要等 `pump.submit` 之後才查得到。重送若在這一段裡到達，
+   * 查佇列與日誌都還查不到，就會再排一次——這張表讓第二個請求等第一個落定再決定。
+   */
+  readonly promptRequestsInFlight: Map<string, Promise<string | undefined>>;
   dispose(): Promise<void>;
 }
 
@@ -1139,6 +1148,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           fileSearch,
           background: attachment.background,
           slashInFlight: false,
+          promptRequestsInFlight: new Map(),
           dispose: async () => {
             detachFeed?.();
             // **標題最先拆**：它在任何一輪之外寫日誌，拆掉會中止還在跑的那一次，之後回來的寫不進去
@@ -1641,66 +1651,110 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       if (typeof params?.assistant_id !== 'string') {
         return json(errorResponse(command.id, 'invalid_argument', 'run.start 缺 assistant_id'));
       }
-      if (thread.slashInFlight) {
-        // **擋的方向是雙向的。** 一次 `slash.run` 還在跑的時候起一輪，`/plan` 那格
-        // pending intent 就會跟這一輪的 `beforeAgent` 賽跑——而那正是
-        // `@nexus/plugin-plan-mode` 的偏離註記押著的那個前提（「命令一定跑在兩輪之間」）。
+      // 客戶端的請求編號（#1335）：選填，照 dsh `session.prompt` 的 `requestId`。**排在所有會「用掉東西」的檢查之前**：重送
+      // 帶的是同一批附件收據，收據第一次就用掉了，晚一步查的話重送會先撞上「收據已用過」，而不是被認出來。
+      const rawRequestId = (params as { request_id?: unknown }).request_id;
+      if (
+        rawRequestId !== undefined &&
+        (typeof rawRequestId !== 'string' ||
+          rawRequestId === '' ||
+          rawRequestId.length > REQUEST_ID_MAX_LENGTH)
+      ) {
         return json(
           errorResponse(
             command.id,
             'invalid_argument',
-            '這條 thread 正在跑一個斜線命令：等它回來再說下一句話',
+            `run.start 的 request_id 要是非空字串，至多 ${REQUEST_ID_MAX_LENGTH} 個字元`,
           ),
         );
       }
-      // **停在核准點時照收**（#637 的 Q4，同 dsh）：以前這裡回錯，因為基座會照跑新的一輪、把中斷靜靜丟掉。
-      // 現在收下的這句進送出佇列，由 pump 停住，等中斷答完、那一輪收掉才跑（#629，`ThreadPump.#nextIndex`）。
-      // 附件（#732）：先驗形狀（便宜、不碰任何東西），收據與圖的收下留到最後——前面任何一道擋掉這句話時，收據不該被用掉。
-      const parsedAttachments = attachmentsParam(command.id, 'run.start', params);
-      if (parsedAttachments instanceof Response) return parsedAttachments;
-      const promptAttachments = parsedAttachments;
-      // 點名子代理（#328 第 2 項）：形狀與名字在這裡驗，**排在收下附件之前**——被擋下的話不該用掉收據。名字不在 `subagent.list` 的
-      // 清單上就整句拒絕（那句話不進佇列），不悄悄收下文字、丟掉點名。
-      const mention = mentionOf(
-        command.id,
-        thread.subagentKinds,
-        (params as { mention?: unknown }).mention,
-      );
-      if (mention instanceof Response) return mention;
-      const text = firstHumanText(params.input);
-      if (text === undefined) {
-        return json(
-          errorResponse(command.id, 'invalid_argument', 'run.start 的 input 沒有可用的訊息'),
+      const requestId = rawRequestId as string | undefined;
+      if (requestId !== undefined) {
+        // 收過就回原本那一件的 `run_id`，不再排。**只比編號、不比內容**（同 dsh）。回應形狀的偏離登記在 `findPromptRequest`
+        // （`@nexus/core` 的 `inbox.ts`）：dsh 回 `{ accepted: true }`，我們的 `run_id` 兼作佇列項目 id，畫面靠它對人。
+        for (;;) {
+          const seen = pump.findPromptRequest(requestId);
+          if (seen !== undefined) return json(successResponse(command.id, { run_id: seen }));
+          const pending = thread.promptRequestsInFlight.get(requestId);
+          if (pending === undefined) break;
+          // 同一個編號的第一個請求還在收（等附件）：等它落定。它進了佇列就是上面那個分支，被擋下（`undefined`）就輪到這一個。
+          await pending;
+        }
+      }
+      let settleRequest: ((runId: string | undefined) => void) | undefined;
+      if (requestId !== undefined) {
+        const inFlight = new Promise<string | undefined>((resolve) => (settleRequest = resolve));
+        thread.promptRequestsInFlight.set(requestId, inFlight);
+      }
+      try {
+        if (thread.slashInFlight) {
+          // **擋的方向是雙向的。** 一次 `slash.run` 還在跑的時候起一輪，`/plan` 那格
+          // pending intent 就會跟這一輪的 `beforeAgent` 賽跑——而那正是
+          // `@nexus/plugin-plan-mode` 的偏離註記押著的那個前提（「命令一定跑在兩輪之間」）。
+          return json(
+            errorResponse(
+              command.id,
+              'invalid_argument',
+              '這條 thread 正在跑一個斜線命令：等它回來再說下一句話',
+            ),
+          );
+        }
+        // **停在核准點時照收**（#637 的 Q4，同 dsh）：以前這裡回錯，因為基座會照跑新的一輪、把中斷靜靜丟掉。
+        // 現在收下的這句進送出佇列，由 pump 停住，等中斷答完、那一輪收掉才跑（#629，`ThreadPump.#nextIndex`）。
+        // 附件（#732）：先驗形狀（便宜、不碰任何東西），收據與圖的收下留到最後——前面任何一道擋掉這句話時，收據不該被用掉。
+        const parsedAttachments = attachmentsParam(command.id, 'run.start', params);
+        if (parsedAttachments instanceof Response) return parsedAttachments;
+        const promptAttachments = parsedAttachments;
+        // 點名子代理（#328 第 2 項）：形狀與名字在這裡驗，**排在收下附件之前**——被擋下的話不該用掉收據。名字不在 `subagent.list` 的
+        // 清單上就整句拒絕（那句話不進佇列），不悄悄收下文字、丟掉點名。
+        const mention = mentionOf(
+          command.id,
+          thread.subagentKinds,
+          (params as { mention?: unknown }).mention,
         );
+        if (mention instanceof Response) return mention;
+        const text = firstHumanText(params.input);
+        if (text === undefined) {
+          return json(
+            errorResponse(command.id, 'invalid_argument', 'run.start 的 input 沒有可用的訊息'),
+          );
+        }
+        // `@` 的會話要能用才收（#713）：網址壞、引用自己、超過三條、這條 thread 不收引用，都在這裡回錯，那句話不進佇列。
+        const referenceError = referenceRejection(pump, command.id, text);
+        if (referenceError !== undefined) return json(referenceError);
+        // 送出模式（#710）：我們加在協定 `RunStartParams` 上的一格，見 `@nexus/wire` 的 `RunStartCommand`。省略就是排隊。
+        const mode = (params as { mode?: unknown }).mode;
+        if (mode !== undefined && !(RUN_START_MODES as readonly unknown[]).includes(mode)) {
+          return json(
+            errorResponse(command.id, 'invalid_argument', 'run.start 的 mode 要是 queue 或 steer'),
+          );
+        }
+        // **`run_id` 就是這一件在送出佇列裡的 id**：畫面據它對上自己送出的那一句（推送裡的 `claimed.id`，插話是
+        // `claimedNextStep` 裡的那一件）。插話在這一輪不收時退成排隊，由 pump 決定，這裡不分。
+        const runId = crypto.randomUUID();
+        let admitted: readonly AttachmentRef[] = [];
+        if (promptAttachments.length > 0) {
+          const outcome = await admitAttachments(thread, threadId, command.id, promptAttachments);
+          if (outcome instanceof Response) return outcome;
+          admitted = outcome;
+        }
+        start(pump, {
+          kind: 'message',
+          text,
+          id: runId,
+          ...(requestId === undefined ? {} : { requestId }),
+          ...(mode === 'steer' ? { steer: true as const } : {}),
+          ...(admitted.length > 0 && { attachments: admitted }),
+          ...(mention !== undefined && { mention }),
+        });
+        return json(successResponse(command.id, { run_id: runId }));
+      } finally {
+        // 進了佇列就查得到它的 `run_id`；被任何一道擋下就是 `undefined`，等著的重送自己重新判。
+        if (requestId !== undefined) {
+          thread.promptRequestsInFlight.delete(requestId);
+          settleRequest?.(pump.findPromptRequest(requestId));
+        }
       }
-      // `@` 的會話要能用才收（#713）：網址壞、引用自己、超過三條、這條 thread 不收引用，都在這裡回錯，那句話不進佇列。
-      const referenceError = referenceRejection(pump, command.id, text);
-      if (referenceError !== undefined) return json(referenceError);
-      // 送出模式（#710）：我們加在協定 `RunStartParams` 上的一格，見 `@nexus/wire` 的 `RunStartCommand`。省略就是排隊。
-      const mode = (params as { mode?: unknown }).mode;
-      if (mode !== undefined && !(RUN_START_MODES as readonly unknown[]).includes(mode)) {
-        return json(
-          errorResponse(command.id, 'invalid_argument', 'run.start 的 mode 要是 queue 或 steer'),
-        );
-      }
-      // **`run_id` 就是這一件在送出佇列裡的 id**：畫面據它對上自己送出的那一句（推送裡的 `claimed.id`，插話是
-      // `claimedNextStep` 裡的那一件）。插話在這一輪不收時退成排隊，由 pump 決定，這裡不分。
-      const runId = crypto.randomUUID();
-      let admitted: readonly AttachmentRef[] = [];
-      if (promptAttachments.length > 0) {
-        const outcome = await admitAttachments(thread, threadId, command.id, promptAttachments);
-        if (outcome instanceof Response) return outcome;
-        admitted = outcome;
-      }
-      start(pump, {
-        kind: 'message',
-        text,
-        id: runId,
-        ...(mode === 'steer' ? { steer: true as const } : {}),
-        ...(admitted.length > 0 && { attachments: admitted }),
-        ...(mention !== undefined && { mention }),
-      });
-      return json(successResponse(command.id, { run_id: runId }));
     }
 
     const params = command.params;
