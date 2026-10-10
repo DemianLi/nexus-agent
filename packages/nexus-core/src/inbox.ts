@@ -51,7 +51,16 @@ export type InboxTarget = 'next-turn' | 'next-step';
  * `revision`、`round`，因為 `turn/start` 的 goal 那幾格全部必填。
  */
 export type QueuedInputSource =
-  | { readonly kind: 'user' }
+  | {
+      readonly kind: 'user';
+      /**
+       * 客戶端給這一次送出的請求編號（`run.start` 的 `request_id`，[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)）。
+       * 照 dsh：`MessageSource` 的 `{ kind: 'user', rpcId }`（`packages/api/session-controller/src/commands.ts:331-335`，
+       * `d7432673886`）。重送同一個編號時，伺服器靠它認出「這一句已經收過了」（{@link findPromptRequest}）。
+       * 客戶端沒帶就整個不放這個 key。**格式 48 起才有**。
+       */
+      readonly requestId?: string;
+    }
   | {
       /** 背景子代理結算的通知（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）：執行期的記帳，不是人說的話。 */
       readonly kind: 'subagent-settled';
@@ -179,4 +188,83 @@ export function foldInbox(
     }
   }
   return inbox;
+}
+
+/** 一個請求編號對應到哪一句、那一句現在在哪個階段（{@link findPromptRequest}）。 */
+export interface PromptRequestMatch {
+  /** 原本那一件的 `run_id`：就是佇列項目的 id。 */
+  readonly runId: string;
+  /**
+   * 那一句現在在哪：
+   *
+   * - `queued`：還排在收件匣的某一條清單上。
+   * - `started`：已經領走、開了一輪（`turn/start` 帶著這個編號），或是插話被領走、進了模型（`user/message` 帶著）。
+   */
+  readonly stage: 'queued' | 'started';
+}
+
+/**
+ * 這個請求編號有沒有收過。照 dsh 的 `hasPromptRequest`（`packages/api/session-controller/src/commands.ts:602-614`，
+ * `d7432673886`）：先查收件匣兩條清單，再查日誌上已落地的人話事件（`user/message`，我們還要加上一輪開頭那句所在的
+ * `turn/start`，見下）。**只比編號，不比內容**，同 dsh：同編號不同字的第二次也回原本那一件。
+ *
+ * 三個階段都認得，所以重送發生在「還排著」「已領走」「已落日誌」任何一個時刻都不會再排一次：
+ *
+ * 1. 排著：`inbox` 上某一件的 `source` 帶這個編號。
+ * 2. 開了一輪：`turn/start { kind: 'message' }` 帶 `requestId` 與 `runId`。
+ * 3. 插話被領走：`user/message` 的 `source` 帶 `requestId`，`run_id` 就是它那則訊息的 id（`message.data.id`，佇列項目的 id，pump 領走時原樣填）。
+ *
+ * **偏離（登記，同 `run.start` 的回應形狀）**：dsh 找到了只回 `{ accepted: true }`；我們的 `run_id` 就是佇列項目的 id，畫面
+ * 靠它對上自己送出的那一句（`wire-handler.ts` 的註解），所以這裡把原本那一件的 id 一起交出去。
+ *
+ * **被取消的不算**：排著的一句被刪掉之後，它不在收件匣上、也沒有落過任何一顆帶編號的事件，同一個編號再送就是新的一句。
+ * dsh 同。
+ *
+ * @param inbox - 目前的收件匣。
+ * @param events - 這份日誌的事件。**從尾端往前找**：重送多半緊接在原本那一次之後。
+ * @param requestId - 客戶端給的編號。
+ * @returns 收過就是原本那一件的 `run_id` 與階段，沒有就是 `undefined`。
+ */
+export function findPromptRequest(
+  inbox: InboxState,
+  events: readonly { readonly type: string; readonly data: unknown }[],
+  requestId: string,
+): PromptRequestMatch | undefined {
+  for (const item of [...inbox['next-turn'], ...inbox['next-step']]) {
+    if (item.source.kind === 'user' && item.source.requestId === requestId) {
+      return { runId: item.id, stage: 'queued' };
+    }
+  }
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    const event = events[at];
+    if (event === undefined) continue;
+    if (event.type === 'turn/start') {
+      const data = event.data as {
+        kind?: unknown;
+        requestId?: unknown;
+        runId?: unknown;
+      };
+      if (
+        data.kind === 'message' &&
+        data.requestId === requestId &&
+        typeof data.runId === 'string'
+      ) {
+        return { runId: data.runId, stage: 'started' };
+      }
+    } else if (event.type === 'user/message') {
+      const data = event.data as {
+        source?: { kind?: unknown; requestId?: unknown };
+        message?: { data?: { id?: unknown } };
+      };
+      const id = data.message?.data?.id;
+      if (
+        data.source?.kind === 'user' &&
+        data.source.requestId === requestId &&
+        typeof id === 'string'
+      ) {
+        return { runId: id, stage: 'started' };
+      }
+    }
+  }
+  return undefined;
 }

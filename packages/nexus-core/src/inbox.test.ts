@@ -6,7 +6,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { EMPTY_INBOX, foldInbox, spliceInbox } from './inbox.js';
+import { EMPTY_INBOX, findPromptRequest, foldInbox, spliceInbox } from './inbox.js';
 import type { InboxState, QueuedInput } from './inbox.js';
 import { SessionLog } from './session-log.js';
 
@@ -121,5 +121,84 @@ describe('foldInbox', () => {
     log.append('turn/start', { kind: 'message', text: 'x' });
     log.append('inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] });
     expect(() => foldInbox(log.events)).toThrow('seq 1');
+  });
+});
+
+/** 客戶端帶了請求編號的那一件（#1335）。 */
+const requested = (id: string, requestId: string, text = id): QueuedInput => ({
+  id,
+  text,
+  source: { kind: 'user', requestId },
+});
+
+describe('findPromptRequest：這個請求編號收過沒有', () => {
+  it('還排著：認出來，回那一件的 id（兩條清單都找）', () => {
+    const inbox: InboxState = {
+      'next-turn': [item('a'), requested('b', 'req-b')],
+      'next-step': [requested('s', 'req-s')],
+    };
+    expect(findPromptRequest(inbox, [], 'req-b')).toEqual({ runId: 'b', stage: 'queued' });
+    expect(findPromptRequest(inbox, [], 'req-s')).toEqual({ runId: 's', stage: 'queued' });
+    expect(findPromptRequest(inbox, [], 'req-none')).toBeUndefined();
+  });
+
+  it('已領走、開了一輪：turn/start 帶的編號與 runId', () => {
+    const log = new SessionLog('s');
+    log.append('turn/start', { kind: 'message', text: 'X', requestId: 'req-x', runId: 'item-x' });
+    expect(findPromptRequest(EMPTY_INBOX, log.events, 'req-x')).toEqual({
+      runId: 'item-x',
+      stage: 'started',
+    });
+  });
+
+  it('插話被領走：user/message 的 source 帶編號，run_id 是那則訊息的 id', () => {
+    const log = new SessionLog('s');
+    log.append('user/message', {
+      message: { type: 'human', data: { content: '改用 X', id: 'steer-1' } } as never,
+      source: { kind: 'user', requestId: 'req-steer' },
+    });
+    expect(findPromptRequest(EMPTY_INBOX, log.events, 'req-steer')).toEqual({
+      runId: 'steer-1',
+      stage: 'started',
+    });
+  });
+
+  it('沒帶編號的、別的 kind、編號對不上：都不算', () => {
+    const log = new SessionLog('s');
+    log.append('turn/start', { kind: 'message', text: 'X' });
+    log.append('turn/start', {
+      kind: 'goal',
+      text: 'G',
+      goalId: 'g' as never,
+      revision: 1,
+      round: 1,
+    });
+    log.append('user/message', {
+      message: { type: 'human', data: { content: 'x', id: 'u1' } } as never,
+      source: { kind: 'plugin', plugin: 'p' },
+    });
+    expect(findPromptRequest(EMPTY_INBOX, log.events, 'req-x')).toBeUndefined();
+  });
+
+  it('只比編號、不比內容：同編號不同文字也認得', () => {
+    const inbox = turns(requested('a', 'req-a', '原本的字'));
+    expect(findPromptRequest(inbox, [], 'req-a')?.runId).toBe('a');
+  });
+
+  it('被取消的不算：排著的那件刪掉之後，同一個編號再送是新的一句', () => {
+    const log = new SessionLog('s');
+    log.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [requested('a', 'req-a')],
+    });
+    log.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      removedCount: 1,
+      inserted: [],
+      outcome: 'canceled',
+    });
+    expect(findPromptRequest(foldInbox(log.events), log.events, 'req-a')).toBeUndefined();
   });
 });

@@ -74,6 +74,7 @@ import {
   APPROVAL_INTERRUPT_KIND,
   childProjectionUnits,
   createProjectionFold,
+  findPromptRequest,
   foldInbox,
   humanMessageForTurnStart,
   ARCHIVE_GATE_CONFIG_KEY,
@@ -319,6 +320,8 @@ function pumpInputOf(item: QueuedInput): PumpInput {
       return {
         kind: 'message',
         text: item.text,
+        // 帶了請求編號的才把佇列項目的 id 一起帶到 `turn/start`（`runId`）：領走之後它就不在收件匣上了，重送要靠日誌認回來。
+        ...(source.requestId === undefined ? {} : { id: item.id, requestId: source.requestId }),
         ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
         ...(item.mention === undefined ? {} : { mention: item.mention }),
       };
@@ -354,7 +357,9 @@ function pumpInputOf(item: QueuedInput): PumpInput {
 function userMessageSourceOf(source: QueuedInputSource): UserMessageSource {
   switch (source.kind) {
     case 'user':
-      return { kind: 'user' };
+      return source.requestId === undefined
+        ? { kind: 'user' }
+        : { kind: 'user', requestId: source.requestId };
     case 'subagent-settled':
       return {
         kind: 'subagent-settled',
@@ -390,6 +395,12 @@ export type PumpInput =
        * 省略就由 pump 自己產一個。
        */
       readonly id?: string;
+      /**
+       * 客戶端給這句話的請求編號（`run.start` 的 `request_id`，[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)）。
+       * 進佇列那一件的 `source`、開跑時的 `turn/start`、插話領走時的 `user/message` 都帶著它，重送時由
+       * {@link ThreadPump.findPromptRequest} 認出。省略就是客戶端沒帶，日誌與以前位元組相同。
+       */
+      readonly requestId?: string;
       /**
        * 插話（#710，`run.start` 的 `mode: 'steer'`）：這一輪還收插話就排進 `next-step`，下一步送進模型、不開新的一輪；
        * 不收了（閒著、按了停止、正在收尾）就排到 `next-turn` 的**頭**，照樣開一輪。見 {@link ThreadPump.submit}。
@@ -779,6 +790,10 @@ function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
           ? {}
           : { attachments: input.attachments }),
         ...(input.mention === undefined ? {} : { mention: input.mention }),
+        // 兩格一起寫、一起缺（#1335）：沒有 `id` 的話（手搭的呼叫端）認出重送也回不了原本那一件，所以不寫半套。
+        ...(input.requestId === undefined || input.id === undefined
+          ? {}
+          : { requestId: input.requestId, runId: input.id }),
       };
     case 'resume':
       return { kind: 'resume' };
@@ -1446,6 +1461,18 @@ export class ThreadPump {
   }
 
   /**
+   * 這個請求編號收過沒有（`run.start` 的 `request_id`，[#1335](https://github.com/DemianLi/nexus-agent/issues/1335)）：
+   * 查現在的收件匣，再查 root 日誌上已落地的 `turn/start`／`user/message`。**三個階段都認得**（排著、已領走、已落日誌，
+   * 含重啟之後），收過就回原本那一件的 `run_id`，呼叫端不再排第二次。判法與偏離登記見 {@link findPromptRequest}。
+   *
+   * @param requestId - 客戶端給的編號。
+   * @returns 收過就是原本那一件的 `run_id`，沒有就是 `undefined`。
+   */
+  findPromptRequest(requestId: string): string | undefined {
+    return findPromptRequest(this.#inbox, this.#sessions.root.events, requestId)?.runId;
+  }
+
+  /**
    * 這條 thread 掛的會話投影單元。歷史路由用同一份清單折（{@link historyPage}），所以重新整理後長出的狀態與即時一致。
    */
   get projectionUnits(): readonly ProjectionUnit[] {
@@ -1674,7 +1701,10 @@ export class ThreadPump {
       const item: QueuedInput = {
         id,
         text: input.text,
-        source: { kind: 'user' },
+        source:
+          input.requestId === undefined
+            ? { kind: 'user' }
+            : { kind: 'user', requestId: input.requestId },
         ...(input.attachments === undefined || input.attachments.length === 0
           ? {}
           : { attachments: input.attachments }),
