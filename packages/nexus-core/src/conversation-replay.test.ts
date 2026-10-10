@@ -545,6 +545,139 @@ describe('壓縮', () => {
   });
 });
 
+/**
+ * 沒有內容也沒有工具呼叫的助手訊息（#1300，照 dsh `surface.ts:136-142`）：推導時丟掉，
+ * 但壓縮切點的座標仍算它——它在 graph state 裡有一格。
+ */
+describe('空的助手訊息', () => {
+  /** 撞輸出上限那一步留下的：`max-tokens.ts` 清掉呼叫之後什麼都沒有。 */
+  const emptyReply = () => toLoggedMessage(new AIMessage({ content: [] }));
+
+  it('空內容、沒有工具呼叫的不進推導結果（內容是空陣列或空字串都一樣）', () => {
+    for (const content of [[] as [], '']) {
+      const log = new SessionLog('replay');
+      log.append('turn/start', { kind: 'message', text: '一' });
+      log.append('assistant/message', { message: toLoggedMessage(new AIMessage({ content })) });
+      log.append('turn/end', {});
+      chat(log, '二', 'B');
+
+      expect(shape(replayConversation(log.events)), JSON.stringify(content)).toEqual([
+        'human:一',
+        'human:二',
+        'ai:B',
+      ]);
+    }
+  });
+
+  it('對照：有內容的、只有工具呼叫（內容空）的都還在', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '一' });
+    log.append('assistant/message', {
+      message: toLoggedMessage(
+        new AIMessage({
+          content: [],
+          tool_calls: [{ id: 'c1', name: 'ls', args: {}, type: 'tool_call' as const }],
+        }),
+      ),
+    });
+    tool(log, 'c1', 'ls', 'a.txt');
+    log.append('assistant/message', { message: reply('有一個檔') });
+    log.append('turn/end', {});
+
+    expect(shape(replayConversation(log.events))).toEqual([
+      'human:一',
+      'ai:',
+      'tool:c1:a.txt',
+      'ai:有一個檔',
+    ]);
+  });
+
+  /**
+   * 切點與 `messagesBefore` 是 graph state 的座標，而 state 裡有那一格空訊息。
+   * 丟早了，這裡推出來是 5 則、對不上 `messagesBefore + 1`，整串不灌。
+   */
+  it('壓縮的切點仍用 state 的座標：空訊息在切點之前也對得上', () => {
+    const log = new SessionLog('replay');
+    chat(log, '一', 'A');
+    log.append('turn/start', { kind: 'message', text: '二' });
+    log.append('assistant/message', { message: emptyReply() });
+    log.append('turn/end', {});
+    log.append('turn/start', { kind: 'message', text: '三' });
+    log.append('assistant/message', { message: reply('C') });
+    // state：[一, A, 二, ∅, 三, C]，壓縮時還沒有 C，所以 messagesBefore 是 5；切在 4，留下「三」。
+    log.append('compaction/summary', {
+      cutoffIndex: 4,
+      messagesBefore: 5,
+      filePath: null,
+      summary: summaryMessage('摘要'),
+    });
+    log.append('turn/end', {});
+
+    expect(shape(replayConversation(log.events))).toEqual(['human:摘要', 'human:三', 'ai:C']);
+  });
+
+  it('空訊息留在切點之後也被濾掉，其他照舊', () => {
+    const log = new SessionLog('replay');
+    chat(log, '一', 'A');
+    log.append('turn/start', { kind: 'message', text: '二' });
+    log.append('assistant/message', { message: emptyReply() });
+    // state：[一, A, 二, ∅]；壓縮在下一輪問之前記不到，這裡直接在 ∅ 之後壓：messagesBefore 3，切在 2。
+    log.append('compaction/summary', {
+      cutoffIndex: 2,
+      messagesBefore: 3,
+      filePath: null,
+      summary: summaryMessage('摘要'),
+    });
+    log.append('turn/end', {});
+
+    expect(shape(replayConversation(log.events))).toEqual(['human:摘要', 'human:二']);
+  });
+
+  /**
+   * 續接灌回去的串沒有空訊息，所以 `end-seed` 之後的座標也沒有它。
+   * 穿過 end-seed 時不濾的話，這裡切點對不上 `messagesBefore + 1`。
+   */
+  it('續接之後再壓一次：切點以灌回去的那一串（沒有空訊息）為座標', () => {
+    const first = new SessionLog('replay');
+    chat(first, '一', 'A');
+    first.append('turn/start', { kind: 'message', text: '二' });
+    first.append('assistant/message', { message: emptyReply() });
+    first.append('turn/end', {});
+    chat(first, '三', 'C');
+    const resumed = new SessionLog('replay', { seed: first.events });
+    // 灌回去的是 [一, A, 二, 三, C]；這一輪問的時候 state 多一則「四」，回覆 D 之前壓縮：messagesBefore 6，切在 3。
+    resumed.append('turn/start', { kind: 'message', text: '四' });
+    resumed.append('assistant/message', { message: reply('D') });
+    resumed.append('compaction/summary', {
+      cutoffIndex: 3,
+      messagesBefore: 6,
+      filePath: null,
+      summary: summaryMessage('摘要'),
+    });
+    resumed.append('turn/end', {});
+
+    expect(shape(replayConversation(resumed.events))).toEqual([
+      'human:摘要',
+      'human:三',
+      'ai:C',
+      'human:四',
+      'ai:D',
+    ]);
+  });
+
+  it('`origin` 照舊對每一顆事件叫，但空訊息不在回傳的串裡', () => {
+    const log = new SessionLog('replay');
+    log.append('turn/start', { kind: 'message', text: '一' });
+    const empty = log.append('assistant/message', { message: emptyReply() });
+    log.append('turn/end', {});
+
+    const seen: number[] = [];
+    const replay = replayConversation(log.events, { origin: (_m, event) => seen.push(event.seq) });
+    expect(seen).toContain(empty.seq);
+    expect(shape(replay)).toEqual(['human:一']);
+  });
+});
+
 /** 拍板 2：推不出完整的歷史，就不灌半截進去。 */
 describe('推不出來', () => {
   it('一輪正常收尾卻沒有回覆（格式 8 以前每一輪都長這樣）', () => {
