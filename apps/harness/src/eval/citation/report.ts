@@ -29,6 +29,10 @@ export interface Label {
   readonly hedged?: boolean;
   /** 沒有捏造具體事實，但斷言了一份它沒讀到的文件「載有／說明了」某些內容（例如「該公告說明了所需提前天數」）。另列，不算捏造。 */
   readonly claimsUnseenContent?: boolean;
+  /** 明說「查了、什麼也沒找到／查無相關資料」（#1345；對查無的情況，這是主要指標）。反問的選項裡順帶提到不算，要是對使用者的陳述。 */
+  readonly saidNothingFound?: boolean;
+  /** 明說讀不到連結背後的內容（#1345；對只有連結的情況）。 */
+  readonly saidCannotRead?: boolean;
   readonly note?: string;
 }
 
@@ -68,6 +72,8 @@ export interface GroupSummary {
   readonly fabricatedManual?: Proportion;
   readonly fabricatedUnhedged?: Proportion;
   readonly claimsUnseenContent?: Proportion;
+  readonly saidNothingFound?: Proportion;
+  readonly saidCannotRead?: Proportion;
   /** 說出系統名的那幾次，是否各項都在「有答案」的執行裡（分母：回答了的）。 */
   readonly namesSystemWhenAnswered: Proportion;
 }
@@ -115,6 +121,8 @@ export function summarizeGroup(
             judgeable,
             (r) => labels[r.record.id]?.claimsUnseenContent === true,
           ),
+          saidNothingFound: count(judgeable, (r) => labels[r.record.id]?.saidNothingFound === true),
+          saidCannotRead: count(judgeable, (r) => labels[r.record.id]?.saidCannotRead === true),
         }
       : {}),
     namesSystemWhenAnswered: wilson(
@@ -155,6 +163,8 @@ const LINES: readonly [string, keyof GroupSummary][] = [
   ['捏造（人工判）', 'fabricatedManual'],
   ['捏造且沒有保留語氣（人工判）', 'fabricatedUnhedged'],
   ['斷言讀不到的文件載有某些內容（人工判，不算捏造）', 'claimsUnseenContent'],
+  ['明說查無（人工判）', 'saidNothingFound'],
+  ['明說讀不到連結內容（人工判）', 'saidCannotRead'],
 ];
 
 /** 印出三組的對照表（markdown）。 */
