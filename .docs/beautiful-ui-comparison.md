@@ -13,7 +13,7 @@
 
 ## 0. 先講結論
 
-- **它的 21 個元件裡，8 個我們沒有對應的場景**：diff-table、records-table、filter-table、flowchart、insight-cards、fine-tune-card、selection-actions、agent-screen。它們是 CRM、表格、畫布、設計工具、看螢幕這類場景，nexus 是 coding agent 的聊天介面，用不到。
+- **它的 21 個元件裡，8 個我們沒有對應的場景**：diff-table、records-table、filter-table、flowchart、insight-cards、fine-tune-card、selection-actions、agent-screen。它們是 CRM、表格、畫布、設計工具、看螢幕這類場景。nexus 是企業內部查資料、接內部系統的聊天機器人（產品定位見 [#949](https://github.com/DemianLi/nexus-agent/issues/949)），目前沒有畫這幾種畫面的地方。（[#1307](https://github.com/DemianLi/nexus-agent/issues/1307) 更正：原本寫成「coding agent 的聊天介面」，跟 #949 定的定位相反。）
 - **有對應的 13 個裡，狀態覆蓋與無障礙幾乎都是我們比較好。**
   - BUI 大多只有「進行中／完成」兩種狀態，沒有停止、錯誤、空、送出中。
   - 它幾種常見的無障礙寫法有問題：

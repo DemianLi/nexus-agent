@@ -49,7 +49,11 @@ import {
   SWITCHED_THREAD_NOTICE,
 } from '@/App';
 import { NO_DECISION_REASON } from '@/components/approval-card';
-import { BLANK_THREAD_LABEL, UNTITLED_THREAD_LABEL } from '@/components/sidebar/thread-list';
+import {
+  BLANK_THREAD_LABEL,
+  CLEAR_SEARCH_LABEL,
+  UNTITLED_THREAD_LABEL,
+} from '@/components/sidebar/thread-list';
 import { ABORTED_BEFORE_DISPATCH_CODE, STOPPED_QUESTION_TEXT } from '@/lib/question-view';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/lib/steer-view';
@@ -66,6 +70,13 @@ import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
  * App 在那種環境照樣開得起來——那正是「讀寫失敗只是記不住」那條約定——但測試要的是一份真的
  * 記得住的。
  */
+/** 側欄清單裡的會話列。搜尋框有字時的 ×（#1307）也是按鈕，不是列。 */
+function threadRows(list: HTMLElement): HTMLElement[] {
+  return within(list)
+    .queryAllByRole('button')
+    .filter((button) => button.getAttribute('aria-label') !== CLEAR_SEARCH_LABEL);
+}
+
 function memoryStorage(): Storage {
   const entries = new Map<string, string>();
   return {
@@ -2810,10 +2821,7 @@ describe('以前的會話', () => {
       return list;
     }
 
-    const rowNames = (list: HTMLElement) =>
-      within(list)
-        .getAllByRole('button')
-        .map((row) => row.textContent ?? '');
+    const rowNames = (list: HTMLElement) => threadRows(list).map((row) => row.textContent ?? '');
 
     it('按今天、過去 7 天、更早分組，每組有名字；沒有列的「昨天」不出現', async () => {
       const list = await rendered();
@@ -2852,7 +2860,7 @@ describe('以前的會話', () => {
     it('搜不到時講一聲，不說「還沒有」', async () => {
       const list = await rendered();
       fireEvent.change(within(list).getByRole('searchbox'), { target: { value: '部署' } });
-      expect(within(list).queryAllByRole('button')).toHaveLength(0);
+      expect(threadRows(list)).toHaveLength(0);
       expect(within(list).getByRole('status').textContent).toBe('沒有標題含「部署」的會話。');
       expect(list.textContent).not.toContain('還沒有以前的會話');
     });
@@ -3715,8 +3723,8 @@ describe('會話標題（#655）', () => {
     fireEvent.change(within(list).getByRole('searchbox', { name: '搜尋以前的會話' }), {
       target: { value: '錯誤' },
     });
-    await waitFor(() => expect(within(list).getAllByRole('button')).toHaveLength(1));
-    expect(within(list).getByRole('button').textContent).toContain('修好登入頁的錯誤');
+    await waitFor(() => expect(threadRows(list)).toHaveLength(1));
+    expect(threadRows(list)[0]!.textContent).toContain('修好登入頁的錯誤');
   });
 
   it('接回一條有標題的：從歷史就讀得到', async () => {
