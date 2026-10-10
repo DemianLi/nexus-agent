@@ -11,6 +11,7 @@
     "build": "tsc --noEmit",
     "cli": "tsx src/cli.ts",
     "cli:live": "tsx src/cli.ts --live",
+    "eval:citation": "tsx src/eval/citation/citation-cli.ts",
     "eval:compare": "tsx src/eval/compare-cli.ts",
     "eval:sessions": "tsx src/eval/sessions-cli.ts",
     "eval:survey": "tsx src/eval/survey-cli.ts",
