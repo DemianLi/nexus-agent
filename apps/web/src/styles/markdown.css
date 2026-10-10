@@ -121,10 +121,30 @@
     padding: 0.35em 0.7em;
     text-align: start;
     vertical-align: top;
+    /*
+     * 不繼承上面的 anywhere（#1330）：anywhere 把斷點算進最小寬度，表格永遠擠得進框裡，窄螢幕上「1,204,388」被拆成
+     * 一字一行、框也從來不捲。break-word 只在真的放不下時才斷，不算進最小寬度：數字與英文字不拆，表格比框寬就在
+     * `.md-table-scroll` 裡橫捲。中文字之間本來就能換行，不受影響。
+     */
+    overflow-wrap: break-word;
   }
   .markdown th {
     font-weight: 500;
     background: var(--chip);
+  }
+  /* 數字欄（#1330，判定見 `lib/markdown/numeric-columns.ts`）：位數等寬、靠右。作者寫明的對齊是行內樣式，蓋得過這裡。 */
+  .markdown .md-num {
+    font-variant-numeric: tabular-nums;
+    text-align: end;
+  }
+  /*
+   * 整列 hover（#1330）：中性的 muted 疊一半（同 `bg-muted/50`），比表頭的 chip 淺，不會看成又一列表頭。
+   * 包在 (hover: hover) 裡跟 Tailwind 的 `hover:` 一樣：觸控點一下不會把底色卡住。
+   */
+  @media (hover: hover) {
+    .markdown tbody tr:hover {
+      background: color-mix(in oklab, var(--muted) 50%, transparent);
+    }
   }
 
   .markdown .md-image-alt {

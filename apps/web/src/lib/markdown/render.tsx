@@ -29,6 +29,8 @@ import { CodeBlock } from '@/components/markdown/code-block';
 
 import type { PositionedBlock } from './incremental';
 import { renderTexToReact } from './katex';
+import { numericColumns } from './numeric-columns';
+import { inlineText } from './plain-text';
 
 function sanitizeUrl(url: string): string {
   try {
@@ -82,6 +84,8 @@ export interface MarkdownRenderContext {
   readonly footnoteOrder: string[];
   /** 每個腳註被引用了幾次；決定腳註區的返回記號數。 */
   readonly footnoteCounts: Map<string, number>;
+  /** 串流中還沒凍結的尾段：裡面的表格最後一列可能寫到一半（`1,2`、`12.`），數字欄判定不看它（#1330）。 */
+  readonly tail?: boolean;
 }
 
 /** 畫頂層 block；畫不出東西的（定義、認不得的型別）直接丟掉。 */
@@ -277,14 +281,24 @@ function renderListItem(
 function renderTable(node: Md.Table, key: Key, context: MarkdownRenderContext): ReactNode {
   const align = node.align ?? null;
   const [headRow, ...bodyRows] = node.children;
+  // 數字欄（#1330）：整欄套 `md-num`（tabular-nums＋靠右）。作者寫明的對齊是行內樣式，蓋過靠右。
+  const judged = context.tail === true ? bodyRows.slice(0, -1) : bodyRows;
+  const numeric = numericColumns(
+    judged.map((row) => row.children.map(inlineText)),
+    align?.length ?? headRow?.children.length ?? 0,
+  );
   return (
     // 表格比欄寬時在自己的框裡橫捲，不撐開整則訊息。tabIndex 讓鍵盤捲得到。
     <div key={key} className="md-table-scroll" tabIndex={0}>
       <table>
-        {headRow !== undefined && <thead>{renderTableRow(headRow, 'th', align, 0, context)}</thead>}
+        {headRow !== undefined && (
+          <thead>{renderTableRow(headRow, 'th', align, numeric, 0, context)}</thead>
+        )}
         {bodyRows.length > 0 && (
           <tbody>
-            {bodyRows.map((row, index) => renderTableRow(row, 'td', align, index + 1, context))}
+            {bodyRows.map((row, index) =>
+              renderTableRow(row, 'td', align, numeric, index + 1, context),
+            )}
           </tbody>
         )}
       </table>
@@ -296,6 +310,7 @@ function renderTableRow(
   row: Md.TableRow,
   cellTag: 'th' | 'td',
   align: readonly Md.AlignType[] | null,
+  numeric: readonly boolean[],
   key: Key,
   context: MarkdownRenderContext,
 ): ReactNode {
@@ -308,7 +323,11 @@ function renderTableRow(
     cells.push(
       createElement(
         cellTag,
-        { key: index, style: alignValue == null ? undefined : { textAlign: alignValue } },
+        {
+          key: index,
+          className: numeric[index] === true ? 'md-num' : undefined,
+          style: alignValue == null ? undefined : { textAlign: alignValue },
+        },
         ...(cell === undefined ? [] : renderChildren(cell.children, context)),
       ),
     );

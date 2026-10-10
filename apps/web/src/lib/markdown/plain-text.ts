@@ -16,7 +16,8 @@ interface MarkdownNode {
   readonly children?: readonly MarkdownNode[];
 }
 
-function inlineText(node: MarkdownNode): string {
+/** 一個行內節點看得到的字（表格的數字欄判定也用它，`render.tsx`）。 */
+export function inlineText(node: MarkdownNode): string {
   switch (node.type) {
     case 'text':
     case 'inlineCode':
