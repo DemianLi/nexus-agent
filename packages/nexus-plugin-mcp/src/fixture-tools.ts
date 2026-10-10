@@ -37,6 +37,17 @@ export const CITE_LINKS = [
 /** `cite_sources` 回的那一句正文。 */
 export const CITE_TEXT = '查到兩筆相關資料。';
 
+/** 一段 `kb` KB 大的內容。base64 與文字都用同一個產生器，大小才可預期。 */
+export function filler(kb: number, char = 'A'): string {
+  return char.repeat(Math.max(0, Math.floor(kb)) * 1024);
+}
+
+/** 內嵌資源的 URI。 */
+export const EMBED_URI = 'file:///reports/q3.bin';
+
+/** `structured` 回的結構值裡，一列的樣子。 */
+export const STRUCTURED_ROW = { id: 1, label: 'row', note: '結構化資料的一列' };
+
 /** 把這一組工具掛到一台舊協議的 server 上。 */
 export function registerFixtureTools(server: McpServer): void {
   server.registerTool(
@@ -137,5 +148,70 @@ export function registerFixtureTools(server: McpServer): void {
         ...CITE_LINKS.map((link) => ({ type: 'resource_link' as const, ...link })),
       ],
     }),
+  );
+
+  // 原始資料會不會整份進日誌與串流（#1320）。四種內容各一支，大小由參數 `kb` 決定：
+  // 內嵌二進位資源、內嵌文字資源、圖片、結構化內容。
+  const sizeArg = { kb: z.number().describe('內容大小（KB）') };
+  server.registerTool(
+    'embed_blob',
+    { description: '回一份內嵌的二進位資源。', inputSchema: sizeArg },
+    ({ kb }) => ({
+      content: [
+        { type: 'text', text: '資源已附上。' },
+        {
+          type: 'resource',
+          resource: { uri: EMBED_URI, mimeType: 'application/octet-stream', blob: filler(kb) },
+        },
+      ],
+    }),
+  );
+  server.registerTool(
+    'embed_text',
+    { description: '回一份內嵌的文字資源。', inputSchema: sizeArg },
+    ({ kb }) => ({
+      content: [
+        { type: 'text', text: '資源已附上。' },
+        {
+          type: 'resource',
+          resource: {
+            uri: 'file:///reports/q3.txt',
+            mimeType: 'text/plain',
+            text: filler(kb, 'x'),
+          },
+        },
+      ],
+    }),
+  );
+  server.registerTool(
+    'big_image',
+    { description: '回一張很大的圖。', inputSchema: sizeArg },
+    ({ kb }) => ({
+      content: [
+        { type: 'text', text: '圖在下面。' },
+        { type: 'image', data: filler(kb), mimeType: 'image/png' },
+      ],
+    }),
+  );
+  server.registerTool(
+    'structured',
+    {
+      description: '回結構化內容（structuredContent），另附一句文字摘要。',
+      inputSchema: sizeArg,
+      outputSchema: {
+        rows: z.array(z.object({ id: z.number(), label: z.string(), note: z.string() })),
+      },
+    },
+    ({ kb }) => {
+      // 一列約 70 位元組，列數湊到大約 `kb` KB。
+      const rows = Array.from({ length: Math.ceil((kb * 1024) / 70) }, (_, index) => ({
+        ...STRUCTURED_ROW,
+        id: index,
+      }));
+      return {
+        content: [{ type: 'text', text: `共 ${String(rows.length)} 列。` }],
+        structuredContent: { rows },
+      };
+    },
   );
 }

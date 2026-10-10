@@ -22,7 +22,7 @@ import {
   mcpConfigSchema,
   mcpPlugin,
 } from './index.js';
-import { CITE_LINKS, CITE_TEXT, FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
+import { CITE_LINKS, CITE_TEXT, EMBED_URI, FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
 import { CITE_RESOURCE_LINKS } from './project-content.js';
 import { publicToolName } from './names.js';
 import { modelToolNames } from './tool-names.js';
@@ -154,6 +154,10 @@ describe('接上一台真的 MCP server', () => {
         'mcp__fixture__read_env',
         'mcp__fixture__fetch_url',
         'mcp__fixture__cite_sources',
+        'mcp__fixture__embed_blob',
+        'mcp__fixture__embed_text',
+        'mcp__fixture__big_image',
+        'mcp__fixture__structured',
       ]);
     } finally {
       await dispose();
@@ -229,6 +233,42 @@ describe('接上一台真的 MCP server', () => {
           args: { topic: '發行說明' },
         })) as ToolMessage;
       expect(JSON.stringify(plain.content)).not.toContain(CITE_RESOURCE_LINKS);
+    } finally {
+      await dispose();
+    }
+  });
+
+  // #1320：內嵌資源與 structuredContent 只在 artifact 裡（模型看不到），而 artifact 會跟著 ToolMessage 進會話日誌。
+  // 超過上限的換成占位，小的 resource_link 原樣；content（模型看得到的那一半）不受影響。
+  it('artifact：超過上限的內嵌資源與結構值換成占位，resource_link 原樣', async () => {
+    const { registry, dispose } = await loadPlugins([fixturePlugin()]);
+    try {
+      const call = async (name: string, args: Record<string, unknown>) =>
+        (await registry.tools.resolve(`mcp__fixture__${name}`)?.value.invoke({
+          type: 'tool_call',
+          id: `call_${name}`,
+          name: `mcp__fixture__${name}`,
+          args,
+        })) as ToolMessage;
+
+      const blob = await call('embed_blob', { kb: 256 });
+      expect(JSON.stringify(blob.artifact)).not.toContain('AAAA');
+      expect(blob.artifact).toEqual([
+        expect.objectContaining({ type: 'mcp_omitted', uri: EMBED_URI, bytes: expect.any(Number) }),
+      ]);
+      expect((blob.artifact as { bytes: number }[])[0]?.bytes).toBeGreaterThan(256 * 1024);
+
+      const rows = await call('structured', { kb: 64 });
+      expect(JSON.stringify(rows.artifact)).not.toContain('結構化資料的一列');
+      expect(JSON.stringify(rows.artifact)).toContain('mcp_omitted');
+
+      // 在上限內的資源整份保留（只有超限才換），且序列化後遠小於原本的整份。
+      const tiny = await call('embed_text', { kb: 1 });
+      expect(JSON.stringify(tiny.artifact)).not.toContain('mcp_omitted');
+
+      const cite = await call('cite_sources', {});
+      expect(JSON.stringify(cite.artifact)).toContain(CITE_LINKS[0]?.uri);
+      expect(JSON.stringify(cite.artifact)).not.toContain('mcp_omitted');
     } finally {
       await dispose();
     }

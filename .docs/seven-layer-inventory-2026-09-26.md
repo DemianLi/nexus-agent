@@ -29,22 +29,23 @@
 | 層 | 列數 | 完成 | 部分 | 缺口 | 已拍板未落地 | 待拍板 | 判過不做 | dsh 也沒有 | web 只列 | 完成度 |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | E 執行環境 | 14 | 6 | 1 | 0 | 0 | 0 | 5 | 2 | 0 | 92.9% |
-| T 工具介面 | 29 | 13 | 1 | 3 | 2 | 0 | 5 | 5 | 0 | 71.1% |
+| T 工具介面 | 29 | 15 | 1 | 1 | 2 | 0 | 5 | 5 | 0 | 81.6% |
 | C 上下文與記憶 | 16 | 7 | 2 | 1 | 2 | 1 | 1 | 2 | 0 | 61.5% |
 | L 生命週期與編排 | 26 | 9 | 4 | 4 | 1 | 0 | 3 | 4 | 1 | 61.1% |
 | O 可觀測與維運 | 18 | 4 | 3 | 1 | 0 | 1 | 4 | 4 | 1 | 61.1% |
 | V 驗證與評估 | 12 | 5 | 1 | 1 | 0 | 0 | 0 | 4 | 1 | 78.6% |
 | G 治理與安全 | 18 | 8 | 2 | 1 | 0 | 2 | 2 | 3 | 0 | 69.2% |
-| **合計** | **133** | **52** | **14** | **11** | **5** | **4** | **20** | **24** | **3** | **68.6%** |
+| **合計** | **133** | **54** | **14** | **9** | **5** | **4** | **20** | **24** | **3** | **70.9%** |
 
 ※ 標記的兩列（C-16、L-26）來自覆蓋檢查，沒有經過對抗式驗證，見「方法與限制」。
 
 ※※ 2026-10-10：T-28 由待拍板改判為判過不做（Creator 模式不做，見〈2026-10-10 判決〉一節），所以 T 層的待拍板 1 → 0、判過不做 4 → 5，T 層完成度 67.5% → 71.1%，合計的待拍板 5 → 4、判過不做 19 → 20、完成度 67.8% → 68.6%。其餘各列維持 2026-09-26 的判定。
 
-- **整體 68.6%**，以 86 列計分（2026-09-26 原為 67.8%／87 列；T-28 改判後重算，見〈2026-10-10 判決〉）。E 最高，達 92.9%：圍堵那一整組都完成了，其餘各列不是判過不做，就是 dsh 也沒有。C、L、O 三層最低，都在 61% 左右。
-- **缺口 11 條，其中 8 條有卡**。它們集中在四塊：
+※※※ 2026-10-10（[#1320](https://github.com/DemianLi/nexus-agent/issues/1320)）：T-06、T-07 由缺口改判為完成（[#430](https://github.com/DemianLi/nexus-agent/issues/430)、[#431](https://github.com/DemianLi/nexus-agent/issues/431) 於 2026-10-08 以 PR #1235 一起落地並關閉），所以 T 層的完成 13 → 15、缺口 3 → 1，T 層完成度 71.1% → 81.6%；合計的完成 52 → 54、缺口 11 → 9、完成度 68.6% → 70.9%（計分列數仍是 86）。算式：（54 ＋ 0.5 × 14）÷（54 ＋ 14 ＋ 9 ＋ 5 ＋ 4）＝ 61 ÷ 86。
+
+- **整體 70.9%**，以 86 列計分（2026-09-26 原為 67.8%／87 列；T-28 改判、T-06／T-07 完成後重算，見〈2026-10-10 判決〉與註腳 ※※※）。E 最高，達 92.9%：圍堵那一整組都完成了，其餘各列不是判過不做，就是 dsh 也沒有。C、L、O 三層最低，都在 61% 左右。
+- **缺口 9 條，其中 6 條有卡**。它們集中在三塊：
   - 子代理：T-04 逐 agent allow/deny、L-14 逐個選模型，兩條都掛在 #328；L-13 續行與 send_message 沒有卡。
-  - MCP 的後半：T-06 resources（#430）、T-07 server instructions（#431）。
   - 觀測與回歸：O-04 失敗分類碼（#434）、V-06 每晚真模型回歸（#436）。
   - 其他四條：C-03 摘要 prompt（#432）、G-05 具名權限預設（#437），以及兩條沒有卡的 L-23 插話、L-25 每步平行工具上限。
 - **沒有卡的 3 條缺口**：L-13、L-23、L-25（盤點後已開 #708、#710、#711）。L-23 的前提已經變了。#190 當初不補插話，理由是「沒有消費者」；如今送出佇列（L-22）已經落地，09-25 拍板佇列時也寫了「插話另開」，但一直沒開卡。
@@ -57,7 +58,7 @@
 ## 每層一句話
 
 - **E**：圍堵、三種模式、升級、政策句、先讀後改、子代理繼承都完成。程式碼執行只有選配的 quickjs（模型寫程式、程式裡呼叫工具的 PTC 那半，2026-10-10 判過不做）。shell 與行程隔離、MCP stdio、腳本執行期、逐會話工作區都判過不做。
-- **T**：工具註冊、校驗、逾時、MCP 工具（選配）、問使用者、present、HTTP＋SSE、會話續接、斜線命令、檔案工具與 meta 都完成。缺逐 agent 的 allow/deny、MCP resources、server instructions。skills 預設與工具 schema 目錄已拍板未落地。會話標題只做了一半，LLM 生成標題的 #650 在基準之後才開。
+- **T**：工具註冊、校驗、逾時、MCP 工具（選配）、問使用者、present、HTTP＋SSE、會話續接、斜線命令、檔案工具與 meta 都完成。缺逐 agent 的 allow/deny。MCP resources 與 server instructions 已於 2026-10-08 完成（#430、#431，PR #1235）。skills 預設與工具 schema 目錄已拍板未落地。會話標題只做了一半，LLM 生成標題的 #650 在基準之後才開。
 - **C**：AGENTS.md、摘要（#446 拆分）、修剪、壓力量表、重複提醒、計劃指引都完成。缺摘要 prompt 的品質要求（#432）。外溢與系統提示詞身分只做了一半。跨會話引用與 `@file` 已拍板未落地，圖片省略待拍板。
 - **L**：迴圈、取消與續接、max-tokens（#433）、停損、子代理派生、深度上限、headless、送出佇列、閒置逾時都完成。以下四條只做了一半：
   - 重試：只蓋到第一則事件，#520。
@@ -75,7 +76,7 @@
 **09-19 的 8 條缺口**：落地 1 條，推翻 1 條，其餘 6 條仍開著。
 - 落地：L-05 max-tokens（#433，PR #609）。
 - 推翻：O-05 `agent-error`。09-19 只讀了協調器裡的 relay，沒讀生產者。dsh 只在 capture `live` 時掛 relay，出廠後端是 on-demand，所以出廠路徑上一筆都不發。**#435 的前提不成立，triage 時要改判。**（盤點後已在 #435 留言寫明證據；2026-09-26 demian 拍板關卡，標 wontfix，重開條件寫在卡上。）
-- 仍開著：T-06（#430）、T-07（#431）、C-03（#432）、O-04（#434）、V-06（#436）、G-05（#437）。
+- 仍開著：T-06（#430）、T-07（#431）、C-03（#432）、O-04（#434）、V-06（#436）、G-05（#437）。（盤點當時的狀態；T-06、T-07 之後已完成，見註腳 ※※※。）
 
 **09-19 沒判過的 9 題**：09-19 當天全數拍板，落地情況如下。
 - 已完成 4 題：
@@ -132,6 +133,7 @@
 | #652／#654 交出計劃走提問通道，並畫成審核面板 | G-15 的計劃評審 |
 | PR #656（關 #655）會話標頭與分頁顯示標題 | web，只列 |
 | #657 LLM 標題可以走另一顆模型 | T-20 的 LLM 那半；dsh 的 provider／model 覆寫 |
+| PR #1235（2026-10-08，關 #430、#431） | T-06 MCP resources（`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` 三支共用工具）、T-07 server instructions 進提示詞；這兩列已改判為完成並重算統計，見註腳 ※※※ |
 
 ## 2026-10-10 判決：Creator、PTC、逐會話選組合（不做）
 
@@ -143,15 +145,13 @@
   1. 決策 3 重開，例如要註冊 `execute`；
   2. 產品定位改變，例如要支援個人工作流、讓使用者自己擴充 plugin；
   3. 實測顯示多系統查詢的「來回模型」成本是瓶頸（只影響 PTC）。
-- **這份盤點受影響的列**：T-28 由待拍板改判為判過不做（所以上面的統計表與「待拍板」清單少一條，T 層完成度 67.5% → 71.1%、整體 67.8% → 68.6%、計分列數 87 → 86）；T-29 維持判過不做（不再有「因 #714 重開」這個附註）；E-08 **判定維持「部分」**——選配的 `@nexus/plugin-quickjs` 純計算那半是做出來的事實，不能因為另一半不做就把整列改成判過不做——缺的 PTC 那半記為判過不做。其餘各列維持 2026-09-26 的判定，基準之後的變動不重算。
+- **這份盤點受影響的列**：T-28 由待拍板改判為判過不做（所以上面的統計表與「待拍板」清單少一條，T 層完成度 67.5% → 71.1%、整體 67.8% → 68.6%、計分列數 87 → 86）；T-29 維持判過不做（不再有「因 #714 重開」這個附註）；E-08 **判定維持「部分」**——選配的 `@nexus/plugin-quickjs` 純計算那半是做出來的事實，不能因為另一半不做就把整列改成判過不做——缺的 PTC 那半記為判過不做。其餘各列維持 2026-09-26 的判定，基準之後的變動不重算（T-06、T-07 是例外，見註腳 ※※※）。
 
 ## 清單
 
-**缺口 — 11**
+**缺口 — 9**
 
 - T-04　逐 agent 工具 allow/deny（#328；盤點後開 #707，#328 第 3 項是另一件；2026-09-26 拍板照一般缺口排、低優先）
-- T-06　MCP resources（列出／讀取 server 資源）（#430；2026-09-26 拍板照 dsh 做、排後面，動工時以 #431 為主卡合成一張）
-- T-07　MCP server instructions 進系統提示詞（#431；盤點後在 #431 留言補充；2026-09-26 拍板照 dsh 做、排後面，#430 併進來合成一張）
 - C-03　摘要 prompt 保留原始意圖與使用者糾正（清單缺口 3）（#432（OPEN，needs-triage）；盤點後在 #432 留言補充）
 - L-13　子代理：續行／背景（continuable）、send_message、list_agents（盤點後開 #708；2026-09-26 拍板照 dsh 做、預設開，改由地圖 #737 追蹤，第一張是探針 #738）
 - L-14　子代理：逐個選模型（#328；盤點後開 #709，#328 第 3 項是另一件；2026-09-26 拍板照一般缺口排、低優先，等型錄 #729）
@@ -303,8 +303,8 @@
 | T-03 | 工具逾時 | **完成** | 有（§五第 2 條收完） | 有-預設 | — |
 | T-04 | 逐 agent 工具 allow/deny | **缺口**（改判） | 已登記：#328 第 3 項（needs-triage） | 沒有：沒有逐 agent 的允許／拒絕遮罩；rootOnly 是 dsh 逐工具呼叫者拒絕（DELEGATED_CALLER 一類）的宣告化，樁仍可見，不算這一格 | #328；盤點後開 #707，#328 第 3 項是另一件；2026-09-26 拍板照一般缺口排、低優先 |
 | T-05 | MCP 工具（接外部 MCP server） | **完成** | 有，同形 | 有-選配 | — |
-| T-06 | MCP resources（列出／讀取 server 資源） | **缺口** | 缺口（09-19 清單缺口 1） | 沒有 | #430；2026-09-26 拍板照 dsh 做、排後面，動工時以 #431 為主卡合成一張 |
-| T-07 | MCP server instructions 進系統提示詞 | **缺口** | 缺口（09-19 清單缺口 2） | 沒有 | #431；盤點後在 #431 留言補充；2026-09-26 拍板照 dsh 做、排後面，#430 併進來合成一張 |
+| T-06 | MCP resources（列出／讀取 server 資源） | **完成**（改判） | 缺口（09-19 清單缺口 1） | 有-選配：三支共用工具，`packages/nexus-plugin-mcp/src/hub.ts` | #430（2026-10-08 關，PR #1235）；2026-09-26 拍板照 dsh 做、與 #431 合成一張 |
+| T-07 | MCP server instructions 進系統提示詞 | **完成**（改判） | 缺口（09-19 清單缺口 2） | 有-選配：`### MCP server: <名>` 段落進系統提示詞，上限 32,768 位元組，`packages/nexus-plugin-mcp/src/hub.ts` | #431（2026-10-08 關，PR #1235）；盤點後在 #431 留言補充；2026-09-26 拍板照 dsh 做 |
 | T-08 | MCP prompts（提示詞模板） | **dsh 也沒有** | 同形 | 沒有 | — |
 | T-10 | web_search／web_fetch | **判過不做** | 未判（09-19 清單第 9 題） | 沒有 | 決議 09-19 第 1 題 |
 | T-11 | skills 進預設清單 | **已拍板未落地** | 未判（09-19 清單第 10 題） | 有-選配 | #440、決議 09-19 第 2 題；盤點後在 #440 留言補充 |
@@ -354,13 +354,13 @@
     - dsh: git grep -n "dsh-mcp-client'" -- packages/bundle packages/preset apps/cli/config → 只中 apps/cli/config/examples/mcp-memory 三檔與 preset skill 範本 templates/mcp，packages/bundle 0 筆
 - **T-06 MCP resources（列出／讀取 server 資源）**
   - dsh：出廠預設：base 與 sdk-minimal 各掛一列 `mcp-resources`（web-app／headless 繼承 base、沒停用）；沒設 MCP server 時零工具、零提示詞，所以只在「有設 MCP」那條路上生效　`dsh:packages/bundle/base/cordis.patch.yml:492`、`dsh:packages/bundle/sdk-minimal/cordis.patch.yml:95`、`dsh:packages/mcp/mcp-resources/src/tools.ts:34`
-  - 我們：`@nexus/plugin-mcp` 只橋接工具，README 寫 Resources 延後；全 repo 零個 resource 列出／讀取的實作。缺口只存在於使用者掛了 MCP 的那條路上（MCP 本身選配）　`packages/nexus-plugin-mcp/README.md:89`
+  - 我們（2026-10-10 更正：已完成，#430 於 2026-10-08 關，PR #1235）：`packages/nexus-plugin-mcp/src/hub.ts` 註冊 `list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` 三支共用工具與一顆 middleware，提示詞另有 `## MCP resource servers` 一段列出已登記的 server；沒設 MCP 時零工具。**以下是盤點基準（`70357bb`）當時的狀態，保留作為證據**：`@nexus/plugin-mcp` 只橋接工具，README 寫 Resources 延後；全 repo 零個 resource 列出／讀取的實作　`packages/nexus-plugin-mcp/README.md:89`
   - 否定搜尋：
     - nexus: git grep -n -I -- '<p>' -- ':!**/node_modules/**'（再濾掉 .docs/），<p> 逐一為 listResources、readResource、resources/list、resources/read、list_mcp_resources、read_mcp_resource、mcp-resources、mcp_resource、ListResourcesResult、resourceTemplates → 全部 0 筆
     - nexus: git grep -n -i resource -- packages/nexus-plugin-mcp → 只有 README:89（延後）與 project-content.ts 把工具結果裡的 resource link 轉成文字，沒有列出／讀取資源的路
 - **T-07 MCP server instructions 進系統提示詞**
   - dsh：mcp-client 內建：每個連上的 server 的 instructions 以帶 server 名的段落加進系統提示詞（上限 32,768 bytes）；隨 mcp-client 生效，而 mcp-client 本身要使用者設定　`dsh:packages/mcp/mcp-client/src/connection.ts:318`、`dsh:packages/mcp/mcp-client/README.zh.md:188`、`dsh:packages/mcp/mcp-client/src/index.ts:73`
-  - 我們：`@nexus/plugin-mcp` 只把設定轉成 adapter 連線、註冊工具，沒有任何地方讀 server 的 instructions；README 連「延後」都沒寫　`packages/nexus-plugin-mcp/src/index.ts:175`
+  - 我們（2026-10-10 更正：已完成，#431 於 2026-10-08 關，PR #1235）：連線後讀 `initialize` 回的 `instructions`，去掉結尾空白、加 `### MCP server: <serverName>` 標頭接在系統提示詞後面，整串超過 `maxInstructionBytes`（預設 32768）算連線失敗，走 `failOnStartupError`。**以下是盤點基準當時的狀態，保留作為證據**：`@nexus/plugin-mcp` 只把設定轉成 adapter 連線、註冊工具，沒有任何地方讀 server 的 instructions　`packages/nexus-plugin-mcp/src/index.ts:175`
   - 否定搜尋：
     - nexus: git grep -n -I -- '<p>' -- ':!**/node_modules/**'（再濾掉 .docs/），<p> 逐一為 getInstructions、serverInstructions、server_instructions → 全部 0 筆
     - nexus: git grep -n -I -i instruction -- packages/nexus-plugin-mcp → 0 筆

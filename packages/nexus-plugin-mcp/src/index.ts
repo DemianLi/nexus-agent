@@ -33,6 +33,7 @@ import type {
 import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
+import { boundArtifacts } from './artifact-bound.js';
 import { projectNonText } from './project-content.js';
 import { ensureHub } from './hub.js';
 import { Supervisor, reconnectSchema } from './supervisor.js';
@@ -194,9 +195,13 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
       onConnectionError: 'throw',
       // 圖片、音訊這些非文字塊換成文字說明（#642）：模型那一側的工具訊息只收文字。換在工具本體裡，
       // 所以 state、日誌、還原、畫面看到的都是換過的那一份。
+      // 同一個鉤子裡也把超過上限的 artifact 換成占位（#1320，`artifact-bound.ts`）：內嵌資源與 structuredContent 否則整份進日誌。
       afterToolCall: ({ result: [content, artifacts] }) => {
         const projected = projectNonText(content);
-        return projected === undefined ? undefined : { result: [projected, artifacts] };
+        const bounded = boundArtifacts(artifacts);
+        return projected === undefined && bounded === undefined
+          ? undefined
+          : { result: [projected ?? content, bounded ?? artifacts] };
       },
     });
 

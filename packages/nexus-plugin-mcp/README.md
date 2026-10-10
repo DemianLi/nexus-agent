@@ -145,6 +145,12 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 - **結果的呈現由 adapter 決定。** 文字與圖片進 `content`、embedded resource 進 `artifact`
   是 `@langchain/mcp-adapters` 的預設，我們不改。dsh 那套「圖片要先證明這條 model route
   真的收圖片才落地」在這裡沒有對應物。
+- **artifact 單條超過 8 KiB 就換成占位再進日誌**（[#1320](https://github.com/DemianLi/nexus-agent/issues/1320)，退到最接近的實作）。
+  實測：內嵌資源與 `structuredContent` 只放 `artifact`，模型看不到，但 `artifact` 跟著訊息進會話日誌——3 MB 的資源就是約
+  3.1 MB 的 `tool/result`；圖片不在 `artifact` 裡（換成說明文字，日誌只有幾百位元組）。即時串流與歷史端點本來就不帶它
+  （`tool-finished` 約 230 位元組）。處理在 `artifact-bound.ts`：超限的那條換成
+  `{ type: 'mcp_omitted', originalType, bytes, uri?, mimeType? }`，小的（resource link、`_meta`）原樣。dsh 的立場是結構值不上線、
+  只有 render 文字與 meta，adapter 的 `artifact` 欄位表達不出「只放 meta」，所以在進日誌前把大的換掉。
 - **resource link 寫成 `Resource link: <name> (<uri>)`，並要求模型標出處**（[#1319](https://github.com/DemianLi/nexus-agent/issues/1319)，
   **超出 dsh**）。名稱與 URI 照 dsh 拼，adapter 2.0.0 的 metadata 帶著 `name`，所以不再只剩網址。dsh 只對 `web_search`／`web_fetch`
   要求引用（`search.ts:92` 的結果結尾、`:315-323` 的系統提示詞），MCP 沒有；我們的 web 搜尋判過不做，內部資料全走 MCP，所以把同一套

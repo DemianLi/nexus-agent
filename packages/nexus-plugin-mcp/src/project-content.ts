@@ -17,8 +17,10 @@
  * **偏離**（dsh 表達得出來、我們這裡表達不出來的兩處；加上下面一條超出 dsh 的）：
  *
  * - **拿掉 `raw … data remains available to programmatic callers` 那一句**。dsh 把原始值留給程式呼叫端；我們
- *   留的話只能放進 ToolMessage 的 `artifact`，而它會跟著訊息進會話日誌（`toLoggedMessage` 帶 `artifact`），一張圖
- *   就是幾 MB。不留，那一句就不是真的。（artifact 實際進不進日誌、多大，由 #1320 實測。）
+ *   留的話只能放進 ToolMessage 的 `artifact`，而它會跟著訊息進會話日誌（`toLoggedMessage` 帶 `artifact`）。
+ *   **實測（#1320）修正了先前的說法**：圖片根本不在 adapter 的 `artifact` 裡（換成文字說明之後日誌只有幾百位元組），
+ *   會整份進日誌的是**內嵌資源與 `structuredContent`**——3 MB 的資源就是 3 MB 的 `tool/result`。所以原始值今天仍然
+ *   不留給程式呼叫端，那一句仍然不是真的；artifact 的上限處理見 `artifact-bound.ts`（{@link boundArtifacts}），實測表也在那裡。
  * - **不併相鄰的文字**：dsh 把連續的文字（連同音訊、resource link 的說明）用換行併成一塊，我們每塊換成各自一塊
  *   文字、其餘原樣。只有文字的結果照舊不碰。
  * - **超出 dsh：結果含 resource link 時，結尾多一塊引用提示**（{@link CITE_RESOURCE_LINKS}）。dsh 只對
