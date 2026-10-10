@@ -294,9 +294,11 @@ describe('協商到的協議（量在 server 端）', () => {
 });
 
 /**
- * 每條連線都寫了 `elicitation: false`（nexus 沒有 LangGraph interrupt 的續行路徑）。這一組讓它**有人守**：
- * 把任何一行改成 `true`，下面至少兩條會紅。stdio 與 http 是 `toAdapterConnection` 裡**各自**一行，所以兩種載具
- * 都要有新協議的 server。
+ * 沒有人可以回答的組裝，連線不宣告 `elicitation`。#1241 之後 `McpConfig.elicitation` 預設是 `true`，但只有組裝期
+ * 有人答題（`channel.kind === 'human'`）才真的宣告；這裡的 `loadPlugins` 不給 channel，所以是關的。這一組讓那個
+ * 決定**有人守**：拿掉 `index.ts` 的 `channel?.kind === 'human'` 那一格，或把 stdio／http 任一個分支改成寫死
+ * `true`，下面至少兩條會紅（2026-10-11 逐一實測）。stdio 與 http 是 `toAdapterConnection` 裡**各自**一行，所以兩種
+ * 載具都要有新協議的 server。有人答題時宣告、問得出去的那一半在 `apps/harness/src/mcp-elicitation*.test.ts`。
  */
 describe.each(TARGETS.filter((target) => target.modern))('$label：不接 elicitation', (target) => {
   it('server 看到 client 沒宣告 elicitation 能力', async () => {

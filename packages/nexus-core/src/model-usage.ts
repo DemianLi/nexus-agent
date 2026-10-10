@@ -14,10 +14,18 @@
  * 輪級的彙總則是**一道純折疊**（`packages/llm/token-meter/src/turn-usage.ts` 的
  * `deriveTurnTokenUsage`），從 `turn/start` 讀到 `turn/end`，不回寫任何東西。
  *
- * **我們沒有那顆載體。** {@link ./session-log.ts} 的檔頭寫著這一版刻意不記訊息內容，
- * 理由是兩條進入點拿得到的顆粒度不一樣。所以照 AGENTS.md 那條偏離規則退到最接近的
- * 實作：**一顆只帶帳目的獨立事件**（`model/usage`）。退的是載體，不是紀律——
- * 「有報才記、沒報不記、報得自相矛盾也不記」整條照抄。
+ * **我們的用量也不掛在 `assistant/message` 上，是一顆只帶帳目的獨立事件**（`model/usage`）。
+ * 這顆事件寫下來的當時，日誌還不記訊息內容（格式 1 到 8，理由是兩條進入點拿得到的顆粒度
+ * 不一樣），「沒有那顆載體」是真的，所以照 AGENTS.md 那條偏離規則退到最接近的實作。
+ * **這個理由今天縮小了，沒有整條失效**：格式 9 起 `assistant/message` 就在日誌裡（{@link ./session-log.ts}
+ * 檔頭，#305，寫它的是 {@link ./model-calls.ts} 那顆同族 middleware），正常回來的呼叫有地方掛。
+ * **還沒有載體的是其餘失敗的那幾次呼叫**（#1022）：dsh 把失敗嘗試的用量掛在 `assistant/attempt` 上，
+ * 我們只在串流中途失敗又整次重打時才寫它（#520）；其餘拋錯與被中止的呼叫沒有回覆可記
+ * （`assistant/message` 不寫在那種呼叫上），串流裡報過的用量卻是真的花掉了。用量獨立成一顆事件，
+ * 這些 token 才進得了帳。要不要把正常回來的那一半改掛回 `assistant/message` 是另一個決定，這裡沒有做。
+ *
+ * 退的是載體，不是紀律——「有報才記、沒報不記、報得自相矛盾也不記」整條照抄。偏離的登記在
+ * {@link ./session-log.ts} 的 `assistant/message` 那一格（「沒有 `usage`」）。
  *
  * 沒退的還有第二件：**輪級彙總我們同樣不寫回日誌**。要一輪花了多少，讀日誌自己加，
  * 跟 dsh 的 `deriveTurnTokenUsage` 一樣。

@@ -9,7 +9,11 @@
  * ## 兩件從 dsh 抄過來、看起來像細節其實是語意的事
  *
  * 1. **`parseCommand` 的 lookahead。** `/^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u` ——
- *    沒有那個 `(?=$|[\t\n\r ])`，`/planning` 會被解析成 `/plan` 加上 `ning`。
+ *    名字後面要嘛是行尾、要嘛是空白，緊接著別的字元就整行不是命令。它擋的是**名字字元以外的
+ *    非空白**：沒有那個 `(?=$|[\t\n\r ])`，`/usr/bin/env` 會被解析成 `usr` 加上 `/bin/env`，
+ *    `/plan.md` 會被解析成 `plan` 加上 `.md`。**它不是在防 `/planning` 被截成 `/plan`**：名字的
+ *    量詞是貪婪的，拿掉 lookahead 之後 `/planning` 照樣整個吃成 `planning`（2026-10-11 實測：
+ *    拿掉之後 `index.test.ts` 的路徑、標點、冒號、大寫四條紅，`/planning` 那條照綠）。
  * 2. **收不下的行不記日誌。** 語法不符或名字不認得的，回 `undefined`、**日誌裡不留
  *    任何痕跡**（dsh 的原話：「Admission misses (syntax or unknown name) log nothing —
  *    they never entered a handler.」）。發派的那一側收到 `undefined` 就照原樣把那行
