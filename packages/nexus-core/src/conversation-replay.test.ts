@@ -405,8 +405,9 @@ describe('沒配到結果的呼叫', () => {
 });
 
 /**
- * **切點直接用在推出來的串上，對不上就整串不灌。** `compaction/summary` 落在它那次呼叫的回覆之後，所以那一刻
- * 推出來的是 `messagesBefore + 1` 則（對真的摘要器量過：三次壓縮都是）。
+ * **切點直接用在推出來的串上，對不上就整串不灌。** 這一組是**舊順序**（格式 44 以前，沒有 `beforeCall`）：
+ * `compaction/summary` 落在它那次呼叫的回覆之後，所以那一刻推出來的是 `messagesBefore + 1` 則（對真的摘要器量過：三次壓縮都是）。
+ * 新順序見下一組。
  */
 describe('壓縮', () => {
   /** 四則之後，第三次呼叫時壓縮：那時 state 有五則，切在 3。 */
@@ -541,6 +542,169 @@ describe('壓縮', () => {
       kind: 'unreplayable',
       reason: 'compaction-misaligned',
       seq: misaligned.seq,
+    });
+  });
+});
+
+/**
+ * **摘要事件排在用到它的呼叫之前**（#1301，format 45，照 dsh 的 `compaction-basic`）：事件帶 `beforeCall: true`，
+ * 記下它時還沒有那次呼叫的回覆，所以推出來的是 `messagesBefore` 則；舊日誌沒有這個欄位，仍是 `messagesBefore + 1`。
+ * 逐筆判，不是逐檔——續接舊檔會把標頭版本改成新的，同一個檔可以兩種順序都有。
+ */
+describe('壓縮（摘要事件在呼叫之前）', () => {
+  /** 同 `compacted`，但摘要事件在第三次呼叫的回覆之前：那時 state 有五則（一 A 二 B 三），切在 3。 */
+  function compactedBefore(log: SessionLog): void {
+    chat(log, '一', 'A');
+    chat(log, '二', 'B');
+    log.append('turn/start', { kind: 'message', text: '三' });
+    log.append('compaction/summary', {
+      cutoffIndex: 3,
+      messagesBefore: 5,
+      filePath: null,
+      summary: summaryMessage('摘要一'),
+      beforeCall: true,
+    });
+    log.append('assistant/message', { message: reply('C') });
+    log.append('turn/end', {});
+  }
+
+  it('推出來的串與舊順序逐則相同', () => {
+    const before = new SessionLog('replay');
+    compactedBefore(before);
+    chat(before, '四', 'D');
+    const after = new SessionLog('replay');
+    chat(after, '一', 'A');
+    chat(after, '二', 'B');
+    after.append('turn/start', { kind: 'message', text: '三' });
+    after.append('assistant/message', { message: reply('C') });
+    after.append('compaction/summary', {
+      cutoffIndex: 3,
+      messagesBefore: 5,
+      filePath: null,
+      summary: summaryMessage('摘要一'),
+    });
+    after.append('turn/end', {});
+    chat(after, '四', 'D');
+
+    const expected = ['human:摘要一', 'ai:B', 'human:三', 'ai:C', 'human:四', 'ai:D'];
+    expect(shape(replayConversation(before.events))).toEqual(expected);
+    expect(shape(replayConversation(after.events))).toEqual(expected);
+  });
+
+  it('只有摘要事件、回覆還沒到（呼叫失敗或當機）：摘要照用，之後補不到的回覆不補', () => {
+    const log = new SessionLog('replay');
+    chat(log, '一', 'A');
+    chat(log, '二', 'B');
+    log.append('turn/start', { kind: 'message', text: '三' });
+    log.append('compaction/summary', {
+      cutoffIndex: 3,
+      messagesBefore: 5,
+      filePath: null,
+      summary: summaryMessage('摘要一'),
+      beforeCall: true,
+    });
+
+    expect(shape(replayConversation(log.events))).toEqual(['human:摘要一', 'ai:B', 'human:三']);
+  });
+
+  it('呼叫失敗後重打又摘要一次：兩筆之間沒有新訊息，以最後一筆為準', () => {
+    const log = new SessionLog('replay');
+    chat(log, '一', 'A');
+    chat(log, '二', 'B');
+    log.append('turn/start', { kind: 'message', text: '三' });
+    log.append('compaction/summary', {
+      cutoffIndex: 3,
+      messagesBefore: 5,
+      filePath: null,
+      summary: summaryMessage('摘要甲'),
+      beforeCall: true,
+    });
+    // 模型呼叫失敗，graph state 沒存到 `_summarizationEvent`，下一次呼叫從原始的五則再摘要：座標仍是原始串的。
+    log.append('compaction/summary', {
+      cutoffIndex: 3,
+      messagesBefore: 5,
+      filePath: null,
+      summary: summaryMessage('摘要乙'),
+      beforeCall: true,
+    });
+    log.append('assistant/message', { message: reply('C') });
+    log.append('turn/end', {});
+
+    expect(shape(replayConversation(log.events))).toEqual([
+      'human:摘要乙',
+      'ai:B',
+      'human:三',
+      'ai:C',
+    ]);
+  });
+
+  it('同一個檔新舊順序混著：舊的用 +1、新的用 +0，各判各的', () => {
+    const log = new SessionLog('replay');
+    // 舊順序：回覆之後才記，messagesBefore 5
+    chat(log, '一', 'A');
+    chat(log, '二', 'B');
+    log.append('turn/start', { kind: 'message', text: '三' });
+    log.append('assistant/message', { message: reply('C') });
+    log.append('compaction/summary', {
+      cutoffIndex: 3,
+      messagesBefore: 5,
+      filePath: null,
+      summary: summaryMessage('摘要一'),
+    });
+    log.append('turn/end', {});
+    log.append('turn/start', { kind: 'message', text: '四' });
+    log.append('compaction/summary', {
+      cutoffIndex: 5,
+      messagesBefore: 7,
+      filePath: null,
+      summary: summaryMessage('摘要二'),
+      beforeCall: true,
+    });
+    log.append('assistant/message', { message: reply('D') });
+    log.append('turn/end', {});
+
+    expect(shape(replayConversation(log.events))).toEqual([
+      'human:摘要二',
+      'ai:C',
+      'human:四',
+      'ai:D',
+    ]);
+  });
+
+  it('標了 beforeCall 卻用回覆之後的則數（+1）：對不上，不切', () => {
+    const log = new SessionLog('replay');
+    chat(log, '一', 'A');
+    log.append('turn/start', { kind: 'message', text: '二' });
+    const wrong = log.append('compaction/summary', {
+      cutoffIndex: 1,
+      messagesBefore: 2, // 這一刻是 3 則；記成 +1 之前的 2 就不對
+      filePath: null,
+      summary: summaryMessage('摘要'),
+      beforeCall: true,
+    });
+
+    expect(replayConversation(log.events)).toEqual({
+      kind: 'unreplayable',
+      reason: 'compaction-misaligned',
+      seq: wrong.seq,
+    });
+  });
+
+  it('沒標 beforeCall 卻在回覆之前記（則數少一）：對不上，不切', () => {
+    const log = new SessionLog('replay');
+    chat(log, '一', 'A');
+    log.append('turn/start', { kind: 'message', text: '二' });
+    const wrong = log.append('compaction/summary', {
+      cutoffIndex: 1,
+      messagesBefore: 3,
+      filePath: null,
+      summary: summaryMessage('摘要'),
+    });
+
+    expect(replayConversation(log.events)).toEqual({
+      kind: 'unreplayable',
+      reason: 'compaction-misaligned',
+      seq: wrong.seq,
     });
   });
 });

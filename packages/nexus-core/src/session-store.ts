@@ -524,8 +524,21 @@ import type { SessionEvent } from './session-log.js';
  * **升版，不標 `ignorable`**：一台 43 的 runtime 看不懂它，不該以為自己讀得懂這份子日誌。
  *
  * **讀舊檔**：43 以前沒有，不補寫歷史（補了也不知道當時用的是哪一顆模型）。
+ *
+ * ## 45：`compaction/summary` 記在用到它的那次 `model/start` 之前（[#1301](https://github.com/DemianLi/nexus-agent/issues/1301)）
+ *
+ * 以前摘要事件記在觸發它的那次呼叫的**回覆之後**（`assistant/message`、`model/end`、`context/measure`、`compaction/summary`），
+ * 只取 `model/start` 之前的事件推那次請求的歷史會缺摘要。現在記在 `model/start` 之前（摘要生好、基座把摘要過的請求交下去的那一刻），
+ * 照 dsh；這種事件多一格 `beforeCall: true`（見 {@link ./session-log.ts | SessionEventMap} 的 `compaction/summary`）。
+ *
+ * **升版，不標 `ignorable`**：這個欄位**左右重建**。一台 44 的 runtime 讀新檔，推導時對新順序的摘要用舊的則數檢查
+ * （`messagesBefore + 1`），差一則，判成 `compaction-misaligned`、整串不灌，模型從空的開始——是安全的失敗方向，但要由版本號在讀檔那一步擋下。
+ *
+ * **讀舊檔**：44 以前的摘要事件沒有 `beforeCall`，仍是舊順序，推導端照舊檢查（`messagesBefore + 1`），讀得回來。
+ * **逐顆事件判，不看 header 的版本**：續寫舊檔時 header 的 `version` 會被蓋成新的（見上），所以同一份檔可以前段舊順序、後段新順序。
+ * 不遷移、不補寫歷史。
  */
-export const SESSION_LOG_FORMAT_VERSION = 44;
+export const SESSION_LOG_FORMAT_VERSION = 45;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
