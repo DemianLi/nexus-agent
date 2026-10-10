@@ -58,7 +58,9 @@ describe('parseCommand', () => {
     expect(parseCommand('/plan  off ')).toEqual({ name: 'plan', rawInput: '  off ' });
   });
 
-  it('**`/planning` 不是 `/plan`**——命令名後面要嘛是結尾、要嘛是空白', () => {
+  // 這一條**不是 lookahead 的守衛**：拿掉 lookahead 它照綠（2026-10-11 實測）。它只是把「名字吃到底」這個性質說出來。
+  // lookahead 的守衛是下面「解析不出命令」那組的路徑、標點與大寫四行（拿掉之後四行都紅）。
+  it('名字整個吃到底：`/planning` 的名字是 `planning`，不會被截成較短的 `/plan`', () => {
     expect(parseCommand('/planning')).toEqual({ name: 'planning', rawInput: '' });
   });
 
@@ -74,6 +76,9 @@ describe('parseCommand', () => {
     ['數字開頭', '/1plan'],
     ['只有一條斜線', '/'],
     ['路徑不是命令', '/usr/bin/env'],
+    ['名字後緊接標點', '/plan.md'],
+    ['名字後緊接冒號', '/plan:off'],
+    ['名字後緊接大寫', '/planOff'],
   ])('%s 解析不出命令', (_label, line) => {
     expect(parseCommand(line)).toBeUndefined();
   });
