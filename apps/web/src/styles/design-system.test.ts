@@ -9,7 +9,7 @@ import { describe, expect, test } from 'vitest';
  * 元件的 className 越過它就報錯。守的是**原始碼裡的字串字面值**（className、cva 的各段、`cn(...)` 的參數都是字串），
  * 做法同 `border-shadow.test.ts`；先把註解拿掉，註解裡講到類別名不算。
  *
- * 十二條：
+ * 十三條：
  * 1. **不用 Tailwind 預設色板**（`text-red-500`、`bg-white`、`bg-black/50`…）：顏色只走語意 token（`bg-card`、`text-destructive`…）。
  * 2. **字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`**：不用 `text-xs`／`text-sm`／`text-base`…，也不寫 `text-[…px]`。
  * 3. **圓角只走階梯**（`rounded-sm`…`rounded-3xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
@@ -26,6 +26,8 @@ import { describe, expect, test } from 'vitest';
  *     輸入框裡的是 `InputGroupTextarea`，也在 `ui/`。這條掃 JSX，不是字串字面值。
  * 12. **時長走 `motion.css` 的 token**（#1280）：不寫 `duration-200`、`animation-duration-350` 這種數字，寫
  *     `duration-(--duration-fast)`。這條連 `ui/` 一起管：registry 原文寫死的時長已經換成 token。
+ * 13. **不用細字重**（#1307；`COMPONENTS.md`「次要靠顏色不靠字重」）：`font-thin`／`font-extralight`／`font-light` 擋下。
+ *     次要的字靠 `text-muted-foreground`，不靠把字變細——細字在中文與小字級下先糊掉。今天 0 次，是絆索。連 `ui/` 一起管。
  *
  * **例外只能列在 {@link ALLOWED}**，每一條寫明理由；列了卻再也沒有命中的條目會報錯，所以例外只會變少、不會悄悄留著。
  * 沒量的：間距與寬高的任意值（`max-h-[300px]`、`top-[50%]` 都是版面值，不是系統值）、`styles/*.css`（那裡就是 token 層）。
@@ -109,11 +111,13 @@ type Rule =
   | '泡泡'
   | '程式碼小框'
   | '輸入框'
-  | '時長';
+  | '時長'
+  | '字重';
 
 const ROTATE = /^-?rotate-\d+$/;
 const ROTATE_ON_OPEN = /state=open\]?\]?(?:>[^:]*)?:-?rotate-\d+$/;
 const RAW_DURATION = /^(?:animation-)?duration-\d/;
+const THIN_WEIGHT = /^font-(?:thin|extralight|light)$/;
 
 function rulesBroken(text: string): { rule: Rule; what: string }[] {
   const found: { rule: Rule; what: string }[] = [];
@@ -160,6 +164,7 @@ function rulesBroken(text: string): { rule: Rule; what: string }[] {
   for (const token of text.split(/\s+/)) {
     const u = utility(token);
     if (RAW_DURATION.test(u)) found.push({ rule: '時長', what: u });
+    if (THIN_WEIGHT.test(u)) found.push({ rule: '字重', what: u });
     if (ROTATE_ON_OPEN.test(token)) found.push({ rule: '箭頭', what: token });
     if (/(?:^|:)focus-visible:/.test(token) && /^ring(?:-|$)/.test(u)) {
       found.push({ rule: '焦點', what: token });
@@ -488,6 +493,16 @@ describe('判準', () => {
     ]);
     expect(rules('duration-(--duration-fast) animation-duration-(--duration-overlay)')).toEqual([]);
     expect(rules('delay-50 data-[state=closed]:delay-0')).toEqual([]);
+  });
+
+  test('字重：thin、extralight、light 擋，連同 variant 前綴；normal 以上與字型家族不擋', () => {
+    expect(rules('font-light')).toEqual(['字重:font-light']);
+    expect(rules('md:font-thin')).toEqual(['字重:font-thin']);
+    expect(rules('dark:hover:font-extralight')).toEqual(['字重:font-extralight']);
+    expect(rules('font-normal font-medium font-semibold font-bold font-mono font-sans')).toEqual(
+      [],
+    );
+    expect(rules('font-lightish')).toEqual([]);
   });
 
   test('輸入框：ui/ 以外的原生 textarea 擋，ui/ 本身不擋', () => {

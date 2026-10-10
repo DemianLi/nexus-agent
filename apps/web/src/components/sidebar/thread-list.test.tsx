@@ -3,7 +3,7 @@ import type { ThreadSearchOutcome, ThreadSummary } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { ThreadList } from '@/components/sidebar/thread-list';
+import { CLEAR_SEARCH_LABEL, ThreadList } from '@/components/sidebar/thread-list';
 import { SidebarProvider } from '@/components/ui/sidebar';
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
 import { SEARCH_DEBOUNCE_MS } from '@/lib/thread-search';
@@ -70,7 +70,12 @@ function renderList(search?: ReturnType<typeof searcher>['search']) {
 const box = () => screen.getByRole('searchbox', { name: '搜尋以前的會話' }) as HTMLInputElement;
 const type = (value: string) => fireEvent.change(box(), { target: { value } });
 const wait = (ms: number) => act(() => vi.advanceTimersByTime(ms));
-const rows = () => screen.queryAllByRole('button').map((button) => button.textContent);
+/** 會話列的字。搜尋框的 ×（#1307）也是按鈕，不是列。 */
+const rows = () =>
+  screen
+    .queryAllByRole('button')
+    .filter((button) => button.getAttribute('aria-label') !== CLEAR_SEARCH_LABEL)
+    .map((button) => button.textContent);
 const skeleton = () => screen.queryByTestId('thread-search-pending');
 const snippetOf = (name: RegExp) =>
   within(screen.getByRole('button', { name })).queryByTestId('thread-snippet');
@@ -143,6 +148,20 @@ describe('什麼時候問', () => {
     expect(box().value).toBe('');
     expect(fake.calls[0]!.signal.aborted).toBe(true);
     expect(rows()).toHaveLength(3);
+  });
+
+  it('× 有字才出現；按下清空、焦點留在搜尋框、還在問的那一次取消（#1307）', async () => {
+    const fake = searcher();
+    renderList(fake.search);
+    expect(screen.queryByRole('button', { name: CLEAR_SEARCH_LABEL })).toBeNull();
+    type('規格');
+    await wait(SEARCH_DEBOUNCE_MS);
+    fireEvent.click(screen.getByRole('button', { name: CLEAR_SEARCH_LABEL }));
+    expect(box().value).toBe('');
+    expect(document.activeElement).toBe(box());
+    expect(fake.calls[0]!.signal.aborted).toBe(true);
+    expect(rows()).toHaveLength(3);
+    expect(screen.queryByRole('button', { name: CLEAR_SEARCH_LABEL })).toBeNull();
   });
 
   it('沒接搜尋：只比標題，提示字寫「搜尋標題」', () => {
