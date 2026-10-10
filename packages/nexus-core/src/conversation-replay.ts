@@ -28,6 +28,21 @@
  * 第三件（80,000 字元以上的工具結果，模型看到的是基座換過的預覽）要知道組裝怎麼設，交給呼叫端，見
  * {@link ReplayOptions.toolResultAsSeen}。
  *
+ * ## 空的助手訊息推導時丟掉，但切點的座標仍算它
+ *
+ * 沒有內容也沒有工具呼叫的助手訊息（撞輸出上限那一步，`max-tokens.ts` 清掉它的呼叫之後什麼都不剩）不進推出來的串，
+ * 照 dsh 的 `deriveEventMessage`（`packages/core/session/src/surface.ts:136-142`，`d7432673886`）：內容長度為 0 就回 `null`，
+ * 理由是它只承載撞上限那一步的用量，不能把沒有內容的一輪塞進供應商的對話。**不必補事件**：日誌上有它，是確定的。
+ *
+ * **但它在 graph state 裡有一格**，壓縮的 `messagesBefore` 與 `cutoffIndex` 是 state 的座標，所以丟掉要等切完：
+ * {@link isEmptyAssistant} 的訊息先照樣進 `raw`（對則數、切點都算它），在 {@link settle} 把摘要與切點套完之後才濾掉。
+ * 推出來的串因此比 state 少一則；灌回去之後 state 沒有它，**之後的切點以灌回去的那一串為座標**（下一節），所以
+ * `session/end-seed` 的 settle 同樣濾掉。
+ *
+ * **舊日誌的一個縫**：這一版以前續接，灌回去的串帶著這則空訊息，那之後的壓縮記的座標比現在推出來的多一則——
+ * 「空訊息在前、end-seed 在後、之後又壓縮」的舊檔會判成 `compaction-misaligned`（整串不灌，模型從空的開始），
+ * 不會切錯地方。
+ *
  * ## `session/end-seed` 在這裡要穿過去
  *
  * {@link ./session-log.ts | currentTurnStart} 在它那裡停；推歷史反過來——上一個生命週期的對話正是要推回來的
@@ -74,6 +89,21 @@ import { humanMessageForTurnStart } from './message-source.js';
 import { isModelVisibleEvent } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, toolFeedback } from './tool-events.js';
+
+/**
+ * 沒有內容也沒有工具呼叫的助手訊息：推導時不送，見檔頭。
+ *
+ * 內容空＝字串長度 0 或區塊陣列長度 0（照 dsh `content.length === 0`）。**只帶推理區塊的不算空**——
+ * 它在 BaseMessage 這一層有區塊；送出時 `fetch` 層會另外收掉（`live-model.ts` 的 `withEmptyAssistantContent`），
+ * 那一條不在這張卡。
+ */
+export function isEmptyAssistant(message: BaseMessage): boolean {
+  return (
+    AIMessage.isInstance(message) &&
+    (message.tool_calls ?? []).length === 0 &&
+    message.content.length === 0
+  );
+}
 
 /** 記過 `tool/call`、結果沒記下來的那次。逐字照抄 dsh `repair.ts:106`。 */
 export const TOOL_OUTCOME_UNKNOWN_TEXT =
@@ -209,6 +239,8 @@ export function replayConversation(
     if (!keepBatch) flush();
     if (summary !== undefined) raw = [summary.message, ...raw.slice(summary.cutoff)];
     summary = undefined;
+    // 切點是 state 的座標，空的助手訊息要等切完才濾（檔頭）。
+    raw = raw.filter((message) => !isEmptyAssistant(message));
   };
   const asSeen = (message: BaseMessage): BaseMessage =>
     options.toolResultAsSeen !== undefined && ToolMessage.isInstance(message)

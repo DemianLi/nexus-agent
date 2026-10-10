@@ -201,3 +201,5 @@ SR5 的原因是 `restoreConversation` 拿到 `reply-missing`，不灌狀態，�
 一次性探針不進版控。第一輪 23 個場景、第二輪 23 個測試（含作廢的 SS4）、假端點與比對函式的備份在這次工作階段的暫存區（`zz-probe-1159.test.ts.bak`、`zz-probe-1159.test.ts.bak2`，後者是含第二輪的完整版）；要重跑需要放回 `apps/harness/src/` 並用 `pnpm -C apps/harness exec vitest run src/zz-probe-1159.test.ts`，輸出寫到暫存區的 `probe-out.txt`（vitest 會吞 `console.log`）。第二輪有計時（延遲 1.5–4 秒、按停在 0.6 秒），SR5 連跑三次結果一致；整份跑一次約 95 秒。
 
 **2026-10-10 補記（[#1299](https://github.com/DemianLi/nexus-agent/issues/1299)）**：與 S2 前置四張卡（[#1298](https://github.com/DemianLi/nexus-agent/issues/1298)）有關的那幾類——摘要事件順序、剪刀、舊工具參數截斷、空的助手訊息，加上「壓縮後重啟再續接」——已經做成進版控的夾具：`apps/harness/src/log-derived-history.fixture.ts`（假端點、重放比對、跑法）與 `log-derived-history.test.ts`（場景與已知差異清單）。夾具的已知差異清單是**現場重跑的結果**，不是抄這份文件的表；整份約 3 秒。這份文件的其餘場景（子代理、核准重啟、中止、插話、`reply-missing`）**沒有**進夾具，仍只在上面那份一次性探針裡。
+
+**2026-10-10 補記（[#1300](https://github.com/DemianLi/nexus-agent/issues/1300)）**：§三「沒有內容也沒有工具呼叫的助手訊息」一列已修——`replayConversation` 推導時丟掉它（照 dsh `surface.ts:136-142`），但壓縮切點的座標仍算它（它在 graph state 裡有一格，丟掉等切完才濾）。出貨的 CLI 與 serve 兩條路徑（掛著 `withEmptyAssistantContent`）推導與線上相同；**手挑組裝**沒有那層 `fetch` 丟棄，線上仍送空的助手訊息，所以那一格不同（夾具的 S12 記著，產品路徑走不到）。

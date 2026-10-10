@@ -11,7 +11,7 @@
  *
  * 比對器本身被這些突變守住（#1299 實測，改壞夾具後各自會紅哪些）：
  *
- * - 分類一律回「沒有差異」：所有帶差異種類的場景（S8、S9、SH3、SH4、SV5、SV6）。S6 只列推導方式、不列種類，這個突變碰不到它。
+ * - 分類一律回「沒有差異」：所有帶差異種類的場景（S8、S9、SH3、SH4、SV6）。S6 只列推導方式、不列種類，這個突變碰不到它。
  * - 分類一律回「有差異」：兩個對照場景與全部已知差異場景。
  * - 不偵測摘要事件的順序：S6、S8、SH3、SH4、SV6（有 `summary-after-reply` 的那幾個）。
  * - 重放時把系統訊息改一個字：所有場景（系統訊息相符的斷言）。
@@ -54,7 +54,7 @@ import type {
 const CARD_OF: Readonly<Record<DifferenceKind | 'summary-after-reply', string>> = {
   prune: '#1302（工具結果剪刀進日誌）',
   truncate: '#1303（舊工具參數截斷進日誌）',
-  'empty-assistant': '#1300（推導時丟掉空的助手訊息）',
+  'empty-assistant': '#1300（已修；再出現是退步）',
   'summary-after-reply': '#1301（摘要事件排在用到它的呼叫之前）',
   other: '（沒有對應的卡——新問題）',
 };
@@ -212,6 +212,21 @@ describe('對照場景：預期逐位元組相同', () => {
     );
     await expectDerivedHistory('C2', run, [], 3);
   }, 90_000);
+
+  it('SV5 serve：輸出撞上限帶工具呼叫 → 空的助手訊息推導時丟掉（#1300 已修）', async () => {
+    const run = await runServePhases(
+      [['被截斷', '再來']],
+      mainOnly((k) =>
+        k === 0
+          ? {
+              tools: [{ id: 'call_cut', name: 'echo', args: { message: '被切' } }],
+              finish: 'length',
+            }
+          : {},
+      ),
+    );
+    await expectDerivedHistory('SV5', run, [], 2);
+  }, 90_000);
 });
 
 describe('已知差異：每一類對應一張卡', () => {
@@ -332,21 +347,6 @@ describe('已知差異：每一類對應一張卡', () => {
     );
   }, 90_000);
 
-  it('SV5 serve：輸出撞上限帶工具呼叫 → 空的助手訊息（#1300）', async () => {
-    const run = await runServePhases(
-      [['被截斷', '再來']],
-      mainOnly((k) =>
-        k === 0
-          ? {
-              tools: [{ id: 'call_cut', name: 'echo', args: { message: '被切' } }],
-              finish: 'length',
-            }
-          : {},
-      ),
-    );
-    await expectDerivedHistory('SV5', run, [{ call: 1, kinds: ['empty-assistant'] }], 2);
-  }, 90_000);
-
   it('SV6 serve：大結果與長參數，剪刀與截斷同時在場', async () => {
     const run = await runServePhases(
       [['大結果', '二', '三', '四']],
@@ -380,6 +380,25 @@ describe('已知差異：每一類對應一張卡', () => {
   }, 90_000);
 });
 
+describe('手挑組裝的邊界（#1300）', () => {
+  /**
+   * 空的助手訊息推導時丟掉，是跟 `live-model.ts` 的 `withEmptyAssistantContent`（`fetch` 層）對齊——出貨的 `--live` CLI 與 serve
+   * 都掛著它（SH 系列同樣量過：撞上限的那一步線上與推導都沒有那則）。**手挑組裝（`createNexusAgent` 自己給模型）沒有這層**，
+   * 線上仍送空的助手訊息，推導不送，所以這一格不同。產品路徑沒有走到這裡的；留這條是讓邊界有字可查：S2 把請求改成由日誌導出後，
+   * 兩條路徑自然一致，這條就該刪。
+   */
+  it('S12 組裝點沒有 fetch 層：線上仍帶空的助手訊息，推導沒有——已知且不在任何一張卡裡', async () => {
+    const script: Script = (i) =>
+      i === 0
+        ? { tools: [{ id: 'call_cut', name: 'echo', args: { message: '被切' } }], finish: 'length' }
+        : {};
+    const run = await runAssembly('被截斷\n再來\n/exit\n', script, [createEchoPlugin()]);
+    const verdicts = await compareToLog(run.events, run.mainBodies);
+    expect(observedOf(verdicts), explain(verdicts)).toEqual([{ call: 1, kinds: ['other'] }]);
+    expect(verdicts[1]!.detail).toContain('"role":"assistant","content":""');
+  }, 60_000);
+});
+
 describe('重啟後續接', () => {
   it('SR2 壓縮與剪刀、截斷發生之後重啟，下一次請求跟沒重啟的逐位元組相同', async () => {
     const script = () => mainOnly((k) => (k === 0 ? bigThenSmall() : {}));
@@ -403,6 +422,44 @@ describe('重啟後續接', () => {
         .slice(1)
         .map((m) => JSON.stringify(m).replace(/session_[0-9a-f]{8}/g, 'session_X'));
     expect(norm(last(restart))).toEqual(norm(last(control)));
+  }, 180_000);
+
+  /**
+   * #1300：重啟前有一則空的助手訊息（撞輸出上限），重啟後才壓縮。灌回去的串沒有那則空訊息，之後壓縮記的座標
+   * 就以灌回去的串為準；推導端穿過 end-seed 時要跟著濾，不然整串會判成 `compaction-misaligned`、模型從空的開始。
+   */
+  it('SR3 空的助手訊息之後重啟、重啟後才壓縮：日誌仍推得出來，請求與沒重啟的相同', async () => {
+    const script = () =>
+      mainOnly((k) => {
+        if (k === 0) {
+          return {
+            tools: [{ id: 'call_cut', name: 'echo', args: { message: '被切' } }],
+            finish: 'length',
+          };
+        }
+        return k === 2 ? bigThenSmall() : {};
+      });
+    const texts = ['被截斷', '再來', '大結果', '三', '四', '五'];
+    const control = await runServePhases([texts], script(), LOW_SUMMARIZATION);
+    const restart = await runServePhases(
+      [texts.slice(0, 2), texts.slice(2)],
+      script(),
+      LOW_SUMMARIZATION,
+    );
+    const summary = restart.events.find((e) => e.type === 'compaction/summary');
+    const resumedAt = restart.events.find((e) => e.type === 'session/end-seed');
+    expect(resumedAt, '應該有一次續接').toBeDefined();
+    expect(summary?.seq ?? -1, '壓縮要發生在重啟之後').toBeGreaterThan(resumedAt!.seq);
+    const verdicts = await compareToLog(restart.events, restart.mainBodies);
+    expect(
+      verdicts.filter((v) => v.kinds.includes('other') || v.kinds.includes('empty-assistant')),
+      `日誌推不出來、或空的助手訊息又出現${explain(verdicts)}`,
+    ).toEqual([]);
+    const norm = (body: Body) =>
+      body.messages
+        .slice(1)
+        .map((m) => JSON.stringify(m).replace(/session_[0-9a-f]{8}/g, 'session_X'));
+    expect(norm(restart.mainBodies.at(-1)!)).toEqual(norm(control.mainBodies.at(-1)!));
   }, 180_000);
 });
 
