@@ -1263,7 +1263,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    * `GET /threads/:id/attachments/:attachmentId`（[#733](https://github.com/DemianLi/nexus-agent/issues/733)）：契約見 `@nexus/wire` 的
    * `attachmentPath`。**授權＝這條 thread 的日誌引用過它**（`referencedImage`，照 dsh `session.attachment`），不是知道 id。
    * 讀記憶體裡那份 root 日誌（含還沒落盤的），**只讀已經載入的 thread**：沒載入的一律 `attachment_not_found`，不為了讀圖建 thread。
-   * 沒引用、編號不合格式、thread 不存在不細分（見 `ATTACHMENT_NOT_FOUND`）；引用了但位元組讀不回來（儲存被清掉、大小對不上）是 `unknown_error`。
+   * 沒引用、編號不合格式、thread 不存在不細分（見 `ATTACHMENT_NOT_FOUND`）；引用了但位元組讀不回來（儲存被清掉、大小或雜湊對不上）是 `unknown_error`。
    */
   async function handleAttachment(threadId: string, attachmentId: string): Promise<Response> {
     const store = options.attachments;

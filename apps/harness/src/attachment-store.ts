@@ -12,6 +12,9 @@
  * - **檔名清成葉名**（`fileLeafName`，逐條照 dsh）：兩種分隔符都手動剝，不信 `basename`（POSIX 把 `\` 當一般字元，
  *   Windows 客戶端的整條本機路徑會漏進參照與日誌）。
  * - 串流進來、不聚合：上傳不吃記憶體。
+ * - **讀與去重都重算雜湊**（`ATTACHMENT_CORRUPT`，[#1338](https://github.com/DemianLi/nexus-agent/issues/1338)）：
+ *   物件路徑就是雜湊，所以讀圖時重算一次、去重碰到既有物件時重算一次，對不上就拋，不把來路不明的位元組交出去、
+ *   也不讓壞物件「認領」新上傳。沒有行程內的「已驗過」快取（dsh 也沒有）；別名硬連結與物件同一個 inode，不另驗。
  *
  * ## 偏離（依 AGENTS.md 登記）
  *
@@ -28,7 +31,7 @@
 
 import { createHash, randomBytes } from 'node:crypto';
 import { chmod, link, mkdir, open, readFile, stat, unlink } from 'node:fs/promises';
-import { constants } from 'node:fs';
+import { constants, createReadStream } from 'node:fs';
 import { join } from 'node:path';
 
 import { ATTACHMENTS_MODEL_PREFIX } from '@nexus/core';
@@ -70,7 +73,11 @@ export class AttachmentError extends Error {
 }
 
 export type AttachmentErrorCode =
-  'INVALID_ATTACHMENT_REF' | 'ATTACHMENT_TOO_LARGE' | 'ATTACHMENT_STORE_FAILED';
+  | 'INVALID_ATTACHMENT_REF'
+  | 'ATTACHMENT_TOO_LARGE'
+  | 'ATTACHMENT_STORE_FAILED'
+  /** 物件的內容對不上它的雜湊（被換過、損毀、截斷）；讀與去重都會驗。 */
+  | 'ATTACHMENT_CORRUPT';
 
 /** 附件根：`<harness home>/attachments/v1`。只解析，不建目錄。 */
 export function attachmentsRootOf(home: string): string {
@@ -201,7 +208,7 @@ export class AttachmentStore {
       const staged = await this.#stage(input.data, input.signal, input.maxBytes);
       try {
         const objectPath = this.#objectPath(staged.sha256);
-        await this.#publish(staged.path, objectPath);
+        await this.#publish(staged.path, objectPath, staged.sha256);
         // 去重走到這裡也要把模式收回唯讀：先寫的那一個如果被人 chmod 過，這裡恢復。
         await chmod(objectPath, OBJECT_FILE_MODE);
         const ref: FileAttachmentRef = {
@@ -249,7 +256,7 @@ export class AttachmentStore {
       const staged = await this.#stage(input.data, undefined, undefined);
       try {
         const objectPath = this.#objectPath(staged.sha256);
-        await this.#publish(staged.path, objectPath);
+        await this.#publish(staged.path, objectPath, staged.sha256);
         await chmod(objectPath, OBJECT_FILE_MODE);
       } finally {
         await unlink(staged.path).catch(() => {});
@@ -273,9 +280,10 @@ export class AttachmentStore {
   }
 
   /**
-   * 讀一張存好的圖的位元組。大小跟參照對不上（物件被換過、被截斷）就拋，不把來路不明的位元組交出去。
+   * 讀一張存好的圖的位元組。大小或內容雜湊跟參照對不上（物件被換過、損毀、被截斷）就拋，不把來路不明的位元組交出去。
+   * 大小先比（便宜），再重算 sha256。
    *
-   * @throws {AttachmentError} 參照不合格式、物件不在、或大小對不上。
+   * @throws {AttachmentError} 參照不合格式、物件不在（`ATTACHMENT_STORE_FAILED`）、或內容對不上（`ATTACHMENT_CORRUPT`）。
    */
   async readImage(ref: ImageAttachmentRef): Promise<Uint8Array> {
     const sha256 = ATTACHMENT_ID_PATTERN.exec(ref.attachmentId)?.[1];
@@ -295,8 +303,11 @@ export class AttachmentStore {
     if (data.byteLength !== ref.bytes) {
       throw new AttachmentError(
         `圖片的大小對不上參照（${String(data.byteLength)} ≠ ${String(ref.bytes)}）`,
-        'ATTACHMENT_STORE_FAILED',
+        'ATTACHMENT_CORRUPT',
       );
+    }
+    if (createHash('sha256').update(data).digest('hex') !== sha256) {
+      throw new AttachmentError('圖片的內容對不上它的雜湊', 'ATTACHMENT_CORRUPT');
     }
     return data;
   }
@@ -352,13 +363,31 @@ export class AttachmentStore {
     return { path, sha256: hash.digest('hex'), bytes };
   }
 
-  /** `link` 進正式位置；目標已存在就是去重，不算錯。 */
-  async #publish(source: string, target: string): Promise<void> {
+  /**
+   * `link` 進正式位置；目標已存在就是去重，不算錯。
+   *
+   * @param expectedSha256 - 給了就是在發佈內容定址的物件：去重碰到既有物件時重算它的摘要，對不上拋
+   *   `ATTACHMENT_CORRUPT`，不讓先前寫壞或被換過的物件被新上傳「認領」。別名硬連結不給。
+   */
+  async #publish(source: string, target: string, expectedSha256?: string): Promise<void> {
     await this.#mkdirPrivate(join(target, '..'));
     try {
       await link(source, target);
     } catch (error) {
       if (!isCode(error, 'EEXIST')) throw error;
+      if (expectedSha256 !== undefined) await this.#verifyObject(target, expectedSha256);
+    }
+  }
+
+  /** 串流重算既有物件的摘要（檔案可以很大，不整份讀進記憶體）。 */
+  async #verifyObject(path: string, expectedSha256: string): Promise<void> {
+    const hash = createHash('sha256');
+    for await (const chunk of createReadStream(path)) hash.update(chunk as Uint8Array);
+    if (hash.digest('hex') !== expectedSha256) {
+      throw new AttachmentError(
+        `既有物件的內容對不上它的雜湊（sha256:${expectedSha256}），不拿來去重`,
+        'ATTACHMENT_CORRUPT',
+      );
     }
   }
 

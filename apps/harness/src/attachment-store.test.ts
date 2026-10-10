@@ -4,7 +4,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
@@ -263,14 +263,73 @@ describe('存一張圖（#732）', () => {
     ]);
   });
 
-  it('讀的時候大小對不上參照（物件被截斷）：拋，不把來路不明的位元組交出去', async () => {
-    const ref = await store.saveImage({ data: PNG, ...facts });
-    const digest = sha(PNG);
+  /** 把物件換成別的位元組（物件是 0400，先放寬再寫）。 */
+  const overwriteObject = async (original: Uint8Array, replacement: Uint8Array) => {
+    const digest = sha(original);
     const object = join(store.rootDir, 'file-objects', digest.slice(0, 2), digest);
-    const { chmod, writeFile } = await import('node:fs/promises');
     await chmod(object, 0o600);
-    await writeFile(object, PNG.subarray(0, 10));
-    await expect(store.readImage(ref)).rejects.toThrow(/大小對不上/);
+    await writeFile(object, replacement);
+    return object;
+  };
+
+  it('讀的時候大小對不上參照（物件被截斷）：拋 ATTACHMENT_CORRUPT，不把來路不明的位元組交出去', async () => {
+    const ref = await store.saveImage({ data: PNG, ...facts });
+    await overwriteObject(PNG, PNG.subarray(0, 10));
+    await expect(store.readImage(ref)).rejects.toMatchObject({
+      code: 'ATTACHMENT_CORRUPT',
+      message: expect.stringMatching(/大小對不上/) as unknown,
+    });
+  });
+
+  it('同樣大小、內容被換掉：拋 ATTACHMENT_CORRUPT（只比長度抓不到這一種）', async () => {
+    const ref = await store.saveImage({ data: PNG, ...facts });
+    const swapped = Buffer.alloc(PNG.byteLength, 0x41);
+    expect(swapped.byteLength).toBe(ref.bytes);
+    await overwriteObject(PNG, swapped);
+    await expect(store.readImage(ref)).rejects.toMatchObject({
+      code: 'ATTACHMENT_CORRUPT',
+      message: expect.stringMatching(/雜湊/) as unknown,
+    });
+  });
+
+  it('只壞一個位元組：拋 ATTACHMENT_CORRUPT', async () => {
+    const ref = await store.saveImage({ data: PNG, ...facts });
+    const damaged = Buffer.from(PNG);
+    damaged[damaged.byteLength - 1] = (damaged[damaged.byteLength - 1] ?? 0) ^ 0xff;
+    await overwriteObject(PNG, damaged);
+    await expect(store.readImage(ref)).rejects.toMatchObject({ code: 'ATTACHMENT_CORRUPT' });
+  });
+
+  describe('去重碰到既有物件也要驗', () => {
+    it('壞圖物件在、同樣的圖再存一次：拋 ATTACHMENT_CORRUPT，不當成去重成功，物件不被動、暫存收乾淨', async () => {
+      await store.saveImage({ data: PNG, ...facts });
+      const damaged = Buffer.alloc(PNG.byteLength, 0x42);
+      const object = await overwriteObject(PNG, damaged);
+      await expect(store.saveImage({ data: PNG, ...facts })).rejects.toMatchObject({
+        code: 'ATTACHMENT_CORRUPT',
+      });
+      expect(await readFile(object)).toEqual(damaged);
+      expect(await readdir(join(store.rootDir, 'staging'))).toEqual([]);
+    });
+
+    it('壞物件在、當檔案再存一次：同樣拋 ATTACHMENT_CORRUPT，也不建檔名連結', async () => {
+      const first = await store.save({ data: Buffer.from('hello world'), name: 'a.txt' });
+      await overwriteObject(Buffer.from('hello world'), Buffer.from('HELLO WORLD'));
+      await expect(
+        store.save({ data: Buffer.from('hello world'), name: 'b.txt' }),
+      ).rejects.toMatchObject({ code: 'ATTACHMENT_CORRUPT' });
+      const aliasDir = join(store.filesDir, sha('hello world').slice(0, 2), sha('hello world'));
+      expect(await readdir(aliasDir)).toEqual([first.name]);
+    });
+
+    it('好物件：去重照舊成功（圖與檔案各一次）', async () => {
+      const a = await store.saveImage({ data: PNG, ...facts });
+      const b = await store.saveImage({ data: PNG, ...facts });
+      expect(b).toEqual(a);
+      const one = await store.save({ data: Buffer.from('same'), name: 'one.txt' });
+      const two = await store.save({ data: Buffer.from('same'), name: 'two.txt' });
+      expect(two.attachmentId).toBe(one.attachmentId);
+    });
   });
 
   it('物件不在、參照不合格式：AttachmentError', async () => {

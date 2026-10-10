@@ -16,7 +16,7 @@
  * **零憑證、零外部連線**：附件根放 `/var/tmp`。
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, stat, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
@@ -428,6 +428,25 @@ describe('讀圖路由（#733）', () => {
       expect(await c.client.readAttachment(THREAD, 'not-an-id')).toMatchObject(notFound);
       // 沒載入過的 thread 不為了讀圖建起來。
       expect(await c.client.readAttachment('never-opened', attachmentId)).toMatchObject(notFound);
+    } finally {
+      await c.handler.close();
+    }
+  });
+
+  it('引用了但物件被同樣大小的別的位元組換掉（#1338）：unknown_error，不把壞位元組交給畫面', async () => {
+    const c = connect('vision');
+    try {
+      const attachmentId = await sendImage(c);
+      const digest = attachmentId.slice('sha256:'.length);
+      const object = join(attachmentsRootOf(home), 'file-objects', digest.slice(0, 2), digest);
+      const { size } = await stat(object);
+      await chmod(object, 0o600);
+      await writeFile(object, Buffer.alloc(size, 0x41));
+      expect((await stat(object)).size).toBe(size);
+      expect(await c.client.readAttachment(THREAD, attachmentId)).toMatchObject({
+        kind: 'rejected',
+        code: 'unknown_error',
+      });
     } finally {
       await c.handler.close();
     }
