@@ -28,6 +28,7 @@ import {
   TITLE,
   TODOS,
   TOKEN_USAGE,
+  UplinkTransportError,
 } from '@nexus/wire';
 import {
   act,
@@ -1423,7 +1424,7 @@ describe('上行被拒絕的時候', () => {
   it.each([
     ['連不上', new TypeError('連不上（#1335 toast）')],
     ['回條的 JSON 斷在半路', new SyntaxError('JSON 斷了（#1335 toast）')],
-    ['閘道逾時 504', new Error('上行被載體層擋下：504 逾時了（#1335 toast）')],
+    ['閘道逾時 504', new UplinkTransportError(504, '逾時了（#1335 toast）')],
   ])(
     '可能已經到了（%s）：不說沒送出去，說不確定、原樣重送不會重複（#1335）',
     async (_case, error) => {
@@ -1461,14 +1462,14 @@ describe('上行被拒絕的時候', () => {
     [
       '載體層擋下（狀態碼不是 2xx）',
       async (): Promise<UplinkResult> => {
-        throw new Error('上行被載體層擋下：403 擋了（#1335 toast）');
+        throw new UplinkTransportError(403, '擋了（#1335 toast）');
       },
       '上行被載體層擋下：403 擋了（#1335 toast）',
     ],
     [
       '伺服器暫時不收 503',
       async (): Promise<UplinkResult> => {
-        throw new Error('上行被載體層擋下：503 忙（#1335 toast）');
+        throw new UplinkTransportError(503, '忙（#1335 toast）');
       },
       '上行被載體層擋下：503 忙（#1335 toast）',
     ],

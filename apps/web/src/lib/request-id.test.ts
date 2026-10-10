@@ -1,4 +1,4 @@
-import { REQUEST_ID_MAX_LENGTH, createWireClient } from '@nexus/wire';
+import { REQUEST_ID_MAX_LENGTH, UplinkTransportError, createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { mayHaveArrived, newRequestId, requestIdFor } from '@/lib/request-id';
@@ -80,7 +80,10 @@ describe('requestIdFor', () => {
 });
 
 describe('mayHaveArrived', () => {
-  /** 真的 wire client 打一次 `run.start`，伺服器（或代理）回 `status`：丟出來的就是畫面會拿到的那個例外。 */
+  /**
+   * 真的 wire client 打一次 `run.start`，伺服器（或代理）回 `status`：丟出來的就是畫面會拿到的那個例外。
+   * 順便釘住它是帶著同一個 `status` 的 {@link UplinkTransportError}——判斷只讀這個欄位。
+   */
   async function thrownFor(status: number, body: string): Promise<unknown> {
     const client = createWireClient({
       baseUrl: 'http://harness.test',
@@ -89,6 +92,8 @@ describe('mayHaveArrived', () => {
     try {
       await client.runStart('t', '一句話', { requestId: 'r' });
     } catch (error) {
+      expect(error).toBeInstanceOf(UplinkTransportError);
+      expect((error as UplinkTransportError).status).toBe(status);
       return error;
     }
     throw new Error(`狀態碼 ${status} 沒有丟出例外`);
@@ -110,11 +115,9 @@ describe('mayHaveArrived', () => {
     [503, 'Service Unavailable'],
     [5020, 'x'],
   ])('其他非 2xx %i（內文「%s」）：明說了不收', async (status, body) => {
-    // `Response` 只收 200–599；超出的換成同一行訊息的形狀直接比。
+    // `Response` 只收 200–599；超出的直接建同一個型別。
     const error =
-      status <= 599
-        ? await thrownFor(status, body)
-        : new Error(`上行被載體層擋下：${status} ${body}`);
+      status <= 599 ? await thrownFor(status, body) : new UplinkTransportError(status, body);
     expect(mayHaveArrived(error)).toBe(false);
   });
 
@@ -127,6 +130,7 @@ describe('mayHaveArrived', () => {
 
   it.each([
     ['一般 Error', new Error('別的錯')],
+    ['訊息長得像閘道 502 的一般 Error：不解析字串', new Error('上行被載體層擋下：502 Bad Gateway')],
     ['不是 Error', '上行被載體層擋下：502 字串'],
   ])('%s：明說了不收', (_case, error) => {
     expect(mayHaveArrived(error)).toBe(false);

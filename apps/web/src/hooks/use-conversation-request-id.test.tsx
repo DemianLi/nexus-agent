@@ -1,3 +1,4 @@
+import { UplinkTransportError } from '@nexus/wire';
 import type { Event, WireClient } from '@nexus/wire';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -81,7 +82,8 @@ describe('send 的請求編號（#1335）', () => {
   it.each([
     ['連不上（TypeError）', new TypeError('Failed to fetch'), true],
     ['回條的 JSON 斷在半路（SyntaxError）', new SyntaxError('Unexpected end of JSON input'), true],
-    ['載體層擋下（一般 Error）', new Error('上行被載體層擋下：403 no'), false],
+    ['閘道 504（UplinkTransportError）', new UplinkTransportError(504, 'Gateway Timeout'), true],
+    ['載體層擋下 403（UplinkTransportError）', new UplinkTransportError(403, 'no'), false],
   ])('run.start 丟出例外，%s：不確定有沒有到才標 uncertain', async (_case, error, uncertain) => {
     const { client } = setup();
     const failing = {
