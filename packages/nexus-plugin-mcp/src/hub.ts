@@ -20,6 +20,15 @@
  * 3. **起不來的那一列也登記**：dsh 的 provider 登記不看連線成敗，呼叫時才報 `server is disconnected`；這裡一樣——名字照列、
  *    工具照在，叫它得到同一句（`mcp-client(<name>): server is disconnected`，dsh `connection.ts:128,361`）。
  *
+ * 4. **超出 dsh：提示詞多一段引用要求**（[#1319](https://github.com/DemianLi/nexus-agent/issues/1319)）。dsh 只對
+ *    `web_search`／`web_fetch` 要求引用，系統提示詞段落在 `packages/web/tool-web/src/search.ts:315-323`
+ *    （`… and cite the relevant URLs as markdown links.`），MCP 沒有。我們的 web 搜尋判過不做（T-10），內部資料全走 MCP，
+ *    產品定位（[#949](https://github.com/DemianLi/nexus-agent/issues/949)）需要讓使用者知道答案出自哪個系統，所以把同一套提示
+ *    移到 MCP：措辭與語氣比照 `search.ts`（英文、一句），多一個「說出是哪個 server」，因為對內部系統來說出處首先是系統名。
+ *    **只要有任何一台 MCP 登記進來就有這一段**，不看它宣告不宣告 `resources` 能力——hub 的登記不分（只掛 tools 的
+ *    server 也登記），所以 {@link CITATION_PROMPT} 跟 {@link hubPromptText} 的其他文字一起出現或一起不出現。工具結果那一半
+ *    （結果含 resource link 才在結尾加一句）在 `project-content.ts`。
+ *
  * 其餘照 dsh：三支工具的名字、描述、參數、找不到 server 的錯誤訊息一字不差；`list` 沒帶 `cursor` 時由 SDK 的
  * `Client.listResources()` 自己走完所有頁並合併（`@modelcontextprotocol/client` 2.x，dsh README 同寫「Without a cursor,
  * the MCP SDK collects the server's pages」，`mcp-resources/README.md:36`），帶了 `cursor` 就只要那一頁並原樣回
@@ -95,6 +104,14 @@ function isRoot(holder: unknown, root: unknown): boolean {
   return holder === root;
 }
 
+/**
+ * 提示詞裡的引用要求（偏離 4）。比照 dsh `search.ts:315-323` 的語氣，多一個「說出是哪個 server」。
+ */
+export const CITATION_PROMPT =
+  '## MCP citations\n\n' +
+  'When your answer uses the result of an MCP tool, say which MCP server (the system) it came from, ' +
+  'and cite the relevant resource links in that result as markdown links.';
+
 /** 提示詞要接在 system message 後面的文字；沒有任何 server 登記時是空字串。 */
 export function hubPromptText(sources: Iterable<McpSource>): string {
   const all = [...sources];
@@ -103,6 +120,7 @@ export function hubPromptText(sources: Iterable<McpSource>): string {
   const sections = [
     '## MCP resource servers\n\n' +
       `Use ${RESOURCE_TOOL_NAMES.join(', ')} with one of these names as the server argument: ${JSON.stringify(names)}.`,
+    CITATION_PROMPT,
   ];
   for (const source of all) if (source.instructions !== '') sections.push(source.instructions);
   return sections.join('\n\n');

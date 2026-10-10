@@ -13,7 +13,7 @@ import type { PluginRegistry } from '@nexus/core';
 import { loadPlugins } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 import { RESOURCE_TOOL_NAMES } from './hub.js';
-import { ensureHub, hubPromptText, renderResourceResult } from './hub.js';
+import { CITATION_PROMPT, ensureHub, hubPromptText, renderResourceResult } from './hub.js';
 import type { McpResourceRequest, McpSource } from './hub.js';
 import { createMcpPlugin } from './index.js';
 import {
@@ -107,9 +107,33 @@ describe.each(TARGETS)('$label：指引與資源', (target) => {
         '基底提示詞\n\n' +
           '## MCP resource servers\n\n' +
           'Use list_mcp_resources, list_mcp_resource_templates, read_mcp_resource with one of these names as the server argument: ["srv"].' +
+          `\n\n${CITATION_PROMPT}` +
           '\n\n### MCP server: srv\n\n先讀 {model} 與 {cwd} 的說明。\n不要改檔。',
       );
       expect(await systemTextOf(registry)).toBe(first);
+    } finally {
+      await dispose();
+    }
+  });
+
+  // #1319：引用要求跟著「有 server 登記」走，不跟著「宣告了 resources 能力」走。這一台沒有設 FIXTURE_RESOURCES，
+  // 也沒有指引，連 `resources/list` 都會被拒——提示詞裡仍然要有這一段。
+  it('只掛 tools、沒有 resources 能力的 server 也有引用要求', async () => {
+    const { registry, dispose } = await loadPlugins([row(target, {})]);
+    try {
+      const text = await systemTextOf(registry);
+      expect(text).toContain(CITATION_PROMPT);
+      expect(text).toContain('say which MCP server (the system) it came from');
+      expect(text).toContain('cite the relevant resource links in that result as markdown links');
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('起不來的那一列也登記，引用要求照在（跟 hub 的其他文字一起）', async () => {
+    const { registry, dispose } = await loadPlugins([brokenRow()]);
+    try {
+      expect(await systemTextOf(registry)).toContain(CITATION_PROMPT);
     } finally {
       await dispose();
     }
@@ -395,5 +419,9 @@ describe('純函式', () => {
     const text = hubPromptText([mk('b', '### MCP server: b\n\nB'), mk('a', '')]);
     expect(text).toContain('["a","b"]');
     expect(text.endsWith('### MCP server: b\n\nB')).toBe(true);
+    // 引用要求在名單之後、指引之前，只出現一次，不管登記幾台。
+    expect(text.split(CITATION_PROMPT)).toHaveLength(2);
+    expect(text.indexOf(CITATION_PROMPT)).toBeGreaterThan(text.indexOf('["a","b"]'));
+    expect(text.indexOf(CITATION_PROMPT)).toBeLessThan(text.indexOf('### MCP server: b'));
   });
 });

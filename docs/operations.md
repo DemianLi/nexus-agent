@@ -540,6 +540,11 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `### MCP server: <名字>` 接在系統提示詞後面，模型另有 `list_mcp_resources`、`list_mcp_resource_templates`、
   `read_mcp_resource` 三支工具讀它的資源。指引連同標頭超過 `maxInstructionBytes`（預設 32768 位元組）那一列算連線失敗，
   走上一條的 `failOnStartupError` 規則。細節見同一份 README。
+- **MCP 結果會帶名稱與網址，並請模型標出處**（[#1319](https://github.com/DemianLi/nexus-agent/issues/1319)，超出 dsh）：
+  server 回的 `resource_link` 給模型的文字是 `Resource link: <名稱> (<URI>)`（以前只有網址）；系統提示詞多一段
+  `## MCP citations`，要模型說出答案用到哪個 MCP server、並把結果裡的連結用 markdown 連結標出來；只有**結果含 resource link
+  時**，工具結果結尾才多一句引用提示。**這是對模型的請求，不是保證**：模型可能不照做，也可能只標連結不講系統名。server 回的結果沒有
+  連結（只有文字）時，今天沒有任何東西能標出處——要等結構化來源（地圖 [#1318](https://github.com/DemianLi/nexus-agent/issues/1318) 的階段 B）。
 - **MCP 伺服器掛上之後掉了線會自動重連**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)，照 dsh）：500 ms
   起每次連續失敗加倍、上限 30 秒，連續失敗 10 次放棄，連上之後撐過 30 秒失敗次數歸零；斷線期間工具照列但呼叫失敗，連回來之後同一批
   工具又叫得動、定義不變。放棄之後那台的工具對模型隱藏，到下一次組裝才恢復。進度往伺服器日誌（stderr）寫。`reconnect.enabled: false`

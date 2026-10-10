@@ -22,7 +22,8 @@ import {
   mcpConfigSchema,
   mcpPlugin,
 } from './index.js';
-import { FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
+import { CITE_LINKS, CITE_TEXT, FAILURE_TEXT, RELEASE_NOTE } from './fixture-tools.js';
+import { CITE_RESOURCE_LINKS } from './project-content.js';
 import { publicToolName } from './names.js';
 import { modelToolNames } from './tool-names.js';
 
@@ -152,6 +153,7 @@ describe('接上一台真的 MCP server', () => {
         'mcp__fixture__snapshot',
         'mcp__fixture__read_env',
         'mcp__fixture__fetch_url',
+        'mcp__fixture__cite_sources',
       ]);
     } finally {
       await dispose();
@@ -193,6 +195,40 @@ describe('接上一台真的 MCP server', () => {
         { type: 'text', text: '[image unavailable: image/png; no attachment store is mounted]' },
         { type: 'text', text: '畫面之後' },
       ]);
+    } finally {
+      await dispose();
+    }
+  });
+
+  // #1319：server 回 `resource_link`，模型看到的是 dsh 的 `Resource link: <name> (<uri>)`（adapter 2.0.0 的 metadata 帶
+  // name），結尾多一句引用提示；回文字的工具（上面的 `fetch_release_note`）不帶。
+  it('回 resource_link 的工具：名稱加網址，結尾有引用提示；只回文字的沒有', async () => {
+    const { registry, dispose } = await loadPlugins([fixturePlugin()]);
+    try {
+      const message = (await registry.tools.resolve('mcp__fixture__cite_sources')?.value.invoke({
+        type: 'tool_call',
+        id: 'call_cite',
+        name: 'mcp__fixture__cite_sources',
+        args: {},
+      })) as ToolMessage;
+      expect(message.content).toEqual([
+        { type: 'text', text: CITE_TEXT },
+        ...CITE_LINKS.map((link) => ({
+          type: 'text',
+          text: `Resource link: ${link.name} (${link.uri})`,
+        })),
+        { type: 'text', text: CITE_RESOURCE_LINKS },
+      ]);
+
+      const plain = (await registry.tools
+        .resolve('mcp__fixture__fetch_release_note')
+        ?.value.invoke({
+          type: 'tool_call',
+          id: 'call_plain',
+          name: 'mcp__fixture__fetch_release_note',
+          args: { topic: '發行說明' },
+        })) as ToolMessage;
+      expect(JSON.stringify(plain.content)).not.toContain(CITE_RESOURCE_LINKS);
     } finally {
       await dispose();
     }
