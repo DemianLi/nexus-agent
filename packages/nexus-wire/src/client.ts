@@ -11,6 +11,7 @@
  */
 
 import { UPLOAD_NAME_PARAM, attachmentPath, uploadPath } from './attachments.js';
+import { UplinkTransportError } from './uplink-error.js';
 import type {
   AttachmentReadResponse,
   AttachmentReadResult,
@@ -867,7 +868,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
     // （`packages/api/gateway/src/index.ts:134`，`<namespace>/<method>`）。
     const response = await postJson(commandPath(threadId, method), command);
     if (!response.ok) {
-      throw new Error(`上行被載體層擋下：${response.status} ${await response.text()}`);
+      throw new UplinkTransportError(response.status, await response.text());
     }
     return (await response.json()) as UplinkResult;
   }

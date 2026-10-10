@@ -3,6 +3,7 @@ import { createWireClient } from './client.js';
 import type { UplinkResult } from './client.js';
 import { WIRE_CHANNELS, errorResponse, successResponse } from './protocol.js';
 import { encodeSseFrame } from './sse.js';
+import { UplinkTransportError } from './uplink-error.js';
 import type { Event, WireErrorCode, WireErrorResponse } from './protocol.js';
 
 /**
@@ -88,6 +89,43 @@ describe('GET /threads 的釘選與封存集合（#633）', () => {
       expect(result).not.toHaveProperty('pinnedThreadIds');
       expect(result.archivedThreadIds).toEqual(['c']);
     }
+  });
+});
+
+describe('上行回了非 2xx（#1355）', () => {
+  const failWith = (status: number, body: string) =>
+    stub(() => new Response(body, { status, headers: { 'content-type': 'text/html' } })).client;
+
+  it('拋 UplinkTransportError，帶 status 與 body，message 維持舊格式', async () => {
+    const error = await failWith(502, '<h1>Bad Gateway</h1>')
+      .runStart('t 1', '哈囉')
+      .catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(UplinkTransportError);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({
+      name: 'UplinkTransportError',
+      status: 502,
+      body: '<h1>Bad Gateway</h1>',
+      message: '上行被載體層擋下：502 <h1>Bad Gateway</h1>',
+    });
+  });
+
+  it('各種狀態碼各帶各的 status；本文是空字串也照給', async () => {
+    for (const status of [400, 401, 413, 500, 503, 504]) {
+      const error = await failWith(status, '')
+        .runCancel('t 1')
+        .catch((caught: unknown) => caught);
+      expect(error, String(status)).toBeInstanceOf(UplinkTransportError);
+      expect((error as UplinkTransportError).status).toBe(status);
+      expect((error as UplinkTransportError).body).toBe('');
+    }
+  });
+
+  it('2xx 但命令被拒（`rejected`）不是這個錯誤：照舊走結果', async () => {
+    const { client } = stub(() =>
+      Response.json(errorResponse(1, 'invalid_argument', '不認得這個命令')),
+    );
+    await expect(client.runStart('t 1', '哈囉')).resolves.toMatchObject({ type: 'error' });
   });
 });
 

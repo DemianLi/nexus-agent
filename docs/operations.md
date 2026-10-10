@@ -190,6 +190,16 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **讀圖**（#733）：`GET /threads/:id/attachments/:attachmentId`（`attachmentId` 是 `sha256:<hex>`，整段 URL 編碼；同會話 cookie 認證）回 `{ attachment, data }`（參照加 base64，照 dsh `session.attachment`）。**授權是「這條 thread 的日誌引用過它」，不是知道 id**：附件儲存是整個 harness home 共用、內容定址的，所以別條 thread、沒引用過的 id、檔案（只收圖）、壞編號、沒載入的 thread 一律 `attachment_not_found`，不細分。只讀已經載入的 thread（記憶體裡那份日誌，含還沒落盤的），不為了讀圖建 thread。日誌引用了但位元組不在了（`attachments/` 被清）是 `unknown_error`。
 
+**附件物件損毀（`ATTACHMENT_CORRUPT`）**（#1338）：附件是內容定址的，物件的路徑就是它內容的 sha256。**這個碼的意思是物件的內容重算出來對不上路徑上的雜湊**（磁碟損毀、寫到一半被中斷、有人動過儲存目錄；大小對不上參照也算），harness 不把來路不明的位元組交出去。**三個地方會撞到**：讀圖（網頁取圖回 `unknown_error`、harness 記一行 `[讀圖] thread … 的圖 sha256:… 讀不回來`，原因是「圖片的內容對不上它的雜湊」或「圖片的大小對不上參照」；組給模型的請求把那張圖換成 `is no longer available in attachment storage` 的佔位字，這一條不記警告，所以只看佔位字會漏掉）；上傳檔案與送出內嵌圖時，碰到已經存在的同雜湊物件也會重算，對不上就整個上傳失敗（`unknown_error`，訊息是「既有物件的內容對不上它的雜湊（sha256:…），不拿來去重」），不會回一張指向壞物件的收據。
+
+**壞物件在** `<harness home>/attachments/v1/file-objects/<雜湊前兩碼>/<sha256>`（物件是 `0400`、目錄是 `0700`）；雜湊在警告的 `sha256:…` 或上傳失敗的訊息裡；只有佔位字時只看得到前八碼，去 `file-objects/<前兩碼>/` 底下找前綴相同的那個。**怎麼修（2026-10-11 在 macOS、本機檔案系統實測）**：
+
+- **圖片**：刪掉那個物件，再上傳一次同一張圖。內容一樣雜湊就一樣，重傳之後是同一個 `attachmentId`，**舊會話日誌裡的參照不用改，直接讀得回來**（實測重傳後 `readImage` 拿舊參照成功、位元組與原圖相同）。刪掉之後、重傳之前，讀同一張圖會是「圖片讀不到」（物件不在），不是 `ATTACHMENT_CORRUPT`。
+- **檔案**：同樣刪掉那個物件，再上傳一次同一個檔案。重傳時 harness 會比對檔名別名（`files/<前兩碼>/<sha256>/<檔名>`）跟新物件是不是同一個 inode，不同就用新的硬連結**原子地**換掉別名（先連到暫存名再 `rename` 蓋過去，別名不會有一段時間讀不到）；實測重傳之後別名與物件是同一個 inode、模型用路徑讀到的是正確內容（#1352；在那之前只刪物件修不好，別名還指著舊的壞 inode，得連 `files/<前兩碼>/<sha256>/` 整個目錄一起刪）。換一個檔名重傳只會建新別名，舊名那一條沒重傳就不會被修。
+- 重傳的得是**同樣的位元組**；內容不同就是另一個雜湊，修不到舊參照。
+
+**已知缺口**：模型經檔案路徑讀附件（`ATTACHMENTS_PREFIX` 的路由）不經 `AttachmentStore`，讀的時候不驗內容；壞內容只有在重傳去重碰到物件時才會被發現。dsh 的檔案讀取會驗（`file-store.ts:179`），要不要在路由上補是另一件事。
+
 **外溢門檻可調、可關**：一則工具結果超過 `spill-policy` 那一列的 `maxInlineTokens`（出貨 12500，估算 token）時，全文存進上面那個暫存目錄，模型只收到頭尾預覽和一句帶路徑的通知（`Full formatted result stored at: …`），要全文就用 `read_file` 照路徑讀；`read_file` 自己的結果不外溢。日誌記的是這份預覽，不是全文，所以全文只在暫存目錄的保留期內讀得回。把 `maxInlineTokens` 刪掉（或把那一列標成 `disabled: true`）就停用；停用之後超過 80,000 字元的結果仍由基座換成預覽，那一條關不掉。暫存目錄寫不進去、或沒有會話日誌時不外溢，原樣交給模型。
 
 **搜尋結果看筆數、不看字數**：`grep` 命中超過 `tool-fs-search` 那一列的 `grepMaxMatches`（出貨 250）、`glob` 或 `ls` 超過 `globMaxResults`（出貨 100）時，模型只收到前段，結尾一句帶路徑的定位（`Full grep result stored at: …`），完整結果存進上面那個暫存目錄，用 `read_file` 照路徑讀。`grep` 只管逐行命中（`content`）那種輸出，`count`／`files_with_matches` 照原樣。暫存目錄寫不進去、或沒有會話日誌時照樣只留前段，結尾改講沒存到，搜尋不算失敗。把那一列標成 `disabled: true` 就回到基座原樣：超過 80,000 字元由工具自己截掉，原文不留。
