@@ -157,6 +157,10 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   移過來：系統提示詞多一段「說出是哪個 server、結果裡的連結用 markdown 連結標出來」（有任何 MCP 列登記就有，不看 resources 能力），
   工具結果**只在**含 resource link 時結尾多一句 `Cite the relevant resource links above as markdown links in your answer.`
   （措辭用 resource links 而不是 URLs，因為 MCP 的 URI 不一定是 http）。模型有沒有照做不保證，實機結果記在 PR。
+- **同一段提示詞多兩條規則：只講結果裡有的事實、查無要先明說**（[#1345](https://github.com/DemianLi/nexus-agent/issues/1345)，
+  **超出 dsh**，登記在 `hub.ts` 檔頭偏離 5）。dsh 沒有對應的段落。起因是 [#1329](https://github.com/DemianLi/nexus-agent/issues/1329)
+  真模型量測：結果只有連結時 10/24 編出流程，查無資料時 20/24 先反問、明說查無 5/24。放 MCP 段而不放 persona
+  （persona 是 dsh web-app profile 的出貨值）。同樣是請求不是保證。
 - **server 回 `isError` 時，plugin 把它拋回去。** `@langchain/mcp-adapters` 2.0.0 在有 `tool_call_id`
   時不拋，回一則 `status: 'error'` 的訊息、文字是 server 的原文；1.x 是拋 `ToolException`。plugin 在每個
   工具外面把前者改回拋，錯誤才走圍堵（`containment.ts`）那條出口，模型看到 `Error: 工具 … 執行失敗：<原文>`
