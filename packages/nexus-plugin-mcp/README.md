@@ -145,6 +145,12 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 - **結果的呈現由 adapter 決定。** 文字與圖片進 `content`、embedded resource 進 `artifact`
   是 `@langchain/mcp-adapters` 的預設，我們不改。dsh 那套「圖片要先證明這條 model route
   真的收圖片才落地」在這裡沒有對應物。
+- **resource link 寫成 `Resource link: <name> (<uri>)`，並要求模型標出處**（[#1319](https://github.com/DemianLi/nexus-agent/issues/1319)，
+  **超出 dsh**）。名稱與 URI 照 dsh 拼，adapter 2.0.0 的 metadata 帶著 `name`，所以不再只剩網址。dsh 只對 `web_search`／`web_fetch`
+  要求引用（`search.ts:92` 的結果結尾、`:315-323` 的系統提示詞），MCP 沒有；我們的 web 搜尋判過不做，內部資料全走 MCP，所以把同一套
+  移過來：系統提示詞多一段「說出是哪個 server、結果裡的連結用 markdown 連結標出來」（有任何 MCP 列登記就有，不看 resources 能力），
+  工具結果**只在**含 resource link 時結尾多一句 `Cite the relevant resource links above as markdown links in your answer.`
+  （措辭用 resource links 而不是 URLs，因為 MCP 的 URI 不一定是 http）。模型有沒有照做不保證，實機結果記在 PR。
 - **server 回 `isError` 時，plugin 把它拋回去。** `@langchain/mcp-adapters` 2.0.0 在有 `tool_call_id`
   時不拋，回一則 `status: 'error'` 的訊息、文字是 server 的原文；1.x 是拋 `ToolException`。plugin 在每個
   工具外面把前者改回拋，錯誤才走圍堵（`containment.ts`）那條出口，模型看到 `Error: 工具 … 執行失敗：<原文>`
