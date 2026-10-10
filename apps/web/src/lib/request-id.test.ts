@@ -112,7 +112,9 @@ describe('mayHaveArrived', () => {
   ])('其他非 2xx %i（內文「%s」）：明說了不收', async (status, body) => {
     // `Response` 只收 200–599；超出的換成同一行訊息的形狀直接比。
     const error =
-      status <= 599 ? await thrownFor(status, body) : new Error(`上行被載體層擋下：${status} ${body}`);
+      status <= 599
+        ? await thrownFor(status, body)
+        : new Error(`上行被載體層擋下：${status} ${body}`);
     expect(mayHaveArrived(error)).toBe(false);
   });
 
