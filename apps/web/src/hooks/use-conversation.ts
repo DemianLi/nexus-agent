@@ -51,7 +51,7 @@ import { RatingsController } from '@/lib/feedback-ratings';
 import { PLAN_EXIT_LINE } from '@/lib/plan-chip';
 import type { RatingsView } from '@/lib/feedback-ratings';
 import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
-import { newRequestId } from '@/lib/request-id';
+import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 
 /** 回饋對話框開給誰：一則回覆（按了讚或踩），或整個會話（只打了 `/feedback`）。 */
 export type FeedbackTarget =
@@ -614,11 +614,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         });
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
-        // 連不上、回條讀到一半斷了是 `TypeError`，回條的 JSON 斷在半路是 `SyntaxError`：請求可能已經到了。狀態碼不是 2xx
-        // （wire 丟的「上行被載體層擋下」）是一般的 `Error`：伺服器明說了不收（#1335）。
-        return error instanceof TypeError || error instanceof SyntaxError
-          ? { message, uncertain: true }
-          : { message };
+        // 請求可能已經到了（網路層斷了、閘道 502／504）就標不確定；伺服器明說不收的照舊（#1335）。
+        return mayHaveArrived(error) ? { message, uncertain: true } : { message };
       }
       if (result.type === 'error') {
         return {

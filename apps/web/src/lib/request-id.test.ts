@@ -1,7 +1,7 @@
-import { REQUEST_ID_MAX_LENGTH } from '@nexus/wire';
+import { REQUEST_ID_MAX_LENGTH, createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { newRequestId, requestIdFor } from '@/lib/request-id';
+import { mayHaveArrived, newRequestId, requestIdFor } from '@/lib/request-id';
 import type { PendingRequest, Sentence } from '@/lib/request-id';
 
 const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
@@ -76,5 +76,57 @@ describe('requestIdFor', () => {
   it('附件與點名都相同：沿用', () => {
     const same = sentence({ mention: 'explorer', attachmentIds: ['a', 'b'] });
     expect(requestIdFor(pendingFor(same), { ...same, attachmentIds: ['a', 'b'] })).toBe('id-上次');
+  });
+});
+
+describe('mayHaveArrived', () => {
+  /** 真的 wire client 打一次 `run.start`，伺服器（或代理）回 `status`：丟出來的就是畫面會拿到的那個例外。 */
+  async function thrownFor(status: number, body: string): Promise<unknown> {
+    const client = createWireClient({
+      baseUrl: 'http://harness.test',
+      fetch: async () => new Response(body, { status }),
+    });
+    try {
+      await client.runStart('t', '一句話', { requestId: 'r' });
+    } catch (error) {
+      return error;
+    }
+    throw new Error(`狀態碼 ${status} 沒有丟出例外`);
+  }
+
+  it.each([
+    [502, 'Bad Gateway'],
+    [504, 'Gateway Timeout'],
+    [504, ''],
+  ])('閘道 %i（內文「%s」）：代理收到了、上游沒回好，不確定', async (status, body) => {
+    expect(mayHaveArrived(await thrownFor(status, body))).toBe(true);
+  });
+
+  it.each([
+    [400, 'bad request'],
+    [403, 'origin not allowed'],
+    [413, 'too large'],
+    [500, 'upstream 502'],
+    [503, 'Service Unavailable'],
+    [5020, 'x'],
+  ])('其他非 2xx %i（內文「%s」）：明說了不收', async (status, body) => {
+    // `Response` 只收 200–599；超出的換成同一行訊息的形狀直接比。
+    const error =
+      status <= 599 ? await thrownFor(status, body) : new Error(`上行被載體層擋下：${status} ${body}`);
+    expect(mayHaveArrived(error)).toBe(false);
+  });
+
+  it.each([
+    ['連不上（TypeError）', new TypeError('Failed to fetch')],
+    ['回條的 JSON 斷在半路（SyntaxError）', new SyntaxError('Unexpected end of JSON input')],
+  ])('%s：不確定', (_case, error) => {
+    expect(mayHaveArrived(error)).toBe(true);
+  });
+
+  it.each([
+    ['一般 Error', new Error('別的錯')],
+    ['不是 Error', '上行被載體層擋下：502 字串'],
+  ])('%s：明說了不收', (_case, error) => {
+    expect(mayHaveArrived(error)).toBe(false);
   });
 });

@@ -52,6 +52,24 @@ export function requestIdFor(pending: PendingRequest | undefined, sentence: Sent
     : newRequestId();
 }
 
+/**
+ * `run.start` 丟出的例外是不是「不確定有沒有送到」：請求可能已經到了伺服器，只是回條沒好好回來。是的話，畫面不說
+ * 「沒送出去」，說原樣重送不會重複——帶著同一個編號，伺服器收過就不再排。
+ *
+ * - 連不上、回條讀到一半斷了是 `TypeError`；回條的 JSON 斷在半路是 `SyntaxError`。
+ * - 狀態碼 502、504：代理收到了請求、上游沒回好，504 時上游多半已經收到、只是逾時。
+ * - 其他非 2xx（harness 自己回的 4xx、500、503）是明說了不收。
+ *
+ * 狀態碼只在 wire 丟的訊息裡（`sendCommand` 的「上行被載體層擋下：<狀態碼> <內文>」），所以從訊息讀；格式由
+ * `request-id.test.ts` 用真的 wire client 釘住。
+ */
+export function mayHaveArrived(error: unknown): boolean {
+  if (error instanceof TypeError || error instanceof SyntaxError) return true;
+  return error instanceof Error && GATEWAY_REJECTION.test(error.message);
+}
+
+const GATEWAY_REJECTION = /^上行被載體層擋下：50[24](?:\s|$)/u;
+
 function sameSentence(a: Sentence, b: Sentence): boolean {
   return (
     a.text.trim() === b.text.trim() &&
