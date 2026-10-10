@@ -39,7 +39,7 @@ import type { ImageSupport } from './model-catalog.js';
 export interface AttachmentSource {
   /** 這份檔案的存放路徑現在讀不讀得到。 */
   hasFile(ref: FileAttachmentRef): Promise<boolean>;
-  /** 一張圖的位元組；讀不到、大小對不上就拋。 */
+  /** 一張圖的位元組；讀不到、大小或雜湊對不上就拋。 */
   readImage(ref: ImageAttachmentRef): Promise<Uint8Array>;
 }
 

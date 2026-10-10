@@ -393,6 +393,7 @@ export type {
   WireClientOptions,
 } from './client.js';
 export { createWireClient } from './client.js';
+export { UplinkTransportError } from './uplink-error.js';
 export type {
   RequestHeaderSnapshot,
   RequestSnapshotsView,
