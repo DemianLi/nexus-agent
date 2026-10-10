@@ -43,6 +43,31 @@ export function findTranscriptItem(id: string): HTMLElement | undefined {
   );
 }
 
+type ExpandRun = (entryId: string) => boolean;
+
+let expander: ExpandRun | undefined;
+
+/**
+ * 對話區登記「把含有這一則的那一段收起來的工具呼叫展開」（#1309，`components/tool-run.tsx`）：展開要**同步畫出來**
+ * （`flushSync`），回傳那一則是不是在某一段裡。卸下時用回傳的函式取消。
+ */
+export function registerRunExpander(expand: ExpandRun): () => void {
+  expander = expand;
+  return () => {
+    if (expander === expand) expander = undefined;
+  };
+}
+
+/**
+ * 找那一格；它收在一段工具呼叫裡（#1309）就先展開那一段再找。只在使用者按下去的那一刻呼叫（展開會同步重畫）。
+ * 找不到（沒載入、畫不出來）是 `undefined`。
+ */
+export function findOrExpandTranscriptItem(id: string): HTMLElement | undefined {
+  const found = findTranscriptItem(id);
+  if (found !== undefined) return found;
+  return expander?.(id) === true ? findTranscriptItem(id) : undefined;
+}
+
 /** 這一格被標示的計時器：同一格連按不疊，換一格就收掉上一格。 */
 let marked: { item: HTMLElement; timer: ReturnType<typeof setTimeout> } | undefined;
 

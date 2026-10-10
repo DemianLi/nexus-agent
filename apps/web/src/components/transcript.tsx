@@ -11,6 +11,8 @@
  *
  * 模型的推理畫在它那則回覆的泡泡上方，預設收合（`ReasoningRow`，#527）。
  *
+ * 一輪裡連續完成的工具呼叫（連同夾在中間、只有思考的那幾步）收成一列，預設收合（`ToolRun`，#1309；收哪些見 `lib/tool-runs.ts`）。
+ *
  * 模型與工具都可能來自 subagent，
  * 而**歸屬是折疊器 join 出來的**——線上沒有 subagent 的名字，只有 namespace 樹
  * （見 `@nexus/wire` 的 `conversation.ts`）。join 不起來的時候它說「未歸屬」，
@@ -22,6 +24,7 @@
 
 import { Activity, ArrowDown, ThumbsDown, ThumbsUp } from 'lucide-react';
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { flushSync } from 'react-dom';
 
 import type {
   AnswerEntry,
@@ -49,6 +52,7 @@ import { PlanToolCard } from '@/components/plan/review';
 import { ReasoningRow } from '@/components/reasoning-row';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { AttributionBadge, ToolCard } from '@/components/tool/card';
+import { ToolRun } from '@/components/tool-run';
 import { Button } from '@/components/ui/button';
 import { Message, MessageContent, MessageFooter, MessageHeader } from '@/components/ui/message';
 import {
@@ -65,7 +69,8 @@ import type { ChangesStores } from '@/lib/changes-diff';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import { decisionText } from '@/lib/decision-view';
 import { transcriptItems } from '@/lib/deliverables-view';
-import { registerTranscriptScroller } from '@/lib/transcript-locate';
+import { groupToolRuns, toolRunOf } from '@/lib/tool-runs';
+import { registerRunExpander, registerTranscriptScroller } from '@/lib/transcript-locate';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { RetryNotice } from '@/components/retry-notice';
 import { useScrollButtonClearance } from '@/hooks/use-scroll-button-clearance';
@@ -518,7 +523,60 @@ export function Transcript({
   )?.id;
   const answers = useMemo(() => pairAnswers(state.entries), [state.entries]);
   const names = useMemo(() => namesOf(state.entries), [state.entries]);
-  const items = transcriptItems(state.entries).flatMap((item) => {
+  // 收起來的工具呼叫哪幾段打開了（#1309）：預設收合、不跨重新整理。值記怎麼打開的——觀測分頁定位進來的不做動畫。
+  const [openRuns, setOpenRuns] = useState<ReadonlyMap<string, 'user' | 'locate'>>(new Map());
+  const grouped = useMemo(() => groupToolRuns(transcriptItems(state.entries)), [state.entries]);
+  // 定位時（使用者按下去的那一刻）要讀到最新的分組，登記一次就好，所以走 ref。
+  const groupedRef = useRef(grouped);
+  useEffect(() => {
+    groupedRef.current = grouped;
+  }, [grouped]);
+  useEffect(
+    () =>
+      registerRunExpander((entryId) => {
+        const run = toolRunOf(groupedRef.current, entryId);
+        if (run === undefined) return false;
+        // 同步畫出來：定位接著就要找那一格、量它的位置。
+        flushSync(() => setOpenRuns((current) => new Map(current).set(run, 'locate')));
+        return true;
+      }),
+    [],
+  );
+  const renderEntry = (entry: ConversationEntry) => {
+    const answer = answers.get(entry.id);
+    return (
+      <Entry
+        entry={entry}
+        beam={entry.id === beamId}
+        subagentNames={names}
+        {...(feedback === undefined ? {} : { feedback })}
+        {...(answer === undefined ? {} : { answer })}
+      />
+    );
+  };
+  const items = grouped.flatMap((item) => {
+    if (item.kind === 'tool-run') {
+      const opened = openRuns.get(item.id);
+      return {
+        id: item.id,
+        node: (
+          <ToolRun
+            run={item}
+            open={opened !== undefined}
+            instant={opened === 'locate'}
+            onOpenChange={(open) =>
+              setOpenRuns((current) => {
+                const next = new Map(current);
+                if (open) next.set(item.id, 'user');
+                else next.delete(item.id);
+                return next;
+              })
+            }
+            renderEntry={renderEntry}
+          />
+        ),
+      };
+    }
     if (item.kind === 'changes') {
       return changes === undefined
         ? []
@@ -530,20 +588,7 @@ export function Transcript({
         node: <DeliverablesCard files={item.files} download={deliverableDownload} />,
       };
     }
-    const { entry } = item;
-    const answer = answers.get(entry.id);
-    return {
-      id: entry.id,
-      node: (
-        <Entry
-          entry={entry}
-          beam={entry.id === beamId}
-          subagentNames={names}
-          {...(feedback === undefined ? {} : { feedback })}
-          {...(answer === undefined ? {} : { answer })}
-        />
-      ),
-    };
+    return { id: item.entry.id, node: renderEntry(item.entry) };
   });
   // 串流中段出錯、正在等著整次重打（#520）：接在這一輪的最後，下一則回覆一開始就收掉（折疊器清成 `null`）。
   if (state.retry !== null) {
