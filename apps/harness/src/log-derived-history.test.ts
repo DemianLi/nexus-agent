@@ -184,6 +184,8 @@ describe('對照場景：預期逐位元組相同', () => {
     const script: Script = (i) => (i === 0 ? echoCall('call_a', '嗨') : {});
     const run = await runAssembly('叫工具\n再說\n/exit\n', script, [createEchoPlugin()]);
     await expectDerivedHistory('C1', run, [], 2);
+    // 剪刀沒動的會話，日誌不多寫事件（#1302）。
+    expect(run.events.some((e) => e.type === 'compaction/prune')).toBe(false);
   }, 60_000);
 
   it('serve，同一輪併發兩個工具呼叫（串流）', async () => {
@@ -201,6 +203,7 @@ describe('對照場景：預期逐位元組相同', () => {
       ),
     );
     await expectDerivedHistory('C2', run, [], 3);
+    expect(run.events.some((e) => e.type === 'compaction/prune')).toBe(false);
   }, 90_000);
 
   it('SV5 serve：輸出撞上限帶工具呼叫 → 空的助手訊息推導時丟掉（#1300 已修）', async () => {
@@ -238,7 +241,7 @@ describe('已知差異：每一類對應一張卡', () => {
     await expectDerivedHistory('S6', run, [], 7);
   }, 90_000);
 
-  it('S8 工具結果剪刀（#1302）', async () => {
+  it('S8 工具結果剪刀（#1302 已修：剪法進日誌，推導與線上逐位元組相同）', async () => {
     const script: Script = (i, body) => {
       if ((body.tools?.length ?? 0) === 0) return { content: '【不該有摘要】' };
       return i === 0 ? echoCall('call_mid', big('中', 20_000)) : {};
@@ -255,16 +258,14 @@ describe('已知差異：每一類對應一張卡', () => {
     expect(run.mainBodies.some((b) => JSON.stringify(b.messages).includes(PRUNE_MARKER))).toBe(
       true,
     );
-    await expectDerivedHistory(
-      'S8',
-      run,
-      [
-        { call: 1, kinds: ['prune'] },
-        { call: 2, kinds: ['prune'] },
-        { call: 3, kinds: ['prune'] },
-      ],
-      4,
-    );
+    await expectDerivedHistory('S8', run, [], 4);
+    // 位置（#1302）：剪法記在用到它的那次 `model/start` 之前，且只記一次——之後的請求沿用。
+    const prunes = run.events.filter((e) => e.type === 'compaction/prune');
+    expect(prunes).toHaveLength(1);
+    const after = run.events.filter((e) => e.seq > prunes[0]!.seq);
+    expect(
+      after.find((e) => e.type === 'model/start' || e.type === 'assistant/message')?.type,
+    ).toBe('model/start');
   }, 90_000);
 
   it('S9 舊工具參數截斷（#1303）', async () => {
@@ -299,7 +300,7 @@ describe('已知差異：每一類對應一張卡', () => {
     expect(run.mainBodies.some((b) => JSON.stringify(b.messages).includes(PRUNE_MARKER))).toBe(
       true,
     );
-    await expectDerivedHistory('SH3', run, [{ call: 1, kinds: ['prune'] }], 5);
+    await expectDerivedHistory('SH3', run, [], 5);
   }, 90_000);
 
   it('SH4 出貨 CLI：舊工具參數截斷（門檻調低）', async () => {
@@ -343,7 +344,6 @@ describe('已知差異：每一類對應一張卡', () => {
       'SV6',
       run,
       [
-        { call: 1, kinds: ['prune'] },
         { call: 2, kinds: ['truncate'] },
         { call: 3, kinds: ['truncate'] },
         { call: 4, kinds: ['truncate'] },
@@ -395,6 +395,37 @@ describe('重啟後續接', () => {
         .slice(1)
         .map((m) => JSON.stringify(m).replace(/session_[0-9a-f]{8}/g, 'session_X'));
     expect(norm(last(restart))).toEqual(norm(last(control)));
+  }, 180_000);
+
+  /**
+   * #1302：剪法在重啟之前記下，重啟之後仍沿用——不重剪、不重記，日誌推得出每一次請求（包括重啟後的第一次）。
+   * 灌回 graph state 的是原文（`applyPrunes` 省略），下一次請求由剪刀照日誌換上去。
+   */
+  it('SR4 剪法記下之後重啟：沿用不重記，重啟後的請求也推得出來', async () => {
+    const script = () => mainOnly((k) => (k === 0 ? bigThenSmall() : {}));
+    const texts = ['大結果', '二', '三', '重啟點之後的一句', '再一句'];
+    const restart = await runServePhases(
+      [texts.slice(0, 3), texts.slice(3)],
+      script(),
+      LOW_SUMMARIZATION,
+    );
+    const resumedAt = restart.events.find((e) => e.type === 'session/end-seed');
+    expect(resumedAt, '應該有一次續接').toBeDefined();
+    const prunes = restart.events.filter((e) => e.type === 'compaction/prune');
+    expect(prunes.length, '重啟前就該剪過').toBeGreaterThan(0);
+    expect(prunes[0]!.seq).toBeLessThan(resumedAt!.seq);
+    // 每顆結果只記一次：重啟沒有讓它再記一遍。
+    const callIds = prunes.flatMap((e) =>
+      (e as SessionEvent<'compaction/prune'>).data.results.map((r) => r.callId),
+    );
+    expect(new Set(callIds).size).toBe(callIds.length);
+    // 重啟後送出去的請求仍帶剪除標記，而且每一次請求都推得出來。
+    expect(JSON.stringify(restart.mainBodies.at(-1)!.messages)).toContain(PRUNE_MARKER);
+    const verdicts = await compareToLog(restart.events, restart.mainBodies);
+    expect(
+      verdicts.filter((v) => v.kinds.includes('other') || v.kinds.includes('prune')),
+      `剪法推不出來${explain(verdicts)}`,
+    ).toEqual([]);
   }, 180_000);
 
   /**

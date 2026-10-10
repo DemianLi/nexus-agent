@@ -537,8 +537,18 @@ import type { SessionEvent } from './session-log.js';
  * **讀舊檔**：44 以前的摘要事件沒有 `beforeCall`，仍是舊順序，推導端照舊檢查（`messagesBefore + 1`），讀得回來。
  * **逐顆事件判，不看 header 的版本**：續寫舊檔時 header 的 `version` 會被蓋成新的（見上），所以同一份檔可以前段舊順序、後段新順序。
  * 不遷移、不補寫歷史。
+ *
+ * ## 46：`compaction/prune`（[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)）
+ *
+ * 工具結果剪刀（`tool-result-pruner.ts`）剪了哪幾顆、剪成什麼，以前只改請求、不寫日誌，日誌只有原文，所以從日誌推不回模型實際看到的那一份。
+ * 現在剪的當下記一筆 `compaction/prune { results: [{ callId, originalChars, content }] }`，每顆結果只記一次、之後每次請求都沿用（照 dsh）。
+ *
+ * **升版，不標 `ignorable`**：一台 45 的 runtime 讀到這一筆會拒絕重建（歸 {@link ./session-log.ts | MESSAGE_PROJECTION_EVENT_TYPES}）。
+ * 略過它推出來的歷史會比實際送出去的長，而且沒有任何東西說為什麼。
+ *
+ * **讀舊檔**：45 以前沒有這一筆，照舊讀得回來，不補寫（補了也不知道當時剪成什麼）。沒有剪過的會話，日誌與以前位元組相同。
  */
-export const SESSION_LOG_FORMAT_VERSION = 45;
+export const SESSION_LOG_FORMAT_VERSION = 46;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

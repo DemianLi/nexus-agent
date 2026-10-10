@@ -93,6 +93,7 @@ import { humanMessageForTurnStart } from './message-source.js';
 import { isModelVisibleEvent } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 import { TOOL_NOT_STARTED, TOOL_OUTCOME_UNKNOWN, toolFeedback } from './tool-events.js';
+import { applyRecordedPrunes, recordedPrunesOf } from './tool-result-prune-log.js';
 
 /**
  * 沒有內容也沒有工具呼叫的助手訊息：推導時不送，見檔頭。
@@ -148,6 +149,14 @@ export interface ReplayOptions {
    * 門檻與暫存路徑，那是組裝點的設定，所以由呼叫端給。
    */
   readonly toolResultAsSeen?: (message: ToolMessage) => BaseMessage;
+  /**
+   * 把日誌上 `compaction/prune` 記過的剪法套上去（[#1302](https://github.com/DemianLi/nexus-agent/issues/1302)），推出來的就是
+   * **模型實際收到的那一份**：被剪的工具結果是剪過的內容。省略即不套——續接灌回 graph state 的那一串要留原文（剪刀下一次請求會照日誌
+   * 換上去，見 `tool-result-pruner.ts`），會話內容搜尋要搜原文。
+   *
+   * 套用時 `origin` 交出的仍是套用**之前**那一則（物件身分對不上回傳串裡被換掉的那幾則）；要用 `origin` 的讀者本來就不該套。
+   */
+  readonly applyPrunes?: boolean;
   /**
    * 每從一顆事件推出一則訊息就叫一次，交出那則訊息與那顆事件。補上的結果（{@link TOOL_OUTCOME_UNKNOWN_TEXT}
    * 那兩句）不是從事件推出來的，不叫。
@@ -382,5 +391,8 @@ export function replayConversation(
     return { kind: 'unreplayable', reason: 'reply-missing', seq: modelRan };
   }
   settle();
+  if (options.applyPrunes === true) {
+    raw = [...applyRecordedPrunes(raw, recordedPrunesOf(events))];
+  }
   return { kind: 'replayed', messages: raw };
 }
