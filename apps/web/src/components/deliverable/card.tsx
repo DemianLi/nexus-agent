@@ -31,6 +31,14 @@ import { basename } from '@/lib/present-view';
 /** 收起時先列幾個（dsh `COLLAPSED_PRESENTED_COUNT`）。 */
 export const COLLAPSED_COUNT = 4;
 
+/** 一列的格線：窄時兩欄（圖示｜文字，鈕在文字下一行），內容寬 ≥ 384（列寬 ≥ 408）時三欄（鈕在右邊）。理由見元件裡的註解（#1367）。 */
+export const DELIVERABLE_ROW =
+  'grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3 gap-y-1 @sm/deliverable:grid-cols-[auto_minmax(0,1fr)_auto]';
+
+/** 三顆鈕那一組：窄時在文字那一欄的下一行，往左縮 8px 讓圖示對齊文字；寬時回到第一行的第三欄。 */
+export const DELIVERABLE_ACTIONS =
+  'col-start-2 -ms-2 flex items-center gap-3 @sm/deliverable:col-start-3 @sm/deliverable:row-start-1 @sm/deliverable:ms-0';
+
 /** 沒給說明時的那一行：副檔名大寫，沒有副檔名就寫「檔案」。 */
 export function fallbackDescription(path: string): string {
   const name = basename(path);
@@ -83,34 +91,42 @@ export function DeliverablesCard({
             // **用座標當 key，不用列表位置**：同一輪可能宣告兩次同一個路徑，而 `(seq, index)` 本來就唯一
             // ——`seq` 是日誌位置，一顆事件一個（#452）。列表位置在合併之後不再對應宣告當下的位置。
             key={`${file.seq}:${file.index}`}
-            className="flex min-w-0 items-start gap-3 p-3"
+            className="@container/deliverable min-w-0 p-3"
             data-testid="deliverable"
           >
-            <FileText className="text-muted-foreground mt-0.5 size-5 shrink-0" aria-hidden />
-            <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span className="truncate font-medium">{basename(file.path)}</span>
-              <span className="text-muted-foreground text-tip">
-                {file.description ?? fallbackDescription(file.path)}
-              </span>
-              <span className="text-muted-foreground font-mono text-tip break-all">
-                {file.path}
-              </span>
+            {/* 鈕放右邊要的列寬：內距＋圖示＋三顆鈕＋間距固定 188px，加上約 20 字元的檔名（真字型量 149～205px）。
+                `@sm` 量的是內距裡的寬（384），換成列寬是 408：剛好切到右邊時檔名還有 220px；更窄（兩欄各 308、
+                375 寬的 316）就移到檔名下面，檔名有 252px 以上（#1367）。
+                只換格位，不換 DOM 順序：Tab 順序與每顆鈕的名稱不變。container query 只管子孫，所以多包這一層。 */}
+            <div className={DELIVERABLE_ROW}>
+              <FileText className="text-muted-foreground mt-0.5 size-5 shrink-0" aria-hidden />
+              <div className="flex min-w-0 flex-col gap-0.5">
+                <span className="truncate font-medium">{basename(file.path)}</span>
+                <span className="text-muted-foreground text-tip">
+                  {file.description ?? fallbackDescription(file.path)}
+                </span>
+                <span className="text-muted-foreground font-mono text-tip break-all">
+                  {file.path}
+                </span>
+              </div>
+              <div className={DELIVERABLE_ACTIONS}>
+                {preview !== undefined && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="size-8 shrink-0"
+                    title={`預覽：${file.path}`}
+                    aria-label={`預覽：${file.path}`}
+                    onClick={() => preview(file)}
+                  >
+                    <Eye />
+                  </Button>
+                )}
+                {download !== undefined && <DownloadIconButton file={file} downloader={download} />}
+                <CopyPathButton path={file.path} />
+              </div>
             </div>
-            {preview !== undefined && (
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-8 shrink-0"
-                title={`預覽：${file.path}`}
-                aria-label={`預覽：${file.path}`}
-                onClick={() => preview(file)}
-              >
-                <Eye />
-              </Button>
-            )}
-            {download !== undefined && <DownloadIconButton file={file} downloader={download} />}
-            <CopyPathButton path={file.path} />
           </Surface>
         ))}
       </ul>
