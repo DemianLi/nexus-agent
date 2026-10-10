@@ -206,11 +206,15 @@ function FilePicker({
   );
 }
 
+/**
+ * 讀取中與讀不到的那一格。讀取中**不開 live region**（#1290）：這一格是跟著內容一起掛上去的，報讀器常常不唸；
+ * 唸得出來也只是「開始讀」，讀完的內容不唸。焦點在分頁上，往下走就讀得到這一格。
+ */
 function Status({ children, busy = false }: { children: ReactNode; busy?: boolean }) {
   return (
     <div
       className="text-muted-foreground flex items-center gap-3 px-4 py-4 text-body"
-      role={busy ? 'status' : undefined}
+      data-busy={busy || undefined}
     >
       {children}
     </div>

@@ -90,6 +90,17 @@
     color: var(--muted-foreground);
     padding: 0.6rem 1rem 0;
   }
+  /* 帶複製鈕的頭列（#1305）：高度固定成按鈕那麼高，串流中沒有按鈕也一樣，講完時不跳。 */
+  .md-code-head {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    min-height: 2rem;
+    padding: 0.25rem 0.25rem 0 1rem;
+  }
+  .md-code-head .md-code-lang {
+    padding: 0;
+  }
   .md-code pre {
     font-family: var(--font-mono);
     font-size: 13px;

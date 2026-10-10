@@ -21,7 +21,7 @@
  */
 
 import { Activity, ArrowDown, ThumbsDown, ThumbsUp } from 'lucide-react';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 
 import type {
   AnswerEntry,
@@ -39,6 +39,7 @@ import { ReferencedText } from '@/components/session-reference';
 import { Bubble, BubbleContent } from '@/components/ui/bubble';
 import { ChatBubble } from '@/components/chat-bubble';
 import { ChangesCard } from '@/components/changes/card';
+import { CopyButton } from '@/components/copy-button';
 import { CompactionRow } from '@/components/compaction-row';
 import { DeliverablesCard } from '@/components/deliverable/card';
 import { EarlierPager, earlierLoadedNotice, useEarlierAutoLoad } from '@/components/earlier-pager';
@@ -67,6 +68,7 @@ import { transcriptItems } from '@/lib/deliverables-view';
 import { registerTranscriptScroller } from '@/lib/transcript-locate';
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { RetryNotice } from '@/components/retry-notice';
+import { useScrollButtonClearance } from '@/hooks/use-scroll-button-clearance';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
 import { BLOCKED_HINT_TEXT } from '@/lib/archived-view';
@@ -111,6 +113,9 @@ function RatingButtons({
   const rating = feedback.ratings.get(messageId)?.rating;
   const likeLabel = rating === 'positive' ? FEEDBACK_COPY.likeActive : FEEDBACK_COPY.like;
   const dislikeLabel = rating === 'negative' ? FEEDBACK_COPY.dislikeActive : FEEDBACK_COPY.dislike;
+  // 載入失敗那句掛在兩顆鈕的描述上（同 `plan/chip`），不開 live region（#1290）：它是背景載入失敗，不是人剛做的事的結果。
+  const loadFailedId = useId();
+  const describedBy = feedback.loadFailed ? loadFailedId : undefined;
   return (
     <div className="flex items-center gap-1" data-testid="rating-buttons">
       <Button
@@ -121,6 +126,7 @@ function RatingButtons({
         title={likeLabel}
         aria-label={likeLabel}
         aria-pressed={rating === 'positive'}
+        aria-describedby={describedBy}
         disabled={feedback.busy}
         onPointerEnter={feedback.onSeed}
         onFocus={feedback.onSeed}
@@ -136,6 +142,7 @@ function RatingButtons({
         title={dislikeLabel}
         aria-label={dislikeLabel}
         aria-pressed={rating === 'negative'}
+        aria-describedby={describedBy}
         disabled={feedback.busy}
         onPointerEnter={feedback.onSeed}
         onFocus={feedback.onSeed}
@@ -156,11 +163,27 @@ function RatingButtons({
         </Button>
       )}
       {feedback.loadFailed && (
-        <span className="text-muted-foreground text-tip" role="status">
+        <span id={loadFailedId} className="text-muted-foreground text-tip">
           {FEEDBACK_COPY.load}
         </span>
       )}
     </div>
+  );
+}
+
+/** 一則回覆的「複製回覆」（#1305）：複製的是 markdown 原文，貼進信件或文件時格式還在。 */
+function ReplyCopyButton({ text }: { text: string }) {
+  return (
+    <CopyButton
+      text={text}
+      label="複製回覆"
+      copied={{ title: '已複製回覆' }}
+      failed={{
+        title: '沒辦法複製回覆',
+        description: '瀏覽器不讓這個頁面寫剪貼簿，請手動選取文字。',
+      }}
+      className="size-7"
+    />
   );
 }
 
@@ -290,6 +313,9 @@ export function Entry({
   // 就是模型在動的訊號，不必再疊一顆帶游標的空泡泡。沒有推理的照舊。
   // 撞到輸出上限而沒字的那則（只在寫工具參數時被切斷）只畫底下那行提示，不畫空泡泡（#608）。
   const bubble = hasText || (reasoning === undefined && entry.maxTokens !== true);
+  // 複製鈕講完才有（#1305）：串流中不畫，不是畫成透明——鍵盤會按得到。跟評分脫鉤，沒有評分外掛也在。
+  const copyable = hasText && !entry.streaming;
+  const ratable = feedback !== undefined && isRatable(entry);
   return (
     <Message
       align="start"
@@ -326,8 +352,11 @@ export function Entry({
           <MessageFooter className="px-0">{MAX_TOKENS_NOTICE}</MessageFooter>
         )}
         {entry.error !== undefined && <p className="text-destructive text-tip">{entry.error}</p>}
-        {feedback !== undefined && isRatable(entry) && (
-          <RatingButtons messageId={entry.messageId} feedback={feedback} />
+        {(copyable || ratable) && (
+          <div className="flex items-center gap-1">
+            {copyable && <ReplyCopyButton text={entry.text} />}
+            {ratable && <RatingButtons messageId={entry.messageId} feedback={feedback} />}
+          </div>
         )}
       </MessageContent>
     </Message>
@@ -539,12 +568,19 @@ export function Transcript({
   }
   const announced = useFinishedReply(state.entries, isFresh);
   const autoLoad = useEarlierAutoLoad(earlier);
+  const viewport = useRef<HTMLDivElement>(null);
+  useScrollButtonClearance(viewport);
 
   return (
     <MessageScrollerProvider autoScroll>
       <ScrollerRegistration />
       <MessageScroller className="min-h-0 flex-1">
-        <MessageScrollerViewport aria-label="對話訊息" preserveScrollOnPrepend {...autoLoad}>
+        <MessageScrollerViewport
+          ref={viewport}
+          aria-label="對話訊息"
+          preserveScrollOnPrepend
+          {...autoLoad}
+        >
           {/* 在 content 外面，prepend 保位才動得了手（見 `earlier-pager.tsx`）。 */}
           {earlier?.hasMore === true && <EarlierPager earlier={earlier} />}
           <MessageScrollerContent
@@ -563,7 +599,11 @@ export function Transcript({
             ))}
           </MessageScrollerContent>
         </MessageScrollerViewport>
-        <MessageScrollerButton className="rounded-full" behavior={scrollBehavior()}>
+        {/* 壓到對話裡的輸入區（子代理面板）就藏起來（#1295，`use-scroll-button-clearance.ts`）。 */}
+        <MessageScrollerButton
+          className="rounded-full data-[obscuring]:invisible"
+          behavior={scrollBehavior()}
+        >
           <ArrowDown />
           <span className="sr-only">捲到最新的訊息</span>
         </MessageScrollerButton>

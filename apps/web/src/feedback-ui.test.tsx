@@ -368,6 +368,13 @@ describe('讀回評分（list，#382）', () => {
     await waitFor(() =>
       expect(within(entryOf('收工了。')).getByText(FEEDBACK_COPY.load)).toBeTruthy(),
     );
+    // 不是 live region（#1290）：掛在兩顆鈕的描述上，焦點到鈕上時唸。
+    const failed = within(entryOf('收工了。')).getByText(FEEDBACK_COPY.load);
+    expect(failed.closest('[role=status]')).toBeNull();
+    for (const name of [FEEDBACK_COPY.like, FEEDBACK_COPY.dislike]) {
+      const button = within(entryOf('收工了。')).getByRole('button', { name });
+      expect(document.getElementById(button.getAttribute('aria-describedby') ?? '')).toBe(failed);
+    }
     fireEvent.click(
       within(entryOf('收工了。')).getByRole('button', { name: FEEDBACK_COPY.dislike }),
     );

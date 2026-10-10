@@ -12,7 +12,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PANELS } from '@/components/sidebar/right-sidebar-panels';
 import type { PanelBodyProps } from '@/lib/right-sidebar-api';
-import { TRACE_LOCATED_TEXT } from '@/components/trace/panel';
+import { REANNOUNCE_MS, TRACE_LOCATED_TEXT } from '@/components/trace/panel';
 import { TRACE_LOCATE_LABEL } from '@/components/trace/row';
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
@@ -277,11 +277,21 @@ describe('觀測分頁：在對話裡定位', () => {
   it('找不到那一則（沒載入）：什麼都不捲，在那一列底下講原因，說法沿用計劃分頁', async () => {
     mount(conversation());
     await act(async () => {});
+    vi.useFakeTimers();
     fireEvent.click(locateButton(2));
     expect(revealed()).toEqual([]);
     const note = within(rows()[2]!).getByTestId('trace-missing');
     expect(note.textContent).toBe(TRACE_TARGET_MISSING_TEXT);
     expect(note.textContent).toContain('往上捲載入更早的對話');
+    // 讀屏聽面板那一格（#1290）：列上那句不是 live region。連按第二次，先清空再填回去，報讀器才會再唸。
+    expect(note.closest('[role=status]')).toBeNull();
+    const live = screen.getByRole('status');
+    act(() => void vi.advanceTimersByTime(REANNOUNCE_MS));
+    expect(live.textContent).toBe(TRACE_TARGET_MISSING_TEXT);
+    fireEvent.click(locateButton(2));
+    expect(live.textContent).toBe('');
+    act(() => void vi.advanceTimersByTime(REANNOUNCE_MS));
+    expect(live.textContent).toBe(TRACE_TARGET_MISSING_TEXT);
 
     // 之後找得到了，那句話收掉。
     transcriptItem('tool-c1');

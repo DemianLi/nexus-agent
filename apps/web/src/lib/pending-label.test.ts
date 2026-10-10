@@ -32,4 +32,21 @@ describe('面板名稱', () => {
   it('認不出意圖的照一般提問', () => {
     expect(pendingLabel(question(), { index: 0, total: 1 })).toBe('有 1 個問題要你回答');
   });
+
+  it('沙箱升級不露工具名（#1292），其他工具照舊是工具名', () => {
+    const approval = (name: string): PendingInput =>
+      ({
+        kind: 'approval',
+        interruptId: 'a',
+        namespace: [],
+        actions: [{ name, args: {} }],
+        allowedDecisions: ['approve', 'reject'],
+      }) as unknown as PendingInput;
+    expect(pendingLabel(approval('request_sandbox_escalation'), { index: 0, total: 1 })).toBe(
+      '等待核准：要求放寬檔案權限',
+    );
+    expect(pendingLabel(approval('write_file'), { index: 1, total: 2 })).toBe(
+      '等待核准：write_file（2／2）',
+    );
+  });
 });

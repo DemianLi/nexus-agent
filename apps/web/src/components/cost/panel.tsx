@@ -162,6 +162,7 @@ function Subagents({
         <p className="text-muted-foreground text-body">這條對話裡還沒有派出背景子代理</p>
       ) : (
         <>
+          {/* 重新讀取不另開 live region（#1290）：只唸得出「開始讀」，讀完的結果不唸，反而多一格。讀取中的列自己寫「讀取中…」。 */}
           <ul className="divide-border divide-y">
             {runIds.map((runId) => (
               <SubagentRow
@@ -183,9 +184,6 @@ function Subagents({
             <RefreshCw aria-hidden />
             {COST_RELOAD_LABEL}
           </Button>
-          <p role="status" className="sr-only">
-            {loading ? COST_SUBAGENT_LOADING : ''}
-          </p>
         </>
       )}
     </Section>

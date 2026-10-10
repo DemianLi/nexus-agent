@@ -15,25 +15,21 @@
  * 就不畫預覽鈕，`download` 沒給就不畫下載鈕，複製路徑一直都在——它不需要讀檔。
  */
 
-import { Check, Copy, Eye, FileText } from 'lucide-react';
-import { useEffect, useRef, useState } from 'react';
-import { toast } from 'sonner';
+import { Eye, FileText } from 'lucide-react';
+import { useState } from 'react';
 
 import { Chevron } from '@/components/chevron';
+import { CopyButton } from '@/components/copy-button';
 import { Surface } from '@/components/surface';
 import { DownloadIconButton } from '@/components/deliverable/download-button';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { Button } from '@/components/ui/button';
-import { copyText } from '@/lib/clipboard';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import type { LocatedFile } from '@/lib/deliverables-view';
 import { basename } from '@/lib/present-view';
 
 /** 收起時先列幾個（dsh `COLLAPSED_PRESENTED_COUNT`）。 */
 export const COLLAPSED_COUNT = 4;
-
-/** 複製成功的勾勾留多久。 */
-const COPIED_MS = 1500;
 
 /** 沒給說明時的那一行：副檔名大寫，沒有副檔名就寫「檔案」。 */
 export function fallbackDescription(path: string): string {
@@ -43,36 +39,17 @@ export function fallbackDescription(path: string): string {
 }
 
 function CopyPathButton({ path }: { path: string }) {
-  const [copied, setCopied] = useState(false);
-  const timer = useRef<ReturnType<typeof setTimeout>>(undefined);
-  useEffect(() => () => clearTimeout(timer.current), []);
-
-  const copy = async () => {
-    if (await copyText(path)) {
-      clearTimeout(timer.current);
-      setCopied(true);
-      timer.current = setTimeout(() => setCopied(false), COPIED_MS);
-      toast('已複製路徑', { description: path });
-    } else {
-      toast.error('沒辦法複製路徑', {
-        description: '瀏覽器不讓這個頁面寫剪貼簿，請手動選取路徑。',
-      });
-    }
-  };
-
-  const label = `複製路徑：${path}`;
   return (
-    <Button
-      type="button"
-      variant="ghost"
-      size="icon"
-      className="size-8 shrink-0"
-      title={label}
-      aria-label={label}
-      onClick={() => void copy()}
-    >
-      {copied ? <Check /> : <Copy />}
-    </Button>
+    <CopyButton
+      text={path}
+      label={`複製路徑：${path}`}
+      copied={{ title: '已複製路徑', description: path }}
+      failed={{
+        title: '沒辦法複製路徑',
+        description: '瀏覽器不讓這個頁面寫剪貼簿，請手動選取路徑。',
+      }}
+      className="size-8"
+    />
   );
 }
 
