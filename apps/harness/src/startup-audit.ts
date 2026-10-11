@@ -18,6 +18,13 @@
  *
  * 兩次合起來印一段（{@link startupWarning}），只印一次。
  *
+ * ## Cordis 樹上的列（#1401）
+ *
+ * serve 與 CLI 以 Cordis 為根之後（`cordis-root.ts`），樹上另有相容層與入口那兩列。{@link auditTreeEntries} 在
+ * `loader.await()` 之後結算它們，照 dsh `auditStartupEntries` 的 `inactiveEntries`：不是 ACTIVE 的一律列出，FAILED 等一次
+ * `fiber.await()` 拿回原始錯誤，PENDING 列出缺哪些服務；必掛的沒起來就拋同一種 {@link StartupError}。兩張名單分開
+ * （{@link REQUIRED_TREE_ENTRY_IDS}）：清單的列 id 由使用者的 patch 決定，`insert` 一列 id 叫 `serve` 的不該因此變成必掛。
+ *
  * ## 名單是 `browser-session`、`system-prompt` 與 `background-subagents`
  *
  * dsh 的七個 id 分三類（`README.zh.md:43`），對到我們：
@@ -59,6 +66,7 @@
  * @module
  */
 
+import type Loader from '@nexus/cordis-plugin-loader';
 import type { NexusPlugin, PluginEntry, PluginWarning } from '@nexus/core';
 
 import type { AssemblyDrop, AssemblyDropError } from './agent-factory.js';
@@ -165,6 +173,76 @@ export function startupErrorFrom(
   const required = new Set([...requiredIds(options), ...fatal]);
   const count = all.filter((drop) => required.has(drop.id)).length;
   return new StartupError(startupDiagnostic(all, required, count), all);
+}
+
+/**
+ * Cordis 樹上必須起來的列（#1401）：相容層與入口那一列，對到 dsh 名單上的 `agent-loop` 與 `headless-runner`／`webserver`
+ * （dsh `packages/boot/app-boot/src/index.ts:741-757`）。字面值同 `cordis-root.ts` 的列 id。
+ */
+export const REQUIRED_TREE_ENTRY_IDS: ReadonlySet<string> = new Set([
+  'nexus-compat',
+  'cli',
+  'serve',
+]);
+
+/** 上游 `FiberState` 的值：它是 `const enum`，宣告檔讀不到執行期的物件，同 dsh 抄一份（`index.ts:733-739`）。 */
+const FIBER_PENDING = 0;
+const FIBER_ACTIVE = 2;
+const FIBER_FAILED = 3;
+
+/**
+ * 結算 Cordis 樹上的列，照 dsh 的 `auditStartupEntries`：在 `loader.await()` 之後呼叫，不是 ACTIVE 的列一律列出；
+ * 有必掛的就拋。只有可少掛的沒起來時交回它們，由呼叫端決定怎麼講（今天樹上沒有可少掛的列）。
+ *
+ * @param loader - 已結算的那顆 Loader。
+ * @returns 沒起來的可少掛列。
+ * @throws {StartupError} 有必掛的列沒起來，訊息指名那一列與原因，可少掛的一起列。
+ */
+export async function auditTreeEntries(loader: Loader): Promise<readonly StartupDrop[]> {
+  const drops: StartupDrop[] = [];
+  for (const entry of loader.entries()) {
+    const { id, name: module } = entry.options;
+    try {
+      if (entry.disabled) continue;
+    } catch (error) {
+      drops.push({ id, module, stage: 'config', message: messageOf(error) });
+      continue;
+    }
+    // `entry.fiber` 是 `registry.plugin()` 回的包裝，真的 Fiber 在 `.ctx.fiber`（探針 `tree.ts` 的 `fiberOf`）。
+    const fiber = entry.fiber?.ctx.fiber;
+    if (fiber === undefined) {
+      drops.push({ id, module, stage: 'module', message: '模組載不進來' });
+      continue;
+    }
+    if (fiber.state === FIBER_ACTIVE) continue;
+    if (fiber.state === FIBER_FAILED) {
+      // 照 dsh：等一次拿回記下的原始錯誤。
+      const error = await fiber.await().then(
+        () => new Error('狀態是 FAILED，卻沒有記下錯誤'),
+        (reason: unknown) => reason,
+      );
+      drops.push({ id, module, stage: 'apply', message: messageOf(error) });
+    } else if (fiber.state === FIBER_PENDING) {
+      const missing = Object.keys(fiber.inject).filter((name) => fiber.ctx.get(name) === undefined);
+      drops.push({
+        id,
+        module,
+        stage: 'requires',
+        message: `等不到 ${missing.join('、') || '（不明）'}`,
+      });
+    } else {
+      drops.push({ id, module, stage: 'apply', message: `fiber 狀態停在 ${String(fiber.state)}` });
+    }
+  }
+  const count = drops.filter((drop) => REQUIRED_TREE_ENTRY_IDS.has(drop.id)).length;
+  if (count > 0) {
+    throw new StartupError(startupDiagnostic(drops, REQUIRED_TREE_ENTRY_IDS, count), drops);
+  }
+  return drops;
+}
+
+function messageOf(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /**
