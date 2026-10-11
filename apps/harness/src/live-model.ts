@@ -942,6 +942,19 @@ export function normalizeEmptyAssistantContent(messages: readonly unknown[]): re
  * @returns 一個 fetch：`/chat/completions` 的 POST、body 是 JSON 字串時換掉空的助手內容，其餘原樣。
  */
 export function withEmptyAssistantContent(baseFetch: typeof fetch = fetch): typeof fetch {
+  return rewriteChatMessages(baseFetch, normalizeEmptyAssistantContent);
+}
+
+/**
+ * 把 `/chat/completions` 的 POST（body 是 JSON 字串）的 `messages` 交給 `rewrite` 換過再送，其餘原樣交下去。
+ *
+ * `rewrite` 一則都沒換時要回**原本那個陣列**（同一個物件）：這時連 body 都不重新序列化，`init` 原樣往下送。
+ * 不是這種請求（別的路徑、不是 POST、body 不是 JSON、沒有 `messages` 陣列）也原樣交下去。
+ */
+function rewriteChatMessages(
+  baseFetch: typeof fetch,
+  rewrite: (messages: readonly unknown[]) => readonly unknown[],
+): typeof fetch {
   return async (input, init) => {
     const url = input instanceof Request ? input.url : String(input);
     if (
@@ -959,13 +972,55 @@ export function withEmptyAssistantContent(baseFetch: typeof fetch = fetch): type
     }
     const messages = (body as { messages?: unknown } | null)?.messages;
     if (!Array.isArray(messages)) return baseFetch(input, init);
-    const normalized = normalizeEmptyAssistantContent(messages);
-    if (normalized === messages) return baseFetch(input, init);
+    const rewritten = rewrite(messages);
+    if (rewritten === messages) return baseFetch(input, init);
     return baseFetch(input, {
       ...init,
-      body: JSON.stringify({ ...(body as object), messages: normalized }),
+      body: JSON.stringify({ ...(body as object), messages: rewritten }),
     });
   };
+}
+
+/**
+ * 去掉助手訊息的 `name`（[#1392](https://github.com/DemianLi/nexus-agent/issues/1392)，決議見
+ * `.docs/log-derived-history-vs-wire-2026-10-08.md` 最後一則補記）。
+ *
+ * 欄位的來源不是我們的碼：LangChain 的 `AgentNode`（`langchain@1.5.10` 的 `dist/agents/nodes/AgentNode.js:97-98`）
+ * 把回來的 `AIMessage` 的 `name` 設成 `options.name ?? "model"`。非串流回的是完整訊息所以帶，串流路徑不帶
+ * （同一份日誌，兩條路徑送出的訊息不同，#1159 量過 80 次）。日誌不記它、`replayConversation` 不產生它、dsh 的
+ * `AssistantMessage` 沒有這個欄位，所以它是「到了模型請求、不在日誌裡」的東西；兩條路徑統一成都不送。
+ *
+ * 只動 `role: "assistant"` 的 `name`：工具訊息等其他角色的 `name` 不是這張卡的事。
+ *
+ * ## 偏離登記
+ *
+ * **改在 `fetch` 這一層。** dsh 在序列化裡就不送；`AgentNode` 的 `name` 是 `??` 後面接預設值，傳什麼都拿不掉，
+ * `@langchain/openai` 的轉換函式也沒有可設定的地方，所以退到手上最靠近它的一格：送出前的 body（同
+ * {@link withEmptyAssistantContent} 與 {@link withInbandStreamErrors} 退到 `fetch` 的理由）。
+ *
+ * @param messages - 請求 body 的 `messages`。
+ * @returns 換過的訊息串；沒有任何助手訊息帶 `name` 時是**原本那個陣列**。
+ */
+export function stripAssistantName(messages: readonly unknown[]): readonly unknown[] {
+  let changed = false;
+  const next = messages.map((message) => {
+    if (typeof message !== 'object' || message === null) return message;
+    const { role, name, ...rest } = message as { role?: unknown; name?: unknown };
+    if (role !== 'assistant' || name === undefined) return message;
+    changed = true;
+    return { role, ...rest };
+  });
+  return changed ? next : messages;
+}
+
+/**
+ * 送出前把助手訊息的 `name` 拿掉，見 {@link stripAssistantName}。
+ *
+ * @param baseFetch - 底層的 fetch。預設全域那個；測試用它換掉。
+ * @returns 一個 fetch：`/chat/completions` 的 POST、body 是 JSON 字串時去掉助手訊息的 `name`，其餘原樣。
+ */
+export function withoutAssistantName(baseFetch: typeof fetch = fetch): typeof fetch {
+  return rewriteChatMessages(baseFetch, stripAssistantName);
 }
 
 /** 串流用量嗅探單行的長度上限：超過的行放棄（供應商的片段不會這麼長，上限只防暴長的怪行把記憶體吃光）。 */
@@ -1142,9 +1197,10 @@ export function createLiveModel(
 
   const fields: ChatOpenAIFields = {
     model: config.modelId,
-    // `fetch` 疊三層（再加最內層貼著底層 fetch 的串流用量回報，#1022，只旁讀不改位元組）：最內層是 #592（送出前換掉空的助手內容），中間是 #516（串流內回報的錯誤
-    // 翻成 HTTP 錯誤回應，才進得了重試射程），外層是 #521（第一則事件之後的閒置逾時）。外層收到的
-    // 是中間那層嗅完第一則事件的那份回應。
+    // `fetch` 疊三層（再加最內層貼著底層 fetch 的串流用量回報，#1022，只旁讀不改位元組）：最內層是
+    // 送出前換 body 的兩格——#592（換掉空的助手內容）與 #1392（拿掉助手訊息的 `name`），中間是 #516
+    // （串流內回報的錯誤翻成 HTTP 錯誤回應，才進得了重試射程），外層是 #521（第一則事件之後的閒置逾時）。
+    // 外層收到的是中間那層嗅完第一則事件的那份回應。
     configuration: {
       baseURL: config.baseUrl,
       // **每次請求前才解析**（openai 的 `apiKey` 收函式，實測經過 `bindTools`／`withConfig` 之後還在，
@@ -1157,7 +1213,9 @@ export function createLiveModel(
       fetch: ((base) => (purpose === undefined ? withRequestStartNotice(base) : base))(
         withStreamIdleTimeout(
           config.streamIdleTimeoutMs,
-          withInbandStreamErrors(withEmptyAssistantContent(withStreamUsageReport())),
+          withInbandStreamErrors(
+            withoutAssistantName(withEmptyAssistantContent(withStreamUsageReport())),
+          ),
         ),
       ),
     },

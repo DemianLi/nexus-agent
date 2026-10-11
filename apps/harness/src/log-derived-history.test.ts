@@ -32,6 +32,7 @@ import { createEchoPlugin } from '@nexus/plugin-echo';
 import type { SessionEvent } from '@nexus/core';
 
 import {
+  assistantNameLeaks,
   classify,
   compareToLog,
   liveModelPatch,
@@ -41,7 +42,6 @@ import {
   runAssembly,
   runServePhases,
   runShippedCli,
-  stripModelName,
   systemText,
   TRUNCATE_MARKER,
 } from './log-derived-history.fixture.js';
@@ -168,16 +168,40 @@ describe('比對器本身', () => {
     expect(classify([msg('user', '甲')], [msg('user', '乙')]).kinds).toEqual(['other']);
   });
 
-  it('助手訊息的 name: "model" 與系統訊息的區塊邊界被正規化，其他欄位不動', () => {
-    expect(stripModelName(msg('assistant', '好。', { name: 'model' }))).toEqual(
-      msg('assistant', '好。'),
-    );
-    expect(stripModelName(msg('assistant', '好。', { name: 'other' }))).toEqual(
-      msg('assistant', '好。', { name: 'other' }),
-    );
+  it('線上助手訊息帶 name → 點名位置；其他角色的 name 不算（#1392）', () => {
+    expect(
+      assistantNameLeaks([
+        msg('user', '嗨'),
+        msg('assistant', '好。', { name: 'model' }),
+        msg('assistant', '再好。'),
+        msg('tool', '結果', { name: 'echo', tool_call_id: 'c1' }),
+        msg('assistant', '另一個。', { name: 'other' }),
+      ]),
+    ).toEqual([1, 4]);
+    expect(assistantNameLeaks([msg('user', '嗨'), msg('assistant', '好。')])).toEqual([]);
+  });
+
+  it('系統訊息只比區塊文字串起來（契約：日誌 request/system 只記文字）', () => {
     expect(systemText([{ text: '甲' }, { text: '乙' }])).toBe('甲乙');
     expect(systemText('甲乙')).toBe('甲乙');
   });
+
+  it('線上助手訊息帶 name 不能被比對器吃掉：compareToLog 判 other 並點名（#1392）', async () => {
+    const script: Script = (i) => (i === 0 ? echoCall('call_a', '嗨') : {});
+    const run = await runAssembly('叫工具\n再說\n/exit\n', script, [createEchoPlugin()]);
+    // 真跑出來的請求在產品的 fetch 層之後沒有 name；先確認這個前提，再人為把它放回去。
+    const clean = await compareToLog(run.events, run.mainBodies);
+    expect(clean.every((v) => v.kinds.length === 0)).toBe(true);
+    const leaked = run.mainBodies.map((body) => ({
+      ...body,
+      messages: body.messages.map((m) => (m.role === 'assistant' ? { ...m, name: 'model' } : m)),
+    }));
+    const verdicts = await compareToLog(run.events, leaked);
+    const flagged = verdicts.filter((v) => v.kinds.includes('other'));
+    // 第一次呼叫還沒有助手訊息；之後每次呼叫都帶著前面的助手訊息，必須被點名。
+    expect(flagged.length).toBeGreaterThanOrEqual(1);
+    for (const v of flagged) expect(v.detail).toContain('助手訊息帶 name');
+  }, 60_000);
 
   it('主呼叫數對不上 model/start 數 → 拋，不默默少比', async () => {
     const start = { seq: 1, type: 'model/start', data: {} } as unknown as SessionEvent;

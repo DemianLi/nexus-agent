@@ -20,15 +20,15 @@
  * - `kinds`：差在哪一類（{@link DifferenceKind}），用**內容**判，不只看序號——同一個序號換了一種差異要看得出來。
  * - `systemMatches`：線上系統訊息的文字（區塊串起來）是否等於日誌 `request/system`。探針當年沒比這一格。
  *
- * ## 兩個具名的正規化（不是默默抹掉）
+ * ## 兩處決議（#1342，見 `.docs/log-derived-history-vs-wire-2026-10-08.md` 最後一則補記）
  *
- * 地圖 [#1298](https://github.com/DemianLi/nexus-agent/issues/1298) 的 Fog 裡「助手訊息的 `name` 欄位與系統訊息的
- * 區塊邊界」尚未決定，所以這裡把它們正規化而不是當差異：
- *
- * - {@link stripModelName}：非串流路徑（CLI）助手訊息帶 `name: "model"`，串流路徑（web）不帶。
- * - 系統訊息只比「區塊文字串起來」（{@link systemText}），不比區塊邊界。
- *
- * Fog 決定後這兩個正規化要跟著改，不要留著。
+ * - **助手訊息不送 `name`**（#1392）：LangChain 的 `AgentNode` 在非串流路徑把 `name: "model"` 掛在助手訊息上，
+ *   日誌不記、推導不產生，產品的 `fetch` 層（`live-model.ts` 的 `withoutAssistantName`）送出前去掉它。夾具**不**
+ *   把它正規化掉：線上任何助手訊息只要帶 `name`，這一格就是 `other` 差異（{@link assistantNameLeaks}）。
+ *   夾具自己組的模型（`model()`）也掛同一個包裝，所以手挑組裝（S 系列）量到的就是出貨時線上的形狀。
+ * - **系統訊息只比「區塊文字串起來」**（{@link systemText}）：日誌的 `request/system` 只記文字、不記區塊邊界，
+ *   這是**契約**不是補丁——產品路徑沒有用 `cache_control` 的供應商（`agent-assembly.ts` 對 Anthropic／Bedrock
+ *   遇到就拋）。**放開那條限制之前要先開卡決定怎麼記區塊**，到那時這一處才跟著改。
  */
 
 import { createServer } from 'node:http';
@@ -57,7 +57,7 @@ import { toolResultAsSeen } from './conversation-restore.js';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { projectKey } from './jsonl-session-store.js';
-import { DEFAULT_LIVE_MODEL_ID } from './live-model.js';
+import { DEFAULT_LIVE_MODEL_ID, withoutAssistantName } from './live-model.js';
 import { composeEntries } from './plugin-config.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -287,7 +287,8 @@ const model = (baseURL: string) =>
     apiKey: 'sk-loopback',
     maxRetries: 0,
     temperature: 0.3,
-    configuration: { baseURL },
+    // 同出貨的 `fetch` 層（`createLiveModel`）：助手訊息送出前去掉 `name`（#1392）。
+    configuration: { baseURL, fetch: withoutAssistantName() },
   });
 
 /** 把一串訊息經 `ChatOpenAI` 送一次（打 sink），回它的 wire `messages`。 */
@@ -350,11 +351,16 @@ export function systemText(content: unknown): string {
   return JSON.stringify(content);
 }
 
-/** 非串流路徑的助手訊息帶 `name: "model"`（見檔頭的 Fog 說明）；比對前拿掉。 */
-export function stripModelName(message: WireMessage): WireMessage {
-  if (message.role !== 'assistant' || message.name !== 'model') return message;
-  const { name: _name, ...rest } = message;
-  return rest as WireMessage;
+/**
+ * 線上帶著 `name` 的助手訊息的位置（#1392：產品的 `fetch` 層送出前去掉它，兩條路徑都不送）。
+ *
+ * 這是**斷言的依據，不是正規化**：不要在比對前把 `name` 拿掉。拿掉就等於替一個漏回來的欄位掩蓋——
+ * 出貨路徑少了那層去除時，這裡要看得見。
+ */
+export function assistantNameLeaks(messages: readonly WireMessage[]): number[] {
+  return messages.flatMap((message, index) =>
+    message.role === 'assistant' && message['name'] !== undefined ? [index] : [],
+  );
 }
 
 const isEmptyContent = (content: unknown): boolean =>
@@ -462,13 +468,25 @@ export async function compareToLog(
       ...(logged === undefined ? [] : [new SystemMessage(logged)]),
       ...replay.messages,
     ]);
-    const actualAll = body.messages.map(stripModelName);
+    const actualAll = body.messages;
     const systemMatches =
       logged !== undefined &&
       systemText(actualAll[0]?.content) === systemText(derivedWire[0]?.content)
         ? systemText(actualAll[0]?.content) === logged
         : false;
-    const { kinds, detail } = classify(actualAll.slice(1), derivedWire.slice(1));
+    const classified = classify(actualAll.slice(1), derivedWire.slice(1));
+    // 線上助手訊息帶 `name` 就是差異（#1392）：推導不產生它，classify 的逐格比對本來也會抓到，這裡再單獨
+    // 點名，免得讀的人要從 JSON 差異裡自己認出是 `name`。
+    const leaks = assistantNameLeaks(actualAll);
+    const kinds =
+      leaks.length === 0
+        ? classified.kinds
+        : [...new Set([...classified.kinds, 'other' as const])].sort();
+    const detail =
+      leaks.length === 0
+        ? classified.detail
+        : `線上第 ${leaks.join('、')} 則助手訊息帶 name（產品的 fetch 層應已去掉，#1392）` +
+          (classified.detail === undefined ? '' : `\n${classified.detail}`);
     out.push({
       call: index,
       kinds,
