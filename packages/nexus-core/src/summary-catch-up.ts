@@ -131,6 +131,8 @@ export function withSummaryCatchUp(
         });
         if (found.kind === 'ok') restored = summaryEventToCatchUp(request.state, found.log.events);
       } catch {
+        // 註冊表在這一步拋了（`forCall` 或日誌讀取）：吞掉的是「查不到這次呼叫的日誌」這一種錯，結果等於沒有落後，
+        // 請求照舊往下走——補寫是修復，不能因為它自己查不到就扳倒模型呼叫。
         restored = undefined;
       }
       if (restored === undefined) return inner(request, handler);
