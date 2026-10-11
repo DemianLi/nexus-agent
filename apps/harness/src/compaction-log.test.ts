@@ -98,7 +98,7 @@ async function run(
   try {
     for (let index = 0; index < (options.invocations ?? 1); index += 1) {
       try {
-        await agent.invoke(toAgentInvocation(`第 ${index + 1} 句。`), {
+        await agent.invoke(toAgentInvocation(`第 ${index + 1} 句。${USER_PAD}`), {
           configurable: { thread_id: ROOT_ID },
         });
       } catch (error) {
@@ -125,6 +125,13 @@ async function run(
       .map((entry) => compactionsOf(entry.log.events)),
   };
 }
+
+/**
+ * 使用者每一句後面的墊料（#1396）：框好的摘要要比被取代那段小才會提交。腳本裡摘要與回話用的是同一個 `BODY`，
+ * 第一次摘要被取代的只有「一句短話＋一則 BODY」，框好的摘要（BODY ＋ 框架）會比它大、被擋下；墊長使用者句之後
+ * 第一次摘要就提交，「至少一次」才是在量日誌，不是量第二次以後。
+ */
+const USER_PAD = '內容'.repeat(100);
 
 /** 每則約 100 token（`countTokensApproximately` 約當 4 字元 1 token）。 */
 const BODY = '這是一段普通長度的回話。'.repeat(32);
