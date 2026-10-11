@@ -70,7 +70,7 @@ import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
 import { BrowserAuth } from './browser-auth.js';
 import { loadOrCreateBrowserSessionSecret } from './browser-session-secret.js';
-import { resolveSessionHeaderMetadata } from './session-header-metadata.js';
+import { createSessionHeaderMetadataResolver } from './session-header-metadata.js';
 import { createProcessShutdown } from './process-shutdown.js';
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
 import { HARNESS_HOME_ENV, resolveHarnessHome } from './harness-home.js';
@@ -101,6 +101,7 @@ import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
+import { createThreadPluginList } from './thread-plugin-list.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { subagentModelSelectionPlugin } from './settings/subagent-model-selection.js';
 import { assertAllowedModelsInCatalog, modelSelectionPolicyFor } from './model-selection-policy.js';
@@ -579,12 +580,39 @@ async function startServer(
     log(line);
   }
   // **試組掉了的列帶進每條 thread 的組裝，直接算沒掛**（卡上第 6 項）：不再重試、不再每條各印一次。照 dsh：樹只掛
-  // 一次，沒起來的條目一直不在，直到改設定重載；我們沒有重載，所以到重啟為止。標成 `disabled: true` 跟讀清單那一次
-  // 設定驗不過的列同一個做法，載入器因此記成沒掛。
+  // 一次，沒起來的條目一直不在，直到改設定重載。我們的「重載」是每條 thread 重讀清單（#1405）：那一列的設定一改，
+  // 下一條 thread 重新試它；沒改就照樣標成 `disabled: true`，跟讀清單那一次設定驗不過的列同一個做法。
   const trialDropped = new Set(trial.dropped.map(({ entry }) => entry));
-  const threadPlugins = plugins.map((entry) =>
-    trialDropped.has(entry) ? { ...entry, disabled: true } : entry,
-  );
+  // **每條 thread 組裝時重讀清單**（#1405）：同一個函式、同一組參數，新 thread 看得到 home 層改過的列與組裝期設定。
+  // 起動期讀一次的列照舊到重啟才生效，重讀時看到值變了就記「已儲存，待重啟」；這份名單就是上面 `startupSetting`／
+  // `startupEntryMounted` 讀的那幾列。規則與偏離登記見 `thread-plugin-list.ts`。
+  const threadPluginList = createThreadPluginList({
+    load: () =>
+      loadDefaultPlugins({
+        serve: true,
+        env,
+        ...(invocation.patches !== undefined && { patches: invocation.patches }),
+      }),
+    startup: loaded,
+    trialDropped,
+    audit,
+    startupRead: [
+      browserSessionPlugin,
+      threadTitlePlugin,
+      deliverableFilesPlugin,
+      sessionPersistencePlugin,
+      toolTextPlugin,
+      projectionFlushPlugin,
+      toolResultStashPlugin,
+      spillPolicyPlugin,
+      backgroundSubagentsPlugin,
+      liveModelPlugin,
+      subagentModelSelectionPlugin,
+      threadTitleLlmPlugin,
+      threadSearchPlugin,
+    ],
+    log,
+  });
   // 啟動那幾行裡的「plugin：」不列掉了的列，兩次掉的都不列。
   const droppedEntries = new Set([
     ...loaded.dropped.flatMap((drop) => drop.entry ?? []),
@@ -623,13 +651,12 @@ async function startServer(
             log(`[會話日誌] ${message}`);
           },
         });
-  // **新建的 header 帶建置版本、插件清單與設定雜湊**（#1025）：server 的性質，起動期算一次，每條 thread 新建的
-  // header 帶同一份。清單是上面 `loadDefaultPlugins` 疊好的那一份，跟 `--dump-config` 同源；落盤關掉就不算。
-  const buildMetadata =
+  // **新建的 header 帶建置版本、插件清單與設定雜湊**（#1025）：鍵與建置版本是 server 的性質，起動期讀一次；清單與雜湊
+  // 是那條 thread 組裝時重讀的那一份（#1405），跟 `--dump-config` 同源。落盤關掉就不算。
+  const headerMetadataOf =
     sessionStore === undefined
       ? undefined
-      : await resolveSessionHeaderMetadata({
-          entries: loaded.entries,
+      : await createSessionHeaderMetadataResolver({
           env,
           ...(invocation.workspace !== undefined && { workspace: invocation.workspace }),
           cwd,
@@ -732,7 +759,10 @@ async function startServer(
       // 的核准迴圈，`serve.test.ts` 的「核准那份清單」整條走過一遍）。關掉它會把一個
       // 做得出來的功能關掉（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
       let built: Awaited<ReturnType<NexusAssembly['create']>>;
+      let threadList: Awaited<ReturnType<typeof threadPluginList.read>>;
       try {
+        // 讀不起來、必掛的列掉了：只有這一條建不起來，伺服器照常，下一條再讀一次（#1405 Q1）。
+        threadList = await threadPluginList.read();
         if (resumed !== undefined) assertSameCwd('serve', threadId, resumed.header, cwd);
         // **再認它跑在哪個工作區底下**（#504）。順序與理由逐字同 CLI 的 `--resume`：目錄先認，
         // 這一道在沙箱那一道之前。根在這裡自己算（`createCliAgent` 還沒跑），走的是同一個
@@ -788,7 +818,7 @@ async function startServer(
             ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
             threadTitle,
             threadTitleLlm,
-            optionalEntries,
+            optionalEntries: threadList.optionalEntries,
             // 附件（#732）：模型讀上傳檔案的唯讀路由；儲存是這台 server 一份，每條 thread 的 agent 各掛一條路由。
             attachments: attachmentStore,
             // 會話鑰匙：這台 server 的專案日誌目錄加 thread id——重開之後同一條 thread 回到同一個目錄
@@ -805,7 +835,7 @@ async function startServer(
             }),
           },
           {
-            plugins: threadPlugins,
+            plugins: threadList.plugins,
             // 帳是這台 server 的，不是這條 thread 的：第二條 thread 的第一次借第一條的（#702）。
             session: { tokenAnchorBook, ...(invariantTap !== undefined && { invariantTap }) },
           },
@@ -816,16 +846,16 @@ async function startServer(
       }
       // **啟動時沒掉、這一條組裝時才掉的列**（卡上第 6 項，例如跟這條 thread 的工作區有關的 `apply`）：同一套規則，
       // 只作用在這一條——可少掛的在這條 thread 裡不掛、伺服器日誌記一筆；不能少掛的已經在上面讓這條 thread 建不起來。
-      for (const drop of assemblyDropsOf(loaded, built.dropped)) {
+      for (const drop of assemblyDropsOf(threadList.loaded, built.dropped)) {
         log(`[組裝] thread "${threadId}" 這一條沒掛上：${describeDrop(drop)}`);
       }
       // 外掛交出的警告同理逐條記（例如 MCP 連不上）：它每條對話都重連一次，這一條連不上不代表上一條也沒連上。
-      for (const line of describeWarnings(loaded, built.warnings)) {
+      for (const line of describeWarnings(threadList.loaded, built.warnings)) {
         log(`[組裝] thread "${threadId}" 警告：${line}`);
       }
       // 組裝之後這條 thread 的外掛執行期交出的話（例如 MCP 掉線重連的進度，#1099）同樣逐條記；組裝收掉時註冊表一起沒了。
       built.onWarning((warning) => {
-        for (const line of describeWarnings(loaded, [warning])) {
+        for (const line of describeWarnings(threadList.loaded, [warning])) {
           log(`[外掛] thread "${threadId}"：${line}`);
         }
       });
@@ -918,7 +948,10 @@ async function startServer(
               attachPersistence: (sessions: SessionRegistry) => {
                 const persistence = attachSessionPersistence(sessions, sessionStore, {
                   cwd,
-                  ...(buildMetadata !== undefined && { buildMetadata }),
+                  // 這條 thread 實際掛的那一份清單（#1405），不是啟動那一份。
+                  ...(headerMetadataOf !== undefined && {
+                    buildMetadata: headerMetadataOf(threadList.loaded.entries),
+                  }),
                   // 模型型錄 id 只進 root（#1025）；假模型不是型錄裡的一筆，不寫。
                   ...(invocation.live && { rootModelEntryId: liveModel.modelId }),
                   // 批次窗口：起動期解出來的那一份（`runServe` 頂上那一行），一台伺服器一個節奏。

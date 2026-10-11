@@ -1,7 +1,8 @@
 /**
  * 會話日誌 header 的建置中繼資料：建置版本、插件清單、設定雜湊（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。
  *
- * 寫的一側（{@link resolveSessionHeaderMetadata}）由 `cli.ts` 與 `serve.ts` 在起動期各叫一次，結果交給 `@nexus/core` 的
+ * 寫的一側由 `cli.ts` 在起動期叫一次 {@link resolveSessionHeaderMetadata}，`serve.ts` 在起動期建一支
+ * {@link createSessionHeaderMetadataResolver}、每條 thread 拿自己那份清單叫一次（#1405），結果交給 `@nexus/core` 的
  * `attachSessionPersistence`；讀的一側（{@link readSessionHeaderMetadata}、{@link formatSessionHeaderMetadata}）給離線掃描。
  *
  * ## 三個來源，都不另造
@@ -115,8 +116,21 @@ export interface ResolveSessionHeaderMetadataOptions {
 export async function resolveSessionHeaderMetadata(
   options: ResolveSessionHeaderMetadataOptions,
 ): Promise<SessionHeaderBuildMetadata> {
+  const { entries, ...rest } = options;
+  return (await createSessionHeaderMetadataResolver(rest))(entries);
+}
+
+/**
+ * 起動期讀一次鍵與建置版本，交回一支「給一份清單算那三格」的函式。serve 每條 thread 組裝時重讀清單（#1405），
+ * header 要描述那條 thread 實際掛的那一份，所以清單每條各給；鍵與建置版本是行程的性質，讀一次，鍵讀不到也只講一次。
+ *
+ * @param options - 同 {@link resolveSessionHeaderMetadata}，不帶清單。
+ * @returns 給一份清單、回那三格的函式（鍵讀不到就沒有雜湊那一格）。
+ */
+export async function createSessionHeaderMetadataResolver(
+  options: Omit<ResolveSessionHeaderMetadataOptions, 'entries'>,
+): Promise<(entries: readonly ConfigEntry[]) => SessionHeaderBuildMetadata> {
   const build = options.build ?? processBuildVersion();
-  const plugins = pluginRowsOf(options.entries);
   let key: Buffer;
   try {
     const home = resolveHarnessHome(options.env);
@@ -132,9 +146,13 @@ export async function resolveSessionHeaderMetadata(
     options.warn(
       `會話日誌的 header 這一次不記設定雜湊：${error instanceof Error ? error.message : String(error)}`,
     );
-    return { build, plugins };
+    return (entries) => ({ build, plugins: pluginRowsOf(entries) });
   }
-  return { build, plugins, configHash: configHashOf(options.entries, key) };
+  return (entries) => ({
+    build,
+    plugins: pluginRowsOf(entries),
+    configHash: configHashOf(entries, key),
+  });
 }
 
 // ───────────────────────── 讀的一側 ─────────────────────────
