@@ -137,7 +137,7 @@ describe('壓力閘門接在有效串上（接線）', () => {
     messages: readonly BaseMessage[],
     state: Record<string, unknown>,
   ): Promise<readonly BaseMessage[]> {
-    // `keep` 留在預設的 20 則：這一串只有 10 則，`determineCutoffIndex` 會算出 `<= 0`、
+    // 沒有型錄，保留量退到 {@link RETAIN_FALLBACK_MESSAGES}（20 則）：這一串只有 10 則，`determineCutoffIndex` 會算出 `<= 0`、
     // 基座直接 `return handler(...)`。這一格要看的是**剪刀動沒動**，不是摘要跑不跑得起來
     // ——真讓它跑起來就得餵一個會回話的模型，那是另一個檔的事。
     const middleware = createSummarizer(

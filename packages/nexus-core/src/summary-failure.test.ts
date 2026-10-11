@@ -50,6 +50,8 @@ function summaryModel(fail?: () => Error) {
 }
 
 async function run(options: {
+  messages?: readonly BaseMessage[];
+  state?: Record<string, unknown>;
   settings?: Partial<SummarizationSettings>;
   summaryFails?: () => Error;
   /** 第幾次呼叫（1 起算）要拋、拋什麼；其餘回 `好。`。 */
@@ -73,8 +75,8 @@ async function run(options: {
       return {
         result: await middleware.wrapModelCall?.(
           {
-            messages: conversation(),
-            state: {},
+            messages: options.messages ?? conversation(),
+            state: options.state ?? {},
             model,
             systemMessage: new SystemMessage('系統。'),
             tools: [],
@@ -116,6 +118,54 @@ describe('摘要失敗：我們自己的門檻觸發（dsh 的 pressure 路徑�
     expect(out.model.invokes).toBe(1);
   });
 
+  /**
+   * **退回的是「沒動手摘要時本來會往下交的那份」，不是 `request.messages` 的原串。** graph state 的 `messages` 一直長，
+   * 摘要之前的舊訊息還在裡面；已經摘要過的 thread，第二次摘要壞了不能把整段摘要前的歷史原封送給端點。
+   * （dsh 的 continuing the turn 送的是目前的 surface。）
+   */
+  it('state 帶著舊的摘要事件：退回送的是「摘要＋切點之後」，不是原串', async () => {
+    const messages: BaseMessage[] = [
+      ...Array.from({ length: 6 }, (_, index) => new HumanMessage(`舊的第 ${index} 則`)),
+      new HumanMessage(BIG),
+      new AIMessage('六'),
+      new HumanMessage('七'),
+      new AIMessage('八'),
+    ];
+    const out = await run({
+      messages,
+      state: {
+        _summarizationEvent: {
+          cutoffIndex: 6,
+          summaryMessage: new HumanMessage('舊摘要。'),
+          filePath: '/conversation_history/session_x.md',
+        },
+      },
+      settings: TOKEN_TRIGGER,
+      summaryFails: () => new Error('摘要模型當場炸了'),
+    });
+    expect(out.error).toBeUndefined();
+    expect(out.handled).toHaveLength(1);
+    const sent = out.handled[0]!;
+    expect(sent).toHaveLength(5);
+    expect(String(sent[0]!.content)).toBe('舊摘要。');
+    expect(String(sent[1]!.content)).toBe(BIG);
+    // 原串裡切點之前的舊訊息一則都沒有被送出去。
+    expect(sent.map((message) => String(message.content))).not.toContain('舊的第 0 則');
+  });
+
+  it('摘要那次呼叫自己拋 ContextOverflowError（生摘要那顆也裝不下）：同樣不拋、照原請求送出', async () => {
+    const out = await run({
+      settings: TOKEN_TRIGGER,
+      summaryFails: () => new ContextOverflowError('摘要請求本身超窗'),
+    });
+    expect(out.error).toBeUndefined();
+    expect(out.handled).toHaveLength(1);
+    expect(out.handled[0]).toHaveLength(7);
+    expect(out.reports[0]).toContain('摘要請求本身超窗');
+    // 基座沒有把它當成可恢復的超窗再摘一次：摘要模型只被叫一次。
+    expect(out.model.invokes).toBe(1);
+  });
+
   it('訊息數門檻觸發、摘要壞了：同一條路', async () => {
     const out = await run({
       settings: { trigger: [{ type: 'messages', value: 3 }] },
@@ -144,6 +194,36 @@ describe('摘要失敗：端點真的回超窗（dsh 的 overflow 路徑）', ()
     expect(out.reports[0]).toContain('保留原本的請求錯誤');
     // 沒有再送一次原請求：端點已經說裝不下了。
     expect(out.handled).toHaveLength(1);
+  });
+});
+
+describe('端點的超窗被一層層包起來（每顆 middleware 一層 MiddlewareError）', () => {
+  it('埋在十幾層 cause 底下仍認得是超窗：走「保留原本的請求錯誤」，不當成自己的門檻觸發', async () => {
+    let wrapped: Error = new ContextOverflowError('端點說：超窗了');
+    for (let layer = 0; layer < 16; layer += 1)
+      wrapped = new Error(wrapped.message, { cause: wrapped });
+    const out = await run({
+      settings: { trigger: [{ type: 'tokens', value: 900_000 }] },
+      summaryFails: () => new Error('摘要模型當場炸了'),
+      handlerThrows: (call) => (call === 1 ? wrapped : undefined),
+    });
+    expect(out.error).toBe(wrapped);
+    expect(out.handled).toHaveLength(1);
+    expect(out.reports[0]).toContain('保留原本的請求錯誤');
+  });
+});
+
+describe('摘要請求本身超窗，而端點也回了超窗', () => {
+  it('兩個都是超窗：還給呼叫端的仍是端點那一個，不是摘要請求的', async () => {
+    const endpointError = new ContextOverflowError('端點說：超窗了');
+    const out = await run({
+      settings: { trigger: [{ type: 'tokens', value: 900_000 }] },
+      summaryFails: () => new ContextOverflowError('摘要請求本身超窗'),
+      handlerThrows: (call) => (call === 1 ? endpointError : undefined),
+    });
+    expect(out.error).toBe(endpointError);
+    expect(out.model.invokes).toBe(1);
+    expect(out.reports[0]).toContain('保留原本的請求錯誤');
   });
 });
 

@@ -630,10 +630,14 @@ export function createSummarizer(
       backend,
       summaryPrompt: SUMMARY_PROMPT,
       // 只交 `messages` 那幾道，`tokens` 由 withTokenBudget 比。一道都沒有時是空陣列：基座逐條試，一條都不成立。
-      trigger: settings.trigger
-        .filter((threshold) => threshold.type === 'messages')
-        .map((threshold) => ({ ...threshold })),
-      keep: { type: 'messages', value: keepMessages },
+      // 「這一次不要摘要」那顆（{@link SUPPRESS_SUMMARY}）連 `messages` 那幾道也不給。
+      trigger:
+        keepMessages === SUPPRESSED_CHAIN
+          ? []
+          : settings.trigger
+              .filter((threshold) => threshold.type === 'messages')
+              .map((threshold) => ({ ...threshold })),
+      keep: { type: 'messages', value: Math.max(1, keepMessages) },
       historyPathPrefix: settings.historyPathPrefix,
       truncateArgsSettings: {
         trigger: { ...settings.truncateArgs.trigger },
@@ -873,6 +877,19 @@ function withQuietSummaryCall(
   } as AgentMiddleware;
 }
 
+/**
+ * 「這一次請求不要摘要」的記號，掛在請求物件上（`{...request}` 會帶著走，與 `ROUTED_FROM` 同一個做法）。
+ *
+ * 摘要壞了、退回「照原請求送出」時（{@link withTokenBudget}）要送的是**沒動手摘要時本來會往下交的那份**：
+ * 摘要事件套用過的有效串、基座的 `truncateArgs` 也照做、記過的參數截斷與日誌的記帳也照走。這些全在基座與它外面那幾層裡，
+ * 所以不是在外面把 `request` 原樣丟給 `handler`，而是帶著這個記號再走一遍同一條鏈，由 {@link withRetainedTail} 換上一顆
+ * **沒有訊息數門檻**的基座實例——它判 `shouldSummarize` 為 false，走的就是平常不摘要的那條路。
+ */
+const SUPPRESS_SUMMARY = Symbol.for('nexus.summarization.suppress');
+
+/** 沒有訊息數門檻的那顆實例在快取裡的鍵（保留則數不會是負的）。 */
+const SUPPRESSED_CHAIN = -1;
+
 /** 保留則數實例的快取上限。N 是整數、理論上沒有上限，但實際只在「最近一次摘要之後的對話長度」附近移動；超過就丟最久沒用的。 */
 const MAX_RETAIN_CHAINS = 32;
 
@@ -919,18 +936,23 @@ function withRetainedTail(
   return {
     ...reference,
     wrapModelCall: (request, handler) => {
+      const suppressed = (request as { [SUPPRESS_SUMMARY]?: boolean })[SUPPRESS_SUMMARY] === true;
       const view = effectiveMessages(request.messages ?? [], request.state);
       const limits = limitsOf?.(request.model);
       const retain = retainTokensFor(settings, limits, effectiveTrigger(settings.trigger, limits));
-      const keepMessages =
-        retain === undefined ? RETAIN_FALLBACK_MESSAGES : retainedTailCount(view, retain);
+      const keepMessages = suppressed
+        ? SUPPRESSED_CHAIN
+        : retain === undefined
+          ? RETAIN_FALLBACK_MESSAGES
+          : retainedTailCount(view, retain);
       const state = request.state as Record<string, unknown> | undefined;
       const seeded = (
         state !== undefined && typeof state._summarizationSessionId !== 'string'
           ? { ...request, state: { ...state, _summarizationSessionId: fallbackSessionId } }
           : request
       ) as typeof request;
-      return chainFor(Math.max(1, keepMessages)).wrapModelCall!(seeded, handler);
+      return chainFor(keepMessages === SUPPRESSED_CHAIN ? keepMessages : Math.max(1, keepMessages))
+        .wrapModelCall!(seeded, handler);
     },
   } as AgentMiddleware;
 }
@@ -938,12 +960,20 @@ function withRetainedTail(
 /** 生摘要那次模型呼叫拋出來的錯（物件本身）。見 {@link quietInvoke}。 */
 const summaryCallFailures = new WeakSet<object>();
 
-/** 這個錯（或它的 `cause` 鏈上任何一層）是不是超窗：基座自己的判法（`isContextOverflow`）。 */
+/**
+ * 這個錯（或它的 `cause` 鏈上任何一層）是不是超窗：基座自己的判法（`isContextOverflow`，不設深度上限）。
+ *
+ * **不能設深度上限。** 模型拋出來的錯每經過一顆 middleware 就被 `MiddlewareError.wrap` 包一層，疊裡有十幾顆，
+ * 原錯誤埋在十幾層 `cause` 底下；上限設 8 時這裡認不出它，而基座認得——兩邊對同一個錯的判斷分歧，
+ * 端點超窗就被當成「我們自己的門檻觸發」。以走過的物件防環取代深度上限。
+ */
 function isContextOverflowError(error: unknown): boolean {
+  const seen = new Set<unknown>();
   let cause: unknown = error;
-  for (let depth = 0; depth < 8 && cause !== undefined && cause !== null; depth += 1) {
+  while (typeof cause === 'object' && cause !== null && !seen.has(cause)) {
     if (ContextOverflowError.isInstance(cause)) return true;
-    cause = typeof cause === 'object' ? (cause as { cause?: unknown }).cause : undefined;
+    seen.add(cause);
+    cause = (cause as { cause?: unknown }).cause;
   }
   return false;
 }
@@ -1355,7 +1385,9 @@ function withTokenBudget(
           // 不是任何真的請求錯誤，所以沒有「原錯誤」可保留：拿合成的「摘要預算」那句丟出去只會讓人看不懂。
           report(`摘要失敗（門檻觸發）：${reason}；照原請求送出。`);
           thrown = true;
-          return measured(request);
+          // 送「沒動手摘要時本來會往下交的那份」，不是 `request.messages` 的原串（那裡面摘要之前的舊訊息還在）：
+          // 帶著 {@link SUPPRESS_SUMMARY} 再走一遍同一條鏈，有效串、參數截斷與日誌記帳都照平常的路。
+          return inner({ ...request, [SUPPRESS_SUMMARY]: true } as typeof request, measured);
         }
       })();
     },
