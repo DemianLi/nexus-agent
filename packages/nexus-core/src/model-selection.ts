@@ -223,6 +223,9 @@ export class ModelSelectionController {
  * 排在摘要器、起訖與用量記錄器的**外面**：它們看到的 `request.model` 就是選中的那顆（摘要用它生、`model/start.route` 讀它的標籤、
  * 估算的錨按它的名字認）。選中的就是預設那顆時什麼都不換，請求逐欄與沒有這顆 middleware 時一樣。
  *
+ * **「外面」是組裝時搬出來的**（#1369）：摘要器同名取代回預設疊第三格，新名字原本一律排在它後面；
+ * `agent-assembly.ts` 的 `mergeMiddlewareStack` 把這一顆搬到預設疊前面。只在 fold 的槽位表裡排前面不夠。
+ *
  * @param controller - 這條會話的控制器。
  */
 export function createModelSwapMiddleware(controller: ModelSelectionController): AgentMiddleware {
