@@ -34,8 +34,9 @@ import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage, fromLoggedMessage } from './logged-message.js';
 import { messageSourceOf, sourceKwargs } from './message-source.js';
-import { normalizeRoute, sameModel } from './model-route.js';
+import { normalizeRoute, routeOfModel, sameModel, sameRoute } from './model-route.js';
 import type { ModelRoute } from './model-route.js';
+import type { SessionLookup } from './registry.js';
 import type { SessionLog, SessionEvent } from './session-log.js';
 
 /** 通知那則 `user/message` 的來源 plugin 名，也是 `nexus_source.kind`。 */
@@ -218,6 +219,30 @@ export class ModelSelectionController {
 }
 
 /**
+ * 請求上記「換模型之前那顆」的鍵（#1377）。換模型（root 一顆、子代理跟隨一顆）把 `request.model` 換成選中的實例時，原本那顆
+ * 記在這裡——排在它們裡面的摘要器要找回它：換模型那一步由**最近一次已送出的請求**那顆（常常就是它）生摘要，而選中的實例之外
+ * 沒有別的路可以拿到預設那顆（`instanceFor` 對預設路由回 `undefined`）。
+ *
+ * 用 `Symbol.for` 的可列舉屬性，是因為沿路的 `{ ...request, ... }` 會把它帶下去；不用弱引用表是因為那要以請求物件為鍵，而請求
+ * 物件每一層都在重建。
+ */
+const ROUTED_FROM = Symbol.for('nexus.model-selection.routed-from');
+
+/** 把請求換成 `instance`，並記下換之前那顆（見 {@link ROUTED_FROM}）。 */
+function routed<T extends { model?: unknown }>(request: T, instance: BaseChatModel): T {
+  return { ...request, model: instance, [ROUTED_FROM]: routedFromOf(request) } as T;
+}
+
+/**
+ * 這個請求被換模型之前的 `model`；沒被換過（選中的就是預設那顆）就是 `request.model` 本身。
+ *
+ * @param request - 任何帶 `model` 的請求。
+ */
+export function routedFromOf(request: { model?: unknown }): unknown {
+  return (request as Record<symbol, unknown>)[ROUTED_FROM] ?? request.model;
+}
+
+/**
  * 換模型的 middleware：每一步把 `request.model` 換成這一步選定的那顆。**只折進 root**（`fold.ts` 的 `rootOnly`）。
  *
  * 排在摘要器、起訖與用量記錄器的**外面**：它們看到的 `request.model` 就是選中的那顆（摘要用它生、`model/start.route` 讀它的標籤、
@@ -236,7 +261,7 @@ export function createModelSwapMiddleware(controller: ModelSelectionController):
       const instance = controller.instanceFor(route);
       // 預設那顆（`instanceFor` 回 `undefined`）不換：沒選過的會話送出去的請求與沒有這顆 middleware 時逐欄一樣。
       if (instance === undefined || instance === request.model) return handler(request);
-      return handler({ ...request, model: instance });
+      return handler(routed(request, instance));
     },
   }) as unknown as AgentMiddleware;
 }
@@ -286,7 +311,69 @@ export function createSubagentModelFollowMiddleware(
             : parent;
       const instance = controller.instanceFor(route);
       if (instance === undefined || instance === request.model) return handler(request);
-      return handler({ ...request, model: instance });
+      return handler(routed(request, instance));
     },
   }) as unknown as AgentMiddleware;
+}
+
+/** 摘要器問「這一次生摘要用哪一顆」時交的請求（只用到這幾格）。 */
+interface SummaryModelRequest {
+  readonly model?: unknown;
+  readonly runtime?: { readonly configurable?: unknown };
+}
+
+/**
+ * 摘要用哪一顆生（[#1377](https://github.com/DemianLi/nexus-agent/issues/1377)）：**最近一次已送出的請求那顆，沒有就退回
+ * 這個 agent 換模型之前的那顆**——照 dsh `summarizeWithLlm` 的目標 `configured ?? latest ?? agentTarget`
+ * （`compaction-basic/src/summarizer.ts:127-137`，`latest` 是 `session.requestHeader()?.config`；`configured` 不在這一張）。
+ *
+ * ## 為什麼摘要跟最近一次，門檻卻跟選中那顆
+ *
+ * 門檻在換模型那一步就跟著選中那顆夾窗（#1369，比 dsh 早一步：dsh 的壓縮在 `agent/pre-step`、早於路由，那一步必定先撞一次
+ * overflow）；生摘要則仍用最近一次已送出的那顆——換模型那一步它還是舊的、裝得下整段歷史的那顆，選中的小窗口那顆收到的是
+ * 摘要後的請求。**門檻跟選中那顆是偏離 dsh（#1378 登記、PM 接受，理由是 #723 的驗收），生摘要跟 `latest` 是照 dsh。**
+ *
+ * ## 讀哪一份日誌
+ *
+ * 這次呼叫**自己的**日誌（`sessions.forCall`，與 `model/usage`、`compaction/summary` 同一把鑰匙）：root 讀 root 的，
+ * 子代理讀自己的——就是 dsh 的 `agent.session`。背景圖（`follow: false`）的請求一路走委派時那顆，所以它的「最近一次」
+ * 就是它自己，不跟使用者後來換的。**讀不到日誌、或日誌上還沒有請求，就用這個 agent 換模型之前那顆，不拿 root 的紀錄去猜**
+ * （dsh 的 `latest ?? agentTarget`；與 `unknown-caller`「不猜成 root」同一條）。
+ *
+ * 這是對 PM 寫的 `ModelSelectionController.state().lastUsed` 的**解讀**：root 兩者相同，子代理不同（`state()` 只讀 root 的日誌）。
+ *
+ * ## 實例從哪來
+ *
+ * - 路由與這個 agent 換模型之前那顆（{@link routedFromOf}）同一條：就用那一個實例（背景圖委派時給的、預設那顆都走這裡，
+ *   不另建、不丟掉它身上的重試與逾時包裝）。
+ * - 否則 `controller.instanceFor(route)`（同一條路由回同一個實例）；它回 `undefined`（預設路由）就退回換模型之前那顆。
+ *
+ * **不准拋**：這一層坐在同名取代的摘要器裡，漏出去的錯等於把摘要器拔掉。路由已不在型錄（`instanceFor` 拋）或日誌讀不到，
+ * 一律回 `undefined`——呼叫端退回 `request.model`（選中那顆）。
+ *
+ * @param controller - 這條會話的控制器。
+ * @param sessions - 註冊表的 `sessions` 通道。
+ * @returns 問「這次生摘要用哪顆」；`undefined` ＝ 沒有意見，用 `request.model`。
+ */
+export function summaryModelOf(
+  controller: ModelSelectionController,
+  sessions: { forCall(config: unknown): SessionLookup },
+): (request: SummaryModelRequest) => unknown {
+  return (request) => {
+    try {
+      const base = routedFromOf(request);
+      // 讀不到這次呼叫自己的日誌（`not-attached`／`unknown-caller`／多張註冊表）就用換模型之前那顆，**不拿 root 的紀錄去猜**：
+      // 與 `unknown-caller`「不猜成 root」同一條，也與 dsh 的 `latest ?? agentTarget` 一致（自己沒有最近一次就是這個 agent
+      // 自己的模型，不借父代理的）。
+      const found = sessions.forCall({ configurable: request.runtime?.configurable });
+      if (found.kind !== 'ok') return base;
+      const route = recordedRoute(found.log.events);
+      if (route === undefined) return base;
+      const baseRoute = routeOfModel(base);
+      if (baseRoute !== undefined && sameRoute(baseRoute, route)) return base;
+      return controller.instanceFor(route) ?? base;
+    } catch {
+      return undefined;
+    }
+  };
 }

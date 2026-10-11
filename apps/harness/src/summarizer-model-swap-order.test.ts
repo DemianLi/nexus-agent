@@ -19,9 +19,8 @@
  * 3. **生摘要**：摘要那次模型呼叫打到選中那顆，預設那顆一次都沒收到。
  * 4. **後果**：選到小窗口的模型之後，摘要的 token 門檻夾在它的窗口之下，與「把它直接當預設」的對照組一樣。
  * 5. **子代理**：`task` 委派出去的子代理，摘要器問的也是選中那顆（跟隨的那顆也搬到前面）。
- * 6. **已知限制**：對話已經在大窗口模型上長到比小窗口還大，**那一步**才換——摘要請求本身送進小的那顆、超過它的窗口。
- *    修之前小的那顆收到的是同樣大小的未摘要請求，所以這一步沒有變糟，但也沒有變好。見該條與
- *    [#1377](https://github.com/DemianLi/nexus-agent/issues/1377)。
+ * 6. **換模型那一步誰生摘要**（#1377）：對話已經在大窗口模型上長到比小窗口還大，**那一步**才換——摘要由最近一次已送出的請求
+ *    那顆（大的）生，小的那顆收到的請求在夾窗之下。門檻跟選中那顆、生摘要跟 `latest`。
  *
  * ## 與 dsh 的關係（`d7432673886`）
  *
@@ -30,7 +29,8 @@
  * `latest`），換模型那一步還是舊的，靠 `agent/request-error` 的 context-overflow 壓縮接住。**我們比它早一步**：
  * 洋蔥上換模型在摘要器外面，這一步選中的那顆摘要器當場就拿得到，不必等一次失敗。這是偏離，不是「表達不出來」——
  * 要照 dsh 的時序，讀 `ModelSelectionController.state().lastUsed` 就行；選這樣做是因為 #723 的驗收是「換模型之後
- * 窗口跟著換」，而 dsh 的時序在換到小窗口的那一步必定先撞一次失敗。
+ * 窗口跟著換」，而 dsh 的時序在換到小窗口的那一步必定先撞一次失敗。**生摘要則照 dsh**（#1377）：用最近一次已送出的請求
+ * 那顆（`summarizer.ts:127-137` 的 `latest`），所以換模型那一步由還裝得下歷史的大的那顆生。
  *
  * ## 範圍
  *
@@ -45,6 +45,7 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
+import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import {
   estimateAnchoredTokens,
@@ -53,10 +54,12 @@ import {
   SessionRegistry,
   SUMMARY_PROMPT,
   TokenAnchorBook,
+  tagModelRoute,
   windowThreshold,
 } from '@nexus/core';
 import type { ModelContextLimits, PluginEntry } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -122,6 +125,11 @@ interface RunOptions {
   readonly selectAfterRound?: number;
   /** 選中那顆的腳本；省略＝每輪回一句「好」。委派子代理的場景要自己排。 */
   readonly smallTurns?: readonly ScriptedTurn[];
+  /**
+   * 註冊一個 `poke` 工具，被叫到時把選擇換回預設那顆（模擬「使用者在這一輪中間換了模型」）。
+   * 委派子代理、子代理叫 `poke`、再讓下一次請求走預設那顆的場景用。
+   */
+  readonly pokeSelectsDefault?: boolean;
   /** 摘要的門檻；省略＝只留 token 門檻（出廠的 100000）。 */
   readonly trigger?: readonly { type: 'tokens' | 'messages'; value: number }[];
 }
@@ -135,8 +143,14 @@ afterEach(async () => {
 });
 
 async function observe(options: RunOptions): Promise<Observation> {
-  const defaultModel = new ScriptedChatModel({ turns: script() });
-  const smallModel = new ScriptedChatModel({ turns: options.smallTurns ?? script() });
+  // 與產品組裝一樣給實例貼上路由標籤：`model/start.route` 讀它，生摘要的「最近一次已送出的請求那顆」（#1377）靠它。
+  const defaultModel = tagModelRoute(new ScriptedChatModel({ turns: script() }), {
+    model: 'default',
+  });
+  const smallModel = tagModelRoute(
+    new ScriptedChatModel({ turns: options.smallTurns ?? script() }),
+    { model: 'small' },
+  );
   const labelOf = (model: unknown): Label =>
     model === defaultModel ? 'DEFAULT' : model === smallModel ? 'SMALL' : 'other';
   const limitsAskedAbout: Label[] = [];
@@ -159,11 +173,26 @@ async function observe(options: RunOptions): Promise<Observation> {
         } as never),
     },
   };
+  const poker: PluginEntry = {
+    plugin: {
+      name: 'swap-order-poker',
+      apply: (registry) =>
+        void registry.tools.register(
+          tool(
+            () => {
+              controller.select({ model: 'default' });
+              return 'poked';
+            },
+            { name: 'poke', description: '戳一下。', schema: z.object({}) },
+          ),
+        ),
+    },
+  };
   const built = await createNexusAgent({
     model: options.viaSelection ? defaultModel : smallModel,
     checkpointer: new MemorySaver(),
     backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
-    plugins: [observer],
+    plugins: options.pokeSelectsDefault === true ? [observer, poker] : [observer],
     summarization: {
       ...(options.trigger !== undefined && {
         trigger: options.trigger.map((each) => ({ ...each })),
@@ -229,7 +258,7 @@ describe('摘要器看到的是這一步選中的模型（#1369）', () => {
     expect(new Set(run.limitsAskedAbout)).toEqual(new Set(['SMALL']));
   });
 
-  it('生摘要：摘要那次呼叫打到選中那顆，預設那顆一次都沒收到', async () => {
+  it('生摘要：選在第一次請求之前，最近一次已送出的就是選中那顆，摘要打到它、預設那顆一次都沒收到', async () => {
     // 用 messages 門檻觸發，與 token 門檻拆開：這一條只量「誰生」，不牽涉窗口。
     const run = await observe({
       viaSelection: true,
@@ -289,6 +318,39 @@ describe('摘要器看到的是這一步選中的模型（#1369）', () => {
     expect(new Set(run.limitsAskedAbout)).toEqual(new Set(['SMALL']));
   });
 
+  it('子代理（task 委派）：生摘要也跟最近一次已送出的請求那顆，不是它這一步選中的（#1377）', async () => {
+    // 一開始就選小的。root 叫 task → 子代理叫 poke（工具把選擇換回預設）→ 子代理與 root 的下一次請求走預設那顆。
+    // 兩邊的訊息都長到 3 則、messages 門檻 3，所以各摘要一次：最近一次已送出的請求都還是小的那顆。
+    const run = await observe({
+      viaSelection: true,
+      rounds: 1,
+      payloadChars: 10,
+      pokeSelectsDefault: true,
+      trigger: [{ type: 'messages', value: 3 }],
+      smallTurns: [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'task', args: { description: '去做。', subagent_type: 'general-purpose' } },
+          ],
+        },
+        { content: '', toolCalls: [{ name: 'poke', args: {} }] },
+        // 後面兩輪是兩次生摘要（子代理一次、root 一次）：腳本模型每次 `invoke` 都吃一輪。
+        { content: '子代理那段的摘要。' },
+        { content: 'root 那段的摘要。' },
+      ],
+    });
+    // 前提：換回預設之後，子代理與 root 各有一次請求真的走了預設那顆（不然這一條什麼都沒區分）。
+    expect(run.innerSaw).toEqual(['SMALL', 'SMALL', 'DEFAULT', 'DEFAULT']);
+    const requests = (model: ScriptedChatModel) =>
+      model.prompts.filter((prompt) => !isSummaryCall(prompt)).length;
+    expect(requests(run.smallModel)).toBe(2);
+    expect(requests(run.defaultModel)).toBe(2);
+    // 生摘要：兩次（子代理一次、root 一次）都由最近一次已送出的請求那顆（小的）生，預設那顆一次都沒有。
+    expect(summaryCallsOf(run.smallModel)).toBe(2);
+    expect(summaryCallsOf(run.defaultModel)).toBe(0);
+  });
+
   it('圖片省略也在摘要器外面（#1270 的設計位置）', async () => {
     const run = await observe({ viaSelection: true, rounds: 1, payloadChars: 10 });
     const summarizer = run.stackNames.indexOf('SummarizationMiddleware');
@@ -299,17 +361,16 @@ describe('摘要器看到的是這一步選中的模型（#1369）', () => {
   });
 
   /**
-   * **已知限制，不是這張卡修的**：對話在大窗口模型上長到比小窗口還大，那一步才換過去。
+   * **換模型那一步誰生摘要**（[#1377](https://github.com/DemianLi/nexus-agent/issues/1377)，PM 決定 (b)）：對話在大窗口模型上長到
+   * 比小窗口還大，那一步才換過去。門檻在這一步就跟選中那顆夾窗（#1369，比 dsh 早一步），所以摘要器這一步動手；但**生摘要**
+   * 用最近一次已送出的請求那顆（大的、裝得下整段歷史），小的那顆收到的是摘要之後的請求，在夾窗之下。
    *
-   * 門檻現在按選中那顆夾，所以這一步摘要器動手；但摘要請求本身（整段待摘要的歷史加指示）送進**選中那顆**，
-   * 長度超過它的窗口。實測：十二輪後選到 32,768 窗口那顆，摘要請求 72,314（2.2 倍）。修之前同一步是小的那顆
-   * 直接收到 72,000 多的未摘要請求，一樣超窗，所以沒有變糟。
+   * 修之前（#1369 的實測）：摘要請求送進選中的小的那顆，72,314 token，是它窗口的 2.2 倍。
    *
-   * dsh 的 `summarizer.ts` 在這裡有 `configured`（明設的摘要用模型）與 `latest`（最近一次已送出的請求那顆，
-   * 換模型那一步還是大的）兩條路。選哪條是產品決定（[#1377](https://github.com/DemianLi/nexus-agent/issues/1377)），沒有在這裡下。
-   * **要修的時候這一條翻面**：摘要請求不再超過選中那顆的窗口。
+   * 照 dsh `summarizer.ts:127-137` 的 `latest ?? agentTarget`（`configured` 不做）。代價：這一步的摘要由不是接手的那顆生，
+   * 下一步起由選中那顆接手。
    */
-  it('已知限制：換模型那一步，摘要請求本身送進小窗口那顆、超過它的窗口', async () => {
+  it('換模型那一步：摘要由換之前那顆（最近一次已送出的請求）生，小窗口那顆收到的請求在夾窗之下', async () => {
     const run = await observe({
       viaSelection: true,
       rounds: 16,
@@ -318,15 +379,18 @@ describe('摘要器看到的是這一步選中的模型（#1369）', () => {
     });
     const sizes = (model: ScriptedChatModel, summary: boolean) =>
       model.prompts.filter((prompt) => isSummaryCall(prompt) === summary).map(sizeOf);
+    const ceiling = windowThreshold(SMALL_LIMITS);
 
     // 前面十二輪在預設那顆上，沒有一次摘要。
     expect(sizes(run.defaultModel, false)).toHaveLength(12);
-    expect(summaryCallsOf(run.defaultModel)).toBe(0);
-    // 換過去那一步：摘要請求送進小的那顆，超過它的窗口。
-    const summaryRequests = sizes(run.smallModel, true);
-    expect(summaryRequests.length).toBeGreaterThan(0);
-    expect(Math.max(...summaryRequests)).toBeGreaterThan(SMALL_LIMITS.contextWindow);
-    // 之後的請求都在夾窗之下。
-    expect(Math.max(...sizes(run.smallModel, false))).toBeLessThan(windowThreshold(SMALL_LIMITS));
+    // 換過去那一步：摘要請求送進**預設那顆**（它裝得下），而且那份請求比小的窗口還大——所以小的收下會超窗。
+    const summaryRequests = sizes(run.defaultModel, true);
+    expect(summaryRequests).toHaveLength(1);
+    expect(summaryRequests[0]!).toBeGreaterThan(SMALL_LIMITS.contextWindow);
+    // 小的那顆一次摘要請求都沒收到；它收到的每一份請求都在夾窗之下，而且確實有收到（對話在它身上接著走）。
+    expect(summaryCallsOf(run.smallModel)).toBe(0);
+    const requests = sizes(run.smallModel, false);
+    expect(requests.length).toBeGreaterThan(0);
+    expect(Math.max(...requests)).toBeLessThan(ceiling);
   });
 });
