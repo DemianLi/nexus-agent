@@ -1816,8 +1816,9 @@ describe('壓縮前先剪掉過大的工具結果', () => {
 
     let last: { readonly messages: readonly BaseMessage[] } = { messages: [] };
     try {
+      // 使用者句墊長：框好的摘要要比被取代那段小才會提交（#1396），「一。」連框架都比不過。
       for (const line of ['一。', '二。', '三。']) {
-        last = (await agent.invoke(toAgentInvocation(line), {
+        last = (await agent.invoke(toAgentInvocation(`${line}${'內容'.repeat(100)}`), {
           configurable: { thread_id: 'prune' },
         })) as unknown as { readonly messages: readonly BaseMessage[] };
       }

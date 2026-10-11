@@ -30,6 +30,18 @@ function longHistory(count: number): BaseMessage[] {
 }
 
 /**
+ * 每則都墊長的歷史：框好的摘要比被取代那段小才會提交（#1396），框架（含歷史檔路徑）約 60–70 token，
+ * 一則「問 0」連它都比不過。要走到「摘要真的提交」的測試用這一份。
+ */
+function fatHistory(count: number): BaseMessage[] {
+  return Array.from({ length: count }, (_, index) =>
+    index % 2 === 0
+      ? new HumanMessage(`問 ${index} ${'內容'.repeat(120)}`)
+      : new AIMessage(`答 ${index} ${'內容'.repeat(120)}`),
+  );
+}
+
+/**
  * 讓摘要逐字留下最近 `count` 則的 `retainTokens`：前面 `count − 1` 則的 token 加一。dsh 的選尾巴是累加到 **≥** 保留量、
  * 跨過的那則也留，所以前 `count − 1` 則還不夠、第 `count` 則一加就跨過去，剛好留 `count` 則（`count` 為 1 時是 1）。
  */
@@ -214,13 +226,13 @@ describe('生摘要的那次呼叫不上線（接線）', () => {
   async function modelHandedDown(trigger: readonly SummarizationThreshold[], model: object) {
     const middleware = createSummarizer(
       { write: async (path: string) => ({ path }) } as never,
-      { ...DEFAULT_SUMMARIZATION, trigger, retainTokens: retainLast(longHistory(10), 2) },
+      { ...DEFAULT_SUMMARIZATION, trigger, retainTokens: retainLast(fatHistory(10), 2) },
       new TokenAnchorBook(),
     );
     let handed: unknown;
     await middleware.wrapModelCall?.(
       {
-        messages: longHistory(10),
+        messages: fatHistory(10),
         state: {},
         model,
         systemMessage: new SystemMessage('系統。'),
@@ -579,13 +591,8 @@ describe('摘要輸入裡的附件', () => {
   });
 
   it('沒有附件時，訊息串原樣進基座', async () => {
-    // 訊息要夠長：框好的摘要比被取代那段小才會提交（#1396）；一則「問 0」連框架文字都比不過。
-    const fat = longHistory(6).map((_message, index) =>
-      index % 2 === 0
-        ? new HumanMessage(`問 ${index} ${'內容'.repeat(120)}`)
-        : new AIMessage(`答 ${index} ${'內容'.repeat(120)}`),
-    );
-    const { prompts, sent } = await summarize(fat);
+    // 訊息要夠長（#1396）：見 `fatHistory`。
+    const { prompts, sent } = await summarize(fatHistory(6));
     expect(prompts).toHaveLength(1);
     expect(sent.slice(1)).toHaveLength(2);
   });
