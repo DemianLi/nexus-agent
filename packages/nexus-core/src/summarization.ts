@@ -458,6 +458,12 @@ export interface SummarizationSettings {
  * 沒型錄的模型（`limitsOf` 回 `undefined`）只剩後一項；連 token 門檻都沒有（只有 `messages` 門檻）就退回
  * {@link RETAIN_FALLBACK_MESSAGES} 則。
  *
+ * **端點真的回超窗時不用這個保留量**（[#1381](https://github.com/DemianLi/nexus-agent/issues/1381)）：dsh 的 overflow 路徑
+ * 繞過保留政策、`selectCompactableRange(session, measurement, 0)` 只留配對需要的尾巴（`index.ts:262`、`:294`），
+ * `retainTokens` 只用在 pressure 路徑。我們的兩條觸發走同一顆基座，所以由 {@link withRetainedTail} 分開：**真超窗**（錯誤鏈上
+ * 第一顆 `ContextOverflowError` 不在我們合成的 WeakSet 裡）換上 retain 0 的實例、現在就摘要；**我們自己合成的預算超窗**
+ * 保留量照常。
+ *
  * ## `truncateArgs`：顯式寫出來，是為了**保住**基座本來的行為
  *
  * 這一組正是基座 `FALLBACK_TRUNCATE_ARGS` 的值。我們不是在調它——我們是在避免它被
@@ -625,14 +631,16 @@ export function createSummarizer(
 ): AgentMiddleware {
   // 基座的 `keep` 在建構時就定了，每次請求換不了：保留則數 N 由 {@link withRetainedTail} 逐步算，各用一顆
   // `keep: { messages, N }` 的實例（同一個 backend、同一份 `stateSchema`）。
-  const makeChain = (keepMessages: number): AgentMiddleware => {
+  const makeChain = (keepMessages: number, force = false): AgentMiddleware => {
     const base = createSummarizationMiddleware({
       backend,
       summaryPrompt: SUMMARY_PROMPT,
       // 只交 `messages` 那幾道，`tokens` 由 withTokenBudget 比。一道都沒有時是空陣列：基座逐條試，一條都不成立。
-      // 「這一次不要摘要」那顆（{@link SUPPRESS_SUMMARY}）連 `messages` 那幾道也不給。
-      trigger:
-        keepMessages === SUPPRESSED_CHAIN
+      // 「這一次不要摘要」那顆（{@link SUPPRESS_SUMMARY}）連 `messages` 那幾道也不給；「端點已經說裝不下」那顆
+      // （`force`，見 {@link withRetainedTail}）給一道 1 則的門檻：基座一進來就判 `shouldSummarize`，現在就摘要。
+      trigger: force
+        ? [{ type: 'messages', value: 1 }]
+        : keepMessages === SUPPRESSED_CHAIN
           ? []
           : settings.trigger
               .filter((threshold) => threshold.type === 'messages')
@@ -913,21 +921,23 @@ const MAX_RETAIN_CHAINS = 32;
  * @returns 與 `makeChain` 回傳的同名、同狀態的 middleware。
  */
 function withRetainedTail(
-  makeChain: (keepMessages: number) => AgentMiddleware,
+  makeChain: (keepMessages: number, force?: boolean) => AgentMiddleware,
   settings: SummarizationSettings,
   limitsOf?: (model: unknown) => ModelContextLimits | undefined,
 ): AgentMiddleware {
-  const chains = new Map<number, AgentMiddleware>();
-  const chainFor = (keepMessages: number): AgentMiddleware => {
-    const cached = chains.get(keepMessages);
+  // 鍵是「N」與「是不是強制摘要那顆」：同一個 N 兩種都可能用到，各自一顆。
+  const chains = new Map<string, AgentMiddleware>();
+  const chainFor = (keepMessages: number, force = false): AgentMiddleware => {
+    const key = `${force ? 'force' : 'keep'}:${keepMessages}`;
+    const cached = chains.get(key);
     if (cached !== undefined) {
       // 最近用過的排到最後。
-      chains.delete(keepMessages);
-      chains.set(keepMessages, cached);
+      chains.delete(key);
+      chains.set(key, cached);
       return cached;
     }
-    const made = makeChain(keepMessages);
-    chains.set(keepMessages, made);
+    const made = makeChain(keepMessages, force);
+    chains.set(key, made);
     if (chains.size > MAX_RETAIN_CHAINS) chains.delete(chains.keys().next().value!);
     return made;
   };
@@ -951,14 +961,83 @@ function withRetainedTail(
           ? { ...request, state: { ...state, _summarizationSessionId: fallbackSessionId } }
           : request
       ) as typeof request;
-      return chainFor(keepMessages === SUPPRESSED_CHAIN ? keepMessages : Math.max(1, keepMessages))
-        .wrapModelCall!(seeded, handler);
+      const normal = keepMessages === SUPPRESSED_CHAIN ? keepMessages : Math.max(1, keepMessages);
+      // 端點真的回超窗：照 dsh 的 overflow 路徑（`compaction-basic/src/index.ts:262`、`:294`）繞過保留政策，retain 取 0，
+      // 只留工具呼叫與結果配對需要的尾巴（#1381）。**我們合成的預算超窗不算**：那不是端點說的，保留量照常。
+      // 已經是最小尾巴（`zero >= normal`）時不用換，基座自己的緊急摘要就是這個保留量。
+      const zero = suppressed ? undefined : Math.max(1, retainedTailCount(view, 0));
+      const escalate = zero !== undefined && zero < normal;
+      const watched: typeof handler = escalate
+        ? async (sent) => {
+            try {
+              return await handler(sent);
+            } catch (error) {
+              if (isRealOverflow(error)) throw new EndpointOverflowSignal(error);
+              throw error;
+            }
+          }
+        : handler;
+      if (!escalate) return chainFor(normal).wrapModelCall!(seeded, handler);
+      return (async () => {
+        try {
+          return await chainFor(normal).wrapModelCall!(seeded, watched);
+        } catch (error) {
+          if (!(error instanceof EndpointOverflowSignal)) throw error;
+          // 現在就摘要、尾巴只留配對需要的那幾則；這一次的錯誤（含第二次又超窗）照原樣往外走，不再升級。
+          return chainFor(zero, true).wrapModelCall!(seeded, handler);
+        }
+      })();
     },
   } as AgentMiddleware;
 }
 
 /** 生摘要那次模型呼叫拋出來的錯（物件本身）。見 {@link quietInvoke}。 */
 const summaryCallFailures = new WeakSet<object>();
+
+/** 我們自己（{@link withTokenBudget}）合成的預算超窗：不是端點說的，不走 dsh 的 overflow 路徑。 */
+const syntheticOverflows = new WeakSet<object>();
+
+/**
+ * 合成一顆預算超窗並記下它是我們自己的。基座只認型別（`ContextOverflowError`），所以它得是真的那個類別；
+ * 「是不是我們合成的」靠這個 WeakSet 的物件身分，不靠訊息字串。
+ *
+ * @internal 匯出只給測試用，不在 `index.ts` 的公開面上。
+ */
+export function syntheticOverflow(message: string): ContextOverflowError {
+  const error = new ContextOverflowError(message);
+  syntheticOverflows.add(error);
+  return error;
+}
+
+/**
+ * 端點真的回了超窗，從 {@link withRetainedTail} 的觀察點拋出來、**故意不是** `ContextOverflowError` 也不帶 `cause`：
+ * 基座認不出它，不會拿 N 則的保留量去做緊急摘要，錯誤整個冒回分派器，由分派器換上 retain 0 的實例重走一遍。
+ */
+class EndpointOverflowSignal extends Error {
+  constructor(readonly original: unknown) {
+    super('endpoint reported a context overflow');
+    this.name = 'EndpointOverflowSignal';
+  }
+}
+
+/**
+ * 這個錯的鏈上第一顆 `ContextOverflowError` 是不是端點真的回的（不是 {@link syntheticOverflows} 裡我們自己合成的）。
+ * 不設深度上限、以走過的物件防環，原因同 {@link isContextOverflowError}。
+ *
+ * **判的是「鏈上找到的那一顆」的身分，不是最外層那個。** 合成的超窗被包了很多層之後仍然是合成的。
+ *
+ * @internal 匯出只給測試用，不在 `index.ts` 的公開面上。
+ */
+export function isRealOverflow(error: unknown): boolean {
+  const seen = new Set<unknown>();
+  let cause: unknown = error;
+  while (typeof cause === 'object' && cause !== null && !seen.has(cause)) {
+    if (ContextOverflowError.isInstance(cause)) return !syntheticOverflows.has(cause);
+    seen.add(cause);
+    cause = (cause as { cause?: unknown }).cause;
+  }
+  return false;
+}
 
 /**
  * 這個錯（或它的 `cause` 鏈上任何一層）是不是超窗：基座自己的判法（`isContextOverflow`，不設深度上限）。
@@ -1321,7 +1400,7 @@ function withTokenBudget(
         if (estimate !== undefined && budget !== undefined && baseWillCatch && !thrown) {
           if (estimate.tokens >= budget) {
             thrown = true;
-            throw new ContextOverflowError(
+            throw syntheticOverflow(
               `摘要預算：這份請求估計 ${estimate.tokens} token，到了 ${budget} 的門檻。`,
             );
           }
