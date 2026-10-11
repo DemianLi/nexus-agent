@@ -1,11 +1,13 @@
 # `@nexus/core` 要不要拆成容器／領域／打底 —— 取捨與決定
 
+**2026-10-11 取代**：§六重開條件第 1 條（出現 repo 外的插件作者）已觸發，§一「維持三合一」由 [`decisions-2026-10-11.md`](decisions-2026-10-11.md) 取代：容器改為 vendor 上游 Cordis，外部插件只相依 `@nexus/plugin-sdk` 與服務定義套件。§五「LangChain 生態沒有 Cordis 對應物，所以要從零寫容器」漏了直接 vendor Cordis 這個選項。以下保留原文作為歷史。
+
 `@nexus/core` 一個包同時扮三個角色。dsh 把同樣的三件事拆在三處：**容器**是 vendored 的
 Cordis，**領域**是 `packages/core/*`，**打底**是 `packages/bundle/base`。這份筆記回答
 「我們要不要照做」，並登記決定與重新開啟這個決定的條件。
 
 **調研日期**：2026-09-16。對讀版本：dsh `0d1f50007f9bca3f52b06e1c3074fa14d5fb0720`（master，
-2026-09-15）；vendored Cordis `4.0.2`；基座 `deepagents@~1.13.1`。dsh 的 clone 在
+2026-09-15）；vendored Cordis `4.0.2`（這是 dsh 自己的發版號；上游基底是 cordiverse/cordis `4.0.0-rc.7`，2026-10-11 補註）；基座 `deepagents@~1.13.1`。dsh 的 clone 在
 `references/`，不進版控。
 
 ## 這份筆記的來源與可信度

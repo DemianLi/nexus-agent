@@ -25,7 +25,10 @@ import {
   pendingNotice,
   recordedRoute,
   recordedSelection,
+  routedFromOf,
+  summaryModelOf,
 } from './model-selection.js';
+import type { SessionLookup } from './registry.js';
 import { SessionLog } from './session-log.js';
 import { effectiveTrigger, windowThreshold } from './summarization.js';
 
@@ -355,5 +358,121 @@ describe('摘要門檻逐步夾在當步模型的窗口內', () => {
     const mixed = [{ type: 'messages', value: 500 }] as const;
     expect(effectiveTrigger(mixed, { contextWindow: 10_000, maxOutputTokens: 1_000 })).toBe(mixed);
     expect(effectiveTrigger(trigger, undefined)).toBe(trigger);
+  });
+});
+
+describe('生摘要用哪一顆（#1377）：最近一次已送出的請求那顆，沒有就退回換模型之前那顆', () => {
+  const base = tagModelRoute({ name: 'default-instance' }, { model: 'default-model' });
+  const small = tagModelRoute({ name: 'small-instance' }, { model: 'small' });
+
+  /** 這次呼叫「自己的」日誌；`undefined` ＝ 讀不到（`not-attached`）。 */
+  const sessionsOf = (log: SessionLog | undefined) => ({
+    forCall: (): SessionLookup =>
+      log === undefined
+        ? { kind: 'not-attached' }
+        : ({ kind: 'ok', address: { sessionId: 's' }, log } as unknown as SessionLookup),
+  });
+  const ask = (
+    resolver: ReturnType<typeof summaryModelOf>,
+    request: { model?: unknown } = { model: base },
+  ) => resolver({ ...request, runtime: { configurable: {} } });
+
+  it('最近一次已送出的請求走的是小的：用小的（換模型那一步，選中的與最近一次不同）', () => {
+    const { subject, log } = controller({ small });
+    started(log, { model: 'small' });
+    subject.select({ model: 'default-model' }); // 選中的是預設，最近一次是小的
+    expect(ask(summaryModelOf(subject, sessionsOf(log)))).toBe(small);
+  });
+
+  it('最近一次走的就是換模型之前那顆（同一條路由）：用那一個實例，不另建', () => {
+    const { subject, log, made } = controller({ small });
+    started(log, { model: 'default-model' });
+    subject.select({ model: 'small' });
+    expect(ask(summaryModelOf(subject, sessionsOf(log)))).toBe(base);
+    expect(made).toEqual([]); // 沒有問過 instanceFor
+  });
+
+  it('預設路由（instanceFor 回 undefined）而且實例沒貼標籤：退回換模型之前那顆', () => {
+    const untagged = { name: 'untagged-default' };
+    const { subject, log } = controller({ small });
+    started(log, { model: 'default-model' });
+    expect(ask(summaryModelOf(subject, sessionsOf(log)), { model: untagged })).toBe(untagged);
+  });
+
+  it('日誌上還沒有任何請求：用換模型之前那顆（沒有 lastUsed 就是預設）', () => {
+    const { subject, log } = controller({ small });
+    subject.select({ model: 'small' });
+    expect(ask(summaryModelOf(subject, sessionsOf(log)))).toBe(base);
+  });
+
+  it('讀不到這次呼叫的日誌：用換模型之前那顆，不拿 root 的紀錄去猜', () => {
+    const { subject, log } = controller({ small });
+    started(log, { model: 'small' }); // root 最近一次走小的——讀不到自己的日誌時不借它
+    expect(ask(summaryModelOf(subject, sessionsOf(undefined)))).toBe(base);
+  });
+
+  it('子代理自己的日誌還沒有請求、root 的最近一次是小的：用換模型之前那顆', () => {
+    const { subject, log } = controller({ small });
+    started(log, { model: 'small' });
+    expect(ask(summaryModelOf(subject, sessionsOf(new SessionLog('subagent-empty'))))).toBe(base);
+  });
+
+  it('子代理讀自己的日誌，不是 root 的', () => {
+    const { subject, log } = controller({ small });
+    started(log, { model: 'default-model' }); // root 最近一次走預設
+    const own = new SessionLog('subagent');
+    started(own, { model: 'small' }); // 子代理自己的最近一次走小的
+    expect(ask(summaryModelOf(subject, sessionsOf(own)))).toBe(small);
+  });
+
+  it('路由已不在型錄（instanceFor 拋）：不准拋，回 undefined 讓呼叫端用 request.model', () => {
+    const subject = new ModelSelectionController({
+      defaultRoute: DEFAULT,
+      instanceFor: () => {
+        throw new Error('型錄沒有這個 id');
+      },
+    });
+    const log = new SessionLog('gone');
+    subject.attach(log);
+    started(log, { model: 'removed-from-catalog' });
+    expect(ask(summaryModelOf(subject, sessionsOf(log)))).toBeUndefined();
+  });
+
+  describe('換模型之前那顆怎麼被帶下去', () => {
+    type Wrap = (
+      request: { model: unknown },
+      handler: (request: { model: unknown }) => unknown,
+    ) => unknown;
+    const through = (middleware: unknown, model: unknown) => {
+      let seen: { model: unknown } | undefined;
+      (middleware as { wrapModelCall: Wrap }).wrapModelCall({ model }, (given) => {
+        seen = given;
+        return undefined;
+      });
+      return seen!;
+    };
+
+    it('root 換模型：換成選中的，原本那顆記在請求上；沒換就不記（routedFromOf 退回 request.model）', () => {
+      const { subject, log } = controller({ small });
+      subject.select({ model: 'small' });
+      subject.noticeFor(log);
+      const swapped = through(createModelSwapMiddleware(subject), base);
+      expect(swapped.model).toBe(small);
+      expect(routedFromOf(swapped)).toBe(base);
+
+      const { subject: plain } = controller({});
+      const same = through(createModelSwapMiddleware(plain), base);
+      expect(same.model).toBe(base);
+      expect(routedFromOf(same)).toBe(base);
+    });
+
+    it('子代理跟隨：同樣記下原本那顆；記號跟著 {...request} 往下走', () => {
+      const { subject } = controller({ small });
+      subject.select({ model: 'small' });
+      const followed = through(createSubagentModelFollowMiddleware(subject, {}), base);
+      expect(followed.model).toBe(small);
+      const forwarded = { ...followed, extra: [] };
+      expect(routedFromOf(forwarded)).toBe(base);
+    });
   });
 });
