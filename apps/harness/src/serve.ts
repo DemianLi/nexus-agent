@@ -587,11 +587,12 @@ async function startServer(
   // 起動期讀一次的列照舊到重啟才生效，重讀時看到值變了就記「已儲存，待重啟」；這份名單就是上面 `startupSetting`／
   // `startupEntryMounted` 讀的那幾列。規則與偏離登記見 `thread-plugin-list.ts`。
   const threadPluginList = createThreadPluginList({
-    load: () =>
+    load: (warn) =>
       loadDefaultPlugins({
         serve: true,
         env,
         ...(invocation.patches !== undefined && { patches: invocation.patches }),
+        warn,
       }),
     startup: loaded,
     trialDropped,
@@ -844,6 +845,7 @@ async function startServer(
         await release().catch(() => {});
         throw error;
       }
+      threadPluginList.noteDropped(threadList, built.dropped);
       // **啟動時沒掉、這一條組裝時才掉的列**（卡上第 6 項，例如跟這條 thread 的工作區有關的 `apply`）：同一套規則，
       // 只作用在這一條——可少掛的在這條 thread 裡不掛、伺服器日誌記一筆；不能少掛的已經在上面讓這條 thread 建不起來。
       for (const drop of assemblyDropsOf(threadList.loaded, built.dropped)) {

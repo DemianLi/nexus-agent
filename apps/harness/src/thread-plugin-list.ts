@@ -15,8 +15,11 @@
  * - **必掛的列掉了，只讓這一條 thread 建不起來**：拋跟啟動那一次同一種 `StartupError`，伺服器照常，下一條再讀一次。
  *   不沿用上一份讀得起來的清單：那會讓「改壞了」靜靜不生效。
  * - **可少掛的列，同一列的設定沒變就一直算沒掛**：啟動試組掉了的列、讀清單時掉了的列，都以「列 id 加那一列疊完的宣告」
- *   記成已知，不每條 thread 重試、各印一次——同啟動那一段的性質。那一列的宣告一改，下一條 thread 就重新試它；新掉的
- *   列在伺服器日誌記一次。
+ *   記成已知，不每條 thread 重試、各印一次——同啟動那一段的性質。那一列的宣告一改，下一條 thread 就重新試它；重試又
+ *   掉了，新的宣告也記成已知（{@link ThreadPluginReader.noteDropped}），讀清單時新掉的列在伺服器日誌記一次。
+ *   啟動試組沒掉、某一條 thread 組裝時才掉的列不在這條規則裡，照舊只在那一條不掛。
+ *
+ * 讀清單交出的警告（例如 patch 指到不存在的 id）也只記一次，進伺服器日誌。
  *
  * ## 偏離登記
  *
@@ -31,7 +34,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
 
-import type { LoadedPluginConfig } from './plugin-config.js';
+import type { LoadedPluginConfig, PluginConfigWarn } from './plugin-config.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { stableStringify } from './stable-stringify.js';
 import {
@@ -56,8 +59,8 @@ export interface ThreadPluginList {
 
 /** {@link createThreadPluginList} 的輸入。 */
 export interface ThreadPluginListOptions {
-  /** 讀一次清單，同啟動那一次的 `loadDefaultPlugins` 與參數。 */
-  readonly load: () => Promise<LoadedPluginConfig>;
+  /** 讀一次清單，同啟動那一次的 `loadDefaultPlugins` 與參數，警告交給 `warn`。 */
+  readonly load: (warn: PluginConfigWarn) => Promise<LoadedPluginConfig>;
   /** 啟動那一次讀出來的結果。 */
   readonly startup: LoadedPluginConfig;
   /** 啟動試組掉了的條目（取自 `startup.plugins`；組裝點自己加的外掛不在清單上，略過）。 */
@@ -79,6 +82,13 @@ export interface ThreadPluginReader {
    * @throws {PluginConfigError} 任何一層讀不了、形狀不合；必掛的列掉了是其中的 `StartupError`，訊息同啟動那一次。
    */
   read(): Promise<ThreadPluginList>;
+  /**
+   * 組裝之後交回這一條掉了的條目。啟動試組掉過的列，宣告改了重試又掉，新的宣告記成已知，之後的 thread 不再試。
+   *
+   * @param list - 這一條用的那份（{@link read} 的回傳）。
+   * @param dropped - 組裝時掉了的條目。
+   */
+  noteDropped(list: ThreadPluginList, dropped: readonly { readonly entry: PluginEntry }[]): void;
 }
 
 /**
@@ -94,10 +104,21 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
   const known = new Set<string>();
   for (const drop of startup.dropped) known.add(rowKey(startup, drop.id));
   const knownAssembly = new Set<string>();
+  // 啟動試組掉過的列 id：只有它們重試又掉時記新的宣告。
+  const assemblyIds = new Set<string>();
   for (const entry of options.trialDropped) {
     const id = startup.rows.get(entry)?.id;
-    if (id !== undefined) knownAssembly.add(rowKey(startup, id));
+    if (id === undefined) continue;
+    assemblyIds.add(id);
+    knownAssembly.add(rowKey(startup, id));
   }
+  // 讀清單的警告，同一句只記一次。
+  const warned = new Set<string>();
+  const warn: PluginConfigWarn = (message) => {
+    if (warned.has(message)) return;
+    warned.add(message);
+    log(`[清單] ${message}`);
+  };
   const running = options.startupRead.map((plugin) => ({
     plugin,
     snapshot: snapshotOf(startup.plugins, plugin),
@@ -107,7 +128,7 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
 
   return {
     async read() {
-      const loaded = await options.load();
+      const loaded = await options.load(warn);
       auditStartupEntries(loaded, audit);
       for (const drop of loaded.dropped) {
         const key = rowKey(loaded, drop.id);
@@ -127,6 +148,12 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
       reportStartupDrift(plugins);
       const view: LoadedPluginConfig = { ...loaded, plugins, rows };
       return { loaded: view, plugins, optionalEntries: optionalEntriesOf(view, audit) };
+    },
+    noteDropped(list, dropped) {
+      for (const { entry } of dropped) {
+        const id = list.loaded.rows.get(entry)?.id;
+        if (id !== undefined && assemblyIds.has(id)) knownAssembly.add(rowKey(list.loaded, id));
+      }
     },
   };
 

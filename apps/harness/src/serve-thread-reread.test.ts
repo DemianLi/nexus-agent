@@ -214,4 +214,33 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     expect(await say(server, 'b')).toBeUndefined();
     expect(h.applied()).toEqual(['{"ok":false}', '{"ok":true}']);
   }, 60000);
+
+  it('試組掉了的列改成另一個壞值：只重試一次，之後的對話不再試', async () => {
+    const h = home(true);
+    h.patch(probeRow('      config:\n        note: 1\n'));
+    const server = await start(h.env, []);
+    h.patch(probeRow('      config:\n        note: 2\n'));
+    expect(await say(server, 'a')).toBeUndefined();
+    expect(await say(server, 'b')).toBeUndefined();
+    expect(h.applied()).toEqual(['{"note":1}', '{"note":2}']);
+  }, 60000);
+
+  it('讀清單的警告只記一次，進伺服器日誌', async () => {
+    const h = home();
+    const lines: string[] = [];
+    const server = await start(h.env, lines);
+    h.patch('- id: no-such-row\n  disabled: true\n');
+    expect(await say(server, 'a')).toBeUndefined();
+    expect(await say(server, 'b')).toBeUndefined();
+    expect(lines.filter((line) => line.includes('no-such-row'))).toEqual([
+      '[清單] patch：找不到 id 為 "no-such-row" 的條目，這一條跳過。',
+    ]);
+  }, 60000);
+
+  it('重讀時關核准閘門：那一條建不起來', async () => {
+    const h = home();
+    const server = await start(h.env, []);
+    h.patch('- id: approval-gate\n  disabled: true\n');
+    expect(await say(server, 'a')).toContain('approval-gate');
+  }, 60000);
 });
