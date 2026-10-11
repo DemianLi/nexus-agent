@@ -16,9 +16,9 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
-import type { Context } from 'cordis';
-import { Group } from '@cordisjs/plugin-loader';
-import type { EntryGroup, Loader } from '@cordisjs/plugin-loader';
+import type { Context } from '@nexus/cordis';
+import { Group } from '@nexus/cordis-plugin-loader';
+import type { EntryGroup, Loader } from '@nexus/cordis-plugin-loader';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ChangeJournal, JournaledLoader, fold } from './journal.js';
 import type { ChangeRecord } from './journal.js';
@@ -221,7 +221,7 @@ describe('Loader 的樹由變更紀錄導出（#1386 ④）', () => {
       writeFileSync(join(dir, 'package.json'), '{}');
       writes.calls.length = 0;
       // 深路徑用字串變數 import：寫成字面值的話 tsc 會把 vendor 原始碼拉進 harness 的型別檢查（見 ① 的 (c)）。
-      const specifier = '@cordisjs/plugin-loader/src/resolve.ts';
+      const specifier = '@nexus/cordis-plugin-loader/src/resolve.ts';
       const { createResolve } = (await import(specifier)) as {
         createResolve: (baseUrl: string) => Promise<unknown>;
       };

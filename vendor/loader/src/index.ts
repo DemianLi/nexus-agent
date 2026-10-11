@@ -1,4 +1,4 @@
-import { Context, Inject, Service } from 'cordis'
+import { Context, Inject, Service } from '@nexus/cordis'
 import { Awaitable, defineProperty, Dict, isNullable } from 'cosmokit'
 import { ModuleLoader } from './internal.ts'
 import { Entry, EntryOptions } from './config/entry.ts'
@@ -14,7 +14,7 @@ export * from './config/tree.ts'
 export * from './config/utils.ts'
 export * from './internal.ts'
 
-declare module 'cordis' {
+declare module '@nexus/cordis' {
   interface Events {
     'exit'(signal: NodeJS.Signals): Promise<void>
     'loader/config-update'(): void

@@ -195,7 +195,7 @@ jobs:
       - name: Test
         env:
           PKG_FILTERS: ${{ needs.plan.outputs.pkg_filters }}
-        # PKG_FILTERS 由 plan_ci.py 產生（只含 `--filter=./packages/...`），刻意不加引號讓它分詞；
+        # PKG_FILTERS 由 plan_ci.py 產生（`--filter=./packages/...`，全跑時另加 `./vendor/*`），刻意不加引號讓它分詞；
         # `set -f` 關掉 glob，`./packages/*` 要原樣交給 pnpm，不能被 shell 展開。
         run: |
           set -f

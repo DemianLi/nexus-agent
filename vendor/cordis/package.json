@@ -1,5 +1,5 @@
 {
-  "name": "cordis",
+  "name": "@nexus/cordis",
   "description": "Meta-Framework for Modern Applications",
   "version": "4.0.0-rc.10",
   "private": true,
@@ -16,7 +16,8 @@
     "./package.json": "./package.json"
   },
   "scripts": {
-    "prepare": "tsc -p tsconfig.json"
+    "prepare": "tsc -p tsconfig.json",
+    "test": "vitest run"
   },
   "license": "MIT",
   "dependencies": {
@@ -25,6 +26,7 @@
   },
   "devDependencies": {
     "@types/node": "^24.10.0",
-    "typescript": "^5.9.3"
+    "typescript": "^5.9.3",
+    "vitest": "^4.1.11"
   }
 }

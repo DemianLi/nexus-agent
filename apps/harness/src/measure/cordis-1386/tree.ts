@@ -10,13 +10,25 @@
  * @module
  */
 
-import { Context } from 'cordis';
-import type { Fiber, Message } from 'cordis';
-import Loader from '@cordisjs/plugin-loader';
-import type { EntryOptions } from '@cordisjs/plugin-loader';
+import { Context } from '@nexus/cordis';
+import type { Fiber, Message } from '@nexus/cordis';
+import Loader from '@nexus/cordis-plugin-loader';
+import type { EntryOptions } from '@nexus/cordis-plugin-loader';
 
-/** 上游 `FiberState` 的值（vendor/cordis/src/fiber.ts）。 */
-export const STATE = { PENDING: 0, LOADING: 1, ACTIVE: 2, UNLOADING: 3, DISPOSED: 4 } as const;
+/**
+ * 上游 `FiberState` 的值（vendor/cordis/src/fiber.ts）。
+ *
+ * 2026-10-11 #1401 更正：探針當時把 3 寫成 UNLOADING，其實上游的順序是 FAILED 3、DISPOSED 4、UNLOADING 5。
+ * 探針報告與 ③ 負對照說的「停在 UNLOADING（3）」因此是「停在 FAILED（3）」；#127 重現的結論不變。
+ */
+export const STATE = {
+  PENDING: 0,
+  LOADING: 1,
+  ACTIVE: 2,
+  FAILED: 3,
+  DISPOSED: 4,
+  UNLOADING: 5,
+} as const;
 
 /** 用自己決定的 id 建一列，回傳完整 id。 */
 export function createEntry(loader: Loader, options: EntryOptions, parent: string | null = null) {
