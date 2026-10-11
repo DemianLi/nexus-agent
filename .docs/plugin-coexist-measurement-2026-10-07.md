@@ -75,7 +75,7 @@
 
 ## 依 AGENTS.md 偏離規則的登記
 
-dsh 做的是全域熱換，靠 `--expose-internals` 操作 Node 內部的模組快取，且它自己的 plugin-manager 承認「替換已有包要重啟進程」。我們退到「**新 thread 重新組裝，舊 thread 繼續用舊版**」，理由是 deepagents 建構後不可變（`.docs/development-plan.md` 已登記），表達不出全域熱換；而不碰 Node 內部是因為客戶的正式環境不能開 `--expose-internals`。退到的實作＝版本目錄加絕對路徑 `import()`，與這份實測一致。
+（**2026-10-11 更正**：dsh 出貨的 base 只對設定檔開 HMR，下面這句講的是它的開發用 HMR，不是出貨行為；這條偏離改登記為「產品需求超出 dsh 的射程」，見 [`decisions-2026-10-11.md`](decisions-2026-10-11.md) §五。）dsh 做的是全域熱換，靠 `--expose-internals` 操作 Node 內部的模組快取，且它自己的 plugin-manager 承認「替換已有包要重啟進程」。我們退到「**新 thread 重新組裝，舊 thread 繼續用舊版**」，理由是 deepagents 建構後不可變（`.docs/development-plan.md` 已登記），表達不出全域熱換；而不碰 Node 內部是因為客戶的正式環境不能開 `--expose-internals`。退到的實作＝版本目錄加絕對路徑 `import()`，與這份實測一致。
 
 ## 重跑
 
