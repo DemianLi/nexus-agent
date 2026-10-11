@@ -220,6 +220,9 @@ describe('摘要器讀選中的那顆（#1369；修 #1354 F1）', () => {
     expect(swap).toBeGreaterThanOrEqual(0);
     // 方向 (b)：不挪順序（`summarization.test.ts` 釘著第三格）。
     expect(summarizer).toBeLessThan(swap);
+    // 順序不變，但摘要器讀到的是選中那顆：這一輪裡內層看到的與摘要器問窗口的是同一顆。
+    expect(run.innerSaw).toEqual(['SMALL']);
+    expect(new Set(run.limitsAskedAbout)).toEqual(new Set(['SMALL']));
   });
 
   it('門檻：摘要器問 modelLimits 的是選中那顆，而且只有它（兩邊都是 SMALL）', async () => {
