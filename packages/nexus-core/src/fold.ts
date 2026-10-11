@@ -73,6 +73,7 @@ import { createStepInboxMiddleware } from './step-inbox.js';
 import {
   createModelSwapMiddleware,
   createSubagentModelFollowMiddleware,
+  summaryModelOf,
 } from './model-selection.js';
 import type { ModelSelectionController } from './model-selection.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
@@ -1417,8 +1418,21 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
     );
   // **一次組裝一本，root 與子代理共用**：放在工廠外面，每呼叫一次工廠才不會各建一本、把借錨切碎。
   const book = options.tokenAnchorBook ?? new TokenAnchorBook();
+  // 生摘要跟最近一次已送出的請求那顆（#1377）；沒有模型選擇的組裝沒有這一格，摘要打到 `request.model`，與以前相同。
+  const summaryModel =
+    options.modelSelection === undefined
+      ? undefined
+      : summaryModelOf(options.modelSelection, registry.sessions);
   return () =>
-    createSummarizer(backend, settings, book, registry.sessions, pruning, options.modelLimits);
+    createSummarizer(
+      backend,
+      settings,
+      book,
+      registry.sessions,
+      pruning,
+      options.modelLimits,
+      summaryModel,
+    );
 }
 
 /**
