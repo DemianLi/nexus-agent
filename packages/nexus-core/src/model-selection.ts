@@ -337,7 +337,10 @@ interface SummaryModelRequest {
  *
  * 這次呼叫**自己的**日誌（`sessions.forCall`，與 `model/usage`、`compaction/summary` 同一把鑰匙）：root 讀 root 的，
  * 子代理讀自己的——就是 dsh 的 `agent.session`。背景圖（`follow: false`）的請求一路走委派時那顆，所以它的「最近一次」
- * 就是它自己，不跟使用者後來換的。讀不到日誌時退回控制器上 root 的 `lastUsed`。
+ * 就是它自己，不跟使用者後來換的。**讀不到日誌、或日誌上還沒有請求，就用這個 agent 換模型之前那顆，不拿 root 的紀錄去猜**
+ * （dsh 的 `latest ?? agentTarget`；與 `unknown-caller`「不猜成 root」同一條）。
+ *
+ * 這是對 PM 寫的 `ModelSelectionController.state().lastUsed` 的**解讀**：root 兩者相同，子代理不同（`state()` 只讀 root 的日誌）。
  *
  * ## 實例從哪來
  *
@@ -359,10 +362,12 @@ export function summaryModelOf(
   return (request) => {
     try {
       const base = routedFromOf(request);
-      let route: ModelRoute | undefined;
+      // 讀不到這次呼叫自己的日誌（`not-attached`／`unknown-caller`／多張註冊表）就用換模型之前那顆，**不拿 root 的紀錄去猜**：
+      // 與 `unknown-caller`「不猜成 root」同一條，也與 dsh 的 `latest ?? agentTarget` 一致（自己沒有最近一次就是這個 agent
+      // 自己的模型，不借父代理的）。
       const found = sessions.forCall({ configurable: request.runtime?.configurable });
-      if (found.kind === 'ok') route = recordedRoute(found.log.events);
-      route ??= controller.state().lastUsed;
+      if (found.kind !== 'ok') return base;
+      const route = recordedRoute(found.log.events);
       if (route === undefined) return base;
       const baseRoute = routeOfModel(base);
       if (baseRoute !== undefined && sameRoute(baseRoute, route)) return base;

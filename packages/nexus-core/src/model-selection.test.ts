@@ -405,10 +405,16 @@ describe('生摘要用哪一顆（#1377）：最近一次已送出的請求那�
     expect(ask(summaryModelOf(subject, sessionsOf(log)))).toBe(base);
   });
 
-  it('讀不到這次呼叫的日誌：退回控制器上 root 的最近一次', () => {
+  it('讀不到這次呼叫的日誌：用換模型之前那顆，不拿 root 的紀錄去猜', () => {
+    const { subject, log } = controller({ small });
+    started(log, { model: 'small' }); // root 最近一次走小的——讀不到自己的日誌時不借它
+    expect(ask(summaryModelOf(subject, sessionsOf(undefined)))).toBe(base);
+  });
+
+  it('子代理自己的日誌還沒有請求、root 的最近一次是小的：用換模型之前那顆', () => {
     const { subject, log } = controller({ small });
     started(log, { model: 'small' });
-    expect(ask(summaryModelOf(subject, sessionsOf(undefined)))).toBe(small);
+    expect(ask(summaryModelOf(subject, sessionsOf(new SessionLog('subagent-empty'))))).toBe(base);
   });
 
   it('子代理讀自己的日誌，不是 root 的', () => {
