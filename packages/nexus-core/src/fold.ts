@@ -73,8 +73,11 @@ import { createStepInboxMiddleware } from './step-inbox.js';
 import {
   createModelSwapMiddleware,
   createSubagentModelFollowMiddleware,
+  rootSelectedModel,
+  subagentSelectedModel,
+  withSelectedModel,
 } from './model-selection.js';
-import type { ModelSelectionController } from './model-selection.js';
+import type { ModelSelectionController, SubagentModelPin } from './model-selection.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
 import {
   REPEAT_REMINDER_PLUGIN_NAME,
@@ -613,7 +616,9 @@ export function foldRegistry(
       'stepInbox',
       same(options.stepInbox === true ? createStepInboxMiddleware() : undefined),
     ),
-    // 換模型排在洋蔥最外面（#723）：摘要器、起訖、用量與 plugin middleware 看到的 `request.model` 都是這一步選中的那顆。
+    // 換模型（#723）：起訖、用量與 plugin middleware 看到的 `request.model` 是這一步選中的那顆。**摘要器不在這一列的裡面**：它與基座
+    // 同名、原地換進基座 core 段，排在所有新名字（含這一顆）外面，所以看到的 `request.model` 是組裝時給的預設那顆（#1354 量到的）；
+    // 它靠自己包的 `withSelectedModel` 讀選中的（下面 `summarizer` 那一列，#1369）。
     // root 的每一步快照一次；子代理另給一顆（#328 第 3 項）：沒釘模型就跟父代理**當下**的選擇，釘了就用定義釘的，見
     // {@link ./model-selection.ts | createSubagentModelFollowMiddleware}。背景圖若是 `subagent` 工具替這一次委派挑了模型，
     // `compileSubagentGraph` 會把這一顆濾掉（模型自己挑的勝過一切，dsh `requestedAgentOptions`）。
@@ -627,13 +632,11 @@ export function foldRegistry(
       subagent: make((spec) =>
         options.modelSelection === undefined
           ? undefined
-          : createSubagentModelFollowMiddleware(options.modelSelection, {
-              ...(typeof spec.model === 'string' && { model: spec.model }),
-              ...(spec.reasoningEffort !== undefined && { reasoningEffort: spec.reasoningEffort }),
-            }),
+          : createSubagentModelFollowMiddleware(options.modelSelection, pinOf(spec)),
       ),
     },
-    // 圖片額度與 `image/offload`（#1270）緊貼換模型之後、摘要器外面：摘要器的門檻估算、起訖紀錄與請求快照看到的都是省略過的請求。
+    // 圖片額度與 `image/offload`（#1270）緊貼換模型之後。**摘要器在它外面**（同名換進基座 core 段，新名字都排在它裡面）：摘要器在這一顆
+    // 之前看到請求，看到的是還沒標上省略的；這一顆裡面的起訖紀錄、請求快照與用量看到的才是省略過的請求。
     // 這一顆只把日誌上**已經下的決定**標在請求上；新的決定由 adapter 量到超額、上層接住下（見下面 `imageOffloadRecovery`）。
     // 只折進 root：圖由人送出、住在 root 的日誌上。沒給 `modelLimits`（沒有型錄，也就沒有誰宣告得了圖片額度）就整顆不掛，請求與以前逐位元組相同；沒有圖的請求原樣通過、不讀日誌。
     rootOnly(
@@ -698,7 +701,14 @@ export function foldRegistry(
     perAgent('observationPolicy', () => observationPolicy?.()),
     // **摘要器也各建一份，不共用**：`sessionId` 在 closure 裡，共用會讓 root 與這個 subagent 的歷史 append 進同一個檔。
     // 理由見 {@link foldSummarizer}。排在子代理自帶的 middleware 之前 ＝ 自帶的同名版本贏得過我們這份（打底不是強制）。
-    perAgent('summarizer', () => summarizer()),
+    // **它在換模型的外面**（與基座同名、原地換進基座 core 段），看到的 `request.model` 是組裝時給的預設那顆；所以包一層
+    // {@link withSelectedModel}，讓它裡面的每一層（剪刀的壓力判斷、預算層的門檻與錨、生摘要的模型呼叫）看到這一步選中的那顆
+    // （#1369，照 dsh 的 `routedTarget`）。順序不動，`summarization.test.ts` 釘著它。子代理問的路由跟它的跟隨那顆是同一個函式。
+    {
+      name: 'summarizer',
+      root: make(() => selectedSummarizer(summarizer(), options.modelSelection)),
+      subagent: make((spec) => selectedSummarizer(summarizer(), options.modelSelection, spec)),
+    },
     // 提醒器與用量記錄器同樣打底、共用一份：它們無狀態，不注的話子代理那幾輪完全沒有——沒有人會紅
     // （#147）。見 {@link ./model-usage.ts}。
     shared('repeatReminder', repeatReminder),
@@ -1201,6 +1211,35 @@ function make<Args extends unknown[]>(
 /** root 與每個子代理共用同一個實例（或同樣是「沒有」）。 */
 function shared(name: string, value: SlotContribution): MiddlewareSlot {
   return { name, root: same(value), subagent: same(value) };
+}
+
+/** 這個子代理定義自己釘的那兩格（字串型錄 id 與推理強度；給實例不算釘）。 */
+function pinOf(spec: NexusSubAgent): SubagentModelPin {
+  return {
+    ...(typeof spec.model === 'string' && { model: spec.model }),
+    ...(spec.reasoningEffort !== undefined && { reasoningEffort: spec.reasoningEffort }),
+  };
+}
+
+/**
+ * 摘要器讀選中的那顆（#1369）：沒有模型選擇的組裝原樣回（請求與以前逐位元組相同）。
+ *
+ * @param summarizer - 摘要器（或空殼）。
+ * @param controller - 這條會話的控制器；省略＝這次組裝沒有模型選擇。
+ * @param spec - 子代理的規格；省略＝root。
+ */
+function selectedSummarizer(
+  summarizer: AgentMiddleware,
+  controller: ModelSelectionController | undefined,
+  spec?: NexusSubAgent,
+): AgentMiddleware {
+  if (controller === undefined) return summarizer;
+  return withSelectedModel(
+    summarizer,
+    spec === undefined
+      ? rootSelectedModel(controller)
+      : subagentSelectedModel(controller, pinOf(spec)),
+  );
 }
 
 /** root 與每個子代理各建一份：它的狀態在閉包裡，共用會讓兩個 agent 串台。 */

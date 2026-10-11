@@ -25,7 +25,13 @@ import {
   pendingNotice,
   recordedRoute,
   recordedSelection,
+  rootSelectedModel,
+  subagentRouteOf,
+  subagentSelectedModel,
+  withSelectedModel,
+  withoutSelectedModel,
 } from './model-selection.js';
+import type { AgentMiddleware } from './base-types.js';
 import { SessionLog } from './session-log.js';
 import { effectiveTrigger, windowThreshold } from './summarization.js';
 
@@ -355,5 +361,166 @@ describe('摘要門檻逐步夾在當步模型的窗口內', () => {
     const mixed = [{ type: 'messages', value: 500 }] as const;
     expect(effectiveTrigger(mixed, { contextWindow: 10_000, maxOutputTokens: 1_000 })).toBe(mixed);
     expect(effectiveTrigger(trigger, undefined)).toBe(trigger);
+  });
+});
+
+describe('摘要器讀選中的那顆（#1369）', () => {
+  type Wrap = (
+    request: { model: unknown },
+    handler: (request: { model: unknown }) => unknown,
+  ) => unknown;
+  const wrapOf = (middleware: AgentMiddleware) =>
+    (middleware as unknown as { wrapModelCall: Wrap }).wrapModelCall;
+
+  /** 一顆「記下自己看到的 request.model」的 middleware，當成摘要器的替身。 */
+  const recorder = () => {
+    const seen: unknown[] = [];
+    const stateSchema = { sentinel: true };
+    const base = {
+      name: 'SummarizationMiddleware',
+      stateSchema,
+      wrapModelCall: (request: { model: unknown }, handler: (next: unknown) => unknown) => {
+        seen.push(request.model);
+        return handler(request);
+      },
+    } as unknown as AgentMiddleware;
+    return { base, seen, stateSchema };
+  };
+
+  describe('peekStepRoute：讀這一步的快照，不消耗', () => {
+    it('有快照就讀快照，連讀幾次不變，之後 takeStepRoute 仍拿得到同一份', () => {
+      const { subject, log } = controller();
+      started(log, { model: 'x' });
+      subject.select({ model: 'a' });
+      subject.noticeFor(log); // 這一步開頭的快照 = a
+      subject.select({ model: 'b' }); // 步跑到一半才選：這一步仍是 a
+      expect(subject.peekStepRoute()).toEqual({ model: 'a' });
+      expect(subject.peekStepRoute()).toEqual({ model: 'a' });
+      expect(subject.takeStepRoute()).toEqual({ model: 'a' });
+      // 用過清掉：下一步現算。
+      expect(subject.peekStepRoute()).toEqual({ model: 'b' });
+    });
+
+    it('沒有快照（beforeModel 沒跑到）就現算，與 takeStepRoute 的退路同一個來源', () => {
+      const { subject } = controller();
+      subject.select({ model: 'c' });
+      expect(subject.peekStepRoute()).toEqual(subject.next());
+      expect(subject.takeStepRoute()).toEqual({ model: 'c' });
+    });
+  });
+
+  describe('withSelectedModel', () => {
+    const original = { name: 'default' };
+    const chosen = { name: 'chosen' };
+
+    it('裡面看到選中的，往下交 handler 時換回原本那顆（外側到換模型之間逐欄不變）', () => {
+      const { base, seen } = recorder();
+      const wrapped = withSelectedModel(base, () => chosen as unknown as BaseChatModel);
+      const handled: unknown[] = [];
+      wrapOf(wrapped)({ model: original }, (next) => handled.push(next.model));
+      expect(seen).toEqual([chosen]);
+      expect(handled).toEqual([original]);
+    });
+
+    it('選中的就是預設那顆（回 undefined）：什麼都不換，handler 收到同一個 request 物件', () => {
+      const { base } = recorder();
+      const wrapped = withSelectedModel(base, () => undefined);
+      const request = { model: original };
+      let given: unknown;
+      wrapOf(wrapped)(request, (next) => (given = next));
+      expect(given).toBe(request);
+    });
+
+    it('同名、同 stateSchema（基座的狀態與位置釘子不能動）', () => {
+      const { base, stateSchema } = recorder();
+      const wrapped = withSelectedModel(base, () => chosen as unknown as BaseChatModel);
+      expect(wrapped.name).toBe('SummarizationMiddleware');
+      expect((wrapped as unknown as { stateSchema: unknown }).stateSchema).toBe(stateSchema);
+    });
+
+    it('沒有 wrapModelCall 的（空殼摘要器）原樣回，不憑空多一層', () => {
+      const shell = { name: 'SummarizationMiddleware' } as unknown as AgentMiddleware;
+      expect(withSelectedModel(shell, () => chosen as unknown as BaseChatModel)).toBe(shell);
+    });
+
+    it('每次呼叫現問：選的換了，下一次請求就跟著換', () => {
+      const { base, seen } = recorder();
+      const other = { name: 'other' };
+      let current: object | undefined = chosen;
+      const wrapped = withSelectedModel(base, () => current as unknown as BaseChatModel);
+      wrapOf(wrapped)({ model: original }, () => undefined);
+      current = other;
+      wrapOf(wrapped)({ model: original }, () => undefined);
+      expect(seen).toEqual([chosen, other]);
+    });
+
+    it('withoutSelectedModel 取回沒包的那份；沒包過的原樣回', () => {
+      const { base } = recorder();
+      const wrapped = withSelectedModel(base, () => chosen as unknown as BaseChatModel);
+      expect(withoutSelectedModel(wrapped)).toBe(base);
+      expect(withoutSelectedModel(base)).toBe(base);
+    });
+  });
+
+  describe('跟 root 那顆換模型讀同一個來源', () => {
+    it('rootSelectedModel：選中的就是 createModelSwapMiddleware 會換成的那顆，而且不消耗快照', () => {
+      const small = { name: 'small' };
+      const { subject, log } = controller({ small });
+      started(log, { model: 'default-model' });
+      subject.select({ model: 'small' });
+      subject.noticeFor(log);
+
+      const summarizerSees = rootSelectedModel(subject)();
+      expect(summarizerSees).toBe(small);
+
+      // 摘要器問過之後換模型那顆照樣拿得到這一步的快照。
+      let swapped: { model: unknown } | undefined;
+      wrapOf(createModelSwapMiddleware(subject))(
+        { model: { name: 'default-instance' } },
+        (given) => (swapped = given),
+      );
+      expect(swapped?.model).toBe(summarizerSees);
+    });
+
+    it('選中的是預設那顆（instanceFor 回 undefined）：rootSelectedModel 回 undefined', () => {
+      const { subject } = controller({});
+      expect(rootSelectedModel(subject)()).toBeUndefined();
+    });
+  });
+
+  describe('子代理：與跟隨那顆共用同一個路由函式', () => {
+    const pins = [
+      {},
+      { model: 'pinned' },
+      { model: 'pinned', reasoningEffort: 'off' },
+      { reasoningEffort: 'off' },
+      { model: 'default-model' },
+    ] as const;
+
+    it.each(pins)('摘要器問到的實例 == 跟隨那顆換成的實例（pin = %j）', (pin) => {
+      const instances = { pinned: { name: 'pinned' }, chosen: { name: 'chosen' } };
+      const { subject } = controller(instances);
+      subject.select({ model: 'chosen' });
+      const followed: unknown[] = [];
+      wrapOf(createSubagentModelFollowMiddleware(subject, pin))(
+        { model: { name: 'built-in' } },
+        (given) => followed.push(given.model),
+      );
+      const selected = subagentSelectedModel(subject, pin)();
+      // 沒換（undefined）時，跟隨那顆交下去的是原本那顆。
+      expect(followed[0]).toBe(selected ?? followed[0]);
+      if (selected !== undefined) expect(followed[0]).toBe(selected);
+    });
+
+    it('subagentRouteOf：釘的 > 父代理當下的選擇', () => {
+      const { subject } = controller({});
+      subject.select({ model: 'chosen', effort: 'off' });
+      expect(subagentRouteOf(subject, {})).toEqual({ model: 'chosen', effort: 'off' });
+      expect(subagentRouteOf(subject, { model: 'pinned' })).toEqual({ model: 'pinned' });
+      expect(subagentRouteOf(subject, { reasoningEffort: 'default' })).toEqual({
+        model: 'chosen',
+        effort: 'default',
+      });
+    });
   });
 });

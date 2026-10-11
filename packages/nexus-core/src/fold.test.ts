@@ -31,7 +31,9 @@ import {
   MODEL_SELECTION_MIDDLEWARE_NAME,
   ModelSelectionController,
   SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+  withoutSelectedModel,
 } from './model-selection.js';
+import { SessionLog } from './session-log.js';
 import { REQUEST_SNAPSHOT_MIDDLEWARE_NAME } from './request-snapshot.js';
 import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
 import { SUBAGENT_TOOL_FILTER_MIDDLEWARE_NAME } from './subagent-tool-filter.js';
@@ -2575,6 +2577,93 @@ describe('子代理定義的 model／maxTurns／reasoningEffort（#328 第 3 項
     expect(stackOf(params, 'worker')).toContain('ModelCallLimitMiddleware');
     expect(stackOf(params, 'other')).not.toContain('ModelCallLimitMiddleware');
     expect(middlewareNames(params)).not.toContain('ModelCallLimitMiddleware');
+  });
+
+  describe('摘要器讀選中的那顆（#1369）：槽位表把它接到正確的路由', () => {
+    const preset = { name: 'preset' };
+    const cheap = { name: 'cheap' };
+    const small = { name: 'small' };
+    const selecting = () => {
+      const instances: Record<string, object> = { cheap, small };
+      const subject = new ModelSelectionController({
+        defaultRoute: { model: 'm' },
+        instanceFor: (route) => instances[route.model] as never,
+      });
+      subject.attach(new SessionLog('summarizer-selection'));
+      subject.select({ model: 'small' });
+      return subject;
+    };
+    type Folded = Awaited<ReturnType<typeof fold>>;
+    const summarizerIn = (list: readonly unknown[] | undefined) =>
+      (list ?? []).find(
+        (middleware) => (middleware as { name: string }).name === 'SummarizationMiddleware',
+      ) as {
+        wrapModelCall: (
+          request: unknown,
+          handler: (given: { model: unknown }) => unknown,
+        ) => Promise<unknown>;
+      };
+    /** 叫某個 agent 的摘要器一次（沒有訊息，直接走到預算層的第一行），回它問過 `modelLimits` 的實例與交下去的 `request.model`。 */
+    const ask = async (pick: (params: Folded) => readonly unknown[] | undefined) => {
+      const asked: unknown[] = [];
+      const params = await fold(
+        [
+          worker({ model: 'cheap' }),
+          fakePlugin('free', (r) => void r.subagents.register(fakeSubAgent('free'))),
+        ],
+        {
+          summarization: {},
+          defaultBackend: fakeBackend('default'),
+          modelSelection: selecting(),
+          modelLimits: (model: unknown) => {
+            asked.push(model);
+            return undefined;
+          },
+        },
+      );
+      let handed: unknown;
+      await summarizerIn(pick(params)).wrapModelCall(
+        { model: preset, messages: [], state: {}, runtime: {} },
+        (given) => {
+          handed = given.model;
+          return {};
+        },
+      );
+      return { asked, handed };
+    };
+
+    it('root：問 modelLimits 的是這一步選中的那顆，往下交的仍是原本那顆', async () => {
+      const { asked, handed } = await ask((params) => params.middleware as readonly unknown[]);
+      expect(asked).toContain(small);
+      expect(asked).not.toContain(preset);
+      expect(handed).toBe(preset);
+    });
+
+    it('子代理沒釘：跟父代理當下的選擇', async () => {
+      const { asked } = await ask(
+        (params) => params.subagents.find((sub) => sub.name === 'free')?.middleware as unknown[],
+      );
+      expect(asked).toContain(small);
+      expect(asked).not.toContain(preset);
+    });
+
+    it('子代理釘了模型：問的是它釘的那顆，不是父代理選的（槽位表把 spec 接進去了）', async () => {
+      const { asked } = await ask(
+        (params) => params.subagents.find((sub) => sub.name === 'worker')?.middleware as unknown[],
+      );
+      expect(asked).toContain(cheap);
+      expect(asked).not.toContain(small);
+    });
+
+    it('沒有控制器：摘要器不包，請求不經過這一層', async () => {
+      const params = await fold([worker({})], {
+        summarization: {},
+        defaultBackend: fakeBackend('default'),
+      });
+      const entry = summarizerIn(params.middleware as unknown[]);
+      expect(entry).toBeDefined();
+      expect(withoutSelectedModel(entry as never)).toBe(entry);
+    });
   });
 
   it('釘住的值進跟隨那顆：兩個子代理各用各的，不共用一份', async () => {

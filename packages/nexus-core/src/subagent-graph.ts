@@ -44,7 +44,7 @@ import { mergeMiddlewareStack, subagentDefaultMiddleware } from './agent-assembl
 import type { AgentCheckpointer } from './base-types.js';
 import type { FoldedAgentParams } from './fold.js';
 import { APPROVAL_GATE_MIDDLEWARE_NAME } from './approval.js';
-import { SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME } from './model-selection.js';
+import { SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME, withoutSelectedModel } from './model-selection.js';
 import { SUBAGENT_DELEGATION_MIDDLEWARE_NAME } from './subagent-delegation.js';
 import { createStepInboxMiddleware } from './step-inbox.js';
 
@@ -157,6 +157,8 @@ export function compileSubagentGraph(
       // `requestedAgentOptions`：request 蓋過 configured），跟隨的那顆每次叫模型都會換掉它。`follow: false` 則是呼叫端明說不跟。
       ((declarative.middleware ?? []) as AgentMiddleware[])
         .filter((each) => follows || each.name !== SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME)
+        // 不跟隨就連摘要器也不跟（#1369）：它的門檻與生摘要要問這張圖實際跑的那顆（委派時定的），不是使用者後來選的。
+        .map((each) => (follows ? each : withoutSelectedModel(each)))
         // 原位換掉，不改順序：閘門的位置有唯一正確答案（見 fold 的 middleware 疊）。
         .map((each) =>
           options.approvalGate !== undefined && each.name === APPROVAL_GATE_MIDDLEWARE_NAME

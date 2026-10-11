@@ -300,7 +300,8 @@ function callConfigurable(request: unknown): { configurable?: unknown } {
 /**
  * 每次叫模型之前：把日誌上已經省略的圖標在請求上，然後才把請求交下去。**沒有任何圖片區塊的請求原樣通過、不讀日誌。**
  *
- * 位置：緊貼換模型之後、摘要器外面（`fold.ts` 的槽位表），所以摘要器的門檻估算、起訖紀錄與請求快照看到的都是省略過的請求。
+ * 位置：緊貼換模型之後（`fold.ts` 的槽位表）。**摘要器在它外面**：摘要器與基座同名、原地換進基座 core 段，新名字的 middleware
+ * 都排在它裡面（#1354），所以摘要器在這一顆之前看到請求，看到的是還沒標上省略的；這一顆裡面的起訖紀錄、請求快照與用量看到的才是省略過的請求。
  * 只折進 root：圖由人送出、住在 root 的日誌上。**新的決定不在這裡下**，見 {@link createImageOffloadRecoveryMiddleware}。
  */
 export function createImageOffloadMiddleware(deps: ImageOffloadDeps): AgentMiddleware {

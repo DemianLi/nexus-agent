@@ -12,7 +12,8 @@ import type { SubAgent } from 'deepagents';
 import { createMiddleware } from 'langchain';
 import { describe, expect, it } from 'vitest';
 
-import { SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME } from './model-selection.js';
+import { SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME, withSelectedModel } from './model-selection.js';
+import type { AgentMiddleware } from './base-types.js';
 import { compileSubagentGraph, mergeMiddlewareByName } from './subagent-graph.js';
 import type { SubagentGraphParams } from './subagent-graph.js';
 
@@ -156,6 +157,57 @@ describe('跟隨會話選擇的 middleware（#328 第 3 項）', () => {
     });
     await built.run();
     expect(built.calls).toEqual(['follow']);
+  });
+});
+
+describe('摘要器跟不跟選中的模型（#1369）：背景圖不跟', () => {
+  /** 摘要器的替身：記下自己看到的 `request.model`，外面包 `withSelectedModel`（選中的是 `chosen`）。 */
+  const compile = (extra: { follow?: boolean; model?: FakeListChatModel }) => {
+    const own = new FakeListChatModel({ responses: ['委派時定的'] });
+    const chosen = new FakeListChatModel({ responses: ['使用者後來選的'] });
+    const seen: unknown[] = [];
+    const probe = createMiddleware({
+      name: 'SummarizationProbe',
+      wrapModelCall: (request, handler) => {
+        seen.push(request.model);
+        return handler(request);
+      },
+    }) as unknown as AgentMiddleware;
+    const wrapped = withSelectedModel(probe, () => chosen);
+    const graph = compileSubagentGraph(
+      { ...paramsWith({ middleware: [wrapped as never] }), model: own },
+      'worker',
+      { ...options(), ...extra },
+    );
+    return {
+      own,
+      chosen,
+      seen,
+      run: () =>
+        graph.invoke(
+          { messages: [{ role: 'user', content: '嗨' }] },
+          { configurable: { thread_id: 't' } },
+        ),
+    };
+  };
+
+  it('預設（會跟）：摘要器看到使用者選的', async () => {
+    const built = compile({});
+    await built.run();
+    expect(built.seen).toEqual([built.chosen]);
+  });
+
+  it('follow: false（背景子代理）：摘要器摘掉那一層，看到的是這張圖委派時定的那顆', async () => {
+    const built = compile({ follow: false });
+    await built.run();
+    expect(built.seen).toEqual([built.own]);
+  });
+
+  it('呼叫端指定了這張圖的模型：同樣不跟', async () => {
+    const picked = new FakeListChatModel({ responses: ['挑的'] });
+    const built = compile({ model: picked });
+    await built.run();
+    expect(built.seen).toEqual([picked]);
   });
 });
 

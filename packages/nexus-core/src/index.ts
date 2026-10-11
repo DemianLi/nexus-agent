@@ -503,8 +503,13 @@ export {
   pendingNotice,
   recordedRoute,
   recordedSelection,
+  rootSelectedModel,
+  subagentRouteOf,
+  subagentSelectedModel,
+  withSelectedModel,
+  withoutSelectedModel,
 } from './model-selection.js';
-export type { ModelSelectionOptions } from './model-selection.js';
+export type { ModelSelectionOptions, SelectedModel } from './model-selection.js';
 export {
   modelNameOf,
   normalizeEffort,

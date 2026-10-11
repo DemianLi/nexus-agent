@@ -174,6 +174,15 @@ export class ModelSelectionController {
   }
 
   /**
+   * 這一步的請求**會**用哪條路由，**不消耗快照**。排在換模型外面的那些（摘要器，見 {@link withSelectedModel}）要在換模型之前知道
+   * 這一步走哪顆，而它們一次叫模型可能看到好幾次請求（緊急摘要會重送）：消耗了快照，換模型那顆就拿不到這一步的快照。
+   * 讀的來源跟 {@link takeStepRoute} 一樣（快照，沒有就現算），所以兩邊永遠是同一條路由。
+   */
+  peekStepRoute(): ModelRoute {
+    return this.#assembled ?? this.next();
+  }
+
+  /**
    * 這一步的請求用哪條路由，並清掉快照。沒有快照（`beforeModel` 沒跑到、或重複提醒與通知節點都沒掛）就現算。
    * **清掉是承重的**：留著會讓 `beforeModel` 被跳過的下一步用上一步的舊快照。
    */
@@ -220,8 +229,10 @@ export class ModelSelectionController {
 /**
  * 換模型的 middleware：每一步把 `request.model` 換成這一步選定的那顆。**只折進 root**（`fold.ts` 的 `rootOnly`）。
  *
- * 排在摘要器、起訖與用量記錄器的**外面**：它們看到的 `request.model` 就是選中的那顆（摘要用它生、`model/start.route` 讀它的標籤、
- * 估算的錨按它的名字認）。選中的就是預設那顆時什麼都不換，請求逐欄與沒有這顆 middleware 時一樣。
+ * 排在起訖與用量記錄器的**外面**：它們看到的 `request.model` 就是選中的那顆（`model/start.route` 讀它的標籤、估算的錨按它的名字認）。
+ * **摘要器不在這一列**：它與基座同名、被原地換進基座 core 段，在這一顆的外面，看到的是組裝時給的預設那顆（#1354 量到的）——所以它
+ * 另外包一層 {@link withSelectedModel}，自己讀這一步選中的（#1369）。選中的就是預設那顆時什麼都不換，請求逐欄與沒有這顆 middleware
+ * 時一樣。
  *
  * @param controller - 這條會話的控制器。
  */
@@ -271,19 +282,111 @@ export function createSubagentModelFollowMiddleware(
   return createMiddleware({
     name: SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
-      const parent = controller.next();
-      const route: ModelRoute =
-        pin.model !== undefined
-          ? {
-              model: pin.model,
-              ...(pin.reasoningEffort !== undefined && { effort: pin.reasoningEffort }),
-            }
-          : pin.reasoningEffort !== undefined
-            ? { model: parent.model, effort: pin.reasoningEffort }
-            : parent;
-      const instance = controller.instanceFor(route);
+      const instance = controller.instanceFor(subagentRouteOf(controller, pin));
       if (instance === undefined || instance === request.model) return handler(request);
       return handler({ ...request, model: instance });
     },
   }) as unknown as AgentMiddleware;
+}
+
+/**
+ * 子代理此刻該走的路由：**定義釘的 > 父代理當下的選擇**（{@link ModelSelectionController.next}）。
+ *
+ * 跟隨的那顆（{@link createSubagentModelFollowMiddleware}）與排在它外面的摘要器（{@link withSelectedModel}）問的是**同一個函式**——
+ * 兩邊各寫一份的話，哪天釘住的合併規則改了一邊，摘要器就會悄悄去問另一顆。
+ *
+ * @param controller - 這條會話的控制器。
+ * @param pin - 定義釘住的兩格。
+ */
+export function subagentRouteOf(
+  controller: ModelSelectionController,
+  pin: SubagentModelPin = {},
+): ModelRoute {
+  const parent = controller.next();
+  if (pin.model !== undefined) {
+    return {
+      model: pin.model,
+      ...(pin.reasoningEffort !== undefined && { effort: pin.reasoningEffort }),
+    };
+  }
+  return pin.reasoningEffort !== undefined
+    ? { model: parent.model, effort: pin.reasoningEffort }
+    : parent;
+}
+
+/** 「這一次請求選中的模型實例」；`undefined` ＝ 沒有東西可換（選中的就是預設那顆，沿用 `request.model`）。 */
+export type SelectedModel = () => BaseChatModel | undefined;
+
+/** root 這一步會走的模型：讀這一步的快照（不消耗），與換模型那顆 {@link createModelSwapMiddleware} 同一個來源。 */
+export function rootSelectedModel(controller: ModelSelectionController): SelectedModel {
+  return () => controller.instanceFor(controller.peekStepRoute());
+}
+
+/** 子代理此刻會走的模型：與 {@link createSubagentModelFollowMiddleware} 同一條路由（{@link subagentRouteOf}）。 */
+export function subagentSelectedModel(
+  controller: ModelSelectionController,
+  pin: SubagentModelPin = {},
+): SelectedModel {
+  return () => controller.instanceFor(subagentRouteOf(controller, pin));
+}
+
+/** 裝了 {@link withSelectedModel} 的 middleware 身上帶著未裝的那份；背景圖用它摘掉。 */
+const WITHOUT_SELECTED_MODEL = Symbol('nexus.withoutSelectedModel');
+
+/**
+ * 讓一顆**排在換模型外面**的 middleware（摘要器）看到的 `request.model` 是這一步選中的那顆（
+ * [#1369](https://github.com/DemianLi/nexus-agent/issues/1369)，F1 of [#1340](https://github.com/DemianLi/nexus-agent/issues/1340)）。
+ *
+ * ## 為什麼是它、不是挪順序
+ *
+ * 摘要器與基座同名，被原地換進基座 core 段（`agent-assembly.ts` 的第三格）；換模型是新名字，一定排在基座那幾顆**之後**——
+ * 摘要器在換模型外面，拿到的 `request.model` 是組裝時給的預設那顆（#1354 量到的）。挪順序要動基座的合併規則與
+ * `summarization.test.ts` 釘住的位置；這一層讓摘要器自己讀選中的那顆，與 dsh 同方向：門檻與生摘要都問**路由後**的那顆
+ * （`compaction-basic/src/index.ts:274` 的 `routedTarget(agent.session)`、`summarizer.ts:127-137` 的 `latest ?? agentTarget`）。
+ *
+ * ## 形狀
+ *
+ * 進來時把 `request.model` 換成選中的實例，往下交給 `handler` 時**換回原本那顆**：摘要器裡面的每一層（剪刀的壓力判斷、預算層的
+ * 門檻與錨、生摘要的模型呼叫）看到選中的那顆；摘要器外面到換模型之間的那幾顆（基座 core 段）看到的跟今天逐欄一樣，換模型照舊
+ * 做它的事。選中的就是預設那顆（`selected()` 回 `undefined`）時什麼都不換。
+ *
+ * 同名、同狀態：用 `...base` 保住 `name` 與 `stateSchema`；沒有 `wrapModelCall` 的（空殼）原樣回。
+ *
+ * @param base - 要包的 middleware。
+ * @param selected - 選中模型的讀取（{@link rootSelectedModel}／{@link subagentSelectedModel}）。
+ * @returns 同名的 middleware；用 {@link withoutSelectedModel} 可以取回沒包的那份。
+ */
+export function withSelectedModel(base: AgentMiddleware, selected: SelectedModel): AgentMiddleware {
+  const inner = base.wrapModelCall?.bind(base);
+  if (inner === undefined) return base;
+  const wrapped = {
+    ...base,
+    wrapModelCall: (request: { model: unknown }, handler: (next: unknown) => unknown) => {
+      const original = request.model;
+      const instance = selected();
+      if (instance === undefined || instance === original) {
+        return (inner as (request: unknown, handler: unknown) => unknown)(request, handler);
+      }
+      return (inner as (request: unknown, handler: unknown) => unknown)(
+        { ...request, model: instance },
+        (sent: { model: unknown }) =>
+          handler(sent.model === instance ? { ...sent, model: original } : sent),
+      );
+    },
+    [WITHOUT_SELECTED_MODEL]: base,
+  };
+  return wrapped as unknown as AgentMiddleware;
+}
+
+/**
+ * 摘掉 {@link withSelectedModel} 那一層：沒包過的原樣回。
+ *
+ * 背景子代理的模型在委派那一刻定了、之後不跟著使用者換（`compileSubagentGraph` 的 `follow: false`，照 dsh），它的摘要器也不能跟——
+ * 否則門檻與生摘要問的是使用者**後來**選的那顆，而這張圖實際跑的是委派時那顆。
+ */
+export function withoutSelectedModel(middleware: AgentMiddleware): AgentMiddleware {
+  const base = (middleware as unknown as Record<symbol, AgentMiddleware | undefined>)[
+    WITHOUT_SELECTED_MODEL
+  ];
+  return base ?? middleware;
 }
