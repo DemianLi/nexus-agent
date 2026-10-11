@@ -19,7 +19,7 @@ import {
   readSummarizationEvent,
 } from './summarization.js';
 import type { SummarizationThreshold } from './summarization.js';
-import { estimateRequestTokens, TokenAnchorBook } from './token-estimate.js';
+import { estimateMessageTokens, estimateRequestTokens, TokenAnchorBook } from './token-estimate.js';
 import { TOOL_RESULT_PRUNE_MARKER } from './tool-result-pruner.js';
 
 /** 一串長到任何門檻都會成立的原始訊息。 */
@@ -27,6 +27,15 @@ function longHistory(count: number): BaseMessage[] {
   return Array.from({ length: count }, (_, index) =>
     index % 2 === 0 ? new HumanMessage(`問 ${index}`) : new AIMessage(`答 ${index}`),
   );
+}
+
+/**
+ * 讓摘要逐字留下最近 `count` 則的 `retainTokens`：前面 `count − 1` 則的 token 加一。dsh 的選尾巴是累加到 **≥** 保留量、
+ * 跨過的那則也留，所以前 `count − 1` 則還不夠、第 `count` 則一加就跨過去，剛好留 `count` 則（`count` 為 1 時是 1）。
+ */
+function retainLast(messages: readonly BaseMessage[], count: number): number {
+  const tail = count <= 1 ? [] : messages.slice(Math.max(0, messages.length - (count - 1)));
+  return tail.reduce((sum, message) => sum + estimateMessageTokens(message), 0) + 1;
 }
 
 const SUMMARY = new AIMessage('這是摘要。');
@@ -128,7 +137,7 @@ describe('壓力閘門接在有效串上（接線）', () => {
     messages: readonly BaseMessage[],
     state: Record<string, unknown>,
   ): Promise<readonly BaseMessage[]> {
-    // `keep` 留在預設的 20 則：這一串只有 10 則，`determineCutoffIndex` 會算出 `<= 0`、
+    // 沒有型錄，保留量退到 {@link RETAIN_FALLBACK_MESSAGES}（20 則）：這一串只有 10 則，`determineCutoffIndex` 會算出 `<= 0`、
     // 基座直接 `return handler(...)`。這一格要看的是**剪刀動沒動**，不是摘要跑不跑得起來
     // ——真讓它跑起來就得餵一個會回話的模型，那是另一個檔的事。
     const middleware = createSummarizer(
@@ -205,7 +214,7 @@ describe('生摘要的那次呼叫不上線（接線）', () => {
   async function modelHandedDown(trigger: readonly SummarizationThreshold[], model: object) {
     const middleware = createSummarizer(
       { write: async (path: string) => ({ path }) } as never,
-      { ...DEFAULT_SUMMARIZATION, trigger, keep: { type: 'messages', value: 2 } },
+      { ...DEFAULT_SUMMARIZATION, trigger, retainTokens: retainLast(longHistory(10), 2) },
       new TokenAnchorBook(),
     );
     let handed: unknown;
@@ -340,7 +349,7 @@ describe('tokens 門檻（接線）', () => {
       {
         ...DEFAULT_SUMMARIZATION,
         trigger: options.trigger,
-        keep: { type: 'messages', value: options.keep ?? 20 },
+        retainTokens: retainLast(options.messages, options.keep ?? 20),
       },
       options.book ?? new TokenAnchorBook(),
       undefined,
@@ -511,7 +520,7 @@ describe('摘要輸入裡的附件', () => {
       {
         ...DEFAULT_SUMMARIZATION,
         trigger: [{ type: 'messages', value: 3 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: retainLast(messages, 2),
       },
       new TokenAnchorBook(),
       undefined,

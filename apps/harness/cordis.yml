@@ -241,7 +241,10 @@
     trigger:
       - { type: tokens, value: 100000 }
       - { type: messages, value: 60 }
-    keep: { type: messages, value: 20 }
+    # 摘要之後逐字留下的量：占這顆模型訊息預算（窗口 − 輸出上限）的比例，dsh `compaction-basic` 的 `retainRatio` 預設。
+    # 與 `retainTokens`（固定 token 數）**擇一**，兩個一起寫載入就報錯；patch 整份替換 `config`，要改用固定 token 數就
+    # 把這一行換成 `retainTokens: <數字>`。舊的 `keep`（固定則數）已拿掉，寫了載入同樣報錯並說明改成哪兩個（#1374）。
+    retainRatio: 0.16
     truncateArgs:
       trigger: { type: messages, value: 20 }
       keep: { type: messages, value: 20 }

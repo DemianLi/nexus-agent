@@ -47,7 +47,7 @@ const withWorker: PluginEntry = {
 
 const SUMMARIZATION = {
   trigger: [{ type: 'tokens' as const, value: 3_000 }],
-  keep: { type: 'messages' as const, value: 2 },
+  retainTokens: 12,
 };
 
 interface Ran {

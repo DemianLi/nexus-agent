@@ -48,7 +48,7 @@ describe('摘要提示詞在產品路徑上', () => {
       plugins: [],
       summarization: {
         trigger: [{ type: 'messages', value: 6 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
     });
     try {
@@ -106,7 +106,7 @@ describe('摘要提示詞在產品路徑上', () => {
       plugins: [],
       summarization: {
         trigger: [{ type: 'messages', value: 6 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
     });
     try {
@@ -167,7 +167,7 @@ describe('摘要提示詞在產品路徑上', () => {
       plugins: [worker],
       summarization: {
         trigger: [{ type: 'tokens', value: 3_000 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
     });
     try {
@@ -222,7 +222,7 @@ describe('摘要提示詞在產品路徑上', () => {
       plugins: [worker],
       summarization: {
         trigger: [{ type: 'tokens', value: 3_000 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
     });
     try {

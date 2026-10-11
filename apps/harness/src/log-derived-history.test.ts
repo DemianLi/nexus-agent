@@ -242,7 +242,7 @@ describe('已知差異：每一類對應一張卡', () => {
       [createEchoPlugin()],
       {
         trigger: [{ type: 'messages', value: 8 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
     );
     expect(run.events.filter((e) => e.type === 'compaction/summary').length).toBeGreaterThan(0);
@@ -260,7 +260,7 @@ describe('已知差異：每一類對應一張卡', () => {
       [createEchoPlugin()],
       {
         trigger: [{ type: 'tokens', value: 12_000 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
     );
     expect(run.mainBodies.some((b) => JSON.stringify(b.messages).includes(PRUNE_MARKER))).toBe(
@@ -280,7 +280,7 @@ describe('已知差異：每一類對應一張卡', () => {
     const script: Script = (i) => (i === 0 ? writeCall('call_w') : {});
     const run = await runAssembly('寫檔\n二\n三\n四\n/exit\n', script, [], {
       trigger: [{ type: 'messages', value: 1000 }],
-      keep: { type: 'messages', value: 2 },
+      retainTokens: 12,
       truncateArgs: {
         trigger: { type: 'messages', value: 4 },
         keep: { type: 'messages', value: 2 },
@@ -360,7 +360,7 @@ describe('截斷視窗裡有鄰居（#1303）', () => {
     '  config:',
     '    trigger:',
     '      - { type: tokens, value: 50000 }',
-    '    keep: { type: messages, value: 2 }',
+    '    retainTokens: 12',
     '    truncateArgs:',
     '      trigger: { type: messages, value: 10 }',
     '      keep: { type: messages, value: 2 }',
