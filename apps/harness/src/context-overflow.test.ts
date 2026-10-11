@@ -246,6 +246,33 @@ describe('供應商回上下文溢出', () => {
 });
 
 /**
+ * **端點真的回超窗：緊急摘要不保留尾巴**（[#1381](https://github.com/DemianLi/nexus-agent/issues/1381)，dsh
+ * `compaction-basic/src/index.ts:262`、`:294`：overflow 繞過保留政策、`selectCompactableRange(..., 0)`）。
+ *
+ * 沒有型錄時保留量退到 20 則，4 句話才 8 則，**尾巴原本蓋住全部**：照保留量算沒有東西可摘，基座只能把同一個請求
+ * 再送一次（端點已經說裝不下了）。retain 0 之後，端點超窗那一次照樣摘要、只留最新一則。
+ * 對照是預算層合成的超窗（上面「尾巴蓋住全部」那條）：我們自己的門檻到了不繞過保留量。
+ */
+describe('端點超窗：retain 0', () => {
+  it('尾巴蓋住全部時端點回超窗：仍然摘要一次，歷史檔落了地，整場活下來', async () => {
+    const { rejected, calls, historyFiles, events } = await runUntilThrow(
+      new ContextOverflowError('Input exceeded the model context window.'),
+      4,
+      4,
+      undefined,
+      undefined,
+      {},
+    );
+
+    expect(rejected).toBeNull();
+    // 三次正常、溢出一次、摘要一次、摘要之後重送一次。
+    expect(calls).toBe(6);
+    expect(historyFiles.length).toBeGreaterThan(0);
+    expect(events.filter((event) => event.type === 'compaction/summary')).toHaveLength(1);
+  });
+});
+
+/**
  * **門檻到了但尾巴蓋住全部：整棵樹什麼都不多做**（#1374；單元級的在 `summary-failure.test.ts`）。
  * 沒有型錄時保留量退到 20 則，4 句話才 8 則——訊息數門檻 3 到了，沒有東西可摘。
  * 每一步都會遇到這種情況，所以不多叫一次摘要模型、不記 `compaction/summary`。
