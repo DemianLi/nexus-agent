@@ -371,6 +371,19 @@ function messageTokens(message: BaseMessage): Counted {
   return counted;
 }
 
+/**
+ * 一則訊息的 E（不錨）：o200k 的 token 數加角色框架開銷，圖按 {@link IMAGE_TOKENS} 算。同一個物件只編一次。
+ *
+ * 給「這一串裡誰占多大」用（摘要保留量選尾巴，[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)），
+ * 不是請求的總量：總量要走 {@link estimateAnchoredTokens}，那把才有錨。逐位切詞的模型多出來的那一截不算進來。
+ *
+ * @param message - 要估的訊息。
+ * @returns token 數。
+ */
+export function estimateMessageTokens(message: BaseMessage): number {
+  return messageTokens(message).tokens;
+}
+
 /** 每則訊息的角色框架開銷，加在 o200k 那一截上。 */
 function withOverhead(counted: Counted): Counted {
   return { tokens: counted.tokens + MESSAGE_OVERHEAD, excess: counted.excess };

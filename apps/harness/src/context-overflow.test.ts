@@ -112,7 +112,7 @@ async function runUntilThrow(
     plugins: [],
     summarization: {
       trigger,
-      keep: { type: 'messages', value: 2 },
+      retainTokens: 12,
     },
   });
   const sessions = new SessionRegistry('overflow');

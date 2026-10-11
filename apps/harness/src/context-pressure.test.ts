@@ -241,7 +241,7 @@ const TURNS = ['很長的第一句。'.repeat(500), '第二句。'] as const;
 
 function summarizeAt(trigger: { type: 'tokens' | 'messages'; value: number }[]) {
   // `keep` 留一則：第二次呼叫時訊息串是 [人, 模型, 人]，切點落在 2，前兩則被摘要掉。
-  return { trigger, keep: { type: 'messages' as const, value: 1 } };
+  return { trigger, retainTokens: 1 };
 }
 
 describe('分子跟摘要判準同源：門檻夾擠', () => {

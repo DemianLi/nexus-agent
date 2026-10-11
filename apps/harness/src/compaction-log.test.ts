@@ -167,7 +167,7 @@ describe('壓縮發生時，日誌裡留得下來', () => {
     const { root } = await run(chatter(120), {
       summarization: {
         trigger: [{ type: 'tokens', value: 3_000 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
       invocations: 20,
     });
@@ -314,7 +314,7 @@ describe('subagent 那側', () => {
           trigger: [{ type: 'tokens', value: 3_000 }],
           // 要小於當時的訊息數，否則 `determineCutoffIndex` 算出 `<= 0`，基座直接放行、
           // 什麼都不會發生——那會讓這條測試永遠綠得沒有意義。
-          keep: { type: 'messages', value: 2 },
+          retainTokens: 12,
         },
         plugins: [withWorker],
       },
@@ -379,7 +379,7 @@ describe('摘要事件的位置與內容（#1301）', () => {
     const { rootEvents } = await run(chatter(120), {
       summarization: {
         trigger: [{ type: 'tokens', value: 3_000 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
       invocations: 20,
     });
@@ -412,7 +412,7 @@ describe('摘要事件的位置與內容（#1301）', () => {
     const { root, saver } = await run(chatter(120), {
       summarization: {
         trigger: [{ type: 'tokens', value: 3_000 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
       invocations: 20,
     });
@@ -446,7 +446,7 @@ describe('摘要事件的位置與內容（#1301）', () => {
   it('摘要之後的模型呼叫失敗：事件仍在日誌裡，重打再摘要，兩筆都在', async () => {
     const summarization = {
       trigger: [{ type: 'tokens' as const, value: 3_000 }],
-      keep: { type: 'messages' as const, value: 2 },
+      retainTokens: 12,
     };
     // 先照全部成功的腳本跑一遍，找出第一次摘要用掉的是第幾輪（摘要提示詞是一則含對話全文的 human 訊息）。
     const probe = await run(chatter(120), { summarization, invocations: 20 });

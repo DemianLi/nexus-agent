@@ -197,7 +197,7 @@ async function observe(options: RunOptions): Promise<Observation> {
       ...(options.trigger !== undefined && {
         trigger: options.trigger.map((each) => ({ ...each })),
       }),
-      keep: { type: 'messages', value: 2 },
+      retainTokens: 12,
     },
     ...(options.viaSelection && { modelSelection: controller }),
     modelLimits: (model) => {
@@ -313,8 +313,8 @@ describe('摘要器看到的是這一步選中的模型（#1369）', () => {
     // 三次模型呼叫（root、子代理、root）都走在選中那顆上；預設那顆沒有被叫過。
     expect(run.innerSaw).toEqual(['SMALL', 'SMALL', 'SMALL']);
     expect(run.defaultModel.prompts).toHaveLength(0);
-    // 摘要器每次呼叫問兩次（剪刀的壓力判斷與預算層）。子代理那一次也在裡面。
-    expect(run.limitsAskedAbout).toHaveLength(6);
+    // 摘要器每次呼叫問三次（剪刀的壓力判斷、預算層與保留量，#1374）。子代理那一次也在裡面。
+    expect(run.limitsAskedAbout).toHaveLength(9);
     expect(new Set(run.limitsAskedAbout)).toEqual(new Set(['SMALL']));
   });
 

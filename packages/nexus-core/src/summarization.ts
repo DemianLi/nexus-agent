@@ -93,6 +93,7 @@
  */
 
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { randomUUID } from 'node:crypto';
 import { ContextOverflowError } from '@langchain/core/errors';
 import { ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage, MessageContent } from '@langchain/core/messages';
@@ -112,7 +113,7 @@ import { captureModelCall, withModelCall } from './model-call-scope.js';
 import { readModelUsage, type ModelUsage } from './model-usage.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
-import { estimateAnchoredTokens } from './token-estimate.js';
+import { estimateAnchoredTokens, estimateMessageTokens } from './token-estimate.js';
 import type { EstimatedRequest, TokenAnchorBook } from './token-estimate.js';
 import {
   applyRecordedArgTruncations,
@@ -252,6 +253,8 @@ export function windowThreshold(limits: ModelContextLimits): number {
  * - **配置的絕對值留著當上限，只往下夾。** dsh 的門檻只由窗口導出（沒有絕對值）。我們的 `100_000` 是量出來的（見
  *   {@link DEFAULT_SUMMARIZATION}：最小那顆 131,007 塞得進、預設那顆 700k 偏保守），拿掉它預設模型的摘要時機會從 10 萬跳到 56 萬，
  *   是另一個行為決定。所以窗口只負責「更小的窗口不會來不及」，**預設模型與 131k 級的模型門檻不變**。
+ * - **沒有型錄的模型不夾**：dsh 對解不出窗口的目標會 warn 一次然後不壓縮（`TargetPressureConfigError`，`index.ts:163-170`）；我們用
+ *   配置的絕對門檻接住它，所以 `limits` 是 `undefined` 時原樣回。
  * - **沒有 headroom。** dsh 的 `headroomTokens` 預設 65,536，是為百萬級窗口定的；套在 131k 的窗口上門檻會掉到 49,087，比我們量過
  *   安全的 100,000 低一半，無謂地多摘要。輸出上限那一項（`窗口 − maxTokens`）已經守住「請求加回應不超過窗口」。
  *
@@ -271,6 +274,92 @@ export function effectiveTrigger(
   );
 }
 
+/** 保留量的比例預設：dsh 的 `DEFAULT_RETAIN_RATIO`（`compaction-basic/src/config.ts:23`）。 */
+export const RETAIN_RATIO = 0.16;
+
+/**
+ * 保留量的封頂：有效 `tokens` 門檻的幾成。**登記的偏離**：dsh 沒有這一項（它的門檻只由窗口導出，保留量一定小於門檻）；
+ * 我們的絕對門檻 100,000 讓 dsh 的值在大窗口上超過門檻（預設那顆 109,385），所以用這一項封頂。90b（窗口 32,768）上
+ * 這一項是 5,242，高於 dsh 的值 4,587，不生效——也就是只在大窗口上與 dsh 不同。
+ */
+export const RETAIN_THRESHOLD_CAP_RATIO = 0.2;
+
+/** 算不出 token 保留量時（沒型錄、也沒有 `tokens` 門檻）退回的則數：基座本來的預設。 */
+export const RETAIN_FALLBACK_MESSAGES = 20;
+
+/**
+ * 這一步摘要之後要逐字留下的 token 數。
+ *
+ * `min(wanted, cap)`：
+ * - `wanted`：`retainTokens` 照給；`retainRatio` 是 `floor((窗口 − 輸出上限) × 比例)`，要型錄（dsh 的訊息預算）；
+ * - `cap`：`floor(有效 tokens 門檻 × 0.2)`（{@link RETAIN_THRESHOLD_CAP_RATIO}），見該常數的偏離登記。
+ *
+ * @param retain - 設定上的 `retainRatio` 或 `retainTokens`（只有一個有值）。
+ * @param limits - 這一步用的模型的上限；不知道就是 `undefined`。
+ * @param trigger - **有效**門檻（{@link effectiveTrigger} 的結果）。
+ * @returns 保留量；兩項都算不出來時 `undefined`，呼叫端退回 {@link RETAIN_FALLBACK_MESSAGES}。
+ */
+export function retainTokensFor(
+  retain: { readonly retainRatio?: number; readonly retainTokens?: number },
+  limits: ModelContextLimits | undefined,
+  trigger: readonly SummarizationThreshold[],
+): number | undefined {
+  const budgets = trigger.filter((each) => each.type === 'tokens').map((each) => each.value);
+  const cap =
+    budgets.length === 0
+      ? undefined
+      : Math.floor(Math.min(...budgets) * RETAIN_THRESHOLD_CAP_RATIO);
+  let wanted: number | undefined;
+  if (retain.retainTokens !== undefined) wanted = retain.retainTokens;
+  else if (retain.retainRatio !== undefined && limits !== undefined)
+    wanted = Math.floor((limits.contextWindow - limits.maxOutputTokens) * retain.retainRatio);
+  if (wanted === undefined) return cap;
+  return cap === undefined ? wanted : Math.min(wanted, cap);
+}
+
+/**
+ * 摘要之後要留的尾巴有幾則。照 dsh `selectCompactableRange`（`compaction-basic/src/region.ts:133-148`）：
+ *
+ * 1. 從最新往前累加，到 **≥** `retainTokens` 為止，**跨過的那則也留**——所以至少留一則，最新一則再大也不會一則不留
+ *    （基座的 `tokens` 形式會，見 {@link DEFAULT_SUMMARIZATION} 的「保留量」一節）；
+ * 2. 切點不能把工具呼叫和它的結果拆開：切點後面有任何一則工具結果的呼叫在切點前面，就把切點退到那則呼叫。
+ *    退到底（0）就是整串都留，基座看到 `messages.length <= keep` 不摘要。
+ *
+ * 這一步的價是 {@link estimateMessageTokens}（不錨）。錨定只對整份請求有意義；選尾巴要的是「誰占多大」，相對比例夠用。
+ *
+ * @param messages - 摘要器看到的那一串（摘要事件套用過的）。
+ * @param retainTokens - 保留量。
+ * @returns 尾巴則數，`0` 只在 `messages` 是空的時候。
+ */
+export function retainedTailCount(messages: readonly BaseMessage[], retainTokens: number): number {
+  const length = messages.length;
+  if (length === 0) return 0;
+  let accumulated = 0;
+  let cut = length;
+  for (let index = length - 1; index >= 0; index -= 1) {
+    accumulated += estimateMessageTokens(messages[index]!);
+    cut = index;
+    if (accumulated >= retainTokens) break;
+  }
+  const calls = new Map<string, number>();
+  messages.forEach((message, index) => {
+    for (const call of (message as { tool_calls?: readonly { id?: unknown }[] }).tool_calls ?? [])
+      if (typeof call.id === 'string') calls.set(call.id, index);
+  });
+  for (;;) {
+    let earliest = cut;
+    for (let index = cut; index < length; index += 1) {
+      const message = messages[index]!;
+      if (!ToolMessage.isInstance(message)) continue;
+      const at = calls.get(message.tool_call_id);
+      if (at !== undefined && at < earliest) earliest = at;
+    }
+    if (earliest === cut) break;
+    cut = earliest;
+  }
+  return length - cut;
+}
+
 /** 舊訊息裡過大的工具**參數**要不要剪。剪工具**結果**是另一件事，見 [#149](https://github.com/DemianLi/nexus-agent/issues/149)。 */
 export interface SummarizationArgTruncation {
   /** 超過這個量就開始剪。 */
@@ -284,11 +373,11 @@ export interface SummarizationArgTruncation {
 /**
  * 摘要的完整設定。
  *
- * **四格全部必填，而這正是它買到的東西。** 基座的
+ * **四格永遠都在（保留量算一格：`retainRatio` 與 `retainTokens` 擇一），而這正是它買到的東西。** 基座的
  * `defaultsComputed = trigger != null` 讓 `applyModelDefaults` 在收到 `trigger` 的當下
  * 就 return，於是只給 `trigger` 會**同時**做兩件沒有徵兆的事：`truncateTrigger` 留在
  * `undefined`（arg 截斷停用），`keep` 留在建構初值 **20 而不是 fallback 的 6**。
- * 一個原因、兩個效果。設成必填之後，「只給一格」這種寫法在型別層就不成立。
+ * 一個原因、兩個效果。我們建構基座時四格都明著給，「只給一格」這種寫法就不會走到那裡。
  *
  * 呼叫端要覆寫的話給的是 `Partial<SummarizationSettings>`，逐格淺合併到
  * {@link DEFAULT_SUMMARIZATION} 上——所以四格永遠都在。
@@ -301,8 +390,13 @@ export interface SummarizationSettings {
    * `profile.maxInputTokens`。兩道並聯的用意是 token 估算靠不住時還有第二道兜著。
    */
   readonly trigger: readonly SummarizationThreshold[];
-  /** 摘要之後最近這些則逐字留下。 */
-  readonly keep: SummarizationThreshold;
+  /**
+   * 摘要之後最近這些逐字留下，**用比例**：占這顆模型訊息預算（窗口 − 輸出上限）的幾成。與 {@link retainTokens} 擇一。
+   * 照 dsh `compaction-basic` 的 `retainRatio`；實際留多少見 {@link retainTokensFor}。
+   */
+  readonly retainRatio?: number;
+  /** 摘要之後最近這些逐字留下，**用 token 數**。與 {@link retainRatio} 擇一。照 dsh 的 `retainTokens`。 */
+  readonly retainTokens?: number;
   /** 工具參數截斷。 */
   readonly truncateArgs: SummarizationArgTruncation;
   /** 歷史落在 backend 的哪個前綴底下。 */
@@ -345,23 +439,24 @@ export interface SummarizationSettings {
  * 長任務會摘要一次，正常的基準任務（最長 3 次工具呼叫）碰不到它。serve 每輪四格只有 24 輪，
  * 單次 invoke 湊不到 60 則（2026-10-02 實測最多 51 則），要靠同一條 thread 後面幾輪累積才碰得到。
  *
- * ## `keep`：用訊息數，不用 token
+ * ## 保留量：`retainRatio` 0.16，依這一步的模型算 token（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)）
  *
- * 這一格看起來該跟 `trigger` 同尺（token 對 token），但 `determineCutoffIndex` 的
- * `tokens` 分支是從**最新那則**往前累加、超過就切：
+ * 這一格原本叫 `keep`，是 20 則。**則數不是尺**：小窗口模型（32,768）上每則 3,000 字，20 則自己就 30,342 token，
+ * 比它的門檻還大——摘要完下一步又過門檻，每一步都重摘。dsh 的 `compaction-basic` 每個目標模型有
+ * `retainTokens`／`retainRatio`（互斥，`config.ts:292`），所以現在照辦：
  *
- * ```js
- * if (tokensKept + msgTokens > targetTokenCount) { rawCutoff = i + 1; break; }
- * ```
+ * - **留多少**：`retainTokensFor`——`min(floor((窗口 − 輸出上限) × retainRatio), floor(有效 token 門檻 × 0.2))`。前一項是 dsh
+ *   的公式；後一項是**登記的偏離**：我們的 100,000 絕對門檻讓 dsh 的值（預設那顆 109,385）超過門檻，dsh 的載入期驗證
+ *   （`retainTokens < thresholdTokens`，`config.ts:198`）會當場不過，所以封在門檻的兩成。
+ * - **怎麼選尾巴**：照 dsh `selectCompactableRange`（`region.ts:133-140`）——從最新往前累加到 **≥** 保留量，跨過的那則也留；
+ *   再往前退到「工具呼叫與它的結果沒被切開」的位置。基座的 `{type:'tokens'}` 是反過來的（加上去會超過就切，最新一則自己
+ *   就超過時**一則不留**，`langsmith-zm0ILQsV.js:2872`），而且用的是 `countTokensApproximately`，所以不用它。
+ * - **誰來切**：基座的 `keep` 在建構時就定了，不能每次請求換，而 `fraction` 要偽造 `profile.maxInputTokens`（見上面
+ *   「`fraction` 一個都不准用」）。所以 {@link createSummarizer} 在每次請求算出「這一步該留幾則」N，轉給 `keep: { messages, N }`
+ *   那一顆基座實例。
  *
- * 最新那一則自己就超過門檻時（一個剛回來的超大工具結果），第一圈就 `rawCutoff =
- * messages.length`——**一則都不留**。那正是 `fraction` 那個 fail-open 的同一個形狀，
- * 而這張卡整個立論就是拒絕這種靜默失敗。`messages` 分支則是
- * `rawCutoff = messages.length - keep.value`，**恆定留下 20 則**。
- *
- * 代價是兩邊不同尺：留下的 20 則塞進一個超大工具結果時，摘要完可能立刻又過門檻。
- * 那個風險由 `summarization.test.ts` 的「超大工具結果不會逐輪重摘」釘住，不是靠這裡的
- * 一句註解。
+ * 沒型錄的模型（`limitsOf` 回 `undefined`）只剩後一項；連 token 門檻都沒有（只有 `messages` 門檻）就退回
+ * {@link RETAIN_FALLBACK_MESSAGES} 則。
  *
  * ## `truncateArgs`：顯式寫出來，是為了**保住**基座本來的行為
  *
@@ -380,7 +475,7 @@ export const DEFAULT_SUMMARIZATION: SummarizationSettings = {
     { type: 'tokens', value: 100_000 },
     { type: 'messages', value: 60 },
   ],
-  keep: { type: 'messages', value: 20 },
+  retainRatio: RETAIN_RATIO,
   truncateArgs: {
     trigger: { type: 'messages', value: 20 },
     keep: { type: 'messages', value: 20 },
@@ -402,10 +497,28 @@ export const DEFAULT_SUMMARIZATION: SummarizationSettings = {
 export function resolveSummarizationSettings(
   override?: Partial<SummarizationSettings>,
 ): SummarizationSettings {
-  const settings: SummarizationSettings = { ...DEFAULT_SUMMARIZATION, ...override };
+  if (override !== undefined && 'keep' in override) throw new Error(LEGACY_KEEP_MESSAGE);
+  // 兩個保留量互斥：呼叫端給了任何一個，預設的 `retainRatio` 就不算，不然給 `retainTokens` 會與預設的比例同時在場。
+  const { retainRatio: defaultRatio, ...defaults } = DEFAULT_SUMMARIZATION;
+  const overridesRetain =
+    override?.retainRatio !== undefined || override?.retainTokens !== undefined;
+  return validateSettings({
+    ...defaults,
+    ...override,
+    ...(!overridesRetain && { retainRatio: defaultRatio }),
+  });
+}
+
+/** 舊的 `keep` 欄位被拿掉了（#1374）：靜靜忽略會讓人以為保留量還是自己設的那個，所以載入就拋，並說明改成什麼。 */
+const LEGACY_KEEP_MESSAGE =
+  'summarization.keep 已經拿掉（#1374）：保留量改成依這一步的模型算 token，不再是固定則數。' +
+  '請改用 `retainRatio`（占訊息預算的比例，出廠 0.16）或 `retainTokens`（固定 token 數），兩者擇一。';
+
+/** 補滿之後的設定的執行期檢查。 */
+function validateSettings(settings: SummarizationSettings): SummarizationSettings {
   for (const [index, threshold] of settings.trigger.entries())
     assertThreshold(threshold, `trigger[${index}]`);
-  assertThreshold(settings.keep, 'keep');
+  assertRetain(settings);
   assertThreshold(settings.truncateArgs.trigger, 'truncateArgs.trigger');
   assertThreshold(settings.truncateArgs.keep, 'truncateArgs.keep');
   if (settings.trigger.length === 0)
@@ -414,6 +527,29 @@ export function resolveSummarizationSettings(
         '所以那等於沒有摘要器——要那個效果請明著傳 `summarization: false`。',
     );
   return settings;
+}
+
+/**
+ * 保留量的執行期檢查：兩個擇一、數值合理。`retainRatio` 要小於窗口門檻的比例（dsh 的 `validateRatioRetention`，
+ * `config.ts:235`）；`retainTokens` 是非負整數（`config.ts:291`），0 的意思是「只留跨過的那一則」。
+ */
+function assertRetain(settings: {
+  readonly retainRatio?: number;
+  readonly retainTokens?: number;
+}): void {
+  const { retainRatio, retainTokens } = settings;
+  if (retainRatio !== undefined && retainTokens !== undefined)
+    throw new Error('summarization.retainRatio 與 retainTokens 互斥，只能給一個。');
+  if (retainRatio === undefined && retainTokens === undefined)
+    throw new Error('summarization 要有 retainRatio 或 retainTokens 其中一個。');
+  if (retainRatio !== undefined) {
+    if (!Number.isFinite(retainRatio) || retainRatio <= 0 || retainRatio >= WINDOW_THRESHOLD_RATIO)
+      throw new Error(
+        `summarization.retainRatio 是 ${String(retainRatio)}，要在 0 與 ${WINDOW_THRESHOLD_RATIO}（窗口門檻的比例）之間。`,
+      );
+  }
+  if (retainTokens !== undefined && (!Number.isInteger(retainTokens) || retainTokens < 0))
+    throw new Error(`summarization.retainTokens 是 ${String(retainTokens)}，要非負整數。`);
 }
 
 /** 一道門檻的執行期檢查。型別已經擋掉 `'fraction'`，這道擋的是繞過型別的呼叫端。 */
@@ -474,6 +610,7 @@ function assertThreshold(threshold: SummarizationThreshold, where: string): void
  *   會話註冊表，它們不該為此拿到一個例外。同 {@link ./model-usage.ts} 的 `not-attached`。
  * @param pruning - 包在外面的那把剪刀的預算，來自 `resolveToolResultPruneConfig`；
  *   `false` 就不包（[#446](https://github.com/DemianLi/nexus-agent/issues/446)）。
+ * @param report - 摘要失敗時往哪裡講一條 warn（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)）；省略即 `console.warn`。
  * @returns 可以直接放進 `middleware` 的 middleware。
  */
 export function createSummarizer(
@@ -484,33 +621,46 @@ export function createSummarizer(
   pruning: ToolResultPruneConfig | false = DEFAULT_TOOL_RESULT_PRUNE,
   limitsOf?: (model: unknown) => ModelContextLimits | undefined,
   summaryModelOf?: (request: { model?: unknown; runtime?: { configurable?: unknown } }) => unknown,
+  report?: (message: string) => void,
 ): AgentMiddleware {
-  const base = createSummarizationMiddleware({
-    backend,
-    summaryPrompt: SUMMARY_PROMPT,
-    // 只交 `messages` 那幾道，`tokens` 由 withTokenBudget 比。一道都沒有時是空陣列：基座逐條試，一條都不成立。
-    trigger: settings.trigger
-      .filter((threshold) => threshold.type === 'messages')
-      .map((threshold) => ({ ...threshold })),
-    keep: { ...settings.keep },
-    historyPathPrefix: settings.historyPathPrefix,
-    truncateArgsSettings: {
-      trigger: { ...settings.truncateArgs.trigger },
-      keep: { ...settings.truncateArgs.keep },
-      ...(settings.truncateArgs.maxLength !== undefined && {
-        maxLength: settings.truncateArgs.maxLength,
-      }),
-    },
-  }) as unknown as AgentMiddleware;
-  // 貼著基座包：外面幾層看到的 `request.model` 與交下去的都是原本那顆，不會碰到替身。
-  const quiet = withQuietSummaryCall(withAttachmentText(base), summaryModelOf);
+  // 基座的 `keep` 在建構時就定了，每次請求換不了：保留則數 N 由 {@link withRetainedTail} 逐步算，各用一顆
+  // `keep: { messages, N }` 的實例（同一個 backend、同一份 `stateSchema`）。
+  const makeChain = (keepMessages: number): AgentMiddleware => {
+    const base = createSummarizationMiddleware({
+      backend,
+      summaryPrompt: SUMMARY_PROMPT,
+      // 只交 `messages` 那幾道，`tokens` 由 withTokenBudget 比。一道都沒有時是空陣列：基座逐條試，一條都不成立。
+      trigger: settings.trigger
+        .filter((threshold) => threshold.type === 'messages')
+        .map((threshold) => ({ ...threshold })),
+      keep: { type: 'messages', value: keepMessages },
+      historyPathPrefix: settings.historyPathPrefix,
+      truncateArgsSettings: {
+        trigger: { ...settings.truncateArgs.trigger },
+        keep: { ...settings.truncateArgs.keep },
+        ...(settings.truncateArgs.maxLength !== undefined && {
+          maxLength: settings.truncateArgs.maxLength,
+        }),
+      },
+    }) as unknown as AgentMiddleware;
+    // 貼著基座包：外面幾層看到的 `request.model` 與交下去的都是原本那顆，不會碰到替身。
+    return withQuietSummaryCall(withAttachmentText(base), summaryModelOf);
+  };
+  const quiet = withRetainedTail(makeChain, settings, limitsOf);
   // 兩層各管一個方向，刻意不合成一層：剪刀改請求、日誌讀回傳，合起來寫會讓兩個獨立的
   // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。預算那層讀的是基座交下去的
   // 請求，不是進來的那份，也不碰回傳值。
   const logged = sessions === undefined ? quiet : withCompactionLog(quiet, sessions);
   // 基座的 `truncateArgs` 是它自己的事，這一層只在交給它之前換上記過的、在它交下去時記新的（#1303）。
   const truncationLogged = sessions === undefined ? logged : withArgTruncationLog(logged, sessions);
-  const budgeted = withTokenBudget(truncationLogged, settings.trigger, book, sessions, limitsOf);
+  const budgeted = withTokenBudget(
+    truncationLogged,
+    settings.trigger,
+    book,
+    sessions,
+    limitsOf,
+    report,
+  );
   if (pruning === false) return budgeted;
   return withToolResultPruning(
     budgeted,
@@ -723,6 +873,81 @@ function withQuietSummaryCall(
   } as AgentMiddleware;
 }
 
+/** 保留則數實例的快取上限。N 是整數、理論上沒有上限，但實際只在「最近一次摘要之後的對話長度」附近移動；超過就丟最久沒用的。 */
+const MAX_RETAIN_CHAINS = 32;
+
+/**
+ * 每次請求算出「這一步該留幾則」，轉給對應那顆基座實例（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)）。
+ *
+ * 見 {@link DEFAULT_SUMMARIZATION} 的「保留量」一節。回傳的是**一顆** middleware：`name` 與 `stateSchema` 取自參考實例，
+ * 所有實例共用同一個 backend、同一份 `stateSchema`，疊上只有它一顆。
+ *
+ * ## 實例之間沒有狀態要同步
+ *
+ * 基座實例的 closure 裡有三樣：`tokenEstimationMultiplier`（只在 `profile.maxInputTokens` 有值時才會改，我們的模型沒有，
+ * 見 {@link createSummarizer} 的絆索說明）、`cachedModel`（只在 `request.model` 缺席時用）、`sessionId`（歷史檔名的退路）。
+ * 前兩樣不會動；第三樣這裡統一：state 上沒有 `_summarizationSessionId` 時補一個**這顆摘要器自己的**，所以不論用到哪顆實例，
+ * 歷史都寫進同一個檔（`session_…` 名字與基座一致）。這一份與基座原本的「一顆摘要器一個 closure」同一個範圍：
+ * 摘要器逐個 agent 各建一份（見 `foldSummarizer`），root 與子代理照舊不共用。
+ *
+ * @param makeChain - 建「`keep` 是 N 則」的那一顆（含它外面貼著的兩層）。
+ * @param settings - 補滿的設定。
+ * @param limitsOf - 這一步模型的上限；沒給（沒有型錄）就只剩門檻那一項。
+ * @returns 與 `makeChain` 回傳的同名、同狀態的 middleware。
+ */
+function withRetainedTail(
+  makeChain: (keepMessages: number) => AgentMiddleware,
+  settings: SummarizationSettings,
+  limitsOf?: (model: unknown) => ModelContextLimits | undefined,
+): AgentMiddleware {
+  const chains = new Map<number, AgentMiddleware>();
+  const chainFor = (keepMessages: number): AgentMiddleware => {
+    const cached = chains.get(keepMessages);
+    if (cached !== undefined) {
+      // 最近用過的排到最後。
+      chains.delete(keepMessages);
+      chains.set(keepMessages, cached);
+      return cached;
+    }
+    const made = makeChain(keepMessages);
+    chains.set(keepMessages, made);
+    if (chains.size > MAX_RETAIN_CHAINS) chains.delete(chains.keys().next().value!);
+    return made;
+  };
+  const reference = makeChain(RETAIN_FALLBACK_MESSAGES);
+  const fallbackSessionId = `session_${randomUUID().substring(0, 8)}`;
+  return {
+    ...reference,
+    wrapModelCall: (request, handler) => {
+      const view = effectiveMessages(request.messages ?? [], request.state);
+      const limits = limitsOf?.(request.model);
+      const retain = retainTokensFor(settings, limits, effectiveTrigger(settings.trigger, limits));
+      const keepMessages =
+        retain === undefined ? RETAIN_FALLBACK_MESSAGES : retainedTailCount(view, retain);
+      const state = request.state as Record<string, unknown> | undefined;
+      const seeded = (
+        state !== undefined && typeof state._summarizationSessionId !== 'string'
+          ? { ...request, state: { ...state, _summarizationSessionId: fallbackSessionId } }
+          : request
+      ) as typeof request;
+      return chainFor(Math.max(1, keepMessages)).wrapModelCall!(seeded, handler);
+    },
+  } as AgentMiddleware;
+}
+
+/** 生摘要那次模型呼叫拋出來的錯（物件本身）。見 {@link quietInvoke}。 */
+const summaryCallFailures = new WeakSet<object>();
+
+/** 這個錯（或它的 `cause` 鏈上任何一層）是不是超窗：基座自己的判法（`isContextOverflow`）。 */
+function isContextOverflowError(error: unknown): boolean {
+  let cause: unknown = error;
+  for (let depth = 0; depth < 8 && cause !== undefined && cause !== null; depth += 1) {
+    if (ContextOverflowError.isInstance(cause)) return true;
+    cause = typeof cause === 'object' ? (cause as { cause?: unknown }).cause : undefined;
+  }
+  return false;
+}
+
 /**
  * 一顆只有 `invoke` 會補上 {@link SUMMARY_CALL_TAG} 的替身。
  *
@@ -745,10 +970,18 @@ function quietInvoke<T extends object>(
       const caller = generator ?? target;
       const invoke = (caller as { invoke(input: unknown, config?: unknown): unknown }).invoke;
       return async (input: unknown, config?: { tags?: readonly string[] }) => {
-        const result = await invoke.call(caller, input, {
-          ...config,
-          tags: [...(config?.tags ?? []), SUMMARY_CALL_TAG],
-        });
+        let result: unknown;
+        try {
+          result = await invoke.call(caller, input, {
+            ...config,
+            tags: [...(config?.tags ?? []), SUMMARY_CALL_TAG],
+          });
+        } catch (error) {
+          // 記下「這個錯是生摘要那次拋的」（#1374）：基座不包它，原物件一路冒到外面，外面的 {@link withTokenBudget}
+          // 靠這個分得出它與「摘要成功、之後的模型呼叫才失敗」。
+          if (typeof error === 'object' && error !== null) summaryCallFailures.add(error);
+          throw error;
+        }
         // 摘要的用量（#1022）：回來的那則訊息上讀，驗不過就是沒有。拋錯的那次連 `compaction/summary` 都不記，
         // 用量也就跟著沒有（見 withCompactionLog 的說明）。
         if (cell !== undefined) {
@@ -1029,6 +1262,7 @@ function withTokenBudget(
   book: TokenAnchorBook,
   sessions?: { forCall(config: unknown): SessionLookup },
   limitsOf?: (model: unknown) => ModelContextLimits | undefined,
+  report: (message: string) => void = (message) => console.warn(message),
 ): AgentMiddleware {
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 同 withCompactionLog。 */
@@ -1045,7 +1279,9 @@ function withTokenBudget(
       const view = effectiveMessages(request.messages ?? [], request.state);
       const baseWillCatch = view.length > 0 && !byMessages.some((value) => view.length >= value);
       let thrown = false;
-      return inner(request, async (sent) => {
+      // 端點真的回的超窗（不是我們合成的）：基座接住它、走緊急摘要；摘要若失敗，這一份是要還給呼叫端的原錯誤。
+      let endpointOverflow: unknown;
+      const measured: Parameters<NonNullable<typeof inner>>[1] = async (sent) => {
         let estimate: ReturnType<typeof estimateAnchoredTokens> | undefined;
         try {
           estimate = estimateAnchoredTokens(sent, book);
@@ -1061,7 +1297,14 @@ function withTokenBudget(
           }
         }
         // 夾住下一層，拿回它裡面那次模型呼叫的識別：量測寫在 `model/end` 之後，位置歸不對（#1021）。
-        const { result: response, call } = await captureModelCall(() => handler(sent));
+        const { result: response, call } = await captureModelCall(async () => {
+          try {
+            return await handler(sent);
+          } catch (error) {
+            if (isContextOverflowError(error)) endpointOverflow ??= error;
+            throw error;
+          }
+        });
         if (estimate === undefined) return response;
         try {
           book.record(response, sent, estimate.estimated, estimate.basis);
@@ -1090,7 +1333,31 @@ function withTokenBudget(
           // 記不進去不能反過來把摘要器殺掉。見 withCompactionLog。
         }
         return response;
-      });
+      };
+      return (async () => {
+        try {
+          return await inner(request, measured);
+        } catch (error) {
+          // 只認「生摘要那次模型呼叫拋的」：摘要成功、之後的模型呼叫才失敗的錯照原樣冒出去。
+          if (typeof error !== 'object' || error === null || !summaryCallFailures.has(error))
+            throw error;
+          // 使用者按停止不是摘要壞了，不吞。
+          if ((error as { name?: unknown }).name === 'AbortError') throw error;
+          const reason = error instanceof Error ? error.message : String(error);
+          if (endpointOverflow !== undefined) {
+            // 端點真的超窗、摘要也失敗：照 dsh 的 overflow 路徑（`compaction-basic/src/index.ts:205-224`），
+            // 記一條 warn、**保留原本的請求錯誤**，不拿摘要那個錯蓋掉它，也不發明修剪。
+            report(`摘要失敗（端點回超窗後的恢復）：${reason}；保留原本的請求錯誤。`);
+            throw endpointOverflow;
+          }
+          // 我們自己的門檻（token 預算或訊息數）觸發、摘要失敗：照 dsh 的 pressure 路徑（`index.ts:158-175`，
+          // 「step compaction failed … continuing the turn」）——記一條 warn，照原請求送出去，讓端點自己決定裝不裝得下。
+          // 不是任何真的請求錯誤，所以沒有「原錯誤」可保留：拿合成的「摘要預算」那句丟出去只會讓人看不懂。
+          report(`摘要失敗（門檻觸發）：${reason}；照原請求送出。`);
+          thrown = true;
+          return measured(request);
+        }
+      })();
     },
   } as AgentMiddleware;
 }
@@ -1261,8 +1528,15 @@ export const summarizationConfigSchema = z.strictObject({
   trigger: z
     .array(thresholdSchema)
     .default(() => DEFAULT_SUMMARIZATION.trigger.map((threshold) => ({ ...threshold }))),
-  /** 見 {@link SummarizationSettings.keep}。 */
-  keep: thresholdSchema.default(() => ({ ...DEFAULT_SUMMARIZATION.keep })),
+  /** 見 {@link SummarizationSettings.retainRatio}。與 `retainTokens` 擇一；都沒給就是 {@link RETAIN_RATIO}。 */
+  retainRatio: z.number().optional(),
+  /** 見 {@link SummarizationSettings.retainTokens}。 */
+  retainTokens: z.number().optional(),
+  /**
+   * **已拿掉**（#1374）。收下它只為了給一句看得懂的錯誤——`strictObject` 的「不認得的欄位」不會說要改成什麼。
+   * 驗過之後這一格一定不在。
+   */
+  keep: z.unknown().optional(),
   /** 見 {@link SummarizationSettings.truncateArgs}。 */
   truncateArgs: z
     .strictObject({

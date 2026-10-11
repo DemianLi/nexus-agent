@@ -558,15 +558,17 @@ describe('模式狀態活得過什麼', () => {
    */
   it('一次真的壓縮之後還在', async () => {
     const root = await tmpRoot('nexus-plan-sum-');
+    const omitRetainRatio = ({ retainRatio: _ratio, ...rest }: Record<string, unknown>) => rest;
     const lowThreshold = (plugins: PluginEntry[]): PluginEntry[] =>
       plugins.map((entry) =>
         entry.id === 'summarization'
           ? {
               ...entry,
               config: {
-                ...(entry.config as Record<string, unknown>),
+                // 兩個保留量互斥：出貨檔寫的是 `retainRatio`，換成 `retainTokens` 就要把它拿掉。
+                ...omitRetainRatio(entry.config as Record<string, unknown>),
                 trigger: [{ type: 'messages', value: 3 }],
-                keep: { type: 'messages', value: 1 },
+                retainTokens: 1,
               },
             }
           : entry,

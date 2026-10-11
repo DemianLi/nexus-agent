@@ -307,7 +307,7 @@ export const LOW_SUMMARIZATION = [
   '  config:',
   '    trigger:',
   '      - { type: tokens, value: 6000 }',
-  '    keep: { type: messages, value: 2 }',
+  '    retainTokens: 12',
   '    truncateArgs:',
   '      trigger: { type: messages, value: 4 }',
   '      keep: { type: messages, value: 2 }',
