@@ -284,7 +284,10 @@ export async function runCoexist(): Promise<CoexistReport> {
 
 /** 負對照：不開 isolate，第二版 provide 同名服務會撞名，第二版那一列起不來；它已經開的子行程照樣收掉。 */
 export async function runWithoutIsolate(): Promise<{
+  /** 撞名之後、撤掉之前：失敗的 fiber 本來就是 FAILED。 */
   v2State: number | undefined;
+  /** 撤掉之後同一顆 fiber 的狀態：要收斂到 DISPOSED（上游 #127）。 */
+  v2StateAfterRemove: number | undefined;
   errors: string[];
   leak: Record<string, number>;
 }> {
@@ -301,13 +304,19 @@ export async function runWithoutIsolate(): Promise<{
     const v2Entry = await router.install('mcp@2', 'mcp-v2', mcpConfig());
     await settle();
     const v2State = t.state(v2Entry);
+    const v2Fiber = fiberOf(t.loader, v2Entry);
     const errors = t.errors.flatMap((message) =>
       message.args.map((arg) => (arg instanceof Error ? arg.message : String(arg))),
     );
     for (const id of Object.keys(t.loader.store)) t.loader.remove(id);
     await t.loader.await();
     await settle();
-    return { v2State, errors, leak: delta(resources(), before) };
+    return {
+      v2State,
+      v2StateAfterRemove: v2Fiber?.state,
+      errors,
+      leak: delta(resources(), before),
+    };
   } finally {
     await cleanup();
   }
