@@ -109,7 +109,8 @@ describe('相容層的生命週期（驗收 D）', () => {
 
 describe('相容層那一列起不來（驗收 E）', () => {
   const broken = () =>
-    vi.spyOn(compatLayer, 'apply').mockImplementation(() => {
+    // 實作用 `function`：mock 有 `prototype`，Cordis 的 `isConstructor` 因此用 `new` 呼叫它，箭頭實作在那一步就拋。
+    vi.spyOn(compatLayer, 'apply').mockImplementation(function () {
       throw new Error('相容層壞了');
     });
 

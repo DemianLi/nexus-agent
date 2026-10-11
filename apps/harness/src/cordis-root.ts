@@ -3,8 +3,9 @@
  *
  * ## 照 dsh 的 `boot()`
  *
- * dsh `packages/boot/app-boot/src/index.ts:975-1010`：`new Context()`、`await ctx.plugin(Loader)`、掛列、`loader.await()`、
- * `auditStartupEntries`。這裡同一個順序，樹上有兩列：
+ * dsh `packages/boot/app-boot/src/index.ts:975-1010`：`new Context()`、根上 provide 宿主的值（dsh 的 `dshHomePath`，
+ * launcher 的 `cmdlineArgs`／`appExit`）、`await ctx.plugin(Loader)`、掛列、`loader.await()`、`auditStartupEntries`。
+ * 這裡同一個順序。宿主的值是 {@link COMPAT_HOST_SERVICE}：這一次啟動的清單與解析基準，相容層 inject 它。樹上有兩列：
  *
  * | 列 id | 是什麼 | dsh 對應 |
  * |---|---|---|
@@ -21,15 +22,16 @@
  *
  * ## 偏離登記
  *
- * - **清單不是 Loader 讀的**：dsh 的樹由 Include 讀 YAML 長出來；我們的清單仍由 `loadDefaultPlugins` 解（樹由變更紀錄
- *   導出是後台插拔那幾張卡的事，決議 §3-5）。**而且不經那一列的 `config` 進來**：Loader 對每一列的設定跑一次
- *   `interpolate`（vendor `loader/src/index.ts:79-87`），物件與陣列整份重建，清單項目的身分（`optionalEntries` 用它比對）
- *   與外掛物件都留不住——列的設定只能是 YAML 那種資料。表達不出來的是「把執行期物件交給一列」，退到最接近的：相容層
- *   那一列的內建插件由這一次啟動的閉包帶著清單，列本身不帶設定。
- * - **入口的工作不在 `apply` 裡**：dsh 的 `headless-runner` 在 `apply` 裡 `void run(...)`。我們的入口那一列只把服務交回
- *   `runCli`／`runServe`，對話迴圈與 HTTP 伺服器照舊跑在呼叫端的流程裡。表達不出來的是「入口的錯誤原樣拋給呼叫端」：
- *   `apply` 裡拋的錯會變成那一列 FAILED，入口一路以來的錯誤（`StartupError`、旗標矛盾、續接失敗）就得換一種形狀出去，
- *   使用者看到的字會變（驗收 C）。退到最接近的：入口那一列只負責 inject，生命週期仍歸根。
+ * - **清單不是 Loader 讀的**：dsh 的樹由 Include 讀 YAML 長出來；我們的清單仍由 `loadDefaultPlugins` 解，經
+ *   {@link COMPAT_HOST_SERVICE} 交給相容層。樹由變更紀錄導出是後台插拔那幾張卡的事（決議 §3-5），這一步只把容器換上去，
+ *   舊插件一行不改。
+ * - **入口的工作不在入口那一列裡**：dsh 的 `headless-runner` 在 `apply` 裡 `void run(...)`，跑在那一列的 fiber 底下。
+ *   我們的入口那一列只把服務交回 `runCli`／`runServe`，對話迴圈與 HTTP 伺服器照舊跑在呼叫端的流程裡，理由是驗收 C：
+ *   入口一路以來的錯誤（`StartupError`、旗標矛盾、續接失敗）要在同一個時刻、以同一個類別與同一句話拋給呼叫端。搬進
+ *   `run` 的話，錯誤得改經 `appExit` 那一類通道出去，每一條的形狀都要重新對一遍，那是「每個 thread 重讀清單」之後的卡。
+ *
+ * 列的設定只能是 YAML 那種資料：Loader 對每一列的 `config` 跑一次 `interpolate`（vendor `loader/src/index.ts:79-87`），
+ * 物件與陣列整份重建，清單項目的身分（`optionalEntries` 用它比對）留不住。所以清單走根上的 provide，不走列的設定。
  *
  * @module
  */
@@ -46,6 +48,9 @@ import { auditTreeEntries } from './startup-audit.js';
 /** 相容層提供的服務名。 */
 export const ASSEMBLY_SERVICE = 'assembly';
 
+/** 宿主在根上 provide 給相容層的服務名，值是 {@link CompatConfig}。 */
+export const COMPAT_HOST_SERVICE = 'compatHost';
+
 /** 相容層那一列的 id。 */
 export const COMPAT_ENTRY_ID = 'nexus-compat';
 
@@ -54,7 +59,7 @@ export type Surface = 'cli' | 'serve';
 
 type CliAgent = Awaited<ReturnType<typeof createCliAgent>>;
 
-/** 相容層手上的東西：這一次啟動的清單與解析基準。不是列的設定，理由見檔頭的偏離登記。 */
+/** 相容層要的宿主值：這一次啟動的清單與解析基準。走根上的 provide，不走列的設定，理由見檔頭。 */
 export interface CompatConfig {
   /** `loadDefaultPlugins` 解出來的清單。 */
   readonly plugins: readonly PluginEntry[];
@@ -86,13 +91,21 @@ export interface NexusAssembly {
 declare module '@nexus/cordis' {
   interface Context {
     [ASSEMBLY_SERVICE]: NexusAssembly;
+    [COMPAT_HOST_SERVICE]: CompatConfig;
   }
 }
 
-/** 相容層：一顆 Cordis 插件包住整個組裝流程。掛上樹時由 {@link createCordisRoot} 綁上這一次的 {@link CompatConfig}。 */
+/**
+ * 相容層：一顆 Cordis 插件包住整個組裝流程。
+ *
+ * 在 `provide` 之前什麼資源都不開；每個 agent 組好就登記收尾、登記完才交出去，所以探針 ③ 量到的「收尾排在 provide 之後
+ * 會漏」在這裡沒有可漏的東西。
+ */
 export const compatLayer = {
   name: COMPAT_ENTRY_ID,
-  apply(ctx: Context, config: CompatConfig) {
+  inject: [COMPAT_HOST_SERVICE],
+  apply(ctx: Context) {
+    const config = ctx[COMPAT_HOST_SERVICE];
     ctx.provide(ASSEMBLY_SERVICE, {
       create: async (invocation, options = {}) => {
         const built = await createCliAgent(
@@ -153,13 +166,10 @@ export function createCordisRoot(): CordisRoot {
       current = root;
       let assembly: NexusAssembly | undefined;
       try {
+        root.provide(COMPAT_HOST_SERVICE, config);
         await root.plugin(Loader);
         Object.assign(root.loader.builtins, {
-          // 箭頭函式：沒有 `prototype`，Cordis 不會把它當 class `new`。
-          [COMPAT_ENTRY_ID]: {
-            name: COMPAT_ENTRY_ID,
-            apply: (ctx: Context) => compatLayer.apply(ctx, config),
-          },
+          [COMPAT_ENTRY_ID]: compatLayer,
           [surface]: surfacePlugin(surface, (provided) => {
             assembly = provided;
           }),
@@ -170,6 +180,7 @@ export function createCordisRoot(): CordisRoot {
         await create({ id: COMPAT_ENTRY_ID, name: `cordis:${COMPAT_ENTRY_ID}` });
         await create({ id: surface, name: `cordis:${surface}` });
         await root.loader.await();
+        // 回傳的是可少掛而沒起來的列：今天樹上兩列都必掛，沒有東西可印；有了可少掛的列再接進 `startupWarning`。
         await auditTreeEntries(root.loader);
       } catch (error) {
         await dispose().catch(() => {});
