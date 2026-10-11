@@ -428,20 +428,28 @@ describe('截斷視窗裡有鄰居（#1303）', () => {
 
 describe('手挑組裝的邊界（#1300）', () => {
   /**
-   * 空的助手訊息推導時丟掉，是跟 `live-model.ts` 的 `withEmptyAssistantContent`（`fetch` 層）對齊——出貨的 `--live` CLI 與 serve
-   * 都掛著它（SH 系列同樣量過：撞上限的那一步線上與推導都沒有那則）。**手挑組裝（`createNexusAgent` 自己給模型）沒有這層**，
-   * 線上仍送空的助手訊息，推導不送，所以這一格不同。產品路徑沒有走到這裡的；留這條是讓邊界有字可查：S2 把請求改成由日誌導出後，
-   * 兩條路徑自然一致，這條就該刪。
+   * 空的助手訊息推導時丟掉，是跟 `live-model.ts` 的 `withEmptyAssistantContent`（`fetch` 層）對齊。**手挑組裝（`createNexusAgent`
+   * 自己給模型）以前沒有這層**，線上仍送空的助手訊息、推導不送，這一格曾登記成已知差異（`other`）。[#1398](https://github.com/DemianLi/nexus-agent/issues/1398)
+   * 之後夾具的 `model()` 與 `createLiveModel` 共用 `withShippedRequestBody`，手挑組裝量到的就是出貨時線上的形狀：這一格相同。
+   *
+   * 突變（#1398 實測）：夾具 `model()` 不掛 `withEmptyAssistantContent` → 這一條紅（線上又多一則空的助手訊息）。
    */
-  it('S12 組裝點沒有 fetch 層：線上仍帶空的助手訊息，推導沒有——已知且不在任何一張卡裡', async () => {
+  it('S12 輸出撞上限（空的助手訊息）：手挑組裝與出貨同一組 fetch 改寫，推導與線上逐位元組相同', async () => {
     const script: Script = (i) =>
       i === 0
         ? { tools: [{ id: 'call_cut', name: 'echo', args: { message: '被切' } }], finish: 'length' }
         : {};
     const run = await runAssembly('被截斷\n再來\n/exit\n', script, [createEchoPlugin()]);
+    // 前提：撞上限那一步真的發生過、後面還有請求（不然「相同」什麼都沒量到）。
+    expect(run.events.some((e) => e.type === 'model/start')).toBe(true);
+    expect(run.mainBodies.length).toBeGreaterThan(1);
     const verdicts = await compareToLog(run.events, run.mainBodies);
-    expect(observedOf(verdicts), explain(verdicts)).toEqual([{ call: 1, kinds: ['other'] }]);
-    expect(verdicts[1]!.detail).toContain('"role":"assistant","content":""');
+    expect(observedOf(verdicts), explain(verdicts)).toEqual([]);
+    // 線上沒有空的助手訊息（`content` 空且沒有 `tool_calls`），也沒有 `name`。
+    for (const body of run.mainBodies) {
+      expect(JSON.stringify(body.messages)).not.toContain('"role":"assistant","content":""');
+      expect(assistantNameLeaks(body.messages)).toEqual([]);
+    }
   }, 60_000);
 });
 

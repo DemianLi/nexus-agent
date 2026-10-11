@@ -22,6 +22,7 @@ import {
   withEmptyAssistantContent,
   withInbandStreamErrors,
   withoutAssistantName,
+  withShippedRequestBody,
   withStreamIdleTimeout,
 } from './live-model.js';
 import { MEASURED_MODELS } from './eval/tiers.js';
@@ -1541,5 +1542,61 @@ describe('助手訊息不送 name（#1392）', () => {
       expect(assistants).toHaveLength(1);
       expect('name' in assistants[0]!).toBe(false);
     });
+  });
+});
+
+/**
+ * **夾具與出貨共用的那一組 body 改寫**（[#1398](https://github.com/DemianLi/nexus-agent/issues/1398)）。
+ *
+ * `createLiveModel` 與 `log-derived-history.fixture.ts` 的 `model()` 都用 `withShippedRequestBody`，所以夾具量到的是出貨時線上的
+ * 形狀。這裡釘住「這一組裡有哪兩格」：少了任何一格，下面那條就紅（兩格各自的細節在上面兩個 describe）。
+ *
+ * 突變（#1398 實測）：函式裡拿掉 `withEmptyAssistantContent` → 紅（空內容還是 `[]`）；拿掉 `withoutAssistantName` → 紅（`name` 還在）。
+ */
+describe('夾具與出貨共用的 body 改寫（#1398）', () => {
+  const call = { id: 'call-1', type: 'function', function: { name: 'echo', arguments: '{}' } };
+
+  function recording() {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const base = ((input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: input instanceof Request ? input.url : String(input), init });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as typeof fetch;
+    return { calls, base };
+  }
+
+  it('同一個請求裡：空的助手內容換成 null、助手訊息的 name 拿掉，其餘原樣', async () => {
+    const { calls, base } = recording();
+    const body = JSON.stringify({
+      model: 'm',
+      messages: [
+        { role: 'user', content: '嗨' },
+        { role: 'assistant', name: 'model', content: [], tool_calls: [call] },
+        { role: 'tool', content: '結果', name: 'echo', tool_call_id: 'call-1' },
+        { role: 'assistant', name: 'model', content: '好。' },
+      ],
+    });
+    await withShippedRequestBody(base)('http://h/v1/chat/completions', { method: 'POST', body });
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({
+      model: 'm',
+      messages: [
+        { role: 'user', content: '嗨' },
+        { role: 'assistant', content: null, tool_calls: [call] },
+        // 工具訊息的 `name` 不是這一組的事（只動 `role: assistant`）。
+        { role: 'tool', content: '結果', name: 'echo', tool_call_id: 'call-1' },
+        { role: 'assistant', content: '好。' },
+      ],
+    });
+  });
+
+  it('什麼都不用換的請求：原樣交下去，同一個 init 物件', async () => {
+    const { calls, base } = recording();
+    const init = {
+      method: 'POST',
+      body: JSON.stringify({ messages: [{ role: 'user', content: '嗨' }] }),
+    };
+    await withShippedRequestBody(base)('http://h/v1/chat/completions', init);
+    expect(calls[0]!.init).toBe(init);
   });
 });

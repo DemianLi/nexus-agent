@@ -25,7 +25,8 @@
  * - **助手訊息不送 `name`**（#1392）：LangChain 的 `AgentNode` 在非串流路徑把 `name: "model"` 掛在助手訊息上，
  *   日誌不記、推導不產生，產品的 `fetch` 層（`live-model.ts` 的 `withoutAssistantName`）送出前去掉它。夾具**不**
  *   把它正規化掉：線上任何助手訊息只要帶 `name`，這一格就是 `other` 差異（{@link assistantNameLeaks}）。
- *   夾具自己組的模型（`model()`）也掛同一個包裝，所以手挑組裝（S 系列）量到的就是出貨時線上的形狀。
+ *   夾具自己組的模型（`model()`）與 `createLiveModel` 共用同一個 `withShippedRequestBody`（#1398：換掉空的助手內容 #592、
+ *   去掉 `name` #1392），所以手挑組裝（S 系列）量到的就是出貨時線上的形狀，包括撞輸出上限那一步的空助手訊息（S12）。
  * - **系統訊息只比「區塊文字串起來」**（{@link systemText}）：日誌的 `request/system` 只記文字、不記區塊邊界，
  *   這是**契約**不是補丁——產品路徑沒有用 `cache_control` 的供應商（`agent-assembly.ts` 對 Anthropic／Bedrock
  *   遇到就拋）。**放開那條限制之前要先開卡決定怎麼記區塊**，到那時這一處才跟著改。
@@ -57,7 +58,7 @@ import { toolResultAsSeen } from './conversation-restore.js';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { projectKey } from './jsonl-session-store.js';
-import { DEFAULT_LIVE_MODEL_ID, withoutAssistantName } from './live-model.js';
+import { DEFAULT_LIVE_MODEL_ID, withShippedRequestBody } from './live-model.js';
 import { composeEntries } from './plugin-config.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -287,8 +288,9 @@ const model = (baseURL: string) =>
     apiKey: 'sk-loopback',
     maxRetries: 0,
     temperature: 0.3,
-    // 同出貨的 `fetch` 層（`createLiveModel`）：助手訊息送出前去掉 `name`（#1392）。
-    configuration: { baseURL, fetch: withoutAssistantName() },
+    // 同出貨的 `fetch` 層（`createLiveModel`）：同一個 `withShippedRequestBody`——換掉空的助手內容（#592）與
+    // 去掉助手訊息的 `name`（#1392），兩格都在，手挑組裝量到的才是出貨時線上的形狀（#1398）。
+    configuration: { baseURL, fetch: withShippedRequestBody() },
   });
 
 /** 把一串訊息經 `ChatOpenAI` 送一次（打 sink），回它的 wire `messages`。 */
