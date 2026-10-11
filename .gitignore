@@ -5,6 +5,8 @@ node_modules/
 # build output
 dist/
 build/
+# vendor 套件的宣告檔由各自的 prepare（pnpm install 時）產生，見 vendor/README.md。
+vendor/*/lib/
 .next/
 .turbo/
 *.tsbuildinfo
