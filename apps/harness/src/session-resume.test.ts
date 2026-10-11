@@ -17,7 +17,7 @@ import { appendFile, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/p
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 
 import { AIMessage } from '@langchain/core/messages';
 
@@ -83,6 +83,32 @@ async function readLog(path: string): Promise<SessionEvent[]> {
 
 let workspace: string;
 let logs: string;
+
+/**
+ * **熱身：第一次 `runCli` 的一次性成本不能算在第一條測試頭上**
+ * （[#1382](https://github.com/DemianLi/nexus-agent/issues/1382)）。
+ *
+ * 這個檔每條測試都是真的 `runCli`——整份出廠 plugin 清單（約 144 次動態 `import()`）與 agent 都從頭建。
+ * 那些 import 與初始化只在**這個檔的第一次呼叫**付一次，之後都在模組快取裡：本機實測第一次約 220ms、之後約 20ms
+ * （第一條測試含兩次 `runCli`，約 505ms，其餘每條 30–70ms）。冷成本因此全落在檔案裡的第一條，
+ * 而那一條跟別條一樣只有預設的 5 秒。
+ *
+ * CI 吃緊時（#1380 第一次跑：這一份 shard import 就花 134s）冷成本放大到超過 5 秒，第一條逾時，
+ * 其餘 34 條合計只花約 5.4 秒、一條沒掛。所以**把冷成本搬到這裡、給它一個明講的逾時**，每條測試都只量熱路徑，
+ * 不放寬全域逾時、也不替某一條單獨加時間——加時間只是把一個一次性的成本繼續算在不相干的測試上。
+ *
+ * 這一次的工作區與日誌目錄是自己的、跑完即丟，不碰任何一條測試要看的檔案。
+ */
+beforeAll(async () => {
+  const warmWorkspace = await mkdtemp(join(tmpdir(), 'nexus-resume-warm-ws-'));
+  const warmLogs = await mkdtemp(join(tmpdir(), 'nexus-resume-warm-logs-'));
+  try {
+    await cli(['--workspace', warmWorkspace, '--session-log', warmLogs]);
+  } finally {
+    await rm(warmWorkspace, { recursive: true, force: true });
+    await rm(warmLogs, { recursive: true, force: true });
+  }
+}, 60_000);
 
 beforeEach(async () => {
   workspace = await mkdtemp(join(tmpdir(), 'nexus-resume-ws-'));
