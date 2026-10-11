@@ -81,7 +81,7 @@ async function summarize(
     plugins: [],
     summarization: {
       trigger: [{ type: 'messages', value: 3 }],
-      keep: { type: 'messages', value: 1 },
+      retainTokens: 1,
       ...(historyPathPrefix !== undefined && { historyPathPrefix }),
     },
   });

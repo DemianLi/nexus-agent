@@ -43,6 +43,7 @@ import { SystemMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
+import { stringify } from 'yaml';
 import { SessionRegistry, replayConversation } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
@@ -57,6 +58,7 @@ import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { projectKey } from './jsonl-session-store.js';
 import { DEFAULT_LIVE_MODEL_ID } from './live-model.js';
+import { composeEntries } from './plugin-config.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -307,7 +309,7 @@ export const LOW_SUMMARIZATION = [
   '  config:',
   '    trigger:',
   '      - { type: tokens, value: 6000 }',
-  '    keep: { type: messages, value: 2 }',
+  '    retainTokens: 12',
   '    truncateArgs:',
   '      trigger: { type: messages, value: 4 }',
   '      keep: { type: messages, value: 2 }',
@@ -500,20 +502,34 @@ function readJsonl(file: string): SessionEvent[] {
     .map((line) => JSON.parse(line) as SessionEvent);
 }
 
-function liveModelPatch(baseUrl: string, extra: string): string {
-  return [
-    '- id: live-model',
-    '  config:',
-    `    baseUrl: '${baseUrl}'`,
-    `    modelId: '${DEFAULT_LIVE_MODEL_ID}'`,
-    '    maxRetries: 0',
-    '    models:',
-    `      - id: '${DEFAULT_LIVE_MODEL_ID}'`,
-    '        contextWindow: 700045',
-    '        maxTokens: 16384',
-    extra,
-    '',
-  ].join('\n');
+/**
+ * 出貨的 `live-model` 那一列（`apps/harness/cordis.yml`，已驗過形狀）的 `config`。
+ *
+ * patch 對既有列是**整份替換 `config`**（`applyEntryPatches` 的淺層覆寫），所以夾具只想換 `baseUrl` 與重試的時候，
+ * 不能只寫那幾格——#1372 之前夾具就是這樣寫的，SH、SV 系列跑的 `live-model` 少了出貨型錄、相容設定與逾時，
+ * 名義上量「出貨設定」實際不是。
+ */
+export function shippedLiveModelConfig(): Record<string, unknown> {
+  const row = composeEntries().find((entry) => entry.id === 'live-model');
+  if (row?.config === undefined) throw new Error('出貨清單裡找不到 live-model 那一列');
+  return structuredClone(row.config) as Record<string, unknown>;
+}
+
+/**
+ * 夾具疊在出貨清單上的 `live-model` patch：**以出貨那一列為底**，只換 `baseUrl` 指向假端點，並把兩個重試
+ * （SDK 的 `maxRetries`、#520 的 `streamRetry.maxRetries`）關成 0——重打會多出請求 body，比對要求主呼叫數等於
+ * `model/start` 數。其餘（型錄、相容設定、逾時、`modelId`）都留出貨值。
+ *
+ * @param extra - 接在 `live-model` 後面的其他 patch 列（例如 {@link LOW_SUMMARIZATION}）。
+ */
+export function liveModelPatch(baseUrl: string, extra: string): string {
+  const shipped = shippedLiveModelConfig();
+  const streamRetry = { ...(shipped['streamRetry'] as Record<string, unknown>), maxRetries: 0 };
+  const row = {
+    id: 'live-model',
+    config: { ...shipped, baseUrl, maxRetries: 0, streamRetry },
+  };
+  return `${stringify([row])}${extra}\n`;
 }
 
 /**

@@ -1494,7 +1494,6 @@ describe('摘要器打底', () => {
 
   it.each([
     ['trigger[0]', { trigger: [{ type: 'fraction', value: 0.85 }] }],
-    ['keep', { keep: { type: 'fraction', value: 0.1 } }],
     [
       'truncateArgs.trigger',
       {
@@ -2263,14 +2262,30 @@ describe('摘要的設定從條目來', () => {
 
   it('條目的壞門檻型別在載入期就失敗，而且訊息指得出是哪一格', async () => {
     // **只斷言得到這麼多，而那是量出來的。** 今天擋它的是 schema 的 `z.enum`，但把那一格
-    // 放寬成 `z.string()` 之後換成 `assertThreshold` 擋，載入一樣失敗、一樣指名 `keep`
+    // 放寬成 `z.string()` 之後換成 `assertThreshold` 擋，載入一樣失敗、一樣指名 `trigger`
     // ——兩層對這個輸入是等價的，差別只有措辭。斷言寫到「是哪一層」就是在釘 zod 的訊息
     // 格式，不是在釘我們的行為。理由見 `summarizationConfigSchema` 的檔頭。
     await expect(
       loadPlugins([
-        { plugin: summarizationPlugin, config: { keep: { type: 'fraction', value: 0.5 } } },
+        {
+          plugin: summarizationPlugin,
+          config: { trigger: [{ type: 'fraction', value: 0.5 }] },
+        },
       ]),
-    ).rejects.toThrow(/keep/);
+    ).rejects.toThrow(/trigger/);
+  });
+
+  /**
+   * 舊設定裡還寫著 `keep` 的，載入就要有看得懂的錯誤（#1374）：schema 若只是 strictObject 的「不認得的欄位」，
+   * 讀的人看不出要改成什麼；靜靜忽略則更糟——以為保留量還是自己設的那個。
+   */
+  it('條目裡還寫著舊的 keep：載入期就失敗，訊息說得出要改成 retainRatio 或 retainTokens', async () => {
+    const load = loadPlugins([
+      { plugin: summarizationPlugin, config: { keep: { type: 'messages', value: 20 } } },
+    ]);
+    await expect(load).rejects.toThrow(/summarization\.keep/);
+    await expect(load).rejects.toThrow(/retainRatio/);
+    await expect(load).rejects.toThrow(/retainTokens/);
   });
 });
 

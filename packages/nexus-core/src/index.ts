@@ -503,6 +503,8 @@ export {
   pendingNotice,
   recordedRoute,
   recordedSelection,
+  routedFromOf,
+  summaryModelOf,
 } from './model-selection.js';
 export type { ModelSelectionOptions } from './model-selection.js';
 export {
@@ -584,6 +586,11 @@ export {
   isUnderCompactionPressure,
   readSummarizationEvent,
   resolveSummarizationSettings,
+  RETAIN_FALLBACK_MESSAGES,
+  RETAIN_RATIO,
+  RETAIN_THRESHOLD_CAP_RATIO,
+  retainedTailCount,
+  retainTokensFor,
   SUMMARIZATION_MIDDLEWARE_NAME,
   SUMMARIZATION_PLUGIN_NAME,
   SUMMARIZATION_SERVICE,
@@ -594,6 +601,7 @@ export {
 export type { EstimatedRequest, TokenEstimate } from './token-estimate.js';
 export {
   estimateAnchoredTokens,
+  estimateMessageTokens,
   estimateRequestTokens,
   estimateTextTokens,
   TokenAnchorBook,

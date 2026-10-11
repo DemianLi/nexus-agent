@@ -139,7 +139,7 @@ function chatter(count = 40): ScriptedTurn[] {
 
 describe('壓縮發生時，日誌裡留得下來', () => {
   /**
-   * **卡上的驗收句。** 設定是等比縮小的：`tokens: 3_000` 配預設的 `keep: 20 則`，結構上
+   * **卡上的驗收句。** 設定是等比縮小的：`tokens: 3_000` 配預設的保留量（`retainRatio` 0.16，夾在門檻的 0.2 倍以內），結構上
    * 等同預設的 `tokens: 100_000` 配一般大小的訊息（同 `summarization.test.ts` 的鋸齒那條）。
    *
    * 這裡不斷言筆數，因為摘要跑幾次取決於腳本被吃掉幾輪——**「至少一次」才是這條測得準的
@@ -161,13 +161,13 @@ describe('壓縮發生時，日誌裡留得下來', () => {
    * messagesBefore` 在第二次摘要之後成立——圖的狀態只會長不會縮，有效串卻短得多。
    */
   it('切點落在長度之內，讀得出「換掉了多前面的多少」', async () => {
-    // **`keep` 要小**，這一格才分得出來：`keep` 留在預設的 20 則時切點只有 1 或 3，
+    // **保留量要小**，這一格才分得出來：保留量大時切點落得很前面（#1374 之前預設留 20 則，實測切點只有 1 或 3），
     // 而切點是 1 的時候有效串跟原始串**一樣長**（`[摘要, ...slice(1)]`），量錯了也看不出來。
-    // 實測過：預設 `keep` 下量成有效串的突變是全綠的。
+    // 實測過：保留量大時，量成有效串的突變是全綠的。
     const { root } = await run(chatter(120), {
       summarization: {
         trigger: [{ type: 'tokens', value: 3_000 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
       invocations: 20,
     });
@@ -314,7 +314,7 @@ describe('subagent 那側', () => {
           trigger: [{ type: 'tokens', value: 3_000 }],
           // 要小於當時的訊息數，否則 `determineCutoffIndex` 算出 `<= 0`，基座直接放行、
           // 什麼都不會發生——那會讓這條測試永遠綠得沒有意義。
-          keep: { type: 'messages', value: 2 },
+          retainTokens: 12,
         },
         plugins: [withWorker],
       },
@@ -379,7 +379,7 @@ describe('摘要事件的位置與內容（#1301）', () => {
     const { rootEvents } = await run(chatter(120), {
       summarization: {
         trigger: [{ type: 'tokens', value: 3_000 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
       invocations: 20,
     });
@@ -412,7 +412,7 @@ describe('摘要事件的位置與內容（#1301）', () => {
     const { root, saver } = await run(chatter(120), {
       summarization: {
         trigger: [{ type: 'tokens', value: 3_000 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
       invocations: 20,
     });
@@ -446,7 +446,7 @@ describe('摘要事件的位置與內容（#1301）', () => {
   it('摘要之後的模型呼叫失敗：事件仍在日誌裡，重打再摘要，兩筆都在', async () => {
     const summarization = {
       trigger: [{ type: 'tokens' as const, value: 3_000 }],
-      keep: { type: 'messages' as const, value: 2 },
+      retainTokens: 12,
     };
     // 先照全部成功的腳本跑一遍，找出第一次摘要用掉的是第幾輪（摘要提示詞是一則含對話全文的 human 訊息）。
     const probe = await run(chatter(120), { summarization, invocations: 20 });

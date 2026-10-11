@@ -23,8 +23,8 @@ import type { BaseChatModelParams } from '@langchain/core/language_models/chat_m
 import type { ChatResult } from '@langchain/core/outputs';
 import { MemorySaver } from '@langchain/langgraph';
 import { deriveSessionStats, SessionRegistry } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
-import { describe, expect, it } from 'vitest';
+import type { SessionEvent, SummarizationSettings } from '@nexus/core';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
@@ -42,19 +42,23 @@ interface ThrowingState {
 class ThrowingChatModel extends BaseChatModel {
   private readonly error: unknown;
   private readonly throwOnCall: number;
+  private readonly also: { call: number; error: unknown } | undefined;
   private readonly state: ThrowingState;
 
   constructor(
     options: BaseChatModelParams & {
       error: unknown;
       throwOnCall: number;
+      /** 另一次要拋的呼叫與它的錯誤（摘要那次呼叫壞掉用）。 */
+      also?: { call: number; error: unknown };
       state?: ThrowingState;
     },
   ) {
-    const { error, throwOnCall, state, ...rest } = options;
+    const { error, throwOnCall, also, state, ...rest } = options;
     super(rest);
     this.error = error;
     this.throwOnCall = throwOnCall;
+    this.also = also;
     this.state = state ?? { calls: 0 };
   }
 
@@ -70,6 +74,7 @@ class ThrowingChatModel extends BaseChatModel {
     return new ThrowingChatModel({
       error: this.error,
       throwOnCall: this.throwOnCall,
+      ...(this.also === undefined ? {} : { also: this.also }),
       state: this.state,
     });
   }
@@ -77,6 +82,7 @@ class ThrowingChatModel extends BaseChatModel {
   async _generate(_messages: BaseMessage[]): Promise<ChatResult> {
     this.state.calls += 1;
     if (this.state.calls === this.throwOnCall) throw this.error;
+    if (this.also !== undefined && this.state.calls === this.also.call) throw this.also.error;
     const message = new AIMessage(`第 ${this.state.calls} 次回話。`);
     return { generations: [{ text: message.text, message }], llmOutput: {} };
   }
@@ -86,7 +92,7 @@ class ThrowingChatModel extends BaseChatModel {
  * 跑到第 `throwOnCall` 次呼叫，看那次拋出去之後整場活不活得下來。
  *
  * `trigger` 刻意設到高不可攀：這一格要走的是**壓力沒到、直接撞窗口**那條分支
- * （`:3220-3231`），不是正常的壓力壓縮。`keep` 要小，否則 `performSummarization` 算出
+ * （`:3220-3231`），不是正常的壓力壓縮。`retainTokens` 要小，否則 `performSummarization` 算出
  * `cutoffIndex <= 0`，基座直接把同一個請求再送一次、當場再拋一次——那會讓恢復看起來
  * 失敗，而原因其實是設定。
  */
@@ -97,6 +103,11 @@ async function runUntilThrow(
   trigger: { type: 'tokens' | 'messages'; value: number }[] = [
     { type: 'tokens', value: 1_000_000 },
   ],
+  also?: { call: number; error: unknown },
+  /** 保留量設定；預設一個很小的 `retainTokens`，讓切點算得出正的。 */
+  retain: Pick<SummarizationSettings, 'retainRatio' | 'retainTokens'> | Record<string, never> = {
+    retainTokens: 12,
+  },
 ): Promise<{
   rejected: unknown;
   calls: number;
@@ -104,16 +115,17 @@ async function runUntilThrow(
   events: readonly SessionEvent[];
 }> {
   const root = await mkdtemp(join(tmpdir(), 'nexus-overflow-'));
-  const model = new ThrowingChatModel({ error, throwOnCall });
+  const model = new ThrowingChatModel({
+    error,
+    throwOnCall,
+    ...(also === undefined ? {} : { also }),
+  });
   const { agent, attachSession, dispose } = await createNexusAgent({
     model,
     backend: new ContainedFilesystemBackend({ rootDir: root }),
     checkpointer: new MemorySaver(),
     plugins: [],
-    summarization: {
-      trigger,
-      keep: { type: 'messages', value: 2 },
-    },
+    summarization: { trigger, ...retain },
   });
   const sessions = new SessionRegistry('overflow');
   const detach = attachSession(sessions);
@@ -143,7 +155,7 @@ async function runUntilThrow(
 describe('供應商回上下文溢出', () => {
   /**
    * **go／no-go。** 第 4 次呼叫拋 `ContextOverflowError`：前三次各自留下一問一答，
-   * 所以第 4 次進來時訊息串夠長，`keep: 2 則` 算得出正的切點。
+   * 所以第 4 次進來時訊息串夠長，`retainTokens: 12`（尾巴只留一兩則）算得出正的切點。
    *
    * 這條綠 ＝ 錯誤真的沿著 `cause` 鏈到得了 `isContextOverflow`，基座的緊急摘要接住了它。
    */
@@ -230,5 +242,94 @@ describe('供應商回上下文溢出', () => {
 
     expect(rejected).toBeNull();
     expect(historyFiles.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * **門檻到了但尾巴蓋住全部：整棵樹什麼都不多做**（#1374；單元級的在 `summary-failure.test.ts`）。
+ * 沒有型錄時保留量退到 20 則，4 句話才 8 則——訊息數門檻 3 到了，沒有東西可摘。
+ * 每一步都會遇到這種情況，所以不多叫一次摘要模型、不記 `compaction/summary`。
+ */
+describe('尾巴蓋住全部', () => {
+  it('訊息數門檻到了、沒有可摘的東西：模型只被叫 4 次，日誌上沒有壓縮事件', async () => {
+    const { rejected, calls, events, historyFiles } = await runUntilThrow(
+      null,
+      0,
+      4,
+      [{ type: 'messages', value: 3 }],
+      undefined,
+      {},
+    );
+    expect(rejected).toBeNull();
+    expect(calls).toBe(4);
+    expect(historyFiles).toEqual([]);
+    expect(events.filter((event) => event.type === 'compaction/summary')).toEqual([]);
+  });
+});
+
+/**
+ * **生摘要那次呼叫壞掉時，整場怎麼走**（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)，單元級的釘在
+ * `packages/nexus-core/src/summary-failure.test.ts`；這裡走整棵樹，確認走到的是同一個處理）。
+ *
+ * 照 dsh `compaction-basic`：我們自己的門檻觸發 ＝ pressure（warn、照原請求送出）；端點真的回超窗 ＝ overflow
+ * （warn、保留原本的請求錯誤）。
+ */
+describe('摘要那次呼叫失敗', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** 沿 `cause` 鏈找：每顆 middleware 包一層 `MiddlewareError`，原錯誤埋得很深，不設深度上限。 */
+  const chainHas = (error: unknown, predicate: (candidate: unknown) => boolean): boolean => {
+    const seen = new Set<unknown>();
+    for (let current: unknown = error; typeof current === 'object' && current !== null;) {
+      if (seen.has(current)) return false;
+      if (predicate(current)) return true;
+      seen.add(current);
+      current = (current as { cause?: unknown }).cause;
+    }
+    return false;
+  };
+
+  it('端點真的回超窗、摘要又壞了：整場拋的是原本那個超窗，不是摘要的錯；warn 一條，不再重送', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { rejected, calls } = await runUntilThrow(
+      new ContextOverflowError('Input exceeded the model context window.'),
+      4,
+      4,
+      undefined,
+      { call: 5, error: new Error('摘要模型當場炸了') },
+    );
+
+    expect(rejected).not.toBeNull();
+    expect(chainHas(rejected, (candidate) => candidate instanceof ContextOverflowError)).toBe(true);
+    // 摘要的錯被記在 warn 上，沒有換掉要還給使用者的那個錯。
+    expect(String(rejected)).not.toContain('摘要模型當場炸了');
+    // 三次正常、溢出一次、摘要一次——恢復不再重送原請求，因為端點已經說裝不下了。
+    expect(calls).toBe(5);
+    const lines = warn.mock.calls.map((call) => String(call[0]));
+    expect(lines.filter((line) => line.includes('保留原本的請求錯誤'))).toHaveLength(1);
+    expect(lines.join('\n')).toContain('摘要模型當場炸了');
+  });
+
+  it('我們自己的預算門檻觸發、摘要壞了：warn 一條，照原請求往下走，整場不倒', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    // 門檻壓到 1：第 2 次起每次都要摘要。第 2 次的摘要（整體第 2 次呼叫）壞掉，第 3、4 次的摘要正常。
+    const { rejected, calls, events } = await runUntilThrow(
+      null,
+      0,
+      4,
+      [{ type: 'tokens', value: 1 }],
+      { call: 2, error: new Error('摘要模型當場炸了') },
+    );
+
+    expect(rejected).toBeNull();
+    const lines = warn.mock.calls.map((call) => String(call[0]));
+    expect(lines.filter((line) => line.includes('照原請求送出'))).toHaveLength(1);
+    expect(lines.join('\n')).toContain('摘要模型當場炸了');
+    // 第 2 次摘要壞了沒有留下 compaction/summary；第 3、4 次各一筆。
+    expect(events.filter((event) => event.type === 'compaction/summary')).toHaveLength(2);
+    // 4 次模型節點 ＋ 3 次摘要呼叫（含壞掉的那次）。
+    expect(calls).toBe(7);
   });
 });

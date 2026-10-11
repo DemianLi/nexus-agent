@@ -289,7 +289,7 @@ export interface CreateNexusAgentOptions {
    * 關係**。唯一的縫是同名取代，fold 走的就是那條。
    *
    * `fraction` 型別的門檻在型別層與執行期都被擋掉——它需要 `profile.maxInputTokens`，
-   * 缺值時 `trigger` 一輩子不觸發、`keep` 一則逐字訊息都不留，兩個方向都不警告。
+   * 缺值時 `trigger` 一輩子不觸發、基座的 `keep` 一則逐字訊息都不留，兩個方向都不警告。
    * 實測與決議見 [#142](https://github.com/DemianLi/nexus-agent/issues/142)，形狀與
    * 數值的理由見 [`summarization.ts`](../../../packages/nexus-core/src/summarization.ts)。
    */

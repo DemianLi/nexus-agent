@@ -22,6 +22,10 @@
  * 不要把它當成推導的證據。
  */
 
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { createEchoPlugin } from '@nexus/plugin-echo';
@@ -30,6 +34,7 @@ import type { SessionEvent } from '@nexus/core';
 import {
   classify,
   compareToLog,
+  liveModelPatch,
   LOW_SUMMARIZATION,
   mainOnly,
   PRUNE_MARKER,
@@ -40,6 +45,7 @@ import {
   systemText,
   TRUNCATE_MARKER,
 } from './log-derived-history.fixture.js';
+import { composeEntries } from './plugin-config.js';
 import type {
   Body,
   DifferenceKind,
@@ -236,7 +242,7 @@ describe('已知差異：每一類對應一張卡', () => {
       [createEchoPlugin()],
       {
         trigger: [{ type: 'messages', value: 8 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
     );
     expect(run.events.filter((e) => e.type === 'compaction/summary').length).toBeGreaterThan(0);
@@ -254,7 +260,7 @@ describe('已知差異：每一類對應一張卡', () => {
       [createEchoPlugin()],
       {
         trigger: [{ type: 'tokens', value: 12_000 }],
-        keep: { type: 'messages', value: 2 },
+        retainTokens: 12,
       },
     );
     expect(run.mainBodies.some((b) => JSON.stringify(b.messages).includes(PRUNE_MARKER))).toBe(
@@ -274,7 +280,7 @@ describe('已知差異：每一類對應一張卡', () => {
     const script: Script = (i) => (i === 0 ? writeCall('call_w') : {});
     const run = await runAssembly('寫檔\n二\n三\n四\n/exit\n', script, [], {
       trigger: [{ type: 'messages', value: 1000 }],
-      keep: { type: 'messages', value: 2 },
+      retainTokens: 12,
       truncateArgs: {
         trigger: { type: 'messages', value: 4 },
         keep: { type: 'messages', value: 2 },
@@ -354,7 +360,7 @@ describe('截斷視窗裡有鄰居（#1303）', () => {
     '  config:',
     '    trigger:',
     '      - { type: tokens, value: 50000 }',
-    '    keep: { type: messages, value: 2 }',
+    '    retainTokens: 12',
     '    truncateArgs:',
     '      trigger: { type: messages, value: 10 }',
     '      keep: { type: messages, value: 2 }',
@@ -539,4 +545,43 @@ const bigThenSmall = (): Reply => ({
     { id: 'call_mid', name: 'echo', args: { message: big('中', 10_000) } },
     { id: 'call_w', name: 'write_file', args: { file_path: '/a.txt', content: big('abc', 2_000) } },
   ],
+});
+
+describe('夾具的 live-model 是出貨那一列（#1372）', () => {
+  /**
+   * patch 對既有列是整份替換 `config`。#1372 之前夾具只寫 `baseUrl`、`modelId`、`maxRetries` 與一顆模型，SH、SV
+   * 系列的 `live-model` 少了出貨型錄、相容設定與逾時，卻名義上量「出貨設定」。這條直接用產品的疊層函式
+   * （`composeEntries`）把夾具的 patch 疊到出貨清單上，比疊完的整份 `config`。
+   *
+   * 突變（#1372 實測）：把 `liveModelPatch` 改回只寫那幾格 → 這條紅（缺 `timeoutMs`、`models` 只剩一顆等）。
+   */
+  it('疊完之後，除了 baseUrl 與兩個重試，整份 config 等於出貨那一列', () => {
+    const configOf = (overlay?: string): Record<string, unknown> => {
+      const row = composeEntries(overlay === undefined ? {} : { overlays: [overlay] }).find(
+        (entry) => entry.id === 'live-model',
+      );
+      if (row?.config === undefined) throw new Error('清單上沒有 live-model 那一列');
+      return row.config as Record<string, unknown>;
+    };
+
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-lh-patch-'));
+    try {
+      const file = join(dir, 'patch.yml');
+      writeFileSync(file, liveModelPatch('http://127.0.0.1:1/v1', ''));
+
+      const shipped = configOf();
+      // 前提：出貨那一列真的有「整份替換會弄丟」的東西，這條才不是空斷言。
+      expect(shipped['timeoutMs']).toBeDefined();
+      expect((shipped['models'] as unknown[]).length).toBeGreaterThan(1);
+
+      expect(configOf(file)).toEqual({
+        ...shipped,
+        baseUrl: 'http://127.0.0.1:1/v1',
+        maxRetries: 0,
+        streamRetry: { ...(shipped['streamRetry'] as object), maxRetries: 0 },
+      });
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

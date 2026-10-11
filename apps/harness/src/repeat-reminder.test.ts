@@ -216,7 +216,7 @@ describe('摘要與提醒一起跑', () => {
       // 「摘要發生過之後鏈還在不在」，不是預設門檻的數值。
       summarization: {
         trigger: [{ type: 'messages', value: 10 }],
-        keep: { type: 'messages', value: 4 },
+        retainTokens: 36,
       },
     });
     try {

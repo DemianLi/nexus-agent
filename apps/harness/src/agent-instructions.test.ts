@@ -99,7 +99,7 @@ interface RunOptions {
    * 門檻壓低是為了在上限內摘要得到；**plugin 清單照舊是出貨的那一份**。
    */
   readonly looping?: {
-    readonly summarization: { readonly messages: number; readonly keep: number };
+    readonly summarization: { readonly messages: number; readonly retainTokens: number };
     readonly recursionLimit: number;
   };
   /** 送幾句話。預設一句。 */
@@ -136,7 +136,7 @@ async function run(options: RunOptions) {
       recursionLimit: looping.recursionLimit,
       summarization: {
         trigger: [{ type: 'messages', value: looping.summarization.messages }],
-        keep: { type: 'messages', value: looping.summarization.keep },
+        retainTokens: looping.summarization.retainTokens,
       },
     }),
   });
@@ -421,7 +421,7 @@ describe('摘要之後下一句話把基線補回來', () => {
   beforeAll(async () => {
     found = await run({
       files: { 'AGENTS.md': '規矩。' },
-      looping: { summarization: { messages: 8, keep: 3 }, recursionLimit: 40 },
+      looping: { summarization: { messages: 8, retainTokens: 24 }, recursionLimit: 40 },
       submits,
     });
     state = await found.state();
@@ -549,7 +549,7 @@ it('shipped 摘要過之後，invoke 的回傳值除了 skills 自己那一格�
     backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
     summarization: {
       trigger: [{ type: 'messages', value: 3 }],
-      keep: { type: 'messages', value: 1 },
+      retainTokens: 1,
     },
   });
   try {
