@@ -779,8 +779,9 @@ function quietInvoke<T extends object>(model: T, cell: SummaryUsageCell | undefi
  *
  * ## 為什麼是包住它，而不是一顆新 middleware
  *
- * 一顆新名字的 middleware 一定排在 `SummarizationMiddleware` 後面（更內層，見 {@link SUMMARIZATION_MIDDLEWARE_NAME}），
- * 看不到基座交下去之前的那一刻。
+ * 一顆新名字的 middleware 排在 `SummarizationMiddleware` 後面（更內層，見 {@link SUMMARIZATION_MIDDLEWARE_NAME}），
+ * 看不到基座交下去之前的那一刻。（例外是換模型、子代理跟隨與圖片省略：`mergeMiddlewareStack` 在合併時把它們搬到預設疊
+ * 前面，所以它們在摘要器**外面**——#1369。）
  *
  * ## subagent 那側**寫得進去**，而這是 #143 卡上決定 3 的反面
  *

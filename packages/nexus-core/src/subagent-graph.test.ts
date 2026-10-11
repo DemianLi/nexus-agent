@@ -149,6 +149,33 @@ describe('跟隨會話選擇的 middleware（#328 第 3 項）', () => {
     expect(built.calls).toEqual([]);
   });
 
+  it('跟隨那顆排在摘要器外面：摘要器看到的 request.model 是跟隨之後那顆（#1369）', async () => {
+    const order: string[] = [];
+    const follow = createMiddleware({
+      name: SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+      wrapModelCall: (request, handler) => {
+        order.push('follow');
+        return handler(request);
+      },
+    });
+    // 同名取代內建摘要器：記下它被走到的先後。
+    const summary = createMiddleware({
+      name: 'SummarizationMiddleware',
+      wrapModelCall: (request, handler) => {
+        order.push('summary');
+        return handler(request);
+      },
+    });
+    const graph = compileSubagentGraph(paramsWith({ middleware: [summary, follow] }), 'worker', {
+      ...options(),
+    });
+    await graph.invoke(
+      { messages: [{ role: 'user', content: '嗨' }] },
+      { configurable: { thread_id: 't' } },
+    );
+    expect(order).toEqual(['follow', 'summary']);
+  });
+
   it('follow: true 蓋過「指定了模型就不跟」', async () => {
     const built = compile({
       model: new FakeListChatModel({ responses: ['挑的'] }),
