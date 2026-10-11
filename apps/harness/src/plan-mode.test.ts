@@ -582,8 +582,10 @@ describe('模式狀態活得過什麼', () => {
 
     let last;
     try {
+      // 使用者句墊長：框好的摘要要比被取代那段小才會提交（#1396）。回話不墊——腳本的回話也會被摘要呼叫領走，
+      // 墊長了摘要就比被取代的大。
       for (const line of ['第一句。', '第二句。', '第三句。', '第四句。']) {
-        last = await agent.invoke(toAgentInvocation(line), config);
+        last = await agent.invoke(toAgentInvocation(`${line}${'內容'.repeat(200)}`), config);
       }
     } finally {
       detach();

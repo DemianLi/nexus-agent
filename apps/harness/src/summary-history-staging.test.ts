@@ -86,10 +86,23 @@ class BehaviorModel extends BaseChatModel {
         options.signal?.addEventListener('abort', () => reject(new Error('aborted')));
       });
     }
-    const message = new AIMessage(`第 ${n} 次回話。`);
+    const isSummary = messages[0]?.getType() !== 'system';
+    const message = new AIMessage(isSummary ? '摘要。' : `第 ${String(n)} 次回話。${REPLY_PAD}`);
     return { generations: [{ text: message.text, message }], llmOutput: {} };
   }
 }
+
+/**
+ * 墊料（#1396）：框好的摘要要比被取代那段小才會提交。使用者句墊得比回話長，因為第一次摘要取代的就是它一則；
+ * 摘要呼叫（沒有系統訊息的那種）反過來回短字串，不然摘要本身就比被取代的大。
+ */
+const USER_PAD = '內容'.repeat(200);
+const REPLY_PAD = '內容'.repeat(120);
+/** 保留量：使用者句約 210 token、回話約 130 token，這個值在這份對話上留下尾巴的最後兩則（N = 2）。 */
+const RETAIN_TOKENS = 250;
+/** 日誌與歷史檔裡長出來的那兩種行。 */
+const human = (n: number) => `Human: 第 ${String(n)} 句。${USER_PAD}`;
+const reply = (n: number) => `AI: model, 第 ${String(n)} 次回話。${REPLY_PAD}`;
 
 const SECTION = /## Summarized at [^\n]+\n\n/;
 /**
@@ -127,7 +140,7 @@ async function converse(options: {
     backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
     checkpointer: new MemorySaver(),
     plugins: [],
-    summarization: { trigger: [{ type: 'messages', value: 3 }], retainTokens: 12 },
+    summarization: { trigger: [{ type: 'messages', value: 3 }], retainTokens: RETAIN_TOKENS },
   });
   const pump = new ThreadPump(
     built.agent as unknown as PumpAgent,
@@ -148,7 +161,7 @@ async function converse(options: {
     for (let turn = 1; turn <= (options.turns ?? 3); turn += 1) {
       const before = pump.sessionLog.events.length;
       await pump
-        .submit({ kind: 'message', text: `第 ${turn} 句。`, id: `m${turn}` })
+        .submit({ kind: 'message', text: `第 ${turn} 句。${USER_PAD}`, id: `m${turn}` })
         .catch(() => undefined);
       await pump.whenIdle().catch(() => undefined);
       const state = await (
@@ -219,7 +232,7 @@ describe('同一步內重摘：最後一次勝出（S1、S6）', () => {
     expect(run.snapshots[1]!.logCutoffs).toEqual([1, 2]);
     expect(run.snapshots[1]!.end).toBe('turn/end');
 
-    expect(run.snapshots[1]!.sections).toEqual(['Human: 第 1 句。 | AI: model, 第 1 次回話。']);
+    expect(run.snapshots[1]!.sections).toEqual([`${human(1)} | ${reply(1)}`]);
     expect(run.snapshots[1]!.files).toBe(1);
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ', 'EQ']);
   });
@@ -229,9 +242,7 @@ describe('同一步內重摘：最後一次勝出（S1、S6）', () => {
     const run = await converse({ behavior: (n) => (n === 3 || n === 5 ? 'overflow' : 'ok') });
 
     expect(run.snapshots[1]!.logCutoffs).toEqual([1, 2, 3]);
-    expect(run.snapshots[1]!.sections).toEqual([
-      'Human: 第 1 句。 | AI: model, 第 1 次回話。 | Human: 第 2 句。',
-    ]);
+    expect(run.snapshots[1]!.sections).toEqual([`${human(1)} | ${reply(1)} | ${human(2)}`]);
     expect(run.snapshots[1]!.files).toBe(1);
     expect(derivedVersusActual(run).every((each) => each === 'EQ')).toBe(true);
   });
@@ -264,9 +275,9 @@ describe('摘要之後主請求失敗或被停：檔留著，下一輪接著它�
     const run = await converse({ behavior: (n) => (n === 3 ? 'error' : 'ok') });
 
     expect(run.snapshots[1]!.end).toBe('turn/failed');
-    expect(run.snapshots[1]!.sections).toEqual(['Human: 第 1 句。']);
+    expect(run.snapshots[1]!.sections).toEqual([human(1)]);
 
-    expect(run.snapshots[2]!.sections).toEqual(['Human: 第 1 句。', 'AI: model, 第 1 次回話。']);
+    expect(run.snapshots[2]!.sections).toEqual([human(1), reply(1)]);
     const lines = linesOf(run.snapshots[2]!.sections);
     expect(new Set(lines).size).toBe(lines.length);
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
@@ -279,8 +290,8 @@ describe('摘要之後主請求失敗或被停：檔留著，下一輪接著它�
     });
 
     expect(run.snapshots[1]!.logCutoffs).toEqual([1]);
-    expect(run.snapshots[1]!.sections).toEqual(['Human: 第 1 句。']);
-    expect(run.snapshots[2]!.sections).toEqual(['Human: 第 1 句。', 'AI: model, 第 1 次回話。']);
+    expect(run.snapshots[1]!.sections).toEqual([human(1)]);
+    expect(run.snapshots[2]!.sections).toEqual([human(1), reply(1)]);
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
   });
 
@@ -311,10 +322,7 @@ describe('沒有失敗：行為不變（S0）', () => {
     const run = await converse({ behavior: () => 'ok' });
 
     expect(run.snapshots.map((s) => s.sections.length)).toEqual([0, 1, 2]);
-    expect(run.snapshots[2]!.sections).toEqual([
-      'Human: 第 1 句。',
-      'AI: model, 第 1 次回話。 | Human: 第 2 句。',
-    ]);
+    expect(run.snapshots[2]!.sections).toEqual([human(1), `${reply(1)} | ${human(2)}`]);
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
   });
 });

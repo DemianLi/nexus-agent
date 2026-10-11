@@ -116,6 +116,12 @@ async function expectDerivedHistory(
 }
 
 const big = (char: string, n: number) => char.repeat(n);
+/**
+ * 一句話後面的墊料。剪刀剪過之後，被取代的那段在有效視角裡可能只剩幾句短話；框好的摘要要比它小才會提交
+ * （#1396），所以要壓縮的那幾格把每句墊到比摘要框架大。框架約 60–70 token（歷史檔路徑裡的隨機 session id
+ * 讓它每次差幾個），墊料要留足餘裕，不然這幾格會隨機被擋、而且被擋了只留一行 warn、測試照綠。
+ */
+const PAD = '內容'.repeat(100);
 const echoCall = (id: string, message: string): Reply => ({
   tools: [{ id, name: 'echo', args: { message } }],
 });
@@ -279,7 +285,7 @@ describe('已知差異：每一類對應一張卡', () => {
       return i === 0 ? echoCall('call_mid', big('中', 20_000)) : {};
     };
     const run = await runAssembly(
-      '大一點的結果\n再說一輪\n再一輪\n/exit\n',
+      `大一點的結果${PAD}\n再說一輪${PAD}\n再一輪${PAD}\n/exit\n`,
       script,
       [createEchoPlugin()],
       {
@@ -350,7 +356,7 @@ describe('已知差異：每一類對應一張卡', () => {
 
   it('SV6 serve：大結果與長參數，剪刀與截斷同時在場', async () => {
     const run = await runServePhases(
-      [['大結果', '二', '三', '四']],
+      [['大結果', '二', '三', '四'].map((t) => `${t}${PAD}`)],
       mainOnly((k) =>
         k === 0
           ? {
@@ -442,7 +448,7 @@ describe('手挑組裝的邊界（#1300）', () => {
 describe('重啟後續接', () => {
   it('SR2 壓縮與剪刀、截斷發生之後重啟，下一次請求跟沒重啟的逐位元組相同', async () => {
     const script = () => mainOnly((k) => (k === 0 ? bigThenSmall() : {}));
-    const texts = ['大結果', '二', '三', '四', '五', '重啟點之後的一句'];
+    const texts = ['大結果', '二', '三', '四', '五', '重啟點之後的一句'].map((t) => `${t}${PAD}`);
     const control = await runServePhases([texts], script(), LOW_SUMMARIZATION);
     const restart = await runServePhases(
       [texts.slice(0, 5), texts.slice(5)],
@@ -470,7 +476,7 @@ describe('重啟後續接', () => {
    */
   it('SR4 剪法記下之後重啟：沿用不重記，重啟後的請求也推得出來', async () => {
     const script = () => mainOnly((k) => (k === 0 ? bigThenSmall() : {}));
-    const texts = ['大結果', '二', '三', '重啟點之後的一句', '再一句'];
+    const texts = ['大結果', '二', '三', '重啟點之後的一句', '再一句'].map((t) => `${t}${PAD}`);
     const restart = await runServePhases(
       [texts.slice(0, 3), texts.slice(3)],
       script(),
@@ -540,7 +546,7 @@ describe('重啟後續接', () => {
         }
         return k === 2 ? bigThenSmall() : {};
       });
-    const texts = ['被截斷', '再來', '大結果', '三', '四', '五'];
+    const texts = ['被截斷', '再來', '大結果', '三', '四', '五'].map((t) => `${t}${PAD}`);
     const control = await runServePhases([texts], script(), LOW_SUMMARIZATION);
     const restart = await runServePhases(
       [texts.slice(0, 2), texts.slice(2)],
