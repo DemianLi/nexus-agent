@@ -15,3 +15,6 @@ pnpm-lock.yaml
 .github/rulesets/*.json
 
 references/
+
+# vendor 的上游原始碼保持上游的格式，同步時才 diff 得出本地修改（見 vendor/README.md）。
+vendor/
