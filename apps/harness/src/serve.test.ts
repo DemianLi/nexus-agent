@@ -199,7 +199,15 @@ describe('serve 的命令面', () => {
     // 這一條同時是 `/goal` 那個「一份 registry 只接一份日誌」假設的實地驗收：
     // `serve.ts` 每個 thread 呼叫一次 `createCliAgent`，所以各自一份 registry 一份日誌。
     // 假設破掉的話這裡不會靜靜串台，會直接收到 `goalAmbiguousMessage` 那句錯誤。
-    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
+    //
+    // **續行關掉**：開著的話 `/goal 把測試修綠` 之後 alpha 自己會開一輪（#661），第三次問 alpha 撞上就回「正在跑」。
+    // 以前綠，是賭第二、三次請求搶在那一輪的耐久檢查點（`flush()`）寫完之前；develop 上在第三次之前多等 80ms 就 3/3 紅，
+    // #1405 的 CI 兩次都輸掉這場賭。這一條驗的是目標各自一份，續行有下面兩條專門的測試。
+    running = await runServe({
+      argv: ['--port', '0', '--no-goal-driver'],
+      log: () => undefined,
+      env: {},
+    });
     const started = running as RunningServe;
     const client = await serveClient(started);
     await client.openEvents('alpha');
