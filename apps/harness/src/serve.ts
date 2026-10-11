@@ -39,7 +39,6 @@ import type {
 import { AssemblyDropError } from './agent-factory.js';
 import {
   assertPersistenceFlags,
-  createCliAgent,
   parseSandboxMode,
   formatGoalDriverDisclosure,
   goalDriverPort,
@@ -48,6 +47,8 @@ import {
   resolveWorkspaceRoot,
   SESSION_LOG_OFF_DISCLOSURE,
 } from './assembly-root.js';
+import { createCordisRoot } from './cordis-root.js';
+import type { CordisRoot, NexusAssembly } from './cordis-root.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { createColdChildStore } from './background-cold.js';
@@ -406,10 +407,14 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
       log(message);
     },
   );
+  // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`：`startServer` 載完清單才建它，起不來與關掉時都
+  // 在這裡卸載，排在 server 自己的收尾之後、還原代理之前。
+  const root = createCordisRoot();
   let running: RunningServe;
   try {
-    running = await startServer(options, invocation, liveLaunch, log);
+    running = await startServer(options, invocation, liveLaunch, log, root);
   } catch (error) {
+    await root.dispose().catch(() => {});
     await disposeProxy();
     throw error;
   }
@@ -417,7 +422,11 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     ...running,
     close: async () => {
       try {
-        await running.close();
+        try {
+          await running.close();
+        } finally {
+          await root.dispose();
+        }
       } finally {
         await disposeProxy();
       }
@@ -431,6 +440,7 @@ async function startServer(
   invocation: ServeInvocation,
   liveLaunch: LiveLaunch | undefined,
   serverLog: (line: string) => void,
+  root: CordisRoot,
 ): Promise<RunningServe> {
   // `goalDriver` 那個閉包的參數也叫 `log`（它是讀日誌的 getter），所以伺服器日誌在這裡
   // 另取一個名字——同一個函式，只是不讓兩個 `log` 在同一段裡打架。
@@ -516,8 +526,9 @@ async function startServer(
   // 同一套：可少掛的列掉了印警告、照樣起來，其餘原樣拋（見下面「判第二次」那段）。
   //
   // **偏離登記**：dsh 的 `boot()` 把 plugin 樹掛一次、一直用下去，驗證是掛載順帶發生的
-  // （dsh `packages/boot/app-boot/README.zh.md:92`，`477b4f4`）。我們沒有那棵樹：agent 一條 thread 一份（見檔頭），
-  // 這個形狀在這之前就在，不是基座表達不出來。退到這裡：形狀不動，啟動時多組一次、驗完就收，錯誤出現的時刻跟 dsh
+  // （dsh `packages/boot/app-boot/README.zh.md:92`，`477b4f4`）。我們的 Cordis 樹（#1401）上只有相容層與入口兩列，清單上的
+  // 列不在樹上：agent 一條 thread 一份（見檔頭），這個形狀在這之前就在，不是基座表達不出來。退到這裡：形狀不動，
+  // 啟動時多組一次、驗完就收，錯誤出現的時刻跟 dsh
   // 一樣在啟動時，代價是每一列的 `apply` 多跑一遍。
   //
   // **位置是承重的**：在讀或建瀏覽器會話密鑰與綁 port 之前，起不來的那一次什麼都還沒留下。收掉失敗也拋，同 CLI
@@ -542,20 +553,23 @@ async function startServer(
   );
   const invariantTap =
     invariantLogPath === undefined ? undefined : createInvariantLog(invariantLogPath);
-  const trial = await createCliAgent(
-    {
+  // **組 agent 經 Cordis 樹上的相容層**（#1401）：根在試組之前才建，前面每一個錯誤的時刻與字都不變；每條 thread 用同一份服務。
+  const assembly = await root.boot('serve', {
+    plugins,
+    ...(options.cwd !== undefined && { cwd: options.cwd }),
+  });
+  const trial = await assembly
+    .create({
       ...invocation,
       liveModel,
       ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
       threadTitle,
       threadTitleLlm,
       optionalEntries,
-    },
-    plugins,
-    options.cwd,
-  ).catch((error: unknown) => {
-    throw error instanceof AssemblyDropError ? startupErrorFrom(loaded, error, audit) : error;
-  });
+    })
+    .catch((error: unknown) => {
+      throw error instanceof AssemblyDropError ? startupErrorFrom(loaded, error, audit) : error;
+    });
   await trial.dispose();
   for (const line of startupWarning(
     loaded,
@@ -717,7 +731,7 @@ async function startServer(
       // 入口收不了核准決定，而 web 這端真的按得下去（[#79](https://github.com/DemianLi/nexus-agent/pull/79)
       // 的核准迴圈，`serve.test.ts` 的「核准那份清單」整條走過一遍）。關掉它會把一個
       // 做得出來的功能關掉（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
-      let built: Awaited<ReturnType<typeof createCliAgent>>;
+      let built: Awaited<ReturnType<NexusAssembly['create']>>;
       try {
         if (resumed !== undefined) assertSameCwd('serve', threadId, resumed.header, cwd);
         // **再認它跑在哪個工作區底下**（#504）。順序與理由逐字同 CLI 的 `--resume`：目錄先認，
@@ -756,7 +770,7 @@ async function startServer(
           resumedEvents: resumed?.events,
           setting: modelSelection,
         });
-        built = await createCliAgent(
+        built = await assembly.create(
           {
             ...effective,
             // 插話（#710）：只有 serve 有，見 `createCliAgent` 那一格。
@@ -790,10 +804,11 @@ async function startServer(
               }),
             }),
           },
-          threadPlugins,
-          options.cwd,
-          // 帳是這台 server 的，不是這條 thread 的：第二條 thread 的第一次借第一條的（#702）。
-          { tokenAnchorBook, ...(invariantTap !== undefined && { invariantTap }) },
+          {
+            plugins: threadPlugins,
+            // 帳是這台 server 的，不是這條 thread 的：第二條 thread 的第一次借第一條的（#702）。
+            session: { tokenAnchorBook, ...(invariantTap !== undefined && { invariantTap }) },
+          },
         );
       } catch (error) {
         await release().catch(() => {});

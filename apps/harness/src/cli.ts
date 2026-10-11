@@ -94,9 +94,10 @@ import {
   THREAD_ID,
   formatGoalDriverDisclosure,
   type NexusAgent,
-  createCliAgent,
   goalDriverPort,
 } from './assembly-root.js';
+import { createCordisRoot } from './cordis-root.js';
+import type { CordisRoot, NexusAssembly } from './cordis-root.js';
 
 export const USAGE = `用法：cli [選項] [要說的話...]
 
@@ -892,8 +893,17 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     liveLaunch?.launchEnv ?? processLaunchEnv(),
     (message) => printer.error(message),
   );
+  // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`：`runLaunched` 載完清單才建它，但起不來、跑壞了、
+  // 跑完了都在這裡卸載。跑壞了的那一條先保住原本的錯誤，同下面 `runLaunched` 收尾的規則。
+  const root = createCordisRoot();
   try {
-    await runLaunched(options, invocation, printer, liveLaunch);
+    try {
+      await runLaunched(options, invocation, printer, liveLaunch, root);
+    } catch (error) {
+      await root.dispose().catch(() => {});
+      throw error;
+    }
+    await root.dispose();
   } finally {
     await disposeProxy();
   }
@@ -905,6 +915,7 @@ async function runLaunched(
   invocation: CliInvocation,
   printer: Printer,
   liveLaunch: LiveLaunch | undefined,
+  root: CordisRoot,
 ): Promise<void> {
   // REPL 的輸入行與非同步輸出的協調點（見 {@link ReplLine}）：外掛執行期的警告與 REPL 都在這一次呼叫裡。
   const replLine: ReplLine = {};
@@ -999,7 +1010,7 @@ async function runLaunched(
   // **續接那個把手在讀之前就拿了寫租約**，要到日誌掛上之後才有人收（`persistence.dispose`）。
   // 這中間任何一步拋錯都要先放掉它（try 一路包到掛上日誌之前，連同三個 attach）：CLI 行程會退出、kernel 會放，但同一個行程裡的呼叫端
   // （測試、將來 serve 的續接）會撞上自己沒放的鎖。
-  let built: Awaited<ReturnType<typeof createCliAgent>>;
+  let built: Awaited<ReturnType<NexusAssembly['create']>>;
   let restored: Awaited<ReturnType<typeof restoreConversation>> | undefined;
   try {
     // **先認它屬於哪個目錄**（見 `resume-guards.ts`）。排在沙箱那道檢查前面：
@@ -1029,47 +1040,54 @@ async function runLaunched(
     // 重名、`requires` 缺件、`apply` 拋錯與 fold 的前置條件都在這一步發生——全在跑起來之前。**掉了哪幾列在這裡判
     // 第二次**（#751）：清單上可少掛的列自己的失敗只讓它掉；必掛的、組裝點自己加的外掛掉了，換成跟第一次同一種
     // `StartupError`，兩次掉的一起列；fold 的前置條件照舊原樣拋。
-    built = await createCliAgent(
-      {
-        ...effective,
-        liveModel,
-        ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
-        threadTitle,
-        threadTitleLlm,
-        optionalEntries: optionalEntriesOf(loaded, { live: invocation.live }),
-        // 會話鑰匙是這一次的 run 目錄（續接時就是被接回的那個），沒有會話日誌就沒有「回到同一個會話」的身分。
-        ...(sessionStore !== undefined && {
-          toolResultStash: {
-            rootDir: stashRoot,
-            session: sessionStore.directory,
-            warn: stashWarn,
-          },
-          ...(spillPolicy.maxInlineTokens !== undefined && {
-            spillPolicy: { maxInlineTokens: spillPolicy.maxInlineTokens },
-          }),
-        }),
-      },
+    // **組 agent 經 Cordis 樹上的相容層**（#1401）：根在這一刻才建，前面每一個錯誤的時刻與字都不變。
+    const assembly = await root.boot('cli', {
       plugins,
-      options.cwd,
-      {
-        // **不繞過 `Printer`。** 違規跟 agent 的輸出落在同一個終端機上，前綴是唯一分得出
-        // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
-        // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
-        onInvariantViolation: (error) => printer.error(`[不變量] ${error.message}`),
-        // 量測記錄（#976）：違規照上面那行印出來，另外留一份可數的紀錄，並記下這一輪實際裝上了哪幾個檢查。
-        // 落盤關掉或 home 在工作區底下時沒有 tap，理由見 `resolveInvariantLogPath`。
-        ...(invariantTap !== undefined && { invariantTap }),
-        // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
-        // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
-        // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
-        approvals: HEADLESS_APPROVALS,
-        rootSeed: resumed?.events,
-      },
-    ).catch((error: unknown) => {
-      throw error instanceof AssemblyDropError
-        ? startupErrorFrom(loaded, error, { live: invocation.live })
-        : error;
+      ...(options.cwd !== undefined && { cwd: options.cwd }),
     });
+    built = await assembly
+      .create(
+        {
+          ...effective,
+          liveModel,
+          ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
+          threadTitle,
+          threadTitleLlm,
+          optionalEntries: optionalEntriesOf(loaded, { live: invocation.live }),
+          // 會話鑰匙是這一次的 run 目錄（續接時就是被接回的那個），沒有會話日誌就沒有「回到同一個會話」的身分。
+          ...(sessionStore !== undefined && {
+            toolResultStash: {
+              rootDir: stashRoot,
+              session: sessionStore.directory,
+              warn: stashWarn,
+            },
+            ...(spillPolicy.maxInlineTokens !== undefined && {
+              spillPolicy: { maxInlineTokens: spillPolicy.maxInlineTokens },
+            }),
+          }),
+        },
+        {
+          session: {
+            // **不繞過 `Printer`。** 違規跟 agent 的輸出落在同一個終端機上，前綴是唯一分得出
+            // 誰在講話的東西——同 `printInterrupt` 的 `[核准]`。訊息本身已經帶著
+            // `invariant violated by "<pkg>"`，所以擁有它的 package 不必在這裡再講一次。
+            onInvariantViolation: (error) => printer.error(`[不變量] ${error.message}`),
+            // 量測記錄（#976）：違規照上面那行印出來，另外留一份可數的紀錄，並記下這一輪實際裝上了哪幾個檢查。
+            // 落盤關掉或 home 在工作區底下時沒有 tap，理由見 `resolveInvariantLogPath`。
+            ...(invariantTap !== undefined && { invariantTap }),
+            // **這個入口沒有人在。** 收核准決定的介面在 web（`serve.ts` 那條刻意不傳這個），
+            // 這裡按不下去，所以停在核准點只有一個結局：整輪作廢。關掉之後被擋的那個工具
+            // 拿到一則模型讀得懂的拒絕，其餘照跑完（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
+            approvals: HEADLESS_APPROVALS,
+            rootSeed: resumed?.events,
+          },
+        },
+      )
+      .catch((error: unknown) => {
+        throw error instanceof AssemblyDropError
+          ? startupErrorFrom(loaded, error, { live: invocation.live })
+          : error;
+      });
     // 兩次合起來印一段到標準錯誤，只印這一次（卡上第 5 項）。
     for (const line of startupWarning(
       loaded,
