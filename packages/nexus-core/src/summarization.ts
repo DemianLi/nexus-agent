@@ -483,6 +483,7 @@ export function createSummarizer(
   sessions?: { forCall(config: unknown): SessionLookup },
   pruning: ToolResultPruneConfig | false = DEFAULT_TOOL_RESULT_PRUNE,
   limitsOf?: (model: unknown) => ModelContextLimits | undefined,
+  summaryModelOf?: (request: { model?: unknown; runtime?: { configurable?: unknown } }) => unknown,
 ): AgentMiddleware {
   const base = createSummarizationMiddleware({
     backend,
@@ -502,7 +503,7 @@ export function createSummarizer(
     },
   }) as unknown as AgentMiddleware;
   // 貼著基座包：外面幾層看到的 `request.model` 與交下去的都是原本那顆，不會碰到替身。
-  const quiet = withQuietSummaryCall(withAttachmentText(base));
+  const quiet = withQuietSummaryCall(withAttachmentText(base), summaryModelOf);
   // 兩層各管一個方向，刻意不合成一層：剪刀改請求、日誌讀回傳，合起來寫會讓兩個獨立的
   // 失敗模式共用一個 try。順序無所謂——它們碰的不是同一樣東西。預算那層讀的是基座交下去的
   // 請求，不是進來的那份，也不碰回傳值。
@@ -684,10 +685,20 @@ const summaryUsageCells = new AsyncLocalStorage<SummaryUsageCell>();
  * 退到最接近的：同一次呼叫，貼一個串流層認得的標記。結果一樣：摘要文字不進對話，只以 `compaction/summary`
  * 那一顆存在。
  *
+ * ## 生摘要用哪一顆（[#1377](https://github.com/DemianLi/nexus-agent/issues/1377)）
+ *
+ * **門檻跟選中那顆（偏離 dsh，#1378 登記、PM 接受），生摘要跟最近一次已送出的請求那顆（照 dsh `summarizer.ts:127-137` 的
+ * `latest ?? agentTarget`）。** 替身的 `invoke` 轉給 `summaryModelOf` 挑的那顆；其餘屬性仍讀 `request.model`（基座讀它的
+ * `profile`）。`summaryModelOf` 沒給或回 `undefined`＝摘要打到 `request.model`，與沒有模型選擇的組裝一樣。
+ *
  * @param base - 基座那顆摘要器。
+ * @param summaryModelOf - 這次生摘要用哪一顆；省略＝`request.model`。
  * @returns 同名、同狀態、生摘要那次不上線的 middleware。
  */
-function withQuietSummaryCall(base: AgentMiddleware): AgentMiddleware {
+function withQuietSummaryCall(
+  base: AgentMiddleware,
+  summaryModelOf?: (request: { model?: unknown; runtime?: { configurable?: unknown } }) => unknown,
+): AgentMiddleware {
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 同 withCompactionLog。 */
   if (inner === undefined) return base;
@@ -698,7 +709,13 @@ function withQuietSummaryCall(base: AgentMiddleware): AgentMiddleware {
       // 基座自己有退路（`getChatModel()`），沒有模型可換就原樣交給它。
       /* v8 ignore next */
       if (model === undefined) return inner(request, handler);
-      const quiet = quietInvoke(model, summaryUsageCells.getStore());
+      // 生摘要的模型（#1377）：門檻跟 `request.model`（選中那顆），摘要跟最近一次已送出的請求那顆；沒有意見就是 `request.model`。
+      const target = summaryModelOf?.(request);
+      const quiet = quietInvoke(
+        model,
+        summaryUsageCells.getStore(),
+        typeof target === 'object' && target !== null ? target : undefined,
+      );
       return inner({ ...request, model: quiet }, (sent) =>
         handler(sent.model === quiet ? { ...sent, model } : sent),
       );
@@ -716,13 +733,19 @@ function withQuietSummaryCall(base: AgentMiddleware): AgentMiddleware {
  * @param model - 本尊。
  * @returns 替身。
  */
-function quietInvoke<T extends object>(model: T, cell: SummaryUsageCell | undefined): T {
+function quietInvoke<T extends object>(
+  model: T,
+  cell: SummaryUsageCell | undefined,
+  generator?: object,
+): T {
   return new Proxy(model, {
     get(target, key) {
       if (key !== 'invoke') return Reflect.get(target, key) as unknown;
-      const invoke = (target as { invoke(input: unknown, config?: unknown): unknown }).invoke;
+      // 生摘要的那顆可以不是本尊（#1377）：`invoke` 轉給 `generator`，其餘屬性（基座讀的 `profile`）照讀本尊。
+      const caller = generator ?? target;
+      const invoke = (caller as { invoke(input: unknown, config?: unknown): unknown }).invoke;
       return async (input: unknown, config?: { tags?: readonly string[] }) => {
-        const result = await invoke.call(target, input, {
+        const result = await invoke.call(caller, input, {
           ...config,
           tags: [...(config?.tags ?? []), SUMMARY_CALL_TAG],
         });
@@ -779,8 +802,9 @@ function quietInvoke<T extends object>(model: T, cell: SummaryUsageCell | undefi
  *
  * ## 為什麼是包住它，而不是一顆新 middleware
  *
- * 一顆新名字的 middleware 一定排在 `SummarizationMiddleware` 後面（更內層，見 {@link SUMMARIZATION_MIDDLEWARE_NAME}），
- * 看不到基座交下去之前的那一刻。
+ * 一顆新名字的 middleware 排在 `SummarizationMiddleware` 後面（更內層，見 {@link SUMMARIZATION_MIDDLEWARE_NAME}），
+ * 看不到基座交下去之前的那一刻。（例外是換模型、子代理跟隨與圖片省略：`mergeMiddlewareStack` 在合併時把它們搬到預設疊
+ * 前面，所以它們在摘要器**外面**——#1369。）
  *
  * ## subagent 那側**寫得進去**，而這是 #143 卡上決定 3 的反面
  *

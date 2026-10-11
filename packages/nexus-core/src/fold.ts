@@ -73,6 +73,7 @@ import { createStepInboxMiddleware } from './step-inbox.js';
 import {
   createModelSwapMiddleware,
   createSubagentModelFollowMiddleware,
+  summaryModelOf,
 } from './model-selection.js';
 import type { ModelSelectionController } from './model-selection.js';
 import { createTurnCancelGuard, createTurnCancelModelSignal } from './turn-cancel.js';
@@ -614,6 +615,8 @@ export function foldRegistry(
       same(options.stepInbox === true ? createStepInboxMiddleware() : undefined),
     ),
     // 換模型排在洋蔥最外面（#723）：摘要器、起訖、用量與 plugin middleware 看到的 `request.model` 都是這一步選中的那顆。
+    // **槽位表的順序只決定新名字之間的先後**：摘要器同名取代回預設疊第三格，新名字原本一律排在它後面。「最外面」是
+    // `mergeMiddlewareStack` 在合併時把這一顆（與子代理跟隨那顆、圖片省略）搬到預設疊前面做到的（#1369），不是這張表。
     // root 的每一步快照一次；子代理另給一顆（#328 第 3 項）：沒釘模型就跟父代理**當下**的選擇，釘了就用定義釘的，見
     // {@link ./model-selection.ts | createSubagentModelFollowMiddleware}。背景圖若是 `subagent` 工具替這一次委派挑了模型，
     // `compileSubagentGraph` 會把這一顆濾掉（模型自己挑的勝過一切，dsh `requestedAgentOptions`）。
@@ -634,6 +637,7 @@ export function foldRegistry(
       ),
     },
     // 圖片額度與 `image/offload`（#1270）緊貼換模型之後、摘要器外面：摘要器的門檻估算、起訖紀錄與請求快照看到的都是省略過的請求。
+    // 「摘要器外面」同上：由 `mergeMiddlewareStack` 搬到預設疊前面（#1369），不靠這張表。
     // 這一顆只把日誌上**已經下的決定**標在請求上；新的決定由 adapter 量到超額、上層接住下（見下面 `imageOffloadRecovery`）。
     // 只折進 root：圖由人送出、住在 root 的日誌上。沒給 `modelLimits`（沒有型錄，也就沒有誰宣告得了圖片額度）就整顆不掛，請求與以前逐位元組相同；沒有圖的請求原樣通過、不讀日誌。
     rootOnly(
@@ -1414,8 +1418,21 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
     );
   // **一次組裝一本，root 與子代理共用**：放在工廠外面，每呼叫一次工廠才不會各建一本、把借錨切碎。
   const book = options.tokenAnchorBook ?? new TokenAnchorBook();
+  // 生摘要跟最近一次已送出的請求那顆（#1377）；沒有模型選擇的組裝沒有這一格，摘要打到 `request.model`，與以前相同。
+  const summaryModel =
+    options.modelSelection === undefined
+      ? undefined
+      : summaryModelOf(options.modelSelection, registry.sessions);
   return () =>
-    createSummarizer(backend, settings, book, registry.sessions, pruning, options.modelLimits);
+    createSummarizer(
+      backend,
+      settings,
+      book,
+      registry.sessions,
+      pruning,
+      options.modelLimits,
+      summaryModel,
+    );
 }
 
 /**

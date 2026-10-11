@@ -503,6 +503,8 @@ export {
   pendingNotice,
   recordedRoute,
   recordedSelection,
+  routedFromOf,
+  summaryModelOf,
 } from './model-selection.js';
 export type { ModelSelectionOptions } from './model-selection.js';
 export {
