@@ -72,6 +72,11 @@ try {
   for (const name of patches) {
     execFileSync('patch', ['-p1', '--forward', '--batch', '-s', '-d', base, '-i', join(PATCHES, name)], { stdio: 'inherit' });
   }
+  // 上下文有偏移時 patch 會留 .orig 備份；有 .rej 代表沒套上，直接失敗。
+  for (const file of walk(base)) {
+    if (file.endsWith('.rej')) throw new Error(`修補沒套上：${file}`);
+    if (file.endsWith('.orig')) rmSync(file);
+  }
   // 3. 放到 vendor 的形狀，再做機械改寫。
   const out = join(work, 'vendor');
   for (const [to, from] of COPIES) cpSync(join(base, from), join(out, to), { recursive: true });
