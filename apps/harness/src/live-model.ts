@@ -1023,6 +1023,22 @@ export function withoutAssistantName(baseFetch: typeof fetch = fetch): typeof fe
   return rewriteChatMessages(baseFetch, stripAssistantName);
 }
 
+/**
+ * 出貨的「送出前換 body」那一組：換掉空的助手內容（#592）、再去掉助手訊息的 `name`（#1392）。
+ *
+ * **`createLiveModel` 與測試夾具共用這一個函式**（[#1398](https://github.com/DemianLi/nexus-agent/issues/1398)）：
+ * 夾具自己組的模型（`log-derived-history.fixture.ts` 的 `model()`）要量的是出貨時線上的形狀，兩邊各疊一次的話，
+ * 產品哪天多掛一格 body 改寫、夾具不會跟著變，S 系列量到的就悄悄不是出貨的樣子。要加新的一格改寫就加在這裡。
+ *
+ * 順序：`withoutAssistantName` 在外、`withEmptyAssistantContent` 在內——外層的請求先被去掉 `name`，
+ * 再交給內層換空內容；兩格改的是不同的欄位，順序不影響結果，這裡照 #1392 之後 `createLiveModel` 原本的疊法不變。
+ *
+ * @param baseFetch - 底層的 fetch。預設全域那個；`createLiveModel` 傳進最貼近底層的用量回報那一層，測試用它換掉。
+ */
+export function withShippedRequestBody(baseFetch: typeof fetch = fetch): typeof fetch {
+  return withoutAssistantName(withEmptyAssistantContent(baseFetch));
+}
+
 /** 串流用量嗅探單行的長度上限：超過的行放棄（供應商的片段不會這麼長，上限只防暴長的怪行把記憶體吃光）。 */
 const USAGE_TAP_MAX_LINE_CHARS = 1_000_000;
 
@@ -1198,7 +1214,7 @@ export function createLiveModel(
   const fields: ChatOpenAIFields = {
     model: config.modelId,
     // `fetch` 疊三層（再加最內層貼著底層 fetch 的串流用量回報，#1022，只旁讀不改位元組）：最內層是
-    // 送出前換 body 的兩格——#592（換掉空的助手內容）與 #1392（拿掉助手訊息的 `name`），中間是 #516
+    // 送出前換 body 的兩格（{@link withShippedRequestBody}，夾具共用）——#592（換掉空的助手內容）與 #1392（拿掉助手訊息的 `name`），中間是 #516
     // （串流內回報的錯誤翻成 HTTP 錯誤回應，才進得了重試射程），外層是 #521（第一則事件之後的閒置逾時）。
     // 外層收到的是中間那層嗅完第一則事件的那份回應。
     configuration: {
@@ -1213,9 +1229,7 @@ export function createLiveModel(
       fetch: ((base) => (purpose === undefined ? withRequestStartNotice(base) : base))(
         withStreamIdleTimeout(
           config.streamIdleTimeoutMs,
-          withInbandStreamErrors(
-            withoutAssistantName(withEmptyAssistantContent(withStreamUsageReport())),
-          ),
+          withInbandStreamErrors(withShippedRequestBody(withStreamUsageReport())),
         ),
       ),
     },
