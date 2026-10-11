@@ -23,7 +23,7 @@ import type { BaseChatModelParams } from '@langchain/core/language_models/chat_m
 import type { ChatResult } from '@langchain/core/outputs';
 import { MemorySaver } from '@langchain/langgraph';
 import { deriveSessionStats, SessionRegistry } from '@nexus/core';
-import type { SessionEvent } from '@nexus/core';
+import type { SessionEvent, SummarizationSettings } from '@nexus/core';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
@@ -104,6 +104,10 @@ async function runUntilThrow(
     { type: 'tokens', value: 1_000_000 },
   ],
   also?: { call: number; error: unknown },
+  /** 保留量設定；預設一個很小的 `retainTokens`，讓切點算得出正的。 */
+  retain: Pick<SummarizationSettings, 'retainRatio' | 'retainTokens'> | Record<string, never> = {
+    retainTokens: 12,
+  },
 ): Promise<{
   rejected: unknown;
   calls: number;
@@ -121,10 +125,7 @@ async function runUntilThrow(
     backend: new ContainedFilesystemBackend({ rootDir: root }),
     checkpointer: new MemorySaver(),
     plugins: [],
-    summarization: {
-      trigger,
-      retainTokens: 12,
-    },
+    summarization: { trigger, ...retain },
   });
   const sessions = new SessionRegistry('overflow');
   const detach = attachSession(sessions);
@@ -241,6 +242,28 @@ describe('供應商回上下文溢出', () => {
 
     expect(rejected).toBeNull();
     expect(historyFiles.length).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * **門檻到了但尾巴蓋住全部：整棵樹什麼都不多做**（#1374；單元級的在 `summary-failure.test.ts`）。
+ * 沒有型錄時保留量退到 20 則，4 句話才 8 則——訊息數門檻 3 到了，沒有東西可摘。
+ * 每一步都會遇到這種情況，所以不多叫一次摘要模型、不記 `compaction/summary`。
+ */
+describe('尾巴蓋住全部', () => {
+  it('訊息數門檻到了、沒有可摘的東西：模型只被叫 4 次，日誌上沒有壓縮事件', async () => {
+    const { rejected, calls, events, historyFiles } = await runUntilThrow(
+      null,
+      0,
+      4,
+      [{ type: 'messages', value: 3 }],
+      undefined,
+      {},
+    );
+    expect(rejected).toBeNull();
+    expect(calls).toBe(4);
+    expect(historyFiles).toEqual([]);
+    expect(events.filter((event) => event.type === 'compaction/summary')).toEqual([]);
   });
 });
 

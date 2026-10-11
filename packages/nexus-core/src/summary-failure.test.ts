@@ -18,7 +18,11 @@ import { ContextOverflowError } from '@langchain/core/errors';
 import { AIMessage, HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
-import { createSummarizer, DEFAULT_SUMMARIZATION } from './summarization.js';
+import {
+  createSummarizer,
+  DEFAULT_SUMMARIZATION,
+  readSummarizationEvent,
+} from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
 import { TokenAnchorBook } from './token-estimate.js';
 
@@ -53,19 +57,32 @@ async function run(options: {
   messages?: readonly BaseMessage[];
   state?: Record<string, unknown>;
   settings?: Partial<SummarizationSettings>;
+  /** 給了就是有型錄的模型：保留量走出廠的 `retainRatio`，不是測試預設的 1 token。 */
+  limits?: { contextWindow: number; maxOutputTokens: number };
   summaryFails?: () => Error;
   /** 第幾次呼叫（1 起算）要拋、拋什麼；其餘回 `好。`。 */
   handlerThrows?: (call: number) => Error | undefined;
 }) {
   const reports: string[] = [];
+  const writes: string[] = [];
   const model = summaryModel(options.summaryFails);
+  const limits = options.limits;
   const middleware = createSummarizer(
-    { write: async (path: string) => ({ path }) } as never,
-    { ...DEFAULT_SUMMARIZATION, retainTokens: 1, ...options.settings },
+    {
+      write: async (path: string) => {
+        writes.push(path);
+        return { path };
+      },
+    } as never,
+    {
+      ...DEFAULT_SUMMARIZATION,
+      ...(limits === undefined ? { retainTokens: 1 } : {}),
+      ...options.settings,
+    },
     new TokenAnchorBook(),
     undefined,
     false,
-    undefined,
+    limits === undefined ? undefined : () => limits,
     undefined,
     (message) => reports.push(message),
   );
@@ -93,7 +110,7 @@ async function run(options: {
       return { error };
     }
   })();
-  return { ...outcome, reports, handled, model };
+  return { ...outcome, reports, handled, model, writes };
 }
 
 const TOKEN_TRIGGER: Partial<SummarizationSettings> = {
@@ -175,6 +192,33 @@ describe('摘要失敗：我們自己的門檻觸發（dsh 的 pressure 路徑�
     expect(out.handled).toHaveLength(1);
     expect(out.handled[0]).toHaveLength(7);
     expect(out.reports[0]).toContain('照原請求送出');
+  });
+});
+
+/**
+ * **尾巴蓋住全部：門檻到了，但沒有東西可摘。** 出廠設定下小訊息的對話就是這樣——訊息數門檻（60）到了，
+ * 20,000 token 的尾巴還裝得下整段對話，基座算出 `cutoffIndex <= 0`，直接把請求送出去。
+ *
+ * 這種情況每一步都會遇到，所以釘死四件事：**不叫摘要模型、不寫歷史檔、不記壓縮事件、不 warn**，請求原樣照送。
+ * 多花一次呼叫或多寫一筆事件，就是每一步都在浪費。
+ */
+describe('門檻到了，但尾巴蓋住全部：什麼都不做', () => {
+  it('訊息數門檻觸發、尾巴蓋住整段：不摘要、不寫檔、不記事件、不 warn，原請求照送', async () => {
+    const out = await run({
+      limits: { contextWindow: 700_045, maxOutputTokens: 16_384 },
+      settings: { trigger: [{ type: 'messages', value: 3 }] },
+      // 就算摘要模型會壞，也不該被叫到：壞了也不會有 warn。
+      summaryFails: () => new Error('不該被叫到'),
+    });
+    expect(out.error).toBeUndefined();
+    expect(out.model.invokes).toBe(0);
+    expect(out.writes).toEqual([]);
+    expect(out.reports).toEqual([]);
+    expect(readSummarizationEvent(out.result)).toBeUndefined();
+    expect(out.handled).toHaveLength(1);
+    expect(out.handled[0]).toHaveLength(7);
+    expect(String(out.handled[0]![0]!.content)).toBe(BIG);
+    expect((out.result as AIMessage).content).toBe('好。');
   });
 });
 
