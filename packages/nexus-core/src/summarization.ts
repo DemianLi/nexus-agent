@@ -121,6 +121,7 @@ import {
   recordedArgTruncationsOf,
 } from './tool-arg-truncation-log.js';
 import { withSummaryCatchUp } from './summary-catch-up.js';
+import { createHistoryStaging } from './summary-history-staging.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
 import type {
@@ -630,11 +631,17 @@ export function createSummarizer(
   summaryModelOf?: (request: { model?: unknown; runtime?: { configurable?: unknown } }) => unknown,
   report?: (message: string) => void,
 ): AgentMiddleware {
+  // 歷史檔的寫入先暫存、這一步結束才依「有沒有生出摘要」提交（#1389，見 summary-history-staging.ts）。
+  // 沒有會話註冊表就查不了日誌，維持直接寫。
+  const staging =
+    sessions === undefined
+      ? undefined
+      : createHistoryStaging(backend, settings.historyPathPrefix, report);
   // 基座的 `keep` 在建構時就定了，每次請求換不了：保留則數 N 由 {@link withRetainedTail} 逐步算，各用一顆
   // `keep: { messages, N }` 的實例（同一個 backend、同一份 `stateSchema`）。
   const makeChain = (keepMessages: number, force = false): AgentMiddleware => {
     const base = createSummarizationMiddleware({
-      backend,
+      backend: staging?.backend ?? backend,
       summaryPrompt: SUMMARY_PROMPT,
       // 只交 `messages` 那幾道，`tokens` 由 withTokenBudget 比。一道都沒有時是空陣列：基座逐條試，一條都不成立。
       // 「這一次不要摘要」那顆（{@link SUPPRESS_SUMMARY}）連 `messages` 那幾道也不給；「端點已經說裝不下」那顆
@@ -674,13 +681,16 @@ export function createSummarizer(
     limitsOf,
     report,
   );
+  // 暫存的範圍要罩住基座的寫入與日誌那層記下事件的時點，所以在預算層外面、剪刀裡面。
+  const staged =
+    staging === undefined || sessions === undefined ? budgeted : staging.wrap(budgeted, sessions);
   // 最外層：state 的摘要事件在這一步請求之前先跟上日誌（#1390）。外面的預算與剪刀看到的有效訊息串要是補過的。
   const catchUp = (middleware: AgentMiddleware): AgentMiddleware =>
     sessions === undefined ? middleware : withSummaryCatchUp(middleware, sessions);
-  if (pruning === false) return catchUp(budgeted);
+  if (pruning === false) return catchUp(staged);
   return catchUp(
     withToolResultPruning(
-      budgeted,
+      staged,
       (request) =>
         isUnderCompactionPressure(
           request,

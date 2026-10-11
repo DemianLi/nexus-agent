@@ -17,9 +17,11 @@ import {
   modelGoneMessage,
   normalizeEmptyAssistantContent,
   retryDecision,
+  stripAssistantName,
   StreamIdleTimeoutError,
   withEmptyAssistantContent,
   withInbandStreamErrors,
+  withoutAssistantName,
   withStreamIdleTimeout,
 } from './live-model.js';
 import { MEASURED_MODELS } from './eval/tiers.js';
@@ -1407,6 +1409,137 @@ describe('空的助手內容照 dsh 送（#592）', () => {
       });
       await model.invoke([new HumanMessage('一'), interrupted, new HumanMessage('二')]);
       expect(sent).toEqual([[]]);
+    });
+  });
+});
+
+describe('助手訊息不送 name（#1392）', () => {
+  const call = { id: 'call-1', type: 'function', function: { name: 'noop', arguments: '{}' } };
+
+  it('只拿掉助手訊息的 name，其餘欄位與順序原樣；別的角色的 name 不動', () => {
+    const out = stripAssistantName([
+      { role: 'user', content: '嗨', name: 'u' },
+      { role: 'assistant', content: '好。', name: 'model' },
+      { role: 'assistant', content: null, name: 'model', tool_calls: [call] },
+      { role: 'tool', content: '做完了', tool_call_id: 'call-1', name: 'noop' },
+    ]);
+    expect(out).toEqual([
+      { role: 'user', content: '嗨', name: 'u' },
+      { role: 'assistant', content: '好。' },
+      { role: 'assistant', content: null, tool_calls: [call] },
+      { role: 'tool', content: '做完了', tool_call_id: 'call-1', name: 'noop' },
+    ]);
+    expect(Object.keys((out as Record<string, unknown>[])[2]!)).toEqual([
+      'role',
+      'content',
+      'tool_calls',
+    ]);
+  });
+
+  it('沒有助手訊息帶 name 時回原本那個陣列', () => {
+    const messages = [
+      { role: 'user', content: '嗨' },
+      { role: 'assistant', content: '好。' },
+      { role: 'tool', content: '結果', name: 'noop', tool_call_id: 'call-1' },
+    ];
+    expect(stripAssistantName(messages)).toBe(messages);
+  });
+
+  function recording() {
+    const calls: { url: string; init: RequestInit | undefined }[] = [];
+    const base = ((input: string | URL | Request, init?: RequestInit) => {
+      calls.push({ url: input instanceof Request ? input.url : String(input), init });
+      return Promise.resolve(new Response('{}', { status: 200 }));
+    }) as typeof fetch;
+    return { calls, base };
+  }
+
+  const NAMED = JSON.stringify({
+    model: 'm',
+    messages: [{ role: 'assistant', name: 'model', content: '好。' }],
+  });
+
+  it('只改 /chat/completions 的 POST，而且只換 messages', async () => {
+    const { calls, base } = recording();
+    await withoutAssistantName(base)('http://h/v1/chat/completions', {
+      method: 'POST',
+      body: NAMED,
+      headers: { 'x-a': '1' },
+    });
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.init!.headers).toEqual({ 'x-a': '1' });
+    expect(JSON.parse(calls[0]!.init!.body as string)).toEqual({
+      model: 'm',
+      messages: [{ role: 'assistant', content: '好。' }],
+    });
+  });
+
+  it('其餘原樣交下去：同一個 init 物件', async () => {
+    const { calls, base } = recording();
+    const wrapped = withoutAssistantName(base);
+    const cases: [string, RequestInit | undefined][] = [
+      ['http://h/v1/chat/completions', { method: 'GET' }],
+      ['http://h/v1/models', { method: 'POST', body: NAMED }],
+      ['http://h/v1/chat/completions', { method: 'POST', body: '不是 JSON' }],
+      ['http://h/v1/chat/completions', { method: 'POST', body: JSON.stringify({ messages: 1 }) }],
+      [
+        'http://h/v1/chat/completions',
+        {
+          method: 'POST',
+          body: JSON.stringify({ messages: [{ role: 'assistant', content: '好。' }] }),
+        },
+      ],
+      ['http://h/v1/chat/completions', undefined],
+    ];
+    for (const [url, init] of cases) await wrapped(url, init);
+    for (const [index, [, init]] of cases.entries()) expect(calls[index]!.init).toBe(init);
+  });
+
+  describe('經過 createLiveModel：出貨的 fetch 疊裡有這一層', () => {
+    const original = process.env[LIVE_API_KEY_ENV];
+    const originalFetch = globalThis.fetch;
+
+    afterEach(() => {
+      globalThis.fetch = originalFetch;
+      if (original === undefined) delete process.env[LIVE_API_KEY_ENV];
+      else process.env[LIVE_API_KEY_ENV] = original;
+    });
+
+    it('非串流的歷史裡帶 name: "model" 的助手訊息，送出去的 body 沒有 name', async () => {
+      process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
+      const sent: { role: string; name?: string }[][] = [];
+      globalThis.fetch = ((_input: string | URL | Request, init?: RequestInit) => {
+        const body = JSON.parse(init!.body as string) as { messages: { role: string }[] };
+        sent.push(body.messages);
+        return Promise.resolve(
+          new Response(
+            JSON.stringify({
+              id: 'c1',
+              object: 'chat.completion',
+              created: 0,
+              model: 'm',
+              choices: [
+                {
+                  index: 0,
+                  finish_reason: 'stop',
+                  message: { role: 'assistant', content: '好。' },
+                },
+              ],
+            }),
+            { status: 200, headers: { 'content-type': 'application/json' } },
+          ),
+        );
+      }) as typeof fetch;
+      const model = createLiveModel({ ...DEFAULTS, maxRetries: 0 });
+      await model.invoke([
+        new HumanMessage('一'),
+        new AIMessage({ content: '好。', name: 'model' }),
+        new HumanMessage('二'),
+      ]);
+      expect(sent).toHaveLength(1);
+      const assistants = sent[0]!.filter((message) => message.role === 'assistant');
+      expect(assistants).toHaveLength(1);
+      expect('name' in assistants[0]!).toBe(false);
     });
   });
 });
