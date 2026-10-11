@@ -120,6 +120,7 @@ import {
   newlyTruncatedArgs,
   recordedArgTruncationsOf,
 } from './tool-arg-truncation-log.js';
+import { withSummaryCatchUp } from './summary-catch-up.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
 import type {
@@ -673,17 +674,22 @@ export function createSummarizer(
     limitsOf,
     report,
   );
-  if (pruning === false) return budgeted;
-  return withToolResultPruning(
-    budgeted,
-    (request) =>
-      isUnderCompactionPressure(
-        request,
-        effectiveTrigger(settings.trigger, limitsOf?.(request.model)),
-        book,
-      ),
-    pruning,
-    sessions === undefined ? undefined : pruneLogOf(sessions),
+  // 最外層：state 的摘要事件在這一步請求之前先跟上日誌（#1390）。外面的預算與剪刀看到的有效訊息串要是補過的。
+  const catchUp = (middleware: AgentMiddleware): AgentMiddleware =>
+    sessions === undefined ? middleware : withSummaryCatchUp(middleware, sessions);
+  if (pruning === false) return catchUp(budgeted);
+  return catchUp(
+    withToolResultPruning(
+      budgeted,
+      (request) =>
+        isUnderCompactionPressure(
+          request,
+          effectiveTrigger(settings.trigger, limitsOf?.(request.model)),
+          book,
+        ),
+      pruning,
+      sessions === undefined ? undefined : pruneLogOf(sessions),
+    ),
   );
 }
 
