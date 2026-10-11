@@ -1,6 +1,6 @@
 /**
  * **第一次已經摘要過、送出去端點還是回超窗：三處的樣子**（[#1381](https://github.com/DemianLi/nexus-agent/issues/1381)
- * PM 要求量清楚的邊界）。
+ * PM 要求量清楚的邊界；歷史檔那一格在 [#1389](https://github.com/DemianLi/nexus-agent/issues/1389) 翻面）。
  *
  * 情境：訊息數門檻先到，基座用 N 則的保留量摘要一次（attempt 1），摘要之後的請求送出去，**端點回超窗**；
  * 分派器換上 retain 0 的實例，**從同一份 graph state 重新摘要**（attempt 2），再送一次。
@@ -11,17 +11,14 @@
  * | --- | --- |
  * | 日誌 | 兩筆 `compaction/summary` 都在（attempt 1 的先記在它那次 `model/start` 之前，那次超窗了）。**每一次主呼叫，從日誌推出的歷史都等於實際送出的**，包括升級之後那一次 |
  * | graph state | `_summarizationEvent` 是 attempt 2 的（切點 2），不是 attempt 1 的（切點 1）；訊息串沒有被動到 |
- * | 歷史檔 | 兩個區段：attempt 1 卸載的、attempt 2 卸載的。**第 1 句出現兩次**——與基座既有行為同形（見下） |
+ * | 歷史檔 | **一個區段**：attempt 2 卸載的（含 attempt 1 那一則）。attempt 1 的寫入在同一步內被 attempt 2 取代，第 1 句只出現一次 |
  *
- * ## 歷史檔重複不是 #1381 引進的
+ * ## 歷史檔那一格的前後
  *
- * 在沒有 #1381 的 develop 上跑同一個情境：日誌同樣兩筆 `compaction/summary`（切點 1、3）、歷史檔同樣兩個區段
- * （第 1 句出現兩次，第二段多了第 2 句）、推導與實送同樣逐呼叫相等。原因在基座：摘要之後的 handler 超窗它會再接一次、
- * 再摘要一次，而 attempt 1 的卸載已經寫進檔了。dsh 沒有這個形狀：它的壓縮是 `compactRegion` 的交易（`compaction/start`
- * ～`end`）、不寫任何檔案，overflow 時對**已經提交的** surface 重新 `selectCompactableRange(..., 0)`。
- * 我們這邊 attempt 1 的摘要沒有提交進 state（請求失敗了），只留下檔案區段與日誌事件這兩個副作用，所以不是同一種東西。
- *
- * 這一條把量到的釘住，是為了讓日後有人動到這裡時看得出「這一格不是新壞的」。要不要消除重複是另一個決定。
+ * #1389 之前是兩個區段、第 1 句出現兩次。原因在基座：摘要之後的 handler 超窗它會再接一次、再摘要一次，而 attempt 1 的
+ * 卸載已經寫進檔了（dsh 沒有這個形狀：壓縮是不寫檔的交易）。現在摘要器的 backend 換成暫存層
+ * （`packages/nexus-core/src/summary-history-staging.ts`）：同一步內同一個路徑最後一次寫入勝出，這一步結束時才寫。
+ * 兩個 attempt 都讀「已提交的」內容，所以第二個區段不含第一個的。
  */
 
 import { mkdtemp } from 'node:fs/promises';
@@ -127,7 +124,7 @@ async function converse(overflowOn: number) {
 describe('第一次已經摘要過、送出去端點還是回超窗', () => {
   // 第 1 輪：呼叫 1。第 2 輪：呼叫 2 是摘要、呼叫 3 是摘要之後的請求——在這裡超窗；
   // 升級之後呼叫 4 是 retain 0 的摘要、呼叫 5 是重送。
-  it('日誌兩筆都在、推導與實送逐呼叫相等；state 是第二次的切點；歷史檔兩個區段', async () => {
+  it('日誌兩筆都在、推導與實送逐呼叫相等；state 是第二次的切點；歷史檔一個區段', async () => {
     const { events, shared, afterTurn } = await converse(3);
 
     // 前提：真的走到了升級（第 4 次呼叫是摘要，第 5 次是重送）。
@@ -162,10 +159,9 @@ describe('第一次已經摘要過、送出去端點還是回超窗', () => {
     // 2. graph state：第二輪結束時是 attempt 2 的切點，不是 attempt 1 的；訊息串長度就是兩輪四則。
     expect(afterTurn[1]).toMatchObject({ cutoff: 2, messages: 4 });
 
-    // 3. 歷史檔：兩個區段，第 1 句出現兩次（與沒有 #1381 的基座同形，見檔頭）。
+    // 3. 歷史檔：一個區段（attempt 2 的），第 1 句只出現一次（見檔頭，#1389）。
     const sections = afterTurn[1]!.history!.split(SECTION).filter((text) => text.trim() !== '');
     expect(sections.map((text) => text.trim())).toEqual([
-      'Human: 第 1 句。',
       'Human: 第 1 句。\nAI: model, 第 1 次回話。',
     ]);
   });
