@@ -14,7 +14,7 @@
  * @module
  */
 
-import type { Context } from 'cordis';
+import type { Context } from '@nexus/cordis';
 import type { PluginEntry } from '@nexus/core';
 import { createNexusAgent } from '../../agent-factory.js';
 import { loadDefaultPlugins } from '../../plugin-config.js';
@@ -37,7 +37,7 @@ export interface NexusAssembly {
   create(options: AgentOptions): ReturnType<typeof createNexusAgent>;
 }
 
-declare module 'cordis' {
+declare module '@nexus/cordis' {
   interface Context {
     'nexus.assembly': NexusAssembly;
   }

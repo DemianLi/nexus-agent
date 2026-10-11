@@ -25,8 +25,8 @@
 import { cp, mkdtemp, rm } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { Context } from 'cordis';
-import type { Loader } from '@cordisjs/plugin-loader';
+import type { Context } from '@nexus/cordis';
+import type { Loader } from '@nexus/cordis-plugin-loader';
 import { loadPlugins } from '@nexus/core';
 import type { NexusPlugin, PluginRegistry } from '@nexus/core';
 import { STATE, boot, createEntry, fiberOf } from './tree.js';
@@ -36,7 +36,7 @@ const MCP = join(REPO, 'packages', 'nexus-plugin-mcp');
 const FIXTURE_SERVER = join(MCP, 'src', 'fixture-server.ts');
 const TOOL = 'mcp__fixture__fetch_release_note';
 
-declare module 'cordis' {
+declare module '@nexus/cordis' {
   interface Context {
     mcp: McpVersion;
   }
@@ -284,7 +284,10 @@ export async function runCoexist(): Promise<CoexistReport> {
 
 /** 負對照：不開 isolate，第二版 provide 同名服務會撞名，第二版那一列起不來；它已經開的子行程照樣收掉。 */
 export async function runWithoutIsolate(): Promise<{
+  /** 撞名之後、撤掉之前：失敗的 fiber 本來就是 FAILED。 */
   v2State: number | undefined;
+  /** 撤掉之後同一顆 fiber 的狀態：要收斂到 DISPOSED（上游 #127）。 */
+  v2StateAfterRemove: number | undefined;
   errors: string[];
   leak: Record<string, number>;
 }> {
@@ -301,13 +304,19 @@ export async function runWithoutIsolate(): Promise<{
     const v2Entry = await router.install('mcp@2', 'mcp-v2', mcpConfig());
     await settle();
     const v2State = t.state(v2Entry);
+    const v2Fiber = fiberOf(t.loader, v2Entry);
     const errors = t.errors.flatMap((message) =>
       message.args.map((arg) => (arg instanceof Error ? arg.message : String(arg))),
     );
     for (const id of Object.keys(t.loader.store)) t.loader.remove(id);
     await t.loader.await();
     await settle();
-    return { v2State, errors, leak: delta(resources(), before) };
+    return {
+      v2State,
+      v2StateAfterRemove: v2Fiber?.state,
+      errors,
+      leak: delta(resources(), before),
+    };
   } finally {
     await cleanup();
   }

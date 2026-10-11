@@ -4,6 +4,8 @@
 
 **量測日期**：2026-10-11。nexus `b88d8339`（develop）上的分支 `chore/cordis-probe-1386`。上游 `cordiverse/cordis` `c261dd2c13d65b1994adb1cdc10d7dba61542523`（`cordis` 4.0.0-rc.10、`@cordisjs/plugin-loader` 1.0.0-rc.7）。Node 25.9.0、macOS arm64、tsx 4.23.12、vitest 4.1.11、TypeScript 5.9.3。
 
+> **更正（2026-10-11，[#1401](https://github.com/DemianLi/nexus-agent/issues/1401)）**：探針把上游 `FiberState` 的 3 誤當成 UNLOADING，其實上游的順序是 FAILED 3、DISPOSED 4、UNLOADING 5。所以下文 ③ 負對照的「停在 `UNLOADING`（3）」是**撤掉之前**讀到的 FAILED，那是撞名失敗的正常狀態，不是 #127。#127 本身確實重現（照 issue 的 repro，以及 #1401 拿掉修補後變紅的測試），只是不是在 ③ 撞到的。#1401 讓 ③ 在撤掉之後再讀一次：沒有修補停在 FAILED（3），有修補收斂到 DISPOSED（4）。套件名與目錄也在 #1401 換成 `@nexus/cordis`、`vendor/loader`。其餘數字是當時的快照，沒有改。
+
 探針程式在 `apps/harness/src/measure/cordis-1386/`，沒有接進出貨路徑。vendor 的套件在 `vendor/cordis`、`vendor/cordis-loader`，清單與本地修改登記在 [`vendor/README.md`](../vendor/README.md)。
 
 ## 結論
