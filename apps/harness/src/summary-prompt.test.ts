@@ -111,7 +111,8 @@ describe('摘要提示詞在產品路徑上', () => {
     });
     try {
       for (let index = 0; index < 10; index += 1) {
-        await agent.invoke(toAgentInvocation(`第 ${index} 句。`), {
+        // 使用者句墊長：框好的摘要要比被取代那段小才會提交（#1396）；回話不墊，摘要文字就是那顆短回覆。
+        await agent.invoke(toAgentInvocation(`第 ${index} 句。${'內容'.repeat(60)}`), {
           configurable: { thread_id: 'sp-twice' },
         });
       }

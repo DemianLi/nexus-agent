@@ -17,12 +17,12 @@ trap 'rm -rf "$T"' EXIT
 
 echo "upstream $(git -C "$UPSTREAM" rev-parse HEAD)"
 
-mkdir -p "$T/node_modules/@cordisjs" "$T/node_modules/@types" "$T/node_modules/@standard-schema" "$T/consumer"
-for pkg in cordis cordis-loader; do
-  rsync -a --exclude node_modules --exclude lib "$VENDOR/$pkg/" "$T/$pkg/"
+mkdir -p "$T/node_modules/@nexus" "$T/node_modules/@types" "$T/node_modules/@standard-schema" "$T/consumer"
+for pkg in cordis loader; do
+  rsync -a --exclude node_modules --exclude lib --exclude tests "$VENDOR/$pkg/" "$T/$pkg/"
 done
-ln -s "$T/cordis" "$T/node_modules/cordis"
-ln -s "$T/cordis-loader" "$T/node_modules/@cordisjs/plugin-loader"
+ln -s "$T/cordis" "$T/node_modules/@nexus/cordis"
+ln -s "$T/loader" "$T/node_modules/@nexus/cordis-plugin-loader"
 ln -s "$(cd "$VENDOR/cordis/node_modules/cosmokit" && pwd -P)" "$T/node_modules/cosmokit"
 ln -s "$(cd "$VENDOR/cordis/node_modules/@standard-schema/spec" && pwd -P)" "$T/node_modules/@standard-schema/spec"
 ln -s "$(cd "$VENDOR/cordis/node_modules/@types/node" && pwd -P)" "$T/node_modules/@types/node"
@@ -50,21 +50,21 @@ measure() {
 }
 
 build() {
-  rm -rf "$T/cordis/lib" "$T/cordis-loader/lib"
+  rm -rf "$T/cordis/lib" "$T/loader/lib"
   measure "  建 cordis 宣告檔" "$T/cordis" tsconfig.json
-  measure "  建 loader 宣告檔" "$T/cordis-loader" tsconfig.json
+  measure "  建 loader 宣告檔" "$T/loader" tsconfig.json
 }
 
 echo "== 上游原樣（packages/core/src 不改）"
 rm -rf "$T/cordis/src" && cp -R "$UPSTREAM/packages/core/src" "$T/cordis/src"
-rm -rf "$T/cordis/lib" "$T/cordis-loader/lib"
+rm -rf "$T/cordis/lib" "$T/loader/lib"
 measure "原始碼模式、NodeNext 消費者" "$T/consumer" tsconfig.src.json
 build
 measure "宣告檔模式、NodeNext 消費者" "$T/consumer" tsconfig.json
 
 echo "== vendor（本地修改第 1 條）"
 rm -rf "$T/cordis/src" && cp -R "$VENDOR/cordis/src" "$T/cordis/src"
-rm -rf "$T/cordis/lib" "$T/cordis-loader/lib"
+rm -rf "$T/cordis/lib" "$T/loader/lib"
 measure "原始碼模式、NodeNext 消費者" "$T/consumer" tsconfig.src.json
 measure "原始碼模式、nexus 的 base 設定" "$T/consumer" tsconfig.base.json
 build

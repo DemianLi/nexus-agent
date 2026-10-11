@@ -12,7 +12,7 @@
  * @module
  */
 
-import type { EntryChange, EntryOptions, Loader } from '@cordisjs/plugin-loader';
+import type { EntryChange, EntryOptions, Loader } from '@nexus/cordis-plugin-loader';
 
 /** 紀錄的一筆。`parent` 是 group 列的 id，`null` 是根。 */
 export type ChangeRecord =

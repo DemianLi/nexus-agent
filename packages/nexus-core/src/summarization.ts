@@ -889,16 +889,85 @@ function withQuietSummaryCall(
       if (model === undefined) return inner(request, handler);
       // 生摘要的模型（#1377）：門檻跟 `request.model`（選中那顆），摘要跟最近一次已送出的請求那顆；沒有意見就是 `request.model`。
       const target = summaryModelOf?.(request);
+      // 生摘要的呼叫完成過幾次、已經檢查過幾次：基座生完摘要緊接著交下去的第一份請求就是要檢查的那一份（#1396）。
+      let generated = 0;
+      let checked = 0;
       const quiet = quietInvoke(
         model,
         summaryUsageCells.getStore(),
         typeof target === 'object' && target !== null ? target : undefined,
+        () => {
+          generated += 1;
+        },
       );
-      return inner({ ...request, model: quiet }, (sent) =>
-        handler(sent.model === quiet ? { ...sent, model } : sent),
-      );
+      return inner({ ...request, model: quiet }, (sent) => {
+        if (generated > checked) {
+          checked = generated;
+          assertSummaryShrinks(request, sent);
+        }
+        return handler(sent.model === quiet ? { ...sent, model } : sent);
+      });
     },
   } as AgentMiddleware;
+}
+
+/**
+ * 摘要生出來了，但加上框架之後不比它取代的那一段小（[#1396](https://github.com/DemianLi/nexus-agent/issues/1396)）。
+ *
+ * 型別化是為了讓測試與日後的讀者認得它，**也記進 {@link summaryCallFailures}**：外面的 {@link withTokenBudget} 靠那個認
+ * 「摘要這一格壞了」，走 #1383 既有的兩條路——自己的門檻觸發就 warn、照原請求送；端點真的超窗就 warn、保留原錯誤。
+ * 日誌不記 `compaction/summary`（拋在往外交之前），#1395 的歷史檔暫存因此丟掉這一步的寫入。
+ */
+export class SummaryNotSmallerError extends Error {
+  constructor(
+    /** 加上框架的摘要訊息的估計 token。 */
+    readonly framedTokens: number,
+    /** 被它取代的那一段的估計 token 總和。 */
+    readonly replacedTokens: number,
+  ) {
+    super(
+      `摘要不比被取代的內容小（框好的摘要 ${framedTokens} token ≥ 被取代的 ${replacedTokens} token）`,
+    );
+    this.name = 'SummaryNotSmallerError';
+  }
+}
+
+/**
+ * dsh 的 shrink 檢查（`compaction-basic/src/region.ts:417-420`）：摘要生出來、提交之前，框好的摘要訊息要**比它取代的那段小**，
+ * 不然整次壓縮不提交。擋的是「只剩舊摘要一則」這類壓了反而變大或沒變小的壓縮（S6 第 3 輪）。
+ *
+ * - **框好的摘要**：基座生完摘要緊接著交下去的那份請求的第一則（`buildSummaryMessage` 加過框架與歷史檔路徑）。
+ * - **被取代的那段**：這一步開始時摘要器眼中的有效串（{@link effectiveMessages}），去掉交下去那份留下的尾巴。
+ * - **兩邊同一把量具**：{@link estimateMessageTokens}。**偏離 dsh**：它用 route price（`meter.estimateMessage` 對 `shadowedRouteTokenCount`），
+ *   我們沒有逐路由的計價，退到這把與保留量選尾巴同一把的估算（#1383 的 D3 同一個理由）。被取代那段取的是參數截斷之前的有效串，
+ *   所以只會略高估被取代的量（檢查寬鬆一點，不會多擋）。
+ *
+ * 估不出來（形狀不對、估算拋）就不擋：檢查不能反過來把摘要殺掉。
+ *
+ * @throws {SummaryNotSmallerError} 框好的摘要 ≥ 被取代的那段。
+ */
+function assertSummaryShrinks(
+  request: { messages?: readonly BaseMessage[]; state?: unknown },
+  sent: { messages?: readonly BaseMessage[] },
+): void {
+  const head = sent.messages?.[0];
+  if (head === undefined) return;
+  let framed: number;
+  let replaced: number;
+  try {
+    const before = effectiveMessages(request.messages ?? [], request.state);
+    const kept = Math.max(0, (sent.messages?.length ?? 1) - 1);
+    const span = before.slice(0, Math.max(0, before.length - kept));
+    if (span.length === 0) return;
+    framed = estimateMessageTokens(head);
+    replaced = span.reduce((total, message) => total + estimateMessageTokens(message), 0);
+  } catch {
+    return;
+  }
+  if (framed < replaced) return;
+  const error = new SummaryNotSmallerError(framed, replaced);
+  summaryCallFailures.add(error);
+  throw error;
 }
 
 /**
@@ -1087,6 +1156,7 @@ function quietInvoke<T extends object>(
   model: T,
   cell: SummaryUsageCell | undefined,
   generator?: object,
+  onGenerated?: () => void,
 ): T {
   return new Proxy(model, {
     get(target, key) {
@@ -1113,6 +1183,7 @@ function quietInvoke<T extends object>(
           cell.usage = readModelUsage(result);
           cell.summaries += 1;
         }
+        onGenerated?.();
         return result;
       };
     },

@@ -5,12 +5,12 @@
  * 所以除了 `contract.ts` 那個 `Service` 子類別之外沒有任何框架層的補丁。
  */
 
-import type { Context } from 'cordis';
+import type { Context } from '@nexus/cordis';
 import { describe, expect, it } from 'vitest';
 import { ContractError, contractProvider } from './contract.js';
 import { STATE, boot as bootTree, createEntry, fiberOf } from './tree.js';
 
-declare module 'cordis' {
+declare module '@nexus/cordis' {
   interface Context {
     memory: { version: string };
   }

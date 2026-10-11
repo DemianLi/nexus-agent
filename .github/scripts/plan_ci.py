@@ -36,8 +36,9 @@ TS_RE = re.compile(
 FULL_RES = [
     re.compile(rx)
     for rx in (
-        # 全部套件都依賴它們。
+        # 全部套件都依賴它們。vendor 的 Cordis 是容器本身（#1401）。
         r'^packages/nexus-(core|wire)/',
+        r'^vendor/',
         # 相依、工具鏈、workspace 設定：影響每一個套件。
         r'^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|\.prettierignore|\.prettierrc.*|prettier\.config\..*)$',
         r'^(eslint\.config\..*|tsconfig.*\.json|vitest\..*)$',
@@ -83,7 +84,8 @@ def plan(changed: list[str], event: str, base_ref: str) -> dict[str, str]:
     if selective:
         pkg_filters = ' '.join(f'--filter=./{d}' for d in changed_plugin_dirs(changed))
     else:
-        pkg_filters = '--filter=./packages/*'
+        # vendor 只有全跑時才測：它的異動本來就一律觸發全跑（見 FULL_RES）。
+        pkg_filters = '--filter=./packages/* --filter=./vendor/*'
     # 全跑時 harness 是關鍵路徑（單一 job 約三分鐘），切片平行跑；選擇性時只有幾十個檔，切了只是多付安裝。
     harness_total = 1 if selective else HARNESS_SHARDS
     return {

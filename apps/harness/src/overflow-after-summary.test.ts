@@ -62,10 +62,19 @@ class RecordingModel extends BaseChatModel {
     );
     if (this.shared.calls === this.overflowOn)
       throw new ContextOverflowError('Input exceeded the model context window.');
-    const message = new AIMessage(`第 ${this.shared.calls} 次回話。`);
+    const isSummary = messages[0]?.getType() !== 'system';
+    const message = new AIMessage(isSummary ? '摘要。' : `第 ${this.shared.calls} 次回話。${PAD}`);
     return { generations: [{ text: message.text, message }], llmOutput: {} };
   }
 }
+
+/**
+ * 墊料：框好的摘要要比被取代那段小才會提交（#1396）。被取代的那段是第 1 句，所以那一句要比摘要框架大；
+ * 摘要呼叫（沒有系統訊息的那種）反過來回短字串，不然摘要本身就比被取代的大。
+ */
+const PAD = '內容'.repeat(80);
+/** 使用者那句墊得更長：第一次摘要取代的就是它一則，要比「框架＋歷史檔路徑」大得多。 */
+const USER_PAD = '內容'.repeat(200);
 
 const SECTION = /## Summarized at [^\n]+\n\n/;
 
@@ -77,8 +86,8 @@ async function converse(overflowOn: number) {
     backend: new ContainedFilesystemBackend({ rootDir: root }),
     checkpointer: new MemorySaver(),
     plugins: [],
-    // 第 2 輪進來是 3 則，到了訊息數門檻；保留量 12 token 在這份對話上算出 N = 2。
-    summarization: { trigger: [{ type: 'messages', value: 3 }], retainTokens: 12 },
+    // 第 2 輪進來是 3 則，到了訊息數門檻；使用者句約 210 token、回話約 90 token，保留量 250 token 在這份對話上算出 N = 2。
+    summarization: { trigger: [{ type: 'messages', value: 3 }], retainTokens: 250 },
   });
   const pump = new ThreadPump(
     built.agent as unknown as PumpAgent,
@@ -95,7 +104,7 @@ async function converse(overflowOn: number) {
   const afterTurn: Snapshot[] = [];
   try {
     for (let turn = 1; turn <= 2; turn += 1) {
-      await pump.submit({ kind: 'message', text: `第 ${turn} 句。`, id: `m${turn}` });
+      await pump.submit({ kind: 'message', text: `第 ${turn} 句。${USER_PAD}`, id: `m${turn}` });
       await pump.whenIdle();
       const state = await (
         built.agent as unknown as {
@@ -162,7 +171,7 @@ describe('第一次已經摘要過、送出去端點還是回超窗', () => {
     // 3. 歷史檔：一個區段（attempt 2 的），第 1 句只出現一次（見檔頭，#1389）。
     const sections = afterTurn[1]!.history!.split(SECTION).filter((text) => text.trim() !== '');
     expect(sections.map((text) => text.trim())).toEqual([
-      'Human: 第 1 句。\nAI: model, 第 1 次回話。',
+      `Human: 第 1 句。${USER_PAD}\nAI: model, 第 1 次回話。${PAD}`,
     ]);
   });
 
@@ -175,6 +184,6 @@ describe('第一次已經摘要過、送出去端點還是回超窗', () => {
     ]);
     expect(afterTurn[1]).toMatchObject({ cutoff: 1, messages: 4 });
     const sections = afterTurn[1]!.history!.split(SECTION).filter((text) => text.trim() !== '');
-    expect(sections.map((text) => text.trim())).toEqual(['Human: 第 1 句。']);
+    expect(sections.map((text) => text.trim())).toEqual([`Human: 第 1 句。${USER_PAD}`]);
   });
 });
