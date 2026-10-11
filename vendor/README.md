@@ -27,6 +27,8 @@
 
 ### 沒有移植的
 
+- **dsh 第 10 條（被抹掉的 import 標成 `type`）**：那是給 Node 原生 TypeScript 轉譯用的，我們只用 tsx 與 vitest 跑原始碼，碰不到。
+- **dsh 第 17 條（換成自己的 scope）**：見上面清單下的說明；是偏離，等決定。
 - **dsh 第 6 條（fiber 重入卸載三處）**：探針沒有觸及在 setup 裡發起卸載的情形，先不移植，才量得出「以上游 main 為底」本身行不行。上游對應的修補是還開著的 [#185](https://github.com/cordiverse/cordis/pull/185)。
 - **[#127](https://github.com/cordiverse/cordis/issues/127)（非 ACTIVE 的 fiber 卸載後停不到 DISPOSED）**：在 c261dd2c 上照 issue 的 repro 實跑仍然重現（PENDING 停在 0、失敗過的停在 3）。上游的修補 #133、#140 都還開著。
 

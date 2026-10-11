@@ -40,6 +40,10 @@ root.inject(['greeter', 'loader'], (ctx) => {
   void [viaGet, viaProp, loader, wrong, notLoader];
 });
 
+// @ts-expect-error provide 回傳收尾函式，不是 number
+const disposer: number = root.provide('greeter', new Greeter(root));
+void disposer;
+
 // provide：第一個重載帶型別；值型別不合時會落到 `provide(name: string, value?: any)`，**不報錯**。
 // 這一行刻意不標 @ts-expect-error——報告把它列為「provide 的值型別沒有被檢查」。
 root.provide('greeter', 42);

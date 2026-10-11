@@ -24,15 +24,16 @@ export interface ContractIntercept {
   range?: string;
 }
 
-/** 契約不相容：指名消費者那一列、服務、兩邊的版本。 */
+/** 契約不相容：指名消費者與提供者那兩列、服務、兩邊的版本。 */
 export class ContractError extends Error {
   constructor(
     readonly consumer: string,
+    readonly provider: string,
     readonly service: string,
     readonly provided: string,
     readonly range: string,
   ) {
-    super(`插件 ${consumer} 要的服務 ${service} 是 ${range}，提供的是 ${provided}`);
+    super(`插件 ${consumer} 要的服務 ${service} 是 ${range}，${provider} 提供的是 ${provided}`);
     this.name = 'ContractError';
   }
 }
@@ -42,8 +43,12 @@ export function contractProvider(name: string, version: string) {
   return class ContractProvider extends Service<ContractIntercept> {
     static readonly contractVersion = version;
 
+    /** 提供者那一列的 id。在建構子記下：`check` 裡的 `this.ctx` 追蹤到的是消費者。 */
+    readonly provider: string;
+
     constructor(ctx: Context) {
       super(ctx, name);
+      this.provider = ctx.fiber.entry?.id ?? ctx.fiber.runtime?.name ?? '(未知)';
     }
 
     readonly version = version;
@@ -52,7 +57,7 @@ export function contractProvider(name: string, version: string) {
       const { range } = this[Service.resolveConfig]();
       if (range === undefined || semver.satisfies(version, range)) return true;
       const consumer = this.ctx.fiber.entry?.id ?? this.ctx.fiber.runtime?.name ?? '(未知)';
-      throw new ContractError(consumer, name, version, range);
+      throw new ContractError(consumer, this.provider, name, version, range);
     }
   };
 }

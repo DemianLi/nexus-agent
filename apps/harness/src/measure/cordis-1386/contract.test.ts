@@ -52,7 +52,7 @@ describe('服務契約的 semver 檢查（#1386 ⑤）', () => {
     expect(t.thrown()).toEqual([]);
   });
 
-  it('major 不相容：消費者停在 PENDING，錯誤指名那一列、服務與兩邊版本', async () => {
+  it('major 不相容：消費者停在 PENDING，錯誤指名消費者與提供者兩列、服務與兩邊版本', async () => {
     const c = consumer('^3.0.0');
     const t = await boot({ v2: contractProvider('memory', '2.3.0'), consumer: c.plugin });
     await createEntry(t.loader, { id: 'provider', name: 'cordis:v2' });
@@ -61,8 +61,12 @@ describe('服務契約的 semver 檢查（#1386 ⑤）', () => {
     expect(t.state('consumer-new')).toBe(STATE.PENDING);
     expect(c.seen).toEqual([]);
     const [error] = t.thrown();
+    expect(error?.message).toBe(
+      '插件 consumer-new 要的服務 memory 是 ^3.0.0，provider 提供的是 2.3.0',
+    );
     expect(error).toMatchObject({
       consumer: 'consumer-new',
+      provider: 'provider',
       service: 'memory',
       provided: '2.3.0',
       range: '^3.0.0',

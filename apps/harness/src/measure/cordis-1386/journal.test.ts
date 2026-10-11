@@ -1,12 +1,15 @@
 /**
- * [#1386](https://github.com/DemianLi/nexus-agent/issues/1386) 驗收 ④：Loader 的樹由 append-only 的變更紀錄導出，不 fork Include，Loader 不寫回任何檔案。
+ * [#1386](https://github.com/DemianLi/nexus-agent/issues/1386) 驗收 ④：Loader 的樹由 append-only 的變更紀錄導出，不 fork Include，Loader 不寫回任何 YAML。
+ *
+ * 範圍：這裡每一列都是 `cordis:` 開頭的內建插件。按套件名（裸 specifier）載入的列會經過 `createResolve`，
+ * 在設定目錄寫出 `.cordis/{.gitignore,resolve.mjs}`——那不是樹的狀態，但確實是寫檔；最後一條正對照就是量它。
  *
  * 有牙的三件事：
  *
  * 1. Loader **自己發起**的變更也落進紀錄——插件 `ctx.fiber.dispose()` 自我停用（上游 index.ts 的 case 7 寫 `disabled: true`）、
  *    插件 `ctx.fiber.update()` 改自己的設定（`internal/commit`）。
  * 2. 同一份紀錄導出的樹與現場的樹逐欄相同：逐筆重播一次、冷啟動折成列表交給 `root.update()` 一次。
- * 3. 寫檔次數為零靠 spy `node:fs` 與 `node:fs/promises` 的寫入函式證明；另有一條正對照，證明 spy 抓得到 vendor 裡真的寫檔的那條路。
+ * 3. （內建插件的列）寫檔次數為零靠 spy `node:fs` 與 `node:fs/promises` 的寫入函式證明；另有一條正對照，證明 spy 抓得到 vendor 裡真的寫檔的那條路。
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -203,7 +206,7 @@ describe('Loader 的樹由變更紀錄導出（#1386 ④）', () => {
     expect(snapshot(fresh.loader)).not.toBe(snapshot(t.loader));
   });
 
-  it('整個過程沒有任何寫檔', async () => {
+  it('內建插件的列：整個過程沒有任何寫檔', async () => {
     const t = await live();
     const fresh = await boot(BUILTINS);
     await fresh.loader.root.update(fold(t.journal.records));
