@@ -329,3 +329,19 @@ C 與 A 合計 56 個串流回應（7,401＋11,875 個 SSE frame）：
 
 **這一次沒有發現新的推導差異**，所以沒有開新卡。真模型在 B 的前景子代理裡反覆讀寫同一個檔直到被切斷，是模型行為，這份紀錄不評論它。
 
+
+**2026-10-11 決議（[#1342](https://github.com/DemianLi/nexus-agent/issues/1342)，demian 拍板）**：§三「助手訊息的 `name` 欄位」與「系統訊息的內容形狀」兩列要不要保留。這是地圖 [#1298](https://github.com/DemianLi/nexus-agent/issues/1298) 的 Fog，2026-10-09 的拍板沒有涵蓋。**這一則只記決議，沒有改任何產品程式碼**；實作在 [#1392](https://github.com/DemianLi/nexus-agent/issues/1392)。
+
+| 項目 | 決議 | 理由 |
+| --- | --- | --- |
+| 助手訊息的 `name: "model"` | **拿掉**：CLI 與 web 兩條路徑都不送 | 欄位的來源不是我們的碼，是 LangChain `AgentNode.js:97-98`（`aiMessage.name = options.name ?? "model"`，`langchain@1.5.10`）。日誌不記、推導不產生（`conversation-replay.ts` 不碰 `name`），所以它是「到了模型請求、不在日誌裡」的東西，違反 dsh 的「Model-visible ⟺ logged」（dsh `AGENTS.md`）。dsh 的 `AssistantMessage`（`packages/llm/llm/src/message.ts:167`）沒有這個欄位。web 是實際主路徑，本來就不送，所以拿掉只改 CLI。我在 `packages/*/src` 與 `apps/*/src` 的非測試檔 grep 不到任何讀它的地方（否定宣稱，只用 grep 查過） |
+| 系統訊息的區塊邊界 | **不記**，維持 `request/system` 只記區塊串起來的文字；登記條件見下 | 產品路徑沒有任何會用 `cache_control` 的供應商：`agent-assembly.ts:38-40` 對 Anthropic／Bedrock 的快取 middleware 是「遇到就拋並指名」，記憶層 `addCacheControl: false`（`:245`），`request-snapshot.ts:51` 已登記「系統提示詞只記文字」。現在記區塊要付日誌格式升版、web 觀測分頁與夾具的成本，換的是一個沒有的供應商 |
+| 夾具的兩處正規化 | **`stripModelName` 拿掉並改成斷言；`systemText` 保留並改成明文規格** | 卡面第 3 項寫「兩處都拿掉」，那是沒有第二題答案時寫的；選了「不記區塊」之後，比對就只能比文字，所以這一處是契約不是補丁，**不拿掉**。第一處改成斷言（線上任何助手訊息都沒有 `name`），不是只刪：只刪的話欄位悄悄回來時沒有東西會報 |
+
+**登記的條件**：`agent-assembly.ts` 若要放開 Anthropic／Bedrock（或任何會用區塊邊界做 `cache_control` 的供應商），**必須先開卡決定怎麼記區塊**。dsh 的對照做法是 `SystemMessage.content: readonly ContentBlock[]`，註解「Exact model-facing blocks」（`message.ts:143、151`），`cache_control` 在供應商轉接層（`llm-pi-ai`）才加、不進日誌；若我們走那條路，`request/system` 會多一個區塊欄位，日誌格式升版。這一則決議不替那張卡預選答案。
+
+**實作時要處理的一處**（寫在 [#1392](https://github.com/DemianLi/nexus-agent/issues/1392)）：剝除放在 live-model 的 fetch 層（與 `withEmptyAssistantContent`，`live-model.ts:944`，同一格），夾具的手挑組裝（S 系列）沒有那層包裝，非串流時線上仍帶 `name: "model"`，同 S12 的空助手訊息。那一組要嘛掛上同一個包裝，要嘛登記成已知差異（產品路徑走不到）。
+
+**沒量的事**：自架端點（例如 vLLM 一類）收到文字區塊陣列的系統訊息時，可能把區塊用 `\n` 串接、也可能不串，取決於端點的 chat template 設定。若會串，**模型實際看到的系統提示詞**可能與日誌上的字串不同，而日誌今天無從得知。我們手上只有雲端 API，量不到；要知道內網部署端點的類型才能量。**沒有開卡**（沒有人能做的卡只會變成噪音），等內網端點類型確定再開。
+
+**這一則的對讀版本**：nexus develop `91c87252`；dsh `d743267388641bc76f17c45ce8b4c231aed1d32c`（`references/deepseek-harness`，與遠端 HEAD 相同）。
