@@ -439,11 +439,14 @@ describe('摘要事件的位置與內容（#1301）', () => {
   });
 
   /**
-   * **摘要之後模型那一輪失敗：事件已經記下，重打時再摘要一次，兩筆都在。**
-   * 失敗那輪 graph state 沒存到 `_summarizationEvent`（基座只在呼叫回來後才交出），下一次呼叫從原始的串再摘要；
-   * 日誌因此有兩筆，座標都是原始串的，重放取最後一筆（重放那一頭在 `packages/nexus-core/src/conversation-replay.test.ts`——這裡的裸 agent 沒有回合驅動層記的 `turn/start`，推不出歷史）。
+   * **摘要之後模型那一輪失敗：事件已經記下，下一次呼叫從那一筆接著，不從原始的串重摘**（[#1390](https://github.com/DemianLi/nexus-agent/issues/1390)）。
+   *
+   * 失敗那輪 graph state 沒存到 `_summarizationEvent`（基座只在呼叫回來後才交出）。修之前下一次呼叫從沒摘要過的串再摘一次，
+   * 日誌因此緊接著第二筆、歷史檔疊一份重複的區段；現在摘要器外面那一層在下一步請求前把日誌上那筆補回 state，
+   * 下一次呼叫直接拿那份摘要送出去，沒有第二次摘要。後面照常門檻到了再摘（切點接著第一筆往後走，由「單調」那條管）。
+   * 重放那一頭在 `packages/nexus-core/src/conversation-replay.test.ts`——這裡的裸 agent 沒有回合驅動層記的 `turn/start`，推不出歷史。
    */
-  it('摘要之後的模型呼叫失敗：事件仍在日誌裡，重打再摘要，兩筆都在', async () => {
+  it('摘要之後的模型呼叫失敗：事件仍在日誌裡，下一次呼叫接著它走，不重摘', async () => {
     const summarization = {
       trigger: [{ type: 'tokens' as const, value: 3_000 }],
       retainTokens: 12,
@@ -457,7 +460,7 @@ describe('摘要事件的位置與內容（#1301）', () => {
 
     const turns = chatter(120);
     turns[summaryTurn + 1] = { content: '', error: '供應商過載' };
-    const { rootEvents, failures } = await run(turns, {
+    const { rootEvents, failures, prompts } = await run(turns, {
       summarization,
       invocations: 20,
       tolerateFailures: true,
@@ -465,12 +468,21 @@ describe('摘要事件的位置與內容（#1301）', () => {
 
     expect(failures.some((message) => message.includes('供應商過載'))).toBe(true);
     const summaries = rootEvents.filter((event) => event.type === 'compaction/summary');
-    expect(summaries.length).toBeGreaterThan(1);
+    expect(summaries.length).toBeGreaterThan(0);
     // 失敗那次呼叫的摘要事件之後，緊接著是它失敗的 model/start，沒有 assistant/message。
     const first = rootEvents.indexOf(summaries[0]!);
-    const between = rootEvents
-      .slice(first + 1, rootEvents.indexOf(summaries[1]!))
-      .map((event) => event.type);
-    expect(between).not.toContain('assistant/message');
+    const afterFirst = rootEvents.slice(first + 1).map((event) => event.type);
+    expect(afterFirst[0]).toBe('model/start');
+    const nextAssistant = afterFirst.indexOf('assistant/message');
+    const nextSummary = afterFirst.indexOf('compaction/summary');
+    expect(nextAssistant).toBeGreaterThan(-1);
+    // 下一筆摘要（如果有）排在失敗之後至少一次成功回覆的後面：失敗的下一次呼叫沒有立刻重摘。
+    if (nextSummary !== -1) expect(nextAssistant).toBeLessThan(nextSummary);
+
+    // 失敗之後的下一次呼叫：不是摘要請求（單一 human），而是主請求，第一則 human 就是日誌上那份摘要。
+    const next = prompts[summaryTurn + 2]!;
+    expect(next.length).toBeGreaterThan(1);
+    const humans = next.filter((message) => message.getType() === 'human');
+    expect(humans[0]!.text).toBe(fromLoggedMessage(summaries[0]!.data.summary!).text);
   });
 });
