@@ -215,7 +215,8 @@ describe('Loader 的樹由變更紀錄導出（#1386 ④）', () => {
   });
 
   it('正對照：spy 抓得到 vendor Loader 唯一寫檔的那條路（裸 specifier 的解析輔助檔）', async () => {
-    const dir = await mkdtemp(join(import.meta.dirname, '.resolve-probe-'));
+    // 放 harness 的 node_modules 底下：掃整棵樹的測試都略過那裡。
+    const dir = await mkdtemp(join(import.meta.dirname, '../../../node_modules/.resolve-probe-'));
     try {
       writeFileSync(join(dir, 'package.json'), '{}');
       writes.calls.length = 0;

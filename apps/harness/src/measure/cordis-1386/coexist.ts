@@ -185,7 +185,9 @@ async function copies(): Promise<{
   v2: NexusPlugin<unknown>;
   cleanup: () => Promise<void>;
 }> {
-  const root = await mkdtemp(join(MCP, '.coexist-cordis-'));
+  // 放在套件自己的 node_modules 底下：相依照樣往上找得到，而掃整棵樹的測試（例如 known-event-types）
+  // 都略過 node_modules，不會在這份副本被刪掉的那一刻讀到半個目錄。
+  const root = await mkdtemp(join(MCP, 'node_modules', '.coexist-cordis-'));
   const load = async (version: string) => {
     await cp(join(MCP, 'src'), join(root, version), {
       recursive: true,

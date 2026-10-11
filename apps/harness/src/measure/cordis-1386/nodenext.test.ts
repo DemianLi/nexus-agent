@@ -40,7 +40,8 @@ describe('vendor 的 Cordis 在 NodeNext 下（#1386 ①）', () => {
     const source = await readFile(join(DIR, 'consumer.ts'), 'utf8');
     const stripped = source.replace(/^\s*\/\/ @ts-expect-error.*\n/gmu, '');
     expect(stripped).not.toBe(source);
-    const tmp = await mkdtemp(join(DIR, '.mutant-'));
+    // 突變副本放 harness 的 node_modules 底下：解析得到 vendor 套件，掃整棵樹的測試也不會撞上它。
+    const tmp = await mkdtemp(join(DIR, '../../../../node_modules/.mutant-'));
     try {
       await writeFile(join(tmp, 'consumer.ts'), stripped);
       const config = JSON.parse(await readFile(join(DIR, 'tsconfig.json'), 'utf8')) as object;
