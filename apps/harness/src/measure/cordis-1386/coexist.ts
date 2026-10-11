@@ -25,8 +25,8 @@
 import { cp, mkdtemp, rm } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import type { Context } from 'cordis';
-import type { Loader } from '@cordisjs/plugin-loader';
+import type { Context } from '@nexus/cordis';
+import type { Loader } from '@nexus/cordis-plugin-loader';
 import { loadPlugins } from '@nexus/core';
 import type { NexusPlugin, PluginRegistry } from '@nexus/core';
 import { STATE, boot, createEntry, fiberOf } from './tree.js';
@@ -36,7 +36,7 @@ const MCP = join(REPO, 'packages', 'nexus-plugin-mcp');
 const FIXTURE_SERVER = join(MCP, 'src', 'fixture-server.ts');
 const TOOL = 'mcp__fixture__fetch_release_note';
 
-declare module 'cordis' {
+declare module '@nexus/cordis' {
   interface Context {
     mcp: McpVersion;
   }

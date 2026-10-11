@@ -10,10 +10,10 @@
  * @module
  */
 
-import { Context } from 'cordis';
-import type { Fiber, Message } from 'cordis';
-import Loader from '@cordisjs/plugin-loader';
-import type { EntryOptions } from '@cordisjs/plugin-loader';
+import { Context } from '@nexus/cordis';
+import type { Fiber, Message } from '@nexus/cordis';
+import Loader from '@nexus/cordis-plugin-loader';
+import type { EntryOptions } from '@nexus/cordis-plugin-loader';
 
 /** 上游 `FiberState` 的值（vendor/cordis/src/fiber.ts）。 */
 export const STATE = { PENDING: 0, LOADING: 1, ACTIVE: 2, UNLOADING: 3, DISPOSED: 4 } as const;

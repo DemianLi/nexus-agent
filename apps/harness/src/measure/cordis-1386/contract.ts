@@ -4,18 +4,18 @@
  * 用的是 Cordis 本來就有的一條路，不加任何東西：
  *
  * - 消費者宣告範圍的地方有兩個——插件自己的 `inject: { memory: { range } }`，或 Loader 列上的 `intercept: { memory: { range } }`。
- *   兩者都落進消費者 ctx 的 `Context.intercept`（vendor/cordis/src/fiber.ts 的建構子、vendor/cordis-loader/src/config/isolate.ts 的 patch-context）。
+ *   兩者都落進消費者 ctx 的 `Context.intercept`（vendor/cordis/src/fiber.ts 的建構子、vendor/loader/src/config/isolate.ts 的 patch-context）。
  * - 提供者是 `Service`：它的 `[Service.check]` 由**消費者的** fiber 呼叫（`Fiber._checkImpl`），`this` 是追蹤到消費者 ctx 的代理，
  *   所以 `this[Service.resolveConfig]()` 讀到的是消費者宣告的範圍，`this.ctx.fiber.entry` 是消費者那一列。
- *   Loader 自己的 `await` 檢查就是這樣用的（vendor/cordis-loader/src/index.ts 的 `[Service.check]`）。
+ *   Loader 自己的 `await` 檢查就是這樣用的（vendor/loader/src/index.ts 的 `[Service.check]`）。
  *
  * 不相容時 `check` 拋 {@link ContractError}；Cordis 把它交給**提供者**的 logger，消費者留在 PENDING。
  *
  * @module
  */
 
-import { Context, Service } from 'cordis';
-import type {} from '@cordisjs/plugin-loader';
+import { Context, Service } from '@nexus/cordis';
+import type {} from '@nexus/cordis-plugin-loader';
 import semver from 'semver';
 
 /** 消費者對一個契約服務宣告的東西。 */

@@ -1,13 +1,13 @@
 /**
- * #1386 驗收 ①：只相依 vendor 的 `cordis` 與 `@cordisjs/plugin-loader`，在 `module: NodeNext` 下型別解得到。
+ * #1386 驗收 ①：只相依 vendor 的 `@nexus/cordis` 與 `@nexus/cordis-plugin-loader`，在 `module: NodeNext` 下型別解得到。
  *
  * 每一行 `@ts-expect-error` 是一道牙：型別若退化成 `any`，那一行就不再報錯，標記變成未使用，tsc 會紅。
  * 「解得到」靠這幾行證明，不是靠 tsc 綠。
  */
-import { Context, Service } from 'cordis';
-import Loader from '@cordisjs/plugin-loader';
+import { Context, Service } from '@nexus/cordis';
+import Loader from '@nexus/cordis-plugin-loader';
 
-declare module 'cordis' {
+declare module '@nexus/cordis' {
   interface Context {
     greeter: Greeter;
   }
