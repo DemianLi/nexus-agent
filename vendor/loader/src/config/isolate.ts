@@ -1,4 +1,4 @@
-import { Context } from 'cordis'
+import { Context } from '@nexus/cordis'
 import { Dict } from 'cosmokit'
 import { Entry } from './entry.ts'
 

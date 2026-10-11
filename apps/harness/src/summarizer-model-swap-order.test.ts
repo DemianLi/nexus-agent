@@ -331,7 +331,14 @@ describe('摘要器看到的是這一步選中的模型（#1369）', () => {
         {
           content: '',
           toolCalls: [
-            { name: 'task', args: { description: '去做。', subagent_type: 'general-purpose' } },
+            {
+              name: 'task',
+              // 描述墊長：框好的摘要要比被取代那段小才會提交（#1396），「去做。」連框架都比不過。
+              args: {
+                description: `去做。${'內容'.repeat(100)}`,
+                subagent_type: 'general-purpose',
+              },
+            },
           ],
         },
         { content: '', toolCalls: [{ name: 'poke', args: {} }] },

@@ -1,4 +1,4 @@
-import { Context, Service } from 'cordis'
+import { Context, Service } from '@nexus/cordis'
 import { Entry, EntryOptions } from './entry.ts'
 import { EntryTree } from './tree.ts'
 

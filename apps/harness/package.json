@@ -40,7 +40,6 @@
     "vitest": "^4.1.11"
   },
   "dependencies": {
-    "@cordisjs/plugin-loader": "workspace:*",
     "@deepseek-ai/node-addon-system": "0.1.2",
     "@langchain/core": "^1.2.9",
     "@langchain/langgraph": "^1.4.13",
@@ -48,6 +47,8 @@
     "@langchain/langgraph-sdk": "^1.9.23",
     "@langchain/openai": "^1.5.10",
     "@nexus/core": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/cordis-plugin-loader": "workspace:*",
     "@nexus/plugin-agent-instructions": "workspace:*",
     "@nexus/plugin-ask-user": "workspace:*",
     "@nexus/plugin-feedback": "workspace:*",
@@ -71,7 +72,6 @@
     "@nexus/plugin-workspace-changes": "workspace:*",
     "@nexus/wire": "workspace:*",
     "@nexus/web": "workspace:*",
-    "cordis": "workspace:*",
     "deepagents": "~1.13.1",
     "langchain": "^1.5.10",
     "langsmith": ">=0.7.1 <0.10.0",

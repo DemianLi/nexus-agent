@@ -29,6 +29,12 @@ import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
 
+/**
+ * 對話內容的墊料：框好的摘要要比被取代那段小才會提交（#1396），一句「第 1 句。」連框架文字都比不過。
+ * 墊到比摘要框架大，這一檔才走得到「摘要真的提交」那條路。
+ */
+const PAD = '內容'.repeat(60);
+
 interface ThrowingState {
   calls: number;
 }
@@ -83,7 +89,7 @@ class ThrowingChatModel extends BaseChatModel {
     this.state.calls += 1;
     if (this.state.calls === this.throwOnCall) throw this.error;
     if (this.also !== undefined && this.state.calls === this.also.call) throw this.also.error;
-    const message = new AIMessage(`第 ${this.state.calls} 次回話。`);
+    const message = new AIMessage(`第 ${this.state.calls} 次回話。${PAD}`);
     return { generations: [{ text: message.text, message }], llmOutput: {} };
   }
 }
@@ -132,7 +138,7 @@ async function runUntilThrow(
   let rejected: unknown = null;
   try {
     for (let index = 0; index < invocations; index += 1) {
-      await agent.invoke(toAgentInvocation(`第 ${index + 1} 句。`), {
+      await agent.invoke(toAgentInvocation(`第 ${index + 1} 句。${PAD}`), {
         configurable: { thread_id: 'overflow' },
       });
     }

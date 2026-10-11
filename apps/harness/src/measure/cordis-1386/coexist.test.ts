@@ -10,6 +10,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { describe, expect, it } from 'vitest';
 import type { CoexistReport } from './coexist.js';
+import { STATE } from './tree.js';
 
 const run = promisify(execFile);
 
@@ -18,6 +19,7 @@ type Line =
   | {
       kind: 'without-isolate';
       v2State: number | undefined;
+      v2StateAfterRemove: number | undefined;
       errors: string[];
       leak: Record<string, number>;
     };
@@ -62,10 +64,12 @@ describe('新舊版並存加排水（#1386 ③，tsx 子行程）', () => {
       Object.fromEntries(Object.entries(opened).map(([type, count]) => [type, -count])),
     );
 
-    // 負對照：不開 isolate，第二版 provide 同名服務撞名、起不來；它開的子行程照樣收掉。
-    // 失敗的 fiber 停在 UNLOADING（3）收斂不到 DISPOSED——上游 #127，在 c261dd2c 上仍然重現。
+    // 負對照：不開 isolate，第二版 provide 同名服務撞名、起不來（FAILED）；它開的子行程照樣收掉。
+    // 撤掉之後同一顆 fiber 要收斂到 DISPOSED：上游 #127，由 vendor/patches/0001（上游 #185）修好，
+    // 拿掉那份修補就停在 FAILED。（#1386 探針當時只讀了撤掉之前那一次，又把 3 誤當成 UNLOADING。）
     expect(negative).toMatchObject({
-      v2State: 3,
+      v2State: STATE.FAILED,
+      v2StateAfterRemove: STATE.DISPOSED,
       errors: ['service "mcp" has been registered at <mcp-version>'],
       leak: {},
     });

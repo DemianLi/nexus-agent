@@ -1,4 +1,4 @@
-import { composeError, Context } from 'cordis'
+import { composeError, Context } from '@nexus/cordis'
 import { Dict, isNonNullable } from 'cosmokit'
 import { Entry, EntryOptions } from './entry.ts'
 import { EntryGroup } from './group.ts'
