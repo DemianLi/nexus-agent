@@ -963,15 +963,20 @@ describe('我們配的那份打底到每個 subagent', () => {
     }
   }
 
+  /** 墊料：框好的摘要要比被取代那段小才會提交（#1396），這幾句短話連框架文字都比不過。 */
+  const PAD = '內容'.repeat(100);
+
   /** root 叫 subagent、subagent 自己再叫一次工具——兩邊都累積得到門檻。 */
   function crewModel(): ScriptedChatModel {
     return new ScriptedChatModel({
       turns: [
         {
           content: '',
-          toolCalls: [{ name: 'task', args: { description: '去寫', subagent_type: 'writer' } }],
+          toolCalls: [
+            { name: 'task', args: { description: `去寫${PAD}`, subagent_type: 'writer' } },
+          ],
         },
-        { content: '', toolCalls: [{ name: ECHO_TOOL_NAME, args: { message: '一' } }] },
+        { content: '', toolCalls: [{ name: ECHO_TOOL_NAME, args: { message: `一${PAD}` } }] },
         { content: '（subagent 那側的摘要）' },
         { content: 'subagent 做完了。' },
         { content: '（root 那側的摘要）' },
@@ -1005,7 +1010,7 @@ describe('我們配的那份打底到每個 subagent', () => {
     });
 
     try {
-      await agent.invoke(toAgentInvocation('叫 writer 去做事。'));
+      await agent.invoke(toAgentInvocation(`叫 writer 去做事。${PAD}`));
     } finally {
       await dispose();
     }

@@ -24,7 +24,7 @@ import {
   readSummarizationEvent,
 } from './summarization.js';
 import type { SummarizationSettings } from './summarization.js';
-import { TokenAnchorBook } from './token-estimate.js';
+import { estimateMessageTokens, TokenAnchorBook } from './token-estimate.js';
 
 const BIG = '這是一段很長的內容。'.repeat(300);
 const conversation = (): BaseMessage[] => [
@@ -294,5 +294,114 @@ describe('摘要失敗的處理只認「生摘要那次」', () => {
     const out = await run({ settings: TOKEN_TRIGGER });
     expect(out.error).toBeUndefined();
     expect(out.reports).toEqual([]);
+  });
+});
+
+/**
+ * **摘要生出來了，但不比它取代的那段小：不提交**（[#1396](https://github.com/DemianLi/nexus-agent/issues/1396)）。
+ *
+ * 照 dsh `compaction-basic` 的 shrink 檢查（`region.ts:417-420`，`framedSummaryTokenCount >= shadowedRouteTokenCount` 就拋）。
+ * 拋出來的錯記進「摘要這一格壞了」的那份名單，所以走上面 #1383 既有的兩條路，不另開第三條：自己的門檻觸發就 warn、
+ * 照原請求送；端點真的超窗就 warn、保留原本的請求錯誤。
+ *
+ * 量具兩邊同一把（`estimateMessageTokens`）。**偏離 dsh**：它用 route price，我們沒有逐路由計價（#1383 的 D3 同一個理由）。
+ */
+describe('摘要不比被取代的小', () => {
+  /** 七則都短：被取代的那段一定比「框架＋歷史檔路徑」小。 */
+  const tiny = (): BaseMessage[] => [
+    new HumanMessage('問'),
+    new AIMessage('答'),
+    new HumanMessage('二'),
+    new AIMessage('三'),
+    new HumanMessage('四'),
+    new AIMessage('五'),
+    new HumanMessage('短問題'),
+  ];
+
+  it('我們自己的門檻觸發：warn 一條，照原請求送出去，不提交、不拋', async () => {
+    const out = await run({
+      messages: tiny(),
+      settings: { trigger: [{ type: 'messages', value: 3 }] },
+    });
+    expect(out.error).toBeUndefined();
+    // 摘要真的生出來過（所以才有得比），然後被擋下。
+    expect(out.model.invokes).toBe(1);
+    // 送出去的是原請求：七則一則沒少，第一則不是摘要。
+    expect(out.handled).toHaveLength(1);
+    expect(out.handled[0]).toHaveLength(7);
+    expect(String(out.handled[0]![0]!.content)).toBe('問');
+    // 沒有提交：回的是模型的回應，不是帶 `_summarizationEvent` 的 Command。
+    expect(readSummarizationEvent(out.result)).toBeUndefined();
+    expect((out.result as AIMessage).content).toBe('好。');
+    // 正好一條 warn，說的是這件事，走的是 #1383 那條「照原請求送出」。
+    expect(out.reports).toHaveLength(1);
+    expect(out.reports[0]).toContain('不比被取代');
+    expect(out.reports[0]).toContain('照原請求送出');
+  });
+
+  it('端點真的回超窗：保留原本的請求錯誤（同一個物件），warn 一條，不再重送', async () => {
+    const endpointError = new ContextOverflowError('端點說：超窗了');
+    const out = await run({
+      messages: tiny(),
+      // 門檻開很大：我們自己的預算不會合成超窗，是端點回的。
+      settings: { trigger: [{ type: 'tokens', value: 900_000 }] },
+      handlerThrows: (call) => (call === 1 ? endpointError : undefined),
+    });
+    expect(out.error).toBe(endpointError);
+    expect(out.model.invokes).toBe(1);
+    expect(out.handled).toHaveLength(1);
+    expect(out.reports).toHaveLength(1);
+    expect(out.reports[0]).toContain('不比被取代');
+    expect(out.reports[0]).toContain('保留原本的請求錯誤');
+  });
+
+  it('被取代的遠比摘要大：照常提交，沒有 warn', async () => {
+    const out = await run({ settings: { trigger: [{ type: 'messages', value: 3 }] } });
+    expect(out.error).toBeUndefined();
+    expect(readSummarizationEvent(out.result)).toBeDefined();
+    expect(String(out.handled[0]![0]!.content)).toContain('這是摘要。');
+    expect(out.reports).toEqual([]);
+  });
+
+  /**
+   * **邊界：框好的摘要與被取代的那段一樣大。** dsh 是 `>=`，所以一樣大也不提交；要是寫成 `>`，這一條翻成提交。
+   * 一樣大是真實會碰到的形狀——第 3 輪要取代的只剩上一份摘要、新摘要又與它同長（`summary-shrink.test.ts` 走的就是它）。
+   *
+   * 被取代的那段取一則純文字，字數逐字加到它的估計值剛好等於、再多一格（`framed + 1`）：兩個都在，才有「剛好等於」可量。
+   */
+  it('一樣大：不提交；只大一個 token：提交', async () => {
+    // 歷史檔路徑固定：框好的摘要裡帶著它，隨機的 session id 會讓估計值在兩次執行之間差幾個 token。
+    const state = { _summarizationSessionId: 'session_fixed01' };
+    const committed = await run({ state, settings: { trigger: [{ type: 'messages', value: 3 }] } });
+    const framed = estimateMessageTokens(committed.handled[0]![0]!);
+
+    const textOf = (chars: number) => new HumanMessage('字'.repeat(chars));
+    let equal = -1;
+    let plusOne = -1;
+    for (let chars = 1; chars <= 4_000 && plusOne < 0; chars += 1) {
+      const tokens = estimateMessageTokens(textOf(chars));
+      if (tokens === framed && equal < 0) equal = chars;
+      if (tokens === framed + 1 && plusOne < 0) plusOne = chars;
+    }
+    // 前提：兩個長度都找得到，不然下面比的不是「剛好等於」。
+    expect(equal).toBeGreaterThan(0);
+    expect(plusOne).toBeGreaterThan(0);
+
+    const attempt = (chars: number) =>
+      run({
+        messages: [textOf(chars), new HumanMessage('短問題')],
+        state,
+        settings: { trigger: [{ type: 'messages', value: 2 }] },
+      });
+
+    const same = await attempt(equal);
+    expect(readSummarizationEvent(same.result)).toBeUndefined();
+    expect(same.reports).toHaveLength(1);
+    expect(same.reports[0]).toContain('不比被取代');
+    expect(same.handled[0]).toHaveLength(2);
+
+    const bigger = await attempt(plusOne);
+    expect(readSummarizationEvent(bigger.result)).toBeDefined();
+    expect(bigger.reports).toEqual([]);
   });
 });

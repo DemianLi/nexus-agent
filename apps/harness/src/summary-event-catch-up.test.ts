@@ -48,6 +48,14 @@ const isSummaryCall = (prompt: readonly BaseMessage[]) =>
 
 const LONG = '長'.repeat(2_400);
 
+/**
+ * 第 1 輪的那一問一答墊長（#1396）：摘要要比被取代那段小才會提交，被取代的就是這一問一答。
+ * 之後的 `摘要一` 之類維持短字串，不然摘要本身就比被取代的大。
+ */
+const PAD = '內容'.repeat(100);
+const H1 = `第 1 句。${PAD}`;
+const A1 = `好 1${PAD}`;
+
 let dir: string;
 beforeEach(async () => {
   dir = await mkdtemp(join(tmpdir(), 'nexus-catch-up-'));
@@ -199,8 +207,8 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
    */
   it('503：下一輪不摘要時，state 補上那筆事件，每次呼叫推導等於實送', async () => {
     const run = await converse({
-      script: [ok('好 1'), ok('摘要一'), { content: '', error: 'upstream 503' }, ok('好 3')],
-      rounds: [{ text: '第 1 句。' }, { text: LONG }, { text: '第 3 句。', limits: BIG }],
+      script: [ok(A1), ok('摘要一'), { content: '', error: 'upstream 503' }, ok('好 3')],
+      rounds: [{ text: H1 }, { text: LONG }, { text: '第 3 句。', limits: BIG }],
     });
 
     // 前提：第 2 輪真的摘要了、請求真的失敗了、第 3 輪真的沒有再摘要。
@@ -217,7 +225,7 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
 
     // 歷史檔只有第 2 輪摘要卸下的那一段。
-    expect(run.snapshots[2]!.sections).toEqual(['Human: 第 1 句。 | AI: model, 好 1']);
+    expect(run.snapshots[2]!.sections).toEqual([`Human: ${H1} | AI: model, ${A1}`]);
   });
 
   /**
@@ -226,17 +234,8 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
    */
   it('使用者停止：同樣補上，每次呼叫推導等於實送', async () => {
     const run = await converse({
-      script: [
-        ok('好 1'),
-        ok('摘要一'),
-        { content: '好'.repeat(400), tokenDelayMs: 25 },
-        ok('好 3'),
-      ],
-      rounds: [
-        { text: '第 1 句。' },
-        { text: LONG, cancelAtCall: 3 },
-        { text: '第 3 句。', limits: BIG },
-      ],
+      script: [ok(A1), ok('摘要一'), { content: '好'.repeat(400), tokenDelayMs: 25 }, ok('好 3')],
+      rounds: [{ text: H1 }, { text: LONG, cancelAtCall: 3 }, { text: '第 3 句。', limits: BIG }],
     });
 
     expect(run.snapshots[1]!.logCutoffs).toEqual([2]);
@@ -247,7 +246,7 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
 
     expect(run.snapshots[2]!.stateCutoff).toBe(2);
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
-    expect(run.snapshots[2]!.sections).toEqual(['Human: 第 1 句。 | AI: model, 好 1']);
+    expect(run.snapshots[2]!.sections).toEqual([`Human: ${H1} | AI: model, ${A1}`]);
   });
 
   /**
@@ -257,13 +256,13 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
   it('503 之後下一輪又摘要：歷史檔不疊區段，兩段內容互不重複', async () => {
     const run = await converse({
       script: [
-        ok('好 1'),
+        ok(A1),
         ok('摘要一'),
         { content: '', error: 'upstream 503' },
         ok('摘要二'),
         ok('好 3'),
       ],
-      rounds: [{ text: '第 1 句。' }, { text: LONG }, { text: `${LONG}。` }],
+      rounds: [{ text: H1 }, { text: LONG }, { text: `${LONG}。` }],
     });
 
     expect(run.snapshots.map((s) => s.end)).toEqual(['turn/end', 'turn/failed', 'turn/end']);
@@ -272,7 +271,7 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
     const sections = run.snapshots[2]!.sections;
     expect(sections).toHaveLength(2);
     // 第一段：第 2 輪卸下的；第二段：第 3 輪新卸下的（第 2 輪那句長的），不含第一段的任何一則。
-    expect(sections[0]).toBe('Human: 第 1 句。 | AI: model, 好 1');
+    expect(sections[0]).toBe(`Human: ${H1} | AI: model, ${A1}`);
     expect(sections[1]).toBe(`Human: ${LONG}`);
     expect(sections[1]).not.toContain('第 1 句');
 
@@ -286,8 +285,8 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
   /** 沒有失敗：這一層什麼都不做（單元測試釘住它不回 `Command`；這裡看行為不變）。 */
   it('沒有失敗：摘要照舊由基座提交，一筆事件、一個區段', async () => {
     const run = await converse({
-      script: [ok('好 1'), ok('摘要一'), ok('好 2'), ok('好 3')],
-      rounds: [{ text: '第 1 句。' }, { text: LONG }, { text: '第 3 句。', limits: BIG }],
+      script: [ok(A1), ok('摘要一'), ok('好 2'), ok('好 3')],
+      rounds: [{ text: H1 }, { text: LONG }, { text: '第 3 句。', limits: BIG }],
     });
 
     expect(run.snapshots.map((s) => s.end)).toEqual(['turn/end', 'turn/end', 'turn/end']);
@@ -295,7 +294,7 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
     expect(run.snapshots[1]!.stateCutoff).toBe(2);
     expect(run.snapshots[2]!.logCutoffs).toEqual([]);
     expect(run.snapshots[2]!.stateCutoff).toBe(2);
-    expect(run.snapshots[2]!.sections).toEqual(['Human: 第 1 句。 | AI: model, 好 1']);
+    expect(run.snapshots[2]!.sections).toEqual([`Human: ${H1} | AI: model, ${A1}`]);
     expect(derivedVersusActual(run)).toEqual(['EQ', 'EQ', 'EQ']);
   });
 
@@ -305,7 +304,7 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
    */
   it('換模型：第 3 輪換到大窗口那顆，補的規則不看這一步選中的模型', async () => {
     const defaultModel = tagModelRoute(
-      new ScriptedChatModel({ turns: [ok('好 1'), ok('摘要一'), { content: '', error: '503' }] }),
+      new ScriptedChatModel({ turns: [ok(A1), ok('摘要一'), { content: '', error: '503' }] }),
       { model: 'default' },
     );
     const bigModel = tagModelRoute(new ScriptedChatModel({ turns: [ok('好 3')] }), {
@@ -322,7 +321,7 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
       limits: (candidate) =>
         candidate === bigModel ? BIG : candidate === defaultModel ? SMALL : undefined,
       rounds: [
-        { text: '第 1 句。' },
+        { text: H1 },
         { text: LONG },
         { text: '第 3 句。', before: () => controller.select({ model: 'big' }) },
       ],
@@ -359,7 +358,7 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
   /**
    * 子代理讀的是自己那份日誌：root 日誌上有摘要事件，子代理（一份全新的 state）的請求**不能**被補上 root 的事件。
    *
-   * 切點取 1（訊息數門檻 3、保留量 12 token），子代理 state 只有一則（任務描述）：切點 ≤ 長度，
+   * 切點取 1（訊息數門檻 3、保留量 12 token；只有第 1 句墊長，尾巴那兩則維持短，切點才仍是 1），子代理 state 只有一則（任務描述）：切點 ≤ 長度，
    * 「切點落在訊息串之外就不補」那一道擋不住——能擋住的只有「讀的是誰的日誌」。
    * 呼叫順序：1 ＝ 第 1 輪、2 ＝ root 摘要、3 ＝ root 請求（叫 task）、4 ＝ 子代理、5、6 ＝ root 收尾（又摘要一次）。
    */
@@ -379,7 +378,7 @@ describe('摘要之後請求失敗，下一輪從日誌上那筆接著', () => {
         ok('收工。'),
       ],
       trigger: [{ type: 'messages', value: 3 }],
-      rounds: [{ text: '第 1 句。' }, { text: '第 2 句。' }],
+      rounds: [{ text: H1 }, { text: '第 2 句。' }],
     });
 
     // 前提：root 日誌上先有一筆摘要，切點 1。

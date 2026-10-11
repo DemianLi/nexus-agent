@@ -572,12 +572,20 @@ describe('摘要輸入裡的附件', () => {
     expect(prompts[0]).toContain('"shot.png" (sha256:bbbbbbbb, 3x2) was attached here');
     expect(prompts[0]).not.toContain('[nexus-file]');
     expect(prompts[0]).not.toContain('[nexus-image]');
+    // 前提：摘要真的提交了（交下去的是「摘要 ＋ 留下的兩則」），不是被 shrink 檢查擋掉後照原串送（#1396）。
+    expect(sent).toHaveLength(3);
     // 留下的那則：同一個物件、區塊沒被換。
     expect(sent.at(-2)).toBe(kept);
   });
 
   it('沒有附件時，訊息串原樣進基座', async () => {
-    const { prompts, sent } = await summarize(longHistory(6));
+    // 訊息要夠長：框好的摘要比被取代那段小才會提交（#1396）；一則「問 0」連框架文字都比不過。
+    const fat = longHistory(6).map((_message, index) =>
+      index % 2 === 0
+        ? new HumanMessage(`問 ${index} ${'內容'.repeat(120)}`)
+        : new AIMessage(`答 ${index} ${'內容'.repeat(120)}`),
+    );
+    const { prompts, sent } = await summarize(fat);
     expect(prompts).toHaveLength(1);
     expect(sent.slice(1)).toHaveLength(2);
   });

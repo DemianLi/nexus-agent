@@ -48,6 +48,9 @@ function lastToolText(prompt: readonly BaseMessage[]): string {
   return typeof content === 'string' ? content : JSON.stringify(content ?? '');
 }
 
+/** 墊料：框好的摘要要比被取代那段小才會提交（#1396），一句「第一句。」連框架文字都比不過。 */
+const PAD = '內容'.repeat(60);
+
 interface Assembly {
   readonly root: string;
   readonly backend: ContainedFilesystemBackend;
@@ -72,7 +75,9 @@ async function summarize(
   historyPathPrefix?: string,
 ): Promise<CompactionSummary[]> {
   const model = new ScriptedChatModel({
-    turns: Array.from({ length: 12 }, (_, index) => ({ content: `第 ${index + 1} 次回話。` })),
+    turns: Array.from({ length: 12 }, (_, index) => ({
+      content: `第 ${index + 1} 次回話。${PAD}`,
+    })),
   });
   const { agent, attachSession, dispose } = await createNexusAgent({
     model,
@@ -89,7 +94,9 @@ async function summarize(
   const detach = attachSession(sessions);
   try {
     for (const line of ['第一句。', '第二句。', '第三句。', '第四句。']) {
-      await agent.invoke(toAgentInvocation(line), { configurable: { thread_id: THREAD } });
+      await agent.invoke(toAgentInvocation(`${line}${PAD}`), {
+        configurable: { thread_id: THREAD },
+      });
     }
   } finally {
     detach();

@@ -116,6 +116,11 @@ async function expectDerivedHistory(
 }
 
 const big = (char: string, n: number) => char.repeat(n);
+/**
+ * 一句話後面的墊料。剪刀剪過之後，被取代的那段在有效視角裡可能只剩幾句短話；框好的摘要要比它小才會提交
+ * （#1396），所以要壓縮的那幾格把每句墊到比摘要框架大。
+ */
+const PAD = '內容'.repeat(60);
 const echoCall = (id: string, message: string): Reply => ({
   tools: [{ id, name: 'echo', args: { message } }],
 });
@@ -442,7 +447,7 @@ describe('手挑組裝的邊界（#1300）', () => {
 describe('重啟後續接', () => {
   it('SR2 壓縮與剪刀、截斷發生之後重啟，下一次請求跟沒重啟的逐位元組相同', async () => {
     const script = () => mainOnly((k) => (k === 0 ? bigThenSmall() : {}));
-    const texts = ['大結果', '二', '三', '四', '五', '重啟點之後的一句'];
+    const texts = ['大結果', '二', '三', '四', '五', '重啟點之後的一句'].map((t) => `${t}${PAD}`);
     const control = await runServePhases([texts], script(), LOW_SUMMARIZATION);
     const restart = await runServePhases(
       [texts.slice(0, 5), texts.slice(5)],
@@ -540,7 +545,7 @@ describe('重啟後續接', () => {
         }
         return k === 2 ? bigThenSmall() : {};
       });
-    const texts = ['被截斷', '再來', '大結果', '三', '四', '五'];
+    const texts = ['被截斷', '再來', '大結果', '三', '四', '五'].map((t) => `${t}${PAD}`);
     const control = await runServePhases([texts], script(), LOW_SUMMARIZATION);
     const restart = await runServePhases(
       [texts.slice(0, 2), texts.slice(2)],
