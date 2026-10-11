@@ -29,7 +29,7 @@
  * ```
  *
  * 同名的 fold middleware 原地換掉 core／tail 裡的預設（摘要就是這樣被換成我們的），沒撞名的新 middleware
- * 插在 core 與 tail 之間。**對照的證據**是 `apps/harness/src/assembly-parity.test.ts`：同一份 fold
+ * 插在 core 與 tail 之間——**換模型與圖片省略例外，搬到 core 前面**（#1369，見 {@link mergeMiddlewareStack}）。**對照的證據**是 `apps/harness/src/assembly-parity.test.ts`：同一份 fold
  * 產物分別走 `createDeepAgent` 與這裡，middleware 名稱與順序、工具、系統提示、兩邊第一次送給模型的
  * 請求（root 與子代理）要逐位元組相同。基座移除之前，那條測試同時是升版絆索。
  *
@@ -53,6 +53,11 @@ import { createAgent } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
 
 import type { FoldedAgentParams } from './fold.js';
+import { IMAGE_OFFLOAD_MIDDLEWARE_NAME } from './image-offload.js';
+import {
+  MODEL_SELECTION_MIDDLEWARE_NAME,
+  SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+} from './model-selection.js';
 import { createPatchToolCallsMiddleware } from './patch-tool-calls.js';
 import { createSkillsMiddlewareQuietWhenEmpty } from './skills-middleware.js';
 
@@ -63,10 +68,33 @@ export interface AssembleAgentParams extends FoldedAgentParams {
 }
 
 /**
- * 把 fold 的 middleware 併進預設疊與尾段，**照基座的 `mergeMiddlewareStack`**。
+ * 排在**預設疊前面**的那幾顆的名字（#1369）：換模型（root 一顆、子代理跟隨一顆）與圖片省略。
+ *
+ * 它們的設計位置是「洋蔥最外面」（`fold.ts` 槽位表的註解）：摘要器、起訖、用量與 plugin middleware 看到的
+ * `request.model` 要是這一步選中的那顆，摘要器估算看到的要是省略過的圖。**但槽位表的順序只決定新名字之間的先後**——
+ * 摘要器與基座同名、被原地換進預設疊的第三格，新名字一律排在預設疊**後面**，所以摘要器實際在它們外面
+ * （門檻按換模型之前那顆算、由那顆生摘要；見 `summarizer-model-swap-order.test.ts`）。要把它們放到摘要器外面，
+ * 只能在合併這一步搬，不能靠槽位表。
+ *
+ * 三條合併路徑（root、一次性子代理、背景圖）都經過 {@link mergeMiddlewareStack}，所以搬移是它的**預設行為**，
+ * 不是選項：做成選項只會多出一個會漏接的呼叫點。
+ */
+const OUTSIDE_DEFAULTS: ReadonlySet<string> = new Set([
+  MODEL_SELECTION_MIDDLEWARE_NAME,
+  SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+  IMAGE_OFFLOAD_MIDDLEWARE_NAME,
+]);
+
+/**
+ * 把 fold 的 middleware 併進預設疊與尾段，**照基座的 `mergeMiddlewareStack`**，加一處偏離。
  *
  * 同名的原地換掉預設（兩段都找）；沒撞名的新 middleware 排在預設與尾段之間，或在
  * `appendNew: false` 時丟掉。
+ *
+ * **偏離基座的 `mergeMiddlewareStack`（登記，#1369）**：{@link OUTSIDE_DEFAULTS} 那幾個名字（沒撞名的）排在
+ * **預設疊前面**，而不是後面。理由與限制見那個常數。偏離的是基座這個函式，不是 dsh：dsh 沒有這個洋蔥，
+ * 它的壓縮在 `agent/pre-step`、早於 `agent/request` 的路由。保持原位的後果是摘要器永遠在換模型外面，
+ * 而同名取代這條縫（摘要器的唯一入口）又不能動，所以搬的是它們，不是摘要器。
  *
  * @param defaults - 預設疊。
  * @param custom - 呼叫端給的。
@@ -92,11 +120,19 @@ export function mergeMiddlewareStack(
     // 同名取最後一個：基座用 `Map.set` 覆寫，後給的贏。
     return base.map((entry) => replacements.get(entry.name) ?? entry);
   };
-  const novel =
+  const novelAll =
     options.appendNew === false
       ? []
       : custom.filter((entry) => !defaultNames.has(entry.name) && !tailNames.has(entry.name));
-  return [...replaceByName(defaults, defaultNames), ...novel, ...replaceByName(tail, tailNames)];
+  // 搬到預設疊前面的那幾顆，彼此維持 custom 給的先後（fold 槽位表：換模型在圖片省略外面）。
+  const outside = novelAll.filter((entry) => OUTSIDE_DEFAULTS.has(entry.name));
+  const novel = novelAll.filter((entry) => !OUTSIDE_DEFAULTS.has(entry.name));
+  return [
+    ...outside,
+    ...replaceByName(defaults, defaultNames),
+    ...novel,
+    ...replaceByName(tail, tailNames),
+  ];
 }
 
 /**

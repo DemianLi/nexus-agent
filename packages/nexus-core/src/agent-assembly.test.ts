@@ -14,6 +14,11 @@ import { describe, expect, it } from 'vitest';
 
 import { assembleAgent, mergeMiddlewareStack } from './agent-assembly.js';
 import type { AssembleAgentParams } from './agent-assembly.js';
+import { IMAGE_OFFLOAD_MIDDLEWARE_NAME } from './image-offload.js';
+import {
+  MODEL_SELECTION_MIDDLEWARE_NAME,
+  SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME,
+} from './model-selection.js';
 
 const named = (name: string, tag = name) => Object.assign(createMiddleware({ name }), { tag });
 const namesOf = (stack: readonly { name: string }[]) => stack.map((entry) => entry.name);
@@ -57,6 +62,88 @@ describe('mergeMiddlewareStack', () => {
 
   it('什麼都沒給時原樣回預設疊', () => {
     expect(namesOf(mergeMiddlewareStack([named('a'), named('b')], []))).toEqual(['a', 'b']);
+  });
+
+  /**
+   * #1369：換模型與圖片省略的設計位置是洋蔥最外面，而新名字一律排在預設疊後面——摘要器同名取代回預設疊
+   * 第三格，所以它實際在這兩顆外面（門檻按換模型之前那顆算、由那顆生摘要）。搬移在合併這一步做。
+   */
+  describe('排在預設疊前面的那幾顆（#1369）', () => {
+    const defaults = () => [named('fs'), named('SummarizationMiddleware'), named('patch')];
+
+    it('換模型與圖片省略搬到預設疊前面，彼此維持 custom 給的先後；其餘新名字照舊排在預設疊後面', () => {
+      const merged = mergeMiddlewareStack(
+        defaults(),
+        [
+          named('novel-a'),
+          named(MODEL_SELECTION_MIDDLEWARE_NAME),
+          named('novel-b'),
+          named(IMAGE_OFFLOAD_MIDDLEWARE_NAME),
+        ],
+        [named('memory')],
+      );
+
+      expect(namesOf(merged)).toEqual([
+        MODEL_SELECTION_MIDDLEWARE_NAME,
+        IMAGE_OFFLOAD_MIDDLEWARE_NAME,
+        'fs',
+        'SummarizationMiddleware',
+        'patch',
+        'novel-a',
+        'novel-b',
+        'memory',
+      ]);
+    });
+
+    it('子代理跟隨的那顆同樣搬到前面', () => {
+      const merged = mergeMiddlewareStack(defaults(), [
+        named('novel'),
+        named(SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME),
+      ]);
+
+      expect(namesOf(merged).slice(0, 2)).toEqual([SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME, 'fs']);
+      expect(namesOf(merged).indexOf(SUBAGENT_MODEL_FOLLOW_MIDDLEWARE_NAME)).toBeLessThan(
+        namesOf(merged).indexOf('SummarizationMiddleware'),
+      );
+    });
+
+    it('摘要器仍在原位被同名取代，位置沒動（縫是它唯一的入口）', () => {
+      const ours = named('SummarizationMiddleware', 'ours');
+      const merged = mergeMiddlewareStack(defaults(), [
+        ours,
+        named(MODEL_SELECTION_MIDDLEWARE_NAME),
+      ]);
+
+      expect(namesOf(merged)).toEqual([
+        MODEL_SELECTION_MIDDLEWARE_NAME,
+        'fs',
+        'SummarizationMiddleware',
+        'patch',
+      ]);
+      expect(merged[2]).toBe(ours);
+    });
+
+    it('appendNew: false 時它們跟其他沒撞名的新名字一樣被丟掉', () => {
+      const merged = mergeMiddlewareStack(
+        defaults(),
+        [named(MODEL_SELECTION_MIDDLEWARE_NAME), named(IMAGE_OFFLOAD_MIDDLEWARE_NAME)],
+        [],
+        { appendNew: false },
+      );
+
+      expect(namesOf(merged)).toEqual(['fs', 'SummarizationMiddleware', 'patch']);
+    });
+
+    it('預設疊自己就有同名的不搬：留在原位', () => {
+      const ours = named(MODEL_SELECTION_MIDDLEWARE_NAME, 'ours');
+      const merged = mergeMiddlewareStack(
+        [named('fs'), named(MODEL_SELECTION_MIDDLEWARE_NAME)],
+        [ours],
+      );
+
+      expect(namesOf(merged)).toEqual(['fs', MODEL_SELECTION_MIDDLEWARE_NAME]);
+      expect(merged[1]).toBe(ours);
+    });
   });
 });
 
