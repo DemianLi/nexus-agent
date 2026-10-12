@@ -30,6 +30,7 @@ import {
   PLUGIN_SNAPSHOT_FILE_NAME,
 } from './plugin-snapshot.js';
 import type { PluginSnapshot, SnapshotSource } from './plugin-snapshot.js';
+import { createThreadPluginList } from './thread-plugin-list.js';
 
 const temporary: string[] = [];
 const AT = new Date('2026-10-12T00:00:00.000Z');
@@ -196,6 +197,30 @@ describe('buildPluginSnapshot', () => {
       state: 'dropped',
       dropStage: 'config',
     });
+  });
+
+  it('宣告沒變、掉在不同的一步（apply → requires）：兩邊各記各的 dropStage，判 next-thread', async () => {
+    // 同一份宣告、兩邊都掉，只是掉的原因換了（例如它依賴的那一列被關掉）；管理員看 jq 要看得到這個差別。
+    const loaded = await load();
+    const withDrop = (stage: 'apply' | 'requires'): SnapshotSource => ({
+      ...sourceOf(loaded),
+      drops: [{ id: 'todo', stage }],
+    });
+    const snapshot = buildPluginSnapshot({
+      running: withDrop('apply'),
+      saved: withDrop('requires'),
+      generatedAt: AT,
+    });
+    const row = snapshot.rows.find((candidate) => candidate.id === 'todo');
+    expect(row?.running).toEqual({ state: 'dropped', dropStage: 'apply' });
+    expect(row?.saved).toEqual({ state: 'dropped', dropStage: 'requires' });
+    expect(row?.sync).toBe('next-thread');
+    const same = buildPluginSnapshot({
+      running: withDrop('apply'),
+      saved: withDrop('apply'),
+      generatedAt: AT,
+    });
+    expect(same.rows.find((candidate) => candidate.id === 'todo')?.sync).toBe('same');
   });
 
   it('沒寫 id 的列（insert 進來的）設定改了：next-thread，不是 same', async () => {
@@ -371,5 +396,44 @@ describe('createPluginSnapshotWriter', () => {
     mkdirSync(blocker);
     await writer.publish(snapshotOf('same', '2026-10-12T00:00:02.000Z'));
     expect(existsSync(path)).toBe(true);
+  });
+});
+
+describe('createThreadPluginList 的快照', () => {
+  it('read() 等快照寫完才回：開一條對話要等一次寫檔，不是丟著不管', async () => {
+    const dir = tmp();
+    const env = { [HARNESS_HOME_ENV]: dir };
+    const startup = await loadDefaultPlugins({ serve: true, env, warn: () => {} });
+    let release: () => void = () => {};
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const published: PluginSnapshot[] = [];
+    const reader = createThreadPluginList({
+      load: (warn) => loadDefaultPlugins({ serve: true, env, warn }),
+      startup,
+      trialDropped: [],
+      audit: { live: false },
+      startupRead: [],
+      log: () => {},
+      now: () => AT,
+      publishSnapshot: async (snapshot) => {
+        published.push(snapshot);
+        await gate;
+      },
+    });
+    let settled = false;
+    const reading = reader.read().then((list) => {
+      settled = true;
+      return list;
+    });
+    // 讓重讀跑到寫檔那一步；寫檔還沒放行，read() 不能先回。
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(published).toHaveLength(1);
+    expect(settled).toBe(false);
+    release();
+    await reading;
+    expect(settled).toBe(true);
+    expect(published[0]?.generatedAt).toBe(AT.toISOString());
   });
 });
