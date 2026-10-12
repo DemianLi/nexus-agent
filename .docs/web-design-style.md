@@ -42,7 +42,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 ### 1.3 圓的形狀
 
 - **長什麼樣**：圓角走一條階梯（`sm` 6 到 `3xl` 24）；按鈕是全圓（`rounded-full`）。
-- **從哪裡來**：Libraries.dev 的按鈕與 chip 是全圓 pill、卡片外框圓角約 24–26px、選單 12px、選項 8–9px（元件清單 §3.2）；階梯在 [#377 定稿](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498) 拍板，不用 superellipse。為什麼選這種柔和的形狀：**待確認**（文件與卡片裡只記了「照 Libraries.dev」，沒寫更深的理由）。
+- **從哪裡來**：Libraries.dev 的按鈕與 chip 是全圓 pill、卡片外框圓角約 24–26px、選單 12px、選項 8–9px（元件清單 §3.2）；階梯在 [#377 定稿](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498) 拍板，不用 superellipse。文件與卡片裡只記了「照 Libraries.dev」，沒寫更深的理由；demian 2026-10-12 決定保留現狀，不另補理由、不改階梯。
 - **規則在哪**：規格 §5「形狀」；`design-system.test.ts` 擋任意值圓角。
 
 ### 1.4 字：四階、兩種粗細，次要靠顏色
