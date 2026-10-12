@@ -989,6 +989,14 @@ export interface LoadedPluginConfig {
    * 啟動時才掉的列（{@link dropped}）在這裡照宣告的樣子留著，同 `--dump-config`。
    */
   readonly entries: readonly ConfigEntry[];
+  /**
+   * {@link entries} 每一列解析後的 id，一格對一格（[#1406](https://github.com/DemianLi/nexus-agent/issues/1406)）。
+   * 寫了 `id` 的列就是那個 id；沒寫的（只有 `insert` 進來的會這樣）是載入器補的那個號，跟 {@link rows}、
+   * {@link StartupDrop.id} 同一套。模組載不進來的列載入器沒補過號，用 `id ?? name`，同 {@link StartupDrop.id} 的規則。
+   * 「磁碟上有哪幾列」要從這裡走，不能從 {@link rows} 或 {@link plugins} 走：模組那一步掉了的列、與停用而且模組載
+   * 不起來的列不在那兩份裡。
+   */
+  readonly ids: readonly string[];
 }
 
 /**
@@ -1020,9 +1028,13 @@ export async function loadPluginConfig(
   const entries = composeEntries(sources);
   const loaded: { readonly row: ConfigEntry; readonly entry: PluginEntry }[] = [];
   const dropped: StartupDrop[] = [];
-  for (const row of entries) {
+  // `entries` 每一列解析後的 id：先放「宣告的 id 或模組名」，載進來的那幾列等載入器補完號再換成補過的那個。
+  const ids = entries.map((row) => row.id ?? row.name);
+  const loadedAt: number[] = [];
+  for (const [position, row] of entries.entries()) {
     try {
       loaded.push({ row, entry: await resolveEntryModule(row) });
+      loadedAt.push(position);
     } catch (error) {
       if (error instanceof PluginModuleAccessError || !(error instanceof PluginConfigError)) {
         throw error;
@@ -1044,6 +1056,8 @@ export async function loadPluginConfig(
     const resolution = resolutions[index];
     if (resolution === undefined) return entry;
     const { origin, configError } = resolution;
+    const position = loadedAt[index];
+    if (position !== undefined) ids[position] = origin.id;
     rows.set(entry, { id: origin.id, module: row.name });
     if (resolution.disabled) return entry;
     if (configError !== undefined) {
@@ -1063,7 +1077,7 @@ export async function loadPluginConfig(
     }
     return entry;
   });
-  return { plugins, dropped, ignoredConfig, rows, entries };
+  return { plugins, dropped, ignoredConfig, rows, entries, ids };
 }
 
 /**

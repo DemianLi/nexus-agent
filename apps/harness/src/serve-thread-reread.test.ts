@@ -215,6 +215,18 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     expect(h.applied()).toEqual(['{"ok":false}', '{"ok":true}']);
   }, 60000);
 
+  it('沒寫 id 的列試組掉了：設定一改下一條照樣重新試它（鍵要含那一列的宣告）', async () => {
+    const h = home(true);
+    const anonymous = (config: string): string => `- insert:\n    - name: './probe.ts'\n${config}`;
+    h.patch(anonymous('      config:\n        ok: false\n'));
+    const server = await start(h.env, []);
+    expect(await say(server, 'a')).toBeUndefined();
+    expect(h.applied()).toEqual(['{"ok":false}']);
+    h.patch(anonymous('      config:\n        ok: true\n'));
+    expect(await say(server, 'b')).toBeUndefined();
+    expect(h.applied()).toEqual(['{"ok":false}', '{"ok":true}']);
+  }, 60000);
+
   it('試組掉了的列改成另一個壞值：只重試一次，之後的對話不再試', async () => {
     const h = home(true);
     h.patch(probeRow('      config:\n        note: 1\n'));

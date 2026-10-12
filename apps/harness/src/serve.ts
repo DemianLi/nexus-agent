@@ -101,6 +101,12 @@ import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
+import { STARTUP_READ_PLUGINS } from './plugin-row-classes.js';
+import {
+  createPluginSnapshotWriter,
+  describeSnapshot,
+  pluginSnapshotPath,
+} from './plugin-snapshot.js';
 import { createThreadPluginList } from './thread-plugin-list.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { subagentModelSelectionPlugin } from './settings/subagent-model-selection.js';
@@ -586,6 +592,11 @@ async function startServer(
   // **每條 thread 組裝時重讀清單**（#1405）：同一個函式、同一組參數，新 thread 看得到 home 層改過的列與組裝期設定。
   // 起動期讀一次的列照舊到重啟才生效，重讀時看到值變了就記「已儲存，待重啟」；這份名單就是上面 `startupSetting`／
   // `startupEntryMounted` 讀的那幾列。規則與偏離登記見 `thread-plugin-list.ts`。
+  //
+  // **已儲存 vs 執行中的對照寫成 home 底下一份 JSON 檔**（#1406）：啟動時一次、之後每次重讀一次。不開 wire 路由——
+  // 還沒有管理員身分，`/threads` 底下每個登入的人都看得到。檔裡不帶設定值也不帶 drop 原文，理由與偏離登記見
+  // `plugin-snapshot.ts`；路徑與讀法見 `docs/operations.md`。
+  const snapshotWriter = createPluginSnapshotWriter({ path: pluginSnapshotPath(env), log });
   const threadPluginList = createThreadPluginList({
     load: (warn) =>
       loadDefaultPlugins({
@@ -596,24 +607,18 @@ async function startServer(
       }),
     startup: loaded,
     trialDropped,
+    trialDrops: assemblyDropsOf(loaded, trial.dropped),
     audit,
-    startupRead: [
-      browserSessionPlugin,
-      threadTitlePlugin,
-      deliverableFilesPlugin,
-      sessionPersistencePlugin,
-      toolTextPlugin,
-      projectionFlushPlugin,
-      toolResultStashPlugin,
-      spillPolicyPlugin,
-      backgroundSubagentsPlugin,
-      liveModelPlugin,
-      subagentModelSelectionPlugin,
-      threadTitleLlmPlugin,
-      threadSearchPlugin,
-    ],
+    // 起動期讀的 13 列：名單與分類表同一份（`plugin-row-classes.ts`），上面 `startupSetting` 那幾行讀的就是它們。
+    startupRead: STARTUP_READ_PLUGINS,
     log,
+    publishSnapshot: async (snapshot) => {
+      await snapshotWriter.publish(snapshot);
+    },
   });
+  // 啟動那一份先寫下去（檔在 server 起來之前就在），摘要留到下面啟動那幾行印完再記，不插在網址前面。
+  const startupSnapshot = threadPluginList.snapshot();
+  const startupSnapshotWritten = await snapshotWriter.publish(startupSnapshot, { announce: false });
   // 啟動那幾行裡的「plugin：」不列掉了的列，兩次掉的都不列。
   const droppedEntries = new Set([
     ...loaded.dropped.flatMap((drop) => drop.entry ?? []),
@@ -1029,6 +1034,8 @@ async function startServer(
   // 以前印在第一條 thread 組起來時，因為那之前沒有人知道掛了什麼；上面那一次試組之後答案就在了，管理的人起
   // serve 的那一刻就看得到，不必等第一個人開對話。
   for (const line of formatTelemetryDisclosure(telemetrySharing)) log(line);
+  // 已儲存 vs 執行中的對照（#1406）：寫成功才講，寫不進去的警告已經在上面記過。
+  if (startupSnapshotWritten) log(describeSnapshot(startupSnapshot, pluginSnapshotPath(env)));
 
   return {
     url: server.url,
