@@ -108,7 +108,8 @@ CLI 每一次啟動各自一個 run 目錄，一份會話一個 `.jsonl` 加一�
 （理由與絆索見 `apps/harness/src/eval/runner.ts` 的檔頭）。
 
 `.header.json` 自格式 30 起記下**寫這份日誌的是誰**（#1025）：程式碼的 commit 與工作樹有沒有未提交的改動、疊完的插件清單
-（每一列的 `name`、`id`、是否停用，**不含設定內容**）、整份設定的雜湊，以及 root 用的模型型錄 id（只在 `--live`）。續接不改它，
+（每一列的 `name`、`id`、是否停用，**不含設定內容**）、整份設定的雜湊，以及 root 用的模型型錄 id（只在 `--live`）。`serve` 記的是
+那條 thread 組裝時重讀的那一份清單（#1405），所以同一台 server 上改了清單之後開的對話，header 跟著不同。續接不改它，
 永遠是最初那一個行程。設定雜湊是帶鍵的，鍵在 `~/.nexus-agent/config-hash-key.json`（`0600`）：**只能跟同一個 home 寫的日誌比**，
 拿到日誌的人反推不出設定裡的值。刪掉那個檔，之後的日誌換一套雜湊。離線掃描（`pnpm --filter @nexus/harness eval:sessions scan <目錄>`）每一份
 印一行這些欄位，舊日誌沒記的印「—」。
@@ -531,6 +532,17 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 - **哪一列的設定寫壞了，啟動時就講。** CLI 在進對話之前、`serve` 在印出網址之前，都先驗過每一列的設定、
   照清單組一次 agent（`serve` 組完就收，[#749](https://github.com/DemianLi/nexus-agent/issues/749)），設定不合法、
   外掛掛上去時拋錯，都在那一刻報出來，訊息兩邊同一句。**`disabled: true` 的那一列不驗設定。**
+- **`serve` 改了清單，新對話就生效，不必重啟**（[#1405](https://github.com/DemianLi/nexus-agent/issues/1405)）。每條對話組裝時
+  照同一組 env 與 `--patch` 重讀一次清單，所以改了 home 層的 `cordis.patch.yml`，之後開的對話看得到：哪幾列掛、組裝時讀的設定
+  （`agent-loop`、`recursion-limit`、`tool-fs-search` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
+  第一次碰到的舊對話，拿的是那一刻的清單。三件事照舊要重啟：
+  - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
+  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`deliverable-files`、
+    `session-persistence`、`tool-text`、`projection-flush`、`tool-result-stash`、`spill-policy`、`background-subagents`、
+    `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
+  - `goal`、`sandbox-policy`、`workspace-changes`、`commands` 這四顆：宿主直接用它們的程式碼。
+
+  重讀時清單讀不起來、或必掛的列掉了，**只有那一條對話開不起來**，錯誤訊息同啟動那一次，伺服器照常，下一條再讀一次。
 - **報了之後起不起得來，照必掛與可少掛**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)，照 dsh）。
   設定驗不過、模組載不起來、外掛掛上去時拋錯的那一列掉了：啟動時印一段「警告：N 列沒有掛上」指名它與原因，
   其餘照樣起來，掉了的列算沒掛（跟寫 `disabled: true` 一樣）。**必掛的只有 `browser-session` 與 `system-prompt`**（後者掉了，模型拿到的提示詞就不是部署方寫的那份），它們掉了整個起不來，訊息連
@@ -538,12 +550,13 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   不會退回預設那個對外的端點。啟動程式自己加的外掛（交協作者的 host-services，不在清單上）掛上去時拋錯，
   照舊整個起不來。
   **掛上那一刻的警告只印在啟動時**（組裝之後外掛執行期交出的話，例如 MCP 掉線重連的進度，另外逐條印：CLI 一行一條到標準錯誤、前綴 `[外掛]`，`serve` 記進伺服器日誌 `[外掛] thread "…"：…`）：CLI 印到標準錯誤，`serve` 印到伺服器日誌、在印出網址之前。`serve` 啟動時掉了的列，
-  之後每條對話都直接算沒掛，不再重試，到重啟為止；啟動時沒掉、某一條對話組裝時才掉的列，只在那條對話裡不掛，
+  之後每條對話都直接算沒掛，不再重試，到重啟或那一列的設定改了為止（改了，下一條對話重新試它；重讀時新掉的列在伺服器日誌記一次
+  「[清單] 這一列沒掛上」）；啟動時沒掉、某一條對話組裝時才掉的列，只在那條對話裡不掛，
   伺服器日誌記一行「[組裝] thread "…" 這一條沒掛上」。
 - **掛上了、但外掛自己有話要講的，也在那段警告裡。** 例如 MCP 伺服器連不上：那一列照 dsh 照樣掛上、那台
   沒有工具，啟動時印「警告：N 則外掛掛上時交出的話」指名它與原因。`serve` 每條對話各連一次，某一條又連不上
   就記一行「[組裝] thread "…" 警告：…」，伺服器回來之後開的對話就有工具了。要它連不上就算掉，那一列的
-  `config` 寫 `failOnStartupError: true`（掉了之後照上一條，到重啟為止不再連），見
+  `config` 寫 `failOnStartupError: true`（掉了之後照上一條，到重啟或改了那一列為止不再連），見
   [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)。
 - **MCP 伺服器的使用指引與資源也進得來**（[#431](https://github.com/DemianLi/nexus-agent/issues/431)、
   [#430](https://github.com/DemianLi/nexus-agent/issues/430)）：伺服器 `initialize` 回的 `instructions` 會加上
