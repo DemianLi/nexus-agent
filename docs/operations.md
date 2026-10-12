@@ -535,14 +535,36 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 - **`serve` 改了清單，新對話就生效，不必重啟**（[#1405](https://github.com/DemianLi/nexus-agent/issues/1405)）。每條對話組裝時
   照同一組 env 與 `--patch` 重讀一次清單，所以改了 home 層的 `cordis.patch.yml`，之後開的對話看得到：哪幾列掛、組裝時讀的設定
   （`agent-loop`、`recursion-limit`、`tool-fs-search` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
-  第一次碰到的舊對話，拿的是那一刻的清單。三件事照舊要重啟：
+  第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
-  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`deliverable-files`、
+  - **啟動時讀一次的那 13 列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`deliverable-files`、
     `session-persistence`、`tool-text`、`projection-flush`、`tool-result-stash`、`spill-policy`、`background-subagents`、
     `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
-  - `goal`、`sandbox-policy`、`workspace-changes`、`commands` 這四顆：宿主直接用它們的程式碼。
+    `agent-default-model` 不在這裡：沒帶 `--live` 時它在每條對話組裝時讀，改了新對話就生效。
+
+  **`goal`、`sandbox-policy`、`workspace-changes` 關掉也是新對話生效，不必重啟**：這三顆每條對話組裝時各取一份，沒掛就缺席
+  （`commands` 不是清單上的一列，執行器是宿主自己建的，要動只能改程式碼）。**`sandbox-policy` 有 `--workspace` 時關掉，之後每條新對話
+  都開不起來**（檔案系統有圍堵而沒有政策那一列，組裝當場拋），不是「照舊」。
 
   重讀時清單讀不起來、或必掛的列掉了，**只有那一條對話開不起來**，錯誤訊息同啟動那一次，伺服器照常，下一條再讀一次。
+- **哪些已儲存、還沒生效，看 `$NEXUS_AGENT_HOME/plugin-snapshot.json`**（[#1406](https://github.com/DemianLi/nexus-agent/issues/1406)）。
+  `--dump-config` 只印磁碟上疊出來的那一份；`serve` 另外把「磁碟上現在的」與「啟動時讀進去、試組過的」逐列對照，寫成這個檔：
+  啟動時寫一次，之後每條對話組裝時重讀清單、各更新一次（先寫暫存檔再 `rename`，讀的人不會讀到寫一半的；模式 0600）。
+  伺服器日誌記一行 `[對照快照] N 列，與執行中相同 …、新對話生效 …、待重啟 …；寫在 <路徑>`，第一次一定記，之後只在哪一列的
+  `sync` 變了才記。寫不進去不影響 `serve`，只記一次警告，下一次重讀再試。
+
+  ```bash
+  jq '.rows[] | select(.sync != "same")' "$NEXUS_AGENT_HOME/plugin-snapshot.json"
+  ```
+
+  每一列只有 `id`、`module`、`running`、`saved`、`sync`，`running` 與 `saved` 裡只有 `state`（`mounted`／`disabled`／`dropped`／`absent`）
+  和掉了才有的 `dropStage`（`module`／`config`／`apply`／`requires`）。`sync`：`same` 沒有差別、`next-thread` 已儲存新對話生效、
+  `restart` 已儲存待重啟。**檔裡不帶設定值，也不帶掉了的原因原文**（設定可能放了秘密，原因照舊只進伺服器日誌）。
+  `running` 是啟動時的樣子；組裝期讀的列，已儲存的那份已經在新對話生效，所以是 `next-thread`。列的全集與順序同
+  `--dump-config`，磁碟上新插進來的列接在最後（`running` 是 `absent`）。分類依據是
+  [`.docs/plugin-reload-classification-2026-10-08.md`](../.docs/plugin-reload-classification-2026-10-08.md)，表在
+  `apps/harness/src/plugin-row-classes.ts`。**不開 wire 路由**：還沒有管理員身分，`/threads` 底下每個登入的人都看得到；
+  有了之後改走那道閘的只讀路由。
 - **報了之後起不起得來，照必掛與可少掛**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)，照 dsh）。
   設定驗不過、模組載不起來、外掛掛上去時拋錯的那一列掉了：啟動時印一段「警告：N 列沒有掛上」指名它與原因，
   其餘照樣起來，掉了的列算沒掛（跟寫 `disabled: true` 一樣）。**必掛的只有 `browser-session` 與 `system-prompt`**（後者掉了，模型拿到的提示詞就不是部署方寫的那份），它們掉了整個起不來，訊息連

@@ -21,6 +21,12 @@
  *
  * 讀清單交出的警告（例如 patch 指到不存在的 id）也只記一次，進伺服器日誌。
  *
+ * ## 已儲存 vs 執行中的對照（[#1406](https://github.com/DemianLi/nexus-agent/issues/1406)）
+ *
+ * 每次讀完清單、與啟動那一刻，這裡算一份「磁碟上現在的」對「啟動時讀進去的」逐列對照，交給 `publishSnapshot`（serve 寫成
+ * home 底下的 JSON 檔，見 `plugin-snapshot.ts`）。**「已儲存，待重啟」的判定只有一處**：`plugin-row-state.ts` 的
+ * `snapshotsDiffer`，日誌那一句（`reportStartupDrift`）與快照的 `sync` 同一支。`rowKey`、`snapshotOf` 也從那裡來。
+ *
  * ## 偏離登記
  *
  * dsh 開 HMR 時設定一改立即影響使用那個 profile 的全部會話，沒開就保留到重啟（dsh
@@ -30,13 +36,12 @@
  * @module
  */
 
-import { isDeepStrictEqual } from 'node:util';
-
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
 
-import type { LoadedPluginConfig, PluginConfigWarn } from './plugin-config.js';
-import { startupEntryMounted, startupSetting } from './settings/startup.js';
-import { stableStringify } from './stable-stringify.js';
+import type { LoadedPluginConfig, PluginConfigWarn, StartupDrop } from './plugin-config.js';
+import { buildPluginSnapshot } from './plugin-snapshot.js';
+import type { PluginSnapshot, SnapshotSource } from './plugin-snapshot.js';
+import { rowKey, snapshotOf, snapshotsDiffer } from './plugin-row-state.js';
 import {
   auditStartupEntries,
   describeDrop,
@@ -71,6 +76,17 @@ export interface ThreadPluginListOptions {
   readonly startupRead: readonly NexusPlugin<unknown>[];
   /** 伺服器日誌。 */
   readonly log: (line: string) => void;
+  /**
+   * 啟動試組掉了的列（`assemblyDropsOf(startup, trial.dropped)`），帶著掉在哪一步。省略時對照快照把它們記成 `apply`。
+   */
+  readonly trialDrops?: readonly Pick<StartupDrop, 'id' | 'stage'>[];
+  /**
+   * 每次讀完清單、啟動那一刻（{@link ThreadPluginReader.snapshot}）算出來的「已儲存 vs 執行中」對照（#1406）。
+   * **不拋**：寫不出來不能讓一條 thread 建不起來，由實作自己吞掉並記日誌。省略就不算。
+   */
+  readonly publishSnapshot?: (snapshot: PluginSnapshot) => Promise<void> | void;
+  /** 算快照用的時間，測試給固定的。省略即現在。 */
+  readonly now?: () => Date;
 }
 
 /** 讀清單的那一支。 */
@@ -88,7 +104,21 @@ export interface ThreadPluginReader {
    * @param list - 這一條用的那份（{@link read} 的回傳）。
    * @param dropped - 組裝時掉了的條目。
    */
-  noteDropped(list: ThreadPluginList, dropped: readonly { readonly entry: PluginEntry }[]): void;
+  noteDropped(
+    list: ThreadPluginList,
+    dropped: readonly {
+      readonly entry: PluginEntry;
+      /** 掉在哪一步；省略時對照快照記成 `apply`。 */
+      readonly drop?: { readonly stage: StartupDrop['stage'] };
+    }[],
+  ): void;
+  /**
+   * 「已儲存 vs 執行中」的對照（#1406）。啟動時呼叫不帶引數：已儲存的就是啟動那一份，每一列都是 `same`。
+   *
+   * @param saved - 這一刻磁碟上的那一份；省略即啟動那一份。
+   * @returns 快照。
+   */
+  snapshot(saved?: ThreadPluginList): PluginSnapshot;
 }
 
 /**
@@ -112,6 +142,13 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
     assemblyIds.add(id);
     knownAssembly.add(rowKey(startup, id));
   }
+  // 試組掉了的列掉在哪一步：只給對照快照用（`dropStage`）。鍵同 `knownAssembly`，宣告一改就是另一格。
+  const assemblyStage = new Map<string, StartupDrop['stage']>();
+  const trialStageById = new Map((options.trialDrops ?? []).map((drop) => [drop.id, drop.stage]));
+  for (const id of assemblyIds) {
+    assemblyStage.set(rowKey(startup, id), trialStageById.get(id) ?? 'apply');
+  }
+  const now = options.now ?? (() => new Date());
   // 讀清單的警告，同一句只記一次。
   const warned = new Set<string>();
   const warn: PluginConfigWarn = (message) => {
@@ -125,6 +162,48 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
   }));
   // 已經講過「待重啟」的那個值，同一個值不再講；改回執行中的值就清掉。
   const reported = new Map<string, unknown>();
+  // 啟動時那一份的「執行中」：讀清單那一步掉的，加試組那一步掉的。
+  const runningSource: SnapshotSource = {
+    entries: startup.entries,
+    ids: startup.ids,
+    plugins: startup.plugins,
+    rows: startup.rows,
+    drops: [
+      ...startup.dropped.map(({ id, stage }) => ({ id, stage })),
+      ...[...assemblyIds].map((id) => ({
+        id,
+        stage: assemblyStage.get(rowKey(startup, id)) ?? 'apply',
+      })),
+    ],
+  };
+  /** 一份讀出來的清單換成快照的來源：讀清單那一步掉的，加已知組裝掉了的（`plugins` 裡被標成停用、宣告沒寫停用的）。 */
+  function savedSourceOf(list: ThreadPluginList): SnapshotSource {
+    const { loaded, plugins } = list;
+    const droppedIds = new Set(loaded.dropped.map((drop) => drop.id));
+    const drops = loaded.dropped.map(({ id, stage }) => ({ id, stage }));
+    for (const entry of plugins) {
+      const row = loaded.rows.get(entry);
+      if (row === undefined || entry.disabled !== true || droppedIds.has(row.id)) continue;
+      const declared = loaded.entries.find((candidate) => candidate.id === row.id);
+      if (declared?.disabled === true) continue;
+      const stage = assemblyStage.get(rowKey(loaded, row.id));
+      if (stage !== undefined) drops.push({ id: row.id, stage });
+    }
+    return {
+      entries: loaded.entries,
+      ids: loaded.ids,
+      plugins,
+      rows: loaded.rows,
+      drops,
+    };
+  }
+  function snapshotFor(saved?: ThreadPluginList): PluginSnapshot {
+    return buildPluginSnapshot({
+      running: runningSource,
+      saved: saved === undefined ? runningSource : savedSourceOf(saved),
+      generatedAt: now(),
+    });
+  }
 
   return {
     async read() {
@@ -147,46 +226,38 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
       });
       reportStartupDrift(plugins);
       const view: LoadedPluginConfig = { ...loaded, plugins, rows };
-      return { loaded: view, plugins, optionalEntries: optionalEntriesOf(view, audit) };
+      const list: ThreadPluginList = {
+        loaded: view,
+        plugins,
+        optionalEntries: optionalEntriesOf(view, audit),
+      };
+      await options.publishSnapshot?.(snapshotFor(list));
+      return list;
     },
     noteDropped(list, dropped) {
-      for (const { entry } of dropped) {
+      for (const { entry, drop } of dropped) {
         const id = list.loaded.rows.get(entry)?.id;
-        if (id !== undefined && assemblyIds.has(id)) knownAssembly.add(rowKey(list.loaded, id));
+        if (id === undefined || !assemblyIds.has(id)) continue;
+        const key = rowKey(list.loaded, id);
+        knownAssembly.add(key);
+        assemblyStage.set(key, drop?.stage ?? assemblyStage.get(key) ?? 'apply');
       }
     },
+    snapshot: snapshotFor,
   };
 
   function reportStartupDrift(plugins: readonly PluginEntry[]): void {
     for (const { plugin, snapshot } of running) {
       const next = snapshotOf(plugins, plugin);
-      if (isDeepStrictEqual(next, snapshot)) {
+      if (!snapshotsDiffer(snapshot, next)) {
         reported.delete(plugin.name);
         continue;
       }
-      if (reported.has(plugin.name) && isDeepStrictEqual(reported.get(plugin.name), next)) continue;
+      if (reported.has(plugin.name) && !snapshotsDiffer(reported.get(plugin.name), next)) continue;
       reported.set(plugin.name, next);
       log(
         `[清單] 「${plugin.name}」改了，已儲存，待重啟：這一列在啟動時讀一次，新對話照舊用啟動時的值`,
       );
     }
-  }
-}
-
-/** 一列的鍵：id 加那一列疊完的宣告（`entries` 照宣告留著，連讀清單時掉了的列也在）。 */
-function rowKey(loaded: Pick<LoadedPluginConfig, 'entries'>, id: string): string {
-  const declared = loaded.entries.find((entry) => entry.id === id);
-  return `${id}\0${declared === undefined ? '' : stableStringify(declared)}`;
-}
-
-/** 起動期讀的一列在這份清單上的樣子：掛沒掛、讀出來的值；讀不出來就記原因。 */
-function snapshotOf(plugins: readonly PluginEntry[], plugin: NexusPlugin<unknown>): unknown {
-  try {
-    return {
-      mounted: startupEntryMounted(plugins, plugin),
-      value: startupSetting(plugins, plugin),
-    };
-  } catch (error) {
-    return { error: error instanceof Error ? error.message : String(error) };
   }
 }
