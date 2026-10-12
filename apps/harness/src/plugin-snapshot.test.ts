@@ -198,6 +198,21 @@ describe('buildPluginSnapshot', () => {
     });
   });
 
+  it('沒寫 id 的列（insert 進來的）設定改了：next-thread，不是 same', async () => {
+    // 這種列的宣告上沒有 id，載入器補了號；用宣告上的 id 去找宣告會找不到，鍵退化成只剩 id，設定怎麼改都「沒變」。
+    const insert = (value: boolean): string =>
+      `- insert:\n    - name: '@nexus/plugin-todo'\n      config:\n        allowParallelInProgress: ${String(value)}\n`;
+    const { snapshot } = await compare(insert(true), insert(false));
+    const extra = snapshot.rows.filter(
+      (row) => row.module === '@nexus/plugin-todo' && row.id !== 'todo',
+    );
+    expect(extra).toHaveLength(1);
+    expect(extra[0]?.running).toEqual({ state: 'mounted' });
+    expect(extra[0]?.sync).toBe('next-thread');
+    const same = await compare(insert(true), insert(true));
+    expect(same.snapshot.summary).toMatchObject({ 'next-thread': 0, restart: 0 });
+  });
+
   it('模組載不進來的列、停用而且模組載不進來的列：不在 rows 與 plugins 裡，仍在快照上', async () => {
     // 列的全集從 `rows` 或 `plugins` 走的話，這兩列會憑空消失，列數對不上 `--dump-config`。
     const patch = [

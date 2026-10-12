@@ -26,12 +26,17 @@ import { stableStringify } from './stable-stringify.js';
 /**
  * 一列的鍵：id 加那一列疊完的宣告（`entries` 照宣告留著，連讀清單時掉了的列也在）。宣告一改鍵就不同。
  *
- * @param loaded - 讀清單的結果（只用 `entries`）。
+ * **宣告用位置找，不用宣告上的 `id`**：`insert` 進來沒寫 id 的列，宣告上沒有 `id`，載入器補了號；停用而且載不進來的列
+ * 也是補的號。拿補的號去比宣告上的 `id` 永遠找不到，鍵退化成只剩 id，設定怎麼改都「沒變」。`ids` 與 `entries` 逐位對齊
+ * （`LoadedPluginConfig.ids`），所以用 `ids.indexOf(id)` 取同一個位置的宣告。
+ *
+ * @param loaded - 讀清單的結果（只用 `entries` 與 `ids`）。
  * @param id - 列 id。
  * @returns 鍵；清單上沒有那一列時宣告那一段是空的。
  */
-export function rowKey(loaded: Pick<LoadedPluginConfig, 'entries'>, id: string): string {
-  const declared = loaded.entries.find((entry) => entry.id === id);
+export function rowKey(loaded: Pick<LoadedPluginConfig, 'entries' | 'ids'>, id: string): string {
+  const position = loaded.ids.indexOf(id);
+  const declared = position < 0 ? undefined : loaded.entries[position];
   return `${id}\0${declared === undefined ? '' : stableStringify(declared)}`;
 }
 

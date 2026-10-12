@@ -29,6 +29,8 @@
  * - **sandbox-policy**：控制器每條 thread 組裝時各建一個（`assembly-root.ts:820`）。**關掉它的後果不是「照舊」而是
  *   「建不起來」**：有 `--workspace` 又沒掛這一列，那條 thread 的組裝直接拋（`:803-809`），重讀之後每條新 thread 都是。
  *   這跟 #1405 Q1「必掛的列掉了，只讓這一條 thread 建不起來，大聲報出來」同一路，不另做處理。
+ * - **permission-presets**（不在 PM 的 R2／R3 名單上，順手補記）：同一種後果，有 `--workspace` 又沒掛這一列，組裝一樣拋
+ *   （`assembly-root.ts:811-818`）；它是 `/permission` 的唯一入口。
  *
  * `commands` 不是清單上的一列（`cordis.yml`／`cordis.serve.yml` 只有 `commands-invariant`），執行器是宿主自己建的
  * （`cli.ts:29`、`wire-handler.ts:126`），沒有可以切的列。
@@ -138,7 +140,15 @@ export const ROW_CLASSES: ReadonlyMap<string, RowClassEntry> = new Map<string, R
     { class: 'next-thread', note: '非 --live 時每條 thread 組裝才讀（assembly-root.ts:527）。' },
   ],
   ['cli-script', next],
-  ['permission-presets', next],
+  [
+    'permission-presets',
+    {
+      class: 'next-thread',
+      note:
+        '有 --workspace 時關掉它，之後每條新 thread 都建不起來（assembly-root.ts:811-818 拋錯），不是照舊。' +
+        '它是 /permission 的唯一入口。沒有 --workspace 時關掉是合法的。',
+    },
+  ],
   // ── invariant 配套（分類文件 D 表）：隨所屬套件走，所屬的都是 next-thread。
   ['core-invariant', next],
   ['commands-invariant', next],

@@ -238,8 +238,7 @@ function syncOf(input: {
   const mountedBefore = was?.state === 'mounted';
   const mountedAfter = now?.state === 'mounted';
   if (kind === 'mount-restart' && mountedBefore !== mountedAfter) return 'restart';
-  const declaredSame =
-    rowKey({ entries: input.running.entries }, id) === rowKey({ entries: input.saved.entries }, id);
+  const declaredSame = rowKey(input.running, id) === rowKey(input.saved, id);
   const same = declaredSame && was?.state === now?.state && was?.dropStage === now?.dropStage;
   return same ? 'same' : 'next-thread';
 }

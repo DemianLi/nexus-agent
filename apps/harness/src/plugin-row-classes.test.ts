@@ -91,11 +91,14 @@ describe('列的分類表', () => {
     expect(mountRestart.map(([id]) => id)).toEqual([]);
   });
 
-  it('sandbox-policy 的分類表上寫著「關掉之後新 thread 都建不起來」', () => {
-    const entry = ROW_CLASSES.get('sandbox-policy');
-    expect(entry?.class).toBe('next-thread');
-    expect(entry?.note).toContain('建不起來');
-  });
+  it.each(['sandbox-policy', 'permission-presets'])(
+    '%s 的分類表上寫著「關掉之後新 thread 都建不起來」（有 --workspace 時組裝會拋）',
+    (id) => {
+      const entry = ROW_CLASSES.get(id);
+      expect(entry?.class).toBe('next-thread');
+      expect(entry?.note).toContain('建不起來');
+    },
+  );
 
   it('classOfRow：起動期名單優先；表上沒有的列（使用者 insert 進來的）當 next-thread', () => {
     expect(classOfRow('thread-title', 'thread-title')).toBe('startup-read');

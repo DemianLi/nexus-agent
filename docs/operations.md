@@ -544,7 +544,8 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 
   **`goal`、`sandbox-policy`、`workspace-changes` 關掉也是新對話生效，不必重啟**：這三顆每條對話組裝時各取一份，沒掛就缺席
   （`commands` 不是清單上的一列，執行器是宿主自己建的，要動只能改程式碼）。**`sandbox-policy` 有 `--workspace` 時關掉，之後每條新對話
-  都開不起來**（檔案系統有圍堵而沒有政策那一列，組裝當場拋），不是「照舊」。
+  都開不起來**（檔案系統有圍堵而沒有政策那一列，組裝當場拋），不是「照舊」；**`permission-presets` 同理**（有 `--workspace` 時
+  它是 `/permission` 的唯一入口，關掉組裝一樣當場拋）。
 
   重讀時清單讀不起來、或必掛的列掉了，**只有那一條對話開不起來**，錯誤訊息同啟動那一次，伺服器照常，下一條再讀一次。
 - **哪些已儲存、還沒生效，看 `$NEXUS_AGENT_HOME/plugin-snapshot.json`**（[#1406](https://github.com/DemianLi/nexus-agent/issues/1406)）。

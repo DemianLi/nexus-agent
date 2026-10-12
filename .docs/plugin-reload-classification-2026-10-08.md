@@ -13,7 +13,8 @@
 >    （`:1083-1095`）；`wire-handler.ts:1139`、`:2563`、`:2582` 讀的是 `ready.get(threadId)?.workspaceChanges`，一條 thread 一份；
 >    控制器每條 thread 各建一個（`:820`）。宿主 import 的是純函式與常數（`renderGoalRoundPrompt`、`applyGoalEvent`、
 >    `recordedSandboxMode`、`*_SERVICE` 名字），那是**程式碼版本**的耦合，不是掛不掛的耦合。**`sandbox-policy` 有
->    `--workspace` 時關掉，之後每條新 thread 都建不起來**（`assembly-root.ts:803-809` 拋錯），不是「照舊」。
+>    `--workspace` 時關掉，之後每條新 thread 都建不起來**（`assembly-root.ts:803-809` 拋錯），不是「照舊」；
+>    **`permission-presets` 同一種後果**（`:811-818`，有 `--workspace` 而那一列沒掛就拋；它不在 R2／R3 的名單上，順手補記）。
 > 2. **A 表「出貨」欄**：`sandbox-policy` 是 `cordis.yml` 的一列，`workspace-changes` 是 `cordis.serve.yml` 的一列，
 >    `commands` 不是清單上的列（執行器是宿主自己建的，`cli.ts:29`、`wire-handler.ts:126`；清單上只有 `commands-invariant`）。
 > 3. **`default-model` 在組裝期讀**，不是起動期：沒帶 `--live` 時 `resolveDefaultModel(plugins)` 在每條 thread 組裝時呼叫
