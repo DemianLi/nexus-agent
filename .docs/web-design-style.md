@@ -49,12 +49,13 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 
 - **長什麼樣**：
   - 介面字 Google Sans Flex，等寬字 Google Sans Code（只用在程式碼、工具輸入輸出、終端機），中文兩者都退 Noto Sans TC。
-  - 字級只有四階：內文 `text-body`、可以點的與當標題的小字 `text-ui`、說明與附註 `text-tip`、還沒人用的 `text-micro`。
+  - 字級只有四階：內文 `text-body`、可以點的與當標題的小字 `text-ui`、說明與附註 `text-tip`，以及只用在程式碼區塊語言標籤的 `text-micro`。
   - 字重只有 400 與 500。次要的字（說明、時間、計數）用 `text-muted-foreground` 退後，不把字變細。
 - **從哪裡來**：
   - 字型與四階：規格 §5「字型」（[#377](https://github.com/DemianLi/nexus-agent/issues/377)）；Libraries.dev 用的 Inter／Roboto Mono 沒有採用，標題字 Saans 授權不明不拿（元件清單 §3.2、規格 §3、§5）。
   - 只走四階、不用 Tailwind 預設字級：[#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。
   - 主次（可以點的與當標題的用 13，說明用 12）：[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)（PR [#1296](https://github.com/DemianLi/nexus-agent/pull/1296)）。
+  - `text-micro` 保留：它其實有一處在用（程式碼區塊的語言標籤），demian 2026-10-12 決定保留，不刪（規格 §5「字型」）。
   - 次要靠顏色不靠字重，「細字在中文與小字級下先糊掉」：beautiful-ui 的原則，加上一條它自己沒守住的——次要色本身要過 4.5:1（它的說明字只有 2.4–2.7:1，比對文件 §3、§4；`COMPONENTS.md`「外觀原則」第二條）。
 - **規則在哪**：規格 §5「字型」；`COMPONENTS.md`「字級的主次」；`design-system.test.ts`（只准四階、擋細字重）、`type-hierarchy.test.ts`、`tokens-contrast.test.ts`。
 
@@ -166,7 +167,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 - beautiful-ui 裡判定「沒有場景」的 8 個元件中，跟資料呈現有關的 4 個（records-table、filter-table、insight-cards、diff-table）在 [#1318](https://github.com/DemianLi/nexus-agent/issues/1318) 階段 B 重開時重評（B 已在 2026-10-11 擱置，見 [#1318 的 PM 留言](https://github.com/DemianLi/nexus-agent/issues/1318#issuecomment-6110645206)）。
 - 「引用來源」（答案出自哪個內部系統）的地圖是 [#1318](https://github.com/DemianLi/nexus-agent/issues/1318)：階段 A 已完成；階段 B 擱置，重開條件是 demian 提供至少一個試點內部系統的 MCP 回傳範例；階段 C 不排（同一則留言）。
 - 規格 §11「還沒驗過的」：下拉的動效值、macOS VoiceOver、停在提問時按停止等。
-- `text-micro`（11）還沒有地方用，「第二波比對完仍沒人用再刪」（#1278 拍板第 8 點）；比對已完成，刪不刪**待確認**。
+- `text-micro`（11）：保留，只用在程式碼區塊的語言標籤（`apps/web/src/styles/markdown.css:89`），demian 2026-10-12 決定。#1278 拍板第 8 點「沒人用再刪」的前提不成立。
 
 ## 7. 這份怎麼更新
 
