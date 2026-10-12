@@ -163,8 +163,8 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 
 ## 6. 還沒定或還沒驗的
 
-- beautiful-ui 裡判定「沒有場景」的 8 個元件要不要重評，掛在引用來源地圖 [#1318](https://github.com/DemianLi/nexus-agent/issues/1318) 的階段 B（#1278 收尾留言）。
-- 「引用來源」（答案出自哪個內部系統）要從 harness 做起，另開地圖（#1278 選卡留言）。
+- beautiful-ui 裡判定「沒有場景」的 8 個元件中，跟資料呈現有關的 4 個（records-table、filter-table、insight-cards、diff-table）在 [#1318](https://github.com/DemianLi/nexus-agent/issues/1318) 階段 B 重開時重評（B 已在 2026-10-11 擱置，見 [#1318 的 PM 留言](https://github.com/DemianLi/nexus-agent/issues/1318#issuecomment-6110645206)）。
+- 「引用來源」（答案出自哪個內部系統）的地圖是 [#1318](https://github.com/DemianLi/nexus-agent/issues/1318)：階段 A 已完成；階段 B 擱置，重開條件是 demian 提供至少一個試點內部系統的 MCP 回傳範例；階段 C 不排（同一則留言）。
 - 規格 §11「還沒驗過的」：下拉的動效值、macOS VoiceOver、停在提問時按停止等。
 - `text-micro`（11）還沒有地方用，「第二波比對完仍沒人用再刪」（#1278 拍板第 8 點）；比對已完成，刪不刪**待確認**。
 
