@@ -1,6 +1,6 @@
 # apps/web 新增元件規則
 
-給「要在 `apps/web` 加元件、改樣式」的人。詞（registry 元件、積木、配方……）的定義在 [`CONTEXT.md`](./CONTEXT.md)。**值**（色碼、字級、圓角、時長）不在這裡，在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md)；這裡只講**該放哪、該用什麼、什麼會被擋**。來歷見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。
+給「要在 `apps/web` 加元件、改樣式」的人。詞（registry 元件、積木、配方……）的定義在 [`CONTEXT.md`](./CONTEXT.md)。**值**（色碼、字級、圓角、時長）不在這裡，在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md)；這裡只講**該放哪、該用什麼、什麼會被擋**。來歷見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。整體長什麼樣、參考過哪些元件庫，見 [`.docs/web-design-style.md`](../../.docs/web-design-style.md)。
 
 ## 放哪一層
 
@@ -76,7 +76,7 @@
 - **兩處以上手寫同一份配方**（不只是名字像）才抽；只有一處就留在原地。
 - 只抽**共通的部分**，差異用 `className` 補（例：`RowTrigger` 只含底色、最小高度、圓角、過渡，圖示與間距由呼叫端給）。
 - 抽完要證明**畫面沒變**：展開成的 class 集合與原本逐項相等，再加實機前後比對。
-- 已抽的：`RowTrigger`（可展開列；`fit="card"` 嵌在卡片裡、用 `rounded-row` 同心，`fit="bare"` 自己就是一列）、`Chevron`（展開箭頭，跟著外層的 `data-state` 轉，或用 `open` 直接給）、`ChatBubble`（對話裡的文字泡泡，人的話靠右、子代理寄來的話靠左）、`MonoBlock`（夾在說明文字裡的等寬字小框，平的 `bg-chip`；工具輸出那種有標題、有細線的內層底是 `Surface tone="stage"`，不是它）、`Surface`（`raised` 浮起來的卡片、`stage` 內層底、`docked` 貼在輸入框上方的平邊線卡片，用 `as` 選元素）。新的卡片或內層底用 `Surface`，手寫整組配方會被護欄擋下。
+- 已抽的：`RowTrigger`（可展開列；`fit="card"` 嵌在卡片裡、用 `rounded-row` 同心，`fit="bare"` 自己就是一列）、`Chevron`（展開箭頭，跟著外層的 `data-state` 轉，或用 `open` 直接給）、`ChatBubble`（對話裡的文字泡泡，人的話靠右、子代理寄來的話靠左）、`MonoBlock`（夾在說明文字裡的等寬字小框，平的 `bg-chip`；工具輸出那種有標題、有細線的內層底是 `Surface tone="stage"`，不是它）、`Surface`（`raised` 浮起來的卡片、`stage` 內層底、`docked` 貼在輸入框上方的平邊線卡片，用 `as` 選元素）、`CopyButton`（複製鈕：交付卡的複製路徑、回覆底下的複製回覆、程式碼區塊的複製程式碼共用同一套行為與回饋，[#1305](https://github.com/DemianLi/nexus-agent/issues/1305)）。新的卡片或內層底用 `Surface`，手寫整組配方會被護欄擋下。
 - 還沒抽的：`pending-swap`（走 `ui/Card` 覆寫，是 shadcn 元件的用法）。
 
 ## 新增 shadcn 元件
