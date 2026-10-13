@@ -156,6 +156,32 @@ expect(await checkConformance({ row, module, providers, residue })).toEqual([]);
 所以**只有能做快照的插件，才能比版本路由早上樹**：快照拿走的是「註冊進登記處的東西」（工具、命令⋯），它們在
 列卸載後仍然可以呼叫。**有狀態的插件不行**，它們得等版本路由的引用計數排水，舊版的最後一段對話結束才撤。
 
+## 逐條 thread 的東西在呼叫當下拿，狀態以日誌為準（#1418）
+
+插件在一次組裝裡**只套一次**，可是這個行程可能同時服務好幾條 thread（serve 一條連線一條 thread）。所以 `apply`
+閉包裡抓到的東西，凡是「每條 thread 各一份」的，在第二條 thread 進來的那一刻就是錯的——而且錯得靜默：
+工具寫進別條 thread 的日誌，或問到別條 thread 的人。
+
+規則只有兩條，對應 dsh 的 `exec.agent`（身分隨呼叫明確傳進來，不靠 `apply` 當下）：
+
+| 規則 | 怎麼做 | 為什麼 |
+| --- | --- | --- |
+| **逐條 thread 的東西，呼叫當下才拿** | 要會話日誌用 `registry.sessions.forCall(config)`，要答題管道用 `registry.services.get(CHANNEL_FOR_THREAD_SERVICE)?.(callThreadId(config))`（沒提供就退回 `channel`）。工具 handler 與 middleware 都從呼叫設定的 `configurable.thread_id` 拿身分，`PipelineExecution.thread` 是同一個值 | `apply` 只跑一次；`thread_id` 在 root、同步子代理、背景子代理三種位置都到得了 handler 與 middleware（`apps/harness/src/thread-id-reaches-handlers.test.ts` 實測） |
+| **狀態以日誌為準，閉包裡的暫存表鍵要帶 thread** | 暫存表（例如 present 的「已呼叫、尚未落定」）的鍵是 `thread \0 位址 \0 callId`，不是 `callId` | 模型給的 `tool_call.id` 是各 thread 各自編號的，兩條 thread 同時懸著同一個 `callId` 是會發生的 |
+
+**身分三種位置**：root 與同步子代理的 `thread_id` 是 root 那一條（子代理身分靠 `checkpoint_ns`）；背景子代理的
+`thread_id` 是它自己的日誌 id（`<root>/<runId>`）並帶 `nexus_background_session`。`forCall` 就是用這個挑會話註冊表：
+綁著一張時不看 `thread_id`（跟以前一樣），綁著多張時依 `thread_id` 挑**恰好認得它的那一張**，挑不出仍回 `ambiguous`。
+
+**這條規則怎麼被守住**：`@nexus/sdk` 的 `checkSharedAcrossThreads` 是一格通用的一致性檢查——同一份序列各條
+thread 各自掛一份跑一遍當基準，再掛**一份**服務所有 thread 跑一遍，兩邊結果對不上就紅並指名是第幾步、哪條 thread、
+各回了什麼。它不 import `@nexus/core`：每顆插件在自己的套件裡寫一個轉接器（ask-user 與 present 各一份，`shared-across-threads.test.ts`）。
+這一格**不要求插件上樹**——ask-user 與 present 仍是相容層的 `NexusPlugin`，不匯出 `manifest`
+（`apps/harness/src/pilot-plugins-stay-compat.test.ts` 釘住）。
+
+**出貨路徑不變**：組裝點只提供 `channel`，不提供 `channelForThread`，所以產品路徑上答題管道的取法與以前一樣；
+只有同一次組裝真的服務多條 thread 的呼叫端才需要提供 `channelForThread`。
+
 ## 偏離 dsh
 
 | 偏離 dsh 的什麼 | 理由類別 | 說明 |

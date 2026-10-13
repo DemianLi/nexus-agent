@@ -1258,7 +1258,8 @@ describe('第 4 項：背景那一輪走 v3 串流時的孤兒 rejection', () =>
    * 背景圖包一顆自己的 `ThreadPump`：pump 替它寫輪次（`turn/start`、`turn/end`、`turn/failed`），也替 v3 投影掛 catch。
    * 但模型與工具的事件是圍堵與記錄器經 `registry.sessions.forCall` 寫的，它只認**組裝點綁著的那一張**會話註冊表：
    * - 背景 pump 沒接上組裝：事件寫進 root 的日誌（位址被認成 root），背景 pump 自己的日誌只有輪次。
-   * - 兩張都接上：`forCall` 回 `ambiguous`，事件**兩邊都沒有**——輪照跑、沒有任何錯誤，只是背景那一輪沒有日誌。
+   * - 兩張都接上：`forCall` 依呼叫的 `thread_id` 挑（#1418）——背景圖的 `thread_id` 就是背景 pump 的根 id，
+   *   事件寫進**背景 pump 自己的日誌**，root 的日誌一顆都不多。以前這裡回 `ambiguous`、兩邊都沒有。
    */
   for (const attached of [false, true]) {
     for (const [label, turns, expectedEnd] of [
@@ -1283,14 +1284,15 @@ describe('第 4 項：背景那一輪走 v3 串流時的孤兒 rejection', () =>
 
           // 輪次在背景 pump 自己的日誌裡。
           expect(bgPump.sessions.root.events.map((event) => event.type)).toContain(expectedEnd);
-          // 事件歸誰：沒接上就進 root 的日誌；兩張都接上就哪裡都沒有。
+          // 事件歸誰：沒接上就進 root 的日誌；兩張都接上就進背景 pump 自己的日誌，root 的不動。
           const rootGained = count(run.pump.sessions, 'model/start') - rootBefore;
           // 工具那條有兩次模型呼叫（叫工具、收尾），模型拋錯那條只有一次。
-          expect(rootGained).toBe(attached ? 0 : label === '工具本體拋錯' ? 2 : 1);
-          expect(count(bgPump.sessions, 'model/start')).toBe(0);
+          const modelStarts = label === '工具本體拋錯' ? 2 : 1;
+          expect(rootGained).toBe(attached ? 0 : modelStarts);
+          expect(count(bgPump.sessions, 'model/start')).toBe(attached ? modelStarts : 0);
           if (label === '工具本體拋錯') {
             expect(count(run.pump.sessions, 'tool/call')).toBe(attached ? 0 : 1);
-            expect(count(bgPump.sessions, 'tool/call')).toBe(0);
+            expect(count(bgPump.sessions, 'tool/call')).toBe(attached ? 1 : 0);
           }
         } finally {
           detachBg?.();

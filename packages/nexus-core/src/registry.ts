@@ -32,7 +32,7 @@ import type { StructuredTool } from '@langchain/core/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
 import type { ZodType } from 'zod';
 import type { AgentMiddleware } from './base-types.js';
-import type { ApprovalChannel, PreToolListener } from './approval.js';
+import type { ApprovalChannel, ChannelForThread, PreToolListener } from './approval.js';
 import type { ApprovalPolicyController } from './approval-policy.js';
 import { normalizeCommandDefinition } from './commands.js';
 import { EventBus } from './events.js';
@@ -53,7 +53,7 @@ import { normalizeProjectionUnit } from './projections.js';
 import type { ProjectionUnit } from './projections.js';
 import type { InvariantCompanion, InvariantInstaller } from './invariants.js';
 import type { SessionInstaller } from './sessions.js';
-import { toolCallSessionAddress } from './session-address.js';
+import { callThreadId, toolCallSessionAddress } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
 import type { SessionRegistry } from './session-registry.js';
 import type { SessionLog } from './session-log.js';
@@ -309,6 +309,11 @@ export interface NexusServices {
    * 組裝點用的；產品路徑由組裝點明著算一次提供出來。
    */
   channel: ApprovalChannel;
+  /**
+   * `channel` 的逐條 thread 版（#1418）。名字見 {@link ./approval.ts | CHANNEL_FOR_THREAD_SERVICE}。**可選**：沒人提供就
+   * 退回 `channel`。消費者在**呼叫當下**問它，不在 `apply` 當下抓，一份 registry 才能服務好幾條 thread。
+   */
+  channelForThread: ChannelForThread;
   /**
    * 這個組裝的核准政策控制器（`ask`／`never`，[#437](https://github.com/DemianLi/nexus-agent/issues/437)）。名字見
    * {@link ./approval-policy.ts | APPROVAL_POLICY_SERVICE}。**組裝點提供**：核准政策的 session 開關歸組裝點，plugin 只能讀與切。
@@ -998,11 +1003,13 @@ export type SessionLookup =
   /** 認不出這次呼叫屬於誰（沒有 `checkpoint_ns`）。**不猜成 root**，理由見 session-address。 */
   | { readonly kind: 'unknown-caller' }
   /**
-   * 這次組裝綁著不只一張註冊表，挑不出來。
+   * 這次組裝綁著不只一張註冊表，而且挑不出是哪一張。
    *
-   * 一次組裝配多條 thread 時會走到（每條 thread 一張）。`checkpoint_ns` 分得出 root 與
-   * 每一次 spawn，**但分不出 thread**——`thread_id` 才分得出，而那要另一條路。挑一張猜
-   * 的話，一條 thread 的工具會寫進另一條 thread 的日誌，那是這條路上最貴的那種靜默錯。
+   * 一次組裝配多條 thread 時會走到（每條 thread 一張）。`checkpoint_ns` 分得出 root 與每一次 spawn，
+   * **但分不出 thread**——分 thread 的是呼叫設定的 `thread_id`（#1418）：它對得上**恰好一張**
+   * （那一張的某份日誌 id 就是這個 `thread_id`）就解到那一張。這個格子只剩「真挑不出」的三種：呼叫沒帶
+   * `thread_id`、沒有任何一張認得它、不只一張認得它。挑一張猜的話，一條 thread 的工具會寫進另一條
+   * thread 的日誌，那是這條路上最貴的那種靜默錯，所以寧可明說。
    */
   | { readonly kind: 'ambiguous'; readonly count: number };
 
@@ -1201,6 +1208,14 @@ export interface CreateRegistryOptions {
    * 在 `register()` 裡就拋，而不是等到委派才炸。registry 自己沒有型錄，所以由組裝點傳進來。拋出的錯誤照註冊點的規矩指名註冊者。
    */
   readonly validateSubagent?: (subagent: NexusSubAgent) => void;
+}
+
+/**
+ * 這張註冊表是不是擁有這條 `thread_id`：root 的日誌 id 就是 thread id，背景子代理的日誌 id 是 `<root>/<runId>`，
+ * 同步子代理沿用 root 的 thread id（見 {@link callThreadId}）。所以「有哪一份日誌的 id 等於它」就是擁有。
+ */
+function ownsThread(sessions: SessionRegistry, thread: string): boolean {
+  return sessions.list().some((entry) => entry.log.sessionId === thread);
 }
 
 /**
@@ -1562,10 +1577,21 @@ export function createRegistry(options: CreateRegistryOptions = {}): InternalPlu
     installers: () => [...sessionInstallers.entries()],
     forCall(config) {
       if (boundSessions.size === 0) return { kind: 'not-attached' };
-      if (boundSessions.size > 1) return { kind: 'ambiguous', count: boundSessions.size };
+      // 只綁一張：與逐條 thread 之前逐位元組相同，不看 `thread_id`（手搭的測試呼叫沒有它）。
+      // 綁了不只一張（一份插件套一次、服務好幾條 thread，#1418）：依這次呼叫的 `thread_id` 挑出擁有它的那一張。
+      // 挑不出（沒帶 `thread_id`、沒有任何一張認得、兩張都認得）就仍然是 `ambiguous`——寧可明說也不猜。
+      let sessions: SessionRegistry | undefined;
+      if (boundSessions.size === 1) {
+        [sessions] = boundSessions;
+      } else {
+        const thread = callThreadId(config);
+        const owners =
+          thread === undefined ? [] : [...boundSessions].filter((s) => ownsThread(s, thread));
+        if (owners.length !== 1) return { kind: 'ambiguous', count: boundSessions.size };
+        [sessions] = owners;
+      }
       const address = toolCallSessionAddress(config);
       if (address === undefined) return { kind: 'unknown-caller' };
-      const [sessions] = boundSessions;
       // `open` 而不是 `get`：subagent 的日誌在第一次有人要寫的時候才出生，理由見
       // `SessionRegistry` 的偏離第 1 條。訂閱者在這一行之內就裝好了。
       return { kind: 'ok', address, log: sessions!.open(address) };

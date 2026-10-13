@@ -94,6 +94,7 @@ import type {
   SessionLog,
 } from '@nexus/core';
 import {
+  callThreadId,
   FS_SERVICE,
   toolCallIdOf,
   toolCallSessionAddress,
@@ -255,11 +256,23 @@ async function inspect(backend: AnyBackendProtocol, path: string): Promise<Inspe
   return found.is_dir === true ? 'not-file' : 'file';
 }
 
-/** 等結果的那張表的鍵：呼叫者的位址加 `callId`。位址認不出來時本體已經拒了，不會走到這裡。 */
-function pendingKey(address: SessionAddress | undefined, callId: string): string {
+/**
+ * 等結果的那張表的鍵：thread、呼叫者的位址加 `callId`。位址認不出來時本體已經拒了，不會走到這裡。
+ *
+ * **thread 不能省**（#1418）：插件套一次、服務好幾條 thread 時，這張表是 `apply` 閉包裡的一張，兩條 thread 可能撞上同一個
+ * `callId`（模型給的 `tool_call.id`，各 thread 各自編號），少了它就互相覆蓋。dsh 用 `WeakMap<ToolExecution>`，是因為工具執行當下
+ * 與 `tools/result` 拿到的是同一個物件；我們每次都重建 `exec`，照它的意思改用身分當鍵——`exec.thread` 與工具本體
+ * 從 `config` 讀到的 `thread_id` 是同一個值（`thread-id-reaches-handlers.test.ts` 實測）。認不出 thread 時是 `?`
+ * （手搭的測試呼叫；兩邊同樣認不出來，鍵仍然對得上）。
+ */
+function pendingKey(
+  thread: string | undefined,
+  address: SessionAddress | undefined,
+  callId: string,
+): string {
   const who =
     address === undefined ? '?' : address.kind === 'root' ? 'root' : `sub:${address.runId}`;
-  return `${who}\u0000${callId}`;
+  return `${thread ?? '?'}\u0000${who}\u0000${callId}`;
 }
 
 /**
@@ -281,7 +294,7 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
     >();
     registry.lifecycle.onDispose(() => pending.clear());
     registry.events.on('tools/result', (exec, result) => {
-      const key = pendingKey(exec.agent, exec.callId);
+      const key = pendingKey(exec.thread, exec.agent, exec.callId);
       const entry = pending.get(key);
       if (entry === undefined) return;
       pending.delete(key);
@@ -336,7 +349,7 @@ export const presentPlugin: NexusPlugin<PresentConfig> = {
               ...(file.description !== undefined && { description: file.description }),
             });
           }
-          pending.set(pendingKey(toolCallSessionAddress(config), callId), {
+          pending.set(pendingKey(callThreadId(config), toolCallSessionAddress(config), callId), {
             log: found.log,
             files,
           });

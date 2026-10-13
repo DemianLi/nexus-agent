@@ -58,6 +58,8 @@ import type {
   ToolErrorInfo,
 } from '@nexus/core';
 import {
+  callThreadId,
+  CHANNEL_FOR_THREAD_SERVICE,
   CHANNEL_SERVICE,
   markToolError,
   QUESTION_INTERRUPT_KIND,
@@ -189,7 +191,13 @@ export const askUserPlugin: NexusPlugin = {
     // 問了就停在一個沒人接的中斷上。照 dsh：`tool-ask-user` 硬注入 `userQuestions`，沒有任何答題者接下請求時以
     // `NO_PROVIDER` 拋錯（`packages/interaction/user-questions/src/index.ts:132`）。拒絕發生在**呼叫時**，載入
     // 照常，所以出貨清單疊在不掛 host-services 的組裝上也載得起來——那種組裝只是沒有這顆工具可用。
-    const channel: ApprovalChannel | undefined = registry.services.get(CHANNEL_SERVICE);
+    //
+    // **在呼叫當下依這次呼叫的 thread 取，不在 `apply` 當下抓**（#1418，dsh 的 `exec.agent`：身分隨呼叫明確傳進來）：
+    // 插件套一次之後一份 registry 要服務好幾條 thread，各自的答題者不同。組裝點提供 `channelForThread` 就依它；
+    // 沒提供（今天的產品路徑一條 thread 一份組裝）就用 `channel`，與以前相同。
+    const channelOf = (config: unknown): ApprovalChannel | undefined =>
+      registry.services.get(CHANNEL_FOR_THREAD_SERVICE)?.(callThreadId(config)) ??
+      registry.services.get(CHANNEL_SERVICE);
     registry.tools.register(
       tool(
         async (args, config) => {
@@ -206,6 +214,7 @@ export const askUserPlugin: NexusPlugin = {
             });
           // **fail-closed 排在最前面**：沒有人在的時候連中斷都不該發出去，
           // 因為 `no-channel` 底下 `interrupt()` 是當場拋，而那個錯訊說不出原因。
+          const channel = channelOf(config);
           if (channel === undefined) return failed(NO_CHANNEL_MESSAGE);
           if (channel.kind !== 'human') return failed(noAnswererMessage(channel));
           if (questions.length === 0) return failed(EMPTY_QUESTIONS_MESSAGE);

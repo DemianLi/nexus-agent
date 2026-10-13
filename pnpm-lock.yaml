@@ -421,6 +421,9 @@ importers:
         specifier: ^4.3.6
         version: 4.4.3
     devDependencies:
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -679,6 +682,9 @@ importers:
         specifier: ^4.3.6
         version: 4.4.3
     devDependencies:
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3

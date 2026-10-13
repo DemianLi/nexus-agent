@@ -62,7 +62,7 @@ import type { PreToolDecision } from './approval.js';
 import type { AgentMiddleware } from './base-types.js';
 import type { EventDispatcher, EventListenerInfo } from './events.js';
 import { formatOrigin } from './plugin.js';
-import { toolCallSessionAddress } from './session-address.js';
+import { callThreadId, toolCallSessionAddress } from './session-address.js';
 import type { SessionAddress } from './session-address.js';
 import { markToolError, readToolOutcome, toolErrorOf, toolRefusal } from './tool-events.js';
 import type { ToolErrorInfo } from './tool-events.js';
@@ -82,6 +82,12 @@ export interface PipelineExecution {
   readonly args: unknown;
   /** 誰在呼叫：root 或某個子代理（`runId`）；認不出來（不在圖裡）是 `undefined`。 */
   readonly agent: SessionAddress | undefined;
+  /**
+   * 這次呼叫在哪一條 thread 裡（`configurable.thread_id`，{@link callThreadId}）；認不出來是 `undefined`。
+   * 一份監聽者只掛一次、服務好幾條 thread 時，**逐條 thread 的暫存要以它為鍵的一部分**：兩條 thread 可能撞上同一個 `callId`
+   * （#1418）。與 `agent` 合起來才是完整的身分：`agent` 分 root／子代理，`thread` 分哪一條對話。
+   */
+  readonly thread: string | undefined;
 }
 
 /**
@@ -213,6 +219,7 @@ export function toolExecutionOf(request: PipelineRequest): PipelineExecution {
     name: request.toolCall.name,
     args: frozenArgsCopy(request.toolCall.args),
     agent: toolCallSessionAddress({ configurable: request.runtime?.configurable }),
+    thread: callThreadId({ configurable: request.runtime?.configurable }),
   });
 }
 

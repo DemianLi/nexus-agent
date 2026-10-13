@@ -17,6 +17,7 @@ import { ToolMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import {
+  callThreadId,
   createRegistry,
   FS_SERVICE,
   loadPlugins,
@@ -155,6 +156,7 @@ function settle(
       name: PRESENT_TOOL_NAME,
       args: {},
       agent: toolCallSessionAddress(config),
+      thread: callThreadId(config),
     },
     { kind: 'message', content: '', isError },
   );
