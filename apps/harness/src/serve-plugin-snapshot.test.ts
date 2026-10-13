@@ -1,11 +1,11 @@
 /**
  * serve 的「已儲存 vs 執行中」對照快照（[#1406](https://github.com/DemianLi/nexus-agent/issues/1406)）：量的是產品路徑
- * （`runServe` 加真的 wire client），在兩條對話之間改 home 層的 `cordis.patch.yml`，讀 home 底下那份 JSON 檔。
+ * （`runServe` 加真的 wire client），在兩條對話之間改 home 層（#1412 起是變更紀錄），讀 home 底下那份 JSON 檔。
  *
  * 判準是「檔裡的列對得上 `--dump-config`」：同一個函式、同一個 home 層、同一組 `--patch`，列數與 id 一個都不能差。
  */
 
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -14,6 +14,7 @@ import { parse as parseYaml } from 'yaml';
 
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
+import { seedHomePatch, writeJournalText } from './plugin-journal.fixture.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
 import type { PluginSnapshot } from './plugin-snapshot.js';
 import { runServe } from './serve.js';
@@ -32,6 +33,10 @@ interface Home {
   readonly env: NodeJS.ProcessEnv;
   readonly dir: string;
   readonly snapshotPath: string;
+  /**
+   * 把 home 層整份換成這份設定。**測試專用，不是產品行為**：這一組量的是快照怎麼對照「已儲存」與「執行中」，
+   * 不是寫入口；產品上紀錄只增不改（寫入口與它的驗證見 `plugin-change.test.ts`、`serve-thread-reread.test.ts`）。
+   */
   patch(body: string): void;
   snapshot(): PluginSnapshot;
 }
@@ -40,15 +45,13 @@ function home(): Home {
   const dir = mkdtempSync(join(tmpdir(), 'nexus-plugin-snapshot-serve-'));
   temporary.push(dir);
   chmodSync(dir, 0o700);
-  const patchPath = join(dir, 'cordis.patch.yml');
   const snapshotPath = join(dir, PLUGIN_SNAPSHOT_FILE_NAME);
   return {
     env: { [HARNESS_HOME_ENV]: dir },
     dir,
     snapshotPath,
     patch(body) {
-      writeFileSync(patchPath, body);
-      chmodSync(patchPath, 0o600);
+      seedHomePatch(dir, body);
     },
     snapshot: () => JSON.parse(readFileSync(snapshotPath, 'utf8')) as PluginSnapshot,
   };
@@ -190,7 +193,7 @@ describe('serve 的對照快照檔（#1406）', () => {
     const h = home();
     const server = await start(h.env, []);
     const before = readFileSync(h.snapshotPath, 'utf8');
-    h.patch('- id: [這不是 YAML\n');
+    writeJournalText(h.dir, '{這不是 JSON\n');
     expect(await say(server, 'a')).toBeDefined();
     expect(readFileSync(h.snapshotPath, 'utf8')).toBe(before);
   }, 60000);

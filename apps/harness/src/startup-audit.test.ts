@@ -21,6 +21,7 @@ import { runCli } from './cli.js';
 import { foldTurn, serveClient, withSystemPromptVariables } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { loadDefaultPlugins } from './plugin-config.js';
+import { seedHomePatch } from './plugin-journal.fixture.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import {
@@ -46,9 +47,7 @@ function homeWith(patch: string): NodeJS.ProcessEnv {
   const home = mkdtempSync(join(tmpdir(), 'nexus-startup-audit-'));
   temporary.push(home);
   chmodSync(home, 0o700);
-  const path = join(home, 'cordis.patch.yml');
-  writeFileSync(path, patch);
-  chmodSync(path, 0o600);
+  if (patch !== '') seedHomePatch(home, patch);
   return { [HARNESS_HOME_ENV]: home };
 }
 
@@ -282,9 +281,7 @@ describe('serve：組裝時掉了的列', () => {
       ].join('\n'),
     );
     chmodSync(module, 0o600);
-    const patch = join(home, 'cordis.patch.yml');
-    writeFileSync(patch, "- insert:\n    - id: counted\n      name: './counted.ts'\n");
-    chmodSync(patch, 0o600);
+    seedHomePatch(home, "- insert:\n    - id: counted\n      name: './counted.ts'\n");
     return { env, witness };
   }
 

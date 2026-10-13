@@ -31,13 +31,21 @@
  *
  * dsh 開 HMR 時設定一改立即影響使用那個 profile 的全部會話，沒開就保留到重啟（dsh
  * `packages/boot/plugin-manager/README.zh.md`〈概述〉）。我們是組 thread 時拉、只給新 thread：產品需求超出 dsh 的射程，
- * 歸在決議 `.docs/decisions-2026-10-11.md` §3-2 第 6 條（插件更新只給新對話）。清單仍不由 Loader 讀出來（決議 §3-5）。
+ * 歸在決議 `.docs/decisions-2026-10-11.md` §3-2 第 6 條（插件更新只給新對話）。清單由變更紀錄導出（#1412，決議 §3-5），
+ * 重讀時一起讀；列不在 Loader 的樹上，因為插件還在相容層，上樹跟著逐顆搬出相容層一起做（`cordis-root.ts` 偏離登記）。
+ *
+ * ## 變更紀錄那一層的兩件事要讓人看得到（#1412）
+ *
+ * - **舊的 `cordis.patch.yml` 又出現**：紀錄檔在了，這個檔不讀、不自動再遷，警告一次（日誌＋快照 `layers.journal`）。
+ * - **`--patch` 蓋到哪幾列**：它是部署端在命令列給的、不經過紀錄的路，稽核看不到，所以啟動與重讀時把它蓋到的列
+ *   記進日誌（內容變了才再記）與快照（`layers.overlays`、每列 `unaudited`）。
  *
  * @module
  */
 
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
 
+import { legacyPatchIgnoredMessage } from './plugin-config.js';
 import type { LoadedPluginConfig, PluginConfigWarn, StartupDrop } from './plugin-config.js';
 import { buildPluginSnapshot } from './plugin-snapshot.js';
 import type { PluginSnapshot, SnapshotSource } from './plugin-snapshot.js';
@@ -156,6 +164,25 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
     warned.add(message);
     log(`[清單] ${message}`);
   };
+  // 變更紀錄那一層的兩件事要讓人在伺服器日誌看得到（#1412）：舊的 patch 檔出現了、沒讀；`--patch` 蓋到哪幾列（不經過紀錄，
+  // 稽核看不到）。啟動那一刻講一次，之後每次重讀只在內容變了才再講。
+  const reportedLayers = new Set<string>();
+  function reportLayers(layers: LoadedPluginConfig['layers']): void {
+    const journal = layers.journal;
+    if (journal?.ignoredLegacyPatch !== undefined) {
+      warn(legacyPatchIgnoredMessage(journal.ignoredLegacyPatch, journal.path));
+    }
+    for (const overlay of layers.overlays) {
+      if (overlay.rows.length === 0) continue;
+      const line =
+        `有未稽核的覆蓋層在作用：--patch ${overlay.file} 指到 ${overlay.rows.join('、')}` +
+        '（這一層不經過變更紀錄，稽核看不到；開關回 overridden、設定被它蓋掉的改設定會被拒）';
+      if (reportedLayers.has(line)) continue;
+      reportedLayers.add(line);
+      log(`[清單] ${line}`);
+    }
+  }
+  reportLayers(startup.layers);
   const running = options.startupRead.map((plugin) => ({
     plugin,
     snapshot: snapshotOf(startup.plugins, plugin),
@@ -175,6 +202,7 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
         stage: assemblyStage.get(rowKey(startup, id)) ?? 'apply',
       })),
     ],
+    layers: startup.layers,
   };
   /** 一份讀出來的清單換成快照的來源：讀清單那一步掉的，加已知組裝掉了的（`plugins` 裡被標成停用、宣告沒寫停用的）。 */
   function savedSourceOf(list: ThreadPluginList): SnapshotSource {
@@ -195,6 +223,7 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
       plugins,
       rows: loaded.rows,
       drops,
+      layers: loaded.layers,
     };
   }
   function snapshotFor(saved?: ThreadPluginList): PluginSnapshot {
@@ -225,6 +254,7 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
         return off;
       });
       reportStartupDrift(plugins);
+      reportLayers(loaded.layers);
       const view: LoadedPluginConfig = { ...loaded, plugins, rows };
       const list: ThreadPluginList = {
         loaded: view,

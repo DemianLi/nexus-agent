@@ -83,7 +83,9 @@ import type { WireServer } from './wire-server.js';
 import { runDumpConfigSchema } from './config-schema-dump.js';
 import {
   composeDefaultEntries,
+  describePrepareJournal,
   loadDefaultPlugins,
+  prepareJournal,
   renderLayeredConfigDump,
   renderShippedConfigDump,
 } from './plugin-config.js';
@@ -154,13 +156,13 @@ const USAGE = `用法：
 選項：
   --live               換成真實供應商（預設 ${DEFAULT_LIVE_MODEL_ID}），需要 API key
   --patch <file>       把這個 patch 檔疊在出貨的 cordis.yml 上（可以給多次，後面的蓋前面的）
-                       另一層是 $NEXUS_AGENT_HOME/cordis.patch.yml，它排在 --patch 之前
+                       另一層是變更紀錄 $NEXUS_AGENT_HOME/plugin-journal.jsonl（用 plugin 寫入口改），它排在 --patch 之前
   --dump-config        把三層疊完的 plugin 設定印出來就退出（不開 server、不載 plugin）
   --dump-config-schema 把疊完的 plugin 設定欄位規格表（JSON Schema 2020-12）印出來就退出（不開 server）
                        標準輸出只有那份 JSON，診斷走標準錯誤；有任何一列轉不完整（或載不起來）退出碼是 1
                        停用的列也收。不能配 --dump-config
   --dump-default-config
-                       只印出貨那一層的設定就退出（不開 server）：不讀 $NEXUS_AGENT_HOME/cordis.patch.yml，也不收 --patch
+                       只印出貨那一層的設定就退出（不開 server）：不讀 $NEXUS_AGENT_HOME 的變更紀錄，也不收 --patch
                        覆寫檔壞了連 --dump-config 都印不出來時，用它拿一份對照
                        不能配 --dump-config、--dump-config-schema 或 --patch
   --workspace <dir>    把檔案落在這個目錄底下（省略即虛擬檔案系統）
@@ -463,6 +465,12 @@ async function startServer(
   // **它排在瀏覽器會話之前，那是承重的**（[#529](https://github.com/DemianLi/nexus-agent/issues/529)）：
   // cookie 的有效期由清單上 `#settings/browser-session` 那一列講，密鑰讀出來的那一刻就要有它。
   // **serve 多疊一層專屬的出貨清單**（`cordis.serve.yml`，#669 第 4 步）：每一輪改了哪些檔那一列只在這裡。
+  //
+  // **清單的第二層是變更紀錄，不是 `cordis.patch.yml`**（#1412）：讀清單之前先確保紀錄在、必要時把舊的 patch 檔遷進去。
+  // 遷移那一步在鎖裡做，serve 與 CLI 同時第一次啟動只會遷一次（`plugin-config.ts` 的 `prepareJournal`）。
+  const prepared = await prepareJournal({ env });
+  const preparedLine = describePrepareJournal(prepared);
+  if (preparedLine !== undefined) log(preparedLine);
   const loaded = await loadDefaultPlugins({
     serve: true,
     env,

@@ -22,9 +22,12 @@
  *
  * ## 偏離登記
  *
- * - **清單不是 Loader 讀的**：dsh 的樹由 Include 讀 YAML 長出來；我們的清單仍由 `loadDefaultPlugins` 解，經
- *   {@link COMPAT_HOST_SERVICE} 交給相容層。樹由變更紀錄導出是後台插拔那幾張卡的事（決議 §3-5），這一步只把容器換上去，
- *   舊插件一行不改。
+ * - **清單由變更紀錄導出（#1412），但清單上的列不在 Loader 的樹上**：dsh 的整棵樹本來就由一份 patch 清單導出
+ *   （`packages/boot/app-boot/src/index.ts:291`，`entry.update({ config: { ...includeConfig, patches } })`），所以「Cordis 不管
+ *   插件」不是理由。我們的清單由 `loadDefaultPlugins` 疊出來——第二層是變更紀錄折出來的 patch（`plugin-journal.ts`、
+ *   `plugin-config.ts`），經 {@link COMPAT_HOST_SERVICE} 交給相容層。**列不上樹的理由是插件還在相容層**：上樹跟著
+ *   「逐顆搬出相容層」一起做（地圖終點第 1 項），現在放上去只會在相容層底下多一層轉接，而且 Loader 對每列 `config` 跑
+ *   `interpolate` 深複製，清單項目的身分留不住（見下）。舊插件一行不改。
  * - **入口的工作不在入口那一列裡**：dsh 的 `headless-runner` 在 `apply` 裡 `void run(...)`，跑在那一列的 fiber 底下。
  *   我們的入口那一列只把服務交回 `runCli`／`runServe`，對話迴圈與 HTTP 伺服器照舊跑在呼叫端的流程裡，理由是驗收 C：
  *   入口一路以來的錯誤（`StartupError`、旗標矛盾、續接失敗）要在同一個時刻、以同一個類別與同一句話拋給呼叫端。搬進

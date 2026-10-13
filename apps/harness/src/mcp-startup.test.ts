@@ -22,6 +22,7 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { toAgentInvocation } from './messages.js';
 import { loadDefaultPlugins } from './plugin-config.js';
 import type { ScriptedChatModel } from './scripted-model.js';
+import { seedHomePatch } from './plugin-journal.fixture.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -54,9 +55,8 @@ function homeWithLateServer(extraConfig = ''): { env: NodeJS.ProcessEnv; recover
       '',
     ].join('\n'),
   );
-  const patch = join(home, 'cordis.patch.yml');
-  writeFileSync(
-    patch,
+  seedHomePatch(
+    home,
     [
       '- insert:',
       '    - id: mcp-late',
@@ -73,7 +73,6 @@ function homeWithLateServer(extraConfig = ''): { env: NodeJS.ProcessEnv; recover
       .filter((line) => line !== '')
       .join('\n'),
   );
-  chmodSync(patch, 0o600);
   return { env: { [HARNESS_HOME_ENV]: home }, recover: () => writeFileSync(flag, '') };
 }
 

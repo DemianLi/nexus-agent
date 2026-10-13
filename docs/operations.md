@@ -80,8 +80,8 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 
 日誌裡有你打的每一句話、模型的每一則回覆，以及工具讀到的檔案內容與指令輸出——連同裡面可能有的秘密。
 **不想留的話，把清單上 `session-persistence` 那一列關掉**（[#612](https://github.com/DemianLi/nexus-agent/issues/612)），
-照 dsh 在部署設定裡拿掉 `session-persistence-jsonl` 那一列的做法。在 `$NEXUS_AGENT_HOME/cordis.patch.yml` 或
-`--patch <檔>` 裡寫：
+照 dsh 在部署設定裡拿掉 `session-persistence-jsonl` 那一列的做法。用 `plugin disable session-persistence`
+（寫進變更紀錄，要重啟才生效），或在 `--patch <檔>` 裡寫：
 
 ```yaml
 - id: session-persistence
@@ -486,11 +486,16 @@ agent 由什麼組成」的來源。例外是組裝點在程式碼裡掛的一�
 它是檔案政策的全部（升級、`sandbox/mode`；切換入口在 `permission-presets` 那一列），**這時關掉它啟動會失敗**（fence 還在擋，模型卻不知道）；沒有
 `--workspace` 時它只講一句不宣稱圍堵的政策，關掉合法。
 
-要改它不是去編輯那份檔案，而是疊一層自己的 patch。**三層，後面的蓋前面的**：
+要改它不是去編輯那份檔案，而是疊自己的覆寫。**三層，後面的蓋前面的**：
 
-1. 出貨的 `apps/harness/cordis.yml`
-2. `$NEXUS_AGENT_HOME/cordis.patch.yml`（預設 `~/.nexus-agent/cordis.patch.yml`）
+1. 出貨的 `apps/harness/cordis.yml`（serve 另疊 `cordis.serve.yml`）
+2. **變更紀錄** `$NEXUS_AGENT_HOME/plugin-journal.jsonl`（預設 `~/.nexus-agent/plugin-journal.jsonl`）：用 `plugin` 寫入口
+   停用、啟用、改設定寫進去，只增不改，清單從它導出（[#1412](https://github.com/DemianLi/nexus-agent/issues/1412)，
+   見下面「後台改清單」）
 3. 任意個 `--patch <檔>`，照命令列順序
+
+**home 的 `cordis.patch.yml` 不再是一層**：第一次啟動時它的每條 patch 被遷進變更紀錄（見「後台改清單」的遷移），
+之後放一個進來只會警告、不讀。下面講的 patch 檔格式仍然是 `--patch <檔>` 的格式，也是變更紀錄裡 `patch` 那種紀錄的內容。
 
 patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 
@@ -533,7 +538,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   照清單組一次 agent（`serve` 組完就收，[#749](https://github.com/DemianLi/nexus-agent/issues/749)），設定不合法、
   外掛掛上去時拋錯，都在那一刻報出來，訊息兩邊同一句。**`disabled: true` 的那一列不驗設定。**
 - **`serve` 改了清單，新對話就生效，不必重啟**（[#1405](https://github.com/DemianLi/nexus-agent/issues/1405)）。每條對話組裝時
-  照同一組 env 與 `--patch` 重讀一次清單，所以改了 home 層的 `cordis.patch.yml`，之後開的對話看得到：哪幾列掛、組裝時讀的設定
+  照同一組 env 與 `--patch` 重讀一次清單，所以用 `plugin` 寫入口改了變更紀錄，之後開的對話看得到：哪幾列掛、組裝時讀的設定
   （`agent-loop`、`recursion-limit`、`tool-fs-search` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
@@ -812,7 +817,8 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 
 **`thread-search`**（[#631](https://github.com/DemianLi/nexus-agent/issues/631)）讓側欄按**內容**搜尋以前的會話，
 不只比標題。**出廠不開**，同 dsh 的產品組裝：要不要多背一份搜尋索引是部署自己的選擇。多人共用的主機上沒有「整台
-一起設」的那一層，想用的人在自己的 `~/.nexus-agent/cordis.patch.yml` 加這一段：
+一起設」的那一層，想用的人用 `plugin config set thread-search --file -` 寫入下面這段（`plugin enable` 不需要，它本來就是掛著的，
+只是 `openAt: never`），或放進自己的 `--patch <檔>`：
 
 ```yaml
 - id: thread-search
@@ -922,6 +928,58 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - 三格都空、身分句也關掉時，這顆 middleware 根本不掛。
 - 這一列是必掛的：`disabled: true` 或設定寫壞，整個起不來。
 
+### 後台改清單：`plugin` 寫入口與變更紀錄
+
+停用、啟用一列、換一列的設定，不要去編輯檔案，在這台主機上跑：
+
+```bash
+pnpm --filter @nexus/harness run plugin -- disable todo
+pnpm --filter @nexus/harness run plugin -- enable todo
+printf 'maxWords: 3\nmaxBytes: 40\n' | pnpm --filter @nexus/harness run plugin -- config set thread-title --file -
+pnpm --filter @nexus/harness run plugin -- config reset thread-title
+```
+
+- **新設定只從檔案或標準輸入來**（`--file <路徑|->`），不收命令列參數：命令列會進 shell history 與 `ps`。
+  **整份替換，不是深層合併**，跟 patch 檔的 `config` 同一條規則。`config reset` 把那一列的設定恢復成繼承來的值
+  （出貨清單或更下面的覆寫給的），**不是**釘在今天的值上：之後出貨清單改了預設值，它會跟著變。
+  新值剛好等於繼承值時，照 dsh 的做法把覆寫拿掉，紀錄裡記成 `config-reset`，輸出會講「已記成恢復成繼承值」。
+- **寫之前先驗**：id 不存在、設定不合那一列的 schema、關的是必掛的列，一律拒絕，結束碼 1，**紀錄檔一個位元組都不動**。
+  關掉 `sandbox-policy`／`permission-presets` 不會被拒絕（`validateEntries` 沒有這條），但輸出會警告：serve 帶 `--workspace`
+  時，之後每條新對話都會建不起來。
+- **輸出講的**：紀錄檔的完整路徑、第幾筆、操作者、改了哪些**欄位名**（不印值）、什麼時候生效——`新對話生效`，或
+  `待重啟`（啟動時讀一次的那 13 列，見上面）。**那份路徑要跟 serve 讀的是同一個 `$NEXUS_AGENT_HOME`**；
+  `plugin-snapshot.json` 不在的話輸出會警告（serve 沒開過，或指到別的 home），不擋寫入。
+- **要跟 serve 帶同一組 `--patch`**：`plugin` 也收 `--patch <檔>`（可多次）。`--patch` 排在變更紀錄之後，被它蓋住的列，
+  寫入口照寫紀錄但回報 `被 --patch 蓋住`（設定的那一類直接拒絕，因為寫了也不會生效）。沒帶同一組，它看不出誰被蓋住。
+- **操作者記的是自報**：記的是有效帳號，以及 `sudo` 之前的帳號（讀 `SUDO_USER`，沒有就讀 `LOGNAME`，並標明出處）。
+  那是環境變數，不是身分認證；**要能追責，靠主機本身的存取控制**（誰能登入、誰能 `sudo`）。
+- **加一列原本不在清單裡的 plugin（`insert`）只能用 `--patch`**，寫入口不做這件事。
+- **舊插件一行不改**：清單上的列仍在相容層裡掛，變更紀錄只是清單的來源。
+
+**紀錄檔的格式**：JSON Lines，一行一筆，`{"v":1,"seq":N,"at":"<ISO>","actor":{…},"op":"disable|enable|config-set|config-reset|patch",…}`。
+`seq` 從 1 連續遞增。`config-set` 與 `config-reset` 帶 `before`／`after`（**明文**，連同裡面可能有的秘密，所以檔案是 `0600`、
+home 是 `0700`；不要把它貼進 issue 或聊天）。直接 `cat` 就能讀，用 `jq -c .` 更舒服。
+
+**怎麼寫的**：拿跨行程鎖（`plugin-journal.jsonl.lock`）→ 在鎖裡驗證 → 整行 append → `fsync` → 回報。讀的一方不拿鎖，
+最後一行沒寫完就略過；寫的一方拿到鎖後發現尾巴不完整，會截掉並在 stderr 講一聲。**中間某一行壞了、或 `seq` 斷號**：
+serve 起不來，訊息指名壞在第幾行；已經在跑的 serve 只有重讀的那條對話失敗，其他不受影響。
+
+**第一次啟動的遷移**：serve 起動時（或你第一次跑 `plugin`），如果 home 有舊的 `cordis.patch.yml` 而紀錄檔還沒有，
+它的每條 patch 變成一筆 `patch` 紀錄（操作者記「遷移」，帶來源路徑與全文的 SHA-256；`insert` 的相對模組路徑換成絕對路徑），
+舊檔改名成 `cordis.patch.yml.migrated-<時間>`（`0600`）。這是遷移的界線：**紀錄檔存在之後**，舊檔再出現一律警告一次、不讀、
+不再遷（誰都能放一個檔進 home，自動遷移會讓「誰改的」全記成「遷移」）。要保留那個檔的內容，用 `plugin` 重做，或改放進 `--patch`。
+**搬 home 會讓遷移進來的絕對 `insert` 路徑指到舊位置**，搬完要核對。一次性的 CLI（`pnpm … run cli`）沒有舊檔要遷時什麼都不寫；
+紀錄檔由 serve 或 `plugin` 第一次建。
+
+**紀錄壞了怎麼救**（沒有救援指令，三步手動，**這一步本身不進紀錄**）：
+
+1. 先備份整個檔：`cp plugin-journal.jsonl plugin-journal.jsonl.bak-$(date +%s)`。
+2. 看啟動失敗訊息指的第幾行，把**那一行之後**的內容挪到別的檔（或確認那幾行可以丟）。
+3. 剩下的前半段 `seq` 本來就連續，起得來；之後要補回挪走的改動，用 `plugin` 重做，讓它們重新進紀錄。
+
+**沒走變更紀錄的改動看得到**：`--patch` 蓋住的列，在 `plugin-snapshot.json` 裡標 `unaudited: true`，serve 日誌第一次看到時記一行
+`[清單] 有未稽核的覆蓋層在作用`（只有檔名與列，不印值）。`--dump-config` 照舊印疊完的樣子，**不遷移、不寫任何檔**。
+
 ### 看這台機器上疊出來的是什麼
 
 ```bash
@@ -935,7 +993,7 @@ server、不綁 port：
 # == /path/to/apps/harness/cordis.yml
 - id: echo
   name: '@nexus/plugin-echo'
-# == /path/to/apps/harness/cordis.yml, patched by /home/you/.nexus-agent/cordis.patch.yml
+# == /path/to/apps/harness/cordis.yml, patched by /home/you/.nexus-agent/plugin-journal.jsonl
 - id: todo
   name: '@nexus/plugin-todo'
   disabled: true
@@ -947,8 +1005,8 @@ server、不綁 port：
 
 輸出的位元組不是約定，不要拿它去做程式化的比對：dsh 對自己那份 dump 也明講了同一件事。
 
-**覆寫檔壞了的時候**（權限被開到別人也寫得動、YAML 寫壞），`--dump-config` 自己也印不出來——它一定會去讀
-`$NEXUS_AGENT_HOME/cordis.patch.yml`，讀不過就拋，訊息指名壞的是哪個檔。這時候用：
+**覆寫檔壞了的時候**（權限被開到別人也寫得動、YAML 寫壞、變更紀錄某一行壞了），`--dump-config` 自己也印不出來——它一定會去讀
+變更紀錄與 `--patch` 的檔，讀不過就拋，訊息指名壞的是哪個檔、哪一行。這時候用：
 
 ```bash
 pnpm --filter @nexus/harness run cli -- --dump-default-config
@@ -969,7 +1027,7 @@ pnpm --filter @nexus/harness run cli -- --dump-config-schema > nexus-config.sche
 
 `serve` 也收同一個旗標。它用跟 `--dump-config` 同樣的三層與 `--patch`，印出**一份 JSON Schema 2020-12 文件**
 （[#741](https://github.com/DemianLi/nexus-agent/issues/741)）：根描述疊完之後的條目清單，`$defs.patchList` 描述
-覆寫檔（`cordis.patch.yml`、`--patch`）的格式。編輯器與 agent 拿它就能事先知道某一列收哪些欄位、預設值是多少，
+覆寫（變更紀錄裡的 `config-set`、`patch` 紀錄，與 `--patch` 檔）的格式。編輯器與 agent 拿它就能事先知道某一列收哪些欄位、預設值是多少，
 打錯欄位名不必等到啟動才發現——對認得的 `id` 整份換掉 `config` 時，多寫一個欄位、型別不對都驗不過。
 
 - **標準輸出只有那份 JSON**，診斷走標準錯誤。載入 plugin 模組時它們寫進 `process.stdout.write` 的東西會被轉到標準錯誤；

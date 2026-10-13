@@ -29,6 +29,7 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { toAgentInvocation } from './messages.js';
 import { composeEntries, loadDefaultPlugins } from './plugin-config.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { seedHomePatch } from './plugin-journal.fixture.js';
 import { runServe } from './serve.js';
 import { StartupError } from './startup-audit.js';
 
@@ -294,9 +295,8 @@ describe('寫壞的前後綴：起動就失敗，不把字面的 {{…}} 送給�
 
   function env(): NodeJS.ProcessEnv {
     const home = privateDirectory('nexus-persona-bad-');
-    // 放在 home 底下的 cordis.patch.yml，兩個入口都會讀。
-    writeFileSync(join(home, 'cordis.patch.yml'), BAD);
-    chmodSync(join(home, 'cordis.patch.yml'), 0o600);
+    // 放在 home 底下，兩個入口都會讀（#1412 起是變更紀錄那一層）。
+    seedHomePatch(home, BAD);
     return { [HARNESS_HOME_ENV]: home };
   }
 

@@ -1,6 +1,8 @@
 /**
- * serve 每條 thread 組裝時重讀清單（#1405）：量的是產品路徑（`runServe` 加真的 wire client），在兩條對話之間改 home 層的
- * `cordis.patch.yml`。
+ * serve 每條 thread 組裝時重讀清單（#1405）：量的是產品路徑（`runServe` 加真的 wire client），在兩條對話之間改設定。
+ *
+ * **#1412 之後「改設定」走真的寫入口**（`plugin-change.ts`）：home 的 `cordis.patch.yml` 不再是一層，這一層是只增不改的
+ * 變更紀錄。要寫「寫入口不會放行」的壞狀態（驗證之後才壞掉的設定、被人手動改壞的紀錄）走 `appendRaw`／`writeJournalText`。
  *
  * 量具是一顆插進清單的假插件：每次 `apply` 把拿到的設定寫進一個見證檔，模組被求值一次就在另一個見證檔記一筆。
  */
@@ -14,6 +16,15 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { projectKey } from './jsonl-session-store.js';
+import { changePlugin } from './plugin-change.js';
+import type { PluginChange, PluginChangeResult } from './plugin-change.js';
+import type { JournalBody, JournalRecord } from './plugin-journal.js';
+import {
+  appendRaw,
+  readJournalText,
+  seedHomePatch,
+  writeJournalText,
+} from './plugin-journal.fixture.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -33,8 +44,14 @@ interface Home {
   applied(): string[];
   /** 模組被求值了幾次。 */
   evaluations(): number;
-  /** 換掉 home 層的 patch。 */
-  patch(body: string): void;
+  /** 起始的設定：寫成紀錄檔（等同第一次啟動時遷移的結果），要在 `runServe` 之前呼叫。 */
+  seed(body: string): void;
+  /** 走真的寫入口改一列（驗證、鎖、fsync 都在）。 */
+  change(change: PluginChange): Promise<PluginChangeResult>;
+  /** 不經驗證追加一筆。 */
+  raw(body: JournalBody): Promise<JournalRecord>;
+  /** 整份換掉紀錄檔的文字。 */
+  text(body?: string): string;
 }
 
 /**
@@ -63,21 +80,24 @@ function home(failUnlessOk = false): Home {
     ].join('\n'),
   );
   chmodSync(module, 0o600);
-  const patchPath = join(dir, 'cordis.patch.yml');
   const read = (path: string) => (existsSync(path) ? readFileSync(path, 'utf8') : '');
+  const env = { [HARNESS_HOME_ENV]: dir };
   return {
-    env: { [HARNESS_HOME_ENV]: dir },
+    env,
     dir,
     applied: () => read(appliedPath).split('\n').filter(Boolean),
     evaluations: () => read(evaluatedPath).length,
-    patch(body) {
-      writeFileSync(patchPath, body);
-      chmodSync(patchPath, 0o600);
+    seed: (body) => seedHomePatch(dir, body),
+    change: (change) => changePlugin(change, { env }),
+    raw: (body) => appendRaw(dir, body),
+    text(body) {
+      if (body !== undefined) writeJournalText(dir, body);
+      return readJournalText(dir);
     },
   };
 }
 
-/** 插一列假插件，帶這份設定。 */
+/** 插一列假插件，帶這份設定（起始設定用）。 */
 function probeRow(config: string, extra = ''): string {
   return `- insert:\n    - id: probe\n      name: './probe.ts'\n${config}${extra}`;
 }
@@ -116,10 +136,11 @@ function header(dir: string, thread: string): { configHash?: string; plugins?: u
 describe('serve 每條 thread 重讀清單（#1405）', () => {
   it('兩條對話之間改了一列的設定：第二條拿到新值，開著的第一條不變；模組只求值一次', async () => {
     const h = home();
-    h.patch(probeRow('      config:\n        tag: one\n'));
+    h.seed(probeRow('      config:\n        tag: one\n'));
     const server = await start(h.env, []);
     expect(await say(server, 'a')).toBeUndefined();
-    h.patch(probeRow('      config:\n        tag: two\n'));
+    const written = await h.change({ op: 'config-set', id: 'probe', config: { tag: 'two' } });
+    expect(written).toMatchObject({ outcome: 'recorded', effect: 'next-thread' });
     expect(await say(server, 'b')).toBeUndefined();
     // 第一條還開著，再說一句不重組。
     expect(await say(server, 'a')).toBeUndefined();
@@ -131,20 +152,20 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
 
   it('兩條對話之間關掉一列：第二條不掛它', async () => {
     const h = home();
-    h.patch(probeRow('      config:\n        tag: one\n'));
+    h.seed(probeRow('      config:\n        tag: one\n'));
     const server = await start(h.env, []);
     expect(await say(server, 'a')).toBeUndefined();
-    h.patch(`${probeRow('      config:\n        tag: one\n')}- id: probe\n  disabled: true\n`);
+    expect(await h.change({ op: 'disable', id: 'probe' })).toMatchObject({ outcome: 'recorded' });
     expect(await say(server, 'b')).toBeUndefined();
     expect(h.applied()).toHaveLength(2);
   }, 60000);
 
   it('會話 header 記的是那條對話自己那份清單', async () => {
     const h = home();
-    h.patch(probeRow('      config:\n        tag: one\n'));
+    h.seed(probeRow('      config:\n        tag: one\n'));
     const server = await start(h.env, []);
     expect(await say(server, 'a')).toBeUndefined();
-    h.patch(probeRow('      config:\n        tag: two\n'));
+    await h.change({ op: 'config-set', id: 'probe', config: { tag: 'two' } });
     expect(await say(server, 'b')).toBeUndefined();
     const a = header(h.dir, 'a');
     const b = header(h.dir, 'b');
@@ -155,13 +176,18 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
 
   it('清單讀不起來：只有那一條建不起來，伺服器照常，改好之後下一條建得起來', async () => {
     const h = home();
-    h.patch(probeRow('      config:\n        tag: one\n'));
+    h.seed(probeRow('      config:\n        tag: one\n'));
     const server = await start(h.env, []);
-    h.patch('- id: [這不是 YAML\n');
+    const good = h.text();
+    // 紀錄中間壞了一行（後面還有合法的一筆）：讀端拋、指名第幾行。
+    h.text(`${good}{這不是 JSON\n${good.split('\n')[0] ?? ''}\n`);
     const refused = await say(server, 'a');
     expect(refused).toBeDefined();
-    expect(refused).toContain('cordis.patch.yml');
-    h.patch(probeRow('      config:\n        tag: two\n'));
+    expect(refused).toContain('plugin-journal.jsonl');
+    expect(refused).toMatch(/第 \d+ 行/u);
+    // 照 PM 說明的救援：備份、把壞行拿掉。
+    h.text(good);
+    await h.change({ op: 'config-set', id: 'probe', config: { tag: 'two' } });
     expect(await say(server, 'b')).toBeUndefined();
     expect(h.applied()).toEqual(['{"tag":"one"}', '{"tag":"two"}']);
   }, 60000);
@@ -169,21 +195,36 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
   it('必掛的列掉了：只有那一條建不起來，訊息同啟動那一次', async () => {
     const h = home();
     const server = await start(h.env, []);
-    h.patch('- id: browser-session\n  config:\n    maxAgeDays: 0\n');
+    // 寫入口不會放行這個值；驗證之後才壞掉（例如手動改紀錄、或下一版收緊了設定格式）的狀態用 raw 造。
+    await h.raw({
+      op: 'config-set',
+      id: 'browser-session',
+      name: '#settings/browser-session',
+      before: null,
+      after: { maxAgeDays: 0 },
+    });
     const refused = await say(server, 'a');
     expect(refused).toMatch(/起不來/u);
     expect(refused).toContain('browser-session');
-    h.patch('[]\n');
+    // 恢復成繼承值之後，下一條建得起來。
+    expect(await h.change({ op: 'config-reset', id: 'browser-session' })).toMatchObject({
+      outcome: 'recorded',
+    });
     expect(await say(server, 'b')).toBeUndefined();
   }, 60000);
 
-  it('啟動時讀一次的列改了：伺服器日誌記一次「已儲存，待重啟」', async () => {
+  it('啟動時讀一次的列改了：寫入口回報 restart，伺服器日誌記一次「已儲存，待重啟」', async () => {
     const h = home();
     const lines: string[] = [];
     const server = await start(h.env, lines);
     expect(await say(server, 'a')).toBeUndefined();
     expect(lines.filter((line) => line.startsWith('[清單]'))).toEqual([]);
-    h.patch('- id: thread-title\n  config:\n    maxWords: 3\n    maxBytes: 40\n');
+    const written = await h.change({
+      op: 'config-set',
+      id: 'thread-title',
+      config: { maxWords: 3, maxBytes: 40 },
+    });
+    expect(written).toMatchObject({ outcome: 'recorded', effect: 'restart' });
     expect(await say(server, 'b')).toBeUndefined();
     expect(await say(server, 'c')).toBeUndefined();
     expect(lines.filter((line) => line.startsWith('[清單]'))).toEqual([
@@ -195,7 +236,13 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     const h = home();
     const lines: string[] = [];
     const server = await start(h.env, lines);
-    h.patch("- id: todo\n  config:\n    allowParallelInProgress: '不是布林'\n");
+    await h.raw({
+      op: 'config-set',
+      id: 'todo',
+      name: '@nexus/plugin-todo',
+      before: null,
+      after: { allowParallelInProgress: '不是布林' },
+    });
     expect(await say(server, 'a')).toBeUndefined();
     expect(await say(server, 'b')).toBeUndefined();
     const dropped = lines.filter((line) => line.startsWith('[清單] 這一列沒掛上'));
@@ -205,12 +252,12 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
 
   it('試組掉了的列：設定沒變就不再試，設定一改下一條重新試它', async () => {
     const h = home(true);
-    h.patch(probeRow('      config:\n        ok: false\n'));
+    h.seed(probeRow('      config:\n        ok: false\n'));
     const server = await start(h.env, []);
     expect(await say(server, 'a')).toBeUndefined();
     // 只有試組那一次。
     expect(h.applied()).toEqual(['{"ok":false}']);
-    h.patch(probeRow('      config:\n        ok: true\n'));
+    await h.change({ op: 'config-set', id: 'probe', config: { ok: true } });
     expect(await say(server, 'b')).toBeUndefined();
     expect(h.applied()).toEqual(['{"ok":false}', '{"ok":true}']);
   }, 60000);
@@ -218,20 +265,21 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
   it('沒寫 id 的列試組掉了：設定一改下一條照樣重新試它（鍵要含那一列的宣告）', async () => {
     const h = home(true);
     const anonymous = (config: string): string => `- insert:\n    - name: './probe.ts'\n${config}`;
-    h.patch(anonymous('      config:\n        ok: false\n'));
+    h.seed(anonymous('      config:\n        ok: false\n'));
     const server = await start(h.env, []);
     expect(await say(server, 'a')).toBeUndefined();
     expect(h.applied()).toEqual(['{"ok":false}']);
-    h.patch(anonymous('      config:\n        ok: true\n'));
+    // 沒有 id 的列寫入口指不到：這一條只換整份起始設定（測試用），量的是重試的鍵。
+    seedHomePatch(h.dir, anonymous('      config:\n        ok: true\n'));
     expect(await say(server, 'b')).toBeUndefined();
     expect(h.applied()).toEqual(['{"ok":false}', '{"ok":true}']);
   }, 60000);
 
   it('試組掉了的列改成另一個壞值：只重試一次，之後的對話不再試', async () => {
     const h = home(true);
-    h.patch(probeRow('      config:\n        note: 1\n'));
+    h.seed(probeRow('      config:\n        note: 1\n'));
     const server = await start(h.env, []);
-    h.patch(probeRow('      config:\n        note: 2\n'));
+    await h.change({ op: 'config-set', id: 'probe', config: { note: 2 } });
     expect(await say(server, 'a')).toBeUndefined();
     expect(await say(server, 'b')).toBeUndefined();
     expect(h.applied()).toEqual(['{"note":1}', '{"note":2}']);
@@ -241,7 +289,8 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
     const h = home();
     const lines: string[] = [];
     const server = await start(h.env, lines);
-    h.patch('- id: no-such-row\n  disabled: true\n');
+    // 寫入口不會為不存在的 id 追加；紀錄被手動改成這樣時，疊層照 dsh 警告後跳過。
+    await h.raw({ op: 'disable', id: 'no-such-row', name: 'x', before: false, after: true });
     expect(await say(server, 'a')).toBeUndefined();
     expect(await say(server, 'b')).toBeUndefined();
     expect(lines.filter((line) => line.includes('no-such-row'))).toEqual([
@@ -252,7 +301,13 @@ describe('serve 每條 thread 重讀清單（#1405）', () => {
   it('重讀時關核准閘門：那一條建不起來', async () => {
     const h = home();
     const server = await start(h.env, []);
-    h.patch('- id: approval-gate\n  disabled: true\n');
+    await h.raw({
+      op: 'disable',
+      id: 'approval-gate',
+      name: '@nexus/core/approval-gate',
+      before: false,
+      after: true,
+    });
     expect(await say(server, 'a')).toContain('approval-gate');
   }, 60000);
 });

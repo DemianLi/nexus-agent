@@ -14,8 +14,13 @@
  *
  * ## 疊加順序
  *
- * 出貨預設 → `$NEXUS_AGENT_HOME/cordis.patch.yml` → 任意個 `--patch`，照命令列順序。
- * **不從目前目錄讀**——那一份會跟著 clone 一起到來，而它能停用核准。
+ * 出貨預設 → **變更紀錄折出來的那一層**（`$NEXUS_AGENT_HOME/plugin-journal.jsonl`，#1412，見 {@link readJournalLayer}）→ 任意個
+ * `--patch`，照命令列順序。**不從目前目錄讀**——那一份會跟著 clone 一起到來，而它能停用核准。
+ *
+ * **home 的 `cordis.patch.yml` 不再是一層**（#1412，demian 2026-10-13 Q2）：第一次啟動時遷進變更紀錄（{@link prepareJournal}），
+ * 之後出現這個檔只警告、不讀。`--patch` 是部署端在命令列給的，照 dsh 的覆蓋層留著。照 dsh 的層序
+ * （`packages/boot/app-boot/src/profile-context.ts:63-75`：各層 → profile 的 patch → home 的 patch → overlays）：
+ * 後台只寫 profile 那一層，我們把它與 home 那層併成一份稽核過的紀錄。
  *
  * ## 權限檢查只管使用者那兩層
  *
@@ -44,7 +49,9 @@
  * @module
  */
 
-import { lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { chmodSync, existsSync, lstatSync, readFileSync, realpathSync } from 'node:fs';
+import { mkdir, rename } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -53,6 +60,16 @@ import type { PluginEntry } from '@nexus/core';
 
 import { resolveHarnessHome } from './harness-home.js';
 import { assertPluginCompatible, PluginCompatibilityError } from './plugin-compatibility.js';
+import {
+  createJournalFile,
+  foldJournal,
+  PLUGIN_JOURNAL_FILE_NAME,
+  PLUGIN_JOURNAL_VERSION,
+  PluginJournalError,
+  readJournal,
+  withFileLock,
+} from './plugin-journal.js';
+import type { JournalActor, JournalBody, JournalRecord } from './plugin-journal.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -69,7 +86,10 @@ export const SHIPPED_CONFIG_FILENAME = 'cordis.yml';
  */
 export const SERVE_SHIPPED_CONFIG_FILENAME = 'cordis.serve.yml';
 
-/** 使用者那一層的檔名，放在 harness home 底下。 */
+/**
+ * 舊的使用者那一層的檔名，放在 harness home 底下。**#1412 之後它不再是一層**：第一次啟動時遷進變更紀錄
+ * （{@link prepareJournal}），之後有這個檔只警告、不讀。
+ */
 export const USER_PATCH_FILENAME = 'cordis.patch.yml';
 
 /** 這個模組所有的失敗都是這個型別。訊息一律指得出是哪個檔、哪一列。 */
@@ -522,6 +542,12 @@ export const PATCH_FILE_ROLE: PrivateFileRole = {
   why: '這個檔案改得動 plugin 清單，包括把核准關掉。',
 };
 
+/** 變更紀錄（#1412）：它折出來的 patch 決定載入哪些模組，跟舊的 patch 檔同一條理由。 */
+export const JOURNAL_FILE_ROLE: PrivateFileRole = {
+  subject: '變更紀錄',
+  why: '它折出來的 patch 改得動 plugin 清單，包括 insert 新模組進來。',
+};
+
 /** `insert` 進來、指到檔案的模組（[#542](https://github.com/DemianLi/nexus-agent/issues/542)）。 */
 export const PLUGIN_MODULE_ROLE: PrivateFileRole = {
   subject: 'plugin 模組',
@@ -752,6 +778,19 @@ function assertPrivateModule(entry: ConfigEntry): void {
   }
 }
 
+/** 變更紀錄那一層的來源（#1412）。 */
+export interface JournalSource {
+  /** 紀錄檔的絕對路徑。 */
+  readonly path: string;
+  /**
+   * 舊的 `cordis.patch.yml`。紀錄檔還不在時，它是**待遷移**的來源（照舊疊進清單，行為跟遷移前一樣）；紀錄檔在了，
+   * 它在就只警告、不讀。
+   */
+  readonly legacyPatch?: string;
+  /** 還沒寫進紀錄的內容，接在已有的後面折：寫入前驗證「這一筆寫下去之後清單長什麼樣」用。 */
+  readonly pending?: readonly JournalBody[];
+}
+
 /** 組裝一次要讀的東西。 */
 export interface PluginConfigSources {
   /** 出貨那一份的路徑，省略即 {@link shippedConfigPath}。 */
@@ -761,8 +800,10 @@ export interface PluginConfigSources {
    * 它們的列接在出貨列後面，dump 的來源註解標各自的檔；使用者的 patch 照樣疊在全部出貨列之上。
    */
   readonly shippedLayers?: readonly string[];
-  /** harness home 底下那一份的路徑，省略即不讀這一層。 */
+  /** 一份 patch 檔當一層（測試與函式庫層級用）；產品路徑不再走它，走 {@link journal}。 */
   readonly userPatch?: string;
+  /** 變更紀錄折出來的那一層，疊在出貨層之後、`--patch` 之前（#1412）。 */
+  readonly journal?: JournalSource;
   /** `--patch` 指定的檔，照命令列順序。 */
   readonly overlays?: readonly string[];
   /** 跳過某條 patch 時往哪裡講，省略即 stderr。 */
@@ -784,9 +825,55 @@ export interface PluginConfigSources {
  * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
  */
 export function composeEntries(sources: PluginConfigSources = {}): ConfigEntry[] {
-  const { shipped, rows, layers } = readLayers(sources);
+  return composeEntriesWithReport(sources).entries;
+}
+
+/**
+ * {@link composeEntries}，多交出各層的報告（#1412）：變更紀錄有幾筆、有沒有舊的 patch 檔被略過、`--patch` 蓋到哪幾列。
+ *
+ * @param sources - 各層的來源。
+ * @returns 疊完並驗過的條目清單，與各層的報告。
+ * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
+ */
+export function composeEntriesWithReport(sources: PluginConfigSources = {}): {
+  readonly entries: ConfigEntry[];
+  readonly report: LayerReport;
+} {
+  const { shipped, rows, layers, report } = readLayers(sources);
   const patches = layers.flatMap((layer) => layer.patches);
-  return validateEntries(applyEntryPatches(rows, patches, sources.warn), shipped);
+  return {
+    entries: validateEntries(applyEntryPatches(rows, patches, sources.warn), shipped),
+    report,
+  };
+}
+
+/**
+ * 各層的報告（#1412）。**不帶設定值**：快照與日誌都從這裡取材。
+ */
+export interface LayerReport {
+  /** 變更紀錄那一層；沒有給 `journal` 來源（測試、`--dump-default-config`）就沒有。 */
+  readonly journal?: {
+    readonly path: string;
+    /** 紀錄檔在不在。 */
+    readonly exists: boolean;
+    /** 紀錄幾筆（不含還沒寫的）。 */
+    readonly records: number;
+    /** 最後一筆的序號。 */
+    readonly lastSeq: number | null;
+    /** 紀錄檔還不在、舊 patch 檔在：這一次當待遷移讀，下一次啟動才遷。 */
+    readonly pendingMigration: boolean;
+    /** 紀錄檔在了、舊 patch 檔也在：看到了、沒讀（也不會自動再遷）。 */
+    readonly ignoredLegacyPatch?: string;
+  };
+  /**
+   * 未稽核的覆蓋層：`--patch` 給的檔，與它們指到（改或插入）的列 id。這一層不經過變更紀錄，所以寫入口看不到它，
+   * 稽核也看不到——這份報告就是讓它不要靜靜地在。
+   */
+  readonly overlays: readonly {
+    readonly file: string;
+    /** 這個檔的 patch 指到的列 id，依出現順序、不重複。 */
+    readonly rows: readonly string[];
+  }[];
 }
 
 /** 一層 patch 加上它在 dump 的來源註解裡叫什麼。 */
@@ -814,6 +901,7 @@ function readLayers(sources: PluginConfigSources): {
   /** 每一列出貨列來自哪個檔，與 `rows` 同長同序。 */
   rowOrigins: string[];
   layers: ConfigLayer[];
+  report: LayerReport;
 } {
   const shipped = sources.shipped ?? shippedConfigPath();
   const rows: Record<string, unknown>[] = [];
@@ -836,10 +924,116 @@ function readLayers(sources: PluginConfigSources): {
     const patches = loadOptionalPatches(sources.userPatch);
     if (patches !== undefined) layers.push({ label: sources.userPatch, patches });
   }
-  for (const overlay of sources.overlays ?? []) {
-    layers.push({ label: overlay, patches: loadOverlayPatches(overlay) });
+  let journalReport: LayerReport['journal'];
+  if (sources.journal !== undefined) {
+    const read = readJournalLayer(sources.journal, sources.warn ?? warnToStderr);
+    if (read.patches.length > 0) layers.push({ label: read.label, patches: read.patches });
+    journalReport = read.report;
   }
-  return { shipped, rows, rowOrigins, layers };
+  const overlays: { file: string; rows: string[] }[] = [];
+  for (const overlay of sources.overlays ?? []) {
+    const patches = loadOverlayPatches(overlay);
+    layers.push({ label: overlay, patches });
+    overlays.push({ file: overlay, rows: rowsTouchedBy(patches) });
+  }
+  return {
+    shipped,
+    rows,
+    rowOrigins,
+    layers,
+    report: { ...(journalReport !== undefined && { journal: journalReport }), overlays },
+  };
+}
+
+/** 一批 patch 指到的列 id：`insert` 進來的用它的 id（沒寫就用 name），其餘用 patch 的 id。 */
+function rowsTouchedBy(patches: readonly ConfigPatch[]): string[] {
+  const ids = new Set<string>();
+  for (const patch of patches) {
+    if (patch.insert !== undefined) {
+      for (const row of patch.insert) {
+        const id = row['id'] ?? row['name'];
+        if (typeof id === 'string') ids.add(id);
+      }
+    } else if (patch.id !== undefined) {
+      ids.add(patch.id);
+    }
+  }
+  return [...ids];
+}
+
+/** 紀錄檔在了、舊 patch 檔又出現：看到、沒讀。訊息只在這一處組，日誌那一側用同一句去重。 */
+export function legacyPatchIgnoredMessage(legacy: string, journal: string): string {
+  return (
+    `看到 ${legacy}，但沒讀：變更紀錄 ${journal} 已經建立，這個檔不會生效，也不會再自動遷移` +
+    `（誰都能放個檔進來，自動遷移會讓「誰改的」全變成「遷移」）。` +
+    '要保留裡面的改動，請用 plugin 寫入口重做，或改放進 --patch。'
+  );
+}
+
+/**
+ * 讀變更紀錄那一層，折成 patch（#1412）。
+ *
+ * | 紀錄檔 | 舊 `cordis.patch.yml` | 這一次 |
+ * |---|---|---|
+ * | 在 | 不在 | 折紀錄 |
+ * | 在 | 在 | 折紀錄；**舊檔不讀**，警告一次（加 3：誰都能放個檔進來，自動再遷等於繞過稽核） |
+ * | 不在 | 在 | **待遷移**：照遷移前的行為把舊檔當這一層讀，下一次啟動（{@link prepareJournal}）才遷 |
+ * | 不在 | 不在 | 沒有這一層 |
+ *
+ * 紀錄檔**讀端不取鎖**：最後一行還沒寫完就略過（`plugin-journal.ts`）。權限檢查與舊 patch 檔同一條
+ * （{@link assertPrivateFile}）：它決定這個行程載入哪些模組，別人寫得動就是別人替你決定跑什麼。
+ */
+function readJournalLayer(
+  source: JournalSource,
+  warn: PluginConfigWarn,
+): { patches: ConfigPatch[]; label: string; report: NonNullable<LayerReport['journal']> } {
+  let contents;
+  try {
+    contents = readJournal(source.path, {
+      check: (path) => assertPrivateFile(path, JOURNAL_FILE_ROLE),
+    });
+  } catch (error) {
+    if (error instanceof PluginJournalError) throw new PluginConfigError(error.message);
+    throw error;
+  }
+  const legacyExists = source.legacyPatch !== undefined && existsSync(source.legacyPatch);
+  const bodies: JournalBody[] = [...(contents?.records ?? [])];
+  let label = source.path;
+  let pendingMigration = false;
+  let ignoredLegacyPatch: string | undefined;
+  if (contents === undefined && legacyExists && source.legacyPatch !== undefined) {
+    pendingMigration = true;
+    label = source.legacyPatch;
+    for (const patch of loadOptionalPatches(source.legacyPatch) ?? []) {
+      bodies.push({ op: 'patch', patch });
+    }
+  } else if (contents !== undefined && legacyExists && source.legacyPatch !== undefined) {
+    ignoredLegacyPatch = source.legacyPatch;
+    warn(legacyPatchIgnoredMessage(source.legacyPatch, source.path));
+  }
+  bodies.push(...(source.pending ?? []));
+  const patches = foldJournal(bodies).map((row, index) => {
+    const result = patchSchema.safeParse(row);
+    if (!result.success) {
+      throw new PluginConfigError(
+        `${label} 折出來的第 ${String(index + 1)} 條 patch 不合法 — ${formatIssues(result.error)}`,
+      );
+    }
+    return result.data;
+  });
+  const records = contents?.records ?? [];
+  return {
+    patches,
+    label,
+    report: {
+      path: source.path,
+      exists: contents !== undefined,
+      records: records.length,
+      lastSeq: records.at(-1)?.seq ?? null,
+      pendingMigration,
+      ...(ignoredLegacyPatch !== undefined && { ignoredLegacyPatch }),
+    },
+  };
 }
 
 /**
@@ -997,6 +1191,11 @@ export interface LoadedPluginConfig {
    * 不起來的列不在那兩份裡。
    */
   readonly ids: readonly string[];
+  /**
+   * 各層的報告（#1412）：變更紀錄幾筆、舊 patch 檔有沒有被略過、`--patch` 蓋到哪幾列。**不帶設定值。**
+   * 快照（`plugin-snapshot.ts`）與伺服器日誌從這裡取材。
+   */
+  readonly layers: LayerReport;
 }
 
 /**
@@ -1025,7 +1224,7 @@ export interface LoadedPluginConfig {
 export async function loadPluginConfig(
   sources: PluginConfigSources = {},
 ): Promise<LoadedPluginConfig> {
-  const entries = composeEntries(sources);
+  const { entries, report } = composeEntriesWithReport(sources);
   const loaded: { readonly row: ConfigEntry; readonly entry: PluginEntry }[] = [];
   const dropped: StartupDrop[] = [];
   // `entries` 每一列解析後的 id：先放「宣告的 id 或模組名」，載進來的那幾列等載入器補完號再換成補過的那個。
@@ -1077,7 +1276,7 @@ export async function loadPluginConfig(
     }
     return entry;
   });
-  return { plugins, dropped, ignoredConfig, rows, entries, ids };
+  return { plugins, dropped, ignoredConfig, rows, entries, ids, layers: report };
 }
 
 /**
@@ -1111,10 +1310,12 @@ export interface DefaultConfigOptions {
   readonly patches?: readonly string[];
   /** 跳過某條 patch 時往哪裡講，省略即 stderr。 */
   readonly warn?: PluginConfigWarn;
+  /** 還沒寫進變更紀錄的內容（寫入前驗證用），見 {@link JournalSource.pending}。 */
+  readonly pending?: readonly JournalBody[];
 }
 
 /**
- * 產品路徑上那三層的來源。
+ * 產品路徑上那幾層的來源。
  *
  * **`--dump-config` 與啟動共用這一個**，所以 dump 印的層與啟動疊的層是同一組。各自算一次
  * 的下場是有一天 dump 說「你的 home patch 沒生效」而它其實生效了——那比沒有 dump 更糟。
@@ -1122,11 +1323,15 @@ export interface DefaultConfigOptions {
  * @param options - env、`--patch`、警告出口。
  * @returns 三層的來源。
  */
-function defaultSources(options: DefaultConfigOptions): PluginConfigSources {
+export function defaultSources(options: DefaultConfigOptions): PluginConfigSources {
   const home = resolveHarnessHome(options.env ?? process.env);
   return {
     ...(options.serve === true && { shippedLayers: [serveShippedConfigPath()] }),
-    userPatch: join(home, USER_PATCH_FILENAME),
+    journal: {
+      path: join(home, PLUGIN_JOURNAL_FILE_NAME),
+      legacyPatch: join(home, USER_PATCH_FILENAME),
+      ...(options.pending !== undefined && { pending: options.pending }),
+    },
     ...(options.patches !== undefined && { overlays: options.patches }),
     ...(options.warn !== undefined && { warn: options.warn }),
   };
@@ -1172,6 +1377,140 @@ export function renderLayeredConfigDump(options: DefaultConfigOptions = {}): str
 export function renderShippedConfigDump(options: { readonly serve?: boolean } = {}): string {
   return renderConfigDump(
     options.serve === true ? { shippedLayers: [serveShippedConfigPath()] } : {},
+  );
+}
+
+/** {@link prepareJournal} 的選項。 */
+export interface PrepareJournalOptions {
+  /** 決定 harness home 落在哪，省略即 `process.env`。 */
+  readonly env?: NodeJS.ProcessEnv;
+  /** 做不成時往哪裡講，省略即 stderr。 */
+  readonly warn?: PluginConfigWarn;
+  /** 算遷移那幾筆的 `at`，測試給固定的。 */
+  readonly now?: () => Date;
+  /**
+   * 測試用：紀錄檔已經 rename 進位、舊 patch 檔還沒改名的那一刻。在這裡拋，等於「兩步之間當掉」。
+   */
+  readonly afterJournalWritten?: () => void | Promise<void>;
+  /**
+   * 紀錄檔和舊 patch 檔都不在的時候要不要建一個空的，省略即 `true`。
+   *
+   * serve 與寫入口要建（那是「第一次啟動」的界線，見 {@link prepareJournal}）；**一次性的 CLI 傳 `false`**：
+   * 落盤關掉的那一次、預設根被拒絕的那一次，承諾的是「home 連目錄都不建」（`session-log-durability.test.ts`、
+   * `invariant-log.test.ts`），建一個空紀錄檔就破了它。沒有舊檔要遷的時候 CLI 什麼都不寫，讀端本來就把「沒有紀錄檔」
+   * 當成沒有這一層（驗收 H）。
+   */
+  readonly createWhenAbsent?: boolean;
+}
+
+/** {@link prepareJournal} 做了什麼。 */
+export type PrepareJournalResult =
+  | { readonly status: 'present'; readonly path: string }
+  | { readonly status: 'absent'; readonly path: string }
+  | { readonly status: 'created'; readonly path: string }
+  | {
+      readonly status: 'migrated';
+      readonly path: string;
+      /** 遷了幾條 patch。 */
+      readonly migrated: number;
+      /** 舊檔改名成了什麼（0600）。 */
+      readonly renamedTo: string;
+    }
+  | { readonly status: 'unavailable'; readonly path: string; readonly reason: string };
+
+/**
+ * 啟動步驟：確保變更紀錄存在，必要時把舊的 `cordis.patch.yml` 遷進去（#1412 Q2）。
+ *
+ * **serve 與 CLI 啟動、寫入口寫之前都先呼叫它**；`--dump-config` 不呼叫（它只讀，遷移還沒發生時照舊把舊檔當待遷移那一層
+ * 讀，見 {@link readJournalLayer}）。
+ *
+ * - **界線是紀錄檔存在**：第一次啟動時沒有紀錄檔，就建一個（沒有舊檔就建空的）。之後只要紀錄檔在，舊檔再出現一律
+ *   警告、不讀、不遷（加 3）。沒有這個界線，「從來沒有 patch 的新 home」之後被人丟進一個檔就會被當成第一次遷移吃進去。
+ * - **整件事在 `plugin-journal.jsonl.lock` 裡做，拿到鎖後再查一次紀錄檔在不在**：serve 與 CLI 同時第一次啟動，只有一個
+ *   遷，另一個看到的是 `present`。
+ * - **順序**：帶遷移內容的紀錄先寫暫存檔、fsync、rename 成正式檔，**最後**才把舊檔改名成 `cordis.patch.yml.migrated-<時間>`
+ *   （並設 0600：舊檔裡同樣有秘密，原本的權限不一定是 0600）。兩步之間當掉：下次啟動紀錄檔已在、舊檔還在，走
+ *   「警告、不讀」，既不重複遷也不漏——改動已經在紀錄裡。
+ * - **每條 patch 一筆，actor 記「遷移」**（來源路徑與全文的 SHA-256）。`insert` 的模組路徑在解析時已經換成絕對的
+ *   file URL（{@link anchorInsertedNames}），不然檔案改名之後相對路徑就沒有基準了（加 1）。
+ *
+ * **舊檔壞了（YAML、形狀、權限）照舊整個拋**，跟遷移前啟動讀它的下場一樣；建不出紀錄檔（唯讀的 home、等不到鎖）不拋，
+ * 回 `unavailable`：紀錄檔還不在，讀端照樣把舊檔當待遷移那一層讀，不漏任何改動。
+ *
+ * @param options - env、警告出口、測試鉤子。
+ * @returns 做了什麼。
+ * @throws {PluginConfigError} 舊的 patch 檔讀不了、形狀不合，或別人動得了。
+ */
+export async function prepareJournal(
+  options: PrepareJournalOptions = {},
+): Promise<PrepareJournalResult> {
+  const home = resolveHarnessHome(options.env ?? process.env);
+  const path = join(home, PLUGIN_JOURNAL_FILE_NAME);
+  const legacy = join(home, USER_PATCH_FILENAME);
+  if (existsSync(path)) return { status: 'present', path };
+  if (options.createWhenAbsent === false && !existsSync(legacy)) return { status: 'absent', path };
+  const warn = options.warn ?? warnToStderr;
+  const now = options.now ?? (() => new Date());
+  let journalWritten = false;
+  try {
+    await mkdir(home, { recursive: true, mode: 0o700 });
+    return await withFileLock(path, async (): Promise<PrepareJournalResult> => {
+      if (existsSync(path)) return { status: 'present', path };
+      if (!existsSync(legacy)) {
+        if (options.createWhenAbsent === false) return { status: 'absent', path };
+        await createJournalFile(path, []);
+        return { status: 'created', path };
+      }
+      const text = readFileSync(legacy, 'utf8');
+      assertPrivateFile(legacy);
+      const patches = parsePatchList(text, legacy);
+      const actor: JournalActor = {
+        kind: 'migration',
+        source: resolve(legacy),
+        sha256: createHash('sha256').update(text).digest('hex'),
+      };
+      const at = now().toISOString();
+      const records: JournalRecord[] = patches.map((patch, index) => ({
+        v: PLUGIN_JOURNAL_VERSION,
+        seq: index + 1,
+        at,
+        actor,
+        op: 'patch',
+        patch: structuredClone(patch) as Record<string, unknown>,
+      }));
+      await createJournalFile(path, records);
+      journalWritten = true;
+      await options.afterJournalWritten?.();
+      const stamp = now().toISOString().replace(/[:.]/gu, '-');
+      const renamedTo = `${legacy}.migrated-${stamp}`;
+      chmodSync(legacy, 0o600);
+      await rename(legacy, renamedTo);
+      return { status: 'migrated', path, migrated: records.length, renamedTo };
+    });
+  } catch (error) {
+    if (error instanceof PluginConfigError) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    warn(
+      journalWritten
+        ? `${legacy} 的內容已經遷進 ${path}，但舊檔沒能改名（${reason}）。它會被當成「遷移後又出現的檔」警告、不讀；` +
+            '確認紀錄之後可以自己把它改名或刪掉。'
+        : `建不出變更紀錄 ${path}（${reason}）。紀錄檔還不在，${legacy} 照舊當這一層讀，改動不會漏；下一次啟動再試。`,
+    );
+    return { status: 'unavailable', path, reason };
+  }
+}
+
+/**
+ * {@link prepareJournal} 的結果寫成一行給人看的話；沒什麼好講的（紀錄在、或剛建空檔）回 `undefined`。
+ *
+ * @param result - {@link prepareJournal} 的回傳。
+ * @returns 一行，或 `undefined`。
+ */
+export function describePrepareJournal(result: PrepareJournalResult): string | undefined {
+  if (result.status !== 'migrated') return undefined;
+  return (
+    `[清單] 已把舊的 cordis.patch.yml 的 ${String(result.migrated)} 條 patch 遷進變更紀錄 ${result.path}；` +
+    `原檔改名為 ${result.renamedTo}（不再讀取，0600）。之後改插件請用 plugin 寫入口。`
   );
 }
 
