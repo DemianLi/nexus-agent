@@ -51,14 +51,14 @@ demian 的定義：**像 Cordis 那樣管理生命週期、插件、執行序的
 
 ### 3-4 插件規範
 
-10. **manifest 必填**，缺一個就不載入：`id`、`version`、`owner`（負責團隊）、`provides`（服務 token 與契約版本）、`consumes`（依賴的 token、semver 範圍、必要或選配）、`config`（zod strictObject）、`reload`（即時／需重啟）、`capabilities`（子行程、網路、檔案系統等特權，不宣告就不給）。
+10. **manifest 必填**，缺一個就不載入：`id`、`version`、`owner`（負責團隊）、`provides`（服務 token 與契約版本）、`consumes`（依賴的 token、semver 範圍、必要或選配）、`config`（zod strictObject）、`reload`（拆兩軸：`code` 為 `coexist`／`restart`，`config` 為 `next-thread`／`restart`；插件只宣告自己知道的那一半，宿主那一半由宿主算出，取較嚴者；`coexist` 在兩版並存的案例落地之前拒收。#1136、#1416）、`capabilities`（子行程、網路、檔案系統等特權，不宣告就不給）。
 11. **生命週期硬規則**：所有副作用走 `ctx.effect`／`ctx.on`，不用 `process.on`、`setInterval`、模組層級的可變狀態；`apply` 與 dispose 收 AbortSignal 與時限，逾時判 FAILED 並脫離；錯誤以結構化事件丟出（插件 id、階段、原因、相關服務）；選配服務用 `ctx.get(token)`，沒宣告就讀一律拋錯。
 12. **強制分四層**：SDK 型別、lint（禁用 API、`internal/*`、`ctx.root`、`ctx.registry`）、載入期驗證（manifest、契約版本、capabilities）、**一致性測試套件**（每顆插件的 CI 都跑：載入→卸載後活資源歸零、兩版並存、逾時、缺件指名；改自 `apps/harness/src/measure/plugin-coexist-real.ts`）。
 13. **插拔出錯的呈現**：fiber 狀態與結構化錯誤同時進後台插件頁（狀態、卡在哪個階段、缺什麼、找哪個團隊）、稽核紀錄、啟動結算（PENDING 一律列出，gate 上非零退出）。
 14. **服務型別用帶型別的 token**：定義套件匯出 token 與介面，消費方 `inject: [Token]` 後經 `ctx.get(token)` 取得。字串鍵只留給框架內部。
 15. **服務契約走 semver**：定義套件以 semver 管契約，載入時用 `provide` 的 `check` 參數做範圍檢查，major 不相容就拒絕並指名哪顆插件、哪個服務。這同時回答 [#1137](https://github.com/DemianLi/nexus-agent/issues/1137)。
 16. **採用 dsh 的三角色紀律**：一個能力接縫由定義、提供者、消費者三個角色組成；消費者只依賴定義套件，永不 import 提供者。
-17. **交付形式**：`docs/plugin-contract.md` 加一個 `@nexus/plugin-sdk` 套件（manifest 型別、token 輔助函式、lint 設定、一致性測試套件）。外部插件只相依 SDK 與服務定義套件，不相依整個 `@nexus/core`。
+17. **交付形式**：`docs/plugin-contract.md` 加一個 `@nexus/sdk` 套件（manifest 型別、token 輔助函式、lint 設定、一致性測試套件；套件名不落在 `@nexus/plugin-*`，R2 的 grep 與 `plugin-coexist-real.ts` 把那個前綴當插件看，#1416 PM 決定）。外部插件只相依 SDK 與服務定義套件，不相依整個 `@nexus/core`。
 
 ### 3-5 後台插拔
 
@@ -90,6 +90,9 @@ demian 的定義：**像 Cordis 那樣管理生命週期、插件、執行序的
 | §3-2 第 6 條 | dsh 出貨不做模組熱換，換已有的包要重啟（`packages/boot/plugin-manager/README.zh.md` 已知限制） | 產品需求超出 dsh | 企業客戶要求插件更新不停機；dsh 沒有這個需求 |
 | §3-4 第 14 條 | dsh 用 declaration merging 加型錄生成器 | 產品需求超出 dsh | 幾百人並行開發下，全域命名空間只能靠人工登記表守、生成器每個 PR 都要重跑而衝突、型別保證在執行期不成立 |
 | §3-5 第 18 條 | dsh 的後台改 `cordis.patch.yml`，由 HMR 監看重載 | 產品需求超出 dsh | 買方管理員要看得到誰、何時、改了什麼；dsh 沒有稽核需求。以稽核紀錄為真相來源，就不必維護兩份可能不一致的東西 |
+| §3-4 第 10 條 | dsh 的身分只有 `package.json` 的 name／version 加 Loader 列 id，`dsh` 欄位沒有 id、owner、provides、consumes、capabilities、reload（`packages/util/package-manifest/src/types.ts:8-39`） | 產品需求超出 dsh | 後台插件頁、稽核與啟動結算要指得出找誰、缺什麼、什麼時候生效；dsh 沒有這些需求。#1416 |
+| §3-4 第 12 條 | dsh 的卸載測試是每個套件各寫一份，插件層級沒有共用套件，只有後端層級的 contract suite（`packages/storage/storage/tests/contract.ts`） | 產品需求超出 dsh | 幾百人並行開發下，每顆插件各寫一份卸載測試等於沒有保證。#1416 |
+| §3-4 第 15 條 | dsh 一處都沒用 `provide` 的 `check`；它的版本相容檢查在套件層，比整個 runtime 的版本（`packages/boot/app-boot/src/plugin-compatibility.ts:61-88`） | 產品需求超出 dsh | 服務層級的契約要能擋下 major 不相容的提供者並指名消費者與服務。探針 #1386 ⑤ 量過。#1416 |
 | §3-1 第 4 條第一段 | dsh 的 loop 是自寫的，第一段仍是 `createAgent` | 基座表達不出來（暫時） | 自寫 loop 的前提是 interrupt、resume、背景子代理續行不再依賴 LangGraph 狀態，那是 S2 的內容；第二段完成後這條偏離消失 |
 
 ## 六、排程
@@ -115,7 +118,7 @@ demian 的定義：**像 Cordis 那樣管理生命週期、插件、執行序的
 ## 八、這份決議沒有回答的
 
 - 版本路由的細節：版本表放哪、引用計數怎麼跨重啟、「舊 thread 用到有洞的舊版」怎麼處置（[#1138](https://github.com/DemianLi/nexus-agent/issues/1138) 的殘留風險）。
-- `@nexus/plugin-sdk` 的 API 形狀、lint 規則清單、一致性測試套件的完整案例。
+- `@nexus/sdk` 的 API 形狀（最小切片已在 #1416 落地，見 [`docs/plugin-contract.md`](../docs/plugin-contract.md)）、lint 規則清單、一致性測試套件的完整案例。
 - 遷移的逐顆順序與相容層的拆除條件。
 - 私有 registry 的選型與部署位置。
 - Cordis 執行期的效能代價（Proxy 加 `internal/get` waterfall、`notify` 走遍所有 fiber）：盤點沒量。
