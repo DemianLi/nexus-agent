@@ -1,5 +1,6 @@
 /**
- * 主機端寫入口的命令列（[#1412](https://github.com/DemianLi/nexus-agent/issues/1412)）：加 4–7，驗收表 D 的非零結束。
+ * 主機端寫入口的命令列（[#1412](https://github.com/DemianLi/nexus-agent/issues/1412)）：加 4–7，驗收表 D 的非零結束；
+ * [#1414](https://github.com/DemianLi/nexus-agent/issues/1414) 的驗收 A（告訴人記了哪一筆）與 B。
  */
 
 import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -10,6 +11,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { journalPathOf } from './plugin-journal.fixture.js';
+import { readJournal } from './plugin-journal.js';
 import { runPluginCli } from './plugin-cli.js';
 
 const temporary: string[] = [];
@@ -138,16 +140,41 @@ describe('輸出與紀錄日誌不印設定值（加 7）', () => {
 });
 
 describe('驗不過', () => {
-  it('不存在的 id、必掛的列：非零結束、訊息指名原因、紀錄不動', async () => {
+  it('不存在的 id、必掛的列：非零結束、訊息指名原因，告訴人紀錄多了哪一筆 rejected（#1414）', async () => {
+    const { dir, env } = home();
+    await run(['disable', 'skills'], env);
+    const ids = ['no-such-row', 'browser-session', 'approval-gate'];
+    for (const [index, id] of ids.entries()) {
+      const { code, err } = await run(['disable', id], env);
+      expect(code).toBe(1);
+      const text = err.join('\n');
+      expect(text).toContain('拒絕');
+      expect(text).toContain(`第 ${String(index + 2)} 筆 rejected`);
+      expect(text).not.toContain('紀錄沒有動');
+    }
+    const records = readJournal(journalPathOf(dir))?.records ?? [];
+    expect(records.map((entry) => entry.op)).toEqual([
+      'disable',
+      'rejected',
+      'rejected',
+      'rejected',
+    ]);
+  });
+
+  it('還沒形成一筆變更的錯（參數、--file 讀不到、不是一張表）與沒有改變任何東西：紀錄逐位元組不變（#1414 驗收 B）', async () => {
     const { dir, env } = home();
     await run(['disable', 'skills'], env);
     const before = readFileSync(journalPathOf(dir));
-    for (const id of ['no-such-row', 'browser-session', 'approval-gate']) {
-      const { code, err } = await run(['disable', id], env);
-      expect(code).toBe(1);
-      expect(err.join('\n')).toContain('拒絕');
-      expect(err.join('\n')).toContain('紀錄沒有動');
-    }
+    expect((await run(['disable'], env)).code).toBe(2);
+    expect((await run(['frobnicate'], env)).code).toBe(2);
+    expect((await run(['config', 'set', 'todo'], env)).code).toBe(2);
+    expect((await run(['config', 'set', 'todo', '--file', join(dir, 'nope.yml')], env)).code).toBe(
+      2,
+    );
+    expect((await run(['config', 'set', 'todo', '--file', '-'], env, '- 1\n- 2\n')).code).toBe(2);
+    const noop = await run(['disable', 'skills'], env);
+    expect(noop.code).toBe(0);
+    expect(noop.out.join('\n')).toContain('沒有寫入');
     expect(readFileSync(journalPathOf(dir)).equals(before)).toBe(true);
   });
 

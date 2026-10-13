@@ -96,9 +96,13 @@ import {
   describeWarnings,
   dropReasonsOf,
   optionalEntriesOf,
+  StartupError,
   startupErrorFrom,
   startupWarning,
 } from './startup-audit.js';
+import { hostActor } from './plugin-change.js';
+import { createFailureRecorder, failedRowsOf } from './plugin-failure-recorder.js';
+import { PLUGIN_JOURNAL_FILE_NAME } from './plugin-journal.js';
 import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { liveModelPlugin } from './settings/live-model.js';
@@ -471,6 +475,13 @@ async function startServer(
   const prepared = await prepareJournal({ env });
   const preparedLine = describePrepareJournal(prepared);
   if (preparedLine !== undefined) log(preparedLine);
+  // **掛不上的列記進變更紀錄**（#1414）：紀錄裡有被接受的改動指到它才記，紀錄檔不在就什麼都不做；等鎖上限 2 秒、
+  // 不擋 thread，只有「必掛的掉了、要拋之前」才等它寫完。規則與去重見 `plugin-failure-recorder.ts`。
+  const failureRecorder = createFailureRecorder({
+    path: join(resolveHarnessHome(env), PLUGIN_JOURNAL_FILE_NAME),
+    effective: hostActor(env).effective,
+    log,
+  });
   const loaded = await loadDefaultPlugins({
     serve: true,
     env,
@@ -479,7 +490,17 @@ async function startServer(
   // **掉了哪幾列在這裡判第一次**（#751），同 CLI 那一刻：必掛的掉了就在這裡起不來——還沒建瀏覽器會話密鑰、還沒綁
   // port。可少掛的掉了先不印，等下面試組那一次補完再合成一段。掉了的列在清單上已標成沒掛，每條 thread 組裝時照樣跳過。
   const audit = { live: invocation.live };
-  auditStartupEntries(loaded, audit);
+  try {
+    auditStartupEntries(loaded, audit);
+  } catch (error) {
+    // 必掛的掉了、起不來：先把那一筆記進紀錄再拋（#1414）。
+    if (error instanceof StartupError) {
+      failureRecorder.note(failedRowsOf(error.dropped), 'startup');
+      await failureRecorder.flush();
+    }
+    throw error;
+  }
+  failureRecorder.note(failedRowsOf(loaded.dropped), 'startup');
   const plugins: readonly PluginEntry[] = loaded.plugins;
   const optionalEntries = optionalEntriesOf(loaded, audit);
   // **起動期解一次、往下傳一份**：這兩顆都有消費者跑在任何 agent 出生之前（冷讀清單、`BrowserAuth`），那時
@@ -582,10 +603,15 @@ async function startServer(
       threadTitleLlm,
       optionalEntries,
     })
-    .catch((error: unknown) => {
-      throw error instanceof AssemblyDropError ? startupErrorFrom(loaded, error, audit) : error;
+    .catch(async (error: unknown) => {
+      if (!(error instanceof AssemblyDropError)) throw error;
+      const startupError = startupErrorFrom(loaded, error, audit);
+      failureRecorder.note(failedRowsOf(startupError.dropped), 'startup');
+      await failureRecorder.flush();
+      throw startupError;
     });
   await trial.dispose();
+  failureRecorder.note(failedRowsOf(assemblyDropsOf(loaded, trial.dropped)), 'startup');
   for (const line of startupWarning(
     loaded,
     assemblyDropsOf(loaded, trial.dropped),
@@ -616,6 +642,7 @@ async function startServer(
     startup: loaded,
     trialDropped,
     trialDrops: assemblyDropsOf(loaded, trial.dropped),
+    recorder: failureRecorder,
     audit,
     // 起動期讀的 13 列：名單與分類表同一份（`plugin-row-classes.ts`），上面 `startupSetting` 那幾行讀的就是它們。
     startupRead: STARTUP_READ_PLUGINS,
@@ -774,9 +801,12 @@ async function startServer(
       // 做得出來的功能關掉（[#113](https://github.com/DemianLi/nexus-agent/issues/113)）。
       let built: Awaited<ReturnType<NexusAssembly['create']>>;
       let threadList: Awaited<ReturnType<typeof threadPluginList.read>>;
+      // 組裝失敗時 catch 要用這一份清單換算掉了的列（`threadList` 在 catch 裡還沒有保證已賦值）。
+      let assembledFrom: typeof threadList | undefined;
       try {
         // 讀不起來、必掛的列掉了：只有這一條建不起來，伺服器照常，下一條再讀一次（#1405 Q1）。
         threadList = await threadPluginList.read();
+        assembledFrom = threadList;
         if (resumed !== undefined) assertSameCwd('serve', threadId, resumed.header, cwd);
         // **再認它跑在哪個工作區底下**（#504）。順序與理由逐字同 CLI 的 `--resume`：目錄先認，
         // 這一道在沙箱那一道之前。根在這裡自己算（`createCliAgent` 還沒跑），走的是同一個
@@ -855,10 +885,22 @@ async function startServer(
           },
         );
       } catch (error) {
+        // 這一條組裝時必掛的列掉了：這條 thread 建不起來之前，先把那一筆記進紀錄（#1414；等鎖上限 2 秒）。
+        if (error instanceof AssemblyDropError && assembledFrom !== undefined) {
+          failureRecorder.note(
+            failedRowsOf(assemblyDropsOf(assembledFrom.loaded, error.dropped)),
+            'thread-assembly',
+          );
+          await failureRecorder.flush();
+        }
         await release().catch(() => {});
         throw error;
       }
       threadPluginList.noteDropped(threadList, built.dropped);
+      failureRecorder.note(
+        failedRowsOf(assemblyDropsOf(threadList.loaded, built.dropped)),
+        'thread-assembly',
+      );
       // **啟動時沒掉、這一條組裝時才掉的列**（卡上第 6 項，例如跟這條 thread 的工作區有關的 `apply`）：同一套規則，
       // 只作用在這一條——可少掛的在這條 thread 裡不掛、伺服器日誌記一筆；不能少掛的已經在上面讓這條 thread 建不起來。
       for (const drop of assemblyDropsOf(threadList.loaded, built.dropped)) {
@@ -1052,6 +1094,8 @@ async function startServer(
       await server.close();
       await handler.close();
       threadSearch?.close();
+      // 背景還在寫的 `failed`：收完再回，不然關掉之後（測試刪暫存目錄）才落地。不 reject。
+      await failureRecorder.flush();
     },
   };
 }

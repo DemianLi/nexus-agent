@@ -40,11 +40,20 @@
  * - **`--patch` 蓋到哪幾列**：它是部署端在命令列給的、不經過紀錄的路，稽核看不到，所以啟動與重讀時把它蓋到的列
  *   記進日誌（內容變了才再記）與快照（`layers.overlays`、每列 `unaudited`）。
  *
+ * ## 掛不上的列也進變更紀錄（[#1414](https://github.com/DemianLi/nexus-agent/issues/1414)）
+ *
+ * 每次重讀把整份掉了的列交給記錄器（{@link ThreadPluginListOptions.recorder}），**不看上面那幾個「已知掉了」的集合**：
+ * 它們的鍵是「列 id 加宣告」，紀錄的去重鍵是「列 id 加觸發的 `seq`」；宣告改回舊值時這裡不重試、也就不會再掉，那一次的
+ * `failed` 只有每次都交進去、由紀錄決定才記得到。必掛的列掉了要拋之前，先等它寫完（上限 2 秒）。規則在
+ * `plugin-failure-recorder.ts`。
+ *
  * @module
  */
 
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
 
+import { failedRowsOf } from './plugin-failure-recorder.js';
+import type { FailedRow, FailureRecorder } from './plugin-failure-recorder.js';
 import { legacyPatchIgnoredMessage } from './plugin-config.js';
 import type { LoadedPluginConfig, PluginConfigWarn, StartupDrop } from './plugin-config.js';
 import { buildPluginSnapshot } from './plugin-snapshot.js';
@@ -54,6 +63,7 @@ import {
   auditStartupEntries,
   describeDrop,
   optionalEntriesOf,
+  StartupError,
   type StartupAuditOptions,
 } from './startup-audit.js';
 
@@ -87,7 +97,15 @@ export interface ThreadPluginListOptions {
   /**
    * 啟動試組掉了的列（`assemblyDropsOf(startup, trial.dropped)`），帶著掉在哪一步。省略時對照快照把它們記成 `apply`。
    */
-  readonly trialDrops?: readonly Pick<StartupDrop, 'id' | 'stage'>[];
+  readonly trialDrops?: readonly (Pick<StartupDrop, 'id' | 'stage'> & {
+    readonly message?: string;
+  })[];
+  /**
+   * 把掉了的列記進變更紀錄（#1414）。**每次重讀都把整份掉了的列交進去**，包括被「已知掉了」壓成停用、這一條沒有重試的列：
+   * 「已知」的鍵是列 id 加宣告，紀錄的去重鍵是列 id 加觸發的 `seq`，兩個不是同一把尺；改了又改回舊值的宣告不會重試、
+   * 也不會再掉，那一次的 `failed` 只有靠每次都交進去才記得到。要不要記由紀錄決定（`plugin-failure-recorder.ts`）。
+   */
+  readonly recorder?: Pick<FailureRecorder, 'note' | 'flush'>;
   /**
    * 每次讀完清單、啟動那一刻（{@link ThreadPluginReader.snapshot}）算出來的「已儲存 vs 執行中」對照（#1406）。
    * **不拋**：寫不出來不能讓一條 thread 建不起來，由實作自己吞掉並記日誌。省略就不算。
@@ -116,8 +134,8 @@ export interface ThreadPluginReader {
     list: ThreadPluginList,
     dropped: readonly {
       readonly entry: PluginEntry;
-      /** 掉在哪一步；省略時對照快照記成 `apply`。 */
-      readonly drop?: { readonly stage: StartupDrop['stage'] };
+      /** 掉在哪一步、原因；省略時對照快照記成 `apply`。 */
+      readonly drop?: { readonly stage: StartupDrop['stage']; readonly message?: string };
     }[],
   ): void;
   /**
@@ -152,9 +170,13 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
   }
   // 試組掉了的列掉在哪一步：只給對照快照用（`dropStage`）。鍵同 `knownAssembly`，宣告一改就是另一格。
   const assemblyStage = new Map<string, StartupDrop['stage']>();
-  const trialStageById = new Map((options.trialDrops ?? []).map((drop) => [drop.id, drop.stage]));
+  // 同一格的原因原文，只給變更紀錄的 `failed` 用（#1414）。
+  const assemblyMessage = new Map<string, string>();
+  const trialDropById = new Map((options.trialDrops ?? []).map((drop) => [drop.id, drop]));
   for (const id of assemblyIds) {
-    assemblyStage.set(rowKey(startup, id), trialStageById.get(id) ?? 'apply');
+    const trial = trialDropById.get(id);
+    assemblyStage.set(rowKey(startup, id), trial?.stage ?? 'apply');
+    if (trial?.message !== undefined) assemblyMessage.set(rowKey(startup, id), trial.message);
   }
   const now = options.now ?? (() => new Date());
   // 讀清單的警告，同一句只記一次。
@@ -237,10 +259,28 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
   return {
     async read() {
       const loaded = await options.load(warn);
-      auditStartupEntries(loaded, audit);
+      try {
+        auditStartupEntries(loaded, audit);
+      } catch (error) {
+        // 必掛的列掉了，這一條 thread 建不起來：先把那一筆記進紀錄，再拋（#1414；等鎖上限 2 秒）。
+        if (error instanceof StartupError) {
+          options.recorder?.note(failedRowsOf(error.dropped), 'reread');
+          await options.recorder?.flush();
+        }
+        throw error;
+      }
+      const toRecord: FailedRow[] = [];
       for (const drop of loaded.dropped) {
         const key = rowKey(loaded, drop.id);
-        if (known.has(key)) continue;
+        const fresh = !known.has(key);
+        toRecord.push({
+          id: drop.id,
+          module: drop.module,
+          stage: drop.stage,
+          message: drop.message,
+          newlyDropped: fresh,
+        });
+        if (!fresh) continue;
         known.add(key);
         log(`[清單] 這一列沒掛上，之後的 thread 也不掛，直到它的設定改了：${describeDrop(drop)}`);
       }
@@ -248,11 +288,21 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
       const plugins = loaded.plugins.map((entry) => {
         const row = loaded.rows.get(entry);
         if (row === undefined || entry.disabled === true) return entry;
-        if (!knownAssembly.has(rowKey(loaded, row.id))) return entry;
+        const key = rowKey(loaded, row.id);
+        if (!knownAssembly.has(key)) return entry;
         const off: PluginEntry = { ...entry, disabled: true };
         rows.set(off, row);
+        // 已知組裝掉了、這一條沒有重試的列：照樣交給紀錄，原因取它掉的那一次。
+        toRecord.push({
+          id: row.id,
+          module: row.module,
+          stage: assemblyStage.get(key) ?? 'apply',
+          message: assemblyMessage.get(key) ?? '',
+          newlyDropped: false,
+        });
         return off;
       });
+      options.recorder?.note(toRecord, 'reread');
       reportStartupDrift(plugins);
       reportLayers(loaded.layers);
       const view: LoadedPluginConfig = { ...loaded, plugins, rows };
@@ -271,6 +321,7 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
         const key = rowKey(list.loaded, id);
         knownAssembly.add(key);
         assemblyStage.set(key, drop?.stage ?? assemblyStage.get(key) ?? 'apply');
+        if (drop?.message !== undefined) assemblyMessage.set(key, drop.message);
       }
     },
     snapshot: snapshotFor,

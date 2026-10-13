@@ -2,6 +2,8 @@
  * 變更紀錄本身（[#1412](https://github.com/DemianLi/nexus-agent/issues/1412)）：格式、折疊、追加、鎖、壞掉的行。
  *
  * 驗收表的 F（並發）、G（壞掉的行）在這裡；遷移在 `plugin-journal-migration.test.ts`，寫入口在 `plugin-change.test.ts`。
+ * [#1414](https://github.com/DemianLi/nexus-agent/issues/1414) 的兩種只記不折的筆（`rejected`、`failed`）：驗收 H
+ * 與「觸發的是哪一筆」的判定。
  */
 
 import { execFile } from 'node:child_process';
@@ -15,7 +17,9 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   appendJournalRecord,
+  failureTriggerOf,
   foldJournal,
+  hasFailedRecord,
   journalOverrideOf,
   parseJournal,
   PluginJournalError,
@@ -367,5 +371,170 @@ describe('寫到一半當掉之後（加 9）', () => {
     for (const line of readFileSync(path, 'utf8').trimEnd().split('\n')) {
       expect(() => JSON.parse(line)).not.toThrow();
     }
+  });
+});
+
+describe('rejected、failed：只記不折（#1414 驗收 H）', () => {
+  const REJECTED: JournalBody = {
+    op: 'rejected',
+    requested: 'disable',
+    id: 'browser-session',
+    reason: '關不掉',
+  };
+  const FAILED: JournalBody = {
+    op: 'failed',
+    id: 'todo',
+    triggerSeq: 1,
+    stage: 'apply',
+    reason: '掛上時失敗',
+  };
+  const SERVE: JournalActor = { kind: 'serve', effective: 'svc' };
+
+  const BASE: JournalBody[] = [
+    DISABLE_TODO,
+    { op: 'config-set', id: 'limit', name: '@nexus/plugin-limit', before: null, after: { n: 1 } },
+    { op: 'enable', id: 'todo', name: '@nexus/plugin-todo', before: true, after: false },
+    { op: 'config-reset', id: 'limit', name: '@nexus/plugin-limit', before: { n: 1 }, after: null },
+    { op: 'patch', patch: { id: 'skills', disabled: true } },
+  ];
+
+  it('夾在中間：折出來的清單跟沒有它們時相同；序號照樣從 1 連續', () => {
+    // 一筆「寫了就會讓 todo 停用」的 rejected 夾在 enable 之前：被折進去的話最後 todo 會是停用。
+    const noisy: JournalBody[] = [
+      BASE[0] as JournalBody,
+      { ...REJECTED, id: 'todo', requested: 'disable' },
+      BASE[1] as JournalBody,
+      { ...FAILED, id: 'limit', triggerSeq: 3 },
+      BASE[2] as JournalBody,
+      { ...REJECTED, requested: 'config-reset', id: 'limit' },
+      BASE[3] as JournalBody,
+      BASE[4] as JournalBody,
+    ];
+    expect(foldJournal(noisy)).toEqual(foldJournal(BASE));
+    expect(journalOverrideOf(noisy, 'todo', '@nexus/plugin-todo')).toEqual(
+      journalOverrideOf(BASE, 'todo', '@nexus/plugin-todo'),
+    );
+    const text = noisy
+      .map((body, index) =>
+        record(index + 1, body).op === 'failed'
+          ? { ...record(index + 1, body), actor: SERVE }
+          : record(index + 1, body),
+      )
+      .map((entry) => `${JSON.stringify(entry)}\n`)
+      .join('');
+    const parsed = parseJournal(Buffer.from(text), 'journal');
+    expect(parsed.records.map((entry) => entry.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(foldJournal(parsed.records)).toEqual(foldJournal(BASE));
+  });
+
+  it('failed 指向的必須是更早、被接受的那一筆：指向自己、未來、rejected 都是壞掉的檔', () => {
+    const point = (triggerSeq: number, ...before: JournalRecord[]): string =>
+      lines(...before, { ...record(before.length + 1, { ...FAILED, triggerSeq }), actor: SERVE });
+    expect(() => parseJournal(Buffer.from(point(1, record(1, DISABLE_TODO))), 'j')).not.toThrow();
+    expect(() => parseJournal(Buffer.from(point(2, record(1, DISABLE_TODO))), 'j')).toThrow(
+      /指向第 2 筆/u,
+    );
+    expect(() => parseJournal(Buffer.from(point(5, record(1, DISABLE_TODO))), 'j')).toThrow(
+      /還不存在/u,
+    );
+    expect(() => parseJournal(Buffer.from(point(1, record(1, REJECTED))), 'j')).toThrow(
+      /不是被接受的改動/u,
+    );
+  });
+
+  it('多一個欄位（把要寫入的值塞進 rejected）算壞掉的檔', () => {
+    const text = lines(record(1, { ...REJECTED, after: { secret: 1 } } as unknown as JournalBody));
+    expect(() => parseJournal(Buffer.from(text), 'j')).toThrow(PluginJournalError);
+  });
+
+  it('寫端：rejected 與 failed 都佔序號，鎖裡讀到的是現有那份', async () => {
+    const root = dir();
+    const path = join(root, 'plugin-journal.jsonl');
+    const first = await appendJournalRecord(path, { actor: ACTOR }, () => DISABLE_TODO);
+    const second = await appendJournalRecord(path, { actor: ACTOR }, () => REJECTED);
+    const third = await appendJournalRecord(path, { actor: SERVE }, (records) => {
+      expect(records.map((entry) => entry.op)).toEqual(['disable', 'rejected']);
+      return FAILED;
+    });
+    expect([first?.seq, second?.seq, third?.seq]).toEqual([1, 2, 3]);
+    expect(readJournal(path)?.records.map((entry) => entry.op)).toEqual([
+      'disable',
+      'rejected',
+      'failed',
+    ]);
+  });
+});
+
+describe('failureTriggerOf：失敗記在哪一筆上（#1414 Q2）', () => {
+  const CONTEXT = { discoveredAt: 'reread' } as const;
+  const TODO = { id: 'todo', module: '@nexus/plugin-todo' };
+  const patchOf = (seq: number, patch: Record<string, unknown>): JournalRecord =>
+    record(seq, { op: 'patch', patch });
+
+  it('最後一筆碰到那一列、被接受的紀錄；rejected 與 failed 不算', () => {
+    const records = [
+      record(1, DISABLE_TODO),
+      record(2, { op: 'config-set', id: 'other', name: 'x', before: null, after: {} }),
+      record(3, { op: 'rejected', requested: 'config-set', id: 'todo', reason: 'x' }),
+      record(4, { op: 'failed', id: 'todo', triggerSeq: 1, stage: 'apply', reason: 'x' }),
+    ];
+    expect(failureTriggerOf(records, TODO, CONTEXT)).toBe(1);
+    expect(failureTriggerOf(records, { id: 'nobody', module: 'x' }, CONTEXT)).toBeUndefined();
+  });
+
+  it('紀錄裡沒有任何一筆指到它：不記（只被出貨設定或 --patch 影響）', () => {
+    expect(failureTriggerOf([], TODO, CONTEXT)).toBeUndefined();
+    expect(
+      failureTriggerOf([record(1, { ...DISABLE_TODO, id: 'skills' })], TODO, CONTEXT),
+    ).toBeUndefined();
+  });
+
+  it('遷移來的 patch 也算：改既有列、insert 有 id 的列、insert 沒寫 id 的列用模組名比', () => {
+    const records = [
+      patchOf(1, { id: 'todo', config: { a: 1 } }),
+      patchOf(2, {
+        insert: [
+          { id: 'probe-a', name: 'file:///p/a.ts' },
+          { id: 'probe-b', name: 'file:///p/b.ts' },
+          { name: 'file:///p/anon.ts' },
+        ],
+      }),
+    ];
+    expect(failureTriggerOf(records, TODO, CONTEXT)).toBe(1);
+    // 同一筆 insert 讓好幾列掛不上：每一列各自指到它。
+    expect(failureTriggerOf(records, { id: 'probe-a', module: 'file:///p/a.ts' }, CONTEXT)).toBe(2);
+    expect(failureTriggerOf(records, { id: 'probe-b', module: 'file:///p/b.ts' }, CONTEXT)).toBe(2);
+    // 沒寫 id：載入器補的是 `<name>#<n>`，用模組名對。
+    expect(failureTriggerOf(records, { id: 'x#0', module: 'file:///p/anon.ts' }, CONTEXT)).toBe(2);
+  });
+
+  it('跟折疊共用 name 斷言：斷言的模組名對不上的 patch、config-set 不算碰到它', () => {
+    const records = [
+      patchOf(1, { id: 'todo', name: '@nexus/another', disabled: true }),
+      record(2, { op: 'config-set', id: 'todo', name: '@nexus/another', before: null, after: {} }),
+    ];
+    expect(failureTriggerOf(records, TODO, CONTEXT)).toBeUndefined();
+    // config-reset 照折疊的規矩，不看 name。
+    const withReset = [
+      ...records,
+      record(3, {
+        op: 'config-reset',
+        id: 'todo',
+        name: '@nexus/another',
+        before: {},
+        after: null,
+      }),
+    ];
+    expect(failureTriggerOf(withReset, TODO, CONTEXT)).toBe(3);
+  });
+
+  it('hasFailedRecord：鍵是列 id 加觸發的 seq', () => {
+    const records = [
+      record(1, DISABLE_TODO),
+      { ...record(2, { op: 'failed', id: 'todo', triggerSeq: 1, stage: 'apply', reason: 'x' }) },
+    ];
+    expect(hasFailedRecord(records, 'todo', 1)).toBe(true);
+    expect(hasFailedRecord(records, 'todo', 3)).toBe(false);
+    expect(hasFailedRecord(records, 'skills', 1)).toBe(false);
   });
 });
