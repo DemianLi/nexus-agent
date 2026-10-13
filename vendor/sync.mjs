@@ -146,6 +146,45 @@ function closeWriteBack(source) {
   return out;
 }
 
+/**
+ * 本地修改第 9 條（loader）：宿主可以給一支解析函式，Loader 就不在安裝樹裡寫 `.cordis/resolve.mjs` 輔助檔。
+ * 上游的 `createResolve` 會在 `baseUrl` 所屬專案根（這裡是 `apps/harness`）建 `.cordis/{.gitignore,resolve.mjs}`，
+ * 唯讀的安裝樹或別的帳號建過時，寫不進去只能退回原生 `import()`；產品路徑不該依賴安裝樹可寫。
+ * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 vendor/README.md。
+ */
+function hostResolver(source, file) {
+  const once = (text, from, to) => {
+    const parts = text.split(from);
+    if (parts.length !== 2) throw new Error(`loader 本地修改沒命中（${file}，${parts.length - 1} 處）：${from.slice(0, 60)}`);
+    return parts.join(to);
+  };
+  if (file === 'index.ts') {
+    return once(
+      source,
+      `  public internal = ModuleLoader.fromInternal()
+`,
+      `  public internal = ModuleLoader.fromInternal()
+
+  /**
+   * nexus 本地修改：宿主給的裸 specifier 解析函式。有就用它，不走 \`createResolve\`（不在安裝樹裡寫 \`.cordis/\`）。
+   * 沒給就照上游。
+   */
+  public resolver?: (specifier: string) => string
+`,
+    );
+  }
+  if (file === 'config/tree.ts') {
+    return once(
+      source,
+      `        const resolve = await createResolve(this.ctx.baseUrl)
+`,
+      `        const resolve = this.ctx.loader.resolver ?? await createResolve(this.ctx.baseUrl)
+`,
+    );
+  }
+  return source;
+}
+
 const work = mkdtempSync(join(tmpdir(), 'vendor-sync-'));
 try {
   // 1. 上游原樣。
@@ -171,6 +210,11 @@ try {
   rewrite(join(out, 'include/src'), (source) => rescope(explicitExtensions(source)));
   rewrite(join(out, 'include/src'), (source) => (source.includes('class Include') ? closeWriteBack(source) : source));
   rewrite(join(out, 'cordis/tests'), rescope);
+  // 本地修改第 9 條：兩個檔各命中一次。
+  for (const file of ['index.ts', 'config/tree.ts']) {
+    const path = join(out, 'loader/src', file);
+    writeFileSync(path, hostResolver(readFileSync(path, 'utf8'), file));
+  }
 
   if (flag === '--check') {
     const rel = (root) => new Set(COPIES.flatMap(([to]) => (existsSync(join(root, to)) ? walk(join(root, to)) : []).map((path) => relative(root, path))));

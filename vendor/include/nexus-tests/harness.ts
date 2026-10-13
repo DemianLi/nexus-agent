@@ -48,7 +48,9 @@ export async function bootTree(options: TreeOptions): Promise<Tree> {
   const applied: Record<string, number> = {}
   const logs: string[] = []
   const root = new Context()
-  root.logger.exporter({ export: (message) => void logs.push(`${message.type}: ${String(message.body)}`) })
+  root.logger.exporter({
+    export: (message) => void logs.push(`${message.type}: ${message.args.map((arg) => String(arg)).join(' ')}`),
+  })
   await root.plugin(Loader, { baseUrl: pathToFileURL(`${dir}/`).href })
 
   class Reg extends Service {
@@ -65,6 +67,16 @@ export async function bootTree(options: TreeOptions): Promise<Tree> {
       }, 'reg.add()')
     }
   }
+  /** 名單外的列要換成「真的掛得起來」的插件：不然沒有過濾它也掛不上，過濾那一步就沒被測到。 */
+  const legacy = {
+    name: 'legacy',
+    inject: ['reg'],
+    apply(ctx: Context) {
+      const id = (ctx.fiber.entry?.id ?? '?').replace(/^include:/, '')
+      applied[id] = (applied[id] ?? 0) + 1
+      ;(ctx as unknown as { reg: Reg }).reg.add(`${id}!legacy`)
+    },
+  }
   const consumer = {
     name: 'consumer',
     inject: ['reg'],
@@ -75,7 +87,7 @@ export async function bootTree(options: TreeOptions): Promise<Tree> {
       ;(ctx as unknown as { reg: Reg }).reg.add(`${id}=${config?.v ?? ''}`)
     },
   }
-  Object.assign(root.loader.builtins, { reg: Reg, consumer, include: Include, ...options.builtins })
+  Object.assign(root.loader.builtins, { reg: Reg, consumer, legacy, include: Include, ...options.builtins })
   const config = {
     path: file,
     ...(options.patches === undefined ? {} : { patches: structuredClone(options.patches) }),

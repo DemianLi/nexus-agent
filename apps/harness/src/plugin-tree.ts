@@ -12,7 +12,7 @@
  * ## 清單怎麼進樹
  *
  * 變更紀錄折出來的 patch 與 `--patch` 的 patch，原樣推給 Include（`entry.update({ config: { ...config, patches } })`），
- * 樹上的列由 Include 自己疊（上游 `applyPatches`）。**Include 不寫檔**（`vendor/README.md` 第 7 條）：寫入口只有變更紀錄一個。
+ * 樹上的列由 Include 自己疊（上游 `applyPatches`）。**Include 不寫回任何檔**（`vendor/README.md` 第 7 條）：寫入口只有變更紀錄一個。Loader 上游會在安裝樹建 `.cordis/` 輔助檔，這裡給了解析函式（{@link resolveBareSpecifier}，第 9 條）就不建：產品路徑不依賴安裝樹可寫。
  * 疊的規則跟相容層那邊（`applyEntryPatches`）是兩支，所以每次推完都對一次：樹上那一列的 `disabled` 與 `config` 跟相容層
  * 疊出來的不一致，那一列就算掉了，不靜靜地各走各的（`diverged`）。
  *
@@ -129,6 +129,14 @@ export class PluginTreeError extends Error {
   }
 }
 
+/**
+ * 樹上裸 specifier（`@nexus/plugin-echo`）的解析：錨在這個檔所在的專案（`apps/harness`），跟 Loader 預設的輔助檔
+ * 錨在 `cordis.yml` 所在目錄是同一個專案。**給了它 Loader 就不在安裝樹裡寫 `.cordis/{.gitignore,resolve.mjs}`**
+ * （`vendor/loader` 本地修改第 9 條）：唯讀的安裝樹、別的帳號建過的目錄，都不該讓插件掛不上，也不該在
+ * 安裝樹裡多出檔案。
+ */
+const resolveBareSpecifier = (specifier: string): string => import.meta.resolve(specifier);
+
 const treeId = (id: string): string => `${NAMESPACE}${id}`;
 
 /** `undefined` 與 `{}` 在這裡是同一件事：相容層沒寫 `config` 就是 `{}`，樹那一側為了 strictObject 補的也是 `{}`。 */
@@ -205,6 +213,7 @@ export class PluginTree {
       },
     });
     await root.plugin(Loader);
+    root.loader.resolver = resolveBareSpecifier;
     Object.assign(root.loader.builtins, {
       [TOOLS_ROW_ID]: this.#provider.Provider,
       [INCLUDE_ROW_ID]: Include,
@@ -335,12 +344,17 @@ export class PluginTree {
     row: TreeRowInput,
     entries: readonly ToolEntry[],
   ): Promise<RowVerdict> {
-    if (row.disabled) return { kind: 'off' };
     const id = treeId(row.id);
+    if (row.disabled) {
+      // 關掉的列不再等契約：留著舊的錯，之後重新啟用時會把別的原因講成它。
+      this.#contractErrors.delete(id);
+      return { kind: 'off' };
+    }
     let entry;
     try {
       entry = root.loader.resolve(id);
     } catch {
+      this.#contractErrors.delete(id);
       return {
         kind: 'dropped',
         stage: 'apply',
@@ -370,6 +384,8 @@ export class PluginTree {
       return { kind: 'dropped', stage: 'apply', message: '模組載不進來' };
     }
     if (fiber.state === FIBER_STATE.ACTIVE) {
+      // 起來了：之前記的契約錯誤作廢（只有仍在等服務的列才用得到它）。
+      this.#contractErrors.delete(id);
       return {
         kind: 'active',
         tools: entries.filter((item) => item.source === id).map((item) => item.tool),
@@ -445,6 +461,7 @@ export async function mountDetached(
   });
   try {
     await root.plugin(Loader);
+    root.loader.resolver = resolveBareSpecifier;
     Object.assign(root.loader.builtins, {
       [TOOLS_ROW_ID]: provider.Provider,
       plugin: mount.module,

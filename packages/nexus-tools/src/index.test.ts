@@ -61,10 +61,24 @@ describe('@nexus/tools 的定義', () => {
     expect(failures).toEqual([]);
   });
 
-  it('三角色：定義套件只相依 SDK 與工具的型別，不相依 @nexus/core', () => {
+  it('三角色：定義套件只相依 SDK 與工具的型別，不相依 @nexus/core；SDK 是 peer（同一份 ContractError 的 instanceof）', () => {
     const manifest = JSON.parse(
       readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
-    ) as { dependencies: Record<string, string> };
-    expect(Object.keys(manifest.dependencies).sort()).toEqual(['@langchain/core', '@nexus/sdk']);
+    ) as {
+      dependencies: Record<string, string>;
+      peerDependencies: Record<string, string>;
+      devDependencies: Record<string, string>;
+    };
+    // dsh 的做法：插件與服務定義套件把框架／規範套件放 peerDependencies，開發時由 devDependencies 補上。
+    // `ContractError` 的 `instanceof` 靠「宿主與這個套件看到同一份 `@nexus/sdk`」，放進 dependencies 就可能各裝一份。
+    expect(Object.keys(manifest.dependencies)).toEqual(['@langchain/core']);
+    expect(manifest.peerDependencies).toEqual({ '@nexus/sdk': 'workspace:*' });
+    expect(manifest.devDependencies['@nexus/sdk']).toBe('workspace:*');
+    const all = Object.keys({
+      ...manifest.dependencies,
+      ...manifest.peerDependencies,
+      ...manifest.devDependencies,
+    });
+    expect(all).not.toContain('@nexus/core');
   });
 });

@@ -26,6 +26,7 @@ import {
   resolveEntryModule,
   shippedConfigPath,
 } from './plugin-config.js';
+import { installTreeListing } from './install-tree.fixture.js';
 import { journalPathOf, readJournalText } from './plugin-journal.fixture.js';
 import type { ScriptedChatModel } from './scripted-model.js';
 
@@ -118,6 +119,7 @@ describe('E：寫入口停用 echo', () => {
   it('journal 多一行；下一條 thread 沒有 echo；開著的 thread 照樣叫得到；再啟用回來；cordis.yml 沒被寫', async () => {
     const { dir, env } = home();
     const shipped = readFileSync(shippedConfigPath(), 'utf8');
+    const installBefore = installTreeListing();
     const root = newRoot();
     const first = await openThread(root, env, 'open');
     expect(first.names).toContain(ECHO_TOOL_NAME);
@@ -151,6 +153,8 @@ describe('E：寫入口停用 echo', () => {
       extra.every((name) => name === 'plugin-journal.jsonl' || name.startsWith('.plugin-')),
     ).toBe(true);
     expect(readdirSync(dir).some((name) => name.endsWith('.tmp'))).toBe(false);
+    // 安裝樹也沒有多出任何檔（Loader 的 `.cordis/` 輔助檔也不建，vendor 本地修改第 9 條）。
+    expect(installTreeListing()).toEqual(installBefore);
     await first.built.dispose();
     await second.built.dispose();
     await third.built.dispose();
@@ -258,10 +262,11 @@ describe('H：快照與列分類對 echo 的描述', () => {
   });
 });
 
-describe('寫回三路徑：Include 不寫檔', () => {
+describe('寫回三路徑：Include 不寫檔、安裝樹不多出檔', () => {
   it('停用、改設定、再還原之後，出貨檔位元組不變、home 沒有多出 cordis.yml 或 tmp', async () => {
     const { dir, env } = home();
     const shippedBefore = readFileSync(shippedConfigPath(), 'utf8');
+    const installBefore = installTreeListing();
     const root = newRoot();
     await (await openThread(root, env, 'a')).built.dispose();
     for (const change of [
@@ -275,6 +280,8 @@ describe('寫回三路徑：Include 不寫檔', () => {
     }
     expect(readFileSync(shippedConfigPath(), 'utf8')).toBe(shippedBefore);
     expect(readdirSync(dir).filter((name) => /cordis\.ya?ml|\.tmp$/u.test(name))).toEqual([]);
+    // 安裝樹沒有多出任何檔：Include 不寫回，Loader 也不建 `.cordis/` 輔助檔。
+    expect(installTreeListing()).toEqual(installBefore);
   }, 60000);
 });
 

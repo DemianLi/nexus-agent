@@ -78,21 +78,25 @@ describe('一致性套件（驗收 G）：真的提供者、真的 Loader', () =
 });
 
 describe('相依關係（#30）', () => {
-  it('不相依 @nexus/core 與 @nexus/harness：外部插件只看見 SDK 與服務定義', () => {
+  it('不相依 @nexus/core 與 @nexus/harness：外部插件只看見 SDK 與服務定義；框架與規範套件走 peer', () => {
     const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
       dependencies: Record<string, string>;
+      peerDependencies: Record<string, string>;
       devDependencies: Record<string, string>;
     };
-    const all = Object.keys({ ...pkg.dependencies, ...pkg.devDependencies });
+    const all = Object.keys({
+      ...pkg.dependencies,
+      ...pkg.peerDependencies,
+      ...pkg.devDependencies,
+    });
     expect(all).not.toContain('@nexus/core');
     expect(all).not.toContain('@nexus/harness');
-    expect(Object.keys(pkg.dependencies).sort()).toEqual([
-      '@langchain/core',
-      '@nexus/cordis',
-      '@nexus/sdk',
-      '@nexus/tools',
-      'zod',
-    ]);
+    // dsh 的做法：宿主給的套件放 peerDependencies（同一份 `@nexus/sdk` 才有 ContractError 的 instanceof、同一份 Cordis
+    // 才有同一個 Context 類別），開發時由 devDependencies 補上 workspace 版本；自己才用的第三方留在 dependencies。
+    expect(Object.keys(pkg.dependencies).sort()).toEqual(['@langchain/core', 'zod']);
+    const peers = ['@nexus/cordis', '@nexus/sdk', '@nexus/tools'];
+    expect(Object.keys(pkg.peerDependencies).sort()).toEqual(peers);
+    for (const name of peers) expect(pkg.devDependencies[name]).toBe('workspace:*');
   });
 
   it('沒有 default 匯出（Loader 的 unwrapExports 有 default 就取 default）', () => {

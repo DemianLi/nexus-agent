@@ -99,7 +99,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   在 `tsc` 就停下（`token.test.ts` 的 `typePins`，用 `@ts-expect-error` 釘住）。字串鍵只留給框架內部。
 - 取值：`service(ctx, token)` 讀已宣告的服務（沒宣告就讀，Cordis 拋錯）；`optionalService(ctx, token)` 讀選配的。
 - **定義套件不放在 `@nexus/plugin-*` 底下**：R2 的 grep 與 `plugin-coexist-real.ts` 把那個前綴當插件看。
-- 這個慣例 dsh 也只是慣例，沒有 gate 強制；這裡同樣不加 gate。`@nexus/tools` 有一條測試守它的相依只有 SDK 與工具型別。
+- 這個慣例 dsh 也只是慣例，沒有 gate 強制；這裡同樣不加 gate。`@nexus/tools` 有一條測試守它的相依只有 SDK 與工具型別。依賴的放法照 dsh：宿主給的 `@nexus/sdk`、`@nexus/cordis`、服務定義套件（`@nexus/tools`）放 `peerDependencies`，`devDependencies` 留 `workspace:*` 供開發與測試——`ContractError` 的 `instanceof` 與 Cordis 的 `Context` 類別都要求宿主與插件看到同一份，放進 `dependencies` 在套件獨立安裝時就可能各裝一份。`@nexus/plugin-echo` 與 `@nexus/tools` 各有測試釘著。
 
 ## 契約版本走 semver
 
@@ -178,7 +178,7 @@ expect(await checkConformance({ row, module, providers, residue })).toEqual([]);
 | 樹 | `plugin-tree.ts` 的 `PluginTree` | `tools` 一列（工具登記處）、`include` 一列（Include 讀出貨的 `cordis.yml`、疊 patch），函式插件在 `include:<id>` |
 
 - **變更紀錄怎麼到樹上**：折出來的 patch 原樣經 `entry.update({ config: { ...includeConfig, patches } })` 推給 Include（dsh
-  `app-boot` 的做法）。**Include 不寫檔**——寫入口只有變更紀錄一個（`vendor/README.md` 第 7 條，上游三條寫回路徑全關）。
+  `app-boot` 的做法）。**Include 不寫回任何檔**——寫入口只有變更紀錄一個（`vendor/README.md` 第 7 條，上游三條寫回路徑全關）；Loader 上游會在安裝樹建 `.cordis/` 輔助檔，宿主給了解析函式就不建（第 9 條），所以安裝樹唯讀也不影響掛載。
 - **兩支疊 patch 的演算法**：相容層的 `applyEntryPatches` 與上游的 `applyPatches` 對下面五種操作疊出一樣的 id／name／
   disabled／config 與順序（停用、啟用、改設定、還原設定、`--patch` 改與插入；`echo-on-tree-edges.test.ts`）。已知的差別是
   帶 `id` 的 `insert`（相容層接到尾巴，上游往群組裡塞），推給樹的 patch 把那個 `id` 拿掉，兩邊就一致。每次同步還會比一次

@@ -149,7 +149,7 @@ export abstract class EntryTree {
         // own dependencies. A helper inside the config file's project supplies
         // that project as the anchor; the plain import applies when no project
         // can be located.
-        const resolve = await createResolve(this.ctx.baseUrl)
+        const resolve = this.ctx.loader.resolver ?? await createResolve(this.ctx.baseUrl)
         const url = resolve ? resolve(name) : name
         return await import(/* @vite-ignore */ url)
       }

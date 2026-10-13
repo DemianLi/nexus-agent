@@ -258,6 +258,9 @@ describe('兩支疊 patch 的演算法：相容層的 applyEntryPatches 與上�
     expect(loaded.ids).toEqual(['echo', 'echo-two']);
     const tree = await root.tree.context();
     expect(tree.loader.resolve('include:echo-two').options.config).toEqual({ prefix: '二' });
+    // 出貨的那一列不受牽連：還是 ACTIVE，工具登記著；掉的是撞名的第二列。
+    expect(tree.loader.resolve('include:echo').fiber?.ctx.fiber.state).toBe(2);
+    expect(loaded.dropped.map((drop) => drop.id)).toEqual(['echo-two']);
   }, 60000);
 });
 
@@ -406,5 +409,26 @@ describe('已知限制：插件自我停用只在記憶體，下一條 thread �
     // 沒有任何檔被寫：出貨檔位元組不變，目錄裡只有那兩個檔。
     expect(readFileSync(shipped, 'utf8')).toBe(shippedBody);
     expect(readdirSync(dir).sort()).toEqual(['cordis.yml', 'self-disable.mjs']);
+  }, 60000);
+});
+
+describe('安裝樹不可寫：Loader 的 .cordis 輔助檔不是產品路徑的前提', () => {
+  it('出貨檔所在專案根唯讀，裸 specifier 的 echo 仍然 ACTIVE，目錄裡沒有多出任何檔', async () => {
+    const dir = scratch();
+    // 上游 `createResolve` 會在 `baseUrl` 所屬專案根（最近有 package.json 的目錄）建 `.cordis/`。
+    write(dir, 'package.json', '{"name":"readonly-install","private":true,"type":"module"}\n');
+    const shipped = write(dir, 'cordis.yml', "- id: echo\n  name: '@nexus/plugin-echo'\n");
+    chmodSync(dir, 0o500);
+    try {
+      const root = newRoot();
+      const loaded = await loadPluginConfig({ shipped, warn: warnNothing }, { tree: root.tree });
+      expect(loaded.dropped).toEqual([]);
+      const tree = await root.tree.context();
+      // 2 = ACTIVE。
+      expect(tree.loader.resolve('include:echo').fiber?.ctx.fiber.state).toBe(2);
+      expect(readdirSync(dir).sort()).toEqual(['cordis.yml', 'package.json']);
+    } finally {
+      chmodSync(dir, 0o700);
+    }
   }, 60000);
 });

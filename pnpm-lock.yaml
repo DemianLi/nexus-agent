@@ -458,22 +458,22 @@ importers:
       '@langchain/core':
         specifier: ^1.2.9
         version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.4.3))(ws@8.21.3)
+      zod:
+        specifier: ^4.3.6
+        version: 4.4.3
+    devDependencies:
       '@nexus/cordis':
         specifier: workspace:*
         version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
       '@nexus/sdk':
         specifier: workspace:*
         version: link:../nexus-sdk
       '@nexus/tools':
         specifier: workspace:*
         version: link:../nexus-tools
-      zod:
-        specifier: ^4.3.6
-        version: 4.4.3
-    devDependencies:
-      '@nexus/cordis-plugin-loader':
-        specifier: workspace:*
-        version: link:../../vendor/loader
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3
@@ -1008,9 +1008,6 @@ importers:
       '@langchain/core':
         specifier: ^1.2.9
         version: 1.2.9(@opentelemetry/api@1.9.1)(openai@7.5.0(ws@8.21.3)(zod@4.4.3))(ws@8.21.3)
-      '@nexus/sdk':
-        specifier: workspace:*
-        version: link:../nexus-sdk
     devDependencies:
       '@nexus/cordis':
         specifier: workspace:*
@@ -1018,6 +1015,9 @@ importers:
       '@nexus/cordis-plugin-loader':
         specifier: workspace:*
         version: link:../../vendor/loader
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3

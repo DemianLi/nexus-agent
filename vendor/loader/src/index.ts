@@ -56,6 +56,12 @@ export class Loader extends EntryTree {
   public name = 'loader'
   public internal = ModuleLoader.fromInternal()
 
+  /**
+   * nexus 本地修改：宿主給的裸 specifier 解析函式。有就用它，不走 `createResolve`（不在安裝樹裡寫 `.cordis/`）。
+   * 沒給就照上游。
+   */
+  public resolver?: (specifier: string) => string
+
   public builtins: Dict<any> = Object.create(null)
 
   constructor(ctx: Context, public config: Loader.Config = {}) {
