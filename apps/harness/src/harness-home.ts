@@ -8,8 +8,8 @@
  * `DSH_HOME`、預設 `~/.dsh`，這裡只換名字。
  *
  * 住在這裡的：瀏覽器會話的簽章密鑰（`browser-session-secret.ts`）、會話日誌 header 設定雜湊的鍵（`session-header-metadata.ts`，
- * #1025）、使用者那一層 patch
- * （`cordis.patch.yml`，`plugin-config.ts`），以及會話日誌的預設根（{@link harnessSessionsDir}）。
+ * #1025）、清單的變更紀錄（`plugin-journal.jsonl`，#1412，`plugin-journal.ts`；舊的 `cordis.patch.yml` 第一次啟動時遷進去），
+ * 以及會話日誌的預設根（{@link harnessSessionsDir}）。
  */
 
 import { homedir } from 'node:os';

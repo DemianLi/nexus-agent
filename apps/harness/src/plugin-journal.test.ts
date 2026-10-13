@@ -1,0 +1,371 @@
+/**
+ * 變更紀錄本身（[#1412](https://github.com/DemianLi/nexus-agent/issues/1412)）：格式、折疊、追加、鎖、壞掉的行。
+ *
+ * 驗收表的 F（並發）、G（壞掉的行）在這裡；遷移在 `plugin-journal-migration.test.ts`，寫入口在 `plugin-change.test.ts`。
+ */
+
+import { execFile } from 'node:child_process';
+import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { promisify } from 'node:util';
+
+import { afterEach, describe, expect, it } from 'vitest';
+
+import {
+  appendJournalRecord,
+  foldJournal,
+  journalOverrideOf,
+  parseJournal,
+  PluginJournalError,
+  readJournal,
+  withFileLock,
+} from './plugin-journal.js';
+import type { JournalActor, JournalBody, JournalRecord } from './plugin-journal.js';
+
+const run = promisify(execFile);
+const temporary: string[] = [];
+
+afterEach(() => {
+  for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+function dir(): string {
+  const root = mkdtempSync(join(tmpdir(), 'nexus-journal-'));
+  chmodSync(root, 0o700);
+  temporary.push(root);
+  return root;
+}
+
+const ACTOR: JournalActor = {
+  kind: 'host-account',
+  effective: 'svc',
+  invoker: 'alice',
+  invokerSource: 'SUDO_USER',
+};
+
+const AT = '2026-10-13T00:00:00.000Z';
+
+function record(seq: number, body: JournalBody): JournalRecord {
+  return { v: 1, seq, at: AT, actor: ACTOR, ...body } as JournalRecord;
+}
+
+function lines(...records: JournalRecord[]): string {
+  return records.map((entry) => `${JSON.stringify(entry)}\n`).join('');
+}
+
+const DISABLE_TODO: JournalBody = {
+  op: 'disable',
+  id: 'todo',
+  name: '@nexus/plugin-todo',
+  before: false,
+  after: true,
+};
+
+describe('解析（驗收 G）', () => {
+  it('最後一行沒有換行：略過，哪怕它剛好是合法的 JSON', () => {
+    const complete = lines(record(1, DISABLE_TODO));
+    const partial = JSON.stringify(
+      record(2, { ...DISABLE_TODO, op: 'enable', before: true, after: false }),
+    );
+    const parsed = parseJournal(Buffer.from(complete + partial), 'j');
+    expect(parsed.records).toHaveLength(1);
+    expect(parsed.incompleteTail).toBe(true);
+    expect(parsed.completeBytes).toBe(Buffer.byteLength(complete));
+  });
+
+  it('最後一行寫到一半（不是合法 JSON、沒有換行）：略過，不拋', () => {
+    const complete = lines(record(1, DISABLE_TODO));
+    const parsed = parseJournal(Buffer.from(`${complete}{"v":1,"seq":2,"at":"2026`), 'j');
+    expect(parsed.records).toHaveLength(1);
+    expect(parsed.incompleteTail).toBe(true);
+  });
+
+  it('中間一行壞掉：拋，指名第幾行', () => {
+    const text = `${lines(record(1, DISABLE_TODO))}{壞掉\n${lines(record(3, DISABLE_TODO))}`;
+    expect(() => parseJournal(Buffer.from(text), '/home/plugin-journal.jsonl')).toThrow(
+      /\/home\/plugin-journal\.jsonl 第 2 行不是合法的 JSON/u,
+    );
+  });
+
+  it('序號跳號、倒退、重複：拋，指名第幾行與應有的序號', () => {
+    const gap = lines(record(1, DISABLE_TODO), record(3, DISABLE_TODO));
+    expect(() => parseJournal(Buffer.from(gap), 'j')).toThrow(/第 2 行的序號是 3，應該是 2/u);
+    const back = lines(record(1, DISABLE_TODO), record(2, DISABLE_TODO), record(1, DISABLE_TODO));
+    expect(() => parseJournal(Buffer.from(back), 'j')).toThrow(/第 3 行的序號是 1，應該是 3/u);
+  });
+
+  it('多一個欄位、少一個欄位、空行：都是壞行', () => {
+    const extra = `${JSON.stringify({ ...record(1, DISABLE_TODO), surprise: 1 })}\n`;
+    expect(() => parseJournal(Buffer.from(extra), 'j')).toThrow(/第 1 行不是一筆合法的紀錄/u);
+    const missing = `${JSON.stringify({ v: 1, seq: 1, op: 'disable' })}\n`;
+    expect(() => parseJournal(Buffer.from(missing), 'j')).toThrow(/第 1 行不是一筆合法的紀錄/u);
+    expect(() => parseJournal(Buffer.from(`${lines(record(1, DISABLE_TODO))}\n`), 'j')).toThrow(
+      /第 2 行不是合法的 JSON（空行）/u,
+    );
+  });
+
+  it('檔案不在：undefined；權限檢查在讀完之後、解析之前', () => {
+    const root = dir();
+    expect(readJournal(join(root, 'nope.jsonl'))).toBeUndefined();
+    const path = join(root, 'j.jsonl');
+    writeFileSync(path, lines(record(1, DISABLE_TODO)), { mode: 0o600 });
+    expect(() =>
+      readJournal(path, {
+        check: () => {
+          throw new Error('別人動得了');
+        },
+      }),
+    ).toThrow('別人動得了');
+  });
+});
+
+describe('折疊：一列一條覆蓋項，照 dsh', () => {
+  const NAME = '@nexus/plugin-todo';
+
+  it('停用再啟用同一列：只剩一條，disabled 是 false', () => {
+    const patches = foldJournal([
+      DISABLE_TODO,
+      { op: 'enable', id: 'todo', name: NAME, before: true, after: false },
+    ]);
+    expect(patches).toEqual([{ id: 'todo', disabled: false }]);
+  });
+
+  it('同一列改設定兩次：後一次蓋掉前一次，不長筆數', () => {
+    const patches = foldJournal([
+      { op: 'config-set', id: 'todo', name: NAME, before: null, after: { a: 1 } },
+      { op: 'config-set', id: 'todo', name: NAME, before: { a: 1 }, after: { b: 2 } },
+    ]);
+    expect(patches).toEqual([{ id: 'todo', name: NAME, config: { b: 2 } }]);
+  });
+
+  it('開關與設定落在同一條覆蓋項上', () => {
+    const patches = foldJournal([
+      DISABLE_TODO,
+      { op: 'config-set', id: 'todo', name: NAME, before: null, after: { a: 1 } },
+    ]);
+    expect(patches).toEqual([{ id: 'todo', disabled: true, config: { a: 1 } }]);
+  });
+
+  it('恢復成繼承值：拿掉 config 覆蓋，不是抄一份；只剩 id／name 的整條拿掉，disabled 留著', () => {
+    const set: JournalBody = {
+      op: 'config-set',
+      id: 'todo',
+      name: NAME,
+      before: null,
+      after: { a: 1 },
+    };
+    const reset: JournalBody = {
+      op: 'config-reset',
+      id: 'todo',
+      name: NAME,
+      before: { a: 1 },
+      // 紀錄裡記著當時的繼承值，折疊不能用它。
+      after: { shipped: 'default-at-that-time' },
+    };
+    expect(foldJournal([set, reset])).toEqual([]);
+    expect(foldJournal([DISABLE_TODO, set, reset])).toEqual([{ id: 'todo', disabled: true }]);
+  });
+
+  it('遷移來的 patch 原樣保留位置；後來的操作改它最後一條相符的覆蓋項，不動 insert', () => {
+    const patches = foldJournal([
+      { op: 'patch', patch: { insert: [{ id: 'extra', name: 'file:///x.ts' }] } },
+      { op: 'patch', patch: { id: 'extra', config: { n: 1 } } },
+      { op: 'config-set', id: 'extra', name: 'file:///x.ts', before: { n: 1 }, after: { n: 2 } },
+    ]);
+    expect(patches).toEqual([
+      { insert: [{ id: 'extra', name: 'file:///x.ts' }] },
+      { id: 'extra', config: { n: 2 } },
+    ]);
+    expect(
+      journalOverrideOf([{ op: 'patch', patch: { id: 'x', config: { a: 1 } } }], 'x', 'n'),
+    ).toEqual({
+      config: { a: 1 },
+    });
+  });
+
+  it('name 斷言對不上的覆蓋項不是同一列：另起一條', () => {
+    const patches = foldJournal([
+      { op: 'patch', patch: { id: 'todo', name: '@other/module', config: { a: 1 } } },
+      { op: 'config-set', id: 'todo', name: NAME, before: null, after: { b: 2 } },
+    ]);
+    expect(patches).toHaveLength(2);
+  });
+
+  it('name 是空字串的覆蓋項：折疊與 journalOverrideOf 同一個答案——都不當成這一列的（不是「沒寫」）', () => {
+    const records: JournalBody[] = [
+      { op: 'patch', patch: { id: 'todo', name: '', config: { a: 1 } } },
+      { op: 'config-set', id: 'todo', name: NAME, before: null, after: { b: 2 } },
+    ];
+    expect(foldJournal(records)).toHaveLength(2);
+    expect(journalOverrideOf(records, 'todo', NAME)).toEqual({ config: { b: 2 } });
+  });
+
+  it('不改輸入', () => {
+    const body: JournalBody = { op: 'patch', patch: { id: 'a', config: { x: { y: 1 } } } };
+    const before = JSON.stringify(body);
+    const [out] = foldJournal([body, DISABLE_TODO]);
+    (out?.['config'] as { x: { y: number } }).x.y = 99;
+    expect(JSON.stringify(body)).toBe(before);
+  });
+});
+
+describe('追加', () => {
+  it('建檔 0600、序號從 1、帶時間與 actor；驗證（prepare）拋了就一個位元組都不寫', async () => {
+    const root = dir();
+    const path = join(root, 'j.jsonl');
+    const first = await appendJournalRecord(
+      path,
+      { actor: ACTOR, now: () => new Date(AT) },
+      () => DISABLE_TODO,
+    );
+    expect(first).toMatchObject({ seq: 1, at: AT, actor: ACTOR, op: 'disable', id: 'todo' });
+    expect(statSync(path).mode & 0o777).toBe(0o600);
+    const before = readFileSync(path);
+
+    await expect(
+      appendJournalRecord(path, { actor: ACTOR }, () => {
+        throw new Error('驗不過');
+      }),
+    ).rejects.toThrow('驗不過');
+    expect(readFileSync(path).equals(before)).toBe(true);
+
+    // prepare 回 undefined：什麼都不寫。
+    expect(await appendJournalRecord(path, { actor: ACTOR }, () => undefined)).toBeUndefined();
+    expect(readFileSync(path).equals(before)).toBe(true);
+  });
+
+  it('prepare 拿到的是鎖裡讀到的現有紀錄', async () => {
+    const root = dir();
+    const path = join(root, 'j.jsonl');
+    await appendJournalRecord(path, { actor: ACTOR }, () => DISABLE_TODO);
+    let seen = 0;
+    await appendJournalRecord(path, { actor: ACTOR }, (records) => {
+      seen = records.length;
+      return { ...DISABLE_TODO, op: 'enable', before: true, after: false } as JournalBody;
+    });
+    expect(seen).toBe(1);
+  });
+
+  it('現有紀錄壞了：不在壞掉的檔後面追加', async () => {
+    const root = dir();
+    const path = join(root, 'j.jsonl');
+    writeFileSync(path, `${lines(record(1, DISABLE_TODO))}{壞\n`, { mode: 0o600 });
+    const before = readFileSync(path);
+    await expect(appendJournalRecord(path, { actor: ACTOR }, () => DISABLE_TODO)).rejects.toThrow(
+      PluginJournalError,
+    );
+    expect(readFileSync(path).equals(before)).toBe(true);
+  });
+});
+
+describe('並發（驗收 F）', () => {
+  it('同一個行程裡 25 個寫入同時進來：25 筆都在、序號嚴格遞增、沒有遺失', async () => {
+    const root = dir();
+    const path = join(root, 'j.jsonl');
+    const results = await Promise.all(
+      Array.from({ length: 25 }, (_, index) =>
+        appendJournalRecord(path, { actor: ACTOR }, () => ({
+          op: 'config-set',
+          id: `row-${String(index)}`,
+          name: 'm',
+          before: null,
+          after: { index },
+        })),
+      ),
+    );
+    expect(results.every((entry) => entry !== undefined)).toBe(true);
+    const contents = readJournal(path);
+    expect(contents?.records.map((entry) => entry.seq)).toEqual(
+      Array.from({ length: 25 }, (_, index) => index + 1),
+    );
+    const ids = new Set(contents?.records.map((entry) => ('id' in entry ? entry.id : '')));
+    expect(ids.size).toBe(25);
+  });
+
+  it('三個行程各寫 8 筆：24 筆都在、序號 1..24、沒有半筆', async () => {
+    const root = dir();
+    const path = join(root, 'j.jsonl');
+    const child = fileURLToPath(new URL('./plugin-journal.child.fixture.ts', import.meta.url));
+    await Promise.all(
+      ['a', 'b', 'c'].map((tag) =>
+        run(process.execPath, ['--import', 'tsx', child, path, tag, '8'], { timeout: 60_000 }),
+      ),
+    );
+    const contents = readJournal(path);
+    expect(contents?.incompleteTail).toBe(false);
+    expect(contents?.records.map((entry) => entry.seq)).toEqual(
+      Array.from({ length: 24 }, (_, index) => index + 1),
+    );
+    for (const tag of ['a', 'b', 'c']) {
+      const mine = contents?.records.filter(
+        (entry) => 'id' in entry && entry.id.startsWith(`${tag}-`),
+      );
+      expect(mine).toHaveLength(8);
+    }
+  }, 90_000);
+
+  it('讀端不取鎖：持鎖期間照讀，從不讀到半筆', async () => {
+    const root = dir();
+    const path = join(root, 'j.jsonl');
+    await appendJournalRecord(path, { actor: ACTOR }, () => DISABLE_TODO);
+    let readDuring: number | undefined;
+    await withFileLock(path, async () => {
+      readDuring = readJournal(path)?.records.length;
+    });
+    expect(readDuring).toBe(1);
+  });
+
+  it('持有者行程不在了：接手那把鎖', async () => {
+    const root = dir();
+    const path = join(root, 'j.jsonl');
+    // 一個確定不存在的 PID。
+    writeFileSync(`${path}.lock`, '2147483646\n');
+    const written = await appendJournalRecord(
+      path,
+      { actor: ACTOR, waitMs: 5_000 },
+      () => DISABLE_TODO,
+    );
+    expect(written?.seq).toBe(1);
+  });
+
+  it('持有者還活著：等到逾時，訊息指名鎖檔', async () => {
+    const root = dir();
+    const path = join(root, 'j.jsonl');
+    writeFileSync(`${path}.lock`, `${String(process.pid)}\n`);
+    await expect(withFileLock(path, async () => 1, { waitMs: 150 })).rejects.toThrow(/等不到/u);
+    rmSync(`${path}.lock`);
+  });
+});
+
+describe('寫到一半當掉之後（加 9）', () => {
+  it('下一次寫入先截掉那半行再追加、stderr 記一句；讀端在這之前就略過它，啟動不受影響', async () => {
+    const root = dir();
+    const path = join(root, 'j.jsonl');
+    const complete = lines(record(1, DISABLE_TODO));
+    const crashed = JSON.stringify(record(2, DISABLE_TODO)).slice(0, 40);
+    writeFileSync(path, complete + crashed, { mode: 0o600 });
+
+    // 當掉之後、下一次寫入之前：讀端看到的是第 1 筆。
+    expect(readJournal(path)?.records).toHaveLength(1);
+
+    const warnings: string[] = [];
+    const written = await appendJournalRecord(
+      path,
+      { actor: ACTOR, warn: (message) => warnings.push(message) },
+      () => ({ ...DISABLE_TODO, op: 'enable', before: true, after: false }) as JournalBody,
+    );
+    expect(written?.seq).toBe(2);
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('沒有寫完');
+
+    const contents = readJournal(path);
+    expect(contents?.incompleteTail).toBe(false);
+    expect(contents?.records.map((entry) => entry.op)).toEqual(['disable', 'enable']);
+    // 不是黏成一行壞資料：每一行都是完整的 JSON。
+    for (const line of readFileSync(path, 'utf8').trimEnd().split('\n')) {
+      expect(() => JSON.parse(line)).not.toThrow();
+    }
+  });
+});

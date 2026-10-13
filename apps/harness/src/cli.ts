@@ -65,7 +65,9 @@ import { runDumpConfigSchema } from './config-schema-dump.js';
 import { resolveSessionHeaderMetadata } from './session-header-metadata.js';
 import {
   composeDefaultEntries,
+  describePrepareJournal,
   loadDefaultPlugins,
+  prepareJournal,
   renderLayeredConfigDump,
   renderShippedConfigDump,
 } from './plugin-config.js';
@@ -106,7 +108,7 @@ export const USAGE = `用法：cli [選項] [要說的話...]
 選項：
   --live               換成真實供應商（預設 ${DEFAULT_LIVE_MODEL_ID}），需要 API key
   --patch <file>       把這個 patch 檔疊在出貨的 cordis.yml 上（可以給多次，後面的蓋前面的）
-                       另一層是 $NEXUS_AGENT_HOME/cordis.patch.yml，它排在 --patch 之前
+                       另一層是變更紀錄 $NEXUS_AGENT_HOME/plugin-journal.jsonl（用 plugin 寫入口改），它排在 --patch 之前
   --workspace <dir>    在真實磁碟的這個目錄上跑，變更被圍堵在它之下
                        （省略即虛擬檔案系統，完全不碰磁碟）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
@@ -131,7 +133,7 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        每一段前面的 # == 註解標明那幾列來自哪個檔、被哪幾層改過
                        不能配 --resume 或要說的話（印設定不跑任何一輪）
   --dump-default-config
-                       只印出貨那一層的設定就退出：不讀 $NEXUS_AGENT_HOME/cordis.patch.yml，也不收 --patch
+                       只印出貨那一層的設定就退出：不讀 $NEXUS_AGENT_HOME 的變更紀錄，也不收 --patch
                        覆寫檔壞了（權限不對、YAML 寫壞）連 --dump-config 都印不出來時，用它拿一份對照
                        不能配 --dump-config、--dump-config-schema、--patch、--resume 或要說的話
   --dump-config-schema 把疊完的 plugin 設定欄位規格表（JSON Schema 2020-12）印出來就退出
@@ -923,6 +925,19 @@ async function runLaunched(
   // 之前，那是承重的**（#612）：落盤掛不掛由清單上 `session-persistence` 那一列講，而下面讀續接、
   // 解析日誌根都要先知道答案——關掉的時候一件都不該做。清單在這裡載也讓設定寫壞的那一類錯
   // 早於續接拿租約，拋了沒有東西要放。
+  //
+  // **清單的第二層是變更紀錄，不是 `cordis.patch.yml`**（#1412）：讀之前先確保紀錄在、必要時把舊的 patch 檔遷進去，
+  // 與 serve 同一個函式（`plugin-config.ts` 的 `prepareJournal`），兩個入口誰先起都只遷一次。
+  //
+  // **CLI 不建空紀錄檔**（`createWhenAbsent: false`）：落盤關掉、預設根被拒絕的那幾次承諾 home 連目錄都不建；
+  // 沒有舊檔要遷的時候一次性 CLI 什麼都不寫，紀錄檔由 serve 或寫入口第一次建。
+  const prepared = await prepareJournal({
+    env: options.env ?? process.env,
+    warn: (message) => printer.error(message),
+    createWhenAbsent: false,
+  });
+  const preparedLine = describePrepareJournal(prepared);
+  if (preparedLine !== undefined) printer.error(preparedLine);
   const loaded = await loadDefaultPlugins({
     env: options.env ?? process.env,
     ...(invocation.patches !== undefined && { patches: invocation.patches }),

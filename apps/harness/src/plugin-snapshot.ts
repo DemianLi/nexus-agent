@@ -26,15 +26,26 @@
  * 每列只有 `id`、`module`、`running`、`saved`、`sync`，`running`／`saved` 裡只有 `state` 與 `dropStage`。drop 的原文照舊
  * 只進伺服器日誌（`startup-audit.ts` 的 `describeDrop`）。
  *
+ * ## 「已儲存」含變更紀錄（#1412）
+ *
+ * 「已儲存」就是這一刻 `loadDefaultPlugins` 疊出來的那一份，而它的第二層是變更紀錄折出來的（`plugin-journal.ts`），
+ * 所以寫入口追加一筆之後，下一次重讀的快照自然反映它，不另算一套。另外多兩樣、**同樣不帶設定值**；**兩樣都在沒東西可講
+ * 的時候整個不出現**（紀錄是空的或不在、沒有舊檔、沒有 `--patch`），沒用到這張卡的機器上快照與以前逐位元組相同：
+ *
+ * - `layers.journal`：紀錄檔路徑、幾筆、最後序號；舊的 `cordis.patch.yml` 在不在（`ignoredLegacyPatch`：紀錄在了、這個檔
+ *   看到了但沒讀）；`pendingMigration`：紀錄檔還不在、舊檔照舊被讀，下一次啟動才遷。
+ * - `layers.overlays` 與每列的 `unaudited: true`：**`--patch` 是一條不經過紀錄的路**，它蓋到的列標出來，稽核看得到
+ *   「這幾列的值有一部分不是紀錄說了算」。
+ *
  * ## 偏離登記
  *
  * 1. **出口是主機端的檔，不是給 trusted client 的 inventory。** dsh 經 `pluginInventory/list` 給 trusted client
  *    （`packages/host/plugin-inventory/src/index.ts:70-73`）。我們沒有管理員身分，表達不出 trusted；wire 的 `/threads`
  *    底下每個登入的人都看得到。所以退到寫成 home 底下的檔，只有進得了主機的人讀得到，跟 `--dump-config` 同一群人。
  *    管理員身分落地後（#1385 排程第 3 步）改成走那道閘的只讀路由。
- * 2. **「執行中」不從 Loader 讀。** dsh 每次直接讀 `ctx.loader.entries()`，不留快取（`index.ts:85`）。我們的清單不是
- *    Loader 的樹（`cordis-root.ts:25-27`），退到啟動那一份 `LoadedPluginConfig` 加試組結果。決議 §3-5 讓樹由變更紀錄導出
- *    之後，應改回讀 Loader。
+ * 2. **「執行中」不從 Loader 讀。** dsh 每次直接讀 `ctx.loader.entries()`，不留快取（`index.ts:85`）。我們的清單由變更紀錄
+ *    導出（#1412），但清單上的列不在 Loader 的樹上，因為插件還在相容層（`cordis-root.ts` 偏離登記），退到啟動那一份
+ *    `LoadedPluginConfig` 加試組結果。列隨著逐顆搬出相容層上樹之後，應改回讀 Loader。
  * 3. **沒有 `fiberPhase`**：清單上的列沒有各自的 fiber，用 `mounted`／`disabled`／`dropped`／`absent` 四態取代，掉在哪一步用
  *    `dropStage`。
  * 4. **`dropStage` 在 `running` 與 `saved` 各一份**，不是一個平的欄位：啟動時掉了、改設定之後重試掉在別一步，兩邊會不同。
@@ -50,7 +61,7 @@ import { dirname, join } from 'node:path';
 import type { PluginEntry } from '@nexus/core';
 
 import { resolveHarnessHome } from './harness-home.js';
-import type { ConfigEntry, StartupDrop } from './plugin-config.js';
+import type { ConfigEntry, LayerReport, StartupDrop } from './plugin-config.js';
 import { classOfRow, STARTUP_READ_PLUGINS } from './plugin-row-classes.js';
 import type { RowClass } from './plugin-row-classes.js';
 import { rowKey, snapshotOf, snapshotsDiffer } from './plugin-row-state.js';
@@ -97,6 +108,8 @@ export interface PluginSnapshotRow {
   /** 這一刻磁碟上的那一份。 */
   readonly saved: PluginSnapshotSide;
   readonly sync: RowSync;
+  /** 有 `--patch` 的 patch 指到這一列（未經稽核的覆蓋層，#1412）。沒有就省略。 */
+  readonly unaudited?: true;
 }
 
 /** 整份快照。 */
@@ -107,6 +120,8 @@ export interface PluginSnapshot {
   /** 各種 `sync` 幾列。 */
   readonly summary: Readonly<Record<RowSync, number>>;
   readonly rows: readonly PluginSnapshotRow[];
+  /** 各層的報告（#1412）：變更紀錄與未稽核的覆蓋層。**不帶設定值。** 來源沒給就省略。 */
+  readonly layers?: LayerReport;
 }
 
 /** 一份清單（啟動那一份，或這一刻磁碟上的那一份）。 */
@@ -121,6 +136,8 @@ export interface SnapshotSource {
   readonly rows: ReadonlyMap<PluginEntry, { readonly id: string; readonly module: string }>;
   /** 掉了的列：讀清單那一步與組裝那一步都在。 */
   readonly drops: readonly Pick<StartupDrop, 'id' | 'stage'>[];
+  /** 這一份清單各層的報告（`LoadedPluginConfig.layers`）。 */
+  readonly layers?: LayerReport;
 }
 
 interface SideRow {
@@ -196,14 +213,34 @@ export function buildPluginSnapshot(input: {
       sync,
     };
   });
+  // **沒什麼好報的就不帶 `layers`**（驗收 H）：沒有紀錄、沒有舊檔、沒有 `--patch` 的機器上，快照跟加這一層之前逐位元組相同。
+  const layers = reportable(input.saved.layers);
+  const covered = new Set(layers?.overlays.flatMap((overlay) => overlay.rows) ?? []);
+  const marked = rows.map((row) =>
+    covered.has(row.id) ? { ...row, unaudited: true as const } : row,
+  );
   const summary: Record<RowSync, number> = { same: 0, 'next-thread': 0, restart: 0 };
-  for (const row of rows) summary[row.sync] += 1;
+  for (const row of marked) summary[row.sync] += 1;
   return {
     version: PLUGIN_SNAPSHOT_VERSION,
     generatedAt: input.generatedAt.toISOString(),
     summary,
-    rows,
+    rows: marked,
+    ...(layers !== undefined && { layers }),
   };
+}
+
+/** 各層報告裡有東西可講才回它，否則 `undefined`：紀錄是空的（或不在）、沒有舊檔、沒有 `--patch` 就是「沒有」。 */
+function reportable(layers: LayerReport | undefined): LayerReport | undefined {
+  if (layers === undefined) return undefined;
+  const journal = layers.journal;
+  const quiet =
+    layers.overlays.length === 0 &&
+    (journal === undefined ||
+      (journal.records === 0 &&
+        !journal.pendingMigration &&
+        journal.ignoredLegacyPatch === undefined));
+  return quiet ? undefined : layers;
 }
 
 function sideOf(row: SideRow | undefined): PluginSnapshotSide {

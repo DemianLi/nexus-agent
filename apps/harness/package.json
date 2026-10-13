@@ -17,6 +17,7 @@
     "eval:survey": "tsx src/eval/survey-cli.ts",
     "gen-known-event-types": "tsx src/gen-known-event-types.ts",
     "lint": "eslint .",
+    "plugin": "tsx src/plugin-cli.ts",
     "serve": "tsx src/serve.ts",
     "serve:live": "tsx src/serve.ts --live",
     "smoke": "vitest run --config vitest.smoke.config.ts",

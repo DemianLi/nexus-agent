@@ -33,6 +33,7 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { loadDefaultPlugins } from './plugin-config.js';
+import { seedHomePatch } from './plugin-journal.fixture.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { parseServeArgs, runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -57,6 +58,11 @@ function privateHome(): string {
 
 function writePatch(root: string, name: string, content: string): string {
   const path = join(root, name);
+  // home 那一層是變更紀錄（#1412）：預先放的設定走夾具，不讓每一條測試都帶一行遷移通知。
+  if (name === 'cordis.patch.yml') {
+    seedHomePatch(root, content);
+    return path;
+  }
   writeFileSync(path, content);
   chmodSync(path, 0o600);
   return path;
