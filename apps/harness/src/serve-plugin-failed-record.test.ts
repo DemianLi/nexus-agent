@@ -117,7 +117,7 @@ async function waitFor(predicate: () => boolean, label: string, timeoutMs = 1000
 }
 
 describe('寫入口改的設定讓那一列 apply 掛不上（驗收 C、D）', () => {
-  it('記一筆 failed（觸發的 seq、stage、原因）；再開十條 thread、重啟都不再多記；再改一次又掛，指向新的 seq', async () => {
+  it('記一筆 failed（歸因到的 seq、stage、原因）；再開十條 thread、重啟都不再多記；再改一次又掛，指向新的 seq', async () => {
     const h = home();
     h.seed(probeRow(true));
     const lines: string[] = [];

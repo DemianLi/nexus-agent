@@ -43,7 +43,7 @@
  * ## 掛不上的列也進變更紀錄（[#1414](https://github.com/DemianLi/nexus-agent/issues/1414)）
  *
  * 每次重讀把整份掉了的列交給記錄器（{@link ThreadPluginListOptions.recorder}），**不看上面那幾個「已知掉了」的集合**：
- * 它們的鍵是「列 id 加宣告」，紀錄的去重鍵是「列 id 加觸發的 `seq`」；宣告改回舊值時這裡不重試、也就不會再掉，那一次的
+ * 它們的鍵是「列 id 加宣告」，紀錄的去重鍵是「列 id 加歸因到的 `seq`」；宣告改回舊值時這裡不重試、也就不會再掉，那一次的
  * `failed` 只有每次都交進去、由紀錄決定才記得到。必掛的列掉了要拋之前，先等它寫完（上限 2 秒）。規則在
  * `plugin-failure-recorder.ts`。
  *
@@ -102,7 +102,7 @@ export interface ThreadPluginListOptions {
   })[];
   /**
    * 把掉了的列記進變更紀錄（#1414）。**每次重讀都把整份掉了的列交進去**，包括被「已知掉了」壓成停用、這一條沒有重試的列：
-   * 「已知」的鍵是列 id 加宣告，紀錄的去重鍵是列 id 加觸發的 `seq`，兩個不是同一把尺；改了又改回舊值的宣告不會重試、
+   * 「已知」的鍵是列 id 加宣告，紀錄的去重鍵是列 id 加歸因到的 `seq`，兩個不是同一把尺；改了又改回舊值的宣告不會重試、
    * 也不會再掉，那一次的 `failed` 只有靠每次都交進去才記得到。要不要記由紀錄決定（`plugin-failure-recorder.ts`）。
    */
   readonly recorder?: Pick<FailureRecorder, 'note' | 'flush'>;

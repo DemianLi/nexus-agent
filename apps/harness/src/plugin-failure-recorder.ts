@@ -9,7 +9,7 @@
  *
  * - **要記不要記，全由 {@link failureTriggerOf} 判**：那一列在紀錄裡有被接受的改動才記，只被出貨設定或 `--patch` 影響
  *   而掛不上的列照今天只進日誌。這支不自己判。
- * - **去重在鎖裡**：鍵是「列 id ＋ 觸發那一筆的 `seq`」（PM 2026-10-13：一筆遷移來的 `insert` 可能同時讓好幾列掛不上，
+ * - **去重在鎖裡**：鍵是「列 id ＋ 歸因到的那一筆的 `seq`」（PM 2026-10-13：一筆遷移來的 `insert` 可能同時讓好幾列掛不上，
  *   只用 `seq` 會只記到第一列）。寫之前在鎖裡對現有紀錄再查一次，所以兩個 serve 同時看到同一件事、跨重啟，都只記一次。
  *   鎖外先查一次只是省鎖。
  * - **呼叫端不做記憶**：每次重讀與每次組裝都把整份交進來。`thread-plugin-list.ts` 那幾個「已知掉了」的集合鍵是
@@ -101,7 +101,7 @@ export interface FailureRecorderOptions {
 export function createFailureRecorder(options: FailureRecorderOptions): FailureRecorder {
   const { path, effective, log } = options;
   const waitMs = options.waitMs ?? FAILURE_RECORD_WAIT_MS;
-  // 「沒寫成」那一句，同一列同一個觸發只講一次：home 唯讀時不要每條 thread 都講一遍。
+  // 「沒寫成」那一句，同一列歸因到同一筆只講一次：home 唯讀時不要每條 thread 都講一遍。
   const complained = new Set<string>();
   let tail: Promise<void> = Promise.resolve();
 
@@ -111,7 +111,9 @@ export function createFailureRecorder(options: FailureRecorderOptions): FailureR
     complained.add(key);
     const why = error instanceof Error ? error.message : String(error);
     // 錯誤文字是檔案系統或鎖的，不是設定值；原因原文不在這裡。
-    log(`[變更紀錄] ${id} 掛不上，但這一筆 failed 沒寫成（紀錄第 ${String(seq)} 筆觸發）：${why}`);
+    log(
+      `[變更紀錄] ${id} 掛不上，但這一筆 failed 沒寫成（歸因到紀錄第 ${String(seq)} 筆）：${why}`,
+    );
   }
 
   async function handle(rows: readonly FailedRow[], at: FailureDiscovery): Promise<void> {
@@ -162,7 +164,7 @@ export function createFailureRecorder(options: FailureRecorderOptions): FailureR
         if (written !== undefined) {
           log(
             `[變更紀錄] ${row.id} 掛不上，已記成第 ${String(written.seq)} 筆 failed` +
-              `（紀錄第 ${String(trigger)} 筆觸發，掉在「${row.stage}」；原因原文在紀錄裡）`,
+              `（歸因到紀錄第 ${String(trigger)} 筆，掉在「${row.stage}」；原因原文在紀錄裡）`,
           );
         }
       } catch (error) {

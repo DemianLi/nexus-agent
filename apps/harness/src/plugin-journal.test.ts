@@ -3,7 +3,7 @@
  *
  * 驗收表的 F（並發）、G（壞掉的行）在這裡；遷移在 `plugin-journal-migration.test.ts`，寫入口在 `plugin-change.test.ts`。
  * [#1414](https://github.com/DemianLi/nexus-agent/issues/1414) 的兩種只記不折的筆（`rejected`、`failed`）：驗收 H
- * 與「觸發的是哪一筆」的判定。
+ * 與「歸因到哪一筆」的判定。
  */
 
 import { execFile } from 'node:child_process';
@@ -528,7 +528,7 @@ describe('failureTriggerOf：失敗記在哪一筆上（#1414 Q2）', () => {
     expect(failureTriggerOf(withReset, TODO, CONTEXT)).toBe(3);
   });
 
-  it('hasFailedRecord：鍵是列 id 加觸發的 seq', () => {
+  it('hasFailedRecord：鍵是列 id 加歸因到的 seq', () => {
     const records = [
       record(1, DISABLE_TODO),
       { ...record(2, { op: 'failed', id: 'todo', triggerSeq: 1, stage: 'apply', reason: 'x' }) },

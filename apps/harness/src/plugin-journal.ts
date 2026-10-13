@@ -21,11 +21,11 @@
  * | `config-set` | 整份替換一列的 `config` | `{ id, name, config }` |
  * | `config-reset` | 恢復成繼承值 | 拿掉那一列的 `config` 覆蓋 |
  * | `patch` | 遷移用：原樣收一條舊 `cordis.patch.yml` 的 patch（含 `insert`、`name` 斷言），寫入口不開 | 原樣 |
-| `rejected` | 寫入口驗不過、沒有生效的一次變更（[#1414](https://github.com/DemianLi/nexus-agent/issues/1414)）：操作者、要做的操作、列 id、原因原文；**不帶要寫入的值** | **不折**，清單不因它改變 |
-| `failed` | serve 發現某一列掛不上，而那一列在紀錄裡有被接受的改動（#1414）：觸發的那一筆的 `seq`、掉在哪一步、原因原文 | **不折** |
-
-`rejected`／`failed` **只記不折**：照樣佔序號、序號照樣從 1 連續，`foldJournal` 與 `journalOverrideOf` 跳過它們，所以
-同一份紀錄有它們與沒有它們，折出來的清單相同。它們讓「被拒絕的變更」與「掛不上的列」進稽核，不是讓它們有作用。
+ * | `rejected` | 寫入口驗不過、沒有生效的一次變更（[#1414](https://github.com/DemianLi/nexus-agent/issues/1414)）：操作者、要做的操作、列 id、原因原文；**不帶要寫入的值** | **不折**，清單不因它改變 |
+ * | `failed` | serve 發現某一列掛不上，而那一列在紀錄裡有被接受的改動（#1414）：歸因的那一筆的 `seq`（`triggerSeq`，**歸因，不保證是原因**）、掉在哪一步、原因原文 | **不折** |
+ *
+ * `rejected`／`failed` **只記不折**：照樣佔序號、序號照樣從 1 連續，`foldJournal` 與 `journalOverrideOf` 跳過它們，所以
+ * 同一份紀錄有它們與沒有它們，折出來的清單相同。它們讓「被拒絕的變更」與「掛不上的列」進稽核，不是讓它們有作用。
  *
  * `before`／`after` 是**明文**（Q4，demian 2026-10-13）：這份檔取代的是 `cordis.patch.yml`，暴露面一樣，檔案 0600。
  *
@@ -169,8 +169,13 @@ export const journalRecordSchema = z.discriminatedUnion('op', [
     reason: z.string(),
   }),
   /**
-   * serve 發現這一列掛不上，而紀錄裡有一筆被接受的改動指到它（#1414 Q2）。`triggerSeq` 是那一列最後一筆被接受的紀錄
-   * （含遷移的 `patch`）；去重鍵是「列 id ＋ `triggerSeq`」，同一次改動只記一次、跨重啟也不重複。
+   * serve 發現這一列掛不上，而紀錄裡有一筆被接受的改動指到它（#1414 Q2）。
+   *
+   * **`triggerSeq` 是歸因，不是因果**：掉的那一刻，紀錄裡最後一筆碰到這一列、被接受的紀錄（含遷移的 `patch`）。它不保證
+   * 是這次掛不上的原因，所以讀的人不要把責任算到那一筆的操作者頭上。例如 A 早年改過設定，後來因為 B 被停用而掉在
+   * `requires`，歸因指到 A 那筆舊改動；出貨版本升級後才掉的列，也指到它最後一次被改的那一筆。
+   *
+   * 去重鍵是「列 id ＋ `triggerSeq`」：同一次歸因只記一次、跨重啟也不重複。
    */
   z.strictObject({
     ...envelope,
@@ -383,7 +388,7 @@ export function journalOverrideOf(
   };
 }
 
-// ── serve 記 `failed`：哪一筆觸發的（#1414）──────────────────────────────────────────────────
+// ── serve 記 `failed`：歸因到哪一筆（#1414）──────────────────────────────────────────────────
 
 /** serve 掉了的一列：id，與那一列的模組名（沒寫 id 的 `insert` 列只能用模組名比）。 */
 export interface FailedRowIdentity {
@@ -437,8 +442,12 @@ function touchesRow(record: JournalRecord, row: FailedRowIdentity): boolean {
 /**
  * **這一列要不要記 `failed`，答案只在這一處**（PM 2026-10-13：待 demian 回覆的缺口要改的就是這一個函式）。
  *
- * 現行規則（卡上 Q2）：那一列在紀錄裡有被接受的改動才記，觸發的是**最後一筆**碰到它的、被接受的紀錄（含遷移的 `patch`）。
- * 只被出貨設定或 `--patch` 影響而掛不上的列，紀錄裡沒有任何一筆指到它，回 `undefined`，照今天只進日誌。
+ * 現行規則（卡上 Q2）：那一列在紀錄裡有被接受的改動才記，**歸因**到**最後一筆**碰到它的、被接受的紀錄（含遷移的
+ * `patch`）。只被出貨設定或 `--patch` 影響而掛不上的列，紀錄裡沒有任何一筆指到它，回 `undefined`，照今天只進日誌。
+ *
+ * **這是歸因規則，不是因果**：回傳的 `seq` 不保證是這次掛不上的原因。例如 A 早年改過設定（seq 2），後來因為 B 被停用
+ * 而 A 掉在 `requires`，歸因指到 seq 2；出貨版本升級後才掉的列，也指到它最後一次被改的那一筆。欄位叫 `triggerSeq`
+ * 是格式只增不改、改名的成本以後只會更高（PM 2026-10-13）；讀的時候要當歸因讀。
  *
  * 待決的缺口：A 依賴 B、用寫入口關掉 B，A 掉在 `requires`，但 A 自己在紀錄裡沒有改動，所以現行規則不記。補的規則會
  * 看 `context`（serve 跑著的期間、兩次重讀之間新掉的列），回「當時最新一筆被接受的」；呼叫端已經把場面交進來了。
@@ -446,7 +455,7 @@ function touchesRow(record: JournalRecord, row: FailedRowIdentity): boolean {
  * @param records - 現在紀錄檔裡的全部紀錄。
  * @param row - 掉了的那一列。
  * @param context - 在哪裡發現的、是不是剛掉的。
- * @returns 觸發它的那一筆的 `seq`；不記就 `undefined`。
+ * @returns 歸因到的那一筆的 `seq`；不記就 `undefined`。
  */
 export function failureTriggerOf(
   records: readonly JournalRecord[],
@@ -457,7 +466,7 @@ export function failureTriggerOf(
   return records.findLast((record) => touchesRow(record, row))?.seq;
 }
 
-/** 紀錄裡已經有同一列、同一個觸發的 `failed` 了嗎。 */
+/** 紀錄裡已經有同一列、歸因到同一筆的 `failed` 了嗎。 */
 export function hasFailedRecord(
   records: readonly JournalRecord[],
   id: string,

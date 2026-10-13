@@ -76,7 +76,7 @@ describe('不建檔、不多話', () => {
 });
 
 describe('記一筆 failed（驗收 C、D）', () => {
-  it('帶觸發那一筆的 seq、stage、原因原文；actor 是 serve 與有效帳號；日誌不帶原因', async () => {
+  it('帶歸因到的那一筆的 seq、stage、原因原文；actor 是 serve 與有效帳號；日誌不帶原因', async () => {
     const dir = home();
     seedHomePatch(dir, TODO_DISABLED);
     const lines: string[] = [];
