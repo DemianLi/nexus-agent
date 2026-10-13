@@ -1,6 +1,7 @@
 /**
  * 後台插拔的寫入口（[#1412](https://github.com/DemianLi/nexus-agent/issues/1412)）：驗收表 A–D、F、I 與加 4／5、
- * PM 2026-10-13 的第 4、5 點。
+ * PM 2026-10-13 的第 4、5 點；以及 [#1414](https://github.com/DemianLi/nexus-agent/issues/1414) 的驗收 A、B、H
+ * （被拒絕的變更也進紀錄）。
  */
 
 import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -224,7 +225,7 @@ describe('改設定、恢復成繼承值（驗收 B、C）', () => {
   });
 });
 
-describe('寫入前先驗，驗不過紀錄逐位元組不變（驗收 D）', () => {
+describe('寫入前先驗，驗不過拒絕並追加一筆 rejected（#1412 驗收 D、#1414 驗收 A）', () => {
   const CASES: readonly { name: string; change: PluginChange; message: RegExp }[] = [
     {
       name: '不存在的 id',
@@ -248,20 +249,66 @@ describe('寫入前先驗，驗不過紀錄逐位元組不變（驗收 D）', ()
     },
   ];
 
-  it.each(CASES)('$name：拒絕、訊息指名原因、紀錄不動、不留鎖檔', async ({ change, message }) => {
-    const { dir, env } = home();
-    // 先放一筆，讓「逐位元組不變」比的是一份有內容的檔。
-    await changePlugin({ op: 'disable', id: 'skills' }, { env });
-    const bytes = readFileSync(journalPathOf(dir));
-    const error = await reject(change, env);
-    expect(error).toBeInstanceOf(PluginChangeRejected);
-    expect((error as Error).message).toMatch(message);
-    expect(readFileSync(journalPathOf(dir)).equals(bytes)).toBe(true);
-    expect(existsSync(`${journalPathOf(dir)}.lock`)).toBe(false);
-  });
+  it.each(CASES)(
+    '$name：照樣拒絕，舊檔是新檔的前綴、後面恰好多一行 rejected；折出來的清單不變、不留鎖檔',
+    async ({ change, message }) => {
+      const { dir, env } = home();
+      // 先放一筆，讓「前綴」比的是一份有內容的檔。
+      await changePlugin({ op: 'disable', id: 'skills' }, { env, now: FIXED });
+      const bytes = readFileSync(journalPathOf(dir));
+      const listBefore = composeEntries(
+        defaultSources({ serve: true, env, warn: () => undefined }),
+      );
+      const error = await changePlugin(change, {
+        env,
+        now: FIXED,
+        actor: {
+          kind: 'host-account',
+          effective: 'svc',
+          invoker: 'alice',
+          invokerSource: 'SUDO_USER',
+        },
+      }).then(
+        () => undefined,
+        (reason: unknown) => reason,
+      );
+      expect(error).toBeInstanceOf(PluginChangeRejected);
+      expect((error as Error).message).toMatch(message);
+      expect((error as PluginChangeRejected).seq).toBe(2);
 
-  it('config 格式驗不過的訊息帶著那一列的 id 與原因，不帶設定值', async () => {
-    const { env } = home();
+      const after = readFileSync(journalPathOf(dir));
+      // 位元組：舊檔是前綴，後面恰好一整行。
+      expect(after.subarray(0, bytes.length).equals(bytes)).toBe(true);
+      const appended = after.subarray(bytes.length).toString('utf8');
+      expect(appended.endsWith('\n')).toBe(true);
+      expect(appended.split('\n').filter((line) => line !== '')).toHaveLength(1);
+
+      const records = readJournal(journalPathOf(dir))?.records ?? [];
+      expect(records.map((entry) => entry.seq)).toEqual([1, 2]);
+      const last = records[1];
+      expect(last).toMatchObject({
+        op: 'rejected',
+        seq: 2,
+        requested: change.op,
+        id: change.id,
+        reason: (error as Error).message,
+        actor: { kind: 'host-account', effective: 'svc', invoker: 'alice' },
+      });
+      // 不帶要寫入的值：這一筆只有信封加這三格。
+      expect(Object.keys(last ?? {}).sort()).toEqual(
+        ['actor', 'at', 'id', 'op', 'reason', 'requested', 'seq', 'v'].sort(),
+      );
+      // 它不折：清單與沒有它時相同。
+      expect(foldJournal(records)).toEqual(foldJournal(records.slice(0, 1)));
+      expect(composeEntries(defaultSources({ serve: true, env, warn: () => undefined }))).toEqual(
+        listBefore,
+      );
+      expect(existsSync(`${journalPathOf(dir)}.lock`)).toBe(false);
+    },
+  );
+
+  it('要寫入的設定值一個位元組都不進紀錄', async () => {
+    const { dir, env } = home();
     const secret = 'secret-value-7c1e';
     const error = await reject(
       { op: 'config-set', id: 'todo', config: { allowParallelInProgress: secret } },
@@ -269,6 +316,52 @@ describe('寫入前先驗，驗不過紀錄逐位元組不變（驗收 D）', ()
     );
     expect(error).toBeInstanceOf(PluginChangeRejected);
     expect((error as Error).message).toContain('"todo"');
+    expect(readFileSync(journalPathOf(dir), 'utf8')).not.toContain(secret);
+  });
+
+  it('連續被拒絕兩次：各佔一個序號，序號從 1 連續，之後的正常變更接在後面', async () => {
+    const { dir, env } = home();
+    await reject({ op: 'disable', id: 'no-such-row' }, env);
+    await reject({ op: 'disable', id: 'browser-session' }, env);
+    const ok = await changePlugin({ op: 'disable', id: 'todo' }, { env });
+    expect(ok.record?.seq).toBe(3);
+    const records = readJournal(journalPathOf(dir))?.records ?? [];
+    expect(records.map((entry) => `${String(entry.seq)}:${entry.op}`)).toEqual([
+      '1:rejected',
+      '2:rejected',
+      '3:disable',
+    ]);
+  });
+
+  it('id 是空字串：照樣記，不被 schema 吞掉', async () => {
+    const { dir, env } = home();
+    const error = await reject({ op: 'disable', id: '' }, env);
+    expect(error).toBeInstanceOf(PluginChangeRejected);
+    expect(readJournal(journalPathOf(dir))?.records[0]).toMatchObject({
+      op: 'rejected',
+      id: '',
+      requested: 'disable',
+    });
+  });
+
+  it('沒有改變任何東西（已經是那個狀態）不是拒絕：紀錄逐位元組不變（#1414 驗收 B）', async () => {
+    const { dir, env } = home();
+    await changePlugin({ op: 'disable', id: 'todo' }, { env });
+    const bytes = readFileSync(journalPathOf(dir));
+    const result = await changePlugin({ op: 'disable', id: 'todo' }, { env });
+    expect(result.outcome).toBe('unchanged');
+    expect(readFileSync(journalPathOf(dir)).equals(bytes)).toBe(true);
+  });
+
+  it('紀錄壞了（還沒進到驗證）：不在壞掉的檔後面追加，也不記', async () => {
+    const { dir, env } = home();
+    await changePlugin({ op: 'disable', id: 'skills' }, { env });
+    writeJournalText(dir, `${readFileSync(journalPathOf(dir), 'utf8')}not json\n`);
+    const bytes = readFileSync(journalPathOf(dir));
+    const error = await reject({ op: 'disable', id: 'no-such-row' }, env);
+    expect(error).toBeDefined();
+    expect(error).not.toBeInstanceOf(PluginChangeRejected);
+    expect(readFileSync(journalPathOf(dir)).equals(bytes)).toBe(true);
   });
 });
 
@@ -290,12 +383,11 @@ describe('被 --patch 蓋掉（Q2，照 dsh 的兩種處置）', () => {
     expect(readJournal(journalPathOf(dir))?.records).toHaveLength(1);
   });
 
-  it('設定：寫入前就拒絕，紀錄不動', async () => {
+  it('設定：寫入前就拒絕，記成一筆 rejected', async () => {
     const { dir, env } = home();
     // 出貨值是 true；--patch 把它釘成 false，所以想寫 true 以外的值都會被它蓋掉。
     const path = overlay(dir, '- id: todo\n  config:\n    allowParallelInProgress: false\n');
     await changePlugin({ op: 'disable', id: 'skills' }, { env, patches: [path] });
-    const bytes = readFileSync(journalPathOf(dir));
     const error = await reject(
       { op: 'config-set', id: 'todo', config: { allowParallelInProgress: 'x' } },
       env,
@@ -303,7 +395,10 @@ describe('被 --patch 蓋掉（Q2，照 dsh 的兩種處置）', () => {
     );
     expect(error).toBeInstanceOf(PluginChangeRejected);
     expect((error as Error).message).toContain('被 --patch 蓋掉');
-    expect(readFileSync(journalPathOf(dir)).equals(bytes)).toBe(true);
+    expect(readJournal(journalPathOf(dir))?.records.map((entry) => entry.op)).toEqual([
+      'disable',
+      'rejected',
+    ]);
   });
 });
 

@@ -52,7 +52,8 @@ export const PLUGIN_CLI_USAGE = `用法：plugin <命令> [選項]
   --file <路徑|->           config set 的新設定；- 是標準輸入
   --help                    印這段話
 
-每一次變更追加一筆進 $NEXUS_AGENT_HOME/plugin-journal.jsonl（沒設就是 ~/.nexus-agent）。
+每一次變更追加一筆進 $NEXUS_AGENT_HOME/plugin-journal.jsonl（沒設就是 ~/.nexus-agent）；
+驗不過被拒絕的變更也記一筆 rejected（不帶要寫入的值），清單不因它改變。
 命令參數不收設定值：寫在命令列上，共用主機上的其他人用 ps 看得到。
 要新增或移除一列，今天只有 --patch 一條路（不在這個命令的範圍）。`;
 
@@ -263,7 +264,11 @@ export async function runPluginCli(options: PluginCliOptions): Promise<number> {
     }
     if (error instanceof PluginChangeRejected) {
       printer.error(`拒絕：${error.message}`);
-      printer.error('紀錄沒有動。');
+      printer.error(
+        error.seq === undefined
+          ? '紀錄沒有動。'
+          : `已記成第 ${String(error.seq)} 筆 rejected（操作者、操作、列 id、原因；不含要寫入的值）。清單不變。`,
+      );
       return 1;
     }
     printer.error(error instanceof Error ? error.message : String(error));

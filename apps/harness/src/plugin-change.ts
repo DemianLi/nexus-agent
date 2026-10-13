@@ -18,8 +18,9 @@
  * ## 寫入前先驗
  *
  * 只增不改沒有回滾，所以驗證在追加之前、**在同一把鎖裡**（兩個寫入口同時進來，後拿到鎖的驗證時已經看得到前一筆）：
- * 折完、疊完（含 `--patch`）、`validateEntries`（關不掉的名單）、那一列的設定格式、模組載得進來。驗不過就拋
- * {@link PluginChangeRejected}，紀錄逐位元組不變。
+ * 折完、疊完（含 `--patch`）、`validateEntries`（關不掉的名單）、那一列的設定格式、模組載得進來。驗不過就**在同一把鎖裡
+ * 追加一筆 `rejected`**（操作者、要做的操作、列 id、原因原文，**不帶要寫入的值**，#1414），再拋 {@link PluginChangeRejected}；
+ * 它不折，清單不變。「沒有改變任何東西，沒有寫」（已經是那個狀態）不是拒絕，照舊什麼都不寫。
  *
  * 驗不到的是 `apply` 裡才會發生的事（值檢查、`requires` 缺件、撞名）：那要整個組裝一次，跟 serve 每條 thread 重讀時
  * 的處置一樣，掉了只讓那一列不掛（`thread-plugin-list.ts`）。
@@ -71,8 +72,16 @@ export type PluginChange =
   | { readonly op: 'config-set'; readonly id: string; readonly config: Record<string, unknown> }
   | { readonly op: 'config-reset'; readonly id: string };
 
-/** 這一筆驗不過、沒寫。訊息指名原因。 */
+/**
+ * 這一筆驗不過、沒有生效。訊息指名原因。
+ *
+ * 驗證那一段的拒絕會在同一把鎖裡追加一筆 `rejected`（#1414），{@link seq} 是那一筆的序號；
+ * 還沒進到驗證的錯（參數解析、`--file` 讀不到、紀錄壞了）不是這個類別，也不記。
+ */
 export class PluginChangeRejected extends Error {
+  /** 記進紀錄的那一筆 `rejected` 的序號；沒有記就 `undefined`。 */
+  seq?: number;
+
   constructor(message: string) {
     super(message);
     this.name = 'PluginChangeRejected';
@@ -131,7 +140,7 @@ export interface PluginChangeResult {
 export function hostActor(
   env: NodeJS.ProcessEnv = process.env,
   current: () => string = () => userInfo().username,
-): JournalActor {
+): Extract<JournalActor, { kind: 'host-account' }> {
   const sudo = env['SUDO_USER'];
   const login = env['LOGNAME'];
   const fromSudo = sudo !== undefined && sudo.trim() !== '';
@@ -169,7 +178,7 @@ function changedKeys(
  * @param change - 要做什麼。
  * @param options - env、`--patch`、時間、誰。
  * @returns 結果；`recorded` 或 `unchanged`（沒有改變任何東西，沒寫）。
- * @throws {PluginChangeRejected} 驗不過：不存在的 id、關不掉的列、設定格式不合、被 `--patch` 蓋掉的設定。
+ * @throws {PluginChangeRejected} 驗不過：不存在的 id、關不掉的列、設定格式不合、被 `--patch` 蓋掉的設定。已記成 `rejected`。
  * @throws {PluginConfigError} 清單本身讀不了，或舊的 patch 檔壞了。
  * @throws {PluginJournalError} 紀錄壞了（不在壞掉的檔後面追加）、等不到鎖。
  */
@@ -194,6 +203,8 @@ export async function changePlugin(
   let effect: ChangeEffect | undefined;
   let fields: string[] = [];
   let unchangedReason: string | undefined;
+  // 驗不過的那一次：在鎖裡換成一筆 `rejected` 寫下去，寫完再拋這個錯（#1414）。
+  let rejection: PluginChangeRejected | undefined;
 
   const record = await appendJournalRecord(
     path,
@@ -204,8 +215,11 @@ export async function changePlugin(
       check: (file) => assertPrivateFile(file, JOURNAL_FILE_ROLE),
     },
     async (records): Promise<JournalBody | undefined> => {
-      const reject = (message: string): never => {
-        throw new PluginChangeRejected(message);
+      // 驗不過不在這裡拋：換成一筆 `rejected` 交給 `appendJournalRecord` 寫進去，寫完才在下面拋（#1414）。
+      // 原文進紀錄（0600，前後值本來就是明文）；要寫入的值一個位元組都不進來。
+      const reject = (message: string): JournalBody => {
+        rejection = new PluginChangeRejected(message);
+        return { op: 'rejected', requested: change.op, id: change.id, reason: message };
       };
 
       // 1. 這一列。用不含 `--patch` 的清單找：寫入口看的是「紀錄加出貨」。
@@ -398,6 +412,10 @@ export async function changePlugin(
       return body;
     },
   );
+  if (rejection !== undefined) {
+    if (record !== undefined) rejection.seq = record.seq;
+    throw rejection;
+  }
 
   const snapshotPresent = existsSync(pluginSnapshotPath(env));
   if (!snapshotPresent) {

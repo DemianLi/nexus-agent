@@ -21,6 +21,11 @@
  * | `config-set` | 整份替換一列的 `config` | `{ id, name, config }` |
  * | `config-reset` | 恢復成繼承值 | 拿掉那一列的 `config` 覆蓋 |
  * | `patch` | 遷移用：原樣收一條舊 `cordis.patch.yml` 的 patch（含 `insert`、`name` 斷言），寫入口不開 | 原樣 |
+ * | `rejected` | 寫入口驗不過、沒有生效的一次變更（[#1414](https://github.com/DemianLi/nexus-agent/issues/1414)）：操作者、要做的操作、列 id、原因原文；**不帶要寫入的值** | **不折**，清單不因它改變 |
+ * | `failed` | serve 發現某一列掛不上，而那一列在紀錄裡有被接受的改動（#1414）：歸因的那一筆的 `seq`（`triggerSeq`，**歸因，不保證是原因**）、掉在哪一步、原因原文 | **不折** |
+ *
+ * `rejected`／`failed` **只記不折**：照樣佔序號、序號照樣從 1 連續，`foldJournal` 與 `journalOverrideOf` 跳過它們，所以
+ * 同一份紀錄有它們與沒有它們，折出來的清單相同。它們讓「被拒絕的變更」與「掛不上的列」進稽核，不是讓它們有作用。
  *
  * `before`／`after` 是**明文**（Q4，demian 2026-10-13）：這份檔取代的是 `cordis.patch.yml`，暴露面一樣，檔案 0600。
  *
@@ -75,6 +80,11 @@ export const actorSchema = z.discriminatedUnion('kind', [
     effective: nonEmpty,
     invoker: nonEmpty.nullable(),
     invokerSource: nonEmpty.nullable(),
+  }),
+  /** serve 寫的（#1414 的 `failed`）：行程的有效帳號，作業系統給的。 */
+  z.strictObject({
+    kind: z.literal('serve'),
+    effective: nonEmpty,
   }),
   z.strictObject({
     kind: z.literal('migration'),
@@ -143,6 +153,38 @@ export const journalRecordSchema = z.discriminatedUnion('op', [
     op: z.literal('patch'),
     patch: z.record(z.string(), z.unknown()),
   }),
+  /**
+   * 寫入口拒絕的一次變更（#1414 Q1）。**不帶要寫入的設定值**：`reason` 是驗證器回的原文，可能引到值的一部分，逐字剔除
+   * 做不可靠；紀錄是 0600、前後值本來就是明文（#1412 Q4），所以原文進紀錄沒有新增暴露面。
+   *
+   * `id` 與 `reason` 不用 `nonEmpty`：這一筆是「使用者要求了什麼」的記錄，id 是空字串也是一種被拒絕的要求；parse 失敗的話
+   * 拒絕本身就會被一個 ZodError 吞掉。
+   */
+  z.strictObject({
+    ...envelope,
+    op: z.literal('rejected'),
+    /** 使用者要做的操作；不能叫 `op`，那是這一筆自己的種類。 */
+    requested: z.enum(['disable', 'enable', 'config-set', 'config-reset']),
+    id: z.string(),
+    reason: z.string(),
+  }),
+  /**
+   * serve 發現這一列掛不上，而紀錄裡有一筆被接受的改動指到它（#1414 Q2）。
+   *
+   * **`triggerSeq` 是歸因，不是因果**：掉的那一刻，紀錄裡最後一筆碰到這一列、被接受的紀錄（含遷移的 `patch`）。它不保證
+   * 是這次掛不上的原因，所以讀的人不要把責任算到那一筆的操作者頭上。例如 A 早年改過設定，後來因為 B 被停用而掉在
+   * `requires`，歸因指到 A 那筆舊改動；出貨版本升級後才掉的列，也指到它最後一次被改的那一筆。
+   *
+   * 去重鍵是「列 id ＋ `triggerSeq`」：同一次歸因只記一次、跨重啟也不重複。
+   */
+  z.strictObject({
+    ...envelope,
+    op: z.literal('failed'),
+    id: nonEmpty,
+    triggerSeq: z.number().int().min(1),
+    stage: z.enum(['module', 'config', 'apply', 'requires']),
+    reason: z.string(),
+  }),
 ]);
 
 /** 一筆紀錄。 */
@@ -202,6 +244,16 @@ export function parseJournal(bytes: Uint8Array, label: string): JournalContents 
         `${where}的序號是 ${String(parsed.data.seq)}，應該是 ${String(expected)}` +
           `（序號跳號或倒退：這份紀錄被改動過，或有人手動搬過行）。`,
       );
+    }
+    if (parsed.data.op === 'failed') {
+      // 指向的必須是更早、而且被接受的那一筆：指向自己、未來或另一筆只記不折的，是被人手動動過的檔。
+      const target = records[parsed.data.triggerSeq - 1];
+      if (target === undefined || target.op === 'rejected' || target.op === 'failed') {
+        throw new PluginJournalError(
+          `${where}是一筆 failed，卻指向第 ${String(parsed.data.triggerSeq)} 筆` +
+            `（${target === undefined ? '那一筆還不存在' : `那是 ${target.op}，不是被接受的改動`}）。`,
+        );
+      }
     }
     records.push(parsed.data);
   }
@@ -301,6 +353,10 @@ export function foldJournal(records: readonly JournalBody[]): Record<string, unk
           if (rest.length === 0) patches.splice(index, 1);
         }
         break;
+      case 'rejected':
+      case 'failed':
+        // 只記不折：沒有任何改動生效過（#1414）。
+        break;
     }
   }
   return patches;
@@ -330,6 +386,95 @@ export function journalOverrideOf(
     ...(typeof config === 'object' &&
       config !== null && { config: config as Record<string, unknown> }),
   };
+}
+
+// ── serve 記 `failed`：歸因到哪一筆（#1414）──────────────────────────────────────────────────
+
+/** serve 掉了的一列：id，與那一列的模組名（沒寫 id 的 `insert` 列只能用模組名比）。 */
+export interface FailedRowIdentity {
+  readonly id: string;
+  readonly module: string;
+}
+
+/** 在哪裡發現這一列掛不上。 */
+export type FailureDiscovery = 'startup' | 'reread' | 'thread-assembly';
+
+/** 判斷這一列要不要記 `failed` 時用得到的場面。 */
+export interface FailureContext {
+  readonly discoveredAt: FailureDiscovery;
+  /** 上一次讀（或啟動）的時候這一列還掛著；沒有資料就 `undefined`。 */
+  readonly newlyDropped?: boolean;
+}
+
+/**
+ * 紀錄裡這一筆是不是指到那一列：**跟折疊同一套規矩**（{@link isOverrideOf}、{@link nameAssertionMatches}），
+ * 不然「哪些紀錄碰過這一列」會有兩套答案。`config-reset` 同折疊不看 `name`；`config-set` 折出來的覆蓋項帶 `name` 斷言，
+ * 模組名對不上的那一筆在這一列上沒有作用；遷移進來的 `insert`，沒寫 id 的列（id 是載入器補的 `<name>#<n>`）用模組名比。
+ */
+function touchesRow(record: JournalRecord, row: FailedRowIdentity): boolean {
+  switch (record.op) {
+    case 'disable':
+    case 'enable':
+    case 'config-reset':
+      return record.id === row.id;
+    case 'config-set':
+      return record.id === row.id && record.name === row.module;
+    case 'patch': {
+      const insert = record.patch['insert'];
+      if (Array.isArray(insert)) {
+        const inserted = insert.some((candidate: unknown) => {
+          if (typeof candidate !== 'object' || candidate === null) return false;
+          const fields = candidate as Record<string, unknown>;
+          return (
+            fields['id'] === row.id || (fields['id'] === undefined && fields['name'] === row.module)
+          );
+        });
+        if (inserted) return true;
+      }
+      return record.patch['id'] === row.id && nameAssertionMatches(record.patch, row.module);
+    }
+    case 'rejected':
+    case 'failed':
+      return false;
+  }
+}
+
+/**
+ * **這一列要不要記 `failed`，答案只在這一處**（PM 2026-10-13：待 demian 回覆的缺口要改的就是這一個函式）。
+ *
+ * 現行規則（卡上 Q2）：那一列在紀錄裡有被接受的改動才記，**歸因**到**最後一筆**碰到它的、被接受的紀錄（含遷移的
+ * `patch`）。只被出貨設定或 `--patch` 影響而掛不上的列，紀錄裡沒有任何一筆指到它，回 `undefined`，照今天只進日誌。
+ *
+ * **這是歸因規則，不是因果**：回傳的 `seq` 不保證是這次掛不上的原因。例如 A 早年改過設定（seq 2），後來因為 B 被停用
+ * 而 A 掉在 `requires`，歸因指到 seq 2；出貨版本升級後才掉的列，也指到它最後一次被改的那一筆。欄位叫 `triggerSeq`
+ * 是格式只增不改、改名的成本以後只會更高（PM 2026-10-13）；讀的時候要當歸因讀。
+ *
+ * 待決的缺口：A 依賴 B、用寫入口關掉 B，A 掉在 `requires`，但 A 自己在紀錄裡沒有改動，所以現行規則不記。補的規則會
+ * 看 `context`（serve 跑著的期間、兩次重讀之間新掉的列），回「當時最新一筆被接受的」；呼叫端已經把場面交進來了。
+ *
+ * @param records - 現在紀錄檔裡的全部紀錄。
+ * @param row - 掉了的那一列。
+ * @param context - 在哪裡發現的、是不是剛掉的。
+ * @returns 歸因到的那一筆的 `seq`；不記就 `undefined`。
+ */
+export function failureTriggerOf(
+  records: readonly JournalRecord[],
+  row: FailedRowIdentity,
+  context: FailureContext,
+): number | undefined {
+  void context;
+  return records.findLast((record) => touchesRow(record, row))?.seq;
+}
+
+/** 紀錄裡已經有同一列、歸因到同一筆的 `failed` 了嗎。 */
+export function hasFailedRecord(
+  records: readonly JournalRecord[],
+  id: string,
+  triggerSeq: number,
+): boolean {
+  return records.some(
+    (record) => record.op === 'failed' && record.id === id && record.triggerSeq === triggerSeq,
+  );
 }
 
 // ── 跨行程鎖，照 dsh `withFileLock`（packages/util/atomic-write/src/index.ts:235）────────────────
