@@ -1,81 +1,105 @@
-import { loadPlugins } from '@nexus/core';
+import { readFileSync } from 'node:fs';
+
+import { Context } from '@nexus/cordis';
+import Loader from '@nexus/cordis-plugin-loader';
+import { checkConformance } from '@nexus/sdk';
+import { createToolsProvider } from '@nexus/tools/provider';
 import { describe, expect, it } from 'vitest';
-import { createEchoPlugin, DEFAULT_ECHO_PREFIX, echoPlugin, ECHO_TOOL_NAME } from './index.js';
+
+import * as echo from './index.js';
+import { createEchoTool, DEFAULT_ECHO_PREFIX, ECHO_TOOL_NAME } from './index.js';
 
 /**
- * 薄測試，只斷言「`apply` 真的往那兩個註冊點放了東西」。
+ * 這個套件的驗收分三塊：工具本身、一致性套件（G）、相依關係。
  *
- * 這個套件的真正驗收在組裝點（`apps/harness` 的正面路徑測試：一份清單 fold 出的
- * agent 真的呼叫得到這個工具）。這裡不重跑那條——重點是不要讓一個沒有測試的
- * package 通過 gate（[#32](https://github.com/DemianLi/nexus-agent/issues/32)：
- * `pnpm -r run test` 找不到測試檔就是紅燈）。
+ * 組裝點那一側（一份清單 fold 出的 agent 真的呼叫得到這個工具、設定一改下一條 thread 看到新值）在
+ * `apps/harness` 的 `echo-on-tree.test.ts`；這裡不重跑。
  */
-describe('createEchoPlugin', () => {
-  it('註冊 echo 工具', async () => {
-    const { registry } = await loadPlugins([createEchoPlugin()]);
-
-    expect(registry.tools.resolve(ECHO_TOOL_NAME)?.value.name).toBe(ECHO_TOOL_NAME);
+describe('echo 工具', () => {
+  it('回聲帶上前綴', async () => {
+    await expect(createEchoTool('聽到了').invoke({ message: '嗨' })).resolves.toBe('聽到了：嗨');
   });
 
-  it('回聲帶上組裝點給的前綴', async () => {
-    const { registry } = await loadPlugins([createEchoPlugin({ prefix: '聽到了' })]);
-    const echo = registry.tools.resolve(ECHO_TOOL_NAME);
+  it('不給前綴就用 schema 的預設值', async () => {
+    await expect(createEchoTool().invoke({ message: '嗨' })).resolves.toBe(
+      `${DEFAULT_ECHO_PREFIX}：嗨`,
+    );
+    expect(createEchoTool().name).toBe(ECHO_TOOL_NAME);
+  });
 
-    await expect(echo?.value.invoke({ message: '嗨' })).resolves.toBe('聽到了：嗨');
+  it('設定：預設值寫在 schema、未知欄位拒收（登記的偏離）', () => {
+    expect(echo.Config.parse({})).toEqual({ prefix: DEFAULT_ECHO_PREFIX });
+    expect(echo.Config.parse({ prefix: '甲' })).toEqual({ prefix: '甲' });
+    expect(() => echo.Config.parse({ prefixx: '甲' })).toThrow(/prefixx/);
+    expect(() => echo.Config.parse({ prefix: 7 })).toThrow(/prefix/);
   });
 });
 
-/**
- * 設定走條目那條路（[#453](https://github.com/DemianLi/nexus-agent/issues/453)）。
- *
- * 這一組是**不經過工廠**的那條路——#454 從 YAML 載入時就是這樣：`plugin` 是 import
- * 出來的那顆模組層級常數，`config` 是設定檔裡的一塊資料。工廠不再做任何檢查，所以
- * 這條路上看得到的錯誤就是使用者會看到的錯誤。
- */
-describe('echo 的 Config（#453）', () => {
-  it('合法的覆寫會生效——只經過條目，不經過工廠', async () => {
-    const { registry } = await loadPlugins([{ plugin: echoPlugin, config: { prefix: '聽到了' } }]);
-    const echo = registry.tools.resolve(ECHO_TOOL_NAME);
-
-    await expect(echo?.value.invoke({ message: '嗨' })).resolves.toBe('聽到了：嗨');
-  });
-
-  it('一格都不給就用 schema 的預設值', async () => {
-    const { registry } = await loadPlugins([{ plugin: echoPlugin }]);
-    const echo = registry.tools.resolve(ECHO_TOOL_NAME);
-
-    await expect(echo?.value.invoke({ message: '嗨' })).resolves.toBe(`${DEFAULT_ECHO_PREFIX}：嗨`);
-  });
-
-  it('型別錯就載入失敗，訊息帶 `<id> (<name>)` 與欄位路徑', async () => {
-    const bad = [{ plugin: echoPlugin, config: { prefix: 7 } }];
-    await expect(loadPlugins(bad)).rejects.toThrow('echo#0 (echo)');
-    await expect(loadPlugins(bad)).rejects.toThrow('prefix');
-  });
-
-  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
-    // YAML 上一個拼錯的欄位名在 dsh 那邊會靜靜沒有作用，在共用主機上沒有人會發現。
-    const typo = [{ plugin: echoPlugin, config: { prefixx: '聽到了' } }];
-    await expect(loadPlugins(typo)).rejects.toThrow('echo#0 (echo)');
-    await expect(loadPlugins(typo)).rejects.toThrow(/prefixx/);
-  });
-
-  it('工廠只是薄薄一層：它回的就是條目，設定原樣放在 config 上', () => {
-    expect(createEchoPlugin({ prefix: '聽到了' })).toEqual({
-      plugin: echoPlugin,
-      config: { prefix: '聽到了' },
+describe('一致性套件（驗收 G）：真的提供者、真的 Loader', () => {
+  it('echo 全格通過：manifest、匯出形式、載入→卸載後登記處回到掛載前、缺提供者停在 PENDING', async () => {
+    let latest = createToolsProvider();
+    const failures = await checkConformance({
+      row: 'echo',
+      module: echo,
+      config: {},
+      providers: {
+        tools: () => {
+          latest = createToolsProvider();
+          return latest.Provider;
+        },
+      },
+      residue: () => latest.entries().length,
     });
+    expect(failures).toEqual([]);
   });
 
-  it('**同一顆模組層級的 plugin 掛兩次組裝不會串台**——每次掛載的設定各自獨立', async () => {
-    const a = await loadPlugins([{ plugin: echoPlugin, config: { prefix: '甲' } }]);
-    const b = await loadPlugins([{ plugin: echoPlugin, config: { prefix: '乙' } }]);
+  it('掛上之後登記處裡是 echo 這一個工具，登記者是那一列', async () => {
+    // 不重複 `checkConformance` 內部的步驟，只量它不給的那一面：登記的東西對不對。
+    const provider = createToolsProvider();
+    const root = new Context();
+    try {
+      await root.plugin(Loader);
+      Object.assign(root.loader.builtins, { tools: provider.Provider, echo });
+      await root.loader.create({ id: 'tools', name: 'cordis:tools' } as never, null);
+      await root.loader.create(
+        { id: 'row-echo', name: 'cordis:echo', config: { prefix: '甲' } } as never,
+        null,
+      );
+      await root.loader.await();
+      const entries = provider.entries();
+      expect(entries.map((entry) => [entry.tool.name, entry.source])).toEqual([
+        [ECHO_TOOL_NAME, 'row-echo'],
+      ]);
+      await expect(entries[0]?.tool.invoke({ message: '嗨' })).resolves.toBe('甲：嗨');
+    } finally {
+      await root.fiber.dispose();
+    }
+  });
+});
 
-    await expect(
-      a.registry.tools.resolve(ECHO_TOOL_NAME)?.value.invoke({ message: '嗨' }),
-    ).resolves.toBe('甲：嗨');
-    await expect(
-      b.registry.tools.resolve(ECHO_TOOL_NAME)?.value.invoke({ message: '嗨' }),
-    ).resolves.toBe('乙：嗨');
+describe('相依關係（#30）', () => {
+  it('不相依 @nexus/core 與 @nexus/harness：外部插件只看見 SDK 與服務定義；框架與規範套件走 peer', () => {
+    const pkg = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
+      dependencies: Record<string, string>;
+      peerDependencies: Record<string, string>;
+      devDependencies: Record<string, string>;
+    };
+    const all = Object.keys({
+      ...pkg.dependencies,
+      ...pkg.peerDependencies,
+      ...pkg.devDependencies,
+    });
+    expect(all).not.toContain('@nexus/core');
+    expect(all).not.toContain('@nexus/harness');
+    // dsh 的做法：宿主給的套件放 peerDependencies（同一份 `@nexus/sdk` 才有 ContractError 的 instanceof、同一份 Cordis
+    // 才有同一個 Context 類別），開發時由 devDependencies 補上 workspace 版本；自己才用的第三方留在 dependencies。
+    expect(Object.keys(pkg.dependencies).sort()).toEqual(['@langchain/core', 'zod']);
+    const peers = ['@nexus/cordis', '@nexus/sdk', '@nexus/tools'];
+    expect(Object.keys(pkg.peerDependencies).sort()).toEqual(peers);
+    for (const name of peers) expect(pkg.devDependencies[name]).toBe('workspace:*');
+  });
+
+  it('沒有 default 匯出（Loader 的 unwrapExports 有 default 就取 default）', () => {
+    expect('default' in echo).toBe(false);
   });
 });

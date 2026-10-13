@@ -10,7 +10,7 @@ import { HumanMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { REPEAT_REMINDER_MARKER } from '@nexus/core';
 import type { SessionLog } from '@nexus/core';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import {
   createGoalPlugin,
   GOAL_COMMAND_NAME,

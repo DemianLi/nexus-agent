@@ -16,7 +16,7 @@
 import type { Event } from '@nexus/wire';
 import { createWireClient } from '@nexus/wire';
 import type { PluginEntry } from '@nexus/core';
-import { createEchoPlugin } from '@nexus/plugin-echo';
+import { createEchoPlugin } from './echo.fixture.js';
 import { describe, expect, it } from 'vitest';
 
 import { runTurn } from './cli.js';

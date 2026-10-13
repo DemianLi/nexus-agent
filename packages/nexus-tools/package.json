@@ -6,6 +6,7 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./provider": "./src/provider.ts",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
@@ -19,14 +20,17 @@
   "devDependencies": {
     "@nexus/cordis": "workspace:*",
     "@nexus/cordis-plugin-loader": "workspace:*",
+    "@nexus/sdk": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11",
     "zod": "^4.3.6"
   },
-  "dependencies": {
-    "@langchain/core": "^1.2.9",
+  "peerDependencies": {
     "@nexus/sdk": "workspace:*"
+  },
+  "dependencies": {
+    "@langchain/core": "^1.2.9"
   }
 }

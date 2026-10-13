@@ -32,7 +32,7 @@ import {
 import type { PluginEntry } from '@nexus/core';
 import { countTokensApproximately, tool } from 'langchain';
 import { z } from 'zod';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { computeSummarizationDefaults, createSummarizationMiddleware } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';

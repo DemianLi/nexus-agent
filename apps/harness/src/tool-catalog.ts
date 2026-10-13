@@ -32,6 +32,7 @@ import type { PluginEntry } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
 import { shippedPlugins, withSystemPromptVariables } from './fixtures.js';
+import { isFunctionPluginModule } from './plugin-tree.js';
 import { DEFAULT_LIVE_MODEL_ID } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -224,7 +225,11 @@ async function packageFacts(packagesRoot: string, dir: string): Promise<PackageF
   const name = (
     JSON.parse(readFileSync(join(packagesRoot, dir, 'package.json'), 'utf8')) as { name: string }
   ).name;
-  const mod = (await import(name)) as { default?: unknown };
+  const mod = (await import(name)) as { default?: unknown; name?: unknown; apply?: unknown };
+  // 樹上的函式插件（#1416）沒有 default：身分是具名匯出的 `name`，判別式與 `resolveEntryModule` 同一支。
+  if (isFunctionPluginModule(mod) && typeof mod.apply === 'function') {
+    return { dir, pluginName: String(mod.name) };
+  }
   const candidate = mod.default as { name?: unknown; apply?: unknown } | undefined;
   const isPlugin = candidate !== undefined && typeof candidate.apply === 'function';
   return { dir, pluginName: isPlugin ? String(candidate.name) : undefined };

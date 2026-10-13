@@ -482,11 +482,14 @@ async function startServer(
     effective: hostActor(env).effective,
     log,
   });
-  const loaded = await loadDefaultPlugins({
-    serve: true,
-    env,
-    ...(invocation.patches !== undefined && { patches: invocation.patches }),
-  });
+  const loaded = await loadDefaultPlugins(
+    {
+      serve: true,
+      env,
+      ...(invocation.patches !== undefined && { patches: invocation.patches }),
+    },
+    { tree: root.tree },
+  );
   // **掉了哪幾列在這裡判第一次**（#751），同 CLI 那一刻：必掛的掉了就在這裡起不來——還沒建瀏覽器會話密鑰、還沒綁
   // port。可少掛的掉了先不印，等下面試組那一次補完再合成一段。掉了的列在清單上已標成沒掛，每條 thread 組裝時照樣跳過。
   const audit = { live: invocation.live };
@@ -633,12 +636,15 @@ async function startServer(
   const snapshotWriter = createPluginSnapshotWriter({ path: pluginSnapshotPath(env), log });
   const threadPluginList = createThreadPluginList({
     load: (warn) =>
-      loadDefaultPlugins({
-        serve: true,
-        env,
-        ...(invocation.patches !== undefined && { patches: invocation.patches }),
-        warn,
-      }),
+      loadDefaultPlugins(
+        {
+          serve: true,
+          env,
+          ...(invocation.patches !== undefined && { patches: invocation.patches }),
+          warn,
+        },
+        { tree: root.tree },
+      ),
     startup: loaded,
     trialDropped,
     trialDrops: assemblyDropsOf(loaded, trial.dropped),

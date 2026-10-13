@@ -135,9 +135,11 @@ describe('serve 的對照快照檔（#1406）', () => {
     expect(byId.get('thread-title')?.sync).toBe('restart');
     expect(byId.get('todo')?.sync).toBe('next-thread');
     expect(byId.get('todo')?.saved).toEqual({ state: 'disabled' });
+    // 第二個 echo 登記的工具名跟出貨的那一列撞名：echo 是樹上的函式插件之後，這一列在讀清單那一步就被樹判掉
+    // （`saved` 是 dropped），不再等到組裝那一刻才掉（#1416）。它仍是「新插進來、下一條對話才會看到」的列。
     expect(byId.get('extra-echo')).toMatchObject({
       running: { state: 'absent' },
-      saved: { state: 'mounted' },
+      saved: { state: 'dropped' },
       sync: 'next-thread',
     });
     expect(snapshot.summary).toEqual({

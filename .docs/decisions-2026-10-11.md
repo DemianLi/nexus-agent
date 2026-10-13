@@ -93,6 +93,9 @@ demian 的定義：**像 Cordis 那樣管理生命週期、插件、執行序的
 | §3-4 第 10 條 | dsh 的身分只有 `package.json` 的 name／version 加 Loader 列 id，`dsh` 欄位沒有 id、owner、provides、consumes、capabilities、reload（`packages/util/package-manifest/src/types.ts:8-39`） | 產品需求超出 dsh | 後台插件頁、稽核與啟動結算要指得出找誰、缺什麼、什麼時候生效；dsh 沒有這些需求。#1416 |
 | §3-4 第 12 條 | dsh 的卸載測試是每個套件各寫一份，插件層級沒有共用套件，只有後端層級的 contract suite（`packages/storage/storage/tests/contract.ts`） | 產品需求超出 dsh | 幾百人並行開發下，每顆插件各寫一份卸載測試等於沒有保證。#1416 |
 | §3-4 第 15 條 | dsh 一處都沒用 `provide` 的 `check`；它的版本相容檢查在套件層，比整個 runtime 的版本（`packages/boot/app-boot/src/plugin-compatibility.ts:61-88`） | 產品需求超出 dsh | 服務層級的契約要能擋下 major 不相容的提供者並指名消費者與服務。探針 #1386 ⑤ 量過。#1416 |
+| §3-5 第 18 條（#1416 PR 2） | dsh 的 Include 會把樹側的變更與插件自我停用寫回 `cordis.yml`（`vendor/README.md` 對照表第 14 條的寫入路徑就是為它存在） | 產品需求超出 dsh | 寫回是第二個寫入口，會繞過變更紀錄；出貨檔是 repo 裡的檔。vendor 時關掉三條寫回路徑（`vendor/sync.mjs` 的 `closeWriteBack`），寫入口只剩變更紀錄；插件自我停用因此只在記憶體（已知限制，見 `docs/plugin-contract.md`） |
+| §3-1 第 5 條（#1416 PR 2） | dsh 的 Include 掛起檔案裡的每一列；我們給它一份 `only` 允許名單（`vendor/README.md` 第 8 條） | 產品需求超出 dsh | 出貨清單裡 20 列還是相容層的 `NexusPlugin`，沒有 `manifest` 匯出，不能由 Loader 掛。dsh 沒有相容層，所以沒有這個需要 |
+| §3-5 第 18 條（#1416 PR 2） | dsh 的設定允許 `__jsExpr`（Loader `interpolate` 會 `eval`） | 產品需求超出 dsh | 設定來自變更紀錄與 `--patch`，寫入口的使用者與部署端不該有「經設定檔執行任意程式」的路；讀清單時與推上樹之前各擋一次。延續 `cordis.yml` 檔頭對 `disabled` 的偏離標註（#104） |
 | §3-1 第 4 條第一段 | dsh 的 loop 是自寫的，第一段仍是 `createAgent` | 基座表達不出來（暫時） | 自寫 loop 的前提是 interrupt、resume、背景子代理續行不再依賴 LangGraph 狀態，那是 S2 的內容；第二段完成後這條偏離消失 |
 
 ## 六、排程

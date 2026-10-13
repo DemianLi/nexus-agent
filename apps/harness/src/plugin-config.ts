@@ -55,8 +55,10 @@ import { mkdir, rename } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
+import type { StructuredTool, StructuredToolInterface } from '@langchain/core/tools';
 import { NEXUS_CORE_VERSION, resolveEntriesPerEntry } from '@nexus/core';
-import type { PluginEntry } from '@nexus/core';
+import type { NexusPlugin, PluginEntry } from '@nexus/core';
+import { ManifestError, validateManifest } from '@nexus/sdk';
 
 import { resolveHarnessHome } from './harness-home.js';
 import { assertPluginCompatible, PluginCompatibilityError } from './plugin-compatibility.js';
@@ -70,6 +72,14 @@ import {
   withFileLock,
 } from './plugin-journal.js';
 import type { JournalActor, JournalBody, JournalRecord } from './plugin-journal.js';
+import { findJsExpr, isFunctionPluginModule, mountDetached } from './plugin-tree.js';
+import type {
+  FunctionPluginModule,
+  PluginTree,
+  TreeInput,
+  TreeRowInput,
+  TreeSnapshot,
+} from './plugin-tree.js';
 import { parse as parseYaml, stringify as stringifyYaml } from 'yaml';
 import { z } from 'zod';
 
@@ -735,6 +745,9 @@ export async function resolveEntryModule(entry: ConfigEntry): Promise<PluginEntr
       `條目 ${describeEntry(entry)} 載不起來：${String((error as Error).message)}`,
     );
   }
+  // **判別式只有一個**（`plugin-tree.ts` 的 `isFunctionPluginModule`）：有 `manifest` 具名匯出就是樹上的函式插件，
+  // 不是 `NexusPlugin`，不看 default。Include 的允許名單從走這條路的列算出來，兩邊用同一支所以不會漂移。
+  if (isFunctionPluginModule(module)) return bridgeEntry(entry, module);
   const exported = (module['default'] ?? module) as unknown;
   if (!isPluginShaped(exported)) {
     throw new PluginConfigError(
@@ -748,6 +761,99 @@ export async function resolveEntryModule(entry: ConfigEntry): Promise<PluginEntr
     ...(entry.disabled === undefined ? {} : { disabled: entry.disabled }),
     ...(entry.config === undefined ? {} : { config: entry.config }),
   };
+}
+
+/** 橋接外殼上掛的記號：這顆 `NexusPlugin` 是樹上某顆函式插件在相容層的代表。 */
+const BRIDGE = Symbol.for('nexus.plugin-bridge');
+
+interface BridgeMeta {
+  /** 函式插件的命名空間。 */
+  readonly module: FunctionPluginModule;
+}
+
+type BridgePlugin = NexusPlugin<unknown> & { readonly [BRIDGE]: BridgeMeta };
+
+function bridgeOf(plugin: PluginEntry['plugin']): BridgeMeta | undefined {
+  return (plugin as Partial<BridgePlugin>)[BRIDGE];
+}
+
+/**
+ * 這一列是不是樹上的函式插件在相容層的橋接列（#1416 PR 2）。
+ *
+ * 橋接列跟 `NexusPlugin` 長一樣、佔同一個 id 與位置，`Config` 是 manifest 的 `config`，所以**設定驗證、停用、id 補號、
+ * 快照、會話 header 都照舊走相容層那條路**。它的 `apply` 自己不掛任何東西——真正的 `apply` 在樹上跑了一次；這裡只把
+ * **登記者就是這一列**的工具折進這一條 thread 的 registry，排在它在清單上的位置（工具順序不變）。
+ *
+ * **過渡性質**：卡上寫「拿掉」，這裡留著，是因為清單上其餘的列還是 `NexusPlugin`，它們跟 echo 要排在同一份清單、同一個
+ * 順序裡（PM 決議 Q-A）。最後一顆搬出相容層時橋接連同整個相容層一起拿掉。
+ */
+export function isBridgeEntry(entry: PluginEntry): boolean {
+  return bridgeOf(entry.plugin) !== undefined;
+}
+
+function bridgeEntry(entry: ConfigEntry, module: FunctionPluginModule): PluginEntry {
+  const row = describeEntry(entry);
+  let manifest;
+  try {
+    manifest = validateManifest(module.manifest, entry.id ?? entry.name);
+  } catch (error) {
+    if (!(error instanceof ManifestError)) throw error;
+    throw new PluginConfigError(`條目 ${row} 的 manifest 不合格：${error.message}`);
+  }
+  if (typeof module.apply !== 'function') {
+    throw new PluginConfigError(`條目 ${row} 是函式插件（有 manifest）卻沒有具名匯出 apply`);
+  }
+  const plugin: BridgePlugin = {
+    name: typeof module.name === 'string' && module.name !== '' ? module.name : manifest.id,
+    Config: manifest.config,
+    apply() {
+      throw new Error(
+        `橋接列 ${row} 還沒綁定到樹：只有 loadPluginConfig 交出來的清單上的條目能組裝`,
+      );
+    },
+    [BRIDGE]: { module },
+  };
+  return {
+    plugin,
+    ...(entry.id === undefined ? {} : { id: entry.id }),
+    ...(entry.disabled === undefined ? {} : { disabled: entry.disabled }),
+    ...(entry.config === undefined ? {} : { config: entry.config }),
+  };
+}
+
+/** 登記進相容層 registry 的是 `StructuredTool` 類別；契約上的 `StructuredToolInterface` 在執行期就是它（`tool()` 的回傳）。 */
+function registerFolded(
+  registry: Parameters<NexusPlugin<unknown>['apply']>[0],
+  tools: readonly StructuredToolInterface[],
+): void {
+  for (const tool of tools) registry.tools.register(tool as StructuredTool);
+}
+
+/** 樹上這一列起來了：折進它登記的工具。 */
+function bindToTree(entry: PluginEntry, tools: readonly StructuredToolInterface[]): PluginEntry {
+  const plugin: BridgePlugin = {
+    ...(entry.plugin as BridgePlugin),
+    apply(registry) {
+      registerFolded(registry, tools);
+    },
+  };
+  return { ...entry, plugin };
+}
+
+/** 沒有樹的呼叫端（手搭清單的測試、基準任務）：組裝時單獨掛一次、取工具、立刻卸載。 */
+function bindDetached(entry: PluginEntry, id: string): PluginEntry {
+  const meta = bridgeOf(entry.plugin);
+  if (meta === undefined) return entry;
+  const plugin: BridgePlugin = {
+    ...(entry.plugin as BridgePlugin),
+    async apply(registry) {
+      registerFolded(
+        registry,
+        await mountDetached({ id, module: meta.module, config: entry.config }),
+      );
+    },
+  };
+  return { ...entry, plugin };
 }
 
 /**
@@ -838,13 +944,28 @@ export function composeEntries(sources: PluginConfigSources = {}): ConfigEntry[]
 export function composeEntriesWithReport(sources: PluginConfigSources = {}): {
   readonly entries: ConfigEntry[];
   readonly report: LayerReport;
+  /** 疊之前的出貨列與全部層攤平後的 patch：樹上的插件從這裡讀（#1416），不另外再讀一次檔。 */
+  readonly source: ComposeSource;
 } {
-  const { shipped, rows, layers, report } = readLayers(sources);
+  const { shipped, rows, rowOrigins, layers, report } = readLayers(sources);
   const patches = layers.flatMap((layer) => layer.patches);
   return {
     entries: validateEntries(applyEntryPatches(rows, patches, sources.warn), shipped),
     report,
+    source: { shipped, rows, rowOrigins, patches },
   };
+}
+
+/** {@link composeEntriesWithReport} 疊之前的原料。 */
+export interface ComposeSource {
+  /** 出貨 `cordis.yml` 的路徑。 */
+  readonly shipped: string;
+  /** 出貨列（出貨檔加 serve 專屬層），照順序。 */
+  readonly rows: readonly Record<string, unknown>[];
+  /** 每一列出貨列來自哪個檔，與 `rows` 同長同序。 */
+  readonly rowOrigins: readonly string[];
+  /** 各層攤平成一串、照套用順序的 patch。 */
+  readonly patches: readonly ConfigPatch[];
 }
 
 /**
@@ -1223,8 +1344,29 @@ export interface LoadedPluginConfig {
  */
 export async function loadPluginConfig(
   sources: PluginConfigSources = {},
+  options: LoadPluginConfigOptions = {},
 ): Promise<LoadedPluginConfig> {
-  const { entries, report } = composeEntriesWithReport(sources);
+  const { tree } = options;
+  // 有樹的話，「讀清單 → 推給樹 → 等收斂 → 取工具快照」是一段臨界區（`plugin-tree.ts`）：兩條 thread 同時組裝時，
+  // 各自拿到的工具跟自己讀到的清單相符。
+  if (tree !== undefined) return tree.run(() => loadPluginConfigOnce(sources, tree));
+  return loadPluginConfigOnce(sources, undefined);
+}
+
+/** {@link loadPluginConfig} 的選項。 */
+export interface LoadPluginConfigOptions {
+  /**
+   * 產品路徑的樹（`cordis-root.ts` 的 `root.tree`）：函式插件的工具從這棵長壽的樹來。省略就是**沒有樹的呼叫端**
+   * （手搭清單的測試、基準任務、驗證寫入用的疊檔）：函式插件的列在組裝時單獨掛一次，驗證寫入的疊檔路徑根本不組裝。
+   */
+  readonly tree?: PluginTree;
+}
+
+async function loadPluginConfigOnce(
+  sources: PluginConfigSources,
+  tree: PluginTree | undefined,
+): Promise<LoadedPluginConfig> {
+  const { entries, report, source } = composeEntriesWithReport(sources);
   const loaded: { readonly row: ConfigEntry; readonly entry: PluginEntry }[] = [];
   const dropped: StartupDrop[] = [];
   // `entries` 每一列解析後的 id：先放「宣告的 id 或模組名」，載進來的那幾列等載入器補完號再換成補過的那個。
@@ -1249,14 +1391,38 @@ export async function loadPluginConfig(
   }
   // 身分照載入器同一支算（補號、重複 id），訊息裡的 id 才跟組裝時對得上。
   const resolutions = resolveEntriesPerEntry(loaded.map(({ entry }) => entry));
+  // 樹上的函式插件（橋接列）：先把 id 補完、位置記下，才知道要推什麼給樹。
+  const bridged: TreeRowInput[] = [];
+  loaded.forEach(({ row, entry }, index) => {
+    const resolution = resolutions[index];
+    const position = loadedAt[index];
+    if (resolution === undefined) return;
+    if (position !== undefined) ids[position] = resolution.origin.id;
+    if (!isBridgeEntry(entry)) return;
+    // 樹上的設定會過 Loader 的 `interpolate`，`__jsExpr` 在那裡是 `eval`：進樹之前整份拒絕，寫入前驗證也走這一條。
+    const jsExpr = findJsExpr(entry.config, `${resolution.origin.id} 的 config`);
+    if (jsExpr !== undefined) {
+      throw new PluginConfigError(
+        `${jsExpr} 帶了 \`__jsExpr\`：樹上的設定不接受表達式（Loader 會把它 eval 掉，` +
+          '這裡刻意不接，同 cordis.yml 檔頭對 `disabled` 的偏離標註 #104）。',
+      );
+    }
+    bridged.push({
+      id: resolution.origin.id,
+      module: row.name,
+      // 設定驗不過的列相容層標成停用，樹上也不該去掛它。
+      disabled: resolution.disabled || resolution.configError !== undefined,
+      config: entry.config,
+    });
+  });
+  const snapshot: TreeSnapshot | undefined =
+    tree === undefined ? undefined : await tree.sync(treeInputOf(source, ids, bridged));
   const ignoredConfig: IgnoredConfig[] = [];
   const rows = new Map<PluginEntry, { readonly id: string; readonly module: string }>();
   const plugins = loaded.map(({ row, entry }, index): PluginEntry => {
     const resolution = resolutions[index];
     if (resolution === undefined) return entry;
     const { origin, configError } = resolution;
-    const position = loadedAt[index];
-    if (position !== undefined) ids[position] = origin.id;
     rows.set(entry, { id: origin.id, module: row.name });
     if (resolution.disabled) return entry;
     if (configError !== undefined) {
@@ -1274,9 +1440,83 @@ export async function loadPluginConfig(
     if (entry.plugin.Config === undefined && entry.config !== undefined) {
       ignoredConfig.push({ id: origin.id, module: row.name });
     }
-    return entry;
+    if (!isBridgeEntry(entry)) return entry;
+    // 橋接列：樹上起來了就折它登記的工具；沒起來就跟設定驗不過同一個待遇——標成停用、記進 `dropped`，
+    // 哪一步掉的取樹上的（FAILED／缺席是 `apply`，缺服務與契約不相容是 `requires`）。
+    if (snapshot === undefined) {
+      const bound = bindDetached(entry, origin.id);
+      rows.set(bound, { id: origin.id, module: row.name });
+      return bound;
+    }
+    const verdict = snapshot.verdict(origin.id);
+    if (verdict.kind === 'dropped') {
+      const off: PluginEntry = { ...entry, disabled: true };
+      rows.set(off, { id: origin.id, module: row.name });
+      dropped.push({
+        id: origin.id,
+        module: row.name,
+        stage: verdict.stage,
+        message: verdict.message,
+        entry: off,
+      });
+      return off;
+    }
+    const bound = bindToTree(entry, verdict.kind === 'active' ? verdict.tools : []);
+    rows.set(bound, { id: origin.id, module: row.name });
+    return bound;
   });
   return { plugins, dropped, ignoredConfig, rows, entries, ids, layers: report };
+}
+
+/**
+ * 這一份清單推給樹的是什麼。
+ *
+ * - **只推走橋接的那幾列的 patch**：指到其他列的 patch 對樹沒有意義，也不該讓它們的內容（例如一顆舊插件的 `config`）
+ *   過樹的 `__jsExpr` 掃描。目標 id 取自出貨檔那一層與 `insert` 進來的橋接列。
+ * - **插進來的列補上相容層解析後的 id**：Include 對沒有 id 的 `insert` 會補隨機 id，樹上那一列對不回相容層的列。
+ *   `applyEntryPatches` 把 `insert` 的列接在尾巴、照 patch 順序，所以第 k 個插進來的列就是 `entries[出貨列數 + k]`。
+ * - **出貨列沒寫 `config` 的補 `{}`**：Loader 對沒有 `config` 的列交 `undefined`，`strictObject` 收不下；相容層對沒寫的
+ *   視同 `{}`（`resolveEntries`），樹這一側也要一致。
+ * - **相容層標成停用的列，結尾補一條 `disabled: true`**：設定驗不過的列不該在樹上掛著。
+ */
+function treeInputOf(
+  source: ComposeSource,
+  ids: readonly string[],
+  bridged: readonly TreeRowInput[],
+): TreeInput {
+  const modules = new Set(bridged.map((row) => row.module));
+  const treeIds = new Set<string>();
+  const patches: Record<string, unknown>[] = [];
+  source.rows.forEach((row, index) => {
+    if (source.rowOrigins[index] !== source.shipped) return;
+    const id = row['id'];
+    const name = row['name'];
+    if (typeof id !== 'string' || typeof name !== 'string' || !modules.has(name)) return;
+    treeIds.add(id);
+    if (row['config'] === undefined) patches.push({ id, config: {} });
+  });
+  let inserted = 0;
+  for (const patch of source.patches) {
+    if (patch.insert !== undefined) {
+      const kept: Record<string, unknown>[] = [];
+      for (const row of patch.insert) {
+        const position = source.rows.length + inserted;
+        inserted += 1;
+        const name = row['name'];
+        const id = ids[position];
+        if (typeof name !== 'string' || !modules.has(name) || id === undefined) continue;
+        treeIds.add(id);
+        kept.push({ ...structuredClone(row), id, config: row['config'] ?? {} });
+      }
+      if (kept.length > 0) patches.push({ insert: kept });
+      continue;
+    }
+    if (patch.id !== undefined && treeIds.has(patch.id)) patches.push(structuredClone(patch));
+  }
+  for (const row of bridged) {
+    if (row.disabled && treeIds.has(row.id)) patches.push({ id: row.id, disabled: true });
+  }
+  return { shipped: source.shipped, patches, rows: bridged };
 }
 
 /**
@@ -1293,8 +1533,9 @@ export async function loadPluginConfig(
  */
 export async function loadDefaultPlugins(
   options: DefaultConfigOptions = {},
+  load: LoadPluginConfigOptions = {},
 ): Promise<LoadedPluginConfig> {
-  return loadPluginConfig(defaultSources(options));
+  return loadPluginConfig(defaultSources(options), load);
 }
 
 /** {@link loadDefaultPlugins} 與 {@link renderLayeredConfigDump} 共用的那幾格。 */

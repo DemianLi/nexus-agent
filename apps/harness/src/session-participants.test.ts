@@ -11,7 +11,7 @@
 
 import { PassThrough } from 'node:stream';
 
-import { createEchoPlugin } from '@nexus/plugin-echo';
+import { createEchoPlugin } from './echo.fixture.js';
 import {
   createGoalPlugin,
   GOAL_CLEARED_MESSAGE,

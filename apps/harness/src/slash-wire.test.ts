@@ -21,7 +21,7 @@
 
 import type { PluginEntry, SessionLog } from '@nexus/core';
 import { createCommandsInvariantPlugin } from '@nexus/plugin-commands/invariant';
-import { createEchoPlugin } from '@nexus/plugin-echo';
+import { createEchoPlugin } from './echo.fixture.js';
 import {
   PLAN_ALREADY_ACTIVE_MESSAGE,
   PLAN_COMMAND_NAME,

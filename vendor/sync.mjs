@@ -2,7 +2,7 @@
 // 從上游 cordiverse/cordis 的 clone 重建 vendor 的原始碼：複製 → 套 patches/ 裡的上游修補 → 機械改寫。
 //
 // 用法：
-//   node vendor/sync.mjs <上游 clone>           蓋過 vendor/cordis/{src,tests} 與 vendor/loader/src
+//   node vendor/sync.mjs <上游 clone>           蓋過 vendor/cordis/{src,tests}、vendor/loader/src 與 vendor/include/src
 //   node vendor/sync.mjs <上游 clone> --check   重建到暫存目錄，與 vendor 逐檔比對；有差異就印出並以 1 退出
 //
 // 上游 clone 要停在 README 清單記的 commit。步驟與每一條本地修改的對應見 vendor/README.md。
@@ -21,6 +21,7 @@ const COPIES = [
   ['cordis/src', 'packages/core/src'],
   ['cordis/tests', 'packages/core/tests'],
   ['loader/src', 'packages/loader/src'],
+  ['include/src', 'packages/include/src'],
 ];
 
 const [upstream, flag] = process.argv.slice(2);
@@ -62,6 +63,128 @@ function rescope(source) {
   return out;
 }
 
+/**
+ * 本地修改第 7 條（include）：關掉寫回，拿掉 HMR 監看。每一處都要在上游原樣裡剛好命中一次，否則同步時直接失敗，
+ * 不靜默漏改。理由與涵蓋的測試見 vendor/README.md。
+ */
+function closeWriteBack(source) {
+  const once = (text, from, to) => {
+    const parts = text.split(from);
+    if (parts.length !== 2) throw new Error(`include 本地修改沒命中（${parts.length - 1} 處）：${from.slice(0, 60)}`);
+    return parts.join(to);
+  };
+  let out = source;
+  // HMR 不 vendor（決議 §3-1 第 1 條）：型別宣告與檔案監看都拿掉；樹只由 `patches` 驅動。
+  out = once(out, "import type {} from '@cordisjs/plugin-hmr'\n", '');
+  out = once(
+    out,
+    `    ctx.inject(['hmr'], (ctx) => {
+      ctx.hmr.watch(this.filename, () => this.refresh())
+    })
+`,
+    '',
+  );
+  // 寫回路徑 (b)：缺檔時上游把 `initial` 寫成檔。這裡缺檔就是錯，不建檔。
+  out = once(
+    out,
+    `      if (!this.config.initial) {
+        throw new Error(\`config file not found: \${this.filename}\`)
+      }
+      const initial = structuredClone(this.config.initial) as EntryOptions[]
+      ensureIds(initial, id => !!this.store[id])
+      await this._writeText(this.dump(initial))
+      await this._read()
+`,
+    `      throw new Error(\`config file not found: \${this.filename}\`)
+`,
+  );
+  // 寫回路徑 (a)、(c)：樹側的變更（含 Loader 對插件自我停用的 case 7）不進 journal，也就不會寫檔、不會路由回 patches。
+  out = once(
+    out,
+    `    const parent = change.group === this.root ? null : change.group.ctx.fiber.entry!.options.id
+    record(this.journal, change, parent)
+    this.dirtyWrite = true
+    this._drain()
+`,
+    '',
+  );
+  // 縱深：就算 `dirtyWrite` 因別的原因被設起來，迴圈也不呼叫 `_write`（`_write` 留著沒人叫）。
+  out = once(
+    out,
+    `        try {
+          await this._write()
+        } catch (error) {
+          this.ctx.logger.error(error)
+        }
+`,
+    '',
+  );
+  // 允許名單：疊完 patch 之後才過濾（先疊、後濾——patch 指到允許名單外的列照樣命中，不會多出「找不到」的警告）。
+  // `only` 是模組 specifier 的清單；沒給就不濾，等同上游。
+  out = once(
+    out,
+    `    path: string
+    initial?: any[]
+`,
+    `    path: string
+    initial?: any[]
+    /** nexus 本地修改：只掛 \`name\` 在這份清單裡的列（模組 specifier），疊完 patch 之後才濾。 */
+    only?: string[]
+`,
+  );
+  out = once(
+    out,
+    `    const tree = applyPatches(this.cache.data, this.config.patches, this.warn)
+    this._pendingTree = applyJournal(tree, this.journal, undefined, this.warn)
+`,
+    `    const patched = applyPatches(this.cache.data, this.config.patches, this.warn)
+    const only = this.config.only
+    const tree = only === undefined ? patched : patched.filter((options) => only.includes(options.name))
+    this._pendingTree = applyJournal(tree, this.journal, undefined, this.warn)
+`,
+  );
+  return out;
+}
+
+/**
+ * 本地修改第 9 條（loader）：宿主可以給一支解析函式，Loader 就不在安裝樹裡寫 `.cordis/resolve.mjs` 輔助檔。
+ * 上游的 `createResolve` 會在 `baseUrl` 所屬專案根（這裡是 `apps/harness`）建 `.cordis/{.gitignore,resolve.mjs}`，
+ * 唯讀的安裝樹或別的帳號建過時，寫不進去只能退回原生 `import()`；產品路徑不該依賴安裝樹可寫。
+ * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 vendor/README.md。
+ */
+function hostResolver(source, file) {
+  const once = (text, from, to) => {
+    const parts = text.split(from);
+    if (parts.length !== 2) throw new Error(`loader 本地修改沒命中（${file}，${parts.length - 1} 處）：${from.slice(0, 60)}`);
+    return parts.join(to);
+  };
+  if (file === 'index.ts') {
+    return once(
+      source,
+      `  public internal = ModuleLoader.fromInternal()
+`,
+      `  public internal = ModuleLoader.fromInternal()
+
+  /**
+   * nexus 本地修改：宿主給的裸 specifier 解析函式。有就用它，不走 \`createResolve\`（不在安裝樹裡寫 \`.cordis/\`）。
+   * 沒給就照上游。
+   */
+  public resolver?: (specifier: string) => string
+`,
+    );
+  }
+  if (file === 'config/tree.ts') {
+    return once(
+      source,
+      `        const resolve = await createResolve(this.ctx.baseUrl)
+`,
+      `        const resolve = this.ctx.loader.resolver ?? await createResolve(this.ctx.baseUrl)
+`,
+    );
+  }
+  return source;
+}
+
 const work = mkdtempSync(join(tmpdir(), 'vendor-sync-'));
 try {
   // 1. 上游原樣。
@@ -84,7 +207,14 @@ try {
   rmSync(join(out, 'cordis/tests/tsconfig.json'));
   rewrite(join(out, 'cordis/src'), explicitExtensions);
   rewrite(join(out, 'loader/src'), rescope);
+  rewrite(join(out, 'include/src'), (source) => rescope(explicitExtensions(source)));
+  rewrite(join(out, 'include/src'), (source) => (source.includes('class Include') ? closeWriteBack(source) : source));
   rewrite(join(out, 'cordis/tests'), rescope);
+  // 本地修改第 9 條：兩個檔各命中一次。
+  for (const file of ['index.ts', 'config/tree.ts']) {
+    const path = join(out, 'loader/src', file);
+    writeFileSync(path, hostResolver(readFileSync(path, 'utf8'), file));
+  }
 
   if (flag === '--check') {
     const rel = (root) => new Set(COPIES.flatMap(([to]) => (existsSync(join(root, to)) ? walk(join(root, to)) : []).map((path) => relative(root, path))));

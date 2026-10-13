@@ -5,15 +5,19 @@
  *
  * dsh `packages/boot/app-boot/src/index.ts:975-1010`：`new Context()`、根上 provide 宿主的值（dsh 的 `dshHomePath`，
  * launcher 的 `cmdlineArgs`／`appExit`）、`await ctx.plugin(Loader)`、掛列、`loader.await()`、`auditStartupEntries`。
- * 這裡同一個順序。宿主的值是 {@link COMPAT_HOST_SERVICE}：這一次啟動的清單與解析基準，相容層 inject 它。樹上有兩列：
+ * 這裡同一個順序。宿主的值是 {@link COMPAT_HOST_SERVICE}：這一次啟動的清單與解析基準，相容層 inject 它。樹上有這幾列：
  *
  * | 列 id | 是什麼 | dsh 對應 |
  * |---|---|---|
  * | `nexus-compat` | 相容層：`assembly-root.ts` 的整個組裝流程包成一顆插件，提供服務 {@link ASSEMBLY_SERVICE}「組一個 agent」 | `agent-loop`（提供 `agents`） |
  * | `cli`／`serve` | 入口那一列，`inject: [ASSEMBLY_SERVICE]` | `headless-runner`／`webserver` |
+ * | `tools` | 行程級的工具登記處（`@nexus/tools/provider`，契約服務；#1416 PR 2） | `tools` 服務的提供者 |
+ * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`、疊 patch、把函式插件掛起來（#1416 PR 2，`plugin-tree.ts`） | `include` |
+ * | `include:<id>` | Include 底下的函式插件，今天只有 `include:echo` | 各插件 |
  *
- * 兩列都必掛（`startup-audit.ts` 的 {@link auditTreeEntries}）。入口的程式碼經入口那一列的 inject 拿到服務，所有組 agent 的地方
- * 都走它。
+ * `nexus-compat`、入口、`tools`、`include` 都必掛（`startup-audit.ts` 的 {@link auditTreeEntries}）；`include:<id>` 不在名單上，
+ * 它掉了是清單那一列掉了，走 `dropped`。入口的程式碼經入口那一列的 inject 拿到服務，所有組 agent 的地方都走它。`tools` 與
+ * `include` 是**懶建**的（`PluginTree.context()` 第一次被叫到才建），`include` 要等第一次讀清單才有。
  *
  * **收尾**：相容層組出來的每一個 agent 都用 `ctx.effect` 登記收尾，登記完才交出去；agent 的 `dispose` 就是那筆 effect 的
  * 處置函式，所以正常收掉時那筆登記一起撤下，不會一條 thread 留一筆。根卸載時還沒收的 agent 由相容層的 fiber 收掉。這是 dsh
@@ -22,12 +26,20 @@
  *
  * ## 偏離登記
  *
- * - **清單由變更紀錄導出（#1412），但清單上的列不在 Loader 的樹上**：dsh 的整棵樹本來就由一份 patch 清單導出
- *   （`packages/boot/app-boot/src/index.ts:291`，`entry.update({ config: { ...includeConfig, patches } })`），所以「Cordis 不管
- *   插件」不是理由。我們的清單由 `loadDefaultPlugins` 疊出來——第二層是變更紀錄折出來的 patch（`plugin-journal.ts`、
- *   `plugin-config.ts`），經 {@link COMPAT_HOST_SERVICE} 交給相容層。**列不上樹的理由是插件還在相容層**：上樹跟著
- *   「逐顆搬出相容層」一起做（地圖終點第 1 項），現在放上去只會在相容層底下多一層轉接，而且 Loader 對每列 `config` 跑
- *   `interpolate` 深複製，清單項目的身分留不住（見下）。舊插件一行不改。
+ * - **清單由變更紀錄導出（#1412），清單上只有函式插件的列在 Loader 的樹上（#1416 PR 2）**：dsh 的整棵樹本來就由一份 patch
+ *   清單導出（`packages/boot/app-boot/src/index.ts:291`，`entry.update({ config: { ...includeConfig, patches } })`），所以
+ *   「Cordis 不管插件」不是理由。我們的清單由 `loadDefaultPlugins` 疊出來——第二層是變更紀錄折出來的 patch
+ *   （`plugin-journal.ts`、`plugin-config.ts`），經 {@link COMPAT_HOST_SERVICE} 交給相容層。**其餘 20 列不上樹的理由是插件
+ *   還在相容層**：上樹跟著「逐顆搬出相容層」一起做（地圖終點第 1 項），現在放上去只會在相容層底下多一層轉接，而且 Loader
+ *   對每列 `config` 跑 `interpolate` 深複製，清單項目的身分留不住（見下）。舊插件一行不改。**函式插件（今天只有 echo）**
+ *   經 `plugin-tree.ts` 的 Include 上樹：patch 原樣推給 Include，相容層那一側仍然疊一份、驗一份、當清單的權威，兩邊疊出來
+ *   對不上那一列就算掉了。
+ * - **Include 的寫回全關（#1416 PR 2，`vendor/README.md` 第 7 條）**：上游 Include 會把樹側的變更寫回 `cordis.yml`，那是
+ *   第二個寫入口，會繞過變更紀錄。vendor 時關掉三條寫回路徑，寫入口只有變更紀錄一個。這是對 dsh 做法的偏離，理由是我們的
+ *   出貨檔是 repo 裡的檔、使用者的改動要留稽核軌跡。
+ * - **橋接列（過渡）**：函式插件在相容層清單上有一個外殼（同 id、同位置），因為清單上其餘的列還是 `NexusPlugin`，要排在同
+ *   一份清單、同一個順序裡。卡上寫「拿掉」，這是對字面的偏離；最後一顆搬出相容層時橋接連同相容層一起拿掉
+ *   （`docs/plugin-contract.md` 的「接進清單」）。
  * - **入口的工作不在入口那一列裡**：dsh 的 `headless-runner` 在 `apply` 裡 `void run(...)`，跑在那一列的 fiber 底下。
  *   我們的入口那一列只把服務交回 `runCli`／`runServe`，對話迴圈與 HTTP 伺服器照舊跑在呼叫端的流程裡，理由是驗收 C：
  *   入口一路以來的錯誤（`StartupError`、旗標矛盾、續接失敗）要在同一個時刻、以同一個類別與同一句話拋給呼叫端。搬進
@@ -39,13 +51,13 @@
  * @module
  */
 
-import { Context } from '@nexus/cordis';
-import Loader from '@nexus/cordis-plugin-loader';
+import type { Context } from '@nexus/cordis';
 import type { EntryOptions } from '@nexus/cordis-plugin-loader';
 import type { PluginEntry } from '@nexus/core';
 
 import { createCliAgent } from './assembly-root.js';
 import type { CreateCliAgentSession } from './assembly-root.js';
+import { PluginTree } from './plugin-tree.js';
 import { auditTreeEntries } from './startup-audit.js';
 
 /** 相容層提供的服務名。 */
@@ -144,6 +156,11 @@ function surfacePlugin(surface: Surface, handoff: (assembly: NexusAssembly) => v
 /** 入口持有的根。 */
 export interface CordisRoot {
   /**
+   * 樹上的函式插件那一面（#1416 PR 2）：入口把它交給 `loadDefaultPlugins`，清單上的函式插件從這棵長壽的樹來。
+   * 根在第一次用到時才建（讀清單早於 {@link boot}），所以讀清單那一步拋的錯照舊發生在同一個時刻。
+   */
+  readonly tree: PluginTree;
+  /**
    * 建根、掛相容層與入口那一列、等樹結算、跑啟動結算。起不來就先卸載再拋。
    *
    * @returns 相容層的服務，經入口那一列的 inject 拿到的那一份。
@@ -156,21 +173,20 @@ export interface CordisRoot {
 
 /** 一個還沒建的根。入口先拿到它，失敗與關掉的收尾才有東西可收，照 dsh launcher 的 `app.current`。 */
 export function createCordisRoot(): CordisRoot {
-  let current: Context | undefined;
+  const tree = new PluginTree();
+  let booted = false;
   const dispose = async (): Promise<void> => {
-    const root = current;
-    current = undefined;
-    await root?.fiber.dispose();
+    await tree.dispose();
   };
   return {
+    tree,
     async boot(surface, config) {
-      if (current !== undefined) throw new Error('Cordis 根已經建過了');
-      const root = new Context();
-      current = root;
+      if (booted) throw new Error('Cordis 根已經建過了');
+      booted = true;
       let assembly: NexusAssembly | undefined;
       try {
+        const root: Context = await tree.context();
         root.provide(COMPAT_HOST_SERVICE, config);
-        await root.plugin(Loader);
         Object.assign(root.loader.builtins, {
           [COMPAT_ENTRY_ID]: compatLayer,
           [surface]: surfacePlugin(surface, (provided) => {

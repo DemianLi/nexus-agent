@@ -104,6 +104,14 @@ describe('validateManifest（驗收 A）', () => {
     expect(error.message).toContain('列 row-coexist');
     expect(error.message).toContain("'coexist' 還不放行");
   });
+
+  it("code: 'coexist' 與別的欄位問題一起報，不是修一輪再撞一輪", () => {
+    const error = rejection({
+      ...widgetManifest({ reload: { code: 'coexist', config: 'next-thread' } }),
+      reloadd: 'x',
+    });
+    expect(error.invalid.map((issue) => issue.field).sort()).toEqual(['reload.code', 'reloadd']);
+  });
 });
 
 describe('effectiveReload：取兩邊較嚴的那個', () => {

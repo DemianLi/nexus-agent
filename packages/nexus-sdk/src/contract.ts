@@ -5,7 +5,8 @@
  * 原型在 `apps/harness/src/measure/cordis-1386/contract.ts`，這裡是它搬進 SDK 的正式版）：
  *
  * - 消費者宣告範圍的地方有兩個——插件自己的 `inject: { tools: { range } }`（{@link injectOf} 組的就是這個），或
- *   Loader 列上的 `intercept`。兩者都落進消費者 ctx 的 `Context.intercept`。
+ *   Loader 列上的 `intercept`。兩者都落進消費者 ctx 的 `Context.intercept`。**權威是插件自己的 `inject`**（實測，
+ *   `contract.test.ts`）：列的 `intercept` 只在插件沒宣告範圍時才算，蓋不掉插件自己宣告的；列的 `inject` 對範圍沒有作用。
  * - 提供者必須是 `Service`：它的 `[Service.check]` 由**消費者的** fiber 呼叫，`this` 是追蹤到消費者 ctx 的代理，
  *   所以讀得到消費者的範圍與列 id。plain object 提供者的 `check` 讀不到，不相容也會放行（探針 ⑤ 的負對照）——
  *   所以契約服務一律繼承 {@link ContractService}。

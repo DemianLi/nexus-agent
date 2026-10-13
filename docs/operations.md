@@ -956,6 +956,13 @@ pnpm --filter @nexus/harness run plugin -- config reset thread-title
   那是環境變數，不是身分認證；**要能追責，靠主機本身的存取控制**（誰能登入、誰能 `sudo`）。
 - **加一列原本不在清單裡的 plugin（`insert`）只能用 `--patch`**，寫入口不做這件事。
 - **舊插件一行不改**：清單上的列仍在相容層裡掛，變更紀錄只是清單的來源。
+- **函式插件（今天只有 `echo`，[#1416](https://github.com/DemianLi/nexus-agent/issues/1416)）怎麼改都一樣**：停用、啟用、換設定
+  照同一個寫入口與同一份變更紀錄，操作者看不出差別。差別只在內部：這一類的列在 Cordis 的樹上，寫入口寫了紀錄之後，
+  下一條新對話讀清單時把折出來的 patch 推給樹，樹上那一列卸載或重掛。**不會有任何檔被這條路寫**（`cordis.yml` 與
+  home 底下的檔，位元組都不變）；開著的對話手上的工具照舊能叫，只有新對話看到新的。
+  兩個已知限制：（1）**`cordis.serve.yml` 那一層不經樹**——放在那一層的函式插件掛不上，啟動日誌會指名那一列；今天那一層沒有。
+  （2）**插件自己停用自己只在記憶體**，不進變更紀錄也不寫檔，下一條新對話會被重新掛上、再停用一次，所以這一列每條新對話的清單讀取裡
+  都是「沒掛上」。要不要把它也寫進紀錄還沒定。
 
 **紀錄檔的格式**：JSON Lines，一行一筆，`{"v":1,"seq":N,"at":"<ISO>","actor":{…},"op":"disable|enable|config-set|config-reset|patch|rejected|failed",…}`。
 `seq` 從 1 連續遞增（`rejected`、`failed` 也佔序號）。`config-set` 與 `config-reset` 帶 `before`／`after`（**明文**，連同裡面可能有的秘密，所以檔案是 `0600`、

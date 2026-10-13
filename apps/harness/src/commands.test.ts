@@ -13,7 +13,7 @@ import { describe, expect, it } from 'vitest';
 
 import { SessionLog } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 
 import { createNexusAgent } from './agent-factory.js';
 import { runRepl } from './cli.js';
