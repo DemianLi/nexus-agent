@@ -193,6 +193,15 @@ describe('折疊：一列一條覆蓋項，照 dsh', () => {
     expect(patches).toHaveLength(2);
   });
 
+  it('name 是空字串的覆蓋項：折疊與 journalOverrideOf 同一個答案——都不當成這一列的（不是「沒寫」）', () => {
+    const records: JournalBody[] = [
+      { op: 'patch', patch: { id: 'todo', name: '', config: { a: 1 } } },
+      { op: 'config-set', id: 'todo', name: NAME, before: null, after: { b: 2 } },
+    ];
+    expect(foldJournal(records)).toHaveLength(2);
+    expect(journalOverrideOf(records, 'todo', NAME)).toEqual({ config: { b: 2 } });
+  });
+
   it('不改輸入', () => {
     const body: JournalBody = { op: 'patch', patch: { id: 'a', config: { x: { y: 1 } } } };
     const before = JSON.stringify(body);

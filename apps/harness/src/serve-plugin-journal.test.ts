@@ -115,6 +115,10 @@ describe('第一次啟動', () => {
     expect(lines.filter((line) => /變更紀錄|遷進|覆蓋層|cordis\.patch/u.test(line))).toEqual([]);
     // 空的紀錄檔是界線，不是一層：疊出來的跟只有出貨層的一個字不差。
     expect(readJournalText(dir)).toBe('');
+    // 快照也沒有多出任何東西：`layers` 在沒有東西可講的時候整個不出現。
+    expect(
+      JSON.parse(readFileSync(join(dir, PLUGIN_SNAPSHOT_FILE_NAME), 'utf8')),
+    ).not.toHaveProperty('layers');
     expect(renderLayeredConfigDump({ serve: true, env })).toBe(
       renderShippedConfigDump({ serve: true }),
     );

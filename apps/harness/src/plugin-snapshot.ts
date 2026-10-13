@@ -29,7 +29,8 @@
  * ## 「已儲存」含變更紀錄（#1412）
  *
  * 「已儲存」就是這一刻 `loadDefaultPlugins` 疊出來的那一份，而它的第二層是變更紀錄折出來的（`plugin-journal.ts`），
- * 所以寫入口追加一筆之後，下一次重讀的快照自然反映它，不另算一套。另外多兩樣、**同樣不帶設定值**：
+ * 所以寫入口追加一筆之後，下一次重讀的快照自然反映它，不另算一套。另外多兩樣、**同樣不帶設定值**；**兩樣都在沒東西可講
+ * 的時候整個不出現**（紀錄是空的或不在、沒有舊檔、沒有 `--patch`），沒用到這張卡的機器上快照與以前逐位元組相同：
  *
  * - `layers.journal`：紀錄檔路徑、幾筆、最後序號；舊的 `cordis.patch.yml` 在不在（`ignoredLegacyPatch`：紀錄在了、這個檔
  *   看到了但沒讀）；`pendingMigration`：紀錄檔還不在、舊檔照舊被讀，下一次啟動才遷。
@@ -212,7 +213,8 @@ export function buildPluginSnapshot(input: {
       sync,
     };
   });
-  const layers = input.saved.layers;
+  // **沒什麼好報的就不帶 `layers`**（驗收 H）：沒有紀錄、沒有舊檔、沒有 `--patch` 的機器上，快照跟加這一層之前逐位元組相同。
+  const layers = reportable(input.saved.layers);
   const covered = new Set(layers?.overlays.flatMap((overlay) => overlay.rows) ?? []);
   const marked = rows.map((row) =>
     covered.has(row.id) ? { ...row, unaudited: true as const } : row,
@@ -226,6 +228,19 @@ export function buildPluginSnapshot(input: {
     rows: marked,
     ...(layers !== undefined && { layers }),
   };
+}
+
+/** 各層報告裡有東西可講才回它，否則 `undefined`：紀錄是空的（或不在）、沒有舊檔、沒有 `--patch` 就是「沒有」。 */
+function reportable(layers: LayerReport | undefined): LayerReport | undefined {
+  if (layers === undefined) return undefined;
+  const journal = layers.journal;
+  const quiet =
+    layers.overlays.length === 0 &&
+    (journal === undefined ||
+      (journal.records === 0 &&
+        !journal.pendingMigration &&
+        journal.ignoredLegacyPatch === undefined));
+  return quiet ? undefined : layers;
 }
 
 function sideOf(row: SideRow | undefined): PluginSnapshotSide {

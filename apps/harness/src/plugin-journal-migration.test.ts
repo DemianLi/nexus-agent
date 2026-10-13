@@ -29,7 +29,7 @@ import {
   USER_PATCH_FILENAME,
 } from './plugin-config.js';
 import { readJournal } from './plugin-journal.js';
-import { journalPathOf } from './plugin-journal.fixture.js';
+import { journalPathOf, writeJournalText } from './plugin-journal.fixture.js';
 
 const temporary: string[] = [];
 
@@ -69,6 +69,20 @@ function probeModule(dir: string): void {
 }
 
 describe('第一次啟動遷移', () => {
+  it('紀錄裡的 patch 帶 name: ""：讀端拋、指名那一列（空字串不是「沒寫斷言」）', async () => {
+    const { dir, env } = home();
+    const line = JSON.stringify({
+      v: 1,
+      seq: 1,
+      at: '2026-10-13T00:00:00.000Z',
+      actor: { kind: 'migration', source: join(dir, USER_PATCH_FILENAME), sha256: 'a'.repeat(64) },
+      op: 'patch',
+      patch: { id: 'todo', name: '', disabled: true },
+    });
+    writeJournalText(dir, `${line}\n`);
+    await expect(loadDefaultPlugins({ env })).rejects.toBeInstanceOf(PluginConfigError);
+  });
+
   it('createWhenAbsent: false（一次性 CLI）：沒有舊檔就什麼都不寫，連 home 目錄都不建；有舊檔照遷', async () => {
     const { dir, env } = home();
     const missing = join(dir, 'not-yet');

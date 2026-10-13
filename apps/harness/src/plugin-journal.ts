@@ -243,10 +243,22 @@ function isOverrideOf(patch: Record<string, unknown>, id: string): boolean {
 }
 
 /**
+ * 這條覆蓋項的 `name` 斷言跟這一列對得上嗎：沒寫就是沒有斷言，寫了就要相等。**折疊與 {@link journalOverrideOf} 共用這一個
+ * 函式**，不然「哪一條是這一列的覆蓋項」會有兩套答案。
+ *
+ * 空字串**不**當成沒寫：`patchSchema` 的 `name` 是 `min(1)`（`plugin-config.ts`），含 `name: ''` 的覆蓋項過不了那一關，
+ * 讀端讀到會拋、指名那一列，所以到不了這裡之後的任何一步。dsh 的 `!expectedName`（`plugin-manager/src/patch.ts:34-35`）
+ * 把空字串也算沒斷言，但它的 patch 檔沒有這一關；我們的檔有，單獨留一支空字串的分支只會讓兩邊各說各話。
+ */
+function nameAssertionMatches(patch: Record<string, unknown>, name: string): boolean {
+  return patch['name'] === undefined || patch['name'] === name;
+}
+
+/**
  * 把紀錄折成 patch 清單，**一列一條覆蓋項**（照 dsh）：
  *
  * - 開關：改**最後一條**相符的覆蓋項的 `disabled`，沒有就追加（`packages/boot/plugin-manager/src/patch.ts:14-43`，相符＝同 id、
- *   不是 `insert`、`name` 沒寫或等於這一列的）。
+ *   不是 `insert`、`name` 沒寫或等於這一列的；{@link nameAssertionMatches}）。
  * - 設定：改同一條的 `config`，沒有就追加 `{ id, name, config }`（`packages/boot/config-editor/src/index.ts:119-135`）。
  * - 恢復成繼承值：拿掉**那一列所有**覆蓋項的 `config`，只剩 `id`／`name` 的整條拿掉（`:120-129`）。**不是把出貨值抄一份。**
  * - 遷移來的 `patch` 原樣接上，保留它在清單裡的位置（`insert` 之後的 patch 才指得到插進來的列）。
@@ -259,11 +271,7 @@ function isOverrideOf(patch: Record<string, unknown>, id: string): boolean {
 export function foldJournal(records: readonly JournalBody[]): Record<string, unknown>[] {
   const patches: Record<string, unknown>[] = [];
   const lastOverride = (id: string, name: string): Record<string, unknown> | undefined =>
-    patches.findLast(
-      (patch) =>
-        isOverrideOf(patch, id) &&
-        (patch['name'] === undefined || patch['name'] === '' || patch['name'] === name),
-    );
+    patches.findLast((patch) => isOverrideOf(patch, id) && nameAssertionMatches(patch, name));
   for (const record of records) {
     switch (record.op) {
       case 'patch':
@@ -312,9 +320,7 @@ export function journalOverrideOf(
   name: string,
 ): { readonly disabled?: boolean; readonly config?: Record<string, unknown> } | undefined {
   const patch = foldJournal(records).findLast(
-    (candidate) =>
-      isOverrideOf(candidate, id) &&
-      (candidate['name'] === undefined || candidate['name'] === name),
+    (candidate) => isOverrideOf(candidate, id) && nameAssertionMatches(candidate, name),
   );
   if (patch === undefined) return undefined;
   const disabled = patch['disabled'];
