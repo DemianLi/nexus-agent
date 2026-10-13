@@ -3,19 +3,12 @@ import { readFileSync } from 'node:fs';
 import { tool } from '@langchain/core/tools';
 import type { StructuredToolInterface } from '@langchain/core/tools';
 import type { Context } from '@nexus/cordis';
-import {
-  ContractService,
-  checkConformance,
-  defineManifest,
-  injectOf,
-  need,
-  service,
-} from '@nexus/sdk';
+import { checkConformance, defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
 import { TOOLS_CONTRACT_VERSION, toolsToken } from './index.js';
-import type { ToolRegistry } from './index.js';
+import { createToolsProvider } from './provider.js';
 
 const echoTool = (name: string): StructuredToolInterface =>
   tool(({ message }) => message, {
@@ -23,32 +16,6 @@ const echoTool = (name: string): StructuredToolInterface =>
     description: '測試用',
     schema: z.object({ message: z.string() }),
   });
-
-/** 測試專用的提供者：真正的提供者在 #1416 PR 2。這裡只驗定義套件的接縫形狀。 */
-function createProvider() {
-  const items: StructuredToolInterface[] = [];
-  class TestRegistry extends ContractService<ToolRegistry> implements ToolRegistry {
-    constructor(ctx: Context) {
-      super(ctx, toolsToken);
-    }
-    register(registered: StructuredToolInterface): () => void {
-      return this.ctx.effect(() => {
-        if (items.some((item) => item.name === registered.name)) {
-          throw new Error(`重名：${registered.name}`);
-        }
-        items.push(registered);
-        return () => {
-          const index = items.indexOf(registered);
-          if (index >= 0) items.splice(index, 1);
-        };
-      }, 'tools.register()');
-    }
-    list(): readonly StructuredToolInterface[] {
-      return [...items];
-    }
-  }
-  return { TestRegistry, items };
-}
 
 const config = z.strictObject({ name: z.string().default('probe_tool') });
 
@@ -79,17 +46,17 @@ describe('@nexus/tools 的定義', () => {
   });
 
   it('一致性套件跑在 tools 接縫上：載入→卸載後登記處回到空的、缺件指名', async () => {
-    let latest = createProvider();
+    let latest = createToolsProvider();
     const failures = await checkConformance({
       row: 'row-tools-consumer',
       module: consumer,
       providers: {
         tools: () => {
-          latest = createProvider();
-          return latest.TestRegistry;
+          latest = createToolsProvider();
+          return latest.Provider;
         },
       },
-      residue: () => latest.items.length,
+      residue: () => latest.entries().length,
     });
     expect(failures).toEqual([]);
   });

@@ -6,6 +6,7 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./provider": "./src/provider.ts",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },

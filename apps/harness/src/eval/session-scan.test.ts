@@ -21,7 +21,7 @@ import {
   SESSION_LOG_FORMAT_VERSION,
 } from '@nexus/core';
 import type { PluginEntry, RepeatReminderSettings, SessionEvent } from '@nexus/core';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from '../echo.fixture.js';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from '../agent-factory.js';

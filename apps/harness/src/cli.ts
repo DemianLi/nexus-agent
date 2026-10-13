@@ -938,10 +938,14 @@ async function runLaunched(
   });
   const preparedLine = describePrepareJournal(prepared);
   if (preparedLine !== undefined) printer.error(preparedLine);
-  const loaded = await loadDefaultPlugins({
-    env: options.env ?? process.env,
-    ...(invocation.patches !== undefined && { patches: invocation.patches }),
-  });
+  // **函式插件的工具從 Cordis 樹來**（#1416）：`root.tree` 在這一刻才建根，讀清單與推給樹是同一段臨界區。
+  const loaded = await loadDefaultPlugins(
+    {
+      env: options.env ?? process.env,
+      ...(invocation.patches !== undefined && { patches: invocation.patches }),
+    },
+    { tree: root.tree },
+  );
   // **掉了哪幾列在這裡判第一次**（#751）：模組載不進來、設定驗不過的列已經標成沒掛；必掛的掉了就在這裡起不來，
   // 早於下面任何一個 `startupSetting`，也早於建模型（`--live` 時 `live-model` 那一列掉了不退回預設值）。
   // 可少掛的掉了先不印，等組裝那一次（下面 `createCliAgent`）補完再合成一段。

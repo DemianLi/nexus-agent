@@ -68,6 +68,7 @@
 
 import type Loader from '@nexus/cordis-plugin-loader';
 import type { NexusPlugin, PluginEntry, PluginWarning } from '@nexus/core';
+import { FIBER_STATE, missingServices } from '@nexus/sdk';
 
 import type { AssemblyDrop, AssemblyDropError } from './agent-factory.js';
 import { PluginConfigError } from './plugin-config.js';
@@ -183,12 +184,15 @@ export const REQUIRED_TREE_ENTRY_IDS: ReadonlySet<string> = new Set([
   'nexus-compat',
   'cli',
   'serve',
+  // 樹上的工具登記處與 Include（#1416）：它們起不來，函式插件沒有地方掛，整個起不來。
+  'tools',
+  'include',
 ]);
 
-/** 上游 `FiberState` 的值：它是 `const enum`，宣告檔讀不到執行期的物件，同 dsh 抄一份（`index.ts:733-739`）。 */
-const FIBER_PENDING = 0;
-const FIBER_ACTIVE = 2;
-const FIBER_FAILED = 3;
+/** 上游 `FiberState` 的值：從 `@nexus/sdk` 取，那裡抄了一份（它是 `const enum`，宣告檔讀不到執行期的物件）。 */
+const FIBER_PENDING = FIBER_STATE.PENDING;
+const FIBER_ACTIVE = FIBER_STATE.ACTIVE;
+const FIBER_FAILED = FIBER_STATE.FAILED;
 
 /**
  * 結算 Cordis 樹上的列，照 dsh 的 `auditStartupEntries`：在 `loader.await()` 之後呼叫，不是 ACTIVE 的列一律列出；
@@ -223,7 +227,7 @@ export async function auditTreeEntries(loader: Loader): Promise<readonly Startup
       );
       drops.push({ id, module, stage: 'apply', message: messageOf(error) });
     } else if (fiber.state === FIBER_PENDING) {
-      const missing = Object.keys(fiber.inject).filter((name) => fiber.ctx.get(name) === undefined);
+      const missing = missingServices(fiber);
       drops.push({
         id,
         module,

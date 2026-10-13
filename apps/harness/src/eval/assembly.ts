@@ -10,7 +10,7 @@
  */
 
 import type { PluginEntry } from '@nexus/core';
-import { createEchoPlugin } from '@nexus/plugin-echo';
+import { createEchoPlugin } from '../echo.fixture.js';
 
 /** 基準任務跑的 plugin 清單。 */
 export function benchmarkPlugins(): readonly PluginEntry[] {

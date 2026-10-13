@@ -25,7 +25,7 @@ import {
   fromLoggedMessage,
   REPEAT_REMINDER_MARKER,
 } from '@nexus/core';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { SessionLog as SessionLogClass } from '@nexus/core';
 import type { InboxSplice, SessionEvent, SessionEventMap, SessionLog } from '@nexus/core';
 import { describe, expect, it } from 'vitest';

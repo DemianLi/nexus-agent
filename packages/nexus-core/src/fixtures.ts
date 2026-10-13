@@ -1,8 +1,9 @@
 /**
  * 測試用的假 plugin 與假擴充內容。只給本套件的測試用，不從 `index.ts` 對外匯出。
  *
- * 衝突單測用的一次性假 plugin 全部留在這裡——真的 workspace plugin（證明契約沒有
- * 偷偷要求你伸手進 harness 內部的那一個）是 `packages/nexus-plugin-echo` 的事。
+ * 衝突單測用的一次性假 plugin 全部留在這裡——真的 workspace plugin 是各個 `packages/nexus-plugin-*` 的事。
+ * `packages/nexus-plugin-echo` 已經不是 `NexusPlugin`（#1416 PR 2 起它是樹上的函式插件，證明的是 SDK 契約
+ * 沒有要求你伸手進 harness 內部），所以這裡不再拿它當 `NexusPlugin` 的真實例子。
  */
 
 import type { FeedbackService } from './feedback.js';

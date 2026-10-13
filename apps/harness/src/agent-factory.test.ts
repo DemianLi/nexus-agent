@@ -2,7 +2,7 @@ import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { loadPlugins, SessionRegistry } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { describe, expect, it } from 'vitest';
 import { AssemblyDropError, createNexusAgent } from './agent-factory.js';
 import { loadDefaultPlugins } from './plugin-config.js';

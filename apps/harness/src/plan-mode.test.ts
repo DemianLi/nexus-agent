@@ -60,7 +60,7 @@ import {
   planFeedbackMessage,
   recordedPlanMode,
 } from '@nexus/plugin-plan-mode';
-import { createEchoPlugin, ECHO_TOOL_NAME } from '@nexus/plugin-echo';
+import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
 import { createMemoryPlugin } from '@nexus/plugin-memory';
 import { afterEach, describe, expect, it } from 'vitest';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';

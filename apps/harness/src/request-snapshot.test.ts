@@ -26,7 +26,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { SessionRegistry } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
-import { createEchoPlugin } from '@nexus/plugin-echo';
+import { createEchoPlugin } from './echo.fixture.js';
 import { createMemoryPlugin } from '@nexus/plugin-memory';
 import { createPlanModePlugin, DEFAULT_PLAN_GUIDANCE } from '@nexus/plugin-plan-mode';
 import { describe, expect, it } from 'vitest';

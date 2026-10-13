@@ -2,7 +2,8 @@
  * 組裝點測試用的假 plugin。只給本套件的測試用，不從 `index.ts` 對外匯出。
  *
  * 正面路徑要兩個 plugin：一個是 `packages/nexus-plugin-echo`（真的 workspace package，
- * 零 harness import——那是「契約沒有偷偷要求你伸手進組裝點內部」的證據），另一個就是
+ * 零 harness import、零 `@nexus/core` import——那是「契約沒有偷偷要求你伸手進組裝點內部」的證據；
+ * #1416 PR 2 起它是樹上的函式插件，經 `echo.fixture.ts` 的外殼或橋接列進清單），另一個就是
  * 這裡的 fixture。兩邊都要呼叫得到，才算證明了「一份清單 fold 出來的 agent 真的把各
  * plugin 的工具都接上了」。
  */

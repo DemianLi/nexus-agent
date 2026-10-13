@@ -185,7 +185,9 @@ export function validateManifest(raw: unknown, row: string): Manifest {
       if (missing.some((path) => field.startsWith(`${path}.`))) continue;
       invalid.push({ field: field === '' ? '(根)' : field, reason: issue.message });
     }
-  } else if (parsed.data.reload.code === 'coexist') {
+  }
+  // 不掛在 `safeParse` 成功的分支裡：別的欄位也有問題時，這一條照樣要一起報，作者不用修一輪再撞一輪。
+  if (lookup(raw, 'reload.code') === 'coexist') {
     invalid.push({
       field: 'reload.code',
       reason:
