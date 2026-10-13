@@ -208,6 +208,12 @@ export const CHANNEL_SERVICE = 'channel';
  * **可選，缺席就退回 {@link CHANNEL_SERVICE}**：產品路徑今天一條 thread 一份組裝，只提供 `channel`，行為與以前相同。
  * 回 `undefined` 也退回 `channel`（這支函式不認得那條 thread）。
  *
+ * **宿主的義務：同一份組裝服務多條 thread 時，`channel` 是每一條 thread 都會拿到的預設。** 所以 `channel` 只能放
+ * 每條 thread 都適用的值；逐條不同的答題者一律交給這支函式，並且不提供 `channel`（或只放每條都適用的那個）。
+ * 這是照 dsh：它的答題者用 `scopeTarget(agent, agent)` 分發，對**沒有標籤的監聽者一律放行**、只有帶標籤的才看是不是
+ * 這個 agent 或它的上層（`packages/core/scope/src/index.ts:170-185`）——行程級、不分 scope 的答題者服務每一個 agent。
+ * 我們的 `channel` 對應那個沒有標籤的監聽者，往下退回它就是那個語意。
+ *
  * @param threadId - 這次呼叫的 `thread_id`；認不出來（不在圖裡）是 `undefined`。
  */
 export type ChannelForThread = (threadId: string | undefined) => ApprovalChannel | undefined;

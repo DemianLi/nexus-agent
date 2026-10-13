@@ -1213,6 +1213,11 @@ export interface CreateRegistryOptions {
 /**
  * 這張註冊表是不是擁有這條 `thread_id`：root 的日誌 id 就是 thread id，背景子代理的日誌 id 是 `<root>/<runId>`，
  * 同步子代理沿用 root 的 thread id（見 {@link callThreadId}）。所以「有哪一份日誌的 id 等於它」就是擁有。
+ *
+ * **前提：背景子代理的日誌在送出時就已經開好**（`apps/harness/src/background-subagents.ts` 的 `start()`，
+ * `sessions.open` 在 `submit` 拉起背景圖之前）。日後如果有人把它改成延後到第一次 `forCall` 才開，多張綁定下
+ * 背景那一輪的第一筆會因為還沒有任何一張認得 `<root>/<runId>` 而回 `ambiguous`——這是前提被改掉的徵兆，
+ * 不是這支函式的錯。
  */
 function ownsThread(sessions: SessionRegistry, thread: string): boolean {
   return sessions.list().some((entry) => entry.log.sessionId === thread);
