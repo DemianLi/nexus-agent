@@ -23,7 +23,7 @@
  * | `patch` | 遷移用：原樣收一條舊 `cordis.patch.yml` 的 patch（含 `insert`、`name` 斷言），寫入口不開 | 原樣 |
  * | `rejected` | 寫入口驗不過、沒有生效的一次變更（[#1414](https://github.com/DemianLi/nexus-agent/issues/1414)）：操作者、要做的操作、列 id、原因原文；**不帶要寫入的值** | **不折**，清單不因它改變 |
  * | `failed` | serve 發現某一列掛不上，而那一列在紀錄裡有被接受的改動（#1414）：歸因的那一筆的 `seq`（`triggerSeq`，**歸因，不保證是原因**）、掉在哪一步、原因原文 | **不折** |
-| `self-disabled` | 插件在 `apply` 裡自己 `ctx.fiber.dispose()`（Loader 的 case 7，[#1424](https://github.com/DemianLi/nexus-agent/issues/1424)）：列 id 與模組名。**不帶原因**：插件沒有講原因的管道，要查的是那個插件自己的日誌 | **不折** |
+ * | `self-disabled` | 插件在 `apply` 裡自己 `ctx.fiber.dispose()`（Loader 的 case 7，[#1424](https://github.com/DemianLi/nexus-agent/issues/1424)）：列 id 與模組名。**不帶原因**：插件沒有講原因的管道，要查的是那個插件自己的日誌 | **不折** |
  *
  * `rejected`／`failed`／`self-disabled` **只記不折**：照樣佔序號、序號照樣從 1 連續，`foldJournal` 與 `journalOverrideOf` 跳過
  * 它們，所以同一份紀錄有它們與沒有它們，折出來的清單相同。它們讓「被拒絕的變更」「掛不上的列」「插件自己停用了自己」進稽核，

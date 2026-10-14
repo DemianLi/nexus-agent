@@ -318,6 +318,7 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
 | 卡上寫「會話位址加上 thread 身分」，實作是另外加 `exec.thread` 與 `callThreadId`，`SessionAddress` 沒動 | **對卡上字面的改動，不是對 dsh 的偏離** | `SessionAddress` 是**一張 `SessionRegistry` 之內**的位址：每張註冊表就是一條 thread（根日誌 id 就是那條 thread 的 id、子代理日誌 id 是 `<root>/<runId>`，`session-registry.ts`），`sessionAddressKey` 只用來在那一張裡當 Map 鍵。thread 在「挑哪一張註冊表」那一步就用掉了，放進位址會在同一張表裡重複一份永遠相同的值。實測的足跡：24 個檔案提到 `SessionAddress`，原始碼與測試裡有 38 處 `kind: 'root'`、33 處 `kind: 'subagent'` 的字面比對、20 個檔案走 `toolCallSessionAddress`——加欄位要全部改，不加成可選欄位則又回到「沒填就挑不出」。而且背景子代理的 `thread_id` 本身就是 `<root>/<runId>`，已經含 `runId`，放進位址會有兩種寫法指同一個身分（`thread-id-reaches-handlers.test.ts` 量到）。所以 thread 走呼叫設定（`callThreadId`），在 `forCall` 與 `exec.thread` 用 |
 | `live-model` 的 `retryPolicy.mode` 只收 `normal`，`always` 拒收（#1427） | 產品需求超出 dsh | dsh 的 `retryPolicy` 有 `normal` 與 `always` 兩種模式（`packages/llm/llm/src/retry-policy.ts:37-57`），`always` 對每一次模型請求失敗無限重試到成功、取消或卸載。我們是企業內部聊天機器人：一輪沒有盡頭，中段失敗每次都重付整個回覆，無限重試會無限重付。其餘照 dsh：`mode` 寫了就必填，`maxRetries`／`retryableCodes`／`backoff` 逐條照 `resolveRetryPolicy`／`resolveBackoff` 驗（登記在 `apps/harness/src/settings/live-model.ts` 檔頭「偏離二」）。**撤除條件**：demian 提出需要無限重試的情境 |
 | `live-model` 重試的失敗分類沿用 `retryDecision`，三處與 dsh 不同（#1427） | 範圍切分（暫時） | (a) 有狀態、不是 429 的失敗一律記 `SERVER`，含非 5xx 的 4xx（實測 408、422、425、418 都重打，記 `SERVER`）；dsh 記成 `HTTP_n`、不重試（`packages/llm/llm-deepseek/src/transport.ts:22-35`）。(b) 沒有狀態、也不是逾時的失敗一律記 `TRANSPORT`；dsh 記成 `PI_AI_ERROR`、不重試（`packages/llm/llm-pi-ai/src/stream.ts:42-67`）。(c) `EMPTY_RESPONSE` 沒有生產者；dsh 由 `mapStopReason` 在「stop 但沒有 content」時產生並重試。改分類會讓使用者看得到的重試行為變動，要在自己的卡上量過、由 demian 拍板（PM 決議：[#1436 留言](https://github.com/DemianLi/nexus-agent/issues/1427#issuecomment-6168443352)）。另有 `classifyLlmFailure` 與 `classifyTurnFailure` 碼不一致，一併放進後續卡。**撤除條件**：後續分類卡（[#1437](https://github.com/DemianLi/nexus-agent/issues/1437)）合併 |
+| 插件自我停用只在行程裡停著，不改清單、不寫檔，宣告沒變就不重掛（#1424，demian Q1 (b)） | 表達不出來，退到最接近的實作 | dsh 的 Include 把樹側的變更與插件自我停用寫回根檔，持久化靠它；我們關掉了寫回（變更紀錄是唯一的寫入口，決議 §3-5 第 18 條），所以自我停用只改記憶體。dsh 在這一點上其實也是行程內的：每次開機重寫根檔（`apps/cli/src/profile-boot.ts:152-172`），任何一次協調都會把 Include 的樹重疊一遍、把停用的列蓋回啟用（未實測的推論）。我們每條 thread 都重推一次清單，照 dsh「每次協調都蓋回」就是每條 thread 重掛一次的閃動；而「每條 thread 重讀清單」源自 #1416 Q3 (a) 的快照語意，這條偏離跟著它走。所以：宿主記下停用當時的宣告（整份，簽章輸入是列 id、模組名、設定三格，序列化用 `rowKey` 同一支 `stable-stringify.ts`），**宣告沒變就替那一列推一條 `{ id, disabled: true }` 給 Include**，不論 Include 怎麼重疊都維持停用；宣告改了或重啟才重試。紀錄多一筆只記不折的 `self-disabled`。**撤除條件**：讀清單改成不是每條 thread 都推 |
 
 ## 接進清單（#1416 PR 2）
 
@@ -358,11 +359,15 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
 - **插件自我停用只在行程裡停著**（[#1424](https://github.com/DemianLi/nexus-agent/issues/1424)，demian 決議 Q1 (b)、Q2 (a)）：
   插件自己 `ctx.fiber.dispose()`，Loader 的 case 7 把那一列在樹上標成 `disabled`；Include 不寫檔，所以只改記憶體。
   Loader 在 case 7 呼叫點發 `loader/self-disable`（`vendor/README.md` 第 10 條；`ctx.fiber.update()` 走的 `internal/commit`
-  帶同樣的參數，所以只能在呼叫點區分），`PluginTree` 記下當時的宣告（模組名＋設定）：**宣告沒變就不再推 `epoch`、不重掛**，
-  清單判成 `off`、插件列標 `disabled`（不進 `dropped`，所以沒有 `failed`）。宣告改了或重啟才再試一次。
+  帶同樣的參數，所以只能在呼叫點區分），`PluginTree` 記下當時整份宣告的簽章：**宣告沒變就不再推 `epoch`、不重掛**，
+  清單判成 `off`、插件列標 `disabled`（不進 `dropped`，所以沒有 `failed`），並由宿主替那一列推一條 `{ id, disabled: true }`
+  給 Include——Include 每次重疊（樹上別列的設定改了、整列重建）都把每一列的 options 整份換掉，不推就會被蓋回啟用。
+  宣告改了或重啟才再試一次；清單自己把它停用（`disable`）算了結，之後啟用回同一份宣告會重掛、再停用，去重鍵同，不再記一筆。
   序列化的出口是變更紀錄的 `self-disabled`（只記不折，`isAcceptedRecord` 為 false、`touchesRow` 不算碰到那一列），
   由 serve 掛在 `PluginTree.onSelfDisable` 上的記錄器寫；沒有紀錄檔就不記（閃動照樣止住，靠的是記憶體那一頭）。
-  不做：`ctx.fiber.update(config)` 的持久化、非同步的自我停用窗口（記在迷霧裡）。
+  不做：`ctx.fiber.update(config)` 的持久化、非同步的自我停用窗口（記在迷霧裡）。已知的縫：必掛的列（`startup-audit.ts`
+  的必掛名單）今天都在相容層；等必掛的列搬上樹之後，它自我停用會被判成 `off`，serve 缺了它還照樣起來——第一顆必掛的列
+  上樹時處理（記在 #1385 的迷霧）。
 - **`cordis.serve.yml` 那一層不經 Include**：Include 只有一個 `path`，serve 專屬層是相容層疊在出貨層後面的另一個檔。那一層裡的
   函式插件上不了樹，會在讀清單時掉在 `apply` 階段並指名原因；今天那一層沒有函式插件。要放進去，得讓 Include 讀多個檔或
   把那一層併進出貨檔。

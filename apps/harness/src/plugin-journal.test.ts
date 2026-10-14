@@ -442,6 +442,11 @@ describe('rejected、failed：只記不折（#1414 驗收 H）', () => {
     expect(() => parseJournal(Buffer.from(point(1, record(1, REJECTED))), 'j')).toThrow(
       /不是被接受的改動/u,
     );
+    // self-disabled 也不是被接受的改動（#1424）：failed 不能把責任歸到它身上。
+    const selfDisabled = record(1, { op: 'self-disabled', id: 'todo', name: '@nexus/plugin-todo' });
+    expect(() =>
+      parseJournal(Buffer.from(point(1, { ...selfDisabled, actor: SERVE })), 'j'),
+    ).toThrow(/不是被接受的改動/u);
   });
 
   it('多一個欄位（把要寫入的值塞進 rejected）算壞掉的檔', () => {
