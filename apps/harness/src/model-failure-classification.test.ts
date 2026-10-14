@@ -24,8 +24,14 @@ import type { IncomingMessage, Server, ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MiddlewareError } from 'langchain';
-import { retryModelCall, SessionLog } from '@nexus/core';
 import {
+  createEmptyResponseMiddleware,
+  markModelCallFailure,
+  retryModelCall,
+  SessionLog,
+} from '@nexus/core';
+import {
+  classifyFailedAttempt,
   classifyTurnFailure,
   createLiveModel,
   LIVE_API_KEY_ENV,
@@ -44,6 +50,7 @@ type Cell =
   | { readonly kind: 'reset-mid' }
   | { readonly kind: 'json-reset-mid' }
   | { readonly kind: 'garbage' }
+  | { readonly kind: 'bad-json' }
   | { readonly kind: 'silent' };
 
 let server: Server;
@@ -105,6 +112,12 @@ function respond(request: IncomingMessage, response: ServerResponse): void {
       setTimeout(() => response.socket?.destroy(), 20);
       return;
     }
+    case 'bad-json': {
+      // 非串流：200，body 是壞掉的 JSON（SDK 解析失敗，發生在 AsyncCaller 的呼叫裡面）。
+      response.writeHead(200, { 'content-type': 'application/json' });
+      response.end('{"id":"chatcmpl-1437","choices":[{這不是 JSON');
+      return;
+    }
     case 'garbage': {
       response.writeHead(200, { 'content-type': 'text/event-stream' });
       response.write(frame(textChunk('開頭正常')));
@@ -159,13 +172,20 @@ async function run(
   const log = new SessionLog('classification');
   const model = createLiveModel(config);
   let error: unknown;
-  await retryModelCall(streamRetryOptionsOf(config.retryPolicy), { log }, async () => {
-    if (options.mode === 'invoke') {
-      await model.invoke('嗨');
-      return;
-    }
-    for await (const part of await model.stream('嗨')) void part;
-  }).catch((caught: unknown) => {
+  // 真的圖裡，每一次模型呼叫都經過 `wrapModelCall` 那一格（它記下「這顆錯是模型呼叫拋的」）；這裡照樣包一層。
+  const guard = createEmptyResponseMiddleware() as unknown as {
+    wrapModelCall: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
+  };
+  await retryModelCall(streamRetryOptionsOf(config.retryPolicy), { log }, () =>
+    guard.wrapModelCall({}, async () => {
+      if (options.mode === 'invoke') {
+        await model.invoke('嗨');
+        return undefined;
+      }
+      for await (const part of await model.stream('嗨')) void part;
+      return undefined;
+    }),
+  ).catch((caught: unknown) => {
     error = caught;
   });
   return { log, error };
@@ -442,7 +462,17 @@ describe('B／C／D：串流（首事件之前與之後）', () => {
     cell = { kind: 'garbage' };
     const { log, error } = await run();
 
-    // D：碼不在 retryableCodes 裡就不重打；#1437 之前沒有狀態的一律 `TRANSPORT`、重打到預算用盡。
+    // D：碼不在 retryableCodes 裡就不重打。**這一列在 develop 上也只打 1 次**——串流的解析失敗發生在 AsyncCaller 外面，
+    // 沒有人回報，所以它分辨不出新舊；分得出來的是下一列（非串流）。
+    expect(hits).toBe(1);
+    expect(classifyTurnFailure(error).code).toBe('UNKNOWN');
+    expect(retryRows(log)).toEqual([]);
+  });
+
+  it('解不開的回應（非串流，200＋壞 JSON）→ UNKNOWN，不重打（Q2 (a)；#1437 之前記 TRANSPORT、重打到預算用盡）', async () => {
+    cell = { kind: 'bad-json' };
+    const { log, error } = await run({ mode: 'invoke' });
+
     expect(hits).toBe(1);
     expect(classifyTurnFailure(error).code).toBe('UNKNOWN');
     expect(retryRows(log)).toEqual([]);
@@ -475,6 +505,47 @@ describe('讀端的失敗：沒有任何碼的錯，也跟 llm/retry 同一個�
   });
 });
 
+describe('連線碼是列舉，不是前綴；逾時類記 TIMEOUT', () => {
+  /** 一顆「模型呼叫拋的」undici 形狀的錯：外層 `TypeError`，真正的碼在 `cause`。 */
+  const undici = (code: string): unknown => {
+    const error = new TypeError('fetch failed', {
+      cause: Object.assign(new Error(code), { code }),
+    });
+    markModelCallFailure(error);
+    return error;
+  };
+
+  it.each([
+    'UND_ERR_SOCKET',
+    'UND_ERR_CLOSED',
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'EPIPE',
+    'ENOTFOUND',
+    'EAI_AGAIN',
+    'ENETUNREACH',
+    'EHOSTUNREACH',
+    'ERR_INCOMPLETE_CHUNKED_ENCODING',
+  ])('%s → TRANSPORT', (code) => {
+    expect(classifyTurnFailure(undici(code)).code).toBe('TRANSPORT');
+  });
+
+  it.each([
+    'UND_ERR_HEADERS_TIMEOUT',
+    'UND_ERR_BODY_TIMEOUT',
+    'UND_ERR_CONNECT_TIMEOUT',
+    'ETIMEDOUT',
+  ])('%s → TIMEOUT（照 pi-ai：逾時排在連線之前）', (code) => {
+    expect(classifyTurnFailure(undici(code)).code).toBe('TIMEOUT');
+  });
+
+  it('UND_ERR_INVALID_ARG（我們自己的程式錯誤）→ UNKNOWN，而且 onFailedAttempt 放棄、不重打', () => {
+    const error = undici('UND_ERR_INVALID_ARG');
+    expect(classifyTurnFailure(error).code).toBe('UNKNOWN');
+    expect(() => classifyFailedAttempt(error)).toThrow();
+  });
+});
+
 describe('E：不是供應商的錯，與被層層包住的供應商錯', () => {
   it('工具 middleware 拋的、遞迴上限這類沒有供應商痕跡的錯 → UNKNOWN', () => {
     expect(classifyTurnFailure(new Error('工具壞了')).code).toBe('UNKNOWN');
@@ -487,6 +558,17 @@ describe('E：不是供應商的錯，與被層層包住的供應商錯', () => 
       wrapped = MiddlewareError.wrap(wrapped, `middleware-${String(layer)}`);
     }
     expect(classifyTurnFailure(wrapped)).toMatchObject({ code: 'AUTH', status: 401 });
+  });
+
+  it('工具 middleware 拋的錯、cause 帶 ECONNREFUSED（MCP 伺服器連不上）→ UNKNOWN，不被連線規則搶走', () => {
+    const tool = new Error('MCP 伺服器連不上', {
+      cause: Object.assign(new Error('connect ECONNREFUSED 127.0.0.1:1'), { code: 'ECONNREFUSED' }),
+    });
+    const wrapped = MiddlewareError.wrap(MiddlewareError.wrap(tool, 'mcp'), 'outer');
+    expect(classifyTurnFailure(wrapped).code).toBe('UNKNOWN');
+    // 同一個形狀，若是模型呼叫拋的就是 TRANSPORT——差別只在有沒有「模型呼叫」的記號。
+    markModelCallFailure(tool);
+    expect(classifyTurnFailure(wrapped).code).toBe('TRANSPORT');
   });
 
   it('被包住的 422 與 408 也是 HTTP_<n>', () => {

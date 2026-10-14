@@ -7,6 +7,8 @@ import {
   assertImageBudget,
   beginAttemptReport,
   DEFAULT_STREAM_RETRYABLE_CODES,
+  isModelCallFailure,
+  markModelCallFailure,
   noteStreamFailure,
   streamFailureReporter,
   tagModelRoute,
@@ -1341,6 +1343,8 @@ export function modelGoneMessage(error: unknown): string | undefined {
  * @throws 要放棄時拋——下架拋人話的那顆、溢出拋 branded 的那顆、其餘原樣拋。要重試就正常返回。
  */
 export function classifyFailedAttempt(error: unknown): void {
+  // `onFailedAttempt` 看到的一定是模型呼叫的失敗（含不在圖裡的標題、摘要器、eval）：記下來，分類器才套連線規則。
+  markModelCallFailure(error);
   const gone = modelGoneMessage(error);
   if (gone !== undefined) throw new Error(gone, { cause: error });
   if (isDerivedContextOverflow(error)) throw ContextOverflowError.fromError(error as Error);
@@ -1375,35 +1379,67 @@ function isInbandApiError(link: object): boolean {
 }
 
 /**
- * 連線層的錯誤碼（Node／undici 的）：連線被重設、被拒、名字解析失敗、讀到一半對端關了。
+ * 連線層錯誤碼（Node／undici 的）→ `TRANSPORT`。**逐碼列舉，每個碼說得出它對到 dsh 哪一類**
+ * （pi-ai 的 `classifyPiAiError`，`llm-pi-ai/src/stream.ts:56-65`；那一支只認訊息字面，它自己的 `XXX` 註解說「拿得到
+ * `code`／`cause` 就該改認碼」，所以這裡認碼、不認字面，但類別要對得上）：
  *
- * **認碼，不認訊息**——undici 在讀 body 中途被切斷時拋 `TypeError: terminated`（沒有碼、名字也不是 `APIConnectionError`），
- * 真正的碼在它的 `cause`（`SocketError`，`UND_ERR_SOCKET`）。非串流的呼叫（CLI 一輪、標題、摘要器、eval）不經過
- * {@link withStreamIdleTimeout} 的讀端，只能靠這一條認出它。`ECONNABORTED` 不在裡面：那是 {@link isAbortLike} 的中止。
+ * | 碼 | pi-ai 的字面類別 |
+ * | --- | --- |
+ * | `UND_ERR_SOCKET` | 有：訊息 `other side closed`／`socket`（`:62-65`）→ `TRANSPORT` |
+ * | `ECONNRESET`、`ECONNREFUSED` | 有：`ECONN[A-Z]+`（`:62`）→ `TRANSPORT` |
+ * | `UND_ERR_CLOSED` | 沒有字面對應：undici 的 `ClientClosedError`，連線已被關掉；歸 `TRANSPORT`（最近的是 `connection` 那一類） |
+ * | `EPIPE` | 沒有字面對應：寫進已關閉的 socket；歸 `TRANSPORT` |
+ * | `ENOTFOUND`、`EAI_AGAIN` | 沒有字面對應：名字解析失敗；歸 `TRANSPORT` |
+ * | `ENETUNREACH`、`EHOSTUNREACH` | 沒有字面對應：網路／主機不可達；歸 `TRANSPORT` |
+ * | `ERR_INCOMPLETE_CHUNKED_ENCODING` | 沒有字面對應：chunked 回應在結尾前被切斷；pi-ai 對應的是 `terminated`／`premature close`（`:63-65`）那一類，歸 `TRANSPORT` |
+ *
+ * **不在表裡的就不是連線問題**：`UND_ERR_INVALID_ARG`、`UND_ERR_NOT_SUPPORTED` 這類是我們自己的程式錯誤，照 Q2 (a)
+ * 記 `UNKNOWN`、不重打——不用 `UND_ERR_` 前綴一網打盡。`ECONNABORTED` 也不在：那是 {@link isAbortLike} 的中止。
  */
 const NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
+  'UND_ERR_SOCKET',
+  'UND_ERR_CLOSED',
   'ECONNRESET',
   'ECONNREFUSED',
   'EPIPE',
   'ENOTFOUND',
   'EAI_AGAIN',
-  'ETIMEDOUT',
   'ENETUNREACH',
   'EHOSTUNREACH',
   'ERR_INCOMPLETE_CHUNKED_ENCODING',
 ]);
 
-/** 這一環是不是連線層的失敗：SDK 的 `APIConnectionError`、{@link NETWORK_ERROR_CODES} 的碼，或 {@link withStreamIdleTimeout} 標過的讀端錯誤。 */
-function isConnectionLink(link: object): boolean {
+/**
+ * 逾時類錯誤碼 → `TIMEOUT`（照 pi-ai `:61`：訊息含 `timeout`／`timed out` 的記 `TIMEOUT`，排在連線類之前）。
+ * 兩個碼都在預設可重試集裡，重打行為與記成 `TRANSPORT` 相同，差別只在日誌與網頁上寫的碼。
+ *
+ * | 碼 | 說明 |
+ * | --- | --- |
+ * | `UND_ERR_HEADERS_TIMEOUT`、`UND_ERR_BODY_TIMEOUT` | undici 等標頭／等 body 逾時；訊息含 `Timeout`，有字面對應 |
+ * | `UND_ERR_CONNECT_TIMEOUT` | undici 連線逾時；訊息 `Connect Timeout Error`，有字面對應 |
+ * | `ETIMEDOUT` | Node 的 TCP 逾時；訊息 `connect ETIMEDOUT` 沒有被 `\btimed out\b` 的字界吃到，沒有字面對應，依 PM 審查（#1448）歸 `TIMEOUT` |
+ */
+const TIMEOUT_ERROR_CODES: ReadonlySet<string> = new Set([
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'ETIMEDOUT',
+]);
+
+/**
+ * 這一環是不是連線層的失敗：SDK 的 `APIConnectionError`（SDK 自己的型別，工具鏈上不會有）、
+ * {@link withStreamIdleTimeout} 標過的讀端錯誤，或是**模型呼叫拋的錯**（`modelCall`，見 {@link isModelCallFailure}）
+ * 上有 {@link NETWORK_ERROR_CODES} 的碼。
+ *
+ * **碼那一條只在模型呼叫的錯誤鏈上套**：工具 middleware 拋的、cause 帶 `ECONNREFUSED` 的錯（MCP 伺服器連不上）是工具失敗，
+ * 不該被記成模型的 `TRANSPORT`。
+ */
+function isConnectionLink(link: object, modelCall: boolean): boolean {
   if ((link.constructor as { name?: string } | undefined)?.name === 'APIConnectionError')
     return true;
   if (connectionFailures.has(link)) return true;
   const code = (link as { code?: unknown }).code;
-  if (typeof code !== 'string') return false;
-  // undici 的碼都是 `UND_ERR_*`（`SOCKET`、`CLOSED`、`HEADERS_TIMEOUT`、`BODY_TIMEOUT`…）；`UND_ERR_ABORTED` 是我們自己中止的。
-  return (
-    (code.startsWith('UND_ERR_') && code !== 'UND_ERR_ABORTED') || NETWORK_ERROR_CODES.has(code)
-  );
+  return modelCall && typeof code === 'string' && NETWORK_ERROR_CODES.has(code);
 }
 
 /**
@@ -1441,10 +1477,10 @@ function classifyInbandEnvelope(envelope: Record<string, unknown>, status: numbe
  * | 400、413 | `INVALID_REQUEST` | 否 |
  * | ≥ 500 | `SERVER` | 是 |
  * | 其他有狀態的（404、408、410、418、422、425…） | `HTTP_<狀態>` | 否 |
- * | 串流中段的錯誤信封（SDK 拋的沒有 `status` 的 `APIError`）：信封的數字碼（400–599）照上面幾列；沒有數字碼 | 照上面；`SERVER` | 照上面；是 |
- * | 沒有狀態、逾時那幾個名字（{@link isTimeoutLink}） | `TIMEOUT` | 是 |
+ * | 模型呼叫拋的、串流中段的錯誤信封（SDK 拋的沒有 `status` 的 `APIError`）：信封的數字碼（400–599）照上面幾列；沒有數字碼 | 照上面；`SERVER` | 照上面；是 |
+ * | 沒有狀態、逾時那幾個名字（{@link isTimeoutLink}），或模型呼叫的錯誤鏈上有 {@link TIMEOUT_ERROR_CODES} 的碼 | `TIMEOUT` | 是 |
  * | 空回覆（{@link createEmptyResponseMiddleware} 拋的 `EmptyResponseError`） | `EMPTY_RESPONSE` | 是 |
- * | 沒有狀態、連線層的（`APIConnectionError`、鏈上有 {@link NETWORK_ERROR_CODES} 的碼、讀串流時被切斷，見 {@link connectionFailures}） | `TRANSPORT` | 是 |
+ * | 沒有狀態、連線層的（`APIConnectionError`、模型呼叫的錯誤鏈上有 {@link NETWORK_ERROR_CODES} 的碼、讀串流時被切斷，見 {@link connectionFailures}） | `TRANSPORT` | 是 |
  * | **其餘——不是供應商的錯，或解不開的回應** | `UNKNOWN` | 否 |
  *
  * 狀態那幾列就是 {@link failureCodeOfStatus}；它與這張表只有一處寫。
@@ -1478,7 +1514,10 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   let timedOut = false;
   let connection = false;
   let empty = false;
-  for (const link of causeLinks(root)) {
+  // 「只看結構」的連線與串流中段規則只套在模型呼叫拋的錯誤鏈上（工具 middleware 的錯不算）。
+  const links = [...causeLinks(root)];
+  const modelCall = links.some((link) => isModelCallFailure(link));
+  for (const link of links) {
     const found = (link as { status?: unknown }).status;
     if (status === undefined && typeof found === 'number') status = found;
     const { code, type, name } = link as { code?: unknown; type?: unknown; name?: unknown };
@@ -1486,9 +1525,10 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
     if (name === 'RateLimitQuotaExhaustedError' || name === 'InsufficientQuotaError') quota = true;
     if (ContextOverflowError.isInstance(link)) overflow = true;
     if (isTimeoutLink(link)) timedOut = true;
-    if (isConnectionLink(link)) connection = true;
+    if (modelCall && typeof code === 'string' && TIMEOUT_ERROR_CODES.has(code)) timedOut = true;
+    if (isConnectionLink(link, modelCall)) connection = true;
     if (name === 'EmptyResponseError') empty = true;
-    if (inband === undefined && isInbandApiError(link)) {
+    if (inband === undefined && modelCall && isInbandApiError(link)) {
       const body = (link as { error?: unknown }).error;
       inband = inbandErrorStatus(
         typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {},

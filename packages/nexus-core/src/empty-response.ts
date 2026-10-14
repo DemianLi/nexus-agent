@@ -22,7 +22,10 @@
  * 全部成立才算：
  *
  * 1. `response_metadata.finish_reason` **明確是 `stop`**。沒有這一格的（假模型、`length`、`tool_calls`、合成的
- *    中止收尾）一律不碰——**判準是供應商說「我講完了」，不是「我沒看到東西」**。
+ *    中止收尾）一律不碰——**判準是供應商說「我講完了」，不是「我沒看到東西」**。**串流那條路例外地不夠精確**：
+ *    `@langchain/core` 的 `mapFinishReason`（`openai_completions_stream.js:261-268`）會把不認得的 `finish_reason` 先對映成
+ *    `stop`，所以供應商說了一個陌生字串、又沒有任何內容時，也會被當成空回覆。出貨模型只回 `stop`／`tool_calls`／`length`，
+ *    實際風險低；CLI 的非串流那條拿到的是原字串，沒有這個問題。
  * 2. 沒有任何文字（空字串、或陣列裡沒有非空的文字區塊）。**只有空白的文字算有內容**（dsh 同：它數的是區塊）。
  * 3. 沒有工具呼叫（`tool_calls`、`invalid_tool_calls`、`additional_kwargs.tool_calls`、content 裡的呼叫區塊）。
  * 4. 沒有推理（`additional_kwargs.reasoning_content` 或 content 裡的 reasoning／thinking 區塊）。
@@ -41,6 +44,7 @@
 import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
+import { markModelCallFailure } from './model-call-failure.js';
 import { noteStreamFailure } from './stream-retry.js';
 import { isSyntheticStopReply, modelCallAborted } from './turn-cancel.js';
 
@@ -118,7 +122,15 @@ export function createEmptyResponseMiddleware(): AgentMiddleware {
   return createMiddleware({
     name: EMPTY_RESPONSE_MIDDLEWARE_NAME,
     wrapModelCall: async (request, handler) => {
-      const response = await handler(request);
+      let response: Awaited<ReturnType<typeof handler>>;
+      try {
+        response = await handler(request);
+      } catch (error: unknown) {
+        // 順帶的第二個職責：這裡拋出來的一定是模型呼叫的錯，記下來，失敗分類器才敢套「只看結構」的連線規則，
+        // 工具 middleware 拋的錯（MCP 連不上…）不會被它搶走。見 {@link ./model-call-failure.ts}。
+        markModelCallFailure(error);
+        throw error;
+      }
       if (
         !AIMessage.isInstance(response) ||
         isSyntheticStopReply(response) ||
