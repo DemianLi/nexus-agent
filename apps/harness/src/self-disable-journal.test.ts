@@ -8,7 +8,7 @@
  * | A 止住閃動、B 記一筆、F 不產生 `failed`／快照判成 `disabled` | serve：「自我停用只記一筆、只掛一次」 |
  * | C 宣告改了才重試、改別的列不會 | serve：「宣告改了才重試」 |
  * | D 重啟就回來 | serve：「重啟之後那一列重新試一次」 |
- * | E 關機與重建不誤寫 | serve 關機＋樹：「拆卸與重建」 |
+ * | E 關機與重建不誤寫 | serve 關機＋樹：「拆卸與重建」（含**切換出貨路徑**——Include restart，`UNLOADING` 條件是承重的） |
  * | G 沒有紀錄檔 | serve：「沒有紀錄檔」 |
  * | H 只有 case 7 才交給宿主 | 樹：「只有自己停用才有事件」＋serve：寫入口的 `disable` |
  *
@@ -20,6 +20,7 @@ import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import { FIBER_STATE } from '@nexus/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createCordisRoot } from './cordis-root.js';
@@ -204,8 +205,11 @@ describe('宣告改了才重試（驗收 C）', () => {
     expect(h.applied()).toBe(1);
     await waitFor(() => selfDisabledOf(h.dir).length === 1, '第一筆');
 
-    // 改別的列：它的宣告沒變，不重試。
-    expect(await h.change({ op: 'disable', id: 'skills' })).toBeGreaterThan(2);
+    // 改**樹上別的列**（echo 是樹上的函式插件列，skills 不是）：Include 把整棵樹重疊、每一列的 options 整份換掉，
+    // 但它的宣告沒變，宿主替它推著 `disabled`，不重掛（#1424 補件）。
+    expect(
+      await h.change({ op: 'config-set', id: 'echo', config: { prefix: 'other' } }),
+    ).toBeGreaterThan(1);
     expect(await say(server, 'other-row')).toBeUndefined();
     expect(h.applied()).toBe(1);
     expect(selfDisabledOf(h.dir)).toHaveLength(1);
@@ -300,15 +304,51 @@ describe('只有自己停用才有事件（驗收 H）', () => {
     return { root, shipped };
   }
 
-  it('寫入口的 disable：不產生 self-disabled', async () => {
+  it('寫入口的 disable（樹上的 echo）：不產生 self-disabled；紀錄與快照的存檔那一側都是 disabled', async () => {
+    // 出貨清單上的 echo 是樹上的函式插件列：寫入口停用它走的是 Loader 的 `entry.update`，不是 case 7。
     const h = home({ seedInsert: false });
-    seedHomePatch(h.dir, `- insert:\n    - id: echo2\n      name: '${ECHO_MODULE}'\n`);
     const server = await start(h.env);
     expect(await say(server, 'a')).toBeUndefined();
-    await h.change({ op: 'disable', id: 'echo2' });
+    const stateOf = (side: 'running' | 'saved'): string | undefined => {
+      const snapshot = JSON.parse(
+        readFileSync(pluginSnapshotPath(h.env), 'utf8'),
+      ) as PluginSnapshot;
+      return snapshot.rows.find((entry) => entry.id === 'echo')?.[side].state;
+    };
+    expect(stateOf('saved')).toBe('mounted');
+    await h.change({ op: 'disable', id: 'echo' });
     expect(await say(server, 'b')).toBeUndefined();
+    // 動作真的生效：存檔那一側是 disabled（running 是啟動時試組的結果，重啟才換——快照語意）。
+    expect(stateOf('saved')).toBe('disabled');
+    expect(stateOf('running')).toBe('mounted');
     await stop();
     expect(selfDisabledOf(h.dir)).toEqual([]);
+  }, 120000);
+
+  it('清單把樹上的 echo 停用：樹上那一列真的卸載，沒有 self-disable 事件', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-self-disable-listoff-'));
+    temporary.push(dir);
+    chmodSync(dir, 0o700);
+    const { root, shipped } = await treeFor(dir, `- id: echo\n  name: '${ECHO_MODULE}'\n`);
+    const events: SelfDisableEvent[] = [];
+    root.tree.onSelfDisable = (event) => void events.push(event);
+    const stateOfEcho = async (): Promise<number | undefined> => {
+      const context = await root.tree.context();
+      return context.loader.resolve('include:echo').fiber?.ctx.fiber.state;
+    };
+    await loadPluginConfig({ shipped, warn: () => undefined }, { tree: root.tree });
+    expect(await stateOfEcho()).toBe(FIBER_STATE.ACTIVE);
+    const overlay = join(dir, 'off.yml');
+    writeFileSync(overlay, '- id: echo\n  disabled: true\n', { mode: 0o600 });
+    chmodSync(overlay, 0o600);
+    const loaded = await loadPluginConfig(
+      { shipped, overlays: [overlay], warn: () => undefined },
+      { tree: root.tree },
+    );
+    expect(loaded.plugins.find((plugin) => plugin.id === 'echo')?.disabled).toBe(true);
+    // 動作真的生效：樹上那一列不再是 ACTIVE。
+    expect(await stateOfEcho()).not.toBe(FIBER_STATE.ACTIVE);
+    expect(events).toEqual([]);
   }, 120000);
 
   it('插件呼叫 ctx.fiber.update()（走 internal/commit）：沒有事件；真的自己停用才有', async () => {
@@ -316,12 +356,14 @@ describe('只有自己停用才有事件（驗收 H）', () => {
     temporary.push(dir);
     chmodSync(dir, 0o700);
     const updater = join(dir, 'updater.mjs');
+    const seenConfigs = `__selfDisableUpdater_${String(Date.now())}`;
     writeFileSync(
       updater,
-      functionPlugin('updater', 'if (config?.n !== 2) ctx.fiber.update({ n: 2 })'),
-      {
-        mode: 0o600,
-      },
+      functionPlugin(
+        'updater',
+        `(globalThis[${JSON.stringify(seenConfigs)}] ??= []).push(config?.n ?? null); if (config?.n !== 2) ctx.fiber.update({ n: 2 })`,
+      ),
+      { mode: 0o600 },
     );
     chmodSync(updater, 0o600);
     const quitter = join(dir, 'quitter.mjs');
@@ -336,6 +378,8 @@ describe('只有自己停用才有事件（驗收 H）', () => {
     await loadPluginConfig({ shipped, warn: () => undefined }, { tree: root.tree });
     // `updater` 改了自己的設定、echo 照常掛著：都不是自我停用。
     expect(events).toEqual([]);
+    // 動作真的發生了：apply 跑了兩次，第二次拿到的是 update 給的設定（update 哪天變成 no-op，這條會紅）。
+    expect((globalThis as Record<string, unknown>)[seenConfigs]).toEqual([null, 2]);
 
     // 對照：同一棵樹上換成會自己停用的那顆，事件才出現。
     const second = await treeFor(
@@ -353,6 +397,83 @@ describe('只有自己停用才有事件（驗收 H）', () => {
 });
 
 describe('拆卸與重建不誤認成自我停用（驗收 E）', () => {
+  /** 兩份出貨清單，echo 一列：切換路徑讓 Include 走 restart（`config.path` 變了，`vendor/include/src/index.ts` 的 `internal/update`）。 */
+  it('切換出貨路徑（Include restart，uid 保留、狀態 UNLOADING）：正常掛著的列沒有事件、不寫紀錄、仍然 ACTIVE', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-self-disable-switch-'));
+    temporary.push(dir);
+    chmodSync(dir, 0o700);
+    const write = (name: string): string => {
+      const path = join(dir, name);
+      writeFileSync(path, `- id: echo\n  name: '${ECHO_MODULE}'\n`, { mode: 0o600 });
+      chmodSync(path, 0o600);
+      return path;
+    };
+    const first = write('first.yml');
+    const second = write('second.yml');
+    const root = createCordisRoot();
+    roots.push(root);
+    const events: SelfDisableEvent[] = [];
+    root.tree.onSelfDisable = (event) => void events.push(event);
+    const loadedFirst = await loadPluginConfig(
+      { shipped: first, warn: () => undefined },
+      { tree: root.tree },
+    );
+    expect(loadedFirst.dropped).toEqual([]);
+    const loadedSecond = await loadPluginConfig(
+      { shipped: second, warn: () => undefined },
+      { tree: root.tree },
+    );
+    // 路徑換了、Include 整列重起：子列在卸載的路上被 Loader 當成「自己停用」的候選，只有 UNLOADING 條件擋得住它。
+    expect(events).toEqual([]);
+    expect(loadedSecond.dropped).toEqual([]);
+    expect(loadedSecond.plugins.map((plugin) => plugin.disabled)).not.toContain(true);
+  }, 120000);
+
+  it('Include 整列重建之後，自我停用過的列照樣不重掛（宿主替它推著 disabled）', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-self-disable-rebuild-'));
+    temporary.push(dir);
+    chmodSync(dir, 0o700);
+    const counter = `__selfDisableRebuild_${String(Date.now())}`;
+    const quitter = join(dir, 'quitter.mjs');
+    writeFileSync(
+      quitter,
+      functionPlugin(
+        'quitter',
+        `globalThis[${JSON.stringify(counter)}] = (globalThis[${JSON.stringify(counter)}] ?? 0) + 1; ctx.fiber.dispose()`,
+      ),
+      { mode: 0o600 },
+    );
+    chmodSync(quitter, 0o600);
+    const shipped = join(dir, 'cordis.yml');
+    const good = `- id: quitter\n  name: 'file://${quitter}'\n- id: echo\n  name: '${ECHO_MODULE}'\n`;
+    writeFileSync(shipped, good, { mode: 0o600 });
+    chmodSync(shipped, 0o600);
+    const root = createCordisRoot();
+    roots.push(root);
+    const events: SelfDisableEvent[] = [];
+    root.tree.onSelfDisable = (event) => void events.push(event);
+    const count = (): number => (globalThis as Record<string, unknown>)[counter] as number;
+    const overlay = (prefix: string): string => {
+      const path = join(dir, `overlay-${prefix}.yml`);
+      writeFileSync(path, `- id: echo\n  config:\n    prefix: ${prefix}\n`, { mode: 0o600 });
+      chmodSync(path, 0o600);
+      return path;
+    };
+    const sources = (patch: string) => ({ shipped, overlays: [patch], warn: () => undefined });
+    await loadPluginConfig(sources(overlay('a')), { tree: root.tree });
+    await loadPluginConfig(sources(overlay('b')), { tree: root.tree });
+    expect(count()).toBe(1);
+    // 出貨檔弄壞再修好：Include 不是 ACTIVE，整列拆掉重建。
+    writeFileSync(shipped, 'not: a list\n', { mode: 0o600 });
+    await expect(loadPluginConfig(sources(overlay('c')), { tree: root.tree })).rejects.toThrow();
+    writeFileSync(shipped, good, { mode: 0o600 });
+    const loaded = await loadPluginConfig(sources(overlay('d')), { tree: root.tree });
+    expect(count()).toBe(1);
+    expect(events).toHaveLength(1);
+    expect(loaded.dropped).toEqual([]);
+    expect(loaded.plugins.find((plugin) => plugin.id === 'quitter')?.disabled).toBe(true);
+  }, 120000);
+
   it('Include 那一列整列重建、整棵樹卸載：正常掛著的列沒有事件', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'nexus-self-disable-teardown-'));
     temporary.push(dir);
