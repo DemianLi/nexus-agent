@@ -57,13 +57,30 @@ interface Seen {
   readonly title: boolean;
 }
 
+/** 標題成功的回應寫完之後，再等這麼久才放主請求回：夠標題那一路把結果寫進日誌，遠大於一次事件迴圈的往返。 */
+const TITLE_LANDING_SLACK_MS = 100;
+/** 等標題的上限。標題一直不回就不等了，讓斷言去講「標題沒進日誌」，而不是整個測試逾時。 */
+const TITLE_WAIT_CAP_MS = 5000;
+
 /**
  * 假端點。`answer(title, nth)` 回 `'503'` 或 `'ok'`；`nth` 是這一類請求（標題／主）的第幾次，從 1 起。
  * 主請求的成功回串流，標題的成功回一般 JSON。
+ *
+ * **主請求會等標題先答完**：標題 LLM 不在任何一輪裡，一次性 CLI 的收尾會先拆它（`cli.ts` 的 `detachTitle`，
+ * 「行程多半比標題先結束」，#650）——主回應一結束，還在退避或還在飛的標題就被中止、寫不進日誌。標題那條測試要斷言
+ * 「第二次成功的標題進了日誌」，就得讓主回應排在標題成功之後，否則斷言取決於兩條路誰先回來（負載重的 CI 上會輸）。
+ * 沒有標題請求的測試（標題被關掉）不受影響：永遠等不到，所以只有 `holdMainForTitle` 開著才等。
  */
-async function endpoint(answer: (title: boolean, nth: number) => '503' | 'ok') {
+async function endpoint(
+  answer: (title: boolean, nth: number) => '503' | 'ok',
+  options: { readonly holdMainForTitle?: boolean } = {},
+) {
   const seen: Seen[] = [];
   const counts = { title: 0, main: 0 };
+  let titleLanded!: () => void;
+  const titleAnswered = new Promise<void>((resolve) => {
+    titleLanded = resolve;
+  });
   const server = createServer((request: IncomingMessage, response: ServerResponse) => {
     const chunks: Buffer[] = [];
     request.on('data', (piece: Buffer) => chunks.push(piece));
@@ -85,24 +102,39 @@ async function endpoint(answer: (title: boolean, nth: number) => '503' | 'ok') {
         response.end(JSON.stringify({ error: { message: '上游出事了', type: 'upstream' } }));
         return;
       }
+      // 主請求等標題先答完（見 `endpoint` 的說明）。CLI 的主呼叫走非串流、pump 走串流，兩條都要等。
+      const hold = (): Promise<void> =>
+        !title && options.holdMainForTitle === true
+          ? Promise.race([
+              titleAnswered,
+              new Promise<void>((resolve) => setTimeout(resolve, TITLE_WAIT_CAP_MS)),
+            ])
+          : Promise.resolve();
       if (body.stream !== true) {
-        response.writeHead(200, { 'content-type': 'application/json' });
-        response.end(
-          JSON.stringify({
-            id,
-            object: 'chat.completion',
-            created: 1_790_000_000,
-            model: 'fake',
-            choices: [
-              {
-                index: 0,
-                message: { role: 'assistant', content: '一個標題' },
-                finish_reason: 'stop',
-              },
-            ],
-            usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
-          }),
-        );
+        void hold().then(() => {
+          response.writeHead(200, { 'content-type': 'application/json' });
+          response.end(
+            JSON.stringify({
+              id,
+              object: 'chat.completion',
+              created: 1_790_000_000,
+              model: 'fake',
+              choices: [
+                {
+                  index: 0,
+                  message: { role: 'assistant', content: '一個標題' },
+                  finish_reason: 'stop',
+                },
+              ],
+              usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+            }),
+          );
+          if (title) {
+            response.on('finish', () => {
+              setTimeout(titleLanded, TITLE_LANDING_SLACK_MS);
+            });
+          }
+        });
         return;
       }
       const piece = (delta: Record<string, unknown>, finish: string | null): string =>
@@ -113,11 +145,13 @@ async function endpoint(answer: (title: boolean, nth: number) => '503' | 'ok') {
           model: 'fake',
           choices: [{ index: 0, delta, finish_reason: finish }],
         })}\n\n`;
-      response.writeHead(200, { 'content-type': 'text/event-stream' });
-      response.write(piece({ role: 'assistant', content: '' }, null));
-      response.write(piece({ content: '好' }, null));
-      response.write(piece({}, 'stop'));
-      response.end('data: [DONE]\n\n');
+      void hold().then(() => {
+        response.writeHead(200, { 'content-type': 'text/event-stream' });
+        response.write(piece({ role: 'assistant', content: '' }, null));
+        response.write(piece({ content: '好' }, null));
+        response.write(piece({}, 'stop'));
+        response.end('data: [DONE]\n\n');
+      });
     });
   });
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
@@ -188,7 +222,9 @@ describe('產品組裝：模型請求的重試政策接到了每個入口', () =
   }, 30000);
 
   it('標題：第一次 503、第二次成功，標題請求打了兩次，模型標題進了日誌', async () => {
-    upstream = await endpoint((title, nth) => (title && nth === 1 ? '503' : 'ok'));
+    upstream = await endpoint((title, nth) => (title && nth === 1 ? '503' : 'ok'), {
+      holdMainForTitle: true,
+    });
     const { events } = await runOnce([]);
     expect(upstream.counts.title).toBe(2);
     expect(upstream.counts.main).toBe(1);
