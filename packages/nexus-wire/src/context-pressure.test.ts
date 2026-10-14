@@ -61,6 +61,21 @@ describe('contextPressure', () => {
     });
   });
 
+  /**
+   * `messagesCompactable`（#1443）是選填的：有就原樣帶著，沒有就不出這個 key。這一格出現以前的日誌重放出來的就是後者，
+   * web 要能分出「沒記」與 `false`。
+   */
+  it('messagesCompactable：有就帶著，沒有就不出這一格', () => {
+    for (const messagesCompactable of [true, false]) {
+      expect(fold(custom(CONTEXT_MEASURE, { ...measure, messagesCompactable }))).toEqual({
+        measure: { ...measure, messagesCompactable },
+      });
+    }
+    const old = fold(custom(CONTEXT_MEASURE, measure));
+    expect(old).toEqual({ measure });
+    expect('messagesCompactable' in old!.measure!).toBe(false);
+  });
+
   it('形狀不對整顆不收，不收一半', () => {
     const bad: unknown[] = [
       { ...measure, approxTokens: -1 },
@@ -73,6 +88,9 @@ describe('contextPressure', () => {
       { ...measure, thresholds: [{ type: 'tokens', value: Number.POSITIVE_INFINITY }] },
       { ...measure, thresholds: [{ type: 'tokens', value: 5 }, { type: 'messages' }] },
       { ...measure, thresholds: [null] },
+      { ...measure, messagesCompactable: 'false' },
+      { ...measure, messagesCompactable: 0 },
+      { ...measure, messagesCompactable: null },
       null,
     ];
     for (const payload of bad) expect(fold(custom(CONTEXT_MEASURE, payload))).toBeNull();

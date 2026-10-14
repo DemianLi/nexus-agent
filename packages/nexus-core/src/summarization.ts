@@ -702,14 +702,7 @@ export function createSummarizer(
   const logged = sessions === undefined ? quiet : withCompactionLog(quiet, sessions);
   // 基座的 `truncateArgs` 是它自己的事，這一層只在交給它之前換上記過的、在它交下去時記新的（#1303）。
   const truncationLogged = sessions === undefined ? logged : withArgTruncationLog(logged, sessions);
-  const budgeted = withTokenBudget(
-    truncationLogged,
-    settings.trigger,
-    book,
-    sessions,
-    limitsOf,
-    report,
-  );
+  const budgeted = withTokenBudget(truncationLogged, settings, book, sessions, limitsOf, report);
   // 暫存的範圍要罩住基座的寫入與日誌那層記下事件的時點，所以在預算層外面、剪刀裡面。
   const staged =
     staging === undefined || sessions === undefined ? budgeted : staging.wrap(budgeted, sessions);
@@ -1460,6 +1453,18 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  * 估它收到的那份——**就是要送上線的那份**，錨上的實數也是同一個階段的東西，兩邊同一把尺。記進日誌的正是這次
  * 比過的那個數，所以用量表的環與摘要時機是同一個數：環到 100% 就是這一層觸發摘要。
  *
+ * ## `messages` 那道到了摘不摘得到：`messagesCompactable`
+ *
+ * 上面那句只對 `tokens` 那道成立。`messages` 那道到了，基座還要切得出東西才會摘要：保留量是 token 算的（#1374），
+ * 訊息本身還沒超過保留量時尾巴蓋住整串，原樣送出（#1441）。所以每一筆多記一格 `messagesCompactable`
+ * （[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：同一份交下去的串，{@link retainedMessageCount} 算出的尾巴
+ * 比它短就是 `true`。**不看則數到了沒**，問的是「這道門檻到了的話摘不摘得到東西」；`false` 只有一個意思，不會同時代表
+ * 「還沒到」。沒有 `messages` 門檻就不給這一格。
+ *
+ * 量的是交下去的那份，跟 `messageCount` 同一串；{@link withRetainedTail} 選尾巴時看的是有效串。兩份則數相同（截參數不改
+ * 則數），差在被截過的參數比較便宜：同一段對話量出來的尾巴可能多蓋幾則，所以邊界上這一格偏向 `false`。摘要了的那一次
+ * 交下去的是 `[摘要, ...留下的]`，摘要那則落在尾巴外面，這一格是 `true`。
+ *
  * ## 超過就借基座的溢出恢復路徑摘要
  *
  * 基座的判準寫死在 `countTotalTokens`（純估算），沒有縫注入別的數。但它在「不摘要」那條路上把
@@ -1487,6 +1492,11 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  * 3. **載體：一顆事件**。dsh 不記這種事件，壓力從 `request/header` 與 surface 投影。我們的日誌不記 system、工具
  *    定義與請求標頭，重建不出這份請求，所以退到只帶量測結果的一顆，同 `model/usage` 那條偏離。**分母也不同**：
  *    dsh 除的是模型窗口，我們除的是摘要門檻（#528 grilling Q2）。
+ * 4. **`messagesCompactable` 是 dsh 沒有的一格**（產品需求超出 dsh，#1443）。dsh 的 `ContextPressureProjection`
+ *    （`llm/token-meter/src/projection.ts:30-48`，`5719020`）只有 token 數與窗口；「切不切得出東西」只在壓縮內部問
+ *    （`selectCompactableRange` 回 `null`，`compaction-basic/src/region.ts:117-155`、`index.ts:299`／`331`／`394`）
+ *    與 `/compact` 的回覆裡講（`command-compact/src/index.ts:68`），不進投影。dsh 也沒有 `messages` 門檻（觸發只比 token，
+ *    `index.ts:319`）；那道是我們自己加的（{@link DEFAULT_SUMMARIZATION} 的「`messages: 60` 那道」），這一格補的是它的誠實。
  *
  * ## 量與記都不准拋
  *
@@ -1497,14 +1507,15 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  * 它回的合成收尾對這裡就是正常回來。`turn-cancel.test.ts` 的委派那條釘著這件事。
  *
  * @param base - 摘要器（包過 {@link withCompactionLog} 的也行，它原樣轉交 `handler`）。
- * @param trigger - 全部門檻；比的是 `tokens` 那幾道，`messages` 那幾道用來判斷基座走哪條路。原樣記進每一筆。
+ * @param settings - 補滿的設定。`trigger` 是全部門檻：比的是 `tokens` 那幾道，`messages` 那幾道用來判斷基座走哪條路，
+ *   原樣記進每一筆；保留量那兩格算 `messagesCompactable`。
  * @param book - 錨定估算的帳。
  * @param sessions - 註冊表的 `sessions` 通道。省略即不記，照樣比。
  * @returns 同名、同狀態、多一層預算的 middleware。
  */
 function withTokenBudget(
   base: AgentMiddleware,
-  trigger: readonly SummarizationThreshold[],
+  settings: Pick<SummarizationSettings, 'trigger' | 'retainRatio' | 'retainTokens'>,
   book: TokenAnchorBook,
   sessions?: { forCall(config: unknown): SessionLookup },
   limitsOf?: (model: unknown) => ModelContextLimits | undefined,
@@ -1513,12 +1524,14 @@ function withTokenBudget(
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 同 withCompactionLog。 */
   if (inner === undefined) return base;
+  const { trigger } = settings;
   const byMessages = trigger.filter((t) => t.type === 'messages').map((t) => t.value);
   return {
     ...base,
     wrapModelCall: (request, handler) => {
       // 門檻逐步算：換模型之後窗口跟著換（#723）。沒有夾住時 `effective` 就是 `trigger` 本身。
-      const effective = effectiveTrigger(trigger, limitsOf?.(request.model));
+      const limits = limitsOf?.(request.model);
+      const effective = effectiveTrigger(trigger, limits);
       const thresholds = effective.map(({ type, value }) => ({ type, value }));
       const budgets = effective.filter((t) => t.type === 'tokens').map((t) => t.value);
       const budget = budgets.length === 0 ? undefined : Math.min(...budgets);
@@ -1563,18 +1576,25 @@ function withTokenBudget(
             configurable: (request as { runtime?: { configurable?: unknown } }).runtime
               ?.configurable,
           });
-          if (found.kind === 'ok')
+          if (found.kind === 'ok') {
+            const messages = sent.messages ?? [];
             found.log.append(
               'context/measure',
               withModelCall(
                 {
                   approxTokens: estimate.tokens,
-                  messageCount: (sent.messages ?? []).length,
+                  messageCount: messages.length,
                   thresholds,
+                  // 不看則數到了沒，只問「到了的話摘不摘得到東西」（#1443）。沒有 `messages` 門檻就不給這一格。
+                  ...(thresholds.some((threshold) => threshold.type === 'messages') && {
+                    messagesCompactable:
+                      retainedMessageCount(messages, settings, limits) < messages.length,
+                  }),
                 },
                 call.of(found.log),
               ),
             );
+          }
         } catch {
           // 記不進去不能反過來把摘要器殺掉。見 withCompactionLog。
         }

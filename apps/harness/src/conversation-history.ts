@@ -417,6 +417,9 @@ export function contextMeasureData(measure: SessionEventMap['context/measure']):
       approxTokens: measure.approxTokens,
       messageCount: measure.messageCount,
       thresholds: measure.thresholds.map(({ type, value }) => ({ type, value })),
+      ...(measure.messagesCompactable !== undefined && {
+        messagesCompactable: measure.messagesCompactable,
+      }),
     },
   };
 }

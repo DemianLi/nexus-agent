@@ -19,6 +19,8 @@ import {
   readSummarizationEvent,
 } from './summarization.js';
 import type { SummarizationThreshold } from './summarization.js';
+import { SessionLog } from './session-log.js';
+import type { SessionEventMap } from './session-log.js';
 import { estimateMessageTokens, estimateRequestTokens, TokenAnchorBook } from './token-estimate.js';
 import { TOOL_RESULT_PRUNE_MARKER } from './tool-result-pruner.js';
 
@@ -269,6 +271,108 @@ describe('壓力閘門接在有效串上（接線）', () => {
 
     expect(seen).toHaveLength(messages.length);
     expect(String(seen.at(-1)?.content)).toBe(HUGE);
+  });
+});
+
+/**
+ * **`context/measure` 帶 `messagesCompactable`**（[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：`messages` 那道到了的話
+ * 摘不摘得到東西。web 的用量環靠它分辨「70／60 則」是真的要摘要，還是尾巴蓋住全部、什麼都不會發生（#1441）。
+ *
+ * 一律走 `createSummarizer` 加出廠門檻：拿掉「把保留量設定傳進預算層」那條接線，這幾條就量不到同一個尾巴。
+ */
+describe('context/measure 帶 messagesCompactable（接線）', () => {
+  /** 預設模型的上限：保留量 = min((700,045 − 16,384) × 0.16, 100,000 × 0.2) = 20,000 token。 */
+  const LIMITS = { contextWindow: 700_045, maxOutputTokens: 16_384 };
+  const SUMMARY_MODEL = { profile: {}, invoke: async () => ({ text: '這是摘要。' }) } as never;
+
+  async function measureOf(
+    trigger: readonly SummarizationThreshold[],
+    messages: readonly BaseMessage[],
+    retainTokens?: number,
+  ) {
+    const log = new SessionLog('measure');
+    const middleware = createSummarizer(
+      { readFile: async () => null, write: async (path: string) => ({ path }) } as never,
+      {
+        ...DEFAULT_SUMMARIZATION,
+        trigger,
+        ...(retainTokens !== undefined && { retainTokens }),
+      },
+      new TokenAnchorBook(),
+      { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
+      undefined,
+      () => LIMITS,
+    );
+    let seen: readonly BaseMessage[] = [];
+    await middleware.wrapModelCall?.(
+      {
+        messages,
+        state: {},
+        model: SUMMARY_MODEL,
+        systemMessage: new SystemMessage('系統。'),
+        tools: [],
+      } as never,
+      ((request: { messages: readonly BaseMessage[] }) => {
+        seen = request.messages;
+        return new AIMessage('好。');
+      }) as never,
+    );
+    const measures = log.events.flatMap((event) =>
+      event.type === 'context/measure' ? [event.data as SessionEventMap['context/measure']] : [],
+    );
+    // 前提：一次呼叫一筆。
+    expect(measures).toHaveLength(1);
+    return {
+      seen,
+      measure: measures[0]!,
+      summarized: log.events.filter((event) => event.type === 'compaction/summary').length,
+    };
+  }
+
+  /** A：發版模擬的形狀。則數過了 60，訊息本身遠小於 20,000 token 的保留量，尾巴蓋住全部。 */
+  it('則數到了門檻、整串都在保留的尾巴裡：false，這一步也沒摘要', async () => {
+    const messages = longHistory(61);
+    const { seen, measure, summarized } = await measureOf(DEFAULT_SUMMARIZATION.trigger, messages);
+
+    expect(summarized).toBe(0);
+    expect(seen).toHaveLength(61);
+    expect(measure).toMatchObject({ messageCount: 61, messagesCompactable: false });
+  });
+
+  /** A2：不看門檻。還沒到 60 則，但尾巴只留一則——到了的話摘得到，所以是 true，環才不會在跨過門檻那一刻跳。 */
+  it('則數還沒到門檻、尾巴比整串短：true', async () => {
+    const { measure, summarized } = await measureOf(
+      DEFAULT_SUMMARIZATION.trigger,
+      longHistory(10),
+      1,
+    );
+
+    expect(summarized).toBe(0);
+    expect(measure).toMatchObject({ messageCount: 10, messagesCompactable: true });
+  });
+
+  /**
+   * B：則數到了、尾巴比整串短，這一步真的摘要了。記下的是交下去的 `[摘要, 最新一則]`：摘要那則落在尾巴外面，所以仍是 true。
+   * 歷史墊長，框好的摘要才比被取代的那段小、提交得了（#1396）。
+   */
+  it('則數到了門檻、尾巴比整串短：true，而且這一步真的摘要了', async () => {
+    const { seen, measure, summarized } = await measureOf(
+      DEFAULT_SUMMARIZATION.trigger,
+      fatHistory(61),
+      1,
+    );
+
+    expect(summarized).toBe(1);
+    expect(String(seen[0]?.content)).toContain('這是摘要。');
+    expect(measure).toMatchObject({ messageCount: 2, messagesCompactable: true });
+  });
+
+  /** C：沒有 `messages` 門檻就沒有這一格——不是 false。 */
+  it('沒有 messages 門檻時不出這一格', async () => {
+    const { measure } = await measureOf([{ type: 'tokens', value: 100_000 }], longHistory(61));
+
+    expect(measure.messageCount).toBe(61);
+    expect('messagesCompactable' in measure).toBe(false);
   });
 });
 

@@ -59,8 +59,17 @@ export interface WireContextMeasure {
    *
    * `tokens` 那道到了就摘要。`messages` 那道**到了不一定摘要**：保留量是 token 算的（#1374），訊息本身還沒超過保留量時
    * 尾巴蓋住整串、切不出東西，原樣送出。所以只看則數的比例會在不會摘要時顯示到頂（2026-10-14 發版模擬：70／60 則、約 33k token）。
+   * 那道到了摘不摘得到，看 {@link messagesCompactable}。
    */
   readonly thresholds: readonly WireSummaryThreshold[];
+  /**
+   * `messages` 那道門檻到了的話，摘不摘得到東西（[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：同一串算出的
+   * 保留尾巴比它短就是 `true`。**不看則數到了沒**——還沒到門檻時也可能是 `true`，`false` 只代表「到了也摘不到」。
+   *
+   * 沒有 `messages` 門檻時沒有這一格。**這一格出現以前的會話日誌也沒有**：重放舊日誌拿到的 `measure` 不帶它，
+   * 讀的人照沒有這一格以前的算法，不當成 `false`。
+   */
+  readonly messagesCompactable?: boolean;
 }
 
 /**
