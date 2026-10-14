@@ -12,7 +12,8 @@ import { createServer } from 'node:http';
 import type { ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { MemorySaver } from '@langchain/langgraph';
-import type { SessionEventMap } from '@nexus/core';
+import { deriveTokenUsage } from '@nexus/core';
+import type { SessionEventMap, StreamRetryOptions } from '@nexus/core';
 import {
   emptyConversation,
   LLM_RETRY,
@@ -43,6 +44,10 @@ type Act =
   | 'stall'
   /** 第一則事件就是 503 的錯誤（第一則事件之前；#1427 起與中段共用同一份預算）。 */
   | 'first503'
+  /** 同 `mid503`，但錯誤事件之前供應商先報了用量（100 輸入、10 輸出）。 */
+  | 'mid503usage'
+  /** 同 `ok`，但收尾前供應商報了用量（120 輸入、20 輸出）。 */
+  | 'okusage'
   /** 一口氣吐 {@link DENSE} 個字片段、緊接著送 503 的錯誤事件（順序測試用：失敗那次有一大串片段排在佇列裡）。 */
   | 'dense503';
 
@@ -57,6 +62,20 @@ const chunk = (id: string, delta: Record<string, unknown>, finish: string | null
     created: 0,
     model: 'fake',
     choices: [{ index: 0, delta, finish_reason: finish }],
+  })}\n\n`;
+
+const usageChunk = (id: string, prompt: number, completion: number): string =>
+  `data: ${JSON.stringify({
+    id,
+    object: 'chat.completion.chunk',
+    created: 0,
+    model: 'fake',
+    choices: [],
+    usage: {
+      prompt_tokens: prompt,
+      completion_tokens: completion,
+      total_tokens: prompt + completion,
+    },
   })}\n\n`;
 
 const envelope = (code: number): string =>
@@ -77,10 +96,11 @@ async function scriptedOpenAi(script: readonly Act[]) {
       return;
     }
     res.write(chunk(id, { role: 'assistant', content: '' }));
-    if (act === 'ok') {
+    if (act === 'ok' || act === 'okusage') {
       res.write(chunk(id, { content: '丙' }));
       res.write(chunk(id, { content: '丁' }));
       res.write(chunk(id, {}, 'stop'));
+      if (act === 'okusage') res.write(usageChunk(id, 120, 20));
       res.end('data: [DONE]\n\n');
       return;
     }
@@ -99,6 +119,7 @@ async function scriptedOpenAi(script: readonly Act[]) {
       return;
     }
     setTimeout(() => {
+      if (act === 'mid503usage') res.write(usageChunk(id, 100, 10));
       res.write(envelope(act === 'mid400' ? 400 : 503));
       res.end('data: [DONE]\n\n');
     }, 30);
@@ -118,7 +139,7 @@ async function scriptedOpenAi(script: readonly Act[]) {
 
 interface RunOptions {
   /** 預算；省略就是不給（等於不重打）。 */
-  readonly streamRetry?: { maxRetries: number; initialDelayMs: number; jitterRatio?: number };
+  readonly streamRetry?: StreamRetryOptions;
   /** 慢消費者：pump 每讀到一個圖事件就多等這麼久（毫秒），讓字片段在佇列裡積壓。 */
   readonly slowMs?: number;
   /** 在真事件之前先注入 pump 的假原始事件（測 pump 不該聽的 `custom`）。 */
@@ -535,6 +556,44 @@ describe('串流第一則事件之後才出錯（#520）', () => {
     expect(shownReplies(run.frames).map((entry) => entry.text)).toEqual(['丙丁']);
     expect(customNamed(run.frames, LLM_RETRY)).toHaveLength(1);
     expect(customNamed(run.frames, LLM_RETRY_STARTED)).toHaveLength(1);
+    // 沒有講到一半的回覆就沒有東西可擦：不送 `message-discard`（#1427，web 不會收到「擦掉沒有的東西」）。
+    expect(customNamed(run.frames, MESSAGE_DISCARD)).toHaveLength(0);
+  }, 30_000);
+
+  /**
+   * #1427：token-meter 按嘗試記帳。同一份日誌裡有首事件之前的失敗（供應商沒報用量）、串流中段的失敗（報了）與最後成功的一次；
+   * 每次嘗試各是一對起訖，用量只算有報的，總帳是它們的和，沒有重複也沒有漏。
+   */
+  it('混合失敗的日誌：每次嘗試各一對起訖，用量只算供應商報了的那幾次，總帳是它們的和', async () => {
+    const run = await runTurn(['first503', 'mid503usage', 'okusage'], { streamRetry: BUDGET });
+    expect(run.thrown).toBeUndefined();
+    expect(run.hits).toBe(3);
+
+    const starts = run.events.filter((event) => event.type === 'model/start');
+    const ends = run.events.filter((event) => event.type === 'model/end');
+    expect(starts).toHaveLength(3);
+    expect(ends.map((event) => (event.data as SessionEventMap['model/end']).outcome)).toEqual([
+      'error',
+      'error',
+      undefined,
+    ]);
+    const usages = run.events.filter((event) => event.type === 'model/usage');
+    expect(
+      usages.map((event) => {
+        const data = event.data as SessionEventMap['model/usage'];
+        return [data.modelCall, data.inputTokens, data.outputTokens, data.outcome];
+      }),
+    ).toEqual([
+      [starts[1]!.seq, 100, 10, 'error'],
+      [starts[2]!.seq, 120, 20, undefined],
+    ]);
+    expect(deriveTokenUsage(run.events)).toMatchObject({ inputTokens: 220, outputTokens: 30 });
+    // 兩次重打各一顆 `llm/retry`，分別指回失敗的那次（第 1、第 2 次嘗試）。
+    const retries = run.events.filter((event) => event.type === 'llm/retry');
+    expect(retries.map((event) => (event.data as { modelCall?: number }).modelCall)).toEqual([
+      starts[0]!.seq,
+      starts[1]!.seq,
+    ]);
   }, 30_000);
 
   /**
@@ -542,9 +601,12 @@ describe('串流第一則事件之後才出錯（#520）', () => {
    * `llm/retry` 的顆數 = 實際重打的次數。以前 SDK 層（6 次）與串流層（2 次）各算各的，同一個情境會打出遠多於 N+1 次。
    */
   it('端點每次都在第一則事件失敗：請求數不超過 N+1，llm/retry 的顆數等於實際重打的次數', async () => {
-    const run = await runTurn(Array.from({ length: 12 }, () => 'first503' as const), {
-      streamRetry: { maxRetries: 3, initialDelayMs: 5, maxDelayMs: 10, jitterRatio: 0 },
-    });
+    const run = await runTurn(
+      Array.from({ length: 12 }, () => 'first503' as const),
+      {
+        streamRetry: { maxRetries: 3, initialDelayMs: 5, maxDelayMs: 10, jitterRatio: 0 },
+      },
+    );
     expect(run.hits).toBe(4);
     expect(run.thrown).toBeInstanceOf(Error);
     const retries = run.events.filter((event) => event.type === 'llm/retry');

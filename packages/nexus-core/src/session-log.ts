@@ -553,7 +553,7 @@ export interface SessionEventMap {
    *
    * 帶 `outcome` 的是**沒有正常回來的那次呼叫**，供應商在串流裡報了用量才記（照 dsh 的 `assistant/attempt`：串流最後一個
    * `usage` chunk 算數）。數字一樣進總帳——那些 token 真的花掉了。**沒報就沒有這顆**，不是 0：「燒了但不知道燒多少」靠
-   * 配對的 `model/end.outcome` 看出來，兩者分得開。重試掉的中間幾次拿不到（SDK 的重試在記錄器底下，見 `llm-retry.ts`）。
+   * 配對的 `model/end.outcome` 看出來，兩者分得開。重試掉的每一次嘗試各是一對起訖（#1427：重試在記錄器外面，見 `stream-retry.ts`），失敗那次沒報用量就沒有這顆。
    * 沒有 `outcome` ＝ 正常回來的那次，舊日誌全是這一種。
    */
   'model/usage': {
@@ -658,13 +658,12 @@ export interface SessionEventMap {
    * `llm/retry`（`packages/llm/llm-retry/src/types.ts:9`）：排定時先寫，再開始等。**只記排定、不記完成**——
    * 成敗看後面的 `model/end`／`turn/failed`；預算用盡的那一次不排，所以不寫。
    *
-   * SDK 層的重試（#712）落在一次模型呼叫的 `model/start`／`model/end` 之間（重試包在那一對之內），一次呼叫的所有重試共用一個
-   * `retryId`。**串流中段出錯的整次重打（#520，`stream-retry.ts`）的在兩對之間**：失敗那一對已經收尾、下一對還沒開，由 `modelCall`
-   * 指回失敗的那次；所有讀的人靠 `modelCall` 歸屬、不靠落在哪一對之間（`indexModelCalls`、軌跡投影、token-meter 都是；
-   * token-meter 的 `llm/retry-started` 在呼叫之外不扣牆鐘，因為退避本來就不在起訖之內）。**不進模型**：推模型歷史的一側不讀。
+   * 重試只有一層（#1427，`stream-retry.ts` 的 `retryModelCall`，SDK 層不重試），不分第一則事件之前或之後：一次呼叫的所有重試共用
+   * 一個 `retryId`，**每次嘗試各是一對 `model/start`／`model/end`**，`llm/retry` 落在兩對之間：失敗那一對已經收尾、下一對還沒開，
+   * 由 `modelCall` 指回失敗的那次；所有讀的人靠 `modelCall` 歸屬、不靠落在哪一對之間（`indexModelCalls`、軌跡投影、token-meter
+   * 都是；token-meter 的 `llm/retry-started` 在呼叫之外不扣牆鐘，因為退避本來就不在起訖之內）。**不進模型**：推模型歷史的一側不讀。
    *
-   * 欄位比 dsh 少，理由與計數的壽命見 {@link ./llm-retry.ts}：SDK 層沒有 `delayMs`（接縫看不到退避）、沒有
-   * `turn`（由 `seq` 推）。`step` 的對應物是 `modelCall`（#1021）：所屬那次呼叫的 `model/start` 的 `seq`。
+   * 欄位比 dsh 少：沒有 `turn`（由 `seq` 推）。`step` 的對應物是 `modelCall`（#1021）：所屬那次呼叫的 `model/start` 的 `seq`。
    */
   'llm/retry': {
     readonly retryId: string;
@@ -673,9 +672,8 @@ export interface SessionEventMap {
     readonly maxRetries: number;
     readonly failure: LlmFailure;
     /**
-     * 排定要等多久（毫秒，已含抖動）。**只有串流中段出錯的重打有**（[#520](https://github.com/DemianLi/nexus-agent/issues/520)，
-     * `stream-retry.ts` 自己算退避）；**SDK 層（#712，`llm-retry.ts`）沒有這一格**——`onFailedAttempt` 在 `p-retry` 算退避之前就被叫，
-     * 事前不可知，那一側的實際等待看配對的 `llm/retry-started.waitedMs`。
+     * 排定要等多久（毫秒）：本機退避（含抖動、夾在 `maxDelayMs` 以內），或供應商給的 `retry-after`（不超過 `maxDelayMs` 才會排）。
+     * 實際等了多久看配對的 `llm/retry-started.waitedMs`。舊日誌（#1427 之前 SDK 層的重試）沒有這一格。
      */
     readonly delayMs?: number;
     /**
@@ -686,7 +684,7 @@ export interface SessionEventMap {
   };
   /**
    * 排定的那次重試等完、**真的要重打**了。與同一個 `retryId` 與 `retry` 的 `llm/retry` 配對；等待中被取消的
-   * 重試沒有這一顆（{@link ./llm-retry.ts} 的「取消之後不再寫」）。`waitedMs` 是**實際**等了多久——dsh 在
+   * 重試沒有這一顆（`stream-retry.ts` 的「取消之後不再寫」）。`waitedMs` 是**實際**等了多久——dsh 在
    * `llm/retry` 上帶的是排定的 `delayMs`，這裡的接縫拿不到。
    */
   'llm/retry-started': {

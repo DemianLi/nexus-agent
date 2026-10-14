@@ -346,9 +346,7 @@ export async function retryModelCall<T>(
     if (outcome.status === 'fulfilled') return outcome.value;
     const reported = scope.failure;
     const retriable =
-      reported?.retryable === true &&
-      codes.includes(reported.code) &&
-      attempt < options.maxRetries;
+      reported?.retryable === true && codes.includes(reported.code) && attempt < options.maxRetries;
     if (reported === undefined || !retriable) throw outcome.reason;
     // 供應商要求的等待：不超過上限就照它等，超過就放棄（照 dsh 的 normal 模式，原錯誤往外拋）。
     const asked = reported.retryAfterMs;

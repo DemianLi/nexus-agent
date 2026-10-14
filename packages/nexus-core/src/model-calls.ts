@@ -51,10 +51,10 @@
  * 摘要，`llmMs` 不會把同一段牆鐘算兩次。`apps/harness/src/context-overflow.test.ts` 釘著
  * 「四次模型節點、五步」。
  *
- * ## 重試也在這一格記（[#712](https://github.com/DemianLi/nexus-agent/issues/712)）
+ * ## 重試在這一格外面（[#712](https://github.com/DemianLi/nexus-agent/issues/712)、#1427）
  *
- * 重試發生在 handler 裡面，core 看不到；這一格替每次呼叫開一個重試範圍（{@link ./llm-retry.ts}），
- * adapter 在裡面回報，落成 `llm/retry`／`llm/retry-started`，位置就在這一對起訖之間。
+ * 重試只有一層，在 {@link ./stream-retry.ts} 的 middleware（站在這一格外面）：每次嘗試各走一遍這一格，所以各是一對
+ * `model/start`／`model/end`，`llm/retry` 與 `llm/retry-started` 寫在兩對之間。這一格自己不開重試範圍。
  *
  * ## 回覆也在這一格記（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）
  *

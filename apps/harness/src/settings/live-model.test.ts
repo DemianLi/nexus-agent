@@ -137,11 +137,17 @@ describe('live-model 的 schema', () => {
       Number.MAX_SAFE_INTEGER,
     );
     // dsh 要的是「大於 0」，不是「至少 1」：0.5 毫秒合法。
-    expect(parse({ ...normal, backoff: { initialDelayMs: 0.5 } }).retryPolicy.backoff).toMatchObject({
+    expect(
+      parse({ ...normal, backoff: { initialDelayMs: 0.5 } }).retryPolicy.backoff,
+    ).toMatchObject({
       initialDelayMs: 0.5,
     });
-    expect(parse({ ...normal, backoff: { jitterRatio: 0 } }).retryPolicy.backoff.jitterRatio).toBe(0);
-    expect(parse({ ...normal, backoff: { jitterRatio: 1 } }).retryPolicy.backoff.jitterRatio).toBe(1);
+    expect(parse({ ...normal, backoff: { jitterRatio: 0 } }).retryPolicy.backoff.jitterRatio).toBe(
+      0,
+    );
+    expect(parse({ ...normal, backoff: { jitterRatio: 1 } }).retryPolicy.backoff.jitterRatio).toBe(
+      1,
+    );
     expect(
       parse({
         ...normal,

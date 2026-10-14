@@ -122,22 +122,28 @@ describe('重打的判斷', () => {
       throw new Error(code);
     };
     await expect(
-      callWith({ maxRetries: 2, initialDelayMs: 1, retryableCodes: ['SERVER'] }, failWith('TIMEOUT')),
+      callWith(
+        { maxRetries: 2, initialDelayMs: 1, retryableCodes: ['SERVER'] },
+        failWith('TIMEOUT'),
+      ),
     ).rejects.toThrow('TIMEOUT');
     expect(calls).toBe(1);
 
     calls = 0;
     await expect(
-      callWith({ maxRetries: 2, initialDelayMs: 1, retryableCodes: ['TIMEOUT'] }, failWith('TIMEOUT')),
+      callWith(
+        { maxRetries: 2, initialDelayMs: 1, retryableCodes: ['TIMEOUT'] },
+        failWith('TIMEOUT'),
+      ),
     ).rejects.toThrow('TIMEOUT');
     expect(calls).toBe(3);
 
     // 省略：dsh 預設的五個碼都重打，其他的碼（例如 HTTP_404）不重打。
     for (const code of ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT']) {
       calls = 0;
-      await expect(
-        callWith({ maxRetries: 1, initialDelayMs: 1 }, failWith(code)),
-      ).rejects.toThrow(code);
+      await expect(callWith({ maxRetries: 1, initialDelayMs: 1 }, failWith(code))).rejects.toThrow(
+        code,
+      );
       expect(calls, code).toBe(2);
     }
     calls = 0;

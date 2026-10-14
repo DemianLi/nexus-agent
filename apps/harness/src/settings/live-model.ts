@@ -25,30 +25,45 @@
  * 不看 per-call options。逐次換只能每次重建實例。
  *
  * 所以退到 `startupSetting`：起動期解一次、往下傳一份，同 `#settings/…` 那幾列
- * （[#529](https://github.com/DemianLi/nexus-agent/issues/529) 的 A2）。**這一條與 `live-model.ts`
- * 裡 `DEFAULT_LIVE_MAX_RETRIES` 檔頭登記的「要對齊 dsh 的有界退避得自己包一層 caller」是同一層
- * 的工**——哪天包了那一層，逐次解析跟有界退避一起做。key 不在這一列：它已經是逐次請求解析
+ * （[#529](https://github.com/DemianLi/nexus-agent/issues/529) 的 A2）。key 不在這一列：它已經是逐次請求解析
  * （[#730](https://github.com/DemianLi/nexus-agent/issues/730)，`credentials.ts`），跟這裡的「起動期解一次」是兩件事。
+ * 重試政策（偏離二）同樣在起動期解一次、進組裝點的那一份；退避與次數的有界性已經由 `retryModelCall` 自己守，不再依賴
+ * 「自己包一層 caller」。
  *
- * ## 偏離二：重試只有次數，而且次數有上限
+ * ## 偏離二：重試只有一層，`mode: 'always'` 拒收（[#1427](https://github.com/DemianLi/nexus-agent/issues/1427)）
  *
- * dsh 的 `retryPolicy` 有 `initialDelayMs`／`maxDelayMs`／`jitterRatio`。`AsyncCaller` 只收
- * `maxRetries` 與 `onFailedAttempt`，退避寫死在 `callWithRetries` 裡，所以這裡只有 `maxRetries`。
+ * **形狀與驗證逐條照 dsh**（`packages/llm/llm/src/retry-policy.ts` 的 `resolveRetryPolicy`／`resolveBackoff`）：
+ * `retryPolicy: { mode, maxRetries, retryableCodes, backoff: { initialDelayMs, maxDelayMs, jitterRatio } }`。整個不寫就是
+ * normal 的預設值，寫了就必填 `mode`；`maxRetries` 是非負安全整數、**不設上限**（同 dsh：安全靠單次等待有界）；
+ * `initialDelayMs` 大於 0、不超過 `MAX_TIMER_DELAY_MS`、不大於 `maxDelayMs`；`jitterRatio` 在 0 到 1；`retryableCodes` 不能
+ * 是空陣列、不能有空字串、不能重複；未知欄位拒收。
  *
- * **dsh 的次數上限是 `Number.MAX_SAFE_INTEGER`，我們不能照抄**，因為那個上限安全的前提是退避
- * 有界（`maxDelayMs`）。我們的退避是 p-retry 的 `factor 2`、`minTimeout 1s`、**`maxTimeout` 無限**
- * （`@langchain/core` 的 `dist/utils/p-retry/index.js:91-93`），第 k 次重試前等 `2^(k−1) × [1, 2]`
- * 秒。n 次重試的累計等待：
+ * **重試只有 `@nexus/core` 的 `retryModelCall` 這一層**：SDK 的 `AsyncCaller` `maxRetries` 恆為 0（`live-model.ts`
+ * 的 `onFailedAttempt` 只做分類與回報）。以前兩層各算各的（SDK 6 次＋串流中段 2 次），同一個情境最壞 (1+6)×(1+2) 次請求、
+ * 第 4 次起 `llm/retry` 還被吞掉（`.docs/wrapmodelcall-bridge-gaps-2026-10-11.md` G4）。現在首事件之前與之後共用這一份預算，
+ * 打到端點的請求數就是 `maxRetries + 1`，`llm/retry` 的顆數就是實際重打的次數。標題、摘要器生摘要、eval、spike 也吃同一份
+ * （`retryModelCall` 直接呼叫，沒有日誌就不寫 `llm/retry`）。
  *
- * | `maxRetries` | 累計等待 |
- * | --- | --- |
- * | 6（預設） | 63–126 秒 |
- * | 8 | 4.3–8.5 分鐘 |
- * | 10（上限） | 17–34 分鐘 |
- * | 11 | 34–68 分鐘 |
+ * **出廠值**（demian 2026-10-14 拍板，不是偏離）：`maxRetries` 6、`initialDelayMs` 500、`maxDelayMs` 10000、
+ * `jitterRatio` 0.1、`retryableCodes` 是 dsh 的預設五個碼。dsh 的預設是 5 次；6 次不計抖動的累計等待約 25.5 秒（0.5＋1＋2＋4＋8＋10），
+ * 蓋得過 2026-08-28 量到的 16 秒限流窗口。**那次量的是 `openai/gpt-oss-120b`，出貨的 nemotron 沒量過**，所以這個數字是
+ * 「蓋過已知窗口」不是「量過這顆」。代價：串流中段失敗最壞重付 6 次整個回覆。
  *
- * **10 是挑的，不是量的**：算式是量得到的，「一次呼叫最多安靜多久還算可以接受」不是。挑在
- * 半小時這個量級，是因為再往上一格，一次呼叫就可能安靜超過一小時才浮出錯誤。
+ * **碼對得上我們的分類**（`live-model.ts` 的 `classifyLlmFailure`）：429（含沒帶 header 的）→ `RATE_LIMIT`、其他 HTTP 狀態 →
+ * `SERVER`、逾時 → `TIMEOUT`、沒有狀態的連線問題 → `TRANSPORT`。`EMPTY_RESPONSE` 今天沒有生產者（沒有「空回覆就重打」的
+ * 路徑），收在清單裡只為形狀與 dsh 一致。放棄的那幾類（401／403／402／配額、4xx、上下文溢出、410 下架）不經過回報，所以
+ * `retryableCodes` 擋的是「分類出來的碼」，不是替它們翻案。
+ *
+ * **與 dsh 行為對齊的幾條**：`retry-after` 不超過 `maxDelayMs` 就照它等（不加抖動）、超過就放棄；抖動之後再夾到
+ * `maxDelayMs`；**沒帶 header 的 429 照樣重試**（基座的預設 handler 會把它當容量不足放棄）。
+ *
+ * **偏離：`mode` 只收 `normal`，`always` 拒收。** dsh 的 `always` 對每一次失敗無限重試。我們是企業內部聊天機器人，一輪沒有
+ * 盡頭，中段失敗每次都重付整個回覆，無限重試會無限重付。理由類別是**產品需求超出 dsh**。**撤除條件**：demian 提出需要無限
+ * 重試的情境。也登記在 `docs/plugin-contract.md` 的偏離表。
+ *
+ * **舊欄位（頂層 `maxRetries`、`streamRetry`）大聲失敗**，不自動轉換：兩個舊數字沒有無損的合併方式（見
+ * `legacyRetryKeysMessage`）。`--live` 起不來並指名這一列；寫入口 `plugin config set live-model` 整份替換可以改，
+ * 但**寫在 `--patch` 檔裡的舊值寫入口蓋不掉**，使用者要自己改那個檔。
  *
  * ## 偏離三：逾時拆兩格，第一格語意與 dsh 不同所以欄位名不照抄
  *
@@ -126,11 +141,8 @@
  *
  * dsh 的 `TIMEOUT`、`TRANSPORT`、`SERVER` 都在預設可重試碼裡（`packages/llm/llm/src/retry-policy.ts:18-24`），中段失敗照樣整次重打，
  * 靠的是 `assistant/attempt` 這個載體宣告「那一次作廢」。我們同向：`@nexus/core` 的 `stream-retry.ts` 整次重打、日誌多一顆
- * `assistant/attempt`、web 收到 `message-discard` 擦掉作廢的那一則。**退避的形狀照 dsh**：倍增、`maxDelayMs` 封頂 10 秒、
- * `jitterRatio` 0.1（`:14-17`，`5badb15009a`），次數沒有另設上限（同 dsh，安全靠單次等待有界）。**只有兩個起始值不照抄**：
- * 預設 2 次、1 秒起（dsh 是 5 次、500 毫秒），因為每次重打都重付整個回覆的費用；那是 #520 卡上 2026-10-06 拍板的，欄位都能調。
- * 第一則事件**之前**的失敗不歸這一格管：SDK 層用 `maxRetries`（偏離二，p-retry 的退避，**不是同一套**——那一層 `AsyncCaller`
- * 只收次數、退避寫死，帶不進 dsh 的上限與抖動）已經重試過，這裡再接就是乘法。
+ * `assistant/attempt`、web 收到 `message-discard` 擦掉作廢的那一則。**政策與首事件之前共用**（偏離二，#1427）：同一份次數、
+ * 同一套退避，沒有第二層。
  *
  * ## 這一列關不掉
  *
@@ -227,9 +239,17 @@ function legacyRetryKeysMessage(found: readonly string[]): string {
 const retryBackoffSchema = z
   .strictObject({
     /** 第一次重打前等多久（毫秒），之後每次加倍。dsh：大於 0、不超過計時器上限、不大於 `maxDelayMs`。 */
-    initialDelayMs: z.number().gt(0).max(MAX_LIVE_TIMEOUT_MS).default(DEFAULT_RETRY_INITIAL_DELAY_MS),
+    initialDelayMs: z
+      .number()
+      .gt(0)
+      .max(MAX_LIVE_TIMEOUT_MS)
+      .default(DEFAULT_RETRY_INITIAL_DELAY_MS),
     /** 單次等待的上限（毫秒），**供應商給的 `retry-after` 超過它就放棄**（dsh 的 normal 模式）。 */
-    maxDelayMs: z.number().gt(0).max(MAX_LIVE_TIMEOUT_MS).default(DEFAULT_STREAM_RETRY_MAX_DELAY_MS),
+    maxDelayMs: z
+      .number()
+      .gt(0)
+      .max(MAX_LIVE_TIMEOUT_MS)
+      .default(DEFAULT_STREAM_RETRY_MAX_DELAY_MS),
     /** 抖動比例，0 到 1。 */
     jitterRatio: z.number().min(0).max(1).default(DEFAULT_STREAM_RETRY_JITTER_RATIO),
   })
@@ -257,7 +277,12 @@ const retryPolicySchema = z.strictObject({
   /** 只收 `normal`，寫了就必填，見 {@link retryModeError}。 */
   mode: z.literal('normal', { error: retryModeError }),
   /** 最多重打幾次（不含第一次）。非負安全整數，沒有另外的上限，同 dsh：安全靠的是單次等待有界。 */
-  maxRetries: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(DEFAULT_RETRY_MAX_RETRIES),
+  maxRetries: z
+    .number()
+    .int()
+    .min(0)
+    .max(Number.MAX_SAFE_INTEGER)
+    .default(DEFAULT_RETRY_MAX_RETRIES),
   /** 哪些失敗碼才重打；不能是空陣列、不能有空字串、不能重複（dsh 同三條）。 */
   retryableCodes: z
     .array(z.string().min(1, 'retryableCodes 不能有空字串'))

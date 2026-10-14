@@ -140,13 +140,13 @@ export function noteModelCallReplied(log: SessionLog, modelCall: number): void {
 }
 
 /**
- * adapter 在**每次請求開跑**時呼叫（`fetch` 層，跟 `noteRequestStart` 同一個時刻），換來一個回報函式：請求的串流裡
+ * adapter 在**每次請求開跑**時呼叫（`fetch` 層，每次請求開跑的那一刻），換來一個回報函式：請求的串流裡
  * 看到供應商的用量就用它回報（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）。
  *
  * ## 為什麼是 adapter 回報，不是記錄器自己讀
  *
  * 失敗的呼叫沒有回應物件可讀；v3 串流的模型層也收不到 token 回呼（pump 轉發的逐段片段不經模型的回呼）。
- * 供應商的用量只活在 `fetch` 回來的位元組裡，所以只有 adapter 手上有它——同 {@link ./llm-retry.ts} 的重試回報。
+ * 供應商的用量只活在 `fetch` 回來的位元組裡，所以只有 adapter 手上有它——同 {@link ./stream-retry.ts} 的重試回報（`noteStreamFailure`）。
  *
  * ## 回報函式要在請求開跑時就拿住
  *

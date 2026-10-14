@@ -126,7 +126,9 @@ async function until(predicate: () => boolean, ms = 15_000): Promise<void> {
 /** 經 pump 跑一輪：`stopAfterText` 為真就等正文上線之後按停止；否則等這一輪自己收（斷線那種）。 */
 async function runTurn(stopAfterText: boolean) {
   const built = await createNexusAgent({
-    model: createLiveModel(liveModelConfigSchema.parse({ baseUrl, retryPolicy: { mode: 'normal', maxRetries: 0 } })),
+    model: createLiveModel(
+      liveModelConfigSchema.parse({ baseUrl, retryPolicy: { mode: 'normal', maxRetries: 0 } }),
+    ),
     checkpointer: new MemorySaver(),
     plugins: [],
   });
