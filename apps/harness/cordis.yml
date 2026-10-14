@@ -142,6 +142,9 @@
 # 377 KB、整段下行約 1.2 GB；理論最壞一顆約 0.6 MB；長會話另加最多 200 列摘要（約 50 KB）。請求快照那顆只在快照真的變了才重送。沒有設定可調。
 #
 # 關掉它（`disabled: true`）的結果：web 的觀測分頁讀不到這兩份投影，其餘一切照舊。沒有它，通道仍然在，只是沒有單元。
+#
+# 這一列是**樹上的函式插件**（#1435）：模組有 `manifest` 匯出，Include 把它掛在 `include:trajectory`、經 `projections` 服務登記
+# 兩個單元；清單上的位置、名字與 `disabled` 的寫法都沒變，相容層那一側只留一列橋接列。
 - id: trajectory
   name: '@nexus/plugin-trajectory'
 

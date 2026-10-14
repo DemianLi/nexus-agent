@@ -12,7 +12,7 @@
  * @module
  */
 
-import type { ProjectionUnit, SessionEvent } from '@nexus/core';
+import type { ProjectionUnit, SessionEvent } from '@nexus/projections';
 import {
   REQUEST_SNAPSHOTS_KEEP,
   REQUEST_SNAPSHOTS_PROJECTION,

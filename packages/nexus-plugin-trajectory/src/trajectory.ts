@@ -34,15 +34,14 @@
  * @module
  */
 
+import { isLogicalTurnStart, ProjectionDetailError } from '@nexus/projections';
+import type { ProjectionUnit, SessionEvent } from '@nexus/projections';
 import {
-  isLogicalTurnStart,
   loggedContentBlocks,
   loggedMessageId,
   REPEAT_REMINDER_MARKER,
   toolCallIds,
-} from '@nexus/core';
-import { ProjectionDetailError } from '@nexus/core';
-import type { ProjectionUnit, SessionEvent } from '@nexus/core';
+} from '@nexus/session';
 import {
   TRAJECTORY_CALL_TOOLS_CAP,
   TRAJECTORY_DETAIL_TURNS,
@@ -431,7 +430,14 @@ function withInput(state: TrajectoryState, input: TrajectoryInput): TrajectorySt
   });
 }
 
-/** 就地改的歸屬表目前有幾筆（只有按需拉細節的重放用就地改，見 {@link TrimPolicy.ownersInPlace}）。 */
+/**
+ * 就地改的歸屬表目前有幾筆（只有按需拉細節的重放用就地改，見 {@link TrimPolicy.ownersInPlace}）。
+ *
+ * **SDK lint 的窄例外**（#1435 Q2 (b)，`top-level-collection`）：規則擋的是「跨掛載存活、卸載不會清的狀態」，這份快取不是那一種——
+ * 鍵是每次投影重放自己的歸屬表物件，所以不會跨單元實例共用到別人的狀態；`WeakMap` 的鍵被回收項目就跟著消失，卸載後沒有會被
+ * 誤用的東西。dsh 的生產碼有同樣的做法：`packages/compaction/compaction/src/tool-pairing.ts:26` 的 `balanceCacheBySession`。
+ */
+// eslint-disable-next-line no-restricted-syntax -- 鍵是每次重放自己的歸屬表物件、不跨單元實例共用，鍵被回收項目就消失；dsh 先例 tool-pairing.ts:26（#1435 Q2 (b)）
 const inPlaceSizes = new WeakMap<object, number>();
 
 /** 工具表：加進一筆擁有者，超過上限從最舊的丟。 */
@@ -574,13 +580,14 @@ function startText(data: Record<string, unknown>): string | undefined {
   }
 }
 
-const TURN_KINDS: ReadonlySet<string> = new Set([
+/** 認得的 `turn/start` 種類（常數查表；唯讀陣列，不是模組層的集合，#1435 Q2 (b)）。 */
+const TURN_KINDS: readonly string[] = [
   'message',
   'resume',
   'agent-message',
   'subagent-settled',
   'goal',
-]);
+];
 
 /**
  * 窗口的裁法。預設（推送的投影）是只留最新 {@link TRAJECTORY_DETAIL_TURNS} 輪；按需拉細節時重放整份日誌，`pinned` 指到的輪**不裁**
@@ -600,7 +607,7 @@ function startTurn(state: TrajectoryState, event: SessionEvent, trim: TrimPolicy
   const data = event.data as unknown as Record<string, unknown>;
   const kindRaw = data['kind'];
   // 不認得的 `turn/start` 種類（之後才長出來的）照樣開一輪，標成 message 以外沒有的誠實做法是丟掉它的預覽。
-  const kind: TrajectoryTurnKind = TURN_KINDS.has(String(kindRaw))
+  const kind: TrajectoryTurnKind = TURN_KINDS.includes(String(kindRaw))
     ? (kindRaw as TrajectoryTurnKind)
     : 'message';
   const text = startText(data);

@@ -13,9 +13,9 @@ capabilities 的執行、版本路由與兩版並存不在這一刀，見文末�
 ## 這份規範管誰
 
 **只管 Cordis 樹上的函式插件。** 今天樹上有相容層與入口兩列、`tools`（工具登記處）、`projections`（投影登記處，#1421）、
-`include`（讀出貨清單的那一列），加上逐顆遷出的插件，**今天是 `echo`**（[#1416](https://github.com/DemianLi/nexus-agent/issues/1416) PR 2）
-**與 `token-meter`**（[#1421](https://github.com/DemianLi/nexus-agent/issues/1421)）；還留在
-相容層裡的 19 顆是 `NexusPlugin` 物件，照舊 `export default`（`cordis.yml` 的 `name` 要靠它指到那顆物件），不受下面
+`include`（讀出貨清單的那一列），加上逐顆遷出的插件，**今天是 `echo`**（[#1416](https://github.com/DemianLi/nexus-agent/issues/1416) PR 2）、
+**`token-meter`**（[#1421](https://github.com/DemianLi/nexus-agent/issues/1421)）**與 `trajectory`**（[#1435](https://github.com/DemianLi/nexus-agent/issues/1435)）；還留在
+相容層裡的 18 顆是 `NexusPlugin` 物件，照舊 `export default`（`cordis.yml` 的 `name` 要靠它指到那顆物件），不受下面
 「不能有 default」的約束。遷出一顆，它就從物件形式換成這裡的函式插件形式。載入器怎麼分辨兩種形式，見下面
 「接進清單」。
 
@@ -228,6 +228,10 @@ ctx.effect(() => {
 - 頂層的 `const state = { count: 0 }`（物件本身可變）不在清單裡。
 - 頂層的**常數查表**也會中 `top-level-collection`（`const KNOWN = new Set([...])`）：語法分不出它是不是只讀。**不為它
   放寬**（PM 決定）：遷移卡碰到時二選一，把它搬進 `apply` 的閉包，或寫一行窄例外並寫理由。
+- **已登記的窄例外**（#1435 Q2 (b)）：`trajectory` 的 `inPlaceSizes`（`trajectory.ts`，`top-level-collection`）。它是以投影重放
+  自己的歸屬表物件為鍵的 `WeakMap` 快取：鍵被回收項目就消失，不跨單元實例共用到別人的狀態，卸載後沒有會被誤用的東西；
+  dsh 的生產碼有同樣的做法（`packages/compaction/compaction/src/tool-pairing.ts:26` 的 `balanceCacheBySession`）。同一支的
+  `TURN_KINDS` 是常數查表，改成唯讀陣列加 `includes`，不必例外。
 - 這些由審查與一致性套件的 `unload` 那一格補：副作用沒走 `ctx.effect`，卸載後就有殘留，`unload` 會紅。真的有人繞過，
   再升級成帶型別的規則。
 
@@ -305,7 +309,7 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
 | 服務契約用 `check` 做 semver | 產品需求超出 dsh | dsh 一處都沒用（`Service.check` 在 `packages`、`apps` 為 0）；它的版本相容檢查在套件層，比整個 runtime 的版本（`packages/boot/app-boot/src/plugin-compatibility.ts:61-88`） |
 | 共用的一致性套件 | 產品需求超出 dsh | dsh 的卸載測試是每個套件各寫一份；插件層級沒有共用套件，只有後端層級的 contract suite（`packages/storage/storage/tests/contract.ts`）。決議 §3-4 第 12 條。**並由 gate 保證每顆遷出的插件都有一條呼叫它的測試**（dsh 沒有這道 gate，靠每個檔 100% 覆蓋率間接保證，`docs/testing.md:9`） |
 | 插件邊界的 lint | 產品需求超出 dsh | dsh 沒有這條 lint：`.oxlintrc.json` 唯一的 `no-restricted-properties` 禁的是 `crypto.randomUUID`，而它自己的生產碼大量在用 `ctx.root`（`packages` 非測試碼 11 處）與 `internal/*`。決議 §3-4 第 12 條、grilling Q18 (c)（#1420） |
-| 投影登記處的定義套件相依 `@nexus/core`（#1421 Q2 (a)） | 表達不出來，退到最接近的實作 | dsh 的 `dsh-session-projection` 相依 `dsh-session`，`SessionEvent` 在 `dsh-session`。我們的 `SessionEvent` 與 `isLogicalTurnStart` 在 `@nexus/core` 的 `session-log.ts`，抽一個 `@nexus/session` 定義套件是橫跨整個核心的一刀（Q2 (b)），這一張不做。所以 `ProjectionUnit`、`SessionEvent`、`isLogicalTurnStart` 留在 core、由定義套件單向轉出，`@nexus/core` 放定義套件的 `peerDependencies`（`devDependencies` 留 `workspace:*`，不能讓安裝結果出現第二份 core）。**這是第一個相依 core 的定義套件。撤除條件**：SDK 與定義套件要發布到私有 registry 之前，要先做 Q2 (b)，讓定義套件不再相依 `@nexus/core` |
+| 投影登記處的定義套件相依 `@nexus/core`（#1421 Q2 (a)） | 表達不出來，退到最接近的實作 | dsh 的 `dsh-session-projection` 相依 `dsh-session`，`SessionEvent` 在 `dsh-session`。我們的 `SessionEvent` 與 `isLogicalTurnStart` 在 `@nexus/core` 的 `session-log.ts`，抽一個 `@nexus/session` 定義套件是橫跨整個核心的一刀（Q2 (b)），這一張不做。所以 `ProjectionUnit`、`SessionEvent`、`isLogicalTurnStart` 留在 core、由定義套件單向轉出，`@nexus/core` 放定義套件的 `peerDependencies`（`devDependencies` 留 `workspace:*`，不能讓安裝結果出現第二份 core）。**這是第一個相依 core 的定義套件。** #1435 Q1 (c) 之後多一個同形狀的 `@nexus/session`（`packages/nexus-session`）：只做單向轉出，轉出的是會話日誌的四個讀法（`loggedContentBlocks`、`loggedMessageId`、`toolCallIds`、`REPEAT_REMINDER_MARKER`），`@nexus/core` 同樣放 `peerDependencies`；`ProjectionDetailError` 屬於投影，由 `@nexus/projections` 轉出。**撤除條件**（兩個套件一起）：SDK 與定義套件要發布到私有 registry 之前，把日誌讀法的實作搬進 `@nexus/session`（Q2 (b)），屆時 `SessionEvent`、`isLogicalTurnStart` 也從 `@nexus/projections` 移到 `@nexus/session`，`@nexus/projections` 改成從 `@nexus/session` 轉出，讓兩個定義套件都不再相依 `@nexus/core` |
 | 投影的 provider 只收定義，不負責推動（#1421，PM 決策 2） | 表達不出來，退到最接近的實作 | dsh 的 `SessionProjectionRegistry` 自己監聽 `session/created` 與 `session/event`，逐 session 推動每一格（`session-projection/src/index.ts`）。我們把推動留在 `@nexus/core` 每條 thread 的登記處（`createProjectionFold`）：推動綁在會話日誌與 wire 的投影通道上，搬過去就是 Q2 (b) 那一刀。**撤除條件**：跟 Q2 (b) 一起做 |
 | 投影：provider 這一層同 key 同 `stateVersion` 引用計數共用、`stateVersion` 不同才拒絕；每條 thread 的登記處每個 key 只收一份、重複照舊拒絕（#1421，PM 決策 1） | 照 dsh；thread 那一層是沿用的舊偏離 | provider 層照 dsh（`session-projection/src/index.ts:253-292`）：同一個套件可能掛 N 次，引用計數歸零之前一直用第一個登記者的定義，版本不同報 `refusing to share`。thread 層的重複拒絕登記在 `.docs/session-projections-design.md:95` 與 `:110`，理由是「一次組裝一張註冊表、不熱換」——這個理由對每條 thread 的登記處仍然成立，對樹上的 provider 不成立（它是行程級的，樹會熱換；重掛時新舊兩份 fiber 可能短暫重疊）。所以兩層各自的規則不同：共用的 key 由宿主（`plugin-tree.ts` 的 `#assignProjections`）只交給**這一份清單上起來了的第一個登記者**折進 thread |
 | 樹上那一列改了或停了，開著的對話照舊有它的投影（#1421，照 #1416 Q3 的快照語意） | 產品需求超出 dsh | dsh 在卸載時把那個 key 從活的快照拿掉（引用計數歸零就刪，`session-projection/src/index.ts:273-292`）。我們不跟：組 thread 時拿的是快照（決議 §3-2 第 6 條「插件更新只給新對話」），單元是純函式的折疊，樹上那一列卸了之後開著的對話手上的單元照樣折得動，下一條 thread 才看到新的 |
@@ -317,7 +321,7 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
 
 ## 接進清單（#1416 PR 2）
 
-`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
+`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
 **樹那一側不是第二份清單，是清單的一個消費者**：
 
 | 東西 | 在哪 | 做什麼 |

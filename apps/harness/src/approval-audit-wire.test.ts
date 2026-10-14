@@ -29,7 +29,6 @@ import {
 } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionRegistry } from '@nexus/core';
 import { ASK_USER_QUESTION_TOOL_NAME, createAskUserPlugin } from '@nexus/plugin-ask-user';
-import { createTrajectoryPlugin } from '@nexus/plugin-trajectory';
 import {
   appendDecision,
   createWireClient,
@@ -61,6 +60,7 @@ import type { PumpAgent } from './thread-pump.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { createTrajectoryPlugin } from './trajectory.fixture.js';
 
 const GATED = 'alpha';
 const BASE_URL = 'http://approval-audit.test';

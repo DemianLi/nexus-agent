@@ -8,7 +8,7 @@
  * | --- | --- | --- |
  * | 定義 | 這個套件：token、介面、契約版本，與投影單元的型別 | `@nexus/sdk`，與 `@nexus/core` 的型別與 `isLogicalTurnStart`（見下） |
  * | 提供者 | 樹上一列，行程級的投影登記處：同一個套件的另一個入口 `@nexus/projections/provider`，由宿主（`apps/harness`）掛一列 | 這個套件、`@nexus/sdk` |
- * | 消費者 | 想登記投影單元的插件，今天只有 `token-meter` | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
+ * | 消費者 | 想登記投影單元的插件，今天是 `token-meter` 與 `trajectory` | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
  *
  * ## 偏離登記：這個定義套件相依 `@nexus/core`（#1421 Q2 (a)）
  *
@@ -16,13 +16,15 @@
  * `session-log.ts`。dsh 的對應是 `dsh-session-projection` 相依 `dsh-session`（`SessionEvent` 在 `dsh-session`）；
  * 照那個形狀要抽一個 `@nexus/session` 定義套件，是橫跨整個核心的一刀（Q2 (b)），**這一張不做**。所以：
  *
- * - 三樣東西（`ProjectionUnit`、`SessionEvent`、`isLogicalTurnStart`）**留在 `@nexus/core`，由這個套件單向轉出**。
+ * - 四樣東西（`ProjectionUnit`、`SessionEvent`、`isLogicalTurnStart`、`ProjectionDetailError`）**留在 `@nexus/core`，由這個套件單向轉出**。
  *   相依是單向的：這個套件相依 `@nexus/core`，core 不 import 這個套件。插件只 import 這個套件，所以 lint 與決議第 17
  *   條在插件這一側都成立。
  * - **`@nexus/core` 放 `peerDependencies`，`devDependencies` 留 `workspace:*`**（PM 決策 3）：不能讓安裝結果出現第二份
  *   core，理由同 `@nexus/sdk` 放 peer。
  * - 這是第一個相依 core 的定義套件。**撤除條件**：SDK 與定義套件要發布到私有 registry 之前，要先做 Q2 (b)，讓定義套件不再
  *   相依 `@nexus/core`。
+ * - 會話日誌的**讀法**（`loggedContentBlocks` 等四個值）不在這裡，由 `@nexus/session` 單向轉出（#1435 Q1 (c)）；`SessionEvent`、
+ *   `isLogicalTurnStart` 日後歸 `@nexus/session`，撤除條件一併涵蓋。`ProjectionDetailError` 屬於投影（按需拉細節的錯誤），放這裡名實相符。
  *
  * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）。
  *
@@ -32,7 +34,7 @@
 import type { ProjectionUnit } from '@nexus/core';
 import { defineToken } from '@nexus/sdk';
 
-export { isLogicalTurnStart } from '@nexus/core';
+export { isLogicalTurnStart, ProjectionDetailError } from '@nexus/core';
 export type { ProjectionUnit, SessionEvent } from '@nexus/core';
 
 /** 契約版本（semver）。介面破壞性改動跳 major，消費者的 `inject` 範圍擋下不相容的提供者。 */
