@@ -597,6 +597,7 @@ export {
   RETAIN_FALLBACK_MESSAGES,
   RETAIN_RATIO,
   RETAIN_THRESHOLD_CAP_RATIO,
+  retainedMessageCount,
   retainedTailCount,
   retainTokensFor,
   SUMMARIZATION_MIDDLEWARE_NAME,
