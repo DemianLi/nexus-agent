@@ -1,4 +1,4 @@
-import { Context, Inject, Service } from '@nexus/cordis'
+import { Context, FiberState, Inject, Service } from '@nexus/cordis'
 import { Awaitable, defineProperty, Dict, isNullable } from 'cosmokit'
 import { ModuleLoader } from './internal.ts'
 import { Entry, EntryOptions } from './config/entry.ts'
@@ -20,6 +20,12 @@ declare module '@nexus/cordis' {
     'loader/config-update'(): void
     'loader/entry-init'(entry: Entry): void
     'loader/partial-dispose'(entry: Entry, legacy: Partial<EntryOptions>, active: boolean): void
+    /**
+     * nexus local modification: emitted only from case 7 below (the plugin disposed itself with `ctx.fiber.dispose()`),
+     * after `entry.options.disabled` was set and the in-memory commit ran. `legacy` is the entry's options *before* it
+     * was disabled, i.e. the declaration the plugin was mounted with.
+     */
+    'loader/self-disable'(entry: Entry, legacy: Partial<EntryOptions>): void
     'loader/patch-context'(entry: Entry, next: () => Awaitable<void>): Awaitable<void>
   }
 
@@ -133,7 +139,10 @@ export class Loader extends EntryTree {
       if (!ctx.registry.has(fiber.runtime!.callback)) return
 
       // case 5: the entry's tree is being disposed
-      if (!fiber.entry.parent.tree.ctx.fiber.uid) return
+      // nexus local modification: also while the tree owner is still UNLOADING (dsh loader case 5), so a child unload
+      // caused by the owner's teardown is never mistaken for a self-disable.
+      const treeOwner = fiber.entry.parent.tree.ctx.fiber
+      if (!treeOwner.uid || treeOwner.state === FiberState.UNLOADING) return
 
       const { entry } = fiber
       this.showLog(entry, 'unload')
@@ -149,6 +158,9 @@ export class Loader extends EntryTree {
       const legacy = { ...entry.options }
       entry.options.disabled = true
       entry.parent.tree.commit({ id: entry.options.id, group: entry.parent, options: entry.options, legacy })
+      // nexus local modification: `commit` above carries the same arguments as `internal/commit` (`ctx.fiber.update`),
+      // so the host can only tell a self-disable apart here, at the call site.
+      ctx.emit('loader/self-disable', entry, legacy)
     })
 
     ctx.plugin(isolate)

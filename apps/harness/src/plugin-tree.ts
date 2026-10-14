@@ -30,10 +30,15 @@
  *
  * ## 偏離登記
  *
- * - **插件自我停用只在記憶體**（PM 決議 Q-C）：Loader 的 case 7 把那一列在樹上標成 `disabled`，Include 不寫檔也不進變更紀錄。
- *   清單是「想要的狀態」，所以下一條 thread 同步時會把它重新掛上（{@link TreeInput}`.rows` 裡想要它起來、樹上卻是自我停用的，
- *   {@link PluginTree.sync} 推一次 `epoch`）。**已知限制**：自我停用的插件會每條 thread 被重掛一次、再停一次（閃動）；
- *   要不要寫進變更紀錄，等 demian 決定。
+ * - **插件自我停用只在行程裡停著，紀錄只記不折**（#1424，demian 2026-10-14 拍板 Q1 (b)、Q2 (a)；PM 決議 Q-C 的後續）：Loader 的
+ *   case 7 把那一列在樹上標成 `disabled`，Include 不寫檔，也不折進清單。樹把「這一列自我停用過、當時的宣告是什麼」記在
+ *   記憶體裡（{@link PluginTree}`.#selfDisabled`）：**宣告沒變就不推 `epoch`、不重掛，判成 `off`**，所以不再每條 thread 重掛一次
+ *   再停一次（閃動）；serve 重啟、或那一列的宣告改了（模組名或設定），下一次同步才再試。Loader 在 case 7 呼叫點發的
+ *   `loader/self-disable`（`vendor/loader` 本地修改第 10 條，只有 case 7 發；`ctx.fiber.update()` 走的 `internal/commit` 不發）
+ *   經 {@link PluginTree.onSelfDisable} 交給宿主，serve 把它記成 `self-disabled`（`plugin-failure-recorder.ts`）。
+ *   **偏離 dsh（未實測的推論，撤除條件：讀清單改成不是每條 thread 都推）**：dsh 任何一次協調（plugin-manager 操作、HMR 偵測到
+ *   patch 檔改了）都會把 Include 的樹重疊一遍、把自我停用的列蓋回啟用；這裡只在那一列自己的宣告改了才重試，因為 nexus 每條
+ *   thread 都重推一次——照 dsh「每次協調都蓋回」就是原本的閃動。
  * - **`cordis.serve.yml` 不經 Include**：Include 只有一個 `path`，serve 專屬那一層是相容層疊在出貨層後面的另一個檔。
  *   那一層裡的函式插件上不了樹（它們會在這裡被判成 `absent`，指名原因）；今天那一層沒有函式插件。
  *
@@ -196,6 +201,33 @@ function assertNoJsExpr(value: unknown, where: string): void {
   );
 }
 
+/** 一列插件自己停用了自己（#1424）：Loader 在 case 7 的呼叫點發的，經 {@link PluginTree.onSelfDisable} 交給宿主。 */
+export interface SelfDisableEvent {
+  /** 相容層解析後的列 id（不帶樹上的 `include:` 前綴）。 */
+  readonly id: string;
+  /** 模組 specifier，即那一列的 `name`。 */
+  readonly module: string;
+}
+
+/** 穩定的序列化（物件鍵排序）：宣告簽章與去重鍵用，兩邊疊出來的鍵順序不同也算同一份。 */
+function stableStringify(value: unknown): string {
+  if (typeof value !== 'object' || value === null) return JSON.stringify(value) ?? 'undefined';
+  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
+  const entries = Object.entries(value as Record<string, unknown>)
+    .filter(([, item]) => item !== undefined)
+    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`).join(',')}}`;
+}
+
+/** 一列的宣告：模組名與（正規化後的）設定。自我停用的記憶與去重都以它為準。 */
+interface RowDeclaration {
+  readonly module: string;
+  readonly config: unknown;
+}
+
+const declarationSignature = (declaration: RowDeclaration): string =>
+  stableStringify({ module: declaration.module, config: normalized(declaration.config) });
+
 /** 一棵 Cordis 樹加上它的工具登記處與 Include。 */
 export class PluginTree {
   #context?: Promise<Context>;
@@ -209,6 +241,20 @@ export class PluginTree {
   /** 契約不相容的錯誤，以消費者那一列的 id 為鍵：Cordis 把它交給提供者的 logger，要對回消費者得自己收。 */
   readonly #contractErrors = new Map<string, ContractError>();
   #disposed = false;
+  /**
+   * **自我停用過的列**（#1424，Q1 (b)）：鍵是樹上的列 id，值是它**停用當時**的宣告。宣告沒變就一直算停著（不推 `epoch`、
+   * 判成 `off`）；宣告改了、或那一列又起來了就忘掉。只活在這個行程裡：重啟就是新的一棵樹，那一列重新試一次。
+   */
+  readonly #selfDisabled = new Map<string, RowDeclaration>();
+  /** 已經交給 {@link onSelfDisable} 的（列 id ＋ 宣告簽章）：同一個行程裡同一件事只講一次（#1424 推導 4）。 */
+  readonly #announced = new Set<string>();
+
+  /**
+   * 宿主掛上來的接收者：插件自己停用了自己時呼叫（同一個行程裡、同一列同一份宣告只呼叫一次）。**同步呼叫，不要拋、
+   * 不要等**：它在 Loader 卸載那一列的路上被叫到。今天只有 serve 掛它，把這件事記進變更紀錄；CLI 與沒有樹的呼叫端不掛，
+   * 閃動照樣止住（記憶體那一頭）。
+   */
+  onSelfDisable?: (event: SelfDisableEvent) => void;
 
   /**
    * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections` 那兩列。
@@ -232,6 +278,8 @@ export class PluginTree {
     });
     await root.plugin(Loader);
     root.loader.resolver = resolveBareSpecifier;
+    // Loader 的 case 7 呼叫點發的（`vendor/loader` 本地修改第 10 條）：只有插件自己 `ctx.fiber.dispose()` 才有。
+    root.on('loader/self-disable', (entry, legacy) => this.#noteSelfDisable(root, entry, legacy));
     Object.assign(root.loader.builtins, {
       [TOOLS_ROW_ID]: this.#provider.Provider,
       [PROJECTIONS_ROW_ID]: this.#projections.Provider,
@@ -241,6 +289,35 @@ export class PluginTree {
     await this.#create(root, { id: PROJECTIONS_ROW_ID, name: `cordis:${PROJECTIONS_ROW_ID}` });
     await root.loader.await();
     return root;
+  }
+
+  #noteSelfDisable(
+    root: Context,
+    entry: { readonly options: { readonly id: string; readonly name: string } },
+    legacy: { readonly config?: unknown },
+  ): void {
+    // 只管 Include 底下的列（橋接列）：它們在 Include 的群組裡，`entry.options.id` 是不帶前綴的本地 id，樹上的完整 id 是
+    // `include:<id>`；`tools`、`projections`、`include` 自己是樹的骨架，不在這一組。用身分比，不用字串猜。
+    const id = entry.options.id;
+    const treeRowId = treeId(id);
+    try {
+      if (root.loader.resolve(treeRowId) !== entry) return;
+    } catch {
+      return;
+    }
+    const declaration: RowDeclaration = {
+      module: entry.options.name,
+      config: structuredClone(normalized(legacy.config)),
+    };
+    this.#selfDisabled.set(treeRowId, declaration);
+    const key = `${id}\0${declarationSignature(declaration)}`;
+    if (this.#announced.has(key)) return;
+    this.#announced.add(key);
+    try {
+      this.onSelfDisable?.({ id, module: declaration.module });
+    } catch {
+      // 接收者不該拋；拋了也不能讓 Loader 卸載那一列的路上多一種結局。
+    }
   }
 
   /** `EntryTree.create` 的型別不收 id，執行期照用（探針 `tree.ts` 的 `createEntry`）：列 id 要由我們決定。 */
@@ -270,7 +347,7 @@ export class PluginTree {
     const root = await this.context();
     assertNoJsExpr(input.patches, 'patch');
     const only = [...new Set(input.rows.map((row) => row.module))];
-    const forced = this.#hasSelfDisabled(root, input);
+    const forced = this.#needsRetry(root, input);
     if (forced) this.#epoch += 1;
     const config = {
       path: pathToFileURL(input.shipped).href,
@@ -315,18 +392,39 @@ export class PluginTree {
     return this.#includeEntry(root)?.fiber?.ctx.fiber.state;
   }
 
-  /** 想要它起來的列，樹上卻是 Loader 自我停用（case 7）留下的 `disabled`。 */
-  #hasSelfDisabled(root: Context, input: TreeInput): boolean {
+  /**
+   * 這一份清單要不要強推一次（推 `epoch`）：有一列清單想要它起來、樹上卻是停用的，而且**不是**「自我停用過、宣告沒變」那一種。
+   *
+   * 自我停用過的列（#1424）宣告沒變就一直停著，不強推——這就是止住閃動的那一處；宣告變了就忘掉記憶、強推一次，插件重新
+   * 掛上、重新試一次。樹上停用卻沒有記憶的（不是 case 7 留下的，或是兩邊疊出來的不一致）照舊強推，`#verdictOf` 會報成掉了。
+   */
+  #needsRetry(root: Context, input: TreeInput): boolean {
     if (this.#includeEntry(root) === undefined) return false;
-    return input.rows.some((row) => {
-      if (row.disabled) return false;
+    let retry = false;
+    for (const row of input.rows) {
+      if (row.disabled) continue;
+      let disabled = false;
       try {
-        const entry = root.loader.resolve(treeId(row.id));
-        return entry.options.disabled === true;
+        disabled = root.loader.resolve(treeId(row.id)).options.disabled === true;
       } catch {
-        return false;
+        continue;
       }
-    });
+      if (!disabled) continue;
+      if (this.#stillSelfDisabled(treeId(row.id), row)) continue;
+      this.#selfDisabled.delete(treeId(row.id));
+      retry = true;
+    }
+    return retry;
+  }
+
+  /** 這一列自我停用過、而且清單上它現在的宣告跟停用當時一樣。 */
+  #stillSelfDisabled(id: string, row: TreeRowInput): boolean {
+    const remembered = this.#selfDisabled.get(id);
+    return (
+      remembered !== undefined &&
+      remembered.module === row.module &&
+      isDeepStrictEqual(normalized(remembered.config), normalized(row.config))
+    );
   }
 
   async #failureOf(root: Context, id: string): Promise<string> {
@@ -417,6 +515,8 @@ export class PluginTree {
     }
     // 兩支疊 patch 的演算法對不上時，不靜靜地各走各的。
     if (entry.options.disabled === true) {
+      // 自我停用過、宣告沒變：不是掉了，是它自己停的（#1424）。判成 `off`，不進 `failed` 的記錄器。
+      if (this.#stillSelfDisabled(id, row)) return { kind: 'off' };
       return {
         kind: 'dropped',
         stage: 'apply',
@@ -436,8 +536,9 @@ export class PluginTree {
       return { kind: 'dropped', stage: 'apply', message: '模組載不進來' };
     }
     if (fiber.state === FIBER_STATE.ACTIVE) {
-      // 起來了：之前記的契約錯誤作廢（只有仍在等服務的列才用得到它）。
+      // 起來了：之前記的契約錯誤作廢（只有仍在等服務的列才用得到它）；自我停用的記憶也作廢。
       this.#contractErrors.delete(id);
+      this.#selfDisabled.delete(id);
       return {
         kind: 'active',
         tools: entries.filter((item) => item.source === id).map((item) => item.tool),

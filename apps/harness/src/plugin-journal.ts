@@ -23,9 +23,12 @@
  * | `patch` | 遷移用：原樣收一條舊 `cordis.patch.yml` 的 patch（含 `insert`、`name` 斷言），寫入口不開 | 原樣 |
  * | `rejected` | 寫入口驗不過、沒有生效的一次變更（[#1414](https://github.com/DemianLi/nexus-agent/issues/1414)）：操作者、要做的操作、列 id、原因原文；**不帶要寫入的值** | **不折**，清單不因它改變 |
  * | `failed` | serve 發現某一列掛不上，而那一列在紀錄裡有被接受的改動（#1414）：歸因的那一筆的 `seq`（`triggerSeq`，**歸因，不保證是原因**）、掉在哪一步、原因原文 | **不折** |
+| `self-disabled` | 插件在 `apply` 裡自己 `ctx.fiber.dispose()`（Loader 的 case 7，[#1424](https://github.com/DemianLi/nexus-agent/issues/1424)）：列 id 與模組名。**不帶原因**：插件沒有講原因的管道，要查的是那個插件自己的日誌 | **不折** |
  *
- * `rejected`／`failed` **只記不折**：照樣佔序號、序號照樣從 1 連續，`foldJournal` 與 `journalOverrideOf` 跳過它們，所以
- * 同一份紀錄有它們與沒有它們，折出來的清單相同。它們讓「被拒絕的變更」與「掛不上的列」進稽核，不是讓它們有作用。
+ * `rejected`／`failed`／`self-disabled` **只記不折**：照樣佔序號、序號照樣從 1 連續，`foldJournal` 與 `journalOverrideOf` 跳過
+ * 它們，所以同一份紀錄有它們與沒有它們，折出來的清單相同。它們讓「被拒絕的變更」「掛不上的列」「插件自己停用了自己」進稽核，
+ * 不是讓它們有作用。**`self-disabled` 不是「有人把這一列關了」**：樹上那一列只在 serve 行程裡停著（`plugin-tree.ts`），
+ * 重啟就再試一次；真的要它一直關著，要走寫入口的 `disable`。
  *
  * `before`／`after` 是**明文**（Q4，demian 2026-10-13）：這份檔取代的是 `cordis.patch.yml`，暴露面一樣，檔案 0600。
  *
@@ -184,6 +187,17 @@ export const journalRecordSchema = z.discriminatedUnion('op', [
     triggerSeq: z.number().int().min(1),
     stage: z.enum(['module', 'config', 'apply', 'requires']),
     reason: z.string(),
+  }),
+  /**
+   * 插件自己停用了自己（#1424，demian 2026-10-14 拍板 Q1 (b)、Q2 (a)）：Loader 的 case 7 在呼叫點發的事件，serve 寫。
+   * **只記不折**：樹上那一列只在這個行程裡停著，清單不因它改變。去重在行程記憶裡（列 id ＋ 宣告），重啟後那一列重新掛上、
+   * 又自己停用，算一次新的事件、再記一筆。actor 沿用 `serve`：寫這一筆的就是 serve，「是插件自己停的」由這個 op 承載。
+   */
+  z.strictObject({
+    ...envelope,
+    op: z.literal('self-disabled'),
+    id: nonEmpty,
+    name: nonEmpty,
   }),
 ]);
 
@@ -357,6 +371,9 @@ export function foldJournal(records: readonly JournalBody[]): Record<string, unk
       case 'failed':
         // 只記不折：沒有任何改動生效過（#1414）。
         break;
+      case 'self-disabled':
+        // 同上：樹上只在行程裡停著，清單不變（#1424）。
+        break;
     }
   }
   return patches;
@@ -415,7 +432,7 @@ export interface FailureContext {
 }
 
 /**
- * 這一筆是不是「被接受的」改動：生效過、折得進清單的那幾種。`rejected`（被攔下）與 `failed`（掛不上）是只記不折的筆，不是。
+ * 這一筆是不是「被接受的」改動：生效過、折得進清單的那幾種。`rejected`（被攔下）、`failed`（掛不上）與 `self-disabled`（插件自己停用）是只記不折的筆，不是。
  *
  * **逐一列舉、不寫 `default`**：以後再加一種只記不折的 op（#1424 的 `self-disabled`），這裡不補一格就編不過；
  * 寫成「不是 `rejected` 也不是 `failed`」的排除法，新 op 會被靜靜當成被接受的。
@@ -433,6 +450,7 @@ export function isAcceptedRecord(record: Pick<JournalRecord, 'op'>): boolean {
       return true;
     case 'rejected':
     case 'failed':
+    case 'self-disabled':
       return false;
   }
 }
@@ -466,6 +484,8 @@ function touchesRow(record: JournalRecord, row: FailedRowIdentity): boolean {
     }
     case 'rejected':
     case 'failed':
+    case 'self-disabled':
+      // 只記不折的筆不「碰」任何一列：它們沒有改變那一列的宣告，也不能被歸因（#1424）。
       return false;
   }
 }

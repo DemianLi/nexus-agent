@@ -1500,12 +1500,14 @@ async function loadPluginConfigOnce(
       });
       return off;
     }
-    const bound = bindToTree(
-      entry,
-      verdict.kind === 'active'
-        ? { tools: verdict.tools, projections: verdict.projections }
-        : { tools: [], projections: [] },
-    );
+    if (verdict.kind === 'off') {
+      // 樹上這一列自我停用過、宣告沒變（#1424）：不是掉了，是它自己停的，行程裡一直停著。標成停用，不進 `dropped`，
+      // 所以不會在紀錄裡多一筆 `failed`、也不會讓必掛名單把它當成掛不上。
+      const off: PluginEntry = { ...entry, disabled: true };
+      rows.set(off, { id: origin.id, module: row.name });
+      return off;
+    }
+    const bound = bindToTree(entry, { tools: verdict.tools, projections: verdict.projections });
     rows.set(bound, { id: origin.id, module: row.name });
     return bound;
   });

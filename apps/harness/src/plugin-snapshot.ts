@@ -159,8 +159,14 @@ function sideRows(source: SnapshotSource): Map<string, SideRow> {
     const id = source.ids[index] ?? declared.id ?? declared.name;
     const stage = drops.get(id);
     const entry = entries.get(id);
+    // 宣告是啟用、交給組裝的那一顆卻是停用的，而且沒掉：樹上自我停用過、宣告沒變的橋接列（#1424），快照照現有四種狀態
+    // 顯示成 `disabled`，不加欄位（加了要升快照版本）；是誰停的看變更紀錄。
     const state: RowState =
-      stage !== undefined ? 'dropped' : declared.disabled === true ? 'disabled' : 'mounted';
+      stage !== undefined
+        ? 'dropped'
+        : declared.disabled === true || entry?.disabled === true
+          ? 'disabled'
+          : 'mounted';
     result.set(id, {
       module: declared.name,
       state,

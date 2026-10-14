@@ -987,11 +987,14 @@ pnpm --filter @nexus/harness run plugin -- config reset thread-title
   下一條新對話讀清單時把折出來的 patch 推給樹，樹上那一列卸載或重掛。**不會有任何檔被這條路寫**（`cordis.yml` 與
   home 底下的檔，位元組都不變）；開著的對話手上的工具照舊能叫，只有新對話看到新的。
   兩個已知限制：（1）**`cordis.serve.yml` 那一層不經樹**——放在那一層的函式插件掛不上，啟動日誌會指名那一列；今天那一層沒有。
-  （2）**插件自己停用自己只在記憶體**，不進變更紀錄也不寫檔，下一條新對話會被重新掛上、再停用一次，所以這一列每條新對話的清單讀取裡
-  都是「沒掛上」。要不要把它也寫進紀錄還沒定。
+  （2）**插件自己停用自己只在行程裡停著，不改清單**（[#1424](https://github.com/DemianLi/nexus-agent/issues/1424)）：
+  不寫檔、不進折出來的清單；紀錄多記一筆只記不折的 `self-disabled`（列 id、模組名，actor 是 `serve`），**同一份宣告**
+  在這個行程裡只掛一次、只記一筆，之後的新對話不再重掛。**重啟**，或它的設定／模組名**改了**，才再試一次——
+  又自己停用就再記一筆。它在 `plugin-snapshot.json` 裡是 `disabled`，不是「沒掛上」，也不會有 `failed`。
+  想讓它回來：改它的設定（`config-set`），或重啟 serve。沒有紀錄檔時行為相同，只是不記那一筆。
 
-**紀錄檔的格式**：JSON Lines，一行一筆，`{"v":1,"seq":N,"at":"<ISO>","actor":{…},"op":"disable|enable|config-set|config-reset|patch|rejected|failed",…}`。
-`seq` 從 1 連續遞增（`rejected`、`failed` 也佔序號）。`config-set` 與 `config-reset` 帶 `before`／`after`（**明文**，連同裡面可能有的秘密，所以檔案是 `0600`、
+**紀錄檔的格式**：JSON Lines，一行一筆，`{"v":1,"seq":N,"at":"<ISO>","actor":{…},"op":"disable|enable|config-set|config-reset|patch|rejected|failed|self-disabled",…}`。
+`seq` 從 1 連續遞增（`rejected`、`failed`、`self-disabled` 也佔序號）。`config-set` 與 `config-reset` 帶 `before`／`after`（**明文**，連同裡面可能有的秘密，所以檔案是 `0600`、
 home 是 `0700`；不要把它貼進 issue 或聊天）。直接 `cat` 就能讀，用 `jq -c .` 更舒服。
 
 **被拒絕與掛不上也進紀錄**（`rejected`、`failed`）：這兩種筆**只記不折**，清單不因它們改變——同一份紀錄有它們與沒有

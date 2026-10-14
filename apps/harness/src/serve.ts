@@ -482,6 +482,8 @@ async function startServer(
     effective: hostActor(env).effective,
     log,
   });
+  // **插件自己停用了自己也記一筆**（#1424）：Loader 的 case 7 呼叫點發的事件，由樹轉進來；只記不折，閃動由樹的記憶止住。
+  root.tree.onSelfDisable = (event) => failureRecorder.noteSelfDisabled(event);
   const loaded = await loadDefaultPlugins(
     {
       serve: true,

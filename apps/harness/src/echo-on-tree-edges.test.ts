@@ -379,8 +379,8 @@ describe('設定帶 __jsExpr', () => {
   }, 60000);
 });
 
-describe('已知限制：插件自我停用只在記憶體，下一條 thread 會被重新掛上', () => {
-  it('不寫檔、不進紀錄；每次讀清單都重掛一次（閃動）', async () => {
+describe('插件自我停用只在記憶體，但同一份宣告不再被重新掛上（#1424）', () => {
+  it('不寫檔、不進紀錄；讀清單多次也只掛一次，那一列判成停用而不是掉列', async () => {
     const dir = scratch();
     const counter = `__selfDisable_${String(Date.now())}`;
     const module = write(
@@ -397,14 +397,14 @@ describe('已知限制：插件自我停用只在記憶體，下一條 thread �
     const root = newRoot();
     const count = (): number => (globalThis as Record<string, unknown>)[counter] as number;
 
-    const first = await loadPluginConfig({ shipped, warn: warnNothing }, { tree: root.tree });
-    expect(count()).toBe(1);
-    // 樹上那一列自己停用了自己，清單疊出來是啟用的：這一列掉了，訊息講得出為什麼。
-    expect(first.dropped.find((drop) => drop.id === 'quitter')?.message).toMatch(/停用/u);
-
-    await loadPluginConfig({ shipped, warn: warnNothing }, { tree: root.tree });
-    // 清單是「想要的狀態」：同步時把它重新掛上，又停用一次。
-    expect(count()).toBe(2);
+    for (let read = 0; read < 3; read += 1) {
+      const loaded = await loadPluginConfig({ shipped, warn: warnNothing }, { tree: root.tree });
+      // 以前：每次讀清單都把它重新掛上、又停用一次（閃動）；現在宣告沒變就不再掛。
+      expect(count()).toBe(1);
+      // 自己停用不是「掛不上」：判成停用，不進 dropped。
+      expect(loaded.dropped).toEqual([]);
+      expect(loaded.plugins.find((plugin) => plugin.id === 'quitter')?.disabled).toBe(true);
+    }
 
     // 沒有任何檔被寫：出貨檔位元組不變，目錄裡只有那兩個檔。
     expect(readFileSync(shipped, 'utf8')).toBe(shippedBody);
