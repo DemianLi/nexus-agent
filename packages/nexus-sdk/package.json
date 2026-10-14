@@ -6,6 +6,7 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./lint": "./src/lint.ts",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
@@ -21,6 +22,7 @@
     "@types/semver": "^7.8.0",
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",
+    "typescript-eslint": "^8.46.0",
     "vitest": "^4.1.11"
   },
   "dependencies": {
