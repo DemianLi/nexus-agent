@@ -2,7 +2,8 @@
 
 樹上的插件怎麼寫、怎麼被驗、怎麼被換。**這是最小切片**（[#1416](https://github.com/DemianLi/nexus-agent/issues/1416)，
 屬於 [#1385](https://github.com/DemianLi/nexus-agent/issues/1385)）：manifest、帶型別的 token、semver 契約檢查、
-一致性套件。lint、capabilities 的執行、版本路由與兩版並存不在這一刀，見文末。
+一致性套件，以及強制它們的 lint 與 gate（[#1420](https://github.com/DemianLi/nexus-agent/issues/1420)）。
+capabilities 的執行、版本路由與兩版並存不在這一刀，見文末。
 
 決議出處是 [`.docs/decisions-2026-10-11.md`](../.docs/decisions-2026-10-11.md) §3-4。程式碼在
 [`packages/nexus-sdk`](../packages/nexus-sdk)（`@nexus/sdk`）與
@@ -148,6 +149,82 @@ expect(await checkConformance({ row, module, providers, residue })).toEqual([]);
   （`plugin-tree.ts` 的 `PluginTree.run`），兩條 thread 同時組裝時各拿一份跟自己讀到的清單相符的工具。
 - 兩版並存與逾時留給版本路由那張卡。
 
+## lint 與 gate（#1420）
+
+決議 §3-4 第 12 條的四層強制（SDK 型別、lint、載入期驗證、一致性套件）裡，後兩層之一是「每顆插件的 CI 都跑一致性
+套件」，另一層是 lint。這一節是它們怎麼落地、管到誰、漏什麼。
+
+### 誰受管
+
+**遷出的插件**：模組有 `manifest` 具名匯出，判別就是 `apps/harness/src/plugin-tree.ts` 的 `isFunctionPluginModule`。
+Include 的 allow-list、`tool-catalog` 與 gate 用的是**同一支**（`migrated-plugin-gate.test.ts` 的 E 那組釘住：定義只有
+一份、三處都 import 並呼叫、harness 沒有第二份手寫的「有沒有 manifest」）。沒有 `manifest` 匯出的舊插件，這一節
+一概不管；它們遷出時才受管。
+
+### lint：`@nexus/sdk/lint`
+
+SDK 匯出一份 ESLint flat config，**只用 ESLint 內建的 `no-restricted-*`**（純語法，SDK 不多任何相依），範圍是插件的
+`src/`、**不含測試檔**（測試可以用假計時器、直接操作 fiber）。它**不帶 parser**：`typescript-eslint` 由消費者自己的
+base 設定提供，套用時排在後面：
+
+```js
+import { pluginLintConfig } from '@nexus/sdk/lint';
+
+import base from '../../eslint.config.js';
+
+export default [...base, ...pluginLintConfig];
+```
+
+外部插件在自己的 CI 一樣這樣用。這個檔會被 `eslint.config.js` 用 Node 原生載入（它是 `.ts`），要求 Node 的 type
+stripping 開著（本 repo 的 `engines` 是 `>=22.19.0`，22.18 起預設開）。
+
+| 規則 | 擋什麼 | 改用什麼 |
+| --- | --- | --- |
+| `ctx-root` | `ctx.root`（含 `ctx['root']`、`this.ctx.root`、`const { root } = ctx`） | `inject` 宣告服務，`apply` 裡 `ctx.get(token)` |
+| `ctx-registry` | `ctx.registry`（同上各種寫法） | 服務的 `register()`（內部包 `ctx.effect`）、`inject` 後 `ctx.get(token)` |
+| `internal-name` | 以 `internal/` 開頭的字串或樣板字串（服務名、事件名） | 公開的事件用 `ctx.on`，登記東西用 `ctx.effect` |
+| `process-on` ／ `process-once` ／ `process-addListener` ／ `process-prependListener` | `process.on`／`once`／`addListener`／`prependListener`，以及從 `node:process` 具名 import 它們 | 宿主提供服務、插件經 `ctx.on` 訂；必須時窄例外並把成對的撤除包進 `ctx.effect` |
+| `setInterval`（含 `globalThis.`／`global.` 與從 `node:timers` 具名 import） | 全域 `setInterval` | 計時器包進 `ctx.effect`，清除函式裡撤掉 |
+| `top-level-let-var` | 模組頂層的 `let`／`var`（含 `export let`） | 狀態放進 `apply` 的閉包，生命週期交給 `ctx.effect` |
+| `top-level-collection` | 模組頂層的 `new Map`／`Set`／`WeakMap`／`WeakSet`（含 `export const`、`as`／`satisfies` 包著的） | 放進 `apply` 的閉包 |
+| `import-nexus-core`（含 `import type`、`export … from`、動態 `import()`） | import `@nexus/core` 與它的子路徑 | `@nexus/sdk` 與服務定義套件（例如 `@nexus/tools`） |
+
+**沒收的**（Q2 (a)，決議點名的才收）：`crypto.randomUUID`（dsh 禁它是因為瀏覽器的 secure context，插件跑在 Node 端，
+理由不成立）與 `setTimeout`（要先確認 vendor 的 Cordis 有沒有對應的計時器服務，由第一顆真的需要計時器的遷移卡提出）。
+選配服務與 capabilities 留給 capabilities 那張卡。
+
+**例外一律窄**：`// eslint-disable-next-line <規則> -- <理由>`，不整檔關、不整條關。PR 內文逐條列出。後面又寫一份
+`no-restricted-syntax` 等於把整份蓋掉（flat config 的規則不合併），gate 量的是解析後的設定，會紅。
+
+**已知的洞**（Q3 (a) 的代價）：純語法認不出別名。
+
+- `const c = ctx; c.root`、把參數取別的名字、從別的名字解構，抓不到；它只認叫 `ctx` 的識別字。
+- 頂層的 `const state = { count: 0 }`（物件本身可變）不在清單裡。
+- 頂層的**常數查表**也會中 `top-level-collection`（`const KNOWN = new Set([...])`）：語法分不出它是不是只讀，遷移時用
+  窄例外寫理由。
+- 這些由審查與一致性套件的 `unload` 那一格補：副作用沒走 `ctx.effect`，卸載後就有殘留，`unload` 會紅。真的有人繞過，
+  再升級成帶型別的規則。
+
+### gate：`apps/harness/src/migrated-plugin-gate.ts`
+
+形狀照 dsh 的 verify gate（`AGENTS.md:171`），nexus 的前例是 `package-invariants.ts`：純函式，由
+`migrated-plugin-gate.test.ts` 在 `pnpm -r run test` 裡跑，CI 不必多一個 step。它依檔案路徑 import 每個
+`packages/nexus-plugin-*` 的入口（新插件不一定在 harness 的相依裡；載不進來是違規，不跳過），對遷出的每一顆查：
+
+1. **lint 設定生效**：量解析後的設定，不 grep 字串。對 `<pkg>/src/index.ts` 問 ESLint 最後的規則，逐條比對
+   `@nexus/sdk/lint` 的值。`files` 寫錯、後面蓋掉，都抓得到。
+2. **有一條測試呼叫從 `@nexus/sdk` import 的 `checkConformance`**（TS AST；註解、字串、沒呼叫的 import 都不算）。它
+   **不看結果有沒有被斷言**，跟 `package-invariants` 一樣只量機械判得出來的東西。
+3. **`scripts.lint` 與 `scripts.test` 在場**：少了它們，`pnpm -r run` 會靜靜跳過這個套件，上面兩項在 CI 上就沒跑。
+
+「一支中央測試自動對每顆跑 `checkConformance`」做不到，因為 `row`、`providers`、`residue` 是每顆插件各自的東西，所以
+gate 檢查的是「這條測試存在」。
+
+**CI 上哪裡跑**：lint 在 static job 的 `pnpm -r run lint`；gate 在 harness 的測試。只動某顆插件的 PR 走選擇性測試，
+harness 只跑 import 圖上的測試，而 gate 是動態載入、不在圖上，所以 `plan_ci.py` 的 harness 必跑集合用
+`collectMigratedPluginViolations` 這個字面（gate 測試本來就會呼叫它）把它釘進去。只動 `packages/nexus-sdk` 的 PR 一律
+全跑（`FULL_RES`）。
+
 ## 能比版本路由早上樹的插件
 
 **樹上那一列是行程級的，一改（停用、改設定）Loader 就重載那一列；組 thread 時拿的是快照**（決議 §3-2 第 6 條「插件更新
@@ -200,7 +277,8 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
 | `Config` 用 zod `strictObject` | 沿用既有偏離 | dsh 用 schemastery 而且非 strict（`vendor/schemastery/src/index.ts:812-822`）。代價：沒有 `.volatile()`，Loader 的 `equalExceptVolatile` 不適用，設定一改那一列就重載 |
 | 帶型別的 token | 已登記（決議 §五，第 14 條） | 取代 declaration merging 加 `scripts/gen-cordis-catalog.ts` |
 | 服務契約用 `check` 做 semver | 產品需求超出 dsh | dsh 一處都沒用（`Service.check` 在 `packages`、`apps` 為 0）；它的版本相容檢查在套件層，比整個 runtime 的版本（`packages/boot/app-boot/src/plugin-compatibility.ts:61-88`） |
-| 共用的一致性套件 | 產品需求超出 dsh | dsh 的卸載測試是每個套件各寫一份；插件層級沒有共用套件，只有後端層級的 contract suite（`packages/storage/storage/tests/contract.ts`）。決議 §3-4 第 12 條 |
+| 共用的一致性套件 | 產品需求超出 dsh | dsh 的卸載測試是每個套件各寫一份；插件層級沒有共用套件，只有後端層級的 contract suite（`packages/storage/storage/tests/contract.ts`）。決議 §3-4 第 12 條。**並由 gate 保證每顆遷出的插件都有一條呼叫它的測試**（dsh 沒有這道 gate，靠每個檔 100% 覆蓋率間接保證，`docs/testing.md:9`） |
+| 插件邊界的 lint | 產品需求超出 dsh | dsh 沒有這條 lint：`.oxlintrc.json` 唯一的 `no-restricted-properties` 禁的是 `crypto.randomUUID`，而它自己的生產碼大量在用 `ctx.root`（`packages` 非測試碼 11 處）與 `internal/*`。決議 §3-4 第 12 條、grilling Q18 (c)（#1420） |
 | `present` 的暫存表以身分（thread＋位址＋`callId`）當鍵，不用 `WeakMap<ToolExecution>` | 表達不出來，退到最接近的實作 | dsh 的工具執行與 `tools/result` 拿到的是**同一個物件**，所以 `WeakMap` 夠用；我們的 `exec` 每次都在 `tool-pipeline.ts` 的 `toolExecutionOf` 重建，物件身分對不上。照它的意思改用身分當鍵（#1418） |
 | 答題管道是函式服務 `channelForThread`，不是 exec 上的欄位 | 表達不出來，退到最接近的實作 | dsh 的答題者從 `exec.agent` 分發；我們的答題管道是宿主服務（`channel`），不在 `exec` 上，沒有地方放「隨呼叫傳進來」的值。呼叫當下依 `callThreadId(config)` 問一支函式，回 `undefined` 退回 `channel`（見上一節）（#1418） |
 | 卡上寫「會話位址加上 thread 身分」，實作是另外加 `exec.thread` 與 `callThreadId`，`SessionAddress` 沒動 | **對卡上字面的改動，不是對 dsh 的偏離** | `SessionAddress` 是**一張 `SessionRegistry` 之內**的位址：每張註冊表就是一條 thread（根日誌 id 就是那條 thread 的 id、子代理日誌 id 是 `<root>/<runId>`，`session-registry.ts`），`sessionAddressKey` 只用來在那一張裡當 Map 鍵。thread 在「挑哪一張註冊表」那一步就用掉了，放進位址會在同一張表裡重複一份永遠相同的值。實測的足跡：24 個檔案提到 `SessionAddress`，原始碼與測試裡有 38 處 `kind: 'root'`、33 處 `kind: 'subagent'` 的字面比對、20 個檔案走 `toolCallSessionAddress`——加欄位要全部改，不加成可選欄位則又回到「沒填就挑不出」。而且背景子代理的 `thread_id` 本身就是 `<root>/<runId>`，已經含 `runId`，放進位址會有兩種寫法指同一個身分（`thread-id-reaches-handlers.test.ts` 量到）。所以 thread 走呼叫設定（`callThreadId`），在 `forCall` 與 `exec.thread` 用 |
@@ -244,7 +322,6 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
 
 ## 這一刀沒有的
 
-- **lint**（禁 `internal/*`、`ctx.root`、`ctx.registry`）：dsh 沒有這條 lint，而且自己的生產碼大量在用，屬於 nexus 自加，
-  另開一張。
+- **帶型別的 lint 規則**：別名繞過今天抓不到（見「lint 與 gate」的「已知的洞」），有人真的繞過再升級。
 - **capabilities 的執行**：「不宣告就不給」另開一張。
 - **版本路由、兩版並存、逾時**。
