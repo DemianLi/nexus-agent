@@ -465,7 +465,8 @@ export interface SummarizationSettings {
  *
  * **#1374 之後，則數到了不等於會摘要。** 保留量改成 token（下一節），則數到 60 時尾巴若裝得下整串（出廠是 20,000 token），
  * 基座切不出東西、原樣送出。所以這一道實際的意思是「則數 ≥ 60 **而且**訊息本身超過保留量」——訊息短的對話不會在第 60 則摘要
- * （PM 在 #1374 驗收時列為已知、刻意的變化；2026-10-14 發版模擬實測 70 則、訊息約 21k token，一次都沒摘）。
+ * （PM 在 #1374 驗收時列為已知、刻意的變化；2026-10-14 發版模擬實測到 70 則、整份請求約 33k token，一次都沒摘、
+ * serve 也沒有任何「摘要失敗」——每一步都是尾巴蓋住全部）。
  * 剪刀的閘門跟著這個意思走，見 {@link isUnderCompactionPressure}。
  *
  * ## 保留量：`retainRatio` 0.16，依這一步的模型算 token（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)）
@@ -1705,11 +1706,12 @@ export function effectiveMessages(
  *
  * 則數到了，基座才走 `performSummarization`；但保留量改成 token 之後（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)），
  * 尾巴可能蓋住整串，基座算出 `cutoffIndex <= 0`、原樣送出——**這一步不會摘要**。出廠設定下，訊息本身不到 20,000 token
- * 的對話就是這樣（2026-10-14 發版模擬實測：70 則、訊息約 21k token，一次都沒摘）。那時照則數判壓力，剪刀就會在
+ * 的對話就是這樣（2026-10-14 發版模擬實測：到 70 則、整份請求約 33k token，一次都沒摘）。那時照則數判壓力，剪刀就會在
  * 一個離任何門檻都還很遠的對話上，把每一則大工具結果（包括模型剛查回來的那一則）剪掉中段，正是 dsh「低于压力的对话绝不被碰」
  * 禁止的事。所以 `messages` 那道多一個條件：{@link retainedMessageCount} 算出的尾巴要比有效串短。
  *
- * `tokens` 那道不必：保留量封在門檻的兩成（{@link RETAIN_THRESHOLD_CAP_RATIO}），越過門檻時尾巴一定蓋不住全部。
+ * `tokens` 那道不加：保留量封在門檻的兩成（{@link RETAIN_THRESHOLD_CAP_RATIO}），越過門檻時尾巴通常蓋不住全部。例外是 system
+ * 與工具定義自己就占掉門檻八成以上——那時摘不到東西、剪刀照剪，而剪掉的確實是讓整份請求逼近窗口的那一截，所以不擋。
  *
  * @param request - 剪刀收到的那份請求。
  * @param trigger - 我們配的那組門檻。
