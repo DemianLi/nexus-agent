@@ -20,6 +20,7 @@ import {
   failureTriggerOf,
   foldJournal,
   hasFailedRecord,
+  isAcceptedRecord,
   journalOverrideOf,
   parseJournal,
   PluginJournalError,
@@ -465,6 +466,23 @@ describe('rejected、failed：只記不折（#1414 驗收 H）', () => {
   });
 });
 
+describe('isAcceptedRecord：哪些 op 算被接受的（#1423）', () => {
+  // 逐一列舉：每一種 op 一列，新增 op 時 `JournalRecord['op']` 的聯集會逼這張表補一格。
+  const EXPECTED: Record<JournalRecord['op'], boolean> = {
+    disable: true,
+    enable: true,
+    'config-set': true,
+    'config-reset': true,
+    patch: true,
+    rejected: false,
+    failed: false,
+  };
+
+  it.each(Object.entries(EXPECTED))('%s → %s', (op, accepted) => {
+    expect(isAcceptedRecord({ op: op as JournalRecord['op'] })).toBe(accepted);
+  });
+});
+
 describe('failureTriggerOf：失敗記在哪一筆上（#1414 Q2）', () => {
   const CONTEXT = { discoveredAt: 'reread' } as const;
   const TODO = { id: 'todo', module: '@nexus/plugin-todo' };
@@ -526,6 +544,64 @@ describe('failureTriggerOf：失敗記在哪一筆上（#1414 Q2）', () => {
       }),
     ];
     expect(failureTriggerOf(withReset, TODO, CONTEXT)).toBe(3);
+  });
+
+  describe('依賴的列被關掉、掉在 requires（#1423）', () => {
+    const A = { id: 'probe-a', module: './a.ts' };
+    const FRESH_REQUIRES = {
+      discoveredAt: 'thread-assembly',
+      stage: 'requires',
+      newlyDropped: true,
+    } as const;
+    // 紀錄裡沒有任何一筆指到 A；最新一筆被接受的是別的列的改動。
+    const OTHERS = [
+      record(1, DISABLE_TODO),
+      record(2, { op: 'rejected', requested: 'config-set', id: 'todo', reason: 'x' }),
+      record(3, { op: 'failed', id: 'skills', triggerSeq: 1, stage: 'apply', reason: 'x' }),
+    ];
+
+    it('四件事同時成立：歸因到紀錄裡最新一筆被接受的（rejected、failed 不算）', () => {
+      // seq 3 是 failed、seq 2 是 rejected，都不算；最新被接受的是 seq 1。
+      expect(failureTriggerOf(OTHERS, A, FRESH_REQUIRES)).toBe(1);
+      expect(failureTriggerOf(OTHERS, A, { ...FRESH_REQUIRES, discoveredAt: 'reread' })).toBe(1);
+      // 遷移來的 patch 也算被接受的。
+      const withPatch = [
+        ...OTHERS,
+        record(4, { op: 'patch', patch: { id: 'skills', disabled: true } }),
+      ];
+      expect(failureTriggerOf(withPatch, A, FRESH_REQUIRES)).toBe(4);
+    });
+
+    it('少任何一件都不套：啟動試組、不是新掉、不是 requires、沒帶場面', () => {
+      expect(
+        failureTriggerOf(OTHERS, A, { ...FRESH_REQUIRES, discoveredAt: 'startup' }),
+      ).toBeUndefined();
+      expect(
+        failureTriggerOf(OTHERS, A, { ...FRESH_REQUIRES, newlyDropped: false }),
+      ).toBeUndefined();
+      const { newlyDropped: _omitted, ...withoutFlag } = FRESH_REQUIRES;
+      expect(failureTriggerOf(OTHERS, A, withoutFlag)).toBeUndefined();
+      for (const stage of ['module', 'config', 'apply'] as const) {
+        expect(failureTriggerOf(OTHERS, A, { ...FRESH_REQUIRES, stage })).toBeUndefined();
+      }
+      // 舊的呼叫端不帶 stage：照現行規則。
+      expect(
+        failureTriggerOf(OTHERS, A, { discoveredAt: 'thread-assembly', newlyDropped: true }),
+      ).toBeUndefined();
+    });
+
+    it('這一列自己有被接受的改動：照現行規則歸因到它自己那一筆，不被「最新一筆」取代', () => {
+      const own = [
+        record(1, { op: 'patch', patch: { id: 'probe-a', disabled: false } }),
+        ...OTHERS.map((r, i) => ({ ...r, seq: i + 2 }) as JournalRecord),
+      ];
+      expect(failureTriggerOf(own, A, FRESH_REQUIRES)).toBe(1);
+      expect(failureTriggerOf(own, A, { discoveredAt: 'reread', stage: 'apply' })).toBe(1);
+    });
+
+    it('紀錄是空的：沒有任何一筆可歸因，不記', () => {
+      expect(failureTriggerOf([], A, FRESH_REQUIRES)).toBeUndefined();
+    });
   });
 
   it('hasFailedRecord：鍵是列 id 加歸因到的 seq', () => {

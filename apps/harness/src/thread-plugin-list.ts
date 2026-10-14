@@ -115,6 +115,16 @@ export interface ThreadPluginListOptions {
   readonly now?: () => Date;
 }
 
+/** 組裝時掉了的一個條目；`drop` 的形狀是 `AssemblyDrop`（`agent-factory.ts`）的子集，省略時對照快照記成 `apply`。 */
+export interface AssemblyDropInput {
+  readonly entry: PluginEntry;
+  readonly drop?: {
+    readonly stage: StartupDrop['stage'];
+    readonly message?: string;
+    readonly origin?: { readonly id: string };
+  };
+}
+
 /** 讀清單的那一支。 */
 export interface ThreadPluginReader {
   /**
@@ -127,17 +137,24 @@ export interface ThreadPluginReader {
   /**
    * 組裝之後交回這一條掉了的條目。啟動試組掉過的列，宣告改了重試又掉，新的宣告記成已知，之後的 thread 不再試。
    *
+   * **同時記下每一列這一次組裝的結果**（掛上或掉了，#1423）：清單上沒停用、也不在 `dropped` 裡的列就是掛上了。
+   * 「新掉」（上一次組裝或重讀還掛著、這一次掉了）要在更新之前算，所以由這裡一併回傳。
+   *
    * @param list - 這一條用的那份（{@link read} 的回傳）。
    * @param dropped - 組裝時掉了的條目。
+   * @returns 這一次**新掉**的列 id，交給變更紀錄的記錄器當 `newlyDropped`。
    */
-  noteDropped(
-    list: ThreadPluginList,
-    dropped: readonly {
-      readonly entry: PluginEntry;
-      /** 掉在哪一步、原因；省略時對照快照記成 `apply`。 */
-      readonly drop?: { readonly stage: StartupDrop['stage']; readonly message?: string };
-    }[],
-  ): void;
+  noteDropped(list: ThreadPluginList, dropped: readonly AssemblyDropInput[]): ReadonlySet<string>;
+  /**
+   * 組裝**失敗**（不能少掛的列掉了、拋之前）：算新掉的並記下它們掉了（#1423）。
+   *
+   * 跟 {@link noteDropped} 分開：組裝沒走完，其餘的列掛沒掛上不知道，所以只改掉了的那幾列；也不動「已知組裝掉了」
+   * 的重試記憶（重試的行為不改）。
+   *
+   * @param dropped - `AssemblyDropError.dropped`。
+   * @returns 這一次新掉的列 id。
+   */
+  noteAssemblyFailure(dropped: readonly AssemblyDropInput[]): ReadonlySet<string>;
   /**
    * 「已儲存 vs 執行中」的對照（#1406）。啟動時呼叫不帶引數：已儲存的就是啟動那一份，每一列都是 `same`。
    *
@@ -167,6 +184,34 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
     if (id === undefined) continue;
     assemblyIds.add(id);
     knownAssembly.add(rowKey(startup, id));
+  }
+  // **每一列上一次組裝或重讀的結果**（#1423）：鍵是列 id，值是掛上（`mounted`）或掉了（`dropped`）。起點是啟動那一份。
+  // 「新掉」就是這裡是 `mounted`、這一次掉了。**跟 `known` 不是同一件事**：`known` 只管日誌講不講（鍵含宣告，只增不刪），
+  // 這裡要能在掛回來之後再掉一次還算新掉。重讀只會把掉了的列記成 `dropped`，不會把列記成 `mounted`：純相容層的列
+  // 掛不掛得上要等組裝才知道，重讀把它當掛上的話，組裝又掉就每條 thread 都算新掉、歸因到無關的最新一筆。
+  const lastResult = new Map<string, 'mounted' | 'dropped'>();
+  const trialDroppedIds = new Set<string>();
+  for (const entry of options.trialDropped) {
+    const id = startup.rows.get(entry)?.id;
+    if (id !== undefined) trialDroppedIds.add(id);
+  }
+  const startupDroppedIds = new Set(startup.dropped.map((drop) => drop.id));
+  for (const entry of startup.plugins) {
+    const id = startup.rows.get(entry)?.id;
+    if (id === undefined) continue;
+    if (startupDroppedIds.has(id) || trialDroppedIds.has(id)) lastResult.set(id, 'dropped');
+    else if (entry.disabled !== true) lastResult.set(id, 'mounted');
+  }
+  for (const id of startupDroppedIds) lastResult.set(id, 'dropped');
+  for (const id of trialDroppedIds) lastResult.set(id, 'dropped');
+  /** 這幾列這一次掉了：回新掉的（上一次還是 `mounted`），並記成掉了。 */
+  function noteDroppedIds(ids: Iterable<string>): Set<string> {
+    const fresh = new Set<string>();
+    for (const id of ids) {
+      if (lastResult.get(id) === 'mounted') fresh.add(id);
+      lastResult.set(id, 'dropped');
+    }
+    return fresh;
   }
   // 試組掉了的列掉在哪一步：只給對照快照用（`dropStage`）。鍵同 `knownAssembly`，宣告一改就是另一格。
   const assemblyStage = new Map<string, StartupDrop['stage']>();
@@ -264,12 +309,15 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
       } catch (error) {
         // 必掛的列掉了，這一條 thread 建不起來：先把那一筆記進紀錄，再拋（#1414；等鎖上限 2 秒）。
         if (error instanceof StartupError) {
-          options.recorder?.note(failedRowsOf(error.dropped), 'reread');
+          const fresh = noteDroppedIds(error.dropped.map((drop) => drop.id));
+          options.recorder?.note(failedRowsOf(error.dropped, fresh), 'reread');
           await options.recorder?.flush();
         }
         throw error;
       }
       const toRecord: FailedRow[] = [];
+      // **新掉照字面算**（#1423）：上一次組裝或重讀還掛著、這一次掉了；跟下面「日誌講不講」的 `known` 不是同一把尺。
+      const newlyDropped = noteDroppedIds(loaded.dropped.map((drop) => drop.id));
       for (const drop of loaded.dropped) {
         const key = rowKey(loaded, drop.id);
         const fresh = !known.has(key);
@@ -278,7 +326,7 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
           module: drop.module,
           stage: drop.stage,
           message: drop.message,
-          newlyDropped: fresh,
+          newlyDropped: newlyDropped.has(drop.id),
         });
         if (!fresh) continue;
         known.add(key);
@@ -315,14 +363,32 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
       return list;
     },
     noteDropped(list, dropped) {
+      const droppedIds = new Set<string>();
       for (const { entry, drop } of dropped) {
-        const id = list.loaded.rows.get(entry)?.id;
-        if (id === undefined || !assemblyIds.has(id)) continue;
-        const key = rowKey(list.loaded, id);
+        const id = drop?.origin?.id ?? list.loaded.rows.get(entry)?.id;
+        if (id !== undefined) droppedIds.add(id);
+        const rowId = list.loaded.rows.get(entry)?.id;
+        if (rowId === undefined || !assemblyIds.has(rowId)) continue;
+        const key = rowKey(list.loaded, rowId);
         knownAssembly.add(key);
         assemblyStage.set(key, drop?.stage ?? assemblyStage.get(key) ?? 'apply');
         if (drop?.message !== undefined) assemblyMessage.set(key, drop.message);
       }
+      const fresh = noteDroppedIds(droppedIds);
+      // 清單上沒停用、這一次也沒掉的列就是掛上了。
+      for (const entry of list.plugins) {
+        const id = list.loaded.rows.get(entry)?.id;
+        if (id === undefined || entry.disabled === true || droppedIds.has(id)) continue;
+        lastResult.set(id, 'mounted');
+      }
+      return fresh;
+    },
+    noteAssemblyFailure(dropped) {
+      const ids: string[] = [];
+      for (const { drop } of dropped) {
+        if (drop?.origin?.id !== undefined) ids.push(drop.origin.id);
+      }
+      return noteDroppedIds(ids);
     },
     snapshot: snapshotFor,
   };

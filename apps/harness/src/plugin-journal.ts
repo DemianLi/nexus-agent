@@ -248,7 +248,7 @@ export function parseJournal(bytes: Uint8Array, label: string): JournalContents 
     if (parsed.data.op === 'failed') {
       // 指向的必須是更早、而且被接受的那一筆：指向自己、未來或另一筆只記不折的，是被人手動動過的檔。
       const target = records[parsed.data.triggerSeq - 1];
-      if (target === undefined || target.op === 'rejected' || target.op === 'failed') {
+      if (target === undefined || !isAcceptedRecord(target)) {
         throw new PluginJournalError(
           `${where}是一筆 failed，卻指向第 ${String(parsed.data.triggerSeq)} 筆` +
             `（${target === undefined ? '那一筆還不存在' : `那是 ${target.op}，不是被接受的改動`}）。`,
@@ -402,8 +402,39 @@ export type FailureDiscovery = 'startup' | 'reread' | 'thread-assembly';
 /** 判斷這一列要不要記 `failed` 時用得到的場面。 */
 export interface FailureContext {
   readonly discoveredAt: FailureDiscovery;
-  /** 上一次讀（或啟動）的時候這一列還掛著；沒有資料就 `undefined`。 */
+  /**
+   * 這一列掉在哪一步（#1423）：新規則只認 `requires`。放在場面而不是列的身分上：它是「這一次怎麼掉的」，不是「這一列是誰」。
+   * 省略就不套新規則（舊的呼叫端與測試不帶）。
+   */
+  readonly stage?: 'module' | 'config' | 'apply' | 'requires';
+  /**
+   * 上一次組裝或重讀的時候這一列還掛著、這一次掉了（#1423）；上一次就已經掉了、或沒有資料，就是 `false`／`undefined`。
+   * 啟動那一份的結果是起點。
+   */
   readonly newlyDropped?: boolean;
+}
+
+/**
+ * 這一筆是不是「被接受的」改動：生效過、折得進清單的那幾種。`rejected`（被攔下）與 `failed`（掛不上）是只記不折的筆，不是。
+ *
+ * **逐一列舉、不寫 `default`**：以後再加一種只記不折的 op（#1424 的 `self-disabled`），這裡不補一格就編不過；
+ * 寫成「不是 `rejected` 也不是 `failed`」的排除法，新 op 會被靜靜當成被接受的。
+ *
+ * @param record - 一筆紀錄（或還沒有序號與時間的那一筆）。
+ * @returns 被接受的改動是 `true`。
+ */
+export function isAcceptedRecord(record: Pick<JournalRecord, 'op'>): boolean {
+  switch (record.op) {
+    case 'disable':
+    case 'enable':
+    case 'config-set':
+    case 'config-reset':
+    case 'patch':
+      return true;
+    case 'rejected':
+    case 'failed':
+      return false;
+  }
 }
 
 /**
@@ -440,21 +471,28 @@ function touchesRow(record: JournalRecord, row: FailedRowIdentity): boolean {
 }
 
 /**
- * **這一列要不要記 `failed`，答案只在這一處**（PM 2026-10-13：待 demian 回覆的缺口要改的就是這一個函式）。
+ * **這一列要不要記 `failed`，答案只在這一處**（PM 2026-10-13；#1423 補了第二條規則）。
  *
- * 現行規則（卡上 Q2）：那一列在紀錄裡有被接受的改動才記，**歸因**到**最後一筆**碰到它的、被接受的紀錄（含遷移的
- * `patch`）。只被出貨設定或 `--patch` 影響而掛不上的列，紀錄裡沒有任何一筆指到它，回 `undefined`，照今天只進日誌。
+ * **規則一（#1414 Q2）**：那一列在紀錄裡有被接受的改動才記，**歸因**到**最後一筆**碰到它的、被接受的紀錄
+ * （含遷移的 `patch`）。只被出貨設定或 `--patch` 影響而掛不上的列，紀錄裡沒有任何一筆指到它，照今天只進日誌。
  *
- * **這是歸因規則，不是因果**：回傳的 `seq` 不保證是這次掛不上的原因。例如 A 早年改過設定（seq 2），後來因為 B 被停用
- * 而 A 掉在 `requires`，歸因指到 seq 2；出貨版本升級後才掉的列，也指到它最後一次被改的那一筆。欄位叫 `triggerSeq`
- * 是格式只增不改、改名的成本以後只會更高（PM 2026-10-13）；讀的時候要當歸因讀。
+ * **規則二（#1423，demian 拍板於 #1414 issuecomment-6157679809）**：A 依賴 B、用寫入口關掉 B，A 自己在紀錄裡沒有
+ * 改動，掉在 `requires`。規則一回 `undefined`，這時下面四件事**同時**成立就歸因到紀錄裡**最新一筆被接受的**：
  *
- * 待決的缺口：A 依賴 B、用寫入口關掉 B，A 掉在 `requires`，但 A 自己在紀錄裡沒有改動，所以現行規則不記。補的規則會
- * 看 `context`（serve 跑著的期間、兩次重讀之間新掉的列），回「當時最新一筆被接受的」；呼叫端已經把場面交進來了。
+ * 1. serve 跑著的期間：`discoveredAt` 是 `reread` 或 `thread-assembly`，不含 `startup`（啟動試組不套）；
+ * 2. `newlyDropped === true`：上一次組裝或重讀時它還掛著；
+ * 3. `stage === 'requires'`：`apply` 會因為每條 thread 的工作區不同而一條掛一條掉，不能一律當成紀錄造成的，
+ *    只有 `requires`（依賴的列在不在）在 serve 跑著時只會因為紀錄改了而變；
+ * 4. 規則一回 `undefined`（這一列自己沒有被接受的改動）。
+ *
+ * **這是歸因規則，不是因果**：回傳的 `seq` 不保證是這次掛不上的原因。規則一的例子：A 早年改過設定（seq 2），後來因為
+ * B 被停用而 A 掉在 `requires`，歸因指到 seq 2。規則二的已知邊角：B 自己在某條 thread 因為工作區而 `apply` 失敗、
+ * 連帶 A 掉在 `requires`，A 會被歸因到當時最新的那一筆紀錄，而那一筆跟這次掉落無關；這個邊角接受，不另外處理。
+ * 欄位叫 `triggerSeq` 是格式只增不改、改名的成本以後只會更高（PM 2026-10-13）；讀的時候要當歸因讀。
  *
  * @param records - 現在紀錄檔裡的全部紀錄。
  * @param row - 掉了的那一列。
- * @param context - 在哪裡發現的、是不是剛掉的。
+ * @param context - 在哪裡發現的、掉在哪一步、是不是剛掉的。
  * @returns 歸因到的那一筆的 `seq`；不記就 `undefined`。
  */
 export function failureTriggerOf(
@@ -462,8 +500,17 @@ export function failureTriggerOf(
   row: FailedRowIdentity,
   context: FailureContext,
 ): number | undefined {
-  void context;
-  return records.findLast((record) => touchesRow(record, row))?.seq;
+  const own = records.findLast((record) => touchesRow(record, row))?.seq;
+  if (own !== undefined) return own;
+  if (
+    context.discoveredAt === 'startup' ||
+    context.newlyDropped !== true ||
+    context.stage !== 'requires'
+  ) {
+    return undefined;
+  }
+  // 「被接受」見 `isAcceptedRecord`（遷移來的 `patch` 也算）。
+  return records.findLast(isAcceptedRecord)?.seq;
 }
 
 /** 紀錄裡已經有同一列、歸因到同一筆的 `failed` 了嗎。 */

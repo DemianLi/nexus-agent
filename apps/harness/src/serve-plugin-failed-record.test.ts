@@ -338,3 +338,126 @@ describe('寫不進去不擋 thread（驗收 G）', () => {
     expect(existsSync(lock)).toBe(false);
   }, 120000);
 });
+
+/**
+ * 依賴的列被關掉、掉在 `requires`（[#1423](https://github.com/DemianLi/nexus-agent/issues/1423) 驗收 A–E）。
+ *
+ * 量具：B（`dep-b`）提供一個能力、在紀錄裡有自己的一筆遷移 `insert`，所以寫入口關得掉它；A（`dep-a`）靠 `--patch`
+ * 覆蓋層插進來、需要那個能力。**A 自己在紀錄裡沒有任何一筆**——這正是 #1414 的規則一接不上的那一類。
+ * A 的 `apply` 在環境變數 `DEP_A_APPLY_FAIL` 是 `1` 時拋，給驗收 E 造「掉在 apply」。
+ */
+describe('依賴的列被關掉、掉在 requires（#1423）', () => {
+  const CAPABILITY = 'dep-cap';
+
+  function depsHome(): Home & { readonly overlay: string } {
+    const base = home(false);
+    const write = (name: string, lines: string[]): string => {
+      const file = join(base.dir, name);
+      writeFileSync(file, `${lines.join('\n')}\n`);
+      chmodSync(file, 0o600);
+      return file;
+    };
+    write('dep-b.ts', [
+      'export default {',
+      "  name: 'dep-b',",
+      `  apply(registry) { registry.capabilities.provide('${CAPABILITY}'); },`,
+      '};',
+    ]);
+    write('dep-a.ts', [
+      'export default {',
+      "  name: 'dep-a',",
+      `  requires: ['${CAPABILITY}'],`,
+      '  apply() {',
+      "    if (process.env.DEP_A_APPLY_FAIL === '1') throw new Error('故意在 dep-a 的 apply 裡壞掉');",
+      '  },',
+      '};',
+    ]);
+    const overlay = write('dep-overlay.yml', [
+      '- insert:',
+      '    - id: dep-a',
+      "      name: './dep-a.ts'",
+    ]);
+    base.seed("- insert:\n    - id: dep-b\n      name: './dep-b.ts'\n");
+    return { ...base, overlay };
+  }
+
+  it('A 主情境、B 只記一次、C 第二輪也記：failed 的 stage 是 requires，triggerSeq 是關掉 B 那一筆', async () => {
+    const h = depsHome();
+    const lines: string[] = [];
+    const server = await start(h.env, lines, ['--patch', h.overlay]);
+    expect(await say(server, 'warm')).toBeUndefined();
+    expect(failedOf(h.dir)).toEqual([]);
+
+    // A：關掉 B（seq 2）。下一條 thread 組裝時 A 掉在 requires，記一筆 failed（seq 3）。
+    expect(await h.change({ op: 'disable', id: 'dep-b' })).toBe(2);
+    expect(await say(server, 'a')).toBeUndefined();
+    await waitFor(() => failedOf(h.dir).length === 1, '第一筆 failed（A 掉在 requires）');
+    expect(failedOf(h.dir)[0]).toMatchObject({
+      op: 'failed',
+      seq: 3,
+      id: 'dep-a',
+      triggerSeq: 2,
+      stage: 'requires',
+      actor: { kind: 'serve' },
+    });
+
+    // B：再開幾條 thread（A 每條都重試、每條都再掉一次），不再多記。
+    for (let index = 0; index < 3; index += 1) {
+      expect(await say(server, `more-${String(index)}`)).toBeUndefined();
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(failedOf(h.dir)).toHaveLength(1);
+
+    // C：打開 B（seq 4），A 掛回來；再關掉 B（seq 5），A 再掉，再記一筆，歸因到新的 seq。
+    expect(await h.change({ op: 'enable', id: 'dep-b' })).toBe(4);
+    expect(await say(server, 'back')).toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(failedOf(h.dir)).toHaveLength(1);
+    expect(await h.change({ op: 'disable', id: 'dep-b' })).toBe(5);
+    expect(await say(server, 'again')).toBeUndefined();
+    await waitFor(() => failedOf(h.dir).length === 2, '第二輪的 failed');
+    expect(failedOf(h.dir)[1]).toMatchObject({
+      seq: 6,
+      id: 'dep-a',
+      triggerSeq: 5,
+      stage: 'requires',
+    });
+    // 失敗只記 A：被關掉的 B 不是「掛不上」。
+    expect(failedOf(h.dir).map((entry) => entry.id)).toEqual(['dep-a', 'dep-a']);
+  }, 180000);
+
+  it('D 啟動試組不套：紀錄裡 B 一開始就是關的，A 在啟動試組掉了，之後的 thread 也不多出 failed', async () => {
+    const h = depsHome();
+    expect(await h.change({ op: 'disable', id: 'dep-b' })).toBe(2);
+    const lines: string[] = [];
+    const server = await start(h.env, lines, ['--patch', h.overlay]);
+    expect(await say(server, 'a')).toBeUndefined();
+    expect(await say(server, 'b')).toBeUndefined();
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(failedOf(h.dir)).toEqual([]);
+    // 日誌照今天：啟動試組那一段有講 A 掉了。
+    expect(lines.join('\n')).toContain('dep-a');
+  }, 120000);
+
+  it('E apply 不記：A 自己沒有任何改動、這一條 thread 組裝時掉在 apply，紀錄裡不多一筆', async () => {
+    const h = depsHome();
+    const lines: string[] = [];
+    const server = await start(h.env, lines, ['--patch', h.overlay]);
+    expect(await say(server, 'warm')).toBeUndefined();
+    // 紀錄裡有一筆別的被接受的改動：要是 stage 不限 requires，新規則就會歸因到它。
+    expect(await h.change({ op: 'disable', id: 'skills' })).toBe(2);
+    const previous = process.env['DEP_A_APPLY_FAIL'];
+    process.env['DEP_A_APPLY_FAIL'] = '1';
+    try {
+      expect(await say(server, 'a')).toBeUndefined();
+      expect(await say(server, 'b')).toBeUndefined();
+    } finally {
+      if (previous === undefined) delete process.env['DEP_A_APPLY_FAIL'];
+      else process.env['DEP_A_APPLY_FAIL'] = previous;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(failedOf(h.dir)).toEqual([]);
+    // 它確實掉了：日誌記了一筆。
+    expect(lines.join('\n')).toContain('故意在 dep-a 的 apply 裡壞掉');
+  }, 120000);
+});
