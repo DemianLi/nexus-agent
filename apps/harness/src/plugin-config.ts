@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { StructuredTool, StructuredToolInterface } from '@langchain/core/tools';
 import { NEXUS_CORE_VERSION, resolveEntriesPerEntry } from '@nexus/core';
-import type { NexusPlugin, PluginEntry } from '@nexus/core';
+import type { NexusPlugin, PluginEntry, ProjectionUnit } from '@nexus/core';
 import { ManifestError, validateManifest } from '@nexus/sdk';
 
 import { resolveHarnessHome } from './harness-home.js';
@@ -822,20 +822,37 @@ function bridgeEntry(entry: ConfigEntry, module: FunctionPluginModule): PluginEn
   };
 }
 
-/** 登記進相容層 registry 的是 `StructuredTool` 類別；契約上的 `StructuredToolInterface` 在執行期就是它（`tool()` 的回傳）。 */
-function registerFolded(
-  registry: Parameters<NexusPlugin<unknown>['apply']>[0],
-  tools: readonly StructuredToolInterface[],
-): void {
-  for (const tool of tools) registry.tools.register(tool as StructuredTool);
+/**
+ * 一列在樹上登記的東西，**每一種接縫一格**（#1421）。加一個新接縫要在這裡多一格，然後在 {@link registerFolded} 折進
+ * 這條 thread 的 registry；`plugin-tree.ts` 的 `RowVerdict.active` 與 `mountDetached` 是兩個產生它的地方。
+ */
+interface FoldedContributions {
+  readonly tools: readonly StructuredToolInterface[];
+  readonly projections: readonly ProjectionUnit[];
 }
 
-/** 樹上這一列起來了：折進它登記的工具。 */
-function bindToTree(entry: PluginEntry, tools: readonly StructuredToolInterface[]): PluginEntry {
+/**
+ * 把樹上登記的東西折進這條 thread 的 registry。
+ *
+ * - 登記進相容層 registry 的工具是 `StructuredTool` 類別；契約上的 `StructuredToolInterface` 在執行期就是它（`tool()` 的
+ *   回傳）。
+ * - 投影單元走 `registry.projections.register`：這一層每個 key 只收一份、重複拒絕照舊（`NamedEntries`）。共用的 key 由
+ *   `plugin-tree.ts` 只交給其中一列，所以這裡不會撞自己。
+ */
+function registerFolded(
+  registry: Parameters<NexusPlugin<unknown>['apply']>[0],
+  contributions: FoldedContributions,
+): void {
+  for (const tool of contributions.tools) registry.tools.register(tool as StructuredTool);
+  for (const unit of contributions.projections) registry.projections.register(unit);
+}
+
+/** 樹上這一列起來了：折進它登記的工具與投影單元。 */
+function bindToTree(entry: PluginEntry, contributions: FoldedContributions): PluginEntry {
   const plugin: BridgePlugin = {
     ...(entry.plugin as BridgePlugin),
     apply(registry) {
-      registerFolded(registry, tools);
+      registerFolded(registry, contributions);
     },
   };
   return { ...entry, plugin };
@@ -1483,7 +1500,12 @@ async function loadPluginConfigOnce(
       });
       return off;
     }
-    const bound = bindToTree(entry, verdict.kind === 'active' ? verdict.tools : []);
+    const bound = bindToTree(
+      entry,
+      verdict.kind === 'active'
+        ? { tools: verdict.tools, projections: verdict.projections }
+        : { tools: [], projections: [] },
+    );
     rows.set(bound, { id: origin.id, module: row.name });
     return bound;
   });

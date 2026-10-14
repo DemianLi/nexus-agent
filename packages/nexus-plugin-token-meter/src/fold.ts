@@ -31,8 +31,8 @@
  * @module
  */
 
-import { isLogicalTurnStart } from '@nexus/core';
-import type { ProjectionUnit, SessionEvent } from '@nexus/core';
+import { isLogicalTurnStart } from '@nexus/projections';
+import type { ProjectionUnit, SessionEvent } from '@nexus/projections';
 import {
   TOKEN_METER_LINKS_CAP,
   TOKEN_METER_MODELS_CAP,

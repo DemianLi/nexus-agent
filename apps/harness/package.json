@@ -72,6 +72,7 @@
     "@nexus/plugin-token-meter": "workspace:*",
     "@nexus/plugin-trajectory": "workspace:*",
     "@nexus/plugin-workspace-changes": "workspace:*",
+    "@nexus/projections": "workspace:*",
     "@nexus/sdk": "workspace:*",
     "@nexus/tools": "workspace:*",
     "@nexus/wire": "workspace:*",

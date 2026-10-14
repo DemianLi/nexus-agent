@@ -6,8 +6,9 @@
  * | 列 | 是什麼 | dsh 對應 |
  * |---|---|---|
  * | `tools` | 行程級的工具登記處（`@nexus/tools/provider`），契約服務，一列 | `tools` 服務的提供者 |
+ * | `projections` | 行程級的投影登記處（`@nexus/projections/provider`，#1421），契約服務，一列 | `sessionProjections` 服務的提供者 |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 | `include`（`app-boot` 的 `entry.update({ config: { ...includeConfig, patches } })`） |
- * | `include:<id>` | Include 底下的列，今天只有 echo（模組有 `manifest` 匯出的才上樹） | 各插件 |
+ * | `include:<id>` | Include 底下的列，今天是 echo 與 token-meter（模組有 `manifest` 匯出的才上樹） | 各插件 |
  *
  * ## 清單怎麼進樹
  *
@@ -43,17 +44,23 @@ import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
 import type { StructuredToolInterface } from '@langchain/core/tools';
+import type { ProjectionUnit } from '@nexus/core';
 import { Context } from '@nexus/cordis';
 import type { Message } from '@nexus/cordis';
 import Include from '@nexus/cordis-plugin-include';
 import Loader from '@nexus/cordis-plugin-loader';
 import type { EntryOptions } from '@nexus/cordis-plugin-loader';
+import { createProjectionsProvider } from '@nexus/projections/provider';
+import type { ProjectionEntry } from '@nexus/projections/provider';
 import { ContractError, FIBER_STATE, missingServices } from '@nexus/sdk';
 import { createToolsProvider } from '@nexus/tools/provider';
 import type { ToolEntry } from '@nexus/tools/provider';
 
 /** 工具登記處那一列的 id。 */
 export const TOOLS_ROW_ID = 'tools';
+
+/** 投影登記處那一列的 id。 */
+export const PROJECTIONS_ROW_ID = 'projections';
 
 /** Include 那一列的 id。 */
 export const INCLUDE_ROW_ID = 'include';
@@ -107,7 +114,17 @@ export interface TreeInput {
 
 /** 一列在樹上的結果。 */
 export type RowVerdict =
-  | { readonly kind: 'active'; readonly tools: readonly StructuredToolInterface[] }
+  | {
+      readonly kind: 'active';
+      /** 登記者就是這一列的工具。 */
+      readonly tools: readonly StructuredToolInterface[];
+      /**
+       * **這一列負責折進這條 thread 的**投影單元（#1421）：登記者是這一列、而且這一列是那個 key 目前還活著的第一個登記者。
+       * 同一個 key 由兩列共用時（提供者那一層引用計數共用，PM 決策 1），每個 key 只交給其中一列，這條 thread 的登記處才
+       * 不會撞上它自己的重複拒絕（`NamedEntries`，照舊）。
+       */
+      readonly projections: readonly ProjectionUnit[];
+    }
   | { readonly kind: 'off' }
   | {
       readonly kind: 'dropped';
@@ -183,6 +200,7 @@ function assertNoJsExpr(value: unknown, where: string): void {
 export class PluginTree {
   #context?: Promise<Context>;
   #provider = createToolsProvider();
+  #projections = createProjectionsProvider();
   /** 串行化 {@link run}。 */
   #chain: Promise<unknown> = Promise.resolve();
   /** 最後一次推給 Include 的設定簽章；一樣就不推。 */
@@ -193,9 +211,9 @@ export class PluginTree {
   #disposed = false;
 
   /**
-   * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools` 那一列。
+   * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections` 那兩列。
    *
-   * @returns 已掛好 Loader 與 `tools` 列的根。
+   * @returns 已掛好 Loader 與 `tools`、`projections` 列的根。
    */
   context(): Promise<Context> {
     this.#context ??= this.#build();
@@ -216,9 +234,11 @@ export class PluginTree {
     root.loader.resolver = resolveBareSpecifier;
     Object.assign(root.loader.builtins, {
       [TOOLS_ROW_ID]: this.#provider.Provider,
+      [PROJECTIONS_ROW_ID]: this.#projections.Provider,
       [INCLUDE_ROW_ID]: Include,
     });
     await this.#create(root, { id: TOOLS_ROW_ID, name: `cordis:${TOOLS_ROW_ID}` });
+    await this.#create(root, { id: PROJECTIONS_ROW_ID, name: `cordis:${PROJECTIONS_ROW_ID}` });
     await root.loader.await();
     return root;
   }
@@ -329,6 +349,7 @@ export class PluginTree {
     const entries = this.#provider.entries();
     const verdicts = new Map<string, RowVerdict>();
     for (const row of rows) verdicts.set(row.id, await this.#verdictOf(root, row, entries));
+    this.#assignProjections(rows, verdicts, this.#projections.entries());
     return {
       verdict: (id) =>
         verdicts.get(id) ?? {
@@ -337,6 +358,37 @@ export class PluginTree {
           message: `樹上沒有 ${id} 這一列的結果（它不在這一次推給樹的清單裡）`,
         },
     };
+  }
+
+  /**
+   * 把共用的投影單元分給列（#1421）：每個 key 只給**這一份清單上起來了的**第一個登記者。
+   *
+   * 提供者那一層引用計數共用：同 key 同 `stateVersion` 的兩列都起來，登記處只有一份。這條 thread 的登記處每個 key 只收
+   * 一份（重複拒絕照舊），所以折進去的人只能有一個——取「登記順序上第一個、在這份清單上是 `active` 的列」，而不是提供者
+   * 記的第一個：登記者在提供者那裡還在、在清單上卻掉了（設定與樹上對不上）時，單元不能跟著它一起丟掉，要換下一個。
+   */
+  #assignProjections(
+    rows: readonly TreeRowInput[],
+    verdicts: Map<string, RowVerdict>,
+    entries: readonly ProjectionEntry[],
+  ): void {
+    const owned = new Map<string, ProjectionUnit[]>();
+    const rowIdOf = new Map(rows.map((row) => [treeId(row.id), row.id]));
+    for (const entry of entries) {
+      // 登記順序上第一個、在這份清單上是 `active` 的登記者。
+      const owner = entry.sources
+        .map((source) => rowIdOf.get(source))
+        .find((id) => id !== undefined && verdicts.get(id)?.kind === 'active');
+      if (owner === undefined) continue;
+      const units = owned.get(owner) ?? [];
+      units.push(entry.unit);
+      owned.set(owner, units);
+    }
+    for (const row of rows) {
+      const verdict = verdicts.get(row.id);
+      if (verdict?.kind !== 'active') continue;
+      verdicts.set(row.id, { ...verdict, projections: owned.get(row.id) ?? [] });
+    }
   }
 
   async #verdictOf(
@@ -389,6 +441,8 @@ export class PluginTree {
       return {
         kind: 'active',
         tools: entries.filter((item) => item.source === id).map((item) => item.tool),
+        // 投影單元由 `#assignProjections` 在所有列的結果都有了之後再分：共用的 key 只能給一列。
+        projections: [],
       };
     }
     if (fiber.state === FIBER_STATE.FAILED) {
@@ -434,8 +488,14 @@ export interface DetachedMount {
   readonly config: unknown;
 }
 
+/** {@link mountDetached} 取出的東西：這一列登記的工具與投影單元。 */
+export interface DetachedContributions {
+  readonly tools: readonly StructuredToolInterface[];
+  readonly projections: readonly ProjectionUnit[];
+}
+
 /**
- * 不經產品的樹，把一顆函式插件單獨掛一次、取出它登記的工具、立刻卸載。
+ * 不經產品的樹，把一顆函式插件單獨掛一次、取出它登記的工具與投影單元、立刻卸載。
  *
  * 給**沒有樹的呼叫端**用：手搭 `PluginEntry` 清單、直接 `createCliAgent` 的測試與基準任務，以及 `shippedPlugins()`。
  * 走的是跟產品同一條路（真的 Loader、真的 `tools` 提供者、真的 `ctx.effect`），差別只在樹是用完即丟的。
@@ -445,10 +505,9 @@ export interface DetachedMount {
  *
  * @throws {Error} 那一列沒有起來，訊息同樹上的判定。
  */
-export async function mountDetached(
-  mount: DetachedMount,
-): Promise<readonly StructuredToolInterface[]> {
+export async function mountDetached(mount: DetachedMount): Promise<DetachedContributions> {
   const provider = createToolsProvider();
+  const projections = createProjectionsProvider();
   const root = new Context();
   const contractErrors = new Map<string, ContractError>();
   root.logger.exporter({
@@ -464,11 +523,13 @@ export async function mountDetached(
     root.loader.resolver = resolveBareSpecifier;
     Object.assign(root.loader.builtins, {
       [TOOLS_ROW_ID]: provider.Provider,
+      [PROJECTIONS_ROW_ID]: projections.Provider,
       plugin: mount.module,
     });
     const create = (options: EntryOptions) =>
       root.loader.create(options as Omit<EntryOptions, 'id'>);
     await create({ id: TOOLS_ROW_ID, name: `cordis:${TOOLS_ROW_ID}` });
+    await create({ id: PROJECTIONS_ROW_ID, name: `cordis:${PROJECTIONS_ROW_ID}` });
     await create({
       id: mount.id,
       name: 'cordis:plugin',
@@ -477,10 +538,16 @@ export async function mountDetached(
     await root.loader.await();
     const fiber = root.loader.resolve(mount.id).fiber?.ctx.fiber;
     if (fiber?.state === FIBER_STATE.ACTIVE) {
-      return provider
-        .entries()
-        .filter((entry) => entry.source === mount.id)
-        .map((entry) => entry.tool);
+      return {
+        tools: provider
+          .entries()
+          .filter((entry) => entry.source === mount.id)
+          .map((entry) => entry.tool),
+        projections: projections
+          .entries()
+          .filter((entry) => entry.sources.includes(mount.id))
+          .map((entry) => entry.unit),
+      };
     }
     if (fiber?.state === FIBER_STATE.FAILED) {
       const error = await fiber.await().then(

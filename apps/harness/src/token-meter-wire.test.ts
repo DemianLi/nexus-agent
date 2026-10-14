@@ -22,7 +22,6 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { attachSessionPersistence } from '@nexus/core';
 import type { PluginEntry, SessionRegistry } from '@nexus/core';
-import { createTokenMeterPlugin, tokenMeterUnit } from '@nexus/plugin-token-meter';
 import {
   createWireClient,
   emptyConversation,
@@ -30,6 +29,7 @@ import {
   TOKEN_METER_PROJECTION,
 } from '@nexus/wire';
 import type { ConversationState, Event, TokenMeterView } from '@nexus/wire';
+import { createTokenMeterPlugin, tokenMeterUnit } from './token-meter.fixture.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
