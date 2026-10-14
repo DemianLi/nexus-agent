@@ -20,7 +20,8 @@ import { describe, expect, it } from 'vitest';
 import {
   applyTokenMeter,
   initialTokenMeter,
-  tokenMeterPlugin,
+  manifest,
+  name,
   tokenMeterUnit,
   viewTokenMeter,
 } from './index.js';
@@ -758,7 +759,8 @@ describe('快取分桶：依模型的列、失敗、生摘要（#724）', () => 
 describe('投影通道', () => {
   it('單元宣告 children: true，插件註冊的就是它', () => {
     expect(tokenMeterUnit.children).toBe(true);
-    expect(tokenMeterPlugin.name).toBe('token-meter');
+    expect(name).toBe('token-meter');
+    expect(manifest.id).toBe('token-meter');
   });
 
   it('即時一顆顆 push 與一次 fold 是同一個值；view 是純 JSON', () => {

@@ -250,7 +250,11 @@ describe('buildPluginSnapshot', () => {
       '',
     ].join('\n');
     const loaded = await load(patch);
-    expect(loaded.rows.size).toBeLessThan(loaded.ids.length);
+    // 數的是列 id，不是 `rows.size`：橋接列在 `rows` 裡有原件與綁定樹之後的兩個鍵（#1421 起有兩顆），大小會跟著它們變。
+    const rowIds = new Set([...loaded.rows.values()].map((row) => row.id));
+    expect(rowIds.has('ghost')).toBe(false);
+    expect(rowIds.has('ghost-off')).toBe(false);
+    expect(loaded.ids).toEqual(expect.arrayContaining(['ghost', 'ghost-off']));
     const { snapshot, byId } = await compare(undefined, patch);
     expect(snapshot.rows.map((row) => row.id)).toEqual([...loaded.ids]);
     expect(byId('ghost').saved).toEqual({ state: 'dropped', dropStage: 'module' });
