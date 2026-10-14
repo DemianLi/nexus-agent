@@ -18,6 +18,16 @@
  *   記成已知，不每條 thread 重試、各印一次——同啟動那一段的性質。那一列的宣告一改，下一條 thread 就重新試它；重試又
  *   掉了，新的宣告也記成已知（{@link ThreadPluginReader.noteDropped}），讀清單時新掉的列在伺服器日誌記一次。
  *   啟動試組沒掉、某一條 thread 組裝時才掉的列不在這條規則裡，照舊只在那一條不掛。
+ * - **試組掉在 `requires` 的列，紀錄有新的被接受改動時重試一次**（#1426，demian 2026-10-14 拍板 Q1 (a)）：#1405 問的是
+ *   「設定修好的列要不要回來」，沒考慮「掉的原因在別的列」——A 自己什麼都沒錯、錯在它依賴的 B 不在，B 之後被打開，A 的
+ *   宣告沒變，照上一條永遠不回來，要重啟 serve。所以這一階段記住的鍵多帶「當時紀錄裡最新一筆被接受的 `seq`」
+ *   （{@link LoadedPluginConfig.acceptedSeq}）：serve 跑著時 `--patch`、出貨設定、環境變數都不變，依賴的列在不在只會因為紀錄
+ *   改了而變。對得上就照上一條不重試；對不上，下一條 thread 重新組裝它一次，又掉了就用新的 `seq` 記住（只重試一次）。
+ *   **只動 `requires` 這一階段**：`module`、`config`、`apply` 照上一條不變。相容層的 `requires` 檢查排在 `apply` 之後
+ *   （`packages/nexus-core/src/load.ts`），重試一次就是真的跑一次 `apply` 再撤掉，所以不能每條 thread 都試。
+ *   「被接受」用 `isAcceptedRecord`：`failed`、`rejected` 是只記不折的筆，要是算進去，重試又掉時記下的那一筆 `failed`
+ *   就會讓下一條 thread 再試一次，永遠停不下來。不處理的邊角：B 因為工作區而 `apply` 失敗、連帶 A 掉在 `requires`，
+ *   B 自己也照上一條不重試，所以 A 等到紀錄有改動才回來，跟 B 的待遇一致。
  *
  * 讀清單交出的警告（例如 patch 指到不存在的 id）也只記一次，進伺服器日誌。
  *
@@ -177,13 +187,28 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
   const known = new Set<string>();
   for (const drop of startup.dropped) known.add(rowKey(startup, drop.id));
   const knownAssembly = new Set<string>();
+  // **掉在 `requires` 的那幾格當時紀錄裡最新一筆被接受的 `seq`**（#1426）：鍵同 `knownAssembly`（列 id 加宣告），沒有那一格
+  // 的就是掉在別的階段（`module`、`config`、`apply`），宣告不變就一直算沒掛。有那一格的，讀清單時紀錄裡最新被接受的
+  // `seq` 跟它不同，就不標成停用、讓下一條 thread 組裝它一次。
+  const requiresSeq = new Map<string, number | null>();
   // 啟動試組掉過的列 id：只有它們重試又掉時記新的宣告。
   const assemblyIds = new Set<string>();
+  const trialDropById = new Map((options.trialDrops ?? []).map((drop) => [drop.id, drop]));
   for (const entry of options.trialDropped) {
     const id = startup.rows.get(entry)?.id;
     if (id === undefined) continue;
     assemblyIds.add(id);
-    knownAssembly.add(rowKey(startup, id));
+    const key = rowKey(startup, id);
+    knownAssembly.add(key);
+    if (trialDropById.get(id)?.stage === 'requires') requiresSeq.set(key, startup.acceptedSeq);
+  }
+  /** 這一格在這一份清單上還算不算「已知組裝掉了」：掉在 `requires` 的，紀錄有新的被接受改動就不算（#1426）。 */
+  function stillKnownAssembly(
+    loaded: Pick<LoadedPluginConfig, 'acceptedSeq'>,
+    key: string,
+  ): boolean {
+    if (!knownAssembly.has(key)) return false;
+    return !requiresSeq.has(key) || requiresSeq.get(key) === loaded.acceptedSeq;
   }
   // **每一列上一次組裝或重讀的結果**（#1423）：鍵是列 id，值是掛上（`mounted`）或掉了（`dropped`）。起點是啟動那一份。
   // 「新掉」就是這裡是 `mounted`、這一次掉了。**跟 `known` 不是同一件事**：`known` 只管日誌講不講（鍵含宣告，只增不刪），
@@ -217,7 +242,6 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
   const assemblyStage = new Map<string, StartupDrop['stage']>();
   // 同一格的原因原文，只給變更紀錄的 `failed` 用（#1414）。
   const assemblyMessage = new Map<string, string>();
-  const trialDropById = new Map((options.trialDrops ?? []).map((drop) => [drop.id, drop]));
   for (const id of assemblyIds) {
     const trial = trialDropById.get(id);
     assemblyStage.set(rowKey(startup, id), trial?.stage ?? 'apply');
@@ -337,7 +361,7 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
         const row = loaded.rows.get(entry);
         if (row === undefined || entry.disabled === true) return entry;
         const key = rowKey(loaded, row.id);
-        if (!knownAssembly.has(key)) return entry;
+        if (!stillKnownAssembly(loaded, key)) return entry;
         const off: PluginEntry = { ...entry, disabled: true };
         rows.set(off, row);
         // 已知組裝掉了、這一條沒有重試的列：照樣交給紀錄，原因取它掉的那一次。
@@ -371,7 +395,12 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
         if (rowId === undefined || !assemblyIds.has(rowId)) continue;
         const key = rowKey(list.loaded, rowId);
         knownAssembly.add(key);
-        assemblyStage.set(key, drop?.stage ?? assemblyStage.get(key) ?? 'apply');
+        const stage = drop?.stage ?? assemblyStage.get(key) ?? 'apply';
+        assemblyStage.set(key, stage);
+        // 掉在 `requires`：用**這一條 thread 讀到的**那個 `seq` 記住（#1426），紀錄再有新的被接受改動才又試一次；
+        // 這一次掉在別的階段，就照 #1405 Q2 只看宣告。
+        if (stage === 'requires') requiresSeq.set(key, list.loaded.acceptedSeq);
+        else requiresSeq.delete(key);
         if (drop?.message !== undefined) assemblyMessage.set(key, drop.message);
       }
       const fresh = noteDroppedIds(droppedIds);

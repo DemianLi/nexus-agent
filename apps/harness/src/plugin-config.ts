@@ -65,6 +65,7 @@ import { assertPluginCompatible, PluginCompatibilityError } from './plugin-compa
 import {
   createJournalFile,
   foldJournal,
+  isAcceptedRecord,
   PLUGIN_JOURNAL_FILE_NAME,
   PLUGIN_JOURNAL_VERSION,
   PluginJournalError,
@@ -946,13 +947,16 @@ export function composeEntriesWithReport(sources: PluginConfigSources = {}): {
   readonly report: LayerReport;
   /** 疊之前的出貨列與全部層攤平後的 patch：樹上的插件從這裡讀（#1416），不另外再讀一次檔。 */
   readonly source: ComposeSource;
+  /** 紀錄裡最後一筆被接受的改動的序號（#1426），跟這一份條目是同一次讀的。 */
+  readonly acceptedSeq: number | null;
 } {
-  const { shipped, rows, rowOrigins, layers, report } = readLayers(sources);
+  const { shipped, rows, rowOrigins, layers, report, acceptedSeq } = readLayers(sources);
   const patches = layers.flatMap((layer) => layer.patches);
   return {
     entries: validateEntries(applyEntryPatches(rows, patches, sources.warn), shipped),
     report,
     source: { shipped, rows, rowOrigins, patches },
+    acceptedSeq,
   };
 }
 
@@ -1023,6 +1027,8 @@ function readLayers(sources: PluginConfigSources): {
   rowOrigins: string[];
   layers: ConfigLayer[];
   report: LayerReport;
+  /** 紀錄裡最後一筆被接受的改動的序號；沒有紀錄、或紀錄裡一筆都沒被接受就是 `null`。 */
+  acceptedSeq: number | null;
 } {
   const shipped = sources.shipped ?? shippedConfigPath();
   const rows: Record<string, unknown>[] = [];
@@ -1046,10 +1052,12 @@ function readLayers(sources: PluginConfigSources): {
     if (patches !== undefined) layers.push({ label: sources.userPatch, patches });
   }
   let journalReport: LayerReport['journal'];
+  let acceptedSeq: number | null = null;
   if (sources.journal !== undefined) {
     const read = readJournalLayer(sources.journal, sources.warn ?? warnToStderr);
     if (read.patches.length > 0) layers.push({ label: read.label, patches: read.patches });
     journalReport = read.report;
+    acceptedSeq = read.acceptedSeq;
   }
   const overlays: { file: string; rows: string[] }[] = [];
   for (const overlay of sources.overlays ?? []) {
@@ -1063,6 +1071,7 @@ function readLayers(sources: PluginConfigSources): {
     rowOrigins,
     layers,
     report: { ...(journalReport !== undefined && { journal: journalReport }), overlays },
+    acceptedSeq,
   };
 }
 
@@ -1107,7 +1116,12 @@ export function legacyPatchIgnoredMessage(legacy: string, journal: string): stri
 function readJournalLayer(
   source: JournalSource,
   warn: PluginConfigWarn,
-): { patches: ConfigPatch[]; label: string; report: NonNullable<LayerReport['journal']> } {
+): {
+  patches: ConfigPatch[];
+  label: string;
+  report: NonNullable<LayerReport['journal']>;
+  acceptedSeq: number | null;
+} {
   let contents;
   try {
     contents = readJournal(source.path, {
@@ -1146,6 +1160,8 @@ function readJournalLayer(
   return {
     patches,
     label,
+    // 最後一筆**被接受的**改動的序號（#1426）：`failed`、`rejected` 是只記不折的筆，不算。
+    acceptedSeq: records.findLast((record) => isAcceptedRecord(record))?.seq ?? null,
     report: {
       path: source.path,
       exists: contents !== undefined,
@@ -1317,6 +1333,12 @@ export interface LoadedPluginConfig {
    * 快照（`plugin-snapshot.ts`）與伺服器日誌從這裡取材。
    */
   readonly layers: LayerReport;
+  /**
+   * 變更紀錄裡**最後一筆被接受的**改動的序號（{@link isAcceptedRecord}），沒有就是 `null`（#1426）。跟 {@link entries}
+   * 是同一次讀的。放在這裡而不是 {@link layers}：`layers` 整份進快照檔，這個數字只給「試組掉在 `requires` 的列什麼時候
+   * 重試」用（`thread-plugin-list.ts`），不屬於對外報的那份。
+   */
+  readonly acceptedSeq: number | null;
 }
 
 /**
@@ -1366,7 +1388,7 @@ async function loadPluginConfigOnce(
   sources: PluginConfigSources,
   tree: PluginTree | undefined,
 ): Promise<LoadedPluginConfig> {
-  const { entries, report, source } = composeEntriesWithReport(sources);
+  const { entries, report, source, acceptedSeq } = composeEntriesWithReport(sources);
   const loaded: { readonly row: ConfigEntry; readonly entry: PluginEntry }[] = [];
   const dropped: StartupDrop[] = [];
   // `entries` 每一列解析後的 id：先放「宣告的 id 或模組名」，載進來的那幾列等載入器補完號再換成補過的那個。
@@ -1465,7 +1487,7 @@ async function loadPluginConfigOnce(
     rows.set(bound, { id: origin.id, module: row.name });
     return bound;
   });
-  return { plugins, dropped, ignoredConfig, rows, entries, ids, layers: report };
+  return { plugins, dropped, ignoredConfig, rows, entries, ids, layers: report, acceptedSeq };
 }
 
 /**
