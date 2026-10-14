@@ -476,10 +476,11 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  * data: [DONE]
  * ```
  *
- * 重試包裝器（`AsyncCaller` → `p-retry`）包的是**建立串流的那一次呼叫**。那次拿到 `200`，
- * 當場判定成功；錯誤是稍後消費串流時才冒出來的，**那時候已經在重試的射程之外**。
+ * SDK 的呼叫包裝器（`AsyncCaller` → `p-retry`）包的是**建立串流的那一次呼叫**。那次拿到 `200`，
+ * 當場判定成功；錯誤是稍後消費串流時才冒出來的，**那時候已經在它的射程之外**。
  * 結果是 {@link retryDecision} 那一整套政策對這一類失敗**從來沒有被問到** ——
- * 不是判錯，是沒被呼叫到。
+ * 不是判錯，是沒被呼叫到。（#1427 之後 `maxRetries` 恆為 0、重試只在 `retryModelCall` 一層，
+ * 但分類與回報仍走這個 `onFailedAttempt`，所以「落進它的迴圈」仍是下面這個做法的目標。）
  *
  * ## 做法：翻譯投遞方式，不是新增政策
  *
