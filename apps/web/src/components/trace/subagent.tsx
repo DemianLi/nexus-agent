@@ -19,6 +19,7 @@ import {
   TURN_KIND_LABEL,
   clockText,
   durationText,
+  failureReasonText,
   subagentSnapshotsOf,
   subagentTrajectoryOf,
 } from '@/lib/trajectory-view';
@@ -92,7 +93,9 @@ function SubagentTurn({ turn }: { turn: SubagentTurnView }) {
               data-testid="trace-subagent-retry"
             >
               重試 {retry.retry}/{retry.maxRetries} ·{' '}
-              {retry.status === undefined ? retry.code : `${retry.code} · HTTP ${retry.status}`}
+              <span title={retry.code} data-failure-code={retry.code}>
+                {failureReasonText(retry.code, retry.status)}
+              </span>
               {retry.waitedMs !== undefined && ` · 等了 ${durationText(retry.waitedMs)}`}
             </p>
           ))}

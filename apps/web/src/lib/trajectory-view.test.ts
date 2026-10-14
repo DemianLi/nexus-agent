@@ -16,6 +16,7 @@ import {
   durationText,
   FAILURE_CODE_LABEL,
   failureCodeText,
+  failureReasonText,
   TURN_KIND_LABEL,
   signalText,
   snapshotsOf,
@@ -188,6 +189,7 @@ describe('失敗碼：一句話，不認得的原樣顯示', () => {
       'SERVER',
       'TIMEOUT',
       'TRANSPORT',
+      'EMPTY_RESPONSE',
       'UNKNOWN',
     ];
     for (const code of vocabulary) {
@@ -195,6 +197,14 @@ describe('失敗碼：一句話，不認得的原樣顯示', () => {
       expect(failureCodeText(code), code).not.toBe(code);
     }
     expect(failureCodeText('QUOTA')).toBe('額度用盡');
+    expect(failureCodeText('EMPTY_RESPONSE')).toBe('回覆是空的');
+  });
+
+  it('重試列的原因：帶了 HTTP 狀態就接在後面，碼本身是同一個 HTTP_<n> 只寫一次（#1449）', () => {
+    expect(failureReasonText('RATE_LIMIT', 429)).toBe('被限流 · HTTP 429');
+    expect(failureReasonText('HTTP_404', 404)).toBe('HTTP 404');
+    expect(failureReasonText('EMPTY_RESPONSE')).toBe('回覆是空的');
+    expect(failureReasonText('NEW_KIND', 503)).toBe('NEW_KIND · HTTP 503');
   });
 
   it('HTTP_<n> 寫成「HTTP <n>」', () => {
