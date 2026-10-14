@@ -661,6 +661,7 @@ function createInbandWatcher(
         if (envelope !== undefined) {
           const status = inbandStatus(envelope);
           const code = (envelope.error as Record<string, unknown>).code;
+          // 非 429 一律記 `SERVER`，包含非 5xx 的 4xx：沿用 `retryDecision`；dsh 會把非 5xx 的 4xx 記成 `HTTP_n`、不重試（`llm-deepseek/src/transport.ts:22-35`）（#1427 的已知差異）。
           report({
             code: status === 429 ? 'RATE_LIMIT' : 'SERVER',
             retryable: retryDecision({ status, code }) === 'retry',
@@ -765,6 +766,7 @@ export function withStreamIdleTimeout(
               report({ code: 'TIMEOUT', retryable: true });
             } else if (!(error instanceof Error && error.name === 'AbortError')) {
               // 使用者中止的 AbortError 不回報——那是我們自己要的，不重打。
+              // 沒有狀態、也不是逾時的一律記 `TRANSPORT`，不只是斷線：沿用 `retryDecision`；dsh 會把認不出的錯誤記成 `PI_AI_ERROR`、不重試（`llm-pi-ai/src/stream.ts:42-67`）（#1427 的已知差異）。
               report({ code: 'TRANSPORT', retryable: retryDecision(error) === 'retry' });
             }
             throw error;
@@ -1327,6 +1329,12 @@ export function classifyFailedAttempt(error: unknown): void {
  * 碼的詞彙取 dsh 預設可重試集的四個（`llm/src/retry-policy.ts:18`）：429 是 `RATE_LIMIT`、其他 HTTP 狀態
  * 是 `SERVER`、{@link StreamIdleTimeoutError} 與 SDK 的逾時是 `TIMEOUT`，沒有狀態碼的其餘（連線斷、解不開的回應）
  * 是 `TRANSPORT`。**只對會被重試的失敗有意義**：判放棄的那些走 {@link classifyFailedAttempt} 拋出去，不經過這裡。
+ *
+ * **三處與 dsh 的已知差異（#1427，登記為「範圍切分（暫時）」，分類另開卡對齊）**：
+ * (a) 有狀態、不是 429 的一律記 `SERVER`，包含 `STATUS_NO_RETRY` 沒列的非 5xx 4xx（408、422、425、418…）：沿用
+ * {@link retryDecision}；dsh 會記成 `HTTP_n`、不重試。(b) 沒有狀態、不是逾時的一律記 `TRANSPORT`，不只是斷線：沿用
+ * {@link retryDecision}；dsh 會記成 `PI_AI_ERROR`、不重試。(c) `EMPTY_RESPONSE` 沒有生產者：dsh 在「stop 但沒有 content」
+ * 時產生並重試，我們沒有這條路徑。另外它與 {@link classifyTurnFailure} 的碼不一致（同一類失敗那邊記 `UNKNOWN`），這張不修。
  *
  * **認碼與名字，不解析訊息**，同 {@link retryDecision}；`message` 只是原話搬運。
  *

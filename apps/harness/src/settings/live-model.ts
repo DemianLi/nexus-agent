@@ -57,6 +57,14 @@
  * **與 dsh 行為對齊的幾條**：`retry-after` 不超過 `maxDelayMs` 就照它等（不加抖動）、超過就放棄；抖動之後再夾到
  * `maxDelayMs`；**沒帶 header 的 429 照樣重試**（基座的預設 handler 會把它當容量不足放棄）。
  *
+ * **已知差異（暫時，理由類別「範圍切分（暫時）」）：失敗分類沿用 `retryDecision`，三處與 dsh 不同。** (a) 有狀態、不是 429
+ * 的失敗一律記 `SERVER`，含 `STATUS_NO_RETRY` 沒列的非 5xx 4xx（408、422、425、418 實測都重打）：dsh 記成 `HTTP_n`、不重試
+ * （`llm-deepseek/src/transport.ts:22-35`）。(b) 沒有狀態、也不是逾時的失敗一律記 `TRANSPORT`：dsh 記成 `PI_AI_ERROR`、不重試
+ * （`llm-pi-ai/src/stream.ts:42-67`）。(c) `EMPTY_RESPONSE` 沒有生產者：dsh 在「stop 但沒有 content」時產生並重試。這張卡的
+ * 「要做」第 2 條是「今天的 `retryDecision` 判準照用」，改分類會讓使用者看得到的重試行為變動，要在自己的卡上量過、由 demian
+ * 拍板。`classifyLlmFailure` 與 `classifyTurnFailure` 對同一類失敗的碼不一致（後者記 `UNKNOWN`），也放進後續卡。
+ * **撤除條件**：後續分類卡合併。
+ *
  * **偏離：`mode` 只收 `normal`，`always` 拒收。** dsh 的 `always` 對每一次失敗無限重試。我們是企業內部聊天機器人，一輪沒有
  * 盡頭，中段失敗每次都重付整個回覆，無限重試會無限重付。理由類別是**產品需求超出 dsh**。**撤除條件**：demian 提出需要無限
  * 重試的情境。也登記在 `docs/plugin-contract.md` 的偏離表。
