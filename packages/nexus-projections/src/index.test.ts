@@ -1,5 +1,6 @@
 import { readFileSync } from 'node:fs';
 
+import { ProjectionDetailError } from '@nexus/core';
 import type { ProjectionUnit } from '@nexus/core';
 import type { Context } from '@nexus/cordis';
 import { checkConformance, defineManifest, injectOf, need, service } from '@nexus/sdk';
@@ -49,8 +50,10 @@ describe('@nexus/projections 的定義', () => {
     expect(PROJECTIONS_CONTRACT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
-  it('轉出 isLogicalTurnStart（執行期的值），型別由 @nexus/core 單向轉出', () => {
+  it('轉出 isLogicalTurnStart 與 ProjectionDetailError（執行期的值），型別由 @nexus/core 單向轉出', () => {
     expect(typeof definition.isLogicalTurnStart).toBe('function');
+    // 同一個類別（instanceof 才成立），不是複製。
+    expect(definition.ProjectionDetailError).toBe(ProjectionDetailError);
   });
 
   it('一致性套件跑在 projections 接縫上：載入→卸載後登記處回到空的、缺件指名', async () => {

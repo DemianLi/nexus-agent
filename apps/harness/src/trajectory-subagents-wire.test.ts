@@ -18,7 +18,6 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { attachSessionPersistence } from '@nexus/core';
 import type { PluginEntry, SessionRegistry } from '@nexus/core';
-import { createTrajectoryPlugin } from '@nexus/plugin-trajectory';
 import {
   createWireClient,
   emptyConversation,
@@ -41,6 +40,7 @@ import { composeAttachSessions } from './session-attach.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { createTrajectoryPlugin } from './trajectory.fixture.js';
 
 let dir: string;
 const opened: WireHandler[] = [];
