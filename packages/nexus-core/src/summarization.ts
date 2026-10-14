@@ -365,6 +365,25 @@ export function retainedTailCount(messages: readonly BaseMessage[], retainTokens
   return length - cut;
 }
 
+/**
+ * 這一步摘要之後要留幾則：{@link retainTokensFor} 算得出 token 保留量就照 {@link retainedTailCount} 選尾巴，算不出就是
+ * {@link RETAIN_FALLBACK_MESSAGES} 則。{@link withRetainedTail}（交給基座的 `keep`）與 {@link isUnderCompactionPressure}
+ * （剪刀的閘門）用的是這同一個數，兩邊才會對「這一步摘不摘得到東西」有同一個答案。
+ *
+ * @param messages - 摘要器眼中的那一串（{@link effectiveMessages}）。
+ * @param settings - 補滿的設定。
+ * @param limits - 這一步模型的上限；不知道就是 `undefined`。
+ * @returns 尾巴則數；`>= messages.length` 就是尾巴蓋住全部、基座切不出東西。
+ */
+export function retainedMessageCount(
+  messages: readonly BaseMessage[],
+  settings: Pick<SummarizationSettings, 'trigger' | 'retainRatio' | 'retainTokens'>,
+  limits: ModelContextLimits | undefined,
+): number {
+  const retain = retainTokensFor(settings, limits, effectiveTrigger(settings.trigger, limits));
+  return retain === undefined ? RETAIN_FALLBACK_MESSAGES : retainedTailCount(messages, retain);
+}
+
 /** 舊訊息裡過大的工具**參數**要不要剪。剪工具**結果**是另一件事，見 [#149](https://github.com/DemianLi/nexus-agent/issues/149)。 */
 export interface SummarizationArgTruncation {
   /** 超過這個量就開始剪。 */
@@ -443,6 +462,12 @@ export interface SummarizationSettings {
  * 每次 invoke 走一次的 `beforeAgent` 是 32 輪，兩者跑到上限前都越過 60 則——所以一場跑滿的
  * 長任務會摘要一次，正常的基準任務（最長 3 次工具呼叫）碰不到它。serve 每輪四格只有 24 輪，
  * 單次 invoke 湊不到 60 則（2026-10-02 實測最多 51 則），要靠同一條 thread 後面幾輪累積才碰得到。
+ *
+ * **#1374 之後，則數到了不等於會摘要。** 保留量改成 token（下一節），則數到 60 時尾巴若裝得下整串（出廠是 20,000 token），
+ * 基座切不出東西、原樣送出。所以這一道實際的意思是「則數 ≥ 60 **而且**訊息本身超過保留量」——訊息短的對話不會在第 60 則摘要
+ * （PM 在 #1374 驗收時列為已知、刻意的變化；2026-10-14 發版模擬實測到 70 則、整份請求約 33k token，一次都沒摘、
+ * serve 也沒有任何「摘要失敗」——每一步都是尾巴蓋住全部）。
+ * 剪刀的閘門跟著這個意思走，見 {@link isUnderCompactionPressure}。
  *
  * ## 保留量：`retainRatio` 0.16，依這一步的模型算 token（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)）
  *
@@ -700,6 +725,7 @@ export function createSummarizer(
           request,
           effectiveTrigger(settings.trigger, limitsOf?.(request.model)),
           book,
+          (messages) => retainedMessageCount(messages, settings, limitsOf?.(request.model)),
         ),
       pruning,
       sessions === undefined ? undefined : pruneLogOf(sessions),
@@ -1049,13 +1075,9 @@ function withRetainedTail(
     wrapModelCall: (request, handler) => {
       const suppressed = (request as { [SUPPRESS_SUMMARY]?: boolean })[SUPPRESS_SUMMARY] === true;
       const view = effectiveMessages(request.messages ?? [], request.state);
-      const limits = limitsOf?.(request.model);
-      const retain = retainTokensFor(settings, limits, effectiveTrigger(settings.trigger, limits));
       const keepMessages = suppressed
         ? SUPPRESSED_CHAIN
-        : retain === undefined
-          ? RETAIN_FALLBACK_MESSAGES
-          : retainedTailCount(view, retain);
+        : retainedMessageCount(view, settings, limitsOf?.(request.model));
       const state = request.state as Record<string, unknown> | undefined;
       const seeded = (
         state !== undefined && typeof state._summarizationSessionId !== 'string'
@@ -1680,20 +1702,37 @@ export function effectiveMessages(
  *
  * 要量的是 {@link effectiveMessages}，不是原串：摘要過之後原串只長不縮，照原串量門檻會從第一次摘要起永遠成立。
  *
+ * ## `messages` 門檻要「摘得到東西」才算
+ *
+ * 則數到了，基座才走 `performSummarization`；但保留量改成 token 之後（[#1374](https://github.com/DemianLi/nexus-agent/issues/1374)），
+ * 尾巴可能蓋住整串，基座算出 `cutoffIndex <= 0`、原樣送出——**這一步不會摘要**。出廠設定下，訊息本身不到 20,000 token
+ * 的對話就是這樣（2026-10-14 發版模擬實測：到 70 則、整份請求約 33k token，一次都沒摘）。那時照則數判壓力，剪刀就會在
+ * 一個離任何門檻都還很遠的對話上，把每一則大工具結果（包括模型剛查回來的那一則）剪掉中段，正是 dsh「低于压力的对话绝不被碰」
+ * 禁止的事。所以 `messages` 那道多一個條件：{@link retainedMessageCount} 算出的尾巴要比有效串短。
+ *
+ * `tokens` 那道不加：保留量封在門檻的兩成（{@link RETAIN_THRESHOLD_CAP_RATIO}），越過門檻時尾巴通常蓋不住全部。例外是 system
+ * 與工具定義自己就占掉門檻八成以上——那時摘不到東西、剪刀照剪，而剪掉的確實是讓整份請求逼近窗口的那一截，所以不擋。
+ *
  * @param request - 剪刀收到的那份請求。
  * @param trigger - 我們配的那組門檻。
  * @param book - 錨定估算的帳。
+ * @param retainedCount - 這一步摘要之後會留幾則，見 {@link retainedMessageCount}；收的是有效串。
  * @returns 任何一道門檻成立就 `true`。
  */
 export function isUnderCompactionPressure(
   request: EstimatedRequest & { readonly state?: unknown },
   trigger: readonly SummarizationThreshold[],
   book: TokenAnchorBook,
+  retainedCount: (messages: readonly BaseMessage[]) => number,
 ): boolean {
   const messages = effectiveMessages(request.messages ?? [], request.state);
   let tokens: number | undefined;
+  let compactable: boolean | undefined;
   for (const threshold of trigger) {
-    if (threshold.type === 'messages' && messages.length >= threshold.value) return true;
+    if (threshold.type === 'messages' && messages.length >= threshold.value) {
+      compactable ??= retainedCount(messages) < messages.length;
+      if (compactable) return true;
+    }
     if (threshold.type === 'tokens') {
       tokens ??= estimateAnchoredTokens({ ...request, messages }, book).tokens;
       if (tokens >= threshold.value) return true;

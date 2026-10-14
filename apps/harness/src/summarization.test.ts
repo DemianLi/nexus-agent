@@ -1720,11 +1720,12 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   it('toolResultPruning 的覆寫會生效', async () => {
     const medium = 'M'.repeat(5_000);
     const budget = { thresholdChars: 2_000, headChars: 500, tailChars: 100 };
-    const model = bulkTurns();
+    // 則數門檻要「摘得到東西」才算壓力（#1441）：保留量壓到 1，這一步真的會摘要，摘要那次呼叫吃掉一份備料。
+    const model = bulkTurns(1, 1);
     const { agent, dispose } = await createNexusAgent({
       model,
       plugins: [bulkPlugin(medium)],
-      summarization: { trigger: [{ type: 'messages', value: 2 }] },
+      summarization: { trigger: [{ type: 'messages', value: 2 }], retainTokens: 1 },
       toolResultPruning: budget,
     });
     try {
@@ -1733,7 +1734,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
       await dispose();
     }
 
-    const text = String(toolResults(model.prompts[1]!)[0]!.content);
+    const text = String(toolResults(model.prompts.at(-1)!)[0]!.content);
     expect(text).toBe(`${'M'.repeat(500)}${TOOL_RESULT_PRUNE_MARKER}${'M'.repeat(100)}`);
   });
 
@@ -1910,7 +1911,8 @@ describe('壓縮前先剪掉過大的工具結果', () => {
   describe('剪刀的預算從條目來，在正式路徑上', () => {
     it('條目給的預算真的傳到剪刀手上——頭尾長度照它的值', async () => {
       const medium = 'M'.repeat(5_000);
-      const model = bulkTurns();
+      // 同上一組的覆寫那條：保留量壓到 1，則數門檻才摘得到東西、才算壓力（#1441）。
+      const model = bulkTurns(1, 1);
       const { agent, dispose } = await createNexusAgent({
         model,
         plugins: [
@@ -1920,7 +1922,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
             config: { thresholdChars: 2_000, headChars: 500, tailChars: 100 },
           },
         ],
-        summarization: { trigger: [{ type: 'messages', value: 2 }] },
+        summarization: { trigger: [{ type: 'messages', value: 2 }], retainTokens: 1 },
       });
       try {
         await agent.invoke(toAgentInvocation('去拿一坨。'));
@@ -1930,7 +1932,7 @@ describe('壓縮前先剪掉過大的工具結果', () => {
 
       // 5,000 在預設的 8,192 之下——預設那條路會一字不動。剪成這個樣子只有條目那份預算
       // 生效才可能。
-      const text = String(toolResults(model.prompts[1]!)[0]!.content);
+      const text = String(toolResults(model.prompts.at(-1)!)[0]!.content);
       expect(text).toBe(`${'M'.repeat(500)}${TOOL_RESULT_PRUNE_MARKER}${'M'.repeat(100)}`);
     });
 

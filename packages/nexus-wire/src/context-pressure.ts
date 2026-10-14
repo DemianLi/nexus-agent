@@ -54,7 +54,12 @@ export interface WireContextMeasure {
   readonly approxTokens: number;
   /** 訊息則數。摘要之後會掉下來。 */
   readonly messageCount: number;
-  /** 那次呼叫生效的門檻，並聯，任一成立就摘要，**至少一道**。部署改過就是改過的值——**不要在 web 寫死**。 */
+  /**
+   * 那次呼叫生效的門檻，並聯，**至少一道**。部署改過就是改過的值——**不要在 web 寫死**。
+   *
+   * `tokens` 那道到了就摘要。`messages` 那道**到了不一定摘要**：保留量是 token 算的（#1374），訊息本身還沒超過保留量時
+   * 尾巴蓋住整串、切不出東西，原樣送出。所以只看則數的比例會在不會摘要時顯示到頂（2026-10-14 發版模擬：70／60 則、約 33k token）。
+   */
   readonly thresholds: readonly WireSummaryThreshold[];
 }
 

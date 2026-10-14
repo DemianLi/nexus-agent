@@ -91,12 +91,37 @@ describe('壓力閘門', () => {
     messages: readonly BaseMessage[],
     trigger: readonly SummarizationThreshold[],
     state?: unknown,
-  ) => isUnderCompactionPressure({ messages, state }, trigger, new TokenAnchorBook());
+    // 預設尾巴一則不留：這一組多數條目量的是門檻本身，不是「摘不摘得到東西」。
+    retainedCount: (messages: readonly BaseMessage[]) => number = () => 0,
+  ) =>
+    isUnderCompactionPressure({ messages, state }, trigger, new TokenAnchorBook(), retainedCount);
 
   it('門檻陣列並聯，任何一道成立就算壓力到了', () => {
     expect(pressure(longHistory(6), BY_MESSAGES)).toBe(true);
     expect(pressure(longHistory(5), BY_MESSAGES)).toBe(false);
     expect(pressure(longHistory(5), [...BY_MESSAGES, { type: 'tokens', value: 1 }])).toBe(true);
+  });
+
+  /**
+   * **則數到了、尾巴卻蓋住全部：不算壓力。** 基座這時切不出東西、原樣送出，這一步不會摘要；照則數判壓力的話，
+   * 剪刀會在離任何門檻都還很遠的對話上剪掉大工具結果（2026-10-14 發版模擬的形狀）。差一則就要翻過來。
+   */
+  it('messages 那道要摘得到東西才算：尾巴蓋住全部就不是壓力', () => {
+    const messages = longHistory(6);
+    expect(pressure(messages, BY_MESSAGES, undefined, () => 6)).toBe(false);
+    expect(pressure(messages, BY_MESSAGES, undefined, () => 7)).toBe(false);
+    expect(pressure(messages, BY_MESSAGES, undefined, () => 5)).toBe(true);
+  });
+
+  it('尾巴量的是有效串，不是原串', () => {
+    const messages = longHistory(12);
+    const state = { _summarizationEvent: { summaryMessage: SUMMARY, cutoffIndex: 4 } };
+    const seen: number[] = [];
+    pressure(messages, BY_MESSAGES, state, (view) => {
+      seen.push(view.length);
+      return 0;
+    });
+    expect(seen).toEqual([9]);
   });
 
   it('token 那道用的是錨定估算，沒錨時就是 o200k 的純估算', () => {
@@ -148,21 +173,32 @@ describe('壓力閘門接在有效串上（接線）', () => {
     trigger: readonly SummarizationThreshold[],
     messages: readonly BaseMessage[],
     state: Record<string, unknown>,
+    options: {
+      /** 給了就是「真的摘得到東西」的那種組裝：保留量照給、摘要模型會回話。 */
+      retainTokens?: number;
+      limits?: { contextWindow: number; maxOutputTokens: number };
+    } = {},
   ): Promise<readonly BaseMessage[]> {
-    // 沒有型錄，保留量退到 {@link RETAIN_FALLBACK_MESSAGES}（20 則）：這一串只有 10 則，`determineCutoffIndex` 會算出 `<= 0`、
-    // 基座直接 `return handler(...)`。這一格要看的是**剪刀動沒動**，不是摘要跑不跑得起來
-    // ——真讓它跑起來就得餵一個會回話的模型，那是另一個檔的事。
+    // 沒給 `retainTokens` 也沒型錄時，保留量退到 {@link RETAIN_FALLBACK_MESSAGES}（20 則）：串比它短就是尾巴蓋住全部，
+    // `determineCutoffIndex` 算出 `<= 0`、基座直接 `return handler(...)`。這一格要看的是**剪刀動沒動**。
     const middleware = createSummarizer(
-      { readFile: async () => null } as never,
-      { ...DEFAULT_SUMMARIZATION, trigger },
+      { readFile: async () => null, write: async (path: string) => ({ path }) } as never,
+      {
+        ...DEFAULT_SUMMARIZATION,
+        trigger,
+        ...(options.retainTokens !== undefined && { retainTokens: options.retainTokens }),
+      },
       new TokenAnchorBook(),
+      undefined,
+      undefined,
+      options.limits === undefined ? undefined : () => options.limits,
     );
     let seen: readonly BaseMessage[] = [];
     await middleware.wrapModelCall?.(
       {
         messages,
         state,
-        model: FAKE_MODEL,
+        model: options.retainTokens === undefined ? FAKE_MODEL : SUMMARY_MODEL,
         systemMessage: new SystemMessage('系統。'),
         tools: [],
       } as never,
@@ -174,10 +210,13 @@ describe('壓力閘門接在有效串上（接線）', () => {
     return seen;
   }
 
+  /** 會回話的摘要模型：「真的摘得到東西」的那幾條要它。 */
+  const SUMMARY_MODEL = { profile: {}, invoke: async () => ({ text: '這是摘要。' }) } as never;
+
   const HUGE = 'X'.repeat(40_000);
 
-  function withHugeTool(): BaseMessage[] {
-    return [...longHistory(9), new ToolMessage({ content: HUGE, tool_call_id: 'c1' })];
+  function withHugeTool(history: BaseMessage[] = longHistory(9)): BaseMessage[] {
+    return [...history, new ToolMessage({ content: HUGE, tool_call_id: 'c1' })];
   }
 
   /**
@@ -192,11 +231,44 @@ describe('壓力閘門接在有效串上（接線）', () => {
     expect(String(seen.at(-1)?.content)).toBe(HUGE);
   });
 
-  /** 對照組：同一串、同一道門檻，沒有摘要事件時壓力是真的到了——這時候就該剪。 */
-  it('沒有摘要事件時同一串就會被剪', async () => {
-    const seen = await messagesSeenByModel([{ type: 'messages', value: 6 }], withHugeTool(), {});
+  /**
+   * 對照組：同一道門檻、沒有摘要事件、尾巴只留最後一則——這一步真的會摘要，壓力是真的到了，這時候就該剪。
+   * 歷史墊長，框好的摘要才比被取代的那段小、提交得了（#1396）。
+   */
+  it('沒有摘要事件、摘得到東西時就會被剪', async () => {
+    const seen = await messagesSeenByModel(
+      [{ type: 'messages', value: 6 }],
+      // 結果前面要有發出它的那則呼叫：孤兒結果會被基座的安全切點一起摘掉（`findSafeCutoffPoint`）。尾巴就是這一對。
+      withHugeTool([
+        ...fatHistory(8),
+        new AIMessage({ content: '', tool_calls: [{ id: 'c1', name: 'lookup', args: {} }] }),
+      ]),
+      {},
+      { retainTokens: 1 },
+    );
 
+    expect(String(seen[0]?.content)).toContain('這是摘要。');
     expect(String(seen.at(-1)?.content)).toContain(TOOL_RESULT_PRUNE_MARKER);
+  });
+
+  /**
+   * **2026-10-14 發版模擬的形狀**：出廠門檻（100,000 token／60 則）、預設模型的窗口，則數過了 60，訊息本身卻遠小於
+   * 20,000 token 的保留量。基座切不出東西、這一步不摘要，所以剪刀也不准動——模型剛查回來的那一則大結果要整則送上去。
+   * 閘門只看則數的話，這裡會剪。
+   */
+  it('出廠門檻下則數過了 60、尾巴卻蓋住全部：不摘要，那坨大東西也一個字都不動', async () => {
+    const messages = withHugeTool(longHistory(61));
+    const seen = await messagesSeenByModel(
+      DEFAULT_SUMMARIZATION.trigger,
+      messages,
+      {},
+      {
+        limits: { contextWindow: 700_045, maxOutputTokens: 16_384 },
+      },
+    );
+
+    expect(seen).toHaveLength(messages.length);
+    expect(String(seen.at(-1)?.content)).toBe(HUGE);
   });
 });
 
