@@ -352,19 +352,21 @@ describe('context/measure 帶 messagesCompactable（接線）', () => {
   });
 
   /**
-   * B：則數到了、尾巴比整串短，這一步真的摘要了。記下的是交下去的 `[摘要, 最新一則]`：摘要那則落在尾巴外面，所以仍是 true。
-   * 歷史墊長，框好的摘要才比被取代的那段小、提交得了（#1396）。
+   * B：出廠設定下則數到了、訊息本身超過 20,000 token 的保留量，這一步真的摘要了。記下的是交下去的 `[摘要, ...留下的]`：
+   * 留下的那段自己就跨過保留量，摘要那則落在尾巴外面，所以仍是 true。
    */
   it('則數到了門檻、尾巴比整串短：true，而且這一步真的摘要了', async () => {
-    const { seen, measure, summarized } = await measureOf(
-      DEFAULT_SUMMARIZATION.trigger,
-      fatHistory(61),
-      1,
-    );
+    const messages = fatHistory(200);
+    // 前提：整串真的超過保留量，尾巴蓋不住全部。
+    expect(
+      messages.reduce((sum, message) => sum + estimateMessageTokens(message), 0),
+    ).toBeGreaterThan(20_000);
+    const { seen, measure, summarized } = await measureOf(DEFAULT_SUMMARIZATION.trigger, messages);
 
     expect(summarized).toBe(1);
     expect(String(seen[0]?.content)).toContain('這是摘要。');
-    expect(measure).toMatchObject({ messageCount: 2, messagesCompactable: true });
+    expect(seen.length).toBeLessThan(messages.length);
+    expect(measure).toMatchObject({ messageCount: seen.length, messagesCompactable: true });
   });
 
   /** C：沒有 `messages` 門檻就沒有這一格——不是 false。 */
