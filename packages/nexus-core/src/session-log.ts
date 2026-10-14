@@ -1025,8 +1025,10 @@ export interface SessionEventMap {
     }[];
     /**
      * `messages` 那道門檻到了的話，摘不摘得到東西（[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：
-     * 同一串算出的保留尾巴比它短就是 `true`。**不看則數到了沒**。沒有 `messages` 門檻時沒有這一格；這一格出現以前寫的
-     * 日誌也沒有——沒有就是沒記，不是 `false`。加它沒有升日誌格式版本，見 `session-store.ts` 的 48。
+     * 這一步選尾巴的那一串（摘要器的有效串），照保留政策要留的則數比它短就是 `true`，也就是交給基座的 `keep` 比則數小。
+     * **不看則數到了沒**。跟 `messageCount` 不一定是同一串：摘要了的那一步量的是摘要前的串（所以是 `true`），`messageCount`
+     * 是摘要後交下去的。沒有 `messages` 門檻時沒有這一格；這一格出現以前寫的日誌也沒有——沒有就是沒記，不是 `false`。
+     * 加它沒有升日誌格式版本，見 `session-store.ts` 的 48。
      */
     readonly messagesCompactable?: boolean;
     /**

@@ -17,6 +17,7 @@ import {
   effectiveMessages,
   isUnderCompactionPressure,
   readSummarizationEvent,
+  retainedMessageCount,
 } from './summarization.js';
 import type { SummarizationThreshold } from './summarization.js';
 import { SessionLog } from './session-log.js';
@@ -278,56 +279,71 @@ describe('壓力閘門接在有效串上（接線）', () => {
  * **`context/measure` 帶 `messagesCompactable`**（[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：`messages` 那道到了的話
  * 摘不摘得到東西。web 的用量環靠它分辨「70／60 則」是真的要摘要，還是尾巴蓋住全部、什麼都不會發生（#1441）。
  *
- * 一律走 `createSummarizer` 加出廠門檻：拿掉「把保留量設定傳進預算層」那條接線，這幾條就量不到同一個尾巴。
+ * 一律走 `createSummarizer` 加出廠門檻與出廠的 `truncateArgs`（20／20）：這一格要等於那一步交給基座的保留決定，只有走完整條鏈才問得到。
  */
 describe('context/measure 帶 messagesCompactable（接線）', () => {
   /** 預設模型的上限：保留量 = min((700,045 − 16,384) × 0.16, 100,000 × 0.2) = 20,000 token。 */
   const LIMITS = { contextWindow: 700_045, maxOutputTokens: 16_384 };
   const SUMMARY_MODEL = { profile: {}, invoke: async () => ({ text: '這是摘要。' }) } as never;
 
-  async function measureOf(
-    trigger: readonly SummarizationThreshold[],
-    messages: readonly BaseMessage[],
-    retainTokens?: number,
-  ) {
+  /** 一顆摘要器配一份日誌；`call` 可以連叫，後一次讀得到前一次記下的東西（例如參數截斷）。 */
+  function summarizer(trigger: readonly SummarizationThreshold[], retainTokens?: number) {
     const log = new SessionLog('measure');
+    const settings = {
+      ...DEFAULT_SUMMARIZATION,
+      trigger,
+      ...(retainTokens !== undefined && { retainTokens }),
+    };
     const middleware = createSummarizer(
       { readFile: async () => null, write: async (path: string) => ({ path }) } as never,
-      {
-        ...DEFAULT_SUMMARIZATION,
-        trigger,
-        ...(retainTokens !== undefined && { retainTokens }),
-      },
+      settings,
       new TokenAnchorBook(),
       { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
       undefined,
       () => LIMITS,
     );
-    let seen: readonly BaseMessage[] = [];
-    await middleware.wrapModelCall?.(
-      {
-        messages,
-        state: {},
-        model: SUMMARY_MODEL,
-        systemMessage: new SystemMessage('系統。'),
-        tools: [],
-      } as never,
-      ((request: { messages: readonly BaseMessage[] }) => {
-        seen = request.messages;
-        return new AIMessage('好。');
-      }) as never,
-    );
-    const measures = log.events.flatMap((event) =>
-      event.type === 'context/measure' ? [event.data as SessionEventMap['context/measure']] : [],
-    );
-    // 前提：一次呼叫一筆。
-    expect(measures).toHaveLength(1);
+    const countOf = (type: string) => log.events.filter((event) => event.type === type).length;
     return {
-      seen,
-      measure: measures[0]!,
-      summarized: log.events.filter((event) => event.type === 'compaction/summary').length,
+      log,
+      settings,
+      async call(messages: readonly BaseMessage[]) {
+        const measuredBefore = countOf('context/measure');
+        const summarizedBefore = countOf('compaction/summary');
+        let seen: readonly BaseMessage[] = [];
+        await middleware.wrapModelCall?.(
+          {
+            messages,
+            state: {},
+            model: SUMMARY_MODEL,
+            systemMessage: new SystemMessage('系統。'),
+            tools: [],
+          } as never,
+          ((request: { messages: readonly BaseMessage[] }) => {
+            seen = request.messages;
+            return new AIMessage('好。');
+          }) as never,
+        );
+        const measures = log.events.flatMap((event) =>
+          event.type === 'context/measure'
+            ? [event.data as SessionEventMap['context/measure']]
+            : [],
+        );
+        // 前提：一次呼叫一筆。
+        expect(measures).toHaveLength(measuredBefore + 1);
+        return {
+          seen,
+          measure: measures.at(-1)!,
+          summarized: countOf('compaction/summary') - summarizedBefore,
+        };
+      },
     };
   }
+
+  const measureOf = (
+    trigger: readonly SummarizationThreshold[],
+    messages: readonly BaseMessage[],
+    retainTokens?: number,
+  ) => summarizer(trigger, retainTokens).call(messages);
 
   /** A：發版模擬的形狀。則數過了 60，訊息本身遠小於 20,000 token 的保留量，尾巴蓋住全部。 */
   it('則數到了門檻、整串都在保留的尾巴裡：false，這一步也沒摘要', async () => {
@@ -352,8 +368,8 @@ describe('context/measure 帶 messagesCompactable（接線）', () => {
   });
 
   /**
-   * B：出廠設定下則數到了、訊息本身超過 20,000 token 的保留量，這一步真的摘要了。記下的是交下去的 `[摘要, ...留下的]`：
-   * 留下的那段自己就跨過保留量，摘要那則落在尾巴外面，所以仍是 true。
+   * B：出廠設定下則數到了、訊息本身超過 20,000 token 的保留量，這一步真的摘要了。旗標量的是選尾巴的那一串，也就是摘要前的串，
+   * 所以是 true；`messageCount` 是交下去的 `[摘要, ...留下的]` 的則數。
    */
   it('則數到了門檻、尾巴比整串短：true，而且這一步真的摘要了', async () => {
     const messages = fatHistory(200);
@@ -367,6 +383,81 @@ describe('context/measure 帶 messagesCompactable（接線）', () => {
     expect(String(seen[0]?.content)).toContain('這是摘要。');
     expect(seen.length).toBeLessThan(messages.length);
     expect(measure).toMatchObject({ messageCount: seen.length, messagesCompactable: true });
+  });
+
+  /**
+   * 會分辨三種串的對話（PM 在 #1447 審查要的）：第 1 則是帶長 `write_file` 參數的呼叫，後面接一串短訊息，讓它落在出廠
+   * `truncateArgs` 會截的範圍（最新 20 則之前）。保留量夾在中間：算原文時尾巴在那則呼叫切開，算截過的時尾巴蓋住全部。
+   */
+  const LONG_ARG = '寫進檔案的一大段內容。'.repeat(1500);
+  function writeThenChat(count: number): BaseMessage[] {
+    return [
+      new HumanMessage('把這段寫進檔案。'),
+      new AIMessage({
+        content: '',
+        tool_calls: [
+          { id: 'w1', name: 'write_file', args: { file_path: '/notes.md', content: LONG_ARG } },
+        ],
+      }),
+      new ToolMessage({ content: '寫好了。', tool_call_id: 'w1' }),
+      ...longHistory(count - 3),
+    ];
+  }
+  /** 第二次呼叫的那一串（61 則）除了那則呼叫以外的 token，再加一點：截過的那則呼叫遠小於這點餘裕。 */
+  const BETWEEN = (() => {
+    const all = writeThenChat(61);
+    return (
+      all.reduce(
+        (sum, message, index) => (index === 1 ? sum : sum + estimateMessageTokens(message)),
+        0,
+      ) + 200
+    );
+  })();
+  const argOf = (messages: readonly BaseMessage[]) =>
+    String(
+      (
+        messages.find(
+          (message) => AIMessage.isInstance(message) && message.tool_calls?.length,
+        ) as AIMessage
+      )?.tool_calls?.[0]?.args.content,
+    );
+
+  /**
+   * 沒摘要的那一步：選尾巴的有效串（原文）切得出東西，交下去的那份（基座截過參數）卻蓋得住全部。旗標要跟前者——那才是交給基座的
+   * `keep`。量交下去的那份會在這裡記 false，門檻一到卻真的摘要。
+   */
+  it('量的是選尾巴的有效串，不是交下去的那份', async () => {
+    const messages = writeThenChat(25);
+    const { settings, call } = summarizer(DEFAULT_SUMMARIZATION.trigger, BETWEEN);
+    const { seen, measure, summarized } = await call(messages);
+
+    // 前提：基座真的截了那則參數；有效串的尾巴比整串短，交下去那份的尾巴蓋住全部。
+    expect(argOf(messages)).toBe(LONG_ARG);
+    expect(argOf(seen).length).toBeLessThan(LONG_ARG.length);
+    expect(retainedMessageCount(messages, settings, LIMITS)).toBeLessThan(messages.length);
+    expect(retainedMessageCount(seen, settings, LIMITS)).toBeGreaterThanOrEqual(seen.length);
+    expect(summarized).toBe(0);
+    expect(measure).toMatchObject({ messageCount: 25, messagesCompactable: true });
+  });
+
+  /**
+   * 記過截斷之後：日誌上的截斷在交給選尾巴那層之前就換上去了（`withArgTruncationLog`），那串的尾巴蓋住全部，門檻到了也不摘。
+   * 旗標要說 false。在預算層拿原文的有效串重算的話，這裡會記 true、實際卻不摘——#1441 那種不誠實。
+   */
+  it('記過的參數截斷換上去之後才選尾巴：旗標跟著它，不跟原文', async () => {
+    const { settings, log, call } = summarizer(DEFAULT_SUMMARIZATION.trigger, BETWEEN);
+    await call(writeThenChat(25));
+    // 前提：第一次真的把截斷記進日誌了。
+    expect(log.events.some((event) => event.type === 'compaction/truncate-args')).toBe(true);
+
+    const messages = writeThenChat(61);
+    // 前提：拿原文算，尾巴切得出東西。
+    expect(retainedMessageCount(messages, settings, LIMITS)).toBeLessThan(messages.length);
+    const { seen, measure, summarized } = await call(messages);
+
+    expect(summarized).toBe(0);
+    expect(seen).toHaveLength(61);
+    expect(measure).toMatchObject({ messageCount: 61, messagesCompactable: false });
   });
 
   /** C：沒有 `messages` 門檻就沒有這一格——不是 false。 */

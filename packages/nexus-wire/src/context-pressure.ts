@@ -63,8 +63,9 @@ export interface WireContextMeasure {
    */
   readonly thresholds: readonly WireSummaryThreshold[];
   /**
-   * `messages` 那道門檻到了的話，摘不摘得到東西（[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：同一串算出的
-   * 保留尾巴比它短就是 `true`。**不看則數到了沒**——還沒到門檻時也可能是 `true`，`false` 只代表「到了也摘不到」。
+   * `messages` 那道門檻到了的話，摘不摘得到東西（[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：就是摘要器那一步
+   * 實際的保留決定。**不看則數到了沒**——還沒到門檻時也可能是 `true`，`false` 只代表「到了也摘不到」。量的串跟
+   * {@link messageCount} 不一定相同：摘要了的那一步量摘要前的串（所以是 `true`），則數是摘要後的；比例照則數算，不受影響。
    *
    * 沒有 `messages` 門檻時沒有這一格。**這一格出現以前的會話日誌也沒有**：重放舊日誌拿到的 `measure` 不帶它，
    * 讀的人照沒有這一格以前的算法，不當成 `false`。

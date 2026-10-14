@@ -702,7 +702,14 @@ export function createSummarizer(
   const logged = sessions === undefined ? quiet : withCompactionLog(quiet, sessions);
   // 基座的 `truncateArgs` 是它自己的事，這一層只在交給它之前換上記過的、在它交下去時記新的（#1303）。
   const truncationLogged = sessions === undefined ? logged : withArgTruncationLog(logged, sessions);
-  const budgeted = withTokenBudget(truncationLogged, settings, book, sessions, limitsOf, report);
+  const budgeted = withTokenBudget(
+    truncationLogged,
+    settings.trigger,
+    book,
+    sessions,
+    limitsOf,
+    report,
+  );
   // 暫存的範圍要罩住基座的寫入與日誌那層記下事件的時點，所以在預算層外面、剪刀裡面。
   const staged =
     staging === undefined || sessions === undefined ? budgeted : staging.wrap(budgeted, sessions);
@@ -1015,6 +1022,20 @@ function assertSummaryShrinks(
  */
 const SUPPRESS_SUMMARY = Symbol.for('nexus.summarization.suppress');
 
+/**
+ * {@link withRetainedTail} 這一步的保留決定，交還給外面的 {@link withTokenBudget} 記 `messagesCompactable` 用
+ * （[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）。同 {@link SUPPRESS_SUMMARY} 掛在請求物件上，由外層放一個空格子、
+ * 內層填。**外層不自己重算**：中間隔著 {@link withArgTruncationLog}，它把日誌上記過的參數截斷換上去之後才交下來，外層手上的那串
+ * 跟選尾巴用的不是同一份。
+ */
+const RETAIN_DECISION = Symbol.for('nexus.summarization.retain-decision');
+
+/** {@link RETAIN_DECISION} 的格子：選尾巴的那一串有幾則、照保留政策要留幾則。 */
+interface RetainDecision {
+  retained?: number;
+  length?: number;
+}
+
 /** 沒有訊息數門檻的那顆實例在快取裡的鍵（保留則數不會是負的）。 */
 const SUPPRESSED_CHAIN = -1;
 
@@ -1068,9 +1089,14 @@ function withRetainedTail(
     wrapModelCall: (request, handler) => {
       const suppressed = (request as { [SUPPRESS_SUMMARY]?: boolean })[SUPPRESS_SUMMARY] === true;
       const view = effectiveMessages(request.messages ?? [], request.state);
-      const keepMessages = suppressed
-        ? SUPPRESSED_CHAIN
-        : retainedMessageCount(view, settings, limitsOf?.(request.model));
+      const retained = retainedMessageCount(view, settings, limitsOf?.(request.model));
+      // 交出去的是保留政策下的決定：不要摘要的那一次也照算（問的是「門檻到了會不會摘」），端點超窗的升級不算。
+      const decision = (request as { [RETAIN_DECISION]?: RetainDecision })[RETAIN_DECISION];
+      if (decision !== undefined) {
+        decision.retained = retained;
+        decision.length = view.length;
+      }
+      const keepMessages = suppressed ? SUPPRESSED_CHAIN : retained;
       const state = request.state as Record<string, unknown> | undefined;
       const seeded = (
         state !== undefined && typeof state._summarizationSessionId !== 'string'
@@ -1457,14 +1483,17 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  *
  * 上面那句只對 `tokens` 那道成立。`messages` 那道到了，基座還要切得出東西才會摘要：保留量是 token 算的（#1374），
  * 訊息本身還沒超過保留量時尾巴蓋住整串，原樣送出（#1441）。所以每一筆多記一格 `messagesCompactable`
- * （[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：同一份交下去的串，{@link retainedMessageCount} 算出的尾巴
- * 比它短就是 `true`。**不看則數到了沒**，問的是「這道門檻到了的話摘不摘得到東西」；`false` 只有一個意思，不會同時代表
- * 「還沒到」。沒有 `messages` 門檻就不給這一格。
+ * （[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：{@link withRetainedTail} 這一步選尾巴的那一串，照保留政策要留的
+ * 則數比它短就是 `true`，也就是交給基座的 `keep` 比則數小。**不看則數到了沒**，問的是「這道門檻到了的話摘不摘得到東西」；
+ * `false` 只有一個意思，不會同時代表「還沒到」。沒有 `messages` 門檻就不給這一格。
  *
- * 量的是交下去的那份，跟 `messageCount` 同一串；{@link withRetainedTail} 選尾巴時看的是有效串。兩份則數相同（截參數不改
- * 則數），差在被截過的參數比較便宜：同一段對話量出來的尾巴可能多蓋幾則，所以邊界上這一格偏向 `false`。摘要了的那一次
- * 交下去的是 `[摘要, ...留下的]`：留下的那段自己就跨過保留量，摘要那則落在尾巴外面，所以是 `true`——除非留下的那段裡有
- * 參數被截過、量起來不夠保留量，那是同一條偏向 `false` 的邊界。
+ * **數字是內層交出來的，這裡不重算**（{@link RETAIN_DECISION}）：中間隔著 {@link withArgTruncationLog}，它把日誌上記過的參數截斷
+ * 換上去之後才交下來，選尾巴用的那串比這裡手上的便宜。在這裡拿自己的有效串重算，記過截斷之後就會記 `true`、實際卻不摘。
+ *
+ * 跟 `messageCount` 量的不一定是同一串：
+ *
+ * - 沒摘要的那一步，兩串則數相同（截參數不改則數）。
+ * - 摘要了的那一步，選尾巴的是摘要前的串，所以記 `true`；`messageCount` 仍是交下去的 `[摘要, ...留下的]` 的則數。
  *
  * ## 超過就借基座的溢出恢復路徑摘要
  *
@@ -1508,15 +1537,14 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  * 它回的合成收尾對這裡就是正常回來。`turn-cancel.test.ts` 的委派那條釘著這件事。
  *
  * @param base - 摘要器（包過 {@link withCompactionLog} 的也行，它原樣轉交 `handler`）。
- * @param settings - 補滿的設定。`trigger` 是全部門檻：比的是 `tokens` 那幾道，`messages` 那幾道用來判斷基座走哪條路，
- *   原樣記進每一筆；保留量那兩格算 `messagesCompactable`。
+ * @param trigger - 全部門檻；比的是 `tokens` 那幾道，`messages` 那幾道用來判斷基座走哪條路。原樣記進每一筆。
  * @param book - 錨定估算的帳。
  * @param sessions - 註冊表的 `sessions` 通道。省略即不記，照樣比。
  * @returns 同名、同狀態、多一層預算的 middleware。
  */
 function withTokenBudget(
   base: AgentMiddleware,
-  settings: Pick<SummarizationSettings, 'trigger' | 'retainRatio' | 'retainTokens'>,
+  trigger: readonly SummarizationThreshold[],
   book: TokenAnchorBook,
   sessions?: { forCall(config: unknown): SessionLookup },
   limitsOf?: (model: unknown) => ModelContextLimits | undefined,
@@ -1525,20 +1553,20 @@ function withTokenBudget(
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 同 withCompactionLog。 */
   if (inner === undefined) return base;
-  const { trigger } = settings;
   const byMessages = trigger.filter((t) => t.type === 'messages').map((t) => t.value);
   return {
     ...base,
     wrapModelCall: (request, handler) => {
       // 門檻逐步算：換模型之後窗口跟著換（#723）。沒有夾住時 `effective` 就是 `trigger` 本身。
-      const limits = limitsOf?.(request.model);
-      const effective = effectiveTrigger(trigger, limits);
+      const effective = effectiveTrigger(trigger, limitsOf?.(request.model));
       const thresholds = effective.map(({ type, value }) => ({ type, value }));
       const budgets = effective.filter((t) => t.type === 'tokens').map((t) => t.value);
       const budget = budgets.length === 0 ? undefined : Math.min(...budgets);
       const view = effectiveMessages(request.messages ?? [], request.state);
       const baseWillCatch = view.length > 0 && !byMessages.some((value) => view.length >= value);
       let thrown = false;
+      // 內層 {@link withRetainedTail} 填的保留決定，`messagesCompactable` 讀它（#1443）。
+      const decision: RetainDecision = {};
       // 端點真的回的超窗（不是我們合成的）：基座接住它、走緊急摘要；摘要若失敗，這一份是要還給呼叫端的原錯誤。
       let endpointOverflow: unknown;
       const measured: Parameters<NonNullable<typeof inner>>[1] = async (sent) => {
@@ -1578,19 +1606,18 @@ function withTokenBudget(
               ?.configurable,
           });
           if (found.kind === 'ok') {
-            const messages = sent.messages ?? [];
+            const { retained, length } = decision;
             found.log.append(
               'context/measure',
               withModelCall(
                 {
                   approxTokens: estimate.tokens,
-                  messageCount: messages.length,
+                  messageCount: (sent.messages ?? []).length,
                   thresholds,
                   // 不看則數到了沒，只問「到了的話摘不摘得到東西」（#1443）。沒有 `messages` 門檻就不給這一格。
-                  ...(thresholds.some((threshold) => threshold.type === 'messages') && {
-                    messagesCompactable:
-                      retainedMessageCount(messages, settings, limits) < messages.length,
-                  }),
+                  ...(thresholds.some((threshold) => threshold.type === 'messages') &&
+                    retained !== undefined &&
+                    length !== undefined && { messagesCompactable: retained < length }),
                 },
                 call.of(found.log),
               ),
@@ -1603,7 +1630,10 @@ function withTokenBudget(
       };
       return (async () => {
         try {
-          return await inner(request, measured);
+          return await inner(
+            { ...request, [RETAIN_DECISION]: decision } as typeof request,
+            measured,
+          );
         } catch (error) {
           // 只認「生摘要那次模型呼叫拋的」：摘要成功、之後的模型呼叫才失敗的錯照原樣冒出去。
           if (typeof error !== 'object' || error === null || !summaryCallFailures.has(error))
@@ -1624,7 +1654,10 @@ function withTokenBudget(
           thrown = true;
           // 送「沒動手摘要時本來會往下交的那份」，不是 `request.messages` 的原串（那裡面摘要之前的舊訊息還在）：
           // 帶著 {@link SUPPRESS_SUMMARY} 再走一遍同一條鏈，有效串、參數截斷與日誌記帳都照平常的路。
-          return inner({ ...request, [SUPPRESS_SUMMARY]: true } as typeof request, measured);
+          return inner(
+            { ...request, [SUPPRESS_SUMMARY]: true, [RETAIN_DECISION]: decision } as typeof request,
+            measured,
+          );
         }
       })();
     },
