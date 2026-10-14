@@ -536,18 +536,18 @@ export function shippedLiveModelConfig(): Record<string, unknown> {
 }
 
 /**
- * 夾具疊在出貨清單上的 `live-model` patch：**以出貨那一列為底**，只換 `baseUrl` 指向假端點，並把兩個重試
- * （SDK 的 `maxRetries`、#520 的 `streamRetry.maxRetries`）關成 0——重打會多出請求 body，比對要求主呼叫數等於
- * `model/start` 數。其餘（型錄、相容設定、逾時、`modelId`）都留出貨值。
+ * 夾具疊在出貨清單上的 `live-model` patch：**以出貨那一列為底**，只換 `baseUrl` 指向假端點，並把重試
+ * （#1427 之後只剩 `retryPolicy.maxRetries` 一格）關成 0——重打會多出請求 body，比對要求主呼叫數等於
+ * `model/start` 數。其餘（型錄、相容設定、逾時、`modelId`、可重試碼、退避）都留出貨值。
  *
  * @param extra - 接在 `live-model` 後面的其他 patch 列（例如 {@link LOW_SUMMARIZATION}）。
  */
 export function liveModelPatch(baseUrl: string, extra: string): string {
   const shipped = shippedLiveModelConfig();
-  const streamRetry = { ...(shipped['streamRetry'] as Record<string, unknown>), maxRetries: 0 };
+  const retryPolicy = { ...(shipped['retryPolicy'] as Record<string, unknown>), maxRetries: 0 };
   const row = {
     id: 'live-model',
-    config: { ...shipped, baseUrl, maxRetries: 0, streamRetry },
+    config: { ...shipped, baseUrl, retryPolicy },
   };
   return `${stringify([row])}${extra}\n`;
 }

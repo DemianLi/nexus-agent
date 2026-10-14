@@ -759,24 +759,44 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   16384」當淘汰門檻選出來的，吃不下的模型會**每一次**呼叫都失敗，沒有任何東西會擋你。
 - **`baseUrl` 要是 `http:` 或 `https:` 的網址，不能帶帳密、query 或 fragment**（照 dsh）。`http:` 放行，
   所以指向內網的明文端點是合法的——**key 會以明文送過去**，那是部署自己的判斷。
-- **`maxRetries` 上限 10**：退避是指數成長而且沒有上限，10 次的累計等待已經是 17–34 分鐘。
+- **`retryPolicy`：模型請求失敗的重試，一條政策、一份預算**（[#1427](https://github.com/DemianLi/nexus-agent/issues/1427)，形狀與驗證逐條照 dsh 的 `retryPolicy`）。
+  **首事件之前與之後共用同一份次數**，SDK 層不重試（`@langchain/openai` 底層 client 的 `maxRetries` 恆為 0），打到端點的請求數就是 `maxRetries + 1`，
+  日誌上 `llm/retry` 的顆數就是實際重打的次數。標題、摘要器生摘要的那一次呼叫也吃同一份。寫法：
+
+  ```yaml
+  retryPolicy:
+    mode: normal                 # 寫了 retryPolicy 就必填；只收 normal，always 拒收（見下）
+    maxRetries: 6                # 非負整數，0 關掉；沒有上限
+    retryableCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]   # 預設就是這五個；不能空、不能重複
+    backoff:
+      initialDelayMs: 500        # 大於 0，之後每次加倍；不能大於 maxDelayMs
+      maxDelayMs: 10000          # 單次等待上限，也是 retry-after 肯等的上限
+      jitterRatio: 0.1           # 0 到 1
+  ```
+
+  整個不寫就是上面這組出廠值。**次數取 6（dsh 預設 5）**：不計抖動的累計等待約 25.5 秒，蓋得過 2026-08-28 量到的 16 秒限流窗口——
+  **那次量的是 `openai/gpt-oss-120b`，出貨的 nemotron 沒量過**。代價：串流中段失敗最壞重付 6 次整個回覆。
+  碼的對應：429（含沒帶 `retry-after` header 的）是 `RATE_LIMIT`、其他 HTTP 狀態是 `SERVER`、逾時是 `TIMEOUT`、沒有狀態的連線問題是 `TRANSPORT`；
+  `EMPTY_RESPONSE` 今天沒有生產者。401／403／配額、`STATUS_NO_RETRY` 列出的 4xx（如 400）、上下文溢出、410 下架不重試，不管 `retryableCodes` 怎麼寫。
+  **沒列在 `STATUS_NO_RETRY` 的非 5xx 4xx（實測 408、422、425、418）沿用 `retryDecision`，會照樣重打、記成 `SERVER`**；dsh 會把它們記成 `HTTP_n`、不重試——這一點是已知差異，登記在 #1437，不是設計。
+  供應商給的 `retry-after` 不超過 `maxDelayMs` 就照它等（不加抖動），**超過就直接放棄**、不重打；每次等待是 `initialDelayMs` 倍增、
+  封頂 `maxDelayMs`，抖動之後再夾到上限。**`mode: always`（無限重試）拒收**：這是對 dsh 的登記偏離——一輪沒有盡頭、中段失敗每次重付整個回覆，
+  撤除條件是需要無限重試的情境（`docs/plugin-contract.md` 偏離表）。
+  **舊欄位大聲失敗，不自動轉換**：頂層 `maxRetries`（舊 SDK 層次數，預設 6）與 `streamRetry`（舊串流中段，預設 2）都已拿掉，寫了會讓 `--live` 起不來，
+  訊息指名舊欄位與 `retryPolicy`。兩個舊數字沒有無損的合併方式，請自己決定新的次數。**從 `plugin config set live-model --file -` 寫的可以直接改；
+  寫在 `--patch` 檔裡的舊值寫入口蓋不掉，要自己改那個檔。**
   **逾時拆兩格**（[#1251](https://github.com/DemianLi/nexus-agent/issues/1251)，同 dsh 的 `timeoutMs`／`streamIdleTimeoutMs`）：
   `timeoutMs`（預設 180000）管連線到第一則事件，逾時會重試；視覺模型要先吃圖才吐第一則事件（`meta/llama-3.2-90b-vision-instruct` 實測 133 秒），所以比閒置那格寬。
-  `streamIdleTimeoutMs`（預設 90000）管第一則事件之後每一段之間的閒置，逾時整次重打（見下一條 `streamRetry`）；dsh 預設 300 秒，我們維持 90 秒，因為每次重打都重付整個回覆。
+  `streamIdleTimeoutMs`（預設 90000）管第一則事件之後每一段之間的閒置，逾時整次重打（吃同一份 `retryPolicy`）；dsh 預設 300 秒，我們維持 90 秒，因為每次重打都重付整個回覆。
   兩格上限都是 2 147 483 647（同 `windowMs` 的理由），**互不連動**：只改 `timeoutMs` 不會動到閒置，舊設定裡寫過 `timeoutMs` 且想保留舊行為的，把同一個值也寫到 `streamIdleTimeoutMs`。
-  **最壞情況：端點開了線卻一個位元組都不吐，一輪要二十多分鐘才失敗。** 每一次都等滿 `timeoutMs`，次數是 `maxRetries`（出廠 6）加第一次共 7 次，
-  所以是 180 秒 × 7 = 21 分鐘，再加 6 次退避（1、2、4、8、16、32 秒，帶隨機，合計 63–126 秒），大約 22–23 分鐘；
-  拆開之前是 90 秒 × 7 加退避，約 12 分鐘。乘數只有 SDK 重試這一層：`@langchain/openai` 底層 client 的 `maxRetries` 寫死 0，
-  下一條的 `streamRetry` 只管第一則事件**之後**，兩層不相乘（`live-model.test.ts` 實測請求數都是 `maxRetries + 1`）。
-  要讓它更快失敗，調的是 `timeoutMs`（或 `maxRetries`）；代價是視覺模型的首事件長尾（`meta/llama-3.2-90b-vision-instruct` 逐一實測最長 133 秒）會被撞到，
+  **最壞情況：端點開了線卻一個位元組都不吐，一輪要二十一分鐘多才失敗。** 每一次都等滿 `timeoutMs`，嘗試數是 `maxRetries`（出廠 6）加第一次共 7 次，
+  所以是 180 秒 × 7 = 21 分鐘，再加 6 次退避（0.5、1、2、4、8、10 秒，帶 ±10% 抖動，合計約 25.5 秒），大約 21.5 分鐘。
+  要讓它更快失敗，調的是 `timeoutMs`（或 `retryPolicy.maxRetries`）；代價是視覺模型的首事件長尾（`meta/llama-3.2-90b-vision-instruct` 逐一實測最長 133 秒）會被撞到，
   `timeoutMs` 低於 133000 就會砍到它。
-- **`streamRetry`：串流吐了內容之後才出錯的整次重打**（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）。管三類：串流中段的
-  錯誤事件、連線中途斷掉、吐了內容之後停住（上一條的閒置逾時）。第一則事件之前的失敗歸 `maxRetries`，不乘在一起。四個欄位：
-  `maxRetries`（預設 2，`0` 關掉）、`baseDelayMs`（預設 1000，之後每次加倍）、`maxDelayMs`（單次等待封頂，預設 10000）、
-  `jitterRatio`（抖動，預設 0.1）。退避的形狀照 dsh；次數與起點比 dsh（5 次、500 毫秒）保守，**因為每一次重打都重付整個回覆的費用**。
-  決定重打的**當下**，上一次吐了一半的回覆在畫面上被擦掉（`message-discard`），畫面收到 `llm-retry`（第幾次、等多久、失敗碼，用來畫
-  「N 秒後重試」）；日誌留一顆 `assistant/attempt`（不進模型）與 `llm/retry`（帶 `delayMs`）、`llm/retry-started`，失敗那次的 `model/end` 帶
-  `outcome: error`、用量照記。退避期間按停止：輪次以中止收尾、不再重打。請求本身有問題的錯誤（例如串流內的 400）不重打。**子代理的回覆也會重打，但已經畫出去的子代理字
+- **重打時畫面怎麼走**（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）：決定重打的**當下**，上一次吐了一半的回覆在畫面上被擦掉（`message-discard`），
+  畫面收到 `llm-retry`（第幾次、等多久、失敗碼，用來畫「N 秒後重試」）；日誌留一顆 `assistant/attempt`（不進模型）與 `llm/retry`（帶 `delayMs`）、
+  `llm/retry-started`，失敗那次的 `model/end` 帶 `outcome: error`、用量照記。退避期間按停止：輪次以中止收尾、不再重打。請求本身有問題的錯誤（例如串流內的 400）不重打。
+  第一則事件之前的失敗沒有半段回覆可擦，只有倒數與 `llm/retry`。**子代理的回覆也會重打，但已經畫出去的子代理字
   不會被擦**（畫面上多一則斷尾的回覆）。
 - **關推理的寫法在型錄那一筆**（[#650](https://github.com/DemianLi/nexus-agent/issues/650)、原本的 `thinkingOffBody`）：
   `off` 那一級加 `compat.chatTemplateKwargs`（`$var: thinking.enabled` 在 `off` 解成 `false`）。它只有標題呼叫會
@@ -813,9 +833,9 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   挑的 id 不在型錄裡，帶 `--live` 時 CLI 與 serve 都在啟動時起不來，訊息指名這一列與那個 id。換之前照 #650 的量法量一次
   （`maxOutputTokens` 64 下，關推理與不關推理各跑 6 次）。`session/title-llm-request` 的 `route.model` 與標題的來源記的是實際走的那一顆。
   dsh 那一對成對的 `provider`／`model` 我們只有 `modelId`：一個組裝一條連線，沒有第二個端點可挑。這次呼叫**不計進會話統計，也不寫 `model/usage`**（同 dsh），所以用量表上看不到它。
-- **重試次數沿用 `live-model` 的 `maxRetries`**，但整段有這一列的 `timeoutMs`（60 秒）封頂，所以最壞是等滿
-  60 秒。
-- **失敗只講一聲**：serve 記進伺服器日誌、CLI 印在 stderr，前綴都是 `[標題]`，退回標題留著，不重試。
+- **重試政策沿用 `live-model` 的 `retryPolicy`**（同一份次數與退避，標題不寫 `llm/retry`），但整段有這一列的 `timeoutMs`（60 秒）封頂，
+  退避也聽得到那個時限，所以最壞是等滿 60 秒。
+- **失敗只講一聲**：標題請求照同一份 `retryPolicy` 重試，用完仍失敗就只講一聲——serve 記進伺服器日誌、CLI 印在 stderr，前綴都是 `[標題]`，退回標題留著，不另外再排一次標題生成。
   `finish_reason` 不是 `stop`（例如推理吃光上限）、要求呼叫工具、正規化後是空的、輸入超過 `maxInputBytes`，
   都算失敗。
 - **CLI 一次性的呼叫多半等不到它**：主回覆收完行程就收尾，還沒回來的標題請求會被中止（不講話），只留退回標題。

@@ -418,19 +418,25 @@ export type {
 } from './request-snapshot.js';
 export { createModelCallIndexer, indexModelCalls, toolCallIds } from './model-call-index.js';
 export type { ModelCallIndex, ModelCallIndexer, ModelCallRecord } from './model-call-index.js';
-export { noteFailedAttempt, noteRequestStart, runInRetryScope } from './llm-retry.js';
 export {
   createStreamRetryMiddleware,
+  retryModelCall,
   noteStreamFailure,
   streamRetryDelayMs,
   DEFAULT_STREAM_RETRY_JITTER_RATIO,
+  DEFAULT_STREAM_RETRYABLE_CODES,
   DEFAULT_STREAM_RETRY_MAX_DELAY_MS,
   streamFailureReporter,
   streamRetrySignalOf,
   STREAM_RETRY_MIDDLEWARE_NAME,
   STREAM_RETRY_SIGNAL,
 } from './stream-retry.js';
-export type { StreamFailure, StreamRetryOptions, StreamRetrySignal } from './stream-retry.js';
+export type {
+  RetryRunContext,
+  StreamFailure,
+  StreamRetryOptions,
+  StreamRetrySignal,
+} from './stream-retry.js';
 export { interruptedTurnClosers, resumeClosingInterruptedTurn } from './interrupted-turn.js';
 export {
   createSubagentDelegationMiddleware,

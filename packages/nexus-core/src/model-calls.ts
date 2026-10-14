@@ -51,10 +51,10 @@
  * 摘要，`llmMs` 不會把同一段牆鐘算兩次。`apps/harness/src/context-overflow.test.ts` 釘著
  * 「四次模型節點、五步」。
  *
- * ## 重試也在這一格記（[#712](https://github.com/DemianLi/nexus-agent/issues/712)）
+ * ## 重試在這一格外面（[#712](https://github.com/DemianLi/nexus-agent/issues/712)、#1427）
  *
- * 重試發生在 handler 裡面，core 看不到；這一格替每次呼叫開一個重試範圍（{@link ./llm-retry.ts}），
- * adapter 在裡面回報，落成 `llm/retry`／`llm/retry-started`，位置就在這一對起訖之間。
+ * 重試只有一層，在 {@link ./stream-retry.ts} 的 middleware（站在這一格外面）：每次嘗試各走一遍這一格，所以各是一對
+ * `model/start`／`model/end`，`llm/retry` 與 `llm/retry-started` 寫在兩對之間。這一格自己不開重試範圍。
  *
  * ## 回覆也在這一格記（[#305](https://github.com/DemianLi/nexus-agent/issues/305)）
  *
@@ -80,7 +80,6 @@
 import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { runInRetryScope } from './llm-retry.js';
 import { toLoggedMessage } from './logged-message.js';
 import { noteModelCallReplied, runInModelCall, withModelCall } from './model-call-scope.js';
 import { routeOfModel } from './model-route.js';
@@ -148,11 +147,9 @@ export function createModelCallRecorder(sessions: {
       // 沒有正常回來的方式（#1022）：拋錯、或使用者按了停止。正常回來沒有。
       let outcome: ModelCallOutcome | undefined;
       try {
-        // 這次呼叫的識別（`model/start` 的 `seq`）往內傳給用量與重試的寫入點，往外填給摘要器的量測
-        // （{@link ./model-call-scope.ts}）。重試範圍包住 handler：adapter 在裡面回報失敗與重開（{@link ./llm-retry.ts}）。
-        const response = await runInModelCall(log, modelCall, () =>
-          runInRetryScope(log, () => handler(request)),
-        );
+        // 這次呼叫的識別（`model/start` 的 `seq`）往內傳給用量的寫入點，往外填給摘要器的量測
+        // （{@link ./model-call-scope.ts}）。重試在這一格外面（{@link ./stream-retry.ts}），每次嘗試各是一對起訖。
+        const response = await runInModelCall(log, modelCall, () => handler(request));
         // 子代理被中止時回的是合成的空收尾，不是拋錯：它沒有回覆可記，這次呼叫算被中止。
         if (AIMessage.isInstance(response) && isSyntheticStopReply(response)) outcome = 'aborted';
         tryRecordReply(log, response, modelCall);

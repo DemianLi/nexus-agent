@@ -113,6 +113,8 @@ import { captureModelCall, withModelCall } from './model-call-scope.js';
 import { readModelUsage, type ModelUsage } from './model-usage.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry, SessionLookup } from './registry.js';
+import { retryModelCall } from './stream-retry.js';
+import type { StreamRetryOptions } from './stream-retry.js';
 import { estimateAnchoredTokens, estimateMessageTokens } from './token-estimate.js';
 import type { EstimatedRequest, TokenAnchorBook } from './token-estimate.js';
 import {
@@ -123,6 +125,7 @@ import {
 import { withSummaryCatchUp } from './summary-catch-up.js';
 import { createHistoryStaging } from './summary-history-staging.js';
 import { recordedPrunesOf } from './tool-result-prune-log.js';
+import { turnCancelSignalOf } from './turn-cancel.js';
 import { DEFAULT_TOOL_RESULT_PRUNE, withToolResultPruning } from './tool-result-pruner.js';
 import type {
   PruneRequest,
@@ -630,6 +633,7 @@ export function createSummarizer(
   limitsOf?: (model: unknown) => ModelContextLimits | undefined,
   summaryModelOf?: (request: { model?: unknown; runtime?: { configurable?: unknown } }) => unknown,
   report?: (message: string) => void,
+  retry?: StreamRetryOptions,
 ): AgentMiddleware {
   // 歷史檔的寫入先暫存、這一步結束才依「有沒有生出摘要」提交（#1389，見 summary-history-staging.ts）。
   // 沒有會話註冊表就查不了日誌，維持直接寫。
@@ -664,7 +668,7 @@ export function createSummarizer(
       },
     }) as unknown as AgentMiddleware;
     // 貼著基座包：外面幾層看到的 `request.model` 與交下去的都是原本那顆，不會碰到替身。
-    return withQuietSummaryCall(withAttachmentText(base), summaryModelOf);
+    return withQuietSummaryCall(withAttachmentText(base), summaryModelOf, retry);
   };
   const quiet = withRetainedTail(makeChain, settings, limitsOf);
   // 兩層各管一個方向，刻意不合成一層：剪刀改請求、日誌讀回傳，合起來寫會讓兩個獨立的
@@ -876,6 +880,7 @@ const summaryUsageCells = new AsyncLocalStorage<SummaryUsageCell>();
 function withQuietSummaryCall(
   base: AgentMiddleware,
   summaryModelOf?: (request: { model?: unknown; runtime?: { configurable?: unknown } }) => unknown,
+  retry?: StreamRetryOptions,
 ): AgentMiddleware {
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 同 withCompactionLog。 */
@@ -899,6 +904,17 @@ function withQuietSummaryCall(
         () => {
           generated += 1;
         },
+        // 生摘要的那一次呼叫在重試那一格外面，SDK 層又不重試了（#1427）：自己吃同一份政策。沒有日誌（同 #1341：摘要器的呼叫不是
+        // 模型呼叫圖裡的一步），按了停止在退避中收。
+        retry === undefined || retry.maxRetries <= 0
+          ? undefined
+          : {
+              policy: retry,
+              signal: turnCancelSignalOf({
+                configurable: (request as { runtime?: { configurable?: unknown } }).runtime
+                  ?.configurable,
+              }),
+            },
       );
       return inner({ ...request, model: quiet }, (sent) => {
         if (generated > checked) {
@@ -1157,6 +1173,7 @@ function quietInvoke<T extends object>(
   cell: SummaryUsageCell | undefined,
   generator?: object,
   onGenerated?: () => void,
+  retry?: { readonly policy: StreamRetryOptions; readonly signal: AbortSignal | undefined },
 ): T {
   return new Proxy(model, {
     get(target, key) {
@@ -1166,11 +1183,22 @@ function quietInvoke<T extends object>(
       const invoke = (caller as { invoke(input: unknown, config?: unknown): unknown }).invoke;
       return async (input: unknown, config?: { tags?: readonly string[] }) => {
         let result: unknown;
+        const attempt = (): Promise<unknown> =>
+          Promise.resolve(
+            invoke.call(caller, input, {
+              ...config,
+              tags: [...(config?.tags ?? []), SUMMARY_CALL_TAG],
+            }),
+          );
         try {
-          result = await invoke.call(caller, input, {
-            ...config,
-            tags: [...(config?.tags ?? []), SUMMARY_CALL_TAG],
-          });
+          result =
+            retry === undefined
+              ? await attempt()
+              : await retryModelCall(
+                  retry.policy,
+                  retry.signal === undefined ? {} : { signal: retry.signal },
+                  attempt,
+                );
         } catch (error) {
           // 記下「這個錯是生摘要那次拋的」（#1374）：基座不包它，原物件一路冒到外面，外面的 {@link withTokenBudget}
           // 靠這個分得出它與「摘要成功、之後的模型呼叫才失敗」。

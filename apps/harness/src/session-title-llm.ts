@@ -46,11 +46,13 @@ import { AsyncResource } from 'node:async_hooks';
 
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
+import { retryModelCall } from '@nexus/core';
 import type {
   SessionEvent,
   SessionLog,
   SessionTitleLlmMessage,
   SessionTitleModelIdentity,
+  StreamRetryOptions,
 } from '@nexus/core';
 
 import {
@@ -66,6 +68,26 @@ import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
 
 /** 標題模型。只用得到 `invoke`：一次非串流的呼叫，CLI 與 web 走同一條。 */
 export type TitleModel = Pick<BaseChatModel, 'invoke'>;
+
+/**
+ * 讓標題那一次模型呼叫吃重試政策（[#1427](https://github.com/DemianLi/nexus-agent/issues/1427)）：SDK 層不重試了，標題不在模型呼叫
+ * 圖裡、沒有 middleware 可掛，所以包在 `invoke` 上，走 `@nexus/core` 的 {@link retryModelCall}（同一個迴圈、同一份政策）。
+ *
+ * **不記日誌**（#712）：標題不是這一輪對話的步，記進去會冒充成對話在重試；退避也聽呼叫端傳進來的 `signal`
+ * （整段時限 `timeoutMs` 與使用者改名的中止都在裡面），所以最壞也不會超過 `timeoutMs`。
+ */
+function withRetryPolicy(model: TitleModel, policy: StreamRetryOptions): TitleModel {
+  const invoke = model.invoke.bind(model) as (
+    input: unknown,
+    options?: { signal?: AbortSignal },
+  ) => unknown;
+  return {
+    invoke: (input: unknown, options?: { signal?: AbortSignal }) =>
+      retryModelCall(policy, options?.signal === undefined ? {} : { signal: options.signal }, () =>
+        Promise.resolve(invoke(input, options)),
+      ),
+  } as unknown as TitleModel;
+}
 
 /** 一則合格的人話：`turn/start {kind:'message'}` 的 `seq` 與原文。同 dsh 的 `SessionTitleUserMessage`。 */
 export interface TitleSourceMessage {
@@ -178,6 +200,8 @@ export interface SessionTitleLlmOptions {
   readonly route: SessionTitleModelIdentity;
   readonly config: ThreadTitleLlmConfig;
   readonly limits: TitleLlmLimits;
+  /** 重試政策（#1427）：省略或 `maxRetries` 為 0 就只打一次。產品路徑給 `live-model` 那一列的 `retryPolicy`。 */
+  readonly retry?: StreamRetryOptions;
   /**
    * 標題沒有自己的覆寫時，**沿用觸發它的那次主請求走的模型**（[#723](https://github.com/DemianLi/nexus-agent/issues/723)，
    * PM 2026-10-08 決策：照 dsh，標題沒給覆寫就沿用主請求的路由）。拿 `model/start` 記的路由，換出這一次用的模型與記進
@@ -229,7 +253,11 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
       mainRoute: ModelRoute | undefined,
     ): Promise<void> => {
       const followed = mainRoute === undefined ? undefined : options.follow?.(mainRoute);
-      const model = followed?.model ?? options.model;
+      const chosen = followed?.model ?? options.model;
+      const model =
+        options.retry === undefined || options.retry.maxRetries <= 0
+          ? chosen
+          : withRetryPolicy(chosen, options.retry);
       const route = followed?.route ?? options.route;
       const own = new AbortController();
       active = own;

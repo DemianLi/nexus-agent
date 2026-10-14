@@ -139,6 +139,7 @@ dsh 同情境：失敗那次一律先記 `assistant/attempt` 再派 `request-err
 - 這是**算得出來、量到了一組**；**正式環境的乘數沒量**：SDK 6 次（`live-model.ts:166`）、`streamRetry` 3 次嘗試（第一次＋2 次重打，卡上 2026-10-06 拍板）、
   再乘 `request-error` 允許的次數，最壞是三者的乘積，每次嘗試的 `llm/retry` 只記到 SDK 預算那一段。
 - dsh 的單層（SDK `maxRetries: 0`）沒有這個問題；`DEFAULT_LIVE_MAX_RETRIES = 6` 是 nexus 的設定，不是 LangChain 的限制（`live-model.ts:147-166` 解釋了當初的理由）。
+- **（2026-10-14 更新）#1427 之後 SDK 層 `maxRetries` 恆為 0**，`llm-retry.ts`（`runInRetryScope`／`noteFailedAttempt`）已刪；打到端點的請求數就是 `maxRetries + 1`，`llm/retry` 的顆數就是實際重打的次數，上表「9 與 2」的落差不再可能出現（`apps/harness/src/stream-retry.test.ts` 的「端點每次都在第一則事件失敗」釘著）。
 
 ### G5 中止：配對不變形，但橋接要先檢查中止
 
@@ -159,7 +160,7 @@ dsh 同情境：中止不派 `request-error`。所以「中止時也派」是**�
 - 橋接收到的是拋出的錯誤；用 `classifyLlmFailure` 就拿得到 dsh 同形的 `{code, message, status?}`。**要分首事件／閒置，只能看錯誤名**，與 dsh 同（只有 `TIMEOUT` 一碼）。
 - `streamRetry` 靠的 `StreamFailure.retryable`（fetch 層回報進這次嘗試的範圍）**不在這個 payload 裡**：橋接 listener 看不到「adapter 判這次重打有沒有用」。
   這是 dsh `retryPolicy` 欄位的對應物，S2 要決定放進 payload 還是讓 `streamRetry` 的判定留在監聽者外。
-- **兩套預算（SDK 6 次、串流重打 2 次）是 demian 拍板的**；合成一條政策是要他決定的事，這張卡不替他定。
+- **（2026-10-14 更新，#1427 已落地）兩套預算（SDK 6 次、串流重打 2 次）已合成一條政策**：重試只有 `@nexus/core` 的 `retryModelCall` 一層，SDK 層 `maxRetries` 恆為 0，首事件之前與之後共用 `retryPolicy`（出廠 6 次，形狀照 dsh）；`retryable` 與 `retry-after` 一併進了同一個迴圈。下面保留的是當時的量測與讀碼。
 
 ### G7 `max-tokens`：A 看不到原始的，B 看得到
 
@@ -277,4 +278,4 @@ nexus 今天有**四種恢復**，分在洋蔥四個位置，記帳各不相同�
 2. **S2 的第一刀可以是 B 的最小版**：model 層子類只穿透、只讓 `session-checkpoint-policy` 的對應物搬上去，驗證「所有模型實例都走同一個建構點」。這一刀不改任何行為，
    對照 G10。
 3. **`streamRetry` 變成 `request-error` 監聽者的前置**：先把它的三件事（signal、`llm/retry`、每次嘗試一對起訖）整理成可被別的監聽者呼叫的介面，不然四種恢復各自重做一遍。
-4. **要 demian 決定**（這張卡不替他定）：SDK 層與串流層兩套預算要不要合成一條政策（G4、G6）。
+4. ~~要 demian 決定：SDK 層與串流層兩套預算要不要合成一條政策（G4、G6）。~~ **（2026-10-14 更新）已決定並落地（#1427）**：合成一條，見 G6 的更新。

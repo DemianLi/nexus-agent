@@ -1,13 +1,13 @@
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { tool } from '@langchain/core/tools';
-import type { PluginEntry } from '@nexus/core';
+import type { PluginEntry, StreamRetryOptions } from '@nexus/core';
 import { z } from 'zod';
 import { createNexusAgent } from '../agent-factory.js';
 import { ScriptedChatModel } from '../scripted-model.js';
 import type { ScriptedTurn } from '../scripted-model.js';
 import type { CredentialService } from '../credentials.js';
 import { createLiveModel } from '../live-model.js';
-import { liveModelConfigSchema } from '../settings/live-model.js';
+import { liveModelConfigSchema, streamRetryOptionsOf } from '../settings/live-model.js';
 
 /** spike 的自訂工具：只把輸入回聲成一句話，用來證明工具真的被基座呼叫到。 */
 export const recordFinding = tool(({ topic, detail }) => `已記錄「${topic}」：${detail}`, {
@@ -94,13 +94,15 @@ const spikePlugin: PluginEntry = {
  * Phase 1 有了組裝點之後留著第二條組裝路徑只會讓 `--live` 驗的東西跟真的會出貨的東西
  * 分岔。default backend 由組裝點補（`StateBackend`），與原本的組裝一致。
  */
-async function buildAgent(model: BaseChatModel) {
+async function buildAgent(model: BaseChatModel, streamRetry?: StreamRetryOptions) {
   // 只取 `agent`、丟掉 `dispose`：這份清單只有 `spikePlugin`，它不開任何活資源。要收
   // 東西的清單走的是 `cli.ts` 那條——那支收的才是任意清單。
   const { agent } = await createNexusAgent({
     model,
     systemPrompt: SYSTEM_PROMPT,
     plugins: [spikePlugin],
+    // 真模型的重試政策（#1427）：SDK 層不重試了，沒有它第一次限流就失敗。假模型不給。
+    ...(streamRetry !== undefined && { streamRetry }),
   });
   return agent;
 }
@@ -123,6 +125,7 @@ export async function createSpikeAgent(options: SpikeAgentOptions = {}) {
  */
 export async function createLiveSpikeAgent(credentials?: CredentialService) {
   // 手上沒有條目清單，吃 schema 預設（#545）。
-  const model = createLiveModel(liveModelConfigSchema.parse({}), undefined, credentials);
-  return { agent: await buildAgent(model), model };
+  const config = liveModelConfigSchema.parse({});
+  const model = createLiveModel(config, undefined, credentials);
+  return { agent: await buildAgent(model, streamRetryOptionsOf(config.retryPolicy)), model };
 }

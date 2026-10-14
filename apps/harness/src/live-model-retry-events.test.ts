@@ -1,42 +1,53 @@
 /**
  * 模型請求的重試記進會話日誌（[#712](https://github.com/DemianLi/nexus-agent/issues/712)）。
  *
- * 沿用 #516 的 loopback 假端點（零憑證、零外部連線），把真的 `createLiveModel` 放進
- * `@nexus/core` 的重試範圍裡跑，再讀範圍所屬的那一份日誌：判準是**日誌裡有幾顆、帶什麼**，
- * 同時數假端點收到幾個請求，兩個數字要對得上。
+ * 沿用 #516 的 loopback 假端點（零憑證、零外部連線），把真的 `createLiveModel` 放進 `@nexus/core` 的
+ * `retryModelCall`（#1427：整個專案唯一的重試迴圈，SDK 層不重試）裡跑，再讀它寫的那一份日誌：判準是**日誌裡
+ * 有幾顆、帶什麼**，同時數假端點收到幾個請求，兩個數字要對得上。
  *
- * **`RETRIES = 2` 的理由同 `live-model.test.ts`**：要真的等完退避才數得到重試，6 次是 63 秒。
+ * **退避縮成幾十毫秒**（`jitterRatio: 0`）：要真的等完退避才數得到重試，出廠值 6 次是 25 秒。
  */
 
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { createModelCallRecorder, runInRetryScope, SessionLog } from '@nexus/core';
+import { createModelCallRecorder, retryModelCall, SessionLog } from '@nexus/core';
 import {
   classifyLlmFailure,
   createLiveModel,
   LIVE_API_KEY_ENV,
   StreamIdleTimeoutError,
 } from './live-model.js';
-import { liveModelConfigSchema } from './settings/live-model.js';
+import { liveModelConfigSchema, streamRetryOptionsOf } from './settings/live-model.js';
 
 const RETRIES = 2;
 
-type Cell = 'http500' | 'head503' | 'head400';
+type Cell = 'http500' | 'head503' | 'head400' | 'http429' | 'http400';
 
 let server: Server;
 let baseUrl: string;
 let hits = 0;
 let cell: Cell = 'http500';
+/** `http429` 那一格要不要帶 `retry-after`（秒，字串）；`undefined` 就是沒有 header 的 429。 */
+let retryAfter: string | undefined;
 let savedKey: string | undefined;
 
 beforeEach(async () => {
   hits = 0;
+  retryAfter = undefined;
   savedKey = process.env[LIVE_API_KEY_ENV];
   process.env[LIVE_API_KEY_ENV] = 'fake-key-for-loopback';
   server = createServer((request, response) => {
     hits += 1;
     request.resume();
+    if (cell === 'http429' || cell === 'http400') {
+      response.writeHead(cell === 'http429' ? 429 : 400, {
+        'content-type': 'application/json',
+        ...(cell === 'http429' && retryAfter !== undefined && { 'retry-after': retryAfter }),
+      });
+      response.end(JSON.stringify({ error: { message: 'plain http failure', type: 'x' } }));
+      return;
+    }
     if (cell === 'http500') {
       response.writeHead(500, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ error: { message: 'Internal server error', code: 500 } }));
@@ -62,17 +73,48 @@ afterEach(async () => {
   await new Promise<void>((done) => server.close(() => done()));
 });
 
-const config = (maxRetries = RETRIES) => liveModelConfigSchema.parse({ baseUrl, maxRetries });
+const policy = (
+  maxRetries = RETRIES,
+  initialDelayMs = 20,
+  maxDelayMs = 200,
+  retryableCodes?: string[],
+) =>
+  streamRetryOptionsOf(
+    liveModelConfigSchema.parse({
+      baseUrl,
+      retryPolicy: {
+        mode: 'normal',
+        maxRetries,
+        ...(retryableCodes !== undefined && { retryableCodes }),
+        backoff: { initialDelayMs, maxDelayMs, jitterRatio: 0 },
+      },
+    }).retryPolicy,
+  );
 
-/** 把一次串流呼叫跑完（吞掉最後的拋錯），回日誌上的事件。 */
-async function streamInScope(
-  log: SessionLog,
+const config = () => liveModelConfigSchema.parse({ baseUrl });
+
+/** 把一次串流呼叫放進重試迴圈跑完（吞掉最後的拋錯），事件寫進 `log`。 */
+async function streamWithRetry(
+  log: SessionLog | undefined,
   model = createLiveModel(config()),
-  options: { signal?: AbortSignal } = {},
+  options: {
+    signal?: AbortSignal;
+    maxRetries?: number;
+    initialDelayMs?: number;
+    maxDelayMs?: number;
+    retryableCodes?: string[];
+  } = {},
 ): Promise<void> {
-  await runInRetryScope(log, async () => {
-    for await (const _part of await model.stream('嗨', options)) void _part;
-  }).catch(() => undefined);
+  const { signal, maxRetries, initialDelayMs, maxDelayMs, retryableCodes } = options;
+  await retryModelCall(
+    policy(maxRetries, initialDelayMs, maxDelayMs, retryableCodes),
+    { ...(log !== undefined && { log }), ...(signal !== undefined && { signal }) },
+    async () => {
+      for await (const _part of await model.stream('嗨', signal === undefined ? {} : { signal })) {
+        void _part;
+      }
+    },
+  ).catch(() => undefined);
 }
 
 const retries = (log: SessionLog) => log.events.filter((event) => event.type === 'llm/retry');
@@ -83,7 +125,7 @@ describe('重試寫進日誌', () => {
   it('HTTP 500：llm/retry 與 llm/retry-started 的顆數都等於重試次數（請求數減 1），failure 帶狀態與碼', async () => {
     cell = 'http500';
     const log = new SessionLog('r');
-    await streamInScope(log);
+    await streamWithRetry(log);
 
     expect(hits).toBe(RETRIES + 1);
     expect(retries(log)).toHaveLength(RETRIES);
@@ -103,8 +145,8 @@ describe('重試寫進日誌', () => {
     ]);
   }, 30_000);
 
-  /** #1021：經真的起訖紀錄器，真 adapter 回報的重試帶著這次呼叫的識別——也就是 `model/start` 的 `seq`。 */
-  it('經起訖紀錄器跑：llm/retry 與 llm/retry-started 都帶 modelCall，指回那顆 model/start', async () => {
+  /** #1021：經真的起訖紀錄器，每次嘗試各自一組 `model/start`／`model/end`，重試指回失敗的那一次（#1427：重試在紀錄器外面）。 */
+  it('經起訖紀錄器跑：每次嘗試各一組起訖，llm/retry 與 llm/retry-started 指回失敗那次的 model/start', async () => {
     cell = 'http500';
     const log = new SessionLog('r');
     const model = createLiveModel(config());
@@ -113,26 +155,33 @@ describe('重試寫進日誌', () => {
     }) as unknown as {
       wrapModelCall: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
     };
-    await recorder
-      .wrapModelCall({ runtime: { configurable: {} } }, async () => {
+    await retryModelCall(policy(), { log }, () =>
+      recorder.wrapModelCall({ runtime: { configurable: {} } }, async () => {
         for await (const _part of await model.stream('嗨')) void _part;
-      })
-      .catch(() => undefined);
+      }),
+    ).catch(() => undefined);
 
-    const start = log.events.find((event) => event.type === 'model/start')!;
+    const modelStarts = log.events.filter((event) => event.type === 'model/start');
+    const modelEnds = log.events.filter((event) => event.type === 'model/end');
+    expect(modelStarts).toHaveLength(RETRIES + 1);
+    expect(modelEnds).toHaveLength(RETRIES + 1);
     expect(retries(log)).toHaveLength(RETRIES);
-    for (const event of [...retries(log), ...starts(log)]) {
-      expect((event.data as { modelCall?: number }).modelCall).toBe(start.seq);
+    retries(log).forEach((event, index) => {
+      expect((event.data as { modelCall?: number }).modelCall).toBe(modelStarts[index]!.seq);
+    });
+    starts(log).forEach((event, index) => {
+      expect((event.data as { modelCall?: number }).modelCall).toBe(modelStarts[index]!.seq);
+    });
+    // 每一次失敗都是拋錯收的：`model/end` 標 `error`（#1022）。
+    for (const [index, end] of modelEnds.entries()) {
+      expect(end.data).toEqual({ modelCall: modelStarts[index]!.seq, outcome: 'error' });
     }
-    const end = log.events.find((event) => event.type === 'model/end')!;
-    // 重試用盡之後這次呼叫是拋錯收的：`model/end` 標 `error`（#1022）。
-    expect(end.data).toEqual({ modelCall: start.seq, outcome: 'error' });
   }, 30_000);
 
   it('第一則事件是 503：同上（#516 的串流內錯誤也進得了日誌）', async () => {
     cell = 'head503';
     const log = new SessionLog('r');
-    await streamInScope(log);
+    await streamWithRetry(log);
 
     expect(hits).toBe(RETRIES + 1);
     expect(retries(log)).toHaveLength(RETRIES);
@@ -143,7 +192,7 @@ describe('重試寫進日誌', () => {
   it('第一則事件是 400：只打一次，0 顆', async () => {
     cell = 'head400';
     const log = new SessionLog('r');
-    await streamInScope(log);
+    await streamWithRetry(log);
 
     expect(hits).toBe(1);
     expect(log.events).toHaveLength(0);
@@ -152,36 +201,115 @@ describe('重試寫進日誌', () => {
   it('maxRetries 為 0：一次失敗就收，0 顆', async () => {
     cell = 'http500';
     const log = new SessionLog('r');
-    await streamInScope(log, createLiveModel(config(0)));
+    await streamWithRetry(log, createLiveModel(config()), { maxRetries: 0 });
 
     expect(hits).toBe(1);
     expect(log.events).toHaveLength(0);
   });
 
-  it('等待重試時取消：已寫的 llm/retry 留著，背景迴圈再打也不會多出 llm/retry-started', async () => {
+  it('等待重試時取消：已寫的 llm/retry 留著，不再打、不寫 llm/retry-started', async () => {
     cell = 'http500';
     const log = new SessionLog('r');
     const controller = new AbortController();
     log.subscribe((event) => {
       if (event.type === 'llm/retry') controller.abort();
     });
-    await streamInScope(log, createLiveModel(config()), { signal: controller.signal });
+    await streamWithRetry(log, createLiveModel(config()), {
+      signal: controller.signal,
+      initialDelayMs: 150,
+    });
 
+    expect(hits).toBe(1);
     expect(retries(log)).toHaveLength(1);
     const settled = log.events.length;
-    // 等過原本的退避（第一次 1–2 秒）：這條路徑上 signal 也交給了 fetch，所以背景迴圈醒來的那次請求
-    // 到不了假端點；背景迴圈照樣醒來、卻到得了 `fetch` 的那種情形由 core 的 `llm-retry.test.ts`
-    // （範圍關了之後的回報）釘住。這裡釘的是產品路徑上整條走完的結果。
-    await new Promise<void>((done) => setTimeout(done, 3_500));
+    // 等過原本的退避：停了就是停了，背景不會再醒來多打一次。
+    await new Promise<void>((done) => setTimeout(done, 400));
+    expect(hits).toBe(1);
     expect(starts(log)).toHaveLength(0);
     expect(log.events).toHaveLength(settled);
   }, 30_000);
 
-  it('標題那一顆：碰到可重試的失敗也一顆都不寫，即使繼承了對話那一輪的範圍', async () => {
-    cell = 'http500';
+  /** #1427 D：沒帶 header 的 429 照樣重試（基座的預設 handler 會把它當「容量不足」直接放棄）。 */
+  it('沒有 retry-after header 的 429：照樣重試，failure 是 RATE_LIMIT', async () => {
+    cell = 'http429';
     const log = new SessionLog('r');
+    await streamWithRetry(log);
+
+    expect(hits).toBe(RETRIES + 1);
+    expect(retries(log)).toHaveLength(RETRIES);
+    expect(retries(log)[0]!.data).toMatchObject({
+      failure: { code: 'RATE_LIMIT', status: 429 },
+    });
+  }, 30_000);
+
+  it('retry-after 不超過 maxDelayMs：照它等（不加抖動、不用本機的退避）', async () => {
+    cell = 'http429';
+    retryAfter = '1';
+    const log = new SessionLog('r');
+    await streamWithRetry(log, createLiveModel(config()), {
+      maxRetries: 1,
+      initialDelayMs: 20,
+      maxDelayMs: 5_000,
+    });
+
+    expect(hits).toBe(2);
+    expect(retries(log)).toHaveLength(1);
+    expect(retries(log)[0]!.data).toMatchObject({ delayMs: 1_000 });
+    expect((starts(log)[0]!.data as { waitedMs: number }).waitedMs).toBeGreaterThanOrEqual(950);
+  }, 30_000);
+
+  it('retry-after 超過 maxDelayMs：不等、不重打，原錯誤往外拋', async () => {
+    cell = 'http429';
+    retryAfter = '30';
+    const log = new SessionLog('r');
+    const model = createLiveModel(config());
+    const thrown = await retryModelCall(policy(), { log }, async () => {
+      for await (const _part of await model.stream('嗨')) void _part;
+    }).then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+
+    expect(hits).toBe(1);
+    expect(thrown).toBeInstanceOf(Error);
+    expect(log.events).toHaveLength(0);
+  });
+
+  /** #1427：`retryableCodes` 真的是閘門——分類出來的碼不在清單裡就不重打，原錯誤往外拋（dsh 的 `retryableCodes`）。 */
+  it('retryableCodes 是閘門：碼不在清單裡的失敗只打一次，在清單裡的照常重打', async () => {
+    cell = 'http429';
+    const limited = new SessionLog('r');
+    await streamWithRetry(limited, createLiveModel(config()), { retryableCodes: ['SERVER'] });
+    expect(hits).toBe(1);
+    expect(limited.events).toHaveLength(0);
+
+    hits = 0;
+    const listed = new SessionLog('r');
+    await streamWithRetry(listed, createLiveModel(config()), { retryableCodes: ['RATE_LIMIT'] });
+    expect(hits).toBe(RETRIES + 1);
+    expect(retries(listed)).toHaveLength(RETRIES);
+
+    hits = 0;
+    cell = 'http500';
+    const server500 = new SessionLog('r');
+    await streamWithRetry(server500, createLiveModel(config()), { retryableCodes: ['RATE_LIMIT'] });
+    expect(hits).toBe(1);
+  }, 30_000);
+
+  it('HTTP 400：不重試（請求本身有問題）', async () => {
+    cell = 'http400';
+    const log = new SessionLog('r');
+    await streamWithRetry(log);
+
+    expect(hits).toBe(1);
+    expect(log.events).toHaveLength(0);
+  });
+
+  it('不給日誌（標題、摘要器那種呼叫）：照樣吃同一份預算重打，但一顆都不寫', async () => {
+    cell = 'http500';
+    const log = new SessionLog('untouched');
     const title = createLiveModel(config(), 'session-title');
-    await runInRetryScope(log, () => title.invoke('嗨')).catch(() => undefined);
+    await retryModelCall(policy(), {}, () => title.invoke('嗨')).catch(() => undefined);
 
     expect(hits).toBe(RETRIES + 1);
     expect(log.events).toHaveLength(0);
@@ -192,7 +320,7 @@ describe('重試寫進日誌', () => {
     const model = createLiveModel(config());
     const a = new SessionLog('a');
     const b = new SessionLog('b');
-    await Promise.all([streamInScope(a, model), streamInScope(b, model)]);
+    await Promise.all([streamWithRetry(a, model), streamWithRetry(b, model)]);
 
     expect(retries(a)).toHaveLength(RETRIES);
     expect(retries(b)).toHaveLength(RETRIES);

@@ -70,7 +70,6 @@ describe('供應商吐一段就停住（#521）', () => {
         liveModelConfigSchema.parse({
           baseUrl: upstream.baseUrl,
           streamIdleTimeoutMs: 300,
-          maxRetries: 2,
         }),
       ),
       checkpointer: new MemorySaver(),

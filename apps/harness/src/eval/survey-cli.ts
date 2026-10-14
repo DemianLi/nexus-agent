@@ -17,8 +17,12 @@
  */
 
 import { installLaunchProxy } from '../http-proxy-boot.js';
-import { createLiveModel, loadLiveLaunchEnv, DEFAULT_LIVE_MAX_RETRIES } from '../live-model.js';
-import { liveModelConfigForModel } from '../settings/live-model.js';
+import { createLiveModel, loadLiveLaunchEnv } from '../live-model.js';
+import {
+  liveModelConfigForModel,
+  liveModelConfigSchema,
+  streamRetryOptionsOf,
+} from '../settings/live-model.js';
 import { parseCases, parseModels, parseOut, parseSamples } from './cli-args.js';
 import {
   compareTiers,
@@ -37,6 +41,9 @@ import { intervalLines, tokenTotalsLine } from './compare-report.js';
 import { startResultFile } from './result-file.js';
 import type { CaseStats } from './stats.js';
 import { SURVEY_INVENTORY_DATE, SURVEY_MODELS, type SurveyModel } from './survey.js';
+
+/** eval 的重試政策（#1427）：跟出貨預設同一份，不跟任何一台部署的設定走（`settings/live-model.ts` 的「eval 不跟這一列走」）。 */
+const EVAL_RETRY_POLICY = streamRetryOptionsOf(liveModelConfigSchema.parse({}).retryPolicy);
 
 const USAGE = `用法：eval:survey [--samples <n>] [--cases <id,...>] [--models <label,...>] [--out <dir>]
 
@@ -205,6 +212,8 @@ async function main(argv: readonly string[]): Promise<void> {
     // 那一組設定底下的模型。見 `settings/live-model.ts` 的「eval 不跟這一列走」。
     createModel: (modelId) =>
       createLiveModel(liveModelConfigForModel(modelId), undefined, credentials),
+    // 重試政策也吃 schema 預設（#1427）：SDK 層不重試了，沒有它真模型第一次限流就失敗。
+    streamRetry: EVAL_RETRY_POLICY,
     samples,
     cases,
     onOutcome: (model, outcome) => {
@@ -233,7 +242,7 @@ async function main(argv: readonly string[]): Promise<void> {
   }
   if (throttledHits > 0) {
     console.log(
-      `\n注意：有 ${throttledHits} 次執行在重試 ${DEFAULT_LIVE_MAX_RETRIES} 次之後仍然被限流（throttled）。` +
+      `\n注意：有 ${throttledHits} 次執行在重試 ${EVAL_RETRY_POLICY.maxRetries} 次之後仍然被限流（throttled）。` +
         `**那不是分數，是沒有資料** —— 先看每一列的 n，被限流多的那幾列 n 會很小，` +
         `而小 n 的 1.00 跟大 n 的 1.00 不是同一個東西。\n` +
         `  2026-08-29 那一輪量到的是：47 次 throttled 全部集中在 3 個候選（其餘 11 個零），` +

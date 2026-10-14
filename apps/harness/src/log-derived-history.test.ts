@@ -587,13 +587,13 @@ const bigThenSmall = (): Reply => ({
 
 describe('夾具的 live-model 是出貨那一列（#1372）', () => {
   /**
-   * patch 對既有列是整份替換 `config`。#1372 之前夾具只寫 `baseUrl`、`modelId`、`maxRetries` 與一顆模型，SH、SV
+   * patch 對既有列是整份替換 `config`。#1372 之前夾具只寫 `baseUrl`、`modelId`、重試次數與一顆模型，SH、SV
    * 系列的 `live-model` 少了出貨型錄、相容設定與逾時，卻名義上量「出貨設定」。這條直接用產品的疊層函式
    * （`composeEntries`）把夾具的 patch 疊到出貨清單上，比疊完的整份 `config`。
    *
    * 突變（#1372 實測）：把 `liveModelPatch` 改回只寫那幾格 → 這條紅（缺 `timeoutMs`、`models` 只剩一顆等）。
    */
-  it('疊完之後，除了 baseUrl 與兩個重試，整份 config 等於出貨那一列', () => {
+  it('疊完之後，除了 baseUrl 與重試次數，整份 config 等於出貨那一列', () => {
     const configOf = (overlay?: string): Record<string, unknown> => {
       const row = composeEntries(overlay === undefined ? {} : { overlays: [overlay] }).find(
         (entry) => entry.id === 'live-model',
@@ -615,8 +615,7 @@ describe('夾具的 live-model 是出貨那一列（#1372）', () => {
       expect(configOf(file)).toEqual({
         ...shipped,
         baseUrl: 'http://127.0.0.1:1/v1',
-        maxRetries: 0,
-        streamRetry: { ...(shipped['streamRetry'] as object), maxRetries: 0 },
+        retryPolicy: { ...(shipped['retryPolicy'] as object), maxRetries: 0 },
       });
     } finally {
       rmSync(dir, { recursive: true, force: true });

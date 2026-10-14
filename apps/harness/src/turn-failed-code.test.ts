@@ -99,7 +99,7 @@ const live = (timeoutMs?: number) =>
   createLiveModel(
     liveModelConfigSchema.parse({
       baseUrl,
-      maxRetries: 0,
+      retryPolicy: { mode: 'normal', maxRetries: 0 },
       ...(timeoutMs !== undefined && { timeoutMs }),
     }),
   );

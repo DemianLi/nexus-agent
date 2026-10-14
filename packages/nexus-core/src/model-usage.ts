@@ -37,7 +37,7 @@
  * 供應商的用量只活在 `fetch` 回來的位元組裡——所以由 adapter（`live-model.ts` 的串流用量嗅探）在請求開跑時拿一個回報函式
  * （`beginAttemptReport`，{@link ./model-call-scope.ts}），串流裡看到用量就回報；這顆 middleware 在呼叫拋錯（或子代理被中止回合成收尾）
  * 時讀它，**過同一把尺**（{@link validateUsage}）才記，記成帶 `outcome` 的 `model/usage`。**沒報就不記**：「不知道花了多少」
- * 不是 0，由配對的 `model/end.outcome` 表態。每次請求（含 SDK 的重試）各換一格，所以只有**最後一次請求**的用量算數。
+ * 不是 0，由配對的 `model/end.outcome` 表態。每次請求各換一格（#1427 之後重打只有 core 那一層，每次重打都是自己的一對 `model/start`／`model/end`），所以一次請求只記它自己那一格的用量。
  *
  * ## 生產者是一個 `wrapModelCall`，而那個鉤子是選的
  *

@@ -514,9 +514,8 @@
 # （`packages/llm/llm-deepseek/src/config.ts:83-100`，`ddefc45`），所以可設定本身沒有偏離，寫死才是。
 # 值全是原本寫死的那幾個，測量與理由留在 `src/live-model.ts` 各常數的檔頭。
 #
-# 照抄不了的三處登記在 `src/settings/live-model.ts` 的檔頭：dsh 逐次請求解析端點，`ChatOpenAI` 表達
-# 不出來，退到起動期解一次；重試只有次數（`AsyncCaller` 不收退避參數），而且因為退避沒有上限，次數
-# 有上限；逾時是整個請求的逾時，不是 dsh 的串流閒置逾時。
+# 照抄不了的兩處登記在 `src/settings/live-model.ts` 的檔頭：dsh 逐次請求解析端點，`ChatOpenAI` 表達
+# 不出來，退到起動期解一次；重試掛在 `wrapModelCall`，不是 dsh 的 `agent/request-error`（LangChain 沒有步級掛點）。
 #
 # **`models` 是型錄**（#729），照 `llm-pi-ai` 一條路由的 `models` 清單（`packages/llm/llm-pi-ai/README.md:40-103`）：
 # 每筆帶窗口、輸出上限（`maxTokens`，設了就是這顆每次請求送出去的 `max_tokens`）、`input`（收哪些種類，這是對端點
@@ -541,15 +540,22 @@
     # dsh 預設 300 秒）。登記在 `src/settings/live-model.ts` 的檔頭「偏離三」。
     timeoutMs: 180000
     streamIdleTimeoutMs: 90000
-    maxRetries: 6
-    # 串流吐了內容之後才出錯（中段錯誤、斷線、停住）的整次重打（#520）：`maxRetries: 0` 關掉。退避的形狀照 dsh
-    # （`retry-policy.ts:14-17`）：倍增、單次封頂 10 秒、抖動 0.1；次數與起點比 dsh 保守（2 次、1 秒起，dsh 是 5 次、500 毫秒），
-    # 因為每次重打都重付整個回覆的費用。登記在 `src/settings/live-model.ts` 的檔頭「偏離五」。
-    streamRetry:
-      maxRetries: 2
-      baseDelayMs: 1000
-      maxDelayMs: 10000
-      jitterRatio: 0.1
+    # 模型請求失敗的重試（#1427，取代舊的頂層 `maxRetries` 與 `streamRetry` 兩套預算）：**首事件之前與之後共用這一份**，
+    # SDK 層不重試。形狀與欄位照 dsh 的 `retryPolicy`（`retry-policy.ts:14-17`）：倍增、單次封頂、抖動；`maxRetries: 0` 關掉。
+    # **次數取 6（dsh 預設 5）**：不計抖動的累計等待約 25.5 秒，蓋得過 2026-08-28 量到的 16 秒限流窗口——那次量的是
+    # `openai/gpt-oss-120b`，出貨的 nemotron 沒量過。代價：串流中段失敗最壞重付 6 次回覆。供應商給的 `retry-after`
+    # 不超過 `maxDelayMs` 就照它等，超過就放棄。登記在 `src/settings/live-model.ts` 的檔頭「偏離二」。
+    # `retryableCodes` 是 dsh 的預設五個碼：429（含沒帶 header 的）`RATE_LIMIT`、5xx `SERVER`、逾時 `TIMEOUT`、斷線 `TRANSPORT`、
+    # 空回覆 `EMPTY_RESPONSE`（我們今天沒有空回覆就重打的路徑，收著只為形狀一致）。`mode` 只收 `normal`（`always` 是登記在案
+    # 的偏離，見「偏離二」）；整個不寫 `retryPolicy` 就是下面這組值，寫了就要寫 `mode`。
+    retryPolicy:
+      mode: normal
+      maxRetries: 6
+      retryableCodes: [EMPTY_RESPONSE, RATE_LIMIT, SERVER, TIMEOUT, TRANSPORT]
+      backoff:
+        initialDelayMs: 500
+        maxDelayMs: 10000
+        jitterRatio: 0.1
     models:
       - id: 'nvidia/nemotron-3-super-120b-a12b'
         contextWindow: 700045

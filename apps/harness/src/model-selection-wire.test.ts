@@ -110,7 +110,7 @@ async function writePatch(baseUrl: string): Promise<string> {
       id: 'live-model',
       config: {
         baseUrl,
-        maxRetries: 0,
+        retryPolicy: { mode: 'normal', maxRetries: 0 },
         modelId: A,
         models: [entry(A), entry(B, { reasoningEfforts: false })],
       },

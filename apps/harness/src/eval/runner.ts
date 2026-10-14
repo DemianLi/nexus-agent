@@ -39,7 +39,7 @@ import { BaseCallbackHandler } from '@langchain/core/callbacks/base';
 import { AIMessage } from '@langchain/core/messages';
 import type { LLMResult } from '@langchain/core/outputs';
 import type { BaseMessage } from '@langchain/core/messages';
-import type { AgentModel, PluginEntry } from '@nexus/core';
+import type { AgentModel, PluginEntry, StreamRetryOptions } from '@nexus/core';
 import { createNexusAgent, HEADLESS_APPROVALS } from '../agent-factory.js';
 import { toAgentInvocation } from '../messages.js';
 import type { BenchmarkCase } from './dataset.js';
@@ -105,6 +105,11 @@ export class UsageTally extends BaseCallbackHandler {
 }
 
 export interface RunBenchmarkOptions {
+  /**
+   * 模型呼叫失敗的重試政策（[#1427](https://github.com/DemianLi/nexus-agent/issues/1427)）。SDK 層不重試了，所以真模型要靠它才會
+   * 重打；省略就是只打一次（CI 的假模型不需要）。eval 沒有會話日誌，所以只是打了更多次、不留痕跡。
+   */
+  readonly streamRetry?: StreamRetryOptions;
   /**
    * 每次模型呼叫結束就回報一次用量，**包括後來整輪失敗的那一輪**。省略即不記。
    *
@@ -176,6 +181,7 @@ export async function runBenchmarkCase(
     approvals: HEADLESS_APPROVALS,
     ...(options.systemPrompt === undefined ? {} : { systemPrompt: options.systemPrompt }),
     ...(options.recursionLimit === undefined ? {} : { recursionLimit: options.recursionLimit }),
+    ...(options.streamRetry === undefined ? {} : { streamRetry: options.streamRetry }),
   });
 
   try {

@@ -8,7 +8,6 @@ import {
   LIVE_API_KEY_ENV,
   DEFAULT_LIVE_BASE_URL,
   DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
-  DEFAULT_LIVE_MAX_RETRIES,
   DEFAULT_LIVE_MODEL_ID,
   DEFAULT_LIVE_TIMEOUT_MS,
   classifyFailedAttempt,
@@ -105,22 +104,22 @@ describe('真實供應商的 key 處理', () => {
   });
 
   /**
-   * **這條驗的是設定真的到得了重試層，不是我們有沒有寫那一行。**
+   * **這條驗的是設定真的到得了 `AsyncCaller`，不是我們有沒有寫那一行。**
    *
    * `maxRetries` 與 `onFailedAttempt` 都不是 `ChatOpenAI` 的公開屬性 —— 它們被拿去建
    * `AsyncCaller`。傳錯名字、或哪天基座換了收法，`createLiveModel` 一樣建得起來、
-   * 型別一樣是綠的，而重試會**靜默地沒有生效**。所以這裡直接問那個 caller。
+   * 型別一樣是綠的，而 #1427 的前提（SDK 層不重試，重試只在 `retryModelCall` 一層）會**靜默地沒有成立**：
+   * 兩層一起重試是乘法。所以這裡直接問那個 caller。
    */
-  it('重試設定到得了 AsyncCaller —— 不是只寫在建構參數裡', () => {
+  it('SDK 層不重試，onFailedAttempt 裝的是我們那支 —— 不是只寫在建構參數裡', () => {
     process.env[LIVE_API_KEY_ENV] = 'nvapi-test-value-not-a-real-key';
     const { caller } = createLiveModel(DEFAULTS) as unknown as {
       caller: { maxRetries: number; onFailedAttempt: (error: unknown) => void };
     };
 
-    expect(caller.maxRetries).toBe(DEFAULT_LIVE_MAX_RETRIES);
-    expect(DEFAULT_LIVE_MAX_RETRIES).toBeGreaterThan(0);
+    expect(caller.maxRetries).toBe(0);
 
-    // 裝上去的必須是**我們的**那個：對限流不拋（＝重試），對 4xx 拋（＝放棄）。
+    // 裝上去的必須是**我們的**那個：對限流不拋（＝交給外層那一層重試），對 4xx 拋（＝放棄）。
     // 只斷言 `typeof === 'function'` 的話，裝到基座的預設也會是綠的。
     expect(() =>
       caller.onFailedAttempt(Object.assign(new Error('429'), { status: 429 })),
@@ -340,7 +339,7 @@ describe('假端點回那個 400，到我們手上是 ContextOverflowError', () 
       model: 'openai/gpt-oss-20b',
       configuration: { baseURL },
       maxTokens: DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
-      maxRetries: DEFAULT_LIVE_MAX_RETRIES,
+      maxRetries: 0,
       ...(onFailedAttempt !== undefined && { onFailedAttempt }),
     });
   }
@@ -455,10 +454,10 @@ describe('模型下架（410）', () => {
  * **整條鏈走一遍：下架的模型只打一次，不是重試到底。**
  *
  * 量的是**送出去幾次請求**，不是錯誤長什麼樣——「快」才是這一段的產出，而它只有在
- * 請求數上看得見。真打量到的成本是 **106.7 秒**（2026-09-04，`DEFAULT_LIVE_MAX_RETRIES` 6 次，
+ * 請求數上看得見。真打量到的成本是 **106.7 秒**（2026-09-04，當時 SDK 層 6 次，
  * 退避 1／2／4／8／16／32 秒）。
  *
- * **這裡用 `maxRetries: 2` 而不是 {@link DEFAULT_LIVE_MAX_RETRIES}**：對照組要真的等完退避才數得到
+ * **這裡用 `maxRetries: 2` 而不是出廠的 6 次**：對照組要真的等完退避才數得到
  * 重試次數，6 次是 63 秒，那個代價不該由每次 `pnpm test` 付。2 次是 3 秒，而它證的是同一件
  * 事（有沒有重試），不是同一個數字。
  *
@@ -785,7 +784,7 @@ describe('串流內回報的錯誤（#516）', () => {
   /**
    * ## 明確未涵蓋，而且這兩條就是那個宣告
    *
-   * 這一層（翻成 HTTP 錯誤、交 SDK 重試）涵蓋的是**第一則 SSE 事件**。中段才出錯的串流在這一層仍然只打一次 ——
+   * 這一層（翻成 HTTP 錯誤、交 `onFailedAttempt` 回報）涵蓋的是**第一則 SSE 事件**。中段才出錯的串流在這一層仍然只打一次 ——
    * 它的整次重打在更上面的 `stream-retry`（#520，端到端的測試在 `stream-retry.test.ts`），這裡的 `ChatOpenAI` 直接
    * 呼叫不經過那一顆（偏離登記見 {@link withInbandStreamErrors} 的檔頭）。
    *
@@ -1363,7 +1362,7 @@ describe('空的助手內容照 dsh 送（#592）', () => {
           ),
         );
       }) as typeof fetch;
-      return { model: createLiveModel({ ...DEFAULTS, maxRetries: 0 }), sent };
+      return { model: createLiveModel(DEFAULTS), sent };
     }
 
     it('truncateArgs 重建的推理＋工具呼叫那則：送 null，不送 []', async () => {
@@ -1531,7 +1530,7 @@ describe('助手訊息不送 name（#1392）', () => {
           ),
         );
       }) as typeof fetch;
-      const model = createLiveModel({ ...DEFAULTS, maxRetries: 0 });
+      const model = createLiveModel(DEFAULTS);
       await model.invoke([
         new HumanMessage('一'),
         new AIMessage({ content: '好。', name: 'model' }),

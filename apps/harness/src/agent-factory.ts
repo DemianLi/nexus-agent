@@ -230,8 +230,9 @@ export interface CreateNexusAgentOptions {
    */
   readonly modelUsage?: boolean;
   /**
-   * 串流第一則事件之後才出錯的整次重打預算（[#520](https://github.com/DemianLi/nexus-agent/issues/520)），原樣轉給
-   * `FoldOptions.streamRetry`。省略（或 `maxRetries` 為 0）就不重打。產品路徑由 `settings/live-model.ts` 的 `streamRetry` 給。
+   * 模型呼叫失敗的整次重打政策（[#520](https://github.com/DemianLi/nexus-agent/issues/520)、
+   * [#1427](https://github.com/DemianLi/nexus-agent/issues/1427)：首事件之前與之後共用），原樣轉給
+   * `FoldOptions.streamRetry`。省略（或 `maxRetries` 為 0）就不重打。產品路徑由 `settings/live-model.ts` 的 `retryPolicy` 給。
    */
   readonly streamRetry?: StreamRetryOptions;
   /**
