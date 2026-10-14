@@ -893,8 +893,10 @@ async function startServer(
       } catch (error) {
         // 這一條組裝時必掛的列掉了：這條 thread 建不起來之前，先把那一筆記進紀錄（#1414；等鎖上限 2 秒）。
         if (error instanceof AssemblyDropError && assembledFrom !== undefined) {
+          // 「新掉」同重讀那一支的判斷（#1423）：上一次組裝或重讀還掛著、這一次掉了。
+          const fresh = threadPluginList.noteAssemblyFailure(error.dropped);
           failureRecorder.note(
-            failedRowsOf(assemblyDropsOf(assembledFrom.loaded, error.dropped)),
+            failedRowsOf(assemblyDropsOf(assembledFrom.loaded, error.dropped), fresh),
             'thread-assembly',
           );
           await failureRecorder.flush();
@@ -902,9 +904,9 @@ async function startServer(
         await release().catch(() => {});
         throw error;
       }
-      threadPluginList.noteDropped(threadList, built.dropped);
+      const newlyDropped = threadPluginList.noteDropped(threadList, built.dropped);
       failureRecorder.note(
-        failedRowsOf(assemblyDropsOf(threadList.loaded, built.dropped)),
+        failedRowsOf(assemblyDropsOf(threadList.loaded, built.dropped), newlyDropped),
         'thread-assembly',
       );
       // **啟動時沒掉、這一條組裝時才掉的列**（卡上第 6 項，例如跟這條 thread 的工作區有關的 `apply`）：同一套規則，

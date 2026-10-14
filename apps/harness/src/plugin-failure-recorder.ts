@@ -59,15 +59,25 @@ export interface FailedRow {
   readonly stage: 'module' | 'config' | 'apply' | 'requires';
   /** 原因原文，只進紀錄。 */
   readonly message: string;
-  /** 上一次讀（或啟動）時這一列還掛著嗎；沒有資料就省略。 */
+  /**
+   * 上一次組裝或重讀時這一列還掛著、這一次掉了嗎（#1423）；起點是啟動那一份的結果。上一次就已經掉了是 `false`，
+   * 沒有資料就省略。
+   */
   readonly newlyDropped?: boolean;
 }
 
 /** 把掉了的列（`StartupDrop`）換成 {@link FailedRow}。不帶 `entry`：那是組裝用的物件，不進紀錄。 */
 export function failedRowsOf(
   drops: readonly Pick<FailedRow, 'id' | 'module' | 'stage' | 'message'>[],
+  newlyDropped?: ReadonlySet<string>,
 ): FailedRow[] {
-  return drops.map(({ id, module, stage, message }) => ({ id, module, stage, message }));
+  return drops.map(({ id, module, stage, message }) => ({
+    id,
+    module,
+    stage,
+    message,
+    ...(newlyDropped !== undefined && { newlyDropped: newlyDropped.has(id) }),
+  }));
 }
 
 /** 記錄器。 */
@@ -133,6 +143,7 @@ export function createFailureRecorder(options: FailureRecorderOptions): FailureR
     for (const row of rows) {
       const context: FailureContext = {
         discoveredAt: at,
+        stage: row.stage,
         ...(row.newlyDropped !== undefined && { newlyDropped: row.newlyDropped }),
       };
       const trigger = failureTriggerOf(records, row, context);
