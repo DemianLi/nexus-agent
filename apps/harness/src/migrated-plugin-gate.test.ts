@@ -183,7 +183,7 @@ export default [{ files: ['**/*.ts'] }, ...pluginLintConfig.map((c) => ({ ...c, 
     expect(violations.every((v) => v.check === 'lint')).toBe(true);
   });
 
-  it('lint：沒有 eslint.config.js 的話，ESLint 往上找到的是別人的設定，量得出來沒生效', async () => {
+  it('lint：找不到設定也算沒生效（臨時目錄往上沒有任何 eslint.config.js，ESLint 拋錯、被接成違規）', async () => {
     const root = fakeRepo();
     rmSync(join(root, 'packages', 'nexus-plugin-fake', 'eslint.config.js'));
     const { violations } = await gate(root);

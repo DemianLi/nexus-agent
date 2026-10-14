@@ -110,7 +110,7 @@ const VIOLATIONS: readonly (Violation & { readonly expected: () => string })[] =
   {
     id: 'process-on',
     names: /行程層級的監聽器/,
-    suggests: /ctx\.on/,
+    suggests: /ctx\.effect/,
     expected: () => messageOfProperty('process-on'),
     code: ["export function apply() { process.on('exit', () => {}); }"],
   },
@@ -124,14 +124,14 @@ const VIOLATIONS: readonly (Violation & { readonly expected: () => string })[] =
   {
     id: 'process-addListener',
     names: /行程層級的監聽器/,
-    suggests: /ctx\.on/,
+    suggests: /ctx\.effect/,
     expected: () => messageOfProperty('process-addListener'),
     code: ["export function apply() { process.addListener('exit', () => {}); }"],
   },
   {
     id: 'process-prependListener',
     names: /行程層級的監聽器/,
-    suggests: /ctx\.on/,
+    suggests: /ctx\.effect/,
     expected: () => messageOfProperty('process-prependListener'),
     code: ["export function apply() { process.prependListener('exit', () => {}); }"],
   },
@@ -169,7 +169,7 @@ const VIOLATIONS: readonly (Violation & { readonly expected: () => string })[] =
   {
     id: 'import-process-listener',
     names: /行程層級的監聽器/,
-    suggests: /ctx\.on/,
+    suggests: /ctx\.effect/,
     expected: () => messageOfProperty('process-on'),
     code: ["import { on } from 'node:process'; export const x = on;"],
   },
@@ -281,6 +281,27 @@ export function apply(ctx: Context): void {
 
   it('用 ctx.effect／ctx.on／ctx.get、import @nexus/sdk 與定義套件；函式內的 let、Map 與 setTimeout 都放行', async () => {
     expect(await messagesOf(COMPLIANT)).toEqual([]);
+  });
+
+  it('訊息寫的「改用什麼」走得通：`ctx.effect` 裡加窄例外、成對撤除，lint 0 則訊息（沒用到的例外指令也會報，所以也證明例外有被用到）', async () => {
+    const code = `
+import type { Context } from '@nexus/cordis';
+
+export function apply(ctx: Context): void {
+  ctx.effect(() => {
+    // eslint-disable-next-line no-restricted-globals -- 輪詢外部狀態，沒有不經全域的計時器服務
+    const timer = setInterval(() => {}, 1000);
+    return () => clearInterval(timer);
+  }, 'poll');
+  const onSignal = (): void => {};
+  ctx.effect(() => {
+    // eslint-disable-next-line no-restricted-properties -- 宿主沒有提供行程事件的服務
+    process.on('SIGUSR2', onSignal);
+    return () => process.off('SIGUSR2', onSignal);
+  }, 'signal');
+}
+`;
+    expect(await messagesOf(code)).toEqual([]);
   });
 
   it('`@nexus/cordis`、`@nexus/sdk`、`@nexus/tools` 不是 `@nexus/core`：前綴相近的不誤殺', async () => {

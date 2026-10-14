@@ -175,16 +175,21 @@ import base from '../../eslint.config.js';
 export default [...base, ...pluginLintConfig];
 ```
 
-外部插件在自己的 CI 一樣這樣用。這個檔會被 `eslint.config.js` 用 Node 原生載入（它是 `.ts`），要求 Node 的 type
-stripping 開著（本 repo 的 `engines` 是 `>=22.19.0`，22.18 起預設開）。
+這個檔會被 `eslint.config.js` 用 Node 原生載入（它是 `.ts`），要求 Node 的 type stripping 開著（本 repo 的 `engines`
+是 `>=22.19.0`，22.18 起預設開）。
+
+**目前只有 monorepo 內的插件拿得到。** Node 不對 `node_modules` 底下的檔做 type stripping：`pnpm pack` 出來的 tarball
+裝進空目錄，`import('@nexus/sdk/lint')` 在 Node 22.19.0 與 25 都丟 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`
+（`import('@nexus/sdk')` 同樣，因為整包 SDK 今天出貨的是 TS 原始碼）。決議說外部插件在自己的 CI 也要拿得到這份設定，
+所以 **SDK 對外發佈前要先建置成 JS**，這是那一刀的事，不在這張。
 
 | 規則 | 擋什麼 | 改用什麼 |
 | --- | --- | --- |
 | `ctx-root` | `ctx.root`（含 `ctx['root']`、`this.ctx.root`、`const { root } = ctx`） | `inject` 宣告服務，`apply` 裡 `ctx.get(token)` |
 | `ctx-registry` | `ctx.registry`（同上各種寫法） | 服務的 `register()`（內部包 `ctx.effect`）、`inject` 後 `ctx.get(token)` |
 | `internal-name` | 以 `internal/` 開頭的字串或樣板字串（服務名、事件名） | 公開的事件用 `ctx.on`，登記東西用 `ctx.effect` |
-| `process-on` ／ `process-once` ／ `process-addListener` ／ `process-prependListener` | `process.on`／`once`／`addListener`／`prependListener`，以及從 `node:process` 具名 import 它們 | 宿主提供服務、插件經 `ctx.on` 訂；必須時窄例外並把成對的撤除包進 `ctx.effect` |
-| `setInterval`（含 `globalThis.`／`global.` 與從 `node:timers` 具名 import） | 全域 `setInterval` | 計時器包進 `ctx.effect`，清除函式裡撤掉 |
+| `process-on` ／ `process-once` ／ `process-addListener` ／ `process-prependListener` | `process.on`／`once`／`addListener`／`prependListener`，以及從 `node:process` 具名 import 它們 | 今天宿主沒有行程事件的服務；必須用時，`ctx.effect` 裡掛、回傳撤除函式（`process.off`），那一行寫窄例外 |
+| `setInterval`（含 `globalThis.`／`global.` 與從 `node:timers` 具名 import） | 全域 `setInterval` | 今天沒有不經全域的計時器服務（vendor 的 Cordis 沒有）；必須用時，`ctx.effect` 裡呼叫、回傳清除函式（`clearInterval`），那一行寫窄例外 |
 | `top-level-let-var` | 模組頂層的 `let`／`var`（含 `export let`） | 狀態放進 `apply` 的閉包，生命週期交給 `ctx.effect` |
 | `top-level-collection` | 模組頂層的 `new Map`／`Set`／`WeakMap`／`WeakSet`（含 `export const`、`as`／`satisfies` 包著的） | 放進 `apply` 的閉包 |
 | `import-nexus-core`（含 `import type`、`export … from`、動態 `import()`） | import `@nexus/core` 與它的子路徑 | `@nexus/sdk` 與服務定義套件（例如 `@nexus/tools`） |
@@ -193,15 +198,27 @@ stripping 開著（本 repo 的 `engines` 是 `>=22.19.0`，22.18 起預設開�
 理由不成立）與 `setTimeout`（要先確認 vendor 的 Cordis 有沒有對應的計時器服務，由第一顆真的需要計時器的遷移卡提出）。
 選配服務與 capabilities 留給 capabilities 那張卡。
 
-**例外一律窄**：`// eslint-disable-next-line <規則> -- <理由>`，不整檔關、不整條關。PR 內文逐條列出。後面又寫一份
+**例外一律窄**：`// eslint-disable-next-line <規則> -- <理由>`，不整檔關、不整條關。PR 內文逐條列出。`setInterval` 與行程
+監聽器今天就只有這一條路（`lint.test.ts` 的 B 組實跑這個寫法：`ctx.effect` 裡呼叫、回傳清除函式、那一行寫例外，lint 0
+則訊息）：
+
+```ts
+ctx.effect(() => {
+  // eslint-disable-next-line no-restricted-globals -- 輪詢外部狀態，沒有不經全域的計時器服務
+  const timer = setInterval(poll, 1000);
+  return () => clearInterval(timer);
+}, 'poll');
+```
+
+後面又寫一份
 `no-restricted-syntax` 等於把整份蓋掉（flat config 的規則不合併），gate 量的是解析後的設定，會紅。
 
 **已知的洞**（Q3 (a) 的代價）：純語法認不出別名。
 
 - `const c = ctx; c.root`、把參數取別的名字、從別的名字解構，抓不到；它只認叫 `ctx` 的識別字。
 - 頂層的 `const state = { count: 0 }`（物件本身可變）不在清單裡。
-- 頂層的**常數查表**也會中 `top-level-collection`（`const KNOWN = new Set([...])`）：語法分不出它是不是只讀，遷移時用
-  窄例外寫理由。
+- 頂層的**常數查表**也會中 `top-level-collection`（`const KNOWN = new Set([...])`）：語法分不出它是不是只讀。**不為它
+  放寬**（PM 決定）：遷移卡碰到時二選一，把它搬進 `apply` 的閉包，或寫一行窄例外並寫理由。
 - 這些由審查與一致性套件的 `unload` 那一格補：副作用沒走 `ctx.effect`，卸載後就有殘留，`unload` 會紅。真的有人繞過，
   再升級成帶型別的規則。
 

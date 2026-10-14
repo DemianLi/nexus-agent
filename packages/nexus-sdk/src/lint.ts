@@ -128,10 +128,10 @@ export interface PluginLintPropertyRestriction {
 }
 
 const PROCESS_MESSAGE =
-  '插件不准自己掛行程層級的監聽器：卸載時沒有人撤，掛幾次留幾個。要訂行程事件，請宿主提供服務、插件經 `ctx.on` 訂它；真的必須時，寫窄例外並把成對的撤除包進 `ctx.effect`。';
+  '插件不准自己掛行程層級的監聽器：卸載時沒有人撤，掛幾次留幾個。今天宿主沒有提供行程事件的服務；必須用時，在 `ctx.effect` 裡掛、回傳撤除函式（`process.off`），並在該行寫窄例外 `// eslint-disable-next-line <被報的規則> -- <理由>`。';
 
 const INTERVAL_MESSAGE =
-  '插件不准用全域 `setInterval`：卸載後它還會一直跑。計時器包進 `ctx.effect` 並在回傳的清除函式裡撤掉；必須呼叫全域的時候，寫窄例外並成對 `clearInterval`。';
+  '插件不准直接用全域 `setInterval`：卸載後它還會一直跑。今天沒有不經全域的計時器服務（vendor 的 Cordis 沒有）；必須用時，在 `ctx.effect` 裡呼叫、回傳清除函式（`clearInterval`），並在該行寫窄例外 `// eslint-disable-next-line <被報的規則> -- <理由>`。';
 
 /** 屬性限制。 */
 export const pluginLintPropertyRestrictions: readonly PluginLintPropertyRestriction[] = [
