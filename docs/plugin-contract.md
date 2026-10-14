@@ -351,10 +351,14 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
 
 ### 已知限制
 
-- **插件自我停用只在記憶體**（PM 決議）：插件自己 `ctx.fiber.dispose()`，Loader 的 case 7 把那一列在樹上標成 `disabled`，
-  Include 不寫檔、也不進變更紀錄。清單是「想要的狀態」，所以下一條 thread 同步時會把它重新掛上、它再停用一次——
-  **每條 thread 閃動一次**。要不要把自我停用也寫進變更紀錄，等 demian 決定（`echo-on-tree-edges.test.ts` 的閃動那一條釘住
-  今天的行為）。
+- **插件自我停用只在行程裡停著**（[#1424](https://github.com/DemianLi/nexus-agent/issues/1424)，demian 決議 Q1 (b)、Q2 (a)）：
+  插件自己 `ctx.fiber.dispose()`，Loader 的 case 7 把那一列在樹上標成 `disabled`；Include 不寫檔，所以只改記憶體。
+  Loader 在 case 7 呼叫點發 `loader/self-disable`（`vendor/README.md` 第 10 條；`ctx.fiber.update()` 走的 `internal/commit`
+  帶同樣的參數，所以只能在呼叫點區分），`PluginTree` 記下當時的宣告（模組名＋設定）：**宣告沒變就不再推 `epoch`、不重掛**，
+  清單判成 `off`、插件列標 `disabled`（不進 `dropped`，所以沒有 `failed`）。宣告改了或重啟才再試一次。
+  序列化的出口是變更紀錄的 `self-disabled`（只記不折，`isAcceptedRecord` 為 false、`touchesRow` 不算碰到那一列），
+  由 serve 掛在 `PluginTree.onSelfDisable` 上的記錄器寫；沒有紀錄檔就不記（閃動照樣止住，靠的是記憶體那一頭）。
+  不做：`ctx.fiber.update(config)` 的持久化、非同步的自我停用窗口（記在迷霧裡）。
 - **`cordis.serve.yml` 那一層不經 Include**：Include 只有一個 `path`，serve 專屬層是相容層疊在出貨層後面的另一個檔。那一層裡的
   函式插件上不了樹，會在讀清單時掉在 `apply` 階段並指名原因；今天那一層沒有函式插件。要放進去，得讓 Include 讀多個檔或
   把那一層併進出貨檔。

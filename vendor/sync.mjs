@@ -185,6 +185,69 @@ function hostResolver(source, file) {
   return source;
 }
 
+/**
+ * 本地修改第 10 條（loader）：自我停用（case 7）交給宿主，與樹拆卸時不誤認（case 5）。
+ *
+ * - case 5 加 dsh 同一條的 `UNLOADING` 條件：樹的擁有者還在卸載時，子列的拆卸不是自我停用（dsh loader case 5、dsh vendor/README 第 15 條）。
+ * - case 7 在 `tree.commit` 之後發一個 `loader/self-disable` 事件。`commit` 的參數與 `internal/commit`（插件 `ctx.fiber.update`）
+ *   送出的一模一樣，宿主在 `commit` 那一頭分不出來，只能在呼叫點這裡區分。
+ *
+ * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 vendor/README.md。
+ */
+function selfDisableHook(source) {
+  const once = (text, from, to) => {
+    const parts = text.split(from);
+    if (parts.length !== 2) throw new Error(`loader 本地修改沒命中（index.ts，${parts.length - 1} 處）：${from.slice(0, 60)}`);
+    return parts.join(to);
+  };
+  let out = source;
+  out = once(
+    out,
+    "import { Context, Inject, Service } from '@nexus/cordis'",
+    "import { Context, FiberState, Inject, Service } from '@nexus/cordis'",
+  );
+  out = once(
+    out,
+    `    'loader/partial-dispose'(entry: Entry, legacy: Partial<EntryOptions>, active: boolean): void
+`,
+    `    'loader/partial-dispose'(entry: Entry, legacy: Partial<EntryOptions>, active: boolean): void
+    /**
+     * nexus local modification: emitted only from case 7 below (the plugin disposed itself with \`ctx.fiber.dispose()\`),
+     * after \`entry.options.disabled\` was set and the in-memory commit ran. \`legacy\` is the entry's options *before* it
+     * was disabled, i.e. the declaration the plugin was mounted with.
+     */
+    'loader/self-disable'(entry: Entry, legacy: Partial<EntryOptions>): void
+`,
+  );
+  out = once(
+    out,
+    `      // case 5: the entry's tree is being disposed
+      if (!fiber.entry.parent.tree.ctx.fiber.uid) return
+`,
+    `      // case 5: the entry's tree is being disposed
+      // nexus local modification: also while the tree owner is still UNLOADING (dsh loader case 5), so a child unload
+      // caused by the owner's teardown is never mistaken for a self-disable.
+      const treeOwner = fiber.entry.parent.tree.ctx.fiber
+      if (!treeOwner.uid || treeOwner.state === FiberState.UNLOADING) return
+`,
+  );
+  out = once(
+    out,
+    `      entry.parent.tree.commit({ id: entry.options.id, group: entry.parent, options: entry.options, legacy })
+    })
+
+    ctx.plugin(isolate)`,
+    `      entry.parent.tree.commit({ id: entry.options.id, group: entry.parent, options: entry.options, legacy })
+      // nexus local modification: \`commit\` above carries the same arguments as \`internal/commit\` (\`ctx.fiber.update\`),
+      // so the host can only tell a self-disable apart here, at the call site.
+      ctx.emit('loader/self-disable', entry, legacy)
+    })
+
+    ctx.plugin(isolate)`,
+  );
+  return out;
+}
+
 const work = mkdtempSync(join(tmpdir(), 'vendor-sync-'));
 try {
   // 1. 上游原樣。
@@ -214,6 +277,11 @@ try {
   for (const file of ['index.ts', 'config/tree.ts']) {
     const path = join(out, 'loader/src', file);
     writeFileSync(path, hostResolver(readFileSync(path, 'utf8'), file));
+  }
+  // 本地修改第 10 條：只動 `index.ts`。
+  {
+    const path = join(out, 'loader/src/index.ts');
+    writeFileSync(path, selfDisableHook(readFileSync(path, 'utf8')));
   }
 
   if (flag === '--check') {

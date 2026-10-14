@@ -1,5 +1,6 @@
 /**
- * serve 把「掛不上的列」記進變更紀錄的那一支（[#1414](https://github.com/DemianLi/nexus-agent/issues/1414)，Part of #1385）。
+ * serve 把「掛不上的列」與「插件自己停用了自己」記進變更紀錄的那一支
+ * （[#1414](https://github.com/DemianLi/nexus-agent/issues/1414)、[#1424](https://github.com/DemianLi/nexus-agent/issues/1424)，Part of #1385）。
  *
  * 決議 `.docs/decisions-2026-10-11.md` §3-4 第 13 條（Q27 (b)）：插拔出錯時，結構化錯誤要進稽核紀錄。紀錄多一種只記不折
  * 的 `failed`（`plugin-journal.ts`），這裡是它的寫入者：serve 在三個地方發現某一列掛不上（啟動試組、每條 thread 組裝、
@@ -26,7 +27,14 @@
  * - **{@link FailureRecorder.note} 不等寫完**；只有「要拋之前」才 {@link FailureRecorder.flush}（必掛的列掉了，起不來
  *   或那條 thread 建不起來之前，先把那一筆寫進去；等的時間仍以 2 秒為上限）。
  *
- * ## 日誌不帶原因
+ * ## `self-disabled`（#1424）
+
+Loader 的 case 7 在呼叫點發的 `loader/self-disable` 經 `PluginTree.onSelfDisable` 進來，記一筆只記不折的 `self-disabled`
+（列 id、模組名；actor 沿用 `serve`）。**規則同 `failed` 的第一二條**：紀錄檔不在就什麼都不做、不建檔，一行日誌都不出；
+等鎖上限 2 秒；不 reject、不等寫完。**去重不在這裡**：同一個行程裡同一列同一份宣告只會被叫到一次（樹的記憶，
+`plugin-tree.ts`），重啟後那一列又自己停用就是新的事件、再記一筆。閃動在樹的記憶那一頭已經止住，所以沒有紀錄檔不影響行為。
+
+## 日誌不帶原因
  *
  * 原因原文只進紀錄（0600）。這支加的日誌只講「記了」「沒寫成」與列 id，不印原因：原因可能引到設定值的一部分。
  * 既有的 `describeDrop` 日誌行照舊（它早就在了）。
@@ -88,10 +96,19 @@ export function failedRowsOf(
   }));
 }
 
+/** 插件自己停用了自己的那一列（#1424）。 */
+export interface SelfDisabledRow {
+  readonly id: string;
+  /** 模組 specifier。 */
+  readonly module: string;
+}
+
 /** 記錄器。 */
 export interface FailureRecorder {
   /** 排進去就回，不等寫完。 */
   note(rows: readonly FailedRow[], at: FailureDiscovery): void;
+  /** 記一筆 `self-disabled`（#1424）；排進去就回，不等寫完。 */
+  noteSelfDisabled(row: SelfDisabledRow): void;
   /** 等排進去的都處理完（含失敗）。不 reject。 */
   flush(): Promise<void>;
 }
@@ -192,11 +209,49 @@ export function createFailureRecorder(options: FailureRecorderOptions): FailureR
     }
   }
 
+  async function handleSelfDisabled(row: SelfDisabledRow): Promise<void> {
+    let present: boolean;
+    try {
+      present =
+        readJournal(path, { check: (file) => assertPrivateFile(file, JOURNAL_FILE_ROLE) }) !==
+        undefined;
+    } catch {
+      // 紀錄壞了、權限不對：讀清單那一步早就拋過，這裡不再多講一次。
+      return;
+    }
+    // 紀錄檔不在：不建檔、不出聲（#1413 的不變量）；閃動在樹的記憶那一頭已經止住。
+    if (!present) return;
+    try {
+      const written = await appendJournalRecord(
+        path,
+        {
+          actor: { kind: 'serve', effective },
+          ...(options.now !== undefined && { now: options.now }),
+          warn: () => undefined,
+          check: (file) => assertPrivateFile(file, JOURNAL_FILE_ROLE),
+          waitMs,
+        },
+        (): JournalBody => ({ op: 'self-disabled', id: row.id, name: row.module }),
+      );
+      if (written !== undefined) {
+        log(
+          `[變更紀錄] ${row.id} 自己停用了自己（行程內停著，重啟或它的宣告改了才再試），已記成第 ${String(written.seq)} 筆 self-disabled`,
+        );
+      }
+    } catch (error) {
+      const why = error instanceof Error ? error.message : String(error);
+      log(`[變更紀錄] ${row.id} 自己停用了自己，但這一筆 self-disabled 沒寫成：${why}`);
+    }
+  }
+
   return {
     note(rows, at) {
       if (rows.length === 0) return;
       const batch = [...rows];
       tail = tail.then(() => handle(batch, at)).catch(() => undefined);
+    },
+    noteSelfDisabled(row) {
+      tail = tail.then(() => handleSelfDisabled(row)).catch(() => undefined);
     },
     flush() {
       return tail;

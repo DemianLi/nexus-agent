@@ -170,6 +170,61 @@ describe('記一筆 failed（驗收 C、D）', () => {
   });
 });
 
+describe('記一筆 self-disabled（#1424）', () => {
+  const quitter = { id: 'quitter', module: 'file:///p/quitter.mjs' };
+  const selfDisabledOf = (dir: string): JournalRecord[] =>
+    (readJournal(journalPathOf(dir))?.records ?? []).filter(
+      (entry) => entry.op === 'self-disabled',
+    );
+
+  it('紀錄檔不在：不建檔、不建鎖檔、一行日誌都不出', async () => {
+    const dir = home();
+    const lines: string[] = [];
+    const recorder = recorderOf(dir, lines);
+    recorder.noteSelfDisabled(quitter);
+    await recorder.flush();
+    expect(existsSync(journalPathOf(dir))).toBe(false);
+    expect(existsSync(`${journalPathOf(dir)}.lock`)).toBe(false);
+    expect(lines).toEqual([]);
+  });
+
+  it('紀錄檔在：記 id、模組名、actor serve 與有效帳號；折出來的清單不變', async () => {
+    const dir = home();
+    seedHomePatch(dir, TODO_DISABLED);
+    const before = readJournal(journalPathOf(dir));
+    const lines: string[] = [];
+    const recorder = recorderOf(dir, lines);
+    recorder.noteSelfDisabled(quitter);
+    await recorder.flush();
+    const [entry, ...rest] = selfDisabledOf(dir);
+    expect(rest).toEqual([]);
+    expect(entry).toMatchObject({
+      op: 'self-disabled',
+      seq: 2,
+      id: 'quitter',
+      name: 'file:///p/quitter.mjs',
+      actor: { kind: 'serve', effective: 'svc' },
+    });
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain('quitter');
+    expect(lines[0]).toContain('第 2 筆 self-disabled');
+    // 只記不折：前面的紀錄原樣、折出來的 patch 與沒有它時相同。
+    const after = readJournal(journalPathOf(dir));
+    expect(after?.records.slice(0, 1)).toEqual(before?.records);
+    expect(after?.records).toHaveLength(2);
+  });
+
+  it('去重不在記錄器：樹每次事件都叫一次，叫幾次就記幾筆（樹保證同一份宣告只叫一次）', async () => {
+    const dir = home();
+    seedHomePatch(dir, TODO_DISABLED);
+    const recorder = recorderOf(dir);
+    recorder.noteSelfDisabled(quitter);
+    recorder.noteSelfDisabled({ ...quitter, module: 'file:///p/other.mjs' });
+    await recorder.flush();
+    expect(selfDisabledOf(dir)).toHaveLength(2);
+  });
+});
+
 describe('並發與等鎖', () => {
   it('兩個 serve 同時看到同一件事：鎖裡再查一次，只記一筆', async () => {
     const dir = home();

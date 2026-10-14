@@ -408,6 +408,7 @@ describe('rejected、failed：只記不折（#1414 驗收 H）', () => {
       { ...FAILED, id: 'limit', triggerSeq: 3 },
       BASE[2] as JournalBody,
       { ...REJECTED, requested: 'config-reset', id: 'limit' },
+      { op: 'self-disabled', id: 'todo', name: '@nexus/plugin-todo' },
       BASE[3] as JournalBody,
       BASE[4] as JournalBody,
     ];
@@ -417,14 +418,14 @@ describe('rejected、failed：只記不折（#1414 驗收 H）', () => {
     );
     const text = noisy
       .map((body, index) =>
-        record(index + 1, body).op === 'failed'
+        record(index + 1, body).op === 'failed' || record(index + 1, body).op === 'self-disabled'
           ? { ...record(index + 1, body), actor: SERVE }
           : record(index + 1, body),
       )
       .map((entry) => `${JSON.stringify(entry)}\n`)
       .join('');
     const parsed = parseJournal(Buffer.from(text), 'journal');
-    expect(parsed.records.map((entry) => entry.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+    expect(parsed.records.map((entry) => entry.seq)).toEqual([1, 2, 3, 4, 5, 6, 7, 8, 9]);
     expect(foldJournal(parsed.records)).toEqual(foldJournal(BASE));
   });
 
@@ -476,6 +477,7 @@ describe('isAcceptedRecord：哪些 op 算被接受的（#1423）', () => {
     patch: true,
     rejected: false,
     failed: false,
+    'self-disabled': false,
   };
 
   it.each(Object.entries(EXPECTED))('%s → %s', (op, accepted) => {
@@ -488,6 +490,21 @@ describe('failureTriggerOf：失敗記在哪一筆上（#1414 Q2）', () => {
   const TODO = { id: 'todo', module: '@nexus/plugin-todo' };
   const patchOf = (seq: number, patch: Record<string, unknown>): JournalRecord =>
     record(seq, { op: 'patch', patch });
+
+  it('self-disabled 不算碰到那一列：它是插件自己停的，不是誰改了它（#1424）', () => {
+    const records = [
+      record(1, DISABLE_TODO),
+      record(2, { op: 'self-disabled', id: 'todo', name: '@nexus/plugin-todo' }),
+    ];
+    expect(failureTriggerOf(records, TODO, CONTEXT)).toBe(1);
+    expect(
+      failureTriggerOf(
+        [record(1, { op: 'self-disabled', id: 'todo', name: '@nexus/plugin-todo' })],
+        TODO,
+        CONTEXT,
+      ),
+    ).toBeUndefined();
+  });
 
   it('最後一筆碰到那一列、被接受的紀錄；rejected 與 failed 不算', () => {
     const records = [
