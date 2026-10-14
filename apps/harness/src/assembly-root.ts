@@ -35,7 +35,7 @@ import type { BackgroundParentPort, ModelChoice } from './background-subagents.j
 import { composeAttachSessions } from './session-attach.js';
 import type { AttachSessions } from './session-attach.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
-import { liveModelPlugin } from './settings/live-model.js';
+import { liveModelPlugin, streamRetryOptionsOf } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
@@ -907,8 +907,9 @@ export async function createCliAgent(
       // 子代理定義的 `model`／`reasoningEffort` 在註冊那一刻對型錄驗（#328 第 3 項）；沒有每會話選擇（假模型）就沒有型錄，驗證函式走預設的全拒。
       validateSubagent: subagentDefinitionValidator(liveModel.models),
     }),
-    // 串流中段失敗的整次重打（#520）。只有真模型的 fetch 層會回報失敗，腳本模型照給也無事發生。
-    streamRetry: liveModel.streamRetry,
+    // 模型呼叫失敗的整次重打（#520、#1427）：首事件之前與之後共用 `retryPolicy` 這一份。只有真模型的 fetch 層與
+    // `onFailedAttempt` 會回報失敗，腳本模型照給也無事發生。
+    streamRetry: streamRetryOptionsOf(liveModel.retryPolicy),
     ...(backend !== undefined && { backend }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
     systemPrompt: SYSTEM_PROMPT,
@@ -1037,6 +1038,8 @@ function titleLlmFor(
     route: { provider: liveModel.baseUrl, model: modelId },
     config,
     limits,
+    // 標題不在模型呼叫圖裡，SDK 層又不重試了（#1427）：自己吃同一份政策，不記日誌。
+    retry: streamRetryOptionsOf(liveModel.retryPolicy),
     // **標題自己指定了模型就不跟**（`config.modelId`）；沒指定才沿用觸發它的那次主請求走的（#723，照 dsh）。
     // 主請求走預設、或路由不在型錄裡（續接的會話選過後來被拿掉的模型）時回 `undefined`，用上面預設那顆。
     ...(options.followMainRoute &&

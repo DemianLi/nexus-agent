@@ -141,7 +141,7 @@ function configFor(baseUrl: string) {
   });
   return liveModelConfigSchema.parse({
     baseUrl,
-    maxRetries: 0,
+    retryPolicy: { mode: 'normal', maxRetries: 0 },
     modelId: A,
     models: [
       entry(A),

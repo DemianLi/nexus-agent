@@ -68,7 +68,7 @@ async function streamOnce(
   const upstream = await pacedOpenAi(pacing);
   try {
     const model = createLiveModel(
-      liveModelConfigSchema.parse({ baseUrl: upstream.baseUrl, maxRetries: 0, ...timeouts }),
+      liveModelConfigSchema.parse({ baseUrl: upstream.baseUrl, retryPolicy: { mode: 'normal', maxRetries: 0 }, ...timeouts }),
     );
     const started = Date.now();
     let text = '';

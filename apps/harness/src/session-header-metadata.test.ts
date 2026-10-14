@@ -98,7 +98,7 @@ function canaryPatch(baseUrl: string): string {
     '  config:',
     `    baseUrl: '${baseUrl}'`,
     `    modelId: '${DEFAULT_LIVE_MODEL_ID}'`,
-    '    maxRetries: 0',
+    '    retryPolicy: { mode: normal, maxRetries: 0 }',
     '    models:',
     `      - id: '${DEFAULT_LIVE_MODEL_ID}'`,
     '        contextWindow: 700045',

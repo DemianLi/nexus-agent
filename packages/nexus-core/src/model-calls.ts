@@ -80,7 +80,6 @@
 import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { runInRetryScope } from './llm-retry.js';
 import { toLoggedMessage } from './logged-message.js';
 import { noteModelCallReplied, runInModelCall, withModelCall } from './model-call-scope.js';
 import { routeOfModel } from './model-route.js';
@@ -148,11 +147,9 @@ export function createModelCallRecorder(sessions: {
       // 沒有正常回來的方式（#1022）：拋錯、或使用者按了停止。正常回來沒有。
       let outcome: ModelCallOutcome | undefined;
       try {
-        // 這次呼叫的識別（`model/start` 的 `seq`）往內傳給用量與重試的寫入點，往外填給摘要器的量測
-        // （{@link ./model-call-scope.ts}）。重試範圍包住 handler：adapter 在裡面回報失敗與重開（{@link ./llm-retry.ts}）。
-        const response = await runInModelCall(log, modelCall, () =>
-          runInRetryScope(log, () => handler(request)),
-        );
+        // 這次呼叫的識別（`model/start` 的 `seq`）往內傳給用量的寫入點，往外填給摘要器的量測
+        // （{@link ./model-call-scope.ts}）。重試在這一格外面（{@link ./stream-retry.ts}），每次嘗試各是一對起訖。
+        const response = await runInModelCall(log, modelCall, () => handler(request));
         // 子代理被中止時回的是合成的空收尾，不是拋錯：它沒有回覆可記，這次呼叫算被中止。
         if (AIMessage.isInstance(response) && isSyntheticStopReply(response)) outcome = 'aborted';
         tryRecordReply(log, response, modelCall);

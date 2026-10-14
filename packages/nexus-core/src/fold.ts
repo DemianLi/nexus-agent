@@ -420,8 +420,10 @@ export interface FoldOptions {
   events?: EventDispatcher;
 
   /**
-   * 串流第一則事件之後才出錯的模型呼叫，整次重打的預算（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）。省略或 `maxRetries`
-   * 為 0 就不掛這一顆。由組裝點按 `live-model` 的設定給；root 與每個子代理的模型呼叫都吃它。見 {@link ./stream-retry.ts}。
+   * 模型呼叫失敗的整次重打政策（[#520](https://github.com/DemianLi/nexus-agent/issues/520)、
+   * [#1427](https://github.com/DemianLi/nexus-agent/issues/1427)：首事件之前與之後共用）。省略或 `maxRetries` 為 0 就不掛這一顆。
+   * 由組裝點按 `live-model` 的 `retryPolicy` 給；root、每個子代理的模型呼叫與摘要器生摘要的那一次都吃它。見
+   * {@link ./stream-retry.ts}。欄位名保留 `streamRetry` 是歷史（#520 時只管串流中段），語意已是整條重試政策。
    */
   streamRetry?: StreamRetryOptions;
 
@@ -1432,6 +1434,8 @@ function foldSummarizer(registry: PluginRegistry, options: FoldOptions): () => A
       pruning,
       options.modelLimits,
       summaryModel,
+      undefined,
+      options.streamRetry,
     );
 }
 

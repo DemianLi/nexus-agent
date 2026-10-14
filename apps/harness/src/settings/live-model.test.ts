@@ -27,7 +27,6 @@ import { foldTurn, serveClient } from '../fixtures.js';
 import {
   DEFAULT_LIVE_BASE_URL,
   DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
-  DEFAULT_LIVE_MAX_RETRIES,
   DEFAULT_LIVE_MODEL_ENTRY,
   DEFAULT_LIVE_MODEL_ID,
   DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS,
@@ -49,7 +48,6 @@ import {
   liveModelConfigForModel,
   liveModelConfigSchema,
   liveModelPlugin,
-  MAX_LIVE_RETRIES,
   MAX_LIVE_TIMEOUT_MS,
 } from './live-model.js';
 import type { LiveModelConfig } from './live-model.js';
@@ -76,8 +74,12 @@ const OVERRIDE: Omit<LiveModelConfig, 'baseUrl'> = {
   models: [OVERRIDE_ENTRY],
   timeoutMs: 4321,
   streamIdleTimeoutMs: 8765,
-  maxRetries: 2,
-  streamRetry: { maxRetries: 4, baseDelayMs: 50, maxDelayMs: 500, jitterRatio: 0 },
+  retryPolicy: {
+    mode: 'normal',
+    maxRetries: 4,
+    retryableCodes: ['RATE_LIMIT', 'SERVER'],
+    backoff: { initialDelayMs: 50, maxDelayMs: 500, jitterRatio: 0 },
+  },
 };
 
 /** 覆寫那一筆在標題請求上關推理的 body。 */
@@ -90,7 +92,8 @@ function connectionOf(config: LiveModelConfig): Record<string, unknown> {
     modelId: config.modelId,
     maxOutputTokens: config.models.find((entry) => entry.id === config.modelId)?.maxTokens,
     timeoutMs: config.timeoutMs,
-    maxRetries: config.maxRetries,
+    // #1427：SDK 層不重試，不論 `retryPolicy` 寫什麼；重試只在 `@nexus/core` 的 `retryModelCall`。
+    maxRetries: 0,
   };
 }
 
@@ -102,39 +105,84 @@ describe('live-model 的 schema', () => {
       models: [DEFAULT_LIVE_MODEL_ENTRY],
       timeoutMs: DEFAULT_LIVE_TIMEOUT_MS,
       streamIdleTimeoutMs: DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS,
-      maxRetries: DEFAULT_LIVE_MAX_RETRIES,
-      streamRetry: { maxRetries: 2, baseDelayMs: 1_000, maxDelayMs: 10_000, jitterRatio: 0.1 },
+      retryPolicy: {
+        mode: 'normal',
+        maxRetries: 6,
+        retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
+        backoff: { initialDelayMs: 500, maxDelayMs: 10_000, jitterRatio: 0.1 },
+      },
     });
   });
 
-  /** #520：串流中段整次重打的預算。出廠值寫成字面值；退避的形狀（封頂、抖動）照 dsh 的 `retry-policy.ts:14-17`。 */
-  it('streamRetry：出廠 2 次、1 秒起、封頂 10 秒、抖動 0.1；0 次合法（等於關掉）；小數、負數、抖動過界、未知欄位都拒', () => {
-    const parse = (streamRetry: unknown) => liveModelConfigSchema.parse({ streamRetry });
-    expect(parse({}).streamRetry).toEqual({
-      maxRetries: 2,
-      baseDelayMs: 1_000,
-      maxDelayMs: 10_000,
-      jitterRatio: 0.1,
+  /**
+   * #1427：首事件之前與之後共用的重試政策。形狀與驗證逐條照 dsh 的 `resolveRetryPolicy`／`resolveBackoff`
+   * （`packages/llm/llm/src/retry-policy.ts`）：出廠 6 次（demian 拍板，dsh 預設是 5）、500 毫秒起、封頂 10 秒、抖動 0.1。
+   */
+  it('retryPolicy：整個不寫就是出廠值；寫了就必填 mode；數值逐條照 dsh 驗', () => {
+    const parse = (retryPolicy: unknown) => liveModelConfigSchema.parse({ retryPolicy });
+    const normal = { mode: 'normal' };
+    expect(parse(undefined).retryPolicy).toEqual({
+      mode: 'normal',
+      maxRetries: 6,
+      retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
+      backoff: { initialDelayMs: 500, maxDelayMs: 10_000, jitterRatio: 0.1 },
     });
-    expect(parse({ maxRetries: 0 }).streamRetry.maxRetries).toBe(0);
-    expect(parse({ maxRetries: 50 }).streamRetry.maxRetries).toBe(50);
-    expect(parse({ jitterRatio: 0 }).streamRetry.jitterRatio).toBe(0);
-    expect(parse({ jitterRatio: 1 }).streamRetry.jitterRatio).toBe(1);
-    expect(parse({ maxDelayMs: MAX_LIVE_TIMEOUT_MS }).streamRetry.maxDelayMs).toBe(
-      MAX_LIVE_TIMEOUT_MS,
+    // 只寫 mode：其餘各自補預設（dsh 的 `?? DEFAULT_*`）。
+    expect(parse(normal).retryPolicy.maxRetries).toBe(6);
+    expect(parse(normal).retryPolicy.backoff.maxDelayMs).toBe(10_000);
+    // 0 次合法（等於關掉）、沒有上限（同 dsh 的 `Number.MAX_SAFE_INTEGER`）。
+    expect(parse({ ...normal, maxRetries: 0 }).retryPolicy.maxRetries).toBe(0);
+    expect(parse({ ...normal, maxRetries: 50 }).retryPolicy.maxRetries).toBe(50);
+    expect(parse({ ...normal, maxRetries: Number.MAX_SAFE_INTEGER }).retryPolicy.maxRetries).toBe(
+      Number.MAX_SAFE_INTEGER,
     );
+    // dsh 要的是「大於 0」，不是「至少 1」：0.5 毫秒合法。
+    expect(parse({ ...normal, backoff: { initialDelayMs: 0.5 } }).retryPolicy.backoff).toMatchObject({
+      initialDelayMs: 0.5,
+    });
+    expect(parse({ ...normal, backoff: { jitterRatio: 0 } }).retryPolicy.backoff.jitterRatio).toBe(0);
+    expect(parse({ ...normal, backoff: { jitterRatio: 1 } }).retryPolicy.backoff.jitterRatio).toBe(1);
+    expect(
+      parse({
+        ...normal,
+        backoff: { initialDelayMs: 1, maxDelayMs: MAX_LIVE_TIMEOUT_MS },
+      }).retryPolicy.backoff.maxDelayMs,
+    ).toBe(MAX_LIVE_TIMEOUT_MS);
+    expect(parse({ ...normal, retryableCodes: ['SERVER'] }).retryPolicy.retryableCodes).toEqual([
+      'SERVER',
+    ]);
     for (const bad of [
-      { maxRetries: -1 },
-      { maxRetries: 1.5 },
-      { baseDelayMs: -1 },
-      { baseDelayMs: MAX_LIVE_TIMEOUT_MS + 1 },
-      { maxDelayMs: MAX_LIVE_TIMEOUT_MS + 1 },
-      { jitterRatio: 1.1 },
-      { jitterRatio: -0.1 },
-      { jitter: 0.2 },
+      {}, // 寫了就必填 mode
+      { mode: 'always' },
+      { mode: 'Normal' },
+      { ...normal, maxRetries: -1 },
+      { ...normal, maxRetries: 1.5 },
+      { ...normal, maxRetries: Number.MAX_SAFE_INTEGER + 1 },
+      { ...normal, backoff: { initialDelayMs: 0 } },
+      { ...normal, backoff: { initialDelayMs: -1 } },
+      { ...normal, backoff: { initialDelayMs: MAX_LIVE_TIMEOUT_MS + 1 } },
+      { ...normal, backoff: { maxDelayMs: 0 } },
+      { ...normal, backoff: { maxDelayMs: MAX_LIVE_TIMEOUT_MS + 1 } },
+      { ...normal, backoff: { initialDelayMs: 600, maxDelayMs: 500 } },
+      { ...normal, backoff: { jitterRatio: 1.1 } },
+      { ...normal, backoff: { jitterRatio: -0.1 } },
+      { ...normal, backoff: { jitter: 0.2 } },
+      { ...normal, retryableCodes: [] },
+      { ...normal, retryableCodes: [''] },
+      { ...normal, retryableCodes: ['SERVER', 'SERVER'] },
+      { ...normal, baseDelayMs: 10 },
     ]) {
       expect(() => parse(bad), JSON.stringify(bad)).toThrow();
     }
+  });
+
+  it("mode: 'always' 被拒收，訊息講理由與撤除條件（登記在案的偏離）", () => {
+    const result = liveModelConfigSchema.safeParse({ retryPolicy: { mode: 'always' } });
+    expect(result.success).toBe(false);
+    const message = JSON.stringify(result.error?.issues);
+    expect(message).toContain('always');
+    expect(message).toContain('無限');
+    expect(message).toContain('偏離');
   });
 
   it('出廠那一筆是量過的字面值，關推理的寫法是 #650 量過的那一種', () => {
@@ -289,12 +337,21 @@ describe('live-model 的 schema', () => {
     });
   });
 
-  it('重試次數 0 到 10——退避沒有上限，所以次數要有', () => {
-    expect(MAX_LIVE_RETRIES).toBe(10);
-    expect(liveModelConfigSchema.parse({ maxRetries: 0 }).maxRetries).toBe(0);
-    expect(liveModelConfigSchema.parse({ maxRetries: 10 }).maxRetries).toBe(10);
-    expect(() => liveModelConfigSchema.parse({ maxRetries: 11 })).toThrow();
-    expect(() => liveModelConfigSchema.parse({ maxRetries: -1 })).toThrow();
+  it('舊的兩個重試欄位大聲失敗：訊息指名舊欄位、新欄位與語意差異，不自動轉換（#1427）', () => {
+    for (const legacy of [
+      { maxRetries: 2 },
+      { streamRetry: { maxRetries: 2, baseDelayMs: 1_000, maxDelayMs: 10_000, jitterRatio: 0.1 } },
+    ]) {
+      const result = liveModelConfigSchema.safeParse(legacy);
+      expect(result.success, JSON.stringify(legacy)).toBe(false);
+      const message = result.error?.issues.map((issue) => issue.message).join('\n') ?? '';
+      expect(message).toContain('#1427');
+      expect(message).toContain('retryPolicy');
+      expect(message).toContain('語意不同');
+      expect(message).toContain(Object.keys(legacy)[0]);
+    }
+    // 多寫別的未知欄位不會被當成舊欄位的訊息吞掉。
+    expect(() => liveModelConfigSchema.parse({ retry: {} })).toThrow();
   });
 
   it('模型 id 不能是空的；多寫一格是打錯字', () => {
@@ -498,8 +555,7 @@ async function writeOverridePatch(baseUrl: string): Promise<string> {
       `    modelId: '${OVERRIDE.modelId}'`,
       `    timeoutMs: ${String(OVERRIDE.timeoutMs)}`,
       `    streamIdleTimeoutMs: ${String(OVERRIDE.streamIdleTimeoutMs)}`,
-      `    maxRetries: ${String(OVERRIDE.maxRetries)}`,
-      `    streamRetry: ${JSON.stringify(OVERRIDE.streamRetry)}`,
+      `    retryPolicy: ${JSON.stringify(OVERRIDE.retryPolicy)}`,
       // YAML 是 JSON 的超集，`models` 整份取代出廠那一筆。
       `    models: ${JSON.stringify(OVERRIDE.models)}`,
       '',

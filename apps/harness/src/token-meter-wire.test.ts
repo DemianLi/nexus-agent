@@ -361,7 +361,7 @@ describe('失敗的呼叫：真的 createLiveModel 對假 SSE 端點', () => {
 
   it('斷線的那一次：用量投影的失敗列有 321／45，總計含它，與 tokenUsage 總帳同數', async () => {
     const built = await createNexusAgent({
-      model: createLiveModel(liveModelConfigSchema.parse({ baseUrl, maxRetries: 0 })),
+      model: createLiveModel(liveModelConfigSchema.parse({ baseUrl, retryPolicy: { mode: 'normal', maxRetries: 0 } })),
       checkpointer: new MemorySaver(),
       plugins: [createTokenMeterPlugin()],
     });

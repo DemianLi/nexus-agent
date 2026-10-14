@@ -127,7 +127,7 @@ function config(modelId: 'vision' | 'texty' | 'silent') {
   return liveModelConfigSchema.parse({
     baseUrl: `http://127.0.0.1:${port}/v1`,
     modelId,
-    maxRetries: 0,
+    retryPolicy: { mode: 'normal', maxRetries: 0 },
     models: [entry('vision', ['text', 'image']), entry('texty', ['text']), entry('silent')],
   });
 }

@@ -144,7 +144,7 @@ function writePatch(dir: string, baseUrl: string): string {
   const path = join(dir, `patch-${String(temporary.length)}.yml`);
   writeFileSync(
     path,
-    ['- id: live-model', '  config:', `    baseUrl: '${baseUrl}'`, '    maxRetries: 0', ''].join(
+    ['- id: live-model', '  config:', `    baseUrl: '${baseUrl}'`, '    retryPolicy: { mode: normal, maxRetries: 0 }', ''].join(
       '\n',
     ),
   );

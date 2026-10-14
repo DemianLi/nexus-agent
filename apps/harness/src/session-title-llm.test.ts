@@ -18,8 +18,8 @@ import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import {
   createModelCallRecorder,
-  noteFailedAttempt,
-  noteRequestStart,
+  noteStreamFailure,
+  retryModelCall,
   SessionLog,
 } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
@@ -185,17 +185,17 @@ describe('送出去的是什麼、寫了什麼', () => {
   });
 
   /**
-   * #1021：標題請求由 `model/start` 的訂閱者排起，主呼叫的重試與識別範圍不能把它收進去，否則它的 `llm/retry` 會帶著主呼叫
-   * 的識別寫進主日誌。兩層擋著：起訖紀錄器在**開範圍之前**寫 `model/start`，標題呼叫又綁在接上那一刻的 context 上
-   * （`AsyncResource.bind`）。**單拿掉 bind 這條不會紅**（實測過：第一層還在）——它釘的是結果（主日誌上沒有標題的重試事件），
-   不是 bind 本身；bind 的理由是 LangChain 的 callbacks，由上面的案例與 serve 的產品路徑測試守著。
-   * 這裡走真的起訖紀錄器，並讓標題模型像 adapter 一樣回報一次失敗重試。
+   * #1021／#1427：標題請求由 `model/start` 的訂閱者排起，它回報的失敗不能算進主呼叫的那一次嘗試——否則主呼叫會因為
+   * 標題端點的失敗被重打，它的 `llm/retry` 也會寫進主日誌。擋的有兩層：起訖紀錄器在**開範圍之前**寫 `model/start`，
+   * 標題呼叫又綁在接上那一刻的 context 上（`AsyncResource.bind`）。**單拿掉 bind 這條不會紅**（第一層還在）——它釘的是
+   * 結果：主呼叫只打一次、主日誌上沒有重試事件。這裡走真的起訖紀錄器與真的重試迴圈，並讓標題模型像 adapter 一樣回報
+   * 一次可重試的失敗。
    */
-  it('標題請求的重試不會掉進主呼叫的重試範圍', async () => {
+  it('標題請求回報的失敗不會讓主呼叫重打，也不會掉進主日誌', async () => {
     let titleCalled = false;
+    let mainCalls = 0;
     const t = attached(async () => {
-      noteFailedAttempt({ message: '標題端點壞了', code: 'SERVER', status: 500 }, 3);
-      noteRequestStart();
+      noteStreamFailure({ code: 'SERVER', retryable: true, status: 500 });
       titleCalled = true;
       return stopReply();
     });
@@ -206,12 +206,19 @@ describe('送出去的是什麼、寫了什麼', () => {
     }) as unknown as {
       wrapModelCall: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
     };
-    await recorder.wrapModelCall({ runtime: { configurable: {} } }, async () => {
-      await until(() => titleCalled);
-      return new AIMessage('好。');
-    });
+    await retryModelCall(
+      { maxRetries: 2, initialDelayMs: 5, maxDelayMs: 10, jitterRatio: 0 },
+      { log: t.log },
+      () =>
+        recorder.wrapModelCall({ runtime: { configurable: {} } }, async () => {
+          mainCalls += 1;
+          await until(() => titleCalled);
+          return new AIMessage('好。');
+        }),
+    );
     await until(() => titleEvents(t.log.events).length === 2);
     expect(titleCalled).toBe(true);
+    expect(mainCalls).toBe(1);
     expect(t.log.events.filter((event) => event.type.startsWith('llm/retry'))).toEqual([]);
     await t.detach();
   });
@@ -601,7 +608,7 @@ function liveModelPatch(baseUrl: string, extraConfig: readonly string[] = []): s
     '- id: live-model',
     '  config:',
     `    baseUrl: '${baseUrl}'`,
-    '    maxRetries: 0',
+    '    retryPolicy: { mode: normal, maxRetries: 0 }',
     ...extraConfig,
     '',
   ].join('\n');

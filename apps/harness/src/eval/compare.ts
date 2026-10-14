@@ -26,7 +26,7 @@
  * 單次取樣的一個數字讀起來像判決，但它不是。
  */
 
-import type { AgentModel } from '@nexus/core';
+import type { AgentModel, StreamRetryOptions } from '@nexus/core';
 import { BENCHMARK_SYSTEM_PROMPT, benchmarkPlugins } from './assembly.js';
 import { isRetryableRateLimit } from '../live-model.js';
 import { BENCHMARK, type BenchmarkCase } from './dataset.js';
@@ -181,6 +181,10 @@ export interface CompareOptions<T extends ModelUnderTest = ModelUnderTest> {
   readonly recursionLimit?: number;
   /** 一次執行的時間預算，毫秒。預設 {@link EVAL_DEADLINE_MS}；給 `0` 表示不設。 */
   readonly deadlineMs?: number;
+  /**
+   * 模型呼叫失敗的重試政策（#1427），原樣交給 {@link runBenchmarkCase}。真模型的比較要給（SDK 層不重試了），假模型省略即只打一次。
+   */
+  readonly streamRetry?: StreamRetryOptions;
 }
 
 /**
@@ -269,6 +273,7 @@ async function runOnce(
       recursionLimit: options.recursionLimit ?? EVAL_RECURSION_LIMIT,
       onUsage,
       ...(deadline === undefined ? {} : { signal: deadline }),
+      ...(options.streamRetry === undefined ? {} : { streamRetry: options.streamRetry }),
     });
     return { kind: 'scored', score: scoreCase(testCase, run), seconds: elapsed(started), run };
   } catch (error) {

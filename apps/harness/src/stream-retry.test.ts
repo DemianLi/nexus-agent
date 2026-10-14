@@ -41,7 +41,7 @@ type Act =
   | 'cut'
   /** 吐兩個字之後停住。 */
   | 'stall'
-  /** 第一則事件就是 503 的錯誤（第一則事件之前，歸 SDK 層管）。 */
+  /** 第一則事件就是 503 的錯誤（第一則事件之前；#1427 起與中段共用同一份預算）。 */
   | 'first503'
   /** 一口氣吐 {@link DENSE} 個字片段、緊接著送 503 的錯誤事件（順序測試用：失敗那次有一大串片段排在佇列裡）。 */
   | 'dense503';
@@ -118,9 +118,7 @@ async function scriptedOpenAi(script: readonly Act[]) {
 
 interface RunOptions {
   /** 預算；省略就是不給（等於不重打）。 */
-  readonly streamRetry?: { maxRetries: number; baseDelayMs: number; jitterRatio?: number };
-  /** SDK 層的重試次數（第一則事件之前的失敗）。 */
-  readonly sdkRetries?: number;
+  readonly streamRetry?: { maxRetries: number; initialDelayMs: number; jitterRatio?: number };
   /** 慢消費者：pump 每讀到一個圖事件就多等這麼久（毫秒），讓字片段在佇列裡積壓。 */
   readonly slowMs?: number;
   /** 在真事件之前先注入 pump 的假原始事件（測 pump 不該聽的 `custom`）。 */
@@ -187,7 +185,6 @@ async function runTurn(script: readonly Act[], options: RunOptions = {}) {
         baseUrl: upstream.baseUrl,
         timeoutMs: 400,
         streamIdleTimeoutMs: 400,
-        maxRetries: options.sdkRetries ?? 0,
       }),
     ),
     checkpointer: new MemorySaver(),
@@ -249,7 +246,7 @@ function foldUpTo(frames: readonly Event[], last: Event) {
   return state;
 }
 
-const BUDGET = { maxRetries: 2, baseDelayMs: 20 } as const;
+const BUDGET = { maxRetries: 2, initialDelayMs: 20 } as const;
 
 describe('串流第一則事件之後才出錯（#520）', () => {
   const original = process.env[LIVE_API_KEY_ENV];
@@ -329,7 +326,7 @@ describe('串流第一則事件之後才出錯（#520）', () => {
 
   it('失敗當下就擦：作廢記號與 llm-retry 排在失敗那次的最後一個片段之後、第二次的 message-start 之前；退避期間畫面是空的、有倒數', async () => {
     const run = await runTurn(['mid503', 'ok'], {
-      streamRetry: { maxRetries: 2, baseDelayMs: 200, jitterRatio: 0 },
+      streamRetry: { maxRetries: 2, initialDelayMs: 200, jitterRatio: 0 },
     });
     expect(run.thrown).toBeUndefined();
     const discards = customNamed(run.frames, MESSAGE_DISCARD);
@@ -389,7 +386,7 @@ describe('串流第一則事件之後才出錯（#520）', () => {
     '順序回歸（%s）：失敗那次的全部字片段都排在作廢記號之前，擦掉之後不會有字再把它畫回來',
     async (_label, act, slowMs) => {
       const run = await runTurn([act, 'ok'], {
-        streamRetry: { maxRetries: 1, baseDelayMs: 5, jitterRatio: 0 },
+        streamRetry: { maxRetries: 1, initialDelayMs: 5, jitterRatio: 0 },
         ...(slowMs === undefined ? {} : { slowMs }),
       });
       expect(run.thrown).toBeUndefined();
@@ -474,7 +471,7 @@ describe('串流第一則事件之後才出錯（#520）', () => {
     expect(none.hits).toBe(1);
     expect(none.thrown).toBeInstanceOf(Error);
     const zero = await runTurn(['mid503', 'ok'], {
-      streamRetry: { maxRetries: 0, baseDelayMs: 20 },
+      streamRetry: { maxRetries: 0, initialDelayMs: 20 },
     });
     expect(zero.hits).toBe(1);
     expect(zero.thrown).toBeInstanceOf(Error);
@@ -483,7 +480,7 @@ describe('串流第一則事件之後才出錯（#520）', () => {
   it('等重打的退避時按了停止：不再打，輪次收成中止，失敗那次的半段記成 attempt、不存回對話', async () => {
     const run = await runTurn(['mid503', 'ok'], {
       // 退避拉到 30 秒：按停止時一定還在等。
-      streamRetry: { maxRetries: 2, baseDelayMs: 30_000 },
+      streamRetry: { maxRetries: 2, initialDelayMs: 30_000 },
       during: async (pump) => {
         // 等到第一次嘗試失敗收尾（model/end 帶 error），這時就在退避裡。
         for (let waited = 0; waited < 10_000; waited += 20) {
@@ -518,14 +515,53 @@ describe('串流第一則事件之後才出錯（#520）', () => {
     expect(folded.retry).toBeNull();
   }, 30_000);
 
-  it('第一則事件就是錯誤的：歸 SDK 層，不跟串流重試相乘', async () => {
-    // SDK 重試 1 次（1–2 秒退避）；兩次都在第一則事件失敗。串流重試的預算是 2，但它不該被叫到。
-    const run = await runTurn(['first503', 'first503', 'first503', 'first503'], {
-      streamRetry: BUDGET,
-      sdkRetries: 1,
-    });
+  /**
+   * #1427：首事件之前與之後共用一份預算、沒有第二層。SDK 層 `maxRetries: 0`，所以打到端點的請求數就是
+   * 重試迴圈的嘗試數，不會乘出 (1+SDK)×(1+串流)。
+   */
+  it('第一則事件就是錯誤的：吃同一份預算，退避期間畫面有倒數，沒有東西可擦', async () => {
+    const run = await runTurn(['first503', 'ok'], { streamRetry: BUDGET });
+    expect(run.thrown).toBeUndefined();
     expect(run.hits).toBe(2);
-    expect(run.thrown).toBeInstanceOf(Error);
+    const retries = run.events.filter((event) => event.type === 'llm/retry');
+    expect(retries).toHaveLength(1);
+    expect(retries[0]!.data).toMatchObject({
+      retry: 1,
+      maxRetries: 2,
+      failure: { code: 'SERVER', status: 503 },
+    });
+    // 第一則事件之前沒有任何半段回覆：不寫 attempt，畫面最後只有成功那次。
     expect(run.events.filter((event) => event.type === 'assistant/attempt')).toHaveLength(0);
+    expect(shownReplies(run.frames).map((entry) => entry.text)).toEqual(['丙丁']);
+    expect(customNamed(run.frames, LLM_RETRY)).toHaveLength(1);
+    expect(customNamed(run.frames, LLM_RETRY_STARTED)).toHaveLength(1);
+  }, 30_000);
+
+  /**
+   * #1427 B（P5 情境）：端點每一次都在第一則事件失敗。**打到端點的請求數 = 重試迴圈的嘗試數 = N+1**，
+   * `llm/retry` 的顆數 = 實際重打的次數。以前 SDK 層（6 次）與串流層（2 次）各算各的，同一個情境會打出遠多於 N+1 次。
+   */
+  it('端點每次都在第一則事件失敗：請求數不超過 N+1，llm/retry 的顆數等於實際重打的次數', async () => {
+    const run = await runTurn(Array.from({ length: 12 }, () => 'first503' as const), {
+      streamRetry: { maxRetries: 3, initialDelayMs: 5, maxDelayMs: 10, jitterRatio: 0 },
+    });
+    expect(run.hits).toBe(4);
+    expect(run.thrown).toBeInstanceOf(Error);
+    const retries = run.events.filter((event) => event.type === 'llm/retry');
+    expect(retries).toHaveLength(run.hits - 1);
+    expect(run.events.filter((event) => event.type === 'model/start')).toHaveLength(run.hits);
+    expect(retries.map((event) => (event.data as { retry: number }).retry)).toEqual([1, 2, 3]);
+  }, 30_000);
+
+  it('首事件前 k 次、中段 m 次共用一份預算：第 N+1 次失敗就放棄，不是各算各的', async () => {
+    // 預算 2 次重打：first503、mid503 用掉兩次，第三次（mid503）失敗就放棄。分開計的話（各 2 次）會打到第 5 次。
+    const run = await runTurn(['first503', 'mid503', 'mid503', 'ok'], { streamRetry: BUDGET });
+    expect(run.hits).toBe(3);
+    expect(run.thrown).toBeInstanceOf(Error);
+    expect(run.events.filter((event) => event.type === 'llm/retry')).toHaveLength(2);
+    // 預算還夠的時候兩種失敗混著也救得回來。
+    const saved = await runTurn(['first503', 'mid503', 'ok'], { streamRetry: BUDGET });
+    expect(saved.thrown).toBeUndefined();
+    expect(saved.hits).toBe(3);
   }, 30_000);
 });

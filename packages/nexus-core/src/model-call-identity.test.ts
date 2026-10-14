@@ -1,17 +1,20 @@
 /**
  * 寫方：一次模型呼叫的識別怎麼傳到每個寫入點（[#1021](https://github.com/DemianLi/nexus-agent/issues/1021)）。
- * 用真的起訖紀錄器、用量紀錄器與重試範圍串成一條洋蔥，不是各自單獨叫。
+ * 用真的重試、起訖紀錄器與用量紀錄器串成一條洋蔥，不是各自單獨叫。
+ *
+ * #1427 之後重試只有 `stream-retry.ts` 那一層，在起訖外面：每次嘗試各是一對 `model/start`／`model/end`，`llm/retry` 指向失敗
+ * 的那一次。
  */
 
 import { AIMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
-import { noteFailedAttempt, noteRequestStart } from './llm-retry.js';
 import { captureModelCall, currentModelCall, lastModelCall } from './model-call-scope.js';
 import { createModelCallRecorder } from './model-calls.js';
 import { createModelUsageRecorder } from './model-usage.js';
 import { indexModelCalls } from './model-call-index.js';
 import type { SessionLookup } from './registry.js';
 import { SessionLog } from './session-log.js';
+import { createStreamRetryMiddleware, noteStreamFailure } from './stream-retry.js';
 
 type Hook = (request: unknown, handler: (r: unknown) => unknown) => Promise<unknown>;
 const hookOf = (middleware: unknown): Hook => (middleware as { wrapModelCall: Hook }).wrapModelCall;
@@ -19,12 +22,15 @@ const hookOf = (middleware: unknown): Hook => (middleware as { wrapModelCall: Ho
 const ok = (log: SessionLog): SessionLookup => ({ kind: 'ok', address: { kind: 'root' }, log });
 const REQUEST = { runtime: { configurable: {} } };
 
-/** 起訖（外）→ 用量（內）→ handler，同 `fold.ts` 槽位表裡那兩顆的相對位置。 */
+/** 重試（最外）→ 起訖 → 用量（內）→ handler，同 `fold.ts` 槽位表裡那三顆的相對位置。 */
 function onion(log: SessionLog, handler: () => unknown): Promise<unknown> {
   const sessions = { forCall: () => ok(log) };
+  const retry = hookOf(
+    createStreamRetryMiddleware({ maxRetries: 3, initialDelayMs: 1, jitterRatio: 0 }, sessions),
+  );
   const calls = hookOf(createModelCallRecorder(sessions));
   const usage = hookOf(createModelUsageRecorder(sessions));
-  return calls(REQUEST, (request) => usage(request, handler));
+  return retry(REQUEST, (outer) => calls(outer, (request) => usage(request, handler)));
 }
 
 const withUsage = () =>
@@ -33,52 +39,70 @@ const withUsage = () =>
     usage_metadata: { input_tokens: 3, output_tokens: 4, total_tokens: 7 },
   });
 
+/** 第一次嘗試報一次可重試的 500 然後拋，之後都正常回。 */
+function failOnce(): () => unknown {
+  let attempt = 0;
+  return () => {
+    attempt += 1;
+    if (attempt > 1) return withUsage();
+    noteStreamFailure({ code: 'SERVER', retryable: true, status: 500 });
+    throw new Error('壞了');
+  };
+}
+
 describe('起訖、用量、重試、回覆都帶同一個識別', () => {
-  it('識別是 model/start 的 seq，每一顆都指回去', async () => {
+  it('每次嘗試各是一對起訖；重試指回失敗的那一次，用量與回覆指向成功的那一次', async () => {
     const log = new SessionLog('id');
     log.append('turn/start', { kind: 'message', text: 'x' }); // 讓 seq 不從 0 起
-    await onion(log, () => {
-      noteFailedAttempt({ message: '壞了', code: 'SERVER', status: 500 }, 3);
-      noteRequestStart();
-      return withUsage();
-    });
-    const start = log.events.find((event) => event.type === 'model/start')!;
-    expect(start.seq).toBe(1);
-    const tagged = log.events.filter(
+    await onion(log, failOnce());
+    const starts = log.events.filter((event) => event.type === 'model/start');
+    expect(starts.map((event) => event.seq)).toEqual([1, 5]);
+    const failed = starts[0]!;
+    const succeeded = starts[1]!;
+    const body = log.events.filter(
       (event) => event.type !== 'model/start' && event.type !== 'turn/start',
     );
-    expect(tagged.map((event) => event.type)).toEqual([
+    expect(body.map((event) => event.type)).toEqual([
+      'model/end',
       'llm/retry',
       'llm/retry-started',
       'model/usage',
       'assistant/message',
       'model/end',
     ]);
-    for (const event of tagged) {
-      expect((event.data as { modelCall?: number }).modelCall, event.type).toBe(start.seq);
-    }
+    const identities = body.map((event) => (event.data as { modelCall?: number }).modelCall);
+    // 失敗那次的 model/end 與 llm/retry、llm/retry-started 指向它；其餘指向成功那次。
+    expect(identities).toEqual([
+      failed.seq,
+      failed.seq,
+      failed.seq,
+      succeeded.seq,
+      succeeded.seq,
+      succeeded.seq,
+    ]);
     const { calls, unattributed } = indexModelCalls(log.events);
     expect(unattributed).toEqual([]);
-    expect(calls[0]).toMatchObject({ modelCall: 1 });
+    expect(calls).toHaveLength(2);
+    expect(calls[0]).toMatchObject({ modelCall: failed.seq });
     expect(calls[0]!.retries).toHaveLength(1);
-    expect(calls[0]!.usage).toHaveLength(1);
-    expect(calls[0]!.end).toBeDefined();
+    expect(calls[0]!.end).toMatchObject({ data: { outcome: 'error' } });
+    expect(calls[1]!.retries).toHaveLength(0);
+    expect(calls[1]!.usage).toHaveLength(1);
+    expect(calls[1]!.end).toBeDefined();
   });
 
   it('兩次呼叫各有各的識別：第二次的重試不會算進第一次', async () => {
     const log = new SessionLog('two');
     await onion(log, () => withUsage());
-    await onion(log, () => {
-      noteFailedAttempt({ message: '壞了', code: 'SERVER', status: 500 }, 3);
-      return withUsage();
-    });
+    await onion(log, failOnce());
     const { calls } = indexModelCalls(log.events);
-    expect(calls.map((each) => each.modelCall)).toHaveLength(2);
+    expect(calls.map((each) => each.modelCall)).toHaveLength(3);
     expect(calls[0]!.retries).toHaveLength(0);
     expect(calls[1]!.retries).toHaveLength(1);
+    expect(calls[2]!.retries).toHaveLength(0);
   });
 
-  it('模型拋了：model/end 照樣帶識別', async () => {
+  it('模型拋了而且沒有回報可重試：model/end 照樣帶識別，只打一次', async () => {
     const log = new SessionLog('throw');
     await expect(
       onion(log, () => {
@@ -88,6 +112,7 @@ describe('起訖、用量、重試、回覆都帶同一個識別', () => {
     const end = log.events.find((event) => event.type === 'model/end')!;
     // 拋錯收的呼叫還帶沒有正常回來的方式（#1022）。
     expect(end.data).toEqual({ modelCall: 0, outcome: 'error' });
+    expect(log.events.filter((event) => event.type === 'model/start')).toHaveLength(1);
   });
 });
 

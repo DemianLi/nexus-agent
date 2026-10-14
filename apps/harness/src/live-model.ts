@@ -1,12 +1,12 @@
 import { ContextOverflowError } from '@langchain/core/errors';
+import { parseRetryAfterMs } from '@langchain/core/utils/async_caller';
 import { MiddlewareError } from 'langchain';
 import { ChatOpenAI } from '@langchain/openai';
 import type { ChatOpenAIFields } from '@langchain/openai';
 import {
   assertImageBudget,
   beginAttemptReport,
-  noteFailedAttempt,
-  noteRequestStart,
+  noteStreamFailure,
   streamFailureReporter,
   tagModelRoute,
 } from '@nexus/core';
@@ -119,13 +119,13 @@ export const LIVE_API_KEY_ENV = 'NVIDIA_API_KEY';
  * 133 秒，被 90 秒砍掉。兩段的性質不同——首事件前的等待含排隊與預處理（吃圖），本來就長；吐字之後的停頓才是
  * 「掛住」的訊號——所以拆開，各自有各自的值。
  *
- * **範圍**：連線到第一則事件，由 SDK 的計時器管、在 SDK 重試射程內（{@link DEFAULT_LIVE_MAX_RETRIES}）。
+ * **範圍**：連線到第一則事件，由 SDK 的計時器管；逾時算 `TIMEOUT`，由 `@nexus/core` 的 `stream-retry.ts` 整次重打
+ * （[#1427](https://github.com/DemianLi/nexus-agent/issues/1427)，政策在 `settings/live-model.ts` 的 `retryPolicy`）。
  * 第一則事件**之後**每一段的閒置歸 {@link DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS} 與 {@link withStreamIdleTimeout}，
- * 逾時整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)，`@nexus/core` 的 `stream-retry.ts`，
- * 預算在 `settings/live-model.ts` 的 `streamRetry`）。
+ * 逾時同樣整次重打（[#520](https://github.com/DemianLi/nexus-agent/issues/520)），兩段共用同一份預算。
  *
  * **最壞情況是它乘上重試次數**：開了線卻不吐位元組，每一次都等滿，180 秒 × (6 + 1) = 1260 秒，再加上
- * 退避的 63–126 秒（`settings/live-model.ts` 的偏離二）。**這是 dsh 的形狀，不是缺陷**：dsh 的
+ * 退避的約 25.5 秒（`settings/live-model.ts` 的偏離二）。**這是 dsh 的形狀，不是缺陷**：dsh 的
  * `TIMEOUT` 在預設可重試碼裡（`llm/src/retry-policy.ts:18`），5 次重試 × 300 秒閒置 ≈ 30 分鐘。
  * #521 查過之後照 dsh 保留逾時重試——一次偶發的慢本來就該重試。
  */
@@ -140,30 +140,6 @@ export const DEFAULT_LIVE_TIMEOUT_MS = 180_000;
  * 等 300 秒才發現太貴。要放寬改 `streamIdleTimeoutMs`，與 `timeoutMs` 互不牽動。
  */
 export const DEFAULT_LIVE_STREAM_IDLE_TIMEOUT_MS = 90_000;
-
-/**
- * 被端點限流時，最多重試幾次。
- *
- * **這道要存在，是因為基座那道的作用面比看起來窄。** `AsyncCaller` 的 `maxRetries` 預設是
- * 6，看起來限流本來就會被接住；但 `@langchain/core` 的 `defaultFailedAttemptHandler` 把
- * **沒有 `retry-after` header 的 429** 分類成 `headerless_429` → `action: 'capacity'`，
- * 然後**直接拋**（`async_caller.js`）。NVIDIA 回的正是
- * `{"status":429,"title":"Too Many Requests"}` —— 沒有那個 header，所以一次都不會重試。
- * 底層那道也關著：`@langchain/openai` 建 `OpenAI` client 時寫死 `maxRetries: 0`。
- *
- * **退避多久是量出來的，不是猜的。** 2026-08-28 實測這個端點：`openai/gpt-oss-120b` 在
- * 49.5 秒內燒掉 119,363 token 後觸發 429（約 120k 的每分鐘 token 配額），而 **16 秒後
- * 就完全恢復** —— 輕請求與一次真的 eval 執行都立刻通過。`AsyncCaller` 交給 `p-retry` 的
- * 退避是 1／2／4／8／16／32 秒（帶隨機），所以第四次重試累計就蓋過那個窗口。
- *
- * **偏離標註**：dsh 的 [`retry-policy.ts`](../../../references/deepseek-harness/packages/llm/llm/src/retry-policy.ts)
- * 把 `RATE_LIMIT` 放在預設可重試碼裡（與這裡同向），但它的退避是**有界**的
- * （`initialDelayMs: 500`、`maxDelayMs: 10_000`、`jitterRatio: 0.1`）。`AsyncCaller`
- * **沒有把退避參數暴露出來** —— 只收 `maxRetries` 與 `onFailedAttempt`，退避寫死在
- * `callWithRetries` 裡。所以這裡只釘得住次數，釘不住每次等多久；要對齊 dsh 的有界退避
- * 得自己包一層 caller，那是更大的一張工。
- */
-export const DEFAULT_LIVE_MAX_RETRIES = 6;
 
 /**
  * 端點限流（HTTP 429）的判定。
@@ -1226,11 +1202,9 @@ export function createLiveModel(
         if (hit === undefined) throw new Error(missingKeyMessage());
         return hit.value;
       },
-      fetch: ((base) => (purpose === undefined ? withRequestStartNotice(base) : base))(
-        withStreamIdleTimeout(
-          config.streamIdleTimeoutMs,
-          withInbandStreamErrors(withShippedRequestBody(withStreamUsageReport())),
-        ),
+      fetch: withStreamIdleTimeout(
+        config.streamIdleTimeoutMs,
+        withInbandStreamErrors(withShippedRequestBody(withStreamUsageReport())),
       ),
     },
     temperature: 1,
@@ -1238,13 +1212,12 @@ export function createLiveModel(
     // 這顆的輸出上限跟著型錄條目走；覆寫是明著傳的（標題那一顆用它自己那一列的上限）。
     maxTokens: overrides.maxOutputTokens ?? entry.maxTokens,
     timeout: config.timeoutMs,
-    maxRetries: config.maxRetries,
-    // 對話那一顆（含子代理）把重試記進那一輪的日誌，標題那一顆不記（#712）：它走同一條重試路徑，
-    // 但不是這一輪對話的步，記進去會冒充成對話在重試。
-    onFailedAttempt:
-      purpose === undefined
-        ? classifyAndNoteFailedAttempt(config.maxRetries)
-        : classifyFailedAttempt,
+    // **SDK 層不重試**（#1427，照 dsh `llm-pi-ai/src/adapter.ts:141`：「The agent recovery layer owns visible attempts」）。
+    // 重試只有 `@nexus/core` 的 `stream-retry.ts` 那一層，首事件之前與之後共用一份預算；留著 SDK 的 6 次就是兩層相乘
+    // （#1341 的 G4：打到端點 9 次、日誌只有 2 顆）。`onFailedAttempt` 仍然會在每次失敗時被叫（含沒有重試的這一次）——
+    // 分類（下架、溢出、不可重試）與把「這一次值得重打」報給重試那一層，都靠它。
+    maxRetries: 0,
+    onFailedAttempt: classifyAndReportFailedAttempt,
     // 用途專屬的請求內容，見 {@link LiveModelPurpose}。**要在建構時給**：建好之後才設 `modelKwargs` 不會進請求
     // （#650 實測，前兩輪的參數就是這樣沒送出去的）。
     ...((purpose === 'session-title' || overrides.thinkingOff === true) &&
@@ -1280,7 +1253,7 @@ export function createLiveModel(
  * {@link STATUS_NO_RETRY} 是 `@langchain/core` 那份的複本，成員是
  * `400/401/402/403/404/405/406/407/409/413` —— **`410` 不在裡面**。所以一顆下架的模型
  * 今天會走到 {@link retryDecision} 最後那個 `return 'retry'`，被重試滿
- * {@link DEFAULT_LIVE_MAX_RETRIES} 次。**實測 2026-09-04：`openai/gpt-oss-120b` 的 410 花了
+ * 政策的 `maxRetries` 次（出廠 6 次）。**實測 2026-09-04（當時是 SDK 層 6 次、退避 1–32 秒）：`openai/gpt-oss-120b` 的 410 花了
  * 106.7 秒才浮出來**，而它第一次回應就已經確定了。
  *
  * ## 這裡沒有破「認碼不解析訊息」那條規矩
@@ -1478,28 +1451,45 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
 }
 
 /**
- * {@link classifyFailedAttempt}，加上把「排定了重試」回報給當下那次模型呼叫的重試範圍
- * （`@nexus/core` 的 `noteFailedAttempt`）。**分類先做**：要放棄就在分類那裡拋，不經過回報，所以只有真的會再打的失敗
- * 才可能被記成重試；最後一次（預算用盡）由回報那一側對上限擋掉，`AsyncCaller` 連它也會叫 `onFailedAttempt`。
+ * 供應商給的 `retry-after`（毫秒）：從錯誤鏈上找帶 `headers` 的那一環，秒數或 HTTP 日期都認，沒有就 `undefined`。
  *
- * @param maxRetries - 這顆模型的重試上限，跟傳給 `AsyncCaller` 的同一個值。
+ * **認 header，不解析訊息**（同這個檔的規矩）。in-band 錯誤翻成的 HTTP 回應會把 `retry-after` 帶過來
+ * （{@link withInbandStreamErrors}），所以兩種投遞方式走同一條路。
  */
-function classifyAndNoteFailedAttempt(maxRetries: number): (error: unknown) => void {
-  return (error) => {
-    classifyFailedAttempt(error);
-    noteFailedAttempt(classifyLlmFailure(error), maxRetries);
-  };
+export function retryAfterMsOf(error: unknown): number | undefined {
+  for (const link of causeLinks(error)) {
+    const headers = (link as { headers?: unknown }).headers;
+    if (typeof headers !== 'object' || headers === null) continue;
+    const raw =
+      typeof (headers as { get?: unknown }).get === 'function'
+        ? (headers as Headers).get('retry-after')
+        : (headers as Record<string, unknown>)['retry-after'];
+    if (typeof raw !== 'string') continue;
+    const parsed = parseRetryAfterMs(raw);
+    if (parsed !== undefined) return parsed;
+  }
+  return undefined;
 }
 
 /**
- * 每次請求**開跑**的當下通知重試範圍（`@nexus/core` 的 `noteRequestStart`）：重試等完、真的要重打的那一刻就是
- * 下一次請求開跑的那一刻。放最外層，所以閒置逾時與嗅探都在它裡面。範圍外（標題那一顆、沒有日誌的呼叫）是空操作。
+ * `AsyncCaller` 的 `onFailedAttempt`（#1427）：先分類，再把「這一次值得重打」報給重試那一層
+ * （`@nexus/core` 的 `noteStreamFailure`，`stream-retry.ts` 在外面讀它）。
+ *
+ * **分類先做**：要放棄就在分類那裡拋——不經過回報，那一層讀到「沒有回報」就原樣往外拋，所以只有真的會再打的失敗才可能
+ * 被重打。SDK 層的 `maxRetries` 是 0，這裡正常返回的失敗會直接以原錯誤落到外層，**不再由 `p-retry` 排退避**。
+ *
+ * 範圍外（沒有包重試的呼叫）回報是空操作，行為同 SDK 重試關掉之後的樣子：打一次、失敗就失敗。
  */
-function withRequestStartNotice(baseFetch: typeof fetch): typeof fetch {
-  return (input, init) => {
-    noteRequestStart();
-    return baseFetch(input, init);
-  };
+function classifyAndReportFailedAttempt(error: unknown): void {
+  classifyFailedAttempt(error);
+  const failure = classifyLlmFailure(error);
+  const retryAfterMs = retryAfterMsOf(error);
+  noteStreamFailure({
+    code: failure.code,
+    retryable: true,
+    ...(failure.status !== undefined && { status: failure.status }),
+    ...(retryAfterMs !== undefined && { retryAfterMs }),
+  });
 }
 
 /** 缺 key 的失敗訊息：指名缺哪一個、去哪裡放。 */

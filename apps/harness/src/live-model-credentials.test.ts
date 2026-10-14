@@ -81,7 +81,7 @@ function credentials() {
   return createCredentialService({ home, launchEnv, warn: () => undefined });
 }
 
-const config = () => liveModelConfigSchema.parse({ baseUrl, maxRetries: 0 });
+const config = () => liveModelConfigSchema.parse({ baseUrl, retryPolicy: { mode: 'normal', maxRetries: 0 } });
 
 describe('key 從受管檔來、每次請求前解析', () => {
   it('key 只在受管檔：請求帶著它，process.env 始終沒有', async () => {
