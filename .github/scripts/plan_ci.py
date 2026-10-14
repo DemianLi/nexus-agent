@@ -132,9 +132,15 @@ class Suite:
 #
 # - harness：用 `shippedPlugins()` 的測試照 cordis.yml 用 `import(entry.name)` 動態載入 plugin，plugin 原始碼的異動
 #   不在靜態 import 圖上；掃描整個原始碼樹的絆索測試（`'apps/web/src'` 出現在掃描根裡）異動落在哪都可能踩到。
+# - harness 的插件套件 gate（#1420）：`collectMigratedPluginViolations` 依檔案路徑動態載入每顆 `packages/nexus-plugin-*`
+#   的入口，不在 import 圖上。只動某顆插件的 PR（選擇性模式）不會讓它被挑到，而「遷出了卻忘了寫一致性測試」正是它要擋的。
 # - web：用 fs 讀原始碼的測試（讀的是別的檔，import 圖看不到）。
 SUITES = {
-    'harness': Suite('apps/harness', ('.test.ts',), ('shippedPlugins', "'apps/web/src'")),
+    'harness': Suite(
+        'apps/harness',
+        ('.test.ts',),
+        ('shippedPlugins', "'apps/web/src'", 'collectMigratedPluginViolations'),
+    ),
     'web': Suite('apps/web', ('.test.ts', '.test.tsx'), ('readFileSync', 'readdirSync')),
 }
 
