@@ -32,14 +32,17 @@
  *
  * - **插件自我停用只在行程裡停著，紀錄只記不折**（#1424，demian 2026-10-14 拍板 Q1 (b)、Q2 (a)；PM 決議 Q-C 的後續）：Loader 的
  *   case 7 把那一列在樹上標成 `disabled`，Include 不寫檔，也不折進清單。樹把「這一列自我停用過、當時的宣告是什麼」記在
- *   記憶體裡（{@link PluginTree}`.#selfDisabled`）：**宣告沒變就不推 `epoch`、不重掛，判成 `off`**，所以不再每條 thread 重掛一次
- *   再停一次（閃動）；serve 重啟、或那一列的宣告改了（模組名或設定），下一次同步才再試。Loader 在 case 7 呼叫點發的
- *   `loader/self-disable`（`vendor/loader` 本地修改第 10 條，只有 case 7 發；`ctx.fiber.update()` 走的 `internal/commit` 不發）
- *   經 {@link PluginTree.onSelfDisable} 交給宿主，serve 把它記成 `self-disabled`（`plugin-failure-recorder.ts`）。
+ *   記憶體裡（{@link PluginTree}`.#selfDisabled`，鍵是列 id、值是整份宣告的簽章）：**宣告沒變就不推 `epoch`、不重掛，判成 `off`**，
+ *   並由宿主替那一列推一條 `{ id, disabled: true }` 給 Include——Include 每次重疊（樹上別列的設定改了、整列重建）都把每一列的
+ *   options 整份換掉，不推的話那一列會被蓋回啟用、重掛一次再停一次（閃動）。serve 重啟、或那一列的宣告改了（模組名或設定），
+ *   下一次同步才再試；清單自己把它停用（`disable`）也算了結，之後啟用回同一份宣告會重掛、再停用，去重鍵同所以不再記一筆。
+ *   Loader 在 case 7 呼叫點發的 `loader/self-disable`（`vendor/loader` 本地修改第 10 條，只有 case 7 發；`ctx.fiber.update()`
+ *   走的 `internal/commit` 不發）經 {@link PluginTree.onSelfDisable} 交給宿主，serve 把它記成 `self-disabled`
+ *   （`plugin-failure-recorder.ts`）。
  *   **偏離 dsh（未實測的推論，撤除條件：讀清單改成不是每條 thread 都推）**：dsh 任何一次協調（plugin-manager 操作、HMR 偵測到
  *   patch 檔改了）都會把 Include 的樹重疊一遍、把自我停用的列蓋回啟用；這裡只在那一列自己的宣告改了才重試，因為 nexus 每條
  *   thread 都重推一次——照 dsh「每次協調都蓋回」就是原本的閃動。
- * - **`cordis.serve.yml` 不經 Include**：Include 只有一個 `path`，serve 專屬那一層是相容層疊在出貨層後面的另一個檔。
+ - **`cordis.serve.yml` 不經 Include**：Include 只有一個 `path`，serve 專屬那一層是相容層疊在出貨層後面的另一個檔。
  *   那一層裡的函式插件上不了樹（它們會在這裡被判成 `absent`，指名原因）；今天那一層沒有函式插件。
  *
  * @module
@@ -60,6 +63,8 @@ import type { ProjectionEntry } from '@nexus/projections/provider';
 import { ContractError, FIBER_STATE, missingServices } from '@nexus/sdk';
 import { createToolsProvider } from '@nexus/tools/provider';
 import type { ToolEntry } from '@nexus/tools/provider';
+
+import { stableStringify } from './stable-stringify.js';
 
 /** 工具登記處那一列的 id。 */
 export const TOOLS_ROW_ID = 'tools';
@@ -209,24 +214,12 @@ export interface SelfDisableEvent {
   readonly module: string;
 }
 
-/** 穩定的序列化（物件鍵排序）：宣告簽章與去重鍵用，兩邊疊出來的鍵順序不同也算同一份。 */
-function stableStringify(value: unknown): string {
-  if (typeof value !== 'object' || value === null) return JSON.stringify(value) ?? 'undefined';
-  if (Array.isArray(value)) return `[${value.map(stableStringify).join(',')}]`;
-  const entries = Object.entries(value as Record<string, unknown>)
-    .filter(([, item]) => item !== undefined)
-    .sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-  return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableStringify(item)}`).join(',')}}`;
-}
-
-/** 一列的宣告：模組名與（正規化後的）設定。自我停用的記憶與去重都以它為準。 */
-interface RowDeclaration {
-  readonly module: string;
-  readonly config: unknown;
-}
-
-const declarationSignature = (declaration: RowDeclaration): string =>
-  stableStringify({ module: declaration.module, config: normalized(declaration.config) });
+/**
+ * 一列宣告的簽章：自我停用的記憶與去重都以它為準。**整份宣告**（列 id、模組名、設定），序列化用共用的
+ * `stable-stringify.ts`（跟 `plugin-row-state.ts` 的 `rowKey` 同一套），所以兩邊疊出來的鍵順序不同、`undefined` 與沒寫也算同一份。
+ */
+const declarationSignature = (id: string, module: string, config: unknown): string =>
+  stableStringify({ id, module, config: normalized(config) });
 
 /** 一棵 Cordis 樹加上它的工具登記處與 Include。 */
 export class PluginTree {
@@ -242,10 +235,11 @@ export class PluginTree {
   readonly #contractErrors = new Map<string, ContractError>();
   #disposed = false;
   /**
-   * **自我停用過的列**（#1424，Q1 (b)）：鍵是樹上的列 id，值是它**停用當時**的宣告。宣告沒變就一直算停著（不推 `epoch`、
-   * 判成 `off`）；宣告改了、或那一列又起來了就忘掉。只活在這個行程裡：重啟就是新的一棵樹，那一列重新試一次。
+   * **自我停用過的列**（#1424，Q1 (b)）：鍵是樹上的列 id，值是它**停用當時**宣告的簽章。宣告沒變就一直算停著（不推
+   * `epoch`、判成 `off`，並由宿主替它推一條 `{ id, disabled: true }` 給 Include，見 {@link sync}）；宣告改了、那一列又起來了、
+   * 或清單自己把它停用了就忘掉。只活在這個行程裡：重啟就是新的一棵樹，那一列重新試一次。
    */
-  readonly #selfDisabled = new Map<string, RowDeclaration>();
+  readonly #selfDisabled = new Map<string, string>();
   /** 已經交給 {@link onSelfDisable} 的（列 id ＋ 宣告簽章）：同一個行程裡同一件事只講一次（#1424 推導 4）。 */
   readonly #announced = new Set<string>();
 
@@ -305,16 +299,13 @@ export class PluginTree {
     } catch {
       return;
     }
-    const declaration: RowDeclaration = {
-      module: entry.options.name,
-      config: structuredClone(normalized(legacy.config)),
-    };
-    this.#selfDisabled.set(treeRowId, declaration);
-    const key = `${id}\0${declarationSignature(declaration)}`;
-    if (this.#announced.has(key)) return;
-    this.#announced.add(key);
+    const module = entry.options.name;
+    const signature = declarationSignature(id, module, legacy.config);
+    this.#selfDisabled.set(treeRowId, signature);
+    if (this.#announced.has(signature)) return;
+    this.#announced.add(signature);
     try {
-      this.onSelfDisable?.({ id, module: declaration.module });
+      this.onSelfDisable?.({ id, module });
     } catch {
       // 接收者不該拋；拋了也不能讓 Loader 卸載那一列的路上多一種結局。
     }
@@ -347,11 +338,18 @@ export class PluginTree {
     const root = await this.context();
     assertNoJsExpr(input.patches, 'patch');
     const only = [...new Set(input.rows.map((row) => row.module))];
+    this.#forgetSettled(input);
     const forced = this.#needsRetry(root, input);
     if (forced) this.#epoch += 1;
+    // 自我停用過、宣告沒變的列：由宿主替它推一條 `disabled`（#1424）。Include 每次重疊（改了樹上別列的設定、整列重建）都把
+    // 每一列的 options 整份換掉，不推的話那一列會被蓋回啟用、重掛一次；推了，不論怎麼重疊它都維持停用。宣告一改記憶就
+    // 忘掉（`#needsRetry`），這一條也跟著不推，那一列重試。
+    const held = input.rows
+      .filter((row) => !row.disabled && this.#stillSelfDisabled(treeId(row.id), row))
+      .map((row) => ({ id: row.id, disabled: true }));
     const config = {
       path: pathToFileURL(input.shipped).href,
-      patches: structuredClone(input.patches),
+      patches: [...structuredClone(input.patches), ...held],
       only,
       ...(this.#epoch === 0 ? {} : { epoch: this.#epoch }),
     };
@@ -417,13 +415,23 @@ export class PluginTree {
     return retry;
   }
 
-  /** 這一列自我停用過、而且清單上它現在的宣告跟停用當時一樣。 */
+  /**
+   * 這一份清單已經「了結」的記憶：清單自己把那一列停用了（之後再啟用回同一份宣告，要讓插件重掛、再停用——去重鍵同，不會再記
+   * 一筆），或那一列已不在清單上。
+   */
+  #forgetSettled(input: TreeInput): void {
+    const live = new Set(input.rows.filter((row) => !row.disabled).map((row) => treeId(row.id)));
+    for (const id of [...this.#selfDisabled.keys()]) {
+      if (!live.has(id)) this.#selfDisabled.delete(id);
+    }
+  }
+
+  /** 這一列自我停用過、而且清單上它現在的宣告（簽章）跟停用當時一樣。 */
   #stillSelfDisabled(id: string, row: TreeRowInput): boolean {
     const remembered = this.#selfDisabled.get(id);
     return (
       remembered !== undefined &&
-      remembered.module === row.module &&
-      isDeepStrictEqual(normalized(remembered.config), normalized(row.config))
+      remembered === declarationSignature(row.id, row.module, row.config)
     );
   }
 
