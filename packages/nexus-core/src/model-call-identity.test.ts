@@ -45,7 +45,7 @@ function failOnce(): () => unknown {
   return () => {
     attempt += 1;
     if (attempt > 1) return withUsage();
-    noteStreamFailure({ code: 'SERVER', retryable: true, status: 500 });
+    noteStreamFailure({ code: 'SERVER', status: 500 });
     throw new Error('壞了');
   };
 }

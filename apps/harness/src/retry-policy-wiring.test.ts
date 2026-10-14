@@ -224,7 +224,7 @@ class SummaryFlakyModel extends BaseChatModel {
     if (isSummary) {
       this.shared.summaryCalls += 1;
       if (this.shared.summaryCalls === this.failOn) {
-        noteStreamFailure({ code: 'SERVER', retryable: true, status: 503 });
+        noteStreamFailure({ code: 'SERVER', status: 503 });
         throw new Error('503 上游出事了');
       }
     } else {
