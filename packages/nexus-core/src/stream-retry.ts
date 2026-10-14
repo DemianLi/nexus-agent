@@ -168,8 +168,8 @@ export const DEFAULT_STREAM_RETRY_MAX_DELAY_MS = 10_000;
 export const DEFAULT_STREAM_RETRY_JITTER_RATIO = 0.1;
 
 /**
- * dsh 的預設可重試碼（`retry-policy.ts:18-24`）：空回覆、限流、伺服器、逾時、斷線。**我們的分類對得上前四個**
- * （`classifyLlmFailure`：429 → `RATE_LIMIT`、其餘 HTTP 狀態 → `SERVER`、逾時 → `TIMEOUT`、沒有狀態 → `TRANSPORT`）；
+ * dsh 的預設可重試碼（`retry-policy.ts:18-24`）：空回覆、限流、伺服器、逾時、斷線。**我們的分類對得上前四個**（`RATE_LIMIT`、`SERVER`、`TIMEOUT`、`TRANSPORT`；
+ * `classifyLlmFailure`：429 → `RATE_LIMIT`、其餘 HTTP 狀態 → `SERVER`、逾時 → `TIMEOUT`、沒有狀態 → `TRANSPORT`）；
  * `EMPTY_RESPONSE` 今天沒有生產者（沒有「空回覆就重打」的路徑），收在清單裡是為了形狀與 dsh 一致。
  */
 export const DEFAULT_STREAM_RETRYABLE_CODES: readonly string[] = Object.freeze([
@@ -243,7 +243,7 @@ async function runInAttempt<T>(call: () => Promise<T>): Promise<{
  *
  * fetch 那一層要在**回應的串流被讀的時候**才看得到失敗，而那已經是 `fetch` 回傳之後的事；`ReadableStream` 的 `pull`
  * 是在誰的非同步脈絡裡被喚起的，要看是哪一次讀觸發的。所以在 `fetch` 被呼叫的當下就把範圍抓起來，之後不論從哪裡回報都
- * 落在這一次嘗試上。範圍外（沒有這顆 middleware、標題那一顆、eval）拿到的是空操作。
+ * 落在這一次嘗試上。範圍外（沒有開範圍的呼叫，例如不經 `retryModelCall` 直接打模型的路徑）拿到的是空操作；標題與 eval 現在也經 `retryModelCall`，各自開範圍。
  *
  * 同一次嘗試回報多次時**以第一次為準**：同一條串流只死一次，後面的是連帶的（例如斷線之後讀端再拋）。
  *

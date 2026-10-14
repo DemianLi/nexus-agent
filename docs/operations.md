@@ -777,7 +777,8 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   整個不寫就是上面這組出廠值。**次數取 6（dsh 預設 5）**：不計抖動的累計等待約 25.5 秒，蓋得過 2026-08-28 量到的 16 秒限流窗口——
   **那次量的是 `openai/gpt-oss-120b`，出貨的 nemotron 沒量過**。代價：串流中段失敗最壞重付 6 次整個回覆。
   碼的對應：429（含沒帶 `retry-after` header 的）是 `RATE_LIMIT`、其他 HTTP 狀態是 `SERVER`、逾時是 `TIMEOUT`、沒有狀態的連線問題是 `TRANSPORT`；
-  `EMPTY_RESPONSE` 今天沒有生產者。401／403／配額、400 系列、上下文溢出、410 下架不重試，不管 `retryableCodes` 怎麼寫。
+  `EMPTY_RESPONSE` 今天沒有生產者。401／403／配額、`STATUS_NO_RETRY` 列出的 4xx（如 400）、上下文溢出、410 下架不重試，不管 `retryableCodes` 怎麼寫。
+  **沒列在 `STATUS_NO_RETRY` 的非 5xx 4xx（實測 408、422、425、418）沿用 `retryDecision`，會照樣重打、記成 `SERVER`**；dsh 會把它們記成 `HTTP_n`、不重試——這一點是已知差異，登記在 #1437，不是設計。
   供應商給的 `retry-after` 不超過 `maxDelayMs` 就照它等（不加抖動），**超過就直接放棄**、不重打；每次等待是 `initialDelayMs` 倍增、
   封頂 `maxDelayMs`，抖動之後再夾到上限。**`mode: always`（無限重試）拒收**：這是對 dsh 的登記偏離——一輪沒有盡頭、中段失敗每次重付整個回覆，
   撤除條件是需要無限重試的情境（`docs/plugin-contract.md` 偏離表）。
@@ -834,7 +835,7 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   dsh 那一對成對的 `provider`／`model` 我們只有 `modelId`：一個組裝一條連線，沒有第二個端點可挑。這次呼叫**不計進會話統計，也不寫 `model/usage`**（同 dsh），所以用量表上看不到它。
 - **重試政策沿用 `live-model` 的 `retryPolicy`**（同一份次數與退避，標題不寫 `llm/retry`），但整段有這一列的 `timeoutMs`（60 秒）封頂，
   退避也聽得到那個時限，所以最壞是等滿 60 秒。
-- **失敗只講一聲**：serve 記進伺服器日誌、CLI 印在 stderr，前綴都是 `[標題]`，退回標題留著，不重試。
+- **失敗只講一聲**：標題請求照同一份 `retryPolicy` 重試，用完仍失敗就只講一聲——serve 記進伺服器日誌、CLI 印在 stderr，前綴都是 `[標題]`，退回標題留著，不另外再排一次標題生成。
   `finish_reason` 不是 `stop`（例如推理吃光上限）、要求呼叫工具、正規化後是空的、輸入超過 `maxInputBytes`，
   都算失敗。
 - **CLI 一次性的呼叫多半等不到它**：主回覆收完行程就收尾，還沒回來的標題請求會被中止（不講話），只留退回標題。

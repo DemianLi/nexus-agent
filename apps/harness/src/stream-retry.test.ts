@@ -13,6 +13,7 @@ import type { ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import { MemorySaver } from '@langchain/langgraph';
 import { deriveTokenUsage } from '@nexus/core';
+import { applyTokenMeter, initialTokenMeter, viewTokenMeter } from '@nexus/plugin-token-meter';
 import type { SessionEventMap, StreamRetryOptions } from '@nexus/core';
 import {
   emptyConversation,
@@ -588,6 +589,31 @@ describe('串流第一則事件之後才出錯（#520）', () => {
       [starts[2]!.seq, 120, 20, undefined],
     ]);
     expect(deriveTokenUsage(run.events)).toMatchObject({ inputTokens: 220, outputTokens: 30 });
+    // token-meter 的投影（#1421）：同一份日誌折一次。用量與 core 的總帳一致；退避落在兩次嘗試之間，
+    // 不屬於任何一對起訖，所以 `modelMs`（三次嘗試的牆鐘）一毫秒都沒被扣，`retryWaitMs` 是實際等的總和。
+    const meter = viewTokenMeter(
+      run.events.reduce((state, event) => applyTokenMeter(state, event), initialTokenMeter()),
+    );
+    const waited = run.events
+      .filter((event) => event.type === 'llm/retry-started')
+      .reduce((sum, event) => sum + (event.data as { waitedMs: number }).waitedMs, 0);
+    const attemptMs = starts.reduce(
+      (sum, start, index) => sum + (ends[index]!.time - start.time),
+      0,
+    );
+    expect(meter.session).toMatchObject({
+      steps: 3,
+      failedSteps: 2,
+      unknownSteps: 1,
+      inputTokens: 220,
+      outputTokens: 30,
+      failedInputTokens: 100,
+      failedOutputTokens: 10,
+      retries: 2,
+      retryWaitMs: waited,
+      modelMs: attemptMs,
+    });
+    expect(waited).toBeGreaterThan(0);
     // 兩次重打各一顆 `llm/retry`，分別指回失敗的那次（第 1、第 2 次嘗試）。
     const retries = run.events.filter((event) => event.type === 'llm/retry');
     expect(retries.map((event) => (event.data as { modelCall?: number }).modelCall)).toEqual([

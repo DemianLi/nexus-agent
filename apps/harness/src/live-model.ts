@@ -486,7 +486,7 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  *
  * 在 fetch 這一層先把第一則事件讀出來。是錯誤物件的話，**不往外拋，而是回一個帶著
  * 供應商原始信封的 HTTP 錯誤回應** —— 於是 SDK 走它本來就有的 HTTP 錯誤路徑，
- * 建出帶 `status` 的 `APIError`，那顆錯誤落在 `AsyncCaller` 的重試迴圈**裡面**。
+ * 建出帶 `status` 的 `APIError`，那顆錯誤落在 `AsyncCaller` 的 `onFailedAttempt` **裡面**（分類與回報都在那裡做）。
  *
  * **為什麼不用拋的**：`openai@7.5.0` 會把自訂 `fetch` 拋出來的東西包成 `APIConnectionError`
  * （`client.js:558`），而訊息來自 `getConnectionErrorMessage`，它對這個情形回 `undefined`
@@ -515,15 +515,16 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  * `assistantStreamRevision`（`core/agent-loop/src/agent.ts:116`、`:426-429`，`5badb15009a`），我們當時沒有——已經送到畫面上的字沒有
  * 地方宣告作廢。#520 補的載體是日誌的 `assistant/attempt`（不進模型）加線上的 `message-discard` 自訂 frame，重打本身是
  * `@nexus/core` 的 `stream-retry.ts`（`wrapModelCall`，排在記錄器外面，每次嘗試各是一對 `model/start`／`model/end`）。
- * **這一層對第一則事件之前的失敗仍然是翻成 HTTP 錯誤交給 SDK 重試**；第一則事件之後的失敗只做一件事——**回報**
- * （{@link createInbandWatcher}），由 core 那一顆決定重不重打。兩邊的預算互不相乘：回報只在第一則事件之後才發生。
+ * **#1427 之後重打只有 core 那一層**：這一層對第一則事件之前的失敗是翻成 HTTP 錯誤，經 `AsyncCaller` 的 `onFailedAttempt`
+ * 分類並**回報**（SDK 層 `maxRetries` 為 0，不自己重打）；第一則事件之後的失敗由 {@link createInbandWatcher} 回報。兩種都由 core
+ * 那一顆（`retryModelCall`）決定重不重打，**共用同一份預算**，不存在兩邊相乘的問題。
  *
  * ## 邊界：第一則事件，不是「串流錯誤」
  *
  * 涵蓋的是**串流的第一則 SSE 事件**。判準刻意是事件而不是「第一次網路讀取拿到的位元組」——
  * 後者會隨網路分段漂移（loopback 上整份 body 會被併成一段，量出來的覆蓋率是假的）。
  *
- * **這一層（翻成 HTTP 錯誤、交 SDK 重試）不涵蓋、而且有測試釘住**：
+ * **這一層（翻成 HTTP 錯誤、交 `onFailedAttempt` 分類回報）不涵蓋、而且有測試釘住**：
  *
  * - 吐了內容之後中段才出錯（第 2 則以後的事件是 error）。
  * - 串流中途斷掉（`ERR_INCOMPLETE_CHUNKED_ENCODING`）。
@@ -726,7 +727,8 @@ export class StreamIdleTimeoutError extends Error {
  * 1. **中段逾時由 core 的 `stream-retry.ts` 整次重打**（#520；#521 時是「不重試」，因為當時沒有載體宣告「已經送到畫面上的字
  *    作廢」）。dsh 的 `TIMEOUT` 在預設可重試碼裡（`llm/src/retry-policy.ts:18`），由步級掛點重試整條串流；這裡拋
  *    {@link StreamIdleTimeoutError} 的同時向重試那一顆回報 `TIMEOUT`，跟串流中途斷掉（`TRANSPORT`）走同一條路。重打的預算
- *    比 dsh 保守，見 `settings/live-model.ts` 的偏離四。**第一則事件之前的逾時照舊歸 SDK 的計時器與重試。**
+ *    與第一則事件之前的失敗**共用同一份 `retryPolicy`**（#1427，出廠 6 次，比 dsh 的預設 5 次多，見 `settings/live-model.ts`
+ *    的偏離二）。**第一則事件之前的逾時由 SDK 的 `timeout` 計時器產生**，同樣經 `onFailedAttempt` 回報、進同一份預算。
  * 2. **位元組級，不是 chunk 級**。dsh 等的是解析好的一個 chunk；我們在 `fetch` 這一層只看得到位元組，
  *    所以 SSE 的 keep-alive 註解行（`: ping`）也會重新計時。供應商要是只送 keep-alive 不送內容，這一層
  *    擋不到。退到位元組級是因為這是手上最靠近 adapter 的一格（同 {@link withInbandStreamErrors}）。

@@ -16,13 +16,13 @@
  * ## 檢查在 adapter、決定在上層（dsh 的形狀）
  *
  * dsh 的 adapter 只投影、不決定：請求裡留著的圖超過額度時，adapter 以 `IMAGE_OFFLOAD_REQUIRED` 失敗並帶 `offloadImages`（還要再省略最舊的幾張），
- * 上層 `agent/request-error` 接住、記 `image/offload`、重試，**不花供應商的重試額度、不記 `llm/retry`**。這裡逐項對應：
+ * 上層 `agent/request-error` 接住、記 `image/offload`、重試，**不花重打的預算、不記 `llm/retry`**。這裡逐項對應：
  *
  * - **adapter**：{@link assertImageBudget} 在請求轉換之前量留著的圖（`AttachmentChatOpenAI`、`ScriptedChatModel` 各自呼叫），超過就拋
  *   {@link ImageOffloadRequiredError}。額度來自型錄條目（`imageBudget`），跟著建出這顆 adapter 的那一列走——換模型就換了一顆 adapter、換了額度。
  * - **上層**：{@link createImageOffloadRecoveryMiddleware} 接住那個錯、挑最舊的 `offloadImages` 張寫成 `image/offload`、改好請求再送一次。
  *   它排在起訖紀錄器、用量記錄器與串流重打的**內側**（`fold.ts` 的槽位表），所以失敗的那一次嘗試在它們看來從沒發生：同一次 `model/start`／`model/end`、
- *   同一次用量、沒有 `llm/retry`；供應商的重試額度（`AsyncCaller` 在 `super._generate` 裡面，我們的拋錯在它前面）也沒碰到。
+ *   同一次用量、沒有 `llm/retry`；整次重打的預算（`retryPolicy`，#1427 之後 SDK 層不重打）也沒碰到。
  * - **沒東西可省就往外拋**：挑不到（沒有來源記號的圖、已經全省略）時原錯誤原樣往外，走一般失敗路徑——同 dsh「沒有可省略的就委派下游」。
  *
  * ## 登記的偏離

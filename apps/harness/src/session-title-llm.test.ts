@@ -185,18 +185,21 @@ describe('送出去的是什麼、寫了什麼', () => {
   });
 
   /**
-   * #1021／#1427：標題請求由 `model/start` 的訂閱者排起，它回報的失敗不能算進主呼叫的那一次嘗試——否則主呼叫會因為
-   * 標題端點的失敗被重打，它的 `llm/retry` 也會寫進主日誌。擋的有兩層：起訖紀錄器在**開範圍之前**寫 `model/start`，
-   * 標題呼叫又綁在接上那一刻的 context 上（`AsyncResource.bind`）。**單拿掉 bind 這條不會紅**（第一層還在）——它釘的是
-   * 結果：主呼叫只打一次、主日誌上沒有重試事件。這裡走真的起訖紀錄器與真的重試迴圈，並讓標題模型像 adapter 一樣回報
-   * 一次可重試的失敗。
+   * #1021／#1427：標題請求由 `model/start` 的訂閱者排起，它回報的失敗不能算進主呼叫的那一次嘗試——否則主呼叫會被當成
+   * 「帶著一個可重試的失敗」而重打，它的 `llm/retry` 也會寫進主日誌。擋住這件事的是標題呼叫綁在**接上那一刻**的
+   * context 上（`AsyncResource.bind`），所以標題的 `noteStreamFailure` 落在範圍外、是空操作。
+   *
+   * **斷言要能分辨「有掉進來」與「沒掉進來」**：主 handler 等標題回報完之後，拋一顆**自己沒有回報過**的錯。回報若掉進
+   * 主呼叫的範圍，重試那一層會把這顆錯當成可重試的失敗、重打一次（`mainCalls` 變 2、主日誌多一顆 `llm/retry`）；沒掉進來，
+   * 這顆錯原樣往外、只打一次。這裡走真的起訖紀錄器與真的重試迴圈。
    */
   it('標題請求回報的失敗不會讓主呼叫重打，也不會掉進主日誌', async () => {
-    let titleCalled = false;
+    let titleReported = false;
     let mainCalls = 0;
+    const mainError = new Error('主呼叫自己的錯，沒有向重試那一層回報過');
     const t = attached(async () => {
       noteStreamFailure({ code: 'SERVER', retryable: true, status: 500 });
-      titleCalled = true;
+      titleReported = true;
       return stopReply();
     });
     t.log.append('turn/start', { kind: 'message', text: FIRST });
@@ -206,19 +209,23 @@ describe('送出去的是什麼、寫了什麼', () => {
     }) as unknown as {
       wrapModelCall: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
     };
-    await retryModelCall(
+    const outcome = await retryModelCall(
       { maxRetries: 2, initialDelayMs: 5, maxDelayMs: 10, jitterRatio: 0 },
       { log: t.log },
       () =>
         recorder.wrapModelCall({ runtime: { configurable: {} } }, async () => {
           mainCalls += 1;
-          await until(() => titleCalled);
-          return new AIMessage('好。');
+          await until(() => titleReported);
+          throw mainError;
         }),
+    ).then(
+      () => ({ kind: 'resolved' as const }),
+      (error: unknown) => ({ kind: 'rejected' as const, error }),
     );
     await until(() => titleEvents(t.log.events).length === 2);
-    expect(titleCalled).toBe(true);
+    expect(titleReported).toBe(true);
     expect(mainCalls).toBe(1);
+    expect(outcome).toEqual({ kind: 'rejected', error: mainError });
     expect(t.log.events.filter((event) => event.type.startsWith('llm/retry'))).toEqual([]);
     await t.detach();
   });

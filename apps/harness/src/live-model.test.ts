@@ -784,7 +784,7 @@ describe('串流內回報的錯誤（#516）', () => {
   /**
    * ## 明確未涵蓋，而且這兩條就是那個宣告
    *
-   * 這一層（翻成 HTTP 錯誤、交 SDK 重試）涵蓋的是**第一則 SSE 事件**。中段才出錯的串流在這一層仍然只打一次 ——
+   * 這一層（翻成 HTTP 錯誤、交 `onFailedAttempt` 回報）涵蓋的是**第一則 SSE 事件**。中段才出錯的串流在這一層仍然只打一次 ——
    * 它的整次重打在更上面的 `stream-retry`（#520，端到端的測試在 `stream-retry.test.ts`），這裡的 `ChatOpenAI` 直接
    * 呼叫不經過那一顆（偏離登記見 {@link withInbandStreamErrors} 的檔頭）。
    *

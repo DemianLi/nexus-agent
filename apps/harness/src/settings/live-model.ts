@@ -51,7 +51,8 @@
  *
  * **碼對得上我們的分類**（`live-model.ts` 的 `classifyLlmFailure`）：429（含沒帶 header 的）→ `RATE_LIMIT`、其他 HTTP 狀態 →
  * `SERVER`、逾時 → `TIMEOUT`、沒有狀態的連線問題 → `TRANSPORT`。`EMPTY_RESPONSE` 今天沒有生產者（沒有「空回覆就重打」的
- * 路徑），收在清單裡只為形狀與 dsh 一致。放棄的那幾類（401／403／402／配額、4xx、上下文溢出、410 下架）不經過回報，所以
+ * 路徑），收在清單裡只為形狀與 dsh 一致。放棄的那幾類（401／403／402／配額、`STATUS_NO_RETRY` 列出的 4xx、上下文溢出、410 下架）不經過回報；沒列的非 5xx 4xx（408、422、425、418）
+ * 沿用 `retryDecision` 照樣重打、記 `SERVER`（見下面的已知差異）。所以
  * `retryableCodes` 擋的是「分類出來的碼」，不是替它們翻案。
  *
  * **與 dsh 行為對齊的幾條**：`retry-after` 不超過 `maxDelayMs` 就照它等（不加抖動）、超過就放棄；抖動之後再夾到

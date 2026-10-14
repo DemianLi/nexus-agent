@@ -685,7 +685,8 @@ export interface SessionEventMap {
   /**
    * 排定的那次重試等完、**真的要重打**了。與同一個 `retryId` 與 `retry` 的 `llm/retry` 配對；等待中被取消的
    * 重試沒有這一顆（`stream-retry.ts` 的「取消之後不再寫」）。`waitedMs` 是**實際**等了多久——dsh 在
-   * `llm/retry` 上帶的是排定的 `delayMs`，這裡的接縫拿不到。
+   * `llm/retry` 上帶的是排定的 `delayMs`；#1427 之後重試迴圈在 core 這一層，排定的 `delayMs` 拿得到，`llm/retry` 帶 `delayMs`，
+   * 這一顆帶實際等的 `waitedMs`。
    */
   'llm/retry-started': {
     readonly retryId: string;
