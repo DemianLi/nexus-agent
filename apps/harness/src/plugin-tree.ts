@@ -42,7 +42,7 @@
  *   **偏離 dsh（未實測的推論，撤除條件：讀清單改成不是每條 thread 都推）**：dsh 任何一次協調（plugin-manager 操作、HMR 偵測到
  *   patch 檔改了）都會把 Include 的樹重疊一遍、把自我停用的列蓋回啟用；這裡只在那一列自己的宣告改了才重試，因為 nexus 每條
  *   thread 都重推一次——照 dsh「每次協調都蓋回」就是原本的閃動。
- - **`cordis.serve.yml` 不經 Include**：Include 只有一個 `path`，serve 專屬那一層是相容層疊在出貨層後面的另一個檔。
+ * - **`cordis.serve.yml` 不經 Include**：Include 只有一個 `path`，serve 專屬那一層是相容層疊在出貨層後面的另一個檔。
  *   那一層裡的函式插件上不了樹（它們會在這裡被判成 `absent`，指名原因）；今天那一層沒有函式插件。
  *
  * @module
@@ -215,8 +215,9 @@ export interface SelfDisableEvent {
 }
 
 /**
- * 一列宣告的簽章：自我停用的記憶與去重都以它為準。**整份宣告**（列 id、模組名、設定），序列化用共用的
- * `stable-stringify.ts`（跟 `plugin-row-state.ts` 的 `rowKey` 同一套），所以兩邊疊出來的鍵順序不同、`undefined` 與沒寫也算同一份。
+ * 一列宣告的簽章：自我停用的記憶與去重都以它為準。輸入是樹看得到的三格（列 id、模組名、設定）；序列化用共用的
+ * `stable-stringify.ts`，跟 `plugin-row-state.ts` 的 `rowKey` 同一支（`rowKey` 序列化的是整份 entry，這裡只有這三格，
+ * 其他欄位到不了 Include），所以兩邊疊出來的鍵順序不同、`undefined` 與沒寫也算同一份。
  */
 const declarationSignature = (id: string, module: string, config: unknown): string =>
   stableStringify({ id, module, config: normalized(config) });
