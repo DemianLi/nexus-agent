@@ -498,12 +498,13 @@ async function startServer(
   } catch (error) {
     // 必掛的掉了、起不來：先把那一筆記進紀錄再拋（#1414）。
     if (error instanceof StartupError) {
-      failureRecorder.note(failedRowsOf(error.dropped), 'startup');
+      // 啟動沒有「上一次」可比，不帶 newlyDropped（#1423：啟動試組不套新規則）。
+      failureRecorder.note(failedRowsOf(error.dropped, undefined), 'startup');
       await failureRecorder.flush();
     }
     throw error;
   }
-  failureRecorder.note(failedRowsOf(loaded.dropped), 'startup');
+  failureRecorder.note(failedRowsOf(loaded.dropped, undefined), 'startup');
   const plugins: readonly PluginEntry[] = loaded.plugins;
   const optionalEntries = optionalEntriesOf(loaded, audit);
   // **起動期解一次、往下傳一份**：這兩顆都有消費者跑在任何 agent 出生之前（冷讀清單、`BrowserAuth`），那時
@@ -609,12 +610,12 @@ async function startServer(
     .catch(async (error: unknown) => {
       if (!(error instanceof AssemblyDropError)) throw error;
       const startupError = startupErrorFrom(loaded, error, audit);
-      failureRecorder.note(failedRowsOf(startupError.dropped), 'startup');
+      failureRecorder.note(failedRowsOf(startupError.dropped, undefined), 'startup');
       await failureRecorder.flush();
       throw startupError;
     });
   await trial.dispose();
-  failureRecorder.note(failedRowsOf(assemblyDropsOf(loaded, trial.dropped)), 'startup');
+  failureRecorder.note(failedRowsOf(assemblyDropsOf(loaded, trial.dropped), undefined), 'startup');
   for (const line of startupWarning(
     loaded,
     assemblyDropsOf(loaded, trial.dropped),
