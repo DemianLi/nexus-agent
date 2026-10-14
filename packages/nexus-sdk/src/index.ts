@@ -35,3 +35,11 @@ export type { ContractIntercept } from './contract.js';
 
 export { FIBER_STATE, checkConformance, fiberOf, missingServices } from './conformance.js';
 export type { ConformanceCheck, ConformanceFailure, ConformanceTarget } from './conformance.js';
+
+export { checkSharedAcrossThreads } from './shared-across-threads.js';
+export type {
+  SharedAcrossThreadsCheck,
+  SharedAcrossThreadsFailure,
+  SharedAcrossThreadsTarget,
+  ThreadStep,
+} from './shared-across-threads.js';

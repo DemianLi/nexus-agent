@@ -156,6 +156,42 @@ expect(await checkConformance({ row, module, providers, residue })).toEqual([]);
 所以**只有能做快照的插件，才能比版本路由早上樹**：快照拿走的是「註冊進登記處的東西」（工具、命令⋯），它們在
 列卸載後仍然可以呼叫。**有狀態的插件不行**，它們得等版本路由的引用計數排水，舊版的最後一段對話結束才撤。
 
+## 逐條 thread 的東西在呼叫當下拿，狀態以日誌為準（#1418）
+
+插件在一次組裝裡**只套一次**，可是這個行程可能同時服務好幾條 thread（serve 一條連線一條 thread）。所以 `apply`
+閉包裡抓到的東西，凡是「每條 thread 各一份」的，在第二條 thread 進來的那一刻就是錯的——而且錯得靜默：
+工具寫進別條 thread 的日誌，或問到別條 thread 的人。
+
+規則只有兩條，對應 dsh 的 `exec.agent`（身分隨呼叫明確傳進來，不靠 `apply` 當下）：
+
+| 規則 | 怎麼做 | 為什麼 |
+| --- | --- | --- |
+| **逐條 thread 的東西，呼叫當下才拿** | 要會話日誌用 `registry.sessions.forCall(config)`，要答題管道用 `registry.services.get(CHANNEL_FOR_THREAD_SERVICE)?.(callThreadId(config))`；**這支函式沒提供、或提供了但對這條 thread 回 `undefined`，都退回 `channel`**。工具 handler 與 middleware 都從呼叫設定的 `configurable.thread_id` 拿身分，`PipelineExecution.thread` 是同一個值 | `apply` 只跑一次；`thread_id` 在 root、同步子代理、背景子代理三種位置都到得了 handler 與 middleware（`apps/harness/src/thread-id-reaches-handlers.test.ts` 實測） |
+| **狀態以日誌為準，閉包裡的暫存表鍵要帶 thread** | 暫存表（例如 present 的「已呼叫、尚未落定」）的鍵是 `thread \0 位址 \0 callId`，不是 `callId` | 模型給的 `tool_call.id` 是各 thread 各自編號的，兩條 thread 同時懸著同一個 `callId` 是會發生的 |
+
+**身分三種位置**：root 與同步子代理的 `thread_id` 是 root 那一條（子代理身分靠 `checkpoint_ns`）；背景子代理的
+`thread_id` 是它自己的日誌 id（`<root>/<runId>`）並帶 `nexus_background_session`。`forCall` 就是用這個挑會話註冊表：
+綁著一張時不看 `thread_id`（跟以前一樣），綁著多張時依 `thread_id` 挑**恰好認得它的那一張**，挑不出仍回 `ambiguous`。
+
+**這條規則怎麼被守住**：`@nexus/sdk` 的 `checkSharedAcrossThreads` 是一格通用的一致性檢查——同一份序列各條
+thread 各自掛一份跑一遍當基準，再掛**一份**服務所有 thread 跑一遍，兩邊結果對不上就紅並指名是第幾步、哪條 thread、
+各回了什麼。它不 import `@nexus/core`：每顆插件在自己的套件裡寫一個轉接器（ask-user 與 present 各一份，`shared-across-threads.test.ts`）。
+這一格**不要求插件上樹**——ask-user 與 present 仍是相容層的 `NexusPlugin`，不匯出 `manifest`
+（`apps/harness/src/pilot-plugins-stay-compat.test.ts` 釘住）。
+
+**出貨路徑不變**：組裝點只提供 `channel`，不提供 `channelForThread`，所以產品路徑上答題管道的取法與以前一樣
+（一條 thread 一份組裝，現在提供它只會是一支恆等函式）。assembly-root 提供 `channelForThread` 由 ask-user 自己的
+遷移卡接手。
+
+**宿主的義務：同一份組裝服務多條 thread 時，`channel` 是每一條都會拿到的預設。** `channel` 只能放每條 thread 都適用的值；
+逐條不同的答題者一律走 `channelForThread`，並且不提供 `channel`（或只放每條都適用的那個）。理由是對應 dsh 沒有標籤的
+監聽者：它的答題者用 `scopeTarget(agent, agent)` 分發，對沒有標籤的監聽者一律放行，只有帶標籤的才看是不是這個
+agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以行程級的答題者服務每一個 agent。我們的
+`channel` 就是那個沒有標籤的監聽者，`channelForThread` 回 `undefined` 往下退回它是同一個語意。
+
+**一個前提**：背景子代理的日誌在送出時就已經開好（`background-subagents.ts` 的 `start()`，`sessions.open` 在 `submit`
+拉起背景圖之前），`forCall` 靠日誌 id 認出它屬於哪一張。日後改成延後才開的話，多張綁定下背景那一輪的第一筆會回 `ambiguous`。
+
 ## 偏離 dsh
 
 | 偏離 dsh 的什麼 | 理由類別 | 說明 |
@@ -165,6 +201,9 @@ expect(await checkConformance({ row, module, providers, residue })).toEqual([]);
 | 帶型別的 token | 已登記（決議 §五，第 14 條） | 取代 declaration merging 加 `scripts/gen-cordis-catalog.ts` |
 | 服務契約用 `check` 做 semver | 產品需求超出 dsh | dsh 一處都沒用（`Service.check` 在 `packages`、`apps` 為 0）；它的版本相容檢查在套件層，比整個 runtime 的版本（`packages/boot/app-boot/src/plugin-compatibility.ts:61-88`） |
 | 共用的一致性套件 | 產品需求超出 dsh | dsh 的卸載測試是每個套件各寫一份；插件層級沒有共用套件，只有後端層級的 contract suite（`packages/storage/storage/tests/contract.ts`）。決議 §3-4 第 12 條 |
+| `present` 的暫存表以身分（thread＋位址＋`callId`）當鍵，不用 `WeakMap<ToolExecution>` | 表達不出來，退到最接近的實作 | dsh 的工具執行與 `tools/result` 拿到的是**同一個物件**，所以 `WeakMap` 夠用；我們的 `exec` 每次都在 `tool-pipeline.ts` 的 `toolExecutionOf` 重建，物件身分對不上。照它的意思改用身分當鍵（#1418） |
+| 答題管道是函式服務 `channelForThread`，不是 exec 上的欄位 | 表達不出來，退到最接近的實作 | dsh 的答題者從 `exec.agent` 分發；我們的答題管道是宿主服務（`channel`），不在 `exec` 上，沒有地方放「隨呼叫傳進來」的值。呼叫當下依 `callThreadId(config)` 問一支函式，回 `undefined` 退回 `channel`（見上一節）（#1418） |
+| 卡上寫「會話位址加上 thread 身分」，實作是另外加 `exec.thread` 與 `callThreadId`，`SessionAddress` 沒動 | **對卡上字面的改動，不是對 dsh 的偏離** | `SessionAddress` 是**一張 `SessionRegistry` 之內**的位址：每張註冊表就是一條 thread（根日誌 id 就是那條 thread 的 id、子代理日誌 id 是 `<root>/<runId>`，`session-registry.ts`），`sessionAddressKey` 只用來在那一張裡當 Map 鍵。thread 在「挑哪一張註冊表」那一步就用掉了，放進位址會在同一張表裡重複一份永遠相同的值。實測的足跡：24 個檔案提到 `SessionAddress`，原始碼與測試裡有 38 處 `kind: 'root'`、33 處 `kind: 'subagent'` 的字面比對、20 個檔案走 `toolCallSessionAddress`——加欄位要全部改，不加成可選欄位則又回到「沒填就挑不出」。而且背景子代理的 `thread_id` 本身就是 `<root>/<runId>`，已經含 `runId`，放進位址會有兩種寫法指同一個身分（`thread-id-reaches-handlers.test.ts` 量到）。所以 thread 走呼叫設定（`callThreadId`），在 `forCall` 與 `exec.thread` 用 |
 
 ## 接進清單（#1416 PR 2）
 

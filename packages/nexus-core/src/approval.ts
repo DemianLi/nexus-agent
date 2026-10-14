@@ -196,6 +196,31 @@ export interface QuestionReply {
  */
 export const CHANNEL_SERVICE = 'channel';
 
+/**
+ * 「這條 thread 有沒有人可以回答」：{@link CHANNEL_SERVICE} 的逐條 thread 版
+ * （[#1418](https://github.com/DemianLi/nexus-agent/issues/1418)）。
+ *
+ * **為什麼要有它。** 今天每條 thread 各組裝一次，組裝點在那一次算出一個 {@link ApprovalChannel} 交給 `channel`，
+ * 消費者在 `apply` 當下抓住那個值。插件只套一次之後，一份 registry 要服務好幾條 thread，各自的答題者不同
+ * （這條有人在、那條是 `policy-never`），`apply` 當下抓的那個值就只對一條。所以改成**呼叫當下依這次呼叫的 thread 取**
+ * （dsh：身分隨呼叫明確傳進來，`exec.agent`）：消費者拿 {@link callThreadId} 問這支函式。
+ *
+ * **可選，缺席就退回 {@link CHANNEL_SERVICE}**：產品路徑今天一條 thread 一份組裝，只提供 `channel`，行為與以前相同。
+ * 回 `undefined` 也退回 `channel`（這支函式不認得那條 thread）。
+ *
+ * **宿主的義務：同一份組裝服務多條 thread 時，`channel` 是每一條 thread 都會拿到的預設。** 所以 `channel` 只能放
+ * 每條 thread 都適用的值；逐條不同的答題者一律交給這支函式，並且不提供 `channel`（或只放每條都適用的那個）。
+ * 這是照 dsh：它的答題者用 `scopeTarget(agent, agent)` 分發，對**沒有標籤的監聽者一律放行**、只有帶標籤的才看是不是
+ * 這個 agent 或它的上層（`packages/core/scope/src/index.ts:170-185`）——行程級、不分 scope 的答題者服務每一個 agent。
+ * 我們的 `channel` 對應那個沒有標籤的監聽者，往下退回它就是那個語意。
+ *
+ * @param threadId - 這次呼叫的 `thread_id`；認不出來（不在圖裡）是 `undefined`。
+ */
+export type ChannelForThread = (threadId: string | undefined) => ApprovalChannel | undefined;
+
+/** {@link ChannelForThread} 這個服務的名字。型別見 `NexusServices.channelForThread`。 */
+export const CHANNEL_FOR_THREAD_SERVICE = 'channelForThread';
+
 export type ApprovalChannel =
   /** 有人在，`ask` 真的會停下來問。 */
   | { readonly kind: 'human' }

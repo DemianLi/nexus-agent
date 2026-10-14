@@ -42,6 +42,7 @@ export type {
   PreToolDecision,
   PreToolListener,
   ApprovalChannel,
+  ChannelForThread,
   PlanReviewIntent,
   QuestionAnswerItem,
   QuestionInterruptItem,
@@ -67,6 +68,7 @@ export {
   approvalGatePlugin,
   APPROVAL_INTERRUPT_KIND,
   QUESTION_INTERRUPT_KIND,
+  CHANNEL_FOR_THREAD_SERVICE,
   CHANNEL_SERVICE,
   createApprovalGateMiddleware,
   deriveApprovalChannel,
@@ -776,6 +778,7 @@ export type { SessionAddress } from './session-address.js';
 export {
   BACKGROUND_RUN_PREFIX,
   BACKGROUND_SESSION_CONFIG_KEY,
+  callThreadId,
   isBackgroundAddress,
   sessionAddressKey,
   spawnedSubagentRunId,

@@ -173,6 +173,27 @@ export function toolCallSessionAddress(config: unknown): SessionAddress | undefi
 }
 
 /**
+ * 這次呼叫在哪一條 LangGraph thread 裡（`configurable.thread_id`）。**身分隨呼叫明確傳進來**，不靠環境式的「目前 thread」
+ * （dsh 的 `exec.agent` 對應；[#1418](https://github.com/DemianLi/nexus-agent/issues/1418) Q3）。
+ *
+ * `apps/harness/src/thread-id-reaches-handlers.test.ts` 實測過三種呼叫都拿得到：
+ *
+ * - 根 agent：那條 thread 的 id；
+ * - 同步子代理（`task`，在父圖裡跑）：**沿用父 thread 的 id**，子代理是誰靠 {@link toolCallSessionAddress} 的 `checkpoint_ns`；
+ * - 背景子代理：它自己的日誌 id（`<root>/<runId>`），另帶 {@link BACKGROUND_SESSION_CONFIG_KEY}。
+ *
+ * @param config - 同 {@link toolCallSessionAddress}：工具的第二個參數，或 `{ configurable: request.runtime.configurable }`。
+ * @returns 非空字串的 `thread_id`；沒有（不在圖裡、手搭的測試呼叫）是 `undefined`。
+ */
+export function callThreadId(config: unknown): string | undefined {
+  if (typeof config !== 'object' || config === null) return undefined;
+  const configurable = (config as { configurable?: unknown }).configurable;
+  if (typeof configurable !== 'object' || configurable === null) return undefined;
+  const id = (configurable as { thread_id?: unknown }).thread_id;
+  return typeof id === 'string' && id.length > 0 ? id : undefined;
+}
+
+/**
  * 一次工具呼叫**派出去的子代理**會帶著的 `runId`：就是這次呼叫自己的整串命名空間。
  *
  * 同一張表的另一面：子代理那兩列去掉最後一段，剩下的正是父圖裡那次 `task` 呼叫的

@@ -145,8 +145,9 @@ describe('拒絕在日誌上記成錯誤', () => {
   }, 20000);
 
   /**
-   * **組裝沒接好的那一類：錯誤只看得到在訊息上，日誌一顆事件都沒有。** 綁兩份會話是真的
-   * 組裝裡造得出「挑不出哪一份」的唯一辦法；圍堵同樣挑不出來，所以兩份都是空的。
+   * **組裝沒接好的那一類：錯誤只看得到在訊息上，日誌一顆事件都沒有。** 綁兩份會話、而且這次呼叫的
+   * `thread_id` 哪一份都不認（#1418 之後認得就解到那一份，見 `session-lookup-by-thread.test.ts`）
+   * 是真的組裝裡造得出「挑不出哪一份」的辦法；圍堵同樣挑不出來，所以兩份都是空的。
    */
   it('挑不出哪一份：回給模型的是錯誤，兩份日誌上什麼都沒有', async () => {
     const { agent, attachSession, dispose } = await createNexusAgent({
@@ -172,7 +173,7 @@ describe('拒絕在日誌上記成錯誤', () => {
     let result;
     try {
       result = await agent.invoke(toAgentInvocation('跑。'), {
-        configurable: { thread_id: 'refusals-a' },
+        configurable: { thread_id: 'refusals-neither' },
       });
     } finally {
       detachSecond();
