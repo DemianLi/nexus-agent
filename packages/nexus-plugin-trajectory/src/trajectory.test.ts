@@ -9,7 +9,6 @@ import { AIMessage, HumanMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 import {
   createProjectionFold,
-  createRegistry,
   indexModelCalls,
   REPEAT_REMINDER_MARKER,
   SessionLog,
@@ -26,7 +25,6 @@ import {
   TRAJECTORY_TURN_LIST_CAP,
 } from '@nexus/wire';
 import type { TrajectoryApprovalOutcome, TrajectoryView } from '@nexus/wire';
-import { trajectoryPlugin } from './index.js';
 import {
   applyTrajectory,
   initialTrajectory,
@@ -781,17 +779,6 @@ describe('純度與通道的契約', () => {
     for (const event of log.events) live.push(event);
     expect(live.current()).toEqual(fold.fold(log.events));
   });
-
-  it('插件把兩個單元註冊進通道', () => {
-    const registry = createRegistry();
-    const leave = registry.enter({ id: 'trajectory#0', name: 'trajectory' });
-    trajectoryPlugin.apply(registry, undefined as never);
-    leave();
-    expect(registry.projections.list().map((unit) => unit.key)).toEqual([
-      'trajectory',
-      'request-snapshots',
-    ]);
-  });
 });
 
 describe('差分：歸屬跟 core 的 indexModelCalls 一致', () => {
@@ -932,18 +919,6 @@ describe('沒有 turn/start 的日誌：前景子代理（#1070）', () => {
     expect(applyTrajectory(state, stray)).toBe(state);
     // 有 turn/start 在前的日誌，第一輪是 message，不是 run。
     expect(foldAll(rooted.events).turns.map((turn) => turn.kind)).toEqual(['message']);
-  });
-
-  it('兩個單元都宣告 children：子代理的日誌也各折一份', () => {
-    const registry = createRegistry();
-    const leave = registry.enter({ id: 'trajectory#0', name: 'trajectory' });
-    trajectoryPlugin.apply(registry, undefined as never);
-    leave();
-    const units = registry.projections.list();
-    expect(units.map((unit) => [unit.key, unit.children])).toEqual([
-      ['trajectory', true],
-      ['request-snapshots', true],
-    ]);
   });
 });
 

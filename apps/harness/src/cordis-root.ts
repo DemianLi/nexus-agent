@@ -14,7 +14,7 @@
  * | `tools` | 行程級的工具登記處（`@nexus/tools/provider`，契約服務；#1416 PR 2） | `tools` 服務的提供者 |
  * | `projections` | 行程級的投影登記處（`@nexus/projections/provider`，契約服務；#1421），只收定義、不推動 | `sessionProjections` 服務的提供者 |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`、疊 patch、把函式插件掛起來（#1416 PR 2，`plugin-tree.ts`） | `include` |
- * | `include:<id>` | Include 底下的函式插件，今天是 `include:echo` 與 `include:token-meter` | 各插件 |
+ * | `include:<id>` | Include 底下的函式插件，今天是 `include:echo`、`include:trajectory` 與 `include:token-meter` | 各插件 |
  *
  * `nexus-compat`、入口、`tools`、`projections`、`include` 都必掛（`startup-audit.ts` 的 {@link auditTreeEntries}）；`include:<id>` 不在名單上，
  * 它掉了是清單那一列掉了，走 `dropped`。入口的程式碼經入口那一列的 inject 拿到服務，所有組 agent 的地方都走它。`tools`、

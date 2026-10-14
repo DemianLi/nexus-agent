@@ -18,13 +18,25 @@
   },
   "devDependencies": {
     "@langchain/core": "^1.2.9",
+    "@nexus/core": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/cordis-plugin-loader": "workspace:*",
+    "@nexus/projections": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   },
   "dependencies": {
-    "@nexus/core": "workspace:*",
-    "@nexus/wire": "workspace:*"
+    "@nexus/wire": "workspace:*",
+    "zod": "^4.3.6"
+  },
+  "peerDependencies": {
+    "@nexus/cordis": "workspace:*",
+    "@nexus/projections": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*"
   }
 }
