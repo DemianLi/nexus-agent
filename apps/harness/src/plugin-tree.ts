@@ -9,8 +9,9 @@
  * | `projections` | 行程級的投影登記處（`@nexus/projections/provider`，#1421），契約服務，一列 | `sessionProjections` 服務的提供者 |
  * | `skill-sources` | 行程級的技能來源登記處（`@nexus/skills/provider`，#1446），契約服務，一列 | `skills` 服務的提供者（形狀不同：收路徑，不收提供者，偏離登記在 `@nexus/skills`） |
  * | `commands` | 行程級的命令登記處（`@nexus/commands/provider`，#1456），契約服務，一列 | `commands` 服務的提供者 |
+ * | `approval-channel` | 行程級的預設答題管道（`@nexus/approval-channel/provider`，#1458），契約服務，一列；**宿主在建樹時給值**，不是插件登記進來的 | （dsh 沒有這一種：它的答題者是 `session.interrupt` 事件的監聽者；偏離登記在 `@nexus/approval-channel`） |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 | `include`（`app-boot` 的 `entry.update({ config: { ...includeConfig, patches } })`） |
- * | `include:<id>` | Include 底下的列，今天是 echo、token-meter、trajectory、skills 與 feedback（#1456；模組有 `manifest` 匯出的才上樹） | 各插件 |
+ * | `include:<id>` | Include 底下的列，今天是 echo、token-meter、trajectory、skills、feedback 與 ask-user（#1458；模組有 `manifest` 匯出的才上樹） | 各插件 |
  *
  * ## 清單怎麼進樹
  *
@@ -54,6 +55,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
 import type { StructuredToolInterface } from '@langchain/core/tools';
+import type { ApprovalChannel } from '@nexus/approval-channel';
+import { createApprovalChannelProvider } from '@nexus/approval-channel/provider';
 import { createCommandsProvider } from '@nexus/commands/provider';
 import type { CommandEntry } from '@nexus/commands/provider';
 import type { CommandDefinition, ProjectionUnit } from '@nexus/core';
@@ -70,6 +73,7 @@ import type { ServiceToken } from '@nexus/sdk';
 import { createSkillSourcesProvider } from '@nexus/skills/provider';
 import type { SkillSourceEntry } from '@nexus/skills/provider';
 import { createToolsProvider } from '@nexus/tools/provider';
+import type { ToolRegisterOptions } from '@nexus/tools';
 import type { ToolEntry } from '@nexus/tools/provider';
 import semver from 'semver';
 
@@ -86,6 +90,9 @@ export const SKILL_SOURCES_ROW_ID = 'skill-sources';
 
 /** 命令登記處那一列的 id。 */
 export const COMMANDS_ROW_ID = 'commands';
+
+/** 答題管道那一列的 id（#1458）。 */
+export const APPROVAL_CHANNEL_ROW_ID = 'approval-channel';
 
 /** Include 那一列的 id。 */
 export const INCLUDE_ROW_ID = 'include';
@@ -191,6 +198,11 @@ export type RowVerdict =
       /** 登記者就是這一列的工具。 */
       readonly tools: readonly StructuredToolInterface[];
       /**
+       * 這一列登記工具時帶的註冊選項（#1458 Q3）：`rootOnly`、`outputSchema`。**只有帶了選項的工具才有一格**，沒帶的不在裡面。
+       * 折進這條 thread 的 registry 時跟著工具一起交給註冊點——宿主不認得選項的語意，原樣轉交，照 dsh 的 `defineTool`。
+       */
+      readonly toolOptions: ReadonlyMap<StructuredToolInterface, ToolRegisterOptions>;
+      /**
        * **這一列負責折進這條 thread 的**投影單元（#1421）：登記者是這一列、而且這一列是那個 key 目前還活著的第一個登記者。
        * 同一個 key 由兩列共用時（提供者那一層引用計數共用，PM 決策 1），每個 key 只交給其中一列，這條 thread 的登記處才
        * 不會撞上它自己的重複拒絕（`NamedEntries`，照舊）。
@@ -287,13 +299,25 @@ export interface SelfDisableEvent {
   readonly module: string;
 }
 
+/** {@link PluginTree} 的建構選項。 */
+export interface PluginTreeOptions {
+  /**
+   * 這棵樹上預設的答題管道（#1458 Q1 (c)）：進入點（serve「有人在」、CLI headless）依自己的情境算出來，建樹時交進來，
+   * 樹把它放進 `approval-channel` 那一列。ask-user 只消費它，不自己決定。不給就是「宿主沒有指定」：那一列照樣掛著，
+   * 服務的值是 `undefined`，ask-user 在呼叫當下拒絕（fail-closed，#669）。
+   */
+  readonly channel?: ApprovalChannel;
+}
+
 /** 一棵 Cordis 樹加上它的工具登記處與 Include。 */
 export class PluginTree {
+  readonly #channel: ApprovalChannel | undefined;
   #context?: Promise<Context>;
   #provider = createToolsProvider();
   #projections = createProjectionsProvider();
   #skillSources = createSkillSourcesProvider();
   #commands = createCommandsProvider();
+  #approvalChannel: ReturnType<typeof createApprovalChannelProvider>;
   /** 串行化 {@link run}。 */
   #chain: Promise<unknown> = Promise.resolve();
   /** 最後一次推給 Include 的設定簽章；一樣就不推。 */
@@ -318,10 +342,24 @@ export class PluginTree {
    */
   onSelfDisable?: (event: SelfDisableEvent) => void;
 
+  constructor(options: PluginTreeOptions = {}) {
+    this.#channel = options.channel;
+    this.#approvalChannel = createApprovalChannelProvider(options.channel);
+  }
+
   /**
-   * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections`、`skill-sources`、`commands` 那四列。
+   * 這棵樹預設的答題管道（建樹時交進來的那一份）。**給測試與審計對照用**：樹上 `approvalChannel` 服務的值與這個一致，
+   * 進入點算出來的與組裝根（`createHostServicesPlugin`）算出來的一致，是 #1458 驗收 E 的一格。
+   */
+  get channel(): ApprovalChannel | undefined {
+    return this.#channel;
+  }
+
+  /**
+   * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections`、`skill-sources`、`commands`、
+   * `approval-channel` 那五列。
    *
-   * @returns 已掛好 Loader 與 `tools`、`projections`、`skill-sources`、`commands` 列的根。
+   * @returns 已掛好 Loader 與上述五列的根。
    */
   context(): Promise<Context> {
     this.#context ??= this.#build();
@@ -347,12 +385,17 @@ export class PluginTree {
       [PROJECTIONS_ROW_ID]: this.#projections.Provider,
       [SKILL_SOURCES_ROW_ID]: this.#skillSources.Provider,
       [COMMANDS_ROW_ID]: this.#commands.Provider,
+      [APPROVAL_CHANNEL_ROW_ID]: this.#approvalChannel.Provider,
       [INCLUDE_ROW_ID]: Include,
     });
     await this.#create(root, { id: TOOLS_ROW_ID, name: `cordis:${TOOLS_ROW_ID}` });
     await this.#create(root, { id: PROJECTIONS_ROW_ID, name: `cordis:${PROJECTIONS_ROW_ID}` });
     await this.#create(root, { id: SKILL_SOURCES_ROW_ID, name: `cordis:${SKILL_SOURCES_ROW_ID}` });
     await this.#create(root, { id: COMMANDS_ROW_ID, name: `cordis:${COMMANDS_ROW_ID}` });
+    await this.#create(root, {
+      id: APPROVAL_CHANNEL_ROW_ID,
+      name: `cordis:${APPROVAL_CHANNEL_ROW_ID}`,
+    });
     await root.loader.await();
     return root;
   }
@@ -718,6 +761,7 @@ export class PluginTree {
       return {
         kind: 'active',
         tools: entries.filter((item) => item.source === id).map((item) => item.tool),
+        toolOptions: toolOptionsOf(entries.filter((item) => item.source === id)),
         // 投影單元由 `#assignProjections` 在所有列的結果都有了之後再分：共用的 key 只能給一列。
         projections: [],
         // 技能來源路徑由 `#assignSkillSources` 在所有列的結果都有了之後再分。
@@ -760,6 +804,17 @@ export class PluginTree {
   }
 }
 
+/** 一組工具登記裡帶了選項的那些：工具實例 → 選項。沒帶選項的不進表（`Map` 只是索引，不是清單）。 */
+function toolOptionsOf(
+  entries: readonly ToolEntry[],
+): ReadonlyMap<StructuredToolInterface, ToolRegisterOptions> {
+  const options = new Map<StructuredToolInterface, ToolRegisterOptions>();
+  for (const entry of entries) {
+    if (entry.options !== undefined) options.set(entry.tool, entry.options);
+  }
+  return options;
+}
+
 /** {@link mountDetached} 的輸入。 */
 export interface DetachedMount {
   /** 列 id。 */
@@ -768,11 +823,18 @@ export interface DetachedMount {
   readonly module: FunctionPluginModule;
   /** 那一列的設定（原始的）。 */
   readonly config: unknown;
+  /**
+   * 這一次單獨掛上時預設的答題管道（#1458）。**沒有樹的呼叫端也要有**：`bindDetached` 從組裝的 registry 讀 `channel` 服務交進來，
+   * 不給等於「宿主沒有指定」（ask-user 在呼叫當下拒絕）。
+   */
+  readonly channel?: ApprovalChannel;
 }
 
 /** {@link mountDetached} 取出的東西：這一列登記的工具、投影單元、技能來源路徑、命令定義，與它提供、宿主取到的服務。 */
 export interface DetachedContributions {
   readonly tools: readonly StructuredToolInterface[];
+  /** 帶了註冊選項的工具與它的選項（#1458 Q3），同 {@link RowVerdict} 的 `toolOptions`。 */
+  readonly toolOptions: ReadonlyMap<StructuredToolInterface, ToolRegisterOptions>;
   readonly projections: readonly ProjectionUnit[];
   readonly skillSources: readonly string[];
   readonly commands: readonly CommandDefinition[];
@@ -795,6 +857,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
   const projections = createProjectionsProvider();
   const skillSources = createSkillSourcesProvider();
   const commands = createCommandsProvider();
+  const approvalChannel = createApprovalChannelProvider(mount.channel);
   const root = new Context();
   const contractErrors = new Map<string, ContractError>();
   root.logger.exporter({
@@ -813,6 +876,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
       [PROJECTIONS_ROW_ID]: projections.Provider,
       [SKILL_SOURCES_ROW_ID]: skillSources.Provider,
       [COMMANDS_ROW_ID]: commands.Provider,
+      [APPROVAL_CHANNEL_ROW_ID]: approvalChannel.Provider,
       plugin: mount.module,
     });
     const create = (options: EntryOptions) =>
@@ -821,6 +885,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
     await create({ id: PROJECTIONS_ROW_ID, name: `cordis:${PROJECTIONS_ROW_ID}` });
     await create({ id: SKILL_SOURCES_ROW_ID, name: `cordis:${SKILL_SOURCES_ROW_ID}` });
     await create({ id: COMMANDS_ROW_ID, name: `cordis:${COMMANDS_ROW_ID}` });
+    await create({ id: APPROVAL_CHANNEL_ROW_ID, name: `cordis:${APPROVAL_CHANNEL_ROW_ID}` });
     await create({
       id: mount.id,
       name: 'cordis:plugin',
@@ -839,11 +904,10 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
         if (problem !== undefined) throw new Error(problem);
         services.push({ name: token.name, value: found.value });
       }
+      const owned = provider.entries().filter((entry) => entry.source === mount.id);
       return {
-        tools: provider
-          .entries()
-          .filter((entry) => entry.source === mount.id)
-          .map((entry) => entry.tool),
+        tools: owned.map((entry) => entry.tool),
+        toolOptions: toolOptionsOf(owned),
         projections: projections
           .entries()
           .filter((entry) => entry.sources.includes(mount.id))

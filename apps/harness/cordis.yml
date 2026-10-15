@@ -129,9 +129,12 @@
 # 部署方想在多人共用的主機上關掉 `ask_user_question`，寫 `- id: ask-user` ＋ `disabled: true` 只會得到一行「找不到 id」。
 # 搬進清單之後它們跟其他列一樣：看得見、關得掉。dsh 的 ask-user 也只是 preset 裡的一列。
 #
-# 兩顆都沒有資料設定，協作者走服務注入（#459）：`ask_user_question` 讀 host-services 提供的答題管道（**沒有就在呼叫時拒絕**，
-# 不退成「有人在」，照 dsh 的 `NO_PROVIDER`），`submit_record` 在被叫時讀 `fs` 服務（#694，折出來的 backend）。host-services 仍由組裝點在最前面掛。
-# 我們的 CLI 是有人在的互動入口，dsh 沒有對應物，所以兩個入口照舊都有這兩顆。
+# 兩顆都沒有資料設定，協作者走服務注入（#459）。`ask_user_question` 讀樹上 `approval-channel` 那一列給的預設答題管道（**沒有就
+# 在呼叫時拒絕**，不退成「有人在」，照 dsh 的 `NO_PROVIDER`；值由入口在建樹時給，#1458），`submit_record` 在被叫時讀 `fs` 服務
+# （#694，折出來的 backend）。host-services 仍由組裝點在最前面掛。我們的 CLI 是有人在的互動入口，dsh 沒有對應物，所以兩個入口照舊都有這兩顆。
+#
+# **`ask-user` 是樹上的函式插件**（#1458）：模組有 `manifest` 匯出，Include 把它掛在 `include:ask-user`，經 `tools` 服務登記
+# `ask_user_question`（帶 `rootOnly`＋`outputSchema` 選項）；清單上的位置、名字與 `disabled` 的寫法都沒變。`submit_record` 還在相容層。
 #
 # `submit_record` 帶一道核准閘門（一律停下來讓人看過），所以它在 `approval-gate-order.test.ts` 的射程內。
 - id: ask-user

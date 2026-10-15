@@ -26,6 +26,22 @@ const consumer = {
   },
 };
 
+/** 帶選項登記的消費者（#1458）：`rootOnly` 兩種形狀與 `outputSchema` 都交給登記處。 */
+const optionedConsumer = {
+  name: 'tools-optioned-consumer',
+  // 範圍仍是 `^1.0.0`：舊消費者不改範圍，提供者升到 1.1.0 之後照常（驗收 F）。
+  inject: injectOf(need(toolsToken, '^1.0.0')),
+  apply(ctx: Context) {
+    const tools = service(ctx, toolsToken);
+    tools.register(make('plain'));
+    tools.register(make('root_true'), { rootOnly: true });
+    tools.register(make('root_refusal'), {
+      rootOnly: { message: '不給子代理', error: { name: 'SomeError', code: 'SOME_CODE' } },
+      outputSchema: z.object({ answers: z.array(z.string()) }),
+    });
+  },
+};
+
 let root: Context | undefined;
 afterEach(async () => {
   await root?.fiber.dispose();
@@ -37,7 +53,11 @@ async function boot() {
   const context = new Context();
   root = context;
   await context.plugin(Loader);
-  Object.assign(context.loader.builtins, { tools: provider.Provider, consumer });
+  Object.assign(context.loader.builtins, {
+    tools: provider.Provider,
+    consumer,
+    optioned: optionedConsumer,
+  });
   const create = (options: EntryOptions) =>
     context.loader.create(options as Omit<EntryOptions, 'id'>, null);
   await create({ id: 'tools', name: 'cordis:tools' });
@@ -73,6 +93,33 @@ describe('工具登記處的提供者', () => {
     await loader.await();
     expect(provider.entries().map(({ source }) => source)).toEqual(['row-a']);
     expect(loader.resolve('row-b').fiber?.ctx.fiber.state).toBe(3);
+  });
+
+  it('登記帶的選項原樣記在那一筆上；沒帶就是沒有這一格（不是空物件）', async () => {
+    const { provider, loader, create } = await boot();
+    await create({ id: 'row-opt', name: 'cordis:optioned' });
+    await loader.await();
+    const byName = new Map(provider.entries().map((entry) => [entry.tool.name, entry]));
+    expect(byName.get('plain')?.options).toBeUndefined();
+    expect('options' in (byName.get('plain') ?? {})).toBe(false);
+    expect(byName.get('root_true')?.options).toEqual({ rootOnly: true });
+    const refusal = byName.get('root_refusal')?.options;
+    expect(refusal?.rootOnly).toEqual({
+      message: '不給子代理',
+      error: { name: 'SomeError', code: 'SOME_CODE' },
+    });
+    // schema 是原物件：宿主折進組裝時交給 `outputSchema`，不是複本。
+    expect(refusal?.outputSchema?.safeParse({ answers: ['x'] }).success).toBe(true);
+    expect(refusal?.outputSchema?.safeParse({ answers: 3 }).success).toBe(false);
+  });
+
+  it('選項跟著那一筆撤掉：消費者那一列卸載後，整筆（連選項）不在登記處', async () => {
+    const { provider, loader, create } = await boot();
+    await create({ id: 'row-opt', name: 'cordis:optioned' });
+    await loader.await();
+    expect(provider.entries()).toHaveLength(3);
+    await loader.resolve('row-opt').fiber?.ctx.fiber.dispose();
+    expect(provider.entries()).toEqual([]);
   });
 
   it('每次 createToolsProvider 的狀態是新的', () => {

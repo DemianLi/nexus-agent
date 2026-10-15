@@ -15,7 +15,7 @@ import { tool } from '@langchain/core/tools';
 import { Command, MemorySaver } from '@langchain/langgraph';
 import { APPROVAL_REJECTED_BY_USER, fromLoggedMessage, SessionRegistry } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
-import { createAskUserPlugin } from '@nexus/plugin-ask-user';
+import { createAskUserPlugin } from './ask-user.fixture.js';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 import { createNexusAgent } from './agent-factory.js';

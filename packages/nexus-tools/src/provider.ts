@@ -19,12 +19,14 @@ import type { Context } from '@nexus/cordis';
 import { ContractService } from '@nexus/sdk';
 
 import { toolsToken } from './index.js';
-import type { ToolRegistry } from './index.js';
+import type { ToolRegistry, ToolRegisterOptions } from './index.js';
 
-/** 一筆登記：工具與登記它的那一列（Cordis 的列 id；沒有列就是插件名）。 */
+/** 一筆登記：工具、登記它的那一列（Cordis 的列 id；沒有列就是插件名），與登記時帶的選項（#1458）。 */
 export interface ToolEntry {
   readonly tool: StructuredToolInterface;
   readonly source: string;
+  /** 登記時帶的選項；沒帶就是 `undefined`（不是空物件）。宿主折進每條 thread 的組裝時一起交出去。 */
+  readonly options?: ToolRegisterOptions;
 }
 
 /** {@link createToolsProvider} 的回傳：交給 Loader 當內建插件的類別，與讀登記內容的那一面。 */
@@ -44,7 +46,7 @@ export function createToolsProvider(): ToolsProviderHandle {
       super(ctx, toolsToken);
     }
 
-    register(tool: StructuredToolInterface): () => void {
+    register(tool: StructuredToolInterface, options?: ToolRegisterOptions): () => void {
       // `this.ctx` 追蹤到呼叫者（消費者）：登記者那一列的 id 取自它。
       const caller = this.ctx.fiber;
       const source = caller.entry?.id ?? caller.runtime?.name ?? '(未知)';
@@ -55,7 +57,7 @@ export function createToolsProvider(): ToolsProviderHandle {
             `工具名 ${tool.name} 已經由 ${existing.source} 登記，${source} 不能再登記同名的工具`,
           );
         }
-        const entry: ToolEntry = { tool, source };
+        const entry: ToolEntry = { tool, source, ...(options !== undefined && { options }) };
         items.push(entry);
         return () => {
           const index = items.indexOf(entry);

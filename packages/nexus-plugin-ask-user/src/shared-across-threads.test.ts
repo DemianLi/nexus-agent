@@ -1,67 +1,66 @@
 /**
  * `ask_user_question` 套一次、服務兩條 thread（[#1418](https://github.com/DemianLi/nexus-agent/issues/1418) 的 C 類試點）。
  *
- * 今天每條 thread 各組裝一次，答題者（`channel`）在那一次算出來、`apply` 當下抓住。插件只套一次之後，一份 registry
- * 服務好幾條 thread，各自的答題者不同：一條有人在、一條是 `policy-never`。這一檔把「同一份掛一次、綁兩條 thread、交錯呼叫」
- * 的結果拿來跟「各自一份」比（`@nexus/sdk` 的 {@link checkSharedAcrossThreads}，SDK 不 import core，轉接在這裡寫）。
+ * 一份 registry 服務好幾條 thread：「同一份掛一次、綁兩條 thread、交錯呼叫」的結果，要與「各自一份」相同
+ * （`@nexus/sdk` 的 {@link checkSharedAcrossThreads}，SDK 不 import core，轉接在這裡寫）。
+ *
+ * **#1458 之後答題者是行程級的**：宿主在建樹時交給樹一份預設答題管道（`approval-channel` 那一列），ask-user 在 `apply`
+ * 當下抓住它，**不再逐條 thread 查**（`channelForThread` 退成定義套件裡的 token 與型別，今天沒有提供者）。所以這一檔的
+ * 「兩條 thread」共用同一個答題者；「一條有人在、一條沒人在」是兩個進程級組裝（serve 與 headless CLI）的事，
+ * 各自一棵樹，那一格的測試在 `apps/harness/src/ask-user-on-tree.test.ts`。
  *
  * **轉接用真的圖**：`interrupt()` 只在圖裡有意義，所以每次呼叫都是一張只有一個節點的 `StateGraph`，帶存檔點、以 thread 為鍵，
  * 同 serve 那條路的形狀。結果只留兩種：「問了」（圖停在中斷上，帶題目 id）與「沒問」（回給模型的那一句）。
  */
 
 import { MemorySaver, Annotation, END, START, StateGraph } from '@langchain/langgraph';
-import type { StructuredTool } from '@langchain/core/tools';
-import {
-  CHANNEL_FOR_THREAD_SERVICE,
-  CHANNEL_SERVICE,
-  createHostServicesPlugin,
-  loadPlugins,
-  SessionRegistry,
-} from '@nexus/core';
-import type { ApprovalChannel } from '@nexus/core';
+import type { StructuredToolInterface } from '@langchain/core/tools';
+import type { ApprovalChannel } from '@nexus/approval-channel';
+import { createApprovalChannelProvider } from '@nexus/approval-channel/provider';
+import { Context } from '@nexus/cordis';
+import Loader from '@nexus/cordis-plugin-loader';
 import { checkSharedAcrossThreads } from '@nexus/sdk';
 import type { ThreadStep } from '@nexus/sdk';
-import { describe, expect, it } from 'vitest';
+import { createToolsProvider } from '@nexus/tools/provider';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import {
-  ASK_USER_QUESTION_TOOL_NAME,
-  createAskUserPlugin,
-  NO_CHANNEL_MESSAGE,
-  noAnswererMessage,
-} from './index.js';
-
-/** 每條 thread 各自的答題者：人在的、沒人在的、沒有存檔點的。 */
-const CHANNELS: Readonly<Record<string, ApprovalChannel>> = {
-  'with-human': { kind: 'human' },
-  'no-human': { kind: 'policy-never' },
-  'no-checkpointer': { kind: 'no-channel' },
-};
-
-const channelOf = (thread: string | undefined): ApprovalChannel | undefined =>
-  thread === undefined ? undefined : CHANNELS[thread];
+import * as askUser from './index.js';
+import { NO_CHANNEL_MESSAGE, noAnswererMessage } from './index.js';
 
 interface Mounted {
-  readonly tool: StructuredTool;
+  readonly tool: StructuredToolInterface;
 }
 
+const opened: Context[] = [];
+afterEach(async () => {
+  for (const root of opened.splice(0)) await root.fiber.dispose();
+});
+
 /**
- * 掛一次。**組裝點提供的東西與產品路徑同形**：`channel`（今天的值）與 `channelForThread`（逐條 thread）。
- * 基準那一份（只綁一條 thread）的 `channel` 就是那條 thread 的答題者，等於今天「一條 thread 一次組裝」；
- * 共用那一份的 `channel` 沒有「那一條」可指，給預設的 `human`——沒改的插件在 `apply` 當下抓住的就是它。
+ * 掛一次：行程級的答題管道給定一個值（宿主在建樹時決定），這一份工具服務 `threads` 裡的每一條。
+ * `threads` 只用來讓呼叫端寫得出「這一份服務幾條」——工具不需要事先知道有哪些 thread，身分從每次呼叫的設定來。
  */
-async function mount(threads: readonly string[]): Promise<Mounted> {
-  const only = threads.length === 1 ? channelOf(threads[0]) : undefined;
-  const { registry } = await loadPlugins([
-    createHostServicesPlugin({
-      channel: only ?? { kind: 'human' },
-      channelForThread: channelOf,
-    }),
-    createAskUserPlugin(),
-  ]);
-  for (const thread of threads) registry.sessions.bind(new SessionRegistry(thread));
-  const entry = registry.tools.resolve(ASK_USER_QUESTION_TOOL_NAME);
+async function mountWith(channel: ApprovalChannel | undefined): Promise<Mounted> {
+  const tools = createToolsProvider();
+  const root = new Context();
+  opened.push(root);
+  await root.plugin(Loader);
+  Object.assign(root.loader.builtins, {
+    tools: tools.Provider,
+    'approval-channel': createApprovalChannelProvider(channel).Provider,
+    'ask-user': askUser,
+  });
+  const create = (options: { id: string; name: string; config?: unknown }) =>
+    root.loader.create(options as never, null);
+  await create({ id: 'tools', name: 'cordis:tools' });
+  await create({ id: 'approval-channel', name: 'cordis:approval-channel' });
+  await create({ id: 'ask-user', name: 'cordis:ask-user', config: {} });
+  await root.loader.await();
+  const entry = tools
+    .entries()
+    .find((item) => item.tool.name === askUser.ASK_USER_QUESTION_TOOL_NAME);
   if (entry === undefined) throw new Error('工具沒有註冊上去');
-  return { tool: entry.value };
+  return { tool: entry.tool };
 }
 
 const State = Annotation.Root({ text: Annotation<string>() });
@@ -92,59 +91,52 @@ async function askAs(mounted: Mounted, thread: string, questionId: string): Prom
 }
 
 describe('ask_user_question 套一次、服務兩條 thread', () => {
-  it('一條有人在、一條沒人在：各自得到對的結果，與各自一份時相同', async () => {
-    const steps: ThreadStep<string>[] = [
-      { thread: 'with-human', input: 'q1' },
-      { thread: 'no-human', input: 'q2' },
-      { thread: 'with-human', input: 'q3' },
-      { thread: 'no-human', input: 'q4' },
-    ];
+  const STEPS: ThreadStep<string>[] = [
+    { thread: 'thread-a', input: 'q1' },
+    { thread: 'thread-b', input: 'q2' },
+    { thread: 'thread-a', input: 'q3' },
+    { thread: 'thread-b', input: 'q4' },
+  ];
+
+  it('有人在：共用一份與各自一份相同，每條 thread 都停在自己的中斷上', async () => {
     const failures = await checkSharedAcrossThreads({
       name: 'ask-user',
-      steps,
-      mount,
+      steps: STEPS,
+      mount: () => mountWith({ kind: 'human' }),
       call: (mounted, thread, input) => askAs(mounted, thread, input),
     });
     expect(failures).toEqual([]);
   });
 
-  it('三種答題者交錯：有人就問、沒人就在呼叫當下拒絕（#669）', async () => {
-    const mounted = await mount(['with-human', 'no-human', 'no-checkpointer']);
-    expect(await askAs(mounted, 'with-human', 'a')).toEqual({ asked: ['a'] });
-    expect(await askAs(mounted, 'no-human', 'b')).toEqual({
-      refused: `Error: ${noAnswererMessage({ kind: 'policy-never' })}`,
+  it('沒人在（policy-never）：共用一份與各自一份相同，每條 thread 都在呼叫當下被拒', async () => {
+    const failures = await checkSharedAcrossThreads({
+      name: 'ask-user',
+      steps: STEPS,
+      mount: () => mountWith({ kind: 'policy-never' }),
+      call: (mounted, thread, input) => askAs(mounted, thread, input),
     });
-    expect(await askAs(mounted, 'no-checkpointer', 'c')).toEqual({
-      refused: `Error: ${noAnswererMessage({ kind: 'no-channel' })}`,
-    });
-    // 再回到有人的那一條：沒有被前面兩條的拒絕帶偏。
-    expect(await askAs(mounted, 'with-human', 'd')).toEqual({ asked: ['d'] });
+    expect(failures).toEqual([]);
   });
 
-  it('組裝點不認得這條 thread：退回 channel；channel 也沒有就是 NO_CHANNEL（fail-closed，#669）', async () => {
-    const { registry } = await loadPlugins([
-      createHostServicesPlugin({ channelForThread: () => undefined }),
-      createAskUserPlugin(),
-    ]);
-    registry.sessions.bind(new SessionRegistry('stranger'));
-    const entry = registry.tools.resolve(ASK_USER_QUESTION_TOOL_NAME);
-    const mounted: Mounted = { tool: entry!.value };
+  it('三種答題者各自成一棵樹：有人就問、沒人就在呼叫當下拒絕（#669）', async () => {
+    const human = await mountWith({ kind: 'human' });
+    const never = await mountWith({ kind: 'policy-never' });
+    const none = await mountWith({ kind: 'no-channel' });
+    expect(await askAs(human, 'thread-a', 'a')).toEqual({ asked: ['a'] });
+    expect(await askAs(never, 'thread-a', 'b')).toEqual({
+      refused: `Error: ${noAnswererMessage({ kind: 'policy-never' })}`,
+    });
+    expect(await askAs(none, 'thread-a', 'c')).toEqual({
+      refused: `Error: ${noAnswererMessage({ kind: 'no-channel' })}`,
+    });
+    // 再回到有人的那一棵：沒有被別棵的拒絕帶偏——答題者是各棵樹自己的，不是模組層級的狀態。
+    expect(await askAs(human, 'thread-b', 'd')).toEqual({ asked: ['d'] });
+  });
+
+  it('宿主沒有給答題管道：呼叫當下 NO_CHANNEL，載入照常（fail-closed，#669）', async () => {
+    const mounted = await mountWith(undefined);
     expect(await askAs(mounted, 'stranger', 'x')).toEqual({
       refused: `Error: ${NO_CHANNEL_MESSAGE}`,
     });
-  });
-
-  it('只提供 channel（今天的產品路徑）：行為不變', async () => {
-    const { registry } = await loadPlugins([
-      createHostServicesPlugin({ channel: { kind: 'policy-never' } }),
-      createAskUserPlugin(),
-    ]);
-    registry.sessions.bind(new SessionRegistry('solo'));
-    const mounted: Mounted = { tool: registry.tools.resolve(ASK_USER_QUESTION_TOOL_NAME)!.value };
-    expect(await askAs(mounted, 'solo', 'x')).toEqual({
-      refused: `Error: ${noAnswererMessage({ kind: 'policy-never' })}`,
-    });
-    expect(CHANNEL_SERVICE).toBe('channel');
-    expect(CHANNEL_FOR_THREAD_SERVICE).toBe('channelForThread');
   });
 });

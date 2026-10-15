@@ -26,11 +26,8 @@ import {
   SUBAGENT_DELEGATION_CONTEXT,
   TOOL_ERROR_PREFIX,
 } from '@nexus/core';
-import {
-  ASK_USER_QUESTION_TOOL_NAME,
-  createAskUserPlugin,
-  DELEGATED_CALLER_MESSAGE,
-} from '@nexus/plugin-ask-user';
+import { ASK_USER_QUESTION_TOOL_NAME, DELEGATED_CALLER_MESSAGE } from '@nexus/plugin-ask-user';
+import { createAskUserPlugin } from './ask-user.fixture.js';
 import { hasDirectHumanTurn } from '@nexus/plugin-goal';
 import {
   CONTAINED_FILESYSTEM,
