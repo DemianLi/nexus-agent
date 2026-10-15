@@ -868,6 +868,43 @@ describe('舊格式', () => {
   it('對照：格式 9 的不是舊格式', () => {
     expect(historyPage(TWO_TURNS).legacy).toBe(false);
   });
+
+  /**
+   * `messagesCompactable`（[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）出現以前寫的 `context/measure` 沒有這一格：
+   * 重放出來的 `measure` 不出這個 key，web 照沒有它的算法畫，不當成 `false`。對照：有就原樣帶上線。
+   */
+  it('context/measure 沒有 messagesCompactable 時，線上的 measure 也沒有這個 key', () => {
+    const measured = (extra: object) =>
+      reduceAll(
+        emptyConversation(),
+        historyPage(
+          log(
+            human('嗨'),
+            { type: 'model/start', data: {} },
+            reply('嗨。'),
+            { type: 'model/end', data: {} },
+            {
+              type: 'context/measure',
+              data: {
+                approxTokens: 33_000,
+                messageCount: 70,
+                thresholds: [
+                  { type: 'tokens', value: 100_000 },
+                  { type: 'messages', value: 60 },
+                ],
+                ...extra,
+              },
+            },
+            turnEnd,
+          ),
+        ).events,
+      ).contextPressure?.measure;
+
+    const old = measured({});
+    expect(old).toMatchObject({ approxTokens: 33_000, messageCount: 70 });
+    expect(old !== undefined && 'messagesCompactable' in old).toBe(false);
+    expect(measured({ messagesCompactable: false })?.messagesCompactable).toBe(false);
+  });
 });
 
 /**

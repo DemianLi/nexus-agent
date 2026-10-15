@@ -345,11 +345,17 @@ describe('即時與重新整理拿到同一份，只算 root', () => {
     expect(eventsOf(subagents, 'model/usage').map((usage) => usage.inputTokens)).toEqual([1001]);
     expect(eventsOf(subagents, 'context/measure')).toHaveLength(1);
     expect(eventsOf(root, 'model/usage').map((usage) => usage.inputTokens)).toEqual([1000, 1002]);
-    // 線上的量測沒有 `modelCall`（識別是日誌內的事，畫面不需要）；其餘三格與日誌逐一相等。
+    // 線上的量測沒有 `modelCall`（識別是日誌內的事，畫面不需要）；其餘幾格與日誌逐一相等。
     const rootMeasures = eventsOf(root, 'context/measure').map(
       ({ modelCall: _modelCall, ...wire }) => wire,
     );
     expect(rootMeasures).toHaveLength(2);
+    // 前提：出廠門檻帶 `messages` 那道，所以日誌上每筆都有 `messagesCompactable`（#1443）——下面的「逐一相等」才問得到
+    // 逐欄手抄的 `contextMeasureData` 有沒有把它帶上線。
+    expect(rootMeasures.map((each) => typeof each.messagesCompactable)).toEqual([
+      'boolean',
+      'boolean',
+    ]);
     // 前提：最後一輪真的失敗了，而且沒有留下任何一筆。
     expect(root.at(-1)?.type).toBe('turn/failed');
 
