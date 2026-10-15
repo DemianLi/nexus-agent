@@ -184,11 +184,13 @@ export const REQUIRED_TREE_ENTRY_IDS: ReadonlySet<string> = new Set([
   'nexus-compat',
   'cli',
   'serve',
-  // 樹上的工具、投影、技能來源與命令登記處、Include（#1416、#1421、#1446、#1456）：它們起不來，函式插件沒有地方掛，整個起不來。
+  // 樹上的工具、投影、技能來源與命令登記處、預設答題管道、Include（#1416、#1421、#1446、#1456、#1458）：它們起不來，
+  // 函式插件沒有地方掛，整個起不來。
   'tools',
   'projections',
   'skill-sources',
   'commands',
+  'approval-channel',
   'include',
 ]);
 

@@ -17,7 +17,8 @@ import {
   SessionRegistry,
   type SessionEvent,
 } from '@nexus/core';
-import { createAskUserPlugin, ASK_USER_QUESTION_TOOL_NAME } from '@nexus/plugin-ask-user';
+import { ASK_USER_QUESTION_TOOL_NAME } from '@nexus/plugin-ask-user';
+import { createAskUserPlugin } from './ask-user.fixture.js';
 import type { ConversationState, Event, WireClient } from '@nexus/wire';
 import {
   APPROVAL_PENDING_KIND,

@@ -56,9 +56,16 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { StructuredTool, StructuredToolInterface } from '@langchain/core/tools';
-import { NEXUS_CORE_VERSION, resolveEntriesPerEntry } from '@nexus/core';
-import type { CommandDefinition, NexusPlugin, PluginEntry, ProjectionUnit } from '@nexus/core';
+import { CHANNEL_SERVICE, NEXUS_CORE_VERSION, resolveEntriesPerEntry } from '@nexus/core';
+import type {
+  CommandDefinition,
+  NexusPlugin,
+  PluginEntry,
+  ProjectionUnit,
+  RegisterOptions,
+} from '@nexus/core';
 import { ManifestError, validateManifest } from '@nexus/sdk';
+import type { ToolRegisterOptions } from '@nexus/tools';
 
 import { resolveHarnessHome } from './harness-home.js';
 import { assertPluginCompatible, PluginCompatibilityError } from './plugin-compatibility.js';
@@ -829,6 +836,8 @@ function bridgeEntry(entry: ConfigEntry, module: FunctionPluginModule): PluginEn
  */
 interface FoldedContributions {
   readonly tools: readonly StructuredToolInterface[];
+  /** 帶了註冊選項的工具與選項（#1458 Q3）：`rootOnly`、`outputSchema`，折進 thread 時原樣交給註冊點。 */
+  readonly toolOptions: ReadonlyMap<StructuredToolInterface, ToolRegisterOptions>;
   readonly projections: readonly ProjectionUnit[];
   /** 技能來源路徑（#1446），照那一列登記的順序。 */
   readonly skillSources: readonly string[];
@@ -850,7 +859,16 @@ function registerFolded(
   registry: Parameters<NexusPlugin<unknown>['apply']>[0],
   contributions: FoldedContributions,
 ): void {
-  for (const tool of contributions.tools) registry.tools.register(tool as StructuredTool);
+  // 工具連同它登記時帶的選項（`rootOnly`、`outputSchema`，#1458 Q3）一起折：宿主不認得選項的語意，原樣轉交註冊點，由它
+  // 與 fold 照舊處理（子代理那份換成拒絕樁、成功輸出過校驗器）。`outputSchema` 在定義套件裡是「有 `safeParse` 的東西」，
+  // 註冊點要的是 zod 型別——執行期是同一個物件。
+  for (const tool of contributions.tools) {
+    const options = contributions.toolOptions.get(tool);
+    registry.tools.register(
+      tool as StructuredTool,
+      options === undefined ? undefined : (options as RegisterOptions),
+    );
+  }
   for (const unit of contributions.projections) registry.projections.register(unit);
   // 技能來源走 `registry.skills.addSource`，**照那一列登記的順序**：`sources` 依序即優先序（後面的來源贏過前面的同名 skill）。
   // 格式與重名在樹上的提供者登記時就驗過了，這一層的 `NamedEntries` 只是第二道（相容層的列也走它）。
@@ -880,9 +898,17 @@ function bindDetached(entry: PluginEntry, id: string): PluginEntry {
   const plugin: BridgePlugin = {
     ...(entry.plugin as BridgePlugin),
     async apply(registry) {
+      // 答題管道：從組裝的 registry 讀 `channel` 服務（組裝根提供，#1458 Q1 (c) 的第三個進入點）。讀不到就是「沒有指定」，
+      // 照今天的語意不提供。**每次單獨掛上各讀各的**：同一個行程裡兩份無樹組裝（一份 headless、一份有人在）各有各的值。
+      const channel = registry.services.get(CHANNEL_SERVICE);
       registerFolded(
         registry,
-        await mountDetached({ id, module: meta.module, config: entry.config }),
+        await mountDetached({
+          id,
+          module: meta.module,
+          config: entry.config,
+          ...(channel === undefined ? {} : { channel }),
+        }),
       );
     },
   };
@@ -1524,6 +1550,7 @@ async function loadPluginConfigOnce(
     }
     const bound = bindToTree(entry, {
       tools: verdict.tools,
+      toolOptions: verdict.toolOptions,
       projections: verdict.projections,
       skillSources: verdict.skillSources,
       commands: verdict.commands,

@@ -11,7 +11,9 @@ capabilities 的執行、版本路由與兩版並存不在這一刀，見文末�
 [`packages/nexus-projections`](../packages/nexus-projections)（`@nexus/projections`，第二個，#1421）與
 [`packages/nexus-skills`](../packages/nexus-skills)（`@nexus/skills`，第三個，#1446）、
 [`packages/nexus-commands`](../packages/nexus-commands)（`@nexus/commands`，第四個，#1456）與
-[`packages/nexus-feedback`](../packages/nexus-feedback)（`@nexus/feedback`，第五個，#1456，**第一個由插件提供、宿主消費的服務**）。
+[`packages/nexus-feedback`](../packages/nexus-feedback)（`@nexus/feedback`，第五個，#1456，**第一個由插件提供、宿主消費的服務**）、
+[`packages/nexus-approval-channel`](../packages/nexus-approval-channel)（`@nexus/approval-channel`，第六個，#1458，**宿主在建樹時給值的預設答題管道**）與
+[`packages/nexus-tool-result`](../packages/nexus-tool-result)（`@nexus/tool-result`，#1458，工具回結果的三個寫法，**不是接縫**，只是單向轉出）。
 
 ## 這份規範管誰
 
@@ -143,6 +145,25 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   - **同名第二份當場拋**：Cordis 在 `provide` 拋 `service "…" has been registered at …`，後掛的那一列掉在 `apply`。
   - **一致性套件量得到撤除**：`residue` 是呼叫端的閉包，量不到服務還在不在 root 上，所以 `checkConformance` 的 `unload` 格自己讀 root：
     `manifest.provides` 宣告的服務掛上後要讀得到（歸屬是這一列、契約版本同宣告），卸載後要讀不到。
+- **第六個接縫：預設答題管道**（`@nexus/approval-channel`，#1458 Q1 (c)、Q2 (a)）。形狀跟前五個都不一樣：**值由宿主在建樹時給，不是插件登記進來的**。
+  - **定義套件**：token（`approvalChannelToken`，服務名 `approvalChannel`）、`ApprovalChannelService`（只有 `current(): ApprovalChannel | undefined`）、
+    契約版本，與 `@nexus/core` 的 `ApprovalChannel`、`ChannelForThread`、`QUESTION_INTERRUPT_KIND`、`CHANNEL_SERVICE`、`CHANNEL_FOR_THREAD_SERVICE`、
+    `QuestionReply`⋯的**單向轉出**（core 放 `peerDependencies`，同 `@nexus/session` 的前例）。`channelForThread` 的 token 與型別留在這個定義套件，**今天沒有提供者**。
+  - **提供者**：`@nexus/approval-channel/provider` 的 `createApprovalChannelProvider(channel | undefined)`，宿主在樹上掛一列 `approval-channel`（`PluginTree.#build` 與
+    `mountDetached` 兩處）；值是進入點算出來、建樹時交進去的那一份——serve「有人在」是 `human`、CLI headless 是 `policy-never`
+    （`cordis-root.ts` 的 `entryApprovalChannel`、`createCordisRoot({ channel })`）。**沒有樹的呼叫端**（`bindDetached`）從組裝根的 `channel` 服務讀、交給
+    `mountDetached`，讀不到就是「沒有指定」。
+  - **消費者**：ask-user 的 `inject` 是 `need(approvalChannelToken, '^1.0.0')`，在 `apply` 當下 `service(ctx, token).current()` 抓一次、進閉包；**不再逐條 thread 查**
+    （不把 `channelForThread` 放進 `inject`：選配的相依會讓匯出形式那一格紅）。服務**一定在**、值可能是 `undefined`，所以必要相依照常成立，
+    「沒有人指定」是呼叫當下拒絕（fail-closed，#669），不是載入失敗。服務的方法是屬性閉包、不碰 `this.ctx`，卸載之後開著的 thread 手上的那份照樣能問。
+  - **為什麼不是提供者掛 `provide`**：兩個進入點的答題者是**情境**（有沒有人在），不是一個可以註冊的東西；放進 `cordis.yml` 的一列要有設定，而這個值沒有設定、也不該被 patch 改。
+- **工具接縫 1.1.0：登記選項**（`@nexus/tools`，#1458 Q3 (a)）。`register(tool, options?)` 多一個**選配**的第二參數：`rootOnly`（`true`，或 `{ message, error? }` 帶自己的拒絕句與碼，
+  照 dsh `DELEGATED_CALLER`）與 `outputSchema`（有 `safeParse` 的東西，成功輸出照它驗）。選項隨工具一起折進 thread 的註冊點（`RowVerdict.active.toolOptions`、
+  `registerFolded`）；**沒有 `scope`**（`rootOnly` 配 `scope` 是矛盾，註冊點當場拋，這裡不開這個口）。次版號升級：`^1.0.0` 的舊消費者照常（不傳第二參數），要用選項的消費者宣告 `^1.1.0`。
+- **工具結果的三個寫法**（`@nexus/tool-result`，#1458 Q4）：`toolRefusal`（回給模型的拒絕）、`toolCallIdOf`（從呼叫設定取呼叫 id）、`markToolError`（替一則拒絕訊息掛錯誤內容）。實作留在 `@nexus/core`，
+  這個套件只做單向轉出（core 放 `peerDependencies`）——**不是**因為表達不出別的做法，而是 `markToolError` 與 core 讀它的 `toolErrorOf` 共用同一個 `WeakMap`，複製一份寫入端就是靜默失效。
+  `callThreadId` 刻意不在：它是 `channelForThread` 的配套，而 ask-user 不再逐條 thread 查。放這裡而不放 `@nexus/tools`／`@nexus/sdk`：前者的 `package.json` 只准相依 SDK 與工具型別（測試釘著），後者不 import core。
+  現有消費者：`@nexus/plugin-ask-user`（三個都用）。
 - 這個慣例 dsh 也只是慣例，沒有 gate 強制；這裡同樣不加 gate。`@nexus/tools` 有一條測試守它的相依只有 SDK 與工具型別。依賴的放法照 dsh：宿主給的 `@nexus/sdk`、`@nexus/cordis`、服務定義套件（`@nexus/tools`）放 `peerDependencies`，`devDependencies` 留 `workspace:*` 供開發與測試——`ContractError` 的 `instanceof` 與 Cordis 的 `Context` 類別都要求宿主與插件看到同一份，放進 `dependencies` 在套件獨立安裝時就可能各裝一份。`@nexus/plugin-echo` 與 `@nexus/tools` 各有測試釘著。
 
 ## 契約版本走 semver
@@ -321,18 +342,18 @@ harness 只跑 import 圖上的測試，而 gate 是動態載入、不在圖上�
 **這條規則怎麼被守住**：`@nexus/sdk` 的 `checkSharedAcrossThreads` 是一格通用的一致性檢查——同一份序列各條
 thread 各自掛一份跑一遍當基準，再掛**一份**服務所有 thread 跑一遍，兩邊結果對不上就紅並指名是第幾步、哪條 thread、
 各回了什麼。它不 import `@nexus/core`：每顆插件在自己的套件裡寫一個轉接器（ask-user 與 present 各一份，`shared-across-threads.test.ts`）。
-這一格**不要求插件上樹**——ask-user 與 present 仍是相容層的 `NexusPlugin`，不匯出 `manifest`
-（`apps/harness/src/pilot-plugins-stay-compat.test.ts` 釘住）。
+這一格**不要求插件上樹**：present 仍是相容層的 `NexusPlugin`，不匯出 `manifest`（`apps/harness/src/pilot-plugins-stay-compat.test.ts` 釘住）；
+ask-user 在 #1458 遷上樹，轉接器照留，改成對「行程級的預設答題管道」量（見下）。
 
-**出貨路徑不變**：組裝點只提供 `channel`，不提供 `channelForThread`，所以產品路徑上答題管道的取法與以前一樣
-（一條 thread 一份組裝，現在提供它只會是一支恆等函式）。assembly-root 提供 `channelForThread` 由 ask-user 自己的
-遷移卡接手。
+**答題管道（#1458 起）**：ask-user 只消費樹上 `approval-channel` 那一列給的**行程級預設值**，不再逐條 thread 查 `channelForThread`——
+那是 PM 決定的邊界：今天兩個進入點各是一個行程級的情境（serve 有人在、CLI headless），沒有「同一份組裝裡逐條 thread 不同」的產品需求。
+`channelForThread` 的 token 與型別留在 `@nexus/approval-channel`，等真的有第二種答題者再接。`apply` 當下抓一次進閉包，所以**同一棵樹上多條 thread
+共用同一個答題者**；「一條有人在、一條沒人在」是兩個行程級組裝（serve 與 headless CLI）的事，各一棵樹、各自的 `channel`。
+相容層的測試夾具（`apps/harness/src/ask-user.fixture.ts`）保留舊外殼的取法（先問 `channelForThread`，沒有再用 `channel`），給手搭清單的測試用，不在產品路徑上。
 
-**宿主的義務：同一份組裝服務多條 thread 時，`channel` 是每一條都會拿到的預設。** `channel` 只能放每條 thread 都適用的值；
-逐條不同的答題者一律走 `channelForThread`，並且不提供 `channel`（或只放每條都適用的那個）。理由是對應 dsh 沒有標籤的
-監聽者：它的答題者用 `scopeTarget(agent, agent)` 分發，對沒有標籤的監聽者一律放行，只有帶標籤的才看是不是這個
-agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以行程級的答題者服務每一個 agent。我們的
-`channel` 就是那個沒有標籤的監聽者，`channelForThread` 回 `undefined` 往下退回它是同一個語意。
+**宿主的義務：進入點建樹時要把自己的答題管道交進去。** 不交就是「沒有指定」，ask-user 在呼叫當下拒絕（`NO_CHANNEL_MESSAGE`）；
+拿掉任何一個進入點的那一行交接，`ask-user-assembly.test.ts`（`runCli`、`runServe`）與 `ask-user-on-tree.test.ts` 都會紅。
+同一個行程裡的兩份無樹組裝（`bindDetached`）各自從自己組裝根的 `channel` 讀，不共用。
 
 **一個前提**：背景子代理的日誌在送出時就已經開好（`background-subagents.ts` 的 `start()`，`sessions.open` 在 `submit`
 拉起背景圖之前），`forCall` 靠日誌 id 認出它屬於哪一張。日後改成延後才開的話，多張綁定下背景那一輪的第一筆會回 `ambiguous`。
@@ -358,21 +379,23 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
 | 命令登記處不做 dsh 的 `ScopedLayers`、`commands/change` 通知與 `definitionId`（#1456） | 沿用既有偏離 | 理由與撤除條件在 `@nexus/core` 的 `CommandRegistrationPoint` 檔頭（一次組裝一張 registry、沒有 per-agent 遮蔽，通知與 `definitionId` 今天沒有消費者）；定義套件只轉出同一份型別 |
 | 樹上那一列改了或停了，開著的對話照舊有它的投影（#1421，照 #1416 Q3 的快照語意） | 產品需求超出 dsh | dsh 在卸載時把那個 key 從活的快照拿掉（引用計數歸零就刪，`session-projection/src/index.ts:273-292`）。我們不跟：組 thread 時拿的是快照（決議 §3-2 第 6 條「插件更新只給新對話」），單元是純函式的折疊，樹上那一列卸了之後開著的對話手上的單元照樣折得動，下一條 thread 才看到新的 |
 | `present` 的暫存表以身分（thread＋位址＋`callId`）當鍵，不用 `WeakMap<ToolExecution>` | 表達不出來，退到最接近的實作 | dsh 的工具執行與 `tools/result` 拿到的是**同一個物件**，所以 `WeakMap` 夠用；我們的 `exec` 每次都在 `tool-pipeline.ts` 的 `toolExecutionOf` 重建，物件身分對不上。照它的意思改用身分當鍵（#1418） |
-| 答題管道是函式服務 `channelForThread`，不是 exec 上的欄位 | 表達不出來，退到最接近的實作 | dsh 的答題者從 `exec.agent` 分發；我們的答題管道是宿主服務（`channel`），不在 `exec` 上，沒有地方放「隨呼叫傳進來」的值。呼叫當下依 `callThreadId(config)` 問一支函式，回 `undefined` 退回 `channel`（見上一節）（#1418） |
+| 答題管道是函式服務 `channelForThread`，不是 exec 上的欄位 | 表達不出來，退到最接近的實作 | dsh 的答題者從 `exec.agent` 分發；我們的答題管道是宿主服務（`channel`），不在 `exec` 上，沒有地方放「隨呼叫傳進來」的值。呼叫當下依 `callThreadId(config)` 問一支函式，回 `undefined` 退回 `channel`（#1418）。**#1458 之後 ask-user 不再用它**：token 與型別留在 `@nexus/approval-channel`，今天沒有提供者；舊外殼（測試夾具）還走這條 |
+| 預設答題管道是宿主在建樹時給的一列內建列，不是 dsh 的 `session.interrupt` 事件監聽者（#1458，demian Q1 (c)） | 表達不出來，退到最接近的實作 | dsh 的答題者是 `userQuestions` 服務上的監聽者（`packages/interaction/user-questions/src/index.ts:132`），headless runner 與 webserver 各自掛自己的、依 `scopeTarget` 分發。我們沒有那個事件系統（中斷由 LangGraph 的 `interrupt()` 發、折疊器收）。退到最接近的：**進入點算出它的答題情境、建樹時交進 `approval-channel` 那一列**，ask-user 只消費。**撤除條件**：有第二種答題者要同時存在於一個行程裡（例如 serve 同時服務有人在與 headless 的連線），那時 `channelForThread` 才接上提供者 |
+| `toolRefusal`／`toolCallIdOf`／`markToolError` 由 `@nexus/tool-result` 單向轉出 `@nexus/core`（#1458，demian Q4 (a)） | 表達不出來，退到最接近的實作 | dsh 的工具結果寫法在 `dsh-tool` 這一類定義套件裡，實作與型別同處。我們的實作在 `@nexus/core`（`markToolError` 與 `toolErrorOf` 共用一個 `WeakMap`，複製寫入端會靜默失效），抽出實作是橫跨核心的一刀。所以只做轉出，`@nexus/core` 放 `peerDependencies`。**撤除條件**：與 `@nexus/session`、`@nexus/projections` 同（Q2 (b)，SDK 與定義套件發布到私有 registry 之前把實作搬進定義套件） |
 | 卡上寫「會話位址加上 thread 身分」，實作是另外加 `exec.thread` 與 `callThreadId`，`SessionAddress` 沒動 | **對卡上字面的改動，不是對 dsh 的偏離** | `SessionAddress` 是**一張 `SessionRegistry` 之內**的位址：每張註冊表就是一條 thread（根日誌 id 就是那條 thread 的 id、子代理日誌 id 是 `<root>/<runId>`，`session-registry.ts`），`sessionAddressKey` 只用來在那一張裡當 Map 鍵。thread 在「挑哪一張註冊表」那一步就用掉了，放進位址會在同一張表裡重複一份永遠相同的值。實測的足跡：24 個檔案提到 `SessionAddress`，原始碼與測試裡有 38 處 `kind: 'root'`、33 處 `kind: 'subagent'` 的字面比對、20 個檔案走 `toolCallSessionAddress`——加欄位要全部改，不加成可選欄位則又回到「沒填就挑不出」。而且背景子代理的 `thread_id` 本身就是 `<root>/<runId>`，已經含 `runId`，放進位址會有兩種寫法指同一個身分（`thread-id-reaches-handlers.test.ts` 量到）。所以 thread 走呼叫設定（`callThreadId`），在 `forCall` 與 `exec.thread` 用 |
 | `live-model` 的 `retryPolicy.mode` 只收 `normal`，`always` 拒收（#1427） | 產品需求超出 dsh | dsh 的 `retryPolicy` 有 `normal` 與 `always` 兩種模式（`packages/llm/llm/src/retry-policy.ts:37-57`），`always` 對每一次模型請求失敗無限重試到成功、取消或卸載。我們是企業內部聊天機器人：一輪沒有盡頭，中段失敗每次都重付整個回覆，無限重試會無限重付。其餘照 dsh：`mode` 寫了就必填，`maxRetries`／`retryableCodes`／`backoff` 逐條照 `resolveRetryPolicy`／`resolveBackoff` 驗（登記在 `apps/harness/src/settings/live-model.ts` 檔頭「偏離二」）。**撤除條件**：demian 提出需要無限重試的情境 |
 | 插件自我停用只在行程裡停著，不改清單、不寫檔，宣告沒變就不重掛（#1424，demian Q1 (b)） | 表達不出來，退到最接近的實作 | dsh 的 Include 把樹側的變更與插件自我停用寫回根檔，持久化靠它；我們關掉了寫回（變更紀錄是唯一的寫入口，決議 §3-5 第 18 條），所以自我停用只改記憶體。dsh 在這一點上其實也是行程內的：每次開機重寫根檔（`apps/cli/src/profile-boot.ts:152-172`），任何一次協調都會把 Include 的樹重疊一遍、把停用的列蓋回啟用（未實測的推論）。我們每條 thread 都重推一次清單，照 dsh「每次協調都蓋回」就是每條 thread 重掛一次的閃動；而「每條 thread 重讀清單」源自 #1416 Q3 (a) 的快照語意，這條偏離跟著它走。所以：宿主記下停用當時的宣告（整份，簽章輸入是列 id、模組名、設定三格，序列化用 `rowKey` 同一支 `stable-stringify.ts`），**宣告沒變就替那一列推一條 `{ id, disabled: true }` 給 Include**，不論 Include 怎麼重疊都維持停用；宣告改了或重啟才重試。紀錄多一筆只記不折的 `self-disabled`。**撤除條件**：讀清單改成不是每條 thread 都推 |
 
 ## 接進清單（#1416 PR 2）
 
-`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
+`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
 **樹那一側不是第二份清單，是清單的一個消費者**：
 
 | 東西 | 在哪 | 做什麼 |
 | --- | --- | --- |
 | 載入器的分辨 | `plugin-config.ts` 的 `resolveEntryModule` | 模組有 `manifest` 具名匯出就是函式插件，走 `validateManifest`；沒有就照舊是 `NexusPlugin`。判別式只有一個（`plugin-tree.ts` 的 `isFunctionPluginModule`），Include 的允許名單也從它算 |
 | 橋接列 | `plugin-config.ts` 的 `isBridgeEntry` | 函式插件在相容層清單上的代表：同一個 id、同一個位置、`Config` 是 manifest 的 `config`，所以設定驗證、停用、補號、快照、會話 header 都照舊。它的 `apply` 不自己掛任何東西，只把**登記者是這一列**的工具、投影單元、技能來源路徑與命令，加上**這一列提供**的服務，折進這一條 thread 的 registry（每一種接縫一格，見下） |
-| 樹 | `plugin-tree.ts` 的 `PluginTree` | `tools` 一列（工具登記處）、`projections` 一列（投影登記處）、`skill-sources` 一列（技能來源登記處）、`commands` 一列（命令登記處）、`include` 一列（Include 讀出貨的 `cordis.yml`、疊 patch），函式插件在 `include:<id>` |
+| 樹 | `plugin-tree.ts` 的 `PluginTree` | `tools` 一列（工具登記處）、`projections` 一列（投影登記處）、`skill-sources` 一列（技能來源登記處）、`commands` 一列（命令登記處）、`approval-channel` 一列（預設答題管道，值是進入點在建樹時給的，#1458）、`include` 一列（Include 讀出貨的 `cordis.yml`、疊 patch），函式插件在 `include:<id>` |
 
 - **變更紀錄怎麼到樹上**：折出來的 patch 原樣經 `entry.update({ config: { ...includeConfig, patches } })` 推給 Include（dsh
   `app-boot` 的做法）。**Include 不寫回任何檔**——寫入口只有變更紀錄一個（`vendor/README.md` 第 7 條，上游三條寫回路徑全關）；Loader 上游會在安裝樹建 `.cordis/` 輔助檔，宿主給了解析函式就不建（第 9 條），所以安裝樹唯讀也不影響掛載。
@@ -382,8 +405,8 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
   樹上那一列的 `disabled` 與 `config` 跟相容層疊出來的是否相同，不同那一列算掉了，不靜靜地各走各的。
 - **樹上的結果怎麼對回清單上的掉列**：樹上那一列 FAILED 或缺席是 `apply` 階段、PENDING（缺服務、契約不相容）是 `requires`
   階段，在**讀清單那一步**就判定（以前 echo 重名要到組裝那一刻才掉）。契約不相容的訊息帶消費者列 id（樹上的 `include:<id>`）。
-- **橋接列折入多種接縫（#1421、#1446、#1456）**：`RowVerdict` 的 `active` 帶每一種接縫的貢獻（`tools`、`projections`、`skillSources`、`commands`、`services`），橋接列的 `apply` 把
-  來源是那一列的各自折進這條 thread 的 registry：工具走 `registry.tools.register`，投影單元走 `registry.projections.register`，
+- **橋接列折入多種接縫（#1421、#1446、#1456、#1458）**：`RowVerdict` 的 `active` 帶每一種接縫的貢獻（`tools`、`toolOptions`、`projections`、`skillSources`、`commands`、`services`），橋接列的 `apply` 把
+  來源是那一列的各自折進這條 thread 的 registry：工具走 `registry.tools.register`（**帶它登記時的 `rootOnly`／`outputSchema` 選項**，#1458），投影單元走 `registry.projections.register`，
   技能來源走 `registry.skills.addSource`（**照那一列登記的順序**：`sources` 依序即優先序，後面的來源贏過前面的同名 skill），
   命令走 `registry.commands.register`（照登記順序），**那一列提供的服務**走 `registry.services.provide`。
   同一個投影 key 由兩列共用時，只交給其中一列（見偏離表），這條 thread 的登記處才不會撞上它自己的重複拒絕；技能來源不共用，

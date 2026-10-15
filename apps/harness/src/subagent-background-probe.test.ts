@@ -50,7 +50,8 @@ import {
   BACKGROUND_SESSION_CONFIG_KEY,
   TURN_CANCEL_CONFIG_KEY,
 } from '@nexus/core';
-import { createAskUserPlugin, DELEGATED_CALLER_MESSAGE } from '@nexus/plugin-ask-user';
+import { DELEGATED_CALLER_MESSAGE } from '@nexus/plugin-ask-user';
+import { createAskUserPlugin } from './ask-user.fixture.js';
 import type { SandboxMode } from '@nexus/core';
 import {
   CONTAINED_FILESYSTEM,

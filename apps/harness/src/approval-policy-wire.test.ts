@@ -28,7 +28,8 @@ import {
   createHostServicesPlugin,
 } from '@nexus/core';
 import type { ApprovalPolicyValue, PluginEntry, SessionEvent, SessionRegistry } from '@nexus/core';
-import { ASK_USER_QUESTION_TOOL_NAME, createAskUserPlugin } from '@nexus/plugin-ask-user';
+import { ASK_USER_QUESTION_TOOL_NAME } from '@nexus/plugin-ask-user';
+import { createAskUserPlugin } from './ask-user.fixture.js';
 import {
   appendDecision,
   createWireClient,

@@ -47,7 +47,7 @@ import {
   resolveWorkspaceRoot,
   SESSION_LOG_OFF_DISCLOSURE,
 } from './assembly-root.js';
-import { createCordisRoot } from './cordis-root.js';
+import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
 import type { CordisRoot, NexusAssembly } from './cordis-root.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
@@ -426,7 +426,8 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   );
   // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`：`startServer` 載完清單才建它，起不來與關掉時都
   // 在這裡卸載，排在 server 自己的收尾之後、還原代理之前。
-  const root = createCordisRoot();
+  // 預設答題管道由入口給（#1458 Q1 (c)）：serve 有人在（web 收得到問題），組裝時也不傳 `approvals`——同一個決定。
+  const root = createCordisRoot({ channel: entryApprovalChannel(undefined) });
   let running: RunningServe;
   try {
     running = await startServer(options, invocation, liveLaunch, log, root);

@@ -98,7 +98,7 @@ import {
   type NexusAgent,
   goalDriverPort,
 } from './assembly-root.js';
-import { createCordisRoot } from './cordis-root.js';
+import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
 import type { CordisRoot, NexusAssembly } from './cordis-root.js';
 
 export const USAGE = `用法：cli [選項] [要說的話...]
@@ -897,7 +897,8 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   );
   // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`：`runLaunched` 載完清單才建它，但起不來、跑壞了、
   // 跑完了都在這裡卸載。跑壞了的那一條先保住原本的錯誤，同下面 `runLaunched` 收尾的規則。
-  const root = createCordisRoot();
+  // 預設答題管道由入口給（#1458 Q1 (c)）：這個入口沒有人在，與下面組裝時傳的 `HEADLESS_APPROVALS` 是同一個決定。
+  const root = createCordisRoot({ channel: entryApprovalChannel(HEADLESS_APPROVALS) });
   try {
     try {
       await runLaunched(options, invocation, printer, liveLaunch, root);

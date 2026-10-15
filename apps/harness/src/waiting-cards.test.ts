@@ -24,7 +24,8 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
 import { createHostServicesPlugin } from '@nexus/core';
-import { ASK_USER_QUESTION_TOOL_NAME, createAskUserPlugin } from '@nexus/plugin-ask-user';
+import { ASK_USER_QUESTION_TOOL_NAME } from '@nexus/plugin-ask-user';
+import { createAskUserPlugin } from './ask-user.fixture.js';
 import {
   CONTAINED_FILESYSTEM,
   createSandboxPolicyPlugin,

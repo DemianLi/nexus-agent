@@ -25,10 +25,10 @@ import {
 } from '@nexus/core';
 import {
   ASK_USER_QUESTION_TOOL_NAME,
-  createAskUserPlugin,
   DELEGATED_CALLER_ERROR,
   DELEGATED_CALLER_MESSAGE,
 } from '@nexus/plugin-ask-user';
+import { createAskUserPlugin } from './ask-user.fixture.js';
 import {
   createPlanModePlugin,
   DEFAULT_PLAN_GUIDANCE,
