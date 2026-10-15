@@ -12,7 +12,7 @@
  *    description／path 寫進 system prompt，然後用文字叫模型自己去 `read_file`。所以
  *    **清單載入與內容讀取走的是兩條不同的路**：清單走 backend 方法（`ls` /
  *    `downloadFiles`），內容走 `read_file` 工具。只有後者經過 `permissions`。
- *    直接後果見 {@link createSkillsPlugin}。
+ *    直接後果見 {@link apply}。
  * 2. **`allowed-tools` frontmatter 零強制。** 基座解析它、把它印進 prompt，就這樣——
  *    全套件 7 個出現點沒有一個是強制點。**不能當權限用**，權限只有 `permissions`。
  * 3. **`module` frontmatter 只印一行 `await import("@/skills/<name>")`，沒有東西實作
