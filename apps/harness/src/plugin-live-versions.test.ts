@@ -16,7 +16,8 @@ import { loadDefaultPlugins } from './plugin-config.js';
 import type { LoadedPluginConfig } from './plugin-config.js';
 import { createLiveVersionTable, liveBindingsOf } from './plugin-live-versions.js';
 import { buildPluginSnapshot } from './plugin-snapshot.js';
-import type { SnapshotSource } from './plugin-snapshot.js';
+import type { PluginSnapshot, SnapshotSource } from './plugin-snapshot.js';
+import { createThreadPluginList } from './thread-plugin-list.js';
 import { declarationSignature } from './plugin-row-state.js';
 import { hmacHashOf } from './session-header-metadata.js';
 
@@ -250,5 +251,122 @@ describe('buildPluginSnapshot 的 live', () => {
       live: { rows: table.rows(), sign },
     });
     expect(JSON.stringify(snapshot)).not.toContain(secret);
+  });
+});
+
+describe('current：下一條新 thread 會拿到的就是這一版（#1442 PM 審查）', () => {
+  const sign = (signature: string): string => hmacHashOf(signature, KEY);
+
+  async function liveOf(
+    savedPatch: string | undefined,
+    id: string,
+    signature: string,
+  ): Promise<PluginSnapshot['rows'][number]['live']> {
+    const [running, saved] = [await load(), await load(savedPatch)];
+    const table = createLiveVersionTable();
+    table.bind('t1', [{ id, signature }]);
+    const snapshot = buildPluginSnapshot({
+      running: sourceOf(running),
+      saved: sourceOf(saved),
+      generatedAt: AT,
+      live: { rows: table.rows(), sign },
+    });
+    return snapshot.rows.find((row) => row.id === id)?.live;
+  }
+
+  async function currentSignatureOf(id: string): Promise<string> {
+    const loaded = await load();
+    return liveBindingsOf({ loaded, plugins: loaded.plugins }, []).find((b) => b.id === id)!
+      .signature;
+  }
+
+  it('掛著的列：現在這一版是 current', async () => {
+    const signature = await currentSignatureOf('todo');
+    expect(await liveOf(undefined, 'todo', signature)).toMatchObject([{ current: true }]);
+  });
+
+  it('已儲存那份把這一列停用：它所有的版本都不是 current', async () => {
+    const signature = await currentSignatureOf('todo');
+    const live = await liveOf('- id: todo\n  disabled: true\n', 'todo', signature);
+    expect(live).toMatchObject([{ current: false, threads: ['t1'] }]);
+  });
+
+  it('已儲存那份這一列掉了（設定驗不過、不會重試）：所有版本都不是 current', async () => {
+    const signature = await currentSignatureOf('todo');
+    const live = await liveOf(
+      "- id: todo\n  config:\n    allowParallelInProgress: '不是布林'\n",
+      'todo',
+      signature,
+    );
+    expect(live).toMatchObject([{ current: false }]);
+  });
+});
+
+describe('ThreadPluginReader.bindThread', () => {
+  function reader(env: NodeJS.ProcessEnv, published: PluginSnapshot[]) {
+    return loadDefaultPlugins({ serve: true, env, warn: () => {} }).then((startup) =>
+      createThreadPluginList({
+        load: (warn) => loadDefaultPlugins({ serve: true, env, warn }),
+        startup,
+        trialDropped: [],
+        audit: { live: false },
+        startupRead: [],
+        log: () => {},
+        now: () => AT,
+        publishSnapshot: (snapshot) => {
+          published.push(snapshot);
+        },
+        liveVersions: { sign: (signature) => hmacHashOf(signature, KEY) },
+      }),
+    );
+  }
+
+  function home(): { env: NodeJS.ProcessEnv; patch(body: string): void } {
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-live-bind-'));
+    temporary.push(dir);
+    chmodSync(dir, 0o700);
+    return {
+      env: { [HARNESS_HOME_ENV]: dir },
+      patch(body) {
+        const file = join(dir, 'cordis.patch.yml');
+        writeFileSync(file, body);
+        chmodSync(file, 0o600);
+      },
+    };
+  }
+
+  it('重寫快照用最近一次讀到的清單當「已儲存」，不是這條 thread 自己讀到的（latestRead）', async () => {
+    const h = home();
+    const published: PluginSnapshot[] = [];
+    const list = await reader(h.env, published);
+    const first = await list.read();
+    // 慢的那一條還拿著舊清單，這時另一條已經讀到改過設定的新清單。
+    h.patch('- id: todo\n  config:\n    allowParallelInProgress: false\n');
+    await list.read();
+    await list.bindThread('slow', first, []);
+    const live = published.at(-1)?.rows.find((row) => row.id === 'todo')?.live;
+    // 慢的那條綁的是舊版（出貨值）；`current` 以最近一次讀到的新清單為準，所以舊版不是 current。
+    // 把 bindThread 裡的 `latestRead ?? list` 改成 `list`，這裡會變成 `current: true`。
+    expect(live).toMatchObject([{ current: false, threads: ['slow'] }]);
+  });
+
+  it('停用之後開出下一條 thread：舊的那一項 current 變 false，列得出還握著它的 thread', async () => {
+    const h = home();
+    const published: PluginSnapshot[] = [];
+    const list = await reader(h.env, published);
+    const first = await list.read();
+    await list.bindThread('t1', first, []);
+    expect(published.at(-1)?.rows.find((row) => row.id === 'todo')?.live).toMatchObject([
+      { current: true, threads: ['t1'] },
+    ]);
+    h.patch('- id: todo\n  disabled: true\n');
+    const second = await list.read();
+    await list.bindThread('t2', second, []);
+    const live = published.at(-1)?.rows.find((row) => row.id === 'todo')?.live;
+    expect(live).toMatchObject([{ current: false, threads: ['t1'] }]);
+    // operations.md 的那行 jq：`select(.current | not) | .threads[]`。
+    expect(live?.filter((entry) => !entry.current).flatMap((entry) => entry.threads)).toEqual([
+      't1',
+    ]);
   });
 });

@@ -45,8 +45,10 @@
  * - `version`：那一份宣告（列 id、模組名、設定）的帶鍵雜湊，`hmac-sha256:` 加 16 個十六進位字元，**同
  *   `config-hash-key.json` 那把鍵與 `configHash` 的寫法**（`session-header-metadata.ts`）。不含設定值；設定改了又改回來
  *   是同一版。
- * - `current`：它是不是**寫這份快照當下**清單上那一列的那一版。**跟 `saved` 同一個時間點**：寫入口改設定不會重寫快照
- *   （快照只有 serve 一個寫者，#1406），所以改完之後、下一條 thread 組裝之前，檔上的 `current` 還指著舊版。
+ * - `current`：「下一條新 thread 會拿到的就是這一版」——**寫這份快照當下**清單上那一列的那一版，**而且那一列在已儲存的
+ *   那份上是掛上的**。停用的、或掉了而且不會重試的列，沒有任何一版是 current（要找「還握著一列已停用設定的 thread」，
+ *   就是找 `current` 為 `false` 的）。**跟 `saved` 同一個時間點**：寫入口改設定不會重寫快照（快照只有 serve 一個寫者，
+ *   #1406），所以改完之後、下一條 thread 組裝之前，檔上的 `current` 還指著舊版。
  * - `threads`：綁著它的 root thread id（已排序）。**thread id 進檔擴大了上面的揭露白名單**（PM 核可，#1442）：它本來就經
  *   `GET /threads` 給每個登入的人看，快照檔是 0600；#1428／#1429 做逐人可見之後這個前提不成立，到時重審。
  *
@@ -134,7 +136,7 @@ export interface PluginSnapshotRow {
 export interface LiveVersion {
   /** `hmac-sha256:<16 個十六進位字元>`。 */
   readonly version: string;
-  /** 寫這份快照當下，清單上那一列是不是這一版（時間點同 `saved`）。 */
+  /** 下一條新 thread 會不會拿到這一版：清單上那一列是這一版、而且掛上了（時間點同 `saved`）。停用或掉了的列一律 `false`。 */
   readonly current: boolean;
   /** 綁著這一版的 root thread id，已排序。 */
   readonly threads: readonly string[];
@@ -262,7 +264,11 @@ export function buildPluginSnapshot(input: {
   // **沒什麼好報的就不帶 `layers`**（驗收 H）：沒有紀錄、沒有舊檔、沒有 `--patch` 的機器上，快照跟加這一層之前逐位元組相同。
   const layers = reportable(input.saved.layers);
   const covered = new Set(layers?.overlays.flatMap((overlay) => overlay.rows) ?? []);
+  // **`current` 的意思是「下一條新對話會拿到的就是這一版」**（#1442 PM 審查）：這一列在已儲存的那份上不是掛上的狀態
+  // （停用，或掉了而且不會重試）時，沒有任何一版是 current。只比宣告的話，用寫入口停用一列之後舊那一版仍是 `current`，
+  // 「還在用一列已停用設定的對話」就列不出來。
   const currentSignature = (id: string): string | undefined => {
+    if (saved.get(id)?.state !== 'mounted') return undefined;
     const index = input.saved.ids.indexOf(id);
     const declared = index < 0 ? undefined : input.saved.entries[index];
     return declared === undefined

@@ -18,10 +18,13 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { aiDone, idleWithContent, runServeDriver, settle } from './log-derived-history.fixture.js';
 import type { Body, DriverRun, Reply, Script } from './log-derived-history.fixture.js';
 import { seedHomePatch, writeJournalText } from './plugin-journal.fixture.js';
+import { loadDefaultPlugins } from './plugin-config.js';
+import { declarationSignature } from './plugin-row-state.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
 import type { PluginSnapshot, PluginSnapshotRow } from './plugin-snapshot.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { hmacHashOf, loadConfigHashKey } from './session-header-metadata.js';
 
 const temporary: string[] = [];
 let running: RunningServe | undefined;
@@ -238,6 +241,33 @@ describe('活著的設定版本（#1442）', () => {
     expect(rowOf(h.snapshot(), 'todo').live?.[0]?.threads).toEqual(['t1', 't2']);
   }, 120_000);
 
+  it('停用之後開出下一條 thread：舊版沒有任何一版是 current，列得出還握著它的 thread（PM 審查第 3 項）', async () => {
+    const h = home();
+    const server = await start(h.env);
+    expect(await say(server, 't1')).toBeUndefined();
+    expect(rowOf(h.snapshot(), 'todo').live).toMatchObject([{ current: true, threads: ['t1'] }]);
+
+    // 兩種「列不再掛上」：todo 是相容層的列、echo 是樹上的列，各停用一次。
+    h.patch(['- id: todo', '  disabled: true', '- id: echo', '  disabled: true', ''].join('\n'));
+    expect(await say(server, 't2')).toBeUndefined();
+    const snapshot = h.snapshot();
+    for (const id of ['todo', 'echo']) {
+      const live = rowOf(snapshot, id).live;
+      // t2 沒掛上這一列，所以沒有新的一版；t1 握著的那一版不是下一條新對話會拿到的。
+      expect(live, id).toMatchObject([{ current: false, threads: ['t1'] }]);
+      // operations.md 的 jq：`select(.current | not) | .threads[]`。
+      expect(
+        live?.filter((entry) => !entry.current).flatMap((entry) => entry.threads),
+        id,
+      ).toEqual(['t1']);
+    }
+    // 沒停用的列不受影響。
+    expect(rowOf(snapshot, 'goal').live?.[0]).toMatchObject({
+      current: true,
+      threads: ['t1', 't2'],
+    });
+  }, 120_000);
+
   it('設定值不進檔：版本是帶鍵雜湊，秘密字串找不到（驗收 E）', async () => {
     const h = home();
     const secret = 'secret-prefix-1442-9f3a';
@@ -248,8 +278,21 @@ describe('活著的設定版本（#1442）', () => {
     expect(text).not.toContain(secret);
     const live = rowOf(JSON.parse(text) as PluginSnapshot, 'echo').live;
     expect(live?.[0]?.version).toMatch(/^hmac-sha256:[0-9a-f]{16}$/u);
-    // 鍵的檔案是 serve 自己建的那一把（跟會話日誌 header 的 `configHash` 同一把）。
-    expect(readFileSync(join(h.dir, 'config-hash-key.json'), 'utf8').length).toBeGreaterThan(0);
+    // 鍵的檔案是 serve 自己建的那一把（跟會話日誌 header 的 `configHash` 同一把）：
+    // 版本就是「那一列宣告的簽章」用 `config-hash-key.json` 那把鍵算出來的帶鍵雜湊，換一把鍵就對不上。
+    const key = await loadConfigHashKey({ env: h.env, cwd: process.cwd() });
+    const loaded = await loadDefaultPlugins({ serve: true, env: h.env, warn: () => {} });
+    const index = loaded.ids.indexOf('echo');
+    const declared = loaded.entries[index]!;
+    expect(live?.[0]?.version).toBe(
+      hmacHashOf(declarationSignature('echo', declared.name, declared.config), key),
+    );
+    expect(live?.[0]?.version).not.toBe(
+      hmacHashOf(
+        declarationSignature('echo', declared.name, declared.config),
+        Buffer.from('另一把鍵'),
+      ),
+    );
   }, 60_000);
 
   it('只看歷史、沒跑過一輪的 thread 也綁（驗收 F）', async () => {
