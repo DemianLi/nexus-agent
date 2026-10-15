@@ -33,13 +33,13 @@
  *
  * ## 偏離登記
  *
- * - **插件自我停用只在行程裡停著，紀錄只記不折**（#1424，demian 2026-10-14 拍板 Q1 (b)、Q2 (a)；PM 決議 Q-C 的後續）：Loader 的
- *   case 7 把那一列在樹上標成 `disabled`，Include 不寫檔，也不折進清單。樹把「這一列自我停用過、當時的宣告是什麼」記在
+ * - **插件自我停用只在行程裡停著，紀錄只記不折**（#1424，demian 2026-10-14 拍板 Q1 (b)、Q2 (a)；PM 決議 Q-C 的後續）：
+ *   Loader 處理自我停用的那一格把那一列在樹上標成 `disabled`，Include 不寫檔，也不折進清單。樹把「這一列自我停用過、當時的宣告是什麼」記在
  *   記憶體裡（{@link PluginTree}`.#selfDisabled`，鍵是列 id、值是整份宣告的簽章）：**宣告沒變就不推 `epoch`、不重掛，判成 `off`**，
  *   並由宿主替那一列推一條 `{ id, disabled: true }` 給 Include——Include 每次重疊（樹上別列的設定改了、整列重建）都把每一列的
  *   options 整份換掉，不推的話那一列會被蓋回啟用、重掛一次再停一次（閃動）。serve 重啟、或那一列的宣告改了（模組名或設定），
  *   下一次同步才再試；清單自己把它停用（`disable`）也算了結，之後啟用回同一份宣告會重掛、再停用，去重鍵同所以不再記一筆。
- *   Loader 在 case 7 呼叫點發的 `loader/self-disable`（`vendor/loader` 本地修改第 10 條，只有 case 7 發；`ctx.fiber.update()`
+ *   Loader 在自我停用那一格的呼叫點發的 `loader/self-disable`（`vendor/loader` 本地修改第 10 條，只有那一格發；`ctx.fiber.update()`
  *   走的 `internal/commit` 不發）經 {@link PluginTree.onSelfDisable} 交給宿主，serve 把它記成 `self-disabled`
  *   （`plugin-failure-recorder.ts`）。
  *   **偏離 dsh（未實測的推論，撤除條件：讀清單改成不是每條 thread 都推）**：dsh 任何一次協調（plugin-manager 操作、HMR 偵測到
@@ -258,8 +258,10 @@ const treeId = (id: string): string => `${NAMESPACE}${id}`;
  * 樹上帶 `__jsExpr` 的物件會被 Loader 的 `interpolate` 當 JavaScript `eval` 掉（`vendor/loader/src/config/utils.ts`），
  * 而設定來自變更紀錄與 `--patch`：寫入口的使用者、部署端都不該有「經設定檔執行任意程式」的路。
  *
- * 兩個地方各擋一次：相容層讀清單時掃走橋接那幾列的最終 `config`（寫入前驗證走同一條，所以寫入口當場擋下、
- * 不會把會讓之後每次啟動都失敗的東西寫進紀錄）；推上樹之前再把整份 patch 掃一遍，是「演算法對不上」時的後盾。
+ * 三個地方各擋一次：相容層讀清單時掃走橋接那幾列的最終 `config`（寫入前驗證走同一條，所以寫入口當場擋下、
+ * 不會把會讓之後每次啟動都失敗的東西寫進紀錄）；推上樹之前再把整份 patch 掃一遍，是「演算法對不上」時的後盾；
+ * 第三道在 vendor 的 Include：它讀完出貨檔、疊完 patch、交給 Loader 之前，掃那份真正會被 eval 的樹（`vendor/README.md`
+ * 本地修改第 11 條，#1461）。rc.11 起 Loader 連 `disabled` 都會 eval，而出貨檔那一列不經 patch，前兩道看不到它。
  *
  * @param value - 要掃的東西（設定或 patch）。
  * @param where - 訊息裡怎麼稱呼它的位置。
@@ -291,7 +293,7 @@ function assertNoJsExpr(value: unknown, where: string): void {
   );
 }
 
-/** 一列插件自己停用了自己（#1424）：Loader 在 case 7 的呼叫點發的，經 {@link PluginTree.onSelfDisable} 交給宿主。 */
+/** 一列插件自己停用了自己（#1424）：Loader 在自我停用那一格的呼叫點發的，經 {@link PluginTree.onSelfDisable} 交給宿主。 */
 export interface SelfDisableEvent {
   /** 相容層解析後的列 id（不帶樹上的 `include:` 前綴）。 */
   readonly id: string;
@@ -378,7 +380,7 @@ export class PluginTree {
     });
     await root.plugin(Loader);
     root.loader.resolver = resolveBareSpecifier;
-    // Loader 的 case 7 呼叫點發的（`vendor/loader` 本地修改第 10 條）：只有插件自己 `ctx.fiber.dispose()` 才有。
+    // Loader 自我停用那一格的呼叫點發的（`vendor/loader` 本地修改第 10 條）：只有插件自己 `ctx.fiber.dispose()` 才有。
     root.on('loader/self-disable', (entry, legacy) => this.#noteSelfDisable(root, entry, legacy));
     Object.assign(root.loader.builtins, {
       [TOOLS_ROW_ID]: this.#provider.Provider,
@@ -481,7 +483,15 @@ export class PluginTree {
         loader.remove(INCLUDE_ROW_ID);
         await this.#create(root, { id: INCLUDE_ROW_ID, name: `cordis:${INCLUDE_ROW_ID}`, config });
       } else {
-        await existing.update({ config } as never);
+        try {
+          await existing.update({ config } as never);
+        } catch (error) {
+          // Include 已經起來之後的更新被它自己拒了（例如重讀到的檔帶 `__jsExpr`，vendor 本地修改第 11 條）：同樣是整份的錯。
+          throw new PluginTreeError(
+            `清單推不上樹：${error instanceof Error ? error.message : String(error)}`,
+            { cause: error },
+          );
+        }
       }
       await loader.await();
     }
@@ -509,7 +519,7 @@ export class PluginTree {
    * 這一份清單要不要強推一次（推 `epoch`）：有一列清單想要它起來、樹上卻是停用的，而且**不是**「自我停用過、宣告沒變」那一種。
    *
    * 自我停用過的列（#1424）宣告沒變就一直停著，不強推——這就是止住閃動的那一處；宣告變了就忘掉記憶、強推一次，插件重新
-   * 掛上、重新試一次。樹上停用卻沒有記憶的（不是 case 7 留下的，或是兩邊疊出來的不一致）照舊強推，`#verdictOf` 會報成掉了。
+   * 掛上、重新試一次。樹上停用卻沒有記憶的（不是自我停用留下的，或是兩邊疊出來的不一致）照舊強推，`#verdictOf` 會報成掉了。
    */
   #needsRetry(root: Context, input: TreeInput): boolean {
     if (this.#includeEntry(root) === undefined) return false;

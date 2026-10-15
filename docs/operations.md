@@ -1042,7 +1042,7 @@ home 是 `0700`；不要把它貼進 issue 或聊天）。直接 `cat` 就能讀
 |---|---|---|---|
 | `rejected` | `plugin` 寫入口（`actor` 是主機帳號） | 驗證那一段拒絕了：id 不存在、設定不合 schema、關的是必掛的列、設定被 `--patch` 蓋住 | `requested`（要做的操作：`disable`／`enable`／`config-set`／`config-reset`）、`id`、`reason`（驗證器的原文） |
 | `failed` | serve（`actor` 是 `{"kind":"serve","effective":"<帳號>"}`） | 某一列掛不上，**而那一列在紀錄裡有被接受的改動**；或它依賴的列被關掉、它剛掉在 `requires`（見下面「依賴的列被關掉」） | `id`、`triggerSeq`（**歸因**到的那一筆的 `seq`，見下面「`triggerSeq` 是歸因，不是因果」）、`stage`（`module`／`config`／`apply`／`requires`）、`reason` |
-| `self-disabled` | serve（`actor` 同 `failed`：沿用 `serve`，「是插件自己停的」由 `op` 承載；#1424） | 樹上的函式插件在 `apply` 裡自己 `ctx.fiber.dispose()`（Loader 的 case 7）；同一個行程裡同一列同一份宣告只記一次，重啟或宣告（模組名、設定）改了才會再記 | `id`、`name`（模組名）。**不帶原因**：插件沒有講原因的管道，要查的是那個插件自己的日誌 |
+| `self-disabled` | serve（`actor` 同 `failed`：沿用 `serve`，「是插件自己停的」由 `op` 承載；#1424） | 樹上的函式插件在 `apply` 裡自己 `ctx.fiber.dispose()`（Loader 處理自我停用的那一格）；同一個行程裡同一列同一份宣告只記一次，重啟或宣告（模組名、設定）改了才會再記 | `id`、`name`（模組名）。**不帶原因**：插件沒有講原因的管道，要查的是那個插件自己的日誌 |
 
 - **`rejected` 不帶要寫入的值**。`reason` 是驗證器原文，可能引到值的一部分；檔案本來就是 `0600`、前後值本來就是明文，
   所以沒有新增暴露面，但**不要把它貼進 issue 或聊天**。CLI 與伺服器日誌只印「記成第幾筆」，不印原因、不印值。

@@ -420,15 +420,17 @@ ask-user 在 #1458 遷上樹，轉接器照留，改成對「行程級的預設�
   (6) `.github/scripts/plan_ci.py` 的 `FULL_RES` 加上新的定義套件（遷出的插件都相依它，改了就不能只跑改動的那幾顆插件）。
 - **設定帶 `__jsExpr` 整份拒絕**：Loader 的 `interpolate` 會把它當 JavaScript `eval`。相容層讀清單時掃走橋接那幾列的最終
   `config`（寫入前驗證走同一條，所以寫入口當場擋下，不會把一條讓之後每次啟動都失敗的東西寫進紀錄），推上樹之前再掃一遍
-  整份 patch 當後盾。
+  整份 patch 當後盾。第三道在 vendor 的 Include（`vendor/README.md` 本地修改第 11 條，#1461）：它讀完出貨檔、疊完 patch、
+  交給 Loader 之前，掃那份真正會被 eval 的樹，有就整份拒絕（`PluginTree.sync` 報成 `PluginTreeError`）。rc.11 起 Loader
+  連 `disabled` 都會 eval，而出貨檔那一列不經 patch，前兩道看不到它。
 - **沒有樹的呼叫端**（手搭 `PluginEntry` 清單的測試、基準任務、`shippedPlugins()`）：橋接列在組裝時單獨掛一次、取工具、
   投影單元、技能來源路徑、命令與提供的服務、立刻卸載，走的是同一個 Loader 與 `tools`、`projections`、`skill-sources`、`commands` 提供者。產品路徑（`cli.ts`、`serve.ts`）不走這條。
 
 ### 已知限制
 
 - **插件自我停用只在行程裡停著**（[#1424](https://github.com/DemianLi/nexus-agent/issues/1424)，demian 決議 Q1 (b)、Q2 (a)）：
-  插件自己 `ctx.fiber.dispose()`，Loader 的 case 7 把那一列在樹上標成 `disabled`；Include 不寫檔，所以只改記憶體。
-  Loader 在 case 7 呼叫點發 `loader/self-disable`（`vendor/README.md` 第 10 條；`ctx.fiber.update()` 走的 `internal/commit`
+  插件自己 `ctx.fiber.dispose()`，Loader 處理自我停用的那一格把那一列在樹上標成 `disabled`；Include 不寫檔，所以只改記憶體。
+  Loader 在自我停用那一格的呼叫點發 `loader/self-disable`（`vendor/README.md` 第 10 條；`ctx.fiber.update()` 走的 `internal/commit`
   帶同樣的參數，所以只能在呼叫點區分），`PluginTree` 記下當時整份宣告的簽章：**宣告沒變就不再推 `epoch`、不重掛**，
   清單判成 `off`、插件列標 `disabled`（不進 `dropped`，所以沒有 `failed`），並由宿主替那一列推一條 `{ id, disabled: true }`
   給 Include——Include 每次重疊（樹上別列的設定改了、整列重建）都把每一列的 options 整份換掉，不推就會被蓋回啟用。

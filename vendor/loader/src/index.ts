@@ -4,7 +4,7 @@ import { ModuleLoader } from './internal.ts'
 import { Entry, EntryOptions } from './config/entry.ts'
 import { EntryGroup } from './config/group.ts'
 import isolate from './config/isolate.ts'
-import { EntryTree } from './config/tree.ts'
+import { EntryChange, EntryTree } from './config/tree.ts'
 import { interpolate } from './config/utils.ts'
 
 export * from './config/entry.ts'
@@ -21,7 +21,7 @@ declare module '@nexus/cordis' {
     'loader/entry-init'(entry: Entry): void
     'loader/partial-dispose'(entry: Entry, legacy: Partial<EntryOptions>, active: boolean): void
     /**
-     * nexus local modification: emitted only from case 7 below (the plugin disposed itself with `ctx.fiber.dispose()`),
+     * nexus local modification: emitted only from the self-disable branch of `internal/plugin` below (the plugin disposed itself with `ctx.fiber.dispose()`),
      * after `entry.options.disabled` was set and the in-memory commit ran. `legacy` is the entry's options *before* it
      * was disabled, i.e. the declaration the plugin was mounted with.
      */
@@ -139,7 +139,7 @@ export class Loader extends EntryTree {
       if (!ctx.registry.has(fiber.runtime!.callback)) return
 
       // case 5: the entry's tree is being disposed
-      // nexus local modification: also while the tree owner is still UNLOADING (dsh loader case 5), so a child unload
+      // nexus local modification: also while the tree owner is still UNLOADING (the same check as dsh's loader), so a child unload
       // caused by the owner's teardown is never mistaken for a self-disable.
       const treeOwner = fiber.entry.parent.tree.ctx.fiber
       if (!treeOwner.uid || treeOwner.state === FiberState.UNLOADING) return
@@ -147,11 +147,15 @@ export class Loader extends EntryTree {
       const { entry } = fiber
       this.showLog(entry, 'unload')
 
-      // case 6: the entry is being removed by the loader (`EntryGroup.remove`
+      // case 6: the entry's parent is being unloaded, which takes the entry with it
+      // (the parent may still be registered, e.g. when it has lost a dependency)
+      if (fiber.parent.fiber.state === FiberState.UNLOADING) return
+
+      // case 7: the entry is being removed by the loader (`EntryGroup.remove`
       // unregisters it before disposing the fiber)
       if (entry.parent.tree.store[entry.options.id] !== entry) return
 
-      // case 7: fiber is disposed by loader behavior
+      // case 8: fiber is disposed by loader behavior
       // such as inject checker, config file update, ancestor group disable
       if (entry.disabled) return
 
@@ -166,7 +170,7 @@ export class Loader extends EntryTree {
     ctx.plugin(isolate)
   }
 
-  commit() {
+  commit(_change: EntryChange) {
     // the root tree lives in memory only; there is nothing to persist to
   }
 

@@ -98,7 +98,7 @@ function closeWriteBack(source) {
     `      throw new Error(\`config file not found: \${this.filename}\`)
 `,
   );
-  // 寫回路徑 (a)、(c)：樹側的變更（含 Loader 對插件自我停用的 case 7）不進 journal，也就不會寫檔、不會路由回 patches。
+  // 寫回路徑 (a)、(c)：樹側的變更（含 Loader 對插件自我停用的那一格）不進 journal，也就不會寫檔、不會路由回 patches。
   out = once(
     out,
     `    const parent = change.group === this.root ? null : change.group.ctx.fiber.entry!.options.id
@@ -147,6 +147,64 @@ function closeWriteBack(source) {
 }
 
 /**
+ * 本地修改第 11 條（include）：疊完 patch 的那份樹交給 Loader 之前掃一遍，帶 `__jsExpr` 的整份拒絕（#1461）。
+ *
+ * Loader 會把樹上任何帶 `__jsExpr` 的值 `eval` 掉（`interpolate`、`Entry._resolveDisabled`）；rc.11 起（上游 #179）
+ * `disabled` 也在其中。宿主的承諾是「樹上的設定不接受表達式」，所以檢查要做在 Loader **真正會 eval 的那份資料**上：
+ * `_scheduleApply` 算出來、緊接著交給 `root.update` 的那個物件。這裡掃的就是它，不另外再讀一次檔，讀檔與檢查之間沒有空隙。
+ * 述詞用 Loader 自己的 `isJsExpr`（與 eval 的那一側同一支）。同步地拋，`_read`（初次載入、重讀）與 `internal/update`
+ * 的呼叫鏈都接得住；放在 `_applyTask` 裡拋會變成沒人接的 rejection。
+ *
+ * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 vendor/README.md。
+ */
+function rejectJsExpr(source) {
+  const once = (text, from, to) => {
+    const parts = text.split(from);
+    if (parts.length !== 2) throw new Error(`include 本地修改沒命中（${parts.length - 1} 處）：${from.slice(0, 60)}`);
+    return parts.join(to);
+  };
+  let out = source;
+  out = once(
+    out,
+    `export class Include extends EntryTree {
+`,
+    `/**
+ * nexus local modification: where in \`value\` the Loader would \`eval\` something (a \`__jsExpr\` value, judged by the
+ * Loader's own \`isJsExpr\`), or \`undefined\`. \`seen\`: YAML aliases make the structure shared or cyclic, visit each object once.
+ */
+function findJsExpr(value: unknown, path: string, seen = new WeakSet<object>()): string | undefined {
+  if (typeof value !== 'object' || value === null || seen.has(value)) return undefined
+  seen.add(value)
+  if (isJsExpr(value)) return path
+  for (const [key, item] of Object.entries(value)) {
+    const found = findJsExpr(item, Array.isArray(value) ? \`\${path}[\${key}]\` : \`\${path}.\${key}\`, seen)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
+export class Include extends EntryTree {
+`,
+  );
+  out = once(
+    out,
+    `    this._applyTask ??= (async () => {
+`,
+    `    // nexus local modification: \`_pendingTree\` is the object \`root.update\` is about to hand to the Loader, which \`eval\`s
+    // every \`__jsExpr\` it finds. Reject the whole tree here, before anything of it is applied (the tree already applied stays).
+    for (const [index, options] of (this._pendingTree ?? []).entries()) {
+      const found = findJsExpr(options, \`entry \${JSON.stringify(options?.id ?? index)}\`)
+      if (found === undefined) continue
+      this._pendingTree = undefined
+      throw new Error(\`config file \${this.filename}: \${found} carries \\\`__jsExpr\\\`; this host does not accept expressions in the tree (the Loader would eval it)\`)
+    }
+    this._applyTask ??= (async () => {
+`,
+  );
+  return out;
+}
+
+/**
  * 本地修改第 9 條（loader）：宿主可以給一支解析函式，Loader 就不在安裝樹裡寫 `.cordis/resolve.mjs` 輔助檔。
  * 上游的 `createResolve` 會在 `baseUrl` 所屬專案根（這裡是 `apps/harness`）建 `.cordis/{.gitignore,resolve.mjs}`，
  * 唯讀的安裝樹或別的帳號建過時，寫不進去只能退回原生 `import()`；產品路徑不該依賴安裝樹可寫。
@@ -186,10 +244,10 @@ function hostResolver(source, file) {
 }
 
 /**
- * 本地修改第 10 條（loader）：自我停用（case 7）交給宿主，與樹拆卸時不誤認（case 5）。
+ * 本地修改第 10 條（loader）：自我停用交給宿主，與樹拆卸時不誤認。
  *
- * - case 5 加 dsh 同一條的 `UNLOADING` 條件：樹的擁有者還在卸載時，子列的拆卸不是自我停用（dsh loader case 5、dsh vendor/README 第 15 條）。
- * - case 7 在 `tree.commit` 之後發一個 `loader/self-disable` 事件。`commit` 的參數與 `internal/commit`（插件 `ctx.fiber.update`）
+ * - 「這棵樹正在拆卸」那一格加 dsh 同一條的 `UNLOADING` 條件：樹的擁有者還在卸載時，子列的拆卸不是自我停用（dsh loader 同一格、dsh vendor/README 第 15 條）。
+ * - 自我停用那一格在 `tree.commit` 之後發一個 `loader/self-disable` 事件。`commit` 的參數與 `internal/commit`（插件 `ctx.fiber.update`）
  *   送出的一模一樣，宿主在 `commit` 那一頭分不出來，只能在呼叫點這裡區分。
  *
  * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 vendor/README.md。
@@ -201,18 +259,19 @@ function selfDisableHook(source) {
     return parts.join(to);
   };
   let out = source;
-  out = once(
-    out,
-    "import { Context, Inject, Service } from '@nexus/cordis'",
-    "import { Context, FiberState, Inject, Service } from '@nexus/cordis'",
-  );
+  // 上游 rc.11 起（#196）loader 自己 import 了 `FiberState`，目標內容已經在：這一處「已經存在就跳過」，其餘各處照舊剛好命中一次。
+  // 只有這一處放寬，因為它是純 import，目標已在不代表上游的行為變了；`FiberState` 不在也不是舊形狀時，仍然在這裡擋下。
+  const importWithFiberState = "import { Context, FiberState, Inject, Service } from '@nexus/cordis'";
+  if (!out.includes(importWithFiberState)) {
+    out = once(out, "import { Context, Inject, Service } from '@nexus/cordis'", importWithFiberState);
+  }
   out = once(
     out,
     `    'loader/partial-dispose'(entry: Entry, legacy: Partial<EntryOptions>, active: boolean): void
 `,
     `    'loader/partial-dispose'(entry: Entry, legacy: Partial<EntryOptions>, active: boolean): void
     /**
-     * nexus local modification: emitted only from case 7 below (the plugin disposed itself with \`ctx.fiber.dispose()\`),
+     * nexus local modification: emitted only from the self-disable branch of \`internal/plugin\` below (the plugin disposed itself with \`ctx.fiber.dispose()\`),
      * after \`entry.options.disabled\` was set and the in-memory commit ran. \`legacy\` is the entry's options *before* it
      * was disabled, i.e. the declaration the plugin was mounted with.
      */
@@ -225,7 +284,7 @@ function selfDisableHook(source) {
       if (!fiber.entry.parent.tree.ctx.fiber.uid) return
 `,
     `      // case 5: the entry's tree is being disposed
-      // nexus local modification: also while the tree owner is still UNLOADING (dsh loader case 5), so a child unload
+      // nexus local modification: also while the tree owner is still UNLOADING (the same check as dsh's loader), so a child unload
       // caused by the owner's teardown is never mistaken for a self-disable.
       const treeOwner = fiber.entry.parent.tree.ctx.fiber
       if (!treeOwner.uid || treeOwner.state === FiberState.UNLOADING) return
@@ -271,7 +330,7 @@ try {
   rewrite(join(out, 'cordis/src'), explicitExtensions);
   rewrite(join(out, 'loader/src'), rescope);
   rewrite(join(out, 'include/src'), (source) => rescope(explicitExtensions(source)));
-  rewrite(join(out, 'include/src'), (source) => (source.includes('class Include') ? closeWriteBack(source) : source));
+  rewrite(join(out, 'include/src'), (source) => (source.includes('class Include') ? rejectJsExpr(closeWriteBack(source)) : source));
   rewrite(join(out, 'cordis/tests'), rescope);
   // 本地修改第 9 條：兩個檔各命中一次。
   for (const file of ['index.ts', 'config/tree.ts']) {

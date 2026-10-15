@@ -10,7 +10,7 @@
  * | D 重啟就回來 | serve：「重啟之後那一列重新試一次」 |
  * | E 關機與重建不誤寫 | serve 關機＋樹：「拆卸與重建」（含**切換出貨路徑**——Include restart，`UNLOADING` 條件是承重的） |
  * | G 沒有紀錄檔 | serve：「沒有紀錄檔」 |
- * | H 只有 case 7 才交給宿主 | 樹：「只有自己停用才有事件」＋serve：寫入口的 `disable` |
+ * | H 只有插件自己 `ctx.fiber.dispose()` 才交給宿主 | 樹：「只有自己停用才有事件」＋serve：寫入口的 `disable` |
  *
  * 量具：一顆**遷出的函式插件**（有 `manifest` 匯出），`apply` 裡數一次、`ctx.fiber.dispose()`。出貨清單上沒有任何插件
  * 會這樣做，所以只能用夾具。
@@ -305,7 +305,7 @@ describe('只有自己停用才有事件（驗收 H）', () => {
   }
 
   it('寫入口的 disable（樹上的 echo）：不產生 self-disabled；紀錄與快照的存檔那一側都是 disabled', async () => {
-    // 出貨清單上的 echo 是樹上的函式插件列：寫入口停用它走的是 Loader 的 `entry.update`，不是 case 7。
+    // 出貨清單上的 echo 是樹上的函式插件列：寫入口停用它走的是 Loader 的 `entry.update`，不是插件自己 `ctx.fiber.dispose()` 那一格。
     const h = home({ seedInsert: false });
     const server = await start(h.env);
     expect(await say(server, 'a')).toBeUndefined();

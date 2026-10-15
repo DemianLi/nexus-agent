@@ -36,6 +36,8 @@ export interface TreeOptions {
   readonly initial?: Record<string, unknown>[]
   /** 不建檔（驗缺檔那條路）。 */
   readonly noFile?: boolean
+  /** 直接給檔案原文（要寫 YAML 標籤這類 `yaml.dump` 寫不出來的形狀）；有給就不用 `rows` 產生。 */
+  readonly source?: string
   /** 額外的內建插件。 */
   readonly builtins?: Record<string, unknown>
 }
@@ -43,7 +45,7 @@ export interface TreeOptions {
 export async function bootTree(options: TreeOptions): Promise<Tree> {
   const dir = mkdtempSync(join(tmpdir(), 'include-nexus-'))
   const file = join(dir, 'cordis.yml')
-  if (options.noFile !== true) writeFileSync(file, yaml.dump(options.rows))
+  if (options.noFile !== true) writeFileSync(file, options.source ?? yaml.dump(options.rows))
   const registry: string[] = []
   const applied: Record<string, number> = {}
   const logs: string[] = []

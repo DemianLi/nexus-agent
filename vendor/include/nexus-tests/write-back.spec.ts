@@ -127,7 +127,7 @@ describe('Include 不寫檔', () => {
     expect(tree.registry).toEqual([])
   })
 
-  it('路徑 (c)：插件自我停用（Loader case 7）只在記憶體，不寫檔', async () => {
+  it('路徑 (c)：插件自我停用（Loader 處理自我停用的那一格）只在記憶體，不寫檔', async () => {
     tree = await bootTree({
       rows: [{ id: 'q', name: 'cordis:quitter' }, ...rows],
       builtins: {
