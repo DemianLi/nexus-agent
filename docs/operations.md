@@ -563,14 +563,40 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   jq '.rows[] | select(.sync != "same")' "$NEXUS_AGENT_HOME/plugin-snapshot.json"
   ```
 
-  每一列只有 `id`、`module`、`running`、`saved`、`sync`，`running` 與 `saved` 裡只有 `state`（`mounted`／`disabled`／`dropped`／`absent`）
-  和掉了才有的 `dropStage`（`module`／`config`／`apply`／`requires`）。`sync`：`same` 沒有差別、`next-thread` 已儲存新對話生效、
-  `restart` 已儲存待重啟。**檔裡不帶設定值，也不帶掉了的原因原文**（設定可能放了秘密，原因照舊只進伺服器日誌）。
+  每一列只有 `id`、`module`、`running`、`saved`、`sync`（與下面兩個選填的 `unaudited`、`live`），`running` 與 `saved` 裡只有
+  `state`（`mounted`／`disabled`／`dropped`／`absent`）和掉了才有的 `dropStage`（`module`／`config`／`apply`／`requires`）。
+  `sync`：`same` 沒有差別、`next-thread` 已儲存新對話生效、`restart` 已儲存待重啟。**檔裡不帶設定值，也不帶掉了的原因原文**
+  （設定可能放了秘密，原因照舊只進伺服器日誌）。
   `running` 是啟動時的樣子；組裝期讀的列，已儲存的那份已經在新對話生效，所以是 `next-thread`。列的全集與順序同
   `--dump-config`，磁碟上新插進來的列接在最後（`running` 是 `absent`）。分類依據是
   [`.docs/plugin-reload-classification-2026-10-08.md`](../.docs/plugin-reload-classification-2026-10-08.md)，表在
   `apps/harness/src/plugin-row-classes.ts`。**不開 wire 路由**：還沒有管理員身分，`/threads` 底下每個登入的人都看得到；
   有了之後改走那道閘的只讀路由。
+- **還有哪些對話握著舊設定，看每一列的 `live`**（[#1442](https://github.com/DemianLi/nexus-agent/issues/1442)，版本路由的第一刀）。
+  改了設定之後，進行中的對話還握著組裝當下那一份，新對話才用新的；`live` 把「這一列的哪一版設定 → 哪些對話在用」列出來。
+  **只有至少一條對話綁著那一列時才有這一格**，剛開機、還沒開過任何對話的檔沒有它。一項是 `{ version, current, threads }`：
+
+  | 欄位 | 意思 |
+  |---|---|
+  | `version` | 那一份宣告（列 id、模組名、設定）的帶鍵雜湊，`hmac-sha256:` 加 16 個十六進位字元，鍵同會話日誌 header 的 `configHash`（`config-hash-key.json`）。**不含設定值**；設定改了又改回來是同一版。 |
+  | `current` | 它是不是**寫這份檔當下**清單上那一列的那一版。 |
+  | `threads` | 握著這一版的對話 id（只有主對話；子代理沿用主對話那一份，不另列），已排序。 |
+
+  ```bash
+  jq -r '.rows[] | select(.id == "<列 id>") | .live[]? | select(.current | not) | .threads[]' "$NEXUS_AGENT_HOME/plugin-snapshot.json"
+  ```
+
+  上面那行列出「用著這一列舊版設定的對話」。要重新讀設定，那些對話要重開（或重啟 serve）。
+  - **剛用寫入口改完設定，要等下一條對話開出來，`current` 才會換。** 寫入口是另一個行程、不寫這個檔（檔只有 serve 一個寫者）；
+    檔上的 `current` 是「serve 上一次寫檔當時」清單上的那一版，跟 `saved` 同一個時間點。
+  - **綁的規則**：只算實際掛上的列——停用的、這條對話掉了的、樹上自我停用的不算；啟動時讀一次的那 13 列也不算（它們生效的是啟動那一份，
+    改了看 `sync: restart`）。對話建好之後才綁，只看過歷史、沒跑過一輪的對話也算（它下一輪真的會用那一版）。**對話只在 serve 關機時才拆**
+    （沒有閒置逐出），所以名單只增不減，直到重啟；表在行程記憶體裡，重啟之後從零開始。要分「正在跑」還是「閒著」，看 `GET /threads` 的 `running`。
+  - **對話 id 進了這個檔**，擴大了上面「不帶設定值」的揭露範圍：對話 id 本來就經 `GET /threads` 給每個登入的人看，這個檔是 0600，
+    只有進得了主機的人讀得到，所以曝露面比 wire 小。**這個前提在 #1428／#1429 做逐人可見之後不成立**（`GET /threads` 不再是每個人都看得到
+    全部）；那時這個檔仍然列出全部對話，因為讀者只有主機上的人，但要重審。
+  - **關掉會話落盤**（`session-persistence` 列停用）的 serve 沒有這一格：版本字串用 `config-hash-key.json` 那把鍵，落盤關掉的啟動不在 home 底下建鍵檔。
+  - 這一版交付的是「設定版本」，不是「程式碼版本」：寫入口沒有換模組的動作，同一列在一個 serve 行程裡只會因為宣告（模組名加設定）改了而出現兩版。
 - **報了之後起不起得來，照必掛與可少掛**（[#751](https://github.com/DemianLi/nexus-agent/issues/751)，照 dsh）。
   設定驗不過、模組載不起來、外掛掛上去時拋錯的那一列掉了：啟動時印一段「警告：N 列沒有掛上」指名它與原因，
   其餘照樣起來，掉了的列算沒掛（跟寫 `disabled: true` 一樣）。**必掛的只有 `browser-session` 與 `system-prompt`**（後者掉了，模型拿到的提示詞就不是部署方寫的那份），它們掉了整個起不來，訊息連

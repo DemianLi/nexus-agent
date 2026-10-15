@@ -81,6 +81,19 @@ export function pluginRowsOf(entries: readonly ConfigEntry[]): StoredSessionPlug
 }
 
 /**
+ * 一段文字的帶鍵雜湊：`hmac-sha256:<16 個十六進位字元>`。**設定雜湊與快照裡的設定版本共用這一支**
+ * （[#1442](https://github.com/DemianLi/nexus-agent/issues/1442) Q2 (a)）：同一把鍵、同一種寫法，讀的人不用分兩套。
+ *
+ * @param text - 要雜湊的文字（呼叫端用 `stableStringify` 序列化過）。
+ * @param key - {@link CONFIG_HASH_KEY_FILE} 那一把。
+ * @returns `hmac-sha256:<16 個十六進位字元>`。
+ */
+export function hmacHashOf(text: string, key: Uint8Array): string {
+  const digest = createHmac('sha256', key).update(text).digest('hex');
+  return `${CONFIG_HASH_PREFIX}${digest.slice(0, CONFIG_HASH_HEX_LENGTH)}`;
+}
+
+/**
  * 整份清單（含 `config`）的帶鍵雜湊。
  *
  * @param entries - 疊完的清單。
@@ -88,8 +101,7 @@ export function pluginRowsOf(entries: readonly ConfigEntry[]): StoredSessionPlug
  * @returns `hmac-sha256:<16 個十六進位字元>`。
  */
 export function configHashOf(entries: readonly ConfigEntry[], key: Uint8Array): string {
-  const digest = createHmac('sha256', key).update(stableStringify(entries)).digest('hex');
-  return `${CONFIG_HASH_PREFIX}${digest.slice(0, CONFIG_HASH_HEX_LENGTH)}`;
+  return hmacHashOf(stableStringify(entries), key);
 }
 
 /** {@link resolveSessionHeaderMetadata} 的輸入。 */
@@ -121,6 +133,26 @@ export async function resolveSessionHeaderMetadata(
 }
 
 /**
+ * 讀（沒有就建）設定雜湊的鍵。**鍵檔落在工作區底下的話模型讀得到也改得動它，帶鍵就沒有意義：不建、不用**（拋）。
+ *
+ * @param options - env（決定 harness home）、`--workspace` 與 cwd。
+ * @returns 鍵。
+ * @throws 鍵檔在工作區底下、或讀不到也建不了。
+ */
+export async function loadConfigHashKey(
+  options: Pick<ResolveSessionHeaderMetadataOptions, 'env' | 'workspace' | 'cwd'>,
+): Promise<Buffer> {
+  const home = resolveHarnessHome(options.env);
+  outsideWorkspace(
+    join(home, CONFIG_HASH_KEY_FILE),
+    options.workspace,
+    options.cwd,
+    '設定雜湊的鍵檔',
+  );
+  return loadOrCreateHomeSecret(home, CONFIG_HASH_KEY_ROLE);
+}
+
+/**
  * 起動期讀一次鍵與建置版本，交回一支「給一份清單算那三格」的函式。serve 每條 thread 組裝時重讀清單（#1405），
  * header 要描述那條 thread 實際掛的那一份，所以清單每條各給；鍵與建置版本是行程的性質，讀一次，鍵讀不到也只講一次。
  *
@@ -133,15 +165,7 @@ export async function createSessionHeaderMetadataResolver(
   const build = options.build ?? processBuildVersion();
   let key: Buffer;
   try {
-    const home = resolveHarnessHome(options.env);
-    // 鍵檔落在工作區底下的話模型讀得到也改得動它，帶鍵就沒有意義：不建、不用。
-    outsideWorkspace(
-      join(home, CONFIG_HASH_KEY_FILE),
-      options.workspace,
-      options.cwd,
-      '設定雜湊的鍵檔',
-    );
-    key = await loadOrCreateHomeSecret(home, CONFIG_HASH_KEY_ROLE);
+    key = await loadConfigHashKey(options);
   } catch (error) {
     options.warn(
       `會話日誌的 header 這一次不記設定雜湊：${error instanceof Error ? error.message : String(error)}`,

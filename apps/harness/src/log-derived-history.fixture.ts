@@ -716,6 +716,8 @@ export interface DriverCtx {
 }
 
 export interface DriverRun {
+  /** 這一次的 harness home（`plugin-snapshot.json` 等落在它底下）。 */
+  readonly home: string;
   /** 日誌目錄裡的每一份日誌（root 與各子代理）。 */
   readonly logs: LogFile[];
   readonly bodies: Body[];
@@ -818,6 +820,7 @@ export async function runServeDriver(
     await upstream.close();
   }
   return {
+    home,
     logs: readAllLogs(logs),
     bodies: upstream.bodies,
     mainBodies: upstream.bodies.filter(hasTools),

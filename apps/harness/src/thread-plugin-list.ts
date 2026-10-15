@@ -66,6 +66,7 @@ import { failedRowsOf } from './plugin-failure-recorder.js';
 import type { FailedRow, FailureRecorder } from './plugin-failure-recorder.js';
 import { legacyPatchIgnoredMessage } from './plugin-config.js';
 import type { LoadedPluginConfig, PluginConfigWarn, StartupDrop } from './plugin-config.js';
+import { createLiveVersionTable, liveBindingsOf } from './plugin-live-versions.js';
 import { buildPluginSnapshot } from './plugin-snapshot.js';
 import type { PluginSnapshot, SnapshotSource } from './plugin-snapshot.js';
 import { rowKey, snapshotOf, snapshotsDiffer } from './plugin-row-state.js';
@@ -123,6 +124,11 @@ export interface ThreadPluginListOptions {
   readonly publishSnapshot?: (snapshot: PluginSnapshot) => Promise<void> | void;
   /** 算快照用的時間，測試給固定的。省略即現在。 */
   readonly now?: () => Date;
+  /**
+   * 活著的設定版本（#1442）：給了就維護「列 id → 宣告簽章 → thread」那張表，快照每列多選填的 `live`。`sign` 把簽章（含設定
+   * 明文）換成寫進檔的帶鍵雜湊；拿不到鍵就不給這一格（快照照舊，沒有 `live`）。
+   */
+  readonly liveVersions?: { readonly sign: (signature: string) => string };
 }
 
 /** 組裝時掉了的一個條目；`drop` 的形狀是 `AssemblyDrop`（`agent-factory.ts`）的子集，省略時對照快照記成 `apply`。 */
@@ -172,6 +178,22 @@ export interface ThreadPluginReader {
    * @returns 快照。
    */
   snapshot(saved?: ThreadPluginList): PluginSnapshot;
+  /**
+   * 一條 thread **組裝成功之後**綁上它實際掛上的列，並把這一刻的快照寫一次（#1442）。沒給 `liveVersions` 就什麼也不做。
+   *
+   * 寫的是**最近一次讀到的那一份**當「已儲存」，不是這條 thread 自己讀到的：兩條 thread 同時組裝時，慢的那一條不該把
+   * 較新的那一份蓋回去。**只綁 root thread id**——子代理沿用 root 那一份，呼叫端不要替它們呼叫。
+   *
+   * @param threadId - root thread id。
+   * @param list - 這條 thread 用的那份（{@link read} 的回傳）。
+   * @param dropped - 這條 thread 組裝時掉了的條目（`built.dropped`）。
+   * @returns 放掉：只動記憶體、不寫檔（關機時整批拆掉，不各自 fsync 一次）；呼叫第二次是空操作。
+   */
+  bindThread(
+    threadId: string,
+    list: ThreadPluginList,
+    dropped: readonly AssemblyDropInput[],
+  ): Promise<() => void>;
 }
 
 /**
@@ -317,11 +339,19 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
       layers: loaded.layers,
     };
   }
+  // 活著的設定版本（#1442）：表在行程記憶體裡，沒給 `liveVersions` 就不維護。
+  const liveTable = options.liveVersions === undefined ? undefined : createLiveVersionTable();
+  // 最近一次 `read()` 回的那一份：綁定之後重寫快照時當「已儲存」（見 {@link ThreadPluginReader.bindThread}）。
+  let latestRead: ThreadPluginList | undefined;
   function snapshotFor(saved?: ThreadPluginList): PluginSnapshot {
     return buildPluginSnapshot({
       running: runningSource,
       saved: saved === undefined ? runningSource : savedSourceOf(saved),
       generatedAt: now(),
+      ...(liveTable !== undefined &&
+        options.liveVersions !== undefined && {
+          live: { rows: liveTable.rows(), sign: options.liveVersions.sign },
+        }),
     });
   }
 
@@ -383,8 +413,15 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
         plugins,
         optionalEntries: optionalEntriesOf(view, audit),
       };
+      latestRead = list;
       await options.publishSnapshot?.(snapshotFor(list));
       return list;
+    },
+    async bindThread(threadId, list, dropped) {
+      if (liveTable === undefined) return () => undefined;
+      const release = liveTable.bind(threadId, liveBindingsOf(list, dropped));
+      await options.publishSnapshot?.(snapshotFor(latestRead ?? list));
+      return release;
     },
     noteDropped(list, dropped) {
       const droppedIds = new Set<string>();

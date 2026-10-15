@@ -23,8 +23,8 @@
  * ## 不帶什麼（PM 2026-10-12 拍板）
  *
  * **不帶設定值，也不帶 drop 訊息原文。** 一列的 `config` 可能放了秘密，而這台主機是多人共用、瀏覽器會話沒有角色概念。
- * 每列只有 `id`、`module`、`running`、`saved`、`sync`，`running`／`saved` 裡只有 `state` 與 `dropStage`。drop 的原文照舊
- * 只進伺服器日誌（`startup-audit.ts` 的 `describeDrop`）。
+ * 每列只有 `id`、`module`、`running`、`saved`、`sync`（與下面兩個選填的 `unaudited`、`live`），`running`／`saved` 裡只有
+ * `state` 與 `dropStage`。drop 的原文照舊只進伺服器日誌（`startup-audit.ts` 的 `describeDrop`）。
  *
  * ## 「已儲存」含變更紀錄（#1412）
  *
@@ -36,6 +36,21 @@
  *   看到了但沒讀）；`pendingMigration`：紀錄檔還不在、舊檔照舊被讀，下一次啟動才遷。
  * - `layers.overlays` 與每列的 `unaudited: true`：**`--patch` 是一條不經過紀錄的路**，它蓋到的列標出來，稽核看得到
  *   「這幾列的值有一部分不是紀錄說了算」。
+ *
+ * ## 「活著的設定版本」（#1442）
+ *
+ * 每列選填的 `live`：哪些 thread 還握著這一列哪一版的宣告。**沒有任何 thread 綁著那一列時整格省略**，所以剛開機、還沒組裝任何
+ * thread 的快照與以前逐位元組相同。一項是 `{ version, current, threads }`：
+ *
+ * - `version`：那一份宣告（列 id、模組名、設定）的帶鍵雜湊，`hmac-sha256:` 加 16 個十六進位字元，**同
+ *   `config-hash-key.json` 那把鍵與 `configHash` 的寫法**（`session-header-metadata.ts`）。不含設定值；設定改了又改回來
+ *   是同一版。
+ * - `current`：它是不是**寫這份快照當下**清單上那一列的那一版。**跟 `saved` 同一個時間點**：寫入口改設定不會重寫快照
+ *   （快照只有 serve 一個寫者，#1406），所以改完之後、下一條 thread 組裝之前，檔上的 `current` 還指著舊版。
+ * - `threads`：綁著它的 root thread id（已排序）。**thread id 進檔擴大了上面的揭露白名單**（PM 核可，#1442）：它本來就經
+ *   `GET /threads` 給每個登入的人看，快照檔是 0600；#1428／#1429 做逐人可見之後這個前提不成立，到時重審。
+ *
+ * 綁定的規則（只綁實際掛上的列、組裝成功才綁、thread 拆掉才放、子代理只綁 root）見 `plugin-live-versions.ts`。
  *
  * ## 偏離登記
  *
@@ -64,7 +79,8 @@ import { resolveHarnessHome } from './harness-home.js';
 import type { ConfigEntry, LayerReport, StartupDrop } from './plugin-config.js';
 import { classOfRow, STARTUP_READ_PLUGINS } from './plugin-row-classes.js';
 import type { RowClass } from './plugin-row-classes.js';
-import { rowKey, snapshotOf, snapshotsDiffer } from './plugin-row-state.js';
+import type { LiveVersionRows } from './plugin-live-versions.js';
+import { declarationSignature, rowKey, snapshotOf, snapshotsDiffer } from './plugin-row-state.js';
 
 /** 快照檔在 harness home 底下的檔名。 */
 export const PLUGIN_SNAPSHOT_FILE_NAME = 'plugin-snapshot.json';
@@ -110,6 +126,25 @@ export interface PluginSnapshotRow {
   readonly sync: RowSync;
   /** 有 `--patch` 的 patch 指到這一列（未經稽核的覆蓋層，#1412）。沒有就省略。 */
   readonly unaudited?: true;
+  /** 還有 thread 握著這一列的哪幾版宣告（#1442）。沒有 thread 綁著就省略。 */
+  readonly live?: readonly LiveVersion[];
+}
+
+/** 一列的一版宣告，與還握著它的 thread（#1442）。**不帶設定值**：`version` 是帶鍵雜湊。 */
+export interface LiveVersion {
+  /** `hmac-sha256:<16 個十六進位字元>`。 */
+  readonly version: string;
+  /** 寫這份快照當下，清單上那一列是不是這一版（時間點同 `saved`）。 */
+  readonly current: boolean;
+  /** 綁著這一版的 root thread id，已排序。 */
+  readonly threads: readonly string[];
+}
+
+/** 算 `live` 要的東西：那張表的內容，與「簽章 → 帶鍵雜湊」。 */
+export interface LiveVersionInput {
+  readonly rows: LiveVersionRows;
+  /** 簽章（含設定明文）→ 寫進檔的版本字串。 */
+  readonly sign: (signature: string) => string;
 }
 
 /** 整份快照。 */
@@ -160,7 +195,9 @@ function sideRows(source: SnapshotSource): Map<string, SideRow> {
     const stage = drops.get(id);
     const entry = entries.get(id);
     // 宣告是啟用、交給組裝的那一顆卻是停用的，而且沒掉：樹上自我停用過、宣告沒變的橋接列（#1424），快照照現有四種狀態
-    // 顯示成 `disabled`，不加欄位（加了要升快照版本）；是誰停的看變更紀錄。
+    // 顯示成 `disabled`；是誰停的看變更紀錄。
+    // **快照版本的規則**（#1442 Q3 (a)）：加選填欄位、舊讀者忽略也不會讀錯 → 不升；改了既有欄位的意思 → 升。
+    // 這條規則是類比 dsh 會話格式的升版規則（只有既有欄位擋不住誤讀時才升版），不是照 dsh：dsh 沒有這份快照。
     const state: RowState =
       stage !== undefined
         ? 'dropped'
@@ -187,6 +224,7 @@ function sideRows(source: SnapshotSource): Map<string, SideRow> {
  * @param input.saved - 這一刻磁碟上的那一份。
  * @param input.generatedAt - 算的時間。
  * @param input.classify - 一列屬於哪一類；省略即 {@link classOfRow}（出貨的表）。測試用它造 `mount-restart` 的列。
+ * @param input.live - 活著的設定版本；`current` 以 `saved` 那一份清單上的宣告為準。
  * @returns 快照。
  */
 export function buildPluginSnapshot(input: {
@@ -194,6 +232,8 @@ export function buildPluginSnapshot(input: {
   readonly saved: SnapshotSource;
   readonly generatedAt: Date;
   readonly classify?: (id: string, pluginName: string | undefined) => RowClass;
+  /** 活著的設定版本（#1442）。省略就不帶 `live`。 */
+  readonly live?: LiveVersionInput;
 }): PluginSnapshot {
   const running = sideRows(input.running);
   const saved = sideRows(input.saved);
@@ -222,9 +262,22 @@ export function buildPluginSnapshot(input: {
   // **沒什麼好報的就不帶 `layers`**（驗收 H）：沒有紀錄、沒有舊檔、沒有 `--patch` 的機器上，快照跟加這一層之前逐位元組相同。
   const layers = reportable(input.saved.layers);
   const covered = new Set(layers?.overlays.flatMap((overlay) => overlay.rows) ?? []);
-  const marked = rows.map((row) =>
-    covered.has(row.id) ? { ...row, unaudited: true as const } : row,
-  );
+  const currentSignature = (id: string): string | undefined => {
+    const index = input.saved.ids.indexOf(id);
+    const declared = index < 0 ? undefined : input.saved.entries[index];
+    return declared === undefined
+      ? undefined
+      : declarationSignature(id, declared.name, declared.config);
+  };
+  const marked = rows.map((row) => {
+    const live =
+      input.live === undefined ? undefined : liveOf(row.id, input.live, currentSignature(row.id));
+    return {
+      ...row,
+      ...(covered.has(row.id) && { unaudited: true as const }),
+      ...(live !== undefined && { live }),
+    };
+  });
   const summary: Record<RowSync, number> = { same: 0, 'next-thread': 0, restart: 0 };
   for (const row of marked) summary[row.sync] += 1;
   return {
@@ -234,6 +287,21 @@ export function buildPluginSnapshot(input: {
     rows: marked,
     ...(layers !== undefined && { layers }),
   };
+}
+
+/** 一列的 `live`；沒有 thread 綁著就是 `undefined`（整格省略）。 */
+function liveOf(
+  id: string,
+  live: LiveVersionInput,
+  current: string | undefined,
+): readonly LiveVersion[] | undefined {
+  const versions = live.rows.get(id);
+  if (versions === undefined || versions.size === 0) return undefined;
+  return [...versions].map(([signature, threads]) => ({
+    version: live.sign(signature),
+    current: signature === current,
+    threads: [...threads].sort(),
+  }));
 }
 
 /** 各層報告裡有東西可講才回它，否則 `undefined`：紀錄是空的（或不在）、沒有舊檔、沒有 `--patch` 就是「沒有」。 */
