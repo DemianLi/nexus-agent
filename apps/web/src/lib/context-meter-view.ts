@@ -9,6 +9,9 @@
  *   `inputTokens` 算法不同，只放進明細的「目前大小」那一行，不拿來算比例。
  * - **環取最近的那道**，明細每道各一行、照設定的順序。門檻是部署的設定（patch 改得動），一律讀線上給的值，
  *   不寫死 100000／60。
+ * - **只算會真的觸發的門檻**（[#1444](https://github.com/DemianLi/nexus-agent/issues/1444)）：`messagesCompactable` 是
+ *   `false` 時，`messages` 那道到了也摘不到東西（整串都在原樣保留的尾巴裡，#1441），不算進環、不會是最近那道，明細照列並
+ *   標成目前不會觸發。沒有這一格（舊日誌）照沒有這一格以前的算法。每一道都不算時環是 0%，不是不畫：環一消失，看起來像量測壞了。
  * - **百分比無條件捨去**，最多 100：「100%」只在真的到門檻時出現。比例是估算的，所以前面標「約」。
  * - **80% 以上變警示色**，同 dsh 的 `thresholdRatio` 預設 0.8。
  *
@@ -27,6 +30,8 @@ export interface ThresholdRow {
   readonly text: string;
   /** 環量的就是這一道：比例最高的那道，同分取設定裡排前面的。 */
   readonly nearest: boolean;
+  /** 這一道目前不會觸發（`messages` 那道、`messagesCompactable` 是 `false`）：不算進環，也不會是最近那道。 */
+  readonly dormant: boolean;
 }
 
 export interface ContextMeterView {
@@ -38,19 +43,37 @@ export interface ContextMeterView {
   /** 「目前大小」那一行；沒收到 `model/usage` 時沒有這一行。 */
   readonly inputTokens?: string;
   readonly rows: readonly ThresholdRow[];
+  /** 明細底下那句：有沒有會觸發的門檻，說法不同。 */
+  readonly note: string;
 }
+
+/** 不會觸發的那一行底下那句。 */
+export const DORMANT_ROW_TEXT = '整串都在原樣保留的範圍內，這道目前不會觸發';
+
+/** 明細底下那句：每一道都會觸發時。 */
+export const NOTE_ALL_ACTIVE = '到了任何一道門檻，較早的訊息會被摘要成一段。比例是估算的。';
+/** 有一道以上不會觸發、但還有會觸發的。 */
+export const NOTE_SOME_DORMANT = '到了會觸發的門檻，較早的訊息會被摘要成一段。比例是估算的。';
+/** 一道會觸發的都沒有：環是 0%。 */
+export const NOTE_NONE_ACTIVE = '目前沒有會觸發的門檻，不會自動摘要。';
 
 /** `null`：不畫。 */
 export function contextMeterView(pressure: WireContextPressure | null): ContextMeterView | null {
   const measure = pressure?.measure;
   if (measure === undefined) return null;
-  const ratios = measure.thresholds.map(
-    (threshold) =>
-      (threshold.type === 'tokens' ? measure.approxTokens : measure.messageCount) / threshold.value,
+  // 只有明講 `false` 才算不會觸發；沒有這一格（舊日誌）照舊。
+  const dormant = (threshold: WireSummaryThreshold) =>
+    threshold.type === 'messages' && measure.messagesCompactable === false;
+  // 不會觸發的那道記成 -1：不會贏過任何一道會觸發的（比例最小是 0）。
+  const ratios = measure.thresholds.map((threshold) =>
+    dormant(threshold)
+      ? -1
+      : (threshold.type === 'tokens' ? measure.approxTokens : measure.messageCount) /
+        threshold.value,
   );
-  // 線上保證至少一道（折疊器不收空陣列），所以 `nearest` 一定找得到。
+  // 線上保證至少一道（折疊器不收空陣列）；每一道都不會觸發時沒有最近那道，環是 0。
   const top = Math.max(...ratios);
-  const nearest = ratios.indexOf(top);
+  const nearest = top < 0 ? -1 : ratios.indexOf(top);
   const rows = measure.thresholds.map((threshold, index) => ({
     type: threshold.type,
     text:
@@ -58,8 +81,10 @@ export function contextMeterView(pressure: WireContextPressure | null): ContextM
         ? `約 ${compact(measure.approxTokens)}／${compact(threshold.value)} token`
         : `${measure.messageCount}／${threshold.value} 則`,
     nearest: index === nearest,
+    dormant: dormant(threshold),
   }));
-  const ratio = Math.min(top, 1);
+  const ratio = Math.min(Math.max(top, 0), 1);
+  const dormantCount = rows.filter((row) => row.dormant).length;
   return {
     ratio,
     percent: Math.floor(ratio * 100),
@@ -68,6 +93,12 @@ export function contextMeterView(pressure: WireContextPressure | null): ContextM
       ? {}
       : { inputTokens: `${pressure.inputTokens.toLocaleString('en-US')} token` }),
     rows,
+    note:
+      dormantCount === 0
+        ? NOTE_ALL_ACTIVE
+        : dormantCount === rows.length
+          ? NOTE_NONE_ACTIVE
+          : NOTE_SOME_DORMANT,
   };
 }
 

@@ -104,10 +104,53 @@ describe('用量表（#528）', () => {
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 
+  it('不會觸發的門檻（#1444）：照列、次要色、下面一行小字，不是最近；報讀兩句一起唸；底下那句改說法', () => {
+    render(
+      <ContextMeter
+        pressure={{
+          measure: {
+            approxTokens: 30_000,
+            messageCount: 70,
+            thresholds: [
+              { type: 'tokens', value: 100_000 },
+              { type: 'messages', value: 60 },
+            ],
+            messagesCompactable: false,
+          },
+        }}
+      />,
+    );
+    expect(meter().textContent).toBe('約 30%');
+    fireEvent.click(meter());
+    const [tokens, messages] = screen.getAllByTestId('context-meter-row');
+    expect(tokens?.getAttribute('data-nearest')).toBe('true');
+    expect(messages?.getAttribute('data-nearest')).toBe('false');
+    expect(messages?.getAttribute('data-dormant')).toBe('true');
+    expect(messages?.classList.contains('text-muted-foreground')).toBe(true);
+    expect(messages?.classList.contains('font-medium')).toBe(false);
+    expect(messages?.classList.contains('line-through')).toBe(false);
+    expect(messages?.textContent).toBe('70／60 則，整串都在原樣保留的範圍內，這道目前不會觸發');
+    expect(screen.getByTestId('context-meter-dormant').classList.contains('text-tip')).toBe(true);
+    expect(tokens?.querySelector('[data-testid="context-meter-dormant"]')).toBeNull();
+    expect(screen.getByTestId('context-meter-note').textContent).toBe(
+      '到了會觸發的門檻，較早的訊息會被摘要成一段。比例是估算的。',
+    );
+  });
+
   it('axe：收著與點開都沒有違規', async () => {
-    const { baseElement } = render(<ContextMeter pressure={{ measure, inputTokens: 1 }} />);
+    const { baseElement, rerender } = render(
+      <ContextMeter pressure={{ measure, inputTokens: 1 }} />,
+    );
     expect(await axeViolations(baseElement)).toEqual([]);
     fireEvent.click(meter());
+    expect(await axeViolations(baseElement)).toEqual([]);
+    // 有不會觸發的那一行（#1444）。
+    rerender(
+      <ContextMeter
+        pressure={{ measure: { ...measure, messagesCompactable: false }, inputTokens: 1 }}
+      />,
+    );
+    expect(screen.getByTestId('context-meter-dormant')).not.toBeNull();
     expect(await axeViolations(baseElement)).toEqual([]);
   });
 });
