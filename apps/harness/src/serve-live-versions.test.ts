@@ -111,7 +111,7 @@ const ECHO_X = [
 ].join('\n');
 
 describe('活著的設定版本（#1442）', () => {
-  it('兩版並存、改回來是同一版：樹上的列（echo）與相容層的列（todo）各做一次（驗收 A、B）', async () => {
+  it('兩版並存、改回來是同一版：樹上的列（echo、todo）各做一次（驗收 A、B）', async () => {
     const h = home();
     const server = await start(h.env);
     expect(await say(server, 't1')).toBeUndefined();

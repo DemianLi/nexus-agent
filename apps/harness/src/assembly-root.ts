@@ -34,6 +34,7 @@ import type { ColdChildStore } from './background-cold.js';
 import type { BackgroundParentPort, ModelChoice } from './background-subagents.js';
 import { composeAttachSessions } from './session-attach.js';
 import type { AttachSessions } from './session-attach.js';
+import type { SessionLookupRegistrar } from './thread-sessions.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { liveModelPlugin, streamRetryOptionsOf } from './settings/live-model.js';
 import type { LiveModelConfig } from './settings/live-model.js';
@@ -563,6 +564,12 @@ export interface CreateCliAgentSession {
    * CLI 一個行程一個組裝，省略即這個組裝自己一本，行為相同。
    */
   readonly tokenAnchorBook?: TokenAnchorBook;
+  /**
+   * 樹上會話查找的登記面（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463)），原樣轉給 `createNexusAgent`：
+   * 兩個產品入口經 `compatLayer` 從 `PluginTree.threadSessions` 帶進來；**省略就是沒有樹的組裝**，只有這一次組裝自己的
+   * `registry.sessions`。
+   */
+  readonly sessionLookup?: SessionLookupRegistrar;
 }
 
 /**
@@ -673,6 +680,7 @@ export async function createCliAgent(
     approvals,
     rootSeed,
     tokenAnchorBook,
+    sessionLookup,
   }: CreateCliAgentSession = {},
 ): Promise<{
   agent: NexusAgent;
@@ -920,6 +928,7 @@ export async function createCliAgent(
       cwd: PROMPT_WORKING_DIRECTORY,
     },
     checkpointer,
+    ...(sessionLookup !== undefined && { sessionLookup }),
     ...(onInvariantViolation !== undefined && { onInvariantViolation }),
     ...(invariantTap !== undefined && { invariantTap }),
     approvals: { ...approvals, policy: approvalPolicy.source },

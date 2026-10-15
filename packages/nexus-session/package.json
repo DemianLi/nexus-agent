@@ -6,6 +6,7 @@
   "main": "src/index.ts",
   "exports": {
     ".": "./src/index.ts",
+    "./provider": "./src/provider.ts",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
@@ -17,13 +18,18 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@nexus/cordis": "workspace:*",
+    "@nexus/cordis-plugin-loader": "workspace:*",
     "@nexus/core": "workspace:*",
+    "@nexus/sdk": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   },
   "peerDependencies": {
-    "@nexus/core": "workspace:*"
+    "@nexus/cordis": "workspace:*",
+    "@nexus/core": "workspace:*",
+    "@nexus/sdk": "workspace:*"
   }
 }

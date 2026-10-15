@@ -11,7 +11,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { createRegistry } from './registry.js';
+import { createRegistry, pickSessionForCall } from './registry.js';
 import { BACKGROUND_SESSION_CONFIG_KEY, callThreadId } from './session-address.js';
 import { SessionRegistry } from './session-registry.js';
 
@@ -140,5 +140,67 @@ describe('forCall 綁了兩張：依 thread_id 挑', () => {
 describe('一份 registry 沒綁任何會話', () => {
   it('not-attached', () => {
     expect(createRegistry().sessions.forCall(at('t', 'tools:x'))).toEqual({ kind: 'not-attached' });
+  });
+});
+
+/**
+ * `pickSessionForCall` 是挑法的**唯一一份實作**（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463)）：相容層的
+ * `registry.sessions.forCall` 與樹上的會話查找服務都是它。上面那幾組走的是前者；這一組直接餵它可迭代的註冊表，
+ * 證明樹上那一支（餵 `Map#values()`、只迭代一次）與相容層同一個答案。
+ */
+describe('pickSessionForCall：兩個呼叫者共用的那一支', () => {
+  it('沒有註冊表：not-attached', () => {
+    expect(pickSessionForCall([], at('t', 'tools:x'))).toEqual({ kind: 'not-attached' });
+  });
+
+  it('一張：不看 thread_id；算不出位址是 unknown-caller', () => {
+    const only = new SessionRegistry('only');
+    const found = pickSessionForCall([only], at('somebody-else', 'tools:x'));
+    expect(found.kind === 'ok' && found.log).toBe(only.root);
+    expect(pickSessionForCall([only], undefined)).toEqual({ kind: 'unknown-caller' });
+  });
+
+  it('多張：依 thread_id 挑恰好一張，其餘三種都是 ambiguous 並帶份數', () => {
+    const a = new SessionRegistry('thread-a');
+    const b = new SessionRegistry('thread-b');
+    const live = new Map([
+      ['thread-a', a],
+      ['thread-b', b],
+    ]);
+    const fromB = pickSessionForCall(live.values(), at('thread-b', 'tools:c'));
+    expect(fromB.kind === 'ok' && fromB.log).toBe(b.root);
+    const fromA = pickSessionForCall(live.values(), at('thread-a', 'tools:c'));
+    expect(fromA.kind === 'ok' && fromA.log).toBe(a.root);
+    for (const config of [at(undefined, 'tools:c'), at('thread-z', 'tools:c')]) {
+      expect(pickSessionForCall(live.values(), config)).toEqual({ kind: 'ambiguous', count: 2 });
+    }
+  });
+
+  it('只迭代一次：一個只能走一遍的迭代器也行', () => {
+    const a = new SessionRegistry('thread-a');
+    const b = new SessionRegistry('thread-b');
+    function* once() {
+      yield a;
+      yield b;
+    }
+    const found = pickSessionForCall(once(), at('thread-b', 'tools:c'));
+    expect(found.kind === 'ok' && found.log).toBe(b.root);
+  });
+
+  it('與相容層的 sessions.forCall 同一個答案（同一份輸入逐格比）', () => {
+    const registry = createRegistry();
+    const a = new SessionRegistry('thread-a');
+    const b = new SessionRegistry('thread-b');
+    registry.sessions.bind(a);
+    registry.sessions.bind(b);
+    for (const config of [
+      at('thread-a', 'tools:c'),
+      at('thread-b', 'tools:s|tools:c'),
+      at(undefined, 'tools:c'),
+      at('thread-z', 'tools:c'),
+      { configurable: { thread_id: 'thread-a' } },
+    ]) {
+      expect(pickSessionForCall([a, b], config)).toEqual(registry.sessions.forCall(config));
+    }
   });
 });
