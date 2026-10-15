@@ -25,10 +25,13 @@ export function Line({
   meta,
   attribution,
   tone,
+  code,
 }: {
   icon: ComponentType<{ className?: string; 'aria-hidden'?: boolean }>;
   label: string;
   summary: string;
+  /** 摘要是某個失敗碼的一句話時的原碼：放進 `title` 與 `data-failure-code`，同輪標頭的「失敗（…）」。 */
+  code?: string;
   meta?: ReactNode;
   attribution?: Attribution | undefined;
   tone?: 'danger';
@@ -47,7 +50,12 @@ export function Line({
         <span className="flex min-w-0 items-baseline gap-2">
           <span className="text-muted-foreground shrink-0">{label}</span>
           {summary !== '' && (
-            <span className="text-foreground min-w-0 truncate text-body">{summary}</span>
+            <span
+              className="text-foreground min-w-0 truncate text-body"
+              {...(code === undefined ? {} : { title: code, 'data-failure-code': code })}
+            >
+              {summary}
+            </span>
           )}
         </span>
         {(meta !== undefined || who !== undefined) && (
