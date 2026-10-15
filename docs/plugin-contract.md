@@ -9,14 +9,16 @@ capabilities 的執行、版本路由與兩版並存不在這一刀，見文末�
 [`packages/nexus-sdk`](../packages/nexus-sdk)（`@nexus/sdk`）與
 [`packages/nexus-tools`](../packages/nexus-tools)（`@nexus/tools`，第一個服務定義套件）與
 [`packages/nexus-projections`](../packages/nexus-projections)（`@nexus/projections`，第二個，#1421）與
-[`packages/nexus-skills`](../packages/nexus-skills)（`@nexus/skills`，第三個，#1446）。
+[`packages/nexus-skills`](../packages/nexus-skills)（`@nexus/skills`，第三個，#1446）、
+[`packages/nexus-commands`](../packages/nexus-commands)（`@nexus/commands`，第四個，#1456）與
+[`packages/nexus-feedback`](../packages/nexus-feedback)（`@nexus/feedback`，第五個，#1456，**第一個由插件提供、宿主消費的服務**）。
 
 ## 這份規範管誰
 
-**只管 Cordis 樹上的函式插件。** 今天樹上有相容層與入口兩列、`tools`（工具登記處）、`projections`（投影登記處，#1421）、`skill-sources`（技能來源登記處，#1446）、
+**只管 Cordis 樹上的函式插件。** 今天樹上有相容層與入口兩列、`tools`（工具登記處）、`projections`（投影登記處，#1421）、`skill-sources`（技能來源登記處，#1446）、`commands`（命令登記處，#1456）、
 `include`（讀出貨清單的那一列），加上逐顆遷出的插件，**今天是 `echo`**（[#1416](https://github.com/DemianLi/nexus-agent/issues/1416) PR 2）、
-**`token-meter`**（[#1421](https://github.com/DemianLi/nexus-agent/issues/1421)）、**`trajectory`**（[#1435](https://github.com/DemianLi/nexus-agent/issues/1435)）**與 `skills`**（[#1446](https://github.com/DemianLi/nexus-agent/issues/1446)）；還留在
-相容層裡的 17 顆是 `NexusPlugin` 物件，照舊 `export default`（`cordis.yml` 的 `name` 要靠它指到那顆物件），不受下面
+**`token-meter`**（[#1421](https://github.com/DemianLi/nexus-agent/issues/1421)）、**`trajectory`**（[#1435](https://github.com/DemianLi/nexus-agent/issues/1435)）、**`skills`**（[#1446](https://github.com/DemianLi/nexus-agent/issues/1446)）**與 `feedback`**（[#1456](https://github.com/DemianLi/nexus-agent/issues/1456)）；還留在
+相容層裡的 16 顆是 `NexusPlugin` 物件，照舊 `export default`（`cordis.yml` 的 `name` 要靠它指到那顆物件），不受下面
 「不能有 default」的約束。遷出一顆，它就從物件形式換成這裡的函式插件形式。載入器怎麼分辨兩種形式，見下面
 「接進清單」。
 
@@ -118,6 +120,29 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   所以 `@nexus/core` 放 `peerDependencies`、`devDependencies` 留 `workspace:*`。**同一個目錄只收一次**（`/skills/` 等於 `/skills`，
   不論同一列寫兩次還是兩列各一次）：後登記的那一列掉在 `apply`，訊息指名兩邊。這跟投影接縫的引用計數共用不同——兩列指到
   同一個目錄只會讓同名 skill 自己覆蓋自己。同一列改設定重掛不會被自己舊的那一份判成重名（卸載的 effect 先撤掉舊的）。
+- **第四個接縫：命令登記處**（`@nexus/commands`，#1456）。形狀照 `@nexus/projections`：`CommandRegistry` 的 `register(definition)` 是
+  effect（登記者那一列卸載時登記處自己撤掉）、`list()` 依名字排序不帶 handler；提供者放 `@nexus/commands/provider`，宿主在樹上
+  掛一列 `commands`。消費者宣告 `inject = injectOf(need(commandsToken, '^1.0.0'))`、`manifest.consumes` 同步，在 `apply` 裡
+  `service(ctx, commandsToken).register({ name, description, handler })`。**中繼資料在登記時就驗**（規則同 core 的
+  `normalizeCommandDefinition`），**同一個名字只收一次**（Q5 (a)）：後登記的那一列掉在 `apply`，訊息指名兩邊；同一列改設定重掛不會
+  被自己舊的那一份判成重名。命令的型別（`CommandDefinition`、`CommandInvocation`、`CommandResult`……）由這個定義套件**單向轉出**
+  `@nexus/core`，插件只 import 定義套件。**跟 `@nexus/plugin-commands` 的分工**：`@nexus/commands` 管**登記**（有哪些命令、誰登記的、
+  重名怎麼擋），`@nexus/plugin-commands` 管**執行**（解析一行輸入、查命令、寫 `command/run`／`command/done`、呼叫 handler）；
+  執行器只讀每條 thread 的 `registry.commands`，宿主把樹上登記的命令折進那一張 registry，所以執行那一半不動。
+  **已知的縫**：樹上的命令跟**相容層**的命令撞名，要到組 thread 時才掉（相容層的列直接寫進 `registry.commands`，不經提供者）；有測試
+  釘住今天的行為。
+- **第五個接縫：插件提供、宿主消費的服務**（`@nexus/feedback`，#1456）。前面的接縫都是宿主提供登記處、插件消費；這一個**反過來**：
+  - **提供者是插件**：定義套件只有 token（`feedbackToken`，服務名 `messageFeedback`）、介面與契約版本，沒有提供者入口。插件在
+    `apply` 裡 `new` 一個繼承 `ContractService` 的類別（建構時 `provide`），`manifest.provides` 宣告它（**第一顆 `provides` 非空的
+    遷出插件**）。用 `new` 不用 `ctx.plugin(Class)`；歸屬（`.provider`）是那一列的 id。
+  - **消費者是宿主**：組 thread 時 `PluginTree.#snapshot` 從樹上 `root.get(token.name)` 取，比 `.provider` 判斷歸屬，**只交給 `active`
+    的那一列**，折進 `registry.services.provide`（`registerFolded` 的 `services` 格）。
+  - **服務的方法不碰 `this.ctx`**：宿主手上是組 thread 時取的快照，那一列之後卸載、開著的 thread 仍要能呼叫（traceable proxy 讀屬性
+    不檢查提供的 fiber 還在不在）。需要的設定在建構時進閉包、日誌由呼叫端逐次傳進來；方法用自己的屬性閉包規則，不用 `#私有欄位`
+    （proxy 的 shadow 上私有欄位會拋）。
+  - **同名第二份當場拋**：Cordis 在 `provide` 拋 `service "…" has been registered at …`，後掛的那一列掉在 `apply`。
+  - **一致性套件量得到撤除**：`residue` 是呼叫端的閉包，量不到服務還在不在 root 上，所以 `checkConformance` 的 `unload` 格自己讀 root：
+    `manifest.provides` 宣告的服務掛上後要讀得到（歸屬是這一列、契約版本同宣告），卸載後要讀不到。
 - 這個慣例 dsh 也只是慣例，沒有 gate 強制；這裡同樣不加 gate。`@nexus/tools` 有一條測試守它的相依只有 SDK 與工具型別。依賴的放法照 dsh：宿主給的 `@nexus/sdk`、`@nexus/cordis`、服務定義套件（`@nexus/tools`）放 `peerDependencies`，`devDependencies` 留 `workspace:*` 供開發與測試——`ContractError` 的 `instanceof` 與 Cordis 的 `Context` 類別都要求宿主與插件看到同一份，放進 `dependencies` 在套件獨立安裝時就可能各裝一份。`@nexus/plugin-echo` 與 `@nexus/tools` 各有測試釘著。
 
 ## 契約版本走 semver
@@ -136,6 +161,10 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   `intercept` 只在插件**沒有**宣告範圍時才算，蓋不掉插件自己宣告的（往嚴往鬆都蓋不掉）；列的 `inject` 寫範圍對檢查沒有作用。
   所以宿主對一顆插件的範圍沒有否決權，只能在插件沒講的時候補一句。`manifest.consumes` 不是第三個地方：它跟 `inject`
   是同一份宣告的兩個面，一致性套件的 `export-form` 一格比對兩邊。
+- **宿主消費的服務，宿主自己檢查（#1456）。** 上面這道檢查只在**消費者的 fiber** 注入時跑；宿主從 root 讀服務**沒有 fiber**，
+  `check` 不會發生。所以宿主在取服務的那一處（`plugin-tree.ts` 的 `HOST_SERVICES`）宣告它期望的範圍（具名常數，今天是
+  `FEEDBACK_SERVICE_RANGE = '^1.0.0'`），讀服務上的 `contractVersion` 比 `semver.satisfies`；不合就判**提供者那一列**掉在
+  `requires`，訊息的消費者寫「宿主」，指名提供者那一列與兩個版本。沒有樹的呼叫端（`mountDetached`）同一條規則，不合就拋。
 
 ## 一致性套件
 
@@ -150,7 +179,7 @@ expect(await checkConformance({ row, module, providers, residue })).toEqual([]);
 | --- | --- |
 | `manifest` | manifest 在場、通過載入期驗證 |
 | `export-form` | 沒有 default；`name`／`apply` 在場；`unwrapExports` 取回的就是這個命名空間；`Config` 就是 `manifest.config`；`inject` 與 `consumes` 一致 |
-| `unload` | 掛上後活資源變多、**直接卸載那顆 fiber** 之後回到掛載前、fiber 收斂到 `DISPOSED` |
+| `unload` | 掛上後活資源變多、**直接卸載那顆 fiber** 之後回到掛載前、fiber 收斂到 `DISPOSED`；`manifest.provides` 宣告的服務掛上後在 root 上讀得到（歸屬是這一列、契約版本同宣告）、卸載後讀不到（#1456） |
 | `missing` | 缺提供者時停在 PENDING，等的服務名正好是 `consumes` 裡必要的那幾個 |
 
 - **`residue` 要指到插件貢獻的地方**（登記處裡的工具數、監聽器數⋯）。掛上後沒有變多就是量不到卸載，同樣判不合格，
@@ -323,6 +352,10 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
 | 投影：provider 這一層同 key 同 `stateVersion` 引用計數共用、`stateVersion` 不同才拒絕；每條 thread 的登記處每個 key 只收一份、重複照舊拒絕（#1421，PM 決策 1） | 照 dsh；thread 那一層是沿用的舊偏離 | provider 層照 dsh（`session-projection/src/index.ts:253-292`）：同一個套件可能掛 N 次，引用計數歸零之前一直用第一個登記者的定義，版本不同報 `refusing to share`。thread 層的重複拒絕登記在 `.docs/session-projections-design.md:95` 與 `:110`，理由是「一次組裝一張註冊表、不熱換」——這個理由對每條 thread 的登記處仍然成立，對樹上的 provider 不成立（它是行程級的，樹會熱換；重掛時新舊兩份 fiber 可能短暫重疊）。所以兩層各自的規則不同：共用的 key 由宿主（`plugin-tree.ts` 的 `#assignProjections`）只交給**這一份清單上起來了的第一個登記者**折進 thread |
 | 技能來源接縫收**路徑**，不收 dsh 的提供者（`registerProvider(create)`）（#1446，demian Q1 (a)） | 遷移卡不改行為（暫時） | dsh 的 `SkillRegistry` 收 `SkillProvider { name, list, get }`，掃描與取回由提供者負責（`skill/src/index.ts:247-268`、`:390-424`）。我們收路徑、掃描留給基座的 `createSkillsMiddleware`。**理由不是「表達不出」**：nexus 已自己組裝、取代 `createDeepAgent`，skills 中介層也已用 `createMiddleware` 包過一層，照 dsh 的形狀做得到；做了就等於自寫 skills 中介層（掃描、prompt 那段、格式化都不能從基座重用），模型看到的 prompt 位元組會變。這張是遷移卡，驗收是行為不變，換成 provider 是行為變更。**撤除條件**：自寫 skills 中介層，或拿掉 deepagents 的時候；到時 provider 形狀升這個契約的 major，消費者的 `inject` 範圍擋下不相容的提供者 |
 | 技能來源的路徑驗證放在提供者登記時（`@nexus/core` 的 `assertLoadableSkillsPath`），不搬進定義套件（#1446，demian Q2 (a)） | 沿用既有偏離 | 定義套件不 import core，驗證函式搬過去 core 的 registry 就得反過來 import 它。所以函式留在 core 匯出、提供者入口 import 它；core registry 那一側保留給相容層的列用，兩邊呼叫同一支函式。與 `@nexus/projections` 的 core 相依是同一條撤除條件（Q2 (b)） |
+| 宿主取服務是組 thread 時的快照，dsh 的 gateway 每次呼叫讀 live（#1456 Q1） | 產品需求超出 dsh | 同下一列的快照類別。dsh 的 gateway 每次呼叫當下讀全域 store 的 `ctx.get('messageFeedback')`（`packages/api/gateway/src/index.ts:384-399`、`:874-889`），沒有快照。我們組 thread 時取一次（決議 §3-2 第 6 條「插件更新只給新對話」）：樹上 `feedback` 停了或改了，開著的對話照舊評得到、上限照舊，下一條才看到新的。**要成立的前提**是服務方法不碰 `this.ctx`（驗收 D 實測：列卸下後取到的那一份照樣能呼叫） |
+| 評分與評語的兩個服務（`messageFeedback`、`sessionFeedback`）併成一個（#1456 Q3 (a)） | 遷移卡不改行為（暫時） | dsh 的 `message-feedback` 管 list／put／delete、`command-feedback` 另外提供 `sessionFeedback`（方法 `record`）（`feedback/message-feedback/src/index.ts:118-140`、`feedback/command-feedback/src/index.ts:40-41`、`:85-126`）。nexus 的 `FeedbackService` 把 `record` 併成第四個方法（#278 起如此，`feedback.ts` 與插件檔頭先前沒有登記這一條）。遷移卡的驗收是行為不變，拆成兩個服務要改 wire handler 讀兩個服務。**撤除條件**：要拆時另開卡，連同 home 變更紀錄裡 `feedback` 列 id 的遷移一起處理 |
+| 評分與評語的兩顆套件（`message-feedback`、`command-feedback`）併成一顆（#1456 Q3 (a)） | 遷移卡不改行為（暫時） | 同上一列。拆成兩顆套件，列 id `feedback` 會變：使用者 home 紀錄裡指著 `feedback` 的 patch 在 `plugin-config.ts` 找不到 id 時只警告就跳過，**停用過的列會靜靜重新啟用**。**撤除條件**：同上一列 |
+| 命令登記處不做 dsh 的 `ScopedLayers`、`commands/change` 通知與 `definitionId`（#1456） | 沿用既有偏離 | 理由與撤除條件在 `@nexus/core` 的 `CommandRegistrationPoint` 檔頭（一次組裝一張 registry、沒有 per-agent 遮蔽，通知與 `definitionId` 今天沒有消費者）；定義套件只轉出同一份型別 |
 | 樹上那一列改了或停了，開著的對話照舊有它的投影（#1421，照 #1416 Q3 的快照語意） | 產品需求超出 dsh | dsh 在卸載時把那個 key 從活的快照拿掉（引用計數歸零就刪，`session-projection/src/index.ts:273-292`）。我們不跟：組 thread 時拿的是快照（決議 §3-2 第 6 條「插件更新只給新對話」），單元是純函式的折疊，樹上那一列卸了之後開著的對話手上的單元照樣折得動，下一條 thread 才看到新的 |
 | `present` 的暫存表以身分（thread＋位址＋`callId`）當鍵，不用 `WeakMap<ToolExecution>` | 表達不出來，退到最接近的實作 | dsh 的工具執行與 `tools/result` 拿到的是**同一個物件**，所以 `WeakMap` 夠用；我們的 `exec` 每次都在 `tool-pipeline.ts` 的 `toolExecutionOf` 重建，物件身分對不上。照它的意思改用身分當鍵（#1418） |
 | 答題管道是函式服務 `channelForThread`，不是 exec 上的欄位 | 表達不出來，退到最接近的實作 | dsh 的答題者從 `exec.agent` 分發；我們的答題管道是宿主服務（`channel`），不在 `exec` 上，沒有地方放「隨呼叫傳進來」的值。呼叫當下依 `callThreadId(config)` 問一支函式，回 `undefined` 退回 `channel`（見上一節）（#1418） |
@@ -332,14 +365,14 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
 
 ## 接進清單（#1416 PR 2）
 
-`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
+`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
 **樹那一側不是第二份清單，是清單的一個消費者**：
 
 | 東西 | 在哪 | 做什麼 |
 | --- | --- | --- |
 | 載入器的分辨 | `plugin-config.ts` 的 `resolveEntryModule` | 模組有 `manifest` 具名匯出就是函式插件，走 `validateManifest`；沒有就照舊是 `NexusPlugin`。判別式只有一個（`plugin-tree.ts` 的 `isFunctionPluginModule`），Include 的允許名單也從它算 |
-| 橋接列 | `plugin-config.ts` 的 `isBridgeEntry` | 函式插件在相容層清單上的代表：同一個 id、同一個位置、`Config` 是 manifest 的 `config`，所以設定驗證、停用、補號、快照、會話 header 都照舊。它的 `apply` 不自己掛任何東西，只把**登記者是這一列**的工具、投影單元與技能來源路徑折進這一條 thread 的 registry（每一種接縫一格，見下） |
-| 樹 | `plugin-tree.ts` 的 `PluginTree` | `tools` 一列（工具登記處）、`projections` 一列（投影登記處）、`skill-sources` 一列（技能來源登記處）、`include` 一列（Include 讀出貨的 `cordis.yml`、疊 patch），函式插件在 `include:<id>` |
+| 橋接列 | `plugin-config.ts` 的 `isBridgeEntry` | 函式插件在相容層清單上的代表：同一個 id、同一個位置、`Config` 是 manifest 的 `config`，所以設定驗證、停用、補號、快照、會話 header 都照舊。它的 `apply` 不自己掛任何東西，只把**登記者是這一列**的工具、投影單元、技能來源路徑與命令，加上**這一列提供**的服務，折進這一條 thread 的 registry（每一種接縫一格，見下） |
+| 樹 | `plugin-tree.ts` 的 `PluginTree` | `tools` 一列（工具登記處）、`projections` 一列（投影登記處）、`skill-sources` 一列（技能來源登記處）、`commands` 一列（命令登記處）、`include` 一列（Include 讀出貨的 `cordis.yml`、疊 patch），函式插件在 `include:<id>` |
 
 - **變更紀錄怎麼到樹上**：折出來的 patch 原樣經 `entry.update({ config: { ...includeConfig, patches } })` 推給 Include（dsh
   `app-boot` 的做法）。**Include 不寫回任何檔**——寫入口只有變更紀錄一個（`vendor/README.md` 第 7 條，上游三條寫回路徑全關）；Loader 上游會在安裝樹建 `.cordis/` 輔助檔，宿主給了解析函式就不建（第 9 條），所以安裝樹唯讀也不影響掛載。
@@ -349,9 +382,10 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
   樹上那一列的 `disabled` 與 `config` 跟相容層疊出來的是否相同，不同那一列算掉了，不靜靜地各走各的。
 - **樹上的結果怎麼對回清單上的掉列**：樹上那一列 FAILED 或缺席是 `apply` 階段、PENDING（缺服務、契約不相容）是 `requires`
   階段，在**讀清單那一步**就判定（以前 echo 重名要到組裝那一刻才掉）。契約不相容的訊息帶消費者列 id（樹上的 `include:<id>`）。
-- **橋接列折入多種接縫（#1421、#1446）**：`RowVerdict` 的 `active` 帶每一種接縫的貢獻（`tools`、`projections`、`skillSources`），橋接列的 `apply` 把
+- **橋接列折入多種接縫（#1421、#1446、#1456）**：`RowVerdict` 的 `active` 帶每一種接縫的貢獻（`tools`、`projections`、`skillSources`、`commands`、`services`），橋接列的 `apply` 把
   來源是那一列的各自折進這條 thread 的 registry：工具走 `registry.tools.register`，投影單元走 `registry.projections.register`，
-  技能來源走 `registry.skills.addSource`（**照那一列登記的順序**：`sources` 依序即優先序，後面的來源贏過前面的同名 skill）。
+  技能來源走 `registry.skills.addSource`（**照那一列登記的順序**：`sources` 依序即優先序，後面的來源贏過前面的同名 skill），
+  命令走 `registry.commands.register`（照登記順序），**那一列提供的服務**走 `registry.services.provide`。
   同一個投影 key 由兩列共用時，只交給其中一列（見偏離表），這條 thread 的登記處才不會撞上它自己的重複拒絕；技能來源不共用，
   每條路徑只屬於一列。
 - **加一個新接縫要動哪幾處**：(1) 定義套件（token、介面、契約版本，`@nexus/*` 但不放 `@nexus/plugin-*`）與提供者
@@ -365,7 +399,7 @@ agent 或它的上層（`packages/core/scope/src/index.ts:170-185`），所以�
   `config`（寫入前驗證走同一條，所以寫入口當場擋下，不會把一條讓之後每次啟動都失敗的東西寫進紀錄），推上樹之前再掃一遍
   整份 patch 當後盾。
 - **沒有樹的呼叫端**（手搭 `PluginEntry` 清單的測試、基準任務、`shippedPlugins()`）：橋接列在組裝時單獨掛一次、取工具、
-  投影單元與技能來源路徑、立刻卸載，走的是同一個 Loader 與 `tools`、`projections`、`skill-sources` 提供者。產品路徑（`cli.ts`、`serve.ts`）不走這條。
+  投影單元、技能來源路徑、命令與提供的服務、立刻卸載，走的是同一個 Loader 與 `tools`、`projections`、`skill-sources`、`commands` 提供者。產品路徑（`cli.ts`、`serve.ts`）不走這條。
 
 ### 已知限制
 

@@ -8,8 +8,9 @@
  * | `tools` | 行程級的工具登記處（`@nexus/tools/provider`），契約服務，一列 | `tools` 服務的提供者 |
  * | `projections` | 行程級的投影登記處（`@nexus/projections/provider`，#1421），契約服務，一列 | `sessionProjections` 服務的提供者 |
  * | `skill-sources` | 行程級的技能來源登記處（`@nexus/skills/provider`，#1446），契約服務，一列 | `skills` 服務的提供者（形狀不同：收路徑，不收提供者，偏離登記在 `@nexus/skills`） |
+ * | `commands` | 行程級的命令登記處（`@nexus/commands/provider`，#1456），契約服務，一列 | `commands` 服務的提供者 |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 | `include`（`app-boot` 的 `entry.update({ config: { ...includeConfig, patches } })`） |
- * | `include:<id>` | Include 底下的列，今天是 echo、token-meter、trajectory 與 skills（#1446；模組有 `manifest` 匯出的才上樹） | 各插件 |
+ * | `include:<id>` | Include 底下的列，今天是 echo、token-meter、trajectory、skills 與 feedback（#1456；模組有 `manifest` 匯出的才上樹） | 各插件 |
  *
  * ## 清單怎麼進樹
  *
@@ -53,7 +54,9 @@ import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
 import type { StructuredToolInterface } from '@langchain/core/tools';
-import type { ProjectionUnit } from '@nexus/core';
+import { createCommandsProvider } from '@nexus/commands/provider';
+import type { CommandEntry } from '@nexus/commands/provider';
+import type { CommandDefinition, ProjectionUnit } from '@nexus/core';
 import { Context } from '@nexus/cordis';
 import type { Message } from '@nexus/cordis';
 import Include from '@nexus/cordis-plugin-include';
@@ -61,11 +64,14 @@ import Loader from '@nexus/cordis-plugin-loader';
 import type { EntryOptions } from '@nexus/cordis-plugin-loader';
 import { createProjectionsProvider } from '@nexus/projections/provider';
 import type { ProjectionEntry } from '@nexus/projections/provider';
+import { feedbackToken } from '@nexus/feedback';
 import { ContractError, FIBER_STATE, missingServices } from '@nexus/sdk';
+import type { ServiceToken } from '@nexus/sdk';
 import { createSkillSourcesProvider } from '@nexus/skills/provider';
 import type { SkillSourceEntry } from '@nexus/skills/provider';
 import { createToolsProvider } from '@nexus/tools/provider';
 import type { ToolEntry } from '@nexus/tools/provider';
+import semver from 'semver';
 
 import { declarationSignature, normalizedConfig } from './plugin-row-state.js';
 
@@ -78,8 +84,58 @@ export const PROJECTIONS_ROW_ID = 'projections';
 /** 技能來源登記處那一列的 id。 */
 export const SKILL_SOURCES_ROW_ID = 'skill-sources';
 
+/** 命令登記處那一列的 id。 */
+export const COMMANDS_ROW_ID = 'commands';
+
 /** Include 那一列的 id。 */
 export const INCLUDE_ROW_ID = 'include';
+
+/**
+ * 宿主從樹上讀的服務的契約範圍（#1456 Q2 (a)）：**插件提供、宿主消費**的那一類。
+ *
+ * 前面的接縫都是插件消費宿主的服務，範圍寫在插件的 `inject` 裡，由 Cordis 在消費者 fiber 注入時檢查
+ * （`ContractService` 的 `[Service.check]`）。這一類反過來，宿主從 root 讀，**沒有 fiber，那道檢查不會發生**——所以宿主自己
+ * 在取的那一處比：範圍寫在這裡，取定義套件契約版本的主版號。不合就判**提供者那一列**掉（`stage: 'requires'`），
+ * 訊息的消費者寫「宿主」，指名提供者與兩個版本。
+ */
+export const FEEDBACK_SERVICE_RANGE = '^1.0.0';
+
+/** 宿主取的每一個服務：token 與範圍。加一個「插件提供、宿主消費」的服務就在這裡多一格。 */
+const HOST_SERVICES: readonly { readonly token: ServiceToken<unknown>; readonly range: string }[] =
+  [{ token: feedbackToken as ServiceToken<unknown>, range: FEEDBACK_SERVICE_RANGE }];
+
+/** 樹上某一列提供、宿主取到的服務：服務名與當下取到的值（Cordis 的 traceable proxy，列卸載之後仍能呼叫）。 */
+export interface HostService {
+  readonly name: string;
+  readonly value: unknown;
+}
+
+/**
+ * 從樹上讀一個服務的歸屬與契約版本。**`strict` 預設**：只認 ACTIVE 的提供者，列掉了或卸載了就是 `undefined`。
+ * 讀不出字串型的 `provider` 與 `contractVersion` 的不是契約服務，不認。
+ */
+function readHostService(
+  root: Context,
+  token: ServiceToken<unknown>,
+): { value: unknown; provider: string; version: string } | undefined {
+  const value = root.get(token.name) as
+    { readonly provider?: unknown; readonly contractVersion?: unknown } | undefined;
+  if (value === undefined || value === null) return undefined;
+  const { provider, contractVersion } = value;
+  if (typeof provider !== 'string' || typeof contractVersion !== 'string') return undefined;
+  return { value, provider, version: contractVersion };
+}
+
+/** 契約版本不在宿主要的範圍裡時的訊息；沒有問題回 `undefined`。 */
+function hostRangeProblem(
+  token: ServiceToken<unknown>,
+  range: string,
+  provider: string,
+  version: string,
+): string | undefined {
+  if (semver.satisfies(version, range)) return undefined;
+  return `宿主要的服務 ${token.name} 是 ${range}，${provider} 提供的是 ${version}`;
+}
 
 /** Include 底下每一列 id 的前綴（上游 Include 的命名空間規則）。 */
 const NAMESPACE = `${INCLUDE_ROW_ID}:`;
@@ -145,6 +201,15 @@ export type RowVerdict =
        * 技能來源不共用：同一個目錄兩列登記，後者在提供者那裡就拒絕（Q3 (a)），所以每條路徑只會屬於一列。
        */
       readonly skillSources: readonly string[];
+      /**
+       * 這一列登記的命令定義（#1456），**依登記順序**。同一個名字只會屬於一列：後登記的在提供者那裡就拒絕（Q5 (a)）。
+       */
+      readonly commands: readonly CommandDefinition[];
+      /**
+       * 這一列提供、宿主取到的服務（#1456）：歸屬（`.provider`）是這一列、契約版本在宿主要的範圍裡。**每一格是組 thread
+       * 時取的快照**——列之後卸載，開著的 thread 手上的這一份仍能呼叫（服務的方法不碰 `this.ctx`）。
+       */
+      readonly services: readonly HostService[];
     }
   | { readonly kind: 'off' }
   | {
@@ -228,6 +293,7 @@ export class PluginTree {
   #provider = createToolsProvider();
   #projections = createProjectionsProvider();
   #skillSources = createSkillSourcesProvider();
+  #commands = createCommandsProvider();
   /** 串行化 {@link run}。 */
   #chain: Promise<unknown> = Promise.resolve();
   /** 最後一次推給 Include 的設定簽章；一樣就不推。 */
@@ -253,9 +319,9 @@ export class PluginTree {
   onSelfDisable?: (event: SelfDisableEvent) => void;
 
   /**
-   * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections`、`skill-sources` 那三列。
+   * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections`、`skill-sources`、`commands` 那四列。
    *
-   * @returns 已掛好 Loader 與 `tools`、`projections`、`skill-sources` 列的根。
+   * @returns 已掛好 Loader 與 `tools`、`projections`、`skill-sources`、`commands` 列的根。
    */
   context(): Promise<Context> {
     this.#context ??= this.#build();
@@ -280,11 +346,13 @@ export class PluginTree {
       [TOOLS_ROW_ID]: this.#provider.Provider,
       [PROJECTIONS_ROW_ID]: this.#projections.Provider,
       [SKILL_SOURCES_ROW_ID]: this.#skillSources.Provider,
+      [COMMANDS_ROW_ID]: this.#commands.Provider,
       [INCLUDE_ROW_ID]: Include,
     });
     await this.#create(root, { id: TOOLS_ROW_ID, name: `cordis:${TOOLS_ROW_ID}` });
     await this.#create(root, { id: PROJECTIONS_ROW_ID, name: `cordis:${PROJECTIONS_ROW_ID}` });
     await this.#create(root, { id: SKILL_SOURCES_ROW_ID, name: `cordis:${SKILL_SOURCES_ROW_ID}` });
+    await this.#create(root, { id: COMMANDS_ROW_ID, name: `cordis:${COMMANDS_ROW_ID}` });
     await root.loader.await();
     return root;
   }
@@ -459,8 +527,11 @@ export class PluginTree {
     const entries = this.#provider.entries();
     const verdicts = new Map<string, RowVerdict>();
     for (const row of rows) verdicts.set(row.id, await this.#verdictOf(root, row, entries));
+    // 宿主取的服務先分：契約版本不合的那一列在這裡判掉，後面三個 `#assign*` 只看 `active` 的列，掉了的不會被當成登記者。
+    this.#assignServices(root, rows, verdicts);
     this.#assignProjections(rows, verdicts, this.#projections.entries());
     this.#assignSkillSources(rows, verdicts, this.#skillSources.entries());
+    this.#assignCommands(rows, verdicts, this.#commands.entries());
     return {
       verdict: (id) =>
         verdicts.get(id) ?? {
@@ -530,6 +601,70 @@ export class PluginTree {
     }
   }
 
+  /**
+   * 把宿主取的服務分給列（#1456）：提供者（`.provider`）是哪一列就交給哪一列，**只交給 `active` 的那一列**。
+   *
+   * 讀的是 root 上當下的值：`root.get` 預設 strict，列沒起來（PENDING、FAILED）或已卸載的提供者讀不到。歸屬對不到這一份清單上
+   * 任何一列的（別的東西提供的同名服務）不認。契約版本不在宿主要的範圍裡（{@link FEEDBACK_SERVICE_RANGE}）就判提供者那一列
+   * 掉在 `requires`——Cordis 的 `check` 只在消費者 fiber 注入時跑，宿主從 root 讀沒有那道檢查（#1456 Q2 (a)）。
+   */
+  #assignServices(
+    root: Context,
+    rows: readonly TreeRowInput[],
+    verdicts: Map<string, RowVerdict>,
+  ): void {
+    const rowIdOf = new Map(rows.map((row) => [treeId(row.id), row.id]));
+    const owned = new Map<string, HostService[]>();
+    for (const { token, range } of HOST_SERVICES) {
+      const found = readHostService(root, token);
+      if (found === undefined) continue;
+      const owner = rowIdOf.get(found.provider);
+      if (owner === undefined || verdicts.get(owner)?.kind !== 'active') continue;
+      const problem = hostRangeProblem(token, range, found.provider, found.version);
+      if (problem !== undefined) {
+        verdicts.set(owner, { kind: 'dropped', stage: 'requires', message: problem });
+        owned.delete(owner);
+        continue;
+      }
+      const services = owned.get(owner) ?? [];
+      services.push({ name: token.name, value: found.value });
+      owned.set(owner, services);
+    }
+    for (const row of rows) {
+      const verdict = verdicts.get(row.id);
+      if (verdict?.kind !== 'active') continue;
+      verdicts.set(row.id, { ...verdict, services: owned.get(row.id) ?? [] });
+    }
+  }
+
+  /**
+   * 把命令定義分給列（#1456）：登記者是哪一列就交給哪一列，**照登記順序**。
+   *
+   * 不共用，所以不像 {@link #assignProjections} 要挑「第一個起來的」：提供者已經讓同一個名字只有一個登記者。登記者不是
+   * `active` 的列（掉了、停用，包括 {@link #assignServices} 剛判掉的）它的登記已經隨那一列撤掉，這裡再用 verdict 擋一次，是
+   * 「提供者還沒撤、清單上已經判掉」的那一小段不外漏。
+   */
+  #assignCommands(
+    rows: readonly TreeRowInput[],
+    verdicts: Map<string, RowVerdict>,
+    entries: readonly CommandEntry[],
+  ): void {
+    const owned = new Map<string, CommandDefinition[]>();
+    const rowIdOf = new Map(rows.map((row) => [treeId(row.id), row.id]));
+    for (const entry of entries) {
+      const owner = rowIdOf.get(entry.source);
+      if (owner === undefined || verdicts.get(owner)?.kind !== 'active') continue;
+      const definitions = owned.get(owner) ?? [];
+      definitions.push(entry.definition);
+      owned.set(owner, definitions);
+    }
+    for (const row of rows) {
+      const verdict = verdicts.get(row.id);
+      if (verdict?.kind !== 'active') continue;
+      verdicts.set(row.id, { ...verdict, commands: owned.get(row.id) ?? [] });
+    }
+  }
+
   async #verdictOf(
     root: Context,
     row: TreeRowInput,
@@ -587,6 +722,9 @@ export class PluginTree {
         projections: [],
         // 技能來源路徑由 `#assignSkillSources` 在所有列的結果都有了之後再分。
         skillSources: [],
+        // 命令定義與宿主取的服務也一樣（`#assignCommands`、`#assignServices`）。
+        commands: [],
+        services: [],
       };
     }
     if (fiber.state === FIBER_STATE.FAILED) {
@@ -632,11 +770,13 @@ export interface DetachedMount {
   readonly config: unknown;
 }
 
-/** {@link mountDetached} 取出的東西：這一列登記的工具、投影單元與技能來源路徑。 */
+/** {@link mountDetached} 取出的東西：這一列登記的工具、投影單元、技能來源路徑、命令定義，與它提供、宿主取到的服務。 */
 export interface DetachedContributions {
   readonly tools: readonly StructuredToolInterface[];
   readonly projections: readonly ProjectionUnit[];
   readonly skillSources: readonly string[];
+  readonly commands: readonly CommandDefinition[];
+  readonly services: readonly HostService[];
 }
 
 /**
@@ -654,6 +794,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
   const provider = createToolsProvider();
   const projections = createProjectionsProvider();
   const skillSources = createSkillSourcesProvider();
+  const commands = createCommandsProvider();
   const root = new Context();
   const contractErrors = new Map<string, ContractError>();
   root.logger.exporter({
@@ -671,6 +812,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
       [TOOLS_ROW_ID]: provider.Provider,
       [PROJECTIONS_ROW_ID]: projections.Provider,
       [SKILL_SOURCES_ROW_ID]: skillSources.Provider,
+      [COMMANDS_ROW_ID]: commands.Provider,
       plugin: mount.module,
     });
     const create = (options: EntryOptions) =>
@@ -678,6 +820,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
     await create({ id: TOOLS_ROW_ID, name: `cordis:${TOOLS_ROW_ID}` });
     await create({ id: PROJECTIONS_ROW_ID, name: `cordis:${PROJECTIONS_ROW_ID}` });
     await create({ id: SKILL_SOURCES_ROW_ID, name: `cordis:${SKILL_SOURCES_ROW_ID}` });
+    await create({ id: COMMANDS_ROW_ID, name: `cordis:${COMMANDS_ROW_ID}` });
     await create({
       id: mount.id,
       name: 'cordis:plugin',
@@ -686,6 +829,16 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
     await root.loader.await();
     const fiber = root.loader.resolve(mount.id).fiber?.ctx.fiber;
     if (fiber?.state === FIBER_STATE.ACTIVE) {
+      // 宿主取的服務：歸屬是這一列、契約版本在範圍裡；不合就拋，同樹上那一條（`#assignServices`）。這一份列掛在用完即丟的根上，
+      // 之後根被卸載，取到的值仍能呼叫。
+      const services: HostService[] = [];
+      for (const { token, range } of HOST_SERVICES) {
+        const found = readHostService(root, token);
+        if (found === undefined || found.provider !== mount.id) continue;
+        const problem = hostRangeProblem(token, range, found.provider, found.version);
+        if (problem !== undefined) throw new Error(problem);
+        services.push({ name: token.name, value: found.value });
+      }
       return {
         tools: provider
           .entries()
@@ -699,6 +852,11 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
           .entries()
           .filter((entry) => entry.source === mount.id)
           .map((entry) => entry.path),
+        commands: commands
+          .entries()
+          .filter((entry) => entry.source === mount.id)
+          .map((entry) => entry.definition),
+        services,
       };
     }
     if (fiber?.state === FIBER_STATE.FAILED) {

@@ -20,7 +20,6 @@ import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
 import { loggedMessageId } from '@nexus/core';
 import type { PluginEntry, SessionEvent, SessionLog } from '@nexus/core';
-import { createFeedbackPlugin } from '@nexus/plugin-feedback';
 import { createCommandExecutor } from '@nexus/plugin-commands';
 import type { AiEntry, ConversationState, Event, WireClient } from '@nexus/wire';
 import {
@@ -36,6 +35,7 @@ import { z } from 'zod';
 
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
+import { createFeedbackPlugin } from './feedback.fixture.js';
 import { TEST_BROWSER_AUTH, approvalAt, loopbackRequest, shippedPlugins } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';

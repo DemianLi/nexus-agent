@@ -110,6 +110,10 @@
 # `maxNoteBytes` 是一則評分備註最多幾個 UTF-8 位元組。照 dsh web 那一包的設定
 # （`packages/bundle/web-app/cordis.patch.yml:56`，`c291e79`）；plugin 自己不給預設值，
 # 所以這一行是整棵樹上唯一講這個數字的地方。
+#
+# **這一列走 Cordis 樹**（#1456）：它在 `apply` 裡提供 `messageFeedback` 服務（第一個「插件提供、宿主消費」的服務），並經命令接縫
+# （`@nexus/commands`）登記 `/feedback`。宿主組 thread 時從樹上取服務、折進 `registry.services`，命令折進 `registry.commands`，
+# wire 與 web 看到的 `slash.list`、`feedback.*` 都沒變。`maxNoteBytes` 寫壞（不是正整數）那一列掉在讀清單那一步。
 - id: feedback
   name: '@nexus/plugin-feedback'
   config:

@@ -1,19 +1,17 @@
-import {
-  createRegistry,
-  loadPlugins,
-  MESSAGE_FEEDBACK_SERVICE,
-  SessionLog,
-  SessionRegistry,
-} from '@nexus/core';
+import { readFileSync } from 'node:fs';
+
+import { createCommandsProvider } from '@nexus/commands/provider';
+import { SessionLog } from '@nexus/core';
 import type { LoggedMessage, SessionEvent } from '@nexus/core';
+import { Context } from '@nexus/cordis';
+import Loader from '@nexus/cordis-plugin-loader';
+import { feedbackToken } from '@nexus/feedback';
+import type { FeedbackService } from '@nexus/feedback';
+import { checkConformance } from '@nexus/sdk';
 import { describe, expect, it } from 'vitest';
-import {
-  createFeedbackPlugin,
-  feedbackPlugin,
-  createFeedbackService,
-  currentFeedbackItems,
-  FEEDBACK_USAGE,
-} from './index.js';
+
+import * as feedback from './index.js';
+import { createFeedbackService, currentFeedbackItems, FEEDBACK_USAGE } from './index.js';
 
 const service = createFeedbackService({ maxNoteBytes: 16 });
 
@@ -293,110 +291,190 @@ describe('設定', () => {
     }
   });
 
-  it('maxNoteBytes 不是正的安全整數就讓載入失敗（#453：驗在載入的時候）', async () => {
+  it('maxNoteBytes 不是正的安全整數就讓載入失敗（#453：驗在載入的時候）', () => {
     for (const maxNoteBytes of [0, -1, 1.5, Number.NaN]) {
-      const bad = [createFeedbackPlugin({ maxNoteBytes })];
-      await expect(loadPlugins(bad)).rejects.toThrow('feedback#0 (feedback)');
-      await expect(loadPlugins(bad)).rejects.toThrow('maxNoteBytes');
+      expect(() => feedback.Config.parse({ maxNoteBytes })).toThrow();
     }
   });
 
-  it('必填：一格都不給也是載入失敗，沒有預設值（照 dsh 的 `required()`）', async () => {
-    await expect(loadPlugins([{ plugin: feedbackPlugin }])).rejects.toThrow('maxNoteBytes');
+  it('必填：一格都不給也是載入失敗，沒有預設值（照 dsh 的 `required()`）', () => {
+    expect(() => feedback.Config.parse({})).toThrow(/maxNoteBytes/);
   });
 
-  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', async () => {
-    await expect(
-      loadPlugins([{ plugin: feedbackPlugin, config: { maxNoteBytes: 8, maxNotBytes: 8 } }]),
-    ).rejects.toThrow(/maxNotBytes/);
-  });
-
-  it('**一次組裝一份服務**：同一顆 plugin 掛兩次，兩邊的上限各自算各自的', async () => {
-    // plugin 提到模組層級之後，這一條是「設定真的是每次掛載的」的絆索：服務建在 `apply`
-    // 裡才會有兩份。建在模組層級的話兩次組裝共用同一個上限，而且不會拋。
-    const small = await loadPlugins([createFeedbackPlugin({ maxNoteBytes: 4 })]);
-    const large = await loadPlugins([createFeedbackPlugin({ maxNoteBytes: 4096 })]);
-    const a = small.registry.services.use(MESSAGE_FEEDBACK_SERVICE);
-    const b = large.registry.services.use(MESSAGE_FEEDBACK_SERVICE);
-
-    expect(a).not.toBe(b);
-    const log = new SessionRegistry('限額').root;
-    const note = 'x'.repeat(100);
-    expect(
-      a.put(log, { messageId: '無', rating: 'positive', note, ifVersion: null }),
-    ).toMatchObject({
-      ok: false,
-      error: { code: 'note-too-large', maxBytes: 4 },
-    });
-    // 大的那一份走到下一關（目標訊息不存在），代表它沒有被小的那個上限擋下來。
-    expect(
-      b.put(log, { messageId: '無', rating: 'positive', note, ifVersion: null }),
-    ).toMatchObject({
-      ok: false,
-      error: { code: 'target-not-found' },
-    });
+  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', () => {
+    expect(() => feedback.Config.parse({ maxNoteBytes: 8, maxNotBytes: 8 })).toThrow(/maxNotBytes/);
   });
 });
 
-describe('/feedback', () => {
-  async function assemble() {
-    const { registry, dispose } = await loadPlugins([createFeedbackPlugin({ maxNoteBytes: 8192 })]);
-    const sessions = new SessionRegistry('feedback-root');
-    const detachers = registry.sessions.installers().map((entry) => entry.value);
-    const unbind = registry.sessions.bind(sessions);
-    return { registry, sessions, detachers, unbind, dispose };
-  }
+/** 一棵只有命令登記處的樹，上面掛 feedback（設定可換）；回傳登記處的把手與樹上取得的服務。 */
+async function mount(config: unknown = { maxNoteBytes: 8192 }, row = 'feedback') {
+  const commands = createCommandsProvider();
+  const root = new Context();
+  await root.plugin(Loader);
+  Object.assign(root.loader.builtins, { commands: commands.Provider, feedback });
+  await root.loader.create({ id: 'commands', name: 'cordis:commands' } as never, null);
+  await root.loader.create({ id: row, name: 'cordis:feedback', config } as never, null);
+  await root.loader.await();
+  return {
+    root,
+    commands,
+    service: root.get(feedbackToken.name) as
+      (FeedbackService & { provider: string; contractVersion: string }) | undefined,
+    dispose: () => root.fiber.dispose(),
+  };
+}
 
-  it('空字串回用法說明、不記', async () => {
-    const run = await assemble();
+describe('一致性套件：真的提供者、真的 Loader', () => {
+  it('feedback 全格通過：manifest、匯出形式、載入→卸載後命令與服務都撤掉、缺 commands 停在 PENDING', async () => {
+    let latest = createCommandsProvider();
+    const failures = await checkConformance({
+      row: 'feedback',
+      module: feedback,
+      config: { maxNoteBytes: 8192 },
+      providers: {
+        commands: () => {
+          latest = createCommandsProvider();
+          return latest.Provider;
+        },
+      },
+      residue: () => latest.registrations(),
+    });
+    expect(failures).toEqual([]);
+  });
+});
+
+describe('掛上之後', () => {
+  it('提供 messageFeedback 服務，歸屬是這一列、契約版本是定義套件的；命令登記在登記處，登記者是這一列', async () => {
+    const run = await mount({ maxNoteBytes: 8192 }, 'feedback-row');
     try {
-      const command = run.registry.commands.find('feedback');
-      expect(command?.recordInput).toBe(false);
-      expect(
-        await command!.handler({
-          commandId: 'c1',
-          rawInput: '   ',
-          signal: new AbortController().signal,
-          sessionLog: new SessionLog('feedback-root'),
-          attachments: [],
-          steer: () => undefined,
-        }),
-      ).toEqual({
-        kind: 'error',
-        text: FEEDBACK_USAGE,
-      });
+      expect(run.service?.provider).toBe('feedback-row');
+      expect(run.service?.contractVersion).toBe(feedbackToken.version);
+      expect(run.commands.entries().map((entry) => [entry.definition.name, entry.source])).toEqual([
+        ['feedback', 'feedback-row'],
+      ]);
     } finally {
-      run.unbind();
       await run.dispose();
     }
   });
 
-  it('記在執行器交來的那份日誌上；plugin 不是 sessions 參與者（#688）', async () => {
-    const run = await assemble();
+  it('**一次掛載一份服務**：兩棵樹各掛一次，兩邊的上限各自算各自的', async () => {
+    const small = await mount({ maxNoteBytes: 4 });
+    const large = await mount({ maxNoteBytes: 4096 });
     try {
-      // 只掛 feedback 的組裝上沒有任何 sessions 參與者：命令不必自己追日誌。
-      expect(run.detachers).toEqual([]);
-      const log = new SessionLog('feedback-root');
-      const result = await run.registry.commands.find('feedback')!.handler({
-        commandId: 'c1',
-        rawInput: '回答錯了',
-        signal: new AbortController().signal,
-        sessionLog: log,
-        attachments: [],
-        steer: () => undefined,
+      expect(small.service).toBeDefined();
+      expect(large.service).toBeDefined();
+      const log = new SessionLog('限額');
+      const note = 'x'.repeat(100);
+      expect(
+        small.service!.put(log, { messageId: '無', rating: 'positive', note, ifVersion: null }),
+      ).toMatchObject({ ok: false, error: { code: 'note-too-large', maxBytes: 4 } });
+      // 大的那一份走到下一關（目標訊息不存在），代表它沒有被小的那個上限擋下來。
+      expect(
+        large.service!.put(log, { messageId: '無', rating: 'positive', note, ifVersion: null }),
+      ).toMatchObject({ ok: false, error: { code: 'target-not-found' } });
+    } finally {
+      await small.dispose();
+      await large.dispose();
+    }
+  });
+
+  it('設定驗不過：那一列起不來，服務與命令都沒有登記', async () => {
+    const run = await mount({ maxNoteBytes: 0 });
+    try {
+      expect(run.service).toBeUndefined();
+      expect(run.commands.registrations()).toBe(0);
+    } finally {
+      await run.dispose();
+    }
+  });
+
+  it('列卸下之後：服務與命令都撤掉，但卸下前取到的那份仍能呼叫（宿主的快照，不碰 this.ctx）', async () => {
+    const run = await mount({ maxNoteBytes: 16 });
+    try {
+      const snapshot = run.service!;
+      const entry = run.root.loader.resolve('feedback');
+      await entry.update({ disabled: true } as never);
+      await run.root.loader.await();
+      expect(run.root.get(feedbackToken.name)).toBeUndefined();
+      expect(run.commands.registrations()).toBe(0);
+      const { log } = logWithTurns();
+      expect(
+        snapshot.put(log, { messageId: 'm-first', rating: 'positive', ifVersion: null }).ok,
+      ).toBe(true);
+      expect(snapshot.list(log)).toMatchObject({
+        ok: true,
+        value: { items: [{ messageId: 'm-first' }] },
       });
-      expect(result).toEqual({
+    } finally {
+      await run.dispose();
+    }
+  });
+});
+
+describe('/feedback', () => {
+  async function command() {
+    const run = await mount({ maxNoteBytes: 8192 });
+    const found = run.commands.entries().find((entry) => entry.definition.name === 'feedback');
+    if (found === undefined) throw new Error('沒登記 /feedback');
+    return { run, definition: found.definition };
+  }
+  const invoke = (rawInput: string, sessionLog: SessionLog) => ({
+    commandId: 'c1',
+    rawInput,
+    signal: new AbortController().signal,
+    sessionLog,
+    attachments: [],
+    steer: () => undefined,
+  });
+
+  it('空字串回用法說明、不記；recordInput 是 false', async () => {
+    const { run, definition } = await command();
+    try {
+      expect(definition.recordInput).toBe(false);
+      const log = new SessionLog('feedback-root');
+      expect(await definition.handler(invoke('   ', log))).toEqual({
+        kind: 'error',
+        text: FEEDBACK_USAGE,
+      });
+      expect(log.events.filter((event) => event.type === 'feedback/record')).toEqual([]);
+    } finally {
+      await run.dispose();
+    }
+  });
+
+  it('記在執行器交來的那份日誌上（#688）', async () => {
+    const { run, definition } = await command();
+    try {
+      const log = new SessionLog('feedback-root');
+      expect(await definition.handler(invoke('回答錯了', log))).toEqual({
         kind: 'success',
         text: '已記下對這個會話的回饋（feedback-root）。',
       });
       expect(log.events.filter((event) => event.type === 'feedback/record')).toHaveLength(1);
     } finally {
-      run.unbind();
       await run.dispose();
     }
   });
+});
 
-  it('提供成 messageFeedback 服務；沒人提供時是 undefined', () => {
-    expect(createRegistry().services.get(MESSAGE_FEEDBACK_SERVICE)).toBeUndefined();
+describe('相依關係', () => {
+  it('src 不 import @nexus/core；沒有 default 匯出；相依只有 SDK、cordis、@nexus/commands、@nexus/feedback、@nexus/session', () => {
+    const read = (file: string) => readFileSync(new URL(file, import.meta.url), 'utf8');
+    expect(read('./index.ts')).not.toMatch(/from '@nexus\/core'/u);
+    expect('default' in feedback).toBe(false);
+    const pkg = JSON.parse(read('../package.json')) as {
+      dependencies?: Record<string, string>;
+      peerDependencies: Record<string, string>;
+    };
+    expect(Object.keys(pkg.dependencies ?? {})).toEqual(['zod']);
+    expect(Object.keys(pkg.peerDependencies).sort()).toEqual(
+      [
+        '@nexus/commands',
+        '@nexus/cordis',
+        '@nexus/feedback',
+        '@nexus/sdk',
+        '@nexus/session',
+      ].sort(),
+    );
   });
 });

@@ -57,7 +57,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { StructuredTool, StructuredToolInterface } from '@langchain/core/tools';
 import { NEXUS_CORE_VERSION, resolveEntriesPerEntry } from '@nexus/core';
-import type { NexusPlugin, PluginEntry, ProjectionUnit } from '@nexus/core';
+import type { CommandDefinition, NexusPlugin, PluginEntry, ProjectionUnit } from '@nexus/core';
 import { ManifestError, validateManifest } from '@nexus/sdk';
 
 import { resolveHarnessHome } from './harness-home.js';
@@ -76,6 +76,7 @@ import type { JournalActor, JournalBody, JournalRecord } from './plugin-journal.
 import { findJsExpr, isFunctionPluginModule, mountDetached } from './plugin-tree.js';
 import type {
   FunctionPluginModule,
+  HostService,
   PluginTree,
   TreeInput,
   TreeRowInput,
@@ -831,6 +832,10 @@ interface FoldedContributions {
   readonly projections: readonly ProjectionUnit[];
   /** 技能來源路徑（#1446），照那一列登記的順序。 */
   readonly skillSources: readonly string[];
+  /** 命令定義（#1456），照那一列登記的順序。 */
+  readonly commands: readonly CommandDefinition[];
+  /** 這一列提供、宿主取到的服務（#1456）。 */
+  readonly services: readonly HostService[];
 }
 
 /**
@@ -850,6 +855,11 @@ function registerFolded(
   // 技能來源走 `registry.skills.addSource`，**照那一列登記的順序**：`sources` 依序即優先序（後面的來源贏過前面的同名 skill）。
   // 格式與重名在樹上的提供者登記時就驗過了，這一層的 `NamedEntries` 只是第二道（相容層的列也走它）。
   for (const path of contributions.skillSources) registry.skills.addSource(path);
+  // 命令走 `registry.commands.register`（照登記順序；名字格式與重名在樹上的提供者登記時就驗過了，這一層的 `NamedEntries` 是
+  // 第二道，相容層的列也走它——樹上的命令跟相容層的命令撞名要到這裡才掉，#1456 已知的縫）。
+  for (const definition of contributions.commands) registry.commands.register(definition);
+  // 服務走 `registry.services.provide`：同名只收一份，重名當場拋（相容層也提供同名服務時在這裡掉）。
+  for (const { name, value } of contributions.services) registry.services.provide(name, value);
 }
 
 /** 樹上這一列起來了：折進它登記的工具與投影單元。 */
@@ -1516,6 +1526,8 @@ async function loadPluginConfigOnce(
       tools: verdict.tools,
       projections: verdict.projections,
       skillSources: verdict.skillSources,
+      commands: verdict.commands,
+      services: verdict.services,
     });
     rows.set(bound, { id: origin.id, module: row.name });
     return bound;

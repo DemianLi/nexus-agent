@@ -17,16 +17,34 @@
  * - **沒有 dsh 的非同步寫入權（`enqueue`）**：我們的日誌是同步寫的，見 `FeedbackService`。
  * - **沒有 `session-not-found`**：規則拿到的一定是一份活的日誌；「這條 thread 不存在」由 wire 那一
  *   側回。
+ * - **兩顆套件併成一顆、兩個服務併成一個**（#1456 Q3 (a)，類別：遷移卡不改行為（暫時））：dsh 的
+ *   `message-feedback` 與 `command-feedback` 是兩顆套件、兩個服務（`messageFeedback`、`sessionFeedback`）。這裡一顆套件，
+ *   `record` 是 `FeedbackService` 的第四個方法。理由與撤除條件見 `@nexus/feedback` 的檔頭。
  *
  * 見 [#278](https://github.com/DemianLi/nexus-agent/issues/278)。
+ *
+ * ## 形狀（#1456：第五顆搬上 Cordis 樹的插件，第一顆 `provides` 非空的）
+ *
+ * 函式插件，具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**。相依只有 `@nexus/sdk`、
+ * `@nexus/commands`（命令的登記）、`@nexus/feedback`（服務的定義）與 `@nexus/session`（日誌的讀法與型別）：**沒有一行
+ * import `@nexus/core`**（決議 §3-4 第 17 條；#1420 的 lint 規則擋它）。
+ *
+ * - **提供一個服務**：`apply` 裡 `new` 一個繼承 `ContractService` 的類別，建構時 `provide`。用 `new` 不用 `ctx.plugin(Class)`
+ *   （後者開子 fiber）；歸屬（`.provider`）是這一列的 id，宿主據此只把服務折給 active 的這一列。
+ * - **消費一個接縫**：`commands`，經 `inject` 宣告（`^1.0.0`），登記是 effect，這一列卸載時登記處自己撤掉。
+ * - 服務的方法**一律不碰 `this.ctx`**（設定在建構時進閉包、日誌由呼叫端傳進來），所以列卸載之後宿主手上那份快照仍能呼叫。
+ *
+ * 舊的 `NexusPlugin` 外殼（`feedbackPlugin`、`createFeedbackPlugin`）不在這裡：它是測試夾具，住在 `apps/harness` 的
+ * `feedback.fixture.ts`。
  *
  * @module
  */
 
 import { Buffer } from 'node:buffer';
 import { randomUUID } from 'node:crypto';
-import { currentMessageFeedback, loggedMessageId, MESSAGE_FEEDBACK_SERVICE } from '@nexus/core';
-import { z } from 'zod';
+
+import { commandsToken } from '@nexus/commands';
+import { currentMessageFeedback, feedbackToken } from '@nexus/feedback';
 import type {
   FeedbackRecord,
   FeedbackService,
@@ -36,11 +54,12 @@ import type {
   MessageFeedbackListResult,
   MessageFeedbackPutRequest,
   MessageFeedbackPutResult,
-  NexusPlugin,
-  PluginEntry,
-  SessionEvent,
-  SessionLog,
-} from '@nexus/core';
+} from '@nexus/feedback';
+import type { Context } from '@nexus/cordis';
+import { ContractService, defineManifest, injectOf, need, service } from '@nexus/sdk';
+import { loggedMessageId } from '@nexus/session';
+import type { SessionEvent, SessionLog } from '@nexus/session';
+import { z } from 'zod';
 
 /** `/feedback` 的命令名。 */
 export const FEEDBACK_COMMAND_NAME = 'feedback';
@@ -61,7 +80,7 @@ export const feedbackConfigSchema = z.strictObject({
 export type FeedbackConfig = z.infer<typeof feedbackConfigSchema>;
 
 /**
- * 工廠與 {@link createFeedbackService} 收的東西。
+ * {@link createFeedbackService} 收的東西。
  *
  * **服務那一支自己留著執行期檢查**：它是一支獨立的 API，走得到的路不只有 plugin 這一條
  * （`apps/harness` 有測試直接叫它），而 schema 只守 plugin 那條路。
@@ -181,6 +200,48 @@ export function createFeedbackService(options: FeedbackConfig): FeedbackService 
   };
 }
 
+/** 插件在樹上的列用的名字（`ctx.fiber.runtime.name`，錯誤訊息、log 與相容層清單用）。 */
+export const name = 'feedback';
+
+/** 要的服務：`commands`，契約 `^1.0.0`。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。 */
+export const inject = injectOf(need(commandsToken, '^1.0.0'));
+
+/** 設定的 schema，與 {@link manifest}.config 是同一個物件（一致性套件比對）。 */
+export const Config = feedbackConfigSchema;
+
+export const manifest = defineManifest({
+  id: 'feedback',
+  version: '0.1.0',
+  owner: '平台團隊',
+  provides: [{ token: feedbackToken.name, version: feedbackToken.version }],
+  consumes: [{ token: commandsToken.name, range: '^1.0.0' }],
+  config: feedbackConfigSchema,
+  // 換程式碼要重啟行程；設定一改，下一條 thread 看到新的上限，開著的不動（#1405、決議 §3-2 第 6 條）。
+  reload: { code: 'restart', config: 'next-thread' },
+  capabilities: [],
+});
+
+/**
+ * `messageFeedback` 服務的實作：把 {@link createFeedbackService} 的規則掛成一個契約服務。
+ *
+ * 四個方法是**自己的屬性、閉包住規則**，不是原型上的方法，也不用 `#私有欄位`：宿主取到的是 traceable proxy，方法在
+ * proxy 的 shadow 上執行，私有欄位在那個 receiver 上會拋。方法體一律不碰 `this.ctx`（見檔頭）。
+ */
+class MessageFeedbackService extends ContractService<FeedbackService> implements FeedbackService {
+  readonly put: FeedbackService['put'];
+  readonly delete: FeedbackService['delete'];
+  readonly list: FeedbackService['list'];
+  readonly record: FeedbackService['record'];
+
+  constructor(ctx: Context, rules: FeedbackService) {
+    super(ctx, feedbackToken);
+    this.put = (log, request) => rules.put(log, request);
+    this.delete = (log, request) => rules.delete(log, request);
+    this.list = (log) => rules.list(log);
+    this.record = (log, entry) => rules.record(log, entry);
+  }
+}
+
 /**
  * 掛上評分規則與 `/feedback`。
  *
@@ -188,44 +249,29 @@ export function createFeedbackService(options: FeedbackConfig): FeedbackService 
  * root 那一份）：照 dsh 的 `/feedback` 直接讀 invocation 上的目標，這個 plugin 因此不必當 sessions
  * 參與者、也不必自己追「接了幾份」（[#688](https://github.com/DemianLi/nexus-agent/issues/688)）。
  *
- * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
- * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
- * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
- */
-export const feedbackPlugin: NexusPlugin<FeedbackConfig> = {
-  name: 'feedback',
-  Config: feedbackConfigSchema,
-  apply(registry, config: FeedbackConfig) {
-    // **服務建在 `apply` 裡，不在模組層級**：設定是這一次掛載的，而 `serve.ts` 每個
-    // thread 組裝一次。共用一份的話兩邊會用同一個上限，而且誰都改不動。
-    const service = createFeedbackService(config);
-    // **單一佔位，重名當場拋**（[#477](https://github.com/DemianLi/nexus-agent/issues/477)）：
-    // 兩份規則就是兩種「內容一樣算不算一次」的答案。那句領域說明原本寫在 `registry.feedback`
-    // 的重名訊息裡；搬到 `services` 之後訊息是通用的（照 cordis），所以說明留在這裡。
-    registry.services.provide(MESSAGE_FEEDBACK_SERVICE, service);
-    registry.commands.register({
-      name: FEEDBACK_COMMAND_NAME,
-      description: '記下對這個會話的回饋',
-      input: { hint: '<內容>' },
-      // 那段文字由 `feedback/record` 帶著，`command/run` 不再記一次（照 dsh）。
-      recordInput: false,
-      handler: ({ rawInput, sessionLog }) => {
-        if (rawInput.trim().length === 0) return { kind: 'error', text: FEEDBACK_USAGE };
-        service.record(sessionLog, { text: rawInput });
-        return { kind: 'success', text: `已記下對這個會話的回饋（${sessionLog.sessionId}）。` };
-      },
-    });
-  },
-};
-
-export default feedbackPlugin;
-
-/**
- * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ * **每次掛載才有的狀態一律活在這裡**：設定是這一次掛載的，規則（含備註上限）建在 `apply` 裡，兩列各掛一次各算各的上限。
  *
- * @param options - 設定，形狀見 {@link feedbackConfigSchema}。
- * @returns 可以放進組裝點清單的條目。
+ * **單一佔位，重名當場拋**（[#477](https://github.com/DemianLi/nexus-agent/issues/477)）：同名服務由 Cordis 在
+ * `provide` 當場拋（`service "messageFeedback" has been registered at …`），後掛的那一列掉在 `apply`。兩份規則就是兩種
+ * 「內容一樣算不算一次」的答案。
+ *
+ * @param ctx - 這一列的 Cordis context。
+ * @param config - 驗過的設定。
  */
-export function createFeedbackPlugin(options: FeedbackPluginOptions): PluginEntry {
-  return { plugin: feedbackPlugin, config: options };
+export function apply(ctx: Context, config: FeedbackConfig): void {
+  const rules = createFeedbackService(config);
+  // 用 `new` 不用 `ctx.plugin(Class)`：不開子 fiber，歸屬就是這一列。建構子 `provide` 是 effect，列卸載時服務跟著撤。
+  new MessageFeedbackService(ctx, rules);
+  service(ctx, commandsToken).register({
+    name: FEEDBACK_COMMAND_NAME,
+    description: '記下對這個會話的回饋',
+    input: { hint: '<內容>' },
+    // 那段文字由 `feedback/record` 帶著，`command/run` 不再記一次（照 dsh）。
+    recordInput: false,
+    handler: ({ rawInput, sessionLog }) => {
+      if (rawInput.trim().length === 0) return { kind: 'error', text: FEEDBACK_USAGE };
+      rules.record(sessionLog, { text: rawInput });
+      return { kind: 'success', text: `已記下對這個會話的回饋（${sessionLog.sessionId}）。` };
+    },
+  });
 }
