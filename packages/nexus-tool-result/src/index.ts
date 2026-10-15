@@ -16,7 +16,7 @@
  * ## 偏離登記：只做單向轉出，實作留在 `@nexus/core`（同 `@nexus/session`，#1435 Q1 (c)）
  *
  * `markToolError` 與 `toolErrorOf` 共用 core 模組層的同一張 `WeakMap`（日誌讀的就是它），實作搬出來會出現兩張表、
- * 兩份「工具錯誤」的判準（#1458 Q4 (b) 不選的理由）。所以：
+ * 兩份「工具錯誤」的判準（#1458 Q4 (b) 不選的理由）。所以（抽出實作是橫跨核心的一刀，表達不出來，退到最接近的實作，同 `@nexus/session`、`@nexus/projections`）：
  *
  * - 三個值**留在 `@nexus/core`，由這個套件單向轉出**。相依是單向的：這個套件相依 `@nexus/core`，core 不 import 它。
  * - **`@nexus/core` 放 `peerDependencies`，`devDependencies` 留 `workspace:*`**（#1421 PM 決策 3）：不能讓安裝結果出現第二份

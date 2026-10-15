@@ -153,7 +153,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     `mountDetached` 兩處）；值是進入點算出來、建樹時交進去的那一份——serve「有人在」是 `human`、CLI headless 是 `policy-never`
     （`cordis-root.ts` 的 `entryApprovalChannel`、`createCordisRoot({ channel })`）。**沒有樹的呼叫端**（`bindDetached`）從組裝根的 `channel` 服務讀、交給
     `mountDetached`，讀不到就是「沒有指定」。
-  - **消費者**：ask-user 的 `inject` 是 `need(approvalChannelToken, '^1.0.0')`，在 `apply` 當下 `service(ctx, token).current()` 抓一次、進閉包；**不再逐條 thread 查**
+  - **消費者**：ask-user 的 `inject` 是 `need(approvalChannelToken, '^1.0.0')`，在 `apply` 當下 `service(ctx, token)` 把**服務**抓進閉包，`current()` 是**呼叫當下**才問的（值是宿主交給這個行程的，今天是常數）；**不再逐條 thread 查**
     （不把 `channelForThread` 放進 `inject`：選配的相依會讓匯出形式那一格紅）。服務**一定在**、值可能是 `undefined`，所以必要相依照常成立，
     「沒有人指定」是呼叫當下拒絕（fail-closed，#669），不是載入失敗。服務的方法是屬性閉包、不碰 `this.ctx`，卸載之後開著的 thread 手上的那份照樣能問。
   - **為什麼不是提供者掛 `provide`**：兩個進入點的答題者是**情境**（有沒有人在），不是一個可以註冊的東西；放進 `cordis.yml` 的一列要有設定，而這個值沒有設定、也不該被 patch 改。
@@ -161,7 +161,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   照 dsh `DELEGATED_CALLER`）與 `outputSchema`（有 `safeParse` 的東西，成功輸出照它驗）。選項隨工具一起折進 thread 的註冊點（`RowVerdict.active.toolOptions`、
   `registerFolded`）；**沒有 `scope`**（`rootOnly` 配 `scope` 是矛盾，註冊點當場拋，這裡不開這個口）。次版號升級：`^1.0.0` 的舊消費者照常（不傳第二參數），要用選項的消費者宣告 `^1.1.0`。
 - **工具結果的三個寫法**（`@nexus/tool-result`，#1458 Q4）：`toolRefusal`（回給模型的拒絕）、`toolCallIdOf`（從呼叫設定取呼叫 id）、`markToolError`（替一則拒絕訊息掛錯誤內容）。實作留在 `@nexus/core`，
-  這個套件只做單向轉出（core 放 `peerDependencies`）——**不是**因為表達不出別的做法，而是 `markToolError` 與 core 讀它的 `toolErrorOf` 共用同一個 `WeakMap`，複製一份寫入端就是靜默失效。
+  這個套件只做單向轉出（core 放 `peerDependencies`）——表達不出來，退到最接近的實作（偏離表）：抽出實作是橫跨核心的一刀（同 `@nexus/session`、`@nexus/projections`），而 `markToolError` 與 core 讀它的 `toolErrorOf` 共用同一個 `WeakMap`，複製一份寫入端就是靜默失效。
   `callThreadId` 刻意不在：它是 `channelForThread` 的配套，而 ask-user 不再逐條 thread 查。放這裡而不放 `@nexus/tools`／`@nexus/sdk`：前者的 `package.json` 只准相依 SDK 與工具型別（測試釘著），後者不 import core。
   現有消費者：`@nexus/plugin-ask-user`（三個都用）。
 - 這個慣例 dsh 也只是慣例，沒有 gate 強制；這裡同樣不加 gate。`@nexus/tools` 有一條測試守它的相依只有 SDK 與工具型別。依賴的放法照 dsh：宿主給的 `@nexus/sdk`、`@nexus/cordis`、服務定義套件（`@nexus/tools`）放 `peerDependencies`，`devDependencies` 留 `workspace:*` 供開發與測試——`ContractError` 的 `instanceof` 與 Cordis 的 `Context` 類別都要求宿主與插件看到同一份，放進 `dependencies` 在套件獨立安裝時就可能各裝一份。`@nexus/plugin-echo` 與 `@nexus/tools` 各有測試釘著。
@@ -346,8 +346,8 @@ thread 各自掛一份跑一遍當基準，再掛**一份**服務所有 thread �
 ask-user 在 #1458 遷上樹，轉接器照留，改成對「行程級的預設答題管道」量（見下）。
 
 **答題管道（#1458 起）**：ask-user 只消費樹上 `approval-channel` 那一列給的**行程級預設值**，不再逐條 thread 查 `channelForThread`——
-那是 PM 決定的邊界：今天兩個進入點各是一個行程級的情境（serve 有人在、CLI headless），沒有「同一份組裝裡逐條 thread 不同」的產品需求。
-`channelForThread` 的 token 與型別留在 `@nexus/approval-channel`，等真的有第二種答題者再接。`apply` 當下抓一次進閉包，所以**同一棵樹上多條 thread
+這是 demian 拍板的 Q1 (c)（PM 補了兩件：沒有樹的那條路也要接、ask-user 不再查 `channelForThread`）：今天兩個進入點各是一個行程級的情境（serve 有人在、CLI headless），沒有「同一份組裝裡逐條 thread 不同」的產品需求。
+`channelForThread` 的 token 與型別留在 `@nexus/approval-channel`，等真的有第二種答題者再接。`apply` 當下把服務抓進閉包，所以**同一棵樹上多條 thread
 共用同一個答題者**；「一條有人在、一條沒人在」是兩個行程級組裝（serve 與 headless CLI）的事，各一棵樹、各自的 `channel`。
 相容層的測試夾具（`apps/harness/src/ask-user.fixture.ts`）保留舊外殼的取法（先問 `channelForThread`，沒有再用 `channel`），給手搭清單的測試用，不在產品路徑上。
 

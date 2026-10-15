@@ -20,8 +20,9 @@
  * 沒有標籤，每個 agent 都拿到（`packages/core/scope/src/index.ts:170-185`）。
  *
  * **`ChannelForThread`（逐條 thread 的管道，#1418）今天沒有提供者，也沒有查詢它的消費者。** 型別與服務名（
- * {@link CHANNEL_FOR_THREAD_SERVICE}）留在這裡，是因為相容層的組裝點今天還在提供它（`@nexus/core` 的 `createHostServicesPlugin`），
- * 它的消費者還是相容層的舊插件；樹上的 `ask-user` 不查它。等出現真的會逐條不同的答題者時，再加提供者與查詢，一起加回來。
+ * {@link CHANNEL_FOR_THREAD_SERVICE}）留在這裡，是因為 #1418 的接縫（`@nexus/core` 的 `NexusServices.channelForThread`、`createHostServicesPlugin` 的選項）
+ * 已經存在；但**全樹今天沒有任何地方提供它**，只有測試夾具（`apps/harness/src/ask-user.fixture.ts`，舊外殼）還在查。樹上的
+ * `ask-user` 不查它。等出現真的會逐條不同的答題者時，再加提供者與查詢，一起加回來。
  * 這不是 AGENTS.md 那條「基礎建設表達不出來」的偏離：dsh 的答題者也不是逐條 thread 提供（見上）。
  *
  * ## 偏離登記
