@@ -45,6 +45,11 @@
  * 2. **鎖照 dsh 的 `withFileLock`**（`:235`）：`wx` 建 `<file>.lock`、記 PID、持有者行程不在了就接手（`:97`、`:108`、`:146`）。
  *    **差在等待上限**：dsh 預設 2 秒（`:196`），並明寫「持有者的操作合法地跑得比檔案工作久時要自己給 `waitMs`」（`:200-208`）。
  *    這裡持鎖的時候要驗證一筆變更、載入模組，所以預設 30 秒。
+ * 3. **同一個行程裡先排隊、再取檔案鎖**（[#1450](https://github.com/DemianLi/nexus-agent/issues/1450)）：dsh 的
+ *    `withFileLock` 本身沒有行程內佇列，但它的呼叫端有（`credentials-local/src/index.ts:683` 的 `modifyRecord` 先
+ *    `this.enqueue(...)`、再 `withFileLock`），所以同一行程的寫入從來不互相搶鎖檔。這裡的寫入口有兩處（寫入口與
+ *    `prepareJournal`），把佇列放進 {@link withFileLock} 一處，而不是各自在呼叫端排。差別只在位置，語意同 dsh。
+ *    不排隊的時候，同一行程的 N 個寫入全靠鎖檔輪流、後面的每輪睡滿 200 毫秒，實測 25 筆要 4.4 秒，其中 4 秒是睡眠。
  *
  * @module
  */
@@ -52,7 +57,7 @@
 import { createHash } from 'node:crypto';
 import { constants, readFileSync } from 'node:fs';
 import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
-import { dirname } from 'node:path';
+import { dirname, resolve } from 'node:path';
 
 import { z } from 'zod';
 
@@ -613,12 +618,52 @@ async function takeOverExitedLock(lockPath: string): Promise<boolean> {
   }
 }
 
+/** 同一個行程裡每個鎖檔的佇列尾巴：新來的接在它後面，輪到才去搶鎖檔。見 {@link withFileLock}。 */
+const inProcessTails = new Map<string, Promise<void>>();
+
+function lockTimeoutError(lockPath: string, waitMs: number): PluginJournalError {
+  return new PluginJournalError(
+    `等不到 ${lockPath} 的寫入鎖（${String(waitMs)} 毫秒）。` +
+      '另一個寫入口還在跑，或它當掉後鎖檔沒有被接手（持有者的 PID 還活著）；確認那個行程之後才可以手動刪鎖檔。',
+  );
+}
+
+/** 等 `previous` 結束，但不超過 `deadline`；超過就拋。 */
+async function waitForPredecessor(
+  previous: Promise<void>,
+  deadline: number,
+  lockPath: string,
+  waitMs: number,
+): Promise<void> {
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => {
+        reject(lockTimeoutError(lockPath, waitMs));
+      },
+      Math.max(0, deadline - Date.now()),
+    );
+  });
+  try {
+    await Promise.race([previous, timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * 在持有 `<filename>.lock` 的期間執行 `operation`。
  *
+ * **同一個行程裡的呼叫先排隊，輪到才去搶鎖檔**（#1450，偏離登記第 3 條）：鎖檔只剩跨行程的那一層要爭，行程內不空睡。
+ * 佇列以 `resolve(filename)` 為鍵；同一個檔的不同寫法（符號連結等）不會共用佇列，但照樣被鎖檔擋住，只是慢。
+ * `waitMs` 從進來的那一刻算起，排隊的時間也算在裡面。
+ *
+ * **不可重入**：`operation` 裡不能再呼叫同一個檔的 {@link withFileLock}。鎖檔本來就擋它（等到逾時），佇列則是
+ * 等前一個結束，所以會等到 `waitMs` 才拋，同鎖檔的行為。
+ *
  * @param filename - 要序列化寫入的檔。
  * @param operation - 持鎖期間做的事；結束（含拋）才放鎖。
- * @param options.waitMs - 最多等多久，預設 {@link DEFAULT_LOCK_WAIT_MS}。
+ * @param options.waitMs - 最多等多久（含排隊），預設 {@link DEFAULT_LOCK_WAIT_MS}。
  * @returns `operation` 的回傳值。
  * @throws 等不到鎖。
  */
@@ -628,7 +673,34 @@ export async function withFileLock<T>(
   options: { readonly waitMs?: number } = {},
 ): Promise<T> {
   const lockPath = `${filename}.lock`;
-  const deadline = Date.now() + (options.waitMs ?? DEFAULT_LOCK_WAIT_MS);
+  const waitMs = options.waitMs ?? DEFAULT_LOCK_WAIT_MS;
+  const deadline = Date.now() + waitMs;
+
+  const queueKey = resolve(lockPath);
+  const previous = inProcessTails.get(queueKey) ?? Promise.resolve();
+  let leave!: () => void;
+  const mine = new Promise<void>((done) => {
+    leave = done;
+  });
+  // 我之後的人等我、也等我前面的：就算我等不到逾時先離開，順序也不會亂。
+  const tail = previous.then(() => mine);
+  inProcessTails.set(queueKey, tail);
+  try {
+    await waitForPredecessor(previous, deadline, lockPath, waitMs);
+    return await withLockFile(lockPath, operation, deadline, waitMs);
+  } finally {
+    leave();
+    if (inProcessTails.get(queueKey) === tail) inProcessTails.delete(queueKey);
+  }
+}
+
+/** 只管跨行程那一層：`wx` 建鎖檔、搶不到就退避、持有者不在了就接手。 */
+async function withLockFile<T>(
+  lockPath: string,
+  operation: () => Promise<T>,
+  deadline: number,
+  waitMs: number,
+): Promise<T> {
   let delay = LOCK_RETRY_INITIAL_MS;
   for (;;) {
     try {
@@ -638,13 +710,8 @@ export async function withFileLock<T>(
       if (!(await isLockContention(error, lockPath))) throw error;
       if (await takeOverExitedLock(lockPath)) continue;
     }
-    if (Date.now() >= deadline) {
-      throw new PluginJournalError(
-        `等不到 ${lockPath} 的寫入鎖（${String(options.waitMs ?? DEFAULT_LOCK_WAIT_MS)} 毫秒）。` +
-          '另一個寫入口還在跑，或它當掉後鎖檔沒有被接手（持有者的 PID 還活著）；確認那個行程之後才可以手動刪鎖檔。',
-      );
-    }
-    await new Promise((resolve) => setTimeout(resolve, delay));
+    if (Date.now() >= deadline) throw lockTimeoutError(lockPath, waitMs);
+    await new Promise((done) => setTimeout(done, delay));
     delay = Math.min(delay * 2, LOCK_RETRY_MAX_MS);
   }
   try {
