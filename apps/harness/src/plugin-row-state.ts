@@ -41,6 +41,33 @@ export function rowKey(loaded: Pick<LoadedPluginConfig, 'entries' | 'ids'>, id: 
 }
 
 /**
+ * `undefined` 與 `{}` 在這裡是同一件事：相容層沒寫 `config` 就是 `{}`，樹那一側為了 strictObject 補的也是 `{}`。
+ *
+ * @param config - 一列宣告上的 `config`。
+ * @returns 沒寫就是 `{}`。
+ */
+export const normalizedConfig = (config: unknown): unknown => config ?? {};
+
+/**
+ * 一列**宣告的簽章**：「是什麼插件、怎麼設定」。輸入是三格（列 id、模組名、設定）；`disabled` 這種跟版本無關的欄位不在
+ * 裡面，`undefined` 與 `{}` 算同一份（{@link normalizedConfig}）。序列化用共用的 `stable-stringify.ts`，跟 {@link rowKey}
+ * 同一支，所以鍵順序不影響。
+ *
+ * **兩個人共用這一支**（[#1442](https://github.com/DemianLi/nexus-agent/issues/1442) Q1 (a)）：樹上自我停用的記憶與去重
+ * （`plugin-tree.ts`，#1424）、與「活著的設定版本 → 用到它的 thread」那張表（`plugin-live-versions.ts`）。兩邊判「同一份
+ * 宣告」的尺不能各寫一把。
+ *
+ * **輸出含設定明文**，不要原樣往外送：進快照檔的是它的帶鍵雜湊（`session-header-metadata.ts` 的 `hmacHashOf`）。
+ *
+ * @param id - 列 id。
+ * @param module - 模組 specifier，即那一列的 `name`。
+ * @param config - 那一列的 `config`。
+ * @returns 簽章字串。
+ */
+export const declarationSignature = (id: string, module: string, config: unknown): string =>
+  stableStringify({ id, module, config: normalizedConfig(config) });
+
+/**
  * 起動期讀的一列在這份清單上的樣子：掛沒掛、讀出來的值；讀不出來就記原因。
  *
  * @param plugins - 一份解析好的條目清單。

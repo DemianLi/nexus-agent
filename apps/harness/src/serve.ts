@@ -70,7 +70,11 @@ import type { PumpAgent } from './thread-pump.js';
 import type { SandboxMode } from './contained-backend.js';
 import { BrowserAuth } from './browser-auth.js';
 import { loadOrCreateBrowserSessionSecret } from './browser-session-secret.js';
-import { createSessionHeaderMetadataResolver } from './session-header-metadata.js';
+import {
+  createSessionHeaderMetadataResolver,
+  hmacHashOf,
+  loadConfigHashKey,
+} from './session-header-metadata.js';
 import { createProcessShutdown } from './process-shutdown.js';
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
 import { HARNESS_HOME_ENV, resolveHarnessHome } from './harness-home.js';
@@ -637,6 +641,22 @@ async function startServer(
   // 還沒有管理員身分，`/threads` 底下每個登入的人都看得到。檔裡不帶設定值也不帶 drop 原文，理由與偏離登記見
   // `plugin-snapshot.ts`；路徑與讀法見 `docs/operations.md`。
   const snapshotWriter = createPluginSnapshotWriter({ path: pluginSnapshotPath(env), log });
+  // **活著的設定版本的版本字串用 `config-hash-key.json` 那把鍵**（#1442 Q2 (a)），跟會話日誌 header 的 `configHash` 同一把：
+  // 設定值不進檔，改了又改回來是同一版。**落盤關掉就不取**（同 `headerMetadataOf`：關掉落盤的啟動不該在 home 底下建鍵檔），
+  // 鍵讀不到或落在工作區底下也只講一次、不帶 `live`；快照其餘照舊。
+  const liveVersionKey =
+    sessionLogDir === undefined
+      ? undefined
+      : await loadConfigHashKey({
+          env,
+          ...(invocation.workspace !== undefined && { workspace: invocation.workspace }),
+          cwd,
+        }).catch((error: unknown) => {
+          log(
+            `[對照快照] 這一次不列活著的設定版本：${error instanceof Error ? error.message : String(error)}`,
+          );
+          return undefined;
+        });
   const threadPluginList = createThreadPluginList({
     load: (warn) =>
       loadDefaultPlugins(
@@ -659,6 +679,9 @@ async function startServer(
     publishSnapshot: async (snapshot) => {
       await snapshotWriter.publish(snapshot);
     },
+    ...(liveVersionKey !== undefined && {
+      liveVersions: { sign: (signature: string) => hmacHashOf(signature, liveVersionKey) },
+    }),
   });
   // 啟動那一份先寫下去（檔在 server 起來之前就在），摘要留到下面啟動那幾行印完再記，不插在網址前面。
   const startupSnapshot = threadPluginList.snapshot();
@@ -939,6 +962,13 @@ async function startServer(
           throw error;
         }
       }
+      // **組裝與續接都成功了才綁**（#1442）：這條 thread 握著的那一份宣告，進「活著的設定版本」那張表。只綁 root thread id，
+      // 子代理沿用這一份清單。放掉只動記憶體（下面 `dispose`）：關機時整批拆掉，不各自寫一次快照。
+      const releaseLiveVersions = await threadPluginList.bindThread(
+        threadId,
+        threadList,
+        built.dropped,
+      );
       const {
         agent,
         commands,
@@ -987,6 +1017,7 @@ async function startServer(
         }),
         // 落盤沒接上就被收掉（建 thread 途中失敗）的話，續接那個把手還在這裡，要自己放。
         dispose: async () => {
+          releaseLiveVersions();
           // 放不掉不該擋住收 agent——它底下可能有子行程。
           await release().catch(() => {});
           await dispose();

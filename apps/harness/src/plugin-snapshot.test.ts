@@ -30,6 +30,8 @@ import {
   PLUGIN_SNAPSHOT_FILE_NAME,
 } from './plugin-snapshot.js';
 import type { PluginSnapshot, SnapshotSource } from './plugin-snapshot.js';
+import { createLiveVersionTable } from './plugin-live-versions.js';
+import { declarationSignature } from './plugin-row-state.js';
 import { createThreadPluginList } from './thread-plugin-list.js';
 
 const temporary: string[] = [];
@@ -262,31 +264,60 @@ describe('buildPluginSnapshot', () => {
     expect(byId('ghost').module).toBe('@nexus/plugin-does-not-exist');
   });
 
-  it('不帶設定值、不帶 drop 原文：每列的鍵固定，秘密字串不進檔', async () => {
+  it('不帶設定值、不帶 drop 原文：每列的鍵固定（含 live 項），秘密字串不進檔', async () => {
     const secret = 'secret-token-9f3a';
-    const { snapshot } = await compare(
-      undefined,
-      [
-        '- id: live-model',
-        '  config:',
-        `    baseUrl: 'https://${secret}.example.invalid/v1'`,
-        '- id: todo',
-        '  config:',
-        `    allowParallelInProgress: '${secret}'`,
-        '',
-      ].join('\n'),
-    );
+    const patch = [
+      '- id: live-model',
+      '  config:',
+      `    baseUrl: 'https://${secret}.example.invalid/v1'`,
+      '- id: todo',
+      '  config:',
+      `    allowParallelInProgress: '${secret}'`,
+      '',
+    ].join('\n');
+    const [running, saved] = [await load(), await load(patch)];
+    // 有 thread 綁著兩列：簽章裡帶著秘密（`declarationSignature` 含設定明文），進檔的只有帶鍵雜湊。
+    const table = createLiveVersionTable();
+    table.bind('t1', [
+      {
+        id: 'todo',
+        signature: declarationSignature('todo', 'x', { allowParallelInProgress: secret }),
+      },
+      { id: 'echo', signature: declarationSignature('echo', 'y', { prefix: secret }) },
+    ]);
+    const snapshot = buildPluginSnapshot({
+      running: sourceOf(running),
+      saved: sourceOf(saved),
+      generatedAt: AT,
+      live: {
+        rows: table.rows(),
+        sign: (signature) => `hmac-sha256:${signature.length.toString(16).padStart(16, '0')}`,
+      },
+    });
     const text = JSON.stringify(snapshot);
     expect(text).not.toContain(secret);
     // live-model 是起動期讀的一列：值變了，這一列是 restart，但值不在檔裡。
     expect(snapshot.rows.find((row) => row.id === 'live-model')?.sync).toBe('restart');
-    // 鍵白名單：多一個欄位（例如 declared、config、message）這裡就紅。
+    // 鍵白名單：多一個欄位（例如 declared、config、message、signature）這裡就紅。
+    let liveRows = 0;
     for (const row of snapshot.rows) {
-      expect(Object.keys(row).sort()).toEqual(['id', 'module', 'running', 'saved', 'sync']);
+      const keys = Object.keys(row).sort();
+      if (row.live === undefined) {
+        expect(keys).toEqual(['id', 'module', 'running', 'saved', 'sync']);
+      } else {
+        liveRows += 1;
+        expect(keys).toEqual(['id', 'live', 'module', 'running', 'saved', 'sync']);
+        for (const entry of row.live) {
+          expect(Object.keys(entry).sort()).toEqual(['current', 'threads', 'version']);
+          expect(entry.version).toMatch(/^hmac-sha256:[0-9a-f]{16}$/u);
+        }
+      }
       for (const side of [row.running, row.saved]) {
         expect(Object.keys(side).every((key) => key === 'state' || key === 'dropStage')).toBe(true);
       }
     }
+    // 兩列綁了 thread，其餘沒有：白名單真的走過 live 項。
+    expect(liveRows).toBe(2);
     expect(Object.keys(snapshot).sort()).toEqual(['generatedAt', 'rows', 'summary', 'version']);
   });
 });
@@ -431,7 +462,10 @@ describe('createThreadPluginList 的快照', () => {
       settled = true;
       return list;
     });
-    // 讓重讀跑到寫檔那一步；寫檔還沒放行，read() 不能先回。
+    // 讓重讀跑到寫檔那一步（等到寫檔被叫到為止，整套一起跑時重讀比固定 50ms 慢）；寫檔還沒放行，read() 不能先回。
+    for (let waited = 0; published.length === 0 && waited < 5_000; waited += 10) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(published).toHaveLength(1);
     expect(settled).toBe(false);
