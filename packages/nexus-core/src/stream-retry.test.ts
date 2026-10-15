@@ -41,7 +41,7 @@ function callWith(
   return middleware.wrapModelCall(request, handler);
 }
 
-const RETRYABLE = { code: 'TRANSPORT', retryable: true } as const;
+const RETRYABLE = { code: 'TRANSPORT' } as const;
 
 describe('範圍外', () => {
   it('回報是空操作，不拋', () => {
@@ -77,24 +77,24 @@ describe('重打的判斷', () => {
     expect(calls).toBe(1);
   });
 
-  it('回報說重打沒用（retryable: false）：不重打', async () => {
+  it('回報的碼不在可重試清單裡（HTTP_422 這類）：不重打，原錯誤往外拋（#1437：碼決定重試）', async () => {
     let calls = 0;
     await expect(
       callWith({ maxRetries: 2, initialDelayMs: 1 }, async () => {
         calls += 1;
-        noteStreamFailure({ code: '400', retryable: false });
+        noteStreamFailure({ code: 'HTTP_422' });
         throw new Error('請求有問題');
       }),
     ).rejects.toThrow('請求有問題');
     expect(calls).toBe(1);
   });
 
-  it('同一次嘗試回報多次以第一次為準：後面連帶的回報不能把「不可重打」改成可重打', async () => {
+  it('同一次嘗試回報多次以第一次為準：後面連帶的回報不能把「碼不在清單裡」改成可重打', async () => {
     let calls = 0;
     await expect(
       callWith({ maxRetries: 2, initialDelayMs: 1 }, async () => {
         calls += 1;
-        noteStreamFailure({ code: '400', retryable: false });
+        noteStreamFailure({ code: 'HTTP_422' });
         noteStreamFailure(RETRYABLE);
         throw new Error('x');
       }),
@@ -118,7 +118,7 @@ describe('重打的判斷', () => {
     let calls = 0;
     const failWith = (code: string) => async () => {
       calls += 1;
-      noteStreamFailure({ code, retryable: true });
+      noteStreamFailure({ code });
       throw new Error(code);
     };
     await expect(
@@ -170,7 +170,7 @@ describe('重打的判斷', () => {
 
   it('上一次嘗試的回報函式晚到：算在它自己那一次，不會算到這一次頭上', async () => {
     let calls = 0;
-    let stale: ((failure: { code: string; retryable: boolean }) => void) | undefined;
+    let stale: ((failure: { code: string }) => void) | undefined;
     await expect(
       callWith({ maxRetries: 3, initialDelayMs: 1 }, async () => {
         calls += 1;
@@ -369,11 +369,7 @@ describe('首事件前後共用同一份預算（#1427）', () => {
       callWith({ maxRetries: 3, initialDelayMs: 1, jitterRatio: 0 }, async () => {
         calls += 1;
         // 前兩次當「第一則事件之前」的失敗（HTTP 層回報），之後當「中段」（串流層回報）：都是同一個回報口。
-        noteStreamFailure(
-          calls <= 2
-            ? { code: 'RATE_LIMIT', retryable: true, status: 429 }
-            : { code: 'TRANSPORT', retryable: true },
-        );
+        noteStreamFailure(calls <= 2 ? { code: 'RATE_LIMIT', status: 429 } : { code: 'TRANSPORT' });
         throw new Error(`第 ${String(calls)} 次`);
       }),
     ).rejects.toThrow('第 4 次');
@@ -421,7 +417,7 @@ describe('日誌與通知（失敗當下）', () => {
     const result = await run(async () => {
       calls += 1;
       if (calls === 1) {
-        noteStreamFailure({ code: 'TRANSPORT', retryable: true });
+        noteStreamFailure({ code: 'TRANSPORT' });
         throw new Error('連線斷了');
       }
       return new AIMessage('好了');
@@ -483,7 +479,7 @@ describe('日誌與通知（失敗當下）', () => {
       run(async () => {
         calls += 1;
         if (calls === 1) {
-          noteStreamFailure({ code: 'TRANSPORT', retryable: true });
+          noteStreamFailure({ code: 'TRANSPORT' });
           throw new Error('斷了');
         }
         return new AIMessage('好了');
@@ -500,7 +496,7 @@ describe('日誌與通知（失敗當下）', () => {
     await run(async () => {
       calls += 1;
       if (calls <= 2) {
-        noteStreamFailure({ code: 'TIMEOUT', retryable: true });
+        noteStreamFailure({ code: 'TIMEOUT' });
         throw new Error('停住了');
       }
       return new AIMessage('好了');
@@ -518,7 +514,7 @@ describe('日誌與通知（失敗當下）', () => {
     const { log, signals, run } = rig({ maxRetries: 1, initialDelayMs: 1 });
     await expect(
       run(async () => {
-        noteStreamFailure({ code: 'TRANSPORT', retryable: true });
+        noteStreamFailure({ code: 'TRANSPORT' });
         throw new Error('一直斷');
       }),
     ).rejects.toThrow('一直斷');
@@ -544,7 +540,7 @@ describe('日誌與通知（失敗當下）', () => {
       controller.signal,
     );
     const pending = run(async () => {
-      noteStreamFailure({ code: 'TRANSPORT', retryable: true });
+      noteStreamFailure({ code: 'TRANSPORT' });
       throw new Error('斷了');
     });
     // 讓第一次嘗試失敗、進到退避，再停。
@@ -568,7 +564,7 @@ describe('日誌與通知（失敗當下）', () => {
     await retry.wrapModelCall({ runtime: { configurable: {} } }, async () => {
       calls += 1;
       if (calls === 1) {
-        noteStreamFailure({ code: 'TRANSPORT', retryable: true });
+        noteStreamFailure({ code: 'TRANSPORT' });
         throw new Error('斷了');
       }
       return 'ok';

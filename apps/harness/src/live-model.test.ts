@@ -11,11 +11,11 @@ import {
   DEFAULT_LIVE_MODEL_ID,
   DEFAULT_LIVE_TIMEOUT_MS,
   classifyFailedAttempt,
+  classifyTurnFailure,
   createLiveModel,
   isDerivedContextOverflow,
   modelGoneMessage,
   normalizeEmptyAssistantContent,
-  retryDecision,
   stripAssistantName,
   StreamIdleTimeoutError,
   withEmptyAssistantContent,
@@ -131,61 +131,75 @@ describe('真實供應商的 key 處理', () => {
 });
 
 /**
- * 重試決策。
+ * 重試決策（#1437：只看碼）。
  *
  * **這一組是行為表，不是實作細節。** 它釘住的是 `onFailedAttempt` 取代掉基座預設之後，
- * 我們有沒有把預設的形狀維持住 —— 只改「沒有 `retry-after` 的 429」那一支，其餘照舊。
- * 不打真實 API，錯誤都是手工組出來的形狀。
+ * 重試與否是不是只由 {@link classifyTurnFailure} 的碼決定——碼在預設可重試集（`RATE_LIMIT`／`SERVER`／`TIMEOUT`／
+ * `TRANSPORT`／`EMPTY_RESPONSE`）裡才接著打。不打真實 API，錯誤都是手工組出來的形狀。
  */
-describe('限流的重試決策', () => {
+describe('重試決策（碼決定）', () => {
   const withProps = (message: string, props: Record<string, unknown>): Error =>
     Object.assign(new Error(message), props);
 
+  /** `classifyFailedAttempt` 不拋＝接著打；拋＝放棄。 */
+  const decide = (error: unknown): 'retry' | 'give-up' => {
+    try {
+      classifyFailedAttempt(error);
+      return 'retry';
+    } catch {
+      return 'give-up';
+    }
+  };
+
   it('沒有 retry-after 的 429 要重試 —— 基座對這個形狀是一次都不重試的', () => {
-    expect(retryDecision(withProps('429', { status: 429 }))).toBe('retry');
-    // `@langchain/core` 正規化之後掛上的名字。協定上的 status 有時被包掉，名字還在。
-    expect(retryDecision(withProps('rate limited', { name: 'RateLimitCapacityError' }))).toBe(
-      'retry',
-    );
+    expect(decide(withProps('429', { status: 429 }))).toBe('retry');
   });
 
   it('配額耗盡的 429 不重試 —— 它跟限流共用狀態碼，但重試幾次都一樣', () => {
-    expect(retryDecision(withProps('quota', { status: 429, code: 'insufficient_quota' }))).toBe(
-      'give-up',
-    );
-    expect(retryDecision(withProps('quota', { name: 'RateLimitQuotaExhaustedError' }))).toBe(
+    expect(decide(withProps('quota', { status: 429, code: 'insufficient_quota' }))).toBe('give-up');
+    // 基座自己的 handler 才會掛的名字，產品路徑上由我們的 `onFailedAttempt` 接手，這裡只確認分類器也認它。
+    expect(decide(withProps('quota', { status: 429, name: 'RateLimitQuotaExhaustedError' }))).toBe(
       'give-up',
     );
   });
 
-  it('4xx 不重試 —— 判準對照那個「只支援單筆工具呼叫」重試幾次都一樣', () => {
-    for (const status of [400, 401, 402, 403, 404, 405, 406, 407, 409, 413]) {
-      expect(retryDecision(withProps(String(status), { status }))).toBe('give-up');
+  it('4xx 與沒有碼可重試的狀態不重試 —— 含基座清單沒列的 408／410／418／422／425', () => {
+    for (const status of [
+      400, 401, 402, 403, 404, 405, 406, 407, 408, 409, 410, 413, 418, 422, 425,
+    ]) {
+      expect(decide(withProps(String(status), { status }))).toBe('give-up');
     }
   });
 
   it('5xx 與連線問題仍然重試 —— 這條擋的是「非限流一律放棄」那種退化', () => {
     // 自訂 onFailedAttempt 會**整個**取代基座的預設，所以很容易在只想改限流時，
     // 順手把本來會重試的那些也關掉。把它改成 give-up，這條當場紅。
-    expect(retryDecision(withProps('500', { status: 500 }))).toBe('retry');
-    expect(retryDecision(withProps('502', { status: 502 }))).toBe('retry');
-    expect(retryDecision(new Error('socket hang up'))).toBe('retry');
+    expect(decide(withProps('500', { status: 500 }))).toBe('retry');
+    expect(decide(withProps('502', { status: 502 }))).toBe('retry');
+    // 連線層：SDK 的 `APIConnectionError` 才是 `TRANSPORT`（名字認的是建構子，不是訊息）。
+    class APIConnectionError extends Error {}
+    expect(decide(new APIConnectionError('Connection error.'))).toBe('retry');
+  });
+
+  it('沒有任何供應商痕跡的錯誤（解不開的回應、程式錯誤）不重試 —— 它不是網路問題（Q2 (a)）', () => {
+    expect(decide(new Error('socket hang up'))).toBe('give-up');
+    expect(decide(new SyntaxError('Unexpected token'))).toBe('give-up');
   });
 
   it('中止不重試 —— 那是我們自己要的，重試等於違抗', () => {
-    expect(retryDecision(withProps('x', { name: 'AbortError' }))).toBe('give-up');
-    expect(retryDecision(new Error('Cancel: 使用者中止'))).toBe('give-up');
-    expect(retryDecision(withProps('x', { code: 'ECONNABORTED' }))).toBe('give-up');
+    expect(decide(withProps('x', { name: 'AbortError' }))).toBe('give-up');
+    expect(decide(new Error('Cancel: 使用者中止'))).toBe('give-up');
+    expect(decide(withProps('x', { code: 'ECONNABORTED' }))).toBe('give-up');
   });
 
   it('包在 cause 鏈深處也認得出來 —— 包裝層數是別人家的實作細節', () => {
     const inner = withProps('429', { status: 429 });
     const outer = new Error('外層', { cause: new Error('中層', { cause: inner }) });
-    expect(retryDecision(outer)).toBe('retry');
+    expect(decide(outer)).toBe('retry');
 
     const innerBad = withProps('400', { status: 400 });
     const outerBad = new Error('外層', { cause: new Error('中層', { cause: innerBad }) });
-    expect(retryDecision(outerBad)).toBe('give-up');
+    expect(decide(outerBad)).toBe('give-up');
   });
 });
 
@@ -426,14 +440,11 @@ describe('模型下架（410）', () => {
   });
 
   /**
-   * **這條釘的是「今天為什麼會等 106.7 秒」的成因。**
-   *
-   * `410` 不在 {@link STATUS_NO_RETRY} 的複本裡，所以 `retryDecision` 會說「重試」。
-   * 這不是 bug 而是基座那份清單的實際成員——它哪天把 410 加進去，這條會紅，那時
-   * `modelGoneMessage` 就從「必要」降級成「只是把話講清楚」，值得回頭讀一次。
+   * **410 不重試靠的是碼，不是 `modelGoneMessage`**（#1437）：`HTTP_410` 不在可重試集裡。
+   * 原先 `retryDecision` 對它說「重試」（基座那份清單沒有 410，曾經一次等 106.7 秒），這條釘住那件事已經結束。
    */
-  it('retryDecision 自己是攔不住 410 的', () => {
-    expect(retryDecision(goneError())).toBe('retry');
+  it('410 的碼是 HTTP_410，不在預設可重試集裡', () => {
+    expect(classifyTurnFailure(goneError())).toMatchObject({ code: 'HTTP_410', status: 410 });
   });
 
   it('classifyFailedAttempt 直接放棄，而且原錯誤留在 cause 上', () => {
@@ -532,7 +543,7 @@ describe('假端點回那個 410，我們只打一次就放棄', () => {
  *
  * ## 這一段釘的是「政策有沒有被問到」，不是「政策判得對不對」
  *
- * 上面那些測試釘得住 `retryDecision` 的判斷力（400 不重試、410 不重試）。**它們釘不住
+ * 上面那些測試釘得住 `classifyFailedAttempt` 的判斷力（400 不重試、410 不重試）。**它們釘不住
  * 重試政策有沒有被呼叫到** —— 而 #516 正是後者：端點回 `200`，重試包裝器當場判定成功，
  * 錯誤稍後才從串流裡冒出來，那時已經在射程外。政策整條靜默地沒有作用，
  * 而每一條既有測試照樣是綠的。
@@ -814,12 +825,12 @@ describe('串流內回報的錯誤（#516）', () => {
    *
    * 這條是為了一個**看起來很合理但實測不成立**的顧慮而存在的。嗅探迴圈是在 fetch
    * **裡面** await `read()` 的，所以掛住的連線會變成從 `configuration.fetch` 逃出去的
-   * 東西，落進 {@link retryDecision} —— 推論上，這一層把「逾時」從重試射程外搬進了射程內，
+   * 東西，落進 {@link classifyFailedAttempt} —— 推論上，這一層把「逾時」從重試射程外搬進了射程內，
    * 於是 {@link DEFAULT_LIVE_TIMEOUT_MS} 的止血變成「逾時 × 重試次數」。
    *
    * **實測說不是**：兩側的請求數相同，而且**都**是 `retries + 1`。SDK 的逾時本來就是掛在
    * 整個請求上（`APIConnectionTimeoutError` 的 `name` 不是 `AbortError`、沒有 status，
-   * 所以 {@link retryDecision} 本來就判它重試）。**這個乘法在這一刀之前就存在**，不是
+   * 所以 `TIMEOUT` 本來就在可重試碼裡）。**這個乘法在這一刀之前就存在**，不是
    * 這一層帶來的。#521 查過之後照 dsh 保留（dsh 的 `TIMEOUT` 也在預設可重試碼裡），見
    * {@link DEFAULT_LIVE_TIMEOUT_MS}。
    *

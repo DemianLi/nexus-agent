@@ -549,7 +549,8 @@
     # `openai/gpt-oss-120b`，出貨的 nemotron 沒量過。代價：串流中段失敗最壞重付 6 次回覆。供應商給的 `retry-after`
     # 不超過 `maxDelayMs` 就照它等，超過就放棄。登記在 `src/settings/live-model.ts` 的檔頭「偏離二」。
     # `retryableCodes` 是 dsh 的預設五個碼：429（含沒帶 header 的）`RATE_LIMIT`、5xx `SERVER`、逾時 `TIMEOUT`、斷線 `TRANSPORT`、
-    # 空回覆 `EMPTY_RESPONSE`（我們今天沒有空回覆就重打的路徑，收著只為形狀一致）。`mode` 只收 `normal`（`always` 是登記在案
+    # 空回覆 `EMPTY_RESPONSE`（stop 但沒有任何文字、推理或工具呼叫，#1437）。**重打只看這個碼**：不在清單裡的（401／403、
+    # 400、404、408、410、422 等）不重打。`mode` 只收 `normal`（`always` 是登記在案
     # 的偏離，見「偏離二」）；整個不寫 `retryPolicy` 就是下面這組值，寫了就要寫 `mode`。
     retryPolicy:
       mode: normal

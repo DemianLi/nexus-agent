@@ -60,6 +60,7 @@ import type {
   RootOnlyRefusal,
 } from './registry.js';
 import { createModelCallRecorder } from './model-calls.js';
+import { createEmptyResponseMiddleware } from './empty-response.js';
 import { createStreamRetryMiddleware } from './stream-retry.js';
 import type { StreamRetryOptions } from './stream-retry.js';
 import { createRequestSnapshotRecorder } from './request-snapshot.js';
@@ -553,6 +554,9 @@ export function foldRegistry(
   const modelUsage = foldModelUsage(registry, options);
   // 同上，無狀態、一份走遍。位置緊貼用量記錄器，理由見 {@link ./model-calls.ts}。
   const modelCalls = createModelCallRecorder(registry.sessions);
+  // 空回覆（stop 但什麼都沒有）算一次失敗交給重試那一層（#1437）：無狀態、一份走遍。排在起訖紀錄器內側（空的那次記成
+  // `model/end` 的 error、不寫 `assistant/message`）、用量記錄器外側（那一次燒的 token 照記）。見 {@link ./empty-response.ts}。
+  const emptyResponse = createEmptyResponseMiddleware();
   // 串流中段出錯的整次重打（#520）：排在起訖與用量記錄器外面，每一次嘗試各是一對起訖。無狀態、一份走遍。
   const streamRetry =
     options.streamRetry === undefined || options.streamRetry.maxRetries <= 0
@@ -716,6 +720,8 @@ export function foldRegistry(
     // `outcome: 'error'`。見 {@link ./stream-retry.ts}。
     shared('streamRetry', streamRetry),
     shared('modelCalls', modelCalls),
+    // 空回覆算失敗（#1437）：在起訖內側（失敗那次不記 `assistant/message`）、用量外側（用量照記）。
+    shared('emptyResponse', emptyResponse),
     shared('modelUsage', modelUsage),
     // 耐久檢查點排在起訖紀錄器內側：排空時 `model/start` 已經記下，同 dsh「記好的請求前綴」；在其餘 plugin
     // middleware 外側：一個自己重試模型的 plugin 重試幾次都只排空一次。子代理的模型呼叫排空的是子代理那一份日誌。

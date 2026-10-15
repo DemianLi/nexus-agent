@@ -6,6 +6,9 @@ import type { ChatOpenAIFields } from '@langchain/openai';
 import {
   assertImageBudget,
   beginAttemptReport,
+  DEFAULT_STREAM_RETRYABLE_CODES,
+  isModelCallFailure,
+  markModelCallFailure,
   noteStreamFailure,
   streamFailureReporter,
   tagModelRoute,
@@ -261,6 +264,14 @@ const DERIVED_VALUE = /\(parameter=max_tokens,\s*value=(-?\d+)\)|got\s+(-?\d+)/;
  * 預設那一條路：eval 把 `openai/gpt-oss-20b` 逐一傳進 {@link createLiveModel}，而那一顆
  * **131,007 就滿了**，滿了就是這個 body。**換一顆預設就換一個窗口**，而這個判別式跟預設是誰無關。
  *
+ * **現況（#1437 M2，2026-10-14）：預設模型超過窗口時，端點回的是另一種 body，不是這一種。** 對
+ * `nvidia/nemotron-3-super-120b-a12b` 送約 157 萬 token 的請求，端點回 `400`，信封是
+ * `This model's maximum context length is 1000000 tokens. However, your messages resulted in 1579695 tokens…`，
+ * 沒有 `param`、也沒有導出的負 `max_tokens`——所以**這個判別式對它一個都不中**；它命中的是
+ * `@langchain/openai` 自己的四個溢出字串之一（`maximum context length`），被包成 `ContextOverflowError`，
+ * 分類成 `CONTEXT_WINDOW_EXCEEDED`（`turn-failed` 的碼，狀態 `400`）。上面「逼不出來」的 700,045 token 是更早的
+ * 量測，端點的上限實際是 100 萬。只補這一段現況，判別式不動。
+ *
  * ## 偏離登記一：分類該歸 adapter，我們退到最靠近它的地方
  *
  * dsh 寫得很清楚：「溢出分类由适配器维护——提供方措辞可能改变」
@@ -323,57 +334,61 @@ export function isDerivedContextOverflow(error: unknown): boolean {
 }
 
 /**
- * HTTP 狀態碼裡「重試幾次都一樣」的那些。
+ * 這個錯誤是不是「我們自己要中止的」：不是供應商的失敗，不回報、不重試。
  *
- * **這是 `@langchain/core@1.2.9` `async_caller.js` 的 `STATUS_NO_RETRY` 的複本。**
- * 抄一份是因為它沒有被匯出，而我們需要在自訂的 `onFailedAttempt` 裡維持它的行為 ——
- * 見 {@link retryDecision} 的說明。**它會隨基座版本漂移**，升級 `@langchain/core`
- * 時要回頭核一次；`live-model.test.ts` 有一條測試釘住 400 不重試，但釘不住整份清單。
+ * 認名字與碼，不解析訊息內容的語意：`AbortError`、`Cancel…`／`AbortError…` 開頭的訊息（axios／langchain 的取消訊息）、
+ * `ECONNABORTED`。這是基座 `defaultFailedAttemptHandler` 的同一批判準，原本寫在已退役的 `retryDecision` 裡；**重試與否改由
+ * 碼決定之後（#1437），它是唯一不是「看狀態」的一條規則**，所以獨立出來。
  */
-const STATUS_NO_RETRY: ReadonlySet<number> = new Set([
-  400, 401, 402, 403, 404, 405, 406, 407, 409, 413,
-]);
-
-/**
- * 一次失敗要不要重試。
- *
- * **這是基座 `defaultFailedAttemptHandler` 的複本，只改了一支。** 基座沒有把它匯出，
- * 而 `onFailedAttempt` 是全有全無的 —— 傳了就整個取代掉預設，沒有「只改一條規則」的接縫。
- * 所以這裡把預設的判斷抄回來，唯一的差別是**沒有 `retry-after` header 的 429**：
- * 基座把它歸成 `action: 'capacity'` 然後放棄，這裡讓它重試。
- *
- * **為什麼不是「非限流一律放棄」**：那會把 `500`、連線斷掉這些**本來會重試**的也一起關掉，
- * 是一次行為退化。預設的形狀是「除了明確無望的以外都重試」，不是反過來。
- */
-export function retryDecision(error: unknown): 'retry' | 'give-up' {
-  // 中止是我們自己要的，不重試。
+function isAbortLike(error: unknown): boolean {
   if (error instanceof Error) {
-    if (error.name === 'AbortError') return 'give-up';
-    if (error.message.startsWith('Cancel') || error.message.startsWith('AbortError')) {
-      return 'give-up';
-    }
+    if (error.name === 'AbortError') return true;
+    if (error.message.startsWith('Cancel') || error.message.startsWith('AbortError')) return true;
   }
   if (typeof error === 'object' && error !== null) {
-    if ((error as { code?: unknown }).code === 'ECONNABORTED') return 'give-up';
+    if ((error as { code?: unknown }).code === 'ECONNABORTED') return true;
   }
+  return false;
+}
 
-  // 配額耗盡與 4xx：重試幾次都一樣。
-  for (const link of causeLinks(error)) {
-    const code = (link as { code?: unknown }).code;
-    if (code === 'insufficient_quota') return 'give-up';
-    const name = (link as { name?: unknown }).name;
-    if (name === 'RateLimitQuotaExhaustedError' || name === 'InsufficientQuotaError') {
-      return 'give-up';
-    }
-    const status = (link as { status?: unknown }).status;
-    if (typeof status === 'number' && status !== 429 && STATUS_NO_RETRY.has(status)) {
-      return 'give-up';
-    }
-  }
+/**
+ * 「讀串流時連線斷了」的錯誤物件記號（#1437）。
+ *
+ * undici 在串流中段被切斷時拋 `TypeError: terminated`，沒有狀態、名字也不是 `APIConnectionError`——今天的
+ * `classifyTurnFailure` 只能把它記成 `UNKNOWN`，而同一顆錯在 `llm/retry` 上記的是 `TRANSPORT`。{@link withStreamIdleTimeout}
+ * 在 `reader.read()` 失敗（非逾時、非中止）時把它標在這裡，分類器認這個記號：**同一顆錯誤物件，兩邊同一個碼**。
+ *
+ * 用 `WeakSet` 而不是往錯誤上塞欄位：那顆錯是 undici 的、可能被凍結，也不該被我們的記號改變它的形狀。
+ */
+const connectionFailures = new WeakSet<object>();
 
-  // 到這裡還是 429 的話就是限流 —— 這一支才是我們跟基座不同的地方。
-  // 其餘（5xx、連線問題、解不開的回應）沿用基座「重試」的預設。
-  return 'retry';
+/**
+ * HTTP 狀態 → 失敗碼。**整個專案唯一的一張表**（#1437）：分類器、第一則事件的錯誤信封、第一則事件之後的信封監看用同一張，
+ * 所以同一個狀態不論從哪條路進來都是同一個碼。表的順序與詞彙照 dsh 的 `providerError`
+ * （`packages/llm/llm-deepseek/src/transport.ts:22-35`）：
+ *
+ * | 狀態 | 碼 |
+ * | --- | --- |
+ * | 401、403 | `AUTH` |
+ * | 402 | `QUOTA` |
+ * | 429 | `RATE_LIMIT` |
+ * | 400、413 | `INVALID_REQUEST` |
+ * | ≥ 500 | `SERVER` |
+ * | 其餘（404、408、410、418、422、425…） | `HTTP_<狀態>` |
+ *
+ * **不在這張表裡的規則**：`insufficient_quota` 與配額的名字（429 也可能是 `QUOTA`）、上下文溢出（400 也可能是
+ * `CONTEXT_WINDOW_EXCEEDED`）——它們要看狀態以外的東西，由 {@link classifyTurnFailure} 排在這張表前面。
+ *
+ * @param status - HTTP 狀態。
+ * @returns 失敗碼。
+ */
+function failureCodeOfStatus(status: number): string {
+  if (status === 401 || status === 403) return 'AUTH';
+  if (status === 402) return 'QUOTA';
+  if (status === 429) return 'RATE_LIMIT';
+  if (status === 400 || status === 413) return 'INVALID_REQUEST';
+  if (status >= 500) return 'SERVER';
+  return `HTTP_${String(status)}`;
 }
 
 /** 展開 `cause` 鏈。有深度上限也認得出環，因為包裝層數是別人家的實作細節。 */
@@ -445,12 +460,20 @@ function firstEventError(buffered: string, ended: boolean): Record<string, unkno
  * 它的 `providerError` 在沒有 HTTP 狀態碼可看時（`status === undefined`，正是串流內
  * 錯誤的情形）落到 `code = 'SERVER'`（`llm-deepseek/src/protocols/messages/transport.ts:35`），
  * 而 `SERVER` 在預設可重試集裡（`llm/src/retry-policy.ts:18`）。翻成我們的載體就是
- * 「一個不在 {@link STATUS_NO_RETRY} 裡的 5xx」。
+ * `500`，經 {@link failureCodeOfStatus} 記成 `SERVER`、可重試。
  *
  * 只收 400–599：Response 的建構子不讓 204／304 帶 body，而一個「錯誤」本來也不該是 2xx。
+ *
+ * **兩種投遞方式共用這一支**（#1437）：第一則事件是信封時，這裡決定翻出來的 HTTP 回應的狀態；第一則事件之後的信封
+ * （{@link createInbandWatcher}）與 SDK 在串流中段拋的、沒有 `status` 的 `APIError`（{@link classifyTurnFailure}）讀同一支，
+ * 所以同一個信封不論在串流的哪一格出現都是同一個狀態、同一個碼。
  */
 function inbandStatus(envelope: Record<string, unknown>): number {
-  const error = envelope.error as Record<string, unknown>;
+  return inbandErrorStatus(envelope.error as Record<string, unknown>);
+}
+
+/** {@link inbandStatus} 的核心：直接吃信封裡的那個 `error` 物件（SDK 的 `APIError.error` 就是它）。 */
+function inbandErrorStatus(error: Record<string, unknown>): number {
   for (const candidate of [error.code, error.status]) {
     if (
       typeof candidate === 'number' &&
@@ -478,7 +501,7 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  *
  * SDK 的呼叫包裝器（`AsyncCaller` → `p-retry`）包的是**建立串流的那一次呼叫**。那次拿到 `200`，
  * 當場判定成功；錯誤是稍後消費串流時才冒出來的，**那時候已經在它的射程之外**。
- * 結果是 {@link retryDecision} 那一整套政策對這一類失敗**從來沒有被問到** ——
+ * 結果是分類與重試政策對這一類失敗**從來沒有被問到** ——
  * 不是判錯，是沒被呼叫到。（#1427 之後 `maxRetries` 恆為 0、重試只在 `retryModelCall` 一層，
  * 但分類與回報仍走這個 `onFailedAttempt`，所以「落進它的迴圈」仍是下面這個做法的目標。）
  *
@@ -536,7 +559,7 @@ function inbandStatus(envelope: Record<string, unknown>): number {
  * **掛住的連線也不歸這一層管，而那是量出來的不是推的。** 嗅探迴圈在 fetch 裡面 await
  * `read()`，所以「開了線卻不吐位元組」看起來會從重試射程外被搬進射程內。實測兩側的請求數
  * 相同（`live-model.test.ts` 的「開了線卻不吐位元組」那條）：SDK 的計時器從請求開始一直計到
- * fetch 回來，嗅探在 fetch 裡面，所以兩側都被它蓋到；{@link retryDecision} 本來就判它重試。
+ * fetch 回來，嗅探在 fetch 裡面，所以兩側都被它蓋到；逾時的碼 `TIMEOUT` 本來就在可重試集裡。
  * 那個「逾時 × 重試次數」的乘法在這一刀之前就存在，#521 查過是 dsh 的形狀，見
  * {@link DEFAULT_LIVE_TIMEOUT_MS}。
  *
@@ -634,7 +657,8 @@ export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof 
  * 監看**第一則事件之後**的串流內錯誤，發現了就回報給重試那一層（[#520](https://github.com/DemianLi/nexus-agent/issues/520)）。
  *
  * **只看、不改**：位元組原樣往下交，SDK 照今天的方式自己解析、自己拋 `APIError`；這裡只是在旁邊多解一份，認出錯誤信封就
- * `report` 一次（失敗的種類取信封的狀態碼，重打有沒有用套 {@link retryDecision}，跟第一則事件那條同一支判準）。
+ * `report` 一次（失敗的種類由 {@link classifyTurnFailure} 依信封的狀態碼與欄位分類，跟第一則事件那條、`turn/failed` 同一支分類器；重打與否由
+ * 重試那一層依碼決定）。
  * 不能像第一則事件那樣翻成 HTTP 錯誤回應——內容已經往下送了，回應早就回出去了。
  *
  * 解不開的、不是錯誤信封的事件一律當內容放行。單一事件超過 {@link INBAND_WATCH_MAX_CHARS} 個字元就放棄監看（正常事件
@@ -660,14 +684,10 @@ function createInbandWatcher(
       if (event.includes('"error"')) {
         const envelope = firstEventError(event, true);
         if (envelope !== undefined) {
+          // 同一支分類器（#1437）：信封的狀態碼走 {@link failureCodeOfStatus}，`insufficient_quota` 之類走欄位。
+          // 沒有數字碼的信封記 `SERVER`（照 dsh 的 `providerError`），與第一則事件那條一致。
           const status = inbandStatus(envelope);
-          const code = (envelope.error as Record<string, unknown>).code;
-          // 非 429 一律記 `SERVER`，包含非 5xx 的 4xx：沿用 `retryDecision`；dsh 會把非 5xx 的 4xx 記成 `HTTP_n`、不重試（`llm-deepseek/src/transport.ts:22-35`）（#1427 的已知差異）。
-          report({
-            code: status === 429 ? 'RATE_LIMIT' : 'SERVER',
-            retryable: retryDecision({ status, code }) === 'retry',
-            status,
-          });
+          report({ code: classifyInbandEnvelope(envelope, status).code, status });
           watching = false;
           pending = '';
           return;
@@ -765,11 +785,14 @@ export function withStreamIdleTimeout(
             next = await Promise.race([reader.read(), idle]);
           } catch (error: unknown) {
             if (error instanceof StreamIdleTimeoutError) {
-              report({ code: 'TIMEOUT', retryable: true });
-            } else if (!(error instanceof Error && error.name === 'AbortError')) {
+              report({ code: 'TIMEOUT' });
+            } else if (!isAbortLike(error)) {
               // 使用者中止的 AbortError 不回報——那是我們自己要的，不重打。
-              // 沒有狀態、也不是逾時的一律記 `TRANSPORT`，不只是斷線：沿用 `retryDecision`；dsh 會把認不出的錯誤記成 `PI_AI_ERROR`、不重試（`llm-pi-ai/src/stream.ts:42-67`）（#1427 的已知差異）。
-              report({ code: 'TRANSPORT', retryable: retryDecision(error) === 'retry' });
+              // **讀上游這一步失敗，定義上就是連線層的事**（#1437）：undici 的 `terminated`、`ERR_INCOMPLETE_CHUNKED_ENCODING`。
+              // 標在這顆錯上，分類器認記號，`turn/failed` 才與這裡同一個 `TRANSPORT`；解不開的回應（SDK 讀完才解析出錯）
+              // 不經過這一步，所以不會被當成連線問題重打（Q2 (a)）。
+              if (typeof error === 'object' && error !== null) connectionFailures.add(error);
+              report({ code: 'TRANSPORT' });
             }
             throw error;
           }
@@ -1253,13 +1276,13 @@ export function createLiveModel(
 /**
  * 模型下架了 —— 那句話，原封不動。
  *
- * ## 為什麼要專門認它：`410` 不在基座那份不重試清單裡
+ * ## 為什麼要專門認它：它要的是那句話，不只是一個碼
  *
- * {@link STATUS_NO_RETRY} 是 `@langchain/core` 那份的複本，成員是
- * `400/401/402/403/404/405/406/407/409/413` —— **`410` 不在裡面**。所以一顆下架的模型
- * 今天會走到 {@link retryDecision} 最後那個 `return 'retry'`，被重試滿
- * 政策的 `maxRetries` 次（出廠 6 次）。**實測 2026-09-04（當時是 SDK 層 6 次、退避 1–32 秒）：`openai/gpt-oss-120b` 的 410 花了
- * 106.7 秒才浮出來**，而它第一次回應就已經確定了。
+ * 一顆下架的模型，碼本身（`HTTP_410`，#1437 之後由 {@link failureCodeOfStatus} 記，不在可重試集裡所以不重打）已經夠分類；
+ * 專門認它是為了**把供應商那句帶日期的話搬到人眼前**，並換一個說得出「去哪裡換模型」的訊息。
+ * （#1437 之前的版本它還有一個職責：`410` 不在基座那份不重試清單裡，所以曾被重試滿政策的 `maxRetries` 次——
+ * **實測 2026-09-04（當時是 SDK 層 6 次、退避 1–32 秒）：`openai/gpt-oss-120b` 的 410 花了 106.7 秒才浮出來**。
+ * 現在重試只看碼，這個職責退場了。）
  *
  * ## 這裡沒有破「認碼不解析訊息」那條規矩
  *
@@ -1299,67 +1322,35 @@ export function modelGoneMessage(error: unknown): string | undefined {
 }
 
 /**
- * 一次失敗要怎麼處置：先分類，再決定重試。
+ * 一次失敗要怎麼處置：先分類，再決定 SDK 層要不要接著重打。
  *
  * **抽成具名的匯出，是為了它測得到。** 它是 `AsyncCaller` 的 `onFailedAttempt`，而
  * 「`AsyncCaller` 到底會不會為一個不可重試的 400 叫它」是這條鏈上唯一還沒量過的一環
  * ——寫成 closure 的話，不打真端點就驗不到。`live-model.test.ts` 拿一個 loopback
  * 假端點把整條走一遍（零憑證、零外部連線）。
  *
- * **下架排在最前面**，因為它是三者裡唯一會被 {@link retryDecision} 判成「重試」的
- * ——排在後面就永遠輪不到（`410` 不在 {@link STATUS_NO_RETRY} 裡，見
- * {@link modelGoneMessage}）。
+ * **重試只看碼**（[#1437](https://github.com/DemianLi/nexus-agent/issues/1437)）：中止之外，這裡把錯誤交給
+ * {@link classifyTurnFailure}，碼不在預設可重試集（`DEFAULT_STREAM_RETRYABLE_CODES`）裡就拋出去讓 SDK 別再打。
+ * 產品路徑上 SDK 層的 `maxRetries` 是 0，真正決定重打的是 `@nexus/core` 的 `retryModelCall`，它讀的也是
+ * 同一個碼（見 {@link classifyAndReportFailedAttempt}）；這裡的閘門只讓**直接把它掛在 `ChatOpenAI` 上**的呼叫
+ * （單元測試、eval 的尺寸比較）維持「401／400／422 這類打一次就放棄」。
  *
+ * **下架排在最前面**：它換掉的是錯誤的**說法**——供應商那句帶日期的話、與去哪裡換模型。
  * **溢出的分類排在重試決策之前**，因為它換掉的是錯誤的**型別**而不是重試與否：
- * `ContextOverflowError` 建構當下就標成不可重試（`stampRetryable(this, false)`），
- * 而它本來就是個 400，兩條路的重試結論一致。
+ * `ContextOverflowError` 建構當下就標成不可重試（`stampRetryable(this, false)`），而它本來就是個 400。
  *
  * @param error - 這次失敗的錯誤。
- * @throws 要放棄時拋——溢出拋 branded 的那顆，其餘原樣拋。要重試就正常返回。
+ * @throws 要放棄時拋——下架拋人話的那顆、溢出拋 branded 的那顆、其餘原樣拋。要重試就正常返回。
  */
 export function classifyFailedAttempt(error: unknown): void {
+  // `onFailedAttempt` 看到的一定是模型呼叫的失敗（含不在圖裡的標題、摘要器、eval）：記下來，分類器才套連線規則。
+  markModelCallFailure(error);
   const gone = modelGoneMessage(error);
   if (gone !== undefined) throw new Error(gone, { cause: error });
   if (isDerivedContextOverflow(error)) throw ContextOverflowError.fromError(error as Error);
-  if (retryDecision(error) === 'retry') return;
+  if (isAbortLike(error)) throw error;
+  if (DEFAULT_STREAM_RETRYABLE_CODES.includes(classifyTurnFailure(error).code)) return;
   throw error;
-}
-
-/**
- * 把一次失敗描述成日誌裡的 {@link LlmFailure}（[#712](https://github.com/DemianLi/nexus-agent/issues/712)）。
- *
- * 碼的詞彙取 dsh 預設可重試集的四個（`llm/src/retry-policy.ts:18`）：429 是 `RATE_LIMIT`、其他 HTTP 狀態
- * 是 `SERVER`、{@link StreamIdleTimeoutError} 與 SDK 的逾時是 `TIMEOUT`，沒有狀態碼的其餘（連線斷、解不開的回應）
- * 是 `TRANSPORT`。**只對會被重試的失敗有意義**：判放棄的那些走 {@link classifyFailedAttempt} 拋出去，不經過這裡。
- *
- * **三處與 dsh 的已知差異（#1427，登記為「範圍切分（暫時）」，分類另開卡對齊）**：
- * (a) 有狀態、不是 429 的一律記 `SERVER`，包含 `STATUS_NO_RETRY` 沒列的非 5xx 4xx（408、422、425、418…）：沿用
- * {@link retryDecision}；dsh 會記成 `HTTP_n`、不重試。(b) 沒有狀態、不是逾時的一律記 `TRANSPORT`，不只是斷線：沿用
- * {@link retryDecision}；dsh 會記成 `PI_AI_ERROR`、不重試。(c) `EMPTY_RESPONSE` 沒有生產者：dsh 在「stop 但沒有 content」
- * 時產生並重試，我們沒有這條路徑。另外它與 {@link classifyTurnFailure} 的碼不一致（同一類失敗那邊記 `UNKNOWN`），這張不修。
- *
- * **認碼與名字，不解析訊息**，同 {@link retryDecision}；`message` 只是原話搬運。
- *
- * @param error - 這次失敗的錯誤，可能已經被包過好幾層。
- */
-export function classifyLlmFailure(error: unknown): LlmFailure {
-  const message = error instanceof Error ? error.message : String(error);
-  let status: number | undefined;
-  let timedOut = false;
-  for (const link of causeLinks(error)) {
-    const found = (link as { status?: unknown }).status;
-    if (status === undefined && typeof found === 'number') status = found;
-    if (isTimeoutLink(link)) timedOut = true;
-  }
-  const code =
-    status === 429
-      ? 'RATE_LIMIT'
-      : status !== undefined
-        ? 'SERVER'
-        : timedOut
-          ? 'TIMEOUT'
-          : 'TRANSPORT';
-  return { message, code, ...(status !== undefined && { status }) };
 }
 
 /**
@@ -1378,32 +1369,127 @@ function isTimeoutLink(link: object): boolean {
 }
 
 /**
- * 把「這一輪為什麼失敗」描述成日誌裡的 {@link LlmFailure}（[#434](https://github.com/DemianLi/nexus-agent/issues/434)），
- * 給 `turn/failed.error`。
+ * 這一環是不是「串流中段的錯誤信封」被 SDK 拋出來的那顆：`openai` 的 `APIError` 基底類別、**沒有 `status`**
+ * （`core/streaming.js:62`／`:78`：`new APIError(undefined, data.error, …)`）。有狀態的錯誤是 `generate()` 出的子類別
+ * （`BadRequestError`…），名字不同，不會落到這裡。
+ */
+function isInbandApiError(link: object): boolean {
+  if ((link.constructor as { name?: string } | undefined)?.name !== 'APIError') return false;
+  return typeof (link as { status?: unknown }).status !== 'number';
+}
+
+/**
+ * 連線層錯誤碼（Node／undici 的）→ `TRANSPORT`。**逐碼列舉，每個碼說得出它對到 dsh 哪一類**
+ * （pi-ai 的 `classifyPiAiError`，`llm-pi-ai/src/stream.ts:56-65`；那一支只認訊息字面，它自己的 `XXX` 註解說「拿得到
+ * `code`／`cause` 就該改認碼」，所以這裡認碼、不認字面，但類別要對得上）：
  *
- * ## 跟 {@link classifyLlmFailure} 是兩個函式，因為它們回答不同的問題
- *
- * 那一個只對**會被重試**的失敗有意義（429／5xx／逾時／斷線，四個碼），判放棄的不經過它。**`turn/failed` 記的偏偏
- * 是放棄的那些**：金鑰錯、配額耗盡、上下文溢出、請求本身有問題。照 dsh 的 `providerError`
- * （`packages/llm/llm-deepseek/src/transport.ts`，`5badb15`）的順序與詞彙：
- *
- * | 條件（認結構化欄位，不解析訊息） | `code` |
+ * | 碼 | pi-ai 的字面類別 |
  * | --- | --- |
- * | 401、403 | `AUTH` |
- * | 402，或任何一環 `code`／`type` 是 `insufficient_quota`（要在 429 之前，它跟限流共用 429） | `QUOTA` |
- * | 429 | `RATE_LIMIT` |
- * | 鏈上有 `ContextOverflowError`（含伺服器導出負 `max_tokens` 那種，見 {@link isDerivedContextOverflow}） | `CONTEXT_WINDOW_EXCEEDED` |
- * | 400、413 | `INVALID_REQUEST` |
- * | 5xx | `SERVER` |
- * | 其他有狀態的（404、410…） | `HTTP_<狀態>` |
- * | 沒有狀態、逾時那幾個名字（{@link isTimeoutLink}） | `TIMEOUT` |
- * | 沒有狀態、`APIConnectionError`（連線被拒、被重設） | `TRANSPORT` |
- * | **其餘——不是供應商的錯** | `UNKNOWN` |
+ * | `UND_ERR_SOCKET` | 有：訊息 `other side closed`／`socket`（`:62-65`）→ `TRANSPORT` |
+ * | `ECONNRESET`、`ECONNREFUSED` | 有：`ECONN[A-Z]+`（`:62`）→ `TRANSPORT` |
+ * | `UND_ERR_CLOSED` | 沒有字面對應：undici 的 `ClientClosedError`，連線已被關掉；歸 `TRANSPORT`（最近的是 `connection` 那一類） |
+ * | `EPIPE` | 沒有字面對應：寫進已關閉的 socket；歸 `TRANSPORT` |
+ * | `ENOTFOUND`、`EAI_AGAIN` | 沒有字面對應：名字解析失敗；歸 `TRANSPORT` |
+ * | `ENETUNREACH`、`EHOSTUNREACH` | 沒有字面對應：網路／主機不可達；歸 `TRANSPORT` |
+ * | `ERR_INCOMPLETE_CHUNKED_ENCODING` | 沒有字面對應：chunked 回應在結尾前被切斷；pi-ai 對應的是 `terminated`／`premature close`（`:63-65`）那一類，歸 `TRANSPORT` |
+ *
+ * **不在表裡的就不是連線問題**：`UND_ERR_INVALID_ARG`、`UND_ERR_NOT_SUPPORTED` 這類是我們自己的程式錯誤，照 Q2 (a)
+ * 記 `UNKNOWN`、不重打——不用 `UND_ERR_` 前綴一網打盡。`ECONNABORTED` 也不在：那是 {@link isAbortLike} 的中止。
+ */
+const NETWORK_ERROR_CODES: ReadonlySet<string> = new Set([
+  'UND_ERR_SOCKET',
+  'UND_ERR_CLOSED',
+  'ECONNRESET',
+  'ECONNREFUSED',
+  'EPIPE',
+  'ENOTFOUND',
+  'EAI_AGAIN',
+  'ENETUNREACH',
+  'EHOSTUNREACH',
+  'ERR_INCOMPLETE_CHUNKED_ENCODING',
+]);
+
+/**
+ * 逾時類錯誤碼 → `TIMEOUT`（照 pi-ai `:61`：訊息含 `timeout`／`timed out` 的記 `TIMEOUT`，排在連線類之前）。
+ * 兩個碼都在預設可重試集裡，重打行為與記成 `TRANSPORT` 相同，差別只在日誌與網頁上寫的碼。
+ *
+ * | 碼 | 說明 |
+ * | --- | --- |
+ * | `UND_ERR_HEADERS_TIMEOUT`、`UND_ERR_BODY_TIMEOUT` | undici 等標頭／等 body 逾時；訊息含 `Timeout`，有字面對應 |
+ * | `UND_ERR_CONNECT_TIMEOUT` | undici 連線逾時；訊息 `Connect Timeout Error`，有字面對應 |
+ * | `ETIMEDOUT` | Node 的 TCP 逾時；訊息 `connect ETIMEDOUT` 沒有被 `\btimed out\b` 的字界吃到，沒有字面對應，依 PM 審查（#1448）歸 `TIMEOUT` |
+ */
+const TIMEOUT_ERROR_CODES: ReadonlySet<string> = new Set([
+  'UND_ERR_HEADERS_TIMEOUT',
+  'UND_ERR_BODY_TIMEOUT',
+  'UND_ERR_CONNECT_TIMEOUT',
+  'ETIMEDOUT',
+]);
+
+/**
+ * 這一環是不是連線層的失敗：SDK 的 `APIConnectionError`（SDK 自己的型別，工具鏈上不會有）、
+ * {@link withStreamIdleTimeout} 標過的讀端錯誤，或是**模型呼叫拋的錯**（`modelCall`，見 {@link isModelCallFailure}）
+ * 上有 {@link NETWORK_ERROR_CODES} 的碼。
+ *
+ * **碼那一條只在模型呼叫的錯誤鏈上套**：工具 middleware 拋的、cause 帶 `ECONNREFUSED` 的錯（MCP 伺服器連不上）是工具失敗，
+ * 不該被記成模型的 `TRANSPORT`。
+ */
+function isConnectionLink(link: object, modelCall: boolean): boolean {
+  if ((link.constructor as { name?: string } | undefined)?.name === 'APIConnectionError')
+    return true;
+  if (connectionFailures.has(link)) return true;
+  const code = (link as { code?: unknown }).code;
+  return modelCall && typeof code === 'string' && NETWORK_ERROR_CODES.has(code);
+}
+
+/**
+ * 把一則串流內錯誤信封用同一支分類器分類（給第一則事件之後的監看用，#1437）。
+ *
+ * 造一個形狀同 SDK 在串流中段拋的那顆（`status` 補上、`error`／`code`／`type` 取自信封）的物件餵給
+ * {@link classifyTurnFailure}，所以 `insufficient_quota`、狀態表、溢出以外的欄位規則全部共用，不在監看那裡另寫一份。
+ */
+function classifyInbandEnvelope(envelope: Record<string, unknown>, status: number): LlmFailure {
+  const inner = envelope.error as Record<string, unknown>;
+  const message = typeof inner.message === 'string' ? inner.message : '串流內回報了錯誤';
+  return classifyTurnFailure(
+    Object.assign(new Error(message), { status, error: inner, code: inner.code, type: inner.type }),
+  );
+}
+
+/**
+ * 把「這一輪為什麼失敗」描述成日誌裡的 {@link LlmFailure}（[#434](https://github.com/DemianLi/nexus-agent/issues/434)），
+ * 給 `turn/failed.error`**，也給 `llm/retry.failure`**（[#1437](https://github.com/DemianLi/nexus-agent/issues/1437)）。
+ *
+ * ## 一支分類器，不分投遞方式
+ *
+ * #1437 之前有兩支：`classifyLlmFailure`（`llm/retry` 用，只有 `RATE_LIMIT`／`SERVER`／`TIMEOUT`／`TRANSPORT` 四個碼，
+ * 任何狀態都記 `SERVER`）與這一支。**同一顆錯在兩處的碼不同**（串流中段的信封、斷流：`llm/retry` 記 `SERVER`／
+ * `TRANSPORT`，`turn/failed` 記 `UNKNOWN`），而且 408／422／425 這類被當成 `SERVER` 重打。現在只有這一支：
+ * 分類、`llm/retry` 的回報、串流內信封的監看、`turn/failed` 全走它，重打與否由重試那一層**只看碼**。照 dsh 的
+ * `providerError`（`packages/llm/llm-deepseek/src/transport.ts`，`5badb15`）的順序與詞彙：
+ *
+ * | 條件（認結構化欄位，不解析訊息） | `code` | 預設重打 |
+ * | --- | --- | --- |
+ * | 401、403 | `AUTH` | 否 |
+ * | 402，或任何一環 `code`／`type` 是 `insufficient_quota`、或名字是 `RateLimitQuotaExhaustedError`／`InsufficientQuotaError`（要在 429 之前，它跟限流共用 429） | `QUOTA` | 否 |
+ * | 429 | `RATE_LIMIT` | 是 |
+ * | 鏈上有 `ContextOverflowError`（含伺服器導出負 `max_tokens` 那種，見 {@link isDerivedContextOverflow}） | `CONTEXT_WINDOW_EXCEEDED` | 否 |
+ * | 400、413 | `INVALID_REQUEST` | 否 |
+ * | ≥ 500 | `SERVER` | 是 |
+ * | 其他有狀態的（404、408、410、418、422、425…） | `HTTP_<狀態>` | 否 |
+ * | 模型呼叫拋的、串流中段的錯誤信封（SDK 拋的沒有 `status` 的 `APIError`）：信封的數字碼（400–599）照上面幾列；沒有數字碼 | 照上面；`SERVER` | 照上面；是 |
+ * | 沒有狀態、逾時那幾個名字（{@link isTimeoutLink}），或模型呼叫的錯誤鏈上有 {@link TIMEOUT_ERROR_CODES} 的碼 | `TIMEOUT` | 是 |
+ * | 空回覆（{@link createEmptyResponseMiddleware} 拋的 `EmptyResponseError`） | `EMPTY_RESPONSE` | 是 |
+ * | 沒有狀態、連線層的（`APIConnectionError`、模型呼叫的錯誤鏈上有 {@link NETWORK_ERROR_CODES} 的碼、讀串流時被切斷，見 {@link connectionFailures}） | `TRANSPORT` | 是 |
+ * | **其餘——不是供應商的錯，或解不開的回應** | `UNKNOWN` | 否 |
+ *
+ * 狀態那幾列就是 {@link failureCodeOfStatus}；它與這張表只有一處寫。
  *
  * `UNKNOWN` 是 dsh 的規矩（`packages/core/session/src/types.ts:206-210`：解不成 `LlmFailure` 的錯一律壓成
  * `{ message, code: 'UNKNOWN' }`）。我們的 `turn/failed` 還有不是模型的來源——工具 middleware 拋的、遞迴上限、
- * `#withdraw` 的狀態查詢——它們沒有供應商的任何痕跡，就是 `UNKNOWN`。**不要把它們套進 `TRANSPORT`**：
- * {@link classifyLlmFailure} 把「沒有狀態」一律當 `TRANSPORT`，在這裡會把整類程式錯誤標成網路問題。
+ * `#withdraw` 的狀態查詢——它們沒有供應商的任何痕跡，就是 `UNKNOWN`。**不要把它們套進 `TRANSPORT`**：「沒有狀態」
+ * 不等於「網路問題」，這是 #1437 之前那支把整類程式錯誤標成網路問題的原因（Q2 (a)：解不開的回應也是 `UNKNOWN`，dsh 記成
+ * `PI_AI_ERROR`、同樣不重試）。
  *
  * ## 為什麼要先拆 `MiddlewareError`
  *
@@ -1422,42 +1508,54 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   while (MiddlewareError.isInstance(root)) root = root.cause;
 
   let status: number | undefined;
+  let inband: number | undefined;
   let quota = false;
   let overflow = false;
   let timedOut = false;
   let connection = false;
-  for (const link of causeLinks(root)) {
+  let empty = false;
+  // 「只看結構」的連線與串流中段規則只套在模型呼叫拋的錯誤鏈上（工具 middleware 的錯不算）。
+  const links = [...causeLinks(root)];
+  const modelCall = links.some((link) => isModelCallFailure(link));
+  for (const link of links) {
     const found = (link as { status?: unknown }).status;
     if (status === undefined && typeof found === 'number') status = found;
-    const { code, type } = link as { code?: unknown; type?: unknown };
+    const { code, type, name } = link as { code?: unknown; type?: unknown; name?: unknown };
     if (code === 'insufficient_quota' || type === 'insufficient_quota') quota = true;
+    if (name === 'RateLimitQuotaExhaustedError' || name === 'InsufficientQuotaError') quota = true;
     if (ContextOverflowError.isInstance(link)) overflow = true;
     if (isTimeoutLink(link)) timedOut = true;
-    if ((link.constructor as { name?: string } | undefined)?.name === 'APIConnectionError') {
-      connection = true;
+    if (modelCall && typeof code === 'string' && TIMEOUT_ERROR_CODES.has(code)) timedOut = true;
+    if (isConnectionLink(link, modelCall)) connection = true;
+    if (name === 'EmptyResponseError') empty = true;
+    if (inband === undefined && modelCall && isInbandApiError(link)) {
+      const body = (link as { error?: unknown }).error;
+      inband = inbandErrorStatus(
+        typeof body === 'object' && body !== null ? (body as Record<string, unknown>) : {},
+      );
     }
   }
+  // 串流中段的信封沒有 HTTP 狀態：用信封自己的數字碼（沒有就 500），與第一則事件那條翻成 HTTP 回應時同一支（`inbandStatus`）。
+  if (status === undefined) status = inband;
 
   const code =
-    status === 401 || status === 403
-      ? 'AUTH'
-      : quota || status === 402
-        ? 'QUOTA'
+    quota && status !== 401 && status !== 403
+      ? 'QUOTA'
+      : status === 401 || status === 403
+        ? 'AUTH'
         : status === 429
           ? 'RATE_LIMIT'
           : overflow
             ? 'CONTEXT_WINDOW_EXCEEDED'
-            : status === 400 || status === 413
-              ? 'INVALID_REQUEST'
-              : status !== undefined && status >= 500
-                ? 'SERVER'
-                : status !== undefined
-                  ? `HTTP_${String(status)}`
-                  : timedOut
-                    ? 'TIMEOUT'
-                    : connection
-                      ? 'TRANSPORT'
-                      : 'UNKNOWN';
+            : status !== undefined
+              ? failureCodeOfStatus(status)
+              : empty
+                ? 'EMPTY_RESPONSE'
+                : timedOut
+                  ? 'TIMEOUT'
+                  : connection
+                    ? 'TRANSPORT'
+                    : 'UNKNOWN';
   return { message, code, ...(status !== undefined && { status }) };
 }
 
@@ -1483,24 +1581,37 @@ export function retryAfterMsOf(error: unknown): number | undefined {
 }
 
 /**
- * `AsyncCaller` 的 `onFailedAttempt`（#1427）：先分類，再把「這一次值得重打」報給重試那一層
+ * `AsyncCaller` 的 `onFailedAttempt`（#1427、#1437）：先分類，再把「這一次失敗是哪一種」報給重試那一層
  * （`@nexus/core` 的 `noteStreamFailure`，`stream-retry.ts` 在外面讀它）。
  *
- * **分類先做**：要放棄就在分類那裡拋——不經過回報，那一層讀到「沒有回報」就原樣往外拋，所以只有真的會再打的失敗才可能
- * 被重打。SDK 層的 `maxRetries` 是 0，這裡正常返回的失敗會直接以原錯誤落到外層，**不再由 `p-retry` 排退避**。
+ * **回報的是碼，不是判斷**：重打與否由那一層依 `retryableCodes` 決定，這裡不替它下結論（#1437：碼決定重試）。
+ * 所以不重打的失敗（`HTTP_422`、`AUTH`…）也照樣回報——`retryableCodes` 若被使用者加上 `HTTP_422`，政策就是要重打，
+ * 這裡不該先把它關掉。中止是例外：那是我們自己要的，不回報。
+ *
+ * **分類先做**（{@link classifyFailedAttempt}）：要放棄的在那裡拋；這裡取拋出來的那顆（下架的人話、溢出的 branded 錯誤）
+ * 的碼回報，再原樣往外拋。SDK 層的 `maxRetries` 是 0，這裡正常返回的失敗會直接以原錯誤落到外層，**不再由 `p-retry` 排退避**。
  *
  * 範圍外（沒有包重試的呼叫）回報是空操作，行為同 SDK 重試關掉之後的樣子：打一次、失敗就失敗。
  */
 function classifyAndReportFailedAttempt(error: unknown): void {
-  classifyFailedAttempt(error);
-  const failure = classifyLlmFailure(error);
-  const retryAfterMs = retryAfterMsOf(error);
-  noteStreamFailure({
-    code: failure.code,
-    retryable: true,
-    ...(failure.status !== undefined && { status: failure.status }),
-    ...(retryAfterMs !== undefined && { retryAfterMs }),
-  });
+  let outcome: unknown = error;
+  let thrown = false;
+  try {
+    classifyFailedAttempt(error);
+  } catch (caught: unknown) {
+    outcome = caught;
+    thrown = true;
+  }
+  if (!isAbortLike(error)) {
+    const failure = classifyTurnFailure(outcome);
+    const retryAfterMs = retryAfterMsOf(outcome);
+    noteStreamFailure({
+      code: failure.code,
+      ...(failure.status !== undefined && { status: failure.status }),
+      ...(retryAfterMs !== undefined && { retryAfterMs }),
+    });
+  }
+  if (thrown) throw outcome;
 }
 
 /** 缺 key 的失敗訊息：指名缺哪一個、去哪裡放。 */

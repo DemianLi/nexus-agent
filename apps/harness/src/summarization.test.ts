@@ -195,6 +195,8 @@ describe('同名取代是唯一的縫', () => {
         // 模型呼叫的起訖（#266）。它原本要排在摘要器外層，而摘要器原地取代回第三格——
         // 這一條就是「表達不出來」的證據，見 `model-calls.ts` 的偏離那一節。
         'nexusModelCallEvents',
+        // 空回覆算失敗（#1437）：起訖紀錄器內側、用量記錄器外側。
+        'nexusEmptyResponse',
         'nexusModelUsage',
         // 耐久檢查點（#599）：緊貼用量記錄器內側。
         'nexusSessionCheckpoint',
