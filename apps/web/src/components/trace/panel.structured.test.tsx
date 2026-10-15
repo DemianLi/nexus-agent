@@ -165,7 +165,12 @@ describe('觀測分頁：結構化模式', () => {
     expect(toolRow.textContent).toContain(`${clockText(1_700_000_100_000)} · 1.2 秒`);
     const retry = rows.find((row) => row.getAttribute('data-kind') === 'retry')!;
     expect(retry.textContent).toContain('重試 1/3');
-    expect(retry.textContent).toContain('RATE_LIMIT · HTTP 429');
+    // 原因走失敗碼的一句話（#1449），原碼留在 `data-failure-code` 與 `title`。
+    expect(retry.textContent).toContain('被限流 · HTTP 429');
+    expect(retry.textContent).not.toContain('RATE_LIMIT');
+    const code = retry.querySelector('[data-failure-code]')!;
+    expect(code.getAttribute('data-failure-code')).toBe('RATE_LIMIT');
+    expect(code.getAttribute('title')).toBe('RATE_LIMIT');
     expect(retry.textContent).toContain('等了 2.0 秒');
     const signal = rows.find((row) => row.getAttribute('data-kind') === 'signal')!;
     expect(signal.textContent).toContain('重複呼叫：ls 連續第 3 次');
