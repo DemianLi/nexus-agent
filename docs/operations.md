@@ -776,9 +776,14 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 
   整個不寫就是上面這組出廠值。**次數取 6（dsh 預設 5）**：不計抖動的累計等待約 25.5 秒，蓋得過 2026-08-28 量到的 16 秒限流窗口——
   **那次量的是 `openai/gpt-oss-120b`，出貨的 nemotron 沒量過**。代價：串流中段失敗最壞重付 6 次整個回覆。
-  碼的對應：429（含沒帶 `retry-after` header 的）是 `RATE_LIMIT`、其他 HTTP 狀態是 `SERVER`、逾時是 `TIMEOUT`、沒有狀態的連線問題是 `TRANSPORT`；
-  `EMPTY_RESPONSE` 今天沒有生產者。401／403／配額、`STATUS_NO_RETRY` 列出的 4xx（如 400）、上下文溢出、410 下架不重試，不管 `retryableCodes` 怎麼寫。
-  **沒列在 `STATUS_NO_RETRY` 的非 5xx 4xx（實測 408、422、425、418）沿用 `retryDecision`，會照樣重打、記成 `SERVER`**；dsh 會把它們記成 `HTTP_n`、不重試——這一點是已知差異，登記在 #1437，不是設計。
+  **重打只看失敗的碼**（#1437）：失敗只有一支分類器，`llm/retry` 與 `turn/failed` 同一個碼，碼在 `retryableCodes` 裡才重打。
+  碼的對應：429（含沒帶 `retry-after` header 的）是 `RATE_LIMIT`、5xx（含串流中段與沒有數字碼的錯誤信封）是 `SERVER`、逾時是 `TIMEOUT`、
+  連線層的失敗（連線被拒、讀串流時被切斷）是 `TRANSPORT`、「模型說停了（stop）卻沒有任何文字、推理或工具呼叫」是 `EMPTY_RESPONSE`——
+  這種空回覆照同一份預算重打，預算用盡就是這一輪失敗、`turn/failed.error.code` 是 `EMPTY_RESPONSE`（使用者看到的是失敗訊息，不再是什麼都沒有）。
+  **只有推理、沒有答案的回覆不重打**（沒有失敗訊息，網頁上只多一段折起來的思考過程）。
+  不在清單裡的不重打，不管預設或自己寫的清單怎麼寫：401／403 `AUTH`、402／配額 `QUOTA`、400／413 `INVALID_REQUEST`、上下文溢出
+  `CONTEXT_WINDOW_EXCEEDED`、其他 4xx `HTTP_<狀態>`（404、408、410、418、422、425…，**依 dsh，不是量到的救回率**）、解不開的回應 `UNKNOWN`。
+  把 `HTTP_422` 之類加進 `retryableCodes` 就會重打它。標題、摘要器與 eval 的呼叫不經過「空回覆算失敗」那一步（它們沒有「這一步沒有答案就失敗」的語意）。
   供應商給的 `retry-after` 不超過 `maxDelayMs` 就照它等（不加抖動），**超過就直接放棄**、不重打；每次等待是 `initialDelayMs` 倍增、
   封頂 `maxDelayMs`，抖動之後再夾到上限。**`mode: always`（無限重試）拒收**：這是對 dsh 的登記偏離——一輪沒有盡頭、中段失敗每次重付整個回覆，
   撤除條件是需要無限重試的情境（`docs/plugin-contract.md` 偏離表）。

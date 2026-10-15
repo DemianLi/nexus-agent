@@ -49,22 +49,19 @@
  * 蓋得過 2026-08-28 量到的 16 秒限流窗口。**那次量的是 `openai/gpt-oss-120b`，出貨的 nemotron 沒量過**，所以這個數字是
  * 「蓋過已知窗口」不是「量過這顆」。代價：串流中段失敗最壞重付 6 次整個回覆。
  *
- * **碼對得上我們的分類**（`live-model.ts` 的 `classifyLlmFailure`）：429（含沒帶 header 的）→ `RATE_LIMIT`、其他 HTTP 狀態 →
- * `SERVER`、逾時 → `TIMEOUT`、沒有狀態的連線問題 → `TRANSPORT`。`EMPTY_RESPONSE` 今天沒有生產者（沒有「空回覆就重打」的
- * 路徑），收在清單裡只為形狀與 dsh 一致。放棄的那幾類（401／403／402／配額、`STATUS_NO_RETRY` 列出的 4xx、上下文溢出、410 下架）不經過回報；沒列的非 5xx 4xx（408、422、425、418）
- * 沿用 `retryDecision` 照樣重打、記 `SERVER`（見下面的已知差異）。所以
- * `retryableCodes` 擋的是「分類出來的碼」，不是替它們翻案。
+ * **碼對得上我們的分類，而且重打只看碼**（#1437）：失敗分類只有 `live-model.ts` 的 `classifyTurnFailure` 一支，`llm/retry` 與
+ * `turn/failed` 同一個碼；`@nexus/core` 的重試迴圈讀的也是這個碼，沒有另一個「這次有沒有用」的判斷。429（含沒帶 header 的）→
+ * `RATE_LIMIT`、5xx（含串流中段、沒有數字碼的錯誤信封）→ `SERVER`、逾時 → `TIMEOUT`、連線層的失敗（連線被拒、讀串流時被切斷）→
+ * `TRANSPORT`、「stop 但沒有任何文字、推理或工具呼叫」→ `EMPTY_RESPONSE`（`@nexus/core` 的 `empty-response.ts`；只有推理沒有答案的
+ * 不算）。其餘不在清單裡、不重打：401／403 `AUTH`、402／配額 `QUOTA`、400／413 `INVALID_REQUEST`、上下文溢出
+ * `CONTEXT_WINDOW_EXCEEDED`、其他 4xx `HTTP_<狀態>`（404、408、410、418、422、425…）、解不開的回應與程式錯誤 `UNKNOWN`。
+ * 所以 `retryableCodes` 就是「哪幾種分類結果值得再打」，把 `HTTP_422` 加進去就會重打 422，不用改程式。
  *
  * **與 dsh 行為對齊的幾條**：`retry-after` 不超過 `maxDelayMs` 就照它等（不加抖動）、超過就放棄；抖動之後再夾到
  * `maxDelayMs`；**沒帶 header 的 429 照樣重試**（基座的預設 handler 會把它當容量不足放棄）。
  *
- * **已知差異（暫時，理由類別「範圍切分（暫時）」）：失敗分類沿用 `retryDecision`，三處與 dsh 不同。** (a) 有狀態、不是 429
- * 的失敗一律記 `SERVER`，含 `STATUS_NO_RETRY` 沒列的非 5xx 4xx（408、422、425、418 實測都重打）：dsh 記成 `HTTP_n`、不重試
- * （`llm-deepseek/src/transport.ts:22-35`）。(b) 沒有狀態、也不是逾時的失敗一律記 `TRANSPORT`：dsh 記成 `PI_AI_ERROR`、不重試
- * （`llm-pi-ai/src/stream.ts:42-67`）。(c) `EMPTY_RESPONSE` 沒有生產者：dsh 在「stop 但沒有 content」時產生並重試。這張卡的
- * 「要做」第 2 條是「今天的 `retryDecision` 判準照用」，改分類會讓使用者看得到的重試行為變動，要在自己的卡上量過、由 demian
- * 拍板。`classifyLlmFailure` 與 `classifyTurnFailure` 對同一類失敗的碼不一致（後者記 `UNKNOWN`），也放進後續卡。
- * **撤除條件**：後續分類卡（#1437）合併。
+ * **#1427 登記的三處暫時差異已在 #1437 撤除**：失敗分類不再沿用「除了明確無望的以外都重打」的舊判準，狀態碼、斷線、空回覆
+ * 都與 dsh 的 `providerError`／`mapStopReason` 同形（408／410／422／425 等「依 dsh」不重打，不是量到的救回率；量測見 #1437 卡上）。
  *
  * **偏離：`mode` 只收 `normal`，`always` 拒收。** dsh 的 `always` 對每一次失敗無限重試。我們是企業內部聊天機器人，一輪沒有
  * 盡頭，中段失敗每次都重付整個回覆，無限重試會無限重付。理由類別是**產品需求超出 dsh**。**撤除條件**：demian 提出需要無限

@@ -13,7 +13,7 @@ import type { Server } from 'node:http';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createModelCallRecorder, retryModelCall, SessionLog } from '@nexus/core';
 import {
-  classifyLlmFailure,
+  classifyTurnFailure,
   createLiveModel,
   LIVE_API_KEY_ENV,
   StreamIdleTimeoutError,
@@ -329,14 +329,14 @@ describe('重試寫進日誌', () => {
   }, 30_000);
 });
 
-describe('classifyLlmFailure：只認碼與名字，不解析訊息', () => {
-  it('429 → RATE_LIMIT；其他 HTTP 狀態 → SERVER，狀態碼帶著', () => {
-    expect(classifyLlmFailure(Object.assign(new Error('x'), { status: 429 }))).toEqual({
+describe('classifyTurnFailure（也是 llm/retry 用的那一支）：只認碼與名字，不解析訊息', () => {
+  it('429 → RATE_LIMIT；5xx → SERVER，狀態碼帶著', () => {
+    expect(classifyTurnFailure(Object.assign(new Error('x'), { status: 429 }))).toEqual({
       message: 'x',
       code: 'RATE_LIMIT',
       status: 429,
     });
-    expect(classifyLlmFailure(Object.assign(new Error('y'), { status: 502 }))).toMatchObject({
+    expect(classifyTurnFailure(Object.assign(new Error('y'), { status: 502 }))).toMatchObject({
       code: 'SERVER',
       status: 502,
     });
@@ -346,13 +346,13 @@ describe('classifyLlmFailure：只認碼與名字，不解析訊息', () => {
     const wrapped = new Error('Connection error.', {
       cause: Object.assign(new Error('z'), { status: 503 }),
     });
-    expect(classifyLlmFailure(wrapped)).toMatchObject({ code: 'SERVER', status: 503 });
+    expect(classifyTurnFailure(wrapped)).toMatchObject({ code: 'SERVER', status: 503 });
   });
 
-  it('逾時 → TIMEOUT；沒有狀態碼也不是逾時的 → TRANSPORT，且不帶 status', () => {
-    expect(classifyLlmFailure(new StreamIdleTimeoutError(100)).code).toBe('TIMEOUT');
-    const transport = classifyLlmFailure(new Error('socket hang up'));
-    expect(transport.code).toBe('TRANSPORT');
-    expect('status' in transport).toBe(false);
+  it('逾時 → TIMEOUT；沒有任何供應商痕跡的錯誤 → UNKNOWN，且不帶 status（#1437：不再一律當 TRANSPORT）', () => {
+    expect(classifyTurnFailure(new StreamIdleTimeoutError(100)).code).toBe('TIMEOUT');
+    const unknown = classifyTurnFailure(new Error('socket hang up'));
+    expect(unknown.code).toBe('UNKNOWN');
+    expect('status' in unknown).toBe(false);
   });
 });

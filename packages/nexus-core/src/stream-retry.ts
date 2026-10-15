@@ -9,6 +9,11 @@
  * - **第一則事件之前**：HTTP 錯誤（含沒有 `retry-after` 的 429）、連線失敗、到第一則事件的逾時。#1427 之前這一段歸 SDK 層
  *   （`AsyncCaller`，6 次、退避寫死 1／2／4／8／16／32 秒、日誌少報）；現在 SDK 層 `maxRetries` 是 0，由這一顆重打。
  * - **第一則事件之後**：吐了內容後中段出錯（in-band 的錯誤事件）、串流中途斷掉、吐了內容後停住（閒置逾時）。
+ * - **整次回應之後**：模型說停了（stop）卻什麼都沒有的空回覆（`EMPTY_RESPONSE`，{@link ./empty-response.ts}，#1437）——
+ *   它由圖裡的一顆 middleware 回報並拋，走同一份預算。
+ *
+ * **重打只看回報的碼**（#1437）：碼在 {@link StreamRetryOptions.retryableCodes} 裡才重打。回報的人只說「這是哪一種失敗」，
+ * 不替政策下判斷。
  *
  * 沒有回報的失敗一律原樣往外拋。重試只此一層，所以預算不會相乘（#1341 的 G4：舊制下首事件前連續 503 打到端點 9 次、
  * 日誌只有 2 顆 `llm/retry`）。
@@ -21,7 +26,8 @@
  * 三類失敗拋出來的東西長得完全不同：in-band 的錯誤是 SDK 解析 SSE 時自己拋的 `APIError`（`status` 是 `undefined`），斷線是
  * undici 的 `TypeError: terminated`，停住是我們自己的 `StreamIdleTimeoutError`。前一類的錯誤物件不經過我們的任何一層，貼不上
  * 標記；改它的類別又會動到今天所有「不重試」那條路的失敗分類。所以由 fetch 那一層在**看到失敗的當下**回報進這一次嘗試的範圍
- * （用 `AsyncLocalStorage` 帶，範圍外的回報是空操作），這一顆在 catch 到錯誤時讀它。錯誤本身原樣往外拋，失敗分類一個字不變。
+ * （用 `AsyncLocalStorage` 帶，範圍外的回報是空操作），這一顆在 catch 到錯誤時讀它。錯誤本身原樣往外拋。
+ * （#1437：回報的碼與 `turn/failed` 記的碼出自同一支分類器；讀端斷線那一類在錯誤物件上另有一個 `WeakSet` 記號，不改它的形狀。）
  *
  * ## 位置：記錄器外面
  *
@@ -89,10 +95,12 @@ export const STREAM_RETRY_MIDDLEWARE_NAME = 'nexusStreamRetry';
 
 /** 一次串流失敗，由 adapter（fetch 那一層）在看到的當下回報。 */
 export interface StreamFailure {
-  /** 失敗的種類，照 dsh 的碼：`TIMEOUT`（停住）、`TRANSPORT`（斷線）、其餘取 HTTP 狀態或供應商碼。只給人讀。 */
+  /**
+   * 失敗的種類，照 dsh 的碼：`TIMEOUT`（停住）、`TRANSPORT`（斷線）、`EMPTY_RESPONSE`、`RATE_LIMIT`、`SERVER`，
+   * 其餘取 HTTP 狀態（`HTTP_<n>`）或供應商碼。**重打與否只看它**（#1437）：碼在 {@link StreamRetryOptions.retryableCodes}
+   * 裡才重打，同 dsh 的 `retryableCodes`——沒有另一個「這次有沒有用」的旗標。
+   */
   readonly code: string;
-  /** 重打會不會有用。供應商說「請求本身有問題」（例如 400）的不重試。 */
-  readonly retryable: boolean;
   /** 供應商給的 HTTP 狀態（串流內的錯誤信封帶得出來時）。寫進 `llm/retry` 的 `failure.status`。 */
   readonly status?: number;
   /**
@@ -168,9 +176,10 @@ export const DEFAULT_STREAM_RETRY_MAX_DELAY_MS = 10_000;
 export const DEFAULT_STREAM_RETRY_JITTER_RATIO = 0.1;
 
 /**
- * dsh 的預設可重試碼（`retry-policy.ts:18-24`）：空回覆、限流、伺服器、逾時、斷線。**我們的分類對得上前四個**（`RATE_LIMIT`、`SERVER`、`TIMEOUT`、`TRANSPORT`；
- * `classifyLlmFailure`：429 → `RATE_LIMIT`、其餘 HTTP 狀態 → `SERVER`、逾時 → `TIMEOUT`、沒有狀態 → `TRANSPORT`）；
- * `EMPTY_RESPONSE` 今天沒有生產者（沒有「空回覆就重打」的路徑），收在清單裡是為了形狀與 dsh 一致。
+ * dsh 的預設可重試碼（`retry-policy.ts:18-24`）：空回覆、限流、伺服器、逾時、斷線。**五個都有生產者**（#1437）：
+ * `RATE_LIMIT`／`SERVER`／`TIMEOUT`／`TRANSPORT` 由 `@nexus/harness` 的 live-model 那支分類器產生（429、5xx 與 HTTP 之前的
+ * 串流內信封、逾時、斷線），`EMPTY_RESPONSE` 由 {@link createEmptyResponseMiddleware} 在「stop 但什麼都沒有」時產生。
+ * 其餘的碼（`AUTH`、`QUOTA`、`INVALID_REQUEST`、`HTTP_<n>`、`UNKNOWN`…）不在這裡，所以不重打。
  */
 export const DEFAULT_STREAM_RETRYABLE_CODES: readonly string[] = Object.freeze([
   'EMPTY_RESPONSE',
@@ -345,8 +354,9 @@ export async function retryModelCall<T>(
     const { scope, outcome, captured } = await runInAttempt(call);
     if (outcome.status === 'fulfilled') return outcome.value;
     const reported = scope.failure;
+    // 碼決定重不重打（#1437）：adapter 只回報「是哪一種失敗」，不替政策下判斷。
     const retriable =
-      reported?.retryable === true && codes.includes(reported.code) && attempt < options.maxRetries;
+      reported !== undefined && codes.includes(reported.code) && attempt < options.maxRetries;
     if (reported === undefined || !retriable) throw outcome.reason;
     // 供應商要求的等待：不超過上限就照它等，超過就放棄（照 dsh 的 normal 模式，原錯誤往外拋）。
     const asked = reported.retryAfterMs;
