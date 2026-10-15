@@ -217,6 +217,7 @@ export const FAILURE_CODE_LABEL: Readonly<Record<string, string>> = {
   SERVER: '服務端錯誤',
   TIMEOUT: '逾時',
   TRANSPORT: '連線失敗',
+  EMPTY_RESPONSE: '回覆是空的',
   UNKNOWN: '原因不明',
 };
 
@@ -230,6 +231,15 @@ export function failureCodeText(code: string): string {
   if (Object.hasOwn(FAILURE_CODE_LABEL, code)) return FAILURE_CODE_LABEL[code]!;
   const http = HTTP_FAILURE_CODE.exec(code);
   return http === null ? code : `HTTP ${http[1]}`;
+}
+
+/**
+ * 重試列的原因：失敗碼的一句話，帶了 HTTP 狀態就接在後面（「被限流 · HTTP 429」）。碼本身就是同一個數字的 `HTTP_<n>` 時
+ * 只寫一次「HTTP <n>」。
+ */
+export function failureReasonText(code: string, status?: number): string {
+  const text = failureCodeText(code);
+  return status === undefined || code === `HTTP_${status}` ? text : `${text} · HTTP ${status}`;
 }
 
 export type SignalKind = Exclude<TrajectoryDecision['kind'], 'compaction'>;

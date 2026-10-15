@@ -202,9 +202,12 @@ describe('觀測分頁：子代理自己的呼叫結構', () => {
     const calls = within(block).getAllByTestId('trace-subagent-call');
     expect(calls).toHaveLength(2);
     expect(within(block).getByTestId('trace-subagent-turn').textContent).toContain('交付的任務');
-    expect(within(calls[0]!).getByTestId('trace-subagent-retry').textContent).toContain(
-      '重試 1/3 · RATE_LIMIT · HTTP 429 · 等了',
-    );
+    // 原因走失敗碼的一句話（#1449），原碼留在 `data-failure-code` 與 `title`。
+    const retry = within(calls[0]!).getByTestId('trace-subagent-retry');
+    expect(retry.textContent).toContain('重試 1/3 · 被限流 · HTTP 429 · 等了');
+    const code = retry.querySelector('[data-failure-code]')!;
+    expect(code.getAttribute('data-failure-code')).toBe('RATE_LIMIT');
+    expect(code.getAttribute('title')).toBe('RATE_LIMIT');
     expect(within(calls[0]!).getByTestId('trace-subagent-tool').textContent).toContain('ls');
     expect(within(calls[0]!).getByTestId('trace-subagent-tool').textContent).toContain('完成');
     // 沒有內文：子代理的訊息不在這條路上。

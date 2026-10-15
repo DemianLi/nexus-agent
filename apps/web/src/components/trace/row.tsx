@@ -33,7 +33,13 @@ import { EXIT_PLAN_MODE, PLAN_OUTCOME_LABEL } from '@/lib/plan-review';
 import { reasoningRunning } from '@/lib/reasoning-view';
 import { ENDING_LABEL, TRACE_TARGET_MISSING_TEXT, sameRow } from '@/lib/trace-view';
 import type { TraceRow } from '@/lib/trace-view';
-import { SIGNAL_LABEL, approvalCodeText, clockText, durationText } from '@/lib/trajectory-view';
+import {
+  SIGNAL_LABEL,
+  approvalCodeText,
+  clockText,
+  durationText,
+  failureReasonText,
+} from '@/lib/trajectory-view';
 
 export const TRACE_LOCATE_LABEL = '在對話裡定位';
 
@@ -150,7 +156,8 @@ function RowBody({ row, names }: { row: TraceRow; names: ReadonlyMap<string, str
         <StaticLine
           icon={RotateCw}
           label={`重試 ${row.retry}/${row.maxRetries}`}
-          summary={row.status === undefined ? row.code : `${row.code} · HTTP ${row.status}`}
+          summary={failureReasonText(row.code, row.status)}
+          code={row.code}
           meta={
             <span data-testid="trace-time">
               {clockText(row.time)} · 等了 {durationText(row.waitedMs)}
