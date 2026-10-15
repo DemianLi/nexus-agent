@@ -418,6 +418,14 @@ export type {
 } from './request-snapshot.js';
 export { createModelCallIndexer, indexModelCalls, toolCallIds } from './model-call-index.js';
 export type { ModelCallIndex, ModelCallIndexer, ModelCallRecord } from './model-call-index.js';
+export { isModelCallFailure, markModelCallFailure } from './model-call-failure.js';
+export {
+  createEmptyResponseMiddleware,
+  EMPTY_RESPONSE_CODE,
+  EMPTY_RESPONSE_MIDDLEWARE_NAME,
+  EmptyResponseError,
+  isEmptyStopReply,
+} from './empty-response.js';
 export {
   createStreamRetryMiddleware,
   retryModelCall,

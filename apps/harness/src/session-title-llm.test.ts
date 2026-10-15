@@ -198,7 +198,7 @@ describe('送出去的是什麼、寫了什麼', () => {
     let mainCalls = 0;
     const mainError = new Error('主呼叫自己的錯，沒有向重試那一層回報過');
     const t = attached(async () => {
-      noteStreamFailure({ code: 'SERVER', retryable: true, status: 500 });
+      noteStreamFailure({ code: 'SERVER', status: 500 });
       titleReported = true;
       return stopReply();
     });
