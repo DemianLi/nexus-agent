@@ -1,3 +1,4 @@
+import type { Context } from '@nexus/cordis';
 import { describe, expect, it } from 'vitest';
 
 import { checkConformance } from './conformance.js';
@@ -6,7 +7,8 @@ import { createRegistryProvider, widgetConsumer, widgetManifest } from './fixtur
 import type { ProviderOptions } from './fixtures/registry.js';
 import * as widgetPlugin from './fixtures/widget-plugin.js';
 import * as widgetPluginWithDefault from './fixtures/widget-plugin-with-default.js';
-import { injectOf, need } from './token.js';
+import { ContractService } from './contract.js';
+import { defineToken, injectOf, need, service } from './token.js';
 import { widgetsToken } from './fixtures/registry.js';
 
 /** 一個合格的目標；`provider` 與 `module` 可以換成有缺陷的。 */
@@ -108,5 +110,62 @@ describe('一致性套件（驗收 G）', () => {
       target({ module: { ...widgetConsumer(), manifest: optional } }),
     );
     expect(failures[0]?.message).toContain('選配');
+  });
+});
+
+/** 插件自己**提供**服務的那一類（#1456）：服務名 `gadget`，插件同時消費 `widgets` 登記一筆，讓 `residue` 有東西量。 */
+describe('一致性套件：插件提供的服務（#1456）', () => {
+  interface Gadget {
+    ping(): string;
+  }
+  const gadgetToken = defineToken<Gadget>('gadget', '2.0.0');
+
+  class GadgetService extends ContractService<Gadget> implements Gadget {
+    constructor(ctx: Context, token = gadgetToken) {
+      super(ctx, token);
+    }
+    ping(): string {
+      return 'pong';
+    }
+  }
+
+  const provider = (apply: (ctx: Context) => void, version = gadgetToken.version) => ({
+    ...widgetConsumer(),
+    manifest: widgetManifest({ provides: [{ token: gadgetToken.name, version }] }),
+    apply(ctx: Context) {
+      service(ctx, widgetsToken).register('g');
+      apply(ctx);
+    },
+  });
+
+  it('`new` 繼承 ContractService 的類別提供：全過（掛上後讀得到、卸載後讀不到）', async () => {
+    const good = provider((ctx) => void new GadgetService(ctx));
+    expect(await checkConformance(target({ module: good }))).toEqual([]);
+  });
+
+  it('宣告提供卻沒有提供：unload 紅，訊息指名服務', async () => {
+    const failures = await checkConformance(target({ module: provider(() => {}) }));
+    expect(failures.map((f) => f.check)).toEqual(['unload']);
+    expect(failures[0]?.message).toContain('宣告提供 gadget');
+  });
+
+  it('契約版本與 manifest 宣告的不一致：unload 紅', async () => {
+    const failures = await checkConformance(
+      target({ module: provider((ctx) => void new GadgetService(ctx), '3.0.0') }),
+    );
+    expect(failures.map((f) => f.check)).toEqual(['unload']);
+    expect(failures[0]?.message).toContain('契約版本');
+  });
+
+  // 突變：提供者掛在 root 上、歸屬卻寫成這一列——撤除時不刪服務。列卸載之後 `root.get` 仍取得到一份孤兒。
+  it('撤除時不刪服務（服務掛在 root、不隨那一列走）：unload 紅，訊息指名「還留在 root 上」', async () => {
+    const leaky = provider((ctx) => {
+      class Leaky extends GadgetService {}
+      const leaked = new Leaky(ctx.root as Context);
+      (leaked as { provider: string }).provider = 'row-widget';
+    });
+    const failures = await checkConformance(target({ module: leaky }));
+    expect(failures.map((f) => f.check)).toEqual(['unload']);
+    expect(failures[0]?.message).toContain('還留在 root 上');
   });
 });

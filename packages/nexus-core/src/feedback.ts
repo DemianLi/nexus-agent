@@ -29,6 +29,11 @@
  *
  * - **沒有 `sessionId`**：dsh 帶它是因為分叉出來的會話會繼承父會話的回饋。我們不分叉，一份日誌
  *   就是一個會話。
+ * - **兩個服務併成一個、兩顆套件併成一顆**（#1456 Q3 (a)，類別：遷移卡不改行為（暫時））：dsh 的評分是 `messageFeedback`
+ *   服務（list／put／delete），評語是另一顆套件 `command-feedback` 提供的 `sessionFeedback` 服務（`record`）。{@link FeedbackService}
+ *   把 `record` 併成第四個方法，一顆 `@nexus/plugin-feedback` 套件提供。#278 起如此，這裡先前沒有登記。**撤除條件**：要拆時
+ *   另開卡，連同 home 變更紀錄裡 `feedback` 列 id 的遷移一起處理（紀錄裡找不到 id 的 patch 只警告就跳過，停用過的列會靜靜
+ *   重新啟用）。完整的偏離表在 `docs/plugin-contract.md`。
  */
 
 import type { LoggedMessage } from './logged-message.js';

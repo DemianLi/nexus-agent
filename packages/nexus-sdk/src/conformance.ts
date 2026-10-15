@@ -13,7 +13,7 @@
  * | --- | --- |
  * | `manifest` | manifest 在場、通過 {@link validateManifest} |
  * | `export-form` | 不能有 default 匯出；`name`／`apply` 在場；Loader 的 `unwrapExports` 取回的就是這個命名空間；`Config` 就是 manifest 的 `config`；`inject` 與 `consumes` 一致 |
- * | `unload` | 掛上後有貢獻、**經 fiber 卸載**（移除那一列）後活資源回到掛載前 |
+ * | `unload` | 掛上後有貢獻、**經 fiber 卸載**（移除那一列）後活資源回到掛載前；manifest 的 `provides` 宣告的服務掛上後在 root 上讀得到（歸屬與契約版本對），卸載後讀不到（#1456） |
  * | `missing` | 缺提供者時消費者停在 PENDING，等的服務名正好是 `consumes` 裡必要的那幾個 |
  *
  * 兩版並存與逾時留給版本路由那張卡。
@@ -218,6 +218,25 @@ export async function checkConformance(target: ConformanceTarget): Promise<Confo
     if (fiber?.state !== FIBER_STATE.ACTIVE) {
       fail('unload', `掛不上來（狀態 ${fiber?.state ?? '沒有 fiber'}），量不到卸載`);
     } else {
+      // `provides` 宣告的服務（#1456）：插件**自己提供**的那一類。`residue` 是呼叫端的閉包，量不到服務在不在 root 上，
+      // 所以這一格由套件自己讀 root：掛上後要讀得到、歸屬是這一列、契約版本同宣告；卸載後要讀不到（不論提供者狀態，
+      // `strict: false`）——撤除時不刪服務的提供者，開著的宿主會一直取到一份孤兒。
+      const provideProblems: string[] = [];
+      for (const provide of manifest?.provides ?? []) {
+        const value = live.root.get(provide.token) as
+          { readonly provider?: unknown; readonly contractVersion?: unknown } | undefined;
+        if (value === undefined) {
+          provideProblems.push(`宣告提供 ${provide.token}，掛上後 root 上讀不到`);
+        } else if (value.provider !== target.row) {
+          provideProblems.push(
+            `${provide.token} 的歸屬是 ${String(value.provider)}，不是這一列（用 \`new\` 繼承 ContractService 的類別，不要 ctx.plugin(Class)）`,
+          );
+        } else if (value.contractVersion !== provide.version) {
+          provideProblems.push(
+            `${provide.token} 的契約版本是 ${String(value.contractVersion)}，manifest 宣告的是 ${provide.version}`,
+          );
+        }
+      }
       const during = target.residue();
       if (during <= before) {
         fail(
@@ -241,6 +260,12 @@ export async function checkConformance(target: ConformanceTarget): Promise<Confo
           `卸載後活資源沒有回到掛載前：掛載前 ${before}、掛上後 ${during}、卸載後 ${after}`,
         );
       }
+      for (const provide of manifest?.provides ?? []) {
+        if (live.root.get(provide.token, false) !== undefined) {
+          provideProblems.push(`卸載後 ${provide.token} 還留在 root 上：提供者沒有隨那一列撤掉`);
+        }
+      }
+      if (provideProblems.length > 0) fail('unload', provideProblems.join('；'));
     }
   } finally {
     await live.root.fiber.dispose();
