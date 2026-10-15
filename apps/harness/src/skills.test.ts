@@ -5,6 +5,7 @@
  * prompt**，加上工具真的回了什麼。skills 這個擴充點的產物只有兩樣——prompt 裡多出來的
  * 那段清單，與模型照著清單去 `read_file` 時拿到的東西。斷言 registry 裡有幾筆來源證明
  * 不了任何事，那是 `@nexus/plugin-skills` 那邊薄測試的工作。
+ * 這一檔的手搭清單用 `skills.fixture.ts` 的舊外殼（#1446）；經樹進來的那一條在 `skills-on-tree.test.ts`。
  *
  * 有幾條是**斷言缺陷**的（`看得到讀不到`、`custom subagent 沒有`、`不合規範的名字照樣進清單`）。
  * 跟 [`contained-backend.test.ts`](./contained-backend.test.ts) 那組升版絆索同樣的用意：這些是
@@ -20,7 +21,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { PluginEntry } from '@nexus/core';
-import { createSkillsPlugin } from '@nexus/plugin-skills';
+
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
@@ -29,6 +30,7 @@ import { ContainedFilesystemBackend } from './contained-backend.js';
 import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { createSkillsPlugin } from './skills.fixture.js';
 
 /** 一輪 prompt 裡的 system 訊息。基座把 skill 清單併進 system prompt，不是併進對話。 */
 function systemPrompt(messages: readonly BaseMessage[]): string {

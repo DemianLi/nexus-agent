@@ -124,6 +124,11 @@ describe('活著的設定版本（#1442）', () => {
       expect(live?.[0]).toMatchObject({ current: true, threads: ['t1', 't2'] });
       expect(live?.[0]?.version).toMatch(/^hmac-sha256:[0-9a-f]{16}$/u);
     }
+    // 遷上樹的 skills（#1446）也是掛上的列、next-thread 那一類：自動進表，沒有為它加任何程式。
+    expect(rowOf(first, 'skills').live?.[0]).toMatchObject({
+      current: true,
+      threads: ['t1', 't2'],
+    });
     const oldVersion = {
       echo: rowOf(first, 'echo').live![0]!.version,
       todo: rowOf(first, 'todo').live![0]!.version,

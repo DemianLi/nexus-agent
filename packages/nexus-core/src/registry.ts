@@ -1878,7 +1878,7 @@ function assertLoadableMemoryPath(path: string, origin: PluginOrigin): void {
  *   目錄，載兩次只會讓同名 skill 自己覆蓋自己，那正是重複檢查要擋的事。
  * @throws 路徑以 `~` 開頭、含 `\\`、不是絕對路徑、或含 `.` / `..` / 空的中間路段。
  */
-function assertLoadableSkillsPath(path: string, origin: PluginOrigin): string {
+export function assertLoadableSkillsPath(path: string, origin: PluginOrigin): string {
   const reject = (why: string): never => {
     throw new Error(
       `${formatOrigin(origin)} 註冊的 skill 來源 "${path}" ${why}。` +

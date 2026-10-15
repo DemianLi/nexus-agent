@@ -42,7 +42,8 @@ vi.mock('@nexus/core', async (importOriginal) => {
  * 這條測試在 `deepagents` 被拿乾淨之前同時是升版絆索：基座改了組裝（多一顆 middleware、換順序、改提示），
  * 它會在這裡紅，而不是在生產上才發現。基座拿乾淨之後這條測試連同 `createDeepAgent` 的 import 一起拿掉。
  *
- * **沒涵蓋的**：skills 與 memory 的 middleware（兩個 plugin 都不在預設清單裡）、Anthropic／Bedrock 的快取
+ * **沒涵蓋的**：skills 與 memory 的 middleware（這支測試自己的預設插件清單只有 `WORKER`，不帶這兩個 plugin；出貨清單 `cordis.yml` 上
+ * skills 是掛著的，它的 prompt 行為驗收在 `skills.test.ts` 與 `skills-on-tree.test.ts`，memory 沒出貨）、Anthropic／Bedrock 的快取
  * middleware（組裝點對它們拋出具名錯誤，不照搬）、`interruptOn`、async 與 fork 子代理——都是「拒絕」而不是
  * 「照做」，由 `agent-assembly.test.ts` 釘住那個拒絕。
  */

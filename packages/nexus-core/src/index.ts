@@ -169,7 +169,7 @@ export type {
   RootOnlyRefusal,
   ScopeKey,
 } from './registry.js';
-export { createRegistry } from './registry.js';
+export { assertLoadableSkillsPath, createRegistry } from './registry.js';
 export type {
   DispatchMode,
   EventDispatcher,

@@ -829,6 +829,8 @@ function bridgeEntry(entry: ConfigEntry, module: FunctionPluginModule): PluginEn
 interface FoldedContributions {
   readonly tools: readonly StructuredToolInterface[];
   readonly projections: readonly ProjectionUnit[];
+  /** 技能來源路徑（#1446），照那一列登記的順序。 */
+  readonly skillSources: readonly string[];
 }
 
 /**
@@ -845,6 +847,9 @@ function registerFolded(
 ): void {
   for (const tool of contributions.tools) registry.tools.register(tool as StructuredTool);
   for (const unit of contributions.projections) registry.projections.register(unit);
+  // 技能來源走 `registry.skills.addSource`，**照那一列登記的順序**：`sources` 依序即優先序（後面的來源贏過前面的同名 skill）。
+  // 格式與重名在樹上的提供者登記時就驗過了，這一層的 `NamedEntries` 只是第二道（相容層的列也走它）。
+  for (const path of contributions.skillSources) registry.skills.addSource(path);
 }
 
 /** 樹上這一列起來了：折進它登記的工具與投影單元。 */
@@ -1507,7 +1512,11 @@ async function loadPluginConfigOnce(
       rows.set(off, { id: origin.id, module: row.name });
       return off;
     }
-    const bound = bindToTree(entry, { tools: verdict.tools, projections: verdict.projections });
+    const bound = bindToTree(entry, {
+      tools: verdict.tools,
+      projections: verdict.projections,
+      skillSources: verdict.skillSources,
+    });
     rows.set(bound, { id: origin.id, module: row.name });
     return bound;
   });

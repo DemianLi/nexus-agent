@@ -31,10 +31,11 @@ import { repositoryRoot } from './package-invariants.js';
 
 const ROOT = repositoryRoot();
 
-/** 這個 repo 現在有的插件套件數。**寫死**：拿掃描的結果自己比自己驗不出東西。舊插件 18 顆，加上 echo、token-meter 與 trajectory。`@nexus/session` 不是插件（目錄是 `packages/nexus-session`，不在 `nexus-plugin-*` 底下），掃描器的定義就是目錄前綴，所以總數不因它而動。 */
+/** 這個 repo 現在有的插件套件數。**寫死**：拿掃描的結果自己比自己驗不出東西。舊插件 18 顆，加上 echo、token-meter 與 trajectory。skills 本來就是一個套件，遷出不改總數；`@nexus/skills` 與 `@nexus/session` 一樣是定義套件、不在 `nexus-plugin-*` 底下。`@nexus/session` 不是插件（目錄是 `packages/nexus-session`，不在 `nexus-plugin-*` 底下），掃描器的定義就是目錄前綴，所以總數不因它而動。 */
 const EXPECTED_PLUGIN_PACKAGES = 21;
 const EXPECTED_MIGRATED = [
   '@nexus/plugin-echo',
+  '@nexus/plugin-skills',
   '@nexus/plugin-token-meter',
   '@nexus/plugin-trajectory',
 ];
@@ -54,7 +55,7 @@ describe('對著真的 repo：掃得到、判得對、零違規', () => {
     expect(failed.map(([dir]) => dir)).toEqual([]);
   });
 
-  it('遷出的集合正好是 echo、token-meter 與 trajectory；舊插件（含 ask-user、present）不在裡面', () => {
+  it('遷出的集合正好是 echo、skills、token-meter 與 trajectory；舊插件（含 ask-user、present）不在裡面', () => {
     expect(migratedPackages(packages, loaded).map((pkg) => pkg.name)).toEqual(EXPECTED_MIGRATED);
     const older = packages
       .map((pkg) => pkg.name)
@@ -64,7 +65,7 @@ describe('對著真的 repo：掃得到、判得對、零違規', () => {
     expect(older).toContain('@nexus/plugin-present');
   });
 
-  it('現在零違規（驗收 C：echo、token-meter 與 trajectory 套用 SDK lint 設定、有一致性測試）', async () => {
+  it('現在零違規（驗收 C：echo、skills、token-meter 與 trajectory 套用 SDK lint 設定、有一致性測試）', async () => {
     const violations = await collectMigratedPluginViolations(ROOT, packages, loaded);
     expect(violations.map(formatMigratedPluginViolation)).toEqual([]);
   });
