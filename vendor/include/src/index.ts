@@ -79,6 +79,21 @@ export namespace Include {
   }
 }
 
+/**
+ * nexus local modification: where in `value` the Loader would `eval` something (a `__jsExpr` value, judged by the
+ * Loader's own `isJsExpr`), or `undefined`. `seen`: YAML aliases make the structure shared or cyclic, visit each object once.
+ */
+function findJsExpr(value: unknown, path: string, seen = new WeakSet<object>()): string | undefined {
+  if (typeof value !== 'object' || value === null || seen.has(value)) return undefined
+  seen.add(value)
+  if (isJsExpr(value)) return path
+  for (const [key, item] of Object.entries(value)) {
+    const found = findJsExpr(item, Array.isArray(value) ? `${path}[${key}]` : `${path}.${key}`, seen)
+    if (found !== undefined) return found
+  }
+  return undefined
+}
+
 export class Include extends EntryTree {
   static inject = ['loader']
 
@@ -415,6 +430,14 @@ export class Include extends EntryTree {
     const only = this.config.only
     const tree = only === undefined ? patched : patched.filter((options) => only.includes(options.name))
     this._pendingTree = applyJournal(tree, this.journal, undefined, this.warn)
+    // nexus local modification: `_pendingTree` is the object `root.update` is about to hand to the Loader, which `eval`s
+    // every `__jsExpr` it finds. Reject the whole tree here, before anything of it is applied (the tree already applied stays).
+    for (const [index, options] of (this._pendingTree ?? []).entries()) {
+      const found = findJsExpr(options, `entry ${JSON.stringify(options?.id ?? index)}`)
+      if (found === undefined) continue
+      this._pendingTree = undefined
+      throw new Error(`config file ${this.filename}: ${found} carries \`__jsExpr\`; this host does not accept expressions in the tree (the Loader would eval it)`)
+    }
     this._applyTask ??= (async () => {
       try {
         while (this._pendingTree) {

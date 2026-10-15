@@ -377,6 +377,100 @@ describe('設定帶 __jsExpr', () => {
       ),
     ).rejects.toThrow(PluginTreeError);
   }, 60000);
+
+  // rc.11 起（上游 #179）Loader 連 `disabled` 都會 eval。出貨檔那一列不經 patch：相容層的 schema 與 `assertNoJsExpr(patches)` 都
+  // 看不到它，只有「Include 讀檔、交給 Loader 之前」那一關（vendor 本地修改第 11 條）擋得到。量法是表達式帶副作用計數：
+  // 光看「被拒」分不出「拒了但先 eval 了」。拿掉那一關，這裡是 hits 為 1。
+  it.each([
+    ['disabled', (expr: string) => `  disabled:\n    __jsExpr: ${JSON.stringify(expr)}\n`],
+    [
+      'config 裡',
+      (expr: string) => `  config:\n    prefix:\n      __jsExpr: ${JSON.stringify(expr)}\n`,
+    ],
+  ])(
+    '出貨檔那一列的 %s 帶 __jsExpr、patches 為空，直接交給樹：被拒，沒有被 eval',
+    async (_label, body) => {
+      const counter = `__jsExprHits_${String(Date.now())}`;
+      const bag = globalThis as Record<string, unknown>;
+      const expr = `(globalThis[${JSON.stringify(counter)}] = (globalThis[${JSON.stringify(counter)}] ?? 0) + 1, true)`;
+      try {
+        const root = newRoot();
+        const dir = scratch();
+        const shipped = write(
+          dir,
+          'cordis.yml',
+          `- id: echo\n  name: '${ECHO_MODULE}'\n${body(expr)}`,
+        );
+        const failure = await root.tree
+          .run(() =>
+            root.tree.sync({
+              shipped,
+              patches: [],
+              rows: [{ id: 'echo', module: ECHO_MODULE, disabled: false, config: {} }],
+            }),
+          )
+          .then(
+            () => undefined,
+            (error: unknown) => error,
+          );
+        expect(failure).toBeInstanceOf(PluginTreeError);
+        expect((failure as PluginTreeError).message).toMatch(/__jsExpr/u);
+        expect(bag[counter] ?? 0).toBe(0);
+      } finally {
+        delete bag[counter];
+      }
+    },
+    60000,
+  );
+
+  it('Include 已經起來之後重讀到帶 __jsExpr 的檔：下一次推清單被拒成 PluginTreeError，沒有被 eval，樹維持原樣', async () => {
+    const counter = `__jsExprHits_${String(Date.now())}`;
+    const bag = globalThis as Record<string, unknown>;
+    const expr = `(globalThis[${JSON.stringify(counter)}] = (globalThis[${JSON.stringify(counter)}] ?? 0) + 1, true)`;
+    try {
+      const root = newRoot();
+      const dir = scratch();
+      const shipped = write(dir, 'cordis.yml', ECHO_SHIPPED);
+      const rowOf = (prefix: string) => [
+        { id: 'echo', module: ECHO_MODULE, disabled: false, config: { prefix } },
+      ];
+      const first = await root.tree.run(() =>
+        root.tree.sync({
+          shipped,
+          patches: [{ id: 'echo', config: { prefix: 'x' } }],
+          rows: rowOf('x'),
+        }),
+      );
+      expect(first.verdict('echo').kind).toBe('active');
+      // 產品路徑今天沒有人重讀出貨檔（Include 只在路徑換掉時重起）；這裡白箱地叫它重讀，量「已經起來」之後那一關。
+      const context = await root.tree.context();
+      const include = context.loader.resolve('include:echo').parent.tree as unknown as {
+        refresh(): Promise<void>;
+      };
+      writeFileSync(
+        shipped,
+        `- id: echo\n  name: '${ECHO_MODULE}'\n  disabled:\n    __jsExpr: ${JSON.stringify(expr)}\n`,
+      );
+      await include.refresh();
+      const failure = await root.tree
+        .run(() =>
+          root.tree.sync({
+            shipped,
+            patches: [{ id: 'echo', config: { prefix: 'z' } }],
+            rows: rowOf('z'),
+          }),
+        )
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+      expect(failure).toBeInstanceOf(PluginTreeError);
+      expect((failure as PluginTreeError).message).toMatch(/__jsExpr/u);
+      expect(bag[counter] ?? 0).toBe(0);
+    } finally {
+      delete bag[counter];
+    }
+  }, 60000);
 });
 
 describe('插件自我停用只在記憶體，但同一份宣告不再被重新掛上（#1424）', () => {

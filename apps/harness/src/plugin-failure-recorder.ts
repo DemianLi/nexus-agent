@@ -29,7 +29,7 @@
  *
  * ## `self-disabled`（#1424）
  *
- * Loader 的 case 7 在呼叫點發的 `loader/self-disable` 經 `PluginTree.onSelfDisable` 進來，記一筆只記不折的 `self-disabled`
+ * Loader 處理插件自我停用的那一格在呼叫點發的 `loader/self-disable` 經 `PluginTree.onSelfDisable` 進來，記一筆只記不折的 `self-disabled`
  * （列 id、模組名；actor 沿用 `serve`）。**規則同 `failed` 的第一二條**：紀錄檔不在就什麼都不做、不建檔，一行日誌都不出；
  * 等鎖上限 2 秒；不 reject、不等寫完。**去重不在這裡**：同一個行程裡同一列同一份宣告只會被叫到一次（樹的記憶，
  * `plugin-tree.ts`），重啟後那一列又自己停用就是新的事件、再記一筆。閃動在樹的記憶那一頭已經止住，所以沒有紀錄檔不影響行為。
