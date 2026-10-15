@@ -52,10 +52,14 @@
 # 是 backend 命名空間下的 `/skills/`，要加別的目錄在 `sources` 列出（依序即優先序）。
 #
 # **沒有 skill 就一個字都不加**（照 dsh：目錄訊息清單為空且從沒發佈過就不出現，
-# `packages/skill/tool-skill/src/index.ts:237`）：沒給 `--workspace`、或工作區沒有 `skills/`，
+# `packages/skill/tool-skill/src/index.ts:239`）：沒給 `--workspace`、或工作區沒有 `skills/`，
 # 送給模型的 system prompt 與沒掛這一列逐位元組相同，空結果也只掃一次。基座的 skills
 # middleware 做不到這一點（對空清單照樣接約 2000 字、又每一輪重掃），所以組裝點包了一層，
 # 偏離登記在 `packages/nexus-core/src/skills-middleware.ts` 檔頭。
+#
+# **這一列走 Cordis 樹**（#1446）：`sources` 經技能來源接縫（`@nexus/skills`）登記，路徑格式與重名在讀清單那一步就驗
+# （寫錯的路徑那一列掉在 `apply`，不等到組 thread）；折回每條 thread 的 `registry.skills.addSource` 之後，基座的中介層與
+# 模型看到的 prompt 位元組都沒變。
 - id: skills
   name: '@nexus/plugin-skills'
 

@@ -7,8 +7,9 @@
  * |---|---|---|
  * | `tools` | 行程級的工具登記處（`@nexus/tools/provider`），契約服務，一列 | `tools` 服務的提供者 |
  * | `projections` | 行程級的投影登記處（`@nexus/projections/provider`，#1421），契約服務，一列 | `sessionProjections` 服務的提供者 |
+ * | `skill-sources` | 行程級的技能來源登記處（`@nexus/skills/provider`，#1446），契約服務，一列 | `skills` 服務的提供者（形狀不同：收路徑，不收提供者，偏離登記在 `@nexus/skills`） |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 | `include`（`app-boot` 的 `entry.update({ config: { ...includeConfig, patches } })`） |
- * | `include:<id>` | Include 底下的列，今天是 echo、token-meter 與 trajectory（#1435；模組有 `manifest` 匯出的才上樹） | 各插件 |
+ * | `include:<id>` | Include 底下的列，今天是 echo、token-meter、trajectory 與 skills（#1446；模組有 `manifest` 匯出的才上樹） | 各插件 |
  *
  * ## 清單怎麼進樹
  *
@@ -61,6 +62,8 @@ import type { EntryOptions } from '@nexus/cordis-plugin-loader';
 import { createProjectionsProvider } from '@nexus/projections/provider';
 import type { ProjectionEntry } from '@nexus/projections/provider';
 import { ContractError, FIBER_STATE, missingServices } from '@nexus/sdk';
+import { createSkillSourcesProvider } from '@nexus/skills/provider';
+import type { SkillSourceEntry } from '@nexus/skills/provider';
 import { createToolsProvider } from '@nexus/tools/provider';
 import type { ToolEntry } from '@nexus/tools/provider';
 
@@ -71,6 +74,9 @@ export const TOOLS_ROW_ID = 'tools';
 
 /** 投影登記處那一列的 id。 */
 export const PROJECTIONS_ROW_ID = 'projections';
+
+/** 技能來源登記處那一列的 id。 */
+export const SKILL_SOURCES_ROW_ID = 'skill-sources';
 
 /** Include 那一列的 id。 */
 export const INCLUDE_ROW_ID = 'include';
@@ -134,6 +140,11 @@ export type RowVerdict =
        * 不會撞上它自己的重複拒絕（`NamedEntries`，照舊）。
        */
       readonly projections: readonly ProjectionUnit[];
+      /**
+       * 這一列登記的技能來源路徑（#1446），**照它登記的順序**（`sources` 依序即優先序，後面的來源贏過前面的同名 skill）。
+       * 技能來源不共用：同一個目錄兩列登記，後者在提供者那裡就拒絕（Q3 (a)），所以每條路徑只會屬於一列。
+       */
+      readonly skillSources: readonly string[];
     }
   | { readonly kind: 'off' }
   | {
@@ -216,6 +227,7 @@ export class PluginTree {
   #context?: Promise<Context>;
   #provider = createToolsProvider();
   #projections = createProjectionsProvider();
+  #skillSources = createSkillSourcesProvider();
   /** 串行化 {@link run}。 */
   #chain: Promise<unknown> = Promise.resolve();
   /** 最後一次推給 Include 的設定簽章；一樣就不推。 */
@@ -241,9 +253,9 @@ export class PluginTree {
   onSelfDisable?: (event: SelfDisableEvent) => void;
 
   /**
-   * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections` 那兩列。
+   * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections`、`skill-sources` 那三列。
    *
-   * @returns 已掛好 Loader 與 `tools`、`projections` 列的根。
+   * @returns 已掛好 Loader 與 `tools`、`projections`、`skill-sources` 列的根。
    */
   context(): Promise<Context> {
     this.#context ??= this.#build();
@@ -267,10 +279,12 @@ export class PluginTree {
     Object.assign(root.loader.builtins, {
       [TOOLS_ROW_ID]: this.#provider.Provider,
       [PROJECTIONS_ROW_ID]: this.#projections.Provider,
+      [SKILL_SOURCES_ROW_ID]: this.#skillSources.Provider,
       [INCLUDE_ROW_ID]: Include,
     });
     await this.#create(root, { id: TOOLS_ROW_ID, name: `cordis:${TOOLS_ROW_ID}` });
     await this.#create(root, { id: PROJECTIONS_ROW_ID, name: `cordis:${PROJECTIONS_ROW_ID}` });
+    await this.#create(root, { id: SKILL_SOURCES_ROW_ID, name: `cordis:${SKILL_SOURCES_ROW_ID}` });
     await root.loader.await();
     return root;
   }
@@ -446,6 +460,7 @@ export class PluginTree {
     const verdicts = new Map<string, RowVerdict>();
     for (const row of rows) verdicts.set(row.id, await this.#verdictOf(root, row, entries));
     this.#assignProjections(rows, verdicts, this.#projections.entries());
+    this.#assignSkillSources(rows, verdicts, this.#skillSources.entries());
     return {
       verdict: (id) =>
         verdicts.get(id) ?? {
@@ -484,6 +499,34 @@ export class PluginTree {
       const verdict = verdicts.get(row.id);
       if (verdict?.kind !== 'active') continue;
       verdicts.set(row.id, { ...verdict, projections: owned.get(row.id) ?? [] });
+    }
+  }
+
+  /**
+   * 把技能來源路徑分給列（#1446）：登記者是哪一列就交給哪一列，**照登記順序**。
+   *
+   * 不共用，所以不像 {@link #assignProjections} 要挑「第一個起來的」：提供者已經讓同一個目錄只有一個登記者。登記者不是
+   * `active` 的列（掉了、停用）它的登記已經隨那一列撤掉，這裡再用 verdict 擋一次，是「提供者還沒撤、清單上已經判掉」
+   * 的那一小段不外漏。
+   */
+  #assignSkillSources(
+    rows: readonly TreeRowInput[],
+    verdicts: Map<string, RowVerdict>,
+    entries: readonly SkillSourceEntry[],
+  ): void {
+    const owned = new Map<string, string[]>();
+    const rowIdOf = new Map(rows.map((row) => [treeId(row.id), row.id]));
+    for (const entry of entries) {
+      const owner = rowIdOf.get(entry.source);
+      if (owner === undefined || verdicts.get(owner)?.kind !== 'active') continue;
+      const paths = owned.get(owner) ?? [];
+      paths.push(entry.path);
+      owned.set(owner, paths);
+    }
+    for (const row of rows) {
+      const verdict = verdicts.get(row.id);
+      if (verdict?.kind !== 'active') continue;
+      verdicts.set(row.id, { ...verdict, skillSources: owned.get(row.id) ?? [] });
     }
   }
 
@@ -542,6 +585,8 @@ export class PluginTree {
         tools: entries.filter((item) => item.source === id).map((item) => item.tool),
         // 投影單元由 `#assignProjections` 在所有列的結果都有了之後再分：共用的 key 只能給一列。
         projections: [],
+        // 技能來源路徑由 `#assignSkillSources` 在所有列的結果都有了之後再分。
+        skillSources: [],
       };
     }
     if (fiber.state === FIBER_STATE.FAILED) {
@@ -587,14 +632,15 @@ export interface DetachedMount {
   readonly config: unknown;
 }
 
-/** {@link mountDetached} 取出的東西：這一列登記的工具與投影單元。 */
+/** {@link mountDetached} 取出的東西：這一列登記的工具、投影單元與技能來源路徑。 */
 export interface DetachedContributions {
   readonly tools: readonly StructuredToolInterface[];
   readonly projections: readonly ProjectionUnit[];
+  readonly skillSources: readonly string[];
 }
 
 /**
- * 不經產品的樹，把一顆函式插件單獨掛一次、取出它登記的工具與投影單元、立刻卸載。
+ * 不經產品的樹，把一顆函式插件單獨掛一次、取出它登記的工具、投影單元與技能來源路徑、立刻卸載。
  *
  * 給**沒有樹的呼叫端**用：手搭 `PluginEntry` 清單、直接 `createCliAgent` 的測試與基準任務，以及 `shippedPlugins()`。
  * 走的是跟產品同一條路（真的 Loader、真的 `tools` 提供者、真的 `ctx.effect`），差別只在樹是用完即丟的。
@@ -607,6 +653,7 @@ export interface DetachedContributions {
 export async function mountDetached(mount: DetachedMount): Promise<DetachedContributions> {
   const provider = createToolsProvider();
   const projections = createProjectionsProvider();
+  const skillSources = createSkillSourcesProvider();
   const root = new Context();
   const contractErrors = new Map<string, ContractError>();
   root.logger.exporter({
@@ -623,12 +670,14 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
     Object.assign(root.loader.builtins, {
       [TOOLS_ROW_ID]: provider.Provider,
       [PROJECTIONS_ROW_ID]: projections.Provider,
+      [SKILL_SOURCES_ROW_ID]: skillSources.Provider,
       plugin: mount.module,
     });
     const create = (options: EntryOptions) =>
       root.loader.create(options as Omit<EntryOptions, 'id'>);
     await create({ id: TOOLS_ROW_ID, name: `cordis:${TOOLS_ROW_ID}` });
     await create({ id: PROJECTIONS_ROW_ID, name: `cordis:${PROJECTIONS_ROW_ID}` });
+    await create({ id: SKILL_SOURCES_ROW_ID, name: `cordis:${SKILL_SOURCES_ROW_ID}` });
     await create({
       id: mount.id,
       name: 'cordis:plugin',
@@ -646,6 +695,10 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
           .entries()
           .filter((entry) => entry.sources.includes(mount.id))
           .map((entry) => entry.unit),
+        skillSources: skillSources
+          .entries()
+          .filter((entry) => entry.source === mount.id)
+          .map((entry) => entry.path),
       };
     }
     if (fiber?.state === FIBER_STATE.FAILED) {
