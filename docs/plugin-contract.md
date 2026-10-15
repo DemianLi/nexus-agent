@@ -349,7 +349,7 @@ harness 只跑 import 圖上的測試，而 gate 是動態載入、不在圖上�
 
 | 規則 | 怎麼做 | 為什麼 |
 | --- | --- | --- |
-| **逐條 thread 的東西，呼叫當下才拿** | 要會話日誌用 `registry.sessions.forCall(config)`，要答題管道用 `registry.services.get(CHANNEL_FOR_THREAD_SERVICE)?.(callThreadId(config))`；**這支函式沒提供、或提供了但對這條 thread 回 `undefined`，都退回 `channel`**。工具 handler 與 middleware 都從呼叫設定的 `configurable.thread_id` 拿身分，`PipelineExecution.thread` 是同一個值 | `apply` 只跑一次；`thread_id` 在 root、同步子代理、背景子代理三種位置都到得了 handler 與 middleware（`apps/harness/src/thread-id-reaches-handlers.test.ts` 實測） |
+| **逐條 thread 的東西，呼叫當下才拿** | 要會話日誌，相容層的插件用 `registry.sessions.forCall(config)`、**樹上的插件用 `sessionLookupToken` 服務的 `forCall(config)`**（#1463，兩者是同一支 `pickSessionForCall`），要答題管道用 `registry.services.get(CHANNEL_FOR_THREAD_SERVICE)?.(callThreadId(config))`；**這支函式沒提供、或提供了但對這條 thread 回 `undefined`，都退回 `channel`**。工具 handler 與 middleware 都從呼叫設定的 `configurable.thread_id` 拿身分，`PipelineExecution.thread` 是同一個值 | `apply` 只跑一次；`thread_id` 在 root、同步子代理、背景子代理三種位置都到得了 handler 與 middleware（`apps/harness/src/thread-id-reaches-handlers.test.ts` 實測） |
 | **狀態以日誌為準，閉包裡的暫存表鍵要帶 thread** | 暫存表（例如 present 的「已呼叫、尚未落定」）的鍵是 `thread \0 位址 \0 callId`，不是 `callId` | 模型給的 `tool_call.id` 是各 thread 各自編號的，兩條 thread 同時懸著同一個 `callId` 是會發生的 |
 
 **身分三種位置**：root 與同步子代理的 `thread_id` 是 root 那一條（子代理身分靠 `checkpoint_ns`）；背景子代理的

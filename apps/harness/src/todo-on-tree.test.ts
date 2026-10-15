@@ -390,7 +390,54 @@ describe('E：同一棵樹上多條 thread 同時活著，每一次呼叫靠 thr
     await closeThread(other);
   }, 60000);
 
-  it('第二條 thread 活著時，核准（問答）中斷之後 resume 的那一次呼叫，仍寫進自己的日誌', async () => {
+  it('第二條 thread 活著時，核准中斷（閘門問了人）之後 resume 的那一次呼叫，仍寫進自己的日誌', async () => {
+    const { env } = home();
+    const booted = await boot(env);
+    const other = await openThread(booted, 'other-approve', [
+      { content: '先規劃。', toolCalls: [writeCall('另一條的計畫')] },
+      { content: '收工。' },
+    ]);
+    await runOn(other);
+
+    // 閘門只問 `todo_write`：這一條停在核准，resume 之後工具才真的被執行。
+    const gate: PluginEntry = {
+      plugin: {
+        name: 'todo-gate',
+        apply(registry) {
+          registry.approvals.gate((exec, next) =>
+            exec.name === TODO_TOOL_NAME ? { kind: 'ask', reason: 'todo 要人看過' } : next(),
+          );
+        },
+      },
+    };
+    const mine = await openThread(
+      booted,
+      'mine-approve',
+      [
+        { content: '先規劃。', toolCalls: [writeCall('核准之後的計畫')] },
+        { content: '收工。' },
+        { content: '再收一次。' },
+      ],
+      { extra: [gate] },
+    );
+    const paused = (await runOn(mine)) as { __interrupt__?: unknown[] };
+    expect(paused.__interrupt__).toHaveLength(1);
+    expect(todosIn(mine.sessions.root.events)).toEqual([]);
+
+    await mine.built.agent.invoke(new Command({ resume: { decisions: [{ type: 'approve' }] } }), {
+      configurable: { thread_id: mine.threadId },
+    });
+    expect(todosIn(mine.sessions.root.events)).toEqual([
+      [{ content: '核准之後的計畫', status: 'in_progress' }],
+    ]);
+    expect(todosIn(other.sessions.root.events)).toEqual([
+      [{ content: '另一條的計畫', status: 'in_progress' }],
+    ]);
+    await closeThread(mine);
+    await closeThread(other);
+  }, 60000);
+
+  it('第二條 thread 活著時，問答中斷（ask_user_question）之後 resume 的那一次呼叫，仍寫進自己的日誌', async () => {
     const { env } = home();
     const booted = await boot(env);
     const other = await openThread(booted, 'other-resume', [
