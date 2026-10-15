@@ -2,7 +2,12 @@ import type { WireContextPressure } from '@nexus/wire';
 import { useState } from 'react';
 
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
-import { contextMeterLabel, contextMeterView, percentText } from '@/lib/context-meter-view';
+import {
+  DORMANT_ROW_TEXT,
+  contextMeterLabel,
+  contextMeterView,
+  percentText,
+} from '@/lib/context-meter-view';
 
 /** 環的半徑：畫在 16×16 的 viewBox 裡，線寬 2。 */
 const RADIUS = 6;
@@ -18,6 +23,8 @@ const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
  * - **80% 以上變警示色**，不另外閃。環的弧長變化走「進度」（`motion-progress`，§7），減少動態時直接跳到新值。
  * - **報讀**：按鈕名稱是「對話用量：約 N%，點開看明細」。不掛 `role="status"`：代理的現況只由狀態列唸（§8），
  *   每次模型呼叫都唸一次太吵。最近那一行不只靠粗體，另有一句給報讀的「（最近）」。
+ * - **不會觸發的門檻**（#1444）：那一行照列「N／60 則」，用次要色，下面多一行小字說它目前不會觸發；不用刪除線（看起來像被
+ *   刪掉）。報讀時兩句一起唸。底下那句跟著改說法（`note`）。
  * - **`hidden` 時自己關掉**：輸入框被核准或提問面板換掉時只是藏起來、不卸載，而明細 portal 在 body 上——不關的話，
  *   按鈕不見了，明細還浮在面板上面。
  */
@@ -81,16 +88,25 @@ export function ContextMeter({
                 key={index}
                 data-testid="context-meter-row"
                 data-nearest={row.nearest}
+                data-dormant={row.dormant}
                 className={`tabular-nums ${row.nearest ? 'font-medium' : 'text-muted-foreground'}`}
               >
                 {row.text}
                 {row.nearest && <span className="sr-only">（最近）</span>}
+                {row.dormant && (
+                  <>
+                    <span className="sr-only">，</span>
+                    <span className="block text-tip" data-testid="context-meter-dormant">
+                      {DORMANT_ROW_TEXT}
+                    </span>
+                  </>
+                )}
               </li>
             ))}
           </ul>
         </div>
-        <p className="text-muted-foreground text-tip">
-          到了任何一道門檻，較早的訊息會被摘要成一段。比例是估算的。
+        <p className="text-muted-foreground text-tip" data-testid="context-meter-note">
+          {view.note}
         </p>
       </PopoverContent>
     </Popover>

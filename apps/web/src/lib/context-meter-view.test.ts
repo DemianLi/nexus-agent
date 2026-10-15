@@ -1,7 +1,14 @@
 import type { WireContextMeasure } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { compact, contextMeterLabel, contextMeterView } from '@/lib/context-meter-view';
+import {
+  NOTE_ALL_ACTIVE,
+  NOTE_NONE_ACTIVE,
+  NOTE_SOME_DORMANT,
+  compact,
+  contextMeterLabel,
+  contextMeterView,
+} from '@/lib/context-meter-view';
 
 /**
  * 用量表的算法（#528）。數字刻意不用出廠的 100000／60：寫死預設值的話這裡要紅；兩道門檻的比例也刻意不同，
@@ -12,9 +19,21 @@ function measure(
   approxTokens: number,
   messageCount: number,
   thresholds: WireContextMeasure['thresholds'],
+  messagesCompactable?: boolean,
 ): WireContextMeasure {
-  return { approxTokens, messageCount, thresholds };
+  return {
+    approxTokens,
+    messageCount,
+    thresholds,
+    ...(messagesCompactable === undefined ? {} : { messagesCompactable }),
+  };
 }
+
+/** 出廠形狀的兩道門檻，數字刻意不用 100000／60 以外的；則數那道排後面，同分時不會靠順序贏。 */
+const BOTH = [
+  { type: 'tokens', value: 100_000 },
+  { type: 'messages', value: 60 },
+] as const;
 
 describe('contextMeterView', () => {
   it('沒有 measure 就不畫：null，或只有供應商報的 inputTokens（摘要被關掉）', () => {
@@ -98,6 +117,94 @@ describe('contextMeterView', () => {
   it('按鈕名稱原樣帶著畫面上的「約 N%」', () => {
     const view = contextMeterView({ measure: measure(0, 3, [{ type: 'messages', value: 7 }]) });
     expect(view && contextMeterLabel(view)).toBe('對話用量：約 42%，點開看明細');
+  });
+});
+
+describe('contextMeterView：只算會真的觸發的門檻（#1444）', () => {
+  const rows = (view: ReturnType<typeof contextMeterView>) =>
+    view?.rows.map((row) => [row.type, row.text, row.nearest, row.dormant]);
+
+  it('A. 70／60 則、旗標 false、token 30%：環 30%，則數那行標成不會觸發、不是最近', () => {
+    const view = contextMeterView({ measure: measure(30_000, 70, BOTH, false) });
+    expect(view?.percent).toBe(30);
+    expect(view?.ratio).toBe(0.3);
+    expect(view?.warning).toBe(false);
+    expect(rows(view)).toEqual([
+      ['tokens', '約 30k／100k token', true, false],
+      ['messages', '70／60 則', false, true],
+    ]);
+    expect(view?.note).toBe(NOTE_SOME_DORMANT);
+  });
+
+  it('B. 旗標 true：環取兩道的最大值，跟沒有旗標以前一樣', () => {
+    const view = contextMeterView({ measure: measure(30_000, 70, BOTH, true) });
+    expect(view?.percent).toBe(100);
+    expect(view?.warning).toBe(true);
+    expect(rows(view)).toEqual([
+      ['tokens', '約 30k／100k token', false, false],
+      ['messages', '70／60 則', true, false],
+    ]);
+    expect(view?.note).toBe(NOTE_ALL_ACTIVE);
+  });
+
+  it('C. 沒有這一格（舊日誌）：跟有旗標以前逐項相同，不當成 false', () => {
+    const view = contextMeterView({ measure: measure(30_000, 70, BOTH), inputTokens: 31_000 });
+    expect(view).toEqual({
+      ratio: 1,
+      percent: 100,
+      warning: true,
+      inputTokens: '31,000 token',
+      rows: [
+        { type: 'tokens', text: '約 30k／100k token', nearest: false, dormant: false },
+        { type: 'messages', text: '70／60 則', nearest: true, dormant: false },
+      ],
+      note: NOTE_ALL_ACTIVE,
+    });
+  });
+
+  it('C2. 只有則數門檻、旗標 false：環 0%、沒有最近那道，底下那句改說不會自動摘要', () => {
+    const view = contextMeterView({
+      measure: measure(30_000, 70, [{ type: 'messages', value: 60 }], false),
+    });
+    expect(view).not.toBeNull();
+    expect(view?.ratio).toBe(0);
+    expect(view?.percent).toBe(0);
+    expect(view?.warning).toBe(false);
+    expect(rows(view)).toEqual([['messages', '70／60 則', false, true]]);
+    expect(view?.note).toBe(NOTE_NONE_ACTIVE);
+  });
+
+  it('C3. 59／60 則、旗標 true：還沒到門檻也照算（98%），不會在跨過門檻那一刻才跳', () => {
+    const view = contextMeterView({ measure: measure(30_000, 59, BOTH, true) });
+    expect(view?.percent).toBe(98);
+    expect(rows(view)?.map((row) => row[2])).toEqual([false, true]);
+  });
+
+  it('旗標 false 只影響則數那道：同種的每一道都不算，tokens 那道照算', () => {
+    const view = contextMeterView({
+      measure: measure(
+        9_000,
+        50,
+        [
+          { type: 'messages', value: 40 },
+          { type: 'tokens', value: 10_000 },
+          { type: 'messages', value: 80 },
+        ],
+        false,
+      ),
+    });
+    expect(view?.percent).toBe(90);
+    expect(rows(view)?.map((row) => [row[2], row[3]])).toEqual([
+      [false, true],
+      [true, false],
+      [false, true],
+    ]);
+  });
+
+  it('tokens 那道是 0 時，最近的還是它，不會落到不會觸發的那道', () => {
+    const view = contextMeterView({ measure: measure(0, 70, BOTH, false) });
+    expect(view?.percent).toBe(0);
+    expect(rows(view)?.map((row) => row[2])).toEqual([true, false]);
   });
 });
 
