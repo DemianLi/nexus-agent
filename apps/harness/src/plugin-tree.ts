@@ -8,7 +8,7 @@
  * | `tools` | 行程級的工具登記處（`@nexus/tools/provider`），契約服務，一列 | `tools` 服務的提供者 |
  * | `projections` | 行程級的投影登記處（`@nexus/projections/provider`，#1421），契約服務，一列 | `sessionProjections` 服務的提供者 |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 | `include`（`app-boot` 的 `entry.update({ config: { ...includeConfig, patches } })`） |
- * | `include:<id>` | Include 底下的列，今天是 echo 與 token-meter（模組有 `manifest` 匯出的才上樹） | 各插件 |
+ * | `include:<id>` | Include 底下的列，今天是 echo、token-meter 與 trajectory（#1435；模組有 `manifest` 匯出的才上樹） | 各插件 |
  *
  * ## 清單怎麼進樹
  *
@@ -64,7 +64,7 @@ import { ContractError, FIBER_STATE, missingServices } from '@nexus/sdk';
 import { createToolsProvider } from '@nexus/tools/provider';
 import type { ToolEntry } from '@nexus/tools/provider';
 
-import { stableStringify } from './stable-stringify.js';
+import { declarationSignature, normalizedConfig } from './plugin-row-state.js';
 
 /** 工具登記處那一列的 id。 */
 export const TOOLS_ROW_ID = 'tools';
@@ -166,9 +166,6 @@ const resolveBareSpecifier = (specifier: string): string => import.meta.resolve(
 
 const treeId = (id: string): string => `${NAMESPACE}${id}`;
 
-/** `undefined` 與 `{}` 在這裡是同一件事：相容層沒寫 `config` 就是 `{}`，樹那一側為了 strictObject 補的也是 `{}`。 */
-const normalized = (config: unknown): unknown => config ?? {};
-
 /**
  * 樹上帶 `__jsExpr` 的物件會被 Loader 的 `interpolate` 當 JavaScript `eval` 掉（`vendor/loader/src/config/utils.ts`），
  * 而設定來自變更紀錄與 `--patch`：寫入口的使用者、部署端都不該有「經設定檔執行任意程式」的路。
@@ -213,14 +210,6 @@ export interface SelfDisableEvent {
   /** 模組 specifier，即那一列的 `name`。 */
   readonly module: string;
 }
-
-/**
- * 一列宣告的簽章：自我停用的記憶與去重都以它為準。輸入是樹看得到的三格（列 id、模組名、設定）；序列化用共用的
- * `stable-stringify.ts`，跟 `plugin-row-state.ts` 的 `rowKey` 同一支（`rowKey` 序列化的是整份 entry，這裡只有這三格，
- * 其他欄位到不了 Include），所以兩邊疊出來的鍵順序不同、`undefined` 與沒寫也算同一份。
- */
-const declarationSignature = (id: string, module: string, config: unknown): string =>
-  stableStringify({ id, module, config: normalized(config) });
 
 /** 一棵 Cordis 樹加上它的工具登記處與 Include。 */
 export class PluginTree {
@@ -533,7 +522,7 @@ export class PluginTree {
           '樹上這一列是停用的，清單疊出來卻是啟用的（插件自己停用了自己，或兩邊疊出來的不一致）',
       };
     }
-    if (!isDeepStrictEqual(normalized(entry.options.config), normalized(row.config))) {
+    if (!isDeepStrictEqual(normalizedConfig(entry.options.config), normalizedConfig(row.config))) {
       return {
         kind: 'dropped',
         stage: 'apply',
@@ -643,7 +632,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
     await create({
       id: mount.id,
       name: 'cordis:plugin',
-      config: normalized(mount.config) as Record<string, unknown>,
+      config: normalizedConfig(mount.config) as Record<string, unknown>,
     });
     await root.loader.await();
     const fiber = root.loader.resolve(mount.id).fiber?.ctx.fiber;
