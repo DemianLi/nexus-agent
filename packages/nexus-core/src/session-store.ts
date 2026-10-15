@@ -568,6 +568,19 @@ import type { SessionEvent } from './session-log.js';
  * 重送同一個編號，那一句就排第二次，模型看到兩次同樣的話，沒有任何東西報錯——正是這個欄位要擋的事。
  *
  * **讀舊檔**：47 以前沒有這幾格，等於沒帶編號，不補寫歷史。客戶端沒帶 `request_id` 的送出，日誌與以前位元組相同。
+ *
+ * ### 48 之內新增、沒有升版的欄位
+ *
+ * - **`context/measure.messagesCompactable`**（[#1443](https://github.com/DemianLi/nexus-agent/issues/1443)）：選填的布林，
+ *   `messages` 那道門檻到了的話摘不摘得到東西，web 的用量環讀它。**不升**：判準同 32 那段，前例是 #1021 的 `modelCall`——
+ *   `context/measure` 不進模型、不左右任何折疊，多一個欄位不改舊讀方對其餘三格的讀法。
+ *
+ *   **換回舊版程式**（實測，2026-10-14，用 develop `3e1cdf27` 的程式碼讀一份帶這一格的日誌）：續接（`resume`）、唯讀打開
+ *   與呼叫歸屬（`indexModelCalls`）都照常，不會拒讀、也不會報壞檔。這一格在舊版的記憶體裡原樣留著，但線上的
+ *   `measure` 由逐欄手抄的 `contextMeasureData` 交出，舊版不抄它，所以 web 拿不到，用量環照沒有這一格以前的算法畫。
+ *   舊版續寫進去的 `context/measure` 不帶它。不必先做任何處理。
+ *
+ *   **讀舊檔**：沒有這一格就是沒記（這一版以前寫的，或沒有 `messages` 門檻），不是 `false`，不補寫歷史。
  */
 export const SESSION_LOG_FORMAT_VERSION = 48;
 
