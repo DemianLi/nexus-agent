@@ -18,7 +18,7 @@
  *   所以不論舊的那一份有沒有被收掉，行程裡**不會有兩張都認得同一條 thread 的登記**——那會讓下一次呼叫變成 `ambiguous`。
  *   會重組同一個 id 的時機（產品路徑上今天只有第一種會走到，其餘兩種是同一個機制的邊界）：
  *   1. serve 的 thread 在 `attachSessions` 之後、`ready.set` 之前建不起來（落盤接不上、標題接線拋……），`threads` 條目被刪，
- *      下一次請求用同一個 thread id 重新組裝；舊的那一份沒人收（`wire-handler.ts` 的 catch 只收 `threadAgent`）。
+ *      下一次請求用同一個 thread id 重新組裝；舊的那一份由 `wire-handler.ts` 的 catch 收掉（#1467，和成功路徑共用同一支 `release`）。
  *   2. 同一棵樹上先後組兩次同一個 thread id（測試、`resume` 在同一個行程裡接回同一份日誌）。
  *   3. 行程重啟：新行程是新的一棵樹，沒有殘留。
  *
