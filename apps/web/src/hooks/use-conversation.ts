@@ -37,6 +37,7 @@ import {
   reduceConversation,
   STEER_UNAVAILABLE,
   uniformDecisions,
+  WireRejectedError,
 } from '@nexus/wire';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -133,6 +134,11 @@ export interface Conversation {
   readonly connected: boolean;
   /** 上一次開線失敗、或下行斷掉的原因。接回來就清掉。串流自己正常收掉時沒有原因可講，這一格不在。 */
   readonly connectionError?: string;
+  /**
+   * 下行被伺服器明說不收、而且有一句給使用者看的話時（thread 數滿了，[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)），
+   * 就是那一句；這時 {@link connectionError} 不在——server 的原文是給管理者看的。重試照舊，接回來就清掉。
+   */
+  readonly refusal?: string;
   /**
    * 下行斷了（或第一次就沒開成），正在自動重接（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）。
    * `wasConnected` 分得出「連上過、中斷了」與「從沒連上」；`offline` 是瀏覽器說沒有網路，這時不排重試，
@@ -322,6 +328,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [feedbackDialog, setFeedbackDialog] = useState<FeedbackDialogState | undefined>(undefined);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | undefined>(undefined);
+  const [refusal, setRefusal] = useState<string | undefined>(undefined);
   const [reconnecting, setReconnecting] = useState<Conversation['reconnecting']>(undefined);
   const [recovered, setRecovered] = useState(false);
   /** 每加一就重開一次下行（#593）：自動重試與「立刻重連」都走這一格。 */
@@ -419,14 +426,18 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
-    /** 這條下行斷了：翻回沒連上、講原因、排下一次（#593）。串流正常收掉也算——server 不會無故收線。 */
-    const lose = (reason: string | undefined) => {
+    /**
+     * 這條下行斷了：翻回沒連上、講原因、排下一次（#593）。串流正常收掉也算——server 不會無故收線。
+     * `refused` 是伺服器明說不收時給使用者看的那一句（#1478）；**每次都重設**，上一次被拒的話不會留到下一次斷線。
+     */
+    const lose = (reason: string | undefined, refused?: string) => {
       const book = retry.current;
       book.lost = true;
       clearTimeout(book.recoveredTimer);
       setRecovered(false);
       setConnected(false);
       setConnectionError(reason);
+      setRefusal(refused);
       scheduleRetry();
     };
 
@@ -468,6 +479,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         book.everConnected = true;
         setConnected(true);
         setConnectionError(undefined);
+        setRefusal(undefined);
         setReconnecting(undefined);
         if (wasLost) {
           setRecovered(true);
@@ -498,7 +510,17 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (!cancelled) lose(undefined);
       } catch (error) {
         if (!cancelled) {
-          lose(error instanceof Error ? error.message : String(error));
+          // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
+          const refused =
+            error instanceof WireRejectedError ? threadCapacityText(error.code) : undefined;
+          lose(
+            refused !== undefined
+              ? undefined
+              : error instanceof Error
+                ? error.message
+                : String(error),
+            refused,
+          );
         }
       }
     })();
@@ -902,6 +924,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     dismissFeedback,
     ...(feedbackDialog === undefined ? {} : { feedbackDialog }),
     ...(connectionError === undefined ? {} : { connectionError }),
+    ...(refusal === undefined ? {} : { refusal }),
     ...(commandError === undefined ? {} : { commandError }),
     ...(slashError === undefined ? {} : { slashError }),
     ...(slashNotice === undefined ? {} : { slashNotice }),

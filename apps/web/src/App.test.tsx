@@ -30,6 +30,7 @@ import {
   TODOS,
   TOKEN_USAGE,
   UplinkTransportError,
+  WireRejectedError,
 } from '@nexus/wire';
 import {
   act,
@@ -759,6 +760,69 @@ describe('對話介面', () => {
     };
     render(<App client={client} />);
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('連不上 agent'));
+  });
+
+  /** 第一次開下行被拒（`code` 是哪一個由測試給），之後照常；`thenEnds` 時第二次開好的那條立刻收掉。 */
+  function refusedOnce(code: string, thenEnds = false) {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    let calls = 0;
+    const openEvents: WireClient['openEvents'] = async (...args) => {
+      calls += 1;
+      if (calls === 1) {
+        const body = JSON.stringify({
+          type: 'error',
+          id: null,
+          error: code,
+          message: 'thread 數已到上限 2／2；重啟 serve 才會釋放',
+        });
+        throw new WireRejectedError(
+          code,
+          'thread 數已到上限 2／2；重啟 serve 才會釋放',
+          `下行被拒：${body}`,
+        );
+      }
+      if (calls === 2 && thenEnds) {
+        return (async function* () {})();
+      }
+      return fake.client.openEvents(...args);
+    };
+    return { ...fake.client, openEvents };
+  }
+
+  it('thread 數滿了（#1478）：狀態列講給使用者看的那一句，不接原文；重試接上之後回到正常', async () => {
+    render(<App client={refusedOnce(THREAD_AT_CAPACITY)} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe(THREAD_AT_CAPACITY_TEXT),
+    );
+    expect(screen.queryByText(/2／2|重啟 serve|下行被拒/)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '立刻重連' }));
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    await waitFor(() => expect(screen.queryByText(THREAD_AT_CAPACITY_TEXT)).toBeNull());
+    expect(screen.getByRole('status').textContent).not.toContain('連不上');
+  });
+
+  it('滿了之後接上、下行又自己收掉（#1478）：講一般的斷線，不留上一次被拒的那一句', async () => {
+    render(<App client={refusedOnce(THREAD_AT_CAPACITY, true)} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe(THREAD_AT_CAPACITY_TEXT),
+    );
+    fireEvent.click(screen.getByRole('button', { name: '立刻重連' }));
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe('連線中斷，正在重新連線…'),
+    );
+  });
+
+  it('下行被拒但不是滿了（#1478）：照舊講連不上與原因', async () => {
+    render(<App client={refusedOnce('unknown_error')} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toContain('連不上 agent：下行被拒：'),
+    );
+    expect(screen.queryByText(THREAD_AT_CAPACITY_TEXT)).toBeNull();
   });
 });
 

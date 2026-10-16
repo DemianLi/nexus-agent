@@ -549,6 +549,7 @@ function ConversationView({
               {...(conversation.connectionError === undefined
                 ? {}
                 : { connectionError: conversation.connectionError })}
+              {...(conversation.refusal === undefined ? {} : { refusal: conversation.refusal })}
               {...(conversation.commandError === undefined
                 ? {}
                 : { commandError: conversation.commandError })}
