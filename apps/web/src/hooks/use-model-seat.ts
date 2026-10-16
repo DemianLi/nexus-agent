@@ -1,6 +1,7 @@
 import type { ModelCatalog, ModelSelection, WireClient, WireProjection } from '@nexus/wire';
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 
+import { useOpenRead } from '@/hooks/use-open-read';
 import { effectiveSelection, parseSelectionProjection } from '@/lib/model-selection';
 
 /** 模型選擇投影的 key（伺服器推的那份，多分頁同步用）。 */
@@ -19,40 +20,32 @@ export interface ModelSeat {
  * 還在讀、伺服器回 `rejected`（含還沒實作的 `not_supported`）、或讀的時候拋錯，**一律不顯示**：座位與 `/model`
  * 一起沒有，不留一顆按了沒用的鈕。
  *
- * 型錄在這條 thread 打開時讀一次（換 thread 整個畫面重掛，所以不用管換身分）。選擇的來源與先後見
+ * 型錄在這條 thread 打開時讀一次（換 thread 整個畫面重掛，所以不用管換身分）；暫時讀不到的話，下行下一次接上時再讀（#1483）。選擇的來源與先後見
  * `lib/model-selection.ts` 的 `effectiveSelection`：伺服器的投影一推來就以它為準；這個分頁自己剛選的，在投影更新前先頂著。
  */
 export function useModelSeat(
-  client: WireClient,
+  client: Pick<WireClient, 'modelCatalog' | 'selectModel'>,
   threadId: string,
   projection: WireProjection | undefined,
+  connections: number,
 ): ModelSeat | null {
-  const [read, setRead] = useState<{
-    readonly catalog: ModelCatalog;
-    readonly next: ModelSelection | null;
-    readonly lastUsed: ModelSelection | null;
-  } | null>(null);
+  // 開頁時讀；暫時讀不到的話，下行下一次接上再讀（#1483，見 `useOpenRead`）。
+  const readCatalog = useCallback(() => client.modelCatalog(threadId), [client, threadId]);
+  const catalogResult = useOpenRead(readCatalog, connections);
+  const read =
+    catalogResult?.ok === true
+      ? {
+          catalog: catalogResult.value.catalog,
+          next: catalogResult.value.selection.next,
+          lastUsed: catalogResult.value.selection.lastUsed,
+        }
+      : null;
   // 剛選的，連同選的當下看到的投影：投影之後又變了，就是伺服器講了更新的話。
   const [local, setLocal] = useState<{
     readonly selection: ModelSelection;
     readonly seen: WireProjection | undefined;
   } | null>(null);
   const ticket = useRef(0);
-
-  useEffect(() => {
-    let live = true;
-    client.modelCatalog(threadId).then(
-      (outcome) => {
-        if (!live || outcome.kind !== 'ok' || !outcome.result.ok) return;
-        const { catalog, selection } = outcome.result.value;
-        setRead({ catalog, next: selection.next, lastUsed: selection.lastUsed });
-      },
-      () => undefined,
-    );
-    return () => {
-      live = false;
-    };
-  }, [client, threadId]);
 
   const seen = projection;
   const select = useCallback(

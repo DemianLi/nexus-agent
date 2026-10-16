@@ -2,6 +2,7 @@ import type { CommandOutcome, ThreadActivityKind, ThreadListResult, WireClient }
 import { useCallback, useLayoutEffect, useMemo, useRef, useState } from 'react';
 
 import type { ThreadDirectory } from '@/hooks/use-thread-directory';
+import { threadCapacityText } from '@/lib/thread-capacity';
 import { explainThreadFailure, normalizeTitle, readSets } from '@/lib/thread-management';
 import type { ThreadActionResult, ArchiveAnswer, ThreadManagement } from '@/lib/thread-management';
 
@@ -47,8 +48,11 @@ async function settle<V>(
     return { message: error instanceof Error ? error.message : String(error) };
   }
   if (outcome.kind !== 'ok') {
+    // thread 數滿了（改名經 server 的 `threadFor`，冷會話也算）：message 是給管理者的原文，換成給使用者看的那一句（#1483）。
     return {
-      message: outcome.code === 'not_supported' ? '這個伺服器還不支援這個動作。' : outcome.message,
+      message:
+        threadCapacityText(outcome.code) ??
+        (outcome.code === 'not_supported' ? '這個伺服器還不支援這個動作。' : outcome.message),
     };
   }
   return outcome.result.ok

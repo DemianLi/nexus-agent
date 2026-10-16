@@ -1,9 +1,11 @@
 import type { ThreadListResult, WireClient } from '@nexus/wire';
+import { THREAD_AT_CAPACITY } from '@nexus/wire';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useThreadManagement } from '@/hooks/use-thread-management';
 import type { Listing, ThreadDirectory } from '@/hooks/use-thread-directory';
+import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 
 /** 側欄會話管理的接線（#633）：集合以 server 回的為準、舊回應不蓋新的、列表一來蓋在上面的就作廢。 */
 
@@ -241,6 +243,21 @@ describe('改名', () => {
     });
     expect(hook.result.current?.titles.size).toBe(0);
     expect(refresh).not.toHaveBeenCalled();
+  });
+
+  it('thread 數滿了（#1483，冷會話改名經 `threadFor`）：講給使用者看的那一句，不接 server 的原文', async () => {
+    const client = {
+      threadRename: vi.fn(async () => ({
+        kind: 'rejected' as const,
+        code: THREAD_AT_CAPACITY,
+        message: 'thread 數已到上限 1／1；重啟 serve 才會釋放',
+      })),
+    };
+    const { hook } = setup(client, okListing(listed([], [])));
+    await act(async () => {
+      expect(await hook.result.current!.onRename('t1', '標題')).toBe(THREAD_AT_CAPACITY_TEXT);
+    });
+    expect(hook.result.current?.titles.size).toBe(0);
   });
 });
 

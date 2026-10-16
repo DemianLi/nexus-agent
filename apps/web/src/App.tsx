@@ -273,6 +273,7 @@ function ConversationView({
     client,
     threadId,
     conversation.state.projections[MODEL_SELECTION_PROJECTION],
+    conversation.connections,
   );
   const [modelOpen, setModelOpen] = useState(false);
   // 權限座（#437）：目錄回 `not_supported` 或投影沒送來就是 `null`，座位整個沒有。
@@ -280,6 +281,7 @@ function ConversationView({
     client,
     threadId,
     conversation.state.projections[PERMISSIONS_PROJECTION_KEY],
+    conversation.connections,
   );
   const [permissionOpen, setPermissionOpen] = useState(false);
   // 改動的摘要與比較都快取到這條 thread 的畫面卸掉（換 thread 整個重掛，#443）。
@@ -365,7 +367,7 @@ function ConversationView({
   useEffect(() => () => imageSource.dispose(), [imageSource]);
   // `@子代理` 提及（#328 第 2 項）：這一輪委派給誰，一句話最多一個。清單由 server 給（`subagent.list`），
   // 沒實作、被拒或空的就是 `null`：整個功能不出現。送出時放進 `run.start` 的 `mention`，不轉成文字塞進 `input`。
-  const agents = useAgentMention(client, threadId);
+  const agents = useAgentMention(client, threadId, conversation.connections);
   const [mentionedAgent, setMentionedAgent] = useState<MentionAgent | undefined>(undefined);
   // 附件送出中（上傳、編碼、等伺服器收下）：這段時間不收第二次送出。
   const [sendingAttachments, setSendingAttachments] = useState(false);
@@ -565,8 +567,11 @@ function ConversationView({
               recovered={conversation.recovered}
               onReconnect={conversation.reconnectNow}
             />
-            {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。 */}
-            {notice !== undefined && <p className="text-muted-foreground text-tip">{notice}</p>}
+            {/* 不掛 `role="status"`：那一格歸 `StatusLine`，這一句是背景，不是現況。
+                伺服器不收這條下行時（thread 數滿了）不講「接著上一次／之前的對話回來了」：跟狀態列的「打不開」矛盾（#1483）。 */}
+            {notice !== undefined && conversation.refusal === undefined && (
+              <p className="text-muted-foreground text-tip">{notice}</p>
+            )}
             {conversation.history?.legacy === true && (
               <p className="text-muted-foreground text-tip">{LEGACY_THREAD_NOTICE}</p>
             )}

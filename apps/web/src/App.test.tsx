@@ -816,6 +816,69 @@ describe('對話介面', () => {
     );
   });
 
+  it('開頁時模型座也滿了（#1483）：下行接回之後重讀，座位畫出來', async () => {
+    let catalogCalls = 0;
+    const modelCatalog: WireClient['modelCatalog'] = async () => {
+      catalogCalls += 1;
+      return catalogCalls === 1
+        ? { kind: 'rejected', code: THREAD_AT_CAPACITY, message: 'thread 數已到上限 1／1' }
+        : {
+            kind: 'ok',
+            result: {
+              ok: true,
+              value: {
+                catalog: {
+                  default: { modelId: 'model-a' },
+                  models: [{ id: 'model-a', name: 'Alpha' }],
+                },
+                selection: { lastUsed: null, next: null },
+              },
+            },
+          };
+    };
+    render(<App client={{ ...refusedOnce(THREAD_AT_CAPACITY), modelCatalog }} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe(THREAD_AT_CAPACITY_TEXT),
+    );
+    expect(screen.queryByTestId('model-seat')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: '立刻重連' }));
+    expect(await screen.findByTestId('model-seat')).toBeTruthy();
+    expect(catalogCalls).toBe(2);
+  });
+
+  it('下行沒斷過（#1483 驗收 B）：開頁時讀的三樣各只請求一次，跟以前一樣', async () => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const modelCatalog = vi.fn(fake.client.modelCatalog);
+    const permissionCatalog = vi.fn(fake.client.permissionCatalog);
+    const subagentList = vi.fn(fake.client.subagentList);
+    render(<App client={{ ...fake.client, modelCatalog, permissionCatalog, subagentList }} />);
+
+    await screen.findByPlaceholderText('說點什麼…');
+    await act(async () => {
+      await new Promise((resolve) => setTimeout(resolve, 50));
+    });
+    expect([
+      modelCatalog.mock.calls.length,
+      permissionCatalog.mock.calls.length,
+      subagentList.mock.calls.length,
+    ]).toEqual([1, 1, 1]);
+  });
+
+  it('續開記住的會話被拒（#1483 驗收 E）：不講「接著上一次」；接上之後照舊講', async () => {
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '記住的那條' }));
+    render(<App client={refusedOnce(THREAD_AT_CAPACITY)} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe(THREAD_AT_CAPACITY_TEXT),
+    );
+    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '立刻重連' }));
+    expect(await screen.findByText(RESUMED_THREAD_NOTICE)).toBeTruthy();
+  });
+
   it('下行被拒但不是滿了（#1478）：照舊講連不上與原因', async () => {
     render(<App client={refusedOnce('unknown_error')} />);
 
@@ -5356,16 +5419,20 @@ describe('@子代理 提及（#328）', () => {
     [
       'server 還沒實作（not_supported）',
       async () => ({ kind: 'rejected' as const, code: 'not_supported', message: '沒接' }),
+      1,
     ],
     [
       '被拒',
       async () => ({ kind: 'rejected' as const, code: 'invalid_argument', message: '不行' }),
+      1,
     ],
     [
+      // 開頁那一次拋在下行接上之前，接上時再讀一次（#1483）；又拋的話，要等下一次接上。
       '讀的時候拋錯',
       async (): Promise<never> => {
         throw new Error('斷了');
       },
+      2,
     ],
     [
       '清單是空的（沒有可點名的對象）',
@@ -5373,10 +5440,11 @@ describe('@子代理 提及（#328）', () => {
         kind: 'ok' as const,
         result: { ok: true as const, value: { subagents: [] } },
       }),
+      1,
     ],
-  ])('server 不支援就整個不出現：%s', async (_case, list) => {
+  ])('server 不支援就整個不出現：%s', async (_case, list, reads) => {
     const { listed } = await ready(list);
-    await waitFor(() => expect(listed).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(listed).toHaveBeenCalledTimes(reads));
     type('@');
     await new Promise((resolve) => setTimeout(resolve, 30));
     expect(screen.queryByRole('dialog', { name: '@ 選單' })).toBeNull();
