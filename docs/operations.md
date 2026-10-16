@@ -542,7 +542,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   （`agent-loop`、`recursion-limit`、`tool-fs-search` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
-  - **啟動時讀一次的那 13 列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`deliverable-files`、
+  - **啟動時讀一次的那 14 列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`deliverable-files`、
     `session-persistence`、`tool-text`、`projection-flush`、`tool-result-stash`、`spill-policy`、`background-subagents`、
     `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
     `agent-default-model` 不在這裡：沒帶 `--live` 時它在每條對話組裝時讀，改了新對話就生效。
@@ -595,7 +595,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
     還有幾步（接日誌、接參與者）可能拋，那時會把這條對話收掉、放掉它的綁定，而**放掉只動記憶體、不寫檔**，檔要等下一次寫快照
     （任何一條對話讀清單或綁定）才更新。所以檔上偶爾有一個沒有真的活著的對話 id，下一條對話開出來就消失；要確認是不是真活著，
     看 `GET /threads`。
-  - **綁的規則**：只算實際掛上的列——停用的、這條對話掉了的、樹上自我停用的不算；啟動時讀一次的那 13 列也不算（它們生效的是啟動那一份，
+  - **綁的規則**：只算實際掛上的列——停用的、這條對話掉了的、樹上自我停用的不算；啟動時讀一次的那 14 列也不算（它們生效的是啟動那一份，
     改了看 `sync: restart`）。對話建好之後才綁，只看過歷史、沒跑過一輪的對話也算（它下一輪真的會用那一版）。**對話只在 serve 關機時才拆**
     （沒有閒置逐出），所以名單只增不減，直到重啟；表在行程記憶體裡，重啟之後從零開始。要分「正在跑」還是「閒著」，看 `GET /threads` 的 `running`。
   - **對話 id 進了這個檔**，擴大了上面「不帶設定值」的揭露範圍：對話 id 本來就經 `GET /threads` 給每個登入的人看，這個檔是 0600，
@@ -698,7 +698,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
-今天有十七列：
+出貨清單上這幾列（完整名單與順序以 `apps/harness/cordis.yml` 為準，這裡不寫顆數）：
 
 | id                          | 管什麼                                                                                                                         | 有 `config` 嗎                   | 關得掉嗎                 |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------------------------ |
@@ -713,6 +713,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `thread-title`              | 會話標題的三個上限（退回標題的詞數與位元組，以及任何來源的標題的位元組）                                                       | 有（三格）                       | **關不掉**               |
 | `thread-title-llm`          | `--live` 時由模型依第一句話產生會話標題                                                                                        | 有（五格，另有選配的 `modelId`） | 關得掉（＝只剩退回標題） |
 | `thread-search`             | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開**                                                                             | 有（一格）                       | 關得掉（＝搜尋一律失敗） |
+| `thread-capacity`           | serve 行程裡最多同時有幾條 thread；**出廠不設上限**                                                                             | 有（一格，選配）                 | 關得掉（＝不限）         |
 | `browser-session`           | 瀏覽器 cookie 的絕對有效期                                                                                                     | 有（一格）                       | **關不掉**               |
 | `deliverable-files`         | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數）                                                             | 有（三格）                       | **關不掉**               |
 | `tool-text`                 | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截）                                             | 有（一格）                       | **關不掉**               |
@@ -721,13 +722,13 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `recursion-limit`           | agent 迴圈的 super-step 上限                                                                                                   | 有（一格）                       | **關不掉**               |
 | `agent-loop`                | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆                                                                               | 有（一格）                       | **關不掉**               |
 
-**最後十列裡，九列是「不裝功能、只講設定」的那一型；`session-persistence` 例外，它代表落盤本身**
-（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**十列的擁有者分兩邊**：`session-persistence` 住在
-`@nexus/core`（值的家在那個套件裡），其餘九列住在 `apps/harness`
+**從 `session-persistence` 往下的這一段，除了 `session-persistence` 之外，都是「不裝功能、只講設定」的那一型；`session-persistence` 例外，
+它代表落盤本身**（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**擁有者分兩邊**：`session-persistence` 住在
+`@nexus/core`（值的家在那個套件裡），表上 `thread-title` 以下的其餘各列住在 `apps/harness`
 （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
 **更要緊的分界是消費點跑的時刻**：
 
-- **`session-persistence`、`thread-title`、`thread-title-llm`、`thread-search`、`browser-session`、`deliverable-files`、
+- **`session-persistence`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`browser-session`、`deliverable-files`、
   `tool-text`、`live-model` 跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。`thread-search`、
   `browser-session`、`deliverable-files`、`tool-text` 的消費點分別是內容搜尋的索引、瀏覽器會話的建構子、兩支交付方法（`deliverable.read`／`deliverable.readBytes`）、
   以及工具結果 `meta` 與壓縮摘要那兩條（即時的 `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），
@@ -908,6 +909,28 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   句子中間的「搜尋」「會話」都搜不到，所以這裡換掉了；代價是索引大一些。
 - 日誌不落盤（`session-persistence` 關掉）時沒有東西可搜，一律回空。
 
+**`thread-capacity`**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）給 serve 行程裡的 thread 數設上限，是逐級降載的
+「底座保險絲」第 2 級（量測與背景見 #1464：每條 thread 常駐約 2 MB heap，只讀歷史也有，而且 serve 不回收）。**出廠不設上限**，
+行為與沒有這一列一樣——Linux 還沒量，給數字沒有依據，預設打開的話既有部署會在某一天突然開始拒收。要開的人放進自己的 `--patch <檔>`
+（或 `plugin config set thread-capacity --file -`）：
+
+```yaml
+- id: thread-capacity
+  config:
+    maxThreads: 200
+```
+
+- **數的是行程裡的 thread 數，含還在組裝中的**。到了上限，**新的** thread 一律拒收：送訊息、開下行、讀歷史、續聊磁碟上的舊
+  thread 都算（它們都要為那條 thread 組一份 agent）。**已經在行程裡的 thread 不受影響**，列表、停止、回饋這些不新建 thread 的路也不經過這一道。
+- **拒收回專用錯誤碼 `thread_at_capacity`**，message 寫出上限與下一步；serve 日誌每次拒收記一行，含目前數量與上限；起動時印一行
+  `thread 上限：…`（沒設就印「不限」），設了卻不確定有沒有生效看這一行。
+- **名額不會自己回來**：serve 不逐條收 thread，到上限之後要**重啟 serve** 才會清空（建構失敗的那條會當場釋放）。沒有排隊、搶占，
+  也不會自動關掉最舊的。
+- **起動時讀一次，改了要重啟**。`disabled: true` 就是不限。
+- **偏離 dsh（登記）**：dsh 沒有 thread 數上限；這是 serve 跑在多人共用主機上才有的產品需求。形狀借的是 dsh 背景工作的准入
+  （`jobs-local` 的 `maxConcurrentJobsPerOwner`），逐點見 `apps/harness/src/settings/thread-capacity.ts` 的檔頭。
+- web 怎麼顯示這個錯誤碼另開卡給前端，不在這一張。
+
 `observation-policy`、`model-usage`、`session-checkpoint-policy`、`approval-gate` 那四列**不用加
 `config:`**——它們沒有設定，寫了也沒有作用：照 dsh 原樣交下去、那一列照樣掛，啟動時印一句警告指名它。前三列
 列在這裡的唯一意義就是讓 `disabled: true` 指得著；最後那一列相反，見本節最後。
@@ -1011,7 +1034,7 @@ pnpm --filter @nexus/harness run plugin -- config reset thread-title
   關掉 `sandbox-policy`／`permission-presets` 不會被拒絕（`validateEntries` 沒有這條），但輸出會警告：serve 帶 `--workspace`
   時，之後每條新對話都會建不起來。
 - **輸出講的**：紀錄檔的完整路徑、第幾筆、操作者、改了哪些**欄位名**（不印值）、什麼時候生效——`新對話生效`，或
-  `待重啟`（啟動時讀一次的那 13 列，見上面）。**那份路徑要跟 serve 讀的是同一個 `$NEXUS_AGENT_HOME`**；
+  `待重啟`（啟動時讀一次的那 14 列，見上面）。**那份路徑要跟 serve 讀的是同一個 `$NEXUS_AGENT_HOME`**；
   `plugin-snapshot.json` 不在的話輸出會警告（serve 沒開過，或指到別的 home），不擋寫入。
 - **要跟 serve 帶同一組 `--patch`**：`plugin` 也收 `--patch <檔>`（可多次）。`--patch` 排在變更紀錄之後，被它蓋住的列，
   寫入口照寫紀錄但回報 `被 --patch 蓋住`（設定的那一類直接拒絕，因為寫了也不會生效）。沒帶同一組，它看不出誰被蓋住。

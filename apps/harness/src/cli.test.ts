@@ -251,6 +251,7 @@ describe('一次性模式', () => {
       'thread-title',
       'thread-title-llm',
       'thread-search',
+      'thread-capacity',
       'browser-session',
       'deliverable-files',
       'tool-text',

@@ -128,6 +128,7 @@ import { cleanupToolResultStash } from './tool-result-stash.js';
 import { projectionFlushPlugin } from './settings/projection-flush.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
+import { threadCapacityPlugin } from './settings/thread-capacity.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
 import { SessionReferenceCandidates } from './session-reference-candidates.js';
 import { ThreadSearch } from './thread-search.js';
@@ -566,6 +567,9 @@ async function startServer(
   // 失敗），`openAt: never` 是掛了不開（沒東西可搜時回空）。出廠是後者，見 `settings/thread-search.ts`。
   const threadSearchMounted = startupEntryMounted(plugins, threadSearchPlugin);
   const threadSearchConfig = startupSetting(plugins, threadSearchPlugin);
+  // thread 數上限（#1476，保險絲第 2 級）。**server 的性質**：`threads` 表一台伺服器一張，檢查在 `createWireHandler` 的
+  // `threadFor` 裡，所以值在這裡解、往下傳一份。不寫就不限。
+  const threadCapacity = startupSetting(plugins, threadCapacityPlugin);
   // **先照每條 thread 那一次組一份，組完就收**（#749）。上面那幾列只驗了自己的設定；其餘每一列的設定、重名、
   // `requires` 缺件、`apply` 裡的值檢查（例如 `tool-result-pruner` 的門檻），不組一次就不會發生，而 serve 的
   // agent 是每條 thread 才組的——不先組這一次，伺服器照樣起來，每個開對話的人才各撞一次，伺服器日誌一行都沒有。
@@ -674,7 +678,7 @@ async function startServer(
     trialDrops: assemblyDropsOf(loaded, trial.dropped),
     recorder: failureRecorder,
     audit,
-    // 起動期讀的 13 列：名單與分類表同一份（`plugin-row-classes.ts`），上面 `startupSetting` 那幾行讀的就是它們。
+    // 起動期讀的 14 列：名單與分類表同一份（`plugin-row-classes.ts`），上面 `startupSetting` 那幾行讀的就是它們。
     startupRead: STARTUP_READ_PLUGINS,
     log,
     publishSnapshot: async (snapshot) => {
@@ -768,6 +772,7 @@ async function startServer(
     toolTextLimits,
     threadTitleLimits: threadTitle,
     projectionFlushMs: projectionFlush.flushMs,
+    ...(threadCapacity.maxThreads === undefined ? {} : { maxThreads: threadCapacity.maxThreads }),
     // 一頁歷史撐破軟上限時（#479）、退回標題寫不進去時（#647）、模型標題寫不成時（#650）講一聲。
     warn: (message) => {
       serverLog(message);
@@ -1120,6 +1125,12 @@ async function startServer(
   // 同一條規矩底下的另一行：**這一輪結束之後還會不會有下一輪**。這台 server 上它是
   // per-thread 的行為，但旗標是整個 process 的，所以講在這裡。
   log(formatGoalDriverDisclosure(invocation.goalDriver, undefined, 'serve'));
+  // 上限講出來（#1476）：管理者設了卻沒生效、或以為設了其實沒設，看這一行就知道。不設就印「不限」。
+  log(
+    threadCapacity.maxThreads === undefined
+      ? 'thread 上限：不限'
+      : `thread 上限：${String(threadCapacity.maxThreads)}（到了拒收新 thread，要重啟 serve 才釋放）`,
+  );
   for (const line of formatTracingDisclosure(readTracingDisclosure(env))) {
     log(line);
   }
