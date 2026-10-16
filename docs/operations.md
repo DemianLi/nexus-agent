@@ -698,7 +698,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `repeatReminder` 時，以那句話為準；而手搭 plugin 清單（沒有這幾列）的組裝拿到的是內建
   預設，不是「什麼都沒掛」。
 
-今天有十七列：
+出貨清單上這幾列（完整名單與順序以 `apps/harness/cordis.yml` 為準，這裡不寫顆數）：
 
 | id                          | 管什麼                                                                                                                         | 有 `config` 嗎                   | 關得掉嗎                 |
 | --------------------------- | ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------- | ------------------------ |
@@ -722,9 +722,9 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `recursion-limit`           | agent 迴圈的 super-step 上限                                                                                                   | 有（一格）                       | **關不掉**               |
 | `agent-loop`                | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆                                                                               | 有（一格）                       | **關不掉**               |
 
-**最後十列裡，九列是「不裝功能、只講設定」的那一型；`session-persistence` 例外，它代表落盤本身**
-（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**十列的擁有者分兩邊**：`session-persistence` 住在
-`@nexus/core`（值的家在那個套件裡），其餘十列住在 `apps/harness`
+**從 `session-persistence` 往下的這一段，除了 `session-persistence` 之外，都是「不裝功能、只講設定」的那一型；`session-persistence` 例外，
+它代表落盤本身**（[#612](https://github.com/DemianLi/nexus-agent/issues/612)，關掉就不落盤）。**擁有者分兩邊**：`session-persistence` 住在
+`@nexus/core`（值的家在那個套件裡），表上 `thread-title` 以下的其餘各列住在 `apps/harness`
 （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
 **更要緊的分界是消費點跑的時刻**：
 
