@@ -52,6 +52,7 @@ import { PLAN_EXIT_LINE } from '@/lib/plan-chip';
 import type { RatingsView } from '@/lib/feedback-ratings';
 import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
+import { threadCapacityText } from '@/lib/thread-capacity';
 
 /** 回饋對話框開給誰：一則回覆（按了讚或踩），或整個會話（只打了 `/feedback`）。 */
 export type FeedbackTarget =
@@ -118,8 +119,11 @@ export interface Conversation {
   readonly store: ConversationStore;
   /** 歷史拿到了沒、還有沒有更早的。**拿到之前是 `undefined`**，拿不到時看 {@link historyError}。 */
   readonly history?: HistoryView;
-  /** 第一頁歷史拿不回來的原因。對話照樣接得下去，只是之前說過的話不在畫面上。往前翻的失敗在 {@link HistoryView.error}。 */
-  readonly historyError?: string;
+  /**
+   * 第一頁歷史拿不回來的原因，連同伺服器給的錯誤碼（有的話）。對話照樣接得下去，只是之前說過的話不在畫面上。
+   * 往前翻的失敗在 {@link HistoryView.error}。
+   */
+  readonly historyError?: { readonly message: string; readonly code?: string };
   /** 往前翻一頁，接在最前面。沒有更早的、或正在拿時什麼都不做。 */
   loadEarlier(): Promise<void>;
   /**
@@ -350,7 +354,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [history, setHistory] = useState<
     (HistoryView & { readonly firstSeq: number; readonly throughSeq: number }) | undefined
   >(undefined);
-  const [historyError, setHistoryError] = useState<string | undefined>(undefined);
+  const [historyError, setHistoryError] = useState<
+    { readonly message: string; readonly code?: string } | undefined
+  >(undefined);
   const historyRef = useRef(history);
   historyRef.current = history;
   const clientRef = useRef(client);
@@ -450,7 +456,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         } else {
           advance(() => emptyConversation());
           setHistory(undefined);
-          setHistoryError(page.message);
+          setHistoryError({
+            message: page.message,
+            ...(page.code === undefined ? {} : { code: page.code }),
+          });
         }
         const book = retry.current;
         const wasLost = book.lost && book.everConnected;
@@ -620,6 +629,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       if (result.type === 'error') {
         return {
           message:
+            threadCapacityText(result.error) ??
             sendRejectionText(result.error, hasAttachments, mention !== undefined) ??
             result.message,
         };

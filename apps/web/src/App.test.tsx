@@ -25,6 +25,7 @@ import {
   PROJECTION,
   SESSION_STATS,
   SUBAGENT_STATUS,
+  THREAD_AT_CAPACITY,
   TITLE,
   TODOS,
   TOKEN_USAGE,
@@ -58,6 +59,7 @@ import {
 import { ABORTED_BEFORE_DISPATCH_CODE, STOPPED_QUESTION_TEXT } from '@/lib/question-view';
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/lib/steer-view';
+import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
 import { fakeDownlink } from '@/test/downlink';
@@ -1487,6 +1489,27 @@ describe('上行被拒絕的時候', () => {
     expect(card.getAttribute('data-type')).toBe('error');
     expect(card.textContent).toContain('這一句沒送出去');
     expect(card.textContent).not.toContain('不確定');
+  });
+
+  it('thread 數滿了（#1478）：草稿放回去，說明換成給使用者看的那一句，不接 server 的原文', async () => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const runStart = async (): Promise<UplinkResult> => ({
+      type: 'error',
+      id: 1,
+      error: THREAD_AT_CAPACITY,
+      message: 'thread 數已到上限 2／2（#1478 toast）；重啟 serve 才會釋放',
+    });
+    render(<App client={{ ...fake.client, runStart }} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    const input = screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '滿了的那一句' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+
+    const card = await toastWith(THREAD_AT_CAPACITY_TEXT);
+    expect(card.textContent).not.toContain('#1478 toast');
+    expect(input.value).toBe('滿了的那一句');
   });
 });
 
