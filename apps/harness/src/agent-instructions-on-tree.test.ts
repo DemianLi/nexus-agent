@@ -14,9 +14,18 @@
  * 都讓兩條 thread 的 AGENTS.md **內容不同**，再從這一條跑；每一格都量**兩個方向**（對的有、錯的沒有）。
  */
 
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 
 import type { BaseMessage } from '@langchain/core/messages';
 import { SessionRegistry } from '@nexus/core';
@@ -32,9 +41,10 @@ import { HEADLESS_APPROVALS } from './agent-factory.js';
 import { createNexusAgent } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import { runCli } from './cli.js';
 import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
 import type { CordisRoot, NexusAssembly } from './cordis-root.js';
-import { shippedPlugins, withScriptedModel } from './fixtures.js';
+import { foldTurn, serveClient, shippedPlugins, withScriptedModel } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { LoopingChatModel } from './looping-model.js';
 import { toAgentInvocation } from './messages.js';
@@ -43,6 +53,9 @@ import type { LoadedPluginConfig } from './plugin-config.js';
 import { buildPluginSnapshot } from './plugin-snapshot.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
+import { scriptedPatchText } from './scripted-serve.js';
+import { runServe } from './serve.js';
+import type { RunningServe } from './serve.js';
 import { auditStartupEntries, REQUIRED_TREE_ENTRY_IDS } from './startup-audit.js';
 
 const temporary: string[] = [];
@@ -300,6 +313,8 @@ describe('E：同一棵樹上多條 thread 同時活著，每一次注入靠 thr
     });
     await runOn(thread);
     expect(baselineTexts(thread.model.prompts[0] ?? [])).toHaveLength(0);
+    const root = thread.sessions.list().find((entry) => entry.address.kind === 'root');
+    expect(injectedBaselines(root?.log.events ?? [])).toHaveLength(0);
     await closeThread(thread);
   }, 60000);
 
@@ -541,9 +556,89 @@ describe('D：輪數不變——這顆 middleware 每次 invoke 一格、每輪�
   );
 });
 
-describe('serve 入口', () => {
-  it('serve 入口是上面「E」那組：boot("serve") 的樹、每條 thread 一次 assembly.create、attachSessions——跟 serve 的 wire-handler 同一條路', () => {
-    // 這一格只是把索引寫在這裡：真的 `runServe` 的整條 wire 另有 `serve-*.test.ts` 量。
-    expect(true).toBe(true);
-  });
+/** 一個 home 底下所有會話日誌（jsonl）的事件，連同它來自哪個檔。 */
+function logEventsOf(home: string): { file: string; type: string; data: unknown }[] {
+  const dir = join(home, 'sessions');
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir, { recursive: true, encoding: 'utf8' })
+    .filter((name) => name.endsWith('.jsonl'))
+    .flatMap((name) =>
+      readFileSync(join(dir, name), 'utf8')
+        .split('\n')
+        .filter((line) => line.length > 0)
+        .map((line) => ({ file: name, ...(JSON.parse(line) as { type: string; data: unknown }) })),
+    );
+}
+
+describe('真的入口：runCli 與 runServe（落盤的會話日誌是證據）', () => {
+  it.each([
+    ['有 --workspace', true],
+    ['沒給 --workspace', false],
+  ] as const)(
+    'runCli，%s：日誌裡%s基線',
+    async (_label, withWorkspace) => {
+      const home = scratch();
+      const workspace = workspaceWith('命令列入口的規矩。');
+      const patch = join(home, 'scripted.patch.yml');
+      writeFileSync(patch, scriptedPatchText([{ content: '好。' }]), { mode: 0o600 });
+      const lines: string[] = [];
+      const record = (...parts: unknown[]): void => void lines.push(parts.join(' '));
+      await runCli({
+        argv: ['--patch', patch, ...(withWorkspace ? ['--workspace', workspace] : []), '開工。'],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer: { log: record, error: record },
+        env: { [HARNESS_HOME_ENV]: home },
+        cwd: workspace,
+      });
+      const injected = logEventsOf(home).filter(
+        (event) =>
+          event.type === 'user/message' &&
+          (event.data as { source?: { plugin?: string } }).source?.plugin ===
+            AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
+      );
+      expect(lines.join('\n')).toContain('好。');
+      expect(injected).toHaveLength(withWorkspace ? 1 : 0);
+      if (withWorkspace) expect(JSON.stringify(injected[0]?.data)).toContain('命令列入口的規矩。');
+    },
+    60000,
+  );
+
+  it('runServe：同一台 serve 同時活著兩條 thread，各自的日誌裡各有一則基線，內容是 --workspace 的 AGENTS.md', async () => {
+    const home = scratch();
+    const workspace = workspaceWith('serve 入口的規矩。');
+    const patch = join(home, 'scripted.patch.yml');
+    writeFileSync(patch, scriptedPatchText([{ content: '好。' }]), { mode: 0o600 });
+    const running = (await runServe({
+      argv: ['--port', '0', '--workspace', workspace, '--patch', patch],
+      log: () => undefined,
+      env: { [HARNESS_HOME_ENV]: home },
+    })) as RunningServe;
+    try {
+      const client = await serveClient(running);
+      const [downA, downB] = await Promise.all([
+        client.openEvents('serve-thread-a'),
+        client.openEvents('serve-thread-b'),
+      ]);
+      await Promise.all([
+        client.runStart('serve-thread-a', '開工甲。'),
+        client.runStart('serve-thread-b', '開工乙。'),
+      ]);
+      await Promise.all([foldTurn(downA), foldTurn(downB)]);
+      await downA.return?.(undefined);
+      await downB.return?.(undefined);
+    } finally {
+      await running.close();
+    }
+    const injected = logEventsOf(home).filter(
+      (event) =>
+        event.type === 'user/message' &&
+        (event.data as { source?: { plugin?: string } }).source?.plugin ===
+          AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
+    );
+    expect(injected).toHaveLength(2);
+    expect(new Set(injected.map((event) => event.file)).size).toBe(2);
+    for (const event of injected)
+      expect(JSON.stringify(event.data)).toContain('serve 入口的規矩。');
+  }, 90000);
 });

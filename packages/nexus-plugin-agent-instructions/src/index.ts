@@ -32,18 +32,14 @@
  *    慣例、繞過 backend 直接讀主機檔案，越過 fence。
  *    **退到什麼**：只讀工作區根那一層的四個候選。
  *    **重開條件**：出現跨專案共用指令的需求，或 `--workspace` 常指到 repo 子目錄而漏掉 repo 根的指令。
- * 2. ~~dsh 的這顆 plugin 從 cordis 拿檔案系統提供方（`ctx.get('fs')`），我們的 `apply` 看不到 backend，退到 `useWithBackend`~~
- *    **已撤（#1474 Q3 (a)）**。遷上樹之後經 `fs` 服務（`@nexus/fs`）在**呼叫當下** `fs.forCall(invocation)` 拿這條 thread 的
- *    `FsService.backend()`，與 `submit-record`（#1466）、`present`（#1469）同一個做法。查找不是 `ok`、或 `backend()` 是
- *    `undefined`，就不注入——等於 dsh 在 `ctx.get('fs')` 拿不到提供方時直接返回（`src/index.ts:121-127`）。
- *    **要守的風險**：查找失敗時基線會**靜靜消失**，今天不會。`apps/harness/src/agent-instructions-on-tree.test.ts` 在 CLI、serve、
- *    無樹三個入口、root 與同步／背景子代理，量到的查找都是 `ok`。
- * 2b. **哪一條**：dsh 的 `fs` 是**選配**（`inject = ['sessionProjections', 'workingDirectory']`，`ctx.get('fs')` 拿不到就返回，
+ * 2. **哪一條**：dsh 的 `fs` 是**選配**（`inject = ['sessionProjections', 'workingDirectory']`，`ctx.get('fs')` 拿不到就返回，
  *    `src/index.ts:36`、`:121-127`）；我們把 `fs` 放進 `inject`（必填，`^1.1.0`）。
  *    **為什麼表達不出來**：我們要在 `apply` 當下就把服務抓進閉包。沒有樹的路徑上（eval、`createNexusAgent` 的測試）插件被
  *    `mountDetached` 掛一次就卸載，呼叫當下才經 `ctx` 取服務會拋；而不經 `inject` 的選用服務在 `apply` 當下沒有次序保證——`fs` 那一列
  *    還沒提供就會永遠拿到 `undefined`，基線也就靜靜消失。
  *    **退到什麼**：`fs` 列是宿主內建列、永遠先起來，必填不會讓清單上的這一列多掉一種原因。
+ *    **要守的風險**：呼叫當下 `fs.forCall(invocation)` 的查找若不是 `ok`，基線會**靜靜消失**。`apps/harness/src/agent-instructions-on-tree.test.ts`
+ *    在 CLI、serve、無樹三個入口，root 與同步／背景子代理，量到的查找都是 `ok`。
  * 3. **哪一條**：摘要把基線切掉之後，dsh 在**下一步**補回——`agent/pre-step` 每一步都跑
  *    `visibleBaselineSource`，看的是壓縮後還看得到的那一面，看不到就重讀、重渲染一則新的（`src/index.ts:46-62`、
  *    `:130-190`）。我們在**下一次 invoke** 補回；判準相同（模型看得到的那一串裡有沒有），重讀與重渲染也相同。
@@ -251,7 +247,7 @@ export const name = 'agent-instructions';
 
 /**
  * 要的服務：`agentLoop`（`^1.0.0`，登記 `preStep` listener）與 `fs`（`^1.1.0`，呼叫當下拿這條 thread 的 backend）。範圍在這裡宣告，
- * 落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。`fs` 放進 `inject` 而不是選配，理由見檔頭偏離 2b。
+ * 落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。`fs` 放進 `inject` 而不是選配，理由見檔頭偏離 2。
  */
 export const inject = injectOf(need(agentLoopToken, '^1.0.0'), need(fsToken, '^1.1.0'));
 
@@ -276,7 +272,7 @@ export const manifest = defineManifest({
 /**
  * 掛上：登記一位 `preStep` listener。
  *
- * **兩個服務都在這裡抓進閉包**，列卸載之後經 `ctx` 取服務會拋，抓住的那份仍可呼叫（見檔頭 2b）。**呼叫當下才 `fs.forCall`**。
+ * **兩個服務都在這裡抓進閉包**，列卸載之後經 `ctx` 取服務會拋，抓住的那份仍可呼叫（見檔頭偏離 2）。**呼叫當下才 `fs.forCall`**。
  *
  * @param ctx - 這一列的 Cordis context。
  * @param config - 驗過的設定。
