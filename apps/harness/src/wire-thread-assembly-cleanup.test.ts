@@ -63,6 +63,8 @@ interface Faults {
   detach?: boolean;
   /** 收落盤那一步拋。 */
   persistenceDispose?: boolean;
+  /** 收 `attachSessions` 的那一步要等一下才收完（背景 host 收尾要時間）。 */
+  slowDetach?: boolean;
 }
 
 function scriptedAgent(): PumpAgent {
@@ -92,6 +94,7 @@ function threadAgentFor(rig: Rig, faults: Faults, workspaceRoot: string | undefi
       rig.live.add('sessions');
       return {
         detach: async () => {
+          if (faults.slowDetach === true) await new Promise((resolve) => setTimeout(resolve, 20));
           rig.order.push('sessions');
           rig.live.delete('sessions');
           if (faults.detach === true) throw new Error('會話接線收不掉');
@@ -242,6 +245,15 @@ describe('thread 組到一半失敗：已接上的要收掉（#1467）', () => {
     expect(await open(client)).toBeUndefined();
     expect(rigs[0]?.live.size).toBe(3);
     await handler.close();
+    expect(rigs[0]?.order).toEqual(['title', 'sessions', 'persistence', 'agent']);
+    expect(rigs[0]?.live.size).toBe(0);
+  });
+
+  it('會話接線收得慢：close() 等它收完才收落盤與 agent（背景 host 收尾的事件趕在落盤退訂之前，#1482）', async () => {
+    const { handler, client, rigs } = connect({ slowDetach: true });
+    expect(await open(client)).toBeUndefined();
+    await handler.close();
+    // `order` 記的是各步「收完」的那一刻：會話接線睡了 20ms 才記，落盤與 agent 還是排在它後面。
     expect(rigs[0]?.order).toEqual(['title', 'sessions', 'persistence', 'agent']);
     expect(rigs[0]?.live.size).toBe(0);
   });

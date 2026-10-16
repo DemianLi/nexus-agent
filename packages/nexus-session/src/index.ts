@@ -17,7 +17,7 @@
  * ## 會話查找這個接縫（#1463 Q1 (a)、Q2 (a)）：宿主提供、呼叫當下依 thread 路由
  *
  * 服務只有一個方法 `forCall(invocation)`，回 {@link SessionLookup}。它找的是**行程裡每一條活著的 thread** 綁上的會話註冊表；
- * 挑法是 `@nexus/core` 的 `pickSessionForCall`（一張就不看 `thread_id`、多張依 `thread_id` 挑恰好一張，否則 `ambiguous`），
+ * 挑法是 `@nexus/core` 的 `pickSessionForCall`（相容層一張就不看 `thread_id`、行程級查找一張也核對（#1482）；多張依 `thread_id` 挑恰好一張，否則 `ambiguous`），
  * 相容層的 `registry.sessions.forCall` 與樹上這個服務是**同一支實作**。
  *
  * **偏離 dsh**（AGENTS.md 的偏離規則）：dsh 的形狀是 `exec.agent`，由 agent loop 派發工具時帶進來
@@ -82,7 +82,7 @@ export interface SessionLookupService {
   /**
    * **模型工具問「我這次呼叫該寫進哪一份日誌」的地方**，dsh `exec.agent.session` 的對應物（偏離見檔頭）。
    *
-   * 挑法與四種結果的意思見 {@link SessionLookup}：一張就不看 `thread_id`，多張依 `thread_id` 挑恰好一張。服務看的是**行程裡
+   * 挑法與四種結果的意思見 {@link SessionLookup}：一張時行程級查找也核對 `thread_id`（#1482），多張依 `thread_id` 挑恰好一張。服務看的是**行程裡
    * 每一條活著的 thread**，所以多條 thread 同時活著時，**每一次呼叫都靠 `thread_id` 認出主人**——工具要把整個呼叫設定
    * （handler 的第二個參數）原樣傳進來，不能只傳它自己覺得有用的欄位。
    *

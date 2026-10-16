@@ -42,6 +42,23 @@ describe('ThreadSessions', () => {
     expect(live.forCall(at(undefined))).toEqual({ kind: 'ambiguous', count: 2 });
   });
 
+  it('只剩一條：thread_id 不是它的 → ambiguous 數 1（不再挑它）；是它的、沒帶 thread_id → 照舊（#1482）', () => {
+    const live = new ThreadSessions();
+    const a = new SessionRegistry('a');
+    const b = new SessionRegistry('b');
+    const undoA = live.register(a);
+    live.register(b);
+    // 兩條都活著時 a 的呼叫找得到 a；a 撤掉之後，a 還在飛的呼叫不能被挑到 b 身上。
+    undoA();
+    expect(live.size).toBe(1);
+    expect(live.forCall(at('a'))).toEqual({ kind: 'ambiguous', count: 1 });
+    const own = live.forCall(at('b'));
+    expect(own.kind === 'ok' && own.log).toBe(b.root);
+    // 沒帶 thread_id 的呼叫沒有東西可核對：維持原本「只有一條就是它」。
+    const without = live.forCall(at(undefined));
+    expect(without.kind === 'ok' && without.log).toBe(b.root);
+  });
+
   it('同一個 root id 重組：後登記的取代先登記的；舊的 undo 只撤自己，不誤撤新的', () => {
     const live = new ThreadSessions();
     const first = new SessionRegistry('same');

@@ -1230,6 +1230,15 @@ export type BoundPick<T> =
   | { readonly kind: 'unknown-caller' }
   | { readonly kind: 'ambiguous'; readonly count: number };
 
+/** {@link pickBoundForCall} 的選項。 */
+export interface PickBoundOptions {
+  /**
+   * 只剩一筆登記時也核對 `thread_id`：呼叫帶了 `thread_id`、而那一筆不擁有它，回 `ambiguous`（`count` 是登記的筆數，這裡是 1）；
+   * 沒帶 `thread_id` 的呼叫不受影響。預設 `false`——相容層與手搭的測試呼叫沿用「一筆就挑它」。
+   */
+  readonly verifySingle?: boolean;
+}
+
 /**
  * **「這次工具呼叫屬於哪一條活著的 thread」的挑法，全樹只有這一份**（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463)
  * Q1 (a)，Part of #1385；演算法是 #1418 定下的那一條，原樣搬出來。[#1466](https://github.com/DemianLi/nexus-agent/issues/1466)
@@ -1240,7 +1249,10 @@ export type BoundPick<T> =
  * 依 `thread_id` 認出主人」的語意只在這裡寫一次——不准在別處再寫一份（驗收的「永遠回第一張」突變就改在這裡）。
  *
  * - 一筆都沒有：`not-attached`。
- * - 只有一筆：**不看 `thread_id`**，與逐條 thread 之前逐位元組相同（手搭的測試呼叫沒有它）。
+ * - 只有一筆：**預設不看 `thread_id`**，與逐條 thread 之前逐位元組相同（手搭的測試呼叫沒有它，相容層的 `registry.sessions.forCall` 也是這個預設）。
+ *   行程級的查找（宿主的 `ThreadSessions`）傳 {@link PickBoundOptions.verifySingle}：這時**帶了 `thread_id` 而那一筆不擁有它**就回 `ambiguous`
+ *   （[#1482](https://github.com/DemianLi/nexus-agent/issues/1482)）——行程裡別條 thread 剛好只剩這一筆，不代表這次呼叫屬於它（一條 thread
+ *   收尾途中還在跑的工具、`thread_id` 認得出主人的呼叫都會碰到）。**沒帶 `thread_id` 的呼叫照舊挑那一筆**：它認不出主人，也就沒有東西可核對。
  * - 多筆：依 {@link callThreadId} 挑「有一份日誌的 id 等於它」的恰好一筆；沒帶 `thread_id`、沒有任何一筆認得、不只一筆認得，
  *   一律 `ambiguous`——寧可明說也不猜（猜錯是一條 thread 的工具寫進另一條 thread 的日誌，靜默的）。
  * - 挑到之後算不出位址：`unknown-caller`。
@@ -1250,18 +1262,26 @@ export type BoundPick<T> =
  * @param bound - 這一次查找看得見的登記。**只迭代一次**，所以 `Set`、`Map.values()` 都可以。
  * @param sessionsOf - 這一筆登記帶的那條 thread 的會話註冊表。
  * @param config - 工具 handler 的第二個參數。
+ * @param options - 只剩一筆時要不要核對 `thread_id`，見 {@link PickBoundOptions}。
  * @returns 判別得出來的四種結果之一。
  */
 export function pickBoundForCall<T>(
   bound: Iterable<T>,
   sessionsOf: (item: T) => SessionRegistry,
   config: unknown,
+  options: PickBoundOptions = {},
 ): BoundPick<T> {
   const all = [...bound];
   if (all.length === 0) return { kind: 'not-attached' };
   let picked: T;
   if (all.length === 1) {
     [picked] = all as [T];
+    if (options.verifySingle === true) {
+      const thread = callThreadId(config);
+      if (thread !== undefined && !ownsThread(sessionsOf(picked), thread)) {
+        return { kind: 'ambiguous', count: 1 };
+      }
+    }
   } else {
     const thread = callThreadId(config);
     const owners =
@@ -1283,13 +1303,15 @@ export function pickBoundForCall<T>(
  *
  * @param bound - 這一次查找看得見的註冊表。**只迭代一次**，所以 `Set`、`Map.values()` 都可以。
  * @param config - 工具 handler 的第二個參數。
+ * @param options - 見 {@link PickBoundOptions}；傳給 {@link pickBoundForCall}。
  * @returns 判別得出來的四種結果之一。
  */
 export function pickSessionForCall(
   bound: Iterable<SessionRegistry>,
   config: unknown,
+  options?: PickBoundOptions,
 ): SessionLookup {
-  const picked = pickBoundForCall(bound, (sessions) => sessions, config);
+  const picked = pickBoundForCall(bound, (sessions) => sessions, config, options);
   if (picked.kind !== 'ok') return picked;
   // `open` 而不是 `get`：subagent 的日誌在第一次有人要寫的時候才出生，理由見
   // `SessionRegistry` 的偏離第 1 條。訂閱者在這一行之內就裝好了。

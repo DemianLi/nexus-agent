@@ -42,6 +42,40 @@ describe('pickBoundForCall', () => {
     }
   });
 
+  it('只有一筆、要求核對（verifySingle，#1482）：帶 thread_id 而它不屬於這一筆 → ambiguous 數 1；屬於、或沒帶 thread_id → 照舊挑它', () => {
+    const only = entryOf('only');
+    const verify = { verifySingle: true } as const;
+    expect(pickBoundForCall([only], sessionsOf, at('somebody-else'), verify)).toEqual({
+      kind: 'ambiguous',
+      count: 1,
+    });
+    // 屬於這一筆：自己的 root id，與背景子代理的 `<root>/<runId>`（日誌先出生，`ownsThread` 才認得）。
+    const own = pickBoundForCall([only], sessionsOf, at('only'), verify);
+    expect(own.kind === 'ok' && own.bound).toBe(only);
+    only.sessions.open({ kind: 'subagent', runId: 'run-1' } as never);
+    const background = pickBoundForCall([only], sessionsOf, at('only/run-1'), verify);
+    expect(background.kind === 'ok' && background.bound).toBe(only);
+    // 沒帶 thread_id 的呼叫無從核對，行為不變（#1463 的相容層、沒有 thread_id 的舊呼叫）。
+    const without = pickBoundForCall([only], sessionsOf, at(undefined), verify);
+    expect(without.kind === 'ok' && without.bound).toBe(only);
+    // 算不出位址仍是 unknown-caller，核對不改變這個判別。
+    expect(pickBoundForCall([only], sessionsOf, undefined, verify)).toEqual({
+      kind: 'unknown-caller',
+    });
+  });
+
+  it('多筆時 verifySingle 不改任何事（它只管剩一筆的那一格）', () => {
+    const a = entryOf('a');
+    const b = entryOf('b');
+    const verify = { verifySingle: true } as const;
+    const fromB = pickBoundForCall([a, b], sessionsOf, at('b'), verify);
+    expect(fromB.kind === 'ok' && fromB.bound).toBe(b);
+    expect(pickBoundForCall([a, b], sessionsOf, at('stranger'), verify)).toEqual({
+      kind: 'ambiguous',
+      count: 2,
+    });
+  });
+
   it('多筆：依 thread_id 挑恰好擁有它的那一筆；缺、不認得是 ambiguous', () => {
     const a = entryOf('a');
     const b = entryOf('b');

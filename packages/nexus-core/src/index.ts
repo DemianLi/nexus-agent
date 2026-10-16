@@ -164,6 +164,7 @@ export type {
   EventRegistrationPoint,
   SessionLookup,
   BoundPick,
+  PickBoundOptions,
   SpawnLink,
   Disposer,
   RegisterOptions,

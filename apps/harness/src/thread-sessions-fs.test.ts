@@ -45,6 +45,19 @@ describe('ThreadSessions.fsForCall', () => {
     expect(live.fsForCall(at('stranger'))).toEqual({ kind: 'ambiguous', count: 2 });
   });
 
+  it('只剩一條：thread_id 不是它的 → ambiguous 數 1，拿不到別條的 fs 把手；沒帶 thread_id 照舊（#1482）', () => {
+    const live = new ThreadSessions();
+    const fsB = createFsService();
+    const undoA = live.register(new SessionRegistry('a'), createFsService());
+    live.register(new SessionRegistry('b'), fsB);
+    undoA();
+    expect(live.fsForCall(at('a'))).toEqual({ kind: 'ambiguous', count: 1 });
+    const own = live.fsForCall(at('b'));
+    expect(own.kind === 'ok' && own.fs).toBe(fsB);
+    const without = live.fsForCall(at(undefined));
+    expect(without.kind === 'ok' && without.fs).toBe(fsB);
+  });
+
   it('子代理與背景子代理的呼叫身分（<root>/<runId>）挑到的是 root 那條 thread 的把手', () => {
     const live = new ThreadSessions();
     const fsA = createFsService();
