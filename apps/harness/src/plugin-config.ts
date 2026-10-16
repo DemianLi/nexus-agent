@@ -66,10 +66,15 @@ import type {
   RegisterOptions,
 } from '@nexus/core';
 import { ManifestError, validateManifest } from '@nexus/sdk';
+import type { SystemPromptAssembly } from '@nexus/system-prompt';
 import type { ToolGateListener, ToolRegisterOptions, ToolResultListener } from '@nexus/tools';
 
 import { resolveHarnessHome } from './harness-home.js';
 import { createPreStepMiddleware } from './pre-step-middleware.js';
+import {
+  createSystemPromptMiddleware,
+  systemPromptDefaultsOf,
+} from './system-prompt-middleware.js';
 import { registryFsLookup } from './registry-fs-lookup.js';
 import { assertPluginCompatible, PluginCompatibilityError } from './plugin-compatibility.js';
 import {
@@ -781,6 +786,8 @@ const BRIDGE = Symbol.for('nexus.plugin-bridge');
 interface BridgeMeta {
   /** 函式插件的命名空間。 */
   readonly module: FunctionPluginModule;
+  /** manifest 宣告提供的服務名（`provides[].token`）：宿主據此知道哪一列應該提供 `systemPrompt`（#1477）。 */
+  readonly provides: readonly string[];
 }
 
 type BridgePlugin = NexusPlugin<unknown> & { readonly [BRIDGE]: BridgeMeta };
@@ -823,7 +830,7 @@ function bridgeEntry(entry: ConfigEntry, module: FunctionPluginModule): PluginEn
         `橋接列 ${row} 還沒綁定到樹：只有 loadPluginConfig 交出來的清單上的條目能組裝`,
       );
     },
-    [BRIDGE]: { module },
+    [BRIDGE]: { module, provides: manifest.provides.map((provide) => provide.token) },
   };
   return {
     plugin,
@@ -854,6 +861,12 @@ interface FoldedContributions {
   readonly commands: readonly CommandDefinition[];
   /** 這一列提供、宿主取到的服務（#1456）。 */
   readonly services: readonly HostService[];
+  /**
+   * 這一列提供的 `systemPrompt` 服務的快照（#1477）：**資料**，不是服務。活的服務不折進 `registry.services`（`services` 那一格自動
+   * `provide`，相容層的插件拿到行程級的活服務就能呼叫 `section()`，段會跨 thread 越疊越多）。折進 thread 的是一顆
+   * `nexusSystemPrompt` middleware（`{ last: true }`），用快照渲染。`undefined` 代表這一列不是 `systemPrompt` 的提供者。
+   */
+  readonly systemPrompt: SystemPromptAssembly | undefined;
 }
 
 /**
@@ -895,6 +908,20 @@ function registerFolded(
   for (const { name, listener } of contributions.preSteps) {
     registry.middleware.use(createPreStepMiddleware(name, listener, registry.sessions));
   }
+  // 系統提示詞（#1477）：用快照建一顆 `nexusSystemPrompt` middleware，**帶 `last: true`**——排在每一顆會附加文字的 middleware 之後，後綴才是
+  // 最後一段（前綴是前置，位置不影響）。origin 是這一列（`registry.enter` 設的），所以直接呼叫 `loadPlugins` 的測試也量得到它。
+  // 預設的 model／cwd 走宿主內部的路（`system-prompt-middleware.ts` 的 `WeakMap`），不是 `NexusServices`；組裝點沒交就是這一列起不來
+  // （同今天的 `requires: ['systemPromptVariables']`：不退到猜的值）。代入之後頭尾都是空的就不掛——條件不是「有沒有服務」。
+  if (contributions.systemPrompt !== undefined) {
+    const defaults = systemPromptDefaultsOf(registry);
+    if (defaults === undefined) {
+      throw new Error(
+        'system-prompt 需要組裝點交 model 與 cwd 的預設值（systemPromptDefaultsEntry），這次組裝沒有交：不退到猜的值',
+      );
+    }
+    const middleware = createSystemPromptMiddleware(contributions.systemPrompt, defaults);
+    if (middleware !== undefined) registry.middleware.use(middleware, { last: true });
+  }
   for (const unit of contributions.projections) registry.projections.register(unit);
   // 技能來源走 `registry.skills.addSource`，**照那一列登記的順序**：`sources` 依序即優先序（後面的來源贏過前面的同名 skill）。
   // 格式與重名在樹上的提供者登記時就驗過了，這一層的 `NamedEntries` 只是第二道（相容層的列也走它）。
@@ -932,6 +959,7 @@ function bindDetached(entry: PluginEntry, id: string): PluginEntry {
         await mountDetached({
           id,
           module: meta.module,
+          provides: meta.provides,
           config: entry.config,
           ...(channel === undefined ? {} : { channel }),
           // 會話查找（#1463）：**這一次組裝自己的 `registry.sessions`**，只看那一份。查找在呼叫當下才問、不在掛載當下
@@ -1525,6 +1553,7 @@ async function loadPluginConfigOnce(
       // 設定驗不過的列相容層標成停用，樹上也不該去掛它。
       disabled: resolution.disabled || resolution.configError !== undefined,
       config: entry.config,
+      provides: bridgeOf(entry.plugin)?.provides ?? [],
     });
   });
   const snapshot: TreeSnapshot | undefined =
@@ -1590,6 +1619,7 @@ async function loadPluginConfigOnce(
       skillSources: verdict.skillSources,
       commands: verdict.commands,
       services: verdict.services,
+      systemPrompt: verdict.systemPrompt,
     });
     rows.set(bound, { id: origin.id, module: row.name });
     return bound;

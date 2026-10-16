@@ -101,6 +101,7 @@ import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 import { TextOnlyStateBackend } from './binary-read.js';
 import { ATTACHMENTS_PREFIX } from './attachment-store.js';
 import type { AttachmentStore } from './attachment-store.js';
+import { systemPromptDefaultsEntry } from './system-prompt-middleware.js';
 import { createToolResultStash } from './tool-result-stash.js';
 import type { StashRoute } from './tool-result-stash.js';
 import type { ToolResultStashOptions } from './tool-result-stash.js';
@@ -185,8 +186,9 @@ export interface CreateNexusAgentOptions {
   /**
    * 系統提示詞前後綴的 `{{model}}` 與 `{{cwd}}`（[#720](https://github.com/DemianLi/nexus-agent/issues/720)）。
    *
-   * 出貨清單的 `system-prompt` 那一列硬要這個服務，而**這裡是唯一的提供者**：手搭的呼叫端不必為了一個它們不關心的
-   * 服務各交一份，也就不會有兩個提供者撞在一起。省略時 `model` 取模型物件自己報的型號（`model`／`modelName`，
+   * 出貨清單的 `system-prompt` 那一列折進 thread 時要讀這兩個預設值（#1477：宿主那顆 `nexusSystemPrompt` middleware 用，經宿主內部的路
+   * 交，見 `system-prompt-middleware.ts`；不再是 `NexusServices` 的服務），而**這裡是唯一的提供者**：手搭的呼叫端不必為了一個它們不關心的
+   * 東西各交一份，也就不會有兩份撞在一起。省略時 `model` 取模型物件自己報的型號（`model`／`modelName`，
    * 都沒有就用 `_llmType()`——每個 `BaseChatModel` 都有），`cwd` 是 `/`：檔案工具的位址空間裡的根，不是主機路徑
    * （偏離登記見 `@nexus/plugin-system-prompt` 的檔頭）。`--live` 的兩個入口明著傳 `live-model` 那一列的 `modelId`，
    * 跟建模型讀的是同一份。
@@ -739,17 +741,13 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ...(options.attachments === undefined ? [] : [ATTACHMENTS_PREFIX]),
     ],
   });
-  // **放在最前面**：出貨清單的 `system-prompt` 在自己的 `apply` 當下就讀變數（#720）。
+  // **放在最前面**：`system-prompt` 那一列折進 thread 時（`registerFolded`）要讀這次組裝的 `model`／`cwd`（#720、#1477）。這個條目
+  // 不提供服務，只把值記在這次組裝的 registry 上（`system-prompt-middleware.ts`）：宿主內部的路，不是 `NexusServices` 擴充。
   const plugins: readonly PluginEntry[] = [
-    createHostServicesPlugin(
-      {
-        systemPromptVariables: {
-          model: options.systemPromptVariables?.model ?? modelLabelOf(options.model),
-          cwd: options.systemPromptVariables?.cwd ?? '/',
-        },
-      },
-      'system-prompt-variables',
-    ),
+    systemPromptDefaultsEntry({
+      model: options.systemPromptVariables?.model ?? modelLabelOf(options.model),
+      cwd: options.systemPromptVariables?.cwd ?? '/',
+    }),
     // **工具拿 backend 的那一格**（#694）：這裡先佔位，`foldRegistry` 折完把折出來的那一個填進去，
     // `present` 與 `submit_record` 被叫時才讀。理由見 `@nexus/core` 的 `fs-service.ts`。
     createHostServicesPlugin({ fs: fsService }, 'fs'),

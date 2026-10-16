@@ -144,6 +144,11 @@ describe('活著的設定版本（#1442）', () => {
       current: true,
       threads: ['t1', 't2'],
     });
+    // system-prompt（#1477）也一樣：樹上的列、掛上、next-thread，兩條 thread 各綁一次；沒有為它加任何程式。
+    expect(rowOf(first, 'system-prompt').live?.[0]).toMatchObject({
+      current: true,
+      threads: ['t1', 't2'],
+    });
     const oldVersion = {
       echo: rowOf(first, 'echo').live![0]!.version,
       todo: rowOf(first, 'todo').live![0]!.version,

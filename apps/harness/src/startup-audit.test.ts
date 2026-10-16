@@ -20,7 +20,9 @@ import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
 import { runCli } from './cli.js';
 import { foldTurn, serveClient, withSystemPromptVariables } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
-import { loadDefaultPlugins } from './plugin-config.js';
+import { createCordisRoot } from './cordis-root.js';
+import type { CordisRoot } from './cordis-root.js';
+import { loadDefaultPlugins, loadPluginConfig } from './plugin-config.js';
 import { seedHomePatch } from './plugin-journal.fixture.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -36,9 +38,12 @@ import {
 const temporary: string[] = [];
 let running: RunningServe | undefined;
 
+const roots: CordisRoot[] = [];
+
 afterEach(async () => {
   await running?.close();
   running = undefined;
+  for (const root of roots.splice(0)) await root.dispose().catch(() => {});
   for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -110,6 +115,92 @@ describe('必掛的列掉了：兩個入口都起不來', () => {
     expect((await cli(env)).error).toBeUndefined();
     running = await runServe({ argv: ['--port', '0'], log: () => undefined, env });
   });
+});
+
+/**
+ * system-prompt 的前後綴寫壞（[#1477](https://github.com/DemianLi/nexus-agent/issues/1477) 驗收 D）：遷移之前這一列在 `apply` 裡走一遍前後綴，
+ * 寫壞的變數名當場拋、那一列掉、必掛、起不來；遷移之後驗證搬到掛載當下（這一列自己登記 `model`、`cwd`，掛載時用空值走一遍），
+ * **同一類錯、同一列、同一格、同一個變數名**。量三個時刻：CLI 起動、serve 起動、serve 之後某條 thread 組裝（後者在
+ * `serve-plugin-failed-record.test.ts`）。
+ */
+describe('system-prompt 的前後綴寫壞：兩個入口都在起動時起不來', () => {
+  const cases: readonly (readonly [string, string, string])[] = [
+    [
+      '不存在的變數名',
+      '{{modle}}',
+      'system-prompt 的 personaPrefix 引用了不存在的變數 "{{modle}}"；可用的變數：model、cwd',
+    ],
+    ['名字裡有空白', '{{a b}}', 'system-prompt 的 personaPrefix 有寫壞的變數引用 "{{a b}}"'],
+  ];
+
+  it.each(cases)(
+    '%s：CLI 與 serve 拋同一則 StartupError，指名這一列（必掛）與原文',
+    async (_label, text, original) => {
+      const env = homeWith(`- id: system-prompt\n  config:\n    personaPrefix: '${text}'\n`);
+
+      const fromCli = await cli(env);
+      expect(fromCli.error).toBeInstanceOf(StartupError);
+      const message = (fromCli.error as Error).message;
+      expect(message).toMatch(/^起不來：1 列必掛的沒有掛上。/u);
+      expect(message).toMatch(/^ {2}system-prompt（@nexus\/plugin-system-prompt）〔必掛〕/mu);
+      expect(message).toContain(original);
+      expect(fromCli.errors).toEqual([]);
+
+      // serve：同一則，而且是在起動時（還沒綁 port、沒建任何 thread）。
+      await expect(runServe({ argv: ['--port', '0'], log: () => undefined, env })).rejects.toThrow(
+        message,
+      );
+    },
+  );
+
+  it('對照：前後綴引用的是登記過的 {{model}}、{{cwd}}，兩個入口都起得來', async () => {
+    const env = homeWith(
+      "- id: system-prompt\n  config:\n    personaPrefix: '你是 {{model}}，在 {{cwd}}。'\n",
+    );
+    expect((await cli(env)).error).toBeUndefined();
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env });
+  });
+});
+
+/**
+ * **已知缺口（#1477 Q3）：必掛的列自我停用，這份名單接不住**。樹上自我停用的判定是 `off`，`off` 的列不進 `dropped`（#1424：停著不算掛不上，
+ * 也不重掛、不閃動），而必掛名單比的是 `dropped`。`system-prompt` 沒有自我停用的呼叫，所以這張卡不修；這條測試把**現況**釘住，
+ * 補上必掛列自我停用的語意（行程內停著還是起不來）的那天它會紅，是補完的訊號，不是壞了。
+ */
+describe('已知缺口：必掛的列自我停用不進 dropped，啟動稽核接不住', () => {
+  it('以 system-prompt 的 id 載一顆自我停用的函式插件：dropped 是空的、列標成停用、稽核不拋', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-startup-audit-gap-'));
+    temporary.push(dir);
+    chmodSync(dir, 0o700);
+    const module = join(dir, 'quitter.mjs');
+    writeFileSync(
+      module,
+      `import { z } from 'zod';
+export const name = 'system-prompt';
+export const inject = { tools: { range: '^1.0.0' } };
+export const Config = z.strictObject({});
+export const manifest = {
+  id: 'system-prompt', version: '1.0.0', owner: 't',
+  provides: [], consumes: [{ token: 'tools', range: '^1.0.0' }],
+  config: Config, reload: { code: 'restart', config: 'next-thread' }, capabilities: [],
+};
+export function apply(ctx) { ctx.fiber.dispose(); }
+`,
+      { mode: 0o600 },
+    );
+    chmodSync(module, 0o600);
+    const shipped = join(dir, 'cordis.yml');
+    writeFileSync(shipped, `- id: system-prompt\n  name: 'file://${module}'\n`, { mode: 0o600 });
+    const root = createCordisRoot();
+    roots.push(root);
+    const loaded = await loadPluginConfig({ shipped, warn: () => undefined }, { tree: root.tree });
+
+    expect(REQUIRED_ENTRY_IDS.has('system-prompt')).toBe(true);
+    // 判成 off、標成停用，不是 dropped：必掛的名單接不住它。
+    expect(loaded.dropped).toEqual([]);
+    expect(loaded.plugins.map((plugin) => plugin.disabled)).toEqual([true]);
+    expect(() => auditStartupEntries(loaded, { live: false })).not.toThrow();
+  }, 60000);
 });
 
 /**

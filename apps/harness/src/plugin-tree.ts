@@ -79,6 +79,8 @@ import { createSessionLookupProvider } from '@nexus/session/provider';
 import { createFsLookupProvider } from '@nexus/fs/provider';
 import type { FsLookup } from '@nexus/fs';
 import { createSkillSourcesProvider } from '@nexus/skills/provider';
+import { systemPromptToken } from '@nexus/system-prompt';
+import type { SystemPrompt, SystemPromptAssembly } from '@nexus/system-prompt';
 import type { SkillSourceEntry } from '@nexus/skills/provider';
 import { createToolsProvider } from '@nexus/tools/provider';
 import type { ToolGateListener, ToolRegisterOptions, ToolResultListener } from '@nexus/tools';
@@ -131,6 +133,13 @@ export const FEEDBACK_SERVICE_RANGE = '^1.0.0';
 /** 宿主取的每一個服務：token 與範圍。加一個「插件提供、宿主消費」的服務就在這裡多一格。 */
 const HOST_SERVICES: readonly { readonly token: ServiceToken<unknown>; readonly range: string }[] =
   [{ token: feedbackToken as ServiceToken<unknown>, range: FEEDBACK_SERVICE_RANGE }];
+
+/**
+ * `systemPrompt` 服務的契約範圍（#1477）。它**不在 {@link HOST_SERVICES} 裡**：那一類的值是活的 proxy、整個折進這條 thread 的
+ * `registry.services`（`registerFolded` 自動 `provide`）；`systemPrompt` 不准這樣——相容層的插件拿到行程級的活服務就能呼叫 `section()`，
+ * 段會跨 thread 越疊越多。宿主改在 {@link PluginTree} 的臨界區裡 `assemble()` 一次，只留**資料**（快照）。
+ */
+export const SYSTEM_PROMPT_SERVICE_RANGE = '^1.0.0';
 
 /** 樹上某一列提供、宿主取到的服務：服務名與當下取到的值（Cordis 的 traceable proxy，列卸載之後仍能呼叫）。 */
 export interface HostService {
@@ -200,6 +209,11 @@ export interface TreeRowInput {
   readonly disabled: boolean;
   /** 相容層疊完之後這一列的 `config`（原始的，沒驗過）。 */
   readonly config: unknown;
+  /**
+   * 這一列的 manifest 宣告提供的服務名（`provides[].token`）。宿主據此知道「這一列**應該**提供 `systemPrompt`」：它 `active` 卻取不到
+   * 服務，是這一列掉了（#1477 PM 更正 3），不是「沒有服務所以不掛」。
+   */
+  readonly provides: readonly string[];
 }
 
 /** 交給樹的一份輸入。 */
@@ -261,6 +275,12 @@ export type RowVerdict =
        * 時取的快照**——列之後卸載，開著的 thread 手上的這一份仍能呼叫（服務的方法不碰 `this.ctx`）。
        */
       readonly services: readonly HostService[];
+      /**
+       * 這一列提供的 `systemPrompt` 服務在**組 thread 的臨界區裡**取的快照（#1477）：各段原文與已登記的變數名，**純資料**。
+       * 只有 manifest 宣告提供它的列才有（`undefined` 代表這一列不是它的提供者）；宣告了卻取不到的列判成 `dropped`。
+       * 活的服務不外漏：折進 thread 的只有這份資料。
+       */
+      readonly systemPrompt: SystemPromptAssembly | undefined;
     }
   | { readonly kind: 'off' }
   | {
@@ -644,6 +664,7 @@ export class PluginTree {
     for (const row of rows) verdicts.set(row.id, await this.#verdictOf(root, row, entries));
     // 宿主取的服務先分：契約版本不合的那一列在這裡判掉，後面三個 `#assign*` 只看 `active` 的列，掉了的不會被當成登記者。
     this.#assignServices(root, rows, verdicts);
+    await this.#assignSystemPrompt(root, rows, verdicts);
     this.#assignProjections(rows, verdicts, this.#projections.entries());
     this.#assignSkillSources(rows, verdicts, this.#skillSources.entries());
     this.#assignCommands(rows, verdicts, this.#commands.entries());
@@ -753,6 +774,62 @@ export class PluginTree {
   }
 
   /**
+   * 取 `systemPrompt` 服務的快照，交給提供它的那一列（#1477）。**在 `run` 的臨界區裡取**（`#snapshot` 本來就在臨界區裡）：臨界區只包
+   * 「讀清單、sync、取快照」，不包組裝，如果等到 `registerFolded` 才問，中間可能已經被別條 thread 的重讀插隊，拿到的是新的 persona，甚至是空段。
+   *
+   * - 只看 manifest 宣告提供 `systemPrompt` 的、`active` 的列。
+   * - **宣告了卻取不到**（讀不出字串型的 `provider`／`contractVersion`、歸屬不是這一列、`assemble()` 拋）：判成 `dropped`，寫明原因，
+   *   讓必掛稽核接住——不然這一列 `active`、稽核也過，宿主卻看到「沒有服務」就不掛，一條沒有 persona 的 thread 靜靜組起來。
+   * - 契約版本不在 {@link SYSTEM_PROMPT_SERVICE_RANGE} 裡：判在 `requires`（同 {@link #assignServices} 的做法）。
+   * - 取到的是 `assemble()` 回的資料（各段原文、變數名）；活的服務物件不往下傳。
+   */
+  async #assignSystemPrompt(
+    root: Context,
+    rows: readonly TreeRowInput[],
+    verdicts: Map<string, RowVerdict>,
+  ): Promise<void> {
+    const found = readHostService(root, systemPromptToken as ServiceToken<unknown>);
+    for (const row of rows) {
+      if (!row.provides.includes(systemPromptToken.name)) continue;
+      const verdict = verdicts.get(row.id);
+      if (verdict?.kind !== 'active') continue;
+      const id = treeId(row.id);
+      if (found === undefined || found.provider !== id) {
+        verdicts.set(row.id, {
+          kind: 'dropped',
+          stage: 'apply',
+          message:
+            `${id} 的 manifest 宣告提供 ${systemPromptToken.name}，樹上卻取不到它的服務` +
+            (found === undefined
+              ? '（讀不到，或讀到的不是契約服務）'
+              : `（歸屬是 ${found.provider}）`),
+        });
+        continue;
+      }
+      const problem = hostRangeProblem(
+        systemPromptToken as ServiceToken<unknown>,
+        SYSTEM_PROMPT_SERVICE_RANGE,
+        found.provider,
+        found.version,
+      );
+      if (problem !== undefined) {
+        verdicts.set(row.id, { kind: 'dropped', stage: 'requires', message: problem });
+        continue;
+      }
+      try {
+        const assembly = await (found.value as SystemPrompt).assemble();
+        verdicts.set(row.id, { ...verdict, systemPrompt: assembly });
+      } catch (error) {
+        verdicts.set(row.id, {
+          kind: 'dropped',
+          stage: 'apply',
+          message: `${id} 的 ${systemPromptToken.name} 服務取不了快照：${error instanceof Error ? error.message : String(error)}`,
+        });
+      }
+    }
+  }
+
+  /**
    * 把命令定義分給列（#1456）：登記者是哪一列就交給哪一列，**照登記順序**。
    *
    * 不共用，所以不像 {@link #assignProjections} 要挑「第一個起來的」：提供者已經讓同一個名字只有一個登記者。登記者不是
@@ -853,6 +930,8 @@ export class PluginTree {
         // 命令定義與宿主取的服務也一樣（`#assignCommands`、`#assignServices`）。
         commands: [],
         services: [],
+        // 系統提示詞的快照由 `#assignSystemPrompt` 取（要 await 服務的 `assemble()`，且要在所有列的結果都有了之後）。
+        systemPrompt: undefined,
       };
     }
     if (fiber.state === FIBER_STATE.FAILED) {
@@ -907,6 +986,8 @@ export interface DetachedMount {
   readonly module: FunctionPluginModule;
   /** 那一列的設定（原始的）。 */
   readonly config: unknown;
+  /** 這一列的 manifest 宣告提供的服務名；同 {@link TreeRowInput.provides}，用來判斷「應該提供 `systemPrompt`」。省略就是空。 */
+  readonly provides?: readonly string[];
   /**
    * 這一次單獨掛上時預設的答題管道（#1458）。**沒有樹的呼叫端也要有**：`bindDetached` 從組裝的 registry 讀 `channel` 服務交進來，
    * 不給等於「宿主沒有指定」（ask-user 在呼叫當下拒絕）。
@@ -941,6 +1022,8 @@ export interface DetachedContributions {
   readonly skillSources: readonly string[];
   readonly commands: readonly CommandDefinition[];
   readonly services: readonly HostService[];
+  /** 這一列提供的 `systemPrompt` 服務的快照（#1477），**在卸載之前取**；同 {@link RowVerdict} 的 `systemPrompt`。 */
+  readonly systemPrompt: SystemPromptAssembly | undefined;
 }
 
 /**
@@ -1017,6 +1100,24 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
         if (problem !== undefined) throw new Error(problem);
         services.push({ name: token.name, value: found.value });
       }
+      // 系統提示詞的快照：**在 `finally` 卸載這棵用完即丟的根之前取**（卸載後三段已撤）。宣告了提供卻取不到就拋，同樹上的 `dropped`。
+      let systemPrompt: SystemPromptAssembly | undefined;
+      if (mount.provides?.includes(systemPromptToken.name) === true) {
+        const found = readHostService(root, systemPromptToken as ServiceToken<unknown>);
+        if (found === undefined || found.provider !== mount.id) {
+          throw new Error(
+            `${mount.id} 的 manifest 宣告提供 ${systemPromptToken.name}，掛上之後卻取不到它的服務`,
+          );
+        }
+        const problem = hostRangeProblem(
+          systemPromptToken as ServiceToken<unknown>,
+          SYSTEM_PROMPT_SERVICE_RANGE,
+          found.provider,
+          found.version,
+        );
+        if (problem !== undefined) throw new Error(problem);
+        systemPrompt = await (found.value as SystemPrompt).assemble();
+      }
       const owned = provider.entries().filter((entry) => entry.source === mount.id);
       return {
         tools: owned.map((entry) => entry.tool),
@@ -1046,6 +1147,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
           .filter((entry) => entry.source === mount.id)
           .map((entry) => entry.definition),
         services,
+        systemPrompt,
       };
     }
     if (fiber?.state === FIBER_STATE.FAILED) {

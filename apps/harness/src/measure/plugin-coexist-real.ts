@@ -96,7 +96,7 @@ export async function probeRealPlugin(
       id,
       ...(config === undefined ? {} : { config }),
     });
-    // 宿主在組裝點替它提供的服務（例如 `systemPromptVariables`），排在被測的那一列前面。
+    // 宿主在組裝點替它提供的服務，排在被測的那一列前面。
     const host = (id: string) => ({
       id: `${id}-host`,
       plugin: {

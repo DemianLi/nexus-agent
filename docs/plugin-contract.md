@@ -15,7 +15,8 @@ capabilities 的執行、版本路由與兩版並存不在這一刀，見文末�
 [`packages/nexus-approval-channel`](../packages/nexus-approval-channel)（`@nexus/approval-channel`，第六個，#1458，**宿主在建樹時給值的預設答題管道**）與
 [`packages/nexus-tool-result`](../packages/nexus-tool-result)（`@nexus/tool-result`，#1458，工具回結果的三個寫法，**不是接縫**，只是單向轉出）與
 [`packages/nexus-session`](../packages/nexus-session)（`@nexus/session`，#1435 起單向轉出會話日誌的讀法，**#1463 起多一個接縫：第七個，會話查找**，宿主在樹上提供「這次呼叫的會話」）與
-[`packages/nexus-fs`](../packages/nexus-fs)（`@nexus/fs`，第八個，#1466，宿主在樹上提供「這次呼叫的那條 thread 的 fs 把手」）。
+[`packages/nexus-fs`](../packages/nexus-fs)（`@nexus/fs`，第八個，#1466，宿主在樹上提供「這次呼叫的那條 thread 的 fs 把手」）與
+[`packages/nexus-system-prompt`](../packages/nexus-system-prompt)（`@nexus/system-prompt`，#1477，**第二個由插件提供、宿主消費的服務**：系統提示詞的各段與變數名）。
 
 ## 這份規範管誰
 
@@ -217,6 +218,14 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   - **消費者**：`agent-instructions` 的 `inject` 是 `need(agentLoopToken, '^1.0.0')` 加 `need(fsToken, '^1.1.0')`，`apply` 裡把兩個服務抓進閉包，listener 每次呼叫 `fs.forCall(invocation)`；不是 `ok`、或 `backend()` 是 `undefined` 就不注入。**行為逐字不變**（Q4）：記號、渲染、四個候選、`maxBytes`、middleware 名字與位置、日誌 `source`、每次 invoke 一格、摘要後下一次 invoke 補回。
   - **紅燈**：`pre-step-middleware.test.ts`（宿主 middleware 本身）與 `agent-instructions-on-tree.test.ts`（B：列與快照；D：32 輪有沒有 `--workspace` 都一樣；E：兩條以上 serve thread 各有不同 AGENTS.md、root／同步子代理 worker 與 general-purpose／背景子代理、CLI／serve／無樹三個入口，每一格兩個方向都量）。舊外殼（`NexusPlugin`、`createAgentInstructionsMiddleware`）搬到 `agent-instructions.fixture.ts`，給還在相容層組裝的測試用。
   - **只剩一筆登記時也核對 `thread_id`**（見第八個接縫，#1482）：對不屬於那一筆的呼叫，注入拿到 `ambiguous`，不注入。
+- **第十個接縫：`systemPrompt`——插件提供、宿主取快照渲染的系統提示詞**（`@nexus/system-prompt` 1.0.0，#1477 Q1 (a)）。形狀同第五個接縫（`feedback`，插件提供、宿主消費），差在**宿主消費的是一份純資料的快照，不是活服務**。
+  - **定義套件**：token `systemPrompt`、`SystemPrompt`（`section(section)`、`variable(name)`、`assemble()`）、`SECTION_ORDERS`、嚴格插值 `interpolateStrict` 與前後段的組法 `composeSystemPromptParts`、契約版本。只依賴 `@nexus/sdk`，不 import `@nexus/core`，也不碰訊息型別。
+  - **提供者**：`system-prompt` 那一列（`@nexus/plugin-system-prompt`，`manifest.provides` 宣告）。`apply` 裡 `new` 一個 `ContractService`，三格設定（`includeHarnessIdentity`、`personaPrefix`、`personaSuffix`）是這個服務自己的設定，登記身分句、前綴、後綴三段與 `model`、`cwd` 兩個變數名。**掛載當下**用空值把前後綴走一遍（寫壞的語法、不存在的變數名當場拋，那一列掉在 `apply`，必掛，所以起不來，#720）。
+  - **宿主取快照**：組 thread 時，`PluginTree.#snapshot` 在 `run` 的臨界區裡對 `active` 且 `provides` 含 `systemPrompt` 的列呼叫 `assemble()` 一次，存成 `RowVerdict.active.systemPrompt`（各段原文與變數名，不含值）；沒有樹的路徑在 `mountDetached` 卸載之前取。**活服務不折進 thread 的 `registry.services`**（相容層的插件拿到就能呼叫 `section()`，段會跨 thread 疊加）。宣告了 `provides` 卻取不到服務、歸屬不符、契約範圍不符、或 `assemble()` 拋，那一列掉成 `dropped`（`apply` 或 `requires`），並帶原因。
+  - **宿主建 middleware**：`registerFolded` 以快照建一顆 `nexusSystemPrompt`（`registry.middleware.use(mw, { last: true })`，位置在鏈的最內側；`agent-instructions-on-tree.test.ts` 的三張鏈名守衛原樣不動）。每次模型呼叫代入 `{ model, cwd }`：`model` 取模型實例上的路由標籤（#723，沒貼標籤的用組裝時定的那份），`cwd` 取組裝點給的值。**代入之後頭尾都是空的就不掛**。
+  - **預設值走宿主內部的路，不擴充 `NexusServices`**：組裝點（`createNexusAgent`）在清單最前面放一個條目，把 `model`／`cwd` 記在以 `registry.middleware` 為鍵的 `WeakMap` 上，`registerFolded` 讀回。不經 `registry.services`，相容層的插件讀不到。
+  - **紅燈**：`system-prompt-middleware.test.ts`（宿主 middleware 本身）、`system-prompt-on-tree.test.ts`（B：列與快照；D2：合法改一次後舊 thread 不動、新 thread 看新的；E：同一份清單兩條 thread 各是各的，加組裝點建的、貼了路由標籤的模型實例）、`startup-audit.test.ts`（D：CLI 與 serve 起動時寫壞的變數名都起不來；已知缺口：必掛列自我停用不進 `dropped`，由一條測試釘住）。
+  - **已知缺口（Q3）**：樹上自我停用（`off`）的必掛列不進 `dropped`，必掛名單接不住；`system-prompt` 沒有自我停用的呼叫，這張卡不修。
 - **工具接縫 1.1.0：登記選項**（`@nexus/tools`，#1458 Q3 (a)）。`register(tool, options?)` 多一個**選配**的第二參數：`rootOnly`（`true`，或 `{ message, error? }` 帶自己的拒絕句與碼，
   照 dsh `DELEGATED_CALLER`）與 `outputSchema`（有 `safeParse` 的東西，成功輸出照它驗）。選項隨工具一起折進 thread 的註冊點（`RowVerdict.active.toolOptions`、
   `registerFolded`）；**沒有 `scope`**（`rootOnly` 配 `scope` 是矛盾，註冊點當場拋，這裡不開這個口）。次版號升級：`^1.0.0` 的舊消費者照常（不傳第二參數），要用選項的消費者宣告 `^1.1.0`。
@@ -487,10 +496,17 @@ thread 各自掛一份跑一遍當基準，再掛**一份**服務所有 thread �
 | listener 收到的是「模型看得到的那一串」與 `{ configurable }`，不是 dsh 的「這一步領出來的批次」與 `agent`（#1474，demian Q1-1 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：listener 收 `{ agent, messages, turn, step, signal }`（簽名在 `runtime-types.ts:320`），`messages` 是這一步從收件匣領出來的批次（`runtime-types.ts:313`）。**我們做不到的原因**：沒有收件匣，訊息批次在圖的 state 裡；沒有 `agent` 物件，這次呼叫屬於哪條 thread 由呼叫設定認。**退到哪裡**：`effectiveMessages`（摘要之後是 `[summary, ...切點之後]`）加 `{ configurable }`。**撤除條件**：同第一列 |
 | `user/message` 在注入當下記，不是 dsh 的「請求被接受的第一次嘗試」才記（#1474，demian Q2 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：由 agent loop 在請求被接受的第一次嘗試記（`packages/core/agent-loop/src/agent.ts:426-436`，`if (firstAttempt)` 底下；對讀版本 86a40220），插件不寫日誌。**我們做不到的原因**：`beforeAgent` 在請求之前就跑，看不到「這一步是不是第一次嘗試」。重試是模型呼叫那一層的事（`retryModelCall`），不會重跑 `beforeAgent`，所以同一次 invoke 不會因重試記兩筆。**退到哪裡**：宿主在回傳 `{ messages }` 之前經這條 thread 自己的 `registry.sessions.forCall` 記；插件一樣不寫日誌。**撤除條件**：同第一列 |
 | agent-instructions 把 `fs` 放進 `inject`（必填，`^1.1.0`），不是 dsh 的選配 `ctx.get('fs')`（#1474，demian Q3 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：`inject = ['sessionProjections', 'workingDirectory']`，`ctx.get('fs')` 拿不到就返回（`packages/context/agent-instructions/src/index.ts:36`、`:121-127`；對讀版本 86a40220）。**我們做不到的原因**：要在 `apply` 當下就把服務抓進閉包——沒有樹的路徑上插件被 `mountDetached` 掛一次就卸載，呼叫當下才經 `ctx` 取服務會拋；而不經 `inject` 的選用服務在 `apply` 當下沒有次序保證，`fs` 那一列還沒提供就會永遠拿到 `undefined`，基線靜靜消失。**退到哪裡**：`fs` 必填；它是宿主內建列、永遠先起來，不會讓清單上的這一列多掉一種原因。查找不是 `ok`、或 `backend()` 是 `undefined` 就不注入，等於 dsh 拿不到提供方時直接返回。**撤除條件**：選配服務有次序保證時 |
+| `systemPrompt` 只組頭尾兩段，不是整份提示詞（#1477，偏離登記第 1 列） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：整份提示詞由 `assemble` 組（`packages/core/system-prompt/src/index.ts`，對讀版本 86a40220）。**我們做不到的原因**：基座（deepagents）自己組它的提示詞，它的段不經我們的服務。**退到哪裡**：只組身分句＋前綴（前）與後綴（後），中間是基座與相容層 middleware 已經組好的。**撤除條件**：基座提示詞可以由服務組裝，或中間段的規則有第一個消費者（`plan-mode`／`sandbox-policy`）時 |
+| 宿主取的是組 thread 時的快照，每次模型呼叫只代入變數，不是 dsh 的每一步 `assemble`（#1477，第 4 列） | 產品需求超出 dsh | dsh 每一步重新 `assemble`，段的增減即時生效。我們照決議 §3-2 第 6 條「插件更新只給新對話」：組 thread 時 `assemble()` 一次取純資料快照；若每次呼叫都問活服務，合法地改一次這一列（`next-thread`），舊列卸載、段被撤，開著的 thread 下一次呼叫就靜靜少了身分與 persona。`system-prompt-on-tree.test.ts` 的 D2 釘住 |
+| `variable(name)` 只登記名字，值由宿主每次模型呼叫交（#1477，第 6 列，PM 更正） | 表達不出來，退到最接近的實作 | dsh 的 `variable(name, provider)` 每次 `assemble` 求值，`model`／`provider` 由 agent loop 登記。我們要 `{{model}}` 跟著那一步實際用的模型走（#723），組 thread 時求值就定死了。**`model` 名字目前由這一列登記**：日後 `@nexus/agent-loop` 若照 dsh 再登記同名 `model`，同服務內重名當場拋；到時把登記搬去 agent loop 那一列、這一列改成只讀（登記只有一行） |
+| 設定三格，不是 dsh 的五格（#1477，第 7 列） | 遷移卡不改行為（暫時） | dsh 另有 `includeRuntimeContext`、`toolOrder`，管執行期上下文與工具段，第一刀沒有消費者。**撤除條件**：需要時另開卡 |
+| `{{cwd}}` 是我們多的變數（#1477，第 8 列） | 產品需求超出 dsh | dsh 沒有 `cwd` 變數（dsh 只覆寫前綴：web-app :17-20、headless :11、acp-app :5、sdk-minimal :118）；我們的出貨後綴引用了 `{{cwd}}`，要不要拿掉不在這張卡。舊註解對 dsh 的引用有誤，已更正（插件檔頭與 `cordis.yml`） |
+| 掛載當下驗前後綴的語法與名字，不是渲染時才拋；訊息是中文（#1477，第 9 列） | 表達不出來，退到最接近的實作 | dsh 渲染時才嚴格插值、才拋，每一輪都紅，壞掉的設定不可能被忽略。我們的載入器把 `apply` 拋的錯變成「那一列掉了」，所以在掛載當下驗，並把這一列留在必掛名單（`startup-audit.ts`）。D 的失敗變成：同一類錯、同一列、同一格、同一個變數名，外層由「組裝失敗」變成「起不來」，CLI 的失敗時刻提早到 `cli.ts:953`（讀清單那一次） |
+| `section()` 只收字串 `text`，order 落在前綴與後綴之間的、帶 `complete`／`interpolate` 的登記當場拋（#1477，第 5、10 列） | 遷移卡不改行為（暫時） | dsh 的 `text` 可以是函式、`PromptSection` 另有 `complete`／`interpolate`、order 任意。快照要完整，中間段的渲染規則留給第一個用到的遷移卡。大聲拒絕，不靜靜丟掉 |
 
 ## 接進清單（#1416 PR 2）
 
-`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項），`todo` 是第七顆（#1463，新增會話查找接縫），`submit-record` 是第八顆（#1466，新增 fs 查找接縫與 `tools` 1.2.0 的核准閘門），`present` 是第九顆（#1469，新增 `tools/result` 觀察者與 fs 把手上的工作區事實），`agent-instructions` 是第十顆（#1474，新增 `agent/pre-step` 接縫）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
+`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項），`todo` 是第七顆（#1463，新增會話查找接縫），`submit-record` 是第八顆（#1466，新增 fs 查找接縫與 `tools` 1.2.0 的核准閘門），`present` 是第九顆（#1469，新增 `tools/result` 觀察者與 fs 把手上的工作區事實），`agent-instructions` 是第十顆（#1474，新增 `agent/pre-step` 接縫），`system-prompt` 是第十一顆（#1477，第二個插件提供、宿主消費的服務：`systemPrompt` 快照）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
 **樹那一側不是第二份清單，是清單的一個消費者**：
 
 | 東西 | 在哪 | 做什麼 |

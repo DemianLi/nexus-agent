@@ -71,9 +71,8 @@ if (command === 'verify') {
     'telemetry-otel': { mode: 'disabled' },
     'workspace-changes': { root: process.cwd() },
   };
-  const hostServices: Record<string, Record<string, unknown>> = {
-    'system-prompt': { systemPromptVariables: { model: 'probe-model', cwd: '/' } },
-  };
+  // 宿主在組裝點替某顆插件提供的服務。`system-prompt` 已經遷上樹（#1477），不是 `NexusPlugin` 也不讀服務了，不在這裡。
+  const hostServices: Record<string, Record<string, unknown>> = {};
   for (const pkg of process.argv.slice(3)) {
     const config = (await shippedConfig(pkg)) ?? optional[pkg];
     console.log(JSON.stringify(await probeRealPlugin(pkg, config, hostServices[pkg])));

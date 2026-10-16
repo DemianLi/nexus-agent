@@ -299,7 +299,15 @@ describe('組裝時才掉的必掛列（apply 那一步，驗收 F）', () => {
     const server = await start(h.env, []);
     const bad = await h.raw(BAD_PREFIX);
     const refused = await say(server, 'a');
-    expect(refused).toMatch(/組裝失敗.*system-prompt/su);
+    // #1477 之後 `system-prompt` 是樹上的列：壞掉的設定在讀清單時被必掛稽核接住（`StartupError`），外層從「組裝失敗」變成「起不來」，
+    // 與同檔 browser-session 的那一條同一個形狀；同一類錯誤、同一列、同一格、同一個變數名，內層 `SystemPromptTemplateError` 的文字逐字不變。
+    expect(refused).toMatch(/起不來/u);
+    expect(refused).not.toMatch(/組裝失敗/u);
+    expect(refused).toContain('system-prompt');
+    // 下行是 JSON，引號帶著反斜線。
+    expect(refused).toContain(
+      'system-prompt 的 personaPrefix 引用了不存在的變數 \\"{{nope}}\\"；可用的變數：model、cwd',
+    );
     expect(failedOf(h.dir)).toHaveLength(1);
     expect(failedOf(h.dir)[0]).toMatchObject({
       id: 'system-prompt',
