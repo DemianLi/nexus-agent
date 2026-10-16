@@ -140,6 +140,11 @@ export interface Conversation {
    */
   readonly refusal?: string;
   /**
+   * 下行接上過幾次，第一次接上是 1。開頁時讀一次的那幾樣（`hooks/use-open-read.ts`）看它：暫時讀不到的，下一次接上時再讀
+   * （[#1483](https://github.com/DemianLi/nexus-agent/issues/1483)）。
+   */
+  readonly connections: number;
+  /**
    * 下行斷了（或第一次就沒開成），正在自動重接（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）。
    * `wasConnected` 分得出「連上過、中斷了」與「從沒連上」；`offline` 是瀏覽器說沒有網路，這時不排重試，
    * 回到線上才從頭算。
@@ -329,6 +334,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | undefined>(undefined);
   const [refusal, setRefusal] = useState<string | undefined>(undefined);
+  const [connections, setConnections] = useState(0);
   const [reconnecting, setReconnecting] = useState<Conversation['reconnecting']>(undefined);
   const [recovered, setRecovered] = useState(false);
   /** 每加一就重開一次下行（#593）：自動重試與「立刻重連」都走這一格。 */
@@ -478,6 +484,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         book.attempt = 0;
         book.everConnected = true;
         setConnected(true);
+        setConnections((count) => count + 1);
         setConnectionError(undefined);
         setRefusal(undefined);
         setReconnecting(undefined);
@@ -925,6 +932,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     ...(feedbackDialog === undefined ? {} : { feedbackDialog }),
     ...(connectionError === undefined ? {} : { connectionError }),
     ...(refusal === undefined ? {} : { refusal }),
+    connections,
     ...(commandError === undefined ? {} : { commandError }),
     ...(slashError === undefined ? {} : { slashError }),
     ...(slashNotice === undefined ? {} : { slashNotice }),
