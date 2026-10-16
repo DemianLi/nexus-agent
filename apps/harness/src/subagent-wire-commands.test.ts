@@ -102,6 +102,7 @@ describe('替身控制面：wire 這一層', () => {
         return runId === 'bg-live';
       },
       hasRunning: () => false,
+      quiescent: () => true,
       interruptAll: () => 0,
     };
     return { calls, control };
@@ -202,6 +203,7 @@ describe('替身控制面：wire 這一層', () => {
       sendFromUser: () => Promise.reject(new Error('壞掉了')),
       interrupt: () => false,
       hasRunning: () => false,
+      quiescent: () => true,
       interruptAll: () => 0,
     };
     const { client } = stubbed(control);

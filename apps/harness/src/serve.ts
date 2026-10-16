@@ -764,6 +764,9 @@ async function startServer(
           warn: serverLog,
         });
 
+  // 閒置逐出（#1484）：沒有 `sessionStore` 就是沒落盤，撤掉的 thread 回不來，所以一律不逐出（下面啟動那一段會說）。
+  const idleEvictMs = sessionStore === undefined ? undefined : threadCapacity.idleEvictAfterMs;
+
   const handler = createWireHandler({
     auth,
     // 附件儲存（#732）：上傳路徑存進這裡；每條 thread 的 agent 另外掛一條唯讀路由給模型讀（見下面 `attachments`）。
@@ -773,6 +776,14 @@ async function startServer(
     threadTitleLimits: threadTitle,
     projectionFlushMs: projectionFlush.flushMs,
     ...(threadCapacity.maxThreads === undefined ? {} : { maxThreads: threadCapacity.maxThreads }),
+    // 閒置逐出（#1484，保險絲第 1 級）：**只有落盤開著才傳**。沒有落盤的日誌只在記憶體裡，撤掉就沒了；設了卻不生效，啟動時
+    // 印一行說忽略（下面「thread 上限」那一段）。撤完重寫 `plugin-snapshot.json`：放掉 live 綁定只動記憶體，檔要這裡補。
+    ...(idleEvictMs === undefined
+      ? {}
+      : {
+          idleEvictMs,
+          onThreadEvicted: () => threadPluginList.republishSnapshot(),
+        }),
     // 一頁歷史撐破軟上限時（#479）、退回標題寫不進去時（#647）、模型標題寫不成時（#650）講一聲。
     warn: (message) => {
       serverLog(message);
@@ -1129,8 +1140,18 @@ async function startServer(
   log(
     threadCapacity.maxThreads === undefined
       ? 'thread 上限：不限'
-      : `thread 上限：${String(threadCapacity.maxThreads)}（到了拒收新 thread，要重啟 serve 才釋放）`,
+      : `thread 上限：${String(threadCapacity.maxThreads)}（到了拒收新 thread，${
+          idleEvictMs === undefined ? '要重啟 serve 才釋放' : '閒置的 thread 被撤掉才釋放名額'
+        }）`,
   );
+  // 閒置逐出講出來（#1484）：設了卻沒生效（沒落盤）要看得到，不靜靜吞掉。
+  if (threadCapacity.idleEvictAfterMs !== undefined) {
+    log(
+      idleEvictMs === undefined
+        ? `thread 閒置逐出：已設 ${String(threadCapacity.idleEvictAfterMs)} 毫秒，但沒有開會話日誌（落盤），撤掉的 thread 回不來，所以不逐出`
+        : `thread 閒置逐出：閒置 ${String(idleEvictMs)} 毫秒後撤出記憶體（日誌在磁碟上，再開這條 thread 會照重啟後的路徑重組）`,
+    );
+  }
   for (const line of formatTracingDisclosure(readTracingDisclosure(env))) {
     log(line);
   }

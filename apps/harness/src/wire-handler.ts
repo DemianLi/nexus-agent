@@ -154,7 +154,7 @@ import {
   type DeliverableFilesConfig,
 } from './settings/deliverable-files.js';
 import { renameThreadTitle, ThreadTitleInvalidError } from './session-title.js';
-import type { AttachSessionTitleLlm } from './session-title-llm.js';
+import type { AttachSessionTitleLlm, SessionTitleDetach } from './session-title-llm.js';
 import {
   DEFAULT_THREAD_TITLE_MAX_TITLE_BYTES,
   threadTitleConfigSchema,
@@ -450,6 +450,30 @@ export interface WireHandlerOptions {
    */
   readonly maxThreads?: number;
   /**
+   * 閒置多久（毫秒）之後把一條 thread 從行程裡撤掉（`thread-capacity` 那一列的 `idleEvictAfterMs`，
+   * [#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，保險絲第 1 級）。**省略就不逐出**，行為與沒有這個選項時逐位元組相同。
+   *
+   * **閒置＝下面每一條同時成立**，任何一條不成立就重新計時（同 dsh 終端保留期：條件全成立才開始計、中途忙了就歸零、到期才收，
+   * 沒有「容量滿了先收最舊的」）：沒有 run 在跑、沒有掛著的中斷、送出佇列與插話佇列是空的；背景子代理沒有在跑／叫醒中／被中斷
+   * 暫停而排著的輪次；沒有續行授權（目標 active 且 armed）也沒有一次續行排程在飛；沒有 LLM 標題在產生；沒有請求握著這條 thread
+   * （含還在收本文、等附件的）；沒有斜線命令在跑；沒有下行掛著。「最後活動時間」在請求進出、下行掛上與放掉、pump 狀態變動時更新。
+   *
+   * 撤掉＝不重啟 serve 的前提下做「等價於重啟」那一半：磁碟上的日誌是真相，之後有人再開這條 thread 就照今天重啟後的路徑重組。
+   * **偏離登記：dsh 頂層沒有閒置逐出（遺留 TODO）**；閒置條件借子代理結算（`manager.ts` 的 settlement），計時借終端保留期（`retention.ts`）。
+   *
+   * 只有落盤開著才該給——沒有落盤的日誌只在記憶體裡，撤掉就沒了；`serve.ts` 只在 `sessionStore` 存在時傳。
+   */
+  readonly idleEvictMs?: number;
+  /** 逐出掃描的間隔（毫秒）。省略即 `idleEvictMs` 的十分之一，夾在 1 秒到 30 秒之間。 */
+  readonly idleEvictPollMs?: number;
+  /**
+   * 一條 thread 撤完之後叫一次（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：`serve.ts` 用它重寫 `plugin-snapshot.json`，
+   * 讓檔裡不再列這條 thread 握著的設定版本。**錯誤被吞掉、只記一行 {@link warn}**：它擋不住逐出，也不會讓 thread 留在撤到一半的狀態。
+   */
+  readonly onThreadEvicted?: (threadId: string) => void | Promise<void>;
+  /** 現在的毫秒時間，測試給固定的。省略即 `Date.now`。 */
+  readonly now?: () => number;
+  /**
    * 這台 server 講話的地方，選配（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
    *
    * **今天有四件事走到它**，加它的理由都很窄——發生時回應照樣是 200、畫面照樣對，不講就完全看不見：
@@ -484,6 +508,15 @@ export interface WireHandler {
   handle(request: Request): Promise<Response>;
   /** 收掉所有 thread 的下行，並把每個 thread 的 agent 清乾淨。 */
   close(): Promise<void>;
+}
+
+/** {@link createWireHandler} 回的實作：多一支掃描，其他實作 {@link WireHandler} 的替身（測試、量測）不需要有。 */
+export interface IdleSweepingWireHandler extends WireHandler {
+  /**
+   * 掃一遍閒置的 thread 並撤掉（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：不閒的重新計時，閒夠久的撤，
+   * 撤完才兌現。內部計時器每隔一段時間呼叫同一支；公開是為了測試用假時鐘決定性地驅動它。沒設 `idleEvictMs` 時什麼也不做。
+   */
+  sweepIdle(): Promise<void>;
 }
 
 const JSON_MEDIA_TYPE = 'application/json';
@@ -807,7 +840,18 @@ interface ThreadState {
    * 查佇列與日誌都還查不到，就會再排一次——這張表讓第二個請求等第一個落定再決定。
    */
   readonly promptRequestsInFlight: Map<string, Promise<string | undefined>>;
+  /**
+   * 最後一次活動的毫秒時間（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，閒置逐出的計時起點）。
+   * 請求進出、下行掛上與放掉、pump 狀態變動時更新；逐出掃描看到不閒時也更新。
+   */
+  lastActiveAt: number;
+  /** LLM 標題有一次產生排上或在飛（沒接標題就是假）。閒置逐出的判準之一。 */
+  readonly titleBusy: () => boolean;
+  /** 目標 active 且 armed（續行授權只在行程記憶體裡，撤掉就沒了）。沒接續行排程器就是假。 */
+  readonly goalArmed: () => boolean;
   dispose(): Promise<void>;
+  /** 閒置逐出用的收尾：同 {@link dispose} 的順序，但每一步各自吞錯、回報給 `report`，一步出錯不擋後面的。 */
+  evict(report: (error: unknown) => void): Promise<void>;
 }
 
 /** 這張表以型別窮舉 `WireFeedbackRating`：聯集多一種評價，這裡不補就編不過，不會悄悄被擋在門外。 */
@@ -1006,7 +1050,8 @@ function feedbackResponse(
  * 行程裡的 thread 數到了 {@link WireHandlerOptions.maxThreads}，這一條新 thread 沒建（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）。
  *
  * 只有 `threadFor` 拋、只有 `threadOrError` 接，回 `thread_at_capacity`。**message 是給管理者看的，寫出上限與下一步**
- * （照 dsh 背景工作准入的第 5 點）：名額不會自己回來，要放寬就調高 `thread-capacity` 那一列的 `maxThreads`，要釋放就重啟 serve。
+ * （照 dsh 背景工作准入的第 5 點）：沒設閒置逐出時名額不會自己回來——要放寬就調高 `thread-capacity` 那一列的 `maxThreads`，要釋放就重啟
+ * serve；設了 `idleEvictAfterMs`（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）就等閒置的 thread 被撤掉、名額自己回來。
  */
 export class ThreadCapacityError extends Error {
   constructor(
@@ -1014,16 +1059,21 @@ export class ThreadCapacityError extends Error {
     readonly current: number,
     /** 設定的上限。 */
     readonly limit: number,
+    /** 有設閒置逐出（`idleEvictAfterMs`）的話，管理者設的閒置毫秒數；沒設就是 `undefined`。 */
+    readonly idleEvictMs?: number,
   ) {
     super(
       `這台 server 的 thread 數已到上限（${String(current)}／${String(limit)}），這條新 thread 沒有建。` +
-        '已經開著的 thread 照常；名額不會自己釋放——重啟 serve 才會清空，或請管理者調高 thread-capacity 那一列的 maxThreads 後重啟。',
+        (idleEvictMs === undefined
+          ? '已經開著的 thread 照常；名額不會自己釋放——重啟 serve 才會清空，或請管理者調高 thread-capacity 那一列的 maxThreads 後重啟。'
+          : `已經開著的 thread 照常；閒置超過 ${String(Math.round(idleEvictMs / 1000))} 秒的 thread 會被自動撤掉並釋放名額，稍後再試；` +
+            '或請管理者調高 thread-capacity 那一列的 maxThreads（或調短 idleEvictAfterMs）後重啟。'),
     );
     this.name = 'ThreadCapacityError';
   }
 }
 
-export function createWireHandler(options: WireHandlerOptions): WireHandler {
+export function createWireHandler(options: WireHandlerOptions): IdleSweepingWireHandler {
   /**
    * 這台 server 的交付上限，**一個 server 解一次**。
    *
@@ -1051,8 +1101,9 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    * 已經建好的那些，同步讀得到。**給列表用**：它要知道哪幾條正在跑，但不能等一條還在建的 thread
    * ——`createAgent` 可能要起 MCP 子行程，列表不該被它拖住。還在建的就是還沒在跑。
    *
-   * **沒有逐條刪除是對的**：進得了這張表的，是 `threadFor` 已經走完、不會再失敗的 thread（失敗那條路在
-   * `set` 之前），而 thread 只在 `close()` 一起收，那裡整張清掉。哪天有了逐條收 thread 的路，要跟著刪。
+   * **逐條刪除只有一條路：閒置逐出**（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，`evictThread`，同步刪）。
+   * 進得了這張表的，是 `threadFor` 已經走完、不會再失敗的 thread（失敗那條路在 `set` 之前）；其餘時候 thread 只在
+   * `close()` 一起收，那裡整張清掉。再有新的逐條收 thread 的路，要跟著刪。
    */
   const ready = new Map<string, ThreadState>();
   /** 全部 thread 共用的那條下行（#632）。每條 pump 一建好就接上，見 `thread-feed.ts`。 */
@@ -1063,23 +1114,148 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    * 收據是不透明的隨機 id，不是內容雜湊：知道某個檔的雜湊不等於有權把它掛進這條 thread 的訊息。
    */
   const receipts = new Map<string, Map<string, FileAttachmentRef>>();
+  const now = options.now ?? Date.now;
+  /**
+   * **正在撤的 thread**（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：thread id → 撤完（含寫租約放掉、快照重寫）才兌現的 promise。
+   *
+   * 撤的那一刻 `threads` 與 `ready` 的條目就同步刪掉（之後沒有人再拿到那份舊 state），但**名額與租約要等收完才還**：
+   * 容量數 `threads.size + closing.size`；同一個 thread id 的新請求在 `threadFor` 裡等這個 promise，兌現之後才組新的——
+   * 不然新組的 agent 會撞上舊的那把寫租約。**兌現永不拒絕**：收尾每一步都吞錯並記一行 warn（見 `evictThread`）。
+   */
+  const closing = new Map<string, Promise<void>>();
+  /**
+   * 每條 thread 此刻有幾個請求握著它（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）。**鍵是 thread id 不是 state**：
+   * `handle()` 一進來就同步 +1，早於任何 `await`、早於 `threadFor`，所以連「thread 還不在記憶體裡」的請求也算——
+   * `run.start` 在 `admitAttachments` 的 `await` 前後，這條 thread 看起來什麼都沒在做，只有這個數字擋得住逐出落在那一段、
+   * 讓 `start()` 往一個已收線的 pump 送話（`submit` 拒絕、被 `start()` 吞掉，那句話就不見了）。
+   */
+  const httpInFlight = new Map<string, number>();
+  let closed = false;
+
+  /** 這條 thread 此刻的最後活動時間往現在推。沒載入的略過（初始時間在建好那一刻設）。 */
+  function touchThread(threadId: string): void {
+    const state = ready.get(threadId);
+    if (state !== undefined) state.lastActiveAt = now();
+  }
+
+  /** 見 {@link WireHandlerOptions.idleEvictMs}：卡上列的每一條都要成立。 */
+  function isIdle(threadId: string, state: ThreadState): boolean {
+    const { pump } = state;
+    return (
+      // `agentRunning` ＝ `running` 加上 `awaitingInput`；拆開寫是為了每一條各有各的測試與突變。
+      !pump.running &&
+      !pump.awaitingInput &&
+      pump.inbox.length === 0 &&
+      pump.nextStep.length === 0 &&
+      !pump.goalRoundInFlight &&
+      pump.subscriberCount === 0 &&
+      (state.background?.quiescent() ?? true) &&
+      !state.goalArmed() &&
+      !state.titleBusy() &&
+      !state.slashInFlight &&
+      state.promptRequestsInFlight.size === 0 &&
+      (httpInFlight.get(threadId) ?? 0) === 0
+    );
+  }
+
+  /**
+   * 把一條閒置的 thread 撤掉（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）。**呼叫端在同一段同步程式裡剛驗過閒置**。
+   *
+   * 順序：同步留下「撤中」占位並刪掉 `threads`／`ready` 條目 → `pump.close()` → 收尾（`release` 的順序：下行 → 標題 → 列檔索引 →
+   * 會話接線 → 落盤 → agent，每一步各自吞錯記 warn）→ 清上傳收據 → `onThreadEvicted`（重寫快照，吞錯）→ 放掉占位。
+   * **本函式的 promise 永不拒絕。**
+   */
+  function evictThread(threadId: string, state: ThreadState): Promise<void> {
+    const report = (step: string) => (error: unknown) =>
+      options.warn?.(
+        `[閒置逐出] thread "${threadId}" ${step}出錯（照常往下收）：${error instanceof Error ? error.message : String(error)}`,
+      );
+    // **占位與條目刪除先同步完成，收尾才開始**：收尾裡任何同步會拋的地方（`pump.close()`）都不能讓 `finally` 搶在 `set` 之前跑。
+    let settle!: () => void;
+    const done = new Promise<void>((resolve) => {
+      settle = resolve;
+    });
+    closing.set(threadId, done);
+    threads.delete(threadId);
+    ready.delete(threadId);
+    options.warn?.(
+      `[閒置逐出] thread "${threadId}" 閒置 ${String(Math.round((now() - state.lastActiveAt) / 1000))} 秒，撤出記憶體（日誌在磁碟上，再開這條 thread 會照重啟後的路徑重組）`,
+    );
+    void (async (): Promise<void> => {
+      try {
+        state.pump.close();
+        await state.evict(report('收尾'));
+        // 收據只在收下它的那條 thread 有效，撤掉就失效——同重啟（#732）。
+        receipts.delete(threadId);
+        try {
+          await options.onThreadEvicted?.(threadId);
+        } catch (error: unknown) {
+          report('通知撤完')(error);
+        }
+      } catch (error: unknown) {
+        report('撤')(error);
+      } finally {
+        // 先放占位再兌現：等的人醒來時名額已經還了。
+        closing.delete(threadId);
+        settle();
+      }
+    })();
+    return done;
+  }
+
+  /**
+   * 掃一遍：不閒的重新計時，閒夠久的撤掉。計時器與測試共用這一支；回的 promise 在這一次撤的都撤完才兌現。
+   */
+  async function sweepIdle(): Promise<void> {
+    const limit = options.idleEvictMs;
+    if (limit === undefined || closed) return;
+    const at = now();
+    const started: Promise<void>[] = [];
+    for (const [threadId, state] of [...ready]) {
+      if (!isIdle(threadId, state)) {
+        state.lastActiveAt = at;
+        continue;
+      }
+      if (at - state.lastActiveAt >= limit) started.push(evictThread(threadId, state));
+    }
+    await Promise.all(started);
+  }
+
+  let sweeper: ReturnType<typeof setInterval> | undefined;
+  if (options.idleEvictMs !== undefined) {
+    const pollMs =
+      options.idleEvictPollMs ??
+      Math.min(30_000, Math.max(1000, Math.floor(options.idleEvictMs / 10)));
+    sweeper = setInterval(() => void sweepIdle(), pollMs);
+    // 不能讓計時器單獨撐住行程。
+    sweeper.unref();
+  }
 
   function threadFor(threadId: string): Promise<ThreadState> {
     const existing = threads.get(threadId);
     if (existing !== undefined) {
       return existing;
     }
+    // **這條正在被撤（#1484）**：等撤完再走一遍 `threadFor`——不准拿到正在關的舊 thread，也不准在舊的寫租約放掉之前組新的。
+    // 所有等的人都掛在同一個 promise 上，兌現之後第一個走進來的組新的、其餘的在上面那道 `threads.get` 命中它，所以只重建一次。
+    const retiring = closing.get(threadId);
+    if (retiring !== undefined) {
+      return retiring.then(() => threadFor(threadId));
+    }
     // **thread 數上限（#1476，保險絲第 2 級；偏離登記：產品需求超出 dsh，借 jobs-local 的准入形狀）。**
     // 順序是承重的：在 `threads.get` 沒命中之後（已在行程裡的不受影響，同一個新 id 的並行請求也在上面共用同一個 promise、
     // 只佔一個名額）、在 `createAgent` 與 `threads.set` 之前（拒收不建任何資源、不留任何紀錄）。數 `threads.size` 而不是
     // `ready.size`：建構中的 promise 同步就佔了位，N 條都卡在 `createAgent` 時第 N+1 條也要被拒；建失敗 `threads.delete`
     // 之後名額就回來。沒有排隊、搶占、自動關最舊的（dsh 決策紀錄明確否決）。
-    if (options.maxThreads !== undefined && threads.size >= options.maxThreads) {
-      const current = threads.size;
+    // **撤中的也佔名額**（#1484）：它的寫租約與底下的資源要等收完才還。
+    if (options.maxThreads !== undefined && threads.size + closing.size >= options.maxThreads) {
+      const current = threads.size + closing.size;
       options.warn?.(
         `[thread 上限] 拒收新 thread "${threadId}"：行程裡已有 ${String(current)} 條，上限 ${String(options.maxThreads)}`,
       );
-      return Promise.reject(new ThreadCapacityError(current, options.maxThreads));
+      return Promise.reject(
+        new ThreadCapacityError(current, options.maxThreads, options.idleEvictMs),
+      );
     }
     const created = (async (): Promise<ThreadState> => {
       const threadAgent = await options.createAgent(threadId);
@@ -1091,7 +1267,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       // `release`，收的順序只有一份（[#1467](https://github.com/DemianLi/nexus-agent/issues/1467)）。
       // 沒接上的欄位還是 `undefined`，收的時候跳過。
       const attached: {
-        detachTitle?: () => Promise<void>;
+        detachTitle?: SessionTitleDetach;
         unsubscribeFileSearch?: () => void;
         fileSearch?: WorkspaceFileSearch;
         attachment?: { detach(): Promise<void> };
@@ -1102,14 +1278,19 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
        *
        * @param tolerant - 失敗路徑為 `true`：每一步各自吞掉自己的錯、繼續收下一步，原本的錯才不會被收尾的錯蓋掉，
        *   也不會因為一步出錯就讓後面的（尤其是 agent 的寫租約）漏收。成功路徑為 `false`：照舊讓錯往上拋。
+       * @param report - 只在 `tolerant` 時有意義：吞掉的錯交給它（閒置逐出用它記 warn，#1484）。失敗路徑不給，那條路的錯沒有人能處理。
        */
-      const release = async (tolerant: boolean): Promise<void> => {
+      const release = async (
+        tolerant: boolean,
+        report?: (error: unknown) => void,
+      ): Promise<void> => {
         const step = async (run: () => void | Promise<void>): Promise<void> => {
           if (!tolerant) return run();
           try {
             await run();
-          } catch {
-            // 原本的錯照舊往上拋；收尾的錯在這條路上沒有人能處理。
+          } catch (error: unknown) {
+            // 原本的錯照舊往上拋；收尾的錯在這條路上沒有人能處理（逐出路徑交給 `report`）。
+            report?.(error);
           }
         };
         await step(() => detachFeed?.());
@@ -1176,18 +1357,29 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         // 遙測、不變量、參與者一個口接完（#668）；順序與「參與者寫的會被檢查看到」的保證見 `AttachSessions`。
         // 背景子代理結算了，通知這條 thread 的主對話（#840）：閒著就叫醒它開一輪，見 `ThreadPump.notifySettled`。
         const attachment = (attached.attachment = threadAgent.attachSessions(pump.sessions, {
-          onSettled: (settlement) =>
+          // 三個背景子代理的回呼都先推最後活動時間（#1484）：一輪背景工作的起落不一定經過 pump 的狀態。
+          onSettled: (settlement) => {
+            touchThread(threadId);
             pump.notifySettled({
               text: settlement.text,
               summary: settlement.summary,
               reason: settlement.reason,
               senderSessionId: settlement.sessionId,
-            }),
+            });
+          },
           // 背景子代理寫來的話（#849）：同一條路，來源是 `agent-message`（agent 寫的，不是人說的）。
-          onMessage: (message) =>
-            pump.receiveAgentMessage({ text: message.text, senderSessionId: message.sessionId }),
+          onMessage: (message) => {
+            touchThread(threadId);
+            pump.receiveAgentMessage({
+              text: message.text,
+              senderSessionId: message.sessionId,
+            });
+          },
           // 現況變了（#867）：整份送下行，新接上的下行補送最後一份。
-          onStatus: (items) => pump.notifySubagentStatus(items),
+          onStatus: (items) => {
+            touchThread(threadId);
+            pump.notifySubagentStatus(items);
+          },
           // 背景子代理的每一步也過封存閘門（#633，dsh 沿 lineage 看 root）。
           ...(options.threadOrganization !== undefined && {
             isArchived: () => options.threadOrganization!.isArchived(threadId),
@@ -1238,8 +1430,19 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           background: attachment.background,
           slashInFlight: false,
           promptRequestsInFlight: new Map(),
+          lastActiveAt: now(),
+          titleBusy: () => attached.detachTitle?.busy?.() ?? false,
+          goalArmed: () => {
+            const goal = driver?.goal();
+            return goal?.phase === 'active' && goal.activation === 'armed';
+          },
           dispose: () => release(false),
+          evict: (report) => release(true, report),
         };
+        // **pump 狀態一變就往現在推最後活動時間**（#1484）：run 起落、掛上與撤回中斷，都經 `watch` 講出來。
+        pump.watch(() => {
+          state.lastActiveAt = now();
+        });
         ready.set(threadId, state);
         return state;
       } catch (error) {
@@ -1499,10 +1702,26 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
 
   function openStream(
     pump: ThreadPump,
+    threadId: string,
     channels: readonly WireChannel[],
     signal: AbortSignal,
   ): Response {
-    return sseResponse(pump.subscribe(channels, signal), encodeSseFrame);
+    return sseResponse(touchOnEnd(pump.subscribe(channels, signal), threadId), encodeSseFrame);
+  }
+
+  /**
+   * 下行放掉（頁籤關了、中止、串流結束）的那一刻把這條 thread 的最後活動時間推到現在（#1484）：閒置計時從放掉那一刻起算，
+   * 不是從上一次掃描看到它還掛著的時候。`pump.subscribe` 在呼叫時就同步註冊了訂閱者，這裡只管放掉。
+   */
+  async function* touchOnEnd<T>(
+    events: AsyncGenerator<T, void, undefined>,
+    threadId: string,
+  ): AsyncGenerator<T, void, undefined> {
+    try {
+      yield* events;
+    } finally {
+      touchThread(threadId);
+    }
   }
 
   /** `GET /threads/feed`（#632）：契約見 `@nexus/wire` 的 `THREAD_FEED_PATH`。不建任何一條 thread。 */
@@ -1573,7 +1792,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     }
     const thread = await threadOrError(threadId, null);
     if (thread instanceof Response) return thread;
-    return openStream(thread.pump, channels, signal);
+    return openStream(thread.pump, threadId, channels, signal);
   }
 
   async function handleCommand(
@@ -2850,6 +3069,129 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     return first?.content;
   }
 
+  /**
+   * 這個請求若指名一條 thread，就同步 +1 它的在途請求數（#1484），回「放掉」；不指名（列表、搜尋、全域下行）回 `undefined`。
+   * 放掉時同時把最後活動時間推到現在（請求結束也算活動）。
+   */
+  function holdThread(request: Request): (() => void) | undefined {
+    let threadId: string | undefined;
+    try {
+      threadId = parsePath(new URL(request.url).pathname)?.threadId;
+    } catch {
+      // 壞的百分號編碼：之後會被當 404，沒有 thread 可握。
+      return undefined;
+    }
+    if (threadId === undefined) return undefined;
+    const id = threadId;
+    httpInFlight.set(id, (httpInFlight.get(id) ?? 0) + 1);
+    touchThread(id);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      const left = (httpInFlight.get(id) ?? 1) - 1;
+      if (left <= 0) httpInFlight.delete(id);
+      else httpInFlight.set(id, left);
+      touchThread(id);
+    };
+  }
+
+  /** 認證與信任檢查過之後的分派；`handle()` 在外面包一層請求計數。 */
+  async function dispatchRequest(request: Request): Promise<Response> {
+    const { pathname, searchParams } = new URL(request.url);
+    const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
+    const wrongMediaType = () =>
+      new Response('content type must be application/json', { status: 415 });
+    if (pathname === THREADS_PATH) {
+      if (request.method !== 'GET') return new Response('not found', { status: 404 });
+      // `GET` 沒有 body，這個 header 在這裡純粹是閘門：見 `THREADS_PATH` 的說明。
+      if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+      return handleList(request.signal);
+    }
+    if (pathname === THREAD_SEARCH_PATH) {
+      if (request.method !== 'POST') return new Response('not found', { status: 404 });
+      if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+      let body: unknown;
+      try {
+        body = await request.json();
+      } catch {
+        return new Response('body is not JSON', { status: 400 });
+      }
+      return handleSearch(body, request.signal);
+    }
+    if (pathname === THREAD_FEED_PATH) {
+      if (request.method !== 'GET') return new Response('not found', { status: 404 });
+      // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
+      if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+      return openFeed(request.signal);
+    }
+    const route = parsePath(pathname);
+    if (route?.kind === 'upload') {
+      // 上傳（#732）：契約先合，實作還沒做。位元組不是 JSON，所以不走下面那道 `application/json` 閘門，換成
+      // `application/octet-stream`（同樣不是 simple request，見 `@nexus/wire` 的 `attachments.ts`）。
+      if (request.method !== 'POST') return new Response('not found', { status: 404 });
+      if (mediaType !== 'application/octet-stream') {
+        return new Response('content type must be application/octet-stream', { status: 415 });
+      }
+      return handleUpload(route.threadId, searchParams, request);
+    }
+    if (route?.kind === 'attachment') {
+      if (request.method !== 'GET') return new Response('not found', { status: 404 });
+      if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+      return handleAttachment(route.threadId, route.attachmentId);
+    }
+    if (route?.kind === 'history') {
+      if (request.method !== 'GET') return new Response('not found', { status: 404 });
+      // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
+      if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+      return handleHistory(route.threadId, searchParams);
+    }
+    if (route?.kind === 'subagent-history') {
+      if (request.method !== 'GET') return new Response('not found', { status: 404 });
+      if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+      return handleSubagentHistory(route.threadId, route.runId, searchParams);
+    }
+    if (route?.kind === 'trajectory-turn') {
+      if (request.method !== 'GET') return new Response('not found', { status: 404 });
+      if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+      return handleTrajectoryTurn(route.threadId, searchParams);
+    }
+    if (route?.kind === 'file-references') {
+      if (request.method !== 'GET') return new Response('not found', { status: 404 });
+      // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
+      if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+      return handleFileReferences(route.threadId, searchParams, request.signal);
+    }
+    if (route?.kind === 'session-references') {
+      if (request.method !== 'GET') return new Response('not found', { status: 404 });
+      if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+      return handleSessionReferences(route.threadId, searchParams, request.signal);
+    }
+    if (route?.kind === 'changes-summary' || route?.kind === 'changes-diff') {
+      if (request.method !== 'GET') return new Response('not found', { status: 404 });
+      // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
+      if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
+      return route.kind === 'changes-summary'
+        ? handleChangesSummary(route.threadId, searchParams)
+        : handleChangesDiff(route.threadId, searchParams, request.signal);
+    }
+    if (request.method !== 'POST' || route === undefined) {
+      return new Response('not found', { status: 404 });
+    }
+    if (mediaType !== JSON_MEDIA_TYPE) {
+      return wrongMediaType();
+    }
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return new Response('body is not JSON', { status: 400 });
+    }
+    return route.kind === 'stream'
+      ? handleStream(route.threadId, body, request.signal)
+      : handleCommand(route.threadId, route.method, body, request.signal);
+  }
+
   return {
     async handle(request) {
       // 在任何路徑判斷之前：404 的路徑一樣不回答不信任的來源。見 `request-trust.ts`。
@@ -2863,100 +3205,21 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           headers: { 'cache-control': 'no-store' },
         });
       }
-      const { pathname, searchParams } = new URL(request.url);
-      const mediaType = request.headers.get('content-type')?.split(';', 1)[0]?.trim().toLowerCase();
-      const wrongMediaType = () =>
-        new Response('content type must be application/json', { status: 415 });
-      if (pathname === THREADS_PATH) {
-        if (request.method !== 'GET') return new Response('not found', { status: 404 });
-        // `GET` 沒有 body，這個 header 在這裡純粹是閘門：見 `THREADS_PATH` 的說明。
-        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-        return handleList(request.signal);
-      }
-      if (pathname === THREAD_SEARCH_PATH) {
-        if (request.method !== 'POST') return new Response('not found', { status: 404 });
-        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-        let body: unknown;
-        try {
-          body = await request.json();
-        } catch {
-          return new Response('body is not JSON', { status: 400 });
-        }
-        return handleSearch(body, request.signal);
-      }
-      if (pathname === THREAD_FEED_PATH) {
-        if (request.method !== 'GET') return new Response('not found', { status: 404 });
-        // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
-        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-        return openFeed(request.signal);
-      }
-      const route = parsePath(pathname);
-      if (route?.kind === 'upload') {
-        // 上傳（#732）：契約先合，實作還沒做。位元組不是 JSON，所以不走下面那道 `application/json` 閘門，換成
-        // `application/octet-stream`（同樣不是 simple request，見 `@nexus/wire` 的 `attachments.ts`）。
-        if (request.method !== 'POST') return new Response('not found', { status: 404 });
-        if (mediaType !== 'application/octet-stream') {
-          return new Response('content type must be application/octet-stream', { status: 415 });
-        }
-        return handleUpload(route.threadId, searchParams, request);
-      }
-      if (route?.kind === 'attachment') {
-        if (request.method !== 'GET') return new Response('not found', { status: 404 });
-        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-        return handleAttachment(route.threadId, route.attachmentId);
-      }
-      if (route?.kind === 'history') {
-        if (request.method !== 'GET') return new Response('not found', { status: 404 });
-        // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
-        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-        return handleHistory(route.threadId, searchParams);
-      }
-      if (route?.kind === 'subagent-history') {
-        if (request.method !== 'GET') return new Response('not found', { status: 404 });
-        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-        return handleSubagentHistory(route.threadId, route.runId, searchParams);
-      }
-      if (route?.kind === 'trajectory-turn') {
-        if (request.method !== 'GET') return new Response('not found', { status: 404 });
-        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-        return handleTrajectoryTurn(route.threadId, searchParams);
-      }
-      if (route?.kind === 'file-references') {
-        if (request.method !== 'GET') return new Response('not found', { status: 404 });
-        // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
-        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-        return handleFileReferences(route.threadId, searchParams, request.signal);
-      }
-      if (route?.kind === 'session-references') {
-        if (request.method !== 'GET') return new Response('not found', { status: 404 });
-        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-        return handleSessionReferences(route.threadId, searchParams, request.signal);
-      }
-      if (route?.kind === 'changes-summary' || route?.kind === 'changes-diff') {
-        if (request.method !== 'GET') return new Response('not found', { status: 404 });
-        // 同列表那一條：`GET` 沒有 body，這個 header 純粹是閘門。
-        if (mediaType !== JSON_MEDIA_TYPE) return wrongMediaType();
-        return route.kind === 'changes-summary'
-          ? handleChangesSummary(route.threadId, searchParams)
-          : handleChangesDiff(route.threadId, searchParams, request.signal);
-      }
-      if (request.method !== 'POST' || route === undefined) {
-        return new Response('not found', { status: 404 });
-      }
-      if (mediaType !== JSON_MEDIA_TYPE) {
-        return wrongMediaType();
-      }
-      let body: unknown;
+      // **請求計數在這裡、同步 +1**（#1484）：早於讀本文的 `await`、早於 `threadFor`，連 thread 還不在記憶體裡的請求也算。
+      // 閒置逐出看這個數字，才不會落在 `run.start` 讀完本文、等附件、`pump.submit` 之間。
+      const held = holdThread(request);
       try {
-        body = await request.json();
-      } catch {
-        return new Response('body is not JSON', { status: 400 });
+        return await dispatchRequest(request);
+      } finally {
+        held?.();
       }
-      return route.kind === 'stream'
-        ? handleStream(route.threadId, body, request.signal)
-        : handleCommand(route.threadId, route.method, body, request.signal);
     },
+    sweepIdle,
     async close() {
+      // 計時器先停、之後的掃描一律不動作；已經在撤的等它撤完——撤到一半就收線的話，那條的寫租約與子行程沒人收（#1484）。
+      closed = true;
+      if (sweeper !== undefined) clearInterval(sweeper);
+      await Promise.all([...closing.values()]);
       // 全域下行先收：它不屬於任何一條 thread，下面那幾條 pump 收掉也不會讓它結束。
       feed.close();
       const opened = [...threads.values()];

@@ -354,7 +354,8 @@ export const TURN_NOT_FOUND = 'turn_not_found';
 /**
  * serve 行程裡的 thread 數已到管理者設的上限（`#settings/thread-capacity`，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)），
  * 這條新 thread 沒建。任何會經 `threadFor` 新建組裝的路都可能回（送訊息、讀歷史、續聊磁碟上的舊 thread）；
- * 已在行程裡的 thread 不受影響。名額不會自己回來——要重啟 serve 才釋放，message 寫了上限與這一步。
+ * 已在行程裡的 thread 不受影響。名額不會自己回來——沒開閒置逐出時要重啟 serve 才釋放；開了（`idleEvictAfterMs`，[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）
+ * 則閒置夠久的 thread 被撤掉就還名額。message 寫了上限與對應的下一步。
  */
 export const THREAD_AT_CAPACITY = 'thread_at_capacity';
 

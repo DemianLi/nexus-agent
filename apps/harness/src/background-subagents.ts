@@ -356,6 +356,8 @@ export interface BackgroundSubagentControl {
   readonly hasRunning: () => boolean;
   /** {@link BackgroundSubagentHost.interruptAll}（封存帶 `stopActivity` 時全停，#633）。 */
   readonly interruptAll: () => number;
+  /** {@link BackgroundSubagentHost.quiescent}（閒置逐出要問「撤掉這條 thread 會不會丟掉在記憶體裡的工作」，#1484）。 */
+  readonly quiescent: () => boolean;
 }
 
 /**
@@ -683,6 +685,7 @@ export class BackgroundSubagentHost {
       interrupt: (runId) => this.interrupt(runId),
       hasRunning: () => this.hasRunning(),
       interruptAll: () => this.interruptAll(),
+      quiescent: () => this.quiescent(),
     };
   }
 
@@ -838,6 +841,23 @@ export class BackgroundSubagentHost {
    */
   hasRunning(): boolean {
     return this.statuses().some((item) => item.status === 'running');
+  }
+
+  /**
+   * 記憶體裡**沒有任何在途的工作**（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，閒置逐出的判準）。
+   *
+   * 比 {@link hasRunning} 嚴：`hasRunning` 不算被中斷暫停的排著的輪次（那是給「停止」鈕用的，暫停的不算在跑），但那些輪次
+   * 只存在這個行程的記憶體裡，撤掉 thread 它們就沒了——所以這裡一律算「不閒」。叫醒中的（{@link resume} 正在重建）同理，
+   * 還在飛的一輪（含剛跑完正在收尾的）也算。
+   */
+  quiescent(): boolean {
+    return (
+      this.#busy.size === 0 &&
+      this.#queue.length === 0 &&
+      this.#waking.size === 0 &&
+      this.#running.size === 0 &&
+      this.#inflight.size === 0
+    );
   }
 
   /**
