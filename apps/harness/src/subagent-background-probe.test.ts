@@ -58,7 +58,7 @@ import {
   createSandboxPolicyPlugin,
   SandboxModeController,
 } from '@nexus/plugin-sandbox-policy';
-import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
+import { createSubmitRecordPlugin } from './submit-record.fixture.js';
 import {
   createFilesystemMiddleware,
   createPatchToolCallsMiddleware,

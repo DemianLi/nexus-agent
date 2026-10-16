@@ -19,7 +19,7 @@ import type { Context } from '@nexus/cordis';
 import { ContractService } from '@nexus/sdk';
 
 import { toolsToken } from './index.js';
-import type { ToolRegistry, ToolRegisterOptions } from './index.js';
+import type { ToolGateListener, ToolRegistry, ToolRegisterOptions } from './index.js';
 
 /** 一筆登記：工具、登記它的那一列（Cordis 的列 id；沒有列就是插件名），與登記時帶的選項（#1458）。 */
 export interface ToolEntry {
@@ -29,17 +29,26 @@ export interface ToolEntry {
   readonly options?: ToolRegisterOptions;
 }
 
+/** 一位核准閘門 listener 的登記（#1466）：listener 與登記它的那一列。 */
+export interface ToolGateEntry {
+  readonly listener: ToolGateListener;
+  readonly source: string;
+}
+
 /** {@link createToolsProvider} 的回傳：交給 Loader 當內建插件的類別，與讀登記內容的那一面。 */
 export interface ToolsProviderHandle {
   /** 掛進 Loader 的 `builtins`（或 `ctx.plugin`）的那個服務類別。每次 {@link createToolsProvider} 的狀態都是新的。 */
   readonly Provider: new (ctx: Context) => ToolRegistry;
   /** 目前每一筆登記，依登記順序；快照。 */
   entries(): readonly ToolEntry[];
+  /** 目前每一位核准閘門 listener，依登記順序；快照（#1466）。宿主把登記者是某一列的那幾位折進那一條 thread 的 `registry.approvals`。 */
+  gates(): readonly ToolGateEntry[];
 }
 
 /** 造一個提供者。登記處的狀態活在回傳的 handle 裡，不在模組層級。 */
 export function createToolsProvider(): ToolsProviderHandle {
   const items: ToolEntry[] = [];
+  const gateItems: ToolGateEntry[] = [];
 
   class ToolsRegistryService extends ContractService<ToolRegistry> implements ToolRegistry {
     constructor(ctx: Context) {
@@ -69,10 +78,24 @@ export function createToolsProvider(): ToolsProviderHandle {
     list(): readonly StructuredToolInterface[] {
       return items.map((item) => item.tool);
     }
+
+    gate(listener: ToolGateListener): () => void {
+      const caller = this.ctx.fiber;
+      const source = caller.entry?.id ?? caller.runtime?.name ?? '(未知)';
+      return this.ctx.effect(() => {
+        const entry: ToolGateEntry = { listener, source };
+        gateItems.push(entry);
+        return () => {
+          const index = gateItems.indexOf(entry);
+          if (index >= 0) gateItems.splice(index, 1);
+        };
+      }, 'tools.gate()');
+    }
   }
 
   return {
     Provider: ToolsRegistryService,
     entries: () => [...items],
+    gates: () => [...gateItems],
   };
 }

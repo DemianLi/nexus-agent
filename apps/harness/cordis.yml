@@ -29,8 +29,10 @@
 #
 #   服務相依  清單上的列在 `apply` 當下讀的服務都由組裝點的 host-services 提供（它排在整份清單
 #             前面），沒有一列讀另一列提供的服務。守它的是 `src/shipped-service-reads.test.ts`。
-#   核准閘門  waterfall 的順序就是載入順序，今天只靠清單裡一位 gate 都沒有。守它的是
-#             `src/approval-gate-order.test.ts`。
+#   核准閘門  waterfall 的順序就是載入順序，今天清單裡**剛好一位** gate：submit-record 的
+#             `submit_record` 閘門（#1466 起經樹上 `tools` 服務的 `gate()` 登記、折進每條 thread
+#             的 `registry.approvals`，來源仍是 `submit-record (submit-record)`）。守它的是
+#             `src/approval-gate-order.test.ts`；清單上多一位 gate，那條測試要先重算。
 
 # ── 功能 ──────────────────────────────────────────────────────────────────────
 #
@@ -130,13 +132,15 @@
 # 搬進清單之後它們跟其他列一樣：看得見、關得掉。dsh 的 ask-user 也只是 preset 裡的一列。
 #
 # 兩顆都沒有資料設定，協作者走服務注入（#459）。`ask_user_question` 讀樹上 `approval-channel` 那一列給的預設答題管道（**沒有就
-# 在呼叫時拒絕**，不退成「有人在」，照 dsh 的 `NO_PROVIDER`；值由入口在建樹時給，#1458），`submit_record` 在被叫時讀 `fs` 服務
-# （#694，折出來的 backend）。host-services 仍由組裝點在最前面掛。我們的 CLI 是有人在的互動入口，dsh 沒有對應物，所以兩個入口照舊都有這兩顆。
+# 在呼叫時拒絕**，不退成「有人在」，照 dsh 的 `NO_PROVIDER`；值由入口在建樹時給，#1458），`submit_record` 在被叫時問樹上 `fs` 那一列
+# （`@nexus/fs`，#1466）：依這次呼叫的 `thread_id` 拿到那條 thread 自己的 `fs` 把手，再讀折出來的 backend（#694）。host-services 仍由組裝點在最前面掛。我們的 CLI 是有人在的互動入口，dsh 沒有對應物，所以兩個入口照舊都有這兩顆。
 #
 # **`ask-user` 是樹上的函式插件**（#1458）：模組有 `manifest` 匯出，Include 把它掛在 `include:ask-user`，經 `tools` 服務登記
-# `ask_user_question`（帶 `rootOnly`＋`outputSchema` 選項）；清單上的位置、名字與 `disabled` 的寫法都沒變。`submit_record` 還在相容層。
+# `ask_user_question`（帶 `rootOnly`＋`outputSchema` 選項）；清單上的位置、名字與 `disabled` 的寫法都沒變。
 #
-# `submit_record` 帶一道核准閘門（一律停下來讓人看過），所以它在 `approval-gate-order.test.ts` 的射程內。
+# **`submit-record` 也是樹上的函式插件**（#1466）：Include 把它掛在 `include:submit-record`，經 `tools` 服務登記 `submit_record`，並用
+# `tools.gate()`（`@nexus/tools` 1.2.0）登記一道核准閘門（一律停下來讓人看過），所以它在 `approval-gate-order.test.ts` 的射程內。
+# 關掉它（`disabled: true`）時工具與閘門一起不在：閘門是這一列的性質，不是另一個可以單獨留下的東西。
 - id: ask-user
   name: '@nexus/plugin-ask-user'
 

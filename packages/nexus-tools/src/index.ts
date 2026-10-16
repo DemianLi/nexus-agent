@@ -27,8 +27,11 @@ import { defineToken } from '@nexus/sdk';
  *
  * `1.1.0`（#1458）：`register` 多一個選填的第二個參數 {@link ToolRegisterOptions}（`rootOnly`、`outputSchema`）。
  * 加選項是向後相容的新增，所以跳 minor：`^1.0.0` 的舊消費者照常（不帶選項就是原本的樣子）。
+ *
+ * `1.2.0`（#1466）：`ToolRegistry` 多一個選填方法 {@link ToolRegistry.gate}（核准閘門，登記一位 pre-execute listener）。
+ * 同樣是向後相容的新增：`^1.0.0`、`^1.1.0` 的舊消費者不呼叫它，照常；要用的消費者宣告 `^1.2.0`。
  */
-export const TOOLS_CONTRACT_VERSION = '1.1.0';
+export const TOOLS_CONTRACT_VERSION = '1.2.0';
 
 /**
  * 子代理叫到 `rootOnly` 工具時，那一份拒絕樁自己帶的句與碼（#1458 Q3 (a)）。形狀對應 `@nexus/core` 註冊點的
@@ -62,6 +65,37 @@ export interface ToolRegisterOptions {
   readonly outputSchema?: ToolOutputSchema;
 }
 
+/**
+ * 一次待決的工具呼叫（#1466）。形狀對應 `@nexus/core` 的 `ToolExecution`，但這個套件不 import core，所以結構型別寫在這裡。
+ * **刻意不帶 `tool` 實例**：基座在動態註冊時給的是 `undefined`，伸手拿就會炸（理由見 core 的 `approval.ts`）。
+ */
+export interface ToolGateExecution {
+  /** 工具名。執行當下拿到的，不是宣告出來的。 */
+  readonly name: string;
+  /** 已解析的參數。 */
+  readonly args: Record<string, unknown>;
+  /** 這一次呼叫的 id。基座偶爾不給，所以可選。 */
+  readonly callId: string | undefined;
+}
+
+/**
+ * 一次 pre-execute 決定（#1466）。**三格封閉，照 dsh**（`packages/core/tools/src/index.ts:589`）：`allow`／`deny`／`ask`。
+ * 對應 `@nexus/core` 的 `PreToolDecision`。
+ */
+export type ToolGateDecision =
+  | { readonly kind: 'allow' }
+  | { readonly kind: 'deny'; readonly reason: string }
+  | { readonly kind: 'ask'; readonly reason?: string };
+
+/**
+ * 一位核准閘門 listener（#1466）。waterfall 依註冊順序跑，**鏈底是 `allow`**；`next()` 委派給下一位，不呼叫就是把後面的人
+ * 短路掉（照 dsh 的 waterfall 語義）。
+ */
+export type ToolGateListener = (
+  exec: ToolGateExecution,
+  next: () => Promise<ToolGateDecision>,
+) => Promise<ToolGateDecision> | ToolGateDecision;
+
 /** 工具登記處。 */
 export interface ToolRegistry {
   /**
@@ -76,6 +110,21 @@ export interface ToolRegistry {
   register(tool: StructuredToolInterface, options?: ToolRegisterOptions): () => void;
   /** 目前登記的全部工具，依註冊順序；回傳的是快照，之後的註冊不影響它。 */
   list(): readonly StructuredToolInterface[];
+  /**
+   * 登記一位**核准閘門** listener（契約 `1.2.0` 起，#1466 Q1 (a)）：對一次工具呼叫回 `allow`／`deny`／`ask`。
+   *
+   * 對應 dsh 的 `ctx.on('tools/pre-execute')`（`packages/core/tools/src/index.ts:1512-1516`，鏈底 `allow`）。**偏離**：樹上沒有
+   * 事件匯流排的 token，核准也不搬上匯流排（demian 2026-10-09），所以退到 tools 服務上的一個方法；宿主把這一列登記的
+   * listener 折進**每條 thread 自己的** `registry.approvals`，問人仍走 `nexusApprovalGate` 中介層（管道、政策、確定拒絕照舊）。
+   *
+   * 註冊就是 effect：登記者那一列卸載時自己撤掉。已經折進某條 thread 的那一份不受影響（組 thread 時取快照，決議 §3-2 第 6 條）。
+   *
+   * **選填**：`1.0.0`／`1.1.0` 的提供者沒有它。消費者宣告 `^1.2.0` 就保證有。
+   *
+   * @param listener - 這一位 listener。
+   * @returns 只撤銷這一次登記的冪等 disposer。
+   */
+  gate?(listener: ToolGateListener): () => void;
 }
 
 /** `tools` 服務的 token。 */

@@ -14,14 +14,15 @@ capabilities 的執行、版本路由與兩版並存不在這一刀，見文末�
 [`packages/nexus-feedback`](../packages/nexus-feedback)（`@nexus/feedback`，第五個，#1456，**第一個由插件提供、宿主消費的服務**）、
 [`packages/nexus-approval-channel`](../packages/nexus-approval-channel)（`@nexus/approval-channel`，第六個，#1458，**宿主在建樹時給值的預設答題管道**）與
 [`packages/nexus-tool-result`](../packages/nexus-tool-result)（`@nexus/tool-result`，#1458，工具回結果的三個寫法，**不是接縫**，只是單向轉出）與
-[`packages/nexus-session`](../packages/nexus-session)（`@nexus/session`，#1435 起單向轉出會話日誌的讀法，**#1463 起多一個接縫：第七個，會話查找**，宿主在樹上提供「這次呼叫的會話」）。
+[`packages/nexus-session`](../packages/nexus-session)（`@nexus/session`，#1435 起單向轉出會話日誌的讀法，**#1463 起多一個接縫：第七個，會話查找**，宿主在樹上提供「這次呼叫的會話」）與
+[`packages/nexus-fs`](../packages/nexus-fs)（`@nexus/fs`，第八個，#1466，宿主在樹上提供「這次呼叫的那條 thread 的 fs 把手」）。
 
 ## 這份規範管誰
 
-**只管 Cordis 樹上的函式插件。** 今天樹上有相容層與入口兩列、`tools`（工具登記處）、`projections`（投影登記處，#1421）、`skill-sources`（技能來源登記處，#1446）、`commands`（命令登記處，#1456）、
+**只管 Cordis 樹上的函式插件。** 今天樹上有相容層與入口兩列、`tools`（工具登記處）、`projections`（投影登記處，#1421）、`skill-sources`（技能來源登記處，#1446）、`commands`（命令登記處，#1456）、`approval-channel`、`session-lookup`（#1463）、`fs`（fs 查找，#1466）、
 `include`（讀出貨清單的那一列），加上逐顆遷出的插件，**今天是 `echo`**（[#1416](https://github.com/DemianLi/nexus-agent/issues/1416) PR 2）、
-**`token-meter`**（[#1421](https://github.com/DemianLi/nexus-agent/issues/1421)）、**`trajectory`**（[#1435](https://github.com/DemianLi/nexus-agent/issues/1435)）、**`skills`**（[#1446](https://github.com/DemianLi/nexus-agent/issues/1446)）**與 `feedback`**（[#1456](https://github.com/DemianLi/nexus-agent/issues/1456)）；還留在
-相容層裡的 16 顆是 `NexusPlugin` 物件，照舊 `export default`（`cordis.yml` 的 `name` 要靠它指到那顆物件），不受下面
+**`token-meter`**（[#1421](https://github.com/DemianLi/nexus-agent/issues/1421)）、**`trajectory`**（[#1435](https://github.com/DemianLi/nexus-agent/issues/1435)）、**`skills`**（[#1446](https://github.com/DemianLi/nexus-agent/issues/1446)）**`feedback`**（[#1456](https://github.com/DemianLi/nexus-agent/issues/1456)）、**`ask-user`**（#1458）、**`todo`**（#1463）**與 `submit-record`**（[#1466](https://github.com/DemianLi/nexus-agent/issues/1466)）；還留在
+相容層裡的 15 顆是 `NexusPlugin` 物件，照舊 `export default`（`cordis.yml` 的 `name` 要靠它指到那顆物件），不受下面
 「不能有 default」的約束。遷出一顆，它就從物件形式換成這裡的函式插件形式。載入器怎麼分辨兩種形式，見下面
 「接進清單」。
 
@@ -174,6 +175,28 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   - **消費者**：todo 的 `inject` 只要 `need(sessionLookupToken, '^1.0.0')`，`apply` 當下 `service(ctx, token)` 把**服務**抓進閉包，`forCall` 在**呼叫當下**才問。服務方法是屬性閉包、不碰 `this.ctx`，樹上那一列卸載之後開著的 thread 照樣寫得進自己的日誌（同 #1456 的快照語意）。
   - **三個入口各自接，各有一條會紅的測試**（`apps/harness/src/todo-on-tree.test.ts`）：CLI 與 serve 都是 `cordis-root.ts` 的 `boot` 把 `tree.threadSessions` 交進相容層（`compatLayer.create` → `createCliAgent` → `attachSession`），沒有樹的路徑走 `bindDetached` → `mountDetached`。
     **宿主的義務**：載入了樹上的插件、卻不經 `root.boot` 就呼叫 `createCliAgent`，todo 會回 `not-attached`（產品路徑一律 boot）。
+- **第八個接縫：fs 查找**（`@nexus/fs`，#1466 Q2 (a)、Q2-1 (a)；逐條 thread 接縫的第四段，#1418 → #1458 → #1463 → 這一張）。形狀同第七個：**值由宿主給、插件消費**，逐次呼叫才有答案。
+  - **定義套件**：token（`fsToken`，服務名 `fs`，契約版本 `1.0.0`）、`FsLookupService`（只有 `forCall(invocation: unknown): FsLookup`）、`FsLookup` 四種結果（`ok` 帶 `fs` 把手與位址、`not-attached`、
+    `unknown-caller`、`ambiguous{count}`），與 `@nexus/core` 的 `FsService`、`SessionAddress` 的**單向轉出**（只轉型別，core 放 `peerDependencies`，同 `@nexus/session`）。
+    **把手**就是這次組裝 host-services 裡那一格 `fs` 服務（`createFsService`／`settleFsService`，fold 之後填值），不另建 backend；消費者在呼叫當下才讀 `backend()`。
+  - **提供者**：`@nexus/fs/provider` 的 `createFsLookupProvider(lookup)`，宿主掛一列 `fs`（`PluginTree.#build` 與 `mountDetached` 兩處，列在必掛名單，`startup-audit.ts`）。
+    樹那一邊是 `thread-sessions.ts` 的 `ThreadSessions.fsForCall`；沒有樹的那一邊是 `registry-fs-lookup.ts` 的 `registryFsLookup(registry)`（**那一次組裝自己的** `fs` 服務，兩份無樹組裝互不相見）。
+  - **同一張登記表、同一支挑法**：一次 `attachSession` 登記**一筆**，這一筆**同時帶這條 thread 的會話註冊表與 fs 把手**（`ThreadEntry = { sessions, fs }`）；會話查找與 fs 查找都套同一支
+    `@nexus/core` 的 `pickBoundForCall`（`pickSessionForCall` 是它外面包一層「開日誌」），**挑法只有一份實作**，不另寫一份。所以兩個查找對「這次呼叫屬於哪一條 thread」永遠給同一個答案。
+  - **登記與撤除**：同第七個（`attachSession` 的最後一步登記、撤除掛在它回傳的 detach、同 id 重組時後者取代前者且舊的遲到的 detach 只撤自己），不另開一條。
+  - **消費者**：submit-record 的 `inject` 是 `need(toolsToken, '^1.2.0')` 加 `need(fsToken, '^1.0.0')`，`apply` 當下兩個服務都抓進閉包；工具本體 `fs.forCall(invocation)`，**一律同一句話**回報三種失敗
+    （`not-attached`／`unknown-caller`／`ambiguous` 全是 `SUBMIT_RECORD_NO_BACKEND_MESSAGE`，#1466 Q3 逐字不變）。
+  - **三個入口各自接，各有一條會紅的測試**（`apps/harness/src/submit-record-on-tree.test.ts` 的「三個入口各有一條」）：CLI（`boot('cli')` 的樹上內建列）、serve（`submit-record-wire.test.ts`，真的 `runServe`、真的核准卡、
+    `--workspace` 磁碟上的檔案）、沒有樹的呼叫端（兩份無樹組裝互不相見）。多條 thread 同時活著時每一次呼叫靠 `thread_id` 認主人，另有 root、同步子代理、背景子代理、重組、組裝失敗、撤除六種形狀的紅燈（同檔「E」）。
+  - **已知限制：只剩一筆登記時不看 `thread_id`**（沿用 #1418 的挑法，這張**不修**；PM 2026-10-16 在 #1385 的筆記，讀碼推論，沒有實測）。對會話日誌這是無害的退化（只有一條 thread 活著，沒有別的日誌可寫錯）；**對 fs 這是安全邊界**：fence 是每條 thread 各一顆
+    （`/permission` 切的就是它），萬一一條 thread 的登記已經被撤了、它的工具呼叫還在飛，唯一剩下的那一條會被當成它的主人，寫進別人的 backend、套用別人的 fence。具體情形：某條 thread detach 之後，它還在跑的背景子代理繼續呼叫工具，而行程裡剛好只剩另一條 thread 登記著，這次呼叫就會寫進那一條（相容層這時回 `not-attached`）。
+    今天 serve 只在關機時才收 thread，時間窗極窄（`submit_record` 的背景呼叫又釘 policy-never、沒有人被問到、什麼都不寫，實際上更窄）。
+    **之後開「閒置 thread 回收」的卡（#1464 量到每條 thread 常駐約 2.1 MB、不回收）要先處理它**，兩個做法擇一：detach 等背景 host 收完再撤登記，或行程級查找一律核對 `thread_id`（改挑法要 demian 拍板）。
+- **工具接縫 1.2.0：核准閘門**（`@nexus/tools`，#1466 Q1 (a)）。`ToolRegistry` 多一個**選配**方法 `gate(listener)`：登記一位 pre-execute 閘門，`(exec, next) => allow | deny | ask`，鏈底 `allow`（照 dsh
+  `ctx.on('tools/pre-execute')` 的 waterfall）。**消費者**宣告 `^1.2.0`，並在呼叫前檢查 `gate` 存在（`1.0.0`／`1.1.0` 的提供者沒有它，缺就是啟動失敗而不是靜靜少一道閘）。**折進去**：
+  `RowVerdict.active.gates` → `FoldedContributions.gates` → `registerFolded` 逐位進這條 thread 的 `registry.approvals.gate`，**來源仍是那一列的 `name`（`submit-record (submit-record)`）**，
+  所以 `approval-gate-order.test.ts` 的順序守衛與問人時顯示的來源都不變；問人仍走 `nexusApprovalGate` 中介層（管道、政策、確定拒絕照舊，CLI headless 與背景子代理仍是 policy-never）。
+  次版號升級：既有消費者（`echo`、`ask-user`、`todo` 等）不呼叫它，照常。
 - **工具接縫 1.1.0：登記選項**（`@nexus/tools`，#1458 Q3 (a)）。`register(tool, options?)` 多一個**選配**的第二參數：`rootOnly`（`true`，或 `{ message, error? }` 帶自己的拒絕句與碼，
   照 dsh `DELEGATED_CALLER`）與 `outputSchema`（有 `safeParse` 的東西，成功輸出照它驗）。選項隨工具一起折進 thread 的註冊點（`RowVerdict.active.toolOptions`、
   `registerFolded`）；**沒有 `scope`**（`rootOnly` 配 `scope` 是矛盾，註冊點當場拋，這裡不開這個口）。次版號升級：`^1.0.0` 的舊消費者照常（不傳第二參數），要用選項的消費者宣告 `^1.1.0`。
@@ -378,6 +401,13 @@ ask-user 在 #1458 遷上樹，轉接器照留，改成對「行程級的預設�
 **一個前提**：背景子代理的日誌在送出時就已經開好（`background-subagents.ts` 的 `start()`，`sessions.open` 在 `submit`
 拉起背景圖之前），`forCall` 靠日誌 id 認出它屬於哪一張。日後改成延後才開的話，多張綁定下背景那一輪的第一筆會回 `ambiguous`。
 
+**fs 查找與核准閘門（#1466 起）**：submit-record 是第四顆逐條 thread 的插件、第一顆**要讀寫工作區磁碟**的。
+它的 backend 是逐條 thread 的物件（會話歷史與工具結果暫存的路由帶 thread 的鑰匙，`--workspace` 的 fence 是每條 thread 一顆的 controller），
+所以走**同一張登記表**：`attachSession` 登記一筆，同時帶會話註冊表與 fs 把手，兩個查找共用 `pickBoundForCall`。
+**單一登記時不看 `thread_id`** 的退化在 fs 這邊是安全邊界（見第八個接縫的限制），多條 thread 同時活著才真的靠 `thread_id` 分——
+兩條 serve thread 各有自己的工作區、交錯跑、檔案互不串線，是同檔 E 那一組量的。
+背景子代理（`<root>/<runId>`）解析到的是**同一份 fs 把手與同一個 backend**（#1466 Q2-2 實測）：它叫 `submit_record` 時閘門釘 policy-never、沒有人被問到、什麼都不寫，所以沒有「寫進誰的工作區」的問題。
+
 ## 偏離 dsh
 
 | 偏離 dsh 的什麼 | 理由類別 | 說明 |
@@ -408,17 +438,20 @@ ask-user 在 #1458 遷上樹，轉接器照留，改成對「行程級的預設�
 | 會話查找是行程級的服務，工具呼叫當下依 `thread_id` 從活著的註冊表挑，不是 dsh 的 `exec.agent`（#1463，demian Q1 (a)） | 表達不出來，退到最接近的實作 | dsh 的工具拿到的 `exec` 帶著 `agent`，指到它所屬的會話（工具分發點在 dsh 自己的 pipeline）。我們的工具分發點是 LangGraph 的 `ToolNode`，handler 拿到的只有呼叫設定，沒有地方塞一個宿主算好的會話。退到最接近的：**身分隨呼叫設定傳進來**（`configurable.thread_id` 與 `checkpoint_ns`，`thread-id-reaches-handlers.test.ts` 實測三種位置都到得了），宿主在樹上提供一個查找服務，呼叫當下才問、並從那一刻的活著的註冊表挑。**撤除條件**：工具分發自己握分發點（自寫 pipeline）時，把身分放進 `exec`，這個服務與 `pickSessionForCall` 一起退場 |
 | `TodoItem`、`TodoStatus`、`TODO_STATUSES` 與 `todo/write` 事件的型別擴充留在 `@nexus/core`，由 `@nexus/session` 單向轉出（#1463，demian Q2 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：`TodoItem` 定義在插件自己的套件（`packages/todo/tool-todo/src/types.ts:21`），`todo/write` 的事件擴充也在同一個檔（`:28-31`），用 `declare module '@deepseek-ai/dsh-session/types'` 補進 `SessionEventMap`——型別與事件擴充都住在插件裡，插件去擴充會話套件（對讀版本 86a40220）。**我們做不到的原因**：`SessionEventMap` 在 `@nexus/core`，而遷出的插件被 #1420 的 lint 禁止 import `@nexus/core`，所以沒辦法在插件裡對它寫 `declare module`。**退到哪裡**：事件擴充搬進 core 的 `session-log.ts`，`TodoItem`、`TodoStatus`、`TODO_STATUSES` 三個名字留在 core、由 `@nexus/session` 單向轉出（消費者不能再 import `@nexus/plugin-todo` 取型別）。**撤除條件**（理由是抽出實作橫跨核心，同 Q2 (b)，不是表達不出來的原因）：與 `@nexus/session` 的其他轉出一起——SDK 與定義套件發布到私有 registry 之前把實作搬進定義套件，屆時事件擴充可回到插件側 |
 | `@nexus/plugin-todo` 的 lint 排除 `src/invariant.ts`（#1463，demian Q3 (a)） | 產品需求超出 dsh | `invariant.ts` 是相容層的配套入口（`todo-invariant` 那一列），寫的是 `NexusPlugin`，import `@nexus/core` 並在模組層有 `new Set`，SDK 規則一條都過不了；把它改到綠不是機械改動（`PluginEntry` 是相容層的型別）。排除**只蓋到這一個檔**（`packages/nexus-plugin-todo/src/eslint-exclusion.test.ts` 量：`src/index.ts` 完整受管、暫存的違規檔照樣紅、同一份違規碼放在 `src/invariant.ts` 的路徑才不紅）。**撤除條件**：2026-11-03 配套入口重審——拿掉就連檔一起刪，留下就另開卡遷它 |
+| fs 是呼叫當下依 thread 找回把手的查找服務，不是 dsh 的行程全域一份 `fs`＋每次呼叫傳進去的參數（#1466，demian Q2 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：`fs` 是行程全域一份的 Cordis 服務（`packages/fs/fs/src/index.ts:45-48`、`:87-90`；提供者是 `fs-local` 與 `fs-sandbox` 兩種），工具 `inject: ['fs']`（`packages/fs/tool-fs/src/index.ts:23`）後從閉包取用；每個 agent 不同的 cwd 與沙箱政策在呼叫當下當參數傳入（cwd：`session-cwd.ts:23` 的 `ctx.workingDirectory.ensure(exec.agent, …)`；政策：`write.ts:117-124` 的 `sandbox.resolvePolicy` 結果當 `writeText` 的參數；對讀版本 86a40220）。**我們做不到的原因**：我們每條 thread 的 backend 是 deepagents 的 `CompositeBackend`，路由（會話歷史、工具結果暫存、附件、plugin 的 `backend.mount()`）與 fence 都綁在每次組裝新建的物件上，沒有「同一個 fs、換參數」的介面；拆成「全域 fs＋每次呼叫的政策參數」等於重寫整層 backend，遷移卡做不到（#1466 Q2 (c)）。**退到哪裡**：呼叫當下依 `thread_id` 從行程級的登記表找回那條 thread 自己的把手（同 #1463 的會話查找，同一張登記表、同一支挑法）。**撤除條件**：backend 改成「全域一份＋呼叫時帶政策」之後，這個服務退場，消費者改 `inject` 全域 `fs` |
+| `FsService`、`SessionAddress` 留在 `@nexus/core`，由 `@nexus/fs` 單向轉出型別（#1466，demian Q2-1 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：`fs` 的服務類別與型別在 `dsh-fs` 這個定義套件裡，實作與型別同處（`packages/fs/fs/src/index.ts`，對讀版本 86a40220）。**我們做不到的原因**：`createFsService`／`settleFsService` 綁著 `foldRegistry` 的 fold 與 `@nexus/core` 的 host-services（填值的那一半只在 core 模組裡，消費者手上的把手只讀不能改），抽出實作是橫跨核心的一刀（#1421 Q2 (b)）。**退到哪裡**：只轉出型別，`@nexus/core` 放 `peerDependencies`。**撤除條件**：與 `@nexus/session`、`@nexus/projections` 同（Q2 (b)） |
+| 核准閘門是 `tools` 服務上的方法 `gate(listener)`，不是 dsh 的 `ctx.on('tools/pre-execute')` 事件（#1466，demian Q1 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：核准是 `tools` 服務發的 waterfall 事件，任何插件 `ctx.on('tools/pre-execute', …)` 註冊，鏈底 `allow`（`packages/core/tools/src/index.ts:1512-1516`、決定三格 `PreToolDecision` 同檔；對讀版本 86a40220）。**我們做不到的原因**：樹上沒有事件匯流排的 token，而核准也不搬上匯流排（demian 2026-10-09 決議）；我們的核准是 LangGraph 中介層（`nexusApprovalGate`）從每條 thread 自己的 `registry.approvals` 讀，樹上的列拿不到那張表。**退到哪裡**：`tools` 服務 `1.2.0` 的選配方法 `gate(listener)`，宿主把那一列登記的 listener 折進每條 thread 的 `registry.approvals`（來源仍是那一列的名字）。**撤除條件**：核准搬上事件匯流排時，這個方法退場、消費者改成 `ctx.on` |
 
 ## 接進清單（#1416 PR 2）
 
-`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項），`todo` 是第七顆（#1463，新增會話查找接縫）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
+`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項），`todo` 是第七顆（#1463，新增會話查找接縫），`submit-record` 是第八顆（#1466，新增 fs 查找接縫與 `tools` 1.2.0 的核准閘門）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
 **樹那一側不是第二份清單，是清單的一個消費者**：
 
 | 東西 | 在哪 | 做什麼 |
 | --- | --- | --- |
 | 載入器的分辨 | `plugin-config.ts` 的 `resolveEntryModule` | 模組有 `manifest` 具名匯出就是函式插件，走 `validateManifest`；沒有就照舊是 `NexusPlugin`。判別式只有一個（`plugin-tree.ts` 的 `isFunctionPluginModule`），Include 的允許名單也從它算 |
 | 橋接列 | `plugin-config.ts` 的 `isBridgeEntry` | 函式插件在相容層清單上的代表：同一個 id、同一個位置、`Config` 是 manifest 的 `config`，所以設定驗證、停用、補號、快照、會話 header 都照舊。它的 `apply` 不自己掛任何東西，只把**登記者是這一列**的工具、投影單元、技能來源路徑與命令，加上**這一列提供**的服務，折進這一條 thread 的 registry（每一種接縫一格，見下） |
-| 樹 | `plugin-tree.ts` 的 `PluginTree` | `tools` 一列（工具登記處）、`projections` 一列（投影登記處）、`skill-sources` 一列（技能來源登記處）、`commands` 一列（命令登記處）、`approval-channel` 一列（預設答題管道，值是進入點在建樹時給的，#1458）、`session-lookup` 一列（會話查找，行程級的活著的 thread 註冊簿，#1463）、`include` 一列（Include 讀出貨的 `cordis.yml`、疊 patch），函式插件在 `include:<id>` |
+| 樹 | `plugin-tree.ts` 的 `PluginTree` | `tools` 一列（工具登記處）、`projections` 一列（投影登記處）、`skill-sources` 一列（技能來源登記處）、`commands` 一列（命令登記處）、`approval-channel` 一列（預設答題管道，值是進入點在建樹時給的，#1458）、`session-lookup` 一列（會話查找，行程級的活著的 thread 註冊簿，#1463）、`fs` 一列（fs 查找，同一張登記簿帶 fs 把手，**列在必掛名單**，#1466）、`include` 一列（Include 讀出貨的 `cordis.yml`、疊 patch），函式插件在 `include:<id>` |
 
 - **變更紀錄怎麼到樹上**：折出來的 patch 原樣經 `entry.update({ config: { ...includeConfig, patches } })` 推給 Include（dsh
   `app-boot` 的做法）。**Include 不寫回任何檔**——寫入口只有變更紀錄一個（`vendor/README.md` 第 7 條，上游三條寫回路徑全關）；Loader 上游會在安裝樹建 `.cordis/` 輔助檔，宿主給了解析函式就不建（第 9 條），所以安裝樹唯讀也不影響掛載。
@@ -428,8 +461,8 @@ ask-user 在 #1458 遷上樹，轉接器照留，改成對「行程級的預設�
   樹上那一列的 `disabled` 與 `config` 跟相容層疊出來的是否相同，不同那一列算掉了，不靜靜地各走各的。
 - **樹上的結果怎麼對回清單上的掉列**：樹上那一列 FAILED 或缺席是 `apply` 階段、PENDING（缺服務、契約不相容）是 `requires`
   階段，在**讀清單那一步**就判定（以前 echo 重名要到組裝那一刻才掉）。契約不相容的訊息帶消費者列 id（樹上的 `include:<id>`）。
-- **橋接列折入多種接縫（#1421、#1446、#1456、#1458）**：`RowVerdict` 的 `active` 帶每一種接縫的貢獻（`tools`、`toolOptions`、`projections`、`skillSources`、`commands`、`services`），橋接列的 `apply` 把
-  來源是那一列的各自折進這條 thread 的 registry：工具走 `registry.tools.register`（**帶它登記時的 `rootOnly`／`outputSchema` 選項**，#1458），投影單元走 `registry.projections.register`，
+- **橋接列折入多種接縫（#1421、#1446、#1456、#1458、#1466）**：`RowVerdict` 的 `active` 帶每一種接縫的貢獻（`tools`、`toolOptions`、`gates`、`projections`、`skillSources`、`commands`、`services`），橋接列的 `apply` 把
+  來源是那一列的各自折進這條 thread 的 registry：工具走 `registry.tools.register`（**帶它登記時的 `rootOnly`／`outputSchema` 選項**，#1458），核准閘門走 `registry.approvals.gate`（**來源是那一列的名字**，#1466，照登記順序），投影單元走 `registry.projections.register`，
   技能來源走 `registry.skills.addSource`（**照那一列登記的順序**：`sources` 依序即優先序，後面的來源贏過前面的同名 skill），
   命令走 `registry.commands.register`（照登記順序），**那一列提供的服務**走 `registry.services.provide`。
   同一個投影 key 由兩列共用時，只交給其中一列（見偏離表），這條 thread 的登記處才不會撞上它自己的重複拒絕；技能來源不共用，
@@ -449,6 +482,8 @@ ask-user 在 #1458 遷上樹，轉接器照留，改成對「行程級的預設�
 - **沒有樹的呼叫端**（手搭 `PluginEntry` 清單的測試、基準任務、`shippedPlugins()`）：橋接列在組裝時單獨掛一次、取工具、
   投影單元、技能來源路徑、命令與提供的服務、立刻卸載，走的是同一個 Loader 與 `tools`、`projections`、`skill-sources`、`commands` 提供者。產品路徑（`cli.ts`、`serve.ts`）不走這條。
   會話查找那一列在這條路上看的是**那一次組裝自己的** `registry.sessions`（#1463），所以工具在 `attachSession` 之後才綁上來的註冊表也問得到。
+  `fs` 那一列同理（#1466）：看的是**那一次組裝自己的** `fs` 服務（`registry-fs-lookup.ts`，**每次呼叫都讀**，所以提供它的那一列排前排後一樣），
+  不依 `thread_id` 挑——一份無樹組裝只有一個 backend，沒有別的 thread 的 fs 可以挑錯；仍要算得出位址，與樹上同一個 `unknown-caller` 判準。
 
 ### 已知限制
 

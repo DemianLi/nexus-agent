@@ -1223,19 +1223,62 @@ function ownsThread(sessions: SessionRegistry, thread: string): boolean {
   return sessions.list().some((entry) => entry.log.sessionId === thread);
 }
 
+/** {@link pickBoundForCall} 挑中時回的東西：挑中的那一筆，與這次呼叫在那一條 thread 裡的位址。 */
+export type BoundPick<T> =
+  | { readonly kind: 'ok'; readonly bound: T; readonly address: SessionAddress }
+  | { readonly kind: 'not-attached' }
+  | { readonly kind: 'unknown-caller' }
+  | { readonly kind: 'ambiguous'; readonly count: number };
+
 /**
- * **「這次工具呼叫該寫進哪一份會話日誌」的挑法，全樹只有這一份**（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463)
- * Q1 (a)，Part of #1385；演算法是 #1418 定下的那一條，原樣搬出來）。
+ * **「這次工具呼叫屬於哪一條活著的 thread」的挑法，全樹只有這一份**（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463)
+ * Q1 (a)，Part of #1385；演算法是 #1418 定下的那一條，原樣搬出來。[#1466](https://github.com/DemianLi/nexus-agent/issues/1466)
+ * 起拆成「先挑出那一筆」與「各取所需」兩步：會話日誌要 `open` 位址，fs 要的是同一筆登記帶著的把手，**兩邊的挑法是同一支**）。
  *
- * 兩個地方呼叫它，而且只能呼叫它：相容層的 `registry.sessions.forCall`（一次組裝綁著的那幾張註冊表），與宿主在樹上提供的
- * 「會話查找」服務（行程裡每一條活著的 thread 綁上的那幾張）。它們是同一支實作，所以「多條 thread 同時活著時依 `thread_id`
- * 認出主人」的語意只在這裡寫一次——不准在別處再寫一份（驗收 G 的「永遠回第一張」突變就改在這裡）。
+ * 三個呼叫者，而且只能呼叫它（或它上面包的 {@link pickSessionForCall}）：相容層的 `registry.sessions.forCall`（一次組裝綁著的那幾張
+ * 註冊表）、宿主在樹上提供的「會話查找」服務與「fs 查找」服務（行程裡每一條活著的 thread 的那一筆登記）。「多條 thread 同時活著時
+ * 依 `thread_id` 認出主人」的語意只在這裡寫一次——不准在別處再寫一份（驗收的「永遠回第一張」突變就改在這裡）。
  *
- * - 一張都沒有：`not-attached`。
- * - 只有一張：**不看 `thread_id`**，與逐條 thread 之前逐位元組相同（手搭的測試呼叫沒有它）。
- * - 多張：依 {@link callThreadId} 挑「有一份日誌的 id 等於它」的恰好一張；沒帶 `thread_id`、沒有任何一張認得、不只一張認得，
+ * - 一筆都沒有：`not-attached`。
+ * - 只有一筆：**不看 `thread_id`**，與逐條 thread 之前逐位元組相同（手搭的測試呼叫沒有它）。
+ * - 多筆：依 {@link callThreadId} 挑「有一份日誌的 id 等於它」的恰好一筆；沒帶 `thread_id`、沒有任何一筆認得、不只一筆認得，
  *   一律 `ambiguous`——寧可明說也不猜（猜錯是一條 thread 的工具寫進另一條 thread 的日誌，靜默的）。
  * - 挑到之後算不出位址：`unknown-caller`。
+ *
+ * **這一步不碰日誌**：不 `open`，不會讓 subagent 的日誌出生。要日誌的呼叫者自己在 `ok` 之後 `open(address)`。
+ *
+ * @param bound - 這一次查找看得見的登記。**只迭代一次**，所以 `Set`、`Map.values()` 都可以。
+ * @param sessionsOf - 這一筆登記帶的那條 thread 的會話註冊表。
+ * @param config - 工具 handler 的第二個參數。
+ * @returns 判別得出來的四種結果之一。
+ */
+export function pickBoundForCall<T>(
+  bound: Iterable<T>,
+  sessionsOf: (item: T) => SessionRegistry,
+  config: unknown,
+): BoundPick<T> {
+  const all = [...bound];
+  if (all.length === 0) return { kind: 'not-attached' };
+  let picked: T;
+  if (all.length === 1) {
+    [picked] = all as [T];
+  } else {
+    const thread = callThreadId(config);
+    const owners =
+      thread === undefined ? [] : all.filter((item) => ownsThread(sessionsOf(item), thread));
+    if (owners.length !== 1) return { kind: 'ambiguous', count: all.length };
+    [picked] = owners as [T];
+  }
+  const address = toolCallSessionAddress(config);
+  if (address === undefined) return { kind: 'unknown-caller' };
+  return { kind: 'ok', bound: picked, address };
+}
+
+/**
+ * **「這次工具呼叫該寫進哪一份會話日誌」**：{@link pickBoundForCall} 挑出那一張註冊表之後 `open(address)`。
+ *
+ * 相容層的 `registry.sessions.forCall` 與樹上的會話查找服務呼叫它。
+ *
  * - 成功：`open(address)`——subagent 的日誌在第一次有人要寫的時候才出生（`SessionRegistry` 的偏離第 1 條）。
  *
  * @param bound - 這一次查找看得見的註冊表。**只迭代一次**，所以 `Set`、`Map.values()` 都可以。
@@ -1246,22 +1289,11 @@ export function pickSessionForCall(
   bound: Iterable<SessionRegistry>,
   config: unknown,
 ): SessionLookup {
-  const all = [...bound];
-  if (all.length === 0) return { kind: 'not-attached' };
-  let sessions: SessionRegistry;
-  if (all.length === 1) {
-    [sessions] = all as [SessionRegistry];
-  } else {
-    const thread = callThreadId(config);
-    const owners = thread === undefined ? [] : all.filter((s) => ownsThread(s, thread));
-    if (owners.length !== 1) return { kind: 'ambiguous', count: all.length };
-    [sessions] = owners as [SessionRegistry];
-  }
-  const address = toolCallSessionAddress(config);
-  if (address === undefined) return { kind: 'unknown-caller' };
+  const picked = pickBoundForCall(bound, (sessions) => sessions, config);
+  if (picked.kind !== 'ok') return picked;
   // `open` 而不是 `get`：subagent 的日誌在第一次有人要寫的時候才出生，理由見
   // `SessionRegistry` 的偏離第 1 條。訂閱者在這一行之內就裝好了。
-  return { kind: 'ok', address, log: sessions.open(address) };
+  return { kind: 'ok', address: picked.address, log: picked.bound.open(picked.address) };
 }
 
 /**

@@ -728,6 +728,17 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           ...(delegationBaseline !== undefined && { delegationBaseline }),
         });
 
+  // 這次組裝的 fs 把手：**只建這一份**，host-services 提供它（`present`、`submit_record` 的舊路徑從 `registry.services` 讀），
+  // `attachSession` 登記進行程級的 fs 查找的也是它（#1466）——兩邊是同一個物件，fold 填一次、兩邊都讀得到。
+  const fsService = createFsService({
+    // 這兩格是組裝點在 fold 之前包的（`withToolResultStash`／`withConversationHistory`），不在工作區磁碟上；
+    // 交付的讀端只認磁碟，`present` 靠這份清單拒掉它們（#951）。
+    offWorkspacePrefixes: [
+      TOOL_RESULT_STASH_PREFIX,
+      CONVERSATION_HISTORY_PREFIX,
+      ...(options.attachments === undefined ? [] : [ATTACHMENTS_PREFIX]),
+    ],
+  });
   // **放在最前面**：出貨清單的 `system-prompt` 在自己的 `apply` 當下就讀變數（#720）。
   const plugins: readonly PluginEntry[] = [
     createHostServicesPlugin(
@@ -741,20 +752,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     ),
     // **工具拿 backend 的那一格**（#694）：這裡先佔位，`foldRegistry` 折完把折出來的那一個填進去，
     // `present` 與 `submit_record` 被叫時才讀。理由見 `@nexus/core` 的 `fs-service.ts`。
-    createHostServicesPlugin(
-      {
-        fs: createFsService({
-          // 這兩格是組裝點在 fold 之前包的（`withToolResultStash`／`withConversationHistory`），不在工作區磁碟上；
-          // 交付的讀端只認磁碟，`present` 靠這份清單拒掉它們（#951）。
-          offWorkspacePrefixes: [
-            TOOL_RESULT_STASH_PREFIX,
-            CONVERSATION_HISTORY_PREFIX,
-            ...(options.attachments === undefined ? [] : [ATTACHMENTS_PREFIX]),
-          ],
-        }),
-      },
-      'fs',
-    ),
+    createHostServicesPlugin({ fs: fsService }, 'fs'),
     ...options.plugins,
     ...(delegation === undefined ? [] : [delegation.entry()]),
   ];
@@ -1119,7 +1117,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         });
         // **登記排在這一步**：綁上、背景 host 建好、參與者訂閱都成功之後才登記（#1463），前面任何一步拋，樹上的查找都不會
         // 留下一張沒收的註冊表。同一條 thread id 重組時後登記的取代先登記的，見 `thread-sessions.ts`。
-        const unregister = options.sessionLookup?.register(sessions);
+        const unregister = options.sessionLookup?.register(sessions, fsService);
         const detach = () => {
           unobserve();
           unbind();

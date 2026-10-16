@@ -9,18 +9,18 @@
  * ## 危險本身
  *
  * `PreToolListener` 的 `next()` **不呼叫就是把後面的人整個短路掉**——那是照 dsh 的
- * waterfall 語義刻意提供的能力（`packages/nexus-core/src/approval.ts:60-70`、
- * `registry.ts:248-256` 兩處都寫著）。於是一位排在前面、回 `{ kind: 'allow' }` 而不呼叫
+ * waterfall 語義刻意提供的能力（`packages/nexus-core/src/approval.ts` 的
+ * `PreToolListener`、`registry.ts` 的 `ApprovalRegistrationPoint.gate` 兩處都寫著）。於是一位排在前面、回 `{ kind: 'allow' }` 而不呼叫
  * `next()` 的 gate，會把排在它後面的每一位整條吃掉。
  *
- * **今天不是缺陷**：出貨清單裡一位 gate 都沒有（下面第一層就是在釘這件事），組裝點（`assembly-root.ts`）另外掛的
- * submit-record 那一位從不回 `allow`。但那是**組裝的巧合**，不是機制擋住的。沙箱升級以前也是一位 gate，
+ * **今天不是缺陷**：出貨清單裡**剛好一位** gate（下面第一層就是在釘這件事）——submit-record 的 `submit_record` 閘門，
+ * 它對別的工具一律 `next()`、對 `submit_record` 回 `ask`，從不回 `allow`。但那是**這一位的寫法**，不是機制擋住的。沙箱升級以前也是一位 gate，
  * [#700](https://github.com/DemianLi/nexus-agent/issues/700) 照 dsh 把問人搬進工具本體，排在前面的 gate 怎麼放行都跳不過它。
  *
  * ## 結局是「紀錄寫出去了」，不是「核准被跳過」
  *
  * 被吃掉的那位是 submit-record 的 `submit_record` 閘門（`packages/nexus-plugin-submit-record/src/index.ts`
- * 的 `approvals.gate`）。它被短路之後，工具**真的跑完**，那一列真的寫進工作區的檔案——**而沒有任何人
+ * 的 `submitRecordGate`，#1466 起經樹上 `tools` 服務的 `gate()` 登記、折進 thread 的 `registry.approvals`，來源仍是這一列）。它被短路之後，工具**真的跑完**，那一列真的寫進工作區的檔案——**而沒有任何人
  * 看過它**。畫面上完全正常：沒有例外、沒有拒絕訊息、沒有中斷。這就是為什麼第二層量的是檔案最後在不在
  * （`written`），不是「閘門有沒有被呼叫」。
  *
@@ -30,7 +30,7 @@
  *
  * ## 順序由 plugin 載入順序決定，被排到後面的那位管不著
  *
- * `approvals` 這個註冊點**只有 `append`**（`packages/nexus-core/src/registry.ts:787`），
+ * `approvals` 這個註冊點**只有 `append`**（`packages/nexus-core/src/registry.ts` 的 `ApprovalRegistrationPoint`：只有 `gate`），
  * 沒有 `middleware.use({ prepend })` 或 `permissions` 那種槓桿。想排到前面的人只要在
  * 清單裡排前面就行，被排到後面的人沒有任何辦法。**這張卡不給 `approvals` 加 `prepend`**
  * （#199 的射程），只是把這件事釘住。
@@ -67,7 +67,8 @@ import { join } from 'node:path';
 import { MemorySaver } from '@langchain/langgraph';
 import { formatOrigin, loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
-import { createSubmitRecordPlugin, SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
+import { SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
+import { createSubmitRecordPlugin } from './submit-record.fixture.js';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
@@ -110,7 +111,7 @@ const shipped = await shippedPlugins();
  * [#652](https://github.com/DemianLi/nexus-agent/issues/652) 之後 plan-mode 不再掛閘門，出貨清單裡一位都沒有。
  * [#669](https://github.com/DemianLi/nexus-agent/issues/669) 把 `submit-record` 從組裝點（`assembly-root.ts`）的程式碼搬進出貨清單，
  * 它的閘門因此進了這一層的射程。**照下面 `NEW_GATE_GUIDANCE` 的出路 (c) 收下它**：先確認它對別的工具會呼叫 `next()`
- * （`packages/nexus-plugin-submit-record/src/index.ts` 的 gate 只對 `submit_record` 回 `ask`，其餘一律 `next()`），
+ * （`packages/nexus-plugin-submit-record/src/index.ts` 的 `submitRecordGate` 只對 `submit_record` 回 `ask`，其餘一律 `next()`），
  * 所以不會把排在它後面的人整條吃掉。沙箱升級（#700）已改在工具本體裡問人，不再有閘門。
  * 有人再往出貨清單加一位，這裡就響。
  *
@@ -133,7 +134,7 @@ const NEW_GATE_GUIDANCE =
   '結局是「紀錄寫出去了」而不是「核准被跳過」——本檔第二層那三行實測就是那個結局。\n' +
   '三個出路：(a) 讓它一定呼叫 `next()`；(b) 真的建 dsh 那種只能拒絕的 guard 層\n' +
   '（#198 判過不建，要推翻請開新卡）；(c) 明著接受並把它加進上面那份清單。\n' +
-  '`approvals` 只有 `append`（registry.ts:787），排在前面的人贏，被排到後面的沒有辦法。';
+  '`approvals` 只有 `gate`（只會往後接，registry.ts 的 `ApprovalRegistrationPoint`），排在前面的人贏，被排到後面的沒有辦法。';
 
 describe('預設組裝裡的核准 gate', () => {
   /**
@@ -149,7 +150,7 @@ describe('預設組裝裡的核准 gate', () => {
    * 就整個漏掉了——而測試夾具那位 gate（`apps/harness/src/approval.fixture.ts`）正是規矩的那種，
    * 這個形狀早就存在。
    */
-  it('出貨清單裡一位都沒有', async () => {
+  it('出貨清單裡剛好一位：submit-record 的 `submit_record` 閘門', async () => {
     const { registry, dispose } = await loadPlugins(withSystemPromptVariables(shipped));
     try {
       const gates = registry.approvals.listeners().map((entry) => formatOrigin(entry.origin));

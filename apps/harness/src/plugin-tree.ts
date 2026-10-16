@@ -11,6 +11,7 @@
  * | `commands` | 行程級的命令登記處（`@nexus/commands/provider`，#1456），契約服務，一列 | `commands` 服務的提供者 |
  * | `approval-channel` | 行程級的預設答題管道（`@nexus/approval-channel/provider`，#1458），契約服務，一列；**宿主在建樹時給值**，不是插件登記進來的 | （dsh 沒有這一種：它的答題者是 `session.interrupt` 事件的監聽者；偏離登記在 `@nexus/approval-channel`） |
  * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，#1463），契約服務，一列；**宿主給挑法**（行程裡每一條活著的 thread 綁上的註冊表，`thread-sessions.ts`），不是插件登記進來的 | （dsh 沒有這一種：工具從 `exec.agent.session` 拿；偏離登記在 `@nexus/session`） |
+ * | `fs` | 行程級的 fs 查找（`@nexus/fs/provider`，#1466），契約服務，一列；**宿主給挑法**（同一張登記表、同一支 `pickBoundForCall`，每一筆登記同時帶這條 thread 的 fs 把手），不是插件登記進來的 | （dsh 的 `fs` 是行程全域一份、每個 agent 不同的東西以參數傳入；偏離登記在 `@nexus/fs`） |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 | `include`（`app-boot` 的 `entry.update({ config: { ...includeConfig, patches } })`） |
  * | `include:<id>` | Include 底下的列，今天是 echo、token-meter、trajectory、skills、feedback、ask-user 與 todo（#1463；模組有 `manifest` 匯出的才上樹） | 各插件 |
  *
@@ -72,10 +73,12 @@ import { feedbackToken } from '@nexus/feedback';
 import { ContractError, FIBER_STATE, missingServices } from '@nexus/sdk';
 import type { ServiceToken } from '@nexus/sdk';
 import { createSessionLookupProvider } from '@nexus/session/provider';
+import { createFsLookupProvider } from '@nexus/fs/provider';
+import type { FsLookup } from '@nexus/fs';
 import { createSkillSourcesProvider } from '@nexus/skills/provider';
 import type { SkillSourceEntry } from '@nexus/skills/provider';
 import { createToolsProvider } from '@nexus/tools/provider';
-import type { ToolRegisterOptions } from '@nexus/tools';
+import type { ToolGateListener, ToolRegisterOptions } from '@nexus/tools';
 import type { ToolEntry } from '@nexus/tools/provider';
 import semver from 'semver';
 
@@ -99,6 +102,9 @@ export const APPROVAL_CHANNEL_ROW_ID = 'approval-channel';
 
 /** 會話查找那一列的 id（#1463）。 */
 export const SESSION_LOOKUP_ROW_ID = 'session-lookup';
+
+/** fs 查找那一列的 id（#1466）。 */
+export const FS_ROW_ID = 'fs';
 
 /** Include 那一列的 id。 */
 export const INCLUDE_ROW_ID = 'include';
@@ -208,6 +214,12 @@ export type RowVerdict =
        * 折進這條 thread 的 registry 時跟著工具一起交給註冊點——宿主不認得選項的語意，原樣轉交，照 dsh 的 `defineTool`。
        */
       readonly toolOptions: ReadonlyMap<StructuredToolInterface, ToolRegisterOptions>;
+      /**
+       * 這一列登記的核准閘門監聽（#1466 Q1 (a)，`@nexus/tools` 1.2.0 的 `gate`），**依登記順序**。折進這條 thread 的 registry
+       * 時一條一條交給 `registry.approvals.gate`——來源登記成這一列的 id，所以 `approval-gate-order.test.ts` 看到的
+       * 層一來源仍是 `submit-record (submit-record)`。
+       */
+      readonly gates: readonly ToolGateListener[];
       /**
        * **這一列負責折進這條 thread 的**投影單元（#1421）：登記者是這一列、而且這一列是那個 key 目前還活著的第一個登記者。
        * 同一個 key 由兩列共用時（提供者那一層引用計數共用，PM 決策 1），每個 key 只交給其中一列，這條 thread 的登記處才
@@ -329,6 +341,8 @@ export class PluginTree {
   /** 行程裡每一條活著的 thread 綁上的註冊表（#1463）：`session-lookup` 那一列問它，入口的 `attachSession` 往它登記。 */
   readonly #threadSessions = new ThreadSessions();
   #sessionLookup = createSessionLookupProvider((config) => this.#threadSessions.forCall(config));
+  /** fs 查找（#1466）：同一張登記表、同一支挑法，一筆登記同時帶這條 thread 的 fs 把手。 */
+  #fsLookup = createFsLookupProvider((config) => this.#threadSessions.fsForCall(config));
   /** 串行化 {@link run}。 */
   #chain: Promise<unknown> = Promise.resolve();
   /** 最後一次推給 Include 的設定簽章；一樣就不推。 */
@@ -376,9 +390,9 @@ export class PluginTree {
 
   /**
    * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections`、`skill-sources`、`commands`、
-   * `approval-channel`、`session-lookup` 那六列。
+   * `approval-channel`、`session-lookup`、`fs` 那七列。
    *
-   * @returns 已掛好 Loader 與上述六列的根。
+   * @returns 已掛好 Loader 與上述七列的根。
    */
   context(): Promise<Context> {
     this.#context ??= this.#build();
@@ -406,6 +420,7 @@ export class PluginTree {
       [COMMANDS_ROW_ID]: this.#commands.Provider,
       [APPROVAL_CHANNEL_ROW_ID]: this.#approvalChannel.Provider,
       [SESSION_LOOKUP_ROW_ID]: this.#sessionLookup.Provider,
+      [FS_ROW_ID]: this.#fsLookup.Provider,
       [INCLUDE_ROW_ID]: Include,
     });
     await this.#create(root, { id: TOOLS_ROW_ID, name: `cordis:${TOOLS_ROW_ID}` });
@@ -420,6 +435,7 @@ export class PluginTree {
       id: SESSION_LOOKUP_ROW_ID,
       name: `cordis:${SESSION_LOOKUP_ROW_ID}`,
     });
+    await this.#create(root, { id: FS_ROW_ID, name: `cordis:${FS_ROW_ID}` });
     await root.loader.await();
     return root;
   }
@@ -794,6 +810,10 @@ export class PluginTree {
         kind: 'active',
         tools: entries.filter((item) => item.source === id).map((item) => item.tool),
         toolOptions: toolOptionsOf(entries.filter((item) => item.source === id)),
+        gates: this.#provider
+          .gates()
+          .filter((item) => item.source === id)
+          .map((item) => item.listener),
         // 投影單元由 `#assignProjections` 在所有列的結果都有了之後再分：共用的 key 只能給一列。
         projections: [],
         // 技能來源路徑由 `#assignSkillSources` 在所有列的結果都有了之後再分。
@@ -866,6 +886,12 @@ export interface DetachedMount {
    * 會話（`not-attached`，插件在呼叫當下拒絕）。
    */
   readonly sessionLookup?: (config: unknown) => SessionLookup;
+  /**
+   * 這一次單獨掛上時的 fs 查找（#1466）。**沒有樹的呼叫端也要有**：`bindDetached` 把那一次組裝自己的 host-services
+   * `fs` 服務交進來（呼叫當下才讀它的 backend）——只看那一份，所以兩份無樹組裝互不相見。不給等於這次組裝沒有 fs
+   * （`not-attached`，插件在呼叫當下拒絕）。
+   */
+  readonly fsLookup?: (config: unknown) => FsLookup;
 }
 
 /** {@link mountDetached} 取出的東西：這一列登記的工具、投影單元、技能來源路徑、命令定義，與它提供、宿主取到的服務。 */
@@ -873,6 +899,8 @@ export interface DetachedContributions {
   readonly tools: readonly StructuredToolInterface[];
   /** 帶了註冊選項的工具與它的選項（#1458 Q3），同 {@link RowVerdict} 的 `toolOptions`。 */
   readonly toolOptions: ReadonlyMap<StructuredToolInterface, ToolRegisterOptions>;
+  /** 這一列登記的核准閘門監聽（#1466），同 {@link RowVerdict} 的 `gates`。 */
+  readonly gates: readonly ToolGateListener[];
   readonly projections: readonly ProjectionUnit[];
   readonly skillSources: readonly string[];
   readonly commands: readonly CommandDefinition[];
@@ -899,6 +927,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
   const sessionLookup = createSessionLookupProvider(
     mount.sessionLookup ?? (() => ({ kind: 'not-attached' })),
   );
+  const fsLookup = createFsLookupProvider(mount.fsLookup ?? (() => ({ kind: 'not-attached' })));
   const root = new Context();
   const contractErrors = new Map<string, ContractError>();
   root.logger.exporter({
@@ -919,6 +948,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
       [COMMANDS_ROW_ID]: commands.Provider,
       [APPROVAL_CHANNEL_ROW_ID]: approvalChannel.Provider,
       [SESSION_LOOKUP_ROW_ID]: sessionLookup.Provider,
+      [FS_ROW_ID]: fsLookup.Provider,
       plugin: mount.module,
     });
     const create = (options: EntryOptions) =>
@@ -929,6 +959,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
     await create({ id: COMMANDS_ROW_ID, name: `cordis:${COMMANDS_ROW_ID}` });
     await create({ id: APPROVAL_CHANNEL_ROW_ID, name: `cordis:${APPROVAL_CHANNEL_ROW_ID}` });
     await create({ id: SESSION_LOOKUP_ROW_ID, name: `cordis:${SESSION_LOOKUP_ROW_ID}` });
+    await create({ id: FS_ROW_ID, name: `cordis:${FS_ROW_ID}` });
     await create({
       id: mount.id,
       name: 'cordis:plugin',
@@ -951,6 +982,10 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
       return {
         tools: owned.map((entry) => entry.tool),
         toolOptions: toolOptionsOf(owned),
+        gates: provider
+          .gates()
+          .filter((entry) => entry.source === mount.id)
+          .map((entry) => entry.listener),
         projections: projections
           .entries()
           .filter((entry) => entry.sources.includes(mount.id))

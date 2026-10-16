@@ -17,12 +17,13 @@
  * | `commands` | 行程級的命令登記處（`@nexus/commands/provider`，契約服務；#1456），只收定義、不執行 | `commands` 服務的提供者 |
  * | `approval-channel` | 行程級的預設答題管道（`@nexus/approval-channel/provider`，契約服務；#1458），**值由入口在建樹時給** | （無對應，偏離登記在 `@nexus/approval-channel`） |
  * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，契約服務；#1463），**挑法由宿主給**：行程裡每一條活著的 thread 綁上的註冊表（`thread-sessions.ts`） | （無對應，偏離登記在 `@nexus/session`） |
+ * | `fs` | 行程級的 fs 查找（`@nexus/fs/provider`，契約服務；#1466），**挑法由宿主給**：同一張登記表、同一支 `pickBoundForCall`，一筆登記同時帶這條 thread 的 fs 把手（就是那次組裝 host-services 裡的 `fs` 服務） | （dsh 的 `fs` 是行程全域一份、每個 agent 不同的東西以參數傳入；偏離登記在 `@nexus/fs`） |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`、疊 patch、把函式插件掛起來（#1416 PR 2，`plugin-tree.ts`） | `include` |
  * | `include:<id>` | Include 底下的函式插件，今天是 `include:echo`、`include:trajectory`、`include:token-meter`、`include:skills`、`include:feedback`、`include:ask-user` 與 `include:todo` | 各插件 |
  *
- * `nexus-compat`、入口、`tools`、`projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup`、`include` 都必掛（`startup-audit.ts` 的 {@link auditTreeEntries}）；`include:<id>` 不在名單上，
+ * `nexus-compat`、入口、`tools`、`projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup`、`fs`、`include` 都必掛（`startup-audit.ts` 的 {@link auditTreeEntries}）；`include:<id>` 不在名單上，
  * 它掉了是清單那一列掉了，走 `dropped`。入口的程式碼經入口那一列的 inject 拿到服務，所有組 agent 的地方都走它。`tools`、
- * `projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup` 與 `include` 是**懶建**的（`PluginTree.context()` 第一次被叫到才建），`include` 要等第一次讀清單才有。
+ * `projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup`、`fs` 與 `include` 是**懶建**的（`PluginTree.context()` 第一次被叫到才建），`include` 要等第一次讀清單才有。
  *
  * **收尾**：相容層組出來的每一個 agent 都用 `ctx.effect` 登記收尾，登記完才交出去；agent 的 `dispose` 就是那筆 effect 的
  * 處置函式，所以正常收掉時那筆登記一起撤下，不會一條 thread 留一筆。根卸載時還沒收的 agent 由相容層的 fiber 收掉。這是 dsh
