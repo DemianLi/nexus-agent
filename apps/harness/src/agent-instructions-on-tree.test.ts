@@ -448,6 +448,18 @@ describe('E：同一棵樹上多條 thread 同時活著，每一次注入靠 thr
     expect(texts).toHaveLength(1);
     expect(texts[0]).toContain('新的規矩。');
     expect(texts[0]).not.toContain('舊的規矩。');
+    const freshRoot = fresh.sessions.list().find((entry) => entry.address.kind === 'root');
+    const staleRoot = stale.sessions.list().find((entry) => entry.address.kind === 'root');
+    expect(injectedBaselines(freshRoot?.log.events ?? [])).toHaveLength(1);
+    expect(injectedBaselines(staleRoot?.log.events ?? [])).toHaveLength(0);
+
+    // **反例（#1479）**：再跑**舊的那一份**。行程級的查找（`ThreadSessions`，同一個 thread id 取代成新的那份）和 fs 查找都會挑到新的；
+    // 宿主用的是這一次組裝自己的 `registry.sessions`，所以這一輪的注入記在舊的那份自己的 root 日誌，新的那份的日誌一則都沒有多。
+    // 宿主若改用行程級查找記日誌，這裡會反過來：舊的那份是 0、新的那份變 2。
+    await runOn(stale);
+    expect(injectedBaselines(staleRoot?.log.events ?? [])).toHaveLength(1);
+    expect(injectedBaselines(freshRoot?.log.events ?? [])).toHaveLength(1);
+
     await stale.attachment.detach();
     await closeThread(fresh);
     await closeThread(bystander);
@@ -551,6 +563,182 @@ describe('D：輪數不變——這顆 middleware 每次 invoke 一格、每輪�
       expect(model.calls).toBe(32);
       // 有 workspace 時第一輪 prompt 裡有基線，沒有時沒有——輪數相同，內容不同。
       expect(baselineTexts(model.seen[0] ?? [])).toHaveLength(withWorkspace ? 1 : 0);
+    },
+    60000,
+  );
+});
+
+/**
+ * **middleware 鏈的名字與順序**（[#1479](https://github.com/DemianLi/nexus-agent/issues/1479)，#1474 驗收 D）。
+ *
+ * 期望值**寫死**，是 `b0a74042`（#1475 之前、agent-instructions 還是舊外殼 `useWithBackend` 的最後一個 develop）上實際錄到的名單，
+ * 不是拿當前分支自己比自己：遷到樹上、改由橋接列 `registry.middleware.use` 折進之後，`AgentInstructionsMiddleware` 必須還在
+ * 同一格（`nexusSessionCheckpoint` 之後、`nexusSandboxPolicy` 之前），其餘一個都不能多、不能少、不能換位。
+ *
+ * 錄法（PR 內文也寫了）：`git worktree add --detach <dir> b0a74042`、`pnpm install --frozen-lockfile`，在 `apps/harness/src/` 放一個
+ * 臨時測試，三種組裝各建一次（出貨清單＝`createNexusAgent({ plugins: await shippedPlugins(), summarization: false, backend })`；
+ * CLI／serve＝`createCordisRoot({ channel: entryApprovalChannel(HEADLESS_APPROVALS | undefined) })` ＋ `loadDefaultPlugins(…, { tree })` ＋
+ * `root.boot('cli' | 'serve')` ＋ `assembly.create(…)`），都帶一個放了 AGENTS.md 的工作區；名單取自建好的 agent 身上那份
+ * middleware stack（與 `summarization.test.ts` 的 `middlewareNames` 同一個走法）。同一支探針在這個分支上跑，三份與下面逐字相同。
+ * CLI 與 serve 錄到的兩份相同；出貨清單（不經 `root.boot`，沒有入口掛的列）比它們少 `nexusStreamRetry` 與 `nexusFileReference` 兩格。
+ */
+const CHAIN_SHIPPED = [
+  'SkillsMiddleware',
+  'FilesystemMiddleware',
+  'subAgentMiddleware',
+  'SummarizationMiddleware',
+  'patchToolCallsMiddleware',
+  'nexusToolBarrier',
+  'nexusToolFailureContainment',
+  'nexusTurnCancel',
+  'nexusSearchOverflow',
+  'nexusPlanMode',
+  'nexusToolPreExecute',
+  'nexusApprovalGate',
+  'nexusFileObservationPolicy',
+  'nexusRepeatToolReminder',
+  'nexusModelCallEvents',
+  'nexusEmptyResponse',
+  'nexusModelUsage',
+  'nexusSessionCheckpoint',
+  'AgentInstructionsMiddleware',
+  'nexusSandboxPolicy',
+  'nexusSystemPrompt',
+  'nexusToolPostExecute',
+  'nexusToolOutputSchema',
+  'nexusFsToolErrors',
+  'nexusReadContinuation',
+  'nexusInvalidToolArgs',
+  'nexusToolExecute',
+  'nexusMaxTokens',
+  'nexusRequestSnapshot',
+  'nexusTurnCancelModelSignal',
+] as const;
+
+const CHAIN_CLI = [
+  'SkillsMiddleware',
+  'FilesystemMiddleware',
+  'subAgentMiddleware',
+  'SummarizationMiddleware',
+  'patchToolCallsMiddleware',
+  'nexusToolBarrier',
+  'nexusToolFailureContainment',
+  'nexusTurnCancel',
+  'nexusSearchOverflow',
+  'nexusPlanMode',
+  'nexusToolPreExecute',
+  'nexusApprovalGate',
+  'nexusFileObservationPolicy',
+  'nexusRepeatToolReminder',
+  'nexusStreamRetry',
+  'nexusModelCallEvents',
+  'nexusEmptyResponse',
+  'nexusModelUsage',
+  'nexusSessionCheckpoint',
+  'AgentInstructionsMiddleware',
+  'nexusSandboxPolicy',
+  'nexusFileReference',
+  'nexusSystemPrompt',
+  'nexusToolPostExecute',
+  'nexusToolOutputSchema',
+  'nexusFsToolErrors',
+  'nexusReadContinuation',
+  'nexusInvalidToolArgs',
+  'nexusToolExecute',
+  'nexusMaxTokens',
+  'nexusRequestSnapshot',
+  'nexusTurnCancelModelSignal',
+] as const;
+
+const CHAIN_SERVE = [
+  'SkillsMiddleware',
+  'FilesystemMiddleware',
+  'subAgentMiddleware',
+  'SummarizationMiddleware',
+  'patchToolCallsMiddleware',
+  'nexusToolBarrier',
+  'nexusToolFailureContainment',
+  'nexusTurnCancel',
+  'nexusSearchOverflow',
+  'nexusPlanMode',
+  'nexusToolPreExecute',
+  'nexusApprovalGate',
+  'nexusFileObservationPolicy',
+  'nexusRepeatToolReminder',
+  'nexusStreamRetry',
+  'nexusModelCallEvents',
+  'nexusEmptyResponse',
+  'nexusModelUsage',
+  'nexusSessionCheckpoint',
+  'AgentInstructionsMiddleware',
+  'nexusSandboxPolicy',
+  'nexusFileReference',
+  'nexusSystemPrompt',
+  'nexusToolPostExecute',
+  'nexusToolOutputSchema',
+  'nexusFsToolErrors',
+  'nexusReadContinuation',
+  'nexusInvalidToolArgs',
+  'nexusToolExecute',
+  'nexusMaxTokens',
+  'nexusRequestSnapshot',
+  'nexusTurnCancelModelSignal',
+] as const;
+
+/** agent 身上那份 middleware stack 的名字；找不到就失敗（基座的內部形狀變了，紅了正是要知道的事）。 */
+function middlewareNames(agent: unknown): string[] {
+  const seen = new Set<unknown>();
+  const walk = (node: unknown, depth: number): string[] | null => {
+    if (depth > 5 || node == null || typeof node !== 'object' || seen.has(node)) return null;
+    seen.add(node);
+    for (const [key, value] of Object.entries(node as Record<string, unknown>)) {
+      if (key === 'middleware' && Array.isArray(value)) {
+        return value.map((entry) => String((entry as { name?: string })?.name));
+      }
+      const found = walk(value, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  };
+  const names = walk(agent, 0);
+  if (!names) throw new Error('找不到 agent 的 middleware stack——基座的內部形狀變了。');
+  return names;
+}
+
+describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐字相同（出貨清單、CLI、serve 各一次）', () => {
+  it('出貨清單（createNexusAgent）', async () => {
+    const shipped = await shippedPlugins();
+    const { agent, dispose } = await createNexusAgent({
+      model: new LoopingChatModel(),
+      plugins: shipped,
+      summarization: false,
+      backend: new ContainedFilesystemBackend({
+        rootDir: workspaceWith('規矩。'),
+        mode: 'workspace-write',
+      }),
+    });
+    try {
+      expect(middlewareNames(agent)).toEqual([...CHAIN_SHIPPED]);
+    } finally {
+      await dispose();
+    }
+  }, 60000);
+
+  it.each([
+    ['CLI', 'cli', CHAIN_CLI],
+    ['serve', 'serve', CHAIN_SERVE],
+  ] as const)(
+    '%s 的樹（root.boot）',
+    async (_label, entry, expected) => {
+      const booted = await boot(home(), entry);
+      const thread = await openThread(booted, `chain-${entry}`, [{ content: '好。' }], {
+        workspace: workspaceWith('規矩。'),
+      });
+      try {
+        expect(middlewareNames(thread.built.agent)).toEqual([...expected]);
+      } finally {
+        await closeThread(thread);
+      }
     },
     60000,
   );
