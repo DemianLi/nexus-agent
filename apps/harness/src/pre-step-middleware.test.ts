@@ -177,13 +177,29 @@ describe('宿主建的 middleware', () => {
       expect(JSON.stringify(sessions.appended[0]?.data)).toContain('一則。');
     });
 
-    it('用交進來的那一份 sessions 問（這條 thread 自己的），不是別處', async () => {
-      const mine = fakeSessions();
-      const other = fakeSessions();
-      const middleware = createPreStepMiddleware(NAME, injecting({ content: 'x' }), mine);
-      await hookOf(middleware)({ messages: [] }, { configurable: {} });
-      expect(mine.asked).toHaveLength(1);
-      expect(other.asked).toHaveLength(0);
+    it('兩顆 middleware 各綁各的 sessions：跑哪一顆就只問、只記那一顆綁的，不串到另一顆（#1479）', async () => {
+      const mineSessions = fakeSessions();
+      const otherSessions = fakeSessions();
+      const mine = createPreStepMiddleware(NAME, injecting({ content: '我的。' }), mineSessions);
+      const other = createPreStepMiddleware(
+        NAME,
+        injecting({ content: '別人的。' }),
+        otherSessions,
+      );
+
+      await hookOf(mine)({ messages: [] }, { configurable: {} });
+      expect(mineSessions.asked).toHaveLength(1);
+      expect(mineSessions.appended).toHaveLength(1);
+      expect(otherSessions.asked).toHaveLength(0);
+      expect(otherSessions.appended).toHaveLength(0);
+
+      // 反方向也要量：先建的那顆不能把後建的那顆的查找佔走。
+      await hookOf(other)({ messages: [] }, { configurable: {} });
+      expect(otherSessions.asked).toHaveLength(1);
+      expect(otherSessions.appended).toHaveLength(1);
+      expect(JSON.stringify(otherSessions.appended[0]?.data)).toContain('別人的。');
+      expect(mineSessions.asked).toHaveLength(1);
+      expect(mineSessions.appended).toHaveLength(1);
     });
 
     it.each(['not-attached', 'unknown-caller', 'ambiguous'] as const)(

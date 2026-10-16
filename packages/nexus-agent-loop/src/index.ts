@@ -30,12 +30,16 @@
  *
  * | # | dsh 怎麼做 | 我們怎麼做 | 為什麼表達不出來 |
  * | --- | --- | --- | --- |
- * | 1 | waterfall：listener 收 `next()`、拿到這一步的決定（`enter`／`reject`）後可以 splice 進批次的任何位置、可以 `reject` 整步（`agent.ts:267-288`、`runtime-types.ts:322`）。`agent-instructions` 遇到 `reject`、或第 1 步批次是空的就不 splice，把基線留在收件匣等下一步（`agent-instructions/src/index.ts:345`） | **只能追加**，位置由基座決定（今天落在使用者那一句之後，與 dsh 同位）；沒有 `reject`，也沒有「留到下一步」 | 載體是 middleware 的 `beforeAgent`，只能回要追加的訊息（`interception-index.test.ts` 第 2 列 `permissionDelta`）；拿不到整個批次 |
+ * | 1 | waterfall：listener 收 `next()`、拿到這一步的決定（`enter`／`reject`）後可以 splice 進批次的任何位置、可以 `reject` 整步（`agent.ts:267-288`、`runtime-types.ts:309-320`（`agent/pre-step` 的說明與簽名；`:321` 起是 `agent/request`））。`agent-instructions` 遇到 `reject`、或第 1 步批次是空的就不 splice，把基線留在收件匣等下一步（`agent-instructions/src/index.ts:345`） | **只能追加**，位置由基座決定（今天落在使用者那一句之後，與 dsh 同位）；沒有 `reject`，也沒有「留到下一步」 | 載體是 middleware 的 `beforeAgent`，只能回要追加的訊息（`interception-index.test.ts` 第 2 列 `permissionDelta`）；拿不到整個批次 |
  * | 2 | **每一步**都跑（waterfall 在 `preStep()`，迴圈裡每個 step 一次：`agent.ts:318` 呼叫、`:267-288` 實作） | **每次 invoke 一次**（`beforeAgent`） | 每一步要 `beforeModel`，它是圖裡的節點，預設上限 100 下每輪多一格＝33 輪變 24 輪（#389 triage 實測）；#389 拍板每一步的那一半先不做，這裡也就沒有另外為它付那一格。名字叫 `preStep` 而不叫 `beforeInvoke`：#389 重開時名字不必改 |
- * | 3 | listener 收 `{ agent, messages, step, signal }`，`messages` 是**這一步從收件匣領出來的批次**（`runtime-types.ts:313`） | listener 收「**模型看得到的那一串**」（`effectiveMessages`）與呼叫設定 `{ configurable }`；沒有 `agent` 物件，這次呼叫屬於哪條 thread 由 `configurable` 認 | 我們沒有收件匣：訊息批次在圖的 state 裡。沒有 `agent` 物件，身分由呼叫設定認（同 `@nexus/session` 的會話查找） |
+ * | 3 | listener 收 `{ agent, messages, turn, step, signal }`（簽名在 `runtime-types.ts:320`），`messages` 是**這一步從收件匣領出來的批次**（`runtime-types.ts:313`） | listener 收「**模型看得到的那一串**」（`effectiveMessages`）與呼叫設定 `{ configurable }`；沒有 `agent` 物件，這次呼叫屬於哪條 thread 由 `configurable` 認 | 我們沒有收件匣：訊息批次在圖的 state 裡。沒有 `agent` 物件，身分由呼叫設定認（同 `@nexus/session` 的會話查找） |
  * | 4 | 在請求被接受的**第一次嘗試**才記 `user/message`（`agent.ts:426-436`，`if (firstAttempt)` 底下） | 在注入當下記（`beforeAgent` 回傳之前） | `beforeAgent` 在請求之前就跑，看不到「這一步是不是第一次嘗試」。重試是模型呼叫那一層的事（`retryModelCall`），不會重跑 `beforeAgent`，所以同一次 invoke 不會因重試記兩筆 |
  *
  * **撤除條件**：#389 重開（每一步注入），或 core 開了讓多個貢獻者共用一格的 pre-step 節點時，第 1、2、4 列一起重評。
+ *
+ * 這張表只收接縫本身的偏離。另有一條屬於消費者而不是接縫的——agent-instructions 把 `fs` 放進 `inject`（必填，不是 dsh 的選配
+ * `ctx.get('fs')`，#1474 Q3 (a)）——登記在 `@nexus/plugin-agent-instructions` 檔頭「偏離登記」第 2 條；`docs/plugin-contract.md` 的偏離表把兩處
+ * 合在一張表裡。
  *
  * 介面只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：`agent/turn-stopping` 等其餘 agent loop
  * 事件今天沒有遷出的消費者，不加。

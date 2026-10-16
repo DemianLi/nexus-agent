@@ -71,7 +71,7 @@
  * ## 攔截時刻：dsh 第 2 格 `agent/pre-step`
  *
  * dsh 在 `agent/pre-step` 組好基線、折進那一步的批次，**緊跟在已領取的訊息之後**
- * （`src/index.ts:315-345`）。我們這側對應的是 `@nexus/agent-loop` 的 `preStep`（宿主以 `beforeAgent` 承載），**只佔了注入那半**：
+ * （`86a40220` 上的 `src/index.ts:334-360`，splice 在 `:355-359`）。我們這側對應的是 `@nexus/agent-loop` 的 `preStep`（宿主以 `beforeAgent` 承載），**只佔了注入那半**：
  * 拿不到整個訊息批次自己 splice，只能追加；落點由基座決定（2026-09-18 實測落在使用者那一句之後，與 dsh 同位）。
  * 攔截那半（`jumpTo: 'end'`）用不到，基線只注入。逐欄的差與頻率量在
  * `apps/harness/src/interception-index.test.ts` 第 2 列。
@@ -94,8 +94,9 @@
  * 什麼時候不加」。**行為逐字不變**（Q4）：記號、渲染文字、四個候選與順序、`maxBytes` 預設、middleware 名字與在鏈上的位置、日誌
  * `source`、每次 invoke 一格、摘要後下一次 invoke 補回、寫日誌失敗訊息照送。
  *
- * 舊外殼（`NexusPlugin`、`createAgentInstructionsMiddleware`、`createAgentInstructionsPlugin`）搬到 harness 的
- * `agent-instructions.fixture.ts`，給還在相容層組裝的測試用。
+ * 舊外殼的建構式（`createAgentInstructionsMiddleware`）搬到 harness 的
+ * `agent-instructions.fixture.ts`，給 `pre-step-middleware.test.ts` 的單元測試用；`NexusPlugin` 外殼與 `createAgentInstructionsPlugin`
+ * 沒有人用，已拿掉（#1479）。
  *
  * @module
  */
