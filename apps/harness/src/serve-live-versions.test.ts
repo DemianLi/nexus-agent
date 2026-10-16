@@ -139,6 +139,11 @@ describe('活著的設定版本（#1442）', () => {
       current: true,
       threads: ['t1', 't2'],
     });
+    // agent-instructions（#1474）也一樣：遷上樹之後它是樹上的列、掛上、next-thread，兩條 thread 各綁一次（#1479）。
+    expect(rowOf(first, 'agent-instructions').live?.[0]).toMatchObject({
+      current: true,
+      threads: ['t1', 't2'],
+    });
     const oldVersion = {
       echo: rowOf(first, 'echo').live![0]!.version,
       todo: rowOf(first, 'todo').live![0]!.version,
