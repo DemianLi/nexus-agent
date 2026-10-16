@@ -37,6 +37,7 @@ import {
   reduceConversation,
   STEER_UNAVAILABLE,
   uniformDecisions,
+  WireRejectedError,
 } from '@nexus/wire';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
@@ -52,6 +53,7 @@ import { PLAN_EXIT_LINE } from '@/lib/plan-chip';
 import type { RatingsView } from '@/lib/feedback-ratings';
 import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
+import { threadCapacityText } from '@/lib/thread-capacity';
 
 /** 回饋對話框開給誰：一則回覆（按了讚或踩），或整個會話（只打了 `/feedback`）。 */
 export type FeedbackTarget =
@@ -118,8 +120,11 @@ export interface Conversation {
   readonly store: ConversationStore;
   /** 歷史拿到了沒、還有沒有更早的。**拿到之前是 `undefined`**，拿不到時看 {@link historyError}。 */
   readonly history?: HistoryView;
-  /** 第一頁歷史拿不回來的原因。對話照樣接得下去，只是之前說過的話不在畫面上。往前翻的失敗在 {@link HistoryView.error}。 */
-  readonly historyError?: string;
+  /**
+   * 第一頁歷史拿不回來的原因，連同伺服器給的錯誤碼（有的話）。對話照樣接得下去，只是之前說過的話不在畫面上。
+   * 往前翻的失敗在 {@link HistoryView.error}。
+   */
+  readonly historyError?: { readonly message: string; readonly code?: string };
   /** 往前翻一頁，接在最前面。沒有更早的、或正在拿時什麼都不做。 */
   loadEarlier(): Promise<void>;
   /**
@@ -129,6 +134,11 @@ export interface Conversation {
   readonly connected: boolean;
   /** 上一次開線失敗、或下行斷掉的原因。接回來就清掉。串流自己正常收掉時沒有原因可講，這一格不在。 */
   readonly connectionError?: string;
+  /**
+   * 下行被伺服器明說不收、而且有一句給使用者看的話時（thread 數滿了，[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)），
+   * 就是那一句；這時 {@link connectionError} 不在——server 的原文是給管理者看的。重試照舊，接回來就清掉。
+   */
+  readonly refusal?: string;
   /**
    * 下行斷了（或第一次就沒開成），正在自動重接（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）。
    * `wasConnected` 分得出「連上過、中斷了」與「從沒連上」；`offline` 是瀏覽器說沒有網路，這時不排重試，
@@ -318,6 +328,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [feedbackDialog, setFeedbackDialog] = useState<FeedbackDialogState | undefined>(undefined);
   const [connected, setConnected] = useState(false);
   const [connectionError, setConnectionError] = useState<string | undefined>(undefined);
+  const [refusal, setRefusal] = useState<string | undefined>(undefined);
   const [reconnecting, setReconnecting] = useState<Conversation['reconnecting']>(undefined);
   const [recovered, setRecovered] = useState(false);
   /** 每加一就重開一次下行（#593）：自動重試與「立刻重連」都走這一格。 */
@@ -350,7 +361,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   const [history, setHistory] = useState<
     (HistoryView & { readonly firstSeq: number; readonly throughSeq: number }) | undefined
   >(undefined);
-  const [historyError, setHistoryError] = useState<string | undefined>(undefined);
+  const [historyError, setHistoryError] = useState<
+    { readonly message: string; readonly code?: string } | undefined
+  >(undefined);
   const historyRef = useRef(history);
   historyRef.current = history;
   const clientRef = useRef(client);
@@ -413,14 +426,18 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   useEffect(() => {
     const controller = new AbortController();
     let cancelled = false;
-    /** 這條下行斷了：翻回沒連上、講原因、排下一次（#593）。串流正常收掉也算——server 不會無故收線。 */
-    const lose = (reason: string | undefined) => {
+    /**
+     * 這條下行斷了：翻回沒連上、講原因、排下一次（#593）。串流正常收掉也算——server 不會無故收線。
+     * `refused` 是伺服器明說不收時給使用者看的那一句（#1478）；**每次都重設**，上一次被拒的話不會留到下一次斷線。
+     */
+    const lose = (reason: string | undefined, refused?: string) => {
       const book = retry.current;
       book.lost = true;
       clearTimeout(book.recoveredTimer);
       setRecovered(false);
       setConnected(false);
       setConnectionError(reason);
+      setRefusal(refused);
       scheduleRetry();
     };
 
@@ -450,7 +467,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         } else {
           advance(() => emptyConversation());
           setHistory(undefined);
-          setHistoryError(page.message);
+          setHistoryError({
+            message: page.message,
+            ...(page.code === undefined ? {} : { code: page.code }),
+          });
         }
         const book = retry.current;
         const wasLost = book.lost && book.everConnected;
@@ -459,6 +479,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         book.everConnected = true;
         setConnected(true);
         setConnectionError(undefined);
+        setRefusal(undefined);
         setReconnecting(undefined);
         if (wasLost) {
           setRecovered(true);
@@ -489,7 +510,17 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         if (!cancelled) lose(undefined);
       } catch (error) {
         if (!cancelled) {
-          lose(error instanceof Error ? error.message : String(error));
+          // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
+          const refused =
+            error instanceof WireRejectedError ? threadCapacityText(error.code) : undefined;
+          lose(
+            refused !== undefined
+              ? undefined
+              : error instanceof Error
+                ? error.message
+                : String(error),
+            refused,
+          );
         }
       }
     })();
@@ -620,6 +651,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       if (result.type === 'error') {
         return {
           message:
+            threadCapacityText(result.error) ??
             sendRejectionText(result.error, hasAttachments, mention !== undefined) ??
             result.message,
         };
@@ -892,6 +924,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     dismissFeedback,
     ...(feedbackDialog === undefined ? {} : { feedbackDialog }),
     ...(connectionError === undefined ? {} : { connectionError }),
+    ...(refusal === undefined ? {} : { refusal }),
     ...(commandError === undefined ? {} : { commandError }),
     ...(slashError === undefined ? {} : { slashError }),
     ...(slashNotice === undefined ? {} : { slashNotice }),

@@ -1,4 +1,5 @@
 import type { Event, ThreadHistoryQuery, ThreadHistoryResult, WireClient } from '@nexus/wire';
+import { THREAD_AT_CAPACITY } from '@nexus/wire';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -9,6 +10,7 @@ import {
   LOADING_EARLIER_LABEL,
   RETRY_EARLIER_LABEL,
 } from '@/components/earlier-pager';
+import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { fakeDownlink } from '@/test/downlink';
 import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
 
@@ -268,6 +270,20 @@ describe('畫面照日誌重播', () => {
 
     await waitFor(() => expect(screen.getByText(/之前說過的話拿不回來/)).toBeTruthy());
     expect(screen.getByText(/日誌壞了/)).toBeTruthy();
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+  });
+
+  it('thread 數滿了（#1478）：換成給使用者看的那一句，沒有「拿不回來」的前綴，也不接 server 的原文', async () => {
+    const { client } = fakeClient(async () => ({
+      kind: 'rejected',
+      code: THREAD_AT_CAPACITY,
+      message: 'thread 數已到上限 2／2；重啟 serve 才會釋放',
+    }));
+    render(<App client={client} />);
+
+    await waitFor(() => expect(screen.getByText(THREAD_AT_CAPACITY_TEXT)).toBeTruthy());
+    expect(screen.queryByText(/之前說過的話拿不回來/)).toBeNull();
+    expect(screen.queryByText(/重啟 serve/)).toBeNull();
     await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
   });
 
