@@ -554,6 +554,7 @@ describe('什麼推得動 roundsStarted', () => {
       'subagent/descriptor',
       'tool/call',
       'tool/result',
+      'deliverables/presented',
       'session/end-seed',
       'session/resumed',
       'feedback/message-put',

@@ -19,7 +19,12 @@ import type { Context } from '@nexus/cordis';
 import { ContractService } from '@nexus/sdk';
 
 import { toolsToken } from './index.js';
-import type { ToolGateListener, ToolRegistry, ToolRegisterOptions } from './index.js';
+import type {
+  ToolGateListener,
+  ToolRegistry,
+  ToolRegisterOptions,
+  ToolResultListener,
+} from './index.js';
 
 /** 一筆登記：工具、登記它的那一列（Cordis 的列 id；沒有列就是插件名），與登記時帶的選項（#1458）。 */
 export interface ToolEntry {
@@ -35,6 +40,12 @@ export interface ToolGateEntry {
   readonly source: string;
 }
 
+/** 一位 `tools/result` 觀察者的登記（#1469）：listener 與登記它的那一列。 */
+export interface ToolResultEntry {
+  readonly listener: ToolResultListener;
+  readonly source: string;
+}
+
 /** {@link createToolsProvider} 的回傳：交給 Loader 當內建插件的類別，與讀登記內容的那一面。 */
 export interface ToolsProviderHandle {
   /** 掛進 Loader 的 `builtins`（或 `ctx.plugin`）的那個服務類別。每次 {@link createToolsProvider} 的狀態都是新的。 */
@@ -43,12 +54,15 @@ export interface ToolsProviderHandle {
   entries(): readonly ToolEntry[];
   /** 目前每一位核准閘門 listener，依登記順序；快照（#1466）。宿主把登記者是某一列的那幾位折進那一條 thread 的 `registry.approvals`。 */
   gates(): readonly ToolGateEntry[];
+  /** 目前每一位 `tools/result` 觀察者，依登記順序；快照（#1469）。宿主把登記者是某一列的那幾位折進那一條 thread 的 `registry.events`。 */
+  resultListeners(): readonly ToolResultEntry[];
 }
 
 /** 造一個提供者。登記處的狀態活在回傳的 handle 裡，不在模組層級。 */
 export function createToolsProvider(): ToolsProviderHandle {
   const items: ToolEntry[] = [];
   const gateItems: ToolGateEntry[] = [];
+  const resultItems: ToolResultEntry[] = [];
 
   class ToolsRegistryService extends ContractService<ToolRegistry> implements ToolRegistry {
     constructor(ctx: Context) {
@@ -91,11 +105,25 @@ export function createToolsProvider(): ToolsProviderHandle {
         };
       }, 'tools.gate()');
     }
+
+    onResult(listener: ToolResultListener): () => void {
+      const caller = this.ctx.fiber;
+      const source = caller.entry?.id ?? caller.runtime?.name ?? '(未知)';
+      return this.ctx.effect(() => {
+        const entry: ToolResultEntry = { listener, source };
+        resultItems.push(entry);
+        return () => {
+          const index = resultItems.indexOf(entry);
+          if (index >= 0) resultItems.splice(index, 1);
+        };
+      }, 'tools.onResult()');
+    }
   }
 
   return {
     Provider: ToolsRegistryService,
     entries: () => [...items],
     gates: () => [...gateItems],
+    resultListeners: () => [...resultItems],
   };
 }

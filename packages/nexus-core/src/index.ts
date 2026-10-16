@@ -199,7 +199,7 @@ export {
 } from './tool-pipeline.js';
 export type { HostServices } from './host-services.js';
 export { createHostServicesPlugin } from './host-services.js';
-export type { FsService, FsServiceOptions } from './fs-service.js';
+export type { FsFacts, FsService, FsServiceOptions } from './fs-service.js';
 export { createFsService, FS_SERVICE } from './fs-service.js';
 export { scrubbedParentEnv, SENSITIVE_ENV_PATTERN } from './child-env.js';
 export { installProxyFromEnvironment, proxyEnvironmentForChild } from './http-proxy/index.js';

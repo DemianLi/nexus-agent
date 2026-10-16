@@ -19,7 +19,7 @@
  * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，契約服務；#1463），**挑法由宿主給**：行程裡每一條活著的 thread 綁上的註冊表（`thread-sessions.ts`） | （無對應，偏離登記在 `@nexus/session`） |
  * | `fs` | 行程級的 fs 查找（`@nexus/fs/provider`，契約服務；#1466），**挑法由宿主給**：同一張登記表、同一支 `pickBoundForCall`，一筆登記同時帶這條 thread 的 fs 把手（就是那次組裝 host-services 裡的 `fs` 服務） | （dsh 的 `fs` 是行程全域一份、每個 agent 不同的東西以參數傳入；偏離登記在 `@nexus/fs`） |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`、疊 patch、把函式插件掛起來（#1416 PR 2，`plugin-tree.ts`） | `include` |
- * | `include:<id>` | Include 底下的函式插件，今天是 `include:echo`、`include:trajectory`、`include:token-meter`、`include:skills`、`include:feedback`、`include:ask-user` 與 `include:todo` | 各插件 |
+ * | `include:<id>` | Include 底下的函式插件，模組有 `manifest` 匯出的才上樹（遷出了哪幾顆以 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED` 為準，不在這裡列名單） | 各插件 |
  *
  * `nexus-compat`、入口、`tools`、`projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup`、`fs`、`include` 都必掛（`startup-audit.ts` 的 {@link auditTreeEntries}）；`include:<id>` 不在名單上，
  * 它掉了是清單那一列掉了，走 `dropped`。入口的程式碼經入口那一列的 inject 拿到服務，所有組 agent 的地方都走它。`tools`、

@@ -22,6 +22,9 @@
  * 同步 `append` 不會撞 `SessionLog` 的重入防護，不需要排 microtask。（#1286 之前是訂閱自己那份日誌、等 `tool/result`
  * 發佈後排一個 microtask 才寫，所以落在它**之後**；舊日誌仍是那個次序，讀它的人與日誌不變式兩種都收。）
  *
+ * **#1469 起掛在 Cordis 樹上**：監聽者經 `tools` 服務 `1.3.0` 的 `onResult` 登記，宿主（橋接列）把它折進**每條 thread 自己的**
+ * `registry.events.on('tools/result', l)`，所以派發的時機與次序一個字都沒變。
+ *
  * **表的鍵是最近似的，不是 dsh 的鍵。** dsh 的 `pending` 是 `WeakMap<ToolExecution, …>`，以那一次執行物件為鍵；
  * 我們的圍堵沒有 `ToolExecution` 物件，只有 `PipelineExecution` 的視圖，每次派發都是新造的，認不出同一次執行，
  * 所以退到「呼叫者位址＋`callId`」。這是 #1286 登記的鍵偏離。
@@ -29,10 +32,25 @@
  * 監聽者是 `EventDispatcher.observe` 派發的：它拋或 reject 都只回報、不影響那次呼叫。
  *
  * **一個呼叫只留一筆。** 圍堵對控制流例外（中斷）是原樣往外拋、不派發 `tools/result` 也不寫 `tool/result` 的，而 resume 之後
- * 同一個 `callId` 會再進來一次；表是覆寫，所以舊的一筆不會讓結果落定時交付兩次。組裝收掉時整張表清空。
+ * 同一個 `callId` 會再進來一次；表是覆寫，所以舊的一筆不會讓結果落定時交付兩次。
+ *
+ * ## 交付表的壽命（#1469 Q3 (a)）：行程級，跟著閉包活，不在列卸載時清
+ *
+ * 上樹後 `apply` 在一個行程裡只跑一次，表是行程級的一張。**以前**組裝收掉時整張清空（`registry.lifecycle.onDispose`），**現在拿掉那一行，
+ * 也不改成列卸載（`ctx.effect`）時清**：開著的 thread 手上握著快照的工具與 listener，兩者共用這個閉包；列被停用或重載時清表的話，
+ * 懸著的那一次交付會寫不進日誌。表跟著閉包活，最後一條握著它的 thread 不用了才回收。
+ *
+ * **已知缺口（登記，不修）**：被中斷又沒有 resume 的那一筆留在表裡，條目握著那條 thread 的 `SessionLog`，thread 收掉之後整份日誌仍被引用。
+ * 產品上跟以前一樣（serve 只在關機時收 thread，CLI 一個行程一條 thread，以前清表的時刻就是行程結束），等「閒置 thread 回收」那張卡
+ * （#1464 的量測列為優化線索）一起處理。dsh 沒有這個問題：它的 exec 物件在工具本體與 `tools/result` 之間是同一個，可以當 `WeakMap` 的鍵；
+ * 我們的 exec 每次重建，鍵的偏離已登記（#1286）。
+ *
+ * **這算不算「有狀態的插件」（Q3-1）：不算。** 這張表是**單次呼叫內的過渡狀態**（本體記、`tools/result` 取走刪掉），不是要跨呼叫、
+ * 跨 thread 保留的東西；工具與 listener 一起被快照進同一條 thread，列卸載後仍然成對可用。
  *
  * **前提：宿主端要把 `events` 交給 `foldRegistry`**（產品路徑只有 `agent-factory.ts`，它交 `registry.dispatch`）。
- * 沒交的組裝不派發 `tools/result`，這顆工具就靜靜不交付。
+ * 沒交的組裝不派發 `tools/result`，這顆工具就靜靜不交付。**提供者沒有 `onResult`（`tools` 契約低於 `1.3.0`）時 `apply` 直接拒絕起來**，
+ * 不讓它靜靜不交付。
  *
  * ## 寫進哪一份：呼叫者自己那一份
  *
@@ -47,8 +65,8 @@
  *    內容」；繞過 backend 直接呼叫 `node:fs` 則越過 fence，也看不到 plugin 掛上去的其他 backend。退到
  *    列上一層目錄，只確認「在、而且不是目錄」。
  * 2. **「有沒有工作區」看能力，不看 header。** dsh 看會話 header 的 `cwd`；我們的 header 記的是
- *    行程的工作目錄，而且沒有工作區時組裝點照樣墊一顆 `StateBackend`。改看
- *    {@link WORKSPACE_CAPABILITY}（sandbox-policy 只在有圍堵時宣告它）。
+ *    行程的工作目錄，而且沒有工作區時組裝點照樣墊一顆 `StateBackend`。改看工作區能力（sandbox-policy 只在有圍堵時宣告它），
+ *    **#1469 起經 fs 把手的 `hasWorkspace()` 讀**：fold 填 backend 的同一處把能力算進去，逐條 thread。
  * 3. **路徑在 backend 的命名空間裡解析。** dsh 的絕對路徑可以指到工作區外（例如 `/tmp`），只要
  *    Session 檔案系統讀得到；我們的 backend 是以工作區為根的虛擬路徑，`/report.md` 就是工作區根下
  *    的 `report.md`，工作區外本來就指不到。相對路徑補成以根為起點，同 dsh「相對路徑以工作目錄為準」。
@@ -68,15 +86,22 @@
  *    記下一筆沒人下載得了的交付。**退到什麼**：路徑落在這些路由的前綴底下就拒，回話叫模型先 `write_file`
  *    到工作區再交付（{@link presentOffWorkspaceMessage}，沒有 dsh 對應，句型接 `Cannot present <path>: …`）。
  *    不帶 `FS_NOT_FOUND`：檔案是在的，只是不在磁碟那一側，帶那個碼會讓讀它的人以為是「不存在」。
- *    前綴由兩處合併而來：組裝點明著交的（`FsService.offWorkspacePrefixes`，折後的 backend 是巢狀的，
- *    裡面兩層的前綴在 private 欄位裡讀不到）與 `registry.backend.mounts()`。
+ *    前綴由兩處合併而來，**#1469 起都在 fs 把手的 `offWorkspacePrefixes()` 裡**（fold 填 backend 的同一處併進去）：組裝點明著交的
+ *    （折後的 backend 是巢狀的，裡面兩層的前綴在 private 欄位裡讀不到）與 plugin 用 `backend.mount()` 掛的路由。
  *
  * 檔案系統照 dsh 從 `fs` 服務拿（dsh 的 `inject` 有 `'fs'`），拿到的是基座檔案工具實際讀寫的那一個
  * （[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。**那條理由只對一半成立**：走服務是為了
  * 看得見檔案工具寫的檔（工作區那一側，今天仍如此）；但「看得見」不等於「讀端讀得到」，路由那一側看得見的
  * 檔要另外擋掉（偏離 6）。服務的值是一格 fold 之後才填的把手、
- * 所以在工具被叫時才讀，偏離登記在 `@nexus/core` 的 `fs-service.ts`，理由同
- * `@nexus/plugin-agent-instructions` 的偏離 2，不另立一條。
+ * 所以在工具被叫時才讀；**樹上是 `@nexus/fs` 的查找服務**（#1466、#1469）：呼叫當下依 thread 找回那條 thread 自己的把手，偏離登記在
+ * `docs/plugin-contract.md`（fs 查找）與 `@nexus/core` 的 `fs-service.ts`。
+ *
+ * ## 這個檔不 import `@nexus/core`（#1469）
+ *
+ * 遷上樹之後套 SDK lint：會話日誌與位址的型別取自 `@nexus/session`、工具結果的寫法與呼叫設定的讀法取自 `@nexus/tool-result`、
+ * 路徑換算取自 `@nexus/fs`，三個都是 core 的單向轉出。`deliverables/presented` 的事件擴充搬進 core 的 `session-log.ts`
+ * （前例 `todo/write`），**偏離 dsh**：dsh 把型別和事件擴充都放在插件自己的 `src/types.ts`，我們的宿主（wire、web 的事件讀端、
+ * `conversation-history`）要不經插件就讀到這份型別。`present-invariant` 那一列（`src/invariant.ts`）仍在相容層，eslint 只排除那一個檔（#1463 Q3 (a)）。
  *
  * @see [#441](https://github.com/DemianLi/nexus-agent/issues/441)
  * @module
@@ -85,23 +110,21 @@
 import { posix } from 'node:path';
 
 import { tool } from '@langchain/core/tools';
-import type {
-  NexusPlugin,
-  PluginEntry,
-  PluginRegistry,
-  PresentedFile,
-  SessionAddress,
-  SessionLog,
-} from '@nexus/core';
+import type { StructuredToolInterface } from '@langchain/core/tools';
+import type { Context } from '@nexus/cordis';
+import { fsToken, virtualPathOf } from '@nexus/fs';
+import type { FsLookup } from '@nexus/fs';
+import { defineManifest, injectOf, need, service } from '@nexus/sdk';
+import { sessionLookupToken } from '@nexus/session';
+import type { PresentedFile, SessionAddress, SessionLog, SessionLookup } from '@nexus/session';
 import {
   callThreadId,
-  FS_SERVICE,
   toolCallIdOf,
   toolCallSessionAddress,
   toolRefusal,
-  virtualPathOf,
-  WORKSPACE_CAPABILITY,
-} from '@nexus/core';
+} from '@nexus/tool-result';
+import { toolsToken } from '@nexus/tools';
+import type { ToolResultListener } from '@nexus/tools';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { z } from 'zod';
@@ -276,150 +299,174 @@ function pendingKey(
 }
 
 /**
- * present plugin。
- *
- * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
- * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
- * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
+ * 交付需要的兩個查找。**都是呼叫當下才問**：行程裡活著哪幾條 thread、各自的 fs 把手是哪一個，是呼叫當下的事實，不是掛載當下的。
+ * 兩個查找用同一支挑法（`@nexus/core` 的 `pickBoundForCall`），所以對「這次呼叫屬於哪一條 thread」永遠給同一個答案。
  */
-export const presentPlugin: NexusPlugin<PresentConfig> = {
-  name: 'present',
-  Config: presentConfigSchema,
-  apply(registry: PluginRegistry, config: PresentConfig): void {
-    const { maxFiles } = config;
-    /** 等 `tools/result` 的交付，依「呼叫者是誰＋`callId`」。見檔頭。 */
-    const pending = new Map<
-      string,
-      { readonly log: SessionLog; readonly files: PresentedFile[] }
-    >();
-    registry.lifecycle.onDispose(() => pending.clear());
-    registry.events.on('tools/result', (exec, result) => {
-      const key = pendingKey(exec.thread, exec.agent, exec.callId);
-      const entry = pending.get(key);
-      if (entry === undefined) return;
-      pending.delete(key);
-      if (result.isError) return;
-      // 同步寫，照 dsh：`tools/result` 由圍堵在記 `tool/result` 之前派發，所以交付先、結果後。見檔頭。
-      entry.log.append('deliverables/presented', { callId: exec.callId, files: entry.files });
-    });
-    registry.tools.register(
-      tool(
-        async (
-          { files: requested }: { files: { path: string; description?: string }[] },
-          config?: unknown,
-        ) => {
-          const callId = toolCallIdOf(config);
-          const refuse = (message: string, error?: { name: string; code: string }) =>
-            toolRefusal(message, {
-              callId: callId ?? '',
-              name: PRESENT_TOOL_NAME,
-              ...(error !== undefined && { error }),
-            });
-          // 檢查的順序照 dsh 的 `execute`：先要有會話，再看檔數、工作區，最後逐個看路徑。
-          const found = registry.sessions.forCall(config);
-          if (callId === undefined || found.kind !== 'ok') {
-            return refuse(PRESENT_NO_SESSION_MESSAGE);
-          }
-          if (requested.length === 0 || requested.length > maxFiles) {
-            return refuse(presentCountMessage(maxFiles));
-          }
-          // **被叫時才讀**：`fs` 那一格要等 fold 折完才有值，見檔頭最後一段。
-          const backend = registry.services.get(FS_SERVICE)?.backend();
-          if (!registry.capabilities.has(WORKSPACE_CAPABILITY) || backend === undefined) {
-            return refuse(PRESENT_NO_WORKSPACE_MESSAGE);
-          }
-          // 不在工作區磁碟上的前綴：組裝點交的那幾格，加上 plugin 自己 `backend.mount()` 掛的。**被叫時才讀**，
-          // 理由同上面的 backend——mount 在每顆 plugin 的 `apply` 裡才註冊進來。
-          const offWorkspace = [
-            ...(registry.services.get(FS_SERVICE)?.offWorkspacePrefixes() ?? []),
-            ...registry.backend.mounts().map(([prefix]) => prefix),
-          ];
-          const files: PresentedFile[] = [];
-          for (const file of requested) {
-            if (file.path.trim().length === 0) return refuse(PRESENT_EMPTY_PATH_MESSAGE);
-            if (isUnderPrefix(virtualPathOf(file.path), offWorkspace)) {
-              return refuse(presentOffWorkspaceMessage(file.path));
-            }
-            const kind = await inspect(backend, file.path);
-            if (kind === 'missing') return refuse(presentNotFoundMessage(file.path), NOT_FOUND);
-            if (kind === 'not-file') return refuse(presentNotFileMessage(file.path));
-            // `description` 沒給就整個不放 key：日誌收不下 `undefined`。
-            files.push({
-              path: file.path,
-              ...(file.description !== undefined && { description: file.description }),
-            });
-          }
-          pending.set(pendingKey(callThreadId(config), toolCallSessionAddress(config), callId), {
-            log: found.log,
-            files,
-          });
-          return presentedText(files);
-        },
-        {
-          name: PRESENT_TOOL_NAME,
-          description: PRESENT_TOOL_DESCRIPTION,
-          schema: z.object({
-            files: z
-              .array(
-                z
-                  .object({
-                    path: z
-                      .string()
-                      .describe(
-                        'Path of an existing regular file. Relative paths use the Session working directory.',
-                      ),
-                    description: z.string().optional().describe('Brief description for the user.'),
-                  })
-                  // 照 dsh 的 `additionalProperties: false`：落庫的要等於模型以為它寫的。
-                  .strict(),
-              )
-              // 照 dsh：4 是建議的每次個數，`maxFiles` 才是真的會拒的上限，兩者不是同一件事。
-              .describe('Usually the 1-2 most important deliverables; at most 4 per call.'),
-          }),
-        },
-      ),
-    );
-  },
-};
-
-export default presentPlugin;
-
-/**
- * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
- *
- * @param options - 設定，形狀見 {@link presentConfigSchema}。
- * @returns 可以放進組裝點清單的條目。
- */
-export function createPresentPlugin(options: PresentPluginOptions = {}): PluginEntry {
-  return { plugin: presentPlugin, config: options };
+export interface PresentLookups {
+  /** 這次呼叫寫進哪一份日誌（會話查找，#1463）。 */
+  readonly sessions: (invocation: unknown) => SessionLookup;
+  /** 這次呼叫該讀哪一條 thread 的 fs 把手（fs 查找，#1466）。 */
+  readonly fs: (invocation: unknown) => FsLookup;
 }
 
-declare module '@nexus/core' {
-  interface SessionEventMap {
-    /**
-     * 模型用 `present` 宣告這幾個檔案是交付物，**而且那次呼叫的最終結果是成功的**。
-     *
-     * 照 dsh 的同名事件（`packages/deliverables/tool-present/src/types.ts`，`ddefc45`）：寫進**呼叫者
-     * 自己那一份**日誌，子代理宣告的留在子代理那份——主代理要交付，得自己再叫一次 `present`（dsh README
-     * 原話）。寫的時刻見檔頭：配對的 `tool/result` 之前（同步，同 dsh）。
-     *
-     * ## 對 dsh 的偏離：沒有 `turn`
-     *
-     * dsh 的 `turn` 出自 `turnBoundary` 投影的 `lastTurn`，我們沒有那個投影，日誌與 wire 上也都沒有輪的
-     * 編號（見 `tool/call` 那一條）。這一筆屬於哪一輪照 repo 既有的規則由 `seq` 推：往前找最近一顆不是
-     * resume 的 `turn/start`（{@link isLogicalTurnStart}，各讀方共用）。放一個自己數的號進來，就會有兩個
-     * 可能對不上的輪。
-     *
-     * web 只收 root 那一份的這一顆，即時與重新整理同一條規則——歷史路由只讀 root（`conversation-history.ts`）。
-     *
-     * ⚠️ **檔案路徑與模型寫的說明原樣進本機日誌、也原樣進遙測**，同 `tool/call` 的 `arguments`（同一串路徑
-     * 本來就在那顆呼叫的參數裡）。
-     */
-    'deliverables/presented': {
-      /** 配對的那顆 `tool/call`／`tool/result` 的 `callId`。 */
-      readonly callId: string;
-      /** 通過檢查的檔案，順序照模型給的。 */
-      readonly files: readonly PresentedFile[];
-    };
+/** {@link createPresentDelivery} 的回傳：工具，與等 `tools/result` 的那一位觀察者。 */
+export interface PresentDelivery {
+  /** `present` 工具。 */
+  readonly tool: StructuredToolInterface;
+  /** `tools/result` 觀察者：取出等著的那一筆，結果不是錯誤才往呼叫者那一份日誌寫 `deliverables/presented`。 */
+  readonly onResult: ToolResultListener;
+}
+
+/**
+ * 造 `present` 的工具與它的 `tools/result` 觀察者。**兩者共用同一張等結果的表**（閉包裡，每次呼叫一張，不在模組層級）。
+ *
+ * 樹上的 `apply` 與相容層的舊外殼（`apps/harness/src/present.fixture.ts`，給還沒上樹的測試用）都走這裡，所以行為只有一個出處。
+ *
+ * @param maxFiles - 一次最多幾個檔。
+ * @param lookups - 會話與 fs 的查找（呼叫當下才問）。
+ */
+export function createPresentDelivery(maxFiles: number, lookups: PresentLookups): PresentDelivery {
+  /** 等 `tools/result` 的交付，依「thread＋呼叫者是誰＋`callId`」。見檔頭。 */
+  const pending = new Map<string, { readonly log: SessionLog; readonly files: PresentedFile[] }>();
+  const presentTool = tool(
+    async (
+      { files: requested }: { files: { path: string; description?: string }[] },
+      config?: unknown,
+    ) => {
+      const callId = toolCallIdOf(config);
+      const refuse = (message: string, error?: { name: string; code: string }) =>
+        toolRefusal(message, {
+          callId: callId ?? '',
+          name: PRESENT_TOOL_NAME,
+          ...(error !== undefined && { error }),
+        });
+      // 檢查的順序照 dsh 的 `execute`：先要有會話，再看檔數、工作區，最後逐個看路徑。
+      // 會話查找回 `ambiguous`／`unknown-caller` 也一律是這一句（Q6，逐字不變）。
+      const found = lookups.sessions(config);
+      if (callId === undefined || found.kind !== 'ok') {
+        return refuse(PRESENT_NO_SESSION_MESSAGE);
+      }
+      if (requested.length === 0 || requested.length > maxFiles) {
+        return refuse(presentCountMessage(maxFiles));
+      }
+      // **被叫時才讀**：fs 把手的值要等 fold 折完才有。有沒有工作區與不在磁碟上的前綴（組裝點交的加上 plugin 掛的路由）
+      // 都從這一格把手讀（#1469 Q2 (a)），不在別處再算。查找失敗與「沒有工作區」同一句。
+      const located = lookups.fs(config);
+      const handle = located.kind === 'ok' ? located.fs : undefined;
+      const backend = handle?.backend();
+      if (handle === undefined || !handle.hasWorkspace() || backend === undefined) {
+        return refuse(PRESENT_NO_WORKSPACE_MESSAGE);
+      }
+      const offWorkspace = handle.offWorkspacePrefixes();
+      const files: PresentedFile[] = [];
+      for (const file of requested) {
+        if (file.path.trim().length === 0) return refuse(PRESENT_EMPTY_PATH_MESSAGE);
+        if (isUnderPrefix(virtualPathOf(file.path), offWorkspace)) {
+          return refuse(presentOffWorkspaceMessage(file.path));
+        }
+        const kind = await inspect(backend, file.path);
+        if (kind === 'missing') return refuse(presentNotFoundMessage(file.path), NOT_FOUND);
+        if (kind === 'not-file') return refuse(presentNotFileMessage(file.path));
+        // `description` 沒給就整個不放 key：日誌收不下 `undefined`。
+        files.push({
+          path: file.path,
+          ...(file.description !== undefined && { description: file.description }),
+        });
+      }
+      pending.set(pendingKey(callThreadId(config), toolCallSessionAddress(config), callId), {
+        log: found.log,
+        files,
+      });
+      return presentedText(files);
+    },
+    {
+      name: PRESENT_TOOL_NAME,
+      description: PRESENT_TOOL_DESCRIPTION,
+      schema: z.object({
+        files: z
+          .array(
+            z
+              .object({
+                path: z
+                  .string()
+                  .describe(
+                    'Path of an existing regular file. Relative paths use the Session working directory.',
+                  ),
+                description: z.string().optional().describe('Brief description for the user.'),
+              })
+              // 照 dsh 的 `additionalProperties: false`：落庫的要等於模型以為它寫的。
+              .strict(),
+          )
+          // 照 dsh：4 是建議的每次個數，`maxFiles` 才是真的會拒的上限，兩者不是同一件事。
+          .describe('Usually the 1-2 most important deliverables; at most 4 per call.'),
+      }),
+    },
+  );
+  const onResult: ToolResultListener = (exec, result) => {
+    const key = pendingKey(exec.thread, exec.agent, exec.callId);
+    const entry = pending.get(key);
+    if (entry === undefined) return;
+    pending.delete(key);
+    if (result.isError) return;
+    // 同步寫，照 dsh：`tools/result` 由圍堵在記 `tool/result` 之前派發，所以交付先、結果後。見檔頭。
+    entry.log.append('deliverables/presented', { callId: exec.callId, files: entry.files });
+  };
+  return { tool: presentTool, onResult };
+}
+
+export const name = 'present';
+
+/**
+ * 要的服務：`tools`（`^1.3.0`，要 `onResult`）、`sessionLookup`（`^1.0.0`）與 `fs`（`^1.1.0`，要 `hasWorkspace()` 與併了 mounts 的
+ * `offWorkspacePrefixes()`）。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。
+ */
+export const inject = injectOf(
+  need(toolsToken, '^1.3.0'),
+  need(sessionLookupToken, '^1.0.0'),
+  need(fsToken, '^1.1.0'),
+);
+
+/** 這個插件的設定（manifest 的 `config`）：見 {@link presentConfigSchema}。`strictObject`：未知欄位讓載入失敗。 */
+export const Config = presentConfigSchema;
+
+export const manifest = defineManifest({
+  id: 'present',
+  version: '0.1.0',
+  owner: '平台團隊',
+  provides: [],
+  consumes: [
+    { token: toolsToken.name, range: '^1.3.0' },
+    { token: sessionLookupToken.name, range: '^1.0.0' },
+    { token: fsToken.name, range: '^1.1.0' },
+  ],
+  config: Config,
+  // 換程式碼要重啟行程；設定（`maxFiles`）只給新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。
+  reload: { code: 'restart', config: 'next-thread' },
+  capabilities: [],
+});
+
+/**
+ * 掛上：把 `present` 登記進行程級的工具登記處，並登記等 `tools/result` 的觀察者。
+ *
+ * **三個服務都在這裡抓進閉包**，列卸載之後經 `ctx` 取服務會拋，抓住的那份仍可呼叫（見檔頭）。**呼叫當下才 `forCall`**。
+ * 提供者沒有 `onResult`（契約低於 `1.3.0`）就拒絕起來：不讓它靜靜不交付。
+ *
+ * @param ctx - 這一列的 Cordis context。
+ * @param config - 驗過的設定。
+ */
+export function apply(ctx: Context, config: PresentConfig): void {
+  const tools = service(ctx, toolsToken);
+  if (tools.onResult === undefined) {
+    throw new Error(
+      'present 需要 tools 服務的 onResult（契約 1.3.0 起）；這個提供者沒有它，交付會靜靜不寫進日誌，所以拒絕掛載',
+    );
   }
+  const sessions = service(ctx, sessionLookupToken);
+  const fs = service(ctx, fsToken);
+  const delivery = createPresentDelivery(config.maxFiles, {
+    sessions: (invocation) => sessions.forCall(invocation),
+    fs: (invocation) => fs.forCall(invocation),
+  });
+  tools.register(delivery.tool);
+  tools.onResult(delivery.onResult);
 }

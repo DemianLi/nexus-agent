@@ -186,7 +186,6 @@ import type { McpElicitation, SystemAnswerReason } from './mcp-elicitation.js';
 import type {} from '@nexus/plugin-goal';
 import { renderGoalRoundPrompt } from '@nexus/plugin-goal';
 import type {} from '@nexus/plugin-plan-mode';
-import type {} from '@nexus/plugin-present';
 import type {} from '@nexus/plugin-workspace-changes';
 
 /** 基座 v3 run 抽出來的一顆原始封包（`GraphRunStream implements AsyncIterable<ProtocolEvent>`）。 */

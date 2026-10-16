@@ -2644,7 +2644,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    *
    * 1. **沒有工作區的那一段生不出交付。** `present` 在 `registry.capabilities` 沒有工作區能力、
    *    或 backend 缺席時直接拒（`packages/nexus-plugin-present/src/index.ts` 的
-   *    `PRESENT_NO_WORKSPACE_MESSAGE`），所以一個沒給 `--workspace` 的行程續寫進這份日誌的那一段，
+   *    `PRESENT_NO_WORKSPACE_MESSAGE`；#1469 起「有沒有工作區」讀 fs 把手的 `hasWorkspace()`，逐條 thread），所以一個沒給 `--workspace` 的行程續寫進這份日誌的那一段，
    *    裡面一顆 `deliverables/presented` 都不會有。**這是放寬的正確性前提**：哪天 `present` 改成
    *    「沒有工作區就錨在 cwd」，這條路就變成一次靜默錯檔。
    * 2. **有給 `--workspace` 的那些段落，根一定等於 header 記的那個。** `assertSameWorkspaceRoot`

@@ -40,6 +40,7 @@ import type { AttachmentRef } from './attachment-ref.js';
 import type { SubagentMentionRef } from './subagent-mention.js';
 import type { ModelRoute } from './model-route.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
+import type { PresentedFile } from './deliverables.js';
 import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
 import type { GoalId } from './goal.js';
 import type { InboxSplice, SubagentSettleReason } from './inbox.js';
@@ -1218,6 +1219,36 @@ export interface SessionEventMap {
    * 不變量在它的 `invariant.ts`。
    */
   'todo/write': { readonly todos: readonly TodoItem[] };
+  /**
+   * 模型用 `present` 宣告這幾個檔案是交付物，**而且那次呼叫的最終結果是成功的**。
+   *
+   * 照 dsh 的同名事件（`packages/deliverables/tool-present/src/types.ts`，`ddefc45`）：寫進**呼叫者
+   * 自己那一份**日誌，子代理宣告的留在子代理那份——主代理要交付，得自己再叫一次 `present`（dsh README
+   * 原話）。寫的時刻：配對的 `tool/result` 之前（同步，同 dsh，#1286）。
+   *
+   * ## 對 dsh 的偏離：沒有 `turn`
+   *
+   * dsh 的 `turn` 出自 `turnBoundary` 投影的 `lastTurn`，我們沒有那個投影，日誌與 wire 上也都沒有輪的
+   * 編號（見 `tool/call` 那一條）。這一筆屬於哪一輪照 repo 既有的規則由 `seq` 推：往前找最近一顆不是
+   * resume 的 `turn/start`（{@link isLogicalTurnStart}，各讀方共用）。放一個自己數的號進來，就會有兩個
+   * 可能對不上的輪。
+   *
+   * web 只收 root 那一份的這一顆，即時與重新整理同一條規則——歷史路由只讀 root（`conversation-history.ts`）。
+   *
+   * **事件擴充住在 core 了**（[#1469](https://github.com/DemianLi/nexus-agent/issues/1469) Q4 (a)）：以前是 `@nexus/plugin-present`
+   * 對 `@nexus/core` 寫 `declare module`，而遷上樹之後那顆插件不能 import `@nexus/core`（#1420 的 lint），宿主又有三處靠
+   * `import type {}` 把這個擴充帶進來。前例 `todo/write`（#1463）、`feedback/*` 也住在這裡。**偏離 dsh**：dsh 把型別和事件擴充都放在
+   * 插件自己的 `src/types.ts`；我們的宿主（wire、web 的事件讀端、`conversation-history`）要不經插件就讀到這份型別。
+   *
+   * ⚠️ **檔案路徑與模型寫的說明原樣進本機日誌、也原樣進遙測**，同 `tool/call` 的 `arguments`（同一串路徑
+   * 本來就在那顆呼叫的參數裡）。
+   */
+  'deliverables/presented': {
+    /** 配對的那顆 `tool/call`／`tool/result` 的 `callId`。 */
+    readonly callId: string;
+    /** 通過檢查的檔案，順序照模型給的。 */
+    readonly files: readonly PresentedFile[];
+  };
   /**
    * 送出佇列的一次變動（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）：送進來、領走、改、刪。
    * 形狀與折疊見 {@link ./inbox.ts}。

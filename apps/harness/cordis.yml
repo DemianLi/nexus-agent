@@ -124,6 +124,10 @@
 # **例外四：交付宣告**（#441）。dsh 的 standard preset 掛 `tool-present`，而 web 的交付
 # 卡片讀的事件只有它寫得出來。代價同 todo，多一顆面向模型的工具（`present`）；沒有工作區
 # 時工具照樣在、叫了被拒，同 dsh。
+#
+# **`present` 是樹上的函式插件**（#1469）：Include 把它掛在 `include:present`，經 `tools` 服務登記 `present`，並用 `tools.onResult()`
+# （`@nexus/tools` 1.3.0）登記等 `tools/result` 的觀察者；檔案系統與「有沒有工作區」都問樹上 `fs` 那一列（`@nexus/fs` 1.1.0 的
+# `hasWorkspace()`、`offWorkspacePrefixes()`）。關掉它（`disabled: true`）時工具與觀察者一起不在，同 submit-record 的閘門。
 - id: present
   name: '@nexus/plugin-present'
 

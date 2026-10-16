@@ -24,14 +24,22 @@
  * - **撤除條件**：SDK 與定義套件要發布到私有 registry 之前，把這三個值的實作連同 `toolErrorOf` 一起搬進這個套件
  *   （屆時 core 改從這裡 import）。
  *
- * 只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：三個值與一個型別今天的消費者只有
- * `@nexus/plugin-ask-user`。`callThreadId` 不在這裡——`ask-user` 在 #1458 Q1 (c) 之後不再依 thread 查答題管道，
- * 它沒有消費者；等逐條 thread 的提供者出現時隨查詢一起加回來（見 `docs/plugin-contract.md`）。
+ * 只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：`toolRefusal`、`toolCallIdOf`、`markToolError`
+ * 與一個型別的消費者是 `@nexus/plugin-ask-user`；**`callThreadId`、`toolCallSessionAddress`**（#1469 Q4 (a)）的消費者是
+ * `@nexus/plugin-present`——它的交付表以「thread＋呼叫者位址＋`callId`」為鍵，鍵的前兩段要從呼叫設定算（監聽者那一頭拿到的
+ * `exec.thread`、`exec.agent` 與這兩個函式算出來的是同一個值，`thread-id-reaches-handlers.test.ts` 實測）。`ask-user` 在 #1458
+ * Q1 (c) 之後不再依 thread 查答題管道，所以 #1458 時沒放；這裡是檔頭預留的「等逐條 thread 的消費者出現」。
  *
  * @module
  */
 
-export { markToolError, toolCallIdOf, toolRefusal } from '@nexus/core';
+export {
+  callThreadId,
+  markToolError,
+  toolCallIdOf,
+  toolCallSessionAddress,
+  toolRefusal,
+} from '@nexus/core';
 
 // 錯誤碼的型別：`markToolError` 的第二個參數、`rootOnly` 拒絕樁的 `error`。
 export type { ToolErrorInfo } from '@nexus/core';
