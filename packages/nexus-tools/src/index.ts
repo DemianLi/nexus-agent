@@ -30,8 +30,11 @@ import { defineToken } from '@nexus/sdk';
  *
  * `1.2.0`（#1466）：`ToolRegistry` 多一個選填方法 {@link ToolRegistry.gate}（核准閘門，登記一位 pre-execute listener）。
  * 同樣是向後相容的新增：`^1.0.0`、`^1.1.0` 的舊消費者不呼叫它，照常；要用的消費者宣告 `^1.2.0`。
+ *
+ * `1.3.0`（#1469）：`ToolRegistry` 多一個選填方法 {@link ToolRegistry.onResult}（監聽 `tools/result`，工具最終結果落定的觀察者）。
+ * 同樣是向後相容的新增：`^1.0.0`～`^1.2.0` 的舊消費者不呼叫它，照常；要用的消費者宣告 `^1.3.0`。
  */
-export const TOOLS_CONTRACT_VERSION = '1.2.0';
+export const TOOLS_CONTRACT_VERSION = '1.3.0';
 
 /**
  * 子代理叫到 `rootOnly` 工具時，那一份拒絕樁自己帶的句與碼（#1458 Q3 (a)）。形狀對應 `@nexus/core` 註冊點的
@@ -96,6 +99,42 @@ export type ToolGateListener = (
   next: () => Promise<ToolGateDecision>,
 ) => Promise<ToolGateDecision> | ToolGateDecision;
 
+/**
+ * 一次已落定的工具呼叫，`onResult` 的 listener 看到的樣子（#1469）。形狀對應 `@nexus/core` 的 `PipelineExecution`，但這個套件不
+ * import core，所以結構型別寫在這裡。唯讀。
+ */
+export interface ToolResultExecution {
+  /** 這次呼叫的 id（模型給的 `tool_call.id`）；取不到是 `''`。 */
+  readonly callId: string;
+  /** 工具名。 */
+  readonly name: string;
+  /** 解析後的參數：深凍結的複本。 */
+  readonly args: unknown;
+  /** 誰在呼叫：root 或某個子代理（`runId`）；認不出來（不在圖裡）是 `undefined`。 */
+  readonly agent:
+    { readonly kind: 'root' } | { readonly kind: 'subagent'; readonly runId: string } | undefined;
+  /**
+   * 這次呼叫在哪一條 thread 裡；認不出來是 `undefined`。一份 listener 只登記一次、服務好幾條 thread 時，**逐條 thread 的暫存要以它
+   * 為鍵的一部分**：兩條 thread 可能撞上同一個 `callId`（#1418）。
+   */
+  readonly thread: string | undefined;
+}
+
+/** 一次呼叫落定成什麼，`onResult` 的 listener 看到的樣子（#1469）。對應 `@nexus/core` 的 `PipelineResult`；listener 只需要 `isError`。 */
+export interface ToolResultOutcome {
+  /** 最終回給模型的結果是不是錯誤。 */
+  readonly isError: boolean;
+}
+
+/**
+ * 一位 `tools/result` 觀察者（#1469）。**觀察者的失敗被隔離**：同步拋錯與 promise 拒絕都只報警告，其餘觀察者與那次呼叫的結果不受影響。
+ * 在記 `tool/result` **之前**同步派發（`tool/call → listener 寫的事件 → tool/result` 的次序靠這一點）。
+ */
+export type ToolResultListener = (
+  exec: ToolResultExecution,
+  result: ToolResultOutcome,
+) => void | Promise<void>;
+
 /** 工具登記處。 */
 export interface ToolRegistry {
   /**
@@ -125,6 +164,25 @@ export interface ToolRegistry {
    * @returns 只撤銷這一次登記的冪等 disposer。
    */
   gate?(listener: ToolGateListener): () => void;
+  /**
+   * 登記一位 **`tools/result` 觀察者**（契約 `1.3.0` 起，#1469 Q1 (a)）：每一次工具呼叫的最終結果落定時（成功、工具拋的錯、被拒絕的都算）
+   * 被叫，在記 `tool/result` 之前。
+   *
+   * 對應 dsh 的 `ctx.on('tools/result')`（`packages/deliverables/tool-present/src/index.ts:100-108`）。**偏離**：樹上沒有事件匯流排的
+   * token，退到 tools 服務上的一個方法（理由同 {@link ToolRegistry.gate}）；宿主把這一列登記的 listener 折進**每條 thread 自己的**
+   * `registry.events.on('tools/result', l)`，所以派發的時機與次序不變，而且 listener 跟工具一起被快照——登記者那一列之後被停用或重載，
+   * 開著的 thread 手上的工具與 listener 仍然成對可用。
+   *
+   * **listener 服務好幾條 thread**：看到的每一次呼叫都帶 `thread` 與 `agent`，逐條 thread 的暫存要以它們為鍵。
+   *
+   * 註冊就是 effect：登記者那一列卸載時自己撤掉。已經折進某條 thread 的那一份不受影響（組 thread 時取快照，決議 §3-2 第 6 條）。
+   *
+   * **選填**：`1.0.0`～`1.2.0` 的提供者沒有它。消費者宣告 `^1.3.0` 就保證有。
+   *
+   * @param listener - 這一位觀察者。
+   * @returns 只撤銷這一次登記的冪等 disposer。
+   */
+  onResult?(listener: ToolResultListener): () => void;
 }
 
 /** `tools` 服務的 token。 */

@@ -78,7 +78,7 @@ import type { FsLookup } from '@nexus/fs';
 import { createSkillSourcesProvider } from '@nexus/skills/provider';
 import type { SkillSourceEntry } from '@nexus/skills/provider';
 import { createToolsProvider } from '@nexus/tools/provider';
-import type { ToolGateListener, ToolRegisterOptions } from '@nexus/tools';
+import type { ToolGateListener, ToolRegisterOptions, ToolResultListener } from '@nexus/tools';
 import type { ToolEntry } from '@nexus/tools/provider';
 import semver from 'semver';
 
@@ -220,6 +220,12 @@ export type RowVerdict =
        * 層一來源仍是 `submit-record (submit-record)`。
        */
       readonly gates: readonly ToolGateListener[];
+      /**
+       * 這一列登記的 `tools/result` 觀察者（#1469，`@nexus/tools` 1.3.0 的 `onResult`），**依登記順序**。折進這條 thread 的 registry
+       * 時一條一條交給 `registry.events.on('tools/result', …)`：派發的時機與次序（`tool/call` → 觀察者 → `tool/result`）仍是核心
+       * 圍堵的，這一層只決定「誰聽」。工具與觀察者在同一個折疊裡進同一條 thread，所以之後列被卸載也不影響已開著的 thread。
+       */
+      readonly resultListeners: readonly ToolResultListener[];
       /**
        * **這一列負責折進這條 thread 的**投影單元（#1421）：登記者是這一列、而且這一列是那個 key 目前還活著的第一個登記者。
        * 同一個 key 由兩列共用時（提供者那一層引用計數共用，PM 決策 1），每個 key 只交給其中一列，這條 thread 的登記處才
@@ -814,6 +820,10 @@ export class PluginTree {
           .gates()
           .filter((item) => item.source === id)
           .map((item) => item.listener),
+        resultListeners: this.#provider
+          .resultListeners()
+          .filter((item) => item.source === id)
+          .map((item) => item.listener),
         // 投影單元由 `#assignProjections` 在所有列的結果都有了之後再分：共用的 key 只能給一列。
         projections: [],
         // 技能來源路徑由 `#assignSkillSources` 在所有列的結果都有了之後再分。
@@ -901,6 +911,8 @@ export interface DetachedContributions {
   readonly toolOptions: ReadonlyMap<StructuredToolInterface, ToolRegisterOptions>;
   /** 這一列登記的核准閘門監聽（#1466），同 {@link RowVerdict} 的 `gates`。 */
   readonly gates: readonly ToolGateListener[];
+  /** 這一列登記的 `tools/result` 觀察者（#1469），同 {@link RowVerdict} 的 `resultListeners`。 */
+  readonly resultListeners: readonly ToolResultListener[];
   readonly projections: readonly ProjectionUnit[];
   readonly skillSources: readonly string[];
   readonly commands: readonly CommandDefinition[];
@@ -984,6 +996,10 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
         toolOptions: toolOptionsOf(owned),
         gates: provider
           .gates()
+          .filter((entry) => entry.source === mount.id)
+          .map((entry) => entry.listener),
+        resultListeners: provider
+          .resultListeners()
           .filter((entry) => entry.source === mount.id)
           .map((entry) => entry.listener),
         projections: projections

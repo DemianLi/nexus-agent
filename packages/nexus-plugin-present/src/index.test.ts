@@ -1,10 +1,13 @@
 /**
  * `present` 這顆工具：**它檢查什麼、回什麼，以及什麼時候寫交付**。
  *
- * 這一檔只走 registry 這一層，backend 是真的磁碟（基座的 `FilesystemBackend`，虛擬路徑模式，同
+ * 這一檔走樹的這一層（[#1469](https://github.com/DemianLi/nexus-agent/issues/1469) 起 present 掛在 Cordis 樹上）：tools 提供者、
+ * 會話查找與 fs 查找三位提供者加 `present` 那一列，backend 是真的磁碟（基座的 `FilesystemBackend`，虛擬路徑模式，同
  * `apps/harness` 的圍堵 backend）。`tool/call`、`tools/result` 的派發與 `tool/result` 由測試自己照圍堵的順序做
- * （`tool/call` → 本體 → 派發 `tools/result` → 同步記 `tool/result`，見 {@link settle}）——圍堵、真的圖與
- * pump 那一半在 `apps/harness/src/present-tool.test.ts`。
+ * （`tool/call` → 本體 → 派發 `tools/result` → 同步記 `tool/result`，見 {@link settle}）；派發給的是提供者登記簿裡**每一位**
+ * `tools/result` 觀察者，就是宿主折進 thread 的那一批。圍堵、真的圖與 pump 那一半在 `apps/harness/src/present-tool.test.ts`。
+ *
+ * **測試檔不受 SDK lint 管**（`PLUGIN_LINT_IGNORES`），所以這裡可以 import `@nexus/core`；`src/index.ts` 不行。
  */
 
 import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
@@ -14,23 +17,28 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ToolMessage } from '@langchain/core/messages';
-import type { StructuredTool } from '@langchain/core/tools';
+import type { StructuredToolInterface } from '@langchain/core/tools';
 import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import {
   callThreadId,
-  createRegistry,
-  FS_SERVICE,
-  loadPlugins,
+  pickSessionForCall,
   SessionRegistry,
   toolCallSessionAddress,
   toolErrorOf,
-  WORKSPACE_CAPABILITY,
 } from '@nexus/core';
-import type { InternalPluginRegistry, SessionEvent, SessionLog } from '@nexus/core';
-import { FilesystemBackend, StateBackend } from 'deepagents';
+import type { FsService, SessionEvent, SessionLog } from '@nexus/core';
+import { Context } from '@nexus/cordis';
+import Loader from '@nexus/cordis-plugin-loader';
+import type { FsLookup } from '@nexus/fs';
+import { createFsLookupProvider } from '@nexus/fs/provider';
+import { checkConformance } from '@nexus/sdk';
+import { createSessionLookupProvider } from '@nexus/session/provider';
+import { createToolsProvider } from '@nexus/tools/provider';
+import { FilesystemBackend } from 'deepagents';
 
+import * as present from './index.js';
 import {
-  createPresentPlugin,
+  Config,
   DEFAULT_MAX_FILES,
   presentConfigSchema,
   PRESENT_EMPTY_PATH_MESSAGE,
@@ -44,9 +52,11 @@ import {
 } from './index.js';
 
 const roots: string[] = [];
+const opened: Context[] = [];
 /** `tools/result` 的監聽者失敗（派發面把它們吞掉回報）：每個案例結束時必須是空的。 */
 const observerFailures: unknown[] = [];
 afterEach(async () => {
+  for (const root of opened.splice(0)) await root.fiber.dispose();
   for (const root of roots.splice(0)) await rm(root, { recursive: true, force: true });
   vi.restoreAllMocks();
   expect(observerFailures.splice(0)).toEqual([]);
@@ -60,63 +70,73 @@ async function workspace(): Promise<string> {
 }
 
 interface Mounted {
-  readonly tool: StructuredTool;
+  readonly tool: StructuredToolInterface;
   readonly sessions: SessionRegistry;
-  readonly registry: InternalPluginRegistry;
+  readonly root: Context;
+  readonly tools: ReturnType<typeof createToolsProvider>;
   readonly backend: FilesystemBackend | undefined;
 }
 
 /**
- * 掛一次。`root` 給了就經 `fs` 服務交出 backend（組裝點提供、fold 填值的那一格），`workspace` 決定
- * 有沒有人宣告工作區（組裝點的 sandbox-policy 做的那一步）。`fs` 是 `'empty'` 時服務在、但裡面沒有
- * backend（fold 過、這次組裝一個 backend 都沒有）。
+ * 掛一次：tools 提供者、會話查找、fs 查找與 `present` 那一列。`root` 給了就經 fs 把手交出 backend（fold 填值的那一格），
+ * `workspace` 決定把手的 `hasWorkspace()` 答什麼（fold 時算的事實，這裡直接給）。`fs` 是 `'empty'` 時把手在、但裡面沒有
+ * backend（fold 過、這次組裝一個 backend 都沒有），`'none'` 是行程裡沒有任何 thread 登記 fs（查找答 `not-attached`）。
  */
-function mount(
+async function mount(
   options: {
     root?: string;
     workspace?: boolean;
     maxFiles?: number;
-    fs?: 'empty';
-    /** 組裝點明著交的、不在磁碟上的路由前綴（`fs` 服務那一格）。 */
+    fs?: 'empty' | 'none';
+    /** 組裝點明著交的、不在磁碟上的路由前綴。 */
     offWorkspace?: readonly string[];
-    /** plugin 用 `backend.mount()` 掛的路由。 */
+    /** plugin 用 `backend.mount()` 掛的路由（fold 併進 `offWorkspacePrefixes()`）。 */
     mounts?: readonly string[];
   } = {},
-): Mounted {
-  const registry = createRegistry();
+): Promise<Mounted> {
   const backend =
     options.root === undefined
       ? undefined
       : new FilesystemBackend({ rootDir: options.root, virtualMode: true });
-  if (backend !== undefined || options.fs === 'empty') {
-    const leave = registry.enter({ id: 'host-services#0', name: 'host-services' });
-    registry.services.provide(FS_SERVICE, {
-      backend: () => backend,
-      offWorkspacePrefixes: () => options.offWorkspace ?? [],
-    });
-    leave();
-  }
-  for (const prefix of options.mounts ?? []) {
-    const leave = registry.enter({ id: 'mounter#0', name: 'mounter' });
-    registry.backend.mount(prefix, new StateBackend());
-    leave();
-  }
-  const plugin = createPresentPlugin(
-    options.maxFiles === undefined ? {} : { maxFiles: options.maxFiles },
-  );
-  const exit = registry.enter({ id: 'present#0', name: plugin.plugin.name });
-  void plugin.plugin.apply(registry, presentConfigSchema.parse(plugin.config));
-  exit();
-  if (options.workspace ?? true) {
-    const leave = registry.enter({ id: 'sandbox-policy#0', name: 'sandbox-policy' });
-    registry.capabilities.provide(WORKSPACE_CAPABILITY);
-    leave();
-  }
-  const entry = registry.tools.resolve(PRESENT_TOOL_NAME);
-  if (entry === undefined) throw new Error('工具沒註冊上');
+  const prefixes = [...(options.offWorkspace ?? []), ...(options.mounts ?? [])];
+  const handle: FsService = {
+    backend: () => backend,
+    offWorkspacePrefixes: () => prefixes,
+    hasWorkspace: () => options.workspace ?? true,
+  };
   const sessions = new SessionRegistry('unit');
-  registry.sessions.bind(sessions);
-  return { tool: entry.value, sessions, registry, backend };
+  const tools = createToolsProvider();
+  const root = new Context();
+  opened.push(root);
+  await root.plugin(Loader);
+  const lookupFs = (config: unknown): FsLookup => {
+    if (options.fs === 'none') return { kind: 'not-attached' };
+    const address = toolCallSessionAddress(config);
+    if (address === undefined) return { kind: 'unknown-caller' };
+    return { kind: 'ok', fs: handle, address };
+  };
+  Object.assign(root.loader.builtins, {
+    tools: tools.Provider,
+    'session-lookup': createSessionLookupProvider((config) =>
+      pickSessionForCall([sessions], config),
+    ).Provider,
+    fs: createFsLookupProvider(lookupFs).Provider,
+    present,
+  });
+  const create = (entry: { id: string; name: string; config?: unknown }) =>
+    root.loader.create(entry as never, null);
+  await create({ id: 'tools', name: 'cordis:tools' });
+  await create({ id: 'session-lookup', name: 'cordis:session-lookup' });
+  await create({ id: 'fs', name: 'cordis:fs' });
+  await create({
+    id: 'present',
+    name: 'cordis:present',
+    config: options.maxFiles === undefined ? {} : { maxFiles: options.maxFiles },
+  });
+  await root.loader.await();
+  const entry = tools.entries().find((item) => item.tool.name === PRESENT_TOOL_NAME);
+  if (entry === undefined) throw new Error('工具沒註冊上');
+  return { tool: entry.tool, sessions, root, tools, backend };
 }
 
 /** root 的一次呼叫。`toolCall.id` 就是 `callId`。 */
@@ -141,6 +161,31 @@ function subagentConfig(callId: string) {
  * @param callId - 這顆結果是哪個呼叫的。
  * @param isError - 圍堵最後把這次判成錯誤與否。
  */
+function notifyResult(
+  listeners: readonly present.PresentDelivery['onResult'][],
+  config: { toolCall: { id: string } },
+  callId: string,
+  isError: boolean,
+): void {
+  for (const listener of listeners) {
+    try {
+      void listener(
+        {
+          callId,
+          name: PRESENT_TOOL_NAME,
+          args: {},
+          agent: toolCallSessionAddress(config),
+          thread: callThreadId(config),
+        },
+        { isError },
+      );
+    } catch (error) {
+      // 同宿主的隔離派發：一位觀察者拋了不擋別人，回報給測試收尾去驗。
+      observerFailures.push(error);
+    }
+  }
+}
+
 function settle(
   mounted: Mounted,
   log: SessionLog,
@@ -148,17 +193,11 @@ function settle(
   callId: string,
   isError: boolean,
 ): void {
-  mounted.registry.dispatch.observe(
-    'tools/result',
-    (error: unknown) => void observerFailures.push(error),
-    {
-      callId,
-      name: PRESENT_TOOL_NAME,
-      args: {},
-      agent: toolCallSessionAddress(config),
-      thread: callThreadId(config),
-    },
-    { kind: 'message', content: '', isError },
+  notifyResult(
+    mounted.tools.resultListeners().map((entry) => entry.listener),
+    config,
+    callId,
+    isError,
   );
   log.append('tool/result', { callId, isError });
 }
@@ -212,8 +251,8 @@ function refusalOf(result: unknown): { text: string; code: string | undefined } 
  * 跟自己比，不會紅。
  */
 describe('模型看到的描述', () => {
-  it('工具描述與 files 的說明逐字等於 dsh', () => {
-    const { tool } = mount();
+  it('工具描述與 files 的說明逐字等於 dsh', async () => {
+    const { tool } = await mount();
     const { function: sent } = convertToOpenAITool(tool);
     expect(sent.description).toBe(
       'Declare existing files as final deliverables for the user. ' +
@@ -235,7 +274,7 @@ describe('成功的那一次', () => {
     await writeFile(join(root, '報告.docx'), Uint8Array.of(80, 75, 0, 255));
     await mkdir(join(root, 'out'));
     await writeFile(join(root, 'out', 'a.csv'), 'a');
-    const mounted = mount({ root });
+    const mounted = await mount({ root });
     const log = mounted.sessions.root;
     const read = vi.spyOn(mounted.backend!, 'read');
     const readRaw = vi.spyOn(mounted.backend!, 'readRaw');
@@ -267,7 +306,7 @@ describe('成功的那一次', () => {
   it('結果被判成錯誤就不交付——照 dsh 被 post-execute 擋下的那一條', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
-    const mounted = mount({ root });
+    const mounted = await mount({ root });
     const log = mounted.sessions.root;
     const result = await callThrough(mounted, log, [{ path: 'a' }], rootConfig('c1'), 'error');
     expect(textOf(result)).toBe('Presented a');
@@ -277,7 +316,7 @@ describe('成功的那一次', () => {
   it('別的呼叫的結果不算數，等到自己那一顆才寫，而且只寫一次', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
-    const mounted = mount({ root });
+    const mounted = await mount({ root });
     const log = mounted.sessions.root;
     await callThrough(mounted, log, [{ path: 'a' }], rootConfig('mine'), 'pending');
     settle(mounted, log, rootConfig('someone-else'), 'someone-else', false);
@@ -291,7 +330,7 @@ describe('成功的那一次', () => {
   it('同一個 callId 在結果落定前又進來一次（中斷後 resume）：只交付一次', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
-    const mounted = mount({ root });
+    const mounted = await mount({ root });
     const log = mounted.sessions.root;
     // 第一次本體跑完、外層拋了中斷所以沒有結果；resume 之後同一個 callId 再跑一次。
     await callThrough(mounted, log, [{ path: 'a' }], rootConfig('again'), 'pending');
@@ -300,23 +339,34 @@ describe('成功的那一次', () => {
     expect(deliveries(log).map((event) => event.data.callId)).toEqual(['again']);
   });
 
-  it('組裝收掉之後才落定的結果不交付，等著的那張表清空', async () => {
+  /**
+   * **#1469 Q3 (a)：交付表是行程級，不在列卸載時清。** 以前組裝收掉時整張清空（落定的結果不交付）；上樹後工具與 listener 一起被快照進
+   * 開著的 thread，兩者共用同一個閉包，列被停用或重載就清表的話，懸著的那一次交付會寫不進日誌。這一條釘的是反過來的行為：
+   * 本體跑完、`present` 那一列卸載、**之後**才落定——快照裡的那一對仍然把交付寫進日誌。
+   */
+  it('本體跑完之後那一列才卸載，落定時快照裡的那一對照樣交付（Q3 (a)：表不在卸載時清）', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
-    const mounted = mount({ root });
+    const mounted = await mount({ root });
     const log = mounted.sessions.root;
+    // 宿主折進 thread 的快照：工具與 listener 都在卸載之前握在手上。
+    const [snapshotListener] = mounted.tools.resultListeners().map((entry) => entry.listener);
     await callThrough(mounted, log, [{ path: 'a' }], rootConfig('late'), 'pending');
-    for (const entry of mounted.registry.lifecycle.disposers()) await entry.value();
-    settle(mounted, log, rootConfig('late'), 'late', false);
-    expect(deliveries(log)).toEqual([]);
+    await mounted.root.loader.resolve('present').fiber?.ctx.fiber.dispose();
+    // 提供者那一側的登記撤乾淨（新 thread 看不到它），但快照裡的 listener 還在。
+    expect(mounted.tools.resultListeners()).toEqual([]);
+    expect(mounted.tools.entries()).toEqual([]);
+    notifyResult([snapshotListener!], rootConfig('late'), 'late', false);
+    log.append('tool/result', { callId: 'late', isError: false });
+    expect(deliveries(log).map((event) => event.data.callId)).toEqual(['late']);
   });
 
   it('子代理叫的寫進子代理那一份，root 那一份沒有', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
-    const mounted = mount({ root });
+    const mounted = await mount({ root });
     const config = subagentConfig('sub-1');
-    const found = mounted.registry.sessions.forCall(config);
+    const found = pickSessionForCall([mounted.sessions], config);
     if (found.kind !== 'ok') throw new Error(`認不出子代理：${found.kind}`);
     await callThrough(mounted, found.log, [{ path: 'a' }], config);
     expect(deliveries(found.log).map((event) => event.data.callId)).toEqual(['sub-1']);
@@ -327,10 +377,10 @@ describe('成功的那一次', () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
     await writeFile(join(root, 'b'), 'b');
-    const mounted = mount({ root });
+    const mounted = await mount({ root });
     const rootLog = mounted.sessions.root;
     const subConfig = subagentConfig('same');
-    const found = mounted.registry.sessions.forCall(subConfig);
+    const found = pickSessionForCall([mounted.sessions], subConfig);
     if (found.kind !== 'ok') throw new Error(`認不出子代理：${found.kind}`);
     await callThrough(mounted, rootLog, [{ path: 'a' }], rootConfig('same'), 'pending');
     await callThrough(mounted, found.log, [{ path: 'b' }], subConfig, 'pending');
@@ -345,7 +395,7 @@ describe('成功的那一次', () => {
   it('每次落定都把表上那一筆取走：先錯一次、同 callId 再成功一次，要再叫一次本體才有交付', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
-    const mounted = mount({ root });
+    const mounted = await mount({ root });
     const log = mounted.sessions.root;
     await callThrough(mounted, log, [{ path: 'a' }], rootConfig('retry'), 'error');
     expect(deliveries(log)).toEqual([]);
@@ -356,11 +406,9 @@ describe('成功的那一次', () => {
     expect(deliveries(log).map((event) => event.data.callId)).toEqual(['retry']);
   });
 
-  it('只有一位 tools/result 監聽者', () => {
-    const mounted = mount();
-    expect(
-      mounted.registry.events.listeners().filter((listener) => listener.name === 'tools/result'),
-    ).toHaveLength(1);
+  it('只有一位 tools/result 監聽者，登記者就是 present 那一列', async () => {
+    const mounted = await mount();
+    expect(mounted.tools.resultListeners().map((entry) => entry.source)).toEqual(['present']);
   });
 });
 
@@ -368,7 +416,7 @@ describe('拒絕', () => {
   it('找不到、目錄、工作區根、空路徑都拒絕，而且一筆交付都不寫', async () => {
     const root = await workspace();
     await mkdir(join(root, 'dir'));
-    const mounted = mount({ root });
+    const mounted = await mount({ root });
     const log = mounted.sessions.root;
     const cases: [unknown, string, string | undefined][] = [
       [[{ path: 'missing' }], presentNotFoundMessage('missing'), 'FS_NOT_FOUND'],
@@ -398,7 +446,7 @@ describe('拒絕', () => {
       await writeFile(join(root, 'stash', 'a.md'), 'a');
       await mkdir(join(root, 'mounted'));
       await writeFile(join(root, 'mounted', 'a.md'), 'a');
-      const mounted = mount({ root, offWorkspace: ['/stash'], mounts: ['/mounted/'] });
+      const mounted = await mount({ root, offWorkspace: ['/stash'], mounts: ['/mounted/'] });
       const log = mounted.sessions.root;
       const paths = [
         '/stash/a.md', // 組裝點交的（沒結尾斜線）
@@ -422,7 +470,7 @@ describe('拒絕', () => {
       await mkdir(join(root, 'stash_x'));
       await writeFile(join(root, 'stash_x', 'a.md'), 'a');
       await writeFile(join(root, 'mounted.md'), 'a');
-      const mounted = mount({ root, offWorkspace: ['/stash/'], mounts: ['/mounted/'] });
+      const mounted = await mount({ root, offWorkspace: ['/stash/'], mounts: ['/mounted/'] });
       const log = mounted.sessions.root;
       expect(
         textOf(await callThrough(mounted, log, [{ path: '/stash_x/a.md' }], rootConfig('a'))),
@@ -435,7 +483,7 @@ describe('拒絕', () => {
     it('一次交幾個，有一個在路由上整批都拒', async () => {
       const root = await workspace();
       await writeFile(join(root, 'ok.md'), 'a');
-      const mounted = mount({ root, offWorkspace: ['/stash/'] });
+      const mounted = await mount({ root, offWorkspace: ['/stash/'] });
       const log = mounted.sessions.root;
       const refusal = refusalOf(
         await callThrough(
@@ -454,7 +502,7 @@ describe('拒絕', () => {
   it('檔數要在 1 到 maxFiles 之間', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
-    const mounted = mount({ root, maxFiles: 2 });
+    const mounted = await mount({ root, maxFiles: 2 });
     const log = mounted.sessions.root;
     for (const files of [[], [{ path: 'a' }, { path: 'a' }, { path: 'a' }]]) {
       const refusal = refusalOf(await callThrough(mounted, log, files, rootConfig('c'), 'error'));
@@ -468,7 +516,7 @@ describe('拒絕', () => {
   it('預設設定下一次交 5 個照樣成功：說明裡的「at most 4」是建議，不是上限', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
-    const mounted = mount({ root });
+    const mounted = await mount({ root });
     const files = Array.from({ length: 5 }, () => ({ path: 'a' }));
     expect(
       textOf(await callThrough(mounted, mounted.sessions.root, files, rootConfig('five'))),
@@ -485,7 +533,7 @@ describe('拒絕', () => {
   it('沒有人宣告工作區就拒絕——即使 backend 在（沒有工作區時組裝點照樣墊一顆 StateBackend）', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
-    const mounted = mount({ root, workspace: false });
+    const mounted = await mount({ root, workspace: false });
     const refusal = refusalOf(
       await callThrough(mounted, mounted.sessions.root, [{ path: 'a' }], rootConfig('c'), 'error'),
     );
@@ -493,29 +541,33 @@ describe('拒絕', () => {
   });
 
   it.each([
-    ['沒有人提供 `fs` 服務', {}],
-    ['`fs` 服務在、裡面沒有 backend', { fs: 'empty' as const }],
+    ['行程裡沒有任何 thread 登記 fs 把手', { fs: 'none' as const }],
+    ['fs 把手在、裡面沒有 backend', { fs: 'empty' as const }],
   ])('backend 從沒交進來也拒絕成沒有工作區：%s', async (_label, options) => {
-    const mounted = mount(options);
+    const mounted = await mount(options);
     const refusal = refusalOf(
       await callThrough(mounted, mounted.sessions.root, [{ path: 'a' }], rootConfig('c'), 'error'),
     );
     expect(refusal.text).toBe(`Error: ${PRESENT_NO_WORKSPACE_MESSAGE}`);
   });
 
-  /**
-   * **不借 middleware 拿 backend**（#694）：以前掛一顆沒有鉤子的空殼 middleware，只為了接住 fold 交給
-   * `useWithBackend` 工廠的那一個，每個 agent 的 stack 裡都多一顆空殼。dsh 的 present 是注入 `fs` 的工具。
-   */
-  it('present 不註冊任何 middleware', () => {
-    const { registry } = mount({ fs: 'empty' });
-    expect(registry.middleware.list()).toEqual([]);
+  it('查找認不出呼叫者（沒有 configurable）也是同一句沒有工作區', async () => {
+    const root = await workspace();
+    await writeFile(join(root, 'a'), 'a');
+    const mounted = await mount({ root });
+    const log = mounted.sessions.root;
+    // 日誌認得、fs 認不得的組合不存在於同一次呼叫；這裡直接叫工具，位址算不出時兩邊都先拒。
+    const answer = await mounted.tool.invoke({ files: [{ path: 'a' }] }, {
+      toolCall: { id: 'c' },
+    } as never);
+    expect(refusalOf(answer).text).toBe(`Error: ${PRESENT_NO_SESSION_MESSAGE}`);
+    expect(deliveries(log)).toEqual([]);
   });
 
   it('拿不到呼叫者那一份日誌、或沒有 callId，就拒絕', async () => {
     const root = await workspace();
     await writeFile(join(root, 'a'), 'a');
-    const mounted = mount({ root });
+    const mounted = await mount({ root });
     const noCaller = await mounted.tool.invoke({ files: [{ path: 'a' }] }, {
       toolCall: { id: 'c' },
     } as never);
@@ -527,7 +579,7 @@ describe('拒絕', () => {
   });
 
   it('多一個鍵就是參數不合（照 dsh 的 additionalProperties: false）', async () => {
-    const mounted = mount();
+    const mounted = await mount();
     await expect(
       mounted.tool.invoke({ files: [{ path: 'a', extra: 1 }] }, rootConfig('c') as never),
     ).rejects.toThrow();
@@ -540,7 +592,7 @@ describe('已知的偏離', () => {
     const root = await workspace();
     await writeFile(join(root, 'source'), 'source');
     await symlink(join(root, 'source'), join(root, 'link'));
-    const mounted = mount({ root });
+    const mounted = await mount({ root });
     expect(
       textOf(
         await callThrough(mounted, mounted.sessions.root, [{ path: 'link' }], rootConfig('c')),
@@ -549,17 +601,89 @@ describe('已知的偏離', () => {
   });
 });
 
-describe('掛載', () => {
-  // **翻面過的絆索**（#453）：原本是工廠當場拋，現在驗在載入的時候，訊息因此指得出條目。
-  it('maxFiles 不是正的安全整數就讓載入失敗', async () => {
+describe('設定（#453）', () => {
+  // **翻面過的絆索**：原本是工廠當場拋，現在驗在載入的時候（Loader 用 manifest 的 `config` 驗），訊息因此指得出條目。
+  it('maxFiles 不是正的安全整數就讓載入失敗', () => {
     for (const maxFiles of [0, 1.5, Number.POSITIVE_INFINITY, -1]) {
-      const bad = [createPresentPlugin({ maxFiles })];
-      await expect(loadPlugins(bad)).rejects.toThrow('present#0 (present)');
-      await expect(loadPlugins(bad)).rejects.toThrow('positive integer maxFiles');
+      const result = Config.safeParse({ maxFiles });
+      expect(result.success, String(maxFiles)).toBe(false);
+      expect(JSON.stringify(result.error?.issues)).toContain('positive integer maxFiles');
     }
+  });
+
+  it('未知欄位讓載入失敗（登記的偏離：dsh 放行）', () => {
+    expect(Config.safeParse({ maxFiles: 2, extra: 1 }).success).toBe(false);
   });
 
   it('省略時由 schema 補上預設值', () => {
     expect(presentConfigSchema.parse({})).toEqual({ maxFiles: DEFAULT_MAX_FILES });
+  });
+});
+
+describe('樹上這一列（#1469）', () => {
+  it('一致性套件全格通過：manifest、匯出形式、卸載後登記處回到空的、缺提供者停在 PENDING', async () => {
+    let latest = createToolsProvider();
+    const failures = await checkConformance({
+      row: 'present',
+      module: present,
+      config: {},
+      providers: {
+        tools: () => {
+          latest = createToolsProvider();
+          return latest.Provider;
+        },
+        sessionLookup: () => createSessionLookupProvider(() => ({ kind: 'not-attached' })).Provider,
+        fs: () => createFsLookupProvider(() => ({ kind: 'not-attached' })).Provider,
+      },
+      residue: () => latest.entries().length + latest.resultListeners().length,
+    });
+    expect(failures).toEqual([]);
+  });
+
+  it('manifest 宣告三個必要依賴：tools（^1.3.0）、sessionLookup（^1.0.0）、fs（^1.1.0）；沒有 default 匯出', () => {
+    expect(present.manifest.consumes).toEqual([
+      { token: 'tools', range: '^1.3.0' },
+      { token: 'sessionLookup', range: '^1.0.0' },
+      { token: 'fs', range: '^1.1.0' },
+    ]);
+    expect(present.manifest.provides).toEqual([]);
+    expect(present.inject).toEqual({
+      tools: { range: '^1.3.0' },
+      sessionLookup: { range: '^1.0.0' },
+      fs: { range: '^1.1.0' },
+    });
+    expect('default' in present).toBe(false);
+  });
+
+  it('提供者沒有 onResult（tools 契約低於 1.3.0 的形狀）就拒絕掛載：工具沒登記，不讓它靜靜不交付', async () => {
+    const tools = createToolsProvider();
+    // 同一個提供者，只是把 `onResult` 遮掉：宣告的版本仍是 1.3.0，所以擋下它的是 `apply` 裡的守衛，不是版本範圍。
+    class WithoutOnResult extends tools.Provider {
+      constructor(ctx: Context) {
+        super(ctx);
+        Object.defineProperty(this, 'onResult', { value: undefined });
+      }
+    }
+    const root = new Context();
+    opened.push(root);
+    await root.plugin(Loader);
+    const sessions = new SessionRegistry('unit');
+    Object.assign(root.loader.builtins, {
+      tools: WithoutOnResult,
+      'session-lookup': createSessionLookupProvider((config) =>
+        pickSessionForCall([sessions], config),
+      ).Provider,
+      fs: createFsLookupProvider(() => ({ kind: 'not-attached' })).Provider,
+      present,
+    });
+    const create = (entry: { id: string; name: string; config?: unknown }) =>
+      root.loader.create(entry as never, null);
+    await create({ id: 'tools', name: 'cordis:tools' });
+    await create({ id: 'session-lookup', name: 'cordis:session-lookup' });
+    await create({ id: 'fs', name: 'cordis:fs' });
+    await create({ id: 'present', name: 'cordis:present', config: {} });
+    await root.loader.await();
+    expect(tools.entries()).toEqual([]);
+    expect(tools.resultListeners()).toEqual([]);
   });
 });

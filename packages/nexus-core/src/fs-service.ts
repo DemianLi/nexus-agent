@@ -37,14 +37,34 @@ export interface FsService {
   /**
    * 組裝點在 fold **之前**包上去、**不在工作區磁碟上**的路由前綴（會話歷史、工具結果暫存）。
    *
-   * 為什麼要明著交出來：折出來的 backend 是巢狀的 `CompositeBackend`，最外層只露得出 plugin 掛的那幾格，
+   * 為什麼組裝點要明著交出來：折出來的 backend 是巢狀的 `CompositeBackend`，最外層只露得出 plugin 掛的那幾格，
    * 裡面那兩層的前綴在 private 欄位裡（[#951](https://github.com/DemianLi/nexus-agent/issues/951)）。
-   * plugin 自己用 `backend.mount()` 掛的路由不在這裡——那個 plugin 自己查得到（`registry.backend.mounts()`）。
+   *
+   * **plugin 自己用 `backend.mount()` 掛的路由也在這裡**（[#1469](https://github.com/DemianLi/nexus-agent/issues/1469)，`@nexus/fs`
+   * 1.1.0 起）：fold 填 backend 的同一處（{@link settleFsService}）把 `registry.backend.mounts()` 的前綴併進來，所以消費者
+   * 只讀這一個東西，不必另外握著 registry 去問 mounts。
    *
    * 消費者是要把檔案**交給磁碟那一側**讀的工具（`present`：讀端只認工作區磁碟）；走 backend 讀寫的不需要它。
-   * @returns 路由前綴，原樣（有沒有結尾斜線由組裝點決定，比對的人自己正規化）。
+   * @returns 路由前綴，原樣（有沒有結尾斜線由組裝點決定，比對的人自己正規化）。fold 之前只有組裝點明著交的那幾格。
    */
   offWorkspacePrefixes(): readonly string[];
+  /**
+   * 這次組裝有沒有工作區（[#1469](https://github.com/DemianLi/nexus-agent/issues/1469) Q2 (a)，`@nexus/fs` 1.1.0 起）。
+   *
+   * 就是 fold 當下 `registry.capabilities.has(WORKSPACE_CAPABILITY)` 的結果——`sandbox-policy` 只在有圍堵時（給了 `--workspace`）
+   * 宣告那個能力，而 fold 在所有 `apply` 之後，所以跟「工具被叫時才讀能力」的結果相同。**逐條 thread**：能力每次組裝各提供一次，
+   * 這個把手是這次組裝的那一格，不會出現「這條 thread 的 backend 配上別條的工作區」。
+   * @returns 有工作區就是 `true`；還沒 fold 或這次組裝沒有工作區是 `false`。
+   */
+  hasWorkspace(): boolean;
+}
+
+/** {@link settleFsService} 在 fold 當下算好、一起填進把手的事實（#1469）。 */
+export interface FsFacts {
+  /** 這次組裝有沒有工作區（`registry.capabilities.has(WORKSPACE_CAPABILITY)`）。 */
+  readonly hasWorkspace: boolean;
+  /** plugin 用 `backend.mount()` 掛上的路由前綴（`registry.backend.mounts()` 的鍵），原樣。 */
+  readonly mountPrefixes: readonly string[];
 }
 
 /** {@link createFsService} 的參數。 */
@@ -54,7 +74,10 @@ export interface FsServiceOptions {
 }
 
 /** 填值的那一半只留在這個模組裡：消費者手上的把手只讀得到、改不了。 */
-const settlers = new WeakMap<object, (backend: AnyBackendProtocol | undefined) => void>();
+const settlers = new WeakMap<
+  object,
+  (backend: AnyBackendProtocol | undefined, facts: FsFacts) => void
+>();
 
 /**
  * 建一格還沒填值的 `fs` 服務。組裝點在 `apply` 裡把它提供出去（例如經 `createHostServicesPlugin`）。
@@ -63,10 +86,19 @@ const settlers = new WeakMap<object, (backend: AnyBackendProtocol | undefined) =
  */
 export function createFsService(options: FsServiceOptions = {}): FsService {
   let folded: AnyBackendProtocol | undefined;
-  const prefixes = [...(options.offWorkspacePrefixes ?? [])];
-  const service: FsService = { backend: () => folded, offWorkspacePrefixes: () => prefixes };
-  settlers.set(service, (backend) => {
+  let workspace = false;
+  const assembly = [...(options.offWorkspacePrefixes ?? [])];
+  let prefixes: readonly string[] = assembly;
+  const service: FsService = {
+    backend: () => folded,
+    offWorkspacePrefixes: () => prefixes,
+    hasWorkspace: () => workspace,
+  };
+  settlers.set(service, (backend, facts) => {
     folded = backend;
+    workspace = facts.hasWorkspace;
+    // 組裝點明著交的在前，plugin 掛的在後；重複填（同一格 fold 兩次）不累加。
+    prefixes = [...assembly, ...facts.mountPrefixes];
   });
   return service;
 }
@@ -77,10 +109,18 @@ export function createFsService(options: FsServiceOptions = {}): FsService {
  * 不是 {@link createFsService} 建的那一種（測試直接交一個物件、或根本沒人提供）就不碰：那個值是誰提供的，
  * 就由誰說了算。
  *
+ * **這是「這次組裝有沒有工作區」與「plugin 掛了哪些路由」唯一被算的地方**（#1469）：fold 把兩樣一起交進來，消費者之後
+ * 只從把手讀，不在別處再算一次。
+ *
  * @param service - `registry.services.get(FS_SERVICE)` 拿到的東西。
  * @param backend - `foldBackend` 折出來的那一個。
+ * @param facts - fold 當下算好的工作區事實與掛載前綴。
  */
-export function settleFsService(service: unknown, backend: AnyBackendProtocol | undefined): void {
+export function settleFsService(
+  service: unknown,
+  backend: AnyBackendProtocol | undefined,
+  facts: FsFacts,
+): void {
   if (typeof service !== 'object' || service === null) return;
-  settlers.get(service)?.(backend);
+  settlers.get(service)?.(backend, facts);
 }

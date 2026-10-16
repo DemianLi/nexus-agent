@@ -54,7 +54,10 @@ async function mountFor(threads: readonly string[]): Promise<Mounted> {
   const handles = new Map<string, FsService>(
     threads.map((thread) => {
       const backend = fakeBackendOver(files.get(thread) as Map<string, string>);
-      return [thread, { backend: () => backend, offWorkspacePrefixes: () => [] }];
+      return [
+        thread,
+        { backend: () => backend, offWorkspacePrefixes: () => [], hasWorkspace: () => true },
+      ];
     }),
   );
   const lookup = (config: unknown): FsLookup => {

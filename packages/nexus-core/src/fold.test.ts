@@ -61,6 +61,7 @@ import {
 import { DEFAULT_TOOL_RESULT_PRUNE, toolResultPrunerPlugin } from './tool-result-pruner.js';
 import type { FoldOptions } from './fold.js';
 import { createFsService } from './fs-service.js';
+import { WORKSPACE_CAPABILITY } from './sandbox.js';
 import { createHostServicesPlugin } from './host-services.js';
 import { loadPlugins } from './load.js';
 import { createRegistry } from './registry.js';
@@ -1879,9 +1880,51 @@ describe('fs 服務', () => {
 
   it('不是 createFsService 建的那一種不碰：誰提供的就由誰說了算', async () => {
     const own = fakeBackend('own');
-    const fs = { backend: () => own, offWorkspacePrefixes: () => [] };
+    const fs = { backend: () => own, offWorkspacePrefixes: () => [], hasWorkspace: () => false };
     await fold([createHostServicesPlugin({ fs })], { defaultBackend: fakeBackend('default') });
     expect(marker(fs.backend())).toBe('own');
+  });
+
+  // 工作區事實與 plugin 掛的路由前綴（#1469）：在 fold 填 backend 的同一處算，消費者只從這一格把手讀。
+  it('hasWorkspace：fold 之前是 false；有能力的組裝 fold 之後是 true；沒有能力是 false（逐條組裝各自的）', async () => {
+    const withWorkspace = createFsService();
+    const without = createFsService();
+    expect(withWorkspace.hasWorkspace()).toBe(false);
+    await fold([
+      createHostServicesPlugin({ fs: withWorkspace }),
+      fakePlugin('sandbox', (r) => void r.capabilities.provide(WORKSPACE_CAPABILITY)),
+    ]);
+    await fold([createHostServicesPlugin({ fs: without })]);
+    expect(withWorkspace.hasWorkspace()).toBe(true);
+    expect(without.hasWorkspace()).toBe(false);
+  });
+
+  it('能力排在提供 fs 那一列的後面也算數：fold 在所有 apply 之後才算', async () => {
+    const fs = createFsService();
+    await fold([
+      fakePlugin('sandbox', (r) => void r.capabilities.provide(WORKSPACE_CAPABILITY)),
+      createHostServicesPlugin({ fs }),
+    ]);
+    expect(fs.hasWorkspace()).toBe(true);
+  });
+
+  it('offWorkspacePrefixes：組裝點交的在前，plugin 掛的路由併在後面；沒有路由就只有組裝點交的', async () => {
+    const fs = createFsService({ offWorkspacePrefixes: ['/conversation_history/'] });
+    expect(fs.offWorkspacePrefixes()).toEqual(['/conversation_history/']);
+    await fold(
+      [
+        createHostServicesPlugin({ fs }),
+        fakePlugin('store', (r) => void r.backend.mount('/memories/', fakeBackend('store'))),
+      ],
+      { defaultBackend: fakeBackend('default') },
+    );
+    expect(fs.offWorkspacePrefixes()).toEqual(['/conversation_history/', '/memories/']);
+
+    const bare = createFsService({ offWorkspacePrefixes: ['/conversation_history/'] });
+    await fold([createHostServicesPlugin({ fs: bare })], {
+      defaultBackend: fakeBackend('default'),
+    });
+    expect(bare.offWorkspacePrefixes()).toEqual(['/conversation_history/']);
   });
 });
 

@@ -6,16 +6,20 @@ import { describe, expect, it } from 'vitest';
 import * as toolResult from './index.js';
 
 describe('@nexus/tool-result 是 @nexus/core 的單向轉出', () => {
-  it('三個值與 core 是同一個參照（轉出，不是複製）', () => {
+  it('五個值與 core 是同一個參照（轉出，不是複製）', () => {
     expect(toolResult.toolRefusal).toBe(core.toolRefusal);
     expect(toolResult.toolCallIdOf).toBe(core.toolCallIdOf);
     expect(toolResult.markToolError).toBe(core.markToolError);
+    expect(toolResult.callThreadId).toBe(core.callThreadId);
+    expect(toolResult.toolCallSessionAddress).toBe(core.toolCallSessionAddress);
   });
 
-  it('只轉出這三個值', () => {
+  it('只轉出這五個值', () => {
     expect(Object.keys(toolResult).sort()).toEqual([
+      'callThreadId',
       'markToolError',
       'toolCallIdOf',
+      'toolCallSessionAddress',
       'toolRefusal',
     ]);
   });

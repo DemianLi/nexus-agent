@@ -5,7 +5,9 @@ import Loader from '@nexus/cordis-plugin-loader';
 import { injectOf, need, service } from '@nexus/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { FS_LOOKUP_CONTRACT_VERSION, fsToken } from './index.js';
+import { virtualPathOf as coreVirtualPathOf } from '@nexus/core';
+
+import { FS_LOOKUP_CONTRACT_VERSION, fsToken, virtualPathOf } from './index.js';
 import type { FsLookup } from './index.js';
 import { createFsLookupProvider } from './provider.js';
 
@@ -18,7 +20,14 @@ afterEach(async () => {
 describe('@nexus/fs 的定義', () => {
   it('token 名是 fs，契約版本是 semver 常數', () => {
     expect(fsToken).toEqual({ name: 'fs', version: FS_LOOKUP_CONTRACT_VERSION });
-    expect(FS_LOOKUP_CONTRACT_VERSION).toBe('1.0.0');
+    expect(FS_LOOKUP_CONTRACT_VERSION).toBe('1.1.0');
+  });
+
+  it('virtualPathOf 是 core 那一支的單向轉出：同一個函式、相對路徑以根為起點、.. 夾回根（#1469）', () => {
+    expect(virtualPathOf).toBe(coreVirtualPathOf);
+    expect(virtualPathOf('report.md')).toBe('/report.md');
+    expect(virtualPathOf('a/../b.md')).toBe('/b.md');
+    expect(virtualPathOf('../x.md')).toBe('/x.md');
   });
 
   it('提供者的服務：每次呼叫都問宿主交進來的函式（不快取），config 原樣傳入', async () => {
@@ -55,7 +64,7 @@ describe('@nexus/fs 的定義', () => {
     expect(grabbed?.forCall(config)).toEqual({ kind: 'ambiguous', count: 2 });
   });
 
-  it('三角色：定義套件只相依 SDK 與 core 的型別；core 與 SDK 是 peer，不進 dependencies', () => {
+  it('三角色：定義套件只相依 SDK 與 core 的單向轉出（型別與 virtualPathOf）；core 與 SDK 是 peer，不進 dependencies', () => {
     const manifest = JSON.parse(
       readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
     ) as {

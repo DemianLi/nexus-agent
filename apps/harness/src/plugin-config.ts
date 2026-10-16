@@ -65,7 +65,7 @@ import type {
   RegisterOptions,
 } from '@nexus/core';
 import { ManifestError, validateManifest } from '@nexus/sdk';
-import type { ToolGateListener, ToolRegisterOptions } from '@nexus/tools';
+import type { ToolGateListener, ToolRegisterOptions, ToolResultListener } from '@nexus/tools';
 
 import { resolveHarnessHome } from './harness-home.js';
 import { registryFsLookup } from './registry-fs-lookup.js';
@@ -841,6 +841,8 @@ interface FoldedContributions {
   readonly toolOptions: ReadonlyMap<StructuredToolInterface, ToolRegisterOptions>;
   /** 核准閘門監聽（#1466），照那一列登記的順序；折進 thread 時一條一條交給 `registry.approvals.gate`。 */
   readonly gates: readonly ToolGateListener[];
+  /** `tools/result` 觀察者（#1469），照那一列登記的順序；折進 thread 時一條一條交給 `registry.events.on('tools/result', …)`。 */
+  readonly resultListeners: readonly ToolResultListener[];
   readonly projections: readonly ProjectionUnit[];
   /** 技能來源路徑（#1446），照那一列登記的順序。 */
   readonly skillSources: readonly string[];
@@ -876,6 +878,12 @@ function registerFolded(
   // `submit-record (submit-record)`。監聽的形狀是結構型別（`@nexus/tools` 不 import core），與 core 的 `PreToolListener` 同形。
   // 排在工具之後、投影之前：與相容層那一列「`apply` 裡先 `tools.register` 再 `approvals.gate`」同一個順序。
   for (const listener of contributions.gates) registry.approvals.gate(listener);
+  // `tools/result` 觀察者（#1469）：走 `registry.events.on`，**和工具一起折進同一條 thread**——工具與觀察者共用同一個閉包（present 的
+  // 交付表），兩者必須在同一條 thread 上成對存在，之後列被卸載也不拆開。事件的簽名由核心的事件表定（`Readonly<PipelineExecution>`、
+  // `Readonly<PipelineResult>`）；`@nexus/tools` 的 `ToolResultListener` 是它的窄視圖（只讀 `isError`），結構上相容。
+  for (const listener of contributions.resultListeners) {
+    registry.events.on('tools/result', listener as (...args: never[]) => void);
+  }
   for (const unit of contributions.projections) registry.projections.register(unit);
   // 技能來源走 `registry.skills.addSource`，**照那一列登記的順序**：`sources` 依序即優先序（後面的來源贏過前面的同名 skill）。
   // 格式與重名在樹上的提供者登記時就驗過了，這一層的 `NamedEntries` 只是第二道（相容層的列也走它）。
@@ -1565,6 +1573,7 @@ async function loadPluginConfigOnce(
       tools: verdict.tools,
       toolOptions: verdict.toolOptions,
       gates: verdict.gates,
+      resultListeners: verdict.resultListeners,
       projections: verdict.projections,
       skillSources: verdict.skillSources,
       commands: verdict.commands,

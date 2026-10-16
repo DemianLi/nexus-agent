@@ -10,7 +10,7 @@
  *
  * | 角色 | 是誰 | 依賴什麼 |
  * | --- | --- | --- |
- * | 定義 | 這個套件主入口：`fsToken`、{@link FsLookupService}、{@link FsLookup}，與 `FsService` 型別的單向轉出 | `@nexus/sdk`，與 `@nexus/core`（只轉出型別） |
+ * | 定義 | 這個套件主入口：`fsToken`、{@link FsLookupService}、{@link FsLookup}，與 `FsService`、`virtualPathOf` 的單向轉出 | `@nexus/sdk`，與 `@nexus/core`（只轉出，不寫實作） |
  * | 提供者 | 樹上一列內建列，行程級（`@nexus/fs/provider`），**由宿主把「這次呼叫找哪一條 thread 的把手」的挑法交給它** | 這個套件、`@nexus/sdk` |
  * | 消費者 | 要讀寫工作區的模型工具，今天是 `submit-record` | **只有這個套件**與 `@nexus/sdk`，永不 import 提供者 |
  *
@@ -51,8 +51,19 @@ import { defineToken } from '@nexus/sdk';
 // 型別出口（#1466 Q2-1 (a)）：工具要在簽名裡寫 `FsService`，但不能 import `@nexus/core`。單向轉出，實作留在 core。
 export type { FsService, SessionAddress } from '@nexus/core';
 
-/** 契約版本（semver）。介面破壞性改動跳 major，消費者的範圍擋下不相容的提供者。 */
-export const FS_LOOKUP_CONTRACT_VERSION = '1.0.0';
+// 路徑換算（#1469 Q4 (a)）：把模型給的路徑換成 backend 命名空間裡的虛擬路徑（相對路徑以工作區根為起點、`..` 夾回根）。
+// 它是 backend 命名空間的規則，跟 fs 走，所以放這裡而不放 `@nexus/tool-result`。單向轉出，實作留在 core（讀檔路由與
+// workspace-changes 共用那一份，不在這裡另寫）。
+export { virtualPathOf } from '@nexus/core';
+
+/**
+ * 契約版本（semver）。介面破壞性改動跳 major，消費者的範圍擋下不相容的提供者。
+ *
+ * `1.1.0`（#1469）：`FsService` 多 `hasWorkspace()`，`offWorkspacePrefixes()` 把 plugin 用 `backend.mount()` 掛的前綴也併進來
+ * （兩樣都在 fold 填 backend 的同一處算）；另轉出 `virtualPathOf`。向後相容的新增：只用 `backend()` 的消費者
+ * （`submit-record`，宣告 `^1.0.0`）照常。
+ */
+export const FS_LOOKUP_CONTRACT_VERSION = '1.1.0';
 
 /**
  * 找這次呼叫那條 thread 的 fs 把手的結果。

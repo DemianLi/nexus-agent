@@ -41,6 +41,9 @@
  * - **`TodoItem`、`TodoStatus`、`TODO_STATUSES`**（#1463 Q2 (a)）：本來就住在 core 的 `todo.ts`，這裡只是轉出，用不著另開一個
  *   `@nexus/todo`。`todo/write` 的事件擴充搬進 core 的 `session-log.ts`（同 `feedback/*`），遷出的插件因此不必對 core 寫
  *   `declare module`。
+ * - **`PresentedFile`**（#1469 Q4 (a)）：本來就住在 core 的 `deliverables.ts`（`@nexus/wire` 與 web 都讀它），這裡只是轉出。
+ *   `deliverables/presented` 的事件擴充搬進 core 的 `session-log.ts`（前例 `todo/write`），遷出的 `present` 因此不必對 core 寫
+ *   `declare module`。
  *
  * 只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：四個讀法只有 `trajectory` 在用；
  * 兩個日誌型別（`SessionLog`、`SessionEvent`）是 `feedback` 的（#1456）；查找與 todo 的名字是 `todo` 的（#1463）。
@@ -68,6 +71,8 @@ export type { SessionAddress, SessionLookup } from '@nexus/core';
 // 待辦清單的詞彙（#1463 Q2 (a)）：三個名字本來就住在 core 的 `todo.ts`，單向轉出。
 export { TODO_STATUSES } from '@nexus/core';
 export type { TodoItem, TodoStatus } from '@nexus/core';
+// 交付物的詞彙（#1469）：`present` 的 `deliverables/presented` 酬載。
+export type { PresentedFile } from '@nexus/core';
 
 /** 契約版本（semver）。介面破壞性改動跳 major，消費者的範圍擋下不相容的提供者。 */
 export const SESSION_LOOKUP_CONTRACT_VERSION = '1.0.0';

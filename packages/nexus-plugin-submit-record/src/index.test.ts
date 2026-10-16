@@ -32,7 +32,7 @@ afterEach(async () => {
 
 /** 一格 fs 把手：`backend()` 在呼叫當下才讀（同 core 的 `createFsService`）。 */
 function fsHandle(backend: AnyBackendProtocol | undefined): FsService {
-  return { backend: () => backend, offWorkspacePrefixes: () => [] };
+  return { backend: () => backend, offWorkspacePrefixes: () => [], hasWorkspace: () => true };
 }
 
 /** 一個永遠認得這次呼叫的 fs 查找（單元面不驗挑法，挑法在 core 與宿主那邊量）。 */
