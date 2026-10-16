@@ -5,6 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { ELAPSED_TICK_MS, StatusLine } from '@/components/status-line';
 import { serverClock } from '@/lib/server-clock';
+import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { Script } from '@/test/conversation-frames';
 import { turn, view, withTrajectory } from '@/test/trajectory-fixtures';
 
@@ -48,6 +49,36 @@ describe('StatusLine 的連線那幾句（#593）', () => {
     expect(screen.getByRole('status').textContent).toBe(
       '連不上 agent：connection refused。正在重試…',
     );
+  });
+
+  it.each([false, true])(
+    '伺服器明說不收這條下行（#1478）：換成那一句，不接原文；重連鈕還在（連上過：%s）',
+    (wasConnected) => {
+      render(
+        <StatusLine
+          state={idle}
+          connected={false}
+          connectionError="下行被拒：上限 2／2，重啟 serve 才釋放"
+          refusal={THREAD_AT_CAPACITY_TEXT}
+          reconnecting={{ wasConnected, offline: false }}
+          onReconnect={() => undefined}
+        />,
+      );
+      expect(screen.getByRole('status').textContent).toBe(THREAD_AT_CAPACITY_TEXT);
+      expect(screen.getByRole('button', { name: '立刻重連' })).toBeTruthy();
+    },
+  );
+
+  it('瀏覽器離線排在不收前面：離線時那條下行根本沒送出去', () => {
+    render(
+      <StatusLine
+        state={idle}
+        connected={false}
+        refusal={THREAD_AT_CAPACITY_TEXT}
+        reconnecting={{ wasConnected: false, offline: true }}
+      />,
+    );
+    expect(screen.getByRole('status').textContent).toBe('網路離線：恢復之後會自動重新連線');
   });
 
   it('瀏覽器離線：講恢復之後會自動重連', () => {

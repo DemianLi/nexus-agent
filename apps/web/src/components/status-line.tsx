@@ -50,12 +50,17 @@ function RunningElapsed({ since }: { since: number | undefined }) {
   );
 }
 
-/** 斷線那一行怎麼講。 */
+/**
+ * 斷線那一行怎麼講。`refusal` 是伺服器明說不收這條下行時給人看的話（thread 數滿了，[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)）：
+ * 不管之前連上過沒有都換成它，**不接 server 的原文**。背景的重試照舊，所以「立刻重連」還在。
+ */
 function lostText(
   reconnecting: { readonly wasConnected: boolean; readonly offline: boolean },
   connectionError: string | undefined,
+  refusal: string | undefined,
 ): string {
   if (reconnecting.offline) return '網路離線：恢復之後會自動重新連線';
+  if (refusal !== undefined) return refusal;
   if (reconnecting.wasConnected) return '連線中斷，正在重新連線…';
   return `連不上 agent${connectionError === undefined ? '' : `：${connectionError}`}。正在重試…`;
 }
@@ -64,6 +69,7 @@ export function StatusLine({
   state,
   connected,
   connectionError,
+  refusal,
   commandError,
   slashError,
   slashNotice,
@@ -74,6 +80,8 @@ export function StatusLine({
   state: ConversationState;
   connected: boolean;
   connectionError?: string;
+  /** 下行被伺服器明說不收時給人看的話，取代斷線那一行（見 `lostText`）。 */
+  refusal?: string;
   /** 下行斷了、正在自動重接（見 `useConversation` 的 `reconnecting`）。 */
   reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
   /** 剛重新接上。 */
@@ -88,7 +96,7 @@ export function StatusLine({
     return (
       <div className="flex items-center gap-2">
         <p className="text-warning text-body" role="status">
-          {lostText(reconnecting, connectionError)}
+          {lostText(reconnecting, connectionError, refusal)}
         </p>
         {onReconnect !== undefined && (
           <Button

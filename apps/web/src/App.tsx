@@ -73,6 +73,7 @@ import { MODEL_COMMAND, parseModelLine } from '@/lib/model-selection';
 import { permissionLocked } from '@/lib/permission-presets';
 import { pendingSteers } from '@/lib/steer-view';
 import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
+import { threadCapacityText } from '@/lib/thread-capacity';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
 import { prepareAttachments } from '@/lib/attachment-send';
 import { requestIdFor } from '@/lib/request-id';
@@ -548,6 +549,7 @@ function ConversationView({
               {...(conversation.connectionError === undefined
                 ? {}
                 : { connectionError: conversation.connectionError })}
+              {...(conversation.refusal === undefined ? {} : { refusal: conversation.refusal })}
               {...(conversation.commandError === undefined
                 ? {}
                 : { commandError: conversation.commandError })}
@@ -570,7 +572,9 @@ function ConversationView({
             )}
             {conversation.historyError !== undefined && (
               <p className="text-destructive text-tip">
-                之前說過的話拿不回來：{conversation.historyError}
+                {/* thread 數滿了不是歷史掉了：換成那一句，不加這個前綴（#1478）。 */}
+                {threadCapacityText(conversation.historyError.code) ??
+                  `之前說過的話拿不回來：${conversation.historyError.message}`}
               </p>
             )}
           </div>
