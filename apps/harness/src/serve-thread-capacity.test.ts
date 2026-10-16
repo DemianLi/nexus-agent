@@ -8,6 +8,7 @@
  * **零憑證、零外部連線**：模型是腳本。
  */
 
+import { THREAD_AT_CAPACITY, WireRejectedError } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { foldTurn, serveClient } from './fixtures.js';
@@ -53,6 +54,38 @@ describe('thread 數上限，從 serve 組裝起（#1476 驗收 F）', () => {
     // 已在行程裡的那條照常。
     const again = await client.openEvents('t1');
     await again.return?.(undefined);
+  });
+
+  it('下行被拒帶得上碼：真生產者（#1481 驗收 A、B）', async () => {
+    serve = await startScriptedServe(TURNS, {
+      extraRows: '- id: thread-capacity\n  config:\n    maxThreads: 1\n',
+    });
+    const client = await serveClient(serve.running);
+    const first = await client.openEvents('t1');
+    await first.return?.(undefined);
+
+    // A：滿了。server 回 200 ＋ error 封包，client 丟型別錯誤，碼進得來；message 同 #1476 的斷言（`/上限/u`）。
+    const refused: unknown = await client.openEvents('t2').then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(refused).toBeInstanceOf(WireRejectedError);
+    const full = refused as WireRejectedError;
+    expect(full.code).toBe(THREAD_AT_CAPACITY);
+    expect(full.serverMessage).toContain('1／1');
+    // `serverMessage` 是封包裡的 `message` 欄位，不是整包 body。
+    expect(full.serverMessage).not.toContain(THREAD_AT_CAPACITY);
+    expect(full.message).toMatch(/^下行被拒：\{.*thread_at_capacity.*\}$/u);
+    expect(full.message).toContain(full.serverMessage);
+
+    // B：別的碼也帶得上來。`channels` 空陣列是 server 真的會拒的請求（`invalid_argument`），而且在 thread 檢查之前，
+    // 所以對已在行程裡的 t1 也是這個碼，不是 `thread_at_capacity`。
+    const invalid: unknown = await client.openEvents('t1', { channels: [] }).then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(invalid).toBeInstanceOf(WireRejectedError);
+    expect((invalid as WireRejectedError).code).toBe('invalid_argument');
   });
 
   it('沒有這一列的設定（出廠）：不限，起動日誌講「不限」', async () => {

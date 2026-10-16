@@ -11,6 +11,7 @@
  */
 
 import { UPLOAD_NAME_PARAM, attachmentPath, uploadPath } from './attachments.js';
+import { WireRejectedError } from './rejected-error.js';
 import { UplinkTransportError } from './uplink-error.js';
 import type {
   AttachmentReadResponse,
@@ -246,6 +247,9 @@ export interface WireClient {
    *
    * **promise 兌現代表線已經開好**（server 端的訂閱已註冊），之後才發生的 frame
    * 一顆都不會掉在中間。所以正確的順序是：先 `await openEvents`，再 `runStart`。
+   *
+   * 協定層拒絕（200 ＋ error 封包，例如 thread 數到上限）丟 {@link WireRejectedError}：讀 `code` 分支，不要解析
+   * `message`。載體層的錯（非 2xx、不是 error 封包的 body）仍是一般的 `Error`。
    */
   openEvents(
     threadId: string,
@@ -424,6 +428,8 @@ export interface WireClient {
    * `THREAD_FEED_PATH`。**promise 兌現代表線已經開好**，同 {@link openEvents}；還掛著的那幾題緊接著補送。
    *
    * **兌現之後再抓一次 {@link listThreads}** 當「在跑」的起點：狀態切換不補送。不認得的 frame 在這裡就丟掉。
+   *
+   * 被協定層拒絕的丟法同 {@link openEvents}（{@link WireRejectedError}）。
    *
    * @param signal - 中止這條線，不是任何一條 thread 的 run。
    */
@@ -747,8 +753,33 @@ function rejectedOf(failure: RejectedSource) {
   return {
     kind: 'rejected' as const,
     ...(typeof failure.error === 'string' ? { code: failure.error } : {}),
-    message: typeof failure.message === 'string' ? failure.message : '對方拒絕了，但沒有說明原因',
+    message: serverMessageOf(failure),
   };
+}
+
+function serverMessageOf(failure: RejectedSource): string {
+  return typeof failure.message === 'string' ? failure.message : '對方拒絕了，但沒有說明原因';
+}
+
+/**
+ * 開下行（`openEvents`、`openThreadFeed`）拿到 200 卻不是 SSE 時要丟的錯。
+ *
+ * body 是 error 封包（`type === 'error'` 且 `error` 是字串）就丟 {@link WireRejectedError}，帶碼；其餘（純文字、
+ * 別種 JSON、壞掉的 JSON）照舊丟一般的 `Error`。兩種的 `message` 都是 `<label>：<body 原文>`，逐字同今天。
+ */
+async function rejectedStreamError(label: string, response: Response): Promise<Error> {
+  const text = await response.text();
+  const message = `${label}：${text}`;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return new Error(message);
+  }
+  if (typeof parsed !== 'object' || parsed === null) return new Error(message);
+  const packet = parsed as RejectedSource & { readonly type?: unknown };
+  if (packet.type !== 'error' || typeof packet.error !== 'string') return new Error(message);
+  return new WireRejectedError(packet.error, serverMessageOf(packet), message);
 }
 
 /** 全域有 `XMLHttpRequest`（瀏覽器）就給工廠，沒有（Node）就是 `undefined`。 */
@@ -921,7 +952,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       const contentType = response.headers.get('content-type') ?? '';
       if (!contentType.startsWith('text/event-stream')) {
         // 協定層的錯是 200 ＋ error 封包（照 dsh 的分層），所以這裡拿得到原因。
-        throw new Error(`下行被拒：${await response.text()}`);
+        throw await rejectedStreamError('下行被拒', response);
       }
       if (response.body === null) {
         throw new Error('下行沒有 body');
@@ -940,7 +971,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
         throw new Error(`全域下行開不起來：${response.status} ${await response.text()}`);
       }
       if (!(response.headers.get('content-type') ?? '').startsWith('text/event-stream')) {
-        throw new Error(`全域下行被拒：${await response.text()}`);
+        throw await rejectedStreamError('全域下行被拒', response);
       }
       if (response.body === null) {
         throw new Error('全域下行沒有 body');

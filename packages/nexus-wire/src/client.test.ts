@@ -2,6 +2,7 @@ import { describe, expect, expectTypeOf, it } from 'vitest';
 import { createWireClient } from './client.js';
 import type { UplinkResult } from './client.js';
 import { WIRE_CHANNELS, errorResponse, successResponse } from './protocol.js';
+import { WireRejectedError } from './rejected-error.js';
 import { encodeSseFrame } from './sse.js';
 import { UplinkTransportError } from './uplink-error.js';
 import type { Event, WireErrorCode, WireErrorResponse } from './protocol.js';
@@ -235,6 +236,55 @@ describe('瀏覽器端的 client', () => {
       Response.json(errorResponse(null, 'not_supported', '不支援 since')),
     );
     await expect(client.openEvents('t3')).rejects.toThrow('不支援 since');
+  });
+
+  it('協定層的拒絕丟 WireRejectedError，碼與原文各有欄位，message 逐字不變（#1481）', async () => {
+    const packet = errorResponse(null, 'thread_at_capacity', '這台 server 的 thread 數已到上限');
+    const { client } = stub(() => Response.json(packet));
+    const error: unknown = await client.openEvents('t3').then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(WireRejectedError);
+    expect(error).toBeInstanceOf(Error);
+    const rejected = error as WireRejectedError;
+    expect(rejected.name).toBe('WireRejectedError');
+    expect(rejected.code).toBe('thread_at_capacity');
+    expect(rejected.serverMessage).toBe('這台 server 的 thread 數已到上限');
+    expect(rejected.message).toBe(`下行被拒：${JSON.stringify(packet)}`);
+  });
+
+  it('error 封包沒給 message：serverMessage 是固定說明；碼不是字串就不算 error 封包', async () => {
+    const noMessage = stub(() => Response.json({ type: 'error', error: 'unknown_error' }));
+    await expect(noMessage.client.openEvents('t3')).rejects.toMatchObject({
+      code: 'unknown_error',
+      serverMessage: '對方拒絕了，但沒有說明原因',
+    });
+    for (const body of [{ type: 'error', error: 7 }, { type: 'error' }, { type: 'success' }]) {
+      const { client } = stub(() => Response.json(body));
+      const error: unknown = await client.openEvents('t3').then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(WireRejectedError);
+      expect((error as Error).message).toBe(`下行被拒：${JSON.stringify(body)}`);
+    }
+  });
+
+  it('body 解析不出 error 封包（純文字、null、壞 JSON）：照舊丟一般的 Error，message 是原文', async () => {
+    for (const text of ['sorry', 'null', '[1]', '{"type":"error"']) {
+      const { client } = stub(
+        () => new Response(text, { headers: { 'content-type': 'text/plain' } }),
+      );
+      const error: unknown = await client.openEvents('t3').then(
+        () => undefined,
+        (caught: unknown) => caught,
+      );
+      expect(error).toBeInstanceOf(Error);
+      expect(error).not.toBeInstanceOf(WireRejectedError);
+      expect((error as Error).message).toBe(`下行被拒：${text}`);
+    }
   });
 
   it('載體層的錯照 status 報出來', async () => {
