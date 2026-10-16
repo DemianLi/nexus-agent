@@ -19,10 +19,11 @@ capabilities 的執行、版本路由與兩版並存不在這一刀，見文末�
 
 ## 這份規範管誰
 
-**只管 Cordis 樹上的函式插件。** 今天樹上有相容層與入口兩列、`tools`（工具登記處）、`projections`（投影登記處，#1421）、`skill-sources`（技能來源登記處，#1446）、`commands`（命令登記處，#1456）、`approval-channel`、`session-lookup`（#1463）、`fs`（fs 查找，#1466）、
-`include`（讀出貨清單的那一列），加上逐顆遷出的插件，**今天是 `echo`**（[#1416](https://github.com/DemianLi/nexus-agent/issues/1416) PR 2）、
-**`token-meter`**（[#1421](https://github.com/DemianLi/nexus-agent/issues/1421)）、**`trajectory`**（[#1435](https://github.com/DemianLi/nexus-agent/issues/1435)）、**`skills`**（[#1446](https://github.com/DemianLi/nexus-agent/issues/1446)）**`feedback`**（[#1456](https://github.com/DemianLi/nexus-agent/issues/1456)）、**`ask-user`**（#1458）、**`todo`**（#1463）**與 `submit-record`**（[#1466](https://github.com/DemianLi/nexus-agent/issues/1466)）；還留在
-相容層裡的 15 顆是 `NexusPlugin` 物件，照舊 `export default`（`cordis.yml` 的 `name` 要靠它指到那顆物件），不受下面
+**只管 Cordis 樹上的函式插件。** 樹上有相容層與入口兩列、各接縫的登記處與宿主給值的內建列（`tools`、`projections`、`skill-sources`、`commands`、
+`approval-channel`、`session-lookup`、`fs`）、`include`（讀出貨清單的那一列），加上逐顆遷出的函式插件。**哪些宿主列、哪幾顆已經遷出，以兩處為準，這一節不寫名單與數字**
+（每張遷出卡都會改，寫在這裡一定漏）：宿主列看 `apps/harness/src/startup-audit.ts` 的 `REQUIRED_TREE_ENTRY_IDS` 與下面「接進清單」的樹表；
+遷出的插件看「接進清單」開頭的順序與 `apps/harness/src/migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED`（gate 會對它量，漏一顆就紅）。
+還留在相容層裡的是 `NexusPlugin` 物件，照舊 `export default`（`cordis.yml` 的 `name` 要靠它指到那顆物件），不受下面
 「不能有 default」的約束。遷出一顆，它就從物件形式換成這裡的函式插件形式。載入器怎麼分辨兩種形式，見下面
 「接進清單」。
 
@@ -502,7 +503,7 @@ ask-user 在 #1458 遷上樹，轉接器照留，改成對「行程級的預設�
 - **`cordis.serve.yml` 那一層不經 Include**：Include 只有一個 `path`，serve 專屬層是相容層疊在出貨層後面的另一個檔。那一層裡的
   函式插件上不了樹，會在讀清單時掉在 `apply` 階段並指名原因；今天那一層沒有函式插件。要放進去，得讓 Include 讀多個檔或
   把那一層併進出貨檔。
-- **橋接列是過渡的**：卡上寫「拿掉」，留著是因為清單上其餘 19 列還是 `NexusPlugin`，要跟 echo 排在同一份清單、同一個順序裡
+- **橋接列是過渡的**：卡上寫「拿掉」，留著是因為清單上還有 `NexusPlugin` 的列（沒遷出的插件與設定列），要跟函式插件排在同一份清單、同一個順序裡
   （PM 決議 Q-A）。最後一顆搬出相容層時橋接連同整個相容層一起拿掉。這是對卡上字面的偏離，登記在這裡與 PR 內文。
 
 ## 這一刀沒有的

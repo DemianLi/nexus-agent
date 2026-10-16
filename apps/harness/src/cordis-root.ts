@@ -35,10 +35,10 @@
  * - **清單由變更紀錄導出（#1412），清單上只有函式插件的列在 Loader 的樹上（#1416 PR 2）**：dsh 的整棵樹本來就由一份 patch
  *   清單導出（`packages/boot/app-boot/src/index.ts:291`，`entry.update({ config: { ...includeConfig, patches } })`），所以
  *   「Cordis 不管插件」不是理由。我們的清單由 `loadDefaultPlugins` 疊出來——第二層是變更紀錄折出來的 patch
- *   （`plugin-journal.ts`、`plugin-config.ts`），經 {@link COMPAT_HOST_SERVICE} 交給相容層。**其餘 20 列不上樹的理由是插件
+ *   （`plugin-journal.ts`、`plugin-config.ts`），經 {@link COMPAT_HOST_SERVICE} 交給相容層。**其餘的列不上樹的理由是插件
  *   還在相容層**：上樹跟著「逐顆搬出相容層」一起做（地圖終點第 1 項），現在放上去只會在相容層底下多一層轉接，而且 Loader
- *   對每列 `config` 跑 `interpolate` 深複製，清單項目的身分留不住（見下）。舊插件一行不改。**函式插件（echo、token-meter、trajectory、skills、feedback、
- *   ask-user，模組有 `manifest` 匯出的才上樹）**經 `plugin-tree.ts` 的 Include 上樹：patch 原樣推給 Include，相容層那一側仍然疊一份、驗一份、當清單的權威，兩邊疊出來
+ *   對每列 `config` 跑 `interpolate` 深複製，清單項目的身分留不住（見下）。舊插件一行不改。**函式插件（模組有 `manifest` 匯出的才上樹；
+ *   遷出了哪幾顆見 `docs/plugin-contract.md` 的「接進清單」與 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED`）**經 `plugin-tree.ts` 的 Include 上樹：patch 原樣推給 Include，相容層那一側仍然疊一份、驗一份、當清單的權威，兩邊疊出來
  *   對不上那一列就算掉了。
  * - **Include 的寫回全關（#1416 PR 2，`vendor/README.md` 第 7 條）**：上游 Include 會把樹側的變更寫回 `cordis.yml`，那是
  *   第二個寫入口，會繞過變更紀錄。vendor 時關掉三條寫回路徑，寫入口只有變更紀錄一個。這是對 dsh 做法的偏離，理由是我們的

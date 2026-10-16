@@ -13,7 +13,7 @@
  * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，#1463），契約服務，一列；**宿主給挑法**（行程裡每一條活著的 thread 綁上的註冊表，`thread-sessions.ts`），不是插件登記進來的 | （dsh 沒有這一種：工具從 `exec.agent.session` 拿；偏離登記在 `@nexus/session`） |
  * | `fs` | 行程級的 fs 查找（`@nexus/fs/provider`，#1466），契約服務，一列；**宿主給挑法**（同一張登記表、同一支 `pickBoundForCall`，每一筆登記同時帶這條 thread 的 fs 把手），不是插件登記進來的 | （dsh 的 `fs` 是行程全域一份、每個 agent 不同的東西以參數傳入；偏離登記在 `@nexus/fs`） |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 | `include`（`app-boot` 的 `entry.update({ config: { ...includeConfig, patches } })`） |
- * | `include:<id>` | Include 底下的列，今天是 echo、token-meter、trajectory、skills、feedback、ask-user 與 todo（#1463；模組有 `manifest` 匯出的才上樹） | 各插件 |
+ * | `include:<id>` | Include 底下的列，模組有 `manifest` 匯出的才上樹（遷出了哪幾顆以 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED` 為準） | 各插件 |
  *
  * ## 清單怎麼進樹
  *
