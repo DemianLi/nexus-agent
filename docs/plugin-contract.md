@@ -167,7 +167,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   - **提供者**：`@nexus/session/provider` 的 `createSessionLookupProvider(lookup)`，宿主掛一列 `session-lookup`（`PluginTree.#build` 與 `mountDetached` 兩處，列在必掛名單，`startup-audit.ts`）。
     查找函式是**行程級的**：樹那一邊是 `apps/harness/src/thread-sessions.ts` 的 `ThreadSessions`（每條活著的 thread 一張註冊表，鍵是 root 日誌 id）；沒有樹的那一邊是**那一次組裝自己的** `registry.sessions.forCall`
     （`bindDetached` 交給 `mountDetached`），兩份無樹組裝互不相見。
-  - **挑法只有一份實作**：`@nexus/core` 的 `pickSessionForCall(bound, config)`——沒有就 `not-attached`；一張不看 `thread_id`；多張依 `thread_id` 挑「有一份日誌的 id 等於它」的**恰好一張**，挑不出一律 `ambiguous`（寧可明說也不猜）；
+  - **挑法只有一份實作**：`@nexus/core` 的 `pickSessionForCall(bound, config)`——沒有就 `not-attached`；一張時：相容層不看 `thread_id`，樹上的行程級查找（`ThreadSessions`）**也核對**——呼叫帶了 `thread_id` 而那一張不擁有它就是 `ambiguous`（#1482，選項 `verifySingle`），沒帶 `thread_id` 的呼叫維持直接挑它；多張依 `thread_id` 挑「有一份日誌的 id 等於它」的**恰好一張**，挑不出一律 `ambiguous`（寧可明說也不猜）；
     挑到之後算不出位址是 `unknown-caller`。相容層的 `registry.sessions.forCall` 與樹上的服務**都是它**，不另寫一份。
   - **登記與撤除**：`createNexusAgent` 的 `attachSession` 在綁上註冊表、背景 host 建好、參與者訂閱成功之後才登記，撤除掛在它回傳的 detach 上（與解綁、退訂同一個函式）。**登記排在那一步的最後**，所以組裝在中間任何一步拋，都不會在行程級的查找裡留下沒收的註冊表。
     **同一條 thread id 重組**時後登記的**取代**先登記的（`ThreadSessions` 以 root 日誌 id 為鍵），舊的那一份遲到的 detach 只撤自己；所以行程裡不會有兩張都認得同一條 thread 的登記（那會讓下一次呼叫變成 `ambiguous`）。
@@ -189,9 +189,9 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     （`not-attached`／`unknown-caller`／`ambiguous` 全是 `SUBMIT_RECORD_NO_BACKEND_MESSAGE`，#1466 Q3 逐字不變）。
   - **三個入口各自接，各有一條會紅的測試**（`apps/harness/src/submit-record-on-tree.test.ts` 的「三個入口各有一條」）：CLI（`boot('cli')` 的樹上內建列）、serve（`submit-record-wire.test.ts`，真的 `runServe`、真的核准卡、
     `--workspace` 磁碟上的檔案）、沒有樹的呼叫端（兩份無樹組裝互不相見）。多條 thread 同時活著時每一次呼叫靠 `thread_id` 認主人，另有 root、同步子代理、背景子代理、重組、組裝失敗、撤除六種形狀的紅燈（同檔「E」）。
-  - **已知限制：只剩一筆登記時不看 `thread_id`**（沿用 #1418 的挑法，這張**不修**；PM 2026-10-16 在 #1385 的筆記，讀碼推論，沒有實測）。對會話日誌這是無害的退化（只有一條 thread 活著，沒有別的日誌可寫錯）；**對 fs 這是安全邊界**：fence 是每條 thread 各一顆
-    （`/permission` 切的就是它），萬一一條 thread 的登記已經被撤了、它的工具呼叫還在飛，唯一剩下的那一條會被當成它的主人，寫進別人的 backend、套用別人的 fence。具體情形：某條 thread detach 之後，它還在跑的背景子代理繼續呼叫工具，而行程裡剛好只剩另一條 thread 登記著，這次呼叫就會寫進那一條（相容層這時回 `not-attached`）。
-    今天 serve 只在關機時才收 thread，時間窗極窄（`submit_record` 的背景呼叫又釘 policy-never、沒有人被問到、什麼都不寫，實際上更窄）。
+  - **只剩一筆登記時也核對 `thread_id`（#1482）**：行程級的查找（`ThreadSessions.forCall`／`fsForCall`）在只剩一筆登記時，呼叫若帶了 `thread_id` 而那一筆不擁有它，回 `ambiguous`（數量是 1），不再把唯一剩下的那一條當成它的主人。**這是 fs 的安全邊界**：fence 是每條 thread 各一顆（`/permission` 切的就是它），一條 thread 收尾途中還在跑的工具若被挑到別人身上，會寫進別人的 backend、套用別人的 fence。核對只在帶了 `thread_id` 時做；相容層的 `registry.sessions.forCall` 與沒帶 `thread_id` 的呼叫維持「只有一筆就是它」。挑法仍只寫在 core 的 `pickBoundForCall` 一處（選項 `verifySingle`，行程級查找傳 `true`）。
+    代價：`ambiguous` 的拒絕句（todo／goal 的「接了 N 份會話…」）在 N 為 1 時讀起來怪，今天不另開結果種類。
+    **收尾順序是這條的另一半**（#1482，照 dsh 的 cancel → drain → flush → dispose）：`attachSession` 回傳的 detach 在有背景 host 時是非同步的，**先等背景 host 收完（中止進行中的輪、等它寫完 `turn/end` 與結算通知），才撤登記、解綁、停參與者**；serve 的 `release` 再接著收落盤與 agent。撤得太早，收尾中的工具會問不到自己的登記，落盤先退訂則讓被中止那一輪的事件到不了後端。
     **之後開「閒置 thread 回收」的卡（#1464 量到每條 thread 常駐約 2.1 MB、不回收）要先處理它**，兩個做法擇一：detach 等背景 host 收完再撤登記，或行程級查找一律核對 `thread_id`（改挑法要 demian 拍板）。
 - **工具接縫 1.2.0：核准閘門**（`@nexus/tools`，#1466 Q1 (a)）。`ToolRegistry` 多一個**選配**方法 `gate(listener)`：登記一位 pre-execute 閘門，`(exec, next) => allow | deny | ask`，鏈底 `allow`（照 dsh
   `ctx.on('tools/pre-execute')` 的 waterfall）。**消費者**宣告 `^1.2.0`，並在呼叫前檢查 `gate` 存在（`1.0.0`／`1.1.0` 的提供者沒有它，缺就是啟動失敗而不是靜靜少一道閘）。**折進去**：
@@ -216,7 +216,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   - **三個入口各自接**：`FoldedContributions`（樹上相容層）與 `DetachedContributions`（沒有樹的路徑，`mountDetached` 掛一次就卸載，所以消費者必須在 `apply` 當下把服務抓進閉包）各加 `preSteps` 欄；內建列加在四處（`#create`、`mountDetached`、`REQUIRED_TREE_ENTRY_IDS`、`cordis-root.ts` 的列表）。
   - **消費者**：`agent-instructions` 的 `inject` 是 `need(agentLoopToken, '^1.0.0')` 加 `need(fsToken, '^1.1.0')`，`apply` 裡把兩個服務抓進閉包，listener 每次呼叫 `fs.forCall(invocation)`；不是 `ok`、或 `backend()` 是 `undefined` 就不注入。**行為逐字不變**（Q4）：記號、渲染、四個候選、`maxBytes`、middleware 名字與位置、日誌 `source`、每次 invoke 一格、摘要後下一次 invoke 補回。
   - **紅燈**：`pre-step-middleware.test.ts`（宿主 middleware 本身）與 `agent-instructions-on-tree.test.ts`（B：列與快照；D：32 輪有沒有 `--workspace` 都一樣；E：兩條以上 serve thread 各有不同 AGENTS.md、root／同步子代理 worker 與 general-purpose／背景子代理、CLI／serve／無樹三個入口，每一格兩個方向都量）。舊外殼（`NexusPlugin`、`createAgentInstructionsMiddleware`）搬到 `agent-instructions.fixture.ts`，給還在相容層組裝的測試用。
-  - **已知限制**：「只剩一筆登記時不看 `thread_id`」（見第八個接縫）對注入也成立——只活著一條 thread 時，注入讀的是那一條的工作區。這張不修。
+  - **只剩一筆登記時也核對 `thread_id`**（見第八個接縫，#1482）：對不屬於那一筆的呼叫，注入拿到 `ambiguous`，不注入。
 - **工具接縫 1.1.0：登記選項**（`@nexus/tools`，#1458 Q3 (a)）。`register(tool, options?)` 多一個**選配**的第二參數：`rootOnly`（`true`，或 `{ message, error? }` 帶自己的拒絕句與碼，
   照 dsh `DELEGATED_CALLER`）與 `outputSchema`（有 `safeParse` 的東西，成功輸出照它驗）。選項隨工具一起折進 thread 的註冊點（`RowVerdict.active.toolOptions`、
   `registerFolded`）；**沒有 `scope`**（`rootOnly` 配 `scope` 是矛盾，註冊點當場拋，這裡不開這個口）。次版號升級：`^1.0.0` 的舊消費者照常（不傳第二參數），要用選項的消費者宣告 `^1.1.0`。
@@ -401,7 +401,7 @@ harness 只跑 import 圖上的測試，而 gate 是動態載入、不在圖上�
 
 **身分三種位置**：root 與同步子代理的 `thread_id` 是 root 那一條（子代理身分靠 `checkpoint_ns`）；背景子代理的
 `thread_id` 是它自己的日誌 id（`<root>/<runId>`）並帶 `nexus_background_session`。`forCall` 就是用這個挑會話註冊表：
-綁著一張時不看 `thread_id`（跟以前一樣），綁著多張時依 `thread_id` 挑**恰好認得它的那一張**，挑不出仍回 `ambiguous`。
+相容層綁著一張時不看 `thread_id`（跟以前一樣）；樹上的行程級查找一張也核對（#1482）。綁著多張時依 `thread_id` 挑**恰好認得它的那一張**，挑不出仍回 `ambiguous`。
 
 **這條規則怎麼被守住**：`@nexus/sdk` 的 `checkSharedAcrossThreads` 是一格通用的一致性檢查——同一份序列各條
 thread 各自掛一份跑一遍當基準，再掛**一份**服務所有 thread 跑一遍，兩邊結果對不上就紅並指名是第幾步、哪條 thread、
@@ -428,14 +428,14 @@ thread 各自掛一份跑一遍當基準，再掛**一份**服務所有 thread �
 **fs 查找與核准閘門（#1466 起）**：submit-record 是第四顆逐條 thread 的插件、第一顆**要讀寫工作區磁碟**的。
 它的 backend 是逐條 thread 的物件（會話歷史與工具結果暫存的路由帶 thread 的鑰匙，`--workspace` 的 fence 是每條 thread 一顆的 controller），
 所以走**同一張登記表**：`attachSession` 登記一筆，同時帶會話註冊表與 fs 把手，兩個查找共用 `pickBoundForCall`。
-**單一登記時不看 `thread_id`** 的退化在 fs 這邊是安全邊界（見第八個接縫的限制），多條 thread 同時活著才真的靠 `thread_id` 分——
+**單一登記時也核對 `thread_id`**（#1482，見第八個接縫），fs 這邊是安全邊界；多條 thread 同時活著靠 `thread_id` 分——
 兩條 serve thread 各有自己的工作區、交錯跑、檔案互不串線，是同檔 E 那一組量的。
 背景子代理（`<root>/<runId>`）解析到的是**同一份 fs 把手與同一個 backend**（#1466 Q2-2 實測）：它叫 `submit_record` 時閘門釘 policy-never、沒有人被問到、什麼都不寫，所以沒有「寫進誰的工作區」的問題。
 
 **交付與工作區事實（#1469 起）**：present 是第五顆逐條 thread 的插件，也是會話查找的第三個消費者（寫進哪一份日誌）、fs 查找的第二個消費者（讀哪一條 thread 的 backend）。它另外用了兩樣新接縫：
 `tools/result` 觀察者（`tools` 服務 `1.3.0`，交付在結果說成功的當下同步寫，次序 `tool/call` → `deliverables/presented` → `tool/result` 與遷出前逐筆相同）與 fs 把手上的工作區事實
 （`hasWorkspace()`、併了 mounts 的 `offWorkspacePrefixes()`，`fs` `1.1.0`）。三個入口各有一條會紅的測試（`present-on-tree.test.ts` 的「三個入口各有一條」：CLI 落盤日誌、`boot('cli')` 的樹、沒有樹的呼叫端；serve 是同檔 E 組的
-`assembly.create` 形狀，端到端另有 `serve-scripted-provider.test.ts`）。**「只剩一筆登記時不看 `thread_id`」的限制（見第八個接縫）對交付也成立**：只活著一條 thread 時，交付寫進的是那一條——這張不修。
+`assembly.create` 形狀，端到端另有 `serve-scripted-provider.test.ts`）。**「只剩一筆登記時也核對 `thread_id`」（見第八個接縫，#1482）對交付同樣成立**：不屬於那一筆的呼叫拿到 `ambiguous`，不會寫進別條 thread。
 
 **交付表的壽命（#1469 Q3 (a)）**：表在 `apply` 的閉包裡，一個行程一張（`apply` 只跑一次），鍵維持 `thread \0 位址 \0 callId`。以前組裝收掉時整張清空（`registry.lifecycle.onDispose`）；上樹之後**拿掉那一行，也不改成列卸載（`ctx.effect`）時清**——
 開著的 thread 握著快照裡的工具與觀察者，列一卸表就清的話，懸著的交付會寫不進日誌。

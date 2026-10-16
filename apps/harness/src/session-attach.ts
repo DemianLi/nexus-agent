@@ -49,7 +49,7 @@ export interface SessionAttachers {
   attachSession(
     sessions: SessionRegistry,
     backgroundPort?: BackgroundParentPort,
-  ): (() => void) & { readonly background?: BackgroundSubagentControl };
+  ): (() => void | Promise<void>) & { readonly background?: BackgroundSubagentControl };
 }
 
 /** 把三個口組成 {@link AttachSessions}。順序：遙測、不變量、參與者；收的時候倒過來。 */
@@ -64,11 +64,16 @@ export function composeAttachSessions(attachers: SessionAttachers): AttachSessio
       detach: async () => {
         // **參與者先收，比不變量還早**：它是唯一寫得動日誌的那一個，先讓它停手，檢查才還在看著它最後
         // 那幾筆。反過來收的話，關機途中寫進去的東西沒人檢。
-        detachSession();
-        // 不變量再退訂：它只是一個訂閱，退掉不會有東西要排空。
-        detachInvariants?.();
-        // 遙測最後收，理由同 `agent-factory.ts`：後端可能是某個 plugin 開的。
-        await detachTelemetry?.();
+        // **有背景 host 時，這一步會先等它收完**（被中止那一輪的 `turn/end`、結算通知都寫完，#1482），不變量與遙測因此也看得到
+        // 那幾筆；它拋錯也不能讓後面兩個漏收。
+        try {
+          await detachSession();
+        } finally {
+          // 不變量再退訂：它只是一個訂閱，退掉不會有東西要排空。
+          detachInvariants?.();
+          // 遙測最後收，理由同 `agent-factory.ts`：後端可能是某個 plugin 開的。
+          await detachTelemetry?.();
+        }
       },
     };
   };

@@ -1118,20 +1118,27 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         // **登記排在這一步**：綁上、背景 host 建好、參與者訂閱都成功之後才登記（#1463），前面任何一步拋，樹上的查找都不會
         // 留下一張沒收的註冊表。同一條 thread id 重組時後登記的取代先登記的，見 `thread-sessions.ts`。
         const unregister = options.sessionLookup?.register(sessions, fsService);
-        const detach = () => {
+        const teardown = (): void => {
           unobserve();
           unbind();
           unregister?.();
           for (const stop of [...runners].reverse()) stop();
           runners.length = 0;
-          if (closeHost !== undefined) {
-            const closing = closeHost().finally(() => hostCloses.delete(closing));
-            hostCloses.add(closing);
+        };
+        if (closeHost === undefined) return teardown;
+        // **先等背景 host 收完，才撤登記**（#1482，照 dsh：先收子代理、flush，最後才 dispose）。`closeHost()` 會中止進行中的輪並等它收尾，
+        // 那一輪還會寫 `turn/end`（aborted）、結算通知，輪裡還在跑的工具也還會問會話與 fs 的查找：登記、綁定、參與者都得還在——
+        // 撤得太早，行程裡剛好只剩另一條 thread 時，那一輪的查找會被挑到別人身上；落盤也先退訂的話，這些事件到不了後端。
+        const detach = async (): Promise<void> => {
+          const closing = closeHost().finally(() => hostCloses.delete(closing));
+          hostCloses.add(closing);
+          try {
+            await closing;
+          } finally {
+            teardown();
           }
         };
-        return closeHost === undefined
-          ? detach
-          : Object.assign(detach, { background: closeHost.control });
+        return Object.assign(detach, { background: closeHost.control });
       },
       compileSubagent,
       /**

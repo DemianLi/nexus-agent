@@ -42,6 +42,13 @@ export interface SessionLookupRegistrar {
   register(sessions: SessionRegistry, fs?: FsService): () => void;
 }
 
+/**
+ * 行程級查找只剩一筆登記時**也核對 `thread_id`**（[#1482](https://github.com/DemianLi/nexus-agent/issues/1482)）。行程裡別條 thread 剛好只剩這一筆，
+ * 不代表這次呼叫屬於它——一條 thread 收尾途中還在跑的工具就是這樣被挑到別人身上的（寫進別條 thread 的日誌、讀寫別條 thread 的 fs，而 fs 是
+ * 安全邊界）。相容層的 `registry.sessions.forCall` 與沒帶 `thread_id` 的呼叫不跟著改；挑法仍只寫在 core 的 `pickBoundForCall` 一處。
+ */
+const VERIFY_SINGLE = { verifySingle: true } as const;
+
 /** 一條 thread 的登記：同一次組裝的兩樣東西，**一起登記、一起取代、一起撤**。 */
 interface ThreadEntry {
   readonly sessions: SessionRegistry;
@@ -64,7 +71,7 @@ export class ThreadSessions implements SessionLookupRegistrar {
   }
 
   /**
-   * 這次呼叫該寫進哪一份日誌。挑法是 core 的 {@link pickSessionForCall}：沒有就 `not-attached`、一張不看 `thread_id`、
+   * 這次呼叫該寫進哪一份日誌。挑法是 core 的 {@link pickSessionForCall}：沒有就 `not-attached`、一張時核對 `thread_id`（{@link VERIFY_SINGLE}）、
    * 多張依 `thread_id` 挑恰好一張。
    *
    * @param config - 工具 handler 的第二個參數。
@@ -73,18 +80,24 @@ export class ThreadSessions implements SessionLookupRegistrar {
     return pickSessionForCall(
       [...this.#live.values()].map((entry) => entry.sessions),
       config,
+      VERIFY_SINGLE,
     );
   }
 
   /**
    * 這次呼叫該讀寫哪一條 thread 的 fs（#1466）。**挑的是同一筆登記**：用的是 core 的 {@link pickBoundForCall}，與
-   * {@link forCall} 同一個演算法——沒有就 `not-attached`、只有一筆不看 `thread_id`、多筆依 `thread_id` 挑恰好一筆、
+   * {@link forCall} 同一個演算法——沒有就 `not-attached`、只有一筆也核對 `thread_id`、多筆依 `thread_id` 挑恰好一筆、
    * 算不出位址是 `unknown-caller`。挑中的那一筆沒有 fs 把手（登記時沒給）當 `not-attached`：對模型是同一句話。
    *
    * @param config - 工具 handler 的第二個參數。
    */
   fsForCall(config: unknown): FsLookup {
-    const picked = pickBoundForCall(this.#live.values(), (entry) => entry.sessions, config);
+    const picked = pickBoundForCall(
+      this.#live.values(),
+      (entry) => entry.sessions,
+      config,
+      VERIFY_SINGLE,
+    );
     if (picked.kind !== 'ok') return picked;
     const fs = picked.bound.fs;
     return fs === undefined

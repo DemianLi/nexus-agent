@@ -361,9 +361,14 @@ export interface BackgroundSubagentControl {
 /**
  * `attachSession` 回的收線函式。**上面掛著 `background`**：這份組裝有背景派出（且接上了 host）時，wire 對單一背景子代理
  * 傳話、單獨停的控制面（[#865](https://github.com/DemianLi/nexus-agent/issues/865)）；沒有就缺席，wire 回
- * `subagent_not_found`。掛在收線函式上是為了不動 cli 與其他呼叫端的簽名——它們只當作 `() => void` 用。
+ * `subagent_not_found`。掛在收線函式上是為了不動 cli 與其他呼叫端的簽名。
+ *
+ * **有背景 host 時回一個 promise，要等它兌現**（[#1482](https://github.com/DemianLi/nexus-agent/issues/1482)）：收線先中止並等背景 host 收完
+ * （含被中止那一輪寫完 `turn/end`、結算通知落進日誌），才撤會話與 fs 的登記、退訂、收 runner。沒有背景 host 就是同步收完、回 `undefined`。
  */
-export type SessionDetach = (() => void) & { readonly background?: BackgroundSubagentControl };
+export type SessionDetach = (() => void | Promise<void>) & {
+  readonly background?: BackgroundSubagentControl;
+};
 
 interface Job {
   readonly runId: string;

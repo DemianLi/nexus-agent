@@ -35,12 +35,12 @@
  * （#1421 Q2 (b)），這張不做。所以這裡**只轉出型別**，`@nexus/core` 放 `peerDependencies`（不能讓安裝結果出現第二份 core）。
  * **撤除條件**：與 `@nexus/session`、`@nexus/projections` 同（Q2 (b)）。
  *
- * ## 已知限制：「只剩一筆登記時不看 `thread_id`」
+ * ## 只剩一筆登記時也核對 `thread_id`（#1482）
  *
- * 挑法是 #1418 定下的那一條：行程級的查找在**只剩一筆**登記時不看 `thread_id`，直接回那一筆。對會話日誌這是無害的退化（只有
- * 一條 thread 活著，沒有別的日誌可寫錯）；**對 fs 這是安全邊界**：fence 是每條 thread 各一顆，萬一一條 thread 的登記已經被
- * 撤了、而它的工具呼叫還在飛，唯一剩下的另一條 thread 會被當成它的主人，寫進別人的 backend、套用別人的 fence。這張不修它
- * （照 #1418 原樣，改挑法要 demian 拍板）；它與「閒置 thread 回收」那張卡的關係見 `docs/plugin-contract.md`。
+ * 行程級的查找在**只剩一筆**登記時，呼叫帶了 `thread_id` 而那一筆不擁有它，回 `ambiguous`，不把唯一剩下的另一條 thread 當成它的主人
+ * ——**對 fs 這是安全邊界**：fence 是每條 thread 各一顆，一條 thread 收尾途中還在飛的工具若被挑到別人身上，會寫進別人的 backend、
+ * 套用別人的 fence。沒帶 `thread_id` 的呼叫與相容層的 `registry.sessions.forCall` 維持「只有一筆就是它」。挑法仍只寫在 core 的
+ * `pickBoundForCall`；細節與收尾順序見 `docs/plugin-contract.md`。
  *
  * @module
  */
