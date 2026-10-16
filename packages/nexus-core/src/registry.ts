@@ -1224,6 +1224,47 @@ function ownsThread(sessions: SessionRegistry, thread: string): boolean {
 }
 
 /**
+ * **「這次工具呼叫該寫進哪一份會話日誌」的挑法，全樹只有這一份**（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463)
+ * Q1 (a)，Part of #1385；演算法是 #1418 定下的那一條，原樣搬出來）。
+ *
+ * 兩個地方呼叫它，而且只能呼叫它：相容層的 `registry.sessions.forCall`（一次組裝綁著的那幾張註冊表），與宿主在樹上提供的
+ * 「會話查找」服務（行程裡每一條活著的 thread 綁上的那幾張）。它們是同一支實作，所以「多條 thread 同時活著時依 `thread_id`
+ * 認出主人」的語意只在這裡寫一次——不准在別處再寫一份（驗收 G 的「永遠回第一張」突變就改在這裡）。
+ *
+ * - 一張都沒有：`not-attached`。
+ * - 只有一張：**不看 `thread_id`**，與逐條 thread 之前逐位元組相同（手搭的測試呼叫沒有它）。
+ * - 多張：依 {@link callThreadId} 挑「有一份日誌的 id 等於它」的恰好一張；沒帶 `thread_id`、沒有任何一張認得、不只一張認得，
+ *   一律 `ambiguous`——寧可明說也不猜（猜錯是一條 thread 的工具寫進另一條 thread 的日誌，靜默的）。
+ * - 挑到之後算不出位址：`unknown-caller`。
+ * - 成功：`open(address)`——subagent 的日誌在第一次有人要寫的時候才出生（`SessionRegistry` 的偏離第 1 條）。
+ *
+ * @param bound - 這一次查找看得見的註冊表。**只迭代一次**，所以 `Set`、`Map.values()` 都可以。
+ * @param config - 工具 handler 的第二個參數。
+ * @returns 判別得出來的四種結果之一。
+ */
+export function pickSessionForCall(
+  bound: Iterable<SessionRegistry>,
+  config: unknown,
+): SessionLookup {
+  const all = [...bound];
+  if (all.length === 0) return { kind: 'not-attached' };
+  let sessions: SessionRegistry;
+  if (all.length === 1) {
+    [sessions] = all as [SessionRegistry];
+  } else {
+    const thread = callThreadId(config);
+    const owners = thread === undefined ? [] : all.filter((s) => ownsThread(s, thread));
+    if (owners.length !== 1) return { kind: 'ambiguous', count: all.length };
+    [sessions] = owners as [SessionRegistry];
+  }
+  const address = toolCallSessionAddress(config);
+  if (address === undefined) return { kind: 'unknown-caller' };
+  // `open` 而不是 `get`：subagent 的日誌在第一次有人要寫的時候才出生，理由見
+  // `SessionRegistry` 的偏離第 1 條。訂閱者在這一行之內就裝好了。
+  return { kind: 'ok', address, log: sessions.open(address) };
+}
+
+/**
  * 建一個空的 registry。
  * @returns 尚未進入任何 plugin 的 registry。
  */
@@ -1580,27 +1621,8 @@ export function createRegistry(options: CreateRegistryOptions = {}): InternalPlu
     join: (installer) =>
       effect('sessions.join()', (origin) => sessionInstallers.append(installer, origin)),
     installers: () => [...sessionInstallers.entries()],
-    forCall(config) {
-      if (boundSessions.size === 0) return { kind: 'not-attached' };
-      // 只綁一張：與逐條 thread 之前逐位元組相同，不看 `thread_id`（手搭的測試呼叫沒有它）。
-      // 綁了不只一張（一份插件套一次、服務好幾條 thread，#1418）：依這次呼叫的 `thread_id` 挑出擁有它的那一張。
-      // 挑不出（沒帶 `thread_id`、沒有任何一張認得、兩張都認得）就仍然是 `ambiguous`——寧可明說也不猜。
-      let sessions: SessionRegistry | undefined;
-      if (boundSessions.size === 1) {
-        [sessions] = boundSessions;
-      } else {
-        const thread = callThreadId(config);
-        const owners =
-          thread === undefined ? [] : [...boundSessions].filter((s) => ownsThread(s, thread));
-        if (owners.length !== 1) return { kind: 'ambiguous', count: boundSessions.size };
-        [sessions] = owners;
-      }
-      const address = toolCallSessionAddress(config);
-      if (address === undefined) return { kind: 'unknown-caller' };
-      // `open` 而不是 `get`：subagent 的日誌在第一次有人要寫的時候才出生，理由見
-      // `SessionRegistry` 的偏離第 1 條。訂閱者在這一行之內就裝好了。
-      return { kind: 'ok', address, log: sessions!.open(address) };
-    },
+    // 挑法住在 `pickSessionForCall`，與樹上的會話查找服務是同一支實作（#1463）。
+    forCall: (config) => pickSessionForCall(boundSessions, config),
     async flush(log) {
       await Promise.all([...boundSessions].map((sessions) => sessions.flush(log)));
     },

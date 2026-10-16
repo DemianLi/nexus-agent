@@ -265,7 +265,7 @@ describe('兩支疊 patch 的演算法：相容層的 applyEntryPatches 與上�
 });
 
 describe('沒遷移的列不上樹，也不會被兩邊各套一次', () => {
-  it('樹上 include 底下只有函式插件那幾列（echo、skills、feedback、ask-user、trajectory、token-meter）；工具只登記一次', async () => {
+  it('樹上 include 底下只有函式插件那幾列（echo、skills、todo、feedback、ask-user、trajectory、token-meter）；工具只登記一次', async () => {
     const dir = scratch();
     const root = newRoot();
     const loaded = await loadDefaultPlugins(
@@ -275,7 +275,15 @@ describe('沒遷移的列不上樹，也不會被兩邊各套一次', () => {
     expect(loaded.plugins.length).toBeGreaterThan(5);
     const tree = await root.tree.context();
     const rows = Object.keys(tree.loader.resolve('include').subtree?.store ?? {});
-    expect(rows).toEqual(['echo', 'skills', 'feedback', 'ask-user', 'trajectory', 'token-meter']);
+    expect(rows).toEqual([
+      'echo',
+      'skills',
+      'todo',
+      'feedback',
+      'ask-user',
+      'trajectory',
+      'token-meter',
+    ]);
   }, 60000);
 });
 

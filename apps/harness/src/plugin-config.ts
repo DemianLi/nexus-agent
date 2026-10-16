@@ -908,6 +908,9 @@ function bindDetached(entry: PluginEntry, id: string): PluginEntry {
           module: meta.module,
           config: entry.config,
           ...(channel === undefined ? {} : { channel }),
+          // 會話查找（#1463）：**這一次組裝自己的 `registry.sessions`**，只看那一份。查找在呼叫當下才問、不在掛載當下
+          // 快取，所以之後 `attachSession` 才綁上來的註冊表也看得到；同一個行程裡兩份無樹組裝各問各的、互不相見。
+          sessionLookup: (config) => registry.sessions.forCall(config),
         }),
       );
     },

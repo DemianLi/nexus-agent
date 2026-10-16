@@ -10,8 +10,9 @@
  * | `skill-sources` | 行程級的技能來源登記處（`@nexus/skills/provider`，#1446），契約服務，一列 | `skills` 服務的提供者（形狀不同：收路徑，不收提供者，偏離登記在 `@nexus/skills`） |
  * | `commands` | 行程級的命令登記處（`@nexus/commands/provider`，#1456），契約服務，一列 | `commands` 服務的提供者 |
  * | `approval-channel` | 行程級的預設答題管道（`@nexus/approval-channel/provider`，#1458），契約服務，一列；**宿主在建樹時給值**，不是插件登記進來的 | （dsh 沒有這一種：它的答題者是 `session.interrupt` 事件的監聽者；偏離登記在 `@nexus/approval-channel`） |
+ * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，#1463），契約服務，一列；**宿主給挑法**（行程裡每一條活著的 thread 綁上的註冊表，`thread-sessions.ts`），不是插件登記進來的 | （dsh 沒有這一種：工具從 `exec.agent.session` 拿；偏離登記在 `@nexus/session`） |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 | `include`（`app-boot` 的 `entry.update({ config: { ...includeConfig, patches } })`） |
- * | `include:<id>` | Include 底下的列，今天是 echo、token-meter、trajectory、skills、feedback 與 ask-user（#1458；模組有 `manifest` 匯出的才上樹） | 各插件 |
+ * | `include:<id>` | Include 底下的列，今天是 echo、token-meter、trajectory、skills、feedback、ask-user 與 todo（#1463；模組有 `manifest` 匯出的才上樹） | 各插件 |
  *
  * ## 清單怎麼進樹
  *
@@ -59,7 +60,7 @@ import type { ApprovalChannel } from '@nexus/approval-channel';
 import { createApprovalChannelProvider } from '@nexus/approval-channel/provider';
 import { createCommandsProvider } from '@nexus/commands/provider';
 import type { CommandEntry } from '@nexus/commands/provider';
-import type { CommandDefinition, ProjectionUnit } from '@nexus/core';
+import type { CommandDefinition, ProjectionUnit, SessionLookup } from '@nexus/core';
 import { Context } from '@nexus/cordis';
 import type { Message } from '@nexus/cordis';
 import Include from '@nexus/cordis-plugin-include';
@@ -70,6 +71,7 @@ import type { ProjectionEntry } from '@nexus/projections/provider';
 import { feedbackToken } from '@nexus/feedback';
 import { ContractError, FIBER_STATE, missingServices } from '@nexus/sdk';
 import type { ServiceToken } from '@nexus/sdk';
+import { createSessionLookupProvider } from '@nexus/session/provider';
 import { createSkillSourcesProvider } from '@nexus/skills/provider';
 import type { SkillSourceEntry } from '@nexus/skills/provider';
 import { createToolsProvider } from '@nexus/tools/provider';
@@ -78,6 +80,7 @@ import type { ToolEntry } from '@nexus/tools/provider';
 import semver from 'semver';
 
 import { declarationSignature, normalizedConfig } from './plugin-row-state.js';
+import { ThreadSessions } from './thread-sessions.js';
 
 /** 工具登記處那一列的 id。 */
 export const TOOLS_ROW_ID = 'tools';
@@ -93,6 +96,9 @@ export const COMMANDS_ROW_ID = 'commands';
 
 /** 答題管道那一列的 id（#1458）。 */
 export const APPROVAL_CHANNEL_ROW_ID = 'approval-channel';
+
+/** 會話查找那一列的 id（#1463）。 */
+export const SESSION_LOOKUP_ROW_ID = 'session-lookup';
 
 /** Include 那一列的 id。 */
 export const INCLUDE_ROW_ID = 'include';
@@ -320,6 +326,9 @@ export class PluginTree {
   #skillSources = createSkillSourcesProvider();
   #commands = createCommandsProvider();
   #approvalChannel: ReturnType<typeof createApprovalChannelProvider>;
+  /** 行程裡每一條活著的 thread 綁上的註冊表（#1463）：`session-lookup` 那一列問它，入口的 `attachSession` 往它登記。 */
+  readonly #threadSessions = new ThreadSessions();
+  #sessionLookup = createSessionLookupProvider((config) => this.#threadSessions.forCall(config));
   /** 串行化 {@link run}。 */
   #chain: Promise<unknown> = Promise.resolve();
   /** 最後一次推給 Include 的設定簽章；一樣就不推。 */
@@ -358,10 +367,18 @@ export class PluginTree {
   }
 
   /**
+   * 這棵樹上活著的 thread 的註冊表（#1463）。**登記面**給 `createNexusAgent` 的 `attachSession`（綁上去之後才登記、撤除掛在它的
+   * detach 上）；**查找面**是樹上 `session-lookup` 那一列，插件只從那裡問。
+   */
+  get threadSessions(): ThreadSessions {
+    return this.#threadSessions;
+  }
+
+  /**
    * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections`、`skill-sources`、`commands`、
-   * `approval-channel` 那五列。
+   * `approval-channel`、`session-lookup` 那六列。
    *
-   * @returns 已掛好 Loader 與上述五列的根。
+   * @returns 已掛好 Loader 與上述六列的根。
    */
   context(): Promise<Context> {
     this.#context ??= this.#build();
@@ -388,6 +405,7 @@ export class PluginTree {
       [SKILL_SOURCES_ROW_ID]: this.#skillSources.Provider,
       [COMMANDS_ROW_ID]: this.#commands.Provider,
       [APPROVAL_CHANNEL_ROW_ID]: this.#approvalChannel.Provider,
+      [SESSION_LOOKUP_ROW_ID]: this.#sessionLookup.Provider,
       [INCLUDE_ROW_ID]: Include,
     });
     await this.#create(root, { id: TOOLS_ROW_ID, name: `cordis:${TOOLS_ROW_ID}` });
@@ -397,6 +415,10 @@ export class PluginTree {
     await this.#create(root, {
       id: APPROVAL_CHANNEL_ROW_ID,
       name: `cordis:${APPROVAL_CHANNEL_ROW_ID}`,
+    });
+    await this.#create(root, {
+      id: SESSION_LOOKUP_ROW_ID,
+      name: `cordis:${SESSION_LOOKUP_ROW_ID}`,
     });
     await root.loader.await();
     return root;
@@ -838,6 +860,12 @@ export interface DetachedMount {
    * 不給等於「宿主沒有指定」（ask-user 在呼叫當下拒絕）。
    */
   readonly channel?: ApprovalChannel;
+  /**
+   * 這一次單獨掛上時的會話查找（#1463）。**沒有樹的呼叫端也要有**：`bindDetached` 把那一次組裝自己的
+   * `registry.sessions.forCall` 交進來——**只看那一份註冊表**，所以同一個行程裡兩份無樹組裝互不相見。不給等於這次組裝沒接上
+   * 會話（`not-attached`，插件在呼叫當下拒絕）。
+   */
+  readonly sessionLookup?: (config: unknown) => SessionLookup;
 }
 
 /** {@link mountDetached} 取出的東西：這一列登記的工具、投影單元、技能來源路徑、命令定義，與它提供、宿主取到的服務。 */
@@ -868,6 +896,9 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
   const skillSources = createSkillSourcesProvider();
   const commands = createCommandsProvider();
   const approvalChannel = createApprovalChannelProvider(mount.channel);
+  const sessionLookup = createSessionLookupProvider(
+    mount.sessionLookup ?? (() => ({ kind: 'not-attached' })),
+  );
   const root = new Context();
   const contractErrors = new Map<string, ContractError>();
   root.logger.exporter({
@@ -887,6 +918,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
       [SKILL_SOURCES_ROW_ID]: skillSources.Provider,
       [COMMANDS_ROW_ID]: commands.Provider,
       [APPROVAL_CHANNEL_ROW_ID]: approvalChannel.Provider,
+      [SESSION_LOOKUP_ROW_ID]: sessionLookup.Provider,
       plugin: mount.module,
     });
     const create = (options: EntryOptions) =>
@@ -896,6 +928,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
     await create({ id: SKILL_SOURCES_ROW_ID, name: `cordis:${SKILL_SOURCES_ROW_ID}` });
     await create({ id: COMMANDS_ROW_ID, name: `cordis:${COMMANDS_ROW_ID}` });
     await create({ id: APPROVAL_CHANNEL_ROW_ID, name: `cordis:${APPROVAL_CHANNEL_ROW_ID}` });
+    await create({ id: SESSION_LOOKUP_ROW_ID, name: `cordis:${SESSION_LOOKUP_ROW_ID}` });
     await create({
       id: mount.id,
       name: 'cordis:plugin',

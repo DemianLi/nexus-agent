@@ -26,12 +26,13 @@ import {
   GOAL_GET_TOOL_NAME,
   GOAL_UPDATE_TOOL_NAME,
 } from '@nexus/plugin-goal';
-import { createTodoPlugin, TODO_TOOL_NAME, todoAmbiguousMessage } from '@nexus/plugin-todo';
+import { TODO_TOOL_NAME, todoAmbiguousMessage } from '@nexus/plugin-todo';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { createTodoPlugin } from './todo.fixture.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
 

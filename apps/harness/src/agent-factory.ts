@@ -87,6 +87,7 @@ import type { SystemPromptVariables } from '@nexus/plugin-system-prompt';
 import { CompositeBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BackgroundDelegation } from './background-delegation.js';
+import type { SessionLookupRegistrar } from './thread-sessions.js';
 import { subagentDefinitionValidator } from './subagent-definition.js';
 import type { DelegationBaseline } from './subagent-model-selection.js';
 import type { BackgroundSubagentsOptions } from './background-delegation.js';
@@ -265,6 +266,12 @@ export interface CreateNexusAgentOptions {
    * 所以續接不會第二次寫）。取樣在呼叫端（serve 的 `createAgent`）——這裡只負責「日誌上有一顆」。
    */
   readonly modelSelectionPolicy?: { readonly allowedModels: readonly string[] };
+  /**
+   * 行程級的會話查找登記面（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463)）：`attachSession` 在綁上註冊表**之後**
+   * 才往它登記，撤除掛在回傳的 detach 上。**省略就不登記**——沒有樹的組裝（手搭清單的測試、eval）只有相容層自己的
+   * `registry.sessions`，樹上那一列的查找走 `bindDetached` 交進去的那一份。兩個產品入口都走樹，由 `PluginTree.threadSessions` 給。
+   */
+  readonly sessionLookup?: SessionLookupRegistrar;
   /**
    * 註冊 subagent 的當下驗它的定義（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 3 項）：`model` 是字串時要在型錄裡、`reasoningEffort` 要是
    * 那顆模型宣告過而且今天實作的等級，認不得當場拋錯（指名註冊者），不等到委派。型錄由組裝點傳進來（`subagentDefinitionValidator`）；
@@ -1110,9 +1117,13 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           if (installers.length > 0)
             runners.push(createSessionRunner({ address, log, installers }));
         });
+        // **登記排在這一步**：綁上、背景 host 建好、參與者訂閱都成功之後才登記（#1463），前面任何一步拋，樹上的查找都不會
+        // 留下一張沒收的註冊表。同一條 thread id 重組時後登記的取代先登記的，見 `thread-sessions.ts`。
+        const unregister = options.sessionLookup?.register(sessions);
         const detach = () => {
           unobserve();
           unbind();
+          unregister?.();
           for (const stop of [...runners].reverse()) stop();
           runners.length = 0;
           if (closeHost !== undefined) {

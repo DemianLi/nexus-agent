@@ -13,7 +13,8 @@ capabilities 的執行、版本路由與兩版並存不在這一刀，見文末�
 [`packages/nexus-commands`](../packages/nexus-commands)（`@nexus/commands`，第四個，#1456）與
 [`packages/nexus-feedback`](../packages/nexus-feedback)（`@nexus/feedback`，第五個，#1456，**第一個由插件提供、宿主消費的服務**）、
 [`packages/nexus-approval-channel`](../packages/nexus-approval-channel)（`@nexus/approval-channel`，第六個，#1458，**宿主在建樹時給值的預設答題管道**）與
-[`packages/nexus-tool-result`](../packages/nexus-tool-result)（`@nexus/tool-result`，#1458，工具回結果的三個寫法，**不是接縫**，只是單向轉出）。
+[`packages/nexus-tool-result`](../packages/nexus-tool-result)（`@nexus/tool-result`，#1458，工具回結果的三個寫法，**不是接縫**，只是單向轉出）與
+[`packages/nexus-session`](../packages/nexus-session)（`@nexus/session`，#1435 起單向轉出會話日誌的讀法，**#1463 起多一個接縫：第七個，會話查找**，宿主在樹上提供「這次呼叫的會話」）。
 
 ## 這份規範管誰
 
@@ -157,6 +158,22 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     （不把 `channelForThread` 放進 `inject`：選配的相依會讓匯出形式那一格紅）。服務**一定在**、值可能是 `undefined`，所以必要相依照常成立，
     「沒有人指定」是呼叫當下拒絕（fail-closed，#669），不是載入失敗。服務的方法是屬性閉包、不碰 `this.ctx`，卸載之後開著的 thread 手上的那份照樣能問。
   - **為什麼不是提供者掛 `provide`**：兩個進入點的答題者是**情境**（有沒有人在），不是一個可以註冊的東西；放進 `cordis.yml` 的一列要有設定，而這個值沒有設定、也不該被 patch 改。
+- **第七個接縫：會話查找**（`@nexus/session`，#1463 Q1 (a)；逐條 thread 接縫的第三段，#1418 → #1458 → 這一張）。形狀同第六個：**值由宿主給、插件消費**，但它是**逐次呼叫**才有答案的服務。
+  - **定義套件**：token（`sessionLookupToken`，服務名 `sessionLookup`，契約版本 `1.0.0`）、`SessionLookupService`（只有 `forCall(invocation: unknown): SessionLookup`），
+    與 `@nexus/core` 的 `SessionLookup`、`SessionAddress`、`TodoItem`、`TodoStatus`、`TODO_STATUSES` 的**單向轉出**（core 放 `peerDependencies`，同前例；`todo/write` 的事件擴充搬進 core 的 `session-log.ts`，
+    因為它原本寫在 `@nexus/plugin-todo` 的 `declare module`，消費者不能再 import 那個套件）。
+  - **提供者**：`@nexus/session/provider` 的 `createSessionLookupProvider(lookup)`，宿主掛一列 `session-lookup`（`PluginTree.#build` 與 `mountDetached` 兩處，列在必掛名單，`startup-audit.ts`）。
+    查找函式是**行程級的**：樹那一邊是 `apps/harness/src/thread-sessions.ts` 的 `ThreadSessions`（每條活著的 thread 一張註冊表，鍵是 root 日誌 id）；沒有樹的那一邊是**那一次組裝自己的** `registry.sessions.forCall`
+    （`bindDetached` 交給 `mountDetached`），兩份無樹組裝互不相見。
+  - **挑法只有一份實作**：`@nexus/core` 的 `pickSessionForCall(bound, config)`——沒有就 `not-attached`；一張不看 `thread_id`；多張依 `thread_id` 挑「有一份日誌的 id 等於它」的**恰好一張**，挑不出一律 `ambiguous`（寧可明說也不猜）；
+    挑到之後算不出位址是 `unknown-caller`。相容層的 `registry.sessions.forCall` 與樹上的服務**都是它**，不另寫一份。
+  - **登記與撤除**：`createNexusAgent` 的 `attachSession` 在綁上註冊表、背景 host 建好、參與者訂閱成功之後才登記，撤除掛在它回傳的 detach 上（與解綁、退訂同一個函式）。**登記排在那一步的最後**，所以組裝在中間任何一步拋，都不會在行程級的查找裡留下沒收的註冊表。
+    **同一條 thread id 重組**時後登記的**取代**先登記的（`ThreadSessions` 以 root 日誌 id 為鍵），舊的那一份遲到的 detach 只撤自己；所以行程裡不會有兩張都認得同一條 thread 的登記（那會讓下一次呼叫變成 `ambiguous`）。
+    會重組同一個 id 的時機：(1) serve 的 thread 在 `attachSessions` 之後、`ready.set` 之前建不起來，條目被刪、下一次請求同 id 重組，舊的那份沒人收（`wire-handler.ts` 的 catch 只收 `threadAgent`——這是 #1463 之前就有的缺口，沒有在這一張補）；
+    (2) 同一棵樹上先後組同一個 id（測試、同一個行程裡 `resume` 接回同一份日誌）；(3) 行程重啟是新的一棵樹，沒有殘留。
+  - **消費者**：todo 的 `inject` 只要 `need(sessionLookupToken, '^1.0.0')`，`apply` 當下 `service(ctx, token)` 把**服務**抓進閉包，`forCall` 在**呼叫當下**才問。服務方法是屬性閉包、不碰 `this.ctx`，樹上那一列卸載之後開著的 thread 照樣寫得進自己的日誌（同 #1456 的快照語意）。
+  - **三個入口各自接，各有一條會紅的測試**（`apps/harness/src/todo-on-tree.test.ts`）：CLI 與 serve 都是 `cordis-root.ts` 的 `boot` 把 `tree.threadSessions` 交進相容層（`compatLayer.create` → `createCliAgent` → `attachSession`），沒有樹的路徑走 `bindDetached` → `mountDetached`。
+    **宿主的義務**：載入了樹上的插件、卻不經 `root.boot` 就呼叫 `createCliAgent`，todo 會回 `not-attached`（產品路徑一律 boot）。
 - **工具接縫 1.1.0：登記選項**（`@nexus/tools`，#1458 Q3 (a)）。`register(tool, options?)` 多一個**選配**的第二參數：`rootOnly`（`true`，或 `{ message, error? }` 帶自己的拒絕句與碼，
   照 dsh `DELEGATED_CALLER`）與 `outputSchema`（有 `safeParse` 的東西，成功輸出照它驗）。選項隨工具一起折進 thread 的註冊點（`RowVerdict.active.toolOptions`、
   `registerFolded`）；**沒有 `scope`**（`rootOnly` 配 `scope` 是矛盾，註冊點當場拋，這裡不開這個口）。次版號升級：`^1.0.0` 的舊消費者照常（不傳第二參數），要用選項的消費者宣告 `^1.1.0`。
@@ -332,7 +349,7 @@ harness 只跑 import 圖上的測試，而 gate 是動態載入、不在圖上�
 
 | 規則 | 怎麼做 | 為什麼 |
 | --- | --- | --- |
-| **逐條 thread 的東西，呼叫當下才拿** | 要會話日誌用 `registry.sessions.forCall(config)`，要答題管道用 `registry.services.get(CHANNEL_FOR_THREAD_SERVICE)?.(callThreadId(config))`；**這支函式沒提供、或提供了但對這條 thread 回 `undefined`，都退回 `channel`**。工具 handler 與 middleware 都從呼叫設定的 `configurable.thread_id` 拿身分，`PipelineExecution.thread` 是同一個值 | `apply` 只跑一次；`thread_id` 在 root、同步子代理、背景子代理三種位置都到得了 handler 與 middleware（`apps/harness/src/thread-id-reaches-handlers.test.ts` 實測） |
+| **逐條 thread 的東西，呼叫當下才拿** | 要會話日誌，相容層的插件用 `registry.sessions.forCall(config)`、**樹上的插件用 `sessionLookupToken` 服務的 `forCall(config)`**（#1463，兩者是同一支 `pickSessionForCall`），要答題管道用 `registry.services.get(CHANNEL_FOR_THREAD_SERVICE)?.(callThreadId(config))`；**這支函式沒提供、或提供了但對這條 thread 回 `undefined`，都退回 `channel`**。工具 handler 與 middleware 都從呼叫設定的 `configurable.thread_id` 拿身分，`PipelineExecution.thread` 是同一個值 | `apply` 只跑一次；`thread_id` 在 root、同步子代理、背景子代理三種位置都到得了 handler 與 middleware（`apps/harness/src/thread-id-reaches-handlers.test.ts` 實測） |
 | **狀態以日誌為準，閉包裡的暫存表鍵要帶 thread** | 暫存表（例如 present 的「已呼叫、尚未落定」）的鍵是 `thread \0 位址 \0 callId`，不是 `callId` | 模型給的 `tool_call.id` 是各 thread 各自編號的，兩條 thread 同時懸著同一個 `callId` 是會發生的 |
 
 **身分三種位置**：root 與同步子代理的 `thread_id` 是 root 那一條（子代理身分靠 `checkpoint_ns`）；背景子代理的
@@ -354,6 +371,9 @@ ask-user 在 #1458 遷上樹，轉接器照留，改成對「行程級的預設�
 **宿主的義務：進入點建樹時要把自己的答題管道交進去。** 不交就是「沒有指定」，ask-user 在呼叫當下拒絕（`NO_CHANNEL_MESSAGE`）；
 拿掉任何一個進入點的那一行交接，`ask-user-assembly.test.ts`（`runCli`、`runServe`）與 `ask-user-on-tree.test.ts` 都會紅。
 同一個行程裡的兩份無樹組裝（`bindDetached`）各自從自己組裝根的 `channel` 讀，不共用。
+
+**會話查找（#1463 起）**：todo 是第三顆逐條 thread 的插件，也是第一顆「寫進會話日誌」的：它只消費樹上 `session-lookup` 那一列的**行程級服務**，每次呼叫依 `configurable.thread_id` 挑（root、同步子代理、背景子代理、resume 四種呼叫形狀都量過，且全都是「另一條 thread 活著」的情況——
+單條 thread 時 `forCall` 根本不讀 `thread_id`，那種情況量不出任何東西）。這一格的 `checkSharedAcrossThreads` 轉接器直接對服務量。
 
 **一個前提**：背景子代理的日誌在送出時就已經開好（`background-subagents.ts` 的 `start()`，`sessions.open` 在 `submit`
 拉起背景圖之前），`forCall` 靠日誌 id 認出它屬於哪一張。日後改成延後才開的話，多張綁定下背景那一輪的第一筆會回 `ambiguous`。
@@ -385,17 +405,20 @@ ask-user 在 #1458 遷上樹，轉接器照留，改成對「行程級的預設�
 | 卡上寫「會話位址加上 thread 身分」，實作是另外加 `exec.thread` 與 `callThreadId`，`SessionAddress` 沒動 | **對卡上字面的改動，不是對 dsh 的偏離** | `SessionAddress` 是**一張 `SessionRegistry` 之內**的位址：每張註冊表就是一條 thread（根日誌 id 就是那條 thread 的 id、子代理日誌 id 是 `<root>/<runId>`，`session-registry.ts`），`sessionAddressKey` 只用來在那一張裡當 Map 鍵。thread 在「挑哪一張註冊表」那一步就用掉了，放進位址會在同一張表裡重複一份永遠相同的值。實測的足跡：24 個檔案提到 `SessionAddress`，原始碼與測試裡有 38 處 `kind: 'root'`、33 處 `kind: 'subagent'` 的字面比對、20 個檔案走 `toolCallSessionAddress`——加欄位要全部改，不加成可選欄位則又回到「沒填就挑不出」。而且背景子代理的 `thread_id` 本身就是 `<root>/<runId>`，已經含 `runId`，放進位址會有兩種寫法指同一個身分（`thread-id-reaches-handlers.test.ts` 量到）。所以 thread 走呼叫設定（`callThreadId`），在 `forCall` 與 `exec.thread` 用 |
 | `live-model` 的 `retryPolicy.mode` 只收 `normal`，`always` 拒收（#1427） | 產品需求超出 dsh | dsh 的 `retryPolicy` 有 `normal` 與 `always` 兩種模式（`packages/llm/llm/src/retry-policy.ts:37-57`），`always` 對每一次模型請求失敗無限重試到成功、取消或卸載。我們是企業內部聊天機器人：一輪沒有盡頭，中段失敗每次都重付整個回覆，無限重試會無限重付。其餘照 dsh：`mode` 寫了就必填，`maxRetries`／`retryableCodes`／`backoff` 逐條照 `resolveRetryPolicy`／`resolveBackoff` 驗（登記在 `apps/harness/src/settings/live-model.ts` 檔頭「偏離二」）。**撤除條件**：demian 提出需要無限重試的情境 |
 | 插件自我停用只在行程裡停著，不改清單、不寫檔，宣告沒變就不重掛（#1424，demian Q1 (b)） | 表達不出來，退到最接近的實作 | dsh 的 Include 把樹側的變更與插件自我停用寫回根檔，持久化靠它；我們關掉了寫回（變更紀錄是唯一的寫入口，決議 §3-5 第 18 條），所以自我停用只改記憶體。dsh 在這一點上其實也是行程內的：每次開機重寫根檔（`apps/cli/src/profile-boot.ts:152-172`），任何一次協調都會把 Include 的樹重疊一遍、把停用的列蓋回啟用（未實測的推論）。我們每條 thread 都重推一次清單，照 dsh「每次協調都蓋回」就是每條 thread 重掛一次的閃動；而「每條 thread 重讀清單」源自 #1416 Q3 (a) 的快照語意，這條偏離跟著它走。所以：宿主記下停用當時的宣告（整份，簽章輸入是列 id、模組名、設定三格，序列化用 `rowKey` 同一支 `stable-stringify.ts`），**宣告沒變就替那一列推一條 `{ id, disabled: true }` 給 Include**，不論 Include 怎麼重疊都維持停用；宣告改了或重啟才重試。紀錄多一筆只記不折的 `self-disabled`。**撤除條件**：讀清單改成不是每條 thread 都推 |
+| 會話查找是行程級的服務，工具呼叫當下依 `thread_id` 從活著的註冊表挑，不是 dsh 的 `exec.agent`（#1463，demian Q1 (a)） | 表達不出來，退到最接近的實作 | dsh 的工具拿到的 `exec` 帶著 `agent`，指到它所屬的會話（工具分發點在 dsh 自己的 pipeline）。我們的工具分發點是 LangGraph 的 `ToolNode`，handler 拿到的只有呼叫設定，沒有地方塞一個宿主算好的會話。退到最接近的：**身分隨呼叫設定傳進來**（`configurable.thread_id` 與 `checkpoint_ns`，`thread-id-reaches-handlers.test.ts` 實測三種位置都到得了），宿主在樹上提供一個查找服務，呼叫當下才問、並從那一刻的活著的註冊表挑。**撤除條件**：工具分發自己握分發點（自寫 pipeline）時，把身分放進 `exec`，這個服務與 `pickSessionForCall` 一起退場 |
+| `TodoItem`、`TodoStatus`、`TODO_STATUSES` 與 `todo/write` 事件的型別擴充留在 `@nexus/core`，由 `@nexus/session` 單向轉出（#1463，demian Q2 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：`TodoItem` 定義在插件自己的套件（`packages/todo/tool-todo/src/types.ts:21`），`todo/write` 的事件擴充也在同一個檔（`:28-31`），用 `declare module '@deepseek-ai/dsh-session/types'` 補進 `SessionEventMap`——型別與事件擴充都住在插件裡，插件去擴充會話套件（對讀版本 86a40220）。**我們做不到的原因**：`SessionEventMap` 在 `@nexus/core`，而遷出的插件被 #1420 的 lint 禁止 import `@nexus/core`，所以沒辦法在插件裡對它寫 `declare module`。**退到哪裡**：事件擴充搬進 core 的 `session-log.ts`，`TodoItem`、`TodoStatus`、`TODO_STATUSES` 三個名字留在 core、由 `@nexus/session` 單向轉出（消費者不能再 import `@nexus/plugin-todo` 取型別）。**撤除條件**（理由是抽出實作橫跨核心，同 Q2 (b)，不是表達不出來的原因）：與 `@nexus/session` 的其他轉出一起——SDK 與定義套件發布到私有 registry 之前把實作搬進定義套件，屆時事件擴充可回到插件側 |
+| `@nexus/plugin-todo` 的 lint 排除 `src/invariant.ts`（#1463，demian Q3 (a)） | 產品需求超出 dsh | `invariant.ts` 是相容層的配套入口（`todo-invariant` 那一列），寫的是 `NexusPlugin`，import `@nexus/core` 並在模組層有 `new Set`，SDK 規則一條都過不了；把它改到綠不是機械改動（`PluginEntry` 是相容層的型別）。排除**只蓋到這一個檔**（`packages/nexus-plugin-todo/src/eslint-exclusion.test.ts` 量：`src/index.ts` 完整受管、暫存的違規檔照樣紅、同一份違規碼放在 `src/invariant.ts` 的路徑才不紅）。**撤除條件**：2026-11-03 配套入口重審——拿掉就連檔一起刪，留下就另開卡遷它 |
 
 ## 接進清單（#1416 PR 2）
 
-`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
+`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項），`todo` 是第七顆（#1463，新增會話查找接縫）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
 **樹那一側不是第二份清單，是清單的一個消費者**：
 
 | 東西 | 在哪 | 做什麼 |
 | --- | --- | --- |
 | 載入器的分辨 | `plugin-config.ts` 的 `resolveEntryModule` | 模組有 `manifest` 具名匯出就是函式插件，走 `validateManifest`；沒有就照舊是 `NexusPlugin`。判別式只有一個（`plugin-tree.ts` 的 `isFunctionPluginModule`），Include 的允許名單也從它算 |
 | 橋接列 | `plugin-config.ts` 的 `isBridgeEntry` | 函式插件在相容層清單上的代表：同一個 id、同一個位置、`Config` 是 manifest 的 `config`，所以設定驗證、停用、補號、快照、會話 header 都照舊。它的 `apply` 不自己掛任何東西，只把**登記者是這一列**的工具、投影單元、技能來源路徑與命令，加上**這一列提供**的服務，折進這一條 thread 的 registry（每一種接縫一格，見下） |
-| 樹 | `plugin-tree.ts` 的 `PluginTree` | `tools` 一列（工具登記處）、`projections` 一列（投影登記處）、`skill-sources` 一列（技能來源登記處）、`commands` 一列（命令登記處）、`approval-channel` 一列（預設答題管道，值是進入點在建樹時給的，#1458）、`include` 一列（Include 讀出貨的 `cordis.yml`、疊 patch），函式插件在 `include:<id>` |
+| 樹 | `plugin-tree.ts` 的 `PluginTree` | `tools` 一列（工具登記處）、`projections` 一列（投影登記處）、`skill-sources` 一列（技能來源登記處）、`commands` 一列（命令登記處）、`approval-channel` 一列（預設答題管道，值是進入點在建樹時給的，#1458）、`session-lookup` 一列（會話查找，行程級的活著的 thread 註冊簿，#1463）、`include` 一列（Include 讀出貨的 `cordis.yml`、疊 patch），函式插件在 `include:<id>` |
 
 - **變更紀錄怎麼到樹上**：折出來的 patch 原樣經 `entry.update({ config: { ...includeConfig, patches } })` 推給 Include（dsh
   `app-boot` 的做法）。**Include 不寫回任何檔**——寫入口只有變更紀錄一個（`vendor/README.md` 第 7 條，上游三條寫回路徑全關）；Loader 上游會在安裝樹建 `.cordis/` 輔助檔，宿主給了解析函式就不建（第 9 條），所以安裝樹唯讀也不影響掛載。
@@ -425,6 +448,7 @@ ask-user 在 #1458 遷上樹，轉接器照留，改成對「行程級的預設�
   連 `disabled` 都會 eval，而出貨檔那一列不經 patch，前兩道看不到它。
 - **沒有樹的呼叫端**（手搭 `PluginEntry` 清單的測試、基準任務、`shippedPlugins()`）：橋接列在組裝時單獨掛一次、取工具、
   投影單元、技能來源路徑、命令與提供的服務、立刻卸載，走的是同一個 Loader 與 `tools`、`projections`、`skill-sources`、`commands` 提供者。產品路徑（`cli.ts`、`serve.ts`）不走這條。
+  會話查找那一列在這條路上看的是**那一次組裝自己的** `registry.sessions`（#1463），所以工具在 `attachSession` 之後才綁上來的註冊表也問得到。
 
 ### 已知限制
 

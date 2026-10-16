@@ -49,6 +49,7 @@ import type { RequestHeader, RequestSnapshotReason } from './request-snapshot.js
 import type { SessionHeaderBuildMetadata } from './session-store.js';
 import type { SubagentCatalogData } from './subagent-catalog.js';
 import type { SubagentDescriptorData } from './subagent-descriptor.js';
+import type { TodoItem } from './todo.js';
 import type { ToolErrorInfo } from './tool-events.js';
 
 /**
@@ -1205,6 +1206,18 @@ export interface SessionEventMap {
    * ——同一段話不在 `command/run` 再記一次。
    */
   'feedback/record': FeedbackRecord;
+  /**
+   * 這個會話的待辦清單被整份換掉了一次。**每一筆帶完整的替換清單**，重放時後寫覆蓋先寫。
+   *
+   * 帶整份的理由與 `goal/change` 一樣（讀它的是嚴格重放），但它是**模型**寫的而不是人——所以沒有 CAS、沒有修訂號：整表替換
+   * 的語義本身就沒有「基於哪一版改的」這個問題。條目的形狀見 {@link ./todo.ts | TodoItem}。
+   *
+   * **事件擴充住在 core 了**（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463) Q2 (a)）：以前是 `@nexus/plugin-todo`
+   * 對 `@nexus/core` 寫 `declare module`，而遷上樹之後那顆插件不能 import `@nexus/core`（#1420 的 lint），宿主又有五處靠
+   * `import type {}` 把這個擴充帶進來。前例 `feedback/*` 三顆也住在這裡。生產者仍是 `@nexus/plugin-todo` 的 `todo_write`，
+   * 不變量在它的 `invariant.ts`。
+   */
+  'todo/write': { readonly todos: readonly TodoItem[] };
   /**
    * 送出佇列的一次變動（[#637](https://github.com/DemianLi/nexus-agent/issues/637)）：送進來、領走、改、刪。
    * 形狀與折疊見 {@link ./inbox.ts}。

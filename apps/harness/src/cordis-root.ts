@@ -16,12 +16,13 @@
  * | `skill-sources` | 行程級的技能來源登記處（`@nexus/skills/provider`，契約服務；#1446），只收路徑、不掃描 | `skills` 服務的提供者 |
  * | `commands` | 行程級的命令登記處（`@nexus/commands/provider`，契約服務；#1456），只收定義、不執行 | `commands` 服務的提供者 |
  * | `approval-channel` | 行程級的預設答題管道（`@nexus/approval-channel/provider`，契約服務；#1458），**值由入口在建樹時給** | （無對應，偏離登記在 `@nexus/approval-channel`） |
+ * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，契約服務；#1463），**挑法由宿主給**：行程裡每一條活著的 thread 綁上的註冊表（`thread-sessions.ts`） | （無對應，偏離登記在 `@nexus/session`） |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`、疊 patch、把函式插件掛起來（#1416 PR 2，`plugin-tree.ts`） | `include` |
- * | `include:<id>` | Include 底下的函式插件，今天是 `include:echo`、`include:trajectory`、`include:token-meter`、`include:skills`、`include:feedback` 與 `include:ask-user` | 各插件 |
+ * | `include:<id>` | Include 底下的函式插件，今天是 `include:echo`、`include:trajectory`、`include:token-meter`、`include:skills`、`include:feedback`、`include:ask-user` 與 `include:todo` | 各插件 |
  *
- * `nexus-compat`、入口、`tools`、`projections`、`skill-sources`、`commands`、`approval-channel`、`include` 都必掛（`startup-audit.ts` 的 {@link auditTreeEntries}）；`include:<id>` 不在名單上，
+ * `nexus-compat`、入口、`tools`、`projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup`、`include` 都必掛（`startup-audit.ts` 的 {@link auditTreeEntries}）；`include:<id>` 不在名單上，
  * 它掉了是清單那一列掉了，走 `dropped`。入口的程式碼經入口那一列的 inject 拿到服務，所有組 agent 的地方都走它。`tools`、
- * `projections`、`skill-sources`、`commands`、`approval-channel` 與 `include` 是**懶建**的（`PluginTree.context()` 第一次被叫到才建），`include` 要等第一次讀清單才有。
+ * `projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup` 與 `include` 是**懶建**的（`PluginTree.context()` 第一次被叫到才建），`include` 要等第一次讀清單才有。
  *
  * **收尾**：相容層組出來的每一個 agent 都用 `ctx.effect` 登記收尾，登記完才交出去；agent 的 `dispose` 就是那筆 effect 的
  * 處置函式，所以正常收掉時那筆登記一起撤下，不會一條 thread 留一筆。根卸載時還沒收的 agent 由相容層的 fiber 收掉。這是 dsh
@@ -63,6 +64,7 @@ import type { ApprovalChannel, ApprovalPolicy, PluginEntry } from '@nexus/core';
 import { createCliAgent } from './assembly-root.js';
 import type { CreateCliAgentSession } from './assembly-root.js';
 import { PluginTree } from './plugin-tree.js';
+import type { SessionLookupRegistrar } from './thread-sessions.js';
 import { auditTreeEntries } from './startup-audit.js';
 
 /** 相容層提供的服務名。 */
@@ -85,6 +87,11 @@ export interface CompatConfig {
   readonly plugins: readonly PluginEntry[];
   /** `--workspace` 的解析基準，省略即行程的工作目錄；原樣交給 `createCliAgent`。 */
   readonly cwd?: string;
+  /**
+   * 這棵樹上會話查找的登記面（#1463）。**`createCordisRoot().boot` 自己填，呼叫端不用傳**：每一次組裝的 `attachSession`
+   * 綁上之後往它登記，樹上 `session-lookup` 那一列問的就是它。直接用 `compatLayer`（測試）不給就是沒有樹的組裝。
+   */
+  readonly sessionLookup?: SessionLookupRegistrar;
 }
 
 /** 組一個 agent 的選項。 */
@@ -132,7 +139,10 @@ export const compatLayer = {
           invocation,
           options.plugins ?? config.plugins,
           config.cwd,
-          options.session,
+          // 樹上的會話查找（#1463）：兩個產品入口的每一次組裝都往它登記；呼叫端自己給的 `session.sessionLookup` 優先（測試）。
+          config.sessionLookup === undefined
+            ? options.session
+            : { sessionLookup: config.sessionLookup, ...options.session },
         );
         // 組好就登記、登記完才交出去：交出去之後的任何一步失敗，根卸載時都收得到它。
         const release = ctx.effect(() => () => built.dispose(), 'nexus-compat/agent');
@@ -218,7 +228,7 @@ export function createCordisRoot(options: CordisRootOptions = {}): CordisRoot {
       let assembly: NexusAssembly | undefined;
       try {
         const root: Context = await tree.context();
-        root.provide(COMPAT_HOST_SERVICE, config);
+        root.provide(COMPAT_HOST_SERVICE, { ...config, sessionLookup: tree.threadSessions });
         Object.assign(root.loader.builtins, {
           [COMPAT_ENTRY_ID]: compatLayer,
           [surface]: surfacePlugin(surface, (provided) => {

@@ -523,8 +523,9 @@ describe('什麼推得動 roundsStarted', () => {
     // 跑、寫在一輪之外，不是一輪的開始。
     //
     // **這張表只列這個編譯單元看得到的種類**（#679 第 4 步）：核心的 `SessionEventMap` 加上本套件自己補的 `goal/change`。
-    // 其他套件用宣告合併補的（`command/*`、`todo/write`、`plan/mode`、`sandbox/mode`、`deliverables/presented`、
+    // 其他套件用宣告合併補的（`command/*`、`plan/mode`、`sandbox/mode`、`deliverables/presented`、
     // `workspace/changes`、`session/title*`，上面各段決議照舊成立）在這裡看不到，所以多一個那種不會讓這條絆索紅；
+    // `todo/write` 在 #1463 之後住在核心的 `SessionEventMap`（Q2 (a)），所以下面的表要列它——它不推輪次，理由同 `tool/result`；
     // 折疊的 `default` 分支對沒列的種類一律不推。照 dsh：開放詞彙之後，窮舉只能在擁有者那一側做。
     const KNOWN = [
       'turn/start',
@@ -558,6 +559,7 @@ describe('什麼推得動 roundsStarted', () => {
       'feedback/message-put',
       'feedback/message-delete',
       'feedback/record',
+      'todo/write',
       'context/measure',
       'inbox/spliced',
       'request/header',
