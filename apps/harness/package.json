@@ -78,6 +78,7 @@
     "@nexus/plugin-workspace-changes": "workspace:*",
     "@nexus/fs": "workspace:*",
     "@nexus/projections": "workspace:*",
+    "@nexus/system-prompt": "workspace:*",
     "@nexus/sdk": "workspace:*",
     "@nexus/skills": "workspace:*",
     "@nexus/session": "workspace:*",

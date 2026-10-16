@@ -35,6 +35,8 @@ const shipped = await shippedServePlugins();
 /**
  * 組裝點交協作者的那幾個條目的 plugin 名：`assembly-root.ts` 的 `host-services`，`agent-factory.ts` 的
  * `system-prompt-variables` 與 `fs`。改了名字這一條會紅（讀到的服務找不到認得的提供者）——那是安全的方向。
+ * `system-prompt-variables` 在 #1477 之後不提供服務了（它只把 `model`／`cwd` 記在這次組裝上，`system-prompt-middleware.ts`），
+ * 名單留著它：條目還在、名字沒變，萬一哪天有人讓它又提供服務，這一條照樣認得它是組裝點的。
  */
 const HOST_ENTRY_NAMES = new Set(['host-services', 'system-prompt-variables', 'fs']);
 
@@ -117,8 +119,10 @@ async function readsOf(plugins: readonly PluginEntry[]): Promise<ServiceRead[]> 
 describe('出貨清單在 apply 當下讀的服務', () => {
   it('每一個都由組裝點的 host-services 提供，沒有 plugin → plugin 的服務相依', async () => {
     const reads = await readsOf(shipped);
-    // 前提：真的量到了讀取（`system-prompt` 那一列讀 `systemPromptVariables`，#720）。空陣列也「全部合格」。
-    expect(reads.map((read) => read.service)).toContain('systemPromptVariables');
+    // 前提：真的量到了讀取。空陣列也「全部合格」。#1477 之前這裡斷言 `system-prompt` 那一列讀 `systemPromptVariables`（#720）；
+    // 那一列現在是樹上的函式插件、不讀任何服務，前提改成另一列確實讀到的東西（下面也斷言 `workspaceRoot`）。
+    expect(reads.map((read) => read.service)).toContain('workspaceRoot');
+    expect(reads.map((read) => read.service)).not.toContain('systemPromptVariables');
     expect(straysOf(reads)).toEqual([]);
     // serve 專屬層那一列讀的是組裝點交的工作區根（#669）：在 `apply` 當下讀，提供者是 host-services。
     expect(reads).toContainEqual({

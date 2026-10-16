@@ -265,7 +265,7 @@ describe('兩支疊 patch 的演算法：相容層的 applyEntryPatches 與上�
 });
 
 describe('沒遷移的列不上樹，也不會被兩邊各套一次', () => {
-  it('樹上 include 底下只有函式插件那幾列（echo、agent-instructions、skills、todo、feedback、present、ask-user、submit-record、trajectory、token-meter）；工具只登記一次', async () => {
+  it('樹上 include 底下只有函式插件那幾列（echo、agent-instructions、skills、todo、feedback、present、ask-user、submit-record、trajectory、token-meter、system-prompt）；工具只登記一次', async () => {
     const dir = scratch();
     const root = newRoot();
     const loaded = await loadDefaultPlugins(
@@ -286,6 +286,7 @@ describe('沒遷移的列不上樹，也不會被兩邊各套一次', () => {
       'submit-record',
       'trajectory',
       'token-meter',
+      'system-prompt',
     ]);
   }, 60000);
 });
@@ -326,7 +327,7 @@ describe('兩邊疊出來對不上：不靜靜地各走各的', () => {
       root.tree.sync({
         shipped,
         patches,
-        rows: [{ id: 'echo', module: ECHO_MODULE, disabled: false, config }],
+        rows: [{ id: 'echo', module: ECHO_MODULE, disabled: false, config, provides: [] }],
       }),
     );
     return snapshot.verdict('echo');
@@ -383,7 +384,7 @@ describe('設定帶 __jsExpr', () => {
         root.tree.sync({
           shipped,
           patches: [{ id: 'echo', config: { prefix: { __jsExpr: '1' } } }],
-          rows: [{ id: 'echo', module: ECHO_MODULE, disabled: false, config: {} }],
+          rows: [{ id: 'echo', module: ECHO_MODULE, disabled: false, config: {}, provides: [] }],
         }),
       ),
     ).rejects.toThrow(PluginTreeError);
@@ -417,7 +418,9 @@ describe('設定帶 __jsExpr', () => {
             root.tree.sync({
               shipped,
               patches: [],
-              rows: [{ id: 'echo', module: ECHO_MODULE, disabled: false, config: {} }],
+              rows: [
+                { id: 'echo', module: ECHO_MODULE, disabled: false, config: {}, provides: [] },
+              ],
             }),
           )
           .then(
@@ -443,7 +446,7 @@ describe('設定帶 __jsExpr', () => {
       const dir = scratch();
       const shipped = write(dir, 'cordis.yml', ECHO_SHIPPED);
       const rowOf = (prefix: string) => [
-        { id: 'echo', module: ECHO_MODULE, disabled: false, config: { prefix } },
+        { id: 'echo', module: ECHO_MODULE, disabled: false, config: { prefix }, provides: [] },
       ];
       const first = await root.tree.run(() =>
         root.tree.sync({

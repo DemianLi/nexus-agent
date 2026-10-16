@@ -10,9 +10,10 @@
  * **放在清單最前面。** 載入是一趟到底的（見 `ServiceRegistrationPoint` 的偏離登記），
  * 而消費者讀取服務的時刻不一樣：
  *
- * - **在自己的 `apply` 當下讀**：`@nexus/plugin-sandbox-policy`（`use`）、`@nexus/plugin-system-prompt`
- *   （`use`）、`@nexus/plugin-ask-user` 與 `@nexus/plugin-plan-mode`（`get` 加預設）。排在後面的話
- *   `use` 當場拋、`get` 靜靜拿到預設。
+ * - **在自己的 `apply` 當下讀**：`@nexus/plugin-sandbox-policy`（`use`）、`@nexus/plugin-ask-user`
+ *   與 `@nexus/plugin-plan-mode`（`get` 加預設）。排在後面的話 `use` 當場拋、`get` 靜靜拿到預設。
+ *   （`@nexus/plugin-system-prompt` 以前也在這裡，讀 `systemPromptVariables`；#1477 之後它是樹上的函式插件、不讀服務了，
+ *   `model`／`cwd` 的預設值走宿主內部的路，見 `apps/harness/src/system-prompt-middleware.ts`。）
  * - **在工具被叫時才讀**：`@nexus/plugin-present` 與 `@nexus/plugin-submit-record` 讀的 `fs`
  *   （[#694](https://github.com/DemianLi/nexus-agent/issues/694)）。順序對它們不承重。
  *

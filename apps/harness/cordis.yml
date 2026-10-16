@@ -185,13 +185,18 @@
 - id: token-meter
   name: '@nexus/plugin-token-meter'
 
-# 系統提示詞的身分與 persona（#720）。照 dsh 的 `system-prompt`（`packages/core/system-prompt/src/index.ts:407-442`）
-# 三格設定；出貨值對應 dsh 四個入口 profile 覆寫成的那一組（`packages/bundle/web-app/cordis.patch.yml:16-20`），
-# 英文，開頭句不自稱寫程式。順序是身分句 → 前綴 → 其餘（含組裝點傳的那句指引）→ 後綴，**後綴永遠是最後一段**。
+# 系統提示詞的身分與 persona（#720、#1477）。照 dsh 的 `system-prompt`（`packages/core/system-prompt/src/index.ts:407-442`）
+# 三格設定；出貨的前綴對應 dsh 各入口 profile 覆寫的前綴（`packages/bundle/web-app/cordis.patch.yml:17-20`，另有 `headless` :11、
+# `acp-app` :5、`sdk-minimal` :118），英文，開頭句不自稱寫程式。**dsh 只覆寫前綴**：後綴的 `{{cwd}}` 句是我們的，而且 dsh 沒有
+# `cwd` 變數（`packages/core/system-prompt/README.md:78`，loop 只登記 `provider` 與 `model`），見 `@nexus/plugin-system-prompt` 的檔頭。
+# 順序是身分句 → 前綴 → 其餘（含組裝點傳的那句指引）→ 後綴，**後綴永遠是最後一段**。
+#
+# 這一列是樹上的函式插件，**提供 `systemPrompt` 服務**（`@nexus/system-prompt` 1.0.0）：三格設定是服務自己的設定，建好之後自己登記三段。
+# 宿主在組 thread 時取一次快照，之後每次模型呼叫只代入變數（`apps/harness/src/system-prompt-middleware.ts`）。
 #
 # - `includeHarnessIdentity`：最前面一句 "You are an AI agent powered by nexus-agent."。
 # - `personaPrefix`／`personaSuffix`：`{{model}}`（這一次組裝的模型 id）與 `{{cwd}}` 可以引用。**嚴格插值**：
-#   未知的變數、沒有值的變數、寫壞的 `{{…}}` 都讓啟動失敗，訊息指名是哪一格與哪個變數。
+#   未知的變數、沒有值的變數、寫壞的 `{{…}}` 都讓啟動失敗（**掛載當下驗語法與名字**，值每次模型呼叫才取），訊息指名是哪一格與哪個變數。
 #   **`{{cwd}}` 是檔案工具的位址空間裡的根（`/`），不是主機路徑**：工具收不下主機路徑（登記在
 #   `@nexus/plugin-system-prompt` 的檔頭）。
 #

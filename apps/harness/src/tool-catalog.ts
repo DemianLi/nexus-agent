@@ -11,7 +11,7 @@
  *
  * - **不是每個套件各自用預設 Config 單獨啟動。** dsh 的 Config 都有 schema 預設值，單獨啟動得出合法設定；我們好幾個
  *   plugin 的設定欄位是必填（`todo` 的 `allowParallelInProgress`、`workspace-changes` 的 `root`…），出廠值寫在
- *   `apps/harness/cordis.yml` 的條目上，而且有的要別的 plugin 先提供服務（`sandbox-policy`、`system-prompt`）。所以出廠
+ *   `apps/harness/cordis.yml` 的條目上，而且有的要別的 plugin 先提供服務（`sandbox-policy`）。所以出廠
  *   清單**一次**載進產品組裝，工具各自歸給註冊它的 plugin（`registry.tools` 的 `origin`）。不在出廠清單裡的套件
  *   （選配或由外部決定工具的），清單裡明寫是哪一種，選配的用清單上給的設定單獨載。
  * - **目錄讀的是 `bindTools` 收到的那一份**（`convertToOpenAITool` 轉出來的線上形狀），不是 plugin 註冊時的原物件：

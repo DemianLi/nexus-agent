@@ -25,7 +25,7 @@
  * `fiber.await()` 拿回原始錯誤，PENDING 列出缺哪些服務；必掛的沒起來就拋同一種 {@link StartupError}。兩張名單分開
  * （{@link REQUIRED_TREE_ENTRY_IDS}）：清單的列 id 由使用者的 patch 決定，`insert` 一列 id 叫 `serve` 的不該因此變成必掛。
  *
- * ## 名單是 `browser-session`、`system-prompt` 與 `background-subagents`
+ * ## 名單是 `browser-session`、`system-prompt`、`background-subagents` 與 `permission-presets`
  *
  * dsh 的七個 id 分三類（`README.zh.md:43`），對到我們：
  *
@@ -40,7 +40,12 @@
  * **`system-prompt` 是我們多的一個**（[#720](https://github.com/DemianLi/nexus-agent/issues/720)，偏離登記）：dsh 的名單沒有它，
  * 因為 dsh 的嚴格插值在渲染時拋——每一輪都紅，壞掉的設定不可能被忽略。我們的載入器把 `apply` 拋的錯變成「那一列掉了」，
  * 不列進名單的話，前綴寫了個打錯字的 `{{modle}}` 只換來一行警告，模型靜靜少了身分與 persona 照樣跑——比大聲失敗更糟。
- * 表達不出來的是「壞了就每輪都紅」（我們在掛載當下算，不在渲染時算），退到最接近的：讓這一列掉了就整個起不來。
+ * 表達不出來的是「壞了就每輪都紅」。#1477 之後的理由改寫成：**我們在掛載當下驗語法與名字，不是渲染時才拋**（這一列自己登記
+ * `model`、`cwd` 兩個變數名，`apply` 裡走一遍前後綴，寫壞的設定當場拋；值每次模型呼叫才取）。退到最接近的：讓這一列掉了就整個起不來。
+ *
+ * **已知缺口（#1477 Q3，這張不修）**：樹上自我停用（#1424，verdict `off`）的必掛列不進 `dropped`，這份名單接不住它。`off` 只會來自插件
+ * 自己呼叫自我停用，`system-prompt` 沒有這種呼叫；必掛列自我停用的語意（行程內停著還是起不來）是 #1424 的延伸題，不夾在遷移卡裡定。
+ * `startup-audit.test.ts` 有一條測試把現況釘住，註明是已知缺口；補上的那天這條會紅，是補完的訊號，不是壞了。
  *
  * **`background-subagents` 是第三個**（[#707](https://github.com/DemianLi/nexus-agent/issues/707)，偏離登記），理由與 `system-prompt` 同型但方向相反：
  * 它帶著子代理的 `toolFilter`，那是一道**限制**。這一列設定驗不過就掉，掉了的後果是「沒有過濾」——部署方寫了 `deny: [write_file]`、
