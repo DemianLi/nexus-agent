@@ -11,9 +11,10 @@
  *
  * **哪一條**：dsh 的 `ctx.fs` 就是那個檔案系統，提供方在自己的 `apply` 裡交出它。
  *
- * **為什麼表達不出來**：同 `@nexus/plugin-agent-instructions` 的偏離 2——plugin 在 `apply` 裡看不到折後的
+ * **為什麼表達不出來**：plugin 在 `apply` 裡看不到折後的
  * backend，它要等 `foldRegistry` 把路由與兜底那個折起來才算得出來；而 `services.provide()` 只能在 `apply`
- * 裡呼叫（`registry.ts` 的 `requireOrigin`）。
+ * 裡呼叫（`registry.ts` 的 `requireOrigin`）。（`@nexus/plugin-agent-instructions` 當年為同一件事退到
+ * `useWithBackend`，#1474 起改成呼叫當下問這個服務，那條偏離已撤。）
  *
  * **退到什麼**：組裝點在 `apply` 裡先提供一格（{@link createFsService}），fold 折完把折出來的那一個填進去
  * （{@link settleFsService}）。消費者**在工具被叫時才讀** {@link FsService.backend}，所以排在提供者前面

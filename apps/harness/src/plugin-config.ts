@@ -56,6 +56,7 @@ import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import type { StructuredTool, StructuredToolInterface } from '@langchain/core/tools';
+import type { PreStepEntry } from '@nexus/agent-loop/provider';
 import { CHANNEL_SERVICE, NEXUS_CORE_VERSION, resolveEntriesPerEntry } from '@nexus/core';
 import type {
   CommandDefinition,
@@ -68,6 +69,7 @@ import { ManifestError, validateManifest } from '@nexus/sdk';
 import type { ToolGateListener, ToolRegisterOptions, ToolResultListener } from '@nexus/tools';
 
 import { resolveHarnessHome } from './harness-home.js';
+import { createPreStepMiddleware } from './pre-step-middleware.js';
 import { registryFsLookup } from './registry-fs-lookup.js';
 import { assertPluginCompatible, PluginCompatibilityError } from './plugin-compatibility.js';
 import {
@@ -843,6 +845,8 @@ interface FoldedContributions {
   readonly gates: readonly ToolGateListener[];
   /** `tools/result` 觀察者（#1469），照那一列登記的順序；折進 thread 時一條一條交給 `registry.events.on('tools/result', …)`。 */
   readonly resultListeners: readonly ToolResultListener[];
+  /** `agent/pre-step` listener（#1474），照那一列登記的順序；折進 thread 時一位建一顆 middleware（`registry.middleware.use`，不帶位置旗標）。 */
+  readonly preSteps: readonly Pick<PreStepEntry, 'name' | 'listener'>[];
   readonly projections: readonly ProjectionUnit[];
   /** 技能來源路徑（#1446），照那一列登記的順序。 */
   readonly skillSources: readonly string[];
@@ -883,6 +887,13 @@ function registerFolded(
   // `Readonly<PipelineResult>`）；`@nexus/tools` 的 `ToolResultListener` 是它的窄視圖（只讀 `isError`），結構上相容。
   for (const listener of contributions.resultListeners) {
     registry.events.on('tools/result', listener as (...args: never[]) => void);
+  }
+  // `agent/pre-step` listener（#1474）：**一位一顆 middleware**，名字用登記時給的名字、掛在 `beforeAgent`，走 `registry.middleware.use`
+  // 且**不帶 `prepend`／`last`**——它在鏈上的位置就是這一列在出貨清單上的位置，與遷移之前 `useWithBackend` 的落點相同；一份實例走遍
+  // root 與每個子代理（`fold.ts` 的 `pluginMiddleware`）。日誌用**這條 thread 自己的** `registry.sessions`（不走行程級的
+  // `session-lookup`：那條多 thread 時可能 `ambiguous`）。細節見 `pre-step-middleware.ts`。
+  for (const { name, listener } of contributions.preSteps) {
+    registry.middleware.use(createPreStepMiddleware(name, listener, registry.sessions));
   }
   for (const unit of contributions.projections) registry.projections.register(unit);
   // 技能來源走 `registry.skills.addSource`，**照那一列登記的順序**：`sources` 依序即優先序（後面的來源贏過前面的同名 skill）。
@@ -1574,6 +1585,7 @@ async function loadPluginConfigOnce(
       toolOptions: verdict.toolOptions,
       gates: verdict.gates,
       resultListeners: verdict.resultListeners,
+      preSteps: verdict.preSteps,
       projections: verdict.projections,
       skillSources: verdict.skillSources,
       commands: verdict.commands,

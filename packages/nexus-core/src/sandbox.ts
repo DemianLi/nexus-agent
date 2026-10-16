@@ -64,7 +64,7 @@ export function isSandboxMode(raw: string): raw is SandboxMode {
  * `--workspace`、有圍堵的時候才掛，所以它在不在就是工作區在不在。
  *
  * **要它是因為 backend 在不在答不了這一題**：沒有工作區時組裝點照樣墊一顆 `StateBackend`
- * （`apps/harness/src/agent-factory.ts`），`useWithBackend` 的工廠照樣被叫。dsh 對應的判準是會話 header
+ * （`apps/harness/src/agent-factory.ts`），`fs` 服務的 `backend()` 照樣有值。dsh 對應的判準是會話 header
  * 的 `cwd`（`tool-present` 的 `present requires a workspace`）；我們的 header `cwd` 記的是行程的工作目錄，
  * 不是工作區根，所以不能照抄。第一個讀方是 `@nexus/plugin-present`（[#441](https://github.com/DemianLi/nexus-agent/issues/441)）。
  */

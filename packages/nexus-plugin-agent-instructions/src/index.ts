@@ -32,19 +32,22 @@
  *    慣例、繞過 backend 直接讀主機檔案，越過 fence。
  *    **退到什麼**：只讀工作區根那一層的四個候選。
  *    **重開條件**：出現跨專案共用指令的需求，或 `--workspace` 常指到 repo 子目錄而漏掉 repo 根的指令。
- * 2. **哪一條**：dsh 的這顆 plugin 從 cordis 拿檔案系統提供方（`ctx.get('fs')`）。
- *    **為什麼表達不出來**：我們的 plugin 在 `apply(registry)` 裡看不到 backend——`backend.mount()` 掛的是
- *    路由分支，兜底那個是組裝點的一格，兩者要等 `foldRegistry` 折起來才算得出來。
- *    **退到什麼**：`registry.middleware.useWithBackend()`（#388 一起開的窄縫），由 fold 把折好的 backend
- *    交給工廠。**射程相同**：一份實例走遍 root 與每個子代理；一個 backend 都沒有時工廠不會被呼叫，
- *    等於 dsh 在 `ctx.get('fs')` 拿不到提供方時直接返回。
+ * 2. **哪一條**：dsh 的 `fs` 是**選配**（`inject = ['sessionProjections', 'workingDirectory']`，`ctx.get('fs')` 拿不到就返回，
+ *    `src/index.ts:36`、`:121-127`）；我們把 `fs` 放進 `inject`（必填，`^1.1.0`）。
+ *    **為什麼表達不出來**：我們要在 `apply` 當下就把服務抓進閉包。沒有樹的路徑上（eval、`createNexusAgent` 的測試）插件被
+ *    `mountDetached` 掛一次就卸載，呼叫當下才經 `ctx` 取服務會拋；而不經 `inject` 的選用服務在 `apply` 當下沒有次序保證——`fs` 那一列
+ *    還沒提供就會永遠拿到 `undefined`，基線也就靜靜消失。
+ *    **退到什麼**：`fs` 列是宿主內建列、永遠先起來，必填不會讓清單上的這一列多掉一種原因。
+ *    **要守的風險**：呼叫當下 `fs.forCall(invocation)` 的查找若不是 `ok`，基線會**靜靜消失**。`apps/harness/src/agent-instructions-on-tree.test.ts`
+ *    在 CLI、serve、無樹三個入口，root 與同步／背景子代理，量到的查找都是 `ok`。
  * 3. **哪一條**：摘要把基線切掉之後，dsh 在**下一步**補回——`agent/pre-step` 每一步都跑
  *    `visibleBaselineSource`，看的是壓縮後還看得到的那一面，看不到就重讀、重渲染一則新的（`src/index.ts:46-62`、
  *    `:130-190`）。我們在**下一次 invoke** 補回；判準相同（模型看得到的那一串裡有沒有），重讀與重渲染也相同。
  *    **為什麼表達不出來**：每一步的載體只有 `beforeModel`，而它是圖裡的節點，預設上限 100 下每輪多一格＝
  *    33 輪變 24 輪（#389 triage 實測）；#389 拍板每一步的那一半先不做（路線 B），這裡也就沒有另外為恢復
  *    付那一格。
- *    **退到什麼**：留在既有的 `beforeAgent`，不加節點。
+ *    **退到什麼**：留在既有的 `beforeAgent`，不加節點。載體從「插件自己的 `beforeAgent`」改成「宿主為 listener 建的 `beforeAgent`」
+ *    （#1474，`@nexus/agent-loop` 的 `preStep`；接縫本身的偏離登記在那個套件的檔頭），內容與重開條件不變。
  *    **留下的缺口**：同一次 invoke 裡，摘要之後的那幾輪看不到工作區指令，要等使用者下一句話。
  *    **重開條件**：#389 重開，或 core 開了讓多個貢獻者共用一格的 pre-step 節點。
  *
@@ -68,8 +71,8 @@
  * ## 攔截時刻：dsh 第 2 格 `agent/pre-step`
  *
  * dsh 在 `agent/pre-step` 組好基線、折進那一步的批次，**緊跟在已領取的訊息之後**
- * （`src/index.ts:315-345`）。我們這側對應的是 `beforeAgent`，**只佔了注入那半**：拿不到整個訊息
- * 批次自己 splice，只能追加；落點由基座決定（2026-09-18 實測落在使用者那一句之後，與 dsh 同位）。
+ * （`src/index.ts:315-345`）。我們這側對應的是 `@nexus/agent-loop` 的 `preStep`（宿主以 `beforeAgent` 承載），**只佔了注入那半**：
+ * 拿不到整個訊息批次自己 splice，只能追加；落點由基座決定（2026-09-18 實測落在使用者那一句之後，與 dsh 同位）。
  * 攔截那半（`jumpTo: 'end'`）用不到，基線只注入。逐欄的差與頻率量在
  * `apps/harness/src/interception-index.test.ts` 第 2 列。
  *
@@ -77,26 +80,37 @@
  *
  * 掛在 `beforeAgent` 上，**每一輪不多付 super-step，但每次 invoke 多付一格**——`beforeAgent` 也是圖裡的
  * 一個節點，只是一次 invoke 只走一次。2026-09-18 用 `LoopingChatModel` 在預設上限 100 上實測：預設組裝
- * 33 輪，加上這顆（給了 `--workspace`）是 32 輪；同樣的注入改掛 `beforeModel` 是 24 輪（每輪多一格，見
+ * 33 輪，加上這顆是 32 輪（有沒有 `--workspace` 都一樣：沒有工作區時組裝點墊 `StateBackend`，宿主的 middleware 照建；#1474 的 D 組量過）；同樣的注入改掛 `beforeModel` 是 24 輪（每輪多一格，見
  * `@nexus/core` 的 `repeat-reminder.ts`「代價」那一段）。
  *
  * **#394 原本寫「代價：零」，錯的。** 那次在上限 20、每輪兩格的組裝上量，`floor(19/2)` 與 `floor(18/2)`
  * 都是 9，每次 invoke 的那一格被 floor 吃掉了。每輪零增量的結論是對的，「零」這個字是錯的
  * （[#389](https://github.com/DemianLi/nexus-agent/issues/389) 的 triage）。
  *
+ * ## 遷上樹（[#1474](https://github.com/DemianLi/nexus-agent/issues/1474)）
+ *
+ * 函式插件，套 SDK lint：**不 import `@nexus/core`**，也不碰 langchain 的 middleware。要在一次呼叫開頭追加訊息，經 `agentLoop` 服務
+ * （`@nexus/agent-loop`）登記一位 `preStep` listener；宿主建 middleware、建訊息、記日誌（Q2 (a)）。這個檔只剩「讀什麼、渲染什麼、
+ * 什麼時候不加」。**行為逐字不變**（Q4）：記號、渲染文字、四個候選與順序、`maxBytes` 預設、middleware 名字與在鏈上的位置、日誌
+ * `source`、每次 invoke 一格、摘要後下一次 invoke 補回、寫日誌失敗訊息照送。
+ *
+ * 舊外殼（`NexusPlugin`、`createAgentInstructionsMiddleware`、`createAgentInstructionsPlugin`）搬到 harness 的
+ * `agent-instructions.fixture.ts`，給還在相容層組裝的測試用。
+ *
  * @module
  */
 
 import { createHash } from 'node:crypto';
-import { HumanMessage } from '@langchain/core/messages';
+
 import type { BaseMessage } from '@langchain/core/messages';
-import { sourceKwargs } from '@nexus/core';
-import type { NexusPlugin, PluginEntry, PluginRegistry, SessionLookup } from '@nexus/core';
-import { effectiveMessages, toLoggedMessage } from '@nexus/core';
+import { agentLoopToken } from '@nexus/agent-loop';
+import type { PreStepInjection, PreStepInvocation, PreStepListener } from '@nexus/agent-loop';
+import type { Context } from '@nexus/cordis';
+import { fsToken } from '@nexus/fs';
+import type { FsLookup } from '@nexus/fs';
+import { defineManifest, injectOf, need, service } from '@nexus/sdk';
 import { adaptBackendProtocol } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
-import { createMiddleware } from 'langchain';
-import type { AgentMiddleware } from 'langchain';
 import { z } from 'zod';
 
 import { renderAgentInstructions } from './render.js';
@@ -104,13 +118,16 @@ import type { InstructionFile } from './render.js';
 
 export { AGENT_INSTRUCTIONS_INTRO, COMPACT_AGENT_INSTRUCTIONS_INTRO } from './render.js';
 
-/** middleware 的名字。撞名是 fold 那側的判準，所以它是公開的。 */
+/**
+ * middleware 的名字，也是 listener 登記時給宿主的名字（宿主用它當 middleware 名與日誌 `source.plugin`）。撞名是 fold 那側的判準，
+ * 所以它是公開的。
+ */
 export const AGENT_INSTRUCTIONS_MIDDLEWARE_NAME = 'AgentInstructionsMiddleware';
 
 /**
  * 認出「這個 agent 已經有基線了」的記號。
  *
- * **判準放在訊息上、不放在閉包裡**：一份實例走遍 root 與每個子代理（`registry.middleware` 的契約），
+ * **判準放在訊息上、不放在閉包裡**：一份 listener 服務好幾條 thread、root 與每個子代理（`@nexus/agent-loop` 的契約），
  * 閉包裡的旗標會讓第二個 agent 以為自己已經拿過。放在 `additional_kwargs` 則跟著訊息走，`--resume`
  * 與壓縮之後從日誌重建回來的那一則照樣認得出來——同 `@nexus/core` 的 `REPEAT_REMINDER_MARKER`（#305）。
  */
@@ -152,9 +169,6 @@ export const agentInstructionsConfigSchema = z.strictObject({
 
 /** 驗過的設定。 */
 export type AgentInstructionsConfig = z.infer<typeof agentInstructionsConfigSchema>;
-
-/** 工廠收的東西：schema 的輸入面。 */
-export type AgentInstructionsPluginOptions = z.input<typeof agentInstructionsConfigSchema>;
 
 /** 這一則訊息是基線嗎。 */
 export function isAgentInstructionsMessage(message: BaseMessage): boolean {
@@ -198,107 +212,78 @@ async function discover(backend: AnyBackendProtocol): Promise<InstructionFile[]>
   return files;
 }
 
-/**
- * 讓 `beforeAgent` 讀得到基座摘要器的切點。
- *
- * middleware 的鉤子只看得到自己（與基座）宣告過的 state 鍵；不宣告的話 `state` 裡只有 `messages`
- * （2026-09-18 實測）。**這是基座的私有鍵**（`deepagents@1.13.1` 的 `SummarizationStateSchema`，
- * 原文註解就寫 “private state, not visible to agent”），所以型別刻意放寬成 `unknown`、只宣告
- * 「有這一格」，形狀交給 {@link effectiveMessages} 去認——認不出來就當沒摘要過，退回舊行為。
- * 鍵名與切點語意的上游絆索在 `apps/harness/src/agent-instructions.test.ts`。
- */
-const SUMMARIZATION_EVENT_VIEW = z.object({ _summarizationEvent: z.unknown().optional() });
+/** {@link createAgentInstructionsListener} 要的查找。測試換成替身；`apply` 換成從服務抓進閉包的那一份。 */
+export interface AgentInstructionsLookups {
+  /** 這次呼叫那條 thread 的 fs 把手（`fs.forCall`）。 */
+  fs(invocation: PreStepInvocation): FsLookup;
+}
 
 /**
- * 建 middleware。**由 fold 呼叫**，見 `createAgentInstructionsPlugin`。
+ * 建 listener：**模型看得到一則才算有**（serve 的第二輪、`--resume`、子代理第二次被委派都走到這裡），沒有就讀工作區根、渲染，回一則。
  *
- * @param backend - 折出來的 backend。
+ * 判準看的是宿主交來的第一個參數——摘要器會組給模型的那一串，不是 `state.messages`：摘要之後舊基線還在 state 裡、但落在切點
+ * 之前（#397）。fs 查找不是 `ok`、或 `backend()` 是 `undefined`（這次組裝沒有 backend）就不注入。
+ *
  * @param maxBytes - 一則基線的位元組上限。
- * @param sessions - 註冊表的 `sessions` 通道：基線也記進日誌。**省略就不記**。
- * @returns 可以掛在任意多個 agent 上的 middleware。
+ * @param lookups - 查找，見 {@link AgentInstructionsLookups}。
+ * @returns 登記給 `agentLoop.preStep` 的 listener。
  */
-export function createAgentInstructionsMiddleware(
-  backend: AnyBackendProtocol,
+export function createAgentInstructionsListener(
   maxBytes: number,
-  sessions?: { forCall(config: unknown): SessionLookup },
-): AgentMiddleware {
-  return createMiddleware({
-    name: AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
-    stateSchema: SUMMARIZATION_EVENT_VIEW,
-    beforeAgent: async (
-      state: { messages?: readonly BaseMessage[]; _summarizationEvent?: unknown },
-      runtime?: { readonly configurable?: unknown },
-    ) => {
-      // **模型看得到一則才算有。** serve 的第二輪、`--resume`、子代理第二次被委派都走到這裡。
-      // 看的是摘要器會組給模型的那一串，不是 `state.messages`：摘要之後舊基線還在 state 裡、
-      // 但落在切點之前（#397）。
-      if (effectiveMessages(state.messages ?? [], state).some(isAgentInstructionsMessage)) {
-        return undefined;
-      }
-      const rendered = renderAgentInstructions(await discover(backend), maxBytes);
-      if (rendered === undefined) return undefined;
-      const message = new HumanMessage({
-        content: rendered.text,
-        // 來源是 `plugin`（#662）：它注入的時機是一輪的開頭，今天緊接在人那句話之後所以沒事；以後哪個時刻
-        // 它被補在一輪中間，重複提醒的鏈不會因它被悄悄清零。
-        additional_kwargs: {
-          [AGENT_INSTRUCTIONS_MARKER]: true,
-          ...sourceKwargs({ kind: 'plugin', plugin: AGENT_INSTRUCTIONS_MIDDLEWARE_NAME }),
-        },
-      });
-      record(sessions, runtime?.configurable, message);
-      return { messages: [message] };
-    },
-  }) as unknown as AgentMiddleware;
+  lookups: AgentInstructionsLookups,
+): PreStepListener {
+  return async (visible, invocation): Promise<readonly PreStepInjection[] | undefined> => {
+    if (visible.some(isAgentInstructionsMessage)) return undefined;
+    const found = lookups.fs(invocation);
+    const backend = found.kind === 'ok' ? found.fs.backend() : undefined;
+    if (backend === undefined) return undefined;
+    const rendered = renderAgentInstructions(await discover(backend), maxBytes);
+    if (rendered === undefined) return undefined;
+    return [{ content: rendered.text, additionalKwargs: { [AGENT_INSTRUCTIONS_MARKER]: true } }];
+  };
 }
 
-/** 把基線記成 `user/message`。沒接會話、認不出屬於哪一份、或寫不進去，都不記。 */
-function record(
-  sessions: { forCall(config: unknown): SessionLookup } | undefined,
-  configurable: unknown,
-  message: HumanMessage,
-): void {
-  if (sessions === undefined) return;
-  const found = sessions.forCall({ configurable });
-  if (found.kind !== 'ok') return;
-  try {
-    found.log.append('user/message', {
-      message: toLoggedMessage(message),
-      source: { kind: 'plugin', plugin: AGENT_INSTRUCTIONS_MIDDLEWARE_NAME },
-    });
-  } catch {
-    // 見上面：基線照樣送出。記不進去的後果是續接時重建不回來，不是這一輪少了指令。
-  }
-}
+export const name = 'agent-instructions';
 
 /**
- * agent-instructions plugin。
- *
- * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
- * 從設定檔 import。設定走 {@link Config} 進來，所以同一顆可以被好幾次組裝各 `apply` 一次
- * ——**每次掛載才有的狀態一律活在 `apply` 裡**。
+ * 要的服務：`agentLoop`（`^1.0.0`，登記 `preStep` listener）與 `fs`（`^1.1.0`，呼叫當下拿這條 thread 的 backend）。範圍在這裡宣告，
+ * 落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。`fs` 放進 `inject` 而不是選配，理由見檔頭偏離 2。
  */
-export const agentInstructionsPlugin: NexusPlugin<AgentInstructionsConfig> = {
-  name: 'agent-instructions',
-  Config: agentInstructionsConfigSchema,
-  apply(registry: PluginRegistry, config: AgentInstructionsConfig): void {
-    const { maxBytes } = config;
-    registry.middleware.useWithBackend((backend) =>
-      createAgentInstructionsMiddleware(backend, maxBytes, registry.sessions),
-    );
-  },
-};
+export const inject = injectOf(need(agentLoopToken, '^1.0.0'), need(fsToken, '^1.1.0'));
 
-export default agentInstructionsPlugin;
+/** 這個插件的設定（manifest 的 `config`）：見 {@link agentInstructionsConfigSchema}。`strictObject`：未知欄位讓載入失敗。 */
+export const Config = agentInstructionsConfigSchema;
+
+export const manifest = defineManifest({
+  id: 'agent-instructions',
+  version: '0.1.0',
+  owner: '平台團隊',
+  provides: [],
+  consumes: [
+    { token: agentLoopToken.name, range: '^1.0.0' },
+    { token: fsToken.name, range: '^1.1.0' },
+  ],
+  config: Config,
+  // 換程式碼要重啟行程；設定（`maxBytes`）只給新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。
+  reload: { code: 'restart', config: 'next-thread' },
+  capabilities: [],
+});
 
 /**
- * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
+ * 掛上：登記一位 `preStep` listener。
  *
- * @param options - 設定，形狀見 {@link agentInstructionsConfigSchema}。
- * @returns 可以放進組裝點清單的條目。
+ * **兩個服務都在這裡抓進閉包**，列卸載之後經 `ctx` 取服務會拋，抓住的那份仍可呼叫（見檔頭偏離 2）。**呼叫當下才 `fs.forCall`**。
+ *
+ * @param ctx - 這一列的 Cordis context。
+ * @param config - 驗過的設定。
  */
-export function createAgentInstructionsPlugin(
-  options: AgentInstructionsPluginOptions = {},
-): PluginEntry {
-  return { plugin: agentInstructionsPlugin, config: options };
+export function apply(ctx: Context, config: AgentInstructionsConfig): void {
+  const agentLoop = service(ctx, agentLoopToken);
+  const fs = service(ctx, fsToken);
+  agentLoop.preStep(
+    AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,
+    createAgentInstructionsListener(config.maxBytes, {
+      fs: (invocation) => fs.forCall(invocation),
+    }),
+  );
 }
