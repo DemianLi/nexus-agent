@@ -73,35 +73,35 @@ import {
   interpolateStrict,
   SECTION_ORDERS,
   SYSTEM_PROMPT_MIDDLEWARE_NAME,
+  SYSTEM_PROMPT_SECTION_NAMES,
+  SYSTEM_PROMPT_VARIABLE_NAMES,
   SystemPromptTemplateError,
   systemPromptToken,
   VARIABLE_NAME,
 } from '@nexus/system-prompt';
-import type { PromptSection, SystemPrompt, SystemPromptAssembly } from '@nexus/system-prompt';
+import type {
+  PromptSection,
+  SystemPrompt,
+  SystemPromptAssembly,
+  SystemPromptVariables,
+} from '@nexus/system-prompt';
 import { z } from 'zod';
 
 // 照舊從這個入口匯出（宿主與測試一直從這裡拿）；定義與實作的出處是 `@nexus/system-prompt`。
-export { interpolateStrict, SYSTEM_PROMPT_MIDDLEWARE_NAME, SystemPromptTemplateError };
+export {
+  interpolateStrict,
+  SYSTEM_PROMPT_MIDDLEWARE_NAME,
+  SYSTEM_PROMPT_SECTION_NAMES,
+  SYSTEM_PROMPT_VARIABLE_NAMES,
+  SystemPromptTemplateError,
+};
+export type { SystemPromptVariables };
 
 /**
  * 身分句。**寫死在這裡，不是設定**（dsh 同：文字在 `packages/core/system-prompt/src/index.ts:429`）：部署方想換說法，
  * 用 `personaPrefix`；想拿掉，用 `includeHarnessIdentity: false`。名字換成 nexus-agent，其餘照 dsh。
  */
 export const HARNESS_IDENTITY_SENTENCE = 'You are an AI agent powered by nexus-agent.';
-
-/**
- * 前後綴可以引用的變數的名字，依登記順序（錯誤訊息裡「可用的變數」就是這個順序）。這一列自己登記它們（#1477 Q2 (a)）。
- *
- * - `model`：這一次呼叫實際用的模型 id（宿主每次呼叫交）。
- * - `cwd`：檔案工具的位址空間裡的工作目錄；見檔頭的登記，是 `/`。
- */
-export const SYSTEM_PROMPT_VARIABLE_NAMES = ['model', 'cwd'] as const;
-
-/** 宿主交的變數值：每一個 {@link SYSTEM_PROMPT_VARIABLE_NAMES} 一格。 */
-export interface SystemPromptVariables {
-  readonly model: string;
-  readonly cwd: string;
-}
 
 /**
  * 設定。三格都選填；沒寫的格子回到 dsh 的預設（開身分句、前後綴空）。
@@ -132,13 +132,6 @@ export type SystemPromptConfig = z.infer<typeof systemPromptConfigSchema>;
 
 /** 工廠收的東西：schema 的輸入面。 */
 export type SystemPromptPluginOptions = z.input<typeof systemPromptConfigSchema>;
-
-/** 服務建好之後自己登記的三段的名字，照 dsh（`packages/core/system-prompt/src/index.ts:448-465`）。 */
-export const SYSTEM_PROMPT_SECTION_NAMES = {
-  identity: 'harness:identity',
-  prefix: 'deployment:persona-prefix',
-  suffix: 'deployment:persona-suffix',
-} as const;
 
 /**
  * 設定對應的三段：身分句（開著才有）、前綴、後綴。**前後綴是空字串也登記**（渲染時空的不佔位），這樣 `assemble()` 的結果

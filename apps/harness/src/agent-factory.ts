@@ -83,7 +83,7 @@ import {
   type TokenAnchorBook,
   type ToolResultPruneConfig,
 } from '@nexus/core';
-import type { SystemPromptVariables } from '@nexus/plugin-system-prompt';
+import type { SystemPromptVariables } from '@nexus/system-prompt';
 import { CompositeBackend } from 'deepagents';
 import type { AnyBackendProtocol } from 'deepagents';
 import { BackgroundDelegation } from './background-delegation.js';

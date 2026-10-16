@@ -65,6 +65,37 @@ export const SECTION_ORDERS = {
 } as const;
 
 /**
+ * 前後綴可以引用的變數的名字，依登記順序（錯誤訊息裡「可用的變數」就是這個順序）。提供者（`system-prompt` 那一列）登記它們（#1477 Q2 (a)），
+ * 宿主每次模型呼叫交值。
+ *
+ * - `model`：這一次呼叫實際用的模型 id。
+ * - `cwd`：檔案工具的位址空間裡的工作目錄（`/`，見 `@nexus/plugin-system-prompt` 檔頭）。
+ */
+export const SYSTEM_PROMPT_VARIABLE_NAMES = ['model', 'cwd'] as const;
+
+/** 宿主交的變數值：每一個 {@link SYSTEM_PROMPT_VARIABLE_NAMES} 一格。 */
+export interface SystemPromptVariables {
+  readonly model: string;
+  readonly cwd: string;
+}
+
+/** 提供者登記的三段的名字，照 dsh（`packages/core/system-prompt/src/index.ts:448-465`）。 */
+export const SYSTEM_PROMPT_SECTION_NAMES = {
+  identity: 'harness:identity',
+  prefix: 'deployment:persona-prefix',
+  suffix: 'deployment:persona-suffix',
+} as const;
+
+/**
+ * 段的名字 → 設定裡的欄位名：宿主渲染時某一段的插值壞了，錯誤訊息要指名是哪一格設定（`personaPrefix`／`personaSuffix`）。
+ * 放在定義套件，宿主就不必 import 提供者的套件（三角色紀律，同 #1421 Q2 (a)、#1456 Q4 (a)）。
+ */
+export const SYSTEM_PROMPT_SECTION_FIELDS: Readonly<Record<string, string>> = {
+  [SYSTEM_PROMPT_SECTION_NAMES.prefix]: 'personaPrefix',
+  [SYSTEM_PROMPT_SECTION_NAMES.suffix]: 'personaSuffix',
+};
+
+/**
  * 宿主掛的那一顆 middleware 的名字。排序斷言與錯誤訊息用得到；`@nexus/plugin-system-prompt` 照舊從自己的入口再匯出它。
  */
 export const SYSTEM_PROMPT_MIDDLEWARE_NAME = 'nexusSystemPrompt';

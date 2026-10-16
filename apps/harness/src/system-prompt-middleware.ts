@@ -2,7 +2,7 @@
  * `systemPrompt` 服務的**宿主端**（[#1477](https://github.com/DemianLi/nexus-agent/issues/1477) Q1 (a)、Q2 (a)、Q4）：把快照渲染成一顆
  * 掛在模型呼叫上的 middleware，與組裝點交給它的 `model`／`cwd` 預設值。
  *
- * 服務由 `system-prompt` 那一列提供（`@nexus/plugin-system-prompt`），契約在 `@nexus/system-prompt`。宿主在組 thread 的臨界區裡
+ * 服務由 `system-prompt` 那一列提供，契約在 `@nexus/system-prompt`。宿主在組 thread 的臨界區裡
  * `assemble()` 一次取快照（`plugin-tree.ts` 的 `#assignSystemPrompt`；無樹的路徑在 `mountDetached` 卸載之前取），之後**每次模型呼叫只代入
  * 變數、不再碰服務**。這裡不 import 服務、不 import 插件的實作，只吃快照這份資料。
  *
@@ -39,18 +39,18 @@
 import { SystemMessage } from '@langchain/core/messages';
 import { taggedRouteOf } from '@nexus/core';
 import type { PluginEntry, PluginRegistry } from '@nexus/core';
-import { SYSTEM_PROMPT_SECTION_NAMES } from '@nexus/plugin-system-prompt';
-import type { SystemPromptVariables } from '@nexus/plugin-system-prompt';
-import { composeSystemPromptParts, SYSTEM_PROMPT_MIDDLEWARE_NAME } from '@nexus/system-prompt';
-import type { SystemPromptAssembly, SystemPromptParts } from '@nexus/system-prompt';
+import {
+  composeSystemPromptParts,
+  SYSTEM_PROMPT_MIDDLEWARE_NAME,
+  SYSTEM_PROMPT_SECTION_FIELDS,
+} from '@nexus/system-prompt';
+import type {
+  SystemPromptAssembly,
+  SystemPromptParts,
+  SystemPromptVariables,
+} from '@nexus/system-prompt';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from 'langchain';
-
-/** 錯誤訊息裡指名的格子：段的名字 → 設定裡的欄位名。 */
-const FIELD_OF: Readonly<Record<string, string>> = {
-  [SYSTEM_PROMPT_SECTION_NAMES.prefix]: 'personaPrefix',
-  [SYSTEM_PROMPT_SECTION_NAMES.suffix]: 'personaSuffix',
-};
 
 /**
  * 預設值的登記處：這次組裝的 `registry.middleware`（middleware 註冊點）→ 這次組裝的 `model`／`cwd`。
@@ -143,7 +143,11 @@ export function createSystemPromptMiddleware(
 ): AgentMiddleware | undefined {
   // 值表只有 `model`、`cwd` 兩格；快照上登記了而這裡沒有值的名字，在那次呼叫拋（`composeSystemPromptParts` 只認快照登記過的名字）。
   const valuesOf = (model: string): Record<string, string> => ({ model, cwd: defaults.cwd });
-  const parts = composeSystemPromptParts(assembly, valuesOf(defaults.model), FIELD_OF);
+  const parts = composeSystemPromptParts(
+    assembly,
+    valuesOf(defaults.model),
+    SYSTEM_PROMPT_SECTION_FIELDS,
+  );
   if (parts.head.length === 0 && parts.tail.length === 0) return undefined;
   // `{{model}}` 跟著這一步實際用的模型走（#723）：只認明著貼過路由標籤的實例；沒貼標籤的維持組裝時定的那份。同一個 id 只算一次。
   const byModel = new Map<string, SystemPromptParts>();
@@ -152,7 +156,7 @@ export function createSystemPromptMiddleware(
     if (id === undefined || id === defaults.model) return parts;
     let cached = byModel.get(id);
     if (cached === undefined) {
-      cached = composeSystemPromptParts(assembly, valuesOf(id), FIELD_OF);
+      cached = composeSystemPromptParts(assembly, valuesOf(id), SYSTEM_PROMPT_SECTION_FIELDS);
       byModel.set(id, cached);
     }
     return cached;
