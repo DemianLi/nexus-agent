@@ -171,7 +171,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
     挑到之後算不出位址是 `unknown-caller`。相容層的 `registry.sessions.forCall` 與樹上的服務**都是它**，不另寫一份。
   - **登記與撤除**：`createNexusAgent` 的 `attachSession` 在綁上註冊表、背景 host 建好、參與者訂閱成功之後才登記，撤除掛在它回傳的 detach 上（與解綁、退訂同一個函式）。**登記排在那一步的最後**，所以組裝在中間任何一步拋，都不會在行程級的查找裡留下沒收的註冊表。
     **同一條 thread id 重組**時後登記的**取代**先登記的（`ThreadSessions` 以 root 日誌 id 為鍵），舊的那一份遲到的 detach 只撤自己；所以行程裡不會有兩張都認得同一條 thread 的登記（那會讓下一次呼叫變成 `ambiguous`）。
-    會重組同一個 id 的時機：(1) serve 的 thread 在 `attachSessions` 之後、`ready.set` 之前建不起來，條目被刪、下一次請求同 id 重組，舊的那份沒人收（`wire-handler.ts` 的 catch 只收 `threadAgent`——這是 #1463 之前就有的缺口，沒有在這一張補）；
+    會重組同一個 id 的時機：(1) serve 的 thread 在 `attachSessions` 之後、`ready.set` 之前建不起來，條目被刪、下一次請求同 id 重組；舊的那份由 `wire-handler.ts` 的 catch 收掉（#1467 之前 catch 只收 `threadAgent`，舊的會話接線、落盤、標題沒人收；現在和成功路徑的 `state.dispose` 共用同一支 `release`）；
     (2) 同一棵樹上先後組同一個 id（測試、同一個行程裡 `resume` 接回同一份日誌）；(3) 行程重啟是新的一棵樹，沒有殘留。
   - **消費者**：todo 的 `inject` 只要 `need(sessionLookupToken, '^1.0.0')`，`apply` 當下 `service(ctx, token)` 把**服務**抓進閉包，`forCall` 在**呼叫當下**才問。服務方法是屬性閉包、不碰 `this.ctx`，樹上那一列卸載之後開著的 thread 照樣寫得進自己的日誌（同 #1456 的快照語意）。
   - **三個入口各自接，各有一條會紅的測試**（`apps/harness/src/todo-on-tree.test.ts`）：CLI 與 serve 都是 `cordis-root.ts` 的 `boot` 把 `tree.threadSessions` 交進相容層（`compatLayer.create` → `createCliAgent` → `attachSession`），沒有樹的路徑走 `bindDetached` → `mountDetached`。

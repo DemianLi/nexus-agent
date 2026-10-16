@@ -1040,6 +1040,48 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
       // 而續接的 thread 在 `createAgent` 裡就拿了寫租約——沒人收的話，重試撞上的是**自己
       // 上一次**留下的租約。收 agent 也順便收掉它底下的東西（MCP 的子行程之類）。
       let detachFeed: (() => void) | undefined;
+      // **組裝過程中每接上一樣就記在這裡**，成功路徑的 `state.dispose` 與失敗路徑的 `catch` 共用同一支
+      // `release`，收的順序只有一份（[#1467](https://github.com/DemianLi/nexus-agent/issues/1467)）。
+      // 沒接上的欄位還是 `undefined`，收的時候跳過。
+      const attached: {
+        detachTitle?: () => Promise<void>;
+        unsubscribeFileSearch?: () => void;
+        fileSearch?: WorkspaceFileSearch;
+        attachment?: { detach(): Promise<void> };
+        persistence?: { dispose(): Promise<void> };
+      } = {};
+      /**
+       * 收掉已經接上的每一樣，順序同成功路徑原本的 `state.dispose`：下行 → 標題 → 列檔索引 → 會話接線 → 落盤 → agent。
+       *
+       * @param tolerant - 失敗路徑為 `true`：每一步各自吞掉自己的錯、繼續收下一步，原本的錯才不會被收尾的錯蓋掉，
+       *   也不會因為一步出錯就讓後面的（尤其是 agent 的寫租約）漏收。成功路徑為 `false`：照舊讓錯往上拋。
+       */
+      const release = async (tolerant: boolean): Promise<void> => {
+        const step = async (run: () => void | Promise<void>): Promise<void> => {
+          if (!tolerant) return run();
+          try {
+            await run();
+          } catch {
+            // 原本的錯照舊往上拋；收尾的錯在這條路上沒有人能處理。
+          }
+        };
+        await step(() => detachFeed?.());
+        // **標題最先拆**：它在任何一輪之外寫日誌，拆掉會中止還在跑的那一次，之後回來的寫不進去
+        // （同 dsh 的會話拆卸）。排在參與者前面，理由同下一條：寫得動日誌的先停手。
+        await step(() => attached.detachTitle?.());
+        // **列檔索引接著收**，同 dsh 在 `agent/disposed` 上收它：中止還在背景跑的走訪，之後的查詢回空。它不寫日誌，
+        // 所以排在寫得動日誌的那幾個之間哪裡都不改變誰看到什麼。
+        await step(() => attached.unsubscribeFileSearch?.());
+        await step(() => attached.fileSearch?.dispose());
+        // 參與者、不變量、遙測三個一起收，順序（參與者先、遙測最後）住在 `createCliAgent` 的 `attachSessions`。
+        await step(() => attached.attachment?.detach());
+        // **落盤收在 agent 之前，但這一行的依據跟上面三條不一樣，別讀成驗過的因果。**
+        // 「有這一行」是量出來的（拿掉它，`serve` 那組落盤斷言會紅）；「排在
+        // `threadAgent.dispose()` 之前」是預防，今天的組裝分不出兩種順序——同
+        // `cli.ts` 關機那兩行的處境與措辭。
+        await step(() => attached.persistence?.dispose());
+        await step(() => threadAgent.dispose());
+      };
       try {
         // **三個東西互相要對方，所以綁定是延後的**：port 要日誌（pump 才有）與 flush
         // （協調器才有），而 pump 的建構參數就是 port。這個格子把環打開——兩個 getter
@@ -1086,7 +1128,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
         late.log = pump.sessionLog;
         // 遙測、不變量、參與者一個口接完（#668）；順序與「參與者寫的會被檢查看到」的保證見 `AttachSessions`。
         // 背景子代理結算了，通知這條 thread 的主對話（#840）：閒著就叫醒它開一輪，見 `ThreadPump.notifySettled`。
-        const attachment = threadAgent.attachSessions(pump.sessions, {
+        const attachment = (attached.attachment = threadAgent.attachSessions(pump.sessions, {
           onSettled: (settlement) =>
             pump.notifySettled({
               text: settlement.text,
@@ -1103,23 +1145,23 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           ...(options.threadOrganization !== undefined && {
             isArchived: () => options.threadOrganization!.isArchived(threadId),
           }),
-        });
+        }));
         // **接在最後，理由同 `cli.ts`**：上面那個口接的三件事是觀察者，落盤不改變任何人看得到什麼，
         // 所以順序在功能上沒有差別；排最後是為了讓讀的人看到的因果跟實際一致。
-        const persistence = threadAgent.attachPersistence?.(pump.sessions);
+        const persistence = (attached.persistence = threadAgent.attachPersistence?.(pump.sessions));
         // **沒開落盤時 `flush` 就整個缺席**，而不是一個假裝成功的 no-op：`late.flush?.()`
         // 的缺席語意就是「這條路上沒有耐久檢查點」，同 `attachPersistence` 自己的規矩。
         late.flush = persistence === undefined ? undefined : () => persistence.flush();
         // **LLM 標題接在落盤之後**，同 `cli.ts`：它寫的兩顆照常落地。只接 root，子代理的日誌不排。
-        const detachTitle = threadAgent.attachTitle?.(pump.sessionLog, (message) =>
+        attached.detachTitle = threadAgent.attachTitle?.(pump.sessionLog, (message) =>
           options.warn?.(`[標題] thread ${threadId} ${message}`),
         );
         // **列檔索引跟 pump 同一刻建**：它要聽的是這條 thread 的 root 日誌，而那份日誌在這裡誕生。
-        const fileSearch =
+        const fileSearch = (attached.fileSearch =
           threadAgent.workspaceRoot === undefined
             ? undefined
-            : new WorkspaceFileSearch(threadAgent.workspaceRoot);
-        const unsubscribeFileSearch = fileSearch
+            : new WorkspaceFileSearch(threadAgent.workspaceRoot));
+        attached.unsubscribeFileSearch = fileSearch
           ? pump.sessionLog.subscribe((event) => {
               if (event.type === 'tool/result') fileSearch.invalidate();
             })
@@ -1149,31 +1191,14 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
           background: attachment.background,
           slashInFlight: false,
           promptRequestsInFlight: new Map(),
-          dispose: async () => {
-            detachFeed?.();
-            // **標題最先拆**：它在任何一輪之外寫日誌，拆掉會中止還在跑的那一次，之後回來的寫不進去
-            // （同 dsh 的會話拆卸）。排在參與者前面，理由同下一條：寫得動日誌的先停手。
-            await detachTitle?.();
-            // **列檔索引接著收**，同 dsh 在 `agent/disposed` 上收它：中止還在背景跑的走訪，之後的查詢回空。它不寫日誌，
-            // 所以排在寫得動日誌的那幾個之間哪裡都不改變誰看到什麼。
-            unsubscribeFileSearch?.();
-            fileSearch?.dispose();
-            // 參與者、不變量、遙測三個一起收，順序（參與者先、遙測最後）住在 `createCliAgent` 的 `attachSessions`。
-            await attachment.detach();
-            // **落盤收在 agent 之前，但這一行的依據跟上面三條不一樣，別讀成驗過的因果。**
-            // 「有這一行」是量出來的（拿掉它，`serve` 那組落盤斷言會紅）；「排在
-            // `threadAgent.dispose()` 之前」是預防，今天的組裝分不出兩種順序——同
-            // `cli.ts` 關機那兩行的處境與措辭。
-            await persistence?.dispose();
-            await threadAgent.dispose();
-          },
+          dispose: () => release(false),
         };
         ready.set(threadId, state);
         return state;
       } catch (error) {
-        // 建不起來的那條不留在全域下行上：它的中斷永遠答不到。
-        detachFeed?.();
-        await threadAgent.dispose().catch(() => {});
+        // 建不起來的那條不留在全域下行上：它的中斷永遠答不到。已經接上的每一樣也一併收掉（#1467）：
+        // 下一次請求用同一個 thread id 重組，舊的訂閱、背景 host、落盤不收的話會和新的並存。
+        await release(true);
         throw error;
       }
     })();
