@@ -102,7 +102,10 @@ export type PackageExpectation =
  * 預期與實際對不上（清單說有工具卻零個、說沒有卻冒出工具、套件沒列、列了卻沒有這個套件）都讓產生器失敗。
  */
 export const PACKAGE_MANIFEST: Readonly<Record<string, PackageExpectation>> = {
-  'nexus-plugin-agent-instructions': { kind: 'none', reason: '只把專案指令注入系統提示詞。' },
+  'nexus-plugin-agent-instructions': {
+    kind: 'none',
+    reason: '每次 agent 呼叫開頭把工作區的 AGENTS.md 當一則使用者訊息注入（不是系統提示詞）。',
+  },
   'nexus-plugin-ask-user': { kind: 'shipped', reason: '`ask_user_question`。' },
   'nexus-plugin-commands': {
     kind: 'none',

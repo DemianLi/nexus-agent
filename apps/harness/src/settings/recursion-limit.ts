@@ -107,8 +107,10 @@ export const RECURSION_LIMIT_SERVICE = 'recursionLimit';
  * `模型輪數 = floor((recursionLimit - 1) / 每輪格數)`，所以**預設組裝每一輪是三格，
  * 100 換算成 33 輪而不是 49**。2026-09-03 實測，逐格對照見
  * [`looping-model.ts`](../looping-model.ts) 的檔頭。`beforeAgent` 也是節點，只是每次 invoke 走一次：
- * CLI 與 serve 給了 `--workspace` 時，出貨清單裡的工作區指令那顆每次 invoke 再吃一格，
- * 100 換算成 32 輪（2026-09-18 實測，見 `@nexus/plugin-agent-instructions` 檔頭「代價」）。
+ * 出貨清單裡的工作區指令（宿主為 `agent/pre-step` 接縫建的那顆 `beforeAgent` middleware，#1474）每次 invoke 再吃一格，
+ * 100 換算成 32 輪（2026-09-18 實測，見 `@nexus/plugin-agent-instructions` 檔頭「代價」）。**有沒有給 `--workspace` 都一樣**：
+ * 沒有工作區時組裝點照樣墊一顆 `StateBackend`，那顆 middleware 照建，只是 listener 找不到 AGENTS.md 就什麼都不加
+ * （`agent-instructions-on-tree.test.ts` 的 D 組兩邊都量到 32）。
  *
  * **serve 每輪是四格**：它另掛插話的載體（[#710](https://github.com/DemianLi/nexus-agent/issues/710)，
  * `@nexus/core` 的 `step-inbox.ts`），那顆 `beforeModel` 同樣每輪一個節點；另一半掛在 `afterAgent`，一次執行只走一次，

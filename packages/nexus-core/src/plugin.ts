@@ -32,7 +32,7 @@
  *
  * 我們讓它**載入失敗**：每一層 object 都用 `z.strictObject`。理由是 YAML 拼錯字會悄悄
  * 失效，而這是一台多人共用的內網主機，沒有人會發現。前例是
- * `createAgentInstructionsPlugin` 拒絕 dsh 用 `0` 代表關掉。
+ * `@nexus/plugin-agent-instructions` 的設定拒絕 dsh 用 `0` 代表關掉。
  *
  * @module
  */

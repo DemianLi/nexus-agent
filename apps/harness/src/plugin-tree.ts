@@ -12,6 +12,7 @@
  * | `approval-channel` | 行程級的預設答題管道（`@nexus/approval-channel/provider`，#1458），契約服務，一列；**宿主在建樹時給值**，不是插件登記進來的 | （dsh 沒有這一種：它的答題者是 `session.interrupt` 事件的監聽者；偏離登記在 `@nexus/approval-channel`） |
  * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，#1463），契約服務，一列；**宿主給挑法**（行程裡每一條活著的 thread 綁上的註冊表，`thread-sessions.ts`），不是插件登記進來的 | （dsh 沒有這一種：工具從 `exec.agent.session` 拿；偏離登記在 `@nexus/session`） |
  * | `fs` | 行程級的 fs 查找（`@nexus/fs/provider`，#1466），契約服務，一列；**宿主給挑法**（同一張登記表、同一支 `pickBoundForCall`，每一筆登記同時帶這條 thread 的 fs 把手），不是插件登記進來的 | （dsh 的 `fs` 是行程全域一份、每個 agent 不同的東西以參數傳入；偏離登記在 `@nexus/fs`） |
+ * | `pre-step` | 行程級的 `agent/pre-step` 登記處（`@nexus/agent-loop/provider`，#1474），契約服務，一列；插件登記 listener，**宿主**把登記者是某一列的那幾位建成 middleware 折進每條 thread（`pre-step-middleware.ts`） | `agent/pre-step` 事件（dsh 沒有 middleware 服務；偏離登記在 `@nexus/agent-loop`） |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`，疊上 patch，把樹掛起來 | `include`（`app-boot` 的 `entry.update({ config: { ...includeConfig, patches } })`） |
  * | `include:<id>` | Include 底下的列，模組有 `manifest` 匯出的才上樹（遷出了哪幾顆以 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED` 為準） | 各插件 |
  *
@@ -57,6 +58,8 @@ import { isDeepStrictEqual } from 'node:util';
 import { pathToFileURL } from 'node:url';
 
 import type { StructuredToolInterface } from '@langchain/core/tools';
+import { createAgentLoopProvider } from '@nexus/agent-loop/provider';
+import type { PreStepEntry } from '@nexus/agent-loop/provider';
 import type { ApprovalChannel } from '@nexus/approval-channel';
 import { createApprovalChannelProvider } from '@nexus/approval-channel/provider';
 import { createCommandsProvider } from '@nexus/commands/provider';
@@ -105,6 +108,12 @@ export const SESSION_LOOKUP_ROW_ID = 'session-lookup';
 
 /** fs 查找那一列的 id（#1466）。 */
 export const FS_ROW_ID = 'fs';
+
+/**
+ * `agent/pre-step` 登記處那一列的 id（#1474）。**刻意不叫 `agent-loop`**：`startup-audit.ts` 已經把 dsh 名單上的 `agent-loop` 對到
+ * 「組裝本身」（`nexus-compat`），同名會讓兩個對照分不清。
+ */
+export const PRE_STEP_ROW_ID = 'pre-step';
 
 /** Include 那一列的 id。 */
 export const INCLUDE_ROW_ID = 'include';
@@ -227,6 +236,12 @@ export type RowVerdict =
        */
       readonly resultListeners: readonly ToolResultListener[];
       /**
+       * 這一列登記的 `agent/pre-step` listener（#1474，`@nexus/agent-loop` 1.0.0 的 `preStep`），**依登記順序**。折進這條 thread 的
+       * registry 時一位建一顆 middleware（`registry.middleware.use`，不帶位置旗標，所以落點就是這一列在清單上的位置）：建法在
+       * `pre-step-middleware.ts`，日誌用這條 thread 自己的 `registry.sessions`。
+       */
+      readonly preSteps: readonly Pick<PreStepEntry, 'name' | 'listener'>[];
+      /**
        * **這一列負責折進這條 thread 的**投影單元（#1421）：登記者是這一列、而且這一列是那個 key 目前還活著的第一個登記者。
        * 同一個 key 由兩列共用時（提供者那一層引用計數共用，PM 決策 1），每個 key 只交給其中一列，這條 thread 的登記處才
        * 不會撞上它自己的重複拒絕（`NamedEntries`，照舊）。
@@ -342,6 +357,7 @@ export class PluginTree {
   #provider = createToolsProvider();
   #projections = createProjectionsProvider();
   #skillSources = createSkillSourcesProvider();
+  #preSteps = createAgentLoopProvider();
   #commands = createCommandsProvider();
   #approvalChannel: ReturnType<typeof createApprovalChannelProvider>;
   /** 行程裡每一條活著的 thread 綁上的註冊表（#1463）：`session-lookup` 那一列問它，入口的 `attachSession` 往它登記。 */
@@ -396,9 +412,9 @@ export class PluginTree {
 
   /**
    * 這棵樹的根 context。第一次呼叫才建：根、Loader 與 `tools`、`projections`、`skill-sources`、`commands`、
-   * `approval-channel`、`session-lookup`、`fs` 那七列。
+   * `approval-channel`、`session-lookup`、`fs`、`pre-step` 那八列。
    *
-   * @returns 已掛好 Loader 與上述七列的根。
+   * @returns 已掛好 Loader 與上述八列的根。
    */
   context(): Promise<Context> {
     this.#context ??= this.#build();
@@ -427,6 +443,7 @@ export class PluginTree {
       [APPROVAL_CHANNEL_ROW_ID]: this.#approvalChannel.Provider,
       [SESSION_LOOKUP_ROW_ID]: this.#sessionLookup.Provider,
       [FS_ROW_ID]: this.#fsLookup.Provider,
+      [PRE_STEP_ROW_ID]: this.#preSteps.Provider,
       [INCLUDE_ROW_ID]: Include,
     });
     await this.#create(root, { id: TOOLS_ROW_ID, name: `cordis:${TOOLS_ROW_ID}` });
@@ -442,6 +459,7 @@ export class PluginTree {
       name: `cordis:${SESSION_LOOKUP_ROW_ID}`,
     });
     await this.#create(root, { id: FS_ROW_ID, name: `cordis:${FS_ROW_ID}` });
+    await this.#create(root, { id: PRE_STEP_ROW_ID, name: `cordis:${PRE_STEP_ROW_ID}` });
     await root.loader.await();
     return root;
   }
@@ -824,6 +842,10 @@ export class PluginTree {
           .resultListeners()
           .filter((item) => item.source === id)
           .map((item) => item.listener),
+        preSteps: this.#preSteps
+          .preSteps()
+          .filter((item) => item.source === id)
+          .map(({ name, listener }) => ({ name, listener })),
         // 投影單元由 `#assignProjections` 在所有列的結果都有了之後再分：共用的 key 只能給一列。
         projections: [],
         // 技能來源路徑由 `#assignSkillSources` 在所有列的結果都有了之後再分。
@@ -913,6 +935,8 @@ export interface DetachedContributions {
   readonly gates: readonly ToolGateListener[];
   /** 這一列登記的 `tools/result` 觀察者（#1469），同 {@link RowVerdict} 的 `resultListeners`。 */
   readonly resultListeners: readonly ToolResultListener[];
+  /** 這一列登記的 `agent/pre-step` listener（#1474），同 {@link RowVerdict} 的 `preSteps`。 */
+  readonly preSteps: readonly Pick<PreStepEntry, 'name' | 'listener'>[];
   readonly projections: readonly ProjectionUnit[];
   readonly skillSources: readonly string[];
   readonly commands: readonly CommandDefinition[];
@@ -940,6 +964,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
     mount.sessionLookup ?? (() => ({ kind: 'not-attached' })),
   );
   const fsLookup = createFsLookupProvider(mount.fsLookup ?? (() => ({ kind: 'not-attached' })));
+  const preSteps = createAgentLoopProvider();
   const root = new Context();
   const contractErrors = new Map<string, ContractError>();
   root.logger.exporter({
@@ -961,6 +986,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
       [APPROVAL_CHANNEL_ROW_ID]: approvalChannel.Provider,
       [SESSION_LOOKUP_ROW_ID]: sessionLookup.Provider,
       [FS_ROW_ID]: fsLookup.Provider,
+      [PRE_STEP_ROW_ID]: preSteps.Provider,
       plugin: mount.module,
     });
     const create = (options: EntryOptions) =>
@@ -972,6 +998,7 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
     await create({ id: APPROVAL_CHANNEL_ROW_ID, name: `cordis:${APPROVAL_CHANNEL_ROW_ID}` });
     await create({ id: SESSION_LOOKUP_ROW_ID, name: `cordis:${SESSION_LOOKUP_ROW_ID}` });
     await create({ id: FS_ROW_ID, name: `cordis:${FS_ROW_ID}` });
+    await create({ id: PRE_STEP_ROW_ID, name: `cordis:${PRE_STEP_ROW_ID}` });
     await create({
       id: mount.id,
       name: 'cordis:plugin',
@@ -1002,6 +1029,10 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
           .resultListeners()
           .filter((entry) => entry.source === mount.id)
           .map((entry) => entry.listener),
+        preSteps: preSteps
+          .preSteps()
+          .filter((entry) => entry.source === mount.id)
+          .map(({ name, listener }) => ({ name, listener })),
         projections: projections
           .entries()
           .filter((entry) => entry.sources.includes(mount.id))

@@ -187,7 +187,10 @@ const INDEX: readonly InterceptionRow[] = [
     moment: 'agent/pre-step',
     permission: '讀／改這一步要送出的訊息批次，可 `jumpTo: "end"` 收掉這一輪',
     occupants: [
+      // 注入那半的**消費者**（#1474 起它遷上樹，只經 `@nexus/agent-loop` 的 `preStep` 登記 listener，自己沒有 `beforeAgent`）。
       'packages/nexus-plugin-agent-instructions/src/index.ts',
+      // 注入那半的**載體**：宿主為每一位 listener 建的那顆 `beforeAgent` middleware（#1474）。
+      'apps/harness/src/pre-step-middleware.ts',
       // 邊界提交（#652）：`exit_plan_mode` 同意之後的待關在下一步請求組起來之前交出去，同 dsh。
       // 載體是 `wrapModelCall`，不是 `beforeAgent`，見下面 `PRE_STEP_OTHER_CARRIERS`。
       'packages/nexus-plugin-plan-mode/src/index.ts',
@@ -311,7 +314,7 @@ const INDEX: readonly InterceptionRow[] = [
 const EXPECTED_ROWS = 5;
 
 /** 佔用位址的總數（列可能共用檔案，第 6 與第 7 格就共用 `output-schema.ts`）。 */
-const EXPECTED_SITES = 14;
+const EXPECTED_SITES = 15;
 
 /**
  * 第 2 列的承重事實：全樹的產品程式碼裡，`beforeAgent:` 的實作**恰好就是這一列列出的那些**。
@@ -335,8 +338,15 @@ const PRE_STEP_ROOTS = ['apps/harness/src', 'apps/web/src', 'packages'] as const
  * plan-mode 佔的是 dsh pre-step 的**邊界提交**那半（#652）：待關在下一次模型呼叫前交出去，載體是它本來就有的
  * `wrapModelCall`——那是每次模型呼叫都跑的包裹，不是注入，也不是圖節點。列在這裡而不是讓掃描放寬，
  * 是因為放寬成「`wrapModelCall` 也算」會把十幾個與 pre-step 無關的 `wrapModelCall` 一起掃進來。
+ *
+ * agent-instructions（#1474）是**消費者**：它經 `@nexus/agent-loop` 登記 listener、自己不碰 `beforeAgent`，載體是宿主的
+ * `apps/harness/src/pre-step-middleware.ts`（那個在掃描裡找得到，所以不在這張例外名單上）。
  */
-const PRE_STEP_OTHER_CARRIERS: readonly string[] = ['packages/nexus-plugin-plan-mode/src/index.ts'];
+const PRE_STEP_OTHER_CARRIERS: readonly string[] = [
+  'packages/nexus-plugin-plan-mode/src/index.ts',
+  // agent-instructions 是 `preStep` 的消費者：它登記 listener，載體是宿主的 `pre-step-middleware.ts`（#1474）。
+  'packages/nexus-plugin-agent-instructions/src/index.ts',
+];
 
 /**
  * 掃描會找到、但**不是**第 2 列佔用者的 `beforeAgent:` 實作。

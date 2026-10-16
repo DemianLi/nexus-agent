@@ -44,9 +44,10 @@
 - id: echo
   name: '@nexus/plugin-echo'
 
-# 工作區指令（#388）：產品路徑上的 CLI 與 serve 也看得到 `AGENTS.md`。有 backend
-# 才會真的建 middleware，所以沒給 `--workspace` 時它什麼都不加——與 dsh「沒有檔案系統
-# 提供方就載不到」同形。
+# 工作區指令（#388）：產品路徑上的 CLI 與 serve 也看得到 `AGENTS.md`。這一列經
+# `agent/pre-step` 接縫（`@nexus/agent-loop`，#1474）在每次 agent 呼叫開頭登記一位 listener，
+# 宿主為它建 middleware；listener 在**呼叫當下**問 `fs` 服務拿這條 thread 的 backend，沒給
+# `--workspace`（或工作區沒有 AGENTS.md）時什麼都不加——與 dsh「沒有檔案系統提供方就載不到」同形。
 - id: agent-instructions
   name: '@nexus/plugin-agent-instructions'
 
