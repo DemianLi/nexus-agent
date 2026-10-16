@@ -36,7 +36,7 @@ import {
   SandboxModeController,
   unaskedRefusal,
 } from '@nexus/plugin-sandbox-policy';
-import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
+import { createSubmitRecordPlugin } from './submit-record.fixture.js';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
 

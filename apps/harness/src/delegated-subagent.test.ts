@@ -35,7 +35,7 @@ import {
   EXIT_PLAN_MODE_TOOL_NAME,
   NOT_IN_PLAN_MODE_MESSAGE,
 } from '@nexus/plugin-plan-mode';
-import { createSubmitRecordPlugin } from '@nexus/plugin-submit-record';
+import { createSubmitRecordPlugin } from './submit-record.fixture.js';
 import type { Event } from '@nexus/wire';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { describe, expect, it } from 'vitest';

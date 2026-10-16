@@ -17,12 +17,13 @@
  * | `commands` | 行程級的命令登記處（`@nexus/commands/provider`，契約服務；#1456），只收定義、不執行 | `commands` 服務的提供者 |
  * | `approval-channel` | 行程級的預設答題管道（`@nexus/approval-channel/provider`，契約服務；#1458），**值由入口在建樹時給** | （無對應，偏離登記在 `@nexus/approval-channel`） |
  * | `session-lookup` | 行程級的會話查找（`@nexus/session/provider`，契約服務；#1463），**挑法由宿主給**：行程裡每一條活著的 thread 綁上的註冊表（`thread-sessions.ts`） | （無對應，偏離登記在 `@nexus/session`） |
+ * | `fs` | 行程級的 fs 查找（`@nexus/fs/provider`，契約服務；#1466），**挑法由宿主給**：同一張登記表、同一支 `pickBoundForCall`，一筆登記同時帶這條 thread 的 fs 把手（就是那次組裝 host-services 裡的 `fs` 服務） | （dsh 的 `fs` 是行程全域一份、每個 agent 不同的東西以參數傳入；偏離登記在 `@nexus/fs`） |
  * | `include` | vendor 的 Include：讀出貨的 `cordis.yml`、疊 patch、把函式插件掛起來（#1416 PR 2，`plugin-tree.ts`） | `include` |
  * | `include:<id>` | Include 底下的函式插件，今天是 `include:echo`、`include:trajectory`、`include:token-meter`、`include:skills`、`include:feedback`、`include:ask-user` 與 `include:todo` | 各插件 |
  *
- * `nexus-compat`、入口、`tools`、`projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup`、`include` 都必掛（`startup-audit.ts` 的 {@link auditTreeEntries}）；`include:<id>` 不在名單上，
+ * `nexus-compat`、入口、`tools`、`projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup`、`fs`、`include` 都必掛（`startup-audit.ts` 的 {@link auditTreeEntries}）；`include:<id>` 不在名單上，
  * 它掉了是清單那一列掉了，走 `dropped`。入口的程式碼經入口那一列的 inject 拿到服務，所有組 agent 的地方都走它。`tools`、
- * `projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup` 與 `include` 是**懶建**的（`PluginTree.context()` 第一次被叫到才建），`include` 要等第一次讀清單才有。
+ * `projections`、`skill-sources`、`commands`、`approval-channel`、`session-lookup`、`fs` 與 `include` 是**懶建**的（`PluginTree.context()` 第一次被叫到才建），`include` 要等第一次讀清單才有。
  *
  * **收尾**：相容層組出來的每一個 agent 都用 `ctx.effect` 登記收尾，登記完才交出去；agent 的 `dispose` 就是那筆 effect 的
  * 處置函式，所以正常收掉時那筆登記一起撤下，不會一條 thread 留一筆。根卸載時還沒收的 agent 由相容層的 fiber 收掉。這是 dsh
@@ -34,10 +35,10 @@
  * - **清單由變更紀錄導出（#1412），清單上只有函式插件的列在 Loader 的樹上（#1416 PR 2）**：dsh 的整棵樹本來就由一份 patch
  *   清單導出（`packages/boot/app-boot/src/index.ts:291`，`entry.update({ config: { ...includeConfig, patches } })`），所以
  *   「Cordis 不管插件」不是理由。我們的清單由 `loadDefaultPlugins` 疊出來——第二層是變更紀錄折出來的 patch
- *   （`plugin-journal.ts`、`plugin-config.ts`），經 {@link COMPAT_HOST_SERVICE} 交給相容層。**其餘 20 列不上樹的理由是插件
+ *   （`plugin-journal.ts`、`plugin-config.ts`），經 {@link COMPAT_HOST_SERVICE} 交給相容層。**其餘的列不上樹的理由是插件
  *   還在相容層**：上樹跟著「逐顆搬出相容層」一起做（地圖終點第 1 項），現在放上去只會在相容層底下多一層轉接，而且 Loader
- *   對每列 `config` 跑 `interpolate` 深複製，清單項目的身分留不住（見下）。舊插件一行不改。**函式插件（echo、token-meter、trajectory、skills、feedback、
- *   ask-user，模組有 `manifest` 匯出的才上樹）**經 `plugin-tree.ts` 的 Include 上樹：patch 原樣推給 Include，相容層那一側仍然疊一份、驗一份、當清單的權威，兩邊疊出來
+ *   對每列 `config` 跑 `interpolate` 深複製，清單項目的身分留不住（見下）。舊插件一行不改。**函式插件（模組有 `manifest` 匯出的才上樹；
+ *   遷出了哪幾顆見 `docs/plugin-contract.md` 的「接進清單」與 `migrated-plugin-gate.test.ts` 的 `EXPECTED_MIGRATED`）**經 `plugin-tree.ts` 的 Include 上樹：patch 原樣推給 Include，相容層那一側仍然疊一份、驗一份、當清單的權威，兩邊疊出來
  *   對不上那一列就算掉了。
  * - **Include 的寫回全關（#1416 PR 2，`vendor/README.md` 第 7 條）**：上游 Include 會把樹側的變更寫回 `cordis.yml`，那是
  *   第二個寫入口，會繞過變更紀錄。vendor 時關掉三條寫回路徑，寫入口只有變更紀錄一個。這是對 dsh 做法的偏離，理由是我們的

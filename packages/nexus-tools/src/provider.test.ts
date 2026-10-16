@@ -42,6 +42,28 @@ const optionedConsumer = {
   },
 };
 
+/** 登記核准閘門的消費者（#1466）：要 `^1.2.0`，名字是 `config.tool` 的呼叫回 `ask`，其餘 `next()`。 */
+const gatingConsumer = {
+  name: 'tools-gating-consumer',
+  inject: injectOf(need(toolsToken, '^1.2.0')),
+  apply(ctx: Context, config: { tool: string }) {
+    const tools = service(ctx, toolsToken);
+    if (tools.gate === undefined) throw new Error('提供者沒有 gate');
+    tools.gate((exec, next) =>
+      exec.name === config.tool ? { kind: 'ask', reason: '要人看過' } : next(),
+    );
+  },
+};
+
+/** 舊範圍的消費者：只登記一個工具，不呼叫 `gate`（驗收：`^1.0.0`、`^1.1.0` 在 1.2.0 的提供者上照常）。 */
+const oldRangeConsumer = (name: string, range: string) => ({
+  name,
+  inject: injectOf(need(toolsToken, range)),
+  apply(ctx: Context) {
+    service(ctx, toolsToken).register(make(`${name}_tool`));
+  },
+});
+
 let root: Context | undefined;
 afterEach(async () => {
   await root?.fiber.dispose();
@@ -57,6 +79,9 @@ async function boot() {
     tools: provider.Provider,
     consumer,
     optioned: optionedConsumer,
+    gating: gatingConsumer,
+    'old-100': oldRangeConsumer('old-100', '^1.0.0'),
+    'old-110': oldRangeConsumer('old-110', '^1.1.0'),
   });
   const create = (options: EntryOptions) =>
     context.loader.create(options as Omit<EntryOptions, 'id'>, null);
@@ -122,8 +147,45 @@ describe('工具登記處的提供者', () => {
     expect(provider.entries()).toEqual([]);
   });
 
+  it('核准閘門：登記記下登記者那一列的 id，依登記順序；listener 是原函式', async () => {
+    const { provider, loader, create } = await boot();
+    await create({ id: 'gate-a', name: 'cordis:gating', config: { tool: 'a' } });
+    await create({ id: 'gate-b', name: 'cordis:gating', config: { tool: 'b' } });
+    await loader.await();
+    const gates = provider.gates();
+    expect(gates.map((entry) => entry.source)).toEqual(['gate-a', 'gate-b']);
+    const exec = { name: 'a', args: {}, callId: undefined };
+    const allow = async () => ({ kind: 'allow' as const });
+    expect(await gates[0]!.listener(exec, allow)).toEqual({ kind: 'ask', reason: '要人看過' });
+    expect(await gates[1]!.listener(exec, allow)).toEqual({ kind: 'allow' });
+  });
+
+  it('核准閘門：登記者那一列卸載，它的 listener 自己撤掉，別的列不受影響', async () => {
+    const { provider, loader, create } = await boot();
+    await create({ id: 'gate-a', name: 'cordis:gating', config: { tool: 'a' } });
+    await create({ id: 'gate-b', name: 'cordis:gating', config: { tool: 'b' } });
+    await loader.await();
+    await loader.resolve('gate-a').fiber?.ctx.fiber.dispose();
+    expect(provider.gates().map((entry) => entry.source)).toEqual(['gate-b']);
+  });
+
+  it('舊範圍：^1.0.0 與 ^1.1.0 的消費者在 1.2.0 的提供者上照常登記工具，而且沒有人因此多出閘門', async () => {
+    const { provider, loader, create } = await boot();
+    await create({ id: 'old-a', name: 'cordis:old-100' });
+    await create({ id: 'old-b', name: 'cordis:old-110' });
+    await loader.await();
+    expect(loader.resolve('old-a').fiber?.ctx.fiber.state).toBe(2);
+    expect(loader.resolve('old-b').fiber?.ctx.fiber.state).toBe(2);
+    expect(provider.entries().map(({ tool: t, source }) => [t.name, source])).toEqual([
+      ['old-100_tool', 'old-a'],
+      ['old-110_tool', 'old-b'],
+    ]);
+    expect(provider.gates()).toEqual([]);
+  });
+
   it('每次 createToolsProvider 的狀態是新的', () => {
     expect(createToolsProvider().entries()).toEqual([]);
+    expect(createToolsProvider().gates()).toEqual([]);
     const one = createToolsProvider();
     const two = createToolsProvider();
     expect(one.Provider).not.toBe(two.Provider);

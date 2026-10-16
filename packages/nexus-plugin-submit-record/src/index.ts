@@ -23,12 +23,17 @@
  * 這個 plugin 不自己造 backend。分岔的樣子是「`write_file` 寫到 A、`submit_record` 寫到 B」，
  * **而那不會有任何測試紅**——兩邊各自都寫成功了。所以：
  *
- * - **從 `@nexus/core` 的 `fs` 服務拿，工具被叫時才讀**（[#694](https://github.com/DemianLi/nexus-agent/issues/694)，
- *   照 dsh 寫檔工具注入的 `fs`）。那一格由 fold 填的是**折後**的 backend：組裝點在 fold 之前包的路由
- *   （`apps/harness/src/agent-factory.ts` 的 `/conversation_history/`、`/large_tool_results/`）與 plugin
- *   `registry.backend.mount()` 掛的路由都在裡面。以前收的是組裝點交給 host-services 的**折前**那一個，
- *   被路由的兩個前綴上兩邊各寫各的。量它的是 `apps/harness/src/submit-record-mounts.test.ts`。
+ * - **從 `fs` 查找服務（`@nexus/fs`，#1466）拿，工具被叫時才讀**（[#694](https://github.com/DemianLi/nexus-agent/issues/694)，
+ *   照 dsh 寫檔工具注入的 `fs`）。查找服務依這次呼叫的 `thread_id` 回**那條 thread 自己的** fs 把手，把手的 `backend()` 是
+ *   fold 填的**折後**那一個：組裝點在 fold 之前包的路由（`apps/harness/src/agent-factory.ts` 的 `/conversation_history/`、
+ *   `/large_tool_results/`）與 plugin `registry.backend.mount()` 掛的路由都在裡面。以前收的是組裝點交給 host-services 的
+ *   **折前**那一個，被路由的兩個前綴上兩邊各寫各的。量它的是 `apps/harness/src/submit-record-mounts.test.ts`。
+ * - **為什麼要依 thread 挑**：行程裡可以同時活著好幾條 thread，每條各有自己的 backend 與 `--workspace` 的 fence
+ *   （`SandboxModeController`，`/permission` 切的就是它）。只讀一份行程級的把手，等於一條 thread 的送出寫進另一條 thread 的
+ *   backend、套另一條 thread 的 fence——靜默的。挑法是 `@nexus/core` 的 `pickBoundForCall`，與會話查找同一支。
  * - **拿不到就響亮地拒絕，不退回自己建的預設**（[#687](https://github.com/DemianLi/nexus-agent/issues/687)）。
+ *   **「拿不到」有四種**（沒有任何一條 thread 登記、呼叫認不出、多條 thread 挑不出、把手裡沒有 backend），**對模型一律同一句**
+ *   {@link SUBMIT_RECORD_NO_BACKEND_MESSAGE}（#1466 Q3，逐字不變）；分開是給宿主與測試看的。
  *   照 dsh 的寫檔工具：`tool-str-replace-editor` 硬注入 `fs`（`inject = ['tools', 'fs']`，
  *   `packages/fs/tool-str-replace-editor/src/index.ts:503`，SHA `477b4f4`），缺件時不會悄悄換一個。
  *   以前退到一顆自建的 `StateBackend`：帶 `--workspace` 卻沒接上時，`write_file` 寫進磁碟、`submit_record`
@@ -66,11 +71,17 @@
 
 import { ToolMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
+import type { StructuredToolInterface } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
-import type { NexusPlugin, PluginEntry } from '@nexus/core';
-import { FS_SERVICE, toolRefusal } from '@nexus/core';
+import type { Context } from '@nexus/cordis';
+import { fsToken } from '@nexus/fs';
+import type { FsLookup } from '@nexus/fs';
+import { defineManifest, injectOf, need, service } from '@nexus/sdk';
+import { toolCallIdOf, toolRefusal } from '@nexus/tool-result';
+import { toolsToken } from '@nexus/tools';
+import type { ToolGateListener } from '@nexus/tools';
 import { resolveBackend } from 'deepagents';
-import type { AnyBackendProtocol, BackendProtocolV2 } from 'deepagents';
+import type { BackendProtocolV2 } from 'deepagents';
 import { z } from 'zod';
 
 import { formatCsvRow, parseCsvLine } from './csv.js';
@@ -96,11 +107,6 @@ const submitSchema = z.object({
     .record(z.string(), z.string())
     .describe('這一列的欄位，鍵是欄名、值是欄位內容。值一律是字串。'),
 });
-
-/** 這次執行拿到的 runtime。只用得到兩格，所以不整包相依基座的型別。 */
-interface ToolRuntimeLike {
-  readonly toolCall?: { readonly id?: string };
-}
 
 /** 讀回檔案現在的全文。**讀不到一律當作「還沒有這個檔案」**，見下面的說明。 */
 async function readWhole(
@@ -173,21 +179,29 @@ export const SUBMIT_RECORD_NO_BACKEND_MESSAGE =
   'submit-record: 這次組裝沒有 backend（沒有人提供 `fs` 服務，或裡面沒有值），所以沒有寫。';
 
 /**
- * @param folded - 被叫時讀折出來的那一個 backend；拿不到時回 `undefined`。見模組註解。
+ * 組出 `submit_record` 這顆工具。
+ *
+ * **工具本體只有這一份**：樹上的列（{@link apply}）與還在相容層組裝的測試（`apps/harness/src/submit-record.fixture.ts`）都從這裡
+ * 取，它們之間唯一不同的是「這次呼叫的 fs 把手怎麼來」，所以那一格是參數。
+ *
+ * @param fsFor - 這次呼叫的 fs 查找。**在呼叫當下才呼叫它**，不在建工具的時候；參數是工具 handler 的第二個參數（整份原樣，
+ *   thread 身分在裡面）。把手的 `backend()` 也在這次呼叫才讀。
+ * @returns 可以登記的工具。
  */
-function createSubmitRecordTool(folded: () => AnyBackendProtocol | undefined) {
+export function createSubmitRecordTool(
+  fsFor: (invocation: unknown) => FsLookup,
+): StructuredToolInterface {
   return tool(
-    async (
-      args: { file_path: string; record: Record<string, string> },
-      runtime: ToolRuntimeLike,
-    ) => {
-      const callId = runtime?.toolCall?.id ?? '';
+    async (args: { file_path: string; record: Record<string, string> }, runtime?: unknown) => {
+      const callId = toolCallIdOf(runtime) ?? '';
       // 前綴由 `toolRefusal` 加（#318）：dsh 的寫入失敗是拋 `FsError`，由 `toolErrorResult` 渲染。
       const failed = (message: string): ToolMessage =>
         toolRefusal(message, { callId, name: SUBMIT_RECORD_TOOL_NAME });
 
       // **拿不到就拒絕，不退回預設**，見模組註解。
-      const backend = folded();
+      const found = fsFor(runtime);
+      if (found.kind !== 'ok') return failed(SUBMIT_RECORD_NO_BACKEND_MESSAGE);
+      const backend = found.fs.backend();
       if (backend === undefined) return failed(SUBMIT_RECORD_NO_BACKEND_MESSAGE);
       const fs = await resolveBackend(backend, runtime as never);
       const current = await readWhole(fs, args.file_path);
@@ -223,9 +237,9 @@ function createSubmitRecordTool(folded: () => AnyBackendProtocol | undefined) {
 }
 
 /**
- * 送出一筆紀錄的工具，**外加一個只認它的核准閘門**。
+ * `submit_record` 的**核准閘門**：只認 `submit_record` 這個名字，一律問人；其餘 `next()`。
  *
- * ## 兩樣東西為什麼在同一個 plugin 裡
+ * ## 兩樣東西為什麼在同一個插件裡
  *
  * 形狀照當時的 `@nexus/plugin-plan-mode`：它那時也是自己註冊 `exit_plan_mode`、自己註冊一個只認
  * `exit_plan_mode` 的 `approvals.gate()`（[#652](https://github.com/DemianLi/nexus-agent/issues/652) 照 dsh
@@ -234,52 +248,78 @@ function createSubmitRecordTool(folded: () => AnyBackendProtocol | undefined) {
  * 一張卡都不會出現。
  *
  * **這是新增一個閘門，不是打開一個開關**（#231 第 6 項）：`approvals` 的 waterfall
- * **鏈底是 `allow`**——沒人管的工具一律放行。這一刀之前生產程式碼裡只有一個註冊者
- * （plan-mode，只管 `exit_plan_mode`），**這一刀之後是兩個**，而承重的那一半仍然是鏈底：
- * 掛上這個 plugin 之前，`submit_record` 這個名字沒有任何人會攔。（#652 之後 plan-mode 那位拿掉了，
- * 沙箱升級那位也在 [#700](https://github.com/DemianLi/nexus-agent/issues/700) 照 dsh 把問人搬進工具本體，所以今天又只剩這一位。）
+ * **鏈底是 `allow`**——沒人管的工具一律放行。掛上這個插件之前，`submit_record` 這個名字沒有任何人會攔。
  *
  * **幾個註冊者不會互相影響**：waterfall 依註冊順序跑，每一位對不是自己那個名字的一律 `next()`，
- * 這位對非 `submit_record` 一律 `next()`。「只認自己那個
- * 名字」的否定面各自有測試（見 `index.test.ts` 最後一段）——少了它，一個把所有工具都攔
- * 下來的閘門一條測試都不會紅。
+ * 這位對非 `submit_record` 一律 `next()`。「只認自己那個名字」的否定面有測試（見 `index.test.ts` 最後一段）——
+ * 少了它，一個把所有工具都攔下來的閘門一條測試都不會紅。
  *
  * **閘門沒有開關**。做成可選的失敗方式是有人為了跑測試把它關掉，然後那個組裝就變成
  * 「模型自己把資料寫進真實磁碟」——而 `--workspace` 之下那就是真的檔案。
  *
- * @param options - 見 {@link SubmitRecordPluginOptions}。
- * @returns 可以放進組裝點清單的 plugin。
- */
-/**
- * `submit_record` 的 plugin。
+ * ## 偏離 dsh（AGENTS.md 的偏離規則，#1466 Q1 (a)）
  *
- * **模組層級的一顆常數**，給 [#454](https://github.com/DemianLi/nexus-agent/issues/454)
- * 從設定檔 import。它沒有任何資料設定——唯一要的東西是 backend，走 `@nexus/core` 的 `fs` 服務，
- * **在工具被叫時才讀**（#694），所以清單裡排在提供者前面或後面都一樣。
+ * **哪一條**：dsh 的工具插件用 `ctx.on('tools/pre-execute', listener)` 掛核准閘門
+ * （`packages/core/tools/src/index.ts:1512-1516`，鏈底 `allow`）。**為什麼表達不出來**：樹上沒有事件匯流排的服務 token，
+ * 而核准不搬上匯流排（demian 2026-10-09）。**退到什麼**：`@nexus/tools` 1.2.0 的 `gate(listener)`——同一個 waterfall、同一個
+ * 鏈底，只是入口是 tools 服務上的方法；宿主把這一列的 listener 折進每條 thread 自己的 `registry.approvals`，問人仍走
+ * `nexusApprovalGate` 中介層。
  *
- * 讀服務用 `services.get`：缺件時由工具自己在那一次呼叫拒絕（見模組註解），不在載入時拋。
+ * @param exec - 這一次待決的呼叫。
+ * @param next - 委派給下一位。
+ * @returns 對 `submit_record` 是 `ask`，其餘委派。
  */
-export const submitRecordPlugin: NexusPlugin = {
-  name: 'submit-record',
-  apply(registry) {
-    registry.tools.register(
-      createSubmitRecordTool(() => registry.services.get(FS_SERVICE)?.backend()),
-    );
-    registry.approvals.gate((exec, next) =>
-      exec.name === SUBMIT_RECORD_TOOL_NAME
-        ? { kind: 'ask', reason: '這一列要寫出去，先讓人看過' }
-        : next(),
-    );
-  },
-};
+export const submitRecordGate: ToolGateListener = (exec, next) =>
+  exec.name === SUBMIT_RECORD_TOOL_NAME
+    ? { kind: 'ask', reason: '這一列要寫出去，先讓人看過' }
+    : next();
 
-export default submitRecordPlugin;
+/** 插件在樹上的列用的名字（`ctx.fiber.runtime.name`，錯誤訊息、log 與相容層清單用）。 */
+export const name = 'submit-record';
 
 /**
- * 建一個條目。**薄薄一層**，同 `@nexus/plugin-ask-user`：沒有資料設定，協作者走服務注入。
- *
- * @returns 可以放進組裝點清單的條目。
+ * 要的服務：`tools`（**`^1.2.0`**：要有 `gate`）與 `fs`（`^1.0.0`）。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`，
+ * 提供者的 `check` 讀得到；`tools` 提供者比 1.2.0 舊時，這一列在 `requires` 階段就掉，不會在「閘門沒掛」的狀態下起來。
  */
-export function createSubmitRecordPlugin(): PluginEntry {
-  return { plugin: submitRecordPlugin };
+export const inject = injectOf(need(toolsToken, '^1.2.0'), need(fsToken, '^1.0.0'));
+
+/** 這個插件的設定（manifest 的 `config`）：沒有資料設定。`strictObject`：未知欄位讓載入失敗。 */
+export const Config = z.strictObject({});
+
+export const manifest = defineManifest({
+  id: 'submit-record',
+  version: '0.1.0',
+  owner: '平台團隊',
+  provides: [],
+  consumes: [
+    { token: toolsToken.name, range: '^1.2.0' },
+    { token: fsToken.name, range: '^1.0.0' },
+  ],
+  config: Config,
+  // 換程式碼要重啟行程；沒有資料設定（唯一的協作者 fs 在呼叫當下才讀）。
+  reload: { code: 'restart', config: 'next-thread' },
+  capabilities: [],
+});
+
+/**
+ * 掛上：把 `submit_record` 與它的核准閘門登記進行程級的工具登記處。
+ *
+ * **fs 查找在這裡抓進閉包**，列卸載之後經 `ctx` 取服務會拋，抓住的那份仍可呼叫。**呼叫當下才 `forCall`**：行程裡活著哪幾條
+ * thread 是呼叫當下的事實，不是掛載當下的；`backend()` 也在那一次才讀（同 #694，排在提供者前面或後面都一樣）。
+ *
+ * **閘門缺席不是靜默跳過**：`gate` 在契約上是選填（舊提供者沒有它），但這個插件宣告了 `^1.2.0`，真的沒有就是接線壞了——
+ * 當場拋，不讓一個沒有閘門的 `submit_record` 起來（那一條路上模型會直接把檔案寫出去）。
+ *
+ * @param ctx - 這一列的 Cordis context。
+ */
+export function apply(ctx: Context): void {
+  const fs = service(ctx, fsToken);
+  const tools = service(ctx, toolsToken);
+  if (tools.gate === undefined) {
+    throw new Error(
+      'submit-record: tools 服務沒有 gate()（要 @nexus/tools ^1.2.0），不讓沒有核准閘門的 submit_record 起來。',
+    );
+  }
+  tools.register(createSubmitRecordTool((invocation) => fs.forCall(invocation)));
+  tools.gate(submitRecordGate);
 }

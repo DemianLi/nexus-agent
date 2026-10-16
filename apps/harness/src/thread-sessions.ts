@@ -1,10 +1,13 @@
 /**
- * 行程裡**每一條活著的 thread 綁上的會話註冊表**（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463) Q1 (a)，
- * Part of #1385；逐條 thread 接縫的第三段，#1418 → #1458 → 這張）。
+ * 行程裡**每一條活著的 thread 綁上的會話註冊表與 fs 把手**（[#1463](https://github.com/DemianLi/nexus-agent/issues/1463) Q1 (a)，
+ * [#1466](https://github.com/DemianLi/nexus-agent/issues/1466) Q2 (a)，Part of #1385；逐條 thread 接縫的第三、四段，
+ * #1418 → #1458 → #1463 → 這張）。
  *
- * 樹上的 `session-lookup` 那一列（`@nexus/session/provider`）問的就是它：模型工具呼叫當下問「這次呼叫該寫進哪一份日誌」，
- * 這裡把「活著的那幾張」交給 `@nexus/core` 的 `pickSessionForCall`——**與相容層的 `registry.sessions.forCall` 是同一支挑法**，
- * 這個檔不另寫一份（驗收 G 的「永遠回第一張」突變改在那支函式上）。
+ * 樹上的 `session-lookup` 那一列（`@nexus/session/provider`）問的就是它：模型工具呼叫當下問「這次呼叫該寫進哪一份日誌」；
+ * `fs` 那一列（`@nexus/fs/provider`）問「這次呼叫該讀寫哪一個 backend」。**兩個問題是同一次挑法**：一次 `attachSession` 登記
+ * **一筆**，這一筆同時帶這條 thread 的會話註冊表與 fs 把手，挑法是 `@nexus/core` 的 `pickBoundForCall`（`pickSessionForCall`
+ * 就是它加上「開日誌」）——**與相容層的 `registry.sessions.forCall` 是同一支挑法**，這個檔不另寫一份（驗收的「永遠回第一張」
+ * 突變改在那支函式上，兩個查找一起紅）。
  *
  * ## 登記與撤除的時機
  *
@@ -24,29 +27,39 @@
  * @module
  */
 
-import { pickSessionForCall } from '@nexus/core';
-import type { SessionLookup, SessionRegistry } from '@nexus/core';
+import { pickBoundForCall, pickSessionForCall } from '@nexus/core';
+import type { FsService, SessionLookup, SessionRegistry } from '@nexus/core';
+import type { FsLookup } from '@nexus/fs';
 
-/** `attachSession` 需要的那一面：把一條 thread 的註冊表登記進行程級的查找，回撤除函式。 */
+/** `attachSession` 需要的那一面：把一條 thread 的註冊表（與 fs 把手）登記進行程級的查找，回撤除函式。 */
 export interface SessionLookupRegistrar {
   /**
    * @param sessions - 這條 thread 的會話註冊表（root 日誌 id 就是 thread id）。
+   * @param fs - 這條 thread 的 fs 把手：**就是這次組裝 host-services 裡那一格 `fs` 服務**（`createFsService` 建、fold 填值），
+   *   不是另建的 backend。不給就是這條 thread 沒有（fs 查找對它回 `not-attached`）。
    * @returns 只撤自己這一次登記的冪等 undo：同一個 id 後來被別的註冊表取代了，它什麼都不做。
    */
-  register(sessions: SessionRegistry): () => void;
+  register(sessions: SessionRegistry, fs?: FsService): () => void;
+}
+
+/** 一條 thread 的登記：同一次組裝的兩樣東西，**一起登記、一起取代、一起撤**。 */
+interface ThreadEntry {
+  readonly sessions: SessionRegistry;
+  readonly fs: FsService | undefined;
 }
 
 /** 一棵樹上活著的 thread 的註冊表。 */
 export class ThreadSessions implements SessionLookupRegistrar {
   /** 鍵是 root 日誌 id（＝thread id）。 */
-  readonly #live = new Map<string, SessionRegistry>();
+  readonly #live = new Map<string, ThreadEntry>();
 
-  register(sessions: SessionRegistry): () => void {
+  register(sessions: SessionRegistry, fs?: FsService): () => void {
     const key = sessions.root.sessionId;
+    const entry: ThreadEntry = { sessions, fs };
     // 取代而不是並列：理由見檔頭「同一條 thread id 重組」。
-    this.#live.set(key, sessions);
+    this.#live.set(key, entry);
     return () => {
-      if (this.#live.get(key) === sessions) this.#live.delete(key);
+      if (this.#live.get(key) === entry) this.#live.delete(key);
     };
   }
 
@@ -57,7 +70,26 @@ export class ThreadSessions implements SessionLookupRegistrar {
    * @param config - 工具 handler 的第二個參數。
    */
   forCall(config: unknown): SessionLookup {
-    return pickSessionForCall(this.#live.values(), config);
+    return pickSessionForCall(
+      [...this.#live.values()].map((entry) => entry.sessions),
+      config,
+    );
+  }
+
+  /**
+   * 這次呼叫該讀寫哪一條 thread 的 fs（#1466）。**挑的是同一筆登記**：用的是 core 的 {@link pickBoundForCall}，與
+   * {@link forCall} 同一個演算法——沒有就 `not-attached`、只有一筆不看 `thread_id`、多筆依 `thread_id` 挑恰好一筆、
+   * 算不出位址是 `unknown-caller`。挑中的那一筆沒有 fs 把手（登記時沒給）當 `not-attached`：對模型是同一句話。
+   *
+   * @param config - 工具 handler 的第二個參數。
+   */
+  fsForCall(config: unknown): FsLookup {
+    const picked = pickBoundForCall(this.#live.values(), (entry) => entry.sessions, config);
+    if (picked.kind !== 'ok') return picked;
+    const fs = picked.bound.fs;
+    return fs === undefined
+      ? { kind: 'not-attached' }
+      : { kind: 'ok', fs, address: picked.address };
   }
 
   /** 現在登記著幾條。給測試與稽核對照。 */

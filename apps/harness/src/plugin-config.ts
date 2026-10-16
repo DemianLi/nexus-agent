@@ -65,9 +65,10 @@ import type {
   RegisterOptions,
 } from '@nexus/core';
 import { ManifestError, validateManifest } from '@nexus/sdk';
-import type { ToolRegisterOptions } from '@nexus/tools';
+import type { ToolGateListener, ToolRegisterOptions } from '@nexus/tools';
 
 import { resolveHarnessHome } from './harness-home.js';
+import { registryFsLookup } from './registry-fs-lookup.js';
 import { assertPluginCompatible, PluginCompatibilityError } from './plugin-compatibility.js';
 import {
   createJournalFile,
@@ -838,6 +839,8 @@ interface FoldedContributions {
   readonly tools: readonly StructuredToolInterface[];
   /** 帶了註冊選項的工具與選項（#1458 Q3）：`rootOnly`、`outputSchema`，折進 thread 時原樣交給註冊點。 */
   readonly toolOptions: ReadonlyMap<StructuredToolInterface, ToolRegisterOptions>;
+  /** 核准閘門監聽（#1466），照那一列登記的順序；折進 thread 時一條一條交給 `registry.approvals.gate`。 */
+  readonly gates: readonly ToolGateListener[];
   readonly projections: readonly ProjectionUnit[];
   /** 技能來源路徑（#1446），照那一列登記的順序。 */
   readonly skillSources: readonly string[];
@@ -869,6 +872,10 @@ function registerFolded(
       options === undefined ? undefined : (options as RegisterOptions),
     );
   }
+  // 核准閘門（#1466）：**走 `registry.approvals.gate`，來源就是這一列的橋接插件**——`approval-gate-order.test.ts` 的層一仍是
+  // `submit-record (submit-record)`。監聽的形狀是結構型別（`@nexus/tools` 不 import core），與 core 的 `PreToolListener` 同形。
+  // 排在工具之後、投影之前：與相容層那一列「`apply` 裡先 `tools.register` 再 `approvals.gate`」同一個順序。
+  for (const listener of contributions.gates) registry.approvals.gate(listener);
   for (const unit of contributions.projections) registry.projections.register(unit);
   // 技能來源走 `registry.skills.addSource`，**照那一列登記的順序**：`sources` 依序即優先序（後面的來源贏過前面的同名 skill）。
   // 格式與重名在樹上的提供者登記時就驗過了，這一層的 `NamedEntries` 只是第二道（相容層的列也走它）。
@@ -911,6 +918,9 @@ function bindDetached(entry: PluginEntry, id: string): PluginEntry {
           // 會話查找（#1463）：**這一次組裝自己的 `registry.sessions`**，只看那一份。查找在呼叫當下才問、不在掛載當下
           // 快取，所以之後 `attachSession` 才綁上來的註冊表也看得到；同一個行程裡兩份無樹組裝各問各的、互不相見。
           sessionLookup: (config) => registry.sessions.forCall(config),
+          // fs 查找（#1466）：**這一次組裝自己的 host-services `fs` 服務**——就是這次組裝 fold 填值的那一格，不是另建的 backend。
+          // 在呼叫當下才讀；無樹的組裝一份註冊表就一個 backend，所以不必依 thread 挑（見 `registry-fs-lookup.ts`）。
+          fsLookup: registryFsLookup(registry),
         }),
       );
     },
@@ -1554,6 +1564,7 @@ async function loadPluginConfigOnce(
     const bound = bindToTree(entry, {
       tools: verdict.tools,
       toolOptions: verdict.toolOptions,
+      gates: verdict.gates,
       projections: verdict.projections,
       skillSources: verdict.skillSources,
       commands: verdict.commands,

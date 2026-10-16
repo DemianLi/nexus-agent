@@ -43,8 +43,9 @@ describe('@nexus/tools 的定義', () => {
   it('token 名是 tools，契約版本是 semver 常數', () => {
     expect(toolsToken).toEqual({ name: 'tools', version: TOOLS_CONTRACT_VERSION });
     expect(TOOLS_CONTRACT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
-    // 1.1.0（#1458）：`register` 多選填的第二個參數。加選項是向後相容，所以主版號不動，`^1.0.0` 的舊消費者照常。
-    expect(TOOLS_CONTRACT_VERSION).toBe('1.1.0');
+    // 1.1.0（#1458）：`register` 多選填的第二個參數。1.2.0（#1466）：`ToolRegistry` 多選填方法 `gate`。兩次都是向後相容，
+    // 所以主版號不動，`^1.0.0`、`^1.1.0` 的舊消費者照常（`provider.test.ts` 量）。
+    expect(TOOLS_CONTRACT_VERSION).toBe('1.2.0');
     expect(TOOLS_CONTRACT_VERSION.split('.')[0]).toBe('1');
   });
 

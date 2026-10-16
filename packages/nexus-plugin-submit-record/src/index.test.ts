@@ -1,21 +1,74 @@
 /**
  * `submit_record` 的單元面：**對欄名**、**未知欄名要拒絕**、**`filesUpdate` 那一支**，
- * 加上閘門的兩格（認得它 / 不認得別人）。
+ * 加上閘門的兩格（認得它 / 不認得別人），以及（#1466 起）它在 Cordis 樹上的那一列。
  *
  * backend 在這裡是假的，因為這一層驗的是「拿到什麼就寫出什麼」，不是磁碟。真的走線、
- * 真的核准卡、真的讀檔那一份在 `apps/harness/src/submit-record-wire.test.ts`。
+ * 真的核准卡、真的讀檔那一份在 `apps/harness/src/submit-record-wire.test.ts`；樹上兩條 thread 同時活著的每一種呼叫形狀在
+ * `apps/harness/src/submit-record-on-tree.test.ts`。
+ *
+ * **測試檔不受 SDK lint 管**（`PLUGIN_LINT_IGNORES`），所以這裡可以 import `@nexus/core` 的 `runApprovalGate`；`src/index.ts` 不行。
  */
 
 import type { StructuredTool } from '@langchain/core/tools';
-import { createHostServicesPlugin, loadPlugins, runApprovalGate } from '@nexus/core';
+import { runApprovalGate } from '@nexus/core';
+import { Context } from '@nexus/cordis';
+import Loader from '@nexus/cordis-plugin-loader';
+import { fsToken } from '@nexus/fs';
+import type { FsLookup, FsService } from '@nexus/fs';
+import { createFsLookupProvider } from '@nexus/fs/provider';
+import { checkConformance, ContractService, defineToken, FIBER_STATE } from '@nexus/sdk';
+import type { ToolRegistry } from '@nexus/tools';
+import { createToolsProvider } from '@nexus/tools/provider';
 import type { AnyBackendProtocol, FileData, WriteResult } from 'deepagents';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
-import {
-  createSubmitRecordPlugin,
-  SUBMIT_RECORD_NO_BACKEND_MESSAGE,
-  SUBMIT_RECORD_TOOL_NAME,
-} from './index.js';
+import * as submitRecord from './index.js';
+import { SUBMIT_RECORD_NO_BACKEND_MESSAGE, SUBMIT_RECORD_TOOL_NAME } from './index.js';
+
+const opened: Context[] = [];
+afterEach(async () => {
+  for (const root of opened.splice(0)) await root.fiber.dispose();
+});
+
+/** 一格 fs 把手：`backend()` 在呼叫當下才讀（同 core 的 `createFsService`）。 */
+function fsHandle(backend: AnyBackendProtocol | undefined): FsService {
+  return { backend: () => backend, offWorkspacePrefixes: () => [] };
+}
+
+/** 一個永遠認得這次呼叫的 fs 查找（單元面不驗挑法，挑法在 core 與宿主那邊量）。 */
+function alwaysOk(handle: FsService): (config: unknown) => FsLookup {
+  return () => ({
+    kind: 'ok',
+    fs: handle,
+    address: { kind: 'root' } as never,
+  });
+}
+
+/** 掛一棵小樹：工具登記處、fs 查找（`lookup` 是宿主的挑法）與 `submit-record` 那一列。 */
+async function mount(lookup: (config: unknown) => FsLookup): Promise<{
+  root: Context;
+  tools: ReturnType<typeof createToolsProvider>;
+  tool: StructuredTool;
+}> {
+  const tools = createToolsProvider();
+  const root = new Context();
+  opened.push(root);
+  await root.plugin(Loader);
+  Object.assign(root.loader.builtins, {
+    tools: tools.Provider,
+    fs: createFsLookupProvider(lookup).Provider,
+    'submit-record': submitRecord,
+  });
+  const create = (options: { id: string; name: string; config?: unknown }) =>
+    root.loader.create(options as never, null);
+  await create({ id: 'tools', name: 'cordis:tools' });
+  await create({ id: 'fs', name: 'cordis:fs' });
+  await create({ id: 'submit-record', name: 'cordis:submit-record', config: {} });
+  await root.loader.await();
+  const entry = tools.entries().find((item) => item.tool.name === SUBMIT_RECORD_TOOL_NAME);
+  if (entry === undefined) throw new Error('工具沒有註冊上去');
+  return { root, tools, tool: entry.tool as StructuredTool };
+}
 
 /**
  * 一個記在物件裡的假 backend。
@@ -47,13 +100,7 @@ function fakeBackend(seed: Record<string, string> = {}, checkpoint = false) {
 }
 
 async function toolOf(backend: AnyBackendProtocol): Promise<StructuredTool> {
-  const { registry } = await loadPlugins([
-    createHostServicesPlugin({ fs: { backend: () => backend, offWorkspacePrefixes: () => [] } }),
-    createSubmitRecordPlugin(),
-  ]);
-  const entry = registry.tools.resolve(SUBMIT_RECORD_TOOL_NAME);
-  if (entry === undefined) throw new Error('工具沒有註冊上去');
-  return entry.value;
+  return (await mount(alwaysOk(fsHandle(backend)))).tool;
 }
 
 /** 工具實際回的東西。`Command` 那一支不是 ToolMessage，所以這裡不預設形狀。 */
@@ -166,20 +213,16 @@ describe('拒絕的那幾條', () => {
  */
 describe('拿不到 backend', () => {
   it.each([
-    ['沒有人提供 `fs` 服務', [] as const],
     [
-      '`fs` 服務在、裡面沒有 backend',
-      [
-        createHostServicesPlugin({
-          fs: { backend: () => undefined, offWorkspacePrefixes: () => [] },
-        }),
-      ],
+      '沒有任何一條 thread 登記（`fs` 查找回 not-attached）',
+      () => ({ kind: 'not-attached' }) as FsLookup,
     ],
-  ])('%s：那一次呼叫拒絕，訊息指名 submit-record 與 backend', async (_label, hosts) => {
-    const { registry } = await loadPlugins([...hosts, createSubmitRecordPlugin()]);
-    const entry = registry.tools.resolve(SUBMIT_RECORD_TOOL_NAME);
-    if (entry === undefined) throw new Error('工具沒有註冊上去');
-    const result = await call(entry.value, { file_path: '/v.csv', record: { 姓名: '阿明' } });
+    ['認不出這次呼叫（unknown-caller）', () => ({ kind: 'unknown-caller' }) as FsLookup],
+    ['多條 thread 挑不出（ambiguous）', () => ({ kind: 'ambiguous', count: 2 }) as FsLookup],
+    ['`fs` 把手在、裡面沒有 backend', alwaysOk(fsHandle(undefined))],
+  ])('%s：那一次呼叫拒絕，訊息指名 submit-record 與 backend', async (_label, lookup) => {
+    const { tool } = await mount(lookup);
+    const result = await call(tool, { file_path: '/v.csv', record: { 姓名: '阿明' } });
     // 回的是一則錯誤訊息，不是 `Command`：沒有任何 state update 帶著這一列出去。
     expect((result as { update?: unknown }).update).toBeUndefined();
     const text = errorTextOf(result);
@@ -217,11 +260,12 @@ describe('checkpoint backend 那一支', () => {
 describe('閘門只認 submit_record', () => {
   it('認得它 → `ask`；別人 → 走到鏈底 `allow`', async () => {
     const { backend } = fakeBackend();
-    const { registry } = await loadPlugins([
-      createHostServicesPlugin({ fs: { backend: () => backend, offWorkspacePrefixes: () => [] } }),
-      createSubmitRecordPlugin(),
-    ]);
-    const listeners = registry.approvals.listeners();
+    const { tools } = await mount(alwaysOk(fsHandle(backend)));
+    // 樹上的閘門住在 tools 提供者的 `gates()`（來源是登記它的那一列）；折進 thread 的 `registry.approvals` 是宿主的事
+    // （`apps/harness/src/submit-record-on-tree.test.ts` 與 `approval-gate-order.test.ts` 量）。
+    const gates = tools.gates();
+    expect(gates.map((gate) => gate.source)).toEqual(['submit-record']);
+    const listeners = gates.map((gate) => ({ value: gate.listener, origin: {} as never }));
 
     const mine = await runApprovalGate(listeners, {
       name: SUBMIT_RECORD_TOOL_NAME,
@@ -234,5 +278,80 @@ describe('閘門只認 submit_record', () => {
     // 都攔下來的寫法一條測試都不會紅。
     const other = await runApprovalGate(listeners, { name: 'write_file', args: {}, callId: 'c2' });
     expect(other.kind).toBe('allow');
+  });
+});
+
+describe('樹上這一列（#1466）', () => {
+  it('一致性套件全格通過：manifest、匯出形式、卸載後登記處與閘門回到空的、缺提供者停在 PENDING', async () => {
+    let latest = createToolsProvider();
+    const failures = await checkConformance({
+      row: 'submit-record',
+      module: submitRecord,
+      config: {},
+      providers: {
+        tools: () => {
+          latest = createToolsProvider();
+          return latest.Provider;
+        },
+        fs: () => createFsLookupProvider(() => ({ kind: 'not-attached' })).Provider,
+      },
+      residue: () => latest.entries().length + latest.gates().length,
+    });
+    expect(failures).toEqual([]);
+  });
+
+  it('manifest 宣告兩個必要依賴：tools（^1.2.0，要有 gate）與 fs（^1.0.0）；沒有 default 匯出', () => {
+    expect(submitRecord.manifest.consumes).toEqual([
+      { token: 'tools', range: '^1.2.0' },
+      { token: fsToken.name, range: '^1.0.0' },
+    ]);
+    expect(submitRecord.manifest.provides).toEqual([]);
+    expect(submitRecord.inject).toEqual({ tools: { range: '^1.2.0' }, fs: { range: '^1.0.0' } });
+    expect('default' in submitRecord).toBe(false);
+  });
+
+  it('列卸載之後，抓進閉包的 fs 查找仍可問：已登記的那一份工具照樣寫得出去', async () => {
+    const { backend, files } = fakeBackend();
+    const { root, tool } = await mount(alwaysOk(fsHandle(backend)));
+    await root.loader.resolve('fs').fiber?.ctx.fiber.dispose();
+    expect(root.get('fs', false)).toBeUndefined();
+    const result = await call(tool, { file_path: '/v.csv', record: { 姓名: '阿明' } });
+    expect((result as { status?: string }).status).toBeUndefined();
+    expect(files.get('/v.csv')).toBe('姓名\n阿明\n');
+  });
+
+  it('**tools 提供者比 1.2.0 舊時這一列不會起來**：不讓一個沒有閘門的 submit_record 掛上去', async () => {
+    // 老範圍的提供者：契約版本 1.1.0、服務上沒有 `gate`。這一列宣告 `^1.2.0`，requires 階段就停在 PENDING，工具不會被註冊。
+    const oldToken = defineToken<ToolRegistry>('tools', '1.1.0');
+    const registered: string[] = [];
+    class OldTools extends ContractService<ToolRegistry> implements ToolRegistry {
+      constructor(ctx: Context) {
+        super(ctx, oldToken);
+      }
+      register(tool: { name: string }): () => void {
+        registered.push(tool.name);
+        return () => undefined;
+      }
+      list(): readonly never[] {
+        return [];
+      }
+    }
+    const root = new Context();
+    opened.push(root);
+    await root.plugin(Loader);
+    Object.assign(root.loader.builtins, {
+      tools: OldTools,
+      fs: createFsLookupProvider(() => ({ kind: 'not-attached' })).Provider,
+      'submit-record': submitRecord,
+    });
+    const create = (options: { id: string; name: string; config?: unknown }) =>
+      root.loader.create(options as never, null);
+    await create({ id: 'tools', name: 'cordis:tools' });
+    await create({ id: 'fs', name: 'cordis:fs' });
+    await create({ id: 'submit-record', name: 'cordis:submit-record', config: {} });
+    await root.loader.await();
+    const state = root.loader.resolve('submit-record').fiber?.ctx.fiber.state;
+    expect(state).not.toBe(FIBER_STATE.ACTIVE);
+    expect(registered).toEqual([]);
   });
 });

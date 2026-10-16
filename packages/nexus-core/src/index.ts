@@ -163,13 +163,19 @@ export type {
   ProjectionRegistrationPoint,
   EventRegistrationPoint,
   SessionLookup,
+  BoundPick,
   SpawnLink,
   Disposer,
   RegisterOptions,
   RootOnlyRefusal,
   ScopeKey,
 } from './registry.js';
-export { assertLoadableSkillsPath, createRegistry, pickSessionForCall } from './registry.js';
+export {
+  assertLoadableSkillsPath,
+  createRegistry,
+  pickBoundForCall,
+  pickSessionForCall,
+} from './registry.js';
 export type {
   DispatchMode,
   EventDispatcher,
