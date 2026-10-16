@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { createWireClient } from './client.js';
 import { THREAD_FEED_PATH, isThreadFeedFrame } from './protocol.js';
+import { WireRejectedError } from './rejected-error.js';
 import type { Event, ThreadFeedFrame } from './protocol.js';
 import { decodeSseData, encodeSseData } from './sse.js';
 
@@ -98,5 +99,34 @@ describe('全域下行的 frame', () => {
       fetch: async () => Response.json({ type: 'error', error: 'unknown_error' }),
     });
     await expect(refused.openThreadFeed()).rejects.toThrow('全域下行被拒');
+  });
+
+  it('client：協定層拒絕丟 WireRejectedError，其餘照舊一般的 Error（#1481）', async () => {
+    const packet = { type: 'error', id: null, error: 'not_supported', message: '這個部署沒開' };
+    const refused = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async () => Response.json(packet),
+    });
+    const error: unknown = await refused.openThreadFeed().then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(error).toBeInstanceOf(WireRejectedError);
+    expect(error).toMatchObject({
+      code: 'not_supported',
+      serverMessage: '這個部署沒開',
+      message: `全域下行被拒：${JSON.stringify(packet)}`,
+    });
+    const plain = createWireClient({
+      baseUrl: 'http://agent.test',
+      fetch: async () => new Response('sorry', { headers: { 'content-type': 'text/plain' } }),
+    });
+    const other: unknown = await plain.openThreadFeed().then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+    expect(other).toBeInstanceOf(Error);
+    expect(other).not.toBeInstanceOf(WireRejectedError);
+    expect((other as Error).message).toBe('全域下行被拒：sorry');
   });
 });
