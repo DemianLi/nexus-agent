@@ -104,6 +104,7 @@ import {
   trajectoryTurnPath,
   TURN_NOT_FOUND,
   SUBAGENT_SEND_METHOD,
+  THREAD_AT_CAPACITY,
   isSlashMethod,
   isWireChannel,
   SessionReferenceError,
@@ -437,13 +438,26 @@ export interface WireHandlerOptions {
    */
   readonly projectionFlushMs?: number;
   /**
+   * 行程裡最多同時有幾條 thread（`thread-capacity` 那一列的 `maxThreads`，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)，
+   * 保險絲第 2 級）。**省略就不限**，行為與沒有這個選項時逐位元組相同。
+   *
+   * 數的是 `threads.size`——含建構中的（promise 在 `createAgent` 之前就佔了位），建失敗刪掉就釋放。到了就拒收**新**的 thread：
+   * 不呼叫 `createAgent`、不寫 `threads`，任何會經 `threadFor` 新建組裝的路都算（送訊息、讀歷史、續聊磁碟上的舊 thread）。
+   * 已在行程裡的 thread 不受影響，不經 `threadFor` 的路（列表、`run.cancel`、回饋等）也不經過這一道。名額不會自己回來，
+   * 要重啟 serve。每次拒收經 {@link warn} 講一行，含目前數量與上限。
+   *
+   * **偏離登記：產品需求超出 dsh**——dsh 沒有 thread 數上限；借的是它背景工作准入的形狀，逐點見 `settings/thread-capacity.ts` 的檔頭。
+   */
+  readonly maxThreads?: number;
+  /**
    * 這台 server 講話的地方，選配（[#479](https://github.com/DemianLi/nexus-agent/issues/479)）。
    *
-   * **今天有三件事走到它**，加它的理由都很窄——發生時回應照樣是 200、畫面照樣對，不講就完全看不見：
+   * **今天有四件事走到它**，加它的理由都很窄——發生時回應照樣是 200、畫面照樣對，不講就完全看不見：
    *
    * - 一頁歷史的位元組上限是**軟的**（單獨一輪就超標時不從輪中間切，見 `conversation-history.ts` 的 `fitBytes`）。
    * - 退回標題寫不進去（[#647](https://github.com/DemianLi/nexus-agent/issues/647)）：那一輪照跑，同 dsh；經 pump 的建構子傳下去。
    * - 模型標題寫不成（[#650](https://github.com/DemianLi/nexus-agent/issues/650)）：留著退回標題，同上。
+   * - 拒收新 thread（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)，{@link maxThreads}）：回應是專用錯誤碼，但管理者要在日誌看到目前數量與上限。
    *
    * 缺席就是不講，測試不必為它接線。
    */
@@ -988,6 +1002,27 @@ function feedbackResponse(
   return successResponse(id, { ...result });
 }
 
+/**
+ * 行程裡的 thread 數到了 {@link WireHandlerOptions.maxThreads}，這一條新 thread 沒建（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）。
+ *
+ * 只有 `threadFor` 拋、只有 `threadOrError` 接，回 `thread_at_capacity`。**message 是給管理者看的，寫出上限與下一步**
+ * （照 dsh 背景工作准入的第 5 點）：名額不會自己回來，要放寬就調高 `thread-capacity` 那一列的 `maxThreads`，要釋放就重啟 serve。
+ */
+export class ThreadCapacityError extends Error {
+  constructor(
+    /** 拒收那一刻行程裡的 thread 數（含建構中的）。 */
+    readonly current: number,
+    /** 設定的上限。 */
+    readonly limit: number,
+  ) {
+    super(
+      `這台 server 的 thread 數已到上限（${String(current)}／${String(limit)}），這條新 thread 沒有建。` +
+        '已經開著的 thread 照常；名額不會自己釋放——重啟 serve 才會清空，或請管理者調高 thread-capacity 那一列的 maxThreads 後重啟。',
+    );
+    this.name = 'ThreadCapacityError';
+  }
+}
+
 export function createWireHandler(options: WireHandlerOptions): WireHandler {
   /**
    * 這台 server 的交付上限，**一個 server 解一次**。
@@ -1033,6 +1068,18 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     const existing = threads.get(threadId);
     if (existing !== undefined) {
       return existing;
+    }
+    // **thread 數上限（#1476，保險絲第 2 級；偏離登記：產品需求超出 dsh，借 jobs-local 的准入形狀）。**
+    // 順序是承重的：在 `threads.get` 沒命中之後（已在行程裡的不受影響，同一個新 id 的並行請求也在上面共用同一個 promise、
+    // 只佔一個名額）、在 `createAgent` 與 `threads.set` 之前（拒收不建任何資源、不留任何紀錄）。數 `threads.size` 而不是
+    // `ready.size`：建構中的 promise 同步就佔了位，N 條都卡在 `createAgent` 時第 N+1 條也要被拒；建失敗 `threads.delete`
+    // 之後名額就回來。沒有排隊、搶占、自動關最舊的（dsh 決策紀錄明確否決）。
+    if (options.maxThreads !== undefined && threads.size >= options.maxThreads) {
+      const current = threads.size;
+      options.warn?.(
+        `[thread 上限] 拒收新 thread "${threadId}"：行程裡已有 ${String(current)} 條，上限 ${String(options.maxThreads)}`,
+      );
+      return Promise.reject(new ThreadCapacityError(current, options.maxThreads));
     }
     const created = (async (): Promise<ThreadState> => {
       const threadAgent = await options.createAgent(threadId);
@@ -1218,6 +1265,7 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
    * 那個請求一個位元組都不回、client 永遠卡著，而那顆 rejection 沒有人處理。它屬於協定層：
    * 請求本身沒有錯，是這條 thread 起不來（壞掉的日誌、別的行程握著、目錄對不上……）。
    * 協定的錯誤碼裡沒有「thread 起不來」，最近的是 `unknown_error`——原因寫在 message 裡。
+   * **例外是滿了**（{@link ThreadCapacityError}，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）：那不是壞了，回 `thread_at_capacity`。
    *
    * @param threadId - 哪一條。
    * @param id - 回給哪一顆上行封包；下行那條沒有，是 `null`。
@@ -1230,6 +1278,10 @@ export function createWireHandler(options: WireHandlerOptions): WireHandler {
     try {
       return await threadFor(threadId);
     } catch (error: unknown) {
+      // 滿了不是「壞了」：專用碼、不加「建不起來」的前綴，message 自己講上限與下一步（#1476）。
+      if (error instanceof ThreadCapacityError) {
+        return json(errorResponse(id, THREAD_AT_CAPACITY, error.message));
+      }
       const reason = error instanceof Error ? error.message : String(error);
       return json(errorResponse(id, 'unknown_error', `這條 thread 建不起來：${reason}`));
     }

@@ -50,6 +50,7 @@ import { liveModelPlugin } from './settings/live-model.js';
 import { projectionFlushPlugin } from './settings/projection-flush.js';
 import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { subagentModelSelectionPlugin } from './settings/subagent-model-selection.js';
+import { threadCapacityPlugin } from './settings/thread-capacity.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
@@ -60,9 +61,9 @@ import { toolTextPlugin } from './settings/tool-text.js';
 export type RowClass = 'startup-read' | 'mount-restart' | 'next-thread';
 
 /**
- * 起動期讀一次的那 13 顆（`startupSetting`／`startupEntryMounted` 的呼叫者在 `serve.ts` 起動那一段）。
+ * 起動期讀一次的那 14 顆（`startupSetting`／`startupEntryMounted` 的呼叫者在 `serve.ts` 起動那一段）。
  *
- * **`startup-read` 這一類只從這份名單來**，分類表不再抄一次：兩邊各寫一次 13 顆就是兩份真相。`default-model` 不在這裡：
+ * **`startup-read` 這一類只從這份名單來**，分類表不再抄一次：兩邊各寫一次 14 顆就是兩份真相。`default-model` 不在這裡：
  * 非 `--live` 時它在每條 thread 組裝時讀（`assembly-root.ts:527`），`--live` 時不經過它（`:750`）。
  */
 export const STARTUP_READ_PLUGINS: readonly NexusPlugin<unknown>[] = [
@@ -79,6 +80,7 @@ export const STARTUP_READ_PLUGINS: readonly NexusPlugin<unknown>[] = [
   subagentModelSelectionPlugin,
   threadTitleLlmPlugin,
   threadSearchPlugin,
+  threadCapacityPlugin,
 ] as readonly NexusPlugin<unknown>[];
 
 /** 表上的一格。 */
@@ -94,7 +96,7 @@ const next: RowClassEntry = { class: 'next-thread' };
 /**
  * 出貨清單（`cordis.yml`、`cordis.serve.yml`）每一列的分類，以列 id 為鍵。
  *
- * **起動期讀的 13 列不在這張表上**，它們由 {@link STARTUP_READ_PLUGINS} 決定；守衛測試（`plugin-row-classes.test.ts`）
+ * **起動期讀的 14 列不在這張表上**，它們由 {@link STARTUP_READ_PLUGINS} 決定；守衛測試（`plugin-row-classes.test.ts`）
  * 要求出貨的每一列恰好在其中一邊，漏了是紅，兩邊都有也是紅。表上沒有的列（使用者 `insert` 進來的）一律當
  * `next-thread`：重讀會讓它掛上，這是 #1405 的行為。
  */

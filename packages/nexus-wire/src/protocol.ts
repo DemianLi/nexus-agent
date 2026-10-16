@@ -351,6 +351,13 @@ export const SUBAGENT_CLOSED = 'subagent_closed';
 /** 按需拉軌跡的某一輪（{@link trajectoryTurnPath}），錨點在日誌裡沒有對應的輪。 */
 export const TURN_NOT_FOUND = 'turn_not_found';
 
+/**
+ * serve 行程裡的 thread 數已到管理者設的上限（`#settings/thread-capacity`，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)），
+ * 這條新 thread 沒建。任何會經 `threadFor` 新建組裝的路都可能回（送訊息、讀歷史、續聊磁碟上的舊 thread）；
+ * 已在行程裡的 thread 不受影響。名額不會自己回來——要重啟 serve 才釋放，message 寫了上限與這一步。
+ */
+export const THREAD_AT_CAPACITY = 'thread_at_capacity';
+
 /** 這條線上的錯誤碼：協定的那十個，加上我們自己的命令用到的。 */
 export type WireErrorCode =
   | ErrorCode
@@ -360,6 +367,7 @@ export type WireErrorCode =
   | typeof SUBAGENT_NOT_FOUND
   | typeof SUBAGENT_AT_CAPACITY
   | typeof SUBAGENT_CLOSED
+  | typeof THREAD_AT_CAPACITY
   | typeof MODEL_DOES_NOT_SUPPORT_IMAGES
   | typeof ATTACHMENT_NOT_FOUND;
 

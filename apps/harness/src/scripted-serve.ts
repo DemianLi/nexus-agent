@@ -54,7 +54,7 @@ export interface ScriptedServe {
  *
  * @param turns - 腳本。每條 thread 的 `createCliAgent` 各建一顆新模型，所以腳本**每條 thread 從第一輪開始吃**。
  * @param options - `workspace` 是 `--workspace`（省略即沒有，跑在虛擬檔案系統）；`extraRows` 見 {@link scriptedPatchText}；
- *   `argv` 接在後面的其餘旗標。
+ *   `argv` 接在後面的其餘旗標；`log` 收起動日誌（省略即丟掉）。
  * @returns 跑著的 serve 與收尾函式。
  */
 export async function startScriptedServe(
@@ -63,6 +63,8 @@ export async function startScriptedServe(
     readonly workspace?: string;
     readonly extraRows?: string;
     readonly argv?: readonly string[];
+    /** 起動日誌往哪寫；省略即丟掉。 */
+    readonly log?: (line: string) => void;
   } = {},
 ): Promise<ScriptedServe> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-scripted-serve-'));
@@ -77,7 +79,7 @@ export async function startScriptedServe(
       patch,
       ...(options.argv ?? []),
     ],
-    log: () => undefined,
+    log: options.log ?? (() => undefined),
     env: {},
   })) as RunningServe;
   return {
