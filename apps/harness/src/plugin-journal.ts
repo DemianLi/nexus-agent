@@ -55,11 +55,13 @@
  */
 
 import { createHash } from 'node:crypto';
-import { constants, readFileSync } from 'node:fs';
-import { lstat, mkdir, open, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
+import { lstat, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import { z } from 'zod';
+
+import { syncDirectory, writeAtomic } from './atomic-file.js';
 
 /** 紀錄檔在 harness home 底下的檔名。 */
 export const PLUGIN_JOURNAL_FILE_NAME = 'plugin-journal.jsonl';
@@ -736,17 +738,17 @@ export interface AppendJournalOptions {
   readonly waitMs?: number;
 }
 
-/** fsync 一個目錄：新建檔案之後，名字本身也要落盤。平台不給就算了。 */
-async function syncDirectory(directory: string): Promise<void> {
+/**
+ * 追加路徑上 fsync 目錄，**錯誤吞掉**。全倉只有這一處吞（#1527）：建檔走 {@link createJournalFile}，錯照拋。
+ *
+ * 走到這裡時這一筆已經寫進檔、fsync 過了。這時拋錯，呼叫端會以為沒寫成而重試，紀錄上就多一筆同樣的變更；
+ * 「已寫入但回報失敗」怎麼處置不在 #1527。追加原語本來就不照 dsh（檔頭偏離登記第 1 條），這一處算在那條底下。
+ */
+async function syncDirectoryBestEffort(directory: string): Promise<void> {
   try {
-    const handle = await open(directory, constants.O_RDONLY);
-    try {
-      await handle.sync();
-    } finally {
-      await handle.close();
-    }
+    await syncDirectory(directory);
   } catch {
-    // Windows 開不了目錄；檔案內容已經 fsync，這一步只是更保守。
+    // 刻意不拋，理由見上：不讓已寫進檔的一筆被重試成兩筆。
   }
 }
 
@@ -804,7 +806,7 @@ export async function appendJournalRecord(
         });
         await handle.write(`${JSON.stringify(record)}\n`);
         await handle.sync();
-        if (created) await syncDirectory(directory);
+        if (created) await syncDirectoryBestEffort(directory);
         return record;
       } finally {
         await handle.close();
@@ -815,8 +817,9 @@ export async function appendJournalRecord(
 }
 
 /**
- * 一次建好整份紀錄檔（遷移與建空檔用）：寫暫存檔、fsync、rename 進位，讀端只會看到不存在或完整的那份。
- * **呼叫端要在 {@link withFileLock} 裡呼叫，並確認紀錄檔不存在。**
+ * 一次建好整份紀錄檔（遷移與建空檔用）：`atomic-file.ts` 的 `writeAtomic`（照 dsh `storage-json/src/atomic.ts:24-40`，
+ * #1527）——隨機名暫存檔 `wx`、fsync、rename 進位、fsync 目錄，讀端只會看到不存在或完整的那份；任何一步失敗都不留暫存檔，
+ * **目錄 fsync 的錯照拋**。**呼叫端要在 {@link withFileLock} 裡呼叫，並確認紀錄檔不存在。**
  *
  * @param path - 紀錄檔路徑。
  * @param records - 要寫的紀錄，序號必須是 1、2、3……。
@@ -825,22 +828,9 @@ export async function createJournalFile(
   path: string,
   records: readonly JournalRecord[],
 ): Promise<void> {
-  const directory = dirname(path);
-  await mkdir(directory, { recursive: true, mode: 0o700 });
-  const staging = `${path}.${String(process.pid)}.tmp`;
+  await mkdir(dirname(path), { recursive: true, mode: 0o700 });
   const text = records
     .map((record) => `${JSON.stringify(journalRecordSchema.parse(record))}\n`)
     .join('');
-  const handle = await open(staging, 'w', 0o600);
-  try {
-    await handle.writeFile(text, 'utf8');
-    await handle.sync();
-  } catch (error) {
-    await handle.close();
-    await rm(staging, { force: true });
-    throw error;
-  }
-  await handle.close();
-  await rename(staging, path);
-  await syncDirectory(directory);
+  await writeAtomic(path, text);
 }

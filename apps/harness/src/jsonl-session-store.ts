@@ -77,6 +77,33 @@
  * 3. 不清當機後殘留的 `*.tmp`，同 dsh。殘留檔不會被讀方撿到：列表只認 `.header.json` 結尾，離線掃描走
  *    {@link sessionLogPathOf}，`<base>.header.json.<hex>.tmp` 兩邊都不認。
  *
+ * ## 續接換版：header 原子取代、日誌本文穩定讀（[#1509](https://github.com/DemianLi/nexus-agent/issues/1509)）
+ *
+ * 續接以前會就地覆寫 header（`writeFile`，先截成 0 位元組再寫）：當機或斷電留下空的或半份的 header，這條 thread
+ * 從此接不回來、側欄也找不到；唯讀的讀方（`list`、`open(id, 'read')`、serve 的存在檢查、背景子代理冷讀）不拿租約，
+ * 同時進來就讀到半份。dsh 的 header 不可變、從不就地覆寫（`session-persistence-jsonl/src/index.ts:615-629`，SHA `1517a4db`）。
+ *
+ * - **同版本不寫 header。** 讀到的 header 版本已經是這一版就整步跳過，只截尾、開日誌（與 dsh「同版本續接不碰 header」一致）。
+ * - **版本較舊才換，換法是原子取代**：暫存檔（`<檔名>.<12 hex>.tmp`，`wx`、`0600`）寫滿、`fsync`，`rename` 蓋過 header，
+ *   再 `fsync` 會話目錄。讀方不用鎖，只會看到舊的或新的完整一份（dsh `writeFileAtomic` 的做法，
+ *   `packages/util/atomic-write/src/index.ts:64-95`）。任何一步失敗：暫存檔刪掉、header 原樣、錯照拋。
+ *   換版落定（含目錄 `fsync`）之後才截日誌尾、開日誌續寫。
+ * - **和 `link` 發佈（#1510）刻意是兩支**：`link` 的目標不該存在、撞上就是錯；`rename` 的目標本來就在。
+ * - **日誌本文走穩定快照讀**（{@link readStableSnapshot}，照 dsh `readStableSnapshot`，
+ *   `generation.ts:262-282`）：讀前讀後各 `stat`，身分不變才算數，變了重讀一次，第二次還在變就回傳第二次讀到的位元組
+ *   截到讀前大小的前綴，不被持續寫入的寫者餓死。日誌不是嚴格只追加（續接先 `truncate` 掉撕裂尾巴再續寫），分段讀的大檔
+ *   可能拼出一行垃圾，而 #1508 之後那行會被當成壞尾丟掉、續接還會照錯的位置截檔。
+ *
+ * 偏離，登記：
+ *
+ * 1. **header 換版用「暫存＋fsync＋rename 取代 header 檔」，不換成 dsh 的世代檔**（理由 1，基座表達不出來）：
+ *    nexus 的落盤格式把 header 獨立成 `<base>.header.json`、檔名不帶版本，所有既存會話、離線掃描與日誌匯出共用。
+ *    要照世代檔得先整個遷格式，那是另一張規模 L 的卡（#1509 Q1 (a)）。退到 dsh 自己取代既有檔用的
+ *    `writeFileAtomic`，補上它 TODO 裡寫的檔案 `fsync` 與目錄 `fsync`。
+ *
+ * 照 dsh、不算偏離的：Windows 的 `rename` 暫時性錯誤（`EACCES`／`EBUSY`／`EPERM`）有界重試，常數同 `atomic-write:19-44`
+ * （20 ms 起、上限 200 ms、8 次）。Windows 不做目錄 `fsync`，沿用 #1510 登記的偏離 2（理由 1）。
+ *
  * ## 目錄：CLI 每次一個，serve 按專案固定一格
  *
  * dsh 的 `SessionId` 全域唯一；我們的 CLI root 固定叫 `cli`，放在固定的地方會每次都撞。
@@ -96,20 +123,11 @@
  * @module
  */
 
-import {
-  link,
-  mkdir,
-  open,
-  readdir,
-  readFile,
-  rm,
-  stat,
-  truncate,
-  writeFile,
-} from 'node:fs/promises';
+import { link, mkdir, open, readdir, readFile, rename, rm, stat, truncate } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { setTimeout as wait } from 'node:timers/promises';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   isUnreadableSessionEvent,
@@ -216,8 +234,9 @@ function safeBaseName(sessionId: string): string {
 /**
  * 續接一份已存會話時，把手要知道的兩件事。
  *
- * `truncateTo` 只在最後一行寫到一半時才有：那是當掉的常態，讀方不算它，而把手第一次寫入
- * 之前要把它截掉——不截的話，續寫的第一行會黏在那半行後面，兩行一起變成壞行。
+ * `torn` 只在日誌尾端有讀方不算的東西時才有：最後一行寫到一半（當掉的常態），或讀不懂的完整行加上它之後
+ * 沒收尾的行（可復原的壞尾，#1508）。而把手第一次寫入之前要把它截掉——不截的話，續寫的第一行會黏在那半行後面，
+ * 兩行一起變成壞行。截完 sync、講一行（thread id、截到哪、丟了幾個位元組）；截掉的位元組不另存，同 dsh。
  *
  * **截是跟著第一次寫入走的，不是跟著續接走的。** 續接幾乎都會寫：seed 結尾補的那顆
  * `session/end-seed` 就是一筆待寫。唯一不寫的是 seed 本來就停在 end-seed（上一次續接之後
@@ -226,7 +245,10 @@ function safeBaseName(sessionId: string): string {
  */
 interface ResumePoint {
   readonly nextSeq: number;
-  readonly truncateTo?: number;
+  /** 日誌尾端有東西要丟（撕裂的半行、可復原的壞行與它之後的行）；第一次寫入之前截到 `truncateTo`。 */
+  readonly torn?: { readonly truncateTo: number; readonly droppedBytes: number };
+  /** 磁碟上 header 的版本比這一版舊：第一次寫入之前要原子取代它（#1509）。同版本就是 `undefined`，不碰 header。 */
+  readonly headerStale?: true;
   /** 讀之前就拿到的租約；這個平台拿不到就是 `undefined`。 */
   readonly lease: SessionWriteLease | undefined;
 }
@@ -258,6 +280,8 @@ interface LeaseContext {
   readonly lock: TryLock | undefined;
   readonly unavailable: (outcome: LeaseUnavailable) => void;
   readonly openLog: OpenLogFile;
+  /** 後端的 `options.warn`（沒給就是 `console.warn` 加前綴）：截掉尾巴時講一行。 */
+  readonly warn: (message: string) => void;
 }
 
 /** 拿租約；拿不到的平台講一聲、回 `undefined`。搶不到與其餘的錯照常拋。 */
@@ -320,6 +344,45 @@ async function syncDirectory(directory: string): Promise<void> {
     await handle.sync();
   } finally {
     await handle.close();
+  }
+}
+
+const WINDOWS_TRANSIENT_RENAME_ERRORS: ReadonlySet<string> = new Set(['EACCES', 'EBUSY', 'EPERM']);
+const WINDOWS_RENAME_RETRY_INITIAL_MS = 20;
+const WINDOWS_RENAME_RETRY_MAX_MS = 200;
+const WINDOWS_RENAME_RETRY_LIMIT = 8;
+
+/** `rename` 蓋過既有檔，Windows 上暫時性的 `EACCES`／`EBUSY`／`EPERM` 有界重試，常數同 dsh `atomic-write`（`:19-44`）。 */
+async function renameOverExisting(temp: string, finalPath: string): Promise<void> {
+  let delay = WINDOWS_RENAME_RETRY_INITIAL_MS;
+  for (let retries = 0; ; retries += 1) {
+    try {
+      await rename(temp, finalPath);
+      return;
+    } catch (error: unknown) {
+      const code = (error as { code?: unknown } | null)?.code;
+      const transient =
+        process.platform === 'win32' &&
+        typeof code === 'string' &&
+        WINDOWS_TRANSIENT_RENAME_ERRORS.has(code);
+      if (!transient || retries >= WINDOWS_RENAME_RETRY_LIMIT) throw error;
+    }
+    await wait(delay);
+    delay = Math.min(delay * 2, WINDOWS_RENAME_RETRY_MAX_MS);
+  }
+}
+
+/**
+ * 原子取代一個已存在的檔：暫存檔寫滿＋`fsync`（{@link writeSyncedTemp}）、`rename` 蓋過去。失敗刪暫存檔、目標原樣、錯照拋。
+ * **目錄 `fsync` 由呼叫端做**（取代落定之後）。和 `link` 發佈不是同一支：`link` 的目標不該存在。
+ */
+async function replaceSyncedFile(finalPath: string, content: string): Promise<void> {
+  const temp = await writeSyncedTemp(finalPath, content);
+  try {
+    await renameOverExisting(temp, finalPath);
+  } catch (error: unknown) {
+    await rm(temp, { force: true }).catch(() => undefined);
+    throw error;
   }
 }
 
@@ -582,21 +645,47 @@ class JsonlStoredSession implements StoredSession {
   }
 
   /**
-   * 續接那條：**header 覆寫、日誌續寫**，兩者都不是 `wx`。
+   * 續接那條：header 版本較舊才**原子取代**（#1509），日誌續寫（`a`，不是 `wx`）。
    *
-   * header 覆寫是因為續寫進去的是這一版的詞彙（`session-store.ts` 的版本 3 那一段）；
-   * 其餘欄位原樣——`createdAt` 是這份會話出生的時間，不是這一次打開的時間。
+   * 取代是因為續寫進去的是這一版的詞彙（`session-store.ts` 的版本 3 那一段）；其餘欄位原樣——`createdAt` 是這份會話
+   * 出生的時間，不是這一次打開的時間。**同版本不寫**：就地覆寫同樣的位元組也會先截成 0 位元組。
+   * header 落定（含目錄 `fsync`）之後才截日誌尾、開日誌。重試（`rename` 成功但目錄 `fsync` 失敗）會再取代一次，
+   * 內容相同，不像 `link` 會撞上自己。
    */
   async #materializeResumed(resume: ResumePoint): Promise<LogFileHandle> {
-    await writeFile(
-      join(this.#directory, `${this.#base}${HEADER_SUFFIX}`),
-      `${JSON.stringify(this.#header, null, 2)}\n`,
-      { encoding: 'utf8', mode: FILE_MODE },
-    );
+    if (resume.headerStale === true) {
+      await replaceSyncedFile(
+        join(this.#directory, `${this.#base}${HEADER_SUFFIX}`),
+        `${JSON.stringify(this.#header, null, 2)}\n`,
+      );
+      await syncDirectory(this.#directory);
+    }
     const logPath = this.#logPath();
-    if (resume.truncateTo !== undefined) await truncate(logPath, resume.truncateTo);
+    if (resume.torn !== undefined) await this.#truncateTornTail(logPath, resume.torn);
     this.#handle = await this.#context.openLog(logPath, 'a', FILE_MODE);
     return this.#handle;
+  }
+
+  /**
+   * 截掉尾巴：先 `truncate`，再開 `r+` 做 `sync`，最後講一行（照 dsh `truncateTornTail`／`repair`，
+   * `session-persistence-jsonl/src/index.ts:1452-1460`、`:942-946`）。**不 sync 的話**，斷電後截斷可能沒落盤，
+   * 續寫的新行接在舊尾巴後面。**截掉的位元組不另存**（Q2 (a)，同 dsh）：磁碟上就沒了，warn 是唯一的紀錄。
+   */
+  async #truncateTornTail(
+    logPath: string,
+    torn: { readonly truncateTo: number; readonly droppedBytes: number },
+  ): Promise<void> {
+    await truncate(logPath, torn.truncateTo);
+    const handle = await this.#context.openLog(logPath, 'r+', FILE_MODE);
+    try {
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+    this.#context.warn(
+      `會話 "${this.#header.id}" 的日誌尾端有 ${torn.droppedBytes} 個位元組不屬於任何完整的事件` +
+        `（撕裂的半行，或讀不懂的行與它之後沒收尾的行），已截到第 ${torn.truncateTo} 個位元組、這些位元組已丟棄。`,
+    );
   }
 }
 
@@ -671,9 +760,10 @@ export function sessionLogPathOf(headerPath: string): string | undefined {
 
 /**
  * {@link parseJsonlSessionBody} 的選項。**要嘛說明白是哪一版的日誌，要嘛明說不守**——不給預設，因為守衛開著的時候
- * 拒絕訊息要講是哪一份的哪個版本，而不守是少數呼叫方的例外。
+ * 拒絕訊息要講是哪一份的哪個版本，而不守是少數呼叫方的例外。`recovery` 同理必填、不給預設：兩種讀法對壞行的
+ * 態度相反，呼叫方要明說自己是哪一種。
  */
-export type ParseBodyOptions =
+export type ParseBodyOptions = (
   | {
       /** 不認得又沒標可忽略的種類也照收。**只給產品路徑外的離線掃描**（`eval/session-scan.ts` 的「照格式版本表態」）。 */
       readonly acceptUnknownEvents: true;
@@ -682,70 +772,160 @@ export type ParseBodyOptions =
       readonly acceptUnknownEvents?: false;
       /** header 上寫的版本，原樣；只用在拒絕時的訊息。 */
       readonly version: unknown;
-    };
+    }
+) & {
+  /**
+   * `strict`：第一個壞行就整份拒絕——驗證工具與離線掃描用。
+   * `recoverable`：壞行與它之後的行可以丟掉，除非後面跟著收尾（見 {@link parseJsonlSessionBody}）——產品路徑的
+   * 續接與預設讀取用，照 dsh 的 `SessionLogScanner` 預設（`format.ts:404`）。
+   */
+  readonly recovery: 'strict' | 'recoverable';
+};
+
+/** 收尾一輪的事件種類：`session-log.ts` 的 `openTurnStart` 與 `interrupted-turn.ts` 都把這兩個當收尾（Q1 (a)，#1508）。 */
+const TURN_CLOSER_TYPES: ReadonlySet<unknown> = new Set(['turn/end', 'turn/failed']);
+
+function isTurnCloser(value: unknown): boolean {
+  return isRecord(value) && TURN_CLOSER_TYPES.has(value['type']);
+}
 
 /**
  * 讀日誌本文：**實體上有效的前綴**，加上它有幾個位元組。
  *
+ * **換行在原始位元組上找（`0x0A`），位元組數也算在 Buffer 上**，只有完整的行才解碼成字串。先解碼成字串再算
+ * `Buffer.byteLength` 會多算：完整行裡的非法 UTF-8 位元組解碼時變成 U+FFFD（3 個位元組），算出來的位元組數比
+ * 實際多，截斷就會留下撕裂尾巴的前幾個位元組（照 dsh `format.ts:381-385`、`:423-436`）。`validBytes` 是最後一個
+ * 被接受的行的結束位元組（dsh 的 `committedBytes`）。
+ *
  * 最後一個換行之後的東西是寫到一半的那一行——當掉時的常態，不算壞檔，只是不算進去。
- * 換行之前的每一行都必須是一筆 `seq` 等於行號的事件；不是的話那不是當掉，是壞檔。
+ * 換行之前的每一行必須是一筆 `seq` 等於已接受事件數的事件；不是的話那一行是壞行：
+ *
+ * - `strict`：整份拒絕。
+ * - `recoverable`（照 dsh `format.ts:478-521`）：**第一個**壞行記成 issue，不立刻拋。之後的行不再檢查 `seq`，
+ *   遇到任何一個收尾事件（`turn/end` 或 `turn/failed`）就拋那個 issue——壞行落在一個已收尾的輪中間，不是當掉
+ *   留下的尾巴，是壞檔；沒有收尾的話，壞行與它之後的行都屬於那一次沒寫完的輪，丟掉，由續接補「中斷」。壞行本身
+ *   parse 得了、而且是收尾事件，也立即拋。
+ *
+ * 壞行指：不是 JSON、不像一筆事件（`type` 是字串、`time` 是數字的物件），或 `seq` 不等於已接受的事件數。
  *
  * **種類這一版不認得、又沒標 `ignorable` 的，整份拒絕**（{@link SessionEventUnsupportedError}，
  * [#507](https://github.com/DemianLi/nexus-agent/issues/507)），不是略過那一行：不認得的必需事件可能左右後面每一筆
  * 怎麼讀。同 dsh（`packages/core/session/src/types.ts:501-511`，`5badb15`）。守衛在這裡而不是 append：
- * append 時拒絕詞彙會讓正在跑的會話的耐久寫入卡住。順序在壞檔判斷**之後**：同一行既不認得又 `seq` 對不上的話，
- * 先報壞檔，那是比「更新的版本寫的」更需要人看的一種。
+ * append 時拒絕詞彙會讓正在跑的會話的耐久寫入卡住。`strict` 裡順序在壞檔判斷**之後**：同一行既不認得又 `seq`
+ * 對不上的話，先報壞檔，那是比「更新的版本寫的」更需要人看的一種。`recoverable` 裡順序反過來，照 dsh「准入先於
+ * 復原」（`format.ts:490-497`）：像一筆事件的每一行（`type` 是字串、`seq` 與 `time` 是數字，同撿回模式的門檻），
+ * 包括壞行與壞行之後要丟掉的行，都先過這一關——否則新版行程寫的事件會被當成壞尾，靜靜截掉。
  *
  * **匯出給唯讀的讀方**：離線掃描（`eval/session-scan.ts`）不能走 {@link JsonlSessionStore.resume}
- * ——那條會拿寫租約、覆寫 header、截掉撕裂的尾巴，全是寫入，還會把一個正在寫的行程擋在門外。
- * 撕裂尾巴的規則只有這一份，唯讀打開（`open(id, 'read')`）也走它。
+ * ——那條會拿寫租約、換版時取代 header、截掉撕裂的尾巴，全是寫入，還會把一個正在寫的行程擋在門外。
+ * 撕裂尾巴的規則只有這一份，唯讀打開（`open(id, 'read')`）也走它，但**唯讀的永遠不截、不講**。
  *
- * @throws {@link SessionCorruptionError} 中段某一行讀不懂，或 `seq` 不連續。
+ * @throws {@link SessionCorruptionError} 中段某一行讀不懂，或 `seq` 不連續（`recoverable` 只在壞行之後還有收尾時）。
  */
 export function parseJsonlSessionBody(
   id: string,
-  body: string,
+  body: Buffer,
   options: ParseBodyOptions,
 ): { events: SessionEvent[]; validBytes: number } {
-  const complete = body.slice(0, body.lastIndexOf('\n') + 1);
-  const lines = complete.split('\n');
-  lines.pop();
-  const events = lines.map((line, index): SessionEvent => {
+  const events: SessionEvent[] = [];
+  let validBytes = 0;
+  let issue: SessionCorruptionError | undefined;
+  let lineStart = 0;
+  let lineNumber = 0;
+  for (let newline = body.indexOf(0x0a, lineStart); newline !== -1;) {
+    lineNumber += 1;
+    const lineEnd = newline + 1;
+    const line = body.toString('utf8', lineStart, newline);
+    lineStart = lineEnd;
+    newline = body.indexOf(0x0a, lineStart);
+
     let value: unknown;
+    let problem: string | undefined;
     try {
       value = JSON.parse(line);
     } catch {
-      throw new SessionCorruptionError(id, `第 ${index + 1} 行不是 JSON`);
+      problem = `第 ${lineNumber} 行不是 JSON`;
     }
+    const eventLike =
+      problem === undefined &&
+      isRecord(value) &&
+      typeof value['type'] === 'string' &&
+      typeof value['time'] === 'number';
+    if (problem === undefined && !eventLike) problem = `第 ${lineNumber} 行不是一筆會話事件`;
+
+    if (options.recovery === 'strict') {
+      if (problem !== undefined) throw new SessionCorruptionError(id, problem);
+      events.push(
+        admitEvent(id, value as Record<string, unknown>, events.length, lineNumber, options),
+      );
+      validBytes = lineEnd;
+      continue;
+    }
+
+    // recoverable：准入先於復原——壞行與壞行之後的行都先過。
     if (
-      !isRecord(value) ||
-      typeof value['type'] !== 'string' ||
-      typeof value['time'] !== 'number'
+      eventLike &&
+      typeof (value as Record<string, unknown>)['seq'] === 'number' &&
+      options.acceptUnknownEvents !== true
     ) {
-      throw new SessionCorruptionError(id, `第 ${index + 1} 行不是一筆會話事件`);
+      const { ignorable, seq } = value as Record<string, unknown>;
+      const type = (value as Record<string, unknown>)['type'] as string;
+      if (isUnreadableSessionEvent({ type, ignorable })) {
+        throw new SessionEventUnsupportedError(id, options.version, seq as number, type);
+      }
     }
-    if (value['seq'] !== index) {
-      throw new SessionCorruptionError(
-        id,
-        `第 ${index + 1} 行的 seq 是 ${JSON.stringify(value['seq'])}，應該是 ${index}——缺號或重號`,
+    if (issue !== undefined) {
+      if (isTurnCloser(value)) throw issue;
+      continue;
+    }
+    if (problem === undefined && (value as Record<string, unknown>)['seq'] !== events.length) {
+      problem = seqMismatchMessage(
+        lineNumber,
+        (value as Record<string, unknown>)['seq'],
+        events.length,
       );
     }
-    const { type, ignorable } = value;
-    if (options.acceptUnknownEvents !== true && isUnreadableSessionEvent({ type, ignorable })) {
-      throw new SessionEventUnsupportedError(id, options.version, index, type);
+    if (problem !== undefined) {
+      issue = new SessionCorruptionError(id, problem);
+      if (isTurnCloser(value)) throw issue;
+      continue;
     }
-    return value as unknown as SessionEvent;
-  });
-  return { events, validBytes: Buffer.byteLength(complete, 'utf8') };
+    events.push(value as unknown as SessionEvent);
+    validBytes = lineEnd;
+  }
+  return { events, validBytes };
+}
+
+function seqMismatchMessage(lineNumber: number, seq: unknown, expected: number): string {
+  return `第 ${lineNumber} 行的 seq 是 ${JSON.stringify(seq)}，應該是 ${expected}——缺號或重號`;
+}
+
+/** strict 的一行：`seq` 對得上、這一版認得，才算一筆事件。 */
+function admitEvent(
+  id: string,
+  value: Record<string, unknown>,
+  index: number,
+  lineNumber: number,
+  options: ParseBodyOptions,
+): SessionEvent {
+  if (value['seq'] !== index) {
+    throw new SessionCorruptionError(id, seqMismatchMessage(lineNumber, value['seq'], index));
+  }
+  const { ignorable } = value;
+  const type = value['type'] as string;
+  if (options.acceptUnknownEvents !== true && isUnreadableSessionEvent({ type, ignorable })) {
+    throw new SessionEventUnsupportedError(id, options.version, index, type);
+  }
+  return value as unknown as SessionEvent;
 }
 
 /**
  * 中段壞掉的本文**撿回讀得懂的**：只看完整的行（最後一個換行之前），解析不動、或沒有數字的 `seq` 與 `time` 的略過。
  * 見 `@nexus/core` 的 `StoredSessionReadOptions.salvage`。
  */
-function salvageJsonlSessionBody(id: string, body: string, version: unknown): SessionEvent[] {
+function salvageJsonlSessionBody(id: string, body: Buffer, version: unknown): SessionEvent[] {
   const events: SessionEvent[] = [];
-  for (const line of body.slice(0, body.lastIndexOf('\n') + 1).split('\n')) {
+  for (const line of body.toString('utf8', 0, body.lastIndexOf(0x0a) + 1).split('\n')) {
     let value: unknown;
     try {
       value = JSON.parse(line);
@@ -769,12 +949,57 @@ function salvageJsonlSessionBody(id: string, body: string, version: unknown): Se
   return events;
 }
 
-/** 讀日誌本文。**不在是空的**：只有 header 是「還沒寫第一筆就當了」。 */
-async function readBody(logPath: string): Promise<string> {
+/** {@link readStableSnapshot} 用到的檔案系統。**只給測試換**：真的磁碟上造不出「讀的當下變了」。同 dsh 的 `GenerationFileSystem`。 */
+export interface StableReadFileSystem {
+  stat(path: string): Promise<BigIntStats>;
+  readFile(path: string): Promise<Buffer>;
+}
+
+const defaultStableReadFs: StableReadFileSystem = {
+  stat: (path) => stat(path, { bigint: true }),
+  readFile: (path) => readFile(path),
+};
+
+/** 身分字串：裝置、inode、大小、修改與變更時間（奈秒）。照 dsh `generation.ts:243-245`。 */
+function identityOf(stats: BigIntStats): string {
+  return [stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(':');
+}
+
+/**
+ * 穩定快照讀，逐行照 dsh `readStableSnapshot`（`session-persistence-jsonl/src/generation.ts:262-282`）：讀前 `stat`、
+ * `readFile`、讀後再 `stat`，身分一樣就回傳；不一樣就重讀一次；第二次還是變了，回傳**第二次讀到的位元組截到讀前大小的前綴**
+ * 與讀前身分——不被持續寫入的寫者餓死。（沒有 `AbortSignal`：今天沒有呼叫方要中止單份讀，見 #1509。）
+ *
+ * @param path - 要讀的檔。
+ * @param fs - 檔案系統，預設是真的。
+ * @returns 位元組，與證明它穩定（或截成前綴）的那次 `stat` 的身分字串。
+ */
+export async function readStableSnapshot(
+  path: string,
+  fs: StableReadFileSystem = defaultStableReadFs,
+): Promise<{ readonly bytes: Buffer; readonly identity: string }> {
+  let before = await fs.stat(path);
+  for (let attempt = 0; ; attempt += 1) {
+    const bytes = await fs.readFile(path);
+    const after = await fs.stat(path);
+    if (identityOf(before) === identityOf(after)) return { bytes, identity: identityOf(after) };
+    if (attempt === 1) {
+      return { bytes: bytes.subarray(0, Number(before.size)), identity: identityOf(before) };
+    }
+    before = after;
+  }
+}
+
+/**
+ * 讀日誌本文，原始位元組（不給 encoding）：換行與位元組偏移都要算在 Buffer 上，見 {@link parseJsonlSessionBody}。
+ * 走 {@link readStableSnapshot}（#1509），順序同 dsh：先穩定讀、再解碼。
+ * **不在是空的**：只有 header 是「還沒寫第一筆就當了」。
+ */
+async function readBody(logPath: string): Promise<Buffer> {
   try {
-    return await readFile(logPath, 'utf8');
+    return (await readStableSnapshot(logPath)).bytes;
   } catch (error: unknown) {
-    if (isNotFound(error)) return '';
+    if (isNotFound(error)) return Buffer.alloc(0);
     throw error;
   }
 }
@@ -791,13 +1016,13 @@ async function fileRevision(path: string): Promise<string> {
     if (isNotFound(error)) return 'missing';
     throw error;
   }
-  return [stats.dev, stats.ino, stats.size, stats.mtimeNs, stats.ctimeNs].join(':');
+  return identityOf(stats);
 }
 
 /**
  * 列 `directory` 裡落了盤的每一份。見 {@link SessionStore.list}。
  *
- * `revision` 算的是 **header 與本文兩個檔**：dsh 的 header 在同一個檔裡，我們分開存，而續接會覆寫 header
+ * `revision` 算的是 **header 與本文兩個檔**：dsh 的 header 在同一個檔裡，我們分開存，而續接換版會取代 header
  * （改 `version`）。只算本文的話，那一下看不出來。
  *
  * **檔名基底對不上 header 記的 id 的算讀不懂**：`open(id)` 照 id 算檔名，找不到它。只有手動改過檔名才會這樣。
@@ -882,7 +1107,11 @@ async function openStoredSessionForRead(
     async read(options: StoredSessionReadOptions = {}): Promise<readonly SessionEvent[]> {
       const body = await readBody(logPath);
       try {
-        return parseJsonlSessionBody(id, body, { version: header.version }).events;
+        // 開了 salvage 的先走 strict、失敗才撿回：salvage 的語意（已登記的偏離）維持今天的樣子，不被 recoverable 搶先丟掉。
+        return parseJsonlSessionBody(id, body, {
+          version: header.version,
+          recovery: options.salvage === true ? 'strict' : 'recoverable',
+        }).events;
       } catch (error: unknown) {
         if (options.salvage === true && error instanceof SessionCorruptionError) {
           return salvageJsonlSessionBody(id, body, header.version);
@@ -915,8 +1144,8 @@ async function resumeStoredSession(
     if (isNotFound(error)) throw missing();
     throw error;
   }
-  // **在讀之前拿**，照 dsh：持有者在實體化時會覆寫 header（非原子），不鎖就讀可能讀到半份；
-  // 而且別人握著的話，該在什麼都還沒讀之前就講。
+  // **在讀之前拿**，照 dsh：別人握著的話，該在什麼都還沒讀之前就講；也不讓兩個續接者同時換版。
+  // header 換版是原子取代（#1509），唯讀的讀方不拿租約也只會看到舊的或新的完整一份。
   const lease = await leaseFor(context, join(directory, `${base}${LOCK_SUFFIX}`), id);
   try {
     let headerText: string;
@@ -928,8 +1157,11 @@ async function resumeStoredSession(
     }
     const header = parseHeader(headerText, { id });
     const body = await readBody(join(directory, `${base}${LOG_SUFFIX}`));
-    const { events, validBytes } = parseJsonlSessionBody(id, body, { version: header.version });
-    const torn = validBytes < Buffer.byteLength(body, 'utf8');
+    const { events, validBytes } = parseJsonlSessionBody(id, body, {
+      version: header.version,
+      recovery: 'recoverable',
+    });
+    const droppedBytes = body.byteLength - validBytes;
     return {
       header,
       events,
@@ -937,7 +1169,12 @@ async function resumeStoredSession(
         directory,
         { ...header, version: SESSION_LOG_FORMAT_VERSION },
         context,
-        { nextSeq: events.length, ...(torn && { truncateTo: validBytes }), lease },
+        {
+          nextSeq: events.length,
+          ...(header.version !== SESSION_LOG_FORMAT_VERSION && { headerStale: true as const }),
+          ...(droppedBytes > 0 && { torn: { truncateTo: validBytes, droppedBytes } }),
+          lease,
+        },
       ),
     };
   } catch (error: unknown) {
@@ -1007,6 +1244,7 @@ function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): Jso
   let warned = false;
   const context: LeaseContext = {
     lock: options.lock,
+    warn,
     openLog: options.openLog ?? ((path, flags, mode) => open(path, flags, mode)),
     unavailable: (outcome) => {
       if (warned) return;

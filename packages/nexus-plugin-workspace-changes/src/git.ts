@@ -16,6 +16,12 @@
  * - **逾時與輸出上限**：能力層提供的 `AbortSignal`、`graceMs`、stdout 位元組上限（保留尾端），在
  *   {@link GitRunner.run} 裡自己做。
  * - **找執行檔**：能力層的 `resolveExecutable` 在淨化過的 `PATH` 裡找，見 {@link resolveGitExecutable}。
+ * - **行程結束時同步強殺**（[#1542](https://github.com/DemianLi/nexus-agent/issues/1542)）：dsh 的 `subprocess-local` 在 `'exit'`
+ *   上同步終止每個還活著的子行程（`packages/subprocess/subprocess-local/src/index.ts:90-120`，`687f282e`）。serve 被強制結束時
+ *   git 的逾時沒人數，還在跑的 git 會留成孤兒、照樣往使用者的 repo 寫物件。所以 spawn 之後登記進 `@nexus/core` 的
+ *   `trackHostExitChild`，`close`／`error` 時拿掉。**只殺直接子行程**，不殺 dsh 的整個受管範圍：沒有 subprocess 服務、
+ *   不加 `detached` 就沒有範圍可殺（理由 1，細節在 core 的 `host-exit-children.ts`）。快照用到的指令本身不另開長命的子行程，
+ *   會留下孫行程的是 clean／smudge filter 這類使用者自訂的設定，這一格是已知的窄。
  *
  * ## 與 dsh 的偏離：私有 index 保留原本的時間戳
  *
@@ -35,7 +41,7 @@ import { access, copyFile, mkdir, mkdtemp, rm, stat, utimes } from 'node:fs/prom
 import { homedir } from 'node:os';
 import { delimiter, isAbsolute, join, relative, resolve } from 'node:path';
 
-import { scrubbedParentEnv } from '@nexus/core';
+import { scrubbedParentEnv, trackHostExitChild } from '@nexus/core';
 
 import { parseNumstat } from './numstat.js';
 import type { NumstatEntry } from './numstat.js';
@@ -142,6 +148,8 @@ export class GitRunner {
         stdio: [options.stdin === undefined ? 'ignore' : 'pipe', 'pipe', 'pipe'],
         windowsHide: true,
       });
+      // 行程被強制結束時，這個 git 由 core 在 `'exit'` 上同步 SIGKILL（#1542）；自己結束了就拿掉。
+      const untrack = trackHostExitChild(child);
       let grace: NodeJS.Timeout | undefined;
       const terminate = (): void => {
         child.kill('SIGTERM');
@@ -157,11 +165,13 @@ export class GitRunner {
         child.stdin!.end(options.stdin);
       }
       child.once('error', (error) => {
+        untrack();
         signal.removeEventListener('abort', terminate);
         clearTimeout(grace);
         reject(error);
       });
       child.once('close', (code) => {
+        untrack();
         signal.removeEventListener('abort', terminate);
         clearTimeout(grace);
         resolveExit(code);

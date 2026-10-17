@@ -737,12 +737,17 @@ export interface SessionStore {
    * （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 的門 A）。
    *
    * 照 dsh 的續接：讀回來的是**實體上有效的前綴**——最後一行寫到一半（當掉時的常態）不算
-   * 進去，把手第一次寫入之前把它截掉。中段的壞行或缺號不是當掉，是壞檔，要拒絕。
+   * 進去，把手第一次寫入之前把它截掉。**尾端的壞行也可復原**（dsh 的 `SessionLogScanner` 預設
+   * `recoverable`，`session-persistence-jsonl/src/format.ts:478-521`）：讀不懂的完整行（斷電時一頁落盤、
+   * 前一頁沒落）與它之後沒收尾的行都屬於那一次沒寫完的輪，丟掉，由續接補「中斷」；**壞行之後若還有
+   * 收尾事件（`turn/end` 或 `turn/failed`），那是已收尾的輪中間壞了，不是當掉的尾巴，是壞檔，要拒絕**。
+   * 這一條原本的註解寫「中段的壞行一律拒絕」並自稱照 dsh，是當初抄 dsh 時漏讀了 issue 之後才拋的規則
+   * （[#1508](https://github.com/DemianLi/nexus-agent/issues/1508)）。
    *
    * @param id - 要續接的會話 id，就是當初 `create` 的 `header.id`。
    * @returns 讀回來的 header（`version` 是存的那個）、事件，與 next-seq 等於事件數的把手。
    * @throws {@link SessionFormatUnsupportedError} header 的版本比這一版新。
-   * @throws {@link SessionCorruptionError} header 或某一行讀不懂、或 `seq` 不連續。
+   * @throws {@link SessionCorruptionError} header 讀不懂，或某一行讀不懂／`seq` 不連續**而且它之後還有收尾事件**。
    * @throws {@link SessionNotFoundError} 這個 id 在這裡沒有存檔。
    */
   resume(id: string): Promise<ResumedStoredSession>;
@@ -813,11 +818,12 @@ export interface ReadonlyStoredSession {
   /** 存的那份 header，原樣。 */
   readonly header: StoredSessionHeader;
   /**
-   * 讀整份本文：**實體上有效的前綴**，同續接——最後一行寫到一半不算進去，但也不截掉。只有 header 沒有本文的是零顆。
+   * 讀整份本文：**實體上有效的前綴**，同續接——最後一行寫到一半不算進去、可復原的壞尾也不算進去（規則見
+   * {@link SessionStore.resume}），但都不截掉、不講。只有 header 沒有本文的是零顆。
    * 每叫一次讀一次，讀到的是叫的當下。
    *
-   * @throws {@link SessionCorruptionError} 中段某一行讀不懂、或 `seq` 不連續（開了 {@link StoredSessionReadOptions.salvage}
-   *   就不拋）。
+   * @throws {@link SessionCorruptionError} 某一行讀不懂、或 `seq` 不連續，**而且它之後還有收尾事件**（開了
+   *   {@link StoredSessionReadOptions.salvage}：任何一行壞就先拋、再撿回，所以不拋）。
    */
   read(options?: StoredSessionReadOptions): Promise<readonly SessionEvent[]>;
 }
