@@ -20,9 +20,16 @@ import { startGuardServer, type GuardServer } from './server';
  * 半透明的面實際疊在什麼上面；這裡量的是畫出來的結果。
  *
  * 量三件事，亮暗各一次：
- * 1. **焦點**：鍵盤聚焦後 `box-shadow` 看得見的層跟沒聚焦時一樣（不帶 ring），外框是 2px 實線、顏色是頁面的字色（`.docs/web-ui-spec.md`、#1279）。
+ * 1. **焦點**：鍵盤聚焦後 `box-shadow` 看得見的層跟沒聚焦時一樣（不帶 ring），外框是 2px 實線、顏色是頁面的字色（`.docs/web-ui-spec.md`、#1279），
+ *    外框對它畫在上面的底色過非文字門檻 {@link NON_TEXT_MIN}（#1468 Q5）。
  * 2. **對比**：每個字的顏色對它實際的底色（往上疊到不透明為止，漸層取最差的停點）過門檻（文字 4.5，`data-guard-min` 另給）。
- * 3. **亮色陰影**：每層投影的透明度不超過 {@link MAX_SHADOW_ALPHA}（同 `src/styles/shadow-alpha.test.ts`）。
+ * 3. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
+ *
+ * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
+ * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
+ *
+ * 量不到的：brand 與 SG 的 `status-*` 這幾個顏色，測試頁上沒有元件不寫 class 就會用到它們（只有 `Counts` 的增刪數用到 success／destructive），
+ * 由靜態那一層（`tokens-contrast.test.ts`）量。
  *
  * 跑法：先 `pnpm --filter @nexus/web run build`，再 `pnpm --filter @nexus/web run test:guard`（CI 在 static job 的 build 之後）。
  * 瀏覽器用本機裝的 Chrome（`channel: 'chrome'`），不另外下載。`GUARD_REPORT=<檔案>` 會把量到的數字與瀏覽器版本寫成 JSON。
@@ -30,11 +37,24 @@ import { startGuardServer, type GuardServer } from './server';
 
 type Theme = 'light' | 'dark';
 
-const MAX_SHADOW_ALPHA = 0.06;
-
-/** 亮色時有看得見的投影的元素（`data-guard-shadow`）。 */
-const SHADOWED = ['button-outline', 'card', 'input-group', 'popover'];
+/**
+ * 亮色時有看得見的投影的元素（`data-guard-shadow`）與各自每層投影的透明度上限。上限是 SG 現在的值（#1512 量到的）：
+ * 0.28 是 `--glass-shade`（浮起來的那一層），0.06 是 `--glass-contact`（貼地的那一層）；靜態那一層 `shadow-alpha.test.ts` 釘 token 本身。
+ * 投影整個消失、搬到別的元素上、或調深，都紅。
+ */
+const SHADOW_LIMITS: Record<string, number> = {
+  'button-default': 0.28,
+  'button-outline': 0.06,
+  'button-secondary': 0.06,
+  card: 0.28,
+  popover: 0.28,
+};
+const SHADOWED = Object.keys(SHADOW_LIMITS);
 const TEXT_MIN = 4.5;
+const NON_TEXT_MIN = 3;
+
+type Mode = 'translucent' | 'reduced-transparency' | 'opaque';
+const MODES: Mode[] = ['translucent', 'reduced-transparency', 'opaque'];
 
 interface TextSample {
   name: string;
@@ -46,6 +66,8 @@ interface TextSample {
 interface FocusSample {
   name: string;
   focusVisible: boolean;
+  /** 外框畫在上面的那一層往上的底色（外框在元素外面，所以從它的父元素算）。 */
+  outlineChain: BackgroundLayer[];
   shadowBefore: string;
   shadowAfter: string;
   hostShadowBefore: string;
@@ -98,10 +120,17 @@ async function settle(page: Page): Promise<void> {
   });
 }
 
-async function open(theme: Theme): Promise<Page> {
+async function open(theme: Theme, mode: Mode = 'translucent'): Promise<Page> {
   if (browser === undefined || server === undefined) throw new Error('瀏覽器或伺服器沒起來');
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
-  await page.goto(`${server.url}?theme=${theme}`);
+  if (mode === 'reduced-transparency') {
+    // Playwright 的 emulateMedia 沒有這一項，直接下 CDP。
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }],
+    });
+  }
+  await page.goto(`${server.url}?theme=${theme}${mode === 'opaque' ? '&glass=opaque' : ''}`);
   await page.waitForSelector('[data-guard-text="tooltip"]');
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
   await settle(page);
@@ -155,7 +184,16 @@ async function collectFocus(page: Page): Promise<FocusSample[]> {
       target.evaluate((el) => {
         const host = el.closest('[data-guard-outline-host]') ?? el;
         const hostStyle = getComputedStyle(host);
+        const outlineChain = [];
+        for (let node = host.parentElement; node !== null; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          outlineChain.push({
+            backgroundColor: style.backgroundColor,
+            backgroundImage: style.backgroundImage,
+          });
+        }
         return {
+          outlineChain,
           focusVisible: el.matches(':focus-visible'),
           shadow: getComputedStyle(el).boxShadow,
           hostShadow: hostStyle.boxShadow,
@@ -174,6 +212,7 @@ async function collectFocus(page: Page): Promise<FocusSample[]> {
     samples.push({
       name,
       focusVisible: after.focusVisible,
+      outlineChain: after.outlineChain,
       shadowBefore: before.shadow,
       shadowAfter: after.shadow,
       hostShadowBefore: before.hostShadow,
@@ -196,13 +235,15 @@ function collectShadows(page: Page): Promise<ShadowSample[]> {
   );
 }
 
-/** 字疊在每一個候選底色上的對比，取最差的。 */
-function worstContrast(sample: TextSample): { ratio: number; on: string } {
-  const text = parseColor(sample.color);
-  return backdrops(sample.chain)
-    .map((b) => ({ on: b.label, ratio: contrastRatio(composite(text, b.rgb), b.rgb) }))
+/** 某個顏色疊在每一個候選底色上的對比，取最差的。 */
+function worstOn(color: string, chain: BackgroundLayer[]): { ratio: number; on: string } {
+  const fg = parseColor(color);
+  return backdrops(chain)
+    .map((b) => ({ on: b.label, ratio: contrastRatio(composite(fg, b.rgb), b.rgb) }))
     .reduce((worst, next) => (next.ratio < worst.ratio ? next : worst));
 }
+
+const worstContrast = (sample: TextSample) => worstOn(sample.color, sample.chain);
 
 const round = (n: number) => Math.round(n * 100) / 100;
 
@@ -293,14 +334,27 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
             `${f.name}：${f.outlineStyle} ${f.outlineWidth} ${f.outlineColor}（字色 ${f.pageColor}）`,
         ),
     ).toEqual([]);
+    const outlines = focus.map((f) => ({
+      name: f.name,
+      ...worstOn(f.outlineColor, f.outlineChain),
+    }));
+    report[`${theme}:focus-outline-contrast`] = outlines.map((o) => ({
+      ...o,
+      ratio: round(o.ratio),
+    }));
+    expect(
+      outlines
+        .filter((o) => !(o.ratio >= NON_TEXT_MIN))
+        .map((o) => `${o.name} 外框 ${round(o.ratio)} < ${NON_TEXT_MIN}（${o.on}）`),
+    ).toEqual([]);
   });
 
   // 只有亮色有上限：暗底上投影要更濃才看得到（同 `shadow-alpha.test.ts`）。暗色不定義這條，不是跳過。
   if (theme === 'light')
-    test(`亮色陰影：每層投影的透明度 ≤ ${MAX_SHADOW_ALPHA}（邊緣那一層不算）`, () => {
+    test('亮色陰影：每層投影的透明度不超過該元素的上限（邊緣那一層、inset 的高光與凹槽不算）', () => {
       const layers = shadows.flatMap((s) =>
         shadowLayers(s.boxShadow)
-          .filter((l) => !l.edge && l.color !== undefined)
+          .filter((l) => !l.edge && !l.inset && l.color !== undefined)
           .map((l) => ({ name: s.name, alpha: parseColor(l.color ?? '').alpha })),
       );
       report[`${theme}:shadow`] = layers;
@@ -310,7 +364,59 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
         new Set(SHADOWED),
       );
       expect(
-        layers.filter((l) => !(l.alpha <= MAX_SHADOW_ALPHA)).map((l) => `${l.name} ${l.alpha}`),
+        layers
+          .filter((l) => !(l.alpha <= (SHADOW_LIMITS[l.name] ?? 0)))
+          .map((l) => `${l.name} ${l.alpha} > ${SHADOW_LIMITS[l.name]}`),
       ).toEqual([]);
     });
+});
+
+/** 不透明的兩種退路：面真的不透明、字一樣過門檻。 */
+describe.each(
+  MODES.filter((m) => m !== 'translucent').flatMap((mode) =>
+    (['light', 'dark'] as const).map((theme) => [mode, theme] as const),
+  ),
+)('瀏覽器量出貨的 CSS：%s、%s', (mode, theme) => {
+  let page: Page;
+  let texts: TextSample[];
+  let surfaces: { name: string; backgroundColor: string; backdropFilter: string }[];
+
+  beforeAll(async () => {
+    page = await open(theme, mode);
+    texts = await collectTexts(page);
+    surfaces = await page.$$eval('[data-guard-surface]', (els) =>
+      els.map((el) => {
+        const style = getComputedStyle(el);
+        return {
+          name: el.getAttribute('data-guard-surface') ?? '',
+          backgroundColor: style.backgroundColor,
+          backdropFilter: style.backdropFilter,
+        };
+      }),
+    );
+  }, 60_000);
+
+  afterAll(async () => {
+    await page?.close();
+  });
+
+  test('面是不透明的、沒有 blur', () => {
+    report[`${mode}:${theme}:surfaces`] = surfaces;
+    expect(surfaces.map((s) => s.name).sort()).toEqual(['card', 'popover', 'sidebar']);
+    expect(
+      surfaces
+        .filter((s) => parseColor(s.backgroundColor).alpha !== 1 || s.backdropFilter !== 'none')
+        .map((s) => `${s.name}：${s.backgroundColor}、backdrop-filter ${s.backdropFilter}`),
+    ).toEqual([]);
+  });
+
+  test('每個字對它實際的底色過門檻', () => {
+    const measured = texts.map((t) => ({ name: t.name, min: t.min, ...worstContrast(t) }));
+    report[`${mode}:${theme}:contrast`] = measured.map((m) => ({ ...m, ratio: round(m.ratio) }));
+    expect(
+      measured
+        .filter((m) => !(m.ratio >= m.min))
+        .map((m) => `${m.name} ${round(m.ratio)} < ${m.min}（${m.on}）`),
+    ).toEqual([]);
+  });
 });

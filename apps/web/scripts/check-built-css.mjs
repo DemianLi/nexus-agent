@@ -13,6 +13,8 @@
  * - 產物裡沒有只來自測試檔或說明文件的 class：Tailwind 預設掃整個專案，測試裡的範例字串（`bg-red-500`、`container`…）
  *   與說明文件裡提到的類別名都會被編成真的規則，裸的 `.container`、`.shadow` 這類還會套用到不相干的元素。
  *   `src/index.css` 用 `@source not` 排除，這裡量產物確認真的排除了。
+ * - dark variant 包含 `.dark` 本身（#1468 Q8 保留的機制）：solid-glass 的 `@custom-variant dark (&:is(.dark *))` 只認子孫，
+ *   `<html class="dark">` 上的元素吃不到 `dark:`；`src/styles/solid-glass.overrides.css` 排在它後面重新定義成 `&:is(.dark, .dark *)`。產物裡只能有後者。
  * - 自動捲動不改內容寬度（#1363）：選擇器帶 `[data-autoscrolling]` 的規則不准宣告會動到捲軸佔位的屬性。
  *   `scrollbar-width: none` 會連 `scrollbar-gutter: stable` 留的位置一起拿掉，窄欄時折行變、高度變、又觸發貼底捲動。
  */
@@ -351,6 +353,17 @@ if (leaked.size > 0)
   failures.push(
     `產物裡有只來自測試檔或說明文件的 class（${leaked.size} 個：${[...leaked].join('、')}）：` +
       '`src/index.css` 的 `@source not` 要排除這些檔案',
+  );
+
+// dark variant：Tailwind 只用最後一個定義；產物裡出現 SG 那一版，表示覆寫檔的重新定義不見了或排到前面去了。
+const builtCss = files.map((f) => readFileSync(new URL(f, dir), 'utf8')).join('\n');
+if (builtCss.includes(':is(.dark *)'))
+  failures.push(
+    'dark variant 是 solid-glass 那一版 `:is(.dark *)`，`<html class="dark">` 本身吃不到 `dark:`',
+  );
+if (!builtCss.includes(':is(.dark,.dark *)'))
+  failures.push(
+    '產物裡沒有 `:is(.dark,.dark *)`：`src/styles/solid-glass.overrides.css` 的 `@custom-variant dark` 沒有生效',
   );
 
 if (failures.length > 0) {

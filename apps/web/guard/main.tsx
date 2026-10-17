@@ -7,7 +7,9 @@
  *   - `data-guard-texts`：同上，但量的是它底下每個 `[aria-hidden]` 的字（元件自己的 span 掛不了屬性）。
  *   - `data-guard-focus`：鍵盤聚焦後量焦點的樣子；外框畫在別的元素上時，那個元素掛 `data-guard-outline-host`。
  *   - `data-guard-shadow`：亮色時量 `box-shadow` 每層投影的透明度。
+ *   - `data-guard-surface`：不透明的退路（reduced-transparency、`data-glass="opaque"`）下，量這個面是不是真的不透明、沒有 blur。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
+ * - `?glass=opaque` 在 `<html>` 掛 `data-glass="opaque"`（#1468 Q7：效能不達標時退回的那條路），量不透明的面。
  */
 import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -27,9 +29,11 @@ import {
 } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
-const dark = new URLSearchParams(window.location.search).get('theme') === 'dark';
+const params = new URLSearchParams(window.location.search);
+const dark = params.get('theme') === 'dark';
 document.documentElement.classList.toggle('dark', dark);
 document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
+if (params.get('glass') === 'opaque') document.documentElement.setAttribute('data-glass', 'opaque');
 
 const BUTTON_VARIANTS = [
   'default',
@@ -72,7 +76,7 @@ function GuardPage() {
         </div>
 
         <div style={{ width: 360 }}>
-          <Card data-guard-shadow="card">
+          <Card data-guard-shadow="card" data-guard-surface="card">
             <CardHeader>
               <CardTitle data-guard-text="card-title">卡片標題</CardTitle>
               <CardDescription data-guard-text="card-description">卡片說明</CardDescription>
@@ -97,7 +101,7 @@ function GuardPage() {
 
         <div style={{ height: 160 }}>
           <SidebarProvider style={{ minHeight: 0, height: '100%' }}>
-            <Sidebar collapsible="none" data-guard-text="sidebar">
+            <Sidebar collapsible="none" data-guard-text="sidebar" data-guard-surface="sidebar">
               側欄
               <SidebarMenu>
                 <SidebarMenuItem>
@@ -116,7 +120,12 @@ function GuardPage() {
         <div style={{ ...row, gap: 240, paddingBottom: 200 }}>
           <Popover open>
             <PopoverTrigger>開啟浮層</PopoverTrigger>
-            <PopoverContent side="bottom" data-guard-text="popover" data-guard-shadow="popover">
+            <PopoverContent
+              side="bottom"
+              data-guard-text="popover"
+              data-guard-shadow="popover"
+              data-guard-surface="popover"
+            >
               浮層內容
             </PopoverContent>
           </Popover>

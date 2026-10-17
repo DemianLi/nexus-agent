@@ -2,7 +2,7 @@
 import { describe, expect, test } from 'vitest';
 
 import { surfaceContrast } from './color-math';
-import { readCascade } from './css-cascade';
+import { readCascade, type Query } from './css-cascade';
 
 /**
  * `.docs/web-ui-spec.md` §11 第 2 條：用 colorjs.io 重算**實際生效**的顏色 token，確認達到 §5 的對比度目標。
@@ -13,6 +13,9 @@ import { readCascade } from './css-cascade';
  * 仍過 4.5）、brand 在亮色底色上 ≥ 4.5；亮暗鑑別度一樣＝表面這一層的每一對，亮暗差不超過 0.05（只疊在底色上）。
  *
  * 量的是 token，不是元素：元件實際的底色若是 `color-mix()` 之類現場合成的，這裡看不到，由瀏覽器那一層（`guard/`）量。
+ *
+ * 面有三種狀態，每一種都要達標（{@link MODES}）：平常的半透明、系統要求減少透明度（`prefers-reduced-transparency`）、
+ * 頁面標了 `data-glass="opaque"`（#1468 Q7：效能不達標時退回的那條路）。後兩種的面換成 SG 的不透明值，跟半透明疊出來的不完全一樣。
  */
 
 type Theme = 'light' | 'dark';
@@ -25,16 +28,41 @@ const cascade = readCascade();
  */
 const SELECTORS: Record<Theme, readonly string[]> = { light: [':root'], dark: [':root', '.dark'] };
 
-function token(theme: Theme, name: string): string | undefined {
-  return cascade.computed(SELECTORS[theme], `--${name}`);
+interface Mode {
+  readonly name: string;
+  readonly selectors: Record<Theme, readonly string[]>;
+  readonly query?: Query;
+}
+
+/** 量具只看 layer 與先後、不算 specificity；`data-glass` 掛在 `<html>` 上時，產物裡暗色那段排在後面，結果跟瀏覽器一樣。 */
+const TRANSLUCENT: Mode = { name: '半透明', selectors: SELECTORS };
+
+const MODES: Mode[] = [
+  TRANSLUCENT,
+  {
+    name: 'reduced-transparency',
+    selectors: SELECTORS,
+    query: { conditions: ['@media (prefers-reduced-transparency: reduce)'] },
+  },
+  {
+    name: 'data-glass="opaque"',
+    selectors: {
+      light: [':root', "[data-glass='opaque']"],
+      dark: [':root', '.dark', "[data-glass='opaque']", ".dark[data-glass='opaque']"],
+    },
+  },
+];
+
+function token(mode: Mode, theme: Theme, name: string): string | undefined {
+  return cascade.computed(mode.selectors[theme], `--${name}`, mode.query);
 }
 
 /**
  * 半透明的面疊在哪裡（#1512）：頁面底色，以及頁面漸層的每一個停點（`--light-N`，本身半透明、疊在底色上）。
  * 最差的那一疊要達標（`color-math.ts` 的 `surfaceContrast`）。
  */
-function bases(theme: Theme): string[][] {
-  const stops = [...cascade.customProperties(SELECTORS[theme]).keys()]
+function bases(theme: Theme, mode: Mode = TRANSLUCENT): string[][] {
+  const stops = [...cascade.customProperties(mode.selectors[theme], mode.query).keys()]
     .map((property) => /^--(light-\d+)$/.exec(property)?.[1])
     .filter((name) => name !== undefined)
     .sort();
@@ -43,8 +71,14 @@ function bases(theme: Theme): string[][] {
 
 const ONLY_BACKGROUND = [['background']];
 
-function contrast(theme: Theme, fg: string, bg: string, under = bases(theme)): number {
-  return surfaceContrast((name) => token(theme, name), fg, bg, under).ratio;
+function contrast(
+  mode: Mode,
+  theme: Theme,
+  fg: string,
+  bg: string,
+  under = bases(theme, mode),
+): number {
+  return surfaceContrast((name) => token(mode, theme, name), fg, bg, under).ratio;
 }
 
 const THEMES: Theme[] = ['light', 'dark'];
@@ -133,29 +167,37 @@ const NOT_WORSE_THAN_DEVELOP: Record<Theme, [string, string, number][]> = {
 /** oklch 寫到小數第四位，重算會比產生器的解少一點點；只容許這個量級。 */
 const ROUNDING = 0.01;
 
-describe('產生出來的 token 達到對比度目標', () => {
+describe.each(MODES)('產生出來的 token 達到對比度目標：$name', (mode) => {
   for (const theme of THEMES) {
     test.each(TEXT)(`${theme}：文字 %s 對 %s ≥ 4.5`, (fg, bg) => {
-      expect(contrast(theme, fg, bg)).toBeGreaterThanOrEqual(4.5);
+      expect(contrast(mode, theme, fg, bg)).toBeGreaterThanOrEqual(4.5);
     });
 
     test.each(NON_TEXT)(`${theme}：非文字 %s 對 %s ≥ 3`, (fg, bg) => {
-      expect(contrast(theme, fg, bg)).toBeGreaterThanOrEqual(3);
+      expect(contrast(mode, theme, fg, bg)).toBeGreaterThanOrEqual(3);
     });
 
     test.each(NOT_WORSE_THAN_DEVELOP[theme])(
       `${theme}：%s 對 %s 不比 develop 的 %s 差（既有缺口 #1515）`,
       (fg, bg, floor) => {
-        expect(contrast(theme, fg, bg)).toBeGreaterThanOrEqual(floor);
+        expect(contrast(mode, theme, fg, bg)).toBeGreaterThanOrEqual(floor);
       },
     );
 
     test.each(STATUS)(`${theme}：狀態色 %s 對底色 ≥ 5.2`, (status) => {
-      expect(contrast(theme, status, 'background')).toBeGreaterThanOrEqual(5.2 - ROUNDING);
+      expect(contrast(mode, theme, status, 'background')).toBeGreaterThanOrEqual(5.2 - ROUNDING);
     });
   }
 
-  test('量具自檢：每一疊底都有疊到——SG 的三個漸層停點都在（少了就只量平的底色，偏寬）', () => {
+  test.each(SURFACES)('亮暗鑑別度一樣：%s 對 %s 亮暗差 ≤ 0.05（只疊在底色上）', (fg, bg) => {
+    const light = contrast(mode, 'light', fg, bg, ONLY_BACKGROUND);
+    const dark = contrast(mode, 'dark', fg, bg, ONLY_BACKGROUND);
+    expect(Math.abs(light - dark)).toBeLessThanOrEqual(0.05);
+  });
+});
+
+describe('量具自檢', () => {
+  test('每一疊底都有疊到——SG 的三個漸層停點都在（少了就只量平的底色，偏寬）', () => {
     for (const theme of THEMES) {
       expect(bases(theme)).toEqual([
         ['background'],
@@ -166,9 +208,13 @@ describe('產生出來的 token 達到對比度目標', () => {
     }
   });
 
-  test.each(SURFACES)('亮暗鑑別度一樣：%s 對 %s 亮暗差 ≤ 0.05（只疊在底色上）', (fg, bg) => {
-    const light = contrast('light', fg, bg, ONLY_BACKGROUND);
-    const dark = contrast('dark', fg, bg, ONLY_BACKGROUND);
-    expect(Math.abs(light - dark)).toBeLessThanOrEqual(0.05);
+  test('不透明的兩種狀態真的換了面：--card 不透明、跟半透明那一套不同', () => {
+    for (const mode of MODES.slice(1)) {
+      for (const theme of THEMES) {
+        const card = token(mode, theme, 'card') ?? '';
+        expect(card, `${mode.name} ${theme}`).not.toMatch(/\//);
+        expect(card).not.toBe(token(TRANSLUCENT, theme, 'card'));
+      }
+    }
   });
 });

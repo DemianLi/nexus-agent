@@ -53,9 +53,6 @@
     motion-fade-out var(--tw-animation-duration, 150ms) var(--ease-smooth-out);
 }
 
-/* 自己與子孫都算：`<html class="dark">` 上的元素本身也要吃到 dark variant。 */
-@custom-variant dark (&:is(.dark, .dark *));
-
 @theme inline {
   /*
    * 圓角階梯照 SG（#1468 Q8，#1512）：`--radius-sm`…`--radius-4xl` 都是 `solid-glass.css` 的 `calc(var(--radius) * n)`，這裡不重綁。
@@ -63,18 +60,6 @@
    * 照抄 SG 3xl 的算式（`design-system.test.ts` 比對兩者），SG 改了倍數這裡要跟著改。
    */
   --radius-row: calc(var(--radius) * 2.2 - 4px);
-
-  /* 蓋掉 SG 的堆疊（#1468 Q6）：中文接 Noto Sans TC，系統後備用繁中的 PingFang TC、Microsoft JhengHei，不用 SG 的三個簡體字型。 */
-  --font-sans:
-    'Geist Variable', 'Noto Sans TC Variable', -apple-system, BlinkMacSystemFont, 'PingFang TC',
-    'Microsoft JhengHei', sans-serif;
-  /* 尾端的三個 emoji 字型（#979）：堆疊裡沒有字型涵蓋的符號（旗、☺、❤ 之類）原本要走系統回退，
-     每個新頁面第一次約 40ms，裸旗 U+1F3F3 每含它的一列還要約 1.6ms；明寫之後兩項都回到地板。
-     只放在最尾，所以前面字型涵蓋的字不受影響。--font-sans 補了沒有效果，沒有改。 */
-  --font-mono:
-    'Geist Mono Variable', 'Noto Sans TC Variable', ui-monospace, SFMono-Regular, Menlo,
-    'PingFang TC', 'Microsoft JhengHei', monospace, 'Apple Color Emoji', 'Segoe UI Emoji',
-    'Noto Color Emoji';
 
   /* 字重只用 400／500，semibold 以上一律落在 500 */
   --font-weight-semibold: 500;
