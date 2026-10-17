@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 
 import { cn } from '@/lib/utils';
+import { readCascade } from '@/styles/css-cascade';
 
 const SRC = fileURLToPath(new URL('..', import.meta.url));
 
@@ -15,10 +16,13 @@ function files(dir: string): string[] {
   });
 }
 
-/** `index.css` `@theme` 裡自訂的字級名：`--text-body: 14px;`（`--text-body--line-height` 不算）。 */
-const TEXT_SIZES = [
-  ...readFileSync(join(SRC, 'index.css'), 'utf8').matchAll(/^\s*--text-([a-z]+):\s*\d/gm),
-].map((m) => m[1]!);
+/**
+ * `@theme` 疊出來實際生效的自訂字級名：`--text-body: 14px;`（`--text-body--line-height` 不算）。
+ * 照 import 順序算過 cascade（`styles/css-cascade.ts`，#1498），後面疊上來的 `@theme` 也算進來。
+ */
+const TEXT_SIZES = [...readCascade().customProperties(['@theme'])]
+  .filter(([property, value]) => /^--text-[a-z]+$/.test(property) && /^\d/.test(value))
+  .map(([property]) => property.slice('--text-'.length));
 
 describe('cn 認得我們的字級名', () => {
   test('量得到 index.css 的四階（量具不是空的）', () => {

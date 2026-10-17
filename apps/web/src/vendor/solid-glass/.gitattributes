@@ -1,0 +1,3 @@
+# 這兩個檔是上游原樣，sha256 記在 manifest.json；不讓 git 轉換換行，任何平台 checkout 出來都逐位元相同。
+solid-glass.css -text
+LICENSE -text
