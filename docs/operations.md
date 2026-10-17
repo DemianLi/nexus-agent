@@ -260,7 +260,16 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
   只在磁碟上的會話改名時會被重新打開。列表讀的是落盤的那份，改名到列表上看得見有短暫的落盤延遲，開著的頁面從即時的標題推送看得到。
 - **檔壞了 serve 起不來**：版本不對、JSON 壞、欄位型別不對、兩個集合有重複或互相重疊，或權限讓別人讀得到（會要你 `chmod 600`），
   啟動就失敗，**不會覆寫它**。要重設就刪掉這個檔再重啟——釘選與封存會全部清空。
-- **一個 home 只該有一個 serve 在寫它。** 兩個 serve 行程共用同一個 `NEXUS_AGENT_HOME`，後寫的會蓋掉先寫的；多人共用主機時各人用各自的 home。
+- **一個 home 只能起一個 serve**（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)）。釘選、封存、插件快照這些 home 層的檔都假設只有一個 serve 在寫，
+  所以 `serve` 啟動時對 `$NEXUS_AGENT_HOME/serve.lock` 拿一把 kernel 鎖（`flock`），握到行程結束；**第二個 serve 在碰 home 底下任何檔之前就起不來**，
+  錯誤講出是哪個 home、鎖檔在哪：
+  `這個 home（…）已經有另一個 serve 在用：鎖檔 …/serve.lock 被別的行程握著…`。要並行就各給一個 `NEXUS_AGENT_HOME`（多人共用主機時各人用各自的 home）；
+  要查是誰握著，執行 `lsof <鎖檔>`——鎖檔是空的，不寫 PID。
+  行程不管怎麼死（`kill -9`、當機、致命退出），kernel 都放鎖，沒有要手動清的殘骸；鎖檔本身留著，不用刪。**正常停 `serve`** 時鎖是最後一步放的，
+  排在日誌、thread、插件都收完之後。致命退出（上面那條）後**馬上**重啟，若舊行程還在做那最多 2 秒的收尾，新行程會被這把鎖擋一下，舊行程一結束就拿得到。
+  只擋 serve 對 serve：一次性 CLI 與 `plugin-change` 照樣能在 serve 跑著時用同一個 home。
+  只有 macOS 與 Linux 鎖得到（原生模組 `@deepseek-ai/node-addon-system` 載不起來也一樣）；其他情形 `serve` 照常起來，伺服器日誌講一行 `[home 鎖] 這個平台拿不到 home 鎖，不擋第二個 serve`，
+  同會話寫租約。拿不到鎖的原因是 `EACCES` 這類權限／IO 錯誤則不照常起來，原樣報出。
 
 **網頁與 API 都要瀏覽器會話。** `serve` 印出來的網址帶著這個行程的 token，開一次就換到一顆 cookie
 （`HttpOnly`、`SameSite=Strict`、30 天，serve 重啟之後照樣有效），沒有 cookie 的請求一律 401。

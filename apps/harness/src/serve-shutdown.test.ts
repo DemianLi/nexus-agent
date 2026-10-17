@@ -22,6 +22,7 @@ import type { SessionEvent } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
+import { HOME_LOCK_FILE_NAME, HomeInUseError } from './home-lock.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -234,5 +235,38 @@ describe('serve 遇到未處理的例外（#1501）', () => {
     expect(stderr).toContain('fail-loud probe');
     // 收尾真的跑了：Node 預設（沒有 handler）當場結束，這個檔不會在。
     expect(await exists(marker)).toBe(true);
+  }, 90_000);
+});
+
+/** 同一個 home 的 serve 行程已經結束之後，在這個行程裡起一台（`env` 不給，吃測試的暫存 home，跟子行程同一個）。 */
+async function startInProcess(): Promise<RunningServe> {
+  const started = await runServe({ argv: ['--port', '0'], log: () => undefined });
+  if (started === undefined) throw new Error('runServe 沒有起來');
+  restarted = started;
+  return started;
+}
+
+describe('home 鎖跟著行程走（#1503）', () => {
+  it('SIGKILL：什麼都沒收、不刪任何檔，新的 serve 照樣起得來；活著的時候擋得住', async () => {
+    const server = await startServe(await mkdtemp(join(tmpdir(), 'nexus-serve-home-lock-')));
+    // 子行程活著、握著鎖：同一個 home 的第二台被拒。
+    await expect(runServe({ argv: ['--port', '0'], log: () => undefined })).rejects.toThrow(
+      HomeInUseError,
+    );
+
+    server.process.kill('SIGKILL');
+    expect(await server.exited).toEqual({ code: null, signal: 'SIGKILL' });
+    // 鎖檔還在（釋放不刪檔），但 kernel 已經放了鎖。
+    expect(await exists(join(process.env[HARNESS_HOME_ENV]!, HOME_LOCK_FILE_NAME))).toBe(true);
+    await startInProcess();
+  }, 90_000);
+
+  it('致命退出（#1501）：行程以 1 結束之後，立刻重啟的新行程拿得到鎖', async () => {
+    const { server, arm, leak } = await startProbedServe();
+    await writeFile(arm, '');
+    await writeFile(leak, '');
+
+    expect(await server.exited).toEqual({ code: 1, signal: null });
+    await startInProcess();
   }, 90_000);
 });

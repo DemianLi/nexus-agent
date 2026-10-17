@@ -29,8 +29,9 @@
  * ## 單一寫入者
  *
  * 記憶體裡的集合是真相，檔案是它的耐久副本：兩個 serve 行程共用同一個 home 時，後寫的會蓋掉先寫的（各自的記憶體互不知道）。
- * dsh 的 registry 同樣是單一寫入者的 domain（`DomainGlobal.set` 之後才換 `this.state`，全部經 `enqueueOperation`）。這裡不另做跨行程的鎖，
- * 登記在這裡：多人共用主機時各人用各自的 home（`harness-home.ts`），集合本來就按 home 分。
+ * dsh 的 registry 同樣是單一寫入者的 domain（`DomainGlobal.set` 之後才換 `this.state`，全部經 `enqueueOperation`）。
+ * **「單一寫入者」由 home 鎖保證**（`home-lock.ts`，#1503）：`serve` 啟動時對 `<home>/serve.lock` 拿 kernel 鎖握到行程結束，
+ * 第二個 serve 在碰這份檔之前就起不來；這裡自己不做跨行程的鎖。多人共用主機時各人用各自的 home（`harness-home.ts`），集合本來就按 home 分。
  *
  * @module
  */

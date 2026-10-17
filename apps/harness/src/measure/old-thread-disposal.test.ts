@@ -23,6 +23,7 @@ import { join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { foldTurn, serveClient } from '../fixtures.js';
+import { HARNESS_HOME_ENV } from '../harness-home.js';
 import { openJsonlSessionStore, projectKey } from '../jsonl-session-store.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
@@ -101,7 +102,8 @@ describe('仍在用舊版插件的 thread', () => {
     const server = await runServe({
       argv: ['--port', '0', '--session-log', logs, '--patch', join(dir, `patch-${version}.yml`)],
       log: () => undefined,
-      env: {},
+      // 每一台各給一個 home（#1503）：同一個 home 只能起一個 serve。共用的是 `--session-log`，那才是這裡要量的東西。
+      env: { [HARNESS_HOME_ENV]: join(dir, `home-${String(servers.length)}`) },
     });
     if (server === undefined) throw new Error('runServe 沒有起來');
     servers.push(server);
