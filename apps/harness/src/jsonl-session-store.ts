@@ -3,8 +3,10 @@
  *
  * 形狀照 dsh 隨產品交付的 `session-persistence-jsonl`（`docs/subsystems/persistence.zh.md`，
  * 本地 clone SHA `d347e703908d0406b7a7ef80e3a0e594d86b2215`）：逐 session 的僅追加日誌、
- * **header 與日誌分開存**（dsh 明文：元資料在日誌之外，`stat`／`list` 讀 header 不掃正文）、
- * 實體化延後到第一次寫。
+ * **header 與日誌邏輯上分開**（dsh 明文：元資料在日誌之外，`stat`／`list` 讀 header 不掃正文）、
+ * 實體化延後到第一次寫。**實體上 dsh 把 header 寫成日誌檔的第一行**（`format.ts` 的 `toHeaderLine`），
+ * 我們是兩個獨立的檔（`<base>.header.json`、`<base>.jsonl`）：這是一條沒有合格偏離理由的差異，
+ * 見下面「首次落盤」的登記與 [#1510](https://github.com/DemianLi/nexus-agent/issues/1510) 的拍板（Q1 (a)）。
  *
  * **選 JSONL 不選 SQLite 是一個有代價的選擇，代價登記在這裡。** dsh 兩個 provider 都出
  * （`-jsonl` 與 `-sqlite`），我們先做 JSONL，理由三條：不必現場編譯（SQLite 那條要
@@ -46,6 +48,35 @@
  * 照 dsh——先關掉這個把手、另用 `r+` 開檔截回，下一批用 `a` 重開（demian 2026-10-17 在 #1506 拍板 Q1 (a)）。
  * `append`／`flush`／`close` 排在同一條鏈上，一次只跑一個（dsh `storage.ts:187-195`），否則一邊關把手時另一邊還拿著它。
  *
+ * ## 首次落盤是原子的（[#1510](https://github.com/DemianLi/nexus-agent/issues/1510)）
+ *
+ * 一份新會話第一次寫入時，斷電或行程被殺只會有兩種結果：整份都在，或整份都不在——不會留下空的或半份的 header，
+ * 讓這條 thread 之後每次打開都回「建不起來」。照 dsh `materializePosix`（`index.ts:1282-1322`，SHA `1517a4db`）：
+ *
+ * - 逐層 `mkdir`，每建一層就 `fsync` 它的父目錄；**每次物化都 fsync，不看目錄本來在不在**（別的會話剛建、還沒
+ *   fsync 完的目錄，看到它在就跳過的話會漏掉）。
+ * - header 先寫成暫存檔（`<final>.<12 hex>.tmp`，`wx`、`0600`）、`fsync`，再用 **`link` 發佈，不用 `rename`**：
+ *   目標已存在時 `link` 回 `EEXIST`，兩個行程同時物化同一個 id 不會互相覆蓋（`rename` 會靜靜蓋掉）；
+ *   發佈後 `fsync` 會話目錄，新目錄項才算斷電後還在；暫存檔盡力刪掉，刪不掉不讓這次寫入失敗。
+ * - **目錄 `fsync` 的錯往外拋，不吞**（dsh `syncDirPosix`）。`plugin-journal.ts` 那支不分平台吞掉所有錯，不能拿來用：
+ *   一次 `EIO` 會悄悄關掉目錄 `fsync`。
+ * - **header 的目錄項落盤之後才建日誌**（`wx`，再 `fsync` 一次目錄）。反過來的話，斷電可能留下「有日誌、沒 header」：
+ *   列表看不到它，同一個 id 之後再建時會在日誌那一步撞 `EEXIST`。
+ * - 發佈是**可重試、不撞上自己**的：`link` 一成功就記下 header 已發佈，之後的重試只補做目錄 `fsync`；
+ *   日誌開成了但目錄 `fsync` 失敗，重試也沿用同一個把手，不再 `wx` 一次。跟租約的 `??=` 同一個理由。
+ *
+ * 偏離，登記（皆不屬於「基座表達不出來」或「產品需求超出射程」之一的，除第 2 條）：
+ *
+ * 1. **兩個檔，兩次各自原子的發佈。** dsh 一個檔、一次 `link` 涵蓋 header 與首批事件；兩檔佈局下一次 `link` 涵蓋不了。
+ *    這裡把 header 檔當成「這份會話存在」的提交點：先原子發佈 header，再建日誌。中間狀態「只有 header、日誌不在或是空的」
+ *    讀方今天就當成一份零事件的會話，不是新狀態。首批事件要不要立刻 `fsync` 歸 #1506（每批 `fsync`）。
+ *    單檔佈局另開卡評估（#1510 Q1 (a)）。
+ * 2. **Windows：照樣 `link` 發佈，不做目錄 `fsync`**（理由 1，基座表達不出來）：Node 在 Windows 上開不了目錄，
+ *    也沒有 dsh 用來呼叫 `MoveFileExW` 的 FFI。判斷依據是 `process.platform === 'win32'`，**不是吞錯**；
+ *    比照 `session-lease.ts` 已登記的 Windows 偏離。
+ * 3. 不清當機後殘留的 `*.tmp`，同 dsh。殘留檔不會被讀方撿到：列表只認 `.header.json` 結尾，離線掃描走
+ *    {@link sessionLogPathOf}，`<base>.header.json.<hex>.tmp` 兩邊都不認。
+ *
  * ## 目錄：CLI 每次一個，serve 按專案固定一格
  *
  * dsh 的 `SessionId` 全域唯一；我們的 CLI root 固定叫 `cli`，放在固定的地方會每次都撞。
@@ -65,11 +96,21 @@
  * @module
  */
 
-import { mkdir, open, readdir, readFile, stat, truncate, writeFile } from 'node:fs/promises';
+import {
+  link,
+  mkdir,
+  open,
+  readdir,
+  readFile,
+  rm,
+  stat,
+  truncate,
+  writeFile,
+} from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
 import type { BigIntStats } from 'node:fs';
-import { join } from 'node:path';
-import { createHash, randomUUID } from 'node:crypto';
+import { dirname, join } from 'node:path';
+import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   isUnreadableSessionEvent,
   SESSION_LOG_FORMAT_VERSION,
@@ -233,6 +274,55 @@ async function leaseFor(
   return outcome;
 }
 
+/** 新會話第一次物化的進度（見 {@link JsonlStoredSession} 的 `#publish`）。 */
+interface PublishProgress {
+  /** 要發佈的 header 暫存檔。 */
+  tempHeader?: string;
+  /** `link` 成功了：正式路徑上的 header 是完整的那份。 */
+  headerPublished?: true;
+  /** header 發佈之後的目錄 `fsync` 做完了。 */
+  headerSynced?: true;
+  /** 開成了、但還沒確認目錄項落盤的日誌把手。 */
+  log?: LogFileHandle;
+}
+
+/**
+ * 暫存檔：`open(wx)` → 寫滿 → `fsync` → 關。失敗就刪暫存檔再拋。照 dsh `writeSyncedTempFile`（`index.ts:1359-1369`）。
+ *
+ * @returns 暫存檔的路徑。
+ */
+async function writeSyncedTemp(finalPath: string, content: string): Promise<string> {
+  const temp = `${finalPath}.${randomBytes(6).toString('hex')}.tmp`;
+  let handle: FileHandle | undefined;
+  try {
+    handle = await open(temp, 'wx', FILE_MODE);
+    await handle.writeFile(content, 'utf8');
+    await handle.sync();
+    const done = handle;
+    handle = undefined;
+    await done.close();
+  } catch (error: unknown) {
+    await handle?.close().catch(() => undefined);
+    await rm(temp, { force: true }).catch(() => undefined);
+    throw error;
+  }
+  return temp;
+}
+
+/**
+ * `fsync` 一個目錄，讓裡面新的目錄項斷電後還在（`datasync` 只保證檔案內容）。照 dsh `syncDirPosix`
+ * （`index.ts:1394-1403`）：**錯往外拋，不吞。** Windows 開不了目錄，直接回（見檔頭的登記）。
+ */
+async function syncDirectory(directory: string): Promise<void> {
+  if (process.platform === 'win32') return;
+  const handle = await open(directory, 'r');
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
 /** 一份已存會話。IO 延後到第一次 {@link append} 或 {@link flush}。 */
 class JsonlStoredSession implements StoredSession {
   readonly #directory: string;
@@ -258,6 +348,11 @@ class JsonlStoredSession implements StoredSession {
   #materializing: Promise<LogFileHandle> | undefined;
   /** 已存的 next-seq。下一批的第一顆必須等於它。 */
   #nextSeq: number;
+  /**
+   * 新會話第一次物化走到哪一步（{@link #open}）。每一步成功就記下來，失敗後的重試只補沒做完的——
+   * `link` 成功但目錄 `fsync` 拋錯時，重試再 `link` 一次會撞上自己的 header（`EEXIST`），這個行程從此寫不進這份會話。
+   */
+  #publish: PublishProgress = {};
 
   /**
    * @param directory - run 目錄。
@@ -322,8 +417,10 @@ class JsonlStoredSession implements StoredSession {
    */
   async #shutdown(): Promise<void> {
     const failures: unknown[] = [];
-    const handle = this.#handle;
+    // 第一次物化開成了日誌、但目錄 fsync 失敗又沒等到重試就關：把手還在 `#publish.log`，也要關。
+    const handle = this.#handle ?? this.#publish.log;
     this.#handle = undefined;
+    delete this.#publish.log;
     if (handle !== undefined) {
       try {
         await handle.datasync();
@@ -437,23 +534,51 @@ class JsonlStoredSession implements StoredSession {
 
   async #open(): Promise<LogFileHandle> {
     if (this.#resume !== undefined) return this.#materializeResumed(this.#resume);
-    await mkdir(this.#directory, { recursive: true, mode: DIR_MODE });
+    const directory = this.#directory;
+    // 逐層建、每層都 fsync 父目錄（每次都做，不看它本來在不在）。少了 dsh 每份會話一個目錄那一層（我們沒有）。
+    await mkdir(dirname(directory), { recursive: true, mode: DIR_MODE });
+    await syncDirectory(dirname(dirname(directory)));
+    await mkdir(directory, { recursive: true, mode: DIR_MODE });
+    await syncDirectory(dirname(directory));
     // **租約在第一筆實體化寫入之前拿**，照 dsh：一份還沒實體化的會話在檔案系統上沒有足跡。
     // 上一次實體化拿到租約之後才失敗的話，重試不再拿一次——那會撞上自己。
     this.#lease ??= await leaseFor(
       this.#context,
-      join(this.#directory, `${this.#base}${LOCK_SUFFIX}`),
+      join(directory, `${this.#base}${LOCK_SUFFIX}`),
       this.#header.id,
     );
-    // header 先寫：日誌有內容而 header 不見，比反過來難解釋得多。
-    await writeFile(
-      join(this.#directory, `${this.#base}${HEADER_SUFFIX}`),
-      `${JSON.stringify(this.#header, null, 2)}\n`,
-      { encoding: 'utf8', mode: FILE_MODE, flag: 'wx' },
-    );
-    // `wx`：檔案已經在就拒絕。不覆寫、也不續寫。
-    this.#handle = await this.#context.openLog(this.#logPath(), 'wx', FILE_MODE);
-    return this.#handle;
+    const progress = this.#publish;
+    // header 先發佈：日誌有內容而 header 不見，比反過來難解釋得多。暫存檔加 `link`：正式路徑上只會有不存在或完整的那份；
+    // 已經在就 `EEXIST`（撞名絆索，不覆寫也不續寫）。
+    if (progress.headerPublished === undefined) {
+      const headerPath = join(directory, `${this.#base}${HEADER_SUFFIX}`);
+      const temp = await writeSyncedTemp(headerPath, `${JSON.stringify(this.#header, null, 2)}\n`);
+      try {
+        await link(temp, headerPath);
+      } catch (error: unknown) {
+        await rm(temp, { force: true }).catch(() => undefined);
+        throw error;
+      }
+      // **`link` 一成功的下一行就記**，不等目錄 fsync：目錄 fsync 拋錯之後重試再 `link`，會撞上自己的 header。
+      progress.headerPublished = true;
+      progress.tempHeader = temp;
+    }
+    if (progress.headerSynced === undefined) {
+      await syncDirectory(directory);
+      progress.headerSynced = true;
+    }
+    // 暫存檔盡力刪：刪不掉不讓這次寫入失敗（殘留檔讀方不認）。
+    if (progress.tempHeader !== undefined) {
+      await rm(progress.tempHeader, { force: true }).catch(() => undefined);
+      delete progress.tempHeader;
+    }
+    // header 的目錄項落盤之後才建日誌。`wx`：檔案已經在就拒絕，不覆寫、也不續寫。
+    progress.log ??= await this.#context.openLog(this.#logPath(), 'wx', FILE_MODE);
+    await syncDirectory(directory);
+    const handle = progress.log;
+    delete progress.log;
+    this.#handle = handle;
+    return handle;
   }
 
   /**
@@ -771,7 +896,7 @@ async function openStoredSessionForRead(
 /**
  * 續接 `directory` 裡的那一份。見 {@link SessionStore.resume}。
  *
- * **只有 header、沒有日誌不是壞檔**：`#materialize` 先寫 header 再開日誌，兩步之間當掉
+ * **只有 header、沒有日誌不是壞檔**：`#open` 先發佈 header（暫存檔加 `link`，#1510）再開日誌，兩步之間當掉
  * 就是這個樣子——一份一筆都還沒寫進去的會話。
  */
 async function resumeStoredSession(
