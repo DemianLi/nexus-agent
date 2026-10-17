@@ -26,6 +26,16 @@ describe('registry 檔的改動還在', () => {
     );
   });
 
+  test('input-group 只在欄位停用時變淡：按鈕停用不算，寫在覆寫檔、layer 外（#1523，README 本地修改第 18 條）', () => {
+    const overrides = read('../../styles/solid-glass.overrides.css');
+    expect(overrides).toContain(
+      '[data-slot="input-group"]:has(:disabled):not(:has([data-slot="input-group-control"]:disabled)) {\n  opacity: 1;\n}',
+    );
+    // vendor 原文仍然是任何後代停用就整組變淡（`:has(:disabled)`）。上游改成只看欄位時這條紅，提醒把本地修改拿掉。
+    const vendor = code(read('../../vendor/solid-glass/components/ui/input-group.tsx'));
+    expect(vendor).toMatch(/data-slot="input-group"[\s\S]{0,1200}\bhas-disabled:opacity-50\b/);
+  });
+
   test.each(['./dialog.tsx', './alert-dialog.tsx', './sheet.tsx', './tooltip.tsx'])(
     '%s 的進出場時長走 motion.css 的 token，不寫數字（#1280）',
     (path) => {

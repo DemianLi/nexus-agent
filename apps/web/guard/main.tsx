@@ -17,6 +17,8 @@
  *   - `data-guard-expanded`：Radix 浮層 Trigger（asChild）包著的 outline 按鈕開著時（`trigger`）跟沒開的（`reference`）比底色：
  *     SG 用 `[aria-expanded="true"]` 把它畫成按下去的樣子（#1523 的混合期）。
  *   - `data-guard-hover`：平常與滑鼠移上去兩種狀態各量一次字對底色（destructive 按鈕，頁面上與卡片裡各一顆；hover 底是覆寫檔調淡的，#1523）。
+ *   - `data-guard-opacity`：InputGroup 的 `opacity` 與底色（`reference` 一般的、`send-disabled` 只有按鈕停用、`control-disabled` 欄位停用），
+ *     vendor 的 `has-disabled:opacity-50` 被按鈕停用觸發的那一半由覆寫檔擋掉（#1523 本地修改第 18 條）。
  *   - `data-guard-choice`：問答的選項（已勾選、沒勾選、停用），量平常與滑鼠移上去的底色、停用的樣子：shadcn 的 `data-*` custom variant
  *     （`vendor/solid-glass/shadcn/tailwind.css`，#1523）specificity 是 0，不能改掉這幾個 variant 原本的行為。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
@@ -33,7 +35,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { InputGroup, InputGroupInput } from '@/components/ui/input-group';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+  InputGroupText,
+  InputGroupTextarea,
+} from '@/components/ui/input-group';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Questionnaire,
@@ -135,13 +143,34 @@ function GuardPage() {
         </div>
 
         <div style={{ width: 360 }}>
-          <InputGroup data-guard-outline-host="input-group" data-guard-shadow="input-group">
+          <InputGroup
+            data-guard-outline-host="input-group"
+            data-guard-shadow="input-group"
+            data-guard-opacity="reference"
+          >
             <InputGroupInput
               data-guard-focus="input-group"
               data-guard-field="input-group"
               aria-label="輸入框"
               placeholder="輸入"
             />
+          </InputGroup>
+        </div>
+
+        {/* 群組只在欄位本身停用時變淡（#1523 本地修改第 18 條）：送出鈕停用的（輸入框沒字時就是這樣）要跟上面那個一樣
+            不透明、提示字照常過 4.5；欄位停用的照 vendor 變淡（量具分得出來）。 */}
+        <div style={{ width: 360, display: 'grid', gap: 12 }}>
+          <InputGroup data-guard-opacity="send-disabled">
+            <InputGroupTextarea aria-label="送出鈕停用的輸入框" placeholder="輸入" />
+            <InputGroupAddon align="block-end">
+              <InputGroupText data-guard-text="input-group-send-hint">Enter 送出</InputGroupText>
+              <Button size="sm" disabled>
+                送出
+              </Button>
+            </InputGroupAddon>
+          </InputGroup>
+          <InputGroup data-guard-opacity="control-disabled">
+            <InputGroupInput aria-label="停用的欄位" placeholder="停用" disabled />
           </InputGroup>
         </div>
 

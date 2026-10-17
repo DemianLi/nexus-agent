@@ -6,7 +6,7 @@
  *   輸入框（`composer.tsx`）用的是 `InputGroupTextarea`。vendor 把 `onClick` 寫在 `{...props}` 前面，所以從這裡傳的 `onClick`
  *   整段取代它；呼叫端自己傳 `onClick` 時照舊由呼叫端的蓋掉（跟 vendor 一樣）。
  *
- * 焦點外框畫在群組上（#1279）是覆寫檔那一層，不在這裡（`styles/solid-glass.overrides.css`，第 15 條）。
+ * 焦點外框畫在群組上（#1279，第 15 條）、按鈕停用時群組不跟著變淡（第 18 條）是覆寫檔那一層，不在這裡（`styles/solid-glass.overrides.css`）。
  */
 import type * as React from 'react';
 

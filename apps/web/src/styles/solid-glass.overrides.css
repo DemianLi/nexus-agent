@@ -123,6 +123,19 @@
 }
 
 /*
+ * 群組只在欄位本身停用時才變淡（#1523，PM 定；README 本地修改第 18 條）：vendor 的 `has-disabled:opacity-50`
+ * （`vendor/solid-glass/components/ui/input-group.tsx:17`）編成 `:has(:disabled)`，群組裡任何一個後代停用就命中——
+ * 輸入框（`composer.tsx`）沒字時送出鈕是停用的，整個框就變成 50%。這裡保留 develop 的語意：按鈕停用不算，
+ * 欄位（`input-group-control`）停用時照 vendor 變淡。底色那一半（`has-disabled:bg-input/50`、暗色 /80）本來就被
+ * `solid-glass.css:917-930` 寫在 layer 外的 `background-color: var(--field)` 蓋掉，不用處理。
+ * 寫在 layer 外才蓋得過 utilities layer；`guard/` 量送出鈕停用的群組 opacity 是 1。不讓 Prettier 排版，理由同上。
+ */
+/* prettier-ignore */
+[data-slot="input-group"]:has(:disabled):not(:has([data-slot="input-group-control"]:disabled)) {
+  opacity: 1;
+}
+
+/*
  * destructive 按鈕 hover 的淡紅底調淡（#1523，PM 定格 2；README 本地修改第 17 條）：vendor 是亮 `hover:bg-destructive/20`、
  * 暗 `dark:hover:bg-destructive/30`（`vendor/solid-glass/components/ui/button.tsx:18`），字疊上去只有 3.7，比 develop 那顆實心紅底白字
  * （hover 5.8 以上）差。Q5 碰到 Q8 以 Q5 為準（同第 12 條）：hover 底換成亮 17%、暗 26%，`--destructive` 由 tokengen 照這兩格解到 4.5。
