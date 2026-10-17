@@ -1,83 +1,76 @@
-/* 由 tokengen/generate.mjs 產生（Leonardo 底色 lightness：亮 98、暗 6），不要手改。 */
+/* 由 tokengen/generate.mjs 產生，不要手改。只放要覆寫 solid-glass 的 token，亮暗成對（#1512）。 */
 
 :root {
-  --background: oklch(0.9791 0 0);
-  --foreground: oklch(0.2178 0 0);
-  --card: oklch(1 0 0);
-  --card-foreground: oklch(0.2178 0 0);
-  --popover: oklch(1 0 0);
-  --popover-foreground: oklch(0.2178 0 0);
-  --primary: oklch(0.2046 0 0);
-  --primary-foreground: oklch(1 0 0);
+  --brand: oklch(0.489 0.102 165);
+  --destructive: oklch(0.492 0.2 27.325);
+  --success: oklch(0.454 0.119 152);
+  --status-done: oklch(0.467 0.125 248);
+  --status-interrupted: oklch(0.476 0.113 58);
+  --status-running: oklch(0.468 0 0);
+  --card: oklch(0.981 0.004 265 / 60%);
+  --border: oklch(0.294 0.02 265 / 13%);
   --primary-hover: oklch(0.285 0 0);
   --primary-active: oklch(0 0 0);
-  --secondary: oklch(0.8975 0 0);
-  --secondary-foreground: oklch(0.2178 0 0);
-  --muted: oklch(0.8975 0 0);
-  --muted-foreground: oklch(0.4819 0 0);
-  --accent: oklch(0.8914 0 0);
-  --accent-foreground: oklch(0.2178 0 0);
-  --destructive: oklch(0.5432 0.208 26.09);
-  --success: oklch(0.5036 0.1381 150.18);
-  --warning: oklch(0.5321 0.1458 47.41);
-  --info: oklch(0.5332 0.2414 263.16);
-  --border: oklch(0 0 0 / 0.071);
-  --input: oklch(0 0 0 / 0.14);
-  --ring: oklch(0.2178 0 0);
-  --brand: oklch(0.5535 0.1918 256.39);
-  --brand-soft: oklch(0.5535 0.1918 256.39 / 0.09);
-  --stage: oklch(0.983 0 0);
-  --chip: oklch(0.8975 0 0);
-  --chip-hover: oklch(0.8914 0 0);
-  --chip-pressed: oklch(0.8669 0 0);
-  --card-hairline: oklch(0 0 0 / 0.14);
-  --sidebar: oklch(0.9642 0 0);
-  --sidebar-foreground: oklch(0.2178 0 0);
-  --sidebar-primary: oklch(0.2046 0 0);
-  --sidebar-primary-foreground: oklch(1 0 0);
-  --sidebar-accent: oklch(0.8975 0 0);
-  --sidebar-accent-foreground: oklch(0.2178 0 0);
-  --sidebar-border: oklch(0 0 0 / 0.071);
-  --sidebar-ring: oklch(0.2178 0 0);
+  --warning: oklch(0.48 0.131 47.41);
+  --info: oklch(0.485 0.2414 263.16);
+  --brand-soft: oklch(0.489 0.102 165 / 0.09);
+  --stage: oklch(0.9423 0 0);
+  --chip: oklch(0.8812 0 0);
+  --chip-hover: oklch(0.8729 0 0);
+  --chip-pressed: oklch(0.8511 0 0);
+  --card-hairline: oklch(0 0 0 / 0.141);
+  --ring: oklch(0.16 0 0);
+  --sidebar-ring: oklch(0.16 0 0);
 }
 
 .dark {
-  --background: oklch(0.1867 0 0);
-  --foreground: oklch(0.9521 0 0);
-  --card: oklch(0.2178 0 0);
-  --card-foreground: oklch(0.9521 0 0);
-  --popover: oklch(0.2178 0 0);
-  --popover-foreground: oklch(0.9521 0 0);
-  --primary: oklch(1 0 0);
-  --primary-foreground: oklch(0.1591 0 0);
+  --brand: oklch(0.78 0.13 166);
+  --destructive: oklch(0.704 0.191 22.216);
+  --success: oklch(0.74 0.16 152);
+  --status-done: oklch(0.68 0.15 250);
+  --status-interrupted: oklch(0.77 0.15 62);
+  --status-running: oklch(0.72 0 0);
+  --card: oklch(0.31 0 0 / 46%);
+  --border: oklch(1 0 0 / 11%);
   --primary-hover: oklch(0.931 0 0);
   --primary-active: oklch(0.8822 0 0);
-  --secondary: oklch(0.2809 0 0);
-  --secondary-foreground: oklch(0.9521 0 0);
-  --muted: oklch(0.2809 0 0);
-  --muted-foreground: oklch(0.6633 0 0);
-  --accent: oklch(0.2891 0 0);
-  --accent-foreground: oklch(0.9521 0 0);
-  --destructive: oklch(0.6525 0.2259 24.97);
-  --success: oklch(0.6069 0.1763 147.87);
-  --warning: oklch(0.6391 0.1635 52.25);
-  --info: oklch(0.6307 0.1995 258.86);
-  --border: oklch(1 0 0 / 0.064);
-  --input: oklch(0.8203 0 0 / 0.148);
-  --ring: oklch(0.9521 0 0);
-  --brand: oklch(0.805 0.1267 227.67);
-  --brand-soft: oklch(0.805 0.1267 227.67 / 0.12);
-  --stage: oklch(0.1954 0 0);
-  --chip: oklch(0.2809 0 0);
-  --chip-hover: oklch(0.2891 0 0);
-  --chip-pressed: oklch(0.3092 0 0);
-  --card-hairline: oklch(0.8203 0 0 / 0.148);
-  --sidebar: oklch(0.209 0 0);
-  --sidebar-foreground: oklch(0.9521 0 0);
-  --sidebar-primary: oklch(1 0 0);
-  --sidebar-primary-foreground: oklch(0.1591 0 0);
-  --sidebar-accent: oklch(0.2809 0 0);
-  --sidebar-accent-foreground: oklch(0.9521 0 0);
-  --sidebar-border: oklch(1 0 0 / 0.064);
-  --sidebar-ring: oklch(0.9521 0 0);
+  --warning: oklch(0.628 0.16 52.25);
+  --info: oklch(0.62 0.1995 258.86);
+  --brand-soft: oklch(0.78 0.13 166 / 0.12);
+  --stage: oklch(0.2119 0 0);
+  --chip: oklch(0.2289 0 0);
+  --chip-hover: oklch(0.239 0 0);
+  --chip-pressed: oklch(0.2635 0 0);
+  --card-hairline: oklch(0.8203 0 0 / 0.145);
+  --ring: oklch(0.985 0 0);
+  --sidebar-ring: oklch(0.985 0 0);
+}
+
+/* reduced-transparency：上面覆寫了的照樣重寫（不然無條件的值會蓋掉不透明值），亮暗鑑別度不夠的照 1b 解過。 */
+@media (prefers-reduced-transparency: reduce) {
+  :root {
+    --card: oklch(0.958 0.005 265);
+    --sidebar: oklch(0.952 0 0);
+  }
+  .dark {
+    --card: oklch(0.225 0 0);
+    --sidebar: oklch(0.13 0 0);
+  }
+}
+
+/* data-glass="opaque"：面換成不透明，跟 reduced-transparency 同一組值（#1468 Q7；本地修改，見 vendor/solid-glass/README.md）。 */
+[data-glass='opaque'] {
+  --primary-solid: 100%;
+  --panel: oklch(0.947 0.006 265);
+  --card: oklch(0.958 0.005 265);
+  --popover: oklch(0.98 0.003 265);
+  --sidebar: oklch(0.952 0 0);
+}
+.dark[data-glass='opaque'],
+.dark [data-glass='opaque'] {
+  --primary-solid: 100%;
+  --panel: oklch(0.19 0 0);
+  --card: oklch(0.225 0 0);
+  --popover: oklch(0.22 0 0);
+  --sidebar: oklch(0.13 0 0);
 }
