@@ -29,9 +29,9 @@ import { startGuardServer, type GuardServer } from './server';
  *    SG 畫的是 `--focus-line` 灰線，`solid-glass.overrides.css` 換回來，靜態那一層 `focus-line-suppression.test.ts` 列舉）。
  * 4. **貼在輸入框上方的卡片是平的**：`Surface tone="docked"` 的邊是 1px、沒有投影（SG 的 `.bg-card` 會把它變成浮起來的卡片，
  *    `solid-glass.overrides.css` 補回來）。
- * 5. **chip 三階**：`data-guard-chip` 裡那顆按鈕平常、滑鼠移上去、按下去三種狀態，字對它實際的底色過門檻。develop 就沒到 4.5 的那幾對
- *    只守「不比 develop 差」（既有缺口 #1515，{@link CHIP_FLOORS}）；warning 用量表平常狀態的字直接疊在頁面上，是狀態色對底色，
- *    守 {@link STATUS_MIN}（同靜態那一層的狀態色門檻）。
+ * 5. **chip 三階**：`data-guard-chip` 裡那顆按鈕平常、滑鼠移上去、清單開著三種狀態，字對它實際的底色過門檻。#1591 起量的是輸入框
+ *    底列的 Pick（12px 次要字，4.5）；權限「全開」那顆是警示色直接疊在頁面上，是狀態色對底色，守 {@link STATUS_MIN}（同靜態那一層
+ *    的狀態色門檻）。#1591 之前量的是用量表的 chip（既有缺口 #1515 那幾對守 develop 的值），換成用量環之後沒有字了。
  * 6. **對話裡被定位的那一則有圓角**：`[data-located]` 的圓角是 `var(--radius-3xl)`，這個變數只宣告在 SG 的 `@theme inline`；
  *    Tailwind 沒輸出或修剪掉它的話，圓角會靜靜變成 0。量 `border-radius` 不是 0。
  * 7. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
@@ -43,8 +43,11 @@ import { startGuardServer, type GuardServer } from './server';
  * 11. **modal 浮層**（#1583，`?overlay=`，見 {@link OVERLAYS}）：dialog、sheet 的關閉鈕焦點、標題與說明的對比、陰影上限；手機側欄的抽屜
  *    沒有邊（本地修改第 21 條）；不透明的退路下面與遮罩都沒有 blur（第 22 條）；呼叫端的寬度跟 develop 一樣；reduced-motion 下
  *    sheet 與手機側欄的抽屜不位移、時長 ≤ 150ms（第 23 條）。alert-dialog 的兩顆按鈕（footer 底帶上）的焦點與對比；下拉選單的選項
- *    （平常與 highlighted）對比、觸控高度（第 25 條）、「⋯」開著時看得見；picker 的選項（選中與沒選中）對比、只有一顆勾（第 27 條）、
+ *    （平常與 highlighted）對比、觸控高度（第 25 條）、「⋯」開著時看得見；command 清單的選項（選中與沒選中）對比、只有一顆勾（第 27 條）、
  *    搜尋框的焦點外框畫在群組上（第 15 條的擴充）；鍵盤 Enter 打開選單、在選項上按 Enter 觸發（驗收 D）。
+ * 12. **輸入框的底列**（#1591 PR 2）：三顆 Pick 與用量環的焦點；Pick 的 12px 次要字（含兩種退路）；環三個色階是 status token、
+ *    過 3:1（第 37 條）；「全開」的警示色（第 35 條）；鎖住的樣子（第 39 條）；清單開著時選項的字與高度（第 25 條擴充）；環的明細；
+ *    reduced-motion 下弧長不走 transition（第 38 條）；375 寬 44px、不溢出、不重疊（第 36、40 條）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -90,26 +93,20 @@ const REQUIRED_TEXTS = [
 ];
 const NON_TEXT_MIN = 3;
 
-type ChipState = 'rest' | 'hover' | 'pressed';
-const CHIP_STATES: ChipState[] = ['rest', 'hover', 'pressed'];
+/** `open`：清單開著（`aria-expanded`）。Pick 是選單的 Trigger，按下去就打開清單，量不到單純「按著」的樣子（#1591）。 */
+type ChipState = 'rest' | 'hover' | 'open';
+const CHIP_STATES: ChipState[] = ['rest', 'hover', 'open'];
 
 /**
- * chip 三階上 develop 就沒到 4.5 的那幾對（既有缺口 #1515）：只守「不比 develop 差」，數字同 `tokens-contrast.test.ts` 的
- * `NOT_WORSE_THAN_DEVELOP`（develop c9b957b6 照同一套算法重算、截到小數第四位）。沒列的一律 {@link TEXT_MIN}。
- */
-/**
- * 狀態色對底色的門檻（`.docs/web-ui-spec.md` §5，#1468 Q5）。warning 用量表平常狀態沒有 chip 底，字是 warning 色直接疊在頁面上，
+ * 狀態色對底色的門檻（`.docs/web-ui-spec.md` §5，#1468 Q5）。權限「全開」的 Pick 沒有 chip 底，字是 warning 色直接疊在頁面上，
  * 所以守這一條而不是文字的 4.5。不扣靜態那一層的 `ROUNDING`：瀏覽器量的是出貨的值，跟靜態那層對到小數第四位。
  */
 const STATUS_MIN = 5.2;
-/** chip 三階裡守 {@link STATUS_MIN} 的那幾格。 */
-const CHIP_STATUS_ON_PAGE = new Set(['context-meter-warning:rest']);
-
-const CHIP_FLOORS: Record<string, Record<Theme, number>> = {
-  'context-meter:pressed': { light: 4.3325, dark: 4.2964 },
-  'context-meter-warning:hover': { light: 4.0084, dark: 3.9642 },
-  'context-meter-warning:pressed': { light: 3.7081, dark: 3.6952 },
-};
+/**
+ * chip 三階裡的狀態色：權限「全開」的 Pick 平常與滑鼠移上去是警示色（本地修改第 35 條），守 {@link STATUS_MIN}。清單開著時
+ * 換回字色（開著的底上警示色不到 4.5），守文字的 4.5。
+ */
+const CHIP_STATUS = new Set(['pick-danger:rest', 'pick-danger:hover']);
 
 type Mode = 'translucent' | 'reduced-transparency' | 'opaque';
 const MODES: Mode[] = ['translucent', 'reduced-transparency', 'opaque'];
@@ -370,10 +367,9 @@ async function collectChips(page: Page): Promise<ChipSample[]> {
           });
         }
         const hover = el.matches(':hover');
-        const active = el.matches(':active');
+        const open = el.getAttribute('aria-expanded') === 'true';
         return {
-          inState:
-            state === 'rest' ? !hover && !active : state === 'hover' ? hover && !active : active,
+          inState: state === 'rest' ? !hover && !open : state === 'hover' ? hover && !open : open,
           color: getComputedStyle(el).color,
           backgroundColor: getComputedStyle(el).backgroundColor,
           chain,
@@ -385,11 +381,12 @@ async function collectChips(page: Page): Promise<ChipSample[]> {
     await read('rest');
     await target.hover();
     await read('hover');
-    await page.mouse.down();
-    await read('pressed');
-    // 游標移開再放開：click 要按下與放開在同一個元素上才會觸發，這樣浮層不會打開。
+    await target.click();
+    await page.waitForSelector('[role="menu"]');
     await page.mouse.move(0, 0);
-    await page.mouse.up();
+    await read('open');
+    await page.keyboard.press('Escape');
+    await page.waitForSelector('[role="menu"]', { state: 'detached' });
   }
   await settle(page);
   return samples;
@@ -717,34 +714,34 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     ).toEqual([]);
   });
 
-  test('chip 三階：平常、滑鼠移上去、按下去，字對它實際的底色過門檻（#1515 那幾對守 develop 的值）', () => {
-    const measured = chips.map((c) => {
-      const key = `${c.name}:${c.state}`;
-      return {
-        key,
-        ...c,
-        min: CHIP_FLOORS[key]?.[theme] ?? (CHIP_STATUS_ON_PAGE.has(key) ? STATUS_MIN : TEXT_MIN),
-        ...worstOn(c.color, c.chain),
-      };
-    });
+  test('chip 三階：輸入框底列的 Pick 平常、滑鼠移上去、清單開著，12px 的次要字過 4.5；「全開」平常與移上去是警示色、清單開著換回字色（#1591）', () => {
+    const measured = chips.map((c) => ({
+      key: `${c.name}:${c.state}`,
+      ...c,
+      min: CHIP_STATUS.has(`${c.name}:${c.state}`) ? STATUS_MIN : TEXT_MIN,
+      ...worstOn(c.color, c.chain),
+    }));
     report[`${theme}:chips`] = measured.map((m) => ({
       key: m.key,
       min: m.min,
+      color: m.color,
       backgroundColor: m.backgroundColor,
       on: m.on,
       ratio: Math.round(m.ratio * 10000) / 10000,
     }));
-    // 量具自檢：兩顆用量表都量到三種狀態、真的在那個狀態，而且三種狀態的底色都不一樣（量到的是 hover／按下的底，不是平常那一層）。
+    // 量具自檢：兩顆 Pick 都量到三種狀態、真的在那個狀態。
     expect(measured.map((m) => m.key)).toEqual(
-      ['context-meter', 'context-meter-warning'].flatMap((name) =>
-        CHIP_STATES.map((state) => `${name}:${state}`),
-      ),
+      ['pick', 'pick-danger'].flatMap((name) => CHIP_STATES.map((state) => `${name}:${state}`)),
     );
     expect(measured.filter((m) => !m.inState).map((m) => m.key)).toEqual([]);
-    for (const name of ['context-meter', 'context-meter-warning'])
-      expect(
-        new Set(measured.filter((m) => m.name === name).map((m) => m.backgroundColor)).size,
-      ).toBe(3);
+    // 一般的 Pick 移上去換成字色（vendor 的 `hover:text-foreground`，量具自檢：量到的確實是 hover）；「全開」那顆平常與移上去
+    // 是同一個警示色，跟一般那顆的次要色、字色都不同（拿掉覆寫檔第 35 條，它會跟一般那顆一樣）；開著時跟一般那顆一樣是字色。
+    const color = (key: string) => measured.find((m) => m.key === key)?.color;
+    expect(color('pick:hover')).not.toBe(color('pick:rest'));
+    expect(color('pick-danger:hover')).toBe(color('pick-danger:rest'));
+    expect(color('pick-danger:rest')).not.toBe(color('pick:rest'));
+    expect(color('pick-danger:rest')).not.toBe(color('pick:hover'));
+    expect(color('pick-danger:open')).toBe(color('pick:open'));
     expect(
       measured
         .filter((m) => !(m.ratio >= m.min))
@@ -1002,7 +999,7 @@ const OVERLAYS: Overlay[] = [
     backdrops: [],
   },
   {
-    name: 'picker',
+    name: 'command',
     marks: {
       '[data-slot="command-input"]': { 'data-guard-focus': 'command-input' },
       '[data-slot="command-input-wrapper"] [data-slot="input-group"]': {
@@ -1015,11 +1012,11 @@ const OVERLAYS: Overlay[] = [
         'data-guard-text': 'command-item',
       },
       '[data-slot="command-item"][data-checked="true"]': { 'data-guard-checks': 'checked' },
-      '[data-slot="popover-content"]': { 'data-guard-surface': 'picker' },
+      '[data-slot="popover-content"]': { 'data-guard-surface': 'command' },
     },
     texts: ['command-item-selected', 'command-item'],
     focus: ['command-input-0'],
-    surfaces: ['picker'],
+    surfaces: ['command'],
     backdrops: [],
   },
 ];
@@ -1248,7 +1245,7 @@ describe.each(
     });
   }
 
-  if (overlay.name === 'picker') {
+  if (overlay.name === 'command') {
     test('選中與沒選中的選項底色不同（量具自檢：上面量的確實是兩種狀態）', () => {
       report[`${key}:rows`] = rows;
       const selected = rows.filter((r) => r.selected);
@@ -1558,12 +1555,272 @@ describe.each(
   });
 });
 
+/**
+ * 輸入框的底列（#1591 PR 2，驗收 C、D）：左邊權限、右邊模型、推理強度兩顆 SG 的 `ComposerPick`，最右邊用量環（SG 的 `ContextRing`）。
+ * 都是 vendor 畫的、掛不了屬性，開頁後補。
+ */
+const PICK = '[data-slot="composer-footer"] [data-slot="dropdown-menu-trigger"]';
+const RING = '[data-slot="composer-footer"] [data-slot="context-ring"]';
+const footerMarks: Record<string, Record<string, string>> = {
+  [PICK]: { 'data-guard-focus': 'footer-pick', 'data-guard-text': 'footer-pick' },
+  [RING]: { 'data-guard-focus': 'footer-ring' },
+};
+
+describe.each(['light', 'dark'] as const)('瀏覽器量輸入框的底列（#1591）：%s', (theme) => {
+  test('鍵盤焦點：三顆 Pick 與用量環都不帶 ring、2px 字色外框；Pick 的 12px 次要字過 4.5', async () => {
+    const page = await openOverlay('composer-idle', theme, { marks: footerMarks });
+    try {
+      const texts = await collectTexts(page);
+      const focus = await collectFocus(page);
+      expect(focus.map((f) => f.name).sort()).toEqual([
+        'footer-pick-0',
+        'footer-pick-1',
+        'footer-pick-2',
+        'footer-ring-0',
+      ]);
+      expectFocus(focus, `footer:${theme}`);
+      // 量具自檢：三顆 Pick 都量到。
+      expect(texts.filter((t) => t.name === 'footer-pick')).toHaveLength(3);
+      expectTexts(texts, ['footer-pick'], `footer:${theme}`);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('用量環的三個色階（50%、70%、90%）都是 status token、對底色過非文字 3:1（本地修改第 37 條）', async () => {
+    const page = await openOverlay('composer-tones', theme, {
+      marks: {
+        [`${RING} svg`]: { 'data-guard-text': 'ring', 'data-guard-min': String(NON_TEXT_MIN) },
+      },
+    });
+    try {
+      const texts = (await collectTexts(page)).filter((t) => t.name === 'ring');
+      const tokens = await page.evaluate(() =>
+        ['--info', '--warning', '--destructive'].map((token) => {
+          const probe = document.createElement('span');
+          probe.style.color = `var(${token})`;
+          document.body.append(probe);
+          const color = getComputedStyle(probe).color;
+          probe.remove();
+          return color;
+        }),
+      );
+      report[`footer:${theme}:ring-tones`] = { tokens, colors: texts.map((t) => t.color) };
+      // 三個環依序是 info、warning、destructive（拿掉覆寫檔第 37 條，前兩個會是 Tailwind 色板的藍與琥珀）。
+      expect(texts.map((t) => t.color)).toEqual(tokens);
+      expect(new Set(tokens).size).toBe(3);
+      expectTexts(texts, ['ring'], `footer:${theme}:ring`);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('權限「全開」：Pick 是警示色，滑鼠移上去不變、清單開著換回字色；模型那顆照常是次要色（本地修改第 35 條）', async () => {
+    const page = await openOverlay('composer-danger', theme, { marks: {} });
+    try {
+      const danger = page.locator(
+        '[data-slot="permission-pick"] [data-slot="dropdown-menu-trigger"]',
+      );
+      const model = page.locator('[data-slot="model-pick"] [data-slot="dropdown-menu-trigger"]');
+      const warning = await page.evaluate(() => {
+        const probe = document.createElement('span');
+        probe.style.color = 'var(--warning)';
+        document.body.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      });
+      const colorOf = (target: typeof danger) =>
+        target.evaluate((el) => getComputedStyle(el).color);
+      const rest = await colorOf(danger);
+      await danger.hover();
+      await settle(page);
+      const hover = await colorOf(danger);
+      await page.mouse.move(0, 0);
+      await danger.click();
+      await page.waitForSelector('[role="menu"]');
+      await settle(page);
+      const open = await colorOf(danger);
+      await page.keyboard.press('Escape');
+      await page.waitForSelector('[role="menu"]', { state: 'detached' });
+      const others = await colorOf(model);
+      report[`footer:${theme}:danger`] = { warning, rest, hover, open, others };
+      expect([rest, hover]).toEqual([warning, warning]);
+      expect(open).not.toBe(warning);
+      expect(others).not.toBe(warning);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('權限鎖住：Trigger 半透明、聚焦得到（名稱帶原因），點了清單不開（本地修改第 39 條）', async () => {
+    const page = await openOverlay('composer-locked', theme, { marks: {} });
+    try {
+      const locked = page.locator(
+        '[data-slot="permission-pick"] [data-slot="dropdown-menu-trigger"]',
+      );
+      const model = page.locator('[data-slot="model-pick"] [data-slot="dropdown-menu-trigger"]');
+      const opacityOf = (target: typeof locked) =>
+        target.evaluate((el) => getComputedStyle(el).opacity);
+      await locked.focus();
+      const state = await locked.evaluate((el) => ({
+        focused: document.activeElement === el,
+        disabled: el.hasAttribute('disabled'),
+        ariaDisabled: el.getAttribute('aria-disabled'),
+        name: el.getAttribute('aria-label'),
+      }));
+      // `force`：Playwright 把 `aria-disabled` 當成不能點、會一直等；這裡要的正是「點了也不開」。
+      await locked.click({ force: true });
+      await settle(page);
+      const menus = await page.locator('[role="menu"]').count();
+      const opacities = { locked: await opacityOf(locked), model: await opacityOf(model) };
+      report[`footer:${theme}:locked`] = { ...state, menus, opacities };
+      expect(state).toEqual({
+        focused: true,
+        disabled: false,
+        ariaDisabled: 'true',
+        name: '權限：可寫工作區，這一輪結束後才能切換',
+      });
+      expect(menus).toBe(0);
+      // 量具自檢：沒鎖的那顆是 1。
+      expect(opacities).toEqual({ locked: '0.5', model: '1' });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('模型的清單開著：選項名稱、12px 的說明、11px 的標題都過 4.5，選項 32px 高（1024 以上）', async () => {
+    const page = await openOverlay('composer-pick-open', theme, {
+      marks: {
+        '[role="menuitemradio"]': { 'data-guard-text': 'pick-item' },
+        '[role="menuitemradio"] .text-muted-foreground': { 'data-guard-text': 'pick-hint' },
+        '[data-slot="dropdown-menu-label"]': { 'data-guard-text': 'pick-label' },
+      },
+    });
+    try {
+      const texts = await collectTexts(page);
+      const heights = await page.$$eval('[role="menuitemradio"]', (els) =>
+        els.map((el) => el.getBoundingClientRect().height),
+      );
+      report[`footer:${theme}:pick-open:heights`] = heights;
+      expectTexts(texts, ['pick-item', 'pick-hint', 'pick-label'], `footer:${theme}:pick-open`);
+      expect(heights.length).toBeGreaterThan(1);
+      expect(heights.filter((h) => h < 32)).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('用量環點開：明細的標題、每一行（含不會觸發的那一行與它底下的小字）、說明都過 4.5', async () => {
+    const page = await openOverlay('composer-dormant', theme, {
+      marks: { [RING]: {} },
+      prepare: async (p) => {
+        await p.click(RING);
+        await p.waitForSelector('[data-testid="context-meter-note"]');
+        await settle(p);
+        await p.evaluate(() => {
+          const mark = (selector: string, name: string) =>
+            document
+              .querySelectorAll(selector)
+              .forEach((el) => el.setAttribute('data-guard-text', name));
+          mark('[data-slot="popover-title"]', 'ring-title');
+          mark('[data-testid="context-meter-percent"]', 'ring-percent');
+          mark('[data-testid="context-meter-row"]', 'ring-row');
+          mark('[data-testid="context-meter-dormant"]', 'ring-dormant');
+          mark('[data-testid="context-meter-note"]', 'ring-note');
+        });
+      },
+    });
+    try {
+      const texts = await collectTexts(page);
+      // 量具自檢：兩道門檻都量到，其中一道是不會觸發的。
+      expect(texts.filter((t) => t.name === 'ring-row')).toHaveLength(2);
+      expectTexts(
+        texts,
+        ['ring-title', 'ring-percent', 'ring-row', 'ring-dormant', 'ring-note'],
+        `footer:${theme}:ring-open`,
+      );
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe.each(
+  MODES.filter((m) => m !== 'translucent').flatMap((mode) =>
+    (['light', 'dark'] as const).map((theme) => [mode, theme] as const),
+  ),
+)('瀏覽器量輸入框的底列（#1591）：%s、%s', (mode, theme) => {
+  test('不透明的退路：Pick 的 12px 次要字過 4.5、用量環三個色階過 3:1', async () => {
+    const pick = await openOverlay('composer-idle', theme, { mode, marks: footerMarks });
+    const tones = await openOverlay('composer-tones', theme, {
+      mode,
+      marks: {
+        [`${RING} svg`]: { 'data-guard-text': 'ring', 'data-guard-min': String(NON_TEXT_MIN) },
+      },
+    });
+    try {
+      const texts = [
+        ...(await collectTexts(pick)).filter((t) => t.name === 'footer-pick'),
+        ...(await collectTexts(tones)).filter((t) => t.name === 'ring'),
+      ];
+      // 量具自檢：三顆 Pick、三個環都量到。
+      expect(texts.map((t) => t.name)).toEqual([
+        ...Array(3).fill('footer-pick'),
+        ...Array(3).fill('ring'),
+      ]);
+      expectTexts(texts, ['footer-pick', 'ring'], `${mode}:footer:${theme}`);
+    } finally {
+      await pick.close();
+      await tones.close();
+    }
+  });
+});
+
+test('375 寬：模型清單的選項 44px 高（觸控高度，本地修改第 25 條擴充到 RadioItem）', async () => {
+  const page = await openOverlay('composer-pick-open', 'light', {
+    viewport: { width: 375, height: 812 },
+    marks: { '[role="menuitemradio"]': {} },
+  });
+  try {
+    const heights = await page.$$eval('[role="menuitemradio"]', (els) =>
+      els.map((el) => el.getBoundingClientRect().height),
+    );
+    report['footer:pick-open:375:heights'] = heights;
+    expect(heights.length).toBeGreaterThan(1);
+    expect(heights.filter((h) => h < 44)).toEqual([]);
+  } finally {
+    await page.close();
+  }
+});
+
+test('減少動態：用量環的弧長不走 transition（本地修改第 38 條）', async () => {
+  const duration = async (reducedMotion: boolean) => {
+    const page = await openOverlay('composer-idle', 'light', {
+      reducedMotion,
+      marks: { [RING]: {} },
+    });
+    try {
+      return await page.$eval(
+        `${RING} circle:last-child`,
+        (el) => getComputedStyle(el).transitionDuration,
+      );
+    } finally {
+      await page.close();
+    }
+  };
+  const measured = { normal: await duration(false), reduced: await duration(true) };
+  report['footer:ring-motion'] = measured;
+  // 量具自檢：平常是 vendor 的 500ms（量到的確實是弧長那一圈）。
+  expect(measured).toEqual({ normal: '0.5s', reduced: '0s' });
+});
+
 describe('瀏覽器量輸入框的版面（#1591）', () => {
   test.each([
     { width: 375, px: 44 },
     { width: 1280, px: 32 },
   ])(
-    '$width 寬：底列不溢出、主按鈕在框內；「＋」與主按鈕 $px px、單行的字跟它們置中（觸控高度，本地修改第 31 條）',
+    '$width 寬：底列不溢出、按鈕不重疊、主按鈕在框內；「＋」與主按鈕 $px px、單行的字跟它們置中（第 31 條）；底列的 Pick 與用量環 1024 以下 44px（第 36 條）',
     async ({ width, px }) => {
       const page = await openOverlay('composer-running-draft', 'light', {
         viewport: { width, height: 812 },
@@ -1609,6 +1866,14 @@ describe('瀏覽器量輸入框的版面（#1591）', () => {
         expect(main.top).toBeGreaterThanOrEqual(composer.top);
         expect(main.bottom).toBeLessThanOrEqual(composer.bottom);
         expect([layout.add.height, main.height]).toEqual([px, px]);
+        // 底列的按鈕依序排、不互相蓋住（窄的時候只有模型那顆縮，其餘的包裝層不縮，見 `model-seat.tsx`）。
+        expect(
+          layout.footerChildren.filter((b, i, all) => i > 0 && b.left < all[i - 1]!.right - 0.5),
+        ).toEqual([]);
+        // 底列的三顆 Pick 與用量環：1024 以下 44px（本地修改第 36 條），以上照 SG 是 24px。
+        expect(layout.footerChildren.map((b) => b.height)).toEqual(
+          Array(4).fill(px === 44 ? 44 : 24),
+        );
         // 單行的草稿：字（textarea 的盒子）跟「＋」、主按鈕同高、同一條中線，不會沉在按鈕下緣。
         const middle = (b: { top: number; bottom: number }) => (b.top + b.bottom) / 2;
         expect(layout.textarea.height).toBe(px);

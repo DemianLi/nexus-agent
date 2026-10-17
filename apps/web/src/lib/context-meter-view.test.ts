@@ -96,14 +96,6 @@ describe('contextMeterView', () => {
     const view = contextMeterView({ measure: measure(0, 7, [{ type: 'messages', value: 5 }]) });
     expect(view?.ratio).toBe(1);
     expect(view?.percent).toBe(100);
-    expect(view?.warning).toBe(true);
-  });
-
-  it('80% 以上（含）變警示色', () => {
-    const at = (count: number) =>
-      contextMeterView({ measure: measure(0, count, [{ type: 'messages', value: 100 }]) })?.warning;
-    expect(at(79)).toBe(false);
-    expect(at(80)).toBe(true);
   });
 
   it('「目前大小」只在收過 model/usage 時才有，千分位', () => {
@@ -128,7 +120,6 @@ describe('contextMeterView：只算會真的觸發的門檻（#1444）', () => {
     const view = contextMeterView({ measure: measure(30_000, 70, BOTH, false) });
     expect(view?.percent).toBe(30);
     expect(view?.ratio).toBe(0.3);
-    expect(view?.warning).toBe(false);
     expect(rows(view)).toEqual([
       ['tokens', '約 30k／100k token', true, false],
       ['messages', '70／60 則', false, true],
@@ -139,7 +130,6 @@ describe('contextMeterView：只算會真的觸發的門檻（#1444）', () => {
   it('B. 旗標 true：環取兩道的最大值，跟沒有旗標以前一樣', () => {
     const view = contextMeterView({ measure: measure(30_000, 70, BOTH, true) });
     expect(view?.percent).toBe(100);
-    expect(view?.warning).toBe(true);
     expect(rows(view)).toEqual([
       ['tokens', '約 30k／100k token', false, false],
       ['messages', '70／60 則', true, false],
@@ -152,7 +142,6 @@ describe('contextMeterView：只算會真的觸發的門檻（#1444）', () => {
     expect(view).toEqual({
       ratio: 1,
       percent: 100,
-      warning: true,
       inputTokens: '31,000 token',
       rows: [
         { type: 'tokens', text: '約 30k／100k token', nearest: false, dormant: false },
@@ -169,7 +158,6 @@ describe('contextMeterView：只算會真的觸發的門檻（#1444）', () => {
     expect(view).not.toBeNull();
     expect(view?.ratio).toBe(0);
     expect(view?.percent).toBe(0);
-    expect(view?.warning).toBe(false);
     expect(rows(view)).toEqual([['messages', '70／60 則', false, true]]);
     expect(view?.note).toBe(NOTE_NONE_ACTIVE);
   });

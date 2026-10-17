@@ -89,7 +89,7 @@
 - **tooltip 的字不能帶 Trigger 名稱裡沒有的資訊**：Base UI 的 tooltip 不給 `role="tooltip"`、也不掛 `aria-describedby`，報讀器聽不到它（#1583 驗收 D）。要讓人聽到的資訊寫進 Trigger 的 `aria-label`。
 - **下拉選單的選項用 `onClick`**，不是 `onSelect`；Trigger 開著時掛 `data-popup-open`，要「選單開著時怎樣」寫 `data-popup-open:`（不是 `data-[state=open]:`）。
 - **確認框的 `AlertDialogAction` 按了就關**（包裝層接了 Close），`onClick` 照樣會跑；不用自己在 `onClick` 裡關。
-- **command 的勾自己畫**：vendor 附在每個選項後面的勾被藏掉了（覆寫檔第 27 條）。要標「目前選的」就在選項裡自己放一顆 `<Check aria-label="目前選的" />`（`picker-seat.tsx`）。`CommandDialog` 不自己包 `Command`，由呼叫端包。
+- **command 的勾自己畫**：vendor 附在每個選項後面的勾被藏掉了（覆寫檔第 27 條）。要標「目前選的」就在選項裡自己放一顆 `<Check aria-label="目前選的" />`（`composer.tsx` 的 `@` 選單）。`CommandDialog` 不自己包 `Command`，由呼叫端包。
 - **寬度蓋 SG 的值要寫同一組前綴**：sheet 寫 `data-[side=right]:w-full`、`data-[side=right]:sm:max-w-none`，dialog 寫 `sm:max-w-lg`，cn 才會把 SG 的 `data-[side=*]:w-3/4`、`sm:max-w-sm` 拿掉。
 
 ## 新增 shadcn 元件

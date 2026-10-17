@@ -56,6 +56,45 @@ describe('registry 檔的改動還在', () => {
     );
   });
 
+  describe('輸入框底列的 Pick 與用量環（#1591，README 本地修改第 35–39 條）', () => {
+    const overrides = () => read('../../styles/solid-glass.overrides.css');
+    const pick = () => code(read('../../vendor/solid-glass/components/ui/composer.tsx'));
+    const ring = () => code(read('../../vendor/solid-glass/components/ui/context-ring.tsx'));
+
+    test('第 35 條：「全開」的警示色寫在覆寫檔；vendor 的 Pick 仍沒有危險狀態、移上去換成字色', () => {
+      expect(overrides()).toContain(
+        '[data-slot="permission-pick"][data-danger="true"] [data-slot="dropdown-menu-trigger"]:not([aria-expanded="true"]) {\n  color: var(--warning);\n}',
+      );
+      // 上游哪天給 Pick 加了危險或警示的樣子，這條紅，提醒回頭看那條還要不要。
+      expect(pick()).toMatch(/<DropdownMenuTrigger\b[\s\S]{0,400}\bhover:text-foreground\b/);
+      expect(pick()).not.toMatch(/\b(?:danger|warning|destructive)\b/);
+    });
+
+    test('第 36 條：vendor 的 Pick 仍是 h-6、用量環仍是 size-6（24px，1024 以下由覆寫檔撐到 44px）', () => {
+      expect(pick()).toMatch(/<DropdownMenuTrigger\b[\s\S]{0,400}\bh-6\b/);
+      expect(ring()).toMatch(/data-slot="context-ring"[\s\S]{0,300}\bsize-6\b/);
+    });
+
+    test('第 37 條：用量環在 vendor 原文仍寫死 text-blue-500 與 text-amber-500（覆寫檔的選擇器錨在這兩個 class 上）', () => {
+      expect(ring()).toContain('"text-amber-500" : "text-blue-500"');
+      expect(overrides()).toContain(
+        '[data-slot="context-ring"] svg.text-blue-500 {\n  color: var(--info);\n}',
+      );
+      expect(overrides()).toContain(
+        '[data-slot="context-ring"] svg.text-amber-500 {\n  color: var(--warning);\n}',
+      );
+    });
+
+    test('第 38 條：用量環的弧長在 vendor 原文仍走 500ms 的 transition', () => {
+      expect(ring()).toContain('transition-[stroke-dasharray] duration-500');
+    });
+
+    test('第 39 條：vendor 的 Pick 沒有 aria-disabled 的樣子（鎖住的外觀由覆寫檔補）', () => {
+      expect(pick()).not.toMatch(/aria-disabled:/);
+      expect(overrides()).toContain('[data-slot="dropdown-menu-trigger"][aria-disabled="true"] {');
+    });
+  });
+
   test('message-scroller 的 item 沒有 content-visibility（會把陰影與光暈切成直角，§9）', () => {
     expect(code(read('./message-scroller.tsx'))).not.toMatch(/content-visibility/);
   });

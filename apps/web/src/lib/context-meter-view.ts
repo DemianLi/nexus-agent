@@ -13,15 +13,13 @@
  *   `false` 時，`messages` 那道到了也摘不到東西（整串都在原樣保留的尾巴裡，#1441），不算進環、不會是最近那道，明細照列並
  *   標成目前不會觸發。沒有這一格（舊日誌）照沒有這一格以前的算法。每一道都不算時環是 0%，不是不畫：環一消失，看起來像量測壞了。
  * - **百分比無條件捨去**，最多 100：「100%」只在真的到門檻時出現。比例是估算的，所以前面標「約」。
- * - **80% 以上變警示色**，同 dsh 的 `thresholdRatio` 預設 0.8。
+ * - **色階不在這裡**：環照 SG 的 70／90 上色（`ContextRing` 自己算，#1591）；原本 80% 的 `WARNING_RATIO` 只剩用量表在用，
+ *   跟著拿掉。
  *
  * @module
  */
 
 import type { WireContextPressure, WireSummaryThreshold } from '@nexus/wire';
-
-/** 到了這個比例就變警示色（含）。 */
-export const WARNING_RATIO = 0.8;
 
 /** 明細裡的一道門檻。 */
 export interface ThresholdRow {
@@ -39,7 +37,6 @@ export interface ContextMeterView {
   readonly ratio: number;
   /** 「約 N%」的 N：無條件捨去，最多 100。 */
   readonly percent: number;
-  readonly warning: boolean;
   /** 「目前大小」那一行；沒收到 `model/usage` 時沒有這一行。 */
   readonly inputTokens?: string;
   readonly rows: readonly ThresholdRow[];
@@ -88,7 +85,6 @@ export function contextMeterView(pressure: WireContextPressure | null): ContextM
   return {
     ratio,
     percent: Math.floor(ratio * 100),
-    warning: top >= WARNING_RATIO,
     ...(pressure?.inputTokens === undefined
       ? {}
       : { inputTokens: `${pressure.inputTokens.toLocaleString('en-US')} token` }),
