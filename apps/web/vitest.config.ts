@@ -1,7 +1,7 @@
-import { fileURLToPath, URL } from 'node:url';
-
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vitest/config';
+
+import { RESOLVE_ALIAS } from './resolve-alias';
 
 /**
  * 測試設定。**不沿用 `vite.config.ts`**：那一份在 `command === 'serve'` 時拋錯（#426），而 vitest 載入設定時
@@ -9,11 +9,7 @@ import { defineConfig } from 'vitest/config';
  */
 export default defineConfig({
   plugins: [react()],
-  resolve: {
-    alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url)),
-    },
-  },
+  resolve: { alias: RESOLVE_ALIAS },
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.{ts,tsx}'],

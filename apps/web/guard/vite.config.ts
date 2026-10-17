@@ -3,6 +3,8 @@ import { fileURLToPath, URL } from 'node:url';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 
+import { RESOLVE_ALIAS } from '../resolve-alias';
+
 /**
  * 瀏覽器護欄測試頁的打包設定（#1512）：只打包 `guard/main.tsx` 的 JS，輸出到 `guard/dist`（不出貨，`.gitignore` 的 `dist/`）。
  *
@@ -19,11 +21,8 @@ export default defineConfig(({ command }) => {
   return {
     root: fileURLToPath(new URL('.', import.meta.url)),
     plugins: [react()],
-    resolve: {
-      alias: {
-        '@': fileURLToPath(new URL('../src', import.meta.url)),
-      },
-    },
+    // 同出貨那份（`../resolve-alias.ts`，#1523）：裸的 `cn` 也要解析到 `lib/utils.ts`，測試頁畫出來的 class 才跟出貨的一樣。
+    resolve: { alias: RESOLVE_ALIAS },
     build: {
       outDir: 'dist',
       emptyOutDir: true,

@@ -12,6 +12,8 @@
  *   - `data-guard-surface`：不透明的退路（reduced-transparency、`data-glass="opaque"`）下，量這個面是不是真的不透明、沒有 blur。
  *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、按下去三種狀態各量一次字色對底色（chip 三階，#1512）。
  *   - `data-guard-located`：對話裡被定位的那一則（`[data-slot=message-scroller-item][data-located]`），量圓角真的畫出來。
+ *   - `data-guard-choice`：問答的選項（已勾選、沒勾選、停用），量平常與滑鼠移上去的底色、停用的樣子：shadcn 的 `data-*` custom variant
+ *     （`vendor/solid-glass/shadcn/tailwind.css`，#1523）specificity 是 0，不能改掉這幾個 variant 原本的行為。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
  * - `?glass=opaque` 在 `<html>` 掛 `data-glass="opaque"`（#1468 Q7：效能不達標時退回的那條路），量不透明的面。
  */
@@ -28,6 +30,13 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Input } from '@/components/ui/input';
 import { InputGroup, InputGroupInput } from '@/components/ui/input-group';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  Questionnaire,
+  QuestionnaireChoice,
+  QuestionnaireChoices,
+  QuestionnaireItem,
+  QuestionnaireTitle,
+} from '@/components/ui/questionnaire';
 import { Textarea } from '@/components/ui/textarea';
 import {
   Sidebar,
@@ -146,6 +155,26 @@ function GuardPage() {
           <Surface tone="docked" data-guard-docked="docked" data-guard-text="docked">
             貼在輸入框上方的卡片
           </Surface>
+        </div>
+
+        {/* 問答的選項（#1523）：勾選的底、勾選框、停用的樣子都跟 develop 一樣（shadcn 的 data-* custom variant 不能改掉它們）。 */}
+        <div style={{ width: 360 }}>
+          <Questionnaire item="guard-choice">
+            <QuestionnaireItem name="guard-choice" multiple>
+              <QuestionnaireTitle>選項</QuestionnaireTitle>
+              <QuestionnaireChoices>
+                <QuestionnaireChoice value="checked" defaultChecked data-guard-choice="checked">
+                  已勾選
+                </QuestionnaireChoice>
+                <QuestionnaireChoice value="unchecked" data-guard-choice="unchecked">
+                  沒勾選
+                </QuestionnaireChoice>
+                <QuestionnaireChoice value="disabled" disabled data-guard-choice="disabled">
+                  停用
+                </QuestionnaireChoice>
+              </QuestionnaireChoices>
+            </QuestionnaireItem>
+          </Questionnaire>
         </div>
 
         <div

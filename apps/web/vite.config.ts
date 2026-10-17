@@ -1,9 +1,9 @@
-import { fileURLToPath, URL } from 'node:url';
-
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import type { Plugin } from 'vite';
+
+import { RESOLVE_ALIAS } from './resolve-alias';
 
 /**
  * **網頁從來不由 Vite 服務**（[#426](https://github.com/DemianLi/nexus-agent/issues/426)，照 dsh
@@ -33,9 +33,5 @@ function rejectStandaloneServe(): Plugin {
 
 export default defineConfig({
   plugins: [rejectStandaloneServe(), react(), tailwindcss()],
-  resolve: {
-    alias: {
-      '@': fileURLToPath(new URL('./src', import.meta.url)),
-    },
-  },
+  resolve: { alias: RESOLVE_ALIAS },
 });

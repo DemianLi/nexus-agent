@@ -6,16 +6,32 @@
 
 ## 清單
 
-上游 https://github.com/deeplethe/solid-glass ，commit 只記在 [`manifest.json`](manifest.json) 的 `commit`（目前是 `387c3c2`，2026-10-15）。上游 main 之後還有 commit，照拍板不跟。
+上游有兩個，版本只記在 [`manifest.json`](manifest.json) 的 `sources`：
+
+| 上游 | 固定在 | 怎麼取 |
+|---|---|---|
+| solid-glass：https://github.com/deeplethe/solid-glass | `commit`（目前是 `387c3c2`，2026-10-15；上游 main 之後還有 commit，照拍板不跟） | git clone，停在那個 commit |
+| shadcn：npm 的 `shadcn` 套件 | `version` 與 tarball 的 `integrity`（目前是 `4.21.4`，即 SG 的 `package-lock.json` 鎖的那一版、同一個 sha512） | `npm pack shadcn@<version>` 的 tarball；只取它 `exports["./tailwind.css"]` 指的那個檔，**不加 `shadcn` 這個 CLI 套件當相依**（它帶進 MCP SDK 等一串相依，內網不值得；#1523 PM 定） |
 
 | 這裡 | 上游 | 從哪一步開始 |
 |---|---|---|
-| `solid-glass.css` | `src/solid-glass.css` | ① |
-| `LICENSE` | `LICENSE` | ① |
+| `solid-glass.css` | solid-glass `src/solid-glass.css` | ① |
+| `LICENSE` | solid-glass `LICENSE` | ① |
+| `components/ui/{button,input,textarea,input-group,separator,skeleton,card,badge}.tsx` | solid-glass `src/components/ui/` 同名檔 | ③-1（#1523） |
+| `shadcn/tailwind.css` | shadcn `dist/tailwind.css` | ③-1（#1523） |
+| `shadcn/LICENSE.md` | shadcn `LICENSE.md`（MIT） | ③-1（#1523） |
 
-每個檔的 sha256 記在 `manifest.json`，`vendor.test.ts` 比對：手改這裡的檔，CI 就紅，不用拉上游。
+**目錄**：solid-glass 的檔照上游的相對路徑放，拿掉開頭的 `src/`（`solid-glass.css` 從 ① 就是這樣）；shadcn 的檔放在 `shadcn/` 底下，拿掉 `dist/`。每個檔登記它的上游（`source`）與上游路徑（`from`）。
 
-之後加進來的，照地圖的順序：23 個 registry 元件（`src/components/ui/`）跟 `@base-ui/react` 一起在第 ③ 步，12 個 AI 元件與 AgentWorkspace 在第 ④ 步。每一步用到哪些檔就加哪些，同一支 `sync.mjs`、同一個 commit 同步（Q18 的「一起同步」）。`.tsx` 要的護欄放行（`cn` 從哪裡 import 之類）跟著第一個 `.tsx` 落地。
+每個檔的 sha256 記在 `manifest.json`，`vendor.test.ts` 比對（子目錄也掃）：手改這裡的檔、或放進沒登記的檔，CI 就紅，不用拉上游。
+
+之後加進來的，照地圖的順序：其餘的 registry 元件在 ③-2～③-4，12 個 AI 元件與 AgentWorkspace 在第 ④ 步。每一步用到哪些檔就加哪些，同一支 `sync.mjs`、同一個 commit 同步（Q18 的「一起同步」）。
+
+**元件怎麼接**（#1523 PM 定）：vendor 的元件原樣放這裡，`src/components/ui/<x>.tsx` 留著當 nexus 那一層，預設只轉出 vendor 版，本地修改能用 props 表達的寫成薄包裝放在那裡。vendor 檔裡的 `@/components/ui/button` 解析到的是 nexus 那一層，所以包裝層的修改在 vendor 的組合元件裡也生效。③-1 的第一張 PR 只把檔放進來、接好解析與護欄，`components/ui` 還沒轉出（第二張 PR 才換）。
+
+**載入**：`shadcn/tailwind.css` 照 SG `src/index.css:1-7` 的順序，排在 `tailwindcss`、`tw-animate-css` 之後、`solid-glass.css` 之前（`src/index.css`）。它的 9 個 `@custom-variant`（`data-open`、`data-closed`、`data-checked`、`data-unchecked`、`data-selected`、`data-disabled`、`data-active`、`data-horizontal`、`data-vertical`）會蓋掉 Tailwind 內建的同名 variant：寫成 `:where()`，specificity 從 0,1,0 變成 0，同時認 Radix 的 `data-state` 與 Base UI 的屬性，只認「有屬性且不是 `"false"`」。產品碼裡用到的只有 `components/ui/questionnaire.tsx`（`data-checked`、`data-disabled`、`group-data-checked`），畫出來的值跟換之前逐一相同（`guard/` 的問答選項、`components/ui/questionnaire.test.tsx` 釘 primitive 輸出的屬性）。
+
+**護欄放行**：掃原始碼的護欄對這裡**登記過的**上游檔放行，名單只在 `src/test/vendor-upstream.ts`（從 `manifest.json` 取）。放行：`lib/utils.test.ts` 的 cn 那條（Q19）、`design-system`、`border-shadow`、`type-hierarchy`（外觀照 SG，Q8）；**不放行**：tsc、`live-region` 與其他無障礙類的掃描。設定檔非寫路徑字面不可的另外各寫一次：根目錄的 `eslint.config.js`（忽略 `components/`）與 `.prettierignore`（排除 `components/`、`shadcn/`，上游 tsx 用雙引號、不加分號，格式化後 sha256 就壞）、這個目錄的 `.gitattributes`（`-text`）、`src/index.css` 的 `@source not`。
 
 ## 本地修改
 
@@ -40,15 +56,22 @@
 | 12 | overrides | `:944-948` 欄位聚焦的邊框、`:951-955` 一次性密碼格的內側線（都是 `--focus-line` 灰） | 照抄同一段選擇器、後載入，顏色換回 `var(--ring)`（字色）：Q5 焦點用字色，Q8 碰到 Q5 涵蓋的項目以 Q5 為準（#1512，PM 定 (b)）；不讓 Prettier 排版 | `focus-line-suppression.test.ts`（列舉每一條用到 `--focus-line` 的宣告）、`guard/`（欄位聚焦後的邊框） |
 | 13 | overrides＋`components/surface.tsx` | `:378-391` `.bg-card` 歸零 border、加上浮起的整組陰影 | 貼在輸入框上方的卡片（`Surface tone="docked"`）要平的：`.bg-card[data-surface='docked']` 給 1px `--glass-edge` 邊、`box-shadow: none`，底色與 blur 照 SG。`data-surface` 是 `Surface` 只給 docked 掛的屬性，專給這條用（Q8 機制類保留，#1512，PM 定） | `solid-glass-overrides.test.ts`、`guard/`（docked 的邊與陰影） |
 
+**解析層**（#1523 起）：vendor 的檔不動，改的是模組解析。
+
+| # | 在哪 | 蓋掉 vendor 的哪裡 | 改成什麼、為什麼 | 釘住的測試 |
+|---|---|---|---|---|
+| 14 | `resolve-alias.ts`（`vite.config.ts`、`vitest.config.ts`、`guard/vite.config.ts` 共用）＋`tsconfig.json` 的 `paths` | `components/ui/*.tsx` 的 `import { cn } from "cn"` | 裸的 `cn` 精確解析到 `src/lib/utils.ts`（`cn/config` 不動，`utils.ts` 自己從它取）：npm 的 `cn` 不認得 `text-ui`、`rounded-row`，會把 #1141 帶回來（Q19 放行的執行方式，PM 定）。Vite 用正規式 `/^cn$/`，字串鍵會連 `cn/config` 一起改寫。別名是全域的，但打包進來的相依套件沒有一個 import 裸的 `cn`（#1523 用 build 時的 `resolveId` 探針確認），實際只作用在 vendor 的元件 | `lib/cn-alias.test.tsx`（渲染 vendor 原樣的 Button）、`vite-config.test.ts`（build、guard、tsconfig 三份解析） |
+
 另外**新增**、不是改 SG 的：`index.css` 的 `--radius-row`（SG 的 3xl 減 4px）與 nexus 獨有的顏色 token（`stage`、`chip*`、`brand-soft`、`warning`、`info`、`card-hairline`，Q11 留到第 ⑥ 步），以及 `tokens.generated.css` 的 `--primary-hover`／`--primary-active`（亮 `:12-13`、暗 `:35-36`，主按鈕 hover 與按下的底色，SG 沒有這兩格）。圓角階梯照 SG，不重綁。
 
 讀 CSS 的護欄量的是疊出來的結果，不是某一個檔：`src/styles/css-cascade.ts` 從 `index.css` 照 import 順序展開，算過 layer 的優先序（Q2）。
 
 ## 同步
 
-1. 上游 clone 另放，停在要同步的 commit，記下 `git rev-parse HEAD`，對過 `git ls-remote https://github.com/deeplethe/solid-glass`。工作區要乾淨。
-2. 換版本的話，先改 `manifest.json` 的 `commit`。
-3. `node apps/web/src/vendor/solid-glass/sync.mjs <上游 clone>`：照清單複製，重寫 `manifest.json` 的 sha256。
-4. 跑 web 全套測試與 `pnpm --filter @nexus/web build`（`check-built-css` 量建置出來的 CSS）。
+1. solid-glass：clone 另放，停在要同步的 commit，記下 `git rev-parse HEAD`，對過 `git ls-remote https://github.com/deeplethe/solid-glass`。工作區要乾淨。
+2. shadcn：`npm pack shadcn@<version>`，tarball 的 sha512 要等於 SG `package-lock.json` 裡 `node_modules/shadcn` 的 `integrity`。
+3. 換版本的話，先改 `manifest.json` 的 `sources`（commit；version 與 integrity）。
+4. `node apps/web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz>`：照清單複製（子目錄自動建），重寫 `manifest.json` 的 sha256。
+5. 跑 web 全套測試、`pnpm --filter @nexus/web build`（`check-built-css` 量建置出來的 CSS）與 `test:guard`。
 
-`node apps/web/src/vendor/solid-glass/sync.mjs <上游 clone> --check` 只比對不寫入：vendor 的檔與 `manifest.json` 的 sha256 都要等於上游原樣，有差異就列出並以 1 退出。clone 不在 `manifest.json` 記的 commit 上、或工作區不乾淨，直接以 2 退出。
+`node apps/web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz> --check` 只比對不寫入：vendor 的檔與 `manifest.json` 的 sha256 都要等於上游原樣，有差異就列出並以 1 退出。clone 不在記的 commit 上、工作區不乾淨、tarball 的 integrity 或版本對不上、少給一個上游，直接以 2 退出。

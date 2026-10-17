@@ -6,6 +6,7 @@ import { describe, expect, test } from 'vitest';
 
 import { cn } from '@/lib/utils';
 import { readCascade } from '@/styles/css-cascade';
+import { isVendorUpstream } from '@/test/vendor-upstream';
 
 const SRC = fileURLToPath(new URL('..', import.meta.url));
 
@@ -61,6 +62,8 @@ describe('cn 只有一個出口', () => {
   test('除了 lib/utils.ts，沒有檔案直接 import `cn` 套件（預設的 cn 不認得字級名）', () => {
     const direct = files(SRC)
       .filter((f) => !f.endsWith(join('lib', 'utils.ts')))
+      // vendor 的 solid-glass 元件原樣 `from "cn"`（Q19 放行），解析層把它換成 lib/utils.ts（`lib/cn-alias.test.tsx`、#1523）。
+      .filter((f) => !isVendorUpstream(f))
       .filter((f) =>
         /^import\b[^;]*\bfrom\s+['"]cn(?:\/[a-z]+)?['"]/m.test(readFileSync(f, 'utf8')),
       )
