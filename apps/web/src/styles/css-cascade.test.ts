@@ -1,7 +1,8 @@
 // @vitest-environment node
+import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 
-import { readCascade } from './css-cascade';
+import { PACKAGES, readCascade } from './css-cascade';
 
 /** 虛擬檔案：路徑一律在 `/v` 底下，入口 `/v/index.css`。 */
 function cascadeOf(files: Record<string, string>) {
@@ -137,6 +138,23 @@ describe('css-cascade：記法', () => {
       cascadeOf({ '/v/index.css': "@import './a.css' layer(x);", '/v/a.css': '' }),
     ).toThrow('不支援這種 @import');
   });
+
+  test.each([
+    ['@variant', ':root { @variant dark { --foreground: oklch(0.2 0 0); } }'],
+    ['@scope', '@scope (.card) { :root { --x: a; } }'],
+    ['@starting-style', '@starting-style { :root { --x: a; } }'],
+    ['不認得的 at 敘述', '@config "./tailwind.config.js";'],
+  ])('不在清單上的 at 規則（%s）直接拋錯，不靜默略過', (_name, css) => {
+    expect(() => cascadeOf({ '/v/index.css': css })).toThrow('不支援 @');
+  });
+
+  test('清單上的照樣略過：@apply（效果量不到）、@keyframes、帶區塊的 @custom-variant', () => {
+    const cascade = cascadeOf({
+      '/v/index.css':
+        "@custom-variant dark (&:is(.dark *));\n@custom-variant hover { &:hover { @slot; } }\n@keyframes k { from { opacity: 0; } }\n@layer base { body { @apply bg-background; color: red; } }\n@source not './x';",
+    });
+    expect(cascade.declarations.map((d) => `${d.selector} ${d.property}`)).toEqual(['body color']);
+  });
 });
 
 describe('css-cascade：真的樹', () => {
@@ -148,6 +166,19 @@ describe('css-cascade：真的樹', () => {
     expect(cascade.files.some((f) => f.includes('node_modules') || !f.endsWith('.css'))).toBe(
       false,
     );
-    expect(cascade.layerOrder.slice(0, 4)).toEqual(['theme', 'base', 'components', 'utilities']);
+  });
+
+  test('照抄的 layer 順序等於安裝的 tailwindcss 自己宣告的那一行：Tailwind 升版改了順序就紅', () => {
+    const source = readFileSync(
+      new URL('../../node_modules/tailwindcss/index.css', import.meta.url),
+      'utf8',
+    );
+    const declared = /@layer\s+([^;{]+);/
+      .exec(source)?.[1]
+      ?.split(',')
+      .map((layer) => layer.trim());
+    expect(declared).toBeDefined();
+    expect(PACKAGES.find((p) => p.match('tailwindcss'))?.layers).toEqual(declared);
+    expect(readCascade().layerOrder.slice(0, declared?.length)).toEqual(declared);
   });
 });

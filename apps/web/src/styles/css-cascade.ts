@@ -16,9 +16,30 @@ import { fileURLToPath } from 'node:url';
  *   （例如 `.focus-visible\:ring-3:focus-visible`）蓋過同一個屬性時，這裡看不到。
  * - `@media`、`@supports`、`@container` 裡的宣告帶著條件記下來，查詢時預設不算；要算的話用 `conditions` 指定。
  * - `@theme` 的宣告記在選擇器 `@theme` 底下、`theme` 這一層（Tailwind 把它們產在 `@layer theme`），只跟別的 `@theme` 比先後。
- * - `@keyframes`、`@font-face`、`@utility`、`@property` 這類區塊整塊略過：裡面不是元素上的宣告。
- * - `!important`、巢狀 `@layer`、匿名 `@layer`、`@import … layer()`／帶條件的 `@import` 直接拋錯，不靜默算錯。
+ * - 刻意略過的 at 規則只有 {@link SKIPPED_STATEMENTS} 與 {@link SKIPPED_BLOCKS} 列的那幾種：裡面不是元素上的宣告。
+ *   **`@apply` 也在略過之列，它的效果量不到**：`@apply` 展開成哪些宣告要 Tailwind 才算得出來（`index.css` 與 solid-glass 的
+ *   base layer 都有），這裡只當它不存在。
+ * - 其餘一律直接拋錯，不靜默算錯：不在清單上的 at 規則（`@variant`、`@scope`、`@starting-style`……）、`!important`、
+ *   巢狀 `@layer`、匿名 `@layer`、`@import … layer()`／帶條件的 `@import`。新的寫法要量，先在這裡決定怎麼算。
  */
+
+/** 不帶區塊、刻意略過的 at 規則：不影響元素上的值，或（`@apply`）影響了也量不到，見檔頭。 */
+export const SKIPPED_STATEMENTS: readonly string[] = [
+  'source',
+  'plugin',
+  'charset',
+  'custom-variant',
+  'apply',
+];
+
+/** 帶區塊、整塊略過的 at 規則：裡面不是元素上的宣告。 */
+export const SKIPPED_BLOCKS: readonly string[] = [
+  'keyframes',
+  'font-face',
+  'utility',
+  'property',
+  'custom-variant',
+];
 
 /** 不展開的套件。展開它們量不到我們寫的值，只會多出 Tailwind 產生的 preflight 與 utility；它們宣告的 layer 順序照實記下。 */
 export const PACKAGES: readonly {
@@ -147,8 +168,9 @@ export function readCascade(
             }
           } else if (name === 'layer') {
             for (const layer of prelude.split(',')) declareLayer(qualify(at, layer.trim()));
+          } else if (!SKIPPED_STATEMENTS.includes(name)) {
+            throw new Error(`${file}：不支援 @${name}，要量的話先在 css-cascade.ts 決定怎麼算`);
           }
-          // 其餘（@source、@custom-variant、@plugin、@charset…）不影響元素上的值。
           continue;
         }
         if (statement.kind === 'at-block') {
@@ -167,8 +189,11 @@ export function readCascade(
           } else if (name === 'theme') {
             declareLayer('theme');
             walk(statement.body, { ...at, layer: 'theme', selectors: ['@theme'], topLevel: false });
+          } else if (!SKIPPED_BLOCKS.includes(name)) {
+            throw new Error(
+              `${file}：不支援 @${name} { … }，要量的話先在 css-cascade.ts 決定怎麼算`,
+            );
           }
-          // 其餘（@keyframes、@font-face、@utility、@property、@starting-style…）整塊略過。
           continue;
         }
         const selectors = splitTopLevel(statement.prelude, ',').map((s) =>
