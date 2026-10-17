@@ -74,6 +74,62 @@ export interface GoalPayload {
   readonly goal: WireGoal | null;
 }
 
+/**
+ * 暫停目標的專用 method（`goal.pause`，[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）。
+ *
+ * **人按暫停鈕走這一支，不是 `slash.run` 的 `/goal pause`**（兩條入口都在，效果一樣）：斜線命令是文字，要解析、要過 `slashInFlight`，
+ * 而 web 的按鈕有確切的目標 ref 可以帶。照 dsh 的 `goals.pause(ref)`（`packages/goal/goal/src/service.ts`，ref 是 `{ id, revision }`）：
+ * 帶**看到的修訂**，修訂對不上就是過期，**回錯、不假裝成功**——兩個分頁同時改一個目標是正常情況，後到的那個不該靜靜蓋掉前一個的結果。
+ *
+ * **任何時候都收**：一輪跑著（續行輪或人打的那一輪）、停在核准點、閒著——不經過斜線命令那道「還在跑就擋」，理由同回饋那幾支
+ * （{@link FEEDBACK_METHODS}）。**跑著時按下去，server 當場中止這一輪**（續行預約隨那一輪收成中止整件拿掉、排在後面的人類輸入保留但停住），
+ * 停下來的事實走下行（root 那顆收尾的 `lifecycle` 帶 `aborted: true`）。回應是受理後目標的新樣子，不等停穩。
+ *
+ * 回應同回饋：`{ ok: true, value }`／`{ ok: false, error: { code } }`，業務失敗走成功回應，`ErrorResponse` 只給「這條線收不了」
+ * （含沒掛續行排程器的組裝回的 `not_supported`）。
+ */
+export const GOAL_PAUSE_METHOD = 'goal.pause';
+
+/** 這個檔定義的 method。 */
+export const GOAL_METHODS = [GOAL_PAUSE_METHOD] as const;
+
+export type GoalMethod = (typeof GOAL_METHODS)[number];
+
+export function isGoalMethod(value: unknown): value is GoalMethod {
+  return typeof value === 'string' && (GOAL_METHODS as readonly string[]).includes(value);
+}
+
+/** 目標的 ref：身分加修訂（compare-and-set 的條件）。 */
+export interface WireGoalRef {
+  readonly id: string;
+  readonly revision: number;
+}
+
+export interface GoalPauseCommand {
+  readonly id: number;
+  readonly method: typeof GOAL_PAUSE_METHOD;
+  /** 要暫停的那份目標：身分與**看到的修訂**。 */
+  readonly params: { readonly goalId: string; readonly revision: number };
+}
+
+/** 回應裡交代目標現在的樣子（只有身分、修訂、相位——完整的值走 {@link GOAL} 下行）。 */
+export interface GoalPauseState extends WireGoalRef {
+  readonly phase: WireGoalPhase;
+}
+
+export type GoalPauseResult =
+  | { readonly ok: true; readonly value: { readonly goal: GoalPauseState } }
+  | {
+      readonly ok: false;
+      readonly error:
+        /** 這條 thread 沒有目前的目標（沒建過或清掉了）。 */
+        | { readonly code: 'goal-not-found' }
+        /** 帶來的 ref 過期（身分不同或修訂變了）；`current` 是現在的樣子，讓呼叫端不必再讀一次。 */
+        | { readonly code: 'goal-stale'; readonly current: GoalPauseState }
+        /** 目標不是 active（已經暫停、被擋住或完成了），沒有東西可暫停。 */
+        | { readonly code: 'goal-not-active'; readonly phase: WireGoalPhase };
+    };
+
 // 名字→酬載表（#685）上屬於這個檔的格子，見 `custom-frame.ts`。
 declare module './custom-frame.js' {
   interface CustomFramePayloads {

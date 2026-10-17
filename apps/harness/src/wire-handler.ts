@@ -78,6 +78,7 @@ import {
   encodeSseFrame,
   errorResponse,
   fileReferencesPath,
+  isGoalMethod,
   isModelMethod,
   isPermissionMethod,
   isThreadManagementMethod,
@@ -122,9 +123,14 @@ import type {
   SessionRegistry,
 } from '@nexus/core';
 import { FEEDBACK_CATEGORIES, ProjectionDetailError } from '@nexus/core';
+import type { GoalId } from '@nexus/goal';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
-import { CommandAttachmentRejected, createCommandExecutor } from '@nexus/plugin-commands';
+import {
+  CommandAttachmentRejected,
+  createCommandExecutor,
+  runsWhileBusy,
+} from '@nexus/plugin-commands';
 import { AttachmentError } from './attachment-store.js';
 import { answerElicitation } from './mcp-elicitation.js';
 import { referencedImage } from './attachment-reference.js';
@@ -849,6 +855,8 @@ interface ThreadState {
   readonly titleBusy: () => boolean;
   /** 目標 active 且 armed（續行授權只在行程記憶體裡，撤掉就沒了）。沒接續行排程器就是假。 */
   readonly goalArmed: () => boolean;
+  /** 續行排程器的 port（`goal.pause` 經它改目標，#1516）；`--no-goal-driver` 或手搭的組裝沒有就是 `undefined`。 */
+  readonly goalDriver: GoalDriverPort | undefined;
   dispose(): Promise<void>;
   /** 閒置逐出用的收尾：同 {@link dispose} 的順序，但每一步各自吞錯、回報給 `report`，一步出錯不擋後面的。 */
   evict(report: (error: unknown) => void): Promise<void>;
@@ -963,6 +971,68 @@ function modelResponse(
       error instanceof Error ? error.message : String(error),
     );
   }
+}
+
+/** `GoalError` 的 `code`，不 import plugin 的類別（harness 不該依賴插件套件的內部型別）。 */
+function goalErrorCode(error: unknown): string | undefined {
+  const code = (error as { readonly code?: unknown } | null)?.code;
+  return typeof code === 'string' && code.startsWith('GOAL_') ? code : undefined;
+}
+
+/**
+ * `goal.pause`（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）。契約見 `@nexus/wire` 的 `GOAL_PAUSE_METHOD`。
+ *
+ * 暫停本身是目標服務的 compare-and-set（`GOAL_STALE_REVISION`），這裡只把可預期的拒絕翻成線上的業務失敗；不認得的錯誤照拋。
+ * **中止飛行中的那一輪不在這裡做**：服務一寫 `goal/change{pause}`，pump 在日誌訂閱上看見、判斷是人下的就收掉這一輪，
+ * 所以斜線命令與這一支兩條入口效果一樣。
+ */
+function goalResponse(driver: GoalDriverPort | undefined, id: number, body: unknown): unknown {
+  if (driver === undefined) {
+    return errorResponse(id, 'not_supported', '這個組裝沒有掛續行排程器，不能暫停目標');
+  }
+  const params = (body as { params?: unknown }).params as
+    { goalId?: unknown; revision?: unknown } | null | undefined;
+  if (
+    typeof params?.goalId !== 'string' ||
+    params.goalId.length === 0 ||
+    typeof params.revision !== 'number' ||
+    !Number.isInteger(params.revision)
+  ) {
+    return errorResponse(id, 'invalid_argument', 'goal.pause 要 goalId（字串）與 revision（整數）');
+  }
+  const stateOf = (goal: { id: string; revision: number; phase: string }) => ({
+    id: goal.id,
+    revision: goal.revision,
+    phase: goal.phase,
+  });
+  try {
+    // 線上的 id 是字串；`GoalId` 是品牌型別，服務自己拿它跟目前那份比，對不上就是 `GOAL_STALE_REVISION`。
+    driver.pause({ id: params.goalId as GoalId, revision: params.revision });
+  } catch (error) {
+    const code = goalErrorCode(error);
+    const current = driver.goal();
+    if (code === 'GOAL_NOT_FOUND') {
+      return successResponse(id, { ok: false, error: { code: 'goal-not-found' } });
+    }
+    if (code === 'GOAL_STALE_REVISION' && current !== undefined) {
+      return successResponse(id, {
+        ok: false,
+        error: { code: 'goal-stale', current: stateOf(current) },
+      });
+    }
+    if (code === 'GOAL_INVALID_TRANSITION' && current !== undefined) {
+      return successResponse(id, {
+        ok: false,
+        error: { code: 'goal-not-active', phase: current.phase },
+      });
+    }
+    throw error;
+  }
+  const after = driver.goal();
+  /* v8 ignore next -- 剛暫停成功就一定有目前的目標 */
+  if (after === undefined)
+    return successResponse(id, { ok: false, error: { code: 'goal-not-found' } });
+  return successResponse(id, { ok: true, value: { goal: stateOf(after) } });
 }
 
 function feedbackResponse(
@@ -1434,6 +1504,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           promptRequestsInFlight: new Map(),
           lastActiveAt: now(),
           titleBusy: () => attached.detachTitle?.busy?.() ?? false,
+          goalDriver: driver,
           goalArmed: () => {
             if (driver === undefined) return false;
             try {
@@ -1915,6 +1986,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         }),
       );
     }
+    if (isGoalMethod(method)) {
+      // 暫停目標（#1516）：經 `threadFor`（目標在這條 thread 的日誌上，冷的 thread 要先接回來）。**不看 `slashInFlight`，也不看
+      // 「還在跑／停在核准點」**：跑著時按下去正是它的用途，當場中止那一輪由 pump 在目標變更上做（見 `ThreadPump.#stopRunForHostPause`）。
+      return json(goalResponse(thread.goalDriver, envelope.id, body));
+    }
     if (isModelMethod(method)) {
       // 每會話模型選擇（#723）：經 `threadFor`——選擇記在這條 thread 的日誌裡，web 打開一條 thread 才畫模型座。
       // 沒有型錄的組裝（沒帶 `--live`）回 `not_supported`，web 據這個碼把模型座藏起來。
@@ -2164,7 +2240,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
     const promptAttachments = attachmentsParam(id, 'slash.run', params);
     if (promptAttachments instanceof Response) return promptAttachments;
-    if (thread.pump.awaitingInput) {
+    // **忙的時候放行的呼叫**（#1516）：命令用 `runWhileBusy` 宣告了這一次呼叫的完整字面值才算（`/goal pause`），依這次呼叫判斷，
+    // 不是依整個命令。放行只放過下面「停在核准點」與「還在跑」兩道閘；`slashInFlight`（命令與命令之間的序列性）照擋。
+    // `/plan` 等其餘命令不宣告，所以 #123 的前提（命令一定跑在兩輪之間）對它們不變。
+    const busyAllowed = runsWhileBusy(thread.commands, params.line);
+    if (thread.pump.awaitingInput && !busyAllowed) {
       return json(
         errorResponse(
           id,
@@ -2173,11 +2253,13 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         ),
       );
     }
-    if (thread.pump.running) {
+    if (thread.pump.running && !busyAllowed) {
       return json(
         errorResponse(id, 'invalid_argument', '這條 thread 正在跑：等這一輪跑完再打斜線命令'),
       );
     }
+    // 這一次是不是在忙的時候執行：是的話執行器讓 `steer` 拋錯（宣告過的呼叫不該 steer）。
+    const executedWhileBusy = thread.pump.agentRunning;
     if (thread.slashInFlight) {
       // 兩個分頁同時打。放行的話兩次執行會在日誌裡交錯，而配套入口會把那件事報成違規
       // ——**那是對的，不是誤報**（見 `createCommandExecutor` 的檔頭）。
@@ -2203,6 +2285,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
                 return { attachments: outcome.attachments, rollback: outcome.restore };
               },
             },
+        { busy: executedWhileBusy },
       );
       if (execution === undefined) {
         // 語法不符或名字不認得。**日誌裡一個字都沒有**（執行器保證），線上也不是錯誤

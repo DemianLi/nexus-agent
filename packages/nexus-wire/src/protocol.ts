@@ -39,6 +39,8 @@ import type {
   PromptAttachment,
 } from './attachments.js';
 import { isDeliverableMethod } from './deliverables.js';
+import { isGoalMethod } from './goal.js';
+import type { GoalMethod } from './goal.js';
 import { isModelMethod } from './model-selection.js';
 import type { ModelMethod } from './model-selection.js';
 import { isPermissionMethod } from './permission-presets.js';
@@ -517,6 +519,7 @@ export type RpcMethod =
   | typeof SUBAGENT_SEND_METHOD
   | typeof SUBAGENT_INTERRUPT_METHOD
   | FeedbackMethod
+  | GoalMethod
   | DeliverableMethod
   | ModelMethod
   | PermissionMethod
@@ -531,6 +534,7 @@ export function isRpcMethod(value: unknown): value is RpcMethod {
     isQueueUpdateMethod(value) ||
     isSubagentMethod(value) ||
     isFeedbackMethod(value) ||
+    isGoalMethod(value) ||
     isDeliverableMethod(value) ||
     isModelMethod(value) ||
     isPermissionMethod(value) ||

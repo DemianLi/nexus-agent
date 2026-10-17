@@ -360,6 +360,19 @@ export HTTP_PROXY=http://127.0.0.1:7890
 但那是准許不是保證。額外那條「連續 N 輪沒進展就停」刻意沒做，理由在
 `apps/harness/src/goal-driver.ts` 的檔頭。
 
+**目標在跑的時候也能暫停，按下去當場停掉這一輪**（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)，照 dsh `goal-round-driver` 對暫停的反應）。
+有**兩個入口**，效果一樣：wire 的 `goal.pause`（帶目標的 `goalId` 與看到的 `revision`；`revision` 過期回 `{ ok: false, error: { code: 'goal-stale', current } }`，
+不假裝成功；目標不是 active 回 `goal-not-active`；沒有目標回 `goal-not-found`；`--no-goal-driver` 的組裝回 `not_supported`），與斜線命令 `/goal pause`。
+兩個入口**一輪跑著、停在核准點時都收**，而且**不分這一輪是續行輪還是人打的那一輪**：只要暫停是人下的，server 就走停止鈕那條路中止在跑的輪次
+（續行預約整件拿掉、排在後面的人類輸入保留但停住，下一次送出才照順序跑；停在核准點則是收回待答的問題）。
+**模型自己在輪內用 `update_goal` 暫停不算**（那是它的工具寫的，不是人在外面按的），那一輪照常收完。判斷「誰下的」靠暫停發生那一刻的 async 身分
+（`ThreadPump` 的 `AsyncLocalStorage`，對應 dsh 的 `currentInitiator()`）：比的是**這一輪的身分**，不是「有沒有身分」，所以別條 thread 的輪內鏈、
+或上一輪留下的計時器晚到觸發的暫停，都算人下的。
+**停止鈕不變**（[#265](https://github.com/DemianLi/nexus-agent/issues/265) Q8）：只收回續行授權，目標仍是 active，要 `/goal resume` 才會再往下走；暫停則是把相位改成 paused。
+**一輪跑著時其餘斜線命令照舊被擋**（`/plan`、`/goal <目標>`、`/goal edit`、`/goal resume`、`/goal clear`、`/goal` 本身，回「這條 thread 正在跑：等這一輪跑完再打斜線命令」）：
+命令用 `runWhileBusy` 宣告「忙的時候也放行」的**完整字面值**（`/goal` 只宣告 `pause`，逐字比對，`/goal PAUSE` 不算），`slash.list` 的 descriptor 帶著這一格讓 web 知道哪些呼叫跑著時還能點。
+忙的時候放行的呼叫不能 `steer`（會把兩輪疊起來）。與 dsh `keepInbox: true` 的逐項比對：佇列保留、停住、下一次送出才跑，我們的停止鈕早就是這個形狀（[#637](https://github.com/DemianLi/nexus-agent/issues/637) Q2），同一條路。
+
 ## 前景子代理的核准
 
 **前景子代理要核准的操作，卡片送到使用者面前**（[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，**dsh 沒有**：dsh 委派時把子代理的核准政策釘成 `never`，

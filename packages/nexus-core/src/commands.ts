@@ -100,7 +100,8 @@ export interface CommandInvocation {
    * （`packages/core/agent-loop/tests/agent.spec.ts` 的「steer() while idle becomes a woken prompt turn」）。
    * **我們的命令只跑在兩輪之間**（`serve` 的發派面在跑著、停在核准點時拒收；REPL 一行一輪），
    * 所以這裡的 steer 永遠是閒著的那一種——也就是「命令結束後開一輪」。命令沒有 agent 把手，
-   * 這一格是宿主替它保管的那一半。
+   * 這一格是宿主替它保管的那一半。**唯一的例外是命令用 {@link CommandDefinition.runWhileBusy} 宣告過的那幾種呼叫**
+   * （#1516）：它們可以在一輪跑著時執行，這時宿主讓 `steer` 直接拋錯——在一輪中間「命令結束後開一輪」不成立。
    *
    * - **時刻**：宿主等 `command/done` 寫完才動，所以日誌上 `command/run` → `command/done` 的配對
    *   完整結束之後才有 `turn/start`。`CommandResult` 與 `command/done` 都不因此多任何一格。
@@ -131,6 +132,26 @@ export interface CommandDefinition {
    */
   readonly recordInput?: boolean;
   /**
+   * **這幾種呼叫在一輪跑著、或停在核准點時也可以執行**（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）。
+   * 每一格是命令名後面那段輸入的**完整字面值**（頭尾空白不計，其餘逐字比對、區分大小寫），例如 `/goal` 宣告 `['pause']`，
+   * 就只放行 `/goal pause`，不放行 `/goal pause 1`、`/goal Pause`，也不放行 `/goal edit …`。沒給＝這個命令任何呼叫都
+   * 只能在兩輪之間執行（今天所有命令的樣子）。
+   *
+   * **為什麼是字面值清單，不是整個命令的布林、也不是函式**：
+   *
+   * - 布林太粗：`/goal` 底下有七種子命令，`create`／`edit` 帶附件時會 `steer`、起一輪，不能跟著放行。要放行的是「這一次呼叫」。
+   * - 函式帶不上線：`slash.list` 的 {@link CommandDescriptor} 要把這一格交給 web，web 才不必自己重寫一份 `/goal` 的文法
+   *   就知道哪一行現在打得動。字面值可以序列化，宿主的閘門與 descriptor 讀的是同一份宣告，沒有第二個出處。
+   *
+   * **這是我們自己加的**——dsh 的命令執行根本沒有「忙的時候擋」這一道閘（`packages/interaction/commands/src/index.ts:332-372`），
+   * 所以沒有可以照的形狀，也沒有偏離 dsh 的行為可標：dsh 什麼都放行，我們原本全擋（#123），這一格是在中間開一個窄口。
+   *
+   * **跟 #123 的關係：`/plan` 不准宣告這一格。** #123 擋的理由完全是 `/plan`：plan-mode 的 pending intent 會跟飛行中那一輪的
+   * `beforeAgent` 賽跑，`@nexus/plugin-plan-mode` 的偏離註記押著「命令一定跑在兩輪之間」。宣告這一格的命令要自己保證：
+   * 這幾種呼叫**不碰那種跟飛行中的輪賽跑的狀態**，也**不呼叫 `steer`**（宿主在忙的時候讓它拋錯）。
+   */
+  readonly runWhileBusy?: readonly string[];
+  /**
    * 執行。**不把命令送給模型**——命令是人對工具說的話，不是對模型說的話。
    * 命令要讓模型看到一句話時，呼叫 `invocation.steer`：那句話是普通的人話，不是命令。
    *
@@ -145,6 +166,8 @@ export interface CommandDescriptor {
   readonly name: string;
   readonly description: string;
   readonly input?: CommandInputDescriptor;
+  /** {@link CommandDefinition.runWhileBusy} 的凍結副本；沒宣告就整個不放這個 key。 */
+  readonly runWhileBusy?: readonly string[];
 }
 
 /**
@@ -191,17 +214,37 @@ export function normalizeCommandDefinition(definition: CommandDefinition): {
   if (recordInput !== undefined && typeof recordInput !== 'boolean') {
     throw new TypeError(`命令 "${definition.name}" 的 recordInput 要是布林。`);
   }
+  const declared: unknown = definition.runWhileBusy;
+  let runWhileBusy: readonly string[] | undefined;
+  if (declared !== undefined) {
+    if (!Array.isArray(declared) || declared.length === 0) {
+      throw new TypeError(`命令 "${definition.name}" 的 runWhileBusy 要是非空的字串陣列。`);
+    }
+    const literals: string[] = [];
+    for (const literal of declared as unknown[]) {
+      // 頭尾有空白的字面值永遠比不中（比的是 trim 過的輸入），當場拒絕比靜靜失效好。
+      if (typeof literal !== 'string' || literal.length === 0 || literal !== literal.trim()) {
+        throw new TypeError(
+          `命令 "${definition.name}" 的 runWhileBusy 每一格要是非空、頭尾沒有空白的字串。`,
+        );
+      }
+      if (!literals.includes(literal)) literals.push(literal);
+    }
+    runWhileBusy = Object.freeze(literals);
+  }
   const normalized: CommandDefinition = Object.freeze({
     name: definition.name,
     description: definition.description,
     ...(input === undefined ? {} : { input }),
     ...(recordInput === undefined ? {} : { recordInput }),
+    ...(runWhileBusy === undefined ? {} : { runWhileBusy }),
     handler: definition.handler,
   });
   const descriptor: CommandDescriptor = Object.freeze({
     name: normalized.name,
     description: normalized.description,
     ...(input === undefined ? {} : { input }),
+    ...(runWhileBusy === undefined ? {} : { runWhileBusy }),
   });
   return { definition: normalized, descriptor };
 }

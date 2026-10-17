@@ -248,7 +248,17 @@ export type {
 } from './context-pressure.js';
 export { CONTEXT_MEASURE, MODEL_USAGE } from './context-pressure.js';
 export type { CompactionPayload } from './compaction.js';
-export type { GoalPayload, WireGoal, WireGoalBlockedReason, WireGoalPhase } from './goal.js';
+export type {
+  GoalMethod,
+  GoalPauseCommand,
+  GoalPauseResult,
+  GoalPauseState,
+  GoalPayload,
+  WireGoal,
+  WireGoalBlockedReason,
+  WireGoalPhase,
+  WireGoalRef,
+} from './goal.js';
 export type { PlanModePayload } from './plan-mode.js';
 export type { ProjectionPayload, WireProjection } from './projection.js';
 export type { TodosPayload, WireTodoItem } from './todos.js';
@@ -270,7 +280,7 @@ export { SUBAGENT_CATALOG } from './subagent-catalog.js';
 export type { SubagentCatalogPayload } from './subagent-catalog.js';
 export type { SubagentRunStatus, SubagentStatusPayload } from './subagent-status.js';
 export { COMPACTION } from './compaction.js';
-export { GOAL, GOAL_PHASES } from './goal.js';
+export { GOAL, GOAL_METHODS, GOAL_PAUSE_METHOD, GOAL_PHASES, isGoalMethod } from './goal.js';
 export { PLAN_MODE } from './plan-mode.js';
 export { PROJECTION, PROJECTION_KEY_PATTERN } from './projection.js';
 export { TITLE } from './title.js';

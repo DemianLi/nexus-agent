@@ -19,6 +19,7 @@ import {
   GOAL_CLEARED_MESSAGE,
   GOAL_COMMAND_HINT,
   GOAL_COMMAND_NAME,
+  GOAL_RUN_WHILE_BUSY,
   GOAL_INVALID_EDIT_MESSAGE,
   GOAL_NONE_MESSAGE,
   GOAL_NOTHING_TO_CLEAR_MESSAGE,
@@ -175,8 +176,20 @@ describe('註冊', () => {
         name: GOAL_COMMAND_NAME,
         description: expect.any(String) as unknown as string,
         input: { hint: GOAL_COMMAND_HINT, attachments: true },
+        // 忙的時候放行的呼叫（#1516）：只有 `pause`。
+        runWhileBusy: ['pause'],
       },
     ]);
+    detach();
+  });
+
+  it('**忙的時候放行的名單**只有 pause，而且名單裡每一格都解析成 pause——宣告與文法對得上（#1516）', () => {
+    expect(GOAL_RUN_WHILE_BUSY).toEqual(['pause']);
+    for (const literal of GOAL_RUN_WHILE_BUSY) {
+      expect(parseGoalCommand(literal)).toEqual({ kind: 'pause' });
+    }
+    const { registry, detach } = mount(1);
+    expect(registry.commands.find(GOAL_COMMAND_NAME)?.runWhileBusy).toEqual(GOAL_RUN_WHILE_BUSY);
     detach();
   });
 
@@ -332,6 +345,18 @@ describe('附件隨目標（#732）', () => {
     expect(steers).toEqual([{ text: GOAL_ATTACHMENTS_TEXT, attachments: attached }]);
     // 附件不進 goal 域：日誌上只有 goal/change。
     expect(JSON.stringify(logs[0]?.events)).not.toContain(sha('a'));
+    detach();
+  });
+
+  it('**pause 不 steer**，連帶附件也不——忙的時候放行的呼叫不能起一輪（#1516）', () => {
+    const { run, steers, detach } = mount(1);
+    run('把測試修綠');
+    expect(successText(run('pause'))).toContain('目標暫停了');
+    expect(steers).toEqual([]);
+    // 帶附件的 pause 在動域之前就是 error（其餘子命令收到附件的既有規則），一樣沒有 steer。
+    run('resume');
+    expect(errorText(run('pause', attached))).toBe(GOAL_ATTACHMENTS_ONLY_MESSAGE);
+    expect(steers).toEqual([]);
     detach();
   });
 
