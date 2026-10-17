@@ -1,4 +1,6 @@
 // @vitest-environment node
+import { readFileSync } from 'node:fs';
+
 import { describe, expect, it } from 'vitest';
 
 import { readCascade, type Cascade } from './styles/css-cascade';
@@ -35,13 +37,18 @@ function monoStack(selectors: readonly string[], cascade?: Cascade): string[] {
 const SIMPLIFIED = ['PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei'];
 
 describe.each(READERS)('字型堆疊（#1468 Q6）：%s', (_reader, selectors) => {
-  it('介面 Geist、等寬 Geist Mono，中文都接 Noto Sans TC', () => {
+  it('介面 Geist，中文接 Noto Sans TC', () => {
     expect(stack('--font-sans', selectors).slice(0, 2)).toEqual([
       'Geist Variable',
       'Noto Sans TC Variable',
     ]);
-    expect(monoStack(selectors).slice(0, 2)).toEqual([
+  });
+
+  it('等寬 Geist Mono → 系統等寬（Consolas、Menlo）→ Noto Sans TC：系統等寬接住兩個子集都沒有的字，排在中文字型前面', () => {
+    expect(monoStack(selectors).slice(0, 4)).toEqual([
       'Geist Mono Variable',
+      'Consolas',
+      'Menlo',
       'Noto Sans TC Variable',
     ]);
   });
@@ -69,6 +76,37 @@ describe.each(READERS)('--font-mono 的 emoji 字型（#979）：%s', (_reader, 
   it('emoji 字型只在尾端，前面的字型涵蓋的字不受影響', () => {
     const families = monoStack(selectors);
     expect(families.indexOf('monospace')).toBe(families.length - 4);
+  });
+});
+
+/** `fonts.css` 打包的字型：家族、檔案、unicode-range。 */
+const FACES = [
+  ...readFileSync(new URL('./styles/fonts.css', import.meta.url), 'utf8').matchAll(
+    /@font-face\s*\{([\s\S]*?)\}/g,
+  ),
+].map(([, body = '']) => ({
+  family: /font-family:\s*'([^']+)'/.exec(body)?.[1],
+  file: /url\('([^']+)'\)/.exec(body)?.[1],
+  range: /unicode-range:\s*([^;]+);/.exec(body)?.[1]?.replace(/\s+/g, ' ').trim(),
+}));
+
+describe('打包的字型子集（#1468 Q6，#1512 demian 拍板加 symbols2）', () => {
+  it('只有 Geist latin、Geist Mono symbols2 與 latin 三條，都從本地的 fontsource 套件打包', () => {
+    expect(FACES.map((face) => [face.family, face.file])).toEqual([
+      ['Geist Variable', '@fontsource-variable/geist/files/geist-latin-wght-normal.woff2'],
+      [
+        'Geist Mono Variable',
+        '@fontsource-variable/geist-mono/files/geist-mono-symbols2-wght-normal.woff2',
+      ],
+      [
+        'Geist Mono Variable',
+        '@fontsource-variable/geist-mono/files/geist-mono-latin-wght-normal.woff2',
+      ],
+    ]);
+  });
+
+  it('symbols2 涵蓋方框字元 U+2500–259F（程式碼的樹狀圖與框線）', () => {
+    expect(FACES[1]?.range).toBe('U+2000-2001, U+2004-2008, U+200A, U+23B8-23BD, U+2500-259F');
   });
 });
 

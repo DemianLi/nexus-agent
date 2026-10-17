@@ -22,8 +22,10 @@
   /* 尾端的三個 emoji 字型（#979）：堆疊裡沒有字型涵蓋的符號（旗、☺、❤ 之類）原本要走系統回退，
      每個新頁面第一次約 40ms，裸旗 U+1F3F3 每含它的一列還要約 1.6ms；明寫之後兩項都回到地板。
      只放在最尾，所以前面字型涵蓋的字不受影響。--font-sans 補了沒有效果，沒有改。 */
+  /* 等寬：Geist Mono 之後先接系統的等寬字型（Windows 的 Consolas、macOS 的 Menlo，只列名字、不打包），接住 Geist Mono 兩個子集
+     都沒有的字（← → 之類），它們在中文字型裡是全形寬，會讓程式碼的欄位對不齊；再接 Noto Sans TC 給中文（demian 2026-10-17 拍板，#1512）。 */
   --font-mono:
-    'Geist Mono Variable', 'Noto Sans TC Variable', ui-monospace, SFMono-Regular, Menlo,
+    'Geist Mono Variable', Consolas, Menlo, 'Noto Sans TC Variable', ui-monospace, SFMono-Regular,
     'PingFang TC', 'Microsoft JhengHei', monospace, 'Apple Color Emoji', 'Segoe UI Emoji',
     'Noto Color Emoji';
 }

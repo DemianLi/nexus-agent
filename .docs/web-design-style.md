@@ -52,7 +52,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
   - 字級只有四階：內文 `text-body`、可以點的與當標題的小字 `text-ui`、說明與附註 `text-tip`，以及只用在程式碼區塊語言標籤的 `text-micro`。
   - 字重只有 400 與 500。次要的字（說明、時間、計數）用 `text-muted-foreground` 退後，不把字變細。
 - **從哪裡來**：
-  - 字型：solid-glass 用 Geist，只打包 latin 子集，中文接 Noto Sans TC（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q6）；原本是 Google Sans Flex／Code。四階：規格 §5「字型」（[#377](https://github.com/DemianLi/nexus-agent/issues/377)）；Libraries.dev 用的 Inter／Roboto Mono 沒有採用，標題字 Saans 授權不明不拿（元件清單 §3.2、規格 §3、§5）。
+  - 字型：solid-glass 用 Geist，打包 latin 子集（等寬另加方框字元），等寬再接系統等寬，中文接 Noto Sans TC（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q6）；原本是 Google Sans Flex／Code。四階：規格 §5「字型」（[#377](https://github.com/DemianLi/nexus-agent/issues/377)）；Libraries.dev 用的 Inter／Roboto Mono 沒有採用，標題字 Saans 授權不明不拿（元件清單 §3.2、規格 §3、§5）。
   - 只走四階、不用 Tailwind 預設字級：[#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。
   - 主次（可以點的與當標題的用 13，說明用 12）：[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)（PR [#1296](https://github.com/DemianLi/nexus-agent/pull/1296)）。
   - `text-micro` 保留：它其實有一處在用（程式碼區塊的語言標籤），demian 2026-10-12 決定保留，不刪（規格 §5「字型」）。
