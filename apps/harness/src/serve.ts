@@ -80,6 +80,8 @@ import type { FailLoudProcess } from './fail-loud.js';
 import { createProcessShutdown } from './process-shutdown.js';
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
 import { HARNESS_HOME_ENV, resolveHarnessHome } from './harness-home.js';
+import { acquireHomeLock } from './home-lock.js';
+import type { TryLock } from './kernel-file-lock.js';
 import { createInvariantLog } from './invariant-log.js';
 import { createWebStaticHandler } from './web-static.js';
 import { createWireHandler } from './wire-handler.js';
@@ -297,6 +299,11 @@ export interface RunServeOptions {
    * 位置由前端套件的 manifest 反查，不是設定（dsh 同樣有一個「production never mutates」的測試鉤子）。
    */
   readonly webDist?: string;
+  /**
+   * home 鎖拿鎖的那一下，只給測試用（#1503）：「這個平台拿不到」與 `EACCES` 兩條路在 macOS 與 CI 的 Linux 上走不到，
+   * 不換就是沒驗過就出貨。產品路徑不設，用 dsh 的 `tryLockExclusive`。
+   */
+  readonly homeLock?: TryLock;
 }
 
 export interface RunningServe {
@@ -414,8 +421,51 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     return undefined;
   }
 
-  const cwd = options.cwd ?? process.cwd();
   const env = options.env ?? process.env;
+  // **同一個 home 只能起一個 serve**（#1503）：排在印設定那幾個分支之後（它們不寫 home），其餘一切之前——
+  // 讀 `.env`、裝代理、遷移變更紀錄、清暫存、寫快照、建密鑰、讀釘選檔，這些都碰 home。第二台在這裡就被拒，
+  // 一個檔都沒寫。起不來的每一條路都放鎖，正常 `close()` 在最後一步放（下面）。
+  // 平台拿不到 flock 時照常起來、講一聲（Q1 (a)，同會話寫租約）；`EACCES` 這類其餘的錯原樣往外拋。
+  const homeLock = await acquireHomeLock(resolveHarnessHome(env), options.homeLock);
+  if ('unavailable' in homeLock) {
+    log(`[home 鎖] 這個平台拿不到 home 鎖，不擋第二個 serve：${homeLock.unavailable}`);
+  }
+  let started: RunningServe;
+  try {
+    started = await startUnderHomeLock(options, invocation, env, log);
+  } catch (error) {
+    if (!('unavailable' in homeLock)) await homeLock.release().catch(() => undefined);
+    throw error;
+  }
+  return {
+    ...started,
+    close: async () => {
+      // 放鎖是 `close()` 的最後一步，排在 server、thread、日誌、根、代理都收完之後：鎖放掉之後，
+      // 下一台才可以碰這些檔。收尾失敗也要放；兩邊都失敗時以收尾的為主（放鎖只是關一個 fd）。
+      let closeFailure: { readonly error: unknown } | undefined;
+      try {
+        await started.close();
+      } catch (error: unknown) {
+        closeFailure = { error };
+      }
+      try {
+        if (!('unavailable' in homeLock)) await homeLock.release();
+      } catch (error: unknown) {
+        closeFailure ??= { error };
+      }
+      if (closeFailure !== undefined) throw closeFailure.error;
+    },
+  };
+}
+
+/** {@link runServe} 在 home 鎖就位之後的其餘部分：啟動環境、代理、載清單、組裝、綁 port。 */
+async function startUnderHomeLock(
+  options: RunServeOptions,
+  invocation: ServeInvocation,
+  env: Readonly<Record<string, string | undefined>>,
+  log: (line: string) => void,
+): Promise<RunningServe> {
+  const cwd = options.cwd ?? process.cwd();
   // **真模型路徑的啟動環境：兩層 `.env`**（#730），排在讀清單與建密鑰之前：壞的 `.env` 與舊位置搬家訊息在
   // server 還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`。
   const liveLaunch = invocation.live ? loadLiveLaunchEnv({ cwd, env }) : undefined;

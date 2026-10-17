@@ -22,6 +22,8 @@
  *
  * ## 退到不鎖的只有「這個平台沒有」，不是「出了錯」
  *
+ * （開檔、flock、驗 inode、這四種分類的實作住在 `kernel-file-lock.ts`，home 鎖共用，#1503。）
+ *
  * 失敗分四種，只有兩種退：搶不到（`EAGAIN`／`EWOULDBLOCK`）是 {@link SessionAlreadyOwnedError}；
  * 平台不支援、或原生模組載不起來（缺平台套件、libc 對不上）是 {@link LeaseUnavailable}；
  * **其餘一律往外拋**（`EACCES`、`EIO`……）。一個什麼錯都吞成「退到不鎖」的分類，會讓一次
@@ -30,33 +32,15 @@
  * @module
  */
 
-import { open, stat } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
-import { tryLockExclusive } from '@deepseek-ai/node-addon-system/flock';
 import { SessionAlreadyOwnedError } from '@nexus/core';
+import { lockFileExclusive } from './kernel-file-lock.js';
+import type { LockUnavailable, TryLock } from './kernel-file-lock.js';
 
-/** 對一個已開的 fd 拿非阻塞的排他鎖。預設是 dsh 那顆；測試換得掉。 */
-export type TryLock = (fd: number) => Promise<void>;
+export type { TryLock };
 
 /** 這個平台拿不到鎖：照常寫，由呼叫端講一聲。 */
-export interface LeaseUnavailable {
-  readonly unavailable: string;
-}
-
-/** 認得出來的「這個平台沒有」。其餘的錯不在這裡。 */
-const UNAVAILABLE_CODES: ReadonlySet<string> = new Set([
-  // dsh 的 loader 在非 linux／darwin 上拋的。
-  'ERR_FLOCK_UNSUPPORTED_PLATFORM',
-  // 平台套件沒裝上（optionalDependencies 本來就可能沒裝）。
-  'MODULE_NOT_FOUND',
-  'ERR_MODULE_NOT_FOUND',
-  // 二進位在，但這個行程載不起來（例如 glibc／musl 對不上）。
-  'ERR_DLOPEN_FAILED',
-]);
-
-function codeOf(error: unknown): unknown {
-  return (error as { code?: unknown } | null)?.code;
-}
+export type LeaseUnavailable = LockUnavailable;
 
 /** 一顆握著的鎖。只由 {@link acquireSessionLease} 造；{@link release} 關掉 fd 就是放鎖。 */
 export class SessionWriteLease {
@@ -90,37 +74,11 @@ export class SessionWriteLease {
 export async function acquireSessionLease(
   path: string,
   id: string,
-  lock: TryLock = tryLockExclusive,
+  lock?: TryLock,
 ): Promise<SessionWriteLease | LeaseUnavailable> {
-  // 有界的重試：鎖到的 inode 若已被換掉（刪了又建），重開路徑上現在那一個；平常一圈就好。
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const handle = await open(path, 'w', 0o600);
-    try {
-      try {
-        await lock(handle.fd);
-      } catch (error: unknown) {
-        const code = codeOf(error);
-        if (code === 'EAGAIN' || code === 'EWOULDBLOCK') throw new SessionAlreadyOwnedError(id);
-        if (typeof code === 'string' && UNAVAILABLE_CODES.has(code)) {
-          await handle.close();
-          return { unavailable: error instanceof Error ? error.message : String(error) };
-        }
-        throw error;
-      }
-      const held = await handle.stat({ bigint: true });
-      const current = await stat(path, { bigint: true }).catch((error: unknown) => {
-        if (codeOf(error) === 'ENOENT') return undefined;
-        throw error;
-      });
-      if (current !== undefined && current.ino === held.ino && current.dev === held.dev) {
-        return new SessionWriteLease(handle);
-      }
-    } catch (error: unknown) {
-      await handle.close();
-      throw error;
-    }
-    // 鎖到的已經不是路徑上那個檔：對現在站在那裡的重來。
-    await handle.close();
-  }
-  throw new SessionAlreadyOwnedError(id);
+  // 開檔、flock、驗 inode、最多三次、四種失敗的分類：和 home 鎖共用（`kernel-file-lock.ts`，#1503）。
+  const outcome = await lockFileExclusive(path, lock);
+  if ('held' in outcome) return new SessionWriteLease(outcome.held);
+  if ('contended' in outcome) throw new SessionAlreadyOwnedError(id);
+  return outcome;
 }

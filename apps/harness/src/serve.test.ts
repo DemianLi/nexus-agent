@@ -8,9 +8,13 @@ import {
   uniformDecisions,
 } from '@nexus/wire';
 import type { ConversationState } from '@nexus/wire';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { documentedFixture } from './documented-fixture.js';
 import { approvalAt, foldTurn, serveClient } from './fixtures.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
 import { DEFAULT_PORT, parseServeArgs, runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -83,9 +87,19 @@ describe('起起來之後', () => {
   it('port 被佔住時說得出原因，而不是行程莫名其妙地死掉', async () => {
     running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
     const taken = Number(new URL((running as RunningServe).url).port);
-    await expect(
-      runServe({ argv: ['--port', String(taken)], log: () => undefined, env: {} }),
-    ).rejects.toThrow(/EADDRINUSE|address already in use/);
+    // 第二台要有自己的 home（#1503）：同一個 home 在綁 port 之前就被 home 鎖擋下，這一條量的是 port 那一關。
+    const otherHome = await mkdtemp(join(tmpdir(), 'nexus-serve-port-'));
+    try {
+      await expect(
+        runServe({
+          argv: ['--port', String(taken)],
+          log: () => undefined,
+          env: { [HARNESS_HOME_ENV]: otherHome },
+        }),
+      ).rejects.toThrow(/EADDRINUSE|address already in use/);
+    } finally {
+      await rm(otherHome, { recursive: true, force: true });
+    }
   });
 
   it('瀏覽器端連得上，而且一路折得出對話', async () => {
