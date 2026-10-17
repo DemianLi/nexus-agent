@@ -181,6 +181,8 @@ describe('lazy：服務在第一次被問到才出生，跟著日誌而不是跟
     const log = mounted.sessions.get('t')!.root;
     // 命令先建：宿主之後問到的就是命令建的那個。
     mounted.command('t', '命令建的目標');
+    // 命令建的那一個就是宿主查得到的那一個：宿主還沒問過，`existingFor` 已經有了（兩邊若各一個核心，這裡是 undefined）。
+    expect(mounted.goals.existingFor(log)).toBeDefined();
     const viaHost = mounted.goals.serviceFor(log);
     expect(viaHost.get()?.objective).toBe('命令建的目標');
     // 工具接著動同一個目標的相鄰操作：`get_goal` 讀到的是同一份折疊。
