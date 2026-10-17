@@ -369,6 +369,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 （`ThreadPump` 的 `AsyncLocalStorage`，對應 dsh 的 `currentInitiator()`）：比的是**這一輪的身分**，不是「有沒有身分」，所以別條 thread 的輪內鏈、
 或上一輪留下的計時器晚到觸發的暫停，都算人下的。
 **停止鈕不變**（[#265](https://github.com/DemianLi/nexus-agent/issues/265) Q8）：只收回續行授權，目標仍是 active，要 `/goal resume` 才會再往下走；暫停則是把相位改成 paused。
+**停止鈕落在兩輪續行之間的空檔也算數**（[#1518](https://github.com/DemianLi/nexus-agent/issues/1518)）：一輪收尾後，排程器決定要續行、`flush()`（落盤時約一次 `fsync`）還沒回來、預約還沒排進佇列的那一段，沒有輪在跑可以中止；以前這時按停止是 no-op，續行照排。現在 `ThreadPump.cancel()` 看到排程器在飛就收回續行授權（相位不動，不寫日誌、沒有 aborted 收尾，所以之後 `/goal resume` 照常自己續上），`flush()` 回來的第二次決定讀到 `disarmed` 就不排。**dsh 在這一格有同一個洞**（`agent.cancel` 在 idle 時什麼都不做，`goal-round-driver` 的 `drive` 在 `await ctx.sessions.flush` 之後只複查 `readyAfterCheckpoint`，不含停止），這是補上的，不是照做的。
 **暫停或停止之後 `/goal resume` 會自己續上，不用再送一句話**：中止（aborted）、拋錯、撞輸出上限收回授權，只針對**收尾當時**那份授權——driver 讀日誌決定，收尾**之後**又有人下了 `create` 或 `resume`，那次收尾就不再收回剛武裝的授權（`goal-driver.ts` 的 `reauthorizedSince`）。
 dsh 是在 `turn/end` 抵達的當下收回（`goal-round-driver/src/index.ts:353-357`），事後的 resume 本來就不受影響；我們的決定是無狀態的，要靠日誌上的先後分開「收尾在授權前」與「收尾在授權後」。授權之前就收尾的（同一份授權跑的那一輪被中止）照舊收回。
 **一輪跑著時其餘斜線命令照舊被擋**（`/plan`、`/goal <目標>`、`/goal edit`、`/goal resume`、`/goal clear`、`/goal` 本身，回「這條 thread 正在跑：等這一輪跑完再打斜線命令」）：

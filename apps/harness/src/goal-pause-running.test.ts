@@ -4,6 +4,8 @@
  * 真 agent、真 goal 域、真 pump（同 `goal-driver-pump.test.ts` 的搭法）。這一份測的是 pump 這一段：
  * 目標服務寫出 `goal/change{pause}`，pump 在日誌訂閱上分辨「誰下的」，人下的才中止在跑的那一輪。
  *
+ * 末段（#1518）是停止鈕落在排程器 flush 縫的那幾條，同一個搭法。
+ *
  * 「人下的」在這裡就是**從測試自己的 async 鏈直接呼叫服務**——跟 wire 的 `goal.pause` 與 `/goal pause` 在 HTTP 請求自己的鏈上
  * 呼叫服務是同一個形狀。兩條入口各自的接線（含 `runWhileBusy` 的閘門）在 `goal-pause-wire.test.ts`。
  */
@@ -34,9 +36,16 @@ function portFor(
   goals: GoalServices,
   log: () => SessionLog,
   flush: () => Promise<void> = () => Promise.resolve(),
+  onGoalRead?: (nth: number) => void,
 ): GoalDriverPort {
+  let reads = 0;
   return {
-    goal: () => goals.serviceFor(log())?.get(),
+    goal: () => {
+      const view = goals.serviceFor(log())?.get();
+      reads += 1;
+      onGoalRead?.(reads);
+      return view;
+    },
     block: (ref, reason) => void goals.serviceFor(log())?.block(ref, reason),
     disarm: () => void goals.serviceFor(log())?.disarm(),
     pause: (ref) => void goals.serviceFor(log())?.pause(ref),
@@ -60,6 +69,8 @@ async function build(options: {
   readonly goalId?: string;
   /** 排隊前的耐久檢查點；給一個攔得住的，測試就能把一輪停在「決定了、還沒排」那一縫。 */
   readonly flush?: () => Promise<void>;
+  /** 排程器每讀一次目標視圖就叫一次（第幾次）；讓測試把動作卡進兩次決定之間。 */
+  readonly onGoalRead?: (nth: number) => void;
 }): Promise<Rig> {
   const plugin = createGoalPlugin({ now: () => 100, newGoalId: () => options.goalId ?? 'goal-1' });
   const state: ScriptedModelState = { turn: 0, boundToolNames: [], lastPrompt: [], prompts: [] };
@@ -73,7 +84,7 @@ async function build(options: {
   const pump = new ThreadPump(
     agent as unknown as PumpAgent,
     options.threadId,
-    portFor(goals, () => late.log as SessionLog, options.flush),
+    portFor(goals, () => late.log as SessionLog, options.flush, options.onGoalRead),
   );
   late.log = pump.sessionLog;
   const detachInvariants = attachInvariants(pump.sessions);
@@ -459,6 +470,107 @@ describe('中止之後 resume 要自己續上（#1516 帶出來的主流程）',
 
     expect(startKinds(rig.pump.sessionLog)).toEqual(['goal', 'message']);
     expect(rig.service?.get()).toMatchObject({ activation: 'disarmed' });
+    await rig.stop();
+  });
+});
+
+describe('停止鈕落在 flush 縫（決定了、還沒排）要停住目標（#1518）', () => {
+  /** 一個攔得住的 flush：排程器問到它就停在那，測試動完手再放行。 */
+  function gate() {
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    return { held, release };
+  }
+
+  it('A 停止落在 flush 縫：之後沒有新的一輪，授權收回，相位仍是 active（#265 Q8）', async () => {
+    const { held, release } = gate();
+    const rig = await build({ turns: [SLOW, SLOW], threadId: 'stop-gap-a', flush: () => held });
+    rig.service?.create({ objective: '把 CI 修綠', maxGoalRounds: 5 });
+    await until(() => rig.pump.goalRoundInFlight, '排程器問到 flush');
+    expect(rig.pump.running).toBe(false);
+    expect(rig.service?.get()).toMatchObject({ phase: 'active', activation: 'armed' });
+
+    expect(rig.pump.cancel()).toBe('drive');
+    release();
+    await settle(rig.pump);
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    expect(startKinds(rig.pump.sessionLog)).toEqual([]);
+    expect(rig.state.prompts).toHaveLength(0);
+    expect(rig.service?.get()).toMatchObject({ phase: 'active', activation: 'disarmed' });
+    await rig.stop();
+  });
+
+  it('A2 停止落在 flush 縫之後，再 /goal resume：自己續上（resume 在這個縫裡沒有 aborted 收尾可撞）', async () => {
+    const { held, release } = gate();
+    const rig = await build({
+      turns: [{ content: '續上了。' }],
+      threadId: 'stop-gap-a2',
+      flush: () => held,
+    });
+    rig.service?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    await until(() => rig.pump.goalRoundInFlight, '排程器問到 flush');
+    rig.pump.cancel();
+    release();
+    await settle(rig.pump);
+    expect(startKinds(rig.pump.sessionLog)).toEqual([]);
+
+    rig.service?.resume(refOf(rig));
+    await settle(rig.pump);
+
+    expect(startKinds(rig.pump.sessionLog)).toEqual(['goal']);
+    expect(endKinds(rig.pump.sessionLog)).toEqual(['done']);
+    await rig.stop();
+  });
+
+  it('B 對照：停止落在一輪正在跑的時候，照舊——那一輪以 aborted 收，授權收回，相位不動', async () => {
+    const rig = await build({ turns: [SLOW, SLOW], threadId: 'stop-gap-b' });
+    rig.service?.create({ objective: '把 CI 修綠', maxGoalRounds: 5 });
+    await until(() => rig.pump.running, '續行輪開跑');
+
+    expect(rig.pump.cancel()).toBe('run');
+    await settle(rig.pump);
+
+    expect(endKinds(rig.pump.sessionLog)).toEqual(['aborted']);
+    expect(startKinds(rig.pump.sessionLog)).toEqual(['goal']);
+    expect(rig.service?.get()).toMatchObject({ phase: 'active', activation: 'disarmed' });
+    await rig.stop();
+  });
+
+  it('C 對照：真的閒著、沒有排程在飛時按停止，什麼都不做（授權不動）', async () => {
+    const rig = await build({ turns: [SLOW], threadId: 'stop-gap-c' });
+    rig.service?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    rig.service?.disarm();
+    await settle(rig.pump);
+    expect(rig.pump.goalRoundInFlight).toBe(false);
+    rig.service?.resume(refOf(rig));
+    // resume 之後排程器馬上起跑；等那一輪排完收完，閒著再按。
+    await settle(rig.pump);
+    expect(rig.pump.goalRoundInFlight).toBe(false);
+
+    expect(rig.pump.cancel()).toBe('idle');
+    await rig.stop();
+  });
+
+  it('D 停止落在第二次決定讀視圖的那一刻：第二次決定照樣回「排」，預約排進去，但領走時授權已收回，不跑、不暫停', async () => {
+    // 排程器讀第二次視圖的那一刻按停止：這份視圖還是 armed，第二次決定不會知道剛剛被停；擋住它的是領走時的驗證。
+    const held: { rig?: Rig } = {};
+    const rig = await build({
+      turns: [SLOW],
+      threadId: 'stop-gap-d',
+      onGoalRead: (nth) => {
+        if (nth === 2) expect(held.rig?.pump.cancel()).toBe('drive');
+      },
+    });
+    held.rig = rig;
+    rig.service?.create({ objective: '把 CI 修綠', maxGoalRounds: 5 });
+    await until(() => rig.service?.get()?.activation === 'disarmed', '停止落下');
+    await settle(rig.pump);
+
+    expect(startKinds(rig.pump.sessionLog)).toEqual([]);
+    expect(rig.service?.get()).toMatchObject({ phase: 'active', activation: 'disarmed' });
     await rig.stop();
   });
 });
