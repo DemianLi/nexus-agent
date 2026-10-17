@@ -333,12 +333,20 @@ describe.runIf(POSIX)('G home 以上的祖先開不了（Q1 (b)，偏離 4）', 
     expect(injected).toBe(1);
   });
 
-  it('home 以上的 fsync 本身拋 EIO：照 dsh 拒絕', async () => {
+  it('home 以上的 fsync 本身拋 EIO：照 dsh 拒絕；證明沒做完不算數，撤掉注入再存會重新證明', async () => {
+    const store = storeAt(home);
     failOn.set(`sync ${dirname(home)}`, 'EIO');
     await expect(
-      storeAt(home).save({ data: new TextEncoder().encode('ok'), name: 'o.txt' }),
+      store.save({ data: new TextEncoder().encode('ok'), name: 'o.txt' }),
     ).rejects.toMatchObject({ code: 'ATTACHMENT_STORE_FAILED' });
     expect(injected).toBe(1);
+
+    failOn.clear();
+    calls.length = 0;
+    await expect(
+      store.save({ data: new TextEncoder().encode('ok'), name: 'o.txt' }),
+    ).resolves.toBeDefined();
+    expect(calls.slice(0, homeChain(home).length)).toEqual(homeChain(home));
   });
 
   it('home 以上開目錄拋別的錯（EIO）：照 dsh 拒絕', async () => {
