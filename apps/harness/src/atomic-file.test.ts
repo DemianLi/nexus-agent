@@ -102,6 +102,9 @@ const { appendJournalRecord, createJournalFile, PLUGIN_JOURNAL_FILE_NAME } =
   await import('./plugin-journal.js');
 const { loadOrCreateBrowserSessionSecret, BROWSER_SESSION_SECRET_FILE } =
   await import('./browser-session-secret.js');
+const { loadDefaultPlugins, prepareJournal, USER_PATCH_FILENAME } =
+  await import('./plugin-config.js');
+const { HARNESS_HOME_ENV } = await import('./harness-home.js');
 
 const POSIX = process.platform !== 'win32';
 
@@ -376,6 +379,61 @@ describe.runIf(POSIX)('E 四個呼叫點都經過原子寫入', () => {
       `rm ${tmp}`,
     ]);
     expect(await leftovers(home)).toEqual([]);
+  });
+});
+
+/**
+ * 紀錄已經 rename 進位、只有目錄 fsync 失敗：`prepareJournal` 的警告不能再說「紀錄檔還不在、照舊讀舊檔」——讀端每次讀時
+ * 才看紀錄檔在不在，這一次照的是紀錄（PM 2026-10-18，#1527 issuecomment-6236792757）。
+ */
+describe.runIf(POSIX)('prepareJournal：紀錄已建好、目錄 fsync 失敗時的警告', () => {
+  async function journalHome(): Promise<{ dir: string; env: NodeJS.ProcessEnv }> {
+    const dir = join(base, 'home');
+    await mkdir(dir, { recursive: true, mode: 0o700 });
+    return { dir, env: { [HARNESS_HOME_ENV]: dir } };
+  }
+
+  it('建空檔那條：說已建好、沒能確認落盤、這一次照紀錄讀；不提舊檔', async () => {
+    const { dir, env } = await journalHome();
+    const warnings: string[] = [];
+    failOn.add('sync home');
+
+    const result = await prepareJournal({ env, warn: (message) => warnings.push(message) });
+
+    expect(injected).toBe(1);
+    expect(result.status).toBe('unavailable');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('已經建好，但沒能確認它落盤');
+    expect(warnings[0]).toContain('這一次照紀錄讀');
+    expect(warnings[0]).not.toContain('照舊當這一層讀');
+    expect(warnings[0]).not.toContain(USER_PATCH_FILENAME);
+    expect(await readdir(dir)).toContain(PLUGIN_JOURNAL_FILE_NAME);
+  });
+
+  it('遷移那條：同上，再加「舊檔沒改名、下一次啟動警告不讀」；讀端這一次確實照紀錄讀', async () => {
+    const { dir, env } = await journalHome();
+    const legacy = join(dir, USER_PATCH_FILENAME);
+    await writeFile(legacy, '- id: todo\n  disabled: true\n', { mode: 0o600 });
+    const warnings: string[] = [];
+    failOn.add('sync home');
+
+    const result = await prepareJournal({ env, warn: (message) => warnings.push(message) });
+
+    expect(injected).toBe(1);
+    expect(result.status).toBe('unavailable');
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain('已經建好，但沒能確認它落盤');
+    expect(warnings[0]).toContain('這一次照紀錄讀');
+    expect(warnings[0]).toContain('舊檔沒有改名');
+    expect(warnings[0]).toContain('警告、不讀');
+    expect(warnings[0]).not.toContain('照舊當這一層讀');
+
+    // 警告說的是真的：紀錄在、舊檔還在，讀端讀紀錄、舊檔只警告不讀，改動照樣生效。
+    failOn.clear();
+    const loadWarnings: string[] = [];
+    const loaded = await loadDefaultPlugins({ env, warn: (message) => loadWarnings.push(message) });
+    expect(loaded.layers.journal).toMatchObject({ ignoredLegacyPatch: legacy });
+    expect(loaded.entries.find((entry) => entry.id === 'todo')?.disabled).toBe(true);
   });
 });
 

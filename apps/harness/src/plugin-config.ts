@@ -1835,7 +1835,9 @@ export type PrepareJournalResult =
  *   file URL（{@link anchorInsertedNames}），不然檔案改名之後相對路徑就沒有基準了（加 1）。
  *
  * **舊檔壞了（YAML、形狀、權限）照舊整個拋**，跟遷移前啟動讀它的下場一樣；建不出紀錄檔（唯讀的 home、等不到鎖）不拋，
- * 回 `unavailable`：紀錄檔還不在，讀端照樣把舊檔當待遷移那一層讀，不漏任何改動。
+ * 回 `unavailable`：紀錄檔還不在，讀端照樣把舊檔當待遷移那一層讀，不漏任何改動。紀錄檔已經 rename 進位、只有目錄
+ * fsync 失敗時（#1527）同樣回 `unavailable`，但警告說的是「已建好、沒能確認落盤、這一次照紀錄讀」：讀端每次讀時才看
+ * 紀錄檔在不在，回傳值不影響讀哪一份。
  *
  * @param options - env、警告出口、測試鉤子。
  * @returns 做了什麼。
@@ -1890,12 +1892,25 @@ export async function prepareJournal(
   } catch (error) {
     if (error instanceof PluginConfigError) throw error;
     const reason = error instanceof Error ? error.message : String(error);
-    warn(
-      journalWritten
-        ? `${legacy} 的內容已經遷進 ${path}，但舊檔沒能改名（${reason}）。它會被當成「遷移後又出現的檔」警告、不讀；` +
-            '確認紀錄之後可以自己把它改名或刪掉。'
-        : `建不出變更紀錄 ${path}（${reason}）。紀錄檔還不在，${legacy} 照舊當這一層讀，改動不會漏；下一次啟動再試。`,
-    );
+    if (journalWritten) {
+      warn(
+        `${legacy} 的內容已經遷進 ${path}，但舊檔沒能改名（${reason}）。它會被當成「遷移後又出現的檔」警告、不讀；` +
+          '確認紀錄之後可以自己把它改名或刪掉。',
+      );
+    } else if (existsSync(path)) {
+      // 紀錄檔已經 rename 進位、只是目錄 fsync 失敗（`createJournalFile` 不吞這個錯，#1527）。讀端每次讀時才看紀錄檔
+      // 在不在（`readJournalLayer`），所以這一次照紀錄讀，不是照舊讀舊檔；建空檔那條沒有舊檔，不提它。
+      warn(
+        `變更紀錄 ${path} 已經建好，但沒能確認它落盤（${reason}）；這一次照紀錄讀。` +
+          (existsSync(legacy)
+            ? `${legacy} 的內容已經在紀錄裡，但舊檔沒有改名：下一次啟動會當成「遷移後又出現的檔」警告、不讀。`
+            : ''),
+      );
+    } else {
+      warn(
+        `建不出變更紀錄 ${path}（${reason}）。紀錄檔還不在，${legacy} 照舊當這一層讀，改動不會漏；下一次啟動再試。`,
+      );
+    }
     return { status: 'unavailable', path, reason };
   }
 }
