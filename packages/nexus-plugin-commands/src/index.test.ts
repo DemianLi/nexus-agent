@@ -8,7 +8,12 @@
 import { describe, expect, it, vi } from 'vitest';
 import { SessionLog, createRegistry } from '@nexus/core';
 import type { AttachmentRef, CommandDefinition, PluginOrigin, SessionEvent } from '@nexus/core';
-import { CommandAttachmentRejected, createCommandExecutor, parseCommand } from './index.js';
+import {
+  CommandAttachmentRejected,
+  createCommandExecutor,
+  parseCommand,
+  runsWhileBusy,
+} from './index.js';
 import type { CommandAttachmentSubmission } from './index.js';
 
 const origin: PluginOrigin = { id: 'alpha#0', name: 'alpha' };
@@ -535,5 +540,66 @@ describe('附件', () => {
     resolveAdmit?.();
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(calls.rollback).toBe(1);
+  });
+});
+
+describe('runsWhileBusy（#1516）：依這一次呼叫的完整字面值判斷，fail-closed', () => {
+  const goal: CommandDefinition = {
+    ...ok('goal', () => ({ kind: 'success' })),
+    runWhileBusy: ['pause'],
+  };
+  const plan = ok('plan', () => ({ kind: 'success' }));
+  const commands = commandsOf(goal, plan);
+
+  it('宣告過的字面值放行（頭尾空白不計）', () => {
+    expect(runsWhileBusy(commands, '/goal pause')).toBe(true);
+    expect(runsWhileBusy(commands, '/goal   pause  ')).toBe(true);
+  });
+
+  it.each([
+    ['同一個命令的別的呼叫', '/goal resume'],
+    ['裸命令', '/goal'],
+    ['字面值大小寫不同（文法上 PAUSE 也是暫停，但放行名單逐字）', '/goal PAUSE'],
+    ['字面值後面多了字', '/goal pause now'],
+    ['沒宣告的命令', '/plan'],
+    ['沒宣告的命令帶著同一個字', '/plan pause'],
+    ['不認得的命令', '/nope pause'],
+    ['不是命令', 'goal pause'],
+    ['空字串', ''],
+  ])('%s 不放行', (_label, line) => {
+    expect(runsWhileBusy(commands, line)).toBe(false);
+  });
+
+  it('放行靠的是宣告的資料，不是寫死的名字或字面值：別的命令宣告別的字面值照樣放行', () => {
+    const other = commandsOf({
+      ...ok('x', () => ({ kind: 'success' })),
+      runWhileBusy: ['go', 'go now'],
+    });
+    expect(runsWhileBusy(other, '/x go')).toBe(true);
+    expect(runsWhileBusy(other, '/x go now')).toBe(true);
+    expect(runsWhileBusy(other, '/x pause')).toBe(false);
+    expect(runsWhileBusy(other, '/goal pause')).toBe(false);
+  });
+
+  it('忙的時候執行的呼叫 steer 直接拋錯（同宿主拒收：例外冒出 handler、命令落定成 error），什麼都沒送；平常照送', async () => {
+    const sent: string[] = [];
+    const { executor, events, signal } = harnessWith(
+      { acceptSteer: (text) => void sent.push(text) },
+      ok('goal', ({ steer }) => {
+        steer('幫我接著做');
+        return { kind: 'success' };
+      }),
+    );
+    await expect(executor.execute('/goal', signal, undefined, { busy: true })).rejects.toThrow(
+      '不能 steer',
+    );
+    expect(sent).toEqual([]);
+    const done = events.filter((event) => event.type === 'command/done');
+    expect(done).toHaveLength(1);
+    expect(done[0]?.data).toMatchObject({ kind: 'error' });
+
+    const idle = await executor.execute('/goal', signal);
+    expect(idle?.steers).toEqual([{ text: '幫我接著做' }]);
+    expect(sent).toEqual(['幫我接著做']);
   });
 });

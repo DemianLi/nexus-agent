@@ -46,6 +46,17 @@ export const GOAL_COMMAND_DESCRIPTION = '設定或查看長期任務的目標';
  */
 export const GOAL_COMMAND_HINT = '[<目標>|clear|edit <目標>|pause|resume]';
 
+/**
+ * `/goal` 在一輪跑著、或停在核准點時也放行的呼叫（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）：**只有 `pause`**，
+ * 字面逐字（`/goal PAUSE` 文法上也是暫停，但不在這個清單裡，跑著時照舊被擋——清單是宿主閘門與 `slash.list` 共用的字面值，
+ * 不是文法）。
+ *
+ * 為什麼只有它：人下的暫停會當場中止飛行中的那一輪（`ThreadPump`），這是 dsh 目標列的暫停鈕就有的行為
+ * （`goal-round-driver/src/index.ts:302-312`）。其餘子命令沒有理由跟飛行中的輪賽跑，`create`／`edit` 帶附件時還會 `steer`、起一輪
+ * （宿主在忙的時候讓 `steer` 直接拋錯）。`command.test.ts` 釘住：清單裡每一格都解析成 `pause`，而且 `pause` 的處理不 `steer`。
+ */
+export const GOAL_RUN_WHILE_BUSY: readonly string[] = Object.freeze(['pause']);
+
 /** 帶附件送出的 `create`／`edit` 成功後，請宿主送進對話的那一句。**固定字串，照 dsh**（`Reference attachments for the goal objective.`）。 */
 export const GOAL_ATTACHMENTS_TEXT = 'Reference attachments for the goal objective.';
 

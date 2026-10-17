@@ -1047,6 +1047,18 @@ async function startServer(
         // 清單，所以在這個閉包裡接（見 `wire-handler.ts` 的 `attachPersistence`）。
         // **旗標決定給不給，不是給一個關著的**：`goalDriver` 缺席就是「這條 thread 不
         // 自己排輪次」，同 `attachPersistence` 用缺席表達「沒開落盤」的規矩。
+        // 人改目標的把手（`goal.pause`，#1516）：**不看 `--no-goal-driver`**，暫停是 goal 服務自己的事，不經排程器（dsh 同）。
+        ...(goals !== undefined && {
+          goalControl: (log: () => SessionLog) => {
+            const port = goalDriverPort(
+              goals,
+              log,
+              () => Promise.resolve(),
+              () => undefined,
+            );
+            return { goal: port.goal, pause: port.pause };
+          },
+        }),
         ...(invocation.goalDriver
           ? {
               goalDriver: (log: () => SessionLog, flush: () => Promise<void>) =>

@@ -52,7 +52,14 @@ export type {
 } from '@nexus/core';
 
 /** 契約版本（semver）。介面破壞性改動跳 major，消費者的 `inject` 範圍擋下不相容的提供者。 */
-export const COMMANDS_CONTRACT_VERSION = '1.0.0';
+/**
+ * 契約版本（semver）。
+ *
+ * - `1.1.0`（#1516）：`CommandDefinition`／`CommandDescriptor` 多一個**選配**的 `runWhileBusy`（忙的時候也放行的呼叫字面值）。
+ *   加欄位、舊的登記者與消費者照舊，所以升 minor；要宣告它的命令（`goal`）把範圍收緊到 `^1.1.0`，舊版提供者不認這一格，
+ *   靜靜丟掉的話 `/goal pause` 在跑著時就永遠打不動。
+ */
+export const COMMANDS_CONTRACT_VERSION = '1.1.0';
 
 /** 命令登記處。 */
 export interface CommandRegistry {
@@ -62,7 +69,7 @@ export interface CommandRegistry {
    * 登記就是 effect：登記者那一列卸載時登記處自己撤掉，不靠呼叫者記得呼叫回傳的 disposer。
    *
    * - **中繼資料當場驗**：規則同 `@nexus/core` 的 `normalizeCommandDefinition`（名字的形狀、描述非空、handler 是函式、
-   *   `input.hint` 非空）。
+   *   `input.hint` 非空、`runWhileBusy` 若有要是非空字面值的陣列）。
    * - **同一個名字只收一次**，不論是同一列登記兩次還是兩列各登記一次：後登記的那一列在這裡拋，掛上它的那一列掉在 `apply`
    *   階段（#1456 Q5 (a)；照 dsh 的 `commands`：同一層重名就拋，`packages/interaction/commands/src/index.ts:93-111`）。
    *

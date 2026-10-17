@@ -322,6 +322,48 @@ describe('瀏覽器端的 client', () => {
     expect(calls[1]?.body).toEqual({ id: 2, method: 'slash.run', params: { line: '/plan' } });
   });
 
+  it('descriptor 的 runWhileBusy（#1516）：字串照實讀回、凍過；沒有或不是字串陣列就整格不放', async () => {
+    const { client } = stub(() =>
+      Response.json(
+        successResponse(1, {
+          commands: [
+            { name: 'goal', description: '目標', runWhileBusy: ['pause'] },
+            { name: 'plan', description: '計劃' },
+            { name: 'a', description: 'a', runWhileBusy: [] },
+            { name: 'b', description: 'b', runWhileBusy: 'pause' },
+            { name: 'c', description: 'c', runWhileBusy: ['pause', 1, null] },
+          ],
+        }),
+      ),
+    );
+    const listed = await client.slashList('t5');
+    if (listed.kind !== 'ok') throw new Error('slash.list 應該成功');
+    expect(listed.commands).toEqual([
+      { name: 'goal', description: '目標', runWhileBusy: ['pause'] },
+      { name: 'plan', description: '計劃' },
+      { name: 'a', description: 'a' },
+      { name: 'b', description: 'b' },
+      { name: 'c', description: 'c', runWhileBusy: ['pause'] },
+    ]);
+    expect(Object.isFrozen(listed.commands[0]?.runWhileBusy)).toBe(true);
+  });
+
+  it('goal.pause（#1516）：走同一條 RPC family，業務失敗在成功回應裡原樣交出', async () => {
+    const stale = {
+      ok: false,
+      error: { code: 'goal-stale', current: { id: 'g1', revision: 3, phase: 'active' } },
+    };
+    const { calls, client } = stub(() => Response.json(successResponse(1, stale)));
+    const outcome = await client.goalPause('t6', { goalId: 'g1', revision: 2 });
+    expect(outcome).toEqual({ kind: 'ok', result: stale });
+    expect(calls[0]?.url).toBe('http://agent.test/threads/t6/commands/goal.pause');
+    expect(calls[0]?.body).toEqual({
+      id: 1,
+      method: 'goal.pause',
+      params: { goalId: 'g1', revision: 2 },
+    });
+  });
+
   it('斜線命令帶附件（#732）：descriptor 的 input.attachments 照實讀回；slashRun 的 attachments 非空才送', async () => {
     const { calls, client } = stub((seen) =>
       Response.json(
@@ -547,6 +589,7 @@ describe('被拒時把 server 的錯誤碼交給呼叫端（#764）', () => {
   ])[] = [
     ['slashList', (c) => c.slashList('t')],
     ['slashRun', (c) => c.slashRun('t', '/plan')],
+    ['goalPause', (c) => c.goalPause('t', { goalId: 'g', revision: 1 })],
     ['feedbackPut', (c) => c.feedbackPut('t', {} as never)],
     ['feedbackDelete', (c) => c.feedbackDelete('t', {} as never)],
     ['feedbackList', (c) => c.feedbackList('t')],

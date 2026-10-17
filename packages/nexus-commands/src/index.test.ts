@@ -40,6 +40,10 @@ describe('@nexus/commands 的定義', () => {
     expect(COMMANDS_CONTRACT_VERSION).toMatch(/^\d+\.\d+\.\d+$/);
   });
 
+  it('1.1.0 加了選填的 runWhileBusy（minor）：舊的 1.0.0 消費者範圍仍然相容', () => {
+    expect(COMMANDS_CONTRACT_VERSION).toBe('1.1.0');
+  });
+
   it('一致性套件跑在 commands 接縫上：載入→卸載後登記處回到空的、缺件指名', async () => {
     let latest = createCommandsProvider();
     const failures = await checkConformance({
