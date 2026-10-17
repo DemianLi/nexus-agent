@@ -80,7 +80,7 @@ describe('serve 行程層收尾共用一份 dispose', () => {
     await new Promise((resolve) => setTimeout(resolve, 20));
 
     expect(state.closes).toBe(1);
-    // 兩邊等同一顆 dispose；訊號那一側的 `.then` 先掛，先叫 `exit`。
+    // 兩邊等同一顆 dispose；訊號先開始收尾，它的 `.then` 先掛在那顆 promise 上，先叫 `exit`。
     expect(exits[0]).toBe(0);
   });
 

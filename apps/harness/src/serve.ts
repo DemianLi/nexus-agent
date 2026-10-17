@@ -1233,7 +1233,7 @@ export interface ServeProcessLifecycle {
  * - 未處理的 rejection／未捕捉的例外走 {@link installFailLoud}：印一行帶標籤的診斷，最多等 2 秒走**同一份** dispose，
  *   然後以 1 結束。**不讓 serve 存活**：一條 thread 的半套狀態被其他人繼續用，比全部重連更糟。
  * - 兩邊等同一顆 promise，所以收尾進行中來另一邊，`running.close()` 只跑一次；退出碼以**先到的**為準
- *   （訊號那一側的 `.then` 先掛，先叫 `exit`，同 dsh）。
+ *   （誰先開始收尾，誰的 `.then` 先掛在那顆 promise 上、先叫 `exit`；兩個 handler 的註冊順序不影響，同 dsh）。
  *
  * **在 `main()` 裡、`runServe` 之前裝，不在 `runServe` 裡裝**：`runServe` 被許多測試在 vitest 行程裡直接叫，它們自己掛
  * `unhandledRejection` 計數，裝在裡面會搶走那些測試的判準、還會叫真的 `process.exit`。
@@ -1267,7 +1267,6 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
       proc.exitCode = code;
     },
   );
-  // 先裝訊號、再裝 fail-loud：訊號那一側的 `.then` 先掛。
   // SIGTERM 是監管者的一般停止要求，回 0；SIGINT 是使用者中斷，回 130（同 dsh 的 `profile-boot.ts`）。
   proc.on('SIGTERM', () => {
     shutdown.interrupt(0);
