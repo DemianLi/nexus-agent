@@ -10,19 +10,24 @@
  * - **D 撤中的也佔名額**，收完才還。
  * - **E 撤完之後上傳收據、快照通知不再掛著這條 thread**；通知拋錯不擋逐出。
  * - **G 請求計數**：`run.start` 卡在附件的 `await` 裡時，閒置逐出不能落下去、讓那句話不見。
+ * - **H MCP 收尾有期限**（[#1543](https://github.com/DemianLi/nexus-agent/issues/1543)）：MCP 重連卡在握手時，逐出不被它拖住。
  *
  * 從 serve 組裝起的接線、以及「撤掉之後重開等價於重啟」的對照（驗收 B），在 `serve-idle-eviction.test.ts`。
  *
  * 偏離登記：dsh 頂層沒有閒置逐出，見 `wire-handler.ts` 的 `WireHandlerOptions.idleEvictMs`。
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { tool } from '@langchain/core/tools';
 import { createWireClient, THREAD_AT_CAPACITY, historyPath } from '@nexus/wire';
 import type { Event, PromptAttachment } from '@nexus/wire';
 import type { PluginEntry } from '@nexus/core';
+import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
@@ -137,6 +142,8 @@ interface AgentExtras {
   readonly disposeGate?: Gate;
   /** `dispose` 拋這個錯。 */
   readonly disposeError?: Error;
+  /** 多掛的插件（例如真的 MCP）。 */
+  readonly plugins?: readonly PluginEntry[];
 }
 
 interface Rig {
@@ -181,7 +188,7 @@ function rig(options: Partial<WireHandlerOptions> = {}): Rig {
       const built = await createNexusAgent({
         model: new ScriptedChatModel({ turns: [...(extra.script ?? HOLD_SCRIPT)] }),
         checkpointer: new PrunedMemorySaver(),
-        plugins: [toolsPlugin(probe)],
+        plugins: [toolsPlugin(probe), ...(extra.plugins ?? [])],
         // 插話那一條（`next-step`）的載體：不掛的話插話退成排隊，測不到「只有 nextStep 在擋」。
         stepInbox: true,
       });
@@ -742,4 +749,81 @@ describe('G：請求計數擋住落在 admitAttachments 與 start() 之間的逐
 
 beforeEach(() => {
   handlers = [];
+});
+
+const MODERN_STDIO_SERVER = fileURLToPath(
+  new URL('../../../packages/nexus-plugin-mcp/src/modern-stdio-server.ts', import.meta.url),
+);
+
+/** 命令列含記號的行程；不經 shell（同 `packages/nexus-plugin-mcp/src/reconnect.test.ts`）。 */
+function pidsOf(marker: string): number[] {
+  try {
+    return execFileSync('pgrep', ['-f', '--', marker])
+      .toString()
+      .split('\n')
+      .filter(Boolean)
+      .map(Number);
+  } catch {
+    return [];
+  }
+}
+
+function killAll(pids: readonly number[]): void {
+  for (const pid of pids) {
+    try {
+      process.kill(pid, 'SIGKILL');
+    } catch {
+      // 已經不在了。
+    }
+  }
+}
+
+describe('H：MCP 收尾有期限（#1543）', () => {
+  it('MCP 重連卡在握手：逐出 6 秒內放掉占位，同 id 的下一個請求組得回來', async () => {
+    const dir = await mkdtemp(join('/var/tmp', 'nexus-evict-mcp-'));
+    const flag = join(dir, 'hang');
+    const marker = `--marker-${randomUUID()}`;
+    try {
+      const r = track(rig());
+      r.extras.set('t1', {
+        plugins: [
+          createMcpPlugin({
+            serverName: 'srv',
+            connection: {
+              transport: 'stdio',
+              command: process.execPath,
+              args: ['--import', 'tsx', MODERN_STDIO_SERVER, marker],
+              env: { FIXTURE_HANG_IF_FILE: flag },
+            },
+            reconnect: { initialDelayMs: 40, maxDelayMs: 160, maxAttempts: 5 },
+          }),
+        ],
+      });
+      expect((await touch(r, 't1')).type).toBe('success');
+      const first = pidsOf(marker);
+      expect(first).toHaveLength(1);
+      // 殺掉第 0 代，讓重連起的那一個卡在握手。重建的那一份不掛 MCP：卡住的 server 也會讓組裝等上兩分鐘，那不歸這張。
+      await writeFile(flag, '');
+      killAll(first);
+      await until(() => pidsOf(marker).some((pid) => !first.includes(pid)), 10_000);
+      r.extras.set('t1', {});
+
+      r.advance(T);
+      const started = Date.now();
+      const sweeping = r.handler.sweepIdle();
+      await until(() => r.warnings.some((line) => line.startsWith('[閒置逐出]')));
+      const back = touch(r, 't1');
+      await sweeping;
+      const elapsed = Date.now() - started;
+      // 下限證明真的卡住了、等滿 MCP 的收尾期限（5 秒）；沒卡住的話這條什麼都沒量到。上限是期限加一點餘裕。
+      expect(elapsed).toBeGreaterThanOrEqual(5000);
+      expect(elapsed).toBeLessThan(6000);
+      expect(r.disposed).toEqual(['t1']);
+      expect((await back).type).toBe('success');
+      expect(r.created).toEqual(['t1', 't1']);
+    } finally {
+      killAll(pidsOf(marker));
+      await rm(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
 });

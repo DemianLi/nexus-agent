@@ -215,6 +215,8 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     const report = (message: string): void => {
       logger.warn(message);
     };
+    // dsh 這幾句是 error 級；插件 logger 只有 warn，所以退成 warn（`supervisor.ts` 檔頭偏離 6）。
+    const error = report;
     try {
       const first = new Map<string, ToolCall>();
       const names: string[] = [];
@@ -249,15 +251,19 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
               throwOnToolError(tool);
               calls.set(tool.name, callOf(tool));
             }
-            return { calls, sdk: await client.getClient(serverName) };
+            return generationOf(calls, await client.getClient(serverName));
           },
           close: () => client.close(),
+          closed: (generation) => generation.closed,
+          // 失敗的嘗試可能把連線留在 adapter 裡（例如列出了工具、檢查卻拋了）；dispose 最後整個收掉，連一次都沒連上的間隙也算。
+          release: () => client.close(),
           watch(generation, onDown) {
-            if (generation.sdk !== undefined) generation.sdk.onclose = onDown;
+            generation.onDown = onDown;
           },
           report,
+          error,
         },
-        { calls: first, sdk },
+        generationOf(first, sdk),
       ));
       // 放棄重連之後，這一台的工具對模型隱藏（dsh 此時把工具從註冊表撤掉；我們的註冊表在組裝之後撤了沒有效果，
       // 所以改在每次模型呼叫前把它們從請求的工具清單拿掉，見 `supervisor.ts` 檔頭偏離 4）。
@@ -301,9 +307,9 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
 
     registry.lifecycle.onDispose(async () => {
       unregisterSource?.();
-      // 先取消待跑的重連、等進行中的那次收斂，再把 adapter client 收掉（連一次都沒連上的間隙也要收）。
+      // 取消待跑的重連、等進行中的那次收斂、收掉 adapter client，整段一個期限（#1543）。不要在後面再 `await client.close()`：
+      // adapter 的 `close()` 也先等進行中的握手，會把期限白白疊上去。
       await supervisor.dispose();
-      await client.close();
     });
   },
 };
@@ -354,6 +360,33 @@ function instructionsOf(raw: string | undefined, config: McpConfig): string {
 interface Generation {
   readonly calls: ReadonlyMap<string, ToolCall>;
   readonly sdk: SdkClient | undefined;
+  /** transport 真的關掉了才落定（stdio 是子行程的 close 事件）；沒有 SDK client 的一代沒有東西可等，立刻落定。 */
+  readonly closed: Promise<void>;
+  /** 監督者掛上的「這一代斷了」通報。 */
+  onDown?: () => void;
+}
+
+/**
+ * 建一代，**建的當下**就掛 `onclose`：沒被採用的那一代（dispose 期間才連上的）也要等得到它關掉。先記「關掉了」，再通報斷線。
+ */
+function generationOf(
+  calls: ReadonlyMap<string, ToolCall>,
+  sdk: SdkClient | undefined,
+): Generation {
+  if (sdk === undefined) return { calls, sdk, closed: Promise.resolve() };
+  let markClosed!: () => void;
+  const generation: Generation = {
+    calls,
+    sdk,
+    closed: new Promise<void>((resolve) => {
+      markClosed = resolve;
+    }),
+  };
+  sdk.onclose = () => {
+    markClosed();
+    generation.onDown?.();
+  };
+  return generation;
 }
 
 type ToolCall = (...args: unknown[]) => Promise<unknown>;
