@@ -86,6 +86,15 @@
  *   `filePath` 時是一段前言加 `<summary>…</summary>`，**沒有**（offload 失敗）時只有
  *   「Here is a summary of the conversation to date:」一句，不包標籤。所以那條規則兩種都要認。
  *
+ * ### 摘要輸出 fail-closed（[#1539](https://github.com/DemianLi/nexus-agent/issues/1539)）
+ *
+ * 基座的 `createSummary` 只取回覆的 `.text`，不看結束原因、不看是否為空、不看有沒有圖：被截斷的半份、全空白、只有推理、
+ * 夾了圖的摘要都會被換上去。dsh 的 `summarizeWithLlm` 對這幾種一律拒收（`compaction-basic/src/summarizer.ts:164-171`、
+ * `:196-221`，`687f282e`）。我們在 {@link quietInvoke} 拿得到完整的那則 `AIMessage`，在那裡照同樣的順序檢查，拋
+ * {@link SummaryRejectedError}，走 #1374 既有的退路。不是偏離：dsh 判的是組好的區塊與 `FinishReason`，我們判的是
+ * `response_metadata.finish_reason` 與 `content`。圖片區塊 dsh 只認 `type === 'image'`（`llm/src/content.ts:126-128`）；
+ * LangChain 的圖片另有 OpenAI 形狀的 `image_url`，兩種都認是同一個語意。
+ *
  * ⚠️ **基座的 `{conversation}` 替換有一個已知的小缺陷，我們這層擋不住**：`createSummary` 用
  * `String.prototype.replace(字串, 字串)`，替換字串裡的 `$&`、`` $` ``、`$'`、`$$` 會被當成特殊樣式解讀。
  * 對話文字裡有 `$$`（shell 的行程號、Makefile）時，餵給模型的那份會少一個 `$`；有 `$&` 時會多出一段
@@ -109,6 +118,7 @@ import {
 } from './attachment-projection.js';
 import { isFileBlock } from './attachment-ref.js';
 import { toLoggedMessage } from './logged-message.js';
+import { isMaxTokensFinish } from './max-tokens.js';
 import { captureModelCall, withModelCall } from './model-call-scope.js';
 import { readModelUsage, type ModelUsage } from './model-usage.js';
 import type { NexusPlugin } from './plugin.js';
@@ -1012,6 +1022,73 @@ function assertSummaryShrinks(
   throw error;
 }
 
+/** {@link SummaryRejectedError} 的原因。前兩個與 dsh 同名；`EMPTY_SUMMARY` 在 dsh 只有訊息沒有碼，這裡給名字讓測試與 warn 認得。 */
+export type SummaryRejectedCode = 'MAX_TOKENS' | 'UNSUPPORTED_CONTENT' | 'EMPTY_SUMMARY';
+
+const SUMMARY_REJECTED_MESSAGES: Readonly<Record<SummaryRejectedCode, string>> = {
+  MAX_TOKENS: '摘要被輸出上限截斷，不接受不完整的摘要',
+  UNSUPPORTED_CONTENT: '摘要含圖片，不接受',
+  EMPTY_SUMMARY: '摘要沒有文字內容，不接受',
+};
+
+/**
+ * 摘要生出來了，但不能當摘要用：被截斷、含圖、或沒有文字（[#1539](https://github.com/DemianLi/nexus-agent/issues/1539)）。
+ *
+ * 同 {@link SummaryNotSmallerError}，**記進 {@link summaryCallFailures}**，走 {@link withTokenBudget} 既有的兩條退路。
+ * 訊息只講原因、不引摘要內容。
+ */
+export class SummaryRejectedError extends Error {
+  constructor(readonly code: SummaryRejectedCode) {
+    super(SUMMARY_REJECTED_MESSAGES[code]);
+    this.name = 'SummaryRejectedError';
+  }
+}
+
+/** LangChain 輸出區塊裡的圖片：`image`（v1 標準區塊）與 `image_url`（OpenAI 形狀）是同一種東西。 */
+const IMAGE_BLOCK_TYPES: ReadonlySet<string> = new Set(['image', 'image_url']);
+
+/**
+ * dsh `summarizeWithLlm` 對摘要輸出的 fail-closed（`compaction-basic/src/summarizer.ts:164-171`、`:196-221`），順序也照它：
+ * 結束原因、圖片、有沒有文字。
+ *
+ * **鴨子型別**：測試替身回的是 `{ text }`，沒有 `response_metadata` 也沒有 `content`。沒有 `response_metadata` 就不判截斷；
+ * 沒有 `content` 就退回讀 `.text`。
+ *
+ * @param result - 摘要模型回的那則訊息。
+ * @returns 拒收的原因；能用就是 `undefined`。
+ */
+function summaryRejection(result: unknown): SummaryRejectedCode | undefined {
+  const message = (typeof result === 'object' && result !== null ? result : {}) as {
+    response_metadata?: unknown;
+    content?: unknown;
+    text?: unknown;
+  };
+  if (isMaxTokensFinish(message.response_metadata)) return 'MAX_TOKENS';
+  const { content } = message;
+  const blocks: readonly unknown[] = Array.isArray(content) ? content : [];
+  if (blocks.some((block) => IMAGE_BLOCK_TYPES.has(blockType(block)))) return 'UNSUPPORTED_CONTENT';
+  // 只取文字區塊（同 dsh 的 `summaryText`）：只有推理的輸出在這裡是空的。
+  const texts =
+    typeof content === 'string'
+      ? [content]
+      : Array.isArray(content)
+        ? blocks.flatMap((block) =>
+            blockType(block) === 'text' && typeof (block as { text?: unknown }).text === 'string'
+              ? [(block as { text: string }).text]
+              : [],
+          )
+        : typeof message.text === 'string'
+          ? [message.text]
+          : [];
+  if (!texts.some((text) => text.trim().length > 0)) return 'EMPTY_SUMMARY';
+  return undefined;
+}
+
+function blockType(block: unknown): string {
+  const type = (block as { type?: unknown } | null)?.type;
+  return typeof type === 'string' ? type : '';
+}
+
 /**
  * 「這一次請求不要摘要」的記號，掛在請求物件上（`{...request}` 會帶著走，與 `ROUTED_FROM` 同一個做法）。
  *
@@ -1244,6 +1321,14 @@ function quietInvoke<T extends object>(
           // 記下「這個錯是生摘要那次拋的」（#1374）：基座不包它，原物件一路冒到外面，外面的 {@link withTokenBudget}
           // 靠這個分得出它與「摘要成功、之後的模型呼叫才失敗」。
           if (typeof error === 'object' && error !== null) summaryCallFailures.add(error);
+          throw error;
+        }
+        // 摘要輸出 fail-closed（#1539）：在重試外面檢查，拒收的不重打（同 dsh，摘要那次呼叫不經步級重試）；
+        // 也在記用量之前，被拒收的那次不記（dsh 只在成功時回 usage）。
+        const rejected = summaryRejection(result);
+        if (rejected !== undefined) {
+          const error = new SummaryRejectedError(rejected);
+          summaryCallFailures.add(error);
           throw error;
         }
         // 摘要的用量（#1022）：回來的那則訊息上讀，驗不過就是沒有。拋錯的那次連 `compaction/summary` 都不記，
