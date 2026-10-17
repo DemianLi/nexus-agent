@@ -10,6 +10,9 @@
  * - **一代一個決定**（`generationDown`，`:180-186`）：同一代的 close 事件與呼叫失敗兩個訊號賽跑，只有仍是目前這一代的才算。
  * - **dispose**（`:386-`）：取消待跑的計時器、等進行中的那次嘗試收斂，連上了就關；之後不再重連。
  * - 待跑的計時器 `unref`，不單獨撐住行程。
+ * - **關閉有期限**（[#1543](https://github.com/DemianLi/nexus-agent/issues/1543)，`687f282e` 的 `connection.ts:51-54`、`:187-209`、`:388-407`）：
+ *   收一代最多等 {@link GENERATION_CLOSE_TIMEOUT_MS}，要看到它真的關掉（呼叫端的 `closed`）才算數。dispose 等不到就記一句、照常
+ *   回來；掉線之後等不到，就不重連、記一句，寧可停下也不讓兩代 server 同時活著。訊息的英文前半句逐字照 dsh。
  *
  * ## 偏離登記
  *
@@ -25,6 +28,19 @@
  *    「已放棄重連」的錯誤，要恢復得重新組裝。
  * 5. **起動時就連不上的那一列不重連**：dsh 初次失敗後同一個監督者繼續重試，連上就補工具；我們補不了工具（偏離 2），
  *    所以不重試，下一次組裝才再連（`index.ts` 檔頭既有的偏離）。
+ * 6. **關閉期限退到最接近的做法**（#1543，三格）：
+ *    - **握手中斷不了**（理由 1）：dsh 先關「連線中的那一代」來打斷握手（`connection.ts:277`、`:388-407`）。adapter
+ *      （`@langchain/mcp-adapters` 2.0.0）不交出還沒連上的 client 或 transport，`close()` 也中止不了進行中的
+ *      `_initializeConnection`，而且自己先等它（`connection.js` 的 `#closeAll`）。所以 dispose 照舊先等進行中的嘗試，但整段
+ *      跟 {@link GENERATION_CLOSE_TIMEOUT_MS} 賽跑，到期就記 dsh 那一句、照常回來。被丟下的嘗試落定之後照樣收（連上了就關、
+ *      失敗了 adapter 自己收），只是那個子行程比 thread 多活一段，最多到它的握手逾時。
+ *    - **屏障掛在「已連上的那一代被 down」**（理由 1）：dsh 的屏障在**失敗的連線嘗試**上（`connection.ts:187-197`、
+ *      `:323-331`），已連上的那一代由自己的 `onclose` 證明已經關掉、直接 `generationDown`。握手失敗時 adapter 自己收掉 client
+ *      與 transport（`connection.js:122-124`），我們拿不到那個 close 訊號，所以退到最接近的一格：已連上的那一代被 `down`
+ *      （例如工具呼叫失敗判成斷線、transport 其實還開著）時，先關、確認它真的關掉，才排重連；確認不到就不排。失敗的嘗試靠
+ *      SDK stdio 自帶的兩段 2 秒寬限之後 SIGKILL。期限包住「關」與「等關掉」整段，不是關完才起算。
+ *    - **只有一級日誌**（理由 1）：dsh 這兩句是 error 級；插件 logger 只有 warn（`@nexus/core` `registry.ts:679`、`:705`），
+ *      #1534 也定了不擴充它的等級。所以 {@link SupervisorHooks.error} 接到 warn，等 MCP 遷上樹改用 `ctx.logger.error`。
  *
  * 這個檔案不認識 MCP：一代是什麼、怎麼連、怎麼關、怎麼偵測斷線都由呼叫端給，所以退避與預算可以用假計時器逐步測。
  *
@@ -32,6 +48,12 @@
  */
 
 import { z } from 'zod';
+
+/**
+ * 收一代連線最多等多久（毫秒），照 dsh 的 `GENERATION_CLOSE_TIMEOUT_MS`（`connection.ts:51-54`）。SDK 的 stdio transport
+ * 自帶兩段 2 秒的終止寬限，再多留 1 秒給子行程的 close 事件來證明舊的一代真的沒了；逾時就停下來，不讓兩代子行程重疊。
+ */
+export const GENERATION_CLOSE_TIMEOUT_MS = 5_000;
 
 /** 重連政策，欄位與預設一字不差照 dsh 的 `ReconnectConfig`／`RECONNECT_DEFAULTS`（`connection.ts:28-47`）。 */
 export const reconnectSchema = z
@@ -63,12 +85,21 @@ export interface SupervisorHooks<G> {
   /** 收掉一代。要冪等；監督者會忽略它的錯誤。 */
   close(generation: G): Promise<void>;
   /**
+   * 這一代**真的關掉了**才落定（例如子行程的 close 事件），不能只是「`close` 回來了」：stdio 的 `close()` 送出 SIGKILL
+   * 之後不等就回。沒有東西可等的一代（沒接上 transport）要立刻落定。
+   */
+  closed(generation: G): Promise<void>;
+  /** dispose 最後收掉一代以外的殘留（例如失敗的嘗試留下的連線）；跟關閉算在同一個期限裡。 */
+  release?(): Promise<void>;
+  /**
    * 一代連上之後，安排「這一代斷了」時呼叫 `onDown`（例如掛 transport 的 close 事件）。
    * 另一個訊號來源是呼叫端在工具呼叫失敗時自己呼叫 {@link Supervisor.down}。
    */
   watch(generation: G, onDown: () => void): void;
   /** 給人看的訊息（警告、放棄、重連成功都走這裡）。 */
   report(message: string): void;
+  /** 照 dsh 是 error 級的那幾句：關閉確認不到（偏離 6）。 */
+  error(message: string): void;
   /** 現在的毫秒時鐘，測試可替換；預設 `Date.now`。 */
   readonly now?: () => number;
 }
@@ -106,21 +137,52 @@ export class Supervisor<G> {
   down(generation: G): void {
     if (this.disposed || this.generation !== generation) return;
     this.generation = undefined;
-    this.hooks.close(generation).catch(() => {});
+    this.attempt = this.retire(generation);
+  }
+
+  /** 先確認掉線的那一代真的關掉，才排重連；確認不到就停下（照 dsh `settleFailedGeneration`，`connection.ts:187-197`）。 */
+  private async retire(generation: G): Promise<void> {
+    const confirmed = await settlesWithin(this.closeAndWait(generation));
+    if (this.disposed) return;
+    if (!confirmed) {
+      this.gaveUpFlag = true;
+      this.hooks.error(
+        `${this.hooks.label}: failed generation could not confirm transport closure — reconnect stopped to avoid overlapping server processes; 要重試得重新組裝（下一條 thread 或重啟 serve）`,
+      );
+      return;
+    }
     this.schedule(true);
   }
 
-  /** 取消待跑的重連、等進行中的那次收斂、關掉目前這一代；之後不再重連。 */
+  /**
+   * 取消待跑的重連、等進行中的那次收斂、關掉目前這一代；之後不再重連。整段最多等 {@link GENERATION_CLOSE_TIMEOUT_MS}，
+   * 等不到就記一句、照常回來（不拋，照 dsh）。
+   */
   async dispose(): Promise<void> {
     this.disposed = true;
     if (this.timer !== undefined) {
       clearTimeout(this.timer);
       this.timer = undefined;
     }
+    if (!(await settlesWithin(this.quiesce()))) {
+      this.hooks.error(
+        `${this.hooks.label}: transport closure could not be confirmed during disposal — server shutdown may be incomplete`,
+      );
+    }
+  }
+
+  private async quiesce(): Promise<void> {
     await this.attempt;
     const generation = this.generation;
     this.generation = undefined;
-    if (generation !== undefined) await this.hooks.close(generation).catch(() => {});
+    if (generation !== undefined) await this.closeAndWait(generation);
+    await this.hooks.release?.().catch(() => {});
+  }
+
+  /** 關掉一代並等它真的關掉；永不拋。 */
+  private async closeAndWait(generation: G): Promise<void> {
+    await this.hooks.close(generation).catch(() => {});
+    await this.hooks.closed(generation);
   }
 
   private now(): number {
@@ -187,7 +249,7 @@ export class Supervisor<G> {
       return;
     }
     if (this.disposed) {
-      await this.hooks.close(next).catch(() => {});
+      await this.closeAndWait(next);
       return;
     }
     this.adopt(next);
@@ -197,4 +259,24 @@ export class Supervisor<G> {
       );
     }
   }
+}
+
+/**
+ * `work` 在 {@link GENERATION_CLOSE_TIMEOUT_MS} 內落定就是 `true`，逾時是 `false`，照 dsh 的 `waitForClose`
+ * （`connection.ts:199-209`）。計時器 `unref`、落定就清掉，不單獨撐住行程。`work` 被拒絕算沒確認到，等到逾時。
+ */
+function settlesWithin(work: Promise<void>): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timeout = setTimeout(() => {
+      resolve(false);
+    }, GENERATION_CLOSE_TIMEOUT_MS);
+    timeout.unref();
+    work.then(
+      () => {
+        clearTimeout(timeout);
+        resolve(true);
+      },
+      () => {},
+    );
+  });
 }

@@ -9,7 +9,7 @@
 
 import { execFileSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -24,6 +24,7 @@ import { MEMO_URI } from './resource-fixtures.js';
 import { modelToolNames } from './tool-names.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
+const MODERN_SERVER = fileURLToPath(new URL('./modern-stdio-server.ts', import.meta.url));
 const FAST = { initialDelayMs: 40, maxDelayMs: 160, maxAttempts: 5 } as const;
 const TOOL = 'mcp__srv__fetch_release_note';
 
@@ -257,5 +258,107 @@ describe('殺掉 stdio 子行程', () => {
       rmSync(dir, { recursive: true, force: true });
     }
     expect(s.pids()).toEqual([]);
+  }, 30_000);
+});
+
+/**
+ * **收尾有期限**（[#1543](https://github.com/DemianLi/nexus-agent/issues/1543)）：重連卡在一台不回 initialize 的 server 上時，
+ * 關閉不被它拖住。改之前同樣的布置要等 SDK 的請求逾時（實測約 120 秒）：dispose 先等進行中的握手，adapter 的 `close()` 也先等它。
+ */
+describe('握手卡住時關閉', () => {
+  it('重連卡在握手：dispose 6 秒內回來，並記一句確認不到', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-mcp-hang-'));
+    const flag = join(dir, 'hang');
+    const marker = `--marker-${randomUUID()}`;
+    const pids = () => pidsOf(marker);
+    const { registry, dispose } = await loadPlugins([
+      createMcpPlugin({
+        serverName: 'srv',
+        connection: {
+          transport: 'stdio',
+          command: process.execPath,
+          args: ['--import', 'tsx', MODERN_SERVER, marker],
+          env: { FIXTURE_HANG_IF_FILE: flag },
+        },
+        reconnect: FAST,
+      }),
+    ]);
+    try {
+      const first = pids();
+      expect(first).toHaveLength(1);
+      writeFileSync(flag, '');
+      killAll(first);
+      // 重連起了新的子行程，它正卡在握手。
+      await waitFor(() => pids().some((pid) => !first.includes(pid)));
+      const started = Date.now();
+      await dispose();
+      const elapsed = Date.now() - started;
+      console.log(`#1543 dispose 花了 ${String(elapsed)} ms`);
+      expect(elapsed).toBeLessThan(6000);
+      expect(
+        loggedBy(registry).some((m) =>
+          m.includes(
+            'mcp-client(srv): transport closure could not be confirmed during disposal — server shutdown may be incomplete',
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      // 被丟下的握手要等到 SDK 的請求逾時才有人收；測試自己收掉，不留給別的測試檔的 pgrep。
+      killAll(pids());
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }, 30_000);
+});
+
+/**
+ * **重連前的關閉屏障**（#1543）：server 包在會起孫行程的 wrapper 裡（例如 `npx`），孫行程握著 stdout 時，SDK stdio 的 `close()`
+ * 等 2 秒就回（送了訊號、不等 close 事件），子行程的 close 事件要等孫行程放手才來（實測：`close()` 2002 ms 回來，`onclose` 8 秒內
+ * 沒來；沒有孫行程時兩者都是 6 ms）。這時起第二代，兩代 server 會同時活著，所以要停下來。
+ */
+describe('重連前的關閉屏障', () => {
+  it('close 回來了、上一代卻確認不到關掉（孫行程握著 stdout）：不重連、標成放棄、記一句', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-mcp-grandchild-'));
+    const grandchildren = join(dir, 'grandchildren');
+    const marker = `--marker-${randomUUID()}`;
+    const pids = () => pidsOf(marker);
+    const { registry, dispose } = await loadPlugins([
+      createMcpPlugin({
+        serverName: 'srv',
+        connection: {
+          transport: 'stdio',
+          command: process.execPath,
+          args: ['--import', 'tsx', MODERN_SERVER, marker],
+          env: { FIXTURE_GRANDCHILD_PID_FILE: grandchildren, FIXTURE_DROP_TOOL: '1' },
+        },
+        reconnect: FAST,
+      }),
+    ]);
+    try {
+      const first = pids();
+      expect(first).toHaveLength(1);
+      // 工具呼叫回「Connection closed」：外掛把這一代判成斷線、走 down()，而 transport 這時還開著。
+      await expect(invoke(registry, 'mcp__srv__drop_connection', {})).rejects.toThrow(
+        'Connection closed',
+      );
+      await waitFor(() =>
+        loggedBy(registry).some((m) =>
+          m.includes(
+            'mcp-client(srv): failed generation could not confirm transport closure — reconnect stopped to avoid overlapping server processes',
+          ),
+        ),
+      );
+      // 先確認再排：沒有先冒一句「reconnecting in」，也沒有起第二代。
+      expect(loggedBy(registry).some((m) => m.includes('reconnecting in'))).toBe(false);
+      expect(pids().filter((pid) => !first.includes(pid))).toEqual([]);
+      await expect(invoke(registry, TOOL)).rejects.toThrow('reconnection was given up');
+    } finally {
+      await dispose();
+      // 孫行程會自己活 30 秒；測試自己收掉，不留孤兒。
+      if (existsSync(grandchildren)) {
+        killAll(readFileSync(grandchildren, 'utf8').split('\n').filter(Boolean).map(Number));
+      }
+      killAll(pids());
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 30_000);
 });
