@@ -45,7 +45,10 @@ export function encodeSseData(event: string, data: unknown): string {
   return `event: ${event}\ndata: ${JSON.stringify(data)}${FRAME_SEPARATOR}`;
 }
 
-/** SSE 的註解行（`:` 開頭）。目前只在解碼端認得，我們自己不發心跳。 */
+/**
+ * SSE 的註解行（`:` 開頭）。解碼端跳過它；伺服器端的心跳（`: ping`，#1504，寫在 `apps/harness/src/wire-server.ts`）
+ * 與開線的 `: connected` 都是這種行，所以這個檔不產生心跳，只負責認得它不是封包。
+ */
 function isComment(line: string): boolean {
   return line.startsWith(':');
 }

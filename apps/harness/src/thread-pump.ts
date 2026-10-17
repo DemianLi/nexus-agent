@@ -136,6 +136,7 @@ import {
 } from '@nexus/wire';
 import type { CustomFrameData, SubagentStatusPayload } from '@nexus/wire';
 
+import { BoundedQueue, DEFAULT_DOWNLINK_MAX_BYTES, frameBytes } from './bounded-event-queue.js';
 import { RootGoal } from './goal-wire.js';
 import { imageOffloadData } from './image-offload-wire.js';
 import {
@@ -464,7 +465,8 @@ export type PumpInput =
 
 interface Subscriber {
   readonly channels: readonly WireChannel[];
-  readonly queue: Event[];
+  /** 位元組有界（#1504，偏離 B／C 的登記見 `bounded-event-queue.ts`）。 */
+  readonly queue: BoundedQueue<Event>;
   wake?: () => void;
   done: boolean;
 }
@@ -1127,6 +1129,7 @@ export class ThreadPump {
   /** 封存的閘門（#633）：放進圖的 `configurable`，每次模型呼叫之前問。見 {@link ThreadPump.#runOnce} 的 catch。 */
   readonly #isArchived: (() => boolean) | undefined;
   readonly #subscribers = new Set<Subscriber>();
+  readonly #downlinkMaxBytes: number;
   readonly #sessions: SessionRegistry;
   /**
    * 傳輸層的號，給瀏覽器排序去重用的。
@@ -1358,6 +1361,8 @@ export class ThreadPump {
    * @param isArchived - 這條 thread 封存了沒有（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，`thread-organization.ts`）。
    *   **省略即沒有封存這回事**（沒接整理檔的組裝）。封存的 thread 不跑模型步驟：每一步送出請求之前問一次，擋下的那一輪以 `blocked` 收，
    *   見 {@link ThreadPump.#runOnce} 的 catch。
+   * @param downlinkMaxBytes - 每條下行的佇列位元組上限（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)，`downlink` 那一列）。
+   *   **省略即 {@link DEFAULT_DOWNLINK_MAX_BYTES}**（2 MiB，照 dsh `TerminalFollower`）。
    * @throws `titleLimits` 不是兩個正整數。
    */
   constructor(
@@ -1374,7 +1379,9 @@ export class ThreadPump {
     projectionChildSeeds?: ProjectionChildren,
     projectionFlushMs?: number,
     isArchived?: () => boolean,
+    downlinkMaxBytes: number = DEFAULT_DOWNLINK_MAX_BYTES,
   ) {
+    this.#downlinkMaxBytes = downlinkMaxBytes;
     this.#agent = agent;
     this.#isArchived = isArchived;
     this.#projectionOut = new ProjectionCoalescer(
@@ -1623,35 +1630,50 @@ export class ThreadPump {
   ): AsyncGenerator<Event, void, undefined> {
     // **註冊是同步的**，抽是之後的事。這樣「線開好了」與「開始抽」才是兩件事——
     // 開好之後才發生的 frame 一顆都不會掉在中間，即使消費端還沒開始抽。
-    const subscriber: Subscriber = { channels, queue: [], done: this.#closed };
-    if (!subscriber.done) {
-      // **照號排，不照 Map 的順序**：同 id 再度中斷時 `set` 留在原本的位置、換上新號，Map 順序就不再是發出的順序，
-      // 而折疊器丟掉號比上一顆小的。
-      subscriber.queue.push(
-        ...[...this.#pending.values()]
+    const subscriber: Subscriber = {
+      channels,
+      queue: new BoundedQueue(this.#downlinkMaxBytes),
+      done: this.#closed,
+    };
+    // 補送照算位元組、不判上限（`BoundedQueue.seed`）；算位元組的 `JSON.stringify` 拋錯就收掉這條線。
+    const seed = (frame: Event): void => subscriber.queue.seed(frame, frameBytes(frame));
+    try {
+      if (!subscriber.done) {
+        // **照號排，不照 Map 的順序**：同 id 再度中斷時 `set` 留在原本的位置、換上新號，Map 順序就不再是發出的順序，
+        // 而折疊器丟掉號比上一顆小的。
+        for (const request of [...this.#pending.values()]
           .map((pending) => pending.request)
           .filter((request) => accepts(subscriber, request))
-          .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0)),
+          .sort((a, b) => (a.seq ?? 0) - (b.seq ?? 0))) {
+          seed(request);
+        }
+      }
+      // **背景子代理現況也補送**（#867）：它是「現在」的事，歷史沒有，不補的話重新整理之後要等下一次變動才看得到。
+      // 號是原本那顆的，理由同上面那段。
+      if (!subscriber.done && this.#subagentStatusFrame !== undefined) {
+        if (accepts(subscriber, this.#subagentStatusFrame)) {
+          seed(this.#subagentStatusFrame);
+        }
+      }
+      // **還沒落盤的那則回覆也補送**（[#953](https://github.com/DemianLi/nexus-agent/issues/953) 第二刀）：它的開頭與已吐出的
+      // 字在下行開之前就送完了，歷史又要等那次模型呼叫結束才有，不補的話重新整理之後這一則要等下一次重新整理才看得到。
+      // **蓋的是新號、不是原本的號**：合成的字是一整塊，沒有哪一顆原始 frame 的號對得上；新號比這條線上已經排著的
+      // （上面兩種）都大、又比之後的即時 frame 都小，折疊器照號丟的規則不會把它丟掉，也不會把後面的丟掉。
+      // 補送與歷史可能重疊（回覆在開線與拿歷史之間落盤了），由折疊器照訊息 id 擋掉，見 `@nexus/wire` 的 `reduceMessage`。
+      const reply = this.#current?.reply;
+      if (!subscriber.done && reply !== undefined) {
+        const frames = replyBaseline(reply);
+        if (frames.length > 0 && accepts(subscriber, frames[0] as Event)) {
+          for (const frame of frames) seed(this.#seal(frame));
+        }
+      }
+    } catch (error: unknown) {
+      // 補送的某一顆序列化不了：這條線送不出完整的「現在」，收掉它（它會重連），記一行。
+      subscriber.done = true;
+      subscriber.queue.clear();
+      this.#warn?.(
+        `[下行] thread ${this.#threadId} 開線時補送的事件無法序列化，已斷開這一條：${errorText(error)}`,
       );
-    }
-    // **背景子代理現況也補送**（#867）：它是「現在」的事，歷史沒有，不補的話重新整理之後要等下一次變動才看得到。
-    // 號是原本那顆的，理由同上面那段。
-    if (!subscriber.done && this.#subagentStatusFrame !== undefined) {
-      if (accepts(subscriber, this.#subagentStatusFrame)) {
-        subscriber.queue.push(this.#subagentStatusFrame);
-      }
-    }
-    // **還沒落盤的那則回覆也補送**（[#953](https://github.com/DemianLi/nexus-agent/issues/953) 第二刀）：它的開頭與已吐出的
-    // 字在下行開之前就送完了，歷史又要等那次模型呼叫結束才有，不補的話重新整理之後這一則要等下一次重新整理才看得到。
-    // **蓋的是新號、不是原本的號**：合成的字是一整塊，沒有哪一顆原始 frame 的號對得上；新號比這條線上已經排著的
-    // （上面兩種）都大、又比之後的即時 frame 都小，折疊器照號丟的規則不會把它丟掉，也不會把後面的丟掉。
-    // 補送與歷史可能重疊（回覆在開線與拿歷史之間落盤了），由折疊器照訊息 id 擋掉，見 `@nexus/wire` 的 `reduceMessage`。
-    const reply = this.#current?.reply;
-    if (!subscriber.done && reply !== undefined) {
-      const frames = replyBaseline(reply);
-      if (frames.length > 0 && accepts(subscriber, frames[0] as Event)) {
-        for (const frame of frames) subscriber.queue.push(this.#seal(frame));
-      }
     }
     this.#subscribers.add(subscriber);
     return this.#drain(subscriber, signal);
@@ -3624,12 +3646,57 @@ export class ThreadPump {
   }
 
   #broadcast(event: Event): void {
+    // 位元組數**廣播時算一次**，每條線共用；沒有線收這一顆就不算。
+    let bytes: number | undefined;
     for (const subscriber of this.#subscribers) {
       if (subscriber.done || !accepts(subscriber, event)) continue;
-      subscriber.queue.push(event);
-      subscriber.wake?.();
+      if (bytes === undefined) {
+        try {
+          bytes = frameBytes(event);
+        } catch (error: unknown) {
+          // 這一顆對每條會收它的線都送不出去：只收掉那些線（沒訂這個 channel 的不受影響）、記一行，函式正常返回——
+          // 錯誤不能打回產生事件的路徑（`#broadcast` 跑在 run 的事件迴圈上）。
+          this.#failSubscribers(event, error);
+          return;
+        }
+      }
+      if (subscriber.queue.push(event, bytes)) {
+        subscriber.wake?.();
+      } else {
+        this.#evictSubscriber(subscriber);
+      }
     }
   }
+
+  /** 積壓超過上限：同步從名單拿掉（不再收、不再算進 `subscriberCount`），清空，叫醒 drain 讓它結束這條線。可重複執行。 */
+  #evictSubscriber(subscriber: Subscriber): void {
+    subscriber.done = true;
+    subscriber.queue.clear();
+    this.#subscribers.delete(subscriber);
+    subscriber.wake?.();
+    this.#warn?.(
+      `[下行] thread ${this.#threadId} 有一條下行積壓超過 ${String(this.#downlinkMaxBytes)} 位元組，已斷開（它會自己重連）`,
+    );
+  }
+
+  #failSubscribers(event: Event, error: unknown): void {
+    let closed = 0;
+    for (const subscriber of this.#subscribers) {
+      if (subscriber.done || !accepts(subscriber, event)) continue;
+      subscriber.done = true;
+      subscriber.queue.clear();
+      this.#subscribers.delete(subscriber);
+      subscriber.wake?.();
+      closed += 1;
+    }
+    this.#warn?.(
+      `[下行] thread ${this.#threadId} 有一顆 ${event.method} 事件無法序列化，已斷開 ${String(closed)} 條下行：${errorText(error)}`,
+    );
+  }
+}
+
+function errorText(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 /** 這條下行訂了這顆 frame 的 channel 沒有。即時廣播與補送共用這一個，兩邊的過濾才不會分岔。 */
