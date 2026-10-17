@@ -203,6 +203,8 @@ export { createHostServicesPlugin } from './host-services.js';
 export type { FsFacts, FsService, FsServiceOptions } from './fs-service.js';
 export { createFsService, FS_SERVICE } from './fs-service.js';
 export { scrubbedParentEnv, SENSITIVE_ENV_PATTERN } from './child-env.js';
+export type { HostExitChild } from './host-exit-children.js';
+export { trackHostExitChild } from './host-exit-children.js';
 export { installProxyFromEnvironment, proxyEnvironmentForChild } from './http-proxy/index.js';
 
 export type { DropStage, DroppedEntry, LoadOptions, LoadResult } from './load.js';

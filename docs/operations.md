@@ -133,6 +133,13 @@ CLI 每一次啟動各自一個 run 目錄，一份會話一個 `.jsonl` 加一�
 檢查點把使用者那句話與之前每一步先寫下去（`session-checkpoint-policy`，見下面 core 那幾顆），所以
 最多丟最後一步的尾巴。用腳本或監管程式停它時，送一次訊號、等它自己結束，不要連送。
 
+**強制結束時還在跑的 git 會被一起收掉**（[#1542](https://github.com/DemianLi/nexus-agent/issues/1542)）。
+三條強制結束的路（收尾中再按一次、收尾逾時、下面 #1501 的致命退出）都不等子行程；`workspace-changes` 起的 git 在行程
+結束那一刻被送 SIGKILL，不留孤兒。只收 git 本身：git 再起的行程（例如使用者自訂的 clean／smudge filter）收不到。`kill -9`、OOM 這類
+不經過 Node 的結束一樣什麼都收不到。MCP 的 stdio server **不在這裡強殺**：正常收尾時 MCP 插件會關掉
+連線（最多等 5 秒），強制結束時 server 的 stdin 會被關掉，所以**自己接的 stdio server 要在 stdin
+關掉時自己結束**，不然 serve 走了它還留著。
+
 收尾時某一條 thread、某一份日誌關不掉，**不會讓其餘的跟著留著**（[#1511](https://github.com/DemianLi/nexus-agent/issues/1511)）：
 每一份都會被收完，失敗收集成一則錯誤印出來，訊息點名是哪條 thread、哪一步、底下的原因鏈。
 寫租約是在日誌關檔時放的，所以這一條也是「下次續接同一份會話不會撞上 `SessionAlreadyOwnedError`」的前提。
