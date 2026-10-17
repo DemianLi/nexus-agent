@@ -422,9 +422,11 @@ describe('read：精確讀一條被引用的會話（準備那一半用）', () 
   it('壞的日誌不撿回：拋 SessionCorruptionError（撿回來的殘缺版本不能當成那條會話的樣子）', async () => {
     const directory = await put(CWD, 'torn', { events: [said('好', 2_000), said('二', 3_000)] });
     const lines = (await readFile(join(directory, 'torn.jsonl'), 'utf8')).split('\n');
+    // 壞行之後要有收尾才是壞檔；沒有收尾的壞行是當機的尾巴，預設讀取會丟掉它（#1508）。
+    const closer = JSON.stringify({ type: 'turn/end', seq: 99, time: 1, data: {} });
     await writeFile(
       join(directory, 'torn.jsonl'),
-      [lines[0], '{壞掉', ...lines.slice(1)].join('\n'),
+      `${[lines[0], '{壞掉', ...lines.slice(1)].join('\n')}${closer}\n`,
     );
     await expect(service().read('torn')).rejects.toMatchObject({ name: 'SessionCorruptionError' });
   });
