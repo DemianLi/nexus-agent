@@ -18,11 +18,7 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { TOOL_ERROR_PREFIX } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
-import {
-  createGoalPlugin,
-  GOAL_CREATE_TOOL_NAME,
-  GOAL_TOOL_AUTHORITY_MESSAGE,
-} from '@nexus/plugin-goal';
+import { GOAL_CREATE_TOOL_NAME, GOAL_TOOL_AUTHORITY_MESSAGE } from '@nexus/plugin-goal';
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
 
@@ -31,6 +27,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
+import { createGoalPlugin } from './goal.fixture.js';
 
 /** 一顆要人核准的工具，用來把一輪停在核准點。 */
 function noteTool() {

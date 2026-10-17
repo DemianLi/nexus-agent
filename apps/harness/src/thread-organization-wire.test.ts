@@ -17,7 +17,6 @@ import { join } from 'node:path';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry, SessionLog, SessionRegistry } from '@nexus/core';
-import { createGoalPlugin, GOALS_SERVICE } from '@nexus/plugin-goal';
 import { createWireClient, SUBAGENT_CLOSED } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { z } from 'zod';
@@ -33,6 +32,8 @@ import { THREAD_ORGANIZATION_FILE, ThreadOrganization } from './thread-organizat
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
+import { GOALS_SERVICE } from '@nexus/goal';
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();
@@ -338,7 +339,7 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
       backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
       backgroundSubagents: {},
     });
-    const goals = options.withGoal === true ? built.services.use(GOALS_SERVICE) : undefined;
+    const goals = options.withGoal === true ? goalCoreOf(built.services.use(GOALS_SERVICE)) : undefined;
     const threadOrganization = await ThreadOrganization.open(join(dir, 'home'));
     let sessions: SessionRegistry | undefined;
     let attachment: ReturnType<ReturnType<typeof composeAttachSessions>> | undefined;

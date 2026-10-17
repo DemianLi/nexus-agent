@@ -84,6 +84,7 @@
 
 import type { Context } from '@nexus/cordis';
 import { commandsToken } from '@nexus/commands';
+import type { CommandDefinition } from '@nexus/commands';
 import { DEFAULT_MAX_GOAL_ROUNDS, goalsToken } from '@nexus/goal';
 import type { GoalServices } from '@nexus/goal';
 import { ContractService, defineManifest, injectOf, need, service } from '@nexus/sdk';
@@ -304,6 +305,48 @@ class GoalServicesProvider extends ContractService<GoalServices> implements Goal
   }
 }
 
+/** {@link mountGoal} 要宿主給的東西：登記工具、登記命令，與「這次呼叫屬於哪份日誌」。 */
+export interface GoalMountHost {
+  /** 登記一顆工具；三顆一律帶 `{ rootOnly: true, outputSchema }`。 */
+  registerTool(
+    tool: ReturnType<typeof createGoalTools>[number],
+    options: { readonly rootOnly: true; readonly outputSchema: typeof GOAL_TOOL_OUTPUT_SCHEMA },
+  ): void;
+  /** 登記 `/goal`。 */
+  registerCommand(definition: CommandDefinition): void;
+  /** 這次工具呼叫屬於哪一份日誌；呼叫當下才問，整份呼叫設定原樣傳。 */
+  forCall(config: unknown): GoalToolLookup;
+}
+
+/**
+ * 把三顆工具與 `/goal` 掛上去。**樹上那一列（{@link createGoalApply}）與相容層的測試外殼（`apps/harness/src/goal.fixture.ts`）共用這一份**：
+ * 兩邊唯一不同的是「這次呼叫的會話怎麼來」（`host.forCall`），所以工具本體、命令 handler 與 lazy 核心只有一個出處。
+ *
+ * @param host - 登記處與會話查找。
+ * @param core - {@link createGoalCore} 的結果。
+ * @param config - 驗過的設定。
+ */
+export function mountGoal(host: GoalMountHost, core: GoalCore, config: GoalConfig): void {
+  // **三顆工具一律 `rootOnly`。** `fold.ts` 會把每個 subagent 那一份裡的同名項換成拒絕樁，而**那正是 dsh 對 `tool-goal` 的政策本身**
+  // （`authority.ts` 的 `ctx.agents.roots().includes(execution.agent)`），不是我們的收窄。目標是人交代的，subagent 沒有人可以交代。
+  for (const goalTool of createGoalTools(
+    { forCall: (callConfig) => host.forCall(callConfig), serviceFor: (log) => core.serviceFor(log) },
+    config,
+  )) {
+    // 輸出 schema 隨註冊帶，同 dsh `defineTool` 的 `output`（#252）。
+    host.registerTool(goalTool, { rootOnly: true, outputSchema: GOAL_TOOL_OUTPUT_SCHEMA });
+  }
+  host.registerCommand({
+    name: GOAL_COMMAND_NAME,
+    description: GOAL_COMMAND_DESCRIPTION,
+    // 收附件（#732）：隨目標走，見 `GOAL_COMMAND_HINT` 的說明。
+    input: { hint: GOAL_COMMAND_HINT, attachments: true },
+    // 命令要動哪一份日誌由執行器交過來（`CommandInvocation.sessionLog`，#688，契約上是 root）。
+    handler: ({ rawInput, sessionLog, attachments, steer }) =>
+      executeGoalCommand(core.serviceFor(sessionLog), rawInput, attachments, steer),
+  });
+}
+
 /**
  * 造一個帶測試縫的 `apply`。產品路徑上的 {@link apply} 就是 `createGoalApply()`。
  *
@@ -315,30 +358,19 @@ export function createGoalApply(seams: GoalSeams = {}): (ctx: Context, config: G
     const core = createGoalCore(config, seams);
     // 用 `new` 不用 `ctx.plugin(Class)`：不開子 fiber，歸屬就是這一列。建構子 `provide` 是 effect，列卸載時服務跟著撤。
     new GoalServicesProvider(ctx, core);
-    // 會話查找在這裡抓進閉包：列卸載之後經 `ctx` 取服務會拋，抓住的那份仍可呼叫。**呼叫當下才 `forCall`**。
+    // 三個服務在這裡抓進閉包：列卸載之後經 `ctx` 取服務會拋，抓住的那份仍可呼叫。**呼叫當下才 `forCall`**。
     const sessions = service(ctx, sessionLookupToken);
     const tools = service(ctx, toolsToken);
-    // **三顆工具一律 `rootOnly`。** `fold.ts` 會把每個 subagent 那一份裡的同名項換成拒絕樁，而**那正是 dsh 對 `tool-goal` 的政策本身**
-    // （`authority.ts` 的 `ctx.agents.roots().includes(execution.agent)`），不是我們的收窄。目標是人交代的，subagent 沒有人可以交代。
-    for (const goalTool of createGoalTools(
+    const commands = service(ctx, commandsToken);
+    mountGoal(
       {
-        forCall: (callConfig): GoalToolLookup => sessions.forCall(callConfig),
-        serviceFor: (log) => core.serviceFor(log),
+        registerTool: (goalTool, options) => void tools.register(goalTool, options),
+        registerCommand: (definition) => void commands.register(definition),
+        forCall: (callConfig) => sessions.forCall(callConfig),
       },
+      core,
       config,
-    )) {
-      // 輸出 schema 隨註冊帶，同 dsh `defineTool` 的 `output`（#252）。
-      tools.register(goalTool, { rootOnly: true, outputSchema: GOAL_TOOL_OUTPUT_SCHEMA });
-    }
-    service(ctx, commandsToken).register({
-      name: GOAL_COMMAND_NAME,
-      description: GOAL_COMMAND_DESCRIPTION,
-      // 收附件（#732）：隨目標走，見 `GOAL_COMMAND_HINT` 的說明。
-      input: { hint: GOAL_COMMAND_HINT, attachments: true },
-      // 命令要動哪一份日誌由執行器交過來（`CommandInvocation.sessionLog`，#688，契約上是 root）。
-      handler: ({ rawInput, sessionLog, attachments, steer }) =>
-        executeGoalCommand(core.serviceFor(sessionLog), rawInput, attachments, steer),
-    });
+    );
   };
 }
 

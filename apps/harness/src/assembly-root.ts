@@ -66,8 +66,8 @@ import {
   harnessInvariantLogPath,
   harnessSessionsDir,
 } from './harness-home.js';
-import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/plugin-goal';
-import type { GoalServices } from '@nexus/plugin-goal';
+import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/goal';
+import type { GoalServices } from '@nexus/goal';
 import { WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { createNexusAgent } from './agent-factory.js';
@@ -1007,7 +1007,7 @@ export async function createCliAgent(
     workspaceChanges: services.get(WORKSPACE_CHANGES_SERVICE),
     permissionPresets: services.get(PERMISSION_PRESETS_SERVICE),
     subagentKinds,
-    goals: services.get(GOALS_SERVICE),
+    goals: services.get<GoalServices>(GOALS_SERVICE),
     workspaceRoot,
     attachTitle,
     dropped,
@@ -1101,10 +1101,18 @@ export function goalDriverPort(
   return {
     // **查不到就是 `undefined`**：patch 把 goal 那一列關掉時這條路就沒有 goal 域，
     // 那時排程器安靜地什麼都不做。
-    goal: () => goals?.serviceFor(log())?.get(),
-    block: (ref, reason) => void goals?.serviceFor(log())?.block(ref, reason),
-    disarm: () => void goals?.serviceFor(log())?.disarm(),
-    pause: (ref) => void goals?.serviceFor(log())?.pause(ref),
+    //
+    // **這四格走會建立的 `serviceFor`**（lazy，#1486）：排程器問的時候這條 thread 已經有過一輪，建一次的成本與以前「接上日誌就建」同量級，
+    // 而且它們的語意這張卡不改。**逐出判斷的那一讀不在這裡**，見 {@link GoalDriverPort.armed}。
+    goal: () => goals?.serviceFor(log()).get(),
+    block: (ref, reason) => void goals?.serviceFor(log()).block(ref, reason),
+    disarm: () => void goals?.serviceFor(log()).disarm(),
+    pause: (ref) => void goals?.serviceFor(log()).pause(ref),
+    // **不建立的讀法**（閒置逐出用）：沒被問過的日誌上沒有服務，就沒有人掛過授權，等價於「沒有武裝的目標」。見 `GoalServices.existingFor`。
+    armed: () => {
+      const goal = goals?.existingFor(log())?.get();
+      return goal?.phase === 'active' && goal.activation === 'armed';
+    },
     flush,
     warn: (message) => warn(`[續行] ${message}`),
   };

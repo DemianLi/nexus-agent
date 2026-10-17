@@ -10,16 +10,8 @@ import { HumanMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
-import {
-  createGoalPlugin,
-  GOAL_TOOL_AUTHORITY_MESSAGE,
-  GOAL_WRAPUP_MARKER,
-  GOALS_SERVICE,
-  renderGoalRoundPrompt,
-  renderWrapupContext,
-} from '@nexus/plugin-goal';
+import { GOAL_TOOL_AUTHORITY_MESSAGE, GOAL_WRAPUP_MARKER, renderWrapupContext } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
-import type { GoalServices } from '@nexus/plugin-goal';
 import {
   CONCURRENCY_SAFE_METADATA_KEY,
   fromLoggedMessage,
@@ -37,6 +29,10 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedModelState, ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
+import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
+import { GOALS_SERVICE, renderGoalRoundPrompt } from '@nexus/goal';
+import type { GoalServices } from '@nexus/goal';
+import type { GoalCore } from '@nexus/plugin-goal';
 
 /** 一份 port，記下它被要求做過什麼。 */
 function portFor(
@@ -105,7 +101,7 @@ async function build(options: {
   readonly isArchived?: () => boolean;
 }): Promise<{
   pump: ThreadPump;
-  goals: GoalServices;
+  goals: GoalCore;
   port: ReturnType<typeof portFor>;
   state: ScriptedModelState;
   violations: string[];
@@ -128,7 +124,7 @@ async function build(options: {
   });
   // 同 `wire-handler.ts`：port 要日誌，而日誌由 pump 建，而 pump 的建構參數是 port。
   const late: { log?: SessionLog } = {};
-  const goals = services.use(GOALS_SERVICE);
+  const goals = goalCoreOf(services.use(GOALS_SERVICE));
   const port = portFor(goals, () => late.log as SessionLog, options.portOverrides ?? {});
   const pump = new ThreadPump(
     agent as unknown as PumpAgent,

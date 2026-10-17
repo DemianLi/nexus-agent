@@ -155,3 +155,10 @@ export interface GoalServices {
 
 /** `goals` 服務的 token。 */
 export const goalsToken = defineToken<GoalServices>(GOALS_SERVICE, GOALS_CONTRACT_VERSION);
+
+declare module '@nexus/core' {
+  interface NexusServices {
+    /** 目標服務。由 `@nexus/plugin-goal` 提供，宿主與測試用 `services.use(GOALS_SERVICE)` 讀。 */
+    goals: GoalServices;
+  }
+}

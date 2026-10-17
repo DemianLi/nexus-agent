@@ -1,8 +1,4 @@
-import {
-  GOAL_COMMAND_NAME,
-  GOAL_NONE_MESSAGE,
-  GOAL_NOT_ATTACHED_MESSAGE,
-} from '@nexus/plugin-goal';
+import { GOAL_COMMAND_NAME, GOAL_NONE_MESSAGE } from '@nexus/plugin-goal';
 import { PLAN_COMMAND_NAME, PLAN_ENTERED_MESSAGE } from '@nexus/plugin-plan-mode';
 
 import {
@@ -229,13 +225,9 @@ describe('serve 的命令面', () => {
     expect(again.text).toContain('目標：把測試修綠');
   });
 
-  it('**沒先訂事件流就打 `/goal` 也接得上**——接線在共用的那條懶載入路徑上', async () => {
-    // `/goal` 是第一個正確性**依賴 `attachSession` 跑過**的命令：`/plan` 的狀態活在
-    // `apply` 閉包裡，沒有接線這一步。而這整套測試（含 `slash-wire.test.ts`）一直都是
-    // 先 `openEvents` 再發派，所以「先發派」這個順序從來沒有人走過。
-    //
-    // 接線要是掛在事件流那個 endpoint 上，這裡收到的會是 `GOAL_NOT_ATTACHED_MESSAGE`
-    // ——一句為了排除這種情況而寫的錯誤，出現在一條合法的路徑上。
+  it('**沒先訂事件流就打 `/goal` 也接得上**——服務是 lazy 的，不依賴任何接線步驟', async () => {
+    // 遷上樹之前 `/goal` 的正確性依賴 `attachSession` 跑過（沒接就回「goal 沒接上」那句）。#1486 之後服務在第一次被問到時
+    // 才建，建的時候就讀 `log.events` 重播，所以「先發派」與「先 `openEvents`」是同一條路。
     running = await runServe({ argv: ['--port', '0'], log: () => undefined, env: {} });
     const started = running as RunningServe;
     const client = await serveClient(started);
@@ -243,7 +235,6 @@ describe('serve 的命令面', () => {
     const created = await client.slashRun('gamma', `/${GOAL_COMMAND_NAME} 把測試修綠`);
     if (created.kind !== 'success') throw new Error(JSON.stringify(created));
     expect(created.text).toContain('目標建好了');
-    expect(created.text).not.toContain(GOAL_NOT_ATTACHED_MESSAGE);
   });
 });
 

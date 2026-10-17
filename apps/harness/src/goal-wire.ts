@@ -11,8 +11,8 @@
  */
 
 import type { SessionEvent } from '@nexus/core';
-import { applyGoalEvent, emptyGoalFoldState } from '@nexus/plugin-goal';
-import type { GoalFoldState } from '@nexus/plugin-goal';
+import { applyGoalEvent, emptyGoalFoldState } from '@nexus/goal';
+import type { GoalFoldState } from '@nexus/goal';
 import type { GoalPayload, WireGoal } from '@nexus/wire';
 import { GOAL } from '@nexus/wire';
 

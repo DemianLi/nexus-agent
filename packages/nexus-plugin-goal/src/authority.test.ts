@@ -19,7 +19,7 @@ import type {
 } from '@nexus/core';
 
 import { completionAuthority, hasDirectHumanTurn, isMatchingGoalRound } from './authority.js';
-import type { GoalView } from './service.js';
+import type { GoalView } from '@nexus/goal';
 
 /**
  * **釘住 `turn/start` 的酬載聯集剛好是那四個成員。**
