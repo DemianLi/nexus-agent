@@ -113,6 +113,26 @@ export function parseCommand(line: string): ParsedCommand | undefined {
   return Object.freeze({ name, rawInput: line.slice(match[0].length) });
 }
 
+/**
+ * 這一行在一輪跑著、或停在核准點時能不能執行（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）。
+ *
+ * 依**這一次呼叫**判斷，不是依整個命令：命令用 `runWhileBusy` 宣告了這段輸入的完整字面值（頭尾空白不計）才放行。
+ * 不是命令、名字不認得、沒宣告、字面值對不上，一律 `false`——**fail-closed**，閘門的預設就是擋。
+ * 解析用的是執行器自己的 {@link parseCommand}，不另寫一份文法。
+ *
+ * @param commands - 命令從哪裡查（只讀 `find`）。
+ * @param line - 完整的候選命令行。
+ */
+export function runsWhileBusy(
+  commands: Pick<CommandRegistrationPoint, 'find'>,
+  line: string,
+): boolean {
+  const parsed = parseCommand(line);
+  if (parsed === undefined) return false;
+  const declared = commands.find(parsed.name)?.runWhileBusy;
+  return declared !== undefined && declared.includes(parsed.rawInput.trim());
+}
+
 /** 把任意的中止理由收斂成一個穩定的 Error。 */
 function abortError(signal: AbortSignal): Error {
   if (signal.reason instanceof Error) return signal.reason;
@@ -208,6 +228,15 @@ export interface CommandExecutorOptions {
   readonly acceptSteer?: (text: string) => void;
 }
 
+/** 單次執行的選項。 */
+export interface CommandExecuteOptions {
+  /**
+   * 這一次是在一輪跑著、或停在核准點時放行的（`runWhileBusy`，#1516）。**`steer` 在這種呼叫裡直接拋錯**：steer 的承諾是
+   * 「命令落定之後宿主替人開一輪」，在一輪中間這句話不成立（會把兩輪疊起來，或讓 `/plan` 那種跟飛行中的輪賽跑的狀態重新出現）。
+   */
+  readonly busy?: boolean;
+}
+
 /** 一個發派面。**一個 REPL 一個**，配對 id 的計數器活在它裡面。 */
 export interface CommandExecutor {
   /**
@@ -225,6 +254,7 @@ export interface CommandExecutor {
     line: string,
     signal: AbortSignal,
     submission?: CommandAttachmentSubmission,
+    options?: CommandExecuteOptions,
   ): Promise<CommandExecution | undefined>;
 }
 
@@ -284,7 +314,7 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
   }
 
   return {
-    async execute(line, signal, submission) {
+    async execute(line, signal, submission, executeOptions) {
       const parsed = parseCommand(line);
       if (parsed === undefined) return undefined;
       const definition = commands.find(parsed.name);
@@ -340,6 +370,9 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
       const steer = (text: string, steerAttachments?: readonly AttachmentRef[]): void => {
         // 命令結束後宿主已經不看這一格了：靜靜收下等於靜靜丟掉。
         if (!open) throw new Error(`命令 "/${parsed.name}" 已經結束，不能再 steer。`);
+        if (executeOptions?.busy === true) {
+          throw new Error(`命令 "/${parsed.name}" 這次是在一輪跑著時執行的，不能 steer。`);
+        }
         if (typeof text !== 'string' || text.trim().length === 0) {
           throw new TypeError(`命令 "/${parsed.name}" 的 steer 要是非空字串。`);
         }

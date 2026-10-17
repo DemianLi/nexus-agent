@@ -136,6 +136,9 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   `@nexus/core`，插件只 import 定義套件。**跟 `@nexus/plugin-commands` 的分工**：`@nexus/commands` 管**登記**（有哪些命令、誰登記的、
   重名怎麼擋），`@nexus/plugin-commands` 管**執行**（解析一行輸入、查命令、寫 `command/run`／`command/done`、呼叫 handler）；
   執行器只讀每條 thread 的 `registry.commands`，宿主把樹上登記的命令折進那一張 registry，所以執行那一半不動。
+  **契約 1.1.0（#1516，minor）**：`CommandDefinition` 多一格**選填**的 `runWhileBusy?: readonly string[]`——命令宣告「一輪跑著、
+  或停在核准點時也放行」的完整字面值（資料，不是函式也不是整個命令的布林；每一格非空、頭尾無空白，重複的收成一格）。宿主的閘門與
+  `slash.list` 的 descriptor 讀同一份資料。舊的 1.0.0 消費者不受影響（範圍 `^1.0.0` 仍相容）；`goal` 的 `need` 與 manifest 收緊到 `^1.1.0`。
   **已知的縫**：樹上的命令跟**相容層**的命令撞名，要到組 thread 時才掉（相容層的列直接寫進 `registry.commands`，不經提供者）；有測試
   釘住今天的行為。
 - **第五個接縫：插件提供、宿主消費的服務**（`@nexus/feedback`，#1456）。前面的接縫都是宿主提供登記處、插件消費；這一個**反過來**：
@@ -516,6 +519,7 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 | `GoalView`、折疊與提示詞渲染由 `@nexus/goal` 提供，事件與快照型別轉出自 `@nexus/core`（#1486，demian Q4 (a)） | 表達不出來，退到最接近的實作 | dsh 的型別與純函式住在 `goal` 定義套件（`packages/goal/goal/src/types.ts`，對讀版本 86a40220）。我們的 `goal/change` 事件與 `GoalSnapshot` 等型別在 `@nexus/core`，折疊與提示詞渲染搬進 `@nexus/goal`（宿主要用），`core` 放 `peerDependencies`。`hasDirectHumanTurn` 只有工具與命令用，留在插件 |
 | `AttachmentRef` 由 `@nexus/commands` 轉出、`SessionEventMap` 由 `@nexus/session` 轉出，`goal/change` 的事件擴充搬進 core 的 `session-log.ts`（#1486） | 表達不出來，退到最接近的實作 | 同 `PresentedFile`（#1469）那一列：`SessionEventMap` 在 `@nexus/core`，遷出的插件不能 `declare module` 補它（#1420 的 lint 擋 `@nexus/core` import）。轉出是單向的，`core` 放 `peerDependencies` |
 | `@nexus/plugin-goal` 的 lint 排除 `src/invariant.ts`（#1486，demian Q5，照 #1463 Q3 (a)） | 產品需求超出 dsh | 理由、量法與撤除條件同 `@nexus/plugin-todo` 那一列：`invariant.ts` 是相容層的配套入口（`goal-invariant` 那一列），寫的是 `NexusPlugin`；排除只蓋到這一個檔（`packages/nexus-plugin-goal/src/eslint-exclusion.test.ts`）。**撤除條件**：2026-11-03 配套入口重審 |
+| 命令的「忙的時候放行」是宣告出來的資料（`CommandDefinition.runWhileBusy`，字面值清單），dsh 沒有這一格（#1516，demian 經 PM 認可） | 產品需求超出 dsh | **dsh 怎麼做**：命令沒有「跑著能不能執行」的閘門，（`packages/interaction/commands/src` 裡沒有 busy／running 的判斷）。**我們的閘門是 #123 的前提**：斜線命令一定跑在兩輪之間，所以 `/plan`、`/goal <目標>` 這類會改狀態的命令跑著時被擋。dsh 的暫停鈕（`goal-round-driver/src/index.ts:302-312`）跑著時當場中止，這件事我們需要放行**一個**呼叫（`/goal pause`），但不能放寬整個閘門。**為什麼是資料**：一個函式或整個命令的布林讓「哪些呼叫放行」散在 handler 裡、`slash.list` 讀不到；字面值清單讓閘門與 web 讀同一份。**撤除條件**：dsh 日後有同義的閘門，改讀那一份 |
 | 服務是查找時才建（lazy），`/goal` 的「一份都沒接」「接了不只一份」兩句拿掉（#1486，demian Q1 (a)、Q2 (a)） | 行為改變（這張卡唯一承認的一條） | 完整說明在 PR 內文的「行為改變」一節；這裡只記來龍去脈。遷移前每份會話裝一次參與者、registry 只能接一份 root 日誌，所以 `/goal` 要先問「接了幾份」；lazy 之後命令帶來的 `sessionLog` 就是它要動的那一份，兩句失去生產者。工具層的「不是 root」那句保留（逐字不變）。同一個 registry 想接幾份日誌都行 |
 
 ## 接進清單（#1416 PR 2）

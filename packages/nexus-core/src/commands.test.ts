@@ -120,3 +120,54 @@ describe('commands 註冊點', () => {
     expect(createRegistry().commands.find('nope')).toBeUndefined();
   });
 });
+
+describe('runWhileBusy 宣告（#1516）', () => {
+  it('宣告進得了 descriptor 與正規化後的定義，而且是凍過的資料', () => {
+    const { definition: normalized, descriptor } = normalizeCommandDefinition({
+      ...definition('goal'),
+      runWhileBusy: ['pause'],
+    });
+    expect(normalized.runWhileBusy).toEqual(['pause']);
+    expect(descriptor.runWhileBusy).toEqual(['pause']);
+    expect(Object.isFrozen(descriptor.runWhileBusy)).toBe(true);
+    expect(Object.isFrozen(normalized.runWhileBusy)).toBe(true);
+  });
+
+  it('沒宣告就整個不放這一格——descriptor 上看不到 undefined 的 key', () => {
+    const { descriptor, definition: normalized } = normalizeCommandDefinition(definition('plan'));
+    expect('runWhileBusy' in descriptor).toBe(false);
+    expect('runWhileBusy' in normalized).toBe(false);
+  });
+
+  it('重複的字面值收成一格', () => {
+    expect(
+      normalizeCommandDefinition({ ...definition('goal'), runWhileBusy: ['pause', 'pause'] })
+        .descriptor.runWhileBusy,
+    ).toEqual(['pause']);
+  });
+
+  it.each([
+    ['空陣列', []],
+    ['不是陣列', 'pause'],
+    ['含空字串', ['']],
+    ['含空白字串', ['  ']],
+    ['頭尾帶空白（放行名單是逐字完整字面值，頭尾空白由閘門自己 trim，不進宣告）', [' pause']],
+    ['含非字串', [1]],
+  ])('%s 進不了表', (_label, runWhileBusy) => {
+    expect(() =>
+      normalizeCommandDefinition({
+        ...definition('goal'),
+        runWhileBusy,
+      } as unknown as CommandDefinition),
+    ).toThrow(/runWhileBusy/);
+  });
+
+  it('註冊點的 list 與 find 都帶得出宣告', () => {
+    const registry = createRegistry();
+    const leave = registry.enter(first);
+    registry.commands.register({ ...definition('goal'), runWhileBusy: ['pause'] });
+    leave();
+    expect(registry.commands.list()[0]?.runWhileBusy).toEqual(['pause']);
+    expect(registry.commands.find('goal')?.runWhileBusy).toEqual(['pause']);
+  });
+});

@@ -68,6 +68,8 @@
  * 基座的 frame。
  */
 
+import { AsyncLocalStorage } from 'node:async_hooks';
+
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import {
@@ -870,6 +872,22 @@ const DELEGATION_TOOLS: readonly string[] = DELEGATION_TOOL_NAMES;
  * 經過的是這條線（見 `@nexus/core` 的 `turn-cancel.ts`「兩處偏離」）。這裡收到的正好是瀏覽器畫出
  * 來的那些字。
  */
+/**
+ * 「這一刻的 async 鏈在哪一輪裡」（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）。值是那一輪的 {@link CurrentRun}。
+ *
+ * 對應 dsh 的 `ctx.agents.currentInitiator()`（`packages/core/agent-loop/src/agent.ts` 的
+ * `loopCtx.agents.withInitiator(this, () => this.kick())`）：`goal-round-driver` 看到 `goal/changed` 的 `pause` 時，只有
+ * `currentInitiator() !== agent`——也就是這顆變更不是從 agent 自己這一輪的呼叫鏈裡寫的——才會中止那一輪
+ * （`goal-round-driver/src/index.ts:305-311`）。模型在輪內用 `update_goal` 暫停，工具跑在這一輪的 async 鏈上，寫日誌時
+ * 訂閱者同步地被叫到，`getStore()` 就是這一輪；人從 wire 或斜線命令下的暫停跑在 HTTP 請求自己的鏈上，沒有這個 store。
+ *
+ * **比的是這一輪的身分，不是「有沒有 store」**：這個 store 是模組層級的，所有 thread 共用同一個 `AsyncLocalStorage`，而且 store 會跟著
+ * 輪內排出去的計時器與回呼流到它們觸發的那一刻。比身分（`getStore() === this.#current`）就同時擋掉兩種誤判：別條 thread 的輪內鏈
+ * 寫進這條 thread 的暫停（身分是另一條 pump 的 `CurrentRun`），和這一輪早就收了、它排的計時器晚到、碰巧撞上下一輪才觸發的暫停
+ * （身分是舊的那一輪）。
+ */
+const runScope = new AsyncLocalStorage<CurrentRun>();
+
 interface CurrentRun {
   readonly controller: AbortController;
   /** root 那則回覆到目前為止的文字。`message-finish` 之後清空——講完的那則已經在 checkpoint 裡了。 */
@@ -1310,6 +1328,8 @@ export class ThreadPump {
    * 刪的當下若還有別的輪在跑，目標在那幾輪期間仍然 active——現在就暫停會讓那幾輪中途被 `goal/change` 攪動。
    */
   #cancelledGoalRounds: Extract<QueuedInputSource, { kind: 'goal' }>[] = [];
+  /** pump 自己正在替「被刪掉的續行預約」暫停目標（同步一段）；{@link ThreadPump.#stopRunForHostPause} 看到它就不中止。 */
+  #pausingInternally = false;
 
   /**
    * @param agent - 這條 thread 的 agent。
@@ -2263,12 +2283,51 @@ export class ThreadPump {
       return;
     }
     try {
+      // pump 自己為了「刪不掉的預約」下的暫停，不是人在外面按的暫停：不中止任何東西（#1516，維持 #638 的行為）。
+      //
+      // **這道排除今天走不到，沒有測試釘住（突變：拿掉它，全套仍綠——已知）。** 它要有作用，得在清 `#cancelledGoalRounds` 的這一刻
+      // `agentRunning` 為真而 `running` 為假（核准掛著），且有一份預約剛被刪。但預約只在 pump 閒著時排、下一輪開始就被領走；
+      // 實測（模型建好目標後停在核准點）停在核准點時 inbox 是空的，排程器不在核准點排預約。所以這裡的暫停碰到 `agentRunning`
+      // 為真的機會是零。留著是保險：**以後誰改了預約的排程時機（例如允許在核准點排預約），就要在這裡補一條測試**——
+      // 人打的那一輪停在核准點、預約被刪，核准不該被收回。
+      this.#pausingInternally = true;
       driver.pause({ id: goal.id, revision: goal.revision });
     } catch (error: unknown) {
       driver.warn(
         `刪掉續行預約之後暫停目標失敗：${error instanceof Error ? error.message : String(error)}`,
       );
+    } finally {
+      this.#pausingInternally = false;
     }
+  }
+
+  /**
+   * 目標被暫停了：**人下的暫停會當場中止這一輪**（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)），模型在自己這一輪裡
+   * 用 `update_goal` 下的暫停照常收完。照 dsh `goal-round-driver` 對 `goal/changed` 的反應
+   * （`src/index.ts:305-311`，條件是 `operation === 'pause'`、agent 在跑、`currentInitiator() !== agent`，動作是
+   * `agent.cancel({ kind: 'user' }, { keepInbox: true })`）。**不分這一輪是續行輪還是人打的那一輪**，dsh 的條件裡沒有分。
+   *
+   * - **誰下的**：{@link runScope}。這顆事件是在哪條 async 鏈上寫的，訂閱者同步被叫到，所以 `getStore()` 讀得到寫它的人。
+   * - **「在跑」**：{@link ThreadPump.agentRunning}——一輪跑著、排著還沒開跑，**或停在核准點**都算。dsh 的 agent 停在核准點時
+   *   `status` 是 `running`（核准發生在一輪的工具執行當中，`agent-loop/src/agent.ts:140-152`），所以人在那時暫停也會 cancel；
+   *   對應到我們就是 {@link ThreadPump.cancel} 的「收回」那一支。
+   * - **中止的方式**：走既有的 {@link ThreadPump.cancel}，也就是停止鈕那條路，**不是另一套**。dsh 的 `keepInbox: true` 逐項對過，
+   *   我們的停止鈕早就是那個形狀（#637 的 Q2）：排在後面的人類輸入保留但停住、等下一次送出才照 FIFO 跑；排著的續行預約在那一輪收成
+   *   中止時整件拿掉（`#parkIfStopped`）。
+   * - **為什麼延後一拍才動手**：這裡跑在日誌的發佈期間（`#noteLogEvent` 的說明），中止會同步觸發訊號的監聽者，其中可能寫日誌——發佈期間不能
+   *   `append`。延到微任務，中止前再確認一次還在跑（這一拍之間那一輪若已經收了就不必動）。
+   */
+  #stopRunForHostPause(): void {
+    // **不看有沒有續行排程器**：`--no-goal-driver` 的組裝沒有自動續行，但人打的那一輪照樣會被「暫停」叫停。
+    if (this.#closed || this.#pausingInternally) return;
+    const store = runScope.getStore();
+    // 模型自己在這一輪裡下的：身分是這條 pump 現在的這一輪。
+    if (store !== undefined && store === this.#current) return;
+    if (!this.agentRunning) return;
+    queueMicrotask(() => {
+      if (this.#closed || !this.agentRunning) return;
+      this.cancel();
+    });
   }
 
   /**
@@ -2742,35 +2801,40 @@ export class ThreadPump {
       // **取串流這一步也在 try 裡面。** 它自己就會拋（模型建不起來、憑證不對），
       // 而擺在外面的話那種失敗會留下一顆沒有結尾的 `turn/start` ——
       // 日誌上看起來像跑到一半消失，跟真的跑到一半消失分不出來。
-      const run = await this.#agent.streamEvents(payload as never, {
-        version: 'v3',
-        durability: RUN_DURABILITY,
-        configurable: {
-          thread_id: this.#threadId,
-          // **放在 `configurable`，不是 LangGraph 的 `signal`**：交給 LangGraph 會丟下正在跑的
-          // 工具（實測），見 `@nexus/core` 的 `turn-cancel.ts`。
-          [TURN_CANCEL_CONFIG_KEY]: current.controller.signal,
-          [STEP_INBOX_CONFIG_KEY]: stepInbox,
-          // 封存的會話不跑模型步驟（#633）：每一步送出請求之前問一次，擋下的那一輪以 `blocked` 收，見下面的 catch。
-          ...(this.#isArchived !== undefined && {
-            [ARCHIVE_GATE_CONFIG_KEY]: () => {
-              const archived = this.#isArchived!();
-              if (archived) current.blocked = true;
-              return archived;
-            },
-          }),
-        },
-      });
+      const run = await runScope.run(current, () =>
+        this.#agent.streamEvents(payload as never, {
+          version: 'v3',
+          durability: RUN_DURABILITY,
+          configurable: {
+            thread_id: this.#threadId,
+            // **放在 `configurable`，不是 LangGraph 的 `signal`**：交給 LangGraph 會丟下正在跑的
+            // 工具（實測），見 `@nexus/core` 的 `turn-cancel.ts`。
+            [TURN_CANCEL_CONFIG_KEY]: current.controller.signal,
+            [STEP_INBOX_CONFIG_KEY]: stepInbox,
+            // 封存的會話不跑模型步驟（#633）：每一步送出請求之前問一次，擋下的那一輪以 `blocked` 收，見下面的 catch。
+            ...(this.#isArchived !== undefined && {
+              [ARCHIVE_GATE_CONFIG_KEY]: () => {
+                const archived = this.#isArchived!();
+                if (archived) current.blocked = true;
+                return archived;
+              },
+            }),
+          },
+        }),
+      );
       // **在第一顆封包之前**：投影裡的 promise 一建立就可能被 reject，晚掛就漏（#346）。
       markProjectionsHandled(run);
-      for await (const raw of run) {
-        this.#applyStreamRetrySignal(current, raw);
-        trackRootReply(current, raw);
-        trackUnsettledReply(current, raw);
-        for (const event of this.#translate(raw)) {
-          this.#broadcast(event);
+      // 圖在串流被抽的時候推進，工具在這條 async 鏈上執行：包進 `runScope`，模型在輪內的 `update_goal` 才認得出自己是這一輪。
+      await runScope.run(current, async () => {
+        for await (const raw of run) {
+          this.#applyStreamRetrySignal(current, raw);
+          trackRootReply(current, raw);
+          trackUnsettledReply(current, raw);
+          for (const event of this.#translate(raw)) {
+            this.#broadcast(event);
+          }
         }
-      }
+      });
       // 串流抽完就關窗（#710）：圖收尾時通常已經關了（`finish`），這裡擋的是沒經過那顆 middleware 就收掉的圖——停在
       // 核准點的不算，那時之後的插話由 `#pending` 那一條收。
       current.closed = true;
@@ -3319,7 +3383,10 @@ export class ThreadPump {
       const goal = this.#goal.apply(event);
       if (goal !== undefined) this.#presentCustom(goal);
       this.#reportGoalFailure();
-      if (event.type === 'goal/change') this.#scheduleGoalDrive();
+      if (event.type === 'goal/change') {
+        this.#scheduleGoalDrive();
+        if (event.data.operation === 'pause') this.#stopRunForHostPause();
+      }
       // 插件投影：一個泛用呼叫，不是每種投影一個分支。變了的單元各送一顆 `projection` frame。
       for (const value of this.#projections?.push(event) ?? []) {
         // 輪外（命令、接上時的 baseline）當場送；輪中才合併。

@@ -125,6 +125,9 @@ export type GoalDriverIdleReason =
    * 那一輪」時直接 `disarm`（`packages/goal/goal-round-driver/src/index.ts:328-337`，`477b4f4`）。
    * 停在核准點時按停止的那一種（收回）也落在這裡：收回寫的是一輪 `resume` 帶 aborted 收尾。
    *
+   * **收尾之後又有人下了 `create` 或 `resume`，就不算**——那次收尾針對的是上一份授權，見 {@link reauthorizedSince}
+   * （[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)：暫停一定中止在跑的那一輪，「暫停 → 恢復」靠這一句才會自己續上）。
+   *
    * **偏離一格（Q8 拍板過）**：dsh 在被中止的是自己排的那一輪時，還會在下一個 idle 把目標暫停（改耐久相位）；
    * 我們只收回行程內的授權，相位與修訂號不動——Q8 寫的是「目標狀態不動」。
    *
@@ -186,12 +189,37 @@ function turnClosed(events: readonly SessionEvent[]): GoalDriverIdleReason | und
       // **被中止的那一輪也以 `turn/end` 收尾**（#276）。少了這一句，人按了停止之後續行照樣排
       // 下一輪，而沒有任何測試會紅——跟 `turn-failed` 那格同一個理由。
       const kind = event.data.reason?.kind;
-      if (kind === 'aborted') return 'turn-aborted';
-      return kind === 'max-tokens' ? 'turn-max-tokens' : undefined;
+      if (kind === 'aborted') return reauthorizedSince(events, at) ? undefined : 'turn-aborted';
+      return kind === 'max-tokens' && !reauthorizedSince(events, at)
+        ? 'turn-max-tokens'
+        : undefined;
     }
-    if (event?.type === 'turn/failed') return 'turn-failed';
+    if (event?.type === 'turn/failed') {
+      return reauthorizedSince(events, at) ? undefined : 'turn-failed';
+    }
   }
   return 'turn-open';
+}
+
+/**
+ * 這一輪收尾**之後**，有沒有一次有人下的 `create` 或 `resume`（唯二會武裝續行的變更，見 `service.ts`）。
+ *
+ * 有的話，輪次的收尾（中止、拋錯、撞輸出上限）針對的是上一份授權，不該再收回這一份。
+ * 這是 dsh 那一格的日誌版：dsh 在 `turn/end` 抵達的**當下**收回（`goal-round-driver/src/index.ts:353-357`），
+ * 事後的 `resume` 不受影響；我們的決定是無狀態的、讀日誌算的，所以要用日誌上的先後把「收尾在授權之前」
+ * 與「收尾在授權之後」分開。少了這一句，「暫停 → 恢復」與「停止 → 恢復」之後 driver 一決定就把剛武裝的授權收回，
+ * 續行輪不會自己開跑（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516) 起暫停一定中止在跑的那一輪，
+ * 這條變成主流程）。
+ *
+ * 收尾在授權**之前**才收回的另一半不變：`create` 之後同一份授權跑的那一輪被中止，收尾在 `create` 之後，照樣收回。
+ */
+function reauthorizedSince(events: readonly SessionEvent[], at: number): boolean {
+  for (let next = at + 1; next < events.length; next += 1) {
+    const event = events[next];
+    if (event?.type !== 'goal/change') continue;
+    if (event.data.operation === 'create' || event.data.operation === 'resume') return true;
+  }
+  return false;
 }
 
 /** 看到這幾種原因就把續行授權收回來，不只是這一次不排。值是收回失敗時警告裡的說法。 */

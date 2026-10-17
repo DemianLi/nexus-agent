@@ -60,6 +60,7 @@ import type {
   SessionReferenceListResponse,
   SessionReferenceListResult,
 } from './session-references.js';
+import type { GoalPauseCommand, GoalPauseResult } from './goal.js';
 import { decodeSseData, decodeSseStream } from './sse.js';
 import type {
   Command,
@@ -319,6 +320,14 @@ export interface WireClient {
     threadId: string,
     params: FeedbackPutCommand['params'],
   ): Promise<FeedbackOutcome<FeedbackPutResult>>;
+  /**
+   * 暫停目標（`goal.pause`，[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)）。契約見 `goal.ts` 的 `GOAL_PAUSE_METHOD`。
+   * **一輪跑著時也收，而且當場中止那一輪**。ref 過期回 `{ ok: false, error: { code: 'goal-stale' } }`，不假裝成功。
+   */
+  goalPause(
+    threadId: string,
+    params: GoalPauseCommand['params'],
+  ): Promise<CommandOutcome<GoalPauseResult>>;
   /** 收回一則回覆的評分（`feedback.delete`）。 */
   feedbackDelete(
     threadId: string,
@@ -686,15 +695,25 @@ function readDescriptors(result: unknown): readonly SlashDescriptor[] {
     throw new Error('slash.list 的結果裡沒有 commands 陣列');
   }
   return commands.map((entry: unknown) => {
-    const descriptor = entry as { name?: unknown; description?: unknown; input?: unknown };
+    const descriptor = entry as {
+      name?: unknown;
+      description?: unknown;
+      input?: unknown;
+      runWhileBusy?: unknown;
+    };
     if (typeof descriptor?.name !== 'string' || typeof descriptor.description !== 'string') {
       throw new Error('slash.list 回了不認得的 descriptor');
     }
     const input = descriptor.input as { hint?: unknown; attachments?: unknown } | undefined;
     const hint = input?.hint;
+    // 忙的時候放行的字面值（#1516）：web 據此決定跑著時哪些命令還能點。只收字串，其餘整格不放（同 core 的 `normalizeCommandDefinition`）。
+    const busy = Array.isArray(descriptor.runWhileBusy)
+      ? descriptor.runWhileBusy.filter((item): item is string => typeof item === 'string')
+      : [];
     return Object.freeze({
       name: descriptor.name,
       description: descriptor.description,
+      ...(busy.length === 0 ? {} : { runWhileBusy: Object.freeze(busy) }),
       ...(typeof hint === 'string'
         ? {
             input: Object.freeze({
@@ -890,6 +909,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
       | SubagentSendCommand
       | SubagentInterruptCommand
       | FeedbackCommand
+      | GoalPauseCommand
       | ModelCommand
       | PermissionCommand
       | SubagentListCommand
@@ -924,6 +944,7 @@ export function createWireClient(options: WireClientOptions): WireClient {
     threadId: string,
     command:
       | FeedbackCommand
+      | GoalPauseCommand
       | ModelCommand
       | PermissionCommand
       | SubagentListCommand
@@ -1167,6 +1188,14 @@ export function createWireClient(options: WireClientOptions): WireClient {
         method: 'feedback.put',
         params,
       });
+    },
+
+    async goalPause(threadId, params) {
+      return sendOkCommand<GoalPauseResult>(
+        threadId,
+        { id: nextCommandId++, method: 'goal.pause', params },
+        '暫停目標',
+      );
     },
 
     async feedbackDelete(threadId, params) {

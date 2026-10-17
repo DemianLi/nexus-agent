@@ -117,7 +117,7 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
     expect(goal.manifest.provides).toEqual([{ token: 'goals', version: '1.0.0' }]);
     expect(goal.manifest.consumes).toEqual([
       { token: 'tools', range: '^1.1.0' },
-      { token: 'commands', range: '^1.0.0' },
+      { token: 'commands', range: '^1.1.0' },
       { token: 'sessionLookup', range: '^1.0.0' },
     ]);
     expect('default' in goal).toBe(false);
