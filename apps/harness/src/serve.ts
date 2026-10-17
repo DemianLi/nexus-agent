@@ -75,6 +75,8 @@ import {
   hmacHashOf,
   loadConfigHashKey,
 } from './session-header-metadata.js';
+import { installFailLoud } from './fail-loud.js';
+import type { FailLoudProcess } from './fail-loud.js';
 import { createProcessShutdown } from './process-shutdown.js';
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
 import { HARNESS_HOME_ENV, resolveHarnessHome } from './harness-home.js';
@@ -1209,16 +1211,42 @@ async function startServer(
   };
 }
 
-async function main(): Promise<void> {
-  try {
-    const running = await runServe({ argv: process.argv.slice(2) });
-    if (running === undefined) {
-      return;
-    }
-    // Ctrl-C 要走完 dispose：子行程與檔案控制代碼都掛在那裡。**第二次訊號當場結束**、
-    // 收尾有上限，照 dsh（`process-shutdown.ts`，#599）。所以用 `on` 不用 `once`：`once`
-    // 用掉之後第二次落回預設動作，是同一個結果但不是政策。
-    const shutdown = createProcessShutdown(async () => {
+/** {@link installServeProcessLifecycle} 需要的那一片 `process`：fail-loud 那幾個事件，加上兩個訊號與退出碼。 */
+export type ServeProcess = FailLoudProcess & {
+  on(event: 'SIGTERM' | 'SIGINT', handler: () => void): unknown;
+  exitCode: number | string | null | undefined;
+};
+
+/** {@link installServeProcessLifecycle} 交回的把手。 */
+export interface ServeProcessLifecycle {
+  /** `runServe` 起來之後交進來。之前的訊號與致命例外沒有東西可收，直接結束。 */
+  attach(running: RunningServe): void;
+  /** 解除 fail-loud 的兩個 handler（訊號的不解除，行程結束前都在）。 */
+  uninstall(): void;
+}
+
+/**
+ * 行程層的收尾：**訊號與致命例外共用同一份、記住自己的 dispose**（[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)，
+ * 照 dsh `apps/cli/src/profile-boot.ts:282-311`）。
+ *
+ * - 訊號（`SIGTERM` 回 0、`SIGINT` 回 130）走 {@link createProcessShutdown}：5 秒上限、收尾中再來一次就當場結束（#599）。
+ * - 未處理的 rejection／未捕捉的例外走 {@link installFailLoud}：印一行帶標籤的診斷，最多等 2 秒走**同一份** dispose，
+ *   然後以 1 結束。**不讓 serve 存活**：一條 thread 的半套狀態被其他人繼續用，比全部重連更糟。
+ * - 兩邊等同一顆 promise，所以收尾進行中來另一邊，`running.close()` 只跑一次；退出碼以**先到的**為準
+ *   （誰先開始收尾，誰的 `.then` 先掛在那顆 promise 上、先叫 `exit`；兩個 handler 的註冊順序不影響，同 dsh）。
+ *
+ * **在 `main()` 裡、`runServe` 之前裝，不在 `runServe` 裡裝**：`runServe` 被許多測試在 vitest 行程裡直接叫，它們自己掛
+ * `unhandledRejection` 計數，裝在裡面會搶走那些測試的判準、還會叫真的 `process.exit`。
+ *
+ * @param proc - 要註冊的行程；測試注入假的。
+ * @returns 把手：`runServe` 起來之後 `attach`。
+ */
+export function installServeProcessLifecycle(proc: ServeProcess = process): ServeProcessLifecycle {
+  let running: RunningServe | undefined;
+  let disposal: Promise<void> | undefined;
+  const dispose = (): Promise<void> =>
+    (disposal ??= (async () => {
+      if (running === undefined) return;
       try {
         await running.close();
       } catch (error) {
@@ -1226,14 +1254,44 @@ async function main(): Promise<void> {
         console.error(error instanceof Error ? error.message : String(error));
         throw error;
       }
-    });
-    // SIGTERM 是監管者的一般停止要求，回 0；SIGINT 是使用者中斷，回 130（同 dsh 的 `profile-boot.ts`）。
-    process.on('SIGTERM', () => {
-      shutdown.interrupt(0);
-    });
-    process.on('SIGINT', () => {
-      shutdown.interrupt(130);
-    });
+    })());
+  // Ctrl-C 要走完 dispose：子行程與檔案控制代碼都掛在那裡。**第二次訊號當場結束**、
+  // 收尾有上限，照 dsh（`process-shutdown.ts`，#599）。所以用 `on` 不用 `once`：`once`
+  // 用掉之後第二次落回預設動作，是同一個結果但不是政策。
+  const shutdown = createProcessShutdown(
+    dispose,
+    (code) => {
+      proc.exit(code);
+    },
+    (code) => {
+      proc.exitCode = code;
+    },
+  );
+  // SIGTERM 是監管者的一般停止要求，回 0；SIGINT 是使用者中斷，回 130（同 dsh 的 `profile-boot.ts`）。
+  proc.on('SIGTERM', () => {
+    shutdown.interrupt(0);
+  });
+  proc.on('SIGINT', () => {
+    shutdown.interrupt(130);
+  });
+  const uninstall = installFailLoud('nexus-agent serve', proc, dispose);
+  return {
+    attach(next) {
+      running = next;
+    },
+    uninstall,
+  };
+}
+
+async function main(): Promise<void> {
+  const lifecycle = installServeProcessLifecycle();
+  try {
+    const running = await runServe({ argv: process.argv.slice(2) });
+    if (running === undefined) {
+      lifecycle.uninstall();
+      return;
+    }
+    lifecycle.attach(running);
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
     process.exitCode = 1;
