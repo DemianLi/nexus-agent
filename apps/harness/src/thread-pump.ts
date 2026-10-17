@@ -1989,6 +1989,7 @@ export class ThreadPump {
    * - **有一輪在跑**：觸發它的中止訊號。正在跑的工具等它落定、還沒開始的不開始、模型請求中途
    *   切斷，這一步之後圖停下（`@nexus/core` 的 `turn-cancel.ts`）；這一輪收成 `turn/end` 帶 aborted。
    * - **停在核准點**：收回——排一次 {@link ThreadPump.#withdraw}（#265 的 Q7／Q15）。
+   * - **續行排程器正在飛**（沒有輪在跑，但預約馬上要排進去）：收回續行授權、這一次不排（#1518）。
    * - **閒著**：什麼都不做，同 dsh「閒著時中止不影響之後的事」。
    *
    * **排在後面的輸入保留但停住**（#637 的 Q2，翻過 #265 的 Q6）：照 dsh 的 `cancel({keepInbox: true})`，不接著跑，
@@ -1997,7 +1998,7 @@ export class ThreadPump {
    *
    * @returns 這一次落在哪一種。線上只回受理，這個給測試看。
    */
-  cancel(): 'run' | 'withdrawn' | 'idle' {
+  cancel(): 'run' | 'withdrawn' | 'drive' | 'idle' {
     const current = this.#current;
     if (current !== undefined) {
       current.controller.abort();
@@ -2015,6 +2016,26 @@ export class ThreadPump {
         // 失敗已經進了日誌（`turn/failed`），這個 promise 沒有別人在等。
       });
       return 'withdrawn';
+    }
+    if (this.#goalDrives > 0 && !this.#closed) {
+      // **續行排程器正在飛**（決定了、`flush()` 還沒回來，預約還沒排進佇列）：這一刻 `running` 是假的，沒有輪可以中止，
+      // 但排程器回來之後會把下一輪排進去——按下去等於沒按。收回續行授權（#265 的 Q8：目標的相位不動），排程器回來的第二次決定
+      // 讀到 `disarmed` 就不排。第二次決定已經讀完視圖、預約還沒排進去的那一拍，擋住它的是領走時的驗證
+      // （{@link ThreadPump.#goalReservationValid}：授權不是 armed 就丟掉，不跑、不暫停目標）。不寫日誌：沒有輪被中止，
+      // 後面的 `resume` 不會撞到 aborted 收尾。
+      //
+      // **dsh 沒有這一格**：`agent.cancel` 在 idle 時對 inbox 保留的呼叫什麼都不做
+      // （`agent-loop/src/agent.ts:175-181`），而 `goal-round-driver` 的 `drive` 在 `await ctx.sessions.flush` 之後只複查
+      // `readyAfterCheckpoint`（`:119-122`，不含停止），照樣 `agent.followup`——同一個洞。這是補上的，不是照做的。
+      const driver = this.#driver;
+      try {
+        driver?.disarm();
+      } catch (error: unknown) {
+        driver?.warn(
+          `停止之後停用續行失敗：${error instanceof Error ? error.message : String(error)}`,
+        );
+      }
+      return 'drive';
     }
     return 'idle';
   }
