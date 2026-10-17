@@ -11,9 +11,18 @@ const read = (path: string) => readFileSync(new URL(path, import.meta.url), 'utf
 const code = (source: string) => source.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
 describe('registry 檔的改動還在', () => {
-  test('input-group 的焦點外框明寫 outline-solid：自帶的 outline-none 會把樣式記成 none（#1279）', () => {
-    expect(code(read('./input-group.tsx'))).toContain(
-      'has-[[data-slot=input-group-control]:focus-visible]:outline-solid',
+  test('input-group 的焦點外框畫在群組上：寫在覆寫檔、layer 外（#1279，README 本地修改第 15 條）', () => {
+    // 本地修改所在的那一層：覆寫檔照抄 vendor 用的屬性選擇器，外框 2px 字色寫在 layer 外（offset 2px 在 base layer，`focus-outline.test.ts`）。
+    const overrides = read('../../styles/solid-glass.overrides.css');
+    expect(overrides).toContain(
+      '[data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible) {\n  outline: 2px solid var(--ring);\n}',
+    );
+    // vendor 原文仍然是那樣：群組只有 `outline-none` 加 ring、沒有外框。上游哪天自己畫了外框，這條紅，提醒把本地修改拿掉。
+    const vendor = code(read('../../vendor/solid-glass/components/ui/input-group.tsx'));
+    expect(vendor).toMatch(/data-slot="input-group"[\s\S]{0,400}\boutline-none\b/);
+    expect(vendor).toContain('has-[[data-slot=input-group-control]:focus-visible]:ring-3');
+    expect(vendor).not.toMatch(
+      /has-\[\[data-slot=input-group-control\]:focus-visible\]:outline-(?!none)/,
     );
   });
 
@@ -67,11 +76,9 @@ describe('registry 檔的改動還在', () => {
     expect(source).toContain("from '@/lib/utils'");
   });
 
-  test('按鈕與下拉選單沒有小字，xs 按鈕是 text-ui（#1281：可點的字不小於 13）', () => {
-    for (const path of ['./button.tsx', './dropdown-menu.tsx']) {
-      expect(code(read(path)), path).not.toMatch(/text-(?:tip|micro)\b/);
-    }
-    expect(code(read('./button.tsx'))).toMatch(/xs: "h-6 [^"]*\btext-ui\b/);
+  // 按鈕那一半（xs 按鈕是 text-ui）照 #1468 Q19 隨 button 換成 vendor 版拿掉（#1523）；dropdown-menu 那一半等 ③-2。
+  test('下拉選單沒有小字（#1281：可點的字不小於 13）', () => {
+    expect(code(read('./dropdown-menu.tsx'))).not.toMatch(/text-(?:tip|micro)\b/);
   });
 
   test('側欄的群組標題與 sm 選單鈕、cmdk 的群組標題是 text-ui（#1281：標題與可點的字不小於 13）', () => {

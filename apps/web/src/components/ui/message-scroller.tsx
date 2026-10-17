@@ -4,7 +4,8 @@
  * 不靠重跑 `shadcn add` 更新。
  * 改過的地方（前兩項照原型 tag `proto-375-design-language`）：
  * - 中文報讀字串（§8）；捲到底的按鈕只淡入＋縮放 .97，時長走 `--duration-*` token（§7）。
- * - 拿掉 `scroll-fade-b`：建置出的 CSS 裡沒有這個 utility（§9），寫著也沒作用。
+ * - 拿掉 registry 原文 viewport 底部的淡出工具類：當時建置出的 CSS 裡沒有它（§9），寫著也沒作用。
+ *   （#1523 起 shadcn 的 tailwind.css 有這組工具類，原始碼裡出現類名就會產出；這裡刻意不寫出類名。）
  * - item 拿掉 `[content-visibility:auto]` 與 `contain-intrinsic-size`：paint containment 會把卡片陰影與光暈切成直角（§9）；
  *   500 則的捲動量測寫在 #404 的 PR。
  * - viewport 自動捲動時的捲軸只換成透明（`scrollbar-color`），不再用 `scrollbar-none`：`scrollbar-width: none` 連 gutter 一起拿掉，

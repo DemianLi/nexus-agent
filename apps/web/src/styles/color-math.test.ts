@@ -129,6 +129,14 @@ describe('解析', () => {
       { inset: false, edge: true, color: undefined },
     ]);
   });
+
+  test('shadowLayers 標出什麼都不畫的層：四個長度全是 0（ring-0 留下的那層，#1523）', () => {
+    expect(
+      shadowLayers(
+        'oklch(0.16 0 0) 0px 0px 0px 0px, rgba(0, 0, 0, 0) 0px 0px 0px 0px, oklch(0 0 0 / 0.14) 0px 0px 0px 1px, inset 0 0 0 0 red',
+      ).map((l) => l.empty),
+    ).toEqual([true, true, false, true]);
+  });
 });
 
 describe('backdrops：元素實際的底色', () => {

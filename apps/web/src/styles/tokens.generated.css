@@ -2,7 +2,7 @@
 
 :root {
   --brand: oklch(0.489 0.102 165);
-  --destructive: oklch(0.492 0.2 27.325);
+  --destructive: oklch(0.45 0.183 27.325);
   --success: oklch(0.454 0.119 152);
   --status-done: oklch(0.467 0.125 248);
   --status-interrupted: oklch(0.476 0.113 58);
@@ -25,7 +25,7 @@
 
 .dark {
   --brand: oklch(0.78 0.13 166);
-  --destructive: oklch(0.704 0.191 22.216);
+  --destructive: oklch(0.765 0.139 22.216);
   --success: oklch(0.74 0.16 152);
   --status-done: oklch(0.68 0.15 250);
   --status-interrupted: oklch(0.77 0.15 62);

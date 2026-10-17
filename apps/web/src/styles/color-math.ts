@@ -115,6 +115,8 @@ export interface ShadowLayer {
   inset: boolean;
   /** offset 與 blur 都是 0、只有 spread：畫的是一圈邊緣（邊緣畫在陰影裡，或 Tailwind 的 ring），不是投影。 */
   edge: boolean;
+  /** offset、blur、spread 全是 0：什麼都不畫，顏色是什麼都一樣（Tailwind 的 `ring-0` 留下的就是這種層，#1523）。 */
+  empty: boolean;
   /** 這一層寫死的顏色；整層只有 `var()` 時是 undefined。 */
   color: string | undefined;
 }
@@ -139,7 +141,8 @@ export function shadowLayers(value: string): ShadowLayer[] {
       .filter((t) => t !== '')
       .map((t) => Number.parseFloat(t));
     const [x = 0, y = 0, blur = 0, spread = 0] = lengths;
-    return { text, inset, edge: x === 0 && y === 0 && blur === 0 && spread !== 0, color };
+    const flat = x === 0 && y === 0 && blur === 0;
+    return { text, inset, edge: flat && spread !== 0, empty: flat && spread === 0, color };
   });
 }
 

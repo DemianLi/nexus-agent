@@ -31,11 +31,10 @@ const REDUCED = { conditions: [SG_REDUCED_TRANSPARENCY.condition] };
 
 /**
  * 解出來的值不在 sRGB 內、仍允許出現在產物裡的格子：只認 token 加值。
- * - 暗色 `--destructive`：SG 原值，已達標（對頁面 6.71、對卡片 5.81），照「只動不達標的」不碰；在 P3 內，量對比時按 sRGB 裁切（PM，#1512）。
+ * 目前沒有。原本有暗色 `--destructive` 的 SG 原值（P3 內、已達標所以不碰，PM，#1512）；#1523 起它還要過「自己的淡色底」
+ * （SG 的 destructive 按鈕與 badge 是 `bg-destructive/20` 配 `text-destructive`），SG 原值疊在卡片上的那幾疊不到 4.5，改由產生器重解，落在 sRGB 內。
  */
-const OUT_OF_SRGB: { theme: Theme; name: string; value: string }[] = [
-  { theme: 'dark', name: 'destructive', value: 'oklch(0.704 0.191 22.216)' },
-];
+const OUT_OF_SRGB: { theme: Theme; name: string; value: string }[] = [];
 
 /** 產物裡某個選擇器底下（沒有條件）的自訂屬性。 */
 function declared(selector: string): Map<string, string> {

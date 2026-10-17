@@ -169,12 +169,12 @@
 - 不用 APCA（2023-07 已從 WCAG 3 草稿移除）。人工抽驗用 Vispero Colour Contrast Analyser，CI 用 colorjs.io 重算（§11）。
 
 **形狀**
-- 圓角照 SG 的階梯，不重綁（Q8）：`--radius` 14px，`sm`／`md`／`lg`／`xl`／`2xl`／`3xl`／`4xl` 是它的 0.6／0.8／1／1.4／1.8／2.2／2.6 倍；控制項寫 `rounded-lg` 時改用小一階的 `--radius-control`（11.2px，`solid-glass.css:544-557`）。按鈕 `rounded-full`（registry 原文）。不用 superellipse。
+- 圓角照 SG 的階梯，不重綁（Q8）：`--radius` 14px，`sm`／`md`／`lg`／`xl`／`2xl`／`3xl`／`4xl` 是它的 0.6／0.8／1／1.4／1.8／2.2／2.6 倍；控制項寫 `rounded-lg` 時改用小一階的 `--radius-control`（11.2px，`solid-glass.css:544-557`）。按鈕的圓角照 vendor 原文（`vendor/solid-glass/components/ui/button.tsx`，#1523 起不再是 `rounded-full`）。不用 superellipse。
 - 列的圓角 `--radius-row` 是 SG 的 `3xl` 減 4px（`index.css`），nexus 新增、不是改 SG。
 - **邊緣照 SG 的畫法**（Q8 外觀照 SG；PM 2026-10-17 定照 SG 實際怎麼畫來寫，#1512，照 `solid-glass.css` 實際的寫法）。亮暗是同一組結構，只換 token 值（`:258-265`），所以暗色也是外環＋投影，不再是 inset 疊層：
   - **面**（`.bg-card`、`.glass-panel`、`.bg-popover`）：**邊畫在陰影裡**，`border` 歸零（`:378-401`）。由內到外是頂上一條光 `inset 0 1px 0 --glass-rim`、`inset 0 0 0 1px --glass-inner`、外側細線 `0 0 0 1px --glass-edge`（浮層是 `--popover-edge`）、貼地 `0 1px 2px --glass-contact`、投影 `0 12px 32px -14px --glass-shade`；浮層把投影換成 `0 24px 60px -18px --glass-shade` 加 `0 6px 16px -6px --glass-lift`。側欄只有 inset 線（`:405-409`）。
   - **控制項**（主按鈕 `:436-462`、outline／secondary 按鈕 `:640-664`、欄位 `:917-933`、沒有底色的裸框 `:565-574`）：**細線就是元素自己的 `border`**（`--border`、`--glass-edge`、`--field-edge`），同一個元素再疊 inset 光與貼地投影。所以「同一元素不同時用 `border` 與陰影」只對面成立，對控制項不成立。
-  - `border-shadow.test.ts` 量的是元件原始碼的 className，今天仍是綠的，這一步不動；第 ③ 步換進 SG 的 registry 元件時一起處理。
+  - `border-shadow.test.ts` 量的是元件原始碼的 className：vendor 的 SG 元件放行（外觀照 SG，名單在 `src/test/vendor-upstream.ts`，#1523），產品原始碼（含 `components/ui/` 的 nexus 層）照樣檢查。
   - **例外：貼在輸入框上方的卡片是平的、不浮起**（`Surface tone="docked"`：待辦、送出佇列、目標列）。它們不是浮在對話裡，是接在輸入框上的一排，所以只畫一圈 1px 細線（`--glass-edge`）、不帶投影；底色與 blur 照 SG。**這條是覆寫 SG 的本地修改**：SG 的 `.bg-card` 在 layer 外把 `border` 歸零、畫上浮起的整組陰影，`Surface` 給 docked 掛 `data-surface="docked"`，`solid-glass.overrides.css` 用它補回平線（vendor README「本地修改」第 13 條；Q8 機制類保留，#1512）。出處 `apps/web/src/components/surface.tsx` 檔頭；`design-system.test.ts` 只准 `Surface` 本身寫這組配方，`solid-glass-overrides.test.ts` 與 `guard/` 釘住它是平的。
 - 邊框光的靜態補償（亮色線 2px、光暈 brand 60% 28px、呼吸下限 .55；暗色 1.5px、30% 24px、.3）沿用原型值。
 
@@ -182,7 +182,7 @@
 - 介面 **Geist**；等寬 **Geist Mono**，只用在程式碼、工具輸入輸出、終端機；中文兩者都退 **Noto Sans TC**（所以介面上的中文實際是 Noto Sans TC），再退系統的 PingFang TC、Microsoft JhengHei；SG 原本的三個簡體中文字型拿掉（Q6）。等寬在 Noto Sans TC 前面先接**系統等寬**：Geist Mono → Consolas（Windows）→ Menlo（macOS）→ Noto Sans TC → 系統後備，只列名字、不打包。系統等寬接住 Geist Mono 兩個子集都沒有的字（← → 之類）；它們退到中文字型會是全形寬，程式碼的欄位就對不齊（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。等寬堆疊尾端保留三個 emoji 字型（#979）。
 - 三套都用 `@fontsource-variable/*` 打包（OFL）。Geist／Geist Mono **打包 latin 子集**，Geist Mono 另加 **symbols2 子集**（方框字元 U+2500–259F，5.7 KB；程式碼的樹狀圖與框線，demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）：`apps/web/src/styles/fonts.css` 只寫這三條 `@font-face`，不 import 套件入口（入口會帶進 cyrillic 等子集）；Noto Sans TC 照套件入口，自帶 unicode-range 切片。零外部請求。堆疊在 `solid-glass.overrides.css` 的 `@theme inline`，`font-stack.test.ts` 釘住堆疊順序與打包的三條子集。
 - 字級 UI 13、內文 14／23、tooltip 12、微標籤 11（`@theme` 的 `text-ui`／`text-body`／`text-tip`／`text-micro`）；**字重只用 400／500**（`semibold`、`bold` 落在 500）。
-- **只走這四階，不用 Tailwind 預設的 `text-xs`／`text-sm`**（#1141）：`text-xs`（12／16）一律寫成 `text-tip`（尺寸與行高相同，畫面不變）；`text-sm`（14／20）一律寫成 `text-body`（字級相同、行高 20 → 23）。`ui/` 的 registry 原文也照改（它們裝進來就是我們的原始碼）。例外：`text-base`、`text-lg` 沒有對應的階，registry 原文裡的（輸入框手機尺寸防 iOS 放大、dialog 標題等）保留。要用第五個尺寸，先在這裡加一階，不要寫任意值。
+- **只走這四階，不用 Tailwind 預設的 `text-xs`／`text-sm`**（#1141）：`text-xs`（12／16）一律寫成 `text-tip`（尺寸與行高相同，畫面不變）；`text-sm`（14／20）一律寫成 `text-body`（字級相同、行高 20 → 23）。`ui/` 的 registry 原文也照改（它們裝進來就是我們的原始碼）；換成 vendor 的 SG 元件之後（#1523 起，名單在 `src/test/vendor-upstream.ts`），vendor 檔照 SG 原樣用 `text-sm`／`text-xs`，不改（Q8）。例外：`text-base`、`text-lg` 沒有對應的階，還留在 registry 原文裡的（dialog 標題等）保留。要用第五個尺寸，先在這裡加一階，不要寫任意值。
 - **主次**（[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)）：**可以點的與當標題的小字用 `text-ui`（13）**（`xs` 按鈕、小字的可展開列、輸入框底列的膠囊鈕、群組與區段標題、卡片標頭）；**小字說明、附註、時間、計數用 `text-tip`（12）**（tooltip、`Badge`、快捷鍵、工具名與摘要、等寬的輸出）；內文 `text-body`（14）與本來就是 14 的按鈕、選單項不變。逐處怎麼判與護欄見 [`apps/web/COMPONENTS.md`](../apps/web/COMPONENTS.md)「字級的主次」。`text-micro`（11）只用在程式碼區塊的語言標籤（`markdown.css` 的 `.md-code-lang` 用 `var(--text-micro)`，從 #419 起），保留（demian 2026-10-12 決定；#1278 拍板第 8 點「沒人用再刪」的前提不成立）。
 
 **互動狀態**

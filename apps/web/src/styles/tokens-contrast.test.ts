@@ -1,6 +1,8 @@
 // @vitest-environment node
 import { describe, expect, test } from 'vitest';
 
+import { DESTRUCTIVE_HOVER, DESTRUCTIVE_REST } from '../../tokengen/destructive-tint.mjs';
+
 import { surfaceContrast } from './color-math';
 import { readCascade, type Query } from './css-cascade';
 
@@ -164,6 +166,27 @@ const NOT_WORSE_THAN_DEVELOP: Record<Theme, [string, string, number][]> = {
   ],
 };
 
+/**
+ * 淡紅底上的字（#1523）：SG 的 destructive 按鈕、badge、泡泡是 `bg-destructive/<alpha>` 配 `text-destructive`，按鈕 hover 的底由
+ * 覆寫檔調淡（README 本地修改第 17 條）。淡紅底疊在每一疊頁面上、也疊在每一疊頁面上的卡片上，最差的那一疊要過 4.5。
+ * alpha 跟產生器解色用的同一份（`tokengen/destructive-tint.mjs`）。
+ */
+const DESTRUCTIVE_TINTS: [string, { readonly light: number; readonly dark: number }][] = [
+  ['平常', DESTRUCTIVE_REST],
+  ['按鈕 hover', DESTRUCTIVE_HOVER],
+];
+
+function tintContrast(mode: Mode, theme: Theme, alpha: number): number {
+  const destructive = token(mode, theme, 'destructive') ?? '';
+  const oklch = /^oklch\(([^/)]*)\)$/.exec(destructive.trim());
+  if (oklch === null) throw new Error(`--destructive 不是不透明的 oklch()：${destructive}`);
+  const tint = `oklch(${oklch[1]} / ${alpha})`;
+  const lookup = (name: string) => (name === 'destructive-tint' ? tint : token(mode, theme, name));
+  const pages = bases(theme, mode);
+  const under = [...pages, ...pages.map((stack) => [...stack, 'card'])];
+  return surfaceContrast(lookup, 'destructive', 'destructive-tint', under).ratio;
+}
+
 /** oklch 寫到小數第四位，重算會比產生器的解少一點點；只容許這個量級。 */
 const ROUNDING = 0.01;
 
@@ -181,6 +204,13 @@ describe.each(MODES)('產生出來的 token 達到對比度目標：$name', (mod
       `${theme}：%s 對 %s 不比 develop 的 %s 差（既有缺口 #1515）`,
       (fg, bg, floor) => {
         expect(contrast(mode, theme, fg, bg)).toBeGreaterThanOrEqual(floor);
+      },
+    );
+
+    test.each(DESTRUCTIVE_TINTS)(
+      `${theme}：destructive 的字對它%s的淡紅底 ≥ 4.5（疊在頁面與卡片上）`,
+      (_, tint) => {
+        expect(tintContrast(mode, theme, tint[theme])).toBeGreaterThanOrEqual(4.5);
       },
     );
 

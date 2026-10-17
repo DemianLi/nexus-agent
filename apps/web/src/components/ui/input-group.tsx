@@ -1,165 +1,32 @@
 /**
- * 來源：shadcn registry `input-group`（style new-york，https://ui.shadcn.com/r/styles/new-york-v4/input-group.json），
- * shadcn CLI 4.21.0 `shadcn add input-group textarea command popover --overwrite`。裝進來就是我們的原始碼，
- * 不靠重跑 `shadcn add` 更新。
- * 改過的地方（照原型 tag `proto-375-design-language`）：border＋`shadow-xs` 換成 `bg-card`＋`shadow-material`、
- * 圓角 `rounded-lg`（§5）；focus 用外框線、錯誤用 inset 陰影。外框要明寫 `outline-solid`：群組自帶的 `outline-none`
- * 會把 `--tw-outline-style` 設成 none，只寫 `outline-2` 時樣式沿用 none、整圈畫不出來（#1279 實機量到）。另外點 addon 的空白處時，registry 只找 `input`
- * 來 focus，這裡連 `textarea` 一起找（輸入框用的是 textarea）。
+ * nexus 層（#1523）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/input-group.tsx`），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 16 條）：
+ *
+ * - `InputGroupAddon`：點 addon 的空白處時，vendor 只找 `input` 來 focus（vendor `:61`），這裡連 `textarea` 一起找——
+ *   輸入框（`composer.tsx`）用的是 `InputGroupTextarea`。vendor 把 `onClick` 寫在 `{...props}` 前面，所以從這裡傳的 `onClick`
+ *   整段取代它；呼叫端自己傳 `onClick` 時照舊由呼叫端的蓋掉（跟 vendor 一樣）。
+ *
+ * 焦點外框畫在群組上（#1279）是覆寫檔那一層，不在這裡（`styles/solid-glass.overrides.css`，第 15 條）。
  */
-import * as React from 'react';
-import { cva, type VariantProps } from 'class-variance-authority';
-import { cn } from '@/lib/utils';
+import type * as React from 'react';
 
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Textarea } from '@/components/ui/textarea';
-
-function InputGroup({ className, ...props }: React.ComponentProps<'div'>) {
-  return (
-    <div
-      data-slot="input-group"
-      role="group"
-      className={cn(
-        'group/input-group relative flex w-full items-center rounded-lg bg-card shadow-material transition-[color,box-shadow] outline-none',
-        'h-9 min-w-0 has-[>textarea]:h-auto',
-
-        // Variants based on alignment.
-        'has-[>[data-align=inline-start]]:[&>input]:pl-2',
-        'has-[>[data-align=inline-end]]:[&>input]:pr-2',
-        'has-[>[data-align=block-start]]:h-auto has-[>[data-align=block-start]]:flex-col has-[>[data-align=block-start]]:[&>input]:pb-3',
-        'has-[>[data-align=block-end]]:h-auto has-[>[data-align=block-end]]:flex-col has-[>[data-align=block-end]]:[&>input]:pt-3',
-
-        // Focus state.
-        'has-[[data-slot=input-group-control]:focus-visible]:outline-solid has-[[data-slot=input-group-control]:focus-visible]:outline-2 has-[[data-slot=input-group-control]:focus-visible]:outline-offset-2 has-[[data-slot=input-group-control]:focus-visible]:outline-ring',
-
-        // Error state.
-        'has-[[data-slot][aria-invalid=true]]:shadow-[inset_0_0_0_1px_var(--destructive)]',
-
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-const inputGroupAddonVariants = cva(
-  "flex h-auto cursor-text items-center justify-center gap-2 py-1.5 text-body font-medium text-muted-foreground select-none group-data-[disabled=true]/input-group:opacity-50 [&>kbd]:rounded-[calc(var(--radius)-5px)] [&>svg:not([class*='size-'])]:size-4",
-  {
-    variants: {
-      align: {
-        'inline-start': 'order-first pl-3 has-[>button]:ml-[-0.45rem] has-[>kbd]:ml-[-0.35rem]',
-        'inline-end': 'order-last pr-3 has-[>button]:mr-[-0.45rem] has-[>kbd]:mr-[-0.35rem]',
-        'block-start':
-          'order-first w-full justify-start px-3 pt-3 group-has-[>input]/input-group:pt-2.5 [.border-b]:pb-3',
-        'block-end':
-          'order-last w-full justify-start px-3 pb-3 group-has-[>input]/input-group:pb-2.5 [.border-t]:pt-3',
-      },
-    },
-    defaultVariants: {
-      align: 'inline-start',
-    },
-  },
-);
-
-function InputGroupAddon({
-  className,
-  align = 'inline-start',
-  ...props
-}: React.ComponentProps<'div'> & VariantProps<typeof inputGroupAddonVariants>) {
-  return (
-    <div
-      role="group"
-      data-slot="input-group-addon"
-      data-align={align}
-      className={cn(inputGroupAddonVariants({ align }), className)}
-      onClick={(e) => {
-        if ((e.target as HTMLElement).closest('button')) {
-          return;
-        }
-        e.currentTarget.parentElement?.querySelector<HTMLElement>('input, textarea')?.focus();
-      }}
-      {...props}
-    />
-  );
-}
-
-const inputGroupButtonVariants = cva('flex items-center gap-2 text-body shadow-none', {
-  variants: {
-    size: {
-      xs: "h-6 gap-1 rounded-[calc(var(--radius)-5px)] px-2 has-[>svg]:px-2 [&>svg:not([class*='size-'])]:size-3.5",
-      sm: 'h-8 gap-1.5 rounded-md px-2.5 has-[>svg]:px-2.5',
-      'icon-xs': 'size-6 rounded-[calc(var(--radius)-5px)] p-0 has-[>svg]:p-0',
-      'icon-sm': 'size-8 p-0 has-[>svg]:p-0',
-    },
-  },
-  defaultVariants: {
-    size: 'xs',
-  },
-});
-
-function InputGroupButton({
-  className,
-  type = 'button',
-  variant = 'ghost',
-  size = 'xs',
-  ...props
-}: Omit<React.ComponentProps<typeof Button>, 'size'> &
-  VariantProps<typeof inputGroupButtonVariants>) {
-  return (
-    <Button
-      type={type}
-      data-size={size}
-      variant={variant}
-      className={cn(inputGroupButtonVariants({ size }), className)}
-      {...props}
-    />
-  );
-}
-
-function InputGroupText({ className, ...props }: React.ComponentProps<'span'>) {
-  return (
-    <span
-      className={cn(
-        "flex items-center gap-2 text-body text-muted-foreground [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function InputGroupInput({ className, ...props }: React.ComponentProps<'input'>) {
-  return (
-    <Input
-      data-slot="input-group-control"
-      className={cn(
-        'flex-1 rounded-none border-0 bg-transparent shadow-none focus-visible:ring-0 dark:bg-transparent',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function InputGroupTextarea({ className, ...props }: React.ComponentProps<'textarea'>) {
-  return (
-    <Textarea
-      data-slot="input-group-control"
-      className={cn(
-        'flex-1 resize-none rounded-none border-0 bg-transparent py-3 shadow-none focus-visible:ring-0 dark:bg-transparent',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
+import { InputGroupAddon as VendorInputGroupAddon } from '@/vendor/solid-glass/components/ui/input-group';
 
 export {
   InputGroup,
-  InputGroupAddon,
   InputGroupButton,
-  InputGroupText,
   InputGroupInput,
+  InputGroupText,
   InputGroupTextarea,
-};
+} from '@/vendor/solid-glass/components/ui/input-group';
+
+function focusControl(event: React.MouseEvent<HTMLDivElement>) {
+  if ((event.target as HTMLElement).closest('button')) return;
+  event.currentTarget.parentElement?.querySelector<HTMLElement>('input, textarea')?.focus();
+}
+
+function InputGroupAddon(props: React.ComponentProps<typeof VendorInputGroupAddon>) {
+  return <VendorInputGroupAddon onClick={focusControl} {...props} />;
+}
+
+export { InputGroupAddon };

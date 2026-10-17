@@ -61,12 +61,9 @@ const KEYFRAMES_ALLOWED = new Set([
   'sg-sweep',
   'sg-float-in',
   'sg-fade-in',
-  // 第三方：shadcn 的 tailwind.css（`src/vendor/solid-glass/shadcn/tailwind.css`，#1523）。`@utility scroll-fade-*`、`shimmer`
-  // 只要原始碼裡出現那個字就會產出（今天是註解裡的字），連帶帶出 keyframes；畫面上還沒有元件用它們。
-  'scroll-fade-reveal-b',
-  'scroll-fade-reveal-s',
-  'scroll-fade-reveal-e',
-  'tw-shimmer',
+  // 第三方：shadcn 的 tailwind.css（`src/vendor/solid-glass/shadcn/tailwind.css`，#1523）的 `scroll-fade-reveal-*`、`tw-shimmer`
+  // 不在清單上：它們跟著 `@utility scroll-fade-*`、`shimmer` 產出，而原始碼裡出現那個字就會產出那個 utility。
+  // #1523 PR 1 時出貨過（來源是兩句註解裡的字），PR 2 改寫註解後不再出貨，所以拿掉。哪個元件真的用到時再加回來、寫上是誰用的。
 ]);
 
 const REDUCED_MOTION = /prefers-reduced-motion:\s*reduce/;

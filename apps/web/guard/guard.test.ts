@@ -33,6 +33,9 @@ import { startGuardServer, type GuardServer } from './server';
  * 6. **對話裡被定位的那一則有圓角**：`[data-located]` 的圓角是 `var(--radius-3xl)`，這個變數只宣告在 SG 的 `@theme inline`；
  *    Tailwind 沒輸出或修剪掉它的話，圓角會靜靜變成 0。量 `border-radius` 不是 0。
  * 7. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
+ * 8. **destructive 按鈕的 hover**：平常與滑鼠移上去，字對底色都過 4.5（vendor 的 hover 底太深，覆寫檔調淡，#1523）。
+ * 9. **SG 的按鈕規則真的命中 vendor 的 Button**（#1523）：outline、secondary、glass 有 `backdrop-filter`（`solid-glass.css:640-677`
+ *    靠 `data-variant`）；Radix 浮層 Trigger 用 asChild 包著、開著的 outline 按鈕，底色換成按下去的樣子（SG 認 `aria-expanded`）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -55,6 +58,7 @@ const SHADOW_LIMITS: Record<string, number> = {
   'button-default': 0.28,
   'button-outline': 0.06,
   'button-secondary': 0.06,
+  'button-glass': 0.06,
   card: 0.28,
   popover: 0.28,
 };
@@ -369,6 +373,58 @@ async function collectChips(page: Page): Promise<ChipSample[]> {
   return samples;
 }
 
+interface HoverSample {
+  readonly name: string;
+  readonly state: 'rest' | 'hover';
+  readonly inState: boolean;
+  readonly color: string;
+  readonly backgroundColor: string;
+  readonly chain: BackgroundLayer[];
+}
+
+/** `data-guard-hover` 的元素：游標移開與移上去各量一次字色與往上疊的底（#1523）。 */
+async function collectHovers(page: Page): Promise<HoverSample[]> {
+  const names = await page.$$eval('[data-guard-hover]', (els) =>
+    els.map((el) => el.getAttribute('data-guard-hover') ?? ''),
+  );
+  const samples: HoverSample[] = [];
+  for (const name of names) {
+    const target = page.locator(`[data-guard-hover="${name}"]`);
+    for (const state of ['rest', 'hover'] as const) {
+      if (state === 'rest') await page.mouse.move(0, 0);
+      else await target.hover();
+      await settle(page);
+      const measured = await target.evaluate((el) => {
+        const chain = [];
+        for (let node: Element | null = el; node !== null; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          chain.push({
+            backgroundColor: style.backgroundColor,
+            backgroundImage: style.backgroundImage,
+          });
+        }
+        return {
+          hover: el.matches(':hover'),
+          color: getComputedStyle(el).color,
+          backgroundColor: getComputedStyle(el).backgroundColor,
+          chain,
+        };
+      });
+      samples.push({
+        name,
+        state,
+        inState: measured.hover === (state === 'hover'),
+        color: measured.color,
+        backgroundColor: measured.backgroundColor,
+        chain: measured.chain,
+      });
+    }
+  }
+  await page.mouse.move(0, 0);
+  await settle(page);
+  return samples;
+}
+
 interface ChoiceSample {
   readonly name: string;
   readonly rest: string;
@@ -449,11 +505,12 @@ const round = (n: number) => Math.round(n * 100) / 100;
 
 /**
  * `box-shadow` 裡看得見的層。Tailwind 的 ring／shadow 清掉時留下的是全透明的層（`rgba(0, 0, 0, 0) 0px 0px 0px 0px`），
- * 跟 `none` 畫起來一樣，比的時候拿掉；有顏色的 ring 就留著，聚焦前後一比就看得出來。
+ * 跟 `none` 畫起來一樣，比的時候拿掉；四個長度全是 0 的層（`ring-0` 留下的，帶著字色但寬 0）也什麼都不畫，同樣拿掉（#1523）。
+ * 有寬度、有顏色的 ring 就留著，聚焦前後一比就看得出來。
  */
 function visibleShadow(value: string): string[] {
   return shadowLayers(value)
-    .filter((l) => l.color === undefined || parseColor(l.color).alpha > 0)
+    .filter((l) => !l.empty && (l.color === undefined || parseColor(l.color).alpha > 0))
     .map((l) => l.text);
 }
 
@@ -470,6 +527,9 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   let shadows: ShadowSample[];
   let chips: ChipSample[];
   let choices: ChoiceSample[];
+  let hovers: HoverSample[];
+  let glass: { name: string; backdropFilter: string }[];
+  let expanded: Record<string, { backgroundColor: string; ariaExpanded: string | null }>;
 
   beforeAll(async () => {
     page = await open(theme);
@@ -477,6 +537,24 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     shadows = await collectShadows(page);
     chips = await collectChips(page);
     choices = await collectChoices(page);
+    hovers = await collectHovers(page);
+    glass = await page.$$eval('[data-guard-glass]', (els) =>
+      els.map((el) => ({
+        name: el.getAttribute('data-guard-glass') ?? '',
+        backdropFilter: getComputedStyle(el).backdropFilter,
+      })),
+    );
+    expanded = Object.fromEntries(
+      await page.$$eval('[data-guard-expanded]', (els) =>
+        els.map((el) => [
+          el.getAttribute('data-guard-expanded') ?? '',
+          {
+            backgroundColor: getComputedStyle(el).backgroundColor,
+            ariaExpanded: el.getAttribute('aria-expanded'),
+          },
+        ]),
+      ),
+    );
     focus = await collectFocus(page);
     fields = await collectFields(page);
     docked = await page.$$eval('[data-guard-docked]', (els) =>
@@ -632,6 +710,47 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
       'not-allowed',
     ]);
     expect([unchecked!.opacity, unchecked!.pointerEvents]).toEqual(['1', 'auto']);
+  });
+
+  test('destructive 按鈕：平常與 hover 的字對底色都過 4.5（hover 底由覆寫檔調淡，#1523 第 17 條）', () => {
+    const measured = hovers.map((h) => ({
+      key: `${h.name}:${h.state}`,
+      ...h,
+      ...worstOn(h.color, h.chain),
+    }));
+    report[`${theme}:hovers`] = measured.map((m) => ({
+      key: m.key,
+      backgroundColor: m.backgroundColor,
+      on: m.on,
+      ratio: round(m.ratio),
+    }));
+    // 量具自檢：兩顆都量到兩種狀態、真的在那個狀態，hover 的底跟平常不一樣（量到的是 hover 那一層）。
+    expect(measured.map((m) => m.key)).toEqual(
+      ['button-destructive', 'button-destructive-card'].flatMap((n) => [`${n}:rest`, `${n}:hover`]),
+    );
+    expect(measured.filter((m) => !m.inState).map((m) => m.key)).toEqual([]);
+    for (const name of ['button-destructive', 'button-destructive-card'])
+      expect(
+        new Set(measured.filter((m) => m.name === name).map((m) => m.backgroundColor)).size,
+      ).toBe(2);
+    expect(
+      measured
+        .filter((m) => !(m.ratio >= TEXT_MIN))
+        .map((m) => `${m.key} ${round(m.ratio)} < ${TEXT_MIN}（${m.on}）`),
+    ).toEqual([]);
+  });
+
+  test('SG 的玻璃按鈕吃到 SG 的規則：outline、secondary、glass 都有 backdrop-filter（data-variant 命中 solid-glass.css:640-677，#1523）', () => {
+    report[`${theme}:glass`] = glass;
+    expect(glass.map((g) => g.name).sort()).toEqual(['glass', 'outline', 'secondary']);
+    expect(glass.filter((g) => g.backdropFilter === 'none').map((g) => g.name)).toEqual([]);
+  });
+
+  test('混合期：Radix Trigger（asChild）包的 outline 按鈕開著時，SG 靠 aria-expanded 換成按下去的底色（#1523）', () => {
+    report[`${theme}:expanded`] = expanded;
+    expect(expanded.trigger?.ariaExpanded).toBe('true');
+    expect(expanded.reference?.ariaExpanded).toBeNull();
+    expect(expanded.trigger?.backgroundColor).not.toBe(expanded.reference?.backgroundColor);
   });
 
   test('對話裡被定位的那一則：圓角真的畫出來（--radius-3xl 有宣告），底色換成 chip', () => {
