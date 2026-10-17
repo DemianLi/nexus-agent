@@ -184,10 +184,14 @@ describe('閒置逐出從 serve 組裝起（#1484）', () => {
       expect.stringContaining('沒有開會話日誌'),
     ]);
     const client = await serveClient(server);
-    const events = await client.openEvents('t1');
+    // 下行要真的斷：`events.return()` 只放掉 reader、不關連線，訂閱者還掛著的話這條 thread 本來就不會被撤，測試就是空的。
+    // 真的頁籤關掉時中止的就是這個 signal（同 `setup()`）。
+    const controller = new AbortController();
+    const events = await client.openEvents('t1', { signal: controller.signal });
     expect((await client.runStart('t1', '說一句')).type).toBe('success');
     await foldTurn(events);
-    await events.return?.(undefined);
+    controller.abort();
+    await events.return?.(undefined).catch(() => undefined);
     // 輪詢間隔 1 秒：等兩次以上，真的有在掃的話早就撤了。
     await new Promise((resolve) => setTimeout(resolve, 2500));
     expect(lines.some((line) => line.startsWith('[閒置逐出]'))).toBe(false);

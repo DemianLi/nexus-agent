@@ -182,10 +182,13 @@ function rig(options: Partial<WireHandlerOptions> = {}): Rig {
         model: new ScriptedChatModel({ turns: [...(extra.script ?? HOLD_SCRIPT)] }),
         checkpointer: new PrunedMemorySaver(),
         plugins: [toolsPlugin(probe)],
+        // 插話那一條（`next-step`）的載體：不掛的話插話退成排隊，測不到「只有 nextStep 在擋」。
+        stepInbox: true,
       });
       const compose = composeAttachSessions(built);
       return {
         agent: built.agent as unknown as PumpAgent,
+        stepInbox: true,
         commands: built.commands,
         attachSessions: (sessions, sessionOptions) => {
           const detach = compose(sessions, sessionOptions);
@@ -339,6 +342,23 @@ async function startHeldRun(r: Rig, thread: string): Promise<void> {
   await line.close();
 }
 
+/**
+ * 跑一輪（工具卡住）、可選地插一句話、按停止，放行工具並等這一輪收完、放掉下行。
+ * 回來時 `running` 是假的；有插話的話那一句留在 `next-step`。
+ */
+async function runThenStop(r: Rig, thread: string, withSteer: boolean): Promise<void> {
+  const line = await openLine(r, thread);
+  expect((await r.client.runStart(thread, '動手')).type).toBe('success');
+  await until(() => r.probe.started === 1);
+  if (withSteer) {
+    expect((await r.client.runStart(thread, '停之前插的', { mode: 'steer' })).type).toBe('success');
+  }
+  await r.client.runCancel(thread);
+  r.probe.hold.open();
+  await foldTurn(line.events);
+  await line.close();
+}
+
 /** 放行卡住的工具並等這一輪收完（開一條下行折到收尾，再放掉）。 */
 async function finishHeldRun(r: Rig, thread: string): Promise<void> {
   const line = await openLine(r, thread);
@@ -412,6 +432,23 @@ describe('A：閒置條件成立滿 T 才逐出（#1484）', () => {
     await r.client.runStart('t1', '排著的一句');
     await r.client.runCancel('t1');
     await line.close();
+    r.advance(T * 2);
+    await r.handler.sweepIdle();
+    expect(r.disposed).toEqual([]);
+  });
+
+  it('按停止之後留在 next-step 的插話（沒有輪在跑、佇列空）：只有它擋逐出，不撤；沒有插話的對照照撤', async () => {
+    // 對照：同樣跑一輪、按停止，但沒有插話——所有條件都成立，滿 T 就撤（確認下面那條擋住的真的是插話）。
+    const control = track(rig());
+    await runThenStop(control, 'ctl', false);
+    control.advance(T * 2);
+    await control.handler.sweepIdle();
+    expect(control.disposed).toEqual(['ctl']);
+
+    // 插話：人在這一輪跑著時插的，按停止之後不領、留在 next-step，等下一輪開頭才領走。
+    // 這時 running 是假的、inbox（next-turn）是空的、沒有下行、沒有請求——只剩 nextStep 在擋。撤掉它那句話就沒了。
+    const r = track(rig());
+    await runThenStop(r, 't1', true);
     r.advance(T * 2);
     await r.handler.sweepIdle();
     expect(r.disposed).toEqual([]);

@@ -1238,6 +1238,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
     // **這條正在被撤（#1484）**：等撤完再走一遍 `threadFor`——不准拿到正在關的舊 thread，也不准在舊的寫租約放掉之前組新的。
     // 所有等的人都掛在同一個 promise 上，兌現之後第一個走進來的組新的、其餘的在上面那道 `threads.get` 命中它，所以只重建一次。
+    // **已知取捨**：撤完放掉名額到等的人重新走一遍之間，別的新 thread 可能先搶走那個名額（名額本來就滿的話），
+    // 這時等的人在下面那道上限檢查拿到 `thread_at_capacity`，不保證等了就一定進得來。
     const retiring = closing.get(threadId);
     if (retiring !== undefined) {
       return retiring.then(() => threadFor(threadId));
