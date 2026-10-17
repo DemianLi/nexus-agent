@@ -614,6 +614,15 @@
         initialDelayMs: 500
         maxDelayMs: 10000
         jitterRatio: 0.1
+    # 整台 serve 同時最多幾個模型請求在跑（#1505）。**不寫就不限**（不建閘，行為與沒有這兩格一樣，同 `thread-capacity` 的
+    # `maxThreads`）：多人共用一把供應商 key 時，一條失控的 thread（同一步的 task／subagent 可重疊、背景子代理每個主對話最多 8 個）
+    # 吃不光額度；名額滿了新的請求**排隊**（FIFO、按了停止就離開、退避那段時間不佔名額），不再一起撞供應商的 429、再一起重試。
+    # 供應商的配額因端點而異，所以沒有出廠數字；要設就打開下面這一行，數字照你那把 key 的配額與同時在線的人數定。
+    # `maxWaitMs`（預設 60 秒，沒有量測依據）：排隊等超過它，這一輪以 `LOCAL_CAPACITY` 失敗、**不重試**，serve 日誌寫一行去哪裡調；
+    # 只在設了 `maxConcurrentRequests` 時有意義。只有 serve 建閘，一次性 CLI、REPL、eval 不建；改了要重啟 serve。
+    # dsh 沒有這一道（它是一個人用自己的 key），登記在 `src/settings/live-model.ts` 的檔頭「偏離六」。
+    # maxConcurrentRequests: 8
+    maxWaitMs: 60000
     models:
       - id: 'nvidia/nemotron-3-super-120b-a12b'
         contextWindow: 700045

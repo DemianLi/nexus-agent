@@ -113,6 +113,7 @@ import { createFailureRecorder, failedRowsOf } from './plugin-failure-recorder.j
 import { PLUGIN_JOURNAL_FILE_NAME } from './plugin-journal.js';
 import { browserSessionPlugin } from './settings/browser-session.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
+import { createRequestGate } from './request-gate.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { startupEntryMounted, startupSetting } from './settings/startup.js';
 import { STARTUP_READ_PLUGINS } from './plugin-row-classes.js';
@@ -610,6 +611,9 @@ async function startServer(
   // 一顆），但設定是 server 的性質：解在這裡，設定寫壞的話在 server 起來之前就失敗，而不是等到
   // 第一條 thread；啟動時印的模型名也從這一份來。
   const liveModel = startupSetting(plugins, liveModelPlugin);
+  // 全機的模型請求並行閘（#1505）：起動期建一份，每條 thread 的組裝共用；沒設 `maxConcurrentRequests` 就沒有。
+  // 排隊逾時的那一行走獨立的 `serverLog`，不借別處的 `warn`。
+  const requestGate = createRequestGate(liveModel, serverLog);
   // 子代理逐次選模型（#875）：server 的性質，解一次、對著型錄驗一次（起不來就在 server 起來之前）。
   // 每個新會話在 `createAgent` 裡各自取樣，續接的會話讀日誌那一份。
   const modelSelection = startupSetting(plugins, subagentModelSelectionPlugin);
@@ -670,6 +674,7 @@ async function startServer(
     .create({
       ...invocation,
       liveModel,
+      ...(requestGate !== undefined && { requestGate }),
       ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
       threadTitle,
       threadTitleLlm,
@@ -966,6 +971,7 @@ async function startServer(
               },
             }),
             liveModel,
+            ...(requestGate !== undefined && { requestGate }),
             ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
             threadTitle,
             threadTitleLlm,
@@ -1221,6 +1227,12 @@ async function startServer(
       : `thread 上限：${String(threadCapacity.maxThreads)}（到了拒收新 thread，${
           idleEvictMs === undefined ? '要重啟 serve 才釋放' : '閒置的 thread 被撤掉才釋放名額'
         }）`,
+  );
+  // 模型請求並行上限講出來（#1505）：不設就印「不限」。沒連真實供應商（假模型）時閘不會被用到，也照實講出設定值。
+  log(
+    requestGate === undefined
+      ? '模型請求並行上限：不限'
+      : `模型請求並行上限：${String(requestGate.maxConcurrent)}（整台 serve 共用；名額滿了排隊，等超過 ${String(liveModel.maxWaitMs)} 毫秒以 LOCAL_CAPACITY 失敗、不重試）`,
   );
   // 閒置逐出講出來（#1484）：設了卻沒生效（沒落盤）要看得到，不靜靜吞掉。
   if (threadCapacity.idleEvictAfterMs !== undefined) {
