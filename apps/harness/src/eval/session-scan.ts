@@ -411,9 +411,9 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
         unreadable.push({ file, reason: header });
         continue;
       }
-      let body = '';
+      let body = Buffer.alloc(0);
       try {
-        body = await readFile(file, 'utf8');
+        body = await readFile(file);
       } catch (error: unknown) {
         if ((error as { code?: unknown } | null)?.code !== 'ENOENT') throw error;
       }
@@ -422,7 +422,10 @@ export async function readSessionLogs(roots: readonly string[]): Promise<{
           file,
           header,
           // 掃描照格式版本表態、認不得的略過並報數，不守「不認得的必需種類就拒讀」（#507）：那是產品路徑的讀方才要守的。
-          events: parseJsonlSessionBody(header.id, body, { acceptUnknownEvents: true }).events,
+          events: parseJsonlSessionBody(header.id, body, {
+            acceptUnknownEvents: true,
+            recovery: 'strict',
+          }).events,
         });
       } catch (error: unknown) {
         unreadable.push({ file, reason: error instanceof Error ? error.message : String(error) });

@@ -168,7 +168,7 @@ describe("open(id, 'read')", () => {
     expect(await reader.read()).toEqual([]);
   });
 
-  it('中段壞掉：預設拋；salvage 撿回讀得懂的，撕裂的尾巴兩邊都不算', async () => {
+  it('壞行之後沒有完整收尾：預設 read 丟掉壞尾；salvage 撿回讀得懂的，撕裂的尾巴兩邊都不算', async () => {
     await written('torn');
     await writeFile(
       join(dir, 'torn.jsonl'),
@@ -181,8 +181,29 @@ describe("open(id, 'read')", () => {
       ].join('\n'),
     );
     const reader = await openJsonlSessionStore({ directory: dir }).open('torn', 'read');
-    await expect(reader.read()).rejects.toBeInstanceOf(SessionCorruptionError);
+    // #1508：壞行與它之後沒收尾的行是當機留下的尾巴，recoverable 丟掉（照 dsh）；撕裂的 turn/end 沒有換行，不算收尾。
+    expect((await reader.read()).map((e) => e.seq)).toEqual([0]);
     expect((await reader.read({ salvage: true })).map((e) => e.seq)).toEqual([0, 3]);
+  });
+
+  it('壞行之後有完整的收尾（turn/end 或 turn/failed）：預設拋，訊息指向第一個壞行', async () => {
+    await written('closed');
+    for (const closer of ['turn/end', 'turn/failed']) {
+      await writeFile(
+        join(dir, 'closed.jsonl'),
+        [
+          JSON.stringify(event(0)),
+          '{壞掉',
+          JSON.stringify({ type: closer, seq: 2, time: 1 }),
+          '',
+        ].join('\n'),
+      );
+      const reader = await openJsonlSessionStore({ directory: dir }).open('closed', 'read');
+      await expect(reader.read()).rejects.toThrow(/第 2 行不是 JSON/u);
+      await expect(reader.read()).rejects.toBeInstanceOf(SessionCorruptionError);
+      // salvage 的語意不動：撿回讀得懂的。
+      expect((await reader.read({ salvage: true })).map((e) => e.seq)).toEqual([0, 2]);
+    }
   });
 
   it('找不到、版本太新、header 記的 id 對不上：各拋各的', async () => {
@@ -324,10 +345,18 @@ describe('不認得的事件種類', () => {
     }
   });
 
-  it('同一行既不認得又 seq 對不上：先報壞檔（那一種更需要人看）', async () => {
+  it('同一行既不認得又 seq 對不上：strict 先報壞檔（那一種更需要人看）；預設讀取（recoverable）照 dsh 准入先於復原，先報不認得', async () => {
     await plant('both', [futureEvent(7)]);
+    const body = Buffer.from(`${futureEvent(7)}\n`);
+    expect(() =>
+      parseJsonlSessionBody('both', body, {
+        version: SESSION_LOG_FORMAT_VERSION,
+        recovery: 'strict',
+      }),
+    ).toThrow(SessionCorruptionError);
+    // 不先報不認得的話，recoverable 會把新版行程寫的事件當成壞尾，靜靜丟掉（#1508）。
     const reader = await openJsonlSessionStore({ directory: dir }).open('both', 'read');
-    await expect(reader.read()).rejects.toBeInstanceOf(SessionCorruptionError);
+    await expect(reader.read()).rejects.toBeInstanceOf(SessionEventUnsupportedError);
   });
 
   it('續接：沒標的當場拒絕，檔一個位元組都沒動、租約放掉了；標了的接得回來，旗標那一行原樣留著', async () => {
@@ -350,10 +379,14 @@ describe('不認得的事件種類', () => {
   });
 
   it('離線掃描用的 acceptUnknownEvents：不守，什麼都收', () => {
-    const body = `${futureEvent(0)}\n`;
-    expect(parseJsonlSessionBody('s', body, { acceptUnknownEvents: true }).events).toHaveLength(1);
-    expect(() => parseJsonlSessionBody('s', body, { version: SESSION_LOG_FORMAT_VERSION })).toThrow(
-      SessionEventUnsupportedError,
-    );
+    const body = Buffer.from(`${futureEvent(0)}\n`);
+    for (const recovery of ['strict', 'recoverable'] as const) {
+      expect(
+        parseJsonlSessionBody('s', body, { acceptUnknownEvents: true, recovery }).events,
+      ).toHaveLength(1);
+      expect(() =>
+        parseJsonlSessionBody('s', body, { version: SESSION_LOG_FORMAT_VERSION, recovery }),
+      ).toThrow(SessionEventUnsupportedError);
+    }
   });
 });

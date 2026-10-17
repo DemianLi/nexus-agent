@@ -502,21 +502,34 @@ describe('認不得的沙箱模式', () => {
 });
 
 describe('讀不了的時候在什麼都還沒起來之前就講', () => {
-  it('中段一行壞了是壞檔', async () => {
+  // #1508：壞行之後**有收尾**才是壞檔（落在已收尾的輪中間）；沒有收尾的壞行是當機的尾巴，續接時丟掉。
+  // 這兩條的日誌只有命令、沒有輪，所以壞行之後補一顆完整的 `turn/end` 才站得住「壞檔」。
+  const CLOSER = `${JSON.stringify({ type: 'turn/end', seq: 999, time: 1, data: { reason: { kind: 'done' } } })}\n`;
+
+  it('中段一行壞了、之後有收尾：是壞檔', async () => {
+    const runDir = await firstRun();
+    const logPath = join(runDir, 'cli.jsonl');
+    const lines = (await readFile(logPath, 'utf8')).split('\n');
+    lines[1] = '這不是 JSON';
+    await writeFile(logPath, lines.join('\n') + CLOSER);
+    await expect(cli(['--resume', runDir])).rejects.toThrow(/存檔壞了：第 2 行不是 JSON/);
+  });
+
+  it('缺號、之後有收尾：是壞檔，不是當掉', async () => {
+    const runDir = await firstRun();
+    const logPath = join(runDir, 'cli.jsonl');
+    const lines = (await readFile(logPath, 'utf8')).split('\n').filter((line) => line !== '');
+    await writeFile(logPath, `${[lines[0], ...lines.slice(2)].join('\n')}\n${CLOSER}`);
+    await expect(cli(['--resume', runDir])).rejects.toThrow(/缺號或重號/);
+  });
+
+  it('壞行之後沒有收尾：是當機的尾巴，`--resume` 照樣接得回來', async () => {
     const runDir = await firstRun();
     const logPath = join(runDir, 'cli.jsonl');
     const lines = (await readFile(logPath, 'utf8')).split('\n');
     lines[1] = '這不是 JSON';
     await writeFile(logPath, lines.join('\n'));
-    await expect(cli(['--resume', runDir])).rejects.toThrow(/存檔壞了：第 2 行不是 JSON/);
-  });
-
-  it('缺號是壞檔，不是當掉', async () => {
-    const runDir = await firstRun();
-    const logPath = join(runDir, 'cli.jsonl');
-    const lines = (await readFile(logPath, 'utf8')).split('\n').filter((line) => line !== '');
-    await writeFile(logPath, `${[lines[0], ...lines.slice(2)].join('\n')}\n`);
-    await expect(cli(['--resume', runDir])).rejects.toThrow(/缺號或重號/);
+    await expect(cli(['--resume', runDir])).resolves.toBeDefined();
   });
 
   it('版本比這一版新：不是壞的，是讀不懂', async () => {
