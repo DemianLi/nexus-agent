@@ -81,12 +81,15 @@
 
 ## 浮層（Base UI）
 
-#1583 起 dialog、popover、sheet、tooltip 是 solid-glass 的 Base UI 版（vendor README 的「元件怎麼接」有完整對照）。寫呼叫端時：
+#1583 起 dialog、alert-dialog、popover、sheet、tooltip、dropdown-menu 是 solid-glass 的 Base UI 版，command 是 solid-glass 的 cmdk 版（vendor README 的「元件怎麼接」有完整對照）。寫呼叫端時：
 
 - **Trigger 接自己的元素用 `render`**，不是 `asChild`：`<PopoverTrigger render={<Button variant="outline" />}>字</PopoverTrigger>`，字放在 Trigger 上。
 - **焦點**：打開、關掉要搬到哪裡，給 Popup 的 `initialFocus`／`finalFocus`（boolean、ref 或回傳元素的函式；回傳 `false` 是不要搬）。
 - **點外面要不要關**：在 Root 的 `onOpenChange(open, details)` 看 `details.reason === 'outside-press'`，不關就 `details.cancel()` 並且不改自己的 state。
 - **tooltip 的字不能帶 Trigger 名稱裡沒有的資訊**：Base UI 的 tooltip 不給 `role="tooltip"`、也不掛 `aria-describedby`，報讀器聽不到它（#1583 驗收 D）。要讓人聽到的資訊寫進 Trigger 的 `aria-label`。
+- **下拉選單的選項用 `onClick`**，不是 `onSelect`；Trigger 開著時掛 `data-popup-open`，要「選單開著時怎樣」寫 `data-popup-open:`（不是 `data-[state=open]:`）。
+- **確認框的 `AlertDialogAction` 按了就關**（包裝層接了 Close），`onClick` 照樣會跑；不用自己在 `onClick` 裡關。
+- **command 的勾自己畫**：vendor 附在每個選項後面的勾被藏掉了（覆寫檔第 27 條）。要標「目前選的」就在選項裡自己放一顆 `<Check aria-label="目前選的" />`（`picker-seat.tsx`）。`CommandDialog` 不自己包 `Command`，由呼叫端包。
 - **寬度蓋 SG 的值要寫同一組前綴**：sheet 寫 `data-[side=right]:w-full`、`data-[side=right]:sm:max-w-none`，dialog 寫 `sm:max-w-lg`，cn 才會把 SG 的 `data-[side=*]:w-3/4`、`sm:max-w-sm` 拿掉。
 
 ## 新增 shadcn 元件

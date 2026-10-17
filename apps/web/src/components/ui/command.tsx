@@ -1,167 +1,33 @@
 /**
- * 來源：shadcn registry `command`（style new-york，https://ui.shadcn.com/r/styles/new-york-v4/command.json），
- * shadcn CLI 4.21.0 `shadcn add input-group textarea command popover --overwrite`。裝進來就是我們的原始碼，
- * 不靠重跑 `shadcn add` 更新。
- * 改過的地方：`CommandDialog` 預設的英文標題與說明換成中文（§8）；群組標題用 `text-ui`（13，#1281：標題不小於 13），
- * 快捷鍵提示仍是 `text-tip`。
+ * nexus 層（#1583）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/command.tsx`，cmdk），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 26 條）：
+ *
+ * - `CommandDialog` 預設的標題與說明換成中文（§8）。vendor 預設是英文，產品碼目前沒用到 CommandDialog，照舊保留中文預設。
+ *
+ * 覆寫檔那一層另有兩條（`styles/solid-glass.overrides.css`）：vendor 在每個 `CommandItem` 的 children 後面自己附一顆勾
+ * （第 27 條，設成 `display: none`，勾由呼叫端自己畫、帶報讀名稱）；搜尋框的焦點外框畫在它的 InputGroup 上（第 15 條擴到 `command-input`）。
  */
-import * as React from 'react';
-import { Command as CommandPrimitive } from 'cmdk';
-import { cn } from '@/lib/utils';
-import { SearchIcon } from 'lucide-react';
+import type * as React from 'react';
 
-import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-} from '@/components/ui/dialog';
+import { CommandDialog as VendorCommandDialog } from '@/vendor/solid-glass/components/ui/command';
 
-function Command({ className, ...props }: React.ComponentProps<typeof CommandPrimitive>) {
-  return (
-    <CommandPrimitive
-      data-slot="command"
-      className={cn(
-        'flex h-full w-full flex-col overflow-hidden rounded-md bg-popover text-popover-foreground',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
+export {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+  CommandSeparator,
+  CommandShortcut,
+} from '@/vendor/solid-glass/components/ui/command';
 
 function CommandDialog({
   title = '命令選單',
   description = '搜尋要執行的命令…',
-  children,
-  className,
-  showCloseButton = true,
   ...props
-}: Omit<React.ComponentProps<typeof Dialog>, 'children'> & {
-  children?: React.ReactNode;
-  title?: string;
-  description?: string;
-  className?: string;
-  showCloseButton?: boolean;
-}) {
-  return (
-    <Dialog {...props}>
-      <DialogHeader className="sr-only">
-        <DialogTitle>{title}</DialogTitle>
-        <DialogDescription>{description}</DialogDescription>
-      </DialogHeader>
-      <DialogContent
-        className={cn('overflow-hidden p-0', className)}
-        showCloseButton={showCloseButton}
-      >
-        <Command className="**:data-[slot=command-input-wrapper]:h-12 [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground [&_[cmdk-group]]:px-2 [&_[cmdk-group]:not([hidden])_~[cmdk-group]]:pt-0 [&_[cmdk-input-wrapper]_svg]:h-5 [&_[cmdk-input-wrapper]_svg]:w-5 [&_[cmdk-input]]:h-12 [&_[cmdk-item]]:px-2 [&_[cmdk-item]]:py-3 [&_[cmdk-item]_svg]:h-5 [&_[cmdk-item]_svg]:w-5">
-          {children}
-        </Command>
-      </DialogContent>
-    </Dialog>
-  );
+}: React.ComponentProps<typeof VendorCommandDialog>) {
+  return <VendorCommandDialog title={title} description={description} {...props} />;
 }
 
-function CommandInput({
-  className,
-  ...props
-}: React.ComponentProps<typeof CommandPrimitive.Input>) {
-  return (
-    <div data-slot="command-input-wrapper" className="flex h-9 items-center gap-2 border-b px-3">
-      <SearchIcon className="size-4 shrink-0 opacity-50" />
-      <CommandPrimitive.Input
-        data-slot="command-input"
-        className={cn(
-          'flex h-10 w-full rounded-md bg-transparent py-3 text-body outline-hidden placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50',
-          className,
-        )}
-        {...props}
-      />
-    </div>
-  );
-}
-
-function CommandList({ className, ...props }: React.ComponentProps<typeof CommandPrimitive.List>) {
-  return (
-    <CommandPrimitive.List
-      data-slot="command-list"
-      className={cn('max-h-[300px] scroll-py-1 overflow-x-hidden overflow-y-auto', className)}
-      {...props}
-    />
-  );
-}
-
-function CommandEmpty({ ...props }: React.ComponentProps<typeof CommandPrimitive.Empty>) {
-  return (
-    <CommandPrimitive.Empty
-      data-slot="command-empty"
-      className="py-6 text-center text-body"
-      {...props}
-    />
-  );
-}
-
-function CommandGroup({
-  className,
-  ...props
-}: React.ComponentProps<typeof CommandPrimitive.Group>) {
-  return (
-    <CommandPrimitive.Group
-      data-slot="command-group"
-      className={cn(
-        'overflow-hidden p-1 text-foreground [&_[cmdk-group-heading]]:px-2 [&_[cmdk-group-heading]]:py-1.5 [&_[cmdk-group-heading]]:text-ui [&_[cmdk-group-heading]]:font-medium [&_[cmdk-group-heading]]:text-muted-foreground',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function CommandSeparator({
-  className,
-  ...props
-}: React.ComponentProps<typeof CommandPrimitive.Separator>) {
-  return (
-    <CommandPrimitive.Separator
-      data-slot="command-separator"
-      className={cn('-mx-1 h-px bg-border', className)}
-      {...props}
-    />
-  );
-}
-
-function CommandItem({ className, ...props }: React.ComponentProps<typeof CommandPrimitive.Item>) {
-  return (
-    <CommandPrimitive.Item
-      data-slot="command-item"
-      className={cn(
-        "relative flex cursor-default items-center gap-2 rounded-sm px-2 py-1.5 text-body outline-hidden select-none data-[disabled=true]:pointer-events-none data-[disabled=true]:opacity-50 data-[selected=true]:bg-accent data-[selected=true]:text-accent-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4 [&_svg:not([class*='text-'])]:text-muted-foreground",
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function CommandShortcut({ className, ...props }: React.ComponentProps<'span'>) {
-  return (
-    <span
-      data-slot="command-shortcut"
-      className={cn('ml-auto text-tip tracking-widest text-muted-foreground', className)}
-      {...props}
-    />
-  );
-}
-
-export {
-  Command,
-  CommandDialog,
-  CommandInput,
-  CommandList,
-  CommandEmpty,
-  CommandGroup,
-  CommandItem,
-  CommandShortcut,
-  CommandSeparator,
-};
+export { CommandDialog };

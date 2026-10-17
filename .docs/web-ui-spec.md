@@ -218,10 +218,11 @@
 
 | 互動 | 開／關 |
 | --- | --- |
-| 下拉、指令選單 | 250／150，scale .97／.99（指令選單在 [#407](https://github.com/DemianLi/nexus-agent/issues/407) 的真 Chrome 量過：開 250、scale .97、曲線 smooth-out、fill backwards；關 150、scale .99、fill both；reduced-motion 只剩 150 淡入淡出。**下拉還沒有這個元件，沒驗過**；這兩個在 #1583 的 PR 2 換成 SG 版） |
+| 下拉選單 | **沒有動畫**（#1583 照 SG：vendor 的 Content 寫 `animate-none!`，開關都是立即的） |
+| 指令選單 | 住在 popover 裡（composer 的 `/` 與 @ 選單、輸入框底列的選擇座位），動效就是 popover 那一列；cmdk 本身沒有動效（#1583 換成 SG 版） |
 | popover | 照 SG 的機制（#1583）：淡入＋zoom .95＋往外 slide 2（`slide-in-from-*-2`）。SG 寫的 `duration-100` 蓋不掉 `@theme` 的 `--animate-in`／`--animate-out`，所以時長仍是 250／150，**全域時長留到 ④ 收尾一起換** |
 | tooltip | 同 popover（#1583）：淡入＋zoom .95＋slide 2，250／150（全域時長留到 ④）；延遲 0（SG 的 `TooltipProvider` 預設） |
-| 對話框 | 同 popover（#1583）：淡入＋zoom .95，250／150（全域時長留到 ④）；遮罩淡入、`backdrop-blur-xs` |
+| 對話框（含確認框） | 同 popover（#1583）：淡入＋zoom .95，250／150（全域時長留到 ④）；遮罩淡入、`backdrop-blur-xs` |
 | 抽屜（手機側欄 <1024、窄螢幕的右側欄） | 照 SG 的機制（#1583）：transition 200ms、位移 2.5rem 加淡入淡出；遮罩 150 淡入。reduced-motion 不位移、≤ 150（覆寫檔，vendor README 本地修改第 23 條） |
 | 桌面側欄收合、面板高度差 | resize 300 |
 | 工具卡展開、提問面板收起 | 250／150，高度＋透明度 |
@@ -260,6 +261,8 @@
 - **焦點搬動的判斷寫在換手那一層**，不要散在各元件。
 - 對話框、抽屜一律經過 Trigger（#1583 起是 Base UI 的）；做不到的（`SidebarTrigger`、受控開啟）自己用 Popup 的 `finalFocus` 還焦點：回傳要聚焦的元素，或自己聚焦之後回傳 `false`。
 - `[tabindex="-1"]:focus-visible` 不畫外框。
+- 確認框（alert-dialog）打開時落在第一個可 tab 的按鈕，也就是「取消」：不小心按 Enter 不會執行（Base UI 的預設，#1583）。
+- 下拉選單：Trigger 是原生 button，Enter 打開（瀏覽器轉成 click），方向鍵移動 highlighted、Enter 選取並收起（Base UI 的 Menu；`guard/` 用真的 Chrome 量，#1583）。
 
 **鍵盤**
 - 核准面板與計劃審核面板不加快捷鍵，**Esc 不做事**。
@@ -349,7 +352,6 @@
 
 - 停在**提問**時按停止：`turn-cancel.test.ts` 只測了停在核准；模型看到「before dispatch」後會不會重問同一組，要實跑（[#376](https://github.com/DemianLi/nexus-agent/issues/376#issuecomment-5709355235)）。
 - 自建 markdown＋shiki＋katex 的 bundle 大小；`cn` 套件與 clsx＋tailwind-merge 是否完全等價——`button` 的 240 組已驗（197 組觸發合併、差異 0，#401），其他 registry 元件進來時各卡順手比對（[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108)）。
-- 下拉的動效值（[#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887)；popover 與指令選單已在 [#407](https://github.com/DemianLi/nexus-agent/issues/407) 量過，見 §7）。
 - macOS VoiceOver 沒走過，只有 iPhone VoiceOver（[#384](https://github.com/DemianLi/nexus-agent/issues/384#issuecomment-5719457797)）。
 - Artifact 沙盒裡的字型載入（[#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)）。
 

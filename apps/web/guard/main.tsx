@@ -25,13 +25,18 @@
  *   - `data-guard-border`：手機側欄的抽屜，量四邊的 border 寬（只留陰影、不畫邊，#1583 本地修改第 21 條）。
  *   - `data-guard-width`：呼叫端的寬度（回饋框、手機側欄的抽屜），量畫出來的寬度跟 develop 一樣（#1583 PM 決定第 4 點）。
  *   - `data-guard-motion`：sheet 與手機側欄的抽屜，在模擬 reduced-motion 下量 `translate` 與 `transition-duration`（#1583 本地修改第 23 條）。
+ *   - `data-guard-height`：下拉選單的選項，量畫出來的高度（觸控高度：1024 以下 44px、以上 32px，#1583 本地修改第 25 條）。
+ *   - `data-guard-shown`：側欄列的「⋯」，量 `opacity`（選單開著時要看得見：Trigger 開著掛 `data-popup-open`，#1583）。
+ *   - `data-guard-checks`：picker 勾選的那一列，量它看得見的勾有幾顆、報讀名稱是什麼（vendor 附的勾由覆寫檔藏掉，#1583 本地修改第 27 條）。
  *   vendor 元件自己畫的部分（關閉鈕、遮罩）掛不了屬性，由 `guard.test.ts` 開頁後補上，見 `OVERLAY_MARKS`。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
  * - `?glass=opaque` 在 `<html>` 掛 `data-glass="opaque"`（#1468 Q7：效能不達標時退回的那條路），量不透明的面。
  * - `?overlay=<名字>` 換成只畫一個開著的 modal 浮層（#1583）：modal 會把頁面其他部分設成 inert，跟主頁的焦點量測放不到一起。
- *   `dialog`、`sheet`、`mobile-sidebar`（要用手機寬度開）、`feedback`（回饋框，量寬度）。
+ *   `dialog`、`sheet`、`mobile-sidebar`（要用手機寬度開）、`feedback`（回饋框，量寬度）、`alert-dialog`、`dropdown`（側欄列的「⋯」選單）、
+ *   `picker`（輸入框底列的選擇座位，有搜尋框）、`dropdown-keyboard`（關著的選單，量鍵盤 Enter 打開與選取，#1583 驗收 D）。
  */
-import { StrictMode, useEffect } from 'react';
+import { MoreHorizontal } from 'lucide-react';
+import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Counts } from '@/components/changes/counts';
@@ -50,6 +55,17 @@ import {
   InputGroupTextarea,
 } from '@/components/ui/input-group';
 import { FeedbackDialog } from '@/components/feedback-dialog';
+import { PickerSeat } from '@/components/picker-seat';
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog';
 import {
   Dialog,
   DialogContent,
@@ -58,6 +74,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Sheet,
@@ -77,6 +100,7 @@ import { Textarea } from '@/components/ui/textarea';
 import {
   Sidebar,
   SidebarMenu,
+  SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
@@ -357,9 +381,128 @@ function OverlayPage({ name }: { name: string }) {
       );
     case 'feedback':
       return <FeedbackDialog open submitting={false} onSubmit={() => {}} onDismiss={() => {}} />;
+    case 'alert-dialog':
+      return (
+        <AlertDialog open>
+          <AlertDialogContent data-guard-shadow="alert-dialog" data-guard-surface="alert-dialog">
+            <AlertDialogHeader>
+              <AlertDialogTitle data-guard-text="alert-dialog-title">確認框標題</AlertDialogTitle>
+              <AlertDialogDescription data-guard-text="alert-dialog-description">
+                確認框說明
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {/* footer 是 `bg-muted/50` 的底帶，兩顆按鈕的字疊在它上面量。 */}
+            <AlertDialogFooter>
+              <AlertDialogCancel
+                data-guard-text="alert-dialog-cancel"
+                data-guard-focus="alert-dialog-cancel"
+              >
+                取消
+              </AlertDialogCancel>
+              <AlertDialogAction
+                data-guard-text="alert-dialog-action"
+                data-guard-focus="alert-dialog-action"
+              >
+                確定
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+      );
+    case 'dropdown':
+      // 跟產品一樣：側欄一列的「⋯」（`thread-row-menu.tsx`）。另一列的「⋯」沒開，量具自檢 lg 寬度下它是藏著的。
+      return (
+        <SidebarProvider>
+          <Sidebar collapsible="none">
+            <SidebarMenu>
+              <SidebarMenuItem>
+                <SidebarMenuButton>開著選單的那一列</SidebarMenuButton>
+                <DropdownMenu open>
+                  <DropdownMenuTrigger
+                    render={
+                      <SidebarMenuAction showOnHover aria-label="選項" data-guard-shown="open" />
+                    }
+                  >
+                    <MoreHorizontal aria-hidden />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent
+                    align="start"
+                    data-guard-shadow="dropdown"
+                    data-guard-surface="dropdown"
+                  >
+                    <DropdownMenuItem
+                      data-guard-text="dropdown-item"
+                      data-guard-height="dropdown-item"
+                    >
+                      釘選
+                    </DropdownMenuItem>
+                    <DropdownMenuItem data-guard-text="dropdown-item-highlighted">
+                      重新命名
+                    </DropdownMenuItem>
+                    <DropdownMenuSeparator />
+                    <DropdownMenuItem>封存</DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton>沒開選單的那一列</SidebarMenuButton>
+                <SidebarMenuAction showOnHover aria-label="選項" data-guard-shown="closed">
+                  <MoreHorizontal aria-hidden />
+                </SidebarMenuAction>
+              </SidebarMenuItem>
+            </SidebarMenu>
+          </Sidebar>
+        </SidebarProvider>
+      );
+    case 'dropdown-keyboard':
+      return <KeyboardMenu />;
+    case 'picker':
+      return <OpenPicker />;
     default:
       throw new Error(`沒有這個浮層：${name}`);
   }
+}
+
+/** 關著的選單：鍵盤 Enter 打開、選項上按 Enter 觸發 `onClick`，選了什麼寫在頁面上給 `guard.test.ts` 讀（#1583 驗收 D）。 */
+function KeyboardMenu() {
+  const [picked, setPicked] = useState('');
+  return (
+    <div style={{ padding: 40 }}>
+      <DropdownMenu>
+        <DropdownMenuTrigger render={<Button variant="outline" />}>開選單</DropdownMenuTrigger>
+        <DropdownMenuContent align="start">
+          <DropdownMenuItem onClick={() => setPicked('釘選')}>釘選</DropdownMenuItem>
+          <DropdownMenuItem onClick={() => setPicked('重新命名')}>重新命名</DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      <output data-guard-picked={picked}>{picked}</output>
+    </div>
+  );
+}
+
+/** 輸入框底列的選擇座位，打開、列數超過門檻（有搜尋框）；勾選的是第三列，跟 cmdk 預設選中的第一列分開。 */
+function OpenPicker() {
+  const items = ['一', '二', '三', '四', '五', '六', '七'].map((label, i) => ({
+    id: `item-${i}`,
+    label: `選項${label}`,
+    checked: i === 2,
+  }));
+  return (
+    <div style={{ padding: '420px 40px 40px' }}>
+      <PickerSeat
+        icon={<MoreHorizontal />}
+        label="選項三"
+        accessibleName="選項：選項三，點開切換"
+        tip="選項：選項三"
+        groups={[{ id: 'g', heading: '選項', items }]}
+        onPick={() => {}}
+        open
+        onOpenChange={() => {}}
+        popoverLabel="選選項"
+        testId="guard-picker"
+      />
+    </div>
+  );
 }
 
 const overlay = params.get('overlay');

@@ -63,8 +63,11 @@
     outline: 2px solid var(--ring);
   }
 
-  /* 輸入框群組的外框畫在群組上（下面「輸入框群組的焦點外框」那條）：群組本身不是 :focus-visible，offset 要自己給，同樣留在 base layer。 */
-  [data-slot='input-group']:has([data-slot='input-group-control']:focus-visible) {
+  /* 輸入框群組的外框畫在群組上（下面「輸入框群組的焦點外框」那條）：群組本身不是 :focus-visible，offset 要自己給，同樣留在 base layer。
+     command 的搜尋框（`command-input`）也是包在群組裡的輸入框（#1583）。 */
+  [data-slot='input-group']:has(
+    :is([data-slot='input-group-control'], [data-slot='command-input']):focus-visible
+  ) {
     outline-offset: 2px;
   }
 }
@@ -116,9 +119,11 @@
  * 不是無效的欄位時），這裡只補 Q5 的那一圈：2px 字色、offset 2px（offset 在上面的 base layer），跟全站其他焦點同一個樣子。
  * 外框寫在 layer 外，群組自帶的 `outline-none`（utilities layer）擋不掉。`registry-edits.test.ts` 釘住這條與 vendor 原文；
  * 瀏覽器那一層（`guard/`）量群組聚焦後的外框與 `box-shadow`。不讓 Prettier 排版，理由同上。
+ * command 的搜尋框（vendor `command.tsx` 的 `CommandInput`）也是 InputGroup 包一個輸入框，但輸入框的 `data-slot` 是 `command-input`、
+ * 不是 `input-group-control`，所以一起列（#1583 擴充，PM 決定第 3 點：全站只有一種焦點樣子）；`guard/` 在 picker 頁量它。
  */
 /* prettier-ignore */
-[data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible) {
+[data-slot="input-group"]:has(:is([data-slot="input-group-control"], [data-slot="command-input"]):focus-visible) {
   outline: 2px solid var(--ring);
 }
 
@@ -229,11 +234,12 @@ body {
  * tooltip 與遮罩也走不透明退路（#1583；README 本地修改第 22 條）：SG 的不透明退路（`solid-glass.css:1166-1182`）只列 `.bg-card`、
  * `.bg-popover`、`.bg-sidebar`、`.glass-panel`、`.glass-control`，沒有 tooltip（`:815-825` 自己給 blur）與 dialog／sheet 的遮罩
  * （vendor 的 `supports-backdrop-filter:backdrop-blur-xs`）。照 SG 那段的兩種條件補上：`data-glass="opaque"` 與 `prefers-reduced-transparency`。
- * 面的顏色由 SG 那段換成不透明值（tooltip 用 `--popover`），這裡只拿掉 blur。寫在 layer 外；`guard/` 量這三個的 `backdrop-filter`。
+ * alert-dialog 的遮罩同一個寫法，一起列（#1583 PR 2 擴充）。
+ * 面的顏色由 SG 那段換成不透明值（tooltip 用 `--popover`），這裡只拿掉 blur。寫在 layer 外；`guard/` 量這幾個的 `backdrop-filter`。
  */
 /* prettier-ignore */
-[data-glass="opaque"] :is([data-slot="tooltip-content"], [data-slot="dialog-overlay"], [data-slot="sheet-overlay"]),
-[data-glass="opaque"]:is([data-slot="tooltip-content"], [data-slot="dialog-overlay"], [data-slot="sheet-overlay"]) {
+[data-glass="opaque"] :is([data-slot="tooltip-content"], [data-slot="dialog-overlay"], [data-slot="sheet-overlay"], [data-slot="alert-dialog-overlay"]),
+[data-glass="opaque"]:is([data-slot="tooltip-content"], [data-slot="dialog-overlay"], [data-slot="sheet-overlay"], [data-slot="alert-dialog-overlay"]) {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -241,7 +247,8 @@ body {
 @media (prefers-reduced-transparency: reduce) {
   [data-slot="tooltip-content"],
   [data-slot="dialog-overlay"],
-  [data-slot="sheet-overlay"] {
+  [data-slot="sheet-overlay"],
+  [data-slot="alert-dialog-overlay"] {
     -webkit-backdrop-filter: none;
     backdrop-filter: none;
   }
@@ -262,4 +269,17 @@ body {
     translate: none;
     transition-duration: var(--duration-quick);
   }
+}
+
+/*
+ * command 的選項不畫 vendor 附的那顆勾（#1583，PM 決定第 3 點；README 本地修改第 27 條）：vendor 的 `CommandItem`
+ * （`vendor/solid-glass/components/ui/command.tsx:165`）在 children 後面自己附一顆 `CheckIcon`，平常 `opacity-0` 但照樣占位，
+ * `data-checked="true"` 時才看得見。nexus 的勾由呼叫端自己畫、帶報讀名稱「目前選的」（`picker-seat.tsx`、`composer.tsx`）；
+ * vendor 那顆是 `aria-hidden`，改用它會失去報讀，留著又會畫出兩個勾、在 `flex-col` 的項目（composer 的命令選單）多出一列。
+ * 所以設成 `display: none`（不是 opacity）。選擇器錨在 vendor 的結構上：它永遠是選項的最後一個子節點；
+ * `registry-edits.test.ts` 釘住 vendor 仍是這個結構，`guard/` 在 picker 頁量勾選那一列只有一顆看得見的勾。
+ */
+/* prettier-ignore */
+[data-slot="command-item"] > svg.lucide-check:last-child {
+  display: none;
 }
