@@ -7,6 +7,7 @@
  *
  * - **接線**：閒置夠久真的被撤（伺服器日誌有 `[閒置逐出]`），撤完 `plugin-snapshot.json` 不再列它握著的設定版本。
  * - **B 等價於重啟**：同一組操作（說一輪、`/permission read-only`），一邊撤掉再開、一邊重啟 serve 再開，開出來的歷史與權限模式一樣。
+ * - **goal 撤掉再開 ＝ 重啟再開**（#1486）：目標從落盤的日誌折回來，授權不持久（`/goal` 看得到的狀態兩邊一樣）。
  * - **沒落盤就不逐出**，而且啟動日誌明說「已設但不生效」。
  *
  * 輪詢間隔的下限是 1 秒，所以這一檔的每一條要等一兩秒。**零憑證、零外部連線**：模型是預設的假模型。
@@ -174,6 +175,61 @@ describe('閒置逐出從 serve 組裝起（#1484）', () => {
     expect(afterRestart.entries.length).toBeGreaterThan(1);
     expect(afterRestart.permission).toContain('read-only');
     expect(afterEviction).toEqual(afterRestart);
+  });
+
+  it('goal：撤掉再開 ＝ 重啟再開（目標從落盤的日誌折回來；授權不持久，所以兩邊 /goal 讀到的一樣）', async () => {
+    // 同一組操作：說一輪、建目標、暫停它（只有 active 且 armed 的目標擋逐出；暫停之後才撤得掉）。
+    // serve 預設開續行排程器：目標一建出來就一輪接一輪地跑，跑著的時候進來的 slash 會被拒（輪與輪之間才有縫）。
+    // 本機快、CI 慢，所以暫停要重打到被接受為止，不是賭一次。
+    const pauseWhenAccepted = async (client: WireClient, thread: string): Promise<void> => {
+      let last: unknown;
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        last = await client.slashRun(thread, '/goal pause');
+        if ((last as { kind?: string }).kind === 'success') return;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`/goal pause 一直沒被接受：${JSON.stringify(last)}`);
+    };
+    const goalSetup = async (client: WireClient, thread: string): Promise<void> => {
+      const controller = new AbortController();
+      const events = await client.openEvents(thread, { signal: controller.signal });
+      expect((await client.runStart(thread, '開個頭')).type).toBe('success');
+      await foldTurn(events);
+      expect(await client.slashRun(thread, '/goal 把藍鯨計畫做完')).toMatchObject({
+        kind: 'success',
+      });
+      await pauseWhenAccepted(client, thread);
+      controller.abort();
+      await events.return?.(undefined).catch(() => undefined);
+    };
+    // 暫停前續行排程器跑了幾輪不是要比的東西（看機器快慢），其餘每一行都要一樣。
+    const goalText = async (client: WireClient, thread: string): Promise<string> => {
+      const shown = await client.slashRun(thread, '/goal');
+      if (shown.kind !== 'success') throw new Error(`/goal 讀不到：${JSON.stringify(shown)}`);
+      return (shown.text ?? '').replace(/輪次：\d+\//u, '輪次：N/');
+    };
+
+    // 撤掉的那一邊。
+    const evictHome = home(EVICT_PATCH);
+    const lines: string[] = [];
+    const evictClient = await serveClient(await start(evictHome, lines));
+    await goalSetup(evictClient, 'alpha');
+    await until(() => evictedLine(lines, 'alpha'));
+    const afterEviction = await goalText(evictClient, 'alpha');
+
+    // 重啟的那一邊：不設逐出，說完就收掉整台 serve，再起一台開同一條 thread。
+    const restartHome = home();
+    const first = await start(restartHome, []);
+    await goalSetup(await serveClient(first), 'alpha');
+    await stop(first);
+    const afterRestart = await goalText(await serveClient(await start(restartHome, [])), 'alpha');
+
+    // 前提：兩邊都真的折回了那個目標與它的暫停（不是兩個「沒有目標」相等）。
+    expect(afterRestart).toContain('把藍鯨計畫做完');
+    expect(afterRestart).toContain('狀態：暫停');
+    expect(afterRestart).toContain('續行授權：未授權');
+    expect(afterEviction).toBe(afterRestart);
   });
 
   it('沒落盤：設了 idleEvictAfterMs 也不逐出，啟動日誌明說不生效', async () => {

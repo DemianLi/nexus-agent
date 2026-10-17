@@ -139,13 +139,17 @@ import { tool } from '@langchain/core/tools';
 import { Command } from '@langchain/langgraph';
 import { z } from 'zod';
 
-import { goalId, sourceKwargs, toolCallIdOf, toolRefusal } from '@nexus/core';
-import type { GoalRef, SessionLog, ToolErrorInfo } from '@nexus/core';
+import { goalId } from '@nexus/goal';
+import type { GoalRef, GoalView } from '@nexus/goal';
+import { sourceKwargs } from '@nexus/session';
+import type { SessionAddress, SessionLog } from '@nexus/session';
+import { toolCallIdOf, toolRefusal } from '@nexus/tool-result';
+import type { ToolErrorInfo } from '@nexus/tool-result';
 
 import { completionAuthority, hasDirectHumanTurn } from './authority.js';
 import type { GoalToolAuthority } from './authority.js';
 import { GoalError } from './service.js';
-import type { GoalService, GoalView } from './service.js';
+import type { GoalService } from './service.js';
 import { renderWrapupContext } from './wrapup.js';
 
 /** 讀當前目標。名字照 dsh，**模型面的名字不是我們可以本地化的東西**。 */
@@ -174,14 +178,15 @@ export const GOAL_TOOL_UNKNOWN_CALLER_MESSAGE =
   '認不出這次呼叫屬於哪一個會話，找不到要動的目標，所以沒有動。';
 
 /**
- * 找得到日誌、卻沒有 goal 域接在它上面時回的話。
+ * 這次呼叫的會話不是 root（是某個子代理）時回的話。
  *
- * **subagent 走的就是這一條**——域只接 root（`index.ts` 裡 `subject.address.kind` 那一
- * 格），所以一份 subagent 日誌查出來本來就沒有服務。這句話對它是**字面上準確的**，不是
- * 借用來的錯誤。產品路徑上到不了這裡：工具是 `rootOnly` 註冊的，subagent 那一份早就被
- * 換成拒絕樁了。
+ * **字面上準確**：goal 域只接 root（目標是人交代的，subagent 沒有人可以交代），一份 subagent 日誌上本來就沒有 goal 域。
+ * 產品路徑上到不了這裡：工具是 `rootOnly` 註冊的，subagent 那一份早就被換成拒絕樁了；直接帶子代理的 `checkpoint_ns` 呼叫真工具才走得到。
+ *
+ * **文字逐字沿用 #1486 之前的 `GOAL_TOOL_NO_SERVICE_MESSAGE`**（Q6：拒絕訊息不變）。以前這句同時是「root 日誌卻沒有服務」的話；lazy 建立之後
+ * root 那一條永遠走不到（`serviceFor` 一定建得出來），只剩這一條，所以改了常數名、沒改字。
  */
-export const GOAL_TOOL_NO_SERVICE_MESSAGE = '這一份會話上沒有接 goal 域，所以沒有動。';
+export const GOAL_TOOL_NOT_ROOT_MESSAGE = '這一份會話上沒有接 goal 域，所以沒有動。';
 
 /**
  * 自主收尾要注入指示、卻取不到 `tool_call_id` 時拋的話。
@@ -343,17 +348,17 @@ type Resolution =
   | { readonly kind: 'ok'; readonly service: GoalService; readonly log: SessionLog }
   | { readonly kind: 'refused'; readonly message: string };
 
-/** 工具要問的兩件事：這次呼叫屬於哪一份日誌，那份日誌上有沒有 goal 域。 */
+/** 工具要問的兩件事：這次呼叫屬於哪份日誌，那份（root）日誌上的 goal 域。 */
 export interface GoalToolWiring {
-  /** 照 `registry.sessions.forCall`。 */
+  /** 照 `sessionLookup.forCall`（`@nexus/session`）：整份呼叫設定原樣傳進來，thread 身分在裡面。 */
   forCall(config: unknown): GoalToolLookup;
-  /** 這一次組裝接上的服務，依日誌查。 */
-  serviceFor(log: SessionLog): GoalService | undefined;
+  /** 這份 root 日誌上的域，沒有就建（lazy，見 `index.ts`）。**只在 `address.kind === 'root'` 之後才問**。 */
+  serviceFor(log: SessionLog): GoalService;
 }
 
-/** {@link GoalToolWiring.forCall} 的四種結果，同 `@nexus/core` 的 `SessionLookup`。 */
+/** {@link GoalToolWiring.forCall} 的四種結果，同 `@nexus/session` 的 `SessionLookup`。 */
 export type GoalToolLookup =
-  | { readonly kind: 'ok'; readonly log: SessionLog }
+  | { readonly kind: 'ok'; readonly address: SessionAddress; readonly log: SessionLog }
   | { readonly kind: 'not-attached' }
   | { readonly kind: 'unknown-caller' }
   | { readonly kind: 'ambiguous'; readonly count: number };
@@ -370,11 +375,11 @@ function resolve(wiring: GoalToolWiring, config: unknown): Resolution {
   if (found.kind === 'ambiguous') {
     return { kind: 'refused', message: goalToolAmbiguousMessage(found.count) };
   }
-  const service = wiring.serviceFor(found.log);
-  if (service === undefined) {
-    return { kind: 'refused', message: GOAL_TOOL_NO_SERVICE_MESSAGE };
+  // **只有 root 日誌上有 goal 域**（`goals.serviceFor` 的契約只收 root）：不在這裡擋，一次子代理直呼會替它的日誌建出一份服務。
+  if (found.address.kind !== 'root') {
+    return { kind: 'refused', message: GOAL_TOOL_NOT_ROOT_MESSAGE };
   }
-  return { kind: 'ok', service, log: found.log };
+  return { kind: 'ok', service: wiring.serviceFor(found.log), log: found.log };
 }
 
 /** 工具層拒絕的錯誤類別名：dsh `tool-goal` 拋的是 `HarnessError`。 */

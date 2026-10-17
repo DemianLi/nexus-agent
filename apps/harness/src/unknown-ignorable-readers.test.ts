@@ -15,11 +15,11 @@ import {
   toLoggedMessage,
 } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { foldGoal } from '@nexus/plugin-goal';
 import { describe, expect, it } from 'vitest';
 
 import { historyFrames } from './conversation-history.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
+import { foldGoal } from '@nexus/goal';
 
 /** 兩輪對話，都有回覆、有工具呼叫、有模型起訖：所有讀方都有東西可折。 */
 function baseline(): SessionEvent[] {

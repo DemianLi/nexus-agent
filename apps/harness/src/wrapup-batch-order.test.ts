@@ -81,7 +81,7 @@
 import { MemorySaver } from '@langchain/langgraph';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { SessionLog } from '@nexus/core';
-import { createGoalPlugin, GOAL_WRAPUP_MARKER, GOALS_SERVICE } from '@nexus/plugin-goal';
+import { GOAL_WRAPUP_MARKER } from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import { describe, expect, it } from 'vitest';
 
@@ -91,6 +91,8 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedModelState, ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
+import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
+import { GOALS_SERVICE } from '@nexus/goal';
 
 /**
  * 腳本：人講一句 → 模型建目標 → **續行那一輪把 `update_goal(complete)` 與 `ls` 叫在同一批**
@@ -221,7 +223,7 @@ describe('自主收尾與另一顆工具同批時，收尾指示插在兩顆結�
     });
     // 同 `wire-handler.ts`：port 要日誌，而日誌由 pump 建，而 pump 的建構參數是 port。
     const late: { log?: SessionLog } = {};
-    const goals = services.use(GOALS_SERVICE);
+    const goals = goalCoreOf(services.use(GOALS_SERVICE));
     const port: GoalDriverPort = {
       goal: () => goals.serviceFor(late.log as SessionLog)?.get(),
       block: (ref, reason) => void goals.serviceFor(late.log as SessionLog)?.block(ref, reason),

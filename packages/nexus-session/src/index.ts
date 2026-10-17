@@ -46,7 +46,8 @@
  *   `declare module`。
  *
  * 只放今天有消費者的東西（`packages/AGENTS.md`「Require a current owner and need」）：四個讀法只有 `trajectory` 在用；
- * 兩個日誌型別（`SessionLog`、`SessionEvent`）是 `feedback` 的（#1456）；查找與 todo 的名字是 `todo` 的（#1463）。
+ * 兩個日誌型別（`SessionLog`、`SessionEvent`）是 `feedback` 的（#1456）；查找與 todo 的名字是 `todo` 的（#1463）；
+ * `currentTurnStart`、`sourceKwargs` 與 `SessionEventMap`（`turn/start` 酬載的型別）是 `goal` 的（#1486）。
  *
  * @module
  */
@@ -61,9 +62,13 @@ export {
   toolCallIds,
 } from '@nexus/core';
 
+// goal 要用的兩個讀寫日誌的小函式（#1486 Q4 (a)）：`currentTurnStart` 讀「這一輪從哪顆 `turn/start` 開始」（權限判準），
+// `sourceKwargs` 造一則訊息的來源記號（收尾指示）。本來就住在 core，這裡單向轉出。
+export { currentTurnStart, sourceKwargs } from '@nexus/core';
+
 // 日誌的**型別**出口（#1456 Q4 (a)）：遷出的插件要在簽名裡寫 `SessionLog`／`SessionEvent`，但不能 import `@nexus/core`。
 // 跟上面四個值同一個形狀：單向轉出，實作留在 `@nexus/core`；撤除條件同上（#1421 Q2 (b)）。
-export type { SessionEvent, SessionLog } from '@nexus/core';
+export type { SessionEvent, SessionEventMap, SessionLog } from '@nexus/core';
 
 // 會話查找的型別出口（#1463 Q2 (a)）：工具在簽名裡要寫 `SessionLookup` 與它帶的 `SessionAddress`，但不能 import `@nexus/core`。
 export type { SessionAddress, SessionLookup } from '@nexus/core';

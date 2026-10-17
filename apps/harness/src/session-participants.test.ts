@@ -12,12 +12,7 @@
 import { PassThrough } from 'node:stream';
 
 import { createEchoPlugin } from './echo.fixture.js';
-import {
-  createGoalPlugin,
-  GOAL_CLEARED_MESSAGE,
-  GOAL_COMMAND_NAME,
-  GOALS_SERVICE,
-} from '@nexus/plugin-goal';
+import { GOAL_CLEARED_MESSAGE, GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
 import { SessionRegistry } from '@nexus/core';
 import { createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -30,6 +25,8 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import { composeAttachSessions } from './session-attach.js';
+import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
+import { GOALS_SERVICE } from '@nexus/goal';
 
 const MODEL = (): ScriptedChatModel => new ScriptedChatModel({ turns: [{ content: '好的。' }] });
 
@@ -90,16 +87,19 @@ describe('組裝點', () => {
       plugins: [createEchoPlugin(), createGoalPlugin()],
     });
     try {
-      const goals = services.use(GOALS_SERVICE);
+      const goals = goalCoreOf(services.use(GOALS_SERVICE));
       const sessions = new SessionRegistry('one');
       const log = sessions.root;
       const detach = attachSession(sessions);
       expect(detach).toBeDefined();
-      expect(goals.attached()).toHaveLength(1);
-      goals.serviceFor(log)?.create({ objective: '接上了' });
+      // **lazy**：接上日誌的那一刻不建服務，第一次被問到才建（#1486）。
+      expect(goals.existingFor(log)).toBeUndefined();
+      const service = goals.serviceFor(log);
+      service.create({ objective: '接上了' });
       expect(log.events.map((event) => event.type)).toEqual(['goal/change']);
       detach();
-      expect(goals.attached()).toEqual([]);
+      // 服務跟著日誌而不是跟著 `attachSession`：撤掉參與者之後同一份日誌問到的還是同一個。
+      expect(goals.existingFor(log)).toBe(service);
     } finally {
       await dispose();
     }
@@ -163,15 +163,19 @@ describe('web 那條', () => {
       createGoalPlugin(),
       await shippedModelRow(),
     ]);
-    const goals = built.goals;
-    if (goals === undefined) throw new Error('掛了 goal 就該拿得到服務');
+    if (built.goals === undefined) throw new Error('掛了 goal 就該拿得到服務');
+    const goals = goalCoreOf(built.goals);
+    const registries: SessionRegistry[] = [];
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
         agent: built.agent as unknown as PumpAgent,
         commands: built.commands,
         dispose: built.dispose,
-        attachSessions: composeAttachSessions(built),
+        attachSessions: (registry, backgroundPort) => {
+          registries.push(registry);
+          return composeAttachSessions(built)(registry, backgroundPort);
+        },
       }),
     });
     close = () => handler.close();
@@ -180,12 +184,19 @@ describe('web 那條', () => {
       fetch: async (input, init) => handler.handle(loopbackRequest(input as string, init)),
     });
 
-    expect(goals.attached()).toEqual([]);
+    expect(registries).toEqual([]);
     await client.openEvents('t1');
-    expect(goals.attached()).toHaveLength(1);
+    expect(registries).toHaveLength(1);
     await client.openEvents('t2');
-    // **一個 thread 一份日誌，所以是兩個服務不是一個**——這正是服務綁日誌而不是綁
-    // registry 的理由。
-    expect(goals.attached()).toHaveLength(2);
+    expect(registries).toHaveLength(2);
+    // **一個 thread 一份日誌，所以是兩個服務不是一個**——這正是服務綁日誌而不是綁 registry 的理由。
+    // lazy 之後「接上」不再建服務，所以這裡各問一次，看問出來的是兩個互不相干的實例。
+    const [rootOne, rootTwo] = registries.map((registry) => registry.root);
+    expect(goals.existingFor(rootOne!)).toBeUndefined();
+    const one = goals.serviceFor(rootOne!);
+    const two = goals.serviceFor(rootTwo!);
+    expect(one).not.toBe(two);
+    one.create({ objective: '第一條 thread 的目標' });
+    expect(two.get()).toBeUndefined();
   });
 });

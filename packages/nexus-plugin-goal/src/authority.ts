@@ -47,10 +47,9 @@
  * @module
  */
 
-import { currentTurnStart } from '@nexus/core';
-import type { SessionEvent, SessionEventMap } from '@nexus/core';
-
-import type { GoalView } from './service.js';
+import type { GoalView } from '@nexus/goal';
+import { currentTurnStart } from '@nexus/session';
+import type { SessionEvent, SessionEventMap } from '@nexus/session';
 
 /** `turn/start` 的酬載。**單獨取出來是為了讓下面那個 `default` 分支有話可說**。 */
 type TurnStart = SessionEventMap['turn/start'];

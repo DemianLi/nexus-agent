@@ -9,19 +9,11 @@
 import { describe, expect, it } from 'vitest';
 
 import { createRegistry, createSessionRunner, SessionLog } from '@nexus/core';
-import type {
-  AttachmentRef,
-  CommandDefinition,
-  CommandResult,
-  GoalChangeMeta,
-  PluginRegistry,
-} from '@nexus/core';
+import type { AttachmentRef } from '@nexus/commands';
+import type { CommandDefinition, CommandResult, GoalChangeMeta, PluginRegistry } from '@nexus/core';
 
 import {
-  createGoalPlugin,
-  executeGoalCommand,
   goalConfigSchema,
-  GOALS_SERVICE,
   GOAL_ATTACHMENTS_ONLY_MESSAGE,
   GOAL_ATTACHMENTS_TEXT,
   GOAL_CLEARED_MESSAGE,
@@ -29,14 +21,16 @@ import {
   GOAL_COMMAND_NAME,
   GOAL_INVALID_EDIT_MESSAGE,
   GOAL_NONE_MESSAGE,
-  GOAL_NOT_ATTACHED_MESSAGE,
   GOAL_NOTHING_TO_CLEAR_MESSAGE,
   GOAL_REJECTED_MESSAGE,
-  goalAmbiguousMessage,
   goalMissingMessage,
   parseGoalCommand,
 } from './index.js';
-import type { GoalPluginOptions, GoalService } from './index.js';
+import { GOALS_SERVICE } from '@nexus/goal';
+
+import { createGoalPlugin, goalCoreOf } from './goal-shell.test.helper.js';
+import type { GoalPluginOptions } from './goal-shell.test.helper.js';
+import type { GoalService } from './index.js';
 
 /** 掛一次、接 `logs` 份日誌，回手上要用的每一個東西。 */
 function mount(
@@ -63,7 +57,7 @@ function mount(
   const exit = registry.enter({ id: 'goal#0', name: 'goal' });
   plugin.plugin.apply(registry, goalConfigSchema.parse(plugin.config));
   exit();
-  const goals = registry.services.use(GOALS_SERVICE);
+  const goals = goalCoreOf(registry.services.use(GOALS_SERVICE));
 
   const opened: SessionLog[] = [];
   const steers: { text: string; attachments?: readonly AttachmentRef[] }[] = [];
@@ -89,11 +83,7 @@ function mount(
     registry,
     command,
     logs: opened,
-    serviceFor: (log) => {
-      const service = goals.serviceFor(log);
-      if (service === undefined) throw new Error('接線之後應該找得到服務');
-      return service;
-    },
+    serviceFor: (log) => goals.serviceFor(log),
     steers,
     run: (rawInput, attachments = []) => {
       const result = command.handler({
@@ -202,68 +192,12 @@ describe('註冊', () => {
   });
 });
 
-describe('找得到要動的那一份', () => {
-  it('**一份都沒接就說一份都沒接**，不是靜靜什麼都沒發生', () => {
-    const { run, detach } = mount(0);
-    expect(errorText(run(''))).toBe(GOAL_NOT_ATTACHED_MESSAGE);
-    expect(errorText(run('把測試修綠'))).toBe(GOAL_NOT_ATTACHED_MESSAGE);
-    detach();
-  });
-
-  it('**接了兩份就當場說分不出來**，不是讓後接的那份靜靜贏走', () => {
-    // 這一條釘住的是 `commands.ts` 上那句「一份 registry 只接一份日誌」——它是
-    // `/goal` 找得到目標的前提，而前提要可證偽。
-    const { run, logs, detach } = mount(2);
-    expect(errorText(run('把測試修綠'))).toBe(goalAmbiguousMessage(2));
-    // 而且真的什麼都沒寫進去：分不出來的時候不該賭一份。
-    for (const log of logs) {
-      expect(log.events.filter((event) => event.type === 'goal/change')).toEqual([]);
-    }
-    detach();
-  });
-
-  it('收掉一份之後剩下的那一份就不再有歧義', () => {
-    const plugin = createGoalPlugin();
-    const registry = createRegistry();
-    const exit = registry.enter({ id: 'goal#0', name: 'goal' });
-    plugin.plugin.apply(registry, goalConfigSchema.parse(plugin.config));
-    exit();
-    const installers = registry.sessions.installers();
-    const first = new SessionLog('a');
-    const second = new SessionLog('b');
-    const detachFirst = createSessionRunner({
-      address: { kind: 'root' },
-      log: first,
-      installers,
-    });
-    const detachSecond = createSessionRunner({
-      address: { kind: 'root' },
-      log: second,
-      installers,
-    });
-    const command = registry.commands.find(GOAL_COMMAND_NAME);
-    if (command === undefined) throw new Error('應該註冊得到 /goal');
-    const run = (rawInput: string): CommandResult =>
-      command.handler({
-        commandId: 'cmd-test-1',
-        rawInput,
-        attachments: [],
-        signal: new AbortController().signal,
-        // 收掉 `first` 之後執行器手上剩下的是 `second`。
-        sessionLog: second,
-        steer: () => undefined,
-      }) as CommandResult;
-
-    expect(errorText(run(''))).toBe(goalAmbiguousMessage(2));
-    detachFirst();
-    expect(successText(run(''))).toBe(GOAL_NONE_MESSAGE);
-    // 而且剩下的是**沒被收掉的那一份**：寫進去的目標要落在 `second` 上。
-    run('把測試修綠');
-    expect(first.events.filter((event) => event.type === 'goal/change')).toEqual([]);
-    expect(second.events.filter((event) => event.type === 'goal/change')).toHaveLength(1);
-    detachSecond();
-  });
-
+/**
+ * #1486 之後 `/goal` 找的是**這一次呼叫帶來的那一份日誌**（`sessionLog`）上的服務，沒有「一份都沒接」與「接了不只一份」兩句了：
+ * 服務是 lazy 的，每份 root 日誌第一次被問到才建，一份 registry 想接幾份日誌都行。這兩句連同它們的測試一起拿掉，
+ * 紀錄在 PR 的「行為改變」一節；同一段的覆蓋改由 `lazy.test.ts` 與 harness 的 `session-participants.test.ts` 接手。
+ */
+describe('兩次組裝不串台', () => {
   it('**兩次組裝不串台**——同一個 plugin 物件掛兩次，各自動各自的', () => {
     // 這是 `apply` 裡那一格存在的理由。放進工廠閉包的話，這裡的兩條 registry 會共用
     // 同一格，而 `serve.ts` 每個 thread 組裝一次。
@@ -563,24 +497,5 @@ describe('域的拒絕與域的壞掉分得出來', () => {
     expect(() => run('')).toThrow(/goal 重放在會話事件/u);
     expect(() => run('把測試修綠')).toThrow(/goal 重放在會話事件/u);
     detach();
-  });
-});
-
-describe('executeGoalCommand 直接呼叫', () => {
-  it('空清單與多份清單的那兩句話由它自己決定', () => {
-    expect(executeGoalCommand(undefined, 0, '')).toEqual({
-      kind: 'error',
-      text: GOAL_NOT_ATTACHED_MESSAGE,
-    });
-    // 那份日誌沒接 goal 域、組裝上別份有接：還是「沒接」，不是動到別人的。
-    expect(executeGoalCommand(undefined, 1, '')).toEqual({
-      kind: 'error',
-      text: GOAL_NOT_ATTACHED_MESSAGE,
-    });
-    const fake = {} as unknown as GoalService;
-    expect(executeGoalCommand(fake, 3, '')).toEqual({
-      kind: 'error',
-      text: goalAmbiguousMessage(3),
-    });
   });
 });

@@ -43,6 +43,7 @@ import type { CommandDefinition, CommandDescriptor } from '@nexus/core';
 import { defineToken } from '@nexus/sdk';
 
 export type {
+  AttachmentRef,
   CommandDefinition,
   CommandDescriptor,
   CommandInputDescriptor,

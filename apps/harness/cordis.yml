@@ -83,13 +83,17 @@
   name: '@nexus/plugin-plan-mode'
 
 # **例外二：goal**（#126）。同一條理由：命令沒進清單，`/goal 把測試修綠` 會掉回模型變成
-# 一句閒聊。代價兩筆：每一次執行多接一位會話參與者，以及模型側多三顆工具
-# （`create_goal`／`get_goal`／`update_goal`，#177 之後才有的東西，一律 `rootOnly`，所以
-# subagent 那幾份看到的是拒絕樁）。它不改 prompt、不碰 backend，沒有目標時連一顆事件都
-# 不寫；但工具清單與那幾顆的 token 確實變了。
+# 一句閒聊。代價一筆：模型側多三顆工具（`create_goal`／`get_goal`／`update_goal`，#177 之後
+# 才有的東西，一律 `rootOnly`，所以 subagent 那幾份看到的是拒絕樁）。它不改 prompt、不碰
+# backend，沒有目標時連一顆事件都不寫；但工具清單與那幾顆的 token 確實變了。
 #
 # **域與命令是同一個 plugin**，不像 dsh 拆成兩個套件——理由寫在 `@nexus/plugin-goal` 的
 # 檔頭上。
+#
+# **這一列走 Cordis 樹**（#1486）：`apply` 提供 `goals` 服務（定義在 `@nexus/goal`，第二個「插件提供、宿主消費」的服務，
+# 前例是 `messageFeedback`），並經工具／命令／會話查找三個接縫登記三顆工具與 `/goal`。**每份 root 日誌上的 goal 域是查找時才建的**
+# （`WeakMap<SessionLog, GoalService>`，建的當下同步重播 `log.events`、再 `log.subscribe`），所以不再有「每一次執行多接一位會話參與者」
+# 那一筆代價，`/goal` 也不再有「一份都沒接」「接了不只一份」兩句；宿主組 thread 時把 `goals` 折進該條 thread 的 `registry.services`。
 - id: goal
   name: '@nexus/plugin-goal'
 

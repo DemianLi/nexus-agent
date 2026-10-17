@@ -19,8 +19,8 @@
  * `cli.ts` 的 `runTurn`）。所以載體丟掉、紀律照抄，同 `containment.ts` 對
  * `guard/timeout-policy` 那一筆。
  *
- * **但檢查沒有跟著搬**：續行文字的 renderer 與驗它的不變量伴生都留在
- * `@nexus/plugin-goal`，判準是「只要 `kind: 'goal'` 這個詞彙存在，伴生就武裝」——與有
+ * **但檢查沒有跟著搬**：續行文字的 renderer（`@nexus/goal`）與驗它的不變量伴生（`@nexus/plugin-goal`）
+ * 都不在 harness，判準是「只要 `kind: 'goal'` 這個詞彙存在，伴生就武裝」——與有
  * 沒有掛排程器無關。只在掛了排程器時才擋的檢查，對一顆手寫或寫壞的輪次是零防守。
  *
  * ## 這個模組是純的，`flush()` 不在裡面
@@ -78,8 +78,8 @@
 
 import { currentTurnStart, hasUnansweredInterrupt } from '@nexus/core';
 import type { GoalBlockReason, GoalId, GoalRef, SessionEvent } from '@nexus/core';
-import { renderGoalRoundPrompt } from '@nexus/plugin-goal';
-import type { GoalView } from '@nexus/plugin-goal';
+import { renderGoalRoundPrompt } from '@nexus/goal';
+import type { GoalView } from '@nexus/goal';
 
 /** 上限耗盡時記的那顆 blocker 的穩定代碼。逐字照 dsh。 */
 export const ROUND_LIMIT_BLOCK_CODE = 'round-limit';
@@ -282,6 +282,16 @@ export interface GoalDriverPort {
   pause(ref: GoalRef): void;
   /** 收回續行授權，**不動耐久的相位**。耐久檢查點失敗、上一輪撞到輸出上限、被中止或拋錯時用。 */
   disarm(): void;
+  /**
+   * 這條 thread 的目標現在是不是 **active 且 armed**——**不建立、不重播**的讀法，給閒置逐出的判斷用（#1484、#1486）。
+   *
+   * 逐出掃描對每條 thread 每輪問一次，用會建立的 {@link goal} 會對一條從沒碰過 goal 的 thread 觸發整份日誌的重播。
+   * 沒被問過的日誌上沒有服務，就沒有人掛過授權（授權只活在行程內，只有服務自己的方法掛得上），所以「還沒被問過」等價於「沒有武裝的目標」。
+   * **服務建了、但折疊壞掉時照舊拋**（呼叫端要當成「不閒置」）。
+   *
+   * 選填：手搭的測試替身沒有它時，呼叫端退回 {@link goal}。
+   */
+  armed?(): boolean;
   /** 排隊前的耐久檢查點。沒有落盤時是 no-op。 */
   flush(): Promise<void>;
   /** 排程器自己出事時說一聲。 */

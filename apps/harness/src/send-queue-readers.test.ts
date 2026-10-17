@@ -12,12 +12,12 @@
 
 import { goalId, hasUnansweredInterrupt, SessionLog } from '@nexus/core';
 import type { SessionEventMap } from '@nexus/core';
-import type { GoalView } from '@nexus/plugin-goal';
 import { describe, expect, it } from 'vitest';
 
 import { historyPage } from './conversation-history.js';
 import { scanSessionLog } from './eval/session-scan.js';
 import { decideGoalRound } from './goal-driver.js';
+import type { GoalView } from '@nexus/goal';
 
 const item = (id: string) => ({ id, text: id, source: { kind: 'user' as const } });
 const INSERT = (id: string, start = 0) =>

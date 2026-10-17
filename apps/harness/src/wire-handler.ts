@@ -1435,8 +1435,17 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           lastActiveAt: now(),
           titleBusy: () => attached.detachTitle?.busy?.() ?? false,
           goalArmed: () => {
-            const goal = driver?.goal();
-            return goal?.phase === 'active' && goal.activation === 'armed';
+            if (driver === undefined) return false;
+            try {
+              // **不建立的讀法優先**（#1486）：逐出掃描對每條 thread 每輪問一次，用 `goal()` 會對一條從沒碰過 goal 的 thread 觸發整份日誌的重播。
+              // 手搭的測試替身沒有 `armed`，退回 `goal()`。
+              if (driver.armed !== undefined) return driver.armed();
+              const goal = driver.goal();
+              return goal?.phase === 'active' && goal.activation === 'armed';
+            } catch {
+              // 服務建了、但 goal 串的折疊壞掉：讀不出來就當「不閒置」，保守不撤。掃描是 `void sweepIdle()`，這裡拋會變成沒人接的 rejection。
+              return true;
+            }
           },
           dispose: () => release(false),
           evict: (report) => release(true, report),

@@ -40,7 +40,7 @@ const probe: NexusPlugin = {
   apply(registry) {
     registry.sessions.join((subject) => {
       // 時鐘與 id 都固定：這份 fixture 手動跑的時候輸出要逐字一樣。
-      const service = new GoalService(subject, { now: () => 0, newGoalId: () => 'goal-probe' });
+      const service = new GoalService(subject.log, { now: () => 0, newGoalId: () => 'goal-probe' });
       service.create({ objective: PROBE_OBJECTIVE });
     });
     registry.invariants.register(GOAL_PROBE_PACKAGE, (subject, fail) => {

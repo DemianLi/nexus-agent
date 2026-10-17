@@ -20,7 +20,6 @@ import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { goalId, SessionLog } from '@nexus/core';
 import type { InboxSplice, PluginEntry, SessionEvent } from '@nexus/core';
-import type { GoalView } from '@nexus/plugin-goal';
 import type { Event, InboxPayload } from '@nexus/wire';
 import {
   createWireClient,
@@ -41,6 +40,7 @@ import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 import type { WireHandler } from './wire-handler.js';
+import type { GoalView } from '@nexus/goal';
 
 async function until(predicate: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now();

@@ -16,8 +16,6 @@
 
 import { MemorySaver } from '@langchain/langgraph';
 import type { SessionEvent, SessionLog } from '@nexus/core';
-import { createGoalPlugin, GOALS_SERVICE } from '@nexus/plugin-goal';
-import type { GoalServices } from '@nexus/plugin-goal';
 import type { Event, WireGoal } from '@nexus/wire';
 import { emptyConversation, GOAL, reduceAll } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
@@ -29,6 +27,9 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
+import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
+import { GOALS_SERVICE } from '@nexus/goal';
+import type { GoalCore } from '@nexus/plugin-goal';
 
 const OBJECTIVE = '把 CI 修綠';
 
@@ -46,7 +47,7 @@ const TURNS: readonly ScriptedTurn[] = [
 
 interface Built {
   readonly pump: ThreadPump;
-  readonly goals: GoalServices;
+  readonly goals: GoalCore;
   readonly frames: Event[];
   readonly warnings: string[];
   stop(): Promise<void>;
@@ -70,7 +71,7 @@ async function build(
     checkpointer: new MemorySaver(),
   });
   const late: { log?: SessionLog } = {};
-  const goals = built.services.use(GOALS_SERVICE);
+  const goals = goalCoreOf(built.services.use(GOALS_SERVICE));
   const warnings: string[] = [];
   const port: GoalDriverPort = {
     goal: () => goals.serviceFor(late.log as SessionLog)?.get(),

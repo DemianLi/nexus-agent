@@ -9,8 +9,6 @@ import { describe, expect, it } from 'vitest';
 
 import { goalId, SessionLog } from '@nexus/core';
 import type { SessionEventMap } from '@nexus/core';
-import { renderGoalRoundPrompt } from '@nexus/plugin-goal';
-import type { GoalView } from '@nexus/plugin-goal';
 
 import {
   decideGoalRound,
@@ -19,6 +17,8 @@ import {
   ROUND_LIMIT_BLOCK_CODE,
 } from './goal-driver.js';
 import type { GoalDriverPort } from './goal-driver.js';
+import { renderGoalRoundPrompt } from '@nexus/goal';
+import type { GoalView } from '@nexus/goal';
 
 const ID = goalId('goal-1');
 
