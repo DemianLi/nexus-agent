@@ -100,8 +100,9 @@
  *    nexus 的落盤格式把 header 獨立成 `<base>.header.json`、檔名不帶版本，所有既存會話、離線掃描與日誌匯出共用。
  *    要照世代檔得先整個遷格式，那是另一張規模 L 的卡（#1509 Q1 (a)）。退到 dsh 自己取代既有檔用的
  *    `writeFileAtomic`，補上它 TODO 裡寫的檔案 `fsync` 與目錄 `fsync`。
- * 2. **Windows：`rename` 暫時性錯誤（`EACCES`／`EBUSY`／`EPERM`）有界重試**，常數同 dsh（20 ms 起、上限 200 ms、8 次）；
- *    目錄 `fsync` 與 #1510 一樣在 Windows 略過。
+ *
+ * 照 dsh、不算偏離的：Windows 的 `rename` 暫時性錯誤（`EACCES`／`EBUSY`／`EPERM`）有界重試，常數同 `atomic-write:19-44`
+ * （20 ms 起、上限 200 ms、8 次）。Windows 不做目錄 `fsync`，沿用 #1510 登記的偏離 2（理由 1）。
  *
  * ## 目錄：CLI 每次一個，serve 按專案固定一格
  *

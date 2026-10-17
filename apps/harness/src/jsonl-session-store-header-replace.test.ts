@@ -5,7 +5,7 @@
  * 開日誌。讀日誌本文讀前讀後各 `stat`，變了重讀一次，不拼出垃圾行、也不讓續接照錯的位置截檔。
  *
  * 照 `jsonl-session-store-materialize.test.ts` 的做法包一層 `node:fs/promises`，記下呼叫順序、在指定處注入失敗。
- * 舊實作（就地 `writeFile`）下 A 條紅：它記得到對 header 的 `writeFile`／沒有 `rename`。
+ * B 條同時掛了新實作的暫存檔 `fsync` 失敗與舊實作的「就地 `writeFile` 寫一半」：改回就地覆寫時 header 會真的被寫壞，紅在位元組那個斷言上。
  */
 
 import { appendFile, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
@@ -23,6 +23,8 @@ import type { SessionEvent, StoredSessionHeader } from '@nexus/core';
 interface Injection {
   /** 暫存檔的 `sync` 拋 ENOSPC。 */
   tempSyncEnospc: boolean;
+  /** 舊實作的路徑：就地 `writeFile(<header>)` 先寫一半再拋 ENOSPC。新實作不會走到，掛著是為了讓改回就地覆寫時 header 真的變壞。 */
+  partialHeaderWrite: boolean;
   /** `rename` 拋這個碼（`times` 次後恢復）；`Infinity` 是永遠。 */
   renameFails: { code: string; times: number } | undefined;
   /** 第一次讀日誌本文（不帶 encoding 的 `readFile`）時：回傳這段位元組，並先執行副作用。 */
@@ -37,6 +39,7 @@ let inject: Injection = noInjection();
 function noInjection(): Injection {
   return {
     tempSyncEnospc: false,
+    partialHeaderWrite: false,
     renameFails: undefined,
     firstLogRead: undefined,
   };
@@ -108,6 +111,13 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     writeFile: async (path: unknown, data: unknown, options?: unknown) => {
       if (typeof path === 'string' && path.startsWith(tmpBase))
         calls.push(`writeFile ${label(path)}`);
+      if (inject.partialHeaderWrite && typeof path === 'string' && path.endsWith('.header.json')) {
+        const text = String(data);
+        await actual.writeFile(path, text.slice(0, Math.floor(text.length / 2)), options as never);
+        throw Object.assign(new Error('ENOSPC: no space left on device, write'), {
+          code: 'ENOSPC',
+        });
+      }
       return actual.writeFile(path as never, data as never, options as never);
     },
     readFile: async (path: unknown, options?: unknown) => {
@@ -221,7 +231,13 @@ describe('A. header 路徑上不准就地截斷', () => {
 
 describe('B. 取代中途失敗，header 原樣', () => {
   for (const [name, arm] of [
-    ['暫存檔 fsync 拋 ENOSPC', () => (inject.tempSyncEnospc = true)],
+    [
+      '暫存檔 fsync 拋 ENOSPC',
+      () => {
+        inject.tempSyncEnospc = true;
+        inject.partialHeaderWrite = true;
+      },
+    ],
     [
       'rename 拋 ENOSPC',
       () => (inject.renameFails = { code: 'ENOSPC', times: Number.POSITIVE_INFINITY }),
