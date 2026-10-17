@@ -12,6 +12,13 @@
  *   - `data-guard-surface`：不透明的退路（reduced-transparency、`data-glass="opaque"`）下，量這個面是不是真的不透明、沒有 blur。
  *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、按下去三種狀態各量一次字色對底色（chip 三階，#1512）。
  *   - `data-guard-located`：對話裡被定位的那一則（`[data-slot=message-scroller-item][data-located]`），量圓角真的畫出來。
+ *   - `data-guard-glass`：SG 畫成玻璃的按鈕（outline、secondary、glass），量它真的有 `backdrop-filter`：`solid-glass.css:640-677`
+ *     靠 vendor Button 輸出的 `data-variant` 命中（#1523）。
+ *   - `data-guard-expanded`：Radix 浮層 Trigger（asChild）包著的 outline 按鈕開著時（`trigger`）跟沒開的（`reference`）比底色：
+ *     SG 用 `[aria-expanded="true"]` 把它畫成按下去的樣子（#1523 的混合期）。
+ *   - `data-guard-hover`：平常與滑鼠移上去兩種狀態各量一次字對底色（destructive 按鈕，頁面上與卡片裡各一顆；hover 底是覆寫檔調淡的，#1523）。
+ *   - `data-guard-opacity`：InputGroup 的 `opacity` 與底色（`reference` 一般的、`send-disabled` 只有按鈕停用、`control-disabled` 欄位停用），
+ *     vendor 的 `has-disabled:opacity-50` 被按鈕停用觸發的那一半由覆寫檔擋掉（#1523 本地修改第 18 條）。
  *   - `data-guard-choice`：問答的選項（已勾選、沒勾選、停用），量平常與滑鼠移上去的底色、停用的樣子：shadcn 的 `data-*` custom variant
  *     （`vendor/solid-glass/shadcn/tailwind.css`，#1523）specificity 是 0，不能改掉這幾個 variant 原本的行為。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
@@ -28,7 +35,13 @@ import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { InputGroup, InputGroupInput } from '@/components/ui/input-group';
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+  InputGroupText,
+  InputGroupTextarea,
+} from '@/components/ui/input-group';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import {
   Questionnaire,
@@ -60,7 +73,10 @@ const BUTTON_VARIANTS = [
   'secondary',
   'ghost',
   'link',
+  'glass',
 ] as const;
+/** SG 畫成玻璃的按鈕（`solid-glass.css:640-677` 靠 `data-variant` 命中；`glass` 走 `glass-control`）。 */
+const GLASS_VARIANTS: readonly string[] = ['outline', 'secondary', 'glass'];
 const BADGE_VARIANTS = ['default', 'secondary', 'destructive', 'outline', 'ghost', 'link'] as const;
 
 const row = { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 } as const;
@@ -93,6 +109,8 @@ function GuardPage() {
               data-guard-text={`button-${variant}`}
               data-guard-focus={`button-${variant}`}
               data-guard-shadow={`button-${variant}`}
+              data-guard-glass={GLASS_VARIANTS.includes(variant) ? variant : undefined}
+              data-guard-hover={variant === 'destructive' ? 'button-destructive' : undefined}
             >
               按鈕 {variant}
             </Button>
@@ -117,18 +135,42 @@ function GuardPage() {
               <div data-guard-texts="card-counts">
                 <Counts added={12} deleted={3} />
               </div>
+              <Button variant="destructive" data-guard-hover="button-destructive-card">
+                卡片裡的刪除
+              </Button>
             </CardContent>
           </Card>
         </div>
 
         <div style={{ width: 360 }}>
-          <InputGroup data-guard-outline-host="input-group" data-guard-shadow="input-group">
+          <InputGroup
+            data-guard-outline-host="input-group"
+            data-guard-shadow="input-group"
+            data-guard-opacity="reference"
+          >
             <InputGroupInput
               data-guard-focus="input-group"
               data-guard-field="input-group"
               aria-label="輸入框"
               placeholder="輸入"
             />
+          </InputGroup>
+        </div>
+
+        {/* 群組只在欄位本身停用時變淡（#1523 本地修改第 18 條）：送出鈕停用的（輸入框沒字時就是這樣）要跟上面那個一樣
+            不透明、提示字照常過 4.5；欄位停用的照 vendor 變淡（量具分得出來）。 */}
+        <div style={{ width: 360, display: 'grid', gap: 12 }}>
+          <InputGroup data-guard-opacity="send-disabled">
+            <InputGroupTextarea aria-label="送出鈕停用的輸入框" placeholder="輸入" />
+            <InputGroupAddon align="block-end">
+              <InputGroupText data-guard-text="input-group-send-hint">Enter 送出</InputGroupText>
+              <Button size="sm" disabled>
+                送出
+              </Button>
+            </InputGroupAddon>
+          </InputGroup>
+          <InputGroup data-guard-opacity="control-disabled">
+            <InputGroupInput aria-label="停用的欄位" placeholder="停用" disabled />
           </InputGroup>
         </div>
 
@@ -202,6 +244,22 @@ function GuardPage() {
               </SidebarMenu>
             </Sidebar>
           </SidebarProvider>
+        </div>
+
+        {/* 混合期（#1523）：Radix 浮層的 Trigger 用 asChild 包 Base UI 的 Button。Radix 掛的是 `aria-expanded`，
+            SG 的 `:665` 用它把 outline 按鈕畫成按下去的玻璃；Base UI 的 `[data-popup-open]` 這時不會有。 */}
+        <div style={{ ...row, gap: 240, paddingBottom: 120 }}>
+          <Button variant="outline" data-guard-expanded="reference">
+            沒開的按鈕
+          </Button>
+          <Popover open>
+            <PopoverTrigger asChild>
+              <Button variant="outline" data-guard-expanded="trigger">
+                開著的按鈕
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent side="right">按鈕開的浮層</PopoverContent>
+          </Popover>
         </div>
 
         <div style={{ ...row, gap: 240, paddingBottom: 200 }}>

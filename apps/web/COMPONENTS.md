@@ -6,7 +6,7 @@
 
 | 層 | 放什麼 | 規則 |
 | --- | --- | --- |
-| `src/components/ui/` | shadcn registry 裝進來的元件 | 只放 registry 來的；檔頭寫來源與版本；裝法見規格 §4.1。自己的元件不要放這裡 |
+| `src/components/ui/` | shadcn registry 裝進來的元件，或 vendor 的 solid-glass 元件的 nexus 層 | 只放 registry 來的；檔頭寫來源與版本；裝法見規格 §4.1。已換成 solid-glass 的（#1523 起：button、input、textarea、input-group、separator、skeleton、card、badge）只轉出 `src/vendor/solid-glass/components/ui/` 的原檔，本地修改寫在這一層或覆寫檔，登記在 [vendor README](src/vendor/solid-glass/README.md) 的「本地修改」。自己的元件不要放這裡 |
 | `src/components/*.tsx`（含各資料夾） | 我們自己的元件 | 資料夾按功能分（`tool/`、`todo/`、`sidebar/`…），檔名不重複資料夾名 |
 | `src/components/row-trigger.tsx` 這類 | 兩處以上共用的自製積木 | 見下面「什麼時候抽」 |
 | `src/lib/` | 不畫畫面的邏輯與投影 | 元件只讀它的結果 |
@@ -48,9 +48,9 @@
 
 | 階 | 用在 | 例 |
 | --- | --- | --- |
-| `text-body`（14／23） | 內文，與本來就是內文大小的按鈕、選單項 | 對話、`Button` 預設、下拉選單與 cmdk 的項目、右側欄的分頁鈕 |
-| `text-ui`（13／18） | **可以點的**與**當標題的**小字 | `xs` 按鈕、小字的可展開列（思考過程、待辦、送出佇列、觀測與成本分頁的列）、輸入框底列的膠囊鈕、「這一輪的過程」、側欄與 cmdk 的群組標題、成本分頁的區段標題、卡片標頭（工具卡的標題、計劃、等待核准） |
-| `text-tip`（12／16） | 小字說明、附註、時間、計數 | 工具名與摘要、`Badge`、tooltip、快捷鍵提示、時間戳、popover 裡數字上面的欄位名、卡片裡單一區塊上面的小標籤（「結果」「呼叫參數」「子代理的對話」）、錯誤與提示句 |
+| `text-body`（14／23） | 內文，與本來就是內文大小的按鈕、選單項 | 對話、`Button` 預設（vendor 原文寫 `text-sm`，同字級）、下拉選單與 cmdk 的項目、右側欄的分頁鈕 |
+| `text-ui`（13／18） | **可以點的**與**當標題的**小字 | 小字的可展開列（思考過程、待辦、送出佇列、觀測與成本分頁的列）、輸入框底列的膠囊鈕、「這一輪的過程」、側欄與 cmdk 的群組標題、成本分頁的區段標題、卡片標頭（工具卡的標題、計劃、等待核准） |
+| `text-tip`（12／16） | 小字說明、附註、時間、計數 | 工具名與摘要、`Badge`（vendor 原文寫 `text-xs`，同字級）、`xs` 按鈕（vendor 原文寫 `text-xs`：外觀照 SG，#1468 Q8、Q19 拿掉了 #1281 按鈕那一條，下面「按鈕不縮成 `text-tip`」管的是產品原始碼）、tooltip、快捷鍵提示、時間戳、popover 裡數字上面的欄位名、卡片裡單一區塊上面的小標籤（「結果」「呼叫參數」「子代理的對話」）、錯誤與提示句 |
 | `text-micro`（11） | 只有程式碼區塊的語言標籤。它在 CSS 裡用 `var(--text-micro)`，不是 class，所以搜 `text-micro` 這個 class 搜不到 | 回覆裡程式碼區塊左上角的「ts」（`src/styles/markdown.css` 的 `.md-code-lang`） |
 
 怎麼判：
@@ -61,14 +61,14 @@
 - **等寬的內容不是標題**：diff、讀檔、搜尋結果、`MonoBlock`、工具卡上的路徑都留 `text-tip`。路徑本身就是那顆鈕的字時（改動清單的列、審閱分頁選檔案的鈕）才是 `text-ui`。
 - **只動 12 的那一層**：已經是 `text-body` 的按鈕與選單不降成 13。
 
-機械判得出來的那一半有護欄：按鈕、`RowTrigger` 與其他觸發鈕、選單項自己的 `className` 寫了 `text-tip`／`text-micro` 就紅（`src/styles/type-hierarchy.test.ts`）；registry 元件的預設字級（`ui/button`、`ui/dropdown-menu` 沒有小字，`xs` 按鈕、側欄的群組標題與 `sm` 選單鈕、cmdk 的群組標題、附件的檔名是 `text-ui`）在 `ui/registry-edits.test.ts`。「是不是標題」判不出來，靠 review。
+機械判得出來的那一半有護欄：按鈕、`RowTrigger` 與其他觸發鈕、選單項自己的 `className` 寫了 `text-tip`／`text-micro` 就紅（`src/styles/type-hierarchy.test.ts`）；registry 元件的預設字級（`ui/dropdown-menu` 沒有小字，側欄的群組標題與 `sm` 選單鈕、cmdk 的群組標題、附件的檔名是 `text-ui`）在 `ui/registry-edits.test.ts`。「是不是標題」判不出來，靠 review。
 
 ## 新增自訂 token 要登記 `cn`
 
 `cn`（class 合併）不認得自訂的 `text-*`／`rounded-*` 名，會把字級當字色互相吃掉（2026-10-07 發生過，PR #1144）。所以：
 
 - `index.css` 加了 `--text-<名>` 或 `--radius-<名>`，就到 `src/lib/utils.ts` 的 `createCn` 登記同一個名字。
-- **全站只從 `@/lib/utils` 取 `cn`**，不要 `from 'cn'`（`utils.test.ts` 會擋，registry 檔裝進來也要改）。
+- **全站只從 `@/lib/utils` 取 `cn`**，不要 `from 'cn'`（`utils.test.ts` 會擋，registry 檔裝進來也要改）。vendor 的 SG 元件放行：它們原樣 `from "cn"`，由別名解析到 `@/lib/utils`（vendor README「本地修改」第 14 條）。
 - 改 class 名的重構，前後比對要量**字級、字色、寬度**的計算樣式，不只高度與截圖。
 
 ## 什麼時候抽共用元件

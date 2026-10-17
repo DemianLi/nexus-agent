@@ -40,7 +40,7 @@
  * - **不畫外框的只有三種**：
  *   - 程式把焦點搬到面板或題目容器（`tabindex=-1`；Radix 選單項也是，它們用底色標目前那一項）。
  *   - **文字輸入框**（`input`、`textarea`）：滑鼠點進去也算 `:focus-visible`，而它們自己有焦點樣子——registry 的 `Input`／`Textarea`
- *     是邊框變 `border-ring`，輸入框群組是整個群組畫外框（`ui/input-group.tsx`）。再畫一圈會變成邊框加外框的雙圈。
+ *     是邊框變 `border-ring`，輸入框群組是整個群組畫外框（下面「輸入框群組的焦點外框」那條）。再畫一圈會變成邊框加外框的雙圈。
  *     本專案沒有原生的 checkbox／radio（勾選框都是 Radix 的按鈕），所以整類排除不會漏掉別種控制項。
  *   - 自己畫了別的焦點樣子、標了 `data-focus="custom"` 的（例如右側欄的拖曳把手整條變色）。
  * - registry 自帶的 `focus-visible:ring-[3px]` 在 layer 外關掉，兩圈才不會疊在一起。
@@ -61,6 +61,11 @@
 
   :is(input, textarea):focus-visible {
     outline: 2px solid var(--ring);
+  }
+
+  /* 輸入框群組的外框畫在群組上（下面「輸入框群組的焦點外框」那條）：群組本身不是 :focus-visible，offset 要自己給，同樣留在 base layer。 */
+  [data-slot='input-group']:has([data-slot='input-group-control']:focus-visible) {
+    outline-offset: 2px;
   }
 }
 
@@ -102,6 +107,50 @@
 /* prettier-ignore */
 [data-slot="input-otp-slot"][data-active="true"] {
   box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+/*
+ * 輸入框群組的焦點外框畫在群組上（#1279；#1523 換成 vendor 版起寫在這裡，README 本地修改第 15 條）：裡面的 input／textarea
+ * 自帶 `outline-none`、沒有邊框，焦點只能畫在外面那個群組。vendor 的群組（`vendor/solid-glass/components/ui/input-group.tsx:17`）
+ * 只有 `outline-none` 加 `has-[…:focus-visible]:ring-3`，沒有外框；ring 已由 SG 自己清掉（`solid-glass.css:944-948`，
+ * 不是無效的欄位時），這裡只補 Q5 的那一圈：2px 字色、offset 2px（offset 在上面的 base layer），跟全站其他焦點同一個樣子。
+ * 外框寫在 layer 外，群組自帶的 `outline-none`（utilities layer）擋不掉。`registry-edits.test.ts` 釘住這條與 vendor 原文；
+ * 瀏覽器那一層（`guard/`）量群組聚焦後的外框與 `box-shadow`。不讓 Prettier 排版，理由同上。
+ */
+/* prettier-ignore */
+[data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible) {
+  outline: 2px solid var(--ring);
+}
+
+/*
+ * 群組只在欄位本身停用時才變淡（#1523，PM 定；README 本地修改第 18 條）：vendor 的 `has-disabled:opacity-50`
+ * （`vendor/solid-glass/components/ui/input-group.tsx:17`）編成 `:has(:disabled)`，群組裡任何一個後代停用就命中——
+ * 輸入框（`composer.tsx`）沒字時送出鈕是停用的，整個框就變成 50%。這裡保留 develop 的語意：按鈕停用不算，
+ * 欄位（`input-group-control`）停用時照 vendor 變淡。底色那一半（`has-disabled:bg-input/50`、暗色 /80）本來就被
+ * `solid-glass.css:917-930` 寫在 layer 外的 `background-color: var(--field)` 蓋掉，不用處理。
+ * 寫在 layer 外才蓋得過 utilities layer；`guard/` 量送出鈕停用的群組 opacity 是 1。不讓 Prettier 排版，理由同上。
+ */
+/* prettier-ignore */
+[data-slot="input-group"]:has(:disabled):not(:has([data-slot="input-group-control"]:disabled)) {
+  opacity: 1;
+}
+
+/*
+ * destructive 按鈕 hover 的淡紅底調淡（#1523，PM 定格 2；README 本地修改第 17 條）：vendor 是亮 `hover:bg-destructive/20`、
+ * 暗 `dark:hover:bg-destructive/30`（`vendor/solid-glass/components/ui/button.tsx:18`），字疊上去只有 3.7，比 develop 那顆實心紅底白字
+ * （hover 5.8 以上）差。Q5 碰到 Q8 以 Q5 為準（同第 12 條）：hover 底換成亮 17%、暗 26%，`--destructive` 由 tokengen 照這兩格解到 4.5。
+ * 百分比的來源是 `tokengen/destructive-tint.mjs`，CSS 寫不了 import，`solid-glass-overrides.test.ts` 比對兩邊一致。
+ * 包在 `(hover: hover)` 裡跟 Tailwind 的 `hover:` 一樣（觸控點一下不會把底色卡住）；寫在 layer 外，蓋得過 utilities 層的那兩條。
+ * 瀏覽器那一層（`guard/`）量 hover 時字對底色的對比。不讓 Prettier 排版，理由同上。
+ */
+/* prettier-ignore */
+@media (hover: hover) {
+  [data-slot="button"][data-variant="destructive"]:hover {
+    background-color: color-mix(in oklab, var(--destructive) 17%, transparent);
+  }
+  .dark [data-slot="button"][data-variant="destructive"]:hover {
+    background-color: color-mix(in oklab, var(--destructive) 26%, transparent);
+  }
 }
 
 /*

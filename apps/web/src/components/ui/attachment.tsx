@@ -3,8 +3,9 @@
  * 2026-10-08 取得。裝進來就是我們的原始碼，不靠重跑 `shadcn add` 更新。
  * 改動（`registry-edits.test.ts` 守著）：`cn` 與 `Button` 改走 `@/`；`text-sm`／`text-xs` 換成字級階梯 `text-body`／`text-tip`，
  * 其中 `sm`／`xs` 的標題（檔名）再升成 `text-ui`（#1281：卡片標題不小於 13），說明那一行仍是 `text-tip`；
- * `shimmer` 換成我們的 `text-shimmer`；`scroll-fade-x`、`scrollbar-none` 我們的 CSS 沒有這兩個工具類（寫了也沒有樣式），
- * 捲軸改用 `[scrollbar-width:none]`，邊緣淡出拿掉。
+ * registry 的閃光工具類換成我們的 `text-shimmer`；左右邊緣淡出與隱藏捲軸的兩個工具類當時我們的 CSS 沒有（寫了也沒有樣式），
+ * 捲軸改用 `[scrollbar-width:none]`，邊緣淡出拿掉。（#1523 起 shadcn 的 tailwind.css 有這幾個工具類，原始碼裡出現類名就會產出、
+ * 連帶帶出 keyframes；這裡刻意不寫出類名。）
  */
 import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';

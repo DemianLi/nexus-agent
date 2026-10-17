@@ -4,7 +4,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 
-import { isVendorUpstream } from '@/test/vendor-upstream';
+import { isVendorUpstream, VENDOR_UPSTREAM_FILES } from '@/test/vendor-upstream';
 
 import { readCascade } from './css-cascade';
 
@@ -246,16 +246,6 @@ const ALLOWED: readonly Allowed[] = [
   },
   // `ui/` 的 registry 原文：裝進來就是我們的原始碼，沒有改的就照舊；之後要改或確認要留，逐條處理。
   {
-    file: 'components/ui/badge.tsx',
-    what: 'text-white',
-    why: 'destructive 底上的白字；語意 token 沒有 `--destructive-foreground`',
-  },
-  {
-    file: 'components/ui/button.tsx',
-    what: 'text-white',
-    why: '同 badge：destructive 底上的白字',
-  },
-  {
     file: 'components/ui/dialog.tsx',
     what: 'bg-black/50',
     why: '遮罩的黑色半透明；沒有對應的語意 token',
@@ -274,16 +264,6 @@ const ALLOWED: readonly Allowed[] = [
     file: 'components/ui/dialog.tsx',
     what: 'text-lg',
     why: 'registry 的標題尺寸；規格沒有標題階（同 empty-hero）',
-  },
-  {
-    file: 'components/ui/input.tsx',
-    what: 'text-base',
-    why: '手機上維持 16px 免得 iOS 聚焦時放大頁面，`md:` 以上換成 `text-body`',
-  },
-  {
-    file: 'components/ui/textarea.tsx',
-    what: 'text-base',
-    why: '同 input：手機上 16px，`md:` 以上換成 `text-body`',
   },
   {
     file: 'components/ui/questionnaire.tsx',
@@ -512,18 +492,22 @@ describe('判準', () => {
     expect(rules('font-lightish')).toEqual([]);
   });
 
-  test('輸入框：ui/ 以外的原生 textarea 擋，ui/ 本身不擋', () => {
+  test('輸入框：ui/ 以外的原生 textarea 擋；Textarea 本身是 vendor 原樣（#1523），不在掃描範圍', () => {
     expect(all.filter((v) => v.rule === '輸入框')).toEqual([]);
-    expect(
-      readFileSync(join(SRC, 'components/ui/textarea.tsx'), 'utf8').includes('<textarea'),
-    ).toBe(true);
+    // 位置從共用名單取（`test/vendor-upstream.ts`），這裡不寫 vendor 的路徑。
+    const vendored = [...VENDOR_UPSTREAM_FILES].find((f) =>
+      f.endsWith('/components/ui/textarea.tsx'),
+    );
+    expect(vendored).toBeDefined();
+    expect(readFileSync(join(SRC, vendored ?? ''), 'utf8').includes('<textarea')).toBe(true);
   });
 
   test('焦點那條不管 ui/ 的 registry 原文：那裡的 ring 由 solid-glass.overrides.css 統一處理', () => {
     const registry = scan(files.filter((f) => relative(SRC, f).startsWith('components/ui/')));
     expect(registry.filter((v) => v.rule === '焦點')).toEqual([]);
     expect(
-      readFileSync(join(SRC, 'components/ui/input.tsx'), 'utf8').includes('focus-visible:ring-'),
+      // `input.tsx` 從 #1523 起只轉出 vendor 版；還是 registry 原文、帶 ring 的換成 sidebar（③-4 才換）。
+      readFileSync(join(SRC, 'components/ui/sidebar.tsx'), 'utf8').includes('focus-visible:ring-'),
     ).toBe(true);
   });
 });

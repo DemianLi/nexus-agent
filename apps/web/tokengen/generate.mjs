@@ -24,6 +24,7 @@
 import Color from 'colorjs.io';
 import { writeFileSync } from 'node:fs';
 
+import { DESTRUCTIVE_HOVER, DESTRUCTIVE_REST } from './destructive-tint.mjs';
 import { SG, SG_REDUCED_TRANSPARENCY } from './sg-input.mjs';
 
 const out = (rel) => new URL(rel, import.meta.url);
@@ -324,7 +325,13 @@ for (const theme of THEMES) {
 /** 每個顏色的約束：對頁面（每一疊）、對卡片（每一疊）、對 stage。沒寫的那一面不約束。 */
 const RULES = {
   brand: { page: T.text, card: T.text, stage: T.text },
-  destructive: { page: T.status, card: T.text, stage: T.text },
+  // `tints`：自己的淡色底上的字，淡色底疊在每一疊頁面與卡片上（#1523）：平常那一格與按鈕 hover 那一格，見 `destructive-tint.mjs`。
+  destructive: {
+    page: T.status,
+    card: T.text,
+    stage: T.text,
+    tints: [DESTRUCTIVE_REST, DESTRUCTIVE_HOVER],
+  },
   success: { page: T.status, card: T.text, stage: T.text },
   // SG 自己的狀態色也套 5.2（demian，#1512，2026-10-17）。
   'status-done': { page: T.status, card: T.text },
@@ -344,10 +351,19 @@ const SG_COLORS = [
   'link',
 ];
 
+/** 顏色自己的淡色底（`bg-<色>/<alpha>`）疊在每一疊頁面、每一疊卡片上。 */
+function tintFaces(theme, css, alpha) {
+  const { L, C, H } = lch(css);
+  const tint = `oklch(${L} ${C} ${H} / ${alpha})`;
+  const under = [...BASE[theme].pages, ...facesOn(theme, SURFACE[theme].card)];
+  return under.map((face) => composite(tint, face));
+}
+
 function passes(theme, name, css) {
   const rule = RULES[name];
   const stage = srgb(NEXUS_SURFACE[theme].stage);
   return (
+    (rule.tints ?? []).every((tint) => worst(css, tintFaces(theme, css, tint[theme])) >= T.text) &&
     (rule.page === undefined || worst(css, BASE[theme].pages) >= rule.page) &&
     (rule.card === undefined || worst(css, facesOn(theme, SURFACE[theme].card)) >= rule.card) &&
     (rule.stage === undefined || worst(css, [stage]) >= rule.stage)

@@ -27,7 +27,7 @@
 
 之後加進來的，照地圖的順序：其餘的 registry 元件在 ③-2～③-4，12 個 AI 元件與 AgentWorkspace 在第 ④ 步。每一步用到哪些檔就加哪些，同一支 `sync.mjs`、同一個 commit 同步（Q18 的「一起同步」）。
 
-**元件怎麼接**（#1523 PM 定）：vendor 的元件原樣放這裡，`src/components/ui/<x>.tsx` 留著當 nexus 那一層，預設只轉出 vendor 版，本地修改能用 props 表達的寫成薄包裝放在那裡。vendor 檔裡的 `@/components/ui/button` 解析到的是 nexus 那一層，所以包裝層的修改在 vendor 的組合元件裡也生效。③-1 的第一張 PR 只把檔放進來、接好解析與護欄，`components/ui` 還沒轉出（第二張 PR 才換）。
+**元件怎麼接**（#1523 PM 定）：vendor 的元件原樣放這裡，`src/components/ui/<x>.tsx` 留著當 nexus 那一層，預設只轉出 vendor 版，本地修改能用 props 表達的寫成薄包裝放在那裡。vendor 檔裡的 `@/components/ui/button` 解析到的是 nexus 那一層，所以包裝層的修改在 vendor 的組合元件裡也生效。③-1 的 8 個元件，`components/ui/<x>.tsx` 都已換成轉出 vendor 版；有本地修改的只有 `input-group.tsx`（第 16 條），其餘是一行 `export … from`。
 
 **載入**：`shadcn/tailwind.css` 照 SG `src/index.css:1-7` 的順序，排在 `tailwindcss`、`tw-animate-css` 之後、`solid-glass.css` 之前（`src/index.css`）。它的 9 個 `@custom-variant`（`data-open`、`data-closed`、`data-checked`、`data-unchecked`、`data-selected`、`data-disabled`、`data-active`、`data-horizontal`、`data-vertical`）會蓋掉 Tailwind 內建的同名 variant：寫成 `:where()`，specificity 從 0,1,0 變成 0，同時認 Radix 的 `data-state` 與 Base UI 的屬性，只認「有屬性且不是 `"false"`」。產品碼裡用到的只有 `components/ui/questionnaire.tsx`（`data-checked`、`data-disabled`、`group-data-checked`），畫出來的值跟換之前逐一相同（`guard/` 的問答選項、`components/ui/questionnaire.test.tsx` 釘 primitive 輸出的屬性）。
 
@@ -47,7 +47,7 @@
 | 3 | overrides | `:343` 起的 `body`（`@layer base`）、`:233` 的 `.dark { color-scheme }` | body 的底色、字色與亮暗兩個 `color-scheme` 寫在 layer 外：沒有 layer 的樣式永遠贏過有 layer 的，頁面被包進帶 reset 的外殼時暗色不會變成黑底深字（Q8 保留的機制）。SG 的漸層背景照用 | `solid-glass-overrides.test.ts` |
 | 4 | overrides | `:1319-1322` reduced-motion 下進場 `animation: none` | 改成 150ms 的淡入（Q5：reduced-motion 保留 ≤ 150ms 的透明度動畫）；持續動畫照 SG 停掉 | `reduced-motion.test.ts`、`scripts/check-built-css.mjs` |
 | 5 | overrides | （不是改 SG）| nexus 自己的高亮：`[data-located]`（chip 底色、3xl 圓角）、`[data-revealed]`（字色外框） | `solid-glass-overrides.test.ts`、`focus-outline.test.ts` |
-| 6 | tokens.generated | `:root`／`.dark` 的顏色 | 達不到 Q5 門檻的 SG 顏色照 demian 選的 B 案重解（色相照 SG、彩度收進 sRGB、解明度）；達標的原樣。`--ring`／`--sidebar-ring`＝字色（Q5）。亮暗一定成對 | `tokens-contrast.test.ts`、`tokens-generated.test.ts`、`sg-input.test.ts` |
+| 6 | tokens.generated | `:root`／`.dark` 的顏色 | 達不到 Q5 門檻的 SG 顏色照 demian 選的 B 案重解（色相照 SG、彩度收進 sRGB、解明度）；達標的原樣。`--ring`／`--sidebar-ring`＝字色（Q5）。亮暗一定成對。`--destructive` 另外要過自己的淡紅底（#1523）：vendor 的 destructive 按鈕與 badge 是淡紅底配 `text-destructive`，所以字疊在頁面與卡片上的淡紅底也要 ≥ 4.5，平常（亮 /10、暗 /20，vendor 原值）與按鈕 hover（亮 /17、暗 /26，第 17 條）兩格都約束，alpha 只寫在 `tokengen/destructive-tint.mjs`。重解後亮 `oklch(0.45 0.183 27.325)`、暗 `oklch(0.765 0.139 22.216)`；暗色原本是 SG 原值（P3 內、不在 sRGB），現在落在 sRGB 內，`tokens-generated.test.ts` 的 `OUT_OF_SRGB` 已清空 | `tokens-contrast.test.ts`（含淡紅底 12 格）、`tokens-generated.test.ts`、`sg-input.test.ts`、`guard/`（destructive 平常與 hover） |
 | 7 | tokens.generated | `:1171-1196` reduced-transparency 的不透明面 | 產物覆寫了 `--card`，排在 SG 後面的無條件值會蓋掉這段的不透明值，所以照 SG 原值重寫被覆寫的那幾個 | `tokens-generated.test.ts` |
 | 8 | tokens.generated | `:1166-1170` `data-glass="opaque"` 只拿掉 blur | 面換成跟 reduced-transparency 同一組不透明值（含 `--primary-solid: 100%`）；暗色用 `.dark[data-glass]` 高一階 specificity（Q7） | `tokens-generated.test.ts`、`tokens-contrast.test.ts`（三種狀態都量） |
 | 9 | overrides 的 `@theme inline` | `:41-42` 字型堆疊 | Geist／Geist Mono 打包 latin，Geist Mono 另加方框字元的 symbols2（`styles/fonts.css`），中文接 Noto Sans TC，系統後備 PingFang TC、Microsoft JhengHei，拿掉 SG 的三個簡體字型；等寬在 Noto Sans TC 前先接 Consolas、Menlo；等寬尾端保留三個 emoji 字型（#979）（Q6；symbols2 與系統等寬是 demian 2026-10-17 在 PM session 拍板，#1512） | `font-stack.test.ts` |
@@ -61,6 +61,15 @@
 | # | 在哪 | 蓋掉 vendor 的哪裡 | 改成什麼、為什麼 | 釘住的測試 |
 |---|---|---|---|---|
 | 14 | `resolve-alias.ts`（`vite.config.ts`、`vitest.config.ts`、`guard/vite.config.ts` 共用）＋`tsconfig.json` 的 `paths` | `components/ui/*.tsx` 的 `import { cn } from "cn"` | 裸的 `cn` 精確解析到 `src/lib/utils.ts`（`cn/config` 不動，`utils.ts` 自己從它取）：npm 的 `cn` 不認得 `text-ui`、`rounded-row`，會把 #1141 帶回來（Q19 放行的執行方式，PM 定）。Vite 用正規式 `/^cn$/`，字串鍵會連 `cn/config` 一起改寫。別名是全域的，但打包進來的相依套件沒有一個 import 裸的 `cn`（#1523 用 build 時的 `resolveId` 探針確認），實際只作用在 vendor 的元件 | `lib/cn-alias.test.tsx`（渲染 vendor 原樣的 Button）、`vite-config.test.ts`（build、guard、tsconfig 三份解析） |
+
+**元件層**（#1523 起）：vendor 的元件檔不動，改在覆寫檔或 `components/ui/<x>.tsx` 這一層（選層順序：覆寫檔 → 包裝層；③-1 不改 vendor 檔）。
+
+| # | 在哪 | 蓋掉 vendor 的哪裡 | 改成什麼、為什麼 | 釘住的測試 |
+|---|---|---|---|---|
+| 15 | overrides | `components/ui/input-group.tsx:17` 群組容器的 `outline-none`，聚焦只靠 `has-[…:focus-visible]:ring-3`（而 `solid-glass.css:944-948` 又把容器的 ring 清掉，所以等於沒有焦點樣子） | 內部欄位 `:focus-visible` 時整個群組畫 2px 字色外框、offset 2px（#1279，Q19 留下的那條）：外框寫在 layer 外，offset 在 base layer（跟第 1 條同一套）；選擇器 `[data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible)`，不讓 Prettier 排版 | `registry-edits.test.ts`（覆寫檔含這段、vendor 原文仍是 `outline-none` 配 `ring-3`）、`focus-outline.test.ts`、`guard/`（群組聚焦） |
+| 16 | `components/ui/input-group.tsx`（包裝層） | `components/ui/input-group.tsx:57-61` addon 的 `onClick` 只找 `input` 來 focus | 連 `textarea` 一起找：輸入框（`composer.tsx`）用的是 `InputGroupTextarea`，vendor 原樣點 addon 空白處拿不到焦點。vendor 把 `onClick` 寫在 `{...props}` 前面，所以包裝層傳的整段取代它；呼叫端自己傳的照舊蓋掉包裝層 | `components/ui/input-group.test.tsx`（textarea、vendor 原文只找 input、input 照舊、點按鈕不搶焦點、呼叫端蓋掉） |
+| 17 | overrides | `components/ui/button.tsx:18` destructive 的 `hover:bg-destructive/20`、`dark:hover:bg-destructive/30` | hover 底改成亮 /17、暗 /26：vendor 原值下 `text-destructive` 疊在 hover 底上過不了 4.5。Q5 碰到 Q8 以 Q5 為準（PM 定 (c)，取格 2：第一個達標的值）。寫在 layer 外、包在 `@media (hover: hover)`（跟 Tailwind 的 `hover:` 同條件）；alpha 跟 tokengen 共用 `destructive-tint.mjs`，覆寫檔寫字面值、測試比對兩邊一致 | `solid-glass-overrides.test.ts`（cascade 的贏家、vendor 原文）、`tokens-contrast.test.ts`、`guard/`（destructive hover，拿掉這段會紅） |
+| 18 | overrides | `components/ui/input-group.tsx:17` 的 `has-disabled:opacity-50`（編成 `:has(:disabled)`，群組裡任何後代停用就命中） | 只有欄位（`input-group-control`）停用時群組才變淡，按鈕停用不算，保留 develop 的語意：輸入框沒字時送出鈕是停用的，vendor 原樣會讓整個框變 50%（PM 擋下，#1523）。`:has(:disabled):not(:has([data-slot="input-group-control"]:disabled))` 時 `opacity: 1`，寫在 layer 外。底色那一半（`has-disabled:bg-input/50`、暗色 /80）本來就被 `solid-glass.css:917-930` 寫在 layer 外的 `--field` 蓋掉，不處理 | `registry-edits.test.ts`（覆寫檔含這段、vendor 原文仍是 `has-disabled:opacity-50`）、`guard/`（送出鈕停用的群組 opacity 1、底色同一般群組，欄位停用的 0.5；拿掉這段會紅，對比量具也會紅） |
 
 另外**新增**、不是改 SG 的：`index.css` 的 `--radius-row`（SG 的 3xl 減 4px）與 nexus 獨有的顏色 token（`stage`、`chip*`、`brand-soft`、`warning`、`info`、`card-hairline`，Q11 留到第 ⑥ 步），以及 `tokens.generated.css` 的 `--primary-hover`／`--primary-active`（亮 `:12-13`、暗 `:35-36`，主按鈕 hover 與按下的底色，SG 沒有這兩格）。圓角階梯照 SG，不重綁。
 
