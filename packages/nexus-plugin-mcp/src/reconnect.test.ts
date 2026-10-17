@@ -24,6 +24,7 @@ import { MEMO_URI } from './resource-fixtures.js';
 import { modelToolNames } from './tool-names.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
+const MODERN_SERVER = fileURLToPath(new URL('./modern-stdio-server.ts', import.meta.url));
 const FAST = { initialDelayMs: 40, maxDelayMs: 160, maxAttempts: 5 } as const;
 const TOOL = 'mcp__srv__fetch_release_note';
 
@@ -257,5 +258,54 @@ describe('殺掉 stdio 子行程', () => {
       rmSync(dir, { recursive: true, force: true });
     }
     expect(s.pids()).toEqual([]);
+  }, 30_000);
+});
+
+/**
+ * **收尾有期限**（[#1543](https://github.com/DemianLi/nexus-agent/issues/1543)）：重連卡在一台不回 initialize 的 server 上時，
+ * 關閉不被它拖住。改之前同樣的布置要等 SDK 的請求逾時（實測約 120 秒）：dispose 先等進行中的握手，adapter 的 `close()` 也先等它。
+ */
+describe('握手卡住時關閉', () => {
+  it('重連卡在握手：dispose 6 秒內回來，並記一句確認不到', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-mcp-hang-'));
+    const flag = join(dir, 'hang');
+    const marker = `--marker-${randomUUID()}`;
+    const pids = () => pidsOf(marker);
+    const { registry, dispose } = await loadPlugins([
+      createMcpPlugin({
+        serverName: 'srv',
+        connection: {
+          transport: 'stdio',
+          command: process.execPath,
+          args: ['--import', 'tsx', MODERN_SERVER, marker],
+          env: { FIXTURE_HANG_IF_FILE: flag },
+        },
+        reconnect: FAST,
+      }),
+    ]);
+    try {
+      const first = pids();
+      expect(first).toHaveLength(1);
+      writeFileSync(flag, '');
+      killAll(first);
+      // 重連起了新的子行程，它正卡在握手。
+      await waitFor(() => pids().some((pid) => !first.includes(pid)));
+      const started = Date.now();
+      await dispose();
+      const elapsed = Date.now() - started;
+      console.log(`#1543 dispose 花了 ${String(elapsed)} ms`);
+      expect(elapsed).toBeLessThan(6000);
+      expect(
+        loggedBy(registry).some((m) =>
+          m.includes(
+            'mcp-client(srv): transport closure could not be confirmed during disposal — server shutdown may be incomplete',
+          ),
+        ),
+      ).toBe(true);
+    } finally {
+      // 被丟下的握手要等到 SDK 的請求逾時才有人收；測試自己收掉，不留給別的測試檔的 pgrep。
+      killAll(pids());
+      rmSync(dir, { recursive: true, force: true });
+    }
   }, 30_000);
 });

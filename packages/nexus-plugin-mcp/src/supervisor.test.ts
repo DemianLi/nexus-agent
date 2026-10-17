@@ -7,13 +7,24 @@
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { reconnectSchema, Supervisor } from './supervisor.js';
+import { GENERATION_CLOSE_TIMEOUT_MS, reconnectSchema, Supervisor } from './supervisor.js';
 import type { ReconnectPolicy, SupervisorHooks } from './supervisor.js';
 
 interface Gen {
   readonly id: number;
   /** 被 watch 掛上的「這一代斷了」通報。 */
   down?: () => void;
+  /** 這一代真的關掉了；預設 `close` 一被叫就落定，`holdClosed` 時永不落定。 */
+  readonly closed: Promise<void>;
+  readonly markClosed: () => void;
+}
+
+function gen(id: number): Gen {
+  let markClosed!: () => void;
+  const closed = new Promise<void>((resolve) => {
+    markClosed = resolve;
+  });
+  return { id, closed, markClosed };
 }
 
 /** 一組可控的假連線：`failures` 是接下來要失敗幾次，`clock` 是可控時鐘。 */
@@ -26,8 +37,11 @@ function harness(policy: Partial<ReconnectPolicy> = {}) {
     running: 0,
     maxRunning: 0,
     gate: undefined as Promise<void> | undefined,
+    /** `close` 回來了，但這一代永遠確認不到關掉（stdio 的 SIGKILL 之後不等就回、孫行程還握著 pipe）。 */
+    holdClosed: false,
     closed: [] as number[],
     reports: [] as string[],
+    errors: [] as string[],
   };
   const hooks: SupervisorHooks<Gen> = {
     label: 'mcp-client(t)',
@@ -45,21 +59,24 @@ function harness(policy: Partial<ReconnectPolicy> = {}) {
         }
         const id = next;
         next += 1;
-        return { id };
+        return gen(id);
       } finally {
         state.running -= 1;
       }
     },
     close(generation) {
       state.closed.push(generation.id);
+      if (!state.holdClosed) generation.markClosed();
       return Promise.resolve();
     },
+    closed: (generation) => generation.closed,
     watch(generation, onDown) {
       generation.down = onDown;
     },
     report: (message) => state.reports.push(message),
+    error: (message) => state.errors.push(message),
   };
-  const first: Gen = { id: 0 };
+  const first = gen(0);
   const supervisor = new Supervisor(hooks, first);
   return {
     state,
@@ -262,6 +279,89 @@ describe('關閉', () => {
     const h = harness();
     await h.supervisor.dispose();
     expect(h.state.closed).toEqual([0]);
+  });
+});
+
+describe('關閉的期限（#1543，照 dsh GENERATION_CLOSE_TIMEOUT_MS）', () => {
+  it('期限是 5000 ms', () => {
+    expect(GENERATION_CLOSE_TIMEOUT_MS).toBe(5000);
+  });
+
+  it('重連卡在握手：dispose 到期就回來並記一句，差 1 ms 還在等', async () => {
+    const h = harness({ initialDelayMs: 1, maxDelayMs: 1 });
+    h.state.gate = new Promise<void>(() => {}); // 永不回 initialize
+    h.supervisor.down(h.first);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.state.running).toBe(1);
+    let done = false;
+    const disposing = h.supervisor.dispose().then(() => {
+      done = true;
+    });
+    await vi.advanceTimersByTimeAsync(GENERATION_CLOSE_TIMEOUT_MS - 1);
+    expect(done).toBe(false);
+    expect(h.state.errors).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    await disposing;
+    expect(h.state.errors).toEqual([
+      'mcp-client(t): transport closure could not be confirmed during disposal — server shutdown may be incomplete',
+    ]);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('目前這一代 close 回來了卻確認不到關掉：dispose 同樣到期就回來並記一句', async () => {
+    const h = harness();
+    h.state.holdClosed = true;
+    const disposing = h.supervisor.dispose();
+    await vi.advanceTimersByTimeAsync(GENERATION_CLOSE_TIMEOUT_MS);
+    await disposing;
+    expect(h.state.closed).toEqual([0]);
+    expect(h.state.errors[0]).toContain('transport closure could not be confirmed during disposal');
+  });
+
+  it('掉線的那一代確認不到關掉：不重連、標成放棄、記一句；差 1 ms 還沒決定', async () => {
+    const h = harness();
+    h.state.holdClosed = true;
+    h.supervisor.down(h.first);
+    await vi.advanceTimersByTimeAsync(GENERATION_CLOSE_TIMEOUT_MS - 1);
+    expect(h.state.connects).toBe(0);
+    expect(h.supervisor.gaveUp).toBe(false);
+    expect(h.state.errors).toEqual([]);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.state.connects).toBe(0);
+    expect(h.supervisor.gaveUp).toBe(true);
+    expect(h.state.errors).toHaveLength(1);
+    expect(h.state.errors[0]).toMatch(
+      /^mcp-client\(t\): failed generation could not confirm transport closure — reconnect stopped to avoid overlapping server processes; /u,
+    );
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(h.state.connects).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('關掉得慢但在期限內：等它關掉才連，不提早', async () => {
+    const h = harness();
+    h.state.holdClosed = true;
+    h.supervisor.down(h.first);
+    await vi.advanceTimersByTimeAsync(3000);
+    expect(h.state.connects).toBe(0);
+    h.first.markClosed();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.state.connects).toBe(1);
+    expect(h.supervisor.gaveUp).toBe(false);
+    expect(h.supervisor.current()?.id).toBe(1);
+  });
+
+  it('重連已經在等上一代關掉時 dispose：不重連、不記「reconnect stopped」', async () => {
+    const h = harness();
+    h.state.holdClosed = true;
+    h.supervisor.down(h.first);
+    await vi.advanceTimersByTimeAsync(600); // 500 ms 的重連計時器已經觸發，正等著屏障
+    const disposing = h.supervisor.dispose();
+    await vi.advanceTimersByTimeAsync(GENERATION_CLOSE_TIMEOUT_MS);
+    await disposing;
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(h.state.connects).toBe(0);
+    expect(h.state.errors.filter((m) => m.includes('reconnect stopped'))).toEqual([]);
   });
 });
 
