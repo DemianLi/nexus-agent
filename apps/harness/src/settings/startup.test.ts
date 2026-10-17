@@ -295,6 +295,8 @@ describe('startupSetting', () => {
       modelId: 'nvidia/nemotron-3-super-120b-a12b',
       timeoutMs: 180000,
       streamIdleTimeoutMs: 90000,
+      // #1505：出廠不設 `maxConcurrentRequests`（不限），排隊上限 60 秒。
+      maxWaitMs: 60000,
       retryPolicy: {
         mode: 'normal',
         maxRetries: 6,

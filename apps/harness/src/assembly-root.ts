@@ -83,6 +83,7 @@ import type { PermissionPresetsService } from '@nexus/plugin-permission-presets'
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
 import type { CredentialService } from './credentials.js';
+import type { RequestGate } from './request-gate.js';
 import { createLiveModel } from './live-model.js';
 import { subagentDefinitionValidator } from './subagent-definition.js';
 import { createModelSelectionHost, createModelSelectionPlugin } from './model-selection-host.js';
@@ -522,12 +523,14 @@ function createCliModel(
   credentials: CredentialService | undefined,
   plugins: readonly PluginEntry[],
   attachments: AttachmentStore | undefined,
+  requestGate: RequestGate | undefined,
 ): BaseChatModel {
   // **`--live` 是進 live 的唯一閘門**，不看選擇列（理由見 `model-provider.ts`）；沒帶它才由清單上的
   // `agent-default-model` 在清單上的提供者之間選（#670）：出貨值指的是清單上那一列腳本提供者 `cli-script`。
   if (!live) return resolveDefaultModel(plugins);
   return createLiveModel(liveModel, undefined, credentials, {
     ...(attachments !== undefined && { attachments }),
+    ...(requestGate !== undefined && { requestGate }),
   });
 }
 
@@ -616,6 +619,12 @@ export async function createCliAgent(
      * （`settings/live-model.test.ts`）。
      */
     readonly liveModel?: LiveModelConfig;
+    /**
+     * 全機的模型請求並行閘（[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)）：**只有 serve 給**，起動期建一份、每條 thread 的組裝
+     * 共用同一份（名額是整台 serve 的，不是這條 thread 的）。對話、換模型別顆、背景子代理指定的模型、標題（含跟隨主路由的那顆）都從
+     * 這一份取名額。省略＝不建閘（CLI、REPL、嵌入方與沒設 `maxConcurrentRequests` 的 serve）。
+     */
+    readonly requestGate?: RequestGate;
     /**
      * 真實供應商的憑證服務（[#730](https://github.com/DemianLi/nexus-agent/issues/730)）：`runCli`／`runServe` 在起動期建一次
      * （載入兩層 `.env`、完整檢查受管檔），對話那顆與標題那顆都從它取 key，每次請求前解析。省略時退回啟動環境
@@ -763,6 +772,7 @@ export async function createCliAgent(
     invocation.credentials,
     plugins,
     invocation.attachments,
+    invocation.requestGate,
   );
   // **標題模型是另一顆實例**：輸出上限換成標題那一列的，並表明用途，由 `createLiveModel` 決定要不要關推理
   // （`live-model.ts` 的 `LiveModelPurpose`）。`.env` 已經在入口（`runCli`／`runServe`）載入過了。
@@ -774,7 +784,7 @@ export async function createCliAgent(
           invocation.threadTitle ?? startupSetting(plugins, threadTitlePlugin),
           invocation.credentials,
           // 標題沒有自己的 modelId 時沿用主請求走的模型（#723）。
-          { followMainRoute: true },
+          { followMainRoute: true, requestGate: invocation.requestGate },
         )
       : undefined;
   // **channel 在這裡算一次，消費者共用。** 核准閘門由 `foldRegistry` 自己算
@@ -852,6 +862,7 @@ export async function createCliAgent(
         liveModel,
         credentials: invocation.credentials,
         ...(invocation.attachments !== undefined && { attachments: invocation.attachments }),
+        ...(invocation.requestGate !== undefined && { requestGate: invocation.requestGate }),
       })
     : undefined;
   const {
@@ -958,15 +969,7 @@ export async function createCliAgent(
         }),
         // 背景子代理被指定模型時才用到（#876）：同一個端點、另一個型錄 id。沒連真實供應商就沒有別的模型可建。
         ...(invocation.live && {
-          modelFor: (choice: ModelChoice) =>
-            createLiveModel(
-              { ...liveModel, modelId: choice.model },
-              undefined,
-              invocation.credentials,
-              {
-                ...(choice.effort === 'off' && { thinkingOff: true }),
-              },
-            ),
+          modelFor: liveSubagentModelFor(liveModel, invocation.credentials, invocation.requestGate),
         }),
         ...(workspaceRoot !== undefined && { sandbox: sandboxMode }),
       },
@@ -1019,6 +1022,29 @@ export async function createCliAgent(
 }
 
 /**
+ * 背景子代理被指定模型時建的那一顆（#876）：同一個端點、另一個型錄 id，推理強度 `off` 時關推理。
+ *
+ * **要接全機的並行閘**（#1505）：子代理的請求是並行請求的大宗（每個主對話最多 8 個背景子代理），漏接這一處，閘就管不到最會
+ * 衝量的那一類。抽成具名函式，是為了它測得到（`request-gate-wiring.test.ts`）；`requestGate` 是**必傳的位置參數**，
+ * 少寫在型別上就編不過（不給閘要明著傳 `undefined`）。
+ *
+ * @param liveModel - `live-model` 那一列（連線值與型錄）。
+ * @param credentials - 憑證服務。
+ * @param requestGate - 全機的模型請求並行閘；`undefined`＝不限。
+ */
+export function liveSubagentModelFor(
+  liveModel: LiveModelConfig,
+  credentials: CredentialService | undefined,
+  requestGate: RequestGate | undefined,
+): (choice: ModelChoice) => BaseChatModel {
+  return (choice) =>
+    createLiveModel({ ...liveModel, modelId: choice.model }, undefined, credentials, {
+      ...(choice.effort === 'off' && { thinkingOff: true }),
+      ...(requestGate !== undefined && { requestGate }),
+    });
+}
+
+/**
  * 這一次組裝的 LLM 標題。路由是 `live-model` 那一列的連線（一個組裝一條連線）加上實際走的那顆模型：
  * `thread-title-llm` 的 `modelId`（#657）挑型錄裡的一筆，沒給就是 `live-model` 的預設模型；記進
  * `session/title-llm-request` 與 provider 標題的 `model`。
@@ -1030,8 +1056,13 @@ function titleLlmFor(
   config: ThreadTitleLlmConfig,
   limits: ThreadTitleConfig,
   credentials: CredentialService | undefined,
-  options: { readonly followMainRoute: boolean } = { followMainRoute: false },
+  options: {
+    readonly followMainRoute: boolean;
+    /** 全機的模型請求並行閘（#1505）：標題的請求也算一個名額，兩顆（預設的與跟隨主路由的）都要掛。 */
+    readonly requestGate?: RequestGate | undefined;
+  } = { followMainRoute: false },
 ): AttachSessionTitleLlm {
+  const requestGate = options.requestGate;
   const modelId = config.modelId ?? liveModel.modelId;
   const followedTitleModels = new Map<string, BaseChatModel>();
   if (findModelEntry(liveModel.models, modelId) === undefined) {
@@ -1043,6 +1074,7 @@ function titleLlmFor(
   return createSessionTitleLlm({
     model: createLiveModel({ ...liveModel, modelId }, 'session-title', credentials, {
       maxOutputTokens: config.maxOutputTokens,
+      ...(requestGate !== undefined && { requestGate }),
     }),
     route: { provider: liveModel.baseUrl, model: modelId },
     config,
@@ -1062,7 +1094,10 @@ function titleLlmFor(
               { ...liveModel, modelId: mainRoute.model },
               'session-title',
               credentials,
-              { maxOutputTokens: config.maxOutputTokens },
+              {
+                maxOutputTokens: config.maxOutputTokens,
+                ...(requestGate !== undefined && { requestGate }),
+              },
             );
             followedTitleModels.set(mainRoute.model, followed);
           }
