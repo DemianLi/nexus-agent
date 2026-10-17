@@ -20,7 +20,7 @@
 | `components/ui/{button,input,textarea,input-group,separator,skeleton,card,badge}.tsx` | solid-glass `src/components/ui/` 同名檔 | ③-1（#1523） |
 | `components/ui/{dialog,popover,sheet,tooltip}.tsx` | solid-glass `src/components/ui/` 同名檔（popover、dialog、sheet 套了 patch，見「本地修改」第 19、20 條） | ③-2（#1583） |
 | `components/ui/{alert-dialog,dropdown-menu,command}.tsx` | solid-glass `src/components/ui/` 同名檔 | ③-2（#1583，PR 2） |
-| `components/ui/{composer,context-ring}.tsx` | solid-glass `src/components/ui/` 同名檔（composer 套了 patch，見「本地修改」第 28、29 條） | #1591（插在 ③-3 前，PR 1） |
+| `components/ui/{composer,context-ring}.tsx` | solid-glass `src/components/ui/` 同名檔（composer 套了 patch，見「本地修改」第 28、29、32 條） | #1591（插在 ③-3 前，PR 1） |
 | `shadcn/tailwind.css` | shadcn `dist/tailwind.css` | ③-1（#1523） |
 | `shadcn/LICENSE.md` | shadcn `LICENSE.md`（MIT） | ③-1（#1523） |
 
@@ -102,6 +102,7 @@
 | 20 | `patches/0002-dialog-close-label.patch`、`patches/0003-sheet-close-label.patch` | `components/ui/dialog.tsx` 右上角關閉鈕的 sr-only 與 footer 關閉鈕、`components/ui/sheet.tsx` 關閉鈕的 sr-only，都是寫死的 "Close" | 改成「關閉」：報讀字串保留中文（#1497）。包裝層做得到但要複製上游的按鈕標記，上游一改就靜靜漂移；patch 只改字，上游一動同步就失敗（#1583，PM 定） | `components/ui/overlay-close-label.test.tsx`（dialog、sheet 各一條，打開後掃；拿掉任一 patch 那條會紅） |
 | 28 | `patches/0004-composer-textarea-props.patch` | `components/ui/composer.tsx` 的 textarea 沒有任何外部屬性（387c3c2 只有 `placeholder`），`...props` 給的是外殼 | 加 `textareaProps`（`id`、`aria-label`、`aria-labelledby`、`aria-describedby`），展開到 textarea：`<label htmlFor="prompt">` 與送出提示的 `aria-describedby` 要掛在輸入框本身。**內容逐字等於上游之後的 c60cb14**（三段 hunk 相同），拍板停在 387c3c2，所以用 patch 補；之後跟到 c60cb14 以後就拿掉這條（#1591） | `composer.test.tsx`（名稱「要說的話」、送出提示掛在 `aria-describedby`；拿掉這條 patch 會紅） |
 | 29 | `patches/0005-composer-combobox.patch` | 同上：`textareaProps` 的 `Pick` 不含 `aria-controls`／`aria-activedescendant`；textarea 的 ref 是元件內部的 | `Pick` 加這兩個（`/` 與 @ 選單開著時，輸入框指向清單與目前那一項，規格 §8 的 combobox）；加 `textareaRef`，用 `useImperativeHandle` 轉出同一個元素：插入 @ 代理、選完命令後要把焦點與游標放回輸入框。執行期 `...textareaProps` 本來就會帶過這兩個 aria 屬性，`Pick` 只是型別；但不改型別就只能靠「非字面物件不檢查多餘屬性」的漏洞，所以一起記成 patch。ref 的替代做法（從外殼 `querySelector('textarea')`）會把 nexus 綁在 SG 的 DOM 上，不採用（#1591） | `composer.test.tsx`「textareaRef 指到輸入框」（拿掉這條 patch 會紅，tsc 也紅） |
+| 32 | `patches/0006-composer-width-resize.patch` | `components/ui/composer.tsx` 只在 `value` 變了時用 `scrollHeight` 重算高度（`useLayoutEffect(resize, [value, resize])`） | 加一個只看寬度的 `ResizeObserver`：寬度變了才呼叫同一支 `resize`，卸載時 `disconnect`。草稿不變、寬度變了（打開右側欄、附件列出現）時換行變多，SG 原樣的高度不跟著長，草稿要在框內捲動才看得到；develop 原本的輸入框會跟著長高，所以這是換成 SG 帶進來的退化。**內容等於上游 e867a7a9，只多一處守衛**：它的父版本就是 387c3c2 的同一個 blob，`resize` 在 387c3c2 已經抽成 `useCallback`，所以上游這個 commit 只有 observer 那一段。多的守衛是 `entry === undefined` 時 return：nexus 的 tsconfig 開了 `noUncheckedIndexedAccess`，上游原樣的 `([entry]) => entry.contentRect…` 編不過（vendor 不豁免 tsc）。之後跟到 e867a7a9 以後，這條縮成只剩那處守衛（#1591，PM 定 (a)） | `composer.test.tsx`「寬度變了高度跟著重算」三條（mock ResizeObserver：寬度變了重算、寬度不變不重算、卸載 disconnect；拿掉 observer 三條紅，拿掉寬度比對、拿掉 disconnect 各一條紅） |
 
 另外**新增**、不是改 SG 的：`index.css` 的 `--radius-row`（SG 的 3xl 減 4px）與 nexus 獨有的顏色 token（`stage`、`chip*`、`brand-soft`、`warning`、`info`、`card-hairline`，Q11 留到第 ⑥ 步），以及 `tokens.generated.css` 的 `--primary-hover`／`--primary-active`（亮 `:12-13`、暗 `:35-36`，主按鈕 hover 與按下的底色，SG 沒有這兩格）。圓角階梯照 SG，不重綁。
 

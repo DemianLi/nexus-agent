@@ -50,10 +50,11 @@
     "components/ui/composer.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/composer.tsx",
-      "sha256": "288604206ddc897867d89537f9471ff0dc3c5bb676993996b77ba11f317b00d2",
+      "sha256": "d047df639d10fee3c3e86c35cf383924fd53a7875b7a3f6693292186b5656d6e",
       "patches": [
         "patches/0004-composer-textarea-props.patch",
-        "patches/0005-composer-combobox.patch"
+        "patches/0005-composer-combobox.patch",
+        "patches/0006-composer-width-resize.patch"
       ],
       "upstreamSha256": "9c5481305cae9f7493d1ba61c1e4afb9ddabd005a481fe77cb80b70bd885486b"
     },

@@ -83,6 +83,20 @@ function Composer({
     el.style.height = `${el.scrollHeight}px`
   }, [])
   React.useLayoutEffect(resize, [value, resize])
+  React.useLayoutEffect(() => {
+    const el = textarea.current
+    if (!el || typeof ResizeObserver === "undefined") return
+    // Side panels and attachments change wrapping without changing the text.
+    // Observe width alone so writing the new height cannot feed back into it.
+    let width = -1
+    const observer = new ResizeObserver(([entry]) => {
+      if (entry === undefined || entry.contentRect.width === width) return
+      width = entry.contentRect.width
+      resize()
+    })
+    observer.observe(el)
+    return () => observer.disconnect()
+  }, [resize])
 
   const submit = () => {
     if (!ready) return

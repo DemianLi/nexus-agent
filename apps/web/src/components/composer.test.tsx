@@ -288,6 +288,78 @@ describe('從外面拿得到輸入框（README 本地修改第 29 條，patch `0
   });
 });
 
+describe('寬度變了高度跟著重算（README 本地修改第 32 條，patch `0006-composer-width-resize`，回補上游 e867a7a9）', () => {
+  /** 假的 ResizeObserver：記下觀察誰、能手動送一筆寬度、記得有沒有 disconnect。 */
+  class FakeResizeObserver {
+    static all: FakeResizeObserver[] = [];
+    readonly targets: Element[] = [];
+    disconnected = false;
+    constructor(private readonly callback: ResizeObserverCallback) {
+      FakeResizeObserver.all.push(this);
+    }
+    observe(target: Element) {
+      this.targets.push(target);
+    }
+    unobserve() {}
+    disconnect() {
+      this.disconnected = true;
+    }
+    fire(width: number) {
+      act(() =>
+        this.callback(
+          [{ contentRect: { width } } as unknown as ResizeObserverEntry],
+          this as unknown as ResizeObserver,
+        ),
+      );
+    }
+  }
+  const observerOf = (el: Element) => {
+    const found = FakeResizeObserver.all.find((o) => o.targets.includes(el));
+    if (found === undefined) throw new Error('沒有人觀察輸入框');
+    return found;
+  };
+  /** jsdom 不排版，scrollHeight 恆為 0：改成「內容要多高」由測試指定。 */
+  const contentHeight = (el: HTMLElement, px: number) =>
+    Object.defineProperty(el, 'scrollHeight', { configurable: true, get: () => px });
+
+  beforeEach(() => {
+    FakeResizeObserver.all = [];
+    vi.stubGlobal('ResizeObserver', FakeResizeObserver);
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it('草稿不變、寬度變了（例如打開右側欄）：高度照新的換行重算', () => {
+    render(<Harness initial="一段會換行的草稿" />);
+    const observer = observerOf(input());
+    contentHeight(input(), 104);
+    observer.fire(540);
+    expect(input().style.height).toBe('104px');
+    contentHeight(input(), 152);
+    observer.fire(348);
+    expect(input().style.height).toBe('152px');
+  });
+
+  it('寬度沒變（只有高度變，例如寫入新高度本身）不重算：不會自己回授', () => {
+    render(<Harness initial="一段會換行的草稿" />);
+    const observer = observerOf(input());
+    contentHeight(input(), 104);
+    observer.fire(540);
+    contentHeight(input(), 152);
+    observer.fire(540);
+    expect(input().style.height).toBe('104px');
+  });
+
+  it('卸載時 disconnect', () => {
+    const { unmount } = render(<Harness initial="草稿" />);
+    const observer = observerOf(input());
+    expect(observer.disconnected).toBe(false);
+    unmount();
+    expect(observer.disconnected).toBe(true);
+  });
+});
+
 describe('選單錨在輸入框上（README 本地修改第 19 條，#1583）', () => {
   // vendor 的 PopoverContent 原本不把 `anchor` 傳給 Positioner（patch `0001-popover-anchor`）：拿掉那條 patch，composer 沒有
   // PopoverTrigger，浮層就沒有錨點，`--anchor-width` 不會是輸入框的寬度。
