@@ -238,6 +238,12 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
       '合併照樣在，只會讓這份設定讀起來像把合併關了。',
   ],
   [
+    '#settings/downlink',
+    '這一列不裝任何東西，只講下行串流的心跳間隔與每條線的位元組上限。關掉它不會讓保護消失' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，兩個值於是回到 schema 的預設（2000 毫秒、2 MiB），' +
+      '卡住的線照樣兩拍內被斷、積壓照樣超過上限就被收，只會讓這份設定讀起來像把保險絲拆了。要放寬，把數值調大。',
+  ],
+  [
     '#settings/tool-result-stash',
     '這一列不裝任何東西，只講過大工具結果暫存的根目錄與保留天數。關掉它不會讓工具結果不再暫存' +
       '——`startupSetting` 把關掉的那一列當成沒有那一列，值於是回到 schema 的預設，' +

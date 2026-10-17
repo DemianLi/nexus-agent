@@ -323,6 +323,21 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 
   然後在自己電腦的瀏覽器開 serve 印出的網址。
 
+  **卡住的分頁不會拖垮 serve，但閒著的死線要靠 sshd 收**（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)）。
+  筆電闔上、網路斷在半路時，serve 這一端的 loopback 連線還開著。事件一直在流的時候，serve 發現對方不收（寫入緩衝卡著、連兩個心跳
+  間隔都沒有排出去）就自己斷線，那條 thread 的記憶體與名額跟著放掉；事件沒在流、緩衝是空的死線，serve 看不出來，要等 sshd 判死，
+  這段時間那條 thread 撤不掉（閒置逐出要「沒有下行掛著」）。主機管理者在 `sshd_config` 設 `ClientAliveInterval` 與
+  `ClientAliveCountMax`，使用者在自己的 `~/.ssh/config` 設 `ServerAliveInterval`，這一段就會在以秒計的時間內收掉，而不是以小時計
+  （sshd 預設只剩 TCP keepalive）。
+
+**下行串流的心跳與位元組上限**（`downlink` 那一列，[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)）。每條下行（SSE）每
+`heartbeatIntervalMs` 毫秒（出廠 2000）在兩顆 frame 之間寫一行看不見的註解 `: ping`，解碼端本來就跳過它；寫入緩衝裡有位元組卡著、連
+2 拍都沒有排出去，serve 斷那一條線並在伺服器日誌記一行 `[下行] 斷開卡住的串流 …`（含路徑與卡住的位元組數，不含對話內容）。另外每條線
+排著等送的事件有位元組上限 `maxQueuedBytes`（出廠 2 MiB）：對方活著但比事件產生得慢、積壓超過上限時，只斷那一條線，其他分頁不受影響。
+斷線之後網頁走既有的重連（狀態列短暫出現「連線中斷，正在重新連線…」，接回來後重抓歷史）。**預設開、這一列關不掉**（`disabled: true`
+會在啟動時拋錯）：要放寬就把兩個數值調大；改了要重啟 serve。數值全照 dsh（`websocketHeartbeatIntervalMs` 預設 2000、漏 2 拍淘汰、
+`TerminalFollower` 的 2 MiB）。
+
 **網頁從來不由 Vite 服務**（[#426](https://github.com/DemianLi/nexus-agent/issues/426)）：`vite` 與
 `vite preview` 會拒絕啟動。Vite 的開發伺服器會把整個 repo 的檔案交給連得到那個 port 的任何人，
 而部署主機是多人共用的。網頁由 `serve` 自己服務 `apps/web/dist`，所以改了網頁要等重建完再**手動重新整理**，沒有 HMR。
@@ -618,8 +633,8 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   （`agent-loop`、`recursion-limit`、`tool-fs-search` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
-  - **啟動時讀一次的那 14 列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`deliverable-files`、
-    `session-persistence`、`tool-text`、`projection-flush`、`tool-result-stash`、`spill-policy`、`background-subagents`、
+  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`deliverable-files`、
+    `session-persistence`、`tool-text`、`projection-flush`、`downlink`、`tool-result-stash`、`spill-policy`、`background-subagents`、
     `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
     `agent-default-model` 不在這裡：沒帶 `--live` 時它在每條對話組裝時讀，改了新對話就生效。
 
@@ -671,7 +686,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
     還有幾步（接日誌、接參與者）可能拋，那時會把這條對話收掉、放掉它的綁定，而**放掉只動記憶體、不寫檔**，檔要等下一次寫快照
     （任何一條對話讀清單或綁定）才更新。所以檔上偶爾有一個沒有真的活著的對話 id，下一條對話開出來就消失；要確認是不是真活著，
     看 `GET /threads`。
-  - **綁的規則**：只算實際掛上的列——停用的、這條對話掉了的、樹上自我停用的不算；啟動時讀一次的那 14 列也不算（它們生效的是啟動那一份，
+  - **綁的規則**：只算實際掛上的列——停用的、這條對話掉了的、樹上自我停用的不算；啟動時讀一次的那幾列也不算（它們生效的是啟動那一份，
     改了看 `sync: restart`）。對話建好之後才綁，只看過歷史、沒跑過一輪的對話也算（它下一輪真的會用那一版）。**對話預設只在 serve 關機時才拆**
     （沒有開閒置逐出，見 `thread-capacity` 的 `idleEvictAfterMs`），所以名單只增不減，直到重啟；**開了閒置逐出**，被撤掉的對話在撤完的當下從名單消失
     （serve 撤完會重寫這個檔，寫失敗只記一行日誌、不擋撤，檔留舊的直到下一次寫）；表在行程記憶體裡，重啟之後從零開始。要分「正在跑」還是「閒著」，看 `GET /threads` 的 `running`。
@@ -791,6 +806,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `thread-title-llm`          | `--live` 時由模型依第一句話產生會話標題                                                                                        | 有（五格，另有選配的 `modelId`） | 關得掉（＝只剩退回標題） |
 | `thread-search`             | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開**                                                                             | 有（一格）                       | 關得掉（＝搜尋一律失敗） |
 | `thread-capacity`           | serve 行程裡最多同時有幾條 thread；**出廠不設上限**                                                                             | 有（一格，選配）                 | 關得掉（＝不限）         |
+| `downlink`                  | 下行串流的心跳間隔，與每條下行線排著等送的位元組上限；**出廠開著**                                                              | 有（兩格）                       | **關不掉**               |
 | `browser-session`           | 瀏覽器 cookie 的絕對有效期                                                                                                     | 有（一格）                       | **關不掉**               |
 | `deliverable-files`         | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數）                                                             | 有（三格）                       | **關不掉**               |
 | `tool-text`                 | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截）                                             | 有（一格）                       | **關不掉**               |
@@ -1136,7 +1152,7 @@ pnpm --filter @nexus/harness run plugin -- config reset thread-title
   關掉 `sandbox-policy`／`permission-presets` 不會被拒絕（`validateEntries` 沒有這條），但輸出會警告：serve 帶 `--workspace`
   時，之後每條新對話都會建不起來。
 - **輸出講的**：紀錄檔的完整路徑、第幾筆、操作者、改了哪些**欄位名**（不印值）、什麼時候生效——`新對話生效`，或
-  `待重啟`（啟動時讀一次的那 14 列，見上面）。**那份路徑要跟 serve 讀的是同一個 `$NEXUS_AGENT_HOME`**；
+  `待重啟`（啟動時讀一次的那幾列，見上面）。**那份路徑要跟 serve 讀的是同一個 `$NEXUS_AGENT_HOME`**；
   `plugin-snapshot.json` 不在的話輸出會警告（serve 沒開過，或指到別的 home），不擋寫入。
 - **要跟 serve 帶同一組 `--patch`**：`plugin` 也收 `--patch <檔>`（可多次）。`--patch` 排在變更紀錄之後，被它蓋住的列，
   寫入口照寫紀錄但回報 `被 --patch 蓋住`（設定的那一類直接拒絕，因為寫了也不會生效）。沒帶同一組，它看不出誰被蓋住。

@@ -454,6 +454,14 @@ export interface WireHandlerOptions {
    */
   readonly projectionFlushMs?: number;
   /**
+   * 每條下行（含全域那一條）排著的位元組上限（`downlink` 那一列的 `maxQueuedBytes`，
+   * [#1504](https://github.com/DemianLi/nexus-agent/issues/1504)）。**省略即 {@link DEFAULT_DOWNLINK_MAX_BYTES}**（2 MiB，照 dsh `TerminalFollower`）。
+   *
+   * 超限就只斷那一條線（它自己重連、重抓歷史），其他線不受影響；經 {@link warn} 講一行，不含 thread 內容。
+   * **偏離登記：產品需求超出 dsh**（事件下行 dsh 沒有上限），逐點見 `bounded-event-queue.ts`。
+   */
+  readonly downlinkMaxBytes?: number;
+  /**
    * 行程裡最多同時有幾條 thread（`thread-capacity` 那一列的 `maxThreads`，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)，
    * 保險絲第 2 級）。**省略就不限**，行為與沒有這個選項時逐位元組相同。
    *
@@ -1200,7 +1208,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    */
   const ready = new Map<string, ThreadState>();
   /** 全部 thread 共用的那條下行（#632）。每條 pump 一建好就接上，見 `thread-feed.ts`。 */
-  const feed = new ThreadFeed();
+  const feed = new ThreadFeed({
+    ...(options.downlinkMaxBytes === undefined ? {} : { maxQueuedBytes: options.downlinkMaxBytes }),
+    warn: (message) => options.warn?.(message),
+  });
   /**
    * 上傳收據（[#732](https://github.com/DemianLi/nexus-agent/issues/732)）：thread → 收據 id → 存好的檔案參照。
    * **收據只在收下它的那條 thread 有效**（查表以 thread 為鍵，拿別條 thread 的收據查不到），行程重開就失效——沒送出去的上傳不續命。
@@ -1443,6 +1454,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           options.threadOrganization === undefined
             ? undefined
             : () => options.threadOrganization!.isArchived(threadId),
+          options.downlinkMaxBytes,
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
