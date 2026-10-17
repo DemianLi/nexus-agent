@@ -31,28 +31,28 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 
 ### 1.2 層次靠表面，不靠框線
 
-- **長什麼樣**：底色 → 浮起來的卡片（`Surface tone="raised"`）→ 卡片裡的內層底（`stage`），三層灰只差一點點。卡片邊緣畫在陰影裡，不用 `border`：亮色是一圈 1px 細線環＋淡投影，暗色是 inset 疊層。亮色每層投影透明度不超過 0.06，想更明顯就多疊一層。
+- **長什麼樣**：底色 → 浮起來的卡片（`Surface tone="raised"`）→ 卡片裡的內層底（`stage`），三層灰只差一點點。卡片邊緣畫在陰影裡，不用 `border`：亮色是一圈 1px 細線環＋淡投影，暗色是 inset 疊層。亮色每層投影的透明度上限是 solid-glass 現在的值（浮起來的那一層 `--glass-shade` 0.28、貼地的 `--glass-contact` 0.06），只准一樣或更淡（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q8，[#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。
 - **例外**：貼在輸入框上方的那一排（待辦、送出佇列、目標列，`Surface tone="docked"`）用平的細線，因為它們接在輸入框上、不是浮在對話裡（規格 §5「形狀」；`apps/web/src/components/surface.tsx` 檔頭）。
 - **從哪裡來**：
   - 卡片外框、裡面再嵌一個展示區、1px 半透明邊線、幾乎不用實色邊框：Libraries.dev 的外觀（[元件清單](agent-ui-element-inventory.md) §3.2）；`--stage`、`--chip`、`--material-shadow` 這些名字是原型為了映射它而加的（同節 §3.4 第 2 點、規格 §5「顏色」）。
   - 邊緣畫在陰影裡：[#377 定稿](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)。
-  - 亮色每層 ≤ 0.06：beautiful-ui「不刺眼」那條原則只採亮色的部分（比對文件 §3，#1307）。
+  - 亮色投影有上限：原本是 beautiful-ui「不刺眼」那條原則只採亮色的部分，每層 ≤ 0.06（比對文件 §3，#1307）；改用 solid-glass 後上限換成它的值，護欄保留（Q8，#1512）。
 - **規則在哪**：規格 §5「形狀」；`COMPONENTS.md`「外觀原則」最後一段；`border-shadow.test.ts`、`shadow-alpha.test.ts`、`design-system.test.ts`（卡片與內層底只能用 `Surface`）。
 
 ### 1.3 圓的形狀
 
-- **長什麼樣**：圓角走一條階梯（`sm` 6 到 `3xl` 24）；按鈕是全圓（`rounded-full`）。
-- **從哪裡來**：Libraries.dev 的按鈕與 chip 是全圓 pill、卡片外框圓角約 24–26px、選單 12px、選項 8–9px（元件清單 §3.2）；階梯在 [#377 定稿](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498) 拍板，不用 superellipse。文件與卡片裡只記了「照 Libraries.dev」，沒寫更深的理由；demian 2026-10-12 決定保留現狀，不另補理由、不改階梯。
+- **長什麼樣**：圓角走 solid-glass 的階梯（以 14px 為 `lg`，`sm` 到 `4xl` 是它的 0.6 到 2.6 倍；控制項小一階）；按鈕是全圓（`rounded-full`）。
+- **從哪裡來**：Libraries.dev 的按鈕與 chip 是全圓 pill、卡片外框圓角約 24–26px、選單 12px、選項 8–9px（元件清單 §3.2）；原本的階梯（`sm` 6 到 `3xl` 24）在 [#377 定稿](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498) 拍板，不用 superellipse。改用 solid-glass 後圓角屬於外觀類，照它的階梯、不重綁（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q8）；不用 superellipse 照舊。
 - **規則在哪**：規格 §5「形狀」；`design-system.test.ts` 擋任意值圓角。
 
 ### 1.4 字：四階、兩種粗細，次要靠顏色
 
 - **長什麼樣**：
-  - 介面字 Google Sans Flex，等寬字 Google Sans Code（只用在程式碼、工具輸入輸出、終端機），中文兩者都退 Noto Sans TC。
+  - 介面字 Geist，等寬字 Geist Mono（只用在程式碼、工具輸入輸出、終端機），中文兩者都退 Noto Sans TC。
   - 字級只有四階：內文 `text-body`、可以點的與當標題的小字 `text-ui`、說明與附註 `text-tip`，以及只用在程式碼區塊語言標籤的 `text-micro`。
   - 字重只有 400 與 500。次要的字（說明、時間、計數）用 `text-muted-foreground` 退後，不把字變細。
 - **從哪裡來**：
-  - 字型與四階：規格 §5「字型」（[#377](https://github.com/DemianLi/nexus-agent/issues/377)）；Libraries.dev 用的 Inter／Roboto Mono 沒有採用，標題字 Saans 授權不明不拿（元件清單 §3.2、規格 §3、§5）。
+  - 字型：solid-glass 用 Geist，只打包 latin 子集，中文接 Noto Sans TC（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q6）；原本是 Google Sans Flex／Code。四階：規格 §5「字型」（[#377](https://github.com/DemianLi/nexus-agent/issues/377)）；Libraries.dev 用的 Inter／Roboto Mono 沒有採用，標題字 Saans 授權不明不拿（元件清單 §3.2、規格 §3、§5）。
   - 只走四階、不用 Tailwind 預設字級：[#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。
   - 主次（可以點的與當標題的用 13，說明用 12）：[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)（PR [#1296](https://github.com/DemianLi/nexus-agent/pull/1296)）。
   - `text-micro` 保留：它其實有一處在用（程式碼區塊的語言標籤），demian 2026-10-12 決定保留，不刪（規格 §5「字型」）。
@@ -101,11 +101,12 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 
 ## 2. 從哪裡來：參考過的元件庫各給了什麼
 
-**原則是「只看不裝」**：用它們的結構與手感，換成本專案的值和積木重寫（`CONTEXT.md`「參考對象」）。例外是 shadcn 官方：registry 元件裝進來就是我們的原始碼（規格 §4.1）。另一個例外是 [solid-glass](https://github.com/deeplethe/solid-glass)：demian 拍板改用它取代現有的主題（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573)、地圖 [#1497](https://github.com/DemianLi/nexus-agent/issues/1497)），原樣 vendor 在 `apps/web/src/vendor/solid-glass/`；這一節與整份文件照新的方向改寫，在地圖的第 ② 步。
+**原則是「只看不裝」**：用它們的結構與手感，換成本專案的值和積木重寫（`CONTEXT.md`「參考對象」）。例外是 shadcn 官方：registry 元件裝進來就是我們的原始碼（規格 §4.1）。另一個例外是 [solid-glass](https://github.com/deeplethe/solid-glass)：demian 拍板改用它取代現有的主題（[#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573)、地圖 [#1497](https://github.com/DemianLi/nexus-agent/issues/1497)），原樣 vendor 在 `apps/web/src/vendor/solid-glass/`，外觀類照它，機制類與無障礙門檻照本專案（Q5、Q8），修改逐條登記在該目錄 README 的「本地修改」。主題在地圖第 ② 步換上；元件換成它的 Base UI 版在第 ③ 步，AI 元件在第 ④ 步。
 
 | 來源 | 角色 | 拿了什麼 | 沒拿什麼、為什麼 | 出處 |
 | --- | --- | --- | --- | --- |
 | [shadcn/ui](https://github.com/shadcn-ui/ui) 官方（含 2026 新出的 chat 元件與 `questionnaire`） | **基底** | 元件外殼與基礎件（sidebar、sheet、dialog、command、collapsible、button……） | registry 原樣的外觀：`border` 換成陰影（規格 §5）、`ring-[3px]` 關掉改 outline（規格 §5「互動狀態」）、英文報讀字串換中文（規格 §8） | 規格 §4；[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108) |
+| [solid-glass](https://github.com/deeplethe/solid-glass)（固定在 `387c3c2`） | **外觀與設計 token 的來源**，取代原本的主題 | 顏色的色相、彩度、alpha；玻璃面（含大面積 blur）與陰影；圓角階梯；字型 Geist／Geist Mono；5 個 `sg-*` keyframes | 達不到本專案門檻的色值（只重解明度）、灰色的焦點線（換回文字色）、reduced-motion 下進場整個關掉（改 150ms 淡入）、三個簡體中文字型；dark variant、body 寫在 layer 外照本專案的機制 | [#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573)；`apps/web/src/vendor/solid-glass/README.md`「本地修改」 |
 | [Libraries.dev](https://github.com/Jakubantalik/Libraries.dev) | **一般元件的模仿對象** | 外觀：卡片套展示區、全圓 pill、淡陰影、半透明細線；accent 變成 `--brand`；整組動效 token 與「開快關更快」；orb 與邊框光的樣子 | 效果套件不裝，改純 CSS 仿（#375、#378）；寫死暗色不跟、視覺不複刻（規格 §2）；字型不用 Inter／Roboto Mono，標題字 Saans 授權不明不拿（規格 §3、§5）；`#17181c` 帶藍，主色改用無彩（#377） | [元件清單 §3](agent-ui-element-inventory.md)；[#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)、[#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887) |
 | [beautiful-ui](https://github.com/slev12397/beautiful-ui) | **AI 專屬元件的參考對象**；不安裝、不複製，只用本專案元件重寫 | 收尾與密度的細節（§1.6 那幾張卡）；三條外觀原則（`COMPONENTS.md`「外觀原則」） | 它的設計數值：說明字對比不及格、任意字級 201 處（比對文件 §4）；8 個我們沒有場景的元件（比對文件 §0）；音效、預設深色、影片、示範資料、外部字型與外連素材（[#1278](https://github.com/DemianLi/nexus-agent/issues/1278) 拍板第 6 點） | [比對文件](beautiful-ui-comparison.md)；地圖 [#1278](https://github.com/DemianLi/nexus-agent/issues/1278)；PR [#1289](https://github.com/DemianLi/nexus-agent/pull/1289) |
 | [AI Elements](https://github.com/vercel/ai-elements)（Vercel） | 清單參考 | 「agent 介面該有哪些元件」的清單 | 程式碼一律不裝：`reasoning`／`message` 會把主 chunk 拉到約 2 MB（規格 §4.1） | [選型調研](agent-ui-library-survey.md) 開頭「後續決議」；[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108) |
@@ -143,17 +144,20 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 | --- | --- |
 | 只用系統的值：顏色、字級、圓角、時長、表面、積木、焦點外框、細字重 | `src/styles/design-system.test.ts` |
 | 同一元素不同時用 `border` 與陰影 | `src/styles/border-shadow.test.ts` |
-| 亮色每層陰影透明度 ≤ 0.06 | `src/styles/shadow-alpha.test.ts` |
+| 亮色每層陰影透明度不超過上限（solid-glass 現在的值） | `src/styles/shadow-alpha.test.ts`（token）、`guard/guard.test.ts`（瀏覽器量元件） |
 | 文字、非文字、狀態色的對比度，亮暗共用目標 | `src/styles/tokens-contrast.test.ts` |
 | 按鈕、觸發鈕、選單項不縮成說明字級 | `src/styles/type-hierarchy.test.ts` |
 | 焦點外框畫得出來 | `src/styles/focus-outline.test.ts` |
+| solid-glass 用灰色畫的焦點全部蓋掉：帶回來的 ring、欄位聚焦的邊框 | `src/styles/focus-ring-suppression.test.ts`、`src/styles/focus-line-suppression.test.ts` |
+| 出貨 CSS 在真的 Chrome 裡：焦點、欄位聚焦的邊框、每個字對實際底色的對比、陰影、不透明的退路 | `guard/guard.test.ts`（`pnpm test:guard`，要先 build） |
+| vendor 的 solid-glass 沒被手改 | `src/vendor/solid-glass/vendor.test.ts` |
 | `role="status"` 只有狀態列 | `src/styles/live-region.test.ts` |
 | registry 元件上登記過的修改沒被改回去 | `src/components/ui/registry-edits.test.ts` |
 | 全站只從 `@/lib/utils` 取 `cn` | `src/lib/utils.test.ts` |
 | 建置出的 CSS：`@keyframes` 允許清單、減少動態、沒有只來自測試或文件的 class | `scripts/check-built-css.mjs`（`pnpm build` 最後一步） |
 | axe-core 無障礙掃描 | `src/test/axe.ts` 與用到它的畫面測試 |
 
-**量不出來、靠 review 的**：彩色面積不能大、一個面只有一顆實心按鈕、「是不是標題」（`COMPONENTS.md`）；blur 只給小元素、持續動畫只動 transform／opacity（規格 §11）。
+**量不出來、靠 review 的**：彩色面積不能大、一個面只有一顆實心按鈕、「是不是標題」（`COMPONENTS.md`）；持續動畫只動 transform／opacity（規格 §11）。大面積玻璃的效能改由合併前的量測守（規格 §7「效能」）。
 
 ## 5. 刻意不做的
 
