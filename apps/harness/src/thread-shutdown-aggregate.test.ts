@@ -120,6 +120,10 @@ describe('serve 關機時 thread 收尾一份失敗、其餘照收（#1511）', 
     expect(error.message).toContain('thread "bad"');
     expect(error.message).toContain('磁碟滿了');
     expect(error.message).not.toContain('thread "good"');
+    // 單條 thread 只有一步失敗：thread 層丟那一步本身，不再多包一層 AggregateError（照 dsh ACP session.ts:450-484）。
+    const inner = (error.errors[0] as Error).cause;
+    expect(inner).not.toBeInstanceOf(AggregateError);
+    expect(inner).toMatchObject({ message: '落盤收尾失敗' });
     // 落盤失敗不擋 agent：MCP 子行程在它底下。
     expect(stepsOf('bad')).toEqual(['detach', 'persistence', 'agent']);
     expect(stepsOf('good')).toEqual(['detach', 'persistence', 'agent']);
@@ -152,6 +156,10 @@ describe('serve 關機時 thread 收尾一份失敗、其餘照收（#1511）', 
     const error = await closeError(handler);
 
     expect(error.errors).toHaveLength(2);
+    // 同一條 thread 兩步都失敗：thread 層才聚合。
+    const innerA = (error.errors[0] as Error).cause;
+    expect(innerA).toBeInstanceOf(AggregateError);
+    expect((innerA as AggregateError).errors).toHaveLength(2);
     for (const text of ['thread "a"', 'thread "b"', '磁碟滿了', '子行程收不掉', '接線拆不掉']) {
       expect(error.message).toContain(text);
     }

@@ -869,7 +869,7 @@ interface ThreadState {
   readonly goalControl: Pick<GoalDriverPort, 'goal' | 'pause'> | undefined;
   /**
    * 收尾。**每一步各自接住自己的錯、繼續收下一步**（落盤失敗不擋 agent 的 `dispose`，前一步失敗也不跳過落盤），
-   * 全部收完之後有錯才拒絕成 `AggregateError`，message 嵌入 thread id 與每一步的原因鏈
+   * 全部收完之後有錯才拒絕：只有一步失敗就丟那一步（`Error('<步驟>收尾失敗', { cause })`），兩步以上才是 `AggregateError`，message 嵌入 thread id 與每一步的原因鏈
    * （[#1511](https://github.com/DemianLi/nexus-agent/issues/1511)）。
    */
   dispose(): Promise<void>;
@@ -1544,7 +1544,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             await release((step, error) => {
               failures.push(new Error(`${step}收尾失敗`, { cause: error }));
             });
-            if (failures.length > 0) {
+            // 照 dsh ACP `session.ts:450-484`：只有一步失敗就丟那一個，兩步以上才聚合。外層 `close()` 一律聚合並包 thread id。
+            if (failures.length === 1) throw failures[0];
+            if (failures.length > 1) {
               throw new AggregateError(
                 failures,
                 `thread "${threadId}" 收尾失敗：${failures.map(errorChain).join('; ')}`,
