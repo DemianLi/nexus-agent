@@ -802,11 +802,11 @@ describe('H：MCP 收尾有期限（#1543）', () => {
       expect((await touch(r, 't1')).type).toBe('success');
       const first = pidsOf(marker);
       expect(first).toHaveLength(1);
-      // 殺掉第 0 代，讓重連起的那一個卡在握手；它起來之後就拿掉旗標，重建那一份連得上。
+      // 殺掉第 0 代，讓重連起的那一個卡在握手。重建的那一份不掛 MCP：卡住的 server 也會讓組裝等上兩分鐘，那不歸這張。
       await writeFile(flag, '');
       killAll(first);
       await until(() => pidsOf(marker).some((pid) => !first.includes(pid)), 10_000);
-      await rm(flag);
+      r.extras.set('t1', {});
 
       r.advance(T);
       const started = Date.now();
@@ -815,6 +815,8 @@ describe('H：MCP 收尾有期限（#1543）', () => {
       const back = touch(r, 't1');
       await sweeping;
       const elapsed = Date.now() - started;
+      // 下限證明真的卡住了、等滿 MCP 的收尾期限（5 秒）；沒卡住的話這條什麼都沒量到。上限是期限加一點餘裕。
+      expect(elapsed).toBeGreaterThanOrEqual(5000);
       expect(elapsed).toBeLessThan(6000);
       expect(r.disposed).toEqual(['t1']);
       expect((await back).type).toBe('success');
