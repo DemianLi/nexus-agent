@@ -9,9 +9,17 @@
  * 另有一個開關給收尾期限（[#1543](https://github.com/DemianLi/nexus-agent/issues/1543)）：`FIXTURE_HANG_IF_FILE` 指的檔案存在時，
  * 啟動後**讀著 stdin 卻永遠不回 initialize**——握手卡住的 server。掛上之後才建檔，讓重連卡住（同 `fixture-server.ts` 的
  * `FIXTURE_EXIT_IF_FILE`；不用啟動次數，因為初次組裝起幾次子行程是 adapter 的版本協商決定的）。
+ *
+ * 重連前的關閉屏障（#1543）另用兩個開關，重現「`close()` 回來了，子行程卻還沒關掉」：
+ *
+ * - `FIXTURE_GRANDCHILD_PID_FILE`：啟動時起一個**繼承 stdout 的孫行程**（30 秒後自己結束），pid 逐行附加到這個檔，測試收尾要
+ *   殺掉。它握著 pipe，所以 server 自己退出之後，client 那一側的 close 事件要等它放手才來。
+ * - `FIXTURE_DROP_TOOL`：多掛一支 `drop_connection`，丟一個文字是 `Connection closed` 的錯誤（server 把它回成工具錯誤結果），
+ *   外掛的 `isConnectionLost` 認這句、把這一代判成斷線走 `down()`，而 transport 這時還開著。
  */
 
-import { existsSync } from 'node:fs';
+import { spawn } from 'node:child_process';
+import { appendFileSync, existsSync } from 'node:fs';
 import { McpServer, ResourceTemplate } from '@modelcontextprotocol/server';
 import { serveStdio } from '@modelcontextprotocol/server/stdio';
 import { registerModernTools } from './modern-tools.js';
@@ -37,6 +45,11 @@ function createServer(): McpServer {
     },
   );
   registerModernTools(server);
+  if (process.env['FIXTURE_DROP_TOOL'] === '1') {
+    server.registerTool('drop_connection', { description: '回一個看起來像斷線的錯誤。' }, () => {
+      throw new Error('Connection closed');
+    });
+  }
   if (resourcesRequested()) {
     server.registerResource('memo', MEMO_URI, { mimeType: 'text/plain' }, (uri) => ({
       contents: [{ uri: uri.href, text: memoText() }],
@@ -54,6 +67,15 @@ function createServer(): McpServer {
     );
   }
   return server;
+}
+
+const grandchildPidFile = process.env['FIXTURE_GRANDCHILD_PID_FILE'];
+if (grandchildPidFile !== undefined) {
+  const grandchild = spawn(process.execPath, ['-e', 'setTimeout(() => {}, 30000)'], {
+    stdio: ['ignore', 'inherit', 'ignore'],
+  });
+  appendFileSync(grandchildPidFile, `${String(grandchild.pid)}\n`);
+  grandchild.unref();
 }
 
 const hangIfFile = process.env['FIXTURE_HANG_IF_FILE'];

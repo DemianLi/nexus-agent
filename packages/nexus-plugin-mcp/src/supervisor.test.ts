@@ -188,6 +188,7 @@ describe('預算', () => {
       h.setClock(stable);
       h.state.reports.length = 0;
       h.supervisor.down(reconnected);
+      await vi.advanceTimersByTimeAsync(0); // 先確認上一代關掉了，才排重連（#1543）
       expect(h.state.reports[0]).toContain(`in ${String(expectedDelay)}ms`);
     }
   });
@@ -213,11 +214,12 @@ describe('一次只有一個嘗試', () => {
     expect(h.supervisor.current()?.id).toBe(1);
   });
 
-  it('同一代被通報兩次（close 事件加呼叫失敗）只算一次', () => {
+  it('同一代被通報兩次（close 事件加呼叫失敗）只算一次', async () => {
     const h = harness();
     h.supervisor.down(h.first);
     h.supervisor.down(h.first);
     h.first.down?.();
+    await vi.advanceTimersByTimeAsync(0);
     expect(h.state.reports).toHaveLength(1);
     expect(h.state.closed).toEqual([0]);
   });
@@ -318,7 +320,7 @@ describe('關閉的期限（#1543，照 dsh GENERATION_CLOSE_TIMEOUT_MS）', () 
     expect(h.state.errors[0]).toContain('transport closure could not be confirmed during disposal');
   });
 
-  it('掉線的那一代確認不到關掉：不重連、標成放棄、記一句；差 1 ms 還沒決定', async () => {
+  it('掉線的那一代確認不到關掉：不排重連、標成放棄、記一句；差 1 ms 還沒決定', async () => {
     const h = harness();
     h.state.holdClosed = true;
     h.supervisor.down(h.first);
@@ -333,29 +335,37 @@ describe('關閉的期限（#1543，照 dsh GENERATION_CLOSE_TIMEOUT_MS）', () 
     expect(h.state.errors[0]).toMatch(
       /^mcp-client\(t\): failed generation could not confirm transport closure — reconnect stopped to avoid overlapping server processes; /u,
     );
+    // 先確認再排：確認不到的那一代，不會先冒出一句「reconnecting in」。
+    expect(h.state.reports).toEqual([]);
     await vi.advanceTimersByTimeAsync(100_000);
     expect(h.state.connects).toBe(0);
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it('關掉得慢但在期限內：等它關掉才連，不提早', async () => {
+  it('關掉得慢但在期限內：確認到了才排重連，退避從那一刻起算', async () => {
     const h = harness();
     h.state.holdClosed = true;
     h.supervisor.down(h.first);
     await vi.advanceTimersByTimeAsync(3000);
-    expect(h.state.connects).toBe(0);
+    expect(h.state.reports).toEqual([]);
     h.first.markClosed();
     await vi.advanceTimersByTimeAsync(0);
+    expect(h.state.reports).toEqual([
+      'mcp-client(t): connection lost; reconnecting in 500ms (attempt 1/10)',
+    ]);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(h.state.connects).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
     expect(h.state.connects).toBe(1);
     expect(h.supervisor.gaveUp).toBe(false);
     expect(h.supervisor.current()?.id).toBe(1);
   });
 
-  it('重連已經在等上一代關掉時 dispose：不重連、不記「reconnect stopped」', async () => {
+  it('還在等上一代關掉時 dispose：不重連、不記「reconnect stopped」', async () => {
     const h = harness();
     h.state.holdClosed = true;
     h.supervisor.down(h.first);
-    await vi.advanceTimersByTimeAsync(600); // 500 ms 的重連計時器已經觸發，正等著屏障
+    await vi.advanceTimersByTimeAsync(600); // 正等著確認上一代關掉
     const disposing = h.supervisor.dispose();
     await vi.advanceTimersByTimeAsync(GENERATION_CLOSE_TIMEOUT_MS);
     await disposing;
@@ -369,6 +379,7 @@ describe('reconnect.enabled: false', () => {
   it('掉線之後不排任何重連，直接標成放棄並講一句', async () => {
     const h = harness({ enabled: false });
     h.supervisor.down(h.first);
+    await vi.advanceTimersByTimeAsync(0);
     expect(h.supervisor.gaveUp).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
     await vi.advanceTimersByTimeAsync(100_000);

@@ -34,10 +34,11 @@
  *      `_initializeConnection`，而且自己先等它（`connection.js` 的 `#closeAll`）。所以 dispose 照舊先等進行中的嘗試，但整段
  *      跟 {@link GENERATION_CLOSE_TIMEOUT_MS} 賽跑，到期就記 dsh 那一句、照常回來。被丟下的嘗試落定之後照樣收（連上了就關、
  *      失敗了 adapter 自己收），只是那個子行程比 thread 多活一段，最多到它的握手逾時。
- *    - **失敗嘗試的 close 訊號拿不到**（理由 1）：握手失敗時 adapter 自己收掉 client 與 transport
- *      （`connection.js:122-124`），我們掛不上它的 `onclose`，所以只有**已連上的那一代**掉線時有屏障；失敗嘗試靠 SDK stdio
- *      自帶的兩段 2 秒寬限之後 SIGKILL。屏障放在重連計時器的回呼裡、`connect()` 之前，所以「reconnecting in」那一句會先於
- *      確認不到的那一句出現（dsh 先確認再排計時器）。期限包住「關」與「等關掉」整段，不是關完才起算。
+ *    - **屏障掛在「已連上的那一代被 down」**（理由 1）：dsh 的屏障在**失敗的連線嘗試**上（`connection.ts:187-197`、
+ *      `:323-331`），已連上的那一代由自己的 `onclose` 證明已經關掉、直接 `generationDown`。握手失敗時 adapter 自己收掉 client
+ *      與 transport（`connection.js:122-124`），我們拿不到那個 close 訊號，所以退到最接近的一格：已連上的那一代被 `down`
+ *      （例如工具呼叫失敗判成斷線、transport 其實還開著）時，先關、確認它真的關掉，才排重連；確認不到就不排。失敗的嘗試靠
+ *      SDK stdio 自帶的兩段 2 秒寬限之後 SIGKILL。期限包住「關」與「等關掉」整段，不是關完才起算。
  *    - **只有一級日誌**（理由 1）：dsh 這兩句是 error 級；插件 logger 只有 warn（`@nexus/core` `registry.ts:679`、`:705`），
  *      #1534 也定了不擴充它的等級。所以 {@link SupervisorHooks.error} 接到 warn，等 MCP 遷上樹改用 `ctx.logger.error`。
  *
@@ -112,8 +113,6 @@ export class Supervisor<G> {
   private failedAttempts = 0;
   private connectedAt: number | undefined;
   private attempt: Promise<void> = Promise.resolve();
-  /** 最近一次掉線那一代確認關掉了沒；重連前先等它。 */
-  private retired: Promise<boolean> = Promise.resolve(true);
   private gaveUpFlag = false;
 
   constructor(hooks: SupervisorHooks<G>, initial: G) {
@@ -138,10 +137,21 @@ export class Supervisor<G> {
   down(generation: G): void {
     if (this.disposed || this.generation !== generation) return;
     this.generation = undefined;
-    const closing = this.closeAndWait(generation);
+    this.attempt = this.retire(generation);
+  }
+
+  /** 先確認掉線的那一代真的關掉，才排重連；確認不到就停下（照 dsh `settleFailedGeneration`，`connection.ts:187-197`）。 */
+  private async retire(generation: G): Promise<void> {
+    const confirmed = await settlesWithin(this.closeAndWait(generation));
+    if (this.disposed) return;
+    if (!confirmed) {
+      this.gaveUpFlag = true;
+      this.hooks.error(
+        `${this.hooks.label}: failed generation could not confirm transport closure — reconnect stopped to avoid overlapping server processes; 要重試得重新組裝（下一條 thread 或重啟 serve）`,
+      );
+      return;
+    }
     this.schedule(true);
-    // 真的排了重連才需要屏障：重連前要確認上一代已經關掉，不讓兩代 server 同時活著。
-    if (this.timer !== undefined) this.retired = settlesWithin(closing);
   }
 
   /**
@@ -229,15 +239,6 @@ export class Supervisor<G> {
 
   /** 一次嘗試；永不拋。 */
   private async connectOnce(): Promise<void> {
-    const confirmed = await this.retired;
-    if (this.disposed) return;
-    if (!confirmed) {
-      this.gaveUpFlag = true;
-      this.hooks.error(
-        `${this.hooks.label}: failed generation could not confirm transport closure — reconnect stopped to avoid overlapping server processes; 要重試得重新組裝（下一條 thread 或重啟 serve）`,
-      );
-      return;
-    }
     let next: G;
     try {
       next = await this.hooks.connect();
