@@ -60,7 +60,7 @@
 
 | # | 在哪 | 蓋掉 vendor 的哪裡 | 改成什麼、為什麼 | 釘住的測試 |
 |---|---|---|---|---|
-| 14 | `resolve-alias.ts`（`vite.config.ts`、`vitest.config.ts`、`guard/vite.config.ts` 共用）＋`tsconfig.json` 的 `paths` | `components/ui/*.tsx` 的 `import { cn } from "cn"` | 裸的 `cn` 精確解析到 `src/lib/utils.ts`（`cn/config` 不動，`utils.ts` 自己從它取）：npm 的 `cn` 不認得 `text-ui`、`rounded-row`，會把 #1141 帶回來（Q19 放行的執行方式，PM 定）。Vite 用正規式 `/^cn$/`，字串鍵會連 `cn/config` 一起改寫 | `lib/cn-alias.test.tsx`（渲染 vendor 原樣的 Button）、`vite-config.test.ts`（build、guard、tsconfig 三份解析） |
+| 14 | `resolve-alias.ts`（`vite.config.ts`、`vitest.config.ts`、`guard/vite.config.ts` 共用）＋`tsconfig.json` 的 `paths` | `components/ui/*.tsx` 的 `import { cn } from "cn"` | 裸的 `cn` 精確解析到 `src/lib/utils.ts`（`cn/config` 不動，`utils.ts` 自己從它取）：npm 的 `cn` 不認得 `text-ui`、`rounded-row`，會把 #1141 帶回來（Q19 放行的執行方式，PM 定）。Vite 用正規式 `/^cn$/`，字串鍵會連 `cn/config` 一起改寫。別名是全域的，但打包進來的相依套件沒有一個 import 裸的 `cn`（#1523 用 build 時的 `resolveId` 探針確認），實際只作用在 vendor 的元件 | `lib/cn-alias.test.tsx`（渲染 vendor 原樣的 Button）、`vite-config.test.ts`（build、guard、tsconfig 三份解析） |
 
 另外**新增**、不是改 SG 的：`index.css` 的 `--radius-row`（SG 的 3xl 減 4px）與 nexus 獨有的顏色 token（`stage`、`chip*`、`brand-soft`、`warning`、`info`、`card-hairline`，Q11 留到第 ⑥ 步），以及 `tokens.generated.css` 的 `--primary-hover`／`--primary-active`（亮 `:12-13`、暗 `:35-36`，主按鈕 hover 與按下的底色，SG 沒有這兩格）。圓角階梯照 SG，不重綁。
 
