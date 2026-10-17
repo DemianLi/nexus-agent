@@ -1,6 +1,8 @@
 /**
  * nexus 層（#1583）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/dropdown-menu.tsx`，Base UI 的 Menu），
- * 外觀照 SG（#1468 Q8）。只轉出側欄列選單用得到的那幾件（Root、Trigger、Content、Item、Separator）。
+ * 外觀照 SG（#1468 Q8）。只轉出用得到的那幾件：側欄列選單的 Root、Trigger、Content、Item、Separator，加上 vendor 的
+ * `ComposerPick`（#1591）import 的 RadioGroup、RadioItem、Label——vendor 檔裡的 `@/components/ui/dropdown-menu` 解析到這一層，
+ * 少轉出一件 vendor 的 composer 就編不過。
  * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 25 條）：
  *
  * - `DropdownMenuItem` 的觸控高度：vendor 是 `py-1`（約 28px），規格 §9 要 1024 以下 44px、以上 32px（`min-h-11 lg:min-h-8`）。
@@ -17,6 +19,9 @@ import { DropdownMenuItem as VendorDropdownMenuItem } from '@/vendor/solid-glass
 export {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/vendor/solid-glass/components/ui/dropdown-menu';

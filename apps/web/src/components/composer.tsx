@@ -1,5 +1,9 @@
 /**
- * 輸入框（規格 §4.2 列 26、27，#407）：shadcn `input-group`＋`textarea`，打 `/` 跳 shadcn `command` 選單。
+ * 輸入框（規格 §4.2 列 26、27，#407）：SG 的 `Composer`（`ui/composer.tsx`，#1591），打 `/` 跳 `command` 選單。
+ *
+ * **SG 的 `Composer` 從外面接**（#1468 Q16）：它的按鍵（IME → 開頭退格 → Enter 送出）寫死在 textarea 上，所以選單的鍵、
+ * Cmd/Ctrl＋Enter 在外層用 `onKeyDownCapture` 先攔，攔到就 `stopPropagation`，SG 收不到；Enter 送出與 Shift＋Enter 換行
+ * 交給 SG（`canSubmit` 給 `canSend`）。貼上與游標從外層收（React 的 `paste`／`select` 會冒泡）。
  *
  * **草稿不住在這裡**：由呼叫端持有（`draft`／`onDraftChange`）。⑧ 會用 `hidden`＋`inert` 把輸入框換成面板（§4.3），
  * 就算哪天改成卸載，草稿也不會跟著丟。這裡只留游標與選單這種換掉也無妨的狀態。
@@ -22,22 +26,13 @@
  * 選了不進草稿——`@` 那一段拿掉，換成輸入框上方一顆標記；一句話最多一個，再選取代前一個；標記整顆刪（×、游標在最前面按退格）。
  * 選單的清單是同步算的、不問伺服器，所以只有「委派給」一段也開得起來（沒給檔案與會話來源時）。
  *
- * **外觀與動效是 nexus 的**：浮層 250／150、縮放 .97／.99（§7，在 `ui/popover.tsx`）；送出鍵是實心主按鈕，
- * 按壓 .96（`styles/motion.css`）。
+ * **主按鈕照 dsh**（`InputBar.tsx:323-344`，SG 的 `stops` 是同一套）：一輪在跑、草稿送不出去（空的、或跑著時不收的
+ * 那一種）時是停止，其餘是送出；跑著時送出鈕的名稱說出這一下是排隊（按鈕永遠是 Enter 的送法）。斷線時沒有東西可停，
+ * 不給 `running`，按鈕是送出（草稿空就暗掉）。底列「Enter 送出」那句只給報讀（sr-only，掛在輸入框的描述上）。
  */
 
-import {
-  ArrowUp,
-  Bot,
-  Check,
-  ChevronRight,
-  File,
-  Folder,
-  MessageSquare,
-  Paperclip,
-  Square,
-} from 'lucide-react';
-import { useEffect, useLayoutEffect, useReducer, useRef, useState } from 'react';
+import { Bot, Check, ChevronRight, File, Folder, MessageSquare, Plus } from 'lucide-react';
+import { useEffect, useId, useLayoutEffect, useReducer, useRef, useState } from 'react';
 import type { KeyboardEvent, ReactNode, RefObject } from 'react';
 import type {
   FileReferenceListOutcome,
@@ -51,11 +46,10 @@ import { DropOverlay } from '@/components/drop-overlay';
 import { Button } from '@/components/ui/button';
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command';
 import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupText,
-  InputGroupTextarea,
-} from '@/components/ui/input-group';
+  Composer as SgComposer,
+  ComposerFooter,
+  ComposerFooterEnd,
+} from '@/components/ui/composer';
 import { Popover, PopoverContent } from '@/components/ui/popover';
 import { Skeleton } from '@/components/ui/skeleton';
 import { agentRows, applyAgentPick } from '@/lib/agent-mention';
@@ -73,7 +67,7 @@ import {
 import type { MentionRow, MentionSource } from '@/lib/mention-menu';
 import { applySessionPick } from '@/lib/session-mention';
 import { applySlashPick, detectSlash, slashCandidates } from '@/lib/slash-trigger';
-import { isAcceleratedEnter } from '@/lib/submit-mode';
+import { isAcceleratedEnter, resolveSubmitMode } from '@/lib/submit-mode';
 import { useFileDrop } from '@/lib/use-file-drop';
 import type { SendHint, SubmitGesture } from '@/lib/submit-mode';
 
@@ -127,7 +121,9 @@ export function Composer({
    * 插話由呼叫端照 `lib/submit-mode.ts` 判（#710）。
    */
   readonly onSubmit: (gesture: SubmitGesture) => void;
-  /** 底列左邊那句提示；跑著時呼叫端換成兩種送法各一句（#710）。 */
+  /**
+   * 送出的說明：只給報讀，掛在輸入框的 `aria-describedby`（畫面上不寫，#1591 Q3）。跑著時呼叫端換成兩種送法各一句（#710）。
+   */
   readonly sendHint?: SendHint;
   /**
    * 草稿空白時按 Cmd/Ctrl+Enter：把排著的全部改成插話（#710，dsh 的 `canSteerQueue`）。**給了才生效**；呼叫端在
@@ -139,12 +135,13 @@ export function Composer({
   readonly onRunCommand: (line: string) => boolean;
   /** 光打名字就另有動作的命令：從選單選到時直接執行，不等參數。 */
   readonly decorated?: ReadonlySet<string>;
-  /** 有東西可停（一輪在跑，或停在核准點）。 */
+  /** 有東西可停（一輪在跑）。 */
   readonly stoppable: boolean;
+  /** 停不了（斷線）：主按鈕不變成停止（dsh 的 `stop === undefined`）。 */
   readonly stopDisabled: boolean;
   readonly onStop: () => void;
   readonly textareaRef?: RefObject<HTMLTextAreaElement | null>;
-  /** 底列「Enter 送出」旁邊的用量表（#528）；資料由呼叫端接，這裡只管放哪。 */
+  /** 輸入框底下那一列右邊的用量表（#528）；資料由呼叫端接，這裡只管放哪。 */
   readonly meter?: ReactNode;
   /** `@` 的候選（#653）；要穩定，每換一次就重查一次。沒給就沒有 `@` 選單。 */
   readonly fileReferences?: (
@@ -165,8 +162,8 @@ export function Composer({
    */
   readonly attachments?: ComposerAttachments;
   /**
-   * 底列的選擇座位（#723 模型、#437 權限）：放在加入鈕與送出提示之間。**沒給就沒有**——伺服器還沒實作的座位由呼叫端
-   * 不傳，這裡不留空位。
+   * 輸入框底下那一列左邊的選擇座位（#723 模型、#437 權限；SG 的 `ComposerFooter`，在輸入框外面）。**沒給就沒有**——
+   * 伺服器還沒實作的座位由呼叫端不傳，這裡不留空位。
    */
   readonly seats?: ReactNode;
   /**
@@ -365,7 +362,7 @@ export function Composer({
   }
 
   /** `@` 選單開著時這一鍵歸不歸它；歸它就回 true。 */
-  function mentionKey(event: KeyboardEvent<HTMLTextAreaElement>): boolean {
+  function mentionKey(event: KeyboardEvent<HTMLElement>): boolean {
     const pickable = mentionPickable(menu);
     switch (event.key) {
       case 'ArrowDown':
@@ -404,19 +401,9 @@ export function Composer({
     return false;
   }
 
-  function onKeyDown(event: KeyboardEvent<HTMLTextAreaElement>) {
-    if (event.nativeEvent.isComposing || event.keyCode === 229) return;
-    if (mentionOpen && mentionKey(event)) return;
-    // 游標在最前面（`selectionEnd` 是 0，起點就一定是 0）、沒選一段字時退格：整顆刪掉標記。
-    if (
-      event.key === 'Backspace' &&
-      agentMention?.selected !== undefined &&
-      event.currentTarget.selectionEnd === 0
-    ) {
-      event.preventDefault();
-      agentMention.onSelect(undefined);
-      return;
-    }
+  /** 選單與 Cmd/Ctrl＋Enter 的鍵；歸這裡就回 true（呼叫端擋下，不讓 SG 的 textarea 收到）。 */
+  function interceptKey(event: KeyboardEvent<HTMLElement>): boolean {
+    if (mentionOpen && mentionKey(event)) return true;
     if (open && active !== undefined) {
       switch (event.key) {
         case 'ArrowDown':
@@ -425,52 +412,60 @@ export function Composer({
           const step = event.key === 'ArrowDown' ? 1 : -1;
           const index = candidates.indexOf(active);
           setHighlight((index + step + candidates.length) % candidates.length);
-          return;
+          return true;
         }
         case 'Enter':
           if (event.shiftKey) break;
           event.preventDefault();
           pick(active);
-          return;
+          return true;
         case 'Tab':
           event.preventDefault();
           if (event.shiftKey) setDismissed(hit);
           else pick(active);
-          return;
+          return true;
         case 'Escape':
           event.preventDefault();
           setDismissed(hit);
-          return;
+          return true;
       }
     }
-    if (event.key === 'Enter' && !event.shiftKey) {
+    // 只按 Enter（送出）、Shift＋Enter（換行）交給 SG；加速的 Cmd/Ctrl＋Enter 在這裡送——SG 只看 `shiftKey`，會把它當成一般的 Enter。
+    if (isAcceleratedEnter(event)) {
       event.preventDefault();
-      const accelerated = isAcceleratedEnter(event);
       // 草稿空白但有附件：這一下是送出那份附件（插話），不是把佇列改成插話。
       const hasAttachments = attachments !== undefined && attachments.items.length > 0;
-      if (accelerated && draft.trim() === '' && !hasAttachments && onSteerQueue !== undefined) {
-        onSteerQueue();
-        return;
-      }
-      if (canSend) onSubmit(accelerated ? 'accelerated' : 'enter');
+      if (draft.trim() === '' && !hasAttachments && onSteerQueue !== undefined) onSteerQueue();
+      else if (canSend) onSubmit('accelerated');
+      return true;
     }
+    return false;
   }
+
+  const running = stoppable && !stopDisabled;
+  // 跑著時按鈕送出的是 Enter 的送法（排隊）。名稱只在這一下真的會送出一句普通訊息時說出送法（dsh 的 `primaryLabel`）：
+  // `/` 開頭的是命令，照舊叫「送出」。
+  const sendLabel =
+    running && canSend && !draft.trimStart().startsWith('/')
+      ? resolveSubmitMode('running', 'enter') === 'steer'
+        ? '插話送出'
+        : '排隊送出'
+      : '送出';
+  const hintId = useId();
+  const menuOpen = open || mentionOpen;
 
   return (
     <>
       {dropping && <DropOverlay />}
       <Popover
-        open={open || mentionOpen}
+        open={menuOpen}
         onOpenChange={(next, details) => {
-          // 點輸入框本身不算點外面；**底列另一顆浮層的按鈕算外面**（用量表，#528）：它也在輸入框裡，不收的話兩個浮層疊在
-          // 同一個位置（真 Chrome 量過）。Base UI 沒有 Radix 的 `onInteractOutside`，在這裡看 `reason` 取消（#1583）。
+          // 點輸入框本身（含「＋」與標記）不算點外面。底列在輸入框外面（SG 的 `ComposerFooter`），點底列的座位、用量表就是
+          // 點外面，選單收起，不會跟它們的浮層疊在一起（#528）。Base UI 沒有 Radix 的 `onInteractOutside`，在這裡看 `reason`
+          // 取消（#1583）。
           if (!next && details.reason === 'outside-press') {
             const target = details.event.target;
-            if (
-              target instanceof Element &&
-              anchorRef.current?.contains(target) &&
-              target.closest('[data-slot="popover-trigger"]') === null
-            ) {
+            if (target instanceof Element && anchorRef.current?.contains(target)) {
               details.cancel();
               return;
             }
@@ -479,128 +474,124 @@ export function Composer({
         }}
       >
         {/* 選單錨在整個輸入框上（`PopoverContent` 的 `anchor`，vendor 本地修改第 19 條），不是錨在某顆 Trigger 上。 */}
-        <div data-slot="popover-anchor" ref={anchorRef}>
-          <InputGroup className="rounded-3xl">
-            <label className="sr-only" htmlFor="prompt">
-              要說的話
-            </label>
-            {agentMention?.selected !== undefined && (
-              <InputGroupAddon align="block-start" className="min-w-0 pb-0">
-                <AgentMentionChip
-                  agent={agentMention.selected}
-                  onRemove={() => agentMention.onSelect(undefined)}
-                />
-              </InputGroupAddon>
-            )}
-            {attachments !== undefined && attachments.items.length > 0 && (
-              <InputGroupAddon align="block-start" className="min-w-0 pb-0">
-                <AttachmentRail
-                  items={attachments.items}
-                  onRemove={attachments.onRemove}
-                  uploads={attachments.uploads}
-                  onCancelUpload={attachments.onCancelUpload}
-                />
-              </InputGroupAddon>
-            )}
-            <InputGroupTextarea
-              ref={textarea}
-              id="prompt"
-              rows={1}
-              className="text-body max-h-48 min-h-12 px-4"
-              value={draft}
-              placeholder={placeholder}
-              aria-controls={open || mentionOpen ? ids.list : undefined}
-              aria-activedescendant={open || mentionOpen ? ids.option : undefined}
-              onChange={(event) => {
-                edit(event.target.value, event.target.selectionStart);
-              }}
-              onSelect={(event) => {
-                setCaret(event.currentTarget.selectionStart);
-              }}
-              onKeyDown={onKeyDown}
-              onPaste={(event) => {
-                // 剪貼簿裡有檔案（截圖、在檔案管理員複製的檔案）就收成附件，不貼文字；純文字照舊交給瀏覽器。
-                const files = Array.from(event.clipboardData.files);
-                if (onAddFiles === undefined || files.length === 0) return;
-                event.preventDefault();
-                onAddFiles(files);
-              }}
-            />
-            {/* 有座位時底列放不下就換行（`flex-wrap`）：375 寬、一輪在跑時有加入鈕、模型座、權限座、用量表、停止、送出六顆，
-              塞不下會讓送出鈕超出框（實機量到 18px）。只在有座位時開，沒座位時行為與以前相同。 */}
-            <InputGroupAddon
-              align="block-end"
-              className={`px-2 pb-2 ${seats === undefined ? '' : 'flex-wrap'}`}
-            >
-              {onAddFiles !== undefined && (
-                <>
-                  <input
-                    ref={fileInput}
-                    type="file"
-                    multiple
-                    hidden
-                    tabIndex={-1}
-                    data-testid="attachment-input"
-                    onChange={(event) => {
-                      onAddFiles(Array.from(event.target.files ?? []));
-                      // 同一個檔案選第二次也要觸發 change。
-                      event.target.value = '';
-                    }}
-                  />
-                  <Button
-                    type="button"
-                    variant="ghost"
-                    size="icon"
-                    className="size-11 shrink-0 rounded-full lg:size-9"
-                    aria-label="加入附件"
-                    onClick={() => fileInput.current?.click()}
-                  >
-                    <Paperclip />
-                  </Button>
-                </>
-              )}
-              {seats}
-              {/* 有座位時窄螢幕不寫這句：一輪在跑時底列有加入鈕、座位、用量表、停止、送出五顆，375 寬已經塞不下（實機量到
-                  送出鈕超出框 12px）；手機的軟鍵盤也沒有 Enter／Cmd+Enter 可提示。 */}
-              {/* `gap-0`：外殼是 flex、預設 `gap-2`，寬螢幕那一段會被隔開一大截（實機截圖量到）。 */}
-              <InputGroupText
-                className={`gap-0 pl-2 text-tip ${seats === undefined ? '' : 'max-sm:hidden'}`}
-                data-testid="send-hint"
-              >
-                {sendHint.text}
-                {sendHint.wide !== undefined && (
-                  <span className="hidden sm:inline">{sendHint.wide}</span>
-                )}
-              </InputGroupText>
-              {meter}
-              <div className="ml-auto flex items-center gap-2">
-                {stoppable && (
-                  <Button
-                    type="button"
-                    variant="secondary"
-                    size="icon"
-                    className="size-11 rounded-full lg:size-9"
-                    aria-label="停止"
-                    disabled={stopDisabled}
-                    onClick={onStop}
-                  >
-                    <Square className="fill-current" />
-                  </Button>
-                )}
-                <Button
-                  type="button"
-                  size="icon"
-                  className="size-11 rounded-full lg:size-9"
-                  aria-label="送出"
-                  disabled={!canSend}
-                  onClick={() => onSubmit('enter')}
-                >
-                  <ArrowUp />
-                </Button>
-              </div>
-            </InputGroupAddon>
-          </InputGroup>
+        <div
+          data-slot="popover-anchor"
+          ref={anchorRef}
+          onKeyDownCapture={(event) => {
+            // 只攔輸入框的鍵：「＋」、標記的 ×、附件列的按鈕也在這一層裡，它們的 Enter 照舊是按下去。
+            if (event.target !== textarea.current) return;
+            // 打注音、拼音時的 Enter 是選字（Safari 在選字結束後才報這一鍵，只剩 keyCode 229）：全部交給 SG，它也先判這個。
+            if (event.nativeEvent.isComposing || event.keyCode === 229) return;
+            if (interceptKey(event)) event.stopPropagation();
+          }}
+          onSelect={(event) => {
+            if (event.target === textarea.current) setCaret(textarea.current.selectionStart);
+          }}
+          onPaste={(event) => {
+            // 剪貼簿裡有檔案（截圖、在檔案管理員複製的檔案）就收成附件，不貼文字；純文字照舊交給瀏覽器。
+            const files = Array.from(event.clipboardData.files);
+            if (onAddFiles === undefined || files.length === 0) return;
+            event.preventDefault();
+            onAddFiles(files);
+          }}
+        >
+          <label className="sr-only" htmlFor="prompt">
+            要說的話
+          </label>
+          <SgComposer
+            textareaRef={textarea}
+            textareaProps={{
+              id: 'prompt',
+              'aria-describedby': hintId,
+              ...(menuOpen && ids.list !== undefined ? { 'aria-controls': ids.list } : {}),
+              ...(menuOpen && ids.option !== undefined
+                ? { 'aria-activedescendant': ids.option }
+                : {}),
+            }}
+            value={draft}
+            onValueChange={(next) => {
+              // SG 只給值；游標從 textarea 讀（這時 DOM 已經是新的值）。
+              edit(next, textarea.current?.selectionStart ?? next.length);
+            }}
+            placeholder={placeholder}
+            canSubmit={canSend}
+            onSubmit={() => onSubmit('enter')}
+            running={running}
+            onStop={onStop}
+            sendLabel={sendLabel}
+            stopLabel="停止"
+            // 游標在最前面、沒選一段字時退格：整顆刪掉 `@子代理` 標記（一按就刪，不學 SG demo 的先選再刪）。
+            onBackspaceAtStart={() => {
+              if (agentMention?.selected === undefined) return false;
+              agentMention.onSelect(undefined);
+              return true;
+            }}
+            {...(onAddFiles === undefined
+              ? {}
+              : {
+                  leading: (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="text-muted-foreground hover:text-foreground size-11 shrink-0 lg:size-8"
+                      aria-label="加入附件"
+                      onClick={() => fileInput.current?.click()}
+                    >
+                      <Plus />
+                    </Button>
+                  ),
+                })}
+            {...(agentMention?.selected !== undefined ||
+            (attachments !== undefined && attachments.items.length > 0)
+              ? {
+                  above: (
+                    <>
+                      {agentMention?.selected !== undefined && (
+                        <AgentMentionChip
+                          agent={agentMention.selected}
+                          onRemove={() => agentMention.onSelect(undefined)}
+                        />
+                      )}
+                      {attachments !== undefined && attachments.items.length > 0 && (
+                        <AttachmentRail
+                          items={attachments.items}
+                          onRemove={attachments.onRemove}
+                          uploads={attachments.uploads}
+                          onCancelUpload={attachments.onCancelUpload}
+                        />
+                      )}
+                    </>
+                  ),
+                }
+              : {})}
+          />
+          <span id={hintId} className="sr-only" data-testid="send-hint">
+            {sendHint.text}
+            {sendHint.wide}
+          </span>
         </div>
+        {onAddFiles !== undefined && (
+          <input
+            ref={fileInput}
+            type="file"
+            multiple
+            hidden
+            tabIndex={-1}
+            data-testid="attachment-input"
+            onChange={(event) => {
+              onAddFiles(Array.from(event.target.files ?? []));
+              // 同一個檔案選第二次也要觸發 change。
+              event.target.value = '';
+            }}
+          />
+        )}
+        {(seats !== undefined || meter !== undefined) && (
+          <ComposerFooter>
+            {seats}
+            <ComposerFooterEnd>{meter}</ComposerFooterEnd>
+          </ComposerFooter>
+        )}
         <PopoverContent
           side="top"
           align="start"
