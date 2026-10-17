@@ -238,10 +238,12 @@ const ignore = (): void => undefined;
  * **這不是吞錯。** 這一輪的失敗照舊以 `lifecycle failed` 上線、記成 `turn/failed`；工具的錯照舊由
  * `containment` 回給模型。標掉的只是那份沒有人要讀的副本。
  *
- * **偏離，登記**：dsh 沒有對應物——它的串流不造出這種 promise，行程層的 unhandled rejection 在那邊是
- * 「大聲死」（`installFailLoud`），所以我們也不在行程層接。代價是這裡**依賴投影的形狀**：哪天 langchain
- * 加一種帶 promise 的原生投影，這裡會漏。上游修掉那天，`tool-throw-orphan.test.ts` 的上游絆索會紅，
- * 這一段該拆。
+ * **偏離，登記**：dsh 沒有對應物——它的串流不造出這種 promise。行程層我們現在和 dsh 一樣大聲死
+ * （`installFailLoud`，[#1501](https://github.com/DemianLi/nexus-agent/issues/1501) 裝在 `serve.ts` 的 `main()`），
+ * 所以這裡標掉的是**已知會產生的孤兒**，不是替行程層的 handler 讓路：沒標到的 rejection 會被那個 handler
+ * 當成致命失敗收尾、以 1 結束。代價是這裡**依賴投影的形狀**：哪天 langchain 加一種帶 promise 的原生
+ * 投影，這裡會漏，而漏的後果現在是行程以 1 結束（帶標籤診斷），不再是 Node 預設的無診斷崩潰。
+ * 上游修掉那天，`tool-throw-orphan.test.ts` 的上游絆索會紅，這一段該拆。
  *
  * 不等它：投影在 run 收尾（或失敗）時才關，而那時 pump 早就往下走了。迭代本身在 run 失敗時也會拋，
  * 所以每一條背景迴圈自己也要接住——不然修掉一顆孤兒又生一顆。

@@ -12,7 +12,7 @@
 
 import { spawn } from 'node:child_process';
 import type { ChildProcess } from 'node:child_process';
-import { mkdtemp, readdir, readFile } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, stat, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -45,24 +45,33 @@ interface ServeProcess {
   readonly authenticatedUrl: string;
   readonly exited: Promise<{ code: number | null; signal: NodeJS.Signals | null }>;
   readonly process: ChildProcess;
+  /** 到目前為止收到的 stderr。 */
+  stderr(): string;
 }
 
 /** 起一台 serve 行程，等到它印出網址。**網址帶 token，不印、不寫進斷言訊息。** */
-async function startServe(root: string): Promise<ServeProcess> {
+async function startServe(
+  root: string,
+  extra: { readonly args?: readonly string[]; readonly env?: Record<string, string> } = {},
+): Promise<ServeProcess> {
   // 繼承的 env 帶著 `test-home.setup.ts` 設好的暫存 home；當場確認，不信任它（#424）。
   const home = process.env[HARNESS_HOME_ENV];
   expect(home).toBeDefined();
   expect(home).not.toBe(join(homedir(), '.nexus-agent'));
   const spawned = spawn(
     process.execPath,
-    ['--import', 'tsx', serveEntry, '--port', '0', '--session-log', root],
-    { cwd: harnessDir, env: { ...process.env }, stdio: ['ignore', 'pipe', 'pipe'] },
+    ['--import', 'tsx', serveEntry, '--port', '0', '--session-log', root, ...(extra.args ?? [])],
+    { cwd: harnessDir, env: { ...process.env, ...extra.env }, stdio: ['ignore', 'pipe', 'pipe'] },
   );
   child = spawned;
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((settle) => {
     spawned.once('exit', (code, signal) => void settle({ code, signal }));
   });
-  spawned.stderr.resume();
+  let stderr = '';
+  spawned.stderr.setEncoding('utf8');
+  spawned.stderr.on('data', (chunk: string) => {
+    stderr += chunk;
+  });
   let stdout = '';
   const authenticatedUrl = await new Promise<string>((resolve, reject) => {
     spawned.stdout.setEncoding('utf8');
@@ -75,7 +84,13 @@ async function startServe(root: string): Promise<ServeProcess> {
       reject(new Error('serve 沒有起來就結束了'));
     });
   });
-  return { url: new URL(authenticatedUrl).origin, authenticatedUrl, exited, process: spawned };
+  return {
+    url: new URL(authenticatedUrl).origin,
+    authenticatedUrl,
+    exited,
+    process: spawned,
+    stderr: () => stderr,
+  };
 }
 
 /** 說一句話，折到這一輪收掉。 */
@@ -153,5 +168,71 @@ describe('serve 收到 SIGINT', () => {
       type: 'inbox/spliced',
       data: { inserted: [{ text: '把這句話回聲一次。' }] },
     });
+  }, 90_000);
+});
+
+const probePatch = fileURLToPath(new URL('./fail-loud-probe.patch.yml', import.meta.url));
+
+/** 起一台掛了探針的 serve，說一句話等那一輪收掉（thread 閒著），回行程與探針的三個檔路徑。 */
+async function startProbedServe(): Promise<{
+  readonly server: ServeProcess;
+  readonly marker: string;
+  readonly arm: string;
+  readonly leak: string;
+}> {
+  const root = await mkdtemp(join(tmpdir(), 'nexus-serve-fail-loud-'));
+  const marker = join(root, 'probe.marker');
+  const arm = join(root, 'probe.arm');
+  const leak = join(root, 'probe.leak');
+  const server = await startServe(await mkdtemp(join(tmpdir(), 'nexus-serve-fail-loud-log-')), {
+    args: ['--patch', probePatch],
+    env: {
+      FAIL_LOUD_PROBE_MARKER: marker,
+      FAIL_LOUD_PROBE_ARM: arm,
+      FAIL_LOUD_PROBE_LEAK: leak,
+    },
+  });
+  // 等那一輪折到 `turn/end` 才算閒著；一輪中途的排空是訊號收尾 5 秒預算的事，不壓在 2 秒裡。
+  await say(await serveClient(server), 'idle', '把這句話回聲一次。');
+  return { server, marker, arm, leak };
+}
+
+async function exists(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** 診斷那一行的前綴出現幾次（`inspect` 的堆疊會跨行，數前綴不數行）。 */
+function labelCount(stderr: string, label: string): number {
+  return stderr.split(`nexus-agent serve: ${label}: `).length - 1;
+}
+
+describe('serve 遇到未處理的例外（#1501）', () => {
+  // 正對照：同一顆探針、同一份 patch、不漏，改送一次 SIGTERM。這一條綠了，下一條「標記檔存在」才有意義。
+  it('正對照：SIGTERM 之後以 0 結束，探針的收尾記號存在', async () => {
+    const { server, marker, arm } = await startProbedServe();
+    await writeFile(arm, '');
+    server.process.kill('SIGTERM');
+
+    expect(await server.exited).toEqual({ code: 0, signal: null });
+    expect(await exists(marker)).toBe(true);
+    expect(labelCount(server.stderr(), 'fatal')).toBe(0);
+  }, 90_000);
+
+  it('閒著的 thread 漏一顆 rejection：印一行帶標籤的診斷、走完收尾（記號存在）、以 1 結束', async () => {
+    const { server, marker, arm, leak } = await startProbedServe();
+    await writeFile(arm, '');
+    await writeFile(leak, '');
+
+    expect(await server.exited).toEqual({ code: 1, signal: null });
+    const stderr = server.stderr();
+    expect(labelCount(stderr, 'fatal load failure')).toBe(1);
+    expect(stderr).toContain('fail-loud probe');
+    // 收尾真的跑了：Node 預設（沒有 handler）當場結束，這個檔不會在。
+    expect(await exists(marker)).toBe(true);
   }, 90_000);
 });
