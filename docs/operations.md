@@ -137,6 +137,14 @@ CLI 每一次啟動各自一個 run 目錄，一份會話一個 `.jsonl` 加一�
 每一份都會被收完，失敗收集成一則錯誤印出來，訊息點名是哪條 thread、哪一步、底下的原因鏈。
 寫租約是在日誌關檔時放的，所以這一條也是「下次續接同一份會話不會撞上 `SessionAlreadyOwnedError`」的前提。
 
+**`serve` 遇到沒人接的例外會先收尾再以 1 結束**（[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)）：
+未處理的 rejection 或未捕捉的例外，stderr 會印一行 `nexus-agent serve: fatal load failure: …`（rejection）或
+`nexus-agent serve: fatal uncaught exception: …`（例外），後面接 `util.inspect` 的內容（`code`／`cause` 都在）；
+然後走和 Ctrl-C 同一條收尾（排空日誌、關檔、放租約），**最多等 2 秒**，不論收完與否都以 1 結束。
+監管程式與日誌搜尋認那兩個標籤，不翻譯。收尾中再來的例外一律吞掉，不蓋掉第一顆。
+以前 Node 預設的崩潰沒有這一步：日誌沒排空、租約沒放，下次續接要等租約過期。
+CLI（`nexus-agent` 的單次執行）不在這張的範圍。
+
 **每一批寫進日誌的事件都寫滿並 fsync，磁碟滿了不會把日誌寫壞**（[#1506](https://github.com/DemianLi/nexus-agent/issues/1506)）：
 一批要嘛整批落盤，要嘛整批不在。寫到一半拋錯、`fsync` 拋錯時，檔案會截回這一批之前的大小再回報失敗，
 協調器保留整批、之後重送；以前殘留的半批會留在檔案裡，重送的內容接在它後面，下次續接讀到中段壞行而接不回來，
