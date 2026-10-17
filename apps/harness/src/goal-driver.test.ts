@@ -263,6 +263,66 @@ describe('排不出來的每一種，理由各自有名字', () => {
     expect(decideGoalRound(cut, view())).toEqual({ kind: 'idle', reason: 'turn-max-tokens' });
   });
 
+  /**
+   * **收尾在授權之前才算數**（#1516）：人下的暫停一定中止在跑的那一輪，所以「暫停 → 恢復」每次都是
+   * 「最後一顆 `turn/end` 是 aborted，後面接一次 `resume`」。dsh 在 `turn/end` 抵達的當下收回，事後的 resume 不受影響；
+   * 我們的決定讀日誌算，要靠先後。
+   */
+  describe('收尾之後又有人授權（create／resume）', () => {
+    const ABORTED: readonly [string, unknown] = [
+      'turn/end',
+      { reason: { kind: 'aborted', cause: { kind: 'user' } } },
+    ];
+    const RESUME: readonly [string, unknown] = ['goal/change', { operation: 'resume' }];
+
+    it('aborted 之後 resume：不再算 turn-aborted，照排', () => {
+      const log = logOf([HUMAN, ['goal/change', { operation: 'pause' }], ABORTED, RESUME]).events;
+      expect(decideGoalRound(log, view())?.kind).toBe('run');
+    });
+
+    it('拋錯與撞輸出上限之後 resume 同理', () => {
+      for (const tail of [
+        ['turn/failed', { message: '供應商掛了' }],
+        ['turn/end', { reason: { kind: 'max-tokens' } }],
+      ] as const) {
+        const log = logOf([HUMAN, tail, RESUME]).events;
+        expect(decideGoalRound(log, view())?.kind).toBe('run');
+      }
+    });
+
+    it('create 也算授權', () => {
+      const log = logOf([HUMAN, ABORTED, ['goal/change', { operation: 'create' }]]).events;
+      expect(decideGoalRound(log, view())?.kind).toBe('run');
+    });
+
+    it('對照：授權在收尾之前（同一份授權跑的那一輪被中止），照舊 turn-aborted', () => {
+      const log = logOf([RESUME, HUMAN, ABORTED]).events;
+      expect(decideGoalRound(log, view())).toEqual({ kind: 'idle', reason: 'turn-aborted' });
+    });
+
+    it('對照：收尾之後的是別的變更（pause、edit、complete），不算授權', () => {
+      for (const operation of ['pause', 'edit', 'block', 'complete']) {
+        const log = logOf([HUMAN, ABORTED, ['goal/change', { operation }]]).events;
+        expect(decideGoalRound(log, view())).toEqual({ kind: 'idle', reason: 'turn-aborted' });
+      }
+    });
+
+    it('driveGoalRound：resume 之後不收回剛武裝的授權', async () => {
+      const disarmed: number[] = [];
+      const port: GoalDriverPort = {
+        goal: () => view(),
+        block: () => undefined,
+        pause: () => undefined,
+        disarm: () => void disarmed.push(1),
+        flush: () => Promise.resolve(),
+        warn: () => undefined,
+      };
+      const log = logOf([HUMAN, ABORTED, RESUME]);
+      expect((await driveGoalRound(() => log.events, port))?.round).toBe(1);
+      expect(disarmed).toHaveLength(0);
+    });
+  });
+
   it('停在核准點時按停止（收回）：resume 那一輪以 aborted 收尾，同樣不續行', () => {
     const withdrawn = logOf([
       HUMAN,

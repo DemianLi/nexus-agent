@@ -157,6 +157,30 @@ describe('續行輪在跑：兩條入口都收，都當場中止那一輪（#151
   });
 });
 
+describe('暫停（aborted 收尾）之後 /goal resume 自己續上（#1516 帶出來的主流程）', () => {
+  it.each(['goal.pause', '/goal pause'] as const)(
+    '%s → /goal resume：續行輪自己開跑，不用再送一句話',
+    async (entry) => {
+      const thread = `wire-resume-${entry === 'goal.pause' ? 'wire' : 'slash'}`;
+      const { client, events } = await startGoalRound(thread);
+
+      if (entry === 'goal.pause') {
+        const current = await currentGoalRef(client, thread);
+        expect(
+          await client.goalPause(thread, { goalId: current.id, revision: current.revision }),
+        ).toMatchObject({ kind: 'ok', result: { ok: true } });
+      } else {
+        expect(await client.slashRun(thread, '/goal pause')).toMatchObject({ kind: 'success' });
+      }
+      await untilAborted(events);
+      expect(await isBusy(client, thread)).toBe(false);
+
+      expect(await client.slashRun(thread, '/goal resume')).toMatchObject({ kind: 'success' });
+      await until(() => isBusy(client, thread), '恢復之後續行輪自己開跑');
+    },
+  );
+});
+
 describe('人打的那一輪在跑（目標 active 但已收回授權）：兩條入口同樣中止（#1516 C）', () => {
   it.each(['goal.pause', '/goal pause'] as const)('%s', async (entry) => {
     const thread = `wire-pause-c-${entry === 'goal.pause' ? 'method' : 'slash'}`;

@@ -402,3 +402,63 @@ describe('人下的暫停當場中止在跑的那一輪（#1516）', () => {
     await rig.stop();
   });
 });
+
+describe('中止之後 resume 要自己續上（#1516 帶出來的主流程）', () => {
+  /**
+   * 以前暫停只落在兩輪之間，日誌上不會留下 aborted 的一輪；現在人下的暫停一定中止在跑的那一輪，
+   * 「暫停 → 恢復」每次都會經過「最後一顆 `turn/end` 是 aborted」。`turnClosed` 只看最後一顆，
+   * resume 剛武裝就被 driver 看到 `turn-aborted` 又收回，續行輪不會自己開跑。
+   * dsh 的收回發生在 `turn/end` 當下（`goal-round-driver/src/index.ts:353-357`），之後的 resume 不受影響。
+   */
+  it('G 續行輪跑著被暫停（aborted）→ /goal resume：自己排出下一個續行輪', async () => {
+    const rig = await build({ turns: [SLOW, { content: '續上了。' }], threadId: 'resume-g' });
+    rig.service?.create({ objective: '把 CI 修綠', maxGoalRounds: 2 });
+    await until(() => rig.pump.running, '續行輪開跑');
+
+    rig.service?.pause(refOf(rig));
+    await settle(rig.pump);
+    expect(endKinds(rig.pump.sessionLog)).toEqual(['aborted']);
+    expect(rig.service?.get()?.phase).toBe('paused');
+
+    rig.service?.resume(refOf(rig));
+    await settle(rig.pump);
+
+    expect(startKinds(rig.pump.sessionLog)).toEqual(['goal', 'goal']);
+    expect(endKinds(rig.pump.sessionLog)).toEqual(['aborted', 'done']);
+    await rig.stop();
+  });
+
+  it('H 人按停止（續行輪 aborted）→ /goal resume：同樣自己續上', async () => {
+    const rig = await build({ turns: [SLOW, { content: '續上了。' }], threadId: 'resume-h' });
+    rig.service?.create({ objective: '把 CI 修綠', maxGoalRounds: 2 });
+    await until(() => rig.pump.running, '續行輪開跑');
+
+    rig.pump.cancel();
+    await settle(rig.pump);
+    expect(endKinds(rig.pump.sessionLog)).toEqual(['aborted']);
+    // 停止只收回授權，相位不動（#265 Q8）；沒有 resume 就不續行。
+    expect(rig.service?.get()).toMatchObject({ phase: 'active', activation: 'disarmed' });
+    expect(startKinds(rig.pump.sessionLog)).toEqual(['goal']);
+
+    rig.service?.resume(refOf(rig));
+    await settle(rig.pump);
+
+    expect(startKinds(rig.pump.sessionLog)).toEqual(['goal', 'goal']);
+    await rig.stop();
+  });
+
+  it('I 對照：aborted 之後沒有 resume（只是再說一句話），不續行', async () => {
+    const rig = await build({ turns: [SLOW, { content: '收到。' }], threadId: 'resume-i' });
+    rig.service?.create({ objective: '把 CI 修綠', maxGoalRounds: 5 });
+    await until(() => rig.pump.running, '續行輪開跑');
+    rig.pump.cancel();
+    await settle(rig.pump);
+
+    await rig.pump.submit({ kind: 'message', text: '隨便說一句' });
+    await settle(rig.pump);
+
+    expect(startKinds(rig.pump.sessionLog)).toEqual(['goal', 'message']);
+    expect(rig.service?.get()).toMatchObject({ activation: 'disarmed' });
+    await rig.stop();
+  });
+});
