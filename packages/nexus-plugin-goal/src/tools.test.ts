@@ -685,6 +685,8 @@ describe('接線說得出原因', () => {
       } as never,
     );
     expect(textOf(result)).toBe(TOOL_ERROR_PREFIX + GOAL_TOOL_NOT_ROOT_MESSAGE);
+    // 字面釘一次（Q6 拒絕訊息逐字不變）：光比常數，常數文字改了這一條不會紅。
+    expect(textOf(result)).toBe(`${TOOL_ERROR_PREFIX}這一份會話上沒有接 goal 域，所以沒有動。`);
     expect(verdictOf(result)).toEqual({ status: 'error', error: undefined });
     expect(log.events.filter((event) => event.type === 'goal/change')).toEqual([]);
   });

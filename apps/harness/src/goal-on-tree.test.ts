@@ -6,8 +6,8 @@
  *
  * - **逐出判斷走非建立式讀（`existingFor`）**：真的 wire handler＋真的 `goals` 服務＋真的 `create`。武裝中的目標不撤；沒碰過 goal
  *   的 thread 被撤，而且那一掃沒有替它建出服務；折疊壞掉的目標判成「不閒置」，不是一個沒人接的 rejection。
- * - **撤掉再開 ≡ 重啟再開**：核心跨組裝共用（樹上那一列的樣子），撤掉的日誌與它的服務都可回收；重開拿到新日誌、新服務，目標從日誌折回來，
- *   授權不持久所以是 `disarmed`——與重啟一致。
+ * - **撤掉再開 ≡ 重啟再開**：核心跨組裝共用（樹上那一列的樣子），查找以日誌（不是會話 id）為鍵——重開拿到新日誌、新服務，撤掉的日誌與它的
+ *   服務都可回收。這個 rig 的日誌不落盤；「目標從落盤的日誌折回來、授權不持久」走真的 serve，在 `serve-idle-eviction.test.ts`。
  *
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`，時鐘是假的，掃描由 `handler.sweepIdle()` 決定性地驅動。
  */
@@ -197,26 +197,41 @@ describe('閒置逐出走非建立式讀，而且讀的是真的 goals 服務', 
 });
 
 describe('撤掉再開 ≡ 重啟再開', () => {
-  it('重開拿到新日誌、新服務；目標從日誌折回來，授權不持久（disarmed）', async () => {
+  it('重開拿到新日誌、新服務——查找以日誌為鍵，不以會話 id 為鍵（舊日誌的服務不會被新日誌撿到）', async () => {
     const r = rig();
     await touch(r, 't1');
     const before = rootOf(r, 't1');
     const first = r.core.serviceFor(before);
-    const created = first.create({ objective: '跨過一次逐出' });
+    first.create({ objective: '跨過一次逐出' });
     first.disarm();
-    // 逐出只認 SessionLog 的 events 是否落盤；這條 thread 的 goal 狀態要靠日誌帶過去，所以把事件抄成下一個行程的種子。
-    const seed = [...before.events];
 
     await sweep(r);
     expect(r.disposed).toEqual(['t1']);
 
-    // 重開：新組裝、新日誌（下一個行程的樣子——日誌帶著上一個的事件當種子）。
+    // 重開：新組裝、新日誌。**同一個 thread id**，所以會話 id 相同——鍵錯了（以 id 為鍵）會把舊服務交給新日誌。
     r.logs.delete('t1');
     await touch(r, 't1');
     const after = rootOf(r, 't1');
     expect(after).not.toBe(before);
-    const resumed = new SessionLog('t1-resumed', { seed });
-    const second = r.core.serviceFor(resumed);
+    expect(after.sessionId).toBe(before.sessionId);
+    // 新日誌上還沒人問過：沒有服務；問了得到的是新的一份，不是舊日誌那一個。
+    expect(r.core.existingFor(after)).toBeUndefined();
+    const second = r.core.serviceFor(after);
+    expect(second).not.toBe(first);
+    // 這個 rig 的日誌不落盤，新日誌是空的，所以新服務看不見舊目標——「從落盤的日誌折回來」由 `serve-idle-eviction.test.ts` 的 goal 那一條走真的 serve 量。
+    expect(second.get()).toBeUndefined();
+  });
+
+  it('以種子模擬：下一個行程的日誌帶著上一個的事件，折出來的與另起一份核心重放同一份種子一樣；授權不持久（disarmed）', () => {
+    // 這一條**不是端到端**：種子是手抄的 `events`，不是從落盤檔讀回來的。端到端那一條在 `serve-idle-eviction.test.ts`。
+    const core = createGoalCore(goalConfigSchema.parse({}));
+    const original = new SessionLog('t1');
+    const first = core.serviceFor(original);
+    const created = first.create({ objective: '跨過一次逐出' });
+    first.disarm();
+    const seed = [...original.events];
+
+    const second = core.serviceFor(new SessionLog('t1-resumed', { seed }));
     expect(second).not.toBe(first);
     expect(second.get()).toMatchObject({
       id: created.id,

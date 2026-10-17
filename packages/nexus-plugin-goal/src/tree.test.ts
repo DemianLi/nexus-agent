@@ -244,6 +244,7 @@ describe('工具與命令在 subagent 日誌上不建服務', () => {
     expect(String((answer as { content?: unknown }).content ?? answer)).toContain(
       goal.GOAL_TOOL_NOT_ROOT_MESSAGE,
     );
+    expect(mounted.goals.existingFor(sub)).toBeUndefined();
     expect(mounted.goals.existingFor(registry.root)).toBeUndefined();
     expect(sub.events.filter((event) => event.type === 'goal/change')).toEqual([]);
   });
