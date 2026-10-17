@@ -1,0 +1,28 @@
+===================================================================
+--- a/components/ui/composer.tsx
++++ b/components/ui/composer.tsx
+@@ -32,6 +32,7 @@
+   onStop,
+   running = false,
+   placeholder,
++  textareaProps,
+   leading,
+   tags,
+   above,
+@@ -48,6 +49,8 @@
+   onStop?: () => void
+   running?: boolean
+   placeholder?: string
++  /** Names and describes the input; other HTML attributes belong to the wrapper. */
++  textareaProps?: Pick<React.ComponentProps<"textarea">, "id" | "aria-label" | "aria-labelledby" | "aria-describedby">
+   leading?: React.ReactNode
+   tags?: React.ReactNode
+   /** Stands above the line of text: pictures going with the message. */
+@@ -101,6 +104,7 @@
+             mark is never left on a line of its own. */}
+         <div className={cn("flex min-w-48 flex-1 items-end gap-1", Boolean(tags) && "ml-1.5", !leading && !tags && "pl-1.5")}>
+           <textarea
++            {...textareaProps}
+             ref={textarea}
+             rows={1}
+             value={value}

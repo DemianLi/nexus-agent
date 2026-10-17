@@ -27,25 +27,18 @@ function Host({ seats }: { seats?: ReactNode }) {
 }
 
 describe('seats 槽', () => {
-  it('沒給：底列沒有座位，送出提示照舊整寬顯示', () => {
+  it('沒給：沒有底列', () => {
     render(<Host />);
     expect(screen.queryByTestId('seat')).toBeNull();
-    expect(screen.getByTestId('send-hint').className).not.toContain('max-sm:hidden');
+    expect(document.querySelector('[data-slot="composer-footer"]')).toBeNull();
   });
 
-  it('有座位時底列放不下就換行，沒座位時不動（375 寬最壞情況會超出框）', () => {
-    const bar = () => screen.getByTestId('send-hint').parentElement!;
-    const { unmount } = render(<Host />);
-    expect(bar().className).not.toContain('flex-wrap');
-    unmount();
-    render(<Host seats={<button>座</button>} />);
-    expect(bar().className).toContain('flex-wrap');
-  });
-
-  it('給了：座位畫在底列裡，窄螢幕不寫送出提示（底列塞不下）', () => {
+  // SG 的 `ComposerFooter`（#1591）：座位是送出時的設定，不是寫的內容，放在輸入框底下、框外面。375 寬放不放得下由
+  // `guard/` 在真的瀏覽器裡量。
+  it('給了：座位畫在輸入框外面的底列，不在輸入框裡', () => {
     render(<Host seats={<button data-testid="seat">座</button>} />);
-    const bar = screen.getByTestId('seat').parentElement!;
-    expect(bar.contains(screen.getByTestId('send-hint'))).toBe(true);
-    expect(screen.getByTestId('send-hint').className).toContain('max-sm:hidden');
+    const seat = screen.getByTestId('seat');
+    expect(seat.closest('[data-slot="composer-footer"]')).not.toBeNull();
+    expect(seat.closest('[data-slot="composer"]')).toBeNull();
   });
 });
