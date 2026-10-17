@@ -24,7 +24,8 @@ ROOT = Path(__file__).resolve().parents[2]
 # 有這些異動才值得掃 TypeScript。非 TypeScript 的檔名是刻意的窄例外（「測試會讀這個檔」）：
 # `docs/operations.md`、`apps/harness/cordis.yml`、`apps/harness/cordis.serve.yml`、`apps/harness/src/*.patch.yml`，
 # 以及 web 的樣式（#1512）：`apps/web` 底下的 `.css`（讀 cascade 的護欄、build 後的 check-built-css 與瀏覽器護欄都量它）、
-# 產生顏色 token 的 `tokengen/`、build 後檢查產物的 `scripts/*.mjs`、瀏覽器護欄的測試頁 `guard/`。少了這幾條，
+# 產生顏色 token 的 `tokengen/`、build 後檢查產物的 `scripts/*.mjs`、瀏覽器護欄的測試頁 `guard/`，以及 `apps/web/index.html`
+# （內嵌的主題腳本：`src/lib/theme.test.tsx` 讀它、瀏覽器護欄的測試頁照抄它）。少了這幾條，
 # 只調 CSS 的 PR（例如把陰影調深）static 與 test-web 全部 skipped、gate 照樣綠。
 # 別放寬成所有 `.md` 或所有 `.yml`：「純文件的 PR 不會卡住」是設計。
 TS_RE = re.compile(
@@ -34,6 +35,7 @@ TS_RE = re.compile(
     r'|^apps/harness/cordis(\.serve)?\.yml$'
     r'|^apps/harness/src/.*\.patch\.yml$'
     r'|^apps/web/.*\.css$|^apps/web/tokengen/|^apps/web/scripts/.*\.mjs$|^apps/web/guard/'
+    r'|^apps/web/index\.html$'
 )
 
 # 這些異動讓「哪些測試相關」的判斷失去依據，一律全跑（同時也一定會觸發掃描）。

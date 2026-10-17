@@ -25,7 +25,7 @@ import { startGuardServer, type GuardServer } from './server';
  * 3. **亮色陰影**：每層投影的透明度不超過 {@link MAX_SHADOW_ALPHA}（同 `src/styles/shadow-alpha.test.ts`）。
  *
  * 跑法：先 `pnpm --filter @nexus/web run build`，再 `pnpm --filter @nexus/web run test:guard`（CI 在 static job 的 build 之後）。
- * 瀏覽器用本機裝的 Chrome（`channel: 'chrome'`），不另外下載。`GUARD_REPORT=<檔案>` 會把量到的數字寫成 JSON。
+ * 瀏覽器用本機裝的 Chrome（`channel: 'chrome'`），不另外下載。`GUARD_REPORT=<檔案>` 會把量到的數字與瀏覽器版本寫成 JSON。
  */
 
 type Theme = 'light' | 'dark';
@@ -69,6 +69,8 @@ beforeAll(async () => {
   server = await startGuardServer();
   try {
     browser = await chromium.launch({ channel: 'chrome', headless: true });
+    // 計算值的字串格式（`oklch()` 還是 `rgb()`、小數位數）跟著瀏覽器版本走，日後格式變了要查得到是哪一版量的。
+    report.browser = browser.version();
   } catch (error) {
     await server.close();
     server = undefined;

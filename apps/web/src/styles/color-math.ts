@@ -31,7 +31,7 @@ export function contrastRatio(a: Rgb, b: Rgb): number {
 
 export interface SurfaceContrast {
   ratio: number;
-  /** 最差的那一疊底（由下往上，`background+light-1`）；面本身不透明時不用疊，是 undefined。 */
+  /** 最差的那一疊底（由下往上，`background+light-1`）；面本身不透明、也不是底的最底層時不用疊，是 undefined。 */
   on: string | undefined;
 }
 
@@ -41,6 +41,9 @@ export interface SurfaceContrast {
  * 面是半透明的（玻璃），實際看到的顏色看它疊在什麼上面：`bases` 每一項是一疊底、由下往上（`['background']`、
  * `['background', 'light-1']`：頁面漸層的停點本身也是半透明，疊在底色上），各算一次，**取最差的那一個**。
  * 每一疊最底下那層要不透明，不然沒有答案，直接拋錯，不猜。
+ *
+ * `bg` 本身就是某疊底的最底層時（`brand` 對 `background`：字直接寫在頁面上），看到的是那一疊合成的結果，不是平的底色——
+ * 以 `bg` 開頭的每一疊各算一次。只看平的底色會偏寬（#1512：SG 的亮色 brand 平底 2.17、最差的停點 2.05）。
  */
 export function surfaceContrast(
   lookup: (name: string) => string | undefined,
@@ -55,13 +58,17 @@ export function surfaceContrast(
   };
   const face = color(bg);
   const text = color(fg);
+  // 面本身就是那疊底的最底層（字直接寫在頁面上）：看到的是底色疊上漸層停點，每一疊各算一次。
+  const own = bases.filter((stack) => stack[0] === bg);
   const unders: { on: string | undefined; rgb: Rgb }[] =
-    face.alpha === 1
-      ? [{ on: undefined, rgb: face.rgb }]
-      : bases.map((stack) => ({
-          on: stack.join('+'),
-          rgb: composite(face, flatten(stack, color)),
-        }));
+    own.length > 0
+      ? own.map((stack) => ({ on: stack.join('+'), rgb: flatten(stack, color) }))
+      : face.alpha === 1
+        ? [{ on: undefined, rgb: face.rgb }]
+        : bases.map((stack) => ({
+            on: stack.join('+'),
+            rgb: composite(face, flatten(stack, color)),
+          }));
   if (unders.length === 0) throw new Error(`--${bg} 是半透明的，要指定疊在什麼上面`);
   return unders
     .map(({ on, rgb }) => ({ on, ratio: contrastRatio(composite(text, rgb), rgb) }))

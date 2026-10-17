@@ -49,6 +49,27 @@ describe('surfaceContrast：半透明的面疊到最差的底上', () => {
     );
   });
 
+  test('面就是底的最底層（字直接寫在頁面上）時，量的是疊上漸層停點的結果，不是平的底色', () => {
+    const lookup = tokens({
+      fg: 'rgb(255 255 255)',
+      background: 'rgb(0 0 0)',
+      'light-1': 'rgb(255 255 255 / 0.5)',
+    });
+    const result = surfaceContrast(lookup, 'fg', 'background', [
+      ['background'],
+      ['background', 'light-1'],
+    ]);
+    // 黑底疊白 50% → 灰 0.5；白字對它比對純黑差。
+    expect(result.on).toBe('background+light-1');
+    expect(result.ratio).toBeCloseTo(contrastRatio([1, 1, 1], [0.5, 0.5, 0.5]), 10);
+    expect(result.ratio).toBeLessThan(21);
+    // 沒有停點時跟直接算一樣，`on` 標出疊的是哪一疊。
+    expect(surfaceContrast(lookup, 'fg', 'background', [['background']])).toEqual({
+      ratio: 21,
+      on: 'background',
+    });
+  });
+
   test('文字本身半透明時疊在合成好的面上', () => {
     const result = surfaceContrast(
       tokens({ fg: 'rgb(0 0 0 / 0.5)', bg: 'rgb(255 255 255)' }),
