@@ -179,6 +179,18 @@ describe('閒置逐出從 serve 組裝起（#1484）', () => {
 
   it('goal：撤掉再開 ＝ 重啟再開（目標從落盤的日誌折回來；授權不持久，所以兩邊 /goal 讀到的一樣）', async () => {
     // 同一組操作：說一輪、建目標、暫停它（只有 active 且 armed 的目標擋逐出；暫停之後才撤得掉）。
+    // serve 預設開續行排程器：目標一建出來就一輪接一輪地跑，跑著的時候進來的 slash 會被拒（輪與輪之間才有縫）。
+    // 本機快、CI 慢，所以暫停要重打到被接受為止，不是賭一次。
+    const pauseWhenAccepted = async (client: WireClient, thread: string): Promise<void> => {
+      let last: unknown;
+      const deadline = Date.now() + 20_000;
+      while (Date.now() < deadline) {
+        last = await client.slashRun(thread, '/goal pause');
+        if ((last as { kind?: string }).kind === 'success') return;
+        await new Promise((resolve) => setTimeout(resolve, 10));
+      }
+      throw new Error(`/goal pause 一直沒被接受：${JSON.stringify(last)}`);
+    };
     const goalSetup = async (client: WireClient, thread: string): Promise<void> => {
       const controller = new AbortController();
       const events = await client.openEvents(thread, { signal: controller.signal });
@@ -187,14 +199,15 @@ describe('閒置逐出從 serve 組裝起（#1484）', () => {
       expect(await client.slashRun(thread, '/goal 把藍鯨計畫做完')).toMatchObject({
         kind: 'success',
       });
-      expect(await client.slashRun(thread, '/goal pause')).toMatchObject({ kind: 'success' });
+      await pauseWhenAccepted(client, thread);
       controller.abort();
       await events.return?.(undefined).catch(() => undefined);
     };
+    // 暫停前續行排程器跑了幾輪不是要比的東西（看機器快慢），其餘每一行都要一樣。
     const goalText = async (client: WireClient, thread: string): Promise<string> => {
       const shown = await client.slashRun(thread, '/goal');
       if (shown.kind !== 'success') throw new Error(`/goal 讀不到：${JSON.stringify(shown)}`);
-      return shown.text ?? '';
+      return (shown.text ?? '').replace(/輪次：\d+\//u, '輪次：N/');
     };
 
     // 撤掉的那一邊。
