@@ -14,17 +14,24 @@
  *   - `data-guard-located`：對話裡被定位的那一則（`[data-slot=message-scroller-item][data-located]`），量圓角真的畫出來。
  *   - `data-guard-glass`：SG 畫成玻璃的按鈕（outline、secondary、glass），量它真的有 `backdrop-filter`：`solid-glass.css:640-677`
  *     靠 vendor Button 輸出的 `data-variant` 命中（#1523）。
- *   - `data-guard-expanded`：Radix 浮層 Trigger（asChild）包著的 outline 按鈕開著時（`trigger`）跟沒開的（`reference`）比底色：
- *     SG 用 `[aria-expanded="true"]` 把它畫成按下去的樣子（#1523 的混合期）。
+ *   - `data-guard-expanded`：浮層 Trigger（`render` 接 Base UI 的 Button）開著時（`trigger`）跟沒開的（`reference`）比底色：
+ *     Trigger 開著時掛 `data-popup-open` 與 `aria-expanded="true"`，SG 用後者把它畫成按下去的樣子（#1523 混合期起量，#1583 換成 Base UI）。
  *   - `data-guard-hover`：平常與滑鼠移上去兩種狀態各量一次字對底色（destructive 按鈕，頁面上與卡片裡各一顆；hover 底是覆寫檔調淡的，#1523）。
  *   - `data-guard-opacity`：InputGroup 的 `opacity` 與底色（`reference` 一般的、`send-disabled` 只有按鈕停用、`control-disabled` 欄位停用），
  *     vendor 的 `has-disabled:opacity-50` 被按鈕停用觸發的那一半由覆寫檔擋掉（#1523 本地修改第 18 條）。
  *   - `data-guard-choice`：問答的選項（已勾選、沒勾選、停用），量平常與滑鼠移上去的底色、停用的樣子：shadcn 的 `data-*` custom variant
  *     （`vendor/solid-glass/shadcn/tailwind.css`，#1523）specificity 是 0，不能改掉這幾個 variant 原本的行為。
+ *   - `data-guard-backdrop`：dialog／sheet 的遮罩，量 `backdrop-filter`（不透明的退路要拿掉 blur，#1583 本地修改第 22 條）。
+ *   - `data-guard-border`：手機側欄的抽屜，量四邊的 border 寬（只留陰影、不畫邊，#1583 本地修改第 21 條）。
+ *   - `data-guard-width`：呼叫端的寬度（回饋框、手機側欄的抽屜），量畫出來的寬度跟 develop 一樣（#1583 PM 決定第 4 點）。
+ *   - `data-guard-motion`：sheet 與手機側欄的抽屜，在模擬 reduced-motion 下量 `translate` 與 `transition-duration`（#1583 本地修改第 23 條）。
+ *   vendor 元件自己畫的部分（關閉鈕、遮罩）掛不了屬性，由 `guard.test.ts` 開頁後補上，見 `OVERLAY_MARKS`。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
  * - `?glass=opaque` 在 `<html>` 掛 `data-glass="opaque"`（#1468 Q7：效能不達標時退回的那條路），量不透明的面。
+ * - `?overlay=<名字>` 換成只畫一個開著的 modal 浮層（#1583）：modal 會把頁面其他部分設成 inert，跟主頁的焦點量測放不到一起。
+ *   `dialog`、`sheet`、`mobile-sidebar`（要用手機寬度開）、`feedback`（回饋框，量寬度）。
  */
-import { StrictMode } from 'react';
+import { StrictMode, useEffect } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Counts } from '@/components/changes/counts';
@@ -42,7 +49,23 @@ import {
   InputGroupText,
   InputGroupTextarea,
 } from '@/components/ui/input-group';
+import { FeedbackDialog } from '@/components/feedback-dialog';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import {
+  Sheet,
+  SheetContent,
+  SheetDescription,
+  SheetHeader,
+  SheetTitle,
+} from '@/components/ui/sheet';
 import {
   Questionnaire,
   QuestionnaireChoice,
@@ -57,6 +80,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  useSidebar,
 } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
 
@@ -246,17 +270,15 @@ function GuardPage() {
           </SidebarProvider>
         </div>
 
-        {/* 混合期（#1523）：Radix 浮層的 Trigger 用 asChild 包 Base UI 的 Button。Radix 掛的是 `aria-expanded`，
-            SG 的 `:665` 用它把 outline 按鈕畫成按下去的玻璃；Base UI 的 `[data-popup-open]` 這時不會有。 */}
+        {/* 浮層的 Trigger 用 `render` 畫成 Base UI 的 Button（#1583 起 popover 也是 Base UI）。開著時 Trigger 掛 `data-popup-open`
+            與 `aria-expanded="true"`，SG 的 `:665` 用它們把 outline 按鈕畫成按下去的玻璃。 */}
         <div style={{ ...row, gap: 240, paddingBottom: 120 }}>
           <Button variant="outline" data-guard-expanded="reference">
             沒開的按鈕
           </Button>
           <Popover open>
-            <PopoverTrigger asChild>
-              <Button variant="outline" data-guard-expanded="trigger">
-                開著的按鈕
-              </Button>
+            <PopoverTrigger render={<Button variant="outline" data-guard-expanded="trigger" />}>
+              開著的按鈕
             </PopoverTrigger>
             <PopoverContent side="right">按鈕開的浮層</PopoverContent>
           </Popover>
@@ -276,7 +298,7 @@ function GuardPage() {
           </Popover>
           <Tooltip open>
             <TooltipTrigger>提示</TooltipTrigger>
-            <TooltipContent side="bottom" data-guard-text="tooltip">
+            <TooltipContent side="bottom" data-guard-text="tooltip" data-guard-surface="tooltip">
               提示內容
             </TooltipContent>
           </Tooltip>
@@ -286,10 +308,63 @@ function GuardPage() {
   );
 }
 
+/** 手機側欄一開頁就打開（`openMobile` 是 SidebarProvider 裡的 state，沒有 prop 可以給）。 */
+function OpenMobileSidebar() {
+  const { isMobile, setOpenMobile } = useSidebar();
+  useEffect(() => {
+    if (isMobile) setOpenMobile(true);
+  }, [isMobile, setOpenMobile]);
+  return null;
+}
+
+function OverlayPage({ name }: { name: string }) {
+  switch (name) {
+    case 'dialog':
+      return (
+        <Dialog open>
+          <DialogContent data-guard-shadow="dialog" data-guard-surface="dialog">
+            <DialogHeader>
+              <DialogTitle data-guard-text="dialog-title">對話框標題</DialogTitle>
+              <DialogDescription data-guard-text="dialog-description">對話框說明</DialogDescription>
+            </DialogHeader>
+            <DialogFooter showCloseButton />
+          </DialogContent>
+        </Dialog>
+      );
+    case 'sheet':
+      return (
+        <Sheet open>
+          <SheetContent
+            side="right"
+            data-guard-shadow="sheet"
+            data-guard-surface="sheet"
+            data-guard-motion="sheet"
+          >
+            <SheetHeader>
+              <SheetTitle data-guard-text="sheet-title">抽屜標題</SheetTitle>
+              <SheetDescription data-guard-text="sheet-description">抽屜說明</SheetDescription>
+            </SheetHeader>
+          </SheetContent>
+        </Sheet>
+      );
+    case 'mobile-sidebar':
+      return (
+        <SidebarProvider>
+          <OpenMobileSidebar />
+          {/* 手機側欄把 props 交給 Sheet 的 Root（沒有 DOM），屬性掛不上抽屜：由 `guard.test.ts` 的 `OVERLAY_MARKS` 補。 */}
+          <Sidebar>手機側欄</Sidebar>
+        </SidebarProvider>
+      );
+    case 'feedback':
+      return <FeedbackDialog open submitting={false} onSubmit={() => {}} onDismiss={() => {}} />;
+    default:
+      throw new Error(`沒有這個浮層：${name}`);
+  }
+}
+
+const overlay = params.get('overlay');
 const root = document.getElementById('root');
 if (root === null) throw new Error('找不到 #root');
 createRoot(root).render(
-  <StrictMode>
-    <GuardPage />
-  </StrictMode>,
+  <StrictMode>{overlay === null ? <GuardPage /> : <OverlayPage name={overlay} />}</StrictMode>,
 );

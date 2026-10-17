@@ -19,7 +19,10 @@
  *
  * 跑法（先 build web；serve 用同一個 worktree 的 `apps/web/dist`）：
  *
- *   env -u NVIDIA_API_KEY node apps/web/scripts/measure-frames.mjs [--runs 3] [--out <json>] [--headed]
+ *   env -u NVIDIA_API_KEY node apps/web/scripts/measure-frames.mjs [--runs 3] [--out <json>] [--headed] [--viewport 390x844]
+ *
+ * `--viewport` 預設 1440x900（桌面）。寬度在 `use-mobile` 的斷點 1024 以下時，側欄是手機的抽屜（sheet，整面遮罩帶 blur），
+ * 「開關側欄」量的就是抽屜的開關（#1583 驗收 H）。
  *
  * **不碰真的 key**：模型是腳本裡的假端點（OpenAI 相容、SSE 串流，只聽 127.0.0.1），serve 用 `--patch` 指過去；
  * serve 的 cwd 是沒有 `.env` 的 `apps/harness`；子行程環境裡的 `NVIDIA_API_KEY` **覆寫成假 key** `nvapi-fake-loopback-only`，
@@ -47,6 +50,7 @@ const { values: options } = parseArgs({
     out: { type: 'string' },
     headed: { type: 'boolean', default: false },
     harness: { type: 'string' },
+    viewport: { type: 'string', default: '1440x900' },
   },
 });
 const RUNS = Number(options.runs);
@@ -56,7 +60,10 @@ const TSX = join(HARNESS_DIR, 'node_modules/.bin/tsx');
 /** 門檻（#1468 Q13）。 */
 const P95_LIMIT_MS = 16.7;
 const CPU_THROTTLE = 4;
-const VIEWPORT = { width: 1440, height: 900 };
+const [VIEWPORT_WIDTH, VIEWPORT_HEIGHT] = options.viewport.split('x').map(Number);
+const VIEWPORT = { width: VIEWPORT_WIDTH, height: VIEWPORT_HEIGHT };
+/** 跟 `src/hooks/use-mobile.ts` 的 `MOBILE_BREAKPOINT` 同一個數。 */
+const MOBILE = VIEWPORT.width < 1024;
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const redact = (text) =>
@@ -415,7 +422,12 @@ async function scenarioMenu(page, cdp) {
 
 async function scenarioSidebar(page, cdp) {
   const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
-  await page.locator('body').click({ position: { x: VIEWPORT.width - 20, y: 20 } });
+  // 先把焦點移出輸入框。手機寬度的右上角是標頭的右側欄開關，點了會開另一個抽屜，改點畫面中間（對話區）。
+  await page.locator('body').click({
+    position: MOBILE
+      ? { x: VIEWPORT.width / 2, y: VIEWPORT.height / 2 }
+      : { x: VIEWPORT.width - 20, y: 20 },
+  });
   return recordFrames(
     page,
     async () => {

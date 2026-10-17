@@ -36,7 +36,8 @@ describe('registry 檔的改動還在', () => {
     expect(vendor).toMatch(/data-slot="input-group"[\s\S]{0,1200}\bhas-disabled:opacity-50\b/);
   });
 
-  test.each(['./dialog.tsx', './alert-dialog.tsx', './sheet.tsx', './tooltip.tsx'])(
+  // dialog、sheet、tooltip 換成 vendor 版之後是一行轉出（#1583），時長照 SG 原文；動效 token 的對齊留到 ④。
+  test.each(['./alert-dialog.tsx'])(
     '%s 的進出場時長走 motion.css 的 token，不寫數字（#1280）',
     (path) => {
       const source = code(read(path));

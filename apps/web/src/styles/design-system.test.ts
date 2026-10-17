@@ -246,24 +246,9 @@ const ALLOWED: readonly Allowed[] = [
   },
   // `ui/` 的 registry 原文：裝進來就是我們的原始碼，沒有改的就照舊；之後要改或確認要留，逐條處理。
   {
-    file: 'components/ui/dialog.tsx',
-    what: 'bg-black/50',
-    why: '遮罩的黑色半透明；沒有對應的語意 token',
-  },
-  {
-    file: 'components/ui/sheet.tsx',
-    what: 'bg-black/50',
-    why: '遮罩的黑色半透明；沒有對應的語意 token',
-  },
-  {
     file: 'components/ui/alert-dialog.tsx',
     what: 'bg-black/50',
-    why: '遮罩的黑色半透明；沒有對應的語意 token（與 dialog、sheet 同一條，#437 手抄 alert-dialog 時帶進來）',
-  },
-  {
-    file: 'components/ui/dialog.tsx',
-    what: 'text-lg',
-    why: 'registry 的標題尺寸；規格沒有標題階（同 empty-hero）',
+    why: '遮罩的黑色半透明；沒有對應的語意 token（#437 手抄 alert-dialog 時帶進來；dialog、sheet 那兩條隨 #1583 換成 vendor 版一起刪）',
   },
   {
     file: 'components/ui/questionnaire.tsx',
@@ -279,11 +264,6 @@ const ALLOWED: readonly Allowed[] = [
     file: 'components/ui/questionnaire.tsx',
     what: 'text-[0.625rem]',
     why: '快捷鍵小標籤（10px），比 `text-micro`（11px）還小，registry 原文',
-  },
-  {
-    file: 'components/ui/tooltip.tsx',
-    what: 'rounded-[2px]',
-    why: '提示框的小箭頭，registry 原文',
   },
 ];
 

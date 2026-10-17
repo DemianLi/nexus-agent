@@ -48,19 +48,15 @@ test('Base UI 的 Button 預設 type="button"：表單裡要送出的那顆要�
 });
 
 /**
- * 混合期（#1523）：浮層還是 Radix（③-2 才換），Trigger／Close 用 `asChild` 包著 Base UI 的 Button。
- * Radix 的 Slot 把 ref 與事件併到子元素上，Base UI 的 Button 要把它們接到真的 `<button>`。
+ * 浮層換成 Base UI（#1583）之後，Trigger／Close 用 `render` 接 Base UI 的 Button（取代混合期 Radix 的 `asChild`，#1523）。
+ * ref 要拿到真的 `<button>`，Trigger 開著時掛 `data-popup-open` 與 `aria-expanded`。
  */
-describe('混合期：Radix 的 asChild 包 Base UI 的 Button', () => {
+describe('浮層的 Trigger 用 render 接 Button', () => {
   test('PopoverTrigger：ref 拿到那顆 button，點下去開浮層、掛上 aria-expanded（App 的右側欄、changes/review 的用法）', () => {
     const ref = createRef<HTMLButtonElement>();
     render(
       <Popover>
-        <PopoverTrigger asChild>
-          <Button ref={ref} variant="outline">
-            開浮層
-          </Button>
-        </PopoverTrigger>
+        <PopoverTrigger render={<Button ref={ref} variant="outline" />}>開浮層</PopoverTrigger>
         <PopoverContent>浮層內容</PopoverContent>
       </Popover>,
     );
@@ -70,24 +66,14 @@ describe('混合期：Radix 的 asChild 包 Base UI 的 Button', () => {
     fireEvent.click(trigger);
     expect(screen.getByText('浮層內容')).toBeTruthy();
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(trigger.hasAttribute('data-popup-open')).toBe(true);
   });
 
-  test('TooltipTrigger：鍵盤聚焦就出提示（App.tsx 的用法）', () => {
-    // Radix 的 tooltip 定位用到 jsdom 沒有的 ResizeObserver。
-    vi.stubGlobal(
-      'ResizeObserver',
-      class {
-        observe(): void {}
-        unobserve(): void {}
-        disconnect(): void {}
-      },
-    );
+  test('TooltipTrigger：鍵盤聚焦就出提示（App.tsx 的用法）；Base UI 的提示只是視覺，不帶 role="tooltip"，名稱要寫在 Trigger 上', () => {
     render(
-      <TooltipProvider delayDuration={0}>
+      <TooltipProvider delay={0}>
         <Tooltip>
-          <TooltipTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label="設定" />
-          </TooltipTrigger>
+          <TooltipTrigger render={<Button variant="ghost" size="icon" aria-label="設定" />} />
           <TooltipContent>提示內容</TooltipContent>
         </Tooltip>
       </TooltipProvider>,
@@ -95,20 +81,22 @@ describe('混合期：Radix 的 asChild 包 Base UI 的 Button', () => {
     act(() => {
       screen.getByRole('button', { name: '設定' }).focus();
     });
-    expect(screen.getByRole('tooltip').textContent).toBe('提示內容');
+    const popup = document.querySelector('[data-slot="tooltip-content"]');
+    expect(popup?.textContent).toBe('提示內容');
+    expect(screen.queryByRole('tooltip')).toBeNull();
   });
 
-  test('DialogClose：dialog footer 的關閉鈕點了就關（dialog.tsx 的 showCloseButton）', () => {
+  test('DialogClose：dialog footer 的關閉鈕點了就關（dialog.tsx 的 showCloseButton；名稱是中文，本地修改第 20 條）', () => {
     render(
       <Dialog defaultOpen>
-        <DialogContent showCloseButton={false} aria-describedby={undefined}>
+        <DialogContent showCloseButton={false}>
           <DialogTitle>標題</DialogTitle>
           <DialogFooter showCloseButton />
         </DialogContent>
       </Dialog>,
     );
     expect(screen.getByRole('dialog')).toBeTruthy();
-    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    fireEvent.click(screen.getByRole('button', { name: '關閉' }));
     expect(screen.queryByRole('dialog')).toBeNull();
   });
 });

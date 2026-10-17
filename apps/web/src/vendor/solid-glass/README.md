@@ -18,24 +18,29 @@
 | `solid-glass.css` | solid-glass `src/solid-glass.css` | ① |
 | `LICENSE` | solid-glass `LICENSE` | ① |
 | `components/ui/{button,input,textarea,input-group,separator,skeleton,card,badge}.tsx` | solid-glass `src/components/ui/` 同名檔 | ③-1（#1523） |
+| `components/ui/{dialog,popover,sheet,tooltip}.tsx` | solid-glass `src/components/ui/` 同名檔（popover、dialog、sheet 套了 patch，見「本地修改」第 19、20 條） | ③-2（#1583） |
 | `shadcn/tailwind.css` | shadcn `dist/tailwind.css` | ③-1（#1523） |
 | `shadcn/LICENSE.md` | shadcn `LICENSE.md`（MIT） | ③-1（#1523） |
 
 **目錄**：solid-glass 的檔照上游的相對路徑放，拿掉開頭的 `src/`（`solid-glass.css` 從 ① 就是這樣）；shadcn 的檔放在 `shadcn/` 底下，拿掉 `dist/`。每個檔登記它的上游（`source`）與上游路徑（`from`）。
 
-每個檔的 sha256 記在 `manifest.json`，`vendor.test.ts` 比對（子目錄也掃）：手改這裡的檔、或放進沒登記的檔，CI 就紅，不用拉上游。
+每個檔的 sha256 記在 `manifest.json`，`vendor.test.ts` 比對（子目錄也掃）：手改這裡的檔、或放進沒登記的檔，CI 就紅，不用拉上游。套了 patch 的檔另外記 `upstreamSha256`（上游原樣）與 `patches`，`sha256` 是套完之後的值（見「改 vendor 檔」）。`patches/`、`patches.mjs`、`sync.mjs`、`vendor.test.ts` 這類是我們自己的檔，不在清單上。
 
 之後加進來的，照地圖的順序：其餘的 registry 元件在 ③-2～③-4，12 個 AI 元件與 AgentWorkspace 在第 ④ 步。每一步用到哪些檔就加哪些，同一支 `sync.mjs`、同一個 commit 同步（Q18 的「一起同步」）。
 
-**元件怎麼接**（#1523 PM 定）：vendor 的元件原樣放這裡，`src/components/ui/<x>.tsx` 留著當 nexus 那一層，預設只轉出 vendor 版，本地修改能用 props 表達的寫成薄包裝放在那裡。vendor 檔裡的 `@/components/ui/button` 解析到的是 nexus 那一層，所以包裝層的修改在 vendor 的組合元件裡也生效。③-1 的 8 個元件，`components/ui/<x>.tsx` 都已換成轉出 vendor 版；有本地修改的只有 `input-group.tsx`（第 16 條），其餘是一行 `export … from`。
+**元件怎麼接**（#1523 PM 定）：vendor 的元件原樣放這裡，`src/components/ui/<x>.tsx` 留著當 nexus 那一層，預設只轉出 vendor 版，本地修改能用 props 表達的寫成薄包裝放在那裡。vendor 檔裡的 `@/components/ui/button` 解析到的是 nexus 那一層，所以包裝層的修改在 vendor 的組合元件裡也生效。③-1 的 8 個元件，`components/ui/<x>.tsx` 都已換成轉出 vendor 版；有本地修改的只有 `input-group.tsx`（第 16 條），其餘是一行 `export … from`。③-2 的 dialog、popover、sheet、tooltip 同樣是一行轉出（#1583，PR 1）；alert-dialog、dropdown-menu、command 在 PR 2。
+
+- **Radix 換 Base UI 的用法差異**（#1583）：`asChild` 改成 `render={<元素 />}`；`onOpenAutoFocus`／`onCloseAutoFocus` 改成 Popup 的 `initialFocus`／`finalFocus`；`onInteractOutside` 沒有對應，在 Root 的 `onOpenChange(open, details)` 看 `details.reason === 'outside-press'` 再 `details.cancel()`；Trigger 開著時掛 `data-popup-open` 與 `aria-expanded`；Positioner 的錨點寬度是 `--anchor-width`。
+- **tooltip 只是視覺**（#1583 驗收 D，PM 決定 issuecomment-6232918108）：Base UI 1.9.0 的 tooltip 不給 `role="tooltip"`、也不掛 `aria-describedby`（它的 `docs/react/components/tooltip.md` 寫明是刻意的），報讀器聽不到它。所以**tooltip 的文字不能帶 Trigger 名稱裡沒有的資訊**：模型座的報讀名稱因此補了「從下一步生效」。延遲 0 是 SG `TooltipProvider` 的預設值（`components/ui/tooltip.tsx:7`），Trigger 取 `delay ?? Provider 的 delay ?? 600`，產品裡每個 tooltip 都在 Provider 底下（`components/ui/tooltip.test.tsx`）。
+- **呼叫端的寬度**：SG 的 sheet 把寬度寫在 `data-[side=*]:` 底下、dialog 是 `sm:max-w-sm`。呼叫端要寫同一組前綴（`data-[side=right]:w-full`、`sm:max-w-lg`），cn 才會蓋掉 SG 的值（PM 決定第 4 點；`guard/` 量回饋框與手機側欄，`right-sidebar.test.tsx` 釘 cn 的結果）。
 
 **載入**：`shadcn/tailwind.css` 照 SG `src/index.css:1-7` 的順序，排在 `tailwindcss`、`tw-animate-css` 之後、`solid-glass.css` 之前（`src/index.css`）。它的 9 個 `@custom-variant`（`data-open`、`data-closed`、`data-checked`、`data-unchecked`、`data-selected`、`data-disabled`、`data-active`、`data-horizontal`、`data-vertical`）會蓋掉 Tailwind 內建的同名 variant：寫成 `:where()`，specificity 從 0,1,0 變成 0，同時認 Radix 的 `data-state` 與 Base UI 的屬性，只認「有屬性且不是 `"false"`」。產品碼裡用到的只有 `components/ui/questionnaire.tsx`（`data-checked`、`data-disabled`、`group-data-checked`），畫出來的值跟換之前逐一相同（`guard/` 的問答選項、`components/ui/questionnaire.test.tsx` 釘 primitive 輸出的屬性）。
 
-**護欄放行**：掃原始碼的護欄對這裡**登記過的**上游檔放行，名單只在 `src/test/vendor-upstream.ts`（從 `manifest.json` 取）。放行：`lib/utils.test.ts` 的 cn 那條（Q19）、`design-system`、`border-shadow`、`type-hierarchy`（外觀照 SG，Q8）；**不放行**：tsc、`live-region` 與其他無障礙類的掃描。設定檔非寫路徑字面不可的另外各寫一次：根目錄的 `eslint.config.js`（忽略 `components/`）與 `.prettierignore`（排除 `components/`、`shadcn/`，上游 tsx 用雙引號、不加分號，格式化後 sha256 就壞）、這個目錄的 `.gitattributes`（`-text`）、`src/index.css` 的 `@source not`。
+**護欄放行**：掃原始碼的護欄對這裡**登記過的**上游檔放行，名單只在 `src/test/vendor-upstream.ts`（從 `manifest.json` 取）。套了 patch 的檔照樣放行、名字不改（`isVendorUpstream`）：patch 改的那幾行不受外觀護欄檢查，由 PR 審查負責，每個 patch 都要有自己的行為測試（#1583 PM 定）。放行：`lib/utils.test.ts` 的 cn 那條（Q19）、`design-system`、`border-shadow`、`type-hierarchy`（外觀照 SG，Q8）；**不放行**：tsc、`live-region` 與其他無障礙類的掃描。設定檔非寫路徑字面不可的另外各寫一次：根目錄的 `eslint.config.js`（忽略 `components/`）與 `.prettierignore`（排除 `components/`、`shadcn/`，上游 tsx 用雙引號、不加分號，格式化後 sha256 就壞）、這個目錄的 `.gitattributes`（`-text`）、`src/index.css` 的 `@source not`。
 
 ## 本地修改
 
-規則（Q9）：**這裡的檔不動。** 要改的寫在 `index.css` 裡排在它後面的檔，CSS 靠後載入就蓋得掉，所以同步只是換檔再比對，不必把修改重新套上去。修改分在兩處（第 ② 步 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512) 建立），**同步上游時兩處都要看**：
+規則（Q9）：**這裡的檔預設不動。** 要改的寫在 `index.css` 裡排在它後面的檔，CSS 靠後載入就蓋得掉，所以同步只是換檔再比對，不必把修改重新套上去。例外是下面的「改 vendor 檔」（#1583 起）：只有覆寫檔與包裝層都做不到、或要複製上游標記才做得到的，才用 patch。修改分在兩處（第 ② 步 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512) 建立），**同步上游時兩處都要看**：
 
 - `src/styles/solid-glass.overrides.css`：機制類的規則與字型（Q6、Q8）。規則除了焦點 offset 那段刻意留在 base layer，都在 layer 外。
 - `src/styles/tokens.generated.css`：顏色。由 `tokengen/generate.mjs` 產生，不要手改；SG 的輸入值抄在 `tokengen/sg-input.mjs`（`sg-input.test.ts` 逐值比對這個檔）。
@@ -62,7 +67,7 @@
 |---|---|---|---|---|
 | 14 | `resolve-alias.ts`（`vite.config.ts`、`vitest.config.ts`、`guard/vite.config.ts` 共用）＋`tsconfig.json` 的 `paths` | `components/ui/*.tsx` 的 `import { cn } from "cn"` | 裸的 `cn` 精確解析到 `src/lib/utils.ts`（`cn/config` 不動，`utils.ts` 自己從它取）：npm 的 `cn` 不認得 `text-ui`、`rounded-row`，會把 #1141 帶回來（Q19 放行的執行方式，PM 定）。Vite 用正規式 `/^cn$/`，字串鍵會連 `cn/config` 一起改寫。別名是全域的，但打包進來的相依套件沒有一個 import 裸的 `cn`（#1523 用 build 時的 `resolveId` 探針確認），實際只作用在 vendor 的元件 | `lib/cn-alias.test.tsx`（渲染 vendor 原樣的 Button）、`vite-config.test.ts`（build、guard、tsconfig 三份解析） |
 
-**元件層**（#1523 起）：vendor 的元件檔不動，改在覆寫檔或 `components/ui/<x>.tsx` 這一層（選層順序：覆寫檔 → 包裝層；③-1 不改 vendor 檔）。
+**元件層**（#1523 起）：vendor 的元件檔不動，改在覆寫檔或 `components/ui/<x>.tsx` 這一層。選層順序：覆寫檔 → 包裝層 → 改 vendor 檔（③-1 不准第 3 層，③-2 起照下面「改 vendor 檔」）。**判準補一句**（#1583 PM 定）：包裝層**要複製上游的標記**才做得到的，改走 patch——patch 的漂移看得見（上游一動同步就失敗），複製的標記會靜靜漂移。分不出該放哪一層的，回報 PM。
 
 | # | 在哪 | 蓋掉 vendor 的哪裡 | 改成什麼、為什麼 | 釘住的測試 |
 |---|---|---|---|---|
@@ -70,6 +75,23 @@
 | 16 | `components/ui/input-group.tsx`（包裝層） | `components/ui/input-group.tsx:57-61` addon 的 `onClick` 只找 `input` 來 focus | 連 `textarea` 一起找：輸入框（`composer.tsx`）用的是 `InputGroupTextarea`，vendor 原樣點 addon 空白處拿不到焦點。vendor 把 `onClick` 寫在 `{...props}` 前面，所以包裝層傳的整段取代它；呼叫端自己傳的照舊蓋掉包裝層 | `components/ui/input-group.test.tsx`（textarea、vendor 原文只找 input、input 照舊、點按鈕不搶焦點、呼叫端蓋掉） |
 | 17 | overrides | `components/ui/button.tsx:18` destructive 的 `hover:bg-destructive/20`、`dark:hover:bg-destructive/30` | hover 底改成亮 /17、暗 /26：vendor 原值下 `text-destructive` 疊在 hover 底上過不了 4.5。Q5 碰到 Q8 以 Q5 為準（PM 定 (c)，取格 2：第一個達標的值）。寫在 layer 外、包在 `@media (hover: hover)`（跟 Tailwind 的 `hover:` 同條件）；alpha 跟 tokengen 共用 `destructive-tint.mjs`，覆寫檔寫字面值、測試比對兩邊一致 | `solid-glass-overrides.test.ts`（cascade 的贏家、vendor 原文）、`tokens-contrast.test.ts`、`guard/`（destructive hover，拿掉這段會紅） |
 | 18 | overrides | `components/ui/input-group.tsx:17` 的 `has-disabled:opacity-50`（編成 `:has(:disabled)`，群組裡任何後代停用就命中） | 只有欄位（`input-group-control`）停用時群組才變淡，按鈕停用不算，保留 develop 的語意：輸入框沒字時送出鈕是停用的，vendor 原樣會讓整個框變 50%（PM 擋下，#1523）。`:has(:disabled):not(:has([data-slot="input-group-control"]:disabled))` 時 `opacity: 1`，寫在 layer 外。底色那一半（`has-disabled:bg-input/50`、暗色 /80）本來就被 `solid-glass.css:917-930` 寫在 layer 外的 `--field` 蓋掉，不處理 | `registry-edits.test.ts`（覆寫檔含這段、vendor 原文仍是 `has-disabled:opacity-50`）、`guard/`（送出鈕停用的群組 opacity 1、底色同一般群組，欄位停用的 0.5；拿掉這段會紅，對比量具也會紅） |
+| 21 | overrides | `components/ui/sheet.tsx:54` 的 `data-[side=*]:border-*` 配 `shadow-lg`；SG 只在 `.bg-popover`（`solid-glass.css:394-402`）把邊歸零，`.bg-sidebar`（`:363-369`）只給 blur | sheet 裡的 `.bg-sidebar`（手機左側欄）邊歸零、只留陰影，規格 §5 不准邊加陰影（#1583，PM 定）。手機側欄的 `SheetContent` 帶 `data-slot="sidebar"`（`ui/sidebar.tsx` 傳的，排在 vendor 的 `data-slot="sheet-content"` 後面），選擇器兩種都列；寫在 layer 外 | `guard/`（手機側欄的抽屜四邊 0px，拿掉這段會紅） |
+| 22 | overrides | `solid-glass.css:1166-1182` 的不透明退路只列 `.bg-card`、`.bg-popover`、`.bg-sidebar`、`.glass-panel`、`.glass-control`；tooltip（`:815-825`）與 dialog／sheet 遮罩（`components/ui/{dialog,sheet}.tsx` 的 `supports-backdrop-filter:backdrop-blur-xs`）不在裡面 | 照 SG 那段的兩種條件（`data-glass="opaque"`、`prefers-reduced-transparency`）把這三個的 blur 拿掉，面的顏色由 SG 那段換成不透明值（#1583） | `guard/`（主頁 tooltip 的面、modal 浮層的面與遮罩，兩種退路各量；拿掉這段會紅） |
+| 23 | overrides | `components/ui/sheet.tsx:54` 用 transition 滑入（200ms、位移 2.5rem）、`:29` 遮罩 150ms，不走 `--animate-in`，`motion.css` 的 reduced-motion 段管不到 | reduced-motion 下 sheet、手機側欄的抽屜、sheet 遮罩 `translate: none`、`transition-duration: var(--duration-quick)`（150ms），Q5 的規則（#1583，PM 定） | `scripts/check-built-css.mjs`（新格：產物裡有 transition 位移時，名單上每個面都要有這兩條）、`guard/`（模擬 reduced-motion 量離場位移與時長；拿掉這段兩邊都紅） |
+
+**改 vendor 檔**（#1583 起，PM 決定第 1 點）：上面幾層都表達不出來、或要複製上游標記才做得到的，用 patch 改 vendor 檔。
+
+- 每個 patch 是 `patches/NNNN-<元件>-<事由>.patch`：對上游原樣（加上同一個檔排在它前面的 patch）的 unified diff，LF。`.gitattributes` 的 `patches/** -text` 保證 checkout 不轉換行。
+- `manifest.json` 那一筆多兩個欄位：`upstreamSha256`（上游原樣）與 `patches`（照套用順序）；`sha256` 記套完之後的值。
+- `sync.mjs` 先取上游、再依序套 patch（fuzz 0，套不上就失敗），寫入後記兩個 sha。`--check` 在記憶體裡從上游加 patch 重建，再逐檔比對。`patches.mjs` 是 `sync.mjs` 與 `vendor.test.ts` 共用的那一份：套用、反向套用、產生 patch 都用 `diff` 套件（jsdiff），不混用系統的 `patch`，`--check` 與離線測試的邊界行為才不會分歧。
+- `vendor.test.ts` 離線就驗完：對 vendor 檔倒序反向套 patch，結果要等於 `upstreamSha256`，再正向套回去要等於 vendor 檔；`patches/` 裡每個檔都要被正好一筆引用，檔名合規；`upstreamSha256` 與 `patches` 成對出現。**手改 vendor 檔、不登記 patch，這裡就紅**；patch 對不上上游，`sync --check` 就紅。
+- 新增一個 patch：手改 vendor 檔，然後 `sync.mjs … --record <vendor 裡的路徑> <事由>`。它取下一個編號、產生 patch、驗證套回去等於手改的檔，再寫進 manifest。每條在下表登記，指向它的 patch 檔，並且要有自己的行為測試。
+- **取代 dsh 的守衛**：dsh 改 vendor 檔是直接手改、README 逐條登記，機械守衛只有 pre-commit 的「vendor 原始碼有變動，README 就要同一批改」（dsh `vendor/README.md`、`scripts/check-vendor-manifest.sh`、`lefthook.yml`）。這裡的 vendor 從 ① 起用 sha256 把每個檔釘在上游原樣上，照 dsh 手改就只能把 sha 改成手改後的值、再也驗證不了「vendor 檔等於上游加上登記的修改」，所以退到 patch 檔加 `upstreamSha256` 的反向比對，跟根目錄 vendor（Cordis）的 `patches/` 同一個形狀。dsh 那條守衛由 manifest 的 `patches` 清單加上 `vendor.test` 取代：沒登記的修改就紅（偏離標註見 #1583 的 PR 內文）。
+
+| # | patch | 改 vendor 的哪裡 | 改成什麼、為什麼 | 釘住的測試 |
+|---|---|---|---|---|
+| 19 | `patches/0001-popover-anchor.patch` | `components/ui/popover.tsx` 的 `PopoverContent` 只把 `align`、`alignOffset`、`side`、`sideOffset` 傳給 Positioner，其餘展開到 Popup | 解構與 `Pick` 加上 `anchor`，傳給 Positioner：composer 的 `/` 與 @ 選單錨在整個輸入框上、寬度等於它（`w-(--anchor-width)`），不是錨在某顆 Trigger。包裝層要做到同樣的事得把整個 PopoverContent 用 Base UI 部件重寫一份（#1583，PM 定） | `composer.test.tsx`「Positioner 量的是輸入框那一格」（拿掉這條 patch 會紅） |
+| 20 | `patches/0002-dialog-close-label.patch`、`patches/0003-sheet-close-label.patch` | `components/ui/dialog.tsx` 右上角關閉鈕的 sr-only 與 footer 關閉鈕、`components/ui/sheet.tsx` 關閉鈕的 sr-only，都是寫死的 "Close" | 改成「關閉」：報讀字串保留中文（#1497）。包裝層做得到但要複製上游的按鈕標記，上游一改就靜靜漂移；patch 只改字，上游一動同步就失敗（#1583，PM 定） | `components/ui/overlay-close-label.test.tsx`（dialog、sheet 各一條，打開後掃；拿掉任一 patch 那條會紅） |
 
 另外**新增**、不是改 SG 的：`index.css` 的 `--radius-row`（SG 的 3xl 減 4px）與 nexus 獨有的顏色 token（`stage`、`chip*`、`brand-soft`、`warning`、`info`、`card-hairline`，Q11 留到第 ⑥ 步），以及 `tokens.generated.css` 的 `--primary-hover`／`--primary-active`（亮 `:12-13`、暗 `:35-36`，主按鈕 hover 與按下的底色，SG 沒有這兩格）。圓角階梯照 SG，不重綁。
 
@@ -80,7 +102,7 @@
 1. solid-glass：clone 另放，停在要同步的 commit，記下 `git rev-parse HEAD`，對過 `git ls-remote https://github.com/deeplethe/solid-glass`。工作區要乾淨。
 2. shadcn：`npm pack shadcn@<version>`，tarball 的 sha512 要等於 SG `package-lock.json` 裡 `node_modules/shadcn` 的 `integrity`。
 3. 換版本的話，先改 `manifest.json` 的 `sources`（commit；version 與 integrity）。
-4. `node apps/web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz>`：照清單複製（子目錄自動建），重寫 `manifest.json` 的 sha256。
+4. `node apps/web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz>`：照清單複製（子目錄自動建），有 patch 的檔依序套上（fuzz 0），重寫 `manifest.json` 的 `sha256` 與 `upstreamSha256`。patch 套不上就停下來：上游改到了那幾行，照第 19 條起的事由判斷要重做 patch 還是拿掉。
 5. 跑 web 全套測試、`pnpm --filter @nexus/web build`（`check-built-css` 量建置出來的 CSS）與 `test:guard`。
 
-`node apps/web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz> --check` 只比對不寫入：vendor 的檔與 `manifest.json` 的 sha256 都要等於上游原樣，有差異就列出並以 1 退出。clone 不在記的 commit 上、工作區不乾淨、tarball 的 integrity 或版本對不上、少給一個上游，直接以 2 退出。
+`node apps/web/src/vendor/solid-glass/sync.mjs --solid-glass <clone> --shadcn <tgz> --check` 只比對不寫入：vendor 的檔與 `manifest.json` 的 sha256 都要等於上游原樣，有差異、patch 套不上、`patches/` 裡有沒登記的 patch，就列出並以 1 退出。clone 不在記的 commit 上、工作區不乾淨、tarball 的 integrity 或版本對不上、少給一個上游，直接以 2 退出。

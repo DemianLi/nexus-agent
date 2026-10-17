@@ -6,7 +6,7 @@
 
 | 層 | 放什麼 | 規則 |
 | --- | --- | --- |
-| `src/components/ui/` | shadcn registry 裝進來的元件，或 vendor 的 solid-glass 元件的 nexus 層 | 只放 registry 來的；檔頭寫來源與版本；裝法見規格 §4.1。已換成 solid-glass 的（#1523 起：button、input、textarea、input-group、separator、skeleton、card、badge）只轉出 `src/vendor/solid-glass/components/ui/` 的原檔，本地修改寫在這一層或覆寫檔，登記在 [vendor README](src/vendor/solid-glass/README.md) 的「本地修改」。自己的元件不要放這裡 |
+| `src/components/ui/` | shadcn registry 裝進來的元件，或 vendor 的 solid-glass 元件的 nexus 層 | 只放 registry 來的；檔頭寫來源與版本；裝法見規格 §4.1。已換成 solid-glass 的（#1523 起：button、input、textarea、input-group、separator、skeleton、card、badge；#1583 起：dialog、popover、sheet、tooltip）只轉出 `src/vendor/solid-glass/components/ui/` 的原檔，本地修改寫在這一層或覆寫檔，登記在 [vendor README](src/vendor/solid-glass/README.md) 的「本地修改」。自己的元件不要放這裡 |
 | `src/components/*.tsx`（含各資料夾） | 我們自己的元件 | 資料夾按功能分（`tool/`、`todo/`、`sidebar/`…），檔名不重複資料夾名 |
 | `src/components/row-trigger.tsx` 這類 | 兩處以上共用的自製積木 | 見下面「什麼時候抽」 |
 | `src/lib/` | 不畫畫面的邏輯與投影 | 元件只讀它的結果 |
@@ -78,6 +78,16 @@
 - 抽完要證明**畫面沒變**：展開成的 class 集合與原本逐項相等，再加實機前後比對。
 - 已抽的：`RowTrigger`（可展開列；`fit="card"` 嵌在卡片裡、用 `rounded-row` 同心，`fit="bare"` 自己就是一列）、`Chevron`（展開箭頭，跟著外層的 `data-state` 轉，或用 `open` 直接給）、`ChatBubble`（對話裡的文字泡泡，人的話靠右、子代理寄來的話靠左）、`MonoBlock`（夾在說明文字裡的等寬字小框，平的 `bg-chip`；工具輸出那種有標題、有細線的內層底是 `Surface tone="stage"`，不是它）、`Surface`（`raised` 浮起來的卡片、`stage` 內層底、`docked` 貼在輸入框上方的平邊線卡片，用 `as` 選元素）、`CopyButton`（複製鈕：交付卡的複製路徑、回覆底下的複製回覆、程式碼區塊的複製程式碼共用同一套行為與回饋，[#1305](https://github.com/DemianLi/nexus-agent/issues/1305)）。新的卡片或內層底用 `Surface`，手寫整組配方會被護欄擋下。
 - 還沒抽的：`pending-swap`（走 `ui/Card` 覆寫，是 shadcn 元件的用法）。
+
+## 浮層（Base UI）
+
+#1583 起 dialog、popover、sheet、tooltip 是 solid-glass 的 Base UI 版（vendor README 的「元件怎麼接」有完整對照）。寫呼叫端時：
+
+- **Trigger 接自己的元素用 `render`**，不是 `asChild`：`<PopoverTrigger render={<Button variant="outline" />}>字</PopoverTrigger>`，字放在 Trigger 上。
+- **焦點**：打開、關掉要搬到哪裡，給 Popup 的 `initialFocus`／`finalFocus`（boolean、ref 或回傳元素的函式；回傳 `false` 是不要搬）。
+- **點外面要不要關**：在 Root 的 `onOpenChange(open, details)` 看 `details.reason === 'outside-press'`，不關就 `details.cancel()` 並且不改自己的 state。
+- **tooltip 的字不能帶 Trigger 名稱裡沒有的資訊**：Base UI 的 tooltip 不給 `role="tooltip"`、也不掛 `aria-describedby`，報讀器聽不到它（#1583 驗收 D）。要讓人聽到的資訊寫進 Trigger 的 `aria-label`。
+- **寬度蓋 SG 的值要寫同一組前綴**：sheet 寫 `data-[side=right]:w-full`、`data-[side=right]:sm:max-w-none`，dialog 寫 `sm:max-w-lg`，cn 才會把 SG 的 `data-[side=*]:w-3/4`、`sm:max-w-sm` 拿掉。
 
 ## 新增 shadcn 元件
 

@@ -212,3 +212,54 @@ body {
     animation: motion-fade-in var(--duration-quick) var(--ease-smooth-out);
   }
 }
+
+/*
+ * 手機左側欄的抽屜只留陰影、不畫邊（#1583，PM 定；README 本地修改第 21 條）：vendor 的 sheet（`vendor/solid-glass/components/ui/sheet.tsx:54`）
+ * 同時帶 `data-[side=*]:border-*` 與 `shadow-lg`。SG 只在 `.bg-popover`（`solid-glass.css:394-402`）把邊歸零，`.bg-sidebar` 只給 blur
+ * （`:363-369`），所以手機左側欄（`ui/sidebar.tsx` 傳 `bg-sidebar`）會邊與陰影一起畫，違反規格 §5。寫在 layer 外，蓋得過 utilities 層的邊；
+ * 手機側欄的 `SheetContent` 帶著 `data-slot="sidebar"`（`ui/sidebar.tsx` 傳的，排在 vendor 的 `data-slot="sheet-content"` 後面，蓋掉它），
+ * 所以選擇器兩種都列。瀏覽器那一層（`guard/`）量抽屜的 border 寬是 0。不讓 Prettier 排版，理由同上。
+ */
+/* prettier-ignore */
+:is([data-slot="sheet-content"], [data-slot="sidebar"][data-mobile="true"]).bg-sidebar {
+  border-width: 0;
+}
+
+/*
+ * tooltip 與遮罩也走不透明退路（#1583；README 本地修改第 22 條）：SG 的不透明退路（`solid-glass.css:1166-1182`）只列 `.bg-card`、
+ * `.bg-popover`、`.bg-sidebar`、`.glass-panel`、`.glass-control`，沒有 tooltip（`:815-825` 自己給 blur）與 dialog／sheet 的遮罩
+ * （vendor 的 `supports-backdrop-filter:backdrop-blur-xs`）。照 SG 那段的兩種條件補上：`data-glass="opaque"` 與 `prefers-reduced-transparency`。
+ * 面的顏色由 SG 那段換成不透明值（tooltip 用 `--popover`），這裡只拿掉 blur。寫在 layer 外；`guard/` 量這三個的 `backdrop-filter`。
+ */
+/* prettier-ignore */
+[data-glass="opaque"] :is([data-slot="tooltip-content"], [data-slot="dialog-overlay"], [data-slot="sheet-overlay"]),
+[data-glass="opaque"]:is([data-slot="tooltip-content"], [data-slot="dialog-overlay"], [data-slot="sheet-overlay"]) {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+/* prettier-ignore */
+@media (prefers-reduced-transparency: reduce) {
+  [data-slot="tooltip-content"],
+  [data-slot="dialog-overlay"],
+  [data-slot="sheet-overlay"] {
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+/*
+ * sheet 在 reduced-motion 下不滑、時長 ≤ 150ms（#1583，PM 定；README 本地修改第 23 條）：vendor 的 sheet 用 transition 滑入
+ * （`vendor/solid-glass/components/ui/sheet.tsx:54`，200ms、位移 2.5rem；遮罩 `:29` 150ms 淡入），不走 `--animate-in`，
+ * 所以 `motion.css` 的 reduced-motion 段管不到它。這裡拿掉位移、留下 ≤ 150ms 的透明度（同 Q5 的規則）。寫在 layer 外，
+ * 蓋得過 utilities 層的 `translate-*` 與 `duration-*`。手機側欄的抽屜 `data-slot` 是 `sidebar`（見上面「只留陰影」那條），一起列。
+ * `scripts/check-built-css.mjs` 在產物裡量這幾條，`guard/` 在模擬 reduced-motion 下量計算值。不讓 Prettier 排版，理由同上。
+ */
+/* prettier-ignore */
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="sheet-content"],
+  [data-slot="sidebar"][data-mobile="true"],
+  [data-slot="sheet-overlay"] {
+    translate: none;
+    transition-duration: var(--duration-quick);
+  }
+}

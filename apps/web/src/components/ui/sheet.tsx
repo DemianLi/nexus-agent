@@ -1,137 +1,15 @@
 /**
- * 來源：shadcn registry `sheet`（style new-york，https://ui.shadcn.com/r/styles/new-york-v4/sheet.json），
- * shadcn CLI 4.21.0 `shadcn add sidebar sheet --overwrite`。裝進來就是我們的原始碼，不靠重跑 `shadcn add` 更新。
- * 改過的地方：開 350／關 250（§7，照原型 tag `proto-375-design-language`）；「Close」→「關閉」（§8）；
- * 邊線與 `shadow-lg` 換成 `shadow-menu`（§5 邊緣畫在陰影裡——兩者在不同字串裡，§11 第 1 條看不到，要靠 review）。
+ * nexus 層（#1583）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/sheet.tsx`，Base UI 的 dialog），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」；這個檔沒有本地修改。關閉鈕的中文報讀名稱「關閉」是改 vendor 檔
+ * （第 20 條，`patches/0003-sheet-close-label.patch`）；reduced-motion 與放在 sheet 裡的側欄底在覆寫檔（`styles/solid-glass.overrides.css`）。
  */
-import * as React from 'react';
-import { cn } from '@/lib/utils';
-import { XIcon } from 'lucide-react';
-import { Dialog as SheetPrimitive } from 'radix-ui';
-
-function Sheet({ ...props }: React.ComponentProps<typeof SheetPrimitive.Root>) {
-  return <SheetPrimitive.Root data-slot="sheet" {...props} />;
-}
-
-function SheetTrigger({ ...props }: React.ComponentProps<typeof SheetPrimitive.Trigger>) {
-  return <SheetPrimitive.Trigger data-slot="sheet-trigger" {...props} />;
-}
-
-function SheetClose({ ...props }: React.ComponentProps<typeof SheetPrimitive.Close>) {
-  return <SheetPrimitive.Close data-slot="sheet-close" {...props} />;
-}
-
-function SheetPortal({ ...props }: React.ComponentProps<typeof SheetPrimitive.Portal>) {
-  return <SheetPrimitive.Portal data-slot="sheet-portal" {...props} />;
-}
-
-function SheetOverlay({
-  className,
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Overlay>) {
-  return (
-    <SheetPrimitive.Overlay
-      data-slot="sheet-overlay"
-      className={cn(
-        'fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:animation-duration-(--duration-fast) data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:animation-duration-(--duration-medium) data-[state=open]:fade-in-0',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function SheetContent({
-  className,
-  children,
-  side = 'right',
-  showCloseButton = true,
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Content> & {
-  side?: 'top' | 'right' | 'bottom' | 'left';
-  showCloseButton?: boolean;
-}) {
-  return (
-    <SheetPortal>
-      <SheetOverlay />
-      <SheetPrimitive.Content
-        data-slot="sheet-content"
-        className={cn(
-          'fixed z-50 flex flex-col gap-4 bg-background shadow-menu data-[state=closed]:animate-out data-[state=closed]:animation-duration-(--duration-fast) data-[state=open]:animate-in data-[state=open]:animation-duration-(--duration-medium)',
-          side === 'right' &&
-            'inset-y-0 right-0 h-full w-3/4 data-[state=closed]:slide-out-to-right data-[state=open]:slide-in-from-right sm:max-w-sm',
-          side === 'left' &&
-            'inset-y-0 left-0 h-full w-3/4 data-[state=closed]:slide-out-to-left data-[state=open]:slide-in-from-left sm:max-w-sm',
-          side === 'top' &&
-            'inset-x-0 top-0 h-auto data-[state=closed]:slide-out-to-top data-[state=open]:slide-in-from-top',
-          side === 'bottom' &&
-            'inset-x-0 bottom-0 h-auto data-[state=closed]:slide-out-to-bottom data-[state=open]:slide-in-from-bottom',
-          className,
-        )}
-        {...props}
-      >
-        {children}
-        {showCloseButton && (
-          <SheetPrimitive.Close className="absolute top-4 right-4 rounded-xs opacity-70 ring-offset-background transition-opacity hover:opacity-100 focus:ring-2 focus:ring-ring focus:ring-offset-2 focus:outline-hidden disabled:pointer-events-none data-[state=open]:bg-secondary">
-            <XIcon className="size-4" />
-            <span className="sr-only">關閉</span>
-          </SheetPrimitive.Close>
-        )}
-      </SheetPrimitive.Content>
-    </SheetPortal>
-  );
-}
-
-function SheetHeader({ className, ...props }: React.ComponentProps<'div'>) {
-  return (
-    <div
-      data-slot="sheet-header"
-      className={cn('flex flex-col gap-1.5 p-4', className)}
-      {...props}
-    />
-  );
-}
-
-function SheetFooter({ className, ...props }: React.ComponentProps<'div'>) {
-  return (
-    <div
-      data-slot="sheet-footer"
-      className={cn('mt-auto flex flex-col gap-2 p-4', className)}
-      {...props}
-    />
-  );
-}
-
-function SheetTitle({ className, ...props }: React.ComponentProps<typeof SheetPrimitive.Title>) {
-  return (
-    <SheetPrimitive.Title
-      data-slot="sheet-title"
-      className={cn('font-semibold text-foreground', className)}
-      {...props}
-    />
-  );
-}
-
-function SheetDescription({
-  className,
-  ...props
-}: React.ComponentProps<typeof SheetPrimitive.Description>) {
-  return (
-    <SheetPrimitive.Description
-      data-slot="sheet-description"
-      className={cn('text-body text-muted-foreground', className)}
-      {...props}
-    />
-  );
-}
-
 export {
   Sheet,
-  SheetTrigger,
   SheetClose,
   SheetContent,
-  SheetHeader,
-  SheetFooter,
-  SheetTitle,
   SheetDescription,
-};
+  SheetFooter,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from '@/vendor/solid-glass/components/ui/sheet';

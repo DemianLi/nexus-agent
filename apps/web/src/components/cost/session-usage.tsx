@@ -46,10 +46,10 @@ export function SessionUsage({
         align="end"
         aria-label="這條對話的用量明細"
         className="w-72 space-y-3 text-body"
-        onCloseAutoFocus={(event) => {
-          if (!toCost.current) return;
+        finalFocus={() => {
+          if (!toCost.current) return true;
           toCost.current = false;
-          event.preventDefault();
+          return false;
         }}
       >
         {usage !== undefined && (

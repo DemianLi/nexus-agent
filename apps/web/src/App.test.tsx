@@ -4569,8 +4569,43 @@ describe('模型座（#723）', () => {
     render(<App client={client} />);
 
     const button = await screen.findByTestId('model-seat');
-    expect(button.getAttribute('aria-label')).toBe('模型：Alpha，點開切換');
+    expect(button.getAttribute('aria-label')).toBe('模型：Alpha，從下一步生效，點開切換');
     expect(button.textContent).toBe('Alpha');
+  });
+
+  it('座位的提示只是視覺：Base UI 不給 role="tooltip" 與 describedby，提示裡的資訊都要在報讀名稱裡（#1583 驗收 D）', async () => {
+    const { client } = withModels();
+    render(<App client={client} />);
+
+    const button = await screen.findByTestId('model-seat');
+    act(() => {
+      button.focus();
+    });
+    const popup = await waitFor(() => {
+      const found = document.querySelector('[data-slot="tooltip-content"]');
+      expect(found).not.toBeNull();
+      return found!;
+    });
+    expect(popup.textContent).toBe('模型：Alpha（從下一步生效）');
+    // 提示的兩段資訊（目前的值、從下一步生效）報讀名稱都有。
+    const name = button.getAttribute('aria-label') ?? '';
+    expect(name).toContain('Alpha');
+    expect(name).toContain('從下一步生效');
+  });
+
+  it('滑鼠移到座位上不用等就出提示：座位在 SidebarProvider 的 TooltipProvider 底下（delay 0；沒有 Provider 時 Base UI 等 600ms，#1583）', async () => {
+    const { client } = withModels();
+    render(<App client={client} />);
+
+    const button = await screen.findByTestId('model-seat');
+    // 用 hover 不用 focus：focus 打開是 Base UI 的 instant，跟延遲無關。
+    fireEvent.pointerEnter(button, { pointerType: 'mouse' });
+    fireEvent.mouseEnter(button);
+    fireEvent.mouseMove(button);
+    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
+    const popup = document.querySelector('[data-slot="tooltip-content"]');
+    expect(popup?.textContent).toBe('模型：Alpha（從下一步生效）');
+    expect(popup?.getAttribute('data-instant')).toBeNull();
   });
 
   it('點開選另一顆：送 { modelId }，成功後座位換成新的', async () => {
@@ -4583,7 +4618,7 @@ describe('模型座（#723）', () => {
     await waitFor(() => expect(selected).toEqual([{ modelId: 'model-b' }]));
     await waitFor(() =>
       expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toBe(
-        '模型：Beta · 低，點開切換',
+        '模型：Beta · 低，從下一步生效，點開切換',
       ),
     );
     expect(screen.queryByRole('listbox')).toBeNull();
@@ -4627,7 +4662,7 @@ describe('模型座（#723）', () => {
     await waitFor(() => expect(selected).toHaveLength(1));
     expect(await screen.findByText(/這顆模型現在選不了/u)).toBeTruthy();
     expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toBe(
-      '模型：Alpha，點開切換',
+      '模型：Alpha，從下一步生效，點開切換',
     );
   });
 
@@ -4648,7 +4683,7 @@ describe('模型座（#723）', () => {
     ]);
     await waitFor(() =>
       expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toBe(
-        '模型：Beta · 高，點開切換',
+        '模型：Beta · 高，從下一步生效，點開切換',
       ),
     );
   });
@@ -4674,7 +4709,7 @@ describe('模型座（#723）', () => {
     ]);
     await waitFor(() =>
       expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toBe(
-        '模型：Alpha，點開切換',
+        '模型：Alpha，從下一步生效，點開切換',
       ),
     );
   });
