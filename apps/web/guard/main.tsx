@@ -10,6 +10,7 @@
  *   - `data-guard-docked`：貼在輸入框上方的卡片（`Surface tone="docked"`），量它是不是平的（1px 邊、沒有投影）。
  *   - `data-guard-shadow`：亮色時量 `box-shadow` 每層投影的透明度。
  *   - `data-guard-surface`：不透明的退路（reduced-transparency、`data-glass="opaque"`）下，量這個面是不是真的不透明、沒有 blur。
+ *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、按下去三種狀態各量一次字色對底色（chip 三階，#1512）。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
  * - `?glass=opaque` 在 `<html>` 掛 `data-glass="opaque"`（#1468 Q7：效能不達標時退回的那條路），量不透明的面。
  */
@@ -17,6 +18,8 @@ import { StrictMode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Counts } from '@/components/changes/counts';
+import { ContextMeter } from '@/components/context-meter';
+import { RetryNotice } from '@/components/retry-notice';
 import { Surface } from '@/components/surface';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -51,6 +54,20 @@ const BUTTON_VARIANTS = [
 const BADGE_VARIANTS = ['default', 'secondary', 'destructive', 'outline', 'ghost', 'link'] as const;
 
 const row = { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 } as const;
+
+/** 用量表的門檻 10 個 token：5 是 50%（次要文字），9 是 90%（80% 以上換成 warning）。 */
+const METER = {
+  approxTokens: 0,
+  messageCount: 1,
+  thresholds: [{ type: 'tokens', value: 10 }],
+} as const;
+const RETRY = {
+  retryId: 'guard',
+  retry: 1,
+  maxRetries: 2,
+  delayMs: 3000,
+  code: 'TIMEOUT',
+} as const;
 
 function GuardPage() {
   return (
@@ -108,6 +125,20 @@ function GuardPage() {
         <div style={{ ...row, width: 720 }}>
           <Input data-guard-field="input" aria-label="單行欄位" placeholder="單行" />
           <Textarea data-guard-field="textarea" aria-label="多行欄位" placeholder="多行" />
+        </div>
+
+        {/* chip 三階（#1512）：用量表收著時是次要文字、80% 以上換成 warning，hover／按下的底是 chip-hover／chip-pressed；
+            重試那一行是平的 chip 底加次要文字。 */}
+        <div style={row}>
+          <div data-guard-chip="context-meter">
+            <ContextMeter pressure={{ measure: { ...METER, approxTokens: 5 } }} />
+          </div>
+          <div data-guard-chip="context-meter-warning">
+            <ContextMeter pressure={{ measure: { ...METER, approxTokens: 9 } }} />
+          </div>
+          <div data-guard-texts="retry-notice" style={{ width: 360 }}>
+            <RetryNotice retry={RETRY} />
+          </div>
         </div>
 
         <div style={{ width: 360 }}>

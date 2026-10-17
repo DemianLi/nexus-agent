@@ -27,7 +27,9 @@ import { startGuardServer, type GuardServer } from './server';
  *    SG 畫的是 `--focus-line` 灰線，`solid-glass.overrides.css` 換回來，靜態那一層 `focus-line-suppression.test.ts` 列舉）。
  * 4. **貼在輸入框上方的卡片是平的**：`Surface tone="docked"` 的邊是 1px、沒有投影（SG 的 `.bg-card` 會把它變成浮起來的卡片，
  *    `solid-glass.overrides.css` 補回來）。
- * 5. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
+ * 5. **chip 三階**：`data-guard-chip` 裡那顆按鈕平常、滑鼠移上去、按下去三種狀態，字對它實際的底色過門檻。develop 就沒到 4.5 的那幾對
+ *    只守「不比 develop 差」（既有缺口 #1515，{@link CHIP_FLOORS}）。
+ * 6. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -56,6 +58,19 @@ const SHADOW_LIMITS: Record<string, number> = {
 const SHADOWED = Object.keys(SHADOW_LIMITS);
 const TEXT_MIN = 4.5;
 const NON_TEXT_MIN = 3;
+
+type ChipState = 'rest' | 'hover' | 'pressed';
+const CHIP_STATES: ChipState[] = ['rest', 'hover', 'pressed'];
+
+/**
+ * chip 三階上 develop 就沒到 4.5 的那幾對（既有缺口 #1515）：只守「不比 develop 差」，數字同 `tokens-contrast.test.ts` 的
+ * `NOT_WORSE_THAN_DEVELOP`（develop c9b957b6 照同一套算法重算、截到小數第四位）。沒列的一律 {@link TEXT_MIN}。
+ */
+const CHIP_FLOORS: Record<string, Record<Theme, number>> = {
+  'context-meter:pressed': { light: 4.3325, dark: 4.2964 },
+  'context-meter-warning:hover': { light: 4.0084, dark: 3.9642 },
+  'context-meter-warning:pressed': { light: 3.7081, dark: 3.6952 },
+};
 
 type Mode = 'translucent' | 'reduced-transparency' | 'opaque';
 const MODES: Mode[] = ['translucent', 'reduced-transparency', 'opaque'];
@@ -89,6 +104,16 @@ interface FieldSample {
   borderBefore: string[];
   borderAfter: string[];
   pageColor: string;
+}
+
+interface ChipSample {
+  name: string;
+  state: ChipState;
+  /** 真的在那個狀態（`:hover`／`:active`）。 */
+  inState: boolean;
+  color: string;
+  backgroundColor: string;
+  chain: BackgroundLayer[];
 }
 
 interface ShadowSample {
@@ -278,6 +303,50 @@ async function collectFields(page: Page): Promise<FieldSample[]> {
   return samples;
 }
 
+async function collectChips(page: Page): Promise<ChipSample[]> {
+  const names = await page.$$eval('[data-guard-chip]', (els) =>
+    els.map((el) => el.getAttribute('data-guard-chip') ?? ''),
+  );
+  const samples: ChipSample[] = [];
+  for (const name of names) {
+    const target = page.locator(`[data-guard-chip="${name}"] button`);
+    const read = async (state: ChipState) => {
+      await settle(page);
+      const measured = await target.evaluate((el, state) => {
+        const chain = [];
+        for (let node: Element | null = el; node !== null; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          chain.push({
+            backgroundColor: style.backgroundColor,
+            backgroundImage: style.backgroundImage,
+          });
+        }
+        const hover = el.matches(':hover');
+        const active = el.matches(':active');
+        return {
+          inState:
+            state === 'rest' ? !hover && !active : state === 'hover' ? hover && !active : active,
+          color: getComputedStyle(el).color,
+          backgroundColor: getComputedStyle(el).backgroundColor,
+          chain,
+        };
+      }, state);
+      samples.push({ name, state, ...measured });
+    };
+    await page.mouse.move(0, 0);
+    await read('rest');
+    await target.hover();
+    await read('hover');
+    await page.mouse.down();
+    await read('pressed');
+    // 游標移開再放開：click 要按下與放開在同一個元素上才會觸發，這樣浮層不會打開。
+    await page.mouse.move(0, 0);
+    await page.mouse.up();
+  }
+  await settle(page);
+  return samples;
+}
+
 function collectShadows(page: Page): Promise<ShadowSample[]> {
   return page.$$eval('[data-guard-shadow]', (els) =>
     els.map((el) => ({
@@ -319,11 +388,13 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   let fields: FieldSample[];
   let docked: { borderTopWidth: string; boxShadow: string }[];
   let shadows: ShadowSample[];
+  let chips: ChipSample[];
 
   beforeAll(async () => {
     page = await open(theme);
     texts = await collectTexts(page);
     shadows = await collectShadows(page);
+    chips = await collectChips(page);
     focus = await collectFocus(page);
     fields = await collectFields(page);
     docked = await page.$$eval('[data-guard-docked]', (els) =>
@@ -424,6 +495,41 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
       fields
         .filter((f) => f.borderAfter.some((c) => c !== f.pageColor))
         .map((f) => `${f.name}：${f.borderAfter.join(' ')}（字色 ${f.pageColor}）`),
+    ).toEqual([]);
+  });
+
+  test('chip 三階：平常、滑鼠移上去、按下去，字對它實際的底色過門檻（#1515 那幾對守 develop 的值）', () => {
+    const measured = chips.map((c) => {
+      const key = `${c.name}:${c.state}`;
+      return {
+        key,
+        ...c,
+        min: CHIP_FLOORS[key]?.[theme] ?? TEXT_MIN,
+        ...worstOn(c.color, c.chain),
+      };
+    });
+    report[`${theme}:chips`] = measured.map((m) => ({
+      key: m.key,
+      min: m.min,
+      backgroundColor: m.backgroundColor,
+      on: m.on,
+      ratio: Math.round(m.ratio * 10000) / 10000,
+    }));
+    // 量具自檢：兩顆用量表都量到三種狀態、真的在那個狀態，而且三種狀態的底色都不一樣（量到的是 hover／按下的底，不是平常那一層）。
+    expect(measured.map((m) => m.key)).toEqual(
+      ['context-meter', 'context-meter-warning'].flatMap((name) =>
+        CHIP_STATES.map((state) => `${name}:${state}`),
+      ),
+    );
+    expect(measured.filter((m) => !m.inState).map((m) => m.key)).toEqual([]);
+    for (const name of ['context-meter', 'context-meter-warning'])
+      expect(
+        new Set(measured.filter((m) => m.name === name).map((m) => m.backgroundColor)).size,
+      ).toBe(3);
+    expect(
+      measured
+        .filter((m) => !(m.ratio >= m.min))
+        .map((m) => `${m.key} ${m.ratio.toFixed(4)} < ${m.min}（${m.on}）`),
     ).toEqual([]);
   });
 
