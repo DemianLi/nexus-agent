@@ -1,5 +1,10 @@
 import { isSettleReason } from '@nexus/wire';
-import type { ConversationStatus, WireQueuedInput, WireSettleReason } from '@nexus/wire';
+import type {
+  ConversationStatus,
+  SlashDescriptor,
+  WireQueuedInput,
+  WireSettleReason,
+} from '@nexus/wire';
 
 /**
  * 送出佇列在畫面上的幾個判斷（[#645](https://github.com/DemianLi/nexus-agent/issues/645)）。資料是 harness 的投影
@@ -157,15 +162,39 @@ export function canSendText(
 }
 
 /**
- * 斜線命令送得出去嗎。**一輪沒收尾時照舊擋**：伺服器那側也擋（跑著、停在核准點都是）。只打 `/feedback` 例外：
- * 它不起一輪，只開回饋對話框（#267 的 Q10）。
+ * 這一行在一輪跑著、或停在核准點時能不能執行（[#1517](https://github.com/DemianLi/nexus-agent/issues/1517)）：照 `slash.list`
+ * 帶下來的 `runWhileBusy` 宣告（#1516），**不在前端另寫一份各命令的文法**。
+ *
+ * 判斷跟 server 的閘門同一套（`@nexus/plugin-commands` 的 `runsWhileBusy`）：命令名照 `parseCommand` 的規則解出來，名字後面
+ * 那段輸入去掉頭尾空白後，要**逐字**等於宣告的某一格（`/goal pause` 放行，`/goal PAUSE`、`/goal pause 1` 不放行）。
+ * 清單還沒到、名字不認得、沒宣告，一律不放行——跟 server 一樣預設擋。`queue-view.test.ts` 拿真的 `runsWhileBusy`
+ * 對照同一批輸入，兩邊分岔就紅。
+ */
+export function slashRunsWhileBusy(commands: readonly SlashDescriptor[], line: string): boolean {
+  // 跟 `parseCommand` 同一條：lookahead 讓 `/planning` 不會被當成 `/plan`。
+  const match = /^\/([a-z][a-z0-9_-]*)(?=$|[\t\n\r ])/u.exec(line);
+  if (match === null) return false;
+  const declared = commands.find((command) => command.name === match[1])?.runWhileBusy;
+  return declared !== undefined && declared.includes(line.slice(match[0].length).trim());
+}
+
+/**
+ * 斜線命令送得出去嗎。**一輪沒收尾時照舊擋**：伺服器那側也擋（跑著、停在核准點都是）。例外兩種：
+ *
+ * - 只打 `/feedback`：它不起一輪，只開回饋對話框（#267 的 Q10）。
+ * - 命令宣告了「忙的時候也放行」的那幾行（{@link slashRunsWhileBusy}，例如 `/goal pause`，#1517）。
  */
 export function canRunSlash(
   connected: boolean,
   status: ConversationStatus,
   line: string,
   feedbackLine: string,
+  commands: readonly SlashDescriptor[],
 ): boolean {
   const busy = status === 'running' || status === 'awaiting-input';
-  return connected && line.trim() !== '' && (!busy || line.trim() === feedbackLine);
+  return (
+    connected &&
+    line.trim() !== '' &&
+    (!busy || line.trim() === feedbackLine || slashRunsWhileBusy(commands, line.trim()))
+  );
 }

@@ -422,7 +422,8 @@ function ConversationView({
   };
   // **送出分兩道閘**（#645 Q2）。純文字跑著也送得出去：伺服器收下就排進送出佇列，開跑時才畫人的話。停在核准點時
   // 輸入框被面板換掉（Q3、§4.3），那道閘照樣擋。斜線命令一輪沒收尾時照舊擋——伺服器那側也擋——只打 `/feedback`
-  // 例外：它不起一輪，只開回饋對話框，而那個框送的 `feedback.record` 任何時候都收（#267 的 Q10）。
+  // 例外：它不起一輪，只開回饋對話框，而那個框送的 `feedback.record` 任何時候都收（#267 的 Q10）。命令在 `slash.list` 宣告過
+  // 「忙的時候也放行」的那幾行（`/goal pause`）也過得去，判斷照伺服器的宣告，不在這裡另寫文法（#1517）。
   const status = conversation.state.status;
   // `/model` 客戶端自己攔（#723）：它不起一輪、不進日誌，只改「下一步用哪顆」，所以跑著也能打，只要連著。
   const isModelLine = (line: string) =>
@@ -434,7 +435,13 @@ function ConversationView({
     isModelLine(line)
       ? conversation.connected
       : line.trim().startsWith('/')
-        ? canRunSlash(conversation.connected, status, line, FEEDBACK_COMMAND_LINE)
+        ? canRunSlash(
+            conversation.connected,
+            status,
+            line,
+            FEEDBACK_COMMAND_LINE,
+            conversation.slashCommands,
+          )
         : canSendText(conversation.connected, status, line, hasDraftAttachments);
   /**
    * 執行一行 `/model`。不是 `/model` 回 `undefined`（走一般流程）；打不開、找不到那顆回 `false`（那一行留在草稿，
@@ -628,8 +635,12 @@ function ConversationView({
             connected={conversation.connected}
             onExit={conversation.exitPlanMode}
           />
-          {/* 目標列也在換手區外面（#945）：只讀；排在計劃標籤之後、待辦面板之前。 */}
-          <GoalBar goal={conversation.state.goal} />
+          {/* 目標列也在換手區外面（#945）：停在核准點時也看得到、暫停得了（#1517）；排在計劃標籤之後、待辦面板之前。 */}
+          <GoalBar
+            goal={conversation.state.goal}
+            connected={conversation.connected}
+            onPause={conversation.pauseGoal}
+          />
           {/* 換手區外面：底下換成核准或提問面板時照樣看得到，焦點搬移也不算它（#575 Q1）。 */}
           <TodoPanel todos={conversation.state.todos} status={conversation.state.status} />
           {/* 也在換手區外面：停在核准點時排著的照樣看得到、改得到（#645 Q3、Q7）。 */}
@@ -881,7 +892,7 @@ function ConversationView({
                     }
                   : {})}
                 decorated={DECORATED_COMMANDS}
-                // 從 `/` 選單直接執行不帶參數的命令：走斜線那一道閘（跑著時只有 `/feedback` 過得去）。
+                // 從 `/` 選單直接執行不帶參數的命令：走斜線那一道閘（跑著時只有 `/feedback` 與命令宣告過的那幾行過得去，#1517）。
                 onRunCommand={(line) => {
                   if (!canSendLine(line)) {
                     return false;

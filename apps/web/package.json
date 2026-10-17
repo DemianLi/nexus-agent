@@ -46,6 +46,7 @@
   },
   "devDependencies": {
     "@nexus/core": "workspace:*",
+    "@nexus/plugin-commands": "workspace:*",
     "@tailwindcss/vite": "^4.1.16",
     "@testing-library/react": "^16.3.0",
     "@types/mdast": "^4.0.4",

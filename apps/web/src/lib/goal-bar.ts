@@ -1,10 +1,14 @@
-import type { WireGoal, WireGoalPhase } from '@nexus/wire';
+import type { CommandOutcome, GoalPauseResult, WireGoal, WireGoalPhase } from '@nexus/wire';
 
 /**
  * 輸入框上方的目標列在畫面上的判斷（[#945](https://github.com/DemianLi/nexus-agent/issues/945)）。資料是 harness 的
  * 投影 `ConversationState.goal`（#897）。
  *
  * 照 dsh 的 `GoalBar`：**有目標才畫，`complete` 與沒有目標都不畫**。`null` 是沒有目標，不分從沒建過、建了又清掉、還沒收到。
+ *
+ * **列上唯一的動作是暫停**（[#1517](https://github.com/DemianLi/nexus-agent/issues/1517)）：`active` 才給，送 `goal.pause`
+ * （#1516）。dsh 的暫停鈕要 `active` 而且 `armed` 才出現（`GoalBar.tsx:141-146`）；我們的線上沒有 activation，PM 定成
+ * **只看相位**（UI/UX，不必照 dsh 的條件）。一輪跑著、停在核准點、閒著都給：server 三種都收，跑著時當場停掉那一輪。
  *
  * **階段字不說謊**：`phase === 'active'` 是**持久相位**，不等於「正在續行」——重啟後它仍是 `active`，但可能沒在跑。
  * dsh 用 activation 區分「進行中」與「未運行」，我們的線上還沒有那一半（#638、#660、#661），所以 `active` 只寫中性的
@@ -40,6 +44,8 @@ export interface GoalBarView {
   readonly blockedReason?: string;
   /** 整列的無障礙名稱：階段、目標全文、輪數。 */
   readonly label: string;
+  /** 列上要不要給暫停鈕：相位是 `active` 才給（#1517）。 */
+  readonly pausable: boolean;
 }
 
 /** 這一刻目標列畫什麼；`undefined` 就是不畫。 */
@@ -58,5 +64,44 @@ export function goalBarView(goal: WireGoal | null): GoalBarView | undefined {
     label: [phase, goal.objective, rounds, blockedReason]
       .filter((part): part is string => part !== undefined)
       .join('，'),
+    pausable: goal.phase === 'active',
   };
+}
+
+/** 暫停鈕的名稱與 tooltip：講按下去會發生的事。 */
+export const GOAL_PAUSE_LABEL = '暫停目標';
+
+/** 斷線時暫停鈕停用的提示。 */
+export const GOAL_PAUSE_OFFLINE_HINT = '連線恢復後才能暫停';
+
+/** `goal-not-active`：按下去的時候目標已經不是 `active`，依現在的相位講。`active` 不會出現在這個碼，鍵只為了齊。 */
+const NOT_ACTIVE_TEXT = {
+  active: '目標沒有暫停成功，請再按一次。',
+  paused: '目標已經暫停了。',
+  blocked: '目標受阻，沒有在跑，不用暫停。',
+  complete: '目標已經完成了。',
+} as const satisfies Record<WireGoalPhase, string>;
+
+/**
+ * `goal.pause` 的結果換成講給人聽的一句；成功回 `undefined`（列等下行把相位翻成 `paused`，按鈕自己消失，不搶先改畫面）。
+ *
+ * - `goal-stale`：按下去那一刻看到的目標已經被改過（別的分頁、模型自己的 `update_goal`）。**不重送**——server 回錯就是
+ *   不讓後到的那一下蓋掉別人的結果；畫面隨後換成新的目標，要不要再按由人看過再決定。
+ * - `not_supported`：這台 server 沒有 goal 域。
+ * - 其餘 `rejected`（這條線收不了）照 server 的原話。
+ */
+export function goalPauseFailureText(outcome: CommandOutcome<GoalPauseResult>): string | undefined {
+  if (outcome.kind === 'rejected') {
+    return outcome.code === 'not_supported' ? '這台伺服器不支援暫停目標。' : outcome.message;
+  }
+  const { result } = outcome;
+  if (result.ok) return undefined;
+  switch (result.error.code) {
+    case 'goal-stale':
+      return '目標剛被改過，這次沒有暫停。請看過現在的目標再決定。';
+    case 'goal-not-active':
+      return NOT_ACTIVE_TEXT[result.error.phase];
+    case 'goal-not-found':
+      return '這條對話已經沒有目標了。';
+  }
 }

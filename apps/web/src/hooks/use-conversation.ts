@@ -8,7 +8,9 @@
 
 import type {
   AnswerEntry,
+  CommandOutcome,
   ConversationState,
+  GoalPauseResult,
   PromptAttachment,
   SubagentMention,
   SlashDescriptor,
@@ -49,6 +51,7 @@ import { FEEDBACK_COMMAND_LINE, FEEDBACK_COPY } from '@/lib/feedback';
 import { FramePublisher, publicationOf } from '@/lib/frame-publisher';
 import type { Publication } from '@/lib/frame-publisher';
 import { RatingsController } from '@/lib/feedback-ratings';
+import { goalPauseFailureText } from '@/lib/goal-bar';
 import { PLAN_EXIT_LINE } from '@/lib/plan-chip';
 import type { RatingsView } from '@/lib/feedback-ratings';
 import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
@@ -222,6 +225,13 @@ export interface Conversation {
    * {@link Conversation.slashNotice} 與 {@link Conversation.slashError}：那兩格是狀態列的，標籤的失敗講在標籤旁邊。
    */
   exitPlanMode(): Promise<string | undefined>;
+  /**
+   * 暫停目標（`goal.pause`，[#1517](https://github.com/DemianLi/nexus-agent/issues/1517)）：帶**畫面上當時那份**目標的身分與修訂。
+   * 一輪跑著時 server 當場停掉那一輪，停下來的事實走下行（跟按停止一樣）；相位翻成 `paused` 也走下行，這裡不自己改狀態。
+   * 結果同 {@link Conversation.exitPlanMode}：回 `undefined` 是收下了，回字串是講給人聽的失敗原因（目標剛被改過、已經不在進行、
+   * 伺服器不支援、這條線收不了）。
+   */
+  pauseGoal(goalId: string, revision: number): Promise<string | undefined>;
   /**
    * 改或刪送出佇列裡的一件（`queue.update`，#637）。**只回有沒有收下**：清單的新樣子走下行的 `inbox`，
    * 不拿回條改本地的東西。
@@ -614,6 +624,19 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     }
   }, [threadId]);
 
+  const pauseGoal = useCallback(
+    async (goalId: string, revision: number): Promise<string | undefined> => {
+      let outcome: CommandOutcome<GoalPauseResult>;
+      try {
+        outcome = await clientRef.current.goalPause(threadId, { goalId, revision });
+      } catch (error) {
+        return error instanceof Error ? error.message : String(error);
+      }
+      return goalPauseFailureText(outcome);
+    },
+    [threadId],
+  );
+
   const send = useCallback(
     async (
       text: string,
@@ -917,6 +940,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     slashCommands,
     send,
     exitPlanMode,
+    pauseGoal,
     updateQueue,
     respond,
     answer,
