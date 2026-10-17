@@ -149,7 +149,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 | 按鈕、觸發鈕、選單項不縮成說明字級 | `src/styles/type-hierarchy.test.ts` |
 | 焦點外框畫得出來 | `src/styles/focus-outline.test.ts` |
 | solid-glass 用灰色畫的焦點全部蓋掉：帶回來的 ring、欄位聚焦的邊框 | `src/styles/focus-ring-suppression.test.ts`、`src/styles/focus-line-suppression.test.ts` |
-| 出貨 CSS 在真的 Chrome 裡：焦點、欄位聚焦的邊框、每個字對實際底色的對比、陰影、不透明的退路 | `guard/guard.test.ts`（`pnpm test:guard`，要先 build） |
+| 出貨 CSS 在真的 Chrome 裡：焦點、欄位聚焦的邊框、每個字對實際底色的對比、chip 三階（warning 用量表平常狀態守狀態色 5.2）、貼在輸入框上方的卡片是平的、對話定位那一則的圓角、陰影、不透明的退路 | `guard/guard.test.ts`（`pnpm test:guard`，要先 build） |
 | vendor 的 solid-glass 沒被手改 | `src/vendor/solid-glass/vendor.test.ts` |
 | `role="status"` 只有狀態列 | `src/styles/live-region.test.ts` |
 | registry 元件上登記過的修改沒被改回去 | `src/components/ui/registry-edits.test.ts` |
