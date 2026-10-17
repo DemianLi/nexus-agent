@@ -1,7 +1,7 @@
 // @vitest-environment node
-import Color from 'colorjs.io';
 import { describe, expect, test } from 'vitest';
 
+import { surfaceContrast } from './color-math';
 import { readCascade } from './css-cascade';
 
 /**
@@ -11,10 +11,11 @@ import { readCascade } from './css-cascade';
  *
  * 目標（§5）：文字 ≥ 4.5、非文字 ≥ 3（SC 1.4.11）、狀態色對底色 5.2（產生器的解目標，讓暗色狀態色對卡片
  * 仍過 4.5）、brand 在亮色底色上 ≥ 4.5；亮暗鑑別度一樣＝表面這一層的每一對，亮暗差不超過 0.05。
+ *
+ * 量的是 token，不是元素：元件實際的底色若是 `color-mix()` 之類現場合成的，這裡看不到，由瀏覽器那一層（`guard/`）量。
  */
 
 type Theme = 'light' | 'dark';
-type Rgb = [number, number, number];
 
 const cascade = readCascade();
 
@@ -28,26 +29,20 @@ function token(theme: Theme, name: string): string | undefined {
   return cascade.computed(SELECTORS[theme], `--${name}`);
 }
 
-function parse(value: string): { rgb: Rgb; alpha: number } {
-  const color = new Color(value).to('srgb');
-  const rgb = color.coords.map((v) => Math.min(1, Math.max(0, v ?? 0))) as Rgb;
-  return { rgb, alpha: color.alpha ?? 1 };
-}
-
-/** 瀏覽器在 sRGB（gamma 編碼）上疊 alpha；半透明 token 要先疊在它實際所在的底上。 */
-function resolve(theme: Theme, name: string, on?: Rgb): Rgb {
-  const value = token(theme, name);
-  if (value === undefined) throw new Error(`${theme} 沒有 --${name}`);
-  const { rgb, alpha } = parse(value);
-  if (alpha === 1) return rgb;
-  if (on === undefined) throw new Error(`--${name} 是半透明的，要指定疊在什麼上面`);
-  return rgb.map((c, i) => c * alpha + (on[i] ?? 0) * (1 - alpha)) as Rgb;
+/**
+ * 半透明的面疊在哪裡（#1512）：頁面底色，以及頁面漸層的每一個停點（`--light-N`，本身半透明、疊在底色上）。
+ * 最差的那一疊要達標（`color-math.ts` 的 `surfaceContrast`）。
+ */
+function bases(theme: Theme): string[][] {
+  const stops = [...cascade.customProperties(SELECTORS[theme]).keys()]
+    .map((property) => /^--(light-\d+)$/.exec(property)?.[1])
+    .filter((name) => name !== undefined)
+    .sort();
+  return [['background'], ...stops.map((stop) => ['background', stop])];
 }
 
 function contrast(theme: Theme, fg: string, bg: string): number {
-  const under = resolve(theme, bg);
-  const over = resolve(theme, fg, under);
-  return new Color('srgb', over).contrast(new Color('srgb', under), 'WCAG21');
+  return surfaceContrast((name) => token(theme, name), fg, bg, bases(theme)).ratio;
 }
 
 const THEMES: Theme[] = ['light', 'dark'];

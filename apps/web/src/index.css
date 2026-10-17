@@ -19,11 +19,14 @@
 /* 測試裡的範例字串與說明文件提到的類別名也不要編成規則（裸的 `.container`、`.shadow` 會套到不相干的元素；`scripts/check-built-css.mjs` 量產物確認）。 */
 @source not './**/*.test.{ts,tsx}';
 @source not '../*.md';
-/* 只給測試用的量具（#1498）：它處理 `@container` 的字樣會被當成裸的 `.container`。 */
+/* 只給測試用的量具：`css-cascade.ts`（#1498）處理 `@container` 的字樣會被當成裸的 `.container`，`color-math.ts`（#1512）的 `blur` 會變成 `.blur`。 */
 @source not './styles/css-cascade.ts';
+@source not './styles/color-math.ts';
 /* vendor 的上游 CSS、授權與說明、同步腳本、清單：要的是 import 進來的規則，不是把裡面的字掃成 utility。`.tsx` 不排除（#1497 第 ③ 步起要掃）。 */
 @source not './vendor/**/*.{css,md,mjs,json}';
 @source not './vendor/**/LICENSE';
+/* 瀏覽器護欄的測試頁（#1512）量的是出貨的 CSS，不能讓它自己的字樣反過來改到出貨的 CSS；它也不准寫 class（`src/guard-page.test.ts`）。 */
+@source not '../guard';
 
 /*
  * 現行規則見 `.docs/web-ui-spec.md` §5–§7；兩段 `@theme` 從原型 tag `proto-375-design-language` 搬來（#401）。
