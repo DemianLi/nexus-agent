@@ -10,7 +10,7 @@ import { readCascade } from './css-cascade';
  * 手改了產物、改了產生器輸入卻忘了重跑、oklch 四捨五入吃掉邊際、後面疊上來的樣式表蓋掉了產物，都在這裡紅。
  *
  * 目標（§5）：文字 ≥ 4.5、非文字 ≥ 3（SC 1.4.11）、狀態色對底色 5.2（產生器的解目標，讓暗色狀態色對卡片
- * 仍過 4.5）、brand 在亮色底色上 ≥ 4.5；亮暗鑑別度一樣＝表面這一層的每一對，亮暗差不超過 0.05。
+ * 仍過 4.5）、brand 在亮色底色上 ≥ 4.5；亮暗鑑別度一樣＝表面這一層的每一對，亮暗差不超過 0.05（只疊在底色上）。
  *
  * 量的是 token，不是元素：元件實際的底色若是 `color-mix()` 之類現場合成的，這裡看不到，由瀏覽器那一層（`guard/`）量。
  */
@@ -41,8 +41,10 @@ function bases(theme: Theme): string[][] {
   return [['background'], ...stops.map((stop) => ['background', stop])];
 }
 
-function contrast(theme: Theme, fg: string, bg: string): number {
-  return surfaceContrast((name) => token(theme, name), fg, bg, bases(theme)).ratio;
+const ONLY_BACKGROUND = [['background']];
+
+function contrast(theme: Theme, fg: string, bg: string, under = bases(theme)): number {
+  return surfaceContrast((name) => token(theme, name), fg, bg, under).ratio;
 }
 
 const THEMES: Theme[] = ['light', 'dark'];
@@ -56,6 +58,9 @@ const TEXT: [string, string][] = [
   ['muted-foreground', 'card'],
   ['muted-foreground', 'stage'],
   ['muted-foreground', 'chip'],
+  ['muted-foreground', 'chip-hover'],
+  ['foreground', 'chip-hover'],
+  ['foreground', 'chip-pressed'],
   ['primary-foreground', 'primary'],
   ['secondary-foreground', 'secondary'],
   ['accent-foreground', 'accent'],
@@ -82,9 +87,21 @@ const NON_TEXT: [string, string][] = [
   ['brand', 'card'],
 ];
 
-const STATUS = ['destructive', 'success', 'warning', 'info'];
+/** SG 自己的 `status-*` 也算狀態色、套 5.2（demian，#1512，2026-10-17）。 */
+const STATUS = [
+  'destructive',
+  'success',
+  'warning',
+  'info',
+  'status-done',
+  'status-interrupted',
+  'status-running',
+];
 
-/** 表面這一層：亮暗要一樣分得出來。 */
+/**
+ * 表面這一層：亮暗要一樣分得出來。**只疊在 `--background` 上量**，不算漸層停點（PM，#1512）：鑑別度問的是「這一片面跟頁面分不分得開」，
+ * 面是一整片，停點只是頁面上幾處很淡的光暈（亮色 4–11%、暗色沒有）；算進去的話，亮色多了幾疊、暗色沒有，比的就不是同一件事。
+ */
 const SURFACES: [string, string][] = [
   ['card', 'background'],
   ['stage', 'card'],
@@ -93,6 +110,25 @@ const SURFACES: [string, string][] = [
   ['card-hairline', 'card'],
   ['border', 'background'],
 ];
+
+/**
+ * 按下去的 chip 與 warning 膠囊：develop 就沒到 4.5（既有缺口 #1515，⑥ 處理）。這裡只守「不比 develop 差」，
+ * 數字是 develop（c9b957b6）產物照同一套算法重算、截到小數第四位（PM，#1512）。
+ */
+const NOT_WORSE_THAN_DEVELOP: Record<Theme, [string, string, number][]> = {
+  light: [
+    ['muted-foreground', 'chip-pressed', 4.3325],
+    ['warning', 'chip', 4.0858],
+    ['warning', 'chip-hover', 4.0084],
+    ['warning', 'chip-pressed', 3.7081],
+  ],
+  dark: [
+    ['muted-foreground', 'chip-pressed', 4.2964],
+    ['warning', 'chip', 4.074],
+    ['warning', 'chip-hover', 3.9642],
+    ['warning', 'chip-pressed', 3.6952],
+  ],
+};
 
 /** oklch 寫到小數第四位，重算會比產生器的解少一點點；只容許這個量級。 */
 const ROUNDING = 0.01;
@@ -107,14 +143,32 @@ describe('產生出來的 token 達到對比度目標', () => {
       expect(contrast(theme, fg, bg)).toBeGreaterThanOrEqual(3);
     });
 
+    test.each(NOT_WORSE_THAN_DEVELOP[theme])(
+      `${theme}：%s 對 %s 不比 develop 的 %s 差（既有缺口 #1515）`,
+      (fg, bg, floor) => {
+        expect(contrast(theme, fg, bg)).toBeGreaterThanOrEqual(floor);
+      },
+    );
+
     test.each(STATUS)(`${theme}：狀態色 %s 對底色 ≥ 5.2`, (status) => {
       expect(contrast(theme, status, 'background')).toBeGreaterThanOrEqual(5.2 - ROUNDING);
     });
   }
 
-  test.each(SURFACES)('亮暗鑑別度一樣：%s 對 %s 亮暗差 ≤ 0.05', (fg, bg) => {
-    const light = contrast('light', fg, bg);
-    const dark = contrast('dark', fg, bg);
+  test('量具自檢：每一疊底都有疊到——SG 的三個漸層停點都在（少了就只量平的底色，偏寬）', () => {
+    for (const theme of THEMES) {
+      expect(bases(theme)).toEqual([
+        ['background'],
+        ['background', 'light-1'],
+        ['background', 'light-2'],
+        ['background', 'light-3'],
+      ]);
+    }
+  });
+
+  test.each(SURFACES)('亮暗鑑別度一樣：%s 對 %s 亮暗差 ≤ 0.05（只疊在底色上）', (fg, bg) => {
+    const light = contrast('light', fg, bg, ONLY_BACKGROUND);
+    const dark = contrast('dark', fg, bg, ONLY_BACKGROUND);
     expect(Math.abs(light - dark)).toBeLessThanOrEqual(0.05);
   });
 });

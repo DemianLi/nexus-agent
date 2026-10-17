@@ -6,7 +6,10 @@
 @import '@fontsource-variable/google-sans-code';
 @import '@fontsource-variable/noto-sans-tc';
 
+/* 外觀是 solid-glass（#1468、#1512）：vendor 原檔 → 產生器解過門檻的顏色 → 本地修改（機制類，layer 外）→ nexus 獨有的非顏色 token。 */
+@import './vendor/solid-glass/solid-glass.css';
 @import './styles/tokens.generated.css';
+@import './styles/solid-glass.overrides.css';
 @import './styles/theme.css';
 @import './styles/motion.css';
 @import './styles/markdown.css';

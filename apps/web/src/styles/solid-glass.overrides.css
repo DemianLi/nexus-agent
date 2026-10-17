@@ -1,0 +1,109 @@
+/*
+ * solid-glass 的本地修改（#1512，#1468 Q9）：`vendor/solid-glass/solid-glass.css` 一個字都不改，要改的寫在這裡。
+ * 這個檔在 `index.css` 裡排在 solid-glass.css 與 tokens.generated.css 後面、**每一條都在 layer 外**：
+ * 同選擇器、同 specificity 時後載入的贏，上游同步只是換檔再比對，不必把修改重新套上去。
+ * 每一條都登記在 `vendor/solid-glass/README.md` 的「本地修改」：蓋掉了上游的哪一行、為什麼、哪條測試釘住。
+ *
+ * 這裡只放「機制」（#1468 Q8）：焦點、body、程式標出來的高亮這類行為規則。外觀照 SG。
+ */
+
+/*
+ * 焦點外框：2px 文字色、offset 2px。全站只有這一種焦點樣子（#1279）。
+ *
+ * - **外框本身寫在 layer 外**：registry 的 `Button`、`Input`、`Textarea`、側欄選單鈕……都自帶 `outline-none`／`outline-hidden`，
+ *   而它們自帶的 ring 又被下面那條清掉——放在 base layer 時兩邊抵消，**鍵盤 Tab 走一輪有一半的元件看不到焦點**（#1279 量到 67 個裡 34 個）。
+ *   沒有 layer 的樣式贏過 utilities，所以 `outline-none` 擋不掉它。
+ * - **offset 留在 base layer**：外框被 `overflow-hidden` 裁掉的地方（縮圖、分頁）用 `focus-visible:-outline-offset-2` 畫進裡面，要讓 utility 贏。
+ * - **不畫外框的只有三種**：
+ *   - 程式把焦點搬到面板或題目容器（`tabindex=-1`；Radix 選單項也是，它們用底色標目前那一項）。
+ *   - **文字輸入框**（`input`、`textarea`）：滑鼠點進去也算 `:focus-visible`，而它們自己有焦點樣子——registry 的 `Input`／`Textarea`
+ *     是邊框變 `border-ring`，輸入框群組是整個群組畫外框（`ui/input-group.tsx`）。再畫一圈會變成邊框加外框的雙圈。
+ *     本專案沒有原生的 checkbox／radio（勾選框都是 Radix 的按鈕），所以整類排除不會漏掉別種控制項。
+ *   - 自己畫了別的焦點樣子、標了 `data-focus="custom"` 的（例如右側欄的拖曳把手整條變色）。
+ * - registry 自帶的 `focus-visible:ring-[3px]` 在 layer 外關掉，兩圈才不會疊在一起。
+ */
+@layer base {
+  :focus-visible {
+    outline-offset: 2px;
+  }
+
+  /*
+   * 被排除的那幾種在 base layer 各自給值，不然會掉回瀏覽器預設的藍框（#1279 拿掉舊規則時漏了，#1280 補回）：
+   * - 程式搬焦點的容器不畫。
+   * - 文字輸入框照舊畫我們的外框；registry 的 `Input`／`Textarea` 自帶 `outline-none`（utility 贏過 base），所以它們仍只有邊框變色。
+   */
+  [tabindex='-1']:focus-visible {
+    outline: none;
+  }
+
+  :is(input, textarea):focus-visible {
+    outline: 2px solid var(--ring);
+  }
+}
+
+:focus-visible:not([tabindex='-1'], input, textarea, [data-focus='custom']) {
+  outline: 2px solid var(--ring);
+}
+
+:focus-visible {
+  --tw-ring-shadow: 0 0 #0000;
+}
+
+/*
+ * SG 把 ring 帶回來的那條（`solid-glass.css:857-860`）壓回去（D′，#1512）：它的選擇器 specificity 比上面那條 `:focus-visible` 高，
+ * 光靠後載入蓋不掉，所以**照抄同一段選擇器**、同 specificity、後載入。焦點的樣子仍只有那一圈文字色的外框（Q5）。
+ * `src/styles/focus-ring-suppression.test.ts` 列舉 vendor 檔裡每一條把 ring 設成非透明的宣告，每一條都要在這裡有壓制；
+ * 上游升版多出新的，那條會紅。瀏覽器那一層（`guard/`）量聚焦後的 `box-shadow`。
+ */
+:is([class*="focus-visible:ring-3"], [class*="focus-visible:ring-[3px]"]):focus-visible:not([data-slot="input"]):not([data-slot="textarea"]):not([data-slot="select-trigger"]):not([data-slot="native-select"]):not([data-slot="sidebar-input"]):not([aria-invalid="true"]),
+[data-slot="calendar"] [data-focused="true"] > :is(button, [data-slot="button"]) {
+  --tw-ring-shadow: 0 0 #0000;
+}
+
+/*
+ * body 的字色、底色與 color-scheme 一定要寫在 layer 外面。寫在 `@layer base` 時，
+ * **沒有 layer 的樣式永遠贏過有 layer 的**：頁面被嵌進任何帶 reset 的外殼，暗色會變成黑底深字。
+ */
+:root {
+  color-scheme: light;
+}
+
+.dark {
+  color-scheme: dark;
+}
+
+body {
+  background-color: var(--background);
+  color: var(--foreground);
+}
+
+/*
+ * 「在對話裡定位」（#1033）：觀測分頁捲到對話區某一則時，那一格掛 `data-located`（`lib/transcript-locate.ts`，約 1.6 秒）。
+ * 只是靜態底色的開與關，不做動效（spec §7）；圓角跟泡泡同一階，免得底色切成直角。
+ */
+[data-slot='message-scroller-item'][data-located] {
+  background-color: var(--chip);
+  border-radius: 1.5rem;
+}
+
+/*
+ * 「看這一輪」（成本分頁跳到觀測分頁的某一輪）：那一組或那一則摘要掛 `data-revealed`（`trace/panel.tsx`，約 3 秒）。
+ * 用外框不用 ring：摘要那一則本身會被程式聚焦，它 `:focus-visible` 時，上面清 ring 的那條會把高亮一起清掉（#1279 記下、#1280 修）。
+ * 寫在 layer 外，`[tabindex='-1']` 不畫外框的那條（base layer）蓋不掉它。
+ */
+[data-revealed] {
+  outline: 2px solid var(--ring);
+  border-radius: var(--radius-md);
+}
+
+/*
+ * reduced-motion 下的進場（#1468 Q5：保留 ≤ 150ms 的透明度動畫）。SG 在 reduced-motion 下把 `.animate-float-in`／`.animate-fade-in`
+ * 整個設成 `animation: none`（`solid-glass.css` 的 utilities 層）；我們的規則是只拿掉位移與縮放、留下短的淡入，跟 `motion.css`
+ * 對 `--animate-in` 的處理一樣。寫在 layer 外，蓋得過 SG 在 utilities 層的那條。持續動畫（dot-flash、shimmer、sweep）照 SG 停掉。
+ */
+@media (prefers-reduced-motion: reduce) {
+  .animate-float-in,
+  .animate-fade-in {
+    animation: motion-fade-in var(--duration-quick) var(--ease-smooth-out);
+  }
+}

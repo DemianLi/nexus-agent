@@ -1,36 +1,62 @@
 /* global console, URL */
 /**
- * 設計 token 產生器（設計期工具，不進產品 bundle）。定稿理由見 #377 的結論留言，現行規則見
- * `.docs/web-ui-spec.md` §5；從原型 tag `proto-375-design-language` 的 `prototype-375/tokengen/` 搬來（#401）。
+ * 設計 token 產生器（設計期工具，不進產品 bundle）。現行規則見 `.docs/web-ui-spec.md` §5。
  *
- * 用法：`pnpm --filter @nexus/web tokens:gen`。改色就改這裡的輸入，重跑，把兩個產物一起 commit；
- * 建置不跑這支，CI 只由 `src/styles/tokens-contrast.test.ts` 重算對比度。
+ * 用法：`pnpm --filter @nexus/web tokens:gen`。改色就改這裡（或 `sg-input.mjs`）的輸入，重跑，把兩個產物一起 commit；
+ * 建置不跑這支，CI 由 `src/styles/tokens-contrast.test.ts` 與 `src/styles/tokens-generated.test.ts` 重算。
  *
- * 分工（demian 拍板 Q42／Q43，實作時發現表面層要拆開）：
- * - 文字、brand、狀態色：Leonardo（@adobe/leonardo-contrast-colors）對「底色」解目標對比度，亮暗共用同一組數字。
- * - 表面（卡片、sidebar、chip）：也用 Leonardo 對底色解，但亮色卡片比底色亮、暗色也比底色亮，
- *   在 Leonardo 的符號裡是一負一正，所以數字共用、符號分主題寫。
- * - 不是「對底色」的配對（stage 對卡片、細線環對卡片、分隔線 alpha）：Leonardo 表達不了，用 colorjs.io 逐對二分解。
- * - 起算點是原型修過、demian 認可的那一版（Q43），先量出來再當目標。
+ * #1512（#1468 Q10）起，外觀照 solid-glass（SG），這支只產出**要覆寫 SG 的 token**，SG 沒改的值不重複寫：
+ * 1. **SG 不達標的顏色**：以 SG 的值為起點、Q5 的下限當約束，只動不達標的，只動到剛好達標（PM 定的讀法）。
+ *    解法照 demian 選的 B 案（#1512，2026-10-17）：色相照 SG，彩度先夾進 sRGB 邊界，再以 0.001 為步長往對比變大的方向
+ *    解明度，停在第一個達標的值。夾進 sRGB 是為了「畫的就是量的」：對比在 sRGB 上算，超出 sRGB 的顏色在 P3 螢幕上畫出來
+ *    跟量到的不一樣。對比都疊到最差的那一疊底上算（SG 底色＋每個漸層停點；卡片是半透明的面再疊上去），同 gate。
+ * 2. **SG 表面的亮暗鑑別度**：亮暗差 ≤ 0.05，只疊在 `--background` 上量；不達標時只調亮色、暗色不動（PM 定）。
+ * 3. **nexus 獨有的 token**（留到 #1497 第 ⑥ 步再整理，Q11）：保留原本的目標，改成對 SG 的底色重解。
+ * 4. `--ring`／`--sidebar-ring`＝字色（Q5：焦點外框用文字色）。
+ *
+ * 亮暗**一定成對**：只在一個主題調整的 token，另一個主題也寫一份（值照 SG）。`.dark` 掛在 `<html>` 上，跟 `:root`
+ * 落在同一個元素、同 specificity，只寫 `:root` 的話暗色會吃到亮色的值。覆寫了 SG 在 reduced-transparency 底下也給值的
+ * token，就照樣把那段重寫在後面（無條件的覆寫排在 SG 後面，會蓋掉它的不透明值）。
  *
  * 輸出：`src/styles/tokens.generated.css`（oklch）＋ `tokengen/token-table.md`（值與對比度表）。
  */
 
-import { BackgroundColor, Color as LeoColor, Theme } from '@adobe/leonardo-contrast-colors';
 import Color from 'colorjs.io';
 import { writeFileSync } from 'node:fs';
 
+import { SG, SG_REDUCED_TRANSPARENCY } from './sg-input.mjs';
+
 const out = (rel) => new URL(rel, import.meta.url);
+const THEMES = ['light', 'dark'];
 
-// ── 基本工具 ──
+// ── 基本工具（同 `src/styles/color-math.ts`：sRGB 逐通道裁切、在 gamma 編碼上疊 alpha） ──
 
-const srgb = (css) => new Color(css).to('srgb').coords.map((v) => Math.min(1, Math.max(0, v)));
+/** 任何 CSS 顏色 → sRGB 三通道（逐通道裁切）與 alpha。 */
+function parse(css) {
+  const c = new Color(css);
+  return {
+    rgb: c
+      .to('srgb')
+      .coords.map((v) => (Number.isNaN(v) ? 0 : Math.min(1, Math.max(0, v)))),
+    alpha: c.alpha ?? 1,
+  };
+}
+const srgb = (css) => parse(css).rgb;
 const hex = (rgb) => new Color('srgb', rgb).toString({ format: 'hex' });
 
 /** 瀏覽器在 sRGB（gamma 編碼）上疊 alpha。 */
 const over = (fgRgb, alpha, bgRgb) => fgRgb.map((f, i) => f * alpha + bgRgb[i] * (1 - alpha));
+const composite = (css, underRgb) => {
+  const { rgb, alpha } = parse(css);
+  return over(rgb, alpha, underRgb);
+};
 
 const wcag = (a, b) => new Color('srgb', a).contrast(new Color('srgb', b), 'WCAG21');
+
+/** 字（可能半透明）疊在每一個底上的對比，取最差的。 */
+const worst = (css, unders) => Math.min(...unders.map((u) => wcag(composite(css, u), u)));
+
+const inSrgb = (css) => new Color(css).inGamut('srgb');
 
 function oklch(rgb, alpha = 1) {
   const [l, c, h] = new Color('srgb', rgb).to('oklch').coords;
@@ -40,6 +66,13 @@ function oklch(rgb, alpha = 1) {
   return alpha === 1
     ? `oklch(${L} ${C} ${H})`
     : `oklch(${L} ${C} ${H} / ${Number(alpha.toFixed(3))})`;
+}
+
+/** `oklch(L C H[ / A])` 拆開；A 原樣保留（`60%`）。 */
+function lch(css) {
+  const m = /^oklch\(\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*(?:\/\s*([\d.]+%?))?\s*\)$/.exec(css);
+  if (m === null) throw new Error(`不是 oklch(L C H[ / A])：${css}`);
+  return { L: Number(m[1]), C: Number(m[2]), H: m[3], alpha: m[4] };
 }
 
 /** 在 [lo,hi] 上二分，找讓 f(x) 最接近 target 的 x；f 必須單調。 */
@@ -66,7 +99,41 @@ function solveAlpha(baseRgb, onRgb, target) {
   return Math.round(a * 1000) / 1000;
 }
 
-// ── 起算點：原型修過、demian 認可的值（eb800a1 的 tokens.css） ──
+/** (L, H) 上 sRGB 內、不超過 `max` 的最大彩度（往下取到 0.001）。 */
+function fitChroma(L, max, H) {
+  if (inSrgb(`oklch(${L} ${max} ${H})`)) return max;
+  let lo = 0;
+  let hi = max;
+  for (let i = 0; i < 40; i++) {
+    const mid = (lo + hi) / 2;
+    if (inSrgb(`oklch(${L} ${mid} ${H})`)) lo = mid;
+    else hi = mid;
+  }
+  return Math.floor(lo * 1000) / 1000;
+}
+
+/** B 案：從明度 `start` 起每次推 `step`（0.001，彩度每一步重新夾進 sRGB），回傳第一個讓 `pass` 成立的值。 */
+function solveB({ C, H }, start, step, pass) {
+  for (let L = Math.round(start * 1000) / 1000; L >= 0 && L <= 1; L = Number((L + step).toFixed(3))) {
+    const css = `oklch(${L} ${fitChroma(L, C, H)} ${H})`;
+    if (pass(css)) return css;
+  }
+  throw new Error(`解不出來：色相 ${H}、彩度 ${C}`);
+}
+
+// ── 底：SG 的頁面底色與漸層停點 ──
+
+const BASE = {};
+for (const theme of THEMES) {
+  const s = SG[theme];
+  const bg = srgb(s.background);
+  const pages = [bg, ...['light-1', 'light-2', 'light-3'].map((stop) => composite(s[stop], bg))];
+  BASE[theme] = { bg, pages };
+}
+/** 半透明的面疊在每一疊頁面底上。 */
+const facesOn = (theme, face) => BASE[theme].pages.map((page) => composite(face, page));
+
+// ── nexus 獨有的目標：原型修過、demian 認可的那一版（eb800a1 的 tokens.css）量出來的，亮暗取較強的那個 ──
 
 const PROTO = {
   light: {
@@ -74,280 +141,283 @@ const PROTO = {
     card: srgb('#ffffff'),
     stage: srgb('#f9f9f9'),
     chip: srgb('#ececec'),
-    sidebar: srgb('#f2f2f2'),
-    fg: srgb('#1a1a1a'),
-    mutedFg: srgb('#6c6c6c'),
     hairline: [srgb('#000000'), 0.14],
-    border: [srgb('#000000'), 0.07],
   },
   dark: {
     bg: srgb('#121212'),
     card: srgb('#181818'),
     stage: srgb('#131313'),
     chip: over(srgb('#ffffff'), 0.07, srgb('#181818')),
-    sidebar: srgb('#121212'),
-    fg: srgb('#ededed'),
-    mutedFg: over(srgb('#cacaca'), 0.7, srgb('#121212')),
     hairline: [srgb('#c4c4c4'), 0.08],
-    border: [srgb('#ffffff'), 0.06],
   },
 };
-
 const measured = {};
-for (const theme of ['light', 'dark']) {
+for (const theme of THEMES) {
   const p = PROTO[theme];
   measured[theme] = {
-    'card 對 底色': wcag(p.card, p.bg),
     'stage 對 卡片': wcag(p.stage, p.card),
     'chip 對 底色': wcag(p.chip, p.bg),
-    'sidebar 對 底色': wcag(p.sidebar, p.bg),
     '細線環 對 卡片': wcag(over(p.hairline[0], p.hairline[1], p.card), p.card),
-    '分隔線 對 底色': wcag(over(p.border[0], p.border[1], p.bg), p.bg),
-    '文字 對 底色': wcag(p.fg, p.bg),
-    '次要文字 對 底色': wcag(p.mutedFg, p.bg),
   };
 }
-
-// ── 目標：亮暗共用。邊界類取兩主題中較強的那個（兩邊 demian 都看過，取弱的會讓另一邊退步），文字同理 ──
-
 const round2 = (x) => Math.round(x * 100) / 100;
 const both = (key) => round2(Math.max(measured.light[key], measured.dark[key]));
-const T = {
-  card: both('card 對 底色'),
-  stage: both('stage 對 卡片'),
-  chip: both('chip 對 底色'),
-  sidebar: both('sidebar 對 底色'),
-  hairline: both('細線環 對 卡片'),
-  border: both('分隔線 對 底色'),
-  fg: both('文字 對 底色'),
-  mutedFg: both('次要文字 對 底色'),
-  brandMin: 4.5,
-  status: 5.2,
-};
 // chip 的 hover／pressed：照 Libraries.dev 亮色的階梯比例（#f4f4f4 → #f1f1f1 → #eae9e9 對白卡）往上加
 const LIB_STEP = {
   hover: wcag(srgb('#f1f1f1'), [1, 1, 1]) / wcag(srgb('#f4f4f4'), [1, 1, 1]),
   pressed: wcag(srgb('#eae9e9'), [1, 1, 1]) / wcag(srgb('#f4f4f4'), [1, 1, 1]),
 };
-T.chipHover = round2(T.chip * LIB_STEP.hover);
-T.chipPressed = round2(T.chip * LIB_STEP.pressed);
+const T = {
+  stage: both('stage 對 卡片'),
+  chip: both('chip 對 底色'),
+  hairline: both('細線環 對 卡片'),
+  text: 4.5,
+  status: 5.2,
+  surfaceDiff: 0.05,
+};
+/**
+ * chip 三階（chip／hover／pressed）上有次要文字（選單項、標籤、用量鈕），目標被下面三條約束壓住，取最嚴的那條（PM，#1512）：
+ * - 次要文字對 chip、對 chip-hover ≥ 4.5：Q5 的文字下限是硬約束，原型的目標只是過渡期的偏好。
+ * - 次要文字對 chip-pressed ≥ develop 當時的值（亮暗各自算）：develop 本來就不到 4.5，是既有缺口（第 ⑥ 步處理）；
+ *   這一版不能比 develop 差。
+ * hover／pressed 照 Libraries.dev 的階梯比例跟著 chip 走。每條約束各換算成 chip 目標的上限，取最小的；
+ * 再用四捨五入後的實際字串逐條驗一次，不過就往下推 0.0001。
+ */
+const DEVELOP_PRESSED = {
+  // develop（c9b957b6）的 `--muted-foreground` 對 `--chip-pressed`，用當時產物的字串算精確值。
+  light: { muted: 'oklch(0.4819 0 0)', pressed: 'oklch(0.8669 0 0)' },
+  dark: { muted: 'oklch(0.6633 0 0)', pressed: 'oklch(0.3092 0 0)' },
+};
+const chipAway = (theme) => (theme === 'light' ? 'darker' : 'lighter'); // chip：亮色比底色暗、暗色比底色亮
+const CHIP_RULES = THEMES.flatMap((theme) => {
+  const developPressed = wcag(srgb(DEVELOP_PRESSED[theme].muted), srgb(DEVELOP_PRESSED[theme].pressed));
+  return [
+    { theme, step: 'chip', factor: 1, min: T.text, why: '次要文字對 chip ≥ 4.5' },
+    { theme, step: 'chip-hover', factor: LIB_STEP.hover, min: T.text, why: '次要文字對 chip-hover ≥ 4.5' },
+    {
+      theme,
+      step: 'chip-pressed',
+      factor: LIB_STEP.pressed,
+      min: developPressed,
+      why: `次要文字對 chip-pressed ≥ develop 的 ${developPressed.toFixed(4)}`,
+    },
+  ];
+});
+/** 這條約束換算成 chip 目標的上限：次要文字對它剛好等於門檻的那個灰，對底色的對比，除以階梯比例。 */
+function chipCap(rule) {
+  const bg = srgb(SG[rule.theme].background);
+  const muted = srgb(SG[rule.theme]['muted-foreground']);
+  const gray = solveGray(muted, rule.min, rule.theme === 'light' ? 'lighter' : 'darker');
+  return wcag(gray, bg) / rule.factor;
+}
+function chipSteps(theme, target) {
+  const bg = srgb(SG[theme].background);
+  return {
+    chip: oklch(solveGray(bg, target, chipAway(theme))),
+    'chip-hover': oklch(solveGray(bg, target * LIB_STEP.hover, chipAway(theme))),
+    'chip-pressed': oklch(solveGray(bg, target * LIB_STEP.pressed, chipAway(theme))),
+  };
+}
+const chipOk = (target) =>
+  CHIP_RULES.every(
+    (rule) =>
+      wcag(srgb(SG[rule.theme]['muted-foreground']), srgb(chipSteps(rule.theme, target)[rule.step])) >= rule.min,
+  );
+const caps = CHIP_RULES.map((rule) => ({ ...rule, cap: chipCap(rule) }));
+const binding = caps.reduce((a, b) => (b.cap < a.cap ? b : a));
+T.chipFromProto = T.chip;
+T.chip = Math.min(T.chip, Math.floor(binding.cap * 10000) / 10000);
+while (!chipOk(T.chip)) T.chip = Number((T.chip - 0.0001).toFixed(4));
+T.chipBinding = T.chip < T.chipFromProto ? `${binding.theme === 'light' ? '亮' : '暗'}色${binding.why}` : '原型目標';
 
-// ── Leonardo：挑底色 lightness，讓底色最接近原型 ──
-
-const NEUTRAL_KEYS = ['#000000', '#ffffff'];
-const tw = (css) => hex(srgb(css));
-const STATUS_KEYS = {
-  destructive: [
-    tw('oklch(80.8% 0.114 19.571)'),
-    tw('oklch(63.7% 0.237 25.331)'),
-    tw('oklch(44.4% 0.177 26.899)'),
-  ],
-  success: [
-    tw('oklch(87.1% 0.15 154.449)'),
-    tw('oklch(62.7% 0.194 149.214)'),
-    tw('oklch(44.8% 0.119 151.328)'),
-  ],
-  warning: [
-    tw('oklch(87.9% 0.169 91.605)'),
-    tw('oklch(66.6% 0.179 58.318)'),
-    tw('oklch(47.3% 0.137 46.201)'),
-  ],
-  info: [
-    tw('oklch(80.9% 0.105 251.813)'),
-    tw('oklch(54.6% 0.245 262.881)'),
-    tw('oklch(42.4% 0.199 265.638)'),
-  ],
+/** warning／info 的色相與彩度：沿用上一版產生器（Leonardo 對舊底色解出來的）的值，明度對 SG 底色重解。 */
+const NEXUS_HUE = {
+  light: {
+    warning: { C: 0.1458, H: '47.41' },
+    info: { C: 0.2414, H: '263.16' },
+  },
+  dark: {
+    warning: { C: 0.1635, H: '52.25' },
+    info: { C: 0.1995, H: '258.86' },
+  },
 };
 
-function leonardo(theme, lightness) {
-  const cardSign = theme === 'light' ? -1 : 1; // 亮色卡片比底色亮＝負方向；暗色卡片也比底色亮＝正方向
-  const neutral = new BackgroundColor({
-    name: 'neutral',
-    colorKeys: NEUTRAL_KEYS,
-    colorSpace: 'RGB',
-    ratios: {
-      card: cardSign * T.card,
-      sidebar: T.sidebar,
-      chip: T.chip,
-      chipHover: T.chipHover,
-      chipPressed: T.chipPressed,
-      foreground: T.fg,
-      mutedForeground: T.mutedFg,
-    },
-  });
-  const colors = [neutral];
-  if (theme === 'light') {
-    colors.push(
-      new LeoColor({
-        name: 'brand',
-        colorKeys: ['#0073e5'],
-        colorSpace: 'OKLCH',
-        ratios: { brand: 4.6 },
-      }),
-    );
+/** 不是對比目標、照舊保留的值（留到第 ⑥ 步）。 */
+const KEEP = {
+  light: { 'primary-hover': 'oklch(0.285 0 0)', 'primary-active': 'oklch(0 0 0)' },
+  dark: { 'primary-hover': 'oklch(0.931 0 0)', 'primary-active': 'oklch(0.8822 0 0)' },
+};
+
+// ── 1. SG 表面：亮暗鑑別度（只疊在 --background 上量，只調亮色） ──
+
+const surfaceOnBg = (theme, css) => wcag(composite(css, BASE[theme].bg), BASE[theme].bg);
+const SURFACE = { light: {}, dark: {} };
+for (const name of ['card', 'border', 'sidebar']) {
+  const dark = surfaceOnBg('dark', SG.dark[name]);
+  const ok = (css) => Math.abs(surfaceOnBg('light', css) - dark) <= T.surfaceDiff;
+  let light = SG.light[name];
+  if (!ok(light)) {
+    const { L, C, H, alpha } = lch(light);
+    const at = (x) => `oklch(${x} ${C} ${H}${alpha ? ` / ${alpha}` : ''})`;
+    let found;
+    for (let k = 1; k <= 300 && found === undefined; k++) {
+      for (const dir of [1, -1]) {
+        const x = Number((L + dir * k * 0.001).toFixed(3));
+        if (x >= 0 && x <= 1 && ok(at(x))) {
+          found = at(x);
+          break;
+        }
+      }
+    }
+    if (found === undefined) throw new Error(`--${name} 的亮暗差解不出來`);
+    light = found;
   }
-  for (const [name, keys] of Object.entries(STATUS_KEYS)) {
-    colors.push(
-      new LeoColor({ name, colorKeys: keys, colorSpace: 'OKLCH', ratios: { [name]: T.status } }),
-    );
-  }
-  const out = new Theme({ colors, backgroundColor: neutral, lightness, output: 'HEX' })
-    .contrastColors;
-  const map = { background: srgb(out[0].background) };
-  for (const group of out.slice(1)) for (const v of group.values) map[v.name] = srgb(v.value);
-  return map;
+  SURFACE.light[name] = light;
+  SURFACE.dark[name] = SG.dark[name];
 }
 
-function pickLightness(theme) {
-  const want = PROTO[theme].bg;
-  let best;
-  for (let l = 0; l <= 100; l++) {
-    const bg = leonardo(theme, l).background;
-    const d = Math.abs(bg[0] - want[0]);
-    if (best === undefined || d < best.d) best = { l, d };
-  }
-  return best.l;
-}
+// ── 2. nexus 獨有的表面：對 SG 的底色（stage、細線對「卡片疊在底色上」）重解 ──
 
-const silence = console.warn;
-console.warn = () => {};
-const L = { light: pickLightness('light'), dark: pickLightness('dark') };
-const leo = { light: leonardo('light', L.light), dark: leonardo('dark', L.dark) };
-console.warn = silence;
-
-// ── 組 token ──
-
-const WHITE = [1, 1, 1];
-const tokens = {};
-const pairs = {};
-
-for (const theme of ['light', 'dark']) {
-  const g = leo[theme];
-  const bg = g.background;
-  const card = g.card;
-  const stage = solveGray(card, T.stage, 'darker');
+const NEXUS_SURFACE = { light: {}, dark: {} };
+for (const theme of THEMES) {
+  const bg = BASE[theme].bg;
+  const cardOnBg = composite(SURFACE[theme].card, bg);
   const hairBase = theme === 'light' ? [0, 0, 0] : srgb('#c4c4c4');
-  const hairAlpha = solveAlpha(hairBase, card, T.hairline);
-  const borderBase = theme === 'light' ? [0, 0, 0] : WHITE;
-  const borderAlpha = solveAlpha(borderBase, bg, T.border);
-  const brand = theme === 'light' ? g.brand : srgb('#55cfff');
-  const brandSoftAlpha = theme === 'light' ? 0.09 : 0.12; // Libraries.dev --accent-soft
-  const primary = theme === 'light' ? srgb('#171717') : WHITE; // Libraries.dev .skill-btn--primary 是 #17181c，帶一點藍；Q25 定 primary 無彩，取同亮度的灰
-  const primaryHover = theme === 'light' ? srgb('#2a2a2a') : srgb('#e8e8e8');
-  const primaryActive = theme === 'light' ? [0, 0, 0] : srgb('#d8d8d8');
-  const primaryFg = theme === 'light' ? WHITE : srgb('#0d0d0d');
-  const hairOnCard = over(hairBase, hairAlpha, card);
-
-  const t = {
-    background: oklch(bg),
-    foreground: oklch(g.foreground),
-    card: oklch(card),
-    'card-foreground': oklch(g.foreground),
-    popover: oklch(card),
-    'popover-foreground': oklch(g.foreground),
-    primary: oklch(primary),
-    'primary-foreground': oklch(primaryFg),
-    'primary-hover': oklch(primaryHover),
-    'primary-active': oklch(primaryActive),
-    secondary: oklch(g.chip),
-    'secondary-foreground': oklch(g.foreground),
-    muted: oklch(g.chip),
-    'muted-foreground': oklch(g.mutedForeground),
-    accent: oklch(g.chipHover),
-    'accent-foreground': oklch(g.foreground),
-    destructive: oklch(g.destructive),
-    success: oklch(g.success),
-    warning: oklch(g.warning),
-    info: oklch(g.info),
-    border: oklch(borderBase, borderAlpha),
-    input: oklch(hairBase, hairAlpha),
-    ring: oklch(g.foreground),
-    brand: oklch(brand),
-    'brand-soft': oklch(brand, brandSoftAlpha),
-    stage: oklch(stage),
-    chip: oklch(g.chip),
-    'chip-hover': oklch(g.chipHover),
-    'chip-pressed': oklch(g.chipPressed),
-    'card-hairline': oklch(hairBase, hairAlpha),
-    sidebar: oklch(g.sidebar),
-    'sidebar-foreground': oklch(g.foreground),
-    'sidebar-primary': oklch(primary),
-    'sidebar-primary-foreground': oklch(primaryFg),
-    'sidebar-accent': oklch(g.chip),
-    'sidebar-accent-foreground': oklch(g.foreground),
-    'sidebar-border': oklch(borderBase, borderAlpha),
-    'sidebar-ring': oklch(g.foreground),
+  NEXUS_SURFACE[theme] = {
+    stage: oklch(solveGray(cardOnBg, T.stage, 'darker')),
+    ...chipSteps(theme, T.chip),
+    'card-hairline': oklch(hairBase, solveAlpha(hairBase, cardOnBg, T.hairline)),
   };
-  tokens[theme] = t;
+}
 
-  const fgOn = (fg, name, on) => [name, wcag(fg, on)];
-  pairs[theme] = {
-    邊界: [
-      ['卡片填色 對 底色', wcag(card, bg)],
-      ['卡片細線環 對 卡片', wcag(hairOnCard, card)],
-      ['卡片細線環 對 底色', wcag(over(hairBase, hairAlpha, bg), bg)],
-      ['stage 對 卡片', wcag(stage, card)],
-      ['chip 對 底色', wcag(g.chip, bg)],
-      ['chip 對 卡片', wcag(g.chip, card)],
-      ['sidebar 對 底色', wcag(g.sidebar, bg)],
-      ['分隔線 對 底色', wcag(over(borderBase, borderAlpha, bg), bg)],
-    ],
-    文字: [
-      fgOn(g.foreground, '文字 對 底色', bg),
-      fgOn(g.foreground, '文字 對 chip', g.chip),
-      fgOn(g.mutedForeground, '次要文字 對 底色', bg),
-      fgOn(g.mutedForeground, '次要文字 對 卡片', card),
-      fgOn(g.mutedForeground, '次要文字 對 stage', stage),
-      fgOn(g.mutedForeground, '次要文字 對 chip', g.chip),
-      fgOn(brand, 'brand 對 底色', bg),
-      fgOn(brand, 'brand 對 卡片', card),
-      fgOn(g.destructive, 'destructive 對 卡片', card),
-      fgOn(g.success, 'success 對 卡片', card),
-      fgOn(g.warning, 'warning 對 卡片', card),
-      fgOn(g.info, 'info 對 卡片', card),
-      fgOn(primaryFg, '主按鈕文字 對 主按鈕', primary),
-    ],
-    非文字: [
-      ['焦點外框（文字色）對 底色', wcag(g.foreground, bg)],
-      ['焦點外框（文字色）對 卡片', wcag(g.foreground, card)],
-      ['brand 邊框光 對 卡片', wcag(brand, card)],
-      ['destructive 對 底色', wcag(g.destructive, bg)],
-      ['warning 對 底色', wcag(g.warning, bg)],
-    ],
-  };
+// ── 3. 顏色：SG 不達標的照 B 案解；nexus 獨有的照原目標重解 ──
+
+/** 每個顏色的約束：對頁面（每一疊）、對卡片（每一疊）、對 stage。沒寫的那一面不約束。 */
+const RULES = {
+  brand: { page: T.text, card: T.text, stage: T.text },
+  destructive: { page: T.status, card: T.text, stage: T.text },
+  success: { page: T.status, card: T.text, stage: T.text },
+  // SG 自己的狀態色也套 5.2（demian，#1512，2026-10-17）。
+  'status-done': { page: T.status, card: T.text },
+  'status-interrupted': { page: T.status, card: T.text },
+  'status-running': { page: T.status, card: T.text },
+  link: { page: T.text, card: T.text },
+  warning: { page: T.status, card: T.text, stage: T.text },
+  info: { page: T.status, card: T.text, stage: T.text },
+};
+const SG_COLORS = ['brand', 'destructive', 'success', 'status-done', 'status-interrupted', 'status-running', 'link'];
+
+function passes(theme, name, css) {
+  const rule = RULES[name];
+  const stage = srgb(NEXUS_SURFACE[theme].stage);
+  return (
+    (rule.page === undefined || worst(css, BASE[theme].pages) >= rule.page) &&
+    (rule.card === undefined || worst(css, facesOn(theme, SURFACE[theme].card)) >= rule.card) &&
+    (rule.stage === undefined || worst(css, [stage]) >= rule.stage)
+  );
+}
+
+/** 往對比變大的方向：亮色往暗、暗色往亮。 */
+const toward = (theme) => (theme === 'light' ? -0.001 : 0.001);
+
+const COLOR = { light: {}, dark: {} };
+for (const theme of THEMES) {
+  for (const name of SG_COLORS) {
+    const sg = SG[theme][name];
+    COLOR[theme][name] = passes(theme, name, sg)
+      ? sg
+      : solveB(lch(sg), lch(sg).L, toward(theme), (css) => passes(theme, name, css));
+  }
+  for (const name of ['warning', 'info']) {
+    // 原目標重解：從對比最小的那一端（亮色從最亮、暗色從最暗）往回推，停在第一個達標的值，也就是最接近目標的那個。
+    COLOR[theme][name] = solveB(NEXUS_HUE[theme][name], theme === 'light' ? 1 : 0, toward(theme), (css) =>
+      passes(theme, name, css),
+    );
+  }
+}
+
+// ── 組產物：跟 SG 不一樣的才寫，亮暗成對 ──
+
+const solved = (theme, name) => COLOR[theme][name] ?? SURFACE[theme][name];
+const overridden = [...SG_COLORS, 'card', 'border', 'sidebar'].filter((name) =>
+  THEMES.some((theme) => solved(theme, name) !== SG[theme][name]),
+);
+
+const tokens = { light: {}, dark: {} };
+for (const theme of THEMES) {
+  const t = tokens[theme];
+  for (const name of overridden) t[name] = solved(theme, name);
+  Object.assign(t, KEEP[theme]);
+  t.warning = COLOR[theme].warning;
+  t.info = COLOR[theme].info;
+  const brand = lch(solved(theme, 'brand'));
+  t['brand-soft'] = `oklch(${brand.L} ${brand.C} ${brand.H} / ${theme === 'light' ? 0.09 : 0.12})`; // Libraries.dev --accent-soft
+  Object.assign(t, NEXUS_SURFACE[theme]);
+  t.ring = SG[theme].foreground;
+  t['sidebar-ring'] = SG[theme].foreground;
+}
+
+// ── 自檢：解出來的值都在 sRGB 內（SG 原樣搬來的不算，由 `tokens-generated.test.ts` 的具名例外管） ──
+
+for (const theme of THEMES) {
+  for (const [name, css] of Object.entries(tokens[theme])) {
+    if (css !== SG[theme][name] && !inSrgb(css)) throw new Error(`${theme} --${name} 超出 sRGB：${css}`);
+  }
 }
 
 // ── 輸出 CSS ──
 
-const css = (sel, t) =>
-  `${sel} {\n${Object.entries(t)
-    .map(([k, v]) => `  --${k}: ${v};`)
-    .join('\n')}\n}\n`;
+const block = (sel, t, indent = '') =>
+  `${indent}${sel} {\n${Object.entries(t)
+    .map(([k, v]) => `${indent}  --${k}: ${v};`)
+    .join('\n')}\n${indent}}\n`;
+const reduced = Object.keys(SG_REDUCED_TRANSPARENCY.light).filter((name) => name in tokens.light);
+const pick = (theme) => Object.fromEntries(reduced.map((n) => [n, SG_REDUCED_TRANSPARENCY[theme][n]]));
+const reducedBlock =
+  reduced.length === 0
+    ? ''
+    : `\n/* 覆寫了 SG 在 reduced-transparency 底下也給值的 token：照樣重寫，不然上面無條件的值會蓋掉它的不透明值。 */\n` +
+      `${SG_REDUCED_TRANSPARENCY.condition} {\n${block(':root', pick('light'), '  ')}${block('.dark', pick('dark'), '  ')}}\n`;
 writeFileSync(
   out('../src/styles/tokens.generated.css'),
-  `/* 由 tokengen/generate.mjs 產生（Leonardo 底色 lightness：亮 ${L.light}、暗 ${L.dark}），不要手改。 */\n\n` +
-    css(':root', tokens.light) +
+  `/* 由 tokengen/generate.mjs 產生，不要手改。只放要覆寫 solid-glass 的 token，亮暗成對（#1512）。 */\n\n` +
+    block(':root', tokens.light) +
     '\n' +
-    css('.dark', tokens.dark),
+    block('.dark', tokens.dark) +
+    reducedBlock,
 );
 
 // ── 輸出表格 ──
 
 const f = (x) => x.toFixed(2);
-let md = `## 起算點：原型（eb800a1）量到的對比度\n\n| 配對 | 亮 | 暗 |\n| --- | --- | --- |\n`;
-for (const k of Object.keys(measured.light))
-  md += `| ${k} | ${f(measured.light[k])} | ${f(measured.dark[k])} |\n`;
-md += `\n## 共用目標（亮暗同一組）\n\n| 目標 | 值 |\n| --- | --- |\n`;
-for (const [k, v] of Object.entries(T)) md += `| ${k} | ${typeof v === 'number' ? f(v) : v} |\n`;
-md += `\nLeonardo 底色 lightness：亮 ${L.light}（${hex(leo.light.background)}）、暗 ${L.dark}（${hex(leo.dark.background)}）；卡片 亮 ${hex(leo.light.card)}、暗 ${hex(leo.dark.card)}。\n`;
-for (const group of ['邊界', '文字', '非文字']) {
-  md += `\n## ${group}\n\n| 配對 | 亮 | 暗 | 差 |\n| --- | --- | --- | --- |\n`;
-  pairs.light[group].forEach(([name, v], i) => {
-    const d = pairs.dark[group][i][1];
-    md += `| ${name} | ${f(v)} | ${f(d)} | ${f(Math.abs(v - d))} |\n`;
-  });
+const theme2 = (theme) => (theme === 'light' ? '亮' : '暗');
+let md = `## 目標\n\n| 目標 | 值 | 出處 |\n| --- | --- | --- |\n`;
+md += `| 文字 | ${f(T.text)} | Q5 |\n| 狀態色對頁面 | ${f(T.status)} | Q5；SG 的 status-* 也套（#1512） |\n| 表面亮暗差 | ≤ ${T.surfaceDiff} | Q5 |\n`;
+md += `| stage 對 卡片 | ${f(T.stage)} | 原型 eb800a1，亮暗取強 |\n| chip 對 底色 | ${T.chip.toFixed(4)} | 原型 ${f(T.chipFromProto)}；綁住的約束：${T.chipBinding}（#1512） |\n`;
+md += `| chip-hover／pressed 對 底色 | ${(T.chip * LIB_STEP.hover).toFixed(4)}／${(T.chip * LIB_STEP.pressed).toFixed(4)} | Libraries.dev 的階梯比例 |\n| 細線環 對 卡片 | ${f(T.hairline)} | 原型 eb800a1，亮暗取強 |\n`;
+md += `\nchip 三階上的次要文字（約束見產生器）：\n\n| 約束 | 上限換算成 chip 目標 | 產物上的實際值 |\n| --- | --- | --- |\n`;
+for (const c of caps)
+  md += `| ${c.theme === 'light' ? '亮' : '暗'}：${c.why} | ${c.cap.toFixed(4)} | ${wcag(srgb(SG[c.theme]['muted-foreground']), srgb(chipSteps(c.theme, T.chip)[c.step])).toFixed(4)} |\n`;
+md += `\n顏色的對比疊在最差的那一疊底上算：SG 底色＋每個漸層停點；卡片是半透明的面再疊上去。表面鑑別度只疊在底色上。\n`;
+md += `\n## 顏色（取最差的一疊）\n\n| token | 主題 | SG | 產物 | 對頁面 | 對卡片 | 對 stage |\n| --- | --- | --- | --- | --- | --- | --- |\n`;
+for (const name of Object.keys(RULES)) {
+  for (const theme of THEMES) {
+    const css = COLOR[theme][name];
+    const stage = srgb(NEXUS_SURFACE[theme].stage);
+    md += `| \`--${name}\` | ${theme2(theme)} | ${name in SG[theme] ? `\`${SG[theme][name]}\`` : '—'} | \`${css}\` | ${f(worst(css, BASE[theme].pages))} | ${f(worst(css, facesOn(theme, SURFACE[theme].card)))} | ${f(worst(css, [stage]))} |\n`;
+  }
 }
-md += `\n## token 值（oklch）\n\n| token | 亮 | 暗 |\n| --- | --- | --- |\n`;
+md += `\n## 表面鑑別度（只疊在底色上）\n\n| token | 亮 | 暗 | 亮對底色 | 暗對底色 | 差 |\n| --- | --- | --- | --- | --- | --- |\n`;
+const surfaceRow = (name, l, d) => {
+  const a = surfaceOnBg('light', l);
+  const b = surfaceOnBg('dark', d);
+  return `| \`--${name}\` | \`${l}\` | \`${d}\` | ${a.toFixed(4)} | ${b.toFixed(4)} | ${Math.abs(a - b).toFixed(4)} |\n`;
+};
+for (const name of ['card', 'border', 'sidebar']) md += surfaceRow(name, SURFACE.light[name], SURFACE.dark[name]);
+for (const name of ['chip', 'chip-hover', 'chip-pressed'])
+  md += surfaceRow(name, NEXUS_SURFACE.light[name], NEXUS_SURFACE.dark[name]);
+md += `\nSG 底色：亮 ${hex(BASE.light.bg)}、暗 ${hex(BASE.dark.bg)}。\n`;
+md += `\n## 產物（oklch）\n\n| token | 亮 | 暗 |\n| --- | --- | --- |\n`;
 for (const k of Object.keys(tokens.light))
   md += `| \`--${k}\` | \`${tokens.light[k]}\` | \`${tokens.dark[k]}\` |\n`;
 writeFileSync(out('token-table.md'), md);

@@ -48,6 +48,12 @@ const KEYFRAMES_ALLOWED = new Set([
   // 第三方：sonner
   'sonner-fade-in',
   'sonner-fade-out',
+  // 第三方：solid-glass（`src/vendor/solid-glass/solid-glass.css`，#1512；reduced-motion 的處理見 `styles/solid-glass.overrides.css`）
+  'sg-dot-flash',
+  'sg-status-shimmer',
+  'sg-sweep',
+  'sg-float-in',
+  'sg-fade-in',
   'sonner-spin',
   'swipe-out-left',
   'swipe-out-right',
