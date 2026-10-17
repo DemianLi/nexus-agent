@@ -1328,6 +1328,8 @@ export class ThreadPump {
    * 刪的當下若還有別的輪在跑，目標在那幾輪期間仍然 active——現在就暫停會讓那幾輪中途被 `goal/change` 攪動。
    */
   #cancelledGoalRounds: Extract<QueuedInputSource, { kind: 'goal' }>[] = [];
+  /** pump 自己正在替「被刪掉的續行預約」暫停目標（同步一段）；{@link ThreadPump.#stopRunForHostPause} 看到它就不中止。 */
+  #pausingInternally = false;
 
   /**
    * @param agent - 這條 thread 的 agent。
@@ -2281,11 +2283,15 @@ export class ThreadPump {
       return;
     }
     try {
+      // pump 自己為了「刪不掉的預約」下的暫停，不是人在外面按的暫停：不中止任何東西（#1516，維持 #638 的行為）。
+      this.#pausingInternally = true;
       driver.pause({ id: goal.id, revision: goal.revision });
     } catch (error: unknown) {
       driver.warn(
         `刪掉續行預約之後暫停目標失敗：${error instanceof Error ? error.message : String(error)}`,
       );
+    } finally {
+      this.#pausingInternally = false;
     }
   }
 
@@ -2307,7 +2313,7 @@ export class ThreadPump {
    */
   #stopRunForHostPause(): void {
     // **不看有沒有續行排程器**：`--no-goal-driver` 的組裝沒有自動續行，但人打的那一輪照樣會被「暫停」叫停。
-    if (this.#closed) return;
+    if (this.#closed || this.#pausingInternally) return;
     const store = runScope.getStore();
     // 模型自己在這一輪裡下的：身分是這條 pump 現在的這一輪。
     if (store !== undefined && store === this.#current) return;

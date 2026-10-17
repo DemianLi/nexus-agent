@@ -14,6 +14,7 @@ import type { MockInstance } from 'vitest';
 import { foldTurn, serveClient } from './fixtures.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { startScriptedServe } from './scripted-serve.js';
+import { ASK_USER_QUESTION_TOOL_NAME } from '@nexus/plugin-ask-user';
 import type { ScriptedServe } from './scripted-serve.js';
 
 let served: ScriptedServe | undefined;
@@ -90,8 +91,12 @@ async function goalText(client: WireClient, thread: string): Promise<string> {
 }
 
 /** 開下行、說第一句、折完人打的那一輪。回來時（排程器開的）第一個續行輪正在跑或馬上就跑。 */
-async function startGoalRound(thread: string, turns: readonly ScriptedTurn[] = CREATE_THEN_SLOW) {
-  served = await startScriptedServe(turns);
+async function startGoalRound(
+  thread: string,
+  turns: readonly ScriptedTurn[] = CREATE_THEN_SLOW,
+  argv: readonly string[] = [],
+) {
+  served = await startScriptedServe(turns, { argv });
   const client = await serveClient(served.running);
   const events = await client.openEvents(thread);
   expect((await client.runStart(thread, '開個頭')).type).toBe('success');
@@ -216,5 +221,116 @@ describe('一輪跑著時，其餘斜線命令照舊被擋（#1516 E）', () => 
     for (const [name, command] of byName) {
       if (name !== 'goal') expect(command.runWhileBusy, name).toBeUndefined();
     }
+  });
+});
+
+describe('忙的時候放行的名單，閘門與 descriptor 是同一份（#1516）', () => {
+  it('slash.list 宣告的每個字面值，跑著時真的被收下（不是寫死 /goal pause）', async () => {
+    const { client } = await startGoalRound('wire-pause-single-source');
+    const listed = await client.slashList('wire-pause-single-source');
+    if (listed.kind !== 'ok') throw new Error(`slash.list 失敗：${JSON.stringify(listed)}`);
+    const declared = listed.commands.flatMap((command) =>
+      (command.runWhileBusy ?? []).map((literal) => `/${command.name} ${literal}`),
+    );
+    expect(declared.length).toBeGreaterThan(0);
+    for (const line of declared) {
+      const result = await client.slashRun('wire-pause-single-source', line);
+      expect(result, line).toMatchObject({ kind: 'success' });
+    }
+  });
+});
+
+describe('停在核准點（等人回答）：/goal pause 與 goal.pause 收，其餘照舊被擋（#1516）', () => {
+  const ASK_TURNS: readonly ScriptedTurn[] = [
+    {
+      content: '',
+      toolCalls: [
+        { name: 'create_goal', args: { objective: '把藍鯨計畫做完', max_goal_rounds: 5 } },
+      ],
+    },
+    {
+      content: '我先問。',
+      toolCalls: [
+        {
+          name: ASK_USER_QUESTION_TOOL_NAME,
+          args: {
+            questions: [
+              { id: 'day', question: '哪一天？', options: [{ label: '週一' }, { label: '週二' }] },
+            ],
+          },
+        },
+      ],
+    },
+    { content: '收工。' },
+    SLOW,
+  ];
+
+  it.each(['goal.pause', '/goal pause'] as const)('%s', async (entry) => {
+    const thread = `wire-pause-approval-${entry === 'goal.pause' ? 'method' : 'slash'}`;
+    served = await startScriptedServe(ASK_TURNS);
+    const client = await serveClient(served.running);
+    const events = await client.openEvents(thread);
+    expect((await client.runStart(thread, '開個頭')).type).toBe('success');
+    await foldTurn(events);
+
+    // 停在問答中斷：一般斜線命令被擋，原本那句話不變。
+    expect(await client.slashRun(thread, '/plan')).toMatchObject({
+      kind: 'rejected',
+      message: '這條 thread 停在核准點：先用 input.respond 回答它，再打斜線命令',
+    });
+    expect(await client.slashRun(thread, '/goal resume')).toMatchObject({
+      kind: 'rejected',
+      message: '這條 thread 停在核准點：先用 input.respond 回答它，再打斜線命令',
+    });
+
+    const current = await currentGoalRef(client, thread);
+    if (entry === 'goal.pause') {
+      expect(
+        await client.goalPause(thread, { goalId: current.id, revision: current.revision }),
+      ).toMatchObject({ kind: 'ok', result: { ok: true, value: { goal: { phase: 'paused' } } } });
+    } else {
+      expect(await client.slashRun(thread, '/goal pause')).toMatchObject({ kind: 'success' });
+    }
+    // 待答的問題被收回：不再停在核准點，一般斜線命令又收得下。
+    await until(
+      async () => (await client.slashRun(thread, '/goal')).kind === 'success',
+      '收回之後閒下來',
+    );
+    expect(await goalText(client, thread)).toContain('狀態：暫停');
+  });
+});
+
+describe('--no-goal-driver：兩條入口的差異（#1516）', () => {
+  it('/goal pause 照樣收下並中止人打的那一輪；goal.pause 回 not_supported（它經續行排程器的 port）', async () => {
+    const thread = 'wire-pause-no-driver';
+    // 沒有排程器：模型建完目標之後那一輪（SLOW）就是人打的那一輪。
+    served = await startScriptedServe(
+      [
+        {
+          content: '',
+          toolCalls: [
+            { name: 'create_goal', args: { objective: '把藍鯨計畫做完', max_goal_rounds: 5 } },
+          ],
+        },
+        SLOW,
+      ],
+      { argv: ['--no-goal-driver'] },
+    );
+    const client = await serveClient(served.running);
+    const events = await client.openEvents(thread);
+    expect((await client.runStart(thread, '開個頭')).type).toBe('success');
+    await until(() => isBusy(client, thread), '這一輪開跑');
+    expect(await client.goalPause(thread, { goalId: 'x', revision: 1 })).toMatchObject({
+      kind: 'rejected',
+      code: 'not_supported',
+    });
+    // 目標是這一輪裡由模型建的：建好之前 `/goal pause` 回 error，建好之後被收下。
+    await until(
+      async () => (await client.slashRun(thread, '/goal pause')).kind === 'success',
+      '目標建好、暫停被收下',
+    );
+    await untilAborted(events);
+    expect(await isBusy(client, thread)).toBe(false);
+    expect(await goalText(client, thread)).toContain('狀態：暫停');
   });
 });

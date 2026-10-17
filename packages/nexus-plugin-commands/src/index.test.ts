@@ -570,6 +570,17 @@ describe('runsWhileBusy（#1516）：依這一次呼叫的完整字面值判斷�
     expect(runsWhileBusy(commands, line)).toBe(false);
   });
 
+  it('放行靠的是宣告的資料，不是寫死的名字或字面值：別的命令宣告別的字面值照樣放行', () => {
+    const other = commandsOf({
+      ...ok('x', () => ({ kind: 'success' })),
+      runWhileBusy: ['go', 'go now'],
+    });
+    expect(runsWhileBusy(other, '/x go')).toBe(true);
+    expect(runsWhileBusy(other, '/x go now')).toBe(true);
+    expect(runsWhileBusy(other, '/x pause')).toBe(false);
+    expect(runsWhileBusy(other, '/goal pause')).toBe(false);
+  });
+
   it('忙的時候執行的呼叫 steer 直接拋錯（同宿主拒收：例外冒出 handler、命令落定成 error），什麼都沒送；平常照送', async () => {
     const sent: string[] = [];
     const { executor, events, signal } = harnessWith(

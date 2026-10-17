@@ -30,13 +30,17 @@ import { ThreadPump } from './thread-pump.js';
 const SLOW: ScriptedTurn = { content: '這一輪故意拖得很長。'.repeat(12), tokenDelayMs: 20 };
 
 /** 一份 port，接真的 goal 服務。 */
-function portFor(goals: GoalServices, log: () => SessionLog): GoalDriverPort {
+function portFor(
+  goals: GoalServices,
+  log: () => SessionLog,
+  flush: () => Promise<void> = () => Promise.resolve(),
+): GoalDriverPort {
   return {
     goal: () => goals.serviceFor(log())?.get(),
     block: (ref, reason) => void goals.serviceFor(log())?.block(ref, reason),
     disarm: () => void goals.serviceFor(log())?.disarm(),
     pause: (ref) => void goals.serviceFor(log())?.pause(ref),
-    flush: () => Promise.resolve(),
+    flush,
     warn: () => undefined,
   };
 }
@@ -54,6 +58,8 @@ async function build(options: {
   readonly threadId: string;
   readonly extraPlugins?: readonly PluginEntry[];
   readonly goalId?: string;
+  /** 排隊前的耐久檢查點；給一個攔得住的，測試就能把一輪停在「決定了、還沒排」那一縫。 */
+  readonly flush?: () => Promise<void>;
 }): Promise<Rig> {
   const plugin = createGoalPlugin({ now: () => 100, newGoalId: () => options.goalId ?? 'goal-1' });
   const state: ScriptedModelState = { turn: 0, boundToolNames: [], lastPrompt: [], prompts: [] };
@@ -67,7 +73,7 @@ async function build(options: {
   const pump = new ThreadPump(
     agent as unknown as PumpAgent,
     options.threadId,
-    portFor(goals, () => late.log as SessionLog),
+    portFor(goals, () => late.log as SessionLog, options.flush),
   );
   late.log = pump.sessionLog;
   const detachInvariants = attachInvariants(pump.sessions);
@@ -369,6 +375,30 @@ describe('人下的暫停當場中止在跑的那一輪（#1516）', () => {
     // 沒有再叫模型：那句「不該被讀到」沒被讀。
     expect(rig.state.prompts).toHaveLength(3);
     expect(startKinds(rig.pump.sessionLog).filter((kind) => kind === 'goal')).toEqual(['goal']);
+    await rig.stop();
+  });
+
+  it('暫停落在 flush 縫裡（決定了、還沒排）：不用中止什麼，第二次決定把它擋下，沒有新的一輪', async () => {
+    // 這一縫裡 `running` 是假的，所以人下的暫停沒有東西可中止；#1516 卡的第 4 節量過：停止鈕（`cancel()`）落在這一縫是 no-op（回 `idle`，
+    // 續行照排），而暫停不一樣——它改的是目標的相位，排程器 flush 回來之後的第二次決定看到 paused 就收手。
+    let release: () => void = () => undefined;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const rig = await build({ turns: [SLOW], threadId: 'pause-flush-seam', flush: () => held });
+    rig.service?.create({ objective: '把 CI 修綠', maxGoalRounds: 5 });
+    await until(() => rig.pump.goalRoundInFlight, '排程器問到 flush');
+    expect(rig.pump.running).toBe(false);
+
+    const cancel = vi.spyOn(rig.pump, 'cancel');
+    rig.service?.pause(refOf(rig));
+    release();
+    await settle(rig.pump);
+
+    expect(cancel).not.toHaveBeenCalled();
+    expect(startKinds(rig.pump.sessionLog)).toEqual([]);
+    expect(rig.state.prompts).toHaveLength(0);
+    expect(rig.service?.get()?.phase).toBe('paused');
     await rig.stop();
   });
 });
