@@ -72,7 +72,7 @@
  *   （`GOAL_TOOL_NOT_ROOT_MESSAGE`，文字沿用原句）：直接帶子代理的 `checkpoint_ns` 呼叫真工具今天就走得到。
  *
  * 要的三個服務都由宿主在樹上提供：`tools`（`^1.1.0`，三顆工具一律 `rootOnly` 並帶 `outputSchema`）、`commands`（`^1.0.0`）、
- * `sessionLookup`（`^1.0.0`）。**舊的 `NexusPlugin` 外殼搬走了**（`apps/harness/src/goal.fixture.ts`，同 todo、feedback 的前例）：它與樹上這一列共用
+ * `sessionLookup`（`^1.0.0`）。**舊的 `NexusPlugin` 外殼搬走了**（`apps/harness/src/goal.fixture.ts` 給 harness 的測試，這個套件自己的測試用 `goal-shell.test.helper.ts`，同 todo、feedback 的前例）：它與樹上這一列共用
  * 同一份 lazy 核心（{@link createGoalCore}），只有「這次呼叫的會話怎麼來」那一格不同。
  *
  * **`src/invariant.ts` 不在這條路上**：配套入口還是相容層的列（`goal-invariant`），它 import `@nexus/core` 並寫 `NexusPlugin`。它從 SDK lint 排除

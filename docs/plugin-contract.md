@@ -16,7 +16,8 @@ capabilities 的執行、版本路由與兩版並存不在這一刀，見文末�
 [`packages/nexus-tool-result`](../packages/nexus-tool-result)（`@nexus/tool-result`，#1458，工具回結果的三個寫法，**不是接縫**，只是單向轉出）與
 [`packages/nexus-session`](../packages/nexus-session)（`@nexus/session`，#1435 起單向轉出會話日誌的讀法，**#1463 起多一個接縫：第七個，會話查找**，宿主在樹上提供「這次呼叫的會話」）與
 [`packages/nexus-fs`](../packages/nexus-fs)（`@nexus/fs`，第八個，#1466，宿主在樹上提供「這次呼叫的那條 thread 的 fs 把手」）與
-[`packages/nexus-system-prompt`](../packages/nexus-system-prompt)（`@nexus/system-prompt`，#1477，**第二個由插件提供、宿主消費的服務**：系統提示詞的各段與變數名）。
+[`packages/nexus-system-prompt`](../packages/nexus-system-prompt)（`@nexus/system-prompt`，#1477，**第二個由插件提供、宿主消費的服務**：系統提示詞的各段與變數名）與
+[`packages/nexus-goal`](../packages/nexus-goal)（`@nexus/goal`，#1486，**第三個由插件提供、宿主消費的服務**：每份 root 日誌上的 goal 域，查找時才建）。
 
 ## 這份規範管誰
 
@@ -226,6 +227,12 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   - **預設值走宿主內部的路，不擴充 `NexusServices`**：組裝點（`createNexusAgent`）在清單最前面放一個條目，把 `model`／`cwd` 記在以 `registry.middleware` 為鍵的 `WeakMap` 上，`registerFolded` 讀回。不經 `registry.services`，相容層的插件讀不到。
   - **紅燈**：`system-prompt-middleware.test.ts`（宿主 middleware 本身）、`system-prompt-on-tree.test.ts`（B：列與快照；D2：合法改一次後舊 thread 不動、新 thread 看新的；E：同一份清單兩條 thread 各是各的，加組裝點建的、貼了路由標籤的模型實例）、`startup-audit.test.ts`（D：CLI 與 serve 起動時寫壞的變數名都起不來；已知缺口：必掛列自我停用不進 `dropped`，由一條測試釘住）。
   - **已知缺口（Q3）**：樹上自我停用（`off`）的必掛列不進 `dropped`，必掛名單接不住；`system-prompt` 沒有自我停用的呼叫，這張卡不修。
+- **第十一個接縫：`goals`——插件提供、宿主查找的逐份日誌 goal 域**（`@nexus/goal` 1.0.0，#1486 Q1 (a)、Q3 (a)）。形狀同第五個接縫（`feedback`），差在**服務是一張查找表，不是一顆狀態**。
+  - **定義套件**：token `goals`、`GoalServices`（`serviceFor(log)`、`existingFor(log)`）、宿主要用的 `GoalService` 窄介面（`get`／`block`／`pause`／`disarm`），加上單向轉出的純函式與型別（`foldGoal`、`applyGoalChange`、`renderGoalRoundPrompt`、`GoalView`…，Q4 (a)）。只依賴 `@nexus/core`（`peerDependencies`）與 `@nexus/sdk`；`hasDirectHumanTurn` 留在插件裡（只有工具與命令用）。
+  - **提供者**：`goal` 那一列（`@nexus/plugin-goal`）。`apply` 裡建一份 `WeakMap<SessionLog, GoalService>`（閉包內，模組層級沒有任何一格），`serviceFor` **第一次被問到才建**：建構子在同一個同步區塊裡「讀 `log.events` 重播 → `log.subscribe`」（`SessionLog.append` 先凍住監聽清單、再 push、再同步發布，所以不漏、不重）；建立時不碰 `ctx`、訂閱不掛 effect，所以列卸載之後已經建好的服務照常運作。`serviceFor` **只收 root 日誌**；工具層自己看 `address.kind`，subagent 呼叫得到「這一份會話上沒有接 goal 域，所以沒有動。」（逐字同遷移前的 `GOAL_TOOL_NO_SERVICE_MESSAGE`，常數改名為 `GOAL_TOOL_NOT_ROOT_MESSAGE`）。`existingFor(log)` 是**不建、不重播**的讀，給閒置逐出的判斷用（見下）。
+  - **宿主**：`HOST_SERVICES` 多兩格（`goals` 與其範圍），組 thread 時從樹上取、折進該條 thread 的 `registry.services`（與 `messageFeedback` 同一條路）。**這不是 #1477 的「活服務不折進 registry.services」那一條**：那一條防的是相容層插件拿到活服務就能呼叫 `section()`，段跨 thread 疊加；`goals` 的消費者就是相容層裡的宿主程式（續行排程器、thread-pump、wire-handler），而查找表本身以日誌為鍵，跨 thread 不會疊加。宿主的 production 碼對 `@nexus/plugin-goal` 零 import（`git grep -n "@nexus/plugin-goal" -- apps/harness/src ':!*.test.ts' ':!*.fixture.ts'`）；`apps/harness/package.json` 保留這個依賴，因為 `cordis.yml` 的 `name` 是裸 specifier。
+  - **閒置逐出（#1484）怎麼讀**：`GoalDriverPort.armed?()` 走 `existingFor`（**非建立式讀**）：從沒被問過 goal 的 thread 與「沒有武裝的目標」在那個判斷上等價——授權只活在行程內（`fold.ts` 的 `activation` 不落盤），只有服務自己的 `create`／`resume` 才掛得出 `armed`，沒有服務就沒有人掛過。續行排程器的 `block`／`disarm`／`pause` 與 `goal()` 仍走 `serviceFor`（要寫的路）。服務建好卻重放失敗（`#failure`）時 `get()` 會拋，逐出判斷把拋當成「不閒置」。**重建的 thread 是未武裝的**（授權不落盤，重放回 `disarmed`），與重啟一致。
+  - **紅燈**：`packages/nexus-plugin-goal/src/tree.test.ts`（一致性、套一次服務兩條 thread、lazy 的四個方向、subagent 不建服務）、`eslint-exclusion.test.ts`；宿主端 `goal-on-tree.test.ts`（B：列與快照；E：兩條 thread；逐出與 GC；接線）。舊外殼（`NexusPlugin`、`createGoalPlugin`）搬到 `apps/harness/src/goal.fixture.ts` 與插件包內的 `goal-shell.test.helper.ts`，給還在相容層組裝的測試用；兩者共用同一份 `createGoalCore`／`mountGoal`，行為只有一個出處。
 - **工具接縫 1.1.0：登記選項**（`@nexus/tools`，#1458 Q3 (a)）。`register(tool, options?)` 多一個**選配**的第二參數：`rootOnly`（`true`，或 `{ message, error? }` 帶自己的拒絕句與碼，
   照 dsh `DELEGATED_CALLER`）與 `outputSchema`（有 `safeParse` 的東西，成功輸出照它驗）。選項隨工具一起折進 thread 的註冊點（`RowVerdict.active.toolOptions`、
   `registerFolded`）；**沒有 `scope`**（`rootOnly` 配 `scope` 是矛盾，註冊點當場拋，這裡不開這個口）。次版號升級：`^1.0.0` 的舊消費者照常（不傳第二參數），要用選項的消費者宣告 `^1.1.0`。
@@ -505,10 +512,15 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 | `{{cwd}}` 是我們多的變數（#1477，第 8 列） | 產品需求超出 dsh | dsh 沒有 `cwd` 變數（dsh 只覆寫前綴：web-app :17-20、headless :11、acp-app :5、sdk-minimal :118）；我們的出貨後綴引用了 `{{cwd}}`，要不要拿掉不在這張卡。舊註解對 dsh 的引用有誤，已更正（插件檔頭與 `cordis.yml`） |
 | 掛載當下驗前後綴的語法與名字，不是渲染時才拋；訊息是中文（#1477，第 9 列） | 表達不出來，退到最接近的實作 | dsh 渲染時才嚴格插值、才拋，每一輪都紅，壞掉的設定不可能被忽略。我們的載入器把 `apply` 拋的錯變成「那一列掉了」，所以在掛載當下驗，並把這一列留在必掛名單（`startup-audit.ts`）。D 的失敗變成：同一類錯、同一列、同一格、同一個變數名，外層由「組裝失敗」變成「起不來」，CLI 的失敗時刻提早到 `cli.ts:953`（讀清單那一次） |
 | `section()` 只收字串 `text`，order 落在前綴與後綴之間的、帶 `complete`／`interpolate` 的登記當場拋（#1477，第 5、10 列） | 遷移卡不改行為（暫時） | dsh 的 `text` 可以是函式、`PromptSection` 另有 `complete`／`interpolate`、order 任意。快照要完整，中間段的渲染規則留給第一個用到的遷移卡。大聲拒絕，不靜靜丟掉 |
+| goal 的持久狀態由服務自己折疊（訂閱日誌），不走 `sessionProjections` 的投影（#1486，demian Q1 (a)） | 表達不出來，退到最接近的實作 | **dsh 怎麼做**：`goal` 登記成投影，持久狀態由註冊表的事件驅動維護，服務用 `stateOf(session, 'goal')` 讀（`packages/goal/goal/src/index.ts:258`、`:476-481`；對讀版本 86a40220）；行程內那一半（授權、等待掛上的那一格）放在 `WeakMap<Session, GoalRuntimeState>`（`:248`、`:484-493`）。**我們做不到的原因**：`@nexus/projections` 今天只有給 wire 的 `register`，沒有插件讀狀態的 `stateOf(log, key)`（`nexus-projections/src/index.ts:44-56`）；補上它是一個新接縫，這張卡是搬家，不加接縫。**退到哪裡**：保留遷移前的做法（狀態不走投影註冊表，`service.ts` 檔頭）——折疊住在服務裡，建構子重放加訂閱。行程內那一半與 dsh 同形（逐份日誌的 `WeakMap`）。**撤除條件**：投影的讀法（`stateOf`）另開卡，goal 可改走它 |
+| `GoalView`、折疊與提示詞渲染由 `@nexus/goal` 提供，事件與快照型別轉出自 `@nexus/core`（#1486，demian Q4 (a)） | 表達不出來，退到最接近的實作 | dsh 的型別與純函式住在 `goal` 定義套件（`packages/goal/goal/src/types.ts`，對讀版本 86a40220）。我們的 `goal/change` 事件與 `GoalSnapshot` 等型別在 `@nexus/core`，折疊與提示詞渲染搬進 `@nexus/goal`（宿主要用），`core` 放 `peerDependencies`。`hasDirectHumanTurn` 只有工具與命令用，留在插件 |
+| `AttachmentRef` 由 `@nexus/commands` 轉出、`SessionEventMap` 由 `@nexus/session` 轉出，`goal/change` 的事件擴充搬進 core 的 `session-log.ts`（#1486） | 表達不出來，退到最接近的實作 | 同 `PresentedFile`（#1469）那一列：`SessionEventMap` 在 `@nexus/core`，遷出的插件不能 `declare module` 補它（#1420 的 lint 擋 `@nexus/core` import）。轉出是單向的，`core` 放 `peerDependencies` |
+| `@nexus/plugin-goal` 的 lint 排除 `src/invariant.ts`（#1486，demian Q5，照 #1463 Q3 (a)） | 產品需求超出 dsh | 理由、量法與撤除條件同 `@nexus/plugin-todo` 那一列：`invariant.ts` 是相容層的配套入口（`goal-invariant` 那一列），寫的是 `NexusPlugin`；排除只蓋到這一個檔（`packages/nexus-plugin-goal/src/eslint-exclusion.test.ts`）。**撤除條件**：2026-11-03 配套入口重審 |
+| 服務是查找時才建（lazy），`/goal` 的「一份都沒接」「接了不只一份」兩句拿掉（#1486，demian Q1 (a)、Q2 (a)） | 遷移卡不改行為（暫時） | 這是**這張卡唯一承認的行為改變**，記在 PR 的「行為改變」一節。遷移前每份會話裝一次參與者、registry 只能接一份 root 日誌，所以 `/goal` 要先問「接了幾份」；lazy 之後命令帶來的 `sessionLog` 就是它要動的那一份，兩句失去生產者。工具層的「不是 root」那句保留（逐字不變）。同一個 registry 想接幾份日誌都行 |
 
 ## 接進清單（#1416 PR 2）
 
-`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項），`todo` 是第七顆（#1463，新增會話查找接縫），`submit-record` 是第八顆（#1466，新增 fs 查找接縫與 `tools` 1.2.0 的核准閘門），`present` 是第九顆（#1469，新增 `tools/result` 觀察者與 fs 把手上的工作區事實），`agent-instructions` 是第十顆（#1474，新增 `agent/pre-step` 接縫），`system-prompt` 是第十一顆（#1477，第二個插件提供、宿主消費的服務：`systemPrompt` 快照）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
+`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項），`todo` 是第七顆（#1463，新增會話查找接縫），`submit-record` 是第八顆（#1466，新增 fs 查找接縫與 `tools` 1.2.0 的核准閘門），`present` 是第九顆（#1469，新增 `tools/result` 觀察者與 fs 把手上的工作區事實），`agent-instructions` 是第十顆（#1474，新增 `agent/pre-step` 接縫），`system-prompt` 是第十一顆（#1477，第二個插件提供、宿主消費的服務：`systemPrompt` 快照），`goal` 是第十二顆（#1486，第三個插件提供、宿主消費的服務：`goals` 查找表，服務查找時才建）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
 **樹那一側不是第二份清單，是清單的一個消費者**：
 
 | 東西 | 在哪 | 做什麼 |

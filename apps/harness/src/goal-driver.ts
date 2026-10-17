@@ -19,8 +19,8 @@
  * `cli.ts` 的 `runTurn`）。所以載體丟掉、紀律照抄，同 `containment.ts` 對
  * `guard/timeout-policy` 那一筆。
  *
- * **但檢查沒有跟著搬**：續行文字的 renderer 與驗它的不變量伴生都留在
- * `@nexus/plugin-goal`，判準是「只要 `kind: 'goal'` 這個詞彙存在，伴生就武裝」——與有
+ * **但檢查沒有跟著搬**：續行文字的 renderer（`@nexus/goal`）與驗它的不變量伴生（`@nexus/plugin-goal`）
+ * 都不在 harness，判準是「只要 `kind: 'goal'` 這個詞彙存在，伴生就武裝」——與有
  * 沒有掛排程器無關。只在掛了排程器時才擋的檢查，對一顆手寫或寫壞的輪次是零防守。
  *
  * ## 這個模組是純的，`flush()` 不在裡面

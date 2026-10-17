@@ -13,16 +13,21 @@ describe('@nexus/session 是 @nexus/core 的單向轉出', () => {
     expect(session.REPEAT_REMINDER_MARKER).toBe(core.REPEAT_REMINDER_MARKER);
     // #1463：todo 的狀態集合也是 core 那一份（`TodoItem`／`TodoStatus` 是型別，沒有執行期值）。
     expect(session.TODO_STATUSES).toBe(core.TODO_STATUSES);
+    // #1486：goal 的折疊讀 `turn/start` 與 `source` 用的兩個讀法。
+    expect(session.currentTurnStart).toBe(core.currentTurnStart);
+    expect(session.sourceKwargs).toBe(core.sourceKwargs);
   });
 
-  it('值只有這幾個：五個轉出，加會話查找接縫自己的 token 與契約版本（#1463）', () => {
+  it('值只有這幾個：七個轉出（#1486 多 `currentTurnStart`、`sourceKwargs`），加會話查找接縫自己的 token 與契約版本（#1463）', () => {
     expect(Object.keys(session).sort()).toEqual([
       'REPEAT_REMINDER_MARKER',
       'SESSION_LOOKUP_CONTRACT_VERSION',
       'TODO_STATUSES',
+      'currentTurnStart',
       'loggedContentBlocks',
       'loggedMessageId',
       'sessionLookupToken',
+      'sourceKwargs',
       'toolCallIds',
     ]);
     expect(session.sessionLookupToken.name).toBe('sessionLookup');

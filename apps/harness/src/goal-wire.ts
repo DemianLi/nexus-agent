@@ -3,7 +3,7 @@
  * 形狀與規則見 `@nexus/wire` 的 `goal.ts`。
  *
  * 即時（pump 逐顆餵）與歷史（一頁一次餵整段）共用這一個類別，所以兩條路對同一份日誌算出同一個值。折疊用的是
- * `@nexus/plugin-goal` 的 `applyGoalEvent`，跟耐久的重放同一份程式：`goal/change` 換整份快照或清掉，
+ * `@nexus/goal` 的 `applyGoalEvent`，跟耐久的重放同一份程式：`goal/change` 換整份快照或清掉，
  * `turn/start{kind:'goal'}` 推進續行輪數。**嚴格**：接不上的變更或不屬於目前目標的輪次會拋，這裡接住、記下原因，
  * 之後**停在最後一個好的值**，不再往下送——寫壞的日誌不該讓畫面畫出編出來的目標。
  *

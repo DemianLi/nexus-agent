@@ -21,13 +21,19 @@ import { createGoalCore, goalConfigSchema, mountGoal } from '@nexus/plugin-goal'
 import type { GoalConfig, GoalCore, GoalSeams } from '@nexus/plugin-goal';
 import type { z } from 'zod';
 
-/** {@link createGoalPlugin} 收的東西：設定的輸入面，加上兩道測試縫（時鐘、id 工廠）。 */
-export type GoalPluginOptions = z.input<typeof goalConfigSchema> & GoalSeams;
+/**
+ * {@link createGoalPlugin} 收的東西：設定的輸入面，加上測試縫（時鐘、id 工廠）。
+ *
+ * `core`：**多次組裝共用同一個核心**——樹上那一列的樣子（一個行程一份 `WeakMap`，每條 thread 的日誌各是一個鍵）。省略時每次 `apply`
+ * 各建各的（舊外殼的行為）。要證「撤掉一條 thread 再重開，新日誌建新服務、舊的可回收」這類跨組裝的事才傳。
+ */
+export type GoalPluginOptions = z.input<typeof goalConfigSchema> &
+  GoalSeams & { readonly core?: GoalCore };
 
 /** 一次掛載：每次 `apply` 各建各的核心（狀態全在閉包裡），縫由呼叫端決定。 */
-function applyWith(seams: GoalSeams): NexusPlugin<GoalConfig>['apply'] {
+function applyWith(seams: GoalSeams, shared?: GoalCore): NexusPlugin<GoalConfig>['apply'] {
   return (registry, config) => {
-    const core = createGoalCore(config, seams);
+    const core = shared ?? createGoalCore(config, seams);
     registry.services.provide(GOALS_SERVICE, core);
     mountGoal(
       {
@@ -58,14 +64,16 @@ export const goalPlugin: NexusPlugin<GoalConfig> = {
  * @param options - 設定與測試縫。
  */
 export function createGoalPlugin(options: GoalPluginOptions = {}): PluginEntry {
-  const { now, newGoalId, ...config } = options;
-  if (now === undefined && newGoalId === undefined) return { plugin: goalPlugin, config };
+  const { now, newGoalId, core, ...config } = options;
+  if (now === undefined && newGoalId === undefined && core === undefined) {
+    return { plugin: goalPlugin, config };
+  }
   const seams: GoalSeams = {
     ...(now === undefined ? {} : { now }),
     ...(newGoalId === undefined ? {} : { newGoalId }),
   };
   return {
-    plugin: { name: 'goal', Config: goalConfigSchema, apply: applyWith(seams) },
+    plugin: { name: 'goal', Config: goalConfigSchema, apply: applyWith(seams, core) },
     config,
   };
 }
