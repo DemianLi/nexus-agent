@@ -44,6 +44,8 @@ let inject: Injection = {
   rmTempFails: false,
 };
 let projectDirSyncs = 0;
+/** 日誌把手被關掉幾次。 */
+let logCloses = 0;
 
 /** 路徑換成不隨每次執行變動的標籤。 */
 function label(path: string): string {
@@ -73,6 +75,12 @@ function wrapHandle(target: FileHandle, path: string, directory: boolean): FileH
             calls.push(`sync ${label(path)}`);
           }
           return real.sync();
+        };
+      }
+      if (property === 'close') {
+        return async () => {
+          if (path.endsWith('.jsonl')) logCloses += 1;
+          return real.close();
         };
       }
       if (property === 'writeFile') {
@@ -152,6 +160,7 @@ beforeEach(async () => {
   projectDir = join(root, 'project');
   calls.length = 0;
   projectDirSyncs = 0;
+  logCloses = 0;
   inject = {
     partialHeaderWrite: false,
     logOpenEmfile: false,
@@ -301,6 +310,8 @@ describe('目錄 fsync 的錯不吞，也不卡死', () => {
     const stored = openJsonlSessionStore({ directory: projectDir }).create(header('theta'));
     await expect(stored.flush()).rejects.toThrow(/EIO/);
     await expect(stored.close()).resolves.toBeUndefined();
+    // 開成了、但還沒完成物化的那個日誌把手，close() 要關掉（剛好一次）：不然把手洩漏到行程結束。
+    expect(logCloses).toBe(1);
   });
 });
 
