@@ -539,7 +539,7 @@ describe('停止鈕落在 flush 縫（決定了、還沒排）要停住目標（
     await rig.stop();
   });
 
-  it('C 對照：真的閒著、沒有排程在飛時按停止，什麼都不做（授權不動）', async () => {
+  it('C 對照：真的閒著、沒有排程在飛時按停止，仍回 idle（不落到 drive）', async () => {
     const rig = await build({ turns: [SLOW], threadId: 'stop-gap-c' });
     rig.service?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
     rig.service?.disarm();
