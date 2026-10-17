@@ -72,11 +72,12 @@
  * @module
  */
 
-import { mkdir, open, rename, rm } from 'node:fs/promises';
+import { mkdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import type { PluginEntry } from '@nexus/core';
 
+import { writeAtomic } from './atomic-file.js';
 import { resolveHarnessHome } from './harness-home.js';
 import type { ConfigEntry, LayerReport, StartupDrop } from './plugin-config.js';
 import { classOfRow, STARTUP_READ_PLUGINS } from './plugin-row-classes.js';
@@ -387,8 +388,9 @@ export interface PluginSnapshotWriter {
 /**
  * 建寫檔的那一支。
  *
- * - **原子**：先寫暫存檔、`sync`、再 `rename` 蓋過去，讀的人只會看到完整的舊檔或完整的新檔。
- * - **暫存檔名帶 pid 與遞增序號**：兩次寫入不會搶同一個暫存檔。
+ * - **原子**：`atomic-file.ts` 的 `writeAtomic`（照 dsh `storage-json/src/atomic.ts:24-40`，#1527）——先寫暫存檔、
+ *   `sync`、再 `rename` 蓋過去、fsync 目錄，讀的人只會看到完整的舊檔或完整的新檔，斷電也不會退回上一版。
+ * - **暫存檔隨機名、`wx` 排他建立**：兩次寫入不會搶同一個暫存檔，也不跟隨預先放在那個名字上的連結。
  * - **寫入排成一條鏈**：同時開兩條對話會同時重讀，後來的先落地的話新結果會被舊的蓋掉；排隊之後，檔案裡留下的是
  *   最後一次 `publish` 的那份。
  * - 檔案模式 0600，目錄 0700：只有進得了主機的那個使用者讀得到。
@@ -404,28 +406,19 @@ export function createPluginSnapshotWriter(options: {
 }): PluginSnapshotWriter {
   const { path, log } = options;
   let tail: Promise<void> = Promise.resolve();
-  let sequence = 0;
   let lastDigest: string | undefined;
   const warned = new Set<string>();
 
   async function write(snapshot: PluginSnapshot, announce: boolean): Promise<boolean> {
-    const staging = `${path}.${String(process.pid)}.${String((sequence += 1))}.tmp`;
     try {
       await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-      const handle = await open(staging, 'w', 0o600);
-      try {
-        await handle.writeFile(`${JSON.stringify(snapshot, null, 2)}\n`, 'utf8');
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      await rename(staging, path);
+      await writeAtomic(path, `${JSON.stringify(snapshot, null, 2)}\n`);
     } catch (error) {
-      await rm(staging, { force: true }).catch(() => {});
       const message = error instanceof Error ? error.message : String(error);
       if (!warned.has(message)) {
         warned.add(message);
-        log(`[對照快照] 寫不進 ${path}：${message}（serve 照常，下一次重讀再試）`);
+        // 目錄 fsync 失敗時 rename 已經做了：檔上可能已是這一份，只是還沒落盤。
+        log(`[對照快照] 寫不進或沒落盤 ${path}：${message}（serve 照常，下一次重讀再試）`);
       }
       return false;
     }

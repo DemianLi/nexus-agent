@@ -23,7 +23,9 @@
  * - 記錄帶版本（`{ version: 1, pinnedThreadIds, archivedThreadIds }`）；**認不得的記錄明確失敗、不覆寫**（版本不對、JSON 壞、
  *   欄位型別不對、兩個集合有重複或互相重疊）——交給人決定，跟瀏覽器密鑰那一把、受管憑證檔同一個處置。
  * - 讀之前先確認只有擁有者讀得到（`owner-only.ts`）。
- * - 寫是**先寫暫存檔、再 `rename` 蓋過去**：讀的一方永遠讀不到寫一半的檔，行程死在中間也只會留一個暫存檔。
+ * - 寫是**先寫暫存檔、`fsync`、再 `rename` 蓋過去，然後 fsync 目錄**（`atomic-file.ts` 的 `writeAtomic`，照 dsh
+ *   `storage-json/src/atomic.ts:24-40`，#1527）：讀的一方永遠讀不到寫一半的檔，行程死在中間也只會留一個暫存檔，
+ *   斷電後也不會退回上一版。
  * - **開檔在啟動時**（`serve.ts`），壞檔就讓 serve 起不來，而不是第一個釘選請求才失敗——跟瀏覽器密鑰那一把一樣。
  *
  * ## 單一寫入者
@@ -36,12 +38,12 @@
  * @module
  */
 
-import { randomBytes } from 'node:crypto';
-import { mkdir, open, readFile, rename, rm, stat } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 import type { ThreadActivityKind } from '@nexus/wire';
 
-import { assertOwnerOnlyMode, PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './owner-only.js';
+import { writeAtomic } from './atomic-file.js';
+import { assertOwnerOnlyMode, PRIVATE_DIR_MODE } from './owner-only.js';
 
 /** 檔案在 harness home 底下的名字。 */
 export const THREAD_ORGANIZATION_FILE = 'thread-organization.json';
@@ -279,28 +281,12 @@ export class ThreadOrganization {
 
   /**
    * 先寫檔、成功了才換記憶體裡的：寫不進去時記憶體不動，閘門與下一個請求看到的仍是檔案上的那一份。
-   * 暫存檔 `wx`（不蓋別人的）、`0600`、寫完 `sync` 再 `rename` 蓋過去。
+   * 寫法是 {@link writeAtomic}（dsh `storage-json` 的 `writeAtomic`）：`rename` 之後連 home 目錄一起 fsync，
+   * 斷電重開不會回到上一版——封存過的會話不會變回沒封存、又開始跑模型。
    */
   async #commit(next: OrganizationState): Promise<void> {
     await mkdir(this.#home, { recursive: true, mode: PRIVATE_DIR_MODE });
-    const staging = join(
-      this.#home,
-      `.${THREAD_ORGANIZATION_FILE}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`,
-    );
-    const text = `${JSON.stringify({ version: RECORD_VERSION, ...next })}\n`;
-    try {
-      const handle = await open(staging, 'wx', PRIVATE_FILE_MODE);
-      try {
-        await handle.writeFile(text, 'utf8');
-        await handle.sync();
-      } finally {
-        await handle.close();
-      }
-      await rename(staging, this.#file);
-    } catch (error) {
-      await rm(staging, { force: true });
-      throw error;
-    }
+    await writeAtomic(this.#file, `${JSON.stringify({ version: RECORD_VERSION, ...next })}\n`);
     this.#state = next;
   }
 }
