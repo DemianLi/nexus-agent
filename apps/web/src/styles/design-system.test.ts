@@ -4,7 +4,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 
-import { readCascade } from './css-cascade';
+import { readCascade, type Cascade } from './css-cascade';
 
 /**
  * 元件只能用系統裡的值（#1141 第 2 刀；`.docs/web-ui-spec.md` §5、§11 第 12 條）：顏色、字級、圓角各有一份階梯，
@@ -334,6 +334,22 @@ function scan(files: string[]): Violation[] {
   return found;
 }
 
+/**
+ * `@theme` 疊出來的某個長度，要是寫死的 px。量具不解 `calc()`、`var()`（#1512：solid-glass 的圓角寫成 `calc(var(--radius) * 2.2)`），
+ * 遇到就把生效值寫進錯誤，讓人知道要改成算出來再比，而不是看到 `NaN !== 24`。
+ */
+function themePx(cascade: Cascade, property: string): number {
+  const value = cascade.value(['@theme'], property);
+  if (value === undefined) throw new Error(`@theme 裡沒有 ${property}`);
+  const px = /^(\d+(?:\.\d+)?)px$/.exec(value)?.[1];
+  if (px === undefined) {
+    throw new Error(
+      `@theme 的 ${property} 生效值是 '${value}'，不是寫死的 px：量具不解 calc()／var()，要先算出來再比`,
+    );
+  }
+  return Number(px);
+}
+
 const files = sourceFiles(SRC);
 const all = scan(files);
 const isAllowed = (v: Violation) => ALLOWED.some((a) => a.file === v.file && a.what === v.what);
@@ -364,11 +380,20 @@ describe('判準', () => {
 
   test('`rounded-row` 有定義，且是卡片圓角 3xl 減內距 p-1（4）：讓列與卡片同心', () => {
     const cascade = readCascade();
-    const px = (name: string) =>
-      Number(/^(\d+)px$/.exec(cascade.value(['@theme'], `--radius-${name}`) ?? '')?.[1]);
-    expect(px('3xl')).toBe(24);
-    expect(px('row')).toBe(px('3xl') - 4);
+    expect(themePx(cascade, '--radius-3xl')).toBe(24);
+    expect(themePx(cascade, '--radius-row')).toBe(themePx(cascade, '--radius-3xl') - 4);
     expect(rules('rounded-row rounded-3xl')).toEqual([]);
+  });
+
+  test('圓角不是寫死的 px（例如 `calc()`）時，錯誤直接說出生效值，不算出 NaN 讓人去猜', () => {
+    const cascade = readCascade(
+      '/v/index.css',
+      () => '@theme { --radius-3xl: calc(var(--radius) * 2.2); }',
+    );
+    expect(() => themePx(cascade, '--radius-3xl')).toThrow(
+      "@theme 的 --radius-3xl 生效值是 'calc(var(--radius) * 2.2)'，不是寫死的 px",
+    );
+    expect(() => themePx(cascade, '--radius-row')).toThrow('@theme 裡沒有 --radius-row');
   });
 
   test('原生色板與 white／black，連同 variant 前綴與透明度', () => {
