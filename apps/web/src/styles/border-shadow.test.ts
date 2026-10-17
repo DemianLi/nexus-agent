@@ -4,6 +4,8 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 
+import { isVendorUpstream } from '@/test/vendor-upstream';
+
 /**
  * `.docs/web-ui-spec.md` §11 第 1 條：邊緣畫在陰影裡，同一個元素不同時用 `border` 與陰影（§5）。
  *
@@ -18,6 +20,8 @@ function sourceFiles(dir: string): string[] {
   return readdirSync(dir).flatMap((name) => {
     const path = join(dir, name);
     if (statSync(path).isDirectory()) return sourceFiles(path);
+    // vendor 上游原樣的檔放行（外觀照 SG，Q8；#1523）：名單在 `test/vendor-upstream.ts`。
+    if (isVendorUpstream(path)) return [];
     return /\.tsx?$/.test(name) && !/\.test\.tsx?$/.test(name) ? [path] : [];
   });
 }

@@ -1,5 +1,7 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
+/* shadcn 的 custom variant、工具類與 keyframes（SG `src/index.css:3` 載入的那一份，#1523）：照 SG 的順序排在 solid-glass.css 前面。 */
+@import './vendor/solid-glass/shadcn/tailwind.css';
 
 /* 字型全部打包進本地（完全內網）：介面 Geist、等寬 Geist Mono（只打包 latin，`styles/fonts.css`），中文都退 Noto Sans TC（#1468 Q6）。 */
 @import './styles/fonts.css';
