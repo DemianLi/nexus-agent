@@ -49,7 +49,8 @@
  * 新增或刪掉 @keyframes 時，同一個 PR 更新 `scripts/check-built-css.mjs` 的允許清單（它量建置出來的 CSS）。
  *
  * 效能：持續動畫只動 transform／opacity，唯一例外是執行中邊框光的 conic 角度
- * （同時最多一個：輸入框與面板互斥）；blur 只給小元素；不常駐 will-change。
+ * （同時最多一個：輸入框與面板互斥）；大面積的 blur 照 SG（#1468 Q7，效能門檻由 `scripts/measure-frames.mjs` 量，#1512）；
+ * 不常駐 will-change。
  */
 
 @keyframes motion-fade-in {

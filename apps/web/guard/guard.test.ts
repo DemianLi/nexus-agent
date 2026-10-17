@@ -19,10 +19,26 @@ import { startGuardServer, type GuardServer } from './server';
  * 靜態那一層（`src/styles/*.test.ts`）量的是 token 與選擇器文字，量不到 specificity、`color-mix()` 現場合成的底色、
  * 半透明的面實際疊在什麼上面；這裡量的是畫出來的結果。
  *
- * 量三件事，亮暗各一次：
- * 1. **焦點**：鍵盤聚焦後 `box-shadow` 看得見的層跟沒聚焦時一樣（不帶 ring），外框是 2px 實線、顏色是頁面的字色（`.docs/web-ui-spec.md`、#1279）。
+ * 量這幾件事，亮暗各一次：
+ * 1. **焦點**：鍵盤聚焦後 `box-shadow` 看得見的層跟沒聚焦時一樣（不帶 ring），外框是 2px 實線、顏色是頁面的字色（`.docs/web-ui-spec.md`、#1279），
+ *    外框對它畫在上面的底色過非文字門檻 {@link NON_TEXT_MIN}（#1468 Q5）。
  * 2. **對比**：每個字的顏色對它實際的底色（往上疊到不透明為止，漸層取最差的停點）過門檻（文字 4.5，`data-guard-min` 另給）。
- * 3. **亮色陰影**：每層投影的透明度不超過 {@link MAX_SHADOW_ALPHA}（同 `src/styles/shadow-alpha.test.ts`）。
+ * 3. **欄位聚焦**：文字欄位（`Input`、`Textarea`、輸入框群組）鍵盤聚焦後，邊框四邊都是頁面的字色（#1468 Q5 焦點用字色；
+ *    SG 畫的是 `--focus-line` 灰線，`solid-glass.overrides.css` 換回來，靜態那一層 `focus-line-suppression.test.ts` 列舉）。
+ * 4. **貼在輸入框上方的卡片是平的**：`Surface tone="docked"` 的邊是 1px、沒有投影（SG 的 `.bg-card` 會把它變成浮起來的卡片，
+ *    `solid-glass.overrides.css` 補回來）。
+ * 5. **chip 三階**：`data-guard-chip` 裡那顆按鈕平常、滑鼠移上去、按下去三種狀態，字對它實際的底色過門檻。develop 就沒到 4.5 的那幾對
+ *    只守「不比 develop 差」（既有缺口 #1515，{@link CHIP_FLOORS}）；warning 用量表平常狀態的字直接疊在頁面上，是狀態色對底色，
+ *    守 {@link STATUS_MIN}（同靜態那一層的狀態色門檻）。
+ * 6. **對話裡被定位的那一則有圓角**：`[data-located]` 的圓角是 `var(--radius-3xl)`，這個變數只宣告在 SG 的 `@theme inline`；
+ *    Tailwind 沒輸出或修剪掉它的話，圓角會靜靜變成 0。量 `border-radius` 不是 0。
+ * 7. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
+ *
+ * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
+ * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
+ *
+ * 量不到的：brand 與 SG 的 `status-*` 這幾個顏色，測試頁上沒有元件不寫 class 就會用到它們（只有 `Counts` 的增刪數用到 success／destructive），
+ * 由靜態那一層（`tokens-contrast.test.ts`）量。
  *
  * 跑法：先 `pnpm --filter @nexus/web run build`，再 `pnpm --filter @nexus/web run test:guard`（CI 在 static job 的 build 之後）。
  * 瀏覽器用本機裝的 Chrome（`channel: 'chrome'`），不另外下載。`GUARD_REPORT=<檔案>` 會把量到的數字與瀏覽器版本寫成 JSON。
@@ -30,11 +46,56 @@ import { startGuardServer, type GuardServer } from './server';
 
 type Theme = 'light' | 'dark';
 
-const MAX_SHADOW_ALPHA = 0.06;
-
-/** 亮色時有看得見的投影的元素（`data-guard-shadow`）。 */
-const SHADOWED = ['button-outline', 'card', 'input-group', 'popover'];
+/**
+ * 亮色時有看得見的投影的元素（`data-guard-shadow`）與各自每層投影的透明度上限。上限是 SG 現在的值（#1512 量到的）：
+ * 0.28 是 `--glass-shade`（浮起來的那一層），0.06 是 `--glass-contact`（貼地的那一層）；靜態那一層 `shadow-alpha.test.ts` 釘 token 本身。
+ * 投影整個消失、搬到別的元素上、或調深，都紅。
+ */
+const SHADOW_LIMITS: Record<string, number> = {
+  'button-default': 0.28,
+  'button-outline': 0.06,
+  'button-secondary': 0.06,
+  card: 0.28,
+  popover: 0.28,
+};
+const SHADOWED = Object.keys(SHADOW_LIMITS);
 const TEXT_MIN = 4.5;
+/** 字樣本一定要量到的幾個（量具自檢）：少了就是頁面沒畫出來或選擇器沒中，對比那條會靜靜變成空的綠。 */
+const REQUIRED_TEXTS = [
+  'body',
+  'button-default',
+  'card-title',
+  'card-counts-0',
+  'card-counts-1',
+  'popover',
+  'tooltip',
+  'sidebar-menu-button',
+];
+const NON_TEXT_MIN = 3;
+
+type ChipState = 'rest' | 'hover' | 'pressed';
+const CHIP_STATES: ChipState[] = ['rest', 'hover', 'pressed'];
+
+/**
+ * chip 三階上 develop 就沒到 4.5 的那幾對（既有缺口 #1515）：只守「不比 develop 差」，數字同 `tokens-contrast.test.ts` 的
+ * `NOT_WORSE_THAN_DEVELOP`（develop c9b957b6 照同一套算法重算、截到小數第四位）。沒列的一律 {@link TEXT_MIN}。
+ */
+/**
+ * 狀態色對底色的門檻（`.docs/web-ui-spec.md` §5，#1468 Q5）。warning 用量表平常狀態沒有 chip 底，字是 warning 色直接疊在頁面上，
+ * 所以守這一條而不是文字的 4.5。不扣靜態那一層的 `ROUNDING`：瀏覽器量的是出貨的值，跟靜態那層對到小數第四位。
+ */
+const STATUS_MIN = 5.2;
+/** chip 三階裡守 {@link STATUS_MIN} 的那幾格。 */
+const CHIP_STATUS_ON_PAGE = new Set(['context-meter-warning:rest']);
+
+const CHIP_FLOORS: Record<string, Record<Theme, number>> = {
+  'context-meter:pressed': { light: 4.3325, dark: 4.2964 },
+  'context-meter-warning:hover': { light: 4.0084, dark: 3.9642 },
+  'context-meter-warning:pressed': { light: 3.7081, dark: 3.6952 },
+};
+
+type Mode = 'translucent' | 'reduced-transparency' | 'opaque';
+const MODES: Mode[] = ['translucent', 'reduced-transparency', 'opaque'];
 
 interface TextSample {
   name: string;
@@ -46,6 +107,8 @@ interface TextSample {
 interface FocusSample {
   name: string;
   focusVisible: boolean;
+  /** 外框畫在上面的那一層往上的底色（外框在元素外面，所以從它的父元素算）。 */
+  outlineChain: BackgroundLayer[];
   shadowBefore: string;
   shadowAfter: string;
   hostShadowBefore: string;
@@ -54,6 +117,25 @@ interface FocusSample {
   outlineWidth: string;
   outlineColor: string;
   pageColor: string;
+}
+
+interface FieldSample {
+  name: string;
+  focusVisible: boolean;
+  /** 上、右、下、左四邊的 `border-*-color`。 */
+  borderBefore: string[];
+  borderAfter: string[];
+  pageColor: string;
+}
+
+interface ChipSample {
+  name: string;
+  state: ChipState;
+  /** 真的在那個狀態（`:hover`／`:active`）。 */
+  inState: boolean;
+  color: string;
+  backgroundColor: string;
+  chain: BackgroundLayer[];
 }
 
 interface ShadowSample {
@@ -98,10 +180,17 @@ async function settle(page: Page): Promise<void> {
   });
 }
 
-async function open(theme: Theme): Promise<Page> {
+async function open(theme: Theme, mode: Mode = 'translucent'): Promise<Page> {
   if (browser === undefined || server === undefined) throw new Error('瀏覽器或伺服器沒起來');
   const page = await browser.newPage({ viewport: { width: 1280, height: 1000 } });
-  await page.goto(`${server.url}?theme=${theme}`);
+  if (mode === 'reduced-transparency') {
+    // Playwright 的 emulateMedia 沒有這一項，直接下 CDP。
+    const cdp = await page.context().newCDPSession(page);
+    await cdp.send('Emulation.setEmulatedMedia', {
+      features: [{ name: 'prefers-reduced-transparency', value: 'reduce' }],
+    });
+  }
+  await page.goto(`${server.url}?theme=${theme}${mode === 'opaque' ? '&glass=opaque' : ''}`);
   await page.waitForSelector('[data-guard-text="tooltip"]');
   await page.evaluate(() => document.fonts.ready.then(() => undefined));
   await settle(page);
@@ -155,7 +244,16 @@ async function collectFocus(page: Page): Promise<FocusSample[]> {
       target.evaluate((el) => {
         const host = el.closest('[data-guard-outline-host]') ?? el;
         const hostStyle = getComputedStyle(host);
+        const outlineChain = [];
+        for (let node = host.parentElement; node !== null; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          outlineChain.push({
+            backgroundColor: style.backgroundColor,
+            backgroundImage: style.backgroundImage,
+          });
+        }
         return {
+          outlineChain,
           focusVisible: el.matches(':focus-visible'),
           shadow: getComputedStyle(el).boxShadow,
           hostShadow: hostStyle.boxShadow,
@@ -174,6 +272,7 @@ async function collectFocus(page: Page): Promise<FocusSample[]> {
     samples.push({
       name,
       focusVisible: after.focusVisible,
+      outlineChain: after.outlineChain,
       shadowBefore: before.shadow,
       shadowAfter: after.shadow,
       hostShadowBefore: before.hostShadow,
@@ -187,6 +286,89 @@ async function collectFocus(page: Page): Promise<FocusSample[]> {
   return samples;
 }
 
+async function collectFields(page: Page): Promise<FieldSample[]> {
+  await page.keyboard.press('Tab');
+  const names = await page.$$eval('[data-guard-field]', (els) =>
+    els.map((el) => el.getAttribute('data-guard-field') ?? ''),
+  );
+  const samples: FieldSample[] = [];
+  for (const name of names) {
+    const target = page.locator(`[data-guard-field="${name}"]`);
+    const read = () =>
+      target.evaluate((el) => {
+        const style = getComputedStyle(el.closest('[data-guard-outline-host]') ?? el);
+        return {
+          focusVisible: el.matches(':focus-visible'),
+          border: [
+            style.borderTopColor,
+            style.borderRightColor,
+            style.borderBottomColor,
+            style.borderLeftColor,
+          ],
+          pageColor: getComputedStyle(document.body).color,
+        };
+      });
+    await target.evaluate((el) => (el as HTMLElement).blur());
+    await settle(page);
+    const before = await read();
+    await target.focus();
+    await settle(page);
+    const after = await read();
+    samples.push({
+      name,
+      focusVisible: after.focusVisible,
+      borderBefore: before.border,
+      borderAfter: after.border,
+      pageColor: after.pageColor,
+    });
+  }
+  return samples;
+}
+
+async function collectChips(page: Page): Promise<ChipSample[]> {
+  const names = await page.$$eval('[data-guard-chip]', (els) =>
+    els.map((el) => el.getAttribute('data-guard-chip') ?? ''),
+  );
+  const samples: ChipSample[] = [];
+  for (const name of names) {
+    const target = page.locator(`[data-guard-chip="${name}"] button`);
+    const read = async (state: ChipState) => {
+      await settle(page);
+      const measured = await target.evaluate((el, state) => {
+        const chain = [];
+        for (let node: Element | null = el; node !== null; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          chain.push({
+            backgroundColor: style.backgroundColor,
+            backgroundImage: style.backgroundImage,
+          });
+        }
+        const hover = el.matches(':hover');
+        const active = el.matches(':active');
+        return {
+          inState:
+            state === 'rest' ? !hover && !active : state === 'hover' ? hover && !active : active,
+          color: getComputedStyle(el).color,
+          backgroundColor: getComputedStyle(el).backgroundColor,
+          chain,
+        };
+      }, state);
+      samples.push({ name, state, ...measured });
+    };
+    await page.mouse.move(0, 0);
+    await read('rest');
+    await target.hover();
+    await read('hover');
+    await page.mouse.down();
+    await read('pressed');
+    // 游標移開再放開：click 要按下與放開在同一個元素上才會觸發，這樣浮層不會打開。
+    await page.mouse.move(0, 0);
+    await page.mouse.up();
+  }
+  await settle(page);
+  return samples;
+}
+
 function collectShadows(page: Page): Promise<ShadowSample[]> {
   return page.$$eval('[data-guard-shadow]', (els) =>
     els.map((el) => ({
@@ -196,13 +378,15 @@ function collectShadows(page: Page): Promise<ShadowSample[]> {
   );
 }
 
-/** 字疊在每一個候選底色上的對比，取最差的。 */
-function worstContrast(sample: TextSample): { ratio: number; on: string } {
-  const text = parseColor(sample.color);
-  return backdrops(sample.chain)
-    .map((b) => ({ on: b.label, ratio: contrastRatio(composite(text, b.rgb), b.rgb) }))
+/** 某個顏色疊在每一個候選底色上的對比，取最差的。 */
+function worstOn(color: string, chain: BackgroundLayer[]): { ratio: number; on: string } {
+  const fg = parseColor(color);
+  return backdrops(chain)
+    .map((b) => ({ on: b.label, ratio: contrastRatio(composite(fg, b.rgb), b.rgb) }))
     .reduce((worst, next) => (next.ratio < worst.ratio ? next : worst));
 }
+
+const worstContrast = (sample: TextSample) => worstOn(sample.color, sample.chain);
 
 const round = (n: number) => Math.round(n * 100) / 100;
 
@@ -223,13 +407,34 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   let page: Page;
   let texts: TextSample[];
   let focus: FocusSample[];
+  let fields: FieldSample[];
+  let docked: { borderTopWidth: string; boxShadow: string }[];
+  let located: { borderTopLeftRadius: string; backgroundColor: string }[];
   let shadows: ShadowSample[];
+  let chips: ChipSample[];
 
   beforeAll(async () => {
     page = await open(theme);
     texts = await collectTexts(page);
     shadows = await collectShadows(page);
+    chips = await collectChips(page);
     focus = await collectFocus(page);
+    fields = await collectFields(page);
+    docked = await page.$$eval('[data-guard-docked]', (els) =>
+      els.map((el) => {
+        const style = getComputedStyle(el);
+        return { borderTopWidth: style.borderTopWidth, boxShadow: style.boxShadow };
+      }),
+    );
+    located = await page.$$eval('[data-guard-located]', (els) =>
+      els.map((el) => {
+        const style = getComputedStyle(el);
+        return {
+          borderTopLeftRadius: style.borderTopLeftRadius,
+          backgroundColor: style.backgroundColor,
+        };
+      }),
+    );
   }, 60_000);
 
   afterAll(async () => {
@@ -237,18 +442,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   });
 
   test('量具有抓到東西：每個標了的元素都量到', () => {
-    expect(texts.map((t) => t.name)).toEqual(
-      expect.arrayContaining([
-        'body',
-        'button-default',
-        'card-title',
-        'card-counts-0',
-        'card-counts-1',
-        'popover',
-        'tooltip',
-        'sidebar-menu-button',
-      ]),
-    );
+    expect(texts.map((t) => t.name)).toEqual(expect.arrayContaining(REQUIRED_TEXTS));
     expect(focus.map((f) => f.name)).toEqual(
       expect.arrayContaining(['button-default', 'input-group', 'sidebar-menu-button']),
     );
@@ -293,14 +487,93 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
             `${f.name}：${f.outlineStyle} ${f.outlineWidth} ${f.outlineColor}（字色 ${f.pageColor}）`,
         ),
     ).toEqual([]);
+    const outlines = focus.map((f) => ({
+      name: f.name,
+      ...worstOn(f.outlineColor, f.outlineChain),
+    }));
+    report[`${theme}:focus-outline-contrast`] = outlines.map((o) => ({
+      ...o,
+      ratio: round(o.ratio),
+    }));
+    expect(
+      outlines
+        .filter((o) => !(o.ratio >= NON_TEXT_MIN))
+        .map((o) => `${o.name} 外框 ${round(o.ratio)} < ${NON_TEXT_MIN}（${o.on}）`),
+    ).toEqual([]);
+  });
+
+  test('欄位聚焦：邊框四邊都換成頁面的字色', () => {
+    report[`${theme}:fields`] = fields;
+    // 量具自檢：三種欄位都量到、真的在 `:focus-visible`，而且聚焦前後邊框有變（量到的是聚焦的樣子，不是平常的邊框）。
+    expect(fields.map((f) => f.name).sort()).toEqual(['input', 'input-group', 'textarea']);
+    expect(fields.filter((f) => !f.focusVisible).map((f) => f.name)).toEqual([]);
+    expect(
+      fields
+        .filter((f) => JSON.stringify(f.borderBefore) === JSON.stringify(f.borderAfter))
+        .map((f) => f.name),
+    ).toEqual([]);
+    expect(
+      fields
+        .filter((f) => f.borderAfter.some((c) => c !== f.pageColor))
+        .map((f) => `${f.name}：${f.borderAfter.join(' ')}（字色 ${f.pageColor}）`),
+    ).toEqual([]);
+  });
+
+  test('chip 三階：平常、滑鼠移上去、按下去，字對它實際的底色過門檻（#1515 那幾對守 develop 的值）', () => {
+    const measured = chips.map((c) => {
+      const key = `${c.name}:${c.state}`;
+      return {
+        key,
+        ...c,
+        min: CHIP_FLOORS[key]?.[theme] ?? (CHIP_STATUS_ON_PAGE.has(key) ? STATUS_MIN : TEXT_MIN),
+        ...worstOn(c.color, c.chain),
+      };
+    });
+    report[`${theme}:chips`] = measured.map((m) => ({
+      key: m.key,
+      min: m.min,
+      backgroundColor: m.backgroundColor,
+      on: m.on,
+      ratio: Math.round(m.ratio * 10000) / 10000,
+    }));
+    // 量具自檢：兩顆用量表都量到三種狀態、真的在那個狀態，而且三種狀態的底色都不一樣（量到的是 hover／按下的底，不是平常那一層）。
+    expect(measured.map((m) => m.key)).toEqual(
+      ['context-meter', 'context-meter-warning'].flatMap((name) =>
+        CHIP_STATES.map((state) => `${name}:${state}`),
+      ),
+    );
+    expect(measured.filter((m) => !m.inState).map((m) => m.key)).toEqual([]);
+    for (const name of ['context-meter', 'context-meter-warning'])
+      expect(
+        new Set(measured.filter((m) => m.name === name).map((m) => m.backgroundColor)).size,
+      ).toBe(3);
+    expect(
+      measured
+        .filter((m) => !(m.ratio >= m.min))
+        .map((m) => `${m.key} ${m.ratio.toFixed(4)} < ${m.min}（${m.on}）`),
+    ).toEqual([]);
+  });
+
+  test('對話裡被定位的那一則：圓角真的畫出來（--radius-3xl 有宣告），底色換成 chip', () => {
+    report[`${theme}:located`] = located;
+    expect(located).toHaveLength(1);
+    const [only] = located;
+    // 量具自檢：規則真的套上了（底色不是透明），圓角是 0 才算數，不是整條規則沒中。
+    expect(parseColor(only!.backgroundColor).alpha).toBeGreaterThan(0);
+    expect(Number.parseFloat(only!.borderTopLeftRadius)).toBeGreaterThan(0);
+  });
+
+  test('貼在輸入框上方的卡片是平的：邊 1px、沒有投影', () => {
+    report[`${theme}:docked`] = docked;
+    expect(docked).toEqual([{ borderTopWidth: '1px', boxShadow: 'none' }]);
   });
 
   // 只有亮色有上限：暗底上投影要更濃才看得到（同 `shadow-alpha.test.ts`）。暗色不定義這條，不是跳過。
   if (theme === 'light')
-    test(`亮色陰影：每層投影的透明度 ≤ ${MAX_SHADOW_ALPHA}（邊緣那一層不算）`, () => {
+    test('亮色陰影：每層投影的透明度不超過該元素的上限（邊緣那一層、inset 的高光與凹槽不算）', () => {
       const layers = shadows.flatMap((s) =>
         shadowLayers(s.boxShadow)
-          .filter((l) => !l.edge && l.color !== undefined)
+          .filter((l) => !l.edge && !l.inset && l.color !== undefined)
           .map((l) => ({ name: s.name, alpha: parseColor(l.color ?? '').alpha })),
       );
       report[`${theme}:shadow`] = layers;
@@ -310,7 +583,61 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
         new Set(SHADOWED),
       );
       expect(
-        layers.filter((l) => !(l.alpha <= MAX_SHADOW_ALPHA)).map((l) => `${l.name} ${l.alpha}`),
+        layers
+          .filter((l) => !(l.alpha <= (SHADOW_LIMITS[l.name] ?? 0)))
+          .map((l) => `${l.name} ${l.alpha} > ${SHADOW_LIMITS[l.name]}`),
       ).toEqual([]);
     });
+});
+
+/** 不透明的兩種退路：面真的不透明、字一樣過門檻。 */
+describe.each(
+  MODES.filter((m) => m !== 'translucent').flatMap((mode) =>
+    (['light', 'dark'] as const).map((theme) => [mode, theme] as const),
+  ),
+)('瀏覽器量出貨的 CSS：%s、%s', (mode, theme) => {
+  let page: Page;
+  let texts: TextSample[];
+  let surfaces: { name: string; backgroundColor: string; backdropFilter: string }[];
+
+  beforeAll(async () => {
+    page = await open(theme, mode);
+    texts = await collectTexts(page);
+    surfaces = await page.$$eval('[data-guard-surface]', (els) =>
+      els.map((el) => {
+        const style = getComputedStyle(el);
+        return {
+          name: el.getAttribute('data-guard-surface') ?? '',
+          backgroundColor: style.backgroundColor,
+          backdropFilter: style.backdropFilter,
+        };
+      }),
+    );
+  }, 60_000);
+
+  afterAll(async () => {
+    await page?.close();
+  });
+
+  test('面是不透明的、沒有 blur', () => {
+    report[`${mode}:${theme}:surfaces`] = surfaces;
+    expect(surfaces.map((s) => s.name).sort()).toEqual(['card', 'popover', 'sidebar']);
+    expect(
+      surfaces
+        .filter((s) => parseColor(s.backgroundColor).alpha !== 1 || s.backdropFilter !== 'none')
+        .map((s) => `${s.name}：${s.backgroundColor}、backdrop-filter ${s.backdropFilter}`),
+    ).toEqual([]);
+  });
+
+  test('每個字對它實際的底色過門檻', () => {
+    // 量具自檢：不透明的頁面也真的量到字，不然下面那條在空陣列上會綠。
+    expect(texts.map((t) => t.name)).toEqual(expect.arrayContaining(REQUIRED_TEXTS));
+    const measured = texts.map((t) => ({ name: t.name, min: t.min, ...worstContrast(t) }));
+    report[`${mode}:${theme}:contrast`] = measured.map((m) => ({ ...m, ratio: round(m.ratio) }));
+    expect(
+      measured
+        .filter((m) => !(m.ratio >= m.min))
+        .map((m) => `${m.name} ${round(m.ratio)} < ${m.min}（${m.on}）`),
+    ).toEqual([]);
+  });
 });

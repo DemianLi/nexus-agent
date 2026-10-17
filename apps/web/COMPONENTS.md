@@ -25,8 +25,8 @@
 - **程式碼小框**：用 `MonoBlock`，不手寫 `bg-chip … rounded-lg p-2 font-mono`。
 - **多行輸入**：`ui/` 以外不寫原生 `<textarea`，用 `ui/textarea` 的 `Textarea`。
 - **時長**：走 `motion.css` 的 token（`duration-(--duration-fast)`、`animation-duration-(--duration-overlay)`），不寫 `duration-200` 這種數字。這條連 `ui/` 一起管。
-- **高亮**：程式標出來的那一格（例如「看這一輪」的 `data-revealed`）在 `theme.css` 畫外框，不用 `ring-*`。被程式聚焦的元素 `:focus-visible` 時，ring 會被清掉。
-- **焦點外框**：`ui/` 以外不寫 `focus-visible:ring-*`。全域已經畫 outline，`theme.css` 把 ring 清掉了，寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在 `theme.css` 的 layer 外，`outline-none` 擋不掉；文字輸入框（`input`、`textarea`）不畫，它們用邊框變色或群組外框；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
+- **高亮**：程式標出來的那一格（例如「看這一輪」的 `data-revealed`）在 `styles/solid-glass.overrides.css` 畫外框，不用 `ring-*`。被程式聚焦的元素 `:focus-visible` 時，ring 會被清掉。
+- **焦點外框**：`ui/` 以外不寫 `focus-visible:ring-*`。全域已經畫 outline，`styles/solid-glass.overrides.css` 把 ring 清掉了（solid-glass 自己帶回 ring 的選擇器也照抄壓掉），寫了也畫不出來；配上 `outline-none` 就完全看不到焦點。外框被 `overflow-hidden` 裁掉時用 `focus-visible:-outline-offset-2` 畫在裡面。外框寫在該檔的 layer 外，`outline-none` 擋不掉；文字輸入框（`input`、`textarea`）不畫，它們用邊框變色或群組外框，**邊框變成文字色**（solid-glass 原本畫成灰線，覆寫檔換回來，`styles/focus-line-suppression.test.ts`）；真的自己畫了別的焦點樣子（例如整條變色），標 `data-focus="custom"` 才不畫外框（`styles/focus-outline.test.ts` 守著）。
 - **圓角**：走階梯（`rounded-md`…`rounded-3xl`、`rounded-full`）或有名字的 `rounded-row`。不寫 `rounded-[20px]`。
 - 需要一個系統裡沒有的值 → **先在規格與 `index.css` 加一階**（有名字、有理由），不要寫任意值。
 
@@ -40,7 +40,7 @@
 - **次要靠顏色，不靠字重；次要色本身要過 4.5:1**。說明、附註、時間一律 `text-muted-foreground`，不要把字變細（細字在中文與小字級下先糊掉）。`font-thin`／`font-extralight`／`font-light` 會被 `design-system.test.ts` 擋下。次要色的對比度由 `tokens-contrast.test.ts` 守著——次要色看不清楚，就等於沒寫。
 - **一個面一顆實心按鈕**。一張卡、一個面板、一列操作裡，只有主動作用實心（`Button` 預設 variant）；其他用 `outline`、`ghost`、`secondary`。按壓縮放也只給實心主按鈕（規格 §7）。條件渲染會讓同一個檔裡兩顆實心按鈕不同時出現，靜態量不準，**不寫測試，靠 review**。
 
-陰影也照同一個方向：亮色每一層投影的透明度不超過 0.06，想更明顯就多疊一層，不要把一層調濃（`src/styles/shadow-alpha.test.ts`）。暗底上投影要更濃才看得到，不套這個數字。
+陰影也照同一個方向：亮色每一層投影的透明度有上限，上限是 solid-glass 現在的值（浮起來的那一層 `--glass-shade` 0.28、貼地的 `--glass-contact` 0.06……全表在 `src/styles/shadow-alpha.test.ts`），只准一樣或更淡，不要把一層調濃（[#1468](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573) Q8 外觀照 solid-glass，[#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。`guard/guard.test.ts` 在真的 Chrome 裡量元件的每層投影。暗底上投影要更濃才看得到，不套上限。
 
 ## 字級的主次
 

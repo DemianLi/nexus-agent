@@ -369,6 +369,8 @@ export HTTP_PROXY=http://127.0.0.1:7890
 （`ThreadPump` 的 `AsyncLocalStorage`，對應 dsh 的 `currentInitiator()`）：比的是**這一輪的身分**，不是「有沒有身分」，所以別條 thread 的輪內鏈、
 或上一輪留下的計時器晚到觸發的暫停，都算人下的。
 **停止鈕不變**（[#265](https://github.com/DemianLi/nexus-agent/issues/265) Q8）：只收回續行授權，目標仍是 active，要 `/goal resume` 才會再往下走；暫停則是把相位改成 paused。
+**暫停或停止之後 `/goal resume` 會自己續上，不用再送一句話**：中止（aborted）、拋錯、撞輸出上限收回授權，只針對**收尾當時**那份授權——driver 讀日誌決定，收尾**之後**又有人下了 `create` 或 `resume`，那次收尾就不再收回剛武裝的授權（`goal-driver.ts` 的 `reauthorizedSince`）。
+dsh 是在 `turn/end` 抵達的當下收回（`goal-round-driver/src/index.ts:353-357`），事後的 resume 本來就不受影響；我們的決定是無狀態的，要靠日誌上的先後分開「收尾在授權前」與「收尾在授權後」。授權之前就收尾的（同一份授權跑的那一輪被中止）照舊收回。
 **一輪跑著時其餘斜線命令照舊被擋**（`/plan`、`/goal <目標>`、`/goal edit`、`/goal resume`、`/goal clear`、`/goal` 本身，回「這條 thread 正在跑：等這一輪跑完再打斜線命令」）：
 命令用 `runWhileBusy` 宣告「忙的時候也放行」的**完整字面值**（`/goal` 只宣告 `pause`，逐字比對，`/goal PAUSE` 不算），`slash.list` 的 descriptor 帶著這一格讓 web 知道哪些呼叫跑著時還能點。
 忙的時候放行的呼叫不能 `steer`（會把兩輪疊起來）。與 dsh `keepInbox: true` 的逐項比對：佇列保留、停住、下一次送出才跑，我們的停止鈕早就是這個形狀（[#637](https://github.com/DemianLi/nexus-agent/issues/637) Q2），同一條路。

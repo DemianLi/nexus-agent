@@ -2284,6 +2284,12 @@ export class ThreadPump {
     }
     try {
       // pump 自己為了「刪不掉的預約」下的暫停，不是人在外面按的暫停：不中止任何東西（#1516，維持 #638 的行為）。
+      //
+      // **這道排除今天走不到，沒有測試釘住（突變：拿掉它，全套仍綠——已知）。** 它要有作用，得在清 `#cancelledGoalRounds` 的這一刻
+      // `agentRunning` 為真而 `running` 為假（核准掛著），且有一份預約剛被刪。但預約只在 pump 閒著時排、下一輪開始就被領走；
+      // 實測（模型建好目標後停在核准點）停在核准點時 inbox 是空的，排程器不在核准點排預約。所以這裡的暫停碰到 `agentRunning`
+      // 為真的機會是零。留著是保險：**以後誰改了預約的排程時機（例如允許在核准點排預約），就要在這裡補一條測試**——
+      // 人打的那一輪停在核准點、預約被刪，核准不該被收回。
       this.#pausingInternally = true;
       driver.pause({ id: goal.id, revision: goal.revision });
     } catch (error: unknown) {
