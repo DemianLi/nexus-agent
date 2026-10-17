@@ -82,7 +82,7 @@ describe('liveBindingsOf：只綁實際掛上的列', () => {
     expect(idsOf(bindings)).toEqual(expect.arrayContaining(['echo', 'todo', 'goal']));
   });
 
-  it('起動期讀的 14 列不進表', async () => {
+  it('起動期讀的列不進表', async () => {
     const loaded = await load();
     const ids = idsOf(liveBindingsOf({ loaded, plugins: loaded.plugins }, []));
     for (const startupRead of [
@@ -91,6 +91,7 @@ describe('liveBindingsOf：只綁實際掛上的列', () => {
       'browser-session',
       'spill-policy',
       'thread-capacity',
+      'downlink',
     ]) {
       expect(ids, startupRead).not.toContain(startupRead);
     }

@@ -362,7 +362,7 @@
 #
 # **它們內部又分兩層，分界是消費點跑的時刻**：
 #
-# - **起動期**（`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`browser-session`、`deliverable-files`、`tool-text`、`projection-flush`、
+# - **起動期**（`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`browser-session`、`deliverable-files`、`tool-text`、`projection-flush`、`downlink`、
 #   `tool-result-stash`、`spill-policy`、`background-subagents`、`subagent-model-selection`、`live-model`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
 #   兩條交付路由，以及交給組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。`thread-title`
 #   另外還給寫退回標題的 pump 與 CLI（#647），吃的是同一份起動期的值；`thread-title-llm` 跟它一起在建模型的那一刻
@@ -495,6 +495,20 @@
   name: '#settings/projection-flush'
   config:
     flushMs: 100
+
+# 下行串流的心跳間隔與每條線的位元組上限（#1504）。一個分頁卡住（筆電闔上、`ssh -L` 斷在半路）不再讓 serve 的記憶體跟著那條 thread 的事件長，
+# 也不再讓那條 thread 因為一條死掉的下行永遠撤不掉、一直佔著 thread 名額。健康的分頁沒有感覺：閒著的線只多收到看不見的心跳註解行。
+# **數值全照 dsh、預設開**：`heartbeatIntervalMs` 2000（dsh `websocketHeartbeatIntervalMs`，範圍 1 到 2,147,483,647）、
+# `maxQueuedBytes` 2 MiB（dsh `TerminalFollower` 的 `maxBufferedBytes`）；「連兩拍沒排出去就斷」是協定常數，不開成設定。
+# **偏離登記**：偏離 A（心跳退成 SSE 註解行，理由 1）見 `src/wire-server.ts` 檔頭；偏離 B（事件下行加位元組上限，理由 2）、偏離 C（只斷線、
+# 不送終止 frame，理由 1）見 `src/bounded-event-queue.ts` 檔頭。起動期讀一次、改了要重啟。
+# **這一列關不掉**：它預設是開著，關掉（`disabled: true`）只會讓值回到預設、保護照舊在，卻讀起來像拆了保險絲，所以啟動當場拋錯
+# （`plugin-config.ts` 的 `PROTECTED_ENTRY_REASONS`）。**要放寬，把數值調大。**
+- id: downlink
+  name: '#settings/downlink'
+  config:
+    heartbeatIntervalMs: 2000
+    maxQueuedBytes: 2097152
 
 # 過大的工具結果暫存到主機上的哪裡、留多久（#734）。**兩格名字都是 dsh `spill-local` 的**（`root`、`cleanupPeriodDays`，
 # `packages/spill/spill-local/src/index.ts:66-69`，`477b4f4`）。`root` 不寫就是 harness home 底下的 `tool-results`
