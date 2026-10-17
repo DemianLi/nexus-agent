@@ -448,8 +448,10 @@ thread 各自掛一份跑一遍當基準，再掛**一份**服務所有 thread �
 
 **交付表的壽命（#1469 Q3 (a)）**：表在 `apply` 的閉包裡，一個行程一張（`apply` 只跑一次），鍵維持 `thread \0 位址 \0 callId`。以前組裝收掉時整張清空（`registry.lifecycle.onDispose`）；上樹之後**拿掉那一行，也不改成列卸載（`ctx.effect`）時清**——
 開著的 thread 握著快照裡的工具與觀察者，列一卸表就清的話，懸著的交付會寫不進日誌。
-**已知缺口（登記，不修）**：被中斷又沒有 resume 的那一筆留在表裡，條目握著那條 thread 的 `SessionLog`，thread 收掉之後整份日誌仍被那一筆引用。產品上跟以前一樣（serve 只在關機時收 thread，CLI 一個行程一條 thread，以前清表的時刻就是行程結束），
-等「閒置 thread 回收」那一張卡（#1464 量到每條 thread 常駐約 2.1 MB）一起處理；resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/nexus-plugin-present/src/index.test.ts`）。
+**已知缺口（#1484 已處理）**：被中斷又沒有 resume 的那一筆留在表裡，原本條目握著那條 thread 的 `SessionLog`，thread 收掉之後整份日誌仍被那一筆引用。閒置逐出（#1484）讓 thread 會在行程活著期間被撤，所以這一筆現在**只弱引用日誌**
+（`WeakRef<SessionLog>`，仍在 `apply` 閉包裡，不是模組層級）：日誌隨 thread 一起可回收；`onResult` 取不回日誌就丟掉那一筆，下一次寫入時順手清掉殘留鍵。
+**不需要新接縫、插件也不必知道 thread 何時被撤——鍵（日誌）自己消失**；重建的 thread 有全新的日誌，碰不到舊的那一筆（`shared-across-threads.test.ts` 的「thread 被撤掉又重建」）。
+resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/nexus-plugin-present/src/index.test.ts`）。
 
 **注入與 fs 查找（#1474 起）**：agent-instructions 是第六顆逐條 thread 的插件，也是 fs 查找的第三個消費者（讀哪一條 thread 的工作區）。它的 listener 是**一份服務所有 thread**，所以判準放在訊息的記號上（`additional_kwargs`），不放在閉包裡；fs 一律 `fs.forCall(invocation)` 呼叫當下才問。
 `agent-instructions-on-tree.test.ts` 的 E 組全部讓**第二條 thread 活著、AGENTS.md 內容不同**，再從這一條跑，兩個方向都量（對的有、錯的沒有）：認錯主人的樣子是「甲的規矩被注入乙的對話」，而兩邊各自都注入成功，沒有任何例外。

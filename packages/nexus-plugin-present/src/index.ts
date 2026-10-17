@@ -326,8 +326,19 @@ export interface PresentDelivery {
  * @param lookups - 會話與 fs 的查找（呼叫當下才問）。
  */
 export function createPresentDelivery(maxFiles: number, lookups: PresentLookups): PresentDelivery {
-  /** 等 `tools/result` 的交付，依「thread＋呼叫者是誰＋`callId`」。見檔頭。 */
-  const pending = new Map<string, { readonly log: SessionLog; readonly files: PresentedFile[] }>();
+  /**
+   * 等 `tools/result` 的交付，依「thread＋呼叫者是誰＋`callId`」。見檔頭。
+   *
+   * **日誌是弱引用**（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：一次呼叫通常在 `onResult` 就取走了這一筆，但呼叫在結果出來之前被打斷
+   * （中止、整條 thread 收掉）時這一筆會留下。閒置逐出之後 thread 從行程裡撤掉，留下的那一筆如果強引用日誌，整份日誌就被這張表
+   * 釘在記憶體裡、逐出白做。弱引用讓日誌隨 thread 一起可回收；`onResult` 取不回日誌（已回收）就丟掉這一筆，等同重啟後這張表是空的。
+   * 插件不必知道 thread 何時被撤——日誌不可達，這一筆就沒有東西可寫；新的 thread 有自己的日誌，碰不到舊的這一筆。
+   * 日誌回收了的殘留鍵在下一次 `set` 時順手清掉，表不會無限長。
+   */
+  const pending = new Map<
+    string,
+    { readonly log: WeakRef<SessionLog>; readonly files: PresentedFile[] }
+  >();
   const presentTool = tool(
     async (
       { files: requested }: { files: { path: string; description?: string }[] },
@@ -373,8 +384,11 @@ export function createPresentDelivery(maxFiles: number, lookups: PresentLookups)
           ...(file.description !== undefined && { description: file.description }),
         });
       }
+      for (const [key, entry] of pending) {
+        if (entry.log.deref() === undefined) pending.delete(key);
+      }
       pending.set(pendingKey(callThreadId(config), toolCallSessionAddress(config), callId), {
-        log: found.log,
+        log: new WeakRef(found.log),
         files,
       });
       return presentedText(files);
@@ -408,8 +422,11 @@ export function createPresentDelivery(maxFiles: number, lookups: PresentLookups)
     if (entry === undefined) return;
     pending.delete(key);
     if (result.isError) return;
+    // 日誌已經被回收（thread 被撤、記憶體裡沒有它了）就沒有東西可寫，見 `pending` 的說明。
+    const log = entry.log.deref();
+    if (log === undefined) return;
     // 同步寫，照 dsh：`tools/result` 由圍堵在記 `tool/result` 之前派發，所以交付先、結果後。見檔頭。
-    entry.log.append('deliverables/presented', { callId: exec.callId, files: entry.files });
+    log.append('deliverables/presented', { callId: exec.callId, files: entry.files });
   };
   return { tool: presentTool, onResult };
 }

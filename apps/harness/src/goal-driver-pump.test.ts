@@ -497,6 +497,34 @@ describe('掛了旗標', () => {
     await stop();
   });
 
+  /**
+   * **排程在 `flush()` 裡飛的那一段，`running` 是假的**，但這條 thread 不閒（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，
+   * 閒置逐出的判準）：撤掉它的話，排程器醒來會往一個已收線的 pump 預約。`goalRoundInFlight` 就是為這一段單獨給的讀數。
+   */
+  it('排程在 flush 裡飛的時候：running 為假、goalRoundInFlight 為真，排完回到假', async () => {
+    let release: () => void = () => undefined;
+    const flushing = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    const { pump, goals, stop } = await build({
+      turns: [QUIET],
+      threadId: 'driver-in-flight',
+      withDriver: true,
+      portOverrides: { flush: () => flushing },
+    });
+    expect(pump.goalRoundInFlight).toBe(false);
+    goals.serviceFor(pump.sessionLog)?.create({ objective: '把 CI 修綠', maxGoalRounds: 1 });
+    for (let waited = 0; !pump.goalRoundInFlight && waited < 200; waited += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 5));
+    }
+    expect(pump.goalRoundInFlight).toBe(true);
+    expect(pump.running).toBe(false);
+    release();
+    await settle(pump);
+    expect(pump.goalRoundInFlight).toBe(false);
+    await stop();
+  });
+
   it('沒掛旗標：建立目標也不自己排', async () => {
     const { pump, goals, stop } = await build({
       turns: [QUIET],

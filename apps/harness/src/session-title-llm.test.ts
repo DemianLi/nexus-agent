@@ -522,6 +522,41 @@ describe('使用者改名釘住標題（#633）', () => {
   });
 });
 
+describe('busy（閒置逐出的判準，#1484）', () => {
+  it('一次產生排上或在飛的時候為真，寫完回到假；沒有可產生的人話時從頭到尾是假', async () => {
+    let finish: () => void = () => undefined;
+    const t = attached(
+      () =>
+        new Promise((resolve) => {
+          finish = () => void resolve(stopReply());
+        }),
+    );
+    expect(t.detach.busy?.()).toBe(false);
+    t.startTurn(FIRST);
+    // 排上（等微任務開跑）那一刻就算：不能有一拍是「排著卻說閒著」。
+    expect(t.detach.busy?.()).toBe(true);
+    await until(() => t.calls.length === 1);
+    expect(t.detach.busy?.()).toBe(true);
+    finish();
+    await until(() => titleEvents(t.log.events).length === 2);
+    await settle();
+    expect(t.detach.busy?.()).toBe(false);
+    await t.detach();
+  });
+
+  it('標題已經有了、不再產生的後續輪次：一直是假', async () => {
+    const t = attached(() => stopReply());
+    t.startTurn(FIRST);
+    await until(() => titleEvents(t.log.events).length === 2);
+    await settle();
+    t.log.append('turn/start', { kind: 'message', text: '第二句' });
+    t.log.append('model/start', {});
+    await settle();
+    expect(t.detach.busy?.()).toBe(false);
+    await t.detach();
+  });
+});
+
 describe('拆掉', () => {
   it('中止還在跑的那一次、等它收尾，之後回來的寫不進去，也不講話', async () => {
     const t = attached(hangUntilAborted);

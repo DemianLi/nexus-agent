@@ -224,7 +224,14 @@ export interface SessionTitleLlmOptions {
 export type AttachSessionTitleLlm = (
   log: SessionLog,
   warn: (message: string) => void,
-) => () => Promise<void>;
+) => SessionTitleDetach;
+
+/**
+ * 拆掉函式，**上面掛著 `busy`**（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：這一刻有沒有一次產生已排上或在飛。
+ * 閒置逐出問它——標題在任何一輪之外寫日誌，撤 thread 時還在飛的那一次會被中止、結果丟掉，所以還在飛就不算閒。
+ * 缺席＝沒有這個讀數（手搭的測試替身），逐出端當作不忙。
+ */
+export type SessionTitleDetach = (() => Promise<void>) & { readonly busy?: () => boolean };
 
 /**
  * 建一顆 {@link AttachSessionTitleLlm}。行為見檔頭。
@@ -239,6 +246,8 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
     // 正在跑的那一次自己的中止柄：使用者改名時只撤它（#633，dsh `supersede`），拆掉時由上面的 `controller` 統一撤。
     let active: AbortController | undefined;
     let running: Promise<void> | undefined;
+    // 排上了還沒收尾的產生次數（含微任務延遲的那一拍），給 `busy` 讀。
+    let inFlight = 0;
 
     // 合格的人話：`turn/start {kind:'message'}`、清完不是空的。同退回標題那一條（`session-title.ts`）。
     const eligibleText = (event: SessionEvent): string | undefined =>
@@ -324,17 +333,23 @@ export function createSessionTitleLlm(options: SessionTitleLlmOptions): AttachSe
         const mainRoute = event.data.route;
         pending = undefined;
         // 回呼裡不能 append，延到微任務（同 dsh 的 `defer`）。
-        running = Promise.resolve().then(() =>
-          closed ? undefined : runOutsideTurn(message, mainRoute),
-        );
+        inFlight += 1;
+        running = Promise.resolve()
+          .then(() => (closed ? undefined : runOutsideTurn(message, mainRoute)))
+          .finally(() => {
+            inFlight -= 1;
+          });
       }
     });
 
-    return async () => {
+    const detach = async (): Promise<void> => {
       closed = true;
       unsubscribe();
       controller.abort();
       await running;
     };
+    // 只數排上的次數、不看 `pending`：`pending` 只在一輪之內（`turn/start` 到 `model/start`）有意義，那一刻 pump 本來就不閒；
+    // 一輪在 `model/start` 之前失敗的話它會一直留著，算進去就永遠逐不掉。
+    return Object.assign(detach, { busy: () => inFlight > 0 });
   };
 }

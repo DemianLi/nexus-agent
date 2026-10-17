@@ -432,7 +432,8 @@
 # **出廠不設上限**（沒有 `config:` 就是不限，行為與沒有這一列一樣）：Linux 的單條 thread 記憶體還沒量，給數字沒有依據；預設打開的話，
 # 既有部署會在某一天突然開始拒收。要開的人在自己的 `~/.nexus-agent/cordis.patch.yml` 寫 `config: { maxThreads: N }`（正整數），
 # 寫法見 docs/operations.md。到了上限，新 thread（含讀歷史、續聊磁碟上的舊 thread）回 `thread_at_capacity`，已在行程裡的照常；
-# **名額不會自己回來，要重啟 serve**。起動期讀一次、改了要重啟。
+# **名額不會自己回來，要重啟 serve**——除非設了 `idleEvictAfterMs`（#1484，第 1 級，同一列的另一格、出廠不設）：閒置條件全成立滿 T 毫秒的 thread 會被撤出記憶體、還名額，
+# 只有開了落盤才生效，寫法與代價見 docs/operations.md。起動期讀一次、改了要重啟。
 # **偏離登記：thread 數上限是「產品需求超出 dsh」**——dsh 沒有，借的是它背景工作准入的形狀，逐點見 `src/settings/thread-capacity.ts` 的檔頭。
 # **這一列關得掉**，關掉就是不限（跟預設一樣），所以不在 `PROTECTED_ENTRY_NAMES` 上。
 - id: thread-capacity

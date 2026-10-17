@@ -194,6 +194,14 @@ export interface ThreadPluginReader {
     list: ThreadPluginList,
     dropped: readonly AssemblyDropInput[],
   ): Promise<() => void>;
+  /**
+   * 把這一刻的快照再寫一次（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：閒置逐出放掉一條 thread 的 live 綁定之後呼叫，
+   * 讓 `plugin-snapshot.json` 不再列這條 thread。沒給 `liveVersions`（快照裡本來就沒有 `live`）或還沒讀過清單就什麼也不做。
+   *
+   * 「已儲存」取最近一次 {@link read} 的那份，理由同 {@link bindThread}。**不拋**：寫檔失敗由寫檔那一支記一次警告、照常往下走
+   * （`plugin-snapshot.ts` 的 `PluginSnapshotWriter.publish`），所以不會擋住逐出。
+   */
+  republishSnapshot(): Promise<void>;
 }
 
 /**
@@ -422,6 +430,10 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
       const release = liveTable.bind(threadId, liveBindingsOf(list, dropped));
       await options.publishSnapshot?.(snapshotFor(latestRead ?? list));
       return release;
+    },
+    async republishSnapshot() {
+      if (liveTable === undefined || latestRead === undefined) return;
+      await options.publishSnapshot?.(snapshotFor(latestRead));
     },
     noteDropped(list, dropped) {
       const droppedIds = new Set<string>();
