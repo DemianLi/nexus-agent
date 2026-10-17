@@ -39,10 +39,8 @@
  */
 
 import type { InvariantInstaller, NexusPlugin, PluginEntry } from '@nexus/core';
-
-import { applyGoalEvent, emptyGoalFoldState } from './fold.js';
-import type { GoalFoldState } from './fold.js';
-import { renderGoalRoundPrompt } from './prompt.js';
+import { applyGoalEvent, emptyGoalFoldState, renderGoalRoundPrompt } from '@nexus/goal';
+import type { GoalFoldState } from '@nexus/goal';
 
 /** 這個配套入口認領的 package 名。 */
 export const GOAL_INVARIANT_PACKAGE = '@nexus/plugin-goal';

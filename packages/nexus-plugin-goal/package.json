@@ -18,6 +18,15 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@nexus/commands": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/cordis-plugin-loader": "workspace:*",
+    "@nexus/core": "workspace:*",
+    "@nexus/goal": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
+    "@nexus/tool-result": "workspace:*",
+    "@nexus/tools": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",
@@ -26,7 +35,16 @@
   "dependencies": {
     "@langchain/core": "^1.2.9",
     "@langchain/langgraph": "^1.4.13",
-    "@nexus/core": "workspace:*",
     "zod": "^4.3.6"
+  },
+  "peerDependencies": {
+    "@nexus/commands": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/core": "workspace:*",
+    "@nexus/goal": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
+    "@nexus/tool-result": "workspace:*",
+    "@nexus/tools": "workspace:*"
   }
 }

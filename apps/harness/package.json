@@ -55,6 +55,7 @@
     "@nexus/cordis-plugin-include": "workspace:*",
     "@nexus/cordis-plugin-loader": "workspace:*",
     "@nexus/feedback": "workspace:*",
+    "@nexus/goal": "workspace:*",
     "@nexus/plugin-agent-instructions": "workspace:*",
     "@nexus/plugin-ask-user": "workspace:*",
     "@nexus/plugin-feedback": "workspace:*",

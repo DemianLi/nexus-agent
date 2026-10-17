@@ -9,16 +9,19 @@
  * 1. **方法不帶 `agent`。** dsh 的每一個方法都是 `get(agent)` / `create(agent, …)`，
  *    因為它有 `AgentRegistry` 與 scoped layers，一個服務要服務很多個 agent。我們一次
  *    `createNexusAgent` 一份註冊表、一份會話日誌，一個服務**天生只綁一份日誌**（建構
- *    子收的就是那份日誌的 subject），那個參數沒有指涉對象。同 `registry.ts` 對
- *    `ScopedLayers` 的處理，寫在這裡是為了後面的人不要「還原」它。
+ *    子收的就是那份日誌），那個參數沒有指涉對象。同 `registry.ts` 對
+ *    `ScopedLayers` 的處理，寫在這裡是為了後面的人不要「還原」它。（樹上一份 `goals` 服務服務整個行程，
+ *    所以 `goals.serviceFor(log)` 那一層補回了 dsh 的 `agent` 鍵，鍵是 root 日誌；單一 `GoalService` 仍只綁一份。）
  * 2. **`GOAL_AGENT_NOT_LIVE` 這個錯誤碼不在。** 它守的正是上面那個參數——dsh 的
  *    `assertLive` 擋的是「拿一個已經不在註冊表裡的 Agent 來呼叫」。參數沒了，那個碼就
  *    沒有生產者，留著等於留一個永遠拋不出來的分類。**是缺，不是省略**：驅動器或多
  *    agent 那一天真的來了，它跟著那個參數一起回來。
  * 3. **狀態不走投影註冊表。** dsh 的 `applyGoalProjection` 跑在 `sessionProjections`
  *    裡，帶 `stateVersion` 與 `wire.view`；我們沒有投影子系統，折疊持在這個物件的私有
- *    欄位上，由 {@link ../../nexus-core/src/sessions.ts | sessions 通道} 的 `observe()`
- *    推進——安裝當下會重播日誌裡已有的事件，所以接上一份有內容的日誌折得出同一個答案。
+ *    欄位上，由建構子**同步地**讀 `log.events` 重播、再 `log.subscribe` 接後續推進
+ *    （#1486 起：以前是 `sessions` 通道的 `observe()`，接上日誌就建；現在是第一次被問到才建，見 `index.ts`）。
+ *    重播與訂閱之間不漏、不重：`SessionLog.append` 先凍住監聽清單、再 push、再同步發布。
+ *    折得出的答案與以前相同：接上一份有內容的日誌重播一遍，一路看著它長大折出同一個結果。
  *
  * ## 折疊壞掉要扣住，不能靠拋
  *
@@ -36,31 +39,28 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { GOAL_CHANGE_VERSION, goalId } from '@nexus/core';
+import {
+  applyGoalEvent,
+  DEFAULT_MAX_GOAL_ROUNDS,
+  emptyGoalFoldState,
+  GOAL_CHANGE_VERSION,
+  goalId,
+} from '@nexus/goal';
 import type {
+  GoalActivation,
   GoalBlockReason,
   GoalChangeMeta,
   GoalClearChangeMeta,
+  GoalFoldState,
   GoalOperation,
   GoalPhase,
   GoalRef,
+  GoalService as GoalServiceContract,
   GoalSnapshot,
   GoalSnapshotChangeMeta,
-  SessionEvent,
-  SessionLog,
-  SessionSubject,
-} from '@nexus/core';
-import { applyGoalEvent, emptyGoalFoldState } from './fold.js';
-import type { GoalFoldState } from './fold.js';
-
-/**
- * 這個 process 准不准自動續行這個目標。**永遠不持久**。
- *
- * 它不進日誌是 dsh 刻意的：續行授權是「這個活著的行程被誰授權過」，重放一段歷史不該
- * 讓一個沒有人在的行程自己動起來。我們這一版連續行驅動器都沒有，所以它現在**沒有任何
- * 消費者**——它是給人看的「這個目標現在是不是待命狀態」，以及驅動器那張卡落地時的接口。
- */
-export type GoalActivation = 'armed' | 'disarmed';
+  GoalView,
+} from '@nexus/goal';
+import type { SessionEvent, SessionLog } from '@nexus/session';
 
 /**
  * 被拒絕的讀與變更的穩定分類。
@@ -101,16 +101,6 @@ export class GoalError extends Error {
   }
 }
 
-/** 目前的目標加上重放算出來的東西。 */
-export interface GoalView extends GoalSnapshot {
-  /** 已經開始的續行輪次。只有被準入的 `turn/start{kind:'goal'}` 推得動它，見 `fold.ts`。 */
-  readonly roundsStarted: number;
-  readonly createdAt: number;
-  readonly updatedAt: number;
-  /** process 內的續行授權，不持久。 */
-  readonly activation: GoalActivation;
-}
-
 /** 建一個目標要給的東西。 */
 export interface CreateGoalRequest {
   readonly objective: string;
@@ -123,15 +113,6 @@ export interface EditGoalRequest {
   readonly objective?: string;
   readonly maxGoalRounds?: number;
 }
-
-/**
- * `maxGoalRounds` 沒指定時的預設，**照抄 dsh 的 256**。
- *
- * **它進耐久快照，所以是建立當下的那個值**，不是讀取當下的預設：改了這個常數不會追溯
- * 到既有的目標身上。消費它的是續行排程器（`apps/harness` 的 `goal-driver.ts`）——
- * 用完就記一顆 `round-limit` 的 blocker，而那是開著 `--goal-driver` 時**唯一的硬上限**。
- */
-export const DEFAULT_MAX_GOAL_ROUNDS = 256;
 
 /** 建服務時換得掉的東西。 */
 export interface GoalServiceOptions {
@@ -196,11 +177,12 @@ function resolveBlockReason(reason: GoalBlockReason): GoalBlockReason {
 }
 
 /**
- * 一份會話日誌一個。
+ * 一份 root 會話日誌一個。
  *
- * 建構子就把觀察者掛上去了——**服務與日誌同壽命**，不存在「還沒開始觀察」的狀態。
+ * 建構子**同步地**重播 `log.events`、再 `log.subscribe` 接後續——**服務與日誌同壽命**，不存在「還沒開始觀察」的狀態。訂閱沒有拆除的
+ * 一步：服務存在以日誌為鍵的 `WeakMap` 裡（`index.ts`），日誌被回收時服務與監聽一起走；thread 收掉之後那份日誌不再有人寫入。
  */
-export class GoalService {
+export class GoalService implements GoalServiceContract {
   readonly #log: SessionLog;
   readonly #defaultMaxGoalRounds: number;
   readonly #now: () => number;
@@ -213,18 +195,21 @@ export class GoalService {
   #pending: { readonly seq: number; readonly activation: GoalActivation } | undefined;
 
   /**
-   * @param subject - 這一份日誌與它的觀察面，由 `sessions` 通道交過來。
+   * @param log - 這一份 root 日誌。**呼叫端只交 root**（子代理的日誌建出來也折得出自己的狀態，但沒有任何入口會問它）。
    * @param options - 預設輪次上限、時鐘與 id 工廠。
    * @throws `defaultMaxGoalRounds` 不是正的安全整數。
    */
-  constructor(subject: SessionSubject, options: GoalServiceOptions = {}) {
-    this.#log = subject.log;
+  constructor(log: SessionLog, options: GoalServiceOptions = {}) {
+    this.#log = log;
     this.#defaultMaxGoalRounds = resolveMaxGoalRounds(
       options.defaultMaxGoalRounds ?? DEFAULT_MAX_GOAL_ROUNDS,
     );
     this.#now = options.now ?? (() => Date.now());
     this.#newGoalId = options.newGoalId ?? (() => `goal-${randomUUID()}`);
-    subject.observe((event) => {
+    // **先補歷史再收後續，兩步在同一個同步區塊裡**：`append` 先凍住監聽清單、再 push、再同步發布（`session-log.ts` 的 `append`），
+    // 所以在別人的監聽回呼裡才建立也不會漏掉正在發布的那一筆、也不會把它收兩次。`subscribe` 不補發歷史。
+    for (const event of log.events) this.#observe(event);
+    log.subscribe((event) => {
       this.#observe(event);
     });
   }
