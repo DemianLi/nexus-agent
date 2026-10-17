@@ -756,6 +756,8 @@ export {
   SessionFormatUnsupportedError,
 } from './session-store.js';
 
+export { errorChain } from './error-chain.js';
+
 export type {
   SessionPersistenceConfig,
   SessionPersistenceCoordinatorOptions,

@@ -122,7 +122,7 @@ import type {
   SessionLog,
   SessionRegistry,
 } from '@nexus/core';
-import { FEEDBACK_CATEGORIES, ProjectionDetailError } from '@nexus/core';
+import { errorChain, FEEDBACK_CATEGORIES, ProjectionDetailError } from '@nexus/core';
 import type { GoalId } from '@nexus/goal';
 import type { CommandExecutor } from '@nexus/plugin-commands';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
@@ -867,8 +867,13 @@ interface ThreadState {
   readonly goalArmed: () => boolean;
   /** 人改目標的把手（`goal.pause`，#1516）；沒有 goal 域的組裝是 `undefined`。不依賴續行排程器。 */
   readonly goalControl: Pick<GoalDriverPort, 'goal' | 'pause'> | undefined;
+  /**
+   * 收尾。**每一步各自接住自己的錯、繼續收下一步**（落盤失敗不擋 agent 的 `dispose`，前一步失敗也不跳過落盤），
+   * 全部收完之後有錯才拒絕成 `AggregateError`，message 嵌入 thread id 與每一步的原因鏈
+   * （[#1511](https://github.com/DemianLi/nexus-agent/issues/1511)）。
+   */
   dispose(): Promise<void>;
-  /** 閒置逐出用的收尾：同 {@link dispose} 的順序，但每一步各自吞錯、回報給 `report`，一步出錯不擋後面的。 */
+  /** 閒置逐出用的收尾：同 {@link dispose} 的順序，但錯誤即時回報給 `report`、promise 不拒絕。 */
   evict(report: (error: unknown) => void): Promise<void>;
 }
 
@@ -1364,41 +1369,39 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         persistence?: { dispose(): Promise<void> };
       } = {};
       /**
-       * 收掉已經接上的每一樣，順序同成功路徑原本的 `state.dispose`：下行 → 標題 → 列檔索引 → 會話接線 → 落盤 → agent。
+       * 收掉已經接上的每一樣，順序：下行 → 標題 → 列檔索引 → 會話接線 → 落盤 → agent。
        *
-       * @param tolerant - 失敗路徑為 `true`：每一步各自吞掉自己的錯、繼續收下一步，原本的錯才不會被收尾的錯蓋掉，
-       *   也不會因為一步出錯就讓後面的（尤其是 agent 的寫租約）漏收。成功路徑為 `false`：照舊讓錯往上拋。
-       * @param report - 只在 `tolerant` 時有意義：吞掉的錯交給它（閒置逐出用它記 warn，#1484）。失敗路徑不給，那條路的錯沒有人能處理。
+       * **每一步各自接住自己的錯、繼續收下一步**（[#1511](https://github.com/DemianLi/nexus-agent/issues/1511)，原本只有失敗路徑與逐出
+       * 是這樣，成功路徑的關機收尾「第一步拋錯就停」：落盤失敗時 `threadAgent.dispose()` 不跑，前一步失敗時落盤整步跳過）。
+       * 錯誤交給 `collect`，由各條路自己決定怎麼報：關機收成 `AggregateError` 往外拋、逐出記 warn、組裝失敗那條路吞掉
+       * （原本的錯才不會被收尾的錯蓋掉）。
+       *
+       * @param collect - 一步出錯就叫一次，帶步驟名稱與錯誤。
        */
-      const release = async (
-        tolerant: boolean,
-        report?: (error: unknown) => void,
-      ): Promise<void> => {
-        const step = async (run: () => void | Promise<void>): Promise<void> => {
-          if (!tolerant) return run();
+      const release = async (collect: (step: string, error: unknown) => void): Promise<void> => {
+        const step = async (name: string, run: () => void | Promise<void>): Promise<void> => {
           try {
             await run();
           } catch (error: unknown) {
-            // 原本的錯照舊往上拋；收尾的錯在這條路上沒有人能處理（逐出路徑交給 `report`）。
-            report?.(error);
+            collect(name, error);
           }
         };
-        await step(() => detachFeed?.());
+        await step('下行', () => detachFeed?.());
         // **標題最先拆**：它在任何一輪之外寫日誌，拆掉會中止還在跑的那一次，之後回來的寫不進去
         // （同 dsh 的會話拆卸）。排在參與者前面，理由同下一條：寫得動日誌的先停手。
-        await step(() => attached.detachTitle?.());
+        await step('標題', () => attached.detachTitle?.());
         // **列檔索引接著收**，同 dsh 在 `agent/disposed` 上收它：中止還在背景跑的走訪，之後的查詢回空。它不寫日誌，
         // 所以排在寫得動日誌的那幾個之間哪裡都不改變誰看到什麼。
-        await step(() => attached.unsubscribeFileSearch?.());
-        await step(() => attached.fileSearch?.dispose());
+        await step('列檔索引退訂', () => attached.unsubscribeFileSearch?.());
+        await step('列檔索引', () => attached.fileSearch?.dispose());
         // 參與者、不變量、遙測三個一起收，順序（參與者先、遙測最後）住在 `createCliAgent` 的 `attachSessions`。
-        await step(() => attached.attachment?.detach());
+        await step('會話接線', () => attached.attachment?.detach());
         // **落盤收在 agent 之前，但這一行的依據跟上面三條不一樣，別讀成驗過的因果。**
         // 「有這一行」是量出來的（拿掉它，`serve` 那組落盤斷言會紅）；「排在
         // `threadAgent.dispose()` 之前」是預防，今天的組裝分不出兩種順序——同
         // `cli.ts` 關機那兩行的處境與措辭。
-        await step(() => attached.persistence?.dispose());
-        await step(() => threadAgent.dispose());
+        await step('落盤', () => attached.persistence?.dispose());
+        await step('agent', () => threadAgent.dispose());
       };
       try {
         // **三個東西互相要對方，所以綁定是延後的**：port 要日誌（pump 才有）與 flush
@@ -1536,8 +1539,19 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
               return true;
             }
           },
-          dispose: () => release(false),
-          evict: (report) => release(true, report),
+          dispose: async () => {
+            const failures: Error[] = [];
+            await release((step, error) => {
+              failures.push(new Error(`${step}收尾失敗`, { cause: error }));
+            });
+            if (failures.length > 0) {
+              throw new AggregateError(
+                failures,
+                `thread "${threadId}" 收尾失敗：${failures.map(errorChain).join('; ')}`,
+              );
+            }
+          },
+          evict: (report) => release((_step, error) => report(error)),
         };
         // **pump 狀態一變就往現在推最後活動時間**（#1484）：run 起落、掛上與撤回中斷，都經 `watch` 講出來。
         pump.watch(() => {
@@ -1548,7 +1562,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       } catch (error) {
         // 建不起來的那條不留在全域下行上：它的中斷永遠答不到。已經接上的每一樣也一併收掉（#1467）：
         // 下一次請求用同一個 thread id 重組，舊的訂閱、背景 host、落盤不收的話會和新的並存。
-        await release(true);
+        // 組裝失敗那條路：收尾的錯沒有人能處理，吞掉，原本的錯才不會被蓋掉。
+        await release(() => undefined);
         throw error;
       }
     })();
@@ -3334,17 +3349,38 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       await Promise.all([...closing.values()]);
       // 全域下行先收：它不屬於任何一條 thread，下面那幾條 pump 收掉也不會讓它結束。
       feed.close();
-      const opened = [...threads.values()];
+      const opened = [...threads.entries()];
       threads.clear();
       ready.clear();
       receipts.clear();
       // 還在建的那些也要等——`createAgent` 已經開了資源，只是還沒交出來。
-      const settled = await Promise.all(opened.map((thread) => thread.catch(() => undefined)));
-      for (const thread of settled) {
-        thread?.pump.close();
+      const settled = await Promise.all(
+        opened.map(async ([threadId, thread]) => ({
+          threadId,
+          state: await thread.catch(() => undefined),
+        })),
+      );
+      for (const { state } of settled) {
+        state?.pump.close();
       }
-      // 一個 thread 清不乾淨不該擋住其他的。
-      await Promise.all(settled.map((thread) => thread?.dispose().catch(() => undefined)));
+      // **每條 thread 都收完，再把失敗聚合起來拒絕**（#1511，照 dsh ACP bridge 的 `quiesce`：`Promise.allSettled`，
+      // `packages/acp/acp/src/index.ts:398-424`）。以前這裡 `.catch(() => undefined)` 把錯整個吞掉，
+      // serve 關機時最後一次落盤失敗一行都不會印。message 嵌入每條 thread 的 id 與原因鏈：呼叫端只印 `error.message`。
+      const results = await Promise.allSettled(settled.map(({ state }) => state?.dispose()));
+      const failures: Error[] = [];
+      for (const [index, result] of results.entries()) {
+        if (result.status === 'rejected') {
+          failures.push(
+            new Error(`thread "${settled[index]!.threadId}" 收尾失敗`, { cause: result.reason }),
+          );
+        }
+      }
+      if (failures.length > 0) {
+        throw new AggregateError(
+          failures,
+          `${String(failures.length)} 條 thread 收尾失敗：${failures.map(errorChain).join('; ')}`,
+        );
+      }
     },
   };
 }

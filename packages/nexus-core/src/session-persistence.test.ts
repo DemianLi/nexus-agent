@@ -732,3 +732,184 @@ describe('子代理冷復活：執行期接回來的日誌往原檔續寫（#127
     expect(created).toEqual(['root-r', 'root-r/bg-new']);
   });
 });
+
+/**
+ * 一條 thread 底下有好幾份會話日誌（root 加子代理）：**其中一份寫不下去，其餘照 flush、照收尾**，最後一次把錯報出來
+ * （[#1511](https://github.com/DemianLi/nexus-agent/issues/1511)）。
+ *
+ * 以前全域 flush／dispose 逐一 await、遇到第一個錯就停：子代理那份收尾失敗，排在它後面的 root 就漏收——
+ * 不做最後一次 flush、不關檔、不放寫租約。
+ */
+describe('一份失敗、其餘照收（#1511）', () => {
+  /**
+   * 多兩種行為的假把手：`close` 可以失敗或被攔住，而且**close 開始之後 `flush` 會拒絕**（同 `jsonl-session-store.ts` 關檔之後的樣子）。
+   * 現成的 `fakeStored` 在 close 之後 `flush` 不拒絕，拿它量「關到一半的跳過」會因為錯的理由變綠。
+   */
+  function richStored() {
+    const base = fakeStored();
+    const extra = {
+      closeFail: undefined as Error | undefined,
+      closeGate: undefined as Promise<void> | undefined,
+      closing: false,
+    };
+    const rich = Object.assign(base, extra, {
+      flush(): Promise<void> {
+        if (rich.closing) return Promise.reject(new Error('把手已經關掉了'));
+        rich.flushes += 1;
+        return Promise.resolve();
+      },
+      async close(): Promise<void> {
+        rich.closing = true;
+        rich.closes += 1;
+        await rich.closeGate;
+        if (rich.closeFail !== undefined) throw rich.closeFail;
+      },
+    });
+    return rich;
+  }
+
+  function assemble(children: readonly string[]) {
+    const sessions = new SessionRegistry('root-1');
+    const handles = new Map<string, ReturnType<typeof richStored>>();
+    const store: SessionStore = {
+      ...NO_READS,
+      create(header) {
+        const stored = richStored();
+        handles.set(header.id, stored);
+        return stored;
+      },
+      resume: () => Promise.reject(new Error('這一條不續接')),
+    };
+    const persistence = attachSessionPersistence(sessions, store, {
+      windowMs: MAX_PERSISTENCE_WINDOW_MS,
+      warn: () => {},
+    });
+    // 依序開：協調器的順序是 root、再來是這些子代理，root 永遠第一。
+    const logs = children.map((runId) => sessions.open({ kind: 'subagent', runId }));
+    for (const log of [sessions.root, ...logs]) turn(log);
+    return { sessions, handles, persistence };
+  }
+
+  it('1 全域 flush：中間那份失敗，排在它後面的照 flush；拒絕成 AggregateError，指名那一份與原因', async () => {
+    const { handles, persistence } = assemble(['a', 'b', 'c']);
+    handles.get('root-1/b')!.fail = new Error('磁碟滿了');
+
+    const error: unknown = await persistence.flush().then(
+      () => undefined,
+      (caught: unknown) => caught,
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    const aggregate = error as AggregateError;
+    expect(aggregate.errors).toHaveLength(1);
+    expect(aggregate.message).toContain('root-1/b');
+    expect(aggregate.message).toContain('磁碟滿了');
+    // root、a、c 都被 flush 過，事件都寫進去了；c 排在失敗那份後面。
+    for (const id of ['root-1', 'root-1/a', 'root-1/c']) {
+      expect(handles.get(id)!.flushes, id).toBe(1);
+      expect(handles.get(id)!.written, id).toHaveLength(1);
+    }
+  });
+
+  it('1b 兩份都失敗：兩個都報，message 兩個會話 id 都在', async () => {
+    const { handles, persistence } = assemble(['a', 'b']);
+    handles.get('root-1/a')!.fail = new Error('磁碟滿了');
+    handles.get('root-1/b')!.fail = new Error('權限不對');
+
+    const error = await persistence.flush().then(
+      () => undefined,
+      (caught: unknown) => caught as AggregateError,
+    );
+
+    expect(error?.errors).toHaveLength(2);
+    expect(error?.message).toContain('root-1/a');
+    expect(error?.message).toContain('權限不對');
+  });
+
+  it('2 dispose 收完每一份：一份子代理失敗，root 在內每個把手都關過一次', async () => {
+    const { sessions, handles, persistence } = assemble(['a', 'b', 'c']);
+    handles.get('root-1/b')!.fail = new Error('磁碟滿了');
+
+    const error = await persistence.dispose().then(
+      () => undefined,
+      (caught: unknown) => caught as AggregateError,
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error?.errors).toHaveLength(1);
+    expect(error?.message).toContain('root-1/b');
+    expect(error?.message).toContain('磁碟滿了');
+    for (const id of ['root-1', 'root-1/a', 'root-1/b', 'root-1/c']) {
+      expect(handles.get(id)!.closes, id).toBe(1);
+    }
+    // 收尾完成：排空者退下，不碰已關的把手。
+    const root = handles.get('root-1')!;
+    const flushes = root.flushes;
+    expect(await sessions.flush(sessions.root)).toBe(false);
+    expect(root.flushes).toBe(flushes);
+  });
+
+  it('2b dispose 之後 coordinators 清掉：再 dispose 一次是 no-op，不重關', async () => {
+    const { handles, persistence } = assemble(['a']);
+    handles.get('root-1/a')!.fail = new Error('磁碟滿了');
+    await expect(persistence.dispose()).rejects.toBeInstanceOf(AggregateError);
+    await persistence.dispose();
+    for (const id of ['root-1', 'root-1/a']) expect(handles.get(id)!.closes, id).toBe(1);
+  });
+
+  it('3 單一協調器：flush 與 close 都失敗，兩個錯都留（flush 在前）', async () => {
+    const log = new SessionLog('s');
+    const stored = richStored();
+    const coordinator = new SessionPersistenceCoordinator({ log, stored, warn: () => {} });
+    stored.fail = new Error('磁碟滿了');
+    stored.closeFail = new Error('關檔失敗');
+    turn(log);
+
+    const error = await coordinator.dispose().then(
+      () => undefined,
+      (caught: unknown) => caught as AggregateError,
+    );
+
+    expect(error).toBeInstanceOf(AggregateError);
+    expect(error?.errors.map((e: Error) => e.message)).toEqual(['磁碟滿了', '關檔失敗']);
+    expect(error?.message).toContain('磁碟滿了');
+    expect(error?.message).toContain('關檔失敗');
+  });
+
+  it('3b 只有 close 失敗：拒絕的就是那個錯本身；只有 flush 失敗也是（不包）', async () => {
+    const closeOnly = richStored();
+    closeOnly.closeFail = new Error('關檔失敗');
+    const a = new SessionPersistenceCoordinator({
+      log: new SessionLog('a'),
+      stored: closeOnly,
+      warn: () => {},
+    });
+    await expect(a.dispose()).rejects.toBe(closeOnly.closeFail);
+
+    const flushOnly = richStored();
+    flushOnly.fail = new Error('磁碟滿了');
+    const logB = new SessionLog('b');
+    const b = new SessionPersistenceCoordinator({ log: logB, stored: flushOnly, warn: () => {} });
+    turn(logB);
+    await expect(b.dispose()).rejects.toBe(flushOnly.fail);
+    expect(flushOnly.closes).toBe(1);
+  });
+
+  it('4 收尾途中的全域 flush：卡在某一份的 close 上，flush 不拋「把手已經關掉了」', async () => {
+    const { handles, persistence } = assemble(['a']);
+    let release: () => void = () => undefined;
+    handles.get('root-1/a')!.closeGate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+
+    const disposing = persistence.dispose();
+    // 倒著收：a 先收，卡在 close；它的旗標已經是 disposed。
+    for (let tick = 0; tick < 10; tick += 1) await Promise.resolve();
+    expect(handles.get('root-1/a')!.closing).toBe(true);
+
+    await expect(persistence.flush()).resolves.toBeUndefined();
+
+    release();
+    await disposing;
+  });
+});

@@ -29,6 +29,7 @@
 
 import { z } from 'zod';
 
+import { errorChain } from './error-chain.js';
 import type { NexusPlugin } from './plugin.js';
 import type { PluginRegistry } from './registry.js';
 import type { SessionEvent, SessionLog } from './session-log.js';
@@ -128,6 +129,18 @@ export class SessionPersistenceCoordinator {
   }
 
   /**
+   * 是不是已經開始收尾（{@link dispose} 被呼叫過）。
+   *
+   * 全域 flush 用它跳過「關到一半的」：`dispose()` 自己會做最後一次 flush、報錯也由那邊負責，
+   * 全域 flush 再多算一個「把手已經關掉了」只是噪音（[#1511](https://github.com/DemianLi/nexus-agent/issues/1511)，
+   * 照 dsh `session-persistence-jsonl/src/storage.ts:516-518` 的「關到一半的算已 flush」）。
+   * **跳過只能放在全域那一層，不能放進 {@link flush} 自己**：`dispose()` 先設旗標再呼叫 `flush()`，放進去最後一次落盤就沒了。
+   */
+  get disposed(): boolean {
+    return this.#disposed;
+  }
+
+  /**
    * 耐久屏障：排空到完全停穩，再要後端把東西真的寫下去。
    *
    * **這是唯一會響亮拒絕的地方。** 背景那條路被拒時只保留與 warn，下一次 flush 重試；
@@ -150,7 +163,10 @@ export class SessionPersistenceCoordinator {
    * 關機。這跟遙測那個「後端 reject 只換一行 warn」的 `dispose` 是相反的選擇，理由見
    * 模組說明。
    *
-   * @throws 最後那次 flush 或 `close()` 失敗。
+   * flush 失敗照樣 `close()`（放租約、關檔），而且**兩個錯都留**：只有一個失敗就拋那一個，兩個都失敗拋
+   * `AggregateError`（`errors` 依序是 flush、close；照 dsh `storage.ts:257-258`）——close 的錯不能蓋掉「哪些事件沒落盤」。
+   *
+   * @throws 最後那次 flush 或 `close()` 失敗；兩個都失敗時是 `AggregateError`。
    */
   async dispose(): Promise<void> {
     if (this.#disposed) return;
@@ -158,10 +174,23 @@ export class SessionPersistenceCoordinator {
     this.#unsubscribe?.();
     this.#unsubscribe = undefined;
     this.#cancelTimer();
+    const failures: unknown[] = [];
     try {
       await this.flush();
-    } finally {
+    } catch (error: unknown) {
+      failures.push(error);
+    }
+    try {
       await this.#stored.close();
+    } catch (error: unknown) {
+      failures.push(error);
+    }
+    if (failures.length === 1) throw failures[0];
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        `會話日誌 flush 與 close 都失敗了：${failures.map(errorChain).join('; ')}`,
+      );
     }
   }
 
@@ -273,6 +302,8 @@ export function attachSessionPersistence(
   } = {},
 ): { flush(): Promise<void>; dispose(): Promise<void> } {
   const coordinators: SessionPersistenceCoordinator[] = [];
+  /** 這一組裡每一份的會話 id，給聚合錯誤指名用。 */
+  const idOf = new Map<SessionPersistenceCoordinator, string>();
   /** 同一批協調器，按日誌找——耐久檢查點問的是「這一份」，不是全部（#599）。 */
   const byLog = new Map<SessionLog, SessionPersistenceCoordinator>();
   const unobserve = sessions.observe((entry) => {
@@ -313,6 +344,7 @@ export function attachSessionPersistence(
     });
     coordinators.push(coordinator);
     byLog.set(log, coordinator);
+    idOf.set(coordinator, log.sessionId);
     // **續接的 root 記下這一次實際載入的清單**（#1138）：header 沿用最初那一份，這一顆補上「後來是誰接手的」。
     // 協調器已經接上，所以這一筆會跟著落盤。前一顆是同樣內容的 `session/resumed` 就不疊——空轉的續接不讓日誌長。
     if (resumed !== undefined && options.buildMetadata !== undefined) {
@@ -335,18 +367,57 @@ export function attachSessionPersistence(
     await byLog.get(log)?.flush();
   });
   return {
+    // **每一份都做完再報**（#1511，照 dsh `session-persistence/src/index.ts:168-180`）：某一份失敗不擋住排在它後面的，
+    // 失敗的聚合成一個 `AggregateError`，message 嵌入每一份的會話 id 與原因鏈（只印 message 的人也看得到）。
+    // 已經開始收尾的跳過：它的 `dispose()` 自己會做最後一次 flush 並負責報錯。
     async flush() {
-      for (const coordinator of [...coordinators]) await coordinator.flush();
+      const failures: Error[] = [];
+      for (const coordinator of [...coordinators]) {
+        if (coordinator.disposed) continue;
+        try {
+          await coordinator.flush();
+        } catch (error: unknown) {
+          failures.push(
+            new Error(`會話 "${idOf.get(coordinator) ?? '?'}" flush 失敗`, { cause: error }),
+          );
+        }
+      }
+      throwAggregate(failures, '會話日誌 flush 失敗');
     },
+    // **每一份都收完再報**：照舊倒著收、一份接一份（不並行），每份各自接住，`coordinators` 與 `byLog` 一定清掉。
+    // 收尾失敗的那份不能讓排在它後面的（包括 root）漏收——漏收的是最後一次 flush、關檔與寫租約。
     async dispose() {
       unobserve();
       unflush();
-      // 倒著收，同 `agent-factory.ts` 收 runner 的順序。
-      for (const coordinator of [...coordinators].reverse()) await coordinator.dispose();
-      coordinators.length = 0;
-      byLog.clear();
+      const failures: Error[] = [];
+      try {
+        // 倒著收，同 `agent-factory.ts` 收 runner 的順序。
+        for (const coordinator of [...coordinators].reverse()) {
+          try {
+            await coordinator.dispose();
+          } catch (error: unknown) {
+            failures.push(
+              new Error(`會話 "${idOf.get(coordinator) ?? '?'}" 收尾失敗`, { cause: error }),
+            );
+          }
+        }
+      } finally {
+        coordinators.length = 0;
+        byLog.clear();
+        idOf.clear();
+      }
+      throwAggregate(failures, '會話日誌收尾失敗');
     },
   };
+}
+
+/** 有錯就拋 `AggregateError`，message 串進每一份的原因鏈；沒錯什麼都不做。 */
+function throwAggregate(failures: readonly Error[], what: string): void {
+  if (failures.length === 0) return;
+  throw new AggregateError(
+    failures,
+    `${what}（${String(failures.length)} 份）：${failures.map(errorChain).join('; ')}`,
+  );
 }
 
 /**
