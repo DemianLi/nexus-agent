@@ -21,8 +21,11 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 
-# 有這些異動才值得掃 TypeScript。三個非 TypeScript 的檔名是刻意的窄例外（「測試會讀這個檔」）：
-# `docs/operations.md`、`apps/harness/cordis.yml`、`apps/harness/cordis.serve.yml`、`apps/harness/src/*.patch.yml`。
+# 有這些異動才值得掃 TypeScript。非 TypeScript 的檔名是刻意的窄例外（「測試會讀這個檔」）：
+# `docs/operations.md`、`apps/harness/cordis.yml`、`apps/harness/cordis.serve.yml`、`apps/harness/src/*.patch.yml`，
+# 以及 web 的樣式（#1512）：`apps/web` 底下的 `.css`（讀 cascade 的護欄、build 後的 check-built-css 與瀏覽器護欄都量它）、
+# 產生顏色 token 的 `tokengen/`、build 後檢查產物的 `scripts/*.mjs`、瀏覽器護欄的測試頁 `guard/`。少了這幾條，
+# 只調 CSS 的 PR（例如把陰影調深）static 與 test-web 全部 skipped、gate 照樣綠。
 # 別放寬成所有 `.md` 或所有 `.yml`：「純文件的 PR 不會卡住」是設計。
 TS_RE = re.compile(
     r'\.(ts|tsx|mts|cts)$'
@@ -30,6 +33,7 @@ TS_RE = re.compile(
     r'|^docs/operations\.md$'
     r'|^apps/harness/cordis(\.serve)?\.yml$'
     r'|^apps/harness/src/.*\.patch\.yml$'
+    r'|^apps/web/.*\.css$|^apps/web/tokengen/|^apps/web/scripts/.*\.mjs$|^apps/web/guard/'
 )
 
 # 這些異動讓「哪些測試相關」的判斷失去依據，一律全跑（同時也一定會觸發掃描）。
@@ -134,14 +138,15 @@ class Suite:
 #   不在靜態 import 圖上；掃描整個原始碼樹的絆索測試（`'apps/web/src'` 出現在掃描根裡）異動落在哪都可能踩到。
 # - harness 的插件套件 gate（#1420）：`collectMigratedPluginViolations` 依檔案路徑動態載入每顆 `packages/nexus-plugin-*`
 #   的入口，不在 import 圖上。只動某顆插件的 PR（選擇性模式）不會讓它被挑到，而「遷出了卻忘了寫一致性測試」正是它要擋的。
-# - web：用 fs 讀原始碼的測試（讀的是別的檔，import 圖看不到）。
+# - web：用 fs 讀原始碼的測試（讀的是別的檔，import 圖看不到），以及經 `readCascade` 讀樣式表的護欄（#1498 起
+#   tokens-contrast、focus-outline、shadow-alpha、font-stack 改走量具，檔案本身不再出現 readFileSync，但讀的照樣是 CSS）。
 SUITES = {
     'harness': Suite(
         'apps/harness',
         ('.test.ts',),
         ('shippedPlugins', "'apps/web/src'", 'collectMigratedPluginViolations'),
     ),
-    'web': Suite('apps/web', ('.test.ts', '.test.tsx'), ('readFileSync', 'readdirSync')),
+    'web': Suite('apps/web', ('.test.ts', '.test.tsx'), ('readFileSync', 'readdirSync', 'readCascade')),
 }
 
 
