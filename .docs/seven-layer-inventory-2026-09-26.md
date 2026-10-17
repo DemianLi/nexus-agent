@@ -1,5 +1,7 @@
 # E·T·C·L／O·V·G 七層盤點（2026-09-26）
 
+> 後續版本：[`seven-layer-inventory-2026-10-18.md`](seven-layer-inventory-2026-10-18.md)（生產級刷新，判準與兩把尺見 [#1614](https://github.com/DemianLi/nexus-agent/issues/1614)）。本檔保留原樣不再更新。
+
 - **dsh 基準**：`477b4f4`（上游 master，2026-09-24；`git ls-remote` 確認沒有更新的 commit）。09-19 那次用的是 `ddefc45`。
 - **我們**：develop `70357bb`（#643）。之後合併的 PR #646、#648、#649、#656，以及新開的 #650–#655、#657，都不在判定範圍內（截至 develop `01008a9`）。受影響的列另記在「基準之後」一節。
 - **判準沿用 09-19**：dsh **出廠**有這項能力，我們沒有，也沒判過不做，就是缺口。「出廠」指 base、web-app、headless、acp-app、sdk-app、sdk-minimal 任一列，或四個 preset 任一列。
