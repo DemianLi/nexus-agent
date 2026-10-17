@@ -6,6 +6,7 @@
  *   - `data-guard-text`：量它的字色對它實際的底色（往上疊到不透明為止）；門檻預設 4.5，`data-guard-min` 另給。
  *   - `data-guard-texts`：同上，但量的是它底下每個 `[aria-hidden]` 的字（元件自己的 span 掛不了屬性）。
  *   - `data-guard-focus`：鍵盤聚焦後量焦點的樣子；外框畫在別的元素上時，那個元素掛 `data-guard-outline-host`。
+ *   - `data-guard-field`：文字欄位，鍵盤聚焦後量邊框的顏色（邊框畫在群組上時同樣看 `data-guard-outline-host`）。
  *   - `data-guard-shadow`：亮色時量 `box-shadow` 每層投影的透明度。
  *   - `data-guard-surface`：不透明的退路（reduced-transparency、`data-glass="opaque"`）下，量這個面是不是真的不透明、沒有 blur。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
@@ -18,8 +19,10 @@ import { Counts } from '@/components/changes/counts';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { Input } from '@/components/ui/input';
 import { InputGroup, InputGroupInput } from '@/components/ui/input-group';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Sidebar,
   SidebarMenu,
@@ -93,10 +96,16 @@ function GuardPage() {
           <InputGroup data-guard-outline-host="input-group" data-guard-shadow="input-group">
             <InputGroupInput
               data-guard-focus="input-group"
+              data-guard-field="input-group"
               aria-label="輸入框"
               placeholder="輸入"
             />
           </InputGroup>
+        </div>
+
+        <div style={{ ...row, width: 720 }}>
+          <Input data-guard-field="input" aria-label="單行欄位" placeholder="單行" />
+          <Textarea data-guard-field="textarea" aria-label="多行欄位" placeholder="多行" />
         </div>
 
         <div style={{ height: 160 }}>

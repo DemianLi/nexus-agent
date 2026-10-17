@@ -84,6 +84,25 @@
 }
 
 /*
+ * 欄位聚焦的邊框換回字色（#1512，PM 定 (b)）：SG 把輸入欄位聚焦時的邊框畫成 `--focus-line`（亮 50% 灰、暗 40% 白，
+ * `solid-glass.css:944-948`；一次性密碼格 `:951-955` 是內側 1px），而 Q5 寫明焦點用字色——Q8「外觀照 SG」碰到 Q5 涵蓋的項目時以 Q5 為準。
+ * 灰線對外側雖過 3，亮色聚焦前後的邊框只差 2.5。照抄同一段選擇器、後載入，只換顏色。
+ * `src/styles/focus-line-suppression.test.ts` 列舉 vendor 檔裡每一條用到 `var(--focus-line)` 的宣告，每一條都要在這裡被蓋掉；
+ * 瀏覽器那一層（`guard/`）量欄位聚焦後的 `border-color`。不讓 Prettier 排版，理由同上。
+ */
+/* prettier-ignore */
+:is([data-slot="input"], [data-slot="questionnaire-input"], [data-slot="textarea"], [data-slot="select-trigger"], [data-slot="native-select"], [data-slot="sidebar-input"]):focus-visible:not([aria-invalid="true"]),
+[data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible):not(:has([aria-invalid="true"])),
+[data-slot="combobox-chips"]:focus-within {
+  border-color: var(--ring);
+}
+
+/* prettier-ignore */
+[data-slot="input-otp-slot"][data-active="true"] {
+  box-shadow: inset 0 0 0 1px var(--ring);
+}
+
+/*
  * body 的字色、底色與 color-scheme 一定要寫在 layer 外面。寫在 `@layer base` 時，
  * **沒有 layer 的樣式永遠贏過有 layer 的**：頁面被嵌進任何帶 reset 的外殼，暗色會變成黑底深字。
  */

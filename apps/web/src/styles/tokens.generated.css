@@ -46,13 +46,15 @@
   --sidebar-ring: oklch(0.985 0 0);
 }
 
-/* 覆寫了 SG 在 reduced-transparency 底下也給值的 token：照樣重寫，不然上面無條件的值會蓋掉它的不透明值。 */
+/* reduced-transparency：上面覆寫了的照樣重寫（不然無條件的值會蓋掉不透明值），亮暗鑑別度不夠的照 1b 解過。 */
 @media (prefers-reduced-transparency: reduce) {
   :root {
     --card: oklch(0.958 0.005 265);
+    --sidebar: oklch(0.952 0 0);
   }
   .dark {
     --card: oklch(0.225 0 0);
+    --sidebar: oklch(0.13 0 0);
   }
 }
 
@@ -62,7 +64,7 @@
   --panel: oklch(0.947 0.006 265);
   --card: oklch(0.958 0.005 265);
   --popover: oklch(0.98 0.003 265);
-  --sidebar: oklch(0.985 0 0);
+  --sidebar: oklch(0.952 0 0);
 }
 .dark[data-glass='opaque'],
 .dark [data-glass='opaque'] {

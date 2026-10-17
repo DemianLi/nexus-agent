@@ -18,6 +18,7 @@ import { readCascade } from './css-cascade';
  * 3. **reduced-transparency 底下面是不透明的**：產物覆寫了 `--card`，排在 SG 後面的無條件值會蓋掉 SG 在那個條件下給的不透明值，
  *    產物要照樣重寫那一段。量的是 `index.css` 疊出來的結果。
  * 4. **`data-glass="opaque"` 底下也是**（#1468 Q7）：SG 在那裡只拿掉 blur，面還是半透明的；產物照 reduced-transparency 那一組值補上。
+ *    兩種不透明的退路都要過亮暗鑑別度，過不了的格子由產生器重解，列在 {@link OPAQUE_OVERRIDES}。
  */
 
 const GENERATED = fileURLToPath(new URL('./tokens.generated.css', import.meta.url));
@@ -78,14 +79,30 @@ describe('產生器產物', () => {
   });
 });
 
-/** 輸入表裡的面（`primary-solid` 是百分比，不是顏色）。 */
+/**
+ * 不透明的退路裡跟 SG 不同的格子（PM，#1512）：SG 的不透明亮色 sidebar 跟暗色的鑑別度差 0.159，過不了 Q5 的亮暗鑑別度，
+ * 產生器照「只調亮色、停在第一個達標的值」重解。只認 token 加值；其他格要一字不差等於 SG 原檔（`sg-input.test.ts` 釘 vendor）。
+ */
+const OPAQUE_OVERRIDES: { theme: Theme; name: string; value: string }[] = [
+  { theme: 'light', name: 'sidebar', value: 'oklch(0.952 0 0)' },
+];
+
+/** 不透明的退路該有的值：SG 原值，具名覆寫的換成覆寫值。 */
+function expectedOpaque(theme: Theme): [string, string][] {
+  return Object.entries(SG_REDUCED_TRANSPARENCY[theme]).map(([name, value]) => [
+    name,
+    OPAQUE_OVERRIDES.find((o) => o.theme === theme && o.name === name)?.value ?? value,
+  ]);
+}
+
+/** 不透明的面（`primary-solid` 是百分比，不是顏色）。 */
 const opaqueSurfaces = (theme: Theme) =>
-  Object.entries(SG_REDUCED_TRANSPARENCY[theme]).filter(([name]) => name !== 'primary-solid');
+  expectedOpaque(theme).filter(([name]) => name !== 'primary-solid');
 
 describe('reduced-transparency 底下（index.css 疊出來的結果）', () => {
   for (const theme of ['light', 'dark'] as const) {
     test.each(opaqueSurfaces(theme))(
-      `${theme}：--%s 不透明，而且等於 SG 原檔在那個條件下的值`,
+      `${theme}：--%s 不透明，而且等於 SG 原檔在那個條件下的值（具名覆寫的除外）`,
       (name, value) => {
         const actual = cascade.computed(SELECTORS[theme], `--${name}`, REDUCED);
         expect(actual).toBe(value);
@@ -100,6 +117,11 @@ describe('reduced-transparency 底下（index.css 疊出來的結果）', () => 
 
   test('判準：沒有條件時 --card 仍是半透明的（條件真的有分開量）', () => {
     expect(parseColor(cascade.computed([':root'], '--card') ?? '').alpha).toBeLessThan(1);
+  });
+
+  test('具名覆寫的格子真的跟 SG 不同（沒有留著過期的條目）', () => {
+    for (const { theme, name, value } of OPAQUE_OVERRIDES)
+      expect(SG_REDUCED_TRANSPARENCY[theme][name]).not.toBe(value);
   });
 });
 
@@ -122,7 +144,7 @@ describe('data-glass="opaque" 底下（#1468 Q7）', () => {
   test.each(OPAQUE_ELEMENTS)(
     '%s：面不透明，等於 reduced-transparency 那一組',
     (_where, theme, selectors) => {
-      for (const [name, value] of Object.entries(SG_REDUCED_TRANSPARENCY[theme])) {
+      for (const [name, value] of expectedOpaque(theme)) {
         expect(cascade.computed(selectors, `--${name}`), name).toBe(value);
       }
     },

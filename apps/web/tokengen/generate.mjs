@@ -268,30 +268,42 @@ const KEEP = {
 // ── 1. SG 表面：亮暗鑑別度（只疊在 --background 上量，只調亮色） ──
 
 const surfaceOnBg = (theme, css) => wcag(composite(css, BASE[theme].bg), BASE[theme].bg);
+
+/** 亮色的面要跟暗色一樣分得出來：達標就原樣；不然明度以 0.001 往兩邊交替找，停在第一個達標的值。 */
+function solveLightSurface(name, lightCss, darkCss) {
+  const dark = surfaceOnBg('dark', darkCss);
+  const ok = (css) => Math.abs(surfaceOnBg('light', css) - dark) <= T.surfaceDiff;
+  if (ok(lightCss)) return lightCss;
+  const { L, C, H, alpha } = lch(lightCss);
+  const at = (x) => `oklch(${x} ${C} ${H}${alpha ? ` / ${alpha}` : ''})`;
+  for (let k = 1; k <= 300; k++) {
+    for (const dir of [1, -1]) {
+      const x = Number((L + dir * k * 0.001).toFixed(3));
+      if (x >= 0 && x <= 1 && ok(at(x))) return at(x);
+    }
+  }
+  throw new Error(`--${name} 的亮暗差解不出來`);
+}
+
 const SURFACE = { light: {}, dark: {} };
 for (const name of ['card', 'border', 'sidebar']) {
-  const dark = surfaceOnBg('dark', SG.dark[name]);
-  const ok = (css) => Math.abs(surfaceOnBg('light', css) - dark) <= T.surfaceDiff;
-  let light = SG.light[name];
-  if (!ok(light)) {
-    const { L, C, H, alpha } = lch(light);
-    const at = (x) => `oklch(${x} ${C} ${H}${alpha ? ` / ${alpha}` : ''})`;
-    let found;
-    for (let k = 1; k <= 300 && found === undefined; k++) {
-      for (const dir of [1, -1]) {
-        const x = Number((L + dir * k * 0.001).toFixed(3));
-        if (x >= 0 && x <= 1 && ok(at(x))) {
-          found = at(x);
-          break;
-        }
-      }
-    }
-    if (found === undefined) throw new Error(`--${name} 的亮暗差解不出來`);
-    light = found;
-  }
-  SURFACE.light[name] = light;
+  SURFACE.light[name] = solveLightSurface(name, SG.light[name], SG.dark[name]);
   SURFACE.dark[name] = SG.dark[name];
 }
+
+// ── 1b. 不透明的退路（reduced-transparency、data-glass="opaque"）：SG 給的不透明面也要過亮暗鑑別度 ──
+// 會開不透明的正是需要無障礙的使用者，這條退路不做成例外（PM，#1512）：同一條規則、只調亮色。
+
+const OPAQUE = {
+  light: { ...SG_REDUCED_TRANSPARENCY.light },
+  dark: { ...SG_REDUCED_TRANSPARENCY.dark },
+};
+for (const name of ['card', 'sidebar'])
+  OPAQUE.light[name] = solveLightSurface(
+    `${name}（不透明）`,
+    SG_REDUCED_TRANSPARENCY.light[name],
+    SG_REDUCED_TRANSPARENCY.dark[name],
+  );
 
 // ── 2. nexus 獨有的表面：對 SG 的底色（stage、細線對「卡片疊在底色上」）重解 ──
 
@@ -400,20 +412,24 @@ const block = (sel, t, indent = '') =>
   `${indent}${sel} {\n${Object.entries(t)
     .map(([k, v]) => `${indent}  --${k}: ${v};`)
     .join('\n')}\n${indent}}\n`;
-const reduced = Object.keys(SG_REDUCED_TRANSPARENCY.light).filter((name) => name in tokens.light);
-const pick = (theme) =>
-  Object.fromEntries(reduced.map((n) => [n, SG_REDUCED_TRANSPARENCY[theme][n]]));
+// 要重寫的：上面無條件覆寫了的（不重寫的話會蓋掉 SG 的不透明值），以及不透明的值跟 SG 不同的（1b 解出來的）。
+const reduced = Object.keys(SG_REDUCED_TRANSPARENCY.light).filter(
+  (name) =>
+    name in tokens.light ||
+    THEMES.some((theme) => OPAQUE[theme][name] !== SG_REDUCED_TRANSPARENCY[theme][name]),
+);
+const pick = (theme) => Object.fromEntries(reduced.map((n) => [n, OPAQUE[theme][n]]));
 const reducedBlock =
   reduced.length === 0
     ? ''
-    : `\n/* 覆寫了 SG 在 reduced-transparency 底下也給值的 token：照樣重寫，不然上面無條件的值會蓋掉它的不透明值。 */\n` +
+    : `\n/* reduced-transparency：上面覆寫了的照樣重寫（不然無條件的值會蓋掉不透明值），亮暗鑑別度不夠的照 1b 解過。 */\n` +
       `${SG_REDUCED_TRANSPARENCY.condition} {\n${block(':root', pick('light'), '  ')}${block('.dark', pick('dark'), '  ')}}\n`;
 // `data-glass="opaque"`（#1468 Q7）：SG 在那裡只拿掉 blur（`solid-glass.css` 的 [data-glass="opaque"] 那條），面還是半透明的；
-// 照 reduced-transparency 那條路換成同一組不透明值。暗色要高一階 specificity，不然 `.dark` 的值會蓋回來或吃到亮色。
+// 照 reduced-transparency 那條路換成同一組不透明值（1b）。暗色要高一階 specificity，不然 `.dark` 的值會蓋回來或吃到亮色。
 const opaqueBlock =
   `\n/* data-glass="opaque"：面換成不透明，跟 reduced-transparency 同一組值（#1468 Q7；本地修改，見 vendor/solid-glass/README.md）。 */\n` +
-  block("[data-glass='opaque']", SG_REDUCED_TRANSPARENCY.light) +
-  block(".dark[data-glass='opaque'],\n.dark [data-glass='opaque']", SG_REDUCED_TRANSPARENCY.dark);
+  block("[data-glass='opaque']", OPAQUE.light) +
+  block(".dark[data-glass='opaque'],\n.dark [data-glass='opaque']", OPAQUE.dark);
 writeFileSync(
   out('../src/styles/tokens.generated.css'),
   `/* 由 tokengen/generate.mjs 產生，不要手改。只放要覆寫 solid-glass 的 token，亮暗成對（#1512）。 */\n\n` +
@@ -454,6 +470,9 @@ for (const name of ['card', 'border', 'sidebar'])
   md += surfaceRow(name, SURFACE.light[name], SURFACE.dark[name]);
 for (const name of ['chip', 'chip-hover', 'chip-pressed'])
   md += surfaceRow(name, NEXUS_SURFACE.light[name], NEXUS_SURFACE.dark[name]);
+md += `\n不透明的退路（reduced-transparency、data-glass="opaque"）：\n\n| token | 亮 | 暗 | 亮對底色 | 暗對底色 | 差 |\n| --- | --- | --- | --- | --- | --- |\n`;
+for (const name of ['card', 'sidebar'])
+  md += surfaceRow(name, OPAQUE.light[name], OPAQUE.dark[name]);
 md += `\nSG 底色：亮 ${hex(BASE.light.bg)}、暗 ${hex(BASE.dark.bg)}。\n`;
 md += `\n## 產物（oklch）\n\n| token | 亮 | 暗 |\n| --- | --- | --- |\n`;
 for (const k of Object.keys(tokens.light))

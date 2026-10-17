@@ -36,6 +36,8 @@
 | 8 | tokens.generated | `:1166-1170` `data-glass="opaque"` 只拿掉 blur | 面換成跟 reduced-transparency 同一組不透明值（含 `--primary-solid: 100%`）；暗色用 `.dark[data-glass]` 高一階 specificity（Q7） | `tokens-generated.test.ts`、`tokens-contrast.test.ts`（三種狀態都量） |
 | 9 | overrides 的 `@theme inline` | `:41-42` 字型堆疊 | Geist／Geist Mono 只打包 latin（`styles/fonts.css`），中文接 Noto Sans TC，系統後備 PingFang TC、Microsoft JhengHei，拿掉 SG 的三個簡體字型；等寬尾端保留三個 emoji 字型（#979）（Q6） | `font-stack.test.ts` |
 | 10 | overrides | `:37` `@custom-variant dark (&:is(.dark *))` | 重新定義成 `&:is(.dark, .dark *)`：`<html class="dark">` 本身也要吃到 `dark:`（Q8 保留的機制） | `scripts/check-built-css.mjs`（量產物） |
+| 11 | tokens.generated | `:1171-1196` 不透明面的亮色 `--sidebar`（`oklch(0.985 0 0)`） | 不透明的退路（#7、#8 兩處共用同一組值）也要過 Q5 的表面亮暗差 ≤ 0.05：SG 原值不過，用跟半透明那套同一支 `solveLightSurface` 只調亮色，重解成 `oklch(0.952 0 0)`；其餘不透明值已達標、照 SG（#1512，PM 定 (b)） | `tokens-generated.test.ts`（具名覆寫）、`tokens-contrast.test.ts`、`guard/`（不透明的面） |
+| 12 | overrides | `:944-948` 欄位聚焦的邊框、`:951-955` 一次性密碼格的內側線（都是 `--focus-line` 灰） | 照抄同一段選擇器、後載入，顏色換回 `var(--ring)`（字色）：Q5 焦點用字色，Q8 碰到 Q5 涵蓋的項目以 Q5 為準（#1512，PM 定 (b)）；不讓 Prettier 排版 | `focus-line-suppression.test.ts`（列舉每一條用到 `--focus-line` 的宣告）、`guard/`（欄位聚焦後的邊框） |
 
 另外**新增**、不是改 SG 的：`index.css` 的 `--radius-row`（SG 的 3xl 減 4px）與 nexus 獨有的顏色 token（`stage`、`chip*`、`brand-soft`、`warning`、`info`、`card-hairline`，Q11 留到第 ⑥ 步）。圓角階梯照 SG，不重綁。
 

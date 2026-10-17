@@ -23,7 +23,9 @@ import { startGuardServer, type GuardServer } from './server';
  * 1. **焦點**：鍵盤聚焦後 `box-shadow` 看得見的層跟沒聚焦時一樣（不帶 ring），外框是 2px 實線、顏色是頁面的字色（`.docs/web-ui-spec.md`、#1279），
  *    外框對它畫在上面的底色過非文字門檻 {@link NON_TEXT_MIN}（#1468 Q5）。
  * 2. **對比**：每個字的顏色對它實際的底色（往上疊到不透明為止，漸層取最差的停點）過門檻（文字 4.5，`data-guard-min` 另給）。
- * 3. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
+ * 3. **欄位聚焦**：文字欄位（`Input`、`Textarea`、輸入框群組）鍵盤聚焦後，邊框四邊都是頁面的字色（#1468 Q5 焦點用字色；
+ *    SG 畫的是 `--focus-line` 灰線，`solid-glass.overrides.css` 換回來，靜態那一層 `focus-line-suppression.test.ts` 列舉）。
+ * 4. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -75,6 +77,15 @@ interface FocusSample {
   outlineStyle: string;
   outlineWidth: string;
   outlineColor: string;
+  pageColor: string;
+}
+
+interface FieldSample {
+  name: string;
+  focusVisible: boolean;
+  /** 上、右、下、左四邊的 `border-*-color`。 */
+  borderBefore: string[];
+  borderAfter: string[];
   pageColor: string;
 }
 
@@ -226,6 +237,45 @@ async function collectFocus(page: Page): Promise<FocusSample[]> {
   return samples;
 }
 
+async function collectFields(page: Page): Promise<FieldSample[]> {
+  await page.keyboard.press('Tab');
+  const names = await page.$$eval('[data-guard-field]', (els) =>
+    els.map((el) => el.getAttribute('data-guard-field') ?? ''),
+  );
+  const samples: FieldSample[] = [];
+  for (const name of names) {
+    const target = page.locator(`[data-guard-field="${name}"]`);
+    const read = () =>
+      target.evaluate((el) => {
+        const style = getComputedStyle(el.closest('[data-guard-outline-host]') ?? el);
+        return {
+          focusVisible: el.matches(':focus-visible'),
+          border: [
+            style.borderTopColor,
+            style.borderRightColor,
+            style.borderBottomColor,
+            style.borderLeftColor,
+          ],
+          pageColor: getComputedStyle(document.body).color,
+        };
+      });
+    await target.evaluate((el) => (el as HTMLElement).blur());
+    await settle(page);
+    const before = await read();
+    await target.focus();
+    await settle(page);
+    const after = await read();
+    samples.push({
+      name,
+      focusVisible: after.focusVisible,
+      borderBefore: before.border,
+      borderAfter: after.border,
+      pageColor: after.pageColor,
+    });
+  }
+  return samples;
+}
+
 function collectShadows(page: Page): Promise<ShadowSample[]> {
   return page.$$eval('[data-guard-shadow]', (els) =>
     els.map((el) => ({
@@ -264,6 +314,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   let page: Page;
   let texts: TextSample[];
   let focus: FocusSample[];
+  let fields: FieldSample[];
   let shadows: ShadowSample[];
 
   beforeAll(async () => {
@@ -271,6 +322,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     texts = await collectTexts(page);
     shadows = await collectShadows(page);
     focus = await collectFocus(page);
+    fields = await collectFields(page);
   }, 60_000);
 
   afterAll(async () => {
@@ -346,6 +398,23 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
       outlines
         .filter((o) => !(o.ratio >= NON_TEXT_MIN))
         .map((o) => `${o.name} 外框 ${round(o.ratio)} < ${NON_TEXT_MIN}（${o.on}）`),
+    ).toEqual([]);
+  });
+
+  test('欄位聚焦：邊框四邊都換成頁面的字色', () => {
+    report[`${theme}:fields`] = fields;
+    // 量具自檢：三種欄位都量到、真的在 `:focus-visible`，而且聚焦前後邊框有變（量到的是聚焦的樣子，不是平常的邊框）。
+    expect(fields.map((f) => f.name).sort()).toEqual(['input', 'input-group', 'textarea']);
+    expect(fields.filter((f) => !f.focusVisible).map((f) => f.name)).toEqual([]);
+    expect(
+      fields
+        .filter((f) => JSON.stringify(f.borderBefore) === JSON.stringify(f.borderAfter))
+        .map((f) => f.name),
+    ).toEqual([]);
+    expect(
+      fields
+        .filter((f) => f.borderAfter.some((c) => c !== f.pageColor))
+        .map((f) => `${f.name}：${f.borderAfter.join(' ')}（字色 ${f.pageColor}）`),
     ).toEqual([]);
   });
 
