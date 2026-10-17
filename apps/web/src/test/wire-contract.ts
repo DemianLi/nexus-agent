@@ -19,6 +19,5 @@ export const UNWIRED_WIRE_CONTRACT = {
   threadUnarchive: async () => NOT_SUPPORTED,
   threadRename: async () => NOT_SUPPORTED,
   subagentList: async () => NOT_SUPPORTED,
-  // 暫停目標（#1516，按鈕是 #1517）：契約先到，web 還沒接。
   goalPause: async () => NOT_SUPPORTED,
 };

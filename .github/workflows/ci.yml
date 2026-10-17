@@ -20,7 +20,7 @@ permissions:
 
 # 結構：一個 plan job 算出範圍，各項檢查平行跑，最後由名為 `gate` 的彙總 job 收斂成單一 required check。
 #
-#   plan ─┬─ static ──────┐   format、lint、web build
+#   plan ─┬─ static ──────┐   format、lint、web build、web 的瀏覽器護欄
 #         ├─ typecheck ───┤   兩批（matrix）
 #         ├─ test-packages┤
 #         ├─ test-web ────┼─► gate   ← ruleset 綁的 required status check，名稱永遠不要改
@@ -154,6 +154,12 @@ jobs:
             [ "$(cat "$RUNNER_TEMP/$name.rc")" = "0" ] || { echo "::error::$name 失敗"; rc=1; }
           done
           exit $rc
+
+      # web 的瀏覽器護欄（#1512）：用真的 Chrome 量上一步 build 出來的 dist 上元件的計算值（焦點、合成後的對比、亮色陰影）。
+      # 掛在 static 而不是另開 job：產物已經在這裡，不多付一次安裝，gate 也不用改。上一步紅了這一步不跑，job 照樣是紅的。
+      # ubuntu-latest 自帶 Chrome，playwright-core 用 channel 'chrome' 開它，不另外下載瀏覽器。
+      - name: 瀏覽器護欄
+        run: pnpm --filter @nexus/web run test:guard
 
   # 22 個套件逐一啟動 tsc 是冷 runner 上最慢的部分，切成兩批平行。
   # 切法必須互補：`b` 是明列的一批，`a` 是「packages/ 全部扣掉 b」，
