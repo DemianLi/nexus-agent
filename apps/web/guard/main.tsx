@@ -34,12 +34,16 @@
  * - `?overlay=<名字>` 換成只畫一個開著的 modal 浮層（#1583）：modal 會把頁面其他部分設成 inert，跟主頁的焦點量測放不到一起。
  *   `dialog`、`sheet`、`mobile-sidebar`（要用手機寬度開）、`feedback`（回饋框，量寬度）、`alert-dialog`、`dropdown`（側欄列的「⋯」選單）、
  *   `picker`（輸入框底列的選擇座位，有搜尋框）、`dropdown-keyboard`（關著的選單，量鍵盤 Enter 打開與選取，#1583 驗收 D）。
+ * - `?overlay=composer-<狀態>` 畫產品的輸入框（SG 的 `Composer`，#1591 驗收 D）：`idle`（閒著）、`draft`（有草稿）、`running`（跑著）、
+ *   `running-draft`（跑著有草稿）、`menu`（`/` 選單開著）。輸入框貼在頁面底部，寬度跟產品一樣（左右各 16px、最寬 48rem）。
  */
-import { MoreHorizontal } from 'lucide-react';
+import { Cpu, MoreHorizontal, Shield } from 'lucide-react';
 import { StrictMode, useEffect, useState } from 'react';
+import type { ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Counts } from '@/components/changes/counts';
+import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
 import { RetryNotice } from '@/components/retry-notice';
 import { Surface } from '@/components/surface';
@@ -458,6 +462,12 @@ function OverlayPage({ name }: { name: string }) {
       return <KeyboardMenu />;
     case 'picker':
       return <OpenPicker />;
+    case 'composer-idle':
+    case 'composer-draft':
+    case 'composer-running':
+    case 'composer-running-draft':
+    case 'composer-menu':
+      return <ComposerPage state={name.slice('composer-'.length)} />;
     default:
       throw new Error(`沒有這個浮層：${name}`);
   }
@@ -501,6 +511,72 @@ function OpenPicker() {
         popoverLabel="選選項"
         testId="guard-picker"
       />
+    </div>
+  );
+}
+
+/**
+ * 產品的輸入框（#1591 驗收 D）：貼在頁面底部，左右各 16px、最寬 48rem（同產品）。底列放兩個座位與用量表，模型名稱用型錄裡
+ * 最長的那種，量 375 寬放不放得下。
+ */
+function ComposerPage({ state }: { state: string }) {
+  const running = state.startsWith('running');
+  const [draft, setDraft] = useState(
+    state === 'draft' || state === 'running-draft'
+      ? '幫我整理這週的會議紀錄'
+      : state === 'menu'
+        ? '/'
+        : '',
+  );
+  const seat = (testId: string, icon: ReactNode, label: string) => (
+    <PickerSeat
+      testId={testId}
+      icon={icon}
+      label={label}
+      accessibleName={`${label}，點開切換`}
+      tip={label}
+      popoverLabel="選"
+      groups={[{ id: 'g', heading: '選', items: [{ id: label, label, checked: true }] }]}
+      open={false}
+      onOpenChange={() => {}}
+      onPick={() => {}}
+    />
+  );
+  return (
+    <div
+      style={{
+        minHeight: '100svh',
+        display: 'flex',
+        alignItems: 'flex-end',
+        justifyContent: 'center',
+        padding: '0 16px 24px',
+      }}
+    >
+      <div style={{ width: '100%', maxWidth: '48rem' }}>
+        <Composer
+          draft={draft}
+          onDraftChange={setDraft}
+          placeholder="說點什麼…"
+          canSend={draft.trim() !== ''}
+          onSubmit={() => {}}
+          commands={[
+            { name: 'plan', description: '進出計劃模式。' },
+            { name: 'todo', description: '列出待辦。' },
+          ]}
+          onRunCommand={() => true}
+          stoppable={running}
+          stopDisabled={false}
+          onStop={() => {}}
+          attachments={{ items: [], onAdd: () => {}, onRemove: () => {} }}
+          seats={
+            <>
+              {seat('model-seat', <Cpu size={16} />, 'nvidia/nemotron-3-super-120b-a12b')}
+              {seat('permission-seat', <Shield size={16} />, 'workspace-write')}
+            </>
+          }
+          meter={<ContextMeter pressure={{ measure: { ...METER, approxTokens: 5 } }} />}
+        />
+      </div>
     </div>
   );
 }

@@ -20,6 +20,7 @@
 | `components/ui/{button,input,textarea,input-group,separator,skeleton,card,badge}.tsx` | solid-glass `src/components/ui/` 同名檔 | ③-1（#1523） |
 | `components/ui/{dialog,popover,sheet,tooltip}.tsx` | solid-glass `src/components/ui/` 同名檔（popover、dialog、sheet 套了 patch，見「本地修改」第 19、20 條） | ③-2（#1583） |
 | `components/ui/{alert-dialog,dropdown-menu,command}.tsx` | solid-glass `src/components/ui/` 同名檔 | ③-2（#1583，PR 2） |
+| `components/ui/{composer,context-ring}.tsx` | solid-glass `src/components/ui/` 同名檔（composer 套了 patch，見「本地修改」第 28、29 條） | #1591（插在 ③-3 前，PR 1） |
 | `shadcn/tailwind.css` | shadcn `dist/tailwind.css` | ③-1（#1523） |
 | `shadcn/LICENSE.md` | shadcn `LICENSE.md`（MIT） | ③-1（#1523） |
 
@@ -29,7 +30,7 @@
 
 之後加進來的，照地圖的順序：其餘的 registry 元件在 ③-2～③-4，12 個 AI 元件與 AgentWorkspace 在第 ④ 步。每一步用到哪些檔就加哪些，同一支 `sync.mjs`、同一個 commit 同步（Q18 的「一起同步」）。
 
-**元件怎麼接**（#1523 PM 定）：vendor 的元件原樣放這裡，`src/components/ui/<x>.tsx` 留著當 nexus 那一層，預設只轉出 vendor 版，本地修改能用 props 表達的寫成薄包裝放在那裡。vendor 檔裡的 `@/components/ui/button` 解析到的是 nexus 那一層，所以包裝層的修改在 vendor 的組合元件裡也生效。③-1 的 8 個元件，`components/ui/<x>.tsx` 都已換成轉出 vendor 版；有本地修改的只有 `input-group.tsx`（第 16 條），其餘是一行 `export … from`。③-2 的 dialog、popover、sheet、tooltip 同樣是一行轉出（#1583，PR 1）；alert-dialog、dropdown-menu、command 是轉出加一個薄包裝（PR 2，第 24～26 條）。
+**元件怎麼接**（#1523 PM 定）：vendor 的元件原樣放這裡，`src/components/ui/<x>.tsx` 留著當 nexus 那一層，預設只轉出 vendor 版，本地修改能用 props 表達的寫成薄包裝放在那裡。vendor 檔裡的 `@/components/ui/button` 解析到的是 nexus 那一層，所以包裝層的修改在 vendor 的組合元件裡也生效。③-1 的 8 個元件，`components/ui/<x>.tsx` 都已換成轉出 vendor 版；有本地修改的只有 `input-group.tsx`（第 16 條），其餘是一行 `export … from`。③-2 的 dialog、popover、sheet、tooltip 同樣是一行轉出（#1583，PR 1）；alert-dialog、dropdown-menu、command 是轉出加一個薄包裝（PR 2，第 24～26 條）。composer、context-ring 是一行轉出（#1591）：SG 的 `Composer` 只出外殼、文字、主按鈕與底列，`/` 與 @ 選單、附件、代理 chip 由 `src/components/composer.tsx` 用 `leading`、`above` 與包在外面的一層 `div` 接上（攔鍵在那層 `div` 的 capture 階段，見那個檔的檔頭）。
 
 - **Radix 換 Base UI 的用法差異**（#1583）：`asChild` 改成 `render={<元素 />}`；`onOpenAutoFocus`／`onCloseAutoFocus` 改成 Popup 的 `initialFocus`／`finalFocus`；`onInteractOutside` 沒有對應，在 Root 的 `onOpenChange(open, details)` 看 `details.reason === 'outside-press'` 再 `details.cancel()`；Trigger 開著時掛 `data-popup-open` 與 `aria-expanded`（不是 `data-state="open"`）；Positioner 的錨點寬度是 `--anchor-width`。下拉選單的 Item 用 `onClick`（不是 `onSelect`）。Trigger 是原生 button，鍵盤 Enter 打開靠瀏覽器把 Enter 轉成 click——jsdom 不做這一步，元件測試用點的，鍵盤那條在 `guard/` 量。SG 的 `CommandDialog` 不自己包 `Command`，由呼叫端包。
 - **tooltip 只是視覺**（#1583 驗收 D，PM 決定 issuecomment-6232918108）：Base UI 1.9.0 的 tooltip 不給 `role="tooltip"`、也不掛 `aria-describedby`（它的 `docs/react/components/tooltip.md` 寫明是刻意的），報讀器聽不到它。所以**tooltip 的文字不能帶 Trigger 名稱裡沒有的資訊**：模型座的報讀名稱因此補了「從下一步生效」。延遲 0 是 SG `TooltipProvider` 的預設值（`components/ui/tooltip.tsx:7`），Trigger 取 `delay ?? Provider 的 delay ?? 600`，產品裡每個 tooltip 都在 Provider 底下（`components/ui/tooltip.test.tsx`）。
@@ -83,6 +84,8 @@
 | 25 | `components/ui/dropdown-menu.tsx`（包裝層） | `components/ui/dropdown-menu.tsx:88` 選項 `py-1`（約 28px） | 加 `min-h-11 lg:min-h-8`：規格 §9 的觸控高度，1024 以下 44px、以上 32px（#1583，PM 決定第 3 點） | `guard/`（375 寬 44px、1280 寬 32px；拿掉會紅） |
 | 26 | `components/ui/command.tsx`（包裝層） | `components/ui/command.tsx:37-38` `CommandDialog` 預設的標題與說明是英文 | 預設換成「命令選單」「搜尋要執行的命令…」（§8）；產品碼目前沒用到 CommandDialog，照舊保留（#1583，PM 決定第 3 點） | `components/ui/command.test.tsx`（標題、說明各換回英文都紅） |
 | 27 | overrides | `components/ui/command.tsx:165` 每個 `CommandItem` 在 children 後面附一顆 `CheckIcon`，平常 `opacity-0` 但占位，`data-checked="true"` 時看得見 | `[data-slot="command-item"] > svg.lucide-check:last-child` 設成 `display: none`（不是 opacity）：nexus 的勾由呼叫端畫、帶報讀名稱「目前選的」，vendor 那顆是 `aria-hidden`；留著會畫出兩個勾、在 `flex-col` 的項目（composer 的命令選單）多一列（#1583，PM 決定第 3 點）。選擇器錨在 vendor 的結構（它永遠是最後一個子節點）；寫在 layer 外 | `registry-edits.test.ts`（覆寫檔含這段、vendor 原文仍是 `{children}` 後接 `<CheckIcon />`）、`guard/`（picker 勾選那一列只有一顆看得見的勾、名稱「目前選的」；拿掉這段會紅） |
+| 30 | overrides | `components/ui/composer.tsx` 的 textarea `outline-none`、外殼只有 `focus-within:border-ring/60`（外殼沒有邊框寬度，等於沒有焦點樣子） | textarea `:focus-visible` 時外殼畫 2px 字色外框、offset 2px，跟第 15 條同一套（外框在 layer 外、offset 在 base layer）；選擇器 `[data-slot="composer"]:has(textarea:focus-visible)`，不讓 Prettier 排版（#1591） | `guard/`（composer 五種狀態 × 亮暗，輸入框聚焦量外殼外框；拿掉這段會紅） |
+| 31 | overrides | `components/ui/composer.tsx` 主按鈕 `size="icon"`（32px） | 1024 以下 44px（規格 §9）：`[data-slot="composer"] textarea + [data-slot="button"]`，錨在 vendor「textarea 後面緊跟主按鈕」的結構上，寫在 layer 外。同一段把 textarea 的上下 padding 加到 10px：vendor 那一列 `items-end`、textarea 一行 32px，按鈕變 44px 後單行的字會沉在按鈕下緣。「＋」是 nexus 自己傳的 `leading`，高度寫在 `src/components/composer.tsx` 的 class 上，不經這裡（#1591） | `guard/`（375 寬 44px、1280 寬 32px，單行時 textarea 跟按鈕同高同中線；拿掉這段會紅） |
 
 **改 vendor 檔**（#1583 起，PM 決定第 1 點）：上面幾層都表達不出來、或要複製上游標記才做得到的，用 patch 改 vendor 檔。
 
@@ -97,6 +100,8 @@
 |---|---|---|---|---|
 | 19 | `patches/0001-popover-anchor.patch` | `components/ui/popover.tsx` 的 `PopoverContent` 只把 `align`、`alignOffset`、`side`、`sideOffset` 傳給 Positioner，其餘展開到 Popup | 解構與 `Pick` 加上 `anchor`，傳給 Positioner：composer 的 `/` 與 @ 選單錨在整個輸入框上、寬度等於它（`w-(--anchor-width)`），不是錨在某顆 Trigger。包裝層要做到同樣的事得把整個 PopoverContent 用 Base UI 部件重寫一份（#1583，PM 定） | `composer.test.tsx`「Positioner 量的是輸入框那一格」（拿掉這條 patch 會紅） |
 | 20 | `patches/0002-dialog-close-label.patch`、`patches/0003-sheet-close-label.patch` | `components/ui/dialog.tsx` 右上角關閉鈕的 sr-only 與 footer 關閉鈕、`components/ui/sheet.tsx` 關閉鈕的 sr-only，都是寫死的 "Close" | 改成「關閉」：報讀字串保留中文（#1497）。包裝層做得到但要複製上游的按鈕標記，上游一改就靜靜漂移；patch 只改字，上游一動同步就失敗（#1583，PM 定） | `components/ui/overlay-close-label.test.tsx`（dialog、sheet 各一條，打開後掃；拿掉任一 patch 那條會紅） |
+| 28 | `patches/0004-composer-textarea-props.patch` | `components/ui/composer.tsx` 的 textarea 沒有任何外部屬性（387c3c2 只有 `placeholder`），`...props` 給的是外殼 | 加 `textareaProps`（`id`、`aria-label`、`aria-labelledby`、`aria-describedby`），展開到 textarea：`<label htmlFor="prompt">` 與送出提示的 `aria-describedby` 要掛在輸入框本身。**內容逐字等於上游之後的 c60cb14**（三段 hunk 相同），拍板停在 387c3c2，所以用 patch 補；之後跟到 c60cb14 以後就拿掉這條（#1591） | `composer.test.tsx`（名稱「要說的話」、送出提示掛在 `aria-describedby`；拿掉這條 patch 會紅） |
+| 29 | `patches/0005-composer-combobox.patch` | 同上：`textareaProps` 的 `Pick` 不含 `aria-controls`／`aria-activedescendant`；textarea 的 ref 是元件內部的 | `Pick` 加這兩個（`/` 與 @ 選單開著時，輸入框指向清單與目前那一項，規格 §8 的 combobox）；加 `textareaRef`，用 `useImperativeHandle` 轉出同一個元素：插入 @ 代理、選完命令後要把焦點與游標放回輸入框。執行期 `...textareaProps` 本來就會帶過這兩個 aria 屬性，`Pick` 只是型別；但不改型別就只能靠「非字面物件不檢查多餘屬性」的漏洞，所以一起記成 patch。ref 的替代做法（從外殼 `querySelector('textarea')`）會把 nexus 綁在 SG 的 DOM 上，不採用（#1591） | `composer.test.tsx`「textareaRef 指到輸入框」（拿掉這條 patch 會紅，tsc 也紅） |
 
 另外**新增**、不是改 SG 的：`index.css` 的 `--radius-row`（SG 的 3xl 減 4px）與 nexus 獨有的顏色 token（`stage`、`chip*`、`brand-soft`、`warning`、`info`、`card-hairline`，Q11 留到第 ⑥ 步），以及 `tokens.generated.css` 的 `--primary-hover`／`--primary-active`（亮 `:12-13`、暗 `:35-36`，主按鈕 hover 與按下的底色，SG 沒有這兩格）。圓角階梯照 SG，不重綁。
 

@@ -7,8 +7,8 @@ import type {
   SlashDescriptor,
 } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { useState } from 'react';
-import type { ReactNode } from 'react';
+import { createRef, useState } from 'react';
+import type { ReactNode, RefObject } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Composer } from '@/components/composer';
@@ -50,6 +50,10 @@ function Harness({
   fileReferences,
   sessionReferences,
   seats,
+  stoppable = false,
+  stopDisabled = false,
+  onStop = () => {},
+  textareaRef,
 }: {
   initial?: string;
   canSend?: boolean;
@@ -62,6 +66,10 @@ function Harness({
   fileReferences?: (query: string, signal: AbortSignal) => Promise<FileReferenceListOutcome>;
   sessionReferences?: (query: string, signal: AbortSignal) => Promise<SessionReferenceListOutcome>;
   seats?: ReactNode;
+  stoppable?: boolean;
+  stopDisabled?: boolean;
+  onStop?: () => void;
+  textareaRef?: RefObject<HTMLTextAreaElement | null>;
 }) {
   const [draft, setDraft] = useState(initial);
   return (
@@ -89,9 +97,10 @@ function Harness({
         commands={[plan, feedback, goal, todo]}
         decorated={new Set(['feedback'])}
         onRunCommand={run}
-        stoppable={false}
-        stopDisabled={false}
-        onStop={() => {}}
+        stoppable={stoppable}
+        stopDisabled={stopDisabled}
+        onStop={onStop}
+        {...(textareaRef === undefined ? {} : { textareaRef })}
         {...(fileReferences === undefined ? {} : { fileReferences })}
         {...(sessionReferences === undefined ? {} : { sessionReferences })}
         {...(seats === undefined ? {} : { seats })}
@@ -145,6 +154,19 @@ describe('送出', () => {
     ]);
   });
 
+  it('只攔輸入框的鍵：焦點在「＋」或附件的移除鈕時，Cmd/Ctrl＋Enter 不送出（#1591）', () => {
+    const onSubmit = vi.fn();
+    render(<Harness onSubmit={onSubmit} withAttachment />);
+    type('還沒打完');
+    for (const button of [
+      screen.getByRole('button', { name: '加入附件' }),
+      screen.getByRole('button', { name: /移除/ }),
+    ])
+      fireEvent.keyDown(button, { key: 'Enter', ctrlKey: true });
+    expect(onSubmit).not.toHaveBeenCalled();
+    expect(input().value).toBe('還沒打完');
+  });
+
   it('草稿空白時 Cmd/Ctrl＋Enter 改成把排著的全部改成插話；有字或沒給就照舊（#710）', () => {
     const onSteerQueue = vi.fn();
     const onSubmit = vi.fn();
@@ -178,15 +200,18 @@ describe('送出', () => {
     expect(onSubmit).toHaveBeenCalledWith('', 'accelerated');
   });
 
-  it('底列提示預設「Enter 送出」，呼叫端可以換掉；寬螢幕才畫的那一段窄螢幕藏起來', () => {
+  // 畫面上不寫（#1591 Q3），只掛在輸入框的描述上，報讀還聽得到。
+  it('送出的說明只給報讀：預設「Enter 送出」是輸入框的描述，呼叫端可以換掉', () => {
+    const description = () => {
+      const id = screen.getByRole('textbox', { name: '要說的話' }).getAttribute('aria-describedby');
+      return id === null ? null : document.getElementById(id);
+    };
     const { unmount } = render(<Harness />);
-    expect(screen.getByTestId('send-hint').textContent).toBe('Enter 送出');
+    expect(description()?.textContent).toBe('Enter 送出');
+    expect(description()?.className).toContain('sr-only');
     unmount();
     render(<Harness sendHint={{ text: 'Enter 排隊', wide: '・Ctrl+Enter 插話' }} />);
-    expect(screen.getByTestId('send-hint').textContent).toBe('Enter 排隊・Ctrl+Enter 插話');
-    expect(screen.getByText('・Ctrl+Enter 插話').className).toBe('hidden sm:inline');
-    // 外殼是 flex：兩段之間不能有間距。
-    expect(screen.getByTestId('send-hint').classList.contains('gap-0')).toBe(true);
+    expect(description()?.textContent).toBe('Enter 排隊・Ctrl+Enter 插話');
   });
 
   it('送不出去時 Enter 不送、送出鍵按不下去', () => {
@@ -196,6 +221,70 @@ describe('送出', () => {
     key('Enter');
     expect(onSubmit).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(true);
+  });
+});
+
+describe('主按鈕（照 dsh `InputBar.tsx:323-344`，#1591）', () => {
+  const button = (name: string) => screen.queryByRole('button', { name });
+
+  it('沒在跑：只有送出，草稿空時按不下去', () => {
+    render(<Harness />);
+    expect(button('停止')).toBeNull();
+    expect(button('送出')?.hasAttribute('disabled')).toBe(true);
+    type('記一筆');
+    expect(button('送出')?.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('跑著、草稿空：主按鈕是停止，按下去叫 onStop', () => {
+    const onStop = vi.fn();
+    render(<Harness stoppable onStop={onStop} />);
+    expect(button('送出')).toBeNull();
+    fireEvent.click(button('停止')!);
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it('跑著、有草稿：主按鈕是送出，名稱說出這一下是排隊；按下去是 Enter 的送法', () => {
+    const onSubmit = vi.fn();
+    const onStop = vi.fn();
+    render(<Harness stoppable onStop={onStop} onSubmit={onSubmit} />);
+    type('下一句');
+    expect(button('停止')).toBeNull();
+    fireEvent.click(button('排隊送出')!);
+    expect(onSubmit).toHaveBeenCalledWith('下一句', 'enter');
+    expect(onStop).not.toHaveBeenCalled();
+  });
+
+  it('跑著、草稿是命令：照舊叫「送出」，不說排隊（dsh 的 plainMessageDraft）', () => {
+    render(<Harness stoppable />);
+    type('/feedback 好用');
+    expect(button('排隊送出')).toBeNull();
+    expect(button('送出')?.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('跑著、草稿送不出去（例如跑著時不收的命令）：主按鈕是停止（dsh 的 blocked）', () => {
+    const onStop = vi.fn();
+    render(<Harness stoppable canSend={false} onStop={onStop} />);
+    type('/plan');
+    expect(button('送出')).toBeNull();
+    fireEvent.click(button('停止')!);
+    expect(onStop).toHaveBeenCalledTimes(1);
+  });
+
+  it('斷線：沒有可按的停止；草稿空時是按不下去的送出', () => {
+    render(<Harness stoppable stopDisabled />);
+    expect(button('停止')).toBeNull();
+    expect(button('送出')?.hasAttribute('disabled')).toBe(true);
+  });
+});
+
+describe('從外面拿得到輸入框（README 本地修改第 29 條，patch `0005-composer-combobox`）', () => {
+  // App 用這顆 ref 把焦點放回輸入框（選了座位、關了面板之後）。vendor 的 textarea ref 是內部的，0005 把同一個元素交出來。
+  it('textareaRef 指到的就是那個輸入框', () => {
+    const ref = createRef<HTMLTextAreaElement>();
+    render(<Harness textareaRef={ref} />);
+    expect(ref.current).toBe(input());
+    ref.current?.focus();
+    expect(document.activeElement).toBe(input());
   });
 });
 
@@ -345,6 +434,15 @@ describe('`/` 選單', () => {
     type('/');
     fireEvent.click(screen.getByRole('option', { name: /feedback/ }));
     expect(run).toHaveBeenCalledWith('/feedback');
+  });
+
+  it('只移游標不打字（點一下、方向鍵）：游標離開 `/` 那一段，選單就收起（#1591：游標從外層的 onSelect 讀）', () => {
+    render(<Harness />);
+    type('/p');
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    act(() => input().setSelectionRange(0, 0));
+    fireEvent.select(input());
+    expect(screen.queryByRole('listbox')).toBeNull();
   });
 
   it('Esc 收起，同一個片段不再自己跳出來；再打一個字才回來。Shift＋Tab 也是收起', () => {

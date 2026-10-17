@@ -47,6 +47,21 @@
       "from": "src/components/ui/command.tsx",
       "sha256": "eaccda4b82a74406fc744a6ec084f56951a0a613e9c2a4f762b54fa548b376e9"
     },
+    "components/ui/composer.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/composer.tsx",
+      "sha256": "288604206ddc897867d89537f9471ff0dc3c5bb676993996b77ba11f317b00d2",
+      "patches": [
+        "patches/0004-composer-textarea-props.patch",
+        "patches/0005-composer-combobox.patch"
+      ],
+      "upstreamSha256": "9c5481305cae9f7493d1ba61c1e4afb9ddabd005a481fe77cb80b70bd885486b"
+    },
+    "components/ui/context-ring.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/context-ring.tsx",
+      "sha256": "f6c7441e7a9147f4c52af502c35a15ad7712034ce46fd37c721be92846b62304"
+    },
     "components/ui/dialog.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/dialog.tsx",

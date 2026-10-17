@@ -434,16 +434,19 @@ describe('對話介面', () => {
     render(<App client={client} />);
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
     const input = screen.getByLabelText('要說的話');
-    const sendButton = () => screen.getByRole('button', { name: '送出' }) as HTMLButtonElement;
+    const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement;
 
+    // 跑著時送不出去的那一行：主按鈕是停止（dsh `InputBar.tsx` 的 `blocked`，#1591）。
     fireEvent.change(input, { target: { value: '/plan' } });
-    expect(sendButton().disabled).toBe(true);
+    expect(screen.queryByRole('button', { name: '送出' })).toBeNull();
+    expect(button('停止').disabled).toBe(false);
+    // 命令照舊叫「送出」，不說排隊（dsh 的 `plainMessageDraft`）。
     fireEvent.change(input, { target: { value: '/feedback' } });
-    expect(sendButton().disabled).toBe(false);
+    expect(button('送出').disabled).toBe(false);
 
     fireEvent.change(input, { target: { value: '下一句' } });
-    expect(sendButton().disabled).toBe(false);
-    fireEvent.click(sendButton());
+    expect(button('排隊送出').disabled).toBe(false);
+    fireEvent.click(button('排隊送出'));
 
     const dock = await screen.findByTestId('queue-dock');
     expect(within(dock).getByText('下一句')).toBeTruthy();
@@ -725,7 +728,8 @@ describe('對話介面', () => {
       render(<App client={client} />);
       await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
       fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '下一句' } });
-      fireEvent.click(screen.getByRole('button', { name: '送出' }));
+      // 名稱說出這一下是排隊（dsh 的 `primaryLabel`，#1591）。
+      fireEvent.click(screen.getByRole('button', { name: '排隊送出' }));
       await waitFor(() => expect(modes).toEqual([undefined]));
     });
 
@@ -1090,7 +1094,9 @@ describe('斜線命令', () => {
     fireEvent.keyDown(input, { key: 'Enter' });
     expect(input.value).toBe('/todo');
     expect(slashed).toEqual([]);
-    expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(true);
+    // 留在草稿裡的那一行送不出去：主按鈕是停止，不是送出（dsh 的 `blocked`，#1591）。
+    expect(screen.queryByRole('button', { name: '送出' })).toBeNull();
+    expect(screen.getByRole('button', { name: '停止' })).toBeTruthy();
   });
 
   it('第一個字是 `/` 就走 slash.run，而且不進 transcript', async () => {
@@ -1538,17 +1544,19 @@ describe('目標列（#945）', () => {
     );
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
     const input = screen.getByLabelText('要說的話');
-    const sendButton = () => screen.getByRole('button', { name: '送出' }) as HTMLButtonElement;
+    // 跑著時送不出去的那一行，主按鈕是停止（dsh 的 `blocked`，#1591）；送得出去的命令叫「送出」。
+    const sendable = () => screen.queryByRole('button', { name: '送出' }) !== null;
+    const stops = () => screen.queryByRole('button', { name: '停止' }) !== null;
 
     // 清單是非同步到的：等它到了 `/goal pause` 才會放行。
     fireEvent.change(input, { target: { value: '/goal pause' } });
-    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    await waitFor(() => expect(sendable()).toBe(true));
     fireEvent.change(input, { target: { value: '/goal 把登入改好' } });
-    expect(sendButton().disabled).toBe(true);
+    expect([sendable(), stops()]).toEqual([false, true]);
     fireEvent.change(input, { target: { value: '/goal PAUSE' } });
-    expect(sendButton().disabled).toBe(true);
+    expect([sendable(), stops()]).toEqual([false, true]);
     fireEvent.change(input, { target: { value: '/plan' } });
-    expect(sendButton().disabled).toBe(true);
+    expect([sendable(), stops()]).toEqual([false, true]);
   });
 
   it('跟計劃標籤同時出現：兩個都在，標籤排在目標列前面', async () => {
@@ -4160,15 +4168,20 @@ describe('用量表（#528）', () => {
     }),
   ];
 
-  it('畫在輸入框底列「Enter 送出」旁邊，數字來自線上', async () => {
+  it('畫在輸入框底下那一列的右邊（SG 的 ComposerFooter，#1591），數字來自線上', async () => {
     seq = 0;
     const { client } = fakeClient(pressureFrames());
     render(<App client={client} />);
 
     const meter = await screen.findByTestId('context-meter');
     expect(meter.getAttribute('aria-label')).toBe('對話用量：約 75%，點開看明細');
-    // 這一輪在跑，提示換成兩種送法（#710）；要驗的是用量表的位置。
-    expect(meter.previousElementSibling?.textContent).toMatch(/^Enter 排隊・(⌘|Ctrl\+)Enter 插話$/);
+    expect(meter.closest('[data-slot="composer-footer-end"]')).not.toBeNull();
+    expect(meter.closest('[data-slot="composer"]')).toBeNull();
+    // 這一輪在跑，送出的說明換成兩種送法（#710），只給報讀：掛在輸入框的描述上（#1591）。
+    const describedBy = screen.getByLabelText('要說的話').getAttribute('aria-describedby') ?? '';
+    expect(document.getElementById(describedBy)?.textContent).toMatch(
+      /^Enter 排隊・(⌘|Ctrl\+)Enter 插話$/,
+    );
     fireEvent.click(meter);
     expect(screen.getByTestId('context-meter-input').textContent).toBe('4,321 token');
   });
