@@ -9,6 +9,7 @@ import { readCascade } from './css-cascade';
  */
 const cascade = readCascade();
 const OVERRIDES = 'styles/solid-glass.overrides.css';
+const DOCKED = ".bg-card[data-surface='docked']";
 
 describe('solid-glass 的本地修改：機制類', () => {
   test.each([
@@ -37,6 +38,21 @@ describe('solid-glass 的本地修改：機制類', () => {
       file: OVERRIDES,
     });
   });
+
+  test.each([
+    ['border-width', '1px'],
+    ['border-color', 'var(--glass-edge)'],
+    ['box-shadow', 'none'],
+  ])(
+    '貼在輸入框上方的卡片（docked）是平的：%s 由覆寫檔給（SG 的 .bg-card 會歸零 border、加上浮起的陰影）',
+    (property, value) => {
+      expect(cascade.winner(['.bg-card', DOCKED], property)).toMatchObject({
+        value,
+        layer: null,
+        file: OVERRIDES,
+      });
+    },
+  );
 
   test('「在對話裡定位」的高亮：chip 底色、跟泡泡同一階圓角', () => {
     const selector = "[data-slot='message-scroller-item'][data-located]";

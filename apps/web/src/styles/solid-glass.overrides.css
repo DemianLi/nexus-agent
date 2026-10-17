@@ -103,6 +103,18 @@
 }
 
 /*
+ * 貼在輸入框上方的卡片是平的（#1512，PM 定）：`Surface tone="docked"`（待辦、送出佇列、目標列）接在輸入框上、不浮在對話裡，
+ * 所以只畫一圈 1px 細線、不帶投影（`components/surface.tsx` 檔頭）。SG 的 `.bg-card`（`solid-glass.css:378-391`）把 border 歸零、
+ * 套上浮起來的整組陰影，docked 會變得跟 raised 一樣；這裡用 docked 專屬的屬性把平線補回來（Q8：機制類保留）。底色與 blur 照 SG。
+ * `solid-glass-overrides.test.ts` 釘住勝出的是這條；瀏覽器那一層（`guard/`）量 docked 的 border 與陰影。
+ */
+.bg-card[data-surface='docked'] {
+  border-width: 1px;
+  border-color: var(--glass-edge);
+  box-shadow: none;
+}
+
+/*
  * body 的字色、底色與 color-scheme 一定要寫在 layer 外面。寫在 `@layer base` 時，
  * **沒有 layer 的樣式永遠贏過有 layer 的**：頁面被嵌進任何帶 reset 的外殼，暗色會變成黑底深字。
  */

@@ -25,7 +25,9 @@ import { startGuardServer, type GuardServer } from './server';
  * 2. **對比**：每個字的顏色對它實際的底色（往上疊到不透明為止，漸層取最差的停點）過門檻（文字 4.5，`data-guard-min` 另給）。
  * 3. **欄位聚焦**：文字欄位（`Input`、`Textarea`、輸入框群組）鍵盤聚焦後，邊框四邊都是頁面的字色（#1468 Q5 焦點用字色；
  *    SG 畫的是 `--focus-line` 灰線，`solid-glass.overrides.css` 換回來，靜態那一層 `focus-line-suppression.test.ts` 列舉）。
- * 4. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
+ * 4. **貼在輸入框上方的卡片是平的**：`Surface tone="docked"` 的邊是 1px、沒有投影（SG 的 `.bg-card` 會把它變成浮起來的卡片，
+ *    `solid-glass.overrides.css` 補回來）。
+ * 5. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -315,6 +317,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   let texts: TextSample[];
   let focus: FocusSample[];
   let fields: FieldSample[];
+  let docked: { borderTopWidth: string; boxShadow: string }[];
   let shadows: ShadowSample[];
 
   beforeAll(async () => {
@@ -323,6 +326,12 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     shadows = await collectShadows(page);
     focus = await collectFocus(page);
     fields = await collectFields(page);
+    docked = await page.$$eval('[data-guard-docked]', (els) =>
+      els.map((el) => {
+        const style = getComputedStyle(el);
+        return { borderTopWidth: style.borderTopWidth, boxShadow: style.boxShadow };
+      }),
+    );
   }, 60_000);
 
   afterAll(async () => {
@@ -416,6 +425,11 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
         .filter((f) => f.borderAfter.some((c) => c !== f.pageColor))
         .map((f) => `${f.name}：${f.borderAfter.join(' ')}（字色 ${f.pageColor}）`),
     ).toEqual([]);
+  });
+
+  test('貼在輸入框上方的卡片是平的：邊 1px、沒有投影', () => {
+    report[`${theme}:docked`] = docked;
+    expect(docked).toEqual([{ borderTopWidth: '1px', boxShadow: 'none' }]);
   });
 
   // 只有亮色有上限：暗底上投影要更濃才看得到（同 `shadow-alpha.test.ts`）。暗色不定義這條，不是跳過。
