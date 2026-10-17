@@ -73,12 +73,21 @@ const STASH_ROOT_ROLE: PrivateFileRole = {
  * 會話目錄的名字：`session-` 加鑰匙雜湊的前十六個十六進位字。照 dsh 的 `session-<雜湊>`（`store.ts:78-81`）；
  * 鑰匙本身（路徑、thread id）不進檔名，所以檔名不洩漏別的會話的資訊，也不會有奇怪字元。
  *
+ * **偏離（理由 2）：取十六位，dsh 取十二位。** 既有部署的會話目錄已經是十六位；改成十二位的話，舊目錄續接時找不到、
+ * 清掃時也認不出來（{@link STASH_SESSION_DIR_RE}）。所以維持十六位，清掃的比對式跟著用十六位。
+ *
  * @param key - 呼叫端給的會話鑰匙。
  * @returns 目錄名。
  */
 export function stashSessionDirName(key: string): string {
   return `session-${createHash('sha256').update(key).digest('hex').slice(0, 16)}`;
 }
+
+/**
+ * {@link stashSessionDirName} 產生的名字，**整個名字精確比對**。照 dsh `cleanup.ts:17-23` 的 `SESSION_DIR_RE`：
+ * 共用的根底下有一個無關的 `session-backup`、`session-notes`，清掃也不碰。位數照上面那條偏離用十六位。
+ */
+const STASH_SESSION_DIR_RE = /^session-[0-9a-f]{16}$/;
 
 /** 這一次組裝的暫存去向。 */
 export interface ToolResultStashOptions {
@@ -285,7 +294,9 @@ export function createToolResultStash(options: ToolResultStashOptions): StashRou
  *   可能是別人放的，刪它等於替別人選了要刪什麼。
  * - 以**會話目錄裡最新的檔**的修改時間為準：一個還在用的會話（續接後又寫了新檔）不會因為它的第一個檔很舊被清掉。
  *   空的會話目錄以目錄自己的時間為準。
- * - 只碰 `session-*` 開頭的直接子目錄；其他名字（使用者放的東西）不動。
+ * - 只碰名字是 `session-<十六位雜湊>` 的直接子目錄（{@link STASH_SESSION_DIR_RE}）；其他名字（使用者放的東西，
+ *   包括 `session-notes` 這種剛好以 `session-` 開頭的）不動。
+ * - 那一項先 `lstat`，不是真的目錄就跳過：名字對的**符號連結**也不跟，否則會刪到連結指向的別處（dsh `cleanup.ts:309-326`）。
  * - 逐個目錄獨立：一個清不掉（權限、競爭）只記一筆，不擋其餘。根不存在就是沒東西可清。
  *
  * @param rootDir - 根目錄。
@@ -316,9 +327,10 @@ export async function cleanupToolResultStash(
   const cutoff = (options.now ?? Date.now()) - cleanupPeriodDays * 24 * 60 * 60 * 1000;
   let removed = 0;
   for (const name of names) {
-    if (!name.startsWith('session-')) continue;
+    if (!STASH_SESSION_DIR_RE.test(name)) continue;
     const dir = join(rootDir, name);
     try {
+      // lstat，不是 stat：名字對的符號連結在這裡就被擋下，不跟到它指向的目錄。
       const info = await lstat(dir);
       if (!info.isDirectory()) continue;
       let newest = info.mtimeMs;
