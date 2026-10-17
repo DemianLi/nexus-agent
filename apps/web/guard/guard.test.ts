@@ -42,7 +42,9 @@ import { startGuardServer, type GuardServer } from './server';
  *    底色跟一般的群組相同；欄位停用的照 vendor 是 0.5。
  * 11. **modal 浮層**（#1583，`?overlay=`，見 {@link OVERLAYS}）：dialog、sheet 的關閉鈕焦點、標題與說明的對比、陰影上限；手機側欄的抽屜
  *    沒有邊（本地修改第 21 條）；不透明的退路下面與遮罩都沒有 blur（第 22 條）；呼叫端的寬度跟 develop 一樣；reduced-motion 下
- *    sheet 與手機側欄的抽屜不位移、時長 ≤ 150ms（第 23 條）。
+ *    sheet 與手機側欄的抽屜不位移、時長 ≤ 150ms（第 23 條）。alert-dialog 的兩顆按鈕（footer 底帶上）的焦點與對比；下拉選單的選項
+ *    （平常與 highlighted）對比、觸控高度（第 25 條）、「⋯」開著時看得見；picker 的選項（選中與沒選中）對比、只有一顆勾（第 27 條）、
+ *    搜尋框的焦點外框畫在群組上（第 15 條的擴充）；鍵盤 Enter 打開選單、在選項上按 Enter 觸發（驗收 D）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -918,6 +920,8 @@ interface Overlay {
   name: string;
   viewport?: { width: number; height: number };
   marks: Record<string, Record<string, string>>;
+  /** 補完屬性之後、量之前要做的操作（例如滑鼠移到選項上，讓它變成 highlighted）。 */
+  prepare?: (page: Page) => Promise<void>;
   /** 一定要量到的字、焦點、面、遮罩（量具自檢）。 */
   texts: string[];
   focus: string[];
@@ -969,6 +973,55 @@ const OVERLAYS: Overlay[] = [
     surfaces: ['mobile-sidebar'],
     backdrops: ['mobile-sidebar-overlay'],
   },
+  {
+    name: 'alert-dialog',
+    marks: {
+      '[data-slot="alert-dialog-overlay"]': { 'data-guard-backdrop': 'alert-dialog-overlay' },
+    },
+    texts: [
+      'alert-dialog-title',
+      'alert-dialog-description',
+      'alert-dialog-cancel',
+      'alert-dialog-action',
+    ],
+    focus: ['alert-dialog-cancel', 'alert-dialog-action'],
+    surfaces: ['alert-dialog'],
+    backdrops: ['alert-dialog-overlay'],
+  },
+  {
+    name: 'dropdown',
+    marks: {},
+    // 滑鼠移到第二項上，它掛 `data-highlighted`（Base UI），量 highlighted 的底色。
+    prepare: async (page) => {
+      await page.hover('[data-guard-text="dropdown-item-highlighted"]');
+      await settle(page);
+    },
+    texts: ['dropdown-item', 'dropdown-item-highlighted'],
+    focus: [],
+    surfaces: ['dropdown'],
+    backdrops: [],
+  },
+  {
+    name: 'picker',
+    marks: {
+      '[data-slot="command-input"]': { 'data-guard-focus': 'command-input' },
+      '[data-slot="command-input-wrapper"] [data-slot="input-group"]': {
+        'data-guard-outline-host': '',
+      },
+      '[data-slot="command-item"][data-selected="true"]': {
+        'data-guard-text': 'command-item-selected',
+      },
+      '[data-slot="command-item"]:not([data-selected="true"])': {
+        'data-guard-text': 'command-item',
+      },
+      '[data-slot="command-item"][data-checked="true"]': { 'data-guard-checks': 'checked' },
+      '[data-slot="popover-content"]': { 'data-guard-surface': 'picker' },
+    },
+    texts: ['command-item-selected', 'command-item'],
+    focus: ['command-input-0'],
+    surfaces: ['picker'],
+    backdrops: [],
+  },
 ];
 
 /** 亮色時 modal 浮層每層投影的透明度上限：SG 現在的值（#1583 量到的），規則同 {@link SHADOW_LIMITS}。 */
@@ -976,6 +1029,8 @@ const OVERLAY_SHADOW_LIMITS: Record<string, number> = {
   dialog: 0.28,
   sheet: 0.28,
   'mobile-sidebar': 0.1,
+  'alert-dialog': 0.28,
+  dropdown: 0.28,
 };
 
 /**
@@ -1010,6 +1065,7 @@ async function openOverlay(
     viewport?: { width: number; height: number };
     reducedMotion?: boolean;
     marks: Record<string, Record<string, string>>;
+    prepare?: (page: Page) => Promise<void>;
   },
 ): Promise<Page> {
   if (browser === undefined || server === undefined) throw new Error('瀏覽器或伺服器沒起來');
@@ -1043,6 +1099,7 @@ async function openOverlay(
       });
     }
   }, options.marks);
+  await options.prepare?.(page);
   return page;
 }
 
@@ -1094,13 +1151,46 @@ describe.each(
   let shadows: ShadowSample[];
   let backdrops: { name: string; backdropFilter: string }[];
   let borders: { name: string; widths: string[] }[];
+  let rows: { name: string; backgroundColor: string; highlighted: boolean; selected: boolean }[];
+  let shown: Record<string, string>;
+  let checks: { name: string; visible: string[]; hidden: number }[];
 
   beforeAll(async () => {
     page = await openOverlay(overlay.name, theme, {
       ...(overlay.viewport === undefined ? {} : { viewport: overlay.viewport }),
       marks: overlay.marks,
+      ...(overlay.prepare === undefined ? {} : { prepare: overlay.prepare }),
     });
     texts = await collectTexts(page);
+    rows = await page.$$eval(
+      '[data-guard-text^="dropdown-item"], [data-guard-text^="command-item"]',
+      (els) =>
+        els.map((el) => ({
+          name: el.getAttribute('data-guard-text') ?? '',
+          backgroundColor: getComputedStyle(el).backgroundColor,
+          highlighted: el.hasAttribute('data-highlighted'),
+          selected: el.getAttribute('data-selected') === 'true',
+        })),
+    );
+    shown = Object.fromEntries(
+      await page.$$eval('[data-guard-shown]', (els) =>
+        els.map((el) => [el.getAttribute('data-guard-shown') ?? '', getComputedStyle(el).opacity]),
+      ),
+    );
+    checks = await page.$$eval('[data-guard-checks]', (els) =>
+      els.map((el) => {
+        const svgs = [...el.querySelectorAll('svg')];
+        const isVisible = (svg: Element) => {
+          const box = svg.getBoundingClientRect();
+          return getComputedStyle(svg).display !== 'none' && box.width > 0 && box.height > 0;
+        };
+        return {
+          name: el.getAttribute('data-guard-checks') ?? '',
+          visible: svgs.filter(isVisible).map((svg) => svg.getAttribute('aria-label') ?? ''),
+          hidden: svgs.filter((svg) => !isVisible(svg)).length,
+        };
+      }),
+    );
     shadows = await collectShadows(page);
     backdrops = await collectBackdrops(page);
     borders = await page.$$eval('[data-guard-border]', (els) =>
@@ -1129,16 +1219,52 @@ describe.each(
   });
 
   if (overlay.focus.length > 0)
-    test('關閉鈕的鍵盤焦點：不帶 ring，外框是 2px 實線、頁面的字色', () => {
+    test('鍵盤焦點（關閉鈕、確認框的按鈕、搜尋框）：不帶 ring，外框是 2px 實線、頁面的字色', () => {
       expect(focus.map((f) => f.name).sort()).toEqual([...overlay.focus].sort());
       expectFocus(focus, key);
     });
 
-  test('遮罩照 SG 有 blur（量具自檢：不透明的退路那邊量到 none 才算數）', () => {
-    report[`${key}:backdrops`] = backdrops;
-    expect(backdrops.map((b) => b.name)).toEqual(overlay.backdrops);
-    expect(backdrops.filter((b) => b.backdropFilter === 'none').map((b) => b.name)).toEqual([]);
-  });
+  if (overlay.backdrops.length > 0)
+    test('遮罩照 SG 有 blur（量具自檢：不透明的退路那邊量到 none 才算數）', () => {
+      report[`${key}:backdrops`] = backdrops;
+      expect(backdrops.map((b) => b.name)).toEqual(overlay.backdrops);
+      expect(backdrops.filter((b) => b.backdropFilter === 'none').map((b) => b.name)).toEqual([]);
+    });
+
+  if (overlay.name === 'dropdown') {
+    test('滑鼠移上去的選項掛 data-highlighted、底色跟平常的不同（量具自檢：上面量的確實是兩種狀態）', () => {
+      report[`${key}:rows`] = rows;
+      expect(rows.map((r) => [r.name, r.highlighted])).toEqual([
+        ['dropdown-item', false],
+        ['dropdown-item-highlighted', true],
+      ]);
+      expect(rows[0]!.backgroundColor).not.toBe(rows[1]!.backgroundColor);
+    });
+
+    test('「⋯」選單開著時看得見（Trigger 開著掛 data-popup-open，ui/sidebar.tsx 的 SidebarMenuAction）', () => {
+      report[`${key}:shown`] = shown;
+      // 量具自檢：lg 寬度下沒開的「⋯」照樣藏著（滑過那一列才現身）。
+      expect(shown).toEqual({ open: '1', closed: '0' });
+    });
+  }
+
+  if (overlay.name === 'picker') {
+    test('選中與沒選中的選項底色不同（量具自檢：上面量的確實是兩種狀態）', () => {
+      report[`${key}:rows`] = rows;
+      const selected = rows.filter((r) => r.selected);
+      expect(selected.map((r) => r.name)).toEqual(['command-item-selected']);
+      expect(rows.filter((r) => !r.selected).length).toBeGreaterThan(0);
+      expect(
+        rows.filter((r) => !r.selected && r.backgroundColor === selected[0]!.backgroundColor),
+      ).toEqual([]);
+    });
+
+    test('勾選的那一列只有一顆看得見的勾，報讀名稱是「目前選的」（vendor 附的那顆藏掉，本地修改第 27 條）', () => {
+      report[`${key}:checks`] = checks;
+      // 量具自檢：vendor 那顆確實在 DOM 裡、只是看不見。
+      expect(checks).toEqual([{ name: 'checked', visible: ['目前選的'], hidden: 1 }]);
+    });
+  }
 
   if (overlay.name === 'mobile-sidebar')
     test('手機側欄的抽屜只留陰影、四邊都沒有邊（本地修改第 21 條）', () => {
@@ -1146,7 +1272,7 @@ describe.each(
       expect(borders).toEqual([{ name: 'mobile-sidebar', widths: ['0px', '0px', '0px', '0px'] }]);
     });
 
-  if (theme === 'light')
+  if (theme === 'light' && overlay.name in OVERLAY_SHADOW_LIMITS)
     test('亮色陰影：每層投影的透明度不超過上限', () => {
       const layers = shadows.flatMap((s) =>
         shadowLayers(s.boxShadow)
@@ -1185,6 +1311,7 @@ describe.each(
       mode,
       ...(overlay.viewport === undefined ? {} : { viewport: overlay.viewport }),
       marks: overlay.marks,
+      ...(overlay.prepare === undefined ? {} : { prepare: overlay.prepare }),
     });
     texts = await collectTexts(page);
     surfaces = await collectSurfaces(page);
@@ -1272,4 +1399,54 @@ describe('瀏覽器量 modal 浮層的版面與動效（#1583）', () => {
       expect(Number.parseFloat(reduced.transitionDuration)).toBeLessThanOrEqual(0.15);
     },
   );
+
+  test.each([
+    { width: 375, px: 44 },
+    { width: 1280, px: 32 },
+  ])(
+    '下拉選單的選項在 $width 寬是 $px px 高（觸控高度，本地修改第 25 條）',
+    async ({ width, px }) => {
+      const page = await openOverlay('dropdown', 'light', {
+        viewport: { width, height: 812 },
+        marks: {},
+      });
+      try {
+        const height = await page.$eval(
+          '[data-guard-height="dropdown-item"]',
+          (el) => el.getBoundingClientRect().height,
+        );
+        report[`height:dropdown-item:${width}`] = height;
+        expect(height).toBe(px);
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
+  test('鍵盤：Trigger 上按 Enter 打開選單，選項上按 Enter 觸發、選單收起（驗收 D）', async () => {
+    const page = await openOverlay('dropdown-keyboard', 'light', { marks: {} });
+    try {
+      await page.keyboard.press('Tab');
+      expect(await page.evaluate(() => document.activeElement?.textContent)).toBe('開選單');
+      expect(await page.$('[role="menu"]')).toBeNull();
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('[role="menu"]');
+      // 鍵盤打開時 Base UI 把第一項設成 highlighted；往下一項再按 Enter。
+      await page.keyboard.press('ArrowDown');
+      const highlighted = await page.$eval(
+        '[role="menuitem"][data-highlighted]',
+        (el) => el.textContent,
+      );
+      await page.keyboard.press('Enter');
+      await page.waitForSelector('[role="menu"]', { state: 'detached' });
+      const picked = await page.$eval('[data-guard-picked]', (el) =>
+        el.getAttribute('data-guard-picked'),
+      );
+      report['keyboard:dropdown'] = { highlighted, picked };
+      expect(picked).toBe(highlighted);
+      expect(picked).not.toBe('');
+    } finally {
+      await page.close();
+    }
+  });
 });

@@ -15,7 +15,7 @@ describe('registry 檔的改動還在', () => {
     // 本地修改所在的那一層：覆寫檔照抄 vendor 用的屬性選擇器，外框 2px 字色寫在 layer 外（offset 2px 在 base layer，`focus-outline.test.ts`）。
     const overrides = read('../../styles/solid-glass.overrides.css');
     expect(overrides).toContain(
-      '[data-slot="input-group"]:has([data-slot="input-group-control"]:focus-visible) {\n  outline: 2px solid var(--ring);\n}',
+      '[data-slot="input-group"]:has(:is([data-slot="input-group-control"], [data-slot="command-input"]):focus-visible) {\n  outline: 2px solid var(--ring);\n}',
     );
     // vendor 原文仍然是那樣：群組只有 `outline-none` 加 ring、沒有外框。上游哪天自己畫了外框，這條紅，提醒把本地修改拿掉。
     const vendor = code(read('../../vendor/solid-glass/components/ui/input-group.tsx'));
@@ -36,15 +36,25 @@ describe('registry 檔的改動還在', () => {
     expect(vendor).toMatch(/data-slot="input-group"[\s\S]{0,1200}\bhas-disabled:opacity-50\b/);
   });
 
-  // dialog、sheet、tooltip 換成 vendor 版之後是一行轉出（#1583），時長照 SG 原文；動效 token 的對齊留到 ④。
-  test.each(['./alert-dialog.tsx'])(
-    '%s 的進出場時長走 motion.css 的 token，不寫數字（#1280）',
-    (path) => {
-      const source = code(read(path));
-      expect(source).toMatch(/animation-duration-\(--duration-[a-z-]+\)/);
-      expect(source).not.toMatch(/(?<![-\w])(?:animation-)?duration-\d/);
-    },
-  );
+  test('command 的搜尋框在 vendor 原文仍是 InputGroup 包 `data-slot="command-input"`（#1583，README 本地修改第 15 條的擴充）', () => {
+    // 覆寫檔第 15 條靠這個結構把外框畫在群組上；上游哪天換成 `input-group-control` 或拿掉群組，這條紅，提醒回頭看那條還要不要。
+    const vendor = code(read('../../vendor/solid-glass/components/ui/command.tsx'));
+    expect(vendor).toMatch(
+      /<InputGroup\b[\s\S]{0,300}<CommandPrimitive\.Input\s+data-slot="command-input"/,
+    );
+  });
+
+  test('command 的選項在 vendor 原文仍是 children 後面附一顆 CheckIcon（#1583，README 本地修改第 27 條）', () => {
+    // 覆寫檔用 `> svg.lucide-check:last-child` 把它設成 display: none；上游哪天換位置或換圖示，這條紅。
+    const overrides = read('../../styles/solid-glass.overrides.css');
+    expect(overrides).toContain(
+      '[data-slot="command-item"] > svg.lucide-check:last-child {\n  display: none;\n}',
+    );
+    const vendor = code(read('../../vendor/solid-glass/components/ui/command.tsx'));
+    expect(vendor).toMatch(
+      /data-slot="command-item"[\s\S]{0,800}\{children\}\s*<CheckIcon\b[^>]*\/>\s*<\/CommandPrimitive\.Item>/,
+    );
+  });
 
   test('message-scroller 的 item 沒有 content-visibility（會把陰影與光暈切成直角，§9）', () => {
     expect(code(read('./message-scroller.tsx'))).not.toMatch(/content-visibility/);
@@ -79,25 +89,12 @@ describe('registry 檔的改動還在', () => {
     expect(source).toContain("from '@/lib/utils'");
   });
 
-  test('dropdown-menu 字級走階梯、浮層用 shadow-menu 不用 registry 原文的 border＋shadow-md（#633）', () => {
-    const source = code(read('./dropdown-menu.tsx'));
-    expect(source).not.toMatch(/\btext-(xs|sm|base|lg)\b/);
-    expect(source).toContain('shadow-menu');
-    expect(source).not.toMatch(/shadow-md|(?<![-\w])border(?![-\w])/);
-    expect(source).toContain("from '@/lib/utils'");
-  });
-
-  // 按鈕那一半（xs 按鈕是 text-ui）照 #1468 Q19 隨 button 換成 vendor 版拿掉（#1523）；dropdown-menu 那一半等 ③-2。
-  test('下拉選單沒有小字（#1281：可點的字不小於 13）', () => {
-    expect(code(read('./dropdown-menu.tsx'))).not.toMatch(/text-(?:tip|micro)\b/);
-  });
-
-  test('側欄的群組標題與 sm 選單鈕、cmdk 的群組標題是 text-ui（#1281：標題與可點的字不小於 13）', () => {
+  // dropdown-menu 與 cmdk 那一半照 #1468 Q19 隨 #1583 換成 vendor 版拿掉；sidebar 這一半留給 ③-4。
+  test('側欄的群組標題與 sm 選單鈕是 text-ui（#1281：標題與可點的字不小於 13）', () => {
     const sidebar = code(read('./sidebar.tsx'));
     expect(sidebar).toMatch(/data-sidebar="group-label"[\s\S]{0,200}\btext-ui\b/);
     expect(sidebar).toContain("sm: 'h-7 text-ui'");
     expect(sidebar).toContain("size === 'sm' && 'text-ui'");
-    expect(code(read('./command.tsx'))).toContain('[&_[cmdk-group-heading]]:text-ui');
   });
 
   test('附件 sm／xs 的檔名是 text-ui，說明那一行是 text-tip（#1281）', () => {
@@ -105,15 +102,5 @@ describe('registry 檔的改動還在', () => {
     expect(source).toMatch(/sm: 'gap-2\.5 text-ui /);
     expect(source).toMatch(/xs: 'gap-1\.5 rounded-lg text-ui /);
     expect(source).toMatch(/data-slot="attachment-description"[\s\S]{0,200}\btext-tip\b/);
-  });
-
-  test('alert-dialog 字級走階梯、按鈕走我們的 buttonVariants（#437）', () => {
-    const source = code(read('./alert-dialog.tsx'));
-    expect(source).not.toMatch(/\btext-(xs|sm|base|lg)\b/);
-    expect(source).toContain('buttonVariants');
-    expect(source).toContain("from '@/lib/utils'");
-    // 原型 tag 的 dialog 改法：`bg-card`＋`shadow-menu`，不用 registry 原文的 border＋shadow-lg。
-    expect(source).toContain('shadow-menu');
-    expect(source).not.toMatch(/shadow-lg/);
   });
 });

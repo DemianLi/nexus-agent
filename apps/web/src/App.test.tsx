@@ -2902,10 +2902,9 @@ describe('以前的會話', () => {
       return { client, state, calls, sent: fake.sent, lists: () => lists };
     }
 
+    // Base UI 的 Trigger 在 jsdom 裡用點的打開（Enter 轉 click 是瀏覽器做的，見 `thread-list.test.tsx` 的 `openMenu`）。
     const menuOf = async (list: HTMLElement, title: string) => {
-      fireEvent.keyDown(await within(list).findByRole('button', { name: `「${title}」的選項` }), {
-        key: 'Enter',
-      });
+      fireEvent.click(await within(list).findByRole('button', { name: `「${title}」的選項` }));
     };
     const choose = (item: string) => fireEvent.click(screen.getByRole('menuitem', { name: item }));
 
@@ -4930,8 +4929,8 @@ describe('權限座（#437）', () => {
       expect(within(dialog).getByText('切換到「全開」？')).toBeTruthy();
       expect(within(dialog).getByText(/不再跳出核准請求/u)).toBeTruthy();
       expect(slashed).toEqual([]);
-      // 預設落在取消：不小心按 Enter 不會切過去。
-      expect(document.activeElement?.textContent).toBe('取消');
+      // 預設落在取消：不小心按 Enter 不會切過去。Base UI 在打開後才搬焦點（第一個可 tab 的，就是取消）。
+      await waitFor(() => expect(document.activeElement?.textContent).toBe('取消'));
 
       fireEvent.click(within(dialog).getByRole('button', { name: '取消' }));
       await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
