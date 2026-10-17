@@ -168,6 +168,14 @@ CLI（`nexus-agent` 的單次執行）不在這張的範圍。
 照樣用 `link` 發佈但不做目錄 `fsync`。**已經被舊版寫成空 header 的 thread 這一刀救不回來**：把那個 `<會話>.header.json` 刪掉，
 同一個 id 才能重建。
 
+**續接不再就地覆寫 header、讀日誌本文走穩定快照**（[#1509](https://github.com/DemianLi/nexus-agent/issues/1509)）：
+以前每次續接都把 header 先截成 0 位元組再寫，當機或斷電會留下空的或半份的 header，那條 thread 從此接不回來、側欄也找不到。
+現在 header 版本已經是這一版就**完全不寫**；版本較舊才換，換法是暫存檔寫滿、`fsync`、`rename` 蓋過去、再 `fsync` 會話目錄，
+中途失敗 header 原樣、暫存檔刪掉。同時進來的唯讀讀方（側欄列表、搜尋索引、釘選檢查）只會看到舊的或新的完整一份。
+日誌本文讀前讀後各 `stat` 一次，變了就重讀，第二次還在變就取讀前大小的前綴，所以讀到一半被截尾重寫不會拼出一行垃圾。
+Windows 上 `rename` 遇到暫時性的 `EACCES`／`EBUSY`／`EPERM` 會有界重試。**已經被舊版寫成空 header 的 thread 這一刀救不回來**，
+處理方式同上一段。
+
 **日誌尾端的壞行可復原丟棄**（[#1508](https://github.com/DemianLi/nexus-agent/issues/1508)，照 dsh 的 `recoverable` 解碼）：
 斷電後尾端可能多出一行「有換行、但讀不懂」的完整行。續接與預設讀取遇到時，**壞行與它之後沒有收尾的行一起丟掉**，
 由續接補「中斷」收尾後照常續聊；只有**壞行之後還有 `turn/end` 或 `turn/failed`**（壞行落在已收尾的輪中間，不是當機的尾巴）
