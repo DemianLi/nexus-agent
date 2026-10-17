@@ -209,6 +209,10 @@ function ComposerPick<T extends string>({
   onValueChange,
   shown,
   align = "end",
+  triggerLabel,
+  open,
+  onOpenChange,
+  disabled = false,
 }: {
   label: string
   value: T
@@ -217,12 +221,29 @@ function ComposerPick<T extends string>({
   /** What the trigger says. Defaults to the chosen option's label. */
   shown?: string
   align?: "start" | "end"
+  /** nexus: the trigger's accessible name, carrying the current value. Defaults to `label`. */
+  triggerLabel?: string
+  /** nexus: open state held outside, so a command can open the menu. */
+  open?: boolean
+  onOpenChange?: (open: boolean) => void
+  /** nexus: the menu will not open, yet the trigger stays focusable so its name (and the reason in it) is still heard. */
+  disabled?: boolean
 }) {
   const explained = options.some((option) => option.hint)
   return (
-    <DropdownMenu>
+    <DropdownMenu
+      {...(open === undefined ? {} : { open: open && !disabled })}
+      onOpenChange={(next, details) => {
+        if (next && disabled) {
+          details.cancel()
+          return
+        }
+        onOpenChange?.(next)
+      }}
+    >
       <DropdownMenuTrigger
-        aria-label={label}
+        aria-label={triggerLabel ?? label}
+        aria-disabled={disabled || undefined}
         className="glass-held flex h-6 items-center gap-1 rounded-sm px-1.5 text-[12px] text-muted-foreground transition-colors outline-none hover:text-foreground focus-visible:text-foreground aria-expanded:text-foreground"
       >
         <span className="max-w-40 truncate">{shown ?? options.find((option) => option.value === value)?.label}</span>

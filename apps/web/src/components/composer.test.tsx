@@ -49,7 +49,7 @@ function Harness({
   withAttachment = false,
   fileReferences,
   sessionReferences,
-  seats,
+  footerStart,
   stoppable = false,
   stopDisabled = false,
   onStop = () => {},
@@ -65,7 +65,7 @@ function Harness({
   withAttachment?: boolean;
   fileReferences?: (query: string, signal: AbortSignal) => Promise<FileReferenceListOutcome>;
   sessionReferences?: (query: string, signal: AbortSignal) => Promise<SessionReferenceListOutcome>;
-  seats?: ReactNode;
+  footerStart?: ReactNode;
   stoppable?: boolean;
   stopDisabled?: boolean;
   onStop?: () => void;
@@ -103,7 +103,7 @@ function Harness({
         {...(textareaRef === undefined ? {} : { textareaRef })}
         {...(fileReferences === undefined ? {} : { fileReferences })}
         {...(sessionReferences === undefined ? {} : { sessionReferences })}
-        {...(seats === undefined ? {} : { seats })}
+        {...(footerStart === undefined ? {} : { footerStart })}
       />
     </main>
   );
@@ -398,7 +398,7 @@ describe('選單錨在輸入框上（README 本地修改第 19 條，#1583）', 
   });
 
   it('點輸入框本身不算外面；點底列另一顆浮層的按鈕算外面，選單收起（#528：兩個浮層不疊在同一處）', async () => {
-    render(<Harness seats={<button data-slot="popover-trigger">用量</button>} />);
+    render(<Harness footerStart={<button data-slot="popover-trigger">用量</button>} />);
     type('/');
     await waitFor(() => expect(screen.getByRole('listbox')).toBeTruthy());
     const press = (target: Element) => {

@@ -30,6 +30,8 @@ function ContextRing({
   title = "Context window",
   note = "How much of the window this conversation takes up. Earlier turns are compacted as it fills.",
   freeLabel = "Free",
+  label,
+  children,
   className,
 }: {
   used: number
@@ -38,6 +40,10 @@ function ContextRing({
   title?: string
   note?: string
   freeLabel?: string
+  /** nexus: the trigger's accessible name. Defaults to the title and the rounded percent. */
+  label?: string
+  /** nexus: the body of the popover in place of the built-in total, bar, parts and note. */
+  children?: React.ReactNode
   className?: string
 }) {
   const [detailed, setDetailed] = React.useState(false)
@@ -53,7 +59,7 @@ function ContextRing({
     <Popover>
       <PopoverTrigger
         data-slot="context-ring"
-        aria-label={`${title} ${percent}%`}
+        aria-label={label ?? `${title} ${percent}%`}
         className={cn(
           "glass-held flex size-6 items-center justify-center rounded-sm outline-none hover:bg-accent focus-visible:bg-accent",
           className
@@ -75,6 +81,8 @@ function ContextRing({
         </svg>
       </PopoverTrigger>
       <PopoverContent side="top" align="end" sideOffset={8} className="w-72 gap-2 p-3">
+        {/* nexus: a caller with its own figures brings its own body. */}
+        {children ?? <>
         <button
           type="button"
           disabled={!parts.length}
@@ -122,6 +130,7 @@ function ContextRing({
         )}
 
         <p className="text-[11.5px] leading-relaxed text-muted-foreground">{note}</p>
+        </>}
       </PopoverContent>
     </Popover>
   )

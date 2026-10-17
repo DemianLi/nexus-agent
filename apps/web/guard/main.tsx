@@ -10,7 +10,7 @@
  *   - `data-guard-docked`：貼在輸入框上方的卡片（`Surface tone="docked"`），量它是不是平的（1px 邊、沒有投影）。
  *   - `data-guard-shadow`：亮色時量 `box-shadow` 每層投影的透明度。
  *   - `data-guard-surface`：不透明的退路（reduced-transparency、`data-glass="opaque"`）下，量這個面是不是真的不透明、沒有 blur。
- *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、按下去三種狀態各量一次字色對底色（chip 三階，#1512）。
+ *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、清單開著三種狀態各量一次字色對底色（chip 三階，#1512；#1591 起量底列的 Pick）。
  *   - `data-guard-located`：對話裡被定位的那一則（`[data-slot=message-scroller-item][data-located]`），量圓角真的畫出來。
  *   - `data-guard-glass`：SG 畫成玻璃的按鈕（outline、secondary、glass），量它真的有 `backdrop-filter`：`solid-glass.css:640-677`
  *     靠 vendor Button 輸出的 `data-variant` 命中（#1523）。
@@ -27,19 +27,20 @@
  *   - `data-guard-motion`：sheet 與手機側欄的抽屜，在模擬 reduced-motion 下量 `translate` 與 `transition-duration`（#1583 本地修改第 23 條）。
  *   - `data-guard-height`：下拉選單的選項，量畫出來的高度（觸控高度：1024 以下 44px、以上 32px，#1583 本地修改第 25 條）。
  *   - `data-guard-shown`：側欄列的「⋯」，量 `opacity`（選單開著時要看得見：Trigger 開著掛 `data-popup-open`，#1583）。
- *   - `data-guard-checks`：picker 勾選的那一列，量它看得見的勾有幾顆、報讀名稱是什麼（vendor 附的勾由覆寫檔藏掉，#1583 本地修改第 27 條）。
+ *   - `data-guard-checks`：command 勾選的那一列，量它看得見的勾有幾顆、報讀名稱是什麼（vendor 附的勾由覆寫檔藏掉，#1583 本地修改第 27 條）。
  *   vendor 元件自己畫的部分（關閉鈕、遮罩）掛不了屬性，由 `guard.test.ts` 開頁後補上，見 `OVERLAY_MARKS`。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
  * - `?glass=opaque` 在 `<html>` 掛 `data-glass="opaque"`（#1468 Q7：效能不達標時退回的那條路），量不透明的面。
  * - `?overlay=<名字>` 換成只畫一個開著的 modal 浮層（#1583）：modal 會把頁面其他部分設成 inert，跟主頁的焦點量測放不到一起。
  *   `dialog`、`sheet`、`mobile-sidebar`（要用手機寬度開）、`feedback`（回饋框，量寬度）、`alert-dialog`、`dropdown`（側欄列的「⋯」選單）、
- *   `picker`（輸入框底列的選擇座位，有搜尋框）、`dropdown-keyboard`（關著的選單，量鍵盤 Enter 打開與選取，#1583 驗收 D）。
+ *   `command`（開著的 command 清單，有搜尋框；#1591 之前是底列的選擇座位）、`dropdown-keyboard`（關著的選單，量鍵盤 Enter 打開與選取，#1583 驗收 D）。
  * - `?overlay=composer-<狀態>` 畫產品的輸入框（SG 的 `Composer`，#1591 驗收 D）：`idle`（閒著）、`draft`（有草稿）、`running`（跑著）、
- *   `running-draft`（跑著有草稿）、`menu`（`/` 選單開著）。輸入框貼在頁面底部，寬度跟產品一樣（左右各 16px、最寬 48rem）。
+ *   `running-draft`（跑著有草稿）、`menu`（`/` 選單開著）；底列的 `danger`、`locked`、`pick-open`、`tones`、`dormant` 見
+ *   `ComposerPage`。輸入框貼在頁面底部，寬度跟產品一樣（左右各 16px、最寬 48rem）。
  */
-import { Cpu, MoreHorizontal, Shield } from 'lucide-react';
+import type { WireContextPressure } from '@nexus/wire';
+import { Check, MoreHorizontal } from 'lucide-react';
 import { StrictMode, useEffect, useState } from 'react';
-import type { ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Counts } from '@/components/changes/counts';
@@ -50,6 +51,7 @@ import { Surface } from '@/components/surface';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
+import { ComposerPick } from '@/components/ui/composer';
 import { Input } from '@/components/ui/input';
 import {
   InputGroup,
@@ -59,7 +61,15 @@ import {
   InputGroupTextarea,
 } from '@/components/ui/input-group';
 import { FeedbackDialog } from '@/components/feedback-dialog';
-import { PickerSeat } from '@/components/picker-seat';
+import { ModelSeat } from '@/components/model-seat';
+import { PermissionSeat } from '@/components/permission-seat';
+import {
+  Command,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
 import {
   AlertDialog,
   AlertDialogAction,
@@ -133,12 +143,44 @@ const BADGE_VARIANTS = ['default', 'secondary', 'destructive', 'outline', 'ghost
 
 const row = { display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: 12 } as const;
 
-/** 用量表的門檻 10 個 token：5 是 50%（次要文字），9 是 90%（80% 以上換成 warning）。 */
+/** 用量環的門檻 10 個 token：`approxTokens` 就是十分之一的百分比（5 是 50%、藍；7 是 70%、琥珀；9 是 90%、destructive）。 */
 const METER = {
   approxTokens: 0,
   messageCount: 1,
   thresholds: [{ type: 'tokens', value: 10 }],
 } as const;
+const meter = (approxTokens: number): WireContextPressure => ({
+  measure: { ...METER, approxTokens },
+});
+/** 型錄裡最長的那種模型名稱：量 375 寬放不放得下。 */
+const LONG_MODEL = 'nvidia/nemotron-3-super-120b-a12b';
+const PERMISSIONS = {
+  options: [
+    { value: 'read-only', name: '唯讀', description: '只能讀，改東西要問' },
+    { value: 'workspace-write', name: '可寫工作區', description: '可以改工作區裡的檔案' },
+    { value: 'danger-full-access', name: '全開' },
+  ],
+  defaultOptions: [{ value: 'workspace-write', name: '可寫工作區' }],
+  defaultPreset: 'workspace-write',
+};
+const MODELS = {
+  default: { modelId: LONG_MODEL },
+  models: [
+    {
+      id: LONG_MODEL,
+      name: LONG_MODEL,
+      description: '預設的模型',
+      reasoning: {
+        efforts: [
+          { id: 'low', name: '低' },
+          { id: 'high', name: '高', description: '想得比較久' },
+        ],
+        defaultEffort: 'low',
+      },
+    },
+    { id: 'small', name: 'small' },
+  ],
+};
 const RETRY = {
   retryId: 'guard',
   retry: 1,
@@ -231,14 +273,24 @@ function GuardPage() {
           <Textarea data-guard-field="textarea" aria-label="多行欄位" placeholder="多行" />
         </div>
 
-        {/* chip 三階（#1512）：用量表收著時是次要文字、80% 以上換成 warning，hover／按下的底是 chip-hover／chip-pressed；
-            重試那一行是平的 chip 底加次要文字。 */}
+        {/* 輸入框底列的 Pick（#1591 驗收 D）：平常、滑鼠移上去、按下去，12px 的次要字都過 4.5；權限「全開」換成警示色，
+            三種狀態都留著（本地修改第 35 條）。底列在輸入框外面、直接疊在頁面的底上，所以放在頁面上量。重試那一行是平的
+            chip 底加次要文字（#1512）。用量環（#1591 起沒有字）在 composer 頁量。 */}
         <div style={row}>
-          <div data-guard-chip="context-meter">
-            <ContextMeter pressure={{ measure: { ...METER, approxTokens: 5 } }} />
+          <div data-guard-chip="pick">
+            <ComposerPick
+              label="模型"
+              value="model"
+              options={[{ value: 'model', label: LONG_MODEL }]}
+              onValueChange={() => {}}
+            />
           </div>
-          <div data-guard-chip="context-meter-warning">
-            <ContextMeter pressure={{ measure: { ...METER, approxTokens: 9 } }} />
+          <div data-guard-chip="pick-danger">
+            <PermissionSeat
+              seat={{ catalog: PERMISSIONS, currentValue: 'danger-full-access' }}
+              locked={undefined}
+              onSwitch={() => {}}
+            />
           </div>
           <div data-guard-texts="retry-notice" style={{ width: 360 }}>
             <RetryNotice retry={RETRY} />
@@ -460,13 +512,18 @@ function OverlayPage({ name }: { name: string }) {
       );
     case 'dropdown-keyboard':
       return <KeyboardMenu />;
-    case 'picker':
-      return <OpenPicker />;
+    case 'command':
+      return <OpenCommand />;
     case 'composer-idle':
     case 'composer-draft':
     case 'composer-running':
     case 'composer-running-draft':
     case 'composer-menu':
+    case 'composer-danger':
+    case 'composer-locked':
+    case 'composer-pick-open':
+    case 'composer-tones':
+    case 'composer-dormant':
       return <ComposerPage state={name.slice('composer-'.length)} />;
     default:
       throw new Error(`沒有這個浮層：${name}`);
@@ -490,34 +547,49 @@ function KeyboardMenu() {
   );
 }
 
-/** 輸入框底列的選擇座位，打開、列數超過門檻（有搜尋框）；勾選的是第三列，跟 cmdk 預設選中的第一列分開。 */
-function OpenPicker() {
+/**
+ * 開著的 command 清單，有搜尋框；勾選的是第三列，跟 cmdk 預設選中的第一列分開。底列的選擇座位 #1591 換成 SG 的 Pick 之後，
+ * command 還在用的是輸入框的 `@` 選單（`composer.tsx`，勾選那一列帶「目前選的」）與審查的找檔案（`changes/review.tsx`，
+ * 有搜尋框）：這一頁照它們的形狀畫，量本地修改第 27 條（vendor 附的勾藏掉）與第 15 條的擴充（搜尋框的外框畫在群組上）。
+ */
+function OpenCommand() {
   const items = ['一', '二', '三', '四', '五', '六', '七'].map((label, i) => ({
     id: `item-${i}`,
     label: `選項${label}`,
     checked: i === 2,
   }));
   return (
-    <div style={{ padding: '420px 40px 40px' }}>
-      <PickerSeat
-        icon={<MoreHorizontal />}
-        label="選項三"
-        accessibleName="選項：選項三，點開切換"
-        tip="選項：選項三"
-        groups={[{ id: 'g', heading: '選項', items }]}
-        onPick={() => {}}
-        open
-        onOpenChange={() => {}}
-        popoverLabel="選選項"
-        testId="guard-picker"
-      />
+    <div style={{ padding: '40px' }}>
+      <Popover open>
+        <PopoverTrigger render={<Button variant="outline" />}>選選項</PopoverTrigger>
+        <PopoverContent side="bottom" align="start" aria-label="選選項">
+          <Command>
+            <CommandInput placeholder="找" />
+            <CommandList>
+              <CommandGroup>
+                {items.map((item) => (
+                  <CommandItem key={item.id} value={item.id} data-checked={item.checked}>
+                    {item.label}
+                    {item.checked && <Check aria-label="目前選的" />}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            </CommandList>
+          </Command>
+        </PopoverContent>
+      </Popover>
     </div>
   );
 }
 
 /**
- * 產品的輸入框（#1591 驗收 D）：貼在頁面底部，左右各 16px、最寬 48rem（同產品）。底列放兩個座位與用量表，模型名稱用型錄裡
- * 最長的那種，量 375 寬放不放得下。
+ * 產品的輸入框（#1591 驗收 D）：貼在頁面底部，左右各 16px、最寬 48rem（同產品）。底列是產品的元件：左邊權限、右邊模型、
+ * 推理強度與用量環；模型名稱用型錄裡最長的那種，量 375 寬放不放得下。底列的狀態：
+ * - `danger`：權限是「全開」（警示色，本地修改第 35 條）。
+ * - `locked`：權限鎖住（一輪在跑；`aria-disabled`，第 39 條）。
+ * - `pick-open`：模型的清單開著（量選項的字與觸控高度）。
+ * - `tones`：三個用量環，50%、70%、90%（量三個色階，第 37 條）。
+ * - `dormant`：用量環有一道不會觸發的門檻（`guard.test.ts` 點開它量明細的字）。
  */
 function ComposerPage({ state }: { state: string }) {
   const running = state.startsWith('running');
@@ -528,20 +600,24 @@ function ComposerPage({ state }: { state: string }) {
         ? '/'
         : '',
   );
-  const seat = (testId: string, icon: ReactNode, label: string) => (
-    <PickerSeat
-      testId={testId}
-      icon={icon}
-      label={label}
-      accessibleName={`${label}，點開切換`}
-      tip={label}
-      popoverLabel="選"
-      groups={[{ id: 'g', heading: '選', items: [{ id: label, label, checked: true }] }]}
-      open={false}
-      onOpenChange={() => {}}
-      onPick={() => {}}
-    />
-  );
+  const [modelOpen, setModelOpen] = useState(state === 'pick-open');
+  const [selection, setSelection] = useState<{ modelId: string; reasoningEffort?: string }>({
+    modelId: LONG_MODEL,
+  });
+  const pressure: WireContextPressure =
+    state === 'dormant'
+      ? {
+          measure: {
+            approxTokens: 5,
+            messageCount: 12,
+            messagesCompactable: false,
+            thresholds: [
+              { type: 'tokens', value: 10 },
+              { type: 'messages', value: 60 },
+            ],
+          },
+        }
+      : meter(5);
   return (
     <div
       style={{
@@ -568,13 +644,37 @@ function ComposerPage({ state }: { state: string }) {
           stopDisabled={false}
           onStop={() => {}}
           attachments={{ items: [], onAdd: () => {}, onRemove: () => {} }}
-          seats={
+          footerStart={
+            <PermissionSeat
+              seat={{
+                catalog: PERMISSIONS,
+                currentValue: state === 'danger' ? 'danger-full-access' : 'workspace-write',
+              }}
+              locked={state === 'locked' ? '這一輪結束後才能切換。' : undefined}
+              onSwitch={() => {}}
+            />
+          }
+          footerEnd={
             <>
-              {seat('model-seat', <Cpu size={16} />, 'nvidia/nemotron-3-super-120b-a12b')}
-              {seat('permission-seat', <Shield size={16} />, 'workspace-write')}
+              <ModelSeat
+                seat={{
+                  catalog: MODELS,
+                  selection,
+                  select: async (next) => {
+                    setSelection(next);
+                    return undefined;
+                  },
+                }}
+                open={modelOpen}
+                onOpenChange={setModelOpen}
+              />
+              {state === 'tones' ? (
+                [5, 7, 9].map((tokens) => <ContextMeter key={tokens} pressure={meter(tokens)} />)
+              ) : (
+                <ContextMeter pressure={pressure} />
+              )}
             </>
           }
-          meter={<ContextMeter pressure={{ measure: { ...METER, approxTokens: 5 } }} />}
         />
       </div>
     </div>

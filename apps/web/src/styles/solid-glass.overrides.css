@@ -120,7 +120,7 @@
  * 外框寫在 layer 外，群組自帶的 `outline-none`（utilities layer）擋不掉。`registry-edits.test.ts` 釘住這條與 vendor 原文；
  * 瀏覽器那一層（`guard/`）量群組聚焦後的外框與 `box-shadow`。不讓 Prettier 排版，理由同上。
  * command 的搜尋框（vendor `command.tsx` 的 `CommandInput`）也是 InputGroup 包一個輸入框，但輸入框的 `data-slot` 是 `command-input`、
- * 不是 `input-group-control`，所以一起列（#1583 擴充，PM 決定第 3 點：全站只有一種焦點樣子）；`guard/` 在 picker 頁量它。
+ * 不是 `input-group-control`，所以一起列（#1583 擴充，PM 決定第 3 點：全站只有一種焦點樣子）；`guard/` 在 command 頁量它。
  */
 /* prettier-ignore */
 [data-slot="input-group"]:has(:is([data-slot="input-group-control"], [data-slot="command-input"]):focus-visible) {
@@ -274,10 +274,10 @@ body {
 /*
  * command 的選項不畫 vendor 附的那顆勾（#1583，PM 決定第 3 點；README 本地修改第 27 條）：vendor 的 `CommandItem`
  * （`vendor/solid-glass/components/ui/command.tsx:165`）在 children 後面自己附一顆 `CheckIcon`，平常 `opacity-0` 但照樣占位，
- * `data-checked="true"` 時才看得見。nexus 的勾由呼叫端自己畫、帶報讀名稱「目前選的」（`picker-seat.tsx`、`composer.tsx`）；
+ * `data-checked="true"` 時才看得見。nexus 的勾由呼叫端自己畫、帶報讀名稱「目前選的」（`composer.tsx` 的 `@` 選單）；
  * vendor 那顆是 `aria-hidden`，改用它會失去報讀，留著又會畫出兩個勾、在 `flex-col` 的項目（composer 的命令選單）多出一列。
  * 所以設成 `display: none`（不是 opacity）。選擇器錨在 vendor 的結構上：它永遠是選項的最後一個子節點；
- * `registry-edits.test.ts` 釘住 vendor 仍是這個結構，`guard/` 在 picker 頁量勾選那一列只有一顆看得見的勾。
+ * `registry-edits.test.ts` 釘住 vendor 仍是這個結構，`guard/` 在 command 頁量勾選那一列只有一顆看得見的勾。
  */
 /* prettier-ignore */
 [data-slot="command-item"] > svg.lucide-check:last-child {
@@ -317,4 +317,83 @@ body {
   [data-slot="composer"] textarea {
     padding-block: 0.625rem;
   }
+}
+
+/*
+ * 模式座（權限）在「全開」時換警示色（#1591 PM 決定第 5 點；README 本地修改第 35 條）：develop 的權限座是 `text-warning`，
+ * SG 的 `ComposerPick` 沒有危險狀態。外面那層（`permission-seat.tsx`）帶 `data-danger`，這裡對裡面的 Trigger 上 status token，
+ * 平常、hover、焦點都留著，不被 Trigger 自己的 `hover:text-foreground` 換掉。**清單開著時不換**：SG 開著的底
+ * （`.glass-held[aria-expanded]` 的 `--glass-state`）上，warning 只有 4.46（亮）／4.46（暗），連文字的 4.5 都不到；開著時跟其他
+ * Pick 一樣是字色，「全開」那一列在清單裡打勾。寫在 layer 外。`guard/` 量平常、hover 的警示色過狀態色門檻 5.2，開著時換回字色。
+ */
+/* prettier-ignore */
+[data-slot="permission-pick"][data-danger="true"] [data-slot="dropdown-menu-trigger"]:not([aria-expanded="true"]) {
+  color: var(--warning);
+}
+
+/*
+ * 底列的 Pick 與用量環在 1024 以下 44px（規格 §9，#1591 PM 決定第 5 點；README 本地修改第 36 條）：vendor 的 Pick 是 `h-6`、
+ * 環是 `size-6`（都是 24px）。選擇器錨在 `data-slot`：Pick 的 Trigger 只在底列裡算，側欄列選單的 Trigger 不受影響。
+ * 清單裡的 `RadioItem` 由包裝層補（第 25 條）。`guard/` 在 375 寬量這幾顆的高度。
+ */
+/* prettier-ignore */
+@media (width < 64rem) {
+  [data-slot="composer-footer"] [data-slot="dropdown-menu-trigger"] {
+    height: 2.75rem;
+  }
+  [data-slot="composer-footer"] [data-slot="context-ring"] {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+}
+
+/*
+ * 用量環的色階壓回 status token（#1591 PM 決定第 6 點；README 本地修改第 37 條）：vendor 的 `ContextRing`
+ * （`vendor/solid-glass/components/ui/context-ring.tsx`）寫死 `text-blue-500`（70% 以下）與 `text-amber-500`（70% 起），是
+ * Tailwind 的色板，不跟 nexus 的亮暗 token 走。90% 起的 `text-destructive` 已經是 token，不用動。環是非文字，要過 3:1；
+ * `guard/` 量亮暗兩色加三個色階。選擇器錨在 vendor 的 class 上：`registry-edits.test.ts` 釘住 vendor 仍寫這兩個 class。
+ */
+/* prettier-ignore */
+[data-slot="context-ring"] svg.text-blue-500 {
+  color: var(--info);
+}
+
+/* prettier-ignore */
+[data-slot="context-ring"] svg.text-amber-500 {
+  color: var(--warning);
+}
+
+/*
+ * 用量環的弧長在減少動態時直接跳到新值（#528 的規則；#1591 PM 決定第 7 點；README 本地修改第 38 條）：vendor 的弧長走
+ * `transition-[stroke-dasharray] duration-500`。寫在 layer 外，蓋得過 utilities 層的 `duration-500`。`guard/` 在模擬
+ * reduced-motion 下量計算值。
+ */
+/* prettier-ignore */
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="context-ring"] circle {
+    transition-duration: 0s;
+  }
+}
+
+/*
+ * 底列的 Pick 鎖住時的樣子（#1591 PM 決定第 2 題；README 本地修改第 39 條）：鎖住用 `aria-disabled`（patch `0007` 的
+ * `disabled`），不是原生 `disabled`，Trigger 才聚焦得到、報讀才聽得到原因；所以吃不到 SG 按鈕的 `disabled:opacity-50`。
+ * 照 SG 停用的樣子補上半透明，hover 也不變亮。停用的控制項不在 4.5 的對比門檻裡（WCAG 1.4.3 的例外）。
+ */
+/* prettier-ignore */
+[data-slot="dropdown-menu-trigger"][aria-disabled="true"] {
+  opacity: 0.5;
+  cursor: default;
+  color: var(--muted-foreground);
+}
+
+/*
+ * 底列窄的時候模型名稱截短，不撐出底列（#1591 驗收 D：375 寬底列不溢出；README 本地修改第 40 條）：vendor 的 Pick 把名稱截在
+ * `max-w-40`（160px），可是 Trigger 是 flex 項目，`min-width: auto` 等於整段名稱的寬，外面再怎麼縮它也不讓，只會蓋到旁邊那顆。
+ * nexus 的包裝層只讓模型那顆縮（`model-seat.tsx` 的 `flex min-w-0`；其餘幾顆縮不到內容寬以下），這裡讓它的 Trigger 跟著縮、名稱的
+ * `truncate` 接手。`guard/` 在 375 寬量底列不溢出、按鈕不重疊。
+ */
+/* prettier-ignore */
+[data-slot="model-pick"] > [data-slot="dropdown-menu-trigger"] {
+  min-width: 0;
 }
