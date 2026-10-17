@@ -10,7 +10,11 @@ import { HumanMessage } from '@langchain/core/messages';
 import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import type { PluginEntry } from '@nexus/core';
-import { GOAL_TOOL_AUTHORITY_MESSAGE, GOAL_WRAPUP_MARKER, renderWrapupContext } from '@nexus/plugin-goal';
+import {
+  GOAL_TOOL_AUTHORITY_MESSAGE,
+  GOAL_WRAPUP_MARKER,
+  renderWrapupContext,
+} from '@nexus/plugin-goal';
 import { createGoalInvariantPlugin } from '@nexus/plugin-goal/invariant';
 import {
   CONCURRENCY_SAFE_METADATA_KEY,

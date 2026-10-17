@@ -46,10 +46,7 @@
 import type { GoalBlockReason, GoalRef, GoalSnapshot, SessionLog } from '@nexus/core';
 import { defineToken } from '@nexus/sdk';
 
-export {
-  GOAL_CHANGE_VERSION,
-  goalId,
-} from '@nexus/core';
+export { GOAL_CHANGE_VERSION, goalId } from '@nexus/core';
 export type {
   GoalBlockReason,
   GoalChangeMeta,

@@ -32,7 +32,10 @@ function applyWith(seams: GoalSeams): NexusPlugin<GoalConfig>['apply'] {
     mountGoal(
       {
         registerTool: (tool, options) =>
-          void registry.tools.register(tool as Parameters<typeof registry.tools.register>[0], options),
+          void registry.tools.register(
+            tool as Parameters<typeof registry.tools.register>[0],
+            options,
+          ),
         registerCommand: (definition) => void registry.commands.register(definition),
         forCall: (callConfig) => registry.sessions.forCall(callConfig),
       },

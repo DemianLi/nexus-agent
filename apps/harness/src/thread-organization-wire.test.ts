@@ -339,7 +339,8 @@ describe('真組裝：還在跑的拒絕、stopActivity、封存之後不再發�
       backend: new ContainedFilesystemBackend({ rootDir: dir, mode: 'workspace-write' }),
       backgroundSubagents: {},
     });
-    const goals = options.withGoal === true ? goalCoreOf(built.services.use(GOALS_SERVICE)) : undefined;
+    const goals =
+      options.withGoal === true ? goalCoreOf(built.services.use(GOALS_SERVICE)) : undefined;
     const threadOrganization = await ThreadOrganization.open(join(dir, 'home'));
     let sessions: SessionRegistry | undefined;
     let attachment: ReturnType<ReturnType<typeof composeAttachSessions>> | undefined;

@@ -330,7 +330,10 @@ export function mountGoal(host: GoalMountHost, core: GoalCore, config: GoalConfi
   // **三顆工具一律 `rootOnly`。** `fold.ts` 會把每個 subagent 那一份裡的同名項換成拒絕樁，而**那正是 dsh 對 `tool-goal` 的政策本身**
   // （`authority.ts` 的 `ctx.agents.roots().includes(execution.agent)`），不是我們的收窄。目標是人交代的，subagent 沒有人可以交代。
   for (const goalTool of createGoalTools(
-    { forCall: (callConfig) => host.forCall(callConfig), serviceFor: (log) => core.serviceFor(log) },
+    {
+      forCall: (callConfig) => host.forCall(callConfig),
+      serviceFor: (log) => core.serviceFor(log),
+    },
     config,
   )) {
     // 輸出 schema 隨註冊帶，同 dsh `defineTool` 的 `output`（#252）。

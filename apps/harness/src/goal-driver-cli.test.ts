@@ -581,8 +581,19 @@ describe('披露', () => {
  * 在手搭的 registry 上驗隔離證明不了這條——**清單裡掛的是哪一顆物件**才是以前串台的來源。
  */
 describe('goals 服務綁的是這一次組裝', () => {
-  it('預設清單掛的就是模組層級那一顆 goal plugin', () => {
-    expect(shipped.filter((entry) => entry.plugin === goalPlugin)).toHaveLength(1);
+  it('出貨清單上有 goal 那一列，而且它掛的不是測試外殼——組出來的 agent 拿得到 goals 服務', async () => {
+    // 遷上樹之前這裡守的是「清單上掛的是模組層級那一顆 plugin 物件」；現在 goal 是 `cordis.yml` 的一列（`@nexus/plugin-goal`，
+    // 樹上的函式插件），守的是交付物：清單上恰好一列 goal、它的 plugin 不是 `goal.fixture.ts` 那顆相容層外殼，
+    // 而這一份出貨清單組出來的 agent 手上有 `goals` 服務。
+    const rows = shipped.filter((entry) => entry.id === 'goal');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.plugin).not.toBe(goalPlugin);
+    const built = await createCliAgent({ live: false }, shipped);
+    try {
+      expect(built.goals).toBeDefined();
+    } finally {
+      await built.dispose();
+    }
   });
 
   /**

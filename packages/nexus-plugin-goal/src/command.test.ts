@@ -10,15 +10,9 @@ import { describe, expect, it } from 'vitest';
 
 import { createRegistry, createSessionRunner, SessionLog } from '@nexus/core';
 import type { AttachmentRef } from '@nexus/commands';
-import type {
-  CommandDefinition,
-  CommandResult,
-  GoalChangeMeta,
-  PluginRegistry,
-} from '@nexus/core';
+import type { CommandDefinition, CommandResult, GoalChangeMeta, PluginRegistry } from '@nexus/core';
 
 import {
-  executeGoalCommand,
   goalConfigSchema,
   GOAL_ATTACHMENTS_ONLY_MESSAGE,
   GOAL_ATTACHMENTS_TEXT,
