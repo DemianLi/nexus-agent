@@ -4559,6 +4559,31 @@ describe('模型座（#723）', () => {
   };
 
   it.each([
+    ['模型', modelTrigger],
+    ['推理強度', effortTrigger],
+  ])(
+    '%s的清單開著時底下換成核准面板：清單收起，不浮在面板上（App 把 hidden 接上，#1591）',
+    async (_name, triggerOf) => {
+      // 推理強度那顆只有在選的模型有推理強度時才畫：預設改成 Beta。
+      const { value } = CATALOG as Extract<ModelCatalogResult, { ok: true }>;
+      const fake = withModels(undefined, {
+        ok: true,
+        value: { ...value, catalog: { ...value.catalog, default: { modelId: 'model-b' } } },
+      });
+      render(<App client={fake.client} />);
+      fireEvent.click(await triggerOf());
+      await screen.findByRole('menu');
+      fake.downlink.push(fake.opened[0]!, [
+        approvalFrame([{ name: 'write_file', allowed: ['approve', 'reject'] }]),
+      ]);
+      await screen.findByTestId('approval-card');
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(seat()).toBeNull();
+      expect(screen.queryByTestId('effort-seat')).toBeNull();
+    },
+  );
+
+  it.each([
     ['not_supported', { kind: 'rejected', code: 'not_supported', message: '還沒實作' }],
     ['其他拒絕', { kind: 'rejected', message: '這條線收不了' }],
   ] as const)('伺服器回 %s 時沒有模型座、`/` 選單也沒有 /model', async (_case, outcome) => {
@@ -4825,6 +4850,29 @@ describe('權限座（#437）', () => {
       fireEvent.click(option(menu, name));
     });
   };
+
+  it('清單開著時底下換成核准面板：清單收起、這顆不畫（App 把 hidden 接上，#1591）', async () => {
+    // 三顆一起先備好、seq 照順序：投影若走 `downlink.customFrame`，seq 從很大的數起算，之後推的核准 frame 會被當成舊的丟掉。
+    seq = 0;
+    const events = [
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+      frame('custom', [], {
+        name: PROJECTION,
+        payload: { key: 'permissions', version: 1, view: { currentValue: 'workspace-write' } },
+      }),
+    ];
+    const approval = approvalFrame([{ name: 'write_file', allowed: ['approve', 'reject'] }]);
+    const fake = await withPermissions(undefined, events);
+    fireEvent.click(
+      await within(await screen.findByTestId('permission-seat')).findByRole('button'),
+    );
+    await screen.findByRole('menu');
+    fake.downlink.push(fake.opened[0]!, [approval]);
+    await screen.findByTestId('approval-card');
+    expect(screen.queryByRole('menu')).toBeNull();
+    // 清單的收起其實由鎖住那條先做了（有待決就是 `awaiting-input`，同一次畫）；`hidden` 管的是這顆不畫。
+    expect(seat()).toBeNull();
+  });
 
   it.each([
     ['not_supported', { kind: 'rejected', code: 'not_supported', message: '還沒實作' }],

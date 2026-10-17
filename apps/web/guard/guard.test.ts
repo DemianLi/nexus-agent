@@ -714,7 +714,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     ).toEqual([]);
   });
 
-  test('chip 三階：輸入框底列的 Pick 平常、滑鼠移上去、清單開著，12px 的次要字過 4.5；「全開」三種狀態都是警示色（#1591）', () => {
+  test('chip 三階：輸入框底列的 Pick 平常、滑鼠移上去、清單開著，12px 的次要字過 4.5；「全開」平常與移上去是警示色、清單開著換回字色（#1591）', () => {
     const measured = chips.map((c) => ({
       key: `${c.name}:${c.state}`,
       ...c,
