@@ -1166,6 +1166,8 @@ export class ThreadPump {
    * 沒有背景派出、或從沒變過就是 `undefined`。
    */
   #subagentStatusFrame: Event | undefined;
+  /** 續行排程器正在飛的次數，見 {@link ThreadPump.goalRoundInFlight}。 */
+  #goalDrives = 0;
   /** 聽 {@link PumpActivity} 的人，見 {@link ThreadPump.watch}。 */
   readonly #watchers = new Set<(activity: PumpActivity) => void>();
   /** 最後一次講出去的 {@link ThreadPump.agentRunning}，見 {@link ThreadPump.#noteStatus}。 */
@@ -1670,6 +1672,16 @@ export class ThreadPump {
   }
 
   /**
+   * 續行排程器有一次「決定 → 耐久檢查點 → 預約」正在飛（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，閒置逐出的判準）。
+   *
+   * 那段時間 `running` 是假的（一輪剛落定、下一輪還沒預約進佇列），但這條 thread 不閒：撤掉它，排程器接著會往一個已收線的
+   * pump 預約。{@link running} 看不到這一段，所以單獨給一個讀數。
+   */
+  get goalRoundInFlight(): boolean {
+    return this.#goalDrives > 0;
+  }
+
+  /**
    * 送一件事進去，排在目前那一輪後面跑。
    *
    * **說話與續行在停在核准點時不開跑**（[#629](https://github.com/DemianLi/nexus-agent/issues/629)）：
@@ -2103,6 +2115,7 @@ export class ThreadPump {
     // 這兩句就是唯一擋得住的東西。**不要把它們讀成有測試釘住的因果。**
     if (this.running) return;
     this.#pauseCancelledGoalRounds();
+    this.#goalDrives += 1;
     void (async () => {
       try {
         const round = await driveGoalRound(() => this.#sessions.root.events, driver);
@@ -2112,6 +2125,8 @@ export class ThreadPump {
         this.#reserveGoalRound(driver, round);
       } catch (error: unknown) {
         driver.warn(`排下一輪時出事：${error instanceof Error ? error.message : String(error)}`);
+      } finally {
+        this.#goalDrives -= 1;
       }
     })();
   }

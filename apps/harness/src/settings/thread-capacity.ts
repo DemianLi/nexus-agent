@@ -1,7 +1,8 @@
 /**
- * serve 行程裡 thread 數上限的**設定條目**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)，
+ * serve 行程裡 thread 數上限與閒置逐出的**設定條目**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)，
  * 「底座保險絲」逐級降載的第 2 級；背景是 [#1464](https://github.com/DemianLi/nexus-agent/issues/1464)：
- * 每條 thread 常駐約 2 MB heap、讀歷史也有，而且 serve 不回收）。檢查本體在 `../wire-handler.ts` 的 `threadFor`。
+ * 每條 thread 常駐約 2 MB heap、讀歷史也有。第 1 級 [#1484](https://github.com/DemianLi/nexus-agent/issues/1484) 讓閒置夠久的 thread 被撤掉，
+ * 同一列多一格 `idleEvictAfterMs`）。上限的檢查本體在 `../wire-handler.ts` 的 `threadFor`，逐出在同檔的 `evictThread`。
  *
  * **這一顆不裝功能，只講設定**，`apply` 是空的，同 `thread-search` 那一列：值由 `startupSetting` 在起動期讀出來，
  * 交給 `createWireHandler`。**改了要重啟 serve**（分類 `startup-read`，`plugin-row-classes.ts`）。
@@ -13,14 +14,27 @@
  * （`packages/jobs/jobs-local/src/index.ts:221-223`，`1517a4db`：`start()` 在建立任何資源之前先比 `active >= maxConcurrentJobsPerOwner`；
  * 決策紀錄 `.agents/notes/archived/bug-fix/2026-08-11-bounded-background-job-admission.zh.md`），逐點對到我們：
  *
- * 1. 數量從權威紀錄現算，不另存一份計數——數 `threads.size`。
+ * 1. 數量從權威紀錄現算，不另存一份計數——數 `threads.size + closing.size`（`closing` 是正在撤的）。
  * 2. 在建立任何資源之前拒絕——`createAgent` 之前，也不 `set`。
  * 3. 拒絕不留下任何紀錄——`threads` 上沒有這一條。
- * 4. 還在收尾的照樣佔名額——建構中的 promise 佔名額，建失敗刪掉才釋放。
- * 5. 錯誤訊息寫出上限，也寫出下一步——「重啟 serve 才會釋放」。
- * 6. 不排隊、不搶占、不自動終止最舊的（決策紀錄明確否決）。
+ * 4. 還在收尾的照樣佔名額——建構中的 promise 佔名額，建失敗刪掉才釋放；**撤中的 thread（#1484）也佔名額**，收完才還。
+ * 5. 錯誤訊息寫出上限，也寫出下一步——沒設閒置逐出時是「重啟 serve 才會釋放」，設了就說閒置多久會自動釋放。
+ * 6. 不排隊、不搶占、不自動終止最舊的（決策紀錄明確否決）。逐出只看閒置，不因為容量滿了去收別人。
  *
  * dsh 按 owner（Agent 物件）分桶；我們數的是 thread 本身，所以全行程一桶。
+ *
+ * ## 閒置逐出（`idleEvictAfterMs`，#1484）
+ *
+ * **預設關**——不寫就不逐出，行為與沒有這一格時一樣（demian 拍板，同 `maxThreads` 的理由：Linux 的單條 thread 記憶體還沒量，
+ * 給數字沒有依據）。管理者設一個毫秒數 T：一條 thread **所有閒置條件同時成立**連續滿 T 才被撤掉，中途任何一條不成立就歸零。
+ * 閒置條件、撤的順序與取捨見 `../wire-handler.ts` 的 `WireHandlerOptions.idleEvictMs`。
+ *
+ * **撤掉＝等價於重啟 serve 的那一半**：磁碟上的日誌是真相，之後有人再開這條 thread 就走今天重啟之後的路徑重組。所以有三個代價要先知道：
+ * 被撤的 thread 之後重組會拿**當下**的設定（不是它上一次組裝時的）；行程記憶體裡的續行授權、上傳收據、`present` 交付表都隨之消失；
+ * 下行要重連（web 的重連路本來就有）。
+ *
+ * **只有開了落盤（`session-persistence`）才生效**：沒有落盤的日誌只在記憶體裡，撤掉就沒了。沒落盤卻設了這一格，啟動時印一行
+ * 說「忽略」，不靜靜吞掉。
  *
  * ## 預設不設上限
  *
@@ -47,6 +61,11 @@ export const THREAD_CAPACITY_PLUGIN_NAME = 'thread-capacity';
 export const threadCapacityConfigSchema = z.strictObject({
   /** 行程裡最多同時有幾條 thread（含建構中的）；不寫就不限。正整數。 */
   maxThreads: z.number().int().positive().optional(),
+  /**
+   * 一條 thread 閒置多久（毫秒）之後被撤出行程記憶體；不寫就不逐出。正整數。只有開了落盤才生效，見檔頭。
+   * 撤掉後再開這條 thread 會照重啟後的路徑重組，所以**不要設得比一個人離開座位的時間短**。
+   */
+  idleEvictAfterMs: z.number().int().positive().optional(),
 });
 
 /** 驗過的設定。 */

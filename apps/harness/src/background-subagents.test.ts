@@ -1085,6 +1085,34 @@ describe('載體本身（假 agent）', () => {
       await host.close();
     });
 
+    /**
+     * 閒置逐出的判準（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）：撤 thread 會丟掉只在記憶體裡的東西，所以
+     * `quiescent` 比 `hasRunning` 嚴——被中斷暫停而排著的輪次不算在跑（`hasRunning` 為假），但撤掉它們就沒了。
+     */
+    it('quiescent：沒有任何在途的輪次才為真；被中斷暫停而排著的也算在途', async () => {
+      const hold = gate();
+      const { agent, seen: ran } = fakeAgent(async (text) => {
+        if (text === '開工') await hold.opened;
+      });
+      const { host } = withStatus(agent);
+      expect(host.quiescent()).toBe(true);
+      expect(host.control.quiescent()).toBe(true);
+      const first = host.start({ subagent: 'worker', text: '開工' });
+      await running(ran);
+      expect(host.quiescent()).toBe(false);
+      // 排一輪在後面，再中斷：statuses／hasRunning 在那一輪收完後都說「沒在跑」，但排著的那一輪還在記憶體裡。
+      void host.sendFromUser({ runId: first.runId, text: '之後的話' });
+      host.interrupt(first.runId);
+      hold.open();
+      await first.outcome;
+      expect(host.hasRunning()).toBe(false);
+      expect(host.quiescent()).toBe(false);
+      expect(host.control.quiescent()).toBe(false);
+      // 下一次送話把暫停的恢復、整串跑完之後才是真的閒。
+      await host.sendFromUser({ runId: first.runId, text: '喚醒' });
+      await host.close();
+    });
+
     it('出口拋錯只講一聲，不影響輪次', async () => {
       const { agent } = fakeAgent();
       const sessions = new SessionRegistry('root-1');
