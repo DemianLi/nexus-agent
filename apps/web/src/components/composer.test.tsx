@@ -461,6 +461,17 @@ describe('`/` 選單', () => {
     expect(screen.getByRole('listbox')).toBeTruthy();
   });
 
+  it('Safari 選字結束後才報的 Enter（只剩 keyCode 229）不選也不送', () => {
+    const run = vi.fn(() => true);
+    const onSubmit = vi.fn();
+    render(<Harness run={run} onSubmit={onSubmit} />);
+    type('/to');
+    key('Enter', { isComposing: false, keyCode: 229 });
+    expect(run).not.toHaveBeenCalled();
+    expect(input().value).toBe('/to');
+    expect(onSubmit).not.toHaveBeenCalled();
+  });
+
   it('Enter 選帶參數的命令：填上 `/名稱 `、不執行、選單收起', () => {
     const run = vi.fn(() => true);
     const onSubmit = vi.fn();
