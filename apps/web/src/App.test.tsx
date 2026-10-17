@@ -1,5 +1,7 @@
 import type {
+  CommandOutcome,
   Event,
+  GoalPauseResult,
   ModelCatalogResult,
   ModelSelectResult,
   ModelSelection,
@@ -1413,6 +1415,140 @@ describe('目標列（#945）', () => {
       goalFrame(downlink, wireGoal({ objective: long, roundsStarted: 3, maxGoalRounds: 10 })),
     ]);
     await waitFor(() => expect(screen.getByTestId('goal-rounds').textContent).toBe('第 3／10 輪'));
+  });
+
+  const pauseButton = () => screen.queryByRole('button', { name: '暫停目標' });
+
+  /** 假 client 換上接了線的 `goalPause`（蓋掉 spread 進來的未接線預設），記下每一次帶的參數。 */
+  async function mountedWithPause(
+    reply: () => CommandOutcome<GoalPauseResult>,
+    events: readonly Event[] = [],
+    commands: readonly SlashDescriptor[] = [],
+  ) {
+    seq = 0;
+    const fake = fakeClient(events, { commands });
+    const paused: { threadId: string; goalId: string; revision: number }[] = [];
+    const client: WireClient = {
+      ...fake.client,
+      goalPause: async (threadId, params) => {
+        paused.push({ threadId, ...params });
+        return reply();
+      },
+    };
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByLabelText('要說的話')).toBeTruthy());
+    return { ...fake, paused };
+  }
+
+  const acceptedPause = (): CommandOutcome<GoalPauseResult> => ({
+    kind: 'ok',
+    result: { ok: true, value: { goal: { id: 'g1', revision: 4, phase: 'paused' } } },
+  });
+
+  it('暫停鈕（#1517）：active 才有；paused、blocked、complete、沒有目標都沒有', async () => {
+    const { downlink, opened } = await mounted();
+    expect(pauseButton()).toBeNull();
+    downlink.push(opened[0]!, [goalFrame(downlink, wireGoal())]);
+    await waitFor(() => expect(pauseButton()).toBeTruthy());
+    for (const phase of ['paused', 'blocked', 'complete'] as const) {
+      downlink.push(opened[0]!, [goalFrame(downlink, wireGoal({ phase }))]);
+      await waitFor(() => expect(pauseButton()).toBeNull());
+    }
+    downlink.push(opened[0]!, [goalFrame(downlink, wireGoal())]);
+    await waitFor(() => expect(pauseButton()).toBeTruthy());
+    downlink.push(opened[0]!, [goalFrame(downlink, null)]);
+    await waitFor(() => expect(pauseButton()).toBeNull());
+  });
+
+  it('一輪跑著時按暫停：送 goal.pause，帶畫面上那份目標的身分與修訂；不自己改相位，等下行翻成 paused 鈕才消失', async () => {
+    const { downlink, opened, paused } = await mountedWithPause(acceptedPause, [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+    ]);
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+    downlink.push(opened[0]!, [goalFrame(downlink, wireGoal({ revision: 3 }))]);
+    await waitFor(() => expect(pauseButton()).toBeTruthy());
+    expect(pauseButton()!.hasAttribute('disabled')).toBe(false);
+
+    fireEvent.click(pauseButton()!);
+    await waitFor(() =>
+      expect(paused).toEqual([{ threadId: opened[0], goalId: 'g1', revision: 3 }]),
+    );
+    // 收下了也不搶先改：相位要等下行。
+    expect(bar()!.textContent).toContain('目標：未完成');
+    expect(screen.queryByTestId('goal-pause-failure')).toBeNull();
+
+    downlink.push(opened[0]!, [goalFrame(downlink, wireGoal({ revision: 4, phase: 'paused' }))]);
+    await waitFor(() => expect(bar()!.textContent).toContain('目標：已暫停'));
+    expect(pauseButton()).toBeNull();
+  });
+
+  it('停在核准點時目標列還在、暫停鈕按得到（伺服器停在核准點也收）', async () => {
+    const { downlink, opened, paused } = await mountedWithPause(acceptedPause, [
+      frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
+      approvalFrame([{ name: 'danger', allowed: ['approve', 'reject'] }]),
+    ]);
+    await screen.findByTestId('approval-card');
+    downlink.push(opened[0]!, [goalFrame(downlink, wireGoal())]);
+    await waitFor(() => expect(pauseButton()).toBeTruthy());
+    fireEvent.click(pauseButton()!);
+    await waitFor(() => expect(paused).toHaveLength(1));
+  });
+
+  it('過期被拒：列留著，列下面說出原因並掛在鈕的描述上；再按一次先收掉上一句', async () => {
+    let reply: CommandOutcome<GoalPauseResult> = {
+      kind: 'ok',
+      result: {
+        ok: false,
+        error: { code: 'goal-stale', current: { id: 'g1', revision: 5, phase: 'active' } },
+      },
+    };
+    const { downlink, opened, paused } = await mountedWithPause(() => reply);
+    downlink.push(opened[0]!, [goalFrame(downlink, wireGoal())]);
+    await waitFor(() => expect(pauseButton()).toBeTruthy());
+
+    fireEvent.click(pauseButton()!);
+    const failure = await screen.findByTestId('goal-pause-failure');
+    expect(failure.textContent).toBe('目標剛被改過，這次沒有暫停。請看過現在的目標再決定。');
+    expect(pauseButton()!.getAttribute('aria-describedby')).toBe(failure.id);
+    expect(bar()).toBeTruthy();
+
+    reply = { kind: 'rejected', code: 'not_supported', message: 'not supported' };
+    fireEvent.click(pauseButton()!);
+    await waitFor(() =>
+      expect(screen.getByTestId('goal-pause-failure').textContent).toBe(
+        '這台伺服器不支援暫停目標。',
+      ),
+    );
+    expect(paused).toHaveLength(2);
+  });
+
+  it('一輪跑著時打 /goal pause 送得出去（命令宣告了 runWhileBusy）；/goal <目標> 與 /plan 照舊送不出去', async () => {
+    await mountedWithPause(
+      acceptedPause,
+      [frame('lifecycle', [], { event: 'running', graph_name: 'root' })],
+      [
+        {
+          name: 'goal',
+          description: '目標',
+          input: { hint: '[<目標>|pause]' },
+          runWhileBusy: ['pause'],
+        },
+        { name: 'plan', description: '計劃模式' },
+      ],
+    );
+    await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
+    const input = screen.getByLabelText('要說的話');
+    const sendButton = () => screen.getByRole('button', { name: '送出' }) as HTMLButtonElement;
+
+    // 清單是非同步到的：等它到了 `/goal pause` 才會放行。
+    fireEvent.change(input, { target: { value: '/goal pause' } });
+    await waitFor(() => expect(sendButton().disabled).toBe(false));
+    fireEvent.change(input, { target: { value: '/goal 把登入改好' } });
+    expect(sendButton().disabled).toBe(true);
+    fireEvent.change(input, { target: { value: '/goal PAUSE' } });
+    expect(sendButton().disabled).toBe(true);
+    fireEvent.change(input, { target: { value: '/plan' } });
+    expect(sendButton().disabled).toBe(true);
   });
 
   it('跟計劃標籤同時出現：兩個都在，標籤排在目標列前面', async () => {

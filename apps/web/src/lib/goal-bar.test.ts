@@ -1,7 +1,12 @@
 import type { WireGoal } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
-import { GOAL_PHASE_TEXT, goalBarView, PROMPT_REJECTED_TEXT } from '@/lib/goal-bar';
+import {
+  GOAL_PHASE_TEXT,
+  goalBarView,
+  goalPauseFailureText,
+  PROMPT_REJECTED_TEXT,
+} from '@/lib/goal-bar';
 
 const goal = (patch: Partial<WireGoal> = {}): WireGoal => ({
   id: 'g1',
@@ -76,5 +81,62 @@ describe('goalBarView（#945）', () => {
       }),
     );
     expect(view?.label).toBe('目標：受阻，很長的目標內容，第 2／256 輪，卡住了');
+  });
+});
+
+describe('暫停（#1517）', () => {
+  it('只有 active 給暫停鈕，不看輪數與別的欄位；paused、blocked 不給', () => {
+    expect(goalBarView(goal())?.pausable).toBe(true);
+    expect(goalBarView(goal({ roundsStarted: 3 }))?.pausable).toBe(true);
+    expect(goalBarView(goal({ phase: 'paused' }))?.pausable).toBe(false);
+    expect(
+      goalBarView(goal({ phase: 'blocked', blockedReason: { code: 'x', message: '卡住了' } }))
+        ?.pausable,
+    ).toBe(false);
+  });
+
+  const state = { id: 'g1', revision: 2, phase: 'paused' as const };
+
+  it('收下了回 undefined：列等下行翻成 paused，不搶先改', () => {
+    expect(goalPauseFailureText({ kind: 'ok', result: { ok: true, value: { goal: state } } })).toBe(
+      undefined,
+    );
+  });
+
+  it('業務失敗各自講一句：過期、已經不在進行（依現在的相位）、沒有目標', () => {
+    expect(
+      goalPauseFailureText({
+        kind: 'ok',
+        result: {
+          ok: false,
+          error: { code: 'goal-stale', current: { ...state, phase: 'active' } },
+        },
+      }),
+    ).toBe('目標剛被改過，這次沒有暫停。請看過現在的目標再決定。');
+    expect(
+      goalPauseFailureText({
+        kind: 'ok',
+        result: { ok: false, error: { code: 'goal-not-active', phase: 'paused' } },
+      }),
+    ).toBe('目標已經暫停了。');
+    expect(
+      goalPauseFailureText({
+        kind: 'ok',
+        result: { ok: false, error: { code: 'goal-not-active', phase: 'complete' } },
+      }),
+    ).toBe('目標已經完成了。');
+    expect(
+      goalPauseFailureText({
+        kind: 'ok',
+        result: { ok: false, error: { code: 'goal-not-found' } },
+      }),
+    ).toBe('這條對話已經沒有目標了。');
+  });
+
+  it('這條線收不了：not_supported 講伺服器不支援，其餘照 server 的原話', () => {
+    expect(
+      goalPauseFailureText({ kind: 'rejected', code: 'not_supported', message: 'not supported' }),
+    ).toBe('這台伺服器不支援暫停目標。');
+    expect(goalPauseFailureText({ kind: 'rejected', message: '連線中斷' })).toBe('連線中斷');
   });
 });

@@ -1,9 +1,18 @@
+// @vitest-environment node
+import { readdirSync, readFileSync } from 'node:fs';
+import { join, relative } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { normalizeCommandDefinition } from '@nexus/core';
+import type { CommandDefinition } from '@nexus/core';
+import { runsWhileBusy } from '@nexus/plugin-commands';
 import { SETTLE_REASONS } from '@nexus/wire';
-import type { ConversationStatus, WireQueuedInput } from '@nexus/wire';
+import type { ConversationStatus, SlashDescriptor, WireQueuedInput } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import {
   canRunSlash,
+  slashRunsWhileBusy,
   GOAL_CONTINUATION_TEXT,
   GOAL_CONTINUATION_WARNING,
   isGoalContinuation,
@@ -100,15 +109,98 @@ describe('canRunSlash', () => {
     ['stopped', true],
     ['failed', true],
   ])('%s：/plan %s', (status, allowed) => {
-    expect(canRunSlash(true, status, '/plan', '/feedback')).toBe(allowed);
+    expect(canRunSlash(true, status, '/plan', '/feedback', [])).toBe(allowed);
   });
 
   it.each(STATUSES)('%s：/feedback 照樣放行', (status) => {
-    expect(canRunSlash(true, status, ' /feedback ', '/feedback')).toBe(true);
+    expect(canRunSlash(true, status, ' /feedback ', '/feedback', [])).toBe(true);
   });
 
   it('斷線送不出去', () => {
-    expect(canRunSlash(false, 'idle', '/plan', '/feedback')).toBe(false);
+    expect(canRunSlash(false, 'idle', '/plan', '/feedback', [])).toBe(false);
+  });
+
+  it.each<ConversationStatus>(['idle', 'running', 'awaiting-input'])(
+    '%s：命令宣告過的 /goal pause 放行（#1517），/goal <目標> 與 /plan 跑著時照舊擋',
+    (status) => {
+      const busy = status !== 'idle';
+      expect(canRunSlash(true, status, '/goal pause', '/feedback', COMMANDS)).toBe(true);
+      expect(canRunSlash(true, status, ' /goal pause ', '/feedback', COMMANDS)).toBe(true);
+      expect(canRunSlash(true, status, '/goal 把登入改好', '/feedback', COMMANDS)).toBe(!busy);
+      expect(canRunSlash(true, status, '/plan', '/feedback', COMMANDS)).toBe(!busy);
+    },
+  );
+
+  it('清單還沒到（空的）時跑著照舊擋：不知道的就不放行，跟伺服器一樣', () => {
+    expect(canRunSlash(true, 'running', '/goal pause', '/feedback', [])).toBe(false);
+  });
+});
+
+/** 照伺服器的寫法登記命令：同一份定義產生閘門查的 definition 與 `slash.list` 送的 descriptor。 */
+function command(name: string, runWhileBusy?: readonly string[]) {
+  const definition: CommandDefinition = {
+    name,
+    description: `${name} 的說明`,
+    ...(runWhileBusy === undefined ? {} : { runWhileBusy }),
+    handler: () => ({ kind: 'success' }),
+  };
+  return normalizeCommandDefinition(definition);
+}
+const REGISTERED = [command('goal', ['pause']), command('plan'), command('demo', ['a b', 'stop'])];
+const COMMANDS: readonly SlashDescriptor[] = REGISTERED.map((r) => r.descriptor);
+const FIND = {
+  find: (name: string) => REGISTERED.find((r) => r.definition.name === name)?.definition,
+};
+
+describe('slashRunsWhileBusy 跟伺服器的閘門同一套（#1517）', () => {
+  // 拿 `@nexus/plugin-commands` 真的 `runsWhileBusy` 對照同一批輸入：web 這一份分岔了就紅。
+  it.each([
+    '/goal pause',
+    '/goal pause ',
+    '/goal  pause',
+    '/goal\tpause',
+    '/goal\npause',
+    '/goal PAUSE',
+    '/goal Pause',
+    '/goal pause 1',
+    '/goal pauses',
+    '/goalpause',
+    '/goal',
+    '/goal ',
+    '/goal edit 新的目標',
+    '/plan',
+    '/plan pause',
+    '/feedback',
+    '/demo a b',
+    '/demo a  b',
+    '/demo stop',
+    '/Demo stop',
+    '/nope pause',
+    'goal pause',
+    ' /goal pause',
+    '/',
+    '',
+  ])('%j', (line) => {
+    expect(slashRunsWhileBusy(COMMANDS, line)).toBe(runsWhileBusy(FIND, line));
+  });
+
+  it('對照組裡兩種結果都有，不是全部 false 碰巧一致', () => {
+    expect(slashRunsWhileBusy(COMMANDS, '/goal pause')).toBe(true);
+    expect(slashRunsWhileBusy(COMMANDS, '/demo a b')).toBe(true);
+    expect(slashRunsWhileBusy(COMMANDS, '/goal PAUSE')).toBe(false);
+  });
+
+  it('產品碼不 import `@nexus/plugin-commands`：它只是測試用的對照，裡面有 Node 的模組', () => {
+    const root = fileURLToPath(new URL('..', import.meta.url));
+    const offenders = (readdirSync(root, { recursive: true }) as string[])
+      .filter((file) => /\.(ts|tsx)$/.test(file) && !/\.test\.tsx?$/.test(file))
+      .filter((file) =>
+        /(?:from|import)\s*\(?\s*['"]@nexus\/plugin-commands/.test(
+          readFileSync(join(root, file), 'utf8'),
+        ),
+      )
+      .map((file) => relative(root, join(root, file)));
+    expect(offenders).toEqual([]);
   });
 });
 
