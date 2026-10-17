@@ -11,7 +11,7 @@
  * | `titleLlmFor` 預設的標題模型 | 標題請求 |
  * | `titleLlmFor` 跟隨主路由的標題模型 | 跟隨主路由的標題請求 |
  * | `createModelSelectionHost` 建的別顆實例 | 選了別顆的對話請求 |
- * | `liveSubagentModelFor`（背景子代理指定的模型） | 單獨一條，不經 serve |
+ * | `liveSubagentModelFor`（背景子代理指定的模型） | 單獨一條，不經 serve；另有一條從 `runServe --live` 起量（呼叫點交不交閘） |
  *
  * 做法一致：上限 1，讓**一個**請求扣住那唯一的名額，再開另一條 thread 的請求，量它有沒有溜到端點。不掛閘的那一處，
  * 它發的請求不占名額，另一條 thread 的請求就會直接到端點。
@@ -40,25 +40,34 @@ import { liveModelConfigSchema } from './settings/live-model.js';
 const FAKE_KEY = 'nvapi-fake-for-loopback-only';
 const A = 'model-a';
 const B = 'model-b';
+/** 對話請求的最後一句帶這個：端點照劇本回一個 `subagent` 工具呼叫，指定用 B、背景跑。 */
+const DELEGATE_MARK = 'DELEGATE-TO-B';
+/** 子代理的任務描述帶這個：端點據此把子代理發的請求挑出來。 */
+const SUBTASK_MARK = 'SUBTASK-MARK';
 
 interface Seen {
   readonly model: string;
   readonly title: boolean;
+  /** 背景子代理發的請求（任務描述帶 {@link SUBTASK_MARK}）。 */
+  readonly sub: boolean;
+  /** 最後一則訊息的文字（工具結果等非字串內容為空字串）。 */
+  readonly last: string;
 }
 
 interface Endpoint {
   readonly baseUrl: string;
   readonly seen: Seen[];
   /** 之後到的、符合條件的請求一律扣住不回；回傳的函式放掉目前已經扣住的那些，並且之後的不再扣。 */
-  hold(which: 'root' | 'title'): () => void;
+  hold(which: 'root' | 'title' | 'sub'): () => void;
   close(): Promise<void>;
 }
 
 async function startEndpoint(): Promise<Endpoint> {
   const seen: Seen[] = [];
-  const held: Record<'root' | 'title', { active: boolean; waiting: (() => void)[] }> = {
+  const held: Record<'root' | 'title' | 'sub', { active: boolean; waiting: (() => void)[] }> = {
     root: { active: false, waiting: [] },
     title: { active: false, waiting: [] },
+    sub: { active: false, waiting: [] },
   };
   const sockets = new Set<ServerResponse>();
   const server: Server = createServer((request: IncomingMessage, response: ServerResponse) => {
@@ -75,12 +84,48 @@ async function startEndpoint(): Promise<Endpoint> {
         first?.role === 'system' &&
         typeof first.content === 'string' &&
         first.content.startsWith('Create a concise title');
-      seen.push({ model: body.model ?? '', title });
+      const lastMessage = body.messages.at(-1);
+      const last = typeof lastMessage?.content === 'string' ? lastMessage.content : '';
+      const sub =
+        !title && body.messages.some((m) => JSON.stringify(m.content).includes(SUBTASK_MARK));
+      seen.push({ model: body.model ?? '', title, sub, last });
+      // 劇本：對話請求的最後一句要它派子代理，就回一個 `subagent` 工具呼叫（背景、指定 B）。
+      const delegate =
+        !title && !sub && lastMessage?.role === 'user' && last.includes(DELEGATE_MARK);
       sockets.add(response);
       response.on('close', () => sockets.delete(response));
       const id = `chatcmpl-${String(seen.length)}`;
       const reply = (): void => {
         const text = title ? '標題' : '好';
+        if (delegate) {
+          const call = {
+            id: 'call_1',
+            type: 'function',
+            function: {
+              name: 'subagent',
+              arguments: JSON.stringify({
+                description: SUBTASK_MARK,
+                subagent_type: 'general-purpose',
+                run_in_background: true,
+                model: B,
+              }),
+            },
+          };
+          const piece = (delta: Record<string, unknown>, reason: string | null): string =>
+            `data: ${JSON.stringify({
+              id,
+              object: 'chat.completion.chunk',
+              created: 0,
+              model: body.model,
+              choices: [{ index: 0, delta, finish_reason: reason }],
+            })}\n\n`;
+          response.writeHead(200, { 'content-type': 'text/event-stream' });
+          response.write(piece({ role: 'assistant', content: '' }, null));
+          response.write(piece({ tool_calls: [{ index: 0, ...call }] }, null));
+          response.write(piece({}, 'tool_calls'));
+          response.end('data: [DONE]\n\n');
+          return;
+        }
         if (body.stream !== true) {
           response.writeHead(200, { 'content-type': 'application/json' });
           response.end(
@@ -110,7 +155,7 @@ async function startEndpoint(): Promise<Endpoint> {
         response.write(chunk({}, 'stop'));
         response.end('data: [DONE]\n\n');
       };
-      const slot = held[title ? 'title' : 'root'];
+      const slot = held[title ? 'title' : sub ? 'sub' : 'root'];
       if (slot.active) slot.waiting.push(reply);
       else reply();
     });
@@ -154,7 +199,13 @@ const entry = (id: string): Record<string, unknown> => ({
 /** `live-model` 指向假端點、上限 1、兩顆模型（A 預設、B 可選）；標題那一列按需關掉。 */
 async function patchFor(
   baseUrl: string,
-  options: { title: boolean; cap?: number | undefined; maxWaitMs?: number | undefined },
+  options: {
+    title: boolean;
+    cap?: number | undefined;
+    maxWaitMs?: number | undefined;
+    /** 打開子代理選模型，授權清單只有 B（背景子代理才能被指定 B）。 */
+    selection?: boolean | undefined;
+  },
 ): Promise<string> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-gate-wiring-'));
   const path = join(dir, 'patch.yml');
@@ -169,6 +220,15 @@ async function patchFor(
     `    models: ${JSON.stringify([entry(A), entry(B)])}`,
   ];
   if (!options.title) lines.push('- id: thread-title-llm', '  disabled: true');
+  if (options.selection === true) {
+    lines.push(
+      '- id: subagent-model-selection',
+      '  config:',
+      '    enabled: true',
+      '    allowedModels:',
+      `      - ${B}`,
+    );
+  }
   await writeFile(path, lines.join('\n') + '\n', 'utf8');
   return path;
 }
@@ -194,6 +254,7 @@ describe('serve --live：每個建模型的地方都從全機那一份閘取名�
     title: boolean;
     cap?: number | undefined;
     maxWaitMs?: number | undefined;
+    selection?: boolean | undefined;
   }) {
     endpoint = await startEndpoint();
     running = (await runServe({
@@ -205,7 +266,8 @@ describe('serve --live：每個建模型的地方都從全機那一份閘取名�
     return { client, endpoint };
   }
 
-  const roots = (seen: readonly Seen[]): Seen[] => seen.filter((request) => !request.title);
+  const roots = (seen: readonly Seen[]): Seen[] =>
+    seen.filter((request) => !request.title && !request.sub);
 
   it('起動時講出上限：印一行，寫明整台共用與逾時的碼', async () => {
     await boot({ title: false, cap: 1 });
@@ -302,6 +364,54 @@ describe('serve --live：每個建模型的地方都從全機那一份閘取名�
   }, 60_000);
 });
 
+describe('serve --live：背景子代理指定了模型也占全機的名額', () => {
+  let endpoint: Endpoint | undefined;
+  let running: RunningServe | undefined;
+
+  beforeEach(() => {
+    vi.stubEnv(LIVE_API_KEY_ENV, FAKE_KEY);
+  });
+  afterEach(async () => {
+    await running?.close();
+    running = undefined;
+    await endpoint?.close();
+    endpoint = undefined;
+    vi.unstubAllEnvs();
+  });
+
+  it('一條 thread 派出指定 B 的背景子代理，子代理的請求占著唯一的名額：另一條 thread 的對話請求排隊，放掉才到端點', async () => {
+    endpoint = await startEndpoint();
+    running = (await runServe({
+      argv: [
+        '--port',
+        '0',
+        '--live',
+        '--patch',
+        await patchFor(endpoint.baseUrl, { title: false, cap: 1, selection: true }),
+      ],
+      log: () => undefined,
+      env: {},
+    })) as RunningServe;
+    const client = await serveClient(running);
+    const fake = endpoint;
+    const release = fake.hold('sub');
+    await client.runStart('gate-a', `請派子代理 ${DELEGATE_MARK}`);
+    // 模型回了 `subagent` 工具呼叫，背景子代理用 B 發請求，被端點扣住——它拿著唯一的名額。
+    await until(() => fake.seen.some((request) => request.sub), '子代理的請求到端點（被扣住）');
+    expect(fake.seen.find((request) => request.sub)!.model).toBe(B);
+    // 從 gate-a 的 root 請求（可能還有一個「工具結果之後」的續跑請求）都在這之前或之後處理完或排隊；
+    // 這裡只看另一條 thread 的請求。
+    await client.runStart('gate-b', '第二條 THREAD-B');
+    await quiet();
+    expect(fake.seen.some((request) => request.last.includes('THREAD-B'))).toBe(false);
+    release();
+    await until(
+      () => fake.seen.some((request) => request.last.includes('THREAD-B')),
+      '子代理的名額還了之後另一條 thread 的請求才到端點',
+    );
+  }, 60_000);
+});
+
 describe('liveSubagentModelFor：背景子代理指定的模型也受閘管', () => {
   let endpoint: Endpoint | undefined;
 
@@ -333,7 +443,7 @@ describe('liveSubagentModelFor：背景子代理指定的模型也受閘管', ()
       expect(endpoint.seen).toHaveLength(0);
       occupied();
       await call;
-      expect(endpoint.seen).toEqual([{ model: B, title: false }]);
+      expect(endpoint.seen).toEqual([expect.objectContaining({ model: B, title: false })]);
       expect(gate.active).toBe(0);
     });
   }
