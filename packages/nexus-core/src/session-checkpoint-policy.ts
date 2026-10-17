@@ -49,10 +49,12 @@
  *
  * ## 代價
  *
- * 每次模型呼叫與每次工具呼叫（root 與子代理）多一次排空，而我們的排空帶一次 `datasync`
- * （{@link ./session-persistence.ts | SessionPersistenceCoordinator.flush}）。dsh 那側每一批
- * append 都 fsync，量級相同。沒接持久化時（手搭的組裝、多數測試）排空者一位都沒有，
- * 立刻 resolve。
+ * 每次模型呼叫與每次工具呼叫（root 與子代理）多一次排空：把還在佇列裡的事件交給後端 `append`。
+ * JSONL 後端（`apps/harness/src/jsonl-session-store.ts`）**每一批 `append` 都寫滿並 fsync 一次**
+ * （[#1506](https://github.com/DemianLi/nexus-agent/issues/1506)，同 dsh 的 `appendLines`），所以
+ * fsync 次數等於**批數**：背景窗口的排空與檢查點的排空都算，不是等於檢查點數。排空本身不再多一次
+ * `datasync`——把手已經開著時，{@link ./session-persistence.ts | SessionPersistenceCoordinator.flush}
+ * 往後端的 `flush` 只確認實體化。沒接持久化時（手搭的組裝、多數測試）排空者一位都沒有，立刻 resolve。
  *
  * @module
  */

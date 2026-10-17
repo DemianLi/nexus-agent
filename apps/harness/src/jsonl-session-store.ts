@@ -34,6 +34,18 @@
  *   路徑上，**被收成一行 warn 而不是一個錯**。dsh 也是惰性的，所以不算偏離；只是我們的
  *   協調器讓那個後果更安靜。
  *
+ * ## 每批落盤、失敗截回（[#1506](https://github.com/DemianLi/nexus-agent/issues/1506)）
+ *
+ * 照 dsh 的 `appendLines`（`packages/session/session-persistence-jsonl/src/index.ts:1406-1449`，SHA `1517a4db`）：
+ * 每一批 `append` 先記檔案現在的大小，**寫滿**整批（`writeFile`，不接受短寫）、`fsync`，成功才讓 `seq` 前進。
+ * 寫或 `fsync` 任一步失敗，就把檔案截回寫前大小再 `fsync`，然後拋原錯；截回也失敗拋
+ * `AggregateError([原錯, 截回錯])`。協調器保留整批、之後重送（`session-persistence.ts`），所以殘留的半批
+ * 不截掉，重送的內容就接在它後面，變成中段壞行或重複的 `seq`。
+ *
+ * **和 dsh 唯一的形狀差異是把手的壽命**：dsh 每批開關一次，這裡成功路徑一個把手用到會話結束；失敗路徑
+ * 照 dsh——先關掉這個把手、另用 `r+` 開檔截回，下一批用 `a` 重開（demian 2026-10-17 在 #1506 拍板 Q1 (a)）。
+ * `append`／`flush`／`close` 排在同一條鏈上，一次只跑一個（dsh `storage.ts:187-195`），否則一邊關把手時另一邊還拿著它。
+ *
  * ## 目錄：CLI 每次一個，serve 按專案固定一格
  *
  * dsh 的 `SessionId` 全域唯一；我們的 CLI root 固定叫 `cli`，放在固定的地方會每次都撞。
@@ -179,13 +191,32 @@ interface ResumePoint {
 }
 
 /**
- * 一個後端裡每一份會話共用的：拿鎖的那一下，與「這個平台拿不到鎖」那張嘴。
+ * 日誌檔的把手上，這個後端會用到的那幾個動作。測試包住它來製造寫入失敗（見 {@link OpenLogFile}）。
+ */
+export type LogFileHandle = Pick<
+  FileHandle,
+  'stat' | 'writeFile' | 'sync' | 'datasync' | 'truncate' | 'close'
+>;
+
+/**
+ * 開日誌檔。`wx` 是新會話的第一次實體化、`a` 是續接與失敗後的重開、`r+` 是失敗後的截回。
+ * **只給測試換**：真的磁碟上量不到「寫了一半就拋」「sync 拋錯」這幾條路（前例是 `lock`）。
+ */
+export type OpenLogFile = (
+  path: string,
+  flags: 'wx' | 'a' | 'r+',
+  mode: number,
+) => Promise<LogFileHandle>;
+
+/**
+ * 一個後端裡每一份會話共用的：拿鎖的那一下、「這個平台拿不到鎖」那張嘴，與開日誌檔的那一下。
  *
  * **那張嘴一個後端只開一次**——不然每個 subagent 出生都重講一遍。
  */
 interface LeaseContext {
   readonly lock: TryLock | undefined;
   readonly unavailable: (outcome: LeaseUnavailable) => void;
+  readonly openLog: OpenLogFile;
 }
 
 /** 拿租約；拿不到的平台講一聲、回 `undefined`。搶不到與其餘的錯照常拋。 */
@@ -210,14 +241,21 @@ class JsonlStoredSession implements StoredSession {
   readonly #resume: ResumePoint | undefined;
   readonly #context: LeaseContext;
   #lease: SessionWriteLease | undefined;
-  #handle: FileHandle | undefined;
+  #handle: LogFileHandle | undefined;
+  /**
+   * 實體化成功過。之後 `#handle` 是 `undefined` 就只有一種意思：追加失敗、把手連同截回一起收掉了，
+   * 下一次要用 `a` 重開（{@link #materialize}），不是從頭實體化。
+   */
+  #opened = false;
+  /** `append`／`flush`／`close` 的串行鏈：一次只跑一個，前一個失敗不擋後一個。 */
+  #tail: Promise<void> = Promise.resolve();
+  #closing: Promise<void> | undefined;
   /**
    * 進行中的那次實體化。`#materialize` 裡有好幾個 await，同時進來兩次的話第二次會拿不到
    * **自己的**租約，拋出一句「另一個行程還開著它」——同一個行程、同一份會話，那句話會讓人去找
    * 一個不存在的行程。協調器的背景寫入與 `flush` 排在不同的隊伍上，所以這不是理論上的。
    */
-  #materializing: Promise<FileHandle> | undefined;
-  #closed = false;
+  #materializing: Promise<LogFileHandle> | undefined;
   /** 已存的 next-seq。下一批的第一顆必須等於它。 */
   #nextSeq: number;
 
@@ -245,69 +283,159 @@ class JsonlStoredSession implements StoredSession {
   async append(events: readonly SessionEvent[]): Promise<void> {
     this.#assertOpen();
     if (events.length === 0) return;
-    for (const [index, event] of events.entries()) {
-      const expected = this.#nextSeq + index;
-      if (event.seq !== expected) {
-        throw new Error(
-          `會話 "${this.#header.id}" 的這一批不連續：第 ${index} 顆的 seq 是 ${event.seq}，` +
-            `應該是 ${expected}。寫過的事件不重寫，缺號也不補。`,
-        );
+    return this.#enqueue(async () => {
+      for (const [index, event] of events.entries()) {
+        const expected = this.#nextSeq + index;
+        if (event.seq !== expected) {
+          throw new Error(
+            `會話 "${this.#header.id}" 的這一批不連續：第 ${index} 顆的 seq 是 ${event.seq}，` +
+              `應該是 ${expected}。寫過的事件不重寫，缺號也不補。`,
+          );
+        }
       }
-    }
-    const handle = await this.#materialize();
-    await handle.write(events.map((event) => `${JSON.stringify(event)}\n`).join(''));
-    this.#nextSeq += events.length;
+      await this.#persist(events.map((event) => `${JSON.stringify(event)}\n`).join(''));
+      this.#nextSeq += events.length;
+    });
   }
 
   async flush(): Promise<void> {
     this.#assertOpen();
-    // 一份還沒寫過任何事件的會話，在這裡才真的變成磁碟上看得到的東西——dsh 同條
-    // （「一个空的已创建会话在此变得可持久列出」）。
-    const handle = await this.#materialize();
-    await handle.datasync();
+    return this.#enqueue(async () => {
+      // 實體化過的會話，每一批 `append` resolve 時都已經 fsync 過（失敗那批也已截回並 fsync），
+      // 這裡不再多一次——照 dsh `storage.ts:207`（「appends are durable on resolution」）。
+      if (this.#opened) return;
+      // 一份還沒寫過任何事件的會話，在這裡才真的變成磁碟上看得到的東西——dsh 同條
+      // （「一个空的已创建会话在此变得可持久列出」）。
+      const handle = await this.#materialize();
+      await handle.datasync();
+    });
   }
 
-  async close(): Promise<void> {
-    if (this.#closed) return;
-    this.#closed = true;
-    const handle = this.#handle;
-    this.#handle = undefined;
-    try {
-      if (handle !== undefined) {
-        try {
-          await handle.datasync();
-        } finally {
-          await handle.close();
-        }
-      }
-    } finally {
-      // **不論開沒開過日誌都放**：續接那條路在讀之前就拿了租約，一筆都沒寫就關也要放掉，
-      // 不然同一個行程裡下一次接同一份會撞上自己。
-      const lease = this.#lease;
-      this.#lease = undefined;
-      await lease?.release();
-    }
-  }
-
-  #assertOpen(): void {
-    if (this.#closed) throw new Error(`會話 "${this.#header.id}" 的把手已經關掉了。`);
+  close(): Promise<void> {
+    // 已經排在前面的 append／flush 先跑完，再收尾；第二次呼叫拿到同一個結果。
+    return (this.#closing ??= this.#enqueue(() => this.#shutdown()));
   }
 
   /**
-   * 第一次真的要寫時才建目錄、寫 header、開檔。之後直接回同一個 handle。
-   *
-   * 同時進來的共用同一次；失敗了就清掉，下一次重來——協調器靠的正是「失敗保留、下次再送」。
+   * 收尾：落盤、關檔、放租約，**三步各自接住，全收完才報**——只有一個錯就拋那一個，兩個以上才是
+   * `AggregateError`，照 dsh `storage.ts:246-258`。以前關檔的錯會蓋掉落盤的錯，「哪些位元組沒落盤」就看不見了。
    */
-  #materialize(): Promise<FileHandle> {
-    if (this.#handle !== undefined) return Promise.resolve(this.#handle);
-    this.#materializing ??= this.#open().catch((error: unknown) => {
-      this.#materializing = undefined;
+  async #shutdown(): Promise<void> {
+    const failures: unknown[] = [];
+    const handle = this.#handle;
+    this.#handle = undefined;
+    if (handle !== undefined) {
+      try {
+        await handle.datasync();
+      } catch (error: unknown) {
+        failures.push(error);
+      }
+      try {
+        await handle.close();
+      } catch (error: unknown) {
+        failures.push(error);
+      }
+    }
+    // **不論開沒開過日誌都放**：續接那條路在讀之前就拿了租約，一筆都沒寫就關也要放掉，
+    // 不然同一個行程裡下一次接同一份會撞上自己。
+    const lease = this.#lease;
+    this.#lease = undefined;
+    try {
+      await lease?.release();
+    } catch (error: unknown) {
+      failures.push(error);
+    }
+    if (failures.length > 1) {
+      throw new AggregateError(
+        failures,
+        `會話 "${this.#header.id}" 收尾有 ${failures.length} 步失敗`,
+      );
+    }
+    if (failures.length === 1) throw failures[0];
+  }
+
+  #assertOpen(): void {
+    if (this.#closing !== undefined)
+      throw new Error(`會話 "${this.#header.id}" 的把手已經關掉了。`);
+  }
+
+  #enqueue<T>(task: () => Promise<T>): Promise<T> {
+    const result = this.#tail.then(task);
+    this.#tail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  }
+
+  /**
+   * 追加一批並 fsync；失敗就截回寫前大小（見檔頭「每批落盤、失敗截回」）。
+   *
+   * **寫前大小取檔案現在的大小，不在記憶體裡累計**：續接截尾（{@link #materializeResumed}）會讓記憶體裡的數字對不上檔案。
+   */
+  async #persist(content: string): Promise<void> {
+    const handle = await this.#materialize();
+    const { size: before } = await handle.stat();
+    try {
+      await handle.writeFile(content);
+      await handle.sync();
+    } catch (error: unknown) {
+      this.#handle = undefined;
+      try {
+        await handle.close();
+        await this.#rollback(before);
+      } catch (rollbackError: unknown) {
+        throw new AggregateError(
+          [error, rollbackError],
+          `會話 "${this.#header.id}" 的追加失敗，截回 ${this.#logPath()} 也失敗了：殘留的半批還在檔案裡`,
+        );
+      }
       throw error;
-    });
+    }
+  }
+
+  /** 另開 `r+` 把日誌截回 `size` 並 fsync，同 dsh `rollbackAppend`（`index.ts:1441-1449`）。 */
+  async #rollback(size: number): Promise<void> {
+    const handle = await this.#context.openLog(this.#logPath(), 'r+', FILE_MODE);
+    try {
+      await handle.truncate(size);
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  }
+
+  #logPath(): string {
+    return join(this.#directory, `${this.#base}${LOG_SUFFIX}`);
+  }
+
+  /**
+   * 第一次真的要寫時才建目錄、寫 header、開檔。之後直接回同一個 handle；追加失敗收掉把手之後，用 `a` 重開。
+   *
+   * 呼叫端已經串行，所以不會同時進來兩次；失敗了就清掉，下一次重來——協調器靠的正是「失敗保留、下次再送」。
+   */
+  #materialize(): Promise<LogFileHandle> {
+    if (this.#handle !== undefined) return Promise.resolve(this.#handle);
+    if (this.#opened) {
+      return this.#context.openLog(this.#logPath(), 'a', FILE_MODE).then((handle) => {
+        this.#handle = handle;
+        return handle;
+      });
+    }
+    this.#materializing ??= this.#open().then(
+      (handle) => {
+        this.#opened = true;
+        return handle;
+      },
+      (error: unknown) => {
+        this.#materializing = undefined;
+        throw error;
+      },
+    );
     return this.#materializing;
   }
 
-  async #open(): Promise<FileHandle> {
+  async #open(): Promise<LogFileHandle> {
     if (this.#resume !== undefined) return this.#materializeResumed(this.#resume);
     await mkdir(this.#directory, { recursive: true, mode: DIR_MODE });
     // **租約在第一筆實體化寫入之前拿**，照 dsh：一份還沒實體化的會話在檔案系統上沒有足跡。
@@ -324,7 +452,7 @@ class JsonlStoredSession implements StoredSession {
       { encoding: 'utf8', mode: FILE_MODE, flag: 'wx' },
     );
     // `wx`：檔案已經在就拒絕。不覆寫、也不續寫。
-    this.#handle = await open(join(this.#directory, `${this.#base}${LOG_SUFFIX}`), 'wx', FILE_MODE);
+    this.#handle = await this.#context.openLog(this.#logPath(), 'wx', FILE_MODE);
     return this.#handle;
   }
 
@@ -334,15 +462,15 @@ class JsonlStoredSession implements StoredSession {
    * header 覆寫是因為續寫進去的是這一版的詞彙（`session-store.ts` 的版本 3 那一段）；
    * 其餘欄位原樣——`createdAt` 是這份會話出生的時間，不是這一次打開的時間。
    */
-  async #materializeResumed(resume: ResumePoint): Promise<FileHandle> {
+  async #materializeResumed(resume: ResumePoint): Promise<LogFileHandle> {
     await writeFile(
       join(this.#directory, `${this.#base}${HEADER_SUFFIX}`),
       `${JSON.stringify(this.#header, null, 2)}\n`,
       { encoding: 'utf8', mode: FILE_MODE },
     );
-    const logPath = join(this.#directory, `${this.#base}${LOG_SUFFIX}`);
+    const logPath = this.#logPath();
     if (resume.truncateTo !== undefined) await truncate(logPath, resume.truncateTo);
-    this.#handle = await open(logPath, 'a', FILE_MODE);
+    this.#handle = await this.#context.openLog(logPath, 'a', FILE_MODE);
     return this.#handle;
   }
 }
@@ -744,6 +872,8 @@ export interface JsonlSessionStoreOptions {
   readonly warn?: (message: string) => void;
   /** 拿鎖的那一下。**只給測試換**：真的平台上量不到「拿不到」那兩條路。 */
   readonly lock?: TryLock;
+  /** 開日誌檔的那一下。**只給測試換**：用來包住把手，製造寫到一半拋錯、短寫、sync 拋錯與截回失敗。 */
+  readonly openLog?: OpenLogFile;
 }
 
 /** 落在 `directory` 上的後端。兩個工廠差在目錄是新開的還是既有的。 */
@@ -752,6 +882,7 @@ function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): Jso
   let warned = false;
   const context: LeaseContext = {
     lock: options.lock,
+    openLog: options.openLog ?? ((path, flags, mode) => open(path, flags, mode)),
     unavailable: (outcome) => {
       if (warned) return;
       warned = true;
