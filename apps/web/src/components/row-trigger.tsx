@@ -11,7 +11,7 @@ import { cn } from '@/lib/utils';
  *
  * 兩種位置（`fit`）：
  * - `card`（預設）：嵌在 `rounded-3xl p-1` 的卡片裡（工具卡、待辦、核准的原始內容、排隊清單）。圓角用 `rounded-row`
- *   （`index.css` 的 `--radius-row`，24 減內距 4），跟卡片同心。
+ *   （`index.css` 的 `--radius-row`，SG 的 3xl 減內距 4），跟卡片同心。
  * - `bare`：不在卡片裡、自己就是一列（思考過程、摘要列、觀測與成本分頁的列）。`rounded-xl`、內距窄一點（`px-2`）。
  *
  * 新的可展開列用這個，不要再手寫 `hover:bg-chip-hover active:bg-chip-pressed … w-full … text-left`（`design-system.test.ts` 會擋）。

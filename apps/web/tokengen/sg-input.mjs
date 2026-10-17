@@ -46,18 +46,21 @@ export const SG = {
 };
 
 /**
- * SG 在 `@media (prefers-reduced-transparency: reduce)` 底下給的不透明面。產物覆寫了其中哪一個，
- * 就要在後面照樣重寫這段：無條件的 `:root { --card }` 排在 SG 後面，會把這裡的不透明值蓋掉。
+ * SG 在 `@media (prefers-reduced-transparency: reduce)` 底下給的不透明面（`primary-solid` 只寫在 `:root`，暗色也吃得到）。
+ * 產物覆寫了其中哪一個，就要在後面照樣重寫這段：無條件的 `:root { --card }` 排在 SG 後面，會把這裡的不透明值蓋掉。
+ * `data-glass="opaque"` 也用這一整組（#1468 Q7，產生器輸出）。
  */
 export const SG_REDUCED_TRANSPARENCY = {
   condition: '@media (prefers-reduced-transparency: reduce)',
   light: {
+    'primary-solid': '100%',
     panel: 'oklch(0.947 0.006 265)',
     card: 'oklch(0.958 0.005 265)',
     popover: 'oklch(0.98 0.003 265)',
     sidebar: 'oklch(0.985 0 0)',
   },
   dark: {
+    'primary-solid': '100%',
     panel: 'oklch(0.19 0 0)',
     card: 'oklch(0.225 0 0)',
     popover: 'oklch(0.22 0 0)',

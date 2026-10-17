@@ -54,7 +54,9 @@
  * 光靠後載入蓋不掉，所以**照抄同一段選擇器**、同 specificity、後載入。焦點的樣子仍只有那一圈文字色的外框（Q5）。
  * `src/styles/focus-ring-suppression.test.ts` 列舉 vendor 檔裡每一條把 ring 設成非透明的宣告，每一條都要在這裡有壓制；
  * 上游升版多出新的，那條會紅。瀏覽器那一層（`guard/`）量聚焦後的 `box-shadow`。
+ * 不讓 Prettier 排版：它會把引號換成單引號、把選擇器拆行，就不再是「一字不差照抄」，測試也比對不到。
  */
+/* prettier-ignore */
 :is([class*="focus-visible:ring-3"], [class*="focus-visible:ring-[3px]"]):focus-visible:not([data-slot="input"]):not([data-slot="textarea"]):not([data-slot="select-trigger"]):not([data-slot="native-select"]):not([data-slot="sidebar-input"]):not([aria-invalid="true"]),
 [data-slot="calendar"] [data-focused="true"] > :is(button, [data-slot="button"]) {
   --tw-ring-shadow: 0 0 #0000;

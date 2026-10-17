@@ -16,12 +16,44 @@ const READERS: [string, readonly string[]][] = [
   ['var(--font-mono)，暗色', ['@theme', ':root', '.dark']],
 ];
 
-/** 那個讀者看到的 `--font-mono` 字型清單，一個家族一項、去掉引號。 */
-function monoStack(selectors: readonly string[], cascade: Cascade = readCascade()): string[] {
-  const value = cascade.value(selectors, '--font-mono');
-  if (value === undefined) throw new Error(`${selectors.join(' ')} 都沒有 --font-mono`);
+/** 那個讀者看到的字型清單，一個家族一項、去掉引號。 */
+function stack(
+  property: string,
+  selectors: readonly string[],
+  cascade: Cascade = readCascade(),
+): string[] {
+  const value = cascade.value(selectors, property);
+  if (value === undefined) throw new Error(`${selectors.join(' ')} 都沒有 ${property}`);
   return value.split(',').map((family) => family.trim().replace(/^['"]|['"]$/g, ''));
 }
+
+function monoStack(selectors: readonly string[], cascade?: Cascade): string[] {
+  return stack('--font-mono', selectors, cascade);
+}
+
+/** SG 堆疊裡的簡體中文字型（`solid-glass.css` 的 `--font-sans`），#1468 Q6 拿掉。 */
+const SIMPLIFIED = ['PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei'];
+
+describe.each(READERS)('字型堆疊（#1468 Q6）：%s', (_reader, selectors) => {
+  it('介面 Geist、等寬 Geist Mono，中文都接 Noto Sans TC', () => {
+    expect(stack('--font-sans', selectors).slice(0, 2)).toEqual([
+      'Geist Variable',
+      'Noto Sans TC Variable',
+    ]);
+    expect(monoStack(selectors).slice(0, 2)).toEqual([
+      'Geist Mono Variable',
+      'Noto Sans TC Variable',
+    ]);
+  });
+
+  it('系統後備是繁中的 PingFang TC、Microsoft JhengHei，沒有 SG 的簡體字型', () => {
+    for (const property of ['--font-sans', '--font-mono']) {
+      const families = stack(property, selectors);
+      expect(families).toEqual(expect.arrayContaining(['PingFang TC', 'Microsoft JhengHei']));
+      expect(families.filter((family) => SIMPLIFIED.includes(family))).toEqual([]);
+    }
+  });
+});
 
 describe.each(READERS)('--font-mono 的 emoji 字型（#979）：%s', (_reader, selectors) => {
   it('三個平台的 emoji 字型明寫在堆疊最尾', () => {
@@ -35,9 +67,8 @@ describe.each(READERS)('--font-mono 的 emoji 字型（#979）：%s', (_reader, 
   });
 
   it('emoji 字型只在尾端，前面的字型涵蓋的字不受影響', () => {
-    const stack = monoStack(selectors);
-    expect(stack.indexOf('monospace')).toBe(stack.length - 4);
-    expect(stack.slice(0, 2)).toEqual(['Google Sans Code Variable', 'Noto Sans TC Variable']);
+    const families = monoStack(selectors);
+    expect(families.indexOf('monospace')).toBe(families.length - 4);
   });
 });
 

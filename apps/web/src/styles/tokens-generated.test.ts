@@ -17,6 +17,7 @@ import { readCascade } from './css-cascade';
  *    只有 {@link OUT_OF_SRGB} 列名的那幾格可以例外，而且要一字不差等於 SG 原值——SG 升版帶進新的超色域值，這裡會紅。
  * 3. **reduced-transparency 底下面是不透明的**：產物覆寫了 `--card`，排在 SG 後面的無條件值會蓋掉 SG 在那個條件下給的不透明值，
  *    產物要照樣重寫那一段。量的是 `index.css` 疊出來的結果。
+ * 4. **`data-glass="opaque"` 底下也是**（#1468 Q7）：SG 在那裡只拿掉 blur，面還是半透明的；產物照 reduced-transparency 那一組值補上。
  */
 
 const GENERATED = fileURLToPath(new URL('./tokens.generated.css', import.meta.url));
@@ -39,7 +40,9 @@ const OUT_OF_SRGB: { theme: Theme; name: string; value: string }[] = [
 function declared(selector: string): Map<string, string> {
   return new Map(
     generated.declarations
-      .filter((d) => d.selector === selector && d.conditions.length === 0 && d.property.startsWith('--'))
+      .filter(
+        (d) => d.selector === selector && d.conditions.length === 0 && d.property.startsWith('--'),
+      )
       .map((d) => [d.property.slice(2), d.value]),
   );
 }
@@ -75,9 +78,13 @@ describe('產生器產物', () => {
   });
 });
 
+/** 輸入表裡的面（`primary-solid` 是百分比，不是顏色）。 */
+const opaqueSurfaces = (theme: Theme) =>
+  Object.entries(SG_REDUCED_TRANSPARENCY[theme]).filter(([name]) => name !== 'primary-solid');
+
 describe('reduced-transparency 底下（index.css 疊出來的結果）', () => {
   for (const theme of ['light', 'dark'] as const) {
-    test.each(Object.entries(SG_REDUCED_TRANSPARENCY[theme]))(
+    test.each(opaqueSurfaces(theme))(
       `${theme}：--%s 不透明，而且等於 SG 原檔在那個條件下的值`,
       (name, value) => {
         const actual = cascade.computed(SELECTORS[theme], `--${name}`, REDUCED);
@@ -94,4 +101,30 @@ describe('reduced-transparency 底下（index.css 疊出來的結果）', () => 
   test('判準：沒有條件時 --card 仍是半透明的（條件真的有分開量）', () => {
     expect(parseColor(cascade.computed([':root'], '--card') ?? '').alpha).toBeLessThan(1);
   });
+});
+
+/**
+ * `data-glass` 掛在哪都要成立：掛在 `<html>` 上（跟 `:root`、`.dark` 同一個元素），或掛在裡面某一塊。
+ * 量具只看 layer 與先後、不算 specificity：產物裡暗色那段排在亮色後面，所以這裡也分得出來。
+ */
+const OPAQUE_ELEMENTS: [string, Theme, readonly string[]][] = [
+  ['亮色，掛在 <html>', 'light', [':root', "[data-glass='opaque']"]],
+  ['亮色，掛在裡面一塊', 'light', ["[data-glass='opaque']"]],
+  [
+    '暗色，掛在 <html>',
+    'dark',
+    [':root', '.dark', "[data-glass='opaque']", ".dark[data-glass='opaque']"],
+  ],
+  ['暗色，掛在裡面一塊', 'dark', ["[data-glass='opaque']", ".dark [data-glass='opaque']"]],
+];
+
+describe('data-glass="opaque" 底下（#1468 Q7）', () => {
+  test.each(OPAQUE_ELEMENTS)(
+    '%s：面不透明，等於 reduced-transparency 那一組',
+    (_where, theme, selectors) => {
+      for (const [name, value] of Object.entries(SG_REDUCED_TRANSPARENCY[theme])) {
+        expect(cascade.computed(selectors, `--${name}`), name).toBe(value);
+      }
+    },
+  );
 });

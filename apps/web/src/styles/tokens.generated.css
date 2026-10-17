@@ -55,3 +55,20 @@
     --card: oklch(0.225 0 0);
   }
 }
+
+/* data-glass="opaque"：面換成不透明，跟 reduced-transparency 同一組值（#1468 Q7；本地修改，見 vendor/solid-glass/README.md）。 */
+[data-glass='opaque'] {
+  --primary-solid: 100%;
+  --panel: oklch(0.947 0.006 265);
+  --card: oklch(0.958 0.005 265);
+  --popover: oklch(0.98 0.003 265);
+  --sidebar: oklch(0.985 0 0);
+}
+.dark[data-glass='opaque'],
+.dark [data-glass='opaque'] {
+  --primary-solid: 100%;
+  --panel: oklch(0.19 0 0);
+  --card: oklch(0.225 0 0);
+  --popover: oklch(0.22 0 0);
+  --sidebar: oklch(0.13 0 0);
+}

@@ -35,9 +35,7 @@ const THEMES = ['light', 'dark'];
 function parse(css) {
   const c = new Color(css);
   return {
-    rgb: c
-      .to('srgb')
-      .coords.map((v) => (Number.isNaN(v) ? 0 : Math.min(1, Math.max(0, v)))),
+    rgb: c.to('srgb').coords.map((v) => (Number.isNaN(v) ? 0 : Math.min(1, Math.max(0, v)))),
     alpha: c.alpha ?? 1,
   };
 }
@@ -114,7 +112,11 @@ function fitChroma(L, max, H) {
 
 /** B 案：從明度 `start` 起每次推 `step`（0.001，彩度每一步重新夾進 sRGB），回傳第一個讓 `pass` 成立的值。 */
 function solveB({ C, H }, start, step, pass) {
-  for (let L = Math.round(start * 1000) / 1000; L >= 0 && L <= 1; L = Number((L + step).toFixed(3))) {
+  for (
+    let L = Math.round(start * 1000) / 1000;
+    L >= 0 && L <= 1;
+    L = Number((L + step).toFixed(3))
+  ) {
     const css = `oklch(${L} ${fitChroma(L, C, H)} ${H})`;
     if (pass(css)) return css;
   }
@@ -190,10 +192,19 @@ const DEVELOP_PRESSED = {
 };
 const chipAway = (theme) => (theme === 'light' ? 'darker' : 'lighter'); // chip：亮色比底色暗、暗色比底色亮
 const CHIP_RULES = THEMES.flatMap((theme) => {
-  const developPressed = wcag(srgb(DEVELOP_PRESSED[theme].muted), srgb(DEVELOP_PRESSED[theme].pressed));
+  const developPressed = wcag(
+    srgb(DEVELOP_PRESSED[theme].muted),
+    srgb(DEVELOP_PRESSED[theme].pressed),
+  );
   return [
     { theme, step: 'chip', factor: 1, min: T.text, why: '次要文字對 chip ≥ 4.5' },
-    { theme, step: 'chip-hover', factor: LIB_STEP.hover, min: T.text, why: '次要文字對 chip-hover ≥ 4.5' },
+    {
+      theme,
+      step: 'chip-hover',
+      factor: LIB_STEP.hover,
+      min: T.text,
+      why: '次要文字對 chip-hover ≥ 4.5',
+    },
     {
       theme,
       step: 'chip-pressed',
@@ -221,14 +232,20 @@ function chipSteps(theme, target) {
 const chipOk = (target) =>
   CHIP_RULES.every(
     (rule) =>
-      wcag(srgb(SG[rule.theme]['muted-foreground']), srgb(chipSteps(rule.theme, target)[rule.step])) >= rule.min,
+      wcag(
+        srgb(SG[rule.theme]['muted-foreground']),
+        srgb(chipSteps(rule.theme, target)[rule.step]),
+      ) >= rule.min,
   );
 const caps = CHIP_RULES.map((rule) => ({ ...rule, cap: chipCap(rule) }));
 const binding = caps.reduce((a, b) => (b.cap < a.cap ? b : a));
 T.chipFromProto = T.chip;
 T.chip = Math.min(T.chip, Math.floor(binding.cap * 10000) / 10000);
 while (!chipOk(T.chip)) T.chip = Number((T.chip - 0.0001).toFixed(4));
-T.chipBinding = T.chip < T.chipFromProto ? `${binding.theme === 'light' ? '亮' : '暗'}色${binding.why}` : '原型目標';
+T.chipBinding =
+  T.chip < T.chipFromProto
+    ? `${binding.theme === 'light' ? '亮' : '暗'}色${binding.why}`
+    : '原型目標';
 
 /** warning／info 的色相與彩度：沿用上一版產生器（Leonardo 對舊底色解出來的）的值，明度對 SG 底色重解。 */
 const NEXUS_HUE = {
@@ -305,7 +322,15 @@ const RULES = {
   warning: { page: T.status, card: T.text, stage: T.text },
   info: { page: T.status, card: T.text, stage: T.text },
 };
-const SG_COLORS = ['brand', 'destructive', 'success', 'status-done', 'status-interrupted', 'status-running', 'link'];
+const SG_COLORS = [
+  'brand',
+  'destructive',
+  'success',
+  'status-done',
+  'status-interrupted',
+  'status-running',
+  'link',
+];
 
 function passes(theme, name, css) {
   const rule = RULES[name];
@@ -330,8 +355,11 @@ for (const theme of THEMES) {
   }
   for (const name of ['warning', 'info']) {
     // 原目標重解：從對比最小的那一端（亮色從最亮、暗色從最暗）往回推，停在第一個達標的值，也就是最接近目標的那個。
-    COLOR[theme][name] = solveB(NEXUS_HUE[theme][name], theme === 'light' ? 1 : 0, toward(theme), (css) =>
-      passes(theme, name, css),
+    COLOR[theme][name] = solveB(
+      NEXUS_HUE[theme][name],
+      theme === 'light' ? 1 : 0,
+      toward(theme),
+      (css) => passes(theme, name, css),
     );
   }
 }
@@ -361,7 +389,8 @@ for (const theme of THEMES) {
 
 for (const theme of THEMES) {
   for (const [name, css] of Object.entries(tokens[theme])) {
-    if (css !== SG[theme][name] && !inSrgb(css)) throw new Error(`${theme} --${name} 超出 sRGB：${css}`);
+    if (css !== SG[theme][name] && !inSrgb(css))
+      throw new Error(`${theme} --${name} 超出 sRGB：${css}`);
   }
 }
 
@@ -372,19 +401,27 @@ const block = (sel, t, indent = '') =>
     .map(([k, v]) => `${indent}  --${k}: ${v};`)
     .join('\n')}\n${indent}}\n`;
 const reduced = Object.keys(SG_REDUCED_TRANSPARENCY.light).filter((name) => name in tokens.light);
-const pick = (theme) => Object.fromEntries(reduced.map((n) => [n, SG_REDUCED_TRANSPARENCY[theme][n]]));
+const pick = (theme) =>
+  Object.fromEntries(reduced.map((n) => [n, SG_REDUCED_TRANSPARENCY[theme][n]]));
 const reducedBlock =
   reduced.length === 0
     ? ''
     : `\n/* 覆寫了 SG 在 reduced-transparency 底下也給值的 token：照樣重寫，不然上面無條件的值會蓋掉它的不透明值。 */\n` +
       `${SG_REDUCED_TRANSPARENCY.condition} {\n${block(':root', pick('light'), '  ')}${block('.dark', pick('dark'), '  ')}}\n`;
+// `data-glass="opaque"`（#1468 Q7）：SG 在那裡只拿掉 blur（`solid-glass.css` 的 [data-glass="opaque"] 那條），面還是半透明的；
+// 照 reduced-transparency 那條路換成同一組不透明值。暗色要高一階 specificity，不然 `.dark` 的值會蓋回來或吃到亮色。
+const opaqueBlock =
+  `\n/* data-glass="opaque"：面換成不透明，跟 reduced-transparency 同一組值（#1468 Q7；本地修改，見 vendor/solid-glass/README.md）。 */\n` +
+  block("[data-glass='opaque']", SG_REDUCED_TRANSPARENCY.light) +
+  block(".dark[data-glass='opaque'],\n.dark [data-glass='opaque']", SG_REDUCED_TRANSPARENCY.dark);
 writeFileSync(
   out('../src/styles/tokens.generated.css'),
   `/* 由 tokengen/generate.mjs 產生，不要手改。只放要覆寫 solid-glass 的 token，亮暗成對（#1512）。 */\n\n` +
     block(':root', tokens.light) +
     '\n' +
     block('.dark', tokens.dark) +
-    reducedBlock,
+    reducedBlock +
+    opaqueBlock,
 );
 
 // ── 輸出表格 ──
@@ -413,7 +450,8 @@ const surfaceRow = (name, l, d) => {
   const b = surfaceOnBg('dark', d);
   return `| \`--${name}\` | \`${l}\` | \`${d}\` | ${a.toFixed(4)} | ${b.toFixed(4)} | ${Math.abs(a - b).toFixed(4)} |\n`;
 };
-for (const name of ['card', 'border', 'sidebar']) md += surfaceRow(name, SURFACE.light[name], SURFACE.dark[name]);
+for (const name of ['card', 'border', 'sidebar'])
+  md += surfaceRow(name, SURFACE.light[name], SURFACE.dark[name]);
 for (const name of ['chip', 'chip-hover', 'chip-pressed'])
   md += surfaceRow(name, NEXUS_SURFACE.light[name], NEXUS_SURFACE.dark[name]);
 md += `\nSG 底色：亮 ${hex(BASE.light.bg)}、暗 ${hex(BASE.dark.bg)}。\n`;
