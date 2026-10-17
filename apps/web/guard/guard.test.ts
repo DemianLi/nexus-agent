@@ -369,6 +369,63 @@ async function collectChips(page: Page): Promise<ChipSample[]> {
   return samples;
 }
 
+interface ChoiceSample {
+  readonly name: string;
+  readonly rest: string;
+  readonly hover: string;
+  readonly hovered: boolean;
+  readonly indicator: string;
+  readonly opacity: string;
+  readonly pointerEvents: string;
+  readonly cursor: string;
+}
+
+/** 問答的選項：平常與滑鼠移上去的底色、勾選框的底色、停用的樣子（停用的 `pointer-events: none`，移不上去，只量平常）。 */
+async function collectChoices(page: Page): Promise<ChoiceSample[]> {
+  const names = await page.$$eval('[data-guard-choice]', (els) =>
+    els.map((el) => el.getAttribute('data-guard-choice') ?? ''),
+  );
+  const samples: ChoiceSample[] = [];
+  for (const name of names) {
+    const target = page.locator(`[data-guard-choice="${name}"]`);
+    const read = () =>
+      target.evaluate((el) => {
+        const style = getComputedStyle(el);
+        const indicator = el.querySelector('[data-slot=questionnaire-choice-indicator]');
+        return {
+          backgroundColor: style.backgroundColor,
+          hovered: el.matches(':hover'),
+          indicator: indicator === null ? '' : getComputedStyle(indicator).backgroundColor,
+          opacity: style.opacity,
+          pointerEvents: style.pointerEvents,
+          cursor: style.cursor,
+        };
+      });
+    await page.mouse.move(0, 0);
+    await settle(page);
+    const rest = await read();
+    let hover = rest;
+    if (name !== 'disabled') {
+      await target.hover();
+      await settle(page);
+      hover = await read();
+    }
+    samples.push({
+      name,
+      rest: rest.backgroundColor,
+      hover: hover.backgroundColor,
+      hovered: hover.hovered,
+      indicator: rest.indicator,
+      opacity: rest.opacity,
+      pointerEvents: rest.pointerEvents,
+      cursor: rest.cursor,
+    });
+  }
+  await page.mouse.move(0, 0);
+  await settle(page);
+  return samples;
+}
+
 function collectShadows(page: Page): Promise<ShadowSample[]> {
   return page.$$eval('[data-guard-shadow]', (els) =>
     els.map((el) => ({
@@ -412,12 +469,14 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   let located: { borderTopLeftRadius: string; backgroundColor: string }[];
   let shadows: ShadowSample[];
   let chips: ChipSample[];
+  let choices: ChoiceSample[];
 
   beforeAll(async () => {
     page = await open(theme);
     texts = await collectTexts(page);
     shadows = await collectShadows(page);
     chips = await collectChips(page);
+    choices = await collectChoices(page);
     focus = await collectFocus(page);
     fields = await collectFields(page);
     docked = await page.$$eval('[data-guard-docked]', (els) =>
@@ -552,6 +611,27 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
         .filter((m) => !(m.ratio >= m.min))
         .map((m) => `${m.key} ${m.ratio.toFixed(4)} < ${m.min}（${m.on}）`),
     ).toEqual([]);
+  });
+
+  test('問答的選項：勾選的底蓋得過卡片、移上去不變，勾選框只填勾選的那個，停用的半透明、點不到（shadcn 的 data-* variant，#1523）', () => {
+    report[`${theme}:choices`] = choices;
+    const by = Object.fromEntries(choices.map((c) => [c.name, c]));
+    const { checked, unchecked, disabled } = by;
+    expect(Object.keys(by).sort()).toEqual(['checked', 'disabled', 'unchecked']);
+    // 量具自檢：真的移上去了。
+    expect([checked!.hovered, unchecked!.hovered]).toEqual([true, true]);
+    // 勾選的底跟沒勾選的不一樣（data-checked 要蓋得過 SG 的 `.bg-card`），移上去也不變。
+    // 沒勾選的移上去今天也不變：`hover:bg-chip-hover` 同樣蓋不過 SG 的 `.bg-card`（② 起就是這樣，不是這裡要守的行為，不斷言）。
+    expect(checked!.rest).not.toBe(unchecked!.rest);
+    expect(checked!.hover).toBe(checked!.rest);
+    // group-data-checked：勾選框只有勾選的那一個填上 primary。
+    expect(checked!.indicator).not.toBe(unchecked!.indicator);
+    expect([disabled!.opacity, disabled!.pointerEvents, disabled!.cursor]).toEqual([
+      '0.5',
+      'none',
+      'not-allowed',
+    ]);
+    expect([unchecked!.opacity, unchecked!.pointerEvents]).toEqual(['1', 'auto']);
   });
 
   test('對話裡被定位的那一則：圓角真的畫出來（--radius-3xl 有宣告），底色換成 chip', () => {

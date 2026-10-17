@@ -20,5 +20,8 @@ references/
 # 只排除 repo 根目錄那個（Cordis）；寫成 `vendor/` 會連任何一層的 vendor 目錄都排除。
 /vendor/
 # web 的 solid-glass 只排除上游原樣的檔（見 apps/web/src/vendor/solid-glass/README.md）；同目錄的同步腳本、清單、測試照常檢查。
+# 子目錄整個是上游原樣（SG 的元件、shadcn 的 css，#1523）：上游的 tsx 用雙引號、不加分號，被格式化之後 sha256 就壞了。
 apps/web/src/vendor/solid-glass/solid-glass.css
 apps/web/src/vendor/solid-glass/LICENSE
+apps/web/src/vendor/solid-glass/components/
+apps/web/src/vendor/solid-glass/shadcn/

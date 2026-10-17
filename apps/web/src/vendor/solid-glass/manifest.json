@@ -1,14 +1,76 @@
 {
-  "upstream": "https://github.com/deeplethe/solid-glass",
-  "commit": "387c3c2dc2369bc9af19a5c55adc3bd90d529317",
+  "sources": {
+    "solid-glass": {
+      "upstream": "https://github.com/deeplethe/solid-glass",
+      "commit": "387c3c2dc2369bc9af19a5c55adc3bd90d529317"
+    },
+    "shadcn": {
+      "upstream": "https://www.npmjs.com/package/shadcn",
+      "package": "shadcn",
+      "version": "4.21.4",
+      "integrity": "sha512-YYfn/hsHbRH2mGwnKBx9tk+DjTQH+RUMS5iCxjKzwzuJ5uoHPqLOFUCJSeX0sXfrcBSfgQaXiOLGKNLjlIQxxw=="
+    }
+  },
   "files": {
     "solid-glass.css": {
+      "source": "solid-glass",
       "from": "src/solid-glass.css",
       "sha256": "03bc1f32084d39f939039ec7a52d5b7c83b47a9c594f5f3d14826c95c1730cd4"
     },
     "LICENSE": {
+      "source": "solid-glass",
       "from": "LICENSE",
       "sha256": "eb9d03950a82b3fa15b16bd05163f6691843be957e69ce8eb6f062913848be87"
+    },
+    "components/ui/button.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/button.tsx",
+      "sha256": "af601664c0de75b234a15115801644a33116cdd7bc92d9e1262b12c403ed148c"
+    },
+    "components/ui/input.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/input.tsx",
+      "sha256": "d108ceb1932f7228176b9f490eb325763ca546d5f9c6a34bf4db10a28dc486f1"
+    },
+    "components/ui/textarea.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/textarea.tsx",
+      "sha256": "82601c91ffc6c727d924162c78d7cb853114bcced4e2eb922a68ca12d4239c0f"
+    },
+    "components/ui/input-group.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/input-group.tsx",
+      "sha256": "f0b7cf39da3481d37953aedcdf27f353421000a5b05446b0bab843e074d0d17d"
+    },
+    "components/ui/separator.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/separator.tsx",
+      "sha256": "9a80ff8c110e0c55489509f4f82ebcc929c0174b59544047147b7134f86a54e7"
+    },
+    "components/ui/skeleton.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/skeleton.tsx",
+      "sha256": "4c2af7fa9c645358a0fb188779deab6f0b981733b62befc25e18aaebea1350dc"
+    },
+    "components/ui/card.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/card.tsx",
+      "sha256": "7620e0f122bb5aa0a422254909bd11d5b088bb368eb60e6ba28010c332163cc0"
+    },
+    "components/ui/badge.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/badge.tsx",
+      "sha256": "d9fb280e266119c4b62a4c518e63152de27b094c68d3e5f8929d05bfb0c1bc6c"
+    },
+    "shadcn/tailwind.css": {
+      "source": "shadcn",
+      "from": "dist/tailwind.css",
+      "sha256": "4c371f7a1ff5d219ae2f7ff28bd256b4346fd546fe46fbae22092e57db2f0fae"
+    },
+    "shadcn/LICENSE.md": {
+      "source": "shadcn",
+      "from": "LICENSE.md",
+      "sha256": "1564074e13439397221ffd522e2e504d56561994a23d371aa5e3ad43e4f5423f"
     }
   }
 }

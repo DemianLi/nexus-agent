@@ -6,8 +6,16 @@
     "types": ["node", "vite/client"],
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "cn": ["./src/lib/utils.ts"]
     }
   },
-  "include": ["src", "guard", "vite.config.ts", "vitest.config.ts", "vitest.guard.config.ts"]
+  "include": [
+    "src",
+    "guard",
+    "vite.config.ts",
+    "resolve-alias.ts",
+    "vitest.config.ts",
+    "vitest.guard.config.ts"
+  ]
 }

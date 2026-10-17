@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 
 import { jsxAttributes, tsxFiles } from '@/test/jsx-scan';
+import { isVendorUpstream } from '@/test/vendor-upstream';
 
 /**
  * 字級的主次（[#1281](https://github.com/DemianLi/nexus-agent/issues/1281)，規則在 `COMPONENTS.md`「字級的主次」）：
@@ -60,7 +61,8 @@ function scan(files: readonly string[]): Hit[] {
   });
 }
 
-const files = tsxFiles(SRC);
+// vendor 上游原樣的檔放行（外觀照 SG，Q8；#1523）。live-region 共用同一支 tsxFiles，但不放行——放行做在呼叫端。
+const files = tsxFiles(SRC).filter((file) => !isVendorUpstream(file));
 
 describe('可點的元件不縮成小字（#1281）', () => {
   test('按鈕、觸發鈕、選單項自己的 className 沒有 text-tip／text-micro', () => {
