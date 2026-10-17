@@ -218,10 +218,11 @@
 
 | 互動 | 開／關 |
 | --- | --- |
-| 下拉、popover、指令選單 | 250／150，scale .97／.99（popover 與指令選單在 [#407](https://github.com/DemianLi/nexus-agent/issues/407) 的真 Chrome 量過：開 250、scale .97、曲線 smooth-out、fill backwards；關 150、scale .99、fill both；reduced-motion 只剩 150 淡入淡出。**下拉還沒有這個元件，沒驗過**） |
-| tooltip | 150（延遲 50）／150，只淡入＋blur 3px |
-| 對話框 | 250／150，scale .96；遮罩 200 |
-| 手機側欄（<1024） | 350／250 |
+| 下拉、指令選單 | 250／150，scale .97／.99（指令選單在 [#407](https://github.com/DemianLi/nexus-agent/issues/407) 的真 Chrome 量過：開 250、scale .97、曲線 smooth-out、fill backwards；關 150、scale .99、fill both；reduced-motion 只剩 150 淡入淡出。**下拉還沒有這個元件，沒驗過**；這兩個在 #1583 的 PR 2 換成 SG 版） |
+| popover | 照 SG 的機制（#1583）：淡入＋zoom .95＋往外 slide 2（`slide-in-from-*-2`）。SG 寫的 `duration-100` 蓋不掉 `@theme` 的 `--animate-in`／`--animate-out`，所以時長仍是 250／150，**全域時長留到 ④ 收尾一起換** |
+| tooltip | 同 popover（#1583）：淡入＋zoom .95＋slide 2，250／150（全域時長留到 ④）；延遲 0（SG 的 `TooltipProvider` 預設） |
+| 對話框 | 同 popover（#1583）：淡入＋zoom .95，250／150（全域時長留到 ④）；遮罩淡入、`backdrop-blur-xs` |
+| 抽屜（手機側欄 <1024、窄螢幕的右側欄） | 照 SG 的機制（#1583）：transition 200ms、位移 2.5rem 加淡入淡出；遮罩 150 淡入。reduced-motion 不位移、≤ 150（覆寫檔，vendor README 本地修改第 23 條） |
 | 桌面側欄收合、面板高度差 | resize 300 |
 | 工具卡展開、提問面板收起 | 250／150，高度＋透明度 |
 | 新訊息、工具卡出現 | 250，往上 8px |
@@ -237,7 +238,7 @@
 **reduced-motion**（不是全關；實作寫 `@media (prefers-reduced-motion: reduce)`，原型的 `data-reduce-motion` 屬性只是模擬）
 - 位移、縮放、模糊拿掉，留 ≤ 150 的透明度；尺寸瞬間到位；按壓不縮；循環停一格；**狀態不能只靠動效表達**。
 - SG 的進場（`.animate-float-in`／`.animate-fade-in`）在 reduced-motion 下被 SG 設成 `animation: none`，覆寫檔改回 150ms 淡入；SG 的持續動畫照 SG 停掉（Q5 優先於 Q8，`reduced-motion.test.ts`）。
-- 做法：media query 裡把 `--animate-in`／`--animate-out`／`--animate-collapsible-*` 換成只有透明度的版本。
+- 做法：media query 裡把 `--animate-in`／`--animate-out`／`--animate-collapsible-*` 換成只有透明度的版本。SG 的 sheet 用 transition 滑入、不走這幾個變數，由覆寫檔對抽屜另外拿掉位移、壓到 150（#1583，`check-built-css` 量產物）。
 - JS 的 `scrollTo({ behavior: 'smooth' })` 不看 CSS，要自己讀偏好。
 
 **效能**：持續動畫只動 transform／opacity，唯一例外是執行中邊框光的 conic 角度（同時最多一個）；`will-change` 不常駐。
@@ -249,7 +250,7 @@
 
 出處：[無障礙](https://github.com/DemianLi/nexus-agent/issues/384#issuecomment-5719457797)。
 
-**依據**：WCAG 2.2 AA 定門檻 → WAI-ARIA APG 定模式 → Radix 與 `@shadcn/react` primitive 的內建行為當基底。
+**依據**：WCAG 2.2 AA 定門檻 → WAI-ARIA APG 定模式 → Base UI（#1523、#1583 起換成 solid-glass 的元件）、Radix 與 `@shadcn/react` primitive 的內建行為當基底。
 
 **焦點**
 - **只在焦點本來會丟掉時才搬**（在輸入框裡或已經在 body）。人在別處就不搶，由狀態列報讀。
@@ -257,7 +258,7 @@
 - 計劃審核按「查看全文」：焦點進右側欄的那個分頁；停靠時按收起，焦點回到「查看全文」（覆蓋那一種由 Sheet 還）。自動打開不搬焦點。
 - 面板收掉：有下一個待決就到下一張，沒有就回輸入框。
 - **焦點搬動的判斷寫在換手那一層**，不要散在各元件。
-- 對話框、抽屜一律經過 Radix 的 Trigger；做不到的（`SidebarTrigger`、受控開啟）自己在 `onCloseAutoFocus` 還焦點。
+- 對話框、抽屜一律經過 Trigger（#1583 起是 Base UI 的）；做不到的（`SidebarTrigger`、受控開啟）自己用 Popup 的 `finalFocus` 還焦點：回傳要聚焦的元素，或自己聚焦之後回傳 `false`。
 - `[tabindex="-1"]:focus-visible` 不畫外框。
 
 **鍵盤**
@@ -277,6 +278,7 @@
 - 往前翻讀完：另一格 polite 唸「載入了較早的 N 則。」（N＝人打的字與模型的回覆，同 wire 一頁的單位），**不唸接上來的內容**，也不跟上一條共用一格（2026-09-25，inventory 列 9）。
 - 工具卡狀態變化不唸；orb 旁已有同義文字時 `aria-hidden`。
 - ❌ 的名稱「停止這一輪，不回答這些問題」（`aria-label` 與 tooltip 同一句），不加確認。
+- **tooltip 只是視覺**（#1583）：Base UI 的 tooltip 不給 `role="tooltip"`、也不掛 `aria-describedby`，報讀器聽不到它。tooltip 的字不能帶 Trigger 名稱裡沒有的資訊，要聽到的寫進 `aria-label`（例：模型座「模型：X，從下一步生效，點開切換」）。
 - **英文報讀字串全換中文**（Messages、Scroll to end、Question X of Y、Toggle Sidebar、Close、Sidebar、sonner 的 Notifications）。
 
 ## 9. 版面與 RWD
@@ -329,7 +331,7 @@
 | --- | --- | --- |
 | 1 | 同一 className 同時有 `border` 與 `shadow-`（排除 `shadow-none`）就報錯 | [#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498) |
 | 2 | 用 colorjs.io 重算產生出來的 token，達到 §5 的對比度目標（文字、非文字、狀態色、亮暗共用） | [#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498) |
-| 3 | reduced-motion 下 `--animate-in`／`--animate-out` 換成只有透明度的版本 | [#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887) |
+| 3 | reduced-motion 下 `--animate-in`／`--animate-out` 換成只有透明度的版本；用 transition 滑入的面（SG 的 sheet，名單在 `check-built-css.mjs` 的 `SLIDING_SURFACES`）要有拿掉位移、時長 ≤ 150ms 的規則（#1583） | [#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887) |
 | 4 | `@keyframes` 名稱在允許清單上（清單在 `apps/web/scripts/check-built-css.mjs`），清單分兩段：**我們的** `motion-*`；**第三方** SG 的 `sg-dot-flash`／`sg-status-shimmer`／`sg-sweep`／`sg-float-in`／`sg-fade-in`（Q8）、tw-animate 的 `enter`／`exit`／`collapsible-*`（之後裝 accordion 多 `accordion-*`）、Tailwind 的 `spin`／`pulse`、sonner 的 `sonner-fade-*`／`sonner-spin`／`swipe-out-*`。只寫第一段，第一次跑就紅 | [#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887) |
 | 5 | 每個 `infinite` 動畫在 reduced-motion 下都有對應：`spin`／`pulse` 用 class 蓋，`sonner-spin` 由 sonner 自己的 media query 關——要認得這兩種寫法 | [#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887) |
 | 6 | axe-core 的 vitest（開發期相依），至少掃原型驗過的四個畫面：核准面板 375 暗、提問面板 375 暗、提問面板 1280 亮、對話流＋輸入框 375 暗 | [#384](https://github.com/DemianLi/nexus-agent/issues/384#issuecomment-5719457797) |

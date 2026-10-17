@@ -56,7 +56,7 @@ import {
   InputGroupText,
   InputGroupTextarea,
 } from '@/components/ui/input-group';
-import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover';
+import { Popover, PopoverContent } from '@/components/ui/popover';
 import { Skeleton } from '@/components/ui/skeleton';
 import { agentRows, applyAgentPick } from '@/lib/agent-mention';
 import type { AgentMentionState } from '@/lib/agent-mention';
@@ -461,12 +461,25 @@ export function Composer({
       {dropping && <DropOverlay />}
       <Popover
         open={open || mentionOpen}
-        onOpenChange={(next) => {
+        onOpenChange={(next, details) => {
+          // 點輸入框本身不算點外面；**底列另一顆浮層的按鈕算外面**（用量表，#528）：它也在輸入框裡，不收的話兩個浮層疊在
+          // 同一個位置（真 Chrome 量過）。Base UI 沒有 Radix 的 `onInteractOutside`，在這裡看 `reason` 取消（#1583）。
+          if (!next && details.reason === 'outside-press') {
+            const target = details.event.target;
+            if (
+              target instanceof Element &&
+              anchorRef.current?.contains(target) &&
+              target.closest('[data-slot="popover-trigger"]') === null
+            ) {
+              details.cancel();
+              return;
+            }
+          }
           if (!next) setDismissed(span);
         }}
       >
-        {/* anchor 自己包一層：`asChild` 會把 InputGroup 的 `data-slot` 蓋掉。 */}
-        <PopoverAnchor ref={anchorRef}>
+        {/* 選單錨在整個輸入框上（`PopoverContent` 的 `anchor`，vendor 本地修改第 19 條），不是錨在某顆 Trigger 上。 */}
+        <div data-slot="popover-anchor" ref={anchorRef}>
           <InputGroup className="rounded-3xl">
             <label className="sr-only" htmlFor="prompt">
               要說的話
@@ -587,26 +600,17 @@ export function Composer({
               </div>
             </InputGroupAddon>
           </InputGroup>
-        </PopoverAnchor>
+        </div>
         <PopoverContent
           side="top"
           align="start"
-          className="w-(--radix-popover-trigger-width) p-1"
+          anchor={anchorRef}
+          // 寬度等於輸入框：Base UI 的 Positioner 把錨點的寬度給成 `--anchor-width`。
+          className="w-(--anchor-width) p-1"
           aria-label={mentionOpen ? '@ 選單' : '命令選單'}
-          // 焦點一直留在輸入框：打開、關掉都不搬；點輸入框本身不算點外面。**底列另一顆浮層的按鈕算外面**（用量表，
-          // #528）：它也在輸入框裡，不收的話兩個浮層疊在同一個位置（真 Chrome 量過）。
-          onOpenAutoFocus={(event) => event.preventDefault()}
-          onCloseAutoFocus={(event) => event.preventDefault()}
-          onInteractOutside={(event) => {
-            const target = event.target;
-            if (
-              target instanceof Element &&
-              anchorRef.current?.contains(target) &&
-              target.closest('[data-slot="popover-trigger"]') === null
-            ) {
-              event.preventDefault();
-            }
-          }}
+          // 焦點一直留在輸入框：打開、關掉都不搬。
+          initialFocus={false}
+          finalFocus={false}
         >
           {mentionOpen ? (
             <MentionList

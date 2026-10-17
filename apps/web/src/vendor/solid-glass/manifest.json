@@ -22,45 +22,71 @@
       "from": "LICENSE",
       "sha256": "eb9d03950a82b3fa15b16bd05163f6691843be957e69ce8eb6f062913848be87"
     },
+    "components/ui/badge.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/badge.tsx",
+      "sha256": "d9fb280e266119c4b62a4c518e63152de27b094c68d3e5f8929d05bfb0c1bc6c"
+    },
     "components/ui/button.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/button.tsx",
       "sha256": "af601664c0de75b234a15115801644a33116cdd7bc92d9e1262b12c403ed148c"
-    },
-    "components/ui/input.tsx": {
-      "source": "solid-glass",
-      "from": "src/components/ui/input.tsx",
-      "sha256": "d108ceb1932f7228176b9f490eb325763ca546d5f9c6a34bf4db10a28dc486f1"
-    },
-    "components/ui/textarea.tsx": {
-      "source": "solid-glass",
-      "from": "src/components/ui/textarea.tsx",
-      "sha256": "82601c91ffc6c727d924162c78d7cb853114bcced4e2eb922a68ca12d4239c0f"
-    },
-    "components/ui/input-group.tsx": {
-      "source": "solid-glass",
-      "from": "src/components/ui/input-group.tsx",
-      "sha256": "f0b7cf39da3481d37953aedcdf27f353421000a5b05446b0bab843e074d0d17d"
-    },
-    "components/ui/separator.tsx": {
-      "source": "solid-glass",
-      "from": "src/components/ui/separator.tsx",
-      "sha256": "9a80ff8c110e0c55489509f4f82ebcc929c0174b59544047147b7134f86a54e7"
-    },
-    "components/ui/skeleton.tsx": {
-      "source": "solid-glass",
-      "from": "src/components/ui/skeleton.tsx",
-      "sha256": "4c2af7fa9c645358a0fb188779deab6f0b981733b62befc25e18aaebea1350dc"
     },
     "components/ui/card.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/card.tsx",
       "sha256": "7620e0f122bb5aa0a422254909bd11d5b088bb368eb60e6ba28010c332163cc0"
     },
-    "components/ui/badge.tsx": {
+    "components/ui/dialog.tsx": {
       "source": "solid-glass",
-      "from": "src/components/ui/badge.tsx",
-      "sha256": "d9fb280e266119c4b62a4c518e63152de27b094c68d3e5f8929d05bfb0c1bc6c"
+      "from": "src/components/ui/dialog.tsx",
+      "sha256": "3ec9bb1a9016d9d0c91294c30217bd672d90d7025b48df2768c3ee330576e9ce",
+      "patches": ["patches/0002-dialog-close-label.patch"],
+      "upstreamSha256": "bbc16e198416a5351dc62ad5d20781d32dac72dbe7ad871b2a4842852bbf1120"
+    },
+    "components/ui/input-group.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/input-group.tsx",
+      "sha256": "f0b7cf39da3481d37953aedcdf27f353421000a5b05446b0bab843e074d0d17d"
+    },
+    "components/ui/input.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/input.tsx",
+      "sha256": "d108ceb1932f7228176b9f490eb325763ca546d5f9c6a34bf4db10a28dc486f1"
+    },
+    "components/ui/popover.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/popover.tsx",
+      "sha256": "e348fdc2d2d975a9a4b2222c532949517ec0857b6df68d5d7006ffd72c749c19",
+      "patches": ["patches/0001-popover-anchor.patch"],
+      "upstreamSha256": "5fecff622f4eecc06e8be32bface11c59d529be5c0a1484c78c9e40530b2b7d0"
+    },
+    "components/ui/separator.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/separator.tsx",
+      "sha256": "9a80ff8c110e0c55489509f4f82ebcc929c0174b59544047147b7134f86a54e7"
+    },
+    "components/ui/sheet.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/sheet.tsx",
+      "sha256": "f020d15c067389ec21ee9e49d443514aa6a5f97679a0d4bef124ff1f82e601f8",
+      "patches": ["patches/0003-sheet-close-label.patch"],
+      "upstreamSha256": "db422e2934b79774850defd2ea12bf2d469a77f7237bf93ce0416bde87d8a610"
+    },
+    "components/ui/skeleton.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/skeleton.tsx",
+      "sha256": "4c2af7fa9c645358a0fb188779deab6f0b981733b62befc25e18aaebea1350dc"
+    },
+    "components/ui/textarea.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/textarea.tsx",
+      "sha256": "82601c91ffc6c727d924162c78d7cb853114bcced4e2eb922a68ca12d4239c0f"
+    },
+    "components/ui/tooltip.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/tooltip.tsx",
+      "sha256": "f83d5f511812573f4ac98b866d397a46fda0f27eeb0af0ea89af01969eefbc5a"
     },
     "shadcn/tailwind.css": {
       "source": "shadcn",

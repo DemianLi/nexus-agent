@@ -1,6 +1,8 @@
 # 上游原樣的檔，sha256 記在 manifest.json；不讓 git 轉換換行，任何平台 checkout 出來都逐位元相同。
 # 用目錄規則涵蓋子目錄（#1523），新增元件不必逐檔列；同目錄我們自己的檔（README、manifest、sync、測試）不在這裡。
+# patches/：改 vendor 檔的 patch（#1583），LF 才套得上（patches.mjs 不轉換換行），一樣不讓 git 轉。
 solid-glass.css -text
 LICENSE -text
 components/** -text
 shadcn/** -text
+patches/** -text

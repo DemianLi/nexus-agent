@@ -1,55 +1,13 @@
 /**
- * 來源：shadcn registry `tooltip`（style new-york，https://ui.shadcn.com/r/styles/new-york-v4/tooltip.json），
- * shadcn CLI 4.21.0 `shadcn add sidebar sheet --overwrite`。裝進來就是我們的原始碼，不靠重跑 `shadcn add` 更新。
- * 改過的地方（照原型 tag `proto-375-design-language`）：只淡入＋blur 3px、開 150（延遲 50）／關 150（§7），拿掉 zoom 與 slide。
+ * nexus 層（#1583）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/tooltip.tsx`，Base UI），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」；這個檔沒有本地修改。nexus 要的延遲 0 是 SG 的 `TooltipProvider` 預設值
+ * （vendor `:7`）：Trigger 取 `delay ?? Provider 的 delay ?? 600`，產品裡每個 tooltip 都在 Provider 底下（App 整個包在 SidebarProvider 裡）。
+ * `tooltip.test.tsx` 釘 Provider 的預設，`App.test.tsx`「滑鼠移到座位上不用等就出提示」釘產品裡的那一層。Base UI 的 tooltip 只是視覺，
+ * 不給 `role="tooltip"`、不掛 `aria-describedby`：提示的字不能帶 Trigger 名稱裡沒有的資訊（#1583 驗收 D）。
  */
-import * as React from 'react';
-import { cn } from '@/lib/utils';
-import { Tooltip as TooltipPrimitive } from 'radix-ui';
-
-function TooltipProvider({
-  delayDuration = 0,
-  ...props
-}: React.ComponentProps<typeof TooltipPrimitive.Provider>) {
-  return (
-    <TooltipPrimitive.Provider
-      data-slot="tooltip-provider"
-      delayDuration={delayDuration}
-      {...props}
-    />
-  );
-}
-
-function Tooltip({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Root>) {
-  return <TooltipPrimitive.Root data-slot="tooltip" {...props} />;
-}
-
-function TooltipTrigger({ ...props }: React.ComponentProps<typeof TooltipPrimitive.Trigger>) {
-  return <TooltipPrimitive.Trigger data-slot="tooltip-trigger" {...props} />;
-}
-
-function TooltipContent({
-  className,
-  sideOffset = 0,
-  children,
-  ...props
-}: React.ComponentProps<typeof TooltipPrimitive.Content>) {
-  return (
-    <TooltipPrimitive.Portal>
-      <TooltipPrimitive.Content
-        data-slot="tooltip-content"
-        sideOffset={sideOffset}
-        className={cn(
-          'z-50 w-fit origin-(--radix-tooltip-content-transform-origin) animate-in rounded-md bg-foreground px-3 py-1.5 text-tip text-balance text-background animation-duration-(--duration-quick) delay-50 fade-in-0 blur-in-3 data-[state=closed]:animate-out data-[state=closed]:delay-0 data-[state=closed]:fade-out-0',
-          className,
-        )}
-        {...props}
-      >
-        {children}
-        <TooltipPrimitive.Arrow className="z-50 size-2.5 translate-y-[calc(-50%_-_2px)] rotate-45 rounded-[2px] bg-foreground fill-foreground" />
-      </TooltipPrimitive.Content>
-    </TooltipPrimitive.Portal>
-  );
-}
-
-export { Tooltip, TooltipTrigger, TooltipContent, TooltipProvider };
+export {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/vendor/solid-glass/components/ui/tooltip';

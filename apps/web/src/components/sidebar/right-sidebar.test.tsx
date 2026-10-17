@@ -363,6 +363,18 @@ describe('窄螢幕：全螢幕覆蓋', () => {
     );
   });
 
+  it('寬度是整面、不設上限：SG 的 `w-3/4`、`sm:max-w-sm` 被同前綴的呼叫端蓋掉（#1583 PM 決定第 4 點）', async () => {
+    await mount();
+    await click(cardHeader(7));
+    const classes = screen.getByTestId('right-sidebar').className.split(/\s+/);
+    // jsdom 不算版面，這裡釘 cn 合併後留下的 class；真瀏覽器的寬度由 `guard/` 對同一種寫法（手機側欄）量。
+    expect(classes).toEqual(
+      expect.arrayContaining(['data-[side=right]:w-full', 'data-[side=right]:sm:max-w-none']),
+    );
+    expect(classes).not.toContain('data-[side=right]:w-3/4');
+    expect(classes).not.toContain('data-[side=right]:sm:max-w-sm');
+  });
+
   it('載入時一律從收起開始，不照存下來的「開著」蓋住對話', async () => {
     localStorage.setItem(
       LAYOUT_KEY_PREFIX + 't',
