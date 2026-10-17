@@ -27,7 +27,7 @@ import { parseArgs } from 'node:util';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { THREADS_PATH } from '@nexus/wire';
-import { recordedApprovalPolicy, TokenAnchorBook } from '@nexus/core';
+import { errorChain, recordedApprovalPolicy, TokenAnchorBook } from '@nexus/core';
 import { singleDigitModelIds } from './model-catalog.js';
 import type {
   PluginEntry,
@@ -1116,7 +1116,12 @@ async function startServer(
       warn: (error) => serverLog(`[請求] 處理失敗，回 400：${error.message}`),
     });
   } catch (error) {
-    await handler.close();
+    // 啟動失敗的收尾：先保住原本的錯（收尾的錯記進伺服器日誌，不蓋掉它），`threadSearch` 照樣收（#1511）。
+    try {
+      await handler.close();
+    } catch (closeError: unknown) {
+      serverLog(`[啟動失敗] 收尾也出錯：${errorChain(closeError)}`);
+    }
     threadSearch?.close();
     throw error;
   }
@@ -1178,11 +1183,28 @@ async function startServer(
     url: server.url,
     authenticatedUrl,
     close: async () => {
-      await server.close();
-      await handler.close();
-      threadSearch?.close();
+      // **每一步各自接住，全部跑完才拋**（#1511）：`handler.close()` 現在會拒絕（thread 收尾失敗），
+      // 不能讓它擋住 `threadSearch` 與 `failureRecorder.flush()`。錯誤交給 `main` 印。
+      const failures: unknown[] = [];
+      const attempt = async (run: () => void | Promise<void>): Promise<void> => {
+        try {
+          await run();
+        } catch (error: unknown) {
+          failures.push(error);
+        }
+      };
+      await attempt(() => server.close());
+      await attempt(() => handler.close());
+      await attempt(() => threadSearch?.close());
       // 背景還在寫的 `failed`：收完再回，不然關掉之後（測試刪暫存目錄）才落地。不 reject。
-      await failureRecorder.flush();
+      await attempt(() => failureRecorder.flush());
+      if (failures.length === 1) throw failures[0];
+      if (failures.length > 1) {
+        throw new AggregateError(
+          failures,
+          `serve 收尾有 ${String(failures.length)} 步失敗：${failures.map(errorChain).join('; ')}`,
+        );
+      }
     },
   };
 }
