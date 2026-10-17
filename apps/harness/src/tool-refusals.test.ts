@@ -21,7 +21,6 @@ import { MemorySaver } from '@langchain/langgraph';
 import { SessionRegistry } from '@nexus/core';
 import type { PluginEntry, SessionEvent } from '@nexus/core';
 import {
-  createGoalPlugin,
   GOAL_CREATE_TOOL_NAME,
   GOAL_GET_TOOL_NAME,
   GOAL_UPDATE_TOOL_NAME,
@@ -35,6 +34,7 @@ import { ScriptedChatModel } from './scripted-model.js';
 import { createTodoPlugin } from './todo.fixture.js';
 import type { PumpAgent } from './thread-pump.js';
 import { ThreadPump } from './thread-pump.js';
+import { createGoalPlugin } from './goal.fixture.js';
 
 /** 一份日誌上每一顆 `tool/result` 的內容，依序。 */
 function resultsOf(events: readonly SessionEvent[]): unknown[] {

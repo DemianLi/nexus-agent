@@ -11,14 +11,7 @@ import { MemorySaver } from '@langchain/langgraph';
 import { REPEAT_REMINDER_MARKER } from '@nexus/core';
 import type { SessionLog } from '@nexus/core';
 import { createEchoPlugin, ECHO_TOOL_NAME } from './echo.fixture.js';
-import {
-  createGoalPlugin,
-  GOAL_COMMAND_NAME,
-  goalPlugin,
-  GOALS_SERVICE,
-  renderGoalRoundPrompt,
-} from '@nexus/plugin-goal';
-import type { GoalServices } from '@nexus/plugin-goal';
+import { GOAL_COMMAND_NAME } from '@nexus/plugin-goal';
 import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
@@ -33,6 +26,9 @@ import type { ScriptedModelState, ScriptedTurn } from './scripted-model.js';
 import type { NexusAgentHandle } from './agent-factory.js';
 import { shippedPlugins } from './fixtures.js';
 import { goalId, SessionRegistry } from '@nexus/core';
+import { createGoalPlugin, goalCoreOf, goalPlugin } from './goal.fixture.js';
+import { GOALS_SERVICE, renderGoalRoundPrompt } from '@nexus/goal';
+import type { GoalServices } from '@nexus/goal';
 
 const shipped = await shippedPlugins();
 
@@ -66,7 +62,7 @@ async function build(turns: readonly ScriptedTurn[]): Promise<{
   const sessions = new SessionRegistry('cli-driver');
   const detach = attachSession(sessions);
   // **這一次組裝的那一份**（#459）：以前是問模組層級的 plugin 物件。
-  const goals = services.use(GOALS_SERVICE);
+  const goals = goalCoreOf(services.use(GOALS_SERVICE));
   const warnings: string[] = [];
   const port: GoalDriverPort & { readonly warnings: string[] } = {
     warnings,
@@ -585,8 +581,19 @@ describe('披露', () => {
  * 在手搭的 registry 上驗隔離證明不了這條——**清單裡掛的是哪一顆物件**才是以前串台的來源。
  */
 describe('goals 服務綁的是這一次組裝', () => {
-  it('預設清單掛的就是模組層級那一顆 goal plugin', () => {
-    expect(shipped.filter((entry) => entry.plugin === goalPlugin)).toHaveLength(1);
+  it('出貨清單上有 goal 那一列，而且它掛的不是測試外殼——組出來的 agent 拿得到 goals 服務', async () => {
+    // 遷上樹之前這裡守的是「清單上掛的是模組層級那一顆 plugin 物件」；現在 goal 是 `cordis.yml` 的一列（`@nexus/plugin-goal`，
+    // 樹上的函式插件），守的是交付物：清單上恰好一列 goal、它的 plugin 不是 `goal.fixture.ts` 那顆相容層外殼，
+    // 而這一份出貨清單組出來的 agent 手上有 `goals` 服務。
+    const rows = shipped.filter((entry) => entry.id === 'goal');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]?.plugin).not.toBe(goalPlugin);
+    const built = await createCliAgent({ live: false }, shipped);
+    try {
+      expect(built.goals).toBeDefined();
+    } finally {
+      await built.dispose();
+    }
   });
 
   /**
@@ -600,8 +607,8 @@ describe('goals 服務綁的是這一次組裝', () => {
     const built = await createCliAgent({ live: false }, shipped);
     try {
       built.attachSession(built.sessions);
-      const service = built.goals?.serviceFor(built.sessionLog);
-      if (service === undefined) throw new Error('接了線就該找得到服務');
+      if (built.goals === undefined) throw new Error('接了線就該找得到服務');
+      const service = goalCoreOf(built.goals).serviceFor(built.sessionLog);
       const created = service.create({ objective: '量這一條' });
 
       const port = goalDriverPort(
@@ -630,22 +637,21 @@ describe('goals 服務綁的是這一次組裝', () => {
     const first = await createCliAgent({ live: false }, shipped);
     const second = await createCliAgent({ live: false }, shipped);
     try {
-      const firstGoals = first.goals;
-      const secondGoals = second.goals;
-      if (firstGoals === undefined || secondGoals === undefined) {
+      if (first.goals === undefined || second.goals === undefined) {
         throw new Error('預設清單掛了 goal，兩次組裝都該拿得到服務');
       }
+      const firstGoals = goalCoreOf(first.goals);
+      const secondGoals = goalCoreOf(second.goals);
       // **不是同一個把手**：以前兩次組裝共用模組層級那一格。
       expect(firstGoals).not.toBe(secondGoals);
 
       first.attachSession(first.sessions);
-      firstGoals.serviceFor(first.sessionLog)?.create({ objective: '第一次組裝的目標' });
+      firstGoals.serviceFor(first.sessionLog).create({ objective: '第一次組裝的目標' });
 
-      expect(firstGoals.attached()).toHaveLength(1);
-      expect(firstGoals.serviceFor(first.sessionLog)?.get()?.objective).toBe('第一次組裝的目標');
-      // **第二次組裝一份都看不到**——連第一次那份日誌都查不到。
-      expect(secondGoals.attached()).toEqual([]);
-      expect(secondGoals.serviceFor(first.sessionLog)).toBeUndefined();
+      expect(firstGoals.existingFor(first.sessionLog)).toBeDefined();
+      expect(firstGoals.serviceFor(first.sessionLog).get()?.objective).toBe('第一次組裝的目標');
+      // **第二次組裝沒有人問過那份日誌**——它自己的 `WeakMap` 是空的，`existingFor` 不建。
+      expect(secondGoals.existingFor(first.sessionLog)).toBeUndefined();
     } finally {
       await first.dispose();
       await second.dispose();

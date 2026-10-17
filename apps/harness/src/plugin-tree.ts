@@ -73,6 +73,7 @@ import type { EntryOptions } from '@nexus/cordis-plugin-loader';
 import { createProjectionsProvider } from '@nexus/projections/provider';
 import type { ProjectionEntry } from '@nexus/projections/provider';
 import { feedbackToken } from '@nexus/feedback';
+import { goalsToken } from '@nexus/goal';
 import { ContractError, FIBER_STATE, missingServices } from '@nexus/sdk';
 import type { ServiceToken } from '@nexus/sdk';
 import { createSessionLookupProvider } from '@nexus/session/provider';
@@ -130,9 +131,20 @@ export const INCLUDE_ROW_ID = 'include';
  */
 export const FEEDBACK_SERVICE_RANGE = '^1.0.0';
 
+/**
+ * `goals` 服務的契約範圍（#1486 Q3 (a)）：跟 {@link FEEDBACK_SERVICE_RANGE} 同一類——插件提供、宿主消費，折進這條 thread 的
+ * `registry.services`。**它不是 #1477 條件 2 那一類**（活的 `systemPrompt` 不准折進去，因為它的段會跨 thread 越疊越多）：`goals` 的狀態是
+ * 逐份 root 日誌（`WeakMap<SessionLog, GoalService>`），折進每條 thread 的是同一份服務、問的是各自的日誌；相容層的插件拿得到它，
+ * 拿任何日誌去問都只是建出（或取到）那份日誌自己的一份，不會互相疊加。契約寫明只收 root 日誌。
+ */
+export const GOALS_SERVICE_RANGE = '^1.0.0';
+
 /** 宿主取的每一個服務：token 與範圍。加一個「插件提供、宿主消費」的服務就在這裡多一格。 */
 const HOST_SERVICES: readonly { readonly token: ServiceToken<unknown>; readonly range: string }[] =
-  [{ token: feedbackToken as ServiceToken<unknown>, range: FEEDBACK_SERVICE_RANGE }];
+  [
+    { token: feedbackToken as ServiceToken<unknown>, range: FEEDBACK_SERVICE_RANGE },
+    { token: goalsToken as ServiceToken<unknown>, range: GOALS_SERVICE_RANGE },
+  ];
 
 /**
  * `systemPrompt` 服務的契約範圍（#1477）。它**不在 {@link HOST_SERVICES} 裡**：那一類的值是活的 proxy、整個折進這條 thread 的

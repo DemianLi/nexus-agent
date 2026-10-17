@@ -23,11 +23,11 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { NexusPlugin, PluginEntry, PluginRegistry } from '@nexus/core';
-import { GOALS_SERVICE } from '@nexus/plugin-goal';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
 import { shippedServePlugins } from './fixtures.js';
+import { GOALS_SERVICE } from '@nexus/goal';
 
 // serve 的出貨清單（出貨層加專屬層）是 CLI 那份的超集：量這份兩個入口的列都涵蓋到（#669 第 4 步起 `workspace-changes` 在專屬層）。
 const shipped = await shippedServePlugins();

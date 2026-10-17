@@ -26,8 +26,9 @@ import {
 } from '@nexus/core';
 import type { NamedEntry, SessionLog } from '@nexus/core';
 
-import { createGoalPlugin, goalConfigSchema, GOAL_WRAPUP_MARKER } from './index.js';
-import type { GoalPluginOptions } from './index.js';
+import { goalConfigSchema, GOAL_WRAPUP_MARKER } from './index.js';
+import { createGoalPlugin } from './goal-shell.test.helper.js';
+import type { GoalPluginOptions } from './goal-shell.test.helper.js';
 import { hasDirectHumanTurn } from './authority.js';
 import { renderWrapupContext } from './wrapup.js';
 import {
@@ -37,7 +38,7 @@ import {
   GOAL_TOOL_AUTHORITY_MESSAGE,
   GOAL_TOOL_COMPLETION_AUTHORITY_MESSAGE,
   GOAL_TOOL_INVALID_REF_MESSAGE,
-  GOAL_TOOL_NO_SERVICE_MESSAGE,
+  GOAL_TOOL_NOT_ROOT_MESSAGE,
   GOAL_TOOL_NOT_ATTACHED_MESSAGE,
   GOAL_TOOL_OUTPUT_SCHEMA,
   GOAL_TOOL_REASON_MISPLACED_MESSAGE,
@@ -667,11 +668,12 @@ describe('接線說得出原因', () => {
   });
 
   /**
-   * **subagent 那條路的字面版本。** 域只接 root，所以一份 subagent 日誌上本來就沒有服務。
-   * 產品路徑到不了這裡（工具是 `rootOnly` 註冊的），釘住它是為了萬一那層沒了，這裡
-   * **仍然 fail-closed**——回一句話，不是靜靜動到 root 的目標。
+   * **subagent 那條路的字面版本。** 域只認 root：#1486 之後服務是 lazy 的、`serviceFor` 只收 root 日誌，所以「這一份上沒有服務」換成
+   * 工具層自己看 `address.kind`。產品路徑到不了這裡（工具是 `rootOnly` 註冊的），釘住它是為了萬一那層沒了，這裡
+   * **仍然 fail-closed**——回一句話（字面與遷移前的「沒有 goal 域」那句逐字相同），不是靜靜動到 root 的目標，也不是替 subagent
+   * 那一份建一個服務。**拿掉工具層的 `address.kind === 'root'` 判斷，這一條會紅**（驗收 G5）。
    */
-  it('日誌在、但那一份上沒有 goal 域', async () => {
+  it('日誌在、但那是一份 subagent 的——回 NOT_ROOT 那句，不建服務', async () => {
     const { sessions, tools } = bench();
     const log = sessions.open({ kind: 'subagent', runId: 'tools:spawn-1' });
     human(log);
@@ -682,7 +684,9 @@ describe('接線說得出原因', () => {
         configurable: { checkpoint_ns: 'tools:spawn-1|tools:call-1' },
       } as never,
     );
-    expect(textOf(result)).toBe(TOOL_ERROR_PREFIX + GOAL_TOOL_NO_SERVICE_MESSAGE);
+    expect(textOf(result)).toBe(TOOL_ERROR_PREFIX + GOAL_TOOL_NOT_ROOT_MESSAGE);
+    // 字面釘一次（Q6 拒絕訊息逐字不變）：光比常數，常數文字改了這一條不會紅。
+    expect(textOf(result)).toBe(`${TOOL_ERROR_PREFIX}這一份會話上沒有接 goal 域，所以沒有動。`);
     expect(verdictOf(result)).toEqual({ status: 'error', error: undefined });
     expect(log.events.filter((event) => event.type === 'goal/change')).toEqual([]);
   });

@@ -42,7 +42,7 @@ import type { ModelRoute } from './model-route.js';
 import type { ApprovalPolicyValue } from './approval-policy.js';
 import type { PresentedFile } from './deliverables.js';
 import type { FeedbackRecord, MessageFeedbackDelete, MessageFeedbackPut } from './feedback.js';
-import type { GoalId } from './goal.js';
+import type { GoalChangeMeta, GoalId } from './goal.js';
 import type { InboxSplice, SubagentSettleReason } from './inbox.js';
 import { KNOWN_SESSION_EVENT_TYPES } from './known-event-types.js';
 import type { LoggedMessage } from './logged-message.js';
@@ -1207,6 +1207,18 @@ export interface SessionEventMap {
    * ——同一段話不在 `command/run` 再記一次。
    */
   'feedback/record': FeedbackRecord;
+  /**
+   * 這個會話的長期目標動了一次。**每一筆帶整份耐久狀態**（六個 operation），或是一顆 clear 墓碑。
+   *
+   * 帶整份而不是帶差異，是因為讀它的是一個**嚴格重放**的折疊：差異要求讀的人先有正確的前一份狀態才解得開，而整份快照讓「這一筆自己合不合法」
+   * 與「它接不接得上前一筆」分成兩道各自報得出理由的檢查。折疊在 `@nexus/goal`。**`goal.blockedReason` 沒有時要整個不放 key**，
+   * 同 `command/done` 的 `text`。
+   *
+   * **事件擴充住在 core 了**（[#1486](https://github.com/DemianLi/nexus-agent/issues/1486) Q4 (a)）：以前是 `@nexus/plugin-goal` 對
+   * `@nexus/core` 寫 `declare module`，而遷上樹之後那顆插件不能 import `@nexus/core`（#1420 的 lint）。前例 `todo/write`（#1463）、
+   * `feedback/*` 也住在這裡；生成的 `known-event-types.ts` 掃的是所有套件與 app 的 src，兩個位置都掃得到，內容一字不變。
+   */
+  'goal/change': GoalChangeMeta;
   /**
    * 這個會話的待辦清單被整份換掉了一次。**每一筆帶完整的替換清單**，重放時後寫覆蓋先寫。
    *

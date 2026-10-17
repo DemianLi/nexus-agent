@@ -24,10 +24,11 @@
  * @module
  */
 
-import type { AttachmentRef, CommandResult, GoalPhase, GoalRef } from '@nexus/core';
+import type { AttachmentRef, CommandResult } from '@nexus/commands';
+import type { GoalPhase, GoalRef, GoalView } from '@nexus/goal';
 
 import { GoalError } from './service.js';
-import type { GoalService, GoalView } from './service.js';
+import type { GoalService } from './service.js';
 
 /** 命令名，不帶斜線。**寫死的**——命令名是這個套件的介面，不是部署的設定。 */
 export const GOAL_COMMAND_NAME = 'goal';
@@ -215,34 +216,6 @@ export function goalAlreadyMessage(phase: GoalPhase): string {
 export const GOAL_REJECTED_MESSAGE = `這個 goal 命令在目前的狀態下不成立。打 /${GOAL_COMMAND_NAME} 看現在能做什麼。`;
 
 /**
- * 這一份組裝一份日誌都沒接上。
- *
- * **這條走得到的路是真的**：`attachSession` 是組裝點自己要呼叫的一步，漏掉它的入口
- * 拿到的是一個註冊了命令卻沒有狀態的 plugin。回一句說得出原因的話，比讓
- * 服務是 `undefined` 然後在某處炸掉好。
- */
-export const GOAL_NOT_ATTACHED_MESSAGE = `goal 域還沒接上這個會話的日誌，/${GOAL_COMMAND_NAME} 沒有可以動的目標。`;
-
-/**
- * 這一份組裝接了不只一份 root 日誌。
- *
- * **命令要動哪一份日誌由執行器交過來**（`CommandInvocation.sessionLog`，#688），所以這一句**不再是
- * 「找不到要動哪一份」**。它留著，是因為同一份 registry 綁了多於一份會話登記時，goal 的工具一律拒絕
- * （`registry.sessions.forCall` 回 `ambiguous`，見 `tools.ts`）：命令照樣拒絕，兩邊對「這個組裝
- * 接了不只一份」說的是同一件事。「一份組裝只接一份日誌」是組裝點的假設，沒有東西攔得住 `attachSession`
- * 被呼叫兩次，假設破掉時要**當場說**，不能讓人以為目標設在哪一份。
- *
- * 它不寫成安裝期的 throw，是因為 `createSessionRunner` 把參與者安裝失敗**圍堵成一行
- * warn**——在那裡拋，換來的是一個沒有 goal 服務、而且沒有人看得到原因的 agent。
- */
-export function goalAmbiguousMessage(count: number): string {
-  return (
-    `這一份組裝接了 ${String(count)} 份會話日誌，/${GOAL_COMMAND_NAME} 分不出要動哪一份。` +
-    `一份組裝只接一份日誌。`
-  );
-}
-
-/**
  * 跑一次已經解析好的命令，**變更一律經過擁有耐久性的域**。
  *
  * 錯誤分兩類，而分法照抄 dsh：
@@ -254,8 +227,7 @@ export function goalAmbiguousMessage(count: number): string {
  *   `/goal` 都會拋**。兩條進入點都接得住——REPL 印到 stderr，wire 回一顆
  *   `kind: 'error'` 的封包，而執行器在往外拋之前已經把 `command/done` 寫進日誌了。
  *
- * @param service - 執行器交來的那份日誌上的服務；那份日誌沒接 goal 域時是 `undefined`。
- * @param attachedCount - 這一次組裝接著幾份 root 日誌；多於一份時拒絕（見 {@link goalAmbiguousMessage}）。
+ * @param service - 執行器交來的那份 root 日誌上的服務（`goals.serviceFor(sessionLog)`，lazy 建立，一定有）。
  * @param rawInput - 命令名之後的原文。
  * @param attachments - 這次呼叫收下的附件參照；沒有就省略。
  * @param steer - 請宿主送一句帶附件的話（`CommandInvocation.steer`）。**在動域之前呼叫**：被宿主拒收就什麼都沒改；之後域拒絕的話
@@ -264,14 +236,11 @@ export function goalAmbiguousMessage(count: number): string {
  * @throws 域的非預期失敗，包含折疊壞掉之後的每一次讀。
  */
 export function executeGoalCommand(
-  service: GoalService | undefined,
-  attachedCount: number,
+  service: GoalService,
   rawInput: string,
   attachments: readonly AttachmentRef[] = [],
   steer?: (text: string, attachments?: readonly AttachmentRef[]) => void,
 ): CommandResult {
-  if (attachedCount > 1) return { kind: 'error', text: goalAmbiguousMessage(attachedCount) };
-  if (service === undefined) return { kind: 'error', text: GOAL_NOT_ATTACHED_MESSAGE };
   const goals = service;
   const command = parseGoalCommand(rawInput);
   // 附件只隨目標；其餘一律在動任何域之前擋掉（dsh 同）。

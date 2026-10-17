@@ -183,8 +183,7 @@ import {
   urlKeysOf,
 } from './mcp-elicitation.js';
 import type { McpElicitation, SystemAnswerReason } from './mcp-elicitation.js';
-import type {} from '@nexus/plugin-goal';
-import { renderGoalRoundPrompt } from '@nexus/plugin-goal';
+import { renderGoalRoundPrompt } from '@nexus/goal';
 import type {} from '@nexus/plugin-plan-mode';
 import type {} from '@nexus/plugin-workspace-changes';
 
