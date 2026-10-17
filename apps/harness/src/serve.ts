@@ -132,6 +132,7 @@ import { cleanupToolResultStash } from './tool-result-stash.js';
 import { projectionFlushPlugin } from './settings/projection-flush.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
+import { downlinkPlugin } from './settings/downlink.js';
 import { threadCapacityPlugin } from './settings/thread-capacity.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
 import { SessionReferenceCandidates } from './session-reference-candidates.js';
@@ -623,6 +624,9 @@ async function startServer(
   // thread 數上限（#1476，保險絲第 2 級）。**server 的性質**：`threads` 表一台伺服器一張，檢查在 `createWireHandler` 的
   // `threadFor` 裡，所以值在這裡解、往下傳一份。不寫就不限。
   const threadCapacity = startupSetting(plugins, threadCapacityPlugin);
+  // 下行串流的心跳間隔與每條線的位元組上限（#1504）。**兩個消費點在兩處**：心跳間隔交給 `startWireServer`（socket 那一層），位元組上限交給
+  // `createWireHandler`（訂閱者佇列）。預設開、關不掉（`plugin-config.ts` 的 `PROTECTED_ENTRY_REASONS`）。
+  const downlink = startupSetting(plugins, downlinkPlugin);
   // **先照每條 thread 那一次組一份，組完就收**（#749）。上面那幾列只驗了自己的設定；其餘每一列的設定、重名、
   // `requires` 缺件、`apply` 裡的值檢查（例如 `tool-result-pruner` 的門檻），不組一次就不會發生，而 serve 的
   // agent 是每條 thread 才組的——不先組這一次，伺服器照樣起來，每個開對話的人才各撞一次，伺服器日誌一行都沒有。
@@ -731,7 +735,7 @@ async function startServer(
     trialDrops: assemblyDropsOf(loaded, trial.dropped),
     recorder: failureRecorder,
     audit,
-    // 起動期讀的 14 列：名單與分類表同一份（`plugin-row-classes.ts`），上面 `startupSetting` 那幾行讀的就是它們。
+    // 起動期讀的那幾列：名單與分類表同一份（`plugin-row-classes.ts`），上面 `startupSetting` 那幾行讀的就是它們。
     startupRead: STARTUP_READ_PLUGINS,
     log,
     publishSnapshot: async (snapshot) => {
@@ -828,6 +832,7 @@ async function startServer(
     toolTextLimits,
     threadTitleLimits: threadTitle,
     projectionFlushMs: projectionFlush.flushMs,
+    downlinkMaxBytes: downlink.maxQueuedBytes,
     ...(threadCapacity.maxThreads === undefined ? {} : { maxThreads: threadCapacity.maxThreads }),
     // 閒置逐出（#1484，保險絲第 1 級）：**只有落盤開著才傳**。沒有落盤的日誌只在記憶體裡，撤掉就沒了；設了卻不生效，啟動時
     // 印一行說忽略（下面「thread 上限」那一段）。撤完重寫 `plugin-snapshot.json`：放掉 live 綁定只動記憶體，檔要這裡補。
@@ -1167,6 +1172,9 @@ async function startServer(
       port: invocation.port,
       // 一個請求處理失敗（畸形的網址、讀檔錯誤）：記進伺服器日誌、回 400，行程照跑。見 `wire-server.ts`。
       warn: (error) => serverLog(`[請求] 處理失敗，回 400：${error.message}`),
+      // 下行串流的心跳間隔與斷線的那一行 warn（#1504）。**另開一個選項，不借上面的 `warn`**：那一個會把每則訊息包成「處理失敗，回 400」。
+      heartbeatIntervalMs: downlink.heartbeatIntervalMs,
+      warnDisconnect: serverLog,
     });
   } catch (error) {
     // 啟動失敗的收尾：先保住原本的錯（收尾的錯記進伺服器日誌，不蓋掉它），`threadSearch` 照樣收（#1511）。

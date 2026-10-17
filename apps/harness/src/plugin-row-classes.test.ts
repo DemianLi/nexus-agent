@@ -61,22 +61,22 @@ describe('列的分類表', () => {
     expect(stale).toEqual([]);
   });
 
-  it('起動期那 14 顆都對得上出貨的一列，名字不重複', async () => {
+  it('起動期讀的每一顆都對得上出貨的一列，名字不重複', async () => {
     const rows = await shippedRows();
     const names = STARTUP_READ_PLUGINS.map((plugin) => plugin.name);
-    expect(names).toHaveLength(14);
+    expect(names).toHaveLength(15);
     expect(new Set(names).size).toBe(names.length);
     const shipped = new Set(rows.map((row) => row.pluginName));
     expect(names.filter((name) => !shipped.has(name))).toEqual([]);
   });
 
-  it('serve.ts 起動期讀的設定列就是這 14 顆：多讀一顆而名單沒加，這裡是紅的', () => {
+  it('serve.ts 起動期讀的設定列就是 `STARTUP_READ_PLUGINS` 那幾顆：多讀一顆而名單沒加，這裡是紅的', () => {
     const source = readFileSync(join(import.meta.dirname, 'serve.ts'), 'utf8');
     const read = new Set<string>();
     for (const match of source.matchAll(/startup(?:Setting|EntryMounted)\(plugins, (\w+)\)/gu)) {
       if (match[1] !== undefined) read.add(match[1]);
     }
-    // 只比數量：識別字與插件名不是同一個字串。14 顆，一顆不多一顆不少。
+    // 只比數量：識別字與插件名不是同一個字串。一顆不多一顆不少。
     expect(read.size).toBe(STARTUP_READ_PLUGINS.length);
   });
 
