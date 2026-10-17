@@ -86,7 +86,7 @@ export interface GoalPayload {
  * 停下來的事實走下行（root 那顆收尾的 `lifecycle` 帶 `aborted: true`）。回應是受理後目標的新樣子，不等停穩。
  *
  * 回應同回饋：`{ ok: true, value }`／`{ ok: false, error: { code } }`，業務失敗走成功回應，`ErrorResponse` 只給「這條線收不了」
- * （含沒掛續行排程器的組裝回的 `not_supported`）。
+ * （含沒有 goal 域的組裝回的 `not_supported`；**不依賴續行排程器**，`--no-goal-driver` 照樣收）。
  */
 export const GOAL_PAUSE_METHOD = 'goal.pause';
 

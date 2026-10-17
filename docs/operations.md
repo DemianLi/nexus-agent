@@ -362,7 +362,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 
 **目標在跑的時候也能暫停，按下去當場停掉這一輪**（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)，照 dsh `goal-round-driver` 對暫停的反應）。
 有**兩個入口**，效果一樣：wire 的 `goal.pause`（帶目標的 `goalId` 與看到的 `revision`；`revision` 過期回 `{ ok: false, error: { code: 'goal-stale', current } }`，
-不假裝成功；目標不是 active 回 `goal-not-active`；沒有目標回 `goal-not-found`；`--no-goal-driver` 的組裝回 `not_supported`），與斜線命令 `/goal pause`。
+不假裝成功；目標不是 active 回 `goal-not-active`；沒有目標回 `goal-not-found`；沒有 goal 域的組裝回 `not_supported`；**不依賴續行排程器**，`--no-goal-driver` 也照樣收，暫停是 goal 服務本身的事，同 dsh 的 `@Remote('pause')`），與斜線命令 `/goal pause`。
 兩個入口**一輪跑著、停在核准點時都收**，而且**不分這一輪是續行輪還是人打的那一輪**：只要暫停是人下的，server 就走停止鈕那條路中止在跑的輪次
 （續行預約整件拿掉、排在後面的人類輸入保留但停住，下一次送出才照順序跑；停在核准點則是收回待答的問題）。
 **模型自己在輪內用 `update_goal` 暫停不算**（那是它的工具寫的，不是人在外面按的），那一輪照常收完。判斷「誰下的」靠暫停發生那一刻的 async 身分

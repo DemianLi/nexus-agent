@@ -300,37 +300,54 @@ describe('停在核准點（等人回答）：/goal pause 與 goal.pause 收，�
   });
 });
 
-describe('--no-goal-driver：兩條入口的差異（#1516）', () => {
-  it('/goal pause 照樣收下並中止人打的那一輪；goal.pause 回 not_supported（它經續行排程器的 port）', async () => {
-    const thread = 'wire-pause-no-driver';
-    // 沒有排程器：模型建完目標之後那一輪（SLOW）就是人打的那一輪。
-    served = await startScriptedServe(
-      [
-        {
-          content: '',
-          toolCalls: [
-            { name: 'create_goal', args: { objective: '把藍鯨計畫做完', max_goal_rounds: 5 } },
-          ],
-        },
-        SLOW,
+describe('--no-goal-driver：兩條入口一樣（#1516）', () => {
+  const NO_DRIVER_TURNS: readonly ScriptedTurn[] = [
+    {
+      content: '',
+      toolCalls: [
+        { name: 'create_goal', args: { objective: '把藍鯨計畫做完', max_goal_rounds: 5 } },
       ],
-      { argv: ['--no-goal-driver'] },
-    );
-    const client = await serveClient(served.running);
-    const events = await client.openEvents(thread);
-    expect((await client.runStart(thread, '開個頭')).type).toBe('success');
-    await until(() => isBusy(client, thread), '這一輪開跑');
-    expect(await client.goalPause(thread, { goalId: 'x', revision: 1 })).toMatchObject({
-      kind: 'rejected',
-      code: 'not_supported',
-    });
-    // 目標是這一輪裡由模型建的：建好之前 `/goal pause` 回 error，建好之後被收下。
-    await until(
-      async () => (await client.slashRun(thread, '/goal pause')).kind === 'success',
-      '目標建好、暫停被收下',
-    );
-    await untilAborted(events);
-    expect(await isBusy(client, thread)).toBe(false);
-    expect(await goalText(client, thread)).toContain('狀態：暫停');
-  });
+    },
+    // 沒有排程器：模型建完目標之後這一輪（SLOW）就是人打的那一輪。
+    SLOW,
+  ];
+
+  it.each(['goal.pause', '/goal pause'] as const)(
+    '%s 照樣收下並中止人打的那一輪（暫停是 goal 服務自己的事，不經續行排程器）',
+    async (entry) => {
+      const thread = `wire-pause-no-driver-${entry === 'goal.pause' ? 'method' : 'slash'}`;
+      served = await startScriptedServe(NO_DRIVER_TURNS, { argv: ['--no-goal-driver'] });
+      const client = await serveClient(served.running);
+      const events = await client.openEvents(thread);
+      expect((await client.runStart(thread, '開個頭')).type).toBe('success');
+      await until(() => isBusy(client, thread), '這一輪開跑');
+      // 目標是這一輪裡由模型建的：建好之前 `goal.pause` 回 goal-not-found、`/goal pause` 回 error，建好之後才被收下。
+      if (entry === 'goal.pause') {
+        let current: Awaited<ReturnType<typeof currentGoalRef>> | undefined;
+        await until(async () => {
+          const probe = await client.goalPause(thread, { goalId: 'goal-nope', revision: 1 });
+          if (probe.kind === 'ok' && !probe.result.ok && probe.result.error.code === 'goal-stale') {
+            current = probe.result.error.current;
+            return true;
+          }
+          return false;
+        }, '目標建好');
+        expect(current).toBeDefined();
+        expect(
+          await client.goalPause(thread, {
+            goalId: current?.id ?? '',
+            revision: current?.revision ?? 0,
+          }),
+        ).toMatchObject({ kind: 'ok', result: { ok: true, value: { goal: { phase: 'paused' } } } });
+      } else {
+        await until(
+          async () => (await client.slashRun(thread, '/goal pause')).kind === 'success',
+          '目標建好、暫停被收下',
+        );
+      }
+      await untilAborted(events);
+      expect(await isBusy(client, thread)).toBe(false);
+      expect(await goalText(client, thread)).toContain('狀態：暫停');
+    },
+  );
 });
