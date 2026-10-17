@@ -246,11 +246,6 @@ const ALLOWED: readonly Allowed[] = [
   },
   // `ui/` 的 registry 原文：裝進來就是我們的原始碼，沒有改的就照舊；之後要改或確認要留，逐條處理。
   {
-    file: 'components/ui/alert-dialog.tsx',
-    what: 'bg-black/50',
-    why: '遮罩的黑色半透明；沒有對應的語意 token（#437 手抄 alert-dialog 時帶進來；dialog、sheet 那兩條隨 #1583 換成 vendor 版一起刪）',
-  },
-  {
     file: 'components/ui/questionnaire.tsx',
     what: 'text-base',
     why: '題目標題與輸入框；輸入框同 input 的手機 16px 理由，標題同 dialog 的標題尺寸',

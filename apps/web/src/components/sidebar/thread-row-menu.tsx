@@ -92,27 +92,28 @@ export function ThreadRowMenu(props: RowMenuProps) {
   const renaming = useRef(false);
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger asChild>
-        <SidebarMenuAction
-          showOnHover
-          aria-label={`「${label}」的選項`}
-          className="size-8 lg:size-5"
-        >
-          <MoreHorizontal aria-hidden />
-        </SidebarMenuAction>
+      <DropdownMenuTrigger
+        render={
+          <SidebarMenuAction
+            showOnHover
+            aria-label={`「${label}」的選項`}
+            className="size-8 lg:size-5"
+          />
+        }
+      >
+        <MoreHorizontal aria-hidden />
       </DropdownMenuTrigger>
       <DropdownMenuContent
         align="start"
-        onCloseAutoFocus={(event) => {
-          if (renaming.current) {
-            renaming.current = false;
-            event.preventDefault();
-          }
+        finalFocus={() => {
+          if (!renaming.current) return true;
+          renaming.current = false;
+          return false;
         }}
       >
         {!archived && (
           <DropdownMenuItem
-            onSelect={() => {
+            onClick={() => {
               report(pinned ? '取消釘選' : '釘選', pinned ? props.onUnpin() : props.onPin());
             }}
           >
@@ -121,7 +122,7 @@ export function ThreadRowMenu(props: RowMenuProps) {
           </DropdownMenuItem>
         )}
         <DropdownMenuItem
-          onSelect={() => {
+          onClick={() => {
             renaming.current = true;
             props.onRename();
           }}
@@ -131,13 +132,13 @@ export function ThreadRowMenu(props: RowMenuProps) {
         </DropdownMenuItem>
         {(archived || !current) && <DropdownMenuSeparator />}
         {archived ? (
-          <DropdownMenuItem onSelect={() => report('取消封存', props.onUnarchive())}>
+          <DropdownMenuItem onClick={() => report('取消封存', props.onUnarchive())}>
             <ArchiveRestore aria-hidden />
             取消封存
           </DropdownMenuItem>
         ) : (
           !current && (
-            <DropdownMenuItem onSelect={() => archive(props, undefined, setConfirmStop)}>
+            <DropdownMenuItem onClick={() => archive(props, undefined, setConfirmStop)}>
               <Archive aria-hidden />
               封存
             </DropdownMenuItem>

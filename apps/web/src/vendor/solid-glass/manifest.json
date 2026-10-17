@@ -22,6 +22,11 @@
       "from": "LICENSE",
       "sha256": "eb9d03950a82b3fa15b16bd05163f6691843be957e69ce8eb6f062913848be87"
     },
+    "components/ui/alert-dialog.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/alert-dialog.tsx",
+      "sha256": "d1811546e2248fe9b04e7cefcd4f0ed3acc4e87cb26a083eb17b3c836707d4d0"
+    },
     "components/ui/badge.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/badge.tsx",
@@ -37,12 +42,22 @@
       "from": "src/components/ui/card.tsx",
       "sha256": "7620e0f122bb5aa0a422254909bd11d5b088bb368eb60e6ba28010c332163cc0"
     },
+    "components/ui/command.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/command.tsx",
+      "sha256": "eaccda4b82a74406fc744a6ec084f56951a0a613e9c2a4f762b54fa548b376e9"
+    },
     "components/ui/dialog.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/dialog.tsx",
       "sha256": "3ec9bb1a9016d9d0c91294c30217bd672d90d7025b48df2768c3ee330576e9ce",
       "patches": ["patches/0002-dialog-close-label.patch"],
       "upstreamSha256": "bbc16e198416a5351dc62ad5d20781d32dac72dbe7ad871b2a4842852bbf1120"
+    },
+    "components/ui/dropdown-menu.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/dropdown-menu.tsx",
+      "sha256": "75eb750ad1a6d46052ac8102ce2b0176d61c0cf4b86a17715e1538d3fb3acf2b"
     },
     "components/ui/input-group.tsx": {
       "source": "solid-glass",

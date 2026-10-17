@@ -1,6 +1,6 @@
 import { THREAD_SEARCH_QUERY_MAX_LENGTH } from '@nexus/wire';
 import type { ThreadSearchOutcome, ThreadSummary } from '@nexus/wire';
-import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { CLEAR_SEARCH_LABEL, ThreadList } from '@/components/sidebar/thread-list';
@@ -331,9 +331,12 @@ describe('釘選、封存、改名（#633）', () => {
     );
   }
 
-  /** Radix 的選單在 jsdom 裡用鍵盤打開最穩。 */
+  /**
+   * Base UI 的 Trigger 是原生 button，鍵盤 Enter 打開靠瀏覽器把 Enter 轉成 click——jsdom 不做這一步，所以這裡直接點。
+   * 鍵盤打開與在選項上按 Enter 由 `guard/` 用真的 Chrome 量（#1583 驗收 D）。
+   */
   const openMenu = (title: string) => {
-    fireEvent.keyDown(screen.getByRole('button', { name: `「${title}」的選項` }), { key: 'Enter' });
+    fireEvent.click(screen.getByRole('button', { name: `「${title}」的選項` }));
     return screen.getByRole('menu');
   };
   const menuItems = () => screen.getAllByRole('menuitem').map((item) => item.textContent);
@@ -424,6 +427,26 @@ describe('釘選、封存、改名（#633）', () => {
     expect(screen.queryByRole('menu')).toBeNull();
   });
 
+  it('封存還在跑的會話：確認框按「停掉並封存」就關，帶 stopActivity 再送一次（#1583：Action 本身會關框）', async () => {
+    const calls: string[] = [];
+    const { management } = managed({
+      onArchive: async (id, options) => {
+        calls.push(`archive ${id} ${options?.stopActivity === true ? 'stop' : ''}`.trim());
+        return options?.stopActivity === true ? undefined : { needsStop: ['turn'] };
+      },
+    });
+    // 集合不變：那一列留在原地、確認框也還掛著，關框只能靠 Action 自己（App 那條封存之後整列搬家，量不到這件）。
+    renderManaged(management);
+    openMenu('讀規格');
+    fireEvent.click(screen.getByRole('menuitem', { name: '封存' }));
+    const dialog = await screen.findByRole('alertdialog');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: '停掉並封存' }));
+
+    await waitFor(() => expect(screen.queryByRole('alertdialog')).toBeNull());
+    expect(calls).toEqual(['archive b', 'archive b stop']);
+  });
+
   describe('改名', () => {
     const startRename = (title: string) => {
       openMenu(title);
@@ -441,6 +464,16 @@ describe('釘選、封存、改名（#633）', () => {
       await act(async () => undefined);
       expect(calls).toEqual(['rename b 讀 新規格']);
       expect(screen.queryByRole('textbox', { name: '重新命名會話' })).toBeNull();
+    });
+
+    it('選單關掉後焦點留在輸入框，不還給「⋯」（還回去的話輸入框失焦，當成沒改收起來）', async () => {
+      const { management } = managed();
+      renderManaged(management);
+      const field = startRename('讀規格');
+      // Base UI 在選單關掉之後才還焦點（不是同一個 tick），等它做完再看。
+      await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+      expect(screen.getByRole('textbox', { name: '重新命名會話' })).toBe(field);
+      expect(document.activeElement).toBe(field);
     });
 
     it('Esc 放棄；沒改或清空也算放棄，都不叫動作', async () => {
