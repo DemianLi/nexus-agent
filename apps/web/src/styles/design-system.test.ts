@@ -19,9 +19,9 @@ import { readCascade } from './css-cascade';
  * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`、`bg-card`＋`shadow-material`＋`rounded-3xl`，或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
  * 6. **展開箭頭用 `Chevron`**（#1279）：同一個字串裡有 `transition-transform`＋`rotate-*`，或跟著 `data-state=open` 轉的 `rotate-*`，就是又手寫了一顆。
  * 7. **可展開列用 `RowTrigger`**（#1279）：同一個字串裡有 `hover:bg-chip-hover`＋`active:bg-chip-pressed`＋`w-full`＋`text-left`，就是又手寫了一列。
- * 8. **`ui/` 以外不寫 `focus-visible:ring-*`**（#1279）：`theme.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
+ * 8. **`ui/` 以外不寫 `focus-visible:ring-*`**（#1279）：`solid-glass.overrides.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
  *    再配上 `outline-none` 就是**完全看不到焦點**（#1279 之前有六處）。要改外框位置用 `focus-visible:-outline-offset-2` 之類，不要換成 ring。
- *    `ui/` 的 registry 原文不在這條：那裡的 ring 由 `theme.css` 統一處理。
+ *    `ui/` 的 registry 原文不在這條：那裡的 ring 由 `solid-glass.overrides.css` 統一處理。
  * 9. **對話泡泡用 `ChatBubble`**（#1280）：同一個字串裡有 `rounded-3xl`＋`px-4`＋`py-2.5`，就是又手寫了一個泡泡。
  * 10. **程式碼小框用 `MonoBlock`**（#1280）：同一個字串裡有 `bg-chip`＋`rounded-lg`＋`p-2`＋`font-mono`，就是又手寫了一塊。
  * 11. **`ui/` 以外不寫原生 `<textarea`**（#1280）：用 `ui/textarea` 的 `Textarea`（邊框、焦點、手機字級都在那裡）。
@@ -515,7 +515,7 @@ describe('判準', () => {
     ).toBe(true);
   });
 
-  test('焦點那條不管 ui/ 的 registry 原文：那裡的 ring 由 theme.css 統一處理', () => {
+  test('焦點那條不管 ui/ 的 registry 原文：那裡的 ring 由 solid-glass.overrides.css 統一處理', () => {
     const registry = scan(files.filter((f) => relative(SRC, f).startsWith('components/ui/')));
     expect(registry.filter((v) => v.rule === '焦點')).toEqual([]);
     expect(

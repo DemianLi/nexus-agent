@@ -11,6 +11,7 @@
  *   - `data-guard-shadow`：亮色時量 `box-shadow` 每層投影的透明度。
  *   - `data-guard-surface`：不透明的退路（reduced-transparency、`data-glass="opaque"`）下，量這個面是不是真的不透明、沒有 blur。
  *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、按下去三種狀態各量一次字色對底色（chip 三階，#1512）。
+ *   - `data-guard-located`：對話裡被定位的那一則（`[data-slot=message-scroller-item][data-located]`），量圓角真的畫出來。
  * - 亮暗由網址的 `?theme=dark` 決定，在第一次繪製前套好（同 `index.html`）。
  * - `?glass=opaque` 在 `<html>` 掛 `data-glass="opaque"`（#1468 Q7：效能不達標時退回的那條路），量不透明的面。
  */
@@ -145,6 +146,15 @@ function GuardPage() {
           <Surface tone="docked" data-guard-docked="docked" data-guard-text="docked">
             貼在輸入框上方的卡片
           </Surface>
+        </div>
+
+        <div
+          data-slot="message-scroller-item"
+          data-located=""
+          data-guard-located="located"
+          style={{ width: 360, padding: 12 }}
+        >
+          在對話裡被定位的那一則
         </div>
 
         <div style={{ height: 160 }}>

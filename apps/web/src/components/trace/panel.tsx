@@ -5,8 +5,8 @@
  *
  * **有軌跡投影時**（`lib/trace-view.ts` 的結構化模式）輪界、模型呼叫段落、重試、重複呼叫提醒、時刻與耗時都讀它；**沒有時**
  * 退回第 0 版（只有順序），兩種的限制都全部寫在畫面上（`TRACE_LIMITS`、`TRACE_STRUCTURED_LIMITS`）。投影的歸位在
- * `lib/trace-view.ts`，這裡只畫。UI/UX 以 shadcn＋Tailwind 為基底、Libraries.dev 為模仿對象，不是照 dsh 的
- * `ui-trajectory` 畫時間線。
+ * `lib/trace-view.ts`，這裡只畫。UI/UX 照 AGENTS.md「不在這條範圍內的」：數值以 solid-glass 為準，
+ * Libraries.dev 只當元件多樣性與交互模式的參考，不是照 dsh 的 `ui-trajectory` 畫時間線。
  *
  * - **畫面上的列數有上限**：只畫最新的 {@link TURN_PAGE} 組、每組只畫最新的 `ROW_PAGE` 列（`groups.tsx`），更早的按「顯示更早的」再展開；窗口外的輪摘要（最多 200 列）收在
  *   一個摺起來的區塊、同樣分段。投影每顆事件整份換掉，所以列只放原始值（`lib/trace-view.ts`），`memo` 才擋得住。

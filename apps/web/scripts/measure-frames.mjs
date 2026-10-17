@@ -2,7 +2,7 @@
 /* global console, process, URL, setTimeout, clearTimeout, window, requestAnimationFrame, performance */
 /**
  * 大面積玻璃的效能門檻（#1468 Q7、Q13、Q17，#1512）：Chrome 關 GPU 加速、CPU 降速 4 倍，量三種情境的 frame time，
- * p95 ≤ 16.7ms 才能合併；不達標就退成不透明（`data-glass="opaque"`／reduced-transparency 那條路），由 PM 與 demian 決定。
+ * p95 ≤ 16.7ms 才能合併（判的是 vsync 個數：p95 ≤ 1 個 vsync，見 `summarize`）；不達標就退成不透明（`data-glass="opaque"`／reduced-transparency 那條路），由 PM 與 demian 決定。
  *
  * 三種情境：
  * 1. **串流中捲動**：回覆還在串的時候，在對話區上下捲。
@@ -22,7 +22,8 @@
  *   env -u NVIDIA_API_KEY node apps/web/scripts/measure-frames.mjs [--runs 3] [--out <json>] [--headed]
  *
  * **不碰真的 key**：模型是腳本裡的假端點（OpenAI 相容、SSE 串流，只聽 127.0.0.1），serve 用 `--patch` 指過去；
- * serve 的 cwd 是沒有 `.env` 的 `apps/harness`，環境只放假 key，原本環境裡的 `NVIDIA_API_KEY` 會被刪掉。
+ * serve 的 cwd 是沒有 `.env` 的 `apps/harness`；子行程環境裡的 `NVIDIA_API_KEY` **覆寫成假 key** `nvapi-fake-loopback-only`，
+ * 原本環境裡的值不會傳過去（外層照樣用 `env -u NVIDIA_API_KEY` 跑）。
  * home 與工作區都是新建的暫存目錄，跑完刪掉。輸出不印 serve 的網址（帶 token）。
  *
  * 自檢（不過就不算數、直接失敗）：GPU 合成真的關了（CDP `SystemInfo.getInfo` 的 `gpu_compositing`），
@@ -252,6 +253,9 @@ function summarize(deltas, vsync) {
     p95: percentile(deltas, 95),
     p99: percentile(deltas, 99),
     max: Math.max(...deltas),
+    // 判準看「vsync 個數」本身（p95 ≤ 1 就是 ≥95% 的幀準時）。乘回毫秒只給人讀：時間戳只到 0.1ms，閒置中位數量成 16.8 的那一次，
+    // 零掉幀也會乘出 16.8 > 16.7，判準不能被這個精度卡住。
+    p95VsyncCount: percentile(vsyncs, 95),
     p95Vsync: percentile(vsyncs, 95) * vsync,
     dropped,
     droppedRatio: dropped / deltas.length,
@@ -494,6 +498,7 @@ const verdict = Object.fromEntries(
     const pick = (key) => results.map((r) => r.scenarios[name][key]);
     const raw = percentile(pick('p95'), 50);
     const byVsync = percentile(pick('p95Vsync'), 50);
+    const byVsyncCount = percentile(pick('p95VsyncCount'), 50);
     return [
       name,
       {
@@ -503,7 +508,8 @@ const verdict = Object.fromEntries(
         rawMedian: raw,
         vsyncMedian: byVsync,
         rawPass: raw <= P95_LIMIT_MS,
-        vsyncPass: byVsync <= P95_LIMIT_MS,
+        vsyncCountMedian: byVsyncCount,
+        vsyncPass: byVsyncCount <= 1,
         compositorDropped: results.map((r) => r.scenarios[name].compositor.droppedRatio),
         compositorPartial: results.map((r) => r.scenarios[name].compositor.partialRatio),
         drawAndSwapP95: results.map((r) => r.scenarios[name].compositor.drawAndSwapP95),
@@ -516,7 +522,7 @@ console.log(
 );
 for (const [name, v] of Object.entries(verdict))
   console.log(
-    `${name}：原始 p95 中位數 ${v.rawMedian.toFixed(2)}ms（${v.rawPass ? '≤' : '>'} ${P95_LIMIT_MS}）；以 vsync 計 ${v.vsyncMedian.toFixed(2)}ms（${v.vsyncPass ? '≤' : '>'} ${P95_LIMIT_MS}）；rAF 掉幀 ${v.droppedRatios.map((x) => `${(x * 100).toFixed(1)}%`).join('／')}` +
+    `${name}：原始 p95 中位數 ${v.rawMedian.toFixed(2)}ms（${v.rawPass ? '≤' : '>'} ${P95_LIMIT_MS}）；以 vsync 計 ${v.vsyncMedian.toFixed(2)}ms、vsync 個數 p95 ${v.vsyncCountMedian}（${v.vsyncPass ? '≤' : '>'} 1）；rAF 掉幀 ${v.droppedRatios.map((x) => `${(x * 100).toFixed(1)}%`).join('／')}` +
       `；合成器掉幀 ${v.compositorDropped.map((x) => `${(x * 100).toFixed(1)}%`).join('／')}、部分 ${v.compositorPartial.map((x) => `${(x * 100).toFixed(1)}%`).join('／')}；DrawAndSwap p95 ${v.drawAndSwapP95.map((x) => x?.toFixed(2)).join('／')}ms`,
   );
 if (options.out)

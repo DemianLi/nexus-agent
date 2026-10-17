@@ -19,7 +19,7 @@ import { startGuardServer, type GuardServer } from './server';
  * 靜態那一層（`src/styles/*.test.ts`）量的是 token 與選擇器文字，量不到 specificity、`color-mix()` 現場合成的底色、
  * 半透明的面實際疊在什麼上面；這裡量的是畫出來的結果。
  *
- * 量三件事，亮暗各一次：
+ * 量這幾件事，亮暗各一次：
  * 1. **焦點**：鍵盤聚焦後 `box-shadow` 看得見的層跟沒聚焦時一樣（不帶 ring），外框是 2px 實線、顏色是頁面的字色（`.docs/web-ui-spec.md`、#1279），
  *    外框對它畫在上面的底色過非文字門檻 {@link NON_TEXT_MIN}（#1468 Q5）。
  * 2. **對比**：每個字的顏色對它實際的底色（往上疊到不透明為止，漸層取最差的停點）過門檻（文字 4.5，`data-guard-min` 另給）。
@@ -28,8 +28,11 @@ import { startGuardServer, type GuardServer } from './server';
  * 4. **貼在輸入框上方的卡片是平的**：`Surface tone="docked"` 的邊是 1px、沒有投影（SG 的 `.bg-card` 會把它變成浮起來的卡片，
  *    `solid-glass.overrides.css` 補回來）。
  * 5. **chip 三階**：`data-guard-chip` 裡那顆按鈕平常、滑鼠移上去、按下去三種狀態，字對它實際的底色過門檻。develop 就沒到 4.5 的那幾對
- *    只守「不比 develop 差」（既有缺口 #1515，{@link CHIP_FLOORS}）。
- * 6. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
+ *    只守「不比 develop 差」（既有缺口 #1515，{@link CHIP_FLOORS}）；warning 用量表平常狀態的字直接疊在頁面上，是狀態色對底色，
+ *    守 {@link STATUS_MIN}（同靜態那一層的狀態色門檻）。
+ * 6. **對話裡被定位的那一則有圓角**：`[data-located]` 的圓角是 `var(--radius-3xl)`，這個變數只宣告在 SG 的 `@theme inline`；
+ *    Tailwind 沒輸出或修剪掉它的話，圓角會靜靜變成 0。量 `border-radius` 不是 0。
+ * 7. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -57,6 +60,17 @@ const SHADOW_LIMITS: Record<string, number> = {
 };
 const SHADOWED = Object.keys(SHADOW_LIMITS);
 const TEXT_MIN = 4.5;
+/** 字樣本一定要量到的幾個（量具自檢）：少了就是頁面沒畫出來或選擇器沒中，對比那條會靜靜變成空的綠。 */
+const REQUIRED_TEXTS = [
+  'body',
+  'button-default',
+  'card-title',
+  'card-counts-0',
+  'card-counts-1',
+  'popover',
+  'tooltip',
+  'sidebar-menu-button',
+];
 const NON_TEXT_MIN = 3;
 
 type ChipState = 'rest' | 'hover' | 'pressed';
@@ -66,6 +80,14 @@ const CHIP_STATES: ChipState[] = ['rest', 'hover', 'pressed'];
  * chip 三階上 develop 就沒到 4.5 的那幾對（既有缺口 #1515）：只守「不比 develop 差」，數字同 `tokens-contrast.test.ts` 的
  * `NOT_WORSE_THAN_DEVELOP`（develop c9b957b6 照同一套算法重算、截到小數第四位）。沒列的一律 {@link TEXT_MIN}。
  */
+/**
+ * 狀態色對底色的門檻（`.docs/web-ui-spec.md` §5，#1468 Q5）。warning 用量表平常狀態沒有 chip 底，字是 warning 色直接疊在頁面上，
+ * 所以守這一條而不是文字的 4.5。不扣靜態那一層的 `ROUNDING`：瀏覽器量的是出貨的值，跟靜態那層對到小數第四位。
+ */
+const STATUS_MIN = 5.2;
+/** chip 三階裡守 {@link STATUS_MIN} 的那幾格。 */
+const CHIP_STATUS_ON_PAGE = new Set(['context-meter-warning:rest']);
+
 const CHIP_FLOORS: Record<string, Record<Theme, number>> = {
   'context-meter:pressed': { light: 4.3325, dark: 4.2964 },
   'context-meter-warning:hover': { light: 4.0084, dark: 3.9642 },
@@ -387,6 +409,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   let focus: FocusSample[];
   let fields: FieldSample[];
   let docked: { borderTopWidth: string; boxShadow: string }[];
+  let located: { borderTopLeftRadius: string; backgroundColor: string }[];
   let shadows: ShadowSample[];
   let chips: ChipSample[];
 
@@ -403,6 +426,15 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
         return { borderTopWidth: style.borderTopWidth, boxShadow: style.boxShadow };
       }),
     );
+    located = await page.$$eval('[data-guard-located]', (els) =>
+      els.map((el) => {
+        const style = getComputedStyle(el);
+        return {
+          borderTopLeftRadius: style.borderTopLeftRadius,
+          backgroundColor: style.backgroundColor,
+        };
+      }),
+    );
   }, 60_000);
 
   afterAll(async () => {
@@ -410,18 +442,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   });
 
   test('量具有抓到東西：每個標了的元素都量到', () => {
-    expect(texts.map((t) => t.name)).toEqual(
-      expect.arrayContaining([
-        'body',
-        'button-default',
-        'card-title',
-        'card-counts-0',
-        'card-counts-1',
-        'popover',
-        'tooltip',
-        'sidebar-menu-button',
-      ]),
-    );
+    expect(texts.map((t) => t.name)).toEqual(expect.arrayContaining(REQUIRED_TEXTS));
     expect(focus.map((f) => f.name)).toEqual(
       expect.arrayContaining(['button-default', 'input-group', 'sidebar-menu-button']),
     );
@@ -504,7 +525,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
       return {
         key,
         ...c,
-        min: CHIP_FLOORS[key]?.[theme] ?? TEXT_MIN,
+        min: CHIP_FLOORS[key]?.[theme] ?? (CHIP_STATUS_ON_PAGE.has(key) ? STATUS_MIN : TEXT_MIN),
         ...worstOn(c.color, c.chain),
       };
     });
@@ -531,6 +552,15 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
         .filter((m) => !(m.ratio >= m.min))
         .map((m) => `${m.key} ${m.ratio.toFixed(4)} < ${m.min}（${m.on}）`),
     ).toEqual([]);
+  });
+
+  test('對話裡被定位的那一則：圓角真的畫出來（--radius-3xl 有宣告），底色換成 chip', () => {
+    report[`${theme}:located`] = located;
+    expect(located).toHaveLength(1);
+    const [only] = located;
+    // 量具自檢：規則真的套上了（底色不是透明），圓角是 0 才算數，不是整條規則沒中。
+    expect(parseColor(only!.backgroundColor).alpha).toBeGreaterThan(0);
+    expect(Number.parseFloat(only!.borderTopLeftRadius)).toBeGreaterThan(0);
   });
 
   test('貼在輸入框上方的卡片是平的：邊 1px、沒有投影', () => {
@@ -600,6 +630,8 @@ describe.each(
   });
 
   test('每個字對它實際的底色過門檻', () => {
+    // 量具自檢：不透明的頁面也真的量到字，不然下面那條在空陣列上會綠。
+    expect(texts.map((t) => t.name)).toEqual(expect.arrayContaining(REQUIRED_TEXTS));
     const measured = texts.map((t) => ({ name: t.name, min: t.min, ...worstContrast(t) }));
     report[`${mode}:${theme}:contrast`] = measured.map((m) => ({ ...m, ratio: round(m.ratio) }));
     expect(

@@ -152,10 +152,12 @@
 
 **顏色**
 - 全部 oklch，**語意 token 直接寫值**，不另建色板層；registry 帶進來的 `--sidebar-*` 由 `hsl()` 轉掉。
-- `--primary` **無彩**。另加 `--brand`／`--brand-soft`，**只**用在連結、info、核准與提問面板的邊框光。
-- 補 `--success`／`--warning`／`--info`（Tailwind green／amber／blue 當關鍵色），error 沿用 `--destructive`。
-- 原型另加的名字：`--stage`、`--chip`／`--chip-hover`／`--chip-pressed`、`--card-hairline`、`--material-shadow`／`--menu-shadow`／`--card-shadow`、`--beam-*`。
-- 上面 `--brand*`、`--success`／`--warning`／`--info` 與原型另加的名字是 **nexus 獨有、SG 沒有的**，在 #1497 第 ⑥ 步刪掉，自製元件改用 SG 有的 token（Q11）；「需要你處理」那一色改對到 SG 的 `--status-interrupted`（Q14）。刪之前它們的值照下面的目標解，亮暗都要過。
+- `--primary` **無彩**。`--brand`／`--brand-soft` **只**用在連結、info、核准與提問面板的邊框光；error 沿用 `--destructive`。
+- **帶色相的 token 分兩種來源**：
+  - **SG 自己就有的**：`--brand`、`--brand-muted`（`solid-glass.css:192-194`、`:300-302`）、`--success`（`:199`、`:306`）、`--destructive`、`--status-*`（`:198`、`:305` 起）。值以 SG 的為輸入，照下面的目標解。**第 ⑥ 步不刪它們**。
+  - **nexus 另加、SG 沒有的**：`--brand-soft`（`--brand` 加 alpha）、`--warning`、`--info`。warning／info 的色相與彩度沿用上一版產生器解出來的值，明度對 SG 的底色重解（`apps/web/tokengen/generate.mjs`）。
+- 原型另加的名字（SG 也沒有）：`--stage`、`--chip`／`--chip-hover`／`--chip-pressed`、`--card-hairline`、`--material-shadow`／`--menu-shadow`／`--card-shadow`、`--beam-*`。
+- **nexus 獨有的顏色**（`stage`、`chip*`、`brand-soft`、`warning`、`info`、`card-hairline`，同 vendor README「另外新增」）與原型另加的陰影名字，在 #1497 第 ⑥ 步刪掉，自製元件改用 SG 有的 token（Q11）；「需要你處理」那一色改對到 SG 的 `--status-interrupted`（Q14）。刪之前它們的值照下面的目標解，亮暗都要過。
 
 **對比度目標**（WCAG 2.x；產生器用 colorjs.io 逐對解，不再用 Leonardo）
 - **輸入是 SG 的值**（Q10）：色相、彩度、alpha 照 SG，彩度收進 sRGB，只解明度（步長 0.001）；SG 原值已達標的原樣留。唯一的例外是暗色 `--destructive`，照 SG 原值、不收進 sRGB。逐值的 SG 原值與產物在 `apps/web/tokengen/token-table.md`。
@@ -169,7 +171,7 @@
 **形狀**
 - 圓角照 SG 的階梯，不重綁（Q8）：`--radius` 14px，`sm`／`md`／`lg`／`xl`／`2xl`／`3xl`／`4xl` 是它的 0.6／0.8／1／1.4／1.8／2.2／2.6 倍；控制項寫 `rounded-lg` 時改用小一階的 `--radius-control`（11.2px，`solid-glass.css:544-557`）。按鈕 `rounded-full`（registry 原文）。不用 superellipse。
 - 列的圓角 `--radius-row` 是 SG 的 `3xl` 減 4px（`index.css`），nexus 新增、不是改 SG。
-- **邊緣照 SG 的畫法**（Q8 外觀照 SG；{DEC}，照 `solid-glass.css` 實際的寫法）。亮暗是同一組結構，只換 token 值（`:258-265`），所以暗色也是外環＋投影，不再是 inset 疊層：
+- **邊緣照 SG 的畫法**（Q8 外觀照 SG；PM 2026-10-17 定照 SG 實際怎麼畫來寫，#1512，照 `solid-glass.css` 實際的寫法）。亮暗是同一組結構，只換 token 值（`:258-265`），所以暗色也是外環＋投影，不再是 inset 疊層：
   - **面**（`.bg-card`、`.glass-panel`、`.bg-popover`）：**邊畫在陰影裡**，`border` 歸零（`:378-401`）。由內到外是頂上一條光 `inset 0 1px 0 --glass-rim`、`inset 0 0 0 1px --glass-inner`、外側細線 `0 0 0 1px --glass-edge`（浮層是 `--popover-edge`）、貼地 `0 1px 2px --glass-contact`、投影 `0 12px 32px -14px --glass-shade`；浮層把投影換成 `0 24px 60px -18px --glass-shade` 加 `0 6px 16px -6px --glass-lift`。側欄只有 inset 線（`:405-409`）。
   - **控制項**（主按鈕 `:436-462`、outline／secondary 按鈕 `:640-664`、欄位 `:917-933`、沒有底色的裸框 `:565-574`）：**細線就是元素自己的 `border`**（`--border`、`--glass-edge`、`--field-edge`），同一個元素再疊 inset 光與貼地投影。所以「同一元素不同時用 `border` 與陰影」只對面成立，對控制項不成立。
   - `border-shadow.test.ts` 量的是元件原始碼的 className，今天仍是綠的，這一步不動；第 ③ 步換進 SG 的 registry 元件時一起處理。
@@ -239,7 +241,7 @@
 - JS 的 `scrollTo({ behavior: 'smooth' })` 不看 CSS，要自己讀偏好。
 
 **效能**：持續動畫只動 transform／opacity，唯一例外是執行中邊框光的 conic 角度（同時最多一個）；`will-change` 不常駐。
-- **大面積玻璃照 SG**（Q7），不再限「blur 只給小元素」。換來的是一道合併門檻（Q13、Q17）：Chrome 關 GPU 加速、CPU 降速 4 倍，量**串流中捲動、開 composer 選單（兩層 blur）、開關側欄**三種情境，p95 frame time ≤ 16.7ms。判讀用 rAF 間隔換算成 vsync 之後的 p95；合成器 trace 的 `DrawAndSwap` 當佐證。量具是 `apps/web/scripts/measure-frames.mjs`（假模型端點、真 serve、headless Chrome）。
+- **大面積玻璃照 SG**（Q7），不再限「blur 只給小元素」。換來的是一道合併門檻（Q13、Q17）：Chrome 關 GPU 加速、CPU 降速 4 倍，量**串流中捲動、開 composer 選單（兩層 blur）、開關側欄**三種情境，p95 frame time ≤ 16.7ms。判讀用 rAF 間隔換算成 vsync 個數之後的 p95，**≤ 1 個 vsync** 就是過（≥95% 的幀準時；不用乘回毫秒比 16.7，headless 的時間戳只到 0.1ms，閒置間隔量成 16.8 時零掉幀也會判不過）；合成器 trace 的 `DrawAndSwap` 當佐證。量具是 `apps/web/scripts/measure-frames.mjs`（假模型端點、真 serve、headless Chrome）。
 - [#1512](https://github.com/DemianLi/nexus-agent/issues/1512) 量過三種情境都是 16.70ms（CPU 實測降速約 3.8 倍；數字與條件在該 PR）。限制：headless；實機只量 demian 那台 Mac，VDI／沒有 GPU 的機器沒量（已知缺口，接受）。
 - **不達標的退路是不透明**：沿用 `prefers-reduced-transparency` 那條路與 `<html data-glass="opaque">`，面換成不透明、拿掉 blur（§5 的目標一樣要過）。
 

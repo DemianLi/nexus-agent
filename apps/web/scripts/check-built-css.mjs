@@ -50,17 +50,17 @@ const KEYFRAMES_ALLOWED = new Set([
   // 第三方：sonner
   'sonner-fade-in',
   'sonner-fade-out',
+  'sonner-spin',
+  'swipe-out-left',
+  'swipe-out-right',
+  'swipe-out-up',
+  'swipe-out-down',
   // 第三方：solid-glass（`src/vendor/solid-glass/solid-glass.css`，#1512；reduced-motion 的處理見 `styles/solid-glass.overrides.css`）
   'sg-dot-flash',
   'sg-status-shimmer',
   'sg-sweep',
   'sg-float-in',
   'sg-fade-in',
-  'sonner-spin',
-  'swipe-out-left',
-  'swipe-out-right',
-  'swipe-out-up',
-  'swipe-out-down',
 ]);
 
 const REDUCED_MOTION = /prefers-reduced-motion:\s*reduce/;
