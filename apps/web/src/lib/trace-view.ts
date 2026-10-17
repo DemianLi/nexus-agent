@@ -1,7 +1,7 @@
 /**
  * 觀測分頁（[#1033](https://github.com/DemianLi/nexus-agent/issues/1033)、[#1034](https://github.com/DemianLi/nexus-agent/issues/1034)
- * 觀測那一半）怎麼把對話投成「一輪一組、依序一列一列」。UI/UX 以 shadcn＋Tailwind 為基底、Libraries.dev 為模仿對象，
- * **不是照 dsh 的 `ui-trajectory` 畫時間線**（AGENTS.md「不在這條範圍內的」）。
+ * 觀測那一半）怎麼把對話投成「一輪一組、依序一列一列」。UI/UX 的數值以 solid-glass 為準、Libraries.dev 只當元件多樣性與
+ * 交互模式的參考，**不是照 dsh 的 `ui-trajectory` 畫時間線**（AGENTS.md「不在這條範圍內的」）。
  *
  * ## 兩種模式
  *

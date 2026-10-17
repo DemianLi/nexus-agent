@@ -4,7 +4,7 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 
-import { readCascade, type Cascade } from './css-cascade';
+import { readCascade } from './css-cascade';
 
 /**
  * 元件只能用系統裡的值（#1141 第 2 刀；`.docs/web-ui-spec.md` §5、§11 第 12 條）：顏色、字級、圓角各有一份階梯，
@@ -19,9 +19,9 @@ import { readCascade, type Cascade } from './css-cascade';
  * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`、`bg-card`＋`shadow-material`＋`rounded-3xl`，或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
  * 6. **展開箭頭用 `Chevron`**（#1279）：同一個字串裡有 `transition-transform`＋`rotate-*`，或跟著 `data-state=open` 轉的 `rotate-*`，就是又手寫了一顆。
  * 7. **可展開列用 `RowTrigger`**（#1279）：同一個字串裡有 `hover:bg-chip-hover`＋`active:bg-chip-pressed`＋`w-full`＋`text-left`，就是又手寫了一列。
- * 8. **`ui/` 以外不寫 `focus-visible:ring-*`**（#1279）：`theme.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
+ * 8. **`ui/` 以外不寫 `focus-visible:ring-*`**（#1279）：`solid-glass.overrides.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
  *    再配上 `outline-none` 就是**完全看不到焦點**（#1279 之前有六處）。要改外框位置用 `focus-visible:-outline-offset-2` 之類，不要換成 ring。
- *    `ui/` 的 registry 原文不在這條：那裡的 ring 由 `theme.css` 統一處理。
+ *    `ui/` 的 registry 原文不在這條：那裡的 ring 由 `solid-glass.overrides.css` 統一處理。
  * 9. **對話泡泡用 `ChatBubble`**（#1280）：同一個字串裡有 `rounded-3xl`＋`px-4`＋`py-2.5`，就是又手寫了一個泡泡。
  * 10. **程式碼小框用 `MonoBlock`**（#1280）：同一個字串裡有 `bg-chip`＋`rounded-lg`＋`p-2`＋`font-mono`，就是又手寫了一塊。
  * 11. **`ui/` 以外不寫原生 `<textarea`**（#1280）：用 `ui/textarea` 的 `Textarea`（邊框、焦點、手機字級都在那裡）。
@@ -334,22 +334,6 @@ function scan(files: string[]): Violation[] {
   return found;
 }
 
-/**
- * `@theme` 疊出來的某個長度，要是寫死的 px。量具不解 `calc()`、`var()`（#1512：solid-glass 的圓角寫成 `calc(var(--radius) * 2.2)`），
- * 遇到就把生效值寫進錯誤，讓人知道要改成算出來再比，而不是看到 `NaN !== 24`。
- */
-function themePx(cascade: Cascade, property: string): number {
-  const value = cascade.value(['@theme'], property);
-  if (value === undefined) throw new Error(`@theme 裡沒有 ${property}`);
-  const px = /^(\d+(?:\.\d+)?)px$/.exec(value)?.[1];
-  if (px === undefined) {
-    throw new Error(
-      `@theme 的 ${property} 生效值是 '${value}'，不是寫死的 px：量具不解 calc()／var()，要先算出來再比`,
-    );
-  }
-  return Number(px);
-}
-
 const files = sourceFiles(SRC);
 const all = scan(files);
 const isAllowed = (v: Violation) => ALLOWED.some((a) => a.file === v.file && a.what === v.what);
@@ -379,21 +363,12 @@ describe('判準', () => {
   const rules = (text: string) => rulesBroken(text).map((b) => `${b.rule}:${b.what}`);
 
   test('`rounded-row` 有定義，且是卡片圓角 3xl 減內距 p-1（4）：讓列與卡片同心', () => {
+    // 3xl 是 SG 的 `calc(var(--radius) * 2.2)`（#1512），在元素上才解得出來；比的是算式：row 就是 3xl 的算式再減 4px。
     const cascade = readCascade();
-    expect(themePx(cascade, '--radius-3xl')).toBe(24);
-    expect(themePx(cascade, '--radius-row')).toBe(themePx(cascade, '--radius-3xl') - 4);
+    const threeXl = /^calc\((.+)\)$/.exec(cascade.value(['@theme'], '--radius-3xl') ?? '')?.[1];
+    expect(threeXl).toBe('var(--radius) * 2.2');
+    expect(cascade.value(['@theme'], '--radius-row')).toBe(`calc(${threeXl} - 4px)`);
     expect(rules('rounded-row rounded-3xl')).toEqual([]);
-  });
-
-  test('圓角不是寫死的 px（例如 `calc()`）時，錯誤直接說出生效值，不算出 NaN 讓人去猜', () => {
-    const cascade = readCascade(
-      '/v/index.css',
-      () => '@theme { --radius-3xl: calc(var(--radius) * 2.2); }',
-    );
-    expect(() => themePx(cascade, '--radius-3xl')).toThrow(
-      "@theme 的 --radius-3xl 生效值是 'calc(var(--radius) * 2.2)'，不是寫死的 px",
-    );
-    expect(() => themePx(cascade, '--radius-row')).toThrow('@theme 裡沒有 --radius-row');
   });
 
   test('原生色板與 white／black，連同 variant 前綴與透明度', () => {
@@ -540,7 +515,7 @@ describe('判準', () => {
     ).toBe(true);
   });
 
-  test('焦點那條不管 ui/ 的 registry 原文：那裡的 ring 由 theme.css 統一處理', () => {
+  test('焦點那條不管 ui/ 的 registry 原文：那裡的 ring 由 solid-glass.overrides.css 統一處理', () => {
     const registry = scan(files.filter((f) => relative(SRC, f).startsWith('components/ui/')));
     expect(registry.filter((v) => v.rule === '焦點')).toEqual([]);
     expect(

@@ -1,12 +1,14 @@
 @import 'tailwindcss';
 @import 'tw-animate-css';
 
-/* 字型全部打包進本地（完全內網）：介面 Google Sans Flex、等寬 Google Sans Code，中文都退 Noto Sans TC。 */
-@import '@fontsource-variable/google-sans-flex';
-@import '@fontsource-variable/google-sans-code';
+/* 字型全部打包進本地（完全內網）：介面 Geist、等寬 Geist Mono（只打包 latin，`styles/fonts.css`），中文都退 Noto Sans TC（#1468 Q6）。 */
+@import './styles/fonts.css';
 @import '@fontsource-variable/noto-sans-tc';
 
+/* 外觀是 solid-glass（#1468、#1512）：vendor 原檔 → 產生器解過門檻的顏色 → 本地修改（機制類，layer 外）→ nexus 獨有的非顏色 token。 */
+@import './vendor/solid-glass/solid-glass.css';
 @import './styles/tokens.generated.css';
+@import './styles/solid-glass.overrides.css';
 @import './styles/theme.css';
 @import './styles/motion.css';
 @import './styles/markdown.css';
@@ -51,32 +53,13 @@
     motion-fade-out var(--tw-animation-duration, 150ms) var(--ease-smooth-out);
 }
 
-/* 自己與子孫都算：`<html class="dark">` 上的元素本身也要吃到 dark variant。 */
-@custom-variant dark (&:is(.dark, .dark *));
-
 @theme inline {
   /*
-   * 圓角階梯重綁成 Libraries.dev 實際用的值，registry 的 class 不用改。
-   * md 8＝選單項目、lg 12＝選單與輸入、xl 14＝卡片內層 stage、2xl 16＝程式碼區塊、3xl 24＝卡片與 dialog；按鈕 rounded-full。
+   * 圓角階梯照 SG（#1468 Q8，#1512）：`--radius-sm`…`--radius-4xl` 都是 `solid-glass.css` 的 `calc(var(--radius) * n)`，這裡不重綁。
+   * 嵌在卡片（`rounded-3xl p-1`）裡的列：SG 的 3xl 減內距 4，同心。給 `RowTrigger` 與排隊清單的列用，不要寫 `rounded-[…]`。
+   * 照抄 SG 3xl 的算式（`design-system.test.ts` 比對兩者），SG 改了倍數這裡要跟著改。
    */
-  --radius-sm: 6px;
-  --radius-md: 8px;
-  --radius-lg: 12px;
-  --radius-xl: 14px;
-  --radius-2xl: 16px;
-  --radius-3xl: 24px;
-  /* 嵌在卡片（3xl＝24、內距 4）裡的列：24 減 4，同心。給 `RowTrigger` 與排隊清單的列用，不要寫 `rounded-[20px]`。 */
-  --radius-row: 20px;
-
-  --font-sans:
-    'Google Sans Flex Variable', 'Noto Sans TC Variable', -apple-system, BlinkMacSystemFont,
-    'PingFang TC', sans-serif;
-  /* 尾端的三個 emoji 字型（#979）：堆疊裡沒有字型涵蓋的符號（旗、☺、❤ 之類）原本要走系統回退，
-     每個新頁面第一次約 40ms，裸旗 U+1F3F3 每含它的一列還要約 1.6ms；明寫之後兩項都回到地板。
-     只放在最尾，所以前面字型涵蓋的字不受影響。--font-sans 補了沒有效果，沒有改。 */
-  --font-mono:
-    'Google Sans Code Variable', 'Noto Sans TC Variable', ui-monospace, SFMono-Regular, Menlo,
-    monospace, 'Apple Color Emoji', 'Segoe UI Emoji', 'Noto Color Emoji';
+  --radius-row: calc(var(--radius) * 2.2 - 4px);
 
   /* 字重只用 400／500，semibold 以上一律落在 500 */
   --font-weight-semibold: 500;

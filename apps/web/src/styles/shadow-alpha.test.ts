@@ -20,8 +20,21 @@ import { readCascade } from './css-cascade';
 
 const MAX_ALPHA = 0.06;
 
-/** 當作陰影顏色用的 token 與各自的透明度上限（亮色）。之後誰把它調深就紅。 */
-const ALPHA_TOKENS: Record<string, number> = {};
+/**
+ * 當作陰影顏色用的 token 與各自的透明度上限（亮色）。之後誰把它調深就紅。
+ *
+ * solid-glass 的投影（#1512，#1468 Q8「外觀照 SG」）：上限就是 SG 原檔的值，不是 {@link MAX_ALPHA}——SG 的玻璃靠較深的投影浮起來，
+ * 照 Q8 採用；護欄不拿掉，改成釘住現值。只列**投影**（shade、lift、contact、under）；rim、edge、inner 是畫在邊上的亮線與細邊，不是投影。
+ */
+const ALPHA_TOKENS: Record<string, number> = {
+  '--glass-shade': 0.28,
+  '--glass-lift': 0.14,
+  '--glass-contact': 0.06,
+  '--knob-shade': 0.3,
+  '--well-shade': 0.14,
+  '--popover-under': 0.16,
+  '--primary-under': 0.45,
+};
 
 /** 亮色時 `<html>` 只符合 `:root`。 */
 const LIGHT = [':root'];

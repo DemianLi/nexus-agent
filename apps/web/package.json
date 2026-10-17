@@ -14,8 +14,8 @@
     "tokens:gen": "node tokengen/generate.mjs > /dev/null"
   },
   "dependencies": {
-    "@fontsource-variable/google-sans-code": "5.3.0",
-    "@fontsource-variable/google-sans-flex": "5.3.1",
+    "@fontsource-variable/geist": "5.3.0",
+    "@fontsource-variable/geist-mono": "5.3.0",
     "@fontsource-variable/noto-sans-tc": "5.3.0",
     "@nexus/wire": "workspace:*",
     "@shadcn/react": "^0.3.1",
@@ -46,7 +46,6 @@
   },
   "devDependencies": {
     "@nexus/core": "workspace:*",
-    "@adobe/leonardo-contrast-colors": "1.1.0",
     "@tailwindcss/vite": "^4.1.16",
     "@testing-library/react": "^16.3.0",
     "@types/mdast": "^4.0.4",
