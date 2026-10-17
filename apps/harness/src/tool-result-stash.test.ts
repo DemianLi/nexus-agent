@@ -15,7 +15,18 @@
  * 拿到原文，後者拿到 `ENOENT`，而第一輪的訊息文字差不多。
  */
 
-import { chmod, mkdir, mkdtemp, readdir, stat, utimes, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  lstat,
+  lutimes,
+  mkdir,
+  mkdtemp,
+  readdir,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage, ToolMessage } from '@langchain/core/messages';
@@ -587,37 +598,69 @@ describe('啟動時清掉超過保留期的暫存', () => {
     return dir;
   }
 
-  it('過了保留期的清掉，沒過的留著；只碰 session-* 開頭的目錄', async () => {
+  /** 真的會話目錄名，由出貨的 {@link stashSessionDirName} 產生。 */
+  const OLD = stashSessionDirName('old');
+  const NEW = stashSessionDirName('new');
+
+  it('過了保留期的清掉，沒過的留著；只碰會話目錄', async () => {
     const dir = await root();
-    await session(dir, 'session-old', 40);
-    await session(dir, 'session-new', 5);
+    await session(dir, OLD, 40);
+    await session(dir, NEW, 5);
     await session(dir, 'notes', 400);
     expect(await cleanupToolResultStash(dir, 30)).toBe(1);
-    expect((await readdir(dir)).sort()).toEqual(['notes', 'session-new']);
+    expect((await readdir(dir)).sort()).toEqual(['notes', NEW].sort());
+  });
+
+  it('名字不是 session-<十六位雜湊> 的一律不碰，即使以 session- 開頭', async () => {
+    const dir = await root();
+    const hex = OLD.slice('session-'.length);
+    const foreign = [
+      'session-notes',
+      `session-${hex.slice(0, 12)}`,
+      'session-ABCDEF0123456789',
+      `${OLD}-backup`,
+      `x${OLD}`,
+    ];
+    for (const name of foreign) await session(dir, name, 400);
+    await session(dir, OLD, 400);
+    expect(await cleanupToolResultStash(dir, 30)).toBe(1);
+    expect((await readdir(dir)).sort()).toEqual([...foreign].sort());
+  });
+
+  it('名字對的符號連結不跟：連結與它指向的目錄都原封不動', async () => {
+    const dir = await root();
+    const target = await session(await root(), 'elsewhere', 400);
+    const link = join(dir, OLD);
+    await symlink(target, link);
+    const then = new Date(Date.now() - 400 * DAY);
+    await lutimes(link, then, then);
+    expect(await cleanupToolResultStash(dir, 30)).toBe(0);
+    expect((await lstat(link)).isSymbolicLink()).toBe(true);
+    expect(await readdir(target)).toEqual(['call_1_0.txt']);
   });
 
   it('cleanupPeriodDays 為 0 表示不清', async () => {
     const dir = await root();
-    await session(dir, 'session-old', 4000);
+    await session(dir, OLD, 4000);
     expect(await cleanupToolResultStash(dir, 0)).toBe(0);
-    expect(await readdir(dir)).toEqual(['session-old']);
+    expect(await readdir(dir)).toEqual([OLD]);
   });
 
   it('以會話裡最新的檔為準：續接後又寫了新檔的會話不會因為第一個檔很舊被清掉', async () => {
     const dir = await root();
-    const old = await session(dir, 'session-resumed', 90);
+    const old = await session(dir, OLD, 90);
     await writeFile(join(old, 'call_9_0.txt'), 'fresh');
     expect(await cleanupToolResultStash(dir, 30)).toBe(0);
-    expect(await readdir(dir)).toEqual(['session-resumed']);
+    expect(await readdir(dir)).toEqual([OLD]);
   });
 
   it('根別人改得動就一個檔都不碰，而且講一聲', async () => {
     const dir = await root();
-    await session(dir, 'session-old', 400);
+    await session(dir, OLD, 400);
     await chmod(dir, 0o777);
     const warnings: string[] = [];
     expect(await cleanupToolResultStash(dir, 30, { warn: (m) => warnings.push(m) })).toBe(0);
-    expect(await readdir(dir)).toEqual(['session-old']);
+    expect(await readdir(dir)).toEqual([OLD]);
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('群組或其他人可寫');
   });
@@ -630,8 +673,8 @@ describe('啟動時清掉超過保留期的暫存', () => {
   it('清得掉的照清、清不掉的記一筆不擋其餘', async () => {
     if (process.getuid?.() === 0) return;
     const dir = await root();
-    const locked = await session(dir, 'session-a-locked', 60);
-    await session(dir, 'session-b-old', 60);
+    const locked = await session(dir, stashSessionDirName('locked'), 60);
+    await session(dir, OLD, 60);
     // 目錄本身唯讀：裡面的檔刪不掉。
     await chmod(locked, 0o500);
     const warnings: string[] = [];
@@ -639,7 +682,7 @@ describe('啟動時清掉超過保留期的暫存', () => {
       const removed = await cleanupToolResultStash(dir, 30, { warn: (m) => warnings.push(m) });
       expect(removed).toBe(1);
       expect(warnings).toHaveLength(1);
-      expect(await readdir(dir)).toEqual(['session-a-locked']);
+      expect(await readdir(dir)).toEqual([stashSessionDirName('locked')]);
     } finally {
       await chmod(locked, 0o700);
     }
