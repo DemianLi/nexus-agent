@@ -283,3 +283,38 @@ body {
 [data-slot="command-item"] > svg.lucide-check:last-child {
   display: none;
 }
+
+/*
+ * 輸入框（SG 的 `Composer`）的焦點外框畫在外殼上（#1591；README 本地修改第 30 條）：vendor 的 textarea
+ * （`vendor/solid-glass/components/ui/composer.tsx`）自帶 `outline-none`、沒有邊框，外殼只有 `focus-within:border-ring/60`
+ * 而沒有邊框寬度，等於聚焦時什麼都看不到。跟第 15 條（輸入框群組）同一個做法：2px 字色、offset 2px，外框寫在 layer 外，
+ * offset 在 base layer。`guard/` 在 composer 頁量外殼聚焦後的外框與 `box-shadow`。不讓 Prettier 排版，理由同上。
+ */
+@layer base {
+  [data-slot='composer']:has(textarea:focus-visible) {
+    outline-offset: 2px;
+  }
+}
+
+/* prettier-ignore */
+[data-slot="composer"]:has(textarea:focus-visible) {
+  outline: 2px solid var(--ring);
+}
+
+/*
+ * 輸入框的主按鈕（送出／停止）在 1024 以下 44px（規格 §9，#1591；README 本地修改第 31 條）：vendor 給 `size="icon"`（32px），
+ * 按鈕緊跟在 textarea 後面（`composer.tsx` 的 `<textarea/><Button/>`），選擇器錨在這個相鄰關係上。「＋」是 nexus 自己畫的
+ * （`leading`），高度寫在 `components/composer.tsx` 的 class 上。textarea 一行是 32px（`py-1`＋`leading-6`），那一列又是
+ * `items-end`，按鈕變 44px 後單行的字會沉在按鈕下緣；上下 padding 各加到 10px，一行也是 44px、跟按鈕同一條中線。
+ * `guard/` 在 375 與 1280 寬各量一次（高度與中線）。
+ */
+/* prettier-ignore */
+@media (width < 64rem) {
+  [data-slot="composer"] textarea + [data-slot="button"] {
+    width: 2.75rem;
+    height: 2.75rem;
+  }
+  [data-slot="composer"] textarea {
+    padding-block: 0.625rem;
+  }
+}

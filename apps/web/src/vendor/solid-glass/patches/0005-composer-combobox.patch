@@ -1,0 +1,33 @@
+===================================================================
+--- a/components/ui/composer.tsx
++++ b/components/ui/composer.tsx
+@@ -33,6 +33,7 @@
+   running = false,
+   placeholder,
+   textareaProps,
++  textareaRef,
+   leading,
+   tags,
+   above,
+@@ -50,7 +51,12 @@
+   running?: boolean
+   placeholder?: string
+   /** Names and describes the input; other HTML attributes belong to the wrapper. */
+-  textareaProps?: Pick<React.ComponentProps<"textarea">, "id" | "aria-label" | "aria-labelledby" | "aria-describedby">
++  textareaProps?: Pick<
++    React.ComponentProps<"textarea">,
++    "id" | "aria-label" | "aria-labelledby" | "aria-describedby" | "aria-controls" | "aria-activedescendant"
++  >
++  /** nexus: the textarea itself, for focusing it from outside; shares the element with the ref kept here. */
++  textareaRef?: React.Ref<HTMLTextAreaElement | null>
+   leading?: React.ReactNode
+   tags?: React.ReactNode
+   /** Stands above the line of text: pictures going with the message. */
+@@ -63,6 +69,7 @@
+   stopLabel?: string
+ }) {
+   const textarea = React.useRef<HTMLTextAreaElement>(null)
++  React.useImperativeHandle<HTMLTextAreaElement | null, HTMLTextAreaElement | null>(textareaRef, () => textarea.current, [])
+   const ready = canSubmit ?? value.trim().length > 0
+   // While a turn runs the mark stops it — unless something has been typed,
+   // which is then queued behind the turn like any other message.

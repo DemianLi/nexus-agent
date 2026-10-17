@@ -1450,3 +1450,173 @@ describe('瀏覽器量 modal 浮層的版面與動效（#1583）', () => {
     }
   });
 });
+
+/**
+ * 輸入框（SG 的 `Composer`，#1591 驗收 D）。vendor 自己畫的 textarea、主按鈕掛不了屬性，開頁後補（同 modal 浮層）。
+ * 主按鈕停用時（閒著、草稿空）不量焦點與對比：停用的控制項不在 WCAG 的對比門檻裡，也聚焦不到。
+ */
+const COMPOSER_STATES = ['idle', 'draft', 'running', 'running-draft', 'menu'] as const;
+type ComposerState = (typeof COMPOSER_STATES)[number];
+const COMPOSER_MAIN_ENABLED: readonly ComposerState[] = ['draft', 'running', 'running-draft'];
+
+function composerMarks(state: ComposerState): Record<string, Record<string, string>> {
+  const main: Record<string, Record<string, string>> = COMPOSER_MAIN_ENABLED.includes(state)
+    ? {
+        '[data-slot="composer"] textarea + [data-slot="button"]': {
+          'data-guard-focus': 'composer-main',
+          // 外框是按鈕自己畫的：`collectFocus` 找最近的 outline-host，不掛的話會找到外殼。
+          'data-guard-outline-host': '',
+          // 送出與停止都是非文字的圖示：3:1（WCAG 1.4.11）。
+          'data-guard-text': 'composer-main',
+          'data-guard-min': '3',
+        },
+      }
+    : {};
+  return {
+    '[data-slot="composer"]': { 'data-guard-outline-host': '', 'data-guard-surface': 'composer' },
+    '[data-slot="composer"] textarea': { 'data-guard-focus': 'composer-input' },
+    '[data-slot="composer"] [aria-label="加入附件"]': {
+      'data-guard-focus': 'composer-add',
+      'data-guard-outline-host': '',
+    },
+    ...main,
+    ...(state === 'menu'
+      ? { '[data-slot="command-item"]': { 'data-guard-text': 'composer-menu-item' } }
+      : {}),
+  };
+}
+
+describe.each(
+  COMPOSER_STATES.flatMap((state) =>
+    (['light', 'dark'] as const).map((theme) => [state, theme] as const),
+  ),
+)('瀏覽器量輸入框（#1591）：%s、%s', (state, theme) => {
+  const key = `composer-${state}:${theme}`;
+  let page: Page;
+  let texts: TextSample[];
+  let focus: FocusSample[];
+
+  beforeAll(async () => {
+    page = await openOverlay(`composer-${state}`, theme, { marks: composerMarks(state) });
+    texts = await collectTexts(page);
+    focus = await collectFocus(page);
+  }, 60_000);
+
+  afterAll(async () => {
+    await page?.close();
+  });
+
+  test('鍵盤焦點：輸入框的外框畫在外殼上（本地修改第 30 條）、「＋」與主按鈕，都不帶 ring、2px 字色外框', () => {
+    const expected = [
+      'composer-add-0',
+      'composer-input-0',
+      ...(COMPOSER_MAIN_ENABLED.includes(state) ? ['composer-main-0'] : []),
+    ];
+    expect(focus.map((f) => f.name).sort()).toEqual(expected);
+    expectFocus(focus, key);
+  });
+
+  test('主按鈕的圖示（非文字 3:1）與選單的字過門檻', () => {
+    const required = [
+      ...(COMPOSER_MAIN_ENABLED.includes(state) ? ['composer-main'] : []),
+      ...(state === 'menu' ? ['composer-menu-item'] : []),
+    ];
+    if (required.length === 0) {
+      expect(texts.filter((t) => t.name.startsWith('composer'))).toEqual([]);
+      return;
+    }
+    expectTexts(
+      texts.filter((t) => t.name.startsWith('composer')),
+      required,
+      key,
+    );
+  });
+});
+
+describe.each(
+  MODES.filter((m) => m !== 'translucent').flatMap((mode) =>
+    (['light', 'dark'] as const).map((theme) => [mode, theme] as const),
+  ),
+)('瀏覽器量輸入框（#1591）：%s、%s', (mode, theme) => {
+  test('不透明的退路：輸入框的面不透明、沒有 blur', async () => {
+    const page = await openOverlay('composer-draft', theme, {
+      mode,
+      marks: composerMarks('draft'),
+    });
+    try {
+      const surfaces = await collectSurfaces(page);
+      report[`${mode}:composer:${theme}:surfaces`] = surfaces;
+      expect(surfaces.map((s) => s.name)).toEqual(['composer']);
+      expect(
+        surfaces
+          .filter((s) => parseColor(s.backgroundColor).alpha !== 1 || s.backdropFilter !== 'none')
+          .map((s) => `${s.name}：${s.backgroundColor}、backdrop-filter ${s.backdropFilter}`),
+      ).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe('瀏覽器量輸入框的版面（#1591）', () => {
+  test.each([
+    { width: 375, px: 44 },
+    { width: 1280, px: 32 },
+  ])(
+    '$width 寬：底列不溢出、主按鈕在框內；「＋」與主按鈕 $px px、單行的字跟它們置中（觸控高度，本地修改第 31 條）',
+    async ({ width, px }) => {
+      const page = await openOverlay('composer-running-draft', 'light', {
+        viewport: { width, height: 812 },
+        marks: composerMarks('running-draft'),
+      });
+      try {
+        const layout = await page.evaluate(() => {
+          const box = (el: Element | null) => {
+            if (el === null) throw new Error('量不到元素');
+            const r = el.getBoundingClientRect();
+            return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, height: r.height };
+          };
+          const composer = document.querySelector('[data-slot="composer"]');
+          const footer = document.querySelector('[data-slot="composer-footer"]');
+          const main = document.querySelector(
+            '[data-slot="composer"] textarea + [data-slot="button"]',
+          );
+          const add = document.querySelector('[data-slot="composer"] [aria-label="加入附件"]');
+          const textarea = document.querySelector('[data-slot="composer"] textarea');
+          return {
+            viewport: window.innerWidth,
+            composer: box(composer),
+            footer: box(footer),
+            footerOverflow: footer === null ? 0 : footer.scrollWidth - footer.clientWidth,
+            footerChildren: [...(footer?.querySelectorAll('button') ?? [])].map(box),
+            main: box(main),
+            add: box(add),
+            textarea: box(textarea),
+          };
+        });
+        report[`layout:composer:${width}`] = layout;
+        const { composer, footer, main } = layout;
+        expect(layout.footerOverflow).toBeLessThanOrEqual(0);
+        // 底列每顆按鈕都在畫面裡、不超出輸入框的左右（底列在框外，跟框同寬）。
+        expect(
+          layout.footerChildren.filter(
+            (b) => b.left < composer.left - 0.5 || b.right > composer.right + 0.5,
+          ),
+        ).toEqual([]);
+        expect(footer.right).toBeLessThanOrEqual(layout.viewport);
+        expect(main.left).toBeGreaterThanOrEqual(composer.left);
+        expect(main.right).toBeLessThanOrEqual(composer.right);
+        expect(main.top).toBeGreaterThanOrEqual(composer.top);
+        expect(main.bottom).toBeLessThanOrEqual(composer.bottom);
+        expect([layout.add.height, main.height]).toEqual([px, px]);
+        // 單行的草稿：字（textarea 的盒子）跟「＋」、主按鈕同高、同一條中線，不會沉在按鈕下緣。
+        const middle = (b: { top: number; bottom: number }) => (b.top + b.bottom) / 2;
+        expect(layout.textarea.height).toBe(px);
+        expect(Math.abs(middle(layout.textarea) - middle(main))).toBeLessThanOrEqual(0.5);
+        expect(Math.abs(middle(layout.textarea) - middle(layout.add))).toBeLessThanOrEqual(0.5);
+      } finally {
+        await page.close();
+      }
+    },
+  );
+});
