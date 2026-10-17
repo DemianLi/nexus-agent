@@ -1,0 +1,14 @@
+{
+  "upstream": "https://github.com/deeplethe/solid-glass",
+  "commit": "387c3c2dc2369bc9af19a5c55adc3bd90d529317",
+  "files": {
+    "solid-glass.css": {
+      "from": "src/solid-glass.css",
+      "sha256": "03bc1f32084d39f939039ec7a52d5b7c83b47a9c594f5f3d14826c95c1730cd4"
+    },
+    "LICENSE": {
+      "from": "LICENSE",
+      "sha256": "eb9d03950a82b3fa15b16bd05163f6691843be957e69ce8eb6f062913848be87"
+    }
+  }
+}

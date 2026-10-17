@@ -4,6 +4,8 @@ import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, test } from 'vitest';
 
+import { readCascade } from './css-cascade';
+
 /**
  * 元件只能用系統裡的值（#1141 第 2 刀；`.docs/web-ui-spec.md` §5、§11 第 12 條）：顏色、字級、圓角各有一份階梯，
  * 元件的 className 越過它就報錯。守的是**原始碼裡的字串字面值**（className、cva 的各段、`cn(...)` 的參數都是字串），
@@ -361,8 +363,9 @@ describe('判準', () => {
   const rules = (text: string) => rulesBroken(text).map((b) => `${b.rule}:${b.what}`);
 
   test('`rounded-row` 有定義，且是卡片圓角 3xl 減內距 p-1（4）：讓列與卡片同心', () => {
-    const css = readFileSync(join(SRC, 'index.css'), 'utf8');
-    const px = (name: string) => Number(new RegExp(`--radius-${name}:\\s*(\\d+)px`).exec(css)?.[1]);
+    const cascade = readCascade();
+    const px = (name: string) =>
+      Number(/^(\d+)px$/.exec(cascade.value(['@theme'], `--radius-${name}`) ?? '')?.[1]);
     expect(px('3xl')).toBe(24);
     expect(px('row')).toBe(px('3xl') - 4);
     expect(rules('rounded-row rounded-3xl')).toEqual([]);

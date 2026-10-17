@@ -1,15 +1,13 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
-
 import { describe, expect, it } from 'vitest';
 
-const css = readFileSync(new URL('./index.css', import.meta.url), 'utf8');
+import { readCascade } from './styles/css-cascade';
 
-/** `--font-mono:` 宣告的字型清單，一個家族一項、去掉引號。 */
+/** 實際生效的 `--font-mono`（`@theme` 疊出來的最後一條，`styles/css-cascade.ts`）的字型清單，一個家族一項、去掉引號。 */
 function monoStack(): string[] {
-  const match = /--font-mono:\s*([^;]+);/.exec(css);
-  if (match?.[1] === undefined) throw new Error('index.css 裡找不到 --font-mono');
-  return match[1].split(',').map((family) => family.trim().replace(/^'|'$/g, ''));
+  const value = readCascade().value(['@theme'], '--font-mono');
+  if (value === undefined) throw new Error('@theme 裡沒有 --font-mono');
+  return value.split(',').map((family) => family.trim().replace(/^'|'$/g, ''));
 }
 
 describe('--font-mono 的 emoji 字型（#979）', () => {

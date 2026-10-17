@@ -17,4 +17,8 @@ pnpm-lock.yaml
 references/
 
 # vendor 的上游原始碼保持上游的格式，同步時才 diff 得出本地修改（見 vendor/README.md）。
-vendor/
+# 只排除 repo 根目錄那個（Cordis）；寫成 `vendor/` 會連任何一層的 vendor 目錄都排除。
+/vendor/
+# web 的 solid-glass 只排除上游原樣的檔（見 apps/web/src/vendor/solid-glass/README.md）；同目錄的同步腳本、清單、測試照常檢查。
+apps/web/src/vendor/solid-glass/solid-glass.css
+apps/web/src/vendor/solid-glass/LICENSE
