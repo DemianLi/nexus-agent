@@ -237,22 +237,23 @@ export const RightSidebarPanel = memo(function RightSidebarPanel() {
         <SheetContent
           side="right"
           showCloseButton={false}
-          className="w-full gap-0 p-0 sm:max-w-none"
+          // 寬度：窄螢幕整面、`sm` 以上不設上限（交給外層）。前綴跟 SG 的 `data-[side=right]:w-3/4`、`data-[side=right]:sm:max-w-sm`
+          // 同一組，cn 才蓋得掉（#1583）。
+          className="gap-0 p-0 data-[side=right]:w-full data-[side=right]:sm:max-w-none"
           data-testid="right-sidebar"
           // 沒有 Trigger（受控開啟），焦點自己還（spec §8）：從觀測分頁定位時交給對話裡那一則；其餘交回從哪裡打開的那顆
           // （「查看全文」、「這一輪的過程」），不在了就交回標頭的開關鈕。Radix 的預設在沒有 Trigger 時什麼都不還，焦點掉到 body
-          // （實機量到，#1034）。
-          onCloseAutoFocus={(event) => {
-            event.preventDefault();
+          // （實機量到，#1034）。Base UI 用 Popup 的 `finalFocus`（#1583）：回傳 false 是「不要再搬」，焦點已經自己交了。
+          finalFocus={() => {
             const target = locateFocus.current;
             if (target !== null) {
               locateFocus.current = null;
               focusTranscriptItem(target);
-              return;
+              return false;
             }
             const back = returnFocus.current;
             returnFocus.current = null;
-            (back?.isConnected === true ? back : toggle.current)?.focus();
+            return (back?.isConnected === true ? back : toggle.current) ?? false;
           }}
         >
           <SheetTitle className="sr-only">右側欄</SheetTitle>

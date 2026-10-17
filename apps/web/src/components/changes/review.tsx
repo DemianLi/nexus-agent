@@ -163,18 +163,20 @@ function FilePicker({
   if (file === undefined) return null;
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          className="max-w-full min-w-0 justify-between font-mono text-ui"
-          aria-label={`選擇要看的檔案，現在是 ${file.display}`}
-          data-testid="review-file"
-        >
-          <PathLabel display={file.display} />
-          <ChevronsUpDown className="opacity-60" />
-        </Button>
+      <PopoverTrigger
+        render={
+          <Button
+            type="button"
+            variant="outline"
+            size="sm"
+            className="max-w-full min-w-0 justify-between font-mono text-ui"
+            aria-label={`選擇要看的檔案，現在是 ${file.display}`}
+            data-testid="review-file"
+          />
+        }
+      >
+        <PathLabel display={file.display} />
+        <ChevronsUpDown className="opacity-60" />
       </PopoverTrigger>
       <PopoverContent align="start" className="w-[min(92vw,32rem)] p-0">
         <Command>

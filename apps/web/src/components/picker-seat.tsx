@@ -37,6 +37,9 @@ export const PICKER_SEARCH_THRESHOLD = 6;
  *
  * - **窄螢幕只剩圖示**（`< sm`）：底列同排還有加入鈕、送出提示、用量表與送出鈕，擠不下文字；按鈕的**無障礙名稱**照樣
  *   含目前的值（`accessibleName`），圖示旁的字只是給看得到的人。tooltip 寫同一句（hover 才有，手機靠點開浮層）。
+ * - **tooltip 不能帶名稱裡沒有的資訊**：Base UI 的 tooltip 只是視覺，不給 `role="tooltip"`、也不掛 `aria-describedby`
+ *   （`docs/react/components/tooltip.md` 的 Accessibility 段），報讀器聽不到它。`tip` 寫的每一段資訊都要已經在
+ *   `accessibleName` 裡（#1583 驗收 D，PM 決定 issuecomment-6232918108）。
  * - **焦點**：選了之後交回輸入框（`onCloseFocus`），不留在已經關掉的按鈕上。
  * - **受控**：`open` 由呼叫端持有，`/model` 才打得開它。
  */
@@ -77,21 +80,24 @@ export function PickerSeat({
   const rows = groups.reduce((sum, group) => sum + group.items.length, 0);
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
-      <Tooltip open={open ? false : undefined}>
-        <TooltipTrigger asChild>
-          <PopoverTrigger
-            aria-label={accessibleName}
-            data-testid={testId}
-            data-warning={warning}
-            className={`hover:bg-chip-hover active:bg-chip-pressed flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-full px-2 text-ui transition-colors duration-(--duration-quick) lg:h-9 lg:min-w-9 ${warning ? 'text-warning' : 'text-muted-foreground'}`}
-          >
-            <span aria-hidden className="flex size-4 items-center justify-center">
-              {icon}
-            </span>
-            <span aria-hidden className="hidden max-w-40 truncate sm:inline">
-              {label}
-            </span>
-          </PopoverTrigger>
+      {/* 清單開著時不出 tooltip（Base UI 的 Root 用 `disabled`，#1583）。 */}
+      <Tooltip disabled={open}>
+        <TooltipTrigger
+          render={
+            <PopoverTrigger
+              aria-label={accessibleName}
+              data-testid={testId}
+              data-warning={warning}
+              className={`hover:bg-chip-hover active:bg-chip-pressed flex h-11 min-w-11 shrink-0 items-center justify-center gap-1.5 rounded-full px-2 text-ui transition-colors duration-(--duration-quick) lg:h-9 lg:min-w-9 ${warning ? 'text-warning' : 'text-muted-foreground'}`}
+            />
+          }
+        >
+          <span aria-hidden className="flex size-4 items-center justify-center">
+            {icon}
+          </span>
+          <span aria-hidden className="hidden max-w-40 truncate sm:inline">
+            {label}
+          </span>
         </TooltipTrigger>
         <TooltipContent>{tip}</TooltipContent>
       </Tooltip>
@@ -100,11 +106,8 @@ export function PickerSeat({
         align="start"
         aria-label={popoverLabel}
         className="w-72 max-w-[calc(100vw-2rem)] p-0"
-        onCloseAutoFocus={(event) => {
-          // 交回輸入框，不留在剛關掉的按鈕上。
-          event.preventDefault();
-          document.getElementById('prompt')?.focus();
-        }}
+        // 交回輸入框，不留在剛關掉的按鈕上。
+        finalFocus={() => document.getElementById('prompt') ?? false}
       >
         <Command>
           {rows > PICKER_SEARCH_THRESHOLD && <CommandInput placeholder={searchPlaceholder} />}

@@ -58,11 +58,9 @@ export function FeedbackDialog({
         showCloseButton={false}
         // 沒有另外的說明文字：標題與欄位的名字已經講完了。
         aria-describedby={undefined}
-        className="max-w-md"
-        onOpenAutoFocus={(event) => {
-          event.preventDefault();
-          detailRef.current?.focus();
-        }}
+        // 寬度照 develop 實際畫出來的：窄螢幕 28rem、640 以上 32rem。前綴跟 SG 的 `sm:max-w-sm` 同一組，cn 才蓋得掉（#1583）。
+        className="max-w-md sm:max-w-lg"
+        initialFocus={detailRef}
       >
         <DialogHeader>
           <DialogTitle>{FEEDBACK_COPY.title}</DialogTitle>

@@ -711,21 +711,23 @@ function ConversationView({
               !isPlanReview(pending.questions) && (
                 <TooltipProvider>
                   <Tooltip>
-                    <TooltipTrigger asChild>
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="icon"
-                        className="size-11 shrink-0 rounded-full lg:size-8"
-                        aria-label={STOP_QUESTIONS_LABEL}
-                        disabled={!conversation.connected}
-                        onClick={() => {
-                          void conversation.cancel();
-                          toast('已停止這一輪', { description: STOPPED_QUESTION_TEXT });
-                        }}
-                      >
-                        <X />
-                      </Button>
+                    <TooltipTrigger
+                      render={
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          className="size-11 shrink-0 rounded-full lg:size-8"
+                          aria-label={STOP_QUESTIONS_LABEL}
+                          disabled={!conversation.connected}
+                          onClick={() => {
+                            void conversation.cancel();
+                            toast('已停止這一輪', { description: STOPPED_QUESTION_TEXT });
+                          }}
+                        />
+                      }
+                    >
+                      <X />
                     </TooltipTrigger>
                     <TooltipContent>{STOP_QUESTIONS_LABEL}</TooltipContent>
                   </Tooltip>

@@ -8,6 +8,7 @@ import type {
 } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { useState } from 'react';
+import type { ReactNode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Composer } from '@/components/composer';
@@ -48,6 +49,7 @@ function Harness({
   withAttachment = false,
   fileReferences,
   sessionReferences,
+  seats,
 }: {
   initial?: string;
   canSend?: boolean;
@@ -59,6 +61,7 @@ function Harness({
   withAttachment?: boolean;
   fileReferences?: (query: string, signal: AbortSignal) => Promise<FileReferenceListOutcome>;
   sessionReferences?: (query: string, signal: AbortSignal) => Promise<SessionReferenceListOutcome>;
+  seats?: ReactNode;
 }) {
   const [draft, setDraft] = useState(initial);
   return (
@@ -91,6 +94,7 @@ function Harness({
         onStop={() => {}}
         {...(fileReferences === undefined ? {} : { fileReferences })}
         {...(sessionReferences === undefined ? {} : { sessionReferences })}
+        {...(seats === undefined ? {} : { seats })}
       />
     </main>
   );
@@ -192,6 +196,66 @@ describe('送出', () => {
     key('Enter');
     expect(onSubmit).not.toHaveBeenCalled();
     expect(screen.getByRole('button', { name: '送出' }).hasAttribute('disabled')).toBe(true);
+  });
+});
+
+describe('選單錨在輸入框上（README 本地修改第 19 條，#1583）', () => {
+  // vendor 的 PopoverContent 原本不把 `anchor` 傳給 Positioner（patch `0001-popover-anchor`）：拿掉那條 patch，composer 沒有
+  // PopoverTrigger，浮層就沒有錨點，`--anchor-width` 不會是輸入框的寬度。
+  it('Positioner 量的是輸入框那一格：`--anchor-width` 等於它的寬', async () => {
+    render(<Harness />);
+    const anchor = document.querySelector<HTMLElement>('[data-slot="popover-anchor"]');
+    expect(anchor).not.toBeNull();
+    vi.spyOn(anchor!, 'getBoundingClientRect').mockReturnValue(
+      DOMRect.fromRect({ x: 40, y: 600, width: 480, height: 120 }),
+    );
+    type('/');
+    await waitFor(() => {
+      const positioner = screen
+        .getByRole('listbox')
+        .closest<HTMLElement>('[style*="--anchor-width"]');
+      expect(positioner?.style.getPropertyValue('--anchor-width')).toBe('480px');
+    });
+    // 寬度那一格用的就是這個變數。
+    expect(screen.getByLabelText('命令選單').className).toContain('w-(--anchor-width)');
+  });
+
+  it('焦點一直留在輸入框：打開不搬、Esc 關掉也不搬（Base UI 的 initialFocus／finalFocus 都是 false）', async () => {
+    render(<Harness />);
+    act(() => {
+      input().focus();
+    });
+    type('/');
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeTruthy());
+    // Base UI 搬焦點排在 rAF／timeout 之後，多等幾格再看。
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+    expect(document.activeElement).toBe(input());
+    key('Escape');
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
+    await act(() => new Promise((resolve) => setTimeout(resolve, 100)));
+    expect(document.activeElement).toBe(input());
+  });
+
+  it('點輸入框本身不算外面；點底列另一顆浮層的按鈕算外面，選單收起（#528：兩個浮層不疊在同一處）', async () => {
+    render(<Harness seats={<button data-slot="popover-trigger">用量</button>} />);
+    type('/');
+    await waitFor(() => expect(screen.getByRole('listbox')).toBeTruthy());
+    const press = (target: Element) => {
+      fireEvent.pointerDown(target, { pointerType: 'mouse', button: 0 });
+      fireEvent.mouseDown(target, { button: 0 });
+      fireEvent.pointerUp(target, { pointerType: 'mouse', button: 0 });
+      fireEvent.mouseUp(target, { button: 0 });
+      fireEvent.click(target, { button: 0 });
+    };
+    // 按下的那一刻就要還開著：不取消的話選單先收起、再被輸入框的 click 打開，會閃一下（Radix 時代 `onInteractOutside` 擋的就是這個）。
+    fireEvent.pointerDown(input(), { pointerType: 'mouse', button: 0 });
+    fireEvent.mouseDown(input(), { button: 0 });
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    press(input());
+    await act(async () => {});
+    expect(screen.getByRole('listbox')).toBeTruthy();
+    press(screen.getByRole('button', { name: '用量' }));
+    await waitFor(() => expect(screen.queryByRole('listbox')).toBeNull());
   });
 });
 

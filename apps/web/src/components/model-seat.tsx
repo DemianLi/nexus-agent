@@ -66,7 +66,7 @@ export function ModelSeat({
       testId="model-seat"
       icon={<Cpu className="size-4" />}
       label={text}
-      accessibleName={`模型：${text}，點開切換`}
+      accessibleName={`模型：${text}，從下一步生效，點開切換`}
       tip={`模型：${text}（從下一步生效）`}
       popoverLabel="選模型"
       searchPlaceholder="搜尋模型…"

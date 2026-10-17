@@ -299,6 +299,39 @@ if (longDurations.length > 0 && !durationCap)
     `第 3 條：reduced-motion 沒有壓住 animation-duration-*（${longDurations.map((r) => r.selector).join('、')}）`,
   );
 
+// 第 3 條的延伸：用 transition 滑入的面（#1583：vendor 的 sheet 在 `data-starting-style`／`data-ending-style` 設位移，不走 `--animate-in`）。
+// 產物裡有這種位移，reduced-motion 裡就要有針對那些面的規則：拿掉位移（`translate: none`）、transition 時長 ≤ 150ms。
+// 位移寫在 Tailwind 的 class 上，量具對不到是哪個元素，所以面列在這裡；新的滑入元件出現時，同一個 PR 補進來。
+// 手機側欄的抽屜也是 sheet，但 `data-slot` 被 `ui/sidebar.tsx` 蓋成 `sidebar`，用 `data-mobile` 認。
+const SLIDING_SURFACES = [
+  '[data-slot=sheet-content]',
+  '[data-slot=sidebar][data-mobile=true]',
+  '[data-slot=sheet-overlay]',
+];
+const slides = rules.filter(
+  (r) =>
+    !REDUCED_MOTION.test(r.media) &&
+    /data-(starting|ending)-style/.test(r.selector) &&
+    [...declarations(r.body).keys()].some((k) =>
+      /^(--tw-translate-[xy]|translate|transform)$/.test(k),
+    ),
+);
+if (slides.length > 0)
+  for (const surface of SLIDING_SURFACES) {
+    const mine = reduced.filter((r) => {
+      const subject = simples(compounds(r.selector).at(-1));
+      return simples(surface).every((simple) => subject.includes(simple));
+    });
+    if (!mine.some((r) => declarations(r.body).get('translate') === 'none'))
+      failures.push(`第 3 條：reduced-motion 下 ${surface} 沒有拿掉位移（translate: none）`);
+    if (
+      !mine.some(
+        (r) => seconds(expand(declarations(r.body).get('transition-duration') ?? '1s')) <= 0.15,
+      )
+    )
+      failures.push(`第 3 條：reduced-motion 下 ${surface} 的 transition 時長沒有壓到 150ms 以下`);
+  }
+
 // 引用到的 motion-* keyframes 要存在
 for (const rule of rules)
   for (const [, value] of declarations(rule.body))
