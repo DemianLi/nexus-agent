@@ -21,15 +21,22 @@
  *   - 目錄 `0700`、檔案 `0600`——`credentials-local` 的 `writeFileAtomic(…, { mode: 0o600, dirMode: 0o700 })`；
  *   - 兩個行程同時第一次啟動不能互相蓋掉：dsh 在跨行程寫入鎖裡跑 `modifyRecord`；這裡只有一筆記錄，
  *     改用「先寫暫存檔、再 `link` 到正式路徑」——`link` 在目標已存在時失敗，所以先寫的贏，後到的讀
- *     先寫的那一把，而且讀的一方永遠讀不到寫一半的檔；
+ *     先寫的那一把，而且讀的一方永遠讀不到寫一半的檔（`atomic-file.ts` 的 `publishNewFile`，照 dsh 會話物化
+ *     `session-persistence-jsonl/src/index.ts:1296-1321`）；
  *   - 每次啟動只讀一次，之後在記憶體裡同步驗證；刪掉這個檔再重啟就撤銷全部既有的會話。
+ * - **多做了 fsync（理由 2，#1527 Q1 (a)，demian 2026-10-17 拍板）。** dsh 受管憑證走 `util/atomic-write` 的
+ *   `writeFileAtomic`，**不做 fsync**（`src/index.ts:75`「Crash durability (fsync) is out of scope」），只留了 TODO
+ *   要補檔案與父目錄的 fsync（`:85-86`）。這裡照那條 TODO 的方向補上：暫存檔 fsync 之後才 `link`，`link` 之後
+ *   fsync 目錄。不補的話，第一次啟動後斷電可能在正式路徑留下 0 位元組或半份的檔，上面「認不得就不覆寫」會讓
+ *   serve 從此起不來，只能刪檔、所有瀏覽器會話一起失效。代價是第一次建立多兩次 fsync，之後每次啟動只讀不寫。
  */
 
 import { randomBytes } from 'node:crypto';
-import { link, mkdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, stat } from 'node:fs/promises';
 import { join } from 'node:path';
 
-import { assertOwnerOnlyMode, PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './owner-only.js';
+import { publishNewFile } from './atomic-file.js';
+import { assertOwnerOnlyMode, PRIVATE_DIR_MODE } from './owner-only.js';
 
 /** 密鑰檔在 harness home 底下的名字。 */
 export const BROWSER_SESSION_SECRET_FILE = 'browser-session.json';
@@ -37,7 +44,6 @@ export const BROWSER_SESSION_SECRET_FILE = 'browser-session.json';
 const SECRET_BYTES = 32;
 const RECORD_VERSION = 1;
 const DIR_MODE = PRIVATE_DIR_MODE;
-const FILE_MODE = PRIVATE_FILE_MODE;
 const BASE64URL_PATTERN = /^[A-Za-z0-9_-]*$/;
 
 function encodeBase64Url(value: Uint8Array): string {
@@ -134,15 +140,11 @@ export async function loadOrCreateHomeSecret(home: string, role: HomeSecretRole)
 
   await mkdir(home, { recursive: true, mode: DIR_MODE });
   const text = `${JSON.stringify({ version: RECORD_VERSION, secret: encodeBase64Url(randomBytes(SECRET_BYTES)) })}\n`;
-  const staging = join(home, `.${role.file}.${process.pid}.${randomBytes(6).toString('hex')}.tmp`);
-  await writeFile(staging, text, { mode: FILE_MODE, flag: 'wx' });
   try {
-    await link(staging, file);
+    await publishNewFile(file, text);
   } catch (error) {
     // 別的行程先建好了：讀它那一把。其他失敗照拋。
     if ((error as NodeJS.ErrnoException | null)?.code !== 'EEXIST') throw error;
-  } finally {
-    await rm(staging, { force: true });
   }
   const created = await readSecretFile(file, role);
   if (created === undefined) {
