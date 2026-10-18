@@ -334,6 +334,10 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
   );
 
   // 剛好超過上限一層，跟上面「剛好 600」那一格湊成一對邊界。日誌那一關拒收這一則（601 層），state 照樣收下。
+  // 更深的（約 2000 層起）輪不到存檔點：LangGraph 在圖裡走節點回傳值的 `_deserializeCommandSendObjectGraph`
+  // （`@langchain/langgraph` 的 `dist/constants.js`，遞迴）先爆 `Maximum call stack size exceeded`，碼是 UNKNOWN，
+  // 見 [#1668](https://github.com/DemianLi/nexus-agent/issues/1668)。
+  // 這一格的期望值依賴日誌那一關被拒時錯被吞掉；#1665 改成大聲失敗之後要重定。
   it('事件 601 層（存檔點剛好超過上限一層）：那一輪拋 checkpoint_depth_exceeded，下一輪照常跑，模型收到的是被拒之前的歷史', async () => {
     const { upstream, start, logFile } = await rig({ deep: { v: mixed(AT_LOG_CAP + 1) } });
     const server = await start();
