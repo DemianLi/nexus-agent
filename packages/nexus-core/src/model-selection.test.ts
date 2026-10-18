@@ -5,7 +5,7 @@
  */
 
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { fromLoggedMessage } from './logged-message.js';
 import { messageSourceOf } from './message-source.js';
@@ -166,6 +166,24 @@ describe('換模型通知', () => {
     });
     const message = logged[0]?.type === 'user/message' ? logged[0].data.message : undefined;
     expect(messageSourceOf(fromLoggedMessage(message!))).toMatchObject({ to: 'b' });
+  });
+
+  /**
+   * #1665：通知進模型歷史，寫不進去就是這一步失敗（照 dsh `agent.ts:427-436`），不是照樣送出。通知的內容只有模型名，日誌那一關
+   * 拒不了它的值，用 spy 造拒收。
+   */
+  it('通知寫不進去：原錯往外拋，不交出通知', () => {
+    const { subject, log } = controller();
+    started(log, { model: 'a' });
+    subject.select({ model: 'b' });
+    const boom = new Error('寫不進去');
+    const real = log.append.bind(log);
+    vi.spyOn(log, 'append').mockImplementation(((type: never, data: never, options: never) => {
+      if (type === 'user/message') throw boom;
+      return real(type, data, options);
+    }) as typeof log.append);
+    expect(() => subject.noticeFor(log)).toThrow(boom);
+    expect(log.events.map((event) => event.type)).not.toContain('user/message');
   });
 
   it('只換強度不附', () => {

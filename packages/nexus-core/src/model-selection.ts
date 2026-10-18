@@ -206,14 +206,11 @@ export class ModelSelectionController {
         to: route.model,
       }),
     });
-    try {
-      log.append('user/message', {
-        message: toLoggedMessage(message),
-        source: { kind: 'plugin', plugin: MODEL_SELECTION_NOTICE_KIND },
-      });
-    } catch {
-      // 記不進去通知照樣送出（同重複提醒）。
-    }
+    // 記不進去原錯往外拋，這一步失敗（#1665）：通知進模型歷史，吞掉的話 state 有、日誌沒有。
+    log.append('user/message', {
+      message: toLoggedMessage(message),
+      source: { kind: 'plugin', plugin: MODEL_SELECTION_NOTICE_KIND },
+    });
     return [message];
   }
 }

@@ -406,7 +406,11 @@ function pendingReminders(
  * 給了 `sessions` 就把每一則提醒記成一顆 `user/message`，寫進這次呼叫所屬的那一份——模型看得到，
  * 推模型歷史的一側就得讀得到。照 dsh 的 `repeat-tool-reminder`（`agent/pre-step` 注入一則
  * `source: {kind: 'plugin'}` 的 user 訊息）。身分從 `runtime.configurable` 現算，同 `model-usage.ts`，
- * 所以共用一份實例照舊成立。記不進去就算了：提醒照樣送出。
+ * 所以共用一份實例照舊成立。
+ *
+ * **記不進去，這一步失敗**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）：提醒進模型歷史，照 dsh 不吞——
+ * dsh 把 `agent/pre-step` 交回的訊息在步驟裡直接 append（`packages/core/agent-loop/src/agent.ts:427-436`，`687f282e`），被拒就是那一步拋。吞掉的話提醒照樣進 state、日誌上沒有，續接後模型看到的
+ * 歷史跟之前不同。`beforeModel` 拋出去，節點失敗，state 不收它，兩邊一致。
  *
  * @param settings - 已經 {@link resolveRepeatReminderSettings} 驗過的設定。
  * @param sessions - 註冊表的 `sessions` 通道。**省略就不記**——單元測試走這條；產品組裝由
@@ -449,7 +453,7 @@ export function createRepeatReminder(
   }) as unknown as AgentMiddleware;
 }
 
-/** 把提醒記成 `user/message`。沒接會話、認不出屬於哪一份、或寫不進去，都不記。 */
+/** 把提醒記成 `user/message`。沒接會話、認不出屬於哪一份，都不記；寫不進去原錯往外拋（#1665）。 */
 function recordReminders(
   sessions: { forCall(config: unknown): SessionLookup } | undefined,
   configurable: unknown,
@@ -459,14 +463,11 @@ function recordReminders(
   const found = sessions.forCall({ configurable });
   if (found.kind !== 'ok') return;
   for (const message of messages) {
-    try {
-      found.log.append('user/message', {
-        message: toLoggedMessage(message),
-        source: { kind: 'plugin', plugin: REPEAT_REMINDER_MIDDLEWARE_NAME },
-      });
-    } catch {
-      // 見上面：提醒照樣送出。
-    }
+    // 寫不進去原錯往外拋，見上面。
+    found.log.append('user/message', {
+      message: toLoggedMessage(message),
+      source: { kind: 'plugin', plugin: REPEAT_REMINDER_MIDDLEWARE_NAME },
+    });
   }
 }
 
@@ -553,20 +554,19 @@ export default repeatReminderPlugin;
  */
 export type StepNoticeSource = (log: SessionLog) => readonly HumanMessage[];
 
-/** 問通知來源這一步有沒有東西要附；不是 root、接不上日誌、來源拋錯都是沒有（通知壞了不能扳倒模型呼叫）。 */
+/**
+ * 問通知來源這一步有沒有東西要附；不是 root、接不上日誌都是沒有。**來源拋的錯原樣往外拋**（#1665）：來源自己寫日誌，
+ * 寫不進去就是這一步失敗，同提醒那一側（{@link recordReminders}）。
+ */
 function stepNoticesFor(
   notices: StepNoticeSource | undefined,
   sessions: { forCall(config: unknown): SessionLookup } | undefined,
   configurable: unknown,
 ): readonly HumanMessage[] {
   if (notices === undefined || sessions === undefined) return [];
-  try {
-    const found = sessions.forCall({ configurable });
-    if (found.kind !== 'ok' || found.address.kind !== 'root') return [];
-    return notices(found.log);
-  } catch {
-    return [];
-  }
+  const found = sessions.forCall({ configurable });
+  if (found.kind !== 'ok' || found.address.kind !== 'root') return [];
+  return notices(found.log);
 }
 
 /** 重複提醒被關掉時，通知自己掛的那一顆（付一個 super-step）。名字另取，不冒充提醒。 */

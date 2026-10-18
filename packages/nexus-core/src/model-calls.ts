@@ -68,11 +68,16 @@
  * 拋錯是 `error`、使用者按了停止是 `aborted`，讓「這次燒了多少不知道」讀得出來。子代理那一層被中止時回的空訊息也不記——它是 {@link ./turn-cancel.ts} 合成來
  * 讓子代理的圖收尾的，不是模型的回覆；dsh 那側被中止、沒有看得見內容的那一步沒有 `assistant/message`。
  *
- * ## 記不進去不能扳倒模型呼叫
+ * ## 起訖記不進去不扳倒模型呼叫；回覆記不進去，這次呼叫失敗
  *
- * 同 {@link ./model-usage.ts}：`forCall` 的非 `ok` 與 `append` 自己拋，一律吃掉。**開頭那顆
- * 沒記成，結尾那顆也不記**——半對的事件比沒有更糟，不變量會把它讀成寫錯了。回覆那顆吞得起，是因為
- * 會讓它拋的那條路（`undefined` 欄位）已經在 {@link ./logged-message.ts} 從源頭拿掉了。
+ * 起訖同 {@link ./model-usage.ts}：`forCall` 的非 `ok` 與 `append` 自己拋，一律吃掉。**開頭那顆
+ * 沒記成，結尾那顆也不記**——半對的事件比沒有更糟，不變量會把它讀成寫錯了。（起訖照不照 dsh 另議，#1702。）
+ *
+ * **回覆那顆不吞**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)），照 dsh：`assistant/message` 在
+ * `live.settle()` 裡寫（`packages/core/agent-loop/src/agent.ts:537-546`，`687f282e`），寫不進去就 abandon、原錯重拋
+ * （`assistant-stream.ts:83-88`），不交給重試，這一輪失敗。會讓它拋的是日誌那一關拒收（#1526 的有損值、#1661 的深度上限）。
+ * 吞掉的話，這則回覆照樣進 graph state、日誌上卻沒有：記憶體與日誌分岔，續接後模型看到的歷史跟之前不同。往外拋則模型
+ * 節點失敗，state 不收它，兩邊一致。重試只看回報的碼（{@link ./stream-retry.ts}），這個錯沒有回報碼，所以不會重打，同 dsh。
  *
  * @module
  */
@@ -109,19 +114,14 @@ function tryAppendEnd(log: SessionLog, modelCall: number, outcome: ModelCallOutc
   }
 }
 
-/** 記下這次呼叫回來的那一則。不是回覆的（`Command`、合成的空訊息）不記；記不進去就算了。 */
-function tryRecordReply(log: SessionLog, response: unknown, modelCall: number): void {
+/**
+ * 記下這次呼叫回來的那一則。不是回覆的（`Command`、合成的空訊息）不記。**記不進去原錯往外拋**，見檔頭。
+ */
+function recordReply(log: SessionLog, response: unknown, modelCall: number): void {
   if (!AIMessage.isInstance(response) || isSyntheticStopReply(response)) return;
-  try {
-    log.append(
-      'assistant/message',
-      withModelCall({ message: toLoggedMessage(response) }, modelCall),
-    );
-    // 這一次有正常回覆了：之後 pump 補記的被切斷半段不會再掛到它底下（`lastModelCall`）。
-    noteModelCallReplied(log, modelCall);
-  } catch {
-    // 見檔頭「記不進去不能扳倒模型呼叫」。
-  }
+  log.append('assistant/message', withModelCall({ message: toLoggedMessage(response) }, modelCall));
+  // 這一次有正常回覆了：之後 pump 補記的被切斷半段不會再掛到它底下（`lastModelCall`）。
+  noteModelCallReplied(log, modelCall);
 }
 
 /**
@@ -152,7 +152,8 @@ export function createModelCallRecorder(sessions: {
         const response = await runInModelCall(log, modelCall, () => handler(request));
         // 子代理被中止時回的是合成的空收尾，不是拋錯：它沒有回覆可記，這次呼叫算被中止。
         if (AIMessage.isInstance(response) && isSyntheticStopReply(response)) outcome = 'aborted';
-        tryRecordReply(log, response, modelCall);
+        // 記不進去就從這裡拋，下面的 `catch` 把這次呼叫記成 `error`（#1665）。
+        recordReply(log, response, modelCall);
         return response;
       } catch (error) {
         outcome = modelCallAborted(request) ? 'aborted' : 'error';
