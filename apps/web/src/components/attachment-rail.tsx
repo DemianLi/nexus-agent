@@ -4,7 +4,7 @@
  * 一排**在列內橫向捲動**：附件再多也不撐開頁面（375 寬量過），所以外層一定要 `min-w-0`。移除鈕滑鼠移上去、鍵盤聚焦才出現；
  * 沒有滑鼠的裝置（`hover: none`）一直看得到，不然手機上移不掉。點圖的縮圖開原圖（dialog），焦點會還給縮圖。
  *
- * 外觀是 shadcn `attachment`；這裡只決定放什麼、怎麼互動。
+ * 外觀是 solid-glass 的 `attachment`（#1638 PR C，`components/ui/attachment.tsx` 轉出 vendor 版）；這裡只決定放什麼、怎麼互動。
  */
 
 import { FileText, X } from 'lucide-react';
@@ -29,7 +29,8 @@ import type { UploadStates, UploadView } from '@/lib/upload-state';
 /**
  * 上傳中的進度條（#733）。`percent` 沒有（瀏覽器不知道總量）就畫不確定長度：整條淡色，不猜百分比。**不加循環動畫**：
  * 動效只能從 `styles/motion.css` 的清單裡挑，清單外的 infinite 動畫過不了 `check-built-css`；
- * 「還在動」由標題的 `text-shimmer`（shadcn `attachment` 的 uploading 狀態，有 reduced-motion 停止規則）表達。
+ * 「還在動」由標題的 `shimmer`（vendor `attachment` 的 uploading 狀態用 shadcn 的 `shimmer` utility，reduced-motion 停止規則寫在
+ * utility 裡；亮色的亮面由覆寫檔換成次要字色，README 本地修改第 48 條）表達。
  */
 function UploadBar({ view, name }: { readonly view: UploadView; readonly name: string }) {
   const indeterminate = view.percent === undefined;

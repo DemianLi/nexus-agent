@@ -425,3 +425,50 @@ body {
     --scroll-fade-b: 0px;
   }
 }
+
+/*
+ * 問答選項的焦點外框畫在選項上（#1638 PR C，卡上驗收 D；README 本地修改第 46 條）：vendor 的 `QuestionnaireChoice`
+ * （`vendor/solid-glass/components/ui/questionnaire.tsx:109`）把真的 input 鋪滿選項、`opacity-0`，聚焦的樣子只有
+ * `has-[>input:focus-visible]:border-ring` 與 `ring-3`；而 SG 自己的玻璃規則（`solid-glass.css:768-779`）在 layer 外寫了選項的
+ * `border-color` 與 `box-shadow`，兩樣都被蓋掉，input 上的外框又看不見——鍵盤聚焦時什麼都沒畫（違反 #1497 Q5）。跟第 15、30 條
+ * 同一個做法：2px 字色、offset 2px，外框寫在 layer 外，offset 在 base layer。`registry-edits.test.ts` 釘住這條與 vendor 原文，
+ * `guard/` 量聚焦後的外框、offset 與 `box-shadow` 不變。不讓 Prettier 排版，理由同上。
+ */
+@layer base {
+  [data-slot='questionnaire-choice']:has(> input:focus-visible) {
+    outline-offset: 2px;
+  }
+}
+
+/* prettier-ignore */
+[data-slot="questionnaire-choice"]:has(> input:focus-visible) {
+  outline: 2px solid var(--ring);
+}
+
+/*
+ * 不支援 scroll-driven 動畫的瀏覽器，一排附件左右不淡出（#1638 PR C PM 判，同第 43 條的判法；README 本地修改第 47 條）：vendor 的
+ * `AttachmentGroup`（`vendor/solid-glass/components/ui/attachment.tsx:189`）用 `scroll-fade-x`（`vendor/solid-glass/shadcn/tailwind.css`
+ * 的 `@utility scroll-fade-x`），退路是 `@supports not (animation-timeline: scroll())` 底下把 `--scroll-fade-s`／`-e` 設成整段，
+ * 不管有沒有溢出都常駐：只有一張附件時左右兩邊也被切淡。支援的瀏覽器不溢出時 timeline 不作用、兩邊都是 0，溢出才跟著捲動收放
+ * （`guard/` 量）。這裡把退路歸 0，寫在 layer 外。`guard/`（Chrome）量不到這段；`registry-edits.test.ts` 釘這段與 vendor 的退路原文。
+ * 撤除條件同第 43 條。
+ */
+/* prettier-ignore */
+@supports not (animation-timeline: scroll()) {
+  [data-slot="attachment-group"] {
+    --scroll-fade-s: 0px;
+    --scroll-fade-e: 0px;
+  }
+}
+
+/*
+ * 亮色時附件上傳中的標題 shimmer 亮面改成次要字色（#1638 PR C PM 判；README 本地修改第 48 條）：vendor 的 `AttachmentTitle`
+ * （`vendor/solid-glass/components/ui/attachment.tsx:104`）用 shadcn 的 `shimmer`（`vendor/solid-glass/shadcn/tailwind.css` 的
+ * `@utility shimmer`），字是 `-webkit-text-fill-color: transparent`、顏色來自漸層；亮色的亮面是字色的 20% 透明度，12px 字掃過時
+ * 正中只有 1.55（§5 門檻 4.5）。Q5 優先於 Q8，偏離只做到過門檻為止（同第 12、17 條）：亮面換成 `--muted-foreground`（約 5.9，
+ * 跟說明那一行同色）。暗色的亮面是更亮的字色（最低 16.09），維持 SG。`guard/` 量兩色每個色標的最低對比。
+ */
+/* prettier-ignore */
+[data-slot="attachment-title"]:not(.dark *) {
+  --shimmer-color: var(--muted-foreground);
+}

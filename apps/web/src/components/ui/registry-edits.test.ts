@@ -122,6 +122,53 @@ describe('registry 檔的改動還在', () => {
     );
   });
 
+  test('問答選項的焦點外框畫在選項上：寫在覆寫檔、layer 外（#1638 PR C，README 本地修改第 46 條）', () => {
+    expect(read('../../styles/solid-glass.overrides.css')).toContain(
+      '[data-slot="questionnaire-choice"]:has(> input:focus-visible) {\n  outline: 2px solid var(--ring);\n}',
+    );
+    // vendor 原文仍然是 input 鋪滿、`opacity-0`，選項聚焦只有邊框與 ring（都被 SG 的玻璃規則蓋掉）。上游哪天自己畫了外框，這條紅。
+    const vendor = code(read('../../vendor/solid-glass/components/ui/questionnaire.tsx'));
+    expect(vendor).toContain(
+      'has-[>input:focus-visible]:border-ring has-[>input:focus-visible]:ring-3',
+    );
+    expect(vendor).not.toMatch(/has-\[>input:focus-visible\]:outline-(?!none)/);
+    expect(vendor).toMatch(/data-slot="questionnaire-choice-input"[\s\S]{0,200}\bopacity-0\b/);
+  });
+
+  describe('一排附件與上傳中的標題（#1638 PR C）', () => {
+    const vendor = () => code(read('../../vendor/solid-glass/components/ui/attachment.tsx'));
+    const utility = (name: string) => {
+      const css = read('../../vendor/solid-glass/shadcn/tailwind.css');
+      const from = css.slice(css.indexOf(`@utility ${name} {`));
+      return from.slice(0, from.indexOf('\n}\n'));
+    };
+
+    test('第 47 條：不支援 scroll-driven 動畫時一排附件不淡出，覆寫檔歸 0；vendor 仍用 `scroll-fade-x`、退路仍是整段淡出', () => {
+      expect(read('../../styles/solid-glass.overrides.css')).toContain(
+        '@supports not (animation-timeline: scroll()) {\n  [data-slot="attachment-group"] {\n    --scroll-fade-s: 0px;\n    --scroll-fade-e: 0px;\n  }\n}',
+      );
+      // 上游哪天把退路改成不遮字，這條紅，提醒把本地修改拿掉。
+      expect(vendor()).toMatch(/data-slot="attachment-group"[\s\S]{0,300}\bscroll-fade-x\b/);
+      expect(utility('scroll-fade-x')).toContain(
+        '@supports not (animation-timeline: scroll()) {\n    --scroll-fade-s: var(--_scroll-fade-size-s);\n    --scroll-fade-e: var(--_scroll-fade-size-e);\n  }',
+      );
+    });
+
+    test('第 48 條：亮色的 shimmer 亮面換成次要字色；vendor 的標題仍用 `shimmer`、亮色亮面仍是字色的 20%', () => {
+      expect(read('../../styles/solid-glass.overrides.css')).toContain(
+        '[data-slot="attachment-title"]:not(.dark *) {\n  --shimmer-color: var(--muted-foreground);\n}',
+      );
+      expect(vendor()).toMatch(
+        /data-slot="attachment-title"[\s\S]{0,300}group-data-\[state=uploading\]\/attachment:shimmer\b/,
+      );
+      // 上游哪天把亮面調到過門檻，這條紅，提醒把本地修改拿掉。
+      expect(utility('shimmer')).toContain('oklch(from currentColor l c h / calc(alpha* 0.2))');
+      expect(utility('shimmer')).toContain(
+        '-webkit-text-fill-color: var(--shimmer-text-fill, transparent);',
+      );
+    });
+  });
+
   test('message-scroller 自動捲動時只把捲軸變透明，不改捲軸寬（#1363；#1638 起讀 vendor 原文）', () => {
     // 寬度不變靠 vendor 原文：`scrollbar-thumb-*`／`scrollbar-track-*` 只設 `scrollbar-color`（Tailwind 4.3），上游哪天改成會動寬度的
     // 寫法，這條紅。`scrollbar-none`／`scrollbar-thin`／`scrollbar-auto` 與 `[scrollbar-width:…]`、`[scrollbar-gutter:…]` 都會改內容寬度。
@@ -146,28 +193,11 @@ describe('registry 檔的改動還在', () => {
     expect({ ...pkg.dependencies, ...pkg.devDependencies }).not.toHaveProperty('next-themes');
   });
 
-  test('attachment 不用我們沒有的工具類，字級走階梯（#733）', () => {
-    const source = code(read('./attachment.tsx'));
-    // `scrollbar-none`、`scroll-fade-x`、`shimmer`：registry 的 CSS 才有，我們沒有——寫了不會報錯，只是靜靜沒有樣式。
-    expect(source).not.toMatch(/scrollbar-none|scroll-fade-x/);
-    expect(source).not.toMatch(/(?<![-\w])shimmer/);
-    expect(source).not.toMatch(/\btext-(xs|sm|base|lg)\b/);
-    expect(source).toContain('text-shimmer');
-    expect(source).toContain("from '@/lib/utils'");
-  });
-
   // dropdown-menu 與 cmdk 那一半照 #1468 Q19 隨 #1583 換成 vendor 版拿掉；sidebar 這一半留給 ③-4。
   test('側欄的群組標題與 sm 選單鈕是 text-ui（#1281：標題與可點的字不小於 13）', () => {
     const sidebar = code(read('./sidebar.tsx'));
     expect(sidebar).toMatch(/data-sidebar="group-label"[\s\S]{0,200}\btext-ui\b/);
     expect(sidebar).toContain("sm: 'h-7 text-ui'");
     expect(sidebar).toContain("size === 'sm' && 'text-ui'");
-  });
-
-  test('附件 sm／xs 的檔名是 text-ui，說明那一行是 text-tip（#1281）', () => {
-    const source = code(read('./attachment.tsx'));
-    expect(source).toMatch(/sm: 'gap-2\.5 text-ui /);
-    expect(source).toMatch(/xs: 'gap-1\.5 rounded-lg text-ui /);
-    expect(source).toMatch(/data-slot="attachment-description"[\s\S]{0,200}\btext-tip\b/);
   });
 });

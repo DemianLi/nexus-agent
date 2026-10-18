@@ -3,9 +3,14 @@ import { afterEach, expect, test } from 'vitest';
 
 import {
   Questionnaire,
+  QuestionnaireActions,
   QuestionnaireChoice,
   QuestionnaireChoices,
   QuestionnaireItem,
+  QuestionnaireNext,
+  QuestionnairePrevious,
+  QuestionnaireSkip,
+  QuestionnaireSubmit,
   QuestionnaireTitle,
 } from '@/components/ui/questionnaire';
 
@@ -42,4 +47,45 @@ test('勾選的掛 data-checked=""、沒勾選的不掛；停用的掛 data-disa
   expect(choice('沒勾選')?.hasAttribute('data-disabled')).toBe(false);
   for (const name of ['已勾選', '沒勾選', '停用'])
     expect(choice(name)?.hasAttribute('data-state')).toBe(false);
+});
+
+/**
+ * 第 45 條（#1638 PR C）：vendor 四顆按鈕的預設字是英文，包裝層補中文。`question-panel` 自己有給字，擋不住包裝層被拿掉；
+ * 這裡刻意不給 children，吃的是預設值。
+ */
+test('上一題、跳過、下一題、送出答案：呼叫端沒給字時是中文', () => {
+  const { container } = render(
+    <Questionnaire item="q">
+      <QuestionnaireItem name="q">
+        <QuestionnaireTitle>題目</QuestionnaireTitle>
+      </QuestionnaireItem>
+      <QuestionnaireActions>
+        <QuestionnairePrevious />
+        <QuestionnaireSkip />
+        <QuestionnaireNext />
+        <QuestionnaireSubmit />
+      </QuestionnaireActions>
+    </Questionnaire>,
+  );
+  const text = (slot: string) =>
+    container.querySelector(`[data-slot=questionnaire-${slot}]`)?.textContent;
+  expect(text('previous')).toBe('上一題');
+  expect(text('skip')).toBe('跳過');
+  expect(text('next')).toBe('下一題');
+  expect(text('submit')).toBe('送出答案');
+  expect(container.textContent).not.toMatch(/Previous|Skip|Next|Submit/);
+});
+
+test('呼叫端給的字照用', () => {
+  const { container } = render(
+    <Questionnaire item="q">
+      <QuestionnaireItem name="q">
+        <QuestionnaireTitle>題目</QuestionnaireTitle>
+      </QuestionnaireItem>
+      <QuestionnaireActions>
+        <QuestionnaireSubmit>交出去</QuestionnaireSubmit>
+      </QuestionnaireActions>
+    </Questionnaire>,
+  );
+  expect(container.querySelector('[data-slot=questionnaire-submit]')?.textContent).toBe('交出去');
 });
