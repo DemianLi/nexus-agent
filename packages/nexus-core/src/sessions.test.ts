@@ -5,8 +5,10 @@
  * 而型別上兩者長得一樣，不寫這一條就沒有東西擋住有人哪天把它換成唯讀視圖。
  */
 
+import { HumanMessage } from '@langchain/core/messages';
 import { describe, expect, it, vi } from 'vitest';
 
+import { toLoggedMessage } from './logged-message.js';
 import { createRegistry } from './registry.js';
 import { SessionLog } from './session-log.js';
 import { SessionRegistry } from './session-registry.js';
@@ -389,6 +391,77 @@ describe('sessions.expectSpawn', () => {
     unbind();
     sessions.open({ kind: 'subagent', runId: 'tools:spawn' });
     expect(catalogs(sessions.root)).toEqual([]);
+  });
+
+  /**
+   * 子代理收到的那句話（#1159）：寫在 `open` 回來之後，每一位訂閱者都已接好（#1665）。排在 `bind` 後面的訂閱者代表持久化
+   * （serve 與 CLI 都把它接在最後）：它被通知的時候子日誌還是空的，之後的第一顆就是那句話。
+   */
+  describe('子代理收到的那句話', () => {
+    const input = toLoggedMessage(new HumanMessage('去查一下'));
+
+    /** 綁好、登記好，再接一位排在後面的訂閱者，回傳它看到的每一份子日誌。 */
+    function wired() {
+      const registry = createRegistry();
+      const sessions = new SessionRegistry('t');
+      registry.sessions.bind(sessions);
+      registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1', input });
+      const seen: { log: SessionLog; eventsWhenNotified: number }[] = [];
+      sessions.observe(({ address, log }) => {
+        if (address.kind === 'subagent') seen.push({ log, eventsWhenNotified: log.events.length });
+      });
+      return { registry, sessions, seen };
+    }
+
+    it('寫在每一位訂閱者之後，仍是子日誌的第一顆，之後再查不重寫', () => {
+      const { registry, seen } = wired();
+      const found = registry.sessions.forCall(inChild);
+      if (found.kind !== 'ok') throw new Error(`查不到：${found.kind}`);
+      expect(seen).toEqual([{ log: found.log, eventsWhenNotified: 0 }]);
+      expect(found.log.events.map((event) => [event.type, event.data])).toEqual([
+        ['user/message', { message: input, source: { kind: 'user' } }],
+      ]);
+      registry.sessions.forCall(inChild);
+      expect(found.log.events).toHaveLength(1);
+    });
+
+    /**
+     * 這一句今天沒有真的拒收路徑（圍堵從字串造的訊息，過得了日誌那一關），所以用 spy 造。要釘的是兩件事：拋出去（這一步失敗），
+     * 以及排在後面的訂閱者照樣被通知（以前寫在訂閱者裡，一拋就把它跳過，子日誌從此不落盤）。
+     */
+    it('寫不進去：原錯從查找拋出去，排在後面的訂閱者照樣接上，下一次查找再試', () => {
+      const { registry, sessions, seen } = wired();
+      const boom = new Error('寫不進去');
+      // 排在最後的訂閱者把子日誌的 `user/message` 弄成寫不進去：它跑完才輪到寫那一句。
+      let rejecting = true;
+      sessions.observe(({ address, log }) => {
+        if (address.kind !== 'subagent') return;
+        const real = log.append.bind(log);
+        vi.spyOn(log, 'append').mockImplementation(((type: never, data: never, options: never) => {
+          if (rejecting && type === 'user/message') throw boom;
+          return real(type, data, options);
+        }) as typeof log.append);
+      });
+      expect(() => registry.sessions.forCall(inChild)).toThrow(boom);
+      expect(seen).toHaveLength(1);
+      const child = seen[0]!.log;
+      expect(child.events).toEqual([]);
+      // 登記留著：吞掉查找錯誤的呼叫端先碰到的話，下一個照樣再拋。
+      expect(() => registry.sessions.forCall(inChild)).toThrow(boom);
+      rejecting = false;
+      const found = registry.sessions.forCall(inChild);
+      expect(found.kind === 'ok' && found.log).toBe(child);
+      expect(child.events.map((event) => event.type)).toEqual(['user/message']);
+    });
+
+    it('沒帶輸入就不寫', () => {
+      const registry = createRegistry();
+      const sessions = new SessionRegistry('t');
+      registry.sessions.bind(sessions);
+      registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1' });
+      const found = registry.sessions.forCall(inChild);
+      expect(found.kind === 'ok' && found.log.events).toEqual([]);
+    });
   });
 });
 

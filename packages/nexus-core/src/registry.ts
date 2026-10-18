@@ -981,8 +981,9 @@ export interface SpawnLink {
   /** 派它的那一顆 `tool/call` 的 `callId`。 */
   readonly callId: string;
   /**
-   * 子代理收到的那一句話（`task` 的 `description`，圍堵已經包成日誌的訊息形狀）。子日誌**出生**的那一刻當成它的第一顆
-   * `user/message` 寫進去，來源 `user`，同 dsh 的 `child.followup(createUserMessage({content: prompt, source: {kind: 'user'}}))`。
+   * 子代理收到的那一句話（`task` 的 `description`，圍堵已經包成日誌的訊息形狀）。子日誌**出生**的那一次查找、`open` 回來之後
+   * 當成它的第一顆 `user/message` 寫進去（#1665，見 `pendingSpawnInputs`），來源 `user`，同 dsh 的
+   * `child.followup(createUserMessage({content: prompt, source: {kind: 'user'}}))`。
    * 缺席（呼叫沒帶字串型的 `description`）就不寫，日誌跟以前一樣沒有輸入。
    *
    * **這裡收現成的訊息而不是字串**：這個檔對領域套件只能 `import type`（`kernel-boundary.test.ts`），建 `HumanMessage` 是圍堵的事。
@@ -1315,7 +1316,33 @@ export function pickSessionForCall(
   if (picked.kind !== 'ok') return picked;
   // `open` 而不是 `get`：subagent 的日誌在第一次有人要寫的時候才出生，理由見
   // `SessionRegistry` 的偏離第 1 條。訂閱者在這一行之內就裝好了。
-  return { kind: 'ok', address: picked.address, log: picked.bound.open(picked.address) };
+  const log = picked.bound.open(picked.address);
+  // 子代理收到的那句話在這裡寫：每一位訂閱者（持久化在內）都接好了。寫不進去從這裡拋（#1665）。
+  writePendingSpawnInput(log);
+  return { kind: 'ok', address: picked.address, log };
+}
+
+/**
+ * 前景子代理出生時等著寫的那句話（[#1159](https://github.com/DemianLi/nexus-agent/issues/1159)），子日誌 → 訊息。
+ * `bind` 的訂閱者在子日誌出生那一刻登記，{@link pickSessionForCall} 在 `open` 回來之後寫。
+ *
+ * **不在訂閱者裡寫**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）：這一句進模型歷史，寫不進去要拋。而訂閱者跑在
+ * `SessionRegistry.open` 的通知迴圈裡，拋錯會跳過排在後面的訂閱者——持久化接在 `bind` 之後（serve 的 `wire-handler.ts`、CLI 同序），
+ * 跳過它，這份子日誌之後寫的每一顆都靜靜不落盤，而同一個位址再 `open` 也不會重新通知。挪到 `open` 回來之後，同 dsh：子代理的第一句
+ * 由它自己的迴圈在第一步寫（`packages/core/agent-loop/src/agent.ts:426-436`，`687f282e`），排在所有 `session/created` 監聽者之後；
+ * 寫不進去是子代理那一步失敗，經 `task` 回到父代理成一次失敗的委派。
+ *
+ * **寫成功才清掉**：吞掉查找錯誤的那幾個呼叫端（用量記錄這類）先碰到的話，下一個查找照樣再寫一次、再拋，直到不吞的那一個讓這一步失敗。
+ * 以子日誌為鍵、弱引用：子日誌不在了，登記跟著消失。
+ */
+const pendingSpawnInputs = new WeakMap<SessionLog, LoggedMessage>();
+
+/** 寫 {@link pendingSpawnInputs} 裡等著的那一句；沒有就什麼都不做。寫不進去原錯往外拋，登記留著。 */
+function writePendingSpawnInput(log: SessionLog): void {
+  const input = pendingSpawnInputs.get(log);
+  if (input === undefined) return;
+  log.append('user/message', { message: input, source: { kind: 'user' } });
+  pendingSpawnInputs.delete(log);
 }
 
 /**
@@ -1699,18 +1726,9 @@ export function createRegistry(options: CreateRegistryOptions = {}): InternalPlu
         }
         expectedSpawns.delete(address.runId);
         // 前景子代理的輸入：基座的 `task` 把 `description` 原樣當子圖的第一則 `HumanMessage`，日誌上卻沒有任何一顆事件
-        // 記它，從日誌推這個子代理的歷史就缺了開頭那一句（#1159）。出生當下寫，落在它的第一次 `model/start` 之前。
-        // 同 `recordToolCall`：記不進去不殺這次呼叫。
-        if (link.input !== undefined) {
-          try {
-            log.append('user/message', {
-              message: link.input,
-              source: { kind: 'user' },
-            });
-          } catch {
-            // 日誌不收這一句：子代理照跑，歷史缺開頭，與修之前相同。
-          }
-        }
+        // 記它，從日誌推這個子代理的歷史就缺了開頭那一句（#1159）。**這裡只登記，不寫**：寫在 `open` 回來之後
+        // （{@link pickSessionForCall}），理由見 {@link pendingSpawnInputs}。
+        if (link.input !== undefined) pendingSpawnInputs.set(log, link.input);
         appendSubagentCatalog(link.parent, {
           childId: log.sessionId,
           callId: link.callId,

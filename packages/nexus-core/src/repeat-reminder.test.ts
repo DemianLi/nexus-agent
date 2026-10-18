@@ -1,8 +1,10 @@
 import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
+import type { SessionLookup } from './registry.js';
 import {
   createRepeatReminder,
+  createStepNoticeMiddleware,
   DEFAULT_REPEAT_REMINDER,
   REPEAT_REMINDER_MARKER,
   resolveRepeatReminderSettings,
@@ -10,6 +12,7 @@ import {
 import type { RepeatReminderSettings } from './repeat-reminder.js';
 import { sourceKwargs } from './message-source.js';
 import type { MessageSource } from './message-source.js';
+import { SessionLog } from './session-log.js';
 
 /** `beforeModel` 拿出來直接呼叫用的形狀。 */
 type BeforeModel = (state: {
@@ -367,5 +370,70 @@ describe('參數預覽的上限', () => {
   it('沒超過上限就原樣，不會多一條尾巴', () => {
     const calls = Array.from({ length: 5 }, () => ({ name: 'grep', args: { pattern: 'x' } }));
     expect(conversation(hookOf(), calls)[4]?.[0]).not.toContain('more chars');
+  });
+});
+
+/**
+ * [#1665](https://github.com/DemianLi/nexus-agent/issues/1665)：提醒與通知都進模型歷史，日誌那一關拒收就照 dsh 讓這一步失敗
+ * （`packages/core/agent-loop/src/agent.ts:427-436`，`687f282e`），不吞。提醒的內容是工具名與截過的參數預覽，日誌那一關拒不了它的值，
+ * 所以這幾格用 spy 造拒收。
+ */
+describe('記不進去：這一步失敗', () => {
+  type Hook = (
+    state: { messages: readonly BaseMessage[] },
+    runtime?: { readonly configurable?: unknown },
+  ) => { messages: BaseMessage[] } | undefined;
+
+  const sessionsOf = (log: SessionLog) => ({
+    forCall: (): SessionLookup => ({ kind: 'ok', address: { kind: 'root' }, log }),
+  });
+
+  /** 讓 `user/message` 寫不進去，其餘照真的寫。 */
+  function rejectUserMessages(log: SessionLog, error: Error): void {
+    const real = log.append.bind(log);
+    vi.spyOn(log, 'append').mockImplementation(((type: never, data: never, options: never) => {
+      if (type === 'user/message') throw error;
+      return real(type, data, options);
+    }) as typeof log.append);
+  }
+
+  /** 叫三次同一顆工具之後的訊息串：第三次之後一定有一則提醒。 */
+  const repeated = (): BaseMessage[] => [
+    new HumanMessage('開始'),
+    ...turn('grep', { pattern: 'x' }, 'c0'),
+    ...turn('grep', { pattern: 'x' }, 'c1'),
+    ...turn('grep', { pattern: 'x' }, 'c2'),
+  ];
+
+  const reminderHook = (log: SessionLog): Hook =>
+    (
+      createRepeatReminder(resolveRepeatReminderSettings(), sessionsOf(log)) as unknown as {
+        beforeModel: Hook;
+      }
+    ).beforeModel;
+
+  it('提醒寫不進去：原錯往外拋', () => {
+    const log = new SessionLog('r');
+    const boom = new Error('寫不進去');
+    rejectUserMessages(log, boom);
+    expect(() => reminderHook(log)({ messages: repeated() }, { configurable: {} })).toThrow(boom);
+  });
+
+  it('反例：寫得進去就照常記、照常送', () => {
+    const log = new SessionLog('r');
+    const update = reminderHook(log)({ messages: repeated() }, { configurable: {} });
+    expect(update?.messages).toHaveLength(1);
+    expect(log.events.map((event) => event.type)).toEqual(['user/message']);
+  });
+
+  it('通知來源拋的錯不被吞：原樣往外拋', () => {
+    const log = new SessionLog('n');
+    const boom = new Error('寫不進去');
+    const hook = (
+      createStepNoticeMiddleware(() => {
+        throw boom;
+      }, sessionsOf(log)) as unknown as { beforeModel: Hook }
+    ).beforeModel;
+    expect(() => hook({ messages: [] }, { configurable: {} })).toThrow(boom);
   });
 });

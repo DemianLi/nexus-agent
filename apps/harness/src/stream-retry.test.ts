@@ -23,7 +23,7 @@ import {
   reduceConversation,
 } from '@nexus/wire';
 import type { AiEntry, Event } from '@nexus/wire';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { STREAM_RETRY_SIGNAL } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
@@ -147,6 +147,8 @@ interface RunOptions {
   readonly inject?: readonly object[];
   /** 這一輪跑著的時候同時跑的東西（例如在特定時刻按停止）。 */
   readonly during?: (pump: ThreadPump) => Promise<void>;
+  /** 這幾種事件寫進 root 日誌時拋這個錯（造日誌那一關拒收）。 */
+  readonly reject?: { readonly types: readonly string[]; readonly error: Error };
 }
 
 /**
@@ -213,10 +215,25 @@ async function runTurn(script: readonly Act[], options: RunOptions = {}) {
     plugins: [],
     ...(options.streamRetry !== undefined && { streamRetry: options.streamRetry }),
   });
+  const warnings: string[] = [];
   const pump = new ThreadPump(
     slowed(built.agent, options.slowMs, options.inject) as PumpAgent,
     'stream-retry',
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    (message) => warnings.push(message),
   );
+  if (options.reject !== undefined) {
+    const { types, error } = options.reject;
+    const root = pump.sessions.root;
+    const real = root.append.bind(root);
+    vi.spyOn(root, 'append').mockImplementation(((type: never, data: never, opts: never) => {
+      if (types.includes(type)) throw error;
+      return real(type, data, opts);
+    }) as typeof root.append);
+  }
   const detach = built.attachSession(pump.sessions);
   const frames: Event[] = [];
   const line = new AbortController();
@@ -235,6 +252,7 @@ async function runTurn(script: readonly Act[], options: RunOptions = {}) {
       frames,
       events: pump.sessions.root.events,
       hits: upstream.hits(),
+      warnings,
     };
   } finally {
     line.abort();
@@ -279,6 +297,28 @@ describe('串流第一則事件之後才出錯（#520）', () => {
     if (original === undefined) delete process.env[LIVE_API_KEY_ENV];
     else process.env[LIVE_API_KEY_ENV] = original;
   });
+
+  /**
+   * #1665 的登記偏離（理由 1）：`assistant/attempt` 記不進去，這一輪照常重打、照常成功，不拋；大聲講，帶事件種類與原錯。
+   * 拋出去停不住圖（`thread-pump.ts` 的 `#discardOpenReply` 註解有 langgraph 的出處），這一顆不進模型歷史，吞掉不分岔。
+   * 作廢那半段是字串，日誌那一關拒不了，用 spy 造拒收。
+   */
+  it('作廢的那半段記不進去：這一輪照常重打、照常成功，日誌上沒有那顆 attempt，warn 帶事件種類與原錯', async () => {
+    const boom = new Error('磁碟滿了');
+    const run = await runTurn(['mid503'], {
+      streamRetry: BUDGET,
+      reject: { types: ['assistant/attempt'], error: boom },
+    });
+    expect(run.thrown).toBeUndefined();
+    expect(run.hits).toBe(2);
+    const types = run.events.map((event) => event.type);
+    expect(types).not.toContain('assistant/attempt');
+    expect(types).not.toContain('turn/failed');
+    expect(types.filter((type) => type === 'assistant/message')).toHaveLength(1);
+    expect(run.warnings).toEqual([expect.stringMatching(/assistant\/attempt 記不進去.*磁碟滿了$/)]);
+    // 畫面照樣擦：只剩第二次的回覆。
+    expect(shownReplies(run.frames).map((entry) => entry.text)).toEqual(['丙丁']);
+  }, 30_000);
 
   it.each([
     ['中段的錯誤事件（503）', 'mid503'],

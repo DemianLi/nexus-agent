@@ -85,8 +85,10 @@ import type { AgentMiddleware } from './base-types.js';
 import type { EventDispatcher } from './events.js';
 import { rawArgumentsOf } from './invalid-tool-args.js';
 import { toLoggedMessage } from './logged-message.js';
+import { closer } from './conversation-replay.js';
 import type { SessionLookup, SpawnLink } from './registry.js';
 import { spawnedSubagentRunId } from './session-address.js';
+import type { SessionLog } from './session-log.js';
 import {
   HarnessError,
   INVALID_ARGS,
@@ -94,6 +96,7 @@ import {
   readToolOutcome,
   readToolResultMessage,
   TOOL_ABORTED,
+  TOOL_OUTCOME_UNKNOWN,
   TOOL_TIMEOUT,
   toolRefusal,
 } from './tool-events.js';
@@ -294,11 +297,41 @@ interface RecordedToolCall {
 }
 
 /**
+ * `tool/result` 被拒之後補的那一顆：最小的錯誤結果，形狀同續接時補的（`interrupted-turn.ts`）與 dsh `repair.ts` 那顆。
+ * 這顆也寫不進去，兩個錯一起拋（同 dsh `agent.ts:353`）；寫進去了就交回，由呼叫的人拋原錯。
+ *
+ * @param log - 這次呼叫的日誌。
+ * @param callId - 配對的呼叫。
+ * @param name - 工具名（給補的那則訊息）。
+ * @param rejected - 原本那顆被拒時拋的錯。
+ */
+function recordUnknownOutcome(
+  log: SessionLog,
+  callId: string,
+  name: string,
+  rejected: unknown,
+): void {
+  try {
+    log.append('tool/result', {
+      callId,
+      isError: true,
+      error: { name: 'ToolOutcomeUnknownError', code: TOOL_OUTCOME_UNKNOWN },
+      message: toLoggedMessage(closer({ id: callId, name }, true)),
+    });
+  } catch (recoveryError) {
+    throw new AggregateError(
+      [rejected, recoveryError],
+      '工具結果記不進去，補的錯誤結果也記不進去',
+      { cause: rejected },
+    );
+  }
+}
+
+/**
  * 記下 `tool/call`，回傳記 `tool/result` 用的函式。
  *
  * **這次不記的時候回 `undefined`，而且是整對不記**：沒接會話、認不出屬於哪一份
- * （`forCall` 不是 `ok`）、沒有 `callId`（配不起來）、或 `tool/call` 寫不進去。只寫得進
- * 結果那一半的話，日誌上會有一顆找不到呼叫的結果。
+ * （`forCall` 不是 `ok`）、或沒有 `callId`（配不起來）。只寫得進結果那一半的話，日誌上會有一顆找不到呼叫的結果。
  *
  * **記下了就順手登記「這次呼叫可能派出子代理」**（#1023）：鑰匙是這次呼叫自己的命名空間（`spawnedSubagentRunId`），
  * 子代理那一側算出來的 `runId` 就是它，所以不必認工具名——不是 `task` 的呼叫不會有子日誌以它出生，登記到退掉為止都用不到。
@@ -307,7 +340,19 @@ interface RecordedToolCall {
  * **跟著結果塞進對話的訊息接在 `tool/result` 後面各記一顆 `user/message`**，同它們在對話裡的位置
  * （見 `session-log.ts`）。結果那顆沒寫成就一顆都不記：沒有結果的注入在推歷史時接不到任何地方。
  *
- * **記不進去不能反過來殺掉這次呼叫**，同 `model-usage.ts`：每個 `append` 都吞掉自己的例外。
+ * ## 記不進去，這一步失敗（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）
+ *
+ * 這三種都進模型歷史，照 dsh 不吞（`packages/core/agent-loop/src/tool-calls.ts:156`、`:168`，`687f282e`）。會讓它們拋的是
+ * 日誌那一關拒收（#1526 的有損值、#1661 的深度上限）：
+ *
+ * - `tool/call` 寫不進去：原錯當場拋，工具本體不跑（dsh 的 `appendToolCall` 在 `prepare` 之前）。
+ * - `tool/result` 寫不進去：先補一顆最小的錯誤結果（{@link TOOL_OUTCOME_UNKNOWN}，同 dsh `agent.ts:344-355` 用
+ *   `repair.ts` 補的那顆），再拋原錯，這一步失敗。補的那顆讓日誌上的呼叫有配對、畫面上的工具卡收成失敗
+ *   （pump 從日誌的 `tool/result` 收卡）。補的也寫不進去就兩個錯一起拋（`AggregateError`，同 dsh `:353`）。
+ *   跟著要注入的 `user/message` 不寫，同 dsh 拋在 `acceptContext`（`:157`）之前。
+ * - 注入的 `user/message` 寫不進去：原錯當場拋。
+ *
+ * 拋出去的錯走出 `wrapToolCall`，不會被這一層翻成錯誤訊息（見 `createContainmentMiddleware` 的結構）。
  */
 function recordToolCall(
   sessions: ToolEventSessions | undefined,
@@ -321,17 +366,13 @@ function recordToolCall(
   const found = sessions.forCall(where);
   if (found.kind !== 'ok') return undefined;
   const { log } = found;
-  try {
-    log.append('tool/call', {
-      callId,
-      name: request.toolCall.name,
-      // 解不開的那顆記模型吐的原字串（歷史裡它已經是 `{}`），見 `invalid-tool-args.ts`。
-      arguments: raw ?? JSON.stringify(request.toolCall.args ?? {}),
-    });
-  } catch {
-    // 參數序列化不動或日誌不收：這一對整個不記，見上面。
-    return undefined;
-  }
+  // 寫不進去原錯當場拋，見上面。
+  log.append('tool/call', {
+    callId,
+    name: request.toolCall.name,
+    // 解不開的那顆記模型吐的原字串（歷史裡它已經是 `{}`），見 `invalid-tool-args.ts`。
+    arguments: raw ?? JSON.stringify(request.toolCall.args ?? {}),
+  });
   const runId = spawnedSubagentRunId(where);
   // 子代理的輸入：`task` 與前景的 `subagent`（會被改寫成 `task`）都以 `description` 當那一句話。
   const { args } = request.toolCall;
@@ -360,20 +401,18 @@ function recordToolCall(
         // 失敗的呼叫不帶，同 dsh：client 對失敗一律走 generic，不看 meta。
         ...(outcome.isError || meta === undefined ? {} : { meta }),
       });
-    } catch {
-      // 同 `tool/call`：日誌寫不進去不影響這次呼叫的結果。
-      return;
+    } catch (error) {
+      // 見上面：補一顆錯誤結果再拋原錯；跟著的注入不寫。
+      recordUnknownOutcome(log, callId, request.toolCall.name, error);
+      throw error;
     }
     for (const extra of injected) {
-      try {
-        log.append('user/message', {
-          message: toLoggedMessage(extra),
-          // 圍堵只知道工具，不知道工具屬於哪個 plugin，見 `session-log.ts` 的 `user/message`。
-          source: { kind: 'plugin', plugin: request.toolCall.name },
-        });
-      } catch {
-        // 同上。
-      }
+      // 寫不進去原錯當場拋，見上面。
+      log.append('user/message', {
+        message: toLoggedMessage(extra),
+        // 圍堵只知道工具，不知道工具屬於哪個 plugin，見 `session-log.ts` 的 `user/message`。
+        source: { kind: 'plugin', plugin: request.toolCall.name },
+      });
     }
   };
   return { settle, release };
@@ -427,16 +466,43 @@ export function createContainmentMiddleware(
       const startedAt = Date.now();
       // 解不開的那幾顆讓 `tool/call.arguments` 記原字串（記號在那則 AI 訊息上，`invalid-tool-args.ts`）。
       const raw = rawArgumentsOf(request);
+      // `tool/call` 寫不進去從這裡拋，本體不跑（#1665）。
       const recorded = recordToolCall(sessions, request as RecordableRequest, raw);
       const settle = recorded?.settle;
       try {
-        // 槽在這一層開：產生者（backend 那層的 Proxy、讀檔的 middleware）都在內層，
-        // 寫進來的東西由這裡交給 `tool/result`。見 `tool-result-meta.ts`。
-        const { result, meta } = await runInToolMetaSlot(
-          request.toolCall.name,
-          request.toolCall.args,
-          () => handler(request),
-        );
+        // **只有本體那一段在接錯的 try 裡**：`settle` 寫日誌拋的錯（#1665）要走出這一層，不能被翻成錯誤訊息。
+        let ran;
+        try {
+          // 槽在這一層開：產生者（backend 那層的 Proxy、讀檔的 middleware）都在內層，
+          // 寫進來的東西由這裡交給 `tool/result`。見 `tool-result-meta.ts`。
+          ran = await runInToolMetaSlot(request.toolCall.name, request.toolCall.args, () =>
+            handler(request),
+          );
+        } catch (error) {
+          // 中斷、`Command` 這類控制流是用拋例外走的，接住它們等於把功能吃掉。
+          if (isGraphBubbleUp(error)) throw error;
+          const toolName = resolveToolName(request);
+          // 前綴由 `toolRefusal` 加，同 dsh 的 `toolErrorResult` 渲染每一顆拋出來的錯（#318）。
+          // 基座自己的錯誤回饋**不設 `status`**（`defaultHandleToolErrors`，實測
+          // `undefined`），等於錯誤散文以一則結構上成功的訊息送進模型。這裡比基座嚴。
+          const message = toolRefusal(
+            isToolTimeout(error)
+              ? formatToolTimeout(toolName, Date.now() - startedAt, declaredToolTimeoutMs(request))
+              : formatToolFailure(toolName, error),
+            { callId: request.toolCall.id ?? '', name: toolName },
+          );
+          const kind = classifyThrownToolError(error);
+          if (events !== undefined) {
+            notifyToolResult(events, request as RecordableRequest, message, reportObserverFailure);
+          }
+          settle?.(
+            kind === undefined ? { isError: true } : { isError: true, error: kind },
+            message,
+            [],
+          );
+          return message;
+        }
+        const { result, meta } = ran;
         // **未知工具不在這裡猜**：碼由最內層在交給基座查名字的那一刻標（`invalid-tool-args.ts`，#1024）。
         // 這一格的 `request.tool` 對動態加給模型的工具（`subagent`）也是 `undefined`，拿它當判準會把
         // 外層回的合法拒絕記成 `UNKNOWN_TOOL`。
@@ -450,29 +516,6 @@ export function createContainmentMiddleware(
           meta,
         );
         return result;
-      } catch (error) {
-        // 中斷、`Command` 這類控制流是用拋例外走的，接住它們等於把功能吃掉。
-        if (isGraphBubbleUp(error)) throw error;
-        const toolName = resolveToolName(request);
-        // 前綴由 `toolRefusal` 加，同 dsh 的 `toolErrorResult` 渲染每一顆拋出來的錯（#318）。
-        // 基座自己的錯誤回饋**不設 `status`**（`defaultHandleToolErrors`，實測
-        // `undefined`），等於錯誤散文以一則結構上成功的訊息送進模型。這裡比基座嚴。
-        const message = toolRefusal(
-          isToolTimeout(error)
-            ? formatToolTimeout(toolName, Date.now() - startedAt, declaredToolTimeoutMs(request))
-            : formatToolFailure(toolName, error),
-          { callId: request.toolCall.id ?? '', name: toolName },
-        );
-        const kind = classifyThrownToolError(error);
-        if (events !== undefined) {
-          notifyToolResult(events, request as RecordableRequest, message, reportObserverFailure);
-        }
-        settle?.(
-          kind === undefined ? { isError: true } : { isError: true, error: kind },
-          message,
-          [],
-        );
-        return message;
       } finally {
         // 子代理出生在 `handler` 裡；落定之後（拋錯、中斷也是）就不會再有以這次呼叫出生的，退掉登記（#1023）。
         recorded?.release();

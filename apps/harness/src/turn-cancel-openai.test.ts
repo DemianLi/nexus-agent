@@ -31,7 +31,7 @@ import type { SessionEvent, SessionEventMap } from '@nexus/core';
 import { createFeedbackService } from '@nexus/plugin-feedback';
 import type { Event } from '@nexus/wire';
 import { emptyConversation, reduceConversation } from '@nexus/wire';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -210,6 +210,79 @@ describe('真的 ChatOpenAI 串到一半按停止', () => {
       const full = after[1]!.data as SessionEventMap['assistant/message'];
       expect('interrupted' in full).toBe(false);
       expect(fromLoggedMessage(full.message).text).toBe(FULL);
+    } finally {
+      line.abort();
+      await draining;
+      detach();
+      await built.dispose();
+      await upstream.close();
+    }
+  });
+
+  /**
+   * #1665：那半段記不進日誌就連對話也不寫，兩邊一起少這一則、不分岔；這一輪照樣收成中止（人按了停止是事實），`warn` 大聲講。
+   * 同 dsh：被中止那一支的收尾寫入被拒，那一輪仍記 aborted（`agent.ts:462-500`）。半段是字串，日誌那一關拒不了，用 spy 造拒收。
+   */
+  it('那半段記不進日誌：這一輪照樣收成中止，對話也不留，下一輪的請求沒有它', async () => {
+    const upstream = await slowOpenAi();
+    const built = await createNexusAgent({
+      model: new ChatOpenAI({
+        model: 'fake',
+        apiKey: 'sk-loopback',
+        maxRetries: 0,
+        configuration: { baseURL: upstream.baseURL },
+      }),
+      checkpointer: new MemorySaver(),
+      plugins: [],
+    });
+    const agent = built.agent as unknown as PumpAgent;
+    const warnings: string[] = [];
+    const pump = new ThreadPump(
+      agent,
+      'openai-cancel-rejected',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      (message) => warnings.push(message),
+    );
+    const root = pump.sessions.root;
+    const real = root.append.bind(root);
+    const boom = new Error('磁碟滿了');
+    vi.spyOn(root, 'append').mockImplementation(((type: never, data: never, options: never) => {
+      if (type === 'assistant/message' && (data as { interrupted?: boolean }).interrupted)
+        throw boom;
+      return real(type, data, options);
+    }) as typeof root.append);
+    const detach = built.attachSession(pump.sessions);
+    const frames: Event[] = [];
+    const line = new AbortController();
+    const stream = pump.subscribe(['messages', 'lifecycle'], line.signal);
+    const draining = (async () => {
+      for await (const frame of stream) frames.push(frame);
+    })();
+    try {
+      const turn = pump.submit({ kind: 'message', text: '說一串' });
+      await until(() => rootTextOnWire(frames).length >= 3);
+      expect(pump.cancel()).toBe('run');
+      await turn;
+
+      const events: readonly SessionEvent[] = root.events;
+      expect(events.at(-1)).toMatchObject({
+        type: 'turn/end',
+        data: { reason: { kind: 'aborted', cause: { kind: 'user' } } },
+      });
+      expect(events.map((event) => event.type)).not.toContain('assistant/message');
+      expect(warnings).toEqual([expect.stringMatching(/被停止那則回覆的半段記不進去.*磁碟滿了$/)]);
+      const state = await agent.getState({ configurable: { thread_id: 'openai-cancel-rejected' } });
+      const last = ((state.values as { messages: unknown[] }).messages ?? []).at(-1);
+      expect(AIMessage.isInstance(last)).toBe(false);
+
+      await pump.submit({ kind: 'message', text: '繼續' });
+      expect((upstream.requests[1] ?? []).filter((message) => message.role !== 'system')).toEqual([
+        { role: 'user', content: '說一串' },
+        { role: 'user', content: '繼續' },
+      ]);
     } finally {
       line.abort();
       await draining;

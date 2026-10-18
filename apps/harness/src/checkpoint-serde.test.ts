@@ -349,12 +349,15 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
     60_000,
   );
 
-  // 剛好超過上限一層，跟上面「剛好 600」那一格湊成一對邊界。日誌那一關拒收這一則（601 層），state 照樣收下。
-  // 更深的（約 2000 層起）輪不到存檔點：LangGraph 在圖裡走節點回傳值的 `_deserializeCommandSendObjectGraph`
-  // （`@langchain/langgraph` 的 `dist/constants.js`，遞迴）先爆 `Maximum call stack size exceeded`，碼是 UNKNOWN，
-  // 見 [#1668](https://github.com/DemianLi/nexus-agent/issues/1668)。
-  // 這一格的期望值依賴日誌那一關被拒時錯被吞掉；#1665 改成大聲失敗之後要重定。
-  it('事件 601 層（存檔點剛好超過上限一層）：那一輪拋 checkpoint_depth_exceeded，下一輪照常跑，模型收到的是被拒之前的歷史', async () => {
+  // 剛好超過上限一層，跟上面「剛好 600」那一格湊成一對邊界。
+  //
+  // **#1665 之後先撞上的是日誌那一關，不是存檔點。** 以前日誌拒收這一則（601 層）時錯被吞掉，回覆照樣進 state，這一輪結束寫存檔點
+  // 才拋 checkpoint_depth_exceeded。現在回覆記不進去，模型呼叫當場失敗（`@nexus/core` 的 `model-calls.ts`，照 dsh
+  // `assistant-stream.ts:83-88`），回覆不進 state，存檔點輪不到這一則。這是行為改了，不是放寬：這一輪照樣失敗、下一輪照樣看不到深參數。
+  // 存檔點那一關自己的 601 層邊界由上面 `DepthCheckedSerializer` 那一組直接釘（不經日誌）。
+  //
+  // 更深的（約 2000 層起）同樣先撞日誌那一關；#1668 那條遞迴爆棧要在不經日誌的路上才看得到。
+  it('事件 601 層（日誌那一關剛好超過上限一層）：那一輪失敗在記回覆那一刻，下一輪與重開後模型收到同一份、沒有那則回覆', async () => {
     const { upstream, start, logFile } = await rig({ deep: { v: mixed(AT_LOG_CAP + 1) } });
     const server = await start();
     await say(server, 'same-deep', '第一句');
@@ -367,17 +370,35 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
       if (line === undefined) throw new Error('還沒寫 turn/failed');
       return line;
     });
-    expect(failed).toContain(CHECKPOINT_DEPTH_EXCEEDED);
-    expect(failed).toContain(
-      `有 ${CHECKPOINT_MAX_DEPTH + 1} 層，超過上限 ${CHECKPOINT_MAX_DEPTH} 層`,
+    const data = (JSON.parse(failed) as { data: { message: string; error: { code: string } } })
+      .data;
+    expect(data.message).toMatch(
+      new RegExp(
+        `^會話事件的 assistant/message 的 data\\.message\\..* 是第 ${SESSION_EVENT_MAX_DEPTH + 1} 層巢狀，超過上限 ${SESSION_EVENT_MAX_DEPTH} 層$`,
+      ),
     );
+    // 同 dsh：這種失敗沒有專屬的碼，`turn/end` 記 error、碼 UNKNOWN（`tool-calls.spec.ts:725-747`、`coverage-edges.spec.ts:300-325`）。
+    expect(data.error.code).toBe('UNKNOWN');
+    // 存檔點沒碰到這一則：量到的每一次寫入都在上限內。
+    expect(Math.max(...dumpedDepths)).toBeLessThanOrEqual(CHECKPOINT_MAX_DEPTH);
+    // 那則回覆不在日誌上，日誌上那次呼叫以 error 收。
+    const lines = await logLines(logFile('same-deep'));
+    expect(
+      lines.some((line) => line.includes('"assistant/message"') && line.includes('call-deep')),
+    ).toBe(false);
 
     await say(server, 'same-deep', '再一句');
-    expect(
-      requestFor(upstream, '再一句').map(
-        (m) => `${m.role}:${m.role === 'system' ? '' : textOf(m)}`,
-      ),
-    ).toEqual(['system:', 'user:第一句', 'assistant:好', 'user:再一句']);
+    const roles = (prompt: string) =>
+      requestFor(upstream, prompt).map((m) => `${m.role}:${m.role === 'system' ? '' : textOf(m)}`);
+    // 失敗那一輪的人話留著、回覆沒有：同 dsh，`user/message` 在那一步開頭就寫了（`agent.ts:426-436`），回覆被拒就沒有。
+    const live = roles('再一句');
+    expect(live).toEqual(['system:', 'user:第一句', 'assistant:好', 'user:深:deep', 'user:再一句']);
+
+    // **重開前後同一份歷史**：日誌推回來的跟記憶體裡的一樣，沒有分岔（以前回覆進了 state、日誌上沒有，重開後就少一則）。
+    await server.close();
+    const again = await start();
+    await say(again, 'same-deep', '重開後');
+    expect(roles('重開後')).toEqual([...live, 'assistant:好', 'user:重開後']);
   }, 60_000);
 });
 
