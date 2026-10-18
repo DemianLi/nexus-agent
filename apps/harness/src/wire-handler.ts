@@ -106,6 +106,7 @@ import {
   TURN_NOT_FOUND,
   SUBAGENT_SEND_METHOD,
   THREAD_AT_CAPACITY,
+  THREAD_IS_SUBAGENT,
   isSlashMethod,
   isWireChannel,
   SessionReferenceError,
@@ -1174,6 +1175,24 @@ export class ThreadCapacityError extends Error {
   }
 }
 
+/**
+ * 這個 id 是子代理的會話，不能當一條 thread 開（[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）。
+ *
+ * 由 serve 的 `createAgent` 在**碰日誌之前**拋（冷讀 header 看到 `parentSession`），只有 `threadOrError` 接，回
+ * `thread_is_subagent`。message 寫明原因與下一步：要對子代理說話，從它的主對話用 `subagent.send`。
+ */
+export class SubagentSessionError extends Error {
+  constructor(
+    /** 被當成 thread 送來的會話 id。 */
+    readonly threadId: string,
+  ) {
+    super(
+      `"${threadId}" 是子代理的會話，不能當一條 thread 開；要對它說話，請從它的主對話用 subagent.send。`,
+    );
+    this.name = 'SubagentSessionError';
+  }
+}
+
 export function createWireHandler(options: WireHandlerOptions): IdleSweepingWireHandler {
   /**
    * 這台 server 的交付上限，**一個 server 解一次**。
@@ -1597,7 +1616,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 那個請求一個位元組都不回、client 永遠卡著，而那顆 rejection 沒有人處理。它屬於協定層：
    * 請求本身沒有錯，是這條 thread 起不來（壞掉的日誌、別的行程握著、目錄對不上……）。
    * 協定的錯誤碼裡沒有「thread 起不來」，最近的是 `unknown_error`——原因寫在 message 裡。
-   * **例外是滿了**（{@link ThreadCapacityError}，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）：那不是壞了，回 `thread_at_capacity`。
+   * **例外是滿了**（{@link ThreadCapacityError}，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）：那不是壞了，回 `thread_at_capacity`；
+   * 還有**這個 id 是子代理的會話**（{@link SubagentSessionError}，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）：回 `thread_is_subagent`。
    *
    * @param threadId - 哪一條。
    * @param id - 回給哪一顆上行封包；下行那條沒有，是 `null`。
@@ -1613,6 +1633,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // 滿了不是「壞了」：專用碼、不加「建不起來」的前綴，message 自己講上限與下一步（#1476）。
       if (error instanceof ThreadCapacityError) {
         return json(errorResponse(id, THREAD_AT_CAPACITY, error.message));
+      }
+      // 子代理的會話不是 thread（#1544）：專用碼、不加「建不起來」的前綴，重試沒用。
+      if (error instanceof SubagentSessionError) {
+        return json(errorResponse(id, THREAD_IS_SUBAGENT, error.message));
       }
       const reason = error instanceof Error ? error.message : String(error);
       return json(errorResponse(id, 'unknown_error', `這條 thread 建不起來：${reason}`));
