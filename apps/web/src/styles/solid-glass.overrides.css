@@ -397,3 +397,15 @@ body {
 [data-slot="model-pick"] > [data-slot="dropdown-menu-trigger"] {
   min-width: 0;
 }
+
+/*
+ * 對話的每一則不用 content-visibility（#1638 PM 決定 Q6；README 本地修改第 43 條）：vendor 的 `MessageScrollerItem`
+ * （`vendor/solid-glass/components/ui/message-scroller.tsx:74`）帶 `[content-visibility:auto]` 與 `[contain-intrinsic-size:auto_10rem]`，
+ * paint containment 會把卡片陰影與光暈切成直角（§9，#1468 Q19 保留的壓制；500 則的捲動量測在 #404 的 PR）。寫在 layer 外，
+ * 蓋得過 utilities 層的那兩條。`registry-edits.test.ts` 釘住 vendor 原文仍是 auto，`guard/` 量計算值是 `visible`。
+ */
+/* prettier-ignore */
+[data-slot="message-scroller-item"] {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
+}
