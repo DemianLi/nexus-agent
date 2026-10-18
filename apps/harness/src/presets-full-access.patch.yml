@@ -1,0 +1,22 @@
+# 部署方把全開那一組加回權限表（#1621）。出廠表只有 `read-only` 與 `workspace-write`；`presets` 是整份替換，所以要把
+# 整張表重寫一份。值照 dsh base 出廠的第三組（`packages/bundle/base/cordis.patch.yml:274-276`，`687f282e`）。
+# 讀它的是要量「加回之後跟今天一樣」的測試：`permission-presets.test.ts`、`permission-wire.test.ts`、
+# `subagent-sandbox.test.ts`、`workspace-changes.test.ts`。
+- id: permission-presets
+  config:
+    presets:
+      read-only:
+        sandbox: read-only
+        approval: ask
+        name: read-only
+        description: 只能讀，不能改檔；要改動時先問你。
+      workspace-write:
+        sandbox: workspace-write
+        approval: ask
+        name: workspace-write
+        description: 可以寫工作區；要超出時先問你。
+      danger-full-access:
+        sandbox: danger-full-access
+        approval: never
+        name: danger-full-access
+        description: 經符號連結寫得到工作區外，而且不問你：要人點頭的事一律直接回絕。
