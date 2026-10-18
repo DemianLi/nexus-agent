@@ -177,7 +177,7 @@ function isReadMeta(meta: unknown): boolean {
  */
 export function capToolResultMeta(logged: unknown, maxBytes: number): unknown {
   if (logged === undefined) return logged;
-  const meta = snapshotJsonValue(logged, 'tool/result 的 meta');
+  const meta = logged; // 突變 N1（#1661 CI，量完就撤）
   const bytes = metaBytes(meta);
   if (bytes <= maxBytes) return meta;
   if (isReadMeta(meta)) return bytes <= READ_META_MAX_BYTES_FACTOR * maxBytes ? meta : undefined;
