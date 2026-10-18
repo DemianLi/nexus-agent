@@ -10,7 +10,7 @@
  * (1) lockfile：本 repo 的 `pnpm-lock.yaml` 不記 workspace 套件自己的版號（workspace 相依是 `link:`），實測 `release:bump patch`
  * 改了 40 份 manifest 之後 `pnpm install --lockfile-only --offline` 的 lockfile 與改之前逐位元相同，所以沒有東西要跟；
  * (2) commit：`develop` 禁止直接 push、一律走 PR，squash 後的 commit 標題是 PR 標題（`AGENTS.md`「標題格式」），本地 commit
- * 訊息會被丟掉；所以這支只改檔，commit 與 PR 標題（`release: …`）由人下。撤除條件：之後 workspace 版號進了 lockfile 就補 install。
+ * 訊息會被丟掉；所以這支只改檔，commit 與 PR 標題（`chore: …`；`release` 只給 develop → main 的同步 PR）由人下。撤除條件：之後 workspace 版號進了 lockfile 就補 install。
  *
  * 用法：`pnpm run release:bump <major|minor|patch|x.y.z>`；加 `--dry-run` 只印不寫。1.0 之前的規則見 AGENTS.md「發版」。
  *
