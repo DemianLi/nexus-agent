@@ -224,6 +224,9 @@ export class DepthCheckedSerializer implements SerializerProtocol {
    * 由內往外還原（基座的註解：replacer 先呼叫了 `toJSON`，所以要從最裡面往上解）。`{lc: 2}` 的紀錄（`undefined`、
    * `DeltaSnapshot`、`Set`、`Map` 這一類，`_default` 寫的那幾種）**還沒往下解之前**整顆原樣交給基座：那一顆是純 JSON，
    * 交過去跟基座自己解到這裡的結果相同，就不必複製 `reviveConstructorRecord` 那一整段。
+   *
+   * **已知殘餘**：那幾種紀錄裡面如果包著 LangChain 物件（例如 `Set` 裡放訊息），那一顆仍由基座的 `load` 解，上限還是 50 層，
+   * 「寫得進去就讀得回來」在這種形狀上不成立。今天 state 裡沒有這種形狀（`DeltaChannel` 見 `pruned-memory-saver.ts`）。
    */
   async #revive(value: unknown): Promise<unknown> {
     if (value === null || typeof value !== 'object') return value;

@@ -333,11 +333,9 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
     60_000,
   );
 
-  // 為什麼是 1000 而不是更深：約 2000 層起 LangGraph 自己在圖裡走節點回傳值的 `_deserializeCommandSendObjectGraph`
-  // （`@langchain/langgraph` 的 `dist/constants.js`，遞迴）先爆 `Maximum call stack size exceeded`，輪不到寫存檔點。
-  // 那一段是大聲失敗（`turn/failed`），不在這張卡的範圍。
-  it('參數 1000 層：那一輪拋 checkpoint_depth_exceeded，下一輪照常跑，模型收到的是被拒之前的歷史', async () => {
-    const { upstream, start, logFile } = await rig({ deep: { v: mixed(1_000) } });
+  // 剛好超過上限一層，跟上面「剛好 600」那一格湊成一對邊界。日誌那一關拒收這一則（601 層），state 照樣收下。
+  it('事件 601 層（存檔點剛好超過上限一層）：那一輪拋 checkpoint_depth_exceeded，下一輪照常跑，模型收到的是被拒之前的歷史', async () => {
+    const { upstream, start, logFile } = await rig({ deep: { v: mixed(AT_LOG_CAP + 1) } });
     const server = await start();
     await say(server, 'same-deep', '第一句');
     await say(server, 'same-deep', '深:deep');
@@ -350,7 +348,9 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
       return line;
     });
     expect(failed).toContain(CHECKPOINT_DEPTH_EXCEEDED);
-    expect(failed).toContain(`上限 ${CHECKPOINT_MAX_DEPTH} 層`);
+    expect(failed).toContain(
+      `有 ${CHECKPOINT_MAX_DEPTH + 1} 層，超過上限 ${CHECKPOINT_MAX_DEPTH} 層`,
+    );
 
     await say(server, 'same-deep', '再一句');
     expect(
