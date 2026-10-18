@@ -6,7 +6,7 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 /**
  * tooltip 的延遲（#1583）：nexus 要 0（develop 的 Radix Provider `delayDuration={0}`）。Base UI 的 Trigger 取
  * `delay ?? Provider 的 delay ?? 600`，SG 的 `TooltipProvider` 預設 `delay=0`（vendor `tooltip.tsx:7`），所以 Provider 底下就是 0。
- * 產品裡每個 tooltip 都在 Provider 底下：`ui/sidebar.tsx` 的 SidebarProvider 包一層，`App.tsx` 的停止鈕自己包一層。
+ * 產品裡唯一的 tooltip（`App.tsx` 的停止鈕）自己包一層 Provider。#1680 之前 `ui/sidebar.tsx` 的 SidebarProvider 也包一層，SG 版沒有。
  */
 
 beforeEach(() => {

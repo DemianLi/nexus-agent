@@ -138,6 +138,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import {
   Sidebar,
+  SidebarInset,
   SidebarMenu,
   SidebarMenuAction,
   SidebarMenuButton,
@@ -711,6 +712,14 @@ function OverlayPage({ name }: { name: string }) {
       return <KeyboardMenu />;
     case 'command':
       return <OpenCommand />;
+    case 'desktop-sidebar':
+      // 桌面側欄（offcanvas，產品 `app-sidebar.tsx` 的形狀）：量收合的 transition（#1680 PR B）。
+      return (
+        <SidebarProvider>
+          <Sidebar>桌面側欄</Sidebar>
+          <SidebarInset>會話區</SidebarInset>
+        </SidebarProvider>
+      );
     case 'collapsibles':
       return <CollapsiblesPage />;
     case 'messages':

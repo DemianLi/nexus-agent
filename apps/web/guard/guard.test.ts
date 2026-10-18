@@ -54,6 +54,8 @@ import { startGuardServer, type GuardServer } from './server';
  * 14. **對話區**（#1638 PR B，`?overlay=messages`，產品的 `Transcript`）：泡泡字、表尾、捲到最新的按鈕圖示的對比與按鈕的焦點（亮暗加兩種退路，
  *    {@link OVERLAYS}）；每一則的 `content-visibility` 是 `visible`（第 42 條）；按鈕的動效照 §7：不位移、只縮放 .97、reduced-motion 下沒有
  *    transition（第 41 條）；外殼的行高是 SG 的 20px、泡泡維持 23px；底部淡出捲到底時收成 0。
+ * 15. **桌面側欄的收合**（#1680 PR B，`?overlay=desktop-sidebar`）：gap 與 container 的 transition 是 SG 的 200ms linear，
+ *    reduced-motion 下整個關掉（`motion.css`）。手機抽屜的寬度在 375 與 768 都是 `--sidebar-width`（本地修改第 55 條，見 {@link WIDTHS}）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -1171,6 +1173,13 @@ const WIDTHS: {
     mark: 'mobile-sidebar',
     px: 288,
   },
+  // 768–1023 也是手機抽屜（斷點 1024）：`w-3/4` 加 `sm:max-w-sm` 會變成 384（本地修改第 55 條擋住）。
+  {
+    overlay: 'mobile-sidebar',
+    viewport: { width: 768, height: 1024 },
+    mark: 'mobile-sidebar',
+    px: 288,
+  },
 ];
 const WIDTH_MARKS: Record<string, Record<string, Record<string, string>>> = {
   feedback: { '[data-slot="dialog-content"]': { 'data-guard-width': 'feedback' } },
@@ -1361,7 +1370,7 @@ describe.each(
       expect(rows[0]!.backgroundColor).not.toBe(rows[1]!.backgroundColor);
     });
 
-    test('「⋯」選單開著時看得見（Trigger 開著掛 data-popup-open，ui/sidebar.tsx 的 SidebarMenuAction）', () => {
+    test('「⋯」選單開著時看得見（Trigger 開著掛 aria-expanded，vendor 的 SidebarMenuAction 認它）', () => {
       report[`${key}:shown`] = shown;
       // 量具自檢：lg 寬度下沒開的「⋯」照樣藏著（滑過那一列才現身）。
       expect(shown).toEqual({ open: '1', closed: '0' });
@@ -2007,6 +2016,46 @@ describe('瀏覽器量輸入框的版面（#1591）', () => {
       }
     },
   );
+});
+
+describe('瀏覽器量桌面側欄的收合動效（#1680 PR B，`?overlay=desktop-sidebar`）', () => {
+  // 收合照 SG 的 `duration-200 ease-linear`（#1468 Q8；規格 §7 的「桌面側欄收合」）；reduced-motion 下 `motion.css` 以
+  // `data-slot` 命中 gap 與 container，transition 整個關掉。jsdom 不載 CSS，元件測試量不到。
+  test('平常是 SG 的 200ms linear；reduced-motion 下 gap 與 container 都沒有 transition', async () => {
+    const read = async (reducedMotion: boolean) => {
+      const page = await openOverlay('desktop-sidebar', 'light', { reducedMotion, marks: {} });
+      try {
+        return await page.evaluate(() =>
+          ['sidebar-gap', 'sidebar-container'].map((slot) => {
+            const el = document.querySelector(`[data-slot="${slot}"]`);
+            if (el === null) return { slot, missing: true };
+            const style = getComputedStyle(el);
+            return {
+              slot,
+              property: style.transitionProperty,
+              duration: style.transitionDuration,
+              easing: style.transitionTimingFunction,
+            };
+          }),
+        );
+      } finally {
+        await page.close();
+      }
+    };
+    const normal = await read(false);
+    const reduced = await read(true);
+    report['motion:desktop-sidebar'] = { normal, reduced };
+    expect(normal).toEqual([
+      { slot: 'sidebar-gap', property: 'width', duration: '0.2s', easing: 'linear' },
+      {
+        slot: 'sidebar-container',
+        property: 'left, right, width',
+        duration: '0.2s',
+        easing: 'linear',
+      },
+    ]);
+    for (const row of reduced) expect(row).toMatchObject({ property: 'none', duration: '0s' });
+  });
 });
 
 describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', () => {

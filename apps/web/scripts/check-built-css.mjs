@@ -311,7 +311,7 @@ if (longDurations.length > 0 && !durationCap)
 // 第 3 條的延伸：用 transition 滑入的面（#1583：vendor 的 sheet 在 `data-starting-style`／`data-ending-style` 設位移，不走 `--animate-in`）。
 // 產物裡有這種位移，reduced-motion 裡就要有針對那些面的規則：拿掉位移（`translate: none`）、transition 時長 ≤ 150ms。
 // 位移寫在 Tailwind 的 class 上，量具對不到是哪個元素，所以面列在這裡；新的滑入元件出現時，同一個 PR 補進來。
-// 手機側欄的抽屜也是 sheet，但 `data-slot` 被 `ui/sidebar.tsx` 蓋成 `sidebar`，用 `data-mobile` 認。
+// 手機側欄的抽屜也是 sheet，但 `data-slot` 被 vendor 的 `components/ui/sidebar.tsx` 蓋成 `sidebar`，用 `data-mobile` 認。
 const SLIDING_SURFACES = [
   '[data-slot=sheet-content]',
   '[data-slot=sidebar][data-mobile=true]',
