@@ -76,6 +76,30 @@ test('上一題、跳過、下一題、送出答案：呼叫端沒給字時是�
   expect(container.textContent).not.toMatch(/Previous|Skip|Next|Submit/);
 });
 
+/** 呼叫端明確傳 `null` 也一樣是中文：預設參數只擋 `undefined`，`null` 會漏到 vendor 的 `?? "Previous"`。 */
+test('上一題、跳過、下一題、送出答案：呼叫端給 null 時也是中文', () => {
+  const { container } = render(
+    <Questionnaire item="q">
+      <QuestionnaireItem name="q">
+        <QuestionnaireTitle>題目</QuestionnaireTitle>
+      </QuestionnaireItem>
+      <QuestionnaireActions>
+        <QuestionnairePrevious>{null}</QuestionnairePrevious>
+        <QuestionnaireSkip>{null}</QuestionnaireSkip>
+        <QuestionnaireNext>{null}</QuestionnaireNext>
+        <QuestionnaireSubmit>{null}</QuestionnaireSubmit>
+      </QuestionnaireActions>
+    </Questionnaire>,
+  );
+  const text = (slot: string) =>
+    container.querySelector(`[data-slot=questionnaire-${slot}]`)?.textContent;
+  expect(text('previous')).toBe('上一題');
+  expect(text('skip')).toBe('跳過');
+  expect(text('next')).toBe('下一題');
+  expect(text('submit')).toBe('送出答案');
+  expect(container.textContent).not.toMatch(/Previous|Skip|Next|Submit/);
+});
+
 test('呼叫端給的字照用', () => {
   const { container } = render(
     <Questionnaire item="q">

@@ -429,7 +429,7 @@ body {
 /*
  * 問答選項的焦點外框畫在選項上（#1638 PR C，卡上驗收 D；README 本地修改第 46 條）：vendor 的 `QuestionnaireChoice`
  * （`vendor/solid-glass/components/ui/questionnaire.tsx:109`）把真的 input 鋪滿選項、`opacity-0`，聚焦的樣子只有
- * `has-[>input:focus-visible]:border-ring` 與 `ring-3`；而 SG 自己的玻璃規則（`solid-glass.css:768-779`）在 layer 外寫了選項的
+ * `has-[>input:focus-visible]:border-ring` 與 `ring-3`；而 SG 自己的玻璃規則（`solid-glass.css:767-779`）在 layer 外寫了選項的
  * `border-color` 與 `box-shadow`，兩樣都被蓋掉，input 上的外框又看不見——鍵盤聚焦時什麼都沒畫（違反 #1497 Q5）。跟第 15、30 條
  * 同一個做法：2px 字色、offset 2px，外框寫在 layer 外，offset 在 base layer。`registry-edits.test.ts` 釘住這條與 vendor 原文，
  * `guard/` 量聚焦後的外框、offset 與 `box-shadow` 不變。不讓 Prettier 排版，理由同上。
