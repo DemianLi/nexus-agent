@@ -233,18 +233,27 @@ describe('出貨的 cordis.yml', () => {
     });
     // **記憶體量具**（#1490，預設關閉）：出貨那一行與 schema 預設相等，預設是 0＝不啟動量具。
     expect(byId.get('memory-gauge')).toEqual(memoryGaugeConfigSchema.parse({}));
-    expect(memoryGaugeConfigSchema.parse({})).toEqual({ reportIntervalMs: 0 });
+    expect(memoryGaugeConfigSchema.parse({})).toEqual({ reportIntervalMs: 0, warnAtPercent: 75 });
     // 間隔的邊界（M1）：計時器上限收、多 1 拒——超過 2³¹−1 時 Node 會把間隔改成 1 ms，日誌每毫秒一行。
     expect(memoryGaugeConfigSchema.parse({ reportIntervalMs: 2_147_483_647 })).toEqual({
       reportIntervalMs: 2_147_483_647,
+      warnAtPercent: 75,
     });
     expect(memoryGaugeConfigSchema.safeParse({ reportIntervalMs: 2_147_483_648 }).success).toBe(
       false,
     );
     expect(memoryGaugeConfigSchema.parse({ reportIntervalMs: 1000 })).toEqual({
       reportIntervalMs: 1000,
+      warnAtPercent: 75,
     });
     expect(memoryGaugeConfigSchema.safeParse({ reportIntervalMs: 999 }).success).toBe(false);
+    // 用量警告門檻（#1493）：1 到 99 的整數；0、100、小數、負數都拒（100 的「超過」永遠不會發生，等於沒設）。
+    for (const percent of [1, 75, 99]) {
+      expect(memoryGaugeConfigSchema.parse({ warnAtPercent: percent }).warnAtPercent).toBe(percent);
+    }
+    for (const bad of [0, 100, 75.5, -1, Number.NaN]) {
+      expect(memoryGaugeConfigSchema.safeParse({ warnAtPercent: bad }).success).toBe(false);
+    }
     // **過大工具結果的暫存**（#734）。`root` 不寫（缺席才是 harness home 底下的預設位置），保留天數寫出來，值必須就是預設。
     expect(byId.get('tool-result-stash')).toEqual({
       cleanupPeriodDays: DEFAULT_TOOL_RESULT_STASH_RETENTION_DAYS,
