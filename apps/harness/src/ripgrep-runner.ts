@@ -82,7 +82,7 @@ export interface RipgrepInternals {
   readonly timeoutMs?: number;
   readonly killGraceMs?: number;
   /** 每次真的要 spawn 之前呼叫一次（測試用來數「取消後不起 rg」）。 */
-  readonly onSpawn?: (argv: readonly string[]) => void;
+  readonly onSpawn?: (argv: readonly string[], executable: string) => void;
   /** 子行程起來之後給測試一個把手（斷言「行程已經結束」）。 */
   readonly onChild?: (child: { readonly pid: number | undefined }) => void;
 }
@@ -165,7 +165,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
 
     let child: ReturnType<typeof spawn>;
     try {
-      internals.onSpawn?.(argv);
+      internals.onSpawn?.(argv, executable);
       child = spawn(executable, argv, {
         cwd: options.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],

@@ -22,7 +22,7 @@ import {
   writeFile,
 } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
 import { FilesystemBackend } from 'deepagents';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { BaseMessage } from '@langchain/core/messages';
@@ -411,6 +411,24 @@ describe('失敗不換結果', () => {
 
     expect(result.error).toContain('could not start');
     expect(bare).not.toHaveBeenCalled();
+  });
+});
+
+describe('grep 真的用內附的那一支（#1502 刀 4 的條件）', () => {
+  it('實際 spawn 的執行檔是 node_modules/@vscode/ripgrep-<平台>-<arch>/ 底下的 rg，不是 PATH 上的', async () => {
+    let used: string | undefined;
+
+    const result = await new ContainedFilesystemBackend({
+      rootDir: root,
+      ripgrep: { onSpawn: (_argv, executable) => (used = executable) },
+    }).grep('needle', '/');
+
+    expect(paths(result)).toEqual(['/a.log', '/notes.txt']);
+    expect(used).toBe(await resolveRgPath());
+    const platformPackage = `@vscode/ripgrep-${process.platform}-${process.arch}`;
+    expect((used ?? '').split(sep).join('/')).toMatch(
+      new RegExp(`/node_modules/${platformPackage}/bin/rg(\\.exe)?$`),
+    );
   });
 });
 
