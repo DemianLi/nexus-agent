@@ -206,9 +206,14 @@ function nestedArray(depth: number): unknown {
 describe('日誌裡凍過的深 meta（#1526）', () => {
   it('3000 層陣列巢狀：量得動、交出去的是沒凍過的副本，之後的原生 JSON.stringify 也序列化得了', () => {
     const meta = { deep: nestedArray(3_000) };
-    // 照正式路徑凍：從日誌拿，不自己 `Object.freeze`。
-    const logged = new SessionLog('t').append('tool/result', { callId: 'c1', isError: false, meta })
-      .data.meta;
+    // 照正式路徑凍：從日誌拿，不自己 `Object.freeze`。經 seed 進來：寫入那一關有深度上限（#1661），3000 層只會出現在
+    // 上限之前寫下、續接回來的舊日誌裡。
+    const event = new SessionLog('t', {
+      seed: [
+        { type: 'tool/result', seq: 0, time: 0, data: { callId: 'c1', isError: false, meta } },
+      ],
+    }).events[0]!;
+    const logged = (event.data as { meta: unknown }).meta;
     // 上限明著放大：這一格量的是「量得動、交得出去」，不是上限本身；超過上限的話回 `undefined`，什麼都測不到。
     const capped = capToolResultMeta(logged, 1_000_000);
     expect(Object.isFrozen(capped)).toBe(false);
