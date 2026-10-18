@@ -224,7 +224,8 @@
 | tooltip | 同 popover（#1583）：淡入＋zoom .95＋slide 2，250／150（全域時長留到 ④）；延遲 0（SG 的 `TooltipProvider` 預設） |
 | 對話框（含確認框） | 同 popover（#1583）：淡入＋zoom .95，250／150（全域時長留到 ④）；遮罩淡入、`backdrop-blur-xs` |
 | 抽屜（手機側欄 <1024、窄螢幕的右側欄） | 照 SG 的機制（#1583）：transition 200ms、位移 2.5rem 加淡入淡出；遮罩 150 淡入。reduced-motion 不位移、≤ 150（覆寫檔，vendor README 本地修改第 23 條） |
-| 桌面側欄收合、面板高度差 | resize 300 |
+| 桌面側欄收合 | 照 SG（#1680）：width／left 的 transition 200ms linear；reduced-motion 沒有 transition（`motion.css`，`guard/` 量） |
+| 面板高度差 | resize 300 |
 | 工具卡展開、提問面板收起 | 250／150，高度＋透明度 |
 | 新訊息、工具卡出現 | 250，往上 8px |
 | 面板換掉輸入框、上下題 | 舊 150 淡出 → 新 250 長出；上下題有方向 |

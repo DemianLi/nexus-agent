@@ -197,11 +197,5 @@ describe('registry 檔的改動還在', () => {
     expect({ ...pkg.dependencies, ...pkg.devDependencies }).not.toHaveProperty('next-themes');
   });
 
-  // dropdown-menu 與 cmdk 那一半照 #1468 Q19 隨 #1583 換成 vendor 版拿掉；sidebar 這一半留給 ③-4。
-  test('側欄的群組標題與 sm 選單鈕是 text-ui（#1281：標題與可點的字不小於 13）', () => {
-    const sidebar = code(read('./sidebar.tsx'));
-    expect(sidebar).toMatch(/data-sidebar="group-label"[\s\S]{0,200}\btext-ui\b/);
-    expect(sidebar).toContain("sm: 'h-7 text-ui'");
-    expect(sidebar).toContain("size === 'sm' && 'text-ui'");
-  });
+  // #1281 的三條（側欄、dropdown-menu、cmdk 的 text-ui）照 #1468 Q19 拿掉：dropdown-menu 與 cmdk 隨 #1583、側欄隨 #1680 換成 vendor 版。
 });

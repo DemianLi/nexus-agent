@@ -138,11 +138,14 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import {
   Sidebar,
+  SidebarInput,
+  SidebarInset,
   SidebarMenu,
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  SidebarTrigger,
   useSidebar,
 } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
@@ -357,10 +360,17 @@ function GuardPage() {
           在對話裡被定位的那一則
         </div>
 
-        <div style={{ height: 160 }}>
+        {/* 側欄裡可以聚焦的四種都量（#1680 PR B 換成 vendor 版之後）：選單鈕、「⋯」、開關鈕量焦點外框，搜尋框量欄位邊框。 */}
+        <div style={{ height: 220 }}>
           <SidebarProvider style={{ minHeight: 0, height: '100%' }}>
             <Sidebar collapsible="none" data-guard-text="sidebar" data-guard-surface="sidebar">
               側欄
+              <SidebarTrigger data-guard-focus="sidebar-trigger" />
+              <SidebarInput
+                data-guard-field="sidebar-input"
+                aria-label="側欄搜尋"
+                placeholder="搜尋"
+              />
               <SidebarMenu>
                 <SidebarMenuItem>
                   <SidebarMenuButton
@@ -369,6 +379,9 @@ function GuardPage() {
                   >
                     側欄選單
                   </SidebarMenuButton>
+                  <SidebarMenuAction aria-label="選項" data-guard-focus="sidebar-menu-action">
+                    ⋯
+                  </SidebarMenuAction>
                 </SidebarMenuItem>
               </SidebarMenu>
             </Sidebar>
@@ -711,6 +724,14 @@ function OverlayPage({ name }: { name: string }) {
       return <KeyboardMenu />;
     case 'command':
       return <OpenCommand />;
+    case 'desktop-sidebar':
+      // 桌面側欄（offcanvas，產品 `app-sidebar.tsx` 的形狀）：量收合的 transition（#1680 PR B）。
+      return (
+        <SidebarProvider>
+          <Sidebar>桌面側欄</Sidebar>
+          <SidebarInset>會話區</SidebarInset>
+        </SidebarProvider>
+      );
     case 'collapsibles':
       return <CollapsiblesPage />;
     case 'messages':

@@ -49,7 +49,7 @@
 | 階 | 用在 | 例 |
 | --- | --- | --- |
 | `text-body`（14／23） | 內文，與本來就是內文大小的按鈕、選單項 | 對話、`Button` 預設（vendor 原文寫 `text-sm`，同字級）、下拉選單與 cmdk 的項目、右側欄的分頁鈕 |
-| `text-ui`（13／18） | **可以點的**與**當標題的**小字 | 小字的可展開列（思考過程、待辦、送出佇列、觀測與成本分頁的列）、輸入框底列的膠囊鈕、「這一輪的過程」、側欄與 cmdk 的群組標題、成本分頁的區段標題、卡片標頭（工具卡的標題、計劃、等待核准） |
+| `text-ui`（13／18） | **可以點的**與**當標題的**小字 | 小字的可展開列（思考過程、待辦、送出佇列、觀測與成本分頁的列）、輸入框底列的膠囊鈕、「這一輪的過程」、成本分頁的區段標題、卡片標頭（工具卡的標題、計劃、等待核准） |
 | `text-tip`（12／16） | 小字說明、附註、時間、計數 | 工具名與摘要、`Badge`（vendor 原文寫 `text-xs`，同字級）、`xs` 按鈕（vendor 原文寫 `text-xs`：外觀照 SG，#1468 Q8、Q19 拿掉了 #1281 按鈕那一條，下面「按鈕不縮成 `text-tip`」管的是產品原始碼）、tooltip、快捷鍵提示、時間戳、popover 裡數字上面的欄位名、卡片裡單一區塊上面的小標籤（「結果」「呼叫參數」「子代理的對話」）、錯誤與提示句 |
 | `text-micro`（11） | 只有程式碼區塊的語言標籤。它在 CSS 裡用 `var(--text-micro)`，不是 class，所以搜 `text-micro` 這個 class 搜不到 | 回覆裡程式碼區塊左上角的「ts」（`src/styles/markdown.css` 的 `.md-code-lang`） |
 
@@ -61,7 +61,7 @@
 - **等寬的內容不是標題**：diff、讀檔、搜尋結果、`MonoBlock`、工具卡上的路徑都留 `text-tip`。路徑本身就是那顆鈕的字時（改動清單的列、審閱分頁選檔案的鈕）才是 `text-ui`。
 - **只動 12 的那一層**：已經是 `text-body` 的按鈕與選單不降成 13。
 
-機械判得出來的那一半有護欄：按鈕、`RowTrigger` 與其他觸發鈕、選單項自己的 `className` 寫了 `text-tip`／`text-micro` 就紅（`src/styles/type-hierarchy.test.ts`）；registry 元件的預設字級（`ui/dropdown-menu` 沒有小字，側欄的群組標題與 `sm` 選單鈕、cmdk 的群組標題、附件的檔名是 `text-ui`）在 `ui/registry-edits.test.ts`。「是不是標題」判不出來，靠 review。
+機械判得出來的那一半有護欄：按鈕、`RowTrigger` 與其他觸發鈕、選單項自己的 `className` 寫了 `text-tip`／`text-micro` 就紅（`src/styles/type-hierarchy.test.ts`）；registry 元件的預設字級照 SG：#1281 的三條（下拉選單、cmdk、側欄）照 #1468 Q19 拿掉，下拉選單與 cmdk 隨 #1583、側欄（群組標題與 `sm` 選單鈕是 vendor 原文的 `text-xs`）隨 #1680 換成 vendor 版。「是不是標題」判不出來，靠 review。
 
 ## 新增自訂 token 要登記 `cn`
 

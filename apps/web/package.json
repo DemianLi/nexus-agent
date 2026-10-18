@@ -57,7 +57,6 @@
     "micromark-util-symbol": "^2.0.1",
     "micromark-util-types": "^2.0.2",
     "playwright-core": "1.64.1",
-    "radix-ui": "^1.6.7",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "shiki": "^4.4.3",
