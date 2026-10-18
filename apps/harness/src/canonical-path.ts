@@ -65,7 +65,9 @@ export async function canonicalizeExisting(target: string): Promise<string | und
  *
  * **感知分隔符**：`${root}${sep}` 前綴的寫法在根是 `/` 時會變成 `//`，什麼都比不中。用 `relative` 也要小心：
  * `/a` 對 `/a/..nexus` 的 `relative` 是 `..nexus`，只看 `startsWith('..')` 會把它判成外面。所以只有 `..` 本身、
- * `..` 加分隔符開頭、或跨磁碟機的絕對路徑才算外面。
+ * `..` 加分隔符開頭、或跨磁碟機的絕對路徑才算外面。照 dsh `fs-local` 的 `contains`（`packages/fs/fs-local/src/index.ts:152-155`，
+ * `687f282e`），同一個判斷式。`packages/nexus-plugin-workspace-changes/src/paths.ts` 的 `isInside` 照的是 dsh workspace-changes 自己那一支
+ * （`packages/deliverables/workspace-changes/src/paths.ts:21-24`），有上面那個 `..nexus` 的窄，那邊照 dsh 不改。
  *
  * @param root - 絕對目錄。
  * @param path - 要判的絕對路徑。
