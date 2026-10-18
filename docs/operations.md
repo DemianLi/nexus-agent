@@ -687,9 +687,10 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
     （任何一條對話讀清單或綁定）才更新。所以檔上偶爾有一個沒有真的活著的對話 id，下一條對話開出來就消失；要確認是不是真活著，
     看 `GET /threads`。
   - **綁的規則**：只算實際掛上的列——停用的、這條對話掉了的、樹上自我停用的不算；啟動時讀一次的那幾列也不算（它們生效的是啟動那一份，
-    改了看 `sync: restart`）。對話建好之後才綁，只看過歷史、沒跑過一輪的對話也算（它下一輪真的會用那一版）。**對話預設只在 serve 關機時才拆**
-    （沒有開閒置逐出，見 `thread-capacity` 的 `idleEvictAfterMs`），所以名單只增不減，直到重啟；**開了閒置逐出**，被撤掉的對話在撤完的當下從名單消失
-    （serve 撤完會重寫這個檔，寫失敗只記一行日誌、不擋撤，檔留舊的直到下一次寫）；表在行程記憶體裡，重啟之後從零開始。要分「正在跑」還是「閒著」，看 `GET /threads` 的 `running`。
+    改了看 `sync: restart`）。對話建好之後才綁，只看過歷史、沒跑過一輪的對話也算（它下一輪真的會用那一版）。**出廠開著閒置逐出**（`thread-capacity` 的 `idleEvictAfterMs`，
+    2 小時），被撤掉的對話在撤完的當下從名單消失
+    （serve 撤完會重寫這個檔，寫失敗只記一行日誌、不擋撤，檔留舊的直到下一次寫）；逐出關掉（`idleEvictAfterMs: 0`）或沒有落盤時，對話只在 serve
+    關機時才拆，名單只增不減，直到重啟。表在行程記憶體裡，重啟之後從零開始。要分「正在跑」還是「閒著」，看 `GET /threads` 的 `running`。
   - **對話 id 進了這個檔**，擴大了上面「不帶設定值」的揭露範圍：對話 id 本來就經 `GET /threads` 給每個登入的人看，這個檔是 0600，
     只有進得了主機的人讀得到，所以曝露面比 wire 小。**這個前提在 #1428／#1429 做逐人可見之後不成立**（`GET /threads` 不再是每個人都看得到
     全部）；那時這個檔仍然列出全部對話，因為讀者只有主機上的人，但要重審。
@@ -805,7 +806,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `thread-title`              | 會話標題的三個上限（退回標題的詞數與位元組，以及任何來源的標題的位元組）                                                       | 有（三格）                       | **關不掉**               |
 | `thread-title-llm`          | `--live` 時由模型依第一句話產生會話標題                                                                                        | 有（五格，另有選配的 `modelId`） | 關得掉（＝只剩退回標題） |
 | `thread-search`             | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開**                                                                             | 有（一格）                       | 關得掉（＝搜尋一律失敗） |
-| `thread-capacity`           | serve 行程裡最多同時有幾條 thread；**出廠不設上限**                                                                             | 有（一格，選配）                 | 關得掉（＝不限）         |
+| `thread-capacity`           | serve 行程裡最多同時有幾條 thread，與閒置的 thread 多久之後撤出記憶體；**出廠開著**（500 條、2 小時）                           | 有（兩格）                       | **關不掉**               |
 | `downlink`                  | 下行串流的心跳間隔，與每條下行線排著等送的位元組上限；**出廠開著**                                                              | 有（兩格）                       | **關不掉**               |
 | `browser-session`           | 瀏覽器 cookie 的絕對有效期                                                                                                     | 有（一格）                       | **關不掉**               |
 | `deliverable-files`         | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數）                                                             | 有（三格）                       | **關不掉**               |
@@ -1002,34 +1003,55 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   句子中間的「搜尋」「會話」都搜不到，所以這裡換掉了；代價是索引大一些。
 - 日誌不落盤（`session-persistence` 關掉）時沒有東西可搜，一律回空。
 
-**`thread-capacity`**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)、[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）給 serve 行程裡的 thread 數設上限（第 2 級），
-也可以讓閒置的 thread 被撤出記憶體（第 1 級，見下面「閒置逐出」），是逐級降載的「底座保險絲」（量測與背景見 #1464：每條 thread 常駐約 2 MB heap，只讀歷史也有）。**出廠不設上限**，
-行為與沒有這一列一樣——Linux 還沒量，給數字沒有依據，預設打開的話既有部署會在某一天突然開始拒收。要開的人放進自己的 `--patch <檔>`
-（或 `plugin config set thread-capacity --file -`）：
+**`thread-capacity`**（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)、[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)、[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）給 serve 行程裡的 thread 數設上限（第 2 級），
+並讓閒置的 thread 被撤出記憶體（第 1 級，見下面「閒置逐出」），是逐級降載的「底座保險絲」（量測與背景見 #1464：每條 thread 常駐約 2 MB heap，只讀歷史也有）。
+**出廠兩格都開著**：上限 500 條、閒置 2 小時撤出。出貨清單那一列寫的就是這一組，值的家在 schema（`apps/harness/src/settings/thread-capacity.ts`）。
+要放寬就把數值調大，放進自己的 `--patch <檔>`（或 `plugin config set thread-capacity --file -`）：
 
 ```yaml
 - id: thread-capacity
   config:
-    maxThreads: 200
+    maxThreads: 1000
+    idleEvictAfterMs: 7200000
 ```
 
+- **`config` 是整份替換，但只寫一格不會丟掉另一格**：沒寫的那一格由 schema 補上出廠值。上面兩格都寫出來，是為了讀的人一眼看得到現在是多少。
+- **500 怎麼來的**（這個數字 dsh 沒有，登記為「產品需求超出 dsh」）：dsh 記憶體量測最小的機型是 4 GB；**假設**留一半給主機上的其他人（這是假設，不是量的），
+  serve 約有 2 GB；扣掉閒置的行程樹約 533 MB，剩約 1.5 GB；除以每條短 thread 約 3 MB，約 500 條（數字是 macOS 上量的，Linux 量完會重估）。
+  **這是後盾，不是記憶體保證**：長對話每輪還要再加幾 MB，thread 數上限擋得住「thread 很多」，擋不住「thread 很長」。
+  定得寬是刻意的：讀歷史也佔名額，定太低的話，一個人在側欄連點很多舊對話就能把其他人擋在外面。
 - **數的是行程裡的 thread 數，含還在組裝中的**。到了上限，**新的** thread 一律拒收：送訊息、開下行、讀歷史、續聊磁碟上的舊
   thread 都算（它們都要為那條 thread 組一份 agent）。**已經在行程裡的 thread 不受影響**，列表、停止、回饋這些不新建 thread 的路也不經過這一道。
-- **拒收回專用錯誤碼 `thread_at_capacity`**，message 寫出上限與下一步；serve 日誌每次拒收記一行，含目前數量與上限；起動時印一行
-  `thread 上限：…`（沒設就印「不限」），設了卻不確定有沒有生效看這一行。
-- **名額不會自己回來，除非開了閒置逐出（下一段）**：沒開的話 serve 不逐條收 thread，到上限之後要**重啟 serve** 才會清空（建構失敗的那條會當場釋放）。
+- **拒收回專用錯誤碼 `thread_at_capacity`**，message 寫出上限與下一步；serve 日誌每次拒收記一行，含目前數量與上限。起動時一律印兩行：
+  `thread 上限：N（…）`，以及 `thread 閒置逐出：…`（閒置 T 毫秒後撤出／`idleEvictAfterMs` 是 0，不逐出／沒有落盤，不逐出 三種之一），
+  不確定是出廠值還是自己改過的值，看這兩行。
+- **名額會自己回來**：閒置的 thread 被撤掉就還名額（下一段）。逐出關掉（`idleEvictAfterMs: 0`）或沒有落盤時，名額要**重啟 serve** 才會清空（建構失敗的那條會當場釋放）。
   沒有排隊、搶占，也不會因為滿了就自動關掉最舊的。**正在撤的 thread 也佔名額**，撤完才還；撤的當中有人要同一條 thread，會等它撤完、重新組一份。
-- **起動時讀一次，改了要重啟**。`disabled: true` 就是不限。
+- **起動時讀一次，改了要重啟**。
+- **這一列關不掉**：寫 `disabled: true` 啟動當場拋錯。兩格都有出廠值，關掉只會回到同一組值，讀起來卻像拆了保險絲（同 `downlink` 那一列）。
+  **要放寬，把數值調大；要關閒置逐出，設 `idleEvictAfterMs: 0`**。`maxThreads` 沒有「不限」，最小是 1；寫 0 會被 schema 擋下：**壞設定回到預設、不拒絕啟動**——這一列照「設定驗不過」掉列、
+  啟動警告指名它，值回到出廠的 500，到了 500 照樣拒收。
 - **偏離 dsh（登記）**：dsh 沒有 thread 數上限；這是 serve 跑在多人共用主機上才有的產品需求。形狀借的是 dsh 背景工作的准入
-  （`jobs-local` 的 `maxConcurrentJobsPerOwner`），逐點見 `apps/harness/src/settings/thread-capacity.ts` 的檔頭。
+  （`jobs-local` 的 `maxConcurrentJobsPerOwner`），逐點見 `apps/harness/src/settings/thread-capacity.ts` 的檔頭。「有上限就出廠打開、給有限的預設值、
+  沒有『不限』」照 dsh 各入口的上限（背景工作、終端數、背景子代理都是這樣）。
 - web 怎麼顯示這個錯誤碼另開卡給前端，不在這一張。
 
-**閒置逐出（`idleEvictAfterMs`，[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，第 1 級）**：同一列多一格，毫秒數 T，**出廠不設（不逐出）**，由管理者決定：
+**升級注意（#1619 之前的部署）**：這一列從「出廠不開」改成「出廠開著」，三種既有部署會碰到變化，各自怎麼回到舊行為：
+
+- 原本沒設上限的：行程裡到了 500 條開始拒收新 thread。要更寬，把 `maxThreads` 調大。
+- 原本沒開逐出的：沒人看著的 thread 閒置 2 小時開始被撤出記憶體（代價見下一段的「已知限制」）。要回到不逐出，設 `idleEvictAfterMs: 0`。
+- 原本關掉這一列的：升級之後 serve 起不來，錯誤訊息指名這一列，也講是在哪裡關的。
+  - **用變更紀錄關的**（`plugin disable thread-capacity`）：跑 `plugin enable thread-capacity`。紀錄還留著那一筆停用時，別的 `plugin` 改動也會被拒，訊息帶同一句修法。
+  - **在 patch 檔裡寫 `disabled: true` 的**：把 `disabled` 拿掉。
+  - 要舊的「不限、不逐出」，就把 `maxThreads` 調大、`idleEvictAfterMs` 設 0。
+
+**閒置逐出（`idleEvictAfterMs`，[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，第 1 級）**：同一列的另一格，毫秒數 T，**出廠 7200000（2 小時）**，照 dsh 終端的閒置回收；
+**`0` 是不逐出**，同樣照 dsh。只想改這一格：
 
 ```yaml
 - id: thread-capacity
   config:
-    idleEvictAfterMs: 1800000   # 閒置 30 分鐘後撤出記憶體
+    idleEvictAfterMs: 1800000   # 閒置 30 分鐘後撤出記憶體；0 是不逐出
 ```
 
 - **計時方式**：一條 thread 的「閒置條件」**全部同時成立**才開始算，連續滿 T 才撤；中途任何一條不成立（有人又說話、開了下行、背景子代理又有活…）就歸零重算。
@@ -1041,18 +1063,19 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **撤的順序**：關泵 → 收下行、標題、檔案搜尋、附件、落盤、agent → 作廢上傳收據 → 重寫 `plugin-snapshot.json` → 名額放掉。每一步獨立容錯，
   任何一步拋錯只記一行日誌，不會留下撤到一半的 thread；快照重寫失敗同樣只記一行（`PluginSnapshotWriter.publish` 從不拋）。服務關機時會等正在撤的收完。
 - **開著頁籤的 thread 不會被撤**：「沒有下行訂閱者」是閒置條件之一，使用者的頁籤只要沒關，那條 thread 就一直佔著記憶體。逐出回收的是**沒人看著**的 thread（關掉頁籤、離開的人），不是所有閒著的 thread。
-- **只有開了落盤才生效**：沒有 `session-persistence` 時日誌只在記憶體裡，撤了就沒了。設了卻沒落盤，啟動日誌印一行說明不生效，T 不會傳下去。
+- **只有開了落盤才生效**：沒有 `session-persistence` 時日誌只在記憶體裡，撤了就沒了，T 不會傳下去；啟動日誌那一行說「沒有落盤，不逐出」。
 - **已知限制（決策：接受「等價於重啟」的退化）**：被撤的 thread 再開，就是**重啟 serve 之後再開**——歷史、權限模式、停住的佇列、冷的背景子代理照磁碟上的日誌重組；
   **行程記憶體裡的東西不在了**：上傳收據（舊的收據要重新上傳）、`present` 的等待交付表（見 `docs/plugin-contract.md`）、插件快照裡它那一列；
   **重組時吃當下的設定與插件版本**（見上面「後台改清單」的第三個已知限制）。web 的下行會斷，重連時 thread 重新組裝。
-- **起動時讀一次，改了要重啟**。`maxThreads` 與 `idleEvictAfterMs` 可以只設其中一個。
-- **偏離 dsh（登記）**：dsh 頂層沒有閒置逐出（程式碼裡是 legacy TODO）。閒置條件借的是**子代理結算**（沒有輪、沒有佇列、沒有未收完的子工作），
+- **起動時讀一次，改了要重啟**。`maxThreads` 與 `idleEvictAfterMs` 可以只設其中一個，另一個留在出廠值。
+- **要在整段對話裡釘住組裝它的那一版**（見「後台改清單」的第三個已知限制），設 `idleEvictAfterMs: 0`。
+- **偏離 dsh（登記）**：dsh 頂層沒有閒置逐出（程式碼裡是 legacy TODO）；出廠值 2 小時與「0 是不逐出」照 dsh 終端的 `unattendedTimeoutMs`。閒置條件借的是**子代理結算**（沒有輪、沒有佇列、沒有未收完的子工作），
   計時方式借的是 **terminal retention**（條件全成立才開始算、任何一次忙碌就歸零、到 T 才收）。形狀逐點見 `src/wire-handler.ts` 的 `WireHandlerOptions.idleEvictMs`。
 
 **模型請求並行上限（`live-model` 的 `maxConcurrentRequests` 與 `maxWaitMs`，[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)）**給整台 serve 同時在跑的模型請求數設上限。
 多人共用一把供應商 key 時，一條失控的 thread（同一步的 `task`／`subagent` 可以重疊，背景子代理每個主對話最多 8 個）同時開出十幾條模型串流，會把每分鐘配額一次打穿；
 供應商回 429，所有人的請求一起退避、一起回來再撞，跟那條 thread 無關的人一起受害。設了上限，名額滿了的**新請求排隊**，不再一起撞牆。
-**出廠不設上限**，行為與沒有這兩格一樣——供應商的配額因端點而異，給數字沒有依據，預設打開的話既有部署會在某一天突然開始排隊。要開的人放進自己的 `--patch <檔>`
+**出廠不限**，行為與沒有這兩格一樣——供應商的配額因端點而異，給數字沒有依據，預設打開的話既有部署會在某一天突然開始排隊。要開的人放進自己的 `--patch <檔>`
 （或 `plugin config set live-model --file -`，注意那是整份替換）：
 
 ```yaml
@@ -1195,10 +1218,10 @@ pnpm --filter @nexus/harness run plugin -- config reset thread-title
   又自己停用就再記一筆。它在 `plugin-snapshot.json` 裡是 `disabled`，不是「沒掛上」，也不會有 `failed`。
   想讓它回來：改它的設定（`config-set`），或重啟 serve。沒有紀錄檔時行為相同，只是不記那一筆。
   用寫入口 `disable` 之後再 `enable` 回同一份宣告：插件會重掛、再停用一次，但去重鍵相同，所以**不會再記一筆**。
-  （3）**開了閒置逐出（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）之後，被撤掉又重建的 thread 拿到的是「現在」的設定與插件**：
+  （3）**閒置逐出（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，出廠開著）會讓被撤掉又重建的 thread 拿到「現在」的設定與插件**：
   上面說「開著的對話手上的工具照舊能叫，只有新對話看到新的」，一條 thread 被撤掉之後再開，就是一條新對話——**它重新組裝，吃當下的
-  清單、設定與插件版本，不是它上次組出來的那一份**。這等同「重啟 serve 之後再開那條 thread」，語意變了的是：不開逐出時，一條 thread 在行程
-  活著期間一直守著組裝它的那一版；開了逐出，閒置夠久就會換到新的一版。**要在整段對話裡釘住某一版，不要開逐出**（出廠就是不開）。
+  清單、設定與插件版本，不是它上次組出來的那一份**。這等同「重啟 serve 之後再開那條 thread」，語意變了的是：逐出關掉時，一條 thread 在行程
+  活著期間一直守著組裝它的那一版；逐出開著（出廠），閒置夠久就會換到新的一版。**要在整段對話裡釘住某一版，設 `idleEvictAfterMs: 0`**（[#1619](https://github.com/DemianLi/nexus-agent/issues/1619) 起出廠開著）。
 
 **紀錄檔的格式**：JSON Lines，一行一筆，`{"v":1,"seq":N,"at":"<ISO>","actor":{…},"op":"disable|enable|config-set|config-reset|patch|rejected|failed|self-disabled",…}`。
 `seq` 從 1 連續遞增（`rejected`、`failed`、`self-disabled` 也佔序號）。`config-set` 與 `config-reset` 帶 `before`／`after`（**明文**，連同裡面可能有的秘密，所以檔案是 `0600`、

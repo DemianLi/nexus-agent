@@ -1,9 +1,9 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import ts from 'typescript';
-import { resolveConfig } from 'vite';
+import { createLogger, resolveConfig } from 'vite';
 import { describe, expect, it } from 'vitest';
 
 /** 網頁不由 Vite 服務（#426，照 dsh `rejectStandaloneServe`）：用真的設定檔走 Vite 自己的解析。 */
@@ -41,6 +41,43 @@ describe('裸的 cn 解析到 lib/utils.ts（#1523）', () => {
     const resolve = config.createResolver();
     expect(await resolve('cn', utils)).toBe(utils);
     expect(await resolve('cn/config', utils)).toMatch(/node_modules\/.*\bcn\b.*config/);
+  });
+
+  it('guard 測試頁的打包設定也經根 tsconfig.base.json 的 paths 解析 @nexus（#1642）：指到的檔存在，外掛有掛上', async () => {
+    // 外掛的 `projects` 相對於 Vite 的 `root`（guard/）解析、指錯只印警告；乾淨樹（沒有 lib/）上 build 才會壞，CI 先建 lib 量不到。
+    const guard = fileURLToPath(new URL('../guard/vite.config.ts', import.meta.url));
+    const { BASE_TSCONFIG } = await import('../guard/vite.config');
+    expect(BASE_TSCONFIG).toBe(
+      fileURLToPath(new URL('../../../tsconfig.base.json', import.meta.url)),
+    );
+    expect(existsSync(BASE_TSCONFIG)).toBe(true);
+    // 外掛實際讀的那份：它在 configResolved 就開始解析 `projects`，解析不了只走 logger.error、不擋 build。收下 logger 的錯誤，
+    // 再叫一次它的 resolveId（會等解析做完），斷言沒有錯。外掛那一行與常數任一處指錯都會紅（#1642 PM 審查）。
+    const errors: string[] = [];
+    const base = createLogger('silent');
+    const customLogger = {
+      ...base,
+      error: (message: string) => void errors.push(message),
+      warn: (message: string) => void errors.push(message),
+      hasErrorLogged: () => true,
+    };
+    const config = await resolveConfig({ configFile: guard, customLogger }, 'build', 'production');
+    const plugin = config.plugins.find((p) => p.name === 'vite-tsconfig-paths');
+    expect(plugin).toBeDefined();
+    const resolveId = plugin!.resolveId as (
+      this: { resolve: (id: string) => Promise<{ id: string } | null> },
+      id: string,
+      importer: string,
+      options: object,
+    ) => Promise<unknown>;
+    const importer = fileURLToPath(new URL('../guard/main.tsx', import.meta.url));
+    await resolveId.call(
+      { resolve: async (id) => (existsSync(id) ? { id } : null) },
+      '@nexus/wire',
+      importer,
+      {},
+    );
+    expect(errors).toEqual([]);
   });
 
   it('guard 測試頁的打包設定也用同一份解析（測試頁畫的 class 要跟出貨一樣）', async () => {
