@@ -1,5 +1,6 @@
 {
   "name": "nexus-agent",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.34.5",
@@ -19,7 +20,11 @@
     "gen-tsconfig-paths": "tsx scripts/gen-tsconfig-paths.ts",
     "verify-tsconfig-paths": "tsx scripts/gen-tsconfig-paths.ts --check",
     "verify-lib-manifests": "tsx scripts/verify-lib-manifests.ts",
-    "smoke-built-bin": "tsx scripts/smoke-built-bin.ts"
+    "smoke-built-bin": "tsx scripts/smoke-built-bin.ts",
+    "release:bump": "tsx scripts/release/bump.ts",
+    "release:version": "tsx scripts/release/version.ts",
+    "release:pack": "tsx scripts/release/pack.ts",
+    "release:verify-packed-install": "tsx scripts/release/verify-packed-install.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

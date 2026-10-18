@@ -1512,18 +1512,23 @@ interface SnapshotPath {
   readonly segment: string | number;
 }
 
-function renderPath(path: SnapshotPath): string {
+function renderPath(path: SnapshotPath, maxSegments = Number.POSITIVE_INFINITY): string {
   const segments: (string | number)[] = [];
   for (let node: SnapshotPath | undefined = path; node !== undefined; node = node.parent) {
     segments.push(node.segment);
   }
   let rendered = String(segments.pop());
-  for (let index = segments.length - 1; index >= 0; index--) {
+  const shown = Math.min(segments.length, maxSegments);
+  for (let index = segments.length - 1; index >= segments.length - shown; index--) {
     const segment = segments[index] as string | number;
     rendered += typeof segment === 'number' ? `[${segment}]` : `.${segment}`;
   }
+  if (shown < segments.length) rendered += `…（省略 ${segments.length - shown} 段）`;
   return rendered;
 }
+
+/** 超過深度上限時路徑只印前幾段：一千多段的路徑塞進一行 warn 沒人讀得了，要定位的是從 `data` 的哪個欄位往下。 */
+const DEPTH_FAILURE_PATH_SEGMENTS = 8;
 
 type JsonObject = Record<string, unknown>;
 
@@ -1538,6 +1543,8 @@ type SnapshotTask =
       readonly value: unknown;
       readonly destination: SnapshotDestination;
       readonly path: SnapshotPath;
+      /** 外面包著幾層物件或陣列；根是 0。 */
+      readonly depth: number;
     }
   | {
       readonly kind: 'array-item';
@@ -1545,6 +1552,8 @@ type SnapshotTask =
       readonly index: number;
       readonly target: unknown[];
       readonly path: SnapshotPath;
+      /** 這一格外面包著幾層（含 `source` 這一層）。 */
+      readonly depth: number;
     }
   | {
       readonly kind: 'object-property';
@@ -1552,8 +1561,32 @@ type SnapshotTask =
       readonly key: string;
       readonly target: JsonObject;
       readonly path: SnapshotPath;
+      /** 這一格外面包著幾層（含 `source` 這一層）。 */
+      readonly depth: number;
     }
   | { readonly kind: 'leave'; readonly source: object };
+
+/**
+ * 一則會話事件的 `data` 最多巢狀幾層物件或陣列（`data` 本身算第 1 層，純量不算），超過的在 {@link SessionLog.append} 拒收。
+ * 根跟遙測交出去的 body 是同一個（協調器送的就是 `data`），所以這個數字也是 OTLP 匯出那一段看到的層數。
+ *
+ * **為什麼要有上限：** Node 22 的原生 `JSON.stringify` 是遞迴的，連沒凍過的值也一樣。CI（Linux x64，Node 22.19.0 與
+ * 22.23.3）上一則 `tool/result` 的 `meta` 深到 4104 層，JSONL 後端就寫不出去；寫入失敗的那一批會留在佇列頭（照 dsh
+ * `storage.ts:301-317`），那條會話之後一則都落不了盤。在寫入這一關先拒，壞的只有那一則（[#1661](https://github.com/DemianLi/nexus-agent/issues/1661)）。
+ *
+ * **為什麼是 600：** 被最淺的那個讀方壓下來的。CI（Linux x64，Node 22.19.0 與 22.23.3）上 `telemetry-otel` 的 OTLP/HTTP JSON
+ * 匯出（`toAnyValue` 加 `JSON.stringify`，兩段都是遞迴的）物件 1023 層就送不出去、交錯 1169、陣列 1364；其他的都更深
+ * （凍過陣列的 `structuredClone` 約 1537、沒凍過的 `JSON.stringify` 約 4100）。600 在最低門檻的三分之二以下：那些數字是在
+ * vitest 裡量的，serve 底下呼叫端的堆疊更深，能用的只會更少。`telemetry-otel` 出廠是關的，但上限照最嚴的讀方定。
+ * 正常的工具結果與訊息不到 100 層（#1661 盤點）。
+ *
+ * **只管寫入，讀方不設限。** 這個上限出現之前寫下的舊日誌可能有更深的事件，續接（seed）與讀方（`fromLoggedMessage`、
+ * 遙測、修剪）照樣收得下，{@link snapshotJsonValue} 預設不設限。
+ *
+ * **與 dsh 的偏離（理由 1）：** dsh 的 `Session.append` 沒有深度上限，在 Node 22 上有同一個洞——超深的一則讓整條會話卡住。
+ * 我們的執行環境就是 Node 22，退一步改在寫入那一關設上限。
+ */
+export const SESSION_EVENT_MAX_DEPTH = 600;
 
 /**
  * 深拷貝成**無損的**純 JSON，**拷不動就當場拋**。
@@ -1579,12 +1612,18 @@ type SnapshotTask =
  *
  * @param value - 要拷的值。
  * @param label - 路徑的根，例如 `tool/result 的 data`。
+ * @param maxDepth - 物件與陣列最多巢狀幾層（`value` 本身是容器的話算第 1 層，純量不算）；省略即不設限。
+ *   只有寫入那一關（{@link SessionLog.append}、{@link materializeAppendBatch}）傳，見 {@link SESSION_EVENT_MAX_DEPTH}。
  * @returns 脫離原值的副本。
- * @throws {TypeError} 有 JSON 無法原樣表達的東西，訊息指出是哪一格。
+ * @throws {TypeError} 有 JSON 無法原樣表達的東西，或巢狀超過 `maxDepth`，訊息指出是哪一格。
  */
-export function snapshotJsonValue(value: unknown, label: string): unknown {
-  const fail = (path: SnapshotPath, reason: string): never => {
-    throw new TypeError(`會話事件的 ${renderPath(path)} ${reason}`);
+export function snapshotJsonValue(
+  value: unknown,
+  label: string,
+  maxDepth: number = Number.POSITIVE_INFINITY,
+): unknown {
+  const fail = (path: SnapshotPath, reason: string, maxSegments?: number): never => {
+    throw new TypeError(`會話事件的 ${renderPath(path, maxSegments)} ${reason}`);
   };
   const ancestors = new Set<object>();
   let root: unknown;
@@ -1609,6 +1648,7 @@ export function snapshotJsonValue(value: unknown, label: string): unknown {
       value,
       destination: { kind: 'root' },
       path: { parent: undefined, segment: label },
+      depth: 0,
     },
   ];
   for (let task = tasks.pop(); task !== undefined; task = tasks.pop()) {
@@ -1625,6 +1665,7 @@ export function snapshotJsonValue(value: unknown, label: string): unknown {
         value: task.source[task.index],
         destination: { kind: 'array', target: task.target, index: task.index },
         path: { parent: task.path, segment: task.index },
+        depth: task.depth,
       });
       continue;
     }
@@ -1634,6 +1675,7 @@ export function snapshotJsonValue(value: unknown, label: string): unknown {
         value: task.source[task.key],
         destination: { kind: 'object', target: task.target, key: task.key },
         path: { parent: task.path, segment: task.key },
+        depth: task.depth,
       });
       continue;
     }
@@ -1656,6 +1698,10 @@ export function snapshotJsonValue(value: unknown, label: string): unknown {
       );
     }
     if (ancestors.has(current)) fail(task.path, '繞回自己，日誌不收循環參考');
+    const depth = task.depth + 1;
+    if (depth > maxDepth) {
+      fail(task.path, `是第 ${depth} 層巢狀，超過上限 ${maxDepth} 層`, DEPTH_FAILURE_PATH_SEGMENTS);
+    }
 
     if (Array.isArray(current)) {
       if (!hasPlainArrayPrototype(current)) fail(task.path, '是 object，日誌只收純 JSON');
@@ -1674,7 +1720,7 @@ export function snapshotJsonValue(value: unknown, label: string): unknown {
       ancestors.add(current);
       tasks.push({ kind: 'leave', source: current });
       for (let index = length - 1; index >= 0; index--) {
-        tasks.push({ kind: 'array-item', source: current, index, target, path: task.path });
+        tasks.push({ kind: 'array-item', source: current, index, target, path: task.path, depth });
       }
       continue;
     }
@@ -1693,6 +1739,7 @@ export function snapshotJsonValue(value: unknown, label: string): unknown {
         key: keys[index] as string,
         target,
         path: task.path,
+        depth,
       });
     }
   }
@@ -1707,16 +1754,23 @@ export function snapshotJsonValue(value: unknown, label: string): unknown {
  * **後端為什麼不能直接序列化日誌裡那份：** 日誌裡的事件全凍過，而 V8 的 `JSON.stringify` 對凍過的巢狀撐得比較淺：
  * CI（Node 22.23.3 Linux x64）上凍過的陣列約 2200 層就 `RangeError`，沒凍過的約 4100 層（Node 25 上沒凍過的撐得過
  * 200 萬層，#1526 實測）。快照收得下的值後端卻寫不出去，失敗那批會一直卡在佇列頭，那條 thread 之後一則都落不了盤。
- * 拷過之後在 Node 22 上仍有沒凍過的那個上限，超過的一樣卡住，見 [#1661](https://github.com/DemianLi/nexus-agent/issues/1661)。
+ * 拷過之後在 Node 22 上仍有沒凍過的那個門檻，所以寫入那一關另有深度上限（{@link SESSION_EVENT_MAX_DEPTH}，#1661）。
  *
  * 規則與 {@link SessionLog.append} 同一份（{@link snapshotJsonValue}），拒收時一樣拋帶路徑的 `TypeError`（偏離同那支，理由 2）。
+ * 深度上限也同一個（{@link SESSION_EVENT_MAX_DEPTH}）：經 `append` 進來的事件不會超過，這裡再檢查一次是給繞過日誌、
+ * 直接交給後端的批次。
  *
  * @param events - 這一批，依 seq 排好。
  * @returns 脫離原值、沒凍過的副本。
- * @throws {TypeError} 有 JSON 無法原樣表達的東西，訊息指出是哪一格。
+ * @throws {TypeError} 有 JSON 無法原樣表達的東西，或某顆的 `data` 巢狀超過上限，訊息指出是哪一格。
  */
 export function materializeAppendBatch(events: readonly SessionEvent[]): readonly SessionEvent[] {
-  return snapshotJsonValue(events, '寫入批次') as readonly SessionEvent[];
+  // 從批次算起：批次這個陣列是第 1 層、事件是第 2 層，`data` 才是第 3 層。
+  return snapshotJsonValue(
+    events,
+    '寫入批次',
+    SESSION_EVENT_MAX_DEPTH + 2,
+  ) as readonly SessionEvent[];
 }
 
 /**
@@ -1953,7 +2007,11 @@ export class SessionLog implements SessionLogView {
       throw new TypeError(`會話事件 "${type}" 會進模型，不能標可忽略（#507）`);
     }
     // 先驗再推進：拷不動的話這一筆整個不算，日誌不會留下半筆。
-    const snapshot = snapshotJsonValue(data, `${type} 的 data`) as SessionEventMap[T];
+    const snapshot = snapshotJsonValue(
+      data,
+      `${type} 的 data`,
+      SESSION_EVENT_MAX_DEPTH,
+    ) as SessionEventMap[T];
     if (this.#publishing) {
       throw new Error(
         `會話 "${this.#sessionId}" 的 append 不能在另一次 append 的回呼裡重入` +

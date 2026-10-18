@@ -190,16 +190,21 @@ describe('recordRequestSnapshot：變了才記', () => {
     for (let level = 0; level < 3_000; level++) deep = [deep];
     const before = new SessionLog('s');
     const shallow = request('甲');
-    recordRequestSnapshot(
-      before,
-      {
-        ...shallow,
-        header: { ...shallow.header, tools: [{ name: 'echo', parameters: { deep } }] },
-      },
-      0,
+    recordRequestSnapshot(before, shallow, 0);
+    // 寫入那一關有深度上限（#1661），3000 層只會出現在上限之前寫下的舊日誌裡：把記下的 header 換成深的再續接。
+    const seed = before.events.map((event) =>
+      event.type === 'request/header'
+        ? {
+            ...event,
+            data: {
+              ...event.data,
+              header: { ...event.data.header, tools: [{ name: 'echo', parameters: { deep } }] },
+            },
+          }
+        : event,
     );
 
-    const resumed = new SessionLog('s', { seed: before.events });
+    const resumed = new SessionLog('s', { seed });
     const header = resumed.events.find((event) => event.type === 'request/header')!;
     // 前提：基準讀的是日誌裡凍過的那一份（見上：凍過的那一份直接序列化會拋）。
     expect(Object.isFrozen((header.data as { header: object }).header)).toBe(true);
