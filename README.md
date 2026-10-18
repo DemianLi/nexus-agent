@@ -59,6 +59,11 @@ pnpm --filter @nexus/harness run cli:live "..."             # 換成真實供應
 
 **預設走寫死腳本的假模型，不需要任何 key**——那條路徑驗的是接線，不是模型。
 
+開發時不必先建置：`tsx` 與 `vitest` 照 `tsconfig.base.json`／`tsconfig.runtime.json` 的 `paths` 把 `@nexus/*` 解到 `src/`。
+每個套件的 `package.json` 指的是 `lib/`（出貨的是編好的 ESM），要產出它：`pnpm run build:lib`；`pnpm lint` 會先做這一步，
+因為各插件的 `eslint.config.js` 載入的是 `@nexus/sdk/lint` 編好的 `lib/lint.js`。新增套件或 subpath 後跑
+`pnpm run gen-tsconfig-paths` 更新別名（`pnpm run verify-tsconfig-paths` 查有沒有漂移，CI 會跑）。
+
 在瀏覽器裡跟 agent 說話——**先 build 網頁再起 `serve`**，網頁是 `apps/web/dist` 的靜態產物，
 順序反了什麼都沒有：
 
