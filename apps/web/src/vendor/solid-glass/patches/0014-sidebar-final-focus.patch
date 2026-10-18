@@ -1,0 +1,14 @@
+===================================================================
+--- a/components/ui/sidebar.tsx
++++ b/components/ui/sidebar.tsx
+@@ -191,6 +191,10 @@
+       <Sheet open={openMobile} onOpenChange={setOpenMobile} {...props}>
+         <SheetContent
+           dir={dir}
++          // 開關鈕不是 Sheet 的 Trigger，關掉時自己把焦點還給它（規格 §8）。
++          finalFocus={() =>
++            document.querySelector<HTMLElement>('[data-slot="sidebar-trigger"]') ?? false
++          }
+           data-sidebar="sidebar"
+           data-slot="sidebar"
+           data-mobile="true"

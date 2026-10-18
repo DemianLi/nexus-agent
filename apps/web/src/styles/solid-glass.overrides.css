@@ -221,8 +221,8 @@ body {
 /*
  * 手機左側欄的抽屜只留陰影、不畫邊（#1583，PM 定；README 本地修改第 21 條）：vendor 的 sheet（`vendor/solid-glass/components/ui/sheet.tsx:54`）
  * 同時帶 `data-[side=*]:border-*` 與 `shadow-lg`。SG 只在 `.bg-popover`（`solid-glass.css:394-402`）把邊歸零，`.bg-sidebar` 只給 blur
- * （`:363-369`），所以手機左側欄（`ui/sidebar.tsx` 傳 `bg-sidebar`）會邊與陰影一起畫，違反規格 §5。寫在 layer 外，蓋得過 utilities 層的邊；
- * 手機側欄的 `SheetContent` 帶著 `data-slot="sidebar"`（`ui/sidebar.tsx` 傳的，排在 vendor 的 `data-slot="sheet-content"` 後面，蓋掉它），
+ * （`:363-369`），所以手機左側欄（vendor `components/ui/sidebar.tsx` 傳 `bg-sidebar`）會邊與陰影一起畫，違反規格 §5。寫在 layer 外，蓋得過 utilities 層的邊；
+ * 手機側欄的 `SheetContent` 帶著 `data-slot="sidebar"`（vendor `components/ui/sidebar.tsx` 傳的，排在 vendor 的 `data-slot="sheet-content"` 後面，蓋掉它），
  * 所以選擇器兩種都列。瀏覽器那一層（`guard/`）量抽屜的 border 寬是 0。不讓 Prettier 排版，理由同上。
  */
 /* prettier-ignore */

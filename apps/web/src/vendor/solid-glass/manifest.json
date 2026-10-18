@@ -170,6 +170,19 @@
       "sha256": "2d40f0b3d9021086eab403fe042df04aff794f4dca5214b13aaf23ce8dd37a50",
       "patches": ["patches/0010-sonner-theme-prop.patch"],
       "upstreamSha256": "0c729f9f1ada0b0bedd9296710cc257dc43559fa6b8cc40f010d129e8ff85fdd"
+    },
+    "components/ui/sidebar.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/sidebar.tsx",
+      "sha256": "231a812d637317874675f08d12b507fcf93659893b23066022fdc32079e61cbf",
+      "patches": [
+        "patches/0011-sidebar-chinese-strings.patch",
+        "patches/0012-sidebar-lg-breakpoint.patch",
+        "patches/0013-sidebar-cookie-try-catch.patch",
+        "patches/0014-sidebar-final-focus.patch",
+        "patches/0015-sidebar-mobile-width.patch"
+      ],
+      "upstreamSha256": "45d425d44b65638d390e9d13b868790bf7f948cf35a5b127c00b3e7a009ccdd1"
     }
   }
 }
