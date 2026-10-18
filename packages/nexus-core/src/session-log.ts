@@ -1569,7 +1569,8 @@ type SnapshotTask =
  *   自有屬性（有洞的拒）。
  * - **物件**：原型是 `null` 或某個 realm 的內建 `Object.prototype`（跨 realm 的收、偽造的不收）；自有鍵裡有 symbol 或
  *   不可列舉的就拒——JSON 會靜靜丟掉它們。
- * - **寫進副本用 `Object.defineProperty`**：`"__proto__"` 這種自有鍵照樣是自有鍵，不會經原型 setter 換掉副本的原型。
+ * - **物件屬性用 `Object.defineProperty` 寫進副本**：`"__proto__"` 這種自有鍵照樣是自有鍵，不會經原型 setter 換掉副本的原型。
+ *   陣列格照 dsh 用賦值（`:79-80`）：索引鍵不會碰到原型 setter。
  * - **迭代走訪，不遞迴**：深巢狀不會撞上 `RangeError`。
  * - **每格只讀一次**：檢查和拷貝是同一次走訪，存取器不會被讀兩次而讀到不同的值。
  *
