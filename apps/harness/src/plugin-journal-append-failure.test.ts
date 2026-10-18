@@ -10,7 +10,7 @@
 import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import type { FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -27,6 +27,8 @@ interface Fault {
   /** 截回用的 `r+` 把手上的 `sync` 次數；每次開紀錄檔的 flags。 */
   rollbackSyncs: number;
   opened: string[];
+  /** 以 `'r'` 開的目錄（目錄 fsync 就是這樣開的，見 `atomic-file.ts` 的 `syncDirectory`）。 */
+  directoryOpens: string[];
 }
 
 const state = vi.hoisted(() => ({ fault: undefined as Fault | undefined }));
@@ -48,6 +50,7 @@ vi.mock('node:fs/promises', async (importOriginal) => {
     open: async (path: string, flags?: string, mode?: number) => {
       const real = await actual.open(path, flags, mode);
       const fault = state.fault;
+      if (fault !== undefined && flags === 'r') fault.directoryOpens.push(String(path));
       if (fault === undefined || !String(path).endsWith('.jsonl')) return real;
       fault.opened.push(String(flags));
       const rollback = flags === 'r+';
@@ -134,7 +137,7 @@ function journalPath(): string {
 }
 
 function newFault(): Fault {
-  const fault: Fault = { rollbackSyncs: 0, opened: [] };
+  const fault: Fault = { rollbackSyncs: 0, opened: [], directoryOpens: [] };
   state.fault = fault;
   return fault;
 }
@@ -185,7 +188,7 @@ describe('寫到一半拋錯：截回寫前大小再拋', () => {
     expect(opsOf(path)).toEqual(['disable', 'enable']);
   });
 
-  it('第一筆、檔是這次才建的：截回 0 位元組；下一筆照常是第 1 筆', async () => {
+  it('第一筆、檔是這次才建的：截回 0 位元組；下一筆照常是第 1 筆，而且補做建檔那次該做的目錄 fsync', async () => {
     const path = journalPath();
     const fault = newFault();
     const warnings: string[] = [];
@@ -193,9 +196,12 @@ describe('寫到一半拋錯：截回寫前大小再拋', () => {
     fault.writeThrowsAfter = 12;
     await expect(append(path, warnings)).rejects.toThrow('ENOSPC');
     expect(sizeOf(path)).toBe(0);
+    // 失敗那一筆沒走到目錄 fsync：檔已經在目錄裡，目錄還沒落盤。
+    expect(fault.directoryOpens).toEqual([]);
 
     expect((await append(path, warnings))?.seq).toBe(1);
     expect(warnings).toEqual([]);
+    expect(fault.directoryOpens).toEqual([dirname(path)]);
   });
 
   it('檔尾原本有當掉的半行：先截掉它（講一次），寫失敗截回的是截掉半行之後的大小，不是讀到的原大小', async () => {
@@ -267,6 +273,9 @@ describe('截回也失敗：兩個錯都報，半行由下一個寫者截掉', (
     expect(String((errors[0] as Error).message)).toContain('ENOSPC');
     expect(errors[1]).toBe(truncateFailure);
     expect(message).toContain(path);
+    // 呼叫端只印 message：兩個原因都要在裡面。
+    expect(message).toContain('ENOSPC');
+    expect(message).toContain('truncate failed');
     expect(readJournal(path)?.incompleteTail).toBe(true);
 
     expect((await append(path, warnings, ENABLE_TODO))?.seq).toBe(2);
