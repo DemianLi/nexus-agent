@@ -1,8 +1,9 @@
 /**
  * 組合表與推導：純函式，不碰日誌也不碰控制器。
  *
- * 出廠三組的名字與值是照 dsh 一字不差抄的（`packages/bundle/base/cordis.patch.yml:252-261`），web 的「全開」確認認的就是
- * `danger-full-access` 這個名字——所以它們被釘在這裡，改動要有人明著來改這一條。
+ * 出廠兩組的名字與值照 dsh base 出廠的前兩組（`packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`）；第三組
+ * `danger-full-access` 出廠不給，部署方用 patch 加回（#1621）。web 的「全開」確認認的就是 `danger-full-access` 這個名字
+ * ——所以它們被釘在這裡，改動要有人明著來改這一條。
  */
 
 import { describe, expect, it } from 'vitest';
@@ -16,15 +17,23 @@ import {
 } from './presets.js';
 import type { PresetTable } from './presets.js';
 
-describe('出廠三組', () => {
-  it('名字、值與順序照 dsh', () => {
+/** 部署方用 patch 加回全開之後的表：值照 dsh base 出廠的第三組。推導是機制，用加回之後的表量。 */
+const WITH_FULL_ACCESS: PresetTable = {
+  ...DEFAULT_PRESETS,
+  'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
+};
+
+describe('出廠兩組', () => {
+  it('名字、值與順序照 dsh 的前兩組；全開那一組出廠不給（#1621）', () => {
     expect(
       Object.entries(DEFAULT_PRESETS).map(([name, spec]) => [name, spec.sandbox, spec.approval]),
     ).toEqual([
       ['read-only', 'read-only', 'ask'],
       ['workspace-write', 'workspace-write', 'ask'],
-      ['danger-full-access', 'danger-full-access', 'never'],
     ]);
+    expect(
+      Object.values(DEFAULT_PRESETS).some((spec) => spec.sandbox === 'danger-full-access'),
+    ).toBe(false);
   });
 
   it('每一組都有說明；`custom` 不在表裡', () => {
@@ -39,18 +48,26 @@ describe('derivePreset：現在是哪一組是推導出來的', () => {
       derivePreset(DEFAULT_PRESETS, { preset: null, sandbox: 'read-only', approval: 'ask' }),
     ).toBe('read-only');
     expect(
-      derivePreset(DEFAULT_PRESETS, {
+      derivePreset(WITH_FULL_ACCESS, {
         preset: 'read-only',
         sandbox: 'danger-full-access',
         approval: 'never',
       }),
     ).toBe('danger-full-access');
+    // 出廠表沒有全開那一組：同一對值對不上任何一組。
+    expect(
+      derivePreset(DEFAULT_PRESETS, {
+        preset: 'read-only',
+        sandbox: 'danger-full-access',
+        approval: 'never',
+      }),
+    ).toBe(CUSTOM_PRESET);
   });
 
   it('只動了其中一顆旋鈕就對不上任何一組：custom', () => {
     // 全開沙箱但核准改回 ask：兩顆旋鈕各自切過，不是任何一組。
     expect(
-      derivePreset(DEFAULT_PRESETS, {
+      derivePreset(WITH_FULL_ACCESS, {
         preset: 'danger-full-access',
         sandbox: 'danger-full-access',
         approval: 'ask',
@@ -92,14 +109,10 @@ describe('derivePreset：現在是哪一組是推導出來的', () => {
 });
 
 describe('設定的形狀', () => {
-  it('省略 presets 就是出廠三組，而且是各自的一份拷貝（改了不影響別的組裝）', () => {
+  it('省略 presets 就是出廠兩組，而且是各自的一份拷貝（改了不影響別的組裝）', () => {
     const first = permissionPresetsConfigSchema.parse({});
     const second = permissionPresetsConfigSchema.parse({});
-    expect(Object.keys(first.presets)).toEqual([
-      'read-only',
-      'workspace-write',
-      'danger-full-access',
-    ]);
+    expect(Object.keys(first.presets)).toEqual(['read-only', 'workspace-write']);
     expect(first.presets).not.toBe(second.presets);
   });
 

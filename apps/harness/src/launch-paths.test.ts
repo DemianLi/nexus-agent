@@ -3,7 +3,7 @@
  * 與它用的分隔符感知判斷。serve 那一端的端到端在 `serve-launch-paths.test.ts`。
  */
 
-import { mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
@@ -134,6 +134,44 @@ describe('assertLaunchPathsOutsideWorkspace', () => {
         legacyEnvFile: legacy,
       }),
     ).rejects.toThrow(`程式碼資料夾根目錄的舊 .env：${legacy}，在工作區之內`);
+  });
+
+  /**
+   * #1671：安裝樹的 `lib` 往上三層是系統目錄，那裡的 `.env` 不是舊位置。工作區選在那個目錄之上，
+   * 裝著戳記的樹不該因為它被拒絕；同一份檔放在原始碼樹的形狀裡仍然被點名。
+   */
+  it('安裝樹：往上三層的 .env 在工作區裡，也不當舊位置點名', async () => {
+    const prefix = await tmp('nexus-1671-opt-');
+    const release = join(prefix, 'nexus-agent', 'v1');
+    const moduleDir = join(release, 'lib');
+    await mkdir(moduleDir, { recursive: true });
+    await writeFile(join(prefix, '.env'), 'FAKE_1671_API_KEY=x\n');
+    await writeFile(join(release, 'build-stamp.json'), '{"commit":"a","dirty":false}');
+    const home = await tmp('nexus-1671-home-');
+    await expect(
+      assertLaunchPathsOutsideWorkspace({
+        workspace: prefix,
+        cwd: '/',
+        env: { [HARNESS_HOME_ENV]: home },
+        moduleDir,
+      }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('原始碼樹的形狀：同樣位置的 .env 在工作區裡就被點名為舊位置', async () => {
+    const repo = await tmp('nexus-1671-repo-');
+    const moduleDir = join(repo, 'apps', 'harness', 'src');
+    await mkdir(moduleDir, { recursive: true });
+    await writeFile(join(repo, '.env'), 'FAKE_1671_API_KEY=x\n');
+    const home = await tmp('nexus-1671-home-');
+    await expect(
+      assertLaunchPathsOutsideWorkspace({
+        workspace: repo,
+        cwd: '/',
+        env: { [HARNESS_HOME_ENV]: home },
+        moduleDir,
+      }),
+    ).rejects.toThrow('程式碼資料夾根目錄的舊 .env');
   });
 
   it('舊位置的 .env 不存在就不算', async () => {

@@ -710,9 +710,12 @@ export {
   isLogicalTurnStart,
   isModelVisibleEvent,
   isUnreadableSessionEvent,
+  materializeAppendBatch,
   MESSAGE_PROJECTION_EVENT_TYPES,
   MODEL_VISIBLE_EVENT_TYPES,
+  SESSION_EVENT_MAX_DEPTH,
   SessionLog,
+  snapshotJsonValue,
 } from './session-log.js';
 
 export type {

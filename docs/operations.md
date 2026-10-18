@@ -8,7 +8,7 @@
 **要 `--workspace` 才存在。** 沒給的話檔案跑在虛擬檔案系統裡，那道 fence 根本不在路徑上。
 
 給了之後 `--sandbox <mode>` 決定**起始**強度——`read-only`、`workspace-write`（預設）、
-`danger-full-access`——而跑起來之後 `/permission` 切得動它：不帶引數報告現在是哪一組權限組合與可寫根，
+`danger-full-access`（出廠的權限表沒有這一組，要部署方加回，見下一節）——而跑起來之後 `/permission` 切得動它：不帶引數報告現在是哪一組權限組合與可寫根，
 帶一個組名就切過去（見下一節）。切換同時作用在兩個地方：檔案工具擋不擋得住，以及模型自己知不知道現在在哪一格
 （那句話每次模型呼叫重算）。每一次真的變了都會在會話日誌裡留一顆 `sandbox/mode`，接線當下也會
 釘一顆起始值——所以一份日誌答得出「這一輪跑的時候政策是哪一格」。
@@ -16,23 +16,51 @@
 ### 權限組合：`/permission`
 
 [#437](https://github.com/DemianLi/nexus-agent/issues/437)。把「檔案政策」與「核准政策」兩顆旋鈕捆成使用者看得懂的具名組合，
-**是切換它們的唯一入口**（舊的 `/sandbox` 拿掉了）。出廠三組，名字與值照 dsh：
+**是切換它們的唯一入口**（舊的 `/sandbox` 拿掉了）。出廠兩組，名字與值照 dsh 的前兩組：
 
-| 組                        | 檔案政策             | 核准政策                                  |
-| ------------------------- | -------------------- | ----------------------------------------- |
-| `read-only`               | `read-only`          | `ask`（要改動時先問你）                   |
-| `workspace-write`（預設） | `workspace-write`    | `ask`                                     |
-| `danger-full-access`      | `danger-full-access` | `never`（不問：要人點頭的事一律直接回絕） |
+| 組                        | 檔案政策          | 核准政策                |
+| ------------------------- | ----------------- | ----------------------- |
+| `read-only`               | `read-only`       | `ask`（要改動時先問你） |
+| `workspace-write`（預設） | `workspace-write` | `ask`                   |
+
+**出廠不給全開**（[#1621](https://github.com/DemianLi/nexus-agent/issues/1621)）：dsh 出廠還有第三組 `danger-full-access`
+（檔案政策 `danger-full-access`、核准 `never`，要人點頭的事一律直接回絕）。serve 多人共用一台主機，同一把 token 底下的每個人都切得到，
+所以出廠拿掉（偏離 dsh，理由 2）；CLI 用同一份表，也跟著少（理由 1：出貨層只有一份表，表達不出「serve 少一組、CLI 照舊」）。
+部署方要全開就自己加回（見下面「設定」那條），加回之後的行為跟以前一樣，下面各條講到全開的地方都是指加回之後。
+已經切到全開的舊會話，續接時保留日誌裡的值，顯示為 `custom`，切走之後切不回全開。
 
 - **現在是哪一組是推導出來的**：兩顆旋鈕實際的值對上哪一組就是哪一組，對不上任何一組顯示 `custom`（只能顯示，不是切換目標）。
-- **`--sandbox` 同時決定核准的起始值**：`--sandbox danger-full-access` 是「全開＋不問」。**這是行為改變**：以前它只放寬檔案、核准照舊會問。
+- **`--sandbox` 同時決定核准的起始值**：`--sandbox danger-full-access` 是「全開＋不問」，**要先把那一組加回表裡，否則起動失敗**
+  （serve 在起動當下就失敗，不是等到第一條 thread；訊息是「對不上組合表裡任何一組……要嘛在表裡補上那一組，要嘛設定 defaultPreset」）。
+  **這是行為改變**：以前它只放寬檔案、核准照舊會問。
   續接（`--resume`、重開 server 接回同一條 thread）一律用日誌裡記的值，日誌沒記核准的舊會話照 `ask`。
 - **日誌上多一顆 `permission/preset`**（格式 35）：只記使用者選了哪一組（意圖），執行仍由 `sandbox/mode` 與 `approval/policy` 各自控制。
   新會話接線當下釘一顆起始組合。
-- **子代理**：背景子代理的核准一律 `never`；前景子代理跟主對話**當下**的核准政策走（要核准的操作停下來問人，詳見「前景子代理的核准」）；組合名只在父代理是 `danger-full-access` 時帶下去，兩種一樣。
+- **子代理**：背景子代理的核准一律 `never`；前景子代理跟主對話**當下**的核准政策走（要核准的操作停下來問人，詳見「前景子代理的核准」）；組合名只在部署方加回全開那一組、而且父代理在那一組時帶下去，兩種一樣。
 - **web**：目錄走 RPC `permission.catalog`，目前是哪一組走會話投影 `permissions`（`{ currentValue }`）；切換送的就是 `/permission <組名>` 這一行。
 - **設定**：清單上 `permission-presets` 那一列。`presets` 整份替換、每組必填 `sandbox` 與 `approval`；`defaultPreset` 選填，
   與明確給的 `--sandbox` 矛盾時啟動失敗。有 `--workspace` 時這一列關不掉（會話中就沒有任何辦法改兩顆旋鈕），沒有 `--workspace` 時它什麼都不註冊。
+  部署方要全開，把整張表重寫一份、加回那一組，放進自己的 `--patch <檔>`（或 `plugin config set permission-presets --file -`）：
+
+  ```yaml
+  - id: permission-presets
+    config:
+      presets:
+        read-only:
+          sandbox: read-only
+          approval: ask
+          description: 只能讀，不能改檔；要改動時先問你。
+        workspace-write:
+          sandbox: workspace-write
+          approval: ask
+          description: 可以寫工作區；要超出時先問你。
+        danger-full-access:
+          sandbox: danger-full-access
+          approval: never
+          description: 經符號連結寫得到工作區外，而且不問你：要人點頭的事一律直接回絕。
+  ```
+
+  `presets` 是整份替換，所以出廠那兩組也要寫出來，漏寫的就不在表裡了。
 
 **被擋下來時，模型可以請一次升級。** 拒絕後面會接一行指引，模型照著呼叫
 `request_sandbox_escalation`，指名那個檔、要升到哪一格、一句給人看的理由；核准卡上看得到這三樣。
@@ -69,7 +97,7 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 包一層沙箱，也不打算在不改設計的前提下假裝有。細節見 [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)
 的「明文限制」。
 
-**3. 三個組合是政策，不是隔離。** `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
+**3. 出廠兩個組合，加上部署方可以加回的全開，都是政策，不是隔離。** `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
 動手；它們不涵蓋子行程與網路，對讀也幾乎沒有作用（見第 1 條）。`danger-full-access` 放行 symlink 逃逸，但基座字面的 `..`
 檢查仍在，所以它也不是 dsh 那種真正的不設防（偏離登記在 `contained-backend.ts` 檔頭）。**執行期的提示詞與 `/permission` 的輸出不會講這些**：它們描述的是「檔案工具現在擋不擋」，
 並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界。
@@ -82,7 +110,7 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 - 目前資料夾的 `.env`（存在才算，**不看 `--live`**：同一個目錄下次帶 `--live` 重啟，讀的就是這一份）；
 - harness home 本身（`NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`；還不存在也算）；
 - home 的 `.env`（存在才算）；
-- 程式碼資料夾根目錄的舊 `.env`（存在才算；它不會被讀，但檔案還在的話裡面多半就是 key）。
+- 程式碼資料夾根目錄的舊 `.env`（存在才算；它不會被讀，但檔案還在的話裡面多半就是 key；**打包出來的安裝樹沒有這一項**）。
 
 為什麼：讀取不受圍堵（上面第 1 條），而 serve 是多人共用的——落在工作區裡的 key、瀏覽器會話密鑰、所有人的附件與會話日誌，
 任何一位使用者叫模型讀一次就拿到了。在專案目錄下跑 `serve --live --workspace .`，模型一個 `read_file .env` 就讀得到 key。
@@ -410,6 +438,8 @@ refs:
   代理設定（`HTTP_PROXY` 等）只認 home 那一份。
 - **搬家**：程式碼資料夾根目錄的舊 `.env` 不再讀取。key 解析不到、而舊檔還在時，錯誤訊息會指出舊檔位置與該搬去哪裡。
   搬法：`mkdir -p ~/.nexus-agent && mv <程式碼資料夾>/.env ~/.nexus-agent/.env`，或改存成受管檔。
+  **只對原始碼樹**：打包出來的安裝樹（產物根有 `build-stamp.json`）沒有「程式碼資料夾根目錄」，不找舊位置，
+  也不會把 `/opt/.env` 這類系統目錄底下的檔當成舊檔叫人搬。
 
 ## 經代理連外
 
@@ -437,6 +467,95 @@ export HTTP_PROXY=http://127.0.0.1:7890
 - **刻意直連**：遙測（OTLP 匯出走 Node 自己的 HTTP 客戶端，不經代理；禁止直連的環境裡它只會失敗，沒有功能依賴它）、本機上的一切。
 
 驗證：`--live` 送一則訊息，同時看代理軟體的連線紀錄；沒看到請求時，用 `env | grep -i proxy` 確認變數真的在啟動這個行程的環境裡。
+
+## 用 systemd 常駐
+
+[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5。對象是 Release 打出來的 `nexus-agent-<版本>-linux-x64.tar.gz`（解開即用，目標機不用裝 pnpm、不用連 registry），
+Node 要 22.19 以上。
+
+```bash
+sudo useradd --system --home-dir /var/lib/nexus-agent --shell /usr/sbin/nologin nexus-agent
+sudo install -d -m 0700 -o nexus-agent -g nexus-agent /var/lib/nexus-agent
+sudo -u nexus-agent install -m 600 /dev/null /var/lib/nexus-agent/.credentials.yaml
+sudo -u nexus-agent "${EDITOR:-vi}" /var/lib/nexus-agent/.credentials.yaml   # 填 version: 1 與 refs.NVIDIA_API_KEY，格式見〈金鑰放哪裡〉
+sudo mkdir -p /opt/nexus-agent /srv/nexus-agent/workspace
+sudo tar -xzf nexus-agent-<版本>-linux-x64.tar.gz -C /opt/nexus-agent
+sudo ln -sfn /opt/nexus-agent/nexus-agent-<版本>-linux-x64 /opt/nexus-agent/current
+sudo chown nexus-agent:nexus-agent /srv/nexus-agent/workspace
+# 單元檔：把下面那段存成 /etc/systemd/system/nexus-agent.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now nexus-agent
+```
+
+<!-- systemd-unit:begin（apps/harness/src/systemd-unit.test.ts 讀這一段，改了要一起過） -->
+```ini
+[Unit]
+Description=nexus-agent serve
+Documentation=https://github.com/DemianLi/nexus-agent/blob/develop/docs/operations.md
+After=network-online.target
+Wants=network-online.target
+# 起不來（例如 home 鎖被別的行程占著）時不要無限重啟：60 秒內 5 次就停手。
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=nexus-agent
+Group=nexus-agent
+
+# harness home：會話日誌、瀏覽器會話密鑰、受管憑證檔都在這裡。systemd 替這個使用者建出 /var/lib/nexus-agent。
+# 它必須在 --workspace 之外（見〈serve：key 與 home 不能跟工作區重疊〉）。
+StateDirectory=nexus-agent
+StateDirectoryMode=0700
+Environment=NEXUS_AGENT_HOME=/var/lib/nexus-agent
+WorkingDirectory=/var/lib/nexus-agent
+
+# 直接 exec node，不經 pnpm：pnpm 會把 SIGTERM 吃掉，serve 收不到停止要求（#1464）。
+# systemd 要求絕對路徑；node 不在 /usr/bin 就改成 which node 印出來的那個。
+ExecStart=/usr/bin/node /opt/nexus-agent/current/lib/serve.js --live --workspace /srv/nexus-agent/workspace --port 8787
+
+# SIGTERM 是 serve 的一般停止要求（退出碼 0）。serve 自己的收尾上限是 5 秒，到了就自己結束，
+# 所以這裡留 10 秒：serve 先自己收完，systemd 的 SIGKILL 只是最後一道。
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# 只在失敗時重啟：systemctl stop 與 SIGTERM 的退出碼 0 不會被拉起來，致命例外（退出碼 1）會。
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+<!-- systemd-unit:end -->
+
+- **`TimeoutStopSec` 要大於 serve 的收尾上限。** 收尾上限是 `apps/harness/src/process-shutdown.ts` 的 `PROCESS_SHUTDOWN_TIMEOUT_MS`（5 秒，
+  [#599](https://github.com/DemianLi/nexus-agent/issues/599)／[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)）：`SIGTERM` 之後 serve 最多等 5 秒收完每條 thread，
+  到了就強制結束、退出碼仍是 0。`apps/harness/src/systemd-unit.test.ts` 讀這一段，`TimeoutStopSec` 不大於那個常數就紅。
+  這兩個數字改其中一個，另一個要跟著改。
+- **`ExecStart` 指的是 `current` 這個符號連結。** 升級就是解開新版、`ln -sfn` 換掉 `current`、`systemctl restart nexus-agent`；
+  回退就是把 `current` 指回舊版。連結換掉之前跑著的行程不受影響。
+- **`--live` 要有 key，而且要在第一次 `enable --now` 之前就位。** 上面第三、四步放進 home 的受管憑證檔最合適（`chmod 600`，擁有者是 `nexus-agent`；
+  見〈金鑰放哪裡〉），它的值不進行程的環境變數。**不要把 key 寫在命令列或 heredoc 裡**：那會跟著指令進管理員的 shell history（`~/.bash_history`）；
+  所以先建出權限 600 的空檔，再用編輯器填。單元檔不要寫 `Environment=NVIDIA_API_KEY=…`：`systemctl show` 讀得到，子行程也繼承得到。
+  沒有 key 的話 serve 印「缺少環境變數 NVIDIA_API_KEY」就以 1 結束，`Restart=on-failure` 每 5 秒拉一次，滿 `StartLimitBurst` 後單元進 `failed`；
+  補上 key 之後 `sudo systemctl reset-failed nexus-agent && sudo systemctl start nexus-agent`。
+  代理設定寫在 `/var/lib/nexus-agent/.env`（見〈經代理連外〉）。因為 `WorkingDirectory` 就是 home，兩份 `.env` 是同一份，不會讀兩次。
+- **只監聽 `127.0.0.1`。** `serve` 沒有綁其他位址的旗標；要讓別台機器連進來，前面放反向代理（本專案不附設定）。
+- **啟動印的網址帶登入 token，會進 journal。** 讀得到 journal 的人（`systemd-journal`、`adm` 群組、root）就拿得到：
+  `journalctl -u nexus-agent -n 20` 找「nexus-agent 在 http://…」那一行。token 每次重啟都換新。
+- **一個 home 只能起一個 serve**（`<home>/serve.lock`，[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)）：
+  第二個單元共用同一個 `NEXUS_AGENT_HOME` 會起不來，被 `StartLimitBurst` 擋下；要兩套就各給一個 home 與 port。
+- **刻意沒加的**：`ProtectSystem=`、`PrivateTmp=` 這類 systemd 沙箱指令。agent 的檔案圍堵由 `serve --sandbox` 做（見〈檔案圍堵〉），
+  疊上 systemd 的沙箱會改變 git 快照、MCP server 看得到的路徑，要加請在你的機器上實測過再加。
+
+驗證：
+
+```bash
+systemd-analyze verify /etc/systemd/system/nexus-agent.service   # 語法與路徑
+systemctl status nexus-agent                                     # active (running)
+journalctl -u nexus-agent -n 20                                  # 找到「nexus-agent 在 http://…」
+sudo systemctl stop nexus-agent; systemctl status nexus-agent    # inactive (dead)，Main PID 的 status=0/SUCCESS
+```
 
 ## 執行上限
 

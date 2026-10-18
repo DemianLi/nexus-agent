@@ -13,6 +13,7 @@ import type { IncomingHttpHeaders, Server } from 'node:http';
 import { once } from 'node:events';
 
 import {
+  SESSION_EVENT_MAX_DEPTH,
   SESSION_TELEMETRY_SERVICE,
   SessionLog,
   SessionTelemetryCoordinator,
@@ -347,6 +348,51 @@ describe('走 SDK 真正的流水線送到假 collector', () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('provider 關機超過 120ms');
   }, 10_000);
+});
+
+describe('日誌收得下的最深的一則，OTLP 也送得出去（#1661）', () => {
+  /** OTLP 的 AnyValue 包了幾層物件或陣列，最裡面是什麼。 */
+  function anyValueDepth(value: unknown): { depth: number; leaf: unknown } {
+    let node = value as Record<string, unknown> | undefined;
+    let depth = 0;
+    for (;;) {
+      const kv = node?.['kvlistValue'] as { values: { key: string; value: unknown }[] } | undefined;
+      const array = node?.['arrayValue'] as { values: unknown[] } | undefined;
+      // 物件一路往 `next` 走（最外層的 `data` 還有 callId、isError）。
+      if (kv !== undefined)
+        node = kv.values.find((entry) => entry.key === 'next')?.value as Record<string, unknown>;
+      else if (array !== undefined) node = array.values[0] as Record<string, unknown>;
+      else return { depth, leaf: node?.['stringValue'] };
+      depth++;
+    }
+  }
+
+  it(`剛好 ${SESSION_EVENT_MAX_DEPTH} 層的物件與交錯巢狀：寫得進日誌，送到 collector 的 body 也剛好那麼多層`, async () => {
+    // 上限算的根跟遙測的 body 是同一個（`data`），所以 collector 收到的層數就是上限本身。物件與交錯是 OTLP 最淺的兩種
+    // （CI 上 1023／1169 層就送不出去）。
+    const { url, captures } = await mockCollector();
+    const service = new OpenTelemetrySessionService({ mode: 'feedback-only', exporter: { url } });
+    const log = new SessionLog('thread-deep');
+    const coordinator = new SessionTelemetryCoordinator({ log, sink: service });
+
+    for (const shape of ['object', 'mixed'] as const) {
+      // `data` 本身算第 1 層，所以剩下的包在 `next` 底下。
+      let next: unknown = 'leaf';
+      for (let level = 0; level < SESSION_EVENT_MAX_DEPTH - 1; level++) {
+        next = shape === 'object' || level % 2 === 1 ? { next } : [next];
+      }
+      log.append('tool/result', { callId: shape, isError: false, next } as never);
+    }
+    await coordinator.dispose();
+
+    const deep = allRecords(captures).filter(
+      (entry) => attributeOf(entry.record, 'event.type') === 'tool/result',
+    );
+    expect(deep.map((entry) => anyValueDepth(entry.record.body))).toEqual([
+      { depth: SESSION_EVENT_MAX_DEPTH, leaf: 'leaf' },
+      { depth: SESSION_EVENT_MAX_DEPTH, leaf: 'leaf' },
+    ]);
+  });
 });
 
 describe('plugin 這一層', () => {

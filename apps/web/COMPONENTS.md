@@ -1,6 +1,6 @@
 # apps/web 新增元件規則
 
-給「要在 `apps/web` 加元件、改樣式」的人。詞（registry 元件、積木、配方……）的定義在 [`CONTEXT.md`](./CONTEXT.md)。**值**（色碼、字級、圓角、時長）不在這裡，在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md)；這裡只講**該放哪、該用什麼、什麼會被擋**。來歷見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。整體長什麼樣、參考過哪些元件庫，見 [`.docs/web-design-style.md`](../../.docs/web-design-style.md)。
+給「要在 `apps/web` 加元件、改樣式」的人。詞（registry 元件、積木、配方……）的定義在 [`GLOSSARY.md`](./GLOSSARY.md)。**值**（色碼、字級、圓角、時長）不在這裡，在 [`.docs/web-ui-spec.md`](../../.docs/web-ui-spec.md)；這裡只講**該放哪、該用什麼、什麼會被擋**。來歷見 [#1141](https://github.com/DemianLi/nexus-agent/issues/1141)。整體長什麼樣、參考過哪些元件庫，見 [`.docs/web-design-style.md`](../../.docs/web-design-style.md)。
 
 ## 放哪一層
 

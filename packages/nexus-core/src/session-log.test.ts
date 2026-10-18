@@ -1,3 +1,5 @@
+import { runInNewContext } from 'node:vm';
+
 import { describe, expect, it } from 'vitest';
 
 import { goalId } from './goal.js';
@@ -7,10 +9,13 @@ import {
   isKnownSessionEventType,
   isLogicalTurnStart,
   isUnreadableSessionEvent,
+  materializeAppendBatch,
   MODEL_VISIBLE_EVENT_TYPES,
   openTurnStart,
+  SESSION_EVENT_MAX_DEPTH,
   SessionLog,
 } from './session-log.js';
+import type { SessionEvent } from './session-log.js';
 
 describe('SessionLog', () => {
   it('seq 從 0 開始、逐筆遞增，出自日誌長度', () => {
@@ -544,5 +549,266 @@ describe('認得的事件種類與可忽略旗標（#507）', () => {
       seed: [{ type: 'turn/end', seq: 0, time: 1, data: {}, ignorable: true }],
     });
     expect(resumed.events[0]?.ignorable).toBe(true);
+  });
+});
+
+/**
+ * 從根走訪每一個可達的值：自有屬性（含 symbol 與不可列舉的，讀描述子不觸發 getter）與原型鏈，
+ * 停在內建的 `Object.prototype`／`Array.prototype`／`null`。回所有走到的物件。
+ */
+function reachableObjects(root: unknown): object[] {
+  const intrinsic = new Set<unknown>([Object.prototype, Array.prototype, null]);
+  const seen = new Set<object>();
+  const stack: unknown[] = [root];
+  while (stack.length > 0) {
+    const value = stack.pop();
+    if (typeof value !== 'object' || value === null || seen.has(value)) continue;
+    seen.add(value);
+    for (const key of Reflect.ownKeys(value)) {
+      stack.push(Object.getOwnPropertyDescriptor(value, key)?.value);
+    }
+    const proto: unknown = Object.getPrototypeOf(value);
+    if (!intrinsic.has(proto)) stack.push(proto);
+  }
+  return [...seen];
+}
+
+describe('JSON 快照照 dsh 的規則（#1526）', () => {
+  it('B：帶自有 "__proto__" 鍵的那顆事件，從根走到的每一個物件（含原型鏈上非內建的）都凍過', () => {
+    const log = new SessionLog('t1');
+    const event = log.append('tool/result', {
+      callId: 'c1',
+      isError: false,
+      meta: JSON.parse('{"__proto__":{"x":1},"a":[1,{"b":2}]}') as unknown,
+    });
+    const objects = reachableObjects(event);
+    // 事件、data、meta、meta.__proto__、meta.a、meta.a[1]：一個都不能漏走。
+    expect(objects.length).toBeGreaterThanOrEqual(6);
+    for (const object of objects) expect(Object.isFrozen(object)).toBe(true);
+    const meta = (event.data as { meta: object }).meta;
+    expect(Object.getPrototypeOf(meta)).toBe(Object.prototype);
+    expect(Object.hasOwn(meta, '__proto__')).toBe(true);
+  });
+
+  describe('D：有損的值拋 TypeError、訊息帶路徑、日誌不變', () => {
+    // eslint-disable-next-line no-sparse-arrays -- 要的就是洞
+    const sparse = [1, , 3];
+    const withExtra = Object.assign([1, 2], { extra: true });
+    // 一個洞加一個額外屬性，自有鍵數剛好是 length + 1：鍵數那條過得了，要靠逐格檢查接住。
+    // eslint-disable-next-line no-sparse-arrays -- 要的就是洞
+    const holeOffsetByExtra = Object.assign([1, , 3], { extra: true });
+    const withSymbol = { a: 1, [Symbol('s')]: 2 };
+    const withHidden = Object.defineProperty({ a: 1 }, 'hidden', { value: 2, enumerable: false });
+    const cases: readonly (readonly [string, unknown, string, RegExp])[] = [
+      ['-0', { n: -0 }, 'tool/result 的 data.meta.n', /是 -0/],
+      ['稀疏陣列', { xs: sparse }, 'tool/result 的 data.meta.xs', /陣列有洞/],
+      [
+        '洞與額外屬性數目抵銷的陣列',
+        { xs: holeOffsetByExtra },
+        'tool/result 的 data.meta.xs',
+        /陣列有洞（第 1 格）/,
+      ],
+      ['帶額外屬性的陣列', { xs: withExtra }, 'tool/result 的 data.meta.xs', /陣列帶額外屬性/],
+      ['symbol 鍵', { o: withSymbol }, 'tool/result 的 data.meta.o', /有 symbol 或不可列舉的鍵/],
+      ['不可列舉鍵', { o: withHidden }, 'tool/result 的 data.meta.o', /有 symbol 或不可列舉的鍵/],
+    ];
+    for (const [name, meta, path, reason] of cases) {
+      it(name, () => {
+        const log = new SessionLog('t1');
+        log.append('turn/end', {});
+        let thrown: unknown;
+        try {
+          log.append('tool/result', { callId: 'c1', isError: false, meta });
+        } catch (error: unknown) {
+          thrown = error;
+        }
+        expect(thrown).toBeInstanceOf(TypeError);
+        expect((thrown as TypeError).message).toContain(path);
+        expect((thrown as TypeError).message).toMatch(reason);
+        expect(log.length).toBe(1);
+      });
+    }
+  });
+
+  describe('E：子類與偽造原型照拒，跨 realm 的純值照收', () => {
+    it('Array 的子類拒', () => {
+      class Items extends Array<number> {}
+      const items = new Items();
+      items.push(1);
+      const log = new SessionLog('t1');
+      expect(() =>
+        log.append('tool/result', { callId: 'c1', isError: false, meta: items }),
+      ).toThrow(/tool\/result 的 data\.meta 是 object，日誌只收純 JSON/);
+      expect(log.length).toBe(0);
+    });
+
+    it('原型是普通物件（Object.create({})）拒', () => {
+      const forged = Object.create({}) as Record<string, unknown>;
+      forged['a'] = 1;
+      const log = new SessionLog('t1');
+      expect(() =>
+        log.append('tool/result', { callId: 'c1', isError: false, meta: forged }),
+      ).toThrow(/tool\/result 的 data\.meta 是 object，日誌只收純 JSON/);
+      expect(log.length).toBe(0);
+    });
+
+    it('偽造的 Object.prototype（自己的原型是 null、constructor 叫 Object 且互指，但不是內建函式）拒', () => {
+      // 除了 `Function.prototype.toString` 那一項，其他條件都長得跟別的 realm 的 Object.prototype 一樣。
+      const fakePrototype = Object.create(null) as object;
+      function Fake(): void {}
+      Object.defineProperty(Fake, 'name', { value: 'Object' });
+      Fake.prototype = fakePrototype;
+      Object.defineProperty(fakePrototype, 'constructor', { value: Fake });
+      const forged = Object.create(fakePrototype) as Record<string, unknown>;
+      forged['a'] = 1;
+      const log = new SessionLog('t1');
+      expect(() =>
+        log.append('tool/result', { callId: 'c1', isError: false, meta: forged }),
+      ).toThrow(/tool\/result 的 data\.meta 是 object，日誌只收純 JSON/);
+      expect(log.length).toBe(0);
+    });
+
+    it('另一個 realm 的純物件與陣列收下，副本的原型是本 realm 的內建原型', () => {
+      const foreign = runInNewContext('({ a: 1, b: [1] })') as { a: number; b: number[] };
+      // 前提：真的是別的 realm。
+      expect(Object.getPrototypeOf(foreign)).not.toBe(Object.prototype);
+      const log = new SessionLog('t1');
+      const event = log.append('tool/result', { callId: 'c1', isError: false, meta: foreign });
+      const meta = (event.data as { meta: { a: number; b: number[] } }).meta;
+      expect(meta).toEqual({ a: 1, b: [1] });
+      expect(Object.getPrototypeOf(meta)).toBe(Object.prototype);
+      expect(Object.getPrototypeOf(meta.b)).toBe(Array.prototype);
+    });
+  });
+
+  it('續接收得下 2 萬層：快照與凍結都是迭代的，最底那一層也凍過', () => {
+    // 落盤那一格（`apps/harness/src/session-log-json-snapshot.test.ts` 的 C）只能測到 Node 22 原生 `JSON.stringify`
+    // 撐得住的深度（CI 上約 4100 層），遞迴的凍結在那以上才爆，所以這一格只在記憶體裡驗、不經原生序列化。
+    for (const shape of ['object', 'array'] as const) {
+      let value: unknown = 'leaf';
+      for (let level = 0; level < 20_000; level++)
+        value = shape === 'object' ? { next: value } : [value];
+      // 經 seed 進來：寫入那一關有深度上限（#1661），續接回來的舊日誌沒有。
+      const event = new SessionLog('t1', {
+        seed: [
+          {
+            type: 'tool/result',
+            seq: 0,
+            time: 0,
+            data: { callId: shape, isError: false, meta: value },
+          },
+        ],
+      }).events[0]!;
+      let node: unknown = (event.data as { meta: unknown }).meta;
+      let depth = 0;
+      let unfrozen = 0;
+      while (typeof node === 'object' && node !== null) {
+        if (!Object.isFrozen(node)) unfrozen++;
+        node = Array.isArray(node) ? node[0] : (node as { next: unknown }).next;
+        depth++;
+      }
+      expect({ shape, depth, unfrozen, node }).toEqual({
+        shape,
+        depth: 20_000,
+        unfrozen: 0,
+        node: 'leaf',
+      });
+    }
+  });
+});
+
+describe('寫入那一關的深度上限（#1661）', () => {
+  /** `levels` 層物件或陣列包著一個字串；純量不算層。 */
+  function nested(levels: number, shape: 'object' | 'array'): unknown {
+    let value: unknown = 'leaf';
+    for (let level = 0; level < levels; level++)
+      value = shape === 'object' ? { next: value } : [value];
+    return value;
+  }
+
+  // `data` 本身算第 1 層，所以 `meta` 包 N - 1 層時整份剛好 N 層。
+  for (const shape of ['object', 'array'] as const) {
+    it(`${shape}：剛好 ${SESSION_EVENT_MAX_DEPTH} 層收下`, () => {
+      const log = new SessionLog('t1');
+      const meta = nested(SESSION_EVENT_MAX_DEPTH - 1, shape);
+      const event = log.append('tool/result', { callId: 'c1', isError: false, meta });
+      expect(log.length).toBe(1);
+      expect(JSON.stringify((event.data as { meta: unknown }).meta)).toBe(JSON.stringify(meta));
+    });
+
+    it(`${shape}：多一層就拒，訊息帶路徑與層數，日誌不動`, () => {
+      const log = new SessionLog('t1');
+      log.append('turn/end', {});
+      let thrown: unknown;
+      try {
+        log.append('tool/result', {
+          callId: 'c1',
+          isError: false,
+          meta: nested(SESSION_EVENT_MAX_DEPTH, shape),
+        });
+      } catch (error: unknown) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(TypeError);
+      // 最裡面那個容器的路徑有「上限」那麼多段（meta 加上限減一層），只印前 8 段。
+      const step = shape === 'object' ? '.next' : '[0]';
+      expect((thrown as TypeError).message).toBe(
+        `會話事件的 tool/result 的 data.meta${step.repeat(7)}…（省略 ${SESSION_EVENT_MAX_DEPTH - 8} 段） ` +
+          `是第 ${SESSION_EVENT_MAX_DEPTH + 1} 層巢狀，超過上限 ${SESSION_EVENT_MAX_DEPTH} 層`,
+      );
+      expect(log.length).toBe(1);
+      // 拒掉的那一則不占 seq，下一則照常。
+      expect(log.append('turn/end', {}).seq).toBe(1);
+    });
+  }
+
+  it('續接不設限：seed 裡 3000 層的舊事件收得下，之後照常寫', () => {
+    // 上限出現之前寫下的日誌可能比上限深；讀方（`fromLoggedMessage`、遙測、修剪）的深巢狀格都靠這一點造資料。
+    const log = new SessionLog('t1', {
+      seed: [
+        {
+          type: 'tool/result',
+          seq: 0,
+          time: 0,
+          data: { callId: 'old', isError: false, meta: nested(3_000, 'array') },
+        },
+      ],
+    });
+    // 走訪數層數，不用 `JSON.stringify`：凍過的深陣列直接序列化會 `RangeError`（#1526）。
+    let node: unknown = (log.events[0]!.data as { meta: unknown }).meta;
+    let depth = 0;
+    while (Array.isArray(node)) {
+      node = node[0];
+      depth++;
+    }
+    expect({ depth, node }).toEqual({ depth: 3_000, node: 'leaf' });
+    expect(log.append('turn/end', {}).seq).toBe(log.length - 1);
+  });
+
+  describe('後端寫入前（materializeAppendBatch）是同一個上限', () => {
+    /** 繞過日誌直接造一顆事件。 */
+    function rawEvent(seq: number, meta: unknown): SessionEvent {
+      return {
+        type: 'tool/result',
+        seq,
+        time: seq,
+        data: { callId: `c${seq}`, isError: false, meta },
+      } as SessionEvent;
+    }
+
+    it(`data 剛好 ${SESSION_EVENT_MAX_DEPTH} 層收下（批次與事件那兩層不算進去）`, () => {
+      const batch = [rawEvent(0, 'x'), rawEvent(1, nested(SESSION_EVENT_MAX_DEPTH - 1, 'object'))];
+      expect(materializeAppendBatch(batch)).toHaveLength(2);
+    });
+
+    it('多一層就拒，路徑指到那一顆', () => {
+      const batch = [rawEvent(0, 'x'), rawEvent(1, nested(SESSION_EVENT_MAX_DEPTH, 'object'))];
+      expect(() => materializeAppendBatch(batch)).toThrow(
+        new TypeError(
+          `會話事件的 寫入批次[1].data.meta${'.next'.repeat(5)}…（省略 ${SESSION_EVENT_MAX_DEPTH + 2 - 8} 段） ` +
+            `是第 ${SESSION_EVENT_MAX_DEPTH + 3} 層巢狀，超過上限 ${SESSION_EVENT_MAX_DEPTH + 2} 層`,
+        ),
+      );
+    });
   });
 });

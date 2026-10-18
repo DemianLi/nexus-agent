@@ -51,6 +51,9 @@ import { startGuardServer, type GuardServer } from './server';
  * 13. **展開收合**（#1638 PR A，`?overlay=collapsibles`）：展開途中的高度介於 0 與最終值之間（Q1：keyframes 讀 Base UI 的
  *    `--collapsible-panel-height`，Panel 的 `data-open:` 命中動效）；reduced-motion 下沒有高度動效、第一幀就到位；箭頭跟著 Trigger 的
  *    `data-panel-open` 轉半圈、思考過程展開後藏「·」與摘要（Q2）。
+ * 14. **對話區**（#1638 PR B，`?overlay=messages`，產品的 `Transcript`）：泡泡字、表尾、捲到最新的按鈕圖示的對比與按鈕的焦點（亮暗加兩種退路，
+ *    {@link OVERLAYS}）；每一則的 `content-visibility` 是 `visible`（第 42 條）；按鈕的動效照 §7：不位移、只縮放 .97、reduced-motion 下沒有
+ *    transition（第 41 條）；外殼的行高是 SG 的 20px、泡泡維持 23px；底部淡出捲到底時收成 0。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -187,12 +190,19 @@ afterAll(async () => {
   if (target) writeFileSync(target, `${JSON.stringify(report, null, 2)}\n`);
 });
 
-/** 等有限長度的動畫與轉場跑完（無限的，例如呼吸光，不等）。 */
+/**
+ * 等有限長度的動畫與轉場跑完（無限的，例如呼吸光，不等）。只等跟著時間跑的：scroll-driven 的（對話區的底部淡出，#1638 PR B）
+ * 跟著捲動位置走，沒捲到底就永遠不會 finished。
+ */
 async function settle(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const finite = document
       .getAnimations()
-      .filter((a) => a.effect?.getComputedTiming().endTime !== Infinity);
+      .filter(
+        (a) =>
+          a.timeline instanceof DocumentTimeline &&
+          a.effect?.getComputedTiming().endTime !== Infinity,
+      );
     await Promise.all(finite.map((a) => a.finished.catch(() => undefined)));
   });
 }
@@ -929,6 +939,38 @@ interface Overlay {
   backdrops: string[];
 }
 
+const SCROLL_BUTTON = '[data-slot="message-scroller-button"]';
+
+/** 把對話區捲到頂端或最底，等捲到最新的按鈕換好狀態、動效跑完。 */
+async function scrollMessages(page: Page, to: 'top' | 'end'): Promise<void> {
+  // 剛開頁時對話區還在定位，第一下捲動可能被 primitive 略過：捲完逐幀看按鈕換好狀態沒有，一秒沒換好就再捲一次。
+  const settled = await page.$eval(
+    '[data-slot="message-scroller-viewport"]',
+    async (el, top) => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      const button = el.parentElement!.querySelector('[data-slot="message-scroller-button"]')!;
+      const target = top ? 0 : el.scrollHeight - el.clientHeight;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        // 已經在目標位置時再設一次不會發 scroll 事件，先往回推 1px。
+        if (attempt > 0) {
+          el.scrollTop = top ? 1 : target - 1;
+          await frame();
+        }
+        el.scrollTop = target;
+        // 每捲一次只看不碰：一直改 scrollTop，primitive 等不到捲動停下來，按鈕的狀態不會換。
+        for (let i = 0; i < 60; i++) {
+          await frame();
+          if (button.getAttribute('data-active') === String(top)) return true;
+        }
+      }
+      return false;
+    },
+    to === 'top',
+  );
+  if (!settled) throw new Error(`對話區捲到${to === 'top' ? '頂端' : '最底'}之後，按鈕沒有換狀態`);
+  await settle(page);
+}
+
 const OVERLAYS: Overlay[] = [
   {
     name: 'dialog',
@@ -1020,6 +1062,27 @@ const OVERLAYS: Overlay[] = [
     texts: ['command-item-selected', 'command-item'],
     focus: ['command-input-0'],
     surfaces: ['command'],
+    backdrops: [],
+  },
+  {
+    // 不是浮層，但要的量測一樣（字、焦點、兩種退路），所以掛在這張清單上（#1638 PR B）。
+    name: 'messages',
+    marks: {
+      '[data-slot="message"][data-align="end"] [data-slot="bubble-content"]': {
+        'data-guard-text': 'user-bubble',
+      },
+      '[data-testid="ai-entry"] [data-slot="bubble-content"]': { 'data-guard-text': 'ai-bubble' },
+      '[data-slot="message-footer"]': { 'data-guard-text': 'message-footer' },
+      // 圖示是 `aria-hidden` 的 svg，`data-guard-texts` 量它的顏色。
+      [SCROLL_BUTTON]: { 'data-guard-focus': 'scroll-button', 'data-guard-texts': 'scroll-button' },
+    },
+    // 一開頁就捲在最底，按鈕是藏著的（opacity 0，量具會判不合格）：捲回頂端讓它出現再量。
+    prepare: async (page) => {
+      await scrollMessages(page, 'top');
+    },
+    texts: ['user-bubble', 'ai-bubble', 'message-footer', 'scroll-button-0'],
+    focus: ['scroll-button-0'],
+    surfaces: [],
     backdrops: [],
   },
 ];
@@ -1994,4 +2057,120 @@ describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', (
       await page.close();
     }
   });
+});
+
+describe('瀏覽器量對話區（#1638 PR B，`?overlay=messages`）', () => {
+  const openMessages = (reducedMotion = false) =>
+    openOverlay('messages', 'light', { reducedMotion, marks: { [SCROLL_BUTTON]: {} } });
+
+  test('每一則的 content-visibility 是 visible：覆寫檔壓掉 vendor 的 auto（Q6，本地修改第 42 條）', async () => {
+    const page = await openMessages();
+    try {
+      const items = await page.$$eval('[data-slot="message-scroller-item"]', (els) =>
+        els.map((el) => {
+          const style = getComputedStyle(el);
+          return `${style.contentVisibility} ${style.containIntrinsicSize}`;
+        }),
+      );
+      report['messages:content-visibility'] = items;
+      // 量具自檢：十二則都量到了。
+      expect(items).toHaveLength(12);
+      expect(new Set(items)).toEqual(new Set(['visible none']));
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each([false, true])(
+    '捲到最新的按鈕照 §7：不位移、只縮放 .97，時長走 token；reduced-motion 下沒有 transition（本地修改第 41 條；reduced-motion %s）',
+    async (reducedMotion) => {
+      const page = await openMessages(reducedMotion);
+      try {
+        const read = () =>
+          page.$eval(SCROLL_BUTTON, (el) => {
+            const style = getComputedStyle(el);
+            return {
+              active: el.getAttribute('data-active'),
+              slot: el.getAttribute('data-slot'),
+              translate: style.translate,
+              scale: style.scale,
+              transitionProperty: style.transitionProperty,
+              transitionDuration: style.transitionDuration,
+              top: el.getBoundingClientRect().top,
+            };
+          });
+        const hidden = await read();
+        await scrollMessages(page, 'top');
+        const shown = await read();
+        report[`messages:scroll-button:${reducedMotion ? 'reduced' : 'normal'}`] = {
+          hidden,
+          shown,
+        };
+        // 量具自檢：真的量到藏著與出現兩種狀態，元素是 reduced-motion 那條規則認得的 data-slot。
+        expect([hidden.active, shown.active]).toEqual(['false', 'true']);
+        expect(shown.slot).toBe('message-scroller-button');
+        // 不位移：只有置中用的 -50%（vendor 藏著時是 translate-y-full），框的上緣只差縮放的那一點。
+        expect([hidden.translate, shown.translate]).toEqual(['-50%', '-50%']);
+        expect(Math.abs(hidden.top - shown.top)).toBeLessThan(1);
+        expect([hidden.scale, shown.scale]).toEqual(['0.97', '1']);
+        if (reducedMotion) {
+          expect([hidden.transitionProperty, shown.transitionProperty]).toEqual(['none', 'none']);
+        } else {
+          // `--duration-quick` 150、`--duration-fast` 250（vendor 是 400 與 200）。
+          expect(hidden).toMatchObject({
+            transitionProperty: 'scale, opacity',
+            transitionDuration: '0.15s',
+          });
+          expect(shown).toMatchObject({
+            transitionProperty: 'scale, opacity',
+            transitionDuration: '0.25s',
+          });
+        }
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
+  test('外殼的行高是 SG 的 text-sm（20px），泡泡由呼叫端維持 text-body（23px）', async () => {
+    const page = await openMessages();
+    try {
+      const measured = await page.$eval('[data-testid="ai-entry"]', (el) => ({
+        shell: getComputedStyle(el).lineHeight,
+        bubble: getComputedStyle(el.querySelector('[data-slot="bubble-content"]')!).lineHeight,
+      }));
+      report['messages:line-height'] = measured;
+      expect(measured).toEqual({ shell: '20px', bubble: '23px' });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each([false, true])(
+    '底部淡出（scroll-fade-b，Q8 照 SG）捲到底時收成 0、往上捲才出現（reduced-motion %s）',
+    async (reducedMotion) => {
+      const page = await openMessages(reducedMotion);
+      try {
+        // 淡出的寬度由 scroll-driven 的 `scroll-fade-reveal-b` 帶：進度 1 是收成 0px，0 是整段（12%、最多 40px）。
+        const read = () =>
+          page.$eval('[data-slot="message-scroller-viewport"]', (el) => {
+            const reveal = el
+              .getAnimations()
+              .find((a) => (a as CSSAnimation).animationName === 'scroll-fade-reveal-b');
+            return {
+              progress: reveal?.effect?.getComputedTiming().progress ?? null,
+              value: getComputedStyle(el).getPropertyValue('--scroll-fade-b'),
+            };
+          });
+        const end = await read();
+        await scrollMessages(page, 'top');
+        const top = await read();
+        report[`messages:scroll-fade:${reducedMotion ? 'reduced' : 'normal'}`] = { end, top };
+        expect(end.progress).toBe(1);
+        expect(top.progress).toBe(0);
+      } finally {
+        await page.close();
+      }
+    },
+  );
 });

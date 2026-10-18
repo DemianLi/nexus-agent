@@ -10,9 +10,16 @@ import {
   foldPermissionKnobs,
 } from './fold.js';
 import { DEFAULT_PRESETS } from './presets.js';
+import type { PresetTable } from './presets.js';
 
 const event = (type: string, data: unknown, seq = 0): SessionEvent =>
   ({ type, data, seq }) as unknown as SessionEvent;
+
+/** 部署方用 patch 加回全開之後的表（#1621：出廠不給）。值照 dsh base 出廠的第三組。 */
+const WITH_FULL_ACCESS: PresetTable = {
+  ...DEFAULT_PRESETS,
+  'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
+};
 
 describe('折疊', () => {
   it('三種事件各折自己的格子', () => {
@@ -30,7 +37,7 @@ describe('折疊', () => {
   });
 
   it('投影單元：key 是 permissions，view 只有 currentValue，日誌上沒有任何事件時是出廠假設那一組', () => {
-    const unit = createPermissionsUnit(DEFAULT_PRESETS);
+    const unit = createPermissionsUnit(WITH_FULL_ACCESS);
     expect(unit.key).toBe('permissions');
     expect(unit.view(unit.init())).toEqual({ currentValue: 'workspace-write' });
     const full = [
@@ -41,7 +48,7 @@ describe('折疊', () => {
   });
 
   it('只切了一顆旋鈕：投影是 custom，不是最後記的那一組', () => {
-    const unit = createPermissionsUnit(DEFAULT_PRESETS);
+    const unit = createPermissionsUnit(WITH_FULL_ACCESS);
     const state = [
       event('permission/preset', { preset: 'danger-full-access' }),
       event('sandbox/mode', { mode: 'danger-full-access' }),

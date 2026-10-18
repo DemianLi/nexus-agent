@@ -6,7 +6,7 @@
  */
 
 import { ToolMessage } from '@langchain/core/messages';
-import { toLoggedMessage } from '@nexus/core';
+import { SessionLog, toLoggedMessage } from '@nexus/core';
 import type { LoggedMessage } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
@@ -169,13 +169,13 @@ describe('讀檔 meta 的上限', () => {
   it('剛好等於兩倍上限：照給；多一個位元組：整格不給', () => {
     const limit = READ_META_MAX_BYTES_FACTOR * CAP;
     const atLimit = readMetaOf(limit);
-    expect(capToolResultMeta(atLimit, CAP)).toBe(atLimit);
+    expect(capToolResultMeta(atLimit, CAP)).toEqual(atLimit);
     expect(capToolResultMeta(readMetaOf(limit + 1), CAP)).toBeUndefined();
   });
 
   it('上限是乘數：跟著傳進來的文字上限走', () => {
     const meta = readMetaOf(3_000);
-    expect(capToolResultMeta(meta, 1_500)).toBe(meta);
+    expect(capToolResultMeta(meta, 1_500)).toEqual(meta);
     expect(capToolResultMeta(meta, 1_499)).toBeUndefined();
   });
 
@@ -190,5 +190,34 @@ describe('讀檔 meta 的上限', () => {
       total: 2,
     };
     expect(capToolResultMeta(search, CAP)).toEqual({ ...search, paths: ['/a'], truncated: true });
+  });
+});
+
+/**
+ * 陣列巢狀（#1526）。深度取 3000：CI（Node 22.23.3 Linux x64）上原生 `JSON.stringify` 對凍過的陣列約 2200 層就
+ * `RangeError`、沒凍過的約 4100 層，夾在中間才分得出「先拷再量」。
+ */
+function nestedArray(depth: number): unknown {
+  let value: unknown = 'leaf';
+  for (let level = 0; level < depth; level++) value = [value];
+  return value;
+}
+
+describe('日誌裡凍過的深 meta（#1526）', () => {
+  it('3000 層陣列巢狀：量得動、交出去的是沒凍過的副本，之後的原生 JSON.stringify 也序列化得了', () => {
+    const meta = { deep: nestedArray(3_000) };
+    // 照正式路徑凍：從日誌拿，不自己 `Object.freeze`。經 seed 進來：寫入那一關有深度上限（#1661），3000 層只會出現在
+    // 上限之前寫下、續接回來的舊日誌裡。
+    const event = new SessionLog('t', {
+      seed: [
+        { type: 'tool/result', seq: 0, time: 0, data: { callId: 'c1', isError: false, meta } },
+      ],
+    }).events[0]!;
+    const logged = (event.data as { meta: unknown }).meta;
+    // 上限明著放大：這一格量的是「量得動、交得出去」，不是上限本身；超過上限的話回 `undefined`，什麼都測不到。
+    const capped = capToolResultMeta(logged, 1_000_000);
+    expect(Object.isFrozen(capped)).toBe(false);
+    // 呼叫端拿去組 frame、歷史頁與 SSE 都是原生 `JSON.stringify`；比對也用它，vitest 的 toEqual 是遞迴的。
+    expect(JSON.stringify(capped)).toBe(JSON.stringify(meta));
   });
 });

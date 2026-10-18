@@ -1440,56 +1440,370 @@ export const MESSAGE_PROJECTION_EVENT_TYPES = [
 /** {@link MESSAGE_PROJECTION_EVENT_TYPES} 的成員。 */
 export type MessageProjectionEventType = (typeof MESSAGE_PROJECTION_EVENT_TYPES)[number];
 
-function isPlainObject(value: unknown): value is Record<string, unknown> {
-  if (typeof value !== 'object' || value === null) return false;
-  const proto: unknown = Object.getPrototypeOf(value);
-  return proto === Object.prototype || proto === null;
+/**
+ * 這個原型是不是某個 realm 的內建原型，而且 constructor 是引擎原生的那一支。照 dsh `hasIntrinsicConstructor`
+ * （`packages/util/values/src/index.ts:17-29`，`687f282e`）：名字、`prototype` 互指、`Function.prototype.toString` 三樣都對才算，
+ * 所以跨 realm 的收、偽造的不收。
+ */
+function hasIntrinsicConstructor(prototype: object, name: 'Array' | 'Object'): boolean {
+  const descriptor = Object.getOwnPropertyDescriptor(prototype, 'constructor');
+  const constructor: unknown = descriptor?.value;
+  if (typeof constructor !== 'function') return false;
+  try {
+    return (
+      constructor.name === name &&
+      constructor.prototype === prototype &&
+      Function.prototype.toString.call(constructor) ===
+        Function.prototype.toString.call(name === 'Array' ? Array : Object)
+    );
+  } catch {
+    return false;
+  }
 }
 
-/**
- * 深拷貝成純 JSON，**拷不動就當場拋**。
- *
- * 這一條是 fail-closed 的，照 dsh `Session.append` 的
- * `snapshotJsonValue`（`packages/core/session/src/index.ts`）。**存參考會讓日誌變成活的**
- * ——LangGraph 的 payload 帶的是 `BaseMessage` 實例，存進去之後別人改那顆訊息，
- * 歷史就跟著被改寫，而且沒有任何徵兆。所以這裡連 class 實例都不收，只認
- * null / boolean / 有限 number / string / 陣列 / 純物件。
- */
-function snapshotJsonValue(value: unknown, path: string, seen: Set<object>): unknown {
-  if (value === null || typeof value === 'boolean' || typeof value === 'string') return value;
-  if (typeof value === 'number') {
-    if (!Number.isFinite(value)) {
-      throw new TypeError(`會話事件的 ${path} 是 ${String(value)}，JSON 表達不出來`);
-    }
-    return value;
-  }
-  if (typeof value === 'object' && seen.has(value)) {
-    throw new TypeError(`會話事件的 ${path} 繞回自己，日誌不收循環參考`);
-  }
-  if (Array.isArray(value)) {
-    seen.add(value);
-    const copy = value.map((entry, index) => snapshotJsonValue(entry, `${path}[${index}]`, seen));
-    seen.delete(value);
-    return copy;
-  }
-  if (isPlainObject(value)) {
-    seen.add(value);
-    const copy: Record<string, unknown> = {};
-    for (const [key, entry] of Object.entries(value)) {
-      copy[key] = snapshotJsonValue(entry, `${path}.${key}`, seen);
-    }
-    seen.delete(value);
-    return copy;
-  }
-  throw new TypeError(
-    `會話事件的 ${path} 是 ${value === undefined ? 'undefined' : typeof value}，日誌只收純 JSON`,
+/** 某個 realm 的內建 `Object.prototype`（dsh `isIntrinsicObjectPrototype`，`:31-34`）。 */
+function isIntrinsicObjectPrototype(value: object): boolean {
+  return Object.getPrototypeOf(value) === null && hasIntrinsicConstructor(value, 'Object');
+}
+
+/** 陣列的原型是某個 realm 的內建 `Array.prototype`，不是子類或偽造的（dsh `hasPlainArrayPrototype`，`:36-44`）。 */
+function hasPlainArrayPrototype(value: unknown[]): boolean {
+  const prototype: unknown = Object.getPrototypeOf(value);
+  if (!Array.isArray(prototype) || !hasIntrinsicConstructor(prototype, 'Array')) return false;
+  const objectPrototype: unknown = Object.getPrototypeOf(prototype);
+  return (
+    typeof objectPrototype === 'object' &&
+    objectPrototype !== null &&
+    isIntrinsicObjectPrototype(objectPrototype)
   );
 }
 
+/** 任何 realm 的純物件或 null 原型物件（dsh `hasPlainObjectPrototype`，`:46-51`）。 */
+function hasPlainObjectPrototype(value: object): boolean {
+  const prototype: unknown = Object.getPrototypeOf(value);
+  return (
+    prototype === null || (typeof prototype === 'object' && isIntrinsicObjectPrototype(prototype))
+  );
+}
+
+/**
+ * JSON 看得到的每一個鍵；有 symbol 或不可列舉的自有鍵（JSON 會靜靜丟掉）就回 `undefined`
+ * （dsh `enumerableStringKeys`，`:53-58`）。
+ */
+function enumerableStringKeys(value: object): string[] | undefined {
+  const keys = Reflect.ownKeys(value);
+  if (
+    keys.some(
+      (key) => typeof key !== 'string' || !Object.prototype.propertyIsEnumerable.call(value, key),
+    )
+  ) {
+    return undefined;
+  }
+  return keys as string[];
+}
+
+/**
+ * 走訪到哪一格。**只在拋錯時才組成字串**：每格帶一個指回父節點的小物件，成功的路上不做字串串接。
+ * 組法同改寫前：陣列 `${path}[${index}]`、物件 `${path}.${key}`。
+ */
+interface SnapshotPath {
+  readonly parent: SnapshotPath | undefined;
+  /** 根是呼叫端給的標籤；其餘是索引或鍵。 */
+  readonly segment: string | number;
+}
+
+function renderPath(path: SnapshotPath, maxSegments = Number.POSITIVE_INFINITY): string {
+  const segments: (string | number)[] = [];
+  for (let node: SnapshotPath | undefined = path; node !== undefined; node = node.parent) {
+    segments.push(node.segment);
+  }
+  let rendered = String(segments.pop());
+  const shown = Math.min(segments.length, maxSegments);
+  for (let index = segments.length - 1; index >= segments.length - shown; index--) {
+    const segment = segments[index] as string | number;
+    rendered += typeof segment === 'number' ? `[${segment}]` : `.${segment}`;
+  }
+  if (shown < segments.length) rendered += `…（省略 ${segments.length - shown} 段）`;
+  return rendered;
+}
+
+/** 超過深度上限時路徑只印前幾段：一千多段的路徑塞進一行 warn 沒人讀得了，要定位的是從 `data` 的哪個欄位往下。 */
+const DEPTH_FAILURE_PATH_SEGMENTS = 8;
+
+type JsonObject = Record<string, unknown>;
+
+type SnapshotDestination =
+  | { readonly kind: 'root' }
+  | { readonly kind: 'array'; readonly target: unknown[]; readonly index: number }
+  | { readonly kind: 'object'; readonly target: JsonObject; readonly key: string };
+
+type SnapshotTask =
+  | {
+      readonly kind: 'visit';
+      readonly value: unknown;
+      readonly destination: SnapshotDestination;
+      readonly path: SnapshotPath;
+      /** 外面包著幾層物件或陣列；根是 0。 */
+      readonly depth: number;
+    }
+  | {
+      readonly kind: 'array-item';
+      readonly source: unknown[];
+      readonly index: number;
+      readonly target: unknown[];
+      readonly path: SnapshotPath;
+      /** 這一格外面包著幾層（含 `source` 這一層）。 */
+      readonly depth: number;
+    }
+  | {
+      readonly kind: 'object-property';
+      readonly source: JsonObject;
+      readonly key: string;
+      readonly target: JsonObject;
+      readonly path: SnapshotPath;
+      /** 這一格外面包著幾層（含 `source` 這一層）。 */
+      readonly depth: number;
+    }
+  | { readonly kind: 'leave'; readonly source: object };
+
+/**
+ * 一則會話事件的 `data` 最多巢狀幾層物件或陣列（`data` 本身算第 1 層，純量不算），超過的在 {@link SessionLog.append} 拒收。
+ * 根跟遙測交出去的 body 是同一個（協調器送的就是 `data`），所以這個數字也是 OTLP 匯出那一段看到的層數。
+ *
+ * **為什麼要有上限：** Node 22 的原生 `JSON.stringify` 是遞迴的，連沒凍過的值也一樣。CI（Linux x64，Node 22.19.0 與
+ * 22.23.3）上一則 `tool/result` 的 `meta` 深到 4104 層，JSONL 後端就寫不出去；寫入失敗的那一批會留在佇列頭（照 dsh
+ * `storage.ts:301-317`），那條會話之後一則都落不了盤。在寫入這一關先拒，壞的只有那一則（[#1661](https://github.com/DemianLi/nexus-agent/issues/1661)）。
+ *
+ * **為什麼是 600：** 被最淺的那個讀方壓下來的。CI（Linux x64，Node 22.19.0 與 22.23.3）上 `telemetry-otel` 的 OTLP/HTTP JSON
+ * 匯出（`toAnyValue` 加 `JSON.stringify`，兩段都是遞迴的）物件 1023 層就送不出去、交錯 1169、陣列 1364；其他的都更深
+ * （凍過陣列的 `structuredClone` 約 1537、沒凍過的 `JSON.stringify` 約 4100）。600 在最低門檻的三分之二以下：那些數字是在
+ * vitest 裡量的，serve 底下呼叫端的堆疊更深，能用的只會更少。`telemetry-otel` 出廠是關的，但上限照最嚴的讀方定。
+ * 正常的工具結果與訊息不到 100 層（#1661 盤點）。
+ *
+ * **只管寫入，讀方不設限。** 這個上限出現之前寫下的舊日誌可能有更深的事件，續接（seed）與讀方（`fromLoggedMessage`、
+ * 遙測、修剪）照樣收得下，{@link snapshotJsonValue} 預設不設限。
+ *
+ * **與 dsh 的偏離（理由 1）：** dsh 的 `Session.append` 沒有深度上限，在 Node 22 上有同一個洞——超深的一則讓整條會話卡住。
+ * 我們的執行環境就是 Node 22，退一步改在寫入那一關設上限。
+ */
+export const SESSION_EVENT_MAX_DEPTH = 600;
+
+/**
+ * 深拷貝成**無損的**純 JSON，**拷不動就當場拋**。
+ *
+ * 這一條是 fail-closed 的，照 dsh 的 `snapshotJsonValue`／`walkJsonValue`（`packages/util/values/src/index.ts:71-174`，
+ * `687f282e`；`Session.append` 在 `packages/core/session/src/index.ts:808-811` 呼叫它）。**存參考會讓日誌變成活的**——
+ * LangGraph 的 payload 帶的是 `BaseMessage` 實例，存進去之後別人改那顆訊息，歷史就跟著被改寫，而且沒有任何徵兆。
+ * 所以這裡連 class 實例都不收。規則逐條照 dsh：
+ *
+ * - **只認** null／boolean／string／有限且不是 `-0` 的 number／陣列／純物件。`-0` 落盤會變成 `0`，記憶體與磁碟兩份
+ *   就不一樣（#1526 Q1 (a)）。
+ * - **陣列**：原型必須是某個 realm 的內建 `Array.prototype`；自有鍵數剛好是 `length + 1`（帶額外屬性的拒）；每個索引都是
+ *   自有屬性（有洞的拒）。
+ * - **物件**：原型是 `null` 或某個 realm 的內建 `Object.prototype`（跨 realm 的收、偽造的不收）；自有鍵裡有 symbol 或
+ *   不可列舉的就拒——JSON 會靜靜丟掉它們。
+ * - **物件屬性用 `Object.defineProperty` 寫進副本**：`"__proto__"` 這種自有鍵照樣是自有鍵，不會經原型 setter 換掉副本的原型。
+ *   陣列格照 dsh 用賦值（`:79-80`）：索引鍵不會碰到原型 setter。
+ * - **迭代走訪，不遞迴**：深巢狀不會撞上 `RangeError`。
+ * - **每格只讀一次**：檢查和拷貝是同一次走訪，存取器不會被讀兩次而讀到不同的值。
+ *
+ * **與 dsh 的偏離（理由 2）：拒收時拋帶路徑的 `TypeError`，不是回 `undefined` 由呼叫端拋通用訊息。** 多人共用的主機上，
+ * 管理者要靠伺服器日誌定位是哪個插件寫壞哪一格；判準照 dsh 逐條抄，路徑只在失敗時才組。
+ *
+ * @param value - 要拷的值。
+ * @param label - 路徑的根，例如 `tool/result 的 data`。
+ * @param maxDepth - 物件與陣列最多巢狀幾層（`value` 本身是容器的話算第 1 層，純量不算）；省略即不設限。
+ *   只有寫入那一關（{@link SessionLog.append}、{@link materializeAppendBatch}）傳，見 {@link SESSION_EVENT_MAX_DEPTH}。
+ * @returns 脫離原值的副本。
+ * @throws {TypeError} 有 JSON 無法原樣表達的東西，或巢狀超過 `maxDepth`，訊息指出是哪一格。
+ */
+export function snapshotJsonValue(
+  value: unknown,
+  label: string,
+  maxDepth: number = Number.POSITIVE_INFINITY,
+): unknown {
+  const fail = (path: SnapshotPath, reason: string, maxSegments?: number): never => {
+    throw new TypeError(`會話事件的 ${renderPath(path, maxSegments)} ${reason}`);
+  };
+  const ancestors = new Set<object>();
+  let root: unknown;
+  const assign = (destination: SnapshotDestination, item: unknown): void => {
+    if (destination.kind === 'root') {
+      root = item;
+    } else if (destination.kind === 'array') {
+      destination.target[destination.index] = item;
+    } else {
+      Object.defineProperty(destination.target, destination.key, {
+        value: item,
+        enumerable: true,
+        configurable: true,
+        writable: true,
+      });
+    }
+  };
+
+  const tasks: SnapshotTask[] = [
+    {
+      kind: 'visit',
+      value,
+      destination: { kind: 'root' },
+      path: { parent: undefined, segment: label },
+      depth: 0,
+    },
+  ];
+  for (let task = tasks.pop(); task !== undefined; task = tasks.pop()) {
+    if (task.kind === 'leave') {
+      ancestors.delete(task.source);
+      continue;
+    }
+    if (task.kind === 'array-item') {
+      if (!Object.prototype.hasOwnProperty.call(task.source, task.index)) {
+        fail(task.path, `陣列有洞（第 ${task.index} 格），JSON 表達不出來`);
+      }
+      tasks.push({
+        kind: 'visit',
+        value: task.source[task.index],
+        destination: { kind: 'array', target: task.target, index: task.index },
+        path: { parent: task.path, segment: task.index },
+        depth: task.depth,
+      });
+      continue;
+    }
+    if (task.kind === 'object-property') {
+      tasks.push({
+        kind: 'visit',
+        value: task.source[task.key],
+        destination: { kind: 'object', target: task.target, key: task.key },
+        path: { parent: task.path, segment: task.key },
+        depth: task.depth,
+      });
+      continue;
+    }
+
+    const current = task.value;
+    if (current === null || typeof current === 'boolean' || typeof current === 'string') {
+      assign(task.destination, current);
+      continue;
+    }
+    if (typeof current === 'number') {
+      if (!Number.isFinite(current)) fail(task.path, `是 ${String(current)}，JSON 表達不出來`);
+      if (Object.is(current, -0)) fail(task.path, '是 -0，JSON 表達不出來');
+      assign(task.destination, current);
+      continue;
+    }
+    if (typeof current !== 'object') {
+      return fail(
+        task.path,
+        `是 ${current === undefined ? 'undefined' : typeof current}，日誌只收純 JSON`,
+      );
+    }
+    if (ancestors.has(current)) fail(task.path, '繞回自己，日誌不收循環參考');
+    const depth = task.depth + 1;
+    if (depth > maxDepth) {
+      fail(task.path, `是第 ${depth} 層巢狀，超過上限 ${maxDepth} 層`, DEPTH_FAILURE_PATH_SEGMENTS);
+    }
+
+    if (Array.isArray(current)) {
+      if (!hasPlainArrayPrototype(current)) fail(task.path, '是 object，日誌只收純 JSON');
+      const length = current.length;
+      // 判準照 dsh 只有這一條；訊息分兩種：少了是有洞（索引不在），多了是帶額外屬性。
+      // 洞與額外屬性數目剛好抵銷時過得了這條，由下面逐格的 `array-item` 接住。
+      const keyCount = Reflect.ownKeys(current).length;
+      if (keyCount !== length + 1) {
+        fail(
+          task.path,
+          keyCount < length + 1 ? '陣列有洞，JSON 表達不出來' : '陣列帶額外屬性，JSON 表達不出來',
+        );
+      }
+      const target: unknown[] = [];
+      assign(task.destination, target);
+      ancestors.add(current);
+      tasks.push({ kind: 'leave', source: current });
+      for (let index = length - 1; index >= 0; index--) {
+        tasks.push({ kind: 'array-item', source: current, index, target, path: task.path, depth });
+      }
+      continue;
+    }
+
+    if (!hasPlainObjectPrototype(current)) fail(task.path, '是 object，日誌只收純 JSON');
+    const keys =
+      enumerableStringKeys(current) ?? fail(task.path, '有 symbol 或不可列舉的鍵，JSON 表達不出來');
+    const target: JsonObject = {};
+    assign(task.destination, target);
+    ancestors.add(current);
+    tasks.push({ kind: 'leave', source: current });
+    for (let index = keys.length - 1; index >= 0; index--) {
+      tasks.push({
+        kind: 'object-property',
+        source: current as JsonObject,
+        key: keys[index] as string,
+        target,
+        path: task.path,
+        depth,
+      });
+    }
+  }
+  return root;
+}
+
+/**
+ * 持久化後端寫入前，把一批事件驗過並拷成一份**沒凍過**的副本，照 dsh `materializeAppendBatch`
+ * （`packages/session/session-persistence/src/storage-contract.ts:131-137`，`687f282e`；JSONL 後端在
+ * `session-persistence-jsonl/src/storage.ts:191` 與 `:308` 寫入前都先跑它）。
+ *
+ * **後端為什麼不能直接序列化日誌裡那份：** 日誌裡的事件全凍過，而 V8 的 `JSON.stringify` 對凍過的巢狀撐得比較淺：
+ * CI（Node 22.23.3 Linux x64）上凍過的陣列約 2200 層就 `RangeError`，沒凍過的約 4100 層（Node 25 上沒凍過的撐得過
+ * 200 萬層，#1526 實測）。快照收得下的值後端卻寫不出去，失敗那批會一直卡在佇列頭，那條 thread 之後一則都落不了盤。
+ * 拷過之後在 Node 22 上仍有沒凍過的那個門檻，所以寫入那一關另有深度上限（{@link SESSION_EVENT_MAX_DEPTH}，#1661）。
+ *
+ * 規則與 {@link SessionLog.append} 同一份（{@link snapshotJsonValue}），拒收時一樣拋帶路徑的 `TypeError`（偏離同那支，理由 2）。
+ * 深度上限也同一個（{@link SESSION_EVENT_MAX_DEPTH}）：經 `append` 進來的事件不會超過，這裡再檢查一次是給繞過日誌、
+ * 直接交給後端的批次。
+ *
+ * @param events - 這一批，依 seq 排好。
+ * @returns 脫離原值、沒凍過的副本。
+ * @throws {TypeError} 有 JSON 無法原樣表達的東西，或某顆的 `data` 巢狀超過上限，訊息指出是哪一格。
+ */
+export function materializeAppendBatch(events: readonly SessionEvent[]): readonly SessionEvent[] {
+  // 從批次算起：批次這個陣列是第 1 層、事件是第 2 層，`data` 才是第 3 層。
+  return snapshotJsonValue(
+    events,
+    '寫入批次',
+    SESSION_EVENT_MAX_DEPTH + 2,
+  ) as readonly SessionEvent[];
+}
+
+/**
+ * 原地深凍一整張物件圖，回傳同一個值。照 dsh `deepFreeze`（`packages/util/values/src/index.ts:210-239`，`687f282e`）：
+ * **迭代，不遞迴**（深巢狀不撞 `RangeError`）；`WeakSet` 去重；活的 `AbortSignal` 不凍。
+ */
 function deepFreeze<T>(value: T): T {
-  if (typeof value !== 'object' || value === null) return value;
-  for (const entry of Object.values(value)) deepFreeze(entry);
-  return Object.freeze(value);
+  const seen = new WeakSet<object>();
+  const pending: (
+    | { readonly kind: 'visit'; readonly node: unknown }
+    | { readonly kind: 'property'; readonly source: Record<string, unknown>; readonly key: string }
+  )[] = [{ kind: 'visit', node: value }];
+  while (pending.length > 0) {
+    const task = pending.pop();
+    if (task === undefined) continue;
+    if (task.kind === 'property') {
+      pending.push({ kind: 'visit', node: task.source[task.key] });
+      continue;
+    }
+    const node = task.node;
+    if (node === null || typeof node !== 'object') continue;
+    if (node instanceof AbortSignal) continue;
+    if (seen.has(node)) continue;
+    seen.add(node);
+    Object.freeze(node);
+    const keys = Object.keys(node);
+    for (let index = keys.length - 1; index >= 0; index--) {
+      const key = keys[index];
+      if (key === undefined) continue;
+      pending.push({ kind: 'property', source: node as Record<string, unknown>, key });
+    }
+  }
+  return value;
 }
 
 /** 日誌的觀察者。**同步呼叫，在事件已經進到日誌之後**。 */
@@ -1617,7 +1931,7 @@ export class SessionLog implements SessionLogView {
           `會話 "${this.#sessionId}" 的 seed 不連續：第 ${index} 顆的 seq 是 ${event.seq}。`,
         );
       }
-      const snapshot = snapshotJsonValue(event, `seed 第 ${index} 顆`, new Set());
+      const snapshot = snapshotJsonValue(event, `seed 第 ${index} 顆`);
       this.#events.push(deepFreeze(snapshot) as SessionEvent);
     }
     // 末尾的 `session/resumed` 是上一次續接寫在 end-seed 之後的，不算「有新東西」：算的話每次空轉的續接
@@ -1674,8 +1988,8 @@ export class SessionLog implements SessionLogView {
    * @param data - 酬載，必須是純 JSON。
    * @param options - 見 {@link SessionAppendOptions}。
    * @throws 會進模型的種類帶了 `options.ignorable`（{@link SessionAppendOptions.ignorable}）。
-   * @throws `data` 帶了 JSON 表達不出來的東西（class 實例、函式、`undefined`、
-   *   `NaN`、循環參考）——**當場拋，日誌不變**。
+   * @throws {TypeError} `data` 帶了 JSON 無法原樣表達的東西（class 實例、函式、`undefined`、`NaN`、循環參考、
+   *   `-0`、有洞或帶額外屬性的陣列、symbol 或不可列舉的鍵）——**當場拋，日誌不變**，訊息指出是哪一格。
    * @throws 在某個 listener 的回呼裡被呼叫——重入防護，見 class 註解。
    */
   append<T extends SessionEventType>(
@@ -1693,7 +2007,11 @@ export class SessionLog implements SessionLogView {
       throw new TypeError(`會話事件 "${type}" 會進模型，不能標可忽略（#507）`);
     }
     // 先驗再推進：拷不動的話這一筆整個不算，日誌不會留下半筆。
-    const snapshot = snapshotJsonValue(data, `${type} 的 data`, new Set()) as SessionEventMap[T];
+    const snapshot = snapshotJsonValue(
+      data,
+      `${type} 的 data`,
+      SESSION_EVENT_MAX_DEPTH,
+    ) as SessionEventMap[T];
     if (this.#publishing) {
       throw new Error(
         `會話 "${this.#sessionId}" 的 append 不能在另一次 append 的回呼裡重入` +
