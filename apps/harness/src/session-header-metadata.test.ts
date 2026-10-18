@@ -600,33 +600,22 @@ describe('serve：寫上磁碟的 header', () => {
     expect(after).toEqual({ ...original, version: SESSION_LOG_FORMAT_VERSION });
   }, 60_000);
 
-  /** 同 CLI 那一條（#1049 缺口 1）：量的是 serve 這個入口也把 `--workspace` 傳下去了。 */
-  it('home 在 `--workspace` 底下：header 照寫但沒有雜湊、工作區裡沒有鍵檔，伺服器日誌講一聲', async () => {
+  /**
+   * serve 上 home 落在 `--workspace` 底下就起不來（#1620，排在 home 鎖之前），所以「header 照寫、只少雜湊」那一格在 serve 上
+   * 到不了，只剩 CLI 到得了（上面那條）。這裡量的是更早的那一道：連鍵檔都沒機會建。
+   */
+  it('home 在 `--workspace` 底下：serve 起不來，工作區裡沒有鍵檔', async () => {
     const workspace = privateDir('nexus-hdr-ws-');
     const home = join(workspace, 'home');
     const root = privateDir('nexus-hdr-logs-');
-    const lines: string[] = [];
-    running = (await runServe({
-      argv: ['--port', '0', '--workspace', workspace, '--session-log', root],
-      log: (line) => void lines.push(line),
-      env: { [HARNESS_HOME_ENV]: home },
-    })) as RunningServe;
-    const client = await serveClient(running);
-    const events = await client.openEvents('alpha');
-    await client.runStart('alpha', '說一句話。');
-    await foldTurn(events);
-    await events.return?.(undefined);
-    await running.close();
-    running = undefined;
-
-    const header = JSON.parse(
-      await readFile(join(root, projectKey(process.cwd()), 'alpha.header.json'), 'utf8'),
-    ) as Record<string, unknown>;
-    // 前提：header 真的寫了，其餘那幾格都在——少的只有雜湊。
-    expectBuildShape(header);
-    expect(header['plugins']).toEqual(expect.arrayContaining([expect.anything()]));
-    expect('configHash' in header).toBe(false);
+    await expect(
+      runServe({
+        argv: ['--port', '0', '--workspace', workspace, '--session-log', root],
+        log: () => undefined,
+        env: { [HARNESS_HOME_ENV]: home },
+      }),
+    ).rejects.toThrow(/serve 起不來：下面這些跟 --workspace .*重疊/su);
     expect(existsSync(join(home, CONFIG_HASH_KEY_FILE))).toBe(false);
-    expect(lines.join('\n')).toContain('不記設定雜湊');
-  }, 60_000);
+    expect(readdirSync(workspace)).toEqual([]);
+  });
 });

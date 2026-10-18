@@ -59,6 +59,9 @@
 - 這四條由 `apps/harness/src/contained-backend.test.ts` 的「讀取面的今日實況」釘住：文件與實際漂開時測試會先紅。
   基座哪天補上目錄 symlink 的圍堵，第一條會紅——那時該回來改這一節，不是把測試翻回去。
 - 想擋讀，現在唯一的辦法是在 `permissions` 自己加 deny 規則，或把 agent 跑在你信得過的隔離環境裡。
+- serve 啟動時會拒絕把 key 的來源與 harness home 擺在工作區裡（見下面「serve：key 與 home 不能跟工作區重疊」），但那道檢查
+  **只看路徑本身**：工作區裡一條指向 home 或指向 `.env` 所在目錄的目錄連結擋不到，經它照樣讀得到（就是上面第一條）。
+  不掃描是刻意的：要擋得掃整棵樹，而且連結可以在啟動之後才建。
 
 **2. 以 stdio 起的 MCP server 子行程不在 fence 底下。** 它們是外部程序，走自己的檔案系統，既不經過 `permissions` 也不經過
 backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MCP 讀來的資料經由內建 `write_file` 寫進工作區」那一條。
@@ -70,6 +73,27 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 動手；它們不涵蓋子行程與網路，對讀也幾乎沒有作用（見第 1 條）。`danger-full-access` 放行 symlink 逃逸，但基座字面的 `..`
 檢查仍在，所以它也不是 dsh 那種真正的不設防（偏離登記在 `contained-backend.ts` 檔頭）。**執行期的提示詞與 `/permission` 的輸出不會講這些**：它們描述的是「檔案工具現在擋不擋」，
 並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界。
+
+### serve：key 與 home 不能跟工作區重疊
+
+[#1620](https://github.com/DemianLi/nexus-agent/issues/1620)。serve 帶 `--workspace` 起來時，先檢查下面四個路徑，**任何一個跟工作區
+重疊就當場起不來**（沒有逃生旗標）：
+
+- 目前資料夾的 `.env`（存在才算，**不看 `--live`**：同一個目錄下次帶 `--live` 重啟，讀的就是這一份）；
+- harness home 本身（`NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`；還不存在也算）；
+- home 的 `.env`（存在才算）；
+- 程式碼資料夾根目錄的舊 `.env`（存在才算；它不會被讀，但檔案還在的話裡面多半就是 key）。
+
+為什麼：讀取不受圍堵（上面第 1 條），而 serve 是多人共用的——落在工作區裡的 key、瀏覽器會話密鑰、所有人的附件與會話日誌，
+任何一位使用者叫模型讀一次就拿到了。在專案目錄下跑 `serve --live --workspace .`，模型一個 `read_file .env` 就讀得到 key。
+
+- **重疊算兩個方向**：路徑在工作區裡、就是工作區，或工作區在它底下（例如 `--workspace ~/.nexus-agent/attachments`）都算。
+- **比的是實際位置**：經符號連結的別名、macOS 上大小寫不同的寫法都會被解開再比。
+- **檢查排在拿 home 鎖、讀 `.env` 之前**：被拒的那一次工作區裡一個檔都不會多，`.env` 一份都不讀。錯誤訊息只講路徑，不讀也不印
+  檔案內容。印設定的那幾個旗標（`--dump-config` 這一類）不寫 home，不檢查。
+- **怎麼繞**（擇一）：把 `.env` 搬到工作區外面（例如 home 的 `.env`），或改在啟動環境 export；把 `NEXUS_AGENT_HOME` 設到工作區
+  外面；或換一個不跟這些路徑重疊的 `--workspace`。
+- **只有 serve 檢查**。CLI 是一個人在自己的終端機跑，跟模型對話的人就是 key 的主人，不擋。
 
 ## 會話日誌
 
@@ -98,7 +122,8 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 
 - **不能落在 `--workspace` 底下**，預設的那一個也算。寫在可寫根裡，模型自己 `read_file` 就讀得到、也改得動整份
   對話史。`--workspace ~` 或把 `NEXUS_AGENT_HOME` 設進工作區，啟動就會被擋，訊息講得出兩條出路：`--session-log`
-  指到外面，或把 `NEXUS_AGENT_HOME` 移出去。
+  指到外面，或把 `NEXUS_AGENT_HOME` 移出去。serve 上這種情形更早就被「key 與 home 不能跟工作區重疊」那一道擋下
+  （home 在工作區裡，`--session-log` 指到外面也一樣），訊息是那一道的。
 - **換位置要換到一個留得住的目錄。** 指進 `/tmp` 或某個會被清掉的暫存目錄，那一跑跑完就什麼都沒剩。
 - **遙測開著的話這些內容也原樣送出去**；部署方的脫敏規則只作用在送出去的那一份，本機的 jsonl 照舊是原文。
 
@@ -201,7 +226,8 @@ append 一份 `$NEXUS_AGENT_HOME/invariant-log.jsonl`，一行一筆、兩種：
 - `{"kind":"violation","sessionId":…,"package":…,"message":…}`：一條違規，`message` 最多留前 500 個字元。
 
 **跟著會話日誌的兩條承諾走**：清單上 `session-persistence` 那一列關掉時一個位元組都不寫（home 不建）；
-home 落在 `--workspace` 底下時也不寫（不拋——量測記錄不值得擋掉一次啟動）。檔案 `0600`、目錄 `0700`，
+home 落在 `--workspace` 底下時也不寫（不拋——量測記錄不值得擋掉一次啟動；只有 CLI 到得了這一格，serve 上 home 在工作區裡
+就起不來）。檔案 `0600`、目錄 `0700`，
 不輪替，要清就直接刪。寫不進去只講一次，不影響產品；違規本身仍照舊印出來。
 
 每個 package 掛上幾個會話、報了幾次違規：
