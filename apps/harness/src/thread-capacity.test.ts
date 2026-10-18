@@ -230,3 +230,25 @@ describe('thread 數上限（#1476）', () => {
     expect(((await listed.json()) as Outcome).type).toBe('success');
   });
 });
+
+describe('threadCount：記憶體警告寫的「現在幾條」（#1493）', () => {
+  it('跟 threadFor 檢查上限用的同一個數：建構中的算，建失敗放掉，已建好的不重複算', async () => {
+    const r = rig(5);
+    expect(r.handler.threadCount()).toBe(0);
+    r.gates.set('t1', gate());
+    const building = touch(r, 't1');
+    await untilCalls(r, 1);
+    // 還在 createAgent：已經佔著名額，數得到。
+    expect(r.handler.threadCount()).toBe(1);
+    r.gates.get('t1')?.fail(new Error('模擬建構失敗'));
+    await building;
+    expect(r.handler.threadCount()).toBe(0);
+
+    expect((await touch(r, 't2')).type).toBe('success');
+    expect((await touch(r, 't3')).type).toBe('success');
+    expect(r.handler.threadCount()).toBe(2);
+    // 已在行程裡的 thread 再碰一次不會多算。
+    expect((await touch(r, 't2')).type).toBe('success');
+    expect(r.handler.threadCount()).toBe(2);
+  });
+});

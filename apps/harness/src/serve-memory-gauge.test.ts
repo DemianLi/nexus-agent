@@ -10,6 +10,8 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { foldTurn, serveClient } from './fixtures.js';
+import type { MemoryGaugeDeps } from './memory-gauge.js';
 import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
 
@@ -86,4 +88,150 @@ describe('記憶體量具，從 serve 組裝起（#1490 驗收 B、C）', () => 
       true,
     );
   });
+});
+
+const MIB = 1024 * 1024;
+
+/** 假的 cgroup v2（私有 cgroupns，路徑 `/`）：上限 1000 MiB，用量由 `usedPercent()` 決定，每次讀取當下才取值。 */
+function fakeCgroup(usedPercent: () => number): MemoryGaugeDeps {
+  const files: Record<string, () => string> = {
+    '/proc/self/cgroup': () => '0::/\n',
+    '/sys/fs/cgroup/memory.current': () => String(Math.round(usedPercent() * 10 * MIB)),
+    '/sys/fs/cgroup/memory.max': () => String(1000 * MIB),
+  };
+  return {
+    readText: (path) => {
+      const content = files[path];
+      return content === undefined
+        ? Promise.reject(Object.assign(new Error(`no ${path}`), { code: 'ENOENT' }))
+        : Promise.resolve(content());
+    },
+    processMemory: () => ({
+      rssBytes: 100 * MIB,
+      heapUsedBytes: 40 * MIB,
+      heapTotalBytes: 60 * MIB,
+    }),
+    freemem: () => 8192 * MIB,
+    totalmem: () => 16384 * MIB,
+    constrainedMemory: () => 0,
+  };
+}
+
+const WARNING = /^\[記憶體\] 警告：/u;
+const RECOVERED = /^\[記憶體\] 已恢復：/u;
+
+describe('記憶體用量警告，從 serve 組裝起（#1493 驗收 C、F）', () => {
+  it('取樣關著（出廠）：就算讀數是 99%，日誌裡沒有任何 [記憶體] 行（驗收 C）', async () => {
+    const lines: string[] = [];
+    serve = await startScriptedServe(TURNS, {
+      memoryGaugeDeps: fakeCgroup(() => 99),
+      log: (line) => lines.push(line),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1300));
+    expect(lines.filter((line) => line.startsWith('[記憶體]') || GAUGE_LINE.test(line))).toEqual(
+      [],
+    );
+  });
+
+  it('取樣開著、門檻預設 75：70% → 80% → 69% → 80%，警告、已恢復、再警告；警告帶現在的 thread 數與上限（驗收 F）', async () => {
+    let used = 70;
+    const lines: string[] = [];
+    serve = await startScriptedServe(TURNS, {
+      extraRows: '- id: memory-gauge\n  config:\n    reportIntervalMs: 1000\n',
+      memoryGaugeDeps: fakeCgroup(() => used),
+      log: (line) => lines.push(line),
+    });
+    const count = (pattern: RegExp): number => lines.filter((line) => pattern.test(line)).length;
+    // 真的開一條 thread：警告裡的「現在幾條」要是 handler 的數，不是寫死的。
+    const client = await serveClient(serve.running);
+    const events = await client.openEvents('t1');
+    expect((await client.runStart('t1', '說一句')).type).toBe('success');
+    await foldTurn(events);
+    await events.return?.(undefined);
+
+    await until(() => count(GAUGE_LINE) >= 1);
+    expect(count(WARNING)).toBe(0);
+    used = 80;
+    await until(() => count(WARNING) >= 1);
+    const warning = lines.find((line) => WARNING.test(line)) ?? '';
+    expect(warning).toContain('cgroup v2 /');
+    expect(warning).toContain('80.0%');
+    expect(warning).toContain('門檻 75%');
+    expect(warning).toContain('1 條 thread（上限 500）');
+    // 保持 80%：再過兩個取樣也不重複。
+    const seen = count(GAUGE_LINE);
+    await until(() => count(GAUGE_LINE) >= seen + 2, 4000);
+    expect(count(WARNING)).toBe(1);
+    used = 69;
+    await until(() => count(RECOVERED) >= 1);
+    used = 80;
+    await until(() => count(WARNING) >= 2);
+    expect(count(WARNING)).toBe(2);
+    expect(count(RECOVERED)).toBe(1);
+  }, 20_000);
+
+  it('warnAtPercent 真的是 serve 傳進去的那個值：門檻 50，60% 就警告（拿掉傳門檻那行會紅）', async () => {
+    const lines: string[] = [];
+    serve = await startScriptedServe(TURNS, {
+      extraRows:
+        '- id: memory-gauge\n  config:\n    reportIntervalMs: 1000\n    warnAtPercent: 50\n',
+      memoryGaugeDeps: fakeCgroup(() => 60),
+      log: (line) => lines.push(line),
+    });
+    await until(() => lines.some((line) => WARNING.test(line)));
+    expect(lines.find((line) => WARNING.test(line))).toContain('門檻 50%');
+  });
+
+  it('門檻寫 100（超出範圍）：那一列在載入期被丟掉，量具不啟動，日誌講出來是哪一列', async () => {
+    const lines: string[] = [];
+    serve = await startScriptedServe(TURNS, {
+      extraRows:
+        '- id: memory-gauge\n  config:\n    reportIntervalMs: 1000\n    warnAtPercent: 100\n',
+      memoryGaugeDeps: fakeCgroup(() => 99),
+      log: (line) => lines.push(line),
+    });
+    await new Promise((resolve) => setTimeout(resolve, 1300));
+    expect(lines.filter((line) => GAUGE_LINE.test(line) || WARNING.test(line))).toEqual([]);
+    expect(lines.some((line) => line.includes('memory-gauge') && line.includes('設定驗不過'))).toBe(
+      true,
+    );
+  });
+
+  it('macOS 形狀（沒有 cgroup、沒有 /proc/meminfo，只有 os.freemem 且顯示 99% 用掉）：不警告，只講一次讀不到', async () => {
+    const lines: string[] = [];
+    serve = await startScriptedServe(TURNS, {
+      extraRows: '- id: memory-gauge\n  config:\n    reportIntervalMs: 1000\n',
+      memoryGaugeDeps: {
+        ...fakeCgroup(() => 50),
+        readText: () => Promise.reject(Object.assign(new Error('nope'), { code: 'ENOENT' })),
+        freemem: () => 100 * MIB,
+        totalmem: () => 16384 * MIB,
+      },
+      log: (line) => lines.push(line),
+    });
+    await until(() => lines.filter((line) => GAUGE_LINE.test(line)).length >= 3, 5000);
+    expect(lines.filter((line) => WARNING.test(line))).toEqual([]);
+    const unreadable = lines.filter((line) => /^\[記憶體\] 記憶體用量讀不到/u.test(line));
+    expect(unreadable).toHaveLength(1);
+    expect(unreadable[0]).toContain('os.freemem');
+  }, 15_000);
+
+  it('讀不到（沒有 cgroup、主機也讀不到）：只講一次讀不到，沒有警告（驗收 D）', async () => {
+    const lines: string[] = [];
+    const base = fakeCgroup(() => 99);
+    serve = await startScriptedServe(TURNS, {
+      extraRows: '- id: memory-gauge\n  config:\n    reportIntervalMs: 1000\n',
+      memoryGaugeDeps: {
+        ...base,
+        readText: () => Promise.reject(Object.assign(new Error('nope'), { code: 'ENOENT' })),
+        freemem: () => {
+          throw new Error('freemem 壞了');
+        },
+      },
+      log: (line) => lines.push(line),
+    });
+    await until(() => lines.filter((line) => GAUGE_LINE.test(line)).length >= 3, 5000);
+    expect(lines.filter((line) => WARNING.test(line))).toEqual([]);
+    expect(lines.filter((line) => /^\[記憶體\] 記憶體用量讀不到/u.test(line))).toHaveLength(1);
+  }, 15_000);
 });

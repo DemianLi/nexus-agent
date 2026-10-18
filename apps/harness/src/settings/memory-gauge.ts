@@ -30,6 +30,11 @@ export const MIN_MEMORY_REPORT_INTERVAL_MS = 1000;
  */
 export const MAX_MEMORY_REPORT_INTERVAL_MS = 2_147_483_647;
 
+/** 用量警告門檻的範圍與預設（[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)，demian 2026-10-18 拍板 Q2）。 */
+export const MIN_WARN_AT_PERCENT = 1;
+export const MAX_WARN_AT_PERCENT = 99;
+export const DEFAULT_WARN_AT_PERCENT = 75;
+
 /** `strictObject`：多寫一個欄位是打錯字，同其他幾列。 */
 export const memoryGaugeConfigSchema = z.strictObject({
   /**
@@ -43,6 +48,16 @@ export const memoryGaugeConfigSchema = z.strictObject({
     .refine((value) => value === 0 || value >= MIN_MEMORY_REPORT_INTERVAL_MS, {
       message: `reportIntervalMs 要嘛是 0（不啟動），要嘛至少 ${String(MIN_MEMORY_REPORT_INTERVAL_MS)}`,
     }),
+  /**
+   * 用量警告門檻（百分比，1 到 99 的整數，預設 75；[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)，保險絲第 0 級）。
+   * **跟著取樣開關走**：`reportIntervalMs` 是 0（取樣關著）就不檢查，這個值被忽略；取樣開了，每次讀數之後和它比，嚴格超過就在日誌警告一次。
+   */
+  warnAtPercent: z
+    .number()
+    .int()
+    .min(MIN_WARN_AT_PERCENT)
+    .max(MAX_WARN_AT_PERCENT)
+    .default(DEFAULT_WARN_AT_PERCENT),
 });
 
 /** 驗過的設定。 */

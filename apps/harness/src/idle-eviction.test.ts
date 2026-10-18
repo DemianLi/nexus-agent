@@ -647,9 +647,12 @@ describe('D：撤中的也佔名額（#1484）', () => {
     expect(refused.message).toContain('1／1');
     expect(refused.message).toContain('閒置超過 10 秒');
     expect(r.created).toEqual(['t1']);
+    // 記憶體警告寫的「現在幾條」（#1493）與這道上限檢查數的是同一個：撤到一半的那條還算。
+    expect(r.handler.threadCount()).toBe(1);
 
     closing.open();
     await sweeping;
+    expect(r.handler.threadCount()).toBe(0);
     expect((await touch(r, 't2')).type).toBe('success');
     expect(r.created).toEqual(['t1', 't2']);
   });
