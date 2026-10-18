@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { fakeSink } from './fixtures.js';
+import { fakeSink, resumedLog } from './fixtures.js';
 import type { PluginOrigin } from './plugin.js';
 import { SessionLog } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
@@ -485,5 +485,34 @@ describe('請求快照不進遙測（#1020）', () => {
     log.append('approval/asked', { id: 'a1', toolName: 'take_note', reason: '看一下' });
     log.append('approval/decided', { id: 'a1', outcome: 'allowed-once' });
     expect(log.events.map((event) => isMirroredEvent(event))).toEqual([true, true]);
+  });
+});
+
+/**
+ * 物件與陣列交錯的巢狀（#1526）。深度取 3000：`structuredClone` 在 CI（Node 22.23.3 Linux x64）約 1500–2100 層就
+ * `RangeError`；Node 22 的原生 `JSON.stringify` 連沒凍過的也是遞迴的，CI 上約 4100 層就拋，再深連改寫後也過不了。
+ */
+function deepMixed(depth: number): unknown {
+  let value: unknown = 'leaf';
+  for (let level = 0; level < depth; level++) value = level % 2 ? { next: value } : [value];
+  return value;
+}
+
+describe('深巢狀的事件照樣交得出去（#1526）', () => {
+  it('tool/result 的 meta 是 3000 層交錯巢狀：那一筆記錄交出去、body 原樣，沒有被扣住', () => {
+    // 寫入那一關有深度上限（#1661），3000 層只會出現在上限之前寫下、續接回來的舊日誌裡；live 建構當下會補送它。
+    const meta = deepMixed(3_000);
+    const log = resumedLog('thread-a', [['tool/result', { callId: 'c1', isError: false, meta }]]);
+    const sink = fakeSink();
+    const warnings: string[] = [];
+    new SessionTelemetryCoordinator({ log, sink, warn: (message) => warnings.push(message) });
+
+    expect(warnings).toEqual([]);
+    const records = sink.records.filter(
+      (record) => record.attributes['event.type'] === 'tool/result',
+    );
+    expect(records).toHaveLength(1);
+    expect(records[0]!.attributes['event.seq']).toBe(0);
+    expect(JSON.stringify((records[0]!.body as { meta: unknown }).meta)).toBe(JSON.stringify(meta));
   });
 });

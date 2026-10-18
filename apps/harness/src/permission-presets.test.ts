@@ -9,6 +9,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { MemorySaver } from '@langchain/langgraph';
 import type { SessionEvent } from '@nexus/core';
 import { createWireClient, PERMISSIONS_PROJECTION_KEY } from '@nexus/wire';
@@ -16,11 +17,14 @@ import { createDeepAgent, StateBackend } from 'deepagents';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
+import { runCli } from './cli.js';
 import {
   emptyCommandPoint,
+  FULL_ACCESS_PATCH,
   loopbackRequest,
   noSessions,
   shippedPlugins,
+  shippedPluginsWithFullAccess,
   TEST_BROWSER_AUTH,
 } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -28,6 +32,8 @@ import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
 const shipped = await shippedPlugins();
+/** 部署方用 patch 加回全開那一組之後的清單（#1621：出廠表只有兩組）。 */
+const withFullAccess = await shippedPluginsWithFullAccess();
 
 const noSteer = (): void => undefined;
 
@@ -74,13 +80,14 @@ describe('新會話的起始組合由 --sandbox 推', () => {
     ['workspace-write', 'ask', 'workspace-write'],
     ['read-only', 'ask', 'read-only'],
     // **行為改變**：以前 `--sandbox danger-full-access` 只放寬檔案、核准照舊會問；現在連核准也是 `never`。
+    // 出廠表沒有這一組（#1621），這一格量的是部署方加回之後。
     ['danger-full-access', 'never', 'danger-full-access'],
   ] as const)(
     '--sandbox %s → 核准 %s、組合 %s，三顆事件都釘進日誌',
     async (sandbox, approval, preset) => {
       const built = await createCliAgent(
         { live: false, workspace: root, ...(sandbox !== undefined && { sandbox }) },
-        shipped,
+        sandbox === 'danger-full-access' ? withFullAccess : shipped,
         root,
       );
       const detach = built.attachSession(built.sessions);
@@ -97,8 +104,8 @@ describe('新會話的起始組合由 --sandbox 推', () => {
 });
 
 describe('`/permission` 是切換的唯一入口', () => {
-  it('切到全開：兩顆旋鈕各記一顆、意圖先記，投影跟著換；再切回去也一樣', async () => {
-    const built = await createCliAgent({ live: false, workspace: root }, shipped, root);
+  it('部署方加回全開之後切過去：兩顆旋鈕各記一顆、意圖先記，投影跟著換；再切回去也一樣', async () => {
+    const built = await createCliAgent({ live: false, workspace: root }, withFullAccess, root);
     const detach = built.attachSession(built.sessions);
     const signal = new AbortController().signal;
     const run = async (rawInput: string) =>
@@ -184,6 +191,28 @@ describe('`/permission` 是切換的唯一入口', () => {
       await built.dispose();
     }
   });
+
+  it('出廠表沒有全開（#1621）：`/permission danger-full-access` 被拒，日誌沒有新事件', async () => {
+    const built = await createCliAgent({ live: false, workspace: root }, shipped, root);
+    const detach = built.attachSession(built.sessions);
+    try {
+      const before = built.sessionLog.events.length;
+      const result = await built.commands.find('permission')?.handler({
+        commandId: 'c',
+        rawInput: 'danger-full-access',
+        signal: new AbortController().signal,
+        sessionLog: built.sessionLog,
+        attachments: [],
+        steer: noSteer,
+      });
+      expect(result?.kind).toBe('error');
+      expect(built.sessionLog.events).toHaveLength(before);
+      expect(currentPreset(built.projections, built.sessionLog.events)).toBe('workspace-write');
+    } finally {
+      detach();
+      await built.dispose();
+    }
+  });
 });
 
 describe('續接不重新套預設', () => {
@@ -247,6 +276,45 @@ describe('該起不來的時候起不來', () => {
     ).rejects.toThrow('互相矛盾');
   });
 
+  it('出廠表沒有全開（#1621）：`--sandbox danger-full-access` 起不來，訊息指出要在表裡補上那一組', async () => {
+    await expect(
+      createCliAgent(
+        { live: false, workspace: root, sandbox: 'danger-full-access' },
+        shipped,
+        root,
+      ),
+    ).rejects.toThrow('要嘛在表裡補上那一組');
+  });
+
+  it('CLI 入口同樣：`--sandbox danger-full-access` 沒加回起不來；`--patch` 加回之後跑得完一輪', async () => {
+    const quiet = { log: () => undefined, error: () => undefined };
+    // home 與日誌都放工作區外的暫存目錄：不碰真的 home，也不撞「日誌不能在工作區裡」。
+    const home = await mkdtemp(join(tmpdir(), 'nexus-permission-presets-home-'));
+    const cli = (extra: readonly string[]) =>
+      runCli({
+        argv: [
+          '--workspace',
+          root,
+          '--session-log',
+          join(home, 'sessions'),
+          '--sandbox',
+          'danger-full-access',
+          ...extra,
+          '說點什麼',
+        ],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer: quiet,
+        env: { NEXUS_AGENT_HOME: home },
+      });
+    try {
+      await expect(cli([])).rejects.toThrow('要嘛在表裡補上那一組');
+      await expect(cli(['--patch', FULL_ACCESS_PATCH])).resolves.toBeUndefined();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+
   it('表被改成對不上起始值、又沒設 defaultPreset：新會話起不來', async () => {
     await expect(
       createCliAgent(
@@ -278,8 +346,8 @@ describe('該起不來的時候起不來', () => {
 
 describe('wire 的 permission.catalog', () => {
   /** 一個把 `permissionPresets` 交給 wire 的最小組裝：目錄從產品組裝來。 */
-  async function connect() {
-    const built = await createCliAgent({ live: false, workspace: root }, shipped, root);
+  async function connect(plugins: typeof shipped = shipped) {
+    const built = await createCliAgent({ live: false, workspace: root }, plugins, root);
     const handler = createWireHandler({
       auth: TEST_BROWSER_AUTH,
       createAgent: async () => ({
@@ -303,8 +371,32 @@ describe('wire 的 permission.catalog', () => {
     return { built, handler, client };
   }
 
-  it('送出出廠三組，依宣告順序，預設組是 workspace-write', async () => {
+  it('送出出廠兩組（#1621：不含全開），依宣告順序，預設組是 workspace-write', async () => {
     const { built, handler, client } = await connect();
+    try {
+      const outcome = await client.permissionCatalog('t');
+      expect(outcome.kind).toBe('ok');
+      if (outcome.kind !== 'ok') return;
+      const { catalog } = outcome.result.value;
+      expect(catalog.options.map((option) => option.value)).toEqual([
+        'read-only',
+        'workspace-write',
+      ]);
+      expect(catalog.defaultPreset).toBe('workspace-write');
+      expect(catalog.defaultOptions).toEqual(catalog.options);
+      // 每一組都有畫面上的名字與說明；`custom` 不在目錄裡（不是切換目標）。
+      for (const option of catalog.options) {
+        expect(option.name).not.toBe('');
+        expect(option.description).toBeDefined();
+      }
+      expect(catalog.options.map((option) => option.value)).not.toContain('custom');
+    } finally {
+      await handler.close();
+      await built.dispose();
+    }
+  });
+  it('部署方用 patch 加回全開：目錄回到三組，全開的名字與說明照 patch', async () => {
+    const { built, handler, client } = await connect(withFullAccess);
     try {
       const outcome = await client.permissionCatalog('t');
       expect(outcome.kind).toBe('ok');
@@ -316,13 +408,9 @@ describe('wire 的 permission.catalog', () => {
         'danger-full-access',
       ]);
       expect(catalog.defaultPreset).toBe('workspace-write');
-      expect(catalog.defaultOptions).toEqual(catalog.options);
-      // 每一組都有畫面上的名字與說明；`custom` 不在目錄裡（不是切換目標）。
-      for (const option of catalog.options) {
-        expect(option.name).not.toBe('');
-        expect(option.description).toBeDefined();
-      }
-      expect(catalog.options.map((option) => option.value)).not.toContain('custom');
+      const full = catalog.options.find((option) => option.value === 'danger-full-access');
+      expect(full?.name).toBe('danger-full-access');
+      expect(full?.description).toContain('不問你');
     } finally {
       await handler.close();
       await built.dispose();

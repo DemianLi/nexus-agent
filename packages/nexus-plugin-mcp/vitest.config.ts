@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitest/config';
 
+import { pathsPlugin } from '../../vitest.shared.ts';
+
 /**
  * 這個套件的測試差不多都要起一個真的子行程（stdio MCP server，`node --import tsx …`）。
  * 啟動成本不在測試的邏輯裡，而在 `tsx` 的載入：本機約 0.5 秒，CI 的 runner 在其他套件併行時量到
@@ -10,6 +12,7 @@ import { defineConfig } from 'vitest/config';
  * 所以整個套件一次放寬，而不是只放寬被撞到的那個測試：被撞到的每次都是不同的那一個。
  */
 export default defineConfig({
+  plugins: [pathsPlugin()],
   test: {
     testTimeout: 30_000,
   },

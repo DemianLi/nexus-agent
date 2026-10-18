@@ -47,13 +47,15 @@ import {
   createSandboxPolicyPlugin,
   sandboxPolicySentence,
 } from '@nexus/plugin-sandbox-policy';
-import { shippedPlugins, withScriptedModel } from './fixtures.js';
+import { shippedPlugins, shippedPluginsWithFullAccess, withScriptedModel } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
 const shipped = await shippedPlugins();
+/** 部署方用 patch 加回全開那一組之後的清單（#1621：出廠表只有兩組，`--sandbox danger-full-access` 起不來）。 */
+const withFullAccess = await shippedPluginsWithFullAccess();
 
 const WORKER: PluginEntry = {
   plugin: {
@@ -194,11 +196,15 @@ describe('子代理的沙箱模式', () => {
     return { ...built, controller, model };
   }
 
-  /** **產品組裝，有 `--workspace`**：權限組合那一列要真的掛著，所以不走上面手搭的 `assemble`。 */
+  /**
+   * **產品組裝，有 `--workspace`**：權限組合那一列要真的掛著，所以不走上面手搭的 `assemble`。
+   * 全開那一格用加回全開的清單：出廠表沒有那一組（#1621）。
+   */
   async function assembleProduct(mode: SandboxMode, turns: readonly ScriptedTurn[]) {
+    const base = mode === 'danger-full-access' ? withFullAccess : shipped;
     const built = await createCliAgent(
       { live: false, workspace: root, sandbox: mode },
-      withScriptedModel([...shipped, WORKER], turns),
+      withScriptedModel([...base, WORKER], turns),
       root,
     );
     return { ...built, model: built.model as ScriptedChatModel };

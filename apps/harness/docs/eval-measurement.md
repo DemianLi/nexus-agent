@@ -1,7 +1,7 @@
 # 評估工具層的量測規矩
 
 `apps/harness/src/eval/` 這一層（基準任務、評分器、`eval:compare`、`eval:survey`、`eval:sessions`）怎麼量、
-量出來的數字能拿去做什麼、哪些量法**現在不建**以及哪天要建。詞彙見 [`CONTEXT.md`](../CONTEXT.md)；
+量出來的數字能拿去做什麼、哪些量法**現在不建**以及哪天要建。詞彙見 [`GLOSSARY.md`](../GLOSSARY.md)；
 怎麼跑、報表怎麼讀見 [`docs/operations.md`](../../../docs/operations.md) 的 eval 一節。
 
 **這一份只記「現在不建」的決定。** 已經落地的（結果落檔並記版本、「這題成功」判準與平凡地板、
@@ -39,7 +39,7 @@
 
 ## 二、這七題的分數當上限，不當實力
 
-[`dataset.ts`](../src/eval/dataset.ts) 那七題（見 `CONTEXT.md` 的「基準任務」）同時被拿來**挑設定**與**報成績**，
+[`dataset.ts`](../src/eval/dataset.ts) 那七題（見 `GLOSSARY.md` 的「基準任務」）同時被拿來**挑設定**與**報成績**，
 中間沒有切開：
 
 - **預設模型**是在這七題上決選出來的（2026-09-04，七題 × 3 次，見

@@ -22,7 +22,7 @@
  * @module
  */
 
-import { cp, mkdtemp, rm } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { join, relative } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { Context } from '@nexus/cordis';
@@ -179,6 +179,38 @@ function mcpConfig(): Record<string, unknown> {
   };
 }
 
+/** `from '…'`、`import('…')`、`import '…'`、`require('…')` 裡的 `@nexus/*` 說法。 */
+const WORKSPACE_SPECIFIER =
+  /\b(from\s+|import\s*\(\s*|import\s+|require\s*\(\s*)(['"])(@nexus\/[\w./-]+)\2/gu;
+
+/**
+ * 把副本裡的 `@nexus/*` 說法釘成這個行程解析到的檔案路徑。
+ *
+ * 副本放在 `node_modules` 底下，tsx 不對那裡的檔案套 tsconfig `paths`，Node 原生解析又只會走到各套件
+ * manifest 指的 `lib/`（乾淨樹上不存在）。用 `import.meta.resolve` 取這個行程（已套 `paths`）解析到的來源檔，
+ * 副本與主程式拿到同一個 `@nexus/core` 實例，跟過去 `main` 指 `src/` 時的行為一樣。
+ */
+async function pinWorkspaceImports(dir: string): Promise<void> {
+  for (const entry of await readdir(dir, { withFileTypes: true, recursive: true })) {
+    if (!entry.isFile() || !entry.name.endsWith('.ts')) continue;
+    const file = join(entry.parentPath, entry.name);
+    const text = await readFile(file, 'utf8');
+    const pinned = text.replace(
+      WORKSPACE_SPECIFIER,
+      (whole: string, lead: string, quote: string, specifier: string) => {
+        let target: string;
+        try {
+          target = fileURLToPath(import.meta.resolve(specifier));
+        } catch {
+          return whole;
+        }
+        return `${lead}${quote}${target}${quote}`;
+      },
+    );
+    if (pinned !== text) await writeFile(file, pinned);
+  }
+}
+
 /** 把 mcp 的 src 複製成 v1、v2，各自 import。回傳兩顆插件與收拾函式。 */
 async function copies(): Promise<{
   v1: NexusPlugin<unknown>;
@@ -193,6 +225,7 @@ async function copies(): Promise<{
       recursive: true,
       filter: (source) => !/\.test\.ts$/u.test(source),
     });
+    await pinWorkspaceImports(join(root, version));
     const module = (await import(pathToFileURL(join(root, version, 'index.ts')).href)) as {
       default: NexusPlugin<unknown>;
     };

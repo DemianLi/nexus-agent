@@ -1,5 +1,6 @@
 {
   "name": "nexus-agent",
+  "version": "0.0.0",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@10.34.5",
@@ -7,22 +8,34 @@
     "node": ">=22.19.0"
   },
   "scripts": {
-    "lint": "pnpm -r run lint",
+    "lint": "pnpm run build:lib && pnpm -r run lint",
     "typecheck": "pnpm -r run typecheck",
     "verify-package-invariants": "pnpm --filter @nexus/harness run verify-package-invariants",
     "test": "pnpm -r run test",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "dev": "pnpm --filter @nexus/web run dev",
-    "build": "pnpm -r run build"
+    "build": "pnpm run build:lib && pnpm -r run build",
+    "build:lib": "tsdown",
+    "gen-tsconfig-paths": "tsx scripts/gen-tsconfig-paths.ts",
+    "verify-tsconfig-paths": "tsx scripts/gen-tsconfig-paths.ts --check",
+    "verify-lib-manifests": "tsx scripts/verify-lib-manifests.ts",
+    "smoke-built-bin": "tsx scripts/smoke-built-bin.ts",
+    "release:bump": "tsx scripts/release/bump.ts",
+    "release:version": "tsx scripts/release/version.ts",
+    "release:pack": "tsx scripts/release/pack.ts",
+    "release:verify-packed-install": "tsx scripts/release/verify-packed-install.ts"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",
     "eslint": "^9.39.0",
     "eslint-config-prettier": "^10.1.8",
     "prettier": "^3.9.6",
+    "tsdown": "^0.22.2",
+    "tsx": "^4.23.12",
     "typescript": "^5.9.3",
-    "typescript-eslint": "^8.46.0"
+    "typescript-eslint": "^8.46.0",
+    "vite-tsconfig-paths": "^6.1.1"
   },
   "pnpm": {
     "onlyBuiltDependencies": [

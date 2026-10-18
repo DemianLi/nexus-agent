@@ -2,6 +2,10 @@ node_modules/
 dist/
 build/
 coverage/
+
+# tsdown 編出來的產物（#1502）。錨在根目錄：`apps/web/src/lib/` 是原始碼，不能被排除。
+/apps/harness/lib/
+/packages/*/lib/
 pnpm-lock.yaml
 
 # markdown 不交給 Prettier 排版。

@@ -95,18 +95,46 @@ describe('registry 檔的改動還在', () => {
     });
   });
 
-  test('message-scroller 的 item 沒有 content-visibility（會把陰影與光暈切成直角，§9）', () => {
+  test('message-scroller 的 item 由覆寫檔壓掉 content-visibility（會把陰影與光暈切成直角，§9；#1638 Q6，README 本地修改第 42 條）', () => {
+    expect(read('../../styles/solid-glass.overrides.css')).toContain(
+      '[data-slot="message-scroller-item"] {\n  content-visibility: visible;\n  contain-intrinsic-size: none;\n}',
+    );
+    // vendor 原文仍然是 auto。上游哪天自己拿掉，這條紅，提醒把本地修改拿掉。
+    const vendor = code(read('../../vendor/solid-glass/components/ui/message-scroller.tsx'));
+    expect(vendor).toMatch(
+      /data-slot="message-scroller-item"[\s\S]{0,300}\[content-visibility:auto\]/,
+    );
+    // nexus 層沒有自己再寫一次（壓制只在覆寫檔一處）。
     expect(code(read('./message-scroller.tsx'))).not.toMatch(/content-visibility/);
   });
 
-  test('message-scroller 自動捲動時只把捲軸變透明，不改捲軸寬（#1363）', () => {
-    const source = code(read('./message-scroller.tsx'));
-    // `scrollbar-none`／`scrollbar-thin`／`scrollbar-auto` 與 `[scrollbar-width:…]`、`[scrollbar-gutter:…]` 都會改內容寬度。
-    expect(source).not.toMatch(
-      /data-autoscrolling:(?:scrollbar-(?:none|thin|auto|gutter)|\[scrollbar-(?:width|gutter))/,
+  test('不支援 scroll-driven 動畫時對話區不淡出：覆寫檔歸 0（#1638 PR B，README 本地修改第 43 條）', () => {
+    expect(read('../../styles/solid-glass.overrides.css')).toContain(
+      '@supports not (animation-timeline: scroll()) {\n  [data-slot="message-scroller-viewport"] {\n    --scroll-fade-t: 0px;\n    --scroll-fade-b: 0px;\n  }\n}',
     );
-    expect(source).toContain('data-autoscrolling:[scrollbar-color:transparent_transparent]');
-    expect(source).toContain('scrollbar-gutter-stable');
+    // vendor 的 viewport 仍用 `scroll-fade-b`，它的退路仍是把淡出設成整段（常駐）。上游哪天改成不遮字，這條紅，提醒把本地修改拿掉。
+    const vendor = code(read('../../vendor/solid-glass/components/ui/message-scroller.tsx'));
+    expect(vendor).toMatch(/data-slot="message-scroller-viewport"[\s\S]{0,300}\bscroll-fade-b\b/);
+    const utility = read('../../vendor/solid-glass/shadcn/tailwind.css');
+    const fadeB = utility.slice(utility.indexOf('@utility scroll-fade-b {'));
+    expect(fadeB.slice(0, fadeB.indexOf('\n}\n'))).toContain(
+      '@supports not (animation-timeline: scroll()) {\n    --scroll-fade-b: var(--_scroll-fade-size-b);\n  }',
+    );
+  });
+
+  test('message-scroller 自動捲動時只把捲軸變透明，不改捲軸寬（#1363；#1638 起讀 vendor 原文）', () => {
+    // 寬度不變靠 vendor 原文：`scrollbar-thumb-*`／`scrollbar-track-*` 只設 `scrollbar-color`（Tailwind 4.3），上游哪天改成會動寬度的
+    // 寫法，這條紅。`scrollbar-none`／`scrollbar-thin`／`scrollbar-auto` 與 `[scrollbar-width:…]`、`[scrollbar-gutter:…]` 都會改內容寬度。
+    const width =
+      /data-autoscrolling:(?:scrollbar-(?:none|thin|auto|gutter)|\[scrollbar-(?:width|gutter))/;
+    const vendor = code(read('../../vendor/solid-glass/components/ui/message-scroller.tsx'));
+    expect(vendor).not.toMatch(width);
+    expect(vendor).toContain(
+      'data-autoscrolling:scrollbar-thumb-transparent data-autoscrolling:scrollbar-track-transparent',
+    );
+    expect(vendor).toContain('scrollbar-gutter-stable');
+    // nexus 層也不加會動寬度的寫法。產物另由 `scripts/check-built-css.mjs` 掃。
+    expect(code(read('./message-scroller.tsx'))).not.toMatch(width);
   });
 
   test('sonner 不靠 next-themes（主題由呼叫端給，§6）', () => {

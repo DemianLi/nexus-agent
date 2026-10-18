@@ -61,9 +61,12 @@ const KEYFRAMES_ALLOWED = new Set([
   'sg-sweep',
   'sg-float-in',
   'sg-fade-in',
-  // 第三方：shadcn 的 tailwind.css（`src/vendor/solid-glass/shadcn/tailwind.css`，#1523）的 `scroll-fade-reveal-*`、`tw-shimmer`
-  // 不在清單上：它們跟著 `@utility scroll-fade-*`、`shimmer` 產出，而原始碼裡出現那個字就會產出那個 utility。
-  // #1523 PR 1 時出貨過（來源是兩句註解裡的字），PR 2 改寫註解後不再出貨，所以拿掉。哪個元件真的用到時再加回來、寫上是誰用的。
+  // 第三方：shadcn 的 tailwind.css（`src/vendor/solid-glass/shadcn/tailwind.css`，#1523）。跟著 `@utility scroll-fade-*`、`shimmer`
+  // 產出，原始碼裡出現那個字就會產出那個 utility，所以只列真的有元件用到的那幾個。
+  // - `scroll-fade-reveal-b`：對話捲動區（vendor `message-scroller.tsx` 的 viewport）的 `scroll-fade-b`，底部淡出跟著捲動位置收放
+  //   （scroll-driven，時長 1ms 只是佔位，不是時間動畫；#1638 PR B，Q8 照 SG）。
+  // `tw-shimmer` 還沒有元件用到（attachment 在 #1638 PR C）。
+  'scroll-fade-reveal-b',
 ]);
 
 const REDUCED_MOTION = /prefers-reduced-motion:\s*reduce/;

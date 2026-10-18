@@ -14,9 +14,10 @@ import { join } from 'node:path';
 import { HumanMessage } from '@langchain/core/messages';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { InvalidCredentialError } from './api-key.js';
 import { CREDENTIALS_FILE, createCredentialService } from './credentials.js';
 import { loadLaunchEnv } from './launch-env.js';
-import { LIVE_API_KEY_ENV, createLiveModel } from './live-model.js';
+import { LIVE_API_KEY_ENV, classifyTurnFailure, createLiveModel } from './live-model.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
 
 const FILE_KEY = 'nvapi-only-in-the-managed-file';
@@ -167,5 +168,97 @@ describe('四層優先序走到假端點（不是只看 resolve 的回傳）', (
       'Bearer project-env',
       'Bearer home-env',
     ]);
+  });
+});
+
+/** 受管檔裡寫一個 YAML 純量原文（呼叫端自己決定引號與跳脫）。 */
+function managedRaw(yamlValue: string): void {
+  const file = join(home, CREDENTIALS_FILE);
+  writeFileSync(file, `version: 1\nrefs:\n  ${LIVE_API_KEY_ENV}: ${yamlValue}\n`, { mode: 0o600 });
+  chmodSync(file, 0o600);
+}
+
+function withEnv(inherited: NodeJS.ProcessEnv) {
+  const launchEnv = loadLaunchEnv({
+    cwd: root,
+    home,
+    target: { ...inherited },
+    warn: () => undefined,
+  });
+  return createCredentialService({ home, launchEnv, warn: () => undefined });
+}
+
+/** 取 `invoke` 或建構的拋出物。 */
+async function thrownBy(run: () => unknown): Promise<unknown> {
+  try {
+    await run();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
+describe('金鑰送出前先修剪、檢查（#1541）', () => {
+  it('頭尾有空白：端點收到 Bearer 加一個空白加修過的 key', async () => {
+    managedRaw(`"  ${FILE_KEY}\\n"`);
+    const model = createLiveModel(config(), undefined, credentials());
+
+    await model.invoke([new HumanMessage('hi')]);
+
+    expect(seen).toEqual([`Bearer ${FILE_KEY}`]);
+  });
+
+  it('受管檔只有空白、啟動環境之外還有好的 .env：建構就拋，不往下一層退', async () => {
+    writeFileSync(join(root, '.env'), `${LIVE_API_KEY_ENV}=project-env-good\n`);
+    managedRaw('"   "');
+
+    const error = await thrownBy(() => createLiveModel(config(), undefined, credentials()));
+
+    expect(error).toBeInstanceOf(InvalidCredentialError);
+    expect((error as Error).message).toContain(LIVE_API_KEY_ENV);
+    expect((error as Error).message).toContain(join(home, CREDENTIALS_FILE));
+    expect(seen).toEqual([]);
+  });
+
+  it.each([
+    ['啟動環境', { [LIVE_API_KEY_ENV]: 'nvapi-SECRET1\nnvapi-SECRET1' }, '啟動環境'],
+    ['.env', {}, join('.env')],
+  ])(
+    '起動時 %s 裡的壞 key：拋 InvalidCredentialError、訊息指名層、沒有 key 片段、端點零請求',
+    async (layer, inherited, shown) => {
+      if (layer === '.env')
+        writeFileSync(join(root, '.env'), `${LIVE_API_KEY_ENV}="nvapi-SECRET1 nvapi-SECRET1"\n`);
+
+      const error = await thrownBy(() => createLiveModel(config(), undefined, withEnv(inherited)));
+
+      expect(error).toBeInstanceOf(InvalidCredentialError);
+      const message = (error as Error).message;
+      expect(message).toContain(LIVE_API_KEY_ENV);
+      expect(message).toContain(shown);
+      expect(message).not.toContain('nvapi-S');
+      expect(message).not.toContain('SECRET1');
+      expect(seen).toEqual([]);
+    },
+  );
+
+  it('兩個請求之間受管檔被改成含換行的值：第二個請求拋 InvalidCredentialError、不送出、訊息沒有 key 片段', async () => {
+    managed(FILE_KEY);
+    const model = createLiveModel(config(), undefined, credentials());
+    await model.invoke([new HumanMessage('one')]);
+
+    managedRaw('"nvapi-SECRET2\\nnvapi-SECRET2"');
+    const error = await thrownBy(() => model.invoke([new HumanMessage('two')]));
+
+    expect(seen).toEqual([`Bearer ${FILE_KEY}`]);
+    expect(classifyTurnFailure(error).code).toBe('INVALID_CREDENTIAL');
+    expect(String((error as Error).message)).not.toContain('SECRET2');
+    expect(String((error as Error).message)).toContain(LIVE_API_KEY_ENV);
+  });
+
+  it('classifyTurnFailure：認 name、跨 cause 鏈，且不可重試（不落在 UNKNOWN）', () => {
+    const inner = new InvalidCredentialError('x');
+    const wrapped = new Error('outer', { cause: inner });
+    expect(classifyTurnFailure(inner).code).toBe('INVALID_CREDENTIAL');
+    expect(classifyTurnFailure(wrapped).code).toBe('INVALID_CREDENTIAL');
   });
 });

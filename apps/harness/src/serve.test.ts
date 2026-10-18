@@ -47,6 +47,7 @@ describe('serve 的旗標', () => {
       dumpConfigSchema: false,
       dumpDefaultConfig: false,
       help: false,
+      version: false,
     });
   });
 

@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * 把 agent 掛上 HTTP，給 `apps/web` 連。
  *
@@ -24,10 +25,10 @@
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { THREADS_PATH } from '@nexus/wire';
 import { errorChain, recordedApprovalPolicy, TokenAnchorBook } from '@nexus/core';
+import { HARNESS_VERSION } from './harness-version.js';
 import { singleDigitModelIds } from './model-catalog.js';
 import type {
   PluginEntry,
@@ -43,6 +44,7 @@ import {
   formatGoalDriverDisclosure,
   goalDriverPort,
   resolveInvariantLogPath,
+  assertLaunchPathsOutsideWorkspace,
   resolveSessionLogDir,
   resolveWorkspaceRoot,
   SESSION_LOG_OFF_DISCLOSURE,
@@ -163,6 +165,8 @@ export interface ServeInvocation {
   /** 見 `assembly-root.ts` 的 `CliInvocation.dumpDefaultConfig`。**兩個入口印的是同一份出貨設定**。 */
   readonly dumpDefaultConfig: boolean;
   readonly help: boolean;
+  /** 只印版本就退出（#1502）。 */
+  readonly version: boolean;
 }
 
 const USAGE = `用法：
@@ -183,6 +187,7 @@ const USAGE = `用法：
   --workspace <dir>    把檔案落在這個目錄底下（省略即虛擬檔案系統）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
+                       danger-full-access 出廠的權限表沒有，要先在表裡加回那一組，否則起不來
   --session-log <dir>  把會話日誌改寫到這個目錄
                        （預設 $NEXUS_AGENT_HOME/sessions，沒設就是 ~/.nexus-agent/sessions）
                        要完全不落盤，在 patch 裡把 session-persistence 那一列寫成 disabled: true
@@ -191,6 +196,7 @@ const USAGE = `用法：
                        （上限是那個目標自己的 max_goal_rounds）；關掉之後一輪結束就結束
   --goal-driver        明講要開（預設就是開；與 --no-goal-driver 不能一起給）
   --help               印這段話
+  --version            印這個 harness 的版本就退出
 
 環境變數：
   ${HARNESS_HOME_ENV}  瀏覽器會話密鑰所在的 harness home（預設 ~/.nexus-agent）
@@ -216,6 +222,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         'dump-config-schema': { type: 'boolean', default: false },
         'dump-default-config': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
+        version: { type: 'boolean', default: false },
       },
     });
   } catch (error) {
@@ -288,6 +295,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     dumpConfigSchema,
     dumpDefaultConfig,
     help: values.help === true,
+    version: values.version === true,
   };
 }
 
@@ -385,6 +393,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
     log(USAGE);
     return undefined;
   }
+  if (invocation.version) {
+    log(HARNESS_VERSION);
+    return undefined;
+  }
 
   // **在開 server 之前印完就走**，同 `cli.ts`：印設定不需要綁 port，也不該因為 port 被佔住
   // 就看不到設定。
@@ -425,6 +437,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   }
 
   const env = options.env ?? process.env;
+  const cwd = options.cwd ?? process.cwd();
+  // **key 來源與 home 不能跟 `--workspace` 重疊**（#1620）：排在 home 鎖之前——拿鎖會先 `mkdir` home，排在後面的話被拒的
+  // 那一次已經在工作區裡建出 `home/serve.lock`；也排在讀 `.env` 之前，工作區裡那一份不先載入就拒絕。印設定那幾個分支不寫 home，不受影響。
+  await assertLaunchPathsOutsideWorkspace({ workspace: invocation.workspace, cwd, env });
   // **同一個 home 只能起一個 serve**（#1503）：排在印設定那幾個分支之後（它們不寫 home），其餘一切之前——
   // 讀 `.env`、裝代理、遷移變更紀錄、清暫存、寫快照、建密鑰、讀釘選檔，這些都碰 home。第二台在這裡就被拒，
   // 一個檔都沒寫。起不來的每一條路都放鎖，正常 `close()` 在最後一步放（下面）。
@@ -435,7 +451,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   }
   let started: RunningServe;
   try {
-    started = await startUnderHomeLock(options, invocation, env, log);
+    started = await startUnderHomeLock(options, invocation, env, cwd, log);
   } catch (error) {
     if (!('unavailable' in homeLock)) await homeLock.release().catch(() => undefined);
     throw error;
@@ -466,9 +482,9 @@ async function startUnderHomeLock(
   options: RunServeOptions,
   invocation: ServeInvocation,
   env: Readonly<Record<string, string | undefined>>,
+  cwd: string,
   log: (line: string) => void,
 ): Promise<RunningServe> {
-  const cwd = options.cwd ?? process.cwd();
   // **真模型路徑的啟動環境：兩層 `.env`**（#730），排在讀清單與建密鑰之前：壞的 `.env` 與舊位置搬家訊息在
   // server 還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`。
   const liveLaunch = invocation.live ? loadLiveLaunchEnv({ cwd, env }) : undefined;
@@ -1376,6 +1392,8 @@ async function main(): Promise<void> {
   }
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// 用 `import.meta.main`，不比路徑（照 dsh `apps/cli/src/bin.ts:76-78`）：裝好之後經 `node_modules/.bin` 的符號連結啟動時，
+// `argv[1]` 是連結、`import.meta.url` 是真實路徑，比路徑會靜靜不執行、以 0 結束。
+if (import.meta.main) {
   await main();
 }

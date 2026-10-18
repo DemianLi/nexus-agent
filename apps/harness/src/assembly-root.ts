@@ -14,7 +14,7 @@
  * 改措辭是模型看得到的行為變更，不在這一張。
  */
 
-import { resolve, sep } from 'node:path';
+import { resolve } from 'node:path';
 import type { BaseChatModel } from '@langchain/core/language_models/chat_models';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
 import type {
@@ -65,7 +65,10 @@ import {
   HARNESS_SESSIONS_DIR_NAME,
   harnessInvariantLogPath,
   harnessSessionsDir,
+  resolveHarnessHome,
 } from './harness-home.js';
+import { canonicalize, canonicalizeExisting, isWithin } from './canonical-path.js';
+import { LEGACY_ENV_FILE, legacyEnvFileFor } from './launch-env.js';
 import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/goal';
 import type { GoalServices } from '@nexus/goal';
 import { WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
@@ -236,6 +239,8 @@ export interface CliInvocation {
   readonly dumpDefaultConfig: boolean;
   /** 只印用法就退出。 */
   readonly help: boolean;
+  /** 只印版本就退出（#1502）。 */
+  readonly version: boolean;
 }
 
 /**
@@ -292,8 +297,9 @@ export function parseSandboxMode(
  * 落在可寫根裡——跟指錯 `--session-log` 是同一個下場，只是使用者一個旗標都沒給。所以錯誤訊息
  * 點名的是路徑從哪來，並講出兩條出路。
  *
- * **純字串前綴比對，不 canonicalize**——同 `ContainedFilesystemBackend` 的取捨與同一個
- * 已知缺口（symlink 繞得過）。這裡擋的是順手指到工作區裡，不是惡意。
+ * **只比字面，不 canonicalize**——同 `ContainedFilesystemBackend` 的取捨與同一個
+ * 已知缺口（symlink 繞得過）。這裡擋的是順手指到工作區裡，不是惡意。serve 在這之前還有一道會解 symlink 與大小寫的
+ * {@link assertLaunchPathsOutsideWorkspace}（#1620），預設的根落在工作區裡時先被那一道擋下；CLI 只有這一道。
  *
  * @param invocation - 解析出來的呼叫。
  * @param cwd - 相對路徑的解析基準。
@@ -399,7 +405,8 @@ export function resolveWorkspaceRoot(
  * - **落盤關掉就一個位元組都不寫**（#612）：清單上 `session-persistence` 那一列沒掛，home 連目錄都不建。
  * - **預設位置不能落在 `--workspace` 底下**（#424）：寫在可寫根裡，模型讀得到也改得動。會話日誌那一格
  *   遇到這種情況是當場拋（`resolveSessionLogDir`）；這裡**只是不寫**，因為量測記錄不是使用者要的東西，
- *   不值得替它擋掉一次啟動。唯一到得了這個分支的組合是 `--session-log` 明指到工作區外、home 卻在工作區裡。
+ *   不值得替它擋掉一次啟動。唯一到得了這個分支的組合是 `--session-log` 明指到工作區外、home 卻在工作區裡，
+ *   而且只有 CLI 到得了：serve 啟動時 home 落在工作區裡就起不來（{@link assertLaunchPathsOutsideWorkspace}，#1620）。
  *
  * @param workspace - `--workspace`，沒給就沒有圍堵、也就沒有這一條。
  * @param persistenceMounted - 清單上落盤那一列這次有沒有掛。
@@ -432,7 +439,8 @@ export function outsideWorkspace(
   const directory = resolve(cwd, path);
   const workspace = resolveWorkspaceRoot(workspacePath, cwd);
   if (workspace === undefined) return directory;
-  if (directory === workspace || directory.startsWith(`${workspace}${sep}`)) {
+  // 感知分隔符的那一支（#1620）：`${workspace}${sep}` 在 `--workspace /` 時是 `//`，什麼都比不中。
+  if (isWithin(workspace, directory)) {
     throw new Error(
       `${subject} 不能在 --workspace 底下（${directory} 在 ${workspace} 之內）。` +
         `會話日誌是基礎建設，不是 agent 的工作區——寫在可寫根裡，模型讀得到也改得動整份對話史。` +
@@ -440,6 +448,115 @@ export function outsideWorkspace(
     );
   }
   return directory;
+}
+
+/** {@link assertLaunchPathsOutsideWorkspace} 的參數。 */
+export interface LaunchPathsCheck {
+  /** `--workspace` 命令列上那串字，沒給就是 `undefined`（沒給就不檢查）。 */
+  readonly workspace: string | undefined;
+  /** 目前資料夾：相對路徑的基準，它的 `.env` 是真模型路徑讀的「專案」那一層。 */
+  readonly cwd: string;
+  /** 決定 harness home 落在哪（同 {@link resolveHarnessHome}）。 */
+  readonly env: Readonly<Record<string, string | undefined>>;
+  /** 程式碼資料夾根目錄的舊 `.env`。省略即 `launch-env.ts` 的那一份（安裝樹沒有）；測試才傳。 */
+  readonly legacyEnvFile?: string;
+  /** 本模組所在的目錄，決定舊位置在哪、有沒有（`legacyEnvFileFor`）；測試才傳。 */
+  readonly moduleDir?: string;
+}
+
+/**
+ * **serve 認得的 key 來源與 home 不能跟 `--workspace` 重疊**（[#1620](https://github.com/DemianLi/nexus-agent/issues/1620)）。
+ * 有 `--workspace` 才檢查；重疊就拋，沒有逃生旗標。
+ *
+ * 檢的是這四個路徑，各自解到實際位置（symlink 與大小寫都解，見 `canonical-path.ts`）：
+ *
+ * - 目前資料夾的 `.env`，**存在才算**，不看 `--live`（Q2 (b)）：同一個目錄下次帶 `--live` 重啟，就是這一份被讀。
+ * - harness home 本身，**不論存不存在**：受管憑證檔、瀏覽器會話密鑰、所有人的附件、會話日誌的預設根都在裡面。
+ * - home 的 `.env`，存在才算：home 不在工作區裡、它卻經 symlink 指進工作區的那一種。
+ * - 程式碼資料夾根目錄的舊 `.env`，存在才算（Q5）：不會被讀，但檔案還在的話裡面多半就是 key。
+ *
+ * **兩個方向都算重疊**（Q3）：路徑在工作區之內、就是工作區、或包含工作區。工作區落在 home 裡，模型讀得到也改得動
+ * home 的狀態檔——「歷史是基礎建設，不是 agent 的工作區」（{@link resolveSessionLogDir}）講的是同一件事。
+ *
+ * **只做 `realpath`，不開檔、不讀內容**：訊息裡只有路徑，不會出現任何值。`ELOOP`、`EACCES` 這類解不開的錯原樣往外拋，
+ * 啟動失敗，訊息帶著錯誤碼。
+ *
+ * ## 與 dsh 的偏離（理由 2：產品需求超出 dsh 的射程）
+ *
+ * dsh 沒有這道檢查：`loadLayeredEnv` 讀 `$cwd/.env` 與 `$DSH_HOME/.env`，不看工作區在哪
+ * （`packages/boot/app-boot/src/index.ts:238-259`，`687f282e`），而它的工作區預設就是 `process.cwd()`
+ * （`packages/sandbox/sandbox-policy/src/index.ts:131`），所以專案那份 `.env` 本來就在工作區根，讀取也照本機檔案系統走
+ * （`packages/fs/fs-sandbox/README.zh.md:12`）。dsh 是單人的寫程式代理，跟模型對話的人就是 key 的主人。我們的 serve 是
+ * 多人共用一台主機的內網機器人：任何一位使用者叫模型讀 `.env`，就拿到管理者的 key。**補的是**啟動時這一道路徑重疊檢查；
+ * **不改的是** `launch-env.ts` 的分層與載入規則（照 dsh）、讀取面照舊不圍（#1291）。只做 serve（Q4）：CLI 是一個人在自己的
+ * 終端機跑，跟 dsh 同一個形狀；放在這裡，CLI 之後要用可以直接叫。
+ *
+ * **擋不到的**：工作區裡指向 home 或 `.env` 的目錄連結。要擋得掃整棵樹，而且連結可以在啟動之後才建；這是 #1291
+ * 已經接受的「目錄符號連結讀穿」同一格，寫在 `docs/operations.md`。
+ *
+ * @param check - 見 {@link LaunchPathsCheck}。
+ * @throws 有任何一個路徑跟工作區重疊；或解路徑時遇到 ENOENT／ENOTDIR 以外的錯。
+ */
+export async function assertLaunchPathsOutsideWorkspace(check: LaunchPathsCheck): Promise<void> {
+  const root = resolveWorkspaceRoot(check.workspace, check.cwd);
+  if (root === undefined) return;
+  const workspace = await canonicalize(root);
+  const home = resolveHarnessHome(check.env);
+  const configured = check.env[HARNESS_HOME_ENV];
+  const homeSource =
+    configured !== undefined && configured.trim().length > 0
+      ? `${HARNESS_HOME_ENV}`
+      : `預設的 ~/${HARNESS_HOME_DIR_NAME}`;
+  const legacyEnvFile =
+    check.legacyEnvFile ??
+    (check.moduleDir === undefined ? LEGACY_ENV_FILE : legacyEnvFileFor(check.moduleDir));
+  const candidates: readonly {
+    readonly label: string;
+    readonly path: string;
+    readonly mustExist: boolean;
+  }[] = [
+    { label: '目前資料夾的 .env', path: resolve(check.cwd, '.env'), mustExist: true },
+    { label: `harness home（${homeSource}）`, path: home, mustExist: false },
+    {
+      label: `harness home 的 .env（${homeSource}）`,
+      path: resolve(home, '.env'),
+      mustExist: true,
+    },
+    // 安裝樹沒有「程式碼資料夾根目錄」，這一格不列（#1671）：否則 `/opt/.env` 這種不相干的檔會被當成舊檔去比對工作區。
+    ...(legacyEnvFile === undefined
+      ? []
+      : [{ label: '程式碼資料夾根目錄的舊 .env', path: legacyEnvFile, mustExist: true }]),
+  ];
+  const seen = new Set<string>();
+  const overlaps: string[] = [];
+  for (const candidate of candidates) {
+    const real = candidate.mustExist
+      ? await canonicalizeExisting(candidate.path)
+      : await canonicalize(candidate.path);
+    // 同一個檔只點名一次：cwd 是程式碼根目錄時，目前資料夾的 `.env` 就是舊位置那一份。
+    if (real === undefined || seen.has(real)) continue;
+    seen.add(real);
+    const relation =
+      real === workspace
+        ? '就是工作區'
+        : isWithin(workspace, real)
+          ? '在工作區之內'
+          : isWithin(real, workspace)
+            ? '包含工作區'
+            : undefined;
+    if (relation === undefined) continue;
+    const where = real === candidate.path ? '' : `（實際位置 ${real}）`;
+    overlaps.push(`- ${candidate.label}：${candidate.path}${where}，${relation}`);
+  }
+  if (overlaps.length === 0) return;
+  const shown = workspace === root ? root : `${root}（實際位置 ${workspace}）`;
+  throw new Error(
+    `serve 起不來：下面這些跟 --workspace ${shown} 重疊。\n${overlaps.join('\n')}\n` +
+      '工作區裡的檔模型都讀得到（讀取不受圍堵），而共用這台 serve 的每個人都能叫它讀：' +
+      '落在裡面的 key、瀏覽器會話密鑰、所有人的附件與會話日誌，誰都拿得到。\n' +
+      `出路（擇一）：把 .env 搬到工作區外面，或改在啟動環境 export 那些變數；把 ${HARNESS_HOME_ENV} 設到工作區外面；` +
+      '或換一個不跟這些路徑重疊的 --workspace。',
+  );
 }
 
 /** 假模型腳本寫出去的那個檔。測試靠它確認檔案真的落在 `--workspace` 指的目錄底下。 */
