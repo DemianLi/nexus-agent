@@ -170,6 +170,38 @@ describe('折疊器：單元拋錯只停用自己', () => {
     },
   );
 
+  it('view 帶著日誌裡凍過的 5000 層巢狀：序列化拋了只停用那一格、講一次，別的單元照常（#1526）', () => {
+    // 照 PM 的判定，原生 `JSON.stringify` 這一處不改：驗的是失敗大聲、只壞那一件。
+    let deep: unknown = 'leaf';
+    for (let level = 0; level < 5_000; level++) deep = level % 2 ? { next: deep } : [deep];
+    const log = new SessionLog('proj');
+    log.append('turn/start', { kind: 'message', text: '嗨' });
+    log.append('tool/result', { callId: 'c1', isError: false, meta: { deep } });
+    log.append('model/usage', { inputTokens: 1, outputTokens: 1, totalTokens: 2 });
+    log.append('turn/end', {});
+    const holder: ProjectionUnit<unknown, unknown> = {
+      key: 'deep',
+      stateVersion: 1,
+      init: () => null,
+      // 原樣留著日誌裡那一份（凍過的），view 也原樣交出去。
+      apply: (state, event) => (event.type === 'tool/result' ? event.data.meta : state),
+      view: (state) => state,
+    };
+    const failures: { key: string; error: unknown }[] = [];
+    const fold = createProjectionFold([holder, counter()], {
+      onFailure: (key, error) => failures.push({ key, error }),
+    });
+    const live = fold.session();
+    for (const event of log.events) live.push(event);
+    expect(failures.map((failure) => failure.key)).toEqual(['deep']);
+    expect(failures[0]!.error).toBeInstanceOf(RangeError);
+    expect(live.current()).toEqual([
+      // 版本 0 是一開始的 `null`；變成「失敗」那一刻算一次變更。
+      { key: 'deep', version: 1, view: null, failed: true },
+      { key: 'calls', version: 1, view: { calls: 1 } },
+    ]);
+  });
+
   it('init 拋、view 不是純 JSON：從一開始就是失敗，歷史與即時一致', () => {
     for (const when of ['init', 'json'] as const) {
       const fold = createProjectionFold([boom('bad', when)]);

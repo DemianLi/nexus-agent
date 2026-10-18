@@ -82,6 +82,7 @@ import type { AgentMiddleware } from './base-types.js';
 import { currentModelCall, withModelCall } from './model-call-scope.js';
 import { bindModelConfig } from './model-binding.js';
 import type { SessionLookup } from './registry.js';
+import { snapshotJsonValue } from './session-log.js';
 import type { SessionLog } from './session-log.js';
 
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
@@ -277,7 +278,9 @@ function baselineOf(log: SessionLog): Baseline {
   for (let at = events.length - 1; at >= 0; at -= 1) {
     const event = events[at]!;
     if (fresh.header === undefined && event.type === 'request/header') {
-      fresh.header = JSON.stringify(event.data.header);
+      // 先拷一份沒凍過的再 stringify（#1526）：日誌裡的是凍過的，V8 對凍過的巢狀約 3 千層就 `RangeError`，而日誌收得下
+      // 更深的。拋在這裡的話基準永遠建不起來，這條 thread 之後每次呼叫都被下面 handler 的 `catch` 吞掉，兩種快照都不再記。
+      fresh.header = JSON.stringify(snapshotJsonValue(event.data.header, 'request/header 的 header'));
     } else if (fresh.system === undefined && event.type === 'request/system') {
       fresh.system = event.data.system;
     }

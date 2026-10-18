@@ -176,6 +176,30 @@ describe('recordRequestSnapshot：變了才記', () => {
     ]);
   });
 
+  it('續接：舊日誌裡那顆 header 有 5000 層交錯巢狀，基準照樣建得起來，變了照記（#1526）', () => {
+    let deep: unknown = 'leaf';
+    for (let level = 0; level < 5_000; level++) deep = level % 2 ? { next: deep } : [deep];
+    const before = new SessionLog('s');
+    const shallow = request('甲');
+    recordRequestSnapshot(
+      before,
+      { ...shallow, header: { ...shallow.header, tools: [{ name: 'echo', parameters: { deep } }] } },
+      0,
+    );
+
+    const resumed = new SessionLog('s', { seed: before.events });
+    const header = resumed.events.find((event) => event.type === 'request/header')!;
+    // 前提：基準讀的是日誌裡凍過的那一份（V8 對凍過的巢狀 `JSON.stringify` 約 3 千層就拋）。
+    expect(Object.isFrozen((header.data as { header: object }).header)).toBe(true);
+    // 改之前：基準在 stringify 那一行拋，產品路徑上被 handler 的 `catch` 吞掉，之後每次呼叫兩種快照都不記。
+    recordRequestSnapshot(resumed, shallow, 1);
+    expect(kinds(resumed)).toEqual([
+      'request/system:initial',
+      'request/header:initial',
+      'request/header:change',
+    ]);
+  });
+
   it('寫不進去（append 拋）基準不前進：下一次再試', () => {
     const log = new SessionLog('s');
     const append = log.append.bind(log);

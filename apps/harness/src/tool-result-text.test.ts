@@ -6,7 +6,7 @@
  */
 
 import { ToolMessage } from '@langchain/core/messages';
-import { toLoggedMessage } from '@nexus/core';
+import { SessionLog, toLoggedMessage } from '@nexus/core';
 import type { LoggedMessage } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
@@ -169,13 +169,13 @@ describe('讀檔 meta 的上限', () => {
   it('剛好等於兩倍上限：照給；多一個位元組：整格不給', () => {
     const limit = READ_META_MAX_BYTES_FACTOR * CAP;
     const atLimit = readMetaOf(limit);
-    expect(capToolResultMeta(atLimit, CAP)).toBe(atLimit);
+    expect(capToolResultMeta(atLimit, CAP)).toEqual(atLimit);
     expect(capToolResultMeta(readMetaOf(limit + 1), CAP)).toBeUndefined();
   });
 
   it('上限是乘數：跟著傳進來的文字上限走', () => {
     const meta = readMetaOf(3_000);
-    expect(capToolResultMeta(meta, 1_500)).toBe(meta);
+    expect(capToolResultMeta(meta, 1_500)).toEqual(meta);
     expect(capToolResultMeta(meta, 1_499)).toBeUndefined();
   });
 
@@ -190,5 +190,25 @@ describe('讀檔 meta 的上限', () => {
       total: 2,
     };
     expect(capToolResultMeta(search, CAP)).toEqual({ ...search, paths: ['/a'], truncated: true });
+  });
+});
+
+/** 物件與陣列交錯的巢狀：凍過的 `JSON.stringify` 約 3 千層就 `RangeError`，日誌收得下更深的（#1526）。 */
+function deepMixed(depth: number): unknown {
+  let value: unknown = 'leaf';
+  for (let level = 0; level < depth; level++) value = level % 2 ? { next: value } : [value];
+  return value;
+}
+
+describe('日誌裡凍過的深 meta（#1526）', () => {
+  it('5000 層交錯巢狀：量得動、交出去的是沒凍過的副本，之後的原生 JSON.stringify 也序列化得了', () => {
+    const meta = { deep: deepMixed(5_000) };
+    // 照正式路徑凍：從日誌拿，不自己 `Object.freeze`。
+    const logged = new SessionLog('t').append('tool/result', { callId: 'c1', isError: false, meta }).data.meta;
+    // 上限明著放大：這一格量的是「量得動、交得出去」，不是上限本身；超過上限的話回 `undefined`，什麼都測不到。
+    const capped = capToolResultMeta(logged, 1_000_000);
+    expect(Object.isFrozen(capped)).toBe(false);
+    // 呼叫端拿去組 frame、歷史頁與 SSE 都是原生 `JSON.stringify`；比對也用它，vitest 的 toEqual 是遞迴的。
+    expect(JSON.stringify(capped)).toBe(JSON.stringify(meta));
   });
 });
