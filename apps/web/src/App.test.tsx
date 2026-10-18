@@ -66,6 +66,7 @@ import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
 import { fakeDownlink } from '@/test/downlink';
+import { stubInsecureCrypto, UUID_V4 } from '@/test/insecure-crypto';
 import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
 
 /**
@@ -2747,6 +2748,43 @@ describe('記住這條 thread', () => {
     expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
     // 壞掉的那一份被這一條蓋掉，下一次載入就接得回來。
     await waitFor(() => expect(stored()).toBe(opened[0]));
+  });
+});
+
+/**
+ * 網頁從非安全環境打開（內網用 IP 開的 `http://` 頁面，#1548）：瀏覽器不給 `crypto.randomUUID`。首次載入與「新對話」都要自己產
+ * thread id；斷言 id 的形狀，不只看沒拋錯——換回 `crypto.randomUUID()` 的那一處會直接拋 TypeError。
+ */
+describe('非安全環境（#1548）', () => {
+  it('首次載入：起得來，開的那條 id 是 UUID v4', async () => {
+    seq = 0;
+    stubInsecureCrypto();
+    const { client, opened } = fakeClient([]);
+    render(<App client={client} />);
+
+    await waitFor(() => expect(opened).toHaveLength(1));
+    expect(opened[0]).toMatch(UUID_V4);
+  });
+
+  it('新對話、沒有可重用的空白會話：換一條新的 UUID v4', async () => {
+    seq = 0;
+    stubInsecureCrypto();
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
+    const { client, opened } = fakeClient([
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '記一筆。' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(screen.getByText('記一筆。')).toBeTruthy());
+
+    // 這一檔的清單讀不到（`UNWIRED_THREAD_LIST`），所以沒有可重用的空白會話，走「開新的」那一支。
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+
+    await waitFor(() => expect(opened).toHaveLength(2));
+    expect(opened[0]).toBe('上一條');
+    expect(opened[1]).toMatch(UUID_V4);
   });
 });
 

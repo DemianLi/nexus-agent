@@ -99,3 +99,7 @@
 ## 測試與說明文件裡的類別名
 
 Tailwind 會掃整個專案找 class，所以**測試檔與 `apps/web/*.md` 裡寫到的類別名也會被編成規則**。`src/index.css` 用 `@source not` 排除了它們，`pnpm build` 最後的 `check-built-css` 會量產物確認；新增別種會寫類別名的檔案（例如別的資料夾的 `.md`），要一併排除，否則建置會失敗。
+
+## 不假設自己在安全環境
+
+網頁可能從非安全環境打開（內網用 IP 開的 `http://` 頁面），瀏覽器在那裡不給只限安全環境的 API。用到這類 API 要有退路：產 UUID 走 `@/lib/uuid` 的 `randomUuid()`，`crypto.randomUUID` 由 lint 擋下（#1548）；複製走 `@/lib/clipboard` 的 `copyText`，`navigator.clipboard` 拿不到就退回 `execCommand`。
