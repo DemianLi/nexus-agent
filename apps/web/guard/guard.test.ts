@@ -48,6 +48,9 @@ import { startGuardServer, type GuardServer } from './server';
  * 12. **輸入框的底列**（#1591 PR 2）：三顆 Pick 與用量環的焦點；Pick 的 12px 次要字（含兩種退路）；環三個色階是 status token、
  *    過 3:1（第 37 條）；「全開」的警示色（第 35 條）；鎖住的樣子（第 39 條）；清單開著時選項的字與高度（第 25 條擴充）；環的明細；
  *    reduced-motion 下弧長不走 transition（第 38 條）；375 寬 44px、不溢出、不重疊（第 36、40 條）。
+ * 13. **展開收合**（#1638 PR A，`?overlay=collapsibles`）：展開途中的高度介於 0 與最終值之間（Q1：keyframes 讀 Base UI 的
+ *    `--collapsible-panel-height`，Panel 的 `data-open:` 命中動效）；reduced-motion 下沒有高度動效、第一幀就到位；箭頭跟著 Trigger 的
+ *    `data-panel-open` 轉半圈、思考過程展開後藏「·」與摘要（Q2）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -1884,4 +1887,111 @@ describe('瀏覽器量輸入框的版面（#1591）', () => {
       }
     },
   );
+});
+
+describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', () => {
+  // 這幾件都靠真的 CSS 命中 Base UI 的屬性（Panel 的 `data-open`、Trigger 的 `data-panel-open`、`--collapsible-panel-height`），
+  // jsdom 不載 CSS，元件測試量不到。量思考過程那一列：箭頭、摘要、內容的高度動效都在它身上。
+  const ROW = '[data-testid="reasoning-row"]';
+  const openRow = (reducedMotion: boolean) =>
+    openOverlay('collapsibles', 'light', { reducedMotion, marks: { [ROW]: {} } });
+
+  /** 點開那一列，回傳內容在展開動效 40% 時的高度、第一幀的高度與動效跑完的高度。 */
+  async function expand(page: Page) {
+    await page.click(`${ROW} button[aria-expanded]`);
+    return page.evaluate(async (row) => {
+      const panel = () =>
+        document.querySelector<HTMLElement>(`${row} [data-slot="collapsible-content"]`);
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      while (panel() === null) await frame();
+      const el = panel()!;
+      const first = el.getBoundingClientRect().height;
+      const grow = el
+        .getAnimations()
+        .find((a) => (a as CSSAnimation).animationName === 'collapsible-down');
+      let mid: number | undefined;
+      if (grow !== undefined) {
+        grow.pause();
+        grow.currentTime = Number(grow.effect?.getComputedTiming().duration) * 0.4;
+        mid = el.getBoundingClientRect().height;
+        grow.finish();
+      }
+      await Promise.all(el.getAnimations().map((a) => a.finished.catch(() => undefined)));
+      return {
+        animations: el.getAnimations().length,
+        grows: grow !== undefined,
+        first,
+        mid,
+        final: el.getBoundingClientRect().height,
+        variable: el.style.getPropertyValue('--collapsible-panel-height'),
+      };
+    }, ROW);
+  }
+
+  test('展開途中的高度介於 0 與最終值之間（Q1：keyframes 讀 Base UI 的 --collapsible-panel-height）', async () => {
+    const page = await openRow(false);
+    try {
+      const measured = await expand(page);
+      report['collapsible:expand'] = measured;
+      // 量具自檢：真的有那條高度動效、展開後有高度。
+      expect(measured.grows).toBe(true);
+      expect(measured.final).toBeGreaterThan(0);
+      expect(measured.mid).toBeGreaterThan(0);
+      expect(measured.mid).toBeLessThan(measured.final);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('減少動態：沒有高度動效，點開的第一幀就到位', async () => {
+    const page = await openRow(true);
+    try {
+      const measured = await expand(page);
+      report['collapsible:expand-reduced'] = measured;
+      expect(measured.grows).toBe(false);
+      expect(measured.final).toBeGreaterThan(0);
+      expect(measured.first).toBe(measured.final);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('箭頭跟著 Trigger 開著時的 data-panel-open 轉半圈；思考過程展開後藏「·」與摘要（Q2）', async () => {
+    const page = await openRow(false);
+    try {
+      const read = () =>
+        page.$eval(ROW, (row) => {
+          const trigger = row.querySelector('button[aria-expanded]')!;
+          return {
+            expanded: trigger.getAttribute('aria-expanded'),
+            panelOpen: trigger.hasAttribute('data-panel-open'),
+            // Tailwind v4 的 `rotate-180` 寫的是獨立的 `rotate` 屬性，不是 `transform`。
+            chevron: getComputedStyle(trigger.querySelector('svg[data-motion-rotate]')!).rotate,
+            hidden: [...trigger.querySelectorAll('span[aria-hidden]')]
+              .filter((el) => el.textContent?.trim() !== '')
+              .map((el) => getComputedStyle(el).display === 'none'),
+          };
+        });
+      const closed = await read();
+      await page.click(`${ROW} button[aria-expanded]`);
+      await settle(page);
+      const opened = await read();
+      report['collapsible:trigger'] = { closed, opened };
+      expect(closed).toEqual({
+        expanded: 'false',
+        panelOpen: false,
+        chevron: 'none',
+        hidden: [false, false],
+      });
+      // 量具自檢：「·」與摘要兩個都量到了。
+      expect(opened).toEqual({
+        expanded: 'true',
+        panelOpen: true,
+        chevron: '180deg',
+        hidden: [true, true],
+      });
+    } finally {
+      await page.close();
+    }
+  });
 });

@@ -98,7 +98,11 @@ describe('連續完成的工具呼叫收成一列（#1309）', () => {
     expect(item?.getAttribute('data-message-id')).toBe('tool-c3');
     expect(item?.querySelector('[data-testid=tool-entry]')).not.toBeNull();
     expect(runButton().getAttribute('aria-expanded')).toBe('true');
-    const content = screen.getByTestId('tool-run').querySelector('[data-state=open]:not(button)');
+    // 那一段自己的內容（Base UI 的 Panel）；Root、卡片也帶 `data-open`，用 data-slot 才只命中這一個（#1638）。
+    const content = screen
+      .getByTestId('tool-run')
+      .querySelector('[data-slot="collapsible-content"]');
+    expect(content).not.toBeNull();
     expect(content?.className).not.toContain('animate-collapsible');
     // 不在任何一段裡、也不在畫面上的：照舊找不到。
     expect(findOrExpandTranscriptItem('tool-nope')).toBeUndefined();
@@ -107,7 +111,10 @@ describe('連續完成的工具呼叫收成一列（#1309）', () => {
   it('自己點開的照樣有展開收合的動效', () => {
     show(turn({ steps: 4 }));
     fireEvent.click(runButton());
-    const content = screen.getByTestId('tool-run').querySelector('[data-state=open]:not(button)');
+    const content = screen
+      .getByTestId('tool-run')
+      .querySelector('[data-slot="collapsible-content"]');
+    expect(content).not.toBeNull();
     expect(content?.className).toContain('animate-collapsible-down');
   });
 

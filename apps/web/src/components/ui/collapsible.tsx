@@ -1,24 +1,13 @@
 /**
- * 來源：shadcn registry `collapsible`（style new-york，https://ui.shadcn.com/r/styles/new-york-v4/collapsible.json），
- * shadcn CLI 4.21.0 `shadcn add collapsible badge --overwrite`。裝進來就是我們的原始碼，不靠重跑 `shadcn add` 更新。
- * 沒有改動（只拿掉 `'use client'`）；展開收合的時長在 `index.css` 的 `@theme`（開 250／關 150，§7）。
+ * nexus 層（#1638 PR A）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/collapsible.tsx`，Base UI），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」；這個檔沒有本地修改。
+ *
+ * 跟 Radix 版的用法差異：Root 與 Panel 掛 `data-open`／`data-closed`，**Trigger 只在開著時掛 `data-panel-open`**（關著不帶屬性，
+ * 沒有 `data-state`）；`asChild` 改成 `render={<元素 />}`；`forceMount` 改成 `keepMounted`；量好的高度在 `--collapsible-panel-height`
+ * （展開收合的 keyframes 讀它，`styles/motion.css`；時長在 `index.css` 的 `@theme`，開 250／關 150，§7）。
  */
-import { Collapsible as CollapsiblePrimitive } from 'radix-ui';
-
-function Collapsible({ ...props }: React.ComponentProps<typeof CollapsiblePrimitive.Root>) {
-  return <CollapsiblePrimitive.Root data-slot="collapsible" {...props} />;
-}
-
-function CollapsibleTrigger({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleTrigger>) {
-  return <CollapsiblePrimitive.CollapsibleTrigger data-slot="collapsible-trigger" {...props} />;
-}
-
-function CollapsibleContent({
-  ...props
-}: React.ComponentProps<typeof CollapsiblePrimitive.CollapsibleContent>) {
-  return <CollapsiblePrimitive.CollapsibleContent data-slot="collapsible-content" {...props} />;
-}
-
-export { Collapsible, CollapsibleTrigger, CollapsibleContent };
+export {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from '@/vendor/solid-glass/components/ui/collapsible';

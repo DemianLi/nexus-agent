@@ -42,6 +42,11 @@
       "from": "src/components/ui/card.tsx",
       "sha256": "7620e0f122bb5aa0a422254909bd11d5b088bb368eb60e6ba28010c332163cc0"
     },
+    "components/ui/collapsible.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/collapsible.tsx",
+      "sha256": "ead4349ff7b01d696ef89294a81d18ee1d3f732321398896462c834ab9b9e065"
+    },
     "components/ui/command.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/command.tsx",

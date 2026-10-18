@@ -19,7 +19,8 @@ import { readCascade } from './css-cascade';
  * 3. **圓角只走階梯**（`rounded-sm`…`rounded-3xl`、`rounded-full`）：不寫 `rounded-[20px]` 這種數字。
  * 4. **不硬寫顏色字面值**：`#fff`、`rgb(…)`、沒有 `var(…)` 的 `oklch(…)`／`color-mix(…)`。從 token 推出來的（`oklch(from var(--primary) …)`）可以。
  * 5. **卡片與內層 stage 用 `Surface`，不手寫配方**：同一個字串裡有 `bg-stage`＋`shadow-stage`、`bg-card`＋`shadow-material`＋`rounded-3xl`，或 `bg-card`＋`border`＋`rounded-3xl`，就是又手寫了一份（#1141 第 3 刀）。
- * 6. **展開箭頭用 `Chevron`**（#1279）：同一個字串裡有 `transition-transform`＋`rotate-*`，或跟著 `data-state=open` 轉的 `rotate-*`，就是又手寫了一顆。
+ * 6. **展開箭頭用 `Chevron`**（#1279）：同一個字串裡有 `transition-transform`＋`rotate-*`，或跟著展開轉的 `rotate-*`（Base UI 的 `data-panel-open`，
+ *    #1638；Radix 的 `data-state=open` 也照擋），就是又手寫了一顆。
  * 7. **可展開列用 `RowTrigger`**（#1279）：同一個字串裡有 `hover:bg-chip-hover`＋`active:bg-chip-pressed`＋`w-full`＋`text-left`，就是又手寫了一列。
  * 8. **`ui/` 以外不寫 `focus-visible:ring-*`**（#1279）：`solid-glass.overrides.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
  *    再配上 `outline-none` 就是**完全看不到焦點**（#1279 之前有六處）。要改外框位置用 `focus-visible:-outline-offset-2` 之類，不要換成 ring。
@@ -121,7 +122,7 @@ type Rule =
   | '字重';
 
 const ROTATE = /^-?rotate-\d+$/;
-const ROTATE_ON_OPEN = /state=open\]?\]?(?:>[^:]*)?:-?rotate-\d+$/;
+const ROTATE_ON_OPEN = /(?:state=open\]?\]?(?:>[^:]*)?|panel-open):-?rotate-\d+$/;
 const RAW_DURATION = /^(?:animation-)?duration-\d/;
 const THIN_WEIGHT = /^font-(?:thin|extralight|light)$/;
 
@@ -201,7 +202,7 @@ const ALLOWED: readonly Allowed[] = [
   // 自己的元件。
   {
     file: 'components/chevron.tsx',
-    what: 'group-data-[state=open]:rotate-180',
+    what: 'group-data-panel-open:rotate-180',
     why: '`Chevron` 本身：全站唯一該寫展開箭頭旋轉的地方',
   },
   {
@@ -406,6 +407,10 @@ describe('判準', () => {
     ).toEqual(['箭頭:transition-transform rotate-*', '箭頭:group-data-[state=open]:rotate-180']);
     expect(rules('[&[data-state=open]>svg]:rotate-90')).toEqual([
       '箭頭:[&[data-state=open]>svg]:rotate-90',
+    ]);
+    // Base UI 的 Trigger 開著時掛 `data-panel-open`（#1638）：跟著它轉的照樣擋。
+    expect(rules('group-data-panel-open:rotate-180')).toEqual([
+      '箭頭:group-data-panel-open:rotate-180',
     ]);
     expect(rules('transition-transform rotate-180')).toEqual([
       '箭頭:transition-transform rotate-*',

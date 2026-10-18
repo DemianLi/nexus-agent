@@ -37,29 +37,31 @@ export function TodoPanel({
   if (todos === null || todos.length === 0) return null;
   const summary = todoSummary(todos);
   return (
-    <Collapsible open={open} onOpenChange={setOpen} asChild>
-      <Surface tone="docked" data-testid="todo-panel" className="mb-2 p-1">
-        <RowTrigger
-          aria-label={todoPanelLabel(summary)}
-          className="text-muted-foreground gap-2 text-ui lg:min-h-9"
-        >
-          <ListTodo aria-hidden className="size-4 shrink-0" />
-          <span className="flex min-w-0 flex-1 gap-1.5">
-            <span className="min-w-0 truncate">{summary.text}</span>
-            {summary.extra > 0 && (
-              <span className="shrink-0" data-testid="todo-extra">
-                +{summary.extra}
-              </span>
-            )}
-          </span>
-          <Chevron />
-        </RowTrigger>
-        <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
-          <div className="m-1 mt-0 max-h-60 overflow-y-auto" data-testid="todo-panel-scroll">
-            <TodoList todos={todos} live={status === 'running'} />
-          </div>
-        </CollapsibleContent>
-      </Surface>
+    <Collapsible
+      open={open}
+      onOpenChange={setOpen}
+      render={<Surface tone="docked" data-testid="todo-panel" className="mb-2 p-1" />}
+    >
+      <RowTrigger
+        aria-label={todoPanelLabel(summary)}
+        className="text-muted-foreground gap-2 text-ui lg:min-h-9"
+      >
+        <ListTodo aria-hidden className="size-4 shrink-0" />
+        <span className="flex min-w-0 flex-1 gap-1.5">
+          <span className="min-w-0 truncate">{summary.text}</span>
+          {summary.extra > 0 && (
+            <span className="shrink-0" data-testid="todo-extra">
+              +{summary.extra}
+            </span>
+          )}
+        </span>
+        <Chevron />
+      </RowTrigger>
+      <CollapsibleContent className="data-closed:animate-collapsible-up data-open:animate-collapsible-down overflow-hidden">
+        <div className="m-1 mt-0 max-h-60 overflow-y-auto" data-testid="todo-panel-scroll">
+          <TodoList todos={todos} live={status === 'running'} />
+        </div>
+      </CollapsibleContent>
     </Collapsible>
   );
 }
