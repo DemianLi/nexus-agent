@@ -50,7 +50,7 @@
  */
 
 import type { LoggedMessage, SearchResultMeta } from '@nexus/core';
-import { loggedContentBlocks } from '@nexus/core';
+import { loggedContentBlocks, snapshotJsonValue } from '@nexus/core';
 
 /** 中間被截掉那一段的說明。長度只隨位數變，所以預留時用上界算。 */
 function notice(dropped: number): string {
@@ -166,12 +166,18 @@ function isReadMeta(meta: unknown): boolean {
  * - **讀檔與 diff 超過就整格不給**：dsh 這兩種沒有上限；我們的歷史頁是照每張卡的最大值算的，
  *   一次大改寫的 diff 會讓一頁失控（偏離）。web 照 dsh 退：write 用參數算 diff，其他走 generic。
  *
+ * **量的與交出去的都是一份沒凍過的副本**（#1526）：日誌裡那一份是凍過的，V8 對凍過的巢狀 `JSON.stringify` 撐得比較淺：
+ * CI（Node 22.23.3 Linux x64）上凍過的陣列約 2200 層就 `RangeError`，沒凍過的約 4100 層（Node 25 上沒凍過的撐得過
+ * 兩百萬層），而日誌收得下的比這兩個都深。量不動的話即時那張卡停在執行中、含這一格的歷史頁
+ * 每次都回 400；交出原本那份的話，之後的 frame 位元組、歷史頁與 SSE 都是原生 `JSON.stringify`，一樣在那裡拋。
+ *
  * @param meta - 日誌裡那一份。
  * @param maxBytes - `tool-text` 那一列的上限（位元組）；讀檔 meta 用它的 {@link READ_META_MAX_BYTES_FACTOR} 倍。
- * @returns 放得下的那一份；放不下就 `undefined`。
+ * @returns 放得下的那一份（副本）；放不下就 `undefined`。
  */
-export function capToolResultMeta(meta: unknown, maxBytes: number): unknown {
-  if (meta === undefined) return meta;
+export function capToolResultMeta(logged: unknown, maxBytes: number): unknown {
+  if (logged === undefined) return logged;
+  const meta = snapshotJsonValue(logged, 'tool/result 的 meta');
   const bytes = metaBytes(meta);
   if (bytes <= maxBytes) return meta;
   if (isReadMeta(meta)) return bytes <= READ_META_MAX_BYTES_FACTOR * maxBytes ? meta : undefined;

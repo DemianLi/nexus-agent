@@ -131,6 +131,7 @@ import { setTimeout as wait } from 'node:timers/promises';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
   isUnreadableSessionEvent,
+  materializeAppendBatch,
   SESSION_LOG_FORMAT_VERSION,
   SessionCorruptionError,
   SessionEventUnsupportedError,
@@ -441,8 +442,12 @@ class JsonlStoredSession implements StoredSession {
   async append(events: readonly SessionEvent[]): Promise<void> {
     this.#assertOpen();
     if (events.length === 0) return;
+    // 排隊之前先驗過並拷成沒凍過的副本，照 dsh `session-persistence-jsonl/src/storage.ts:191`：日誌交來的事件是凍過的，
+    // 凍過的深陣列 `JSON.stringify` 會撞 `RangeError`，這一批就永遠寫不出去（#1526）。持久化層的重試也走這裡，
+    // 等同 dsh `:308` 那一處。
+    const batch = materializeAppendBatch(events);
     return this.#enqueue(async () => {
-      for (const [index, event] of events.entries()) {
+      for (const [index, event] of batch.entries()) {
         const expected = this.#nextSeq + index;
         if (event.seq !== expected) {
           throw new Error(
@@ -451,8 +456,8 @@ class JsonlStoredSession implements StoredSession {
           );
         }
       }
-      await this.#persist(events.map((event) => `${JSON.stringify(event)}\n`).join(''));
-      this.#nextSeq += events.length;
+      await this.#persist(batch.map((event) => `${JSON.stringify(event)}\n`).join(''));
+      this.#nextSeq += batch.length;
     });
   }
 

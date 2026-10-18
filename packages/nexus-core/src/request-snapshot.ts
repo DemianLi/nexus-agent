@@ -67,8 +67,9 @@
  *
  * ## 記不進去不能扳倒模型呼叫
  *
- * 同 {@link ./model-calls.ts}：抽取、比對、`append` 任何一步拋都吞掉，這次不記。基準只在**記成功之後**才前進，所以失敗的
- * 那次下一次會再試。
+ * 同 {@link ./model-calls.ts}：抽取、比對、`append` 任何一步拋都接住，這次不記。基準只在**記成功之後**才前進，所以失敗的
+ * 那次下一次會再試。接住的不無聲吞掉：每次往 `report` 講一條 warn（省略即 `console.warn`，#1526）——深巢狀的 header
+ * 在 Node 22 上會讓原生 `JSON.stringify` 爆堆疊，那條 thread 之後每次呼叫都記不進去，沒有這一條就只是日誌上靜靜少了快照。
  *
  * @module
  */
@@ -82,6 +83,7 @@ import type { AgentMiddleware } from './base-types.js';
 import { currentModelCall, withModelCall } from './model-call-scope.js';
 import { bindModelConfig } from './model-binding.js';
 import type { SessionLookup } from './registry.js';
+import { snapshotJsonValue } from './session-log.js';
 import type { SessionLog } from './session-log.js';
 
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
@@ -277,7 +279,12 @@ function baselineOf(log: SessionLog): Baseline {
   for (let at = events.length - 1; at >= 0; at -= 1) {
     const event = events[at]!;
     if (fresh.header === undefined && event.type === 'request/header') {
-      fresh.header = JSON.stringify(event.data.header);
+      // 先拷一份沒凍過的再 stringify（#1526）：日誌裡的是凍過的，V8 對凍過的巢狀撐得比較淺（CI 的 Node 22 上凍過的陣列
+      // 約 2200 層、沒凍過的約 4100 層），而日誌收得下更深的。拋在這裡的話基準永遠建不起來，這條 thread 之後每次呼叫都被
+      // 下面 handler 的 `catch` 接住（每次一條 warn），兩種快照都不再記。
+      fresh.header = JSON.stringify(
+        snapshotJsonValue(event.data.header, 'request/header 的 header'),
+      );
     } else if (fresh.system === undefined && event.type === 'request/system') {
       fresh.system = event.data.system;
     }
@@ -340,6 +347,7 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
   constructor(
     private readonly log: SessionLog,
     private readonly modelCall: number | undefined,
+    private readonly report: (message: string) => void,
   ) {
     super();
   }
@@ -364,8 +372,10 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
         ),
         this.modelCall,
       );
-    } catch {
-      // 見檔頭「記不進去不能扳倒模型呼叫」。
+    } catch (error) {
+      // 見檔頭「記不進去不能扳倒模型呼叫」：只講一條，不往外拋。
+      const reason = error instanceof Error ? error.message : String(error);
+      this.report(`請求快照記不進去，這次不記：${reason}`);
     }
   }
 }
@@ -378,10 +388,14 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
  * 所以外面每一顆 middleware 看到的仍是原本的模型。見檔頭「記錄點」一節，為什麼記錄點不在 middleware 這一層。
  *
  * @param sessions - 註冊表的 `sessions` 通道，用來問「這次呼叫該寫進哪一份」。
+ * @param report - 記不進去時往哪裡講一條 warn；省略即 `console.warn`。
  */
-export function createRequestSnapshotRecorder(sessions: {
-  forCall(config: unknown): SessionLookup;
-}): AgentMiddleware {
+export function createRequestSnapshotRecorder(
+  sessions: {
+    forCall(config: unknown): SessionLookup;
+  },
+  report: (message: string) => void = (message) => console.warn(message),
+): AgentMiddleware {
   return createMiddleware({
     name: REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
@@ -392,7 +406,7 @@ export function createRequestSnapshotRecorder(sessions: {
       if (found.kind !== 'ok' || !RunnableBinding.isRunnable(request.model)) {
         return handler(request);
       }
-      const watcher = new RequestSnapshotHandler(found.log, currentModelCall(found.log));
+      const watcher = new RequestSnapshotHandler(found.log, currentModelCall(found.log), report);
       return handler({
         ...request,
         model: bindModelConfig(request.model, (current) => ({
