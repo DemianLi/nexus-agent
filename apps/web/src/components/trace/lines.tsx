@@ -91,7 +91,7 @@ export function ExpandableLine({
         <Line {...line} />
         <Chevron className="text-muted-foreground ml-auto" />
       </RowTrigger>
-      <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
+      <CollapsibleContent className="data-closed:animate-collapsible-up data-open:animate-collapsible-down overflow-hidden">
         <div className="pt-1 pr-2 pb-2 pl-8 text-body">{children}</div>
       </CollapsibleContent>
     </Collapsible>

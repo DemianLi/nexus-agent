@@ -156,7 +156,7 @@ export function Digests({
         </span>
         <Chevron className="text-muted-foreground ml-auto" />
       </RowTrigger>
-      <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
+      <CollapsibleContent className="data-closed:animate-collapsible-up data-open:animate-collapsible-down overflow-hidden">
         {omitted > 0 && (
           <p className="text-muted-foreground px-2 pb-1 text-tip" data-testid="trace-omitted">
             再更早的 {omitted} 輪連摘要都沒留下。

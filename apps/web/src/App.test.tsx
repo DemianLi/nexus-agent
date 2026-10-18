@@ -2294,7 +2294,7 @@ describe('停在提問時停止之後', () => {
 
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('已停止'));
     const card = screen.getByTestId('tool-entry');
-    expect(card.getAttribute('data-state')).toBe('open');
+    expect(card.hasAttribute('data-open')).toBe(true);
     expect(within(card).getAllByText(STOPPED_QUESTION_TEXT).length).toBeGreaterThan(0);
     expect(within(card).getByText('哪一天？')).toBeTruthy();
     expect(within(card).getByText('週一：早上')).toBeTruthy();

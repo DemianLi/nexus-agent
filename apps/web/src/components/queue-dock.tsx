@@ -462,7 +462,7 @@ export function QueueDock({ items, status, connected, onUpdate, onFocusFallback 
             <Chevron />
           </RowTrigger>
           {hint}
-          <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
+          <CollapsibleContent className="data-closed:animate-collapsible-up data-open:animate-collapsible-down overflow-hidden">
             {list}
           </CollapsibleContent>
         </Collapsible>
