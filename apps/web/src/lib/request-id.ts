@@ -12,6 +12,8 @@
 
 import { UplinkTransportError } from '@nexus/wire';
 
+import { randomUuid } from '@/lib/uuid';
+
 /** 上次沒送出去的那一句，和它用過的編號。 */
 export interface PendingRequest {
   readonly id: string;
@@ -36,15 +38,10 @@ export interface Sentence {
 /**
  * 一個新的請求編號：UUID v4 的字串形狀，36 個字元，遠低於 `REQUEST_ID_MAX_LENGTH`。
  *
- * 用 `crypto.getRandomValues` 自己排，不用 `crypto.randomUUID`：後者只在安全環境（HTTPS、localhost）有，內網用 IP 開的
- * `http://` 頁面上它是 `undefined`，送出會直接拋錯。
+ * 走 {@link randomUuid}，不用 `crypto.randomUUID`：後者在非安全環境（內網用 IP 開的 `http://` 頁面）是 `undefined`（#1548）。
  */
 export function newRequestId(): string {
-  const bytes = crypto.getRandomValues(new Uint8Array(16));
-  bytes[6] = (bytes[6]! & 0x0f) | 0x40;
-  bytes[8] = (bytes[8]! & 0x3f) | 0x80;
-  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('');
-  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  return randomUuid();
 }
 
 /** 這一句要帶的編號：跟上次沒送出去的那一句相同就沿用它的，否則是新的。 */
