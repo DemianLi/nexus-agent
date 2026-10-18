@@ -165,7 +165,7 @@
 - **表面的亮暗鑑別度**：卡片、細線、側欄、chip 這些面對底色的對比，亮色與暗色相差 ≤ 0.05；不到就只調亮色的明度（Q5）。表面只疊在底色上算；文字與狀態色的對比則疊在每一個底色與漸層停點上算，取最差的。
 - **不透明的退路一樣要過**：`prefers-reduced-transparency: reduce` 與 `<html data-glass="opaque">` 下的面換成不透明，對比與表面差照同一組目標量（Q7）。
 - **亮暗鑑別度一樣**：兩主題共用一組目標，取兩主題較強者；起算點是原型 `eb800a1` 認可的對比度。
-- **不准比 develop 差**：換主題前已達標的對要維持達標，本來就沒達標的對（既有缺口，[#1515](https://github.com/DemianLi/nexus-agent/issues/1515)）不准變差。
+- **不准比 develop 差**：換主題前已達標的對要維持達標。原本沒達標的 chip 三階那幾對（次要字與 `warning` 疊在 chip-hover／chip-pressed 上）2026-10-19 已補到 4.5，現在沒有例外。
 - 不用 APCA（2023-07 已從 WCAG 3 草稿移除）。人工抽驗用 Vispero Colour Contrast Analyser，CI 用 colorjs.io 重算（§11）。
 
 **形狀**

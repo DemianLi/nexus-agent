@@ -31,7 +31,8 @@ import { startGuardServer, type GuardServer } from './server';
  *    `solid-glass.overrides.css` 補回來）。
  * 5. **chip 三階**：`data-guard-chip` 裡那顆按鈕平常、滑鼠移上去、清單開著三種狀態，字對它實際的底色過門檻。#1591 起量的是輸入框
  *    底列的 Pick（12px 次要字，4.5）；權限「全開」那顆是警示色直接疊在頁面上，是狀態色對底色，守 {@link STATUS_MIN}（同靜態那一層
- *    的狀態色門檻）。#1591 之前量的是用量表的 chip（既有缺口 #1515 那幾對守 develop 的值），換成用量環之後沒有字了。
+ *    的狀態色門檻）。Pick 按下去就打開清單，量不到單純按著的樣子；`data-guard-press` 那顆頂列用量鈕量平常、移上去、按著
+ *    （`:active`），次要字疊在 `chip-hover`、`chip-pressed` 上過 4.5。
  * 6. **對話裡被定位的那一則有圓角**：`[data-located]` 的圓角是 `var(--radius-3xl)`，這個變數只宣告在 SG 的 `@theme inline`；
  *    Tailwind 沒輸出或修剪掉它的話，圓角會靜靜變成 0。量 `border-radius` 不是 0。
  * 7. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
@@ -460,6 +461,76 @@ async function collectHovers(page: Page): Promise<HoverSample[]> {
   return samples;
 }
 
+type PressState = 'rest' | 'hover' | 'pressed';
+const PRESS_STATES: PressState[] = ['rest', 'hover', 'pressed'];
+
+interface PressSample {
+  readonly name: string;
+  readonly state: PressState;
+  /** 真的在那個狀態（`:hover`、`:active`）。 */
+  readonly inState: boolean;
+  readonly color: string;
+  readonly backgroundColor: string;
+  readonly chain: MeasuredLayer[];
+}
+
+/**
+ * `data-guard-press` 裡那顆按鈕：游標移開、移上去、按著三種狀態各量一次字色與往上疊的底。按著時量完先把游標移開再放開，
+ * 放開的位置不在按鈕上就不算點擊，不會打開它的 popover。
+ */
+async function collectPresses(page: Page): Promise<PressSample[]> {
+  const names = await page.$$eval('[data-guard-press]', (els) =>
+    els.map((el) => el.getAttribute('data-guard-press') ?? ''),
+  );
+  const samples: PressSample[] = [];
+  for (const name of names) {
+    const target = page.locator(`[data-guard-press="${name}"] button`);
+    for (const state of PRESS_STATES) {
+      if (state === 'rest') await page.mouse.move(0, 0);
+      else await target.hover();
+      if (state === 'pressed') await page.mouse.down();
+      await settle(page);
+      const measured = await target.evaluate((el) => {
+        const chain = [];
+        for (let node: Element | null = el; node !== null; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          chain.push({
+            backgroundColor: style.backgroundColor,
+            backgroundImage: style.backgroundImage,
+            opacity: style.opacity,
+          });
+        }
+        return {
+          hover: el.matches(':hover'),
+          active: el.matches(':active'),
+          color: getComputedStyle(el).color,
+          backgroundColor: getComputedStyle(el).backgroundColor,
+          chain,
+        };
+      });
+      if (state === 'pressed') {
+        await page.mouse.move(0, 0);
+        await page.mouse.up();
+      }
+      samples.push({
+        name,
+        state,
+        inState:
+          state === 'rest'
+            ? !measured.hover && !measured.active
+            : state === 'hover'
+              ? measured.hover && !measured.active
+              : measured.active,
+        color: measured.color,
+        backgroundColor: measured.backgroundColor,
+        chain: measured.chain,
+      });
+    }
+  }
+  await settle(page);
+  return samples;
+}
+
 interface ChoiceSample {
   readonly name: string;
   readonly rest: string;
@@ -624,6 +695,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   let chips: ChipSample[];
   let choices: ChoiceSample[];
   let hovers: HoverSample[];
+  let presses: PressSample[];
   let glass: { name: string; backdropFilter: string }[];
   let expanded: Record<
     string,
@@ -638,6 +710,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     chips = await collectChips(page);
     choices = await collectChoices(page);
     hovers = await collectHovers(page);
+    presses = await collectPresses(page);
     glass = await page.$$eval('[data-guard-glass]', (els) =>
       els.map((el) => ({
         name: el.getAttribute('data-guard-glass') ?? '',
@@ -772,6 +845,32 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
       measured
         .filter((m) => !(m.ratio >= m.min))
         .map((m) => `${m.key} ${m.ratio.toFixed(4)} < ${m.min}（${m.on}）`),
+    ).toEqual([]);
+  });
+
+  test('chip 的兩階上的次要字：頂列用量鈕平常、滑鼠移上去（chip-hover）、按著（chip-pressed）都過 4.5', () => {
+    const measured = presses.map((p) => ({
+      key: `${p.name}:${p.state}`,
+      ...p,
+      ...worstOn(p.color, p.chain),
+    }));
+    report[`${theme}:presses`] = measured.map((m) => ({
+      key: m.key,
+      color: m.color,
+      backgroundColor: m.backgroundColor,
+      on: m.on,
+      ratio: Math.round(m.ratio * 10000) / 10000,
+    }));
+    // 量具自檢：三種狀態都量到、真的在那個狀態，而且三種底色都不一樣（移上去與按著真的換了底；`bg-card` 之類蓋掉的話會一樣）。
+    expect(measured.map((m) => m.key)).toEqual(
+      PRESS_STATES.map((state) => `session-usage:${state}`),
+    );
+    expect(measured.filter((m) => !m.inState).map((m) => m.key)).toEqual([]);
+    expect(new Set(measured.map((m) => m.backgroundColor)).size).toBe(3);
+    expect(
+      measured
+        .filter((m) => !(m.ratio >= TEXT_MIN))
+        .map((m) => `${m.key} ${m.ratio.toFixed(4)} < ${TEXT_MIN}（${m.on}）`),
     ).toEqual([]);
   });
 
