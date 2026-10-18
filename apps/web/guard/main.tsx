@@ -39,8 +39,12 @@
  *   `ComposerPage`。輸入框貼在頁面底部，寬度跟產品一樣（左右各 16px、最寬 48rem）。
  * - `?overlay=collapsibles` 畫產品裡展開收合的元件（#1638 PR A），都關著：思考過程、摘要列、工具卡、待辦、提問面板。量展開途中的高度、
  *   reduced-motion 直接到位、箭頭轉向、思考過程展開後藏摘要（這幾件都靠真的 CSS 命中 Base UI 的屬性，jsdom 量不到）。
+ * - `?overlay=messages` 畫產品的對話區（`Transcript`，#1638 PR B）：人與 AI 輪流十二則、最後一則 AI 被停止（帶表尾），高度固定、
+ *   內容超出，量泡泡字與表尾的對比、捲到最新的按鈕（焦點、動效、reduced-motion）、每一則的 `content-visibility`、外殼的行高、底部淡出。
  */
+import { emptyConversation } from '@nexus/wire';
 import type {
+  ConversationEntry,
   CompactionEntry,
   PendingQuestion,
   ToolEntry,
@@ -61,6 +65,7 @@ import { ReasoningRow } from '@/components/reasoning-row';
 import { RetryNotice } from '@/components/retry-notice';
 import { Surface } from '@/components/surface';
 import { TodoPanel } from '@/components/todo/panel';
+import { Transcript } from '@/components/transcript';
 import { ToolCard } from '@/components/tool/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -477,6 +482,27 @@ function CollapsiblesPage() {
   );
 }
 
+/** 對話區（#1638 PR B）：人與 AI 輪流，AI 的回覆夠長、總高度超出容器，捲到最新的按鈕才有機會出現；最後一則 AI 被停止，畫表尾。 */
+const MESSAGES: ConversationEntry[] = Array.from({ length: 6 }, (_, i): ConversationEntry[] => [
+  { kind: 'human', id: `h-${i}`, text: `第 ${i + 1} 個問題：這份報表的數字要怎麼看？` },
+  {
+    kind: 'ai',
+    id: `a-${i}`,
+    text: `第 ${i + 1} 則回覆。先看總表的合計列，再對照各月份的明細；如果兩邊對不上，通常是某一個月的資料還沒結帳。\n\n確認方式是打開那個月份的明細，看最後更新時間是不是在結帳日之後。`,
+    streaming: false,
+    attribution: { kind: 'root' },
+    ...(i === 5 ? { stopped: true as const } : {}),
+  },
+]).flat();
+
+function MessagesPage() {
+  return (
+    <div style={{ height: 600, display: 'flex', flexDirection: 'column' }}>
+      <Transcript state={{ ...emptyConversation(), entries: MESSAGES }} isFresh={() => false} />
+    </div>
+  );
+}
+
 function OverlayPage({ name }: { name: string }) {
   switch (name) {
     case 'dialog':
@@ -596,6 +622,8 @@ function OverlayPage({ name }: { name: string }) {
       return <OpenCommand />;
     case 'collapsibles':
       return <CollapsiblesPage />;
+    case 'messages':
+      return <MessagesPage />;
     case 'composer-idle':
     case 'composer-draft':
     case 'composer-running':

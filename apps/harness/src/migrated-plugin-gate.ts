@@ -84,6 +84,19 @@ function entryOf(manifest: RawPackageJson): string | undefined {
 }
 
 /**
+ * manifest 的入口指 `lib/<路徑>.js`（#1502，出貨的是編好的 JS），而這個 gate 掃的是原始碼樹、可能還沒建過：
+ * `lib/<路徑>.js` 對回 `src/<路徑>.ts`（跟 `scripts/workspace-packages.ts` 推入口是同一條對應），對不到才照 manifest 寫的。
+ */
+function sourceEntry(packageDir: string, entry: string): string {
+  const match = /^\.?\/?lib\/(.+)\.js$/.exec(entry);
+  if (match?.[1] !== undefined) {
+    const source = resolve(packageDir, 'src', `${match[1]}.ts`);
+    if (existsSync(source)) return source;
+  }
+  return resolve(packageDir, entry);
+}
+
+/**
  * 掃出 `packages/nexus-plugin-*` 每一顆。
  *
  * **找不到入口就拋，不回退**：入口是判別「遷出與否」的唯一依據，沒有它就沒辦法說這顆管不管，靜靜跳過的 gate
@@ -114,7 +127,12 @@ export function pluginPackages(root: string): PluginPackage[] {
           ? (manifest.scripts as Record<string, string>)
           : {};
       return [
-        { dir, name: manifest.name, entry: resolve(packagesRoot, directory, entry), scripts },
+        {
+          dir,
+          name: manifest.name,
+          entry: sourceEntry(resolve(packagesRoot, directory), entry),
+          scripts,
+        },
       ];
     });
 }

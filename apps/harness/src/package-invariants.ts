@@ -164,15 +164,17 @@ function addViolation(
  *
  * dsh 那邊 `checkManifest` 還檢 `files` 要發布 `lib/invariant.js`、註冊表要同時是
  * `workspace:^` 的 peer 與 dev 相依，`checkBuild` 再檢 bundle entry 與 project references。
- * **那些規則檢的產物在我們這裡不存在**：沒有 `lib/`、沒有 `files`、不發布，`build` 就是
- * `tsc --noEmit`。整組退到「不檢」，偏離標註見 #108 與該張動工的 PR 內文。
+ * **那些規則檢的產物當時在我們這裡不存在**：沒有 `lib/`、沒有 `files`、不發布，`build` 就是
+ * `tsc --noEmit`。整組退到「不檢」，偏離標註見 #108 與該張動工的 PR 內文。#1502 之後有了 `lib/` 與 `files`，
+ * 但 `files` 與 bundle entry 的檢查仍不在這一條：要補是另一張卡。
  */
 function checkManifest(
   owner: PackageInvariantOwner,
   manifest: PackageManifest,
   violations: PackageInvariantViolation[],
 ): void {
-  const expected = './src/invariant.ts';
+  // 出貨的入口是編好的 `lib/invariant.js`（#1502，由 `src/invariant.ts` 編出）；原始檔在不在由 checkSource 查。
+  const expected = './lib/invariant.js';
   if (manifest.exports?.['./invariant'] !== expected) {
     addViolation(
       violations,

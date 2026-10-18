@@ -617,6 +617,14 @@ export class TokenAnchorBook {
 }
 
 /**
+ * 四捨五入成整數 token，**落在 [-0.5, 0) 時給 `0` 不給 `-0`**：這個數會寫進 `context/measure`，而會話日誌拒收 `-0`
+ * （落盤會變成 `0`，記憶體與磁碟兩份不一樣，#1526）。寫事件的地方吞掉 `append` 的例外，所以給了 `-0` 的下場是那一筆量測無聲消失。
+ */
+function roundTokens(value: number): number {
+  return Math.round(value) || 0;
+}
+
+/**
  * 錨定估算。
  *
  * @param request - 要估的請求。錨從它的 `messages` 裡找。
@@ -646,7 +654,7 @@ export function estimateAnchoredTokens(
     if (earliestSent !== undefined && lastSent !== undefined)
       ratio = contentRatio(tokens - reportedInput(earliest)!.tokens, lastSent - earliestSent);
     return {
-      tokens: Math.round(tokens + (estimated - before) * (ratio ?? learned)),
+      tokens: roundTokens(tokens + (estimated - before) * (ratio ?? learned)),
       basis: 'anchor',
       estimated,
     };
@@ -654,7 +662,7 @@ export function estimateAnchoredTokens(
   const borrowed = book.firstCall(request);
   if (borrowed !== undefined)
     return {
-      tokens: Math.round(borrowed.tokens + (estimated - borrowed.estimated) * learned),
+      tokens: roundTokens(borrowed.tokens + (estimated - borrowed.estimated) * learned),
       basis: 'borrowed',
       estimated,
     };

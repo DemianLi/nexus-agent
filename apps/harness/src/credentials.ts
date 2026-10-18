@@ -50,6 +50,11 @@ export type CredentialOrigin = 'env' | 'file' | 'project-env' | 'user-env';
 export interface ResolvedCredential {
   readonly value: string;
   readonly source: CredentialOrigin;
+  /**
+   * 那一層是哪個檔（`file` 是受管憑證檔、`project-env`／`user-env` 是那份 `.env`）；`env` 沒有。
+   * 只給錯誤訊息指名「去哪裡改」用（#1541），不含值。
+   */
+  readonly path?: string;
 }
 
 /** 憑證服務。同步：受管檔很小，同步讀讓「建構時快速失敗」與「請求時再解析」用同一個函式。 */
@@ -187,12 +192,13 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
       const inherited = options.launchEnv.get(name, ['process']);
       if (inherited !== undefined) return { value: inherited.value, source: 'env' };
       const value = stored().get(name);
-      if (value !== undefined) return { value, source: 'file' };
+      if (value !== undefined) return { value, source: 'file', path: file };
       const dotenv = options.launchEnv.get(name, ['project-env', 'user-env']);
       if (dotenv !== undefined) {
         return {
           value: dotenv.value,
           source: dotenv.source === 'project-env' ? 'project-env' : 'user-env',
+          ...(dotenv.path === undefined ? {} : { path: dotenv.path }),
         };
       }
       return undefined;

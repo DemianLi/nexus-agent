@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * nexus-agent 的命令列入口——**後續 phase 的手動驗證工具**。
  *
@@ -22,7 +23,6 @@ import { parseArgs } from 'node:util';
 import { clearLine, cursorTo } from 'node:readline';
 import { createInterface } from 'node:readline/promises';
 import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { CommandDescriptor, CommandRegistrationPoint, SessionEventMap } from '@nexus/core';
 import { recordedApprovalPolicy } from '@nexus/core';
@@ -34,6 +34,7 @@ import { threadTitleConfigSchema, threadTitlePlugin } from './settings/thread-ti
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { resolveToolResultStashRoot, toolResultStashPlugin } from './settings/tool-result-stash.js';
+import { HARNESS_VERSION } from './harness-version.js';
 import { cleanupToolResultStash } from './tool-result-stash.js';
 import { ensureFallbackTitle } from './session-title.js';
 import type { ThreadTitleLimits } from './session-title.js';
@@ -141,6 +142,7 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        標準輸出只有那份 JSON，診斷走標準錯誤；有任何一列轉不完整（或載不起來）退出碼是 1
                        停用的列也收。不能配 --dump-config、--resume 或要說的話
   --help               印這段話
+  --version            印這個 harness 的版本就退出
 
   REPL 裡輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。`;
 
@@ -173,6 +175,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
         'dump-config-schema': { type: 'boolean', default: false },
         'dump-default-config': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
+        version: { type: 'boolean', default: false },
       },
       allowPositionals: true,
     });
@@ -288,6 +291,7 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
     dumpConfigSchema,
     dumpDefaultConfig,
     help: values.help === true,
+    version: values.version === true,
   };
 }
 
@@ -846,6 +850,10 @@ export async function runCli(options: RunCliOptions): Promise<void> {
     printer.log(USAGE);
     return;
   }
+  if (invocation.version) {
+    printer.log(HARNESS_VERSION);
+    return;
+  }
 
   // 同 `--dump-config` 的位置與理由。標準輸出只放那份 JSON（`printer.log` 是標準輸出），診斷走 `printer.error`；
   // 不完整時文件印完之後拋 `ConfigSchemaIncompleteError`，由 `main` 設退出碼 1。
@@ -1347,6 +1355,6 @@ async function main(): Promise<void> {
 }
 
 // 被 import 時（測試）不執行，被當作腳本跑時才執行。
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   await main();
 }
