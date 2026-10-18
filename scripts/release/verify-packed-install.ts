@@ -363,6 +363,9 @@ export interface ServeSmokeTimeouts {
  * serve 以 `detached: true` 起成自己的行程群組：逾時要 `SIGKILL` 時送給整個群組（`process.kill(-pid)`），
  * serve 自己起的子行程（MCP server、git）不會變孤兒。一般的 `SIGTERM` 只送 serve 本身，
  * 因為要驗的是它自己的收尾。
+ *
+ * 離開行程群組也讓終端機的 Ctrl-C 與 CI 取消的訊號到不了 serve，所以執行期間掛著 `SIGINT`／`SIGTERM` 的處理：
+ * 收到就 `SIGKILL` 整個群組、收掉暫存目錄、再用同一個訊號結束自己（不留孤兒，退出狀態也還是被訊號中斷）。
  */
 export async function smokeInstalledServe(
   root: string,
@@ -385,9 +388,20 @@ export async function smokeInstalledServe(
     child.once('exit', (code) => resolve(code));
     child.once('error', () => resolve(null));
   });
+  // serve 在自己的行程群組（上面 `detached`），終端機的 Ctrl-C 與 CI 取消送給 verify 的訊號到不了它。
+  // 沒有這一段的話 verify 照預設動作直接結束，`finally` 不會跑，serve 與它的子行程就留成孤兒。
+  let interrupted: NodeJS.Signals | undefined;
+  const onSignal = (signal: NodeJS.Signals): void => {
+    interrupted ??= signal;
+    signalGroup(child, 'SIGKILL');
+  };
+  const onInt = (): void => onSignal('SIGINT');
+  const onTerm = (): void => onSignal('SIGTERM');
+  process.on('SIGINT', onInt);
+  process.on('SIGTERM', onTerm);
   try {
     const deadline = Date.now() + (timeouts.startupMs ?? 90_000);
-    while (Date.now() < deadline && child.exitCode === null) {
+    while (Date.now() < deadline && child.exitCode === null && child.signalCode === null) {
       if (/nexus-agent 在 http:\/\/\S+/u.test(output) && /plugin：/u.test(output)) break;
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
@@ -422,11 +436,18 @@ export async function smokeInstalledServe(
     problems.push(`serve 驗證中途拋錯：${(error as Error).message}`);
   } finally {
     // 不論上面怎麼結束（含拋錯），serve 子行程一定要收掉並等到結束，不留孤兒。
-    if (child.exitCode === null) child.kill('SIGTERM');
+    if (child.exitCode === null && child.signalCode === null) child.kill('SIGTERM');
     const killer = setTimeout(() => signalGroup(child, 'SIGKILL'), timeouts.terminateMs ?? 30_000);
     const code = await exited;
     clearTimeout(killer);
     problems.push(...shutdownProblems(code, output));
+    process.off('SIGINT', onInt);
+    process.off('SIGTERM', onTerm);
+    if (interrupted !== undefined) {
+      // 收完 serve 之後照原本的訊號結束（shell 看到 130／143），暫存目錄也收掉——呼叫端的 finally 不會有機會跑。
+      rmSync(scratch, { recursive: true, force: true });
+      process.kill(process.pid, interrupted);
+    }
   }
   return problems;
 }

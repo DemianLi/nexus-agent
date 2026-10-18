@@ -8,9 +8,11 @@
  * 環境清理、`ps` 缺席、`SIGTERM` 收尾見 `release-scripts.test.ts`。
  */
 
+import { spawn } from 'node:child_process';
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -229,4 +231,80 @@ describe('smokeInstalledServe 逾時送 SIGKILL 給整個行程群組', () => {
     if (stillAlive) process.kill(pid, 'SIGKILL'); // 失敗時也別留下孤兒
     expect(stillAlive).toBe(false);
   }, 30_000);
+  // verify 自己被中斷（終端機 Ctrl-C、CI 取消）時，離開了前景群組的 serve 與它的子行程不能留下來。
+  it.each(['SIGINT', 'SIGTERM'] as const)(
+    '對跑著 smokeInstalledServe 的行程送 %s：serve 與孫行程都消失、暫存目錄收掉、行程被同一個訊號結束',
+    async (signal) => {
+      const root = join(dir, 'root');
+      mkdirSync(join(root, 'lib'), { recursive: true });
+      const servePid = join(dir, 'serve.pid');
+      const grandchildPid = join(dir, 'grandchild.pid');
+      writeFileSync(
+        join(root, 'lib/serve.js'),
+        [
+          "import { spawn } from 'node:child_process';",
+          "import { writeFileSync } from 'node:fs';",
+          "const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
+          `writeFileSync(${JSON.stringify(grandchildPid)}, String(g.pid));`,
+          `writeFileSync(${JSON.stringify(servePid)}, String(process.pid));`,
+          "process.on('SIGTERM', () => {});",
+          'setInterval(() => {}, 1000);',
+        ].join('\n'),
+      );
+      const scratch = join(dir, 'scratch');
+      mkdirSync(scratch);
+      const verifyModule = join(
+        dirname(fileURLToPath(import.meta.url)),
+        '../../../scripts/release/verify-packed-install.ts',
+      );
+      const runner = join(dir, 'runner.mts');
+      writeFileSync(
+        runner,
+        [
+          `import { smokeInstalledServe } from ${JSON.stringify(verifyModule)};`,
+          `await smokeInstalledServe(${JSON.stringify(root)}, ${JSON.stringify(dir)}, { ...process.env }, ${JSON.stringify(scratch)}, { startupMs: 60_000, terminateMs: 60_000 });`,
+          "console.log('smoke 正常結束（不該走到這裡）');",
+        ].join('\n'),
+      );
+      const runnerProc = spawn(process.execPath, ['--import', 'tsx', runner], {
+        cwd: join(dirname(fileURLToPath(import.meta.url)), '../../..'),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let log = '';
+      runnerProc.stdout.on('data', (c: Buffer) => (log += c.toString('utf8')));
+      runnerProc.stderr.on('data', (c: Buffer) => (log += c.toString('utf8')));
+      const ended = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolve) =>
+        runnerProc.once('exit', (code, sig) => resolve({ code, signal: sig })),
+      );
+      let serve = 0;
+      let grandchild = 0;
+      try {
+        const ready = Date.now() + 30_000;
+        while (Date.now() < ready && !(existsSync(servePid) && existsSync(grandchildPid))) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        expect(existsSync(servePid) && existsSync(grandchildPid), log).toBe(true);
+        serve = Number(readFileSync(servePid, 'utf8'));
+        grandchild = Number(readFileSync(grandchildPid, 'utf8'));
+        expect(alive(serve) && alive(grandchild)).toBe(true);
+        runnerProc.kill(signal);
+        const result = await ended;
+        // 照原本的訊號結束，不是靜靜變成 exit 0。
+        expect(result.signal, log).toBe(signal);
+        const gone = Date.now() + 3_000;
+        while ((alive(serve) || alive(grandchild)) && Date.now() < gone) {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+        expect(alive(serve)).toBe(false);
+        expect(alive(grandchild)).toBe(false);
+        expect(existsSync(scratch)).toBe(false);
+      } finally {
+        for (const pid of [serve, grandchild])
+          if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL');
+        if (runnerProc.exitCode === null && runnerProc.signalCode === null)
+          runnerProc.kill('SIGKILL');
+      }
+    },
+    60_000,
+  );
 });
