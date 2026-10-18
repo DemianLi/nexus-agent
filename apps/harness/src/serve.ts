@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * 把 agent 掛上 HTTP，給 `apps/web` 連。
  *
@@ -24,10 +25,10 @@
 import { existsSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
-import { dirname, join, resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { dirname, join } from 'node:path';
 import { THREADS_PATH } from '@nexus/wire';
 import { errorChain, recordedApprovalPolicy, TokenAnchorBook } from '@nexus/core';
+import { HARNESS_VERSION } from './harness-version.js';
 import { singleDigitModelIds } from './model-catalog.js';
 import type {
   PluginEntry,
@@ -163,6 +164,8 @@ export interface ServeInvocation {
   /** 見 `assembly-root.ts` 的 `CliInvocation.dumpDefaultConfig`。**兩個入口印的是同一份出貨設定**。 */
   readonly dumpDefaultConfig: boolean;
   readonly help: boolean;
+  /** 只印版本就退出（#1502）。 */
+  readonly version: boolean;
 }
 
 const USAGE = `用法：
@@ -191,6 +194,7 @@ const USAGE = `用法：
                        （上限是那個目標自己的 max_goal_rounds）；關掉之後一輪結束就結束
   --goal-driver        明講要開（預設就是開；與 --no-goal-driver 不能一起給）
   --help               印這段話
+  --version            印這個 harness 的版本就退出
 
 環境變數：
   ${HARNESS_HOME_ENV}  瀏覽器會話密鑰所在的 harness home（預設 ~/.nexus-agent）
@@ -216,6 +220,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
         'dump-config-schema': { type: 'boolean', default: false },
         'dump-default-config': { type: 'boolean', default: false },
         help: { type: 'boolean', default: false },
+        version: { type: 'boolean', default: false },
       },
     });
   } catch (error) {
@@ -288,6 +293,7 @@ export function parseServeArgs(argv: readonly string[]): ServeInvocation {
     dumpConfigSchema,
     dumpDefaultConfig,
     help: values.help === true,
+    version: values.version === true,
   };
 }
 
@@ -383,6 +389,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   const invocation = parseServeArgs(options.argv);
   if (invocation.help) {
     log(USAGE);
+    return undefined;
+  }
+  if (invocation.version) {
+    log(HARNESS_VERSION);
     return undefined;
   }
 
@@ -1376,6 +1386,8 @@ async function main(): Promise<void> {
   }
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+// 用 `import.meta.main`，不比路徑（照 dsh `apps/cli/src/bin.ts:76-78`）：裝好之後經 `node_modules/.bin` 的符號連結啟動時，
+// `argv[1]` 是連結、`import.meta.url` 是真實路徑，比路徑會靜靜不執行、以 0 結束。
+if (import.meta.main) {
   await main();
 }

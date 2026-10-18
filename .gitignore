@@ -5,8 +5,13 @@ node_modules/
 # build output
 dist/
 build/
-# vendor 套件的宣告檔由各自的 prepare（pnpm install 時）產生，見 vendor/README.md。
-vendor/*/lib/
+# 各套件編出來的 lib/（tsdown，見 tsdown.config.ts）；vendor 的 lib/ 另外有各自 prepare 產生的宣告檔，見 vendor/README.md。
+# 只寫套件那幾層：apps/web/src/lib/ 是原始碼。
+/apps/harness/lib/
+/packages/*/lib/
+/vendor/*/lib/
+# 打包時寫進產物的建置戳記（#1502 刀 2 寫、build-version.ts 讀）：只存在於產物，原始碼樹不該有，更不該被提交。
+/apps/harness/build-stamp.json
 .next/
 .turbo/
 *.tsbuildinfo

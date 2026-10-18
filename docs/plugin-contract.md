@@ -322,13 +322,13 @@ import base from '../../eslint.config.js';
 export default [...base, ...pluginLintConfig];
 ```
 
-這個檔會被 `eslint.config.js` 用 Node 原生載入（它是 `.ts`），要求 Node 的 type stripping 開著（本 repo 的 `engines`
-是 `>=22.19.0`，22.18 起預設開）。
+這個檔會被 `eslint.config.js` 用 Node 原生載入，載入的是編好的 `lib/lint.js`（#1502 起每個套件的 manifest 都指 `lib/`），
+所以不再需要 Node 的 type stripping；代價是**原始碼樹裡要先 `pnpm run build:lib`**，`pnpm -r run lint` 才找得到它
+（CI 的 static job 先建置再 lint；`eslint-exclusion.test.ts` 這類在測試裡呼叫 ESLint 的測試，vitest worker 裝了 tsx 的 ESM hook，
+把 `@nexus/sdk/lint` 解到 `src/`，不必先建置）。
 
-**目前只有 monorepo 內的插件拿得到。** Node 不對 `node_modules` 底下的檔做 type stripping：`pnpm pack` 出來的 tarball
-裝進空目錄，`import('@nexus/sdk/lint')` 在 Node 22.19.0 與 25 都丟 `ERR_UNSUPPORTED_NODE_MODULES_TYPE_STRIPPING`
-（`import('@nexus/sdk')` 同樣，因為整包 SDK 今天出貨的是 TS 原始碼）。決議說外部插件在自己的 CI 也要拿得到這份設定，
-所以 **SDK 對外發佈前要先建置成 JS**，這是那一刀的事，不在這張。
+**外部插件拿得到。** `pnpm pack` 出來的 SDK 帶的是 `lib/`（`files` 只收 `lib`），裝進空目錄 `import('@nexus/sdk/lint')`
+載得進來；Fog「SDK 對外發佈前要先建置成 JS」由 #1502 收掉。
 
 | 規則 | 擋什麼 | 改用什麼 |
 | --- | --- | --- |
@@ -470,6 +470,9 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 
 | 偏離 dsh 的什麼 | 理由類別 | 說明 |
 | --- | --- | --- |
+| vitest worker 的 `execArgv` 裝 tsx 的 ESM hook，`TSX_TSCONFIG_PATH` 指 `tsconfig.runtime.json`（#1502，PM 改判 A） | 表達不出來（理由 1） | dsh 處理 workspace 裸名插件只有兩種做法：開子行程（`packages/test-support/loader-smoke/src/index.ts:100-127`），或在 `mkdtemp` 底下手寫 `node_modules`（`app-boot.spec.ts` 約 `:934-990`）。兩種都表達不出 `apps/harness` 約 80 個測試檔對行程內物件的斷言（函式身分 `toBe(applyX)`、樹上的列、middleware 鏈、ctx 服務物件）；`plugin-tree.ts` 的 `resolveBareSpecifier` 是 Node 原生的 `import.meta.resolve`，看不到 vite 的 paths 外掛，要經 tsx 的 resolve hook。退到：只在 worker 的 `execArgv` 裝 ESM hook（dsh source-launch 筆記的機制），子行程的**啟動指令**不動；但 hook 的 `TSX_TSCONFIG_PATH` 是在 vitest 主行程設的，測試裡開的每個 `node --import tsx` 子行程（例如沒傳 `env` 的 `entry-main.test.ts`）都會繼承，實際解析因此也改走 runtime 那份 tsconfig。撤除條件：這批測試改走子行程或 `lib` 模式。不違反 `docs/testing.md:49`（那條管載入 Cordis 設定的子行程） |
+| `tsconfig.runtime.json` 第二份 tsconfig（#1502） | 表達不出來（理由 1） | dsh 只有一份 `tsconfig.base.json`（`:100-108` 把 vendor 也映到 `src`），嚴格度靠 project references 隔開，base 本身就是 `verbatimModuleSyntax: false`（`:18`）。nexus 的 base 是嚴格單檔、沒有 project references：vendor 放進去 `tsc` 多出 186 個錯，所以分兩份（base 不含 vendor、runtime 含 vendor 並關 `verbatimModuleSyntax`，後者因 cosmokit `Dict` 這類未標 `type` 的 import 在 tsx 下載入失敗），由同一支 `scripts/gen-tsconfig-paths.ts` 寫、`--check` 同查。撤除條件：改用 project references 隔開 vendor |
+| tsdown 的 `deps.neverBundle: true`（#1502） | 表達不出來（理由 1） | dsh 靠 tsdown 預設只外掛 `dependencies`／`peerDependencies`，再用 `scripts/check-workspace-constraints.ts:513-521` 強制每個套件把 cordis 同時列進 peer 與 dev。nexus 沒有那支約束檢查，devDependencies 裡的 workspace 套件（例如 `@nexus/cordis`）預設會被內嵌成第二份、單例就壞了，所以退到 `neverBundle`：效果相同（套件之間不內嵌）。撤除條件：補上那支約束檢查 |
 | manifest 必填欄位 | 產品需求超出 dsh | dsh 的身分只有 `package.json` 的 name／version 加 Loader 列 id，`dsh` 欄位沒有 id、owner、provides、consumes、capabilities、reload（`packages/util/package-manifest/src/types.ts:8-39`）。決議 §3-4 第 10 條 |
 | `Config` 用 zod `strictObject` | 沿用既有偏離 | dsh 用 schemastery 而且非 strict（`vendor/schemastery/src/index.ts:812-822`）。代價：沒有 `.volatile()`，Loader 的 `equalExceptVolatile` 不適用，設定一改那一列就重載 |
 | 帶型別的 token | 已登記（決議 §五，第 14 條） | 取代 declaration merging 加 `scripts/gen-cordis-catalog.ts` |
