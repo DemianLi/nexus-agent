@@ -15,6 +15,7 @@ import {
 } from '@nexus/core';
 import type { AttemptUsage, LlmFailure, StreamFailure } from '@nexus/core';
 
+import { assertUsableApiKey, INVALID_CREDENTIAL_CODE } from './api-key.js';
 import { AttachmentChatOpenAI } from './attachment-chat-openai.js';
 import { GatedChatOpenAI } from './gated-chat-openai.js';
 import { LOCAL_CAPACITY_CODE } from './request-gate.js';
@@ -1222,7 +1223,7 @@ export function createLiveModel(
   // **建構時先問一次**：缺 key 在組裝當下就失敗，不等到第一個請求。這是跟 dsh 的時刻差異——dsh 只在請求當下才拋
   // （`llm-deepseek-api-key`），我們兩個時刻都拋：組裝時的那一次讓 `--live` 起不來的原因在起動時就講，
   // 請求時的那一次負責受管檔在兩個請求之間被拿掉的情況。
-  if (credentials.resolve(LIVE_API_KEY_ENV) === undefined) throw new Error(missingKeyMessage());
+  resolveUsableKey(credentials);
 
   const fields: ChatOpenAIFields = {
     model: config.modelId,
@@ -1234,11 +1235,7 @@ export function createLiveModel(
       baseURL: config.baseUrl,
       // **每次請求前才解析**（openai 的 `apiKey` 收函式，實測經過 `bindTools`／`withConfig` 之後還在，
       // 見 `live-model.test.ts`）。所以受管檔改了、下一個請求就用新的，也不必把 key 放進行程的環境變數。
-      apiKey: async () => {
-        const hit = credentials.resolve(LIVE_API_KEY_ENV);
-        if (hit === undefined) throw new Error(missingKeyMessage());
-        return hit.value;
-      },
+      apiKey: async () => resolveUsableKey(credentials),
       fetch: withStreamIdleTimeout(
         config.streamIdleTimeoutMs,
         withInbandStreamErrors(withShippedRequestBody(withStreamUsageReport())),
@@ -1529,6 +1526,7 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   let connection = false;
   let empty = false;
   let localCapacity = false;
+  let invalidCredential = false;
   // 「只看結構」的連線與串流中段規則只套在模型呼叫拋的錯誤鏈上（工具 middleware 的錯不算）。
   const links = [...causeLinks(root)];
   const modelCall = links.some((link) => isModelCallFailure(link));
@@ -1544,6 +1542,7 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
     if (isConnectionLink(link, modelCall)) connection = true;
     if (name === 'EmptyResponseError') empty = true;
     if (name === 'LocalCapacityError') localCapacity = true;
+    if (name === 'InvalidCredentialError') invalidCredential = true;
     if (inband === undefined && modelCall && isInbandApiError(link)) {
       const body = (link as { error?: unknown }).error;
       inband = inbandErrorStatus(
@@ -1565,15 +1564,17 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
             ? 'CONTEXT_WINDOW_EXCEEDED'
             : status !== undefined
               ? failureCodeOfStatus(status)
-              : localCapacity
-                ? LOCAL_CAPACITY_CODE
-                : empty
-                  ? 'EMPTY_RESPONSE'
-                  : timedOut
-                    ? 'TIMEOUT'
-                    : connection
-                      ? 'TRANSPORT'
-                      : 'UNKNOWN';
+              : invalidCredential
+                ? INVALID_CREDENTIAL_CODE
+                : localCapacity
+                  ? LOCAL_CAPACITY_CODE
+                  : empty
+                    ? 'EMPTY_RESPONSE'
+                    : timedOut
+                      ? 'TIMEOUT'
+                      : connection
+                        ? 'TRANSPORT'
+                        : 'UNKNOWN';
   return { message, code, ...(status !== undefined && { status }) };
 }
 
@@ -1630,6 +1631,18 @@ function classifyAndReportFailedAttempt(error: unknown): void {
     });
   }
   if (thrown) throw outcome;
+}
+
+/**
+ * 解析並收下這一把金鑰：沒有就拋缺 key，有但不合格（空白、標頭放不下的字元）就拋 {@link InvalidCredentialError}，合格的回修過頭尾的值
+ * （#1541，照 dsh 在轉接器取金鑰的那一刻判）。建構時與每次請求前各走一次：建構時讓 `--live` 起不來的原因在起動當場就講，
+ * 請求時負責受管檔在兩個請求之間被改壞的情況。**只有空白的值不往下一層退**：資訊來自最高優先的那一層，退下去會讓人以為
+ * 受管檔生效了，其實用的是別處的金鑰（`resolve` 回第一個有值的層，空白字串算有值）。
+ */
+function resolveUsableKey(credentials: CredentialService): string {
+  const hit = credentials.resolve(LIVE_API_KEY_ENV);
+  if (hit === undefined) throw new Error(missingKeyMessage());
+  return assertUsableApiKey(LIVE_API_KEY_ENV, hit);
 }
 
 /** 缺 key 的失敗訊息：指名缺哪一個、去哪裡放。 */
