@@ -1,7 +1,8 @@
 /**
  * 打包出來的產物裡該有什麼、不該有什麼（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 2）。
  *
- * 三道靜態檢查，在 tar 之前對著 `pnpm deploy` 出來的暫存樹跑，也給刀 3 對解開後的安裝樹再跑一次：
+ * 三道靜態檢查。**1、2 在 `pack`（tar 之前，對著 `pnpm deploy` 的暫存樹）和 `verify-packed-install`（對解開後的安裝樹）各跑一次；
+ * 3 只在 `verify-packed-install` 跑**（相依圖走訪要走完整棵樹，打包當下的暫存樹還沒定形）：
  *
  * 1. {@link collectPayloadViolations}：照 dsh `scripts/publication-payload.ts` 拒收 `src/` 與 `.map`，再加上我們自己的必備檔、
  *    不該進閉包的開發工具、相對符號連結要解得開、目標平台的 `node-addon-system` 二進位在。
@@ -235,16 +236,58 @@ export function collectPayloadViolations(
   return violations;
 }
 
+/** `yaml` 是 apps/harness 的相依，不在根 `node_modules`：從 harness 的位置解。 */
+const parseYaml = (
+  createRequire(join(ROOT, 'apps/harness/package.json'))('yaml') as {
+    parse: (text: string) => unknown;
+  }
+).parse;
+
 /**
- * 出貨清單每一列的 `name:` 取出來。`cordis.yml` 的每個列頭是 `- id:`，緊接兩格縮排的 `name:`（套件名，或 `#settings/…` 這種
- * harness 自己的 `imports`）。
+ * 出貨清單要載入的列，其 `name:` 取出來。
+ *
+ * 照 dsh `scripts/verify-runtime-closure.ts:158-174` 的 `activeBarePluginPackages`：真的解析 YAML，逐列看 `disabled`——停用的列
+ * 不載入，不要求它解得到。**遇到認不得的結構就報錯，不准跳過**（今天 `cordis.yml` 沒有 group、也沒有停用的列；以後加了，這裡
+ * 不能靜靜漏查）：
+ *
+ * - 根不是陣列、列不是物件、`name` 不是非空字串；
+ * - `disabled` 不是布林（我們只收字面布林，不接 dsh 的 `__jsExpr`，見 `cordis.yml` 檔頭 #104 的偏離標註）；
+ * - 列帶了 `group`、或 `config` 是陣列（dsh 的 group 形狀：`isCordisGroupEntry` 在 `scripts/cordis-yaml.ts:48-54`；我們沒有 group，
+ *   見 `plugin-config.ts` 的註解）。
  *
  * @param text - `cordis.yml` 或 `cordis.serve.yml` 的原文。
- * @returns 依序的名字。
+ * @returns 依序的名字（`@nexus/...`、子路徑、`#settings/...` 都原樣）。
+ * @throws 結構認不得。
  */
 export function shippedNames(text: string): string[] {
-  const pattern = /^ {2}name:\s*(?:'([^']+)'|"([^"]+)"|([^\s#'"]\S*))\s*(?:#.*)?$/gmu;
-  return [...text.matchAll(pattern)].map((match) => match[1] ?? match[2] ?? match[3] ?? '');
+  const document = parseYaml(text);
+  // 空檔（或只有註解）是空清單；兩份合起來一列都沒有，{@link collectClosureViolations} 會報。
+  if (document === null || document === undefined) return [];
+  if (!Array.isArray(document)) throw new Error('出貨清單的根不是陣列，認不得這個結構');
+  const names: string[] = [];
+  for (const [index, row] of (document as unknown[]).entries()) {
+    const where = `第 ${String(index + 1)} 列`;
+    if (typeof row !== 'object' || row === null || Array.isArray(row)) {
+      throw new Error(`出貨清單${where}不是物件，認不得這個結構`);
+    }
+    const entry = row as Record<string, unknown>;
+    if ('group' in entry || Array.isArray(entry.config)) {
+      throw new Error(
+        `出貨清單${where}（id: ${String(entry.id)}）是 group 形狀；這裡沒有 group，要先讓 shippedNames 認得它，不准跳過`,
+      );
+    }
+    if (typeof entry.name !== 'string' || entry.name === '') {
+      throw new Error(`出貨清單${where}（id: ${String(entry.id)}）沒有字串 name`);
+    }
+    if (entry.disabled !== undefined && typeof entry.disabled !== 'boolean') {
+      throw new Error(
+        `出貨清單${where}（id: ${String(entry.id)}）的 disabled 不是字面布林：${JSON.stringify(entry.disabled)}`,
+      );
+    }
+    if (entry.disabled === true) continue;
+    names.push(entry.name);
+  }
+  return names;
 }
 
 /**
@@ -285,6 +328,7 @@ export function collectClosureViolations(root: string): PayloadViolation[] {
     cwd: root,
     env,
     encoding: 'utf8',
+    timeout: 60_000,
   });
   const bad = JSON.parse(out) as string[];
   return bad.map((entry) => ({

@@ -18,7 +18,11 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { nextVersion, replaceManifestVersion } from '../../../scripts/release/bump.js';
+import {
+  compareVersions,
+  nextVersion,
+  replaceManifestVersion,
+} from '../../../scripts/release/bump.js';
 import { releaseMembers, sharedVersion } from '../../../scripts/release/members.js';
 import { fileSha256, productName, sha256Line } from '../../../scripts/release/pack.js';
 import {
@@ -30,7 +34,12 @@ import {
   walkInstalledGraph,
 } from '../../../scripts/release/payload.js';
 import { assertInputMatches } from '../../../scripts/release/version.js';
-import { checksumProblems } from '../../../scripts/release/verify-packed-install.js';
+import {
+  checksumProblems,
+  cleanEnv,
+  smokeInstalledServe,
+  strayProcesses,
+} from '../../../scripts/release/verify-packed-install.js';
 import { ROOT } from '../../../scripts/workspace-packages.js';
 
 describe('版號', () => {
@@ -50,8 +59,29 @@ describe('版號', () => {
     ['0.2.0', '0.2.0'],
     ['0.2.0', 'v0.3.0'],
     ['0.2.0', 'big'],
+    // prerelease 降版：同一個 x.y.z 加 prerelease 比正式版小；rc.2 → rc.1 也是降版（#1657 審查第 2 項）
+    ['0.0.0', '0.0.0-rc.1'],
+    ['0.1.0-rc.2', '0.1.0-rc.1'],
+    ['0.1.0-rc.1', '0.1.0-rc.1'],
+    ['0.1.0', '0.1.0-rc.9'],
   ])('%s → %s 拒收', (current, spec) => {
     expect(() => nextVersion(current, spec)).toThrow();
+  });
+
+  it('compareVersions 照 semver 優先序（對照 dsh）', () => {
+    const ascending = [
+      '0.1.0-alpha',
+      '0.1.0-alpha.1',
+      '0.1.0-rc.2',
+      '0.1.0-rc.10',
+      '0.1.0',
+      '0.1.1',
+    ];
+    for (let index = 1; index < ascending.length; index += 1) {
+      expect(compareVersions(ascending[index - 1]!, ascending[index]!)).toBeLessThan(0);
+      expect(compareVersions(ascending[index]!, ascending[index - 1]!)).toBeGreaterThan(0);
+    }
+    expect(compareVersions('1.2.3', '1.2.3')).toBe(0);
   });
 
   it('只換 version，其餘位元組原樣；真的每份 manifest 換完 JSON 只差 version', () => {
@@ -95,7 +125,7 @@ describe('出貨清單的 name', () => {
     }
   });
 
-  it('套件名、子路徑、#settings 都取；註解與更深縮排的 name 不取', () => {
+  it('套件名、子路徑、#settings 都取；註解與 config 裡更深的 name 不取', () => {
     const text = [
       '# name: ignored',
       '- id: a',
@@ -108,6 +138,35 @@ describe('出貨清單的 name', () => {
       '    name: nested',
     ].join('\n');
     expect(shippedNames(text)).toEqual(['@nexus/plugin-a', '@nexus/core/sub', '#settings/x']);
+  });
+
+  it('停用的列不取（照 dsh 的 activeBarePluginPackages）；disabled: false 照取', () => {
+    const text = [
+      '- id: a',
+      "  name: '@nexus/plugin-a'",
+      '  disabled: true',
+      '- id: b',
+      "  name: '@nexus/plugin-b'",
+      '  disabled: false',
+    ].join('\n');
+    expect(shippedNames(text)).toEqual(['@nexus/plugin-b']);
+  });
+
+  it.each([
+    ['根不是陣列', 'id: a\nname: x'],
+    ['列不是物件', '- just-a-string'],
+    ['group 形狀（group: true）', "- id: g\n  name: '@nexus/g'\n  group: true\n  config: []"],
+    [
+      'config 是陣列',
+      "- id: g\n  name: '@nexus/g'\n  config:\n    - id: c\n      name: '@nexus/c'",
+    ],
+    ['沒有 name', '- id: a'],
+    [
+      'disabled 不是布林（dsh 的 __jsExpr 我們不接）',
+      "- id: a\n  name: '@nexus/a'\n  disabled:\n    __jsExpr: x",
+    ],
+  ])('認不得的結構報錯、不跳過：%s', (_label, text) => {
+    expect(() => shippedNames(text)).toThrow(/認不得|group|name|disabled/u);
   });
 });
 
@@ -331,4 +390,67 @@ describe('出貨清單每一列要解析得到', () => {
     writeFileSync(join(root, 'cordis.yml'), '');
     expect(collectClosureViolations(root)).toHaveLength(1);
   });
+});
+
+describe('verify-packed-install 的環境與收尾（#1657 審查第 4、5 項）', () => {
+  let dir: string;
+  beforeEach(() => void (dir = mkdtempSync(join(tmpdir(), 'release-verify-'))));
+  afterEach(() => rmSync(dir, { recursive: true, force: true }));
+
+  const withoutPs = async <T>(body: () => T | Promise<T>): Promise<T> => {
+    const saved = process.env.PATH;
+    process.env.PATH = join(dir, 'no-such-bin');
+    try {
+      return await body();
+    } finally {
+      if (saved === undefined) delete process.env.PATH;
+      else process.env.PATH = saved;
+    }
+  };
+
+  it('cleanEnv 清掉遙測與宿主的 node 掛鉤，HOME 指進暫存目錄', () => {
+    const saved = { ...process.env };
+    process.env.NEXUS_OTLP_LOGS_URL = 'http://example.invalid/logs';
+    process.env.NODE_OPTIONS = '--import tsx';
+    process.env.NVIDIA_API_KEY = 'real';
+    try {
+      const env = cleanEnv(dir);
+      expect(env.NEXUS_OTLP_LOGS_URL).toBeUndefined();
+      expect(env.NODE_OPTIONS).toBeUndefined();
+      expect(env.NVIDIA_API_KEY).toBe('verify-fake-key');
+      expect(env.HOME).toBe(dir);
+    } finally {
+      for (const key of ['NEXUS_OTLP_LOGS_URL', 'NODE_OPTIONS', 'NVIDIA_API_KEY']) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+    }
+  });
+
+  it('ps 不存在：strayProcesses 回 problem，不拋錯', async () => {
+    const result = await withoutPs(() => strayProcesses(dir));
+    expect(result.lines).toEqual([]);
+    expect(result.problem).toMatch(/ps 沒跑成/u);
+  });
+
+  it('ps 不存在時 smokeInstalledServe 仍記成 problem，且 serve 子行程被收掉（不留孤兒）', async () => {
+    const root = join(dir, 'root');
+    mkdirSync(join(root, 'lib'), { recursive: true });
+    const pidFile = join(dir, 'serve.pid');
+    writeFileSync(
+      join(root, 'lib/serve.js'),
+      [
+        "import { writeFileSync } from 'node:fs';",
+        `writeFileSync(${JSON.stringify(pidFile)}, String(process.pid));`,
+        "console.log('nexus-agent 在 http://127.0.0.1:1/login?token=x');",
+        "console.log('plugin：fake');",
+        "process.on('SIGTERM', () => process.exit(0));",
+        'setInterval(() => {}, 1000);',
+      ].join('\n'),
+    );
+    const problems = await withoutPs(() => smokeInstalledServe(root, dir, { ...process.env }, dir));
+    expect(problems.join('\n')).toMatch(/ps 沒跑成/u);
+    const pid = Number(readFileSync(pidFile, 'utf8'));
+    expect(() => process.kill(pid, 0)).toThrow(/ESRCH/u);
+  }, 30_000);
 });

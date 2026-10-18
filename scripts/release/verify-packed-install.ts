@@ -34,9 +34,17 @@ import {
 } from './payload.js';
 
 /** 乾淨的子行程環境：宿主的 tsx hook、NODE_PATH 都不能替產物補洞。 */
-function cleanEnv(home: string): NodeJS.ProcessEnv {
+export function cleanEnv(home: string): NodeJS.ProcessEnv {
   const env = { ...process.env };
-  for (const key of ['NODE_OPTIONS', 'NODE_PATH', 'TSX_TSCONFIG_PATH', 'NVIDIA_API_KEY']) {
+  for (const key of [
+    'NODE_OPTIONS',
+    'NODE_PATH',
+    'TSX_TSCONFIG_PATH',
+    'NVIDIA_API_KEY',
+    // 遙測關掉：宿主上若設了，驗證用的假模型日誌會送出去。dsh 在同一個位置設 `DSH_TELEMETRY_DISABLED = '1'`
+    // （`scripts/release/verify-packed-install.ts:44`）；我們的遙測只有這一個開關，沒有就是關，所以清掉它。
+    'NEXUS_OTLP_LOGS_URL',
+  ]) {
     delete env[key];
   }
   return {
@@ -61,12 +69,25 @@ export function checksumProblems(tarball: string): string[] {
   return problems;
 }
 
-/** 目前有哪些行程的命令列帶著這個目錄且是 pnpm／tsx。 */
-function strayProcesses(dir: string): string[] {
-  const out = spawnSync('ps', ['-A', '-o', 'command='], { encoding: 'utf8' }).stdout;
-  return out
-    .split('\n')
-    .filter((line) => line.includes(dir) && /(^|[\s/])(pnpm|tsx)([\s/]|$)/u.test(line));
+/**
+ * 目前有哪些行程的命令列帶著這個目錄且是 pnpm／tsx。
+ *
+ * `ps` 不存在、逾時或非 0 退出時回 `problem`，**不拋錯**：呼叫端把它記成一條失敗，serve 子行程照常被收掉。
+ *
+ * @param dir - 暫存目錄。
+ * @returns 找到的行程命令列；或 `problem`（`ps` 本身沒跑成）。
+ */
+export function strayProcesses(dir: string): { lines: string[]; problem?: string } {
+  const result = spawnSync('ps', ['-A', '-o', 'command='], { encoding: 'utf8', timeout: 10_000 });
+  if (result.error !== undefined || result.status !== 0 || typeof result.stdout !== 'string') {
+    const reason = result.error?.message ?? `exit ${String(result.status)}`;
+    return { lines: [], problem: `ps 沒跑成，無從查安裝樹裡有沒有 pnpm／tsx 行程：${reason}` };
+  }
+  return {
+    lines: result.stdout
+      .split('\n')
+      .filter((line) => line.includes(dir) && /(^|[\s/])(pnpm|tsx)([\s/]|$)/u.test(line)),
+  };
 }
 
 /**
@@ -94,7 +115,7 @@ export async function verifyPackedInstall(
     const home = join(scratch, 'home');
     const work = join(scratch, 'work');
     for (const dir of [extract, home, work]) mkdirSync(dir, { recursive: true });
-    execFileSync('tar', ['-xzf', tarball, '-C', extract]);
+    execFileSync('tar', ['-xzf', tarball, '-C', extract], { timeout: 300_000 });
     const [top] = readdirSync(extract);
     if (top === undefined) return ['tarball 解開是空的'];
     const root = join(extract, top);
@@ -200,7 +221,7 @@ export async function verifyPackedInstall(
 }
 
 /** 起 `lib/serve.js --port 0`，等網址、打首頁、查行程、送 SIGTERM。 */
-async function smokeInstalledServe(
+export async function smokeInstalledServe(
   root: string,
   work: string,
   env: NodeJS.ProcessEnv,
@@ -219,51 +240,58 @@ async function smokeInstalledServe(
     child.once('exit', (code) => resolve(code));
     child.once('error', () => resolve(null));
   });
-  const deadline = Date.now() + 90_000;
-  while (Date.now() < deadline && child.exitCode === null) {
-    if (/nexus-agent 在 http:\/\/\S+/u.test(output) && /plugin：/u.test(output)) break;
-    await new Promise((resolve) => setTimeout(resolve, 100));
-  }
-  const url = /nexus-agent 在 (http:\/\/\S+)/u.exec(output)?.[1];
-  if (url === undefined) {
-    problems.push(`serve 沒印出網址（或逾時）：${JSON.stringify(output.slice(-800))}`);
-  } else {
-    try {
-      // 啟動印的網址帶登入 token：先換 cookie（303＋set-cookie），再帶 cookie 打首頁（同 fixtures.ts 的 exchangeServeToken）。
-      const exchange = await fetch(url, {
-        redirect: 'manual',
-        signal: AbortSignal.timeout(30_000),
-      });
-      const cookie = exchange.headers.get('set-cookie')?.split(';', 1)[0];
-      if (exchange.status !== 303 || cookie === undefined) {
-        problems.push(`token 交換失敗：${String(exchange.status)}`);
-      } else {
-        const home = await fetch(new URL('/', url), {
-          headers: { cookie },
+  try {
+    const deadline = Date.now() + 90_000;
+    while (Date.now() < deadline && child.exitCode === null) {
+      if (/nexus-agent 在 http:\/\/\S+/u.test(output) && /plugin：/u.test(output)) break;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    const url = /nexus-agent 在 (http:\/\/\S+)/u.exec(output)?.[1];
+    if (url === undefined) {
+      problems.push(`serve 沒印出網址（或逾時）：${JSON.stringify(output.slice(-800))}`);
+    } else {
+      try {
+        // 啟動印的網址帶登入 token：先換 cookie（303＋set-cookie），再帶 cookie 打首頁（同 fixtures.ts 的 exchangeServeToken）。
+        const exchange = await fetch(url, {
+          redirect: 'manual',
           signal: AbortSignal.timeout(30_000),
         });
-        const body = await home.text();
-        if (home.status !== 200) problems.push(`首頁回 ${String(home.status)}，要 200`);
-        else if (!/<div id="root"|<script[^>]+type="module"/u.test(body)) {
-          problems.push(`首頁 200 但不像網頁 index：${JSON.stringify(body.slice(0, 200))}`);
+        const cookie = exchange.headers.get('set-cookie')?.split(';', 1)[0];
+        if (exchange.status !== 303 || cookie === undefined) {
+          problems.push(`token 交換失敗：${String(exchange.status)}`);
+        } else {
+          const home = await fetch(new URL('/', url), {
+            headers: { cookie },
+            signal: AbortSignal.timeout(30_000),
+          });
+          const body = await home.text();
+          if (home.status !== 200) problems.push(`首頁回 ${String(home.status)}，要 200`);
+          else if (!/<div id="root"|<script[^>]+type="module"/u.test(body)) {
+            problems.push(`首頁 200 但不像網頁 index：${JSON.stringify(body.slice(0, 200))}`);
+          }
         }
+      } catch (error) {
+        problems.push(`打首頁失敗：${(error as Error).message}`);
       }
-    } catch (error) {
-      problems.push(`打首頁失敗：${(error as Error).message}`);
     }
+    const unloadable = output.split('\n').filter((line) => line.includes('載不起來'));
+    if (unloadable.length > 0)
+      problems.push(`有插件載不進來：${JSON.stringify(unloadable.slice(0, 3))}`);
+    const stray = strayProcesses(scratch);
+    if (stray.problem !== undefined) problems.push(stray.problem);
+    if (stray.lines.length > 0)
+      problems.push(`安裝樹裡有 pnpm／tsx 行程：${JSON.stringify(stray.lines.slice(0, 3))}`);
+  } catch (error) {
+    problems.push(`serve 驗證中途拋錯：${(error as Error).message}`);
+  } finally {
+    // 不論上面怎麼結束（含拋錯），serve 子行程一定要收掉並等到結束，不留孤兒。
+    if (child.exitCode === null) child.kill('SIGTERM');
+    const killer = setTimeout(() => child.kill('SIGKILL'), 30_000);
+    const code = await exited;
+    clearTimeout(killer);
+    if (code !== 0)
+      problems.push(`SIGTERM 後 exit ${String(code)}，要 0：${JSON.stringify(output.slice(-600))}`);
   }
-  const unloadable = output.split('\n').filter((line) => line.includes('載不起來'));
-  if (unloadable.length > 0)
-    problems.push(`有插件載不進來：${JSON.stringify(unloadable.slice(0, 3))}`);
-  const stray = strayProcesses(scratch);
-  if (stray.length > 0)
-    problems.push(`安裝樹裡有 pnpm／tsx 行程：${JSON.stringify(stray.slice(0, 3))}`);
-  if (child.exitCode === null) child.kill('SIGTERM');
-  const killer = setTimeout(() => child.kill('SIGKILL'), 30_000);
-  const code = await exited;
-  clearTimeout(killer);
-  if (code !== 0)
-    problems.push(`SIGTERM 後 exit ${String(code)}，要 0：${JSON.stringify(output.slice(-600))}`);
   return problems;
 }
 

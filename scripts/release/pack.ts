@@ -1,8 +1,8 @@
 /**
  * 把 `@nexus/harness` 的完整正式閉包打成一份 tar.gz，旁邊放 `.sha256`（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 2，C047）。
  *
- * 流程：`build:lib` → web 的 `vite build` → `pnpm deploy --legacy --prod` 出閉包到暫存目錄 → 寫建置戳記 → 三道靜態檢查
- * （`payload.ts`）→ `tar -czf` → `.sha256`。產物名 `nexus-agent-<版本>-<平台>.tar.gz`，解開是同名的一個資料夾。
+ * 流程：`build:lib` → web 的 `vite build` → `pnpm deploy --legacy --prod` 出閉包到暫存目錄 → 寫建置戳記 → 兩道靜態檢查
+ * （`payload.ts` 的內容檢查與出貨清單閉包；第三道相依圖走訪只在 `verify-packed-install` 跑）→ `tar -czf` → `.sha256`。產物名 `nexus-agent-<版本>-<平台>.tar.gz`，解開是同名的一個資料夾。
  * 主機預裝 Node ≥22.19；產物不帶 node、不帶 pnpm、不需要安裝步驟（Q1 (a)，只出 linux-x64，Q2 (a)）。
  *
  * **偏離 dsh，理由 1（基座表達不出來）——`pnpm deploy` 的旗標。** dsh `scripts/build-exe-for-python-sdk.ts:280-300` 用
@@ -56,8 +56,12 @@ export function fileSha256(path: string): string {
   return createHash('sha256').update(readFileSync(path)).digest('hex');
 }
 
-function run(command: string, args: readonly string[], cwd: string = ROOT): void {
-  const result = spawnSync(command, [...args], { cwd, stdio: 'inherit' });
+function run(command: string, args: readonly string[], cwd: string = ROOT, timeout?: number): void {
+  const result = spawnSync(command, [...args], {
+    cwd,
+    stdio: 'inherit',
+    ...(timeout === undefined ? {} : { timeout }),
+  });
   if (result.status !== 0) {
     throw new Error(`${command} ${args.join(' ')} 失敗（exit ${String(result.status)}）`);
   }
@@ -127,7 +131,7 @@ export function pack(options: { out: string; skipBuild?: boolean; commit?: strin
     mkdirSync(options.out, { recursive: true });
     const tarball = join(options.out, `${name}.tar.gz`);
     const checksum = `${tarball}.sha256`;
-    run('tar', ['-czf', tarball, '-C', scratch, name]);
+    run('tar', ['-czf', tarball, '-C', scratch, name], ROOT, 300_000);
     writeFileSync(checksum, sha256Line(fileSha256(tarball), `${name}.tar.gz`));
     return { tarball, checksum, version, platform };
   } finally {
