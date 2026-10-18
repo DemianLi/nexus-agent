@@ -245,7 +245,7 @@ describe('一次性模式', () => {
       // `loadPlugins` 之後，註冊表就在手上，所以它跟上面 core 那三列完全同形——`apply` 把驗過的
       // 值提供成服務，組裝點去讀。三態（旗標 > 條目 > 內建預設）釘在 `agent-factory.test.ts`。
       //
-      // **除了 `thread-title-llm` 與 `thread-search`，六列都在 `PROTECTED_ENTRY_NAMES` 上**，但理由分兩種，而且現在是逐列
+      // **哪幾列在 `PROTECTED_ENTRY_NAMES` 上以那張表為準**（`thread-capacity` 自 #1619 出廠開著起也在上面），這裡不寫顆數；理由分兩種，而且現在是逐列
       // 寫在 `PROTECTED_ENTRY_REASONS` 這張表上的（訊息不再共用一段講核准閘門的文字）。
       // `thread-title-llm` 關得掉：關掉就真的沒有模型產生的標題，同 dsh 的 acp-app 與 sdk-app。`thread-search` 同理（#631）。
       'thread-title',

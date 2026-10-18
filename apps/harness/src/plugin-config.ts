@@ -186,7 +186,7 @@ export type ConfigEntry = z.infer<typeof entrySchema>;
  * plugin，而且把它從兩個插入點拿掉的突變量到 **126 條紅**。沒有條目，就沒有「關得掉」
  * 這個問題要擋。
  *
- * **名單上另外六列是只講設定的條目**——六列 `#settings/*`
+ * **名單上其餘的列是只講設定的條目**——`#settings/*` 那幾列，這裡不寫顆數
  * （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。理由跟核准閘門同形但不同源：
  * 它們**不裝任何東西**，所以「關掉」對它們沒有意義。名單擋的正是那個誤會。
  *
@@ -242,6 +242,13 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
     '這一列不裝任何東西，只講下行串流的心跳間隔與每條線的位元組上限。關掉它不會讓保護消失' +
       '——`startupSetting` 把關掉的那一列當成沒有那一列，兩個值於是回到 schema 的預設（2000 毫秒、2 MiB），' +
       '卡住的線照樣兩拍內被斷、積壓照樣超過上限就被收，只會讓這份設定讀起來像把保險絲拆了。要放寬，把數值調大。',
+  ],
+  [
+    '#settings/thread-capacity',
+    '這一列不裝任何東西，只講 serve 行程裡的 thread 數上限與閒置逐出的時間。關掉它不會讓上限或逐出消失' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，兩個值於是回到 schema 的預設（500 條、閒置 2 小時撤出），' +
+      '到了上限照樣拒收新 thread、閒置的照樣被撤，只會讓這份設定讀起來像把保險絲拆了。' +
+      '要放寬，把數值調大；要關掉閒置逐出，把 `idleEvictAfterMs` 設成 0。',
   ],
   [
     '#settings/tool-result-stash',
@@ -483,6 +490,21 @@ export function applyEntryPatches(
   return data;
 }
 
+/** {@link validateEntries} 的選項。 */
+export interface ValidateEntriesOptions {
+  /**
+   * 疊完之後停用、而那個 `disabled: true` 來自變更紀錄的列：列 id → 紀錄檔的標籤（[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）。
+   * 關不掉的列落在這裡時，訊息指名是紀錄關的、修法是 `plugin enable <id>`，不叫人去改出貨檔或 patch。見 {@link journalDisabledIds}。
+   */
+  readonly disabledByJournal?: ReadonlyMap<string, string>;
+  /**
+   * 不檢查保護名單（[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）。**只給寫入口找列用**：紀錄裡留著舊的 `disable`
+   * （這一列以前關得掉）時，找列這一步也拋的話，連 `plugin enable` 都寫不進去，就沒有任何指令救得回來。寫入之後的整份清單
+   * 照樣經完整的檢查（`plugin-change.ts` 的第 3 步）。
+   */
+  readonly allowDisabledProtected?: boolean;
+}
+
 /**
  * 疊完之後逐列驗形狀。
  *
@@ -494,6 +516,7 @@ export function applyEntryPatches(
 export function validateEntries(
   rows: readonly Record<string, unknown>[],
   label: string,
+  options: ValidateEntriesOptions = {},
 ): ConfigEntry[] {
   const entries = rows.map((row, position) => {
     const result = entrySchema.safeParse(row);
@@ -505,7 +528,9 @@ export function validateEntries(
     }
     // **在這裡問，不是在迴圈後面。** 一份檔案同時寫壞了兩件事的時候，維運者要先看到的是
     // 關於核准的那一句，不是 id 撞號那一句。
-    assertNotProtected(result.data, label, position);
+    if (options.allowDisabledProtected !== true) {
+      assertNotProtected(result.data, label, position, options.disabledByJournal);
+    }
     return result.data;
   });
 
@@ -545,12 +570,28 @@ export function validateEntries(
  * @param entry - 驗過形狀的那一列。
  * @param label - 錯誤訊息裡怎麼稱呼這份清單。
  * @param position - 它在疊完的清單裡的索引（從 0 數）。
+ * @param disabledByJournal - 見 {@link ValidateEntriesOptions.disabledByJournal}。
  * @throws {PluginConfigError} 這一列在 {@link PROTECTED_ENTRY_NAMES} 上而且被關掉了。
  */
-function assertNotProtected(entry: ConfigEntry, label: string, position: number): void {
+function assertNotProtected(
+  entry: ConfigEntry,
+  label: string,
+  position: number,
+  disabledByJournal?: ReadonlyMap<string, string>,
+): void {
   if (entry.disabled !== true) return;
   const reason = PROTECTED_ENTRY_REASONS.get(entry.name);
   if (reason === undefined) return;
+  const journal = entry.id === undefined ? undefined : disabledByJournal?.get(entry.id);
+  if (journal !== undefined && entry.id !== undefined) {
+    // 紀錄裡的 `disable` 只可能是這一列還關得掉的時候寫進去的（之後寫入口會拒），所以是升級撞上的：講出處與那一句修法。
+    throw new PluginConfigError(
+      `變更紀錄 ${journal} 裡有一筆把 ${JSON.stringify(entry.name)}（id ${JSON.stringify(entry.id)}）停用了，` +
+        '而這一列從這一版起關不掉。' +
+        reason +
+        `修法：跑 \`plugin enable ${entry.id}\`（寫進變更紀錄，不必改出貨檔或 patch）。`,
+    );
+  }
   throw new PluginConfigError(
     `${label} 疊完之後第 ${String(position + 1)} 列把 ${JSON.stringify(entry.name)} ` +
       '標成了 `disabled: true`，而這一列關不掉。' +
@@ -1055,18 +1096,25 @@ export interface PluginConfigSources {
  * @returns 疊完並驗過的條目清單。
  * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
  */
-export function composeEntries(sources: PluginConfigSources = {}): ConfigEntry[] {
-  return composeEntriesWithReport(sources).entries;
+export function composeEntries(
+  sources: PluginConfigSources = {},
+  options: Pick<ValidateEntriesOptions, 'allowDisabledProtected'> = {},
+): ConfigEntry[] {
+  return composeEntriesWithReport(sources, options).entries;
 }
 
 /**
  * {@link composeEntries}，多交出各層的報告（#1412）：變更紀錄有幾筆、有沒有舊的 patch 檔被略過、`--patch` 蓋到哪幾列。
  *
  * @param sources - 各層的來源。
+ * @param options - `allowDisabledProtected` 只給寫入口找列用，見 {@link ValidateEntriesOptions}。
  * @returns 疊完並驗過的條目清單，與各層的報告。
  * @throws {PluginConfigError} 任何一層讀不了、形狀不合，或疊完之後有壞掉的列。
  */
-export function composeEntriesWithReport(sources: PluginConfigSources = {}): {
+export function composeEntriesWithReport(
+  sources: PluginConfigSources = {},
+  options: Pick<ValidateEntriesOptions, 'allowDisabledProtected'> = {},
+): {
   readonly entries: ConfigEntry[];
   readonly report: LayerReport;
   /** 疊之前的出貨列與全部層攤平後的 patch：樹上的插件從這裡讀（#1416），不另外再讀一次檔。 */
@@ -1077,7 +1125,10 @@ export function composeEntriesWithReport(sources: PluginConfigSources = {}): {
   const { shipped, rows, rowOrigins, layers, report, acceptedSeq } = readLayers(sources);
   const patches = layers.flatMap((layer) => layer.patches);
   return {
-    entries: validateEntries(applyEntryPatches(rows, patches, sources.warn), shipped),
+    entries: validateEntries(applyEntryPatches(rows, patches, sources.warn), shipped, {
+      ...options,
+      disabledByJournal: journalDisabledIds(layers),
+    }),
     report,
     source: { shipped, rows, rowOrigins, patches },
     acceptedSeq,
@@ -1130,6 +1181,34 @@ export interface ConfigLayer {
   /** 來源標籤，dump 的 `# ==` 註解印的就是這個。 */
   readonly label: string;
   readonly patches: readonly ConfigPatch[];
+  /**
+   * 只有變更紀錄那一層有：紀錄裡**已寫下的**筆（不含這次要寫的 `pending`）折完之後停用的列 id（#1619）。
+   * 分開算是因為 `pending` 跟紀錄折在同一層，而這次新寫的 `disable` 不是「紀錄關的」。
+   */
+  readonly recordedDisabled?: ReadonlySet<string>;
+}
+
+/**
+ * 疊完之後哪幾列的 `disabled: true` 來自變更紀錄（#1619）：列 id → 紀錄那一層的標籤。
+ *
+ * 照疊的順序走一遍，每一列取**最後一條**寫了 `disabled` 的 patch：它在紀錄那一層、而且是紀錄已寫下的筆關的，才算。
+ * 之後的 `--patch` 又寫了 `disabled` 就以它為準。只看帶 `id` 的 patch，`insert` 進來的列不算。
+ *
+ * @param layers - 各層，照疊的順序。
+ * @returns 列 id → 紀錄的標籤。
+ */
+function journalDisabledIds(layers: readonly ConfigLayer[]): Map<string, string> {
+  const last = new Map<string, string | undefined>();
+  for (const layer of layers) {
+    for (const patch of layer.patches) {
+      if (patch.id === undefined || patch.disabled === undefined) continue;
+      const fromJournal = patch.disabled && layer.recordedDisabled?.has(patch.id) === true;
+      last.set(patch.id, fromJournal ? layer.label : undefined);
+    }
+  }
+  const result = new Map<string, string>();
+  for (const [id, label] of last) if (label !== undefined) result.set(id, label);
+  return result;
 }
 
 /**
@@ -1179,7 +1258,13 @@ function readLayers(sources: PluginConfigSources): {
   let acceptedSeq: number | null = null;
   if (sources.journal !== undefined) {
     const read = readJournalLayer(sources.journal, sources.warn ?? warnToStderr);
-    if (read.patches.length > 0) layers.push({ label: read.label, patches: read.patches });
+    if (read.patches.length > 0) {
+      layers.push({
+        label: read.label,
+        patches: read.patches,
+        recordedDisabled: read.recordedDisabled,
+      });
+    }
     journalReport = read.report;
     acceptedSeq = read.acceptedSeq;
   }
@@ -1243,6 +1328,8 @@ function readJournalLayer(
 ): {
   patches: ConfigPatch[];
   label: string;
+  /** 已寫下的筆（不含 `pending`）折完之後停用的列 id，見 {@link ConfigLayer.recordedDisabled}。 */
+  recordedDisabled: Set<string>;
   report: NonNullable<LayerReport['journal']>;
   acceptedSeq: number | null;
 } {
@@ -1270,6 +1357,10 @@ function readJournalLayer(
     ignoredLegacyPatch = source.legacyPatch;
     warn(legacyPatchIgnoredMessage(source.legacyPatch, source.path));
   }
+  const recordedDisabled = new Set<string>();
+  for (const row of foldJournal(bodies)) {
+    if (row['disabled'] === true && typeof row['id'] === 'string') recordedDisabled.add(row['id']);
+  }
   bodies.push(...(source.pending ?? []));
   const patches = foldJournal(bodies).map((row, index) => {
     const result = patchSchema.safeParse(row);
@@ -1284,6 +1375,7 @@ function readJournalLayer(
   return {
     patches,
     label,
+    recordedDisabled,
     // 最後一筆**被接受的**改動的序號（#1426）：`failed`、`rejected` 是只記不折的筆，不算。
     acceptedSeq: records.findLast((record) => isAcceptedRecord(record))?.seq ?? null,
     report: {
@@ -1355,7 +1447,7 @@ export function renderConfigDump(sources: PluginConfigSources = {}): string {
   }
 
   // 疊完先驗過才印：印一棵啟動不起來的樹，讀的人會以為問題在別的地方。
-  validateEntries(composed, shipped);
+  validateEntries(composed, shipped, { disabledByJournal: journalDisabledIds(layers) });
   return groupedDump(composed, origins);
 }
 

@@ -76,6 +76,7 @@ import { DEFAULT_SSE_HEARTBEAT_INTERVAL_MS } from './wire-server.js';
 import { PROJECTION_FLUSH_MS } from './projection-coalescer.js';
 import { downlinkConfigSchema } from './settings/downlink.js';
 import { projectionFlushConfigSchema } from './settings/projection-flush.js';
+import { threadCapacityConfigSchema } from './settings/thread-capacity.js';
 import { DEFAULT_TOOL_TEXT_MAX_BYTES } from './settings/tool-text.js';
 import { DEFAULT_TOOL_RESULT_STASH_RETENTION_DAYS } from './settings/tool-result-stash.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
@@ -222,6 +223,13 @@ describe('出貨的 cordis.yml', () => {
       heartbeatIntervalMs: 2000,
       maxQueuedBytes: 2 * 1024 * 1024,
     });
+    // **thread 數上限與閒置逐出**（#1619，出廠打開）。出貨那一行的值必須就是 schema 的預設，同上面幾列：兩邊各寫一份數字，
+    // 改了一邊忘了另一邊，`--dump-config` 印的跟沒寫 `config:` 的部署實際拿到的就會不一樣。預設是 500 條（理由 2）與 2 小時（照 dsh）。
+    expect(byId.get('thread-capacity')).toEqual(threadCapacityConfigSchema.parse({}));
+    expect(threadCapacityConfigSchema.parse({})).toEqual({
+      maxThreads: 500,
+      idleEvictAfterMs: 7_200_000,
+    });
     // **過大工具結果的暫存**（#734）。`root` 不寫（缺席才是 harness home 底下的預設位置），保留天數寫出來，值必須就是預設。
     expect(byId.get('tool-result-stash')).toEqual({
       cleanupPeriodDays: DEFAULT_TOOL_RESULT_STASH_RETENTION_DAYS,
@@ -290,6 +298,7 @@ describe('出貨的 cordis.yml', () => {
       'thread-title',
       'thread-title-llm',
       'thread-search',
+      'thread-capacity',
       'browser-session',
       'deliverable-files',
       'tool-text',
@@ -984,6 +993,7 @@ describe('保護名單', () => {
       '#settings/tool-text',
       '#settings/projection-flush',
       '#settings/downlink',
+      '#settings/thread-capacity',
       '#settings/tool-result-stash',
       '#settings/live-model',
       '#settings/default-model',
