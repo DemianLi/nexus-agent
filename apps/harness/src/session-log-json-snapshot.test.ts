@@ -16,6 +16,7 @@
  *     陣列在 CI（Node 22.23.3 Linux x64）約 2200 層就爆，沒凍過的約 4100 層，夾在中間才驗得到「凍過的那份要先拷」。
  *   - **C2（超過上限）**：Node 22 的原生 `JSON.stringify` 連沒凍過的也是遞迴的，CI（22.19.0 與 22.23.3）上 4104 層就
  *     寫不出去；寫入失敗那一批留在佇列頭，**前後的事件也一起落不了盤**。5000 層那一則在 `append` 就拒，前後照常。
+ *   - **C3（剛好上限）**：上限值本身在真的後端上寫得出去、讀得回來。
  */
 
 import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
@@ -263,5 +264,30 @@ describe('C：深巢狀（#1526、#1661）', () => {
     sameJson(live, stored);
     expect(rejected).toBeInstanceOf(TypeError);
     expect((rejected as TypeError).message).toContain(`超過上限 ${SESSION_EVENT_MAX_DEPTH} 層`);
+  });
+
+  it(`C3：剛好 ${SESSION_EVENT_MAX_DEPTH} 層的物件、陣列與交錯巢狀：收得下、落得了盤、續接讀得回來且相同`, async () => {
+    // 上限值本身在真的後端上要安全：`data` 本身算第 1 層，所以 `meta` 包上限減一層。
+    const levels = SESSION_EVENT_MAX_DEPTH - 1;
+    const deep = [
+      ['edge-object', nestedObject(levels)],
+      ['edge-array', nestedArray(levels)],
+      ['edge-mixed', nestedMixed(levels)],
+    ] as const;
+    const { live, stored, adopted } = await roundTrip((sessions) => {
+      for (const [callId, meta] of deep) {
+        sessions.root.append('tool/result', { callId, isError: false, meta });
+      }
+    });
+    const callIds = deep.map(([callId]) => callId);
+    for (const [label, events] of [
+      ['記憶體', live],
+      ['落盤讀回', stored],
+      ['接上 seed', adopted],
+    ] as const) {
+      expect(callIdsOf(events), label).toEqual(callIds);
+    }
+    sameJson(live, stored);
+    sameJson(live, adopted);
   });
 });

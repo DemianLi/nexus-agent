@@ -750,10 +750,10 @@ describe('寫入那一關的深度上限（#1661）', () => {
         thrown = error;
       }
       expect(thrown).toBeInstanceOf(TypeError);
-      // 最裡面那個容器的路徑有 1000 段（meta 加 999 層），只印前 8 段。
+      // 最裡面那個容器的路徑有「上限」那麼多段（meta 加上限減一層），只印前 8 段。
       const step = shape === 'object' ? '.next' : '[0]';
       expect((thrown as TypeError).message).toBe(
-        `會話事件的 tool/result 的 data.meta${step.repeat(7)}…（省略 992 段） ` +
+        `會話事件的 tool/result 的 data.meta${step.repeat(7)}…（省略 ${SESSION_EVENT_MAX_DEPTH - 8} 段） ` +
           `是第 ${SESSION_EVENT_MAX_DEPTH + 1} 層巢狀，超過上限 ${SESSION_EVENT_MAX_DEPTH} 層`,
       );
       expect(log.length).toBe(1);
@@ -805,7 +805,7 @@ describe('寫入那一關的深度上限（#1661）', () => {
       const batch = [rawEvent(0, 'x'), rawEvent(1, nested(SESSION_EVENT_MAX_DEPTH, 'object'))];
       expect(() => materializeAppendBatch(batch)).toThrow(
         new TypeError(
-          `會話事件的 寫入批次[1].data.meta${'.next'.repeat(5)}…（省略 994 段） ` +
+          `會話事件的 寫入批次[1].data.meta${'.next'.repeat(5)}…（省略 ${SESSION_EVENT_MAX_DEPTH + 2 - 8} 段） ` +
             `是第 ${SESSION_EVENT_MAX_DEPTH + 3} 層巢狀，超過上限 ${SESSION_EVENT_MAX_DEPTH + 2} 層`,
         ),
       );
