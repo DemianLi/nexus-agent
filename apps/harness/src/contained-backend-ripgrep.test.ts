@@ -9,7 +9,17 @@
  */
 
 import { spawnSync } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { FilesystemBackend } from 'deepagents';
@@ -140,6 +150,42 @@ describe('虛擬路徑的形狀', () => {
       expect(match.path).toMatch(/^\/[^.]/);
     }
   });
+
+  /**
+   * 搜尋起點傳相對於根的路徑（不是絕對路徑）：rg 的錨點是它自己 `getcwd()` 的 realpath，根經 symlink 進來時，
+   * 傳絕對路徑會讓帶目錄的 `--glob` 一個都對不上。**根特地建在 realpath 的暫存目錄底下再用 symlink 指過去**，
+   * 不靠 macOS 的 `/var` 剛好是 symlink：改傳絕對路徑的突變在任何平台都會紅。
+   */
+  it('根是 symlink 時，帶目錄的 glob 仍對根錨定、命中', async () => {
+    const real = join(await realpath(await mkdtemp(join(tmpdir(), 'nexus-rg-real-'))), 'real');
+    await mkdir(join(real, 'logs'), { recursive: true });
+    await writeFile(join(real, 'logs', 'app.log'), 'needle 在 symlink 根\n');
+    const link = join(base, 'ws-link');
+    await symlink(real, link);
+    try {
+      const backend = new ContainedFilesystemBackend({ rootDir: link });
+
+      const viaGlob = await backend.grep('needle', '/', 'logs/app.log');
+      const viaSub = await backend.grep('needle', '/logs', 'logs/*.log');
+
+      expect(viaGlob.error).toBeUndefined();
+      expect(paths(viaGlob)).toEqual(['/logs/app.log']);
+      expect(paths(viaSub)).toEqual(['/logs/app.log']);
+    } finally {
+      await rm(join(real, '..'), { recursive: true, force: true });
+    }
+  });
+
+  it('目錄名是 `-` 或像旗標（`-x`）：照常搜，不是讀 stdin、不是 0 筆', async () => {
+    for (const name of ['-', '-x']) {
+      await mkdir(join(root, name));
+      await writeFile(join(root, name, 'f.log'), 'needle 旗標目錄\n');
+    }
+    const backend = new ContainedFilesystemBackend({ rootDir: root });
+
+    expect(paths(await backend.grep('needle', '/-'))).toEqual(['/-/f.log']);
+    expect(paths(await backend.grep('needle', '/-x'))).toEqual(['/-x/f.log']);
+  });
 });
 
 describe('子行程的環境', () => {
@@ -158,7 +204,7 @@ describe('子行程的環境', () => {
     const seen = await readFile(dump, 'utf8');
     expect(seen).not.toContain('FAKE_1532_API_KEY');
     expect(seen).not.toContain('NEXUS_AGENT_FAKE_1532');
-    expect(seen).toContain('PATH=');
+    expect(seen.split('\n')).toContain(`PATH=${process.env['PATH']}`);
   });
 });
 
@@ -182,33 +228,45 @@ describe('帶目錄的 glob 由 rg 自己對根錨定，不走基座那一支', 
 });
 
 describe('輸出上限', () => {
-  it('超過上限就收掉 rg、回縮小範圍的錯誤，不解析半份輸出', async () => {
-    const long = `needle ${'x'.repeat(100)}\n`.repeat(100);
-    await writeFile(join(root, 'big.log'), long);
-    let pid: number | undefined;
+  /**
+   * 假 rg：先寫出超過上限的量，再掛著不結束。runner 要等 `close` 才 resolve，所以只有「超限時真的收掉 rg」才會很快回來；
+   * 用真的 rg 的話它自己很快就寫完結束，拿掉超限分支的 `terminate()` 也照樣綠。
+   */
+  async function floodingRg(): Promise<{ executable: string; pidFile: string }> {
+    const pidFile = join(base, 'flood.pid');
+    const executable = await script(
+      'flood-rg.sh',
+      `echo $$ > "${pidFile}"\nhead -c 4096 /dev/zero | tr '\\0' x\nexec sleep 20`,
+    );
+    return { executable, pidFile };
+  }
+
+  it('超過上限就收掉 rg、很快回縮小範圍的錯誤，不解析半份輸出', async () => {
+    const { executable, pidFile } = await floodingRg();
+    const started = Date.now();
 
     const backend = new ContainedFilesystemBackend({
       rootDir: root,
-      ripgrep: { rawOutputMaxBytes: 1024, onChild: (child) => (pid = child.pid) },
+      ripgrep: { executable, rawOutputMaxBytes: 1024 },
     });
-    const result = await backend.grep('needle', '/', 'big.log');
+    const result = await backend.grep('needle', '/');
 
+    expect(Date.now() - started).toBeLessThan(3500);
     expect(result.matches).toBeUndefined();
     expect(result.error).toContain('narrow');
     expect(result.error).toContain('1024');
-    expect(pid).toBeDefined();
-    expect(alive(pid as number)).toBe(false);
-  });
+    expect(alive(Number((await readFile(pidFile, 'utf8')).trim()))).toBe(false);
+  }, 15_000);
 
   it('runner 的碼是 SEARCH_RAW_OUTPUT_OVERFLOW', async () => {
-    await writeFile(join(root, 'big.log'), `needle ${'x'.repeat(100)}\n`.repeat(100));
+    const { executable } = await floodingRg();
     const outcome = await runRipgrep({
-      argv: ['--json', '-F', '--', 'needle', 'big.log'],
+      argv: ['--json'],
       cwd: root,
-      internals: { rawOutputMaxBytes: 1024 },
+      internals: { executable, rawOutputMaxBytes: 1024 },
     });
     expect(outcome).toMatchObject({ kind: 'error', code: SEARCH_RAW_OUTPUT_OVERFLOW });
-  });
+  }, 15_000);
 
   it('反例：上限內照常回結果', async () => {
     const result = await new ContainedFilesystemBackend({ rootDir: root }).grep('needle', '/');
@@ -370,6 +428,7 @@ describe('偏離 1：沒有 rg 才走基座的退路', () => {
     const result = await new ContainedFilesystemBackend({ rootDir: file }).grep('needle', '/');
 
     expect(result.error).toContain('workspace root');
+    expect(result.error).not.toContain(base);
     expect(bare).not.toHaveBeenCalled();
   });
 });

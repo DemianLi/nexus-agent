@@ -562,6 +562,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 解析 `--json`、換算虛擬路徑（邏輯照基座 `:951-978`）→ `maxCount` 截斷。失敗一律回 `{ error }`，並替這一次工具呼叫記下
    * 搜尋碼（`noteSearchError`），最後落進會話日誌那顆 `tool/result` 的 `error`。**不換成別的搜尋法。**
    *
+   * rg 是 serve 直接起的子行程，spawn 之後登記進 `trackHostExitChild`（`ripgrep-runner.ts`）：serve 走 `process.exit` 結束而
+   * rg 還在跑時由 core 同步 `SIGKILL`。**只殺直接子行程，不做 process group**——#1542 登記的偏離（理由 1：沒有 subprocess
+   * 服務）同樣適用。
+   *
    * ## 偏離 dsh（AGENTS.md「技術實現標準」，#1532 卡上偏離 1）
    *
    * **理由 2（完全內網，主機可能沒有 rg）：`rg` 不存在（spawn 回 `ENOENT`）時暫時保留基座的退路。** dsh 內附 rg 所以不需要；
@@ -606,7 +610,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { matches: [] };
       return searchFailure(
         SEARCH_FAILED,
-        `grep cannot search: workspace root ${this.cwd} is not an accessible directory`,
+        'grep cannot search: the workspace root is not an accessible directory',
       );
     }
     let baseFull: string;
@@ -622,7 +626,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     }
     // **搜尋起點要傳相對於工作區根的路徑**（根本身是 `.`）：給 rg 絕對路徑時，帶目錄的 `--glob` 一個都對不上
     // （rg 15.1.0 實測；`cwd` 為根、路徑為 `.` 或 `src` 時 `logs/app.log`、`/logs/app.log`、`src/**/*.ts` 都對根錨定）。
-    const searchArg = relative(this.cwd, baseFull) || '.';
+    // 一律加 `./` 前綴：目錄名剛好是 `-` 時 rg 會改讀 stdin（0 筆、沒有錯誤），`-x` 這類也不會被當成旗標。
+    const searchRel = relative(this.cwd, baseFull);
+    const searchArg = searchRel === '' ? '.' : `.${sep}${searchRel}`;
     const outcome = await runRipgrep({
       argv: ['--json', '-F', ...(glob ? ['--glob', glob] : []), '--', pattern, searchArg],
       cwd: this.cwd,

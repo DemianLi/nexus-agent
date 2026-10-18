@@ -128,8 +128,10 @@ for (const route of ['rg', 'literal'] as const) {
     });
 
     /**
-     * **升版絆索**：裸的 `FilesystemBackend` 今天對帶目錄的 glob 回 0 筆。基座修好那天這條會紅，
-     * 那就是拿掉 `ContainedFilesystemBackend.grep` 覆寫的時刻。
+     * **升版絆索，只管退路裡帶目錄的 glob**：裸的 `FilesystemBackend` 今天對帶目錄的 glob 回 0 筆。基座修好那天這條會紅，
+     * 那時可以拿掉退路（`fallbackGrep`）上的 glob 補丁（`lastSegmentOf` 加 `micromatch`）。**不是**拿掉
+     * `ContainedFilesystemBackend.grep` 覆寫的時刻：覆寫還帶著 `--no-config`（擋 `RIPGREP_CONFIG_PATH` 的 `--pre` 注入）、
+     * 輸出上限與取消，整個拿掉會把注入的洞重新打開。
      */
     it('沒有我們那一層時，帶目錄的 glob 回 0 筆', async () => {
       const bare = new FilesystemBackend({ rootDir: root, virtualMode: true });

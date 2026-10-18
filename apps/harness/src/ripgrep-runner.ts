@@ -39,6 +39,7 @@ import {
   SEARCH_INVALID_PATTERN,
   SEARCH_RAW_OUTPUT_OVERFLOW,
   scrubbedParentEnv,
+  trackHostExitChild,
 } from '@nexus/core';
 import type { SearchErrorCode } from '@nexus/core';
 
@@ -150,9 +151,12 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
     let stderrTail = Buffer.alloc(0);
     let stderrTruncated = false;
 
+    /** 行程被強制結束時由 core 同步 SIGKILL 的登記（#1542）；自己結束了就拿掉。 */
+    const untrackers: Array<() => void> = [];
     const settle = (outcome: RipgrepOutcome): void => {
       if (settled) return;
       settled = true;
+      for (const untrack of untrackers.splice(0)) untrack();
       if (killTimer !== undefined) clearTimeout(killTimer);
       signal.removeEventListener('abort', onAbort);
       resolve(outcome);
@@ -178,6 +182,9 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
       );
       return;
     }
+    // spawn 之後立刻登記：serve 走 `process.exit` 結束而 rg 還在跑時，今天沒有人收它。只殺直接子行程，不做 process group
+    // ——#1542 登記的偏離（理由 1，沒有 subprocess 服務）同樣適用，寫法照 `nexus-plugin-workspace-changes/src/git.ts`。
+    untrackers.push(trackHostExitChild(child));
     internals.onChild?.({ pid: child.pid });
 
     /** 收掉 rg：先 `SIGTERM`，寬限之後還沒結束就 `SIGKILL`。 */
