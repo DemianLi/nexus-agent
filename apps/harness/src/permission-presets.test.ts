@@ -9,6 +9,7 @@
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { PassThrough } from 'node:stream';
 import { MemorySaver } from '@langchain/langgraph';
 import type { SessionEvent } from '@nexus/core';
 import { createWireClient, PERMISSIONS_PROJECTION_KEY } from '@nexus/wire';
@@ -16,8 +17,10 @@ import { createDeepAgent, StateBackend } from 'deepagents';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
+import { runCli } from './cli.js';
 import {
   emptyCommandPoint,
+  FULL_ACCESS_PATCH,
   loopbackRequest,
   noSessions,
   shippedPlugins,
@@ -281,6 +284,35 @@ describe('該起不來的時候起不來', () => {
         root,
       ),
     ).rejects.toThrow('要嘛在表裡補上那一組');
+  });
+
+  it('CLI 入口同樣：`--sandbox danger-full-access` 沒加回起不來；`--patch` 加回之後跑得完一輪', async () => {
+    const quiet = { log: () => undefined, error: () => undefined };
+    // home 與日誌都放工作區外的暫存目錄：不碰真的 home，也不撞「日誌不能在工作區裡」。
+    const home = await mkdtemp(join(tmpdir(), 'nexus-permission-presets-home-'));
+    const cli = (extra: readonly string[]) =>
+      runCli({
+        argv: [
+          '--workspace',
+          root,
+          '--session-log',
+          join(home, 'sessions'),
+          '--sandbox',
+          'danger-full-access',
+          ...extra,
+          '說點什麼',
+        ],
+        input: new PassThrough(),
+        output: new PassThrough(),
+        printer: quiet,
+        env: { NEXUS_AGENT_HOME: home },
+      });
+    try {
+      await expect(cli([])).rejects.toThrow('要嘛在表裡補上那一組');
+      await expect(cli(['--patch', FULL_ACCESS_PATCH])).resolves.toBeUndefined();
+    } finally {
+      await rm(home, { recursive: true, force: true });
+    }
   });
 
   it('表被改成對不上起始值、又沒設 defaultPreset：新會話起不來', async () => {

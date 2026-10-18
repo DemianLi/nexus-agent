@@ -129,9 +129,12 @@ describe('出廠表沒有全開（#1621）', () => {
     ]);
 
     const before = await historyLength(client, 't');
-    expect(await client.slashRun('t', '/permission danger-full-access')).toMatchObject({
-      kind: 'error',
-    });
+    const ran = await client.slashRun('t', '/permission danger-full-access');
+    expect(ran).toMatchObject({ kind: 'error' });
+    // 今天那句「認不得」，列出的只有兩組。
+    expect(ran.kind === 'error' && ran.text).toBe(
+      '/permission 認不得 "danger-full-access"。認得的是 read-only、workspace-write。',
+    );
     expect(await historyLength(client, 't')).toBe(before);
     expect(await refreshed(client, 't')).toBe('workspace-write');
   });
