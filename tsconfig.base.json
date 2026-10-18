@@ -14,6 +14,86 @@
     "esModuleInterop": true,
     "skipLibCheck": true,
     "resolveJsonModule": true,
-    "noEmit": true
+    "noEmit": true,
+    "paths": {
+      // BEGIN generated package aliases — pnpm run gen-tsconfig-paths
+      "#settings/*": ["./apps/harness/src/settings/*.ts"],
+      "@nexus/agent-loop": ["./packages/nexus-agent-loop/src/index.ts"],
+      "@nexus/agent-loop/provider": ["./packages/nexus-agent-loop/src/provider.ts"],
+      "@nexus/approval-channel": ["./packages/nexus-approval-channel/src/index.ts"],
+      "@nexus/approval-channel/provider": ["./packages/nexus-approval-channel/src/provider.ts"],
+      "@nexus/commands": ["./packages/nexus-commands/src/index.ts"],
+      "@nexus/commands/provider": ["./packages/nexus-commands/src/provider.ts"],
+      "@nexus/core": ["./packages/nexus-core/src/index.ts"],
+      "@nexus/core/approval-gate": ["./packages/nexus-core/src/approval.ts"],
+      "@nexus/core/invariant": ["./packages/nexus-core/src/invariant.ts"],
+      "@nexus/core/model-usage": ["./packages/nexus-core/src/model-usage.ts"],
+      "@nexus/core/observation-policy": ["./packages/nexus-core/src/observation.ts"],
+      "@nexus/core/repeat-reminder": ["./packages/nexus-core/src/repeat-reminder.ts"],
+      "@nexus/core/session-checkpoint-policy": [
+        "./packages/nexus-core/src/session-checkpoint-policy.ts"
+      ],
+      "@nexus/core/session-persistence": ["./packages/nexus-core/src/session-persistence.ts"],
+      "@nexus/core/summarization": ["./packages/nexus-core/src/summarization.ts"],
+      "@nexus/core/tool-result-pruner": ["./packages/nexus-core/src/tool-result-pruner.ts"],
+      "@nexus/deque": ["./packages/nexus-deque/src/index.ts"],
+      "@nexus/feedback": ["./packages/nexus-feedback/src/index.ts"],
+      "@nexus/fs": ["./packages/nexus-fs/src/index.ts"],
+      "@nexus/fs/provider": ["./packages/nexus-fs/src/provider.ts"],
+      "@nexus/goal": ["./packages/nexus-goal/src/index.ts"],
+      "@nexus/plugin-agent-instructions": [
+        "./packages/nexus-plugin-agent-instructions/src/index.ts"
+      ],
+      "@nexus/plugin-ask-user": ["./packages/nexus-plugin-ask-user/src/index.ts"],
+      "@nexus/plugin-commands": ["./packages/nexus-plugin-commands/src/index.ts"],
+      "@nexus/plugin-commands/invariant": ["./packages/nexus-plugin-commands/src/invariant.ts"],
+      "@nexus/plugin-echo": ["./packages/nexus-plugin-echo/src/index.ts"],
+      "@nexus/plugin-feedback": ["./packages/nexus-plugin-feedback/src/index.ts"],
+      "@nexus/plugin-goal": ["./packages/nexus-plugin-goal/src/index.ts"],
+      "@nexus/plugin-goal/invariant": ["./packages/nexus-plugin-goal/src/invariant.ts"],
+      "@nexus/plugin-mcp": ["./packages/nexus-plugin-mcp/src/index.ts"],
+      "@nexus/plugin-memory": ["./packages/nexus-plugin-memory/src/index.ts"],
+      "@nexus/plugin-permission-presets": [
+        "./packages/nexus-plugin-permission-presets/src/index.ts"
+      ],
+      "@nexus/plugin-plan-mode": ["./packages/nexus-plugin-plan-mode/src/index.ts"],
+      "@nexus/plugin-plan-mode/invariant": ["./packages/nexus-plugin-plan-mode/src/invariant.ts"],
+      "@nexus/plugin-present": ["./packages/nexus-plugin-present/src/index.ts"],
+      "@nexus/plugin-present/invariant": ["./packages/nexus-plugin-present/src/invariant.ts"],
+      "@nexus/plugin-quickjs": ["./packages/nexus-plugin-quickjs/src/index.ts"],
+      "@nexus/plugin-sandbox-policy": ["./packages/nexus-plugin-sandbox-policy/src/index.ts"],
+      "@nexus/plugin-sandbox-policy/invariant": [
+        "./packages/nexus-plugin-sandbox-policy/src/invariant.ts"
+      ],
+      "@nexus/plugin-skills": ["./packages/nexus-plugin-skills/src/index.ts"],
+      "@nexus/plugin-submit-record": ["./packages/nexus-plugin-submit-record/src/index.ts"],
+      "@nexus/plugin-system-prompt": ["./packages/nexus-plugin-system-prompt/src/index.ts"],
+      "@nexus/plugin-telemetry-otel": ["./packages/nexus-plugin-telemetry-otel/src/index.ts"],
+      "@nexus/plugin-todo": ["./packages/nexus-plugin-todo/src/index.ts"],
+      "@nexus/plugin-todo/invariant": ["./packages/nexus-plugin-todo/src/invariant.ts"],
+      "@nexus/plugin-token-meter": ["./packages/nexus-plugin-token-meter/src/index.ts"],
+      "@nexus/plugin-trajectory": ["./packages/nexus-plugin-trajectory/src/index.ts"],
+      "@nexus/plugin-workspace-changes": ["./packages/nexus-plugin-workspace-changes/src/index.ts"],
+      "@nexus/plugin-workspace-changes/types": [
+        "./packages/nexus-plugin-workspace-changes/src/types.ts"
+      ],
+      "@nexus/plugin-workspace-changes/invariant": [
+        "./packages/nexus-plugin-workspace-changes/src/invariant.ts"
+      ],
+      "@nexus/projections": ["./packages/nexus-projections/src/index.ts"],
+      "@nexus/projections/provider": ["./packages/nexus-projections/src/provider.ts"],
+      "@nexus/sdk": ["./packages/nexus-sdk/src/index.ts"],
+      "@nexus/sdk/lint": ["./packages/nexus-sdk/src/lint.ts"],
+      "@nexus/session": ["./packages/nexus-session/src/index.ts"],
+      "@nexus/session/provider": ["./packages/nexus-session/src/provider.ts"],
+      "@nexus/skills": ["./packages/nexus-skills/src/index.ts"],
+      "@nexus/skills/provider": ["./packages/nexus-skills/src/provider.ts"],
+      "@nexus/system-prompt": ["./packages/nexus-system-prompt/src/index.ts"],
+      "@nexus/tool-result": ["./packages/nexus-tool-result/src/index.ts"],
+      "@nexus/tools": ["./packages/nexus-tools/src/index.ts"],
+      "@nexus/tools/provider": ["./packages/nexus-tools/src/provider.ts"],
+      "@nexus/wire": ["./packages/nexus-wire/src/index.ts"]
+      // END generated package aliases
+    }
   }
 }

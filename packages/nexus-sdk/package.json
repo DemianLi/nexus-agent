@@ -3,13 +3,16 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "src/index.ts",
+  "main": "lib/index.js",
   "exports": {
-    ".": "./src/index.ts",
-    "./lint": "./src/lint.ts",
+    ".": "./lib/index.js",
+    "./lint": "./lib/lint.js",
     "./src/*": "./src/*",
     "./package.json": "./package.json"
   },
+  "files": [
+    "lib"
+  ],
   "scripts": {
     "build": "tsc --noEmit",
     "lint": "eslint .",

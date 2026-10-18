@@ -310,9 +310,14 @@ describe('createLiveModel 的 thinkingOff', () => {
   };
   const kwargs = (thinkingOff?: boolean) =>
     (
-      createLiveModel(live as never, undefined, { resolve: () => 'k' } as never, {
-        ...(thinkingOff !== undefined && { thinkingOff }),
-      }) as unknown as { modelKwargs?: Record<string, unknown> }
+      createLiveModel(
+        live as never,
+        undefined,
+        { resolve: () => ({ value: 'k', source: 'env' }) } as never,
+        {
+          ...(thinkingOff !== undefined && { thinkingOff }),
+        },
+      ) as unknown as { modelKwargs?: Record<string, unknown> }
     ).modelKwargs;
 
   it('開了就帶型錄的 off 寫法；沒開（主對話那一顆）什麼都不帶', () => {

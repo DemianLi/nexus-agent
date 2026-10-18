@@ -425,6 +425,21 @@ describe('第一次：借別條 thread 的第一次', () => {
     ).toBe('estimate');
   });
 
+  it('算出來落在 [-0.5, 0) 時記 0，不記 -0（#1526：會話日誌拒收 -0，這個數寫進 context/measure）', () => {
+    const book = new TokenAnchorBook();
+    const thread = request([new HumanMessage('短')]);
+    const other = request([new HumanMessage(CHINESE)]);
+    // 借來的第一次 E 比這次大 20_001，學到的比例 0.3：6_000 + (-20_001) × 0.3 ≈ -0.3。
+    const firstE = estimateRequestTokens(other) + 20_001;
+    book.record(answered('t1', 6_000), thread, firstE, 'estimate');
+    book.record(answered('t2', 6_300), thread, firstE + 1_000, 'borrowed');
+    const result = estimateAnchoredTokens(other, book);
+    expect(result.basis).toBe('borrowed');
+    // 前提：值本身是零（`-0 === 0`），差別只在正負號。
+    expect(result.tokens === 0).toBe(true);
+    expect(Object.is(result.tokens, 0)).toBe(true);
+  });
+
   it('回來的不是帶實數的 AI 訊息就不記', () => {
     const book = new TokenAnchorBook();
     const thread = request([new HumanMessage('短')]);

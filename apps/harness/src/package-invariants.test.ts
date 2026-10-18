@@ -92,7 +92,7 @@ export function createSampleInvariantPlugin(): PluginEntry {
  */
 function sampleRoot(
   source: string | null,
-  exportsInvariant: string | null = './src/invariant.ts',
+  exportsInvariant: string | null = './lib/invariant.js',
 ): string {
   const root = mkdtempSync(join(tmpdir(), 'package-invariants-'));
   temporaryRoots.push(root);
@@ -112,7 +112,7 @@ function sampleRoot(
 /** 造臨時 repo、跑規則，回傳訊息。參數同 {@link sampleRoot}。 */
 function violationsFor(
   source: string | null,
-  exportsInvariant: string | null = './src/invariant.ts',
+  exportsInvariant: string | null = './lib/invariant.js',
 ): string[] {
   return collectPackageInvariantViolations(sampleRoot(source, exportsInvariant)).map(
     (violation) => violation.message,

@@ -41,6 +41,8 @@ import type {
   StoredMessageData,
 } from '@langchain/core/messages';
 
+import { snapshotJsonValue } from './session-log.js';
+
 /**
  * 日誌裡的一則訊息。`type` 是 `ai`／`human`／`tool` 這些，`data` 是那一則的欄位。
  *
@@ -74,13 +76,18 @@ export function toLoggedMessage(message: BaseMessage): LoggedMessage {
  * （補 `tool_calls`）——實測對凍過的那一則拋 `Cannot assign to read only property 'tool_calls'`。
  * 讀日誌的人拿到的一律是凍過的，所以這一步不是防禦，是每一次都會走到的路。
  *
+ * **拷法用日誌自己那支迭代快照（{@link snapshotJsonValue}），不用 `structuredClone`**：V8 的 `structuredClone` 是遞迴的，
+ * 物件與陣列交錯兩千層上下就 `RangeError`，而日誌收得下更深的（#1526）。續接時每一則訊息都經過這裡，
+ * 一則推不回來，整條 thread 就建不起來。
+ *
  * @param logged - 日誌裡記的那一則。
  * @returns 同一則訊息。
  */
 export function fromLoggedMessage(logged: LoggedMessage): BaseMessage {
   // LangChain 的 StoredMessageData.content 宣告是 string，但我們落盤的是 string | ContentBlock[]。
   // mapStoredMessagesToChatMessages 預期 StoredMessage，所以轉型回去。
-  const [message] = mapStoredMessagesToChatMessages([structuredClone(logged as StoredMessage)]);
+  const copy = snapshotJsonValue(logged, '日誌訊息') as StoredMessage;
+  const [message] = mapStoredMessagesToChatMessages([copy]);
   return message!;
 }
 

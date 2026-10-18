@@ -3,31 +3,36 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "main": "src/index.ts",
+  "main": "lib/index.js",
+  "bin": {
+    "nexus-serve": "lib/serve.js",
+    "nexus-cli": "lib/cli.js",
+    "nexus-plugin": "lib/plugin-cli.js"
+  },
   "imports": {
-    "#settings/*": "./src/settings/*.ts"
+    "#settings/*": "./lib/settings/*.js"
   },
   "scripts": {
     "build": "tsc --noEmit",
-    "cli": "tsx src/cli.ts",
-    "cli:live": "tsx src/cli.ts --live",
-    "eval:citation": "tsx src/eval/citation/citation-cli.ts",
-    "eval:compare": "tsx src/eval/compare-cli.ts",
-    "eval:sessions": "tsx src/eval/sessions-cli.ts",
-    "eval:survey": "tsx src/eval/survey-cli.ts",
-    "gen-known-event-types": "tsx src/gen-known-event-types.ts",
+    "cli": "tsx --tsconfig ../../tsconfig.runtime.json src/cli.ts",
+    "cli:live": "tsx --tsconfig ../../tsconfig.runtime.json src/cli.ts --live",
+    "eval:citation": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/citation/citation-cli.ts",
+    "eval:compare": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/compare-cli.ts",
+    "eval:sessions": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/sessions-cli.ts",
+    "eval:survey": "tsx --tsconfig ../../tsconfig.runtime.json src/eval/survey-cli.ts",
+    "gen-known-event-types": "tsx --tsconfig ../../tsconfig.runtime.json src/gen-known-event-types.ts",
     "lint": "eslint .",
-    "plugin": "tsx src/plugin-cli.ts",
-    "serve": "tsx src/serve.ts",
-    "serve:live": "tsx src/serve.ts --live",
+    "plugin": "tsx --tsconfig ../../tsconfig.runtime.json src/plugin-cli.ts",
+    "serve": "tsx --tsconfig ../../tsconfig.runtime.json src/serve.ts",
+    "serve:live": "tsx --tsconfig ../../tsconfig.runtime.json src/serve.ts --live",
     "smoke": "vitest run --config vitest.smoke.config.ts",
-    "spike": "tsx src/spike/cli.ts",
-    "spike:live": "tsx src/spike/cli.ts --live",
+    "spike": "tsx --tsconfig ../../tsconfig.runtime.json src/spike/cli.ts",
+    "spike:live": "tsx --tsconfig ../../tsconfig.runtime.json src/spike/cli.ts --live",
     "test": "vitest run",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
-    "verify-package-invariants": "tsx src/verify-package-invariants.ts",
-    "gen-tool-catalog": "tsx src/gen-tool-catalog.ts"
+    "verify-package-invariants": "tsx --tsconfig ../../tsconfig.runtime.json src/verify-package-invariants.ts",
+    "gen-tool-catalog": "tsx --tsconfig ../../tsconfig.runtime.json src/gen-tool-catalog.ts"
   },
   "devDependencies": {
     "@modelcontextprotocol/sdk": "^1.31.0",
@@ -95,5 +100,10 @@
     "semver": "^7.8.5",
     "yaml": "^2.9.0",
     "zod": "^4.3.6"
-  }
+  },
+  "files": [
+    "lib",
+    "cordis.yml",
+    "cordis.serve.yml"
+  ]
 }
