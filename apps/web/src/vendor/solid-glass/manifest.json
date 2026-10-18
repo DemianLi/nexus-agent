@@ -182,6 +182,23 @@
         "patches/0015-sidebar-mobile-width.patch"
       ],
       "upstreamSha256": "45d425d44b65638d390e9d13b868790bf7f948cf35a5b127c00b3e7a009ccdd1"
+    },
+    "components/ui/tool-steps.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/tool-steps.tsx",
+      "sha256": "60818b617d8d36884ffb89500da9426ae7f2ca9610a8f9c20b16ef78342e6a25",
+      "patches": [
+        "patches/0016-tool-steps-strict-index.patch",
+        "patches/0017-tool-steps-controlled-open.patch",
+        "patches/0018-tool-steps-slots.patch",
+        "patches/0019-tool-steps-output-focus.patch"
+      ],
+      "upstreamSha256": "65d161ca73c2c6ace8782302db0557ef4c101e39c78513f9de3dd00bb986f7bb"
+    },
+    "components/ui/diff-view.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/diff-view.tsx",
+      "sha256": "f2661b83cbd3e3994ae865c3de399ebe8fe136c9d6e5dadd9d44d200438ae00c"
     }
   }
 }
