@@ -106,6 +106,7 @@ import {
   TURN_NOT_FOUND,
   SUBAGENT_SEND_METHOD,
   THREAD_AT_CAPACITY,
+  THREAD_IS_SUBAGENT,
   isSlashMethod,
   isWireChannel,
   SessionReferenceError,
@@ -372,6 +373,12 @@ export interface WireHandlerOptions {
    * **儲存體讀不動要拋，不要回 `false`**：壞掉的磁碟不是「沒有這條」。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
    */
   storedThreadKnown?(threadId: string): Promise<boolean>;
+  /**
+   * 這個 id 是不是落盤的**子代理會話**（header 帶 `parentSession`，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）。
+   * 只給 `run.cancel` 用——它不經 {@link createAgent}，所以閘不到那裡；實作是 `serve.ts` 冷讀 header（`open(id, 'read')`，不拿租約），
+   * 沒有日誌回 `false`。省略＝沒有落盤，沒有子代理會話可言。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
+   */
+  isSubagentSession?(threadId: string): Promise<boolean>;
   /**
    * 讀一個背景子代理自己的落盤日誌（唯讀冷讀，[#871](https://github.com/DemianLi/nexus-agent/issues/871)）：`undefined`＝
    * 沒有這一份。**實作要自己確認它屬於 `threadId`**（header 的 `parentSession`），不然別條 thread 的編號讀得到。缺席＝沒開落盤，
@@ -1174,6 +1181,24 @@ export class ThreadCapacityError extends Error {
   }
 }
 
+/**
+ * 這個 id 是子代理的會話，不能當一條 thread 開（[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）。
+ *
+ * 由 serve 的 `createAgent` 在**碰日誌之前**拋（冷讀 header 看到 `parentSession`），只有 `threadOrError` 接，回
+ * `thread_is_subagent`。message 寫明原因與下一步：要對子代理說話，從它的主對話用 `subagent.send`。
+ */
+export class SubagentSessionError extends Error {
+  constructor(
+    /** 被當成 thread 送來的會話 id。 */
+    readonly threadId: string,
+  ) {
+    super(
+      `"${threadId}" 是子代理的會話，不能當一條 thread 開；要對它說話，請從它的主對話用 subagent.send。`,
+    );
+    this.name = 'SubagentSessionError';
+  }
+}
+
 export function createWireHandler(options: WireHandlerOptions): IdleSweepingWireHandler {
   /**
    * 這台 server 的交付上限，**一個 server 解一次**。
@@ -1597,7 +1622,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 那個請求一個位元組都不回、client 永遠卡著，而那顆 rejection 沒有人處理。它屬於協定層：
    * 請求本身沒有錯，是這條 thread 起不來（壞掉的日誌、別的行程握著、目錄對不上……）。
    * 協定的錯誤碼裡沒有「thread 起不來」，最近的是 `unknown_error`——原因寫在 message 裡。
-   * **例外是滿了**（{@link ThreadCapacityError}，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）：那不是壞了，回 `thread_at_capacity`。
+   * **例外是滿了**（{@link ThreadCapacityError}，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）：那不是壞了，回 `thread_at_capacity`；
+   * 還有**這個 id 是子代理的會話**（{@link SubagentSessionError}，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）：回 `thread_is_subagent`。
    *
    * @param threadId - 哪一條。
    * @param id - 回給哪一顆上行封包；下行那條沒有，是 `null`。
@@ -1613,6 +1639,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // 滿了不是「壞了」：專用碼、不加「建不起來」的前綴，message 自己講上限與下一步（#1476）。
       if (error instanceof ThreadCapacityError) {
         return json(errorResponse(id, THREAD_AT_CAPACITY, error.message));
+      }
+      // 子代理的會話不是 thread（#1544）：專用碼、不加「建不起來」的前綴，重試沒用。
+      if (error instanceof SubagentSessionError) {
+        return json(errorResponse(id, THREAD_IS_SUBAGENT, error.message));
       }
       const reason = error instanceof Error ? error.message : String(error);
       return json(errorResponse(id, 'unknown_error', `這條 thread 建不起來：${reason}`));
@@ -1958,6 +1988,17 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // **不經 `threadFor`**：那會替一條沒人開過的 thread 建一個 agent（連 MCP 子行程），
       // 只為了中止一件不存在的事。沒建過的就是閒著，照「閒著時中止什麼都不做」回受理。
       const existing = threads.get(threadId);
+      // 子代理的會話不是 thread（#1544，照 dsh `session-controller/src/commands.ts:506-507`：對子代理會話的 cancel 丟 ownership 錯誤）。
+      // 記憶體裡沒有它才需要問（子代理的會話永遠進不了 `threads`）；冷讀失敗當「不是」——中止是盡力而為，這條路本來就沒有東西在跑。
+      if (existing === undefined && (await asSubagentSession(threadId))) {
+        return json(
+          errorResponse(
+            envelope.id,
+            THREAD_IS_SUBAGENT,
+            new SubagentSessionError(threadId).message,
+          ),
+        );
+      }
       if (existing !== undefined) {
         // 建到一半的等它建好再中止；建不起來的就沒有東西可停。
         const thread = await existing.catch(() => undefined);
@@ -2504,6 +2545,22 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       );
     }
     return json(successResponse(id, { accepted: true }));
+  }
+
+  /**
+   * {@link WireHandlerOptions.isSubagentSession} 的包裝：沒給當「不是」；冷讀拋了也當「不是」，**但記一行 warn**——
+   * 這條路徑是 `run.cancel` 的閘，讀不了就放行等於閘沒擋住，管理者得知道。放行是因為取消本來就是無害的請求
+   * （對不存在的 id 也回受理），讀不了 header 不該連帶讓正常的取消失敗。
+   */
+  async function asSubagentSession(threadId: string): Promise<boolean> {
+    try {
+      return (await options.isSubagentSession?.(threadId)) ?? false;
+    } catch (error: unknown) {
+      options.warn?.(
+        `run.cancel 查不了 "${threadId}" 是不是子代理會話（${error instanceof Error ? error.message : String(error)}），當作不是、照常處理`,
+      );
+      return false;
+    }
   }
 
   /** 這條會話存不存在：這個行程裡開過的，或落盤的。落盤那一半見 {@link WireHandlerOptions.storedThreadKnown}。 */

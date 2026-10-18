@@ -647,6 +647,7 @@ dsh 是在 `turn/end` 抵達的當下收回（`goal-round-driver/src/index.ts:35
   主對話的輪數大約是「派出去那一輪 ＋ 每個子代理各一輪」。
 - **模型可能在子代理做完之前就先答了使用者**，之後才被結算通知叫醒補上結論。畫面上這一輪不是使用者說的話，不畫成使用者的泡泡。
 - **每個背景子代理有自己的會話日誌**，路徑是 `<主對話會話>/<編號>`；關閉一條 thread 時會等它進行中的背景輪收完。
+- **子代理的會話不是一條 thread**（#1544）：把 `<主對話>/<編號>` 當 thread id 開（下行、`run.start` 等任何會組出 thread 的路，以及 `run.cancel`——照 dsh，對子代理會話的取消也拒絕）會回專屬碼 `thread_is_subagent`，message 說明「這是子代理的會話，要對它說話請從主對話用 `subagent.send`」，不是暫時失敗、重試沒用。serve 在碰日誌之前就拒絕（只冷讀 header、不拿寫租約、不補結），子代理的日誌一個位元組都不動。判準是 header 帶 `parentSession`，與 `GET /threads` 不列子代理是同一份（`isSubagentSessionHeader`）。
 - **重啟 serve 之後，做完的背景子代理還叫得醒**（#1271，缺口源自 #737，照 dsh 的 continuable）。身分（哪一種子代理、哪顆模型與推理等級）記在子代理自己日誌的第一輪之前，
   `subagent/descriptor`（日誌格式 44）；重啟後載體讀主對話日誌上的 `subagent/catalog` 認得它們，現況裡列為 `idle`，**列出不復活任何一個**。
   只有往它送話（畫面上的 `subagent.send`、模型的 `send_message`）才接回來：拿寫入租約、補上當掉那一輪的收尾、按日誌上的身分編圖、把對話從日誌**重播**灌回圖，
