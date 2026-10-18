@@ -103,7 +103,6 @@
   },
   "files": [
     "lib",
-    "cordis.yml",
     "cordis.serve.yml"
   ]
 }
