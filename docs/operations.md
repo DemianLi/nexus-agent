@@ -438,6 +438,97 @@ export HTTP_PROXY=http://127.0.0.1:7890
 
 驗證：`--live` 送一則訊息，同時看代理軟體的連線紀錄；沒看到請求時，用 `env | grep -i proxy` 確認變數真的在啟動這個行程的環境裡。
 
+## 用 systemd 常駐
+
+[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5。對象是 Release 打出來的 `nexus-agent-<版本>-linux-x64.tar.gz`（解開即用，目標機不用裝 pnpm、不用連 registry），
+Node 要 22.19 以上。
+
+```bash
+sudo useradd --system --home-dir /var/lib/nexus-agent --shell /usr/sbin/nologin nexus-agent
+sudo install -d -m 0700 -o nexus-agent -g nexus-agent /var/lib/nexus-agent
+sudo -u nexus-agent sh -c 'umask 077 && cat > /var/lib/nexus-agent/.credentials.yaml' <<'KEY'
+version: 1
+refs:
+  NVIDIA_API_KEY: nvapi-...
+KEY
+sudo mkdir -p /opt/nexus-agent /srv/nexus-agent/workspace
+sudo tar -xzf nexus-agent-<版本>-linux-x64.tar.gz -C /opt/nexus-agent
+sudo ln -sfn /opt/nexus-agent/nexus-agent-<版本>-linux-x64 /opt/nexus-agent/current
+sudo chown nexus-agent:nexus-agent /srv/nexus-agent/workspace
+# 單元檔：把下面那段存成 /etc/systemd/system/nexus-agent.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now nexus-agent
+```
+
+<!-- systemd-unit:begin（apps/harness/src/systemd-unit.test.ts 讀這一段，改了要一起過） -->
+```ini
+[Unit]
+Description=nexus-agent serve
+Documentation=https://github.com/DemianLi/nexus-agent/blob/develop/docs/operations.md
+After=network-online.target
+Wants=network-online.target
+# 起不來（例如 home 鎖被別的行程占著）時不要無限重啟：60 秒內 5 次就停手。
+StartLimitIntervalSec=60
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=nexus-agent
+Group=nexus-agent
+
+# harness home：會話日誌、瀏覽器會話密鑰、受管憑證檔都在這裡。systemd 替這個使用者建出 /var/lib/nexus-agent。
+# 它必須在 --workspace 之外（見〈serve：key 與 home 不能跟工作區重疊〉）。
+StateDirectory=nexus-agent
+StateDirectoryMode=0700
+Environment=NEXUS_AGENT_HOME=/var/lib/nexus-agent
+WorkingDirectory=/var/lib/nexus-agent
+
+# 直接 exec node，不經 pnpm：pnpm 會把 SIGTERM 吃掉，serve 收不到停止要求（#1464）。
+# systemd 要求絕對路徑；node 不在 /usr/bin 就改成 which node 印出來的那個。
+ExecStart=/usr/bin/node /opt/nexus-agent/current/lib/serve.js --live --workspace /srv/nexus-agent/workspace --port 8787
+
+# SIGTERM 是 serve 的一般停止要求（退出碼 0）。serve 自己的收尾上限是 5 秒，到了就自己結束，
+# 所以這裡留 10 秒：serve 先自己收完，systemd 的 SIGKILL 只是最後一道。
+KillSignal=SIGTERM
+TimeoutStopSec=10
+
+# 只在失敗時重啟：systemctl stop 與 SIGTERM 的退出碼 0 不會被拉起來，致命例外（退出碼 1）會。
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+<!-- systemd-unit:end -->
+
+- **`TimeoutStopSec` 要大於 serve 的收尾上限。** 收尾上限是 `apps/harness/src/process-shutdown.ts` 的 `PROCESS_SHUTDOWN_TIMEOUT_MS`（5 秒，
+  [#599](https://github.com/DemianLi/nexus-agent/issues/599)／[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)）：`SIGTERM` 之後 serve 最多等 5 秒收完每條 thread，
+  到了就強制結束、退出碼仍是 0。`apps/harness/src/systemd-unit.test.ts` 讀這一段，`TimeoutStopSec` 不大於那個常數就紅。
+  這兩個數字改其中一個，另一個要跟著改。
+- **`ExecStart` 指的是 `current` 這個符號連結。** 升級就是解開新版、`ln -sfn` 換掉 `current`、`systemctl restart nexus-agent`；
+  回退就是把 `current` 指回舊版。連結換掉之前跑著的行程不受影響。
+- **`--live` 要有 key，而且要在第一次 `enable --now` 之前就位。** 上面第三步放進 home 的受管憑證檔最合適（`chmod 600`，擁有者是 `nexus-agent`；
+  見〈金鑰放哪裡〉），它的值不進行程的環境變數。單元檔不要寫 `Environment=NVIDIA_API_KEY=…`：`systemctl show` 讀得到，子行程也繼承得到。
+  沒有 key 的話 serve 印「缺少環境變數 NVIDIA_API_KEY」就以 1 結束，`Restart=on-failure` 每 5 秒拉一次，滿 `StartLimitBurst` 後單元進 `failed`；
+  補上 key 之後 `sudo systemctl reset-failed nexus-agent && sudo systemctl start nexus-agent`。
+  代理設定寫在 `/var/lib/nexus-agent/.env`（見〈經代理連外〉）。因為 `WorkingDirectory` 就是 home，兩份 `.env` 是同一份，不會讀兩次。
+- **只監聽 `127.0.0.1`。** `serve` 沒有綁其他位址的旗標；要讓別台機器連進來，前面放反向代理（本專案不附設定）。
+- **啟動印的網址帶登入 token，會進 journal。** 讀得到 journal 的人（`systemd-journal`、`adm` 群組、root）就拿得到：
+  `journalctl -u nexus-agent -n 20` 找「nexus-agent 在 http://…」那一行。token 每次重啟都換新。
+- **一個 home 只能起一個 serve**（`<home>/serve.lock`，[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)）：
+  第二個單元共用同一個 `NEXUS_AGENT_HOME` 會起不來，被 `StartLimitBurst` 擋下；要兩套就各給一個 home 與 port。
+- **刻意沒加的**：`ProtectSystem=`、`PrivateTmp=` 這類 systemd 沙箱指令。agent 的檔案圍堵由 `serve --sandbox` 做（見〈檔案圍堵〉），
+  疊上 systemd 的沙箱會改變 git 快照、MCP server 看得到的路徑，要加請在你的機器上實測過再加。
+
+驗證：
+
+```bash
+systemd-analyze verify /etc/systemd/system/nexus-agent.service   # 語法與路徑
+systemctl status nexus-agent                                     # active (running)
+journalctl -u nexus-agent -n 20                                  # 找到「nexus-agent 在 http://…」
+sudo systemctl stop nexus-agent; systemctl status nexus-agent    # inactive (dead)，Main PID 的 status=0/SUCCESS
+```
+
 ## 執行上限
 
 **agent 迴圈的上限是組裝點設的不是基座設的。** `createDeepAgent` 自己把 `recursionLimit` 設成 `1e4`
