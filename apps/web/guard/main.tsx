@@ -37,17 +37,31 @@
  * - `?overlay=composer-<狀態>` 畫產品的輸入框（SG 的 `Composer`，#1591 驗收 D）：`idle`（閒著）、`draft`（有草稿）、`running`（跑著）、
  *   `running-draft`（跑著有草稿）、`menu`（`/` 選單開著）；底列的 `danger`、`locked`、`pick-open`、`tones`、`dormant` 見
  *   `ComposerPage`。輸入框貼在頁面底部，寬度跟產品一樣（左右各 16px、最寬 48rem）。
+ * - `?overlay=collapsibles` 畫產品裡展開收合的元件（#1638 PR A），都關著：思考過程、摘要列、工具卡、待辦、提問面板。量展開途中的高度、
+ *   reduced-motion 直接到位、箭頭轉向、思考過程展開後藏摘要（這幾件都靠真的 CSS 命中 Base UI 的屬性，jsdom 量不到）。
  */
-import type { WireContextPressure } from '@nexus/wire';
+import type {
+  CompactionEntry,
+  PendingQuestion,
+  ToolEntry,
+  WireContextPressure,
+  WireTodoItem,
+} from '@nexus/wire';
 import { Check, MoreHorizontal } from 'lucide-react';
-import { StrictMode, useEffect, useState } from 'react';
+import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
 import { Counts } from '@/components/changes/counts';
+import { CompactionRow } from '@/components/compaction-row';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
+import { PendingSwap } from '@/components/pending-swap';
+import { QuestionPanel } from '@/components/question-panel';
+import { ReasoningRow } from '@/components/reasoning-row';
 import { RetryNotice } from '@/components/retry-notice';
 import { Surface } from '@/components/surface';
+import { TodoPanel } from '@/components/todo/panel';
+import { ToolCard } from '@/components/tool/card';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -397,6 +411,72 @@ function OpenMobileSidebar() {
   return null;
 }
 
+const REASONING = '先讀需求。\n\n使用者要一張表，列出三個方案的成本與風險，再給建議。';
+const COMPACTION: CompactionEntry = {
+  kind: 'compaction',
+  id: 'compaction:1',
+  seq: 1,
+  cutoff: 4,
+  saved: true,
+  summary: '前面談的是三個方案的成本估算與交付時程。',
+};
+const TOOL: ToolEntry = {
+  kind: 'tool',
+  id: 'tool-1',
+  callId: 'call-1',
+  name: 'read_file',
+  input: '{"file_path":"docs/plan.md"}',
+  text: '# 計畫\n\n三個方案的成本與風險。',
+  status: 'done',
+  attribution: { kind: 'root' },
+};
+const TODOS: readonly WireTodoItem[] = [
+  { content: '讀需求', status: 'completed' },
+  { content: '估算成本', status: 'in_progress' },
+  { content: '寫建議', status: 'pending' },
+];
+const QUESTION: PendingQuestion = {
+  kind: 'question',
+  interruptId: 'q-1',
+  namespace: [],
+  questions: [
+    { id: 'day', question: '哪一天？', options: [{ label: '週一' }, { label: '週二' }] },
+    { id: 'name', question: '訪客姓名？' },
+  ],
+};
+
+/** 展開收合的元件（#1638 PR A）：思考過程、摘要列、工具卡（Root 用 `render` 接 `Surface`）、待辦、提問面板（內容保持掛載）。都是關著畫出來的。 */
+function CollapsiblesPage() {
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+  return (
+    <div
+      style={{
+        maxWidth: '48rem',
+        margin: '0 auto',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      }}
+    >
+      <ReasoningRow text={REASONING} running={false} />
+      <CompactionRow entry={COMPACTION} />
+      <ToolCard entry={TOOL} beam={false} />
+      <TodoPanel todos={TODOS} status="idle" />
+      <PendingSwap
+        pendings={[QUESTION]}
+        composerRef={composerRef}
+        composer={<textarea ref={composerRef} aria-label="要說的話" />}
+        renderPanel={(pending) =>
+          pending.kind === 'question' && (
+            <QuestionPanel pending={pending} busy={false} onAnswer={() => {}} />
+          )
+        }
+      />
+    </div>
+  );
+}
+
 function OverlayPage({ name }: { name: string }) {
   switch (name) {
     case 'dialog':
@@ -514,6 +594,8 @@ function OverlayPage({ name }: { name: string }) {
       return <KeyboardMenu />;
     case 'command':
       return <OpenCommand />;
+    case 'collapsibles':
+      return <CollapsiblesPage />;
     case 'composer-idle':
     case 'composer-draft':
     case 'composer-running':

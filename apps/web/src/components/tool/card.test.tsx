@@ -146,7 +146,8 @@ describe('對話流裡的工具卡', () => {
     };
     const view = render(<ToolCard entry={tool({ ...ask, status: 'suspended' })} beam={false} />);
     const card = screen.getByTestId('tool-entry');
-    expect(card.getAttribute('data-state')).toBe('closed');
+    // Base UI 的 Root 掛 `data-open`／`data-closed`（#1638）；卡片是 Root 用 `render` 接的 `Surface`。
+    expect(card.hasAttribute('data-closed')).toBe(true);
     view.rerender(
       <ToolCard
         entry={tool({
@@ -158,7 +159,7 @@ describe('對話流裡的工具卡', () => {
         beam={false}
       />,
     );
-    expect(card.getAttribute('data-state')).toBe('open');
+    expect(card.hasAttribute('data-open')).toBe(true);
     expect(within(card).getByText('哪一天？')).toBeTruthy();
     expect(within(card).getAllByText('已停止，請直接打字回覆').length).toBeGreaterThan(0);
   });
