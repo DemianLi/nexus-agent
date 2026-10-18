@@ -24,6 +24,17 @@
  * 另一句，同一條政策在模型眼裡就有兩套詞彙，測試也得斷言兩個字串。dsh 讓所有拒絕共用一個
  * `FS_SANDBOX_DENIED` 正是這個理由。
  *
+ * ## `write` 與 `edit` 是暫存檔加 `rename` 的原子取代（[#1531](https://github.com/DemianLi/nexus-agent/issues/1531)）
+ *
+ * 基座的兩條寫入路都是 `O_TRUNC` 就地覆寫：寫到一半被 `kill -9`、斷電、磁碟寫滿，使用者打開的是截斷的檔；平行的 `edit`
+ * 後寫蓋掉先寫；工作區裡指向根外的硬連結被寫穿。所以這兩個方法**過完 fence 就自己做完**（`super.write`／`super.edit`
+ * 會 `O_TRUNC`，不能前後包一層）：同目錄 `0700` 暫存目錄、`wx` `0600` 暫存檔、`sync`、補回原檔 mode、`rename`；
+ * 整段（`edit` 連讀與替換）在以 canonical 路徑為鍵的**行程層級**逐目標鎖裡。實作與 dsh 出處、偏離 1（不做
+ * `createIfAbsent` 的 hard link 發佈，理由 1）與偏離 2（不做 Windows，理由 2）見 `atomic-workspace-write.ts`。
+ * 路徑仍走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根）：`danger-full-access` 下 `verdict` 不檢查，那是唯一一道。
+ * 結果形狀與錯誤字句照基座，`edit` 的字串替換逐字照抄 `performStringReplacement`；唯一不同的一句是寫到目錄上，
+ * 基座是 `EISDIR` 的開檔錯誤，這裡是 `not a regular file`（卡上第 2 步的字句）。
+ *
  * 第四個是 **`uploadFiles`**——`BackendProtocolV2` 上另一個會改檔案的方法，覆蓋面漏掉它
  * 就有一條繞得過 fence 的路（PR #62 的 review 實測，經 symlink 寫穿到根外）。
  *
@@ -44,16 +55,16 @@
  *
  * **我們的 TOCTOU 窗口比 dsh 寬一點，這件事要說明白。** dsh 的 `checkedTarget()` 回傳
  * 那個新鮮的 canonical target，變更就用**它**去寫，所以檢查的與寫入的是同一個身分。我們
- * 做不到同一件事：`super.write()` 收的是**虛擬路徑**，它自己會再 `resolvePath()` 一次，
+ * 做不到同一件事（`delete`／`uploadFiles` 仍如此；`write`／`edit` 自己做完之後改走 `resolvePath`，見上）：`super.write()` 收的是**虛擬路徑**，它自己會再 `resolvePath()` 一次，
  * 傳一個 realpath 進去只會被當成虛擬路徑接到 `cwd` 底下。所以這裡回傳的是「canonical 之後
  * 再表達回去的虛擬路徑」——祖先的 symlink 已經被解掉，但基座那一次 lexical resolve 仍在
  * 我們的檢查之後發生。
  */
 
 import { createHash } from 'node:crypto';
-import { relative, resolve, sep } from 'node:path';
+import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
-import { open, realpath } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
 import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
 import type {
   DeleteResult,
@@ -66,6 +77,8 @@ import type {
 import micromatch from 'micromatch';
 
 import { noteSandboxDenial } from '@nexus/core';
+import { writeFileAtomic, withTargetLock } from './atomic-workspace-write.js';
+import type { AtomicWriteInternals } from './atomic-workspace-write.js';
 import { notTextReason, refuseNonText } from './binary-read.js';
 import { canonicalize } from './canonical-path.js';
 import type {
@@ -211,6 +224,48 @@ function sameDenial(bound: SandboxDenial | undefined, call: SandboxDenial): bool
   return bound !== undefined && bound.target === call.target && bound.digest === call.digest;
 }
 
+/**
+ * 基座 `getMimeType`／`isTextMimeType`（`deepagents` 沒有匯出）判成非文字的副檔名：圖、音、影、pdf、ppt。
+ * 基座的 `write` 對這些把內容當 base64 解碼成位元組再寫（附件與摘要器走的就是這條），所以這裡要一樣。
+ * 升版時的對照：`contained-backend.test.ts` 對著裸的 `FilesystemBackend` 逐個副檔名比寫出來的位元組。
+ */
+const NON_TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.heif',
+  '.mp3', '.wav', '.aiff', '.aac', '.ogg', '.flac',
+  '.mp4', '.webm', '.mpeg', '.mov', '.avi', '.flv', '.mpg', '.wmv', '.3gpp',
+  '.pdf', '.ppt', '.pptx',
+]); // prettier-ignore
+
+/**
+ * 基座錯誤字句開頭的那個字。拆成常數是因為 `tool-error-prefix.test.ts` 釘住「字串裡寫 `Error: ` 的只有前綴的定義」；
+ * 這裡要的是基座的字句逐字不變（不是 `TOOL_ERROR_PREFIX`），寫法同 `fs-tool-errors.ts` 的 `BASE_ERROR_WORD`。
+ */
+const BASE_ERROR_WORD = 'Error';
+
+/**
+ * 字串替換，**逐字照抄基座的 `performStringReplacement`**（`deepagents` 沒有匯出）：錯誤字句一字不改，
+ * 模型看到的拒絕理由不因為這個 backend 自己寫檔而換了一套話。`contained-backend.test.ts` 對著裸的
+ * `FilesystemBackend` 釘住字句。
+ *
+ * @returns `[新內容, 取代次數]`，或錯誤字串。
+ */
+function performStringReplacement(
+  content: string,
+  oldString: string,
+  newString: string,
+  replaceAll: boolean,
+): [string, number] | string {
+  if (content === '' && oldString === '') return [newString, 0];
+  if (oldString === '')
+    return `${BASE_ERROR_WORD}: oldString cannot be empty when file has content`;
+  const occurrences = content.split(oldString).length - 1;
+  if (occurrences === 0) return `${BASE_ERROR_WORD}: String not found in file: '${oldString}'`;
+  if (occurrences > 1 && !replaceAll) {
+    return `${BASE_ERROR_WORD}: String '${oldString}' has multiple occurrences (appears ${String(occurrences)} times) in file. Use replace_all=True to replace all instances, or provide a more specific string with surrounding context.`;
+  }
+  return [content.split(oldString).join(newString), occurrences];
+}
+
 export interface ContainedFilesystemBackendOptions {
   /** 可寫根。所有虛擬路徑都以它為基準，變更不得 canonicalize 到它之外。 */
   readonly rootDir: string;
@@ -229,6 +284,8 @@ export interface ContainedFilesystemBackendOptions {
    * **省略就是沒有升級**：被擋就是被擋，拒絕後面不接指引。
    */
   readonly grants?: SandboxGrantLedger;
+  /** 原子寫入的測試接縫（暫存名、檢查點、注入失敗），見 {@link AtomicWriteInternals}。正式組裝不給。 */
+  readonly atomicInternals?: AtomicWriteInternals;
 }
 
 /**
@@ -244,6 +301,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /** 升級的 grant 從哪裡認領；`undefined` 就是這道 fence 沒有升級。 */
   private readonly grants: SandboxGrantLedger | undefined;
+
+  /** 原子寫入的測試接縫；正式組裝是 `undefined`。 */
+  private readonly atomicInternals: AtomicWriteInternals | undefined;
 
   /**
    * 這一刻的圍堵強度，錯誤訊息會指名它。
@@ -264,6 +324,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     const mode = options.mode ?? 'workspace-write';
     this.resolveMode = typeof mode === 'function' ? mode : (): SandboxMode => mode;
     this.grants = options.grants;
+    this.atomicInternals = options.atomicInternals;
   }
 
   /**
@@ -309,23 +370,69 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 寫檔，先過 fence。
-   * @param filePath - 虛擬路徑。
-   * @param content - 檔案內容。
-   * @returns 基座的寫入結果，或被 fence 擋下時的錯誤結果。
+   * 基座 `resolvePath` 的字面檢查（拒 `..`、`~`、跑出根）。它在 TS 上是 private，以型別斷言呼叫。
+   *
+   * **不要改成自己 `resolve(this.cwd, …)`**：`danger-full-access` 下 `verdict` 不檢查、原樣回傳路徑，
+   * 今天擋住 `..`、`~` 與跑出根的只剩這一道。
    */
-  override async write(filePath: string, content: string): Promise<WriteResult> {
-    const checked = await this.checkedPath(filePath, 'write', [content]);
-    return typeof checked === 'string' ? super.write(checked, content) : denied(checked);
+  private resolveVirtual(virtualPath: string): string {
+    return (this as unknown as { resolvePath(key: string): string }).resolvePath(virtualPath);
   }
 
   /**
-   * 編輯檔案，先過 fence。
+   * 寫檔，先過 fence，**再經暫存檔加 `rename` 原子取代**（[#1531](https://github.com/DemianLi/nexus-agent/issues/1531)）。
+   *
+   * 基座的 `write` 是 `O_TRUNC` 就地覆寫，所以不能前後包一層，這裡自己做完：結果形狀與錯誤字句照基座
+   * （成功 `{ path, filesUpdate: null }`，失敗 `{ error: "Error writing file '…': …" }`，symlink 的原句）。
+   * 非文字副檔名的內容照基座當 base64 解碼。整段在逐目標的鎖裡。
+   *
+   * @param filePath - 虛擬路徑。
+   * @param content - 檔案內容。
+   * @returns 寫入結果，或被 fence 擋下時的錯誤結果。
+   */
+  override async write(filePath: string, content: string): Promise<WriteResult> {
+    const checked = await this.checkedPath(filePath, 'write', [content]);
+    if (typeof checked !== 'string') return denied(checked);
+    try {
+      const resolved = this.resolveVirtual(checked);
+      return await withTargetLock(await canonicalize(resolved), async () => {
+        const existing = await lstat(resolved).catch(() => undefined);
+        if (existing?.isSymbolicLink() === true) {
+          return {
+            error: `Cannot write to ${checked} because it is a symlink. Symlinks are not allowed.`,
+          };
+        }
+        if (existing !== undefined && !existing.isFile()) {
+          return { error: `Error writing file '${checked}': not a regular file` };
+        }
+        const data = NON_TEXT_EXTENSIONS.has(extname(checked).toLowerCase())
+          ? Buffer.from(content, 'base64')
+          : content;
+        await mkdir(dirname(resolved), { recursive: true });
+        await writeFileAtomic(
+          resolved,
+          data,
+          existing === undefined ? undefined : existing.mode & 0o777,
+          this.atomicInternals,
+        );
+        return { path: checked, filesUpdate: null };
+      });
+    } catch (error: unknown) {
+      return { error: `Error writing file '${checked}': ${(error as Error).message}` };
+    }
+  }
+
+  /**
+   * 編輯檔案，先過 fence，**自己讀、自己替換、經暫存檔加 `rename` 寫回**（[#1531](https://github.com/DemianLi/nexus-agent/issues/1531)）。
+   *
+   * 讀照基座（`stat` 判一般檔、`O_NOFOLLOW` 開、UTF-8），替換用逐字照抄的 {@link performStringReplacement}，
+   * 保留既有 mode。讀、替換、寫整段在逐目標的鎖裡，同一步的兩個平行 `edit` 不會丟修改。
+   *
    * @param filePath - 虛擬路徑。
    * @param oldString - 要被換掉的字串。
    * @param newString - 換上去的字串。
    * @param replaceAll - 是否全部取代。
-   * @returns 基座的編輯結果，或被 fence 擋下時的錯誤結果。
+   * @returns 編輯結果，或被 fence 擋下時的錯誤結果。
    */
   override async edit(
     filePath: string,
@@ -338,9 +445,31 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       newString,
       replaceAll === true,
     ]);
-    return typeof checked === 'string'
-      ? super.edit(checked, oldString, newString, replaceAll)
-      : denied(checked);
+    if (typeof checked !== 'string') return denied(checked);
+    try {
+      const resolved = this.resolveVirtual(checked);
+      return await withTargetLock(await canonicalize(resolved), async () => {
+        if (!(await stat(resolved)).isFile())
+          return { error: `${BASE_ERROR_WORD}: File '${checked}' not found` };
+        let content: string;
+        let mode: number;
+        const handle = await open(resolved, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          content = await handle.readFile({ encoding: 'utf-8' });
+          mode = (await handle.stat()).mode & 0o777;
+        } finally {
+          await handle.close();
+        }
+        const result = performStringReplacement(content, oldString, newString, replaceAll === true);
+        if (typeof result === 'string') return { error: result };
+        const [newContent, occurrences] = result;
+        await this.atomicInternals?.afterEditRead?.(resolved);
+        await writeFileAtomic(resolved, newContent, mode, this.atomicInternals);
+        return { path: checked, filesUpdate: null, occurrences };
+      });
+    } catch (error: unknown) {
+      return { error: `Error editing file '${checked}': ${(error as Error).message}` };
+    }
   }
 
   /**
