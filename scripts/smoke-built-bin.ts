@@ -13,7 +13,15 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, symlinkSync, mkdirSync } from 'node:fs';
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  mkdirSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -65,6 +73,21 @@ try {
   }
 } finally {
   rmSync(scratch, { recursive: true, force: true });
+}
+
+// 建置戳記只能出現在打包出來的產物（#1502 PM 判 A 的條件）：原始碼樹 build:lib 之後找不到戳記，
+// `resolveBuildVersion` 回的仍是 git HEAD。戳記由刀 2 的 pack 寫，這裡只擋「build 順手寫了一個」。
+const stamp = join(HARNESS, 'build-stamp.json');
+if (existsSync(stamp))
+  failures.push(`build:lib 之後原始碼樹裡出現了 ${stamp}：戳記只能由打包寫進產物`);
+const stray = readdirSync(join(HARNESS, 'lib')).filter((name) => name.includes('build-stamp'));
+if (stray.length > 0) failures.push(`apps/harness/lib 裡有戳記檔：${stray.join('、')}`);
+const { resolveBuildVersion } = (await import('../apps/harness/src/build-version.ts')) as {
+  resolveBuildVersion: () => { commit: string | null };
+};
+const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).trim();
+if (resolveBuildVersion().commit !== head) {
+  failures.push(`原始碼樹 build:lib 之後 resolveBuildVersion 回的不是 git HEAD（${head}）`);
 }
 
 if (failures.length > 0) {

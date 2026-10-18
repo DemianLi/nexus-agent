@@ -10,6 +10,8 @@ build/
 /apps/harness/lib/
 /packages/*/lib/
 /vendor/*/lib/
+# 打包時寫進產物的建置戳記（#1502 刀 2 寫、build-version.ts 讀）：只存在於產物，原始碼樹不該有，更不該被提交。
+/apps/harness/build-stamp.json
 .next/
 .turbo/
 *.tsbuildinfo

@@ -1,3 +1,4 @@
+import { execFileSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -54,6 +55,14 @@ describe('readBuildStamp', () => {
     ['commit 不是字串', stampFile(JSON.stringify({ commit: 7 }))],
   ])('%s：回 undefined，不拋', (_name, path) => {
     expect(readBuildStamp(path ?? join(tmpdir(), 'no-such-build-stamp.json'))).toBeUndefined();
+  });
+});
+
+describe('原始碼樹沒有戳記（戳記只在打包產物裡）', () => {
+  it('預設路徑讀不到，resolveBuildVersion 回的是 git HEAD', () => {
+    expect(readBuildStamp()).toBeUndefined();
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim();
+    expect(resolveBuildVersion().commit).toBe(head);
   });
 });
 
