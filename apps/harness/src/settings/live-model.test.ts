@@ -45,6 +45,7 @@ import { loadDefaultPlugins } from '../plugin-config.js';
 import { runServe } from '../serve.js';
 import type { RunningServe } from '../serve.js';
 import {
+  DEFAULT_MAX_REQUEST_WAIT_MS,
   liveModelConfigForModel,
   liveModelConfigSchema,
   liveModelPlugin,
@@ -74,6 +75,7 @@ const OVERRIDE: Omit<LiveModelConfig, 'baseUrl'> = {
   models: [OVERRIDE_ENTRY],
   timeoutMs: 4321,
   streamIdleTimeoutMs: 8765,
+  maxWaitMs: 60_000,
   retryPolicy: {
     mode: 'normal',
     maxRetries: 4,
@@ -111,7 +113,25 @@ describe('live-model 的 schema', () => {
         retryableCodes: ['EMPTY_RESPONSE', 'RATE_LIMIT', 'SERVER', 'TIMEOUT', 'TRANSPORT'],
         backoff: { initialDelayMs: 500, maxDelayMs: 10_000, jitterRatio: 0.1 },
       },
+      // #1505：預設不限（沒有 `maxConcurrentRequests`），排隊上限 60 秒。
+      maxWaitMs: DEFAULT_MAX_REQUEST_WAIT_MS,
     });
+  });
+
+  /** #1505：全機並行閘的兩格。預設不限，照 #1476 `maxThreads` 的先例（demian 2026-10-16 拍板）。 */
+  it('maxConcurrentRequests 不寫就不限；寫了是正整數；maxWaitMs 預設 60 秒、1 到計時器上限', () => {
+    const parse = (extra: Record<string, unknown>) => liveModelConfigSchema.safeParse(extra);
+    expect(liveModelConfigSchema.parse({}).maxConcurrentRequests).toBeUndefined();
+    expect(liveModelConfigSchema.parse({}).maxWaitMs).toBe(60_000);
+    expect(liveModelConfigSchema.parse({ maxConcurrentRequests: 8 }).maxConcurrentRequests).toBe(8);
+    for (const bad of [0, -1, 1.5, '8']) {
+      expect(parse({ maxConcurrentRequests: bad }).success).toBe(false);
+    }
+    expect(liveModelConfigSchema.parse({ maxWaitMs: 1 }).maxWaitMs).toBe(1);
+    expect(liveModelConfigSchema.parse({ maxWaitMs: 2_147_483_647 }).maxWaitMs).toBe(2_147_483_647);
+    for (const bad of [0, -5, 0.5, 2_147_483_648]) {
+      expect(parse({ maxWaitMs: bad }).success).toBe(false);
+    }
   });
 
   /**
