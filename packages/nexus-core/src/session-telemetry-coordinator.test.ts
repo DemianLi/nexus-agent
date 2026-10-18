@@ -8,7 +8,7 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { fakeSink } from './fixtures.js';
+import { fakeSink, resumedLog } from './fixtures.js';
 import type { PluginOrigin } from './plugin.js';
 import { SessionLog } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
@@ -500,19 +500,19 @@ function deepMixed(depth: number): unknown {
 
 describe('深巢狀的事件照樣交得出去（#1526）', () => {
   it('tool/result 的 meta 是 3000 層交錯巢狀：那一筆記錄交出去、body 原樣，沒有被扣住', () => {
-    const log = new SessionLog('thread-a');
+    // 寫入那一關有深度上限（#1661），3000 層只會出現在上限之前寫下、續接回來的舊日誌裡；live 建構當下會補送它。
+    const meta = deepMixed(3_000);
+    const log = resumedLog('thread-a', [['tool/result', { callId: 'c1', isError: false, meta }]]);
     const sink = fakeSink();
     const warnings: string[] = [];
     new SessionTelemetryCoordinator({ log, sink, warn: (message) => warnings.push(message) });
 
-    const meta = deepMixed(3_000);
-    const event = log.append('tool/result', { callId: 'c1', isError: false, meta });
-
     expect(warnings).toEqual([]);
-    expect(sink.records).toHaveLength(1);
-    expect(sink.records[0]!.attributes['event.seq']).toBe(event.seq);
-    expect(JSON.stringify((sink.records[0]!.body as { meta: unknown }).meta)).toBe(
-      JSON.stringify(meta),
+    const records = sink.records.filter(
+      (record) => record.attributes['event.type'] === 'tool/result',
     );
+    expect(records).toHaveLength(1);
+    expect(records[0]!.attributes['event.seq']).toBe(0);
+    expect(JSON.stringify((records[0]!.body as { meta: unknown }).meta)).toBe(JSON.stringify(meta));
   });
 });

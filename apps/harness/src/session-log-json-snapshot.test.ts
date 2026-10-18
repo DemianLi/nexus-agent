@@ -10,14 +10,15 @@
  *   就丟了：`@langchain/core@1.2.9` 的 `Serializable.toJSON`（`dist/load/validation.js:85`）用賦值拷 kwargs，`toDict()`
  *   出來的 args 原型被換掉、自有鍵沒了，再經 `JSON.stringify` 就只剩 `{"a":1}`。所以這裡斷言的是日誌真正保證的事：
  *   拿到的那份原型乾淨、沒有繼承來的 `x`、記憶體與磁碟一致。上游丟鍵另開卡。
- * - **C**：深巢狀，前後各夾一則普通事件。改寫前快照是遞迴的，陣列一千多層就 `RangeError`；改寫後快照收得下，
- *   但原生 `JSON.stringify` 對凍過的陣列在 CI（Node 22.23.3 Linux x64）約 2200 層就爆，所以後端寫入前要先拷一份
- *   沒凍過的（`materializeAppendBatch`，照 dsh）。沒有那一刀時這一批永遠寫不出去，**前後兩則也一起落不了盤**，續接
- *   整個讀不到。深度取 3000：Node 22 的原生 `JSON.stringify` 連沒凍過的也是遞迴的，CI 上約 4100 層就拋，再深連改寫後
- *   也寫不出去（落盤端的上限是 #1661）。比對用 `JSON.stringify`：vitest 的 `toEqual` 本身是遞迴的。
+ * - **C**：深巢狀，前後各夾一則普通事件。比對用 `JSON.stringify`：vitest 的 `toEqual` 本身是遞迴的。
+ *   - **C1（舊日誌）**：寫入那一關有深度上限（`SESSION_EVENT_MAX_DEPTH`，#1661），但上限之前寫下的日誌可能更深。
+ *     磁碟上一份 3000 層的舊日誌，續接讀回、接上 seed 都照收，讀方不設限。深度取 3000：原生 `JSON.stringify` 對凍過的
+ *     陣列在 CI（Node 22.23.3 Linux x64）約 2200 層就爆，沒凍過的約 4100 層，夾在中間才驗得到「凍過的那份要先拷」。
+ *   - **C2（超過上限）**：Node 22 的原生 `JSON.stringify` 連沒凍過的也是遞迴的，CI（22.19.0 與 22.23.3）上 4104 層就
+ *     寫不出去；寫入失敗那一批留在佇列頭，**前後的事件也一起落不了盤**。5000 層那一則在 `append` 就拒，前後照常。
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -25,8 +26,9 @@ import { AIMessage } from '@langchain/core/messages';
 import {
   attachSessionPersistence,
   fromLoggedMessage,
-  materializeAppendBatch,
+  SESSION_EVENT_MAX_DEPTH,
   SessionRegistry,
+  snapshotJsonValue,
   toLoggedMessage,
 } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
@@ -79,11 +81,16 @@ async function roundTrip(write: (sessions: SessionRegistry) => void): Promise<{
 }
 
 /**
- * 序列化日誌裡的事件：先拷一份沒凍過的再 `JSON.stringify`。凍過的深陣列直接序列化會撞 `RangeError`（V8 走遞迴慢路徑），
- * 後端寫入前也是這樣做（`materializeAppendBatch`）。
+ * 拷一份沒凍過的：凍過的深陣列直接 `JSON.stringify` 會撞 `RangeError`（V8 走遞迴慢路徑）。後端寫入前也是這樣做
+ * （`materializeAppendBatch`），但那支有寫入的深度上限，比對舊日誌要用不設限的那支。
  */
+function thawed(events: readonly SessionEvent[]): readonly SessionEvent[] {
+  return snapshotJsonValue(events, '比對') as readonly SessionEvent[];
+}
+
+/** 序列化日誌裡的事件：先拷一份沒凍過的再 `JSON.stringify`。 */
 function json(events: readonly SessionEvent[]): string[] {
-  return materializeAppendBatch(events).map((event) => JSON.stringify(event));
+  return thawed(events).map((event) => JSON.stringify(event));
 }
 
 /** 每一顆都是同一份 JSON（比位元組，不靠 vitest 的遞迴比對）。 */
@@ -147,9 +154,7 @@ describe('A2：經過訊息那條路（#1526）', () => {
   });
 });
 
-describe('C：深巢狀不撞 RangeError（#1526）', () => {
-  const DEPTH = 3_000;
-
+describe('C：深巢狀（#1526、#1661）', () => {
   function nestedObject(depth: number): unknown {
     let value: unknown = 'leaf';
     for (let level = 0; level < depth; level++) value = { next: value };
@@ -168,40 +173,95 @@ describe('C：深巢狀不撞 RangeError（#1526）', () => {
     return value;
   }
 
-  it('前後各一則普通事件，中間夾 3000 層物件、陣列與交錯巢狀：全部收得下，續接每一則都讀得回來且相同', async () => {
+  /** 各份的 `tool/result` 依序是哪幾個 callId。 */
+  function callIdsOf(events: readonly SessionEvent[]): string[] {
+    return events
+      .filter((event) => event.type === 'tool/result')
+      .map((event) => (event.data as { callId: string }).callId);
+  }
+
+  it('C1：上限之前寫下的舊日誌，中間夾 3000 層物件、陣列與交錯巢狀：續接讀回、接上 seed 都照收且相同', async () => {
+    const DEPTH = 3_000;
     const deep = [
       ['deep-object', nestedObject(DEPTH)],
       ['deep-array', nestedArray(DEPTH)],
       ['deep-mixed', nestedMixed(DEPTH)],
     ] as const;
+    // 今天的 `append` 收不下 3000 層，舊日誌只能直接造在磁碟上：先寫佔位字串，再把那一行換成深的。
+    const sessions = new SessionRegistry('root');
+    const persistence = attachSessionPersistence(
+      sessions,
+      openJsonlSessionStore({ directory: dir }),
+      { warn: () => {} },
+    );
+    sessions.root.append('tool/result', { callId: 'before', isError: false });
+    for (const [callId] of deep) {
+      sessions.root.append('tool/result', {
+        callId,
+        isError: false,
+        meta: `placeholder:${callId}`,
+      });
+    }
+    sessions.root.append('tool/result', { callId: 'after', isError: false });
+    await persistence.flush();
+    await persistence.dispose();
+    const [logFile, ...others] = (await readdir(dir)).filter((name) => name.endsWith('.jsonl'));
+    expect(others).toEqual([]);
+    const path = join(dir, logFile!);
+    let text = await readFile(path, 'utf8');
+    for (const [callId, meta] of deep) {
+      const placeholder = JSON.stringify(`placeholder:${callId}`);
+      expect(text.split(placeholder)).toHaveLength(2);
+      text = text.replace(placeholder, JSON.stringify(meta));
+    }
+    await writeFile(path, text);
+
+    const resumed = await openJsonlSessionStore({ directory: dir }).resume('root');
+    try {
+      const stored = resumed.events;
+      // 接上 seed 走的是 `#adoptSeed` 那條快照，不設上限。
+      const adopted = new SessionRegistry('root', { rootSeed: stored }).root.events;
+      const callIds = ['before', ...deep.map(([callId]) => callId), 'after'];
+      expect(callIdsOf(stored)).toEqual(callIds);
+      expect(callIdsOf(adopted)).toEqual(callIds);
+      const metas = thawed(adopted)
+        .filter((event) => event.type === 'tool/result')
+        .map((event) => (event.data as { meta?: unknown }).meta)
+        .slice(1, -1);
+      expect(metas.map((meta) => JSON.stringify(meta))).toEqual(
+        deep.map(([, meta]) => JSON.stringify(meta)),
+      );
+      sameJson(stored, adopted);
+    } finally {
+      await resumed.stored.close();
+    }
+  });
+
+  it('C2：前後各一則普通事件，中間一則 5000 層：那一則在 append 就拒，前後照常落盤、續接讀得回來', async () => {
+    let rejected: unknown;
     const { live, stored, adopted } = await roundTrip((sessions) => {
       sessions.root.append('tool/result', { callId: 'before', isError: false });
-      for (const [callId, meta] of deep) {
-        sessions.root.append('tool/result', { callId, isError: false, meta });
+      try {
+        sessions.root.append('tool/result', {
+          callId: 'deep',
+          isError: false,
+          meta: nestedObject(5_000),
+        });
+      } catch (error: unknown) {
+        rejected = error;
       }
       sessions.root.append('tool/result', { callId: 'after', isError: false });
     });
-    const callIds = ['before', ...deep.map(([callId]) => callId), 'after'];
+    // 先看落盤：沒有上限時，Node 22 上這一批寫不出去，`flush` 就拋了，走不到這裡。
     for (const [label, events] of [
       ['記憶體', live],
       ['落盤讀回', stored],
       ['接上 seed', adopted],
     ] as const) {
-      expect(
-        events
-          .filter((event) => event.type === 'tool/result')
-          .map((event) => (event.data as { callId: string }).callId),
-        label,
-      ).toEqual(callIds);
+      expect(callIdsOf(events), label).toEqual(['before', 'after']);
     }
-    const metas = materializeAppendBatch(live)
-      .filter((event) => event.type === 'tool/result')
-      .map((event) => (event.data as { meta?: unknown }).meta)
-      .slice(1, -1);
-    expect(metas.map((meta) => JSON.stringify(meta))).toEqual(
-      deep.map(([, meta]) => JSON.stringify(meta)),
-    );
     sameJson(live, stored);
-    sameJson(live, adopted);
+    expect(rejected).toBeInstanceOf(TypeError);
+    expect((rejected as TypeError).message).toContain(`超過上限 ${SESSION_EVENT_MAX_DEPTH} 層`);
   });
 });

@@ -13,6 +13,7 @@ import {
 } from './projections.js';
 import type { ProjectionUnit } from './projections.js';
 import type { PluginOrigin } from './plugin.js';
+import { resumedLog } from './fixtures.js';
 import { createRegistry } from './registry.js';
 import { SessionLog } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
@@ -174,11 +175,13 @@ describe('折疊器：單元拋錯只停用自己', () => {
     // 照 PM 的判定，原生 `JSON.stringify` 這一處不改：驗的是失敗大聲、只壞那一件。
     let deep: unknown = 'leaf';
     for (let level = 0; level < 5_000; level++) deep = level % 2 ? { next: deep } : [deep];
-    const log = new SessionLog('proj');
-    log.append('turn/start', { kind: 'message', text: '嗨' });
-    log.append('tool/result', { callId: 'c1', isError: false, meta: { deep } });
-    log.append('model/usage', { inputTokens: 1, outputTokens: 1, totalTokens: 2 });
-    log.append('turn/end', {});
+    // 寫入那一關有深度上限（#1661），5000 層只會出現在上限之前寫下、續接回來的舊日誌裡。
+    const log = resumedLog('proj', [
+      ['turn/start', { kind: 'message', text: '嗨' }],
+      ['tool/result', { callId: 'c1', isError: false, meta: { deep } }],
+      ['model/usage', { inputTokens: 1, outputTokens: 1, totalTokens: 2 }],
+      ['turn/end', {}],
+    ]);
     const holder: ProjectionUnit<unknown, unknown> = {
       key: 'deep',
       stateVersion: 1,

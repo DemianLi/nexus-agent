@@ -11,6 +11,8 @@ import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
 import { z } from 'zod';
+import { SessionLog } from './session-log.js';
+import type { SessionEvent, SessionEventType } from './session-log.js';
 import type {
   AgentMiddleware,
   NexusPlugin,
@@ -140,4 +142,24 @@ export function fakeFeedback(): FeedbackService {
     list: () => ({ ok: true, value: { items: [] } }),
     record: () => ({ ok: true, value: { recorded: true } }),
   };
+}
+
+/**
+ * 從 seed 接上一份「舊日誌」：事件不經 `append`，所以不受寫入那一關的深度上限（`SESSION_EVENT_MAX_DEPTH`）。
+ *
+ * 上限出現之前寫下的日誌可能有更深的事件，續接之後讀方要照樣吃得下（#1661）。深巢狀的讀方測試用這個造資料，
+ * 不然 `append` 先拒了，讀方那一刀拿掉也紅不起來。
+ *
+ * @param sessionId - 會話 id。
+ * @param entries - 依序的事件種類與 data；`seq` 照位置、`time` 照 seq。
+ * @returns 接上 seed 的日誌（末尾多一顆 `session/end-seed`）。
+ */
+export function resumedLog(
+  sessionId: string,
+  entries: readonly (readonly [type: SessionEventType, data: unknown])[],
+): SessionLog {
+  const seed = entries.map(
+    ([type, data], seq) => ({ type, seq, time: seq, data }) as unknown as SessionEvent,
+  );
+  return new SessionLog(sessionId, { seed });
 }

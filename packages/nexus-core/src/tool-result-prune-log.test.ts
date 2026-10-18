@@ -9,6 +9,7 @@ import { AIMessage, HumanMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 import type { AgentMiddleware } from './base-types.js';
+import { resumedLog } from './fixtures.js';
 import { SessionLog } from './session-log.js';
 import {
   applyRecordedPrune,
@@ -277,12 +278,17 @@ describe('記過的剪法帶深巢狀區塊（#1526）', () => {
       name: 'mcp',
     });
     const content = [{ type: 'text', text: '頭…尾', extra: deepMixed(3_000) }];
-    const log = new SessionLog('s');
-    log.append('compaction/prune', {
-      results: [
-        { callId: 'deep', originalChars: measureToolResultContent(original.content), content },
+    // 寫入那一關有深度上限（#1661），3000 層只會出現在上限之前寫下、續接回來的舊日誌裡。
+    const log = resumedLog('s', [
+      [
+        'compaction/prune',
+        {
+          results: [
+            { callId: 'deep', originalChars: measureToolResultContent(original.content), content },
+          ],
+        },
       ],
-    } as never);
+    ]);
     const replaced = applyRecordedPrune(original, recordedPrunesOf(log.events)) as ToolMessage;
     expect(replaced).not.toBe(original);
     expect(JSON.stringify(replaced.content)).toBe(JSON.stringify(content));
