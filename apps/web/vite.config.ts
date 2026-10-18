@@ -4,6 +4,7 @@ import { defineConfig } from 'vite';
 import type { Plugin } from 'vite';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
+import { fontLicenses } from './font-licenses';
 import { RESOLVE_ALIAS } from './resolve-alias';
 
 /**
@@ -39,6 +40,7 @@ export default defineConfig({
     react(),
     tailwindcss(),
     tsconfigPaths({ projects: ['../../tsconfig.base.json'] }),
+    fontLicenses(),
   ],
   resolve: { alias: RESOLVE_ALIAS },
 });

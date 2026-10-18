@@ -96,6 +96,7 @@
     "src",
     "guard",
     "vite.config.ts",
+    "font-licenses.ts",
     "resolve-alias.ts",
     "vitest.config.ts",
     "vitest.guard.config.ts"
