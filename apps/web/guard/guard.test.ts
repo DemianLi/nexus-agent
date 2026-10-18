@@ -2736,3 +2736,111 @@ describe('瀏覽器量 tool-steps 的覆寫（#1682，第 61、63、64、65 條�
     }
   });
 });
+
+/**
+ * 產品的工具卡與工具段（#1682 PR B 驗收 C，`?overlay=tool-cards`）：三種底上的字都過 4.5——列的字疊在頁面底色與漸層上（單獨的卡）、
+ * 疊在 `StepList` 的 `--panel` 上（段裡的卡）、結果框的標題與內文、錯誤框的紅字、Badge；列、群組、結果框的焦點是 2px 字色外框。
+ * 亮暗加兩種不透明退路都量。vendor 元件掛不了屬性，開頁後補。
+ */
+const CARDS = '[data-guard-cards]';
+const toolCardsMarks: Record<string, Record<string, string>> = {
+  [`${CARDS} > [data-testid="tool-entry"] [data-slot="step-row"] > button > span:first-child`]: {
+    'data-guard-text': 'card-label-page',
+  },
+  [`${CARDS} [data-slot="step-list"] [data-slot="step-row"] > button > span:first-child`]: {
+    'data-guard-text': 'card-label-panel',
+  },
+  [`${CARDS} [data-slot="step-group"] > button > span`]: { 'data-guard-text': 'run-label' },
+  [`${CARDS} [data-slot="step-row"] > button > [data-slot="badge"]`]: {
+    'data-guard-text': 'card-badge',
+  },
+  [`${CARDS} [data-slot="step-row"] > button > code`]: { 'data-guard-text': 'card-code' },
+  [`${CARDS} [data-slot="step-row"] > button > span > [data-slot="badge"]`]: {
+    'data-guard-text': 'card-attribution',
+  },
+  [`${CARDS} [data-slot="output-block"] > div`]: { 'data-guard-text': 'card-output-label' },
+  [`${CARDS} [data-slot="output-block"] > pre`]: {
+    'data-guard-text': 'card-output-text',
+    'data-guard-focus': 'card-output',
+  },
+  [`${CARDS} [data-slot="output-block"]`]: { 'data-guard-outline-host': '' },
+  [`${CARDS} :is([data-slot="step-row"], [data-slot="step-group"]) > button:not(:disabled)`]: {
+    'data-guard-focus': 'card-button',
+  },
+};
+
+describe.each(
+  MODES.flatMap((mode) => (['light', 'dark'] as const).map((theme) => [mode, theme] as const)),
+)('瀏覽器量產品的工具卡（#1682 PR B）：%s、%s', (mode, theme) => {
+  test('頁面、清單、結果框三種底上的字與 Badge 過 4.5；錯誤框的紅字也過；列、群組、結果框的焦點', async () => {
+    const page = await openOverlay('tool-cards', theme, { mode, marks: toolCardsMarks });
+    try {
+      const texts = await collectTexts(page);
+      const focus = await collectFocus(page);
+      const count = (name: string) => texts.filter((t) => t.name === name).length;
+      // 量具自檢：單獨的卡 7 張、段裡 2 張、群組 1 列；Badge 9 顆；結果框（段裡展開那張的參數與結果、完成那張的參數與結果、
+      // 失敗那張的參數與錯誤、撞到上限那張的參數）7 個，其中錯誤框 1 個。
+      expect(count('card-label-page')).toBe(7);
+      expect(count('card-label-panel')).toBe(2);
+      expect(count('run-label')).toBe(1);
+      expect(count('card-badge')).toBe(9);
+      expect(count('card-output-text')).toBe(7);
+      expect(count('card-code')).toBe(9);
+      expect(count('card-attribution')).toBe(1);
+      const error = await page.$$eval(
+        `${CARDS} [data-slot="output-block"] > pre`,
+        (els) => els.filter((el) => el.className.includes('text-destructive')).length,
+      );
+      expect(error).toBe(1);
+      expectTexts(
+        texts,
+        [
+          'card-label-page',
+          'card-label-panel',
+          'run-label',
+          'card-badge',
+          'card-output-label',
+          'card-output-text',
+          'card-code',
+          'card-attribution',
+        ],
+        `tool-cards:${mode}:${theme}`,
+      );
+      expect(focus.filter((f) => f.name.startsWith('card-button'))).toHaveLength(10);
+      expectFocus(focus, `tool-cards:${mode}:${theme}`);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+test('0019：結果框的 pre 鍵盤聚焦後，方向鍵捲得動（#1682 PR B）', async () => {
+  const page = await openOverlay('tool-steps', 'light', { marks: { [TOOL_STANDALONE]: {} } });
+  try {
+    const pre = page.locator(`${TOOL_STANDALONE} [data-slot="output-block"]:last-child > pre`);
+    // 鍵盤操作過，聚焦才算 `:focus-visible`；Tab 走到那一格。
+    for (let i = 0; i < 40; i++) {
+      await page.keyboard.press('Tab');
+      if (await pre.evaluate((el) => el === document.activeElement)) break;
+    }
+    const before = await pre.evaluate((el) => ({
+      focused: el === document.activeElement,
+      scrollTop: el.scrollTop,
+      overflow: el.scrollHeight > el.clientHeight,
+    }));
+    for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
+    // 鍵盤捲動是平滑捲動，等它停下來。
+    await page.waitForFunction(
+      (el) => el !== null && el.scrollTop > 0,
+      await pre.elementHandle(),
+      { timeout: 2000 },
+    ).catch(() => undefined);
+    const after = await pre.evaluate((el) => el.scrollTop);
+    report['tool-steps:arrow-scroll'] = { ...before, after };
+    // 量具自檢：真的超出框高、真的停在那一格上。
+    expect(before).toEqual({ focused: true, scrollTop: 0, overflow: true });
+    expect(after).toBeGreaterThan(0);
+  } finally {
+    await page.close();
+  }
+});

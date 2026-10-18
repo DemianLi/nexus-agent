@@ -4,6 +4,8 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ToolCard } from '@/components/tool/card';
+import { SubagentControlContext } from '@/components/tool/subagent-control';
+import type { SubagentControl } from '@/components/tool/subagent-control';
 import { CARD_LINE_MAX_CHARS, CARD_MAX_CHARS } from '@/lib/card-limit';
 import { MAX_RENDERED_LINES } from '@/lib/diff-rows';
 import {
@@ -1298,5 +1300,181 @@ describe('背景子代理的委派卡上，模型那一行（#889）', () => {
     );
     fireEvent.click(screen.getByRole('button', { name: /task/ }));
     expect(document.querySelector('[data-subagent-model]')).toBeNull();
+  });
+});
+
+/**
+ * #1682 驗收 B2：換成 SG 的 `StepRow` 之後，舊卡上的每一項資訊都還在，而且在對的地方——列上（按鈕裡，收著就看得到、進報讀名稱）
+ * 或展開區。結果畫在 children 的種類，SG 的「結果」「錯誤」框不出現（slots 是附加，兩邊都畫就是同一筆結果畫兩次）。
+ */
+describe('換成 SG 之後每一項資訊都還在（#1682 B2）', () => {
+  const trigger = () => screen.getAllByRole('button')[0]!;
+  const expanded = () => {
+    fireEvent.click(trigger());
+    // 展開區：按鈕後面那一塊（SG 的 `step-row` 第二個子元素）。
+    return screen.getByTestId('tool-entry').querySelector('[data-slot="step-row"] > div')!;
+  };
+  const control: SubagentControl = {
+    connected: true,
+    renderEntry: () => null,
+    history: () => new Promise(() => {}),
+    stateOf: () => 'running',
+    echoesOf: () => [],
+    send: () => new Promise(() => {}),
+    interrupt: () => new Promise(() => {}),
+  };
+
+  it.each([
+    ['running', '執行中'],
+    ['suspended', '等你回答'],
+    ['done', '完成'],
+    ['failed', '失敗'],
+  ] as const)('每一種狀態的按鈕名稱都含狀態字：%s', (status, text) => {
+    render(<ToolCard entry={tool({ status, error: status === 'failed' ? '壞了' : undefined })} />);
+    expect(screen.getByRole('button', { name: new RegExp(text) })).toBe(trigger());
+  });
+
+  it('停止的提問：按鈕名稱含「已停止」', () => {
+    render(
+      <ToolCard
+        entry={tool({
+          name: 'ask_user_question',
+          input: JSON.stringify({ questions: [{ id: 'd', question: '哪一天？' }] }),
+          status: 'failed',
+          error: 'Error: tool call aborted before dispatch',
+          errorCode: ABORTED_BEFORE_DISPATCH_CODE,
+        })}
+      />,
+    );
+    expect(trigger().textContent).toContain('已停止');
+  });
+
+  it('工具名在列上（sm 以上），失敗的狀態字是 destructive', () => {
+    render(<ToolCard entry={tool({ name: 'echo', status: 'failed', error: '壞了' })} />);
+    const code = within(trigger()).getByText('echo');
+    expect(code.tagName).toBe('CODE');
+    expect(code.className).toContain('sm:inline');
+    expect(within(trigger()).getByText('失敗').getAttribute('data-variant')).toBe('destructive');
+  });
+
+  it('歸屬：sm 以上在列上，手機在展開區', () => {
+    render(
+      <ToolCard
+        entry={tool({ attribution: { kind: 'subagent', name: 'writer', callId: 'c0' } })}
+      />,
+    );
+    expect(within(trigger()).getByText('子代理 writer').closest('.sm\\:inline-flex')).not.toBeNull();
+    const area = expanded();
+    expect(within(area as HTMLElement).getByText('子代理 writer').closest('.sm\\:hidden')).not.toBeNull();
+  });
+
+  it('寫檔：行數在列上，diff 在展開區，沒有 SG 的結果框', () => {
+    render(
+      <ToolCard
+        entry={tool({
+          name: 'write_file',
+          input: JSON.stringify({ file_path: '/a.md', content: '一\n二\n' }),
+          text: 'Successfully wrote to /a.md',
+        })}
+      />,
+    );
+    expect(trigger().textContent).toContain('+2');
+    const area = expanded() as HTMLElement;
+    expect(within(area).getByTestId('tool-diff')).toBeTruthy();
+    expect(screen.queryByLabelText('結果')).toBeNull();
+    expect(screen.queryByLabelText('參數')).toBeNull();
+  });
+
+  it('讀檔卡、搜尋卡在展開區，沒有 SG 的結果框', () => {
+    const { unmount } = render(
+      <ToolCard
+        entry={tool({
+          name: 'read_file',
+          input: '{"file_path":"/a.md"}',
+          text: '1\t一',
+          meta: { path: '/a.md', offset: 1, lines: [{ number: 1, text: '一' }], totalLines: 1 },
+        })}
+      />,
+    );
+    expect(within(expanded() as HTMLElement).getByTestId('tool-read')).toBeTruthy();
+    expect(screen.queryByLabelText('結果')).toBeNull();
+    unmount();
+
+    render(
+      <ToolCard
+        entry={tool({
+          name: 'glob',
+          input: '{"pattern":"*.md"}',
+          text: '/a.md',
+          meta: { shape: 'paths', paths: ['/a.md'], truncated: false, total: 1 },
+        })}
+      />,
+    );
+    expect(within(expanded() as HTMLElement).getByText('/a.md')).toBeTruthy();
+    expect(screen.queryByLabelText('結果')).toBeNull();
+  });
+
+  it('提問、交付、待辦快照在展開區，沒有 SG 的結果框與參數框', () => {
+    const cases: Partial<ToolEntry>[] = [
+      {
+        name: 'ask_user_question',
+        input: JSON.stringify({ questions: [{ id: 'd', question: '哪一天？' }] }),
+        text: JSON.stringify({ answers: [{ id: 'd', selected: ['週一'] }] }),
+      },
+      { name: 'present', input: JSON.stringify({ files: [{ path: 'a.md' }] }), text: 'ok' },
+      {
+        name: 'todo_write',
+        input: JSON.stringify({ todos: [{ content: '寫', status: 'pending' }] }),
+        text: 'ok',
+      },
+    ];
+    const ids = ['question-row', 'presented-file', 'todo-item'];
+    cases.forEach((overrides, i) => {
+      const { unmount } = render(<ToolCard entry={tool(overrides)} />);
+      expect(within(expanded() as HTMLElement).getAllByTestId(ids[i]!).length).toBeGreaterThan(0);
+      expect(screen.queryByLabelText('結果')).toBeNull();
+      expect(screen.queryByLabelText('參數')).toBeNull();
+      unmount();
+    });
+  });
+
+  it('有自己檢視的那幾種失敗了：錯誤照 SG 的錯誤框畫一次', () => {
+    render(
+      <ToolCard
+        entry={tool({
+          name: 'ask_user_question',
+          input: JSON.stringify({ questions: [{ id: 'd', question: '哪一天？' }] }),
+          status: 'failed',
+          error: '題目格式不對',
+        })}
+      />,
+    );
+    const area = expanded() as HTMLElement;
+    expect(within(area).getAllByTestId('question-row')).toHaveLength(1);
+    expect(screen.getAllByLabelText('錯誤')).toHaveLength(1);
+    expect(screen.getByLabelText('錯誤').textContent).toBe('題目格式不對');
+  });
+
+  it('背景子代理：狀態字在列上，模型行與面板在展開區', () => {
+    render(
+      <SubagentControlContext.Provider value={control}>
+        <ToolCard
+          entry={tool({
+            name: 'subagent',
+            input: '{}',
+            meta: {
+              kind: 'background-subagent',
+              runId: 'bg-1',
+              subagentType: 'researcher',
+              model: 'm',
+            },
+          })}
+        />
+      </SubagentControlContext.Provider>,
+    );
+    expect(within(trigger()).getByText('跑著')).toBeTruthy();
+    const area = expanded() as HTMLElement;
+    expect(area.querySelector('[data-subagent-model]')?.textContent).toBe('模型：m');
+    expect(within(area).getByRole('button', { name: /停止/ })).toBeTruthy();
   });
 });

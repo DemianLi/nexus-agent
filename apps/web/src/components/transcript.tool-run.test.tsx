@@ -103,6 +103,33 @@ describe('連續完成的工具呼叫收成一列（#1309）', () => {
     expect(findOrExpandTranscriptItem('tool-nope')).toBeUndefined();
   });
 
+  it('使用者收起那一段之後再定位一次，照樣打開、找得到（開關狀態在呼叫端，patch 0017）', () => {
+    show(turn({ steps: 4 }));
+    act(() => {
+      findOrExpandTranscriptItem('tool-c2');
+    });
+    expect(runButton().getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(runButton());
+    expect(runButton().getAttribute('aria-expanded')).toBe('false');
+    expect(findTranscriptItem('tool-c2')).toBeUndefined();
+    let item: HTMLElement | undefined;
+    act(() => {
+      item = findOrExpandTranscriptItem('tool-c2');
+    });
+    expect(runButton().getAttribute('aria-expanded')).toBe('true');
+    expect(item?.getAttribute('data-message-id')).toBe('tool-c2');
+  });
+
+  it('段裡的思考列照原本的順序夾在工具卡之間', () => {
+    show(turn({ steps: 3 }));
+    fireEvent.click(runButton());
+    const run = screen.getByTestId('tool-run');
+    const order = [...run.querySelectorAll('[data-message-id]')].map((el) =>
+      el.querySelector('[data-testid=tool-entry]') !== null ? 'tool' : 'reasoning',
+    );
+    expect(order).toEqual(['reasoning', 'tool', 'reasoning', 'tool', 'reasoning', 'tool']);
+  });
+
   it('段至少兩顆：SG 的 StepGroup 只有一步（而且不在跑）時退化成 StepRow，children、trailing、open 都不轉過去（#1722 審查）', () => {
     // 工具段一律自己給 children 與 open；只剩一步的話 SG 會丟掉它們，段裡的卡、定位、思考列都會不見。
     expect(MIN_TOOLS).toBeGreaterThanOrEqual(2);

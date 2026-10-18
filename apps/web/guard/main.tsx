@@ -47,6 +47,9 @@
  * - `?overlay=tool-steps` 畫 SG 的 tool-steps（nexus 的包裝層，#1682 PR A）：一段展開的群組（執行中、完成、失敗各一列，完成與失敗的列展開）
  *   與一列單獨放在頁面上、展開的列。量執行中不閃、結果框聚焦的外框、1024 以下 44px、減少動態時箭頭不轉場、疊在清單裡的結果框不 blur
  *   （README 本地修改第 61–65 條）。兩塊各包一層 `data-guard-tool`（`group`、`standalone`）給 `guard.test.ts` 找。
+ * - `?overlay=tool-cards` 畫產品的工具卡與工具段（#1682 PR B）：一段打開的工具段（兩張完成的卡，第一張展開）、單獨的卡（執行中、
+ *   等你回答、完成展開、失敗展開、停止的提問、子代理歸屬、撞到輸出上限）。量三種底上的字（頁面、清單的 `--panel`、結果框）、Badge、
+ *   錯誤框的紅字，列、群組、結果框的焦點；`data-guard-cards` 包整頁。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -77,6 +80,14 @@ import { Surface } from '@/components/surface';
 import { TodoPanel } from '@/components/todo/panel';
 import { Transcript } from '@/components/transcript';
 import { ToolCard } from '@/components/tool/card';
+import { ToolRun } from '@/components/tool-run';
+import {
+  MessageScroller,
+  MessageScrollerContent,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
+} from '@/components/ui/message-scroller';
+import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
 import { AttachmentRail } from '@/components/attachment-rail';
 import { SentAttachments } from '@/components/sent-attachments';
 import { Badge } from '@/components/ui/badge';
@@ -530,6 +541,13 @@ const TOOL_STEPS: Step[] = [
   { id: 'failed', label: '讀取 nope.ts', status: 'error', error: '沒有這個檔' },
 ];
 
+/** 單獨那一列的結果夠長、超過結果框的 `max-h-64`：量鍵盤聚焦後方向鍵捲得動（patch `0019`，#1682 PR B）。 */
+const LONG_STEP: Step = {
+  ...TOOL_STEPS[1]!,
+  id: 'long',
+  output: Array.from({ length: 60 }, (_, i) => `notes-${i}.md: 1`).join('\n'),
+};
+
 function ToolStepsPage() {
   const [open, setOpen] = useState<Record<string, boolean>>({ done: true, failed: true });
   return (
@@ -556,8 +574,118 @@ function ToolStepsPage() {
         </StepGroup>
       </div>
       <div data-guard-tool="standalone">
-        <StepRow step={TOOL_STEPS[1]!} open />
+        <StepRow step={LONG_STEP} open />
       </div>
+    </div>
+  );
+}
+
+/** 產品的工具卡與工具段（#1682 PR B）。 */
+const CARD = (overrides: Partial<ToolEntry>): ToolEntry => ({ ...TOOL, ...overrides });
+const RUN_TOOLS: ToolEntry[] = [
+  CARD({
+    id: 'run-1',
+    callId: 'run-c1',
+    name: 'echo',
+    input: '{"message":"嗨"}',
+    text: 'echo: 嗨',
+  }),
+  CARD({ id: 'run-2', callId: 'run-c2', name: 'grep', input: '{"pattern":"計畫"}', text: '2' }),
+];
+const STOP_ERROR = 'Error: tool call aborted before dispatch';
+const ASK_INPUT = JSON.stringify({ questions: [{ id: 'd', question: '哪一天？' }] });
+
+function ToolCardsPage() {
+  const [open, setOpen] = useState(true);
+  return (
+    <div
+      data-guard-cards=""
+      style={{
+        maxWidth: '48rem',
+        margin: '0 auto',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 12,
+      }}
+    >
+      {/* 段裡每一則是一格 `MessageScrollerItem`，要包在 scroller 裡（同 `Transcript`）。 */}
+      <MessageScrollerProvider>
+        <MessageScroller>
+          <MessageScrollerViewport aria-label="工具段">
+            <MessageScrollerContent>
+              <ToolRun
+                run={{ kind: 'tool-run', id: 'tools:run-1', entries: RUN_TOOLS, tools: RUN_TOOLS }}
+                open={open}
+                onOpenChange={setOpen}
+                renderEntry={(entry) =>
+                  entry.kind === 'tool' ? (
+                    <ToolCard entry={entry} defaultOpen={entry.id === 'run-1'} />
+                  ) : null
+                }
+              />
+            </MessageScrollerContent>
+          </MessageScrollerViewport>
+        </MessageScroller>
+      </MessageScrollerProvider>
+      <ToolCard
+        entry={CARD({
+          id: 'running',
+          name: 'execute',
+          input: '{"command":"pnpm test"}',
+          status: 'running',
+          text: undefined,
+        })}
+      />
+      <ToolCard
+        entry={CARD({
+          id: 'suspended',
+          name: 'ask_user_question',
+          input: ASK_INPUT,
+          status: 'suspended',
+          text: undefined,
+        })}
+      />
+      <ToolCard
+        entry={CARD({ id: 'done', name: 'echo', input: '{"message":"嗨"}', text: 'echo: 嗨' })}
+        defaultOpen
+      />
+      <ToolCard
+        entry={CARD({
+          id: 'failed',
+          name: 'echo',
+          input: '{"message":"嗨"}',
+          status: 'failed',
+          error: 'Error: 沒有這個檔',
+          text: undefined,
+        })}
+        defaultOpen
+      />
+      <ToolCard
+        entry={CARD({
+          id: 'stopped',
+          name: 'ask_user_question',
+          input: ASK_INPUT,
+          status: 'failed',
+          error: STOP_ERROR,
+          errorCode: ABORTED_BEFORE_DISPATCH_CODE,
+          text: undefined,
+        })}
+      />
+      <ToolCard
+        entry={CARD({ id: 'sub', attribution: { kind: 'subagent', name: 'writer', callId: 'c0' } })}
+      />
+      <ToolCard
+        entry={CARD({
+          id: 'max',
+          name: 'task',
+          input: '{"description":"寫報告"}',
+          status: 'failed',
+          error: 'Error: subagent run hit its token limit before finishing',
+          text: undefined,
+        })}
+        defaultOpen
+      />
     </div>
   );
 }
@@ -801,6 +929,8 @@ function OverlayPage({ name }: { name: string }) {
       return <AttachmentsPage />;
     case 'tool-steps':
       return <ToolStepsPage />;
+    case 'tool-cards':
+      return <ToolCardsPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':
