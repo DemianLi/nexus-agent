@@ -84,6 +84,9 @@ import { useUploads } from '@/lib/use-uploads';
 import { createAttachmentImageSource } from '@/lib/attachment-image';
 import { AttachmentImageContext } from '@/components/sent-attachments';
 
+// #1548 探針（暫時）：CI 的 static 應該紅在 no-restricted-properties，下一個 commit 拿掉。
+void crypto.randomUUID();
+
 /**
  * 接回上一次那條 thread 時講的話。
  *
