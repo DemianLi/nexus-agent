@@ -19,7 +19,7 @@
  * ## 偏離（登記）
  *
  * 1. **起始的兩顆值由 `--sandbox` 一個來源推。** dsh 用 `DSH_PERMISSION_MODE` 同時決定沙箱模式與核准政策（全開就是 `never`，其他是 `ask`，
- *    `packages/bundle/base/cordis.patch.yml:244-247`）；我們用 `--sandbox` 當這個來源（組裝點做，見 `assembly-root.ts`）。這是行為改變：以前
+ *    `packages/bundle/base/cordis.patch.yml:243-247`、`:259-262`，`687f282e`）；我們用 `--sandbox` 當這個來源（組裝點做，見 `assembly-root.ts`）。這是行為改變：以前
  *    `--sandbox danger-full-access` 只放寬檔案、核准照舊會問；現在連核准也是 `never`（2026-09-26 demian 拍板「全開＋不問」）。
  * 2. **`defaultPreset` 與 `--sandbox` 同時給而且互相矛盾：啟動時報錯。** dsh 沒有命令列旗標，沒有這個情況。不悄悄讓其中一個蓋掉另一個。
  * 3. **沒有使用者設定那一層。** dsh 的 `settings` 讓使用者另外存「新會話的預設組」；我們沒有使用者設定這一層，預設只來自 `defaultPreset` 與 `--sandbox`。

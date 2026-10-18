@@ -183,7 +183,7 @@ const USAGE = `用法：
   --workspace <dir>    把檔案落在這個目錄底下（省略即虛擬檔案系統）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
-                       danger-full-access 出廠的權限表沒有，要先在表裡加回那一組
+                       danger-full-access 出廠的權限表沒有，要先在表裡加回那一組，否則起不來
   --session-log <dir>  把會話日誌改寫到這個目錄
                        （預設 $NEXUS_AGENT_HOME/sessions，沒設就是 ~/.nexus-agent/sessions）
                        要完全不落盤，在 patch 裡把 session-persistence 那一列寫成 disabled: true
