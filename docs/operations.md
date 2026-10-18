@@ -446,11 +446,8 @@ Node 要 22.19 以上。
 ```bash
 sudo useradd --system --home-dir /var/lib/nexus-agent --shell /usr/sbin/nologin nexus-agent
 sudo install -d -m 0700 -o nexus-agent -g nexus-agent /var/lib/nexus-agent
-sudo -u nexus-agent sh -c 'umask 077 && cat > /var/lib/nexus-agent/.credentials.yaml' <<'KEY'
-version: 1
-refs:
-  NVIDIA_API_KEY: nvapi-...
-KEY
+sudo -u nexus-agent install -m 600 /dev/null /var/lib/nexus-agent/.credentials.yaml
+sudo -u nexus-agent "${EDITOR:-vi}" /var/lib/nexus-agent/.credentials.yaml   # 填 version: 1 與 refs.NVIDIA_API_KEY，格式見〈金鑰放哪裡〉
 sudo mkdir -p /opt/nexus-agent /srv/nexus-agent/workspace
 sudo tar -xzf nexus-agent-<版本>-linux-x64.tar.gz -C /opt/nexus-agent
 sudo ln -sfn /opt/nexus-agent/nexus-agent-<版本>-linux-x64 /opt/nexus-agent/current
@@ -507,8 +504,9 @@ WantedBy=multi-user.target
   這兩個數字改其中一個，另一個要跟著改。
 - **`ExecStart` 指的是 `current` 這個符號連結。** 升級就是解開新版、`ln -sfn` 換掉 `current`、`systemctl restart nexus-agent`；
   回退就是把 `current` 指回舊版。連結換掉之前跑著的行程不受影響。
-- **`--live` 要有 key，而且要在第一次 `enable --now` 之前就位。** 上面第三步放進 home 的受管憑證檔最合適（`chmod 600`，擁有者是 `nexus-agent`；
-  見〈金鑰放哪裡〉），它的值不進行程的環境變數。單元檔不要寫 `Environment=NVIDIA_API_KEY=…`：`systemctl show` 讀得到，子行程也繼承得到。
+- **`--live` 要有 key，而且要在第一次 `enable --now` 之前就位。** 上面第三、四步放進 home 的受管憑證檔最合適（`chmod 600`，擁有者是 `nexus-agent`；
+  見〈金鑰放哪裡〉），它的值不進行程的環境變數。**不要把 key 寫在命令列或 heredoc 裡**：那會跟著指令進管理員的 shell history（`~/.bash_history`）；
+  所以先建出權限 600 的空檔，再用編輯器填。單元檔不要寫 `Environment=NVIDIA_API_KEY=…`：`systemctl show` 讀得到，子行程也繼承得到。
   沒有 key 的話 serve 印「缺少環境變數 NVIDIA_API_KEY」就以 1 結束，`Restart=on-failure` 每 5 秒拉一次，滿 `StartLimitBurst` 後單元進 `failed`；
   補上 key 之後 `sudo systemctl reset-failed nexus-agent && sudo systemctl start nexus-agent`。
   代理設定寫在 `/var/lib/nexus-agent/.env`（見〈經代理連外〉）。因為 `WorkingDirectory` 就是 home，兩份 `.env` 是同一份，不會讀兩次。
