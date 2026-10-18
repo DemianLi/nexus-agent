@@ -44,6 +44,7 @@ import {
   formatGoalDriverDisclosure,
   goalDriverPort,
   resolveInvariantLogPath,
+  assertLaunchPathsOutsideWorkspace,
   resolveSessionLogDir,
   resolveWorkspaceRoot,
   SESSION_LOG_OFF_DISCLOSURE,
@@ -435,6 +436,10 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   }
 
   const env = options.env ?? process.env;
+  const cwd = options.cwd ?? process.cwd();
+  // **key 來源與 home 不能跟 `--workspace` 重疊**（#1620）：排在 home 鎖之前——拿鎖會先 `mkdir` home，排在後面的話被拒的
+  // 那一次已經在工作區裡建出 `home/serve.lock`；也排在讀 `.env` 之前，工作區裡那一份不先載入就拒絕。印設定那幾個分支不寫 home，不受影響。
+  await assertLaunchPathsOutsideWorkspace({ workspace: invocation.workspace, cwd, env });
   // **同一個 home 只能起一個 serve**（#1503）：排在印設定那幾個分支之後（它們不寫 home），其餘一切之前——
   // 讀 `.env`、裝代理、遷移變更紀錄、清暫存、寫快照、建密鑰、讀釘選檔，這些都碰 home。第二台在這裡就被拒，
   // 一個檔都沒寫。起不來的每一條路都放鎖，正常 `close()` 在最後一步放（下面）。
@@ -445,7 +450,7 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   }
   let started: RunningServe;
   try {
-    started = await startUnderHomeLock(options, invocation, env, log);
+    started = await startUnderHomeLock(options, invocation, env, cwd, log);
   } catch (error) {
     if (!('unavailable' in homeLock)) await homeLock.release().catch(() => undefined);
     throw error;
@@ -476,9 +481,9 @@ async function startUnderHomeLock(
   options: RunServeOptions,
   invocation: ServeInvocation,
   env: Readonly<Record<string, string | undefined>>,
+  cwd: string,
   log: (line: string) => void,
 ): Promise<RunningServe> {
-  const cwd = options.cwd ?? process.cwd();
   // **真模型路徑的啟動環境：兩層 `.env`**（#730），排在讀清單與建密鑰之前：壞的 `.env` 與舊位置搬家訊息在
   // server 還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`。
   const liveLaunch = invocation.live ? loadLiveLaunchEnv({ cwd, env }) : undefined;
