@@ -3,6 +3,8 @@
  *
  * ## 為什麼是子類，而且覆寫三個方法
  *
+ * （三個方法本身覆寫在基底 `GatedChatOpenAI`：全機的模型請求並行閘 #1505 也掛在同三個方法上，這個子類只提供「送出前做什麼」。）
+ *
  * LangChain 的 `handleChatModelStart` 在 `_generate`／`_streamChatModelEvents`／`_streamResponseChunks` 之前跑，所以 callback
  * 與我們自己的日誌、軌跡看到的是**參照**；底層請求轉換（`completions._generate` 等）在它們裡面，這時換掉區塊，base64 就只存在於
  * 這次請求的記憶體裡。三條路是基座依呼叫方式挑的：`invoke` 走 `_generate`（或有串流 handler 時走 `_streamResponseChunks`），
@@ -23,9 +25,12 @@
  * @module
  */
 
-import { ChatOpenAI } from '@langchain/openai';
+import type { ChatOpenAI } from '@langchain/openai';
 import type { ChatOpenAIFields } from '@langchain/openai';
 import type { BaseMessage } from '@langchain/core/messages';
+
+import { GatedChatOpenAI } from './gated-chat-openai.js';
+import type { RequestGate } from './request-gate.js';
 
 /** 一次請求前的投影：回要送出的訊息。 */
 export type MessageProjector = (
@@ -35,44 +40,40 @@ export type MessageProjector = (
 /** 請求轉換之前的額度檢查：超額就拋，不超額什麼都不做。 */
 export type RequestGuard = (messages: readonly BaseMessage[]) => void;
 
-export class AttachmentChatOpenAI extends ChatOpenAI {
+export class AttachmentChatOpenAI extends GatedChatOpenAI {
   readonly #project: MessageProjector;
   readonly #guard: RequestGuard | undefined;
 
-  constructor(fields: ChatOpenAIFields, project: MessageProjector, guard?: RequestGuard) {
-    super(fields);
+  constructor(
+    fields: ChatOpenAIFields,
+    project: MessageProjector,
+    guard?: RequestGuard,
+    gate?: RequestGate,
+  ) {
+    super(fields, gate);
     this.#project = project;
     this.#guard = guard;
   }
 
-  /** 先量額度（超額就拋，不碰附件），再投影。 */
-  async #prepare(messages: readonly BaseMessage[]): Promise<BaseMessage[]> {
+  /** 先量額度（超額就拋，不碰附件）；排在取全機名額之前，見 `gated-chat-openai.ts`。 */
+  protected override precheck(messages: readonly BaseMessage[]): void {
     this.#guard?.(messages);
-    return [...(await this.#project(messages))];
   }
 
-  override async _generate(
-    ...[messages, options, runManager]: Parameters<ChatOpenAI['_generate']>
-  ): ReturnType<ChatOpenAI['_generate']> {
-    return super._generate(await this.#prepare(messages), options, runManager);
-  }
-
-  override async *_streamChatModelEvents(
-    ...[messages, options, runManager]: Parameters<ChatOpenAI['_streamChatModelEvents']>
-  ): ReturnType<ChatOpenAI['_streamChatModelEvents']> {
-    yield* super._streamChatModelEvents(await this.#prepare(messages), options, runManager);
-  }
-
-  override async *_streamResponseChunks(
-    ...[messages, options, runManager]: Parameters<ChatOpenAI['_streamResponseChunks']>
-  ): ReturnType<ChatOpenAI['_streamResponseChunks']> {
-    yield* super._streamResponseChunks(await this.#prepare(messages), options, runManager);
+  /** 取到名額之後才投影，排隊的那段時間不抱著剛讀進來的位元組。 */
+  protected override project(messages: readonly BaseMessage[]): Promise<readonly BaseMessage[]> {
+    return this.#project(messages);
   }
 
   override withConfig(
     config: Parameters<ChatOpenAI['withConfig']>[0],
   ): ReturnType<ChatOpenAI['withConfig']> {
-    const next = new AttachmentChatOpenAI(this.fields ?? {}, this.#project, this.#guard);
+    const next = new AttachmentChatOpenAI(
+      this.fields ?? {},
+      this.#project,
+      this.#guard,
+      this.requestGate,
+    );
     next.defaultOptions = { ...this.defaultOptions, ...config };
     return next as never;
   }

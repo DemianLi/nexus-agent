@@ -810,7 +810,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `browser-session`           | 瀏覽器 cookie 的絕對有效期                                                                                                     | 有（一格）                       | **關不掉**               |
 | `deliverable-files`         | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數）                                                             | 有（三格）                       | **關不掉**               |
 | `tool-text`                 | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截）                                             | 有（一格）                       | **關不掉**               |
-| `live-model`                | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理） | 有（五格）                       | **關不掉**               |
+| `live-model`                | `--live` 時真實供應商的連線值（端點／預設模型 id／逾時／重試次數），加上模型型錄（每顆的窗口、輸出上限、收不收圖、怎麼關推理），以及全機的模型請求並行上限（選配，出廠不限） | 有                       | **關不掉**               |
 | `agent-default-model`       | 沒帶 `--live` 時用哪個模型提供者（出貨值 `cli-script` 是清單上的腳本提供者那一列）                                             | 有（一格）                       | **關不掉**               |
 | `recursion-limit`           | agent 迴圈的 super-step 上限                                                                                                   | 有（一格）                       | **關不掉**               |
 | `agent-loop`                | 模型同一步吐出多顆工具呼叫時，同時在跑的最多幾顆                                                                               | 有（一格）                       | **關不掉**               |
@@ -1048,6 +1048,30 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **起動時讀一次，改了要重啟**。`maxThreads` 與 `idleEvictAfterMs` 可以只設其中一個。
 - **偏離 dsh（登記）**：dsh 頂層沒有閒置逐出（程式碼裡是 legacy TODO）。閒置條件借的是**子代理結算**（沒有輪、沒有佇列、沒有未收完的子工作），
   計時方式借的是 **terminal retention**（條件全成立才開始算、任何一次忙碌就歸零、到 T 才收）。形狀逐點見 `src/wire-handler.ts` 的 `WireHandlerOptions.idleEvictMs`。
+
+**模型請求並行上限（`live-model` 的 `maxConcurrentRequests` 與 `maxWaitMs`，[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)）**給整台 serve 同時在跑的模型請求數設上限。
+多人共用一把供應商 key 時，一條失控的 thread（同一步的 `task`／`subagent` 可以重疊，背景子代理每個主對話最多 8 個）同時開出十幾條模型串流，會把每分鐘配額一次打穿；
+供應商回 429，所有人的請求一起退避、一起回來再撞，跟那條 thread 無關的人一起受害。設了上限，名額滿了的**新請求排隊**，不再一起撞牆。
+**出廠不設上限**，行為與沒有這兩格一樣——供應商的配額因端點而異，給數字沒有依據，預設打開的話既有部署會在某一天突然開始排隊。要開的人放進自己的 `--patch <檔>`
+（或 `plugin config set live-model --file -`，注意那是整份替換）：
+
+```yaml
+- id: live-model
+  config:
+    maxConcurrentRequests: 8   # 整台 serve 同時最多 8 個模型請求
+    maxWaitMs: 60000           # 排隊最多等 60 秒（這是預設值）
+```
+
+- **數的是整台 serve 同時在跑的模型請求**：對話、換模型選的別顆、背景子代理指定的模型、標題（含標題跟隨主路由的那一顆）、摘要器生摘要的那一次呼叫都算同一份。
+  一次性 CLI、REPL、eval 不建這道閘。
+- **排隊是 FIFO，而且排隊的人聽停止鍵**：等待中按了停止，立刻離開隊伍、不送請求、不占名額。**429 之後的退避那段時間不占名額**，重打前重新排隊，
+  所以一波一起回來的重試，同時在跑的數量也不超過上限。排隊的時間不算 `retryPolicy` 的重試次數、不寫 `llm/retry`、也不吃 180 秒的首事件逾時。
+- **等超過 `maxWaitMs`**（預設 60 秒，沒有量測依據，可改）：這一輪以本機碼 **`LOCAL_CAPACITY`** 失敗，**沒有送請求、不重試**；serve 日誌寫一行，含上限、現在在跑與排隊的數量，以及下一步
+  （調高 `maxConcurrentRequests` 或 `maxWaitMs`，或查是哪條 thread 開了大量子代理）。不是每次排隊都寫，只在逾時時寫。web 對這個碼照今天對未知碼的顯示，中文標籤是另一張卡。
+- **起動時印一行** `模型請求並行上限：…`（沒設就印「不限」），設了卻不確定有沒有生效看這一行。**起動時讀一次，改了要重啟。**
+- **只限同時在跑幾個，不限每分鐘幾次或幾個 token**，也沒有每個使用者一桶：serve 現在沒有使用者身分，等身分上線（[#1428](https://github.com/DemianLi/nexus-agent/issues/1428)／[#1429](https://github.com/DemianLi/nexus-agent/issues/1429)）再另開卡。
+- **偏離 dsh（登記）**：dsh 沒有任何跨 session 的模型請求並行閘（它是一個人用自己的 key）；這是多人共用一把 key 才有的產品需求。形狀借的是 dsh 背景工作的准入
+  （數量從現況現算、訊息寫上限與下一步、預設不限），排隊是 dsh 沒有的部分，對 dsh 決策紀錄否決過的四種形狀的逐條回答見 `apps/harness/src/request-gate.ts` 的檔頭。
 
 `observation-policy`、`model-usage`、`session-checkpoint-policy`、`approval-gate` 那四列**不用加
 `config:`**——它們沒有設定，寫了也沒有作用：照 dsh 原樣交下去、那一列照樣掛，啟動時印一句警告指名它。前三列

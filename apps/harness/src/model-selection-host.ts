@@ -40,6 +40,7 @@ import type {
 import type { CredentialService } from './credentials.js';
 import { createLiveModel } from './live-model.js';
 import type { AttachmentSource } from './attachment-projection.js';
+import type { RequestGate } from './request-gate.js';
 import { acceptsImages, findModelEntry } from './model-catalog.js';
 import type { ImageSupport, ModelEntry } from './model-catalog.js';
 import type { LiveModelConfig } from './settings/live-model.js';
@@ -95,8 +96,10 @@ export function createModelSelectionHost(options: {
   readonly credentials: CredentialService | undefined;
   /** 附件儲存（#732）：給了，這裡建的別顆實例也會在送出請求前投影附件。 */
   readonly attachments?: AttachmentSource;
+  /** 全機的模型請求並行閘（#1505）：給了，這裡建的別顆實例的請求也受它管。 */
+  readonly requestGate?: RequestGate;
 }): ModelSelectionHost {
-  const { liveModel, credentials, attachments } = options;
+  const { liveModel, credentials, attachments, requestGate } = options;
   const defaultRoute: ModelRoute = { model: liveModel.modelId };
   const instances = new Map<string, BaseChatModel>();
 
@@ -113,6 +116,7 @@ export function createModelSelectionHost(options: {
         instance = createLiveModel({ ...liveModel, modelId: route.model }, undefined, credentials, {
           ...(route.effort === 'off' && { thinkingOff: true }),
           ...(attachments !== undefined && { attachments }),
+          ...(requestGate !== undefined && { requestGate }),
         });
         instances.set(key, instance);
       }
