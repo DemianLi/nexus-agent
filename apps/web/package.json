@@ -4,7 +4,6 @@
   "private": true,
   "type": "module",
   "files": [
-    "dist",
     "!dist/**/*.map"
   ],
   "scripts": {
