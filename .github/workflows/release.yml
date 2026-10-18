@@ -50,8 +50,35 @@ jobs:
             exit 1
           fi
 
+      # 以下三步與 ci.yml 的 packed-install 同一套（#1502 刀 2＋3）：Node 鎖在 engines 的下限，產物不帶 node。
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - name: 安裝相依套件
+        run: pnpm install --frozen-lockfile
+
+      # 版號從 manifest 讀（Q4 (a)）：輸入的 vX.Y.Z 只拿來核對兩者相同。要發的版號先用 `pnpm run release:bump` 寫進
+      # manifest、走一張版號 PR 合進來，再到這裡發版。CI 從不寫 repo。
+      - name: 核對輸入的版號等於 manifest
+        env:
+          VERSION: ${{ inputs.version }}
+        run: pnpm run release:version --expect "$VERSION"
+
+      - name: 打包
+        run: pnpm run release:pack
+
+      - name: 核對 sha256
+        working-directory: .release-out
+        run: sha256sum -c ./*.sha256
+
+      - name: 在 repo 外解開並驗證
+        run: pnpm run release:verify-packed-install .release-out/*.tar.gz --expect-commit "${{ github.sha }}"
+
       # 不自己 git tag：runner 沒有 committer 身分，git tag -a 會 exit 128。
       # gh release create 會依 --target 自行建立 tag，少一段 git 操作也少一個失敗點。
+      # 產物（tar.gz 與 .sha256）附在 Release 上；沒有 npm publish（理由 2：完全內網，沒有 registry 可用）。
       - name: 建立 tag 與 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -59,6 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$VERSION" \
+            .release-out/*.tar.gz .release-out/*.sha256 \
             --target "${{ github.sha }}" \
             --title "$VERSION" \
             --generate-notes \

@@ -139,9 +139,17 @@ PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_
 
 ## 發版
 
-到 Actions 頁面執行 **Release** workflow，branch 選 `main` 並輸入版號（`vX.Y.Z`）。workflow 會自行
-打 tag 並建立 GitHub Release。因為 `workflow_dispatch` 限定在 `main` 執行，「從 develop 發版」在機制上
-不可能發生。
+發版分兩段：
+
+1. **版號 PR。** 版號寫在 repo 裡，不是 CI 裡推出來的（照 dsh `scripts/release/bump.ts`）。先跑
+   `pnpm run release:bump <patch|minor|major|x.y.z>`，它把同一個版本寫進根、`apps/*`、`packages/*` 的每一份
+   `package.json`（`vendor/*` 跟著上游，不動），再開一張 `chore:` 的版號 PR 合進 `develop`，隨後照常 `develop → main`。
+2. **發版。** 到 Actions 頁面執行 **Release** workflow，branch 選 `main` 並輸入版號（`vX.Y.Z`）。輸入值**只拿來核對**
+   manifest 裡的版本，不一樣就停。workflow 會建置、用 `pnpm deploy --prod` 打成 `nexus-agent-<版本>-linux-x64.tar.gz`
+   （主機要預裝 Node ≥22.19），在 repo 外解開、用純 `node` 驗過起得來之後，自行打 tag 並建立 GitHub Release，
+   把 tar.gz 與 `.sha256` 附上。因為 `workflow_dispatch` 限定在 `main` 執行，「從 develop 發版」在機制上不可能發生。
+
+同一套打包與驗證在每張動到 TypeScript 的 PR 上都會跑（`gate` 的 `packed-install`），所以 Release 當天不會是第一次試。
 
 版號規則在 1.0 之前從簡：**完成一個 Phase 跳 minor，其餘一律 patch**。1.0 之前 semver 本來就不承諾
 相容性，此刻套用完整規則只是徒增判斷成本。
