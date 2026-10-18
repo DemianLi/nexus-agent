@@ -16,10 +16,12 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  bundledRgProblems,
   cliRunProblems,
   headerProblems,
   homepageProblems,
   nativeLockProblems,
+  ripgrepDisclosureProblems,
   serveOutputProblems,
   shutdownProblems,
   smokeInstalledServe,
@@ -53,6 +55,17 @@ describe('步驟 4：flock 原生二進位', () => {
       expect.stringContaining('ERR_DLOPEN_FAILED'),
     ]);
     expect(nativeLockProblems({ ...ok, stdout: 'nope' })).toHaveLength(1);
+  });
+});
+
+describe('步驟 4b：內附 ripgrep 在 PATH 上沒有 rg 的環境裡跑得起來', () => {
+  it('印出 ripgrep 版本：不報；跑不起來、印別的：報並帶 stderr 尾巴', () => {
+    expect(bundledRgProblems({ ...ok, stdout: 'ripgrep 15.1.0\n' })).toEqual([]);
+    expect(
+      bundledRgProblems({ status: 1, stdout: '', stderr: "Cannot find package '@vscode/ripgrep'" }),
+    ).toEqual([expect.stringContaining('@vscode/ripgrep')]);
+    expect(bundledRgProblems({ ...ok, stdout: 'FAIL spawn ENOENT' })).toHaveLength(1);
+    expect(bundledRgProblems({ status: null, stdout: '', stderr: '' })).toHaveLength(1);
   });
 });
 
@@ -131,6 +144,36 @@ describe('步驟 5：假模型跑一輪與會話 header', () => {
 });
 
 describe('步驟 6：serve', () => {
+  describe('grep 用哪一支 ripgrep（啟動日誌那一行，#1502 驗收 6）', () => {
+    const root = '/var/tmp/verify-x/extract/nexus-agent-1.0.0-linux-x64';
+
+    it('路徑在安裝樹底下：不報', () => {
+      const line = `搜尋（grep）：內附 ripgrep ${root}/node_modules/.pnpm/@vscode+ripgrep-linux-x64@1.18.0/node_modules/@vscode/ripgrep-linux-x64/bin/rg`;
+      expect(ripgrepDisclosureProblems(`plugin：echo\n${line}\n網頁：x`, root)).toEqual([]);
+    });
+
+    it('沒有這一行（啟動路徑少了披露）：報', () => {
+      expect(ripgrepDisclosureProblems('plugin：echo\n網頁：x', root)).toEqual([
+        expect.stringMatching(/沒有 grep 用哪一支 ripgrep/u),
+      ]);
+    });
+
+    it('內附的不可用（缺了或沒有執行權限）：報並帶那一行', () => {
+      const line =
+        '搜尋（grep）：內附 ripgrep 不可用（x 不存在）；每一次 grep 都會以 SEARCH_FAILED 失敗，沒有退路';
+      expect(ripgrepDisclosureProblems(line, root)).toEqual([expect.stringContaining('不可用')]);
+    });
+
+    it('路徑跑到安裝樹外面（用的是宿主的 rg）：報；前綴相同的兄弟目錄也算外面', () => {
+      expect(ripgrepDisclosureProblems('搜尋（grep）：內附 ripgrep /usr/bin/rg', root)).toEqual([
+        expect.stringMatching(/不在安裝樹/u),
+      ]);
+      expect(
+        ripgrepDisclosureProblems(`搜尋（grep）：內附 ripgrep ${root}-evil/bin/rg`, root),
+      ).toHaveLength(1);
+    });
+  });
+
   it('有網址、沒有載不起來：不報', () => {
     expect(
       serveOutputProblems('nexus-agent 在 http://127.0.0.1:1/?token=x\nplugin：echo', 'u'),

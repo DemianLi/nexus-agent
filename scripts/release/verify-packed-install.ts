@@ -8,10 +8,12 @@
  * 1. `.sha256` 與 tarball 對得上（等同 `sha256sum -c`）；
  * 2. 解開的樹過靜態檢查（`payload.ts` 的三道：拒收 `src/`／`.map`、出貨清單每列解析得到、相依圖完整）；
  * 3. `lib/serve.js --version` 等於產物版本，stderr 是空的；
- * 4. 目標平台的 `node-addon-system` 載得起來（flock 的原生二進位，#1503／會話租約都靠它）；
+ * 4. 目標平台的 `node-addon-system` 載得起來（flock 的原生二進位，#1503／會話租約都靠它）；內附的 ripgrep 在 `PATH` 上沒有 rg
+ *    的環境下照樣跑得起來（#1502 刀 4：grep 只用內附那一支，沒有退路）；
  * 5. 假模型跑一輪 `lib/cli.js`：會話 header 的 `build.commit` 等於戳記——已安裝的樹沒有 git，戳記是唯一的來源（PM 補驗收）；
  *    戳記本身也查：`commit` 是非空字串、`dirty` 是 `false`（本機驗沒 commit 的改動加 `--allow-dirty`，CI 不加）；
- * 6. 起一次 `lib/serve.js --port 0`：印出網址、首頁 200 且是網頁 index、安裝樹裡沒有 pnpm／tsx 行程、`SIGTERM` 後 exit 0。
+ * 6. 起一次 `lib/serve.js --port 0`：印出網址、啟動日誌講的 grep 用的 ripgrep 在**安裝樹裡**（不是宿主 `PATH` 上的）、
+ *    首頁 200 且是網頁 index、安裝樹裡沒有 pnpm／tsx 行程、`SIGTERM` 後 exit 0。
  *
  * 子行程環境清掉 `NODE_OPTIONS`、`NODE_PATH`、`TSX_TSCONFIG_PATH`，`NEXUS_AGENT_HOME`／`HOME` 指進暫存目錄，`cwd` 在 repo 外。
  * 不論成敗，暫存目錄一律收掉。放 `/var/tmp`（不放 `os.tmpdir()`：那裡有暫存目錄規則會干擾，見 smoke-built-bin）。
@@ -25,9 +27,17 @@
  */
 
 import { type ChildProcess, execFileSync, spawn, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  realpathSync,
+  rmSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
-import { basename, join } from 'node:path';
+import { basename, join, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 
 import { fileSha256 } from './pack.js';
@@ -101,6 +111,41 @@ export function versionProblems(run: CommandOutcome, expected: string): string[]
 export function nativeLockProblems(run: CommandOutcome): string[] {
   if (run.status !== 0 || run.stdout.trim() !== 'locked') {
     return [`目標平台的 flock 原生二進位拿不到鎖：${run.stderr.slice(-400)}`];
+  }
+  return [];
+}
+
+/** 步驟 4b：內附的 ripgrep 在乾淨環境（`PATH` 上沒有 rg）裡跑得起來，印出自己的版本。 */
+export function bundledRgProblems(run: CommandOutcome): string[] {
+  if (run.status !== 0 || !run.stdout.startsWith('ripgrep ')) {
+    return [
+      `內附的 ripgrep 在 PATH 上沒有 rg 的環境裡跑不起來：exit ${String(run.status)}，stdout ${JSON.stringify(run.stdout.slice(0, 200))}，stderr ${JSON.stringify(run.stderr.slice(-400))}`,
+    ];
+  }
+  return [];
+}
+
+/**
+ * 步驟 6d：serve 啟動日誌裡 grep 的那一行（`搜尋（grep）：…`，`apps/harness/src/rg-path.ts` 的 `formatRipgrepDisclosure`）。
+ *
+ * - 沒有這一行：啟動路徑少了披露（#1502 驗收 6 要的就是它）。
+ * - 說「不可用」：內附的 rg 在安裝樹裡缺了或沒有執行權限。
+ * - 路徑不在安裝樹底下：grep 用的是宿主別的 rg，不是產物內附的。
+ *
+ * @param output - serve 的 stdout＋stderr。
+ * @param root - 安裝樹根。
+ */
+export function ripgrepDisclosureProblems(output: string, root: string): string[] {
+  const line = output.split('\n').find((entry) => entry.startsWith('搜尋（grep）：'));
+  if (line === undefined)
+    return ['serve 啟動日誌沒有 grep 用哪一支 ripgrep 的那一行（搜尋（grep）：…）'];
+  const prefix = '搜尋（grep）：內附 ripgrep ';
+  if (!line.startsWith(prefix)) return [`內附的 ripgrep 在安裝樹裡不可用：${line}`];
+  const path = line.slice(prefix.length).trim();
+  // `require.resolve` 回的是 realpath（macOS 上 `/var/tmp` 是 `/private/var/tmp`），安裝樹根兩種寫法都認。
+  const roots = [root, ...(existsSync(root) ? [realpathSync(root)] : [])];
+  if (!roots.some((candidate) => path.startsWith(candidate + sep))) {
+    return [`grep 用的 ripgrep 不在安裝樹（${root}）底下：${path}`];
   }
   return [];
 }
@@ -317,6 +362,22 @@ export async function verifyPackedInstall(
     });
     problems.push(...nativeLockProblems(native));
 
+    // 4b. 內附的 ripgrep：PATH 換成一個空目錄（宿主有沒有 rg 都不能替它補洞），從產物根解析 `@vscode/ripgrep` 並跑 `--version`。
+    const emptyBin = join(scratch, 'empty-bin');
+    mkdirSync(emptyBin, { recursive: true });
+    const rgProbe =
+      "import { rgPath } from '@vscode/ripgrep';\n" +
+      "import { spawnSync } from 'node:child_process';\n" +
+      "const run = spawnSync(rgPath, ['--version'], { encoding: 'utf8' });\n" +
+      'process.stdout.write(run.status === 0 ? run.stdout : `FAIL ${run.error?.message ?? run.status}`);';
+    const bundledRg = spawnSync(process.execPath, ['--input-type=module', '--eval', rgProbe], {
+      cwd: root,
+      env: { ...env, PATH: emptyBin },
+      encoding: 'utf8',
+      timeout: 60_000,
+    });
+    problems.push(...bundledRgProblems(bundledRg));
+
     // 5. 會話 header 的 build.commit 等於戳記。
     const logs = join(scratch, 'sessions');
     const cli = spawnSync(
@@ -408,6 +469,12 @@ export async function smokeInstalledServe(
     const url = /nexus-agent 在 (http:\/\/\S+)/u.exec(output)?.[1];
     problems.push(...serveOutputProblems(output, url));
     if (url !== undefined) {
+      // 啟動日誌是一行一行印的，grep 那一行排在網址與 plugin 之後：寬限一下，不是等到逾時。
+      const grace = Date.now() + 2_000;
+      while (!/搜尋（grep）：/u.test(output) && Date.now() < grace && child.exitCode === null) {
+        await new Promise((resolve) => setTimeout(resolve, 100));
+      }
+      problems.push(...ripgrepDisclosureProblems(output, root));
       try {
         // 啟動印的網址帶登入 token：先換 cookie（303＋set-cookie），再帶 cookie 打首頁（同 fixtures.ts 的 exchangeServeToken）。
         const exchange = await fetch(url, {
@@ -477,7 +544,7 @@ if (import.meta.main) {
     process.exitCode = 1;
   } else {
     console.log(
-      `verify-packed-install：${basename(tarball)} 解開即用——sha256 對上、靜態檢查過、--version、原生二進位、header 戳記、serve 起得來、SIGTERM exit 0。`,
+      `verify-packed-install：${basename(tarball)} 解開即用——sha256 對上、靜態檢查過、--version、原生二進位與內附 ripgrep、header 戳記、serve 起得來、SIGTERM exit 0。`,
     );
   }
 }

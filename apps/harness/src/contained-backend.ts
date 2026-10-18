@@ -74,7 +74,6 @@ import type {
   ReadResult,
   WriteResult,
 } from 'deepagents';
-import micromatch from 'micromatch';
 
 import {
   currentToolCallSignal,
@@ -86,6 +85,7 @@ import { writeFileAtomic, withTargetLock } from './atomic-workspace-write.js';
 import type { AtomicWriteInternals } from './atomic-workspace-write.js';
 import { notTextReason, refuseNonText } from './binary-read.js';
 import { canonicalize } from './canonical-path.js';
+import { resolveRgPath } from './rg-path.js';
 import { runRipgrep } from './ripgrep-runner.js';
 import type { RipgrepInternals } from './ripgrep-runner.js';
 import type {
@@ -113,20 +113,6 @@ function denied<T extends { error: string }>(result: T): T {
 function searchFailure(code: SearchErrorCode, message: string): GrepResult {
   noteSearchError(code);
   return { error: message };
-}
-
-/**
- * 帶目錄的 glob 的最後一段，拿來交給基座先比檔名（見 {@link ContainedFilesystemBackend.grep}）。
- * 大括號跨了 `/` 的時候（`{logs/a.log,src/b.ts}`），最後一段只是半個選項，拿它比檔名會漏掉
- * 其他選項，所以回 `null`。最後一段是空的（`logs/`）或 `**` 都不必特別處理：前者等於不帶 glob，
- * 後者拿來比檔名本來就什麼都對得上。
- *
- * @param anchored - 已去掉開頭 `/` 的 glob。
- * @returns 最後一段，或 `null`。
- */
-function lastSegmentOf(anchored: string): string | null {
-  if (/\{[^}]*\/[^}]*\}/.test(anchored)) return null;
-  return anchored.slice(anchored.lastIndexOf('/') + 1) || null;
 }
 
 /**
@@ -566,23 +552,14 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * rg 還在跑時由 core 同步 `SIGKILL`。**只殺直接子行程，不做 process group**——#1542 登記的偏離（理由 1：沒有 subprocess
    * 服務）同樣適用。
    *
-   * ## 偏離 dsh（AGENTS.md「技術實現標準」，#1532 卡上偏離 1）
+   * ## 內附的 rg，沒有退路（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 4）
    *
-   * **理由 2（完全內網，主機可能沒有 rg）：`rg` 不存在（spawn 回 `ENOENT`）時暫時保留基座的退路。** dsh 內附 rg 所以不需要；
-   * nexus 的內附 rg 是 #1502 刀 4，還沒做。完全內網的主機多半沒有 rg、也裝不到，刀 4 合併之前照 dsh 不退，這些主機上的
-   * grep 整個不能用。`ENOENT` 時根本沒有 rg 在跑，`--no-config` 要防的那件事不存在，退路的代價只剩「結果和 rg 不同」。
-   * 退到：`ENOENT` 時才交給 `super.grep`（走基座的 `literalSearch`），**其餘失敗一律回錯誤**。
-   *
-   * **這條退路安全的前提**：我們自己 spawn 的和基座 spawn 的是同一支，也就是 `PATH` 上的 `rg`，而且先確認過工作區根存在。
-   * 我們 `ENOENT`，基座也必定 `ENOENT`，基座那支沒有 `--no-config` 的 rg 永遠起不來。#1502 刀 4 照它卡上的形狀（把內附 rg
-   * 所在的目錄前置進 `PATH`）合併之後，前提照樣成立：兩邊找到的都是內附那一支。
-   *
-   * **反過來的限制**：如果之後有人改成把解析出來的路徑直接交給 `runRipgrep`（不經 `PATH`），**必須在同一張 PR 拿掉退路**。
-   * 否則那支路徑 `ENOENT` 時，`PATH` 上另一支 rg 會被基座以沒有 `--no-config` 的方式起來，注入就又打開了。
-   *
-   * **回頭點**：主機一定帶內附 rg 之後，退路只剩「內附 rg 被刪掉」走得到；要不要拿掉，跟 #1502 刀 4 啟動那一行一起決定。
-   * 退路上的 glob 處理（{@link lastSegmentOf} 加 `micromatch`）是基座兩條搜尋路都比不對帶目錄 glob 的補丁，只留給退路用：
-   * 交給基座的是 glob 的最後一段，再用完整 glob 對「相對於工作區根」的路徑過濾。
+   * 執行檔是 `rg-path.ts` 解出的**內附 rg 絕對路徑**（`@vscode/ripgrep` 的平台套件），直接交給 `runRipgrep`，**不前置進
+   * `PATH`、不查 `PATH`**——管理者機器上有沒有 rg、是哪個版本，與這裡無關。內附的找不到或起不來是產物壞了，回
+   * `SEARCH_FAILED`，**不改走基座的 `literalSearch`**：#1532 原本為「完全內網主機可能沒有 rg」暫留的 `ENOENT` 退路
+   * （偏離 1）在這一張拿掉——它的前提是「我們和基座 spawn 的是同一支 `PATH` 上的 rg」，絕對路徑 `ENOENT` 時 `PATH` 上另一支
+   * rg 會被基座以沒有 `--no-config` 的方式起來，注入就又打開了。啟動時 `serve` 會印出這一支的路徑或「不可用」（`rg-path.ts`
+   * 的 `formatRipgrepDisclosure`）。
    *
    * ## 與基座一樣的
    *
@@ -600,8 +577,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     glob?: string | null,
     maxCount?: number | null,
   ): Promise<GrepResult> {
-    // `spawn` 在 `cwd` 不存在時也回 `spawn rg ENOENT`，跟找不到 rg 分不出來；不先確認的話會誤走退路，
-    // 讓 `PATH` 上的 rg 在沒有 `--no-config` 的情況下被基座起來。放在最前面。
+    // `spawn` 在 `cwd` 不存在時也回 `ENOENT`，跟找不到 rg 分不出來；不先確認的話「根不存在」會被說成「rg 不見了」。放在最前面。
     // **根不存在不是錯誤，是「沒有東西可找」**（`{ matches: [] }`，同基座對不存在的起點）：暫存 backend 的根是第一次
     // 存東西才建的（`tool-result-stash.ts`），經 `CompositeBackend` 搜 `/` 時也會搜到它。根存在卻不是目錄才是錯誤。
     try {
@@ -630,13 +606,24 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     // 一律加 `./` 前綴：目錄名剛好是 `-` 時 rg 會改讀 stdin（0 筆、沒有錯誤），`-x` 這類也不會被當成旗標。
     const searchRel = relative(this.cwd, baseFull);
     const searchArg = searchRel === '' ? '.' : `.${sep}${searchRel}`;
+    let executable = this.ripgrepInternals?.executable;
+    if (executable === undefined) {
+      try {
+        executable = await resolveRgPath();
+      } catch (error: unknown) {
+        return searchFailure(
+          SEARCH_FAILED,
+          `grep could not start its search command (bundled ripgrep unavailable: ${error instanceof Error ? error.message : String(error)})`,
+        );
+      }
+    }
     const outcome = await runRipgrep({
+      executable,
       argv: ['--json', '-F', ...(glob ? ['--glob', glob] : []), '--', pattern, searchArg],
       cwd: this.cwd,
       signal: currentToolCallSignal(),
       internals: this.ripgrepInternals,
     });
-    if (outcome.kind === 'unavailable') return this.fallbackGrep(pattern, dirPath, glob, maxCount);
     if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
     return applyGrepMaxCount({
       result: { matches: this.parseRipgrepJson(outcome.stdout) },
@@ -673,30 +660,6 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       }
     }
     return matches;
-  }
-
-  /**
-   * `rg` 不存在時的退路（偏離 1，見 {@link ContainedFilesystemBackend.grep}）：交給基座，它同樣 `ENOENT` 後走
-   * `literalSearch`。**帶目錄的 glob 一律對工作區根錨定**——基座兩條路都比不對，這裡補：只在 glob 帶 `/` 時介入，
-   * 交給基座的是最後一段（`logs/app.log` → `app.log`），回來的是超集，再用完整 glob 精確過濾。大括號跨了 `/` 時沒有可靠的
-   * 最後一段，改成不帶 glob 交給基座，一樣在這裡過濾。`maxCount` 在過濾之後才套用。
-   */
-  private async fallbackGrep(
-    pattern: string,
-    dirPath?: string,
-    glob?: string | null,
-    maxCount?: number | null,
-  ): Promise<GrepResult> {
-    if (glob === undefined || glob === null || !glob.includes('/')) {
-      return super.grep(pattern, dirPath, glob, maxCount);
-    }
-    const anchored = glob.replace(/^\/+/, '');
-    const result = await super.grep(pattern, dirPath, lastSegmentOf(anchored), null);
-    if (result.matches === undefined) return result;
-    const matches = result.matches.filter((match) =>
-      micromatch.isMatch(match.path.replace(/^\/+/, ''), anchored, { dot: true }),
-    );
-    return applyGrepMaxCount({ result: { ...result, matches }, maxCount: maxCount ?? null });
   }
 
   /**

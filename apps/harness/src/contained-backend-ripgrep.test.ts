@@ -1,11 +1,12 @@
 /**
  * `grep` 自己起 rg（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)）：`--no-config`、輸出上限、取消與逾時、
- * 失敗不換結果、沒有 rg 才走退路、根不存在不走退路，以及掛進真的組裝之後這些都還在。
+ * 失敗不換結果、內附 rg 找不到也沒有退路、根不存在不是 rg 的錯，以及掛進真的組裝之後這些都還在。
  *
  * 基座的做法有四個洞，每一條都對著其中一個：`RIPGREP_CONFIG_PATH` 能讓 rg 執行任意程式或濾掉結果；stdout 不設上限；
  * 按停止沒用；失敗改走結果不同的 `literalSearch`。`contained-backend-grep.test.ts` 管 glob 的錨點，這一份管子行程。
  *
- * **要 rg 在 `PATH` 上**（CI 在 `ci.yml` 裝了它），沒有就紅，不跳過——跳過會讓這份防線在沒有 rg 的機器上靜靜消失。
+ * **用的是內附 rg**（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 4，`rg-path.ts`），不是 `PATH` 上的：
+ * 每一條 `beforeEach` 先確認內附的在，不在就紅，不跳過——跳過會讓這份防線在壞掉的產物上靜靜消失。
  */
 
 import { spawnSync } from 'node:child_process';
@@ -38,12 +39,24 @@ import { createCliAgent } from './assembly-root.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
+import { ripgrepStatus } from './rg-path.js';
 import { runRipgrep } from './ripgrep-runner.js';
+
+// 包一層讓個別測試能換掉解析結果（abort 接線、解析不到）；預設原樣呼叫真的。
+vi.mock('./rg-path.js', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./rg-path.js')>();
+  return { ...actual, resolveRgPath: vi.fn(actual.resolveRgPath) };
+});
+const { resolveRgPath } = await import('./rg-path.js');
+const realResolveRgPath = (await vi.importActual<typeof import('./rg-path.js')>('./rg-path.js'))
+  .resolveRgPath;
 
 const shipped = await shippedPlugins();
 
 let base: string;
 let root: string;
+/** 內附 rg 的絕對路徑。 */
+let rg: string;
 const originalEnv = { path: process.env['PATH'], config: process.env['RIPGREP_CONFIG_PATH'] };
 
 beforeEach(async () => {
@@ -52,7 +65,10 @@ beforeEach(async () => {
   await mkdir(root);
   await writeFile(join(root, 'a.log'), 'needle 一\nplain\nneedle 二\n');
   await writeFile(join(root, 'notes.txt'), 'needle 在 txt 裡\n');
-  expect(spawnSync('rg', ['--version']).error).toBeUndefined();
+  vi.mocked(resolveRgPath).mockImplementation(realResolveRgPath);
+  const status = await ripgrepStatus();
+  if (status.kind !== 'bundled') throw new Error(`內附 rg 不可用：${status.reason}`);
+  rg = status.path;
 });
 
 afterEach(async () => {
@@ -110,7 +126,7 @@ describe('`--no-config`：宿主的 RIPGREP_CONFIG_PATH 影響不到我們起的
   /** 對照：沒有 `--no-config` 的 rg 真的會吃這份設定，所以下面兩條的斷言不是白綠。 */
   it('對照：直接起 rg（不帶 --no-config）會執行 --pre 腳本', async () => {
     const { marker } = await markerPre();
-    spawnSync('rg', ['-F', 'needle', root], { env: process.env });
+    spawnSync(rg, ['-F', 'needle', root], { env: process.env });
     expect(await exists(marker)).toBe(true);
   });
 
@@ -195,7 +211,7 @@ describe('子行程的環境', () => {
     process.env['FAKE_1532_API_KEY'] = 'secret-value';
     process.env['NEXUS_AGENT_FAKE_1532'] = 'internal';
     try {
-      await runRipgrep({ argv: ['--json'], cwd: root, internals: { executable } });
+      await runRipgrep({ argv: ['--json'], cwd: root, executable });
     } finally {
       delete process.env['FAKE_1532_API_KEY'];
       delete process.env['NEXUS_AGENT_FAKE_1532'];
@@ -209,7 +225,7 @@ describe('子行程的環境', () => {
 });
 
 describe('帶目錄的 glob 由 rg 自己對根錨定，不走基座那一支', () => {
-  it('rg 在時，帶目錄的 glob 不經過 super.grep（lastSegmentOf 加 micromatch 只留給退路）', async () => {
+  it('帶目錄的 glob 不經過 super.grep', async () => {
     await mkdir(join(root, 'logs'));
     await mkdir(join(root, 'nested', 'logs'), { recursive: true });
     await writeFile(join(root, 'logs', 'app.log'), 'needle 根\n');
@@ -263,7 +279,8 @@ describe('輸出上限', () => {
     const outcome = await runRipgrep({
       argv: ['--json'],
       cwd: root,
-      internals: { executable, rawOutputMaxBytes: 1024 },
+      executable,
+      internals: { rawOutputMaxBytes: 1024 },
     });
     expect(outcome).toMatchObject({ kind: 'error', code: SEARCH_RAW_OUTPUT_OVERFLOW });
   }, 15_000);
@@ -294,6 +311,7 @@ describe('取消與逾時', () => {
       argv: ['--json', '-F', '--', 'needle', '.'],
       cwd: root,
       signal: controller.signal,
+      executable: rg,
       internals: { onSpawn: () => (spawned += 1) },
     });
 
@@ -309,7 +327,7 @@ describe('取消與逾時', () => {
       argv: ['--json'],
       cwd: root,
       signal: controller.signal,
-      internals: { executable },
+      executable,
     });
     await vi.waitFor(async () => expect(await exists(pidFile)).toBe(true));
     controller.abort();
@@ -328,7 +346,8 @@ describe('取消與逾時', () => {
     const outcome = await runRipgrep({
       argv: ['--json'],
       cwd: root,
-      internals: { executable, timeoutMs: 1500 },
+      executable,
+      internals: { timeoutMs: 1500 },
     });
 
     expect(outcome).toMatchObject({ kind: 'error', code: SEARCH_ABORTED });
@@ -342,7 +361,8 @@ describe('取消與逾時', () => {
       argv: ['--json'],
       cwd: root,
       signal: controller.signal,
-      internals: { executable, killGraceMs: 300 },
+      executable,
+      internals: { killGraceMs: 300 },
     });
     await vi.waitFor(async () => expect(await exists(pidFile)).toBe(true));
     controller.abort();
@@ -367,13 +387,14 @@ describe('失敗不換結果', () => {
     const outcome = await runRipgrep({
       argv: ['--json', '-F', '--glob', '{', '--', 'needle', '.'],
       cwd: root,
+      executable: rg,
     });
     expect(outcome).toMatchObject({ kind: 'error', code: SEARCH_INVALID_PATTERN });
   });
 
   it('被訊號殺掉（不是我們收的）是 SEARCH_FAILED', async () => {
     const executable = await script('self-kill.sh', 'kill -9 $$');
-    const outcome = await runRipgrep({ argv: ['--json'], cwd: root, internals: { executable } });
+    const outcome = await runRipgrep({ argv: ['--json'], cwd: root, executable });
     expect(outcome).toMatchObject({ kind: 'error', code: SEARCH_FAILED });
     expect((outcome as { message: string }).message).toContain('SIGKILL');
   });
@@ -393,20 +414,58 @@ describe('失敗不換結果', () => {
   });
 });
 
-describe('偏離 1：沒有 rg 才走基座的退路', () => {
-  it('執行檔找不到（ENOENT）：交給基座，走 literalSearch', async () => {
+describe('內附 rg 找不到：沒有退路（#1502 刀 4 拿掉了 #1532 的 ENOENT 退路）', () => {
+  /** `PATH` 上放一支會留下標記的 `rg`：任何回頭去查 `PATH` 的實作都會被抓到。 */
+  async function pathTrap(): Promise<{ marker: string }> {
+    const marker = join(base, 'PATH-RG-RAN');
+    const bin = join(base, 'trap-bin');
+    await mkdir(bin);
+    const shim = join(bin, 'rg');
+    await writeFile(shim, `#!/bin/sh\n: > "${marker}"\nexit 1\n`);
+    await chmod(shim, 0o755);
+    process.env['PATH'] = `${bin}:${originalEnv.path ?? ''}`;
+    return { marker };
+  }
+
+  it('執行檔路徑不存在（ENOENT）：SEARCH_FAILED，不交給基座、不查 PATH', async () => {
+    const { marker } = await pathTrap();
     const bare = vi.spyOn(FilesystemBackend.prototype, 'grep');
 
     const result = await new ContainedFilesystemBackend({
       rootDir: root,
-      ripgrep: { executable: 'nexus-no-such-rg' },
+      ripgrep: { executable: join(base, 'no-such-rg') },
     }).grep('needle', '/');
 
-    expect(bare).toHaveBeenCalledTimes(1);
-    expect(paths(result)).toEqual(['/a.log', '/notes.txt']);
+    expect(result.matches).toBeUndefined();
+    expect(result.error).toContain('bundled ripgrep not found');
+    expect(bare).not.toHaveBeenCalled();
+    expect(await exists(marker)).toBe(false);
   });
 
-  it('工作區根不存在：沒有東西可找（matches 為空），**不走退路**（ENOENT 會被誤當成沒有 rg）', async () => {
+  it('內附 rg 解析不到（平台套件不見了）：SEARCH_FAILED，不交給基座、不查 PATH', async () => {
+    const { marker } = await pathTrap();
+    const bare = vi.spyOn(FilesystemBackend.prototype, 'grep');
+    vi.mocked(resolveRgPath).mockRejectedValue(new Error('Cannot find module @vscode/ripgrep-x'));
+
+    const result = await new ContainedFilesystemBackend({ rootDir: root }).grep('needle', '/');
+
+    expect(result.matches).toBeUndefined();
+    expect(result.error).toContain('bundled ripgrep unavailable');
+    expect(result.error).toContain('Cannot find module');
+    expect(bare).not.toHaveBeenCalled();
+    expect(await exists(marker)).toBe(false);
+  });
+
+  it('反例：內附 rg 在時，PATH 上的 rg 不會被起來——命中來自內附那一支', async () => {
+    const { marker } = await pathTrap();
+
+    const result = await new ContainedFilesystemBackend({ rootDir: root }).grep('needle', '/');
+
+    expect(paths(result)).toEqual(['/a.log', '/notes.txt']);
+    expect(await exists(marker)).toBe(false);
+  });
+
+  it('工作區根不存在：沒有東西可找（matches 為空），不是 rg 的錯', async () => {
     const bare = vi.spyOn(FilesystemBackend.prototype, 'grep');
     let spawned = 0;
 
@@ -420,7 +479,7 @@ describe('偏離 1：沒有 rg 才走基座的退路', () => {
     expect(bare).not.toHaveBeenCalled();
   });
 
-  it('工作區根不是目錄：同樣回錯誤、不走退路', async () => {
+  it('工作區根不是目錄：回錯誤', async () => {
     const bare = vi.spyOn(FilesystemBackend.prototype, 'grep');
     const file = join(base, 'a-file');
     await writeFile(file, 'needle\n');
@@ -498,12 +557,8 @@ describe('掛進真的組裝之後', () => {
 
   it('使用者中止這一輪：工具呼叫的 signal 一路送到 rg，行程被收掉', async () => {
     const pidFile = join(base, 'wired.pid');
-    const bin = join(base, 'bin');
-    await mkdir(bin);
-    const shim = join(bin, 'rg');
-    await writeFile(shim, `#!/bin/sh\necho $$ > "${pidFile}"\nexec sleep 20\n`);
-    await chmod(shim, 0o755);
-    process.env['PATH'] = `${bin}:${originalEnv.path ?? ''}`;
+    const shim = await script('slow-rg.sh', `echo $$ > "${pidFile}"\nexec sleep 20`);
+    vi.mocked(resolveRgPath).mockResolvedValue(shim);
     const controller = new AbortController();
     const running = runAgent([{ name: 'grep', args: { pattern: 'needle', path: '/' } }], {
       signal: controller.signal,
@@ -515,5 +570,21 @@ describe('掛進真的組裝之後', () => {
 
     const pid = Number((await readFile(pidFile, 'utf8')).trim());
     await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5_000 });
+  }, 60_000);
+
+  it('內附 rg 解析不到：工具結果是錯誤、模型看到 Error: 前綴、日誌上帶 SEARCH_FAILED，沒有改走別的搜尋', async () => {
+    vi.mocked(resolveRgPath).mockRejectedValue(new Error('Cannot find module @vscode/ripgrep-x'));
+
+    const { messages, results } = await runAgent([
+      { name: 'grep', args: { pattern: 'needle', path: '/', output_mode: 'content' } },
+    ]);
+
+    expect(messages[0]?.status).toBe('error');
+    expect(String(messages[0]?.content)).toMatch(/^Error: grep could not start its search command/);
+    expect(String(messages[0]?.content)).not.toContain('/a.log');
+    expect(results[0]).toMatchObject({
+      isError: true,
+      error: { name: 'SearchError', code: SEARCH_FAILED },
+    });
   }, 60_000);
 });

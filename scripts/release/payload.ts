@@ -5,7 +5,7 @@
  * 3 只在 `verify-packed-install` 跑**（相依圖走訪要走完整棵樹，打包當下的暫存樹還沒定形）：
  *
  * 1. {@link collectPayloadViolations}：照 dsh `scripts/publication-payload.ts` 拒收 `src/` 與 `.map`，再加上我們自己的必備檔、
- *    不該進閉包的開發工具、相對符號連結要解得開、目標平台的 `node-addon-system` 二進位在。
+ *    不該進閉包的開發工具、相對符號連結要解得開、目標平台的 `node-addon-system` 二進位與內附 ripgrep（#1502 刀 4）在。
  * 2. {@link collectClosureViolations}：照 dsh `scripts/verify-runtime-closure.ts`，`cordis.yml`／`cordis.serve.yml` 每一列的
  *    `name:` 都要能從產物根解析到。
  * 3. {@link walkInstalledGraph}：照 dsh `scripts/release/installed-product-isolation.ts:23-57`，從產物根沿 `dependencies`／
@@ -42,7 +42,8 @@ export interface PayloadViolation {
 /** 檢查的設定。 */
 export interface PayloadOptions {
   /**
-   * 目標平台的 `node-addon-system` 二進位套件後綴（例如 `linux-x64-gnu`）。`undefined` 代表不查（單元測試用）。
+   * 目標平台的後綴：`node-addon-system` 的二進位套件（例如 `linux-x64-gnu`，用 `includes` 比）與內附 ripgrep 的平台套件
+   * `@vscode/ripgrep-<後綴>`（`${process.platform}-${process.arch}`，要完全相等）都用它查。`undefined` 代表不查（單元測試用）。
    */
   readonly nativeSuffix?: string;
   /** 允許帶 `src/` 的 vendor 套件名；省略即從 repo 的 `vendor/*` 讀。 */
@@ -208,6 +209,46 @@ export function collectPayloadViolations(
         path: 'node_modules/.pnpm',
         message: `缺目標平台的 @deepseek-ai/node-addon-system-${options.nativeSuffix}（找到：${found.join('、') || '無'}）`,
       });
+    }
+  }
+
+  // 目標平台的內附 ripgrep（#1502 刀 4）：`@vscode/ripgrep` 本體加上它的平台套件，而且那支 `rg` 真的在、有執行權限。
+  // 平台套件名是 `@vscode/ripgrep-${platform}-${arch}`（`@vscode/ripgrep/lib/index.js`），跟 `nativeSuffix`（`${platform}-${arch}`）同形。
+  // 缺了的話安裝樹裡每一次 grep 都會 SEARCH_FAILED、沒有退路（#1532 的 ENOENT 退路同批拿掉了），所以在打包當下就擋。
+  if (options.nativeSuffix !== undefined) {
+    const entries = existsSync(store) ? readdirSync(store) : [];
+    if (!entries.some((entry) => entry.startsWith('@vscode+ripgrep@'))) {
+      violations.push({
+        path: 'node_modules/.pnpm',
+        message: '缺 @vscode/ripgrep（grep 內附的 ripgrep 不在產物裡）',
+      });
+    }
+    const packageName = `@vscode/ripgrep-${options.nativeSuffix}`;
+    const platformEntry = entries.find((entry) =>
+      entry.startsWith(`${packageName.replace('/', '+')}@`),
+    );
+    if (platformEntry === undefined) {
+      violations.push({
+        path: 'node_modules/.pnpm',
+        message: `缺目標平台的 ${packageName}（找到：${entries.filter((entry) => entry.startsWith('@vscode+ripgrep-')).join('、') || '無'}）`,
+      });
+    } else {
+      const binary = join(
+        store,
+        platformEntry,
+        'node_modules',
+        packageName,
+        'bin',
+        options.nativeSuffix.startsWith('win32-') ? 'rg.exe' : 'rg',
+      );
+      if (!existsSync(binary)) {
+        violations.push({ path: rel(binary), message: '內附的 rg 執行檔不在' });
+      } else if (
+        !options.nativeSuffix.startsWith('win32-') &&
+        (lstatSync(binary).mode & 0o111) === 0
+      ) {
+        violations.push({ path: rel(binary), message: '內附的 rg 沒有執行權限' });
+      }
     }
   }
 

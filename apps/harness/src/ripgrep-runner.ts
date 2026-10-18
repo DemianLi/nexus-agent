@@ -23,11 +23,11 @@
  * dsh 經 `ctx.subprocess` 服務起子行程，終止升級由那個服務做；nexus 沒有這個服務（`child-env.ts` 檔頭同一個登記），
  * 所以升級（`SIGTERM` → `SIGKILL`）、逾時與輸出計數都在這個檔案裡自己做。規則照抄，載體退成一個函式。
  *
- * ## 不在這裡
+ * ## 執行檔
  *
- * `ENOENT`（`rg` 找不到）不是這裡的錯誤，回 `unavailable` 讓呼叫端決定：偏離 1 的退路寫在
- * `ContainedFilesystemBackend.grep`。`cwd` 不存在時 Node 也回 `spawn rg ENOENT`，跟找不到 rg 分不出來，所以呼叫端
- * 要在 spawn 之前先確認 `cwd` 存在。
+ * **呼叫端給執行檔的絕對路徑**（`rg-path.ts` 解出的內附 rg），這裡不查 `PATH`、也沒有預設值。`ENOENT` 就是
+ * `SEARCH_FAILED`：產物裡的 rg 不見了，沒有退路（#1502 刀 4 拿掉了 #1532 偏離 1 的 `ENOENT` 退路）。
+ * `cwd` 不存在時 Node 也回 `spawn … ENOENT`，兩者分不出來，所以呼叫端要在 spawn 之前先確認 `cwd` 存在。
  *
  * @module
  */
@@ -58,11 +58,12 @@ export const KILL_GRACE_MS = 3_000;
 /** 這一次執行的結果。 */
 export type RipgrepOutcome =
   | { readonly kind: 'ok'; readonly stdout: string; readonly noMatches: boolean }
-  | { readonly kind: 'unavailable' }
   | { readonly kind: 'error'; readonly code: SearchErrorCode; readonly message: string };
 
 /** {@link runRipgrep} 的參數。 */
 export interface RipgrepRunOptions {
+  /** rg 執行檔的絕對路徑（內附的那一支）。不查 `PATH`。 */
+  readonly executable: string;
   /** `--no-config` 之後的 argv。 */
   readonly argv: readonly string[];
   /** 工作目錄；呼叫端要先確認它存在。 */
@@ -73,9 +74,9 @@ export interface RipgrepRunOptions {
   readonly internals?: RipgrepInternals | undefined;
 }
 
-/** 只給測試用的接縫：換執行檔名、數 spawn、壓低上限。 */
+/** 只給測試用的接縫：換執行檔、數 spawn、壓低上限。 */
 export interface RipgrepInternals {
-  /** 執行檔名；省略即 `rg`（走 `PATH`）。 */
+  /** 換掉內附 rg 的路徑（`ContainedFilesystemBackend.grep` 讀它）；runner 本身只認 {@link RipgrepRunOptions.executable}。 */
   readonly executable?: string;
   readonly rawOutputMaxBytes?: number;
   readonly timeoutMs?: number;
@@ -128,7 +129,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
   const internals = options.internals ?? {};
   const maxBytes = internals.rawOutputMaxBytes ?? RAW_OUTPUT_MAX_BYTES;
   const graceMs = internals.killGraceMs ?? KILL_GRACE_MS;
-  const executable = internals.executable ?? 'rg';
+  const executable = options.executable;
   const signals: AbortSignal[] = [AbortSignal.timeout(internals.timeoutMs ?? SEARCH_TIMEOUT_MS)];
   if (options.signal !== undefined) signals.push(options.signal);
   const signal = AbortSignal.any(signals);
@@ -224,14 +225,13 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
     });
 
     child.on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') {
-        settle({ kind: 'unavailable' });
-        return;
-      }
       settle({
         kind: 'error',
         code: SEARCH_FAILED,
-        message: `grep could not start its search command (ripgrep launch failed: ${error.message})`,
+        message:
+          error.code === 'ENOENT'
+            ? `grep could not start its search command (bundled ripgrep not found at ${executable})`
+            : `grep could not start its search command (ripgrep launch failed: ${error.message})`,
       });
     });
 
