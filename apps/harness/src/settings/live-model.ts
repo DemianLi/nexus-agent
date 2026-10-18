@@ -150,6 +150,19 @@
  * `assistant/attempt`、web 收到 `message-discard` 擦掉作廢的那一則。**政策與首事件之前共用**（偏離二，#1427）：同一份次數、
  * 同一套退避，沒有第二層。
  *
+ * ## 偏離六：全機的模型請求並行閘（[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)，理由 2：產品需求超出 dsh）
+ *
+ * `maxConcurrentRequests` 是「整台 serve 同時最多幾個模型請求在跑」，名額滿了排隊（FIFO、聽中止訊號），等超過 `maxWaitMs`
+ * 就以本機碼 `LOCAL_CAPACITY` 失敗、不重試。**dsh 沒有任何跨 session 的模型請求並行閘**（它是一個人用自己的 key）；我們是多人共用
+ * 一把 key，供應商的配額是全機共用的資源。對 dsh 決策紀錄否決過的四種形狀（全域一桶、排隊、全域准入門控、用速率代替計數）的逐條回答、
+ * 語意與閘為什麼放在模型類別的呼叫方法上，見 `../request-gate.ts` 與 `../gated-chat-openai.ts` 的檔頭。
+ *
+ * - **預設不限**（`maxConcurrentRequests` 不寫就不建閘，行為與沒有這兩格一樣；照 #1476 `maxThreads` 的先例，demian 2026-10-16 拍板）：
+ *   供應商的配額因端點而異，給數字沒有依據；預設打開會讓既有部署某天突然開始排隊。
+ * - **`maxWaitMs`**（預設 60 秒，沒有量測依據，可改）只在設了上限時有意義：它是加上 180 秒首事件逾時之後，使用者最壞還等得下去的量級。
+ * - **只有 serve 建閘**；一次性 CLI、REPL、eval、spike 不建。**改了要重啟 serve**（起動期讀一次，不在 `apply` 裡）。
+ * - 只限同時在跑幾個，不限每分鐘速率（Q3 (a)）；只做全機一桶，每人的那一桶等身分上線（#1428／#1429）另開卡（Q2 (a)）。
+ *
  * ## 這一列關不掉
  *
  * `disabled: true` 在載入期當場拋，理由同起動期那幾列：`startupSetting` 把關掉的那一列當成
@@ -187,6 +200,9 @@ export const LIVE_MODEL_PLUGIN_NAME = 'live-model';
 
 /** 逾時的上限：Node 計時器收得住的最大延遲，見檔頭「偏離三」。 */
 export const MAX_LIVE_TIMEOUT_MS = 2_147_483_647;
+
+/** 排隊等名額的預設上限（毫秒），見檔頭「偏離六」。沒有量測依據。 */
+export const DEFAULT_MAX_REQUEST_WAIT_MS = 60_000;
 
 /**
  * 出廠的重試次數（[#1427](https://github.com/DemianLi/nexus-agent/issues/1427)，demian 2026-10-14 拍板）。
@@ -344,6 +360,17 @@ export const liveModelConfigSchema = z
        * normal 的預設值；**寫了就必填 `mode`**。`maxRetries: 0` 就是不重打，回到只打一次。
        */
       retryPolicy: retryPolicySchema.default(defaultRetryPolicy),
+      /**
+       * 整台 serve 同時最多幾個模型請求在跑（#1505）；**不寫就不限**（不建閘），見檔頭「偏離六」。正整數。只有 serve 讀，改了要重啟。
+       */
+      maxConcurrentRequests: z.number().int().positive().optional(),
+      /** 名額滿了最多排隊等幾毫秒，超過就以 `LOCAL_CAPACITY` 失敗、不重試；只在設了 `maxConcurrentRequests` 時有意義。 */
+      maxWaitMs: z
+        .number()
+        .int()
+        .min(1)
+        .max(MAX_LIVE_TIMEOUT_MS)
+        .default(DEFAULT_MAX_REQUEST_WAIT_MS),
     },
     {
       error: (issue) => {

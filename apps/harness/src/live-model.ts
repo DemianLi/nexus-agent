@@ -16,6 +16,9 @@ import {
 import type { AttemptUsage, LlmFailure, StreamFailure } from '@nexus/core';
 
 import { AttachmentChatOpenAI } from './attachment-chat-openai.js';
+import { GatedChatOpenAI } from './gated-chat-openai.js';
+import { LOCAL_CAPACITY_CODE } from './request-gate.js';
+import type { RequestGate } from './request-gate.js';
 import type { RequestGuard } from './attachment-chat-openai.js';
 import { projectAttachments } from './attachment-projection.js';
 import type { AttachmentSource } from './attachment-projection.js';
@@ -1206,6 +1209,12 @@ export function createLiveModel(
      * 東西的子類（`attachment-chat-openai.ts`）。對話那條路（root，與可以換成的別顆）給；標題與背景子代理的模型不會看到附件參照。
      */
     readonly attachments?: AttachmentSource;
+    /**
+     * 全機的模型請求並行閘（[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)，`request-gate.ts`）：給了就建帶閘的子類，
+     * 每一次模型呼叫先取名額、結束時還。**只有 serve 給**（一次性 CLI、REPL、eval、spike 不建閘）；全機只有一份，每個建模型的地方
+     * （對話、換模型、背景子代理、標題）都要交同一份，不然那一處的請求不受管。
+     */
+    readonly requestGate?: RequestGate;
   } = {},
 ): ChatOpenAI {
   // 型錄沒有這個 id 就拋，訊息指名 id：設定的 schema 已經擋過一次，這裡是手搭設定的呼叫端（測試、eval）的最後一道。
@@ -1255,14 +1264,18 @@ export function createLiveModel(
   };
   // 帶了附件儲存的才用會投影附件的子類（#732）：沒有儲存就不會有附件參照進得了請求，也就不需要它。
   const attachments = overrides.attachments;
+  const requestGate = overrides.requestGate;
   const instance =
-    attachments === undefined
-      ? new ChatOpenAI(fields)
-      : new AttachmentChatOpenAI(
+    attachments !== undefined
+      ? new AttachmentChatOpenAI(
           fields,
           (messages) => projectAttachments(messages, attachments, acceptsImages(entry)),
           imageBudgetGuard(entry),
-        );
+          requestGate,
+        )
+      : requestGate !== undefined
+        ? new GatedChatOpenAI(fields, requestGate)
+        : new ChatOpenAI(fields);
   // 對話那一顆（含子代理）貼路由標籤（#723）：`model/start.route`、換模型通知與系統提示詞的 `{{model}}` 讀它。標題等別的用途不貼——
   // 它們不是對話的請求，不該冒充「最近一次請求走的路由」。
   return purpose === undefined
@@ -1479,6 +1492,7 @@ function classifyInbandEnvelope(envelope: Record<string, unknown>, status: numbe
  * | 其他有狀態的（404、408、410、418、422、425…） | `HTTP_<狀態>` | 否 |
  * | 模型呼叫拋的、串流中段的錯誤信封（SDK 拋的沒有 `status` 的 `APIError`）：信封的數字碼（400–599）照上面幾列；沒有數字碼 | 照上面；`SERVER` | 照上面；是 |
  * | 沒有狀態、逾時那幾個名字（{@link isTimeoutLink}），或模型呼叫的錯誤鏈上有 {@link TIMEOUT_ERROR_CODES} 的碼 | `TIMEOUT` | 是 |
+ * | 本機排隊等不到名額（`request-gate.ts` 拋的 `LocalCapacityError`，沒有送請求，#1505） | `LOCAL_CAPACITY` | 否 |
  * | 空回覆（{@link createEmptyResponseMiddleware} 拋的 `EmptyResponseError`） | `EMPTY_RESPONSE` | 是 |
  * | 沒有狀態、連線層的（`APIConnectionError`、模型呼叫的錯誤鏈上有 {@link NETWORK_ERROR_CODES} 的碼、讀串流時被切斷，見 {@link connectionFailures}） | `TRANSPORT` | 是 |
  * | **其餘——不是供應商的錯，或解不開的回應** | `UNKNOWN` | 否 |
@@ -1514,6 +1528,7 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   let timedOut = false;
   let connection = false;
   let empty = false;
+  let localCapacity = false;
   // 「只看結構」的連線與串流中段規則只套在模型呼叫拋的錯誤鏈上（工具 middleware 的錯不算）。
   const links = [...causeLinks(root)];
   const modelCall = links.some((link) => isModelCallFailure(link));
@@ -1528,6 +1543,7 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
     if (modelCall && typeof code === 'string' && TIMEOUT_ERROR_CODES.has(code)) timedOut = true;
     if (isConnectionLink(link, modelCall)) connection = true;
     if (name === 'EmptyResponseError') empty = true;
+    if (name === 'LocalCapacityError') localCapacity = true;
     if (inband === undefined && modelCall && isInbandApiError(link)) {
       const body = (link as { error?: unknown }).error;
       inband = inbandErrorStatus(
@@ -1549,13 +1565,15 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
             ? 'CONTEXT_WINDOW_EXCEEDED'
             : status !== undefined
               ? failureCodeOfStatus(status)
-              : empty
-                ? 'EMPTY_RESPONSE'
-                : timedOut
-                  ? 'TIMEOUT'
-                  : connection
-                    ? 'TRANSPORT'
-                    : 'UNKNOWN';
+              : localCapacity
+                ? LOCAL_CAPACITY_CODE
+                : empty
+                  ? 'EMPTY_RESPONSE'
+                  : timedOut
+                    ? 'TIMEOUT'
+                    : connection
+                      ? 'TRANSPORT'
+                      : 'UNKNOWN';
   return { message, code, ...(status !== undefined && { status }) };
 }
 
