@@ -516,7 +516,7 @@ export const approvalGatePlugin: NexusPlugin = {
     const controller = registry.services.get(APPROVAL_POLICY_SERVICE);
     if (controller === undefined) return;
     registry.sessions.join((subject) => {
-      if (subject.address.kind === 'root') return controller.attach(subject.log);
+      if (subject.address.kind === 'root') return controller.attach(subject);
       // 背景子代理：委派時一律釘成 `never`（照 dsh `child-agent.ts:254-275`，編背景圖時換上的閘門管道固定 `policy-never`，#324／#737），
       // 日誌上補一顆讓讀的人答得出。第一次開啟時寫一次；這一份日誌之後沒有人會切它。
       // 背景續行的子代理被叫醒時日誌是從磁碟讀回來的，已經有這一顆就不再寫。
