@@ -50,18 +50,21 @@
     "components/ui/composer.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/composer.tsx",
-      "sha256": "d047df639d10fee3c3e86c35cf383924fd53a7875b7a3f6693292186b5656d6e",
+      "sha256": "a0a50a49499ec6900d7334cda6fcfa3bfdfdd6e52c575e07ac2ecefad9b2280f",
       "patches": [
         "patches/0004-composer-textarea-props.patch",
         "patches/0005-composer-combobox.patch",
-        "patches/0006-composer-width-resize.patch"
+        "patches/0006-composer-width-resize.patch",
+        "patches/0007-composer-pick-trigger.patch"
       ],
       "upstreamSha256": "9c5481305cae9f7493d1ba61c1e4afb9ddabd005a481fe77cb80b70bd885486b"
     },
     "components/ui/context-ring.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/context-ring.tsx",
-      "sha256": "f6c7441e7a9147f4c52af502c35a15ad7712034ce46fd37c721be92846b62304"
+      "sha256": "968af7e5be491aee2b3aa58d2bf743a8612fd6b7329b7b5b82cf7ce307122ea8",
+      "patches": ["patches/0008-context-ring-body.patch"],
+      "upstreamSha256": "f6c7441e7a9147f4c52af502c35a15ad7712034ce46fd37c721be92846b62304"
     },
     "components/ui/dialog.tsx": {
       "source": "solid-glass",

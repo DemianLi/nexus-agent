@@ -283,7 +283,6 @@ function ConversationView({
     conversation.state.projections[PERMISSIONS_PROJECTION_KEY],
     conversation.connections,
   );
-  const [permissionOpen, setPermissionOpen] = useState(false);
   // 改動的摘要與比較都快取到這條 thread 的畫面卸掉（換 thread 整個重掛，#443）。
   const changes = useMemo(
     () => createChangesStores({ threadId, baseUrl: agentBaseUrl() }),
@@ -845,32 +844,22 @@ function ConversationView({
                 commands={commands}
                 fileReferences={fileReferences}
                 sessionReferences={sessionReferences}
-                {...(modelSeat === null && permissionSeat === null
+                // 底列照 SG demo（#1591 Q3）：左邊是助理怎麼做事（模式＝權限），右邊是這則訊息用什麼送（模型、推理強度、
+                // 用量環）。有待決時輸入框被面板換掉（藏起來、不卸載），三個都不畫，點開的清單與明細跟著關（#528）。
+                {...(permissionSeat === null
                   ? {}
                   : {
-                      seats: (
-                        <>
-                          {modelSeat !== null && (
-                            <ModelSeat
-                              seat={modelSeat}
-                              open={modelOpen}
-                              onOpenChange={setModelOpen}
-                            />
+                      footerStart: (
+                        <PermissionSeat
+                          seat={permissionSeat}
+                          hidden={pendings.length > 0}
+                          locked={permissionLocked(
+                            conversation.connected,
+                            status === 'running' || status === 'awaiting-input',
                           )}
-                          {permissionSeat !== null && (
-                            <PermissionSeat
-                              seat={permissionSeat}
-                              open={permissionOpen}
-                              onOpenChange={setPermissionOpen}
-                              locked={permissionLocked(
-                                conversation.connected,
-                                status === 'running' || status === 'awaiting-input',
-                              )}
-                              // 成功的回話與失敗的原因由斜線命令那一套顯示（狀態列），這裡不另開一條。
-                              onSwitch={(line) => void conversation.send(line)}
-                            />
-                          )}
-                        </>
+                          // 成功的回話與失敗的原因由斜線命令那一套顯示（狀態列），這裡不另開一條。
+                          onSwitch={(line) => void conversation.send(line)}
+                        />
                       ),
                     })}
                 {...(agents !== null
@@ -910,12 +899,21 @@ function ConversationView({
                 stoppable={conversation.state.status === 'running'}
                 stopDisabled={!conversation.connected}
                 onStop={() => void conversation.cancel()}
-                meter={
-                  // 有待決時輸入框被面板換掉（藏起來、不卸載），點開的明細要跟著關（#528）。
-                  <ContextMeter
-                    pressure={conversation.state.contextPressure}
-                    hidden={pendings.length > 0}
-                  />
+                footerEnd={
+                  <>
+                    {modelSeat !== null && (
+                      <ModelSeat
+                        seat={modelSeat}
+                        open={modelOpen}
+                        onOpenChange={setModelOpen}
+                        hidden={pendings.length > 0}
+                      />
+                    )}
+                    <ContextMeter
+                      pressure={conversation.state.contextPressure}
+                      hidden={pendings.length > 0}
+                    />
+                  </>
                 }
               />
             }

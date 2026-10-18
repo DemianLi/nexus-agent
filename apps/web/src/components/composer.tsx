@@ -104,11 +104,11 @@ export function Composer({
   stopDisabled,
   onStop,
   textareaRef,
-  meter,
+  footerEnd,
   fileReferences,
   sessionReferences,
   attachments,
-  seats,
+  footerStart,
   agentMention,
 }: {
   readonly draft: string;
@@ -141,8 +141,11 @@ export function Composer({
   readonly stopDisabled: boolean;
   readonly onStop: () => void;
   readonly textareaRef?: RefObject<HTMLTextAreaElement | null>;
-  /** 輸入框底下那一列右邊的用量表（#528）；資料由呼叫端接，這裡只管放哪。 */
-  readonly meter?: ReactNode;
+  /**
+   * 底列右邊（SG 的 `ComposerFooterEnd`）：這則訊息用什麼送——模型、推理強度、用量環（#1591 Q3，照 SG demo）。資料由
+   * 呼叫端接，這裡只管放哪。**沒給就沒有**。
+   */
+  readonly footerEnd?: ReactNode;
   /** `@` 的候選（#653）；要穩定，每換一次就重查一次。沒給就沒有 `@` 選單。 */
   readonly fileReferences?: (
     query: string,
@@ -162,10 +165,10 @@ export function Composer({
    */
   readonly attachments?: ComposerAttachments;
   /**
-   * 輸入框底下那一列左邊的選擇座位（#723 模型、#437 權限；SG 的 `ComposerFooter`，在輸入框外面）。**沒給就沒有**——
-   * 伺服器還沒實作的座位由呼叫端不傳，這裡不留空位。
+   * 底列左邊：助理怎麼做事——模式（權限，#437；#1591 Q3，照 SG demo）。底列是 SG 的 `ComposerFooter`，在輸入框外面。
+   * **兩邊都沒給就沒有底列**——伺服器還沒實作的座位由呼叫端不傳，這裡不留空位。
    */
-  readonly seats?: ReactNode;
+  readonly footerStart?: ReactNode;
   /**
    * `@子代理` 提及（#328 第 2 項）：清單、目前選的那一個、選與取消。**沒給就沒有**——`@` 選單沒有「委派給」那一段、
    * 輸入框上方也沒有標記。清單要穩定（它在查詢的 effect 依賴裡）。
@@ -460,7 +463,7 @@ export function Composer({
       <Popover
         open={menuOpen}
         onOpenChange={(next, details) => {
-          // 點輸入框本身（含「＋」與標記）不算點外面。底列在輸入框外面（SG 的 `ComposerFooter`），點底列的座位、用量表就是
+          // 點輸入框本身（含「＋」與標記）不算點外面。底列在輸入框外面（SG 的 `ComposerFooter`），點底列的 Pick、用量環就是
           // 點外面，選單收起，不會跟它們的浮層疊在一起（#528）。Base UI 沒有 Radix 的 `onInteractOutside`，在這裡看 `reason`
           // 取消（#1583）。
           if (!next && details.reason === 'outside-press') {
@@ -586,10 +589,13 @@ export function Composer({
             }}
           />
         )}
-        {(seats !== undefined || meter !== undefined) && (
+        {(footerStart !== undefined || footerEnd !== undefined) && (
           <ComposerFooter>
-            {seats}
-            <ComposerFooterEnd>{meter}</ComposerFooterEnd>
+            {footerStart}
+            {/* 窄的時候讓右邊縮：模型名稱截短，不撐出底列（README 本地修改第 40 條）。 */}
+            {footerEnd !== undefined && (
+              <ComposerFooterEnd className="min-w-0">{footerEnd}</ComposerFooterEnd>
+            )}
           </ComposerFooter>
         )}
         <PopoverContent

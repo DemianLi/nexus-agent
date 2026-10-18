@@ -782,7 +782,10 @@ async function startServer(
       ? undefined
       : await ThreadOrganization.open(resolveHarnessHome(env));
   // 上傳的檔案存在 harness home 底下、會話日誌之外（#732）。只解析路徑，第一次上傳才建目錄。
-  const attachmentStore = new AttachmentStore(attachmentsRootOf(resolveHarnessHome(env)));
+  // home 以上的祖先開不了、略過那一層 fsync 時，講在伺服器日誌（#1528 Q1 (b)）。
+  const attachmentStore = new AttachmentStore(attachmentsRootOf(resolveHarnessHome(env)), {
+    warn: log,
+  });
 
   // **會話根按目錄分，一個專案一格**——照 dsh 的 `projectDir(root, cwd)`
   // （[#251](https://github.com/DemianLi/nexus-agent/issues/251) 拍板的第 3 件）。一條
