@@ -859,6 +859,20 @@ async function startServer(
       ? undefined
       : threadCapacity.idleEvictAfterMs;
 
+  /**
+   * 冷讀一條會話的 header（`open(id, 'read')`：不拿租約、不寫檔）；**只吞「找不到」**（回 `undefined`），其他讀不了的原樣拋，
+   * 不吞成別的意思。子代理會話閘（#1544）的兩個入口共用：`createAgent` 的第一道、`run.cancel` 的檢查。
+   */
+  const coldSessionHeader = async (threadId: string): Promise<StoredSessionHeader | undefined> => {
+    if (sessionStore === undefined) return undefined;
+    try {
+      return (await sessionStore.open(threadId, 'read')).header;
+    } catch (error: unknown) {
+      if (error instanceof SessionNotFoundError) return undefined;
+      throw error;
+    }
+  };
+
   const handler = createWireHandler({
     auth,
     // 附件儲存（#732）：上傳路徑存進這裡；每條 thread 的 agent 另外掛一條唯讀路由給模型讀（見下面 `attachments`）。
@@ -917,19 +931,21 @@ async function startServer(
     ...(threadSearch !== undefined && {
       searchThreads: (query: unknown, signal: AbortSignal) => threadSearch.search(query, signal),
     }),
+    // 落盤的子代理會話（#1544）：`run.cancel` 不經 `createAgent`，靠這個問。
+    ...(sessionStore !== undefined && {
+      isSubagentSession: async (threadId: string) => {
+        const header = await coldSessionHeader(threadId);
+        return header !== undefined && isSubagentSessionHeader(header);
+      },
+    }),
     // 一個 thread 一個 agent——各自的 checkpointer、各自的虛擬檔案系統。
     createAgent: async (threadId: string) => {
       // **子代理的會話不是 thread**（#1544，照 dsh 的 headless／ACP：`parentSession` 不是 `undefined` 就拒絕）。
       // **必須在 `resumeThread` 之前、而且只冷讀 header**（`open(…, 'read')`，不拿租約、不寫檔）：續接會先拿寫租約、再把當掉那一輪的
       // 收尾寫回檔上（#721），放在它之後的話，日誌在被拒絕之前就已經被改了。「找不到」往下走（新 thread）；其他讀不了的原樣交給
-      // `resumeThread` 去報，不在這裡吞成別的意思。
+      // `resumeThread` 去報，不在這裡吞成別的意思（`coldSessionHeader` 只吞「找不到」）。
       if (sessionStore !== undefined) {
-        let header: StoredSessionHeader | undefined;
-        try {
-          header = (await sessionStore.open(threadId, 'read')).header;
-        } catch {
-          header = undefined;
-        }
+        const header = await coldSessionHeader(threadId);
         if (header !== undefined && isSubagentSessionHeader(header)) {
           throw new SubagentSessionError(threadId);
         }
@@ -961,7 +977,9 @@ async function startServer(
       // 組裝失敗時 catch 要用這一份清單換算掉了的列（`threadList` 在 catch 裡還沒有保證已賦值）。
       let assembledFrom: typeof threadList | undefined;
       try {
-        // 冷讀與續接之間檔案被換掉的窄縫：接回來的那份再核一次（dsh 組裝後的第二次核對）。丟之前不必自己放租約，下面的 catch 會。
+        // 冷讀與續接之間檔案被換掉的窄縫：接回來的那份再核一次（照 dsh `session-controller/src/agent.ts:231-234`，續接之後核對）。
+        // **撞上這道縫時，日誌在被拒絕之前已經被動過**：`resumeThread` 已拿了寫租約、把當掉那一輪的補結寫回檔上（#721）；
+        // 這一道只保證不往下組裝、不開出一條 thread，並由下面的 catch 放掉租約。要日誌一個位元組都不動只有第一道（冷讀）做得到。
         if (resumed !== undefined && isSubagentSessionHeader(resumed.header)) {
           throw new SubagentSessionError(threadId);
         }

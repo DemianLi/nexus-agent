@@ -374,6 +374,12 @@ export interface WireHandlerOptions {
    */
   storedThreadKnown?(threadId: string): Promise<boolean>;
   /**
+   * 這個 id 是不是落盤的**子代理會話**（header 帶 `parentSession`，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）。
+   * 只給 `run.cancel` 用——它不經 {@link createAgent}，所以閘不到那裡；實作是 `serve.ts` 冷讀 header（`open(id, 'read')`，不拿租約），
+   * 沒有日誌回 `false`。省略＝沒有落盤，沒有子代理會話可言。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
+   */
+  isSubagentSession?(threadId: string): Promise<boolean>;
+  /**
    * 讀一個背景子代理自己的落盤日誌（唯讀冷讀，[#871](https://github.com/DemianLi/nexus-agent/issues/871)）：`undefined`＝
    * 沒有這一份。**實作要自己確認它屬於 `threadId`**（header 的 `parentSession`），不然別條 thread 的編號讀得到。缺席＝沒開落盤，
    * 路由那時只讀得到載入著的 thread 記憶體裡的日誌。**同 {@link listThreads}，它不准碰 {@link createAgent}。**
@@ -1982,6 +1988,17 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       // **不經 `threadFor`**：那會替一條沒人開過的 thread 建一個 agent（連 MCP 子行程），
       // 只為了中止一件不存在的事。沒建過的就是閒著，照「閒著時中止什麼都不做」回受理。
       const existing = threads.get(threadId);
+      // 子代理的會話不是 thread（#1544，照 dsh `session-controller/src/commands.ts:506-507`：對子代理會話的 cancel 丟 ownership 錯誤）。
+      // 記憶體裡沒有它才需要問（子代理的會話永遠進不了 `threads`）；冷讀失敗當「不是」——中止是盡力而為，這條路本來就沒有東西在跑。
+      if (existing === undefined && (await asSubagentSession(threadId))) {
+        return json(
+          errorResponse(
+            envelope.id,
+            THREAD_IS_SUBAGENT,
+            new SubagentSessionError(threadId).message,
+          ),
+        );
+      }
       if (existing !== undefined) {
         // 建到一半的等它建好再中止；建不起來的就沒有東西可停。
         const thread = await existing.catch(() => undefined);
@@ -2528,6 +2545,15 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       );
     }
     return json(successResponse(id, { accepted: true }));
+  }
+
+  /** {@link WireHandlerOptions.isSubagentSession} 的包裝：沒給、或冷讀拋了都當「不是」。 */
+  async function asSubagentSession(threadId: string): Promise<boolean> {
+    try {
+      return (await options.isSubagentSession?.(threadId)) ?? false;
+    } catch {
+      return false;
+    }
   }
 
   /** 這條會話存不存在：這個行程裡開過的，或落盤的。落盤那一半見 {@link WireHandlerOptions.storedThreadKnown}。 */
