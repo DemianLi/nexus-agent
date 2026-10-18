@@ -205,7 +205,7 @@ export class DepthCheckedSerializer implements SerializerProtocol {
   async dumpsTyped(data: unknown): Promise<[string, Uint8Array]> {
     if (data instanceof Uint8Array) return this.#inner.dumpsTyped(data);
     const depth = checkpointDepth(data);
-    void depth; // 探針 M1（#1658）：拿掉層數檢查，會 revert
+    if (depth > this.#maxDepth) throw new CheckpointDepthError(depth, this.#maxDepth);
     const dumped = await this.#inner.dumpsTyped(data);
     if (sameBytes(dumped[1], SWALLOWED)) throw new CheckpointUnserializableError();
     return dumped;
