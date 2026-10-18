@@ -1568,14 +1568,17 @@ type SnapshotTask =
 
 /**
  * 一則會話事件的 `data` 最多巢狀幾層物件或陣列（`data` 本身算第 1 層，純量不算），超過的在 {@link SessionLog.append} 拒收。
+ * 根跟遙測交出去的 body 是同一個（協調器送的就是 `data`），所以這個數字也是 OTLP 匯出那一段看到的層數。
  *
  * **為什麼要有上限：** Node 22 的原生 `JSON.stringify` 是遞迴的，連沒凍過的值也一樣。CI（Linux x64，Node 22.19.0 與
  * 22.23.3）上一則 `tool/result` 的 `meta` 深到 4104 層，JSONL 後端就寫不出去；寫入失敗的那一批會留在佇列頭（照 dsh
  * `storage.ts:301-317`），那條會話之後一則都落不了盤。在寫入這一關先拒，壞的只有那一則（[#1661](https://github.com/DemianLi/nexus-agent/issues/1661)）。
  *
- * **為什麼是 1000：** 低於量過的每一個原生門檻——凍過陣列的 `structuredClone` 最低約 1537 層、沒凍過的 `JSON.stringify`
- * 約 4100 層——而且留了餘量：那些數字是在 vitest 裡量的，serve 底下呼叫端的堆疊（Cordis 的事件派送、中介層）更深，
- * 能用的層數只會更少。正常的工具結果與訊息遠遠到不了這個深度。
+ * **為什麼是 600：** 被最淺的那個讀方壓下來的。CI（Linux x64，Node 22.19.0 與 22.23.3）上 `telemetry-otel` 的 OTLP/HTTP JSON
+ * 匯出（`toAnyValue` 加 `JSON.stringify`，兩段都是遞迴的）物件 1023 層就送不出去、交錯 1169、陣列 1364；其他的都更深
+ * （凍過陣列的 `structuredClone` 約 1537、沒凍過的 `JSON.stringify` 約 4100）。600 在最低門檻的三分之二以下：那些數字是在
+ * vitest 裡量的，serve 底下呼叫端的堆疊更深，能用的只會更少。`telemetry-otel` 出廠是關的，但上限照最嚴的讀方定。
+ * 正常的工具結果與訊息不到 100 層（#1661 盤點）。
  *
  * **只管寫入，讀方不設限。** 這個上限出現之前寫下的舊日誌可能有更深的事件，續接（seed）與讀方（`fromLoggedMessage`、
  * 遙測、修剪）照樣收得下，{@link snapshotJsonValue} 預設不設限。
@@ -1583,7 +1586,7 @@ type SnapshotTask =
  * **與 dsh 的偏離（理由 1）：** dsh 的 `Session.append` 沒有深度上限，在 Node 22 上有同一個洞——超深的一則讓整條會話卡住。
  * 我們的執行環境就是 Node 22，退一步改在寫入那一關設上限。
  */
-export const SESSION_EVENT_MAX_DEPTH = 1000;
+export const SESSION_EVENT_MAX_DEPTH = 600;
 
 /**
  * 深拷貝成**無損的**純 JSON，**拷不動就當場拋**。

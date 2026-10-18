@@ -280,7 +280,7 @@ function baselineOf(log: SessionLog): Baseline {
     const event = events[at]!;
     if (fresh.header === undefined && event.type === 'request/header') {
       // 先拷一份沒凍過的再 stringify（#1526）：日誌裡的是凍過的，V8 對凍過的巢狀撐得比較淺（CI 的 Node 22 上凍過的陣列
-      // 約 2200 層、沒凍過的約 4100 層），續接回來的舊日誌可能更深（新寫的有 1000 層上限，#1661）。拋在這裡的話基準永遠建不起來，這條 thread 之後每次呼叫都被
+      // 約 2200 層、沒凍過的約 4100 層），續接回來的舊日誌可能更深（新寫的有 600 層上限，#1661）。拋在這裡的話基準永遠建不起來，這條 thread 之後每次呼叫都被
       // 下面 handler 的 `catch` 接住（每次一條 warn），兩種快照都不再記。
       fresh.header = JSON.stringify(
         snapshotJsonValue(event.data.header, 'request/header 的 header'),
