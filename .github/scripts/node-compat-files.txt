@@ -7,7 +7,7 @@ apps/harness/src/thread-search.test.ts        # node:sqlite 的載入與 FTS5 �
 apps/harness/src/serve-thread-search.test.ts  # serve 起動時 openAt: startup 就載入 node:sqlite
 apps/harness/src/http-proxy-egress.test.ts    # npm 的 undici 8 換掉 Node 內建 fetch 的全域派送器，用行為量（Node 內建的 undici 每個 major 都不同）
 apps/harness/src/session-lease.test.ts        # 會話租約走真的 kernel flock（@deepseek-ai/node-addon-system 的 N-API 二進位）
-apps/harness/src/home-lock.test.ts            # 同上，home 鎖的真 flock（#1503）
+apps/harness/src/no-such-file-1546.test.ts    # 探針 P3（不合併）：清單放一個不存在的檔
 apps/harness/src/serve-home-lock.test.ts      # 同上，兩台 serve 搶同一個 home
 apps/harness/src/serve-shutdown.test.ts       # 真的子行程 serve 加訊號收尾
 apps/harness/src/serve-echo-on-tree.test.ts   # Loader 依套件名 import 插件的那條路
