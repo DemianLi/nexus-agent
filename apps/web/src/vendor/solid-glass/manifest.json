@@ -153,6 +153,23 @@
       "source": "shadcn",
       "from": "LICENSE.md",
       "sha256": "1564074e13439397221ffd522e2e504d56561994a23d371aa5e3ad43e4f5423f"
+    },
+    "components/ui/questionnaire.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/questionnaire.tsx",
+      "sha256": "69055933125041d2850cda62188fece151780e1236bb4892eca9659509bff685"
+    },
+    "components/ui/attachment.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/attachment.tsx",
+      "sha256": "c2e378aed9b2d11e0b0d910443a128a5fa67e58a748e1acc8cfb9d8122036c77"
+    },
+    "components/ui/sonner.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/sonner.tsx",
+      "sha256": "2d40f0b3d9021086eab403fe042df04aff794f4dca5214b13aaf23ce8dd37a50",
+      "patches": ["patches/0010-sonner-theme-prop.patch"],
+      "upstreamSha256": "0c729f9f1ada0b0bedd9296710cc257dc43559fa6b8cc40f010d129e8ff85fdd"
     }
   }
 }

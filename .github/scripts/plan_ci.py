@@ -49,8 +49,8 @@ FULL_RES = [
         # 相依、工具鏈、workspace 設定：影響每一個套件。
         r'^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|\.prettierignore|\.prettierrc.*|prettier\.config\..*)$',
         r'^(eslint\.config\..*|tsconfig.*\.json|vitest\..*)$',
-        # CI 自己：改了它就該用它驗一次完整的。
-        r'^\.github/(workflows|scripts)/',
+        # CI 自己：改了它就該用它驗一次完整的。`actions/` 是每個 job 共用的 setup（Node 版本在這裡，#1546）。
+        r'^\.github/(workflows|scripts|actions)/',
         # 測試「讀」而不是 import 的檔：import 圖看不到它們（見 ci.yml 的說明）。
         r'^docs/operations\.md$',
         r'^apps/harness/(cordis(\.serve)?\.yml|package\.json|vitest\.config\..*|tsconfig.*\.json|eslint\.config\..*)$',

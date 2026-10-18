@@ -1,6 +1,14 @@
 name: 準備 Node 與相依套件
 description: 每個要跑 TypeScript 檢查的 job 共用的前置：pnpm、Node、frozen lockfile 安裝。
 
+inputs:
+  node-version:
+    description: >-
+      Node 版本。預設是主版本 24，照 dsh `ci.yml:9` 的 `PRIMARY_NODE_VERSION: '24'`（#1546 Q1 (a)）。
+      相容矩陣與下限冒煙才傳別的版本。
+    required: false
+    default: '24'
+
 runs:
   using: composite
   steps:
@@ -12,7 +20,7 @@ runs:
 
     - uses: actions/setup-node@v7
       with:
-        node-version: 22
+        node-version: ${{ inputs.node-version }}
         cache: pnpm
 
     - name: 安裝相依套件
