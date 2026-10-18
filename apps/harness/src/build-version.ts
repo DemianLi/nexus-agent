@@ -4,8 +4,9 @@
  * eval 結果檔（[#1000](https://github.com/DemianLi/nexus-agent/issues/1000)，`eval/result-file.ts`）先有這一份；會話日誌的
  * header 也要記同一件事（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)），所以搬到這裡共用，**取法只有一份**。
  *
- * git 是在**這個檔所在的目錄**問的，不是使用者的 cwd：要的是跑著的這份程式碼的版本，不是使用者工作區的。從一棵沒有
- * `.git` 的樹跑（打包、CI 的淺層 checkout 被拿掉 `.git`）就拿不到，記 `null`。
+ * git 是在**這個檔所在的目錄**問的，不是使用者的 cwd：要的是跑著的這份程式碼的版本，不是使用者工作區的。打包出來的產物
+ * 帶戳記（{@link resolveBuildVersion}，#1502），**戳記優先、不問 git**；沒有戳記、又在一棵沒有 `.git` 的樹裡跑
+ * （CI 的淺層 checkout 被拿掉 `.git`），才拿不到，記 `null`。
  *
  * ## 子行程的環境與逾時（[#1620](https://github.com/DemianLi/nexus-agent/issues/1620)）
  *
