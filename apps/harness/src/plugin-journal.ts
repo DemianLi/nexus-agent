@@ -34,7 +34,8 @@
  *
  * ## 並發與壞掉的行（Q5）
  *
- * - **寫端**：取跨行程鎖 → 檔尾沒有換行就先截掉那半行（它從來沒回報成功，不丟任何稽核過的資料）→ 驗 → 追加整行 → fsync → 才回報。
+ * - **寫端**：取跨行程鎖 → 檔尾沒有換行就先截掉那半行（它從來沒回報成功，不丟任何稽核過的資料）→ 驗 → 寫滿整行 → fsync → 才回報。
+ *   寫或 fsync 失敗就截回寫前大小再拋（[#1582](https://github.com/DemianLi/nexus-agent/issues/1582)，照 dsh `rollbackAppend`）。
  * - **讀端**：不取鎖。最後一行沒有換行結尾，當成「還沒寫完的那一筆」略過。
  * - **其餘壞掉**（中間某行解析不了、序號跳號或倒退）：拋 {@link PluginJournalError}，訊息指名第幾行。
  *
@@ -57,6 +58,7 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { lstat, mkdir, open, readFile, rm, writeFile } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { dirname, resolve } from 'node:path';
 
 import { z } from 'zod';
@@ -784,11 +786,18 @@ export async function appendJournalRecord(
       }
       const created = bytes === undefined;
       const handle = await open(path, 'a+', 0o600);
+      let closed = false;
+      const closeHandle = async (): Promise<void> => {
+        if (closed) return;
+        closed = true;
+        await handle.close();
+      };
       try {
         options.check?.(path);
         const contents = parseJournal(bytes ?? Buffer.alloc(0), path);
         if (contents.incompleteTail) {
-          // 寫到一半當掉留下的半行：它從來沒回報成功，截掉不丟任何稽核過的資料；不截的話下一筆會跟它黏成一行壞資料。
+          // 半行只會來自寫的時候行程當掉，或寫失敗、截回也失敗（那一次已經拋錯，見 {@link appendLine}）：都沒回報成功，
+          // 截掉不丟任何稽核過的資料；不截的話下一筆會跟它黏成一行壞資料。
           await handle.truncate(contents.completeBytes);
           warn(
             `[變更紀錄] ${path} 的最後一行沒有寫完（上一次寫入中途當掉），已截掉那半行再追加；` +
@@ -804,16 +813,59 @@ export async function appendJournalRecord(
           actor: options.actor,
           ...body,
         });
-        await handle.write(`${JSON.stringify(record)}\n`);
-        await handle.sync();
+        await appendLine(path, handle, closeHandle, `${JSON.stringify(record)}\n`);
         if (created) await syncDirectoryBestEffort(directory);
         return record;
       } finally {
-        await handle.close();
+        await closeHandle();
       }
     },
     options.waitMs === undefined ? {} : { waitMs: options.waitMs },
   );
+}
+
+/**
+ * 寫滿一整行並 fsync；寫或 fsync 失敗就截回寫前大小再拋，照 dsh `appendLines`／`rollbackAppend`
+ * （`session-persistence-jsonl/src/index.ts:1410-1449`，[#1582](https://github.com/DemianLi/nexus-agent/issues/1582)）：
+ *
+ * - **寫滿**：`writeFile` 迴圈寫到整行寫完。單次 `write` 短寫時不拋錯、照樣 resolve，留下半行卻回報成功，
+ *   下一個寫者會把它當成「當掉的半行」截掉，一筆已回報的紀錄就沒了。
+ * - **失敗截回**：寫前大小取檔案現在的大小（前面可能剛截過半行）。先關掉追加把手，另開 `r+` 截回並 fsync；
+ *   截回也失敗就把兩個錯一起拋（`AggregateError`），半行留在檔裡，下一個寫者照 {@link appendJournalRecord} 截掉並警告。
+ */
+async function appendLine(
+  path: string,
+  handle: FileHandle,
+  closeHandle: () => Promise<void>,
+  line: string,
+): Promise<void> {
+  const { size: before } = await handle.stat();
+  try {
+    await handle.writeFile(line);
+    await handle.sync();
+  } catch (error: unknown) {
+    try {
+      await closeHandle();
+      await rollbackAppend(path, before);
+    } catch (rollbackError: unknown) {
+      throw new AggregateError(
+        [error, rollbackError],
+        `變更紀錄 ${path} 的追加失敗，截回也失敗了：殘留的半行還在檔案裡，下一次寫入會截掉它`,
+      );
+    }
+    throw error;
+  }
+}
+
+/** 另開 `r+` 把紀錄檔截回 `size` 並 fsync，同 dsh `rollbackAppend`（`index.ts:1441-1449`）。 */
+async function rollbackAppend(path: string, size: number): Promise<void> {
+  const handle = await open(path, 'r+');
+  try {
+    await handle.truncate(size);
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
 }
 
 /**
