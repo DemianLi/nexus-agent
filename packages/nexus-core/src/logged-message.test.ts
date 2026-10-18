@@ -66,7 +66,11 @@ describe('fromLoggedMessage 推得回深巢狀的那一則（#1526）', () => {
   it('日誌裡凍過的、工具參數 5000 層交錯巢狀的 AI 訊息：推得回來，參數原樣、拿到的是可改的副本', () => {
     const args = { v: deepMixed(5_000) };
     // 照續接時的來路造：日誌形狀的訊息是從磁碟讀回來的，不經過 `toLoggedMessage`（LangChain 的 `toDict` 本身是遞迴的）。
-    const shallow = new AIMessage({ id: 'm1', content: '', tool_calls: [{ id: 'c1', name: 't', args: {} }] });
+    const shallow = new AIMessage({
+      id: 'm1',
+      content: '',
+      tool_calls: [{ id: 'c1', name: 't', args: {} }],
+    });
     const logged = toLoggedMessage(shallow);
     // `StoredMessageData` 的型別沒有列 `tool_calls`，實際落盤的 AI 訊息有。
     const data = logged.data as typeof logged.data & { readonly tool_calls: readonly object[] };

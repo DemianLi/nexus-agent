@@ -280,7 +280,9 @@ function baselineOf(log: SessionLog): Baseline {
     if (fresh.header === undefined && event.type === 'request/header') {
       // 先拷一份沒凍過的再 stringify（#1526）：日誌裡的是凍過的，V8 對凍過的巢狀約 3 千層就 `RangeError`，而日誌收得下
       // 更深的。拋在這裡的話基準永遠建不起來，這條 thread 之後每次呼叫都被下面 handler 的 `catch` 吞掉，兩種快照都不再記。
-      fresh.header = JSON.stringify(snapshotJsonValue(event.data.header, 'request/header 的 header'));
+      fresh.header = JSON.stringify(
+        snapshotJsonValue(event.data.header, 'request/header 的 header'),
+      );
     } else if (fresh.system === undefined && event.type === 'request/system') {
       fresh.system = event.data.system;
     }

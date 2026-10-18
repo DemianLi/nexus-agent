@@ -633,9 +633,9 @@ describe('JSON 快照照 dsh 的規則（#1526）', () => {
       const items = new Items();
       items.push(1);
       const log = new SessionLog('t1');
-      expect(() => log.append('tool/result', { callId: 'c1', isError: false, meta: items })).toThrow(
-        /tool\/result 的 data\.meta 是 object，日誌只收純 JSON/,
-      );
+      expect(() =>
+        log.append('tool/result', { callId: 'c1', isError: false, meta: items }),
+      ).toThrow(/tool\/result 的 data\.meta 是 object，日誌只收純 JSON/);
       expect(log.length).toBe(0);
     });
 
@@ -643,9 +643,9 @@ describe('JSON 快照照 dsh 的規則（#1526）', () => {
       const forged = Object.create({}) as Record<string, unknown>;
       forged['a'] = 1;
       const log = new SessionLog('t1');
-      expect(() => log.append('tool/result', { callId: 'c1', isError: false, meta: forged })).toThrow(
-        /tool\/result 的 data\.meta 是 object，日誌只收純 JSON/,
-      );
+      expect(() =>
+        log.append('tool/result', { callId: 'c1', isError: false, meta: forged }),
+      ).toThrow(/tool\/result 的 data\.meta 是 object，日誌只收純 JSON/);
       expect(log.length).toBe(0);
     });
 
@@ -659,9 +659,9 @@ describe('JSON 快照照 dsh 的規則（#1526）', () => {
       const forged = Object.create(fakePrototype) as Record<string, unknown>;
       forged['a'] = 1;
       const log = new SessionLog('t1');
-      expect(() => log.append('tool/result', { callId: 'c1', isError: false, meta: forged })).toThrow(
-        /tool\/result 的 data\.meta 是 object，日誌只收純 JSON/,
-      );
+      expect(() =>
+        log.append('tool/result', { callId: 'c1', isError: false, meta: forged }),
+      ).toThrow(/tool\/result 的 data\.meta 是 object，日誌只收純 JSON/);
       expect(log.length).toBe(0);
     });
 

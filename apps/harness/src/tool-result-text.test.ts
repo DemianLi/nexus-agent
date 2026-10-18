@@ -204,7 +204,8 @@ describe('日誌裡凍過的深 meta（#1526）', () => {
   it('5000 層交錯巢狀：量得動、交出去的是沒凍過的副本，之後的原生 JSON.stringify 也序列化得了', () => {
     const meta = { deep: deepMixed(5_000) };
     // 照正式路徑凍：從日誌拿，不自己 `Object.freeze`。
-    const logged = new SessionLog('t').append('tool/result', { callId: 'c1', isError: false, meta }).data.meta;
+    const logged = new SessionLog('t').append('tool/result', { callId: 'c1', isError: false, meta })
+      .data.meta;
     // 上限明著放大：這一格量的是「量得動、交得出去」，不是上限本身；超過上限的話回 `undefined`，什麼都測不到。
     const capped = capToolResultMeta(logged, 1_000_000);
     expect(Object.isFrozen(capped)).toBe(false);

@@ -508,6 +508,8 @@ describe('深巢狀的事件照樣交得出去（#1526）', () => {
     expect(warnings).toEqual([]);
     expect(sink.records).toHaveLength(1);
     expect(sink.records[0]!.attributes['event.seq']).toBe(event.seq);
-    expect(JSON.stringify((sink.records[0]!.body as { meta: unknown }).meta)).toBe(JSON.stringify(meta));
+    expect(JSON.stringify((sink.records[0]!.body as { meta: unknown }).meta)).toBe(
+      JSON.stringify(meta),
+    );
   });
 });

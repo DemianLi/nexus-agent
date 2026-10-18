@@ -268,11 +268,17 @@ function deepMixed(depth: number): unknown {
 
 describe('記過的剪法帶深巢狀區塊（#1526）', () => {
   it('剪完的內容裡有 5000 層交錯巢狀的欄位：換得上去，內容原樣、拿到的是可改的副本', () => {
-    const original = new ToolMessage({ content: 'x'.repeat(300), tool_call_id: 'deep', name: 'mcp' });
+    const original = new ToolMessage({
+      content: 'x'.repeat(300),
+      tool_call_id: 'deep',
+      name: 'mcp',
+    });
     const content = [{ type: 'text', text: '頭…尾', extra: deepMixed(5_000) }];
     const log = new SessionLog('s');
     log.append('compaction/prune', {
-      results: [{ callId: 'deep', originalChars: measureToolResultContent(original.content), content }],
+      results: [
+        { callId: 'deep', originalChars: measureToolResultContent(original.content), content },
+      ],
     } as never);
     const replaced = applyRecordedPrune(original, recordedPrunesOf(log.events)) as ToolMessage;
     expect(replaced).not.toBe(original);

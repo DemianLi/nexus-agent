@@ -183,7 +183,10 @@ describe('recordRequestSnapshot：變了才記', () => {
     const shallow = request('甲');
     recordRequestSnapshot(
       before,
-      { ...shallow, header: { ...shallow.header, tools: [{ name: 'echo', parameters: { deep } }] } },
+      {
+        ...shallow,
+        header: { ...shallow.header, tools: [{ name: 'echo', parameters: { deep } }] },
+      },
       0,
     );
 

@@ -55,9 +55,13 @@ async function roundTrip(write: (sessions: SessionRegistry) => void): Promise<{
   readonly adopted: readonly SessionEvent[];
 }> {
   const sessions = new SessionRegistry('root');
-  const persistence = attachSessionPersistence(sessions, openJsonlSessionStore({ directory: dir }), {
-    warn: () => {},
-  });
+  const persistence = attachSessionPersistence(
+    sessions,
+    openJsonlSessionStore({ directory: dir }),
+    {
+      warn: () => {},
+    },
+  );
   write(sessions);
   const live = sessions.root.events;
   await persistence.flush();
@@ -118,7 +122,9 @@ describe('A2：經過訊息那條路（#1526）', () => {
     const ai = new AIMessage({
       id: 'm1',
       content: '',
-      tool_calls: [{ id: 'c1', name: 'probe', args: JSON.parse(POLLUTING) as Record<string, unknown> }],
+      tool_calls: [
+        { id: 'c1', name: 'probe', args: JSON.parse(POLLUTING) as Record<string, unknown> },
+      ],
     });
     const { live, stored } = await roundTrip((sessions) => {
       sessions.root.append('assistant/message', { message: toLoggedMessage(ai) });
