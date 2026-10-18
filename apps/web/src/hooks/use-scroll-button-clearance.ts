@@ -12,7 +12,8 @@ import type { RefObject } from 'react';
  * 設 `data-obscuring`（樣式 `data-[obscuring]:invisible`：visibility 不跟淡入淡出那幾條打架，藏起來也不在 Tab 順序裡）。
  * 浮鈕自己有焦點時不藏，焦點不能憑空消失。只看標了的元素，不抓全部的 `form`：新元件要讓就自己標。
  *
- * 不改 `ui/message-scroller.tsx`（registry 原文），只靠它的 `data-slot`。
+ * 不改 vendor 的 `message-scroller.tsx`（#1638 PR B 起是 SG 版），只靠浮鈕的 `data-slot`：合併 `render` 的 Button 之後仍是
+ * `message-scroller-button`（`components/ui/message-scroller.test.tsx` 釘）。浮鈕藏著時不位移（README 本地修改第 41 條），量到的框不受過渡影響。
  */
 
 /** 浮鈕要讓開的元素：標在對話裡的輸入區上。 */
