@@ -2547,11 +2547,18 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     return json(successResponse(id, { accepted: true }));
   }
 
-  /** {@link WireHandlerOptions.isSubagentSession} 的包裝：沒給、或冷讀拋了都當「不是」。 */
+  /**
+   * {@link WireHandlerOptions.isSubagentSession} 的包裝：沒給當「不是」；冷讀拋了也當「不是」，**但記一行 warn**——
+   * 這條路徑是 `run.cancel` 的閘，讀不了就放行等於閘沒擋住，管理者得知道。放行是因為取消本來就是無害的請求
+   * （對不存在的 id 也回受理），讀不了 header 不該連帶讓正常的取消失敗。
+   */
   async function asSubagentSession(threadId: string): Promise<boolean> {
     try {
       return (await options.isSubagentSession?.(threadId)) ?? false;
-    } catch {
+    } catch (error: unknown) {
+      options.warn?.(
+        `run.cancel 查不了 "${threadId}" 是不是子代理會話（${error instanceof Error ? error.message : String(error)}），當作不是、照常處理`,
+      );
       return false;
     }
   }

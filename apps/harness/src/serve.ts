@@ -942,8 +942,8 @@ async function startServer(
     createAgent: async (threadId: string) => {
       // **子代理的會話不是 thread**（#1544，照 dsh 的 headless／ACP：`parentSession` 不是 `undefined` 就拒絕）。
       // **必須在 `resumeThread` 之前、而且只冷讀 header**（`open(…, 'read')`，不拿租約、不寫檔）：續接會先拿寫租約、再把當掉那一輪的
-      // 收尾寫回檔上（#721），放在它之後的話，日誌在被拒絕之前就已經被改了。「找不到」往下走（新 thread）；其他讀不了的原樣交給
-      // `resumeThread` 去報，不在這裡吞成別的意思（`coldSessionHeader` 只吞「找不到」）。
+      // 收尾寫回檔上（#721），放在它之後的話，日誌在被拒絕之前就已經被改了。「找不到」往下走（新 thread）；其他讀不了的
+      // （header 壞了、權限）`coldSessionHeader` 自己就拋，這條 thread 建不起來、下一次請求重試——不吞成「不是子代理」放行。
       if (sessionStore !== undefined) {
         const header = await coldSessionHeader(threadId);
         if (header !== undefined && isSubagentSessionHeader(header)) {

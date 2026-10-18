@@ -12,7 +12,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { appendFile, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, readdir, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -83,10 +83,12 @@ async function start(
   root: string,
   turns: readonly { content: string }[] | typeof DISPATCH_TURNS,
   extraRows?: string,
+  log?: (line: string) => void,
 ): Promise<ScriptedServe> {
   serve = await startScriptedServe(turns as never, {
     argv: ['--session-log', root],
     ...(extraRows === undefined ? {} : { extraRows }),
+    ...(log === undefined ? {} : { log }),
   });
   return serve;
 }
@@ -276,6 +278,27 @@ describe('子代理的會話不是 thread（#1544 驗收 1、2）', () => {
     await foldTurn(events);
     await events.return?.(undefined);
     expect(await client.runCancel('alpha')).toMatchObject({ type: 'success' });
+  });
+
+  it('run.cancel 的冷讀拋錯（header 壞了）：照常受理，但記一行 warn，不是默默放行', async () => {
+    const subagent = await dispatchRealSubagent();
+    await serve?.close();
+    serve = undefined;
+    const rootHeader = (await readdir(subagent.directory)).find(
+      (name) => name.startsWith('alpha.') && name.endsWith('.header.json'),
+    );
+    expect(rootHeader).toBeDefined();
+    await writeFile(join(subagent.directory, rootHeader!), '{壞掉', 'utf8');
+
+    const lines: string[] = [];
+    const second = await start(subagent.root, PLAIN_TURNS, undefined, (line) => lines.push(line));
+    const client = await serveClient(second.running);
+
+    expect(await client.runCancel('alpha')).toMatchObject({
+      type: 'success',
+      result: { accepted: true },
+    });
+    expect(lines.some((line) => line.includes('run.cancel 查不了 "alpha"'))).toBe(true);
   });
 
   it('子代理自己那條路（subagent.history）不受影響：照樣讀得到', async () => {
