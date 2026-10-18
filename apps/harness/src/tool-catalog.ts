@@ -143,6 +143,11 @@ export const PACKAGE_MANIFEST: Readonly<Record<string, PackageExpectation>> = {
   'nexus-plugin-submit-record': { kind: 'shipped', reason: '`submit_record`。' },
   'nexus-plugin-system-prompt': { kind: 'none', reason: '只組系統提示詞。' },
   'nexus-plugin-telemetry-otel': { kind: 'none', reason: '遙測匯出，不是模型的工具。' },
+  'nexus-plugin-time-context': {
+    kind: 'none',
+    reason:
+      '每次 agent 呼叫開頭把取樣時間與距上一則訊息的時長當一則使用者訊息注入（不是系統提示詞）。',
+  },
   'nexus-plugin-todo': { kind: 'shipped', reason: '`todo_write`。' },
   'nexus-plugin-token-meter': { kind: 'none', reason: '用量投影，給畫面看。' },
   'nexus-plugin-trajectory': { kind: 'none', reason: '軌跡投影，給畫面看。' },

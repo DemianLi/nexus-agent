@@ -179,6 +179,10 @@ describe('一次性模式', () => {
     expect(names.filter((name) => !name.endsWith('-invariant'))).toEqual([
       'echo',
       'agent-instructions',
+      // **`time-context` 進來的理由是模型沒有時鐘**（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)）：
+      // 與 `agent-instructions` 同一個 `agent/pre-step` 接縫，每次 agent 呼叫開頭（同一條 thread 10 分鐘內不重複）追加一則
+      // 持久的使用者訊息；不多工具、不多命令、不進系統提示詞。CLI 也掛（偏離 dsh，登記在套件檔頭）。
+      'time-context',
       // **`skills` 進來的理由是它本來就在，只是沒有人掛**（[#440](https://github.com/DemianLi/nexus-agent/issues/440)）：
       // 工作區的 `skills/<name>/SKILL.md` 不進清單就永遠看不到。沒有 skill 的時候一個字都不加（組裝點包了一層，
       // 見 `packages/nexus-core/src/skills-middleware.ts`），多的只是啟動時掃一次 `/skills/`。

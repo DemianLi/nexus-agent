@@ -33,6 +33,7 @@ import {
   emptyCommandPoint,
   loopbackRequest,
   shippedPlugins,
+  withoutTimeContext,
   TEST_BROWSER_AUTH,
 } from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
@@ -171,7 +172,7 @@ async function assemble(
     model,
     checkpointer: new MemorySaver(),
     plugins: [
-      ...(options.shipped === true ? await shippedPlugins() : []),
+      ...(options.shipped === true ? withoutTimeContext(await shippedPlugins()) : []),
       triggerPlugin(hooks, options.extra),
     ],
     stepInbox,

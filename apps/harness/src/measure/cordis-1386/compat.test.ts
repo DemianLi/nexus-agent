@@ -16,7 +16,7 @@ import { convertToOpenAITool } from '@langchain/core/utils/function_calling';
 import { AIMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { NexusAgentHandle } from '../../agent-factory.js';
 import { createNexusAgent } from '../../agent-factory.js';
 import { toAgentInvocation } from '../../messages.js';
@@ -113,6 +113,15 @@ async function viaCordis(config: CompatConfig): Promise<{ observed: string; plug
 }
 
 describe('相容層讓出貨清單原樣跑（#1386 ②）', () => {
+  // `time-context`（#1625）的讀數帶牆鐘秒數：兩條路各跑一次，秒數會不同；固定 `Date` 讓比對只剩組裝差異（讀數留在清單裡，順序也一併比到）。
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(Date.parse('2026-10-18T01:00:00Z'));
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   for (const serve of [false, true]) {
     it(`${serve ? 'serve' : 'CLI'} 清單：請求、工具、middleware、命令逐位元組相同`, async () => {
       const reference = await today(serve);
@@ -133,8 +142,11 @@ describe('相容層讓出貨清單原樣跑（#1386 ②）', () => {
     }, 60_000);
   }
 
+  // 交換的對子裡沒有 `agent-instructions` 與 `system-prompt`：`agent/pre-step` 的 listener 順序就是列的順序（#1474），
+  // #1625 之後有兩位消費者（`agent-instructions`、`time-context`），把 `agent-instructions` 換到 `time-context` 之後，
+  // 同一次 invoke 裡兩則訊息的先後就跟著變——那是該有的差別，不是「順序由槽位表決定」的反例。
   it.each([
-    ['agent-instructions', 'system-prompt'],
+    ['skills', 'system-prompt'],
     ['plan-mode', 'goal'],
     ['repeat-reminder', 'tool-result-pruner'],
   ] as const)(
