@@ -397,3 +397,31 @@ body {
 [data-slot="model-pick"] > [data-slot="dropdown-menu-trigger"] {
   min-width: 0;
 }
+
+/*
+ * 對話的每一則不用 content-visibility（#1638 PM 決定 Q6；README 本地修改第 42 條）：vendor 的 `MessageScrollerItem`
+ * （`vendor/solid-glass/components/ui/message-scroller.tsx:74`）帶 `[content-visibility:auto]` 與 `[contain-intrinsic-size:auto_10rem]`，
+ * paint containment 會把卡片陰影與光暈切成直角（§9，#1468 Q19 保留的壓制；500 則的捲動量測在 #404 的 PR）。寫在 layer 外，
+ * 蓋得過 utilities 層的那兩條。`registry-edits.test.ts` 釘住 vendor 原文仍是 auto，`guard/` 量計算值是 `visible`。
+ */
+/* prettier-ignore */
+[data-slot="message-scroller-item"] {
+  content-visibility: visible;
+  contain-intrinsic-size: none;
+}
+
+/*
+ * 不支援 scroll-driven 動畫的瀏覽器，對話區不淡出（#1638 PR B PM 判；README 本地修改第 43 條）：vendor 的 viewport 用
+ * `scroll-fade-b`（`vendor/solid-glass/shadcn/tailwind.css` 的 `@utility scroll-fade-b`），退路是
+ * `@supports not (animation-timeline: scroll())` 底下把 `--scroll-fade-b` 設成整段，淡出常駐：捲到底時最新那則的最後約 40px
+ * 也被壓淡，字的對比過不了 §5 的門檻。這裡把淡出歸 0（`-t` 一起歸 0，換成雙向淡出時同樣不遮字）。寫在 layer 外，蓋得過
+ * utilities 層。支援的瀏覽器走不到這段，`guard/`（Chrome）量不到；`registry-edits.test.ts` 釘這段與 vendor 的退路原文。
+ * 撤除條件：SG 上游的退路改成不遮字，或目標瀏覽器全都支援 `animation-timeline`。
+ */
+/* prettier-ignore */
+@supports not (animation-timeline: scroll()) {
+  [data-slot="message-scroller-viewport"] {
+    --scroll-fade-t: 0px;
+    --scroll-fade-b: 0px;
+  }
+}

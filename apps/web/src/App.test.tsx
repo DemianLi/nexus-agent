@@ -66,7 +66,17 @@ import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
 import { fakeDownlink } from '@/test/downlink';
+import { stubInsecureCrypto, UUID_V4 } from '@/test/insecure-crypto';
 import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
+
+/**
+ * 等換手層面板出現或收掉的上限（#1643）。面板要等 150ms 的換手計時器跑完才換上或拿掉，機器負載一高，渲染加上
+ * 計時器會超過 testing-library 預設的 1 秒。元素一到位就返回，平常不會多等。
+ */
+const PANEL_WAIT = { timeout: 5_000 };
+
+/** 換手層上的面板（核准、提問、計劃審核），名稱與狀態列同一句。 */
+const findPanel = (name: string) => screen.findByRole('region', { name }, PANEL_WAIT);
 
 /**
  * 一份活在記憶體裡的 `Storage`。
@@ -998,7 +1008,7 @@ describe('核准請求', () => {
     render(<App client={client} />);
 
     // 先來的那顆先畫；只有一個面板。
-    const first = await screen.findByRole('region', { name: '等待核准：alpha（1／2）' });
+    const first = await findPanel('等待核准：alpha（1／2）');
     expect(screen.getAllByTestId('approval-card')).toHaveLength(1);
     expect(within(first).queryByText('beta')).toBeNull();
     // 狀態列唸的就是面板名稱。
@@ -1013,7 +1023,7 @@ describe('核准請求', () => {
     });
 
     // 答掉的收走，下一個接上——只剩一個，不帶進度。
-    const second = await screen.findByRole('region', { name: '等待核准：beta' });
+    const second = await findPanel('等待核准：beta');
     expect(screen.getByRole('status').textContent).toBe('等待核准：beta');
     fireEvent.click(within(second).getByRole('button', { name: '全部核准' }));
     await waitFor(() => expect(responded.length).toBe(2));
@@ -1029,7 +1039,7 @@ describe('核准請求', () => {
     ]);
     render(<App client={client} />);
 
-    const first = await screen.findByRole('region', { name: '等待核准：alpha（1／2）' });
+    const first = await findPanel('等待核准：alpha（1／2）');
     fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '換條路' } });
     expect(
       screen.getByRole('button', { name: '送出', hidden: true }).hasAttribute('disabled'),
@@ -1037,7 +1047,7 @@ describe('核准請求', () => {
 
     fireEvent.click(within(first).getByRole('button', { name: '全部核准' }));
     await waitFor(() => expect(responded).toHaveLength(1));
-    const second = await screen.findByRole('region', { name: '等待核准：beta' });
+    const second = await findPanel('等待核准：beta');
     expect(within(second).getByRole('button', { name: '停止這一輪' })).toBeTruthy();
   });
 });
@@ -1979,7 +1989,7 @@ function questionFrame(interruptId = 'q-1'): Event {
 }
 
 /** 這兩題的提問面板（#409）：換手層的 region，名稱與狀態列同一句。 */
-const questionPanel = () => screen.findByRole('region', { name: '有 2 個問題要你回答' });
+const questionPanel = () => findPanel('有 2 個問題要你回答');
 
 /** 當前這一題的自由作答列。其他題的 fieldset 是 `hidden`，`getByRole` 不會抓到。 */
 const freeAnswer = (panel: HTMLElement) =>
@@ -2076,7 +2086,7 @@ describe('提問面板', () => {
         },
       });
     }
-    const elicitationPanel = () => screen.findByRole('region', { name: '有 1 個問題要你回答' });
+    const elicitationPanel = () => findPanel('有 1 個問題要你回答');
 
     it('面板說出是哪台 server、哪支工具、什麼參數；模型自己問的那種沒有這一塊', async () => {
       seq = 0;
@@ -2104,8 +2114,9 @@ describe('提問面板', () => {
         response: { declined: true },
       });
       expect(first.cancels).toHaveLength(0);
-      await waitFor(() =>
-        expect(screen.queryByRole('region', { name: '有 1 個問題要你回答' })).toBeNull(),
+      await waitFor(
+        () => expect(screen.queryByRole('region', { name: '有 1 個問題要你回答' })).toBeNull(),
+        PANEL_WAIT,
       );
       view.unmount();
       cleanup();
@@ -2172,9 +2183,7 @@ describe('提問面板', () => {
     ]);
     render(<App client={client} />);
 
-    const first = await screen.findByRole('region', {
-      name: '等待核准：write_file（子代理「explore」要的）（1／2）',
-    });
+    const first = await findPanel('等待核准：write_file（子代理「explore」要的）（1／2）');
     expect(screen.getByRole('status').textContent).toBe(
       '等待核准：write_file（子代理「explore」要的）（1／2）',
     );
@@ -2186,9 +2195,7 @@ describe('提問面板', () => {
     expect(responded[0]).toMatchObject({ namespace: ['tools:u1'], interrupt_id: 'int-1' });
 
     // 第一顆答掉之後才輪到第二顆，講的是另一個子代理。
-    const second = await screen.findByRole('region', {
-      name: '等待核准：write_file（子代理「writer」要的）',
-    });
+    const second = await findPanel('等待核准：write_file（子代理「writer」要的）');
     expect(within(second).getByTestId('approval-asker').textContent).toContain('子代理「writer」');
     fireEvent.click(within(second).getByRole('button', { name: '全部拒絕' }));
     await waitFor(() => expect(responded).toHaveLength(2));
@@ -2210,7 +2217,7 @@ describe('提問面板', () => {
     ]);
     render(<App client={client} />);
 
-    const panel = await screen.findByRole('region', { name: '等待核准：write_file（子代理要的）' });
+    const panel = await findPanel('等待核准：write_file（子代理要的）');
     expect(within(panel).getByTestId('approval-asker').textContent).toBe('子代理要執行這個操作');
     fireEvent.click(within(panel).getByRole('button', { name: '全部核准' }));
     await waitFor(() => expect(responded).toHaveLength(1));
@@ -2226,7 +2233,7 @@ describe('提問面板', () => {
     render(<App client={client} />);
 
     // #408：同時只一個面板、先來先處理——核准先發，所以先畫核准；提問排在後面，進度數兩種一起。
-    const approval = await screen.findByRole('region', { name: '等待核准：write_file（1／2）' });
+    const approval = await findPanel('等待核准：write_file（1／2）');
     expect(screen.queryByRole('form')).toBeNull();
 
     // **核准那顆送核准的形狀**：旁邊多了一種中斷不能讓它送錯地方。
@@ -2366,7 +2373,10 @@ describe('答完的問題列在提問工具卡上', () => {
     fireEvent.click(await within(panel).findByRole('radio', { name: '週二' }));
     fireEvent.click(within(panel).getByRole('button', { name: '送出答案' }));
 
-    await waitFor(() => expect(screen.queryByRole('region', { name: /問題要你回答/ })).toBeNull());
+    await waitFor(
+      () => expect(screen.queryByRole('region', { name: /問題要你回答/ })).toBeNull(),
+      PANEL_WAIT,
+    );
     const card = screen.getByTestId('tool-entry');
     fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
     const rows = within(card).getAllByTestId('question-row');
@@ -2528,7 +2538,7 @@ describe('記住這條 thread', () => {
         approvalFrame([{ name: 'alpha', allowed: ['approve', 'reject'] }], 'int-7'),
       ]);
 
-      const panel = await screen.findByRole('region', { name: '等待核准：alpha' });
+      const panel = await findPanel('等待核准：alpha');
       expect(screen.getByRole('status').textContent).toBe('等待核准：alpha');
       fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '換條路' } });
       expect(
@@ -2549,7 +2559,10 @@ describe('記住這條 thread', () => {
         fake.downlink.lifecycleFrame('completed'),
       ]);
       await waitFor(() => expect(screen.getByRole('status').textContent).toContain('就緒'));
-      await waitFor(() => expect(screen.queryByRole('region', { name: /等待核准/ })).toBeNull());
+      await waitFor(
+        () => expect(screen.queryByRole('region', { name: /等待核准/ })).toBeNull(),
+        PANEL_WAIT,
+      );
     });
 
     /**
@@ -2648,7 +2661,7 @@ describe('記住這條 thread', () => {
       const fake = reloaded([planReviewFrame('plan-1')]);
 
       // 名稱是「計劃待審」，只有兩顆鈕，沒有 ❌、不能收起（#654 二-Q2、Q5）。
-      const panel = await screen.findByRole('region', { name: '計劃待審' });
+      const panel = await findPanel('計劃待審');
       expect(within(panel).getByTestId('plan-title').textContent).toBe('改登入頁');
       expect(within(panel).getByTestId('plan-summary').textContent).toBe('改成中文');
       expect(within(panel).queryByRole('button', { name: STOP_QUESTIONS_LABEL })).toBeNull();
@@ -2681,7 +2694,7 @@ describe('記住這條 thread', () => {
       seq = 91;
       const fake = reloaded([planReviewFrame('plan-2')]);
 
-      const panel = await screen.findByRole('region', { name: '計劃待審' });
+      const panel = await findPanel('計劃待審');
       within(panel).getByRole('button', { name: '要求修改' }).focus();
       fireEvent.click(within(panel).getByRole('button', { name: '要求修改' }));
       await waitFor(() => expect(fake.responded).toHaveLength(1));
@@ -2692,7 +2705,10 @@ describe('記住這條 thread', () => {
       });
       // 沒有送停止：這一輪由模型接著收（它收到的是「停在這裡等使用者的訊息」）。
       expect(fake.cancels).toHaveLength(0);
-      await waitFor(() => expect(screen.queryByRole('region', { name: '計劃待審' })).toBeNull());
+      await waitFor(
+        () => expect(screen.queryByRole('region', { name: '計劃待審' })).toBeNull(),
+        PANEL_WAIT,
+      );
       await waitFor(() => expect(document.activeElement).toBe(screen.getByLabelText('要說的話')));
     });
   });
@@ -2747,6 +2763,43 @@ describe('記住這條 thread', () => {
     expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
     // 壞掉的那一份被這一條蓋掉，下一次載入就接得回來。
     await waitFor(() => expect(stored()).toBe(opened[0]));
+  });
+});
+
+/**
+ * 網頁從非安全環境打開（內網用 IP 開的 `http://` 頁面，#1548）：瀏覽器不給 `crypto.randomUUID`。首次載入與「新對話」都要自己產
+ * thread id；斷言 id 的形狀，不只看沒拋錯——換回 `crypto.randomUUID()` 的那一處會直接拋 TypeError。
+ */
+describe('非安全環境（#1548）', () => {
+  it('首次載入：起得來，開的那條 id 是 UUID v4', async () => {
+    seq = 0;
+    stubInsecureCrypto();
+    const { client, opened } = fakeClient([]);
+    render(<App client={client} />);
+
+    await waitFor(() => expect(opened).toHaveLength(1));
+    expect(opened[0]).toMatch(UUID_V4);
+  });
+
+  it('新對話、沒有可重用的空白會話：換一條新的 UUID v4', async () => {
+    seq = 0;
+    stubInsecureCrypto();
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
+    const { client, opened } = fakeClient([
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+    ]);
+    render(<App client={client} />);
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: '記一筆。' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+    await waitFor(() => expect(screen.getByText('記一筆。')).toBeTruthy());
+
+    // 這一檔的清單讀不到（`UNWIRED_THREAD_LIST`），所以沒有可重用的空白會話，走「開新的」那一支。
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+
+    await waitFor(() => expect(opened).toHaveLength(2));
+    expect(opened[0]).toBe('上一條');
+    expect(opened[1]).toMatch(UUID_V4);
   });
 });
 

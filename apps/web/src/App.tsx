@@ -76,6 +76,7 @@ import { resolveSubmitMode, runningSendHint } from '@/lib/submit-mode';
 import { threadCapacityText } from '@/lib/thread-capacity';
 import { documentTitle, headerTitle, PRODUCT_TITLE } from '@/lib/thread-title';
 import { prepareAttachments } from '@/lib/attachment-send';
+import { randomUuid } from '@/lib/uuid';
 import { requestIdFor } from '@/lib/request-id';
 import type { PendingRequest, Sentence } from '@/lib/request-id';
 import { useDraftAttachments } from '@/lib/use-draft-attachments';
@@ -217,7 +218,7 @@ export function App({ client }: { client?: WireClient } = {}) {
         if (navigation.current !== ticket) return;
         const target = newConversationTarget(listing, current);
         setChoice({
-          threadId: target.kind === 'reuse' ? target.threadId : crypto.randomUUID(),
+          threadId: target.kind === 'reuse' ? target.threadId : randomUuid(),
           origin: 'fresh',
         });
       })

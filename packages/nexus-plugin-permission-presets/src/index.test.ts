@@ -12,9 +12,16 @@ import {
 } from './index.js';
 import type { PermissionSeed } from './index.js';
 import { DEFAULT_PRESETS } from './presets.js';
+import type { PresetTable } from './presets.js';
 
 const FRESH: PermissionSeed = { fresh: true, sandboxExplicit: false };
 const RESUMED: PermissionSeed = { fresh: false, sandboxExplicit: false };
+
+/** 部署方用 patch 加回全開之後的表（#1621：出廠不給）。值照 dsh base 出廠的第三組。 */
+const WITH_FULL_ACCESS: PresetTable = {
+  ...DEFAULT_PRESETS,
+  'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
+};
 
 function knobs(
   sandbox: ConstructorParameters<typeof SandboxModeController>[0],
@@ -39,7 +46,7 @@ describe('resolveDefaultPreset', () => {
     const k = knobs('workspace-write', 'ask');
     expect(
       resolveDefaultPreset({
-        table: DEFAULT_PRESETS,
+        table: WITH_FULL_ACCESS,
         configured: 'danger-full-access',
         seed: FRESH,
         ...k,
@@ -51,7 +58,7 @@ describe('resolveDefaultPreset', () => {
   it('續接不套 defaultPreset：保留日誌裡的值', () => {
     const k = knobs('read-only', 'ask');
     resolveDefaultPreset({
-      table: DEFAULT_PRESETS,
+      table: WITH_FULL_ACCESS,
       configured: 'danger-full-access',
       seed: RESUMED,
       ...k,
@@ -67,7 +74,7 @@ describe('resolveDefaultPreset', () => {
         seed: FRESH,
         ...knobs('read-only', 'ask'),
       }),
-    ).toThrow(/nope.*read-only、workspace-write、danger-full-access/s);
+    ).toThrow(/nope.*read-only、workspace-write/s);
   });
 
   it('defaultPreset 與明確給的 --sandbox 矛盾：報錯；沒明確給就以 defaultPreset 為準', () => {

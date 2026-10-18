@@ -32,6 +32,11 @@
       "from": "src/components/ui/badge.tsx",
       "sha256": "d9fb280e266119c4b62a4c518e63152de27b094c68d3e5f8929d05bfb0c1bc6c"
     },
+    "components/ui/bubble.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/bubble.tsx",
+      "sha256": "cef49b9490c90d90451037247adedb8671eae234d388f8c30c7b2eac37356983"
+    },
     "components/ui/button.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/button.tsx",
@@ -92,6 +97,18 @@
       "source": "solid-glass",
       "from": "src/components/ui/input.tsx",
       "sha256": "d108ceb1932f7228176b9f490eb325763ca546d5f9c6a34bf4db10a28dc486f1"
+    },
+    "components/ui/message-scroller.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/message-scroller.tsx",
+      "sha256": "1ef6405c562a70f3012639ed251283d9e400aadda75869849a93deeb9ad30083",
+      "patches": ["patches/0009-message-scroller-scroll-label.patch"],
+      "upstreamSha256": "653012cfeefe555badfb7b7f2079bd758c21fbfc7123140cf0d0bdcb7d6ca349"
+    },
+    "components/ui/message.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/message.tsx",
+      "sha256": "64e9ae0f9d1e268b0ed7b738a53d374d273fe1e7e2dd7b35ad7417e50a9bbe6c"
     },
     "components/ui/popover.tsx": {
       "source": "solid-glass",

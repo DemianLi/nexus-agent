@@ -25,7 +25,8 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { scrubbedParentEnv } from '@nexus/core';
@@ -86,6 +87,21 @@ export function readGitProvenance(probe: GitProbe = defaultGitProbe): BuildVersi
  * 相對這個檔所在的位置找，`src/` 與編出來的 `lib/` 同一深度，兩邊相同。原始碼樹裡沒有這個檔。
  */
 const BUILD_STAMP_PATH = fileURLToPath(new URL('../build-stamp.json', import.meta.url));
+
+/**
+ * 這個模組是不是跑在打包出來的安裝樹裡（[#1671](https://github.com/DemianLi/nexus-agent/issues/1671)）。
+ *
+ * 判準是**產物根有 `build-stamp.json`**：戳記只由 `scripts/release/pack.ts` 寫進產物，原始碼樹裡沒有這個檔（上面那段），
+ * 所以它在就是安裝樹、不在就是原始碼樹。不用路徑形狀猜（`lib/` 對 `src/`、有沒有 `node_modules`、`current` 連結解成什麼），
+ * 那些在 systemd 的安裝目錄、tarball 解在任意位置時都會變；戳記跟著產物走，位置不影響。
+ * 戳記壞了（讀不了、形狀不對）仍算安裝樹：{@link readBuildStamp} 把壞的當沒有是給「版本」用的，
+ * 「這是不是產物」的答案不該跟著變。
+ *
+ * @param moduleDir - 這個模組所在的目錄（`src/` 或 `lib/`），省略即真的位置；測試才傳。
+ */
+export function isPackedTree(moduleDir: string = import.meta.dirname): boolean {
+  return existsSync(resolve(moduleDir, '../build-stamp.json'));
+}
 
 /**
  * 讀建置戳記。**檔不存在、讀不了、形狀不對一律回 `undefined`**，交給呼叫端退回問 git：戳記是產物帶的附加資訊，
