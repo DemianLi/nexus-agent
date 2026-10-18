@@ -95,7 +95,7 @@ describe('registry 檔的改動還在', () => {
     });
   });
 
-  test('message-scroller 的 item 由覆寫檔壓掉 content-visibility（會把陰影與光暈切成直角，§9；#1638 Q6，README 本地修改第 43 條）', () => {
+  test('message-scroller 的 item 由覆寫檔壓掉 content-visibility（會把陰影與光暈切成直角，§9；#1638 Q6，README 本地修改第 42 條）', () => {
     expect(read('../../styles/solid-glass.overrides.css')).toContain(
       '[data-slot="message-scroller-item"] {\n  content-visibility: visible;\n  contain-intrinsic-size: none;\n}',
     );
@@ -106,6 +106,20 @@ describe('registry 檔的改動還在', () => {
     );
     // nexus 層沒有自己再寫一次（壓制只在覆寫檔一處）。
     expect(code(read('./message-scroller.tsx'))).not.toMatch(/content-visibility/);
+  });
+
+  test('不支援 scroll-driven 動畫時對話區不淡出：覆寫檔歸 0（#1638 PR B，README 本地修改第 43 條）', () => {
+    expect(read('../../styles/solid-glass.overrides.css')).toContain(
+      '@supports not (animation-timeline: scroll()) {\n  [data-slot="message-scroller-viewport"] {\n    --scroll-fade-t: 0px;\n    --scroll-fade-b: 0px;\n  }\n}',
+    );
+    // vendor 的 viewport 仍用 `scroll-fade-b`，它的退路仍是把淡出設成整段（常駐）。上游哪天改成不遮字，這條紅，提醒把本地修改拿掉。
+    const vendor = code(read('../../vendor/solid-glass/components/ui/message-scroller.tsx'));
+    expect(vendor).toMatch(/data-slot="message-scroller-viewport"[\s\S]{0,300}\bscroll-fade-b\b/);
+    const utility = read('../../vendor/solid-glass/shadcn/tailwind.css');
+    const fadeB = utility.slice(utility.indexOf('@utility scroll-fade-b {'));
+    expect(fadeB.slice(0, fadeB.indexOf('\n}\n'))).toContain(
+      '@supports not (animation-timeline: scroll()) {\n    --scroll-fade-b: var(--_scroll-fade-size-b);\n  }',
+    );
   });
 
   test('message-scroller 自動捲動時只把捲軸變透明，不改捲軸寬（#1363；#1638 起讀 vendor 原文）', () => {

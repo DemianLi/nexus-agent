@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/message-scroller';
 
 /**
- * message-scroller 換成 SG 版（#1638 PR B）之後，nexus 這邊的兩條本地修改（README 第 41、42 條）與按鈕的 `data-slot`。
+ * message-scroller 換成 SG 版（#1638 PR B）之後，nexus 這邊的兩條本地修改（README 第 41、44 條）與按鈕的 `data-slot`。
  * CSS 有沒有真的命中（計算後的 transition、transform、content-visibility）jsdom 量不到，由 `guard/` 量（`?overlay=messages`）。
  */
 
@@ -36,7 +36,7 @@ function Scroller({ children }: { children?: ReactNode }) {
 const buttons = () => [...document.querySelectorAll<HTMLElement>('[data-direction]')];
 
 describe('message-scroller（SG 版）', () => {
-  it('第 42 條：呼叫端沒給 children 時，兩個方向的報讀名稱都是中文（patch 0009）', () => {
+  it('第 44 條：呼叫端沒給 children 時，兩個方向的報讀名稱都是中文（patch 0009）', () => {
     // 產品的 transcript 自己給了 children，擋不住 patch 被拿掉；這裡刻意不給，吃的是 vendor 的預設內容。
     render(
       <Scroller>

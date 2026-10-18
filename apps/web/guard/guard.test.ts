@@ -52,7 +52,7 @@ import { startGuardServer, type GuardServer } from './server';
  *    `--collapsible-panel-height`，Panel 的 `data-open:` 命中動效）；reduced-motion 下沒有高度動效、第一幀就到位；箭頭跟著 Trigger 的
  *    `data-panel-open` 轉半圈、思考過程展開後藏「·」與摘要（Q2）。
  * 14. **對話區**（#1638 PR B，`?overlay=messages`，產品的 `Transcript`）：泡泡字、表尾、捲到最新的按鈕圖示的對比與按鈕的焦點（亮暗加兩種退路，
- *    {@link OVERLAYS}）；每一則的 `content-visibility` 是 `visible`（第 43 條）；按鈕的動效照 §7：不位移、只縮放 .97、reduced-motion 下沒有
+ *    {@link OVERLAYS}）；每一則的 `content-visibility` 是 `visible`（第 42 條）；按鈕的動效照 §7：不位移、只縮放 .97、reduced-motion 下沒有
  *    transition（第 41 條）；外殼的行高是 SG 的 20px、泡泡維持 23px；底部淡出捲到底時收成 0。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
@@ -2063,7 +2063,7 @@ describe('瀏覽器量對話區（#1638 PR B，`?overlay=messages`）', () => {
   const openMessages = (reducedMotion = false) =>
     openOverlay('messages', 'light', { reducedMotion, marks: { [SCROLL_BUTTON]: {} } });
 
-  test('每一則的 content-visibility 是 visible：覆寫檔壓掉 vendor 的 auto（Q6，本地修改第 43 條）', async () => {
+  test('每一則的 content-visibility 是 visible：覆寫檔壓掉 vendor 的 auto（Q6，本地修改第 42 條）', async () => {
     const page = await openMessages();
     try {
       const items = await page.$$eval('[data-slot="message-scroller-item"]', (els) =>
