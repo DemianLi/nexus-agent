@@ -221,7 +221,9 @@ describe('serve 的 --session-log', () => {
     expect(lines.join('\n')).toContain(`會話日誌：${projectDirOf(join(home, 'sessions'))}`);
   });
 
-  it('預設的根落在 --workspace 底下時起不來，訊息講得出怎麼繞', async () => {
+  // 預設的根落在 `--workspace` 底下，就是 home 落在工作區裡：serve 先被 #1620 那一道擋下（它排在 home 鎖之前），
+  // 日誌根那一道到不了。日誌根那一道自己的訊息由 CLI 那邊守（`session-log-durability.test.ts`）。
+  it('預設的根落在 --workspace 底下時起不來：home 跟工作區重疊那一道先擋', async () => {
     const workspace = await tmp('nexus-serve-ws-');
     await expect(
       runServe({
@@ -229,7 +231,9 @@ describe('serve 的 --session-log', () => {
         log: () => undefined,
         env: { [HARNESS_HOME_ENV]: join(workspace, 'home') },
       }),
-    ).rejects.toThrow(/預設的會話日誌目錄.*不能在 --workspace 底下.*--session-log/su);
+    ).rejects.toThrow(
+      /serve 起不來：下面這些跟 --workspace .*重疊.*harness home（NEXUS_AGENT_HOME）/su,
+    );
   });
 
   it('給了旗標就把落腳處印出來', async () => {
@@ -331,15 +335,21 @@ describe('serve：清單把落盤關掉', () => {
     await expect(readdir(root)).rejects.toThrow();
   });
 
-  it('預設的根落在 --workspace 底下也起得來：關掉的時候根本不解析它', async () => {
+  // 落盤關掉時日誌根根本不解析，所以日誌根那一道不擋；但 home 裡還有憑證檔、會話密鑰、附件，serve 照樣起不來（#1620）。
+  // 「關掉時不解析預設的根」這件事在 serve 上量不到了（預設的根在工作區裡就是 home 在工作區裡），由 CLI 那條守
+  // （`session-log-durability.test.ts` 的「預設的根落在 --workspace 底下也不擋」）。
+  it('預設的根落在 --workspace 底下：關掉落盤也起不來，home 跟工作區重疊那一道不看落盤', async () => {
     const workspace = await tmp('nexus-serve-ws-');
-    const lines: string[] = [];
-    running = await runServe({
-      argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH, '--workspace', workspace],
-      log: (line) => lines.push(line),
-      env: { [HARNESS_HOME_ENV]: join(workspace, 'home') },
-    });
-    expect(lines.join('\n')).toContain(SESSION_LOG_OFF_DISCLOSURE);
+    await expect(
+      runServe({
+        argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH, '--workspace', workspace],
+        log: () => undefined,
+        env: { [HARNESS_HOME_ENV]: join(workspace, 'home') },
+      }),
+    ).rejects.toThrow(
+      /serve 起不來：下面這些跟 --workspace .*重疊.*harness home（NEXUS_AGENT_HOME）/su,
+    );
+    expect(await readdir(workspace)).toEqual([]);
   });
 });
 

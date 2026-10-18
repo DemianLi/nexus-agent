@@ -143,7 +143,7 @@ function isBootstrapOnly(name: string): boolean {
  * 程式碼資料夾根目錄的舊 `.env`。`import.meta.dirname` 是 `apps/harness/src`（編成 `lib/` 之後同一深度，`lib/` 與 `src/` 是兄弟）。
  * 這條只對原始碼樹有意義：裝好的產物沒有「程式碼資料夾根目錄」，往上三層找不到檔就照常略過。
  */
-const LEGACY_ENV_FILE = resolve(import.meta.dirname, '../../../.env');
+export const LEGACY_ENV_FILE = resolve(import.meta.dirname, '../../../.env');
 
 /** 讀一份 `.env` 但不套用。檔案不存在是正常的（回 `undefined`）；其他讀不了的原因走 `warn`。 */
 function readEnvLayer(
