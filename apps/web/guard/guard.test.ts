@@ -36,7 +36,7 @@ import { startGuardServer, type GuardServer } from './server';
  *    Tailwind 沒輸出或修剪掉它的話，圓角會靜靜變成 0。量 `border-radius` 不是 0。
  * 7. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
  * 8. **destructive 按鈕的 hover**：平常與滑鼠移上去，字對底色都過 4.5（vendor 的 hover 底太深，覆寫檔調淡，#1523）。
- * 9. **SG 的按鈕規則真的命中 vendor 的 Button**（#1523）：outline、secondary、glass 有 `backdrop-filter`（`solid-glass.css:640-677`
+ * 9. **SG 的按鈕規則真的命中 vendor 的 Button**（#1523）：outline、secondary、glass 有 `backdrop-filter`（`solid-glass.css:642-679`
  *    靠 `data-variant`）；浮層 Trigger 用 `render` 接的、開著的 outline 按鈕，底色換成按下去的樣子（SG 認 `aria-expanded`）。
  * 10. **輸入框群組只在欄位停用時變淡**（#1523 本地修改第 18 條）：只有按鈕停用的群組（輸入框沒字時送出鈕就是停用的）`opacity` 是 1、
  *    底色跟一般的群組相同；欄位停用的照 vendor 是 0.5。
@@ -824,7 +824,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     ).toEqual([]);
   });
 
-  test('SG 的玻璃按鈕吃到 SG 的規則：outline、secondary、glass 都有 backdrop-filter（data-variant 命中 solid-glass.css:640-677，#1523）', () => {
+  test('SG 的玻璃按鈕吃到 SG 的規則：outline、secondary、glass 都有 backdrop-filter（data-variant 命中 solid-glass.css:642-679，#1523）', () => {
     report[`${theme}:glass`] = glass;
     expect(glass.map((g) => g.name).sort()).toEqual(['glass', 'outline', 'secondary']);
     expect(glass.filter((g) => g.backdropFilter === 'none').map((g) => g.name)).toEqual([]);

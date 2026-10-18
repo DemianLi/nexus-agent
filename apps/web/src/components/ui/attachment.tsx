@@ -5,7 +5,7 @@
  *
  * 跟 shadcn registry 版的差異（#1468 Q19 拿掉 #733、#1281 的改動）：字級回到 SG 的 `text-sm`／`text-xs`（`sm`／`xs` 的檔名 12px），
  * 上傳中的標題用 SG 的 `shimmer`（`tw-shimmer`，reduced-motion 停止寫在 utility 裡），一排附件用 SG 的 `scroll-fade-x`、`scrollbar-none`。
- * 外殼的 `focus-within:ring-1` 畫不出來：SG 的玻璃規則（`solid-glass.css:727-735`）在 layer 外寫了外殼的 `box-shadow`，按鈕聚焦時外殼
+ * 外殼的 `focus-within:ring-1` 畫不出來：SG 的玻璃規則（`solid-glass.css:729-737`）在 layer 外寫了外殼的 `box-shadow`，按鈕聚焦時外殼
  * 不出 ring（#1638 Q7 要的結果，PM 同意不加覆寫）；`guard/` 量鍵盤與滑鼠聚焦後外殼的 `box-shadow` 不變。
  */
 export {
