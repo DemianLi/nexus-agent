@@ -789,8 +789,6 @@ export async function appendJournalRecord(
       } catch (error) {
         if ((error as NodeJS.ErrnoException | null)?.code !== 'ENOENT') throw error;
       }
-      // 0 位元組也算剛建：第一筆寫失敗截回 0 時，檔已經在目錄裡、目錄卻沒 fsync 過，下一次成功的那一筆要補上。
-      const created = bytes === undefined || bytes.length === 0;
       const handle = await open(path, 'a+', 0o600);
       let closed = false;
       const closeHandle = async (): Promise<void> => {
@@ -801,6 +799,9 @@ export async function appendJournalRecord(
       try {
         options.check?.(path);
         const contents = parseJournal(bytes ?? Buffer.alloc(0), path);
+        // 還沒有任何一筆完整的紀錄，就當成剛建：檔可能已經在目錄裡（第一筆寫失敗截回 0，或寫失敗、截回也失敗留下半行），
+        // 目錄卻從沒 fsync 過，這一筆成功時要補上。
+        const created = contents.completeBytes === 0;
         if (contents.incompleteTail) {
           // 半行只會來自寫的時候行程當掉，或寫失敗、截回也失敗（那一次已經拋錯，見 {@link appendLine}）：都沒回報成功，
           // 截掉不丟任何稽核過的資料；不截的話下一筆會跟它黏成一行壞資料。

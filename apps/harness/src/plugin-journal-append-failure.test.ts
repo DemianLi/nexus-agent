@@ -283,4 +283,20 @@ describe('截回也失敗：兩個錯都報，半行由下一個寫者截掉', (
     expect(warnings[0]).toContain('沒有寫完');
     expect(opsOf(path)).toEqual(['disable', 'enable']);
   });
+
+  it('第一筆就兩個都失敗、檔裡只剩半行：下一筆截掉半行、成為第 1 筆，而且補做建檔那次該做的目錄 fsync', async () => {
+    const path = journalPath();
+    const fault = newFault();
+    const warnings: string[] = [];
+    fault.writeThrowsAfter = 20;
+    fault.rollbackTruncateError = new Error('EIO: truncate failed');
+
+    await expect(append(path, warnings)).rejects.toBeInstanceOf(AggregateError);
+    expect(sizeOf(path)).toBe(20);
+    expect(fault.directoryOpens).toEqual([]);
+
+    expect((await append(path, warnings))?.seq).toBe(1);
+    expect(warnings).toHaveLength(1);
+    expect(fault.directoryOpens).toEqual([dirname(path)]);
+  });
 });
