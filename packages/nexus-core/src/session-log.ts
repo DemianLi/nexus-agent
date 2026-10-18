@@ -1581,7 +1581,7 @@ type SnapshotTask =
  * @returns 脫離原值的副本。
  * @throws {TypeError} 有 JSON 無法原樣表達的東西，訊息指出是哪一格。
  */
-function snapshotJsonValue(value: unknown, label: string): unknown {
+export function snapshotJsonValue(value: unknown, label: string): unknown {
   const fail = (path: SnapshotPath, reason: string): never => {
     throw new TypeError(`會話事件的 ${renderPath(path)} ${reason}`);
   };

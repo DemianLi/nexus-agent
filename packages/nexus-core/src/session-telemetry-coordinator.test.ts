@@ -487,3 +487,27 @@ describe('請求快照不進遙測（#1020）', () => {
     expect(log.events.map((event) => isMirroredEvent(event))).toEqual([true, true]);
   });
 });
+
+/** 物件與陣列交錯的巢狀：`structuredClone` 約 3 千層就 `RangeError`，日誌收得下更深的（#1526）。 */
+function deepMixed(depth: number): unknown {
+  let value: unknown = 'leaf';
+  for (let level = 0; level < depth; level++) value = level % 2 ? { next: value } : [value];
+  return value;
+}
+
+describe('深巢狀的事件照樣交得出去（#1526）', () => {
+  it('tool/result 的 meta 是 5000 層交錯巢狀：那一筆記錄交出去、body 原樣，沒有被扣住', () => {
+    const log = new SessionLog('thread-a');
+    const sink = fakeSink();
+    const warnings: string[] = [];
+    new SessionTelemetryCoordinator({ log, sink, warn: (message) => warnings.push(message) });
+
+    const meta = deepMixed(5_000);
+    const event = log.append('tool/result', { callId: 'c1', isError: false, meta });
+
+    expect(warnings).toEqual([]);
+    expect(sink.records).toHaveLength(1);
+    expect(sink.records[0]!.attributes['event.seq']).toBe(event.seq);
+    expect(JSON.stringify((sink.records[0]!.body as { meta: unknown }).meta)).toBe(JSON.stringify(meta));
+  });
+});

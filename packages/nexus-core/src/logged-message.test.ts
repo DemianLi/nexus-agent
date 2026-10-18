@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import type { ContentBlock } from '@langchain/core/messages';
 import { AIMessage } from '@langchain/core/messages';
-import { loggedContentBlocks, toLoggedMessage } from './logged-message.js';
+import { fromLoggedMessage, loggedContentBlocks, toLoggedMessage } from './logged-message.js';
+import { SessionLog } from './session-log.js';
 
 describe('loggedContentBlocks', () => {
   it('把字串轉成一塊 text', () => {
@@ -51,5 +52,30 @@ describe('LoggedMessage 的型別', () => {
     // @ts-expect-error 陣列沒有 trim；讀方要走 loggedContentBlocks。
     const attempt = () => message.data.content.trim();
     expect(typeof attempt).toBe('function');
+  });
+});
+
+/** 物件與陣列交錯的巢狀：`structuredClone` 約 3 千層就 `RangeError`，日誌收得下更深的（#1526）。 */
+function deepMixed(depth: number): unknown {
+  let value: unknown = 'leaf';
+  for (let level = 0; level < depth; level++) value = level % 2 ? { next: value } : [value];
+  return value;
+}
+
+describe('fromLoggedMessage 推得回深巢狀的那一則（#1526）', () => {
+  it('日誌裡凍過的、工具參數 5000 層交錯巢狀的 AI 訊息：推得回來，參數原樣、拿到的是可改的副本', () => {
+    const args = { v: deepMixed(5_000) };
+    // 照續接時的來路造：日誌形狀的訊息是從磁碟讀回來的，不經過 `toLoggedMessage`（LangChain 的 `toDict` 本身是遞迴的）。
+    const shallow = new AIMessage({ id: 'm1', content: '', tool_calls: [{ id: 'c1', name: 't', args: {} }] });
+    const logged = toLoggedMessage(shallow);
+    // `StoredMessageData` 的型別沒有列 `tool_calls`，實際落盤的 AI 訊息有。
+    const data = logged.data as typeof logged.data & { readonly tool_calls: readonly object[] };
+    const message = { ...logged, data: { ...data, tool_calls: [{ ...data.tool_calls[0], args }] } };
+    const event = new SessionLog('t').append('assistant/message', { message });
+    const back = fromLoggedMessage(event.data.message) as AIMessage;
+    const backArgs = back.tool_calls?.[0]?.args as Record<string, unknown>;
+    // 比對用 JSON.stringify：vitest 的 toEqual 是遞迴的。
+    expect(JSON.stringify(backArgs)).toBe(JSON.stringify(args));
+    expect(Object.isFrozen(backArgs)).toBe(false);
   });
 });
