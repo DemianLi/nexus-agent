@@ -39,8 +39,16 @@
  *   `ComposerPage`。輸入框貼在頁面底部，寬度跟產品一樣（左右各 16px、最寬 48rem）。
  * - `?overlay=collapsibles` 畫產品裡展開收合的元件（#1638 PR A），都關著：思考過程、摘要列、工具卡、待辦、提問面板。量展開途中的高度、
  *   reduced-motion 直接到位、箭頭轉向、思考過程展開後藏摘要（這幾件都靠真的 CSS 命中 Base UI 的屬性，jsdom 量不到）。
+ * - `?overlay=messages` 畫產品的對話區（`Transcript`，#1638 PR B）：人與 AI 輪流十二則、最後一則 AI 被停止（帶表尾），高度固定、
+ *   內容超出，量泡泡字與表尾的對比、捲到最新的按鈕（焦點、動效、reduced-motion）、每一則的 `content-visibility`、外殼的行高、底部淡出。
+ * - `?overlay=questionnaire` 畫產品的提問面板（#1638 PR C），量選項的焦點外框（offset、不帶 ring）與字的對比。
+ * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
+ *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
+import { emptyConversation } from '@nexus/wire';
 import type {
+  ConversationEntry,
+  WireAttachmentRef,
   CompactionEntry,
   PendingQuestion,
   ToolEntry,
@@ -61,7 +69,10 @@ import { ReasoningRow } from '@/components/reasoning-row';
 import { RetryNotice } from '@/components/retry-notice';
 import { Surface } from '@/components/surface';
 import { TodoPanel } from '@/components/todo/panel';
+import { Transcript } from '@/components/transcript';
 import { ToolCard } from '@/components/tool/card';
+import { AttachmentRail } from '@/components/attachment-rail';
+import { SentAttachments } from '@/components/sent-attachments';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
@@ -477,6 +488,112 @@ function CollapsiblesPage() {
   );
 }
 
+/** 對話區（#1638 PR B）：人與 AI 輪流，AI 的回覆夠長、總高度超出容器，捲到最新的按鈕才有機會出現；最後一則 AI 被停止，畫表尾。 */
+const MESSAGES: ConversationEntry[] = Array.from({ length: 6 }, (_, i): ConversationEntry[] => [
+  { kind: 'human', id: `h-${i}`, text: `第 ${i + 1} 個問題：這份報表的數字要怎麼看？` },
+  {
+    kind: 'ai',
+    id: `a-${i}`,
+    text: `第 ${i + 1} 則回覆。先看總表的合計列，再對照各月份的明細；如果兩邊對不上，通常是某一個月的資料還沒結帳。\n\n確認方式是打開那個月份的明細，看最後更新時間是不是在結帳日之後。`,
+    streaming: false,
+    attribution: { kind: 'root' },
+    ...(i === 5 ? { stopped: true as const } : {}),
+  },
+]).flat();
+
+function MessagesPage() {
+  return (
+    <div style={{ height: 600, display: 'flex', flexDirection: 'column' }}>
+      <Transcript state={{ ...emptyConversation(), entries: MESSAGES }} isFresh={() => false} />
+    </div>
+  );
+}
+
+/**
+ * 附件（#1638 PR C）：輸入框底下的草稿列兩排，與已送出的附件一排。
+ * - `fits`：一張檔案卡、寬度放得下，不會溢出（量左右淡出不出現）。
+ * - `overflows`：五張、寬度放不下（量頭尾的淡出），涵蓋圖的縮圖、可移除的檔案、上傳中（有進度與不確定長度兩種，標題 shimmer）、上傳失敗。
+ * - `sent`：已送出的檔案卡（沒有按鈕）。
+ * 元件內部的按鈕掛不了屬性，由 `guard.test.ts` 開頁後補標記。
+ */
+const PIXEL =
+  'data:image/svg+xml,' +
+  encodeURIComponent(
+    '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40"><rect width="40" height="40" fill="#8aa"/></svg>',
+  );
+const draft = (id: string, name: string, kind: 'image' | 'file' = 'file') => ({
+  id,
+  file: new File(['x'.repeat(12_345)], name, {
+    type: kind === 'image' ? 'image/svg+xml' : 'application/octet-stream',
+  }),
+  kind,
+  ...(kind === 'image' ? { previewUrl: PIXEL } : {}),
+});
+const RAIL_ITEMS = [
+  draft('image', '螢幕截圖.svg', 'image'),
+  draft('file', '季報.pdf'),
+  draft('uploading', '上傳中.csv'),
+  draft('indeterminate', '不知道大小.txt'),
+  draft('failed', '失敗了.zip'),
+];
+const RAIL_UPLOADS = new Map([
+  ['uploading', { kind: 'uploading' as const, loaded: 4_000, total: 12_345 }],
+  ['indeterminate', { kind: 'uploading' as const, loaded: 4_000 }],
+  ['failed', { kind: 'idle' as const, reason: 'failed' as const }],
+]);
+const SENT: WireAttachmentRef[] = [
+  { type: 'file', attachmentId: 'sent-1', name: '已送出.pdf', bytes: 12_345 },
+];
+
+/** 問答（#1638 PR C）：產品的提問面板直接畫出來（不經換手層），第一題是複選、帶說明，量選項的焦點外框、字的對比。 */
+const QUESTIONNAIRE: PendingQuestion = {
+  kind: 'question',
+  interruptId: 'q-guard',
+  namespace: [],
+  questions: [
+    {
+      id: 'days',
+      question: '哪幾天可以來？',
+      multiSelect: true,
+      options: [
+        { label: '週一', description: '上午九點以後' },
+        { label: '週二' },
+        { label: '週三' },
+      ],
+    },
+    { id: 'name', question: '訪客姓名？' },
+  ],
+};
+
+function QuestionnairePage() {
+  return (
+    <div style={{ maxWidth: '48rem', margin: '0 auto', padding: 16 }}>
+      <QuestionPanel pending={QUESTIONNAIRE} busy={false} onAnswer={() => {}} />
+    </div>
+  );
+}
+
+function AttachmentsPage() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24, padding: 16 }}>
+      <div data-guard-rail="fits" style={{ width: 600 }}>
+        <AttachmentRail items={[draft('alone', '只有一張.pdf')]} onRemove={() => {}} />
+      </div>
+      <div data-guard-rail="overflows" style={{ width: 360 }}>
+        <AttachmentRail
+          items={RAIL_ITEMS}
+          uploads={RAIL_UPLOADS}
+          onRemove={() => {}}
+          onCancelUpload={() => {}}
+        />
+      </div>
+      <div data-guard-rail="sent" style={{ width: 600 }}>
+        <SentAttachments attachments={SENT} />
+      </div>
+    </div>
+  );
+}
+
 function OverlayPage({ name }: { name: string }) {
   switch (name) {
     case 'dialog':
@@ -596,6 +713,12 @@ function OverlayPage({ name }: { name: string }) {
       return <OpenCommand />;
     case 'collapsibles':
       return <CollapsiblesPage />;
+    case 'messages':
+      return <MessagesPage />;
+    case 'attachments':
+      return <AttachmentsPage />;
+    case 'questionnaire':
+      return <QuestionnairePage />;
     case 'composer-idle':
     case 'composer-draft':
     case 'composer-running':

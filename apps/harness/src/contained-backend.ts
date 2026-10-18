@@ -24,6 +24,17 @@
  * 另一句，同一條政策在模型眼裡就有兩套詞彙，測試也得斷言兩個字串。dsh 讓所有拒絕共用一個
  * `FS_SANDBOX_DENIED` 正是這個理由。
  *
+ * ## `write` 與 `edit` 是暫存檔加 `rename` 的原子取代（[#1531](https://github.com/DemianLi/nexus-agent/issues/1531)）
+ *
+ * 基座的兩條寫入路都是 `O_TRUNC` 就地覆寫：寫到一半被 `kill -9`、斷電、磁碟寫滿，使用者打開的是截斷的檔；平行的 `edit`
+ * 後寫蓋掉先寫；工作區裡指向根外的硬連結被寫穿。所以這兩個方法**過完 fence 就自己做完**（`super.write`／`super.edit`
+ * 會 `O_TRUNC`，不能前後包一層）：同目錄 `0700` 暫存目錄、`wx` `0600` 暫存檔、`sync`、補回原檔 mode、`rename`；
+ * 整段（`edit` 連讀與替換）在以 canonical 路徑為鍵的**行程層級**逐目標鎖裡。實作與 dsh 出處、偏離 1（不做
+ * `createIfAbsent` 的 hard link 發佈，理由 1）與偏離 2（不做 Windows，理由 2）見 `atomic-workspace-write.ts`。
+ * 路徑仍走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根）：`danger-full-access` 下 `verdict` 不檢查，那是唯一一道。
+ * 結果形狀與錯誤字句照基座，`edit` 的字串替換逐字照抄 `performStringReplacement`；唯一不同的一句是寫到目錄上，
+ * 基座是 `EISDIR` 的開檔錯誤，這裡是 `not a regular file`（卡上第 2 步的字句）。
+ *
  * 第四個是 **`uploadFiles`**——`BackendProtocolV2` 上另一個會改檔案的方法，覆蓋面漏掉它
  * 就有一條繞得過 fence 的路（PR #62 的 review 實測，經 symlink 寫穿到根外）。
  *
@@ -44,16 +55,16 @@
  *
  * **我們的 TOCTOU 窗口比 dsh 寬一點，這件事要說明白。** dsh 的 `checkedTarget()` 回傳
  * 那個新鮮的 canonical target，變更就用**它**去寫，所以檢查的與寫入的是同一個身分。我們
- * 做不到同一件事：`super.write()` 收的是**虛擬路徑**，它自己會再 `resolvePath()` 一次，
+ * 做不到同一件事（`delete`／`uploadFiles` 仍如此；`write`／`edit` 自己做完之後改走 `resolvePath`，見上）：`super.write()` 收的是**虛擬路徑**，它自己會再 `resolvePath()` 一次，
  * 傳一個 realpath 進去只會被當成虛擬路徑接到 `cwd` 底下。所以這裡回傳的是「canonical 之後
  * 再表達回去的虛擬路徑」——祖先的 symlink 已經被解掉，但基座那一次 lexical resolve 仍在
  * 我們的檢查之後發生。
  */
 
 import { createHash } from 'node:crypto';
-import { relative, resolve, sep } from 'node:path';
+import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
-import { open, realpath } from 'node:fs/promises';
+import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
 import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
 import type {
   DeleteResult,
@@ -65,11 +76,21 @@ import type {
 } from 'deepagents';
 import micromatch from 'micromatch';
 
-import { noteSandboxDenial } from '@nexus/core';
+import {
+  currentToolCallSignal,
+  noteSandboxDenial,
+  noteSearchError,
+  SEARCH_FAILED,
+} from '@nexus/core';
+import { writeFileAtomic, withTargetLock } from './atomic-workspace-write.js';
+import type { AtomicWriteInternals } from './atomic-workspace-write.js';
 import { notTextReason, refuseNonText } from './binary-read.js';
 import { canonicalize } from './canonical-path.js';
+import { runRipgrep } from './ripgrep-runner.js';
+import type { RipgrepInternals } from './ripgrep-runner.js';
 import type {
   SandboxDenial,
+  SearchErrorCode,
   SandboxGrantLedger,
   SandboxMode,
   SandboxModeSource,
@@ -84,6 +105,14 @@ import type {
 function denied<T extends { error: string }>(result: T): T {
   noteSandboxDenial();
   return result;
+}
+
+/**
+ * 搜尋失敗：替這一次工具呼叫記下碼，回帶 `error` 的結果。字句不以 `Error: ` 開頭，前綴由 `fs-tool-errors.ts` 補。
+ */
+function searchFailure(code: SearchErrorCode, message: string): GrepResult {
+  noteSearchError(code);
+  return { error: message };
 }
 
 /**
@@ -211,6 +240,48 @@ function sameDenial(bound: SandboxDenial | undefined, call: SandboxDenial): bool
   return bound !== undefined && bound.target === call.target && bound.digest === call.digest;
 }
 
+/**
+ * 基座 `getMimeType`／`isTextMimeType`（`deepagents` 沒有匯出）判成非文字的副檔名：圖、音、影、pdf、ppt。
+ * 基座的 `write` 對這些把內容當 base64 解碼成位元組再寫（附件與摘要器走的就是這條），所以這裡要一樣。
+ * 升版時的對照：`contained-backend.test.ts` 對著裸的 `FilesystemBackend` 逐個副檔名比寫出來的位元組。
+ */
+const NON_TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.heif',
+  '.mp3', '.wav', '.aiff', '.aac', '.ogg', '.flac',
+  '.mp4', '.webm', '.mpeg', '.mov', '.avi', '.flv', '.mpg', '.wmv', '.3gpp',
+  '.pdf', '.ppt', '.pptx',
+]); // prettier-ignore
+
+/**
+ * 基座錯誤字句開頭的那個字。拆成常數是因為 `tool-error-prefix.test.ts` 釘住「字串裡寫 `Error: ` 的只有前綴的定義」；
+ * 這裡要的是基座的字句逐字不變（不是 `TOOL_ERROR_PREFIX`），寫法同 `fs-tool-errors.ts` 的 `BASE_ERROR_WORD`。
+ */
+const BASE_ERROR_WORD = 'Error';
+
+/**
+ * 字串替換，**逐字照抄基座的 `performStringReplacement`**（`deepagents` 沒有匯出）：錯誤字句一字不改，
+ * 模型看到的拒絕理由不因為這個 backend 自己寫檔而換了一套話。`contained-backend.test.ts` 對著裸的
+ * `FilesystemBackend` 釘住字句。
+ *
+ * @returns `[新內容, 取代次數]`，或錯誤字串。
+ */
+function performStringReplacement(
+  content: string,
+  oldString: string,
+  newString: string,
+  replaceAll: boolean,
+): [string, number] | string {
+  if (content === '' && oldString === '') return [newString, 0];
+  if (oldString === '')
+    return `${BASE_ERROR_WORD}: oldString cannot be empty when file has content`;
+  const occurrences = content.split(oldString).length - 1;
+  if (occurrences === 0) return `${BASE_ERROR_WORD}: String not found in file: '${oldString}'`;
+  if (occurrences > 1 && !replaceAll) {
+    return `${BASE_ERROR_WORD}: String '${oldString}' has multiple occurrences (appears ${String(occurrences)} times) in file. Use replace_all=True to replace all instances, or provide a more specific string with surrounding context.`;
+  }
+  return [content.split(oldString).join(newString), occurrences];
+}
+
 export interface ContainedFilesystemBackendOptions {
   /** 可寫根。所有虛擬路徑都以它為基準，變更不得 canonicalize 到它之外。 */
   readonly rootDir: string;
@@ -229,6 +300,10 @@ export interface ContainedFilesystemBackendOptions {
    * **省略就是沒有升級**：被擋就是被擋，拒絕後面不接指引。
    */
   readonly grants?: SandboxGrantLedger;
+  /** 只給測試用：換 `rg` 執行檔名、數 spawn、壓低輸出上限（{@link RipgrepInternals}）。 */
+  readonly ripgrep?: RipgrepInternals;
+  /** 原子寫入的測試接縫（暫存名、檢查點、注入失敗），見 {@link AtomicWriteInternals}。正式組裝不給。 */
+  readonly atomicInternals?: AtomicWriteInternals;
 }
 
 /**
@@ -244,6 +319,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
 
   /** 升級的 grant 從哪裡認領；`undefined` 就是這道 fence 沒有升級。 */
   private readonly grants: SandboxGrantLedger | undefined;
+
+  /** 只給測試用的 `rg` 接縫；正式組裝是 `undefined`。 */
+  private readonly ripgrepInternals: RipgrepInternals | undefined;
+  /** 原子寫入的測試接縫；正式組裝是 `undefined`。 */
+  private readonly atomicInternals: AtomicWriteInternals | undefined;
 
   /**
    * 這一刻的圍堵強度，錯誤訊息會指名它。
@@ -264,6 +344,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     const mode = options.mode ?? 'workspace-write';
     this.resolveMode = typeof mode === 'function' ? mode : (): SandboxMode => mode;
     this.grants = options.grants;
+    this.ripgrepInternals = options.ripgrep;
+    this.atomicInternals = options.atomicInternals;
   }
 
   /**
@@ -309,23 +391,69 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 寫檔，先過 fence。
-   * @param filePath - 虛擬路徑。
-   * @param content - 檔案內容。
-   * @returns 基座的寫入結果，或被 fence 擋下時的錯誤結果。
+   * 基座 `resolvePath` 的字面檢查（拒 `..`、`~`、跑出根）。它在 TS 上是 private，以型別斷言呼叫。
+   *
+   * **不要改成自己 `resolve(this.cwd, …)`**：`danger-full-access` 下 `verdict` 不檢查、原樣回傳路徑，
+   * 今天擋住 `..`、`~` 與跑出根的只剩這一道。
    */
-  override async write(filePath: string, content: string): Promise<WriteResult> {
-    const checked = await this.checkedPath(filePath, 'write', [content]);
-    return typeof checked === 'string' ? super.write(checked, content) : denied(checked);
+  private resolveVirtual(virtualPath: string): string {
+    return (this as unknown as { resolvePath(key: string): string }).resolvePath(virtualPath);
   }
 
   /**
-   * 編輯檔案，先過 fence。
+   * 寫檔，先過 fence，**再經暫存檔加 `rename` 原子取代**（[#1531](https://github.com/DemianLi/nexus-agent/issues/1531)）。
+   *
+   * 基座的 `write` 是 `O_TRUNC` 就地覆寫，所以不能前後包一層，這裡自己做完：結果形狀與錯誤字句照基座
+   * （成功 `{ path, filesUpdate: null }`，失敗 `{ error: "Error writing file '…': …" }`，symlink 的原句）。
+   * 非文字副檔名的內容照基座當 base64 解碼。整段在逐目標的鎖裡。
+   *
+   * @param filePath - 虛擬路徑。
+   * @param content - 檔案內容。
+   * @returns 寫入結果，或被 fence 擋下時的錯誤結果。
+   */
+  override async write(filePath: string, content: string): Promise<WriteResult> {
+    const checked = await this.checkedPath(filePath, 'write', [content]);
+    if (typeof checked !== 'string') return denied(checked);
+    try {
+      const resolved = this.resolveVirtual(checked);
+      return await withTargetLock(await canonicalize(resolved), async () => {
+        const existing = await lstat(resolved).catch(() => undefined);
+        if (existing?.isSymbolicLink() === true) {
+          return {
+            error: `Cannot write to ${checked} because it is a symlink. Symlinks are not allowed.`,
+          };
+        }
+        if (existing !== undefined && !existing.isFile()) {
+          return { error: `Error writing file '${checked}': not a regular file` };
+        }
+        const data = NON_TEXT_EXTENSIONS.has(extname(checked).toLowerCase())
+          ? Buffer.from(content, 'base64')
+          : content;
+        await mkdir(dirname(resolved), { recursive: true });
+        await writeFileAtomic(
+          resolved,
+          data,
+          existing === undefined ? undefined : existing.mode & 0o777,
+          this.atomicInternals,
+        );
+        return { path: checked, filesUpdate: null };
+      });
+    } catch (error: unknown) {
+      return { error: `Error writing file '${checked}': ${(error as Error).message}` };
+    }
+  }
+
+  /**
+   * 編輯檔案，先過 fence，**自己讀、自己替換、經暫存檔加 `rename` 寫回**（[#1531](https://github.com/DemianLi/nexus-agent/issues/1531)）。
+   *
+   * 讀照基座（`stat` 判一般檔、`O_NOFOLLOW` 開、UTF-8），替換用逐字照抄的 {@link performStringReplacement}，
+   * 保留既有 mode。讀、替換、寫整段在逐目標的鎖裡，同一步的兩個平行 `edit` 不會丟修改。
+   *
    * @param filePath - 虛擬路徑。
    * @param oldString - 要被換掉的字串。
    * @param newString - 換上去的字串。
    * @param replaceAll - 是否全部取代。
-   * @returns 基座的編輯結果，或被 fence 擋下時的錯誤結果。
+   * @returns 編輯結果，或被 fence 擋下時的錯誤結果。
    */
   override async edit(
     filePath: string,
@@ -338,9 +466,31 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       newString,
       replaceAll === true,
     ]);
-    return typeof checked === 'string'
-      ? super.edit(checked, oldString, newString, replaceAll)
-      : denied(checked);
+    if (typeof checked !== 'string') return denied(checked);
+    try {
+      const resolved = this.resolveVirtual(checked);
+      return await withTargetLock(await canonicalize(resolved), async () => {
+        if (!(await stat(resolved)).isFile())
+          return { error: `${BASE_ERROR_WORD}: File '${checked}' not found` };
+        let content: string;
+        let mode: number;
+        const handle = await open(resolved, constants.O_RDONLY | constants.O_NOFOLLOW);
+        try {
+          content = await handle.readFile({ encoding: 'utf-8' });
+          mode = (await handle.stat()).mode & 0o777;
+        } finally {
+          await handle.close();
+        }
+        const result = performStringReplacement(content, oldString, newString, replaceAll === true);
+        if (typeof result === 'string') return { error: result };
+        const [newContent, occurrences] = result;
+        await this.atomicInternals?.afterEditRead?.(resolved);
+        await writeFileAtomic(resolved, newContent, mode, this.atomicInternals);
+        return { path: checked, filesUpdate: null, occurrences };
+      });
+    } catch (error: unknown) {
+      return { error: `Error editing file '${checked}': ${(error as Error).message}` };
+    }
   }
 
   /**
@@ -398,37 +548,140 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   }
 
   /**
-   * 搜尋檔案內容。**帶目錄的 glob 一律對工作區根錨定**，跟 dsh 一樣。
+   * 搜尋檔案內容。**rg 由這裡自己起**（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)），照 dsh
+   * `packages/fs/tool-fs-search/src/search-core.ts:222-287`（`687f282e`）：`--no-config`、`cwd` 是工作區根、stdout 上限、
+   * 取消與逾時、錯誤分類，細節在 `ripgrep-runner.ts`。
    *
-   * **基座的缺陷**：`ripgrepSearch()` 啟動 `rg` 時沒指定 `cwd`，搜尋路徑又是主機上的絕對路徑，
-   * 而 rg 會把帶 `/` 的 glob 錨定在行程的工作目錄上。harness 的工作目錄不是工作區根，所以
-   * `glob: "logs/app.log"`、`glob: "/logs/app.log"` 都會**不報錯、回 0 筆**。沒有 rg 時走的退路
-   * （`literalSearch()`）只拿檔名比對 glob，帶目錄的 glob 同樣永遠對不上。一次 live 量測裡，
-   * 模型那一輪共打了 20 次工具呼叫，其中 9 次 grep 全部回 0 筆，花了 154 秒。不帶 `/` 的 glob（`*.ts`）兩條路
-   * 都對得上，不受影響。
+   * **基座的做法有四個洞**（`deepagents@1.13.1`，`dist/src-C9o7b5C6.js:935-984`）：`spawn("rg", …)` 沒有 `--no-config`，
+   * 所以管理者的 `~/.ripgreprc`、專案 `.env` 帶進來的 `RIPGREP_CONFIG_PATH` 能濾掉結果，`--pre` 還能讓 rg 對每個命中的檔
+   * 執行任意程式；stdout 不設上限；沒有取消；結束碼不是 0／1、逾時、spawn 失敗一律改走結果不同的 `literalSearch`。
+   * 帶目錄的 glob 回 0 筆那個缺陷（rg 的錨點是行程的工作目錄，不是工作區根）也是同一處：`cwd` 現在直接給工作區根，
+   * glob 原樣以 `--glob` 傳下去，錨點語意同 dsh。
    *
-   * **偏離登記**（AGENTS.md「技術實現標準」）：
-   * - dsh 的做法（`packages/fs/tool-fs-search/src/grep.ts` 與 `search-core.ts`）：`rg` 在 session
-   *   的工作目錄裡執行，glob 原樣以 `--glob=` 傳下去，所以帶目錄的 glob 對根錨定。
-   * - 表達不出來的原因：`ripgrepSearch()` 與 `literalSearch()` 在型別上是 `private`，
-   *   `FilesystemBackend` 也沒有指定 `rg` 工作目錄的選項，這一層換不到那個 `cwd`。
-   * - 退到的做法：只在 glob 帶 `/` 時介入。交給基座的是 glob 的最後一段（`logs/app.log` →
-   *   `app.log`），兩條路都拿它比檔名，回來的是一個超集；再拿完整的 glob 對「相對於工作區根」
-   *   的路徑精確過濾，語意等同 rg 在根上執行。大括號跨了 `/` 時沒有可靠的最後一段，改成
-   *   不帶 glob 交給基座，一樣在這裡過濾。
-   * - 回頭點：`contained-backend.test.ts` 對裸 `FilesystemBackend` 斷言今天回 0 筆。基座修好
-   *   那天它會紅，這個覆寫就該拿掉。
+   * 流程：解出搜尋的起點並 `stat`（不存在就 `{ matches: [] }`，同基座）→ 確認工作區根存在 → 跑 rg →
+   * 解析 `--json`、換算虛擬路徑（邏輯照基座 `:951-978`）→ `maxCount` 截斷。失敗一律回 `{ error }`，並替這一次工具呼叫記下
+   * 搜尋碼（`noteSearchError`），最後落進會話日誌那顆 `tool/result` 的 `error`。**不換成別的搜尋法。**
    *
-   * `maxCount` 在過濾之後才套用，否則過濾前的截斷會丟掉本來對得上的結果；截斷時照基座的
-   * 形狀設 `truncated`，工具層據此補上截斷提示。
+   * rg 是 serve 直接起的子行程，spawn 之後登記進 `trackHostExitChild`（`ripgrep-runner.ts`）：serve 走 `process.exit` 結束而
+   * rg 還在跑時由 core 同步 `SIGKILL`。**只殺直接子行程，不做 process group**——#1542 登記的偏離（理由 1：沒有 subprocess
+   * 服務）同樣適用。
+   *
+   * ## 偏離 dsh（AGENTS.md「技術實現標準」，#1532 卡上偏離 1）
+   *
+   * **理由 2（完全內網，主機可能沒有 rg）：`rg` 不存在（spawn 回 `ENOENT`）時暫時保留基座的退路。** dsh 內附 rg 所以不需要；
+   * nexus 的內附 rg 是 #1502 刀 4，還沒做。完全內網的主機多半沒有 rg、也裝不到，刀 4 合併之前照 dsh 不退，這些主機上的
+   * grep 整個不能用。`ENOENT` 時根本沒有 rg 在跑，`--no-config` 要防的那件事不存在，退路的代價只剩「結果和 rg 不同」。
+   * 退到：`ENOENT` 時才交給 `super.grep`（走基座的 `literalSearch`），**其餘失敗一律回錯誤**。
+   *
+   * **這條退路安全的前提**：我們自己 spawn 的和基座 spawn 的是同一支，也就是 `PATH` 上的 `rg`，而且先確認過工作區根存在。
+   * 我們 `ENOENT`，基座也必定 `ENOENT`，基座那支沒有 `--no-config` 的 rg 永遠起不來。#1502 刀 4 照它卡上的形狀（把內附 rg
+   * 所在的目錄前置進 `PATH`）合併之後，前提照樣成立：兩邊找到的都是內附那一支。
+   *
+   * **反過來的限制**：如果之後有人改成把解析出來的路徑直接交給 `runRipgrep`（不經 `PATH`），**必須在同一張 PR 拿掉退路**。
+   * 否則那支路徑 `ENOENT` 時，`PATH` 上另一支 rg 會被基座以沒有 `--no-config` 的方式起來，注入就又打開了。
+   *
+   * **回頭點**：主機一定帶內附 rg 之後，退路只剩「內附 rg 被刪掉」走得到；要不要拿掉，跟 #1502 刀 4 啟動那一行一起決定。
+   * 退路上的 glob 處理（{@link lastSegmentOf} 加 `micromatch`）是基座兩條搜尋路都比不對帶目錄 glob 的補丁，只留給退路用：
+   * 交給基座的是 glob 的最後一段，再用完整 glob 對「相對於工作區根」的路徑過濾。
+   *
+   * ## 與基座一樣的
+   *
+   * 維持 `-F`（字面字串）：暫留，見 #1605 Q1。筆數上限（`maxCount`）在解析之後才套用，截斷時照基座的形狀設 `truncated`。
    *
    * @param pattern - 要找的字面字串。
    * @param dirPath - 從哪個虛擬路徑開始找。
    * @param glob - 篩選檔案的 glob；帶 `/` 時對工作區根錨定。
    * @param maxCount - 最多回幾筆。
-   * @returns 基座的搜尋結果；帶目錄的 glob 已按工作區根過濾。
+   * @returns 搜尋結果；失敗時是帶 `error` 的結果。
    */
   override async grep(
+    pattern: string,
+    dirPath?: string,
+    glob?: string | null,
+    maxCount?: number | null,
+  ): Promise<GrepResult> {
+    // `spawn` 在 `cwd` 不存在時也回 `spawn rg ENOENT`，跟找不到 rg 分不出來；不先確認的話會誤走退路，
+    // 讓 `PATH` 上的 rg 在沒有 `--no-config` 的情況下被基座起來。放在最前面。
+    // **根不存在不是錯誤，是「沒有東西可找」**（`{ matches: [] }`，同基座對不存在的起點）：暫存 backend 的根是第一次
+    // 存東西才建的（`tool-result-stash.ts`），經 `CompositeBackend` 搜 `/` 時也會搜到它。根存在卻不是目錄才是錯誤。
+    try {
+      if (!(await stat(this.cwd)).isDirectory()) throw new Error('not a directory');
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { matches: [] };
+      return searchFailure(
+        SEARCH_FAILED,
+        'grep cannot search: the workspace root is not an accessible directory',
+      );
+    }
+    let baseFull: string;
+    try {
+      baseFull = this.resolveVirtual(dirPath || '.');
+    } catch {
+      return { matches: [] };
+    }
+    try {
+      await stat(baseFull);
+    } catch {
+      return { matches: [] };
+    }
+    // **搜尋起點要傳相對於工作區根的路徑**（根本身是 `.`）：rg 的錨點是它自己 `getcwd()` 的 realpath，根經過 symlink 時
+    // 傳絕對路徑會對不上、帶目錄的 `--glob` 一個都命中不了；相對路徑不受影響（rg 15.1.0 實測；`cwd` 為根、路徑為 `.` 或
+    // `src` 時 `logs/app.log`、`/logs/app.log`、`src/**/*.ts` 都對根錨定）。
+    // 一律加 `./` 前綴：目錄名剛好是 `-` 時 rg 會改讀 stdin（0 筆、沒有錯誤），`-x` 這類也不會被當成旗標。
+    const searchRel = relative(this.cwd, baseFull);
+    const searchArg = searchRel === '' ? '.' : `.${sep}${searchRel}`;
+    const outcome = await runRipgrep({
+      argv: ['--json', '-F', ...(glob ? ['--glob', glob] : []), '--', pattern, searchArg],
+      cwd: this.cwd,
+      signal: currentToolCallSignal(),
+      internals: this.ripgrepInternals,
+    });
+    if (outcome.kind === 'unavailable') return this.fallbackGrep(pattern, dirPath, glob, maxCount);
+    if (outcome.kind === 'error') return searchFailure(outcome.code, outcome.message);
+    return applyGrepMaxCount({
+      result: { matches: this.parseRipgrepJson(outcome.stdout) },
+      maxCount: maxCount ?? null,
+    });
+  }
+
+  /**
+   * 解 `rg --json` 的輸出，換算成虛擬路徑。邏輯照基座 `ripgrepSearch`（`src-C9o7b5C6.js:951-978`）：
+   * 只收 `match`，路徑相對 `cwd` 換成 `/…`，跑到根外的丟掉，壞行略過。
+   */
+  private parseRipgrepJson(stdout: string): Array<{ path: string; line: number; text: string }> {
+    const matches: Array<{ path: string; line: number; text: string }> = [];
+    for (const line of stdout.split('\n')) {
+      if (line.trim() === '') continue;
+      try {
+        const data = JSON.parse(line) as {
+          type?: string;
+          data?: { path?: { text?: string }; line_number?: number; lines?: { text?: string } };
+        };
+        if (data.type !== 'match') continue;
+        const file = data.data?.path?.text;
+        const lineNumber = data.data?.line_number;
+        if (file === undefined || file === '' || lineNumber === undefined) continue;
+        const rel = relative(this.cwd, resolve(this.cwd, file));
+        if (rel.startsWith('..')) continue;
+        matches.push({
+          path: `/${rel.split(sep).join('/')}`,
+          line: lineNumber,
+          text: data.data?.lines?.text?.replace(/\n$/, '') ?? '',
+        });
+      } catch {
+        continue;
+      }
+    }
+    return matches;
+  }
+
+  /**
+   * `rg` 不存在時的退路（偏離 1，見 {@link ContainedFilesystemBackend.grep}）：交給基座，它同樣 `ENOENT` 後走
+   * `literalSearch`。**帶目錄的 glob 一律對工作區根錨定**——基座兩條路都比不對，這裡補：只在 glob 帶 `/` 時介入，
+   * 交給基座的是最後一段（`logs/app.log` → `app.log`），回來的是超集，再用完整 glob 精確過濾。大括號跨了 `/` 時沒有可靠的
+   * 最後一段，改成不帶 glob 交給基座，一樣在這裡過濾。`maxCount` 在過濾之後才套用。
+   */
+  private async fallbackGrep(
     pattern: string,
     dirPath?: string,
     glob?: string | null,

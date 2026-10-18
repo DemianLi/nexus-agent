@@ -51,6 +51,9 @@ import { startGuardServer, type GuardServer } from './server';
  * 13. **展開收合**（#1638 PR A，`?overlay=collapsibles`）：展開途中的高度介於 0 與最終值之間（Q1：keyframes 讀 Base UI 的
  *    `--collapsible-panel-height`，Panel 的 `data-open:` 命中動效）；reduced-motion 下沒有高度動效、第一幀就到位；箭頭跟著 Trigger 的
  *    `data-panel-open` 轉半圈、思考過程展開後藏「·」與摘要（Q2）。
+ * 14. **對話區**（#1638 PR B，`?overlay=messages`，產品的 `Transcript`）：泡泡字、表尾、捲到最新的按鈕圖示的對比與按鈕的焦點（亮暗加兩種退路，
+ *    {@link OVERLAYS}）；每一則的 `content-visibility` 是 `visible`（第 42 條）；按鈕的動效照 §7：不位移、只縮放 .97、reduced-motion 下沒有
+ *    transition（第 41 條）；外殼的行高是 SG 的 20px、泡泡維持 23px；底部淡出捲到底時收成 0。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -187,12 +190,19 @@ afterAll(async () => {
   if (target) writeFileSync(target, `${JSON.stringify(report, null, 2)}\n`);
 });
 
-/** 等有限長度的動畫與轉場跑完（無限的，例如呼吸光，不等）。 */
+/**
+ * 等有限長度的動畫與轉場跑完（無限的，例如呼吸光，不等）。只等跟著時間跑的：scroll-driven 的（對話區的底部淡出，#1638 PR B）
+ * 跟著捲動位置走，沒捲到底就永遠不會 finished。
+ */
 async function settle(page: Page): Promise<void> {
   await page.evaluate(async () => {
     const finite = document
       .getAnimations()
-      .filter((a) => a.effect?.getComputedTiming().endTime !== Infinity);
+      .filter(
+        (a) =>
+          a.timeline instanceof DocumentTimeline &&
+          a.effect?.getComputedTiming().endTime !== Infinity,
+      );
     await Promise.all(finite.map((a) => a.finished.catch(() => undefined)));
   });
 }
@@ -929,6 +939,43 @@ interface Overlay {
   backdrops: string[];
 }
 
+const SCROLL_BUTTON = '[data-slot="message-scroller-button"]';
+const QUESTIONNAIRE_CHOICE = '[data-slot="questionnaire-choice"]';
+const QUESTIONNAIRE_INPUT = `${QUESTIONNAIRE_CHOICE} > input`;
+/** 放不下的那一排草稿附件裡每一顆按鈕：看原圖（縮圖）、移除、取消上傳。 */
+const ATTACHMENT_BUTTONS =
+  '[data-guard-rail="overflows"] :is([data-slot="attachment-action"], [data-slot="attachment-media"] > button)';
+
+/** 把對話區捲到頂端或最底，等捲到最新的按鈕換好狀態、動效跑完。 */
+async function scrollMessages(page: Page, to: 'top' | 'end'): Promise<void> {
+  // 剛開頁時對話區還在定位，第一下捲動可能被 primitive 略過：捲完逐幀看按鈕換好狀態沒有，一秒沒換好就再捲一次。
+  const settled = await page.$eval(
+    '[data-slot="message-scroller-viewport"]',
+    async (el, top) => {
+      const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+      const button = el.parentElement!.querySelector('[data-slot="message-scroller-button"]')!;
+      const target = top ? 0 : el.scrollHeight - el.clientHeight;
+      for (let attempt = 0; attempt < 5; attempt++) {
+        // 已經在目標位置時再設一次不會發 scroll 事件，先往回推 1px。
+        if (attempt > 0) {
+          el.scrollTop = top ? 1 : target - 1;
+          await frame();
+        }
+        el.scrollTop = target;
+        // 每捲一次只看不碰：一直改 scrollTop，primitive 等不到捲動停下來，按鈕的狀態不會換。
+        for (let i = 0; i < 60; i++) {
+          await frame();
+          if (button.getAttribute('data-active') === String(top)) return true;
+        }
+      }
+      return false;
+    },
+    to === 'top',
+  );
+  if (!settled) throw new Error(`對話區捲到${to === 'top' ? '頂端' : '最底'}之後，按鈕沒有換狀態`);
+  await settle(page);
+}
+
 const OVERLAYS: Overlay[] = [
   {
     name: 'dialog',
@@ -1020,6 +1067,79 @@ const OVERLAYS: Overlay[] = [
     texts: ['command-item-selected', 'command-item'],
     focus: ['command-input-0'],
     surfaces: ['command'],
+    backdrops: [],
+  },
+  {
+    // 不是浮層，但要的量測一樣（字、焦點、兩種退路），所以掛在這張清單上（#1638 PR B）。
+    name: 'messages',
+    marks: {
+      '[data-slot="message"][data-align="end"] [data-slot="bubble-content"]': {
+        'data-guard-text': 'user-bubble',
+      },
+      '[data-testid="ai-entry"] [data-slot="bubble-content"]': { 'data-guard-text': 'ai-bubble' },
+      '[data-slot="message-footer"]': { 'data-guard-text': 'message-footer' },
+      // 圖示是 `aria-hidden` 的 svg，`data-guard-texts` 量它的顏色。
+      [SCROLL_BUTTON]: { 'data-guard-focus': 'scroll-button', 'data-guard-texts': 'scroll-button' },
+    },
+    // 一開頁就捲在最底，按鈕是藏著的（opacity 0，量具會判不合格）：捲回頂端讓它出現再量。
+    prepare: async (page) => {
+      await scrollMessages(page, 'top');
+    },
+    texts: ['user-bubble', 'ai-bubble', 'message-footer', 'scroll-button-0'],
+    focus: ['scroll-button-0'],
+    surfaces: [],
+    backdrops: [],
+  },
+  {
+    name: 'questionnaire',
+    marks: {
+      // 真的 input 鋪滿選項、`opacity-0`，外框畫在選項上（本地修改第 46 條）：聚焦 input、量選項。
+      [QUESTIONNAIRE_INPUT]: { 'data-guard-focus': 'questionnaire-choice' },
+      [QUESTIONNAIRE_CHOICE]: { 'data-guard-outline-host': '' },
+      '[data-slot="questionnaire-progress"]': { 'data-guard-text': 'questionnaire-progress' },
+      '[data-slot="questionnaire-title"]': { 'data-guard-text': 'questionnaire-title' },
+      '[data-slot="questionnaire-choice-label"]': { 'data-guard-text': 'questionnaire-choice' },
+      '[data-slot="questionnaire-choice-description"]': {
+        'data-guard-text': 'questionnaire-choice-description',
+      },
+      '[data-slot="questionnaire-next"]': {
+        'data-guard-text': 'questionnaire-next',
+        'data-guard-focus': 'questionnaire-next',
+      },
+    },
+    texts: [
+      'questionnaire-progress',
+      'questionnaire-title',
+      'questionnaire-choice',
+      'questionnaire-choice-description',
+      'questionnaire-next',
+    ],
+    focus: [
+      'questionnaire-choice-0',
+      'questionnaire-choice-1',
+      'questionnaire-choice-2',
+      'questionnaire-next-0',
+    ],
+    surfaces: [],
+    backdrops: [],
+  },
+  {
+    name: 'attachments',
+    marks: {
+      // 上傳中的標題是 shimmer（字是透明的、顏色來自漸層），讀 `color` 會量到完整字色、假綠：這裡不量，另一格量漸層每個色標。
+      '[data-guard-rail] [data-slot="attachment"]:not([data-state="uploading"]) [data-slot="attachment-title"]':
+        { 'data-guard-text': 'attachment-title' },
+      '[data-guard-rail] [data-slot="attachment"]:not([data-state="error"]) [data-slot="attachment-description"]':
+        { 'data-guard-text': 'attachment-description' },
+      '[data-slot="attachment"][data-state="error"] [data-slot="attachment-description"]': {
+        'data-guard-text': 'attachment-error',
+      },
+      [ATTACHMENT_BUTTONS]: { 'data-guard-focus': 'attachment-button' },
+    },
+    texts: ['attachment-title', 'attachment-description', 'attachment-error'],
+    // 圖的看原圖與移除、檔案的移除、取消上傳（有進度）、取消上傳（不確定長度）、移除（失敗的）。
+    focus: [0, 1, 2, 3, 4, 5].map((i) => `attachment-button-${i}`),
+    surfaces: [],
     backdrops: [],
   },
 ];
@@ -1990,6 +2110,326 @@ describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', (
         chevron: '180deg',
         hidden: [true, true],
       });
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe('瀏覽器量對話區（#1638 PR B，`?overlay=messages`）', () => {
+  const openMessages = (reducedMotion = false) =>
+    openOverlay('messages', 'light', { reducedMotion, marks: { [SCROLL_BUTTON]: {} } });
+
+  test('每一則的 content-visibility 是 visible：覆寫檔壓掉 vendor 的 auto（Q6，本地修改第 42 條）', async () => {
+    const page = await openMessages();
+    try {
+      const items = await page.$$eval('[data-slot="message-scroller-item"]', (els) =>
+        els.map((el) => {
+          const style = getComputedStyle(el);
+          return `${style.contentVisibility} ${style.containIntrinsicSize}`;
+        }),
+      );
+      report['messages:content-visibility'] = items;
+      // 量具自檢：十二則都量到了。
+      expect(items).toHaveLength(12);
+      expect(new Set(items)).toEqual(new Set(['visible none']));
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each([false, true])(
+    '捲到最新的按鈕照 §7：不位移、只縮放 .97，時長走 token；reduced-motion 下沒有 transition（本地修改第 41 條；reduced-motion %s）',
+    async (reducedMotion) => {
+      const page = await openMessages(reducedMotion);
+      try {
+        const read = () =>
+          page.$eval(SCROLL_BUTTON, (el) => {
+            const style = getComputedStyle(el);
+            return {
+              active: el.getAttribute('data-active'),
+              slot: el.getAttribute('data-slot'),
+              translate: style.translate,
+              scale: style.scale,
+              transitionProperty: style.transitionProperty,
+              transitionDuration: style.transitionDuration,
+              top: el.getBoundingClientRect().top,
+            };
+          });
+        const hidden = await read();
+        await scrollMessages(page, 'top');
+        const shown = await read();
+        report[`messages:scroll-button:${reducedMotion ? 'reduced' : 'normal'}`] = {
+          hidden,
+          shown,
+        };
+        // 量具自檢：真的量到藏著與出現兩種狀態，元素是 reduced-motion 那條規則認得的 data-slot。
+        expect([hidden.active, shown.active]).toEqual(['false', 'true']);
+        expect(shown.slot).toBe('message-scroller-button');
+        // 不位移：只有置中用的 -50%（vendor 藏著時是 translate-y-full），框的上緣只差縮放的那一點。
+        expect([hidden.translate, shown.translate]).toEqual(['-50%', '-50%']);
+        expect(Math.abs(hidden.top - shown.top)).toBeLessThan(1);
+        expect([hidden.scale, shown.scale]).toEqual(['0.97', '1']);
+        if (reducedMotion) {
+          expect([hidden.transitionProperty, shown.transitionProperty]).toEqual(['none', 'none']);
+        } else {
+          // `--duration-quick` 150、`--duration-fast` 250（vendor 是 400 與 200）。
+          expect(hidden).toMatchObject({
+            transitionProperty: 'scale, opacity',
+            transitionDuration: '0.15s',
+          });
+          expect(shown).toMatchObject({
+            transitionProperty: 'scale, opacity',
+            transitionDuration: '0.25s',
+          });
+        }
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
+  test('外殼的行高是 SG 的 text-sm（20px），泡泡由呼叫端維持 text-body（23px）', async () => {
+    const page = await openMessages();
+    try {
+      const measured = await page.$eval('[data-testid="ai-entry"]', (el) => ({
+        shell: getComputedStyle(el).lineHeight,
+        bubble: getComputedStyle(el.querySelector('[data-slot="bubble-content"]')!).lineHeight,
+      }));
+      report['messages:line-height'] = measured;
+      expect(measured).toEqual({ shell: '20px', bubble: '23px' });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each([false, true])(
+    '底部淡出（scroll-fade-b，Q8 照 SG）捲到底時收成 0、往上捲才出現（reduced-motion %s）',
+    async (reducedMotion) => {
+      const page = await openMessages(reducedMotion);
+      try {
+        // 淡出的寬度由 scroll-driven 的 `scroll-fade-reveal-b` 帶：進度 1 是收成 0px，0 是整段（12%、最多 40px）。
+        const read = () =>
+          page.$eval('[data-slot="message-scroller-viewport"]', (el) => {
+            const reveal = el
+              .getAnimations()
+              .find((a) => (a as CSSAnimation).animationName === 'scroll-fade-reveal-b');
+            return {
+              progress: reveal?.effect?.getComputedTiming().progress ?? null,
+              value: getComputedStyle(el).getPropertyValue('--scroll-fade-b'),
+            };
+          });
+        const end = await read();
+        await scrollMessages(page, 'top');
+        const top = await read();
+        report[`messages:scroll-fade:${reducedMotion ? 'reduced' : 'normal'}`] = { end, top };
+        expect(end.progress).toBe(1);
+        expect(top.progress).toBe(0);
+      } finally {
+        await page.close();
+      }
+    },
+  );
+});
+
+describe.each(['light', 'dark'] as const)('瀏覽器量問答與附件（#1638 PR C）：%s', (theme) => {
+  test('問答選項聚焦：外框 2px、offset 2px 畫在選項上（本地修改第 46 條；外框顏色、box-shadow 不變由上面的浮層那組量）', async () => {
+    const page = await openOverlay('questionnaire', theme, {
+      marks: { [QUESTIONNAIRE_INPUT]: {} },
+    });
+    try {
+      await page.keyboard.press('Tab');
+      const input = page.locator(QUESTIONNAIRE_INPUT).first();
+      await input.focus();
+      await settle(page);
+      const sample = await input.evaluate((el) => {
+        const host = getComputedStyle(el.parentElement!);
+        return {
+          focusVisible: el.matches(':focus-visible'),
+          hostSlot: el.parentElement!.getAttribute('data-slot'),
+          outline: `${host.outlineStyle} ${host.outlineWidth}`,
+          offset: host.outlineOffset,
+        };
+      });
+      report[`questionnaire:${theme}:choice-outline`] = sample;
+      expect(sample).toEqual({
+        focusVisible: true,
+        hostSlot: 'questionnaire-choice',
+        outline: 'solid 2px',
+        offset: '2px',
+      });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('附件的按鈕不管鍵盤或滑鼠聚焦，外殼都不出 ring（vendor 的 `focus-within:ring-1` 被 SG 的玻璃規則蓋掉；偏離 Q7 字面、PM 同意）', async () => {
+    const page = await openOverlay('attachments', theme, { marks: { [ATTACHMENT_BUTTONS]: {} } });
+    try {
+      const buttons = page.locator(ATTACHMENT_BUTTONS);
+      const count = await buttons.count();
+      const read = (i: number) =>
+        buttons.nth(i).evaluate((el) => {
+          const shell = el.closest('[data-slot="attachment"]')!;
+          return {
+            name: el.getAttribute('aria-label') ?? '',
+            shadow: getComputedStyle(shell).boxShadow,
+            focusWithin: shell.matches(':focus-within'),
+            focusVisible: el.matches(':focus-visible'),
+          };
+        });
+      const samples = [];
+      for (let i = 0; i < count; i++) {
+        const button = buttons.nth(i);
+        await button.evaluate((el) => (el as HTMLElement).blur());
+        await page.mouse.move(0, 0);
+        await settle(page);
+        const rest = await read(i);
+        await page.keyboard.press('Shift');
+        await button.focus();
+        await settle(page);
+        const keyboard = await read(i);
+        await button.evaluate((el) => (el as HTMLElement).blur());
+        // 滑鼠：按下就聚焦；移開再放開，不觸發 click（看原圖會開 modal）。
+        await button.hover({ force: true });
+        await page.mouse.down();
+        await settle(page);
+        const mouse = await read(i);
+        await page.mouse.move(0, 0);
+        await page.mouse.up();
+        samples.push({ name: rest.name, rest, keyboard, mouse });
+      }
+      report[`attachments:${theme}:shell-ring`] = samples;
+      // 量具自檢：六顆都量到，鍵盤那次是 :focus-visible、滑鼠那次不是，兩次外殼都是 :focus-within。
+      expect(samples).toHaveLength(6);
+      expect(
+        samples.filter(
+          (s) =>
+            !s.keyboard.focusVisible ||
+            s.mouse.focusVisible ||
+            !s.keyboard.focusWithin ||
+            !s.mouse.focusWithin,
+        ),
+      ).toEqual([]);
+      expect(
+        samples
+          .filter(
+            (s) =>
+              !sameShadow(s.rest.shadow, s.keyboard.shadow) ||
+              !sameShadow(s.rest.shadow, s.mouse.shadow),
+          )
+          .map((s) => `${s.name}：${s.rest.shadow} → ${s.keyboard.shadow}／${s.mouse.shadow}`),
+      ).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('一排附件左右淡出：放得下時兩邊都不淡；放不下時捲在頭只淡尾、捲到尾只淡頭（Q8 照 SG；退路見本地修改第 47 條）', async () => {
+    const page = await openOverlay('attachments', theme, { marks: { '[data-guard-rail]': {} } });
+    try {
+      const fade = (rail: string, to: 'start' | 'end') =>
+        page.$eval(
+          `[data-guard-rail="${rail}"] [data-slot="attachment-group"]`,
+          async (el, end) => {
+            const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+            el.scrollLeft = end ? el.scrollWidth : 0;
+            for (let i = 0; i < 10; i++) await frame();
+            // 計算值是 `calc(…)` 字串，放進一個跟它一樣寬的盒子裡解成像素。
+            const style = getComputedStyle(el);
+            const box = document.createElement('div');
+            box.style.cssText = `position:absolute;visibility:hidden;width:${el.clientWidth}px`;
+            const probe = document.createElement('div');
+            box.append(probe);
+            document.body.append(box);
+            const px = (value: string) => {
+              probe.style.width = value;
+              return probe.getBoundingClientRect().width;
+            };
+            const result = {
+              overflows: el.scrollWidth > el.clientWidth,
+              start: px(style.getPropertyValue('--scroll-fade-s')),
+              end: px(style.getPropertyValue('--scroll-fade-e')),
+            };
+            box.remove();
+            return result;
+          },
+          to === 'end',
+        );
+      const fits = await fade('fits', 'start');
+      const head = await fade('overflows', 'start');
+      const tail = await fade('overflows', 'end');
+      report[`attachments:${theme}:scroll-fade`] = { fits, head, tail };
+      expect(fits).toEqual({ overflows: false, start: 0, end: 0 });
+      expect(head).toMatchObject({ overflows: true, start: 0 });
+      expect(head.end).toBeGreaterThan(0);
+      expect(tail).toMatchObject({ overflows: true, end: 0 });
+      expect(tail.start).toBeGreaterThan(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('上傳中的標題 shimmer：漸層每個色標對底色都過 4.5（亮色由本地修改第 48 條換掉亮面）', async () => {
+    const page = await openOverlay('attachments', theme, {
+      marks: { '[data-slot="attachment"][data-state="uploading"]': {} },
+    });
+    try {
+      const titles = await page.$$eval(
+        '[data-slot="attachment"][data-state="uploading"] [data-slot="attachment-title"]',
+        (els) =>
+          els.map((el) => {
+            const own = getComputedStyle(el);
+            // 漸層畫在標題自己身上、只透過字露出來：底色從上一層開始疊；自己那層只帶 opacity。
+            const chain = [
+              {
+                backgroundColor: 'rgba(0, 0, 0, 0)',
+                backgroundImage: 'none',
+                opacity: own.opacity,
+              },
+            ];
+            for (let node = el.parentElement; node !== null; node = node.parentElement) {
+              const style = getComputedStyle(node);
+              chain.push({
+                backgroundColor: style.backgroundColor,
+                backgroundImage: style.backgroundImage,
+                opacity: style.opacity,
+              });
+            }
+            return {
+              name: el.textContent ?? '',
+              fill: own.webkitTextFillColor,
+              animation: own.animationName,
+              image: own.backgroundImage,
+              chain,
+            };
+          }),
+      );
+      const measured = titles.map((t) => {
+        const stops = [...t.image.matchAll(/(?:oklch|oklab|rgba?)\([^)]*\)/g)].map((m) => m[0]);
+        const ratios = stops.map((stop) => ({ stop, ...worstOn(stop, t.chain) }));
+        const worst = ratios.reduce((a, b) => (b.ratio < a.ratio ? b : a));
+        return {
+          name: t.name,
+          fill: t.fill,
+          animation: t.animation,
+          stops: ratios.map((r) => `${r.stop} ${round(r.ratio)}`),
+          worst: round(worst.ratio),
+          on: worst.on,
+        };
+      });
+      report[`attachments:${theme}:shimmer`] = measured;
+      // 量具自檢：兩張上傳中的卡都量到，字真的是透明的、顏色來自五個色標的漸層、動畫在跑。
+      expect(measured.map((m) => m.name)).toEqual(['上傳中.csv', '不知道大小.txt']);
+      for (const m of measured) {
+        expect(m).toMatchObject({ fill: 'rgba(0, 0, 0, 0)', animation: 'tw-shimmer' });
+        expect(m.stops).toHaveLength(5);
+      }
+      expect(
+        measured
+          .filter((m) => !(m.worst >= TEXT_MIN))
+          .map((m) => `${m.name} ${m.worst}（${m.on}）`),
+      ).toEqual([]);
     } finally {
       await page.close();
     }

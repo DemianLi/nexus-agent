@@ -4,8 +4,9 @@
  * eval 結果檔（[#1000](https://github.com/DemianLi/nexus-agent/issues/1000)，`eval/result-file.ts`）先有這一份；會話日誌的
  * header 也要記同一件事（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)），所以搬到這裡共用，**取法只有一份**。
  *
- * git 是在**這個檔所在的目錄**問的，不是使用者的 cwd：要的是跑著的這份程式碼的版本，不是使用者工作區的。從一棵沒有
- * `.git` 的樹跑（打包、CI 的淺層 checkout 被拿掉 `.git`）就拿不到，記 `null`。
+ * git 是在**這個檔所在的目錄**問的，不是使用者的 cwd：要的是跑著的這份程式碼的版本，不是使用者工作區的。打包出來的產物
+ * 帶戳記（{@link resolveBuildVersion}，#1502），**戳記優先、不問 git**；沒有戳記、又在一棵沒有 `.git` 的樹裡跑
+ * （CI 的淺層 checkout 被拿掉 `.git`），才拿不到，記 `null`。
  *
  * ## 子行程的環境與逾時（[#1620](https://github.com/DemianLi/nexus-agent/issues/1620)）
  *
@@ -24,7 +25,8 @@
  */
 
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 import { scrubbedParentEnv } from '@nexus/core';
@@ -85,6 +87,21 @@ export function readGitProvenance(probe: GitProbe = defaultGitProbe): BuildVersi
  * 相對這個檔所在的位置找，`src/` 與編出來的 `lib/` 同一深度，兩邊相同。原始碼樹裡沒有這個檔。
  */
 const BUILD_STAMP_PATH = fileURLToPath(new URL('../build-stamp.json', import.meta.url));
+
+/**
+ * 這個模組是不是跑在打包出來的安裝樹裡（[#1671](https://github.com/DemianLi/nexus-agent/issues/1671)）。
+ *
+ * 判準是**產物根有 `build-stamp.json`**：戳記只由 `scripts/release/pack.ts` 寫進產物，原始碼樹裡沒有這個檔（上面那段），
+ * 所以它在就是安裝樹、不在就是原始碼樹。不用路徑形狀猜（`lib/` 對 `src/`、有沒有 `node_modules`、`current` 連結解成什麼），
+ * 那些在 systemd 的安裝目錄、tarball 解在任意位置時都會變；戳記跟著產物走，位置不影響。
+ * 戳記壞了（讀不了、形狀不對）仍算安裝樹：{@link readBuildStamp} 把壞的當沒有是給「版本」用的，
+ * 「這是不是產物」的答案不該跟著變。
+ *
+ * @param moduleDir - 這個模組所在的目錄（`src/` 或 `lib/`），省略即真的位置；測試才傳。
+ */
+export function isPackedTree(moduleDir: string = import.meta.dirname): boolean {
+  return existsSync(resolve(moduleDir, '../build-stamp.json'));
+}
 
 /**
  * 讀建置戳記。**檔不存在、讀不了、形狀不對一律回 `undefined`**，交給呼叫端退回問 git：戳記是產物帶的附加資訊，

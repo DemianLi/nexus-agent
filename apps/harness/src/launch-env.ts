@@ -35,6 +35,8 @@ import { readFileSync, existsSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { parseEnv } from 'node:util';
 
+import { isPackedTree } from './build-version.js';
+
 /** 一層的來源。 */
 export type LaunchEnvSource = 'process' | 'project-env' | 'user-env';
 
@@ -140,10 +142,21 @@ function isBootstrapOnly(name: string): boolean {
 }
 
 /**
- * 程式碼資料夾根目錄的舊 `.env`。`import.meta.dirname` 是 `apps/harness/src`（編成 `lib/` 之後同一深度，`lib/` 與 `src/` 是兄弟）。
- * 這條只對原始碼樹有意義：裝好的產物沒有「程式碼資料夾根目錄」，往上三層找不到檔就照常略過。
+ * 程式碼資料夾根目錄的舊 `.env`；**安裝樹沒有這個位置，回 `undefined`**（[#1671](https://github.com/DemianLi/nexus-agent/issues/1671)）。
+ *
+ * 原始碼樹裡 `moduleDir` 是 `apps/harness/src`，往上三層是 repo 根，那裡的 `.env` 才是以前讀的那一份。
+ * 安裝樹（`lib/`）往上三層是 `/opt` 這種系統目錄——`current` 連結被 Node 解成實際路徑之後，那裡根本不是什麼
+ * 「程式碼資料夾根目錄」，把一份不相干的 `/opt/.env` 當成舊檔叫人搬，是誤導。判準是產物根有沒有建置戳記
+ * （{@link isPackedTree}，為什麼選它寫在那裡）。
+ *
+ * @param moduleDir - 本模組所在的目錄，省略即真的位置；測試才傳。
  */
-export const LEGACY_ENV_FILE = resolve(import.meta.dirname, '../../../.env');
+export function legacyEnvFileFor(moduleDir: string = import.meta.dirname): string | undefined {
+  return isPackedTree(moduleDir) ? undefined : resolve(moduleDir, '../../../.env');
+}
+
+/** {@link legacyEnvFileFor} 在真的位置上的答案。 */
+export const LEGACY_ENV_FILE = legacyEnvFileFor();
 
 /** 讀一份 `.env` 但不套用。檔案不存在是正常的（回 `undefined`）；其他讀不了的原因走 `warn`。 */
 function readEnvLayer(
@@ -191,8 +204,10 @@ export interface LaunchEnvOptions {
   readonly target?: NodeJS.ProcessEnv;
   /** 讀不了的檔往哪裡講。省略即 stderr。 */
   readonly warn?: (line: string) => void;
-  /** 舊位置的檔案路徑。省略即程式碼資料夾根目錄的 `.env`；測試才傳。 */
+  /** 舊位置的檔案路徑。省略即程式碼資料夾根目錄的 `.env`（安裝樹沒有）；測試才傳。 */
   readonly legacyFile?: string;
+  /** 本模組所在的目錄，決定「舊位置」在哪、有沒有（{@link legacyEnvFileFor}）；測試才傳。 */
+  readonly moduleDir?: string;
 }
 
 /**
@@ -223,8 +238,11 @@ export function loadLaunchEnv(options: LaunchEnvOptions): LaunchEnvironment {
     ...(user === undefined ? [] : [{ source: 'user-env' as const, ...user }]),
   ];
   const read = new Set([project?.path, user?.path]);
-  const legacy = options.legacyFile ?? LEGACY_ENV_FILE;
-  const legacyEnvFile = !read.has(legacy) && existsSync(legacy) ? legacy : undefined;
+  const legacy =
+    options.legacyFile ??
+    (options.moduleDir === undefined ? LEGACY_ENV_FILE : legacyEnvFileFor(options.moduleDir));
+  const legacyEnvFile =
+    legacy !== undefined && !read.has(legacy) && existsSync(legacy) ? legacy : undefined;
   const snapshot: LaunchEnvironment = Object.freeze({
     layers: Object.freeze(layers),
     ...(legacyEnvFile === undefined ? {} : { legacyEnvFile }),

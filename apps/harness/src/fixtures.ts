@@ -8,6 +8,7 @@
  * plugin 的工具都接上了」。
  */
 
+import { fileURLToPath } from 'node:url';
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { CommandRegistrationPoint, PluginEntry } from '@nexus/core';
@@ -87,6 +88,44 @@ export function shippedServePlugins(): Promise<readonly PluginEntry[]> {
     },
   );
   return shippedServe;
+}
+
+/**
+ * 部署方把全開那一組加回權限表的 patch（[#1621](https://github.com/DemianLi/nexus-agent/issues/1621)）：出廠表只有
+ * `read-only` 與 `workspace-write`，要量「加回之後跟今天一樣」的測試疊這一份。serve 的測試直接 `--patch` 它。
+ */
+export const FULL_ACCESS_PATCH = fileURLToPath(
+  new URL('./presets-full-access.patch.yml', import.meta.url),
+);
+
+/**
+ * 出貨清單疊上 {@link FULL_ACCESS_PATCH}：跟部署方用 `--patch` 加回全開之後組出來的那一份相同。
+ * 走真的 patch 載入路徑，不在這裡手改條目——patch 檔寫壞了，這裡就拋。同樣一列都不能掉。
+ *
+ * @param options.serve - 底下是 serve 的出貨清單（{@link shippedServePlugins}）；省略是 CLI 的（{@link shippedPlugins}）。
+ * @returns 權限表含 `danger-full-access` 的出貨清單。
+ */
+const shippedFullAccess = new Map<boolean, Promise<readonly PluginEntry[]>>();
+export function shippedPluginsWithFullAccess(
+  options: { readonly serve?: boolean } = {},
+): Promise<readonly PluginEntry[]> {
+  const serve = options.serve ?? false;
+  let loaded = shippedFullAccess.get(serve);
+  if (loaded === undefined) {
+    loaded = loadPluginConfig({
+      ...(serve && { shippedLayers: [serveShippedConfigPath()] }),
+      overlays: [FULL_ACCESS_PATCH],
+    }).then(({ plugins, dropped, ignoredConfig }) => {
+      const problems = [
+        ...dropped.map((drop) => drop.message),
+        ...ignoredConfig.map((row) => `${row.id} 寫了沒有作用的 config`),
+      ];
+      if (problems.length > 0) throw new Error(`加回全開的清單有列沒掛上：${problems.join('；')}`);
+      return plugins;
+    });
+    shippedFullAccess.set(serve, loaded);
+  }
+  return loaded;
 }
 
 /**
