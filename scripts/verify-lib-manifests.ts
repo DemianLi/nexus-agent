@@ -4,7 +4,7 @@
  *
  * - `main`、`bin`、`imports` 與 `exports` 的每個入口都指 `./lib/…js`；唯二的例外是 `./package.json` 與 `./src/*`
  *   （後者只給 workspace 內的深路徑與型別用，裝出去的樹因為 `files` 沒有 `src/` 而不存在）；
- * - `files` 收 `lib`，不收 `src`；
+ * - `files` 收 `lib`，不收 `src` 與 `.map`（`vendor/*` 照 dsh 豁免 `src`：dsh 的 vendor `files` 帶 `src`，`.map` 仍不收）；
  * - 每個 `lib/<路徑>.js` 都有對應的 `src/<路徑>.ts` 可編。
  *
  * 跟 `gen-tsconfig-paths.ts --check` 一起接在 gate：新增套件忘了改成 `lib/`，或手滑把 `src/` 放進 `files`，合併前就紅。
@@ -94,7 +94,10 @@ export function collectManifestViolations(
       violations.push({ dir: pkg.dir, message: 'files 沒有收 lib，裝出去的樹會是空的' });
     }
     for (const entry of files) {
-      if (entry === 'src' || entry.startsWith('src/') || entry.endsWith('.map')) {
+      // vendor 照 dsh `scripts/check-workspace-constraints.ts:481-483`：vendored 套件提早 return，不套「產物不帶 src」；
+      // dsh 的 vendor `files` 帶 `src`（`vendor/cordis/package.json:26-32`）。`.map` 仍不收（vendor 的 tsconfig 沒開 declarationMap）。
+      const isSource = entry === 'src' || entry.startsWith('src/');
+      if ((isSource && !pkg.vendor) || entry.endsWith('.map')) {
         violations.push({
           dir: pkg.dir,
           message: `files 收了 ${JSON.stringify(entry)}：產物不帶 src/ 與 .map`,
