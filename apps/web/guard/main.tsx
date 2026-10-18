@@ -44,6 +44,9 @@
  * - `?overlay=messages` 畫產品的對話區（`Transcript`，#1638 PR B）：人與 AI 輪流十二則、最後一則 AI 被停止（帶表尾），高度固定、
  *   內容超出，量泡泡字與表尾的對比、捲到最新的按鈕（焦點、動效、reduced-motion）、每一則的 `content-visibility`、外殼的行高、底部淡出。
  * - `?overlay=questionnaire` 畫產品的提問面板（#1638 PR C），量選項的焦點外框（offset、不帶 ring）與字的對比。
+ * - `?overlay=tool-steps` 畫 SG 的 tool-steps（nexus 的包裝層，#1682 PR A）：一段展開的群組（執行中、完成、失敗各一列，完成與失敗的列展開）
+ *   與一列單獨放在頁面上、展開的列。量執行中不閃、結果框聚焦的外框、1024 以下 44px、減少動態時箭頭不轉場、疊在清單裡的結果框不 blur
+ *   （README 本地修改第 61–65 條）。兩塊各包一層 `data-guard-tool`（`group`、`standalone`）給 `guard.test.ts` 找。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -152,6 +155,8 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { StepGroup, StepRow } from '@/components/ui/tool-steps';
+import type { Step } from '@/components/ui/tool-steps';
 
 const params = new URLSearchParams(window.location.search);
 const dark = params.get('theme') === 'dark';
@@ -512,6 +517,51 @@ function CollapsiblesPage() {
   );
 }
 
+/** tool-steps（#1682 PR A）：執行中那一列要有東西可展開（`detail`），不然按鈕停用、量不到 `animate-pulse` 那一顆。 */
+const TOOL_STEPS: Step[] = [
+  { id: 'running', label: '執行指令 pnpm test', status: 'running', detail: 'pnpm test' },
+  {
+    id: 'done',
+    label: '搜尋 第 1 節',
+    status: 'done',
+    detail: '{"pattern":"第 1 節","output_mode":"count"}',
+    output: 'notes-0.md: 1\nnotes-1.md: 1',
+  },
+  { id: 'failed', label: '讀取 nope.ts', status: 'error', error: '沒有這個檔' },
+];
+
+function ToolStepsPage() {
+  const [open, setOpen] = useState<Record<string, boolean>>({ done: true, failed: true });
+  return (
+    <div
+      style={{
+        maxWidth: '48rem',
+        margin: '0 auto',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      }}
+    >
+      <div data-guard-tool="group">
+        <StepGroup steps={TOOL_STEPS} defaultOpen>
+          {TOOL_STEPS.map((step) => (
+            <StepRow
+              key={step.id}
+              step={step}
+              open={open[step.id] ?? false}
+              onOpenChange={(value) => setOpen((current) => ({ ...current, [step.id]: value }))}
+            />
+          ))}
+        </StepGroup>
+      </div>
+      <div data-guard-tool="standalone">
+        <StepRow step={TOOL_STEPS[1]!} open />
+      </div>
+    </div>
+  );
+}
+
 /** 對話區（#1638 PR B）：人與 AI 輪流，AI 的回覆夠長、總高度超出容器，捲到最新的按鈕才有機會出現；最後一則 AI 被停止，畫表尾。 */
 const MESSAGES: ConversationEntry[] = Array.from({ length: 6 }, (_, i): ConversationEntry[] => [
   { kind: 'human', id: `h-${i}`, text: `第 ${i + 1} 個問題：這份報表的數字要怎麼看？` },
@@ -749,6 +799,8 @@ function OverlayPage({ name }: { name: string }) {
       return <MessagesPage />;
     case 'attachments':
       return <AttachmentsPage />;
+    case 'tool-steps':
+      return <ToolStepsPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':

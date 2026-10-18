@@ -523,3 +523,16 @@ body {
     transition-duration: 0s;
   }
 }
+
+/*
+ * 疊在工具清單上的結果框不再 blur（#1682 驗收 D，PM 裁決 ①；README 本地修改第 65 條）：`StepList` 與 `OutputBlock` 都是
+ * `glass-panel`（`backdrop-filter: var(--glass-blur)`），展開的列把結果框畫在清單裡，就是玻璃疊玻璃。12 列全部展開、串流中捲動，
+ * 關 GPU 加 CPU 4 倍下 vsync p95 是 2（掉幀 23–30%）；只拿掉這一層是 1（issuecomment-6256296211）。結果框底下本來就是 blur 過的清單，
+ * 再 blur 一次畫面上幾乎看不出來；背景色、邊線、陰影照 SG。清單本身與單獨放在頁面上的結果框照 SG 保留 blur。
+ * 寫在 layer 外，蓋得過 vendor 的 `.glass-panel`。`guard/` 量疊在清單裡的是 `none`、單獨放的不是。
+ */
+/* prettier-ignore */
+[data-slot="step-list"] [data-slot="output-block"] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}

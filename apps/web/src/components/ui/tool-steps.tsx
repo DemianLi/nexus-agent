@@ -36,7 +36,12 @@ function StepList({ labels, ...props }: React.ComponentProps<typeof VendorStepLi
   return <VendorStepList labels={{ ...STEP_LABELS, ...labels }} {...props} />;
 }
 
-function StepGroup({ labels, summary, steps, ...props }: React.ComponentProps<typeof VendorStepGroup>) {
+function StepGroup({
+  labels,
+  summary,
+  steps,
+  ...props
+}: React.ComponentProps<typeof VendorStepGroup>) {
   const running = steps.some((step) => step.status === 'running');
   return (
     <VendorStepGroup
