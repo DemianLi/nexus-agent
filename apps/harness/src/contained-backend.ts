@@ -51,7 +51,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { basename, dirname, join, relative, resolve, sep } from 'node:path';
+import { relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
 import { open, realpath } from 'node:fs/promises';
 import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
@@ -67,6 +67,7 @@ import micromatch from 'micromatch';
 
 import { noteSandboxDenial } from '@nexus/core';
 import { notTextReason, refuseNonText } from './binary-read.js';
+import { canonicalize } from './canonical-path.js';
 import type {
   SandboxDenial,
   SandboxGrantLedger,
@@ -628,35 +629,5 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    */
   private denial(mode: SandboxMode, operation: string, filePath: string, reason: string): string {
     return `[containment] 拒絕 ${operation} "${filePath}"：${reason}（mode: ${mode}）`;
-  }
-}
-
-const MISSING_CODES = new Set(['ENOENT', 'ENOTDIR']);
-
-/**
- * 把一個絕對路徑解到它的實際位置——**最深的那個存在的祖先** realpath 之後，再把還不存在的
- * 尾巴接回去。
- *
- * 要這一步是因為寫檔的目標通常還不存在，直接 `realpath()` 會 ENOENT。祖先的 symlink 就是
- * 在這裡被解開的，而那是 fence 唯一有趣的失敗法：只比對 `..` 是在測字串處理。
- *
- * @param target - 已經 `resolve()` 過的絕對路徑。
- * @returns 解析後的絕對路徑；連根都不存在時原樣回傳。
- */
-async function canonicalize(target: string): Promise<string> {
-  const missing: string[] = [];
-  let current = target;
-  for (;;) {
-    try {
-      const real = await realpath(current);
-      return missing.length === 0 ? real : join(real, ...missing.reverse());
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === undefined || !MISSING_CODES.has(code)) throw error;
-      const parent = dirname(current);
-      if (parent === current) return target;
-      missing.push(basename(current));
-      current = parent;
-    }
   }
 }
