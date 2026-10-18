@@ -20,13 +20,15 @@ permissions:
 
 # 結構：一個 plan job 算出範圍，各項檢查平行跑，最後由名為 `gate` 的彙總 job 收斂成單一 required check。
 #
-#   plan ─┬─ static ──────┐   format、lint、web build、web 的瀏覽器護欄
-#         ├─ typecheck ───┤   兩批（matrix）
-#         ├─ test-packages┤
-#         ├─ test-web ────┼─► gate   ← ruleset 綁的 required status check，名稱永遠不要改
-#         └─ test-harness ┘   全跑時兩片、選擇性時一片
+#   plan ─┬─ static ───────────┐   format、lint、web build、web 的瀏覽器護欄
+#         ├─ typecheck ────────┤   兩批（matrix）
+#         ├─ test-packages ────┤
+#         ├─ test-web ─────────┼─► gate   ← ruleset 綁的 required status check，名稱永遠不要改
+#         ├─ test-harness ─────┤   全跑時兩片、選擇性時一片
+#         └─ packed-install ───┘   打成 tarball、在 repo 外解開、用純 node 起來（#1502 刀 2＋3）
 #
 # job 數是有代價的：免費額度同時只跑 20 個 job，一輪 10 個以內，兩張 PR 並行才不會排隊。
+# 目前一輪 10 個：plan、static、typecheck ×2、test-packages、test-web、test-harness ×2、packed-install、gate。
 #
 # 新增檢查：往現有 job 加 step，或新增 job 並把它列進 gate 的 needs 與判斷（不列進去的 job 掛了 gate 也不會紅）。
 #
@@ -169,6 +171,33 @@ jobs:
       # ubuntu-latest 自帶 Chrome，playwright-core 用 channel 'chrome' 開它，不另外下載瀏覽器。
       - name: 瀏覽器護欄
         run: pnpm --filter @nexus/web run test:guard
+
+  # 產物驗證（#1502 刀 2＋3，C047／C083）：照 dsh 每張 PR 都跑 pack 與安裝驗證（dsh `release.yml:10-14`），不是只在發版時。
+  # `pnpm deploy --prod` 打成 tar.gz → 在 repo 外解開 → 純 node 驗 sha256、靜態檢查、`--version`、flock、會話 header 的戳記、
+  # serve 起得來並回 200、SIGTERM exit 0。**解開後不再跑任何 install**，所以整段沒有一步會連 registry。
+  # Node 鎖在 manifest `engines` 的下限 22.19.0，不用 setup 的浮動 22：下限才是我們對使用者承諾的最低版本。
+  # 只在動到 TypeScript 相關檔案時跑（同 static）；`.github/workflows/`、`.github/scripts/` 的異動 plan 也算進去。
+  packed-install:
+    name: packed-install
+    needs: plan
+    if: needs.plan.outputs.ts == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - name: 安裝相依套件
+        run: pnpm install --frozen-lockfile
+      - name: 打包
+        run: pnpm run release:pack
+      - name: 核對 sha256
+        working-directory: .release-out
+        run: sha256sum -c ./*.sha256
+      - name: 在 repo 外解開並驗證
+        run: pnpm run release:verify-packed-install .release-out/*.tar.gz --expect-commit "$(git rev-parse HEAD)"
 
   # 22 個套件逐一啟動 tsc 是冷 runner 上最慢的部分，切成兩批平行。
   # 切法必須互補：`b` 是明列的一批，`a` 是「packages/ 全部扣掉 b」，
@@ -313,7 +342,7 @@ jobs:
   #   - 只有 plan 明說「不用掃」時，其餘才允許是 skipped。
   gate:
     name: gate
-    needs: [plan, static, typecheck, test-packages, test-web, test-harness]
+    needs: [plan, static, typecheck, test-packages, test-web, test-harness, packed-install]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -327,6 +356,7 @@ jobs:
           TEST_PACKAGES: ${{ needs.test-packages.result }}
           TEST_WEB: ${{ needs.test-web.result }}
           TEST_HARNESS: ${{ needs.test-harness.result }}
+          PACKED_INSTALL: ${{ needs.packed-install.result }}
           CHANGED_COUNT: ${{ needs.plan.outputs.changed_count }}
           TEST_MODE: ${{ needs.plan.outputs.test_mode }}
         run: |
@@ -345,6 +375,7 @@ jobs:
             echo "| test-packages | $TEST_PACKAGES |"
             echo "| test-web | $TEST_WEB |"
             echo "| test-harness | $TEST_HARNESS |"
+            echo "| packed-install | $PACKED_INSTALL |"
           } >> "$GITHUB_STEP_SUMMARY"
 
           fail() { echo "::error::$1"; exit 1; }
@@ -352,7 +383,7 @@ jobs:
           [ "$PLAN" = "success" ] || fail "plan 的結果是 '$PLAN'，不是 success；其餘 job 因此不可信。"
 
           if [ "$TS" = "true" ]; then
-            for pair in "static=$STATIC" "typecheck=$TYPECHECK" "test-web=$TEST_WEB" "test-harness=$TEST_HARNESS"; do
+            for pair in "static=$STATIC" "typecheck=$TYPECHECK" "test-web=$TEST_WEB" "test-harness=$TEST_HARNESS" "packed-install=$PACKED_INSTALL"; do
               [ "${pair#*=}" = "success" ] || fail "${pair%%=*} 的結果是 '${pair#*=}'，需要 success。"
             done
             if [ -n "$PKG_FILTERS" ]; then
@@ -362,7 +393,7 @@ jobs:
             fi
           elif [ "$TS" = "false" ]; then
             echo "本次異動未觸及 TypeScript 相關檔案，略過。"
-            for pair in "static=$STATIC" "typecheck=$TYPECHECK" "test-packages=$TEST_PACKAGES" "test-web=$TEST_WEB" "test-harness=$TEST_HARNESS"; do
+            for pair in "static=$STATIC" "typecheck=$TYPECHECK" "test-packages=$TEST_PACKAGES" "test-web=$TEST_WEB" "test-harness=$TEST_HARNESS" "packed-install=$PACKED_INSTALL"; do
               [ "${pair#*=}" = "skipped" ] || fail "不需要掃描，${pair%%=*} 卻是 '${pair#*=}'。"
             done
           else
