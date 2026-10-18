@@ -53,6 +53,29 @@
   --animate-collapsible-up:
     collapsible-up var(--tw-animation-duration, 150ms) var(--ease-smooth-out),
     motion-fade-out var(--tw-animation-duration, 150ms) var(--ease-smooth-out);
+
+  /*
+   * 展開收合的高度讀 Base UI 量好的 `--collapsible-panel-height`（#1638 Q1）。tw-animate-css 同名的那兩個只認
+   * `--radix-`／`--bits-`／`--reka-`／`--kb-collapsible-content-height`，最後退成 `auto`：高度在 0 與 auto 之間直接跳，jsdom 量不到。
+   * **要寫在 `@theme` 裡**：Tailwind 把 `@theme` 的 keyframes 照宣告順序排在產物最後、layer 外，同名的以後宣告的為準；寫在
+   * `styles/*.css` 會排在 tw-animate 那份前面而輸掉（`guard/` 量展開途中的高度）。
+   */
+  @keyframes collapsible-down {
+    from {
+      height: 0;
+    }
+    to {
+      height: var(--collapsible-panel-height, auto);
+    }
+  }
+  @keyframes collapsible-up {
+    from {
+      height: var(--collapsible-panel-height, auto);
+    }
+    to {
+      height: 0;
+    }
+  }
 }
 
 @theme inline {

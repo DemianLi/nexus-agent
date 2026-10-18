@@ -51,7 +51,7 @@ export function ToolRun({
         className={
           instant
             ? 'overflow-hidden'
-            : 'data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden'
+            : 'data-closed:animate-collapsible-up data-open:animate-collapsible-down overflow-hidden'
         }
       >
         <div className="flex flex-col gap-4 pt-4">

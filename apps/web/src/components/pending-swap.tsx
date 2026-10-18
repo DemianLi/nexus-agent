@@ -189,10 +189,10 @@ function PendingPanel({
         >
           {head}
           <CollapsibleContent
-            forceMount
+            keepMounted
             hidden={closed}
             inert={!open}
-            className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden"
+            className="data-closed:animate-collapsible-up data-open:animate-collapsible-down overflow-hidden"
           >
             {children}
           </CollapsibleContent>

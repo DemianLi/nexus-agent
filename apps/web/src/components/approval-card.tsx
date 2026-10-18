@@ -128,7 +128,7 @@ export function ApprovalCard({
             <Chevron />
             原始中斷內容
           </RowTrigger>
-          <CollapsibleContent className="data-[state=closed]:animate-collapsible-up data-[state=open]:animate-collapsible-down overflow-hidden">
+          <CollapsibleContent className="data-closed:animate-collapsible-up data-open:animate-collapsible-down overflow-hidden">
             <Actions pending={pending} {...(asker === undefined ? {} : { asker })} />
           </CollapsibleContent>
         </Collapsible>
