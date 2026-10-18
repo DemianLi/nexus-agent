@@ -35,6 +35,7 @@ import {
   readdirSync,
   realpathSync,
   rmSync,
+  writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
@@ -120,6 +121,36 @@ export function bundledRgProblems(run: CommandOutcome): string[] {
   if (run.status !== 0 || !run.stdout.startsWith('ripgrep ')) {
     return [
       `內附的 ripgrep 在 PATH 上沒有 rg 的環境裡跑不起來：exit ${String(run.status)}，stdout ${JSON.stringify(run.stdout.slice(0, 200))}，stderr ${JSON.stringify(run.stderr.slice(-400))}`,
+    ];
+  }
+  return [];
+}
+
+/** 步驟 4c 的檔案內容與命中：工作區的檔名與那一行要出現在 grep 的工具結果裡。 */
+export const GREP_PROBE_FILE = 'a.txt';
+export const GREP_PROBE_NEEDLE = 'needle-1502';
+
+/**
+ * 步驟 4c：**安裝樹裡真的跑一次 grep**——假模型（腳本提供者）叫 `grep`，`PATH` 是空目錄，所以命中只可能來自內附的 rg。
+ * 只看啟動那一行（`ripgrepDisclosureProblems`）驗不到「已安裝的 serve 搜尋走內附 rg」（#1502 驗收 6）。
+ *
+ * @param run - `lib/cli.js` 這一輪的結果。
+ * @param sessionLog - 這一輪的會話日誌（`cli.jsonl`）原文；沒有就傳 `undefined`。
+ */
+export function installedGrepProblems(
+  run: CommandOutcome,
+  sessionLog: string | undefined,
+): string[] {
+  if (run.status !== 0) {
+    return [
+      `安裝樹裡跑 grep 的那一輪失敗（exit ${String(run.status)}）：${run.stderr.slice(-400)}`,
+    ];
+  }
+  if (sessionLog === undefined) return ['安裝樹裡跑 grep 的那一輪沒有會話日誌'];
+  if (!sessionLog.includes('"name":"grep"')) return ['會話日誌裡沒有 grep 的工具結果'];
+  if (!sessionLog.includes(`${GREP_PROBE_NEEDLE} here`) || !sessionLog.includes(GREP_PROBE_FILE)) {
+    return [
+      `安裝樹裡的 grep 沒有命中工作區的 ${GREP_PROBE_FILE}（要有「${GREP_PROBE_NEEDLE} here」）：${sessionLog.slice(-400)}`,
     ];
   }
   return [];
@@ -377,6 +408,57 @@ export async function verifyPackedInstall(
       timeout: 60_000,
     });
     problems.push(...bundledRgProblems(bundledRg));
+
+    // 4c. 安裝樹裡真的跑一次 grep：腳本模型叫 grep，PATH 是空目錄（同 4b），命中只可能來自內附的 rg。
+    const grepWork = join(scratch, 'grep-ws');
+    mkdirSync(grepWork, { recursive: true });
+    writeFileSync(join(grepWork, GREP_PROBE_FILE), `hello\n${GREP_PROBE_NEEDLE} here\n`);
+    const grepPatch = join(scratch, 'grep.patch.yml');
+    writeFileSync(
+      grepPatch,
+      [
+        '- insert:',
+        '    - id: grep-probe',
+        "      name: '#settings/scripted-model'",
+        '      config:',
+        '        turns:',
+        "          - content: ''",
+        '            toolCalls:',
+        '              - name: grep',
+        `                args: { pattern: '${GREP_PROBE_NEEDLE}', path: '/', output_mode: content }`,
+        "          - content: 'done'",
+        '- id: agent-default-model',
+        '  config: { provider: grep-probe }',
+        '',
+      ].join('\n'),
+      { mode: 0o600 },
+    );
+    const grepLogs = join(scratch, 'grep-sessions');
+    const grepRun = spawnSync(
+      process.execPath,
+      [
+        join(root, 'lib/cli.js'),
+        '--workspace',
+        grepWork,
+        '--patch',
+        grepPatch,
+        '--session-log',
+        grepLogs,
+        'grep',
+      ],
+      { cwd: work, env: { ...env, PATH: emptyBin }, encoding: 'utf8', timeout: 120_000 },
+    );
+    const [grepRunDir] = existsSync(grepLogs) ? readdirSync(grepLogs) : [];
+    const grepLogFile =
+      grepRunDir === undefined ? undefined : join(grepLogs, grepRunDir, 'cli.jsonl');
+    problems.push(
+      ...installedGrepProblems(
+        grepRun,
+        grepLogFile !== undefined && existsSync(grepLogFile)
+          ? readFileSync(grepLogFile, 'utf8')
+          : undefined,
+      ),
+    );
 
     // 5. 會話 header 的 build.commit 等於戳記。
     const logs = join(scratch, 'sessions');

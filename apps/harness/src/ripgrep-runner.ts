@@ -52,6 +52,14 @@ export const SEARCH_TIMEOUT_MS = 30_000;
 /** 保留的 stderr 尾巴（位元組），診斷用。dsh `SEARCH_STDERR_MAX_BYTES`（`:50`）。 */
 export const STDERR_MAX_BYTES = 64 * 1024;
 
+/**
+ * 起不來的錯誤訊息是**固定字串**：它會原樣變成工具結果交給模型，而 Node 的 spawn 錯誤訊息與內附 rg 的位置都帶主機的絕對路徑
+ * （`spawn /opt/…/rg ENOENT`）。照 dsh `packages/fs/tool-fs-search/src/search-core.ts:260`：訊息固定、原始錯誤不接在後面。
+ * 要查是哪個路徑，看 serve 啟動日誌那一行「搜尋（grep）：內附 ripgrep …」（給管理者的，`rg-path.ts`）。
+ */
+const LAUNCH_FAILED_MESSAGE = 'grep could not start its search command (ripgrep launch failed)';
+const NOT_FOUND_MESSAGE = 'grep could not start its search command (bundled ripgrep not found)';
+
 /** 收掉 rg 時 `SIGTERM` 之後等多久升級到 `SIGKILL`（毫秒）。dsh `SEARCH_GRACE_MS`（`:53`）。 */
 export const KILL_GRACE_MS = 3_000;
 
@@ -178,7 +186,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
           : {
               kind: 'error',
               code: SEARCH_FAILED,
-              message: `grep could not start its search command (ripgrep launch failed: ${(error as Error).message})`,
+              message: LAUNCH_FAILED_MESSAGE,
             },
       );
       return;
@@ -191,6 +199,8 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
     /** 收掉 rg：先 `SIGTERM`，寬限之後還沒結束就 `SIGKILL`。 */
     const terminate = (): void => {
       if (child.exitCode !== null || child.signalCode !== null) return;
+      // 起不來的 child 沒有 pid（'error' 事件還沒送到）：此時 `kill()` 會對 pid 0 送訊號，也就是整個行程群組（包括 serve 自己）。
+      if (child.pid === undefined) return;
       child.kill('SIGTERM');
       killTimer ??= setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
@@ -225,13 +235,15 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
     });
 
     child.on('error', (error: NodeJS.ErrnoException) => {
+      // 起不來的同時已經被取消：回「取消」不回「起不來」（照 dsh `search-core.ts:257-259`，spawn 失敗後再看一次 `signal.aborted`）。
+      if (wasAborted || signal.aborted) {
+        settle(aborted());
+        return;
+      }
       settle({
         kind: 'error',
         code: SEARCH_FAILED,
-        message:
-          error.code === 'ENOENT'
-            ? `grep could not start its search command (bundled ripgrep not found at ${executable})`
-            : `grep could not start its search command (ripgrep launch failed: ${error.message})`,
+        message: error.code === 'ENOENT' ? NOT_FOUND_MESSAGE : LAUNCH_FAILED_MESSAGE,
       });
     });
 

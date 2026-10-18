@@ -399,6 +399,28 @@ describe('失敗不換結果', () => {
     expect((outcome as { message: string }).message).toContain('SIGKILL');
   });
 
+  it('起不來（ENOENT）的同時已被取消：回取消，不是「起不來」', async () => {
+    const controller = new AbortController();
+    const outcome = await runRipgrep({
+      argv: ['--json'],
+      cwd: root,
+      executable: join(base, 'no-such-rg'),
+      signal: controller.signal,
+      internals: { onSpawn: () => controller.abort() },
+    });
+    expect(outcome).toMatchObject({ kind: 'error', code: SEARCH_ABORTED });
+  });
+
+  it('spawn 同步丟（執行檔路徑含 NUL）：SEARCH_FAILED，訊息固定、不含路徑', async () => {
+    const executable = join(base, 'rg\0x');
+    const outcome = await runRipgrep({ argv: ['--json'], cwd: root, executable });
+    expect(outcome).toEqual({
+      kind: 'error',
+      code: SEARCH_FAILED,
+      message: 'grep could not start its search command (ripgrep launch failed)',
+    });
+  });
+
   it('非 ENOENT 的起不來（沒有執行權限）是 SEARCH_FAILED，不走退路', async () => {
     const file = join(base, 'not-executable');
     await writeFile(file, '#!/bin/sh\n');
@@ -409,7 +431,10 @@ describe('失敗不換結果', () => {
       ripgrep: { executable: file },
     }).grep('needle', '/');
 
-    expect(result.error).toContain('could not start');
+    expect(result.error).toBe('grep could not start its search command (ripgrep launch failed)');
+    // 訊息不含主機路徑（模型看得到工具結果）：Node 的 spawn 錯誤原文帶執行檔路徑，不能接在後面。
+    expect(result.error).not.toContain(base);
+    expect(result.error).not.toContain('EACCES');
     expect(bare).not.toHaveBeenCalled();
   });
 });
@@ -455,7 +480,11 @@ describe('內附 rg 找不到：沒有退路（#1502 刀 4 拿掉了 #1532 的 E
     }).grep('needle', '/');
 
     expect(result.matches).toBeUndefined();
-    expect(result.error).toContain('bundled ripgrep not found');
+    expect(result.error).toBe(
+      'grep could not start its search command (bundled ripgrep not found)',
+    );
+    expect(result.error).not.toContain(base);
+    expect(result.error).not.toContain('no-such-rg');
     expect(bare).not.toHaveBeenCalled();
     expect(await exists(marker)).toBe(false);
   });
@@ -468,8 +497,12 @@ describe('內附 rg 找不到：沒有退路（#1502 刀 4 拿掉了 #1532 的 E
     const result = await new ContainedFilesystemBackend({ rootDir: root }).grep('needle', '/');
 
     expect(result.matches).toBeUndefined();
-    expect(result.error).toContain('bundled ripgrep unavailable');
-    expect(result.error).toContain('Cannot find module');
+    expect(result.error).toBe(
+      'grep could not start its search command (bundled ripgrep unavailable)',
+    );
+    // `resolveRgPath` 的原始錯誤（套件名、路徑）不交給模型。
+    expect(result.error).not.toContain('Cannot find module');
+    expect(result.error).not.toContain('@vscode');
     expect(bare).not.toHaveBeenCalled();
     expect(await exists(marker)).toBe(false);
   });

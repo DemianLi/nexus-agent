@@ -610,10 +610,12 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     if (executable === undefined) {
       try {
         executable = await resolveRgPath();
-      } catch (error: unknown) {
+      } catch {
+        // 固定字串：`resolveRgPath` 的錯誤訊息帶套件名與路徑，不交給模型（理由見 `ripgrep-runner.ts` 的 `LAUNCH_FAILED_MESSAGE`）。
+        // 管理者從 serve 啟動日誌那一行看得到原因。
         return searchFailure(
           SEARCH_FAILED,
-          `grep could not start its search command (bundled ripgrep unavailable: ${error instanceof Error ? error.message : String(error)})`,
+          'grep could not start its search command (bundled ripgrep unavailable)',
         );
       }
     }
