@@ -2,7 +2,7 @@
   "sources": {
     "solid-glass": {
       "upstream": "https://github.com/deeplethe/solid-glass",
-      "commit": "387c3c2dc2369bc9af19a5c55adc3bd90d529317"
+      "commit": "6e8903e494a15491ceda38fafea5056c95a74d44"
     },
     "shadcn": {
       "upstream": "https://www.npmjs.com/package/shadcn",
@@ -15,7 +15,7 @@
     "solid-glass.css": {
       "source": "solid-glass",
       "from": "src/solid-glass.css",
-      "sha256": "03bc1f32084d39f939039ec7a52d5b7c83b47a9c594f5f3d14826c95c1730cd4"
+      "sha256": "c3c9e4e739f2b3f991d2412c07970f53df4a54f9d416ec3e8e1c0d5261e84bc3"
     },
     "LICENSE": {
       "source": "solid-glass",
@@ -62,12 +62,11 @@
       "from": "src/components/ui/composer.tsx",
       "sha256": "a0a50a49499ec6900d7334cda6fcfa3bfdfdd6e52c575e07ac2ecefad9b2280f",
       "patches": [
-        "patches/0004-composer-textarea-props.patch",
         "patches/0005-composer-combobox.patch",
         "patches/0006-composer-width-resize.patch",
         "patches/0007-composer-pick-trigger.patch"
       ],
-      "upstreamSha256": "9c5481305cae9f7493d1ba61c1e4afb9ddabd005a481fe77cb80b70bd885486b"
+      "upstreamSha256": "fd8244424f03d2aaae9bbd0ab685f823fe3b1da2d9ffaa1597f8fc54cfe0b637"
     },
     "components/ui/context-ring.tsx": {
       "source": "solid-glass",

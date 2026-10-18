@@ -11,8 +11,10 @@
  *   - `data-guard-shadow`：亮色時量 `box-shadow` 每層投影的透明度。
  *   - `data-guard-surface`：不透明的退路（reduced-transparency、`data-glass="opaque"`）下，量這個面是不是真的不透明、沒有 blur。
  *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、清單開著三種狀態各量一次字色對底色（chip 三階，#1512；#1591 起量底列的 Pick）。
+ *   - `data-guard-press`：平常、滑鼠移上去、按著（`:active`）三種狀態各量一次字色對底色：次要字疊在 `chip-hover`、`chip-pressed`
+ *     上的真消費者。
  *   - `data-guard-located`：對話裡被定位的那一則（`[data-slot=message-scroller-item][data-located]`），量圓角真的畫出來。
- *   - `data-guard-glass`：SG 畫成玻璃的按鈕（outline、secondary、glass），量它真的有 `backdrop-filter`：`solid-glass.css:640-677`
+ *   - `data-guard-glass`：SG 畫成玻璃的按鈕（outline、secondary、glass），量它真的有 `backdrop-filter`：`solid-glass.css:642-679`
  *     靠 vendor Button 輸出的 `data-variant` 命中（#1523）。
  *   - `data-guard-expanded`：浮層 Trigger（`render` 接 Base UI 的 Button）開著時（`trigger`）跟沒開的（`reference`）比底色：
  *     Trigger 開著時掛 `data-popup-open` 與 `aria-expanded="true"`，SG 用後者把它畫成按下去的樣子（#1523 混合期起量，#1583 換成 Base UI）。
@@ -61,6 +63,7 @@ import { createRoot } from 'react-dom/client';
 
 import { Counts } from '@/components/changes/counts';
 import { CompactionRow } from '@/components/compaction-row';
+import { SessionUsage } from '@/components/cost/session-usage';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
 import { PendingSwap } from '@/components/pending-swap';
@@ -165,7 +168,7 @@ const BUTTON_VARIANTS = [
   'link',
   'glass',
 ] as const;
-/** SG 畫成玻璃的按鈕（`solid-glass.css:640-677` 靠 `data-variant` 命中；`glass` 走 `glass-control`）。 */
+/** SG 畫成玻璃的按鈕（`solid-glass.css:642-679` 靠 `data-variant` 命中；`glass` 走 `glass-control`）。 */
 const GLASS_VARIANTS: readonly string[] = ['outline', 'secondary', 'glass'];
 const BADGE_VARIANTS = ['default', 'secondary', 'destructive', 'outline', 'ghost', 'link'] as const;
 
@@ -320,6 +323,14 @@ function GuardPage() {
               onSwitch={() => {}}
             />
           </div>
+          {/* 頂列的用量鈕：`text-muted-foreground` 配 `hover:bg-chip-hover active:bg-chip-pressed`，底下沒有 `bg-card`，
+              chip 的兩階真的畫得出來。 */}
+          <div data-guard-press="session-usage">
+            <SessionUsage
+              tokenUsage={{ inputTokens: 412_380, outputTokens: 9_815 }}
+              sessionStats={{ turns: 4, steps: 17, llmMs: 133_000, toolMs: 38_400 }}
+            />
+          </div>
           <div data-guard-texts="retry-notice" style={{ width: 360 }}>
             <RetryNotice retry={RETRY} />
           </div>
@@ -389,7 +400,7 @@ function GuardPage() {
         </div>
 
         {/* 浮層的 Trigger 用 `render` 畫成 Base UI 的 Button（#1583 起 popover 也是 Base UI）。開著時 Trigger 掛 `data-popup-open`
-            與 `aria-expanded="true"`，SG 的 `:665` 用它們把 outline 按鈕畫成按下去的玻璃。 */}
+            與 `aria-expanded="true"`，SG 的 `:667` 用它們把 outline 按鈕畫成按下去的玻璃。 */}
         <div style={{ ...row, gap: 240, paddingBottom: 120 }}>
           <Button variant="outline" data-guard-expanded="reference">
             沒開的按鈕

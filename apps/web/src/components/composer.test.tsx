@@ -288,7 +288,7 @@ describe('從外面拿得到輸入框（README 本地修改第 29 條，patch `0
   });
 });
 
-describe('寬度變了高度跟著重算（README 本地修改第 32 條，patch `0006-composer-width-resize`，回補上游 e867a7a9）', () => {
+describe('寬度變了高度跟著重算（上游 e867a7a9；README 本地修改第 32 條的 patch 只剩它的 `entry === undefined` 守衛）', () => {
   /** 假的 ResizeObserver：記下觀察誰、能手動送一筆寬度、記得有沒有 disconnect。 */
   class FakeResizeObserver {
     static all: FakeResizeObserver[] = [];

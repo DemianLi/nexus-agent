@@ -21,7 +21,7 @@ test('預設按鈕同時帶著字級與字色（cn 不能把其中一個吃掉�
   expect(classes).toContain('text-primary-foreground');
 });
 
-test('SG 的樣式靠的屬性都在：Button 的 data-slot／data-variant，Badge 經 useRender 的 state 輸出的同兩個（solid-glass.css:436、:482、:519-532、:640-677）', () => {
+test('SG 的樣式靠的屬性都在：Button 的 data-slot／data-variant，Badge 經 useRender 的 state 輸出的同兩個（solid-glass.css:438、:484、:521-534、:642-679）', () => {
   render(
     <>
       <Button variant="outline">按鈕</Button>

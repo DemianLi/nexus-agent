@@ -179,42 +179,23 @@ const T = {
   surfaceDiff: 0.05,
 };
 /**
- * chip 三階（chip／hover／pressed）上有次要文字（選單項、標籤、用量鈕），目標被下面三條約束壓住，取最嚴的那條（PM，#1512）：
- * - 次要文字對 chip、對 chip-hover ≥ 4.5：Q5 的文字下限是硬約束，原型的目標只是過渡期的偏好。
- * - 次要文字對 chip-pressed ≥ develop 當時的值（亮暗各自算）：develop 本來就不到 4.5，是既有缺口（第 ⑥ 步處理）；
- *   這一版不能比 develop 差。
- * hover／pressed 照 Libraries.dev 的階梯比例跟著 chip 走。每條約束各換算成 chip 目標的上限，取最小的；
- * 再用四捨五入後的實際字串逐條驗一次，不過就往下推 0.0001。
+ * chip 三階（chip／hover／pressed）上有次要文字（選單項、標籤、用量鈕），三階都要 ≥ 4.5（Q5 的文字下限是硬約束，
+ * 原型的目標只是過渡期的偏好）。
+ * chip 與 hover：hover 照 Libraries.dev 的階梯比例跟著 chip 走；目標被下面兩條約束壓住，取最嚴的那條（PM，#1512）。
+ * 每條約束各換算成 chip 目標的上限，取最小的；再用四捨五入後的實際字串逐條驗一次，不過就往下推 0.0001。
+ * pressed 是例外，見下面的 `PRESSED_STEP`。
  */
-const DEVELOP_PRESSED = {
-  // develop（c9b957b6）的 `--muted-foreground` 對 `--chip-pressed`，用當時產物的字串算精確值。
-  light: { muted: 'oklch(0.4819 0 0)', pressed: 'oklch(0.8669 0 0)' },
-  dark: { muted: 'oklch(0.6633 0 0)', pressed: 'oklch(0.3092 0 0)' },
-};
 const chipAway = (theme) => (theme === 'light' ? 'darker' : 'lighter'); // chip：亮色比底色暗、暗色比底色亮
-const CHIP_RULES = THEMES.flatMap((theme) => {
-  const developPressed = wcag(
-    srgb(DEVELOP_PRESSED[theme].muted),
-    srgb(DEVELOP_PRESSED[theme].pressed),
-  );
-  return [
-    { theme, step: 'chip', factor: 1, min: T.text, why: '次要文字對 chip ≥ 4.5' },
-    {
-      theme,
-      step: 'chip-hover',
-      factor: LIB_STEP.hover,
-      min: T.text,
-      why: '次要文字對 chip-hover ≥ 4.5',
-    },
-    {
-      theme,
-      step: 'chip-pressed',
-      factor: LIB_STEP.pressed,
-      min: developPressed,
-      why: `次要文字對 chip-pressed ≥ develop 的 ${developPressed.toFixed(4)}`,
-    },
-  ];
-});
+const CHIP_RULES = THEMES.flatMap((theme) => [
+  { theme, step: 'chip', factor: 1, min: T.text, why: '次要文字對 chip ≥ 4.5' },
+  {
+    theme,
+    step: 'chip-hover',
+    factor: LIB_STEP.hover,
+    min: T.text,
+    why: '次要文字對 chip-hover ≥ 4.5',
+  },
+]);
 /** 這條約束換算成 chip 目標的上限：次要文字對它剛好等於門檻的那個灰，對底色的對比，除以階梯比例。 */
 function chipCap(rule) {
   const bg = srgb(SG[rule.theme].background);
@@ -222,12 +203,12 @@ function chipCap(rule) {
   const gray = solveGray(muted, rule.min, rule.theme === 'light' ? 'lighter' : 'darker');
   return wcag(gray, bg) / rule.factor;
 }
-function chipSteps(theme, target) {
+function chipSteps(theme, target, pressedStep = LIB_STEP.pressed) {
   const bg = srgb(SG[theme].background);
   return {
     chip: oklch(solveGray(bg, target, chipAway(theme))),
     'chip-hover': oklch(solveGray(bg, target * LIB_STEP.hover, chipAway(theme))),
-    'chip-pressed': oklch(solveGray(bg, target * LIB_STEP.pressed, chipAway(theme))),
+    'chip-pressed': oklch(solveGray(bg, target * pressedStep, chipAway(theme))),
   };
 }
 const chipOk = (target) =>
@@ -238,15 +219,45 @@ const chipOk = (target) =>
         srgb(chipSteps(rule.theme, target)[rule.step]),
       ) >= rule.min,
   );
+/**
+ * chip 目標的上限釘在 ② 出貨的值（PM 裁決，#1515 PR #1721 issuecomment-6255648703）：chip 與 hover 逐值留在
+ * develop，全站的「面對面」不動。出處：② 出貨值，#1512 PR-B（2ad91a61，#1521）。
+ * 這個值當時是被「次要字對 chip-pressed ≥ develop 舊值」那條壓出來的；那條拿掉之後不釘的話，chip 目標會改由
+ * hover 那條綁住，pressed 的比例就沒有空間，按下去跟 hover 一樣。
+ * 撤除條件：⑥ 把 chip 三階換成 SG 的面時。守它的斷言在 `src/styles/tokens-contrast.test.ts`（chip 與 hover 逐字等於 ② 出貨值）。
+ */
+const SHIPPED_CHIP = 1.1459;
 const caps = CHIP_RULES.map((rule) => ({ ...rule, cap: chipCap(rule) }));
 const binding = caps.reduce((a, b) => (b.cap < a.cap ? b : a));
 T.chipFromProto = T.chip;
-T.chip = Math.min(T.chip, Math.floor(binding.cap * 10000) / 10000);
+T.chip = Math.min(T.chip, Math.floor(binding.cap * 10000) / 10000, SHIPPED_CHIP);
 while (!chipOk(T.chip)) T.chip = Number((T.chip - 0.0001).toFixed(4));
 T.chipBinding =
   T.chip < T.chipFromProto
-    ? `${binding.theme === 'light' ? '亮' : '暗'}色${binding.why}`
+    ? T.chip === SHIPPED_CHIP
+      ? '釘在 ② 出貨的值（PM 裁決，PR #1721）'
+      : `${binding.theme === 'light' ? '亮' : '暗'}色${binding.why}`
     : '原型目標';
+/**
+ * pressed 的比例例外（PM 裁決，#1515 PR #1721 issuecomment-6255622861、6255648703）：取 min（次要字對它剛好 ≥ 4.5 的比例，
+ * Libraries.dev 的比例），不跟著 Libraries.dev 的比例走，也不回頭壓 chip 目標——chip 與 hover 因此逐值留在原型目標，
+ * 有字疊在 pressed 上的（用量鈕）照樣 ≥ 4.5。#1512 的階梯比例是過渡期的偏好，不是無障礙門檻。
+ * 撤除條件：⑥ 把 chip 三階換成 SG 的面時，這個例外跟著拿掉。
+ */
+const pressedOk = (step) =>
+  THEMES.every(
+    (theme) =>
+      wcag(
+        srgb(SG[theme]['muted-foreground']),
+        srgb(chipSteps(theme, T.chip, step)['chip-pressed']),
+      ) >= T.text,
+  );
+const pressedCap = Math.min(
+  ...THEMES.map((theme) => chipCap({ theme, min: T.text, factor: T.chip })),
+);
+const PRESSED_STEP = Math.min(LIB_STEP.pressed, Math.floor(pressedCap * 10000) / 10000);
+T.pressedStep = PRESSED_STEP;
+while (!pressedOk(T.pressedStep)) T.pressedStep = Number((T.pressedStep - 0.0001).toFixed(4));
 
 /** warning／info 的色相與彩度：沿用上一版產生器（Leonardo 對舊底色解出來的）的值，明度對 SG 底色重解。 */
 const NEXUS_HUE = {
@@ -315,7 +326,7 @@ for (const theme of THEMES) {
   const hairBase = theme === 'light' ? [0, 0, 0] : srgb('#c4c4c4');
   NEXUS_SURFACE[theme] = {
     stage: oklch(solveGray(cardOnBg, T.stage, 'darker')),
-    ...chipSteps(theme, T.chip),
+    ...chipSteps(theme, T.chip, T.pressedStep),
     'card-hairline': oklch(hairBase, solveAlpha(hairBase, cardOnBg, T.hairline)),
   };
 }
@@ -338,7 +349,8 @@ const RULES = {
   'status-interrupted': { page: T.status, card: T.text },
   'status-running': { page: T.status, card: T.text },
   link: { page: T.text, card: T.text },
-  warning: { page: T.status, card: T.text, stage: T.text },
+  // `chips`：疊在 chip 三階上。chip 是不透明的灰，不用疊頁面。
+  warning: { page: T.status, card: T.text, stage: T.text, chips: T.text },
   info: { page: T.status, card: T.text, stage: T.text },
 };
 const SG_COLORS = [
@@ -359,6 +371,10 @@ function tintFaces(theme, css, alpha) {
   return under.map((face) => composite(tint, face));
 }
 
+/** chip 三階的底（不透明）。 */
+const chipFaces = (theme) =>
+  ['chip', 'chip-hover', 'chip-pressed'].map((step) => srgb(NEXUS_SURFACE[theme][step]));
+
 function passes(theme, name, css) {
   const rule = RULES[name];
   const stage = srgb(NEXUS_SURFACE[theme].stage);
@@ -366,7 +382,8 @@ function passes(theme, name, css) {
     (rule.tints ?? []).every((tint) => worst(css, tintFaces(theme, css, tint[theme])) >= T.text) &&
     (rule.page === undefined || worst(css, BASE[theme].pages) >= rule.page) &&
     (rule.card === undefined || worst(css, facesOn(theme, SURFACE[theme].card)) >= rule.card) &&
-    (rule.stage === undefined || worst(css, [stage]) >= rule.stage)
+    (rule.stage === undefined || worst(css, [stage]) >= rule.stage) &&
+    (rule.chips === undefined || worst(css, chipFaces(theme)) >= rule.chips)
   );
 }
 
@@ -463,10 +480,13 @@ const theme2 = (theme) => (theme === 'light' ? '亮' : '暗');
 let md = `## 目標\n\n| 目標 | 值 | 出處 |\n| --- | --- | --- |\n`;
 md += `| 文字 | ${f(T.text)} | Q5 |\n| 狀態色對頁面 | ${f(T.status)} | Q5；SG 的 status-* 也套（#1512） |\n| 表面亮暗差 | ≤ ${T.surfaceDiff} | Q5 |\n`;
 md += `| stage 對 卡片 | ${f(T.stage)} | 原型 eb800a1，亮暗取強 |\n| chip 對 底色 | ${T.chip.toFixed(4)} | 原型 ${f(T.chipFromProto)}；綁住的約束：${T.chipBinding}（#1512） |\n`;
-md += `| chip-hover／pressed 對 底色 | ${(T.chip * LIB_STEP.hover).toFixed(4)}／${(T.chip * LIB_STEP.pressed).toFixed(4)} | Libraries.dev 的階梯比例 |\n| 細線環 對 卡片 | ${f(T.hairline)} | 原型 eb800a1，亮暗取強 |\n`;
+md += `| chip-hover 對 底色 | ${(T.chip * LIB_STEP.hover).toFixed(4)} | Libraries.dev 的階梯比例 |\n`;
+md += `| chip-pressed 對 底色 | ${(T.chip * T.pressedStep).toFixed(4)} | 比例 ${T.pressedStep.toFixed(4)}：取 min（次要字剛好 ≥ 4.5，Libraries.dev 的 ${LIB_STEP.pressed.toFixed(4)}），例外見產生器 |\n| 細線環 對 卡片 | ${f(T.hairline)} | 原型 eb800a1，亮暗取強 |\n`;
 md += `\nchip 三階上的次要文字（約束見產生器）：\n\n| 約束 | 上限換算成 chip 目標 | 產物上的實際值 |\n| --- | --- | --- |\n`;
 for (const c of caps)
   md += `| ${c.theme === 'light' ? '亮' : '暗'}：${c.why} | ${c.cap.toFixed(4)} | ${wcag(srgb(SG[c.theme]['muted-foreground']), srgb(chipSteps(c.theme, T.chip)[c.step])).toFixed(4)} |\n`;
+for (const theme of THEMES)
+  md += `| ${theme2(theme)}：次要文字對 chip-pressed ≥ 4.5（壓 pressed 比例，不壓 chip） | — | ${wcag(srgb(SG[theme]['muted-foreground']), srgb(NEXUS_SURFACE[theme]['chip-pressed'])).toFixed(4)} |\n`;
 md += `\n顏色的對比疊在最差的那一疊底上算：SG 底色＋每個漸層停點；卡片是半透明的面再疊上去。表面鑑別度只疊在底色上。\n`;
 md += `\n## 顏色（取最差的一疊）\n\n| token | 主題 | SG | 產物 | 對頁面 | 對卡片 | 對 stage |\n| --- | --- | --- | --- | --- | --- | --- |\n`;
 for (const name of Object.keys(RULES)) {
