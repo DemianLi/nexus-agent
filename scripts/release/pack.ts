@@ -3,7 +3,7 @@
  *
  * 流程：`build:lib` → web 的 `vite build` → `pnpm deploy --legacy --prod` 出閉包到暫存目錄 → 寫建置戳記 → 兩道靜態檢查
  * （`payload.ts` 的內容檢查與出貨清單閉包；第三道相依圖走訪只在 `verify-packed-install` 跑）→ `tar -czf` → `.sha256`。產物名 `nexus-agent-<版本>-<平台>.tar.gz`，解開是同名的一個資料夾。
- * 主機預裝 Node ≥22.19；產物不帶 node、不帶 pnpm、不需要安裝步驟（Q1 (a)，只出 linux-x64，Q2 (a)）。
+ * 主機預裝 Node（22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準）；產物不帶 node、不帶 pnpm、不需要安裝步驟（Q1 (a)，只出 linux-x64，Q2 (a)）。
  *
  * **偏離 dsh，理由 1（基座表達不出來）——`pnpm deploy` 的旗標。** dsh `scripts/build-exe-for-python-sdk.ts:280-300` 用
  * `--legacy --prod --config.node-linker=hoisted --config.auto-install-peers=false --config.link-workspace-packages=true
