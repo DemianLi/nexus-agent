@@ -349,11 +349,18 @@ export {
 // 檔案錯誤與讀到哪各是一對：middleware 開 ALS 槽、backend 的 Proxy 寫入，只掛一半會靜默失效。
 // 兩對都只由 `foldRegistry` 組起來，主入口不公開半邊（#698）；core 以外要用時公開成對的單一入口。
 export {
+  currentToolCallSignal,
   FS_SANDBOX_DENIED,
   FS_TOOL_ERRORS_MIDDLEWARE_NAME,
   FS_TOOL_PRIMARY_METHOD,
   noteSandboxDenial,
+  noteSearchError,
+  SEARCH_ABORTED,
+  SEARCH_FAILED,
+  SEARCH_INVALID_PATTERN,
+  SEARCH_RAW_OUTPUT_OVERFLOW,
 } from './fs-tool-errors.js';
+export type { SearchErrorCode } from './fs-tool-errors.js';
 
 export type { SpillPolicyOptions, SpillRef, SpillSaveRequest, SpillStore } from './spill-policy.js';
 export {
