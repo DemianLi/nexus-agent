@@ -693,7 +693,13 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   test('量具有抓到東西：每個標了的元素都量到', () => {
     expect(texts.map((t) => t.name)).toEqual(expect.arrayContaining(REQUIRED_TEXTS));
     expect(focus.map((f) => f.name)).toEqual(
-      expect.arrayContaining(['button-default', 'input-group', 'sidebar-menu-button']),
+      expect.arrayContaining([
+        'button-default',
+        'input-group',
+        'sidebar-menu-button',
+        'sidebar-menu-action',
+        'sidebar-trigger',
+      ]),
     );
     expect(shadows.length).toBeGreaterThan(0);
   });
@@ -714,8 +720,13 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
 
   test('欄位聚焦：邊框四邊都換成頁面的字色', () => {
     report[`${theme}:fields`] = fields;
-    // 量具自檢：三種欄位都量到、真的在 `:focus-visible`，而且聚焦前後邊框有變（量到的是聚焦的樣子，不是平常的邊框）。
-    expect(fields.map((f) => f.name).sort()).toEqual(['input', 'input-group', 'textarea']);
+    // 量具自檢：四種欄位都量到、真的在 `:focus-visible`，而且聚焦前後邊框有變（量到的是聚焦的樣子，不是平常的邊框）。
+    expect(fields.map((f) => f.name).sort()).toEqual([
+      'input',
+      'input-group',
+      'sidebar-input',
+      'textarea',
+    ]);
     expect(fields.filter((f) => !f.focusVisible).map((f) => f.name)).toEqual([]);
     expect(
       fields
