@@ -218,7 +218,11 @@ describe('出廠打開（#1619）', () => {
    * **壞設定照既有的規則掉列**（#751）：設定驗不過的列標成沒掛、啟動警告指名它，其餘照樣起來。這一列不在必掛名單上，
    * 掉了之後 `startupSetting` 回到 schema 預設——所以 0 換不到「不限」，保險絲照樣是出廠那一組。
    */
-  it('D maxThreads: 0 被 schema 擋下（沒有「不限」）：這一列掉了、警告指名它，上限照樣是出廠的 500', async () => {
+  /**
+   * 壞設定回到預設、不拒絕啟動（PM 2026-10-18 定案）。三件事都要斷言：警告有印、生效的上限是 500、`thread_at_capacity` 真的在第 501 條觸發
+   * ——只看日誌那一行的話，「印的是 500、handler 拿到的卻不是」照樣綠。
+   */
+  it('D maxThreads: 0 被 schema 擋下（沒有「不限」）：這一列掉了、警告指名它，第 501 條照樣被拒', async () => {
     const lines: string[] = [];
     serve = await startScriptedServe(TURNS, {
       extraRows: '- id: thread-capacity\n  config:\n    maxThreads: 0\n',
@@ -229,5 +233,20 @@ describe('出廠打開（#1619）', () => {
       expect.stringMatching(/^thread 上限：500（/u),
       SHIPPED_EVICT_LINE,
     ]);
-  });
+
+    const client = await serveClient(serve.running);
+    const open = async (thread: string): Promise<void> => {
+      const events = await client.openEvents(thread);
+      await events.return?.(undefined);
+    };
+    // 一批 25 條並行開，500 條佔滿名額。
+    for (let batch = 0; batch < 20; batch += 1) {
+      await Promise.all(
+        Array.from({ length: 25 }, (_, index) => open(`t${String(batch * 25 + index)}`)),
+      );
+    }
+    const refused = await client.runStart('t500', '說一句');
+    expect(refused).toMatchObject({ type: 'error', error: 'thread_at_capacity' });
+    expect(refused.type === 'error' ? refused.message : '').toContain('500／500');
+  }, 120_000);
 });

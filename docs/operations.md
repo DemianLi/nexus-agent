@@ -1029,8 +1029,8 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
   沒有排隊、搶占，也不會因為滿了就自動關掉最舊的。**正在撤的 thread 也佔名額**，撤完才還；撤的當中有人要同一條 thread，會等它撤完、重新組一份。
 - **起動時讀一次，改了要重啟**。
 - **這一列關不掉**：寫 `disabled: true` 啟動當場拋錯。兩格都有出廠值，關掉只會回到同一組值，讀起來卻像拆了保險絲（同 `downlink` 那一列）。
-  **要放寬，把數值調大；要關閒置逐出，設 `idleEvictAfterMs: 0`**。`maxThreads` 沒有「不限」，最小是 1；寫 0 會被 schema 擋下，這一列照「設定驗不過」掉列、
-  啟動警告指名它，值回到出廠的 500。
+  **要放寬，把數值調大；要關閒置逐出，設 `idleEvictAfterMs: 0`**。`maxThreads` 沒有「不限」，最小是 1；寫 0 會被 schema 擋下：**壞設定回到預設、不拒絕啟動**——這一列照「設定驗不過」掉列、
+  啟動警告指名它，值回到出廠的 500，到了 500 照樣拒收。
 - **偏離 dsh（登記）**：dsh 沒有 thread 數上限；這是 serve 跑在多人共用主機上才有的產品需求。形狀借的是 dsh 背景工作的准入
   （`jobs-local` 的 `maxConcurrentJobsPerOwner`），逐點見 `apps/harness/src/settings/thread-capacity.ts` 的檔頭。「有上限就出廠打開、給有限的預設值、
   沒有『不限』」照 dsh 各入口的上限（背景工作、終端數、背景子代理都是這樣）。
@@ -1040,7 +1040,10 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 
 - 原本沒設上限的：行程裡到了 500 條開始拒收新 thread。要更寬，把 `maxThreads` 調大。
 - 原本沒開逐出的：沒人看著的 thread 閒置 2 小時開始被撤出記憶體（代價見下一段的「已知限制」）。要回到不逐出，設 `idleEvictAfterMs: 0`。
-- 原本寫了 `disabled: true` 的：升級之後 serve 起不來，錯誤訊息指名這一列。把 `disabled` 拿掉；要舊的「不限、不逐出」，就把 `maxThreads` 調大、`idleEvictAfterMs` 設 0。
+- 原本關掉這一列的：升級之後 serve 起不來，錯誤訊息指名這一列，也講是在哪裡關的。
+  - **用變更紀錄關的**（`plugin disable thread-capacity`）：跑 `plugin enable thread-capacity`。紀錄還留著那一筆停用時，別的 `plugin` 改動也會被拒，訊息帶同一句修法。
+  - **在 patch 檔裡寫 `disabled: true` 的**：把 `disabled` 拿掉。
+  - 要舊的「不限、不逐出」，就把 `maxThreads` 調大、`idleEvictAfterMs` 設 0。
 
 **閒置逐出（`idleEvictAfterMs`，[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)，第 1 級）**：同一列的另一格，毫秒數 T，**出廠 7200000（2 小時）**，照 dsh 終端的閒置回收；
 **`0` 是不逐出**，同樣照 dsh。只想改這一格：
