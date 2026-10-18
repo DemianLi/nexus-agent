@@ -193,16 +193,19 @@ describe('讀檔 meta 的上限', () => {
   });
 });
 
-/** 物件與陣列交錯的巢狀：凍過的 `JSON.stringify` 約 3 千層就 `RangeError`，日誌收得下更深的（#1526）。 */
-function deepMixed(depth: number): unknown {
+/**
+ * 陣列巢狀（#1526）。深度取 3000：CI（Node 22.23.3 Linux x64）上原生 `JSON.stringify` 對凍過的陣列約 2200 層就
+ * `RangeError`、沒凍過的約 4100 層，夾在中間才分得出「先拷再量」。
+ */
+function nestedArray(depth: number): unknown {
   let value: unknown = 'leaf';
-  for (let level = 0; level < depth; level++) value = level % 2 ? { next: value } : [value];
+  for (let level = 0; level < depth; level++) value = [value];
   return value;
 }
 
 describe('日誌裡凍過的深 meta（#1526）', () => {
-  it('5000 層交錯巢狀：量得動、交出去的是沒凍過的副本，之後的原生 JSON.stringify 也序列化得了', () => {
-    const meta = { deep: deepMixed(5_000) };
+  it('3000 層陣列巢狀：量得動、交出去的是沒凍過的副本，之後的原生 JSON.stringify 也序列化得了', () => {
+    const meta = { deep: nestedArray(3_000) };
     // 照正式路徑凍：從日誌拿，不自己 `Object.freeze`。
     const logged = new SessionLog('t').append('tool/result', { callId: 'c1', isError: false, meta })
       .data.meta;

@@ -259,7 +259,10 @@ describe('剪刀：先換記過的、再剪新的、新剪的當場記', () => {
   });
 });
 
-/** 物件與陣列交錯的巢狀：`structuredClone` 約 3 千層就 `RangeError`，日誌收得下更深的（#1526）。 */
+/**
+ * 物件與陣列交錯的巢狀（#1526）。深度取 3000：`structuredClone` 在 CI（Node 22.23.3 Linux x64）約 1500–2100 層就
+ * `RangeError`；Node 22 的原生 `JSON.stringify` 連沒凍過的也是遞迴的，CI 上約 4100 層就拋，再深連改寫後也過不了。
+ */
 function deepMixed(depth: number): unknown {
   let value: unknown = 'leaf';
   for (let level = 0; level < depth; level++) value = level % 2 ? { next: value } : [value];
@@ -267,13 +270,13 @@ function deepMixed(depth: number): unknown {
 }
 
 describe('記過的剪法帶深巢狀區塊（#1526）', () => {
-  it('剪完的內容裡有 5000 層交錯巢狀的欄位：換得上去，內容原樣、拿到的是可改的副本', () => {
+  it('剪完的內容裡有 3000 層交錯巢狀的欄位：換得上去，內容原樣、拿到的是可改的副本', () => {
     const original = new ToolMessage({
       content: 'x'.repeat(300),
       tool_call_id: 'deep',
       name: 'mcp',
     });
-    const content = [{ type: 'text', text: '頭…尾', extra: deepMixed(5_000) }];
+    const content = [{ type: 'text', text: '頭…尾', extra: deepMixed(3_000) }];
     const log = new SessionLog('s');
     log.append('compaction/prune', {
       results: [

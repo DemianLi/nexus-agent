@@ -677,4 +677,33 @@ describe('JSON 快照照 dsh 的規則（#1526）', () => {
       expect(Object.getPrototypeOf(meta.b)).toBe(Array.prototype);
     });
   });
+
+  it('記憶體裡收得下 2 萬層：快照與凍結都是迭代的，最底那一層也凍過', () => {
+    // 落盤那一格（`apps/harness/src/session-log-json-snapshot.test.ts` 的 C）只能測到 Node 22 原生 `JSON.stringify`
+    // 撐得住的深度（CI 上約 4100 層），遞迴的凍結在那以上才爆，所以這一格只在記憶體裡驗、不經原生序列化。
+    for (const shape of ['object', 'array'] as const) {
+      let value: unknown = 'leaf';
+      for (let level = 0; level < 20_000; level++)
+        value = shape === 'object' ? { next: value } : [value];
+      const event = new SessionLog('t1').append('tool/result', {
+        callId: shape,
+        isError: false,
+        meta: value,
+      });
+      let node: unknown = (event.data as { meta: unknown }).meta;
+      let depth = 0;
+      let unfrozen = 0;
+      while (typeof node === 'object' && node !== null) {
+        if (!Object.isFrozen(node)) unfrozen++;
+        node = Array.isArray(node) ? node[0] : (node as { next: unknown }).next;
+        depth++;
+      }
+      expect({ shape, depth, unfrozen, node }).toEqual({
+        shape,
+        depth: 20_000,
+        unfrozen: 0,
+        node: 'leaf',
+      });
+    }
+  });
 });

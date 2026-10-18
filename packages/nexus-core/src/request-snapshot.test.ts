@@ -6,10 +6,17 @@
  * @see [#1020](https://github.com/DemianLi/nexus-agent/issues/1020)
  */
 
+import type { AIMessage } from '@langchain/core/messages';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
+import type { Runnable } from '@langchain/core/runnables';
+import { FakeListChatModel } from '@langchain/core/utils/testing';
 import { describe, expect, it } from 'vitest';
 
-import { extractRequest, recordRequestSnapshot } from './request-snapshot.js';
+import {
+  createRequestSnapshotRecorder,
+  extractRequest,
+  recordRequestSnapshot,
+} from './request-snapshot.js';
 import type { ExtractedRequest } from './request-snapshot.js';
 import { SessionLog } from './session-log.js';
 
@@ -176,9 +183,11 @@ describe('recordRequestSnapshot：變了才記', () => {
     ]);
   });
 
-  it('續接：舊日誌裡那顆 header 有 5000 層交錯巢狀，基準照樣建得起來，變了照記（#1526）', () => {
+  it('續接：舊日誌裡那顆 header 有 3000 層陣列巢狀，基準照樣建得起來，變了照記（#1526）', () => {
+    // 深度取 3000 層陣列：CI（Node 22.23.3 Linux x64）上原生 `JSON.stringify` 對凍過的陣列約 2200 層就拋、沒凍過的
+    // 約 4100 層，夾在中間才分得出「先拷再序列化」。
     let deep: unknown = 'leaf';
-    for (let level = 0; level < 5_000; level++) deep = level % 2 ? { next: deep } : [deep];
+    for (let level = 0; level < 3_000; level++) deep = [deep];
     const before = new SessionLog('s');
     const shallow = request('甲');
     recordRequestSnapshot(
@@ -192,7 +201,7 @@ describe('recordRequestSnapshot：變了才記', () => {
 
     const resumed = new SessionLog('s', { seed: before.events });
     const header = resumed.events.find((event) => event.type === 'request/header')!;
-    // 前提：基準讀的是日誌裡凍過的那一份（V8 對凍過的巢狀 `JSON.stringify` 約 3 千層就拋）。
+    // 前提：基準讀的是日誌裡凍過的那一份（見上：凍過的那一份直接序列化會拋）。
     expect(Object.isFrozen((header.data as { header: object }).header)).toBe(true);
     // 改之前：基準在 stringify 那一行拋，產品路徑上被 handler 的 `catch` 吞掉，之後每次呼叫兩種快照都不記。
     recordRequestSnapshot(resumed, shallow, 1);
@@ -217,5 +226,52 @@ describe('recordRequestSnapshot：變了才記', () => {
     expect(() => recordRequestSnapshot(log, request('甲'), 0)).toThrow('壞了');
     recordRequestSnapshot(log, request('甲'), 1);
     expect(kinds(log)).toContain('request/system:initial');
+  });
+});
+
+describe('記不進去不扳倒模型呼叫，也不無聲吞掉（#1526）', () => {
+  it('handler 接住的錯講一條 warn、模型照樣回；下一次記得進去就照記', async () => {
+    const log = new SessionLog('s');
+    const append = log.append.bind(log);
+    let fail = true;
+    (log as { append: unknown }).append = (...args: Parameters<typeof log.append>) => {
+      if (fail) {
+        fail = false;
+        throw new Error('壞了');
+      }
+      return append(...args);
+    };
+    const warnings: string[] = [];
+    const recorder = createRequestSnapshotRecorder(
+      { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
+      (message) => warnings.push(message),
+    );
+    const hook = (
+      recorder as unknown as {
+        wrapModelCall: (
+          request: unknown,
+          handler: (next: { model: Runnable }) => Promise<unknown>,
+        ) => Promise<unknown>;
+      }
+    ).wrapModelCall;
+    // 走真的 callback：middleware 把 handler 綁在模型上，模型被叫時 `handleChatModelStart` 才跑。
+    const call = () =>
+      hook(
+        {
+          model: new FakeListChatModel({ responses: ['好'] }),
+          messages: [],
+          runtime: { configurable: {} },
+        },
+        (next) => next.model.invoke(messages[0]!),
+      );
+
+    const reply = (await call()) as AIMessage;
+    expect(reply.content).toBe('好');
+    expect(warnings).toEqual(['請求快照記不進去，這次不記：壞了']);
+    expect(kinds(log)).toEqual([]);
+
+    await call();
+    expect(kinds(log)).toEqual(['request/system:initial', 'request/header:initial']);
+    expect(warnings).toHaveLength(1);
   });
 });

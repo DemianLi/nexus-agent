@@ -158,7 +158,7 @@ export class SessionTelemetryCoordinator {
       // 後端就地一改等於改寫歷史。今天那還會被 `deepFreeze` 擋成一個看不懂的失敗
       // （sloppy 模式無聲失效、strict 模式拋錯然後被記成「規則扣住了記錄」），明天多
       // 一種沒凍過的 body 就是真的共享可變交接。append 當下驗過純 JSON，所以這裡拷得動——
-      // 拷法用日誌自己那支迭代快照，不用 `structuredClone`：後者是遞迴的，日誌收得下的深巢狀它約 3 千層就
+      // 拷法用日誌自己那支迭代快照，不用 `structuredClone`：後者是遞迴的，日誌收得下的深巢狀它兩千層上下就
       // `RangeError`，那一筆就被扣住（#1526）。
       body: snapshotJsonValue(event.data, `遙測 ${event.type} 的 data`),
     });

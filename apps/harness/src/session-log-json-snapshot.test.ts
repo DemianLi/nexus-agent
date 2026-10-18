@@ -10,10 +10,11 @@
  *   就丟了：`@langchain/core@1.2.9` 的 `Serializable.toJSON`（`dist/load/validation.js:85`）用賦值拷 kwargs，`toDict()`
  *   出來的 args 原型被換掉、自有鍵沒了，再經 `JSON.stringify` 就只剩 `{"a":1}`。所以這裡斷言的是日誌真正保證的事：
  *   拿到的那份原型乾淨、沒有繼承來的 `x`、記憶體與磁碟一致。上游丟鍵另開卡。
- * - **C**：深巢狀，前後各夾一則普通事件。改寫前快照與凍結都是遞迴，約 3 千層就 `RangeError`；改寫後快照收得下，
- *   但凍過的陣列 `JSON.stringify` 一樣約 3 千層就爆，所以後端寫入前要先拷一份沒凍過的（`materializeAppendBatch`，照 dsh）。
- *   沒有那一刀時這一批永遠寫不出去，**前後兩則也一起落不了盤**，續接整個讀不到。比對用 `JSON.stringify`：vitest 的
- *   `toEqual` 本身是遞迴的，2 萬層會先在斷言裡爆。
+ * - **C**：深巢狀，前後各夾一則普通事件。改寫前快照是遞迴的，陣列一千多層就 `RangeError`；改寫後快照收得下，
+ *   但原生 `JSON.stringify` 對凍過的陣列在 CI（Node 22.23.3 Linux x64）約 2200 層就爆，所以後端寫入前要先拷一份
+ *   沒凍過的（`materializeAppendBatch`，照 dsh）。沒有那一刀時這一批永遠寫不出去，**前後兩則也一起落不了盤**，續接
+ *   整個讀不到。深度取 3000：Node 22 的原生 `JSON.stringify` 連沒凍過的也是遞迴的，CI 上約 4100 層就拋，再深連改寫後
+ *   也寫不出去（落盤端的上限是 #1661）。比對用 `JSON.stringify`：vitest 的 `toEqual` 本身是遞迴的。
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -147,7 +148,7 @@ describe('A2：經過訊息那條路（#1526）', () => {
 });
 
 describe('C：深巢狀不撞 RangeError（#1526）', () => {
-  const DEPTH = 20_000;
+  const DEPTH = 3_000;
 
   function nestedObject(depth: number): unknown {
     let value: unknown = 'leaf';
@@ -161,11 +162,17 @@ describe('C：深巢狀不撞 RangeError（#1526）', () => {
     return value;
   }
 
-  it('前後各一則普通事件，中間夾 2 萬層物件、5 千層與 2 萬層陣列：全部收得下，續接每一則都讀得回來且相同', async () => {
+  function nestedMixed(depth: number): unknown {
+    let value: unknown = 'leaf';
+    for (let level = 0; level < depth; level++) value = level % 2 ? { next: value } : [value];
+    return value;
+  }
+
+  it('前後各一則普通事件，中間夾 3000 層物件、陣列與交錯巢狀：全部收得下，續接每一則都讀得回來且相同', async () => {
     const deep = [
-      ['deep-object-20000', nestedObject(DEPTH)],
-      ['deep-array-5000', nestedArray(5_000)],
-      ['deep-array-20000', nestedArray(DEPTH)],
+      ['deep-object', nestedObject(DEPTH)],
+      ['deep-array', nestedArray(DEPTH)],
+      ['deep-mixed', nestedMixed(DEPTH)],
     ] as const;
     const { live, stored, adopted } = await roundTrip((sessions) => {
       sessions.root.append('tool/result', { callId: 'before', isError: false });

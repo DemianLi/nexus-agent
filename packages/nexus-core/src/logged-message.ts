@@ -77,7 +77,7 @@ export function toLoggedMessage(message: BaseMessage): LoggedMessage {
  * 讀日誌的人拿到的一律是凍過的，所以這一步不是防禦，是每一次都會走到的路。
  *
  * **拷法用日誌自己那支迭代快照（{@link snapshotJsonValue}），不用 `structuredClone`**：V8 的 `structuredClone` 是遞迴的，
- * 物件與陣列交錯約 3 千層就 `RangeError`，而日誌收得下更深的（#1526）。續接時每一則訊息都經過這裡，
+ * 物件與陣列交錯兩千層上下就 `RangeError`，而日誌收得下更深的（#1526）。續接時每一則訊息都經過這裡，
  * 一則推不回來，整條 thread 就建不起來。
  *
  * @param logged - 日誌裡記的那一則。

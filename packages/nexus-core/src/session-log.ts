@@ -1704,9 +1704,10 @@ export function snapshotJsonValue(value: unknown, label: string): unknown {
  * （`packages/session/session-persistence/src/storage-contract.ts:131-137`，`687f282e`；JSONL 後端在
  * `session-persistence-jsonl/src/storage.ts:191` 與 `:308` 寫入前都先跑它）。
  *
- * **後端為什麼不能直接序列化日誌裡那份：** 日誌裡的事件全凍過，而 V8 的 `JSON.stringify` 遇到凍過的陣列走遞迴的慢路徑，
- * 巢狀約 3 千層就 `RangeError`（沒凍過的撐得過 200 萬層，#1526 實測）。快照收得下的值後端卻寫不出去，失敗那批會一直卡在
- * 佇列頭，那條 thread 之後一則都落不了盤。
+ * **後端為什麼不能直接序列化日誌裡那份：** 日誌裡的事件全凍過，而 V8 的 `JSON.stringify` 對凍過的巢狀撐得比較淺：
+ * CI（Node 22.23.3 Linux x64）上凍過的陣列約 2200 層就 `RangeError`，沒凍過的約 4100 層（Node 25 上沒凍過的撐得過
+ * 200 萬層，#1526 實測）。快照收得下的值後端卻寫不出去，失敗那批會一直卡在佇列頭，那條 thread 之後一則都落不了盤。
+ * 拷過之後在 Node 22 上仍有沒凍過的那個上限，超過的一樣卡住，見 [#1661](https://github.com/DemianLi/nexus-agent/issues/1661)。
  *
  * 規則與 {@link SessionLog.append} 同一份（{@link snapshotJsonValue}），拒收時一樣拋帶路徑的 `TypeError`（偏離同那支，理由 2）。
  *

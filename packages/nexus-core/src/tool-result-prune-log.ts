@@ -105,7 +105,7 @@ export function applyRecordedPrune(message: BaseMessage, recorded: RecordedPrune
   if (prune === undefined) return message;
   if (measureToolResultContent(message.content) !== prune.originalChars) return message;
   // 先拷一份：日誌裡的事件是凍過的，建構子可能回頭改欄位（同 `fromLoggedMessage`）。拷法也同那支：用日誌自己的
-  // 迭代快照，不用遞迴的 `structuredClone`，深巢狀約 3 千層就 `RangeError`（#1526）。
+  // 迭代快照，不用遞迴的 `structuredClone`，深巢狀兩千層上下就 `RangeError`（#1526）。
   const content = snapshotJsonValue(prune.content, '修剪記錄的 content') as MessageContent;
   return new ToolMessage({ ...message, content });
 }
