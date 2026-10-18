@@ -210,6 +210,9 @@ export const TURN_END_LABEL: Readonly<Record<TrajectoryEnd, string>> = {
  *
  * `LOCAL_CAPACITY` 是本機的碼（#1505）：全機的模型請求名額滿了、排隊等太久，請求根本沒送出去，不重試。那句話要講清楚是
  * 這台主機在排隊、不是供應商的錯，而且稍後再送一次就可能過（#1632）。正在排隊的即時狀態下行沒有事件，畫面上沒有。
+ *
+ * `INVALID_CREDENTIAL` 也是本機的碼（#1541）：這台主機設定的金鑰修掉頭尾空白後是空的、或含有 HTTP 標頭放不下的字元，請求根本沒送出去，
+ * 不重試。那句話要講清楚是本機的金鑰格式、不是供應商拒絕（那是 `AUTH`），而且重送沒用、要管理者修（#1652）。
  */
 export const FAILURE_CODE_LABEL: Readonly<Record<string, string>> = {
   AUTH: '驗證失敗',
@@ -222,6 +225,7 @@ export const FAILURE_CODE_LABEL: Readonly<Record<string, string>> = {
   TRANSPORT: '連線失敗',
   EMPTY_RESPONSE: '回覆是空的',
   LOCAL_CAPACITY: '本機排隊太久，請求沒送出，可稍後再送',
+  INVALID_CREDENTIAL: '本機金鑰格式不對，請求沒送出，重送無效，請管理者修正',
   UNKNOWN: '原因不明',
 };
 
