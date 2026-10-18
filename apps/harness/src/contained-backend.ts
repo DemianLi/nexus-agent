@@ -624,8 +624,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     } catch {
       return { matches: [] };
     }
-    // **搜尋起點要傳相對於工作區根的路徑**（根本身是 `.`）：給 rg 絕對路徑時，帶目錄的 `--glob` 一個都對不上
-    // （rg 15.1.0 實測；`cwd` 為根、路徑為 `.` 或 `src` 時 `logs/app.log`、`/logs/app.log`、`src/**/*.ts` 都對根錨定）。
+    // **搜尋起點要傳相對於工作區根的路徑**（根本身是 `.`）：rg 的錨點是它自己 `getcwd()` 的 realpath，根經過 symlink 時
+    // 傳絕對路徑會對不上、帶目錄的 `--glob` 一個都命中不了；相對路徑不受影響（rg 15.1.0 實測；`cwd` 為根、路徑為 `.` 或
+    // `src` 時 `logs/app.log`、`/logs/app.log`、`src/**/*.ts` 都對根錨定）。
     // 一律加 `./` 前綴：目錄名剛好是 `-` 時 rg 會改讀 stdin（0 筆、沒有錯誤），`-x` 這類也不會被當成旗標。
     const searchRel = relative(this.cwd, baseFull);
     const searchArg = searchRel === '' ? '.' : `.${sep}${searchRel}`;
