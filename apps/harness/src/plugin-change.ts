@@ -34,6 +34,10 @@
  * 4. **沒有「寫入後協調失敗就寫回舊文件」**：dsh 的 `edit` 寫完立刻在同一個行程裡 reconcile 活的 Loader 樹，失敗寫回。
  *    我們的寫入口是另一個行程，樹在 serve 裡，下一條 thread 才重讀；紀錄追加之後沒有可以協調的對象，所以才把驗證全部
  *    搬到追加之前。
+ * 5. **紀錄裡留著舊的 `disable`、而那一列後來改成關不掉時，救得回來**（[#1619](https://github.com/DemianLi/nexus-agent/issues/1619)）：
+ *    找列與找繼承值不檢查保護名單，只有寫入之後的整份清單才檢查，所以 `enable` 寫得進去、新的 `disable` 照樣被拒；
+ *    清單還壞著時別的改動也被拒，訊息帶 `plugin enable <id>` 那一句修法（`plugin-config.ts` 的 `assertNotProtected`）。
+ *    dsh 沒有變更紀錄，這一條跟第 2 條同屬寫入口本身那條理由 2（稽核）。
  *
  * @module
  */
@@ -223,8 +227,10 @@ export async function changePlugin(
       };
 
       // 1. 這一列。用不含 `--patch` 的清單找：寫入口看的是「紀錄加出貨」。
+      // **找列這一步不檢查保護名單**（#1619）：紀錄裡留著一筆舊的 `disable`（那一列以前關得掉）時，這裡也拋的話連 `enable`
+      // 都寫不進去，沒有任何指令救得回來。這一步只拿 target 與 name；寫入之後的整份清單照樣在第 3 步完整驗過。
       const own = defaultSources({ serve: true, env, warn });
-      const current = composeEntries(own);
+      const current = composeEntries(own, { allowDisabledProtected: true });
       const target: ConfigEntry | undefined = current.find((entry) => entry.id === change.id);
       if (target === undefined) {
         return reject(
@@ -240,6 +246,7 @@ export async function changePlugin(
       let inheritedConfig: Record<string, unknown> | undefined;
       const inheritedWithout = (): Record<string, unknown> => {
         if (inheritedConfig !== undefined) return inheritedConfig;
+        // 同第 1 步：只拿繼承值，保護名單交給第 3 步（不然紀錄裡留著舊 `disable` 時，這裡拋的錯不會記成 `rejected`）。
         const without = composeEntries(
           defaultSources({
             serve: true,
@@ -247,6 +254,7 @@ export async function changePlugin(
             warn,
             pending: [{ op: 'config-reset', id: change.id, name, before: null, after: null }],
           }),
+          { allowDisabledProtected: true },
         ).find((entry) => entry.id === change.id);
         inheritedConfig = without?.config ?? {};
         return inheritedConfig;
