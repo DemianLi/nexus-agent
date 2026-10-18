@@ -20,7 +20,7 @@ runs:
 
     - uses: actions/setup-node@v7
       with:
-        node-version: ${{ inputs.node-version }}
+        node-version: '24' # 探針 P2（不合併）：不接 input
         cache: pnpm
 
     - name: 安裝相依套件
