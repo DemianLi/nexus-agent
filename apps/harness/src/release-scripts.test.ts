@@ -6,6 +6,7 @@
  */
 
 import {
+  chmodSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -213,7 +214,14 @@ function goodTree(root: string): void {
     '',
   );
   put('node_modules/.pnpm/zod@4/node_modules/zod/index.js', '');
+  // 內附 ripgrep（#1502 刀 4）：本體加目標平台的平台套件，rg 要有執行權限。
+  put('node_modules/.pnpm/@vscode+ripgrep@1.18.0/node_modules/@vscode/ripgrep/lib/index.js', '');
+  put(RG_BINARY, '');
+  chmodSync(join(root, RG_BINARY), 0o755);
 }
+
+const RG_BINARY =
+  'node_modules/.pnpm/@vscode+ripgrep-linux-x64@1.18.0/node_modules/@vscode/ripgrep-linux-x64/bin/rg';
 
 const options = { nativeSuffix: 'linux-x64', vendorNames: ['@nexus/cordis'] };
 
@@ -277,6 +285,44 @@ describe('產物樹的內容檢查', () => {
           recursive: true,
         }),
       /node-addon-system-linux-x64/u,
+    ],
+    [
+      '缺內附 ripgrep 本體',
+      () =>
+        rmSync(join(root, 'node_modules/.pnpm/@vscode+ripgrep@1.18.0'), {
+          recursive: true,
+        }),
+      /缺 @vscode\/ripgrep（/u,
+    ],
+    [
+      '缺目標平台的內附 ripgrep',
+      () =>
+        rmSync(join(root, 'node_modules/.pnpm/@vscode+ripgrep-linux-x64@1.18.0'), {
+          recursive: true,
+        }),
+      /缺目標平台的 @vscode\/ripgrep-linux-x64/u,
+    ],
+    [
+      '內附的只有別的平台（darwin 的不算 linux 的）',
+      () => {
+        rmSync(join(root, 'node_modules/.pnpm/@vscode+ripgrep-linux-x64@1.18.0'), {
+          recursive: true,
+        });
+        mkdirSync(
+          join(
+            root,
+            'node_modules/.pnpm/@vscode+ripgrep-darwin-arm64@1.18.0/node_modules/@vscode/ripgrep-darwin-arm64/bin',
+          ),
+          { recursive: true },
+        );
+      },
+      /缺目標平台的 @vscode\/ripgrep-linux-x64（找到：@vscode\+ripgrep-darwin-arm64@1\.18\.0）/u,
+    ],
+    ['內附的 rg 執行檔不在', () => rmSync(join(root, RG_BINARY)), /內附的 rg 執行檔不在/u],
+    [
+      '內附的 rg 沒有執行權限',
+      () => chmodSync(join(root, RG_BINARY), 0o644),
+      /內附的 rg 沒有執行權限/u,
     ],
     ['絕對符號連結', () => symlinkSync('/etc/hosts', join(root, 'abs')), /絕對路徑/u],
     ['斷掉的符號連結', () => symlinkSync('./nowhere', join(root, 'dangling')), /解不開/u],

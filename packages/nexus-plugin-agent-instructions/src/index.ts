@@ -92,7 +92,8 @@
  * 函式插件，套 SDK lint：**不 import `@nexus/core`**，也不碰 langchain 的 middleware。要在一次呼叫開頭追加訊息，經 `agentLoop` 服務
  * （`@nexus/agent-loop`）登記一位 `preStep` listener；宿主建 middleware、建訊息、記日誌（Q2 (a)）。這個檔只剩「讀什麼、渲染什麼、
  * 什麼時候不加」。**行為逐字不變**（Q4）：記號、渲染文字、四個候選與順序、`maxBytes` 預設、middleware 名字與在鏈上的位置、日誌
- * `source`、每次 invoke 一格、摘要後下一次 invoke 補回、寫日誌失敗訊息照送。
+ * `source`、每次 invoke 一格、摘要後下一次 invoke 補回。（遷移當時還有「寫日誌失敗訊息照送」；#1665 起宿主改成原錯往外拋、這一輪失敗，見 harness 的
+ * `pre-step-middleware.ts`。）
  *
  * 舊外殼的建構式（`createAgentInstructionsMiddleware`）搬到 harness 的
  * `agent-instructions.fixture.ts`，給 `pre-step-middleware.test.ts` 的單元測試用；`NexusPlugin` 外殼與 `createAgentInstructionsPlugin`

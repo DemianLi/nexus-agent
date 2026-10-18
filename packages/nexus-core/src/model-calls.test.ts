@@ -7,6 +7,7 @@
 import { AIMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
 import { describe, expect, it, vi } from 'vitest';
+import { pastLogDepthCap } from './fixtures.js';
 import { fromLoggedMessage, toLoggedMessage } from './logged-message.js';
 import { createModelCallRecorder } from './model-calls.js';
 import type { SessionLookup } from './registry.js';
@@ -143,17 +144,40 @@ describe('記不進去不能扳倒模型呼叫', () => {
     await expect(run(ok(log), () => response)).resolves.toBe(response);
     expect(typesOf(log)).toEqual(['model/start', 'assistant/message']);
   });
+});
 
-  it('回覆記不進去：回應照樣傳回，結尾照記', async () => {
+/**
+ * [#1665](https://github.com/DemianLi/nexus-agent/issues/1665)：回覆被日誌那一關拒收，照 dsh 這次呼叫失敗（`assistant-stream.ts:83-88`，
+ * `687f282e`），不是吞掉。吞掉的話回應照樣進 state、日誌上卻沒有。
+ */
+describe('回覆記不進去：這次呼叫失敗', () => {
+  it('原錯往外拋，回覆不在日誌上，結尾記 error', async () => {
     const log = new SessionLog('calls');
-    const real = log.append.bind(log);
-    vi.spyOn(log, 'append').mockImplementation(((type: never, data: never) => {
-      if (type === 'assistant/message') throw new Error('寫不進去');
-      return real(type, data);
-    }) as typeof log.append);
-    const response = new AIMessage('好。');
-    await expect(run(ok(log), () => response)).resolves.toBe(response);
+    const response = new AIMessage({
+      content: '',
+      tool_calls: [{ id: 'c1', name: 't', args: { v: pastLogDepthCap() }, type: 'tool_call' }],
+    });
+    const error = await run(ok(log), () => response).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toBeInstanceOf(TypeError);
+    // 原錯原樣：帶事件種類、路徑與層數，`turn/failed` 拿到的就是這句。
+    expect((error as Error).message).toMatch(
+      /^會話事件的 assistant\/message 的 data\.message\..* 是第 601 層巢狀，超過上限 600 層$/,
+    );
     expect(typesOf(log)).toEqual(['model/start', 'model/end']);
+    expect(log.events.at(-1)!.data).toEqual({ modelCall: 0, outcome: 'error' });
+  });
+
+  it('反例：收得下的回覆照常記、照常傳回', async () => {
+    const log = new SessionLog('calls');
+    const response = new AIMessage({
+      content: '',
+      tool_calls: [{ id: 'c1', name: 't', args: { v: 'shallow' }, type: 'tool_call' }],
+    });
+    await expect(run(ok(log), () => response)).resolves.toBe(response);
+    expect(typesOf(log)).toEqual(['model/start', 'assistant/message', 'model/end']);
   });
 });
 

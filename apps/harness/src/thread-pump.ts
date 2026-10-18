@@ -3006,8 +3006,21 @@ export class ThreadPump {
         withModelCall({ message: toLoggedMessage(abandoned) }, modelCall),
         { ignorable: true },
       );
-    } catch {
-      // 紀錄是附帶的：寫不進去不能讓重打的那一輪跟著失敗，畫面照樣擦。
+    } catch (error: unknown) {
+      // **偏離 dsh（理由 1：基座表達不出來），#1665。** dsh 寫不進去就讓這一步失敗：`assistant/attempt` 與回覆走同一個
+      // `settle`，被拒就 abandon 再重拋（`packages/core/agent-loop/src/assistant-stream.ts:83-88`；串流中途失敗那一支在
+      // `agent.ts:489-500`，重打前作廢那一支在 `:506-510`，`687f282e`）。
+      // 我們這一格在 pump、在圖外，從這裡拋停不住圖：`@langchain/langgraph@1.4.19` 的 `streamEvents` v3 由
+      // `createGraphRunStream` 在背景抽圖（`dist/stream/run-stream.js:428` 的 `pump(source, mux)`），上面那個 `for await` 只是
+      // mux 的一個訂閱（`:106-107`），跳出迴圈只是退訂；它的 abortController 也沒接到 Pregel 的 signal（`dist/pregel/index.js:983-1007`）。
+      // 交給 LangGraph 的 `signal` 停圖也不行：那會丟下正在跑的工具（實測，見上面 `streamEvents` 呼叫處的註解與 `turn-cancel.ts`），
+      // 所以 pump 不給它。拋出去的話 pump 記下 `turn/failed`，圖卻在背景照樣重打、照樣寫這份日誌。停得住圖的只有 turn-cancel 的訊號，而那是
+      // 「使用者按了停止」的語意。所以退到：不拋、大聲講，這一輪照常走（重打照跑）。這一顆 `ignorable`、不進模型歷史，吞掉不會
+      // 讓 state 與日誌分岔，只是少了作廢那半段的紀錄。
+      // **回頭點**：底座換成 Cordis、pump 改進迴圈裡之後（#1385），改回照 dsh 拋出。
+      this.#warn?.(
+        `[會話日誌] thread ${this.#threadId} 的 assistant/attempt 記不進去（作廢的那半段不留紀錄，這一輪照常重打）：${String(error)}`,
+      );
     }
     this.#presentCustom({ name: MESSAGE_DISCARD, payload: { messageId: previous.key } });
     current.reply = undefined;
@@ -3028,7 +3041,10 @@ export class ThreadPump {
    * - 一則裡的推理攤平成一塊、排在正文前面，同 `@nexus/wire` 的 `AiEntry.reasoning`（#527 登記過的偏離）。
    * - 沒有推理時 content 照舊是字串。
    *
-   * **寫不進去不能把這一輪變成失敗**：人按了停止是事實，留不下半段只是少了一則訊息。
+   * **寫不進去不能把這一輪變成失敗**：人按了停止是事實，留不下半段只是少了一則訊息。同 dsh：被中止那一支直接重拋，不經
+   * `throwError`、不發 `agent/error`，這一輪記 aborted（`packages/core/agent-loop/src/agent.ts:370-373`、`:387`，`687f282e`），
+   * 錯在 driver 邊界由 `kick()` 收掉（`:252-265`）。**日誌不收就連對話也不寫**（#1665）：
+   * 兩邊一起少這一則，不分岔；並經 `warn` 大聲講。
    *
    * **日誌同時記一顆 `assistant/message {interrupted: true}`**（#305），照 dsh 被中止時把已送出的
    * 前綴收成一則帶記號的回覆。先記日誌再寫對話：日誌是對話的真相，對話那一側寫不進去時，推歷史的
@@ -3066,8 +3082,13 @@ export class ThreadPump {
           lastModelCall(this.#sessions.root),
         ),
       );
-    } catch {
-      // 同下：這一輪照樣收成中止。
+    } catch (error: unknown) {
+      // **日誌不收就不寫對話**（#1665）：這半段進模型歷史，只寫對話的話記憶體有、日誌沒有，續接後模型看到的歷史不同。
+      // 這一輪照樣收成中止（人按了停止是事實），所以不拋，大聲講一聲，兩邊都少這一則。
+      this.#warn?.(
+        `[會話日誌] thread ${this.#threadId} 被停止那則回覆的半段記不進去，對話也不留：${String(error)}`,
+      );
+      return;
     }
     try {
       await this.#agent.updateState(

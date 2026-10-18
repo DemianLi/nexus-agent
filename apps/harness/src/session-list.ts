@@ -92,13 +92,28 @@ function isRecord(value: unknown): value is Record<string, unknown> {
 }
 
 /**
+ * 這份是子代理的會話嗎：header 帶 `parentSession`（[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）。
+ *
+ * **列表（{@link isListedThread}）和 serve 的續接閘（`serve.ts` 的 `createAgent`）共用這一支**，判準只有一份。
+ * 對到 dsh 的 headless（`packages/bundle/headless/src/index.ts:222-224`）與 ACP（`packages/acp/acp/src/index.ts:252-255`）：
+ * `origin === 'subagent' || parentSession !== undefined`。nexus 的 header 沒有 `origin`，而 `parentSession` 只有子代理會寫
+ * （`session-persistence.ts` 的 `address.kind === 'subagent'` 那一支），所以兩者等價。
+ *
+ * **將來做會話分叉（N0762，#1550）時這條要改**：分叉的 header 會帶 `parentSession` 卻是一條可以驅動的主對話。到時要像 dsh 的
+ * session-controller 那樣在 header 加 `origin`，判準改成 `origin === 'subagent'`，否則分叉會被誤擋。
+ */
+export function isSubagentSessionHeader(header: StoredSessionHeader): boolean {
+  return header.parentSession !== undefined;
+}
+
+/**
  * 一份列得出來嗎：root、`cwd` 對得上。判準見檔頭的「列出來的每一列都要切得過去」。
  *
  * 列表與內容搜尋（`thread-search.ts`，[#631](https://github.com/DemianLi/nexus-agent/issues/631)）共用這一支：
  * **搜得到的一定列得出來**，同 dsh 的搜尋先拿列表的可見集合過濾（`packages/api/session-controller/src/list.ts:179-183`）。
  */
 export function isListedThread(header: StoredSessionHeader, cwd: string): boolean {
-  return header.parentSession === undefined && header.cwd === cwd;
+  return !isSubagentSessionHeader(header) && header.cwd === cwd;
 }
 
 /**
