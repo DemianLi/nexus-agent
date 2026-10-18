@@ -7,7 +7,7 @@
  *
  * ## 預設關閉，所以這一列關得掉
  *
- * `reportIntervalMs` 預設 `0`＝不啟動量具，serve 的行為與日誌和沒有這一列時一個字都一樣（#1490 驗收 B）。
+ * `reportIntervalMs` 預設 `0`＝不啟動量具，除了清單多一列（`[對照快照]` 的列數、`plugin-snapshot.json`、`--dump-config`），serve 的行為與日誌和沒有這一列時一樣（#1490 驗收 B）。
  * `startupSetting` 把關掉的列當成沒有那一列、值回到預設——預設就是「關」，所以關掉這一列與不寫它等價，**不需要**放進
  * `PROTECTED_ENTRY_NAMES`（保險絲類的列才要，因為它們的預設是「開」）。
  *
@@ -24,15 +24,21 @@ export const MEMORY_GAUGE_PLUGIN_NAME = 'memory-gauge';
 /** 開了之後最短的間隔：再短只是把日誌灌滿。 */
 export const MIN_MEMORY_REPORT_INTERVAL_MS = 1000;
 
+/**
+ * 計時器的最大延遲（毫秒）。超過 2³¹−1 時 Node 發 `TimeoutOverflowWarning` 並把間隔改成 1 ms——一個驗得過的設定會讓日誌每毫秒寫一行。
+ * 照 dsh `packages/util/timeout/src/index.ts:25` 的 `MAX_TIMER_DELAY_MS`；repo 裡 `live-model.ts`、`thread-title-llm.ts`、`wire-server.ts` 各自定義同一個數字。
+ */
+export const MAX_MEMORY_REPORT_INTERVAL_MS = 2_147_483_647;
+
 /** `strictObject`：多寫一個欄位是打錯字，同其他幾列。 */
 export const memoryGaugeConfigSchema = z.strictObject({
   /**
-   * 兩次記憶體日誌之間的毫秒數。`0`（預設）是不啟動量具；開了就是一個至少 1000 的整數，起動時另外立刻寫一行。
+   * 兩次記憶體日誌之間的毫秒數。`0`（預設）是不啟動量具；開了就是 1000 到 2_147_483_647（計時器上限）的整數，起動時另外立刻寫一行。
    */
   reportIntervalMs: z
     .number()
     .int()
-    .max(Number.MAX_SAFE_INTEGER)
+    .max(MAX_MEMORY_REPORT_INTERVAL_MS)
     .default(0)
     .refine((value) => value === 0 || value >= MIN_MEMORY_REPORT_INTERVAL_MS, {
       message: `reportIntervalMs 要嘛是 0（不啟動），要嘛至少 ${String(MIN_MEMORY_REPORT_INTERVAL_MS)}`,

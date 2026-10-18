@@ -447,12 +447,12 @@
     maxThreads: 500
     idleEvictAfterMs: 7200000
 
-# serve 的記憶體量具（#1490）。**預設關閉**：`reportIntervalMs: 0` 就不啟動，serve 的行為與日誌和沒有這一列時一個字都一樣。
-# 開了（至少 1000 毫秒）：serve 起來時立刻往日誌寫一行，之後每隔這麼久一行，讀三個來源——行程自己（RSS、heap）、容器上限
-# （Linux 的 cgroup，v2 與 v1）、主機（`/proc/meminfo` 的 `MemAvailable`，沒有才退到 `os.freemem()` 並標出來）；
+# serve 的記憶體量具（#1490）。**預設關閉**：`reportIntervalMs: 0` 就不啟動，除了清單多一列，serve 的行為與日誌和沒有這一列時一樣。
+# 開了（1000 到 2147483647 毫秒，後者是計時器上限，超過 Node 會把間隔改成 1 ms）：serve 起來時立刻往日誌寫一行，之後每隔這麼久一行，讀三個來源——行程自己（RSS、heap）、容器上限
+# （Linux 的 cgroup：先解 `/proc/self/cgroup` 讀行程自己所在的那個，v2 與 v1）、主機（`/proc/meminfo` 的 `MemAvailable`，沒有才退到 `os.freemem()` 並標出來）；
 # **讀不到的來源明說讀不到與原因，不回 0**。**只讀、只講**，不拒收、不逐出、不下架。要看就在自己的 `~/.nexus-agent/cordis.patch.yml`
 # 把 `reportIntervalMs` 設成例如 60000。起動期讀一次、改了要重啟。
-# **偏離登記：產品需求超出 dsh**（dsh 沒有執行期記憶體監看），逐點見 `src/memory-gauge.ts` 的檔頭。這一列關得掉（預設就是關）。
+# **偏離登記：產品需求超出 dsh**（dsh `687f282e` 沒有執行期記憶體監看；讀 cgroup 的方法照 dsh bench），逐點見 `src/memory-gauge.ts` 的檔頭。這一列關得掉（預設就是關）。
 - id: memory-gauge
   name: '#settings/memory-gauge'
   config:

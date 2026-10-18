@@ -51,9 +51,11 @@ describe('記憶體量具，從 serve 組裝起（#1490 驗收 B、C）', () => 
     for (const line of gauge) {
       expect(line).toMatch(/heap .*MiB.*cgroup .*主機/u);
     }
-    // 起動那一行排在其他起動披露之後，不夾在中間。
+    // 起動那一行排在**所有**起動披露之後、不夾在中間：緊接在最後一條披露（已儲存 vs 執行中的對照，`serve.ts` 披露段的最後一行）後面。
     const index = lines.findIndex((line) => GAUGE_LINE.test(line));
-    expect(lines.slice(0, index).some((line) => line.startsWith('thread 上限：'))).toBe(true);
+    const lastDisclosure = lines.findIndex((line) => line.startsWith('[對照快照]'));
+    expect(lastDisclosure).toBeGreaterThanOrEqual(0);
+    expect(index).toBe(lastDisclosure + 1);
   });
 
   it('close() 之後計時器收掉：不再有新的一行', async () => {
@@ -66,6 +68,8 @@ describe('記憶體量具，從 serve 組裝起（#1490 驗收 B、C）', () => 
     await serve.close();
     serve = undefined;
     const countAtClose = lines.filter((line) => GAUGE_LINE.test(line)).length;
+    // 量具真的起過：沒起的話下面的「不再增加」是空話（拿掉起量具那段時，會紅在這一行而不是逾時）。
+    expect(countAtClose).toBeGreaterThan(0);
     await new Promise((resolve) => setTimeout(resolve, 2300));
     expect(lines.filter((line) => GAUGE_LINE.test(line))).toHaveLength(countAtClose);
   });
