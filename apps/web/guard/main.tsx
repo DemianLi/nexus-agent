@@ -496,7 +496,7 @@ function CollapsiblesPage() {
     >
       <ReasoningRow text={REASONING} running={false} />
       <CompactionRow entry={COMPACTION} />
-      <ToolCard entry={TOOL} beam={false} />
+      <ToolCard entry={TOOL} />
       <TodoPanel todos={TODOS} status="idle" />
       <PendingSwap
         pendings={[QUESTION]}

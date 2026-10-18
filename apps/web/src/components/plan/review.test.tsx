@@ -53,7 +53,7 @@ function Screen({ panel = true, card }: { panel?: boolean; card?: ToolEntry }) {
     <WithRightSidebar sources={{ plans: PLANS }}>
       <main>
         <RightSidebarToggle />
-        {card !== undefined && <PlanToolCard entry={card} beam={false} />}
+        {card !== undefined && <PlanToolCard entry={card} />}
         {panel && (
           <section aria-label="計劃待審">
             <PlanReviewPanel

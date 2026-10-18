@@ -209,11 +209,11 @@ export function PlanCard({ entry, plan }: { entry: ToolEntry; plan: PlanDocument
 }
 
 /** `exit_plan_mode` 那一顆：交得出計劃就是計劃卡，參數解不開、沒有標題的照通用工具卡（同 dsh `submittedPlan`）。 */
-export function PlanToolCard({ entry, beam }: { entry: ToolEntry; beam: boolean }) {
+export function PlanToolCard({ entry }: { entry: ToolEntry }) {
   // 串流中每一格都會重畫，參數不變就不重解 markdown。
   const plan = useMemo(() => submittedPlanOf(entry), [entry]);
   return plan === undefined ? (
-    <ToolCard entry={entry} beam={beam} />
+    <ToolCard entry={entry} />
   ) : (
     <PlanCard entry={entry} plan={plan} />
   );

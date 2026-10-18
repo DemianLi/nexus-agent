@@ -170,7 +170,7 @@ const NO_NAMES: ReadonlyMap<string, string> = new Map();
 
 /** 背景子代理自己的對話裡一則項目的畫法：同主對話（`Transcript` 的 `Entry`），不給評分、不給邊框光。 */
 function renderSubagentEntry(entry: ConversationEntry) {
-  return <TranscriptEntry entry={entry} beam={false} subagentNames={NO_NAMES} />;
+  return <TranscriptEntry entry={entry} subagentNames={NO_NAMES} />;
 }
 
 /**

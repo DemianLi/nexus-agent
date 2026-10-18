@@ -472,3 +472,54 @@ body {
 [data-slot="attachment-title"]:not(.dark *) {
   --shimmer-color: var(--muted-foreground);
 }
+
+/*
+ * 工具列執行中不閃（#1682 PM 決定 Q1；README 本地修改第 61 條）：vendor 的 `StepRow`（`vendor/solid-glass/components/ui/tool-steps.tsx`）
+ * 在 `status === "running"` 時給整顆按鈕 `animate-pulse`，波谷 opacity .5 時次要字的對比亮色約 2.0、暗色約 2.75，過不了 §5 的 4.5。
+ * Q5 優先於 Q8（先例第 48 條）：動畫停掉，執行中由 trailing 裡的狀態字「執行中」表示（§7：狀態不能只靠動效）。選擇器錨在 vendor 的
+ * class 上，寫在 layer 外；`registry-edits.test.ts` 釘 vendor 仍是 `animate-pulse`，`guard/` 量執行中那一列的 `animation-name`。
+ */
+/* prettier-ignore */
+[data-slot="step-row"] > button.animate-pulse {
+  animation-name: none;
+}
+
+/*
+ * 工具結果框聚焦時外框畫在框上（#1682；README 本地修改第 62 條）：patch `0019` 讓 `OutputBlock` 的 `pre` 聚焦得到（它可以捲，
+ * 鍵盤要停得上去），可是外層 `data-slot="output-block"` 是 `overflow-hidden`，`pre` 自己的外框（offset 2px）會被切掉。
+ * 跟第 30 條同一個做法：2px 字色、offset 2px，外框寫在 layer 外、offset 在 base layer。`guard/` 量聚焦後外層的外框。
+ */
+@layer base {
+  [data-slot='output-block']:has(> pre:focus-visible) {
+    outline-offset: 2px;
+  }
+}
+
+/* prettier-ignore */
+[data-slot="output-block"]:has(> pre:focus-visible) {
+  outline: 2px solid var(--ring);
+}
+
+/*
+ * 工具列與群組那一列在 1024 以下 44px（規格 §9，#1682；README 本地修改第 63 條）：vendor 的按鈕只有一行字高（`lineClass`）。
+ * 選擇器錨在 `data-slot`，寫在 layer 外；1024 以上照 SG。`guard/` 在 375 與 1280 寬各量一次。
+ */
+/* prettier-ignore */
+@media (width < 64rem) {
+  [data-slot="step-row"] > button,
+  [data-slot="step-group"] > button {
+    min-height: 2.75rem;
+  }
+}
+
+/*
+ * 減少動態時工具列的箭頭不轉場（#528 的規則，#1682；README 本地修改第 64 條）：vendor 的箭頭 `transition-transform`，打開時轉 90°。
+ * 寫在 layer 外，蓋得過 utilities 層。`guard/` 在模擬 reduced-motion 下量計算值。
+ */
+/* prettier-ignore */
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="step-row"] > button > svg,
+  [data-slot="step-group"] > button > svg {
+    transition-duration: 0s;
+  }
+}
