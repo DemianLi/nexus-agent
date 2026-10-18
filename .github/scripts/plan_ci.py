@@ -140,13 +140,15 @@ class Suite:
 #   不在靜態 import 圖上；掃描整個原始碼樹的絆索測試（`'apps/web/src'` 出現在掃描根裡）異動落在哪都可能踩到。
 # - harness 的插件套件 gate（#1420）：`collectMigratedPluginViolations` 依檔案路徑動態載入每顆 `packages/nexus-plugin-*`
 #   的入口，不在 import 圖上。只動某顆插件的 PR（選擇性模式）不會讓它被挑到，而「遷出了卻忘了寫一致性測試」正是它要擋的。
+# - harness 的第三方元件清單（#1545）：新鮮度那格讀每一份 workspace `package.json` 與網頁的樣式表，只升某顆插件相依的
+#   PR 改的是 `package.json`，不在 import 圖上；漏跑它，清單過期 CI 照樣綠。
 # - web：用 fs 讀原始碼的測試（讀的是別的檔，import 圖看不到），以及經 `readCascade` 讀樣式表的護欄（#1498 起
 #   tokens-contrast、focus-outline、shadow-alpha、font-stack 改走量具，檔案本身不再出現 readFileSync，但讀的照樣是 CSS）。
 SUITES = {
     'harness': Suite(
         'apps/harness',
         ('.test.ts',),
-        ('shippedPlugins', "'apps/web/src'", 'collectMigratedPluginViolations'),
+        ('shippedPlugins', "'apps/web/src'", 'collectMigratedPluginViolations', 'gen-third-party-notices'),
     ),
     'web': Suite('apps/web', ('.test.ts', '.test.tsx'), ('readFileSync', 'readdirSync', 'readCascade')),
 }

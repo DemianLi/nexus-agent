@@ -145,6 +145,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # lockfile 新帶進的版本要發布滿 `minimumReleaseAge`（#1545）：pnpm 10 的 `--frozen-lockfile` 不再查已進 lockfile 的版本，
+      # 規則與偏離理由見腳本檔頭。排在安裝之前：它只要 Python 與網路，太新的版本要紅在這一步，而不是被別的原因擋掉。
+      # lockfile 沒變就不發請求。只在 PR 上跑：main 的 push 帶的 lockfile 已經在 develop 的 PR 上查過。
+      - name: lockfile 新版本的發布年齡
+        if: github.event_name == 'pull_request'
+        env:
+          BASE_SHA: ${{ needs.plan.outputs.base_sha }}
+        run: |
+          set -euo pipefail
+          git fetch --no-tags --depth=1 origin "$BASE_SHA"
+          python3 .github/scripts/check_lockfile_age.py "$BASE_SHA"
       - uses: ./.github/actions/setup
       # `.github/scripts/` 的 Python 測試（`test_*.py`），例如 CI 形狀測試（#1546）。秒級，放最前面。
       - name: CI 腳本的測試

@@ -20,6 +20,8 @@
     "gen-tsconfig-paths": "tsx scripts/gen-tsconfig-paths.ts",
     "verify-tsconfig-paths": "tsx scripts/gen-tsconfig-paths.ts --check",
     "verify-lib-manifests": "tsx scripts/verify-lib-manifests.ts",
+    "gen-third-party-notices": "tsx scripts/gen-third-party-notices.ts",
+    "verify-third-party-notices": "tsx scripts/gen-third-party-notices.ts --check",
     "smoke-built-bin": "tsx scripts/smoke-built-bin.ts",
     "release:bump": "tsx scripts/release/bump.ts",
     "release:version": "tsx scripts/release/version.ts",
@@ -38,9 +40,6 @@
     "vite-tsconfig-paths": "^6.1.1"
   },
   "pnpm": {
-    "onlyBuiltDependencies": [
-      "esbuild"
-    ],
     "overrides": {
       "mout@<1.2.4": "^1.2.4"
     }
