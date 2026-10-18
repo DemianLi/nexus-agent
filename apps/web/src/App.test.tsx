@@ -28,6 +28,7 @@ import {
   SESSION_STATS,
   SUBAGENT_STATUS,
   THREAD_AT_CAPACITY,
+  THREAD_IS_SUBAGENT,
   TITLE,
   TODOS,
   TOKEN_USAGE,
@@ -63,6 +64,7 @@ import { ABORTED_BEFORE_DISPATCH_CODE, STOPPED_QUESTION_TEXT } from '@/lib/quest
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/lib/steer-view';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
+import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
 import { fakeDownlink } from '@/test/downlink';
@@ -893,6 +895,33 @@ describe('對話介面', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '立刻重連' }));
     expect(await screen.findByText(RESUMED_THREAD_NOTICE)).toBeTruthy();
+  });
+
+  it('記住的是子代理的會話（#1708，localStorage 被改過）：講那一句，沒有重連鈕、不接原文，也不再開', async () => {
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '記住的那條/1' }));
+    const fake = fakeClient([]);
+    const serverMessage =
+      '"記住的那條/1" 是子代理的會話，不能當一條 thread 開；要對它說話，請從它的主對話用 subagent.send。';
+    const openEvents = vi.fn<WireClient['openEvents']>(async () => {
+      const body = JSON.stringify({
+        type: 'error',
+        id: null,
+        error: THREAD_IS_SUBAGENT,
+        message: serverMessage,
+      });
+      throw new WireRejectedError(THREAD_IS_SUBAGENT, serverMessage, `下行被拒：${body}`);
+    });
+    render(<App client={{ ...fake.client, openEvents }} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe(THREAD_IS_SUBAGENT_TEXT),
+    );
+    expect(screen.queryByRole('button', { name: '立刻重連' })).toBeNull();
+    expect(screen.queryByText(/subagent\.send|下行被拒/)).toBeNull();
+    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    // 第一次退避最多 500ms：等過去，下行仍只開過一次。
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(openEvents).toHaveBeenCalledOnce();
   });
 
   it('下行被拒但不是滿了（#1478）：照舊講連不上與原因', async () => {
