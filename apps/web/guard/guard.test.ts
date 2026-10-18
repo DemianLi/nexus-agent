@@ -57,6 +57,9 @@ import { startGuardServer, type GuardServer } from './server';
  *    transition（第 41 條）；外殼的行高是 SG 的 20px、泡泡維持 23px；底部淡出捲到底時收成 0。
  * 15. **桌面側欄的收合**（#1680 PR B，`?overlay=desktop-sidebar`）：gap 與 container 的 transition 是 SG 的 200ms linear，
  *    reduced-motion 下整個關掉（`motion.css`）。手機抽屜的寬度在 375 與 768 都是 `--sidebar-width`（本地修改第 55 條，見 {@link WIDTHS}）。
+ * 16. **tool-steps**（#1682 PR A，`?overlay=tool-steps`）：列、群組那一列、結果框的字過 4.5，結果框聚焦時 2px 外框畫在外層、offset 2px
+ *    （第 62 條）；執行中不閃（第 61 條）；375 寬按鈕至少 44px、1280 寬照 SG（第 63 條）；減少動態時箭頭不轉場（第 64 條）；疊在清單裡的
+ *    結果框沒有 blur、清單與單獨放的結果框照 SG 有（第 65 條）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -2589,6 +2592,145 @@ describe.each(['light', 'dark'] as const)('瀏覽器量問答與附件（#1638 P
           .filter((m) => !(m.worst >= TEXT_MIN))
           .map((m) => `${m.name} ${m.worst}（${m.on}）`),
       ).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+/**
+ * SG 的 tool-steps（#1682 PR A，`?overlay=tool-steps`）：README 本地修改第 61–65 條的覆寫真的命中 vendor 畫出來的元素，
+ * 字與焦點過門檻。vendor 元件掛不了屬性，開頁後補。
+ */
+const TOOL_GROUP = '[data-guard-tool="group"]';
+const TOOL_STANDALONE = '[data-guard-tool="standalone"]';
+const toolStepsMarks: Record<string, Record<string, string>> = {
+  [`${TOOL_GROUP} [data-slot="step-row"] > button > span`]: {
+    'data-guard-text': 'tool-step-label',
+  },
+  [`${TOOL_GROUP} [data-slot="step-group"] > button > span`]: {
+    'data-guard-text': 'tool-group-label',
+  },
+  [`[data-guard-tool] [data-slot="output-block"] > div`]: {
+    'data-guard-text': 'tool-output-label',
+  },
+  [`[data-guard-tool] [data-slot="output-block"] > pre`]: {
+    'data-guard-text': 'tool-output-text',
+    'data-guard-focus': 'tool-output',
+  },
+  [`[data-guard-tool] [data-slot="output-block"]`]: { 'data-guard-outline-host': '' },
+};
+
+describe.each(['light', 'dark'] as const)('瀏覽器量 tool-steps（#1682）：%s', (theme) => {
+  test('列與群組的字、結果框的標題與內文過 4.5；結果框聚焦時外框畫在外層（第 62 條）', async () => {
+    const page = await openOverlay('tool-steps', theme, { marks: toolStepsMarks });
+    try {
+      const texts = await collectTexts(page);
+      const focus = await collectFocus(page);
+      const offsets = await page.$$eval('[data-guard-tool] [data-slot="output-block"]', (els) =>
+        els.map((el) => {
+          (el.querySelector('pre') as HTMLElement).focus();
+          return getComputedStyle(el).outlineOffset;
+        }),
+      );
+      report[`tool-steps:${theme}:outline-offset`] = offsets;
+      // 量具自檢：群組裡三列、群組那一列、展開的結果框（群組裡完成的參數與結果、失敗的錯誤，單獨那列的參數與結果）都量到。
+      expect(texts.filter((t) => t.name === 'tool-step-label')).toHaveLength(3);
+      expect(texts.filter((t) => t.name === 'tool-group-label')).toHaveLength(1);
+      expect(texts.filter((t) => t.name === 'tool-output-text')).toHaveLength(5);
+      expect(focus).toHaveLength(5);
+      expectTexts(
+        texts,
+        ['tool-step-label', 'tool-group-label', 'tool-output-label', 'tool-output-text'],
+        `tool-steps:${theme}`,
+      );
+      expectFocus(focus, `tool-steps:${theme}`);
+      expect(offsets).toEqual(Array(5).fill('2px'));
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe('瀏覽器量 tool-steps 的覆寫（#1682，第 61、63、64、65 條）', () => {
+  test('第 61 條：執行中那一列掛著 vendor 的 animate-pulse，但 animation-name 是 none', async () => {
+    const page = await openOverlay('tool-steps', 'light', { marks: { [TOOL_GROUP]: {} } });
+    try {
+      const rows = await page.$$eval(`${TOOL_GROUP} [data-slot="step-row"] > button`, (els) =>
+        els.map((el) => ({
+          pulse: el.classList.contains('animate-pulse'),
+          animation: getComputedStyle(el).animationName,
+        })),
+      );
+      report['tool-steps:pulse'] = rows;
+      // 量具自檢：真的有一列帶 vendor 的 class（執行中那一列）。
+      expect(rows.filter((r) => r.pulse)).toHaveLength(1);
+      expect(rows.map((r) => r.animation)).toEqual(['none', 'none', 'none']);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each([
+    [375, true],
+    [1280, false],
+  ] as const)('第 63 條：%i 寬時列與群組那一列的按鈕至少 44px：%s', async (width, touch) => {
+    const page = await openOverlay('tool-steps', 'light', {
+      viewport: { width, height: 900 },
+      marks: { [TOOL_GROUP]: {} },
+    });
+    try {
+      const heights = await page.$$eval(
+        `${TOOL_GROUP} :is([data-slot="step-row"], [data-slot="step-group"]) > button`,
+        (els) => els.map((el) => el.getBoundingClientRect().height),
+      );
+      report[`tool-steps:height:${width}`] = heights;
+      expect(heights).toHaveLength(4);
+      // 1280 寬照 SG（一行字高）：量具自檢，44px 不是本來就有的。
+      for (const h of heights) expect(h >= 44).toBe(touch);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each([
+    [true, '0s'],
+    [false, 'not-0s'],
+  ] as const)('第 64 條：減少動態（%s）時箭頭的轉場時長', async (reducedMotion, expected) => {
+    const page = await openOverlay('tool-steps', 'light', {
+      reducedMotion,
+      marks: { [TOOL_GROUP]: {} },
+    });
+    try {
+      const durations = await page.$$eval(
+        `${TOOL_GROUP} :is([data-slot="step-row"], [data-slot="step-group"]) > button > svg`,
+        (els) => els.map((el) => getComputedStyle(el).transitionDuration),
+      );
+      report[`tool-steps:chevron:${reducedMotion ? 'reduce' : 'normal'}`] = durations;
+      expect(durations).toHaveLength(4);
+      for (const d of durations) expect(d === '0s' ? '0s' : 'not-0s').toBe(expected);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('第 65 條：疊在清單裡的結果框沒有 backdrop-filter；清單本身與單獨放的結果框照 SG 有', async () => {
+    const page = await openOverlay('tool-steps', 'light', {
+      marks: { [TOOL_GROUP]: {}, [TOOL_STANDALONE]: {} },
+    });
+    try {
+      const filter = (selector: string) =>
+        page.$$eval(selector, (els) => els.map((el) => getComputedStyle(el).backdropFilter));
+      const measured = {
+        nested: await filter(`${TOOL_GROUP} [data-slot="step-list"] [data-slot="output-block"]`),
+        list: await filter(`${TOOL_GROUP} [data-slot="step-list"]`),
+        standalone: await filter(`${TOOL_STANDALONE} [data-slot="output-block"]`),
+      };
+      report['tool-steps:backdrop'] = measured;
+      expect(measured.nested).toEqual(['none', 'none', 'none']);
+      expect(measured.list).toHaveLength(1);
+      expect(measured.standalone).toHaveLength(2);
+      for (const f of [...measured.list, ...measured.standalone]) expect(f).toMatch(/blur\(/);
     } finally {
       await page.close();
     }

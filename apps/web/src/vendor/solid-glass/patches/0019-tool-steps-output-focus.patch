@@ -1,0 +1,12 @@
+===================================================================
+--- a/components/ui/tool-steps.tsx
++++ b/components/ui/tool-steps.tsx
+@@ -42,6 +42,8 @@
+     <div data-slot="output-block" className={cn("glass-panel overflow-hidden rounded-md", className)}>
+       <div className="border-b border-border/70 px-3 py-1 text-[11px] text-muted-foreground">{label}</div>
+       <pre
++        tabIndex={0}
++        aria-label={label}
+         className={cn(
+           "scrollbar-thin max-h-64 overflow-auto px-3 py-2 font-mono text-[11.5px] leading-[1.6] whitespace-pre-wrap",
+           tone === "error" && "text-destructive"
