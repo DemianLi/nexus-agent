@@ -17,13 +17,14 @@
  *   快照那種 30 秒；同步呼叫也沒有「先 TERM、寬限之後再 KILL」那一步，忽略 SIGTERM 的子行程會讓呼叫等到它自己結束，所以直接
  *   SIGKILL。逾時跟其他失敗一樣記 `null`。**只殺直接子行程**：git 自己留下的孫行程（使用者在程式碼 checkout 設了 `core.fsmonitor`
  *   這類設定時）不會被殺，跟 git 快照登記的是同一格窄。
- * - **執行期問 git 這個形狀，dsh 沒有對應物**：dsh 的 commit 是打包時記下的（`apps/desktop/scripts/desktop-build-commit.mjs:23-29`）。
- *   我們從原始碼樹用 `tsx` 直接跑，沒有打包步驟可以蓋章；這張不動這個形狀。
+ * - **這裡管的只是「沒有戳記才問 git」那條退路**：dsh 的 commit 是打包時記下的（`apps/desktop/scripts/desktop-build-commit.mjs:23-29`），
+ *   我們打包出來的產物也帶戳記（{@link resolveBuildVersion}，#1502）；原始碼樹沒有戳記，才在執行期問 git。這張不動這個順序。
  *
  * @module
  */
 
 import { execFileSync } from 'node:child_process';
+import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import { scrubbedParentEnv } from '@nexus/core';
@@ -79,6 +80,51 @@ export function readGitProvenance(probe: GitProbe = defaultGitProbe): BuildVersi
   };
 }
 
+/**
+ * 打包時寫進產物的建置戳記（#1502 刀 2）：`apps/harness/build-stamp.json`，內容 `{ "commit": "<sha>", "dirty": false }`。
+ * 相對這個檔所在的位置找，`src/` 與編出來的 `lib/` 同一深度，兩邊相同。原始碼樹裡沒有這個檔。
+ */
+const BUILD_STAMP_PATH = fileURLToPath(new URL('../build-stamp.json', import.meta.url));
+
+/**
+ * 讀建置戳記。**檔不存在、讀不了、形狀不對一律回 `undefined`**，交給呼叫端退回問 git：戳記是產物帶的附加資訊，
+ * 壞了不該讓行程起不來，也不猜一個值。
+ *
+ * @param path - 戳記檔路徑，省略即產物裡那一份。
+ * @returns 戳記記的建置版本；沒有或不合法就是 `undefined`。
+ */
+export function readBuildStamp(path: string = BUILD_STAMP_PATH): BuildVersion | undefined {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'));
+  } catch {
+    return undefined;
+  }
+  if (typeof parsed !== 'object' || parsed === null) return undefined;
+  const { commit, dirty } = parsed as { commit?: unknown; dirty?: unknown };
+  if (typeof commit !== 'string' || commit === '') return undefined;
+  return { commit, dirty: typeof dirty === 'boolean' ? dirty : null };
+}
+
+/** {@link resolveBuildVersion} 的來源，測試注入。 */
+export interface BuildVersionSources {
+  readonly stampPath?: string;
+  readonly probe?: GitProbe;
+}
+
+/**
+ * 建置版本：**戳記優先，沒有才問 git，都拿不到才記 `null`。**
+ *
+ * 戳記只存在於打包出來的產物，所以它在就代表這份程式碼是那次打包來的；順序反過來的話，安裝目錄剛好放在別的 git repo
+ * 底下時，會記成那個 repo 的 HEAD，而不是這份程式碼的 commit。原始碼樹沒有戳記，照舊問 git。
+ *
+ * @param sources - 戳記路徑與 git 探針，省略即真的檔案與真的 git。
+ * @returns 同 {@link readGitProvenance}。
+ */
+export function resolveBuildVersion(sources: BuildVersionSources = {}): BuildVersion {
+  return readBuildStamp(sources.stampPath) ?? readGitProvenance(sources.probe);
+}
+
 let processBuild: BuildVersion | undefined;
 
 /**
@@ -87,9 +133,9 @@ let processBuild: BuildVersion | undefined;
  * 跑著的程式碼在行程啟動時就定了，之後工作樹被改不會改變這個行程跑的是什麼；serve 每條 thread 各自組裝，也不該每條
  * 都叫兩次 git。
  *
- * @returns 同 {@link readGitProvenance}。
+ * @returns 同 {@link resolveBuildVersion}。
  */
 export function processBuildVersion(): BuildVersion {
-  processBuild ??= readGitProvenance();
+  processBuild ??= resolveBuildVersion();
   return processBuild;
 }

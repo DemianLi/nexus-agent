@@ -1,3 +1,4 @@
+#!/usr/bin/env node
 /**
  * 主機端的插拔寫入口（[#1412](https://github.com/DemianLi/nexus-agent/issues/1412)）。
  *
@@ -29,12 +30,11 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { resolve } from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { parseArgs } from 'node:util';
 
 import { parse as parseYaml } from 'yaml';
 
+import { HARNESS_VERSION } from './harness-version.js';
 import { changePlugin, PluginChangeRejected } from './plugin-change.js';
 import type { PluginChange, PluginChangeResult } from './plugin-change.js';
 
@@ -51,6 +51,7 @@ export const PLUGIN_CLI_USAGE = `用法：plugin <命令> [選項]
   --patch <file>            serve 帶的 --patch（可多次，照同樣的順序）。不給就偵測不到被它蓋掉
   --file <路徑|->           config set 的新設定；- 是標準輸入
   --help                    印這段話
+  --version                 印這個 harness 的版本就退出
 
 每一次變更追加一筆進 $NEXUS_AGENT_HOME/plugin-journal.jsonl（沒設就是 ~/.nexus-agent）；
 驗不過被拒絕的變更也記一筆 rejected（不帶要寫入的值），清單不因它改變。
@@ -92,7 +93,7 @@ interface Parsed {
   readonly patches: readonly string[];
 }
 
-function parse(argv: readonly string[]): Parsed | 'help' {
+function parse(argv: readonly string[]): Parsed | 'help' | 'version' {
   let parsed;
   try {
     parsed = parseArgs({
@@ -101,6 +102,7 @@ function parse(argv: readonly string[]): Parsed | 'help' {
         patch: { type: 'string', multiple: true },
         file: { type: 'string' },
         help: { type: 'boolean', default: false },
+        version: { type: 'boolean', default: false },
       },
       allowPositionals: true,
     });
@@ -112,6 +114,7 @@ function parse(argv: readonly string[]): Parsed | 'help' {
   }
   const { values, positionals } = parsed;
   if (values.help === true) return 'help';
+  if (values.version === true) return 'version';
   const patches = values.patch ?? [];
   if (patches.some((patch) => patch.trim() === '')) {
     throw new UsageError(`--patch 要給一個檔案路徑。\n\n${PLUGIN_CLI_USAGE}`);
@@ -206,7 +209,7 @@ function describeEffect(result: PluginChangeResult): string {
  */
 export async function runPluginCli(options: PluginCliOptions): Promise<number> {
   const printer = options.printer ?? consolePrinter;
-  let parsed: Parsed | 'help';
+  let parsed: Parsed | 'help' | 'version';
   try {
     parsed = parse(options.argv);
   } catch (error) {
@@ -216,6 +219,10 @@ export async function runPluginCli(options: PluginCliOptions): Promise<number> {
   }
   if (parsed === 'help') {
     printer.log(PLUGIN_CLI_USAGE);
+    return 0;
+  }
+  if (parsed === 'version') {
+    printer.log(HARNESS_VERSION);
     return 0;
   }
   try {
@@ -276,6 +283,6 @@ export async function runPluginCli(options: PluginCliOptions): Promise<number> {
   }
 }
 
-if (process.argv[1] !== undefined && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+if (import.meta.main) {
   process.exitCode = await runPluginCli({ argv: process.argv.slice(2) });
 }

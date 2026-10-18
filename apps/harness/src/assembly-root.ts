@@ -239,6 +239,8 @@ export interface CliInvocation {
   readonly dumpDefaultConfig: boolean;
   /** 只印用法就退出。 */
   readonly help: boolean;
+  /** 只印版本就退出（#1502）。 */
+  readonly version: boolean;
 }
 
 /**

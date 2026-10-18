@@ -140,6 +140,15 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
+      # 編成 `lib/`（#1502）：各插件的 `eslint.config.js` 用 Node 原生載入 `@nexus/sdk/lint`，指到 `lib/lint.js`，所以 lint 之前要先建置。
+      # 順便驗三件事（秒級，都不需要網路）：paths 產生器沒漂移、每個 manifest 都指 `lib/`、編出來的三個入口純 `node` 起得來
+      # （含經符號連結啟動，比路徑的入口檢查在那裡會靜靜以 0 結束）。
+      - name: 建置 lib 並驗 manifest
+        run: |
+          pnpm run build:lib
+          pnpm run verify-tsconfig-paths
+          pnpm run verify-lib-manifests
+          pnpm run smoke-built-bin
       # 三件事互不依賴、在四核 runner 上同時跑，各自的輸出收進檔案、跑完依序印成折疊群組；任何一件失敗整個 step 就紅。
       - name: Format、Lint、Build
         run: |
