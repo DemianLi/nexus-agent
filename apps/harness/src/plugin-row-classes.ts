@@ -48,6 +48,7 @@ import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { downlinkPlugin } from './settings/downlink.js';
 import { liveModelPlugin } from './settings/live-model.js';
+import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { projectionFlushPlugin } from './settings/projection-flush.js';
 import { spillPolicyPlugin } from './settings/spill-policy.js';
 import { subagentModelSelectionPlugin } from './settings/subagent-model-selection.js';
@@ -82,6 +83,7 @@ export const STARTUP_READ_PLUGINS: readonly NexusPlugin<unknown>[] = [
   threadTitleLlmPlugin,
   threadSearchPlugin,
   threadCapacityPlugin,
+  memoryGaugePlugin,
   downlinkPlugin,
 ] as readonly NexusPlugin<unknown>[];
 

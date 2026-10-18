@@ -11,7 +11,7 @@ import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
 import type { AnyBackendProtocol, SubAgent } from 'deepagents';
 import { z } from 'zod';
-import { SessionLog } from './session-log.js';
+import { SESSION_EVENT_MAX_DEPTH, SessionLog } from './session-log.js';
 import type { SessionEvent, SessionEventType } from './session-log.js';
 import type {
   AgentMiddleware,
@@ -162,4 +162,18 @@ export function resumedLog(
     ([type, data], seq) => ({ type, seq, time: seq, data }) as unknown as SessionEvent,
   );
   return new SessionLog(sessionId, { seed });
+}
+
+/**
+ * 日誌那一關一定拒收的值：物件與陣列交錯巢狀 {@link SESSION_EVENT_MAX_DEPTH} 層（#1665）。它自己就在上限上，放進任何
+ * 一顆事件的 `data` 裡都至少再多一層，`append` 當場拋 `TypeError`（#1661）。用真的拒收、不 mock `append`，同 dsh 拿真的否決測。
+ *
+ * @returns 那個值。
+ */
+export function pastLogDepthCap(): unknown {
+  let value: unknown = 'leaf';
+  for (let level = 0; level < SESSION_EVENT_MAX_DEPTH; level++) {
+    value = level % 2 ? { next: value } : [value];
+  }
+  return value;
 }

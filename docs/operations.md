@@ -790,7 +790,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   （`agent-loop`、`recursion-limit`、`tool-fs-search` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
-  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`deliverable-files`、
+  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`memory-gauge`、`deliverable-files`、
     `session-persistence`、`tool-text`、`projection-flush`、`downlink`、`tool-result-stash`、`spill-policy`、`background-subagents`、
     `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
     `agent-default-model` 不在這裡：沒帶 `--live` 時它在每條對話組裝時讀，改了新對話就生效。
@@ -1228,6 +1228,23 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **要在整段對話裡釘住組裝它的那一版**（見「後台改清單」的第三個已知限制），設 `idleEvictAfterMs: 0`。
 - **偏離 dsh（登記）**：dsh 頂層沒有閒置逐出（程式碼裡是 legacy TODO）；出廠值 2 小時與「0 是不逐出」照 dsh 終端的 `unattendedTimeoutMs`。閒置條件借的是**子代理結算**（沒有輪、沒有佇列、沒有未收完的子工作），
   計時方式借的是 **terminal retention**（條件全成立才開始算、任何一次忙碌就歸零、到 T 才收）。形狀逐點見 `src/wire-handler.ts` 的 `WireHandlerOptions.idleEvictMs`。
+
+**`memory-gauge`（[#1490](https://github.com/DemianLi/nexus-agent/issues/1490)）**讓 serve 把自己的記憶體寫進日誌，給管理者看「serve 多大、容器還剩多少、主機還剩多少」。**預設關閉**：不寫這一列，或寫 `reportIntervalMs: 0`，除了清單多一列（`[對照快照]` 的列數、`plugin-snapshot.json`、`--dump-config`），serve 的行為與日誌和沒有這一列時一樣。
+
+```yaml
+# ~/.nexus-agent/cordis.patch.yml
+- id: memory-gauge
+  config:
+    reportIntervalMs: 60000   # 0＝不啟動；開了是 1000 到 2147483647（計時器上限，約 24.8 天）
+```
+
+- **打開之後**：serve 起動的披露都印完之後立刻寫一行，之後每隔 `reportIntervalMs` 毫秒一行，例如
+  `記憶體：行程 RSS 612.3 MiB、heap 301.2 MiB／388.0 MiB；cgroup v2 / 640.1 MiB／4096.0 MiB；主機可用 8000.0 MiB／16000.0 MiB（MemAvailable）`。
+- **三個來源各自讀，讀不到的明說**，不回 0：行程自己（RSS 與 heap，到處讀得到）；容器上限（Linux 的 cgroup：**先解 `/proc/self/cgroup`，讀行程自己所在的那個 cgroup**，不是掛載根——v2 取 `0::` 那一行、讀 `memory.current`／`memory.max`，v1 取 `memory` controller 那一行、讀 `memory.usage_in_bytes`／`memory.limit_in_bytes`，hybrid 先試 v2、v2 沒有 memory controller 再試 v1；日誌上印出那個路徑，systemd 底下會是 `/system.slice/…`、docker 預設是 `/`。沒設上限寫「沒設上限」；沒設上限而 `process.constrainedMemory()` 報了比主機小的限制時另外寫「行程受限 … 上限可能在上層 cgroup」；`/proc/self/cgroup` 不在（macOS）寫「cgroup 讀不到（… 沒有 cgroup …）」，別的失敗點名是哪個檔怎麼了）；主機（Linux 的 `/proc/meminfo` 的 `MemAvailable`，沒有才退到 `os.freemem()`，行尾標出是哪一種——**兩種數字不能直接比**：macOS 的 `os.freemem()` 不含可回收的快取，會比實際少）。
+- **只讀、只講**，不拒收、不逐出、不下架；也不寫進 `plugin-snapshot.json`。看了之後要不要做動作（警告、下架插件）等量測的數字出來再決定。
+- **只量 serve 這一個行程**，不含它起的子行程（MCP 的 stdio 子行程、`rg`）。cgroup 那一格涵蓋同一個容器裡的整棵行程樹，所以在容器裡跑時，`cgroup` 的數字比 `行程 RSS` 大多少，就是子行程與其他行程佔的。
+- **起動時讀一次，改了要重啟**。間隔寫小於 1000 的非零數字，這一列在載入期被丟掉（和其他設定驗不過的列一樣，日誌會說「設定驗不過」），量具不啟動。
+- **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh（`687f282e`）沒有執行期的記憶體監看，它的記憶體只在 CI 量（無 swap 的 cgroup 模擬 4／8 GB 機器）。這一列是多人共用的內網主機才有的需求。讀 cgroup 的方法照 dsh `scripts/run-memory-pressure-bench.ts:63-66`（`/proc/self/cgroup` 加 `process.constrainedMemory()`）；多出來的只有 v1／hybrid 的讀法（dsh 的 bench 只認 v2）。逐點見 `src/memory-gauge.ts` 的檔頭。
 
 **模型請求並行上限（`live-model` 的 `maxConcurrentRequests` 與 `maxWaitMs`，[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)）**給整台 serve 同時在跑的模型請求數設上限。
 多人共用一把供應商 key 時，一條失控的 thread（同一步的 `task`／`subagent` 可以重疊，背景子代理每個主對話最多 8 個）同時開出十幾條模型串流，會把每分鐘配額一次打穿；

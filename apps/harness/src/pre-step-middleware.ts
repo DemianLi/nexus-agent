@@ -21,7 +21,8 @@
  *    `configurable` 兩個查找都回 `unknown-caller`，注入會靜靜消失）。
  * 3. 把 listener 回的每一則建成使用者訊息：`additional_kwargs` 先放 listener 給的記號、**再**蓋 `source`（順序影響位元組，golden
  *    比對）；不加 `id`。
- * 4. 經**這條 thread 的** `registry.sessions.forCall` 記一筆 `user/message`；找不到或寫不進去就不記，訊息照送。**不走行程級的
+ * 4. 經**這條 thread 的** `registry.sessions.forCall` 記一筆 `user/message`；找不到就不記、訊息照送，寫不進去原錯往外拋（#1665，
+ *    見 `record`）。**不走行程級的
  *    `session-lookup`**：那條多 thread 時可能 `ambiguous`，而這顆 middleware 本來就是這條 thread 的。
  * 5. 回 `{ messages }`，由基座追加。
  *
@@ -90,7 +91,14 @@ export function createPreStepMiddleware(
   }) as unknown as AgentMiddleware;
 }
 
-/** 把注入的訊息記成 `user/message`。認不出屬於哪一份、或寫不進去，都不記。 */
+/**
+ * 把注入的訊息記成 `user/message`。認不出屬於哪一份就不記。
+ *
+ * **寫不進去原錯往外拋，這一輪失敗**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）：注入的訊息進模型歷史，
+ * 照 dsh 不吞——`agent/pre-step` 交回的訊息在步驟裡直接 append（`packages/core/agent-loop/src/agent.ts:427-436`，`687f282e`）。
+ * 吞掉的話這則照樣進 state、日誌上沒有，續接後模型看到的歷史跟之前不同。插件交來的 `additionalKwargs` 帶了有損值或巢狀超過
+ * 上限，就會從這裡拋。
+ */
 function record(
   sessions: { forCall(config: unknown): SessionLookup },
   configurable: unknown,
@@ -99,12 +107,8 @@ function record(
 ): void {
   const found = sessions.forCall({ configurable });
   if (found.kind !== 'ok') return;
-  try {
-    found.log.append('user/message', {
-      message: toLoggedMessage(message),
-      source: { kind: 'plugin', plugin: name },
-    });
-  } catch {
-    // 訊息照樣送出。記不進去的後果是續接時重建不回來，不是這一輪少了這則訊息。
-  }
+  found.log.append('user/message', {
+    message: toLoggedMessage(message),
+    source: { kind: 'plugin', plugin: name },
+  });
 }

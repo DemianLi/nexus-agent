@@ -20,7 +20,7 @@
  * 1. 用 core 的 `effectiveMessages` 算出「模型看得到的那一串」交給 listener——摘要器的私有鍵 `_summarizationEvent` 留在宿主，
  *    插件不碰；
  * 2. 把 listener 回的內容建成 `HumanMessage`（`additional_kwargs` 先放 listener 給的、再蓋 `source`）；
- * 3. 經**這條 thread 自己的**會話註冊表記一筆 `user/message`，來源是 `{ kind: 'plugin', plugin: <名字> }`；記不進去訊息照送；
+ * 3. 經**這條 thread 自己的**會話註冊表記一筆 `user/message`，來源是 `{ kind: 'plugin', plugin: <名字> }`；記不進去原錯往外拋，這一輪失敗（#1665，照 dsh）；
  * 4. 回 `{ messages }`，由基座**追加**。
  *
  * 這跟 dsh 一致：dsh 的插件只把基線放進這一步的批次，由 agent loop 記成 `user/message`，插件不寫日誌

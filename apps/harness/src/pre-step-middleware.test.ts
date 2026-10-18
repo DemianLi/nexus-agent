@@ -12,7 +12,7 @@
 import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
 import type { PreStepInjection, PreStepInvocation, PreStepListener } from '@nexus/agent-loop';
-import { MESSAGE_SOURCE_KWARG } from '@nexus/core';
+import { MESSAGE_SOURCE_KWARG, SESSION_EVENT_MAX_DEPTH, SessionLog } from '@nexus/core';
 import type { SessionLookup } from '@nexus/core';
 import {
   AGENT_INSTRUCTIONS_MARKER,
@@ -30,7 +30,7 @@ interface Appended {
 }
 
 /** 一份會記下 `append` 的假日誌，與它被問到的設定。 */
-function fakeSessions(options: { kind?: SessionLookup['kind']; throwOnAppend?: boolean } = {}): {
+function fakeSessions(options: { kind?: SessionLookup['kind'] } = {}): {
   forCall(config: unknown): SessionLookup;
   asked: unknown[];
   appended: Appended[];
@@ -48,7 +48,6 @@ function fakeSessions(options: { kind?: SessionLookup['kind']; throwOnAppend?: b
         address: { kind: 'root' },
         log: {
           append: (type: string, data: unknown) => {
-            if (options.throwOnAppend === true) throw new Error('日誌壞了');
             appended.push({ type, data });
           },
         },
@@ -213,11 +212,35 @@ describe('宿主建的 middleware', () => {
       },
     );
 
-    it('日誌寫不進去（append 拋）：訊息照送', async () => {
-      const sessions = fakeSessions({ throwOnAppend: true });
-      const middleware = createPreStepMiddleware(NAME, injecting({ content: 'x' }), sessions);
+    /**
+     * #1665：照 dsh，注入的訊息寫不進去就是這一輪失敗，不吞（`agent.ts:427-436`）。用真的日誌、真的拒收：插件交來的記號巢狀
+     * 超過上限。
+     */
+    it('日誌拒收（插件的記號太深）：原錯往外拋，日誌上沒有這一則', async () => {
+      const log = new SessionLog('pre-step');
+      let deep: unknown = 'leaf';
+      for (let level = 0; level < SESSION_EVENT_MAX_DEPTH; level++) deep = [deep];
+      const middleware = createPreStepMiddleware(
+        NAME,
+        injecting({ content: 'x', additionalKwargs: { deep } }),
+        { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
+      );
+      await expect(hookOf(middleware)({ messages: [] }, { configurable: {} })).rejects.toThrow(
+        /^會話事件的 user\/message 的 data\.message\..* 是第 \d+ 層巢狀，超過上限 600 層$/,
+      );
+      expect(log.events).toEqual([]);
+    });
+
+    it('反例：收得下的記號照常記、照常送', async () => {
+      const log = new SessionLog('pre-step');
+      const middleware = createPreStepMiddleware(
+        NAME,
+        injecting({ content: 'x', additionalKwargs: { shallow: [1] } }),
+        { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
+      );
       const result = await hookOf(middleware)({ messages: [] }, { configurable: {} });
       expect(result?.messages).toHaveLength(1);
+      expect(log.events.map((event) => event.type)).toEqual(['user/message']);
     });
   });
 
