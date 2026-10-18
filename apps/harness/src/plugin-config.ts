@@ -186,7 +186,7 @@ export type ConfigEntry = z.infer<typeof entrySchema>;
  * plugin，而且把它從兩個插入點拿掉的突變量到 **126 條紅**。沒有條目，就沒有「關得掉」
  * 這個問題要擋。
  *
- * **名單上另外六列是只講設定的條目**——六列 `#settings/*`
+ * **名單上其餘的列是只講設定的條目**——`#settings/*` 那幾列，這裡不寫顆數
  * （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。理由跟核准閘門同形但不同源：
  * 它們**不裝任何東西**，所以「關掉」對它們沒有意義。名單擋的正是那個誤會。
  *
@@ -242,6 +242,13 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
     '這一列不裝任何東西，只講下行串流的心跳間隔與每條線的位元組上限。關掉它不會讓保護消失' +
       '——`startupSetting` 把關掉的那一列當成沒有那一列，兩個值於是回到 schema 的預設（2000 毫秒、2 MiB），' +
       '卡住的線照樣兩拍內被斷、積壓照樣超過上限就被收，只會讓這份設定讀起來像把保險絲拆了。要放寬，把數值調大。',
+  ],
+  [
+    '#settings/thread-capacity',
+    '這一列不裝任何東西，只講 serve 行程裡的 thread 數上限與閒置逐出的時間。關掉它不會讓上限或逐出消失' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，兩個值於是回到 schema 的預設（500 條、閒置 2 小時撤出），' +
+      '到了上限照樣拒收新 thread、閒置的照樣被撤，只會讓這份設定讀起來像把保險絲拆了。' +
+      '要放寬，把數值調大；要關掉閒置逐出，把 `idleEvictAfterMs` 設成 0。',
   ],
   [
     '#settings/tool-result-stash',

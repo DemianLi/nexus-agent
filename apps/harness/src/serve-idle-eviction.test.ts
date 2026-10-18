@@ -8,7 +8,7 @@
  * - **接線**：閒置夠久真的被撤（伺服器日誌有 `[閒置逐出]`），撤完 `plugin-snapshot.json` 不再列它握著的設定版本。
  * - **B 等價於重啟**：同一組操作（說一輪、`/permission read-only`），一邊撤掉再開、一邊重啟 serve 再開，開出來的歷史與權限模式一樣。
  * - **goal 撤掉再開 ＝ 重啟再開**（#1486）：目標從落盤的日誌折回來，授權不持久（`/goal` 看得到的狀態兩邊一樣）。
- * - **沒落盤就不逐出**，而且啟動日誌明說「已設但不生效」。
+ * - **沒落盤就不逐出**，而且啟動日誌明說「沒有落盤，不逐出」（#1619 起出廠就有 T，措辭不暗示管理者設錯了）。
  *
  * 輪詢間隔的下限是 1 秒，所以這一檔的每一條要等一兩秒。**零憑證、零外部連線**：模型是預設的假模型。
  */
@@ -163,7 +163,7 @@ describe('閒置逐出從 serve 組裝起（#1484）', () => {
     await until(() => evictedLine(lines, 'alpha'));
     const afterEviction = await observe(evictClient, 'alpha', evictHome.workspace);
 
-    // 重啟的那一邊：不設逐出，說完就收掉整台 serve，再起一台開同一條 thread。
+    // 重啟的那一邊：出廠的 2 小時（測試裡碰不到），說完就收掉整台 serve，再起一台開同一條 thread。
     const restartHome = home();
     const first = await start(restartHome, []);
     await setup(await serveClient(first), 'alpha');
@@ -208,7 +208,7 @@ describe('閒置逐出從 serve 組裝起（#1484）', () => {
     await until(() => evictedLine(lines, 'alpha'));
     const afterEviction = await goalText(evictClient, 'alpha');
 
-    // 重啟的那一邊：不設逐出，說完就收掉整台 serve，再起一台開同一條 thread。
+    // 重啟的那一邊：出廠的 2 小時（測試裡碰不到），說完就收掉整台 serve，再起一台開同一條 thread。
     const restartHome = home();
     const first = await start(restartHome, []);
     await goalSetup(await serveClient(first), 'alpha');
@@ -222,12 +222,20 @@ describe('閒置逐出從 serve 組裝起（#1484）', () => {
     expect(afterEviction).toBe(afterRestart);
   });
 
-  it('沒落盤：設了 idleEvictAfterMs 也不逐出，啟動日誌明說不生效', async () => {
+  it('沒落盤（#1619 驗收 E）：出廠值的部署，啟動日誌說「沒有落盤，不逐出」，不暗示設錯了', async () => {
+    const lines: string[] = [];
+    await start(home('- id: session-persistence\n  disabled: true\n'), lines);
+    expect(lines.filter((line) => line.startsWith('thread 閒置逐出：'))).toEqual([
+      'thread 閒置逐出：沒有落盤，不逐出（會話日誌只在記憶體裡，撤掉的 thread 回不來）',
+    ]);
+  });
+
+  it('沒落盤：設了很短的 idleEvictAfterMs 也不逐出，啟動日誌同一句', async () => {
     const h = home(`${EVICT_PATCH}- id: session-persistence\n  disabled: true\n`);
     const lines: string[] = [];
     const server = await start(h, lines);
     expect(lines.filter((line) => line.startsWith('thread 閒置逐出：'))).toEqual([
-      expect.stringContaining('沒有開會話日誌'),
+      'thread 閒置逐出：沒有落盤，不逐出（會話日誌只在記憶體裡，撤掉的 thread 回不來）',
     ]);
     const client = await serveClient(server);
     // 下行要真的斷：`events.return()` 只放掉 reader、不關連線，訂閱者還掛著的話這條 thread 本來就不會被撤，測試就是空的。

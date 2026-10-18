@@ -24,8 +24,8 @@
  *
  * ## 這一列關不掉
  *
- * 跟 `thread-capacity` 相反：它預設「不限」，所以關掉＝回預設＝不限，字面與行為一致；這一列預設是**開著**，`startupSetting` 把關掉的
- * 列當成沒有那一列、值回到 schema 的預設，也就是**保護還在**——讀起來卻像把保險絲拆了。所以它在 `PROTECTED_ENTRY_NAMES` 上，寫
+ * 這一列預設是**開著**，`startupSetting` 把關掉的列當成沒有那一列、值回到 schema 的預設，也就是**保護還在**——讀起來卻像把保險絲拆了。
+ * （`thread-capacity` 自 #1619 起出廠也開著，照這一列的前例同樣關不掉。）所以它在 `PROTECTED_ENTRY_NAMES` 上，寫
  * `disabled: true` 在啟動當場拋錯（dsh 的三項保護也都沒有關閉開關）。**要放寬，把數值調大**。理由見 `plugin-config.ts`。
  *
  * @module

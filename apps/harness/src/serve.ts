@@ -626,7 +626,7 @@ async function startServer(
   const threadSearchMounted = startupEntryMounted(plugins, threadSearchPlugin);
   const threadSearchConfig = startupSetting(plugins, threadSearchPlugin);
   // thread 數上限（#1476，保險絲第 2 級）。**server 的性質**：`threads` 表一台伺服器一張，檢查在 `createWireHandler` 的
-  // `threadFor` 裡，所以值在這裡解、往下傳一份。不寫就不限。
+  // `threadFor` 裡，所以值在這裡解、往下傳一份。出廠開著、關不掉（#1619，`settings/thread-capacity.ts`）。
   const threadCapacity = startupSetting(plugins, threadCapacityPlugin);
   // 下行串流的心跳間隔與每條線的位元組上限（#1504）。**兩個消費點在兩處**：心跳間隔交給 `startWireServer`（socket 那一層），位元組上限交給
   // `createWireHandler`（訂閱者佇列）。預設開、關不掉（`plugin-config.ts` 的 `PROTECTED_ENTRY_REASONS`）。
@@ -829,8 +829,13 @@ async function startServer(
           warn: serverLog,
         });
 
-  // 閒置逐出（#1484）：沒有 `sessionStore` 就是沒落盤，撤掉的 thread 回不來，所以一律不逐出（下面啟動那一段會說）。
-  const idleEvictMs = sessionStore === undefined ? undefined : threadCapacity.idleEvictAfterMs;
+  // 閒置逐出（#1484）：沒有 `sessionStore` 就是沒落盤，撤掉的 thread 回不來，所以一律不逐出；設成 0 是管理者關掉逐出（#1619，
+  // 照 dsh `unattendedTimeoutMs` 的 0）。兩種都不把 T 傳下去——handler 收到 0 會把每條閒著的 thread 在下一次掃描就撤掉。
+  // 下面啟動那一段會講是哪一種。
+  const idleEvictMs =
+    sessionStore === undefined || threadCapacity.idleEvictAfterMs === 0
+      ? undefined
+      : threadCapacity.idleEvictAfterMs;
 
   const handler = createWireHandler({
     auth,
@@ -841,9 +846,9 @@ async function startServer(
     threadTitleLimits: threadTitle,
     projectionFlushMs: projectionFlush.flushMs,
     downlinkMaxBytes: downlink.maxQueuedBytes,
-    ...(threadCapacity.maxThreads === undefined ? {} : { maxThreads: threadCapacity.maxThreads }),
-    // 閒置逐出（#1484，保險絲第 1 級）：**只有落盤開著才傳**。沒有落盤的日誌只在記憶體裡，撤掉就沒了；設了卻不生效，啟動時
-    // 印一行說忽略（下面「thread 上限」那一段）。撤完重寫 `plugin-snapshot.json`：放掉 live 綁定只動記憶體，檔要這裡補。
+    maxThreads: threadCapacity.maxThreads,
+    // 閒置逐出（#1484，保險絲第 1 級）：**只有落盤開著、而且不是 0 才傳**。沒有落盤的日誌只在記憶體裡，撤掉就沒了；啟動時
+    // 印一行講是哪一種（下面「thread 上限」那一段）。撤完重寫 `plugin-snapshot.json`：放掉 live 綁定只動記憶體，檔要這裡補。
     ...(idleEvictMs === undefined
       ? {}
       : {
@@ -1223,13 +1228,11 @@ async function startServer(
   // 同一條規矩底下的另一行：**這一輪結束之後還會不會有下一輪**。這台 server 上它是
   // per-thread 的行為，但旗標是整個 process 的，所以講在這裡。
   log(formatGoalDriverDisclosure(invocation.goalDriver, undefined, 'serve'));
-  // 上限講出來（#1476）：管理者設了卻沒生效、或以為設了其實沒設，看這一行就知道。不設就印「不限」。
+  // 上限講出來（#1476）：一律印數字（#1619 起出廠就有值），管理者從這一行分得出出廠值和自己改過的值。
   log(
-    threadCapacity.maxThreads === undefined
-      ? 'thread 上限：不限'
-      : `thread 上限：${String(threadCapacity.maxThreads)}（到了拒收新 thread，${
-          idleEvictMs === undefined ? '要重啟 serve 才釋放' : '閒置的 thread 被撤掉才釋放名額'
-        }）`,
+    `thread 上限：${String(threadCapacity.maxThreads)}（到了拒收新 thread，${
+      idleEvictMs === undefined ? '要重啟 serve 才釋放' : '閒置的 thread 被撤掉才釋放名額'
+    }）`,
   );
   // 模型請求並行上限講出來（#1505）：不設就印「不限」。沒連真實供應商（假模型）時閘不會被用到，也照實講出設定值。
   log(
@@ -1237,14 +1240,15 @@ async function startServer(
       ? '模型請求並行上限：不限'
       : `模型請求並行上限：${String(requestGate.maxConcurrent)}（整台 serve 共用；名額滿了排隊，等超過 ${String(liveModel.maxWaitMs)} 毫秒以 LOCAL_CAPACITY 失敗、不重試）`,
   );
-  // 閒置逐出講出來（#1484）：設了卻沒生效（沒落盤）要看得到，不靜靜吞掉。
-  if (threadCapacity.idleEvictAfterMs !== undefined) {
-    log(
-      idleEvictMs === undefined
-        ? `thread 閒置逐出：已設 ${String(threadCapacity.idleEvictAfterMs)} 毫秒，但沒有開會話日誌（落盤），撤掉的 thread 回不來，所以不逐出`
+  // 閒置逐出講出來（#1484）：一律印一行，三種之一（#1619）。設成 0 先講——那是管理者明著關的，有沒有落盤都一樣不逐出。
+  // 沒落盤那一句是中性的：出廠就有 T，沒落盤的部署每次啟動都會印它，不是管理者設錯了什麼。
+  log(
+    threadCapacity.idleEvictAfterMs === 0
+      ? 'thread 閒置逐出：idleEvictAfterMs 是 0，不逐出'
+      : idleEvictMs === undefined
+        ? 'thread 閒置逐出：沒有落盤，不逐出（會話日誌只在記憶體裡，撤掉的 thread 回不來）'
         : `thread 閒置逐出：閒置 ${String(idleEvictMs)} 毫秒後撤出記憶體（日誌在磁碟上，再開這條 thread 會照重啟後的路徑重組）`,
-    );
-  }
+  );
   for (const line of formatTracingDisclosure(readTracingDisclosure(env))) {
     log(line);
   }
