@@ -2,6 +2,7 @@
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
+import ts from 'typescript';
 import { resolveConfig } from 'vite';
 import { describe, expect, it } from 'vitest';
 
@@ -49,10 +50,31 @@ describe('裸的 cn 解析到 lib/utils.ts（#1523）', () => {
   });
 
   it('tsconfig 的 paths：cn 精確指到同一個檔，沒有 cn/* 萬用', () => {
-    const tsconfig = JSON.parse(
-      readFileSync(new URL('../tsconfig.json', import.meta.url), 'utf8'),
-    ) as { compilerOptions: { paths: Record<string, string[]> } };
-    expect(tsconfig.compilerOptions.paths.cn).toEqual(['./src/lib/utils.ts']);
-    expect(Object.keys(tsconfig.compilerOptions.paths)).not.toContain('cn/*');
+    const { paths } = readTsconfig().compilerOptions;
+    expect(paths.cn).toEqual(['./src/lib/utils.ts']);
+    expect(Object.keys(paths)).not.toContain('cn/*');
+  });
+});
+
+/**
+ * tsconfig 帶 JSON 註解（#1633）：`paths` 裡 `@nexus/*` 那一段由 #1502 的產生器寫，前後各一行 `// BEGIN`／`// END` 標記。
+ * `JSON.parse` 遇到註解會丟錯，讀這個檔一律走 TypeScript 自己的 `parseConfigFileTextToJson`。
+ */
+function readTsconfig(): { compilerOptions: { paths: Record<string, string[]> } } {
+  const text = readFileSync(new URL('../tsconfig.json', import.meta.url), 'utf8');
+  const { config, error } = ts.parseConfigFileTextToJson('tsconfig.json', text);
+  if (error !== undefined)
+    throw new Error(ts.flattenDiagnosticMessageText(error.messageText, '\n'));
+  return config as { compilerOptions: { paths: Record<string, string[]> } };
+}
+
+describe('tsconfig 的 @nexus paths（#1633）', () => {
+  it('產生器的標記是註解，照樣讀得出來；套件解析到各自的 src', () => {
+    const text = readFileSync(new URL('../tsconfig.json', import.meta.url), 'utf8');
+    expect(text).toContain('// BEGIN generated package aliases');
+    expect(text).toContain('// END generated package aliases');
+    const { paths } = readTsconfig().compilerOptions;
+    expect(paths['@nexus/wire']).toEqual(['../../packages/nexus-wire/src/index.ts']);
+    expect(Object.keys(paths).filter((key) => key.startsWith('@nexus/'))).toHaveLength(63);
   });
 });
