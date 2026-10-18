@@ -940,6 +940,11 @@ interface Overlay {
 }
 
 const SCROLL_BUTTON = '[data-slot="message-scroller-button"]';
+const QUESTIONNAIRE_CHOICE = '[data-slot="questionnaire-choice"]';
+const QUESTIONNAIRE_INPUT = `${QUESTIONNAIRE_CHOICE} > input`;
+/** 放不下的那一排草稿附件裡每一顆按鈕：看原圖（縮圖）、移除、取消上傳。 */
+const ATTACHMENT_BUTTONS =
+  '[data-guard-rail="overflows"] :is([data-slot="attachment-action"], [data-slot="attachment-media"] > button)';
 
 /** 把對話區捲到頂端或最底，等捲到最新的按鈕換好狀態、動效跑完。 */
 async function scrollMessages(page: Page, to: 'top' | 'end'): Promise<void> {
@@ -1082,6 +1087,58 @@ const OVERLAYS: Overlay[] = [
     },
     texts: ['user-bubble', 'ai-bubble', 'message-footer', 'scroll-button-0'],
     focus: ['scroll-button-0'],
+    surfaces: [],
+    backdrops: [],
+  },
+  {
+    name: 'questionnaire',
+    marks: {
+      // 真的 input 鋪滿選項、`opacity-0`，外框畫在選項上（本地修改第 46 條）：聚焦 input、量選項。
+      [QUESTIONNAIRE_INPUT]: { 'data-guard-focus': 'questionnaire-choice' },
+      [QUESTIONNAIRE_CHOICE]: { 'data-guard-outline-host': '' },
+      '[data-slot="questionnaire-progress"]': { 'data-guard-text': 'questionnaire-progress' },
+      '[data-slot="questionnaire-title"]': { 'data-guard-text': 'questionnaire-title' },
+      '[data-slot="questionnaire-choice-label"]': { 'data-guard-text': 'questionnaire-choice' },
+      '[data-slot="questionnaire-choice-description"]': {
+        'data-guard-text': 'questionnaire-choice-description',
+      },
+      '[data-slot="questionnaire-next"]': {
+        'data-guard-text': 'questionnaire-next',
+        'data-guard-focus': 'questionnaire-next',
+      },
+    },
+    texts: [
+      'questionnaire-progress',
+      'questionnaire-title',
+      'questionnaire-choice',
+      'questionnaire-choice-description',
+      'questionnaire-next',
+    ],
+    focus: [
+      'questionnaire-choice-0',
+      'questionnaire-choice-1',
+      'questionnaire-choice-2',
+      'questionnaire-next-0',
+    ],
+    surfaces: [],
+    backdrops: [],
+  },
+  {
+    name: 'attachments',
+    marks: {
+      // 上傳中的標題是 shimmer（字是透明的、顏色來自漸層），讀 `color` 會量到完整字色、假綠：這裡不量，另一格量漸層每個色標。
+      '[data-guard-rail] [data-slot="attachment"]:not([data-state="uploading"]) [data-slot="attachment-title"]':
+        { 'data-guard-text': 'attachment-title' },
+      '[data-guard-rail] [data-slot="attachment"]:not([data-state="error"]) [data-slot="attachment-description"]':
+        { 'data-guard-text': 'attachment-description' },
+      '[data-slot="attachment"][data-state="error"] [data-slot="attachment-description"]': {
+        'data-guard-text': 'attachment-error',
+      },
+      [ATTACHMENT_BUTTONS]: { 'data-guard-focus': 'attachment-button' },
+    },
+    texts: ['attachment-title', 'attachment-description', 'attachment-error'],
+    // 圖的看原圖與移除、檔案的移除、取消上傳（有進度）、取消上傳（不確定長度）、移除（失敗的）。
+    focus: [0, 1, 2, 3, 4, 5].map((i) => `attachment-button-${i}`),
     surfaces: [],
     backdrops: [],
   },
@@ -2173,4 +2230,208 @@ describe('瀏覽器量對話區（#1638 PR B，`?overlay=messages`）', () => {
       }
     },
   );
+});
+
+describe.each(['light', 'dark'] as const)('瀏覽器量問答與附件（#1638 PR C）：%s', (theme) => {
+  test('問答選項聚焦：外框 2px、offset 2px 畫在選項上（本地修改第 46 條；外框顏色、box-shadow 不變由上面的浮層那組量）', async () => {
+    const page = await openOverlay('questionnaire', theme, {
+      marks: { [QUESTIONNAIRE_INPUT]: {} },
+    });
+    try {
+      await page.keyboard.press('Tab');
+      const input = page.locator(QUESTIONNAIRE_INPUT).first();
+      await input.focus();
+      await settle(page);
+      const sample = await input.evaluate((el) => {
+        const host = getComputedStyle(el.parentElement!);
+        return {
+          focusVisible: el.matches(':focus-visible'),
+          hostSlot: el.parentElement!.getAttribute('data-slot'),
+          outline: `${host.outlineStyle} ${host.outlineWidth}`,
+          offset: host.outlineOffset,
+        };
+      });
+      report[`questionnaire:${theme}:choice-outline`] = sample;
+      expect(sample).toEqual({
+        focusVisible: true,
+        hostSlot: 'questionnaire-choice',
+        outline: 'solid 2px',
+        offset: '2px',
+      });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('附件的按鈕不管鍵盤或滑鼠聚焦，外殼都不出 ring（vendor 的 `focus-within:ring-1` 被 SG 的玻璃規則蓋掉；偏離 Q7 字面、PM 同意）', async () => {
+    const page = await openOverlay('attachments', theme, { marks: { [ATTACHMENT_BUTTONS]: {} } });
+    try {
+      const buttons = page.locator(ATTACHMENT_BUTTONS);
+      const count = await buttons.count();
+      const read = (i: number) =>
+        buttons.nth(i).evaluate((el) => {
+          const shell = el.closest('[data-slot="attachment"]')!;
+          return {
+            name: el.getAttribute('aria-label') ?? '',
+            shadow: getComputedStyle(shell).boxShadow,
+            focusWithin: shell.matches(':focus-within'),
+            focusVisible: el.matches(':focus-visible'),
+          };
+        });
+      const samples = [];
+      for (let i = 0; i < count; i++) {
+        const button = buttons.nth(i);
+        await button.evaluate((el) => (el as HTMLElement).blur());
+        await page.mouse.move(0, 0);
+        await settle(page);
+        const rest = await read(i);
+        await page.keyboard.press('Shift');
+        await button.focus();
+        await settle(page);
+        const keyboard = await read(i);
+        await button.evaluate((el) => (el as HTMLElement).blur());
+        // 滑鼠：按下就聚焦；移開再放開，不觸發 click（看原圖會開 modal）。
+        await button.hover({ force: true });
+        await page.mouse.down();
+        await settle(page);
+        const mouse = await read(i);
+        await page.mouse.move(0, 0);
+        await page.mouse.up();
+        samples.push({ name: rest.name, rest, keyboard, mouse });
+      }
+      report[`attachments:${theme}:shell-ring`] = samples;
+      // 量具自檢：六顆都量到，鍵盤那次是 :focus-visible、滑鼠那次不是，兩次外殼都是 :focus-within。
+      expect(samples).toHaveLength(6);
+      expect(
+        samples.filter(
+          (s) =>
+            !s.keyboard.focusVisible ||
+            s.mouse.focusVisible ||
+            !s.keyboard.focusWithin ||
+            !s.mouse.focusWithin,
+        ),
+      ).toEqual([]);
+      expect(
+        samples
+          .filter(
+            (s) =>
+              !sameShadow(s.rest.shadow, s.keyboard.shadow) ||
+              !sameShadow(s.rest.shadow, s.mouse.shadow),
+          )
+          .map((s) => `${s.name}：${s.rest.shadow} → ${s.keyboard.shadow}／${s.mouse.shadow}`),
+      ).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('一排附件左右淡出：放得下時兩邊都不淡；放不下時捲在頭只淡尾、捲到尾只淡頭（Q8 照 SG；退路見本地修改第 47 條）', async () => {
+    const page = await openOverlay('attachments', theme, { marks: { '[data-guard-rail]': {} } });
+    try {
+      const fade = (rail: string, to: 'start' | 'end') =>
+        page.$eval(
+          `[data-guard-rail="${rail}"] [data-slot="attachment-group"]`,
+          async (el, end) => {
+            const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+            el.scrollLeft = end ? el.scrollWidth : 0;
+            for (let i = 0; i < 10; i++) await frame();
+            // 計算值是 `calc(…)` 字串，放進一個跟它一樣寬的盒子裡解成像素。
+            const style = getComputedStyle(el);
+            const box = document.createElement('div');
+            box.style.cssText = `position:absolute;visibility:hidden;width:${el.clientWidth}px`;
+            const probe = document.createElement('div');
+            box.append(probe);
+            document.body.append(box);
+            const px = (value: string) => {
+              probe.style.width = value;
+              return probe.getBoundingClientRect().width;
+            };
+            const result = {
+              overflows: el.scrollWidth > el.clientWidth,
+              start: px(style.getPropertyValue('--scroll-fade-s')),
+              end: px(style.getPropertyValue('--scroll-fade-e')),
+            };
+            box.remove();
+            return result;
+          },
+          to === 'end',
+        );
+      const fits = await fade('fits', 'start');
+      const head = await fade('overflows', 'start');
+      const tail = await fade('overflows', 'end');
+      report[`attachments:${theme}:scroll-fade`] = { fits, head, tail };
+      expect(fits).toEqual({ overflows: false, start: 0, end: 0 });
+      expect(head).toMatchObject({ overflows: true, start: 0 });
+      expect(head.end).toBeGreaterThan(0);
+      expect(tail).toMatchObject({ overflows: true, end: 0 });
+      expect(tail.start).toBeGreaterThan(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('上傳中的標題 shimmer：漸層每個色標對底色都過 4.5（亮色由本地修改第 48 條換掉亮面）', async () => {
+    const page = await openOverlay('attachments', theme, {
+      marks: { '[data-slot="attachment"][data-state="uploading"]': {} },
+    });
+    try {
+      const titles = await page.$$eval(
+        '[data-slot="attachment"][data-state="uploading"] [data-slot="attachment-title"]',
+        (els) =>
+          els.map((el) => {
+            const own = getComputedStyle(el);
+            // 漸層畫在標題自己身上、只透過字露出來：底色從上一層開始疊；自己那層只帶 opacity。
+            const chain = [
+              {
+                backgroundColor: 'rgba(0, 0, 0, 0)',
+                backgroundImage: 'none',
+                opacity: own.opacity,
+              },
+            ];
+            for (let node = el.parentElement; node !== null; node = node.parentElement) {
+              const style = getComputedStyle(node);
+              chain.push({
+                backgroundColor: style.backgroundColor,
+                backgroundImage: style.backgroundImage,
+                opacity: style.opacity,
+              });
+            }
+            return {
+              name: el.textContent ?? '',
+              fill: own.webkitTextFillColor,
+              animation: own.animationName,
+              image: own.backgroundImage,
+              chain,
+            };
+          }),
+      );
+      const measured = titles.map((t) => {
+        const stops = [...t.image.matchAll(/(?:oklch|oklab|rgba?)\([^)]*\)/g)].map((m) => m[0]);
+        const ratios = stops.map((stop) => ({ stop, ...worstOn(stop, t.chain) }));
+        const worst = ratios.reduce((a, b) => (b.ratio < a.ratio ? b : a));
+        return {
+          name: t.name,
+          fill: t.fill,
+          animation: t.animation,
+          stops: ratios.map((r) => `${r.stop} ${round(r.ratio)}`),
+          worst: round(worst.ratio),
+          on: worst.on,
+        };
+      });
+      report[`attachments:${theme}:shimmer`] = measured;
+      // 量具自檢：兩張上傳中的卡都量到，字真的是透明的、顏色來自五個色標的漸層、動畫在跑。
+      expect(measured.map((m) => m.name)).toEqual(['上傳中.csv', '不知道大小.txt']);
+      for (const m of measured) {
+        expect(m).toMatchObject({ fill: 'rgba(0, 0, 0, 0)', animation: 'tw-shimmer' });
+        expect(m.stops).toHaveLength(5);
+      }
+      expect(
+        measured
+          .filter((m) => !(m.worst >= TEXT_MIN))
+          .map((m) => `${m.name} ${m.worst}（${m.on}）`),
+      ).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  });
 });

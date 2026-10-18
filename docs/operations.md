@@ -310,6 +310,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **搜尋結果看筆數、不看字數**：`grep` 命中超過 `tool-fs-search` 那一列的 `grepMaxMatches`（出貨 250）、`glob` 或 `ls` 超過 `globMaxResults`（出貨 100）時，模型只收到前段，結尾一句帶路徑的定位（`Full grep result stored at: …`），完整結果存進上面那個暫存目錄，用 `read_file` 照路徑讀。`grep` 只管逐行命中（`content`）那種輸出，`count`／`files_with_matches` 照原樣。暫存目錄寫不進去、或沒有會話日誌時照樣只留前段，結尾改講沒存到，搜尋不算失敗。把那一列標成 `disabled: true` 就回到基座原樣：超過 80,000 字元由工具自己截掉，原文不留。
 
+**`grep` 用的 ripgrep 是產物內附的，不看主機的 `PATH`**（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 4）：`@vscode/ripgrep` 的平台套件隨 `pnpm install` 與 release tarball 一起來，主機有沒有裝 rg、是哪個版本都無關，完全內網的主機也不必另外裝。啟動時 serve 會印一行 `搜尋（grep）：內附 ripgrep <路徑>`；印的是「不可用」就是產物壞了（平台套件被刪、或 rg 沒有執行權限），這時每一次 `grep` 都會以 `SEARCH_FAILED` 失敗，**沒有退路**，重新安裝即可。rg 以 `--no-config` 啟動，`~/.ripgreprc` 與 `RIPGREP_CONFIG_PATH` 影響不到搜尋。
+
 **接得回來要站在同一個地方**，兩道守衛，兩個入口都擋：
 
 - **同一個目錄。** 一份會話記著它建立當下的工作目錄，接不回別的目錄；**沒記的也拒**，不猜。
@@ -444,7 +446,7 @@ refs:
 ## 經代理連外
 
 模型請求與走 HTTP 的 MCP server 會經標準代理環境變數指定的代理發出（[#746](https://github.com/DemianLi/nexus-agent/issues/746)）。
-啟動時讀一次，不需要別的設定；做法與限制照 dsh 的 `docs/user/guide/network-proxy.zh.md`。Node 要 22.19 以上（`package.json` 的 `engines`）。
+啟動時讀一次，不需要別的設定；做法與限制照 dsh 的 `docs/user/guide/network-proxy.zh.md`。Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準。
 
 ```bash
 export HTTPS_PROXY=http://127.0.0.1:7890
@@ -471,7 +473,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 ## 用 systemd 常駐
 
 [#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5。對象是 Release 打出來的 `nexus-agent-<版本>-linux-x64.tar.gz`（解開即用，目標機不用裝 pnpm、不用連 registry），
-Node 要 22.19 以上。
+Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準。
 
 ```bash
 sudo useradd --system --home-dir /var/lib/nexus-agent --shell /usr/sbin/nologin nexus-agent
