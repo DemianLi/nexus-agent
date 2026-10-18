@@ -2,6 +2,7 @@ import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
 import { defineConfig } from 'vite';
 import type { Plugin } from 'vite';
+import tsconfigPaths from 'vite-tsconfig-paths';
 
 import { RESOLVE_ALIAS } from './resolve-alias';
 
@@ -32,6 +33,12 @@ function rejectStandaloneServe(): Plugin {
 }
 
 export default defineConfig({
-  plugins: [rejectStandaloneServe(), react(), tailwindcss()],
+  // `@nexus/*` 經根 `tsconfig.base.json` 的 paths 解析到 `src`，為什麼讀根 base 見 `vitest.config.ts` 同一行（#1633）。
+  plugins: [
+    rejectStandaloneServe(),
+    react(),
+    tailwindcss(),
+    tsconfigPaths({ projects: ['../../tsconfig.base.json'] }),
+  ],
   resolve: { alias: RESOLVE_ALIAS },
 });
