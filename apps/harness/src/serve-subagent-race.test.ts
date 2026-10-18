@@ -2,10 +2,11 @@
  * 子代理的會話閘，第二次核對（[#1544](https://github.com/DemianLi/nexus-agent/issues/1544) 驗收 3）。
  *
  * 第一道（冷讀 header、在續接之前）擋住絕大多數；它和續接之間還有一道窄縫——檔案在冷讀之後、拿到寫租約之前被換掉。
- * 對應 dsh 組裝後的第二次核對（`session-controller/src/agent.ts:437-439`）。這一檔用一個假的存放處重現那道縫：
+ * 對應 dsh 續接之後的核對（`session-controller/src/agent.ts:231-234`）。這一檔用一個假的存放處重現那道縫：
  * `open(…, 'read')` 回「沒有 `parentSession`」，`resume` 回「有」。斷言：丟 `SubagentSessionError`（線上是
  * `thread_is_subagent`），**而且續接拿到的寫把手被關掉了**（租約放了，不然下一次請求撞上自己留下的租約）。
- * 拿掉第二次核對就紅：請求會往下組裝、回成功。
+ * 拿掉第二次核對就紅：請求會往下組裝、回成功（header 帶了 `cwd`，所以不會先被 `assertSameCwd` 擋成別的錯）。
+ * 注意這道縫撞上時，日誌在被拒絕之前已經被續接動過（補結已寫回）——只有第一道（冷讀）做得到一個位元組都不動。
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
@@ -89,6 +90,8 @@ describe('冷讀與續接之間檔案被換掉：第二次核對', () => {
         version: SESSION_LOG_FORMAT_VERSION,
         id: 'alpha/bg-0123456789ab',
         createdAt: 1,
+        // 真的子代理 header 有 cwd（`session-persistence.ts`）；少了它，拿掉第二次核對後會被 `assertSameCwd` 先擋下，測到的就不是核對。
+        cwd: process.cwd(),
         parentSession: 'alpha',
       }),
     );

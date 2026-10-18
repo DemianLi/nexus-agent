@@ -12,7 +12,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
+import { appendFile, mkdtemp, readFile, readdir, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -132,6 +132,19 @@ const digest = async (subagent: RealSubagent) => ({
   entries: (await readdir(subagent.directory)).filter((name) => !name.endsWith('.lock')).sort(),
 });
 
+/**
+ * 讓子代理的日誌停在「當掉的一輪」（`turn/start` 沒有收尾）。續接會先把補結寫回檔上（#721），所以「先 resume 再拒」會讓本文 sha1 變掉——
+ * 這是「碰日誌之前就拒絕」唯一量得到的地方。
+ */
+async function leaveInterruptedTurn(subagent: RealSubagent): Promise<void> {
+  const lines = (await readFile(subagent.body, 'utf8')).trimEnd().split('\n');
+  const last = JSON.parse(lines.at(-1)!) as { seq: number };
+  await appendFile(
+    subagent.body,
+    `${JSON.stringify({ type: 'turn/start', seq: last.seq + 1, time: Date.now(), data: { kind: 'message', text: '當掉的一輪' } })}\n`,
+  );
+}
+
 /** 一次嘗試丟出來的錯（沒丟就是 `undefined`）。 */
 async function rejection(attempt: () => Promise<unknown>): Promise<unknown> {
   return attempt().then(
@@ -152,6 +165,7 @@ describe('子代理的會話不是 thread（#1544 驗收 1、2）', () => {
     const subagent = await dispatchRealSubagent();
     await serve?.close();
     serve = undefined;
+    await leaveInterruptedTurn(subagent);
     const before = await digest(subagent);
 
     const second = await start(subagent.root, PLAIN_TURNS);
