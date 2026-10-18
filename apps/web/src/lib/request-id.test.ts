@@ -3,8 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { mayHaveArrived, newRequestId, requestIdFor } from '@/lib/request-id';
 import type { PendingRequest, Sentence } from '@/lib/request-id';
-
-const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/u;
+import { stubInsecureCrypto, UUID_V4 } from '@/test/insecure-crypto';
 
 const sentence = (overrides: Partial<Sentence> = {}): Sentence => ({
   text: '一句話',
@@ -32,7 +31,7 @@ describe('newRequestId', () => {
   });
 
   it('沒有 crypto.randomUUID（非安全環境的 http:// 頁面）照樣產得出來', () => {
-    vi.stubGlobal('crypto', { getRandomValues: crypto.getRandomValues.bind(crypto) });
+    stubInsecureCrypto();
     expect(newRequestId()).toMatch(UUID_V4);
   });
 });

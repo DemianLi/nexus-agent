@@ -18,8 +18,10 @@
  *
  * - `sampleOverCapGlobResults`：dsh 是必填，base 出廠給 `false`（留按順序的前段）。這裡只做 `false` 那一種，不開這一格——
  *   開了卻只認一個值，等於寫一個改不動的開關。
- * - `grepMaxLineBytes`、`searchMetaMaxBytes`、`rawOutputMaxBytes`、`graceMs`、`stderrMaxBytes`、`timeoutMs`：管的是 dsh
- *   自己的 ripgrep 子行程與輸出，基座的工具沒有對應的東西，不在 #735 的範圍。
+ * - `grepMaxLineBytes`、`searchMetaMaxBytes`：管的是 dsh 自己的輸出形狀，基座的工具沒有對應的東西，不在 #735 的範圍。
+ * - `rawOutputMaxBytes`、`graceMs`、`stderrMaxBytes`、`timeoutMs`：[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)
+ *   之後有對應的東西了——`grep` 自己起 rg（`ripgrep-runner.ts`），這四個值照 dsh 的預設實作成常數
+ *   （20,000,000 位元組、3 秒、64 KiB、30 秒），**未開成設定欄位**：#735 的設定列管的是筆數，要不要開這四格是另一個決定。
  *
  * @module
  */

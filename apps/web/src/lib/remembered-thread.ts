@@ -17,6 +17,8 @@
  * @module
  */
 
+import { randomUuid } from '@/lib/uuid';
+
 /** 存在哪個鍵。 */
 export const REMEMBERED_THREAD_KEY = 'nexus.threads.current';
 
@@ -70,7 +72,7 @@ function recalled(): string | undefined {
 export function recallThread(): ThreadChoice {
   const threadId = recalled();
   return threadId === undefined
-    ? { threadId: crypto.randomUUID(), origin: 'fresh' }
+    ? { threadId: randomUuid(), origin: 'fresh' }
     : { threadId, origin: 'recalled' };
 }
 
