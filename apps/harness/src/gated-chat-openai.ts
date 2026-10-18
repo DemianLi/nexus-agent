@@ -25,6 +25,7 @@
  *
  * 釋放只有一個冪等的函式，三個觸發點：那一次呼叫結束的 `finally`（成功、失敗、串流的消費者 `break` 時呼叫 `return()`）、
  * 以及**這一輪的中止訊號舉起來的那一刻**（消費者在中止時不一定會呼叫 `return()`，見 `#enter`）。串流方法的名額到 `yield*` 結束才還。
+ * 消費者提早結束時，`stream()` 先舉起那顆訊號（見那個方法）：不然 `return()` 排在還沒到的下一段後面，連線也沒關（#1546）。
  *
  * ## `withConfig` 也要覆寫
  *
@@ -123,6 +124,53 @@ export class GatedChatOpenAI extends ChatOpenAI {
     } finally {
       release();
     }
+  }
+
+  /**
+   * 消費者提早結束（`break` 觸發 `return()`，或呼叫 `throw()`）時**先中止底下的請求**，名額與連線一起收
+   * （[#1546](https://github.com/DemianLi/nexus-agent/issues/1546) 換主版本 Node 24 時出現）。
+   *
+   * 照 dsh `packages/llm/llm-deepseek/src/adapter.ts:65-89`（`687f282e`）：一顆 `consumer` 訊號跟呼叫端的 `signal` 合併，消費者停下就
+   * `abort()`；原本的收尾不等，因為它排在還沒到的那一段後面。
+   *
+   * **偏離 dsh，理由 1（基座表達不出來）**：dsh 在生成器的 `finally` 裡 abort，消費者的 `return()` 直接打到那顆生成器。這裡中間隔著
+   * `@langchain/core` 1.2.9 的 `IterableReadableStream`（`dist/utils/stream.js:38-43`、`:86-96`）：它的 `pull` 會先去要下一段，
+   * `return()` 經 `reader.cancel()` 走到 `generator.return()`，排在那次 `next()` 後面——下一段到之前，我們生成器的 `finally` 跑不到。
+   * 所以 abort 改掛在 `stream()` 交出去的那顆物件上。實測（假端點握住第二段不放）：沒有這一層時，Node 22.19 的 `break` 2 ms 回來、
+   * 連線 8 ms 關；**Node 24.21 的 `break` 一直等到下一段到才回來，連線不關、名額跟著卡住**。有這一層，兩版都是 1–2 ms 回來、連線隨即關掉。
+   *
+   * 撤除條件：`IterableReadableStream` 的 `return()` 不再排在預先拉的那次 `next()` 後面（拿掉這個方法，24 上
+   * `gated-chat-openai.test.ts` 的 break／throw 兩格照樣綠），或基座直接把消費者的 `return()` 打到模型的生成器上。
+   *
+   * 中止之後，名額由 {@link #enter} 掛在訊號上的監聽當下還；連線由 SDK 收到訊號後關掉。
+   *
+   * 不包 `cancel()`：還沒讀就取消時 `pull` 沒有卡在下一段，基座自己收得乾淨（24.21 實測，拿掉包裝也綠）；讀過再取消會先撞上
+   * 讀取鎖，走不到這裡。
+   */
+  override async stream(
+    ...[input, options]: Parameters<ChatOpenAI['stream']>
+  ): ReturnType<ChatOpenAI['stream']> {
+    const consumer = new AbortController();
+    const signal =
+      options?.signal === undefined
+        ? consumer.signal
+        : AbortSignal.any([consumer.signal, options.signal]);
+    const stream = await super.stream(input, { ...options, signal });
+    const settle = stream.return.bind(stream);
+    /** 中止請求；原本的收尾在背景跑完，它的錯（就是剛才的中止）不往外丟。 */
+    const stop = (): void => {
+      consumer.abort();
+      void settle().catch(() => {});
+    };
+    stream.return = () => {
+      stop();
+      return Promise.resolve({ done: true, value: undefined });
+    };
+    stream.throw = (error: unknown) => {
+      stop();
+      return Promise.reject(error as Error);
+    };
+    return stream;
   }
 
   override withConfig(

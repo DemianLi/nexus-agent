@@ -26,7 +26,7 @@ plugin 清單 ──fold──▶ agent ──┬──▶ CLI（一次性／REP
 | `apps/harness` | 組裝點：agent 工廠、訊息標準化、CLI 與 serve |
 | `apps/web` | Vite ＋ React 19 ＋ Tailwind v4 ＋ shadcn/ui |
 
-pnpm workspace，Node >= 22。
+pnpm workspace，Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準。
 
 ## 能力
 

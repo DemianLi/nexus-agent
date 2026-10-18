@@ -23,11 +23,11 @@
  * dsh 經 `ctx.subprocess` 服務起子行程，終止升級由那個服務做；nexus 沒有這個服務（`child-env.ts` 檔頭同一個登記），
  * 所以升級（`SIGTERM` → `SIGKILL`）、逾時與輸出計數都在這個檔案裡自己做。規則照抄，載體退成一個函式。
  *
- * ## 不在這裡
+ * ## 執行檔
  *
- * `ENOENT`（`rg` 找不到）不是這裡的錯誤，回 `unavailable` 讓呼叫端決定：偏離 1 的退路寫在
- * `ContainedFilesystemBackend.grep`。`cwd` 不存在時 Node 也回 `spawn rg ENOENT`，跟找不到 rg 分不出來，所以呼叫端
- * 要在 spawn 之前先確認 `cwd` 存在。
+ * **呼叫端給執行檔的絕對路徑**（`rg-path.ts` 解出的內附 rg），這裡不查 `PATH`、也沒有預設值。`ENOENT` 就是
+ * `SEARCH_FAILED`：產物裡的 rg 不見了，沒有退路（#1502 刀 4 拿掉了 #1532 偏離 1 的 `ENOENT` 退路）。
+ * `cwd` 不存在時 Node 也回 `spawn … ENOENT`，兩者分不出來，所以呼叫端要在 spawn 之前先確認 `cwd` 存在。
  *
  * @module
  */
@@ -52,17 +52,26 @@ export const SEARCH_TIMEOUT_MS = 30_000;
 /** 保留的 stderr 尾巴（位元組），診斷用。dsh `SEARCH_STDERR_MAX_BYTES`（`:50`）。 */
 export const STDERR_MAX_BYTES = 64 * 1024;
 
+/**
+ * 起不來的錯誤訊息是**固定字串**：它會原樣變成工具結果交給模型，而 Node 的 spawn 錯誤訊息與內附 rg 的位置都帶主機的絕對路徑
+ * （`spawn /opt/…/rg ENOENT`）。照 dsh `packages/fs/tool-fs-search/src/search-core.ts:260`：訊息固定、原始錯誤不接在後面。
+ * 要查是哪個路徑，看 serve 啟動日誌那一行「搜尋（grep）：內附 ripgrep …」（給管理者的，`rg-path.ts`）。
+ */
+const LAUNCH_FAILED_MESSAGE = 'grep could not start its search command (ripgrep launch failed)';
+const NOT_FOUND_MESSAGE = 'grep could not start its search command (bundled ripgrep not found)';
+
 /** 收掉 rg 時 `SIGTERM` 之後等多久升級到 `SIGKILL`（毫秒）。dsh `SEARCH_GRACE_MS`（`:53`）。 */
 export const KILL_GRACE_MS = 3_000;
 
 /** 這一次執行的結果。 */
 export type RipgrepOutcome =
   | { readonly kind: 'ok'; readonly stdout: string; readonly noMatches: boolean }
-  | { readonly kind: 'unavailable' }
   | { readonly kind: 'error'; readonly code: SearchErrorCode; readonly message: string };
 
 /** {@link runRipgrep} 的參數。 */
 export interface RipgrepRunOptions {
+  /** rg 執行檔的絕對路徑（內附的那一支）。不查 `PATH`。 */
+  readonly executable: string;
   /** `--no-config` 之後的 argv。 */
   readonly argv: readonly string[];
   /** 工作目錄；呼叫端要先確認它存在。 */
@@ -73,15 +82,15 @@ export interface RipgrepRunOptions {
   readonly internals?: RipgrepInternals | undefined;
 }
 
-/** 只給測試用的接縫：換執行檔名、數 spawn、壓低上限。 */
+/** 只給測試用的接縫：換執行檔、數 spawn、壓低上限。 */
 export interface RipgrepInternals {
-  /** 執行檔名；省略即 `rg`（走 `PATH`）。 */
+  /** 換掉內附 rg 的路徑（`ContainedFilesystemBackend.grep` 讀它）；runner 本身只認 {@link RipgrepRunOptions.executable}。 */
   readonly executable?: string;
   readonly rawOutputMaxBytes?: number;
   readonly timeoutMs?: number;
   readonly killGraceMs?: number;
   /** 每次真的要 spawn 之前呼叫一次（測試用來數「取消後不起 rg」）。 */
-  readonly onSpawn?: (argv: readonly string[]) => void;
+  readonly onSpawn?: (argv: readonly string[], executable: string) => void;
   /** 子行程起來之後給測試一個把手（斷言「行程已經結束」）。 */
   readonly onChild?: (child: { readonly pid: number | undefined }) => void;
 }
@@ -128,7 +137,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
   const internals = options.internals ?? {};
   const maxBytes = internals.rawOutputMaxBytes ?? RAW_OUTPUT_MAX_BYTES;
   const graceMs = internals.killGraceMs ?? KILL_GRACE_MS;
-  const executable = internals.executable ?? 'rg';
+  const executable = options.executable;
   const signals: AbortSignal[] = [AbortSignal.timeout(internals.timeoutMs ?? SEARCH_TIMEOUT_MS)];
   if (options.signal !== undefined) signals.push(options.signal);
   const signal = AbortSignal.any(signals);
@@ -164,20 +173,20 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
 
     let child: ReturnType<typeof spawn>;
     try {
-      internals.onSpawn?.(argv);
+      internals.onSpawn?.(argv, executable);
       child = spawn(executable, argv, {
         cwd: options.cwd,
         stdio: ['ignore', 'pipe', 'pipe'],
         env: scrubbedParentEnv(),
       });
-    } catch (error: unknown) {
+    } catch {
       resolve(
         signal.aborted
           ? aborted()
           : {
               kind: 'error',
               code: SEARCH_FAILED,
-              message: `grep could not start its search command (ripgrep launch failed: ${(error as Error).message})`,
+              message: LAUNCH_FAILED_MESSAGE,
             },
       );
       return;
@@ -190,6 +199,8 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
     /** 收掉 rg：先 `SIGTERM`，寬限之後還沒結束就 `SIGKILL`。 */
     const terminate = (): void => {
       if (child.exitCode !== null || child.signalCode !== null) return;
+      // 起不來的 child 沒有 pid（'error' 事件還沒送到）：此時 `kill()` 會對 pid 0 送訊號，也就是整個行程群組（包括 serve 自己）。
+      if (child.pid === undefined) return;
       child.kill('SIGTERM');
       killTimer ??= setTimeout(() => {
         if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
@@ -224,14 +235,15 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
     });
 
     child.on('error', (error: NodeJS.ErrnoException) => {
-      if (error.code === 'ENOENT') {
-        settle({ kind: 'unavailable' });
+      // 起不來的同時已經被取消：回「取消」不回「起不來」（照 dsh `search-core.ts:257-259`，spawn 失敗後再看一次 `signal.aborted`）。
+      if (wasAborted || signal.aborted) {
+        settle(aborted());
         return;
       }
       settle({
         kind: 'error',
         code: SEARCH_FAILED,
-        message: `grep could not start its search command (ripgrep launch failed: ${error.message})`,
+        message: error.code === 'ENOENT' ? NOT_FOUND_MESSAGE : LAUNCH_FAILED_MESSAGE,
       });
     });
 

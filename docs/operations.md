@@ -310,6 +310,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **搜尋結果看筆數、不看字數**：`grep` 命中超過 `tool-fs-search` 那一列的 `grepMaxMatches`（出貨 250）、`glob` 或 `ls` 超過 `globMaxResults`（出貨 100）時，模型只收到前段，結尾一句帶路徑的定位（`Full grep result stored at: …`），完整結果存進上面那個暫存目錄，用 `read_file` 照路徑讀。`grep` 只管逐行命中（`content`）那種輸出，`count`／`files_with_matches` 照原樣。暫存目錄寫不進去、或沒有會話日誌時照樣只留前段，結尾改講沒存到，搜尋不算失敗。把那一列標成 `disabled: true` 就回到基座原樣：超過 80,000 字元由工具自己截掉，原文不留。
 
+**`grep` 用的 ripgrep 是產物內附的，不看主機的 `PATH`**（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 4）：`@vscode/ripgrep` 的平台套件隨 `pnpm install` 與 release tarball 一起來，主機有沒有裝 rg、是哪個版本都無關，完全內網的主機也不必另外裝。啟動時 serve 會印一行 `搜尋（grep）：內附 ripgrep <路徑>`；印的是「不可用」就是產物壞了（平台套件被刪、或 rg 沒有執行權限），這時每一次 `grep` 都會以 `SEARCH_FAILED` 失敗，**沒有退路**，重新安裝即可。rg 以 `--no-config` 啟動，`~/.ripgreprc` 與 `RIPGREP_CONFIG_PATH` 影響不到搜尋。
+
 **接得回來要站在同一個地方**，兩道守衛，兩個入口都擋：
 
 - **同一個目錄。** 一份會話記著它建立當下的工作目錄，接不回別的目錄；**沒記的也拒**，不猜。
@@ -444,7 +446,7 @@ refs:
 ## 經代理連外
 
 模型請求與走 HTTP 的 MCP server 會經標準代理環境變數指定的代理發出（[#746](https://github.com/DemianLi/nexus-agent/issues/746)）。
-啟動時讀一次，不需要別的設定；做法與限制照 dsh 的 `docs/user/guide/network-proxy.zh.md`。Node 要 22.19 以上（`package.json` 的 `engines`）。
+啟動時讀一次，不需要別的設定；做法與限制照 dsh 的 `docs/user/guide/network-proxy.zh.md`。Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準。
 
 ```bash
 export HTTPS_PROXY=http://127.0.0.1:7890
@@ -471,7 +473,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 ## 用 systemd 常駐
 
 [#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5。對象是 Release 打出來的 `nexus-agent-<版本>-linux-x64.tar.gz`（解開即用，目標機不用裝 pnpm、不用連 registry），
-Node 要 22.19 以上。
+Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準。
 
 ```bash
 sudo useradd --system --home-dir /var/lib/nexus-agent --shell /usr/sbin/nologin nexus-agent
@@ -645,6 +647,7 @@ dsh 是在 `turn/end` 抵達的當下收回（`goal-round-driver/src/index.ts:35
   主對話的輪數大約是「派出去那一輪 ＋ 每個子代理各一輪」。
 - **模型可能在子代理做完之前就先答了使用者**，之後才被結算通知叫醒補上結論。畫面上這一輪不是使用者說的話，不畫成使用者的泡泡。
 - **每個背景子代理有自己的會話日誌**，路徑是 `<主對話會話>/<編號>`；關閉一條 thread 時會等它進行中的背景輪收完。
+- **子代理的會話不是一條 thread**（#1544）：把 `<主對話>/<編號>` 當 thread id 開（下行、`run.start` 等任何會組出 thread 的路，以及 `run.cancel`——照 dsh，對子代理會話的取消也拒絕）會回專屬碼 `thread_is_subagent`，message 說明「這是子代理的會話，要對它說話請從主對話用 `subagent.send`」，不是暫時失敗、重試沒用。serve 在碰日誌之前就拒絕（只冷讀 header、不拿寫租約、不補結），子代理的日誌一個位元組都不動。判準是 header 帶 `parentSession`，與 `GET /threads` 不列子代理是同一份（`isSubagentSessionHeader`）。
 - **重啟 serve 之後，做完的背景子代理還叫得醒**（#1271，缺口源自 #737，照 dsh 的 continuable）。身分（哪一種子代理、哪顆模型與推理等級）記在子代理自己日誌的第一輪之前，
   `subagent/descriptor`（日誌格式 44）；重啟後載體讀主對話日誌上的 `subagent/catalog` 認得它們，現況裡列為 `idle`，**列出不復活任何一個**。
   只有往它送話（畫面上的 `subagent.send`、模型的 `send_message`）才接回來：拿寫入租約、補上當掉那一輪的收尾、按日誌上的身分編圖、把對話從日誌**重播**灌回圖，
@@ -787,7 +790,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   （`agent-loop`、`recursion-limit`、`tool-fs-search` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
-  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`deliverable-files`、
+  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`memory-gauge`、`deliverable-files`、
     `session-persistence`、`tool-text`、`projection-flush`、`downlink`、`tool-result-stash`、`spill-policy`、`background-subagents`、
     `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
     `agent-default-model` 不在這裡：沒帶 `--live` 時它在每條對話組裝時讀，改了新對話就生效。
@@ -1225,6 +1228,23 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **要在整段對話裡釘住組裝它的那一版**（見「後台改清單」的第三個已知限制），設 `idleEvictAfterMs: 0`。
 - **偏離 dsh（登記）**：dsh 頂層沒有閒置逐出（程式碼裡是 legacy TODO）；出廠值 2 小時與「0 是不逐出」照 dsh 終端的 `unattendedTimeoutMs`。閒置條件借的是**子代理結算**（沒有輪、沒有佇列、沒有未收完的子工作），
   計時方式借的是 **terminal retention**（條件全成立才開始算、任何一次忙碌就歸零、到 T 才收）。形狀逐點見 `src/wire-handler.ts` 的 `WireHandlerOptions.idleEvictMs`。
+
+**`memory-gauge`（[#1490](https://github.com/DemianLi/nexus-agent/issues/1490)）**讓 serve 把自己的記憶體寫進日誌，給管理者看「serve 多大、容器還剩多少、主機還剩多少」。**預設關閉**：不寫這一列，或寫 `reportIntervalMs: 0`，除了清單多一列（`[對照快照]` 的列數、`plugin-snapshot.json`、`--dump-config`），serve 的行為與日誌和沒有這一列時一樣。
+
+```yaml
+# ~/.nexus-agent/cordis.patch.yml
+- id: memory-gauge
+  config:
+    reportIntervalMs: 60000   # 0＝不啟動；開了是 1000 到 2147483647（計時器上限，約 24.8 天）
+```
+
+- **打開之後**：serve 起動的披露都印完之後立刻寫一行，之後每隔 `reportIntervalMs` 毫秒一行，例如
+  `記憶體：行程 RSS 612.3 MiB、heap 301.2 MiB／388.0 MiB；cgroup v2 / 640.1 MiB／4096.0 MiB；主機可用 8000.0 MiB／16000.0 MiB（MemAvailable）`。
+- **三個來源各自讀，讀不到的明說**，不回 0：行程自己（RSS 與 heap，到處讀得到）；容器上限（Linux 的 cgroup：**先解 `/proc/self/cgroup`，讀行程自己所在的那個 cgroup**，不是掛載根——v2 取 `0::` 那一行、讀 `memory.current`／`memory.max`，v1 取 `memory` controller 那一行、讀 `memory.usage_in_bytes`／`memory.limit_in_bytes`，hybrid 先試 v2、v2 沒有 memory controller 再試 v1；日誌上印出那個路徑，systemd 底下會是 `/system.slice/…`、docker 預設是 `/`。沒設上限寫「沒設上限」；沒設上限而 `process.constrainedMemory()` 報了比主機小的限制時另外寫「行程受限 … 上限可能在上層 cgroup」；`/proc/self/cgroup` 不在（macOS）寫「cgroup 讀不到（… 沒有 cgroup …）」，別的失敗點名是哪個檔怎麼了）；主機（Linux 的 `/proc/meminfo` 的 `MemAvailable`，沒有才退到 `os.freemem()`，行尾標出是哪一種——**兩種數字不能直接比**：macOS 的 `os.freemem()` 不含可回收的快取，會比實際少）。
+- **只讀、只講**，不拒收、不逐出、不下架；也不寫進 `plugin-snapshot.json`。看了之後要不要做動作（警告、下架插件）等量測的數字出來再決定。
+- **只量 serve 這一個行程**，不含它起的子行程（MCP 的 stdio 子行程、`rg`）。cgroup 那一格涵蓋同一個容器裡的整棵行程樹，所以在容器裡跑時，`cgroup` 的數字比 `行程 RSS` 大多少，就是子行程與其他行程佔的。
+- **起動時讀一次，改了要重啟**。間隔寫小於 1000 的非零數字，這一列在載入期被丟掉（和其他設定驗不過的列一樣，日誌會說「設定驗不過」），量具不啟動。
+- **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh（`687f282e`）沒有執行期的記憶體監看，它的記憶體只在 CI 量（無 swap 的 cgroup 模擬 4／8 GB 機器）。這一列是多人共用的內網主機才有的需求。讀 cgroup 的方法照 dsh `scripts/run-memory-pressure-bench.ts:63-66`（`/proc/self/cgroup` 加 `process.constrainedMemory()`）；多出來的只有 v1／hybrid 的讀法（dsh 的 bench 只認 v2）。逐點見 `src/memory-gauge.ts` 的檔頭。
 
 **模型請求並行上限（`live-model` 的 `maxConcurrentRequests` 與 `maxWaitMs`，[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)）**給整台 serve 同時在跑的模型請求數設上限。
 多人共用一把供應商 key 時，一條失控的 thread（同一步的 `task`／`subagent` 可以重疊，背景子代理每個主對話最多 8 個）同時開出十幾條模型串流，會把每分鐘配額一次打穿；

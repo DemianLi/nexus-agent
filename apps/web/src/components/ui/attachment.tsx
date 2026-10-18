@@ -1,201 +1,21 @@
 /**
- * 來源：shadcn registry `attachment`（style new-york，https://ui.shadcn.com/r/styles/new-york-v4/attachment.json），
- * 2026-10-08 取得。裝進來就是我們的原始碼，不靠重跑 `shadcn add` 更新。
- * 改動（`registry-edits.test.ts` 守著）：`cn` 與 `Button` 改走 `@/`；`text-sm`／`text-xs` 換成字級階梯 `text-body`／`text-tip`，
- * 其中 `sm`／`xs` 的標題（檔名）再升成 `text-ui`（#1281：卡片標題不小於 13），說明那一行仍是 `text-tip`；
- * registry 的閃光工具類換成我們的 `text-shimmer`；左右邊緣淡出與隱藏捲軸的兩個工具類當時我們的 CSS 沒有（寫了也沒有樣式），
- * 捲軸改用 `[scrollbar-width:none]`，邊緣淡出拿掉。（#1523 起 shadcn 的 tailwind.css 有這幾個工具類，原始碼裡出現類名就會產出、
- * 連帶帶出 keyframes；這裡刻意不寫出類名。）
+ * nexus 層（#1638 PR C）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/attachment.tsx`），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」；這個檔沒有本地修改，覆寫檔那一層有兩條：一排附件在不支援
+ * scroll-driven 動畫時不淡出（第 47 條）、亮色時上傳中標題的 shimmer 亮面換成次要字色（第 48 條）。
+ *
+ * 跟 shadcn registry 版的差異（#1468 Q19 拿掉 #733、#1281 的改動）：字級回到 SG 的 `text-sm`／`text-xs`（`sm`／`xs` 的檔名 12px），
+ * 上傳中的標題用 SG 的 `shimmer`（`tw-shimmer`，reduced-motion 停止寫在 utility 裡），一排附件用 SG 的 `scroll-fade-x`、`scrollbar-none`。
+ * 外殼的 `focus-within:ring-1` 畫不出來：SG 的玻璃規則（`solid-glass.css:727-735`）在 layer 外寫了外殼的 `box-shadow`，按鈕聚焦時外殼
+ * 不出 ring（#1638 Q7 要的結果，PM 同意不加覆寫）；`guard/` 量鍵盤與滑鼠聚焦後外殼的 `box-shadow` 不變。
  */
-import * as React from 'react';
-import { cva, type VariantProps } from 'class-variance-authority';
-import { cn } from '@/lib/utils';
-import { Slot } from 'radix-ui';
-
-import { Button } from '@/components/ui/button';
-
-const attachmentVariants = cva(
-  'group/attachment relative flex w-fit max-w-full min-w-0 shrink-0 flex-wrap rounded-xl border bg-card text-card-foreground transition-colors focus-within:ring-1 focus-within:ring-ring/50 has-[>a,>button]:hover:bg-muted/50 data-[state=error]:border-destructive/30 data-[state=idle]:border-dashed',
-  {
-    variants: {
-      size: {
-        default:
-          'gap-2 text-body has-data-[slot=attachment-content]:px-2.5 has-data-[slot=attachment-content]:py-2 has-data-[slot=attachment-media]:p-2',
-        sm: 'gap-2.5 text-ui has-data-[slot=attachment-content]:px-2 has-data-[slot=attachment-content]:py-1.5 has-data-[slot=attachment-media]:p-1.5',
-        xs: 'gap-1.5 rounded-lg text-ui has-data-[slot=attachment-content]:px-1.5 has-data-[slot=attachment-content]:py-1 has-data-[slot=attachment-media]:p-1',
-      },
-      orientation: {
-        horizontal: 'min-w-40 items-center',
-        vertical: 'w-24 flex-col has-data-[slot=attachment-content]:w-30',
-      },
-    },
-  },
-);
-
-function Attachment({
-  className,
-  state = 'done',
-  size = 'default',
-  orientation = 'horizontal',
-  ...props
-}: React.ComponentProps<'div'> &
-  VariantProps<typeof attachmentVariants> & {
-    state?: 'idle' | 'uploading' | 'processing' | 'error' | 'done';
-  }) {
-  return (
-    <div
-      data-slot="attachment"
-      data-state={state}
-      data-size={size}
-      data-orientation={orientation}
-      className={cn(attachmentVariants({ size, orientation }), className)}
-      {...props}
-    />
-  );
-}
-
-const attachmentMediaVariants = cva(
-  "relative flex aspect-square w-10 shrink-0 items-center justify-center overflow-hidden rounded-lg bg-muted text-foreground group-data-[orientation=vertical]/attachment:w-full group-data-[size=sm]/attachment:w-8 group-data-[size=xs]/attachment:w-7 group-data-[size=xs]/attachment:rounded-md group-data-[state=error]/attachment:bg-destructive/10 group-data-[state=error]/attachment:text-destructive group-data-[orientation=vertical]/attachment:*:data-[slot=spinner]:size-6! [&_svg]:pointer-events-none [&_svg:not([class*='size-'])]:size-4 group-data-[orientation=vertical]/attachment:[&_svg:not([class*='size-'])]:size-6 group-data-[size=xs]/attachment:[&_svg:not([class*='size-'])]:size-3.5",
-  {
-    variants: {
-      variant: {
-        icon: '',
-        image:
-          'opacity-60 group-data-[state=done]/attachment:opacity-100 group-data-[state=idle]/attachment:opacity-100 *:[img]:aspect-square *:[img]:w-full *:[img]:object-cover',
-      },
-    },
-    defaultVariants: {
-      variant: 'icon',
-    },
-  },
-);
-
-function AttachmentMedia({
-  className,
-  variant = 'icon',
-  ...props
-}: React.ComponentProps<'div'> & VariantProps<typeof attachmentMediaVariants>) {
-  return (
-    <div
-      data-slot="attachment-media"
-      data-variant={variant}
-      className={cn(attachmentMediaVariants({ variant }), className)}
-      {...props}
-    />
-  );
-}
-
-function AttachmentContent({ className, ...props }: React.ComponentProps<'div'>) {
-  return (
-    <div
-      data-slot="attachment-content"
-      className={cn(
-        'max-w-full min-w-0 flex-1 leading-tight group-data-[orientation=vertical]/attachment:px-1',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function AttachmentTitle({ className, ...props }: React.ComponentProps<'span'>) {
-  return (
-    <span
-      data-slot="attachment-title"
-      className={cn(
-        'block max-w-full min-w-0 truncate font-medium group-data-[state=processing]/attachment:text-shimmer group-data-[state=uploading]/attachment:text-shimmer',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function AttachmentDescription({ className, ...props }: React.ComponentProps<'span'>) {
-  return (
-    <span
-      data-slot="attachment-description"
-      className={cn(
-        'mt-0.5 block min-w-0 truncate text-tip text-muted-foreground group-data-[state=error]/attachment:text-destructive/80',
-        'max-w-full',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function AttachmentActions({ className, ...props }: React.ComponentProps<'div'>) {
-  return (
-    <div
-      data-slot="attachment-actions"
-      className={cn(
-        'relative z-20 flex shrink-0 items-center group-data-[orientation=vertical]/attachment:absolute group-data-[orientation=vertical]/attachment:top-3 group-data-[orientation=vertical]/attachment:right-3 group-data-[orientation=vertical]/attachment:gap-1',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function AttachmentAction({
-  className,
-  variant,
-  size = 'icon-xs',
-  ...props
-}: React.ComponentProps<typeof Button>) {
-  return (
-    <Button
-      data-slot="attachment-action"
-      variant={variant ?? 'ghost'}
-      size={size}
-      className={cn(className)}
-      {...props}
-    />
-  );
-}
-
-function AttachmentTrigger({
-  className,
-  asChild = false,
-  type,
-  ...props
-}: React.ComponentProps<'button'> & {
-  asChild?: boolean;
-}) {
-  const Comp = asChild ? Slot.Root : 'button';
-
-  return (
-    <Comp
-      data-slot="attachment-trigger"
-      type={asChild ? undefined : (type ?? 'button')}
-      className={cn('absolute inset-0 z-10 outline-none', className)}
-      {...props}
-    />
-  );
-}
-
-function AttachmentGroup({ className, ...props }: React.ComponentProps<'div'>) {
-  return (
-    <div
-      data-slot="attachment-group"
-      className={cn(
-        'flex min-w-0 snap-x snap-mandatory scroll-px-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden gap-2 overflow-x-auto overscroll-x-contain py-1 *:data-[slot=attachment]:flex-none *:data-[slot=attachment]:snap-start',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
 export {
   Attachment,
+  AttachmentAction,
+  AttachmentActions,
+  AttachmentContent,
+  AttachmentDescription,
   AttachmentGroup,
   AttachmentMedia,
-  AttachmentContent,
   AttachmentTitle,
-  AttachmentDescription,
-  AttachmentActions,
-  AttachmentAction,
   AttachmentTrigger,
-};
+} from '@/vendor/solid-glass/components/ui/attachment';
