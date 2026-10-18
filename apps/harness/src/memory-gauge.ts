@@ -321,7 +321,7 @@ export async function readMemory(deps: MemoryGaugeDeps = defaultDeps): Promise<M
 }
 
 /** 位元組換成 MiB 字串，一位小數。 */
-function mib(bytes: number): string {
+export function mib(bytes: number): string {
   return `${(bytes / 1024 / 1024).toFixed(1)} MiB`;
 }
 
@@ -333,7 +333,7 @@ function mib(bytes: number): string {
  */
 export function formatMemoryLine(reading: MemoryReading): string {
   const proc = reading.process.ok
-    ? `行程 RSS ${mib(reading.process.rssBytes)}、heap ${mib(reading.process.heapUsedBytes)}／${mib(reading.process.heapTotalBytes)}`
+    ? `行程 RSS ${mib(reading.process.rssBytes)}、heap 已用 ${mib(reading.process.heapUsedBytes)}／已提交 ${mib(reading.process.heapTotalBytes)}`
     : `行程讀不到（${reading.process.reason}）`;
   let cgroup: string;
   if (reading.cgroup.ok) {
@@ -368,6 +368,11 @@ export interface MemoryGaugeOptions {
   readonly log: (line: string) => void;
   /** 讀外界的縫；省略即真的。 */
   readonly deps?: MemoryGaugeDeps;
+  /**
+   * 每次讀數寫完那一行之後，把讀數交給這支，它回的行接著寫進日誌（[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)，
+   * 用量警告）。量具自己不認識門檻。拋了就吞掉：警告壞了不該連累記憶體那一行，也不該連累 serve。
+   */
+  readonly onReading?: (reading: MemoryReading) => readonly string[];
 }
 
 /**
@@ -381,7 +386,7 @@ export interface MemoryGaugeOptions {
  * @returns 停止用的把手。
  */
 export function startMemoryGauge(options: MemoryGaugeOptions): RunningMemoryGauge {
-  const { intervalMs, log, deps } = options;
+  const { intervalMs, log, deps, onReading } = options;
   let stopped = false;
   let busy = false;
   const tick = async (): Promise<void> => {
@@ -389,7 +394,12 @@ export function startMemoryGauge(options: MemoryGaugeOptions): RunningMemoryGaug
     busy = true;
     try {
       const reading = await readMemory(deps);
-      if (!stopped) log(formatMemoryLine(reading));
+      if (!stopped) {
+        log(formatMemoryLine(reading));
+        if (onReading !== undefined) {
+          for (const line of onReading(reading)) log(line);
+        }
+      }
     } catch {
       // 量具不影響 serve：`log` 拋了就吞掉，下一次再試。讀數本身的失敗不會走到這裡，已經寫進那一行了。
     } finally {

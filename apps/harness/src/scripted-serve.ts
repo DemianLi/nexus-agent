@@ -16,6 +16,7 @@ import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+import type { MemoryGaugeDeps } from './memory-gauge.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -65,6 +66,8 @@ export async function startScriptedServe(
     readonly argv?: readonly string[];
     /** 起動日誌往哪寫；省略即丟掉。 */
     readonly log?: (line: string) => void;
+    /** 記憶體量具讀外界的縫，換成假讀數（`RunServeOptions.memoryGaugeDeps`）；省略即真的。 */
+    readonly memoryGaugeDeps?: MemoryGaugeDeps;
   } = {},
 ): Promise<ScriptedServe> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-scripted-serve-'));
@@ -81,6 +84,7 @@ export async function startScriptedServe(
     ],
     log: options.log ?? (() => undefined),
     env: {},
+    ...(options.memoryGaugeDeps === undefined ? {} : { memoryGaugeDeps: options.memoryGaugeDeps }),
   })) as RunningServe;
   return {
     running,
