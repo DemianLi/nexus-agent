@@ -136,6 +136,8 @@ import { projectionFlushPlugin } from './settings/projection-flush.js';
 import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { downlinkPlugin } from './settings/downlink.js';
+import { startMemoryGauge } from './memory-gauge.js';
+import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { threadCapacityPlugin } from './settings/thread-capacity.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
 import { SessionReferenceCandidates } from './session-reference-candidates.js';
@@ -644,6 +646,8 @@ async function startServer(
   // thread 數上限（#1476，保險絲第 2 級）。**server 的性質**：`threads` 表一台伺服器一張，檢查在 `createWireHandler` 的
   // `threadFor` 裡，所以值在這裡解、往下傳一份。出廠開著、關不掉（#1619，`settings/thread-capacity.ts`）。
   const threadCapacity = startupSetting(plugins, threadCapacityPlugin);
+  // 記憶體量具（#1490）：只讀只講，預設關閉（`reportIntervalMs: 0`），開了才在起動尾端起，見 `memory-gauge.ts`。
+  const memoryGaugeConfig = startupSetting(plugins, memoryGaugePlugin);
   // 下行串流的心跳間隔與每條線的位元組上限（#1504）。**兩個消費點在兩處**：心跳間隔交給 `startWireServer`（socket 那一層），位元組上限交給
   // `createWireHandler`（訂閱者佇列）。預設開、關不掉（`plugin-config.ts` 的 `PROTECTED_ENTRY_REASONS`）。
   const downlink = startupSetting(plugins, downlinkPlugin);
@@ -1275,6 +1279,12 @@ async function startServer(
   // 已儲存 vs 執行中的對照（#1406）：寫成功才講，寫不進去的警告已經在上面記過。
   if (startupSnapshotWritten) log(describeSnapshot(startupSnapshot, pluginSnapshotPath(env)));
 
+  // 記憶體量具（#1490）：放在所有起動披露之後，讓第一行讀數是 serve 全部起來之後的樣子。關著（預設）就一個字都不印、不建計時器。
+  const memoryGauge =
+    memoryGaugeConfig.reportIntervalMs === 0
+      ? undefined
+      : startMemoryGauge({ intervalMs: memoryGaugeConfig.reportIntervalMs, log });
+
   return {
     url: server.url,
     authenticatedUrl,
@@ -1289,6 +1299,7 @@ async function startServer(
           failures.push(error);
         }
       };
+      await attempt(() => memoryGauge?.stop());
       await attempt(() => server.close());
       await attempt(() => handler.close());
       await attempt(() => threadSearch?.close());

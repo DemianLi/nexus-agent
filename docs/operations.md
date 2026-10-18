@@ -1226,6 +1226,23 @@ thread 的第一句話開跑、主回覆的第一次模型呼叫送出之後，�
 - **偏離 dsh（登記）**：dsh 頂層沒有閒置逐出（程式碼裡是 legacy TODO）；出廠值 2 小時與「0 是不逐出」照 dsh 終端的 `unattendedTimeoutMs`。閒置條件借的是**子代理結算**（沒有輪、沒有佇列、沒有未收完的子工作），
   計時方式借的是 **terminal retention**（條件全成立才開始算、任何一次忙碌就歸零、到 T 才收）。形狀逐點見 `src/wire-handler.ts` 的 `WireHandlerOptions.idleEvictMs`。
 
+**`memory-gauge`（[#1490](https://github.com/DemianLi/nexus-agent/issues/1490)）**讓 serve 把自己的記憶體寫進日誌，給管理者看「serve 多大、容器還剩多少、主機還剩多少」。**預設關閉**：不寫這一列，或寫 `reportIntervalMs: 0`，serve 的行為與日誌和沒有這一列時一個字都一樣。
+
+```yaml
+# ~/.nexus-agent/cordis.patch.yml
+- id: memory-gauge
+  config:
+    reportIntervalMs: 60000   # 0＝不啟動；開了至少 1000
+```
+
+- **打開之後**：serve 起動的披露都印完之後立刻寫一行，之後每隔 `reportIntervalMs` 毫秒一行，例如
+  `記憶體：行程 RSS 612.3 MiB、heap 301.2 MiB／388.0 MiB；cgroup v2 640.1 MiB／4096.0 MiB；主機可用 8000.0 MiB／16000.0 MiB（MemAvailable）`。
+- **三個來源各自讀，讀不到的明說**，不回 0：行程自己（RSS 與 heap，到處讀得到）；容器上限（Linux 的 cgroup，v2 讀 `memory.current`／`memory.max`、v1 讀 `memory.usage_in_bytes`／`memory.limit_in_bytes`；沒設上限寫「沒設上限」，沒有 cgroup（macOS）寫「cgroup 讀不到（…）」）；主機（Linux 的 `/proc/meminfo` 的 `MemAvailable`，沒有才退到 `os.freemem()`，行尾標出是哪一種——**兩種數字不能直接比**：macOS 的 `os.freemem()` 不含可回收的快取，會比實際少）。
+- **只讀、只講**，不拒收、不逐出、不下架；也不寫進 `plugin-snapshot.json`。看了之後要不要做動作（警告、下架插件）等量測的數字出來再決定。
+- **只量 serve 這一個行程**，不含它起的子行程（MCP 的 stdio 子行程、`rg`）。cgroup 那一格涵蓋同一個容器裡的整棵行程樹，所以在容器裡跑時，`cgroup` 的數字比 `行程 RSS` 大多少，就是子行程與其他行程佔的。
+- **起動時讀一次，改了要重啟**。間隔寫小於 1000 的非零數字，這一列在載入期被丟掉（和其他設定驗不過的列一樣，日誌會說「設定驗不過」），量具不啟動。
+- **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh 沒有執行期的記憶體監看，並在背景工作准入的決策紀錄裡否決了行程級記憶體預算，它的記憶體只在 CI 量（無 swap 的 cgroup 模擬 4／8 GB 機器）。這一列是多人共用的內網主機才有的需求。逐點見 `src/memory-gauge.ts` 的檔頭。
+
 **模型請求並行上限（`live-model` 的 `maxConcurrentRequests` 與 `maxWaitMs`，[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)）**給整台 serve 同時在跑的模型請求數設上限。
 多人共用一把供應商 key 時，一條失控的 thread（同一步的 `task`／`subagent` 可以重疊，背景子代理每個主對話最多 8 個）同時開出十幾條模型串流，會把每分鐘配額一次打穿；
 供應商回 429，所有人的請求一起退避、一起回來再撞，跟那條 thread 無關的人一起受害。設了上限，名額滿了的**新請求排隊**，不再一起撞牆。
