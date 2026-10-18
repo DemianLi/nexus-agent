@@ -184,8 +184,12 @@ describe('registry 檔的改動還在', () => {
     expect(code(read('./message-scroller.tsx'))).not.toMatch(width);
   });
 
+  // SG 版 import `next-themes` 的 `useTheme`；第 49 條（`patches/0010-sonner-theme-prop.patch`）把它換成 `theme` prop（#1680）。
   test('sonner 不靠 next-themes（主題由呼叫端給，§6）', () => {
     expect(code(read('./sonner.tsx'))).not.toMatch(/next-themes/);
+    expect(code(read('../../vendor/solid-glass/components/ui/sonner.tsx'))).not.toMatch(
+      /next-themes/,
+    );
     const pkg = JSON.parse(read('../../../package.json')) as {
       dependencies?: Record<string, string>;
       devDependencies?: Record<string, string>;
