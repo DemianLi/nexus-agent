@@ -8,9 +8,12 @@ import { ToolMessage } from '@langchain/core/messages';
 import { describe, expect, it } from 'vitest';
 import {
   createFsToolErrorsMiddleware,
+  currentToolCallSignal,
   FS_SANDBOX_DENIED,
   noteSandboxDenial,
+  noteSearchError,
   recordBackendOutcomes,
+  SEARCH_INVALID_PATTERN,
 } from './fs-tool-errors.js';
 import { markToolError, toolErrorOf } from './tool-events.js';
 
@@ -292,5 +295,71 @@ describe('包過的 backend', () => {
     expect(await backend.write('/deny/x', 'x')).toEqual({
       error: '[containment] 拒絕 write "/deny/x"',
     });
+  });
+});
+
+describe('搜尋失敗的碼與這一次呼叫的取消訊號（#1532）', () => {
+  const wrap = wrapperOf(createFsToolErrorsMiddleware());
+
+  /** 一個會把 grep 的失敗回成 `{ error }` 的假 backend，回之前先記下搜尋碼。 */
+  const failingGrep = {
+    async grep(): Promise<{ error: string }> {
+      noteSearchError(SEARCH_INVALID_PATTERN);
+      return { error: 'grep pattern rejected by ripgrep: bad glob' };
+    },
+  };
+
+  it('grep 回錯並記了搜尋碼：錯誤帶 SearchError 與碼，模型看到的字補上 `Error: `', async () => {
+    const backend = recordBackendOutcomes(failingGrep);
+    const result = (await wrap(requestFor('grep'), async () => {
+      const out = await backend.grep();
+      return asToolMessage(out.error, 'grep');
+    })) as ToolMessage;
+    expect(result.status).toBe('error');
+    expect(result.content).toBe('Error: grep pattern rejected by ripgrep: bad glob');
+    expect(toolErrorOf(result)).toEqual({ name: 'SearchError', code: SEARCH_INVALID_PATTERN });
+  });
+
+  it('沒有記搜尋碼的 grep 錯誤：仍是錯誤，不帶碼', async () => {
+    const backend = recordBackendOutcomes({
+      async grep(): Promise<{ error: string }> {
+        return { error: 'something else' };
+      },
+    });
+    const result = (await wrap(requestFor('grep'), async () => {
+      const out = await backend.grep();
+      return asToolMessage(out.error, 'grep');
+    })) as ToolMessage;
+    expect(result.status).toBe('error');
+    expect(toolErrorOf(result)).toBeUndefined();
+  });
+
+  it('不在工具呼叫裡時 noteSearchError 什麼都不做', () => {
+    expect(() => noteSearchError(SEARCH_INVALID_PATTERN)).not.toThrow();
+  });
+
+  it('currentToolCallSignal：工具呼叫裡是 request.runtime.signal，沒有訊號與在外面都是 undefined', async () => {
+    const controller = new AbortController();
+    let inside: AbortSignal | undefined;
+    await wrap(
+      {
+        toolCall: { name: 'grep', args: {}, id: 'c' },
+        state: {},
+        runtime: { signal: controller.signal },
+      },
+      async () => {
+        inside = currentToolCallSignal();
+        return asToolMessage('ok', 'grep');
+      },
+    );
+    expect(inside).toBe(controller.signal);
+
+    let without: AbortSignal | undefined = controller.signal;
+    await wrap(requestFor('grep'), async () => {
+      without = currentToolCallSignal();
+      return asToolMessage('ok', 'grep');
+    });
+    expect(without).toBeUndefined();
+    expect(currentToolCallSignal()).toBeUndefined();
   });
 });
