@@ -95,6 +95,7 @@ const TEXT: [string, string][] = [
   ['muted-foreground', 'stage'],
   ['muted-foreground', 'chip'],
   ['muted-foreground', 'chip-hover'],
+  ['muted-foreground', 'chip-pressed'],
   ['foreground', 'chip-hover'],
   ['foreground', 'chip-pressed'],
   ['primary-foreground', 'primary'],
@@ -108,6 +109,9 @@ const TEXT: [string, string][] = [
   ['destructive', 'card'],
   ['success', 'card'],
   ['warning', 'card'],
+  ['warning', 'chip'],
+  ['warning', 'chip-hover'],
+  ['warning', 'chip-pressed'],
   ['info', 'card'],
   // 程式碼區塊（stage）上的語法色（`shiki.css`）。
   ['foreground', 'stage'],
@@ -148,25 +152,6 @@ const SURFACES: [string, string][] = [
 ];
 
 /**
- * 按下去的 chip 與 warning 膠囊：develop 就沒到 4.5（既有缺口 #1515，⑥ 處理）。這裡只守「不比 develop 差」，
- * 數字是 develop（c9b957b6）產物照同一套算法重算、截到小數第四位（PM，#1512）。
- */
-const NOT_WORSE_THAN_DEVELOP: Record<Theme, [string, string, number][]> = {
-  light: [
-    ['muted-foreground', 'chip-pressed', 4.3325],
-    ['warning', 'chip', 4.0858],
-    ['warning', 'chip-hover', 4.0084],
-    ['warning', 'chip-pressed', 3.7081],
-  ],
-  dark: [
-    ['muted-foreground', 'chip-pressed', 4.2964],
-    ['warning', 'chip', 4.074],
-    ['warning', 'chip-hover', 3.9642],
-    ['warning', 'chip-pressed', 3.6952],
-  ],
-};
-
-/**
  * 淡紅底上的字（#1523）：SG 的 destructive 按鈕、badge、泡泡是 `bg-destructive/<alpha>` 配 `text-destructive`，按鈕 hover 的底由
  * 覆寫檔調淡（README 本地修改第 17 條）。淡紅底疊在每一疊頁面上、也疊在每一疊頁面上的卡片上，最差的那一疊要過 4.5。
  * alpha 跟產生器解色用的同一份（`tokengen/destructive-tint.mjs`）。
@@ -199,13 +184,6 @@ describe.each(MODES)('產生出來的 token 達到對比度目標：$name', (mod
     test.each(NON_TEXT)(`${theme}：非文字 %s 對 %s ≥ 3`, (fg, bg) => {
       expect(contrast(mode, theme, fg, bg)).toBeGreaterThanOrEqual(3);
     });
-
-    test.each(NOT_WORSE_THAN_DEVELOP[theme])(
-      `${theme}：%s 對 %s 不比 develop 的 %s 差（既有缺口 #1515）`,
-      (fg, bg, floor) => {
-        expect(contrast(mode, theme, fg, bg)).toBeGreaterThanOrEqual(floor);
-      },
-    );
 
     test.each(DESTRUCTIVE_TINTS)(
       `${theme}：destructive 的字對它%s的淡紅底 ≥ 4.5（疊在頁面與卡片上）`,

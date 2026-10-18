@@ -11,6 +11,8 @@
  *   - `data-guard-shadow`：亮色時量 `box-shadow` 每層投影的透明度。
  *   - `data-guard-surface`：不透明的退路（reduced-transparency、`data-glass="opaque"`）下，量這個面是不是真的不透明、沒有 blur。
  *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、清單開著三種狀態各量一次字色對底色（chip 三階，#1512；#1591 起量底列的 Pick）。
+ *   - `data-guard-press`：平常、滑鼠移上去、按著（`:active`）三種狀態各量一次字色對底色：次要字疊在 `chip-hover`、`chip-pressed`
+ *     上的真消費者。
  *   - `data-guard-located`：對話裡被定位的那一則（`[data-slot=message-scroller-item][data-located]`），量圓角真的畫出來。
  *   - `data-guard-glass`：SG 畫成玻璃的按鈕（outline、secondary、glass），量它真的有 `backdrop-filter`：`solid-glass.css:640-677`
  *     靠 vendor Button 輸出的 `data-variant` 命中（#1523）。
@@ -61,6 +63,7 @@ import { createRoot } from 'react-dom/client';
 
 import { Counts } from '@/components/changes/counts';
 import { CompactionRow } from '@/components/compaction-row';
+import { SessionUsage } from '@/components/cost/session-usage';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
 import { PendingSwap } from '@/components/pending-swap';
@@ -318,6 +321,14 @@ function GuardPage() {
               seat={{ catalog: PERMISSIONS, currentValue: 'danger-full-access' }}
               locked={undefined}
               onSwitch={() => {}}
+            />
+          </div>
+          {/* 頂列的用量鈕：`text-muted-foreground` 配 `hover:bg-chip-hover active:bg-chip-pressed`，底下沒有 `bg-card`，
+              chip 的兩階真的畫得出來。 */}
+          <div data-guard-press="session-usage">
+            <SessionUsage
+              tokenUsage={{ inputTokens: 412_380, outputTokens: 9_815 }}
+              sessionStats={{ turns: 4, steps: 17, llmMs: 133_000, toolMs: 38_400 }}
             />
           </div>
           <div data-guard-texts="retry-notice" style={{ width: 360 }}>

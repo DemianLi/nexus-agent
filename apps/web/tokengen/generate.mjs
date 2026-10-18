@@ -179,42 +179,29 @@ const T = {
   surfaceDiff: 0.05,
 };
 /**
- * chip 三階（chip／hover／pressed）上有次要文字（選單項、標籤、用量鈕），目標被下面三條約束壓住，取最嚴的那條（PM，#1512）：
- * - 次要文字對 chip、對 chip-hover ≥ 4.5：Q5 的文字下限是硬約束，原型的目標只是過渡期的偏好。
- * - 次要文字對 chip-pressed ≥ develop 當時的值（亮暗各自算）：develop 本來就不到 4.5，是既有缺口（第 ⑥ 步處理）；
- *   這一版不能比 develop 差。
- * hover／pressed 照 Libraries.dev 的階梯比例跟著 chip 走。每條約束各換算成 chip 目標的上限，取最小的；
- * 再用四捨五入後的實際字串逐條驗一次，不過就往下推 0.0001。
+ * chip 三階（chip／hover／pressed）上有次要文字（選單項、標籤、用量鈕），目標被下面的約束壓住，取最嚴的那條（PM，#1512）：
+ * 次要文字對 chip、chip-hover、chip-pressed 都 ≥ 4.5（Q5 的文字下限是硬約束，原型的目標只是過渡期的偏好）。
+ * hover／pressed 照 Libraries.dev 的階梯比例跟著 chip 走。
+ * 每條約束各換算成 chip 目標的上限，取最小的；再用四捨五入後的實際字串逐條驗一次，不過就往下推 0.0001。
  */
-const DEVELOP_PRESSED = {
-  // develop（c9b957b6）的 `--muted-foreground` 對 `--chip-pressed`，用當時產物的字串算精確值。
-  light: { muted: 'oklch(0.4819 0 0)', pressed: 'oklch(0.8669 0 0)' },
-  dark: { muted: 'oklch(0.6633 0 0)', pressed: 'oklch(0.3092 0 0)' },
-};
 const chipAway = (theme) => (theme === 'light' ? 'darker' : 'lighter'); // chip：亮色比底色暗、暗色比底色亮
-const CHIP_RULES = THEMES.flatMap((theme) => {
-  const developPressed = wcag(
-    srgb(DEVELOP_PRESSED[theme].muted),
-    srgb(DEVELOP_PRESSED[theme].pressed),
-  );
-  return [
-    { theme, step: 'chip', factor: 1, min: T.text, why: '次要文字對 chip ≥ 4.5' },
-    {
-      theme,
-      step: 'chip-hover',
-      factor: LIB_STEP.hover,
-      min: T.text,
-      why: '次要文字對 chip-hover ≥ 4.5',
-    },
-    {
-      theme,
-      step: 'chip-pressed',
-      factor: LIB_STEP.pressed,
-      min: developPressed,
-      why: `次要文字對 chip-pressed ≥ develop 的 ${developPressed.toFixed(4)}`,
-    },
-  ];
-});
+const CHIP_RULES = THEMES.flatMap((theme) => [
+  { theme, step: 'chip', factor: 1, min: T.text, why: '次要文字對 chip ≥ 4.5' },
+  {
+    theme,
+    step: 'chip-hover',
+    factor: LIB_STEP.hover,
+    min: T.text,
+    why: '次要文字對 chip-hover ≥ 4.5',
+  },
+  {
+    theme,
+    step: 'chip-pressed',
+    factor: LIB_STEP.pressed,
+    min: T.text,
+    why: '次要文字對 chip-pressed ≥ 4.5',
+  },
+]);
 /** 這條約束換算成 chip 目標的上限：次要文字對它剛好等於門檻的那個灰，對底色的對比，除以階梯比例。 */
 function chipCap(rule) {
   const bg = srgb(SG[rule.theme].background);
@@ -338,7 +325,8 @@ const RULES = {
   'status-interrupted': { page: T.status, card: T.text },
   'status-running': { page: T.status, card: T.text },
   link: { page: T.text, card: T.text },
-  warning: { page: T.status, card: T.text, stage: T.text },
+  // `chips`：疊在 chip 三階上。chip 是不透明的灰，不用疊頁面。
+  warning: { page: T.status, card: T.text, stage: T.text, chips: T.text },
   info: { page: T.status, card: T.text, stage: T.text },
 };
 const SG_COLORS = [
@@ -359,6 +347,10 @@ function tintFaces(theme, css, alpha) {
   return under.map((face) => composite(tint, face));
 }
 
+/** chip 三階的底（不透明）。 */
+const chipFaces = (theme) =>
+  ['chip', 'chip-hover', 'chip-pressed'].map((step) => srgb(NEXUS_SURFACE[theme][step]));
+
 function passes(theme, name, css) {
   const rule = RULES[name];
   const stage = srgb(NEXUS_SURFACE[theme].stage);
@@ -366,7 +358,8 @@ function passes(theme, name, css) {
     (rule.tints ?? []).every((tint) => worst(css, tintFaces(theme, css, tint[theme])) >= T.text) &&
     (rule.page === undefined || worst(css, BASE[theme].pages) >= rule.page) &&
     (rule.card === undefined || worst(css, facesOn(theme, SURFACE[theme].card)) >= rule.card) &&
-    (rule.stage === undefined || worst(css, [stage]) >= rule.stage)
+    (rule.stage === undefined || worst(css, [stage]) >= rule.stage) &&
+    (rule.chips === undefined || worst(css, chipFaces(theme)) >= rule.chips)
   );
 }
 
