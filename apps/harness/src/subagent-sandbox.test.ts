@@ -409,6 +409,38 @@ describe('子代理的沙箱模式', () => {
     }
   }, 20000);
 
+  /**
+   * **子日誌的順序：委派策略事件在前，子代理收到的那句話在後**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)）。
+   * 照 dsh：子會話的 setup 先寫 `subagent/descriptor` 與委派那一刻的政策（`manager.ts:880-891` 的
+   * `appendDelegatedPolicyOverrides`），第一句話等子代理迴圈的第一步才寫（`agent.ts:426-436`）。我們這邊參與者在
+   * `open()` 裡寫，輸入在 `open()` 回來之後由那一次查找寫（`registry.ts` 的 `writePendingSpawnInput`）。
+   * 兩顆參與者都是真的：沙箱政策（`sandbox/mode {source:'delegation'}`）與權限組合（父代理全開才帶 `permission/preset`）。
+   */
+  it('委派策略事件排在子代理那句 user/message 前面', async () => {
+    const run = await drive(
+      await assembleProduct('danger-full-access', [
+        delegate,
+        { content: '子代理收工。' },
+        { content: '根收工。' },
+      ]),
+    );
+    try {
+      const children = run.pump.sessions.list().filter((s) => s.address.kind === 'subagent');
+      expect(children).toHaveLength(1);
+      const types = children[0]!.log.events.map((event) => event.type);
+      const input = types.indexOf('user/message');
+      const mode = types.indexOf('sandbox/mode');
+      const preset = types.indexOf('permission/preset');
+      // 前提：三顆都在，而且那句話只有一則。
+      expect([mode, preset, input].every((at) => at >= 0)).toBe(true);
+      expect(types.filter((type) => type === 'user/message')).toHaveLength(1);
+      expect(mode).toBeLessThan(input);
+      expect(preset).toBeLessThan(input);
+    } finally {
+      await run.close();
+    }
+  }, 20000);
+
   it('沒給 --workspace 的組裝：子代理的日誌一顆 `sandbox/mode` 都沒有', async () => {
     const run = await runUnfenced([delegate, { content: '子代理收工。' }, { content: '根收工。' }]);
     try {

@@ -395,7 +395,10 @@ describe('sessions.expectSpawn', () => {
 
   /**
    * 子代理收到的那句話（#1159）：寫在 `open` 回來之後，每一位訂閱者都已接好（#1665）。排在 `bind` 後面的訂閱者代表持久化
-   * （serve 與 CLI 都把它接在最後）：它被通知的時候子日誌還是空的，之後的第一顆就是那句話。
+   * （serve 與 CLI 都把它接在最後）：它被通知的時候還沒有那句話。
+   *
+   * 這裡沒有掛會寫事件的參與者，所以那句話是子日誌唯一的一顆。它跟委派政策事件的先後（政策在前，同 dsh）要真的參與者才量得到，
+   * 釘在 `apps/harness/src/subagent-sandbox.test.ts`：這個套件不能依賴插件套件。
    */
   describe('子代理收到的那句話', () => {
     const input = toLoggedMessage(new HumanMessage('去查一下'));
@@ -413,7 +416,7 @@ describe('sessions.expectSpawn', () => {
       return { registry, sessions, seen };
     }
 
-    it('寫在每一位訂閱者之後，仍是子日誌的第一顆，之後再查不重寫', () => {
+    it('寫在每一位訂閱者之後，之後再查不重寫', () => {
       const { registry, seen } = wired();
       const found = registry.sessions.forCall(inChild);
       if (found.kind !== 'ok') throw new Error(`查不到：${found.kind}`);

@@ -358,7 +358,8 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
   //
   // 更深的（約 2000 層起）輪不到日誌那一關：LangGraph 在圖裡走節點回傳值的 `_deserializeCommandSendObjectGraph`
   // （`@langchain/langgraph` 的 `dist/constants.js`，遞迴）先爆 `Maximum call stack size exceeded`，碼是 UNKNOWN（#1665 之後
-  // 實測 2000、3000 層的 `turn/failed` 都是這一句），見 [#1668](https://github.com/DemianLi/nexus-agent/issues/1668)。
+  // 在本機 Node 25.9.0 實測 2000、3000 層的 `turn/failed` 都是這一句；棧深隨 Node 版本變，其他版本沒量），
+  // 見 [#1668](https://github.com/DemianLi/nexus-agent/issues/1668)。
   it('事件 601 層（日誌那一關剛好超過上限一層）：那一輪失敗在記回覆那一刻，下一輪與重開後模型收到同一份、沒有那則回覆', async () => {
     const { upstream, start, logFile } = await rig({ deep: { v: mixed(AT_LOG_CAP + 1) } });
     const server = await start();
@@ -379,7 +380,7 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
         `^會話事件的 assistant/message 的 data\\.message\\..* 是第 ${SESSION_EVENT_MAX_DEPTH + 1} 層巢狀，超過上限 ${SESSION_EVENT_MAX_DEPTH} 層$`,
       ),
     );
-    // 同 dsh：這種失敗沒有專屬的碼，`turn/end` 記 error、碼 UNKNOWN（`tool-calls.spec.ts:725-747`、`coverage-edges.spec.ts:300-325`）。
+    // 同 dsh：這種失敗沒有專屬的碼，不是 `LlmError` 的錯一律攤成 `errorChain` 文字、碼 UNKNOWN（`agent.ts:377-382`，`687f282e`）。
     expect(data.error.code).toBe('UNKNOWN');
     // 存檔點沒碰到這一則：量到的每一次寫入都在上限內。
     expect(Math.max(...dumpedDepths)).toBeLessThanOrEqual(CHECKPOINT_MAX_DEPTH);

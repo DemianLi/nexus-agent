@@ -982,7 +982,7 @@ export interface SpawnLink {
   readonly callId: string;
   /**
    * 子代理收到的那一句話（`task` 的 `description`，圍堵已經包成日誌的訊息形狀）。子日誌**出生**的那一次查找、`open` 回來之後
-   * 當成它的第一顆 `user/message` 寫進去（#1665，見 `pendingSpawnInputs`），來源 `user`，同 dsh 的
+   * 寫成一顆 `user/message`（#1665，見 `pendingSpawnInputs`），排在參與者於 `open` 裡寫的委派政策之後，來源 `user`，同 dsh 的
    * `child.followup(createUserMessage({content: prompt, source: {kind: 'user'}}))`。
    * 缺席（呼叫沒帶字串型的 `description`）就不寫，日誌跟以前一樣沒有輸入。
    *
@@ -1331,6 +1331,11 @@ export function pickSessionForCall(
  * 跳過它，這份子日誌之後寫的每一顆都靜靜不落盤，而同一個位址再 `open` 也不會重新通知。挪到 `open` 回來之後，同 dsh：子代理的第一句
  * 由它自己的迴圈在第一步寫（`packages/core/agent-loop/src/agent.ts:426-436`，`687f282e`），排在所有 `session/created` 監聽者之後；
  * 寫不進去是子代理那一步失敗，經 `task` 回到父代理成一次失敗的委派。
+ *
+ * **所以順序是委派政策在前、這一句在後**，同 dsh：子會話的 setup 先寫 `subagent/descriptor` 與委派那一刻的政策
+ * （`packages/subagent/subagent/src/manager.ts:880-891` 的 `appendDelegatedPolicyOverrides`），第一句等迴圈的第一步。我們的參與者
+ * （沙箱政策的 `sandbox/mode {source:'delegation'}`、權限組合的 `permission/preset`）在 `open` 裡寫，這一句在 `open` 回來之後寫。
+ * 用真的參與者釘在 `apps/harness/src/subagent-sandbox.test.ts`。
  *
  * **寫成功才清掉**：吞掉查找錯誤的那幾個呼叫端（用量記錄這類）先碰到的話，下一個查找照樣再寫一次、再拋，直到不吞的那一個讓這一步失敗。
  * 以子日誌為鍵、弱引用：子日誌不在了，登記跟著消失。

@@ -630,15 +630,48 @@ describe('工具事件記不進去：這一步失敗', () => {
 
   it('補的那顆也寫不進去：兩個錯一起拋（AggregateError），日誌上只有 tool/call', async () => {
     const log = new SessionLog('s');
-    const boom = new Error('寫不進去');
-    rejectOnly(log, 'tool/result', boom);
+    // 兩顆不同的錯：原錯（結果那顆）與補寫的錯（UNKNOWN 那顆）。順序與 cause 對調的話分得出來。
+    const original = new Error('結果寫不進去');
+    const recovery = new Error('補的也寫不進去');
+    let rejected = 0;
+    const real = log.append.bind(log);
+    vi.spyOn(log, 'append').mockImplementation(((t: never, data: never, options: never) => {
+      if (t === 'tool/result') throw rejected++ === 0 ? original : recovery;
+      return real(t, data, options);
+    }) as typeof log.append);
     const error = await thrownBy(
       recorder(log)(call(), async () => new ToolMessage({ content: '好', tool_call_id: 'call-1' })),
     );
     expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).errors).toEqual([boom, boom]);
-    expect((error as AggregateError).cause).toBe(boom);
+    expect((error as AggregateError).errors).toEqual([original, recovery]);
+    expect((error as AggregateError).cause).toBe(original);
     expect(log.events.map((event) => event.type)).toEqual(['tool/call']);
+  });
+
+  /**
+   * 結果那顆被拒時，跟著它注入的 `user/message` 不寫：結果沒進日誌，注入接在它後面就是孤兒。同 dsh：`appendToolResult` 拋了，
+   * 同一處後面的 `acceptContext` 輪不到（`packages/core/agent-loop/src/tool-calls.ts:156-157`，`687f282e`）。
+   */
+  it('tool/result 被拒（真的拒收）：跟著的注入不寫', async () => {
+    const log = new SessionLog('s');
+    const command = new Command({
+      update: {
+        messages: [
+          new ToolMessage({
+            content: '好了',
+            tool_call_id: 'call-1',
+            name: 'probe',
+            artifact: pastLogDepthCap(),
+          }),
+          new HumanMessage('收尾指示'),
+        ],
+      },
+    });
+    const error = await thrownBy(recorder(log)(call(), async () => command));
+    expect((error as Error).message).toMatch(/^會話事件的 tool\/result 的 data\.message\./);
+    // 補的那顆 UNKNOWN 在，注入的那句不在。
+    expect(log.events.map((event) => event.type)).toEqual(['tool/call', 'tool/result']);
+    expect(log.events[1]!.data).toMatchObject({ isError: true });
   });
 
   it('跟著結果注入的 user/message 被拒（真的拒收）：原錯往外拋，結果那顆已經在', async () => {
