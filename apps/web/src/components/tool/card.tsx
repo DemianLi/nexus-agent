@@ -237,6 +237,12 @@ function toolBody(entry: ToolEntry, view: ReturnType<typeof toStep>): ReactNode 
     parts.push(
       <OutputBlock key="error" label={STEP_LABELS.error} text={entry.error} tone="error" />,
     );
+  if (view.emptyNote !== undefined)
+    parts.push(
+      <p key="empty" className="text-muted-foreground text-tip">
+        {view.emptyNote}
+      </p>,
+    );
   if (view.backgroundRunId !== undefined)
     parts.push(<SubagentPanel key="subagent" runId={view.backgroundRunId} />);
   return parts.length === 0 ? undefined : parts;

@@ -20,6 +20,13 @@ import { axeViolations } from '@/test/axe';
 
 afterEach(cleanup);
 
+/**
+ * #1682 起是 SG 的 `StepRow`：收著那一行的 label（標題加摘要）是按鈕裡第一個 span，一段字；SG 的明細框用標題當 `pre` 的名稱
+ * （patch `0019`：「參數」「結果」「錯誤」）。
+ */
+const rowLabel = (card: HTMLElement = screen.getByTestId('tool-entry')) =>
+  card.querySelector('[data-slot="step-row"] > button > span')?.textContent;
+
 function tool(overrides: Partial<ToolEntry> = {}): ToolEntry {
   return {
     kind: 'tool',
@@ -46,18 +53,17 @@ describe('工具卡', () => {
     expect(within(card).getByText(label)).toBeTruthy();
   });
 
-  it('收著一行：分類的標題、工具名、參數摘要；展開看排好的參數', () => {
+  it('收著一行：分類的標題、工具名、參數摘要；展開看排好的參數（SG 的參數框）', () => {
     render(<ToolCard entry={tool({ name: 'echo', input: '{"message":"嗨"}' })} />);
     const trigger = screen.getByRole('button', { name: /回聲/ });
+    expect(rowLabel()).toBe('回聲 嗨');
     expect(trigger.textContent).toContain('echo');
-    expect(trigger.textContent).toContain('嗨');
     expect(trigger.getAttribute('aria-expanded')).toBe('false');
-    // 參數高亮後被切成一段一段的 span，改看整塊程式碼的字。
-    expect(document.querySelector('.md-code')).toBeNull();
+    expect(screen.queryByLabelText('參數')).toBeNull();
 
     fireEvent.click(trigger);
     expect(trigger.getAttribute('aria-expanded')).toBe('true');
-    expect(document.querySelector('.md-code pre')?.textContent).toContain('"message": "嗨"');
+    expect(screen.getByLabelText('參數').textContent).toBe('{\n  "message": "嗨"\n}');
   });
 
   it('失敗時收著那一行就是錯誤的第一行，展開看全文', () => {
@@ -92,7 +98,7 @@ describe('工具卡', () => {
   });
 
   it('狀態變化不唸：卡片裡沒有 live region', () => {
-    const { container } = render(<ToolCard entry={tool({ status: 'running' })} beam />);
+    const { container } = render(<ToolCard entry={tool({ status: 'running' })} />);
     expect(container.querySelector('[aria-live], [role="status"], [role="alert"]')).toBeNull();
   });
 });
@@ -101,23 +107,6 @@ describe('對話流裡的工具卡', () => {
   function state(entries: ToolEntry[]): ConversationState {
     return { ...emptyConversation(), status: 'running', entries };
   }
-
-  it('執行中的邊框光同時最多一個：給最後一顆還在跑的', () => {
-    render(
-      <Transcript
-        state={state([
-          tool({ id: 'a', status: 'running' }),
-          tool({ id: 'b', status: 'done' }),
-          tool({ id: 'c', status: 'running' }),
-        ])}
-        isFresh={() => false}
-      />,
-    );
-    const active = screen
-      .getAllByTestId('tool-entry')
-      .map((card) => card.getAttribute('data-active'));
-    expect(active).toEqual(['false', 'false', 'true']);
-  });
 
   it('含工具卡（收著與展開）的對話流過 axe', async () => {
     const { container } = render(
@@ -146,8 +135,8 @@ describe('對話流裡的工具卡', () => {
     };
     const view = render(<ToolCard entry={tool({ ...ask, status: 'suspended' })} />);
     const card = screen.getByTestId('tool-entry');
-    // Base UI 的 Root 掛 `data-open`／`data-closed`（#1638）；卡片是 Root 用 `render` 接的 `Surface`。
-    expect(card.hasAttribute('data-closed')).toBe(true);
+    const trigger = within(card).getByRole('button', { name: /提問/ });
+    expect(trigger.getAttribute('aria-expanded')).toBe('false');
     view.rerender(
       <ToolCard
         entry={tool({
@@ -159,9 +148,10 @@ describe('對話流裡的工具卡', () => {
        
       />,
     );
-    expect(card.hasAttribute('data-open')).toBe(true);
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
     expect(within(card).getByText('哪一天？')).toBeTruthy();
-    expect(within(card).getAllByText('已停止，請直接打字回覆').length).toBeGreaterThan(0);
+    expect(rowLabel(card)).toBe('提問 已停止，請直接打字回覆');
+    expect(within(trigger).getByText('已停止')).toBeTruthy();
   });
 
   describe('答完的提問卡（§4.3）', () => {
@@ -186,7 +176,7 @@ describe('對話流裡的工具卡', () => {
     it('線上帶著答案（#439）：收著講答了幾題，展開逐題「問題 → 回答」，不畫參數原文', () => {
       render(<ToolCard entry={{ ...ask, text: answersText(ANSWERS) }} />);
       const card = screen.getByTestId('tool-entry');
-      expect(within(card).getByText('已回答 2/2 題')).toBeTruthy();
+      expect(rowLabel(card)).toBe('提問 已回答 2/2 題');
       fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
       expect(
         within(card)
@@ -204,7 +194,7 @@ describe('對話流裡的工具卡', () => {
       ]);
       render(<ToolCard entry={{ ...ask, text }} />);
       const card = screen.getByTestId('tool-entry');
-      expect(within(card).getByText('已回答 1/2 題')).toBeTruthy();
+      expect(rowLabel(card)).toBe('提問 已回答 1/2 題');
       fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
       expect(
         within(card)
@@ -222,7 +212,7 @@ describe('對話流裡的工具卡', () => {
         />,
       );
       const card = screen.getByTestId('tool-entry');
-      expect(within(card).getByText('已回答 2/2 題')).toBeTruthy();
+      expect(rowLabel(card)).toBe('提問 已回答 2/2 題');
       fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
       expect(
         within(card)
@@ -262,7 +252,7 @@ describe('對話流裡的工具卡', () => {
 
       render(<ToolCard entry={{ ...ask, text: truncated }} />);
       const card = screen.getByTestId('tool-entry');
-      expect(within(card).getByText('已回答 2 題')).toBeTruthy();
+      expect(rowLabel(card)).toBe('提問 已回答 2 題');
       fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
       expect(within(card).getAllByTestId('question-row')).toHaveLength(2);
       expect(within(card).getByText('週一')).toBeTruthy();
@@ -279,7 +269,7 @@ describe('對話流裡的工具卡', () => {
       ]);
       render(<ToolCard entry={{ ...ask, text }} />);
       const card = screen.getByTestId('tool-entry');
-      expect(within(card).getByText('已回答 2/2 題')).toBeTruthy();
+      expect(rowLabel(card)).toBe('提問 已回答 2/2 題');
       fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
       expect(within(card).queryByText(/→/)).toBeNull();
       expect(within(card).getByText('答案和題目對不起來，只列題目。')).toBeTruthy();
@@ -288,7 +278,7 @@ describe('對話流裡的工具卡', () => {
     it('兩份都沒有：照樣「已回答 N 題」，展開列題目與選項', () => {
       render(<ToolCard entry={ask} />);
       const card = screen.getByTestId('tool-entry');
-      expect(within(card).getByText('已回答 2 題')).toBeTruthy();
+      expect(rowLabel(card)).toBe('提問 已回答 2 題');
       fireEvent.click(within(card).getByRole('button', { name: /提問/ }));
       expect(within(card).getAllByTestId('question-row')).toHaveLength(2);
       expect(within(card).getByText('週一')).toBeTruthy();
@@ -300,7 +290,7 @@ describe('對話流裡的工具卡', () => {
 
     it('還沒答完：收著講第一題與題數，不是參數 JSON（#409 第一刀留下的）', () => {
       render(<ToolCard entry={{ ...ask, status: 'suspended' }} />);
-      expect(screen.getByText('哪一天？（共 2 題）')).toBeTruthy();
+      expect(rowLabel()).toBe('提問 哪一天？（共 2 題）');
     });
   });
 });
@@ -331,13 +321,12 @@ describe('交付檔案的工具卡（#441 第一刀）', () => {
     render(
       <ToolCard
         entry={tool({ name: 'present', input: '{"files":[{"path":"out/re', status: 'running' })}
-        beam
       />,
     );
     const card = screen.getByTestId('tool-entry');
     expect(within(card).queryAllByTestId('presented-file')).toHaveLength(0);
     fireEvent.click(within(card).getByRole('button', { name: /交付檔案/ }));
-    expect(document.querySelector('.md-code pre')?.textContent).toContain('out/re');
+    expect(screen.queryByLabelText('參數')?.textContent).toContain('out/re');
   });
 
   it('被拒（檔案不存在）：照一般失敗畫，收著是錯誤的第一行', () => {
@@ -381,15 +370,12 @@ describe('待辦清單的工具卡（#575）', () => {
     const card = screen.getByTestId('tool-entry');
     const trigger = within(card).getByRole('button', { name: /更新待辦/ });
     expect(trigger.textContent).toContain('1/4 完成 · 寫測試');
-    // 「+1」不接在會被截斷的那一格裡：窄的時候最先被截掉的就是它。
+    // 「+1」不接在會被截斷的那一格（SG 的 label）裡：窄的時候最先被截掉的就是它。它在 trailing 槽，不縮。
     const extra = within(trigger).getByTestId('todo-extra');
     expect(extra.textContent).toBe('+1，另有 1 項進行中');
-    expect(extra.previousElementSibling?.classList.contains('truncate')).toBe(true);
+    expect(extra.closest('.truncate')).toBeNull();
+    expect(extra.parentElement).toBe(trigger);
     expect(extra.classList.contains('shrink-0')).toBe(true);
-    expect(extra.classList.contains('truncate')).toBe(false);
-    // 吃掉剩下寬度的是外層，不是會截斷的那格：放在那格上，「+N」會被推到最右邊的狀態字旁邊（真 Chrome 量到過）。
-    expect(extra.parentElement?.classList.contains('flex-1')).toBe(true);
-    expect(extra.previousElementSibling?.classList.contains('flex-1')).toBe(false);
     fireEvent.click(trigger);
     expect(
       within(card)
@@ -432,13 +418,12 @@ describe('待辦清單的工具卡（#575）', () => {
     render(
       <ToolCard
         entry={tool({ name: 'todo_write', input: '{"todos":[{"content":"讀', status: 'running' })}
-        beam
       />,
     );
     const card = screen.getByTestId('tool-entry');
     fireEvent.click(within(card).getByRole('button', { name: /更新待辦/ }));
     expect(within(card).queryAllByTestId('todo-item')).toHaveLength(0);
-    expect(document.querySelector('.md-code pre')?.textContent).toContain('"content"');
+    expect(screen.queryByLabelText('參數')?.textContent).toContain('"content"');
   });
 
   it('被工具本體拒絕（內容重複）：照一般失敗畫，收著是錯誤的第一行', () => {
@@ -501,10 +486,8 @@ describe('工具卡的結果與 diff', () => {
       />,
     );
     expand(/回聲/);
-    expect(document.querySelector('.md-code pre')?.textContent).toContain('"message": "嗨"');
-    const output = screen.getByTestId('tool-output');
-    expect(output.textContent).toContain('結果');
-    expect(within(output).getByLabelText('工具結果').textContent).toBe('echo: 嗨');
+    expect(screen.getByLabelText('參數').textContent).toContain('"message": "嗨"');
+    expect(screen.getByLabelText('結果').textContent).toBe('echo: 嗨');
   });
 
   it.each(['ls', 'read_file', 'glob', 'grep', 'write_file', 'edit_file'])(
@@ -517,8 +500,8 @@ describe('工具卡的結果與 diff', () => {
         />,
       );
       fireEvent.click(screen.getByRole('button', { expanded: false }));
-      expect(document.querySelector('.md-code')).toBeNull();
-      expect(screen.getByLabelText('工具結果').textContent).toBe('結果文字');
+      expect(screen.queryByLabelText('參數')).toBeNull();
+      expect(screen.getByLabelText('結果').textContent).toBe('結果文字');
     },
   );
 
@@ -530,22 +513,35 @@ describe('工具卡的結果與 diff', () => {
       />,
     );
     fireEvent.click(screen.getByRole('button', { expanded: false }));
-    expect(document.querySelector('.md-code')).not.toBeNull();
-    expect(screen.getByLabelText('工具結果').textContent).toBe('2');
+    expect(screen.queryByLabelText('參數')).not.toBeNull();
+    expect(screen.getByLabelText('結果').textContent).toBe('2');
   });
 
   it('沒有結果文字就不畫空的結果區塊', () => {
     render(<ToolCard entry={tool({ name: 'echo', input: '{"message":"嗨"}' })} />);
     expand(/回聲/);
-    expect(screen.queryByTestId('tool-output')).toBeNull();
-    expect(document.querySelector('.md-code')).not.toBeNull();
+    expect(screen.queryByLabelText('結果')).toBeNull();
+    expect(screen.queryByLabelText('參數')).not.toBeNull();
   });
 
-  it('只畫結果的工具還沒有結果時講一聲', () => {
-    render(<ToolCard entry={tool({ status: 'running' })} />);
+  it('只畫結果的工具還沒有結果時講一聲；結束了也沒有就講沒有（SG 不會因此把這一列停用）', () => {
+    const { unmount } = render(<ToolCard entry={tool({ status: 'running' })} />);
+    expect(screen.getByRole('button').hasAttribute('disabled')).toBe(false);
     expand(/讀取/);
-    expect(screen.queryByTestId('tool-output')).toBeNull();
+    expect(screen.queryByLabelText('結果')).toBeNull();
     expect(screen.getByText('還沒有結果。')).toBeTruthy();
+    unmount();
+
+    render(<ToolCard entry={tool()} />);
+    expand(/讀取/);
+    expect(screen.getByText('沒有結果文字。')).toBeTruthy();
+  });
+
+  it('該畫參數卻是空的：講沒有參數', () => {
+    render(<ToolCard entry={tool({ name: 'echo', input: '' })} />);
+    expand(/回聲/);
+    expect(screen.queryByLabelText('參數')).toBeNull();
+    expect(screen.getByText('沒有參數。')).toBeTruthy();
   });
 
   it('失敗時紅字照舊，同一串字不畫第二次', () => {
@@ -557,7 +553,7 @@ describe('工具卡的結果與 diff', () => {
       />,
     );
     expand(/回聲/);
-    expect(screen.queryByTestId('tool-output')).toBeNull();
+    expect(screen.queryByLabelText('結果')).toBeNull();
     expect(screen.getAllByText(error, { selector: 'pre' })).toHaveLength(1);
   });
 
@@ -566,62 +562,61 @@ describe('工具卡的結果與 diff', () => {
       <ToolCard entry={tool({ name: 'echo', text: lines(200) })} />,
     );
     expand(/回聲/);
-    expect(screen.queryByTestId('tool-output-omitted')).toBeNull();
-    expect(screen.getByLabelText('工具結果').textContent).toBe(lines(200));
+    expect(screen.getByLabelText('結果').textContent).toBe(lines(200));
     unmount();
 
+    // 頭、省略說明、尾組成一段（SG 的結果框只收一段字），說明自成一行。
     render(<ToolCard entry={tool({ name: 'echo', text: lines(201) })} />);
     expand(/回聲/);
-    expect(screen.getByTestId('tool-output-omitted').textContent).toBe('⋯ 中間 1 行沒畫 ⋯');
-    const text = screen.getByLabelText('工具結果').textContent ?? '';
-    expect(text.startsWith('第 1 行\n')).toBe(true);
-    expect(text).not.toContain('第 101 行\n');
-    expect(text).toContain('第 100 行\n');
-    expect(text.endsWith('第 201 行')).toBe(true);
+    const rows = (screen.getByLabelText('結果').textContent ?? '').split('\n');
+    expect(rows).toHaveLength(201);
+    expect(rows[0]).toBe('第 1 行');
+    expect(rows[99]).toBe('第 100 行');
+    expect(rows[100]).toBe('⋯ 中間 1 行沒畫 ⋯');
+    expect(rows[101]).toBe('第 102 行');
+    expect(rows[200]).toBe('第 201 行');
   });
 
   it('幾千行的結果展開後畫出來的行數不超過上限', () => {
     render(<ToolCard entry={tool({ name: 'echo', text: lines(5000) })} />);
     expand(/回聲/);
-    const text = screen.getByLabelText('工具結果').textContent ?? '';
+    const text = screen.getByLabelText('結果').textContent ?? '';
     // 頭 100、尾 100，加中間那一行說明。
     expect(text.split('\n')).toHaveLength(201);
-    expect(screen.getByTestId('tool-output-omitted').textContent).toBe('⋯ 中間 4800 行沒畫 ⋯');
+    expect(text.split('\n')[100]).toBe('⋯ 中間 4800 行沒畫 ⋯');
   });
 
-  it('參數超過字元上限：頭尾各畫一塊、中間一行講沒畫幾個字；沒超過就是一塊（#958）', () => {
+  it('參數超過字元上限：畫頭尾、中間一行講沒畫幾個字；沒超過就原樣（#958）', () => {
     const small = JSON.stringify({ message: '嗨' });
     const { unmount } = render(
       <ToolCard entry={tool({ name: 'echo', input: small, text: 'echo: 嗨' })} />,
     );
     expand(/回聲/);
-    expect(screen.queryByTestId('tool-input-omitted')).toBeNull();
-    expect(document.querySelectorAll('.md-code')).toHaveLength(1);
+    expect(screen.getByLabelText('參數').textContent).toBe('{\n  "message": "嗨"\n}');
     unmount();
 
     const message = `${'頭'.repeat(15_000)}${'麻'.repeat(7)}${'尾'.repeat(15_000)}`;
     const input = JSON.stringify({ message, extra: 1 });
     render(<ToolCard entry={tool({ name: 'echo', input, text: '收到' })} />);
     expand(/回聲/);
-    const omitted = screen.getByTestId('tool-input-omitted').textContent ?? '';
-    expect(omitted).toMatch(/^⋯ 中間 \d+ 字沒畫 ⋯$/);
-    const blocks = [...document.querySelectorAll('.md-code pre')].map((pre) => pre.textContent);
-    expect(blocks).toHaveLength(2);
-    const drawn = `${blocks[0]}${blocks[1]}`;
-    expect(drawn).not.toContain('麻');
+    // 頭、說明、尾組成一段：說明自成一行（SG 的參數框只收一段字）。
+    const shown = screen.getByLabelText('參數').textContent ?? '';
+    const omitted = /\n(⋯ 中間 (\d+) 字沒畫 ⋯)\n/.exec(shown);
+    expect(omitted).not.toBeNull();
+    const [head, tail] = shown.split(omitted![0]);
+    expect(shown).not.toContain('麻');
     // 畫出來的字加上說明裡的數字，剛好是排好的 JSON 的長度。
     const total = JSON.stringify(JSON.parse(input), null, 2).length;
-    expect(drawn.length + Number(/\d+/.exec(omitted)?.[0])).toBe(total);
-    expect(blocks[0]?.startsWith('{\n  "message": "頭')).toBe(true);
-    expect(blocks[1]?.endsWith('"extra": 1\n}')).toBe(true);
+    expect(head!.length + tail!.length + Number(omitted![2])).toBe(total);
+    expect(head!.startsWith('{\n  "message": "頭')).toBe(true);
+    expect(tail!.endsWith('"extra": 1\n}')).toBe(true);
   });
 
-  it('參數還在串流、已經超過上限時也頭尾各一塊，不拋錯（#958）', () => {
+  it('參數還在串流、已經超過上限時也頭尾加說明，不拋錯（#958）', () => {
     const input = JSON.stringify({ message: 'x'.repeat(50_000) });
     render(<ToolCard entry={tool({ name: 'echo', input, status: 'running' })} />);
     expand(/回聲/);
-    expect(screen.getByTestId('tool-input-omitted')).toBeTruthy();
-    expect(document.querySelectorAll('.md-code pre')).toHaveLength(2);
+    expect(screen.getByLabelText('參數').textContent).toMatch(/\n⋯ 中間 \d+ 字沒畫 ⋯\n/);
   });
 
   it('收合那一行摘要不會把整串超長的參數放進 DOM（#958）', () => {
@@ -635,11 +630,8 @@ describe('工具卡的結果與 diff', () => {
     const text = `${'頭'.repeat(10_000)}${'麻'.repeat(7)}${'尾'.repeat(10_000)}`;
     render(<ToolCard entry={tool({ name: 'echo', text })} />);
     expand(/回聲/);
-    expect(screen.getByTestId('tool-output-omitted').textContent).toBe('⋯ 中間 7 字沒畫 ⋯');
-    const drawn = screen.getByLabelText('工具結果').textContent ?? '';
-    expect(drawn).not.toContain('麻');
-    expect(drawn.startsWith('頭'.repeat(10_000))).toBe(true);
-    expect(drawn.endsWith('尾'.repeat(10_000))).toBe(true);
+    const drawn = screen.getByLabelText('結果').textContent ?? '';
+    expect(drawn).toBe(`${'頭'.repeat(10_000)}\n⋯ 中間 7 字沒畫 ⋯\n${'尾'.repeat(10_000)}`);
   });
 
   describe('write_file', () => {
@@ -667,7 +659,7 @@ describe('工具卡的結果與 diff', () => {
       expect(rows()[1]?.getAttribute('data-diff-line')).toBe('add');
       expect(rows()[1]?.textContent).toBe('+第 1 行');
       expect(rows()[8]?.textContent).toBe('+第 12 行');
-      expect(screen.queryByTestId('tool-output')).toBeNull();
+      expect(screen.queryByLabelText('結果')).toBeNull();
 
       const toggle = screen.getByTestId('tool-diff-toggle');
       expect(toggle.textContent).toBe('展開其餘 4 行');
@@ -730,7 +722,7 @@ describe('工具卡的結果與 diff', () => {
       expect(trigger.textContent).not.toMatch(/\+\d/);
       fireEvent.click(trigger);
       expect(screen.queryByTestId('tool-diff')).toBeNull();
-      expect(screen.getByLabelText('工具結果').textContent).toBe('Successfully wrote to /notes.md');
+      expect(screen.getByLabelText('結果').textContent).toBe('Successfully wrote to /notes.md');
     });
   });
 
@@ -776,7 +768,7 @@ describe('工具卡的結果與 diff', () => {
       expect(trigger.textContent).not.toContain('+1');
       fireEvent.click(trigger);
       expect(screen.queryByTestId('tool-diff')).toBeNull();
-      expect(screen.getByLabelText('工具結果').textContent).toContain('Successfully replaced');
+      expect(screen.getByLabelText('結果').textContent).toContain('Successfully replaced');
     });
 
     it('結束之後有 meta：畫實際套用的每一段，收著接合計的 +2 −2', () => {
@@ -805,7 +797,7 @@ describe('工具卡的結果與 diff', () => {
         'add',
         'context',
       ]);
-      expect(screen.queryByTestId('tool-output')).toBeNull();
+      expect(screen.queryByLabelText('結果')).toBeNull();
     });
 
     it('更正幀補上 meta：同一張卡從通用卡換成 diff', () => {
@@ -815,7 +807,7 @@ describe('工具卡的結果與 diff', () => {
       expect(screen.queryByTestId('tool-diff')).toBeNull();
       view.rerender(<ToolCard entry={{ ...done, meta: applied }} />);
       expect(screen.getByTestId('tool-diff')).toBeTruthy();
-      expect(screen.queryByTestId('tool-output')).toBeNull();
+      expect(screen.queryByLabelText('結果')).toBeNull();
     });
 
     it('失敗時紅字', () => {
@@ -875,7 +867,7 @@ describe('讀檔卡與搜尋卡（#625）', () => {
       row.getAttribute('data-read-line'),
     );
     expect(numbers).toEqual(['21', '22', '23']);
-    expect(screen.queryByTestId('tool-output')).toBeNull();
+    expect(screen.queryByLabelText('結果')).toBeNull();
   });
 
   it('讀檔：有上色（ts 是開機就載的文法）', () => {
@@ -907,10 +899,10 @@ describe('讀檔卡與搜尋卡（#625）', () => {
     const { meta: _meta, ...bare } = settled;
     const view = render(<ToolCard entry={bare} />);
     expand(/讀取/);
-    expect(screen.getByTestId('tool-output')).toBeTruthy();
+    expect(screen.getByLabelText('結果')).toBeTruthy();
     view.rerender(<ToolCard entry={settled} />);
     expect(screen.getByTestId('tool-read')).toBeTruthy();
-    expect(screen.queryByTestId('tool-output')).toBeNull();
+    expect(screen.queryByLabelText('結果')).toBeNull();
   });
 
   const grep = (meta: unknown) =>
@@ -949,7 +941,7 @@ describe('讀檔卡與搜尋卡（#625）', () => {
       'match:1: foo(1)',
       'match:2: foo(2)',
     ]);
-    expect(screen.queryByTestId('tool-output')).toBeNull();
+    expect(screen.queryByLabelText('結果')).toBeNull();
   });
 
   it('grep：超過 8 列收在中間，尾段補回檔案標題', () => {
@@ -979,7 +971,7 @@ describe('讀檔卡與搜尋卡（#625）', () => {
     const { meta: _meta, ...bare } = settled;
     const view = render(<ToolCard entry={bare} />);
     expand(/搜尋|尋找/);
-    expect(screen.getByTestId('tool-output')).toBeTruthy();
+    expect(screen.getByLabelText('結果')).toBeTruthy();
     view.rerender(<ToolCard entry={settled} />);
     const card = screen.getByTestId('tool-search');
     expect(within(card).getByText('2 個路徑')).toBeTruthy();
@@ -1010,7 +1002,7 @@ describe('讀檔卡與搜尋卡（#625）', () => {
     expect(within(card).getByText('顯示 100／共 300 個路徑')).toBeTruthy();
     expect(card.querySelectorAll('[data-search-row="path"]').length).toBeGreaterThan(0);
     expect(document.body.textContent).not.toContain('/large_tool_results/');
-    expect(screen.queryByTestId('tool-output')).toBeNull();
+    expect(screen.queryByLabelText('結果')).toBeNull();
   });
 
   it('meta 形狀不對：照舊畫結果文字，不畫半套', () => {
@@ -1022,7 +1014,7 @@ describe('讀檔卡與搜尋卡（#625）', () => {
     );
     expand(/搜尋/);
     expect(screen.queryByTestId('tool-search')).toBeNull();
-    expect(screen.getByTestId('tool-output')).toBeTruthy();
+    expect(screen.getByLabelText('結果')).toBeTruthy();
   });
 
   it('展開的讀檔卡與搜尋卡過 axe', async () => {

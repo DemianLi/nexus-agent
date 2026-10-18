@@ -90,6 +90,11 @@ export interface ToolStep {
   readonly truncated: ReturnType<typeof subagentMaxTokensOf>;
   readonly backgroundRunId: string | undefined;
   readonly subagentModel: string | undefined;
+  /**
+   * 一般工具展開後沒有東西可看時講一聲（舊卡就有）：該畫參數卻是空的「沒有參數。」，只畫結果的還沒有結果「還沒有結果。」、
+   * 結束了也沒有「沒有結果文字。」。畫在 children 槽，SG 才不會把這一列停用（停用的按鈕鍵盤停不上去）。
+   */
+  readonly emptyNote: string | undefined;
 }
 
 /** 結果文字組成一段：頭、省略說明、尾（`ToolOutputBlock` 原本畫成三段的那個形狀）。 */
@@ -166,13 +171,23 @@ export function toStep(
   const resultInChildren = ownView || truncated !== undefined;
   const body = toolInputBody(entry.name, entry.input);
   const output = toolOutput(entry);
+  const inputShown = showsInput(entry.name) && !ownView;
+  const emptyNote = resultInChildren
+    ? undefined
+    : inputShown
+      ? body === undefined
+        ? '沒有參數。'
+        : undefined
+      : output === undefined && entry.error === undefined
+        ? entry.status === 'running'
+          ? '還沒有結果。'
+          : '沒有結果文字。'
+        : undefined;
   const step: Step = {
     id: entry.id,
     label: summary === '' ? title : `${title} ${summary}`,
     status: sgStatus(entry, stopped),
-    ...(showsInput(entry.name) && body !== undefined && !ownView
-      ? { detail: inputText(body.text) }
-      : {}),
+    ...(inputShown && body !== undefined ? { detail: inputText(body.text) } : {}),
     ...(resultInChildren
       ? {}
       : {
@@ -199,5 +214,6 @@ export function toStep(
     truncated,
     backgroundRunId: background?.runId,
     subagentModel: background === undefined ? undefined : subagentModelText(background),
+    emptyNote,
   };
 }

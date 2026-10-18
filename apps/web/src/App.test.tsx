@@ -2330,8 +2330,9 @@ describe('停在提問時停止之後', () => {
 
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('已停止'));
     const card = screen.getByTestId('tool-entry');
-    expect(card.hasAttribute('data-open')).toBe(true);
-    expect(within(card).getAllByText(STOPPED_QUESTION_TEXT).length).toBeGreaterThan(0);
+    const trigger = within(card).getByRole('button', { name: /提問/ });
+    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    expect(trigger.textContent).toContain(STOPPED_QUESTION_TEXT);
     expect(within(card).getByText('哪一天？')).toBeTruthy();
     expect(within(card).getByText('週一：早上')).toBeTruthy();
     // 那句紅字是給模型看的英文；停止不是失敗（#276）。

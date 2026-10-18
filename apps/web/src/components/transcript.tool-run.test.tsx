@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { Transcript } from '@/components/transcript';
+import { MIN_TOOLS } from '@/lib/tool-runs';
 import { findOrExpandTranscriptItem, findTranscriptItem } from '@/lib/transcript-locate';
 import { axeViolations } from '@/test/axe';
 import { Script } from '@/test/conversation-frames';
@@ -48,8 +49,8 @@ describe('連續完成的工具呼叫收成一列（#1309）', () => {
     show(turn({ steps: 4 }));
     const button = runButton();
     expect(button.getAttribute('aria-expanded')).toBe('false');
-    expect(button.textContent).toContain('4 個工具呼叫');
-    expect(screen.getByTestId('tool-run-summary').textContent).toBe('讀取 ×3、寫入檔案');
+    // SG 的群組那一列是一段字（#1682）：顆數接工具摘要。
+    expect(button.textContent).toBe('4 個工具呼叫，讀取 ×3、寫入檔案');
     expect(screen.queryAllByTestId('tool-entry')).toHaveLength(0);
     expect(screen.queryAllByTestId('reasoning-row')).toHaveLength(1); // 只剩回覆那一則自己的
     expect(screen.getByText('人事最久沒更新。')).toBeTruthy();
@@ -79,16 +80,15 @@ describe('連續完成的工具呼叫收成一列（#1309）', () => {
     expect(screen.getAllByTestId('tool-entry')).toHaveLength(1);
   });
 
-  it('還在跑的那顆在段外、帶邊框光；前面完成的照收', () => {
+  it('還在跑的那顆在段外；前面完成的照收', () => {
     show(turn({ steps: 3, running: true, reply: false }));
     expect(runButton().textContent).toContain('3 個工具呼叫');
     const cards = screen.getAllByTestId('tool-entry');
     expect(cards).toHaveLength(1);
     expect(cards[0]!.getAttribute('data-status')).toBe('running');
-    expect(cards[0]!.getAttribute('data-active')).toBe('true');
   });
 
-  it('從觀測分頁定位到收起來的卡：先展開那一段（不做動畫），再找得到那一格', () => {
+  it('從觀測分頁定位到收起來的卡：先展開那一段，再找得到那一格', () => {
     show(turn({ steps: 4 }));
     expect(findTranscriptItem('tool-c3')).toBeUndefined();
     let item: HTMLElement | undefined;
@@ -98,24 +98,14 @@ describe('連續完成的工具呼叫收成一列（#1309）', () => {
     expect(item?.getAttribute('data-message-id')).toBe('tool-c3');
     expect(item?.querySelector('[data-testid=tool-entry]')).not.toBeNull();
     expect(runButton().getAttribute('aria-expanded')).toBe('true');
-    // 那一段自己的內容（Base UI 的 Panel）；Root、卡片也帶 `data-open`，用 data-slot 才只命中這一個（#1638）。
-    const content = screen
-      .getByTestId('tool-run')
-      .querySelector('[data-slot="collapsible-content"]');
-    expect(content).not.toBeNull();
-    expect(content?.className).not.toContain('animate-collapsible');
+    expect(item?.closest('[data-slot="step-list"]')).not.toBeNull();
     // 不在任何一段裡、也不在畫面上的：照舊找不到。
     expect(findOrExpandTranscriptItem('tool-nope')).toBeUndefined();
   });
 
-  it('自己點開的照樣有展開收合的動效', () => {
-    show(turn({ steps: 4 }));
-    fireEvent.click(runButton());
-    const content = screen
-      .getByTestId('tool-run')
-      .querySelector('[data-slot="collapsible-content"]');
-    expect(content).not.toBeNull();
-    expect(content?.className).toContain('animate-collapsible-down');
+  it('段至少兩顆：SG 的 StepGroup 只有一步（而且不在跑）時退化成 StepRow，children、trailing、open 都不轉過去（#1722 審查）', () => {
+    // 工具段一律自己給 children 與 open；只剩一步的話 SG 會丟掉它們，段裡的卡、定位、思考列都會不見。
+    expect(MIN_TOOLS).toBeGreaterThanOrEqual(2);
   });
 
   it('收合與展開都沒有 axe 違規', async () => {
