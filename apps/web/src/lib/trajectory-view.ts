@@ -207,6 +207,9 @@ export const TURN_END_LABEL: Readonly<Record<TrajectoryEnd, string>> = {
 /**
  * 失敗的那一輪是哪一類失敗（`TrajectoryDigest.failureCode`，#434／#1115／#1121）。詞彙與 `llm/retry` 的碼同一份；
  * 少了一個鍵就是畫面上多一個看不懂的英文碼，所以每一個都有一句話。`HTTP_<n>` 帶狀態碼，另走 {@link failureCodeText}。
+ *
+ * `LOCAL_CAPACITY` 是本機的碼（#1505）：全機的模型請求名額滿了、排隊等太久，請求根本沒送出去，不重試。那句話要講清楚是
+ * 這台主機在排隊、不是供應商的錯，而且稍後再送一次就可能過（#1632）。正在排隊的即時狀態下行沒有事件，畫面上沒有。
  */
 export const FAILURE_CODE_LABEL: Readonly<Record<string, string>> = {
   AUTH: '驗證失敗',
@@ -218,6 +221,7 @@ export const FAILURE_CODE_LABEL: Readonly<Record<string, string>> = {
   TIMEOUT: '逾時',
   TRANSPORT: '連線失敗',
   EMPTY_RESPONSE: '回覆是空的',
+  LOCAL_CAPACITY: '本機排隊太久，請求沒送出，可稍後再送',
   UNKNOWN: '原因不明',
 };
 

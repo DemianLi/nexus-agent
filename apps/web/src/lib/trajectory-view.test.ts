@@ -190,6 +190,7 @@ describe('失敗碼：一句話，不認得的原樣顯示', () => {
       'TIMEOUT',
       'TRANSPORT',
       'EMPTY_RESPONSE',
+      'LOCAL_CAPACITY',
       'UNKNOWN',
     ];
     for (const code of vocabulary) {
@@ -198,6 +199,8 @@ describe('失敗碼：一句話，不認得的原樣顯示', () => {
     }
     expect(failureCodeText('QUOTA')).toBe('額度用盡');
     expect(failureCodeText('EMPTY_RESPONSE')).toBe('回覆是空的');
+    // 本機的碼（#1505、#1632）：講明是這台主機在排隊、請求沒送出，不是供應商那邊的「被限流」或「逾時」。
+    expect(failureCodeText('LOCAL_CAPACITY')).toBe('本機排隊太久，請求沒送出，可稍後再送');
   });
 
   it('重試列的原因：帶了 HTTP 狀態就接在後面，碼本身是同一個 HTTP_<n> 只寫一次（#1449）', () => {
