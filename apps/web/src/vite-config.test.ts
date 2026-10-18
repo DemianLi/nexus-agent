@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 import ts from 'typescript';
@@ -41,6 +41,18 @@ describe('裸的 cn 解析到 lib/utils.ts（#1523）', () => {
     const resolve = config.createResolver();
     expect(await resolve('cn', utils)).toBe(utils);
     expect(await resolve('cn/config', utils)).toMatch(/node_modules\/.*\bcn\b.*config/);
+  });
+
+  it('guard 測試頁的打包設定也經根 tsconfig.base.json 的 paths 解析 @nexus（#1642）：指到的檔存在，外掛有掛上', async () => {
+    // 外掛的 `projects` 相對於 Vite 的 `root`（guard/）解析、指錯只印警告；乾淨樹（沒有 lib/）上 build 才會壞，CI 先建 lib 量不到。
+    const guard = fileURLToPath(new URL('../guard/vite.config.ts', import.meta.url));
+    const { BASE_TSCONFIG } = await import('../guard/vite.config');
+    expect(BASE_TSCONFIG).toBe(
+      fileURLToPath(new URL('../../../tsconfig.base.json', import.meta.url)),
+    );
+    expect(existsSync(BASE_TSCONFIG)).toBe(true);
+    const config = await resolveConfig({ configFile: guard }, 'build', 'production');
+    expect(config.plugins.map((plugin) => plugin.name)).toContain('vite-tsconfig-paths');
   });
 
   it('guard 測試頁的打包設定也用同一份解析（測試頁畫的 class 要跟出貨一樣）', async () => {
