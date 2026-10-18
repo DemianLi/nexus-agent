@@ -16,6 +16,14 @@
  *   物件路徑就是雜湊，所以讀圖時重算一次、去重碰到既有物件時重算一次，對不上就拋，不把來路不明的位元組交出去、
  *   也不讓壞物件「認領」新上傳。沒有行程內的「已驗過」快取（dsh 也沒有）；別名硬連結不重算內容，只比 inode：跟物件不同
  *   （物件被刪掉重建過）就原子地換掉（[#1352](https://github.com/DemianLi/nexus-agent/issues/1352)）。
+ * - **回報參照之前逐層 fsync 目錄**（[#1528](https://github.com/DemianLi/nexus-agent/issues/1528)，dsh `store.ts:126-183`、
+ *   `:272-302`、`:350-388`，`1517a4db`）：暫存檔內容 fsync 了還不夠，`link` 寫進父目錄的那一筆名字、這次新建的
+ *   `<前兩碼>` 目錄都要落盤，不然斷電後會話日誌引用的附件不見。
+ *   - 每個行程對 home 證明一次：home 往上到檔案系統根逐層 fsync（`ensureDurableHome`）。
+ *   - 暫存目錄、物件與別名的父目錄，建好之後往上逐層 fsync 到 home；**不看 `mkdir` 回報哪幾層是新建的**。
+ *   - `link`（或去重、或別名換掉）之後，從父目錄逐層 fsync 到附件根才回。去重那條也走。
+ *   - 目錄 fsync 用 `atomic-file.ts` 的 `syncDirectory`：Windows 略過，POSIX 錯往外拋，`save`／`saveImage` 包成
+ *     `ATTACHMENT_STORE_FAILED`（dsh 的 `ATTACHMENT_WRITE_FAILED`）。
  *
  * ## 偏離（依 AGENTS.md 登記）
  *
@@ -26,6 +34,11 @@
  *    我們沒有影像函式庫，圖按收到的位元組原樣存（`saveImage`），超過上限的拒收而不縮（`image-intake.ts`）。送進模型的是原圖。
  * 3. **沒有逐會話目錄**：dsh 的附件根也是全域內容定址（`attachments/v1`），不按會話分。同一個使用者的不同會話讀得到彼此的
  *    附件（要知道內容雜湊才能點到單一檔，但 `ls` 列得出來）；多人共用主機的隔離靠 `0700`，不靠會話。
+ * 4. **home 以上的祖先開不了就略過那一層**（理由 2，#1528 Q1 (b)，demian 2026-10-17 拍板）。dsh 的 home 證明一路 fsync
+ *    到檔案系統根，任何一層開不了都是寫入失敗；多人共用的主機常把 `/home` 這類目錄收成 `0711`（進得去、列不了），照 dsh
+ *    的話每一次上傳都失敗。所以只在 home **以上**、只對**開目錄時**的 `EACCES`／`EPERM`，略過那一層並在伺服器日誌講一次；
+ *    fsync 本身的錯、home 與 home 以下的任何錯照 dsh 拋。這個帳號開不了的祖先不是它建的，它在父目錄裡的那一筆不是
+ *    這次寫入要保證的。
  *
  * @module
  */
@@ -33,11 +46,12 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { chmod, link, mkdir, open, readFile, rename, stat, unlink } from 'node:fs/promises';
 import { constants, createReadStream } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join, parse, resolve } from 'node:path';
 
 import { ATTACHMENTS_MODEL_PREFIX } from '@nexus/core';
 import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType } from '@nexus/core';
 
+import { syncDirectory } from './atomic-file.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './owner-only.js';
 import { assertPrivateFile } from './plugin-config.js';
@@ -139,14 +153,73 @@ function isCode(error: unknown, code: string): boolean {
   return (error as NodeJS.ErrnoException | null)?.code === code;
 }
 
+/** 這個行程已經證明過「它和它以上每一層都落盤了」的 harness home（dsh `store.ts:23`）。 */
+const durableHomes = new Set<string>();
+/** 開不了、已經在日誌講過的 home 以上祖先：同一層一個行程只講一次（偏離 4）。 */
+const unreadableAncestors = new Set<string>();
+
+/**
+ * fsync 一層 **home 以上**的祖先。開目錄時 `EACCES`／`EPERM` 就略過那一層、講一次（偏離 4，#1528 Q1 (b)）；
+ * fsync 本身的錯、其他開目錄的錯照拋。開與 fsync 要分開判，所以不能直接用 `syncDirectory`。
+ */
+async function syncAncestorAboveHome(
+  directory: string,
+  warn: (line: string) => void,
+): Promise<void> {
+  if (process.platform === 'win32') return;
+  let handle;
+  try {
+    handle = await open(directory, 'r');
+  } catch (error) {
+    if (!isCode(error, 'EACCES') && !isCode(error, 'EPERM')) throw error;
+    if (!unreadableAncestors.has(directory)) {
+      unreadableAncestors.add(directory);
+      warn(
+        `[附件] ${directory} 開不了（${(error as NodeJS.ErrnoException).code ?? ''}），略過這一層的目錄 fsync：` +
+          '這個帳號開不了的祖先不是它建的，它在父目錄裡的那一筆不是這次寫入要保證的。home 與 home 以下照常逐層 fsync。',
+      );
+    }
+    return;
+  }
+  try {
+    await handle.sync();
+  } finally {
+    await handle.close();
+  }
+}
+
+/**
+ * 每個行程對一個 home 證明一次：從 home 往上逐層 fsync 父目錄，直到檔案系統根（dsh `ensureDurableHome`，`store.ts:176-183`）。
+ * 別的行程建的 home，在這個行程裡不算數。home 本身由呼叫端先建好（`#prepare`）。
+ */
+async function ensureDurableHome(home: string, warn: (line: string) => void): Promise<void> {
+  if (durableHomes.has(home)) return;
+  const stop = parse(home).root;
+  for (let level = home; level !== stop;) {
+    const parent = dirname(level);
+    await syncAncestorAboveHome(parent, warn);
+    if (parent === level) break;
+    level = parent;
+  }
+  durableHomes.add(home);
+}
+
 /** 本機附件儲存。一個行程一份，可以並行呼叫。 */
 export class AttachmentStore {
   readonly #root: string;
+  /** harness home：`<home>/attachments/v1` 往上兩層，逐層 fsync 的邊界（dsh `dirname(dirname(root))`）。 */
+  readonly #home: string;
+  readonly #warn: (line: string) => void;
   #prepared: Promise<void> | undefined;
 
-  /** @param rootDir - 絕對路徑，通常是 {@link attachmentsRootOf}。 */
-  constructor(rootDir: string) {
-    this.#root = rootDir;
+  /**
+   * @param rootDir - 絕對路徑，通常是 {@link attachmentsRootOf}。
+   * @param options.warn - 伺服器日誌（home 以上的祖先開不了時講一次）；省略即標準錯誤。
+   */
+  constructor(rootDir: string, options: { readonly warn?: (line: string) => void } = {}) {
+    this.#root = resolve(rootDir);
+    this.#home = dirname(dirname(this.#root));
+    this.#warn = options.warn ?? ((line) => process.stderr.write(`${line}\n`));
   }
 
   /** 附件根（絕對路徑）。 */
@@ -210,15 +283,12 @@ export class AttachmentStore {
       try {
         const objectPath = this.#objectPath(staged.sha256);
         await this.#publish(staged.path, objectPath, staged.sha256);
-        // 去重走到這裡也要把模式收回唯讀：先寫的那一個如果被人 chmod 過，這裡恢復。
-        await chmod(objectPath, OBJECT_FILE_MODE);
         const ref: FileAttachmentRef = {
           attachmentId: `sha256:${staged.sha256}`,
           name,
           bytes: staged.bytes,
         };
         const aliasDir = join(this.filesDir, staged.sha256.slice(0, 2), staged.sha256);
-        await this.#mkdirPrivate(aliasDir);
         await this.#publishAlias(objectPath, join(aliasDir, name));
         input.signal?.throwIfAborted();
         return ref;
@@ -256,9 +326,7 @@ export class AttachmentStore {
       await this.#prepare();
       const staged = await this.#stage(input.data, undefined, undefined);
       try {
-        const objectPath = this.#objectPath(staged.sha256);
-        await this.#publish(staged.path, objectPath, staged.sha256);
-        await chmod(objectPath, OBJECT_FILE_MODE);
+        await this.#publish(staged.path, this.#objectPath(staged.sha256), staged.sha256);
       } finally {
         await unlink(staged.path).catch(() => {});
       }
@@ -331,7 +399,11 @@ export class AttachmentStore {
     signal: AbortSignal | undefined,
     maxBytes: number | undefined,
   ): Promise<{ path: string; sha256: string; bytes: number }> {
-    const path = join(this.#root, 'staging', randomBytes(12).toString('hex'));
+    // 照 dsh `stageImmutableObject`（`store.ts:315-319`）：先證明 home 到根，再把暫存目錄到 home 逐層 fsync。
+    await ensureDurableHome(this.#home, this.#warn);
+    const staging = join(this.#root, 'staging');
+    await this.#ensureDurableDirectory(staging, this.#home);
+    const path = join(staging, randomBytes(12).toString('hex'));
     const handle = await open(
       path,
       constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY,
@@ -365,29 +437,46 @@ export class AttachmentStore {
   }
 
   /**
-   * `link` 進正式位置；目標已存在就是去重，不算錯。
+   * 把內容定址的物件 `link` 進正式位置；目標已存在就是去重，不算錯。照 dsh `publishStagedObject`（`store.ts:350-388`）：
    *
-   * @param expectedSha256 - 給了就是在發佈內容定址的物件：去重碰到既有物件時重算它的摘要，對不上拋
-   *   `ATTACHMENT_CORRUPT`，不讓先前寫壞或被換過的物件被新上傳「認領」。別名硬連結不給。
+   * - `link` 之前父目錄到 home 逐層 fsync；
+   * - 去重碰到既有物件時重算它的摘要，對不上拋 `ATTACHMENT_CORRUPT`，不讓先前寫壞或被換過的物件被新上傳「認領」；
+   * - 模式收回唯讀（去重時也收：先寫的那一個如果被人 chmod 過，這裡恢復）；
+   * - **回報之前**從父目錄逐層 fsync 到附件根。去重那條也走：它看到的可能是另一個寫者剛 `link`、還沒走到自己耐久點的物件。
    */
-  async #publish(source: string, target: string, expectedSha256?: string): Promise<void> {
-    await this.#mkdirPrivate(join(target, '..'));
+  async #publish(source: string, target: string, expectedSha256: string): Promise<void> {
+    const parent = dirname(target);
+    await this.#ensureDurableDirectory(parent, this.#home);
     try {
       await link(source, target);
     } catch (error) {
       if (!isCode(error, 'EEXIST')) throw error;
-      if (expectedSha256 !== undefined) await this.#verifyObject(target, expectedSha256);
+      await this.#verifyObject(target, expectedSha256);
     }
+    await chmod(target, OBJECT_FILE_MODE);
+    await this.#syncUpToRoot(parent);
   }
 
   /**
-   * 建檔名別名（物件的硬連結，[#1352](https://github.com/DemianLi/nexus-agent/issues/1352)）。別名已存在就比對它跟物件的
-   * `dev`＋`ino`：同一個 inode 是去重，什麼都不做；不同（物件被刪掉重建過，別名還指著舊的）就先連到暫存名、再 `rename`
-   * 蓋過去，別名一直都在，不會有一段時間讀不到。只比 inode、不重算內容：物件剛在同一次 `save` 裡驗過。
-   *
-   * 這是偏離 1 的產物：dsh 沒有檔名別名（讀檔走 sha 並且會驗），所以沒有對應做法可抄。
+   * 建檔名別名（物件的硬連結，[#1352](https://github.com/DemianLi/nexus-agent/issues/1352)），回報之前跟物件一樣逐層
+   * fsync（dsh `publishImmutableAlias`，`store.ts:272-302`）：開頭父目錄到 home，三種結局（新建、同一個 inode、換掉）
+   * 之後都從父目錄到附件根。
    */
   async #publishAlias(objectPath: string, aliasPath: string): Promise<void> {
+    const parent = dirname(aliasPath);
+    await this.#ensureDurableDirectory(parent, this.#home);
+    await this.#linkAlias(objectPath, aliasPath);
+    await this.#syncUpToRoot(parent);
+  }
+
+  /**
+   * 別名已存在就比對它跟物件的 `dev`＋`ino`：同一個 inode 是去重，什麼都不做；不同（物件被刪掉重建過，別名還指著舊的）
+   * 就先連到暫存名、再 `rename` 蓋過去，別名一直都在，不會有一段時間讀不到。只比 inode、不重算內容：物件剛在同一次
+   * `save` 裡驗過。
+   *
+   * 這是偏離 1 的產物：dsh 的別名比摘要（`store.ts:283-290`），我們比 inode。
+   */
+  async #linkAlias(objectPath: string, aliasPath: string): Promise<void> {
     try {
       await link(objectPath, aliasPath);
       return;
@@ -416,6 +505,29 @@ export class AttachmentStore {
         `既有物件的內容對不上它的雜湊（sha256:${expectedSha256}），不拿來去重`,
         'ATTACHMENT_CORRUPT',
       );
+    }
+  }
+
+  /**
+   * 建目錄（權限照 {@link #mkdirPrivate}），再從它往上逐層 fsync 父目錄，直到呼叫端擔保已落盤的 `boundary`
+   * （dsh `ensureDurableDirectory`，`store.ts:145-169`）。**不看 `mkdir` 回報哪幾層是新建的**：別的行程剛建、還沒
+   * fsync 的目錄，在這裡看來是「已存在」，「已存在」不等於「已落盤」。重複 fsync 無害，漏一層有害。
+   */
+  async #ensureDurableDirectory(path: string, boundary: string): Promise<void> {
+    await this.#mkdirPrivate(path);
+    for (let level = resolve(path); level !== boundary;) {
+      const parent = dirname(level);
+      await syncDirectory(parent);
+      if (parent === level) return;
+      level = parent;
+    }
+  }
+
+  /** 從 `from` 往上逐層 fsync，到附件根為止（不含根），dsh `store.ts:377-382`。 */
+  async #syncUpToRoot(from: string): Promise<void> {
+    for (let level = resolve(from); level !== this.#root; level = dirname(level)) {
+      await syncDirectory(level);
+      if (dirname(level) === level) return;
     }
   }
 
