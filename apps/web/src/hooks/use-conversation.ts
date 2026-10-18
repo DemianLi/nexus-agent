@@ -57,6 +57,7 @@ import type { RatingsView } from '@/lib/feedback-ratings';
 import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 import { threadCapacityText } from '@/lib/thread-capacity';
+import { randomUuid } from '@/lib/uuid';
 
 /** 回饋對話框開給誰：一則回覆（按了讚或踩），或整個會話（只打了 `/feedback`）。 */
 export type FeedbackTarget =
@@ -302,7 +303,7 @@ export interface Conversation {
 
 export function useConversation(options: UseConversationOptions = {}): Conversation {
   const client = useMemo(() => options.client ?? createAgentClient(), [options.client]);
-  const threadId = useMemo(() => options.threadId ?? crypto.randomUUID(), [options.threadId]);
+  const threadId = useMemo(() => options.threadId ?? randomUuid(), [options.threadId]);
 
   const [state, setState] = useState<ConversationState>(emptyConversation);
   // 右側欄的面板讀對話走這一條（#1033）：跟交給 React 的同一刻、同一份，所以放在發布回呼裡，不另外排。

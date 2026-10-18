@@ -245,22 +245,6 @@ const ALLOWED: readonly Allowed[] = [
     what: 'text-[0.9em]',
     why: '行內引用比周圍字小一點，要跟著周圍的字級走，所以用相對的 em，不是絕對值',
   },
-  // `ui/` 的 registry 原文：裝進來就是我們的原始碼，沒有改的就照舊；之後要改或確認要留，逐條處理。
-  {
-    file: 'components/ui/questionnaire.tsx',
-    what: 'text-base',
-    why: '題目標題與輸入框；輸入框同 input 的手機 16px 理由，標題同 dialog 的標題尺寸',
-  },
-  {
-    file: 'components/ui/questionnaire.tsx',
-    what: 'rounded-[4px]',
-    why: '選項的小方塊勾選框，registry 原文',
-  },
-  {
-    file: 'components/ui/questionnaire.tsx',
-    what: 'text-[0.625rem]',
-    why: '快捷鍵小標籤（10px），比 `text-micro`（11px）還小，registry 原文',
-  },
 ];
 
 interface Violation {

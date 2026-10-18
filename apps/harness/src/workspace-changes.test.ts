@@ -57,6 +57,7 @@ import {
   TEST_BROWSER_AUTH,
   loopbackRequest,
   shippedPlugins,
+  shippedPluginsWithFullAccess,
   shippedServePlugins,
   withScriptedModel,
 } from './fixtures.js';
@@ -611,6 +612,8 @@ describe('工作區外', () => {
     const outside = await outsideDirectory();
     const outcome = await run(THROUGH_LINK, FILES, {
       mode: 'danger-full-access',
+      // 出廠表沒有全開（#1621）：部署方加回那一組之後才起得來。
+      rows: await shippedPluginsWithFullAccess({ serve: true }),
       setup: (root) => symlink(outside, join(root, 'out')),
     });
     try {

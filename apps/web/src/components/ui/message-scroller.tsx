@@ -1,139 +1,47 @@
 /**
- * 來源：shadcn registry `message-scroller`（style new-york，https://ui.shadcn.com/r/styles/new-york-v4/message-scroller.json），
- * shadcn CLI 4.21.0 `shadcn add message-scroller message bubble dialog sonner --overwrite`。裝進來就是我們的原始碼，
- * 不靠重跑 `shadcn add` 更新。
- * 改過的地方（前兩項照原型 tag `proto-375-design-language`）：
- * - 中文報讀字串（§8）；捲到底的按鈕只淡入＋縮放 .97，時長走 `--duration-*` token（§7）。
- * - 拿掉 registry 原文 viewport 底部的淡出工具類：當時建置出的 CSS 裡沒有它（§9），寫著也沒作用。
- *   （#1523 起 shadcn 的 tailwind.css 有這組工具類，原始碼裡出現類名就會產出；這裡刻意不寫出類名。）
- * - item 拿掉 `[content-visibility:auto]` 與 `contain-intrinsic-size`：paint containment 會把卡片陰影與光暈切成直角（§9）；
- *   500 則的捲動量測寫在 #404 的 PR。
- * - viewport 自動捲動時的捲軸只換成透明（`scrollbar-color`），不再用 `scrollbar-none`：`scrollbar-width: none` 連 gutter 一起拿掉，
- *   內容寬度多出捲軸那幾 px、折行跟著變、高度一變又觸發貼底捲動，窄欄時停不下來（#1363）。**自動捲動的開始與結束都不能改內容寬度。**
+ * nexus 層（#1638 PR B）：轉出 vendor 的 solid-glass 版（`vendor/solid-glass/components/ui/message-scroller.tsx`），外觀照 SG（#1468 Q8）。
+ * 本地修改登記在 `vendor/solid-glass/README.md` 的「本地修改」，這個檔有一條（第 41 條）：
+ *
+ * - `MessageScrollerButton` 的動效照 nexus 的 §7：只淡入＋縮放 .97、不位移，時長與緩動走 `--duration-*`／`--ease-*` token。
+ *   vendor（`:100`）是 `translate-y-full`、`scale-95`、`duration-200`／`400` 加兩條 cubic-bezier。全域動效時長在 ④ 一起換成 SG，
+ *   這張單換一顆會兩套並存；不位移也讓「跳到最新」浮鈕的避讓（`hooks/use-scroll-button-clearance.ts`）量到的框不受過渡影響（PM 判）。
+ *   靠 cn 蓋掉 vendor 同一組的 class，所以每一條都要跟 vendor 那條的前綴一字不差。④ 換全域動效時拿掉，改回 vendor 原樣。
+ *
+ * 其餘本地修改不在這裡：
+ * - 報讀字串「捲到最新的訊息」「捲到最早的訊息」是改 vendor 檔（第 44 條，`patches/0009-message-scroller-scroll-label.patch`）。
+ * - item 的 `[content-visibility:auto]` 由覆寫檔壓成 `visible`（第 42 條，`styles/solid-glass.overrides.css`）：paint containment
+ *   會把卡片陰影與光暈切成直角（Q6、§9）。
+ * - viewport 的底部淡出（`scroll-fade-b`）在不支援 scroll-driven 動畫的瀏覽器歸 0、不常駐（第 43 條，同一個覆寫檔）。
+ *
+ * 自動捲動時 vendor 只把捲軸換成透明（`scrollbar-thumb-transparent`／`scrollbar-track-transparent` 只設 `scrollbar-color`），不改捲軸寬，
+ * 所以 #1363 不用本地修改；`registry-edits.test.ts` 釘 vendor 原文，`scripts/check-built-css.mjs` 掃產物。
  * 依賴 `@shadcn/react` 的 primitive：viewport 預設 `role="region"`、content 預設 `role="log"`。
  */
-import * as React from 'react';
-import {
-  MessageScroller as MessageScrollerPrimitive,
-  useMessageScroller,
-  useMessageScrollerScrollable,
-  useMessageScrollerVisibility,
-} from '@shadcn/react/message-scroller';
+import type * as React from 'react';
+
 import { cn } from '@/lib/utils';
-import { ArrowDownIcon } from 'lucide-react';
-
-import { Button } from '@/components/ui/button';
-
-function MessageScrollerProvider(
-  props: React.ComponentProps<typeof MessageScrollerPrimitive.Provider>,
-) {
-  return <MessageScrollerPrimitive.Provider {...props} />;
-}
-
-function MessageScroller({
-  className,
-  ...props
-}: React.ComponentProps<typeof MessageScrollerPrimitive.Root>) {
-  return (
-    <MessageScrollerPrimitive.Root
-      data-slot="message-scroller"
-      className={cn(
-        'group/message-scroller relative flex size-full min-h-0 flex-col overflow-hidden',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function MessageScrollerViewport({
-  className,
-  ...props
-}: React.ComponentProps<typeof MessageScrollerPrimitive.Viewport>) {
-  return (
-    <MessageScrollerPrimitive.Viewport
-      data-slot="message-scroller-viewport"
-      className={cn(
-        'size-full min-h-0 min-w-0 scrollbar-thin scrollbar-gutter-stable overflow-y-auto overscroll-contain contain-content data-autoscrolling:[scrollbar-color:transparent_transparent] data-pending-scroll:invisible',
-        className,
-      )}
-      {...props}
-    />
-  );
-}
-
-function MessageScrollerContent({
-  className,
-  ...props
-}: React.ComponentProps<typeof MessageScrollerPrimitive.Content>) {
-  return (
-    <MessageScrollerPrimitive.Content
-      data-slot="message-scroller-content"
-      className={cn('flex h-max min-h-full flex-col gap-8', className)}
-      {...props}
-    />
-  );
-}
-
-function MessageScrollerItem({
-  className,
-  scrollAnchor = false,
-  ...props
-}: React.ComponentProps<typeof MessageScrollerPrimitive.Item>) {
-  return (
-    <MessageScrollerPrimitive.Item
-      data-slot="message-scroller-item"
-      scrollAnchor={scrollAnchor}
-      className={cn('min-w-0 shrink-0', className)}
-      {...props}
-    />
-  );
-}
-
-function MessageScrollerButton({
-  direction = 'end',
-  className,
-  children,
-  render,
-  variant = 'secondary',
-  size = 'icon-sm',
-  ...props
-}: React.ComponentProps<typeof MessageScrollerPrimitive.Button> &
-  Pick<React.ComponentProps<typeof Button>, 'variant' | 'size'>) {
-  return (
-    <MessageScrollerPrimitive.Button
-      data-slot="message-scroller-button"
-      data-direction={direction}
-      data-variant={variant}
-      data-size={size}
-      direction={direction}
-      className={cn(
-        'absolute inset-s-1/2 -translate-x-1/2 border-border bg-background text-foreground transition-[scale,opacity] duration-(--duration-fast) ease-(--ease-smooth-out) hover:bg-muted hover:text-foreground data-[active=false]:pointer-events-none data-[active=false]:scale-97 data-[active=false]:opacity-0 data-[active=false]:duration-(--duration-quick) data-[active=true]:scale-100 data-[active=true]:opacity-100 data-[direction=end]:bottom-4 data-[direction=start]:top-4 rtl:translate-x-1/2 data-[direction=start]:[&_svg]:rotate-180',
-        className,
-      )}
-      render={render ?? <Button variant={variant} size={size} />}
-      {...props}
-    >
-      {children ?? (
-        <>
-          <ArrowDownIcon />
-          <span className="sr-only">
-            {direction === 'end' ? '捲到最新的訊息' : '捲到最早的訊息'}
-          </span>
-        </>
-      )}
-    </MessageScrollerPrimitive.Button>
-  );
-}
+import { MessageScrollerButton as VendorMessageScrollerButton } from '@/vendor/solid-glass/components/ui/message-scroller';
 
 export {
-  MessageScrollerProvider,
   MessageScroller,
-  MessageScrollerViewport,
   MessageScrollerContent,
   MessageScrollerItem,
-  MessageScrollerButton,
+  MessageScrollerProvider,
+  MessageScrollerViewport,
   useMessageScroller,
   useMessageScrollerScrollable,
   useMessageScrollerVisibility,
-};
+} from '@/vendor/solid-glass/components/ui/message-scroller';
+
+/** 第 41 條：蓋掉 vendor 的位移、縮放、時長與緩動（§7）。 */
+export const SCROLL_BUTTON_MOTION =
+  'transition-[scale,opacity] duration-(--duration-fast) data-[active=false]:scale-97 data-[active=false]:duration-(--duration-quick) data-[active=false]:ease-(--ease-smooth-out) data-[active=true]:ease-(--ease-smooth-out) data-[direction=end]:data-[active=false]:translate-y-0 data-[direction=start]:data-[active=false]:translate-y-0';
+
+function MessageScrollerButton({
+  className,
+  ...props
+}: React.ComponentProps<typeof VendorMessageScrollerButton>) {
+  return <VendorMessageScrollerButton className={cn(SCROLL_BUTTON_MOTION, className)} {...props} />;
+}
+
+export { MessageScrollerButton };

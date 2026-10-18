@@ -68,7 +68,7 @@ import {
   resolveHarnessHome,
 } from './harness-home.js';
 import { canonicalize, canonicalizeExisting, isWithin } from './canonical-path.js';
-import { LEGACY_ENV_FILE } from './launch-env.js';
+import { LEGACY_ENV_FILE, legacyEnvFileFor } from './launch-env.js';
 import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/goal';
 import type { GoalServices } from '@nexus/goal';
 import { WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
@@ -458,8 +458,10 @@ export interface LaunchPathsCheck {
   readonly cwd: string;
   /** 決定 harness home 落在哪（同 {@link resolveHarnessHome}）。 */
   readonly env: Readonly<Record<string, string | undefined>>;
-  /** 程式碼資料夾根目錄的舊 `.env`。省略即 `launch-env.ts` 的那一份；測試才傳。 */
+  /** 程式碼資料夾根目錄的舊 `.env`。省略即 `launch-env.ts` 的那一份（安裝樹沒有）；測試才傳。 */
   readonly legacyEnvFile?: string;
+  /** 本模組所在的目錄，決定舊位置在哪、有沒有（`legacyEnvFileFor`）；測試才傳。 */
+  readonly moduleDir?: string;
 }
 
 /**
@@ -505,6 +507,9 @@ export async function assertLaunchPathsOutsideWorkspace(check: LaunchPathsCheck)
     configured !== undefined && configured.trim().length > 0
       ? `${HARNESS_HOME_ENV}`
       : `預設的 ~/${HARNESS_HOME_DIR_NAME}`;
+  const legacyEnvFile =
+    check.legacyEnvFile ??
+    (check.moduleDir === undefined ? LEGACY_ENV_FILE : legacyEnvFileFor(check.moduleDir));
   const candidates: readonly {
     readonly label: string;
     readonly path: string;
@@ -517,11 +522,10 @@ export async function assertLaunchPathsOutsideWorkspace(check: LaunchPathsCheck)
       path: resolve(home, '.env'),
       mustExist: true,
     },
-    {
-      label: '程式碼資料夾根目錄的舊 .env',
-      path: check.legacyEnvFile ?? LEGACY_ENV_FILE,
-      mustExist: true,
-    },
+    // 安裝樹沒有「程式碼資料夾根目錄」，這一格不列（#1671）：否則 `/opt/.env` 這種不相干的檔會被當成舊檔去比對工作區。
+    ...(legacyEnvFile === undefined
+      ? []
+      : [{ label: '程式碼資料夾根目錄的舊 .env', path: legacyEnvFile, mustExist: true }]),
   ];
   const seen = new Set<string>();
   const overlaps: string[] = [];
