@@ -31,8 +31,15 @@ export interface PresetSpec {
 export type PresetTable = Readonly<Record<string, PresetSpec>>;
 
 /**
- * 出廠的三組，名字與值一字不差照 dsh（`packages/bundle/base/cordis.patch.yml:252-261`）。
- * 名字刻意和沙箱模式同名：web 的「全開」確認認的就是 `danger-full-access`。
+ * 出廠的兩組：`read-only` 與 `workspace-write`，名字與值照 dsh base 出廠的前兩組
+ * （`packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`）。名字刻意和沙箱模式同名：web 的「全開」確認認的就是
+ * `danger-full-access`，部署方加回那一組時照樣作用。
+ *
+ * **與 dsh 的偏離：出廠不含 `danger-full-access`（理由 2，[#1621](https://github.com/DemianLi/nexus-agent/issues/1621)）。**
+ * dsh base 出廠三組，表裡有就人人可選；dsh 的使用者就是部署方。我們的 serve 多人共用一台主機，同一把 token 底下的每個人
+ * 都切得到，所以出廠不給。CLI 也跟著少這一組，屬理由 1：出貨層只有一份表（`cordis.serve.yml` 只能追加列，不能改列），
+ * 表達不出「serve 少一組、CLI 照舊」。**部署方要全開**，用 `--patch` 或 `plugin config set` 把整張表重寫一份、加回這一組
+ * （`presets` 是整份替換）；加回之後機制與 dsh 相同，值照 dsh：沙箱 `danger-full-access`、核准 `never`。
  */
 export const DEFAULT_PRESETS: PresetTable = {
   'read-only': {
@@ -46,12 +53,6 @@ export const DEFAULT_PRESETS: PresetTable = {
     approval: 'ask',
     name: 'workspace-write',
     description: '可以寫工作區；要超出時先問你。',
-  },
-  'danger-full-access': {
-    sandbox: 'danger-full-access',
-    approval: 'never',
-    name: 'danger-full-access',
-    description: '檔案不設限，而且不問你：要人點頭的事一律直接回絕。',
   },
 };
 

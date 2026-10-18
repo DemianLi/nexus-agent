@@ -8,7 +8,7 @@
 **要 `--workspace` 才存在。** 沒給的話檔案跑在虛擬檔案系統裡，那道 fence 根本不在路徑上。
 
 給了之後 `--sandbox <mode>` 決定**起始**強度——`read-only`、`workspace-write`（預設）、
-`danger-full-access`——而跑起來之後 `/permission` 切得動它：不帶引數報告現在是哪一組權限組合與可寫根，
+`danger-full-access`（出廠的權限表沒有這一組，要部署方加回，見下一節）——而跑起來之後 `/permission` 切得動它：不帶引數報告現在是哪一組權限組合與可寫根，
 帶一個組名就切過去（見下一節）。切換同時作用在兩個地方：檔案工具擋不擋得住，以及模型自己知不知道現在在哪一格
 （那句話每次模型呼叫重算）。每一次真的變了都會在會話日誌裡留一顆 `sandbox/mode`，接線當下也會
 釘一顆起始值——所以一份日誌答得出「這一輪跑的時候政策是哪一格」。
@@ -16,13 +16,29 @@
 ### 權限組合：`/permission`
 
 [#437](https://github.com/DemianLi/nexus-agent/issues/437)。把「檔案政策」與「核准政策」兩顆旋鈕捆成使用者看得懂的具名組合，
-**是切換它們的唯一入口**（舊的 `/sandbox` 拿掉了）。出廠三組，名字與值照 dsh：
+**是切換它們的唯一入口**（舊的 `/sandbox` 拿掉了）。出廠兩組，名字與值照 dsh 的前兩組：
 
-| 組                        | 檔案政策             | 核准政策                                  |
-| ------------------------- | -------------------- | ----------------------------------------- |
-| `read-only`               | `read-only`          | `ask`（要改動時先問你）                   |
-| `workspace-write`（預設） | `workspace-write`    | `ask`                                     |
-| `danger-full-access`      | `danger-full-access` | `never`（不問：要人點頭的事一律直接回絕） |
+| 組                        | 檔案政策          | 核准政策                |
+| ------------------------- | ----------------- | ----------------------- |
+| `read-only`               | `read-only`       | `ask`（要改動時先問你） |
+| `workspace-write`（預設） | `workspace-write` | `ask`                   |
+
+**出廠不給全開**（[#1621](https://github.com/DemianLi/nexus-agent/issues/1621)）：dsh 出廠還有第三組 `danger-full-access`
+（檔案政策 `danger-full-access`、核准 `never`，要人點頭的事一律直接回絕）。serve 多人共用一台主機，同一把 token 底下的每個人都切得到，
+所以出廠拿掉；CLI 用同一份表，也跟著少。**部署方要全開**，用 `--patch`（或 `plugin config set`）把整張表重寫一份加回去：
+
+```yaml
+- id: permission-presets
+  config:
+    presets:
+      read-only: { sandbox: read-only, approval: ask }
+      workspace-write: { sandbox: workspace-write, approval: ask }
+      danger-full-access: { sandbox: danger-full-access, approval: never }
+```
+
+加回之後的行為跟以前一樣（下面各條講到全開的地方，都是指加回之後）。**已經用 `--sandbox danger-full-access` 起的部署**，
+升級後沒加回會在起動當下失敗，訊息是「對不上組合表裡任何一組……要嘛在表裡補上那一組，要嘛設定 defaultPreset」；
+已經切到全開的舊會話續接時保留日誌裡的值，顯示為 `custom`，但切不回全開。
 
 - **現在是哪一組是推導出來的**：兩顆旋鈕實際的值對上哪一組就是哪一組，對不上任何一組顯示 `custom`（只能顯示，不是切換目標）。
 - **`--sandbox` 同時決定核准的起始值**：`--sandbox danger-full-access` 是「全開＋不問」。**這是行為改變**：以前它只放寬檔案、核准照舊會問。
@@ -66,7 +82,7 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 包一層沙箱，也不打算在不改設計的前提下假裝有。細節見 [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)
 的「明文限制」。
 
-**3. 三個組合是政策，不是隔離。** `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
+**3. 三種檔案政策是政策，不是隔離。** `read-only` / `workspace-write` / `danger-full-access` 決定的是 harness 內建檔案工具肯不肯
 動手；它們不涵蓋子行程與網路，對讀也幾乎沒有作用（見第 1 條）。`danger-full-access` 放行 symlink 逃逸，但基座字面的 `..`
 檢查仍在，所以它也不是 dsh 那種真正的不設防（偏離登記在 `contained-backend.ts` 檔頭）。**執行期的提示詞與 `/permission` 的輸出不會講這些**：它們描述的是「檔案工具現在擋不擋」，
 並沒有宣稱整台機器被隔離。需要真正隔離的場合（多人共用主機、不信任的模型或 MCP server），請在這層之外自己加容器或帳號邊界。

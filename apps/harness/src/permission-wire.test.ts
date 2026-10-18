@@ -14,7 +14,7 @@ import type { Event, WireClient } from '@nexus/wire';
 import { emptyConversation, PERMISSIONS_PROJECTION_KEY, PROJECTION, reduceAll } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { serveClient } from './fixtures.js';
+import { FULL_ACCESS_PATCH, serveClient } from './fixtures.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 
@@ -26,9 +26,13 @@ afterEach(async () => {
   running = undefined;
 });
 
-async function start(root: string, workspace: string): Promise<RunningServe> {
+async function start(
+  root: string,
+  workspace: string,
+  extra: readonly string[] = [],
+): Promise<RunningServe> {
   const server = (await runServe({
-    argv: ['--port', '0', '--session-log', root, '--workspace', workspace],
+    argv: ['--port', '0', '--session-log', root, '--workspace', workspace, ...extra],
     log: () => {},
     env: {},
   })) as RunningServe;
@@ -43,6 +47,16 @@ const pushed = (frames: readonly Event[]): string[] =>
     .map((frame) => frame.params.data as { name: string; payload: { key: string; view: unknown } })
     .filter((data) => data.name === PROJECTION && data.payload.key === PERMISSIONS_PROJECTION_KEY)
     .map((data) => (data.payload.view as { currentValue: string }).currentValue);
+
+/** 部署方加回全開那一組（#1621：出廠表只有兩組）。 */
+const WITH_FULL_ACCESS = ['--patch', FULL_ACCESS_PATCH] as const;
+
+/** 歷史最新一頁的事件數。 */
+async function historyLength(client: WireClient, threadId: string): Promise<number> {
+  const outcome = await client.threadHistory(threadId);
+  if (outcome.kind !== 'ok') throw new Error(`歷史沒拿到：${JSON.stringify(outcome)}`);
+  return outcome.result.events.length;
+}
 
 /** 歷史最新一頁折出的 `permissions` 投影。 */
 async function refreshed(client: WireClient, threadId: string): Promise<string | undefined> {
@@ -72,10 +86,10 @@ async function until(done: () => boolean): Promise<void> {
 }
 
 describe('權限組合的投影，線上與歷史一致', () => {
-  it('切到全開：下行推出 currentValue=danger-full-access；重新整理與冷啟動都讀回同一個值', async () => {
+  it('部署方加回全開之後切過去：下行推出 currentValue=danger-full-access；重新整理與冷啟動都讀回同一個值', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-permission-wire-'));
     const workspace = await mkdtemp(join(tmpdir(), 'nexus-permission-wire-ws-'));
-    const first = await start(root, workspace);
+    const first = await start(root, workspace, WITH_FULL_ACCESS);
     const client = await serveClient(first);
     const live = await follow(client, 't');
 
@@ -95,7 +109,67 @@ describe('權限組合的投影，線上與歷史一致', () => {
     // 冷啟動：server 重開，第一次開歷史（還沒有任何即時 frame）就是全開。
     await first.close();
     running = undefined;
-    const second = await start(root, workspace);
+    const second = await start(root, workspace, WITH_FULL_ACCESS);
     expect(await refreshed(await serveClient(second), 't')).toBe('danger-full-access');
+  });
+});
+
+describe('出廠表沒有全開（#1621）', () => {
+  it('`/permission danger-full-access` 回 error、日誌沒有新事件、目錄只有兩組', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-permission-wire-'));
+    const workspace = await mkdtemp(join(tmpdir(), 'nexus-permission-wire-ws-'));
+    const client = await serveClient(await start(root, workspace));
+
+    const catalog = await client.permissionCatalog('t');
+    expect(catalog.kind).toBe('ok');
+    if (catalog.kind !== 'ok') return;
+    expect(catalog.result.value.catalog.options.map((option) => option.value)).toEqual([
+      'read-only',
+      'workspace-write',
+    ]);
+
+    const before = await historyLength(client, 't');
+    expect(await client.slashRun('t', '/permission danger-full-access')).toMatchObject({
+      kind: 'error',
+    });
+    expect(await historyLength(client, 't')).toBe(before);
+    expect(await refreshed(client, 't')).toBe('workspace-write');
+  });
+
+  it('`--sandbox danger-full-access` 起 serve：起動當下失敗，訊息指出要在表裡補上那一組', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-permission-wire-'));
+    const workspace = await mkdtemp(join(tmpdir(), 'nexus-permission-wire-ws-'));
+    await expect(start(root, workspace, ['--sandbox', 'danger-full-access'])).rejects.toThrow(
+      '要嘛在表裡補上那一組',
+    );
+  });
+
+  it('升級前切到全開的會話，升級後沒加回：serve 照樣起得來，續接保留日誌裡的值、顯示 custom，切不回全開', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-permission-wire-'));
+    const workspace = await mkdtemp(join(tmpdir(), 'nexus-permission-wire-ws-'));
+    const before = await serveClient(await start(root, workspace, WITH_FULL_ACCESS));
+    expect(await before.slashRun('t', '/permission danger-full-access')).toMatchObject({
+      kind: 'success',
+    });
+    expect(await refreshed(before, 't')).toBe('danger-full-access');
+    await running?.close();
+    running = undefined;
+
+    const after = await serveClient(await start(root, workspace));
+    expect(await refreshed(after, 't')).toBe('custom');
+    expect(await after.slashRun('t', '/permission danger-full-access')).toMatchObject({
+      kind: 'error',
+    });
+  });
+
+  it('加回之後 `--sandbox danger-full-access` 照樣起得來，起始組合就是全開', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'nexus-permission-wire-'));
+    const workspace = await mkdtemp(join(tmpdir(), 'nexus-permission-wire-ws-'));
+    const server = await start(root, workspace, [
+      ...WITH_FULL_ACCESS,
+      '--sandbox',
+      'danger-full-access',
+    ]);
+    expect(await refreshed(await serveClient(server), 't')).toBe('danger-full-access');
   });
 });

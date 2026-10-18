@@ -765,8 +765,21 @@
 # ── 權限組合（#437）──────────────────────────────────────────────────────────
 #
 # **把「檔案政策」與「核准政策」兩顆旋鈕捆成具名組合，並且是切換它們的唯一入口 `/permission`。** 對應 dsh 的
-# `permission-presets`（`packages/bundle/base/cordis.patch.yml:244-261`）：出廠三組 `read-only`／`workspace-write`／
-# `danger-full-access`，名字與值一字不差。
+# `permission-presets`（`packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`）：出廠兩組 `read-only`／`workspace-write`，
+# 名字與值照 dsh 的前兩組。**dsh 出廠還有第三組 `danger-full-access`，我們出廠不給**（#1621，理由 2：多人共用一台主機，
+# 同一把 token 底下的每個人都切得到；CLI 也跟著少這一組，屬理由 1：出貨層只有一份表）。部署方要全開，用 patch 把整張表
+# 重寫一份、加回這一組，值照 dsh：
+#
+# ```yaml
+# - id: permission-presets
+#   config:
+#     presets:
+#       read-only: { sandbox: read-only, approval: ask }
+#       workspace-write: { sandbox: workspace-write, approval: ask }
+#       danger-full-access: { sandbox: danger-full-access, approval: never }
+# ```
+#
+# 沒加回就給 `--sandbox danger-full-access`，起始值對不上表裡任何一組，起動當場失敗。
 #
 # - **`presets` 是整份替換、不是深層合併**（patch 的規矩）：要刪掉某一組，把整張表重寫一份只留要的。每一組必填 `sandbox` 與
 #   `approval`，選填 `name`／`description`。`custom` 是保留字（對不上任何一組時的顯示值），不能當組名。

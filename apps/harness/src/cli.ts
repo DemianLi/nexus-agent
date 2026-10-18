@@ -113,6 +113,7 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        （省略即虛擬檔案系統，完全不碰磁碟）
   --sandbox <mode>     圍堵強度：read-only｜workspace-write｜danger-full-access
                        預設 workspace-write（可寫根之內放行）；要配 --workspace
+                       danger-full-access 出廠的權限表沒有，要先在表裡加回那一組
   --session-log <dir>  把會話日誌改寫到這個目錄底下
                        （預設 $NEXUS_AGENT_HOME/sessions，沒設就是 ~/.nexus-agent/sessions）
                        它不能在 --workspace 底下：日誌是基礎建設，不是 agent 的工作區

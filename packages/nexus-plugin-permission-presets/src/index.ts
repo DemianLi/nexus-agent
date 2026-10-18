@@ -27,6 +27,10 @@
  *    我們的設定檔機制沒有辦法讓一列在某些 profile 才存在，所以退到「不註冊」——淨效果相同（沒有圍堵就沒有 `/permission`），但這不是 dsh 的機制，
  *    同 `@nexus/plugin-sandbox-policy` 登記過的 `/sandbox`。
  * 5. **沒有 `auto` 那一組與目錄變動通知。** dsh 的 `auto` 是選配、出廠沒開的一組，目錄靠 payload-free 的事件通知變動；我們出廠的目錄啟動時就定了。
+ * 6. **出廠表不含 `danger-full-access`（理由 2，[#1621](https://github.com/DemianLi/nexus-agent/issues/1621)）。** dsh base 出廠三組
+ *    （`packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`），表裡有就人人可選；我們的 serve 多人共用一台主機，同一把 token 底下
+ *    的每個人都切得到，所以出廠只留兩組。CLI 跟著少一組屬理由 1：出貨層只有一份表，表達不出「serve 少、CLI 照舊」。部署方要全開就把整張表
+ *    重寫一份加回去（見 `presets.ts` 的 `DEFAULT_PRESETS`）；沒加回又用 `--sandbox danger-full-access` 起，新會話在起動當下失敗。
  *
  * @module
  */
