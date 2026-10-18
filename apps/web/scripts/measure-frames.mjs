@@ -53,6 +53,7 @@ const { values: options } = parseArgs({
     headed: { type: 'boolean', default: false },
     harness: { type: 'string' },
     viewport: { type: 'string', default: '1440x900' },
+    'tool-mix': { type: 'string', default: 'mixed' },
   },
 });
 const RUNS = Number(options.runs);
@@ -102,7 +103,21 @@ function plan() {
 /** 情境 4 的那一步：12 顆工具（{@link TOOL_TURN} 這句話觸發），結果回來之後慢慢串。 */
 const TOOL_TURN = '第四輪：工具段';
 const TOOL_FILES = 4;
+/** `mixed`：讀檔、grep 計數、找檔各 4 顆，展開每種兩列。`generic`：12 顆都走通用卡（SG 的結果框），全部展開——玻璃面最多的那一端。 */
+const TOOL_MIX = options['tool-mix'];
+if (TOOL_MIX !== 'mixed' && TOOL_MIX !== 'generic')
+  throw new Error(`--tool-mix 只收 mixed 或 generic：${TOOL_MIX}`);
 function toolCalls() {
+  if (TOOL_MIX === 'generic')
+    return Array.from({ length: TOOL_FILES * 3 }, (_, index) => ({
+      index,
+      id: `call_${index}_${randomUUID().slice(0, 8)}`,
+      type: 'function',
+      function: {
+        name: 'grep',
+        arguments: JSON.stringify({ pattern: `第 ${index + 1}`, path: '/', output_mode: 'count' }),
+      },
+    }));
   const calls = [];
   for (let i = 0; i < TOOL_FILES; i++) {
     calls.push(['read_file', { file_path: `/notes-${i}.md` }]);
@@ -500,11 +515,12 @@ async function scenarioTools(page, cdp) {
   const group = run.locator('[data-slot="step-group"] > button').first();
   await group.waitFor({ timeout: 60_000 });
   if ((await group.getAttribute('aria-expanded')) !== 'true') await group.click();
-  // 每種各展開兩列：讀檔、grep 計數、找檔。
+  // mixed：每種各展開兩列（讀檔、grep 計數、找檔）；generic：全部展開。
   const rows = run.locator('[data-slot="step-row"] > button');
-  await rows.nth(5).waitFor();
+  const openCount = TOOL_MIX === 'generic' ? TOOL_FILES * 3 : 6;
+  await rows.nth(openCount - 1).waitFor();
   const opened = [];
-  for (const index of [0, 1, 2, 3, 4, 5]) {
+  for (let index = 0; index < openCount; index++) {
     const row = rows.nth(index);
     if ((await row.getAttribute('aria-expanded')) !== 'true') await row.click();
     opened.push(await row.getAttribute('aria-expanded'));
@@ -513,12 +529,23 @@ async function scenarioTools(page, cdp) {
   const outputs = await run.locator('[data-slot="output-block"]').count();
   // 展開的列要真的畫出 SG 的結果框（玻璃），不然量的不是這張卡的面。
   if (outputs === 0) throw new Error('展開的列沒有任何 SG 結果框');
+  if (TOOL_MIX === 'generic' && outputs < 10)
+    throw new Error(`generic 應該每列都有結果框，只有 ${outputs} 個`);
   await sleep(1500);
   const box = await page.locator('[data-slot="message-scroller"]').first().boundingBox();
   if (box === null) throw new Error('找不到對話區');
-  // 先捲回工具段，讓它在畫面裡。
-  await run.scrollIntoViewIfNeeded();
   await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  // 量測期間工具段要在畫面裡（不是被串流帶走了）：前後各看一次它跟對話區的框有沒有交集。
+  const visible = async () => {
+    const r = await run.boundingBox();
+    return r !== null && r.y < box.y + box.height && r.y + r.height > box.y;
+  };
+  // 先用滾輪捲回工具段（`scrollIntoView` 會被貼底捲動拉回去）。
+  for (let i = 0; i < 80 && !(await visible()); i++) {
+    await page.mouse.wheel(0, -120);
+    await sleep(50);
+  }
+  const visibleBefore = await visible();
   const deltas = await recordFrames(
     page,
     async () => {
@@ -537,6 +564,9 @@ async function scenarioTools(page, cdp) {
   );
   const stillStreaming = await page.getByRole('button', { name: '停止' }).count();
   if (stillStreaming === 0) throw new Error('量測途中回覆就串完了，不是「串流中」');
+  const visibleAfter = await visible();
+  if (!visibleBefore || !visibleAfter)
+    throw new Error(`量測期間工具段不在畫面裡（前 ${visibleBefore}、後 ${visibleAfter}）`);
   const tools = await run.locator('[data-slot="step-row"]').count();
   await page.getByRole('button', { name: '停止' }).click();
   await waitTurnDone(page);
