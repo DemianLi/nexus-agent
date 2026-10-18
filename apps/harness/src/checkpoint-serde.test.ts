@@ -356,7 +356,9 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
   // `assistant-stream.ts:83-88`），回覆不進 state，存檔點輪不到這一則。這是行為改了，不是放寬：這一輪照樣失敗、下一輪照樣看不到深參數。
   // 存檔點那一關自己的 601 層邊界由上面 `DepthCheckedSerializer` 那一組直接釘（不經日誌）。
   //
-  // 更深的（約 2000 層起）同樣先撞日誌那一關；#1668 那條遞迴爆棧要在不經日誌的路上才看得到。
+  // 更深的（約 2000 層起）輪不到日誌那一關：LangGraph 在圖裡走節點回傳值的 `_deserializeCommandSendObjectGraph`
+  // （`@langchain/langgraph` 的 `dist/constants.js`，遞迴）先爆 `Maximum call stack size exceeded`，碼是 UNKNOWN（#1665 之後
+  // 實測 2000、3000 層的 `turn/failed` 都是這一句），見 [#1668](https://github.com/DemianLi/nexus-agent/issues/1668)。
   it('事件 601 層（日誌那一關剛好超過上限一層）：那一輪失敗在記回覆那一刻，下一輪與重開後模型收到同一份、沒有那則回覆', async () => {
     const { upstream, start, logFile } = await rig({ deep: { v: mixed(AT_LOG_CAP + 1) } });
     const server = await start();
