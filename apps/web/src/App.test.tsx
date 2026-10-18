@@ -4151,7 +4151,7 @@ describe('待辦清單面板（#575）', () => {
   });
 });
 
-describe('用量表（#528）', () => {
+describe('用量環（#528；#1591 換成 SG 的 ContextRing）', () => {
   const pressureFrames = () => [
     frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
     frame('custom', [], { name: MODEL_USAGE, payload: { inputTokens: 4321 } }),
@@ -4173,8 +4173,7 @@ describe('用量表（#528）', () => {
     const { client } = fakeClient(pressureFrames());
     render(<App client={client} />);
 
-    const meter = await screen.findByTestId('context-meter');
-    expect(meter.getAttribute('aria-label')).toBe('對話用量：約 75%，點開看明細');
+    const meter = await screen.findByRole('button', { name: '對話用量：約 75%，點開看明細' });
     expect(meter.closest('[data-slot="composer-footer-end"]')).not.toBeNull();
     expect(meter.closest('[data-slot="composer"]')).toBeNull();
     // 這一輪在跑，送出的說明換成兩種送法（#710），只給報讀：掛在輸入框的描述上（#1591）。
@@ -4204,11 +4203,11 @@ describe('用量表（#528）', () => {
       })();
     render(<App client={client} />);
 
-    fireEvent.click(await screen.findByTestId('context-meter'));
-    expect(screen.getByRole('dialog', { name: '對話用量明細' })).toBeTruthy();
+    fireEvent.click(await screen.findByRole('button', { name: /^對話用量：/ }));
+    expect(screen.getByRole('dialog', { name: '對話用量' })).toBeTruthy();
     release();
     await screen.findByTestId('approval-card');
-    expect(screen.queryByRole('dialog', { name: '對話用量明細' })).toBeNull();
+    expect(screen.queryByRole('dialog', { name: '對話用量' })).toBeNull();
   });
 });
 
@@ -4536,6 +4535,21 @@ describe('模型座（#723）', () => {
   }
 
   const seat = () => screen.queryByTestId('model-seat');
+  /** SG 的 `ComposerPick`（#1591）：模型、推理強度各一個，外面包一層帶 testid 的 span。 */
+  const modelTrigger = async () =>
+    within(await screen.findByTestId('model-seat')).getByRole('button');
+  const effortTrigger = async () =>
+    within(await screen.findByTestId('effort-seat')).getByRole('button');
+  const modelName = () =>
+    within(screen.getByTestId('model-seat')).getByRole('button').getAttribute('aria-label');
+  const effortName = () =>
+    within(screen.getByTestId('effort-seat')).getByRole('button').getAttribute('aria-label');
+  const pickMenu = async (name: string) => {
+    const menu = await screen.findByRole('menu');
+    await act(async () => {
+      fireEvent.click(within(menu).getByRole('menuitemradio', { name }));
+    });
+  };
   const typeLine = (value: string) =>
     fireEvent.change(screen.getByLabelText('要說的話'), { target: { value } });
   const submit = () => fireEvent.keyDown(screen.getByLabelText('要說的話'), { key: 'Enter' });
@@ -4543,6 +4557,31 @@ describe('模型座（#723）', () => {
     const list = await screen.findByRole('listbox');
     fireEvent.click(within(list).getByText(name));
   };
+
+  it.each([
+    ['模型', modelTrigger],
+    ['推理強度', effortTrigger],
+  ])(
+    '%s的清單開著時底下換成核准面板：清單收起，不浮在面板上（App 把 hidden 接上，#1591）',
+    async (_name, triggerOf) => {
+      // 推理強度那顆只有在選的模型有推理強度時才畫：預設改成 Beta。
+      const { value } = CATALOG as Extract<ModelCatalogResult, { ok: true }>;
+      const fake = withModels(undefined, {
+        ok: true,
+        value: { ...value, catalog: { ...value.catalog, default: { modelId: 'model-b' } } },
+      });
+      render(<App client={fake.client} />);
+      fireEvent.click(await triggerOf());
+      await screen.findByRole('menu');
+      fake.downlink.push(fake.opened[0]!, [
+        approvalFrame([{ name: 'write_file', allowed: ['approve', 'reject'] }]),
+      ]);
+      await screen.findByTestId('approval-card');
+      expect(screen.queryByRole('menu')).toBeNull();
+      expect(seat()).toBeNull();
+      expect(screen.queryByTestId('effort-seat')).toBeNull();
+    },
+  );
 
   it.each([
     ['not_supported', { kind: 'rejected', code: 'not_supported', message: '還沒實作' }],
@@ -4576,89 +4615,51 @@ describe('模型座（#723）', () => {
     expect(seat()).toBeNull();
   });
 
-  it('座位寫目前的模型（無障礙名稱含目前的值），沒選過就是部署預設', async () => {
+  it('座位寫目前的模型（無障礙名稱含目前的值），沒選過就是部署預設；沒宣告推理強度就沒有那一個', async () => {
     const { client } = withModels();
     render(<App client={client} />);
 
-    const button = await screen.findByTestId('model-seat');
+    const button = await modelTrigger();
     expect(button.getAttribute('aria-label')).toBe('模型：Alpha，從下一步生效，點開切換');
     expect(button.textContent).toBe('Alpha');
-  });
-
-  it('座位的提示只是視覺：Base UI 不給 role="tooltip" 與 describedby，提示裡的資訊都要在報讀名稱裡（#1583 驗收 D）', async () => {
-    const { client } = withModels();
-    render(<App client={client} />);
-
-    const button = await screen.findByTestId('model-seat');
-    act(() => {
-      button.focus();
-    });
-    const popup = await waitFor(() => {
-      const found = document.querySelector('[data-slot="tooltip-content"]');
-      expect(found).not.toBeNull();
-      return found!;
-    });
-    expect(popup.textContent).toBe('模型：Alpha（從下一步生效）');
-    // 提示的兩段資訊（目前的值、從下一步生效）報讀名稱都有。
-    const name = button.getAttribute('aria-label') ?? '';
-    expect(name).toContain('Alpha');
-    expect(name).toContain('從下一步生效');
-  });
-
-  it('滑鼠移到座位上不用等就出提示：座位在 SidebarProvider 的 TooltipProvider 底下（delay 0；沒有 Provider 時 Base UI 等 600ms，#1583）', async () => {
-    const { client } = withModels();
-    render(<App client={client} />);
-
-    const button = await screen.findByTestId('model-seat');
-    // 用 hover 不用 focus：focus 打開是 Base UI 的 instant，跟延遲無關。
-    fireEvent.pointerEnter(button, { pointerType: 'mouse' });
-    fireEvent.mouseEnter(button);
-    fireEvent.mouseMove(button);
-    await act(() => new Promise((resolve) => setTimeout(resolve, 50)));
-    const popup = document.querySelector('[data-slot="tooltip-content"]');
-    expect(popup?.textContent).toBe('模型：Alpha（從下一步生效）');
-    expect(popup?.getAttribute('data-instant')).toBeNull();
+    expect(button.closest('[data-slot="composer-footer-end"]')).not.toBeNull();
+    expect(screen.queryByTestId('effort-seat')).toBeNull();
   });
 
   it('點開選另一顆：送 { modelId }，成功後座位換成新的', async () => {
     const { client, selected } = withModels();
     render(<App client={client} />);
 
-    fireEvent.click(await screen.findByTestId('model-seat'));
-    await pickOption('Beta');
+    fireEvent.click(await modelTrigger());
+    await pickMenu('Beta');
 
     await waitFor(() => expect(selected).toEqual([{ modelId: 'model-b' }]));
-    await waitFor(() =>
-      expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toBe(
-        '模型：Beta · 低，從下一步生效，點開切換',
-      ),
-    );
-    expect(screen.queryByRole('listbox')).toBeNull();
+    await waitFor(() => expect(modelName()).toBe('模型：Beta，從下一步生效，點開切換'));
+    expect(effortName()).toBe('推理強度：低，從下一步生效，點開切換');
+    expect(screen.queryByRole('menu')).toBeNull();
   });
 
-  it('有宣告推理強度的模型多一段強度；沒宣告的沒有', async () => {
+  it('有宣告推理強度的模型才多一個「推理強度」；沒宣告的沒有', async () => {
     const { client, selected } = withModels();
     render(<App client={client} />);
 
-    fireEvent.click(await screen.findByTestId('model-seat'));
-    const alphaList = await screen.findByRole('listbox');
-    expect(within(alphaList).queryByText('推理強度')).toBeNull();
-    fireEvent.click(within(alphaList).getByText('Beta'));
+    fireEvent.click(await modelTrigger());
+    expect(screen.queryByTestId('effort-seat')).toBeNull();
+    await pickMenu('Beta');
     await waitFor(() => expect(selected).toHaveLength(1));
 
-    fireEvent.click(await screen.findByTestId('model-seat'));
-    const betaList = await screen.findByRole('listbox');
-    expect(within(betaList).getByText('推理強度')).toBeTruthy();
-    fireEvent.click(within(betaList).getByText('高'));
+    fireEvent.click(await effortTrigger());
+    const menu = await screen.findByRole('menu');
+    expect(within(menu).getByText('推理強度')).toBeTruthy();
+    await pickMenu('高');
     await waitFor(() =>
       expect(selected).toEqual([
         { modelId: 'model-b' },
         { modelId: 'model-b', reasoningEffort: 'high' },
       ]),
     );
-    await waitFor(() =>
-      expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toContain('Beta · 高'),
-    );
+    await waitFor(() => expect(effortName()).toBe('推理強度：高，從下一步生效，點開切換'));
+    expect(modelName()).toBe('模型：Beta，從下一步生效，點開切換');
   });
 
   it('選不上（model_unavailable）：說出來，座位不變', async () => {
@@ -4668,14 +4669,12 @@ describe('模型座（#723）', () => {
     });
     render(<App client={client} />);
 
-    fireEvent.click(await screen.findByTestId('model-seat'));
-    await pickOption('Beta');
+    fireEvent.click(await modelTrigger());
+    await pickMenu('Beta');
 
     await waitFor(() => expect(selected).toHaveLength(1));
     expect(await screen.findByText(/這顆模型現在選不了/u)).toBeTruthy();
-    expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toBe(
-      '模型：Alpha，從下一步生效，點開切換',
-    );
+    expect(modelName()).toBe('模型：Alpha，從下一步生效，點開切換');
   });
 
   it('伺服器推來的投影（別的分頁選的）蓋過先前的選擇', async () => {
@@ -4693,23 +4692,18 @@ describe('模型座（#723）', () => {
         },
       }),
     ]);
-    await waitFor(() =>
-      expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toBe(
-        '模型：Beta · 高，從下一步生效，點開切換',
-      ),
-    );
+    await waitFor(() => expect(modelName()).toBe('模型：Beta，從下一步生效，點開切換'));
+    expect(effortName()).toBe('推理強度：高，從下一步生效，點開切換');
   });
 
   it('自己剛選的先頂著；投影之後再推來的以伺服器為準', async () => {
     const { client, downlink, opened, selected } = withModels();
     render(<App client={client} />);
 
-    fireEvent.click(await screen.findByTestId('model-seat'));
-    await pickOption('Beta');
+    fireEvent.click(await modelTrigger());
+    await pickMenu('Beta');
     await waitFor(() => expect(selected).toHaveLength(1));
-    await waitFor(() =>
-      expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toContain('Beta'),
-    );
+    await waitFor(() => expect(modelName()).toContain('Beta'));
 
     // 別的分頁把它改回 Alpha：伺服器講的比這個分頁記得的新。
     downlink.push(opened[0]!, [
@@ -4719,11 +4713,8 @@ describe('模型座（#723）', () => {
         view: { lastUsed: { modelId: 'model-b' }, next: { modelId: 'model-a' } },
       }),
     ]);
-    await waitFor(() =>
-      expect(screen.getByTestId('model-seat').getAttribute('aria-label')).toBe(
-        '模型：Alpha，從下一步生效，點開切換',
-      ),
-    );
+    await waitFor(() => expect(modelName()).toBe('模型：Alpha，從下一步生效，點開切換'));
+    expect(screen.queryByTestId('effort-seat')).toBeNull();
   });
 
   describe('/model', () => {
@@ -4735,7 +4726,10 @@ describe('模型座（#723）', () => {
       typeLine('/mod');
       await pickOption('/model');
 
-      await screen.findByRole('dialog', { name: '選模型' });
+      // 打開的是模型那個 Pick 的清單（patch `0007` 的受控 `open`）。
+      const menu = await screen.findByRole('menu');
+      expect(within(menu).getByRole('menuitemradio', { name: 'Alpha' })).toBeTruthy();
+      expect((await modelTrigger()).getAttribute('aria-expanded')).toBe('true');
       expect((screen.getByLabelText('要說的話') as HTMLTextAreaElement).value).toBe('');
     });
 
@@ -4843,11 +4837,42 @@ describe('權限座（#437）', () => {
     return fake;
   }
 
+  /** SG 的 `ComposerPick`（#1591）：外面那層帶 testid 與 `data-danger`，裡面是 Trigger。 */
+  const trigger = () => within(screen.getByTestId('permission-seat')).getByRole('button');
+  const triggerName = () => trigger().getAttribute('aria-label');
+  /** 選項的名稱後面接著它的說明（`hint`），所以比開頭。 */
+  const option = (menu: HTMLElement, name: string) =>
+    within(menu).getByRole('menuitemradio', { name: new RegExp(`^${name}`) });
   const pickOption = async (name: string) => {
-    fireEvent.click(await screen.findByTestId('permission-seat'));
-    const list = await screen.findByRole('listbox');
-    fireEvent.click(within(list).getByText(name));
+    fireEvent.click(within(await screen.findByTestId('permission-seat')).getByRole('button'));
+    const menu = await screen.findByRole('menu');
+    await act(async () => {
+      fireEvent.click(option(menu, name));
+    });
   };
+
+  it('清單開著時底下換成核准面板：清單收起、這顆不畫（App 把 hidden 接上，#1591）', async () => {
+    // 三顆一起先備好、seq 照順序：投影若走 `downlink.customFrame`，seq 從很大的數起算，之後推的核准 frame 會被當成舊的丟掉。
+    seq = 0;
+    const events = [
+      frame('lifecycle', [], { event: 'completed', graph_name: 'root' }),
+      frame('custom', [], {
+        name: PROJECTION,
+        payload: { key: 'permissions', version: 1, view: { currentValue: 'workspace-write' } },
+      }),
+    ];
+    const approval = approvalFrame([{ name: 'write_file', allowed: ['approve', 'reject'] }]);
+    const fake = await withPermissions(undefined, events);
+    fireEvent.click(
+      await within(await screen.findByTestId('permission-seat')).findByRole('button'),
+    );
+    await screen.findByRole('menu');
+    fake.downlink.push(fake.opened[0]!, [approval]);
+    await screen.findByTestId('approval-card');
+    expect(screen.queryByRole('menu')).toBeNull();
+    // 清單的收起其實由鎖住那條先做了（有待決就是 `awaiting-input`，同一次畫）；`hidden` 管的是這顆不畫。
+    expect(seat()).toBeNull();
+  });
 
   it.each([
     ['not_supported', { kind: 'rejected', code: 'not_supported', message: '還沒實作' }],
@@ -4872,27 +4897,28 @@ describe('權限座（#437）', () => {
 
   it('座位寫目前的組（無障礙名稱含目前的值），投影換了就跟著換', async () => {
     const fake = await withPermissions('workspace-write');
-    const button = screen.getByTestId('permission-seat');
-    expect(button.getAttribute('aria-label')).toBe('權限：可寫工作區，點開切換');
-    expect(button.getAttribute('data-warning')).toBe('false');
+    expect(triggerName()).toBe('權限：可寫工作區，點開切換');
+    expect(trigger().textContent).toBe('可寫工作區');
+    expect(screen.getByTestId('permission-seat').getAttribute('data-danger')).toBe('false');
+    // 底列左邊（SG demo 的「模式」），不在右邊那一組裡。
+    expect(trigger().closest('[data-slot="composer-footer"]')).not.toBeNull();
+    expect(trigger().closest('[data-slot="composer-footer-end"]')).toBeNull();
 
     fake.downlink.push(fake.opened[0]!, [permissionFrame(fake.downlink, 'read-only')]);
-    await waitFor(() =>
-      expect(screen.getByTestId('permission-seat').getAttribute('aria-label')).toBe(
-        '權限：唯讀，點開切換',
-      ),
-    );
+    await waitFor(() => expect(triggerName()).toBe('權限：唯讀，點開切換'));
   });
 
   it('`custom`（對不上任何一組）寫「自訂」，清單裡沒有哪一列打勾', async () => {
     await withPermissions('custom');
-    expect(screen.getByTestId('permission-seat').getAttribute('aria-label')).toBe(
-      '權限：自訂，點開切換',
-    );
-    fireEvent.click(screen.getByTestId('permission-seat'));
-    const list = await screen.findByRole('listbox');
-    expect(within(list).getAllByRole('option')).toHaveLength(3);
-    expect(list.querySelector('[data-checked="true"]')).toBeNull();
+    expect(triggerName()).toBe('權限：自訂，點開切換');
+    expect(trigger().textContent).toBe('自訂');
+    fireEvent.click(trigger());
+    const menu = await screen.findByRole('menu');
+    const items = within(menu).getAllByRole('menuitemradio');
+    expect(items).toHaveLength(3);
+    expect(items.filter((item) => item.getAttribute('aria-checked') === 'true')).toEqual([]);
+    // 選項底下寫 preset 的說明（SG 的 `hint`）。
+    expect(option(menu, '唯讀').textContent).toContain('只能讀，改東西要問');
   });
 
   it('選另一組：送 `/permission <組名>`；座位等伺服器推新值才換', async () => {
@@ -4901,9 +4927,7 @@ describe('權限座（#437）', () => {
     await pickOption('唯讀');
 
     await waitFor(() => expect(slashed).toEqual(['/permission read-only']));
-    expect(screen.getByTestId('permission-seat').getAttribute('aria-label')).toBe(
-      '權限：可寫工作區，點開切換',
-    );
+    expect(triggerName()).toBe('權限：可寫工作區，點開切換');
   });
 
   it('選目前這一組：什麼都不送', async () => {
@@ -4927,9 +4951,7 @@ describe('權限座（#437）', () => {
     await pickOption('唯讀');
 
     expect(await screen.findByText('這一組在設定裡被拿掉了')).toBeTruthy();
-    expect(screen.getByTestId('permission-seat').getAttribute('aria-label')).toContain(
-      '可寫工作區',
-    );
+    expect(triggerName()).toContain('可寫工作區');
   });
 
   describe('全開要先確認', () => {
@@ -4963,7 +4985,8 @@ describe('權限座（#437）', () => {
 
     it('其他組不問、直接送；目前就是全開時座位換警示色', async () => {
       const fake = await withPermissions('danger-full-access');
-      expect(screen.getByTestId('permission-seat').getAttribute('data-warning')).toBe('true');
+      // 顏色本身由覆寫檔對 `data-danger` 上色（README 本地修改第 35 條），guard 量。
+      expect(screen.getByTestId('permission-seat').getAttribute('data-danger')).toBe('true');
 
       await pickOption('唯讀');
 
@@ -4972,19 +4995,22 @@ describe('權限座（#437）', () => {
     });
   });
 
-  it('一輪在跑時清單停用，寫明原因，選了也不送', async () => {
+  // 照 dsh `PermissionSelect.tsx:180`（#1591 PM 決定第 2 題）：鎖住時清單打不開，不是打開了每列停用。Trigger 照樣聚焦得到，
+  // 原因只在報讀名稱裡（看畫面的人只看得到它停用了；dsh 也只放在 `title`）。
+  it('一輪在跑時清單打不開，原因寫在名稱裡，Trigger 仍聚焦得到', async () => {
     const { slashed } = await withPermissions('workspace-write', [
       frame('lifecycle', [], { event: 'running', graph_name: 'root' }),
     ]);
     await waitFor(() => expect(screen.getByRole('status').textContent).toContain('執行中'));
 
-    fireEvent.click(screen.getByTestId('permission-seat'));
-    const list = await screen.findByRole('listbox');
-    expect(screen.getByTestId('picker-locked').textContent).toBe('這一輪結束後才能切換。');
-    fireEvent.click(within(list).getByText('唯讀'));
+    await waitFor(() => expect(triggerName()).toBe('權限：可寫工作區，這一輪結束後才能切換'));
+    expect(trigger().getAttribute('aria-disabled')).toBe('true');
+    expect(trigger().hasAttribute('disabled')).toBe(false);
+    fireEvent.click(trigger());
+    fireEvent.keyDown(trigger(), { key: 'Enter' });
     await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(screen.queryByRole('menu')).toBeNull();
     expect(slashed).toEqual([]);
-    expect(screen.queryByRole('alertdialog')).toBeNull();
   });
 });
 

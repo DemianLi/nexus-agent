@@ -403,16 +403,18 @@ async function scenarioScroll(page, cdp) {
 
 async function scenarioMenu(page, cdp) {
   const trigger = page.locator('[aria-label^="模型："], [aria-label^="權限："]').first();
+  // 底列的座位 #1591 起是 SG 的 Pick（Base UI 的選單），之前是 popover。
+  const menu = page.locator('[data-slot="dropdown-menu-content"]').first();
   await trigger.waitFor();
   return recordFrames(
     page,
     async () => {
       for (let i = 0; i < 6; i++) {
         await trigger.click();
-        await page.locator('[data-slot="popover-content"]').first().waitFor();
+        await menu.waitFor();
         await sleep(600);
         await page.keyboard.press('Escape');
-        await page.locator('[data-slot="popover-content"]').first().waitFor({ state: 'detached' });
+        await menu.waitFor({ state: 'detached' });
         await sleep(400);
       }
     },

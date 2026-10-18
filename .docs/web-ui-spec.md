@@ -89,7 +89,7 @@
 | 21 | 核准 | 自建，shadcn `card`＋`button`，換掉輸入框（§4.3） | `approval-card.tsx` 留邏輯 |
 | 23 | 提問 | shadcn `questionnaire`（`radix-vega`）＋§4.3 的補件 | `question-card.tsx` 被取代 |
 | 24 | 計劃審核 | 自建，shadcn `card`＋`button`，換掉輸入框；全文開在右側欄的「計劃」分頁，markdown 用列 10／11 那一套；對話裡的計劃卡放在 `exit_plan_mode` 工具卡的位置（§4.3） | `plan-review.tsx`、`plan-preview-tab.tsx`、`lib/plan-review.ts` |
-| 26 | 輸入框 | solid-glass 的 `Composer`（#1591 起；vendor `components/ui/composer.tsx`，套 vendor README「本地修改」第 28、29、32 條的 patch）。`/` 與 @ 選單、附件、`@子代理` 標記由 nexus 從外面接（`leading`、`above`、外層 `div` 的 capture 階段攔鍵）。主按鈕照 dsh `InputBar`：跑著、草稿空（或送不出）是停止，有草稿是送出，名稱說出這次是排隊還是插話（`lib/submit-mode.ts`）；斷線時沒有停止。輸入框底下一列是 SG 的 `ComposerFooter`，放選擇座位與用量 | `composer.tsx`（App 組裝在 `App.tsx`） |
+| 26 | 輸入框 | solid-glass 的 `Composer`（#1591 起；vendor `components/ui/composer.tsx`，套 vendor README「本地修改」第 28、29、32、33 條的 patch）。`/` 與 @ 選單、附件、`@子代理` 標記由 nexus 從外面接（`leading`、`above`、外層 `div` 的 capture 階段攔鍵）。主按鈕照 dsh `InputBar`：跑著、草稿空（或送不出）是停止，有草稿是送出，名稱說出這次是排隊還是插話（`lib/submit-mode.ts`）；斷線時沒有停止。輸入框底下一列是 SG 的 `ComposerFooter`：左邊權限、右邊模型與推理強度，都是 SG 的 `ComposerPick`（下拉選單，鎖住時 `aria-disabled`、聚焦得到）；最右邊是 SG 的 `ContextRing`（用量環，套第 34 條；色階 70% 琥珀、90% destructive，壓回 status token） | `composer.tsx`（App 組裝在 `App.tsx`） |
 | 27 | slash 選單 | shadcn `command` | 在 `App.tsx` |
 | 28 | `@` 引用 | shadcn `command`（跟 slash 選單共用同一顆 popover）；觸發、插入、非同步狀態照 dsh（§4.4） | `lib/file-mention.ts`、`lib/session-mention.ts`、`lib/mention-menu.ts`、`components/session-reference.tsx`、在 `composer.tsx` |
 | 29 | 送出佇列 | 自建，shadcn `collapsible`＋`button`＋`textarea`；行為照 dsh `QueueDock`（一件直接畫、兩件以上收合、就地改、刪與插話；插話鈕只在這一輪跑著時按得動，按下去那一則離開佇列、改畫在對話尾端）；新項目撐過 200ms 才畫、只淡入淡出不 stagger；放在待辦面板下、換手區外，停在核准點時照樣看得到。**插話**（#710）：跑著時 Cmd/Ctrl+Enter 送插話，Enter 與送出鈕照舊排隊（照 dsh 的預設，沒做它讓 Enter 改成插話的偏好設定），送出提示跟著換（#1591 起提示只給報讀：sr-only、掛在輸入框的 `aria-describedby`，畫面上不畫，看畫面的人因此看不到加速鍵那一句，PM 已告知 demian）；排著的插話不進佇列，照 dsh 畫在對話尾端（淡一階，底下一句「插話・下一步送進模型」；這一輪停了就改說「下一輪送進模型」，harness 留到下一輪的第一次模型呼叫才領），被領走時同一格換成人的話。**草稿空白時 Cmd/Ctrl+Enter 把排著的全部改成插話**（照 dsh `steerQueue`：照排的先後一件一件送，碰到「不收了」或「不在隊裡」靜靜停），輸入框提示字跟著換 | `queue-dock.tsx`、`lib/submit-mode.ts`、`lib/steer-view.ts`、`lib/steer-queue.ts` |
@@ -219,7 +219,7 @@
 | 互動 | 開／關 |
 | --- | --- |
 | 下拉選單 | **沒有動畫**（#1583 照 SG：vendor 的 Content 寫 `animate-none!`，開關都是立即的） |
-| 指令選單 | 住在 popover 裡（composer 的 `/` 與 @ 選單、輸入框底列的選擇座位），動效就是 popover 那一列；cmdk 本身沒有動效（#1583 換成 SG 版） |
+| 指令選單 | 住在 popover 裡（composer 的 `/` 與 @ 選單），動效就是 popover 那一列（輸入框底列的 Pick 是下拉選單，#1591 起）；cmdk 本身沒有動效（#1583 換成 SG 版） |
 | popover | 照 SG 的機制（#1583）：淡入＋zoom .95＋往外 slide 2（`slide-in-from-*-2`）。SG 寫的 `duration-100` 蓋不掉 `@theme` 的 `--animate-in`／`--animate-out`，所以時長仍是 250／150，**全域時長留到 ④ 收尾一起換** |
 | tooltip | 同 popover（#1583）：淡入＋zoom .95＋slide 2，250／150（全域時長留到 ④）；延遲 0（SG 的 `TooltipProvider` 預設） |
 | 對話框（含確認框） | 同 popover（#1583）：淡入＋zoom .95，250／150（全域時長留到 ④）；遮罩淡入、`backdrop-blur-xs` |
@@ -229,7 +229,7 @@
 | 新訊息、工具卡出現 | 250，往上 8px |
 | 面板換掉輸入框、上下題 | 舊 150 淡出 → 新 250 長出；上下題有方向 |
 | 單選自動跳 | 先停 200 |
-| 用量環的弧長（[#528](https://github.com/DemianLi/nexus-agent/issues/528)） | 250 smooth-out；reduced-motion 直接跳到新值 |
+| 用量環的弧長（[#528](https://github.com/DemianLi/nexus-agent/issues/528)） | 500（#1591 起照 SG 的 `ContextRing`，#1468 Q8）；reduced-motion 直接跳到新值 |
 
 - **按壓 .96（120ms）只給實心主按鈕與送出鍵**。
 - **stagger 40ms 只給提問選項**（前 6 個）。
