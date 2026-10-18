@@ -272,11 +272,18 @@ function argsIn(messages: readonly WireMessage[], callId: string): unknown {
   return undefined;
 }
 
+/** 改檔時先放進去的記號，`JSON.stringify` 之後再換成深的那段文字。 */
+const ARGS_MARKER = '@@deep-args@@';
+const TEXT_MARKER = '@@deep-args-text@@';
+
 /**
- * 日誌裡那則訊息帶這個呼叫參數的每一處都換掉：`tool_calls`、`content` 與 `content_blocks` 裡的工具呼叫塊（`args`），
+ * 日誌裡那則訊息帶這個呼叫參數的每一處都先換成記號：`tool_calls`、`content` 與 `content_blocks` 裡的工具呼叫塊（`args`），
  * 以及 `additional_kwargs.tool_calls` 的原始字串（有的話）。回換了幾處。
+ *
+ * **不直接放深的值再 `JSON.stringify`**：原生的 `JSON.stringify` 是遞迴的，CI（Linux x64）上約 4100 層就
+ * `RangeError`（#1661），5000 層那一格會在測試自己改檔時就爆。深的那段文字由 {@link mixedJson} 迭代組出來。
  */
-function swapArgs(message: unknown, callId: string, args: unknown): number {
+function swapArgs(message: unknown, callId: string): number {
   let swapped = 0;
   const stack: unknown[] = [message];
   while (stack.length > 0) {
@@ -284,19 +291,28 @@ function swapArgs(message: unknown, callId: string, args: unknown): number {
     if (current === null || typeof current !== 'object') continue;
     const record = current as Record<string, unknown>;
     if (record['id'] === callId && 'args' in record) {
-      record['args'] = args;
+      record['args'] = ARGS_MARKER;
       swapped++;
       continue;
     }
     const fn = record['function'] as { arguments?: unknown } | undefined;
     if (record['id'] === callId && typeof fn?.arguments === 'string') {
-      fn.arguments = JSON.stringify(args);
+      fn.arguments = TEXT_MARKER;
       swapped++;
       continue;
     }
     stack.push(...Object.values(record));
   }
   return swapped;
+}
+
+/** `JSON.stringify({ v: mixed(levels) })` 的結果，迭代組出來。 */
+function mixedJson(levels: number): string {
+  let text = '"leaf"';
+  for (let level = 0; level < levels; level++) {
+    text = level % 2 ? `{"next":${text}}` : `[${text}]`;
+  }
+  return `{"v":${text}}`;
 }
 
 async function logLines(file: string): Promise<string[]> {
@@ -367,13 +383,16 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
 
 describe('續接：日誌裡的舊事件比上限深（#1658）', () => {
   const shallow = { v: mixed(10) };
-  const deep: Record<string, unknown> = {
-    p44: { v: mixed(44) },
-    p46: { v: mixed(46) },
-    e600: { v: mixed(AT_LOG_CAP) },
-    p3000: { v: mixed(3_000) },
-    p5000: { v: mixed(5_000) },
+  const levels: Record<string, number> = {
+    p44: 44,
+    p46: 46,
+    e600: AT_LOG_CAP,
+    p3000: 3_000,
+    p5000: 5_000,
   };
+  const deep = Object.fromEntries(
+    Object.entries(levels).map(([name, count]) => [name, { v: mixed(count) }]),
+  );
   const shared: (() => Promise<void>)[] = [];
   let resumed: {
     readonly rig: Rig;
@@ -392,7 +411,7 @@ describe('續接：日誌裡的舊事件比上限深（#1658）', () => {
     await first.close();
 
     const seqOf: Record<string, number> = {};
-    for (const [name, args] of Object.entries(deep)) {
+    for (const [name, count] of Object.entries(levels)) {
       const file = sharedRig.logFile(`resume-${name}`);
       const lines = await logLines(file);
       const at = lines.findIndex(
@@ -400,14 +419,19 @@ describe('續接：日誌裡的舊事件比上限深（#1658）', () => {
       );
       if (at < 0) throw new Error(`${name}：日誌裡沒有那一則`);
       const event = JSON.parse(lines[at]!) as { seq: number; data: { message: { data: unknown } } };
-      if (swapArgs(event.data.message.data, `call-${name}`, args) === 0) {
+      if (swapArgs(event.data.message.data, `call-${name}`) === 0) {
         throw new Error(`${name}：那一則裡沒有參數可換`);
       }
-      // 前提：剛好 600 那一行換完之後就在日誌的上限上。
-      if (name === 'e600' && jsonDepth(event.data) !== SESSION_EVENT_MAX_DEPTH) {
-        throw new Error(`e600：換完是 ${jsonDepth(event.data)} 層`);
+      const argsJson = mixedJson(count);
+      const line = JSON.stringify(event)
+        .replaceAll(JSON.stringify(ARGS_MARKER), () => argsJson)
+        .replaceAll(JSON.stringify(TEXT_MARKER), () => JSON.stringify(argsJson));
+      // 前提：剛好 600 那一行換完之後就在日誌的上限上。（`JSON.parse` 不是遞迴的，讀得動。）
+      const depth = jsonDepth((JSON.parse(line) as { data: unknown }).data);
+      if (name === 'e600' && depth !== SESSION_EVENT_MAX_DEPTH) {
+        throw new Error(`e600：換完是 ${depth} 層`);
       }
-      lines[at] = JSON.stringify(event);
+      lines[at] = line;
       await writeFile(file, `${lines.join('\n')}\n`);
       seqOf[name] = event.seq;
     }
