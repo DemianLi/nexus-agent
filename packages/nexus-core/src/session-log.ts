@@ -1659,8 +1659,14 @@ function snapshotJsonValue(value: unknown, label: string): unknown {
     if (Array.isArray(current)) {
       if (!hasPlainArrayPrototype(current)) fail(task.path, '是 object，日誌只收純 JSON');
       const length = current.length;
-      if (Reflect.ownKeys(current).length !== length + 1) {
-        fail(task.path, '陣列帶額外屬性，JSON 表達不出來');
+      // 判準照 dsh 只有這一條；訊息分兩種：少了是有洞（索引不在），多了是帶額外屬性。
+      // 洞與額外屬性數目剛好抵銷時過得了這條，由下面逐格的 `array-item` 接住。
+      const keyCount = Reflect.ownKeys(current).length;
+      if (keyCount !== length + 1) {
+        fail(
+          task.path,
+          keyCount < length + 1 ? '陣列有洞，JSON 表達不出來' : '陣列帶額外屬性，JSON 表達不出來',
+        );
       }
       const target: unknown[] = [];
       assign(task.destination, target);
@@ -1690,6 +1696,25 @@ function snapshotJsonValue(value: unknown, label: string): unknown {
     }
   }
   return root;
+}
+
+/**
+ * 持久化後端寫入前，把一批事件驗過並拷成一份**沒凍過**的副本，照 dsh `materializeAppendBatch`
+ * （`packages/session/session-persistence/src/storage-contract.ts:131-137`，`687f282e`；JSONL 後端在
+ * `session-persistence-jsonl/src/storage.ts:191` 與 `:308` 寫入前都先跑它）。
+ *
+ * **後端為什麼不能直接序列化日誌裡那份：** 日誌裡的事件全凍過，而 V8 的 `JSON.stringify` 遇到凍過的陣列走遞迴的慢路徑，
+ * 巢狀約 3 千層就 `RangeError`（沒凍過的撐得過 200 萬層，#1526 實測）。快照收得下的值後端卻寫不出去，失敗那批會一直卡在
+ * 佇列頭，那條 thread 之後一則都落不了盤。
+ *
+ * 規則與 {@link SessionLog.append} 同一份（{@link snapshotJsonValue}），拒收時一樣拋帶路徑的 `TypeError`（偏離同那支，理由 2）。
+ *
+ * @param events - 這一批，依 seq 排好。
+ * @returns 脫離原值、沒凍過的副本。
+ * @throws {TypeError} 有 JSON 無法原樣表達的東西，訊息指出是哪一格。
+ */
+export function materializeAppendBatch(events: readonly SessionEvent[]): readonly SessionEvent[] {
+  return snapshotJsonValue(events, '寫入批次') as readonly SessionEvent[];
 }
 
 /**
