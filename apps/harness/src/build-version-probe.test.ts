@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { GIT_PROBE_TIMEOUT_MS, readGitProvenance } from './build-version.js';
+import { GIT_PROBE_TIMEOUT_MS, readGitProvenance, resolveBuildVersion } from './build-version.js';
 
 let bin: string;
 
@@ -47,6 +47,21 @@ describe.skipIf(process.platform === 'win32')('預設探針起的 git', () => {
     expect(env).toMatch(/^GIT_OPTIONAL_LOCKS=0$/mu);
     expect(env).toMatch(/^GIT_TERMINAL_PROMPT=0$/mu);
     expect(env).toMatch(/^GIT_CONFIG_COUNT=0$/mu);
+  });
+
+  it('沒有戳記時 resolveBuildVersion 退回問 git，走的是同一份清洗過的環境', () => {
+    const seen = join(bin, 'env.txt');
+    fakeGit(`env > '${seen}'\nexit 1`);
+    vi.stubEnv('FAKE_1620_API_KEY', 'fake-value');
+
+    expect(resolveBuildVersion({ stampPath: join(bin, 'no-stamp.json') })).toEqual({
+      commit: null,
+      dirty: null,
+    });
+    const env = readFileSync(seen, 'utf8');
+    expect(env).toContain(`PATH=${bin}${delimiter}`);
+    expect(env).not.toContain('FAKE_1620_API_KEY');
+    expect(env).toMatch(/^GIT_OPTIONAL_LOCKS=0$/mu);
   });
 
   it('卡住的 git 到逾時就被殺（忽略 SIGTERM 的也一樣），記 null；不早於逾時，也不拖到它自己結束', () => {
