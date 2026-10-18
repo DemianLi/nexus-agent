@@ -179,7 +179,7 @@ export function runRipgrep(options: RipgrepRunOptions): Promise<RipgrepOutcome> 
         stdio: ['ignore', 'pipe', 'pipe'],
         env: scrubbedParentEnv(),
       });
-    } catch (error: unknown) {
+    } catch {
       resolve(
         signal.aborted
           ? aborted()
