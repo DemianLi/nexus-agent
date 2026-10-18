@@ -216,6 +216,21 @@ jobs:
           set -f
           pnpm $PKG_FILTERS run test
 
+  # 暫時的探針（#1661）：在 Linux x64 的 Node 22.19.0（engines 的下限）上量 JSONL 後端的層數門檻。量完就撤，不列進 gate。
+  depth-probe-1661:
+    name: depth-probe-1661
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: pnpm/action-setup@v6
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 22.19.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: node --version && uname -m
+      - run: pnpm --filter @nexus/harness exec vitest run src/zz-depth-probe-1661.test.ts
+
   # web 的測試有一批會 fs 讀 plugin 與 harness 的原始碼（todo-view 等），套件圖上沒有這條邊，
   # 所以任何 TypeScript 相關異動都要跑這個 job；選擇性時跑「相關的 ∪ 用 fs 讀原始碼的」，挑法見 plan_ci.py。
   test-web:
