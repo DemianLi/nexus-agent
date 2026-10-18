@@ -15,8 +15,8 @@
   --info: oklch(0.485 0.2414 263.16);
   --brand-soft: oklch(0.489 0.102 165 / 0.09);
   --stage: oklch(0.9423 0 0);
-  --chip: oklch(0.8932 0 0);
-  --chip-hover: oklch(0.8848 0 0);
+  --chip: oklch(0.8812 0 0);
+  --chip-hover: oklch(0.8729 0 0);
   --chip-pressed: oklch(0.8628 0 0);
   --card-hairline: oklch(0 0 0 / 0.141);
   --ring: oklch(0.16 0 0);
@@ -38,8 +38,8 @@
   --info: oklch(0.62 0.1995 258.86);
   --brand-soft: oklch(0.78 0.13 166 / 0.12);
   --stage: oklch(0.2119 0 0);
-  --chip: oklch(0.2132 0 0);
-  --chip-hover: oklch(0.2243 0 0);
+  --chip: oklch(0.2289 0 0);
+  --chip-hover: oklch(0.239 0 0);
   --chip-pressed: oklch(0.2507 0 0);
   --card-hairline: oklch(0.8203 0 0 / 0.145);
   --ring: oklch(0.985 0 0);

@@ -204,6 +204,24 @@ describe.each(MODES)('產生出來的 token 達到對比度目標：$name', (mod
   });
 });
 
+/**
+ * chip 與 hover 釘在 ② 出貨的值（#1512 PR-B 2ad91a61，#1521）：產生器的 `SHIPPED_CHIP`（PM 裁決，PR #1721 issuecomment-6255648703）。
+ * 這張只動 pressed 那一階，全站的 rest 與 hover 逐字不變。撤除條件：⑥ 把 chip 三階換成 SG 的面時，這條跟著拿掉。
+ */
+const SHIPPED_CHIP_STEPS: Record<Theme, { chip: string; 'chip-hover': string }> = {
+  light: { chip: 'oklch(0.8812 0 0)', 'chip-hover': 'oklch(0.8729 0 0)' },
+  dark: { chip: 'oklch(0.2289 0 0)', 'chip-hover': 'oklch(0.239 0 0)' },
+};
+
+describe('chip 與 hover 逐字等於 ② 出貨的值', () => {
+  test.each(THEMES)('%s', (theme) => {
+    expect({
+      chip: token(TRANSLUCENT, theme, 'chip'),
+      'chip-hover': token(TRANSLUCENT, theme, 'chip-hover'),
+    }).toEqual(SHIPPED_CHIP_STEPS[theme]);
+  });
+});
+
 describe('量具自檢', () => {
   test('每一疊底都有疊到——SG 的三個漸層停點都在（少了就只量平的底色，偏寬）', () => {
     for (const theme of THEMES) {
