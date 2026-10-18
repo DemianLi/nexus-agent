@@ -44,6 +44,8 @@ import type { RunnableConfig } from '@langchain/core/runnables';
 import { MemorySaver } from '@langchain/langgraph';
 import type { Checkpoint, CheckpointMetadata } from '@langchain/langgraph-checkpoint';
 
+import { DepthCheckedSerializer } from './checkpoint-serde.js';
+
 /** 每個 (thread, ns) 留幾份存檔點。1＝只留最新那一份；續行、`getState`、`updateState` 讀的都是它。 */
 export const RETAINED_CHECKPOINTS = 1;
 
@@ -64,24 +66,40 @@ export class PrunedMemorySaver extends MemorySaver {
    */
   constructor(keep: number = RETAINED_CHECKPOINTS) {
     super();
+    // 序列化包一層量過層數的（#1658）：基座預設的那顆寫入會吞錯、讀回有 50 層上限，見 `checkpoint-serde.ts`。
+    // 包的是 `MemorySaver` 建構時自己掛的那一顆——基座沒有匯出那個類別，也不另外建一顆 saver 去拿。
+    this.serde = new DepthCheckedSerializer(this.serde);
     if (!Number.isInteger(keep) || keep < 1) {
       throw new RangeError(`PrunedMemorySaver 至少要留 1 份存檔點，收到 ${String(keep)}`);
     }
     this.#keep = keep;
   }
 
-  /** @inheritdoc 存完之後修剪這條鏈。 */
+  /**
+   * @inheritdoc 存完之後修剪這條鏈。
+   *
+   * **寫不進去時收掉空的鏈**（#1658）：`MemorySaver.put` 先建好 (thread, ns) 那一格才序列化，序列化拋錯就留下一格空的，
+   * 之後 `getTuple` 拿空的那格當「有存檔點」去拆，拋 `undefined is not iterable`，把原本那顆錯蓋掉。
+   */
   override async put(
     config: RunnableConfig,
     checkpoint: Checkpoint,
     metadata: CheckpointMetadata,
   ): Promise<RunnableConfig> {
-    const saved = await super.put(config, checkpoint, metadata);
-    if (!hasDeltaChannel(metadata)) {
-      const thread = config.configurable?.thread_id as string;
-      const namespace = (config.configurable?.checkpoint_ns as string | undefined) ?? '';
-      this.#prune(thread, namespace);
+    const thread = config.configurable?.thread_id as string;
+    const namespace = (config.configurable?.checkpoint_ns as string | undefined) ?? '';
+    let saved: RunnableConfig;
+    try {
+      saved = await super.put(config, checkpoint, metadata);
+    } catch (error) {
+      const chain = this.storage[thread]?.[namespace];
+      if (chain !== undefined && Object.keys(chain).length === 0) {
+        delete this.storage[thread]![namespace];
+        if (Object.keys(this.storage[thread]!).length === 0) delete this.storage[thread];
+      }
+      throw error;
     }
+    if (!hasDeltaChannel(metadata)) this.#prune(thread, namespace);
     return saved;
   }
 

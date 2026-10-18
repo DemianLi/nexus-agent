@@ -38,6 +38,7 @@ import type { ConversationReplay, SessionEvent, UnreplayableReason } from '@nexu
 import { context } from 'langchain';
 
 import { TOOL_RESULT_STASH_PREFIX } from './agent-factory.js';
+import { CheckpointDepthError, checkpointDepth } from './checkpoint-serde.js';
 
 /** 灌得進去的 agent 那一面。 */
 export interface RestorableAgent {
@@ -191,19 +192,36 @@ export function toolResultAsSeen(message: ToolMessage): ToolMessage {
  * @param threadId - checkpointer 認的那個 id。
  * @param events - 續接讀回來的 root 日誌。
  * @returns 推的結果，給入口披露用。
- * @throws `updateState` 拋錯——見檔頭「寫不進去就讓這條 thread 起不來」。
+ * @throws `updateState` 拋錯——見檔頭「寫不進去就讓這條 thread 起不來」。存檔點太深（{@link CheckpointDepthError}，
+ *   [#1658](https://github.com/DemianLi/nexus-agent/issues/1658)）時換成一顆帶 `seq` 的：最深的那一則出自日誌哪一顆事件。
+ *   那一則不截斷、不改寫——上限出現之前寫下的舊日誌才會有，要人看過再決定怎麼辦。
  */
 export async function restoreConversation(
   agent: RestorableAgent,
   threadId: string,
   events: readonly SessionEvent[],
 ): Promise<ConversationReplay> {
-  const replay = replayConversation(events, { toolResultAsSeen });
+  const seqOf = new Map<BaseMessage, number>();
+  const replay = replayConversation(events, {
+    toolResultAsSeen,
+    origin: (message, event) => seqOf.set(message, event.seq),
+  });
   if (replay.kind === 'replayed' && replay.messages.length > 0) {
-    await agent.updateState(
-      { configurable: { thread_id: threadId } },
-      { messages: [...replay.messages] as BaseMessage[] },
-    );
+    try {
+      await agent.updateState(
+        { configurable: { thread_id: threadId } },
+        { messages: [...replay.messages] as BaseMessage[] },
+      );
+    } catch (error) {
+      if (!(error instanceof CheckpointDepthError) || error.seq !== undefined) throw error;
+      let deepest: BaseMessage | undefined;
+      let most = -1;
+      for (const message of replay.messages) {
+        const depth = checkpointDepth(message);
+        if (depth > most) [deepest, most] = [message, depth];
+      }
+      throw new CheckpointDepthError(error.depth, error.limit, deepest && seqOf.get(deepest));
+    }
   }
   return replay;
 }
