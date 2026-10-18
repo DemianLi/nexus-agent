@@ -143,6 +143,9 @@ importers:
       '@nexus/plugin-telemetry-otel':
         specifier: workspace:*
         version: link:../../packages/nexus-plugin-telemetry-otel
+      '@nexus/plugin-todo':
+        specifier: workspace:*
+        version: link:../../packages/nexus-plugin-todo
       '@nexus/plugin-token-meter':
         specifier: workspace:*
         version: link:../../packages/nexus-plugin-token-meter
