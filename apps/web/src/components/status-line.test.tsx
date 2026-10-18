@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { ELAPSED_TICK_MS, StatusLine } from '@/components/status-line';
 import { serverClock } from '@/lib/server-clock';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
+import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 import { Script } from '@/test/conversation-frames';
 import { turn, view, withTrajectory } from '@/test/trajectory-fixtures';
 
@@ -68,6 +69,19 @@ describe('StatusLine 的連線那幾句（#593）', () => {
       expect(screen.getByRole('button', { name: '立刻重連' })).toBeTruthy();
     },
   );
+
+  it('伺服器說永遠不收（子代理的會話，#1708）：單獨講那一句，沒有「立刻重連」', () => {
+    render(
+      <StatusLine
+        state={idle}
+        connected={false}
+        refusal={THREAD_IS_SUBAGENT_TEXT}
+        onReconnect={() => undefined}
+      />,
+    );
+    expect(screen.getByRole('status').textContent).toBe(THREAD_IS_SUBAGENT_TEXT);
+    expect(screen.queryByRole('button', { name: '立刻重連' })).toBeNull();
+  });
 
   it('瀏覽器離線排在不收前面：離線時那條下行根本沒送出去', () => {
     render(

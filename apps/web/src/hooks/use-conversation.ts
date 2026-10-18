@@ -57,6 +57,7 @@ import type { RatingsView } from '@/lib/feedback-ratings';
 import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 import { threadCapacityText } from '@/lib/thread-capacity';
+import { threadSubagentText } from '@/lib/thread-subagent';
 import { randomUuid } from '@/lib/uuid';
 
 /** 回饋對話框開給誰：一則回覆（按了讚或踩），或整個會話（只打了 `/feedback`）。 */
@@ -139,8 +140,9 @@ export interface Conversation {
   /** 上一次開線失敗、或下行斷掉的原因。接回來就清掉。串流自己正常收掉時沒有原因可講，這一格不在。 */
   readonly connectionError?: string;
   /**
-   * 下行被伺服器明說不收、而且有一句給使用者看的話時（thread 數滿了，[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)），
-   * 就是那一句；這時 {@link connectionError} 不在——server 的原文是給管理者看的。重試照舊，接回來就清掉。
+   * 下行被伺服器明說不收、而且有一句給使用者看的話時，就是那一句；這時 {@link connectionError} 不在——server 的原文不往畫面送。
+   * thread 數滿了（[#1478](https://github.com/DemianLi/nexus-agent/issues/1478)）是暫時的：重試照舊，接回來就清掉。
+   * 子代理的會話（[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）是永久的：不排重試，{@link reconnecting} 不在。
    */
   readonly refusal?: string;
   /**
@@ -457,6 +459,22 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       setRefusal(refused);
       scheduleRetry();
     };
+    /**
+     * 伺服器說這條**永遠**開不了（子代理的會話，#1708）：講原因、不排重試。`lost` 留在 false，所以「立刻重連」與
+     * `online` 都不會再去開它——重試幾次，server 的答案都一樣。
+     */
+    const refuse = (refused: string) => {
+      const book = retry.current;
+      book.lost = false;
+      clearTimeout(book.timer);
+      book.timer = undefined;
+      clearTimeout(book.recoveredTimer);
+      setRecovered(false);
+      setConnected(false);
+      setConnectionError(undefined);
+      setRefusal(refused);
+      setReconnecting(undefined);
+    };
 
     void (async () => {
       try {
@@ -529,6 +547,12 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       } catch (error) {
         if (!cancelled) {
           // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
+          const permanent =
+            error instanceof WireRejectedError ? threadSubagentText(error.code) : undefined;
+          if (permanent !== undefined) {
+            refuse(permanent);
+            return;
+          }
           const refused =
             error instanceof WireRejectedError ? threadCapacityText(error.code) : undefined;
           lose(

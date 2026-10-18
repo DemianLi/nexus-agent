@@ -1,9 +1,12 @@
 import type { Event, WireClient, WireFeedbackItem } from '@nexus/wire';
+import { THREAD_AT_CAPACITY, THREAD_IS_SUBAGENT, WireRejectedError } from '@nexus/wire';
 import { act, cleanup, configure, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useConversation } from '@/hooks/use-conversation';
 import { RECOVERED_NOTICE_MS } from '@/lib/reconnect';
+import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
+import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 
 /**
  * 斷線與重接（#593）。退避公式本身驗在 `lib/reconnect.test.ts`；這裡驗 hook 真的在斷線時翻回沒連上、照退避排
@@ -37,9 +40,9 @@ interface Line {
  */
 function scriptedClient(extra: Record<string, unknown> = {}) {
   const lines: Line[] = [];
-  let failOpen: string | undefined;
+  let failOpen: string | Error | undefined;
   const openEvents = vi.fn(async () => {
-    if (failOpen !== undefined) throw new Error(failOpen);
+    if (failOpen !== undefined) throw typeof failOpen === 'string' ? new Error(failOpen) : failOpen;
     const queue: Event[] = [];
     let wake: (() => void) | undefined;
     let ended = false;
@@ -81,7 +84,7 @@ function scriptedClient(extra: Record<string, unknown> = {}) {
     openEvents,
     line: (index: number) => lines[index]!,
     latest: () => lines[lines.length - 1]!,
-    setFailOpen: (message: string | undefined) => (failOpen = message),
+    setFailOpen: (failure: string | Error | undefined) => (failOpen = failure),
   };
 }
 
@@ -141,6 +144,51 @@ describe.each([false, true])('useConversation 斷線與重接的主線（StrictM
 
     await tick(RECOVERED_NOTICE_MS);
     expect(result.current.recovered).toBe(false);
+  });
+});
+
+/** serve 拒收下行時 `openEvents` 拋的型別錯誤（#1481）：message 用 serve 的原文，測試要看它沒上畫面。 */
+function rejected(code: string, serverMessage: string) {
+  const body = JSON.stringify({ type: 'error', id: null, error: code, message: serverMessage });
+  return new WireRejectedError(code, serverMessage, `下行被拒：${body}`);
+}
+
+describe('useConversation 下行被拒：永久的不重試，暫時的照試（#1708）', () => {
+  it('子代理的會話：講那一句、不排重試；推過最長的退避、按「立刻重連」、網路回來都不再開', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(
+      rejected(
+        THREAD_IS_SUBAGENT,
+        '"t/1" 是子代理的會話，不能當一條 thread 開；要對它說話，請從它的主對話用 subagent.send。',
+      ),
+    );
+    const { result } = renderHook(() => useConversation({ client, threadId: 't/1' }));
+    await tick();
+    expect(result.current.connected).toBe(false);
+    expect(result.current.refusal).toBe(THREAD_IS_SUBAGENT_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toBeUndefined();
+
+    await tick(60_000);
+    act(() => result.current.reconnectNow());
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await tick(60_000);
+    expect(openEvents).toHaveBeenCalledOnce();
+    expect(result.current.refusal).toBe(THREAD_IS_SUBAGENT_TEXT);
+  });
+
+  it('對照組：thread 數滿了是暫時的，照退避重試，refusal 是另一句', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(rejected(THREAD_AT_CAPACITY, 'thread 數已到上限 2／2'));
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.refusal).toBe(THREAD_AT_CAPACITY_TEXT);
+    expect(result.current.reconnecting).toEqual({ wasConnected: false, offline: false });
+
+    await tick(250);
+    expect(openEvents).toHaveBeenCalledTimes(2);
   });
 });
 
