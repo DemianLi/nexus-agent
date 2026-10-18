@@ -162,6 +162,25 @@ describe('子行程的環境', () => {
   });
 });
 
+describe('帶目錄的 glob 由 rg 自己對根錨定，不走基座那一支', () => {
+  it('rg 在時，帶目錄的 glob 不經過 super.grep（lastSegmentOf 加 micromatch 只留給退路）', async () => {
+    await mkdir(join(root, 'logs'));
+    await mkdir(join(root, 'nested', 'logs'), { recursive: true });
+    await writeFile(join(root, 'logs', 'app.log'), 'needle 根\n');
+    await writeFile(join(root, 'nested', 'logs', 'app.log'), 'needle 巢狀\n');
+    const bare = vi.spyOn(FilesystemBackend.prototype, 'grep');
+
+    const result = await new ContainedFilesystemBackend({ rootDir: root }).grep(
+      'needle',
+      '/',
+      'logs/app.log',
+    );
+
+    expect(paths(result)).toEqual(['/logs/app.log']);
+    expect(bare).not.toHaveBeenCalled();
+  });
+});
+
 describe('輸出上限', () => {
   it('超過上限就收掉 rg、回縮小範圍的錯誤，不解析半份輸出', async () => {
     const long = `needle ${'x'.repeat(100)}\n`.repeat(100);
