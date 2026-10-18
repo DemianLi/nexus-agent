@@ -9,7 +9,7 @@
  * 每一條 `beforeEach` 先確認內附的在，不在就紅，不跳過——跳過會讓這份防線在壞掉的產物上靜靜消失。
  */
 
-import { spawnSync } from 'node:child_process';
+import { ChildProcess, spawnSync } from 'node:child_process';
 import {
   chmod,
   mkdir,
@@ -399,16 +399,24 @@ describe('失敗不換結果', () => {
     expect((outcome as { message: string }).message).toContain('SIGKILL');
   });
 
-  it('起不來（ENOENT）的同時已被取消：回取消，不是「起不來」', async () => {
-    const controller = new AbortController();
-    const outcome = await runRipgrep({
-      argv: ['--json'],
-      cwd: root,
-      executable: join(base, 'no-such-rg'),
-      signal: controller.signal,
-      internals: { onSpawn: () => controller.abort() },
-    });
-    expect(outcome).toMatchObject({ kind: 'error', code: SEARCH_ABORTED });
+  it('起不來（ENOENT）的同時已被取消：回取消，不是「起不來」；沒有 pid 的 child 不呼叫 kill（pid 0 = 整個行程群組）', async () => {
+    // kill 換成不做事的替身：沒有 pid 守衛時它會被呼叫（而且真的會殺掉整個行程群組，連測試行程一起），
+    // 換掉之後守衛拿掉只會紅，不會殺人。
+    const kill = vi.spyOn(ChildProcess.prototype, 'kill').mockReturnValue(false);
+    try {
+      const controller = new AbortController();
+      const outcome = await runRipgrep({
+        argv: ['--json'],
+        cwd: root,
+        executable: join(base, 'no-such-rg'),
+        signal: controller.signal,
+        internals: { onSpawn: () => controller.abort() },
+      });
+      expect(outcome).toMatchObject({ kind: 'error', code: SEARCH_ABORTED });
+      expect(kill).not.toHaveBeenCalled();
+    } finally {
+      kill.mockRestore();
+    }
   });
 
   it('spawn 同步丟（執行檔路徑含 NUL）：SEARCH_FAILED，訊息固定、不含路徑', async () => {
