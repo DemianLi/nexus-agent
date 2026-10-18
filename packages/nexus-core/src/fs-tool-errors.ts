@@ -74,6 +74,24 @@ export const FS_TOOL_ERRORS_MIDDLEWARE_NAME = 'nexusFsToolErrors';
 export const FS_SANDBOX_DENIED = 'FS_SANDBOX_DENIED';
 
 /**
+ * 搜尋失敗的碼（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)）。dsh `SearchErrorCode` 的四個成員
+ * （`packages/fs/tool-fs-search/src/search-core.ts:78-82`，`687f282e`），字面照抄。載體跟 {@link FS_SANDBOX_DENIED}
+ * 一樣：backend 在這一次呼叫的記錄上寫碼（{@link noteSearchError}），`wrapToolCall` 標錯時帶出去，最後落進會話日誌
+ * 那顆 `tool/result` 的 `error`。nexus 沒有 dsh 的 `HarnessError` 註冊表，這是 #293 已經用過的載體，不另立新的。
+ */
+export const SEARCH_INVALID_PATTERN = 'SEARCH_INVALID_PATTERN';
+export const SEARCH_FAILED = 'SEARCH_FAILED';
+export const SEARCH_RAW_OUTPUT_OVERFLOW = 'SEARCH_RAW_OUTPUT_OVERFLOW';
+export const SEARCH_ABORTED = 'SEARCH_ABORTED';
+
+/** 搜尋失敗的四個碼。 */
+export type SearchErrorCode =
+  | typeof SEARCH_INVALID_PATTERN
+  | typeof SEARCH_FAILED
+  | typeof SEARCH_RAW_OUTPUT_OVERFLOW
+  | typeof SEARCH_ABORTED;
+
+/**
  * 基座自己寫成錯誤的那幾句的開頭：`read_file` 的 `Error: …`、`ls`／`glob` 的 `Error listing files: …`
  * 與 `Error finding files: …`（`deepagents@1.13.1`，見檔頭）。這幾句不補前綴，理由見 middleware。
  */
@@ -121,6 +139,10 @@ interface CallRecord {
   readonly failed: Map<string, boolean>;
   /** 這一次有沒有被 fence 擋下。 */
   sandboxDenied: boolean;
+  /** 這一次工具呼叫的取消訊號（使用者停止、工具逾時），langchain 放在 `request.runtime.signal`；沒有就是 `undefined`。 */
+  readonly signal: AbortSignal | undefined;
+  /** backend 的搜尋失敗了，是哪一種（{@link noteSearchError}）。 */
+  searchError: SearchErrorCode | undefined;
 }
 
 /**
@@ -147,6 +169,27 @@ function note(method: string, result: unknown): void {
 export function noteSandboxDenial(): void {
   const record = currentCall.getStore();
   if (record !== undefined) record.sandboxDenied = true;
+}
+
+/**
+ * 搜尋失敗了：backend 在回 `{ error }` 之前叫它，記下是哪一個碼（{@link SearchErrorCode}）。不在任何一次工具呼叫裡時什麼都不做。
+ *
+ * @param code - 四個碼之一。
+ */
+export function noteSearchError(code: SearchErrorCode): void {
+  const record = currentCall.getStore();
+  if (record !== undefined) record.searchError = code;
+}
+
+/**
+ * 正在跑的這一次工具呼叫的取消訊號（[#1532](https://github.com/DemianLi/nexus-agent/issues/1532)）。
+ * langchain 的 `ToolNode.runTool` 把 `lgConfig.signal` 放進 `request.runtime.signal`，`wrapToolCall` 開記錄時帶上。
+ * 使用者按停止、工具逾時都經這個訊號；backend 自己起子行程時據此收掉它。
+ *
+ * @returns 不在工具呼叫裡、或這一次沒有訊號時是 `undefined`。
+ */
+export function currentToolCallSignal(): AbortSignal | undefined {
+  return currentCall.getStore()?.signal;
 }
 
 /**
@@ -208,12 +251,21 @@ export function createFsToolErrorsMiddleware(): AgentMiddleware {
     wrapToolCall: async (request, handler) => {
       // **每一顆工具呼叫都開一份記錄**，不只基座的檔案工具：fence 擋下的若是別的工具
       // （`submit_record`，#316），它的回報也要有地方落。
-      const record: CallRecord = { failed: new Map(), sandboxDenied: false };
+      const record: CallRecord = {
+        failed: new Map(),
+        sandboxDenied: false,
+        signal: (request.runtime as { readonly signal?: AbortSignal } | undefined)?.signal,
+        searchError: undefined,
+      };
       const result = await currentCall.run(record, () => handler(request));
       const method = FS_TOOL_PRIMARY_METHOD[resolveToolName(request)];
       if (method === undefined) return withSandboxCode(result, record);
       if (record.failed.get(method) !== true || !ToolMessage.isInstance(result)) return result;
-      const error = record.sandboxDenied ? { name: 'FsError', code: FS_SANDBOX_DENIED } : undefined;
+      const error = record.sandboxDenied
+        ? { name: 'FsError', code: FS_SANDBOX_DENIED }
+        : record.searchError === undefined
+          ? undefined
+          : { name: 'SearchError', code: record.searchError };
       // 已經是錯誤（`delete` 走基座的 `toolError`）而沒有碼要補：原樣交出去，別人的訊息不動。
       if (result.status === 'error' && error === undefined) return result;
       const options = {
