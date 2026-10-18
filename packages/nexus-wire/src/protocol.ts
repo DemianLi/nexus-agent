@@ -361,6 +361,14 @@ export const TURN_NOT_FOUND = 'turn_not_found';
  */
 export const THREAD_AT_CAPACITY = 'thread_at_capacity';
 
+/**
+ * 這個 id 是**子代理的會話**（`<thread>/<編號>`，header 帶 `parentSession`），不能當一條 thread 開或驅動
+ * （[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）。serve 在碰日誌之前就拒絕，日誌一個位元組都不動。
+ * 要對子代理說話，請從它的主對話用 `subagent.send`。對到 dsh 的 `session/agent-busy`＋`use subagent delivery`
+ * （`packages/api/session-controller/src/agent.ts:24-30`、`:127-133`）。**不是暫時失敗，重試沒用**。
+ */
+export const THREAD_IS_SUBAGENT = 'thread_is_subagent';
+
 /** 這條線上的錯誤碼：協定的那十個，加上我們自己的命令用到的。 */
 export type WireErrorCode =
   | ErrorCode
@@ -371,6 +379,7 @@ export type WireErrorCode =
   | typeof SUBAGENT_AT_CAPACITY
   | typeof SUBAGENT_CLOSED
   | typeof THREAD_AT_CAPACITY
+  | typeof THREAD_IS_SUBAGENT
   | typeof MODEL_DOES_NOT_SUPPORT_IMAGES
   | typeof ATTACHMENT_NOT_FOUND;
 

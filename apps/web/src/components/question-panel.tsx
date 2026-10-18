@@ -1,8 +1,8 @@
 /**
  * **一顆問答中斷一個面板**：模型問的那一組問題，一題一頁（規格 §4.2 列 23、§4.3，#409）。
  *
- * 外殼是 shadcn `questionnaire`（`components/ui/questionnaire.tsx`）；外框、名稱、邊框光、收起、❌ 與焦點歸
- * `pending-swap.tsx`，這裡只畫題目與上下題。資料面照 dsh `QuestionComposer`（`references/deepseek-harness/packages/client/
+ * 外殼是 solid-glass 的 `questionnaire`（`components/ui/questionnaire.tsx` 轉出 vendor 版，#1638 PR C）；外框、名稱、邊框光、
+ * 收起、❌ 與焦點歸 `pending-swap.tsx`，這裡只畫題目與上下題。資料面照 dsh `QuestionComposer`（`references/deepseek-harness/packages/client/
  * ui-user-questions/src/client/QuestionComposer.tsx`）：
  *
  * - **一顆中斷帶整批問題**，一個面板答完（[#231](https://github.com/DemianLi/nexus-agent/issues/231) 第 8 項）。

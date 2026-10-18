@@ -310,6 +310,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **搜尋結果看筆數、不看字數**：`grep` 命中超過 `tool-fs-search` 那一列的 `grepMaxMatches`（出貨 250）、`glob` 或 `ls` 超過 `globMaxResults`（出貨 100）時，模型只收到前段，結尾一句帶路徑的定位（`Full grep result stored at: …`），完整結果存進上面那個暫存目錄，用 `read_file` 照路徑讀。`grep` 只管逐行命中（`content`）那種輸出，`count`／`files_with_matches` 照原樣。暫存目錄寫不進去、或沒有會話日誌時照樣只留前段，結尾改講沒存到，搜尋不算失敗。把那一列標成 `disabled: true` 就回到基座原樣：超過 80,000 字元由工具自己截掉，原文不留。
 
+**`grep` 用的 ripgrep 是產物內附的，不看主機的 `PATH`**（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 4）：`@vscode/ripgrep` 的平台套件隨 `pnpm install` 與 release tarball 一起來，主機有沒有裝 rg、是哪個版本都無關，完全內網的主機也不必另外裝。啟動時 serve 會印一行 `搜尋（grep）：內附 ripgrep <路徑>`；印的是「不可用」就是產物壞了（平台套件被刪、或 rg 沒有執行權限），這時每一次 `grep` 都會以 `SEARCH_FAILED` 失敗，**沒有退路**，重新安裝即可。rg 以 `--no-config` 啟動，`~/.ripgreprc` 與 `RIPGREP_CONFIG_PATH` 影響不到搜尋。
+
 **接得回來要站在同一個地方**，兩道守衛，兩個入口都擋：
 
 - **同一個目錄。** 一份會話記著它建立當下的工作目錄，接不回別的目錄；**沒記的也拒**，不猜。
@@ -444,7 +446,7 @@ refs:
 ## 經代理連外
 
 模型請求與走 HTTP 的 MCP server 會經標準代理環境變數指定的代理發出（[#746](https://github.com/DemianLi/nexus-agent/issues/746)）。
-啟動時讀一次，不需要別的設定；做法與限制照 dsh 的 `docs/user/guide/network-proxy.zh.md`。Node 要 22.19 以上（`package.json` 的 `engines`）。
+啟動時讀一次，不需要別的設定；做法與限制照 dsh 的 `docs/user/guide/network-proxy.zh.md`。Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準。
 
 ```bash
 export HTTPS_PROXY=http://127.0.0.1:7890
@@ -471,7 +473,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 ## 用 systemd 常駐
 
 [#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5。對象是 Release 打出來的 `nexus-agent-<版本>-linux-x64.tar.gz`（解開即用，目標機不用裝 pnpm、不用連 registry），
-Node 要 22.19 以上。
+Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準。
 
 ```bash
 sudo useradd --system --home-dir /var/lib/nexus-agent --shell /usr/sbin/nologin nexus-agent
@@ -645,6 +647,7 @@ dsh 是在 `turn/end` 抵達的當下收回（`goal-round-driver/src/index.ts:35
   主對話的輪數大約是「派出去那一輪 ＋ 每個子代理各一輪」。
 - **模型可能在子代理做完之前就先答了使用者**，之後才被結算通知叫醒補上結論。畫面上這一輪不是使用者說的話，不畫成使用者的泡泡。
 - **每個背景子代理有自己的會話日誌**，路徑是 `<主對話會話>/<編號>`；關閉一條 thread 時會等它進行中的背景輪收完。
+- **子代理的會話不是一條 thread**（#1544）：把 `<主對話>/<編號>` 當 thread id 開（下行、`run.start` 等任何會組出 thread 的路，以及 `run.cancel`——照 dsh，對子代理會話的取消也拒絕）會回專屬碼 `thread_is_subagent`，message 說明「這是子代理的會話，要對它說話請從主對話用 `subagent.send`」，不是暫時失敗、重試沒用。serve 在碰日誌之前就拒絕（只冷讀 header、不拿寫租約、不補結），子代理的日誌一個位元組都不動。判準是 header 帶 `parentSession`，與 `GET /threads` 不列子代理是同一份（`isSubagentSessionHeader`）。
 - **重啟 serve 之後，做完的背景子代理還叫得醒**（#1271，缺口源自 #737，照 dsh 的 continuable）。身分（哪一種子代理、哪顆模型與推理等級）記在子代理自己日誌的第一輪之前，
   `subagent/descriptor`（日誌格式 44）；重啟後載體讀主對話日誌上的 `subagent/catalog` 認得它們，現況裡列為 `idle`，**列出不復活任何一個**。
   只有往它送話（畫面上的 `subagent.send`、模型的 `send_message`）才接回來：拿寫入租約、補上當掉那一輪的收尾、按日誌上的身分編圖、把對話從日誌**重播**灌回圖，

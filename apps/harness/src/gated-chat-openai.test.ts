@@ -226,15 +226,28 @@ describe('三條出請求的路都過閘', () => {
 });
 
 describe('名額一定還回來', () => {
-  it('串流的消費者讀一段就 break：名額還回來', async () => {
+  // 假端點握著第二段不放：`break` 要能在它到之前回來，而且連線要真的關掉（#1546）。Node 24 上少了 `stream()` 那層中止，`break` 會卡到下一段到。
+  it('串流的消費者讀一段就 break：請求中止、連線關掉、名額還回來', async () => {
     const gate = new RequestGate({ maxConcurrent: 1, maxWaitMs: 5_000 });
     const iterable = await model(gate).stream(ask());
     for await (const chunk of iterable) {
       void chunk;
       expect(gate.active).toBe(1);
+      expect(inflight).toBe(1);
       break;
     }
     await until(() => gate.active === 0, '消費者丟掉串流後名額還回來');
+    await until(() => inflight === 0, '消費者丟掉串流後連線關掉');
+  });
+
+  it('串流讀一段之後呼叫 throw()：錯原樣丟回、請求中止、連線關掉、名額還回來', async () => {
+    const gate = new RequestGate({ maxConcurrent: 1, maxWaitMs: 5_000 });
+    const iterable = await model(gate).stream(ask());
+    expect((await iterable.next()).done).toBe(false);
+    const thrown = new Error('消費者不要了');
+    await expect(iterable.throw(thrown)).rejects.toBe(thrown);
+    await until(() => gate.active === 0, 'throw 之後名額還回來');
+    await until(() => inflight === 0, 'throw 之後連線關掉');
   });
 
   it('串流到一半被中止：名額還回來', async () => {
