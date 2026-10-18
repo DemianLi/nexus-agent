@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import type { ContentBlock } from '@langchain/core/messages';
 import { AIMessage } from '@langchain/core/messages';
 import { fromLoggedMessage, loggedContentBlocks, toLoggedMessage } from './logged-message.js';
-import { SessionLog } from './session-log.js';
+import { resumedLog } from './fixtures.js';
 
 describe('loggedContentBlocks', () => {
   it('把字串轉成一塊 text', () => {
@@ -78,7 +78,9 @@ describe('fromLoggedMessage 推得回深巢狀的那一則（#1526）', () => {
     // `StoredMessageData` 的型別沒有列 `tool_calls`，實際落盤的 AI 訊息有。
     const data = logged.data as typeof logged.data & { readonly tool_calls: readonly object[] };
     const message = { ...logged, data: { ...data, tool_calls: [{ ...data.tool_calls[0], args }] } };
-    const event = new SessionLog('t').append('assistant/message', { message });
+    // 寫入那一關有深度上限（#1661），3000 層只會出現在上限之前寫下、續接回來的舊日誌裡。
+    const event = resumedLog('t', [['assistant/message', { message }]]).events[0]!;
+    if (event.type !== 'assistant/message') throw new Error('第 0 顆不是 assistant/message');
     const back = fromLoggedMessage(event.data.message) as AIMessage;
     const backArgs = back.tool_calls?.[0]?.args as Record<string, unknown>;
     // 比對用 JSON.stringify：vitest 的 toEqual 是遞迴的。

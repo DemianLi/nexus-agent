@@ -9,10 +9,13 @@ import {
   isKnownSessionEventType,
   isLogicalTurnStart,
   isUnreadableSessionEvent,
+  materializeAppendBatch,
   MODEL_VISIBLE_EVENT_TYPES,
   openTurnStart,
+  SESSION_EVENT_MAX_DEPTH,
   SessionLog,
 } from './session-log.js';
+import type { SessionEvent } from './session-log.js';
 
 describe('SessionLog', () => {
   it('seq 從 0 開始、逐筆遞增，出自日誌長度', () => {
@@ -678,18 +681,24 @@ describe('JSON 快照照 dsh 的規則（#1526）', () => {
     });
   });
 
-  it('記憶體裡收得下 2 萬層：快照與凍結都是迭代的，最底那一層也凍過', () => {
+  it('續接收得下 2 萬層：快照與凍結都是迭代的，最底那一層也凍過', () => {
     // 落盤那一格（`apps/harness/src/session-log-json-snapshot.test.ts` 的 C）只能測到 Node 22 原生 `JSON.stringify`
     // 撐得住的深度（CI 上約 4100 層），遞迴的凍結在那以上才爆，所以這一格只在記憶體裡驗、不經原生序列化。
     for (const shape of ['object', 'array'] as const) {
       let value: unknown = 'leaf';
       for (let level = 0; level < 20_000; level++)
         value = shape === 'object' ? { next: value } : [value];
-      const event = new SessionLog('t1').append('tool/result', {
-        callId: shape,
-        isError: false,
-        meta: value,
-      });
+      // 經 seed 進來：寫入那一關有深度上限（#1661），續接回來的舊日誌沒有。
+      const event = new SessionLog('t1', {
+        seed: [
+          {
+            type: 'tool/result',
+            seq: 0,
+            time: 0,
+            data: { callId: shape, isError: false, meta: value },
+          },
+        ],
+      }).events[0]!;
       let node: unknown = (event.data as { meta: unknown }).meta;
       let depth = 0;
       let unfrozen = 0;
@@ -705,5 +714,101 @@ describe('JSON 快照照 dsh 的規則（#1526）', () => {
         node: 'leaf',
       });
     }
+  });
+});
+
+describe('寫入那一關的深度上限（#1661）', () => {
+  /** `levels` 層物件或陣列包著一個字串；純量不算層。 */
+  function nested(levels: number, shape: 'object' | 'array'): unknown {
+    let value: unknown = 'leaf';
+    for (let level = 0; level < levels; level++)
+      value = shape === 'object' ? { next: value } : [value];
+    return value;
+  }
+
+  // `data` 本身算第 1 層，所以 `meta` 包 N - 1 層時整份剛好 N 層。
+  for (const shape of ['object', 'array'] as const) {
+    it(`${shape}：剛好 ${SESSION_EVENT_MAX_DEPTH} 層收下`, () => {
+      const log = new SessionLog('t1');
+      const meta = nested(SESSION_EVENT_MAX_DEPTH - 1, shape);
+      const event = log.append('tool/result', { callId: 'c1', isError: false, meta });
+      expect(log.length).toBe(1);
+      expect(JSON.stringify((event.data as { meta: unknown }).meta)).toBe(JSON.stringify(meta));
+    });
+
+    it(`${shape}：多一層就拒，訊息帶路徑與層數，日誌不動`, () => {
+      const log = new SessionLog('t1');
+      log.append('turn/end', {});
+      let thrown: unknown;
+      try {
+        log.append('tool/result', {
+          callId: 'c1',
+          isError: false,
+          meta: nested(SESSION_EVENT_MAX_DEPTH, shape),
+        });
+      } catch (error: unknown) {
+        thrown = error;
+      }
+      expect(thrown).toBeInstanceOf(TypeError);
+      // 最裡面那個容器的路徑有「上限」那麼多段（meta 加上限減一層），只印前 8 段。
+      const step = shape === 'object' ? '.next' : '[0]';
+      expect((thrown as TypeError).message).toBe(
+        `會話事件的 tool/result 的 data.meta${step.repeat(7)}…（省略 ${SESSION_EVENT_MAX_DEPTH - 8} 段） ` +
+          `是第 ${SESSION_EVENT_MAX_DEPTH + 1} 層巢狀，超過上限 ${SESSION_EVENT_MAX_DEPTH} 層`,
+      );
+      expect(log.length).toBe(1);
+      // 拒掉的那一則不占 seq，下一則照常。
+      expect(log.append('turn/end', {}).seq).toBe(1);
+    });
+  }
+
+  it('續接不設限：seed 裡 3000 層的舊事件收得下，之後照常寫', () => {
+    // 上限出現之前寫下的日誌可能比上限深；讀方（`fromLoggedMessage`、遙測、修剪）的深巢狀格都靠這一點造資料。
+    const log = new SessionLog('t1', {
+      seed: [
+        {
+          type: 'tool/result',
+          seq: 0,
+          time: 0,
+          data: { callId: 'old', isError: false, meta: nested(3_000, 'array') },
+        },
+      ],
+    });
+    // 走訪數層數，不用 `JSON.stringify`：凍過的深陣列直接序列化會 `RangeError`（#1526）。
+    let node: unknown = (log.events[0]!.data as { meta: unknown }).meta;
+    let depth = 0;
+    while (Array.isArray(node)) {
+      node = node[0];
+      depth++;
+    }
+    expect({ depth, node }).toEqual({ depth: 3_000, node: 'leaf' });
+    expect(log.append('turn/end', {}).seq).toBe(log.length - 1);
+  });
+
+  describe('後端寫入前（materializeAppendBatch）是同一個上限', () => {
+    /** 繞過日誌直接造一顆事件。 */
+    function rawEvent(seq: number, meta: unknown): SessionEvent {
+      return {
+        type: 'tool/result',
+        seq,
+        time: seq,
+        data: { callId: `c${seq}`, isError: false, meta },
+      } as SessionEvent;
+    }
+
+    it(`data 剛好 ${SESSION_EVENT_MAX_DEPTH} 層收下（批次與事件那兩層不算進去）`, () => {
+      const batch = [rawEvent(0, 'x'), rawEvent(1, nested(SESSION_EVENT_MAX_DEPTH - 1, 'object'))];
+      expect(materializeAppendBatch(batch)).toHaveLength(2);
+    });
+
+    it('多一層就拒，路徑指到那一顆', () => {
+      const batch = [rawEvent(0, 'x'), rawEvent(1, nested(SESSION_EVENT_MAX_DEPTH, 'object'))];
+      expect(() => materializeAppendBatch(batch)).toThrow(
+        new TypeError(
+          `會話事件的 寫入批次[1].data.meta${'.next'.repeat(5)}…（省略 ${SESSION_EVENT_MAX_DEPTH + 2 - 8} 段） ` +
+            `是第 ${SESSION_EVENT_MAX_DEPTH + 3} 層巢狀，超過上限 ${SESSION_EVENT_MAX_DEPTH + 2} 層`,
+        ),
+      );
+    });
   });
 });
