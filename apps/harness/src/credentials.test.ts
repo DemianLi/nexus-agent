@@ -113,18 +113,24 @@ describe('解析順序：啟動環境 > 受管檔 > 目前資料夾 .env > home 
       value: 'from-process',
       source: 'env',
     });
-    expect(service().credentials.resolve(KEY)).toEqual({ value: 'from-file', source: 'file' });
+    expect(service().credentials.resolve(KEY)).toEqual({
+      value: 'from-file',
+      source: 'file',
+      path: file,
+    });
 
     rmSync(file);
     expect(service().credentials.resolve(KEY)).toEqual({
       value: 'from-project-env',
       source: 'project-env',
+      path: join(cwd, '.env'),
     });
 
     rmSync(join(cwd, '.env'));
     expect(service().credentials.resolve(KEY)).toEqual({
       value: 'from-home-env',
       source: 'user-env',
+      path: join(home, '.env'),
     });
 
     rmSync(join(home, '.env'));
