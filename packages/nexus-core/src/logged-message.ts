@@ -86,7 +86,7 @@ export function toLoggedMessage(message: BaseMessage): LoggedMessage {
 export function fromLoggedMessage(logged: LoggedMessage): BaseMessage {
   // LangChain 的 StoredMessageData.content 宣告是 string，但我們落盤的是 string | ContentBlock[]。
   // mapStoredMessagesToChatMessages 預期 StoredMessage，所以轉型回去。
-  const copy = structuredClone(logged as StoredMessage); // 突變 R1（#1661 CI，量完就撤）
+  const copy = snapshotJsonValue(logged, '日誌訊息') as StoredMessage;
   const [message] = mapStoredMessagesToChatMessages([copy]);
   return message!;
 }

@@ -2010,7 +2010,7 @@ export class SessionLog implements SessionLogView {
     const snapshot = snapshotJsonValue(
       data,
       `${type} 的 data`,
-      // 突變 M1（#1661 CI，量完就撤）：append 不傳上限。
+      SESSION_EVENT_MAX_DEPTH,
     ) as SessionEventMap[T];
     if (this.#publishing) {
       throw new Error(
