@@ -329,16 +329,17 @@ describe('偏離 1：沒有 rg 才走基座的退路', () => {
     expect(paths(result)).toEqual(['/a.log', '/notes.txt']);
   });
 
-  it('工作區根不存在：回 SEARCH_FAILED 的錯誤，**不走退路**（ENOENT 會被誤當成沒有 rg）', async () => {
+  it('工作區根不存在：沒有東西可找（matches 為空），**不走退路**（ENOENT 會被誤當成沒有 rg）', async () => {
     const bare = vi.spyOn(FilesystemBackend.prototype, 'grep');
+    let spawned = 0;
 
-    const result = await new ContainedFilesystemBackend({ rootDir: join(base, 'gone') }).grep(
-      'needle',
-      '/',
-    );
+    const result = await new ContainedFilesystemBackend({
+      rootDir: join(base, 'gone'),
+      ripgrep: { onSpawn: () => (spawned += 1) },
+    }).grep('needle', '/');
 
-    expect(result.matches).toBeUndefined();
-    expect(result.error).toContain('workspace root');
+    expect(result).toEqual({ matches: [] });
+    expect(spawned).toBe(0);
     expect(bare).not.toHaveBeenCalled();
   });
 

@@ -597,10 +597,13 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     maxCount?: number | null,
   ): Promise<GrepResult> {
     // `spawn` 在 `cwd` 不存在時也回 `spawn rg ENOENT`，跟找不到 rg 分不出來；不先確認的話會誤走退路，
-    // 讓 `PATH` 上的 rg 在沒有 `--no-config` 的情況下被基座起來。放在最前面：根不見了是錯誤，不是「沒有命中」。
+    // 讓 `PATH` 上的 rg 在沒有 `--no-config` 的情況下被基座起來。放在最前面。
+    // **根不存在不是錯誤，是「沒有東西可找」**（`{ matches: [] }`，同基座對不存在的起點）：暫存 backend 的根是第一次
+    // 存東西才建的（`tool-result-stash.ts`），經 `CompositeBackend` 搜 `/` 時也會搜到它。根存在卻不是目錄才是錯誤。
     try {
       if (!(await stat(this.cwd)).isDirectory()) throw new Error('not a directory');
-    } catch {
+    } catch (error: unknown) {
+      if ((error as NodeJS.ErrnoException).code === 'ENOENT') return { matches: [] };
       return searchFailure(
         SEARCH_FAILED,
         `grep cannot search: workspace root ${this.cwd} is not an accessible directory`,
