@@ -236,7 +236,7 @@ export class DepthCheckedSerializer implements SerializerProtocol {
     const revived: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(record)) revived[key] = await this.#revive(item);
     if (isLangChainSerializedObject(revived)) {
-      return load(JSON.stringify(revived), { maxDepth: this.#maxDepth });
+      return load(JSON.stringify(revived)); // 探針 M2（#1658）：load 不傳 maxDepth，會 revert
     }
     return revived;
   }
