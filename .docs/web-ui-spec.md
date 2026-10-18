@@ -154,7 +154,7 @@
 - 全部 oklch，**語意 token 直接寫值**，不另建色板層；registry 帶進來的 `--sidebar-*` 由 `hsl()` 轉掉。
 - `--primary` **無彩**。`--brand`／`--brand-soft` **只**用在連結、info、核准與提問面板的邊框光；error 沿用 `--destructive`。
 - **帶色相的 token 分兩種來源**：
-  - **SG 自己就有的**：`--brand`、`--brand-muted`（`solid-glass.css:192-194`、`:300-302`）、`--success`（`:199`、`:306`）、`--destructive`、`--status-*`（`:198`、`:305` 起）。值以 SG 的為輸入，照下面的目標解。**第 ⑥ 步不刪它們**。
+  - **SG 自己就有的**：`--brand`、`--brand-muted`（`solid-glass.css:192-194`、`:302-304`）、`--success`（`:199`、`:308`）、`--destructive`、`--status-*`（`:198`、`:307` 起）。值以 SG 的為輸入，照下面的目標解。**第 ⑥ 步不刪它們**。
   - **nexus 另加、SG 沒有的**：`--brand-soft`（`--brand` 加 alpha）、`--warning`、`--info`。warning／info 的色相與彩度沿用上一版產生器解出來的值，明度對 SG 的底色重解（`apps/web/tokengen/generate.mjs`）。
 - 原型另加的名字（SG 也沒有）：`--stage`、`--chip`／`--chip-hover`／`--chip-pressed`、`--card-hairline`、`--material-shadow`／`--menu-shadow`／`--card-shadow`、`--beam-*`。
 - **nexus 獨有的顏色**（`stage`、`chip*`、`brand-soft`、`warning`、`info`、`card-hairline`，同 vendor README「另外新增」）與原型另加的陰影名字，在 #1497 第 ⑥ 步刪掉，自製元件改用 SG 有的 token（Q11）；「需要你處理」那一色改對到 SG 的 `--status-interrupted`（Q14）。刪之前它們的值照下面的目標解，亮暗都要過。
@@ -169,11 +169,11 @@
 - 不用 APCA（2023-07 已從 WCAG 3 草稿移除）。人工抽驗用 Vispero Colour Contrast Analyser，CI 用 colorjs.io 重算（§11）。
 
 **形狀**
-- 圓角照 SG 的階梯，不重綁（Q8）：`--radius` 14px，`sm`／`md`／`lg`／`xl`／`2xl`／`3xl`／`4xl` 是它的 0.6／0.8／1／1.4／1.8／2.2／2.6 倍；控制項寫 `rounded-lg` 時改用小一階的 `--radius-control`（11.2px，`solid-glass.css:544-557`）。按鈕的圓角照 vendor 原文（`vendor/solid-glass/components/ui/button.tsx`，#1523 起不再是 `rounded-full`）。不用 superellipse。
+- 圓角照 SG 的階梯，不重綁（Q8）：`--radius` 14px，`sm`／`md`／`lg`／`xl`／`2xl`／`3xl`／`4xl` 是它的 0.6／0.8／1／1.4／1.8／2.2／2.6 倍；控制項寫 `rounded-lg` 時改用小一階的 `--radius-control`（11.2px，`solid-glass.css:546-559`）。按鈕的圓角照 vendor 原文（`vendor/solid-glass/components/ui/button.tsx`，#1523 起不再是 `rounded-full`）。不用 superellipse。
 - 列的圓角 `--radius-row` 是 SG 的 `3xl` 減 4px（`index.css`），nexus 新增、不是改 SG。
-- **邊緣照 SG 的畫法**（Q8 外觀照 SG；PM 2026-10-17 定照 SG 實際怎麼畫來寫，#1512，照 `solid-glass.css` 實際的寫法）。亮暗是同一組結構，只換 token 值（`:258-265`），所以暗色也是外環＋投影，不再是 inset 疊層：
-  - **面**（`.bg-card`、`.glass-panel`、`.bg-popover`）：**邊畫在陰影裡**，`border` 歸零（`:378-401`）。由內到外是頂上一條光 `inset 0 1px 0 --glass-rim`、`inset 0 0 0 1px --glass-inner`、外側細線 `0 0 0 1px --glass-edge`（浮層是 `--popover-edge`）、貼地 `0 1px 2px --glass-contact`、投影 `0 12px 32px -14px --glass-shade`；浮層把投影換成 `0 24px 60px -18px --glass-shade` 加 `0 6px 16px -6px --glass-lift`。側欄只有 inset 線（`:405-409`）。
-  - **控制項**（主按鈕 `:436-462`、outline／secondary 按鈕 `:640-664`、欄位 `:917-933`、沒有底色的裸框 `:565-574`）：**細線就是元素自己的 `border`**（`--border`、`--glass-edge`、`--field-edge`），同一個元素再疊 inset 光與貼地投影。所以「同一元素不同時用 `border` 與陰影」只對面成立，對控制項不成立。
+- **邊緣照 SG 的畫法**（Q8 外觀照 SG；PM 2026-10-17 定照 SG 實際怎麼畫來寫，#1512，照 `solid-glass.css` 實際的寫法）。亮暗是同一組結構，只換 token 值（`:260-267`），所以暗色也是外環＋投影，不再是 inset 疊層：
+  - **面**（`.bg-card`、`.glass-panel`、`.bg-popover`）：**邊畫在陰影裡**，`border` 歸零（`:380-403`）。由內到外是頂上一條光 `inset 0 1px 0 --glass-rim`、`inset 0 0 0 1px --glass-inner`、外側細線 `0 0 0 1px --glass-edge`（浮層是 `--popover-edge`）、貼地 `0 1px 2px --glass-contact`、投影 `0 12px 32px -14px --glass-shade`；浮層把投影換成 `0 24px 60px -18px --glass-shade` 加 `0 6px 16px -6px --glass-lift`。側欄只有 inset 線（`:407-411`）。
+  - **控制項**（主按鈕 `:438-464`、outline／secondary 按鈕 `:642-666`、欄位 `:919-935`、沒有底色的裸框 `:567-576`）：**細線就是元素自己的 `border`**（`--border`、`--glass-edge`、`--field-edge`），同一個元素再疊 inset 光與貼地投影。所以「同一元素不同時用 `border` 與陰影」只對面成立，對控制項不成立。
   - `border-shadow.test.ts` 量的是元件原始碼的 className：vendor 的 SG 元件放行（外觀照 SG，名單在 `src/test/vendor-upstream.ts`，#1523），產品原始碼（含 `components/ui/` 的 nexus 層）照樣檢查。
   - **例外：貼在輸入框上方的卡片是平的、不浮起**（`Surface tone="docked"`：待辦、送出佇列、目標列）。它們不是浮在對話裡，是接在輸入框上的一排，所以只畫一圈 1px 細線（`--glass-edge`）、不帶投影；底色與 blur 照 SG。**這條是覆寫 SG 的本地修改**：SG 的 `.bg-card` 在 layer 外把 `border` 歸零、畫上浮起的整組陰影，`Surface` 給 docked 掛 `data-surface="docked"`，`solid-glass.overrides.css` 用它補回平線（vendor README「本地修改」第 13 條；Q8 機制類保留，#1512）。出處 `apps/web/src/components/surface.tsx` 檔頭；`design-system.test.ts` 只准 `Surface` 本身寫這組配方，`solid-glass-overrides.test.ts` 與 `guard/` 釘住它是平的。
 - 邊框光的靜態補償（亮色線 2px、光暈 brand 60% 28px、呼吸下限 .55；暗色 1.5px、30% 24px、.3）沿用原型值。
@@ -212,7 +212,7 @@
 - 在 `@theme`（**不用 `inline`**）覆寫 `--animate-in` 250ms／`--animate-out` 150ms、曲線 `--ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1)`。覆寫後 registry 的 `duration-*` 蓋不掉，單獨改用 `animation-duration-*`。
 - 進場 fill-mode `backwards`，退場 `both`。
 
-**token**：SG 沒有定義任何時長、曲線或 `--animate-*` 變數，它的時長寫死在自己的規則裡（transition 150ms ease-out `:980-985`；進場 `sg-float-in` 220ms、`sg-fade-in` 240ms `:1295-1299`；持續動畫 1.2s／2.4s／1.6s `:1257-1291`）。所以下面這組 nexus 的 token 先留著，**第 ③／④ 步換成 SG 的元件時一起換掉**（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。時長、曲線、位移、縮放、模糊、resize 整組原本照 Libraries.dev（時長 40／80／150／250／350／400／500，位移 4／6／8／12／30，縮放 .96–.99，模糊 2／3／8，resize 300），外加 `--duration-press` 120、`--duration-overlay` 200、`--auto-advance-delay` 200。
+**token**：SG 沒有定義任何時長、曲線或 `--animate-*` 變數，它的時長寫死在自己的規則裡（transition 150ms ease-out `:982-987`；進場 `sg-float-in` 220ms、`sg-fade-in` 240ms `:1297-1301`；持續動畫 1.2s／2.4s／1.6s `:1259-1293`）。所以下面這組 nexus 的 token 先留著，**第 ③／④ 步換成 SG 的元件時一起換掉**（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。時長、曲線、位移、縮放、模糊、resize 整組原本照 Libraries.dev（時長 40／80／150／250／350／400／500，位移 4／6／8／12／30，縮放 .96–.99，模糊 2／3／8，resize 300），外加 `--duration-press` 120、`--duration-overlay` 200、`--auto-advance-delay` 200。
 
 **模式清單封閉**：浮層彈出、對話框、側滑抽屜、換內容、展開收合、進場、進度、按壓、持續狀態。清單外沒有動效，只留 100–150ms 顏色過渡。
 
