@@ -38,13 +38,19 @@ gate 會擋下不符格式的 PR 標題。改標題即可，不需要重開 PR�
 
 ## PR 內文
 
-[`.github/pull_request_template.md`](.github/pull_request_template.md) 是唯一格式。
+兩種 PR，兩種格式。
 
-用 `gh pr create --body` 開 PR 時 CLI 不會自動套模板，要自己照模板的段落填。
+**feature → develop**：照 [`.github/pull_request_template.md`](.github/pull_request_template.md)，寫法照 `mattpocock-skills:pr`（Summary／Evidence／Merge Danger 對應「摘要／證據／合併風險」），段落標題用中文，用語照 [`GLOSSARY-MAP.md`](GLOSSARY-MAP.md) 指到的領域詞彙。骨架：
 
-`develop → main` 的 PR 內文會成為 main 上的 commit message，所以 gate 對這種 PR 強制要求 `## 變更內容` 與 `## 驗證方式` 兩個段落。feature PR 的內文不強制。
+- 第一行 `Refs #N`（不寫 Closes）；
+- `## 摘要`：挑最小的一張圖（虛擬碼、呼叫樹、元件樹、檔案樹或 diff 草圖），配一兩句話；GitHub 上 Mermaid 只露出一小塊，優先用文字樹或 diff 草圖；
+- `## 證據`：改之前／改之後，截圖最好，其次是測試或指令的實際輸出，突變結果放這裡。**寫實際跑過的，沒跑過就寫沒跑過**，這一段的價值來自它是真的；
+- `## 合併風險`：門（單向或雙向。單向指合了很難回頭：資料格式、落盤內容、出廠設定、對外協定）與影響範圍（一個詞）；檔案歸屬的同批適配（見「檔案歸屬」）也寫在這裡；
+- `## 偏離 dsh`：有偏離才寫，沒有就整段刪掉（見「技術實現標準」）。
 
-「驗證方式」寫實際跑過的指令與結果。沒跑過就寫沒跑過 — 這一段的價值來自它是真的。
+用 `gh pr create --body` 開 PR 時 CLI 不會自動套模板，要自己照骨架填。feature PR 的內文 gate 不檢查。
+
+**develop → main（發版）**：內文會成為 main 上的 commit message，所以 gate 對這種 PR 強制要求 `## 變更內容` 與 `## 驗證方式` 兩個段落（`.github/scripts/check_pr.py`），不用上面的骨架。「驗證方式」同樣寫實際跑過的指令與結果，沒跑過就寫沒跑過。
 
 ## 程式碼規範
 
@@ -173,7 +179,7 @@ Issue 與 spec 都放在 GitHub Issues（`DemianLi/nexus-agent`），一律用 `
 
 ### Domain docs
 
-多 context 佈局：root 的 `CONTEXT-MAP.md` 指向 `apps/*` 各自的 `CONTEXT.md`。見 [`docs/agents/domain.md`](docs/agents/domain.md)。
+多 context 佈局：root 的 `GLOSSARY-MAP.md` 指向 `apps/*` 各自的 `GLOSSARY.md`。見 [`docs/agents/domain.md`](docs/agents/domain.md)。
 
 ### Code search
 
