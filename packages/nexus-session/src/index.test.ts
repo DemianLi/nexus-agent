@@ -15,6 +15,9 @@ describe('@nexus/session 是 @nexus/core 的單向轉出', () => {
     expect(session.TODO_STATUSES).toBe(core.TODO_STATUSES);
     // #1486：goal 的折疊讀 `turn/start` 與 `source` 用的兩個讀法。
     expect(session.currentTurnStart).toBe(core.currentTurnStart);
+    // #1625：time-context 的兩支述詞。
+    expect(session.isLogicalTurnStart).toBe(core.isLogicalTurnStart);
+    expect(session.isModelVisibleEvent).toBe(core.isModelVisibleEvent);
     expect(session.sourceKwargs).toBe(core.sourceKwargs);
   });
 
@@ -24,6 +27,8 @@ describe('@nexus/session 是 @nexus/core 的單向轉出', () => {
       'SESSION_LOOKUP_CONTRACT_VERSION',
       'TODO_STATUSES',
       'currentTurnStart',
+      'isLogicalTurnStart',
+      'isModelVisibleEvent',
       'loggedContentBlocks',
       'loggedMessageId',
       'sessionLookupToken',

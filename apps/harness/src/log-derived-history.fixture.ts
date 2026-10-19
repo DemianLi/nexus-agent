@@ -55,7 +55,7 @@ import type { CreateNexusAgentOptions } from './agent-factory.js';
 import { runCli, runRepl } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { toolResultAsSeen } from './conversation-restore.js';
-import { foldTurn, serveClient } from './fixtures.js';
+import { foldTurn, serveClient, TIME_CONTEXT_OFF_PATCH_ROWS } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { projectKey } from './jsonl-session-store.js';
 import { DEFAULT_LIVE_MODEL_ID, withShippedRequestBody } from './live-model.js';
@@ -541,15 +541,22 @@ export function shippedLiveModelConfig(): Record<string, unknown> {
  * `model/start` 數。其餘（型錄、相容設定、逾時、`modelId`、可重試碼、退避）都留出貨值。
  *
  * @param extra - 接在 `live-model` 後面的其他 patch 列（例如 {@link LOW_SUMMARIZATION}）。
+ * @param options.timeContext - `true` 時留著出貨的 `time-context` 那一列（驗時間讀數的測試用）；省略是關掉。
  */
-export function liveModelPatch(baseUrl: string, extra: string): string {
+export function liveModelPatch(
+  baseUrl: string,
+  extra: string,
+  options: { readonly timeContext?: boolean } = {},
+): string {
   const shipped = shippedLiveModelConfig();
   const retryPolicy = { ...(shipped['retryPolicy'] as Record<string, unknown>), maxRetries: 0 };
   const row = {
     id: 'live-model',
     config: { ...shipped, baseUrl, retryPolicy },
   };
-  return `${stringify([row])}${extra}\n`;
+  // `time-context` 關掉：兩次跑（不重啟與重啟）要逐位元組相同，而讀數帶牆鐘秒數（#1625，見 `withoutTimeContext`）。
+  const off = options.timeContext === true ? '' : TIME_CONTEXT_OFF_PATCH_ROWS;
+  return `${stringify([row])}${off}${extra}\n`;
 }
 
 /**
@@ -649,14 +656,22 @@ export async function runServePhases(
   phases: readonly (readonly string[])[],
   script: Script,
   patchExtra = '',
+  patchOptions: {
+    readonly timeContext?: boolean;
+    /** 每一段（從第二段起）開始前呼叫一次，參數是那一段的序號（從 1 起）：給需要在兩台 serve 之間推時鐘的測試。 */
+    readonly beforePhase?: (index: number) => void;
+  } = {},
 ): Promise<Run> {
   const upstream = await fakeEndpoint(script, true);
   const home = await mkdtemp(join(tmpdir(), 'nexus-lh-home-'));
   const logs = await mkdtemp(join(tmpdir(), 'nexus-lh-logs-'));
   const patch = join(home, 'patch.yml');
-  writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra), { mode: 0o600 });
+  writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra, patchOptions), {
+    mode: 0o600,
+  });
   try {
-    for (const texts of phases) {
+    for (const [phaseIndex, texts] of phases.entries()) {
+      if (phaseIndex > 0) patchOptions.beforePhase?.(phaseIndex);
       let running: RunningServe | undefined;
       try {
         running = (await runServe({
@@ -775,13 +790,16 @@ export async function runServeDriver(
   drivers: ((ctx: DriverCtx) => Promise<void>) | readonly ((ctx: DriverCtx) => Promise<void>)[],
   script: Script,
   patchExtra = '',
+  patchOptions: { readonly timeContext?: boolean } = {},
 ): Promise<DriverRun> {
   const list = typeof drivers === 'function' ? [drivers] : drivers;
   const upstream = await fakeEndpoint(script, true);
   const home = await mkdtemp(join(tmpdir(), 'nexus-lh-home-'));
   const logs = await mkdtemp(join(tmpdir(), 'nexus-lh-logs-'));
   const patch = join(home, 'patch.yml');
-  writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra), { mode: 0o600 });
+  writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra, patchOptions), {
+    mode: 0o600,
+  });
   try {
     for (const driver of list) {
       let running: RunningServe | undefined;
