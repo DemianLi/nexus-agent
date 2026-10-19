@@ -24,8 +24,18 @@
  * 2. **淨變化為零不寫事件。**
  * 3. **接上日誌的當下把起始值釘進去**，同沙箱那一顆：不釘的話，一份沒有人切過的日誌答不出政策是哪一格。
  *
+ * ## 跟著 root 日誌走（[#1494](https://github.com/DemianLi/nexus-agent/issues/1494)）
+ *
+ * {@link ApprovalPolicyController.attach} 接上日誌之後**也訂閱它**：root 日誌上出現不帶 `source` 的 `approval/policy`，控制器的格子就跟著那一顆。
+ * `/permission` 與 `resolveDefaultPreset` 仍走 {@link ApprovalPolicyController.switchTo}，它寫的那一顆回到自己的訂閱時是同一格，什麼都不動。
+ * 訂閱者**只改格子、不寫日誌**（listener 跑在日誌發布期間，回頭 `append` 會被重入護欄擋下）；`source: 'delegation'` 的那一顆是子代理的，一律略過
+ * （與 {@link recordedApprovalPolicy} 同一條界線）。
+ *
  * ## 偏離（登記）
  *
+ * - **日誌與格子兩個來源，用訂閱收成一個（理由 1：基座表達不出來）。** dsh 沒有這顆控制器，核准閘門每次從日誌最後一顆 `approval/policy` 讀
+ *   （`user-approval/src/index.ts:237-245`），日誌天生是唯一來源。我們的閘門與升級工具讀的是控制器（見上面第 1 點），所以讓格子跟著日誌走。
+ *   **移除條件：sandbox-policy 遷上樹時定**——那時閘門可以直接讀投影，訂閱連同控制器的格子一起拿掉。
  * - **控制器實體歸組裝點，不歸 plugin。** dsh 的 `user-approval` 服務自己擁有政策與它的 setter；`.docs/development-plan.md` 把
  *   「核准政策的 session 開關」留給組裝點，所以組裝點建控制器、經 {@link APPROVAL_POLICY_SERVICE} 交出去，plugin 只能讀與切。
  * - **子代理不讀這一顆。** 照 dsh 委派時把子代理的核准政策釘成 `never`（`child-agent.ts:254`），我們早已為子代理另建一顆管道固定
@@ -36,6 +46,7 @@
  */
 
 import type { SessionEvent, SessionLog } from './session-log.js';
+import type { SessionSubject } from './sessions.js';
 
 /** 核准政策的值，照 dsh 的 `APPROVAL_POLICIES`。 */
 export const APPROVAL_POLICIES = ['ask', 'never'] as const;
@@ -134,20 +145,30 @@ export class ApprovalPolicyController {
   readonly source: ApprovalPolicySource = () => this.#policy;
 
   /**
-   * 接一份 root 會話日誌，**並且當場把起始值釘進去**。
+   * 接一份 root 會話日誌，**並且當場把起始值釘進去**，之後**跟著這份日誌走**（見檔頭「跟著 root 日誌走」）。
    *
    * **日誌上最後一顆已經是這一格就不再寫**（dsh 的 `pinInitialPermission` 只補缺的事實）：續接時控制器就是從那一顆起算的，
    * 再寫一顆等於每次空轉的續接都讓日誌長一筆，還會讓 `session/resumed` 的「前一顆是同樣內容就不疊」與 end-seed 的
    * 判斷失準（尾巴不再是它們認得的那一顆）。
    *
-   * @param log - 要記帳的日誌。
-   * @returns 收掉這次接線的函式。
+   * **先釘再訂閱**：訂閱會重播既有事件，釘在前（或本來就是那一格），重播最後落在的就是現在這一格，接線前後的格子不變。
+   *
+   * @param subject - 要記帳的日誌與它的觀察面（`registry.sessions.join` 給的那一份）。
+   * @returns 收掉這次接線的函式；收掉之後那份日誌的事件不再影響這一格。
    */
-  attach(log: SessionLog): () => void {
+  attach(subject: Pick<SessionSubject, 'log' | 'observe'>): () => void {
+    const { log } = subject;
     this.#logs.push(log);
     if (recordedApprovalPolicy(log.events) !== this.#policy) {
       log.append('approval/policy', { policy: this.#policy });
     }
+    subject.observe((event) => {
+      // `observe` 沒有退訂把手（會話收掉時由 runner 一起清），所以「還接著嗎」要自己看。
+      if (!this.#logs.includes(log)) return;
+      if (event.type !== 'approval/policy' || event.data.source !== undefined) return;
+      // **不驗值，原樣跟**：理由同 `SandboxModeController.attach`——重播最後落在的必須是剛釘的這一格，驗了會讓它停在「最後一顆合法值」。
+      this.#policy = event.data.policy;
+    });
     return () => {
       const at = this.#logs.indexOf(log);
       if (at >= 0) this.#logs.splice(at, 1);
