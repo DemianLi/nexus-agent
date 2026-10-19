@@ -261,6 +261,20 @@ describe('叫醒：送話才接回來', () => {
     await m.host.close();
   });
 
+  it('control.sendFromUser 帶時區（#1734）：冷復活之後才投遞，時區跟著記進新那一輪的 turn/start', async () => {
+    const m = make(['bg-1'], [fixture('bg-1', childEvents('bg-1', { text: '重啟前的任務' }))]);
+    await m.host.control.sendFromUser('bg-1', '重啟後的話', 'Asia/Taipei');
+    await m.host.idle();
+    const log = subagentLog(m.sessions, 'bg-1')!;
+    const starts = log.events.filter((event) => event.type === 'turn/start');
+    expect(starts.at(-1)?.data).toEqual({
+      kind: 'message',
+      text: '重啟後的話',
+      clientTimeZone: 'Asia/Taipei',
+    });
+    await m.host.close();
+  });
+
   it('身分帶模型與推理等級：按它編圖，之後每一輪都沿用', async () => {
     const m = make(
       ['bg-1'],
