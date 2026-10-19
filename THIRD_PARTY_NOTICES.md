@@ -20,6 +20,7 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 | `@nexus/cordis` | `cordis` | [vendor/cordis](vendor/cordis/) | MIT |
 | `@nexus/cordis-plugin-loader` | `@cordisjs/plugin-loader` | [vendor/loader](vendor/loader/) | MIT |
 | `@nexus/cordis-plugin-include` | `@cordisjs/plugin-include` | [vendor/include](vendor/include/) | MIT |
+| `@nexus/cordis-plugin-logger-console` | `@cordisjs/plugin-logger-console` | [vendor/logger-console](vendor/logger-console/) | MIT |
 
 ### 網頁的 solid-glass
 

@@ -14,7 +14,11 @@ import { fileURLToPath } from 'node:url';
 
 const VENDOR = dirname(fileURLToPath(import.meta.url));
 const PATCHES = join(VENDOR, 'patches');
-const SCOPE = { cordis: '@nexus/cordis', '@cordisjs/plugin-loader': '@nexus/cordis-plugin-loader' };
+const SCOPE = {
+  cordis: '@nexus/cordis',
+  '@cordisjs/plugin-loader': '@nexus/cordis-plugin-loader',
+  '@cordisjs/plugin-logger-console': '@nexus/cordis-plugin-logger-console',
+};
 
 /** 目標目錄 ← 上游路徑。 */
 const COPIES = [
@@ -22,6 +26,8 @@ const COPIES = [
   ['cordis/tests', 'packages/core/tests'],
   ['loader/src', 'packages/loader/src'],
   ['include/src', 'packages/include/src'],
+  ['logger-console/src', 'packages/logger-console/src'],
+  ['logger-console/tests', 'packages/logger-console/tests'],
 ];
 
 const [upstream, flag] = process.argv.slice(2);
@@ -307,6 +313,37 @@ function selfDisableHook(source) {
   return out;
 }
 
+/**
+ * 本地修改第 12 條（logger-console）：拿掉兩個 npm 相依，不 vendor 瀏覽器版（#1534）。
+ *
+ * - `shared.ts` 的 `static Config`（`schemastery`）整段拿掉：Loader 不讀 `static Config`（只讀 `Config.simplify`），nexus 的設定由宿主的
+ *   包裝插件用 zod 驗過才交進來。這個檔留 `Config` 型別（`ConsoleExporter.Config` 介面）。
+ * - `index.ts` 的 `supports-color` 拿掉：色彩支援預設 `false`（出貨設定本來就是 `colors: false`），要彩色的明著設 `colors`。
+ *   `inspect` 的格式化函式不變。
+ * - `browser.ts` 刪掉：套件只在 Node 的伺服器上用。
+ *
+ * 每一處都要在上游原樣裡剛好命中一次，沒命中同步直接失敗。理由與涵蓋的測試見 vendor/README.md。
+ */
+function trimLoggerConsole(source, file) {
+  const once = (text, from, to) => {
+    const parts = text.split(from);
+    if (parts.length !== 2) throw new Error(`logger-console 本地修改沒命中（${file}，${parts.length - 1} 處）：${from.slice(0, 60)}`);
+    return parts.join(to);
+  };
+  if (file === 'shared.ts') {
+    let out = once(source, "import z from 'schemastery'\n", '');
+    out = out.replace(/  static readonly Config: z<ConsoleExporter\.Config> = z\.object\(\{[\s\S]*?\}\) as z<ConsoleExporter\.Config>\n\n/, () => '');
+    if (out.includes('schemastery') || out.includes('z.object')) throw new Error('logger-console 本地修改沒命中（shared.ts，Config）');
+    return out;
+  }
+  if (file === 'index.ts') {
+    let out = once(source, "import supportsColor from 'supports-color'\n", '');
+    out = once(out, "colors: (supportsColor.stdout ? supportsColor.stdout.level : 0) as false | 0 | 1 | 2 | 3,", 'colors: false as false | 0 | 1 | 2 | 3,');
+    return out;
+  }
+  return source;
+}
+
 const work = mkdtempSync(join(tmpdir(), 'vendor-sync-'));
 try {
   // 1. 上游原樣。
@@ -332,6 +369,15 @@ try {
   rewrite(join(out, 'include/src'), (source) => rescope(explicitExtensions(source)));
   rewrite(join(out, 'include/src'), (source) => (source.includes('class Include') ? rejectJsExpr(closeWriteBack(source)) : source));
   rewrite(join(out, 'cordis/tests'), rescope);
+  // 本地修改第 12 條：logger-console 刪瀏覽器版、拿掉 schemastery 與 supports-color。
+  rmSync(join(out, 'logger-console/src/browser.ts'));
+  rmSync(join(out, 'logger-console/tests/tsconfig.json'));
+  rewrite(join(out, 'logger-console/src'), rescope);
+  rewrite(join(out, 'logger-console/tests'), rescope);
+  for (const file of ['shared.ts', 'index.ts']) {
+    const path = join(out, 'logger-console/src', file);
+    writeFileSync(path, trimLoggerConsole(readFileSync(path, 'utf8'), file));
+  }
   // 本地修改第 9 條：兩個檔各命中一次。
   for (const file of ['index.ts', 'config/tree.ts']) {
     const path = join(out, 'loader/src', file);
