@@ -42,6 +42,7 @@ import { tmpdir } from 'node:os';
 import { basename, join, sep } from 'node:path';
 import { parseArgs } from 'node:util';
 
+import { serverLogBody } from '../../apps/harness/src/server-log-line.js';
 import { fileSha256 } from './pack.js';
 import {
   SBOM_FILE,
@@ -184,11 +185,15 @@ export function installedGrepProblems(
  * - 說「不可用」：內附的 rg 在安裝樹裡缺了或沒有執行權限。
  * - 路徑不在安裝樹底下：grep 用的是宿主別的 rg，不是產物內附的。
  *
- * @param output - serve 的 stdout＋stderr。
+ * @param output - serve 的 stdout＋stderr（每行可帶伺服器日誌的前綴）。
  * @param root - 安裝樹根。
  */
 export function ripgrepDisclosureProblems(output: string, root: string): string[] {
-  const line = output.split('\n').find((entry) => entry.startsWith('搜尋（grep）：'));
+  // serve 的日誌每行帶「時間 [等級] 名字 」前綴（#1534）：先剝掉再比開頭。剝法與測試共用 `serverLogBody`，不另寫一份解析器。
+  const line = output
+    .split('\n')
+    .map(serverLogBody)
+    .find((entry) => entry.startsWith('搜尋（grep）：'));
   if (line === undefined)
     return ['serve 啟動日誌沒有 grep 用哪一支 ripgrep 的那一行（搜尋（grep）：…）'];
   const prefix = '搜尋（grep）：內附 ripgrep ';

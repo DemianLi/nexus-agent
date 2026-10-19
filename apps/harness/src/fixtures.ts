@@ -35,6 +35,7 @@ import { z } from 'zod';
 import { BrowserAuth } from './browser-auth.js';
 import { loadPluginConfig, serveShippedConfigPath } from './plugin-config.js';
 import type { ScriptedTurn } from './scripted-model.js';
+import { serverLogBody, serverLogLevel } from './server-log-line.js';
 import { scriptedModelPlugin } from './settings/scripted-model.js';
 import type { AttachSessions } from './session-attach.js';
 import { systemPromptDefaultsEntry } from './system-prompt-middleware.js';
@@ -525,17 +526,7 @@ export function virtualFilesOf(result: object): Record<string, FileData | undefi
   return (result as { files?: Record<string, FileData | undefined> }).files ?? {};
 }
 
-/**
- * serve 的伺服器日誌每一行是 `[yyyy-MM-dd hh:mm:ss ][E|W|I|D] 名字 訊息本文`（#1534，照 dsh 的 `render`）。
- * 測試比的是**訊息本文**，這裡把前綴剝掉。多行訊息的續行縮排是「時間＋`[X]`＋空格」那麼長（`render` 的 `indent`，**不含名字**），一併剝掉。
- * 不是這個形狀的行原樣回傳。
- */
-export function serverLogBody(line: string): string {
-  const match = /^(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} )?\[[EWID]\] (\S+) /u.exec(line);
-  if (match === null) return line;
-  const indent = match[0].length - (match[1] as string).length - 1;
-  return line.slice(match[0].length).replace(new RegExp(`\\n {${String(indent)}}`, 'gu'), '\n');
-}
+export { serverLogBody, serverLogLevel };
 
 /**
  * 把 `runServe` 的 `log` 收進一個陣列、只留訊息本文。要驗**等級**的測試另給 `raw`：原樣的一行也收進去，
@@ -546,11 +537,6 @@ export function bodyLog(sink: string[], raw?: string[]): (line: string) => void 
     raw?.push(line);
     sink.push(serverLogBody(line));
   };
-}
-
-/** 一行伺服器日誌的等級字母（`E`／`W`／`I`／`D`）；不是那個形狀回 `undefined`。 */
-export function serverLogLevel(line: string): string | undefined {
-  return /^(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} )?\[([EWID])\] \S+ /u.exec(line)?.[1];
 }
 
 /** 原樣的伺服器日誌行裡，本文以 `prefix` 開頭的那幾行的等級字母。 */
