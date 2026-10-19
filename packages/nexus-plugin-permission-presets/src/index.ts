@@ -50,17 +50,18 @@
  *    thread 鍵可以對回 `start`，所以退到「`defaultPreset`，沒設取沙箱最寬的一組」。兩種規則只有一格結果不同：`--sandbox read-only` 起動、沒設
  *    `defaultPreset`、日誌記著全開——照 dsh 收到 `read-only`，照這裡收到 `workspace-write`（要收得更窄就設 `defaultPreset`）。
  *    dsh 的對照點：續接時保留日誌裡的值是 `:446-455`（`pinInitialPermission` 後半），續接時拒絕的前例是 `:431-436`（`auto` 在續接時拋錯）。
- * 10. **冷復活的背景子代理，讀回的委派沙箱比表裡每一組都寬就收回預設組（理由 2，[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）。**
- *    dsh 的冷復活只重播子代理日誌上已持久化的委派政策事件，不重算（`packages/subagent/subagent/src/manager.ts:881-882`，`687f282e`：
- *    「Only fresh creation appends the descriptor and delegated policy…; a cold resume replays those persisted events」），快照在委派時拍、
- *    不看父代理即時狀態（`.agents/notes/archived/feature/2026-07-25-subagent-policy-inheritance.md:34`）。dsh 的表出廠就含全開，快照不可能比表寬；
- *    我們出廠表拿掉全開（偏離 6），部署方事後把全開從表裡拿掉、或升級前派出去的背景子代理，快照就是表裡不存在的全開，叫醒時照重播就是
- *    一條續接收回（偏離 9）收不到的後門。做法：{@link PermissionPresetsService.narrowDelegated}（1.2.0，純函式，只看「表＋這一格快照」，
- *    條件與目標同偏離 9），宿主在 `SandboxModeController.delegateFromLog` 讀回時過這個上限；**只收「這一輪實際用的那一格」，不寫子代理日誌**
+ * 10. **冷復活的背景子代理，讀回的委派沙箱比表裡每一組都寬就收回預設組（理由 2，[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)，跟 #1621 同一個理由）。**
+ *    dsh 的表也是部署方可以設定的，全開只是預設值（`packages/interaction/permission-presets/src/index.ts:158-166`、`:183-195`），所以部署方把全開拿掉之後，
+ *    dsh 既有子代理的快照一樣可以比表寬；dsh 的答案是取消再重派（`.agents/notes/archived/feature/2026-07-25-subagent-policy-inheritance.md:34`：
+ *    「cancel-and-respawn picks up a tightening」）——冷復活只重播子代理日誌上已持久化的委派政策事件（`packages/subagent/subagent/src/manager.ts:881-882`，`687f282e`），
+ *    fence 解析取的是 session 自己的 override（`packages/sandbox/sandbox-policy/src/index.ts:164-168`）。我們的 serve 多人共用一台主機：改表的人看不到別人的會話，
+ *    而部署方改表就是要對整台主機生效，沒有人能替每一個背景子代理逐一取消重派，所以**改成讀回時收**。
+ *    做法：{@link PermissionPresetsService.narrowDelegated}（1.2.0，純函式，只看「表＋這一格快照」，條件與目標同偏離 9），宿主在
+ *    `SandboxModeController.delegateFromLog` 讀回時過這個上限；**只收「這一輪實際用的那一格」，不寫子代理日誌**
  *    （日誌上仍記委派當時的那一格，代價是日誌與實際行為在這種子代理上不一致；多寫一顆就多一個能移動 fence 的寫入處）。子代理的核准照舊釘 `never`，
  *    不動。同步（前景）子代理拍的是 root 當下那一格，root 已經在續接時收過，不在這裡。收回的那一次在 server 日誌／CLI 標準錯誤留一行，
  *    每個子代理每個行程一次。不看父代理的即時狀態是照 dsh（上述 note 的 rejected alternatives）。
- *    **撤除條件**：沒有（同偏離 9：出廠表沒有全開這件事一天不變，這條就一天要在）。
+ *    **撤除條件**：`sandbox-policy` 遷上樹、fence 改讀投影的時候（那時可以改成直接往子代理日誌寫收窄後的那一格，日誌與行為就一致了）。
  *
  * ## 形狀（#1491：第十四顆搬上 Cordis 樹的插件）
  *

@@ -622,14 +622,8 @@ export function describeDelegationNarrowing(event: DelegationNarrowedEvent): str
 
 /**
  * 每個子代理、每個行程只留一次話（卡上定題）：鍵是子代理日誌的會話 id（跨 thread 不重複）。閒置逐出之後重組不再重複。
- * 測試用 {@link resetDelegationNarrowingWarnings} 清掉。
  */
 const warnedDelegationNarrowing = new Set<string>();
-
-/** 清掉「已經留過話」的紀錄。**只給測試用**：同一個行程裡要重複驗證同一個子代理的 warn 才需要。 */
-export function resetDelegationNarrowingWarnings(): void {
-  warnedDelegationNarrowing.clear();
-}
 
 /** REPL 與一次性模式共用同一條對話——checkpointer 認的是這個 id。 */
 export const THREAD_ID = 'cli';

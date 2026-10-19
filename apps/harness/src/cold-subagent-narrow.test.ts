@@ -223,6 +223,8 @@ async function secondProcess(
   where: Layout,
   table: Record<string, unknown>,
   runId: string,
+  /** 第二台起來之後、叫醒子代理之前要先對 root 做的事（例如切權限）。 */
+  beforeWake?: (client: Awaited<ReturnType<typeof serveClient>>) => Promise<void>,
 ): Promise<{ lines: string[]; events: LoggedEvent[] }> {
   const lines: string[] = [];
   await changePlugin(
@@ -231,6 +233,7 @@ async function secondProcess(
   );
   running = await startServe(where, WAKE_TURNS, lines);
   const client = await serveClient(running);
+  await beforeWake?.(client);
   expect(await client.subagentSend('a', runId, '第一句')).toMatchObject({ type: 'success' });
   await subagentLog(where.sessionLog, 'a', 2);
   expect(await client.subagentSend('a', runId, '第二句')).toMatchObject({ type: 'success' });
@@ -289,6 +292,23 @@ describe('冷復活的背景子代理，委派快照比權限表裡每一組都�
     const warnings = second.lines.filter((line) => DELEGATION_WARNING.test(line));
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('read-only');
+    expect(fenceEvents(second.events)).toEqual(fenceEvents(first.before));
+  }, 120000);
+
+  it('不看 root 當下：叫醒之前 root 先切到 read-only，子代理仍照表收到 workspace-write——工作區內寫得進去（#1739 定題否決「照 root 當下收」）', async () => {
+    const where = layout();
+    const first = await firstProcess(where);
+    const second = await secondProcess(where, WITHOUT_FULL_ACCESS, first.runId, async (client) => {
+      // 第二台起來時 root 續接收回到 workspace-write（#1621），這裡再讓它自己切到更窄的 read-only。
+      expect(await client.slashRun('a', '/permission read-only')).toMatchObject({
+        kind: 'success',
+      });
+    });
+
+    // 照表收是 workspace-write：工作區內寫得進去、逃逸寫不進去。照 root 當下收會是 read-only，工作區內也寫不進去。
+    expect(existsSync(join(where.workspace, 'inside.txt'))).toBe(true);
+    expect(existsSync(join(where.outside, 'escaped.txt'))).toBe(false);
+    expect(second.lines.filter((line) => DELEGATION_WARNING.test(line))).toHaveLength(1);
     expect(fenceEvents(second.events)).toEqual(fenceEvents(first.before));
   }, 120000);
 
