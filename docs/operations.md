@@ -27,7 +27,10 @@
 （檔案政策 `danger-full-access`、核准 `never`，要人點頭的事一律直接回絕）。serve 多人共用一台主機，同一把 token 底下的每個人都切得到，
 所以出廠拿掉（偏離 dsh，理由 2）；CLI 用同一份表，也跟著少（理由 1：出貨層只有一份表，表達不出「serve 少一組、CLI 照舊」）。
 部署方要全開就自己加回（見下面「設定」那條），加回之後的行為跟以前一樣，下面各條講到全開的地方都是指加回之後。
-已經切到全開的舊會話，續接時保留日誌裡的值，顯示為 `custom`，切走之後切不回全開。
+已經切到全開的舊會話，續接時**自動收回**：日誌記的檔案政策比表裡每一組都寬，就切到預設組（`defaultPreset`，沒設就是表裡檔案政策最寬的那一組，
+出廠表是 `workspace-write`），並寫進日誌（`permission/preset`、`sandbox/mode`、`approval/policy`，只寫變了的）；server 日誌（CLI 是標準錯誤）會留一行
+`[權限] thread "…" …`，說明從哪一組收到哪一組。下一次寫檔就照預設組的圍堵判。部署方把全開加回表裡就不收；用 `--sandbox read-only` 起動的部署，要讓全開的舊會話收到 `read-only` 而不是 `workspace-write`，要設 `defaultPreset: read-only`（參與者拿不到 `--sandbox`）；停在 `read-only`、而表裡沒有 `read-only` 的會話比
+`workspace-write` 窄，也不收（顯示 `custom`）。切走之後切不回全開。**已知缺口**：冷復活的背景子代理拿的是當初的委派快照，不會被這一步收窄（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）。
 
 - **現在是哪一組是推導出來的**：兩顆旋鈕實際的值對上哪一組就是哪一組，對不上任何一組顯示 `custom`（只能顯示，不是切換目標）。
 - **`--sandbox` 同時決定核准的起始值**：`--sandbox danger-full-access` 是「全開＋不問」，**要先把那一組加回表裡，否則起動失敗**
@@ -189,7 +192,7 @@ CLI 每一次啟動各自一個 run 目錄，一份會話一個 `.jsonl` 加一�
 **強制結束時還在跑的 git 會被一起收掉**（[#1542](https://github.com/DemianLi/nexus-agent/issues/1542)）。
 三條強制結束的路（收尾中再按一次、收尾逾時、下面 #1501 的致命退出）都不等子行程；`workspace-changes` 起的 git 在行程
 結束那一刻被送 SIGKILL，不留孤兒。只收 git 本身：git 再起的行程（例如使用者自訂的 clean／smudge filter）收不到。`kill -9`、OOM 這類
-不經過 Node 的結束一樣什麼都收不到。MCP 的 stdio server **不在這裡強殺**：正常收尾時 MCP 插件會關掉
+不經過 Node 的結束一樣什麼都收不到。**起不來的子行程不送訊號**（[#1742](https://github.com/DemianLi/nexus-agent/issues/1742)）：spawn 失敗、`'error'` 還沒送到時 `ChildProcess` 沒有 pid，這時 `kill()` 送出去的是 `kill(0, sig)`，也就是整個行程群組（含 serve 自己）；git 與 rg 的收尾、以及行程結束時的強殺，送之前都先看 pid。MCP 的 stdio server **不在這裡強殺**：正常收尾時 MCP 插件會關掉
 連線（最多等 5 秒），強制結束時 server 的 stdin 會被關掉，所以**自己接的 stdio server 要在 stdin
 關掉時自己結束**，不然 serve 走了它還留著。
 
