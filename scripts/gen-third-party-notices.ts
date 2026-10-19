@@ -15,7 +15,9 @@
  *
  * 跟 dsh 不同、但不是偏離的地方（nexus 沒有那些東西）：沒有 Python、沒有 Claude SDK 與 LibreOffice 的授權例外（字型的 OFL 例外照 LibreOffice 那一條的形狀，見 `OFL_FONT_PACKAGES`）、沒有
  * `patchedDependencies`。dsh 的「web 不是 private 才收」換成「網頁 dist 會進 tarball」：nexus 的 `apps/web` 是 private，
- * 但它的 `dist` 由 `scripts/release/payload.ts` 確認一定在產物裡。
+ * 但它的 `dist` 由 `scripts/release/payload.ts` 確認一定在產物裡。dsh `:420-421` 把 `tsx` 硬標成執行期（它的根腳本經 tsx 的
+ * ESM hook 跑）；nexus 的產物不帶 tsx（`scripts/release/payload.ts` 的 `DEV_TOOLS` 把它當開發工具擋），所以不抄。dsh `:44-50`
+ * 的 `FIRST_PARTY`（`:404` 過濾掉）列的是 dsh 自己發布的原生套件；nexus 自己的套件全在 workspace 裡，`names` 已經排除，沒有要另列的。
  *
  * SPDX 運算式用 dsh 同一顆 `spdx-expression-parse` 解（dsh 根 `package.json` 的 devDependencies）。
  */
@@ -191,12 +193,17 @@ function installedManifest(name: string, manifests: Map<string, Manifest>): Mani
   return undefined;
 }
 
-/** manifest 的 repository／homepage 正規化成可瀏覽的 https 網址（dsh `:385-396`）。 */
+/**
+ * manifest 的 repository／homepage 正規化成可瀏覽的 https 網址（dsh `:385-396`）。
+ *
+ * **偏離 dsh**（理由 1，dsh 在這一格有同一個洞、沒有正確行為可抄，口徑同 #1518）：dsh 沒處理 scp 形式的 `git@host:org/repo`，
+ * 會產出 `https://github.com/git@github.com:…`；這裡多一條 replace 補上，其餘照 dsh。
+ */
 export function normalizeRepo(raw: string | undefined): string | undefined {
   if (raw === undefined || raw === '') return undefined;
   let url = raw
     .replace(/^git\+ssh:\/\/git@/, 'https://')
-    // scp 形式的 `git@github.com:org/repo`（dsh 沒有這一條，會產出 `https://github.com/git@github.com:…`）。
+    // scp 形式的 `git@github.com:org/repo`：偏離，見上。
     .replace(/^(?:git\+)?git@([^:/]+):/, 'https://$1/')
     .replace(/^git\+/, '')
     .replace(/^git:\/\//, 'https://')
@@ -524,6 +531,8 @@ function renderOflFonts(runtimeDeps: readonly ExternalDep[]): string {
 ${fonts.map((dep) => `\`${dep.name}\``).join('、')} 宣告 SIL Open Font License 1.1（\`OFL-1.1\`），不在寬鬆授權的清單上；檢查只對這幾個套件名、而且授權剛好是 \`OFL-1.1\` 時放行。字型檔（\`.woff2\`）打包進網頁的 \`dist\`。
 
 OFL 允許字型跟著軟體一起散布、也允許內嵌，條件是：不能單獨販售字型本身；散布時要附上原本的著作權聲明與 OFL 全文；修改過的字型不能沿用保留的字型名稱。
+
+這個例外的決議記錄：[#1545 issuecomment-6254467463](https://github.com/DemianLi/nexus-agent/issues/1545#issuecomment-6254467463)。
 `;
 }
 
