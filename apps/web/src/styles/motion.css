@@ -48,8 +48,8 @@
  *
  * 新增或刪掉 @keyframes 時，同一個 PR 更新 `scripts/check-built-css.mjs` 的允許清單（它量建置出來的 CSS）。
  *
- * 效能：持續動畫只動 transform／opacity，唯一例外是執行中邊框光的 conic 角度
- * （同時最多一個：輸入框與面板互斥）；大面積的 blur 照 SG（#1468 Q7，效能門檻由 `scripts/measure-frames.mjs` 量，#1512）；
+ * 效能：持續動畫只動 transform／opacity（執行中那道 conic 邊框光隨 #1682 的工具卡換成 SG 拿掉，邊框光只剩等你處理
+ * 那一圈的呼吸）；大面積的 blur 照 SG（#1468 Q7，效能門檻由 `scripts/measure-frames.mjs` 量，#1512）；
  * 不常駐 will-change。
  */
 
@@ -258,12 +258,6 @@
 
 /* ── 持續狀態：邊框光（靜態值在 theme.css，這裡只管怎麼動）── */
 
-@property --beam-angle {
-  syntax: '<angle>';
-  inherits: false;
-  initial-value: 0deg;
-}
-
 .border-beam {
   position: relative;
   isolation: isolate;
@@ -301,23 +295,6 @@
   opacity: 1;
 }
 
-/* 執行中：conic 光一圈 2s，開始與結束各淡 350 */
-.border-beam[data-kind='run']::after {
-  background: conic-gradient(
-    from var(--beam-angle),
-    transparent 0 62%,
-    color-mix(in oklab, var(--brand), transparent 40%) 74%,
-    var(--brand) 86%,
-    transparent 100%
-  );
-  animation: motion-beam-angle 2s linear infinite;
-}
-
-.border-beam[data-kind='run']::before {
-  box-shadow: 0 0 calc(var(--beam-glow-size) * 0.6)
-    color-mix(in oklab, var(--beam-glow), transparent 30%);
-}
-
 /* 等你處理：整圈呼吸 2.3s，亮度在 --beam-pulse-min 與 1 之間 */
 .border-beam[data-kind='pending']::after {
   background: var(--brand);
@@ -330,12 +307,6 @@
 .border-beam[data-kind='pending'][data-active='true']::after,
 .border-beam[data-kind='pending'][data-active='true']::before {
   animation: motion-beam-pulse 2.3s ease-in-out infinite;
-}
-
-@keyframes motion-beam-angle {
-  to {
-    --beam-angle: 360deg;
-  }
 }
 
 @keyframes motion-beam-pulse {
@@ -445,15 +416,6 @@
   :root:root .agent-orb[data-state='breathing']::after {
     transform: scale(0.91);
     opacity: 0.7;
-  }
-
-  /* 邊框光：執行中＝靜態整圈細線、沒有光暈；等你處理＝整圈細線加光暈、全亮 */
-  :root:root .border-beam[data-kind='run']::after {
-    background: color-mix(in oklab, var(--brand), transparent 30%);
-  }
-
-  :root:root .border-beam[data-kind='run']::before {
-    display: none;
   }
 
   /* shimmer 退成一般次要文字 */

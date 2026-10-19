@@ -52,11 +52,10 @@ function ToolDetail({
 }) {
   const { entry } = row;
   // 交出計劃的那一顆在對話區畫成計劃卡（`Entry`），這裡同樣。
-  if (entry.name === EXIT_PLAN_MODE) return <PlanToolCard entry={entry} beam={false} />;
+  if (entry.name === EXIT_PLAN_MODE) return <PlanToolCard entry={entry} />;
   return (
     <ToolCard
       entry={entry}
-      beam={false}
       defaultOpen
       subagentNames={names}
       {...(row.answer === undefined ? {} : { answer: row.answer })}
