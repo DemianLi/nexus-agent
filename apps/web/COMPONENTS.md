@@ -49,7 +49,7 @@
 | 階 | 用在 | 例 |
 | --- | --- | --- |
 | `text-body`（14／23） | 內文，與本來就是內文大小的按鈕、選單項 | 對話、`Button` 預設（vendor 原文寫 `text-sm`，同字級）、下拉選單與 cmdk 的項目、右側欄的分頁鈕 |
-| `text-ui`（13／18） | **可以點的**與**當標題的**小字 | 小字的可展開列（待辦、送出佇列、觀測與成本分頁的列）、輸入框底列的膠囊鈕、「這一輪的過程」、成本分頁的區段標題、卡片標頭（計劃、等待核准）；工具卡與工具段那一列的字照 SG（vendor `tool-steps` 寫死 13px／12.5px，#1682）；思考過程照 SG（vendor `reasoning` 標題 12.5px、內文框 13px，#1683） |
+| `text-ui`（13／18） | **可以點的**與**當標題的**小字 | 小字的可展開列（待辦、送出佇列、觀測與成本分頁的列）、輸入框底列的膠囊鈕、「這一輪的過程」、成本分頁的區段標題、卡片標頭（計劃、等待核准）；工具卡與工具段那一列的字照 SG（vendor `tool-steps` 寫死 13px／12.5px，#1682）；思考過程照 SG（vendor `reasoning` 標題 12.5px、內文框 13px，#1683）；狀態列執行中那一列照 SG（vendor `turn-status` 寫死 12.5px、高 20px，#1684；其他支仍是 `text-body`，落差記在 #1688） |
 | `text-tip`（12／16） | 小字說明、附註、時間、計數 | 工具名與摘要、`Badge`（vendor 原文寫 `text-xs`，同字級）、`xs` 按鈕（vendor 原文寫 `text-xs`：外觀照 SG，#1468 Q8、Q19 拿掉了 #1281 按鈕那一條，下面「按鈕不縮成 `text-tip`」管的是產品原始碼）、tooltip、快捷鍵提示、時間戳、popover 裡數字上面的欄位名、卡片裡單一區塊上面的小標籤（「子代理的對話」；工具卡的「參數」「結果」「錯誤」是 SG 結果框的標題，照 SG）、錯誤與提示句 |
 | `text-micro`（11） | 只有程式碼區塊的語言標籤。它在 CSS 裡用 `var(--text-micro)`，不是 class，所以搜 `text-micro` 這個 class 搜不到 | 回覆裡程式碼區塊左上角的「ts」（`src/styles/markdown.css` 的 `.md-code-lang`） |
 
@@ -100,6 +100,15 @@
 - **結果自己畫的種類不設 SG 的 `output`／`error`**（讀檔、搜尋、diff、提問、交付、待辦、撞到輸出上限的子代理）：畫在 children，SG 的結果框只給通用卡，不畫兩次。展開後什麼都沒有的列 SG 會停用按鈕，所以空的時候放一句 `emptyNote`。
 - **`StepGroup` 只有一步、而且沒在跑時退化成單獨一列**，`children`、`trailing`、`open` 都不會轉過去：工具段至少兩顆（`tool-runs.ts` 的 `MIN_TOOLS`，有測試釘住）。
 - **段裡沒畫東西的 child 照樣占一格**（SG 逐個包一層有 padding 的 div）：`MessageScrollerItem` 是空的那格由覆寫檔第 66 條藏掉，別在 child 外面再包東西，不然藏不到。
+
+## 狀態列（SG turn-status）
+
+#1684 起狀態列執行中那一列是 SG 的 `TurnStatus`（vendor README 的「本地修改」第 71–74 條）。寫呼叫端時：
+
+- **live region 由 `status-line.tsx` 包在外面**（`<div role="status">`）：vendor 的 `role="status"` 由 patch 拿掉，別的地方畫 `TurnStatus` 不會自己唸。
+- **字固定、glyph 換樣子**：`label` 是「執行中…」，`activity` 由 `lib/turn-activity.ts` 從本輪的 root entry 判；字在 live region 裡，不要跟著 activity 換。
+- **`since`、`tokens`、`children` 型別上傳不進去**（包裝層 `Omit`），經過時間由 `RunningElapsed` 畫在 live region 外；**`trailing` 也在 live region 裡**，不要拿來放會跳動的東西。
+- **jsdom 不畫 glyph**（沒有 `matchMedia`／`IntersectionObserver`，nexus 層回 `null`）：要量真 glyph 的測試用 `src/test/glyph-env.ts`。
 
 ## 新增 shadcn 元件
 

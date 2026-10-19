@@ -18,6 +18,13 @@
  *    差在這裡。
  * 6. **推理收著時串流中捲動**：接著一輪推理慢慢串（收著），在對話區上下捲。
  *
+ * `--suite turn-status`（#1684 驗收 E）量狀態列執行中那一列的成本，上面六個不跑。SG 的 `StatusGlyph` 是 JS rAF 每幀改 SVG 屬性，
+ * 狀態列在對話區外面、串流中一直看得到，IntersectionObserver 不會讓它停：
+ * 7. **串流中捲動**：同情境 1。
+ * 8. **串流中不捲動**：回覆慢慢串，什麼都不動，單獨看 glyph 的成本。
+ * 兩個情境都自檢：狀態列的 glyph（base 是 CSS 的 `.agent-orb`）在畫面內；是 glyph 的話，量測期間三個 circle 的
+ * `cx`／`cy`／`r`／`opacity` 要變過（只看 `cx` 不夠，writing 的 wave 三點 x 固定），不然等於沒量到它在動，直接失敗。
+ *
  * frame time 用 `requestAnimationFrame` 兩次回呼的間隔算，只取情境進行中的那一段。間隔在 60Hz 下本來就落在 16.67ms 上下
  * 抖動零點幾毫秒，所以同時記三種數字：原始間隔的 p95、換算成 vsync 個數再乘回去的 p95（先量一段沒降速、沒操作的閒置間隔取中位數當
  * vsync）、多於一個 vsync 的幀（掉幀）占幾成。判讀用哪一種見 #1512。
@@ -65,8 +72,8 @@ const { values: options } = parseArgs({
   },
 });
 const SUITE = options.suite;
-if (SUITE !== 'glass' && SUITE !== 'reasoning')
-  throw new Error(`--suite 只收 glass 或 reasoning：${SUITE}`);
+if (SUITE !== 'glass' && SUITE !== 'reasoning' && SUITE !== 'turn-status')
+  throw new Error(`--suite 只收 glass、reasoning 或 turn-status：${SUITE}`);
 const RUNS = Number(options.runs);
 const HARNESS_DIR = options.harness ?? fileURLToPath(new URL('../../harness/', import.meta.url));
 const TSX = join(HARNESS_DIR, 'node_modules/.bin/tsx');
@@ -767,6 +774,111 @@ async function measureReasoning(page, cdp, vsync) {
   };
 }
 
+// ---------- 狀態列（#1684） ----------
+
+/** 狀態列執行中那一列的動畫在不在畫面內；head 是 SG 的 glyph（帶三個 circle 的姿勢），base 是 CSS 的 orb。 */
+function probeStatus(page) {
+  return page.evaluate(() => {
+    const glyph = document.querySelector('[role="status"] [data-slot="status-glyph"]');
+    const orb = document.querySelector('[role="status"] .agent-orb');
+    const el = glyph ?? orb;
+    if (el === null) return { kind: null };
+    const r = el.getBoundingClientRect();
+    const inView = r.width > 0 && r.bottom > 0 && r.top < window.innerHeight;
+    return {
+      kind: glyph !== null ? 'glyph' : 'orb',
+      inView,
+      // 三個 circle 的位置、大小、透明度。只看 cx 不夠：writing 的 wave 三點 x 固定、只上下動。
+      pose:
+        glyph === null
+          ? null
+          : [...glyph.querySelectorAll('circle')]
+              .map((c) => ['cx', 'cy', 'r', 'opacity'].map((a) => c.getAttribute(a)).join(','))
+              .join(' '),
+    };
+  });
+}
+
+/** 量測期間取樣狀態列；量完自檢：在畫面內，glyph 的姿勢變過。 */
+function statusSampler(page) {
+  const samples = [];
+  return {
+    sample: async () => samples.push(await probeStatus(page)),
+    check: () => {
+      if (samples.length === 0 || samples.some((s) => s.kind === null || !s.inView))
+        throw new Error(`自檢：狀態列的動畫不在畫面內（${JSON.stringify(samples)}）`);
+      const kind = samples[0].kind;
+      const distinct = new Set(samples.map((s) => s.pose)).size;
+      if (kind === 'glyph' && distinct < 2)
+        throw new Error(`自檢：量測期間 glyph 沒有動（${JSON.stringify(samples)}）`);
+      return { kind, samples: samples.length, distinctPoses: kind === 'glyph' ? distinct : null };
+    },
+  };
+}
+
+async function startSlowTurn(page, text) {
+  await send(page, text);
+  await page.getByRole('button', { name: '停止' }).waitFor({ timeout: 30_000 });
+  await sleep(1500);
+}
+
+async function stopTurn(page) {
+  const stillStreaming = await page.getByRole('button', { name: '停止' }).count();
+  if (stillStreaming === 0) throw new Error('量測途中回覆就串完了，不是「串流中」');
+  await page.getByRole('button', { name: '停止' }).click();
+  await waitTurnDone(page);
+}
+
+/** 情境 7：同情境 1，捲動之間取樣狀態列。 */
+async function scenarioStatusScroll(page, cdp) {
+  await startSlowTurn(page, '第三輪：慢慢串');
+  const box = await page.locator('[data-slot="message-scroller"]').first().boundingBox();
+  if (box === null) throw new Error('找不到對話區');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const status = statusSampler(page);
+  const deltas = await recordFrames(
+    page,
+    async () => {
+      for (let round = 0; round < 6; round++) {
+        await status.sample();
+        for (let i = 0; i < 10; i++) {
+          await page.mouse.wheel(0, -120);
+          await sleep(50);
+        }
+        for (let i = 0; i < 10; i++) {
+          await page.mouse.wheel(0, 120);
+          await sleep(50);
+        }
+      }
+      await status.sample();
+    },
+    cdp,
+  );
+  const setup = status.check();
+  await stopTurn(page);
+  return Object.assign(deltas, { setup });
+}
+
+/** 情境 8：回覆慢慢串，什麼都不動 6 秒，每秒取樣狀態列。 */
+async function scenarioStatusIdle(page, cdp) {
+  await startSlowTurn(page, '第四輪：慢慢串、不捲');
+  const status = statusSampler(page);
+  const deltas = await recordFrames(
+    page,
+    async () => {
+      for (let i = 0; i < 6; i++) {
+        await status.sample();
+        await sleep(1000);
+      }
+      await status.sample();
+    },
+    cdp,
+  );
+  const setup = status.check();
+  await stopTurn(page);
+  return Object.assign(deltas, { setup });
+}
+
 async function measureOnce(run) {
   const root = mkdtempSync(join(tmpdir(), 'nexus-frames-'));
   const llm = await startFakeLlm();
@@ -800,7 +912,7 @@ async function measureOnce(run) {
       return { run, browser: browser.version(), ...check, vsync, scenarios };
     }
 
-    // 先填兩輪歷史（不降速，省時間），再降速量。
+    // 先填兩輪歷史（不降速，省時間），再降速量。turn-status 一樣。
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
     for (const text of ['第一輪：填歷史', '第二輪：填歷史']) {
       await send(page, text);
@@ -808,6 +920,16 @@ async function measureOnce(run) {
       await waitTurnDone(page);
     }
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU_THROTTLE });
+
+    if (SUITE === 'turn-status') {
+      const scroll = await scenarioStatusScroll(page, cdp);
+      const still = await scenarioStatusIdle(page, cdp);
+      const scenarios = {
+        串流中捲動: Object.assign(summarize(scroll, vsync), { setup: scroll.setup }),
+        串流中不捲動: Object.assign(summarize(still, vsync), { setup: still.setup }),
+      };
+      return { run, browser: browser.version(), ...check, vsync, scenarios };
+    }
 
     const scenarios = {
       串流中捲動: summarize(await scenarioScroll(page, cdp), vsync),
@@ -834,7 +956,7 @@ for (let run = 1; run <= RUNS; run++) {
   const result = await measureOnce(run);
   results.push(result);
   for (const [name, s] of Object.entries(result.scenarios)) {
-    if (s.setup !== undefined && SUITE === 'reasoning')
+    if (s.setup !== undefined && SUITE !== 'glass')
       console.log(`第 ${run} 次 ${name} 的場面：${JSON.stringify(s.setup)}`);
     else if (s.setup !== undefined)
       console.log(

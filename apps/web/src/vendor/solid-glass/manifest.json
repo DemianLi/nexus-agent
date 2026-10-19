@@ -209,6 +209,20 @@
         "patches/0021-reasoning-trailing.patch"
       ],
       "upstreamSha256": "cc17a2722b0db779242b7eaa09ae50f272fae1aeb680db443ff96987ebf9fe87"
+    },
+    "components/ui/status-glyph.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/status-glyph.tsx",
+      "sha256": "2dd2713e7173b536c7aea0ee1b504d83fe89c567fb43df696ca775ee87569977",
+      "patches": ["patches/0022-status-glyph-strict-index.patch"],
+      "upstreamSha256": "248c3de628f366138aaba13641238fba16f3ff2b175cf41bce8ada394f9eefea"
+    },
+    "components/ui/turn-status.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/turn-status.tsx",
+      "sha256": "aa78ab42b3168284685db9bb0910d0603f969aa4137876533d1a2d08f4af71df",
+      "patches": ["patches/0023-turn-status-no-live-region.patch"],
+      "upstreamSha256": "c04bfe27e83c34c73308e2c7543c349fff8c934674903c0a6f9988ba8759a36c"
     }
   }
 }
