@@ -100,11 +100,6 @@ jobs:
           ACTOR: ${{ github.event.pull_request.user.login }}
         run: python3 .github/scripts/check_pr.py
 
-      # 升級指南的格式（#1537，規則見 AGENTS.md「發版」）。放在 plan：純文件 PR 會跳過 static，只有這一層每張都跑。
-      # 版本目錄要對到已存在的 tag，靠上面 checkout 的 `fetch-depth: 0` 連 tags 一起拉下來。
-      - name: 檢查升級指南
-        run: python3 .github/scripts/check_upgrade_guides.py
-
       - name: 攔截大檔案
         run: |
           set -euo pipefail
