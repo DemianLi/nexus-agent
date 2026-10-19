@@ -1348,9 +1348,14 @@ const pendingSpawnInputs = new WeakMap<SessionLog, LoggedMessage>();
  * `bind` 的訂閱者在子日誌出生那一刻登記，{@link pickSessionForCall} 在 `open` 回來之後寫。
  *
  * **寫不進去就讓派出失敗**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)），照 dsh：目錄是直接子代理的持久權威，
- * 寫不進去拋（`packages/subagent/subagent/src/catalog.ts:144`、`:163`），一路回到派它的那次工具呼叫成錯誤結果
- * （`packages/core/tools/src/index.ts:1594-1595`）。不在訂閱者裡寫，理由同 {@link pendingSpawnInputs}：拋錯會跳過排在後面的
- * 訂閱者（持久化在內）。從這裡拋出去，是子代理第一次查找那一步失敗，經 `task` 回到父代理成一次失敗的委派。
+ * 寫不進去拋（`packages/subagent/subagent/src/catalog.ts:144`）。**時序同 dsh**：dsh 在 `submitMaterialized` 的 `commit` 回呼寫
+ * （`manager.ts:467`），排在第一句准入之後（`:1401-1402`）；這裡是 `open` 回來之後、子代理第一句之前。
+ *
+ * **偏離 dsh，理由 1（基座表達不出來）——失敗浮出的位置。** dsh 寫不進去就在派出那一刻 `dispose(activation)` 再重拋
+ * （`manager.ts:1405-1413`），派出的工具呼叫失敗。我們的子日誌是惰性出生的（`SessionRegistry` 偏離第 1 條），deepagents 的 `task`
+ * 在派出前沒有掛點；在出生通知的訂閱者裡拋，又會跳過排在後面的訂閱者（持久化在內，理由同 {@link pendingSpawnInputs}）。所以從
+ * 子代理第一次查找拋出去，經 `task` 回到父代理成一次失敗的委派（工具錯誤，`packages/core/tools/src/index.ts:1594-1595`）。
+ * **回頭點**：底座換成 Cordis、子日誌改成在派出那一刻出生之後（#1385），改回在派出點寫，寫不進去撤掉 activation。
  *
  * **寫成功才清掉**，理由同 {@link pendingSpawnInputs}。以子日誌為鍵、弱引用。
  */

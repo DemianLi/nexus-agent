@@ -238,7 +238,7 @@ describe('這顆 middleware 記得進去的時候', () => {
  * （絕大多數組裝點沒有 `attachSession`），`ambiguous` 在 `serve.ts` 一次組裝配多條 thread 時是真的。
  *
  * 找到了日誌、`append` 卻拋：這次呼叫失敗（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)，照 dsh
- * `request.ts` 的 usage 寫入沒有 catch）。
+ * `packages/core/agent-loop/src/agent.ts:537-546` 的 usage 寫入沒有 catch）。
  */
 describe('寫不進去的時候', () => {
   it.each([

@@ -57,7 +57,7 @@ export interface SubagentCatalogData {
 
 /**
  * 在父那一份記一顆 `subagent/catalog`。**記不進去就往外拋，派出失敗**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)），
- * 照 dsh：目錄是直接子代理的持久權威，`appendCatalog` 不吞（`packages/subagent/subagent/src/catalog.ts:144`、`:163`）；continuable
+ * 照 dsh：目錄是直接子代理的持久權威，`appendCatalog` 不吞（`packages/subagent/subagent/src/catalog.ts:144`）；continuable
  * 寫不進去時撤掉剛准入的 activation 再重拋（`manager.ts:1401-1416`），錯一路回到派它的那次工具呼叫成錯誤結果
  * （`packages/core/tools/src/index.ts:1594-1595`）。少一顆目錄的子代理只剩 header 的 `parentSession` 指得回去，派出成功卻在
  * 父那一頭查不到，比派出失敗難查。撤回由呼叫的人做：前景的在 `registry.ts` 的 `pickSessionForCall`、背景的在

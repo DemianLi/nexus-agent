@@ -76,7 +76,7 @@ describe('subagentLinks', () => {
 });
 
 describe('appendSubagentCatalog', () => {
-  it('寫不進去（日誌正在發佈）就拋，不吞（#1702，照 dsh catalog.ts:144／:163）', () => {
+  it('寫不進去（日誌正在發佈）就拋，不吞（#1702，照 dsh catalog.ts:144）', () => {
     const log = new SessionLog('root');
     const errors: unknown[] = [];
     log.subscribe((event) => {
