@@ -1,8 +1,10 @@
 /**
  * 把 `@nexus/harness` 的完整正式閉包打成一份 tar.gz，旁邊放 `.sha256`（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 2，C047）。
  *
- * 流程：`build:lib` → web 的 `vite build` → `pnpm deploy --legacy --prod` 出閉包到暫存目錄 → 寫建置戳記 → 兩道靜態檢查
- * （`payload.ts` 的內容檢查與出貨清單閉包；第三道相依圖走訪只在 `verify-packed-install` 跑）→ `tar -czf` → `.sha256`。產物名 `nexus-agent-<版本>-<平台>.tar.gz`，解開是同名的一個資料夾。
+ * 流程：`build:lib` → web 的 `vite build` → `pnpm deploy --legacy --prod` 出閉包到暫存目錄 → 寫建置戳記 → 放 `LICENSE`、
+ * `THIRD_PARTY_NOTICES.md`、SBOM（#1545）→ 兩道靜態檢查（`payload.ts` 的內容檢查與出貨清單閉包；第三道相依圖走訪只在
+ * `verify-packed-install` 跑）→ `tar -czf` → `.sha256`。產物名 `nexus-agent-<版本>-<平台>.tar.gz`，解開是同名的一個資料夾。
+ * SBOM 另外複製一份到產物目錄（`<產物名>.cdx.json`，旁邊一份 `.sha256`），Release 一起附上。
  * 主機預裝 Node（22.19 以上的 22.x，或 24 以上（23 已 EOL，不支援），以 `package.json` 的 `engines` 為準）；產物不帶 node、不帶 pnpm、不需要安裝步驟（Q1 (a)，只出 linux-x64，Q2 (a)）。
  *
  * **偏離 dsh，理由 1（基座表達不出來）——`pnpm deploy` 的旗標。** dsh `scripts/build-exe-for-python-sdk.ts:280-300` 用
@@ -27,7 +29,7 @@
 
 import { execFileSync, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
@@ -35,11 +37,13 @@ import { parseArgs } from 'node:util';
 import { ROOT } from '../workspace-packages.js';
 import { releaseMembers, sharedVersion } from './members.js';
 import {
+  SBOM_FILE,
   collectClosureViolations,
   collectPayloadViolations,
   pruneThirdPartyMaps,
   removeSelfLink,
 } from './payload.js';
+import { buildSbom, renderSbom } from './sbom.js';
 
 /** 產物名（不含副檔名）。 */
 export function productName(version: string, platform: string): string {
@@ -71,11 +75,12 @@ function run(command: string, args: readonly string[], cwd: string = ROOT, timeo
  * 打包。
  *
  * @param options - `out` 產物目錄、`skipBuild` 跳過 build、`commit` 寫進戳記的 commit（省略即 `git rev-parse HEAD`）。
- * @returns tarball 與 `.sha256` 的路徑、版本、平台。
+ * @returns tarball、SBOM 與兩份 `.sha256` 的路徑、版本、平台。
  */
 export function pack(options: { out: string; skipBuild?: boolean; commit?: string }): {
   tarball: string;
   checksum: string;
+  sbom: string;
   version: string;
   platform: string;
 } {
@@ -115,6 +120,12 @@ export function pack(options: { out: string; skipBuild?: boolean; commit?: strin
       join(staging, 'build-stamp.json'),
       `${JSON.stringify({ commit, dirty }, null, 2)}\n`,
     );
+    // 照 dsh `scripts/build-python-release.py:178-195` 的 stage_license_files：LICENSE 與第三方授權清單一起進產物。
+    for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
+      copyFileSync(join(ROOT, file), join(staging, file));
+    }
+    const sbomText = renderSbom(buildSbom(staging));
+    writeFileSync(join(staging, SBOM_FILE), sbomText);
 
     const violations = [
       ...collectPayloadViolations(staging, { nativeSuffix: platform }),
@@ -133,7 +144,10 @@ export function pack(options: { out: string; skipBuild?: boolean; commit?: strin
     const checksum = `${tarball}.sha256`;
     run('tar', ['-czf', tarball, '-C', scratch, name], ROOT, 300_000);
     writeFileSync(checksum, sha256Line(fileSha256(tarball), `${name}.tar.gz`));
-    return { tarball, checksum, version, platform };
+    const sbom = join(options.out, `${name}.cdx.json`);
+    writeFileSync(sbom, sbomText);
+    writeFileSync(`${sbom}.sha256`, sha256Line(fileSha256(sbom), `${name}.cdx.json`));
+    return { tarball, checksum, sbom, version, platform };
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
@@ -148,6 +162,6 @@ if (import.meta.main) {
   });
   const result = pack({ out: values.out, skipBuild: values['skip-build'] });
   console.log(
-    `release:pack：${result.tarball}（${result.version}，${result.platform}）\n  ${result.checksum}`,
+    `release:pack：${result.tarball}（${result.version}，${result.platform}）\n  ${result.checksum}\n  ${result.sbom}`,
   );
 }

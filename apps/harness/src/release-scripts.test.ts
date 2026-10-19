@@ -1,5 +1,6 @@
 /**
- * 發版腳本（`scripts/release/`，[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 2＋3）的單元紅燈。
+ * 發版腳本（`scripts/release/`，[#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 2＋3、
+ * [#1545](https://github.com/DemianLi/nexus-agent/issues/1545) 的授權檔與 SBOM）的單元紅燈。
  *
  * 規則在真的 repo 上全綠，不代表它擋得住壞掉的那一刻，所以每一條都用手造的最小產物樹跑「好的不報、壞的報」。
  * 真的 `pnpm deploy` 出來的樹由 CI 的 `packed-install` job 驗（`verify-packed-install.ts`）。
@@ -15,8 +16,9 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { basename, dirname, join, relative } from 'node:path';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
@@ -27,6 +29,8 @@ import {
 import { releaseMembers, sharedVersion } from '../../../scripts/release/members.js';
 import { fileSha256, productName, sha256Line } from '../../../scripts/release/pack.js';
 import {
+  SBOM_FILE,
+  WEB_FONT_LICENSES,
   collectClosureViolations,
   collectPayloadViolations,
   pruneThirdPartyMaps,
@@ -34,8 +38,19 @@ import {
   shippedNames,
   walkInstalledGraph,
 } from '../../../scripts/release/payload.js';
+import {
+  buildSbom,
+  cycloneDxLicense,
+  integrityToHashes,
+  listInstalledPackages,
+  npmPurl,
+  renderSbom,
+  repoLicense,
+  sbomProblems,
+} from '../../../scripts/release/sbom.js';
 import { assertInputMatches } from '../../../scripts/release/version.js';
 import {
+  attachedSbomProblems,
   checksumProblems,
   cleanEnv,
   smokeInstalledServe,
@@ -202,10 +217,15 @@ function goodTree(root: string): void {
   };
   put('package.json', '{"name":"@nexus/harness","version":"0.0.0"}');
   put('build-stamp.json', '{"commit":"abc","dirty":false}');
+  put('LICENSE', 'MIT License');
+  put('THIRD_PARTY_NOTICES.md', '# 第三方授權');
+  put(SBOM_FILE, '{}');
   put('cordis.yml', '');
   put('cordis.serve.yml', '');
   for (const entry of ['serve', 'cli', 'plugin-cli']) put(`lib/${entry}.js`, '');
   put('node_modules/@nexus/web/dist/index.html', '<div id="root"></div>');
+  for (const file of WEB_FONT_LICENSES)
+    put(`node_modules/@nexus/web/dist/assets/fonts/${file}`, 'OFL');
   put('node_modules/.pnpm/@nexus+core@file+x/node_modules/@nexus/core/lib/index.js', '');
   put('node_modules/.pnpm/@nexus+cordis@file+v/node_modules/@nexus/cordis/lib/index.js', '');
   put('node_modules/.pnpm/@nexus+cordis@file+v/node_modules/@nexus/cordis/src/index.ts', '');
@@ -242,8 +262,23 @@ describe('產物樹的內容檢查', () => {
     expect(collectPayloadViolations(root, options)).toEqual([]);
   });
 
-  it.each([
+  it.each<[string, () => void, RegExp]>([
     ['缺戳記', () => rmSync(join(root, 'build-stamp.json')), /build-stamp\.json/u],
+    ['缺 LICENSE', () => rmSync(join(root, 'LICENSE')), /^LICENSE 產物缺這個檔/mu],
+    [
+      '缺第三方授權清單',
+      () => rmSync(join(root, 'THIRD_PARTY_NOTICES.md')),
+      /THIRD_PARTY_NOTICES\.md 產物缺這個檔/u,
+    ],
+    ['缺 SBOM', () => rmSync(join(root, SBOM_FILE)), /sbom\.cdx\.json 產物缺這個檔/u],
+    ...WEB_FONT_LICENSES.map(
+      (file) =>
+        [
+          `缺字型的 OFL 全文 ${file}`,
+          () => rmSync(join(root, `node_modules/@nexus/web/dist/assets/fonts/${file}`)),
+          new RegExp(`fonts/${file.replace('.', '\\.')} 網頁打包的字型缺 OFL`, 'u'),
+        ] satisfies [string, () => void, RegExp],
+    ),
     ['缺入口', () => rmSync(join(root, 'lib/serve.js')), /lib\/serve\.js/u],
     ['缺出貨清單', () => rmSync(join(root, 'cordis.yml')), /cordis\.yml/u],
     ['產物根有 src/', () => mkdirSync(join(root, 'src')), /不收 src/u],
@@ -499,4 +534,173 @@ describe('verify-packed-install 的環境與收尾（#1657 審查第 4、5 項�
     const pid = Number(readFileSync(pidFile, 'utf8'));
     expect(() => process.kill(pid, 0)).toThrow(/ESRCH/u);
   }, 30_000);
+});
+
+describe('SBOM（#1545 步驟 4、驗收 6）', () => {
+  let root: string;
+  beforeEach(() => void (root = mkdtempSync(join(tmpdir(), 'release-sbom-'))));
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  const sri = (text: string): string =>
+    `sha512-${createHash('sha512').update(text).digest('base64')}`;
+  const hex = (text: string): string => createHash('sha512').update(text).digest('hex');
+
+  /** 照 `pnpm deploy` 的 isolated 佈局：套件裝在 `.pnpm/<項目>/node_modules/<名字>`，其餘都是相對連結。 */
+  const install = (entry: string, manifest: { name: string } & Record<string, unknown>): string => {
+    const directory = join(root, 'node_modules/.pnpm', entry, 'node_modules', manifest.name);
+    mkdirSync(directory, { recursive: true });
+    writeFileSync(join(directory, 'package.json'), JSON.stringify(manifest));
+    return directory;
+  };
+  const link = (from: string, to: string): void => {
+    mkdirSync(dirname(from), { recursive: true });
+    symlinkSync(relative(dirname(from), to), from);
+  };
+
+  // 根 → a（第三方）→ native-linux（只掛在 a 的 optionalDependencies，像平台二進位套件）；根 → @nexus/core（自己的、沒宣告 license）。
+  const lockfile = [
+    'lockfileVersion: "9.0"',
+    'packages:',
+    '  a@1.0.0:',
+    `    resolution: {integrity: ${sri('a')}}`,
+    '  native-linux@2.0.0:',
+    `    resolution: {integrity: ${sri('native')}}`,
+    '',
+  ].join('\n');
+
+  beforeEach(() => {
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({
+        name: '@nexus/harness',
+        version: '1.0.0',
+        dependencies: { a: '1.0.0', '@nexus/core': 'workspace:*' },
+      }),
+    );
+    const a = install('a@1.0.0', {
+      name: 'a',
+      version: '1.0.0',
+      license: 'MIT',
+      optionalDependencies: { 'native-linux': '2.0.0' },
+    });
+    const native = install('native-linux@2.0.0', {
+      name: 'native-linux',
+      version: '2.0.0',
+      license: '(MIT OR Apache-2.0)',
+    });
+    const core = install('@nexus+core@file+packages+core', {
+      name: '@nexus/core',
+      version: '0.0.0',
+    });
+    link(join(root, 'node_modules/a'), a);
+    link(join(root, 'node_modules/@nexus/core'), core);
+    link(join(root, 'node_modules/.pnpm/a@1.0.0/node_modules/native-linux'), native);
+    writeFileSync(join(root, 'node_modules/.pnpm/lock.yaml'), lockfile);
+  });
+
+  it('從閉包產生：只掛在 optionalDependencies 的套件也收；第三方帶 hex 雜湊，自己的不帶、授權取 repo 的', () => {
+    const bom = buildSbom(root, { firstPartyLicense: 'MIT' });
+    expect(bom.metadata.component).toMatchObject({
+      type: 'application',
+      group: '@nexus',
+      name: 'harness',
+      purl: 'pkg:npm/%40nexus/harness@1.0.0',
+    });
+    expect(bom.components.map((entry) => entry.purl)).toEqual([
+      'pkg:npm/%40nexus/core@0.0.0',
+      'pkg:npm/a@1.0.0',
+      'pkg:npm/native-linux@2.0.0',
+    ]);
+    const [core, a, native] = bom.components;
+    expect(core).toMatchObject({ licenses: [{ license: { id: 'MIT' } }] });
+    expect(core).not.toHaveProperty('hashes');
+    expect(a).toMatchObject({ hashes: [{ alg: 'SHA-512', content: hex('a') }] });
+    expect(native).toMatchObject({
+      licenses: [{ expression: '(MIT OR Apache-2.0)' }],
+      hashes: [{ alg: 'SHA-512', content: hex('native') }],
+    });
+    // 位元組穩定：同一個閉包產兩次相同。
+    expect(renderSbom(buildSbom(root, { firstPartyLicense: 'MIT' }))).toBe(renderSbom(bom));
+  });
+
+  it('核對用的列法不走相依圖：列 .pnpm 裡實際裝了的，加上根', () => {
+    expect([...listInstalledPackages(root)].sort()).toEqual([
+      '@nexus/core@0.0.0',
+      '@nexus/harness@1.0.0',
+      'a@1.0.0',
+      'native-linux@2.0.0',
+    ]);
+  });
+
+  it('SBOM 與閉包相同不報；漏一顆、多一顆都報', () => {
+    const bom = buildSbom(root, { firstPartyLicense: 'MIT' });
+    writeFileSync(join(root, SBOM_FILE), renderSbom(bom));
+    expect(sbomProblems(root)).toEqual([]);
+
+    // 產生器漏了 optional 那一支的樣子：平台套件不在 SBOM 裡。
+    writeFileSync(
+      join(root, SBOM_FILE),
+      renderSbom({
+        ...bom,
+        components: bom.components.filter((entry) => entry.name !== 'native-linux'),
+      }),
+    );
+    expect(sbomProblems(root)).toEqual(['SBOM 漏了閉包裡的 native-linux@2.0.0']);
+
+    const [, a] = bom.components;
+    if (a === undefined) throw new Error('夾具少了 a');
+    writeFileSync(
+      join(root, SBOM_FILE),
+      renderSbom({ ...bom, components: [...bom.components, { ...a, version: '9.9.9' }] }),
+    );
+    expect(sbomProblems(root)).toEqual(['SBOM 列了閉包裡沒有的 a@9.9.9']);
+
+    rmSync(join(root, SBOM_FILE));
+    expect(sbomProblems(root)).toEqual([`缺 ${SBOM_FILE}`]);
+  });
+
+  it('第三方在閉包 lockfile 裡查不到 integrity：拋錯，不靜靜省略', () => {
+    expect(() =>
+      buildSbom(root, {
+        firstPartyLicense: 'MIT',
+        lockfile: lockfile.split('  native-linux')[0] ?? '',
+      }),
+    ).toThrow(/native-linux@2\.0\.0 在閉包的 lockfile 裡查不到 integrity/u);
+  });
+
+  it('第三方沒有 license 或不是合法的 SPDX：拋錯', () => {
+    expect(() => cycloneDxLicense(undefined, 'x@1')).toThrow(/沒有字串 license/u);
+    expect(() => cycloneDxLicense('SEE LICENSE IN LICENSE.md', 'x@1')).toThrow(/不是合法的 SPDX/u);
+    expect(cycloneDxLicense('Apache-2.0', 'x@1')).toEqual({ license: { id: 'Apache-2.0' } });
+    expect(cycloneDxLicense('GPL-2.0-or-later WITH Classpath-exception-2.0', 'x@1')).toEqual({
+      expression: 'GPL-2.0-or-later WITH Classpath-exception-2.0',
+    });
+  });
+
+  it('integrity 轉 hex；認不得的演算法拋錯', () => {
+    expect(integrityToHashes(sri('a'))).toEqual([{ alg: 'SHA-512', content: hex('a') }]);
+    expect(() => integrityToHashes('md5-AAAA')).toThrow(/認不得的 integrity/u);
+    expect(npmPurl('@scope/x', '1.0.0')).toBe('pkg:npm/%40scope/x@1.0.0');
+  });
+
+  it('repo 根 LICENSE 認得是 MIT；換了授權要先教它', () => {
+    expect(repoLicense(readFileSync(join(ROOT, 'LICENSE'), 'utf8'))).toBe('MIT');
+    expect(() => repoLicense('Apache License\n')).toThrow(/認不得/u);
+  });
+
+  it('Release 要附的那份：要在、對得上 .sha256、與產物裡的相同', () => {
+    writeFileSync(join(root, SBOM_FILE), '{"a":1}\n');
+    const tarball = join(root, 'nexus-agent-1.0.0-linux-x64.tar.gz');
+    const attached = join(root, 'nexus-agent-1.0.0-linux-x64.cdx.json');
+    expect(attachedSbomProblems(tarball, root)).toEqual([
+      '缺 nexus-agent-1.0.0-linux-x64.cdx.json（Release 要附的 SBOM）',
+    ]);
+    writeFileSync(attached, '{"a":1}\n');
+    writeFileSync(`${attached}.sha256`, sha256Line(fileSha256(attached), basename(attached)));
+    expect(attachedSbomProblems(tarball, root)).toEqual([]);
+    writeFileSync(join(root, SBOM_FILE), '{"a":2}\n');
+    expect(attachedSbomProblems(tarball, root)).toEqual([
+      `nexus-agent-1.0.0-linux-x64.cdx.json 與產物裡的 ${SBOM_FILE} 不同`,
+    ]);
+  });
 });

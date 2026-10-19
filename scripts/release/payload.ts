@@ -57,15 +57,34 @@ export interface PayloadOptions {
 /** 閉包裡不該出現的開發工具（`pnpm deploy --prod` 不會裝；出現就是 `dependencies` 被誤放）。 */
 const DEV_TOOLS = /^(tsx|vitest|eslint|typescript|tsdown|vite|prettier|playwright-core)@/u;
 
-/** 產物根一定要有的檔。 */
+/** 產物根的 SBOM 檔名（`sbom.ts` 產生、`verify-packed-install` 核對，#1545 步驟 4）。 */
+export const SBOM_FILE = 'sbom.cdx.json';
+
+/**
+ * 產物根一定要有的檔。`LICENSE` 與 `THIRD_PARTY_NOTICES.md` 照 dsh `scripts/build-python-release.py:178-195` 的
+ * `stage_license_files`（兩份一起複製進產物）與 `:260-265`（驗產物裡兩份都在）。
+ */
 const REQUIRED_FILES = [
   'package.json',
   'build-stamp.json',
+  'LICENSE',
+  'THIRD_PARTY_NOTICES.md',
+  SBOM_FILE,
   'cordis.yml',
   'cordis.serve.yml',
   'lib/serve.js',
   'lib/cli.js',
   'lib/plugin-cli.js',
+] as const;
+
+/**
+ * 網頁打包進去的三顆字型（OFL-1.1）的授權全文，web 的建置放在 `dist/assets/fonts/`（#1713，PR #1717）。
+ * OFL 要求散布時附上授權全文，少一份就是散布條件沒做到。
+ */
+export const WEB_FONT_LICENSES = [
+  'Geist-OFL.txt',
+  'GeistMono-OFL.txt',
+  'NotoSansTC-OFL.txt',
 ] as const;
 
 /**
@@ -171,6 +190,15 @@ export function collectPayloadViolations(
         message:
           '網頁 dist 不在產物裡：開網址會是空白頁或 404（先 build，且 apps/web 的 files 要收 dist）',
       });
+    }
+    for (const file of WEB_FONT_LICENSES) {
+      const path = `node_modules/@nexus/web/dist/assets/fonts/${file}`;
+      if (!existsSync(join(root, path))) {
+        violations.push({
+          path,
+          message: '網頁打包的字型缺 OFL 授權全文（OFL 要求散布時附上全文，#1713）',
+        });
+      }
     }
   }
 
@@ -389,7 +417,7 @@ interface InstalledManifest {
 }
 
 /** 沿 `from` 的祖先 `node_modules` 找一個套件的目錄。 */
-function installedPackage(from: string, name: string): string | undefined {
+export function installedPackage(from: string, name: string): string | undefined {
   const resolver = createRequire(join(from, 'package.json'));
   for (const directory of resolver.resolve.paths(name) ?? []) {
     const candidate = join(directory, name);
