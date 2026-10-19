@@ -97,6 +97,6 @@ jobs:
             .release-out/*.tar.gz .release-out/*.cdx.json .release-out/*.sha256 \
             --target "${{ github.sha }}" \
             --title "$VERSION" \
-            "${notes[@]}" \
+            ${notes[@]+"${notes[@]}"} \
             --generate-notes \
             ${{ inputs.prerelease && '--prerelease' || '' }}
