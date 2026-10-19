@@ -605,6 +605,12 @@ export class PluginTree {
       await this.#create(root, { id: INCLUDE_ROW_ID, name: `cordis:${INCLUDE_ROW_ID}`, config });
       await loader.await();
     } else if (signature !== this.#signature) {
+      // 推之前先抓住每一列現在的 fiber（#1636）：被刪掉的列先離開 Loader 的 store、才非同步收尾（`group.ts` 的 `remove` 不等），
+      // `loader.await()` 看不到它；整列重建時子列的收尾同樣不保證被等到。推完再等這些 fiber 收完，`sync` 回傳時清單上已經沒有
+      // 的列都收完了。照 dsh `app-boot/src/index.ts` 的 `previousFibers`（master `687f282e`）。已經 FAILED 或 DISPOSED 的當場就了結。
+      const previous = [...loader.entries()].flatMap((entry) =>
+        entry.fiber === undefined ? [] : [entry.fiber],
+      );
       if (this.#includeState(root) !== FIBER_STATE.ACTIVE) {
         // 上一次沒起來（檔壞了又好了）：整列拆掉重建，不在 FAILED 的 fiber 上更新。
         await existing.fiber?.ctx.fiber.dispose();
@@ -621,6 +627,8 @@ export class PluginTree {
           );
         }
       }
+      // 收尾拋的錯 Cordis 自己交給 logger（`_unload`），`await()` 只在載入失敗時 reject；列的失敗由下面的快照判成 `dropped`，這裡不拋。
+      await Promise.allSettled(previous.map((fiber) => fiber.await()));
       await loader.await();
     }
     this.#signature = signature;
