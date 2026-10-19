@@ -88,6 +88,25 @@ export interface PermissionKnobs {
   readonly approval: ApprovalPolicyValue | null;
 }
 
+/**
+ * 沙箱模式的寬窄序，越大越寬。**自己放一份、不 import `@nexus/plugin-sandbox-policy` 的 `WIDER_MODES`**：那是 #1491 Q1 (a) 拿掉的相依
+ * （權限組合這一列不認識沙箱政策那一列）。兩邊一致由 harness 的 `permission-resume-narrow.test.ts`（「寬窄序」那一組）對照 `@nexus/plugin-sandbox-policy` 匯出的 `isStrictlyWider`（背後就是 `WIDER_MODES`）逐格釘住，改一邊另一邊不改就紅。
+ */
+const SANDBOX_WIDTH: Readonly<Record<SandboxMode, number>> = {
+  'read-only': 0,
+  'workspace-write': 1,
+  'danger-full-access': 2,
+};
+
+/**
+ * `a` 是不是比 `b` 嚴格更寬。
+ * @param a - 一個沙箱模式。
+ * @param b - 另一個沙箱模式。
+ */
+export function isSandboxWider(a: SandboxMode, b: SandboxMode): boolean {
+  return SANDBOX_WIDTH[a] > SANDBOX_WIDTH[b];
+}
+
 /** 日誌上沒有 `sandbox/mode` 時的假設：預設要是設防的那一格，同 fence 自己的預設。 */
 export const ASSUMED_SANDBOX: SandboxMode = 'workspace-write';
 
