@@ -56,20 +56,19 @@ export interface SubagentCatalogData {
 }
 
 /**
- * 在父那一份記一顆 `subagent/catalog`。**記不進去不能反過來殺掉派出那一步**，同圍堵記工具事件：`append` 拋的一律吃掉，
- * 回 `false`。少一顆目錄的代價是那一份子日誌只剩 header 的 `parentSession` 指得回去，不是派出失敗。
+ * 在父那一份記一顆 `subagent/catalog`。**記不進去就往外拋，派出失敗**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)），
+ * 照 dsh：目錄是直接子代理的持久權威，`appendCatalog` 不吞（`packages/subagent/subagent/src/catalog.ts:144`、`:163`）；continuable
+ * 寫不進去時撤掉剛准入的 activation 再重拋（`manager.ts:1401-1416`），錯一路回到派它的那次工具呼叫成錯誤結果
+ * （`packages/core/tools/src/index.ts:1594-1595`）。少一顆目錄的子代理只剩 header 的 `parentSession` 指得回去，派出成功卻在
+ * 父那一頭查不到，比派出失敗難查。撤回由呼叫的人做：前景的在 `registry.ts` 的 `pickSessionForCall`、背景的在
+ * `apps/harness/src/background-subagents.ts` 的 `start`。
  *
  * @param parent - 派它的那一份（今天一律是 root：子代理不再派子代理）。
  * @param data - 那一顆的載荷。
- * @returns 寫進去了沒有。
+ * @throws `append` 拋的錯，原樣。
  */
-export function appendSubagentCatalog(parent: SessionLog, data: SubagentCatalogData): boolean {
-  try {
-    parent.append('subagent/catalog', data);
-    return true;
-  } catch {
-    return false;
-  }
+export function appendSubagentCatalog(parent: SessionLog, data: SubagentCatalogData): void {
+  parent.append('subagent/catalog', data);
 }
 
 /** 一顆目錄解出來的連結。 */

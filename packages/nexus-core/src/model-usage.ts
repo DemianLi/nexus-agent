@@ -59,12 +59,15 @@
  * 工具呼叫算出來的 `runId` 是同一個值**。所以 {@link ./session-address.ts |
  * toolCallSessionAddress} 原封不動就對，兩列已經補進那個檔頭的表與它的測試。
  *
- * ## 這顆 middleware 坐在 request path 上，所以它不准拋
+ * ## 帳目記不進去，這次呼叫失敗（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）
  *
- * 三件事都會拋，三件都被吃掉：`forCall` 的三種非 `ok`、`usage_metadata` 驗不過、
- * `append` 自己拋（`snapshotJsonValue` 對 `NaN` 是當場拋的）。理由照
- * {@link ./session-log.ts} 對遙測那句「盡力而為的旁路，**不能有能力扳倒 agent loop**」
- * ——而這裡更嚴，因為遙測掛在事件之後，這顆掛在模型呼叫本身上。
+ * dsh 的用量跟著 `assistant/message`／`assistant/attempt` 一起寫（見上），那兩顆寫不進去這一輪失敗
+ * （`packages/core/agent-loop/src/agent.ts:484-510`、`:537-558`）。所以 `append` 自己拋就往外拋：正常回來的那次，
+ * 回覆不進 graph state（它排在 {@link ./model-calls.ts} 記 `assistant/message` 之前，日誌上也沒有那則回覆）；
+ * **已經在失敗路徑上**的那次，兩個錯一起拋，原錯在前、也是 `cause`（dsh `agent.ts:495-499`）。
+ *
+ * 仍然吃掉、照常回應的兩件不是寫入失敗：`forCall` 的三種非 `ok`（這次呼叫不屬於任何一份日誌），以及
+ * `usage_metadata` 驗不過（「有報才記、報得自相矛盾也不記」，見上）。
  *
  * **`not-attached` 是常態不是異常。** 兩條產品進入點都接（`cli.ts` 的 `runRepl`、
  * web 那條的 `wire-handler.ts`），但 `eval/runner.ts`、`spike/spike-agent.ts` 與絕大多數
@@ -245,27 +248,37 @@ function validateAttempt(reported: AttemptUsage | undefined): ModelUsage | undef
 /**
  * 沒有正常回來的呼叫：adapter 在串流裡報過用量才記一筆帶 `outcome` 的 `model/usage`（[#1022](https://github.com/DemianLi/nexus-agent/issues/1022)）。
  *
- * **沒報、或報得對不起來就什麼都不記**——「不知道花了多少」不是 0，由配對的 `model/end.outcome` 表態。這個函式不准拋：
- * 它跑在 `catch` 裡，從這裡漏出去的錯會蓋掉原本那個，所以 `forCall` 與 `append` 的失敗一律吃掉。
+ * **沒報、或報得對不起來就什麼都不記**——「不知道花了多少」不是 0，由配對的 `model/end.outcome` 表態。
+ *
+ * 它跑在 `catch` 裡：**`append` 拋了就兩個錯一起拋**，原錯在前、也是 `cause`（檔頭，#1702），不蓋掉原本那個。
+ * 子代理被中止回合成收尾的那一次沒有原錯，寫入錯原樣往外拋。
+ *
+ * @param original - 這次呼叫拋的錯；合成收尾那次是 `undefined`。
  */
 function recordUnfinished(
   sessions: { forCall(config: unknown): SessionLookup },
   request: unknown,
   outcome: ModelCallOutcome,
+  original?: { readonly error: unknown },
 ): void {
+  const found = sessions.forCall({
+    configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
+  });
+  if (found.kind !== 'ok') return;
+  const usage = validateAttempt(reportedAttemptUsage(found.log));
+  if (usage === undefined) return;
   try {
-    const found = sessions.forCall({
-      configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
-    });
-    if (found.kind !== 'ok') return;
-    const usage = validateAttempt(reportedAttemptUsage(found.log));
-    if (usage === undefined) return;
     found.log.append(
       'model/usage',
       withModelCall({ ...usage, outcome }, currentModelCall(found.log)),
     );
-  } catch {
-    // 見檔頭最後一段。
+  } catch (appendError) {
+    if (original === undefined) throw appendError;
+    throw new AggregateError(
+      [original.error, appendError],
+      '模型呼叫失敗，model/usage 也記不進去',
+      { cause: original.error },
+    );
   }
 }
 
@@ -291,7 +304,9 @@ export function createModelUsageRecorder(sessions: {
         response = await handler(request);
       } catch (error) {
         // 拋錯的呼叫：供應商若在串流裡報過用量，那些 token 照樣花掉了（#1022）。
-        recordUnfinished(sessions, request, modelCallAborted(request) ? 'aborted' : 'error');
+        recordUnfinished(sessions, request, modelCallAborted(request) ? 'aborted' : 'error', {
+          error,
+        });
         throw error;
       }
       const usage = readModelUsage(response);
@@ -308,11 +323,8 @@ export function createModelUsageRecorder(sessions: {
         configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
       });
       if (found.kind !== 'ok') return response;
-      try {
-        found.log.append('model/usage', withModelCall(usage, currentModelCall(found.log)));
-      } catch {
-        // 記不進去不能反過來殺掉這次模型呼叫。見檔頭最後一段。
-      }
+      // 記不進去從這裡拋，回覆不進 graph state（#1702，見檔頭）。
+      found.log.append('model/usage', withModelCall(usage, currentModelCall(found.log)));
       return response;
     },
   }) as unknown as AgentMiddleware;

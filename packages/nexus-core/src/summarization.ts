@@ -130,6 +130,7 @@ import type { EstimatedRequest, TokenAnchorBook } from './token-estimate.js';
 import {
   applyRecordedArgTruncations,
   newlyTruncatedArgs,
+  restoreNewlyTruncatedArgs,
   recordedArgTruncationsOf,
 } from './tool-arg-truncation-log.js';
 import { withSummaryCatchUp } from './summary-catch-up.js';
@@ -676,6 +677,8 @@ export function createSummarizer(
     sessions === undefined
       ? undefined
       : createHistoryStaging(backend, settings.historyPathPrefix, report);
+  // 壓縮事件記不進去、這次壓縮不生效時往哪裡講（#1702）。
+  const warn = report ?? ((message: string) => console.warn(message));
   // 基座的 `keep` 在建構時就定了，每次請求換不了：保留則數 N 由 {@link withRetainedTail} 逐步算，各用一顆
   // `keep: { messages, N }` 的實例（同一個 backend、同一份 `stateSchema`）。
   const makeChain = (keepMessages: number, force = false): AgentMiddleware => {
@@ -711,7 +714,8 @@ export function createSummarizer(
   // 請求，不是進來的那份，也不碰回傳值。
   const logged = sessions === undefined ? quiet : withCompactionLog(quiet, sessions);
   // 基座的 `truncateArgs` 是它自己的事，這一層只在交給它之前換上記過的、在它交下去時記新的（#1303）。
-  const truncationLogged = sessions === undefined ? logged : withArgTruncationLog(logged, sessions);
+  const truncationLogged =
+    sessions === undefined ? logged : withArgTruncationLog(logged, sessions, warn);
   const budgeted = withTokenBudget(
     truncationLogged,
     settings.trigger,
@@ -738,7 +742,7 @@ export function createSummarizer(
           (messages) => retainedMessageCount(messages, settings, limitsOf?.(request.model)),
         ),
       pruning,
-      sessions === undefined ? undefined : pruneLogOf(sessions),
+      sessions === undefined ? undefined : pruneLogOf(sessions, warn),
     ),
   );
 }
@@ -748,12 +752,21 @@ export function createSummarizer(
  *
  * **只記這次請求真正送得出去的那一段**：`request.messages` 是 graph state 的原始串，摘要之前的舊訊息還在裡面，但模型看不到
  * （{@link effectiveMessages}）。剪刀對整串動手，這裡只把落在有效串裡的記下來——日誌要證明的是「模型看到的那一份」，
- * 不是 state 裡每一顆大結果的剪法。記不進去吃掉，同 {@link withCompactionLog}。
+ * 不是 state 裡每一顆大結果的剪法。
+ *
+ * **先記、記進去了才剪**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：`append` 拋了就回 `false`、講一條 warn，
+ * 剪刀這次不套用新剪的（記過的照樣套用）。照 dsh 壓縮的 pressure 路徑：壓縮失敗記 warn、這一輪照原樣繼續
+ * （`packages/compaction/compaction-basic/src/index.ts:163-173`）；dsh 的剪裁是一筆事件，寫不進去就沒有剪，不會「模型看到剪過的、
+ * 日誌卻沒有」。查找本身失敗（認不出這次呼叫屬於哪一份）不是寫入失敗：`recorded` 回 `undefined`，剪刀退回每次重算，不會叫到這裡。
  *
  * @param sessions - 註冊表的 `sessions` 通道。
+ * @param report - 記不進去時的 warn。
  * @returns 接口。
  */
-function pruneLogOf(sessions: { forCall(config: unknown): SessionLookup }): ToolResultPruneLog {
+function pruneLogOf(
+  sessions: { forCall(config: unknown): SessionLookup },
+  report: (message: string) => void,
+): ToolResultPruneLog {
   const lookup = (request: PruneRequest): SessionLookup =>
     sessions.forCall({
       configurable: (request as { runtime?: { configurable?: unknown } }).runtime?.configurable,
@@ -768,15 +781,22 @@ function pruneLogOf(sessions: { forCall(config: unknown): SessionLookup }): Tool
       }
     },
     record(request, results) {
+      let found: SessionLookup;
       try {
-        const found = lookup(request);
-        if (found.kind !== 'ok') return;
-        const sendable = new Set<string>();
-        for (const message of effectiveMessages(request.messages ?? [], request.state)) {
-          if (ToolMessage.isInstance(message)) sendable.add(message.tool_call_id);
-        }
-        const kept = results.filter((result) => sendable.has(result.callId));
-        if (kept.length === 0) return;
+        found = lookup(request);
+      } catch {
+        // 認不出這次呼叫屬於哪一份：同 `recorded` 回 `undefined`，不是寫入失敗。
+        return true;
+      }
+      if (found.kind !== 'ok') return true;
+      const sendable = new Set<string>();
+      for (const message of effectiveMessages(request.messages ?? [], request.state)) {
+        if (ToolMessage.isInstance(message)) sendable.add(message.tool_call_id);
+      }
+      const kept = results.filter((result) => sendable.has(result.callId));
+      // 剪到的都在送不出去的那一段：沒有要記的，模型也看不到它們。
+      if (kept.length === 0) return true;
+      try {
         found.log.append('compaction/prune', {
           results: kept.map((result) => ({
             callId: result.callId,
@@ -785,8 +805,12 @@ function pruneLogOf(sessions: { forCall(config: unknown): SessionLookup }): Tool
             content: JSON.parse(JSON.stringify(result.content)) as MessageContent,
           })),
         });
-      } catch {
-        // 記不進去不能反過來把模型呼叫殺掉。
+        return true;
+      } catch (error) {
+        report(
+          `compaction/prune 記不進去，這次新剪的工具結果不套用：${error instanceof Error ? error.message : String(error)}`,
+        );
+        return false;
       }
     },
   };
@@ -1210,8 +1234,27 @@ function withRetainedTail(
   } as AgentMiddleware;
 }
 
-/** 生摘要那次模型呼叫拋出來的錯（物件本身）。見 {@link quietInvoke}。 */
+/**
+ * 生摘要那次模型呼叫拋出來的錯（物件本身），以及摘要記不進去時 {@link summaryLogFailure} 造的那一顆。見 {@link quietInvoke}、
+ * {@link withTokenBudget}。
+ */
 const summaryCallFailures = new WeakSet<object>();
+
+/**
+ * `compaction/summary` 記不進去：包成一顆「生摘要失敗」的錯（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)），
+ * 由 {@link withTokenBudget} 走 dsh 的 pressure／overflow 兩條路。見 {@link withCompactionLog}。
+ *
+ * @param error - `append` 拋的錯，放進 `cause`。
+ * @returns 登記過的錯。
+ */
+function summaryLogFailure(error: unknown): Error {
+  const failure = new Error(
+    `compaction/summary 記不進去，這次摘要不生效：${error instanceof Error ? error.message : String(error)}`,
+    { cause: error },
+  );
+  summaryCallFailures.add(failure);
+  return failure;
+}
 
 /** 我們自己（{@link withTokenBudget}）合成的預算超窗：不是端點說的，不走 dsh 的 overflow 路徑。 */
 const syntheticOverflows = new WeakSet<object>();
@@ -1397,11 +1440,22 @@ function quietInvoke<T extends object>(
  * 一份摘要器，subagent 那份的 `wrapModelCall` 就在 subagent 自己的圖裡跑，再用 `checkpoint_ns` 問這次呼叫
  * 屬於哪一份日誌——跟 `model/usage` 同一把鑰匙。
  *
- * ## 它不准拋
+ * ## 記不進去，這次摘要不生效（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）
  *
- * `model/usage` 那顆坐在 request path 上就已經不准拋了；**這裡更嚴，因為這一層是同名
- * 取代**：從這裡漏出去的錯不只是掉一行日誌，是把摘要器本身連根拔掉。所以 `forCall` 的
- * 三種非 `ok` 與 `append` 自己拋（`snapshotJsonValue` 對非純 JSON 是當場拋的）全部吃掉，`handler` 照常被叫。
+ * dsh 的不變量是日誌與送給模型的內容一致：壓縮是一筆事件，寫不進去就等於這次壓縮沒發生；自動壓縮的失敗在 pressure 路徑記 warn、
+ * 這一輪照原樣繼續（`packages/compaction/compaction-basic/src/index.ts:163-173`），在 overflow 路徑記 warn、保留原本的請求錯誤
+ * （`:204-227`）。我們的摘要事件在基座交下去的那一刻記，而摘要要生效還有三處：送出去的請求（`sent` 開頭那則摘要）、
+ * 基座最後回的 `Command`（`_summarizationEvent` 進 graph state）、歷史檔（#1389 的暫存層依日誌與 `Command` 決定提交）。
+ *
+ * 所以 `append` 拋了就**不叫 `handler`**，改拋一顆登記成「生摘要失敗」的錯（{@link summaryLogFailure}）：
+ *
+ * - 基座不認它是超窗，原樣往外拋，不會回 `Command`——state 沒有 `_summarizationEvent`；暫存層看不到事件也看不到 `Command`，
+ *   歷史檔丟掉；#1390 的補回（{@link withSummaryCatchUp}）在日誌上找不到它，不會補。
+ * - {@link withTokenBudget} 把它當成生摘要失敗走 dsh 的兩條路：我們自己的門檻觸發的，記 warn、照原請求（不摘要）送出；
+ *   端點回超窗之後的恢復，記 warn、拋原本的超窗錯。照原請求送出的那一次若又碰到端點超窗、基座再摘要又記不進去，
+ *   也是拋原本的超窗錯，不再重摘（重摘的次數由基座與 {@link withRetainedTail} 各自最多一次界住）。
+ *
+ * `forCall` 的三種非 `ok` 不是寫入失敗（這次呼叫不屬於任何一份日誌），照舊不記、`handler` 照常被叫。
  *
  * @param base - 基座那顆摘要器。
  * @param sessions - 註冊表的 `sessions` 通道。
@@ -1426,17 +1480,17 @@ function withCompactionLog(
           // 生摘要的呼叫完成過、而且這一份還沒記過：這一份就是剛摘要過的。
           if (cell.summaries > logged) {
             logged = cell.summaries;
-            try {
-              const summary = sent.messages?.[0];
-              if (summary !== undefined && isSummarizationMessage(summary)) {
-                // `runtime.configurable` 就是 `forCall` 要的那份——包回一層 `configurable` 是因為
-                // 它收的是 handler 的 config 形狀，不是 configurable 本身。同 model-usage.ts。
-                const found = sessions.forCall({
-                  configurable: (request as { runtime?: { configurable?: unknown } }).runtime
-                    ?.configurable,
-                });
-                if (found.kind === 'ok') {
-                  const local = effective.length - ((sent.messages ?? []).length - 1);
+            const summary = sent.messages?.[0];
+            if (summary !== undefined && isSummarizationMessage(summary)) {
+              // `runtime.configurable` 就是 `forCall` 要的那份——包回一層 `configurable` 是因為
+              // 它收的是 handler 的 config 形狀，不是 configurable 本身。同 model-usage.ts。
+              const found = sessions.forCall({
+                configurable: (request as { runtime?: { configurable?: unknown } }).runtime
+                  ?.configurable,
+              });
+              if (found.kind === 'ok') {
+                const local = effective.length - ((sent.messages ?? []).length - 1);
+                try {
                   found.log.append('compaction/summary', {
                     cutoffIndex: previousCutoff === undefined ? local : previousCutoff + local - 1,
                     messagesBefore: (request.messages ?? []).length,
@@ -1446,10 +1500,11 @@ function withCompactionLog(
                     ...(cell.usage === undefined ? {} : { usage: cell.usage }),
                     beforeCall: true,
                   });
+                } catch (error) {
+                  // 不叫 `handler`：這次摘要不生效。見上面「記不進去，這次摘要不生效」。
+                  throw summaryLogFailure(error);
                 }
               }
-            } catch {
-              // 記不進去不能反過來把摘要器殺掉。見上面最後一段。
             }
           }
           return handler(sent);
@@ -1473,15 +1528,20 @@ function withCompactionLog(
  * 2. **基座把請求交下去的那一刻**，拿交下去的串跟交進去的串比（{@link newlyTruncatedArgs}），新縮短的記一筆 `compaction/truncate-args`。
  *    包的是傳給基座的 `handler`，理由與 {@link withCompactionLog} 同：記在那次模型呼叫之前，而且在同一次呼叫的 `compaction/summary` 之後。
  *
- * 記不進去吃掉，同 {@link withCompactionLog}：這一層是同名取代，漏出去的錯會把摘要器本身拔掉。
+ * **記不進去，這次的縮短不生效**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：講一條 warn，把新縮短的那幾則換回
+ * 交給基座之前的原訊息再交下去（{@link restoreNewlyTruncatedArgs}），模型看到的跟日誌一致，這一輪照常繼續——照 dsh 自動壓縮的
+ * pressure 路徑（`packages/compaction/compaction-basic/src/index.ts:163-173`）。基座的縮短只改請求、不進 graph state，所以換回請求就是
+ * 全部。記過的縮短在交給基座之前就換上去了，照樣生效。
  *
  * @param base - 外一層（已包過 {@link withCompactionLog}）。
  * @param sessions - 註冊表的 `sessions` 通道。
+ * @param report - 記不進去時的 warn。
  * @returns 同名、同狀態、多一層紀錄的 middleware。
  */
 function withArgTruncationLog(
   base: AgentMiddleware,
   sessions: { forCall(config: unknown): SessionLookup },
+  report: (message: string) => void,
 ): AgentMiddleware {
   const inner = base.wrapModelCall?.bind(base);
   /* v8 ignore next -- 基座那顆一定有 wrapModelCall；沒有的話包了也沒意義，原樣回去。 */
@@ -1505,13 +1565,19 @@ function withArgTruncationLog(
       const forwarded =
         before === request.messages ? request : { ...request, messages: [...before] };
       return inner(forwarded as typeof request, (sent) => {
+        if (found?.kind !== 'ok') return handler(sent);
+        const calls = newlyTruncatedArgs(before, sent.messages ?? []);
+        if (calls.length === 0) return handler(sent);
         try {
-          if (found?.kind === 'ok') {
-            const calls = newlyTruncatedArgs(before, sent.messages ?? []);
-            if (calls.length > 0) found.log.append('compaction/truncate-args', { calls });
-          }
-        } catch {
-          // 記不進去不能反過來把摘要器殺掉。
+          found.log.append('compaction/truncate-args', { calls });
+        } catch (error) {
+          report(
+            `compaction/truncate-args 記不進去，這次縮短的工具參數換回原文：${error instanceof Error ? error.message : String(error)}`,
+          );
+          return handler({
+            ...sent,
+            messages: [...restoreNewlyTruncatedArgs(before, sent.messages ?? [], calls)],
+          });
         }
         return handler(sent);
       });
@@ -1615,8 +1681,9 @@ export function summaryFilePathOf(message: BaseMessage): string | null {
  *
  * ## 量與記都不准拋
  *
- * 估不出來就不比、不記，退回基座自己的 `messages` 門檻；記不進去吃掉，同 {@link withCompactionLog}。**`handler`
- * 本身拋的錯原樣往外傳**——那是基座的緊急摘要要接的。
+ * 估不出來就不比、不記，退回基座自己的 `messages` 門檻。**`context/measure` 記不進去講一條 warn**（`report`），這次呼叫照常回來
+ * （[#1702](https://github.com/DemianLi/nexus-agent/issues/1702) 歸 (C)）：它不改請求、不改 state，只是量測，跟 dsh 自動壓縮的失敗同一類
+ * （`packages/compaction/compaction-basic/src/index.ts:163-173`）。**`handler` 本身拋的錯原樣往外傳**——那是基座的緊急摘要要接的。
  *
  * **記的時刻是「下一層正常回來」**：拋錯的那次不記；停止閘門（`turnCancel`）擋下的那一次照記——閘門在更內層，
  * 它回的合成收尾對這裡就是正常回來。`turn-cancel.test.ts` 的委派那條釘著這件事。
@@ -1708,8 +1775,10 @@ function withTokenBudget(
               ),
             );
           }
-        } catch {
-          // 記不進去不能反過來把摘要器殺掉。見 withCompactionLog。
+        } catch (error) {
+          report(
+            `context/measure 記不進去：${error instanceof Error ? error.message : String(error)}`,
+          );
         }
         return response;
       };
@@ -1739,10 +1808,27 @@ function withTokenBudget(
           thrown = true;
           // 送「沒動手摘要時本來會往下交的那份」，不是 `request.messages` 的原串（那裡面摘要之前的舊訊息還在）：
           // 帶著 {@link SUPPRESS_SUMMARY} 再走一遍同一條鏈，有效串、參數截斷與日誌記帳都照平常的路。
-          return inner(
-            { ...request, [SUPPRESS_SUMMARY]: true, [RETAIN_DECISION]: decision } as typeof request,
-            measured,
-          );
+          try {
+            return await inner(
+              { ...request, [SUPPRESS_SUMMARY]: true, [RETAIN_DECISION]: decision } as typeof request,
+              measured,
+            );
+          } catch (retryError) {
+            // 照原請求送出又碰到端點超窗、基座的緊急摘要又失敗（含摘要記不進去，#1702）：同上面的 overflow 路徑，
+            // 保留原本的請求錯誤，不再重摘。
+            if (
+              endpointOverflow !== undefined &&
+              typeof retryError === 'object' &&
+              retryError !== null &&
+              summaryCallFailures.has(retryError)
+            ) {
+              report(
+                `摘要失敗（照原請求送出後端點回超窗的恢復）：${retryError instanceof Error ? retryError.message : String(retryError)}；保留原本的請求錯誤。`,
+              );
+              throw endpointOverflow;
+            }
+            throw retryError;
+          }
         }
       })();
     },

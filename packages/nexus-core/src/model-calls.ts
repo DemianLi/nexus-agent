@@ -68,10 +68,15 @@
  * 拋錯是 `error`、使用者按了停止是 `aborted`，讓「這次燒了多少不知道」讀得出來。子代理那一層被中止時回的空訊息也不記——它是 {@link ./turn-cancel.ts} 合成來
  * 讓子代理的圖收尾的，不是模型的回覆；dsh 那側被中止、沒有看得見內容的那一步沒有 `assistant/message`。
  *
- * ## 起訖記不進去不扳倒模型呼叫；回覆記不進去，這次呼叫失敗
+ * ## 起訖與回覆記不進去，這次呼叫失敗（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）
  *
- * 起訖同 {@link ./model-usage.ts}：`forCall` 的非 `ok` 與 `append` 自己拋，一律吃掉。**開頭那顆
- * 沒記成，結尾那顆也不記**——半對的事件比沒有更糟，不變量會把它讀成寫錯了。（起訖照不照 dsh 另議，#1702。）
+ * dsh 沒有 `model/start`／`model/end`，最接近的是請求前的 `request/header`（`agent.ts:637-650`）與結算那次呼叫的
+ * `assistant/message`／`assistant/attempt`（`:484-510`、`:537-558`）：全部直接 `append`、不吞，寫不進去這一輪失敗。照它：
+ *
+ * - **`model/start` 記不進去**：不叫 `handler`，錯直接往外拋。這次請求沒送出去，所以沒有 `model/end` 要配。
+ * - **`model/end` 記不進去**：正常回來的那次，寫入錯往外拋，回覆不進 graph state；**已經在失敗路徑上**（`handler` 拋了、
+ *   回覆記不進去）的那次，兩個錯一起拋，原錯在前、也是 `cause`（dsh `:495-499` 的 `AggregateError`），不蓋掉原錯。
+ * - `forCall` 不是 `ok`（這次呼叫不屬於任何一份日誌）照舊不記、照常呼叫：那不是寫入失敗。
  *
  * **回覆那顆不吞**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)），照 dsh：`assistant/message` 在
  * `live.settle()` 裡寫（`packages/core/agent-loop/src/agent.ts:537-546`，`687f282e`），寫不進去就 abandon、原錯重拋
@@ -88,7 +93,6 @@ import type { AgentMiddleware } from './base-types.js';
 import { toLoggedMessage } from './logged-message.js';
 import { noteModelCallReplied, runInModelCall, withModelCall } from './model-call-scope.js';
 import { routeOfModel } from './model-route.js';
-import type { ModelRoute } from './model-route.js';
 import type { ModelCallOutcome, SessionLog } from './session-log.js';
 import type { SessionLookup } from './registry.js';
 import { isSyntheticStopReply, modelCallAborted } from './turn-cancel.js';
@@ -96,21 +100,24 @@ import { isSyntheticStopReply, modelCallAborted } from './turn-cancel.js';
 /** middleware 的名字。名字不撞基座任何一個，所以它是 novel entry。 */
 export const MODEL_CALL_EVENTS_MIDDLEWARE_NAME = 'nexusModelCallEvents';
 
-/** 記 `model/start`（帶這次請求走的路由，認得出來才帶），回它的 `seq`；記不進去回 `undefined`。 */
-function tryAppendStart(log: SessionLog, route: ModelRoute | undefined): number | undefined {
+/**
+ * 失敗路徑上補記 `model/end`：記不進去兩個錯一起拋（原錯在前、也是 `cause`，同 dsh `agent.ts:495-499`）；記進去了就交回，
+ * 由呼叫的人拋原錯。
+ */
+function appendEndAfterFailure(
+  log: SessionLog,
+  modelCall: number,
+  outcome: ModelCallOutcome,
+  original: unknown,
+): void {
   try {
-    return log.append('model/start', route === undefined ? {} : { route }).seq;
-  } catch {
-    return undefined;
-  }
-}
-
-/** 記配對的 `model/end`，帶這次呼叫的識別與（沒有正常回來時的）結果；記不進去就算了。 */
-function tryAppendEnd(log: SessionLog, modelCall: number, outcome: ModelCallOutcome | undefined) {
-  try {
-    log.append('model/end', outcome === undefined ? { modelCall } : { modelCall, outcome });
-  } catch {
-    // 見檔頭「記不進去不能扳倒模型呼叫」。
+    log.append('model/end', { modelCall, outcome });
+  } catch (appendError) {
+    throw new AggregateError(
+      [original, appendError],
+      '模型呼叫失敗，model/end 也記不進去',
+      { cause: original },
+    );
   }
 }
 
@@ -142,25 +149,27 @@ export function createModelCallRecorder(sessions: {
       });
       if (found.kind !== 'ok') return handler(request);
       const { log } = found;
-      const modelCall = tryAppendStart(log, routeOfModel(request.model));
-      if (modelCall === undefined) return handler(request);
-      // 沒有正常回來的方式（#1022）：拋錯、或使用者按了停止。正常回來沒有。
+      // 記不進去從這裡拋，請求不送出（#1702，見檔頭）。
+      const route = routeOfModel(request.model);
+      const modelCall = log.append('model/start', route === undefined ? {} : { route }).seq;
+      let response;
+      // 沒有正常回來的方式（#1022）：使用者按了停止。正常回來沒有。
       let outcome: ModelCallOutcome | undefined;
       try {
         // 這次呼叫的識別（`model/start` 的 `seq`）往內傳給用量的寫入點，往外填給摘要器的量測
         // （{@link ./model-call-scope.ts}）。重試在這一格外面（{@link ./stream-retry.ts}），每次嘗試各是一對起訖。
-        const response = await runInModelCall(log, modelCall, () => handler(request));
+        response = await runInModelCall(log, modelCall, () => handler(request));
         // 子代理被中止時回的是合成的空收尾，不是拋錯：它沒有回覆可記，這次呼叫算被中止。
         if (AIMessage.isInstance(response) && isSyntheticStopReply(response)) outcome = 'aborted';
         // 記不進去就從這裡拋，下面的 `catch` 把這次呼叫記成 `error`（#1665）。
         recordReply(log, response, modelCall);
-        return response;
       } catch (error) {
-        outcome = modelCallAborted(request) ? 'aborted' : 'error';
+        appendEndAfterFailure(log, modelCall, modelCallAborted(request) ? 'aborted' : 'error', error);
         throw error;
-      } finally {
-        tryAppendEnd(log, modelCall, outcome);
       }
+      // 記不進去從這裡拋：回覆不進 graph state（#1702）。
+      log.append('model/end', outcome === undefined ? { modelCall } : { modelCall, outcome });
+      return response;
     },
   }) as unknown as AgentMiddleware;
 }

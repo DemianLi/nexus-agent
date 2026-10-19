@@ -295,8 +295,14 @@ const PRE_EXECUTE_DENIED = 'PreExecuteDenied';
 
 /**
  * 不必問人就確定結果的那幾條路（政策關掉、沒有管道）在圖內一次寫一對 `approval/asked`＋`approval/decided`，照 dsh
- * （`ApprovalService.request` 對 `never` 政策也先寫 asked 再回 `rejected`）。日誌寫不進去**不影響這次呼叫的結果**，
- * 同圍堵記 `tool/call`；找不到這次呼叫屬於哪份日誌（只給閘門、沒給 `sessions` 的測試組裝）就整對不記。
+ * （`ApprovalService.request` 對 `never` 政策也先寫 asked 再回 `rejected`）。找不到這次呼叫屬於哪份日誌（只給閘門、沒給
+ * `sessions` 的測試組裝）就整對不記。
+ *
+ * **寫不進去就往外拋**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)），照 dsh：`user-approval` 的兩顆
+ * 都直接 `append`、不接（`packages/interaction/user-approval/src/index.ts:225`、`:232`），拋出去由工具執行那層轉成這次呼叫的
+ * 錯誤結果（`packages/core/tools/src/index.ts:1544-1545` → `toolErrorResult`）。我們的對應物是排在第 0 格、包住這顆閘門的
+ * 圍堵（`containment.ts` 的 `createContainmentMiddleware`）：它接住這裡拋的錯、翻成錯誤 ToolMessage 並記 `tool/result`。
+ * 工具本體一樣沒跑，模型看到的從「被拒」變成「審計寫不進去」的工具錯誤。
  *
  * **人那條路不在這裡寫**：閘門在圖內、`interrupt()` 之後會從頭重跑，在它前面寫會寫成兩筆；asked 由 pump 在記
  * `interrupt/raised` 的同一刻寫、decided 在收到回覆那一刻寫（`apps/harness/src/thread-pump.ts`）。
@@ -312,21 +318,17 @@ function auditDecision(
   const found = sessions.forCall({ configurable: request.runtime?.configurable });
   if (found.kind !== 'ok') return;
   const id = randomUUID();
-  try {
-    found.log.append(
-      'approval/asked',
-      {
-        id,
-        toolName: exec.name,
-        ...(exec.callId === undefined || exec.callId === '' ? {} : { callId: exec.callId }),
-        reason,
-      },
-      { ignorable: true },
-    );
-    found.log.append('approval/decided', { id, outcome }, { ignorable: true });
-  } catch {
-    // 審計寫不進去不該賠上這次呼叫（它在 fail-closed 那一邊，結果不變）。
-  }
+  found.log.append(
+    'approval/asked',
+    {
+      id,
+      toolName: exec.name,
+      ...(exec.callId === undefined || exec.callId === '' ? {} : { callId: exec.callId }),
+      reason,
+    },
+    { ignorable: true },
+  );
+  found.log.append('approval/decided', { id, outcome }, { ignorable: true });
 }
 
 /**
