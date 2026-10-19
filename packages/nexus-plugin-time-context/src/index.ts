@@ -16,7 +16,7 @@
  *
  * ## 瀏覽器時區（第二行）：三種讀數（#1629）
  *
- * `run.start` 可以帶 `client_time_zone`（#1629），伺服器驗過、正規化後記在人話的來源上：一輪開頭那句在 `turn/start`（`kind: 'message'`），輪中插話在
+ * `run.start` 可以帶 `client_time_zone`（#1629；`subagent.send` 也帶，記在子代理自己的日誌上，#1734），伺服器驗過、正規化後記在人話的來源上：一輪開頭那句在 `turn/start`（`kind: 'message'`），輪中插話在
  * `user/message` 的 `source.clientTimeZone`。{@link deriveBrowserTimeZoneContext} 從**這一輪**（最後一顆非 `resume` 的 `turn/start` 起）收這幾格，
  * 照 dsh `deriveBrowserTimeZoneContext`（`src/request-zone.ts`，`687f282e`）得出三種之一，第二行照 {@link renderBrowserTimeZoneContext} 的字樣：
  *

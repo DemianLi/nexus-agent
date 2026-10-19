@@ -67,6 +67,14 @@ import type { SessionEvent } from './session-log.js';
  * 的六種一路長到今天、還會再長；不蓋版本的話，第一次改詞彙就是一次**沒有版本可以
  * 分支的遷移**——讀方只能靠猜。
  *
+ * **這份檔頭是格式紀錄的唯一來源**：每一版改了什麼、讀舊檔怎樣，只寫在下面這些段落。營運者讀的升級指南
+ * （`docs/upgrade-guide/`，AGENTS.md「發版」〈升級指南〉）只寫要動手的事，再連到這裡，不另抄一份。
+ * **偏離 dsh**（#1537 Q2 (a)，demian 2026-10-17 拍板；理由 1）：dsh 的格式紀錄是機器檢查的——
+ * `docs/persistence-changes/` 逐筆一份 `.md` 加從型別抽出的 `.schema.json`、digest、`finalized/` 凍結點，
+ * 由 `scripts/persistence-changes.ts` 驗，另有 `docs/session-format-status.md` 記寫入版本與發佈版本。那一套靠它自己的
+ * 型別抽取工具鏈，這裡退到人寫的段落。補機器檢查排成另一張程式卡，跟 #1529 之後的遷移刀一起；撤除條件是那張卡合併。
+ * 七層盤點 O-13 的「形狀不同、未登記成偏離」就是這一條。
+ *
  * ## 2：`turn/start` 多了 `kind: 'goal'`
  *
  * 續行驅動器（[#180](https://github.com/DemianLi/nexus-agent/issues/180)）加了第三種輪次
@@ -584,7 +592,7 @@ import type { SessionEvent } from './session-log.js';
  *
  * ## 49：訊息帶使用者的時區（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)）
  *
- * `run.start` 可以帶一格選填的 `client_time_zone`（照 dsh `session.prompt` 的 `clientTimeZone`，記在訊息來源 `{ kind: 'user', rpcId, clientTimeZone }`）。
+ * `run.start` 可以帶一格選填的 `client_time_zone`（照 dsh `session.prompt` 的 `clientTimeZone`，記在訊息來源 `{ kind: 'user', rpcId, clientTimeZone }`；`subagent.send` 也帶，寫進**子代理自己的日誌**同樣這幾個位置，[#1734](https://github.com/DemianLi/nexus-agent/issues/1734)）。
  * 伺服器在邊界上驗證並正規化（`UTC` 或 IANA `Area/Location`，別名退回這個執行期的正規名），記在人話的三個來源，涵蓋一句話的三個階段，和 48 的
  * `requestId` 同一批位置：排著時在 `inbox/spliced` 裡那一件（`QueuedInput.source.clientTimeZone`）；開了一輪之後在 `turn/start`（`kind: 'message'`）；
  * 輪中插話被領走時在 `user/message` 的 `source.clientTimeZone`。`@nexus/plugin-time-context` 讀這一輪裡的這幾格，決定給模型的「Browser time zone」那一行。

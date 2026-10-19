@@ -26,6 +26,6 @@
 
 GitHub 端已啟用 secret scanning 與 push protection，但它們只擋得住已知格式的憑證被 push，擋不住自己造的洞。三條規範：
 
-1. **所有 secret 一律走環境變數。** 不寫進程式碼、不寫進設定檔、不寫進測試 fixture。**唯一的例外是使用者自己的受管憑證檔**（[#730](https://github.com/DemianLi/nexus-agent/issues/730)）：harness home 的 `.credentials.yaml`（預設 `~/.nexus-agent/`，`chmod 600`），它住在使用者家目錄、不在程式碼資料夾裡，也不進版控；值只在請求當下讀，不寫進行程的環境變數。環境變數仍然優先於它。
+1. **所有 secret 一律走環境變數。** 不寫進程式碼、不寫進設定檔、不寫進測試 fixture。**唯一的例外是使用者自己的受管憑證檔**（[#730](https://github.com/DemianLi/nexus-agent/issues/730)）：harness home 的 `.credentials.yaml`（預設 `~/.nexus-agent/`，`chmod 600`），它住在使用者家目錄、不在程式碼資料夾裡，也不進版控；值只在請求當下讀，不寫進行程的環境變數。serve 讀它而且**它優先於環境變數**（[#1540](https://github.com/DemianLi/nexus-agent/issues/1540)，照 dsh Web profile）；一次性入口（CLI、eval、spike）不讀它。
 2. **`.env.example` 列出每個必要的 key，但不放值。** 值填進 harness home 的 `.env`、受管憑證檔，或目前資料夾的 `.env`（見 [`operations.md`](operations.md) 的「金鑰放哪裡」）。`.gitignore` 已經預留 `!.env.example` 例外。
 3. **不得有預設 key 或 fallback。** `process.env.API_KEY ?? 'sk-...'` 這種寫法一律不接受。缺少必要的環境變數時要直接失敗並說明缺哪一個，不要靜默降級。
