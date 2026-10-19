@@ -16,6 +16,7 @@ import {
   symlinkSync,
   writeFileSync,
 } from 'node:fs';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { tmpdir } from 'node:os';
 import { basename, dirname, join, relative } from 'node:path';
@@ -46,6 +47,7 @@ import {
   renderSbom,
   repoLicense,
   sbomProblems,
+  walkClosure,
 } from '../../../scripts/release/sbom.js';
 import { assertInputMatches } from '../../../scripts/release/version.js';
 import {
@@ -219,7 +221,7 @@ function goodTree(root: string): void {
     mkdirSync(dirname(join(root, path)), { recursive: true });
     writeFileSync(join(root, path), text);
   };
-  put('package.json', '{"name":"@nexus/harness","version":"0.0.0"}');
+  put('package.json', '{"name":"@nexus/harness","version":"0.0.0","license":"MIT"}');
   put('build-stamp.json', '{"commit":"abc","dirty":false}');
   put('LICENSE', 'MIT License');
   put('THIRD_PARTY_NOTICES.md', '# 第三方授權');
@@ -265,6 +267,13 @@ describe('產物樹的內容檢查', () => {
     expect(collectPayloadViolations(root, options)).toEqual([]);
   });
 
+  it('產物 manifest 就是 apps/harness/package.json，它宣告 MIT', () => {
+    const manifest = JSON.parse(
+      readFileSync(new URL('../package.json', import.meta.url), 'utf8'),
+    ) as { license?: unknown };
+    expect(manifest.license).toBe('MIT');
+  });
+
   it.each<[string, () => void, RegExp]>([
     ['缺戳記', () => rmSync(join(root, 'build-stamp.json')), /build-stamp\.json/u],
     ['缺 LICENSE', () => rmSync(join(root, 'LICENSE')), /^LICENSE 產物缺這個檔/mu],
@@ -274,6 +283,17 @@ describe('產物樹的內容檢查', () => {
       /THIRD_PARTY_NOTICES\.md 產物缺這個檔/u,
     ],
     ['缺 SBOM', () => rmSync(join(root, SBOM_FILE)), /sbom\.cdx\.json 產物缺這個檔/u],
+    // 期望值寫死 MIT、不引產品常數（照 dsh `build-python-release.py:256-259`）。
+    [
+      'manifest 沒有 license',
+      () => writeFileSync(join(root, 'package.json'), '{"name":"@nexus/harness"}'),
+      /^package\.json 產物 manifest 的 license 是 undefined，應為 MIT$/mu,
+    ],
+    [
+      'manifest 的 license 不是 MIT',
+      () => writeFileSync(join(root, 'package.json'), '{"license":"Apache-2.0"}'),
+      /^package\.json 產物 manifest 的 license 是 "Apache-2\.0"，應為 MIT$/mu,
+    ],
     ...FONT_LICENSES.map(
       (file) =>
         [
@@ -626,6 +646,77 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
     expect(renderSbom(buildSbom(root, { firstPartyLicense: 'MIT' }))).toBe(renderSbom(bom));
   });
 
+  it('同一個 name@version 有兩個 peer 變體目錄：只收一份，bom-ref 唯一', () => {
+    // 根 → b → a 的另一個 peer 變體（另一個目錄、同一個 a@1.0.0），像 lockfile 裡 deepagents@1.13.1 的兩份。
+    const twin = install('a@1.0.0_peer@1.0.0', { name: 'a', version: '1.0.0', license: 'MIT' });
+    const b = install('b@1.0.0', {
+      name: 'b',
+      version: '1.0.0',
+      license: 'MIT',
+      dependencies: { a: '1.0.0' },
+    });
+    link(join(root, 'node_modules/.pnpm/b@1.0.0/node_modules/a'), twin);
+    link(join(root, 'node_modules/b'), b);
+    writeFileSync(
+      join(root, 'package.json'),
+      JSON.stringify({
+        name: '@nexus/harness',
+        version: '1.0.0',
+        dependencies: { a: '1.0.0', b: '1.0.0', '@nexus/core': 'workspace:*' },
+      }),
+    );
+    // 前提：依目錄走，a@1.0.0 真的走到兩次。
+    expect(walkClosure(root).filter((pkg) => pkg.name === 'a')).toHaveLength(2);
+
+    const bom = buildSbom(root, {
+      firstPartyLicense: 'MIT',
+      lockfile: `${lockfile}  b@1.0.0:\n    resolution: {integrity: ${sri('b')}}\n`,
+    });
+    const refs = bom.components.map((entry) => entry['bom-ref']);
+    expect(refs).toEqual([
+      'pkg:npm/%40nexus/core@0.0.0',
+      'pkg:npm/a@1.0.0',
+      'pkg:npm/b@1.0.0',
+      'pkg:npm/native-linux@2.0.0',
+    ]);
+  });
+
+  it('docs/operations.md〈核對安裝內容〉第 3、4 步原樣在夾具上跑：一致印顆數、0 結束；漏一顆就列出來、1 結束', () => {
+    const doc = readFileSync(join(ROOT, 'docs/operations.md'), 'utf8');
+    const block = /<!-- verify-install:start -->([\s\S]*?)<!-- verify-install:end -->/u.exec(
+      doc,
+    )?.[1];
+    const step = (n: number): string => {
+      const script = new RegExp(
+        `^# ${String(n)}\\.[^\\n]*\\n(?:cd [^\\n]*\\n)?node -e '([^']*)'`,
+        'mu',
+      ).exec(block ?? '')?.[1];
+      if (script === undefined) throw new Error(`文件裡找不到第 ${String(n)} 步的 node -e`);
+      return script;
+    };
+    const run = (script: string) =>
+      spawnSync(process.execPath, ['-e', script], { cwd: root, encoding: 'utf8' });
+
+    const bom = buildSbom(root, { firstPartyLicense: 'MIT' });
+    writeFileSync(join(root, SBOM_FILE), renderSbom(bom));
+    expect(run(step(3)).stdout.split('\n')).toContain('a@1.0.0\tMIT');
+    const same = run(step(4));
+    expect([same.status, same.stdout.trim()]).toEqual([0, '一致：4 顆']);
+
+    writeFileSync(
+      join(root, SBOM_FILE),
+      renderSbom({
+        ...bom,
+        components: bom.components.filter((entry) => entry.name !== 'native-linux'),
+      }),
+    );
+    const missing = run(step(4));
+    expect([missing.status, missing.stdout.trim()]).toEqual([
+      1,
+      'SBOM 漏了：native-linux@2.0.0\nSBOM 多了：',
+    ]);
+  });
+
   it('核對用的列法不走相依圖：列 .pnpm 裡實際裝了的，加上根', () => {
     expect([...listInstalledPackages(root)].sort()).toEqual([
       '@nexus/core@0.0.0',
@@ -675,6 +766,10 @@ describe('SBOM（#1545 步驟 4、驗收 6）', () => {
     expect(() => cycloneDxLicense(undefined, 'x@1')).toThrow(/沒有字串 license/u);
     expect(() => cycloneDxLicense('SEE LICENSE IN LICENSE.md', 'x@1')).toThrow(/不是合法的 SPDX/u);
     expect(cycloneDxLicense('Apache-2.0', 'x@1')).toEqual({ license: { id: 'Apache-2.0' } });
+    // CycloneDX 的 id 只收 SPDX 清單上的值：LicenseRef 放 name。
+    expect(cycloneDxLicense('LicenseRef-Proprietary', 'x@1')).toEqual({
+      license: { name: 'LicenseRef-Proprietary' },
+    });
     expect(cycloneDxLicense('GPL-2.0-or-later WITH Classpath-exception-2.0', 'x@1')).toEqual({
       expression: 'GPL-2.0-or-later WITH Classpath-exception-2.0',
     });

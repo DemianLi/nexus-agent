@@ -61,8 +61,20 @@ const DEV_TOOLS = /^(tsx|vitest|eslint|typescript|tsdown|vite|prettier|playwrigh
 export const SBOM_FILE = 'sbom.cdx.json';
 
 /**
- * 產物根一定要有的檔。`LICENSE` 與 `THIRD_PARTY_NOTICES.md` 照 dsh `scripts/build-python-release.py:178-195` 的
- * `stage_license_files`（兩份一起複製進產物）與 `:260-265`（驗產物裡兩份都在）。
+ * 產物 manifest（產物根的 `package.json`，即 `apps/harness/package.json`）的 `license` 該是什麼，照 dsh
+ * `scripts/build-python-release.py:256-259`（`687f282e`）驗 `License-Expression == "MIT"`。
+ */
+const PRODUCT_LICENSE = 'MIT';
+
+/**
+ * 產物根一定要有的檔。授權檔照 dsh `scripts/build-python-release.py`（`687f282e`）的三件事：
+ *
+ * 1. **複製**（`:180`、`:183`）：`LICENSE` 與 `THIRD_PARTY_NOTICES.md` 複製進產物，我們在 `pack.ts`。
+ * 2. **宣告**（`:185-195`）：把 `license-files` 寫進 pyproject。**偏離，理由 1**：npm 的 manifest 沒有對應 `license-files`
+ *    的欄位。退到：manifest 的 `license` 欄位（{@link PRODUCT_LICENSE}）加上這裡的必備檔檢查。撤除條件：產物改經 package
+ *    manager 安裝、有對應欄位時。
+ * 3. **驗證**：`:256-259` 驗 `License-Expression == "MIT"`，我們驗產物 manifest 的 `license`（{@link collectPayloadViolations}）；
+ *    `:260-265` 驗 `License-File` 清單，我們驗兩份都在產物根（這份清單）。
  */
 const REQUIRED_FILES = [
   'package.json',
@@ -178,6 +190,17 @@ export function collectPayloadViolations(
 
   for (const file of REQUIRED_FILES) {
     if (!existsSync(join(root, file))) violations.push({ path: file, message: '產物缺這個檔' });
+  }
+  // 照 dsh `build-python-release.py:256-259` 的 `License-Expression == "MIT"`，見 {@link REQUIRED_FILES} 的三件事。
+  const manifestPath = join(root, 'package.json');
+  if (existsSync(manifestPath)) {
+    const { license } = JSON.parse(readFileSync(manifestPath, 'utf8')) as { license?: unknown };
+    if (license !== PRODUCT_LICENSE) {
+      violations.push({
+        path: 'package.json',
+        message: `產物 manifest 的 license 是 ${JSON.stringify(license)}，應為 ${PRODUCT_LICENSE}`,
+      });
+    }
   }
   if (existsSync(join(root, 'src'))) {
     violations.push({ path: 'src', message: '產物根不收 src/（只收編好的 lib/）' });

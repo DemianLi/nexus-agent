@@ -482,7 +482,9 @@ export HTTP_PROXY=http://127.0.0.1:7890
 | `nexus-agent-<版本>-linux-x64.cdx.json.sha256` | SBOM 的雜湊 |
 
 tarball 裡另有 `LICENSE`、`THIRD_PARTY_NOTICES.md`（第三方授權清單）和 `sbom.cdx.json`，最後這份與 Release 附的那份位元組相同。
-以下全程離線，主機上只要有 Node（產物本來就要它）：
+以下全程離線，主機上只要有 Node（產物本來就要它）。第 1、2 步在放這四個檔的下載目錄裡執行。SBOM 列的是 linux-x64 版的
+閉包，平台套件（原生二進位、內附的 ripgrep）也是 linux-x64 那一版：Release 只出這一個平台。第 4 步有測試盯著
+（`apps/harness/src/release-scripts.test.ts`），改它要讓那條測試照樣過：
 
 <!-- verify-install:start -->
 ```bash
@@ -494,7 +496,7 @@ cmp /opt/nexus-agent/nexus-agent-<版本>-linux-x64/sbom.cdx.json nexus-agent-<�
 
 # 3. 列出閉包裡的每一顆（名字@版本、授權），拿去對機關的弱點資料庫
 cd /opt/nexus-agent/nexus-agent-<版本>-linux-x64
-node -e 'const b=require("./sbom.cdx.json");for(const c of [b.metadata.component,...b.components])console.log(`${c.group?c.group+"/":""}${c.name}@${c.version}\t${c.licenses.map(l=>l.expression??l.license.id).join(" ")}`)'
+node -e 'const b=require("./sbom.cdx.json");for(const c of [b.metadata.component,...b.components])console.log(`${c.group?c.group+"/":""}${c.name}@${c.version}\t${c.licenses.map(l=>l.expression??l.license.id??l.license.name).join(" ")}`)'
 
 # 4. 主機上實際裝著的套件與 SBOM 逐顆對：印「一致」並以 0 結束；有漏或多就列出來、以 1 結束
 node -e '

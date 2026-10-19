@@ -120,7 +120,8 @@ export function pack(options: { out: string; skipBuild?: boolean; commit?: strin
       join(staging, 'build-stamp.json'),
       `${JSON.stringify({ commit, dirty }, null, 2)}\n`,
     );
-    // 照 dsh `scripts/build-python-release.py:178-195` 的 stage_license_files：LICENSE 與第三方授權清單一起進產物。
+    // 授權檔照 dsh `scripts/build-python-release.py` 的三件事（`payload.ts` 的 REQUIRED_FILES 有全文）：這裡是「複製」
+    // （`:180`、`:183`）；「宣告」（`:185-195`）偏離理由 1，退到 manifest 的 `license`；「驗證」（`:256-259`、`:260-265`）在 payload。
     for (const file of ['LICENSE', 'THIRD_PARTY_NOTICES.md']) {
       copyFileSync(join(ROOT, file), join(staging, file));
     }

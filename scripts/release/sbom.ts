@@ -174,7 +174,8 @@ export function integrityToHashes(integrity: string): CycloneDxHash[] {
 }
 
 /** CycloneDX 的授權欄位：單一 SPDX id 用 `license.id`，運算式用 `expression`。 */
-export type CycloneDxLicense = { license: { id: string } } | { expression: string };
+export type CycloneDxLicense =
+  { license: { id: string } } | { license: { name: string } } | { expression: string };
 
 /**
  * manifest 的 `license` 轉成 CycloneDX 的授權。
@@ -192,7 +193,10 @@ export function cycloneDxLicense(license: unknown, name: string): CycloneDxLicen
     throw new Error(`SBOM：${name} 的 license 不是合法的 SPDX 運算式：${JSON.stringify(license)}`);
   }
   if ('license' in parsed && parsed.exception === undefined && parsed.plus !== true) {
-    return { license: { id: parsed.license } };
+    // CycloneDX 的 `license.id` 只收 SPDX 清單上的 id；`LicenseRef-*`／`DocumentRef-*` 不在清單上，放 `name`。
+    return /^(?:LicenseRef|DocumentRef)-/u.test(parsed.license)
+      ? { license: { name: parsed.license } }
+      : { license: { id: parsed.license } };
   }
   return { expression: license };
 }
@@ -286,9 +290,16 @@ export function buildSbom(
     options.firstPartyLicense ?? repoLicense(readFileSync(join(ROOT, 'LICENSE'), 'utf8'));
   const [rootPackage, ...rest] = walkClosure(root);
   if (rootPackage === undefined) throw new Error('SBOM：產物根讀不到 package.json');
-  const components = rest
-    .map((pkg) => component('library', pkg, integrities, firstPartyLicense))
-    .sort((a, b) => (a.purl < b.purl ? -1 : a.purl > b.purl ? 1 : 0));
+  // 同一個 name@version 可能裝成幾個 peer 變體目錄（`walkClosure` 依目錄回）：purl 與 integrity 都一樣，只收一份，
+  // `bom-ref`（＝purl）才唯一。
+  const byPurl = new Map<string, CycloneDxComponent>();
+  for (const pkg of rest) {
+    const entry = component('library', pkg, integrities, firstPartyLicense);
+    if (!byPurl.has(entry.purl)) byPurl.set(entry.purl, entry);
+  }
+  const components = [...byPurl.values()].sort((a, b) =>
+    a.purl < b.purl ? -1 : a.purl > b.purl ? 1 : 0,
+  );
   return {
     bomFormat: 'CycloneDX',
     specVersion: '1.6',
