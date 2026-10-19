@@ -44,6 +44,11 @@
  *    收回在**會話參與者**裡做（`start` 只回 `narrowed` 描述）：沙箱與核准的參與者排在前面、每次接上都把控制器釘到日誌的值，宿主在 `start`
  *    之後切控制器會被它們蓋回去。寫事件的順序照 `/permission`（`permission/preset` → `sandbox/mode` → `approval/policy`，只寫真的變了的）；
  *    沒有新事件種類、日誌格式不動。**撤除條件**：沒有（出廠表沒有全開這件事一天不變，這條就一天要在）。
+ *    **為什麼目標不照 dsh 的 `inferredDefault`**（理由 1）：dsh 的預設組是 `config.defaultPreset ?? inferredDefault`，`inferredDefault` 由行程起始的沙箱與核准推出
+ *    （`packages/interaction/permission-presets/src/index.ts:222-231`，`687f282e`）；寫事件的參與者拿不到行程的 `--sandbox`，root 的 `SessionAddress` 也沒有
+ *    thread 鍵可以對回 `start`，所以退到「`defaultPreset`，沒設取沙箱最寬的一組」。兩種規則只有一格結果不同：`--sandbox read-only` 起動、沒設
+ *    `defaultPreset`、日誌記著全開——照 dsh 收到 `read-only`，照這裡收到 `workspace-write`（要收得更窄就設 `defaultPreset`）。
+ *    dsh 的對照點：續接時保留日誌裡的值是 `:446-455`（`pinInitialPermission` 後半），續接時拒絕的前例是 `:431-436`（`auto` 在續接時拋錯）。
  *
  * ## 形狀（#1491：第十四顆搬上 Cordis 樹的插件）
  *

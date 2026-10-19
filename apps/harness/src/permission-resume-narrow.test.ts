@@ -11,7 +11,7 @@
  * 三層：
  * - **組裝**（`createCliAgent` ＋ `attachSession`）：事件的順序與數量、投影、`permissionNarrowed`。
  * - **serve／CLI**：真的 `runServe` 兩台、真的 `runCli --resume`：warn 那一行、web 看到的投影、下一次寫檔的 fence。
- * - **寬窄序**：插件自己放一份（不 import `@nexus/plugin-sandbox-policy`），對照 `WIDER_MODES` 釘住。
+ * - **寬窄序**：插件自己放一份（不 import `@nexus/plugin-sandbox-policy`），對照 `isStrictlyWider`（背後是 `WIDER_MODES`）逐格釘住。
  */
 
 import { existsSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';

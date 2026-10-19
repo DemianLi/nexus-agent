@@ -317,7 +317,8 @@ export { recordedSandboxMode, SandboxModeController } from './sandbox-mode.js';
  *
  * 出成公開面是因為**驗收句要對著同一份字串**：走得到產品路徑的那些斷言住在
  * `@nexus/harness` 的 `sandbox-escalation.test.ts`（它們要跑得起一個 agent），
- * 各自複製一份措辭的話，改了話而忘了改測試就會靜靜地綠。
+ * 各自複製一份措辭的話，改了話而忘了改測試就會靜靜地綠。`isStrictlyWider` 也在這一組，是給測試對照用的：`@nexus/plugin-permission-presets`
+ * 自留了一份沙箱寬窄序（它不 import 這個套件），`permission-resume-narrow.test.ts` 逐格對照兩邊。
  */
 export {
   BLANK_JUSTIFICATION_REFUSAL,

@@ -90,7 +90,7 @@ export interface PermissionKnobs {
 
 /**
  * 沙箱模式的寬窄序，越大越寬。**自己放一份、不 import `@nexus/plugin-sandbox-policy` 的 `WIDER_MODES`**：那是 #1491 Q1 (a) 拿掉的相依
- * （權限組合這一列不認識沙箱政策那一列）。兩邊一致由 harness 的 `permission-presets.test.ts` 對照 `WIDER_MODES` 釘住，改一邊另一邊不改就紅。
+ * （權限組合這一列不認識沙箱政策那一列）。兩邊一致由 harness 的 `permission-resume-narrow.test.ts`（「寬窄序」那一組）對照 `@nexus/plugin-sandbox-policy` 匯出的 `isStrictlyWider`（背後就是 `WIDER_MODES`）逐格釘住，改一邊另一邊不改就紅。
  */
 const SANDBOX_WIDTH: Readonly<Record<SandboxMode, number>> = {
   'read-only': 0,

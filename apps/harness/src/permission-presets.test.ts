@@ -216,7 +216,7 @@ describe('`/permission` 是切換的唯一入口', () => {
   });
 });
 
-describe('續接不重新套預設', () => {
+describe('續接不重新套預設（但比表裡每一組都寬的沙箱會被收回，#1621 第 2 步）', () => {
   it('日誌記著全開沙箱、沒記核准（#437 以前的日誌）：收回預設組，核准照 `ask` 起算、不被推成 `never`', async () => {
     // 兩條產品路徑的續接把 `approvalPolicy` 給滿（記著的，沒記就 `ask`）；這裡照那個形狀呼叫。
     const built = await createCliAgent(
