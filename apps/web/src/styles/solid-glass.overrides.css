@@ -81,7 +81,7 @@
 }
 
 /*
- * SG 把 ring 帶回來的那條（`solid-glass.css:857-860`）壓回去（D′，#1512）：它的選擇器 specificity 比上面那條 `:focus-visible` 高，
+ * SG 把 ring 帶回來的那條（`solid-glass.css:859-862`）壓回去（D′，#1512）：它的選擇器 specificity 比上面那條 `:focus-visible` 高，
  * 光靠後載入蓋不掉，所以**照抄同一段選擇器**、同 specificity、後載入。焦點的樣子仍只有那一圈文字色的外框（Q5）。
  * `src/styles/focus-ring-suppression.test.ts` 列舉 vendor 檔裡每一條把 ring 設成非透明的宣告，每一條都要在這裡有壓制；
  * 上游升版多出新的，那條會紅。瀏覽器那一層（`guard/`）量聚焦後的 `box-shadow`。
@@ -95,7 +95,7 @@
 
 /*
  * 欄位聚焦的邊框換回字色（#1512，PM 定 (b)）：SG 把輸入欄位聚焦時的邊框畫成 `--focus-line`（亮 50% 灰、暗 40% 白，
- * `solid-glass.css:944-948`；一次性密碼格 `:951-955` 是內側 1px），而 Q5 寫明焦點用字色——Q8「外觀照 SG」碰到 Q5 涵蓋的項目時以 Q5 為準。
+ * `solid-glass.css:946-950`；一次性密碼格 `:953-957` 是內側 1px），而 Q5 寫明焦點用字色——Q8「外觀照 SG」碰到 Q5 涵蓋的項目時以 Q5 為準。
  * 灰線對外側雖過 3，亮色聚焦前後的邊框只差 2.5。照抄同一段選擇器、後載入，只換顏色。
  * `src/styles/focus-line-suppression.test.ts` 列舉 vendor 檔裡每一條用到 `var(--focus-line)` 的宣告，每一條都要在這裡被蓋掉；
  * 瀏覽器那一層（`guard/`）量欄位聚焦後的 `border-color`。不讓 Prettier 排版，理由同上。
@@ -115,7 +115,7 @@
 /*
  * 輸入框群組的焦點外框畫在群組上（#1279；#1523 換成 vendor 版起寫在這裡，README 本地修改第 15 條）：裡面的 input／textarea
  * 自帶 `outline-none`、沒有邊框，焦點只能畫在外面那個群組。vendor 的群組（`vendor/solid-glass/components/ui/input-group.tsx:17`）
- * 只有 `outline-none` 加 `has-[…:focus-visible]:ring-3`，沒有外框；ring 已由 SG 自己清掉（`solid-glass.css:944-948`，
+ * 只有 `outline-none` 加 `has-[…:focus-visible]:ring-3`，沒有外框；ring 已由 SG 自己清掉（`solid-glass.css:946-950`，
  * 不是無效的欄位時），這裡只補 Q5 的那一圈：2px 字色、offset 2px（offset 在上面的 base layer），跟全站其他焦點同一個樣子。
  * 外框寫在 layer 外，群組自帶的 `outline-none`（utilities layer）擋不掉。`registry-edits.test.ts` 釘住這條與 vendor 原文；
  * 瀏覽器那一層（`guard/`）量群組聚焦後的外框與 `box-shadow`。不讓 Prettier 排版，理由同上。
@@ -132,7 +132,7 @@
  * （`vendor/solid-glass/components/ui/input-group.tsx:17`）編成 `:has(:disabled)`，群組裡任何一個後代停用就命中——
  * 輸入框（`composer.tsx`）沒字時送出鈕是停用的，整個框就變成 50%。這裡保留 develop 的語意：按鈕停用不算，
  * 欄位（`input-group-control`）停用時照 vendor 變淡。底色那一半（`has-disabled:bg-input/50`、暗色 /80）本來就被
- * `solid-glass.css:917-930` 寫在 layer 外的 `background-color: var(--field)` 蓋掉，不用處理。
+ * `solid-glass.css:919-932` 寫在 layer 外的 `background-color: var(--field)` 蓋掉，不用處理。
  * 寫在 layer 外才蓋得過 utilities layer；`guard/` 量送出鈕停用的群組 opacity 是 1。不讓 Prettier 排版，理由同上。
  */
 /* prettier-ignore */
@@ -160,7 +160,7 @@
 
 /*
  * 貼在輸入框上方的卡片是平的（#1512，PM 定）：`Surface tone="docked"`（待辦、送出佇列、目標列）接在輸入框上、不浮在對話裡，
- * 所以只畫一圈 1px 細線、不帶投影（`components/surface.tsx` 檔頭）。SG 的 `.bg-card`（`solid-glass.css:378-391`）把 border 歸零、
+ * 所以只畫一圈 1px 細線、不帶投影（`components/surface.tsx` 檔頭）。SG 的 `.bg-card`（`solid-glass.css:380-393`）把 border 歸零、
  * 套上浮起來的整組陰影，docked 會變得跟 raised 一樣；這裡用 docked 專屬的屬性把平線補回來（Q8：機制類保留）。底色與 blur 照 SG。
  * `solid-glass-overrides.test.ts` 釘住勝出的是這條；瀏覽器那一層（`guard/`）量 docked 的 border 與陰影。
  */
@@ -220,9 +220,9 @@ body {
 
 /*
  * 手機左側欄的抽屜只留陰影、不畫邊（#1583，PM 定；README 本地修改第 21 條）：vendor 的 sheet（`vendor/solid-glass/components/ui/sheet.tsx:54`）
- * 同時帶 `data-[side=*]:border-*` 與 `shadow-lg`。SG 只在 `.bg-popover`（`solid-glass.css:394-402`）把邊歸零，`.bg-sidebar` 只給 blur
- * （`:363-369`），所以手機左側欄（`ui/sidebar.tsx` 傳 `bg-sidebar`）會邊與陰影一起畫，違反規格 §5。寫在 layer 外，蓋得過 utilities 層的邊；
- * 手機側欄的 `SheetContent` 帶著 `data-slot="sidebar"`（`ui/sidebar.tsx` 傳的，排在 vendor 的 `data-slot="sheet-content"` 後面，蓋掉它），
+ * 同時帶 `data-[side=*]:border-*` 與 `shadow-lg`。SG 只在 `.bg-popover`（`solid-glass.css:396-404`）把邊歸零，`.bg-sidebar` 只給 blur
+ * （`:365-371`），所以手機左側欄（vendor `components/ui/sidebar.tsx` 傳 `bg-sidebar`）會邊與陰影一起畫，違反規格 §5。寫在 layer 外，蓋得過 utilities 層的邊；
+ * 手機側欄的 `SheetContent` 帶著 `data-slot="sidebar"`（vendor `components/ui/sidebar.tsx` 傳的，排在 vendor 的 `data-slot="sheet-content"` 後面，蓋掉它），
  * 所以選擇器兩種都列。瀏覽器那一層（`guard/`）量抽屜的 border 寬是 0。不讓 Prettier 排版，理由同上。
  */
 /* prettier-ignore */
@@ -231,8 +231,8 @@ body {
 }
 
 /*
- * tooltip 與遮罩也走不透明退路（#1583；README 本地修改第 22 條）：SG 的不透明退路（`solid-glass.css:1166-1182`）只列 `.bg-card`、
- * `.bg-popover`、`.bg-sidebar`、`.glass-panel`、`.glass-control`，沒有 tooltip（`:815-825` 自己給 blur）與 dialog／sheet 的遮罩
+ * tooltip 與遮罩也走不透明退路（#1583；README 本地修改第 22 條）：SG 的不透明退路（`solid-glass.css:1168-1184`）只列 `.bg-card`、
+ * `.bg-popover`、`.bg-sidebar`、`.glass-panel`、`.glass-control`，沒有 tooltip（`:817-827` 自己給 blur）與 dialog／sheet 的遮罩
  * （vendor 的 `supports-backdrop-filter:backdrop-blur-xs`）。照 SG 那段的兩種條件補上：`data-glass="opaque"` 與 `prefers-reduced-transparency`。
  * alert-dialog 的遮罩同一個寫法，一起列（#1583 PR 2 擴充）。
  * 面的顏色由 SG 那段換成不透明值（tooltip 用 `--popover`），這裡只拿掉 blur。寫在 layer 外；`guard/` 量這幾個的 `backdrop-filter`。
@@ -429,7 +429,7 @@ body {
 /*
  * 問答選項的焦點外框畫在選項上（#1638 PR C，卡上驗收 D；README 本地修改第 46 條）：vendor 的 `QuestionnaireChoice`
  * （`vendor/solid-glass/components/ui/questionnaire.tsx:109`）把真的 input 鋪滿選項、`opacity-0`，聚焦的樣子只有
- * `has-[>input:focus-visible]:border-ring` 與 `ring-3`；而 SG 自己的玻璃規則（`solid-glass.css:767-779`）在 layer 外寫了選項的
+ * `has-[>input:focus-visible]:border-ring` 與 `ring-3`；而 SG 自己的玻璃規則（`solid-glass.css:769-781`）在 layer 外寫了選項的
  * `border-color` 與 `box-shadow`，兩樣都被蓋掉，input 上的外框又看不見——鍵盤聚焦時什麼都沒畫（違反 #1497 Q5）。跟第 15、30 條
  * 同一個做法：2px 字色、offset 2px，外框寫在 layer 外，offset 在 base layer。`registry-edits.test.ts` 釘住這條與 vendor 原文，
  * `guard/` 量聚焦後的外框、offset 與 `box-shadow` 不變。不讓 Prettier 排版，理由同上。
@@ -471,4 +471,68 @@ body {
 /* prettier-ignore */
 [data-slot="attachment-title"]:not(.dark *) {
   --shimmer-color: var(--muted-foreground);
+}
+
+/*
+ * 工具列執行中不閃（#1682 PM 決定 Q1；README 本地修改第 61 條）：vendor 的 `StepRow`（`vendor/solid-glass/components/ui/tool-steps.tsx`）
+ * 在 `status === "running"` 時給整顆按鈕 `animate-pulse`，波谷 opacity .5 時次要字的對比亮色約 2.0、暗色約 2.75，過不了 §5 的 4.5。
+ * Q5 優先於 Q8（先例第 48 條）：動畫停掉，執行中由 trailing 裡的狀態字「執行中」表示（§7：狀態不能只靠動效）。選擇器錨在 vendor 的
+ * class 上，寫在 layer 外；`registry-edits.test.ts` 釘 vendor 仍是 `animate-pulse`，`guard/` 量執行中那一列的 `animation-name`。
+ */
+/* prettier-ignore */
+[data-slot="step-row"] > button.animate-pulse {
+  animation-name: none;
+}
+
+/*
+ * 工具結果框聚焦時外框畫在框上（#1682；README 本地修改第 62 條）：patch `0019` 讓 `OutputBlock` 的 `pre` 聚焦得到（它可以捲，
+ * 鍵盤要停得上去），可是外層 `data-slot="output-block"` 是 `overflow-hidden`，`pre` 自己的外框（offset 2px）會被切掉。
+ * 跟第 30 條同一個做法：2px 字色、offset 2px，外框寫在 layer 外、offset 在 base layer。`guard/` 量聚焦後外層的外框。
+ */
+@layer base {
+  [data-slot='output-block']:has(> pre:focus-visible) {
+    outline-offset: 2px;
+  }
+}
+
+/* prettier-ignore */
+[data-slot="output-block"]:has(> pre:focus-visible) {
+  outline: 2px solid var(--ring);
+}
+
+/*
+ * 工具列與群組那一列在 1024 以下 44px（規格 §9，#1682；README 本地修改第 63 條）：vendor 的按鈕只有一行字高（`lineClass`）。
+ * 選擇器錨在 `data-slot`，寫在 layer 外；1024 以上照 SG。`guard/` 在 375 與 1280 寬各量一次。
+ */
+/* prettier-ignore */
+@media (width < 64rem) {
+  [data-slot="step-row"] > button,
+  [data-slot="step-group"] > button {
+    min-height: 2.75rem;
+  }
+}
+
+/*
+ * 減少動態時工具列的箭頭不轉場（#528 的規則，#1682；README 本地修改第 64 條）：vendor 的箭頭 `transition-transform`，打開時轉 90°。
+ * 寫在 layer 外，蓋得過 utilities 層。`guard/` 在模擬 reduced-motion 下量計算值。
+ */
+/* prettier-ignore */
+@media (prefers-reduced-motion: reduce) {
+  [data-slot="step-row"] > button > svg,
+  [data-slot="step-group"] > button > svg {
+    transition-duration: 0s;
+  }
+}
+
+/*
+ * 疊在工具清單上的結果框不再 blur（#1682 驗收 D，PM 裁決 ①；README 本地修改第 65 條）：`StepList` 與 `OutputBlock` 都是
+ * `glass-panel`（`backdrop-filter: var(--glass-blur)`），展開的列把結果框畫在清單裡，就是玻璃疊玻璃。12 列全部展開、串流中捲動，
+ * 關 GPU 加 CPU 4 倍下 vsync p95 是 2（掉幀 23–30%）；只拿掉這一層是 1（issuecomment-6256296211）。結果框底下本來就是 blur 過的清單，
+ * 再 blur 一次畫面上幾乎看不出來；背景色、邊線、陰影照 SG。清單本身與單獨放在頁面上的結果框照 SG 保留 blur。
+ * 寫在 layer 外，蓋得過 vendor 的 `.glass-panel`。`guard/` 量疊在清單裡的是 `none`、單獨放的不是。
+ */
+/* prettier-ignore */
+[data-slot="step-list"] [data-slot="output-block"] {
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
 }

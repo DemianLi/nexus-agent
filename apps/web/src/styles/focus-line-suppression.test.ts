@@ -20,7 +20,7 @@ const cascade = readCascade();
 const USES = vendor.declarations.filter((d) => d.value.includes('var(--focus-line)'));
 
 describe('SG 用 --focus-line 畫的焦點都換成字色', () => {
-  test('vendor 檔裡用到 --focus-line 的宣告：ring 2 條（:857-860）、欄位邊框 3 條（:944-948）、一次性密碼格 1 條（:951-955）', () => {
+  test('vendor 檔裡用到 --focus-line 的宣告：ring 2 條（:859-862）、欄位邊框 3 條（:946-950）、一次性密碼格 1 條（:953-957）', () => {
     expect(USES.map((d) => `${d.property} @ ${d.selector}`)).toEqual([
       '--tw-ring-shadow @ :is([class*="focus-visible:ring-3"], [class*="focus-visible:ring-[3px]"]):focus-visible:not([data-slot="input"]):not([data-slot="textarea"]):not([data-slot="select-trigger"]):not([data-slot="native-select"]):not([data-slot="sidebar-input"]):not([aria-invalid="true"])',
       '--tw-ring-shadow @ [data-slot="calendar"] [data-focused="true"] > :is(button, [data-slot="button"])',

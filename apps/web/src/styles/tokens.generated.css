@@ -17,7 +17,7 @@
   --stage: oklch(0.9423 0 0);
   --chip: oklch(0.8812 0 0);
   --chip-hover: oklch(0.8729 0 0);
-  --chip-pressed: oklch(0.8511 0 0);
+  --chip-pressed: oklch(0.8628 0 0);
   --card-hairline: oklch(0 0 0 / 0.141);
   --ring: oklch(0.16 0 0);
   --sidebar-ring: oklch(0.16 0 0);
@@ -34,13 +34,13 @@
   --border: oklch(1 0 0 / 11%);
   --primary-hover: oklch(0.931 0 0);
   --primary-active: oklch(0.8822 0 0);
-  --warning: oklch(0.628 0.16 52.25);
+  --warning: oklch(0.641 0.1635 52.25);
   --info: oklch(0.62 0.1995 258.86);
   --brand-soft: oklch(0.78 0.13 166 / 0.12);
   --stage: oklch(0.2119 0 0);
   --chip: oklch(0.2289 0 0);
   --chip-hover: oklch(0.239 0 0);
-  --chip-pressed: oklch(0.2635 0 0);
+  --chip-pressed: oklch(0.2507 0 0);
   --card-hairline: oklch(0.8203 0 0 / 0.145);
   --ring: oklch(0.985 0 0);
   --sidebar-ring: oklch(0.985 0 0);

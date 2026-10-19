@@ -3,7 +3,7 @@
  * https://ui.shadcn.com/r/styles/new-york-v4/sidebar.json），shadcn CLI 4.21.0。裝進來就是我們的原始碼。
  * 改過的地方：
  * - 斷點 768 → **1024**（`.docs/web-ui-spec.md` §9）：768 是驗收寬度，不改會顯示成桌面側欄。
- *   `components/ui/sidebar.tsx` 的 `md:` 也跟著換成 `lg:`，兩邊要一起改。
+ *   sidebar 的 `md:` 也跟著換成 `lg:`，兩邊要一起改（#1680 起是 vendor 本地修改第 52 條，`patches/0012-sidebar-lg-breakpoint.patch`）。
  * - 沒有 `matchMedia`（jsdom）時當成桌面，不拋錯；有的話第一次 render 就讀，不先畫一格桌面版。
  */
 import * as React from 'react';

@@ -452,11 +452,15 @@
 # （Linux 的 cgroup：先解 `/proc/self/cgroup` 讀行程自己所在的那個，v2 與 v1）、主機（`/proc/meminfo` 的 `MemAvailable`，沒有才退到 `os.freemem()` 並標出來）；
 # **讀不到的來源明說讀不到與原因，不回 0**。**只讀、只講**，不拒收、不逐出、不下架。要看就在自己的 `~/.nexus-agent/cordis.patch.yml`
 # 把 `reportIntervalMs` 設成例如 60000。起動期讀一次、改了要重啟。
+# **用量警告（#1493，保險絲第 0 級）**：取樣開了之後，每次讀數都和 `warnAtPercent`（1 到 99 的整數，預設 75）比——有 cgroup 上限用 `memory.current ÷ memory.max`
+# （上限在祖先 cgroup 時用行程受限的值），沒有就用主機的 `(總量 − 可用) ÷ 總量`（可用只認 `MemAvailable`，退到 `os.freemem` 就當讀不到，所以 macOS 上整個不警告）；`memory.current` 含 page cache 會略高估；嚴格超過就在日誌寫一行 `[記憶體] 警告：…`（講用的是哪個來源、百分比、現在幾條 thread、下一步），
+# 降到「門檻 − 5」以下才寫一行 `已恢復`，之間不重複。來源讀不到就不判斷，從可讀變成讀不到時講一次。**只警告，不做任何動作**。取樣關著（預設）就整段不建。
 # **偏離登記：產品需求超出 dsh**（dsh `687f282e` 沒有執行期記憶體監看；讀 cgroup 的方法照 dsh bench），逐點見 `src/memory-gauge.ts` 的檔頭。這一列關得掉（預設就是關）。
 - id: memory-gauge
   name: '#settings/memory-gauge'
   config:
     reportIntervalMs: 0
+    warnAtPercent: 75
 
 # 瀏覽器 cookie 的絕對有效期（#424）。dsh 那側是 plugin 設定 `cookieMaxAgeDays`，預設同樣是 30
 # ——這一列補上的正是 `browser-auth.ts` 原本登記的那條偏離（「寫死 30 天，不能設定」）。

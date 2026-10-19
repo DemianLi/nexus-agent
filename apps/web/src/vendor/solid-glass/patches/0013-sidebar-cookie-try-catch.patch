@@ -1,0 +1,17 @@
+===================================================================
+--- a/components/ui/sidebar.tsx
++++ b/components/ui/sidebar.tsx
+@@ -85,7 +85,12 @@
+       }
+ 
+       // This sets the cookie to keep the sidebar state.
+-      document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
++      // 沙盒 iframe 裡寫 cookie 會拋 SecurityError；記不住開關不影響畫面。
++      try {
++        document.cookie = `${SIDEBAR_COOKIE_NAME}=${openState}; path=/; max-age=${SIDEBAR_COOKIE_MAX_AGE}`
++      } catch {
++        // 記不住側欄開關不影響畫面
++      }
+     },
+     [setOpenProp, open]
+   )

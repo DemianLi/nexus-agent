@@ -80,7 +80,10 @@ export function StatusLine({
   state: ConversationState;
   connected: boolean;
   connectionError?: string;
-  /** 下行被伺服器明說不收時給人看的話，取代斷線那一行（見 `lostText`）。 */
+  /**
+   * 下行被伺服器明說不收時給人看的話。還在重試（thread 數滿了）就取代斷線那一行（見 `lostText`）；
+   * 不重試（子代理的會話，[#1708](https://github.com/DemianLi/nexus-agent/issues/1708)）就單獨一行，沒有「立刻重連」。
+   */
   refusal?: string;
   /** 下行斷了、正在自動重接（見 `useConversation` 的 `reconnecting`）。 */
   reconnecting?: { readonly wasConnected: boolean; readonly offline: boolean };
@@ -110,6 +113,13 @@ export function StatusLine({
           </Button>
         )}
       </div>
+    );
+  }
+  if (refusal !== undefined) {
+    return (
+      <p className="text-warning text-body" role="status">
+        {refusal}
+      </p>
     );
   }
   if (connectionError !== undefined) {

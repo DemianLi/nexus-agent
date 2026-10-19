@@ -398,7 +398,7 @@ describe('一行日誌', () => {
       ),
     );
     expect(line).toBe(
-      '記憶體：行程 RSS 100.0 MiB、heap 40.0 MiB／60.0 MiB；cgroup v2 / 512.0 MiB／4096.0 MiB；主機可用 8000.0 MiB／16000.0 MiB（MemAvailable）',
+      '記憶體：行程 RSS 100.0 MiB、heap 已用 40.0 MiB／已提交 60.0 MiB；cgroup v2 / 512.0 MiB／4096.0 MiB；主機可用 8000.0 MiB／16000.0 MiB（MemAvailable）',
     );
   });
 

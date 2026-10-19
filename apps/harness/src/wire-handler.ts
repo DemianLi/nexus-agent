@@ -548,6 +548,11 @@ export interface IdleSweepingWireHandler extends WireHandler {
    * 撤完才兌現。內部計時器每隔一段時間呼叫同一支；公開是為了測試用假時鐘決定性地驅動它。沒設 `idleEvictMs` 時什麼也不做。
    */
   sweepIdle(): Promise<void>;
+  /**
+   * 行程裡現在佔著名額的 thread 數（[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)）：`threads.size + closing.size`，
+   * 與 `threadFor` 檢查 {@link WireHandlerOptions.maxThreads} 用的同一個數——建構中的算、撤到一半的也算。只讀，給記憶體警告寫「現在幾條」用。
+   */
+  threadCount(): number;
 }
 
 const JSON_MEDIA_TYPE = 'application/json';
@@ -3413,6 +3418,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       }
     },
     sweepIdle,
+    threadCount: () => threads.size + closing.size,
     async close() {
       // 計時器先停、之後的掃描一律不動作；已經在撤的等它撤完——撤到一半就收線的話，那條的寫租約與子行程沒人收（#1484）。
       closed = true;

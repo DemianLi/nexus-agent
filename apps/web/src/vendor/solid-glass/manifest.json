@@ -2,7 +2,7 @@
   "sources": {
     "solid-glass": {
       "upstream": "https://github.com/deeplethe/solid-glass",
-      "commit": "387c3c2dc2369bc9af19a5c55adc3bd90d529317"
+      "commit": "6e8903e494a15491ceda38fafea5056c95a74d44"
     },
     "shadcn": {
       "upstream": "https://www.npmjs.com/package/shadcn",
@@ -15,7 +15,7 @@
     "solid-glass.css": {
       "source": "solid-glass",
       "from": "src/solid-glass.css",
-      "sha256": "03bc1f32084d39f939039ec7a52d5b7c83b47a9c594f5f3d14826c95c1730cd4"
+      "sha256": "c3c9e4e739f2b3f991d2412c07970f53df4a54f9d416ec3e8e1c0d5261e84bc3"
     },
     "LICENSE": {
       "source": "solid-glass",
@@ -62,12 +62,11 @@
       "from": "src/components/ui/composer.tsx",
       "sha256": "a0a50a49499ec6900d7334cda6fcfa3bfdfdd6e52c575e07ac2ecefad9b2280f",
       "patches": [
-        "patches/0004-composer-textarea-props.patch",
         "patches/0005-composer-combobox.patch",
         "patches/0006-composer-width-resize.patch",
         "patches/0007-composer-pick-trigger.patch"
       ],
-      "upstreamSha256": "9c5481305cae9f7493d1ba61c1e4afb9ddabd005a481fe77cb80b70bd885486b"
+      "upstreamSha256": "fd8244424f03d2aaae9bbd0ab685f823fe3b1da2d9ffaa1597f8fc54cfe0b637"
     },
     "components/ui/context-ring.tsx": {
       "source": "solid-glass",
@@ -170,6 +169,36 @@
       "sha256": "2d40f0b3d9021086eab403fe042df04aff794f4dca5214b13aaf23ce8dd37a50",
       "patches": ["patches/0010-sonner-theme-prop.patch"],
       "upstreamSha256": "0c729f9f1ada0b0bedd9296710cc257dc43559fa6b8cc40f010d129e8ff85fdd"
+    },
+    "components/ui/sidebar.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/sidebar.tsx",
+      "sha256": "231a812d637317874675f08d12b507fcf93659893b23066022fdc32079e61cbf",
+      "patches": [
+        "patches/0011-sidebar-chinese-strings.patch",
+        "patches/0012-sidebar-lg-breakpoint.patch",
+        "patches/0013-sidebar-cookie-try-catch.patch",
+        "patches/0014-sidebar-final-focus.patch",
+        "patches/0015-sidebar-mobile-width.patch"
+      ],
+      "upstreamSha256": "45d425d44b65638d390e9d13b868790bf7f948cf35a5b127c00b3e7a009ccdd1"
+    },
+    "components/ui/tool-steps.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/tool-steps.tsx",
+      "sha256": "60818b617d8d36884ffb89500da9426ae7f2ca9610a8f9c20b16ef78342e6a25",
+      "patches": [
+        "patches/0016-tool-steps-strict-index.patch",
+        "patches/0017-tool-steps-controlled-open.patch",
+        "patches/0018-tool-steps-slots.patch",
+        "patches/0019-tool-steps-output-focus.patch"
+      ],
+      "upstreamSha256": "65d161ca73c2c6ace8782302db0557ef4c101e39c78513f9de3dd00bb986f7bb"
+    },
+    "components/ui/diff-view.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/diff-view.tsx",
+      "sha256": "f2661b83cbd3e3994ae865c3de399ebe8fe136c9d6e5dadd9d44d200438ae00c"
     }
   }
 }

@@ -11,8 +11,10 @@
  *   - `data-guard-shadow`：亮色時量 `box-shadow` 每層投影的透明度。
  *   - `data-guard-surface`：不透明的退路（reduced-transparency、`data-glass="opaque"`）下，量這個面是不是真的不透明、沒有 blur。
  *   - `data-guard-chip`：裡面那顆按鈕平常、滑鼠移上去、清單開著三種狀態各量一次字色對底色（chip 三階，#1512；#1591 起量底列的 Pick）。
+ *   - `data-guard-press`：平常、滑鼠移上去、按著（`:active`）三種狀態各量一次字色對底色：次要字疊在 `chip-hover`、`chip-pressed`
+ *     上的真消費者。
  *   - `data-guard-located`：對話裡被定位的那一則（`[data-slot=message-scroller-item][data-located]`），量圓角真的畫出來。
- *   - `data-guard-glass`：SG 畫成玻璃的按鈕（outline、secondary、glass），量它真的有 `backdrop-filter`：`solid-glass.css:640-677`
+ *   - `data-guard-glass`：SG 畫成玻璃的按鈕（outline、secondary、glass），量它真的有 `backdrop-filter`：`solid-glass.css:642-679`
  *     靠 vendor Button 輸出的 `data-variant` 命中（#1523）。
  *   - `data-guard-expanded`：浮層 Trigger（`render` 接 Base UI 的 Button）開著時（`trigger`）跟沒開的（`reference`）比底色：
  *     Trigger 開著時掛 `data-popup-open` 與 `aria-expanded="true"`，SG 用後者把它畫成按下去的樣子（#1523 混合期起量，#1583 換成 Base UI）。
@@ -42,6 +44,9 @@
  * - `?overlay=messages` 畫產品的對話區（`Transcript`，#1638 PR B）：人與 AI 輪流十二則、最後一則 AI 被停止（帶表尾），高度固定、
  *   內容超出，量泡泡字與表尾的對比、捲到最新的按鈕（焦點、動效、reduced-motion）、每一則的 `content-visibility`、外殼的行高、底部淡出。
  * - `?overlay=questionnaire` 畫產品的提問面板（#1638 PR C），量選項的焦點外框（offset、不帶 ring）與字的對比。
+ * - `?overlay=tool-steps` 畫 SG 的 tool-steps（nexus 的包裝層，#1682 PR A）：一段展開的群組（執行中、完成、失敗各一列，完成與失敗的列展開）
+ *   與一列單獨放在頁面上、展開的列。量執行中不閃、結果框聚焦的外框、1024 以下 44px、減少動態時箭頭不轉場、疊在清單裡的結果框不 blur
+ *   （README 本地修改第 61–65 條）。兩塊各包一層 `data-guard-tool`（`group`、`standalone`）給 `guard.test.ts` 找。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -61,6 +66,7 @@ import { createRoot } from 'react-dom/client';
 
 import { Counts } from '@/components/changes/counts';
 import { CompactionRow } from '@/components/compaction-row';
+import { SessionUsage } from '@/components/cost/session-usage';
 import { Composer } from '@/components/composer';
 import { ContextMeter } from '@/components/context-meter';
 import { PendingSwap } from '@/components/pending-swap';
@@ -138,14 +144,19 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import {
   Sidebar,
+  SidebarInput,
+  SidebarInset,
   SidebarMenu,
   SidebarMenuAction,
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarProvider,
+  SidebarTrigger,
   useSidebar,
 } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { StepGroup, StepRow } from '@/components/ui/tool-steps';
+import type { Step } from '@/components/ui/tool-steps';
 
 const params = new URLSearchParams(window.location.search);
 const dark = params.get('theme') === 'dark';
@@ -162,7 +173,7 @@ const BUTTON_VARIANTS = [
   'link',
   'glass',
 ] as const;
-/** SG 畫成玻璃的按鈕（`solid-glass.css:640-677` 靠 `data-variant` 命中；`glass` 走 `glass-control`）。 */
+/** SG 畫成玻璃的按鈕（`solid-glass.css:642-679` 靠 `data-variant` 命中；`glass` 走 `glass-control`）。 */
 const GLASS_VARIANTS: readonly string[] = ['outline', 'secondary', 'glass'];
 const BADGE_VARIANTS = ['default', 'secondary', 'destructive', 'outline', 'ghost', 'link'] as const;
 
@@ -317,6 +328,14 @@ function GuardPage() {
               onSwitch={() => {}}
             />
           </div>
+          {/* 頂列的用量鈕：`text-muted-foreground` 配 `hover:bg-chip-hover active:bg-chip-pressed`，底下沒有 `bg-card`，
+              chip 的兩階真的畫得出來。 */}
+          <div data-guard-press="session-usage">
+            <SessionUsage
+              tokenUsage={{ inputTokens: 412_380, outputTokens: 9_815 }}
+              sessionStats={{ turns: 4, steps: 17, llmMs: 133_000, toolMs: 38_400 }}
+            />
+          </div>
           <div data-guard-texts="retry-notice" style={{ width: 360 }}>
             <RetryNotice retry={RETRY} />
           </div>
@@ -357,10 +376,17 @@ function GuardPage() {
           在對話裡被定位的那一則
         </div>
 
-        <div style={{ height: 160 }}>
+        {/* 側欄裡可以聚焦的四種都量（#1680 PR B 換成 vendor 版之後）：選單鈕、「⋯」、開關鈕量焦點外框，搜尋框量欄位邊框。 */}
+        <div style={{ height: 220 }}>
           <SidebarProvider style={{ minHeight: 0, height: '100%' }}>
             <Sidebar collapsible="none" data-guard-text="sidebar" data-guard-surface="sidebar">
               側欄
+              <SidebarTrigger data-guard-focus="sidebar-trigger" />
+              <SidebarInput
+                data-guard-field="sidebar-input"
+                aria-label="側欄搜尋"
+                placeholder="搜尋"
+              />
               <SidebarMenu>
                 <SidebarMenuItem>
                   <SidebarMenuButton
@@ -369,6 +395,9 @@ function GuardPage() {
                   >
                     側欄選單
                   </SidebarMenuButton>
+                  <SidebarMenuAction aria-label="選項" data-guard-focus="sidebar-menu-action">
+                    ⋯
+                  </SidebarMenuAction>
                 </SidebarMenuItem>
               </SidebarMenu>
             </Sidebar>
@@ -376,7 +405,7 @@ function GuardPage() {
         </div>
 
         {/* 浮層的 Trigger 用 `render` 畫成 Base UI 的 Button（#1583 起 popover 也是 Base UI）。開著時 Trigger 掛 `data-popup-open`
-            與 `aria-expanded="true"`，SG 的 `:665` 用它們把 outline 按鈕畫成按下去的玻璃。 */}
+            與 `aria-expanded="true"`，SG 的 `:667` 用它們把 outline 按鈕畫成按下去的玻璃。 */}
         <div style={{ ...row, gap: 240, paddingBottom: 120 }}>
           <Button variant="outline" data-guard-expanded="reference">
             沒開的按鈕
@@ -484,6 +513,51 @@ function CollapsiblesPage() {
           )
         }
       />
+    </div>
+  );
+}
+
+/** tool-steps（#1682 PR A）：執行中那一列要有東西可展開（`detail`），不然按鈕停用、量不到 `animate-pulse` 那一顆。 */
+const TOOL_STEPS: Step[] = [
+  { id: 'running', label: '執行指令 pnpm test', status: 'running', detail: 'pnpm test' },
+  {
+    id: 'done',
+    label: '搜尋 第 1 節',
+    status: 'done',
+    detail: '{"pattern":"第 1 節","output_mode":"count"}',
+    output: 'notes-0.md: 1\nnotes-1.md: 1',
+  },
+  { id: 'failed', label: '讀取 nope.ts', status: 'error', error: '沒有這個檔' },
+];
+
+function ToolStepsPage() {
+  const [open, setOpen] = useState<Record<string, boolean>>({ done: true, failed: true });
+  return (
+    <div
+      style={{
+        maxWidth: '48rem',
+        margin: '0 auto',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      }}
+    >
+      <div data-guard-tool="group">
+        <StepGroup steps={TOOL_STEPS} defaultOpen>
+          {TOOL_STEPS.map((step) => (
+            <StepRow
+              key={step.id}
+              step={step}
+              open={open[step.id] ?? false}
+              onOpenChange={(value) => setOpen((current) => ({ ...current, [step.id]: value }))}
+            />
+          ))}
+        </StepGroup>
+      </div>
+      <div data-guard-tool="standalone">
+        <StepRow step={TOOL_STEPS[1]!} open />
+      </div>
     </div>
   );
 }
@@ -711,12 +785,22 @@ function OverlayPage({ name }: { name: string }) {
       return <KeyboardMenu />;
     case 'command':
       return <OpenCommand />;
+    case 'desktop-sidebar':
+      // 桌面側欄（offcanvas，產品 `app-sidebar.tsx` 的形狀）：量收合的 transition（#1680 PR B）。
+      return (
+        <SidebarProvider>
+          <Sidebar>桌面側欄</Sidebar>
+          <SidebarInset>會話區</SidebarInset>
+        </SidebarProvider>
+      );
     case 'collapsibles':
       return <CollapsiblesPage />;
     case 'messages':
       return <MessagesPage />;
     case 'attachments':
       return <AttachmentsPage />;
+    case 'tool-steps':
+      return <ToolStepsPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':

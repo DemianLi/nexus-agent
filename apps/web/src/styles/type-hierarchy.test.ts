@@ -13,7 +13,7 @@ import { isVendorUpstream } from '@/test/vendor-upstream';
  *
  * 這裡只守機械判得出來的那一半：**可點的元件不縮成小字**——下面 {@link CONTROLS} 這些 JSX 元素自己的 `className` 裡出現
  * `text-tip`／`text-micro` 就紅。「是不是標題」判不出來，靠 review。registry 元件的預設字級（`xs` 按鈕、側欄、cmdk、附件）
- * 是 registry 原文的改動，守在 `components/ui/registry-edits.test.ts`。
+ * 原本是 registry 原文的改動，#1468 Q19 拿掉，隨各元件換成 vendor 版改回 SG（側欄是 #1680）。
  *
  * 掃 JSX 語法樹（`@/test/jsx-scan`）；先用字串預篩，含 `text-tip` 或 `text-micro` 的檔才 parse。
  */

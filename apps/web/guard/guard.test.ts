@@ -31,12 +31,13 @@ import { startGuardServer, type GuardServer } from './server';
  *    `solid-glass.overrides.css` 補回來）。
  * 5. **chip 三階**：`data-guard-chip` 裡那顆按鈕平常、滑鼠移上去、清單開著三種狀態，字對它實際的底色過門檻。#1591 起量的是輸入框
  *    底列的 Pick（12px 次要字，4.5）；權限「全開」那顆是警示色直接疊在頁面上，是狀態色對底色，守 {@link STATUS_MIN}（同靜態那一層
- *    的狀態色門檻）。#1591 之前量的是用量表的 chip（既有缺口 #1515 那幾對守 develop 的值），換成用量環之後沒有字了。
+ *    的狀態色門檻）。Pick 按下去就打開清單，量不到單純按著的樣子；`data-guard-press` 那顆頂列用量鈕量平常、移上去、按著
+ *    （`:active`），次要字疊在 `chip-hover`、`chip-pressed` 上過 4.5。
  * 6. **對話裡被定位的那一則有圓角**：`[data-located]` 的圓角是 `var(--radius-3xl)`，這個變數只宣告在 SG 的 `@theme inline`；
  *    Tailwind 沒輸出或修剪掉它的話，圓角會靜靜變成 0。量 `border-radius` 不是 0。
  * 7. **亮色陰影**：每層投影的透明度不超過該元素的上限 {@link SHADOW_LIMITS}（#1468 Q8 外觀照 SG：上限就是 SG 現在的值，誰再調深就紅）。
  * 8. **destructive 按鈕的 hover**：平常與滑鼠移上去，字對底色都過 4.5（vendor 的 hover 底太深，覆寫檔調淡，#1523）。
- * 9. **SG 的按鈕規則真的命中 vendor 的 Button**（#1523）：outline、secondary、glass 有 `backdrop-filter`（`solid-glass.css:640-677`
+ * 9. **SG 的按鈕規則真的命中 vendor 的 Button**（#1523）：outline、secondary、glass 有 `backdrop-filter`（`solid-glass.css:642-679`
  *    靠 `data-variant`）；浮層 Trigger 用 `render` 接的、開著的 outline 按鈕，底色換成按下去的樣子（SG 認 `aria-expanded`）。
  * 10. **輸入框群組只在欄位停用時變淡**（#1523 本地修改第 18 條）：只有按鈕停用的群組（輸入框沒字時送出鈕就是停用的）`opacity` 是 1、
  *    底色跟一般的群組相同；欄位停用的照 vendor 是 0.5。
@@ -54,6 +55,11 @@ import { startGuardServer, type GuardServer } from './server';
  * 14. **對話區**（#1638 PR B，`?overlay=messages`，產品的 `Transcript`）：泡泡字、表尾、捲到最新的按鈕圖示的對比與按鈕的焦點（亮暗加兩種退路，
  *    {@link OVERLAYS}）；每一則的 `content-visibility` 是 `visible`（第 42 條）；按鈕的動效照 §7：不位移、只縮放 .97、reduced-motion 下沒有
  *    transition（第 41 條）；外殼的行高是 SG 的 20px、泡泡維持 23px；底部淡出捲到底時收成 0。
+ * 15. **桌面側欄的收合**（#1680 PR B，`?overlay=desktop-sidebar`）：gap 與 container 的 transition 是 SG 的 200ms linear，
+ *    reduced-motion 下整個關掉（`motion.css`）。手機抽屜的寬度在 375 與 768 都是 `--sidebar-width`（本地修改第 55 條，見 {@link WIDTHS}）。
+ * 16. **tool-steps**（#1682 PR A，`?overlay=tool-steps`）：列、群組那一列、結果框的字過 4.5，結果框聚焦時 2px 外框畫在外層、offset 2px
+ *    （第 62 條）；執行中不閃（第 61 條）；375 寬按鈕至少 44px、1280 寬照 SG（第 63 條）；減少動態時箭頭不轉場（第 64 條）；疊在清單裡的
+ *    結果框沒有 blur、清單與單獨放的結果框照 SG 有（第 65 條）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -458,6 +464,76 @@ async function collectHovers(page: Page): Promise<HoverSample[]> {
   return samples;
 }
 
+type PressState = 'rest' | 'hover' | 'pressed';
+const PRESS_STATES: PressState[] = ['rest', 'hover', 'pressed'];
+
+interface PressSample {
+  readonly name: string;
+  readonly state: PressState;
+  /** 真的在那個狀態（`:hover`、`:active`）。 */
+  readonly inState: boolean;
+  readonly color: string;
+  readonly backgroundColor: string;
+  readonly chain: MeasuredLayer[];
+}
+
+/**
+ * `data-guard-press` 裡那顆按鈕：游標移開、移上去、按著三種狀態各量一次字色與往上疊的底。按著時量完先把游標移開再放開，
+ * 放開的位置不在按鈕上就不算點擊，不會打開它的 popover。
+ */
+async function collectPresses(page: Page): Promise<PressSample[]> {
+  const names = await page.$$eval('[data-guard-press]', (els) =>
+    els.map((el) => el.getAttribute('data-guard-press') ?? ''),
+  );
+  const samples: PressSample[] = [];
+  for (const name of names) {
+    const target = page.locator(`[data-guard-press="${name}"] button`);
+    for (const state of PRESS_STATES) {
+      if (state === 'rest') await page.mouse.move(0, 0);
+      else await target.hover();
+      if (state === 'pressed') await page.mouse.down();
+      await settle(page);
+      const measured = await target.evaluate((el) => {
+        const chain = [];
+        for (let node: Element | null = el; node !== null; node = node.parentElement) {
+          const style = getComputedStyle(node);
+          chain.push({
+            backgroundColor: style.backgroundColor,
+            backgroundImage: style.backgroundImage,
+            opacity: style.opacity,
+          });
+        }
+        return {
+          hover: el.matches(':hover'),
+          active: el.matches(':active'),
+          color: getComputedStyle(el).color,
+          backgroundColor: getComputedStyle(el).backgroundColor,
+          chain,
+        };
+      });
+      if (state === 'pressed') {
+        await page.mouse.move(0, 0);
+        await page.mouse.up();
+      }
+      samples.push({
+        name,
+        state,
+        inState:
+          state === 'rest'
+            ? !measured.hover && !measured.active
+            : state === 'hover'
+              ? measured.hover && !measured.active
+              : measured.active,
+        color: measured.color,
+        backgroundColor: measured.backgroundColor,
+        chain: measured.chain,
+      });
+    }
+  }
+  await settle(page);
+  return samples;
+}
+
 interface ChoiceSample {
   readonly name: string;
   readonly rest: string;
@@ -622,6 +698,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   let chips: ChipSample[];
   let choices: ChoiceSample[];
   let hovers: HoverSample[];
+  let presses: PressSample[];
   let glass: { name: string; backdropFilter: string }[];
   let expanded: Record<
     string,
@@ -636,6 +713,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     chips = await collectChips(page);
     choices = await collectChoices(page);
     hovers = await collectHovers(page);
+    presses = await collectPresses(page);
     glass = await page.$$eval('[data-guard-glass]', (els) =>
       els.map((el) => ({
         name: el.getAttribute('data-guard-glass') ?? '',
@@ -691,7 +769,13 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
   test('量具有抓到東西：每個標了的元素都量到', () => {
     expect(texts.map((t) => t.name)).toEqual(expect.arrayContaining(REQUIRED_TEXTS));
     expect(focus.map((f) => f.name)).toEqual(
-      expect.arrayContaining(['button-default', 'input-group', 'sidebar-menu-button']),
+      expect.arrayContaining([
+        'button-default',
+        'input-group',
+        'sidebar-menu-button',
+        'sidebar-menu-action',
+        'sidebar-trigger',
+      ]),
     );
     expect(shadows.length).toBeGreaterThan(0);
   });
@@ -712,8 +796,13 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
 
   test('欄位聚焦：邊框四邊都換成頁面的字色', () => {
     report[`${theme}:fields`] = fields;
-    // 量具自檢：三種欄位都量到、真的在 `:focus-visible`，而且聚焦前後邊框有變（量到的是聚焦的樣子，不是平常的邊框）。
-    expect(fields.map((f) => f.name).sort()).toEqual(['input', 'input-group', 'textarea']);
+    // 量具自檢：四種欄位都量到、真的在 `:focus-visible`，而且聚焦前後邊框有變（量到的是聚焦的樣子，不是平常的邊框）。
+    expect(fields.map((f) => f.name).sort()).toEqual([
+      'input',
+      'input-group',
+      'sidebar-input',
+      'textarea',
+    ]);
     expect(fields.filter((f) => !f.focusVisible).map((f) => f.name)).toEqual([]);
     expect(
       fields
@@ -759,6 +848,32 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
       measured
         .filter((m) => !(m.ratio >= m.min))
         .map((m) => `${m.key} ${m.ratio.toFixed(4)} < ${m.min}（${m.on}）`),
+    ).toEqual([]);
+  });
+
+  test('chip 的兩階上的次要字：頂列用量鈕平常、滑鼠移上去（chip-hover）、按著（chip-pressed）都過 4.5', () => {
+    const measured = presses.map((p) => ({
+      key: `${p.name}:${p.state}`,
+      ...p,
+      ...worstOn(p.color, p.chain),
+    }));
+    report[`${theme}:presses`] = measured.map((m) => ({
+      key: m.key,
+      color: m.color,
+      backgroundColor: m.backgroundColor,
+      on: m.on,
+      ratio: Math.round(m.ratio * 10000) / 10000,
+    }));
+    // 量具自檢：三種狀態都量到、真的在那個狀態，而且三種底色都不一樣（移上去與按著真的換了底；`bg-card` 之類蓋掉的話會一樣）。
+    expect(measured.map((m) => m.key)).toEqual(
+      PRESS_STATES.map((state) => `session-usage:${state}`),
+    );
+    expect(measured.filter((m) => !m.inState).map((m) => m.key)).toEqual([]);
+    expect(new Set(measured.map((m) => m.backgroundColor)).size).toBe(3);
+    expect(
+      measured
+        .filter((m) => !(m.ratio >= TEXT_MIN))
+        .map((m) => `${m.key} ${m.ratio.toFixed(4)} < ${TEXT_MIN}（${m.on}）`),
     ).toEqual([]);
   });
 
@@ -811,7 +926,7 @@ describe.each<Theme>(['light', 'dark'])('瀏覽器量出貨的 CSS：%s', (theme
     ).toEqual([]);
   });
 
-  test('SG 的玻璃按鈕吃到 SG 的規則：outline、secondary、glass 都有 backdrop-filter（data-variant 命中 solid-glass.css:640-677，#1523）', () => {
+  test('SG 的玻璃按鈕吃到 SG 的規則：outline、secondary、glass 都有 backdrop-filter（data-variant 命中 solid-glass.css:642-679，#1523）', () => {
     report[`${theme}:glass`] = glass;
     expect(glass.map((g) => g.name).sort()).toEqual(['glass', 'outline', 'secondary']);
     expect(glass.filter((g) => g.backdropFilter === 'none').map((g) => g.name)).toEqual([]);
@@ -1171,6 +1286,13 @@ const WIDTHS: {
     mark: 'mobile-sidebar',
     px: 288,
   },
+  // 768–1023 也是手機抽屜（斷點 1024）：`w-3/4` 加 `sm:max-w-sm` 會變成 384（本地修改第 55 條擋住）。
+  {
+    overlay: 'mobile-sidebar',
+    viewport: { width: 768, height: 1024 },
+    mark: 'mobile-sidebar',
+    px: 288,
+  },
 ];
 const WIDTH_MARKS: Record<string, Record<string, Record<string, string>>> = {
   feedback: { '[data-slot="dialog-content"]': { 'data-guard-width': 'feedback' } },
@@ -1361,7 +1483,7 @@ describe.each(
       expect(rows[0]!.backgroundColor).not.toBe(rows[1]!.backgroundColor);
     });
 
-    test('「⋯」選單開著時看得見（Trigger 開著掛 data-popup-open，ui/sidebar.tsx 的 SidebarMenuAction）', () => {
+    test('「⋯」選單開著時看得見（Trigger 開著掛 aria-expanded，vendor 的 SidebarMenuAction 認它）', () => {
       report[`${key}:shown`] = shown;
       // 量具自檢：lg 寬度下沒開的「⋯」照樣藏著（滑過那一列才現身）。
       expect(shown).toEqual({ open: '1', closed: '0' });
@@ -2009,6 +2131,46 @@ describe('瀏覽器量輸入框的版面（#1591）', () => {
   );
 });
 
+describe('瀏覽器量桌面側欄的收合動效（#1680 PR B，`?overlay=desktop-sidebar`）', () => {
+  // 收合照 SG 的 `duration-200 ease-linear`（#1468 Q8；規格 §7 的「桌面側欄收合」）；reduced-motion 下 `motion.css` 以
+  // `data-slot` 命中 gap 與 container，transition 整個關掉。jsdom 不載 CSS，元件測試量不到。
+  test('平常是 SG 的 200ms linear；reduced-motion 下 gap 與 container 都沒有 transition', async () => {
+    const read = async (reducedMotion: boolean) => {
+      const page = await openOverlay('desktop-sidebar', 'light', { reducedMotion, marks: {} });
+      try {
+        return await page.evaluate(() =>
+          ['sidebar-gap', 'sidebar-container'].map((slot) => {
+            const el = document.querySelector(`[data-slot="${slot}"]`);
+            if (el === null) return { slot, missing: true };
+            const style = getComputedStyle(el);
+            return {
+              slot,
+              property: style.transitionProperty,
+              duration: style.transitionDuration,
+              easing: style.transitionTimingFunction,
+            };
+          }),
+        );
+      } finally {
+        await page.close();
+      }
+    };
+    const normal = await read(false);
+    const reduced = await read(true);
+    report['motion:desktop-sidebar'] = { normal, reduced };
+    expect(normal).toEqual([
+      { slot: 'sidebar-gap', property: 'width', duration: '0.2s', easing: 'linear' },
+      {
+        slot: 'sidebar-container',
+        property: 'left, right, width',
+        duration: '0.2s',
+        easing: 'linear',
+      },
+    ]);
+    for (const row of reduced) expect(row).toMatchObject({ property: 'none', duration: '0s' });
+  });
+});
+
 describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', () => {
   // 這幾件都靠真的 CSS 命中 Base UI 的屬性（Panel 的 `data-open`、Trigger 的 `data-panel-open`、`--collapsible-panel-height`），
   // jsdom 不載 CSS，元件測試量不到。量思考過程那一列：箭頭、摘要、內容的高度動效都在它身上。
@@ -2430,6 +2592,145 @@ describe.each(['light', 'dark'] as const)('瀏覽器量問答與附件（#1638 P
           .filter((m) => !(m.worst >= TEXT_MIN))
           .map((m) => `${m.name} ${m.worst}（${m.on}）`),
       ).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+/**
+ * SG 的 tool-steps（#1682 PR A，`?overlay=tool-steps`）：README 本地修改第 61–65 條的覆寫真的命中 vendor 畫出來的元素，
+ * 字與焦點過門檻。vendor 元件掛不了屬性，開頁後補。
+ */
+const TOOL_GROUP = '[data-guard-tool="group"]';
+const TOOL_STANDALONE = '[data-guard-tool="standalone"]';
+const toolStepsMarks: Record<string, Record<string, string>> = {
+  [`${TOOL_GROUP} [data-slot="step-row"] > button > span`]: {
+    'data-guard-text': 'tool-step-label',
+  },
+  [`${TOOL_GROUP} [data-slot="step-group"] > button > span`]: {
+    'data-guard-text': 'tool-group-label',
+  },
+  [`[data-guard-tool] [data-slot="output-block"] > div`]: {
+    'data-guard-text': 'tool-output-label',
+  },
+  [`[data-guard-tool] [data-slot="output-block"] > pre`]: {
+    'data-guard-text': 'tool-output-text',
+    'data-guard-focus': 'tool-output',
+  },
+  [`[data-guard-tool] [data-slot="output-block"]`]: { 'data-guard-outline-host': '' },
+};
+
+describe.each(['light', 'dark'] as const)('瀏覽器量 tool-steps（#1682）：%s', (theme) => {
+  test('列與群組的字、結果框的標題與內文過 4.5；結果框聚焦時外框畫在外層（第 62 條）', async () => {
+    const page = await openOverlay('tool-steps', theme, { marks: toolStepsMarks });
+    try {
+      const texts = await collectTexts(page);
+      const focus = await collectFocus(page);
+      const offsets = await page.$$eval('[data-guard-tool] [data-slot="output-block"]', (els) =>
+        els.map((el) => {
+          (el.querySelector('pre') as HTMLElement).focus();
+          return getComputedStyle(el).outlineOffset;
+        }),
+      );
+      report[`tool-steps:${theme}:outline-offset`] = offsets;
+      // 量具自檢：群組裡三列、群組那一列、展開的結果框（群組裡完成的參數與結果、失敗的錯誤，單獨那列的參數與結果）都量到。
+      expect(texts.filter((t) => t.name === 'tool-step-label')).toHaveLength(3);
+      expect(texts.filter((t) => t.name === 'tool-group-label')).toHaveLength(1);
+      expect(texts.filter((t) => t.name === 'tool-output-text')).toHaveLength(5);
+      expect(focus).toHaveLength(5);
+      expectTexts(
+        texts,
+        ['tool-step-label', 'tool-group-label', 'tool-output-label', 'tool-output-text'],
+        `tool-steps:${theme}`,
+      );
+      expectFocus(focus, `tool-steps:${theme}`);
+      expect(offsets).toEqual(Array(5).fill('2px'));
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe('瀏覽器量 tool-steps 的覆寫（#1682，第 61、63、64、65 條）', () => {
+  test('第 61 條：執行中那一列掛著 vendor 的 animate-pulse，但 animation-name 是 none', async () => {
+    const page = await openOverlay('tool-steps', 'light', { marks: { [TOOL_GROUP]: {} } });
+    try {
+      const rows = await page.$$eval(`${TOOL_GROUP} [data-slot="step-row"] > button`, (els) =>
+        els.map((el) => ({
+          pulse: el.classList.contains('animate-pulse'),
+          animation: getComputedStyle(el).animationName,
+        })),
+      );
+      report['tool-steps:pulse'] = rows;
+      // 量具自檢：真的有一列帶 vendor 的 class（執行中那一列）。
+      expect(rows.filter((r) => r.pulse)).toHaveLength(1);
+      expect(rows.map((r) => r.animation)).toEqual(['none', 'none', 'none']);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each([
+    [375, true],
+    [1280, false],
+  ] as const)('第 63 條：%i 寬時列與群組那一列的按鈕至少 44px：%s', async (width, touch) => {
+    const page = await openOverlay('tool-steps', 'light', {
+      viewport: { width, height: 900 },
+      marks: { [TOOL_GROUP]: {} },
+    });
+    try {
+      const heights = await page.$$eval(
+        `${TOOL_GROUP} :is([data-slot="step-row"], [data-slot="step-group"]) > button`,
+        (els) => els.map((el) => el.getBoundingClientRect().height),
+      );
+      report[`tool-steps:height:${width}`] = heights;
+      expect(heights).toHaveLength(4);
+      // 1280 寬照 SG（一行字高）：量具自檢，44px 不是本來就有的。
+      for (const h of heights) expect(h >= 44).toBe(touch);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each([
+    [true, '0s'],
+    [false, 'not-0s'],
+  ] as const)('第 64 條：減少動態（%s）時箭頭的轉場時長', async (reducedMotion, expected) => {
+    const page = await openOverlay('tool-steps', 'light', {
+      reducedMotion,
+      marks: { [TOOL_GROUP]: {} },
+    });
+    try {
+      const durations = await page.$$eval(
+        `${TOOL_GROUP} :is([data-slot="step-row"], [data-slot="step-group"]) > button > svg`,
+        (els) => els.map((el) => getComputedStyle(el).transitionDuration),
+      );
+      report[`tool-steps:chevron:${reducedMotion ? 'reduce' : 'normal'}`] = durations;
+      expect(durations).toHaveLength(4);
+      for (const d of durations) expect(d === '0s' ? '0s' : 'not-0s').toBe(expected);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('第 65 條：疊在清單裡的結果框沒有 backdrop-filter；清單本身與單獨放的結果框照 SG 有', async () => {
+    const page = await openOverlay('tool-steps', 'light', {
+      marks: { [TOOL_GROUP]: {}, [TOOL_STANDALONE]: {} },
+    });
+    try {
+      const filter = (selector: string) =>
+        page.$$eval(selector, (els) => els.map((el) => getComputedStyle(el).backdropFilter));
+      const measured = {
+        nested: await filter(`${TOOL_GROUP} [data-slot="step-list"] [data-slot="output-block"]`),
+        list: await filter(`${TOOL_GROUP} [data-slot="step-list"]`),
+        standalone: await filter(`${TOOL_STANDALONE} [data-slot="output-block"]`),
+      };
+      report['tool-steps:backdrop'] = measured;
+      expect(measured.nested).toEqual(['none', 'none', 'none']);
+      expect(measured.list).toHaveLength(1);
+      expect(measured.standalone).toHaveLength(2);
+      for (const f of [...measured.list, ...measured.standalone]) expect(f).toMatch(/blur\(/);
     } finally {
       await page.close();
     }

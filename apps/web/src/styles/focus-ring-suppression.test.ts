@@ -24,7 +24,7 @@ const RING_RESTORED = vendor.declarations.filter(
 );
 
 describe('SG 帶回來的焦點 ring 都被壓掉（D′）', () => {
-  test('vendor 檔裡把 ring 帶回來的宣告：2 條（solid-glass.css:857-860 的兩個選擇器）', () => {
+  test('vendor 檔裡把 ring 帶回來的宣告：2 條（solid-glass.css:859-862 的兩個選擇器）', () => {
     expect(RING_RESTORED.map((d) => d.selector)).toEqual([
       ':is([class*="focus-visible:ring-3"], [class*="focus-visible:ring-[3px]"]):focus-visible:not([data-slot="input"]):not([data-slot="textarea"]):not([data-slot="select-trigger"]):not([data-slot="native-select"]):not([data-slot="sidebar-input"]):not([aria-invalid="true"])',
       '[data-slot="calendar"] [data-focused="true"] > :is(button, [data-slot="button"])',

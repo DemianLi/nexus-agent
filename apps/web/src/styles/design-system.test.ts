@@ -22,9 +22,9 @@ import { readCascade } from './css-cascade';
  * 6. **展開箭頭用 `Chevron`**（#1279）：同一個字串裡有 `transition-transform`＋`rotate-*`，或跟著展開轉的 `rotate-*`（Base UI 的 `data-panel-open`，
  *    #1638；Radix 的 `data-state=open` 也照擋），就是又手寫了一顆。
  * 7. **可展開列用 `RowTrigger`**（#1279）：同一個字串裡有 `hover:bg-chip-hover`＋`active:bg-chip-pressed`＋`w-full`＋`text-left`，就是又手寫了一列。
- * 8. **`ui/` 以外不寫 `focus-visible:ring-*`**（#1279）：`solid-glass.overrides.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
+ * 8. **不寫 `focus-visible:ring-*`**（#1279）：`solid-glass.overrides.css` 在 layer 外把 ring 清掉、改畫全域 outline，所以元件裡的 ring 畫不出來；
  *    再配上 `outline-none` 就是**完全看不到焦點**（#1279 之前有六處）。要改外框位置用 `focus-visible:-outline-offset-2` 之類，不要換成 ring。
- *    `ui/` 的 registry 原文不在這條：那裡的 ring 由 `solid-glass.overrides.css` 統一處理。
+ *    vendor 上游原樣的 ring 由 `solid-glass.overrides.css` 統一處理（不在掃描範圍）；#1680 起 `ui/` 不再有 registry 原文，`ui/` 也照擋。
  * 9. **對話泡泡用 `ChatBubble`**（#1280）：同一個字串裡有 `rounded-3xl`＋`px-4`＋`py-2.5`，就是又手寫了一個泡泡。
  * 10. **程式碼小框用 `MonoBlock`**（#1280）：同一個字串裡有 `bg-chip`＋`rounded-lg`＋`p-2`＋`font-mono`，就是又手寫了一塊。
  * 11. **`ui/` 以外不寫原生 `<textarea`**（#1280）：用 `ui/textarea` 的 `Textarea`（邊框、焦點、手機字級都在那裡）。
@@ -270,7 +270,6 @@ function scan(files: string[]): Violation[] {
       if (broken.length === 0) continue;
       const line = source.slice(0, match.index).split('\n').length;
       for (const { rule, what } of broken) {
-        if (rule === '焦點' && inRegistry) continue;
         found.push({ file: relative(SRC, file), line, rule, what });
       }
     }
@@ -466,12 +465,15 @@ describe('判準', () => {
     expect(readFileSync(join(SRC, vendored ?? ''), 'utf8').includes('<textarea')).toBe(true);
   });
 
-  test('焦點那條不管 ui/ 的 registry 原文：那裡的 ring 由 solid-glass.overrides.css 統一處理', () => {
+  test('焦點那條 ui/ 也照擋：registry 原文都進了 vendor（#1680 換掉最後一份 sidebar），帶 ring 的只剩 vendor 原樣', () => {
     const registry = scan(files.filter((f) => relative(SRC, f).startsWith('components/ui/')));
     expect(registry.filter((v) => v.rule === '焦點')).toEqual([]);
-    expect(
-      // `input.tsx` 從 #1523 起只轉出 vendor 版；還是 registry 原文、帶 ring 的換成 sidebar（③-4 才換）。
-      readFileSync(join(SRC, 'components/ui/sidebar.tsx'), 'utf8').includes('focus-visible:ring-'),
-    ).toBe(true);
+    const vendored = [...VENDOR_UPSTREAM_FILES].find((f) =>
+      f.endsWith('/components/ui/sidebar.tsx'),
+    );
+    expect(vendored).toBeDefined();
+    expect(readFileSync(join(SRC, vendored ?? ''), 'utf8').includes('focus-visible:ring-')).toBe(
+      true,
+    );
   });
 });

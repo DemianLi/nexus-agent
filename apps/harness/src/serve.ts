@@ -144,6 +144,8 @@ import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { downlinkPlugin } from './settings/downlink.js';
 import { startMemoryGauge } from './memory-gauge.js';
+import type { MemoryGaugeDeps } from './memory-gauge.js';
+import { createMemoryPressureWatch, memoryUsageSource } from './memory-pressure.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { threadCapacityPlugin } from './settings/thread-capacity.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
@@ -323,6 +325,11 @@ export interface RunServeOptions {
    * 不換就是沒驗過就出貨。產品路徑不設，用 dsh 的 `tryLockExclusive`。
    */
   readonly homeLock?: TryLock;
+  /**
+   * 記憶體量具讀外界的縫，只給測試用（#1493）：用量警告要「70% → 80% → 69%」這樣的讀數序列，不靠真的把記憶體吃到 75%。
+   * 產品路徑不設，量具讀真的 `/proc`、`/sys/fs/cgroup` 與 `process`。
+   */
+  readonly memoryGaugeDeps?: MemoryGaugeDeps;
 }
 
 export interface RunningServe {
@@ -1330,7 +1337,20 @@ async function startServer(
   const memoryGauge =
     memoryGaugeConfig.reportIntervalMs === 0
       ? undefined
-      : startMemoryGauge({ intervalMs: memoryGaugeConfig.reportIntervalMs, log });
+      : startMemoryGauge({
+          intervalMs: memoryGaugeConfig.reportIntervalMs,
+          log,
+          ...(options.memoryGaugeDeps === undefined ? {} : { deps: options.memoryGaugeDeps }),
+          // 用量警告（#1493，保險絲第 0 級）：跟著取樣開關走，取樣關著這一整段不建。
+          onReading: createMemoryPressureWatch({
+            thresholdPercent: memoryGaugeConfig.warnAtPercent,
+            sources: [memoryUsageSource],
+            context: () => ({
+              threadCount: handler.threadCount(),
+              maxThreads: threadCapacity.maxThreads,
+            }),
+          }).observe,
+        });
 
   return {
     url: server.url,
