@@ -173,6 +173,15 @@ class UpgradeGuideGate(unittest.TestCase):
         checkout = [s for s in self.steps if str(s.get('uses', '')).startswith('actions/checkout@')]
         self.assertEqual(checkout[0].get('with', {}).get('fetch-depth'), 0)
 
+    def test_release_finds_previous_tag(self) -> None:
+        # release notes 用 `git describe` 找上一個 tag 再連到它的指南；淺 clone 時那行靜靜回空、notes 就不見，不報錯。
+        steps = load(CI.with_name('release.yml'))['jobs']['release']['steps']
+        checkout = [s for s in steps if str(s.get('uses', '')).startswith('actions/checkout@')]
+        self.assertEqual(checkout[0].get('with', {}).get('fetch-depth'), 0)
+        run = next(s['run'] for s in steps if 'gh release create' in str(s.get('run', '')))
+        self.assertIn("git describe --tags --abbrev=0 --match 'v*' HEAD", run)
+        self.assertIn('[ -d "docs/upgrade-guide/$prev" ]', run)
+
 
 if __name__ == '__main__':
     unittest.main()

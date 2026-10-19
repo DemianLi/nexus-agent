@@ -176,7 +176,8 @@ PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_
   - `@nexus/sdk` 給外部插件的面；
   - wire 協定裡 web 以外的客戶端會用到的部分。
 
-  web 與 harness 在同一張 PR 一起改的 wire 變更不必寫：消費者同一張都改到了，同 dsh。純新增的旗標、鍵、插件也不必寫。
+  web 與 harness 在同一張 PR 一起改的 wire 變更不必寫：消費者同一張都改到了，同 dsh。純新增、而且不改既有預設行為的
+  旗標、鍵、插件也不必寫；出廠就掛上、會改變模型看到的內容或多打模型的插件不算純新增，要寫。
   會話日誌格式的升版紀錄在 `packages/nexus-core/src/session-store.ts` 檔頭，指南只寫讀者要做的事，再連到那裡。
 - **位置**：`docs/upgrade-guide/v<版號>/<item>/guide.md`。`<版號>` 是**最近一個 Release 的 tag**，也就是讀者正在跑的
   那一版；`<item>` 是 kebab-case 的變更名。每個 item 目錄只有 `guide.md` 一份。

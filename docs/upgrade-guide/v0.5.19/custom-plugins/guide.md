@@ -14,10 +14,11 @@ v0.5.19 的文件教的自寫插件是 `@nexus/core` 的 `NexusPlugin` 物件：
 舊形狀沒有斷：
 
 - `export default` 的 `NexusPlugin` 物件仍由相容層載入，`insert` 指檔案路徑的寫法照舊。home 的 `cordis.patch.yml` 被遷進變更紀錄之後，
-  相對路徑一樣解得到。`PluginRegistry` 只多了 `projections`、`events`、`logger` 三格，沒有拿掉的。
-- `@nexus/core` 拿掉了幾個內部匯出：`GOAL_WRAPUP_MARKER`、`InvalidArgumentsCarrier`、`createInvalidArgumentsCarrier`、
-  `createFsToolErrorsMiddleware`、`createReadContinuationMiddleware`、`defaultTokenAnchorBook`、`recordBackendOutcomes`、`recordReadExtent`。
-  自寫插件在執行期 import 了其中任何一個的，載入時會失敗（只當型別用的不受影響）。
+  相對路徑一樣解得到。`PluginRegistry` 的頂層成員只多了 `projections`、`events`、`logger` 三格，沒有拿掉的；各成員自己的型別沒有逐一比過，
+  用到的話以新版 `packages/nexus-core/src/registry.ts` 為準。
+- `@nexus/core` 拿掉了幾個內部匯出。執行期的值有 7 個：`GOAL_WRAPUP_MARKER`、`createInvalidArgumentsCarrier`、`createFsToolErrorsMiddleware`、
+  `createReadContinuationMiddleware`、`defaultTokenAnchorBook`、`recordBackendOutcomes`、`recordReadExtent`，import 了其中任何一個的模組載入時會失敗；
+  型別有 1 個：`InvalidArgumentsCarrier`（只當型別用，執行期不受影響）。
 
 受影響的：用 `insert` 掛了自己寫的插件的主機。
 
@@ -25,5 +26,7 @@ v0.5.19 的文件教的自寫插件是 `@nexus/core` 的 `NexusPlugin` 物件：
 
 1. 在自寫插件裡找上面那幾個名字，有用到的改掉。
 2. 檔案權限的規則沒變：模組檔與每一層上層目錄只有你自己寫得動，否則拒絕啟動。
+   改用 tar.gz 以 `node` 直接起的主機，`.ts` 模組不再經 `tsx`，靠 Node 內建的型別剝除載入，只能用剝得掉的寫法
+   （不能有 `enum`、`namespace` 這類要轉譯的語法）；不確定的話改寫成 `.js`。
 3. 新寫的、或要長期維護的插件，照 [`docs/plugin-contract.md`](../../../plugin-contract.md) 改成函式插件形狀，並跑 `@nexus/sdk/lint` 與一致性套件。
 4. 確認：serve 起得來、沒有提到那一列的警告，插件的行為跟 v0.5.19 一樣。

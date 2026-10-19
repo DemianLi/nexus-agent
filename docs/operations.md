@@ -665,6 +665,10 @@ home 是 `NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`（systemd 的設法�
 
    給了 `--session-log` 的話，那個目錄也照樣打包一份。
 4. **裝新版，舊版留著**：照〈用 systemd 常駐〉解開到新目錄、`ln -sfn` 換掉 `current`。舊版的目錄不要刪，回滾時要用。
+   **工作目錄要跟舊版一樣**：會話照起動時的目錄分桶，header 也記著那個目錄，換了目錄起，舊對話不在清單上，開舊的 thread id
+   只會在新的桶裡建一條空的（實測）；把桶目錄改名也接不回來，續接會因為目錄不同而拒絕。從原始碼 checkout 用
+   `pnpm --filter @nexus/harness run serve` 起的舊版，目錄是 `<checkout>/apps/harness`，不是〈用 systemd 常駐〉範例裡的 home；
+   要沿用舊對話，unit 的 `WorkingDirectory` 寫舊的那個目錄。
 5. **起新版**：`sudo systemctl start nexus-agent`。
 
 ### 升級之後確認
