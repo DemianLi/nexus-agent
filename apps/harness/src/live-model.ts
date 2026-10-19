@@ -776,47 +776,297 @@ export function withStreamIdleTimeout(
     const report = streamFailureReporter();
     const reader = response.body.getReader();
     let timer: ReturnType<typeof setTimeout> | undefined;
-    const watched = new ReadableStream<Uint8Array>({
-      async pull(controller) {
-        const idle = new Promise<never>((_, reject) => {
-          timer = setTimeout(() => reject(new StreamIdleTimeoutError(timeoutMs)), timeoutMs);
-        });
-        try {
-          // **回報只針對「讀上游」這一步**（#520）：SDK 收手之後我們這一側再 `enqueue`／`close` 會撞上「Controller is already
-          // closed」，那是下游已經不要了，不是上游斷了——算進去會把一個本來不該重打的失敗標成可重打。
-          let next: Awaited<ReturnType<typeof reader.read>>;
+    const watched = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          const idle = new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new StreamIdleTimeoutError(timeoutMs)), timeoutMs);
+          });
           try {
-            next = await Promise.race([reader.read(), idle]);
-          } catch (error: unknown) {
-            if (error instanceof StreamIdleTimeoutError) {
-              report({ code: 'TIMEOUT' });
-            } else if (!isAbortLike(error)) {
-              // 使用者中止的 AbortError 不回報——那是我們自己要的，不重打。
-              // **讀上游這一步失敗，定義上就是連線層的事**（#1437）：undici 的 `terminated`、`ERR_INCOMPLETE_CHUNKED_ENCODING`。
-              // 標在這顆錯上，分類器認記號，`turn/failed` 才與這裡同一個 `TRANSPORT`；解不開的回應（SDK 讀完才解析出錯）
-              // 不經過這一步，所以不會被當成連線問題重打（Q2 (a)）。
-              if (typeof error === 'object' && error !== null) connectionFailures.add(error);
-              report({ code: 'TRANSPORT' });
+            // **回報只針對「讀上游」這一步**（#520）：SDK 收手之後我們這一側再 `enqueue`／`close` 會撞上「Controller is already
+            // closed」，那是下游已經不要了，不是上游斷了——算進去會把一個本來不該重打的失敗標成可重打。
+            let next: Awaited<ReturnType<typeof reader.read>>;
+            try {
+              next = await Promise.race([reader.read(), idle]);
+            } catch (error: unknown) {
+              if (error instanceof StreamIdleTimeoutError) {
+                report({ code: 'TIMEOUT' });
+              } else if (!isAbortLike(error) && !(error instanceof UnknownFinishReasonError)) {
+                // 使用者中止的 AbortError 不回報——那是我們自己要的，不重打。
+                // 陌生的 finish_reason 也不回報（#1538，Q1 (a)）：那是回應本身的問題不是連線的，落到 `UNKNOWN`、不重打。
+                // **讀上游這一步失敗，定義上就是連線層的事**（#1437）：undici 的 `terminated`、`ERR_INCOMPLETE_CHUNKED_ENCODING`。
+                // 標在這顆錯上，分類器認記號，`turn/failed` 才與這裡同一個 `TRANSPORT`；解不開的回應（SDK 讀完才解析出錯）
+                // 不經過這一步，所以不會被當成連線問題重打（Q2 (a)）。
+                if (typeof error === 'object' && error !== null) connectionFailures.add(error);
+                report({ code: 'TRANSPORT' });
+              }
+              throw error;
             }
-            throw error;
+            if (next.done) controller.close();
+            else controller.enqueue(next.value);
+          } catch (error: unknown) {
+            // 逾時要把底下那條連線放掉；錯誤本身一律原樣往下交，失敗分類同今天。
+            if (error instanceof StreamIdleTimeoutError) void reader.cancel(error).catch(() => {});
+            controller.error(error);
+          } finally {
+            clearTimeout(timer);
+            timer = undefined;
           }
-          if (next.done) controller.close();
-          else controller.enqueue(next.value);
-        } catch (error: unknown) {
-          // 逾時要把底下那條連線放掉；錯誤本身一律原樣往下交，失敗分類同今天。
-          if (error instanceof StreamIdleTimeoutError) void reader.cancel(error).catch(() => {});
-          controller.error(error);
-        } finally {
-          clearTimeout(timer);
-          timer = undefined;
-        }
+        },
+        // 計時器只在 pull 裡活著：這時候取消，等著的那次 read 會回 done，由 pull 的 finally 清掉。
+        cancel(reason) {
+          return reader.cancel(reason);
+        },
+        // **水位 0：有人讀才 pull，不預讀**（#1538）。預讀會讓內側（{@link withStreamCompletionCheck}）延後丟的錯在 SDK 處理完上一則事件之前就先發生，
+        // 搶在 SDK 自己的解析錯誤前面被回報成 `TRANSPORT`。
       },
-      // 計時器只在 pull 裡活著：這時候取消，等著的那次 read 會回 done，由 pull 的 finally 清掉。
-      cancel(reason) {
-        return reader.cancel(reason);
-      },
-    });
+      { highWaterMark: 0 },
+    );
     return new Response(watched, {
+      status: response.status,
+      statusText: response.statusText,
+      headers: response.headers,
+    });
+  };
+}
+
+/**
+ * 模型的回應串流在**收到結束原因（`finish_reason`）之前**就結束了（[#1538](https://github.com/DemianLi/nexus-agent/issues/1538)）。
+ *
+ * 兩種結束法：`via: 'done'` 是看到 `data: [DONE]` 卻從沒出現過 `finish_reason`；`via: 'eof'` 是上游乾淨關線（連 `[DONE]` 都沒有）。
+ * 都是中間的代理或閘道把回應切在一半、卻乾乾淨淨地收尾，使用者端會看到一段被截斷、卻顯示成正常結束的答案。
+ *
+ * **名字刻意不是 `AbortError`**，理由同 {@link StreamIdleTimeoutError}：openai SDK 的串流迭代器把 `AbortError` 當成正常結束。
+ * 這顆錯由 {@link withStreamCompletionCheck} 標進 {@link connectionFailures} 並回報 `TRANSPORT`，分類器與重試那一層都把它當斷線。
+ */
+export class StreamEndedWithoutFinishError extends Error {
+  override readonly name = 'StreamEndedWithoutFinishError';
+
+  /** @param via - 靠什麼發現的：`[DONE]` 或上游關線。 */
+  constructor(readonly via: 'done' | 'eof') {
+    super(
+      via === 'done'
+        ? '模型的回應串流送出 [DONE]，但從沒收到結束原因（finish_reason），回覆可能被截斷。'
+        : '模型的回應串流在收到結束原因（finish_reason）之前就被關閉了，回覆可能被截斷。',
+    );
+  }
+}
+
+/**
+ * 供應商回了 nexus 不認得的 `finish_reason`（[#1538](https://github.com/DemianLi/nexus-agent/issues/1538)，Q1 (a)）。
+ *
+ * `@langchain/core` 的 `mapFinishReason` 把不認得的字串一律改成 `stop`，一段被供應商中止的回覆（`insufficient_system_resource` 之類）
+ * 就會被當成「講完了」。這裡在 `fetch` 層讀得到原字串，當成失敗：不回報任何碼，分類器落到 `UNKNOWN`、不重打，訊息指名原字串。
+ */
+export class UnknownFinishReasonError extends Error {
+  override readonly name = 'UnknownFinishReasonError';
+
+  /** @param reason - 供應商送來的原字串。 */
+  constructor(readonly reason: string) {
+    super(
+      `模型回了無法辨識的結束原因 finish_reason=${JSON.stringify(reason)}，這一輪當成失敗；端點不送標準結束原因時，把型錄條目的 compat.supportsFinishReason 設成 false。`,
+    );
+  }
+}
+
+/** nexus 認得的 `finish_reason`：OpenAI 相容端點的標準值，加上舊式的 `function_call` 與部分供應商的 `max_tokens`。 */
+const KNOWN_FINISH_REASONS: ReadonlySet<string> = new Set([
+  'stop',
+  'length',
+  'max_tokens',
+  'tool_calls',
+  'function_call',
+  'content_filter',
+]);
+
+/**
+ * 串流完成檢查（[#1538](https://github.com/DemianLi/nexus-agent/issues/1538)）：每一條 SSE 串流都要有一則帶 `finish_reason` 的事件，
+ * 沒有就是被切斷，照斷線處理。
+ *
+ * ## 病在哪裡
+ *
+ * 讀上游失敗（undici 的 `terminated`）今天會被 {@link withStreamIdleTimeout} 標成斷線、回報 `TRANSPORT`。可是反向代理在 chunk 邊界
+ * 乾淨收掉 upstream 時，body 是正常 EOF：沒有任何一層會講話——openai SDK 的迭代器沒收到 `[DONE]` 也正常 `return`，
+ * `@langchain/core` 最後一律送 `message-finish`。答案停在一半，這一輪卻以 `turn/end` 收尾、日誌記成功。
+ *
+ * ## 做法：看，不改
+ *
+ * 在 `fetch` 這一層（同 {@link withInbandStreamErrors}、{@link withStreamIdleTimeout} 退到這裡的理由：`@langchain/openai` 的事件轉換
+ * 不暴露原始 `finish_reason`，`message-finish` 又會把它蓋掉）逐則解 SSE 事件，記下有沒有出現過非空的 `choices[0].finish_reason`。
+ * 位元組原樣往下交，只在三種情形把串流弄成錯誤：
+ *
+ * 1. 看到 `[DONE]`、之前沒有 finish → {@link StreamEndedWithoutFinishError}（`via: 'done'`）。**只在 EOF 判斷抓不到這一種**：openai 的迭代器
+ *    看到 `[DONE]` 就收手，不再讀到 EOF。
+ * 2. 上游 EOF、之前沒有 finish → {@link StreamEndedWithoutFinishError}（`via: 'eof'`）。
+ *    這兩種都標進 {@link connectionFailures} 並回報 `TRANSPORT`，照 #1427 的政策整次重打。
+ * 3. 出現了不認得的 finish（{@link KNOWN_FINISH_REASONS} 之外）→ {@link UnknownFinishReasonError}。不回報碼，落到 `UNKNOWN`、不重打。
+ *
+ * **不觸發的情況**：非 2xx、非 SSE、沒有 body；看過錯誤信封（中段的錯誤交給信封那一條，不改判）；下游已經取消（SDK 收手之後）；
+ * 讀上游本身失敗（錯誤原樣交下去，由 {@link withStreamIdleTimeout} 標記）；單一事件超過 {@link INBAND_WATCH_MAX_CHARS}（放棄監看）。
+ *
+ * ## 偏離登記
+ *
+ * 1. **在位元組層解 SSE，不是在轉接器解好的事件上**（理由 1，基座表達不出來）。dsh 在 pi-ai 轉接器那一層，串流在 `finish_reason` 之前
+ *    結束就發 `Stream ended without finish_reason`，並歸 `TRANSPORT`（`llm-pi-ai/src/stream.ts:52-58`）；nexus 沒有那一層。
+ * 2. **不新增 `STREAM_CLOSED` 碼**：那是 dsh 轉接器對「pi-ai 事件流沒有 done／error 就結束」的不變量，nexus 沒有那一層。
+ *
+ * @param baseFetch - 底層的 fetch。產品路徑是 {@link withInbandStreamErrors}；測試換掉它。
+ * @returns 一個 fetch：非 SSE、非 2xx、沒有 body 的回應原樣放行，其餘把 body 包上完成檢查。
+ */
+export function withStreamCompletionCheck(baseFetch: typeof fetch = fetch): typeof fetch {
+  return async (input, init) => {
+    // 抓這一次嘗試的範圍；串流是在 fetch 回來之後才被讀的。
+    const report = streamFailureReporter();
+    const response = await baseFetch(input, init);
+    const contentType = response.headers.get('content-type') ?? '';
+    if (!response.ok || response.body === null || !contentType.includes('text/event-stream')) {
+      return response;
+    }
+
+    // 當場鎖住 reader，理由同 withInbandStreamErrors。
+    const reader = response.body.getReader();
+    // 還沒收尾的那一則事件的位元組：**扣著不交**，收尾了才連同前面完整的事件一起交下去。這樣觸發點那則事件之前的位元組
+    // 可以照常交給下游（SDK 先把它們解析完，例如先遇到解不開的事件就拋它自己的錯），錯誤留到下一次讀才丟。
+    let held: Buffer = Buffer.alloc(0);
+    let finished = false;
+    let sawError = false;
+    let watching = true;
+    let cancelled = false;
+    let deferred: Error | undefined;
+
+    /** 一則完整事件：回傳要不要把串流弄成錯誤。 */
+    const inspect = (event: string): Error | undefined => {
+      const data = event
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('data:'))
+        .map((line) => line.slice(5).trim())
+        .join('\n');
+      if (data === '[DONE]') {
+        return finished || sawError ? undefined : new StreamEndedWithoutFinishError('done');
+      }
+      // 便宜的前置篩：不含這兩個字串的事件不用付 JSON.parse 的錢。
+      if (!data.includes('"finish_reason"') && !data.includes('"error"')) return undefined;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(data);
+      } catch {
+        return undefined;
+      }
+      if (typeof parsed !== 'object' || parsed === null) return undefined;
+      const { error, choices } = parsed as { error?: unknown; choices?: unknown };
+      if (typeof error === 'object' && error !== null) {
+        sawError = true;
+        return undefined;
+      }
+      if (!Array.isArray(choices) || choices.length === 0) return undefined;
+      const choice: unknown = choices[0];
+      if (typeof choice !== 'object' || choice === null) return undefined;
+      const reason = (choice as { finish_reason?: unknown }).finish_reason;
+      if (typeof reason !== 'string' || reason === '') return undefined;
+      finished = true;
+      return KNOWN_FINISH_REASONS.has(reason) ? undefined : new UnknownFinishReasonError(reason);
+    };
+
+    const fail = (
+      controller: ReadableStreamDefaultController<Uint8Array>,
+      failure: Error,
+    ): void => {
+      if (failure instanceof StreamEndedWithoutFinishError) {
+        connectionFailures.add(failure);
+        report({ code: 'TRANSPORT' });
+      }
+      void reader.cancel(failure).catch(() => {});
+      controller.error(failure);
+    };
+
+    const checked = new ReadableStream<Uint8Array>(
+      {
+        async pull(controller) {
+          if (deferred !== undefined) {
+            fail(controller, deferred);
+            return;
+          }
+          // 一次 pull 一定要交出東西或收尾：沒交出東西 SDK 的那次讀會一直掛著。
+          for (;;) {
+            let next: Awaited<ReturnType<typeof reader.read>>;
+            try {
+              next = await reader.read();
+            } catch (error: unknown) {
+              // 讀上游失敗：原樣交下去，標記與回報是 withStreamIdleTimeout 的事。
+              controller.error(error);
+              return;
+            }
+            if (cancelled) return;
+            if (next.done) {
+              const tail = held;
+              held = Buffer.alloc(0);
+              const failure =
+                watching && tail.length > 0 ? inspect(tail.toString('utf8')) : undefined;
+              const ended =
+                failure ??
+                (watching && !finished && !sawError
+                  ? new StreamEndedWithoutFinishError('eof')
+                  : undefined);
+              if (ended === undefined) {
+                if (tail.length > 0) controller.enqueue(tail);
+                controller.close();
+                return;
+              }
+              if (failure === undefined && tail.length > 0) {
+                deferred = ended;
+                controller.enqueue(tail);
+                return;
+              }
+              fail(controller, ended);
+              return;
+            }
+            if (!watching) {
+              controller.enqueue(next.value);
+              return;
+            }
+            const combined = Buffer.concat([held, next.value]);
+            // latin1 一個字元一個位元組，字串索引就是位元組偏移；事件邊界是 ASCII，不會落在多位元組字元裡面。
+            const text = combined.toString('latin1');
+            let start = 0;
+            for (let boundary = SSE_EVENT_BOUNDARY.exec(text.slice(start)); boundary !== null;) {
+              const end = start + boundary.index;
+              const failure = inspect(combined.toString('utf8', start, end));
+              if (failure !== undefined) {
+                held = Buffer.alloc(0);
+                if (start === 0) {
+                  fail(controller, failure);
+                } else {
+                  deferred = failure;
+                  controller.enqueue(combined.subarray(0, start));
+                }
+                return;
+              }
+              start = end + boundary[0].length;
+              boundary = SSE_EVENT_BOUNDARY.exec(text.slice(start));
+            }
+            if (combined.length - start > INBAND_WATCH_MAX_CHARS) {
+              // 單一事件超過上限：放棄監看，已扣著的全部交下去。
+              watching = false;
+              held = Buffer.alloc(0);
+              controller.enqueue(combined);
+              return;
+            }
+            held = combined.subarray(start);
+            if (start > 0) {
+              controller.enqueue(combined.subarray(0, start));
+              return;
+            }
+          }
+        },
+        cancel(reason) {
+          cancelled = true;
+          return reader.cancel(reason);
+        },
+        // 水位 0：有人讀才 pull。延後丟的錯要等 SDK 把交下去的位元組處理完、真的又來讀才發生（見 {@link withStreamIdleTimeout} 同一處的註解）。
+      },
+      { highWaterMark: 0 },
+    );
+    return new Response(checked, {
       status: response.status,
       statusText: response.statusText,
       headers: response.headers,
@@ -1227,7 +1477,7 @@ export function createLiveModel(
 
   const fields: ChatOpenAIFields = {
     model: config.modelId,
-    // `fetch` 疊三層（再加最內層貼著底層 fetch 的串流用量回報，#1022，只旁讀不改位元組）：最內層是
+    // `fetch` 疊三層（再加最內層貼著底層 fetch 的串流用量回報，#1022，只旁讀不改位元組；與 #1538 夾在中間外層的完成檢查）：最內層是
     // 送出前換 body 的兩格（{@link withShippedRequestBody}，夾具共用）——#592（換掉空的助手內容）與 #1392（拿掉助手訊息的 `name`），中間是 #516
     // （串流內回報的錯誤翻成 HTTP 錯誤回應，才進得了重試射程），外層是 #521（第一則事件之後的閒置逾時）。
     // 外層收到的是中間那層嗅完第一則事件的那份回應。
@@ -1238,7 +1488,12 @@ export function createLiveModel(
       apiKey: async () => resolveUsableKey(credentials),
       fetch: withStreamIdleTimeout(
         config.streamIdleTimeoutMs,
-        withInbandStreamErrors(withShippedRequestBody(withStreamUsageReport())),
+        // 完成檢查夾在閒置逾時與串流內錯誤之間（#1538）；型錄條目宣告 `supportsFinishReason: false`（端點不送 finish_reason）就不掛。
+        (entry.compat?.supportsFinishReason === false
+          ? (fetcher: typeof fetch) => fetcher
+          : withStreamCompletionCheck)(
+          withInbandStreamErrors(withShippedRequestBody(withStreamUsageReport())),
+        ),
       ),
     },
     temperature: 1,
