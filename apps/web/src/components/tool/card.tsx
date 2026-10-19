@@ -20,11 +20,11 @@ import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
 import { Surface } from '@/components/surface';
-import { Counts } from '@/components/changes/counts';
 import { SubagentPanel, SubagentStateLabel } from '@/components/tool/subagent-control';
 import { TodoList } from '@/components/todo/list';
 import { ToolDiff, ToolOutputBlock, ToolRead, ToolSearch } from '@/components/tool/result';
 import { Badge } from '@/components/ui/badge';
+import { DiffStats } from '@/components/ui/diff-view';
 import { OutputBlock, StepRow, STEP_LABELS } from '@/components/ui/tool-steps';
 import { answerText } from '@/lib/question-view';
 import type { QuestionAnswer } from '@/lib/question-view';
@@ -169,7 +169,10 @@ export function ToolCard({
               </span>
             )}
             {view.diffView !== undefined && (
-              <Counts added={view.diffView.totals.added} deleted={view.diffView.totals.removed} />
+              <DiffStats
+                added={view.diffView.totals.added}
+                removed={view.diffView.totals.removed}
+              />
             )}
             {view.backgroundRunId !== undefined && (
               <SubagentStateLabel runId={view.backgroundRunId} />
