@@ -345,7 +345,8 @@ export interface SubagentSendCommand {
      * 使用者在哪個時區（[#1734](https://github.com/DemianLi/nexus-agent/issues/1734)），**選填**，形狀與語意同 `run.start` 的
      * `client_time_zone`（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)）：`UTC` 或 IANA 的 `Area/Location` 名，伺服器驗證並正規化，
      * 不合法回 `invalid_argument` 並指名這個欄位，那句話不送給子代理。照 dsh `subagent.prompt` 的 `clientTimeZone`
-     * （`packages/subagent/subagent/src/index.ts:447-475`、`control-types.ts:110`，`687f282e`）。
+     * （`packages/subagent/subagent/src/index.ts:447-475`、`control-types.ts:110`，`687f282e`）。**錯誤碼對照**：dsh 回的是
+     * `subagent/invalid-time-zone`，我們沿用 `run.start` 的 `invalid_argument`（這條 wire 沒有 dsh 的命名空間碼，欄位名寫在 message 裡）。
      *
      * 記在子代理**自己日誌**裡這句話的來源上（開一輪的 `turn/start`、插進跑著那一輪的 `user/message`），所以子代理的下一則讀數是 `resolved`。
      * **派出去的那一輪不帶時區**（沒有人在說話；dsh 的 `manager.ts:464` 同樣給 `{ kind: 'user' }`）：第一則讀數是 `missing`。

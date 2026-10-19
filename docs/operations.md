@@ -1432,7 +1432,7 @@ Browser time zone for this request: unavailable. Ask the user to clarify otherwi
 Elapsed since the preceding model-visible message: 15m 0s.
 ```
 
-- **第二行看這一輪的人話帶不帶時區**（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)，照 dsh 的 `deriveBrowserTimeZoneContext`）：`run.start` 帶了 `client_time_zone` 的話，唯一的時區寫「Browser time zone for this request: Asia/Taipei. Interpret otherwise-unqualified dates and times in this zone.」，**第一行的時鐘也改用這個時區**；同一輪有不同時區的人話（輪中插話換了時區）寫 `mixed ["America/New_York","Asia/Tokyo"]` 並請模型向使用者確認；都沒帶就是 `unavailable`（舊客戶端、CLI、目標續行）。web 真的送出時區是 [#1630](https://github.com/DemianLi/nexus-agent/issues/1630)，在那之前實際跑出來仍是 `unavailable`。**沒帶時區時**第一行的時區只是顯示用的回退，**不代表使用者在哪個時區**。
+- **第二行看這一輪的人話帶不帶時區**（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)，照 dsh 的 `deriveBrowserTimeZoneContext`）：`run.start` 帶了 `client_time_zone` 的話（`subagent.send` 也帶，記在子代理自己的日誌上，[#1734](https://github.com/DemianLi/nexus-agent/issues/1734)），唯一的時區寫「Browser time zone for this request: Asia/Taipei. Interpret otherwise-unqualified dates and times in this zone.」，**第一行的時鐘也改用這個時區**；同一輪有不同時區的人話（輪中插話換了時區）寫 `mixed ["America/New_York","Asia/Tokyo"]` 並請模型向使用者確認；都沒帶就是 `unavailable`（舊客戶端、CLI、目標續行）。web 真的送出時區是 [#1630](https://github.com/DemianLi/nexus-agent/issues/1630)，在那之前實際跑出來仍是 `unavailable`。**沒帶時區時**第一行的時區只是顯示用的回退，**不代表使用者在哪個時區**。
 - **只進請求尾端，不進系統提示詞**：前綴快取不會因此失效；已經送出的讀數記在日誌上，續接舊會話時原樣回到模型手上，不改寫。
 - **同一條 thread 10 分鐘內不重複**（`refreshIntervalMs`，預設 600000）；`0` 是每次呼叫都注入，不是關掉。兩條 thread 各算各的。
 - **顯示時區預設是行程的 `TZ`**，載入時解析一次。**容器裡常常是 UTC**，要固定成使用者看得懂的時區，啟動時設 `TZ`，或用 `plugin config set time-context --file <檔>`（檔裡寫 `timeZone: Asia/Taipei`，IANA 名），或在 `--patch` 裡給這一列的 `config`。
