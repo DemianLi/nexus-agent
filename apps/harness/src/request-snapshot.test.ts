@@ -168,7 +168,7 @@ const WORKER: PluginEntry = {
   },
 };
 
-type Extra = Partial<Pick<CreateNexusAgentOptions, 'backgroundSubagents'>> & {
+type Extra = Partial<Pick<CreateNexusAgentOptions, 'backgroundSubagents' | 'streamRetry'>> & {
   /** 上一個行程留下的事件：新行程從它續接（`SessionRegistry` 的 `rootSeed`）。 */
   readonly seed?: readonly SessionEvent[];
 };
@@ -193,6 +193,7 @@ async function assemble(plugins: readonly PluginEntry[], systemPrompt: string, e
     ...(extra.backgroundSubagents !== undefined && {
       backgroundSubagents: extra.backgroundSubagents,
     }),
+    ...(extra.streamRetry !== undefined && { streamRetry: extra.streamRetry }),
   });
   const sessions = new SessionRegistry(
     'snapshot',
@@ -395,6 +396,8 @@ describe('記錄點在模型呼叫上，不在 middleware 這一層', () => {
 
 describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650）', () => {
   const quiet = { log: () => {}, error: () => {} };
+  /** 掛上重打（產品路徑由 `retryPolicy` 給），「沒有 `llm/retry`」那一格才不是空的。 */
+  const retrying: Extra = { streamRetry: { maxRetries: 2, initialDelayMs: 1 } };
 
   /** 讓 `type` 那種事件的**第一次**寫入拋 `broken`，其餘照寫。 */
   function breakFirst(log: SessionLog, type: string, broken: Error): void {
@@ -415,7 +418,7 @@ describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650�
     const { agent, sessions, bodies, close } = await assemble(
       [createEchoPlugin()],
       '你是測試助手。',
-      {},
+      retrying,
     );
     breakFirst(sessions.root, type, broken);
     // LangChain 重拋 handler 的錯之前自己印一行（`@langchain/core` `callbacks/manager.js:376`）：收起來，也斷言它真的印了。
@@ -506,7 +509,7 @@ describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650�
           ),
       },
     };
-    const { agent, sessions, bodies, close } = await assemble([deep], '你是測試助手。', {});
+    const { agent, sessions, bodies, close } = await assemble([deep], '你是測試助手。', retrying);
     const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     try {
       for (const text of ['一', '二']) {
