@@ -116,7 +116,7 @@ describe('wire：run.start 帶 client_time_zone', () => {
       text: '嗨',
       clientTimeZone: 'Asia/Taipei',
     });
-    expect(insertedSources(log())).toEqual([{ kind: 'user', clientTimeZone: 'Asia/Taipei' }]);
+    expect(insertedSources(log())).toStrictEqual([{ kind: 'user', clientTimeZone: 'Asia/Taipei' }]);
   });
 
   it('UTC 也是有效的', async () => {
@@ -143,8 +143,8 @@ describe('wire：run.start 帶 client_time_zone', () => {
     const { client, log } = wire();
     await client.runStart('tz-omitted', '嗨');
     await until(() => turnStarts(log()).length === 1);
-    expect(turnStarts(log())[0]?.data).toEqual({ kind: 'message', text: '嗨' });
-    expect(insertedSources(log())).toEqual([{ kind: 'user' }]);
+    expect(turnStarts(log())[0]?.data).toStrictEqual({ kind: 'message', text: '嗨' });
+    expect(insertedSources(log())).toStrictEqual([{ kind: 'user' }]);
   });
 
   it('無效的時區：invalid_argument、訊息點名 client_time_zone，不進佇列', async () => {
@@ -198,11 +198,11 @@ describe('pump：三個位置與舊日誌', () => {
       await pump.submit({ kind: 'message', text: '沒時區', id: 'without-zone' });
       await pump.whenIdle();
       const events = pump.sessionLog.events;
-      expect(turnStarts(events).map((event) => event.data)).toEqual([
+      expect(turnStarts(events).map((event) => event.data)).toStrictEqual([
         { kind: 'message', text: '有時區', clientTimeZone: 'America/New_York' },
         { kind: 'message', text: '沒時區' },
       ]);
-      expect(insertedSources(events)).toEqual([
+      expect(insertedSources(events)).toStrictEqual([
         { kind: 'user', clientTimeZone: 'America/New_York' },
         { kind: 'user' },
       ]);
@@ -222,7 +222,7 @@ describe('pump：三個位置與舊日誌', () => {
         clientTimeZone: 'Asia/Tokyo',
       });
       await pump.whenIdle();
-      expect(turnStarts(pump.sessionLog.events)[0]?.data).toEqual({
+      expect(turnStarts(pump.sessionLog.events)[0]?.data).toStrictEqual({
         kind: 'message',
         text: '都帶',
         requestId: 'req-1',
@@ -262,7 +262,7 @@ describe('pump：三個位置與舊日誌', () => {
         clientTimeZone: 'Asia/Taipei',
       });
       await second.whenIdle();
-      expect(turnStarts(second.sessionLog.events).map((event) => event.data)).toEqual([
+      expect(turnStarts(second.sessionLog.events).map((event) => event.data)).toStrictEqual([
         { kind: 'message', text: '舊的一句', requestId: 'req-old', runId: 'run-old' },
         { kind: 'message', text: '新的一句', clientTimeZone: 'Asia/Taipei' },
       ]);

@@ -84,7 +84,7 @@ function workspaceWith(agentsMd: string | undefined): string {
   return dir;
 }
 
-/** 一個 home；`patch` 有給就寫成 home 裡的 `cordis.patch.yml`（使用者的 patch 檔；`plugin disable` 這類指令寫的是變更紀錄，不是這個檔）。 */
+/** 一個 home；`patch` 有給就寫成 home 裡的 `cordis.patch.yml`（使用者的 patch 檔，第一次啟動時會遷進變更紀錄，見 `plugin-config.ts:20`；`plugin disable` 這類指令寫的是變更紀錄，不是這個檔）。 */
 function home(patch?: string): NodeJS.ProcessEnv {
   const dir = scratch();
   if (patch !== undefined) writeFileSync(join(dir, 'cordis.patch.yml'), patch, { mode: 0o600 });
@@ -311,6 +311,8 @@ describe('C：節流——同一條 thread 10 分鐘內不重複，兩條 thread
 /**
  * 把樹上 `sessionLookup` 服務的每一次回答錄下來（#1625 審查要求）：子代理那幾格光看「第三行是 unavailable」分不出
  * 「查到了子代理自己那份日誌、只是沒有基線」與「查找掉到 not-attached 的退路」——兩條路輸出同一行字。
+ * **這裡錄的是服務的回答，釘的是「服務查得到子代理的日誌」；插件有沒有拿它來讀，由插件單元測試的
+ * 「查找回 ok、位址是子代理」那一條釘**（只認 root 位址的突變在那一條紅）。
  */
 async function recordLookups(booted: Booted): Promise<SessionLookup[]> {
   const service = (await booted.root.tree.context()).get('sessionLookup') as

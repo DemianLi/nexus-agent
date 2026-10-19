@@ -358,7 +358,7 @@ describe('瀏覽器時區：三種讀數（#1629，dsh src/request-zone.ts）', 
   it('derive：沒有、一個、同一個（去重）、不同（排序）→ missing／resolved／resolved／mixed', () => {
     const none = new SessionLog('t');
     humanTurn(none, '嗨');
-    expect(deriveBrowserTimeZoneContext(none.events)).toEqual({ kind: 'missing' });
+    expect(deriveBrowserTimeZoneContext(none.events)).toStrictEqual({ kind: 'missing' });
 
     const one = new SessionLog('t');
     humanTurn(one, '嗨', 'Asia/Taipei');
@@ -399,21 +399,34 @@ describe('瀏覽器時區：三種讀數（#1629，dsh src/request-zone.ts）', 
     });
   });
 
-  it('格式不對、Intl 不認得的時區：拋 TypeError；有效但名字跟這個執行期的正規名不同：照用（偏離 6）', () => {
+  it('格式不對、Intl 不認得的時區：拋 TypeError（dsh `request-zone.spec.ts`）', () => {
     for (const bad of ['', 'Taipei', ' Asia/Taipei', 'Asia/Nowhere_City', 'asia/../etc']) {
       const log = new SessionLog('t');
       humanTurn(log, '嗨', bad);
       expect(() => deriveBrowserTimeZoneContext(log.events), bad).toThrow(TypeError);
     }
-    // 兩個別名之一在這個執行期必然不是正規名；兩個都收，不拋。
-    for (const alias of ['Asia/Calcutta', 'Asia/Kolkata']) {
-      const log = new SessionLog('t');
-      humanTurn(log, '嗨', alias);
-      expect(deriveBrowserTimeZoneContext(log.events)).toEqual({
-        kind: 'resolved',
-        timeZone: alias,
-      });
-    }
+  });
+
+  it('逐字照 dsh：有效但不等於這個執行期正規名的別名也拋（dsh `request-zone.spec.ts:52`）；正規名那個照收', () => {
+    // 哪一個是正規名看執行期（Node 25.9 是 Asia/Calcutta；風險見 #1733），所以兩個都試，用 Intl 自己的回答分辨。
+    const canonicalOf = (zone: string): string =>
+      new Intl.DateTimeFormat('en-US', { timeZone: zone }).resolvedOptions().timeZone;
+    const [canonical] = ['Asia/Calcutta', 'Asia/Kolkata'].filter(
+      (zone) => canonicalOf(zone) === zone,
+    );
+    const [alias] = ['Asia/Calcutta', 'Asia/Kolkata'].filter((zone) => canonicalOf(zone) !== zone);
+    expect(canonical).toBeDefined();
+    expect(alias).toBeDefined();
+
+    const accepted = new SessionLog('t');
+    humanTurn(accepted, '嗨', canonical);
+    expect(deriveBrowserTimeZoneContext(accepted.events)).toStrictEqual({
+      kind: 'resolved',
+      timeZone: canonical,
+    });
+    const rejected = new SessionLog('t');
+    humanTurn(rejected, '嗨', alias);
+    expect(() => deriveBrowserTimeZoneContext(rejected.events)).toThrow('must be canonical');
   });
 
   it('render：三種字樣逐字照 dsh', () => {
@@ -500,6 +513,23 @@ describe('瀏覽器時區：三種讀數（#1629，dsh src/request-zone.ts）', 
       expect(lines[0]).toContain('[UTC]');
       expect(lines[1]).toBe(
         'Browser time zone for this request: unavailable. Ask the user to clarify otherwise-unqualified dates and times.',
+      );
+    });
+
+    it('查找回 ok、位址是子代理、日誌裡有帶時區的 turn/start：第二行是 resolved（分得出「查到了」與「退回」）', async () => {
+      // 同步子代理的日誌正常沒有 turn/start；這裡手放一顆，等於那份日誌有東西可讀。
+      // 插件若只認 root 位址、或查到了不讀，這一條會變成 unavailable。
+      const log = new SessionLog('t/sub');
+      humanTurn(log, '任務', 'Asia/Taipei');
+      const listener = createTimeContextListener({
+        refreshIntervalMs: 0,
+        formatter: createTimestampFormatter('UTC'),
+        timeZone: 'UTC',
+        lookup: () => ({ kind: 'ok', address: { kind: 'subagent', runId: 'tools:worker-1' }, log }),
+      });
+      const [injection] = (await listener([], { configurable: {} })) ?? [];
+      expect(injection?.content.split('\n')[1]).toBe(
+        'Browser time zone for this request: Asia/Taipei. Interpret otherwise-unqualified dates and times in this zone.',
       );
     });
 

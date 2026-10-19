@@ -385,7 +385,7 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
 
 ### 5. Context 注入插件 —— 答完了（2026-09-07，[#215](https://github.com/DemianLi/nexus-agent/issues/215)）：判為不是缺口，降到第 7 條
 
-> **2026-10-19 重判：本節對 `time-context` 的結論（「不是缺口」、降到第 7 條）已推翻，該插件已落地**（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)）。重判全文在第 7 條 `:452`；下面第 2 點的理由已劃掉並註明日期，第 1、3 點的帳（鉤子頻率、價錢）也已在 `:452` 重算。`tmux-context` 與其餘三個的結論照舊。
+> **2026-10-19 重判：本節對 `time-context` 的結論（「不是缺口」、降到第 7 條）已推翻，該插件已落地**（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)）。重判全文在第 7 條 `:454`；下面第 2 點的理由已劃掉並註明日期，第 1、3 點的帳（鉤子頻率、價錢）也已在 `:454` 重算。`tmux-context` 與其餘三個的結論照舊。
 
 `time-context`（現在時間、時區、經過時長）是 dsh `context/` 裡最小的一個；`agent-instructions` 我們有（`@nexus/plugin-agent-instructions`，2026-09-18 起；[#388](https://github.com/DemianLi/nexus-agent/issues/388) 之前這裡寫的是 `@nexus/plugin-memory`，那是錯的）。dsh 讓注入的上下文以 user 角色訊息進會話歷史，所以可回放、可壓縮——**那一點也照抄了**，基線記成 `user/message`。
 
@@ -407,7 +407,7 @@ Proteus 定義了「一個 harness 可以被量」的三個前提，對著我們
    **2026-09-16 同一條準則第二次失手，對象是 `hooks`**（[#360](https://github.com/DemianLi/nexus-agent/issues/360)）。§三小計把它寫成「dsh base 預設開著」的兩個之一，而 **dsh 的六個出廠 bundle 一個都沒掛 bridge**。兩次的成因一樣：**「dsh 有這個套件」被當成「dsh 出廠就開」**，而那是兩件事——dsh 發布得出去的套件遠多於任何 profile 掛起來的。**下次用這條準則之前先查 `packages/bundle/`，不要查 `packages/`。**
 
    **2026-09-19 同型的錯又出了兩次，方向相反。** 前兩次是把「dsh 有這個套件」讀成「出廠就開」；§三第 48 列的 `web`（歸成企業級）與上面那句「本來就不在 base 裡」，是把「base 沒有」讀成「出廠沒有」。上一句的規矩因此要補一半：**`packages/bundle/` 要查完六個 bundle（web-app 把 agent 平面整批關掉、改由 preset 掛），再加上 `packages/preset/agent-presets/presets/` 的四個 preset；只查 `base` 不夠。**
-2. ~~**dsh 自己把它歸給一個我們判過不排的東西。** `time-context/README.zh.md` 概述段：「本插件需主动启用：默认组合不启用它，**Schedule Web overlay 会挂载它**」。而 `schedule` 就在第 7 條那一列。**它不是「每個 harness 都該有」，它是 Schedule 的配件。**~~ **2026-10-19 這條理由不再成立**（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)，重判在第 7 條 `:452`）：dsh 的 web-app 出廠 preset（standard、cordis、ptc）都掛 `time-context`，不只是 Schedule 的 overlay；原句只讀了 README 概述段，沒查 `packages/preset/agent-presets/presets/`（第 1 點那條「要查完六個 bundle 加四個 preset」的規矩，這一句是同型的失手）。
+2. ~~**dsh 自己把它歸給一個我們判過不排的東西。** `time-context/README.zh.md` 概述段：「本插件需主动启用：默认组合不启用它，**Schedule Web overlay 会挂载它**」。而 `schedule` 就在第 7 條那一列。**它不是「每個 harness 都該有」，它是 Schedule 的配件。**~~ **2026-10-19 這條理由不再成立**（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)，重判在第 7 條 `:454`）：dsh 的 web-app 出廠 preset（standard、cordis、ptc）都掛 `time-context`，不只是 Schedule 的 overlay；原句只讀了 README 概述段，沒查 `packages/preset/agent-presets/presets/`（第 1 點那條「要查完六個 bundle 加四個 preset」的規矩，這一句是同型的失手）。
 3. **三個讀數逐個量，沒有一個撐得起那格節點。** 這一條要分開算，不能讓其中一個的理由蓋掉另外兩個——`time-context` 每次注的是**現在時間**、**瀏覽器時區**、**經過時長**三行。
    - **瀏覽器時區：今天沒有來源，而且不是加個 middleware 就有的。** dsh 從開放輪次的 `user-rpc` 訊息派生（`src/request-zone.ts`）；我們全樹 `timeZone`／`timezone`／`Intl.`（含 `.tsx`、扣 `node_modules` 與測試）**零命中**。`apps/web` 在，所以來源不是不可能——瀏覽器自己知道 `Intl.DateTimeFormat().resolvedOptions().timeZone`——但 `@nexus/wire` 的 `protocol.ts` 上沒有那個欄位，**要有得先擴 wire，這抬高價錢不是降低**。
    - **現在幾點：零個模型可見的讀數。** `new Date(`／`Date.now()`／`toISOString`／`toLocale*` 全樹 11 處，逐處看過**沒有一處把牆上時鐘 render 進模型看得到的東西**：三處是日誌／遙測時間戳，`plugin-goal` 那個進耐久快照（`prompt.ts` 不 render 它），`jsonl-session-store.ts:205` 是檔名，`quickjs` 是 deadline，`eval/compare.ts` 是計時。

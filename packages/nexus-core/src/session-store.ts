@@ -589,9 +589,10 @@ import type { SessionEvent } from './session-log.js';
  * `requestId` 同一批位置：排著時在 `inbox/spliced` 裡那一件（`QueuedInput.source.clientTimeZone`）；開了一輪之後在 `turn/start`（`kind: 'message'`）；
  * 輪中插話被領走時在 `user/message` 的 `source.clientTimeZone`。`@nexus/plugin-time-context` 讀這一輪裡的這幾格，決定給模型的「Browser time zone」那一行。
  *
- * **升版，但不是非升不可**（判準同 22）：這是既有事件上多的選填欄位，不是新的事件種類，一台 48 的 runtime 讀到新檔照常重建、不拒讀，
- * 只是它不認得這一格：那台 runtime 的 time-context 會把這條 thread 的時區報成不明，而 49 的 runtime 會報成使用者的時區。不影響日誌重建與歷史。
- * 升版是為了讓「這份檔可能帶時區」看得出來；不標 `ignorable`（它不是事件種類）。
+ * **升版，不標 `ignorable`**（判準見上面 32 那段「什麼時候要升版」：寫出來的東西，一台舊 runtime 還能不能完整正確地處理）：這是既有事件上多的選填欄位，
+ * 不是新的事件種類，所以沒有 `ignorable` 可標。一台 48 的 runtime **讀不了** 49 的檔：`parseHeader` 遇到比自己新的版本會拋 `SessionFormatUnsupportedError`
+ * （只有 `eval/session-scan.ts` 開了 `acceptNewer`）。而且續接一條舊 thread 時 header 會被改寫成 49，所以**只要一條 thread 被 49 碰過，退回 48 就打不開**。
+ * **回滾的後果**：發版後退回前一版，被新版碰過的 thread 在舊版打不開；這是升版的營運代價，不是描述上的小事。
  *
  * **讀舊檔**：48 以前沒有這一格，等於沒帶時區，不補寫歷史（補了也不知道當時使用者在哪）。客戶端沒帶 `client_time_zone` 的送出，日誌與以前位元組相同
  * （有測試釘住）。

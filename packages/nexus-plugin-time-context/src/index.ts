@@ -35,8 +35,8 @@
  *
  * ## 偏離登記（AGENTS.md 的偏離規則；dsh 以 `687f282e` 為準）
  *
- * 前五條都是理由 (1)「基座表達不出來」。前三條是 pre-step 接縫（`@nexus/agent-loop`）已登記的偏離，這顆插件繼承下來；第四條同 goal 的前例；
- * 第五條是出貨層的限制；第六條（#1629）是理由 (2)。
+ * 五條都是理由 (1)「基座表達不出來」。前三條是 pre-step 接縫（`@nexus/agent-loop`）已登記的偏離，這顆插件繼承下來；第四條同 goal 的前例；
+ * 第五條是出貨層的限制。
  *
  * 1. **頻率：每次 invoke 一次，不是每步一次。**
  *    dsh 每個 step 都跑 pre-step（`src/index.ts:185`）；我們的宿主把 listener 掛在 `beforeAgent`，一次 invoke 只跑一次。每步要 `beforeModel`，
@@ -62,13 +62,6 @@
  * 5. **CLI 也掛。** dsh 只有 web-app 的三個 preset 掛，headless、base 不掛，照 dsh 該只掛 serve。serve 專屬層（`cordis.serve.yml`）的函式插件
  *    上不了樹（`apps/harness/src/plugin-tree.ts:51-52`），這顆是樹上的插件，只能寫在 `cordis.yml`，CLI 和 serve 一起掛。CLI 沒有瀏覽器，第二行
  *    一律 `unavailable`，跟 dsh 的 CLI 一樣不知道使用者的時區。**撤除條件**：serve 層改成經 Include 上樹時，把這一列搬到 `cordis.serve.yml`。
- * 6. **（#1629）日誌裡記著的時區是這個執行期認得的有效名，但跟這個執行期的正規名不同：收下、照用，不拋。** dsh 的 `browserTimeZone` 在
- *    `canonical !== value` 時丟 `TypeError`（`request-zone.ts`）。時區的「正規名」是 `Intl` 在**當下這個執行期**說了算：實測 Node 25.9 把 `Asia/Kolkata`
- *    收成 `Asia/Calcutta`（舊的別名反而是它的正規名），別的 Node／ICU 版本可能反過來。日誌會比執行期活得久，換了 Node 版本之後，舊版寫進去的
- *    名字在新版眼中「不正規」，照 dsh 的話那條 thread 從此每一輪都因為 pre-step 拋錯而跑不起來。所以伺服器邊界仍然照 dsh 驗證並正規化
- *    （`@nexus/wire` 的 `canonicalClientTimeZone`），但這裡讀日誌時只擋「格式不對」與「`Intl` 不認得」，名字不同的有效時區照用。理由 2：dsh 沒有的產品需求
- *    （長期運行、日誌跨 Node 版本沿用）。**撤除條件**：`Intl` 的正規名在 Node 各版本之間穩定時，改回逐字照 dsh。
- *
  * **和 schedule 不同行，不算偏離。** dsh 把它和提醒工具放在同一個 preset，我們不做 schedule（L-18、#1614 拍板第 2 條）；dsh 拿掉 `minimal` 的理由
  * 是那個組合裡沒有人用得到讀數，它的掛載條件是一般性的（`README.zh.md:28`：要解讀沒寫明時區的日期就掛）。我們的 serve 出廠組合比較接近 standard，
  * 所以照 standard 掛（#1614 Q5 已拍板）。
@@ -118,19 +111,26 @@ export type BrowserTimeZoneContext =
   | { readonly kind: 'mixed'; readonly timeZones: readonly string[] }
   | { readonly kind: 'missing' };
 
-/** 驗一個日誌上的時區名：格式要對、`Intl` 要認得；名字跟這個執行期的正規名不同照用（見檔頭偏離 6）。 */
+/**
+ * 驗一個日誌上的時區名，逐字照 dsh `browserTimeZone`（`request-zone.ts:25-39`）：格式要對、`Intl` 要認得、**而且要等於這個執行期的正規名**。
+ * 最後一條是刻意的（dsh `tests/request-zone.spec.ts:52` 釘住）；跨 Node／ICU 版本正規名可能不同的風險見 #1733。
+ */
 function checkedBrowserTimeZone(value: string): string {
   if (value !== 'UTC' && !IANA_TIME_ZONE.test(value)) {
     throw new TypeError(
-      `browser time zone must be UTC or IANA Area/Location: ${JSON.stringify(value)}`,
+      `browser time zone must be canonical UTC or IANA Area/Location: ${JSON.stringify(value)}`,
     );
   }
+  let canonical: string;
   try {
-    new Intl.DateTimeFormat('en-US', { timeZone: value });
+    canonical = new Intl.DateTimeFormat('en-US', { timeZone: value }).resolvedOptions().timeZone;
   } catch (error: unknown) {
     throw new TypeError(`browser time zone is unsupported: ${JSON.stringify(value)}`, {
       cause: error,
     });
+  }
+  if (canonical !== value) {
+    throw new TypeError(`browser time zone must be canonical: ${JSON.stringify(value)}`);
   }
   return value;
 }
@@ -399,7 +399,7 @@ export function createTimeContextListener(options: TimeContextListenerOptions): 
     const turn = facts?.turn ?? 1;
     const step = facts?.step ?? 1;
     const base = step === 1 ? facts?.baselineBeforeTurn : facts?.lastTurnInjectionTime;
-    // 唯一的使用者時區就用它格式化第一行的時鐘；不唯一或沒有就用回退時區（dsh `src/index.ts:226-228`）。
+    // 唯一的使用者時區就用它格式化第一行的時鐘；不唯一或沒有就用回退時區（dsh `src/index.ts:205-213`）。
     const browser = facts?.browser ?? ({ kind: 'missing' } as const);
     const selectedTimeZone = browser.kind === 'resolved' ? browser.timeZone : options.timeZone;
     const text = renderTimeContext(
