@@ -3874,7 +3874,9 @@ describe('瀏覽器量工具卡的 diff 的覆寫與焦點（#1685 PR B）', () 
                 rect.bottom + reach > bottom + 0.5 && s.overflowY !== 'visible' ? '下' : '',
               ].join('');
               if (sides !== '')
-                out.push(`#${i} 被 ${node.tagName}.${node.className} 切掉（${sides}）`);
+                out.push(
+                  `#${i} 被 ${node.tagName}[${node.getAttribute('data-slot') ?? ''}] 切掉（${sides}）`,
+                );
             }
             return out;
           }),

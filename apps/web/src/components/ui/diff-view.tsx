@@ -87,7 +87,10 @@ export function patchStats(patch: string): { added: number; removed: number } {
  */
 export function capPatch(patch: string): string {
   const lines = patch.replace(/\n$/, '').split('\n');
-  const limit = Math.min(MAX_RENDERED_LINES, fitRowCount(lines, (line) => line.length));
+  const limit = Math.min(
+    MAX_RENDERED_LINES,
+    fitRowCount(lines, (line) => line.length),
+  );
   let clipped = false;
   const kept = lines.slice(0, limit).map((line) => {
     const { head, tail, dropped } = clipMiddle(line, CARD_LINE_MAX_CHARS);

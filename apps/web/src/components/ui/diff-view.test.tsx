@@ -8,7 +8,7 @@ import {
   PATCH_STATS_CACHE_SIZE,
   patchStats,
 } from '@/components/ui/diff-view';
-import { CARD_LINE_MAX_CHARS } from '@/lib/card-limit';
+import { CARD_LINE_MAX_CHARS, CARD_MAX_CHARS } from '@/lib/card-limit';
 import { MAX_RENDERED_LINES } from '@/lib/diff-rows';
 import { patchStats as vendorPatchStats } from '@/vendor/solid-glass/components/ui/diff-view';
 
@@ -78,12 +78,15 @@ describe('DiffView 的 nexus 層：畫之前先截（第 77 條）', () => {
   });
 
   test('交給 vendor 的是截過的，可以停焦點、名稱預設「改動內容」（patch 0024）', () => {
-    const patch = Array.from({ length: MAX_RENDERED_LINES + 3 }, (_, i) => `+${i}`).join('\n');
+    // 每行 2,000 字、25 行：撞到整張卡的字元預算（DOM 小，不必畫 5,000 行）。
+    const patch = Array.from({ length: 25 }, () => `+${'x'.repeat(CARD_LINE_MAX_CHARS - 1)}`).join(
+      '\n',
+    );
     render(<DiffView patch={patch} />);
     const view = screen.getByRole('generic', { name: '改動內容' });
     expect(view.tabIndex).toBe(0);
-    expect(view.children).toHaveLength(MAX_RENDERED_LINES + 1);
-    expect(view.lastElementChild!.textContent).toBe('... 還有 3 行沒畫');
+    expect(view.children).toHaveLength(CARD_MAX_CHARS / CARD_LINE_MAX_CHARS + 1);
+    expect(view.lastElementChild!.textContent).toBe('... 還有 5 行沒畫');
   });
 });
 

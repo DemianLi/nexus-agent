@@ -84,8 +84,8 @@
 | 9 | 歷史往回捲 | shadcn `message-scroller`（帶 `@shadcn/react`） | — |
 | 10／11 | 使用者／助理訊息 | shadcn `message`＋`bubble`；**markdown 自建**：`mdast-util-from-markdown`＋`micromark-extension-gfm`＋增量解析＋`cjkFriendlyStrong`。撞到輸出上限的那一輪，最後一則底下一行灰字，同「（已停止）」（`lib/max-tokens-view.ts`，#608） | `transcript.tsx` 留（歸屬、狀態字面） |
 | 12 | 推理區塊（思考過程） | solid-glass 的 `Reasoning`（#1683 起；vendor `components/ui/reasoning.tsx`，套 vendor README「本地修改」第 67、68 條的 patch、第 69 條的包裝，第 63、64 條的覆寫擴到它身上）。原生 `<details>`，預設收合；收合時一行摘要放在標題後面的 `trailing`；內文用列 10／11 那一套 markdown | `reasoning-row.tsx` 留轉接 |
-| 13 | 工具卡 | solid-glass 的 `StepRow`（#1682 起；vendor `components/ui/tool-steps.tsx`，套 vendor README「本地修改」第 56–59 條的 patch、第 60–66 條的包裝與覆寫）。`lib/tool-step.ts` 把 `ToolEntry` 轉成 SG 的 `Step`：狀態收成 SG 的三態，四格 `ToolEntry.status` 的字放在列尾的 `badge`（狀態不靠顏色或動效）；通用卡的參數、結果、錯誤用 SG 的結果框，專屬呈現（列 14）、提問、交付、待辦、子代理面板畫在展開後的 children，不畫兩次。連續完成的工具（至少 2 顆）收成 SG 的 `StepGroup`（工具段，`tool-run.tsx`）。沒有狀態圖示、邊框光、外框卡片 | `tool/card.tsx`、`tool-run.tsx` |
-| 14 | 工具專屬呈現 | 自建：依工具名分類（`classifyTool`）＋通用卡兜底，分哪幾類照 nexus 實際工具名定；讀檔卡的高亮 `shiki/core`（ts／bash／json 靜態、其餘 `import()`）、數學 `katex`。通用卡的參數是 SG 結果框裡的純文字，不上色（#1682） | `tool/result.tsx` |
+| 13 | 工具卡 | solid-glass 的 `StepRow`（#1682 起；vendor `components/ui/tool-steps.tsx`，套 vendor README「本地修改」第 56–59 條的 patch、第 60–66 條的包裝與覆寫）。`lib/tool-step.ts` 把 `ToolEntry` 轉成 SG 的 `Step`：狀態收成 SG 的三態，四格 `ToolEntry.status` 的字放在列尾的 `badge`（狀態不靠顏色或動效）；通用卡的參數、結果、錯誤用 SG 的結果框，寫檔／改檔給 SG 的 `step.patch`（#1685 起：列上的 `+N −M` 與展開後的 `DiffView` 由 SG 畫，收著不再只畫 9 列；上限與報讀在 nexus 層，第 77–80 條），其餘專屬呈現（列 14）、提問、交付、待辦、子代理面板畫在展開後的 children，不畫兩次。連續完成的工具（至少 2 顆）收成 SG 的 `StepGroup`（工具段，`tool-run.tsx`），段收著那一列有整段的 `+N −M`。沒有狀態圖示、邊框光、外框卡片 | `tool/card.tsx`、`tool-run.tsx` |
+| 14 | 工具專屬呈現 | 自建：依工具名分類（`classifyTool`）＋通用卡兜底，分哪幾類照 nexus 實際工具名定；讀檔卡的高亮 `shiki/core`（ts／bash／json 靜態、其餘 `import()`）、數學 `katex`。通用卡的參數是 SG 結果框裡的純文字，不上色（#1682）。寫檔／改檔的 diff 是 SG 的 `DiffView`（#1685，轉換在 `lib/tool-diff.ts`，見列 13） | `tool/result.tsx`、`lib/tool-diff.ts` |
 | 15／22 | 子代理歸屬、決定紀錄 | 自建＋shadcn `badge` | 在 `transcript.tsx` |
 | 21 | 核准 | 自建，shadcn `card`＋`button`，換掉輸入框（§4.3） | `approval-card.tsx` 留邏輯 |
 | 23 | 提問 | shadcn `questionnaire`（`radix-vega`）＋§4.3 的補件 | `question-card.tsx` 被取代 |
@@ -286,7 +286,8 @@
 - 工具卡狀態變化不唸。狀態列的 glyph（SG `StatusGlyph`）與空白 hero 的 orb 旁已有同義文字時 `aria-hidden`。glyph 是裝飾，非文字對比以裝飾性豁免（WCAG 1.4.11 只管辨識內容所需的圖形；這一刻在做什麼由狀態列的字與工具列的字講，不靠 glyph）。
 - **工具卡與工具段**（#1682，SG 的 `StepRow`／`StepGroup`）：
   - 列是一顆帶 `aria-expanded` 的按鈕，名稱＝標題＋摘要＋列尾看得見的字（工具名、計數、歸屬、狀態字）。狀態一定有字（Badge），不靠顏色、圖示或動效。
-  - 群組按鈕的名稱＝「N 個工具呼叫，讀取 ×3、寫入檔案」（段裡只收完成的工具）。摘要是純字串、會被報讀，用「，」「、」接，不用「·」。
+  - 群組按鈕的名稱＝「N 個工具呼叫，讀取 ×3、寫入檔案」（段裡只收完成的工具）。摘要是純字串、會被報讀，用「，」「、」接，不用「·」。段裡有寫檔／改檔時名稱後面接整段的合計「新增 N 行，刪除 M 行」（#1685，看得見的「+N −M」`aria-hidden`）。
+  - 寫檔／改檔的列名稱裡「新增 N 行，刪除 M 行」只唸一次（同上）。展開後的 diff（SG `DiffView`）停得上焦點（vendor patch `0024`），名稱「改動內容」，方向鍵可以橫向、直向捲。
   - 展開後沒有內容的列，SG 會停用按鈕（聽起來像壞掉），所以空的時候放一句 emptyNote（「沒有參數。」「還沒有結果。」「沒有結果文字。」），按鈕照樣按得到。
   - 結果框的 `pre` 停得上焦點（vendor patch `0019`），名稱是框的標題（「參數」「結果」「錯誤」），鍵盤可以捲。
 - **思考過程**（#1683，SG 的 `Reasoning`）：原生 `<summary>`，不另加 role、`aria-expanded`，展開與否由瀏覽器報。名稱只有「思考過程」或「思考中」；收合時那行摘要與「·」`aria-hidden`（摘要每來一顆 chunk 就變，焦點停在上面時報讀器會跟著重唸）。推理不進 polite 區唸（狀態列已經唸「執行中」）。

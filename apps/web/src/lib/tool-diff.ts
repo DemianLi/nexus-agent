@@ -177,13 +177,11 @@ const ESCAPES: Readonly<Record<string, string>> = { '\n': '\\n', '\r': '\\r', '\
  * 後半段可能被上色、算進增刪數，或憑空開出一個 hunk。開頭的 `/` 拿掉一個，不畫成 `a//notes.md`。
  */
 export function patchPath(path: string): string {
-  return path
-    .replace(/^\//, '')
-    .replace(
-      // eslint-disable-next-line no-control-regex -- 要找的就是控制字元
-      /[\u0000-\u001f\u007f]/g,
-      (c) => ESCAPES[c] ?? `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`,
-    );
+  return path.replace(/^\//, '').replace(
+    // eslint-disable-next-line no-control-regex -- 要找的就是控制字元
+    /[\u0000-\u001f\u007f]/g,
+    (c) => ESCAPES[c] ?? `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`,
+  );
 }
 
 /**
