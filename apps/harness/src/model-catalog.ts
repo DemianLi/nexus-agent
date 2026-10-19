@@ -17,7 +17,7 @@
  *   `packages/llm/llm-pi-ai/src/adapter.ts:370`，`5badb150`），是一個部署一份；我們沒有 profile 這一層，而端點的收圖上限是
  *   **每顆模型各自的**（`meta/llama-3.2-90b-vision-instruct` 每次請求最多一張），跟 id 同一筆、換模型時一起換。形狀照
  *   `LlmImageRequestBudget`（`maxImages`、`maxBytes`），單位是張數與位元組。
- * - **`compat` 只收 `chatTemplateKwargs`。** dsh 的 `compat` 是 pi-ai 的一整組線上相容開關（系統提示放哪個角色、
+ * - **`compat` 收 `chatTemplateKwargs` 與 `supportsFinishReason`（#1538）。** dsh 的 `compat` 是 pi-ai 的一整組線上相容開關（系統提示放哪個角色、
  *   哪個欄位限制輸出、思考怎麼送……）；我們沒有 pi-ai 那一層，只有一個要送 chat template 參數的需求。值裡只認
  *   `{ $var: 'thinking.enabled' }` 這一個佔位符（dsh 有三個：另兩個是 `thinking.effort`、`thinking.budget`，
  *   `catalog.ts:152-160`），因為今天沒有人選推理等級或預算。
@@ -90,6 +90,12 @@ export const modelEntrySchema = z.strictObject({
     .strictObject({
       /** 送成 `chat_template_kwargs` 的參數。 */
       chatTemplateKwargs: z.record(z.string(), chatTemplateValue).optional(),
+      /**
+       * 這個端點的串流會不會送 `finish_reason`（#1538，照 dsh `supportsFinishReason`，`llm-pi-ai/src/catalog.ts:401-405`）。
+       * **沒寫就是 `true`**：串流在收到結束原因之前結束算斷線、陌生的結束原因算失敗。內網自架端點（vLLM 之類）不送時設 `false`，
+       * 兩項檢查都關掉，行為同沒有這一層。
+       */
+      supportsFinishReason: z.boolean().optional(),
     })
     .optional(),
 });

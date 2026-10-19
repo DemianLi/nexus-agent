@@ -30,7 +30,7 @@
 已經切到全開的舊會話，續接時**自動收回**：日誌記的檔案政策比表裡每一組都寬，就切到預設組（`defaultPreset`，沒設就是表裡檔案政策最寬的那一組，
 出廠表是 `workspace-write`），並寫進日誌（`permission/preset`、`sandbox/mode`、`approval/policy`，只寫變了的）；server 日誌（CLI 是標準錯誤）會留一行
 `[權限] thread "…" …`，說明從哪一組收到哪一組。下一次寫檔就照預設組的圍堵判。部署方把全開加回表裡就不收；用 `--sandbox read-only` 起動的部署，要讓全開的舊會話收到 `read-only` 而不是 `workspace-write`，要設 `defaultPreset: read-only`（參與者拿不到 `--sandbox`）；停在 `read-only`、而表裡沒有 `read-only` 的會話比
-`workspace-write` 窄，也不收（顯示 `custom`）。切走之後切不回全開。**已知缺口**：冷復活的背景子代理拿的是當初的委派快照，不會被這一步收窄（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）。
+`workspace-write` 窄，也不收（顯示 `custom`）。切走之後切不回全開。**背景子代理同理**（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）：重啟之後被叫醒的背景子代理，讀回的是當初派出時記在它自己日誌上的沙箱；那一格比表裡每一組都寬，這一輪就收到同一個預設組（只收沙箱，核准照舊不問；子代理日誌**不改**，仍記當初那一格，實際跑的是收窄後的）。server 日誌（CLI 是標準錯誤）每個子代理每個行程留一行 `[權限] … 背景子代理 …`。叫升級照舊被拒。
 
 - **現在是哪一組是推導出來的**：兩顆旋鈕實際的值對上哪一組就是哪一組，對不上任何一組顯示 `custom`（只能顯示，不是切換目標）。
 - **`--sandbox` 同時決定核准的起始值**：`--sandbox danger-full-access` 是「全開＋不問」，**要先把那一組加回表裡，否則起動失敗**
@@ -410,12 +410,22 @@ serve 沒重開過的話面板會回來、答了接著跑；重開過就是上�
 ## 金鑰放哪裡
 
 真實供應商（`--live`）的 key 是 `NVIDIA_API_KEY`（[#730](https://github.com/DemianLi/nexus-agent/issues/730)）。**每次模型請求前**才解析一次，
-依序找，先找到的算數：
+依序找，先找到的算數。**兩種入口順序不同**（[#1540](https://github.com/DemianLi/nexus-agent/issues/1540)，各自照 dsh 的 Web profile 與 headless profile）：
 
-1. **啟動環境**：shell 裡 `export` 的、或行程管理器傳進來的。
-2. **受管憑證檔**：`~/.nexus-agent/.credentials.yaml`（`NEXUS_AGENT_HOME` 可以換位置）。
+**`serve`**：
+
+1. **受管憑證檔**：`~/.nexus-agent/.credentials.yaml`（`NEXUS_AGENT_HOME` 可以換位置）。**最優先**：管理者寫進這個檔的 key 一定生效，
+   行程環境裡碰巧有同名變數（systemd `EnvironmentFile=`、shell profile 替別的工具 export 的那一把）不會蓋掉它。
+2. **啟動環境**：shell 裡 `export` 的、或行程管理器傳進來的。
 3. **目前資料夾的 `.env`**（已被 `.gitignore` 排除）。
 4. **harness home 的 `.env`**：`~/.nexus-agent/.env`，不跟著專案走。
+
+**一次性入口（`cli`、`eval`、`spike`）不讀受管檔**，只看 2、3、4（啟動環境 > 目前資料夾 `.env` > harness home `.env`）：
+不 `stat`、不讀、不檢查它，壞掉的受管檔也不擋。理由：在共用的 home 上用 `NVIDIA_API_KEY=… pnpm cli:live` 明確帶一把 key 跑一次驗證，
+不該被受管檔那一把靜靜換掉。
+
+**起動時會印一行這把 key 來自哪一層**（只有名字與來源，不印值）：`NVIDIA_API_KEY：來自受管檔 <路徑>`、`來自啟動環境`、
+`來自<路徑>/.env`；一次性入口那一行結尾寫明「（此入口不讀受管檔）」。serve 印在 server 日誌，CLI／eval／spike 印在標準錯誤。
 
 ```yaml
 version: 1
@@ -423,12 +433,24 @@ refs:
   NVIDIA_API_KEY: nvapi-...
 ```
 
-- **受管檔一定要 `chmod 600`。** group 或 other 任何一位有權限，serve／CLI 起動就拒絕，訊息帶著要跑的指令。
+- **從舊版升上來的遷移（受管檔現在優先於環境變數）**：以前啟動環境排在受管檔前面，兩邊都有同名 key 時用的是環境那一把；
+  現在 serve 改成用受管檔那一把，**沒有執行期警告、也沒有退回舊序的開關**（dsh 否決過「蓋掉時警告」）。受影響的是：
+  受管檔有值、而 serve 的行程環境也 export 了同名變數的部署；以及只把 key 放在受管檔、卻用 `cli:live`／eval 的人。四步：
+  1. **比對兩邊的名字（只比名字、不印值）**：受管檔有沒有（systemd 部署的 home 是 `/var/lib/nexus-agent`，檔案擁有者是
+     `nexus-agent`，所以用 `sudo -u nexus-agent grep -cE '^[[:space:]]+NVIDIA_API_KEY:' /var/lib/nexus-agent/.credentials.yaml`；本機跑則是
+     `~/.nexus-agent/.credentials.yaml`）。serve 行程的環境有沒有同名變數，看行程實際的環境、只數名字：
+     `sudo cat /proc/<MainPID>/environ | tr '\0' '\n' | grep -c '^NVIDIA_API_KEY='`（`<MainPID>` 取自 `systemctl show -p MainPID --value nexus-agent`）。
+     **別用 `systemctl show -p Environment`**：它會把值印出來（〈金鑰放哪裡〉那一段也講過）。**別 `cat` 檔、別 `echo` 值。**
+  2. **決定留哪一把**。要用環境那一把，就改寫進受管檔；要用受管檔那一把，把環境裡那個同名變數拿掉（不然只是白白留著一把會讓人誤會的 key）。
+  3. **要停用受管檔那一把：刪掉 `refs` 底下那一行。** 執行期改受管檔，下一個請求就生效，不必重啟。
+  4. **一次性驗證**（`cli:live`、eval、spike）的 key 要放在環境或 `.env`，不要只放受管檔。要確認 serve 目前用的是哪一層，才需要重啟，看起動日誌那一行來源（它只在起動時印一次）。
+- **受管檔一定要 `chmod 600`。** group 或 other 任何一位有權限，serve 起動就拒絕，訊息帶著要跑的指令（一次性入口不讀這個檔，也就不檢查它）。
   檔案格式錯（未知頂層鍵、`version` 不是 1、重複的鍵、非字串的值）也是起動就失敗；訊息指名檔案，不會把值印出來。
 - **它的值不進行程的環境變數**，所以子行程（`execute`、MCP、git 快照）看不到它。兩份 `.env` 則是照舊寫進
   行程環境（啟動環境已有的變數不會被蓋掉）。
 - **改了下一個請求就生效**，不必重啟：每次請求前先 `stat` 一次，修改時間、大小、inode 或權限變了才重讀。
   執行期改壞（格式錯、權限放寬）時，繼續用上一份可用的內容並在 stderr 警告一次；還沒讀成功過就直接失敗。
+  **受管檔現在是第一層，所以這個「沿用上一份」會影響到的請求比以前多**：權限被放寬（例如誤 `chmod 644`）之後，serve 不會立刻停擺，而是繼續用放寬之前讀到的那一把，直到 stderr 警告被看到並修好為止。
   key 被整個拿掉的話，那個請求會失敗並指名缺哪一個。
 - **key 長什麼樣才收**（[#1541](https://github.com/DemianLi/nexus-agent/issues/1541)）：四層都過同一道檢查，
   在啟動時（`--live` 組裝當下）與每個請求前各判一次。
@@ -442,7 +464,7 @@ refs:
 - **兩份 `.env` 不准設行程怎麼起的變數**（`PATH`、`NODE_OPTIONS`、`LD_PRELOAD`、`NEXUS_AGENT_*` 這類），起動就失敗並指名檔案與變數；
   代理設定（`HTTP_PROXY` 等）只認 home 那一份。
 - **搬家**：程式碼資料夾根目錄的舊 `.env` 不再讀取。key 解析不到、而舊檔還在時，錯誤訊息會指出舊檔位置與該搬去哪裡。
-  搬法：`mkdir -p ~/.nexus-agent && mv <程式碼資料夾>/.env ~/.nexus-agent/.env`，或改存成受管檔。
+  搬法：`mkdir -p ~/.nexus-agent && mv <程式碼資料夾>/.env ~/.nexus-agent/.env`；只有 serve 可以改存成受管檔（一次性入口不讀它）。
   **只對原始碼樹**：打包出來的安裝樹（產物根有 `build-stamp.json`）沒有「程式碼資料夾根目錄」，不找舊位置，
   也不會把 `/opt/.env` 這類系統目錄底下的檔當成舊檔叫人搬。
 
@@ -1187,7 +1209,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   **那次量的是 `openai/gpt-oss-120b`，出貨的 nemotron 沒量過**。代價：串流中段失敗最壞重付 6 次整個回覆。
   **重打只看失敗的碼**（#1437）：失敗只有一支分類器，`llm/retry` 與 `turn/failed` 同一個碼，碼在 `retryableCodes` 裡才重打。
   碼的對應：429（含沒帶 `retry-after` header 的）是 `RATE_LIMIT`、5xx（含串流中段與沒有數字碼的錯誤信封）是 `SERVER`、逾時是 `TIMEOUT`、
-  連線層的失敗（連線被拒、讀串流時被切斷）是 `TRANSPORT`、「模型說停了（stop）卻沒有任何文字、推理或工具呼叫」是 `EMPTY_RESPONSE`——
+  連線層的失敗（連線被拒、讀串流時被切斷、**串流在收到結束原因 `finish_reason` 之前就乾淨地結束**——例如反向代理的讀取逾時收掉上游）是 `TRANSPORT`、「模型說停了（stop）卻沒有任何文字、推理或工具呼叫」是 `EMPTY_RESPONSE`——
   這種空回覆照同一份預算重打，預算用盡就是這一輪失敗、`turn/failed.error.code` 是 `EMPTY_RESPONSE`（使用者看到的是失敗訊息，不再是什麼都沒有）。
   **只有推理、沒有答案的回覆不重打**（沒有失敗訊息，網頁上只多一段折起來的思考過程）。
   不在清單裡的不重打，不管預設或自己寫的清單怎麼寫：401／403 `AUTH`、402／配額 `QUOTA`、400／413 `INVALID_REQUEST`、上下文溢出
@@ -1212,6 +1234,12 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `llm/retry-started`，失敗那次的 `model/end` 帶 `outcome: error`、用量照記。退避期間按停止：輪次以中止收尾、不再重打。請求本身有問題的錯誤（例如串流內的 400）不重打。
   第一則事件之前的失敗沒有半段回覆可擦，只有倒數與 `llm/retry`。**子代理的回覆也會重打，但已經畫出去的子代理字
   不會被擦**（畫面上多一則斷尾的回覆）。
+- **串流完成檢查與 `compat.supportsFinishReason`**（[#1538](https://github.com/DemianLi/nexus-agent/issues/1538)）：每條串流都要有一則帶
+  `finish_reason` 的事件。看到 `[DONE]` 或上游關線卻從沒收到結束原因，就當成被中途切斷（`TRANSPORT`，照 `retryPolicy` 整次重打，
+  預算用盡才是這一輪失敗）；供應商回了 nexus 不認得的結束原因（認得的是 `stop`、`length`、`max_tokens`、`tool_calls`、`function_call`、
+  `content_filter`）當成失敗（`UNKNOWN`、不重打，訊息指名原字串）。**內網自架的端點（vLLM 之類）若串流不送 `finish_reason`**，
+  那一筆型錄寫 `compat: { supportsFinishReason: false }`，兩項檢查都關掉，行為同沒有這一層；不寫就是 `true`。症狀是每一輪都以
+  `TRANSPORT` 失敗、端點收到的請求數是 `1 + maxRetries`。只有推理、沒有 `finish_reason` 就斷掉的串流，從今天的靜靜結束變成 `TRANSPORT` 重打。
 - **關推理的寫法在型錄那一筆**（[#650](https://github.com/DemianLi/nexus-agent/issues/650)、原本的 `thinkingOffBody`）：
   `off` 那一級加 `compat.chatTemplateKwargs`（`$var: thinking.enabled` 在 `off` 解成 `false`）。它只有標題呼叫會
   加進請求 body，主請求不帶。出貨那顆模型不關推理的話，標題那 64 個輸出 token 全被推理吃光，一個標題都回不出來
@@ -1498,7 +1526,7 @@ Browser time zone for this request: unavailable. Ask the user to clarify otherwi
 Elapsed since the preceding model-visible message: 15m 0s.
 ```
 
-- **第二行看這一輪的人話帶不帶時區**（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)，照 dsh 的 `deriveBrowserTimeZoneContext`）：`run.start` 帶了 `client_time_zone` 的話，唯一的時區寫「Browser time zone for this request: Asia/Taipei. Interpret otherwise-unqualified dates and times in this zone.」，**第一行的時鐘也改用這個時區**；同一輪有不同時區的人話（輪中插話換了時區）寫 `mixed ["America/New_York","Asia/Tokyo"]` 並請模型向使用者確認；都沒帶就是 `unavailable`（舊客戶端、CLI、目標續行）。web 真的送出時區是 [#1630](https://github.com/DemianLi/nexus-agent/issues/1630)，在那之前實際跑出來仍是 `unavailable`。**沒帶時區時**第一行的時區只是顯示用的回退，**不代表使用者在哪個時區**。
+- **第二行看這一輪的人話帶不帶時區**（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)，照 dsh 的 `deriveBrowserTimeZoneContext`）：`run.start` 帶了 `client_time_zone` 的話（`subagent.send` 也帶，記在子代理自己的日誌上，[#1734](https://github.com/DemianLi/nexus-agent/issues/1734)），唯一的時區寫「Browser time zone for this request: Asia/Taipei. Interpret otherwise-unqualified dates and times in this zone.」，**第一行的時鐘也改用這個時區**；同一輪有不同時區的人話（輪中插話換了時區）寫 `mixed ["America/New_York","Asia/Tokyo"]` 並請模型向使用者確認；都沒帶就是 `unavailable`（舊客戶端、CLI、目標續行）。web 真的送出時區是 [#1630](https://github.com/DemianLi/nexus-agent/issues/1630)，在那之前實際跑出來仍是 `unavailable`。**沒帶時區時**第一行的時區只是顯示用的回退，**不代表使用者在哪個時區**。
 - **只進請求尾端，不進系統提示詞**：前綴快取不會因此失效；已經送出的讀數記在日誌上，續接舊會話時原樣回到模型手上，不改寫。
 - **同一條 thread 10 分鐘內不重複**（`refreshIntervalMs`，預設 600000）；`0` 是每次呼叫都注入，不是關掉。兩條 thread 各算各的。
 - **顯示時區預設是行程的 `TZ`**，載入時解析一次。**容器裡常常是 UTC**，要固定成使用者看得懂的時區，啟動時設 `TZ`，或用 `plugin config set time-context --file <檔>`（檔裡寫 `timeZone: Asia/Taipei`，IANA 名），或在 `--patch` 裡給這一列的 `config`。
@@ -1794,7 +1822,8 @@ LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
 - **協定**：`params.client_time_zone`，`UTC` 或 IANA 的 `Area/Location` 時區名（例如 `Asia/Taipei`、`America/Argentina/Buenos_Aires`），前後不能有空白。不合格式、這個執行期的 `Intl` 不認得、或不是字串，回 `invalid_argument`，訊息點名 `client_time_zone`，**這一句不進佇列**（驗證排在查重送之前，壞的時區不會被「重送」吞掉）。**省略＝維持現狀**，舊客戶端不受影響；舊 server 會略過這一格。wire client 的 `runStart(thread, text, { clientTimeZone })` 已接上。
 - **正規化**：伺服器記下的是 `Intl` 回報的正規名，別名會收成同一個值。**讀日誌時照 dsh 逐字要求記著的名字等於這個執行期的正規名**，否則那一輪的 pre-step 拋錯。不同 Node／ICU 版本的正規名不盡相同（Node 25.9 把 `Asia/Kolkata` 收成 `Asia/Calcutta`），這個風險另開 [#1733](https://github.com/DemianLi/nexus-agent/issues/1733) 等 demian 決定；發版產物升 Node 之前要先有結論。
 - **記在哪**：人話的來源上，不進 thread 設定（那會是整條 thread 共用的一個值，同一條 thread 換了時區就說謊）。三個位置同 `request_id`：排著時 `inbox/spliced` 裡那一件的 `source.clientTimeZone`、開了一輪之後的 `turn/start`（`kind: 'message'`）、輪中插話被領走時 `user/message` 的 `source.clientTimeZone`。**格式 49，不標 `ignorable`**（既有事件上多的選填欄位，沒有 `ignorable` 可標）。**一台 48 的 runtime 讀不了 49 的檔**（`SessionFormatUnsupportedError`），而且續接時 header 會被改寫成 49：發版後退回前一版，被新版碰過的 thread 會打不開。沒帶 `client_time_zone` 的送出，日誌與以前位元組相同；48 以前的檔沒有這一格，等於沒帶，不補寫。
-- **誰讀**：`@nexus/plugin-time-context`，見上面「時間讀數」。**子代理不繼承**：子代理的日誌沒有 `turn/start`，它那一則讀數的第二行是 `unavailable`。dsh 派子代理時同樣沒帶時區（`packages/subagent/subagent/src/manager.ts:464` 給的是 `{ kind: 'user' }`）；dsh 有的是人直接對子代理說話時 `subagent.prompt` 帶 `clientTimeZone`。`subagent.send` 帶時區另開 [#1734](https://github.com/DemianLi/nexus-agent/issues/1734)，不在這張。
+- **誰讀**：`@nexus/plugin-time-context`，見上面「時間讀數」。**子代理不繼承**：派出去那一刻沒有人說話，子代理日誌的第一個 `turn/start` 不帶時區，它那一則讀數的第二行是 `unavailable`。dsh 派子代理時同樣沒帶時區（`packages/subagent/subagent/src/manager.ts:464` 給的是 `{ kind: 'user' }`）。
+- **人對背景子代理說話**（[#1734](https://github.com/DemianLi/nexus-agent/issues/1734)，**照 dsh** 的 `subagent.prompt` 帶 `clientTimeZone`，`packages/subagent/subagent/src/index.ts:447-475`）：`subagent.send` 的 `params.client_time_zone` 規則同 `run.start`（共用 `@nexus/wire` 的 `canonicalClientTimeZone`；不合法回 `invalid_argument` 並點名欄位，**排在「有沒有這個背景子代理」之前**，不讓呼叫端靠回應差別試探編號；省略＝維持現狀）。時區記在**子代理自己那份日誌**上這句人話的來源：子代理閒著，新一輪的 `turn/start`（`kind: 'message'`）帶 `clientTimeZone`；正在跑，下一步領走時 `user/message` 的 `source: { kind: 'user', clientTimeZone }`；被中止沒領走而退回的輪次與冷復活（先接回來再投遞）都跟著帶。子代理的下一則時間讀數因此是 `resolved`。wire client 的 `subagentSend(thread, runId, text, { clientTimeZone })` 已接上；web 的子代理輸入框送不送時區是 [#1630](https://github.com/DemianLi/nexus-agent/issues/1630) 那一側。**格式不變**（49 已含這兩個欄位）。
 - **不在這裡**：使用者在設定裡指定時區（覆蓋瀏覽器回報的）不在這張卡；web 送出時區是 [#1630](https://github.com/DemianLi/nexus-agent/issues/1630)。
 
 ## 重送同一句話（請求編號）

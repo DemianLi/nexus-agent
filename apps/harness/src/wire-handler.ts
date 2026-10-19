@@ -2490,7 +2490,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     body: unknown,
   ): Promise<Response> {
     const params = (body as { params?: unknown }).params as
-      { run_id?: unknown; text?: unknown } | null | undefined;
+      { run_id?: unknown; text?: unknown; client_time_zone?: unknown } | null | undefined;
     if (typeof params?.run_id !== 'string' || params.run_id === '') {
       return json(errorResponse(id, 'invalid_argument', `${method} 缺 run_id`));
     }
@@ -2505,12 +2505,30 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     if (typeof params.text !== 'string' || params.text.trim() === '') {
       return json(errorResponse(id, 'invalid_argument', `${method} 要有非空白的 text`));
     }
+    // 使用者的時區（#1734）：選填，驗證與正規化同 `run.start`（共用 `@nexus/wire` 的 `canonicalClientTimeZone`）。**排在「有沒有這個背景
+    // 子代理」之前**：不合法的輸入不論編號對不對都被擋下，不讓呼叫端靠回應的差別試探編號。
+    let clientTimeZone: string | undefined;
+    if (params.client_time_zone !== undefined) {
+      clientTimeZone =
+        typeof params.client_time_zone === 'string'
+          ? canonicalClientTimeZone(params.client_time_zone)
+          : undefined;
+      if (clientTimeZone === undefined) {
+        return json(
+          errorResponse(
+            id,
+            'invalid_argument',
+            `${method} 的 client_time_zone 要是 UTC 或 IANA 的 Area/Location 時區名（例如 Asia/Taipei）`,
+          ),
+        );
+      }
+    }
     if (background === undefined) {
       return json(errorResponse(id, SUBAGENT_NOT_FOUND, `沒有編號 ${params.run_id} 的背景子代理`));
     }
     try {
       // 冷的先接回來再投遞（#1271）；已常駐的立刻過。
-      await background.sendFromUser(params.run_id, params.text);
+      await background.sendFromUser(params.run_id, params.text, clientTimeZone);
     } catch (error) {
       if (!(error instanceof BackgroundSubagentError)) throw error;
       // 叫醒本身失敗（租約被別的行程握著、日誌壞了……）沒有專屬的碼：它不是「找不到」「名額滿」「已關閉」，原因寫在 message。

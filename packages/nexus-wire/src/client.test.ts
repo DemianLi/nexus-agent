@@ -173,6 +173,16 @@ describe('瀏覽器端的 client', () => {
     expect(result).toMatchObject({ type: 'success', result: { accepted: true } });
   });
 
+  it('subagentSend 帶 clientTimeZone 才多一格 client_time_zone（#1734）', async () => {
+    const { calls, client } = stub(() => Response.json(successResponse(1, { accepted: true })));
+    await client.subagentSend('t', 'bg-1', '嗨', { clientTimeZone: 'Asia/Taipei' });
+    await client.subagentSend('t', 'bg-1', '嗨', {});
+    expect(calls[0]?.body).toMatchObject({
+      params: { run_id: 'bg-1', text: '嗨', client_time_zone: 'Asia/Taipei' },
+    });
+    expect((calls[1]?.body as { params: object }).params).toEqual({ run_id: 'bg-1', text: '嗨' });
+  });
+
   it('對單一背景子代理傳話與單獨停同一條 RPC family：路徑與封包各講一次 method，run_id 與 text 原樣帶上', async () => {
     const { calls, client } = stub(() => Response.json(successResponse(1, { accepted: true })));
     const sent = await client.subagentSend('t 1', 'bg-1', '  改看 b.ts\n');

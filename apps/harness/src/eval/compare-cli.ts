@@ -152,7 +152,8 @@ async function main(argv: readonly string[]): Promise<void> {
   }
   const models = parseModels(argv, MEASURED_MODELS);
   const out = parseOut(argv);
-  const { credentials, launchEnv } = loadLiveLaunchEnv();
+  const { credentials, launchEnv, keySource } = loadLiveLaunchEnv({ store: false });
+  if (keySource !== undefined) console.error(keySource);
   // 對外代理（#746）：跟 CLI／serve 同一個時間點，載完環境之後、連模型之前。這支腳本跑到行程結束，不另收尾。
   await installLaunchProxy(launchEnv, (message) => console.error(message));
 
