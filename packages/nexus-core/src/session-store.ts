@@ -581,8 +581,26 @@ import type { SessionEvent } from './session-log.js';
  *   舊版續寫進去的 `context/measure` 不帶它。不必先做任何處理。
  *
  *   **讀舊檔**：沒有這一格就是沒記（這一版以前寫的，或沒有 `messages` 門檻），不是 `false`，不補寫歷史。
+ *
+ * ## 49：訊息帶使用者的時區（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)）
+ *
+ * `run.start` 可以帶一格選填的 `client_time_zone`（照 dsh `session.prompt` 的 `clientTimeZone`，記在訊息來源 `{ kind: 'user', rpcId, clientTimeZone }`）。
+ * 伺服器在邊界上驗證並正規化（`UTC` 或 IANA `Area/Location`，別名退回這個執行期的正規名），記在人話的三個來源，涵蓋一句話的三個階段，和 48 的
+ * `requestId` 同一批位置：排著時在 `inbox/spliced` 裡那一件（`QueuedInput.source.clientTimeZone`）；開了一輪之後在 `turn/start`（`kind: 'message'`）；
+ * 輪中插話被領走時在 `user/message` 的 `source.clientTimeZone`。`@nexus/plugin-time-context` 讀這一輪裡的這幾格，決定給模型的「Browser time zone」那一行。
+ *
+ * **升版，不標 `ignorable`**（判準見上面 32 那段「什麼時候要升版」：寫出來的東西，一台舊 runtime 還能不能完整正確地處理）：這是既有事件上多的選填欄位，
+ * 不是新的事件種類，所以沒有 `ignorable` 可標。一台 48 的 runtime **讀不了** 49 的檔：`parseHeader` 遇到比自己新的版本會拋 `SessionFormatUnsupportedError`
+ * （只有 `eval/session-scan.ts` 開了 `acceptNewer`）。而且續接一條舊 thread 時 header 會被改寫成 49，所以**只要一條 thread 被 49 碰過，退回 48 就打不開**。
+ * **回滾的後果**：發版後退回前一版，被新版碰過的 thread 在舊版打不開；這是升版的營運代價，不是描述上的小事。
+ *
+ * **讀舊檔**：48 以前沒有這一格，等於沒帶時區，不補寫歷史（補了也不知道當時使用者在哪）。客戶端沒帶 `client_time_zone` 的送出，日誌與以前位元組相同
+ * （有測試釘住）。
+ *
+ * **併行的升版**：#1624、#1579 也各自要升版。**誰先合進 `develop` 誰拿下一號，後合的以先合的為底重算**（rebase 時把這一段的編號往後挪，內容不變）。
+ * 這張寫的時候 `develop` 的版本是 48，所以拿 49。
  */
-export const SESSION_LOG_FORMAT_VERSION = 48;
+export const SESSION_LOG_FORMAT_VERSION = 49;
 
 /**
  * 寫這份日誌的程式碼是哪一版（[#1025](https://github.com/DemianLi/nexus-agent/issues/1025)）。

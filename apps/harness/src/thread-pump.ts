@@ -322,6 +322,7 @@ function pumpInputOf(item: QueuedInput): PumpInput {
         text: item.text,
         // 帶了請求編號的才把佇列項目的 id 一起帶到 `turn/start`（`runId`）：領走之後它就不在收件匣上了，重送要靠日誌認回來。
         ...(source.requestId === undefined ? {} : { id: item.id, requestId: source.requestId }),
+        ...(source.clientTimeZone === undefined ? {} : { clientTimeZone: source.clientTimeZone }),
         ...(item.attachments === undefined ? {} : { attachments: item.attachments }),
         ...(item.mention === undefined ? {} : { mention: item.mention }),
       };
@@ -357,9 +358,11 @@ function pumpInputOf(item: QueuedInput): PumpInput {
 function userMessageSourceOf(source: QueuedInputSource): UserMessageSource {
   switch (source.kind) {
     case 'user':
-      return source.requestId === undefined
-        ? { kind: 'user' }
-        : { kind: 'user', requestId: source.requestId };
+      return {
+        kind: 'user',
+        ...(source.requestId === undefined ? {} : { requestId: source.requestId }),
+        ...(source.clientTimeZone === undefined ? {} : { clientTimeZone: source.clientTimeZone }),
+      };
     case 'subagent-settled':
       return {
         kind: 'subagent-settled',
@@ -401,6 +404,12 @@ export type PumpInput =
        * {@link ThreadPump.findPromptRequest} 認出。省略就是客戶端沒帶，日誌與以前位元組相同。
        */
       readonly requestId?: string;
+      /**
+       * 使用者的時區（`run.start` 的 `client_time_zone`，[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)），邊界上已正規化。
+       * 進佇列那一件的 `source`、開跑時的 `turn/start`、插話領走時的 `user/message` 都帶著它，time-context 據此告訴模型使用者在哪個時區。
+       * 省略就是客戶端沒帶，日誌與以前位元組相同。
+       */
+      readonly clientTimeZone?: string;
       /**
        * 插話（#710，`run.start` 的 `mode: 'steer'`）：這一輪還收插話就排進 `next-step`，下一步送進模型、不開新的一輪；
        * 不收了（閒著、按了停止、正在收尾）就排到 `next-turn` 的**頭**，照樣開一輪。見 {@link ThreadPump.submit}。
@@ -795,6 +804,8 @@ function turnStartOf(input: PumpInput): SessionEventMap['turn/start'] {
         ...(input.requestId === undefined || input.id === undefined
           ? {}
           : { requestId: input.requestId, runId: input.id }),
+        // 和 `requestId` 各自獨立（#1629）：只帶時區沒帶編號的送出也要記下時區。
+        ...(input.clientTimeZone === undefined ? {} : { clientTimeZone: input.clientTimeZone }),
       };
     case 'resume':
       return { kind: 'resume' };
@@ -1752,10 +1763,11 @@ export class ThreadPump {
       const item: QueuedInput = {
         id,
         text: input.text,
-        source:
-          input.requestId === undefined
-            ? { kind: 'user' }
-            : { kind: 'user', requestId: input.requestId },
+        source: {
+          kind: 'user',
+          ...(input.requestId === undefined ? {} : { requestId: input.requestId }),
+          ...(input.clientTimeZone === undefined ? {} : { clientTimeZone: input.clientTimeZone }),
+        },
         ...(input.attachments === undefined || input.attachments.length === 0
           ? {}
           : { attachments: input.attachments }),

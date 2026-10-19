@@ -276,6 +276,11 @@ export interface WireClient {
        * **同一句話重送要沿用同一個編號**，伺服器才認得；回應裡的 `run_id` 重送時是原本那一件的。
        */
       readonly requestId?: string;
+      /**
+       * 使用者的時區（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)，見 `RunStartCommand` 的 `client_time_zone`）：
+       * `UTC` 或 IANA 名（`Intl.DateTimeFormat().resolvedOptions().timeZone` 給的就是）。伺服器驗證不過回 `invalid_argument`。
+       */
+      readonly clientTimeZone?: string;
     },
   ): Promise<UplinkResult>;
   /**
@@ -1019,6 +1024,10 @@ export function createWireClient(options: WireClientOptions): WireClient {
           ...(options?.mention === undefined ? {} : { mention: options.mention }),
           // 省略就不放這個 key：舊的 server 也收得下（只是重送時分不出是同一句）。
           ...(options?.requestId === undefined ? {} : { request_id: options.requestId }),
+          // 省略就不放這個 key：舊的 server 也收得下（只是模型被告知時區不明）。
+          ...(options?.clientTimeZone === undefined
+            ? {}
+            : { client_time_zone: options.clientTimeZone }),
         },
       });
     },
