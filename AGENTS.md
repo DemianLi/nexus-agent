@@ -187,7 +187,8 @@ PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_
   `## 變更`、`## 遷移` 兩段。「變更」寫舊行為、新行為、誰受影響；「遷移」是編號步驟，指名檔、鍵、指令，最後一步寫
   怎麼確認改好了。
 - **gate**：`.github/scripts/check_upgrade_guides.py`，跑在 `ci.yml` 的 `plan`（純文件 PR 也跑），檢查路徑形狀、
-  版本目錄是已存在的 tag、frontmatter 與段落。
+  版本目錄是已存在的 tag、frontmatter、段落與指南裡的相對連結。tag 只驗存在，不驗是不是最近一個：發版之後還寫進
+  舊目錄的，gate 擋不住，要靠審查。
 
 Release 的說明開頭會連到 `docs/upgrade-guide/v<上一個 tag>/`，有這個目錄才連。升級前要備份什麼、怎麼確認、出事怎麼
 退回去，見 [`docs/operations.md`](docs/operations.md)〈升級與回滾〉。
@@ -196,9 +197,12 @@ Release 的說明開頭會連到 `docs/upgrade-guide/v<上一個 tag>/`，有這
 
 - **只寫中文一份**（理由 2）。dsh 每份有英、中兩份加配對紀錄，500 字上限只套英文；本 repo 的文件只有中文，所以只有
   `guide.md`，段落名用 dsh 中文版的「變更」「遷移」，不設字數上限（同 dsh 中文版）。
-- **`<版號>` 取 tag，不取根 `package.json`**（理由 1）。dsh 的 `<version>` 是讀者正在跑的那一版，它從 manifest 讀，因為
-  它的 manifest 存的就是已發出的版本；nexus 先開版號 PR 再發版，manifest 存的是「要發的那一版」（今天還是 `0.0.0`），
-  照抄會在版號 PR 到 Release 之間把指南放錯目錄。撤除條件：manifest 改成記已發出版本的那天。
+- **`<版號>` 取 tag，不取根 `package.json`**（理由 1）。dsh 的 `<version>` 是讀者正在跑的那一版，從根 manifest 讀；
+  發版順序兩邊一樣，都是版號 commit 先合、再打 tag（dsh `scripts/release/bump.ts` 檔頭）。不同在 manifest 的值：
+  本 repo 的 manifest 今天還是 `0.0.0`，跟已發出的 `v0.5.19` 對不上，照抄會把指南全寫進 `v0.0.0/`；而且版號 PR
+  合進去到 Release 發出之間，manifest 已經是還沒發的那一版，這段時間合進來的 PR 會把指南放進讀者還沒在跑的目錄。
+  撤除條件（兩條都成立）：根 `package.json` 的 `version` 等於最近一個 Release tag 去掉 `v`；而且「發版」寫明版號 PR
+  合進去到 Release 發出之間 `develop` 不收其他 PR。
 
 ## Agent skills
 

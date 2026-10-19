@@ -18,7 +18,8 @@ v0.5.19 的 `tool-text` 那一列只有 `maxBytes`（預設 50000），管的是
 
 所以 v0.5.19 為了縮小畫面上的工具結果而調小 `maxBytes` 的設定，升級後**沒有作用**，也不會有警告；調大的也一樣。
 
-受影響的：在 home 的 `cordis.patch.yml` 或 `--patch` 覆寫檔裡改過 `tool-text` 的 `maxBytes` 的主機。
+受影響的：所有主機——模型與畫面收到的工具結果文字都改由 `spill-policy` 決定（出廠值與怎麼調見 `default-plugin-additions` 那份指南）。
+在 home 的 `cordis.patch.yml` 或 `--patch` 覆寫檔裡改過 `tool-text` 的 `maxBytes` 的主機，另外要知道那個設定升級後不再管文字。
 
 ## 遷移
 

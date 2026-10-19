@@ -25,7 +25,8 @@ v0.5.19 的技能外掛 `@nexus/plugin-skills` 不在出貨清單上，要在 pa
 
 1. **升級前**，從 home 的 `cordis.patch.yml` 與每一份 `--patch` 覆寫檔拿掉 insert skills 的那一列。原本給的 `sources` 改成對出貨那一列寫
    `- id: skills` 加 `config: { sources: [...] }`（整份替換，要保留 `/skills/` 就一起列）。拿掉之後檔案空了的話寫 `[]`（空檔或只有註解會讓啟動失敗）。
-2. 已經升上來、卡在同 id 那則訊息的：停 serve，刪掉剛建的 `<home>/plugin-journal.jsonl`，把 `cordis.patch.yml.migrated-<時間>`
+2. 已經升上來、卡在同 id 那則訊息的：停 serve，把剛建的 `<home>/plugin-journal.jsonl` 移開（例如改名成 `plugin-journal.jsonl.bad-<時間>`，
+   不要刪，跟 [`docs/operations.md`〈升級與回滾〉](../../../operations.md#升級與回滾)一樣「移開、不刪」），把 `cordis.patch.yml.migrated-<時間>`
    改回 `cordis.patch.yml`，照第 1 步改好，再起新版讓它重新遷移。只在紀錄檔裡**只有**那次遷移的筆時這樣做；之後已經用 `plugin` 改過的，照
    [`docs/operations.md`〈後台改清單〉](../../../operations.md#後台改清單plugin-寫入口與變更紀錄)的「紀錄壞了怎麼救」。
 3. 確認：serve 起得來、沒有提到 skills 的警告，`--dump-config` 裡 `@nexus/plugin-skills` 只出現一次。

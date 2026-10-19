@@ -603,7 +603,9 @@ WantedBy=multi-user.target
   所以先建出權限 600 的空檔，再用編輯器填。單元檔不要寫 `Environment=NVIDIA_API_KEY=…`：`systemctl show` 讀得到，子行程也繼承得到。
   沒有 key 的話 serve 印「缺少環境變數 NVIDIA_API_KEY」就以 1 結束，`Restart=on-failure` 每 5 秒拉一次，滿 `StartLimitBurst` 後單元進 `failed`；
   補上 key 之後 `sudo systemctl reset-failed nexus-agent && sudo systemctl start nexus-agent`。
-  代理設定寫在 `/var/lib/nexus-agent/.env`（見〈經代理連外〉）。因為 `WorkingDirectory` 就是 home，兩份 `.env` 是同一份，不會讀兩次。
+  代理設定寫在 `/var/lib/nexus-agent/.env`（見〈經代理連外〉）。`WorkingDirectory` 是 home 時，「目前資料夾」與 home 的 `.env` 是同一份，不會讀兩次；
+  照〈升級〉第 4 步把 `WorkingDirectory` 改成舊版的目錄（例如 `<checkout>/apps/harness`）的話，那個目錄的 `.env` 也會讀、而且比 home 的優先，
+  裡面不能有代理變數（有就拒絕啟動），代理照樣寫在 home 的那一份。
 - **只監聽 `127.0.0.1`。** `serve` 沒有綁其他位址的旗標；要讓別台機器連進來，前面放反向代理（本專案不附設定）。
 - **啟動印的網址帶登入 token，會進 journal。** 讀得到 journal 的人（`systemd-journal`、`adm` 群組、root）就拿得到：
   `journalctl -u nexus-agent -n 20` 找「nexus-agent 在 http://…」那一行。token 每次重啟都換新。
@@ -652,22 +654,40 @@ home 是 `NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`（systemd 的設法�
 
 ### 升級
 
+下面的指令照〈用 systemd 常駐〉的裝法寫：tar.gz 安裝樹在 `/opt/nexus-agent/<版本>`、home 在 `/var/lib/nexus-agent`。tar.gz 安裝樹、
+`serve.lock`、`--version`、變更紀錄都是 v0.5.19 之後才有的（[#1502](https://github.com/DemianLi/nexus-agent/issues/1502)、
+[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)、[#1412](https://github.com/DemianLi/nexus-agent/issues/1412)）。
+**從 v0.5.19 升上來的，舊版是原始碼 checkout**（`pnpm --filter @nexus/harness run serve` 起、home 預設是起它那個使用者的
+`~/.nexus-agent`），各步照標「v0.5.19」的那一條做。
+
 1. **讀升級指南**：Release 說明開頭有連結；也可以直接看 repo 的 `docs/upgrade-guide/v<目前在跑的版本>/`，每一份的「遷移」都要做。
-2. **停 serve**：`sudo systemctl stop nexus-agent`（或對 serve 的 node 行程送 `SIGTERM`；別對 `pnpm` 送，它會把訊號吃掉）。
-   serve 起動時會拿 `<home>/serve.lock` 的鎖（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)），所以下一步之前，
-   可以用「另起一個 serve 會被鎖擋下」來確認沒有別的行程還在寫這個 home。
-3. **備份整個 home，連權限一起**：
+2. **停 serve，確認沒有行程還在寫這個 home**：`sudo systemctl stop nexus-agent`（或對 serve 的 node 行程送 `SIGTERM`；別對 `pnpm` 送，它會把訊號吃掉）。
+   - 有 `serve.lock` 的版本：跑著的 serve 對 `<home>/serve.lock` 握著 `flock(2)` 的排他鎖（`apps/harness/src/home-lock.ts`），
+     拿得到就代表沒有行程在寫：
+
+     ```bash
+     sudo -u nexus-agent flock -n /var/lib/nexus-agent/serve.lock true && echo 沒有行程握著這個 home
+     ```
+
+     **不要用「另起一個 serve」來試**：起得來的那一個就成了寫入者；拿新版來試的話，它會先拿到鎖、接著遷移 home，
+     等於在你備份**之前**就把 `cordis.patch.yml` 遷走了。
+   - v0.5.19：沒有這把鎖，另起一個也不會被擋。看行程與埠：`pgrep -af 'src/serve.ts'` 沒有輸出、
+     `ss -ltnp 'sport = :8787'`（給過 `--port` 的換成那個埠）沒有人在聽；自己寫了 systemd 單元的，`systemctl is-active <單元>` 是 `inactive`。
+3. **備份整個 home，連權限一起**。在 `umask 077` 底下打包，檔案一建出來就是 `0600`；先打包再 `chmod` 的話，中間有一段時間別人讀得到：
 
    ```bash
-   sudo tar -cpf /var/backups/nexus-agent-home-<日期>.tar -C /var/lib nexus-agent
-   sudo chmod 600 /var/backups/nexus-agent-home-<日期>.tar
+   (umask 077; sudo tar -cpf /var/backups/nexus-agent-home-<日期>.tar -C /var/lib nexus-agent)
    ```
 
-   給了 `--session-log` 的話，那個目錄也照樣打包一份。
+   v0.5.19 的 home 在起它的那個使用者底下，用那個使用者打包：`(umask 077; tar -cpf ~/nexus-agent-home-<日期>.tar -C ~ .nexus-agent)`
+   （設過 `NEXUS_AGENT_HOME` 的換成那個目錄）。給了 `--session-log` 的話，那個目錄也照樣打包一份。
 4. **裝新版，舊版留著**：照〈用 systemd 常駐〉解開到新目錄、`ln -sfn` 換掉 `current`。舊版的目錄不要刪，回滾時要用。
+   v0.5.19：舊版就是那份 checkout，**留在 v0.5.19 不要動**（不要 `git pull`、不要切到別的 tag），回滾時從它起。
+   新版照〈用 systemd 常駐〉另裝；home 要沿用舊的，就把單元的 `NEXUS_AGENT_HOME` 指到舊的 home、`User=` 寫擁有那個 home 的使用者，
+   或把舊 home 連權限搬到 `/var/lib/nexus-agent` 並改擁有者。
    **工作目錄要跟舊版一樣**：會話照起動時的目錄分桶，header 也記著那個目錄，換了目錄起，舊對話不在清單上，開舊的 thread id
    只會在新的桶裡建一條空的（實測）；把桶目錄改名也接不回來，續接會因為目錄不同而拒絕。從原始碼 checkout 用
-   `pnpm --filter @nexus/harness run serve` 起的舊版，目錄是 `<checkout>/apps/harness`，不是〈用 systemd 常駐〉範例裡的 home；
+   `pnpm --filter @nexus/harness run serve` 起的舊版（v0.5.19 都是），目錄是 `<checkout>/apps/harness`，不是〈用 systemd 常駐〉範例裡的 home；
    要沿用舊對話，unit 的 `WorkingDirectory` 寫舊的那個目錄。
 5. **起新版**：`sudo systemctl start nexus-agent`。
 
@@ -679,13 +699,13 @@ home 是 `NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`（systemd 的設法�
     `[清單] 已把舊的 cordis.patch.yml 的 N 條 patch 遷進變更紀錄 …；原檔改名為 ….migrated-<時間>（不再讀取，0600）。`；
   - `[對照快照] N 列，與執行中相同 …` 那一行（見〈plugin 清單〉）；
   - 有「nexus-agent 在 http://…」那一行。
-- **插件設定**：同一個 `NEXUS_AGENT_HOME` 跑 `node /opt/nexus-agent/current/lib/serve.js --dump-config`（不開 server），
-  檔頭寫 `patched by <home>/plugin-journal.jsonl`，之前停用的列仍有 `disabled: true`。
+- **插件設定**：同一個 `NEXUS_AGENT_HOME` 跑 `node /opt/nexus-agent/current/lib/serve.js --dump-config`（不開 server）。
+  改過插件設定的，檔頭寫 `patched by <home>/plugin-journal.jsonl`，之前停用的列仍有 `disabled: true`。
 - **對話**：開一條升級前的舊對話，內容都在；再開一條新對話，送一句話有回覆。
 
 ### 回滾
 
-1. 停新版：`sudo systemctl stop nexus-agent`。
+1. 停新版：`sudo systemctl stop nexus-agent`。v0.5.19 是另裝的新版的話，也 `sudo systemctl disable nexus-agent`，免得開機又起來搶同一個 home。
 2. 要留新版期間的資料的話，先把現在的 home 另外打包一份（之後要撈也只能用新版讀）。
 3. 把 home 還原成升級前的備份：先把現在的 home 移開，再解開備份。
 
@@ -694,8 +714,15 @@ home 是 `NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`（systemd 的設法�
    sudo tar -xpf /var/backups/nexus-agent-home-<日期>.tar -C /var/lib
    ```
 
-4. `ln -sfn` 把 `current` 指回舊版的目錄，`sudo systemctl start nexus-agent`。
-5. 照「升級之後確認」核一次：版本是舊版號、舊對話都在、停用的插件仍是停用。
+   v0.5.19 的 home 在使用者底下：`mv ~/.nexus-agent ~/.nexus-agent.after-upgrade-<日期>`，再 `tar -xpf ~/nexus-agent-home-<日期>.tar -C ~`。
+4. 起舊版：`ln -sfn` 把 `current` 指回舊版的目錄，`sudo systemctl start nexus-agent`。
+   v0.5.19：在那份 checkout 照升級前的方式起（`pnpm --filter @nexus/harness run serve`，同一個 `NEXUS_AGENT_HOME`）。
+5. 核一次：
+   - **版本**：`node /opt/nexus-agent/current/lib/serve.js --version` 是舊版號。v0.5.19 沒有 `--version`，在 checkout 跑 `git describe --tags` 是 `v0.5.19`（實測）。
+   - **插件設定**：照「升級之後確認」跑 `--dump-config`，停用的插件仍是停用。v0.5.19 在 checkout 跑
+     `pnpm --filter @nexus/harness run cli --dump-config`（pnpm 10 會把 `--` 原樣傳給腳本，所以不加），改過插件設定的，
+     檔頭是 `patched by <home>/cordis.patch.yml`，不是 `plugin-journal.jsonl`（實測）。
+   - **對話**：舊對話都在。
 
 ### 為什麼不能直接換回舊程式
 
