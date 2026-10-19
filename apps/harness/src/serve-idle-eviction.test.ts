@@ -13,7 +13,7 @@
  * 輪詢間隔的下限是 1 秒，所以這一檔的每一條要等一兩秒。**零憑證、零外部連線**：模型是預設的假模型。
  */
 
-import { chmodSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
@@ -22,7 +22,7 @@ import { emptyConversation, reduceAll } from '@nexus/wire';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { foldTurn, serveClient } from './fixtures.js';
-import { HARNESS_HOME_ENV } from './harness-home.js';
+import { HARNESS_HOME_ENV, HARNESS_SESSIONS_DIR_NAME } from './harness-home.js';
 import { seedHomePatch } from './plugin-journal.fixture.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
 import type { PluginSnapshot } from './plugin-snapshot.js';
@@ -125,6 +125,22 @@ async function observe(client: WireClient, thread: string, workspace: string) {
   return { entries, permission: (permission.text ?? '').replaceAll(workspace, '<工作區>') };
 }
 
+/** 這條 thread 的 root 日誌（落盤的那一份）上，依序每一顆事件的型別與資料。 */
+function rootLogEvents(h: Home, thread: string): { type: string; data: unknown }[] {
+  const sessions = join(h.dir, HARNESS_SESSIONS_DIR_NAME);
+  const [project] = readdirSync(sessions);
+  const directory = join(sessions, project ?? '');
+  const body = readdirSync(directory).find(
+    (name) => name === `${thread}.jsonl` || name.startsWith(`${encodeURIComponent(thread)}.jsonl`),
+  );
+  if (body === undefined)
+    throw new Error(`找不到 ${thread} 的日誌：${readdirSync(directory).join('、')}`);
+  return readFileSync(join(directory, body), 'utf8')
+    .split('\n')
+    .filter((line) => line.trim() !== '')
+    .map((line) => JSON.parse(line) as { type: string; data: unknown });
+}
+
 const evictedLine = (lines: readonly string[], thread: string): boolean =>
   lines.some((line) => line.startsWith(`[閒置逐出] thread "${thread}"`));
 
@@ -175,6 +191,46 @@ describe('閒置逐出從 serve 組裝起（#1484）', () => {
     expect(afterRestart.entries.length).toBeGreaterThan(1);
     expect(afterRestart.permission).toContain('read-only');
     expect(afterEviction).toEqual(afterRestart);
+  });
+
+  it('E2：設了 defaultPreset 的部署，撤掉再開不重套預設組（fresh 判成 false）：重建後日誌沒有往別的值走、沒有再選組或改核准，權限模式仍是切過去的那一組', async () => {
+    // 沒設 defaultPreset 的話，重套與不重套算出來的值一樣（都從日誌的值推），分不出 `fresh`；設了 `workspace-write`，
+    // `fresh` 判成 true 就會把這條 thread 拉回 `workspace-write`。
+    const h = home(
+      `${EVICT_PATCH}- id: permission-presets\n  config:\n    defaultPreset: workspace-write\n`,
+    );
+    const lines: string[] = [];
+    const client = await serveClient(await start(h, lines));
+    await setup(client, 'alpha');
+    const count = (events: readonly { type: string }[], type: string): number =>
+      events.filter((event) => event.type === type).length;
+    const evictions = (): number =>
+      lines.filter((line) => line.startsWith('[閒置逐出] thread "alpha"')).length;
+    // 落盤是批次的：撤掉（收尾）之後才讀得到完整的日誌。
+    await until(() => evictions() >= 1);
+    const before = rootLogEvents(h, 'alpha');
+    // 前提：切過去之後日誌上真的有一顆讓這件事分得出勝負的東西（起始釘一顆、切換再一顆，最後一顆是唯讀）。
+    expect(count(before, 'sandbox/mode')).toBeGreaterThanOrEqual(2);
+    expect(before.filter((event) => event.type === 'sandbox/mode').at(-1)?.data).toMatchObject({
+      mode: 'read-only',
+    });
+
+    const reopened = await observe(client, 'alpha', h.workspace);
+    expect(reopened.permission).toContain('read-only');
+    // 重建出來的 thread 再閒置一次、再被撤：它如果多寫了什麼，這時候才落盤。
+    await until(() => evictions() >= 2);
+    const after = rootLogEvents(h, 'alpha');
+    // 重建出來的 thread 接上時，沙箱的參與者會照控制器的值再釘一顆 `sandbox/mode`（每次接上都釘，不是這一步的事）；
+    // 要看的是**值**：重建之後沒有任何一顆往別的值走，也沒有人再選一次組、再改一次核准。
+    const rebuilt = after.slice(before.length);
+    expect(
+      rebuilt.filter((event) => event.type === 'sandbox/mode').map((event) => event.data),
+    ).not.toContainEqual(expect.objectContaining({ mode: 'workspace-write' }));
+    expect(count(rebuilt, 'permission/preset')).toBe(0);
+    expect(count(rebuilt, 'approval/policy')).toBe(0);
+    expect(after.filter((event) => event.type === 'sandbox/mode').at(-1)?.data).toMatchObject({
+      mode: 'read-only',
+    });
   });
 
   it('goal：撤掉再開 ＝ 重啟再開（目標從落盤的日誌折回來；授權不持久，所以兩邊 /goal 讀到的一樣）', async () => {
