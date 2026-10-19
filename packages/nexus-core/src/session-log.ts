@@ -1637,7 +1637,9 @@ type SnapshotTask =
  * 遙測、修剪）照樣收得下，{@link snapshotJsonValue} 預設不設限。
  *
  * **與 dsh 的偏離（理由 1）：** dsh 的 `Session.append` 沒有深度上限，在 Node 22 上有同一個洞——超深的一則讓整條會話卡住。
- * 我們的執行環境就是 Node 22，退一步改在寫入那一關設上限。
+ * 我們的執行環境就是 Node 22，退一步改在寫入那一關設上限。它在請求快照上的後果：`request/header` 超過上限就寫不進去、
+ * 這次請求不送，工具清單不變的話這條 thread 之後每次都一樣；dsh 在 601 層到原生 stringify 上限之間照寫照送
+ * （[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)，見 `request-snapshot.ts` 檔頭）。
  */
 export const SESSION_EVENT_MAX_DEPTH = 600;
 
