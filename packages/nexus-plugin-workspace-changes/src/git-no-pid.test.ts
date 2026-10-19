@@ -117,8 +117,9 @@ async function runDriver(mode: 'abort' | 'exit') {
   return await new Promise<{ code: number | null; signal: NodeJS.Signals | null; stdout: string }>(
     (resolve, reject) => {
       const timer = setTimeout(() => {
-        // 逾時只收 driver 自己的群組。
-        if (child.pid !== undefined) process.kill(-child.pid, 'SIGKILL');
+        // 逾時只收 driver 自己的群組；pid 先抄進區域變數過守衛，`no-group-signal.test.ts` 的掃描器認這個形狀（`-pid` 前面要有 `Number.isInteger(pid) && pid > 1`）。
+        const pid = child.pid;
+        if (pid !== undefined && Number.isInteger(pid) && pid > 1) process.kill(-pid, 'SIGKILL');
         reject(new Error('driver 逾時'));
       }, 30_000);
       child.once('error', reject);
