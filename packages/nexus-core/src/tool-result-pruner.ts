@@ -290,8 +290,11 @@ export function resolveToolResultPruneConfig(
 export interface ToolResultPruneLog {
   /** 這次請求所屬那份日誌上記過的剪法；**找不到日誌**（沒接註冊表、認不出呼叫者）是 `undefined`，剪刀退回每次重算。 */
   recorded(request: PruneRequest): RecordedPrunes | undefined;
-  /** 把這次新剪的記進日誌。記不進去自己吃掉：記不進去不能反過來把模型呼叫殺掉。 */
-  record(request: PruneRequest, results: readonly NewlyPruned[]): void;
+  /**
+   * 把這次新剪的記進日誌。**回 `false` 表示記不進去**（接口自己講 warn），剪刀這次不套用新剪的
+   * （[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)：日誌與模型看到的不能分家）；沒有要記的也回 `true`。不拋。
+   */
+  record(request: PruneRequest, results: readonly NewlyPruned[]): boolean;
 }
 
 /** 這次新剪的一顆：被剪的結果的 `tool_call_id`、剪之前的文字量、剪過的內容。 */
@@ -332,6 +335,9 @@ export interface PruneRequest {
  * **行為上與以前的差別只有一處**：以前壓力退了之後原文會回來（剪刀每次從原文重算、壓力不到就不碰），現在不會。
  * 沒有日誌（`log` 省略、或找不到那份日誌）時退回以前的每次重算。
  *
+ * **記不進去，新剪的不生效**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：`record` 回 `false` 就照記過的剪法送出，
+ * 不套用這次新剪的；記過的照樣套用。
+ *
  * @param base - 基座那顆摘要器。
  * @param underPressure - 這次請求到了壓縮門檻沒有。收的是整份請求：`tokens` 門檻要估 system 與工具定義那一截
  *   （[#588](https://github.com/DemianLi/nexus-agent/issues/588)）。
@@ -358,10 +364,13 @@ export function withToolResultPruning(
       if (underPressure(request as PruneRequest)) {
         const { prunedCount, messages: pruned } = pruneToolResults(messages, config);
         if (prunedCount > 0) {
-          if (log !== undefined && recorded !== undefined) {
-            log.record(request as PruneRequest, newlyPruned(messages, pruned));
+          if (
+            log === undefined ||
+            recorded === undefined ||
+            log.record(request as PruneRequest, newlyPruned(messages, pruned))
+          ) {
+            messages = pruned;
           }
-          messages = pruned;
         }
       }
       if (messages === original) return inner(request, handler);

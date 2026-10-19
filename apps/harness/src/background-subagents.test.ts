@@ -28,7 +28,7 @@ import {
 } from '@nexus/core';
 import type { SessionLog, StepInbox } from '@nexus/core';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
@@ -308,6 +308,39 @@ describe('載體本身（假 agent）', () => {
     expect(await second.outcome).toEqual({ ok: true });
     await host.close();
     expect(() => host.start({ subagent: 'worker', text: '句' })).toThrow('已經關閉');
+  });
+
+  /**
+   * #1702：目錄寫不進去就派出失敗，照 dsh 寫目錄失敗時 `dispose(activation)` 再重拋（`manager.ts:1401-1416`）。
+   * 剛准入的那一輪撤回：不跑、不佔名額、不出現在現況裡；錯原樣往外拋，由工具本體那層翻成父代理的錯誤結果。
+   */
+  it('start 帶 callId、目錄寫不進去：原錯往外拋，那一輪撤回（不跑、不佔名額、不在現況）', async () => {
+    const { agent, seen } = fakeAgent();
+    const { host, sessions } = make(() => agent, 1);
+    const boom = new Error('寫不進去');
+    const real = sessions.root.append.bind(sessions.root);
+    const append = vi.spyOn(sessions.root, 'append').mockImplementation(((
+      type: never,
+      data: never,
+      options: never,
+    ) => {
+      if (type === 'subagent/catalog') throw boom;
+      return real(type, data, options);
+    }) as typeof sessions.root.append);
+
+    expect(() => host.start({ subagent: 'worker', text: '第一句', callId: 'c1' })).toThrow(boom);
+    // 讓 runner 有機會領：撤回之後佇列裡沒有它。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(seen).toEqual([]);
+    expect(host.statuses()).toEqual([]);
+    expect(host.hasRunning()).toBe(false);
+
+    // 名額還在：上限 1，下一次派出照樣接受。
+    append.mockRestore();
+    const next = host.start({ subagent: 'worker', text: '第二次', callId: 'c2' });
+    expect(await next.outcome).toEqual({ ok: true });
+    expect(seen.map((each) => each.text)).toEqual(['第二次']);
+    await host.close();
   });
 
   /** #1023：目錄只記成功的事實，同 dsh continuable「先准入、再寫目錄、最後回 id」。 */
