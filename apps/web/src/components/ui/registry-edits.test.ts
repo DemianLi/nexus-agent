@@ -240,9 +240,13 @@ describe('registry 檔的改動還在', () => {
       expect(reasoning()).not.toMatch(/motion-reduce:/);
     });
 
-    test('第 65 條：疊在清單裡的結果框不 blur；vendor 的清單與結果框仍都是 `glass-panel`', () => {
+    test('第 65 條：疊在清單裡的結果框與 DiffView 不 blur；vendor 的清單、結果框、DiffView 仍都是 `glass-panel`', () => {
       expect(overrides()).toContain(
-        '[data-slot="step-list"] [data-slot="output-block"] {\n  -webkit-backdrop-filter: none;\n  backdrop-filter: none;\n}',
+        '[data-slot="step-list"] [data-slot="output-block"],\n[data-slot="step-list"] [data-slot="diff-view"] {\n  -webkit-backdrop-filter: none;\n  backdrop-filter: none;\n}',
+      );
+      // #1685 B 擴到 DiffView：vendor 的 DiffView 是 `glass-panel`（patch 0024 把 tabIndex 插在 data-slot 與 className 之間）。
+      expect(read('../../vendor/solid-glass/components/ui/diff-view.tsx')).toMatch(
+        /data-slot="diff-view"[\s\S]{0,80}className=\{cn\("glass-panel\b/,
       );
       expect(vendor()).toMatch(/data-slot="output-block" className=\{cn\("glass-panel\b/);
       expect(vendor()).toMatch(/data-slot="step-list" className=\{cn\("glass-panel\b/);
@@ -324,6 +328,26 @@ describe('registry 檔的改動還在', () => {
           '      <span className="text-rose-600 dark:text-rose-400">−{removed}</span>\n' +
           '    </span>',
       );
+    });
+
+    test('第 80 條：DiffView 的 @@／...、新增、刪除行換成 token 字色；vendor 的行仍寫死這幾個 class', () => {
+      const diff = code(read('../../vendor/solid-glass/components/ui/diff-view.tsx'));
+      const overrides = read('../../styles/solid-glass.overrides.css');
+      for (const [cls, token] of [
+        ['text-muted-foreground/70', 'muted-foreground'],
+        ['text-emerald-700', 'success'],
+        ['text-rose-700', 'destructive'],
+      ])
+        expect(overrides).toContain(
+          `[data-slot="diff-view"] > [class~="${cls}"] {\n  color: var(--${token});\n}`,
+        );
+      for (const line of [
+        'line.startsWith("+") && "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300"',
+        'line.startsWith("-") && "bg-rose-500/10 text-rose-700 dark:text-rose-300"',
+        'line.startsWith("@@") && "mt-1 text-muted-foreground/70 first:mt-0"',
+        'line.startsWith("...") && "text-muted-foreground/70 italic"',
+      ])
+        expect(diff).toContain(line);
     });
   });
 

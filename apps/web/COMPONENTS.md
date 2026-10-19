@@ -94,10 +94,11 @@
 
 ## 工具卡（SG tool-steps）
 
-#1682 起工具卡是 SG 的 `StepRow`、工具段是 `StepGroup`（vendor README 的「本地修改」第 56–66 條）。寫呼叫端時：
+#1682 起工具卡是 SG 的 `StepRow`、工具段是 `StepGroup`（vendor README 的「本地修改」第 56–66 條；diff 是第 77–80 條）。寫呼叫端時：
 
 - **`ToolEntry` 只經 `lib/tool-step.ts` 轉成 `Step`**：狀態收成 SG 的三態（`running`／`done`／`error`），四格狀態的字由卡放在 `trailing` 的 `Badge`。
-- **結果自己畫的種類不設 SG 的 `output`／`error`**（讀檔、搜尋、diff、提問、交付、待辦、撞到輸出上限的子代理）：畫在 children，SG 的結果框只給通用卡，不畫兩次。展開後什麼都沒有的列 SG 會停用按鈕，所以空的時候放一句 `emptyNote`。
+- **寫檔／改檔給 `step.patch`**（#1685 B）：字串只從 `lib/tool-diff.ts` 的 `toolDiffView` 拿（全樹組 unified patch 的只有那裡的 `toolPatch`），卡與段才拿到同一份、nexus 層的 `patchStats` 快取才查得到。上限在 nexus 層的 `DiffView`，不要在轉接層截 patch：vendor 從 patch 算列與段的 `+N −M`，截過就少報。
+- **結果自己畫的種類不設 SG 的 `output`／`error`**（讀檔、搜尋、提問、交付、待辦、撞到輸出上限的子代理；diff 走 `step.patch`）：畫在 children，SG 的結果框只給通用卡，不畫兩次。展開後什麼都沒有的列 SG 會停用按鈕，所以空的時候放一句 `emptyNote`。
 - **`StepGroup` 只有一步、而且沒在跑時退化成單獨一列**，`children`、`trailing`、`open` 都不會轉過去：工具段至少兩顆（`tool-runs.ts` 的 `MIN_TOOLS`，有測試釘住）。
 - **段裡沒畫東西的 child 照樣占一格**（SG 逐個包一層有 padding 的 div）：`MessageScrollerItem` 是空的那格由覆寫檔第 66 條藏掉，別在 child 外面再包東西，不然藏不到。
 

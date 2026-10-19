@@ -100,7 +100,10 @@ function StepRow({
 
       {open &&
         (step.patch ? (
-          <DiffView patch={step.patch} />
+          <div className="flex flex-col gap-1.5">
+            <DiffView patch={step.patch} />
+            {children}
+          </div>
         ) : (
           <div className="flex flex-col gap-1.5">
             {step.detail && <OutputBlock label={step.detailLabel ?? words.detail} text={step.detail} />}
