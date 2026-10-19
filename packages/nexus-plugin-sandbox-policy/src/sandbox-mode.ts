@@ -52,6 +52,17 @@
  * 用 {@link SandboxModeController.delegateFromLog} 從那份日誌讀回、重新進 ALS。日誌不只是審計面，是背景路徑上
  * 快照的記憶。
  *
+ * ## 跟著 root 日誌走（[#1494](https://github.com/DemianLi/nexus-agent/issues/1494)）
+ *
+ * {@link SandboxModeController.attach} 接上日誌之後**也訂閱它**：root 日誌上出現不帶 `source` 的 `sandbox/mode`，控制器的格子就跟著那一顆。
+ * 平常的寫入口（`/permission`、`resolveDefaultPreset`）仍走 {@link SandboxModeController.switchTo}，它寫的那一顆回到自己的訂閱時是同一格，什麼都不動。
+ * 訂閱者**只改格子、不寫日誌**（日誌的 listener 跑在發布期間，回頭 `append` 會被重入護欄擋下），`source: 'delegation'` 的那一顆是子代理的快照、
+ * 不是 root 的政策，一律略過。
+ *
+ * **偏離 dsh（登記，理由 1：基座表達不出來）。** dsh 沒有這顆控制器：它的 fence 每次從 session 日誌折出模式（`sandbox-policy/src/index.ts`），
+ * 所以「日誌就是唯一來源」天生成立。我們的格子住在控制器（fence 讀的是 ALS 快照，見上面「偏離」那段），不能整個改成逐次折疊，所以先讓格子**跟著**日誌，
+ * 把兩個來源收成一個。**移除條件：sandbox-policy 遷上樹時定**——那時 fence 可以直接讀投影，這個訂閱連同控制器的格子一起拿掉。
+ *
  * ## 跨重啟
  *
  * 切換寫得進日誌，**CLI 的 `--resume <run 目錄>` 與 serve 碰到以前寫過的 thread 都讀得回來**：最後一顆 `sandbox/mode` 就是
@@ -76,6 +87,7 @@ import type {
   SandboxModeSource,
   SessionEvent,
   SessionLog,
+  SessionSubject,
 } from '@nexus/core';
 
 /**
@@ -314,16 +326,26 @@ export class SandboxModeController implements SandboxGrantLedger {
   }
 
   /**
-   * 接一份 root 會話日誌，**並且當場把起始值釘進去**。
+   * 接一份 root 會話日誌，**並且當場把起始值釘進去**，之後**跟著這份日誌走**（見模組註解「跟著 root 日誌走」）。
    *
    * 釘起始值是照 dsh 的挂载固定：不釘的話，一份沒有人切過的日誌答不出政策是哪一格。
+   * **先釘再訂閱**：訂閱會重播既有事件，釘在前，重播最後落在的就是剛釘的這一格，也就是接線前後的格子不變。
    *
-   * @param log - 要記帳的日誌。
-   * @returns 收掉這次接線的函式。
+   * @param subject - 要記帳的日誌與它的觀察面（`registry.sessions.join` 給的那一份）。
+   * @returns 收掉這次接線的函式；收掉之後那份日誌的事件不再影響這一格。
    */
-  attach(log: SessionLog): () => void {
+  attach(subject: Pick<SessionSubject, 'log' | 'observe'>): () => void {
+    const { log } = subject;
     this.#logs.push(log);
     log.append('sandbox/mode', { mode: this.#mode });
+    subject.observe((event) => {
+      // `observe` 沒有退訂把手（會話收掉時由 runner 一起清），所以「還接著嗎」要自己看。
+      if (!this.#logs.includes(log)) return;
+      if (event.type !== 'sandbox/mode' || event.data.source !== undefined) return;
+      // **不驗值，原樣跟**：續接時控制器就是從日誌最後一顆（連同被改壞的值）起算的，驗了的話重播會把格子停在
+      // 「最後一顆合法值」而不是剛釘的這一格，與接線前不一致。認不得的名字由 `invariant.ts` 報違規，不在這裡擋。
+      this.#mode = event.data.mode;
+    });
     return () => {
       const at = this.#logs.indexOf(log);
       if (at >= 0) this.#logs.splice(at, 1);

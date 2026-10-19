@@ -267,7 +267,7 @@ export const sandboxPolicyPlugin: NexusPlugin = {
     // 答不出子代理跑在哪一格。子代理的日誌在它第一次 `forCall` 時才開，那一刻在 `task` 的 handler
     // 裡、讀得到快照；不在任何一次委派裡被開的話不寫——拿 root 當下那格去補，寫的就是錯的值。
     registry.sessions.join((subject) => {
-      if (subject.address.kind === 'root') return controller.attach(subject.log);
+      if (subject.address.kind === 'root') return controller.attach(subject);
       const mode = controller.delegatedMode;
       if (mode !== undefined) subject.log.append('sandbox/mode', { mode, source: 'delegation' });
       return undefined;

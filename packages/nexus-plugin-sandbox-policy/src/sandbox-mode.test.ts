@@ -16,10 +16,22 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { SessionLog } from '@nexus/core';
-import type { SandboxDenial, SandboxGrant, SessionStore } from '@nexus/core';
+import { SessionLog, createSessionRunner } from '@nexus/core';
+import type { SandboxDenial, SandboxGrant, SessionStore, SessionSubject } from '@nexus/core';
 
-import { SandboxModeController } from './sandbox-mode.js';
+import { SandboxModeController, recordedSandboxMode } from './sandbox-mode.js';
+
+/**
+ * 一份日誌的觀察面，形狀與 `createSessionRunner` 給 installer 的一樣：先重播既有事件再收後續。
+ * 沒有退訂把手（真的也沒有）——控制器拆線之後不受影響要靠自己守。
+ */
+const subjectOf = (log: SessionLog): Pick<SessionSubject, 'log' | 'observe'> => ({
+  log,
+  observe(listener) {
+    for (const event of log.events) listener(event);
+    log.subscribe(listener);
+  },
+});
 
 describe('切換', () => {
   it('切換搬動 current 與 source，回 switched；淨變化為零回 unchanged', () => {
@@ -39,7 +51,7 @@ describe('切換', () => {
   it('切到已經生效的那一格什麼都不發生——照 dsh 的「淨變化為零不追加」', () => {
     const controller = new SandboxModeController('read-only');
     const log = new SessionLog('t');
-    controller.attach(log);
+    controller.attach(subjectOf(log));
     const afterAttach = log.events.length;
 
     expect(controller.switchTo('read-only').kind).toBe('unchanged');
@@ -49,7 +61,7 @@ describe('切換', () => {
   it('沒有日誌接在上面時 attachedCount 是 0（呼叫端據此說「這次切換沒留痕跡」）', () => {
     const controller = new SandboxModeController('workspace-write');
     expect(controller.attachedCount).toBe(0);
-    controller.attach(new SessionLog('t'));
+    controller.attach(subjectOf(new SessionLog('t')));
     expect(controller.attachedCount).toBe(1);
   });
 });
@@ -59,7 +71,7 @@ describe('切換寫進會話日誌', () => {
     const controller = new SandboxModeController('read-only');
     const log = new SessionLog('t');
 
-    controller.attach(log);
+    controller.attach(subjectOf(log));
 
     expect(log.events.map((event) => event.type)).toEqual(['sandbox/mode']);
     expect(log.events[0]?.data).toEqual({ mode: 'read-only' });
@@ -70,7 +82,7 @@ describe('切換寫進會話日誌', () => {
     const log = new SessionLog('t');
     log.append('turn/start', { kind: 'message', text: '嗨' });
 
-    controller.attach(log);
+    controller.attach(subjectOf(log));
 
     // 釘的位置是**接線當下**，不是日誌開頭。讀日誌的人因此讀得出「這一輪之後政策才被
     // 宣告」與「這一輪之前就是這一格」的差別。
@@ -80,7 +92,7 @@ describe('切換寫進會話日誌', () => {
   it('每一次真的變了都多一顆，帶的是整個值不是差異', () => {
     const controller = new SandboxModeController('workspace-write');
     const log = new SessionLog('t');
-    controller.attach(log);
+    controller.attach(subjectOf(log));
 
     controller.switchTo('read-only');
     controller.switchTo('danger-full-access');
@@ -95,7 +107,7 @@ describe('切換寫進會話日誌', () => {
   it('收掉接線之後就不再往那份日誌寫', () => {
     const controller = new SandboxModeController('workspace-write');
     const log = new SessionLog('t');
-    const detach = controller.attach(log);
+    const detach = controller.attach(subjectOf(log));
 
     detach();
     controller.switchTo('read-only');
@@ -103,6 +115,117 @@ describe('切換寫進會話日誌', () => {
     expect(log.events).toHaveLength(1);
     // 值照樣換了——收掉的是記帳，不是政策。
     expect(controller.current).toBe('read-only');
+  });
+});
+
+describe('跟著 root 日誌走（#1494）', () => {
+  const modesOf = (log: SessionLog) =>
+    log.events.filter((event) => event.type === 'sandbox/mode').map((event) => event.data);
+
+  it('接著的 root 日誌上出現一顆 sandbox/mode，格子與來源同步跟著——反例：沒接的日誌不算', () => {
+    const controller = new SandboxModeController('workspace-write');
+    const log = new SessionLog('t');
+    controller.attach(subjectOf(log));
+
+    log.append('sandbox/mode', { mode: 'read-only' });
+    expect(controller.current).toBe('read-only');
+    expect(controller.source()).toBe('read-only');
+
+    new SessionLog('other').append('sandbox/mode', { mode: 'danger-full-access' });
+    expect(controller.current).toBe('read-only');
+  });
+
+  it('source: delegation 那顆是子代理的快照，不是 root 的政策——略過；之後的一般事件照常跟', () => {
+    const controller = new SandboxModeController('workspace-write');
+    const log = new SessionLog('t');
+    controller.attach(subjectOf(log));
+
+    log.append('sandbox/mode', { mode: 'danger-full-access', source: 'delegation' });
+    expect(controller.current).toBe('workspace-write');
+
+    log.append('sandbox/mode', { mode: 'read-only' });
+    expect(controller.current).toBe('read-only');
+  });
+
+  it('訂閱者只改格子不寫日誌；switchTo 寫的那一顆回到自己的訂閱是同一格，一次切換只多一顆', () => {
+    const controller = new SandboxModeController('workspace-write');
+    const log = new SessionLog('t');
+    controller.attach(subjectOf(log));
+    const before = log.events.length;
+
+    log.append('sandbox/mode', { mode: 'read-only' });
+    expect(log.events).toHaveLength(before + 1);
+
+    controller.switchTo('danger-full-access');
+    expect(log.events).toHaveLength(before + 2);
+    expect(modesOf(log).at(-1)).toEqual({ mode: 'danger-full-access' });
+    expect(controller.current).toBe('danger-full-access');
+  });
+
+  it('接了兩份 root 日誌：任何一份上的事件都跟，切換仍然每一份都寫', () => {
+    const [a, b] = [new SessionLog('a'), new SessionLog('b')];
+    const controller = new SandboxModeController('workspace-write');
+    controller.attach(subjectOf(a));
+    controller.attach(subjectOf(b));
+
+    b.append('sandbox/mode', { mode: 'read-only' });
+    expect(controller.current).toBe('read-only');
+
+    const [aBefore, bBefore] = [a.events.length, b.events.length];
+    controller.switchTo('workspace-write');
+    expect(a.events).toHaveLength(aBefore + 1);
+    expect(b.events).toHaveLength(bBefore + 1);
+  });
+
+  it('接線不被日誌裡的舊事件拉走：重播最後落在剛釘的這一格', () => {
+    const log = new SessionLog('t');
+    log.append('sandbox/mode', { mode: 'read-only' });
+    const controller = new SandboxModeController('workspace-write');
+
+    controller.attach(subjectOf(log));
+
+    expect(controller.current).toBe('workspace-write');
+    expect(modesOf(log)).toEqual([{ mode: 'read-only' }, { mode: 'workspace-write' }]);
+  });
+
+  it('日誌上最後一顆是被改壞的值：續接起算在那一格，接線（含重播）之後仍是那一格，與接線前一致', () => {
+    const log = new SessionLog('t');
+    log.append('sandbox/mode', { mode: 'workspace-write' });
+    log.append('sandbox/mode', { mode: 'bogus' as never });
+    const controller = new SandboxModeController(recordedSandboxMode(log.events));
+
+    controller.attach(subjectOf(log));
+
+    // 驗了值的話，重播會把格子拉回上一顆合法的 workspace-write（#1494 的 golden 抓到過這一格）。
+    expect(controller.current).toBe('bogus');
+  });
+
+  it('收掉接線之後那份日誌的事件不再影響格子（手動拆線與會話收掉兩條路都是）', () => {
+    const controller = new SandboxModeController('workspace-write');
+    const log = new SessionLog('t');
+    const detach = controller.attach(subjectOf(log));
+    detach();
+    log.append('sandbox/mode', { mode: 'read-only' });
+    expect(controller.current).toBe('workspace-write');
+
+    // 真的 runner：會話收掉（dispose）之後同樣不跟。
+    const second = new SandboxModeController('workspace-write');
+    const live = new SessionLog('live');
+    const dispose = createSessionRunner({
+      address: { kind: 'root' },
+      log: live,
+      installers: [
+        {
+          origin: { kind: 'test' } as never,
+          value: (subject) => second.attach(subject),
+        },
+      ],
+    });
+    live.append('sandbox/mode', { mode: 'read-only' });
+    expect(second.current).toBe('read-only');
+    dispose();
+    live.append('sandbox/mode', { mode: 'danger-full-access' });
+    expect(second.current).toBe('read-only');
   });
 });
 
