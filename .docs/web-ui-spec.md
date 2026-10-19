@@ -83,8 +83,8 @@
 | 8 | 會話標頭 | 自建；標題規則在 `lib/thread-title.ts`（標頭、瀏覽器分頁標題、側欄列表共用），換字不做動效 | 在 `App.tsx` |
 | 9 | 歷史往回捲 | shadcn `message-scroller`（帶 `@shadcn/react`） | — |
 | 10／11 | 使用者／助理訊息 | shadcn `message`＋`bubble`；**markdown 自建**：`mdast-util-from-markdown`＋`micromark-extension-gfm`＋增量解析＋`cjkFriendlyStrong`。撞到輸出上限的那一輪，最後一則底下一行灰字，同「（已停止）」（`lib/max-tokens-view.ts`，#608） | `transcript.tsx` 留（歸屬、狀態字面） |
-| 13 | 工具卡 | 自建，shadcn `collapsible`＋`badge`，直接吃四格 `ToolEntry.status`；浮起來（material），輸入輸出放內層 stage | 在 `transcript.tsx` |
-| 14 | 工具專屬呈現 | 自建：依工具名分類（`classifyTool`）＋通用卡兜底，分哪幾類照 nexus 實際工具名定；高亮 `shiki/core`（ts／bash／json 靜態、其餘 `import()`）、數學 `katex` | — |
+| 13 | 工具卡 | solid-glass 的 `StepRow`（#1682 起；vendor `components/ui/tool-steps.tsx`，套 vendor README「本地修改」第 56–59 條的 patch、第 60–66 條的包裝與覆寫）。`lib/tool-step.ts` 把 `ToolEntry` 轉成 SG 的 `Step`：狀態收成 SG 的三態，四格 `ToolEntry.status` 的字放在列尾的 `badge`（狀態不靠顏色或動效）；通用卡的參數、結果、錯誤用 SG 的結果框，專屬呈現（列 14）、提問、交付、待辦、子代理面板畫在展開後的 children，不畫兩次。連續完成的工具（至少 2 顆）收成 SG 的 `StepGroup`（工具段，`tool-run.tsx`）。沒有狀態圖示、邊框光、外框卡片 | `tool/card.tsx`、`tool-run.tsx` |
+| 14 | 工具專屬呈現 | 自建：依工具名分類（`classifyTool`）＋通用卡兜底，分哪幾類照 nexus 實際工具名定；讀檔卡的高亮 `shiki/core`（ts／bash／json 靜態、其餘 `import()`）、數學 `katex`。通用卡的參數是 SG 結果框裡的純文字，不上色（#1682） | `tool/result.tsx` |
 | 15／22 | 子代理歸屬、決定紀錄 | 自建＋shadcn `badge` | 在 `transcript.tsx` |
 | 21 | 核准 | 自建，shadcn `card`＋`button`，換掉輸入框（§4.3） | `approval-card.tsx` 留邏輯 |
 | 23 | 提問 | shadcn `questionnaire`（`radix-vega`）＋§4.3 的補件 | `question-card.tsx` 被取代 |
@@ -226,7 +226,8 @@
 | 抽屜（手機側欄 <1024、窄螢幕的右側欄） | 照 SG 的機制（#1583）：transition 200ms、位移 2.5rem 加淡入淡出；遮罩 150 淡入。reduced-motion 不位移、≤ 150（覆寫檔，vendor README 本地修改第 23 條） |
 | 桌面側欄收合 | 照 SG（#1680）：width／left 的 transition 200ms linear；reduced-motion 沒有 transition（`motion.css`，`guard/` 量） |
 | 面板高度差 | resize 300 |
-| 工具卡展開、提問面板收起 | 250／150，高度＋透明度 |
+| 工具卡、工具段展開 | **沒有動畫**（#1682 照 SG：`StepRow`／`StepGroup` 開關是立即的，只有箭頭轉 90°；reduced-motion 箭頭不轉場，vendor README 本地修改第 64 條） |
+| 提問面板收起 | 250／150，高度＋透明度 |
 | 新訊息、工具卡出現 | 250，往上 8px |
 | 面板換掉輸入框、上下題 | 舊 150 淡出 → 新 250 長出；上下題有方向 |
 | 單選自動跳 | 先停 200 |
@@ -243,7 +244,7 @@
 - 做法：media query 裡把 `--animate-in`／`--animate-out`／`--animate-collapsible-*` 換成只有透明度的版本。SG 的 sheet 用 transition 滑入、不走這幾個變數，由覆寫檔對抽屜另外拿掉位移、壓到 150（#1583，`check-built-css` 量產物）。
 - JS 的 `scrollTo({ behavior: 'smooth' })` 不看 CSS，要自己讀偏好。
 
-**效能**：持續動畫只動 transform／opacity，唯一例外是執行中邊框光的 conic 角度（同時最多一個）；`will-change` 不常駐。
+**效能**：持續動畫只動 transform／opacity，邊框光只剩等你處理那一圈的呼吸（opacity；執行中那道 conic 光隨 #1682 的工具卡換成 SG 拿掉）；`will-change` 不常駐。
 - **大面積玻璃照 SG**（Q7），不再限「blur 只給小元素」。換來的是一道合併門檻（Q13、Q17）：Chrome 關 GPU 加速、CPU 降速 4 倍，量**串流中捲動、開 composer 選單（兩層 blur）、開關側欄**三種情境，p95 frame time ≤ 16.7ms。判讀用 rAF 間隔換算成 vsync 個數之後的 p95，**≤ 1 個 vsync** 就是過（≥95% 的幀準時；不用乘回毫秒比 16.7，headless 的時間戳只到 0.1ms，閒置間隔量成 16.8 時零掉幀也會判不過）；合成器 trace 的 `DrawAndSwap` 當佐證。量具是 `apps/web/scripts/measure-frames.mjs`（假模型端點、真 serve、headless Chrome）。
 - [#1512](https://github.com/DemianLi/nexus-agent/issues/1512) 量過三種情境都是 16.70ms（CPU 實測降速約 3.8 倍；數字與條件在該 PR）。限制：headless；實機只量 demian 那台 Mac，VDI／沒有 GPU 的機器沒量（已知缺口，接受）。
 - **不達標的退路是不透明**：沿用 `prefers-reduced-transparency` 那條路與 `<html data-glass="opaque">`，面換成不透明、拿掉 blur（§5 的目標一樣要過）。

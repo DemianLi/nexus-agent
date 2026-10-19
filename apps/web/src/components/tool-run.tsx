@@ -21,6 +21,8 @@ import { toolTitle } from '@/lib/tool-view';
  * - **打開後的列由這裡給**（patch `0018`，`StepList` 的 children 各包一格）：**每一則照樣是一格 `MessageScrollerItem`**
  *   （巢在這一格裡），捲動與「在對話裡定位」都用條目 id（`data-message-id`）找，收進來之後照樣找得到；思考列照樣夾在原位。
  * - `steps` 只給 SG 數顆數、判斷有沒有在跑：段裡只收完成的工具（`lib/tool-runs.ts`），所以一律 `done`；摘要由這裡給，不用 SG 的字。
+ * - **SG 只有一步、沒在跑時退化成單獨一列，`children`、`trailing`、`open` 都不轉過去**：段至少兩顆（`MIN_TOOLS`，有測試釘住）。
+ * - 只有思考、沒有思考文字的那一步畫出空的 item，SG 包的那一格照樣有 padding：由覆寫檔第 66 條藏掉（vendor README 本地修改）。
  */
 export function ToolRun({
   run,
