@@ -45,6 +45,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
 import { createAgentClient } from '@/lib/agent';
 import { sendRejectionText } from '@/lib/attachment-send';
+import { resolvedClientTimeZone } from '@/lib/client-time-zone';
 import { createConversationStore } from '@/lib/conversation-store';
 import type { ConversationStore } from '@/lib/conversation-store';
 import { FEEDBACK_COMMAND_LINE, FEEDBACK_COPY } from '@/lib/feedback';
@@ -692,8 +693,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       let result: UplinkResult;
       try {
         // 排隊不帶 `mode`、沒有附件不帶 `attachments`：都是預設。編號每一次都帶（#1335）。
+        // 時區每一次都在送出當下取（#1630，照 dsh）：拿不到就拋，落在下面的 catch，這一句退回、請求沒出門。
         result = await clientRef.current.runStart(threadId, trimmed, {
           requestId: requestId ?? newRequestId(),
+          clientTimeZone: resolvedClientTimeZone(),
           ...(mode === 'steer' ? { mode } : {}),
           ...(attachments === undefined || attachments.length === 0 ? {} : { attachments }),
           ...(mention === undefined ? {} : { mention }),

@@ -5214,13 +5214,16 @@ describe('附件送出（#733、#732）', () => {
     expect(input().value).toBe('');
   });
 
-  it('沒有附件：run.start 沒有 attachments 這個鍵（只多了請求編號，#1335）', async () => {
+  it('沒有附件：run.start 沒有 attachments 這個鍵（只多了請求編號與時區，#1335、#1630）', async () => {
     const { client, runStart, uploads } = withUploads();
     render(<App client={client} />);
     await screen.findByPlaceholderText('說點什麼…');
     send('只有字');
     await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
-    expect(Object.keys(runStart.mock.calls[0]![2] as object)).toEqual(['requestId']);
+    expect(Object.keys(runStart.mock.calls[0]![2] as object)).toEqual([
+      'requestId',
+      'clientTimeZone',
+    ]);
     expect(uploads).toEqual([]);
   });
 
@@ -5768,16 +5771,20 @@ describe('@子代理 提及（#328）', () => {
     expect(options).toEqual({
       mention: { kind: 'subagent', name: 'reviewer' },
       requestId: expect.any(String),
+      clientTimeZone: expect.any(String),
     });
     expect(chip()).toBeNull();
   });
 
-  it('沒選就沒有 mention 欄位：只帶請求編號（#1335）', async () => {
+  it('沒選就沒有 mention 欄位：只帶請求編號與時區（#1335、#1630）', async () => {
     const { runStart } = await ready();
     type('一句話');
     fireEvent.click(screen.getByRole('button', { name: '送出' }));
     await waitFor(() => expect(runStart).toHaveBeenCalledTimes(1));
-    expect(Object.keys(runStart.mock.calls[0]![2] as object)).toEqual(['requestId']);
+    expect(Object.keys(runStart.mock.calls[0]![2] as object)).toEqual([
+      'requestId',
+      'clientTimeZone',
+    ]);
   });
 
   it('取代前一個：送出的是最後選的那個', async () => {
@@ -5791,6 +5798,7 @@ describe('@子代理 提及（#328）', () => {
     expect(runStart.mock.calls[0]![2]).toEqual({
       mention: { kind: 'subagent', name: 'reviewer' },
       requestId: expect.any(String),
+      clientTimeZone: expect.any(String),
     });
   });
 

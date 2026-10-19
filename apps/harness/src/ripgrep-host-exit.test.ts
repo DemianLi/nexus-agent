@@ -11,7 +11,7 @@
  */
 
 import { execFile } from 'node:child_process';
-import { chmod, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -19,13 +19,18 @@ import { promisify } from 'node:util';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { isAlive, readPidFile, signalPid } from './test-pids.fixture.js';
+
 const run = promisify(execFile);
 const BACKEND_SOURCE = fileURLToPath(new URL('./contained-backend.ts', import.meta.url));
 const PACKAGE_DIR = fileURLToPath(new URL('..', import.meta.url));
 
 /** 假 rg：把 pid 寫進檔、忽略 SIGTERM、一直掛著；`FAKE_RG_QUICK=1` 時寫完就以「零筆」結束。 */
 const FAKE_RG = `#!${process.execPath}
-require('node:fs').writeFileSync(process.env.FAKE_RG_PID_FILE, String(process.pid));
+// 寫暫存檔再 rename：pid 檔一出現就是完整的（直接 writeFileSync 會先建出空檔，#1712）。
+const fs = require('node:fs');
+fs.writeFileSync(process.env.FAKE_RG_PID_FILE + '.tmp', String(process.pid));
+fs.renameSync(process.env.FAKE_RG_PID_FILE + '.tmp', process.env.FAKE_RG_PID_FILE);
 if (process.env.FAKE_RG_QUICK === '1') process.exit(1);
 process.on('SIGTERM', () => {});
 setInterval(() => {}, 1000);
@@ -62,25 +67,11 @@ if (${JSON.stringify(mode)} === 'tracked') {
 const cleanup: string[] = [];
 const leftovers: number[] = [];
 afterEach(async () => {
-  for (const pid of leftovers.splice(0)) {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      // 已經不在了。
-    }
-  }
+  for (const pid of leftovers.splice(0)) signalPid(pid, 'SIGKILL');
   for (const path of cleanup.splice(0)) await rm(path, { recursive: true, force: true });
 });
 
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ESRCH') return false;
-    throw error;
-  }
-}
+const alive = isAlive;
 
 /** 跑一次「serve」到它自己結束；回傳假 rg 的 pid 與「serve」的 stdout。 */
 async function serveThenExit(mode: 'tracked' | 'bare' | 'completed') {
@@ -105,7 +96,7 @@ async function serveThenExit(mode: 'tracked' | 'bare' | 'completed') {
       },
     },
   );
-  const pid = Number(await readFile(pidFile, 'utf8'));
+  const pid = await readPidFile(pidFile);
   leftovers.push(pid);
   return { pid, stdout };
 }

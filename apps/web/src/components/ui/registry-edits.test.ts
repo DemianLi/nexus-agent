@@ -2,6 +2,8 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 
+import { GLYPH_RADIUS } from '@/test/glyph-env';
+
 /**
  * registry 檔裝進來之後改過、而且改回去時**畫面不會報錯**的地方（#404）。重跑 `shadcn add` 或手滑貼回
  * registry 原文時在這裡紅。
@@ -273,6 +275,35 @@ describe('registry 檔的改動還在', () => {
         /<summary [^>]*>\s*<span className=\{cn\(thinking && "status-shimmer"\)\}>/,
       );
       expect(reasoning).not.toMatch(/\bshrink-0\b/);
+    });
+  });
+
+  // 狀態列靠 vendor 原文的三件事（#1684）：glyph 是裝飾（狀態列的字已經講了，§8:284），label 帶 SG 的 shimmer，glyph 的半徑與畫法。
+  // vendor 升版改了任一件，這裡紅：第一件會讓報讀器多唸、非文字對比的豁免不成立，第二件會讓 guard 的 shimmer 那條量錯對象，
+  // 第三件會讓測試輔助（`src/test/glyph-env.ts`）與 guard 頁算出來的起始姿勢跟 vendor 畫的對不上。
+  describe('turn-status 與 status-glyph 的 vendor 原文（#1684）', () => {
+    test('glyph 的 svg 是 aria-hidden="true"', () => {
+      const glyph = code(read('../../vendor/solid-glass/components/ui/status-glyph.tsx'));
+      expect(glyph).toMatch(/<svg\s+ref=\{svg\}\s+data-slot="status-glyph"[^>]*aria-hidden="true"/);
+    });
+
+    test('glyph 的半徑是 1.7、`draw` 照四個屬性的寫法畫（測試輔助與 guard 頁的起始姿勢照抄這幾行）', () => {
+      const glyph = code(read('../../vendor/solid-glass/components/ui/status-glyph.tsx'));
+      expect(glyph).toContain(`const RADIUS = ${GLYPH_RADIUS}`);
+      for (const line of [
+        'circle.setAttribute("cx", dot.x.toFixed(2))',
+        'circle.setAttribute("cy", dot.y.toFixed(2))',
+        'circle.setAttribute("r", (RADIUS * dot.s).toFixed(2))',
+        'circle.setAttribute("opacity", Math.max(0, Math.min(1, dot.o)).toFixed(2))',
+      ])
+        expect(glyph).toContain(line);
+    });
+
+    test('label 包在 status-shimmer 的 span 裡', () => {
+      const status = code(read('../../vendor/solid-glass/components/ui/turn-status.tsx'));
+      expect(status).toContain(
+        '{label && <span className="status-shimmer truncate">{label}</span>}',
+      );
     });
   });
 
