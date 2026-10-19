@@ -12,7 +12,7 @@
  * `role="status"` 由 patch `0023` 拿掉）。字固定「執行中…」，glyph 的樣子跟著這一刻在做什麼換（`lib/turn-activity.ts`）：
  * 字在 live region 裡，跟著換就每換一次唸一次。glyph 是 `aria-hidden` 的裝飾；reduced-motion 下 glyph 停在起始姿勢、shimmer 停住，
  * 字照樣在。SG 的經過時間、token 數、可展開的 children 都不接（包裝層 `components/ui/turn-status.tsx` 型別上擋掉）。
- * 只換這一支：其他支的字級與高度跟它不一樣（14px、行高 23px 對 12.5px、20px），記在 #1688。
+ * 只換這一支：其他支的字級跟它不一樣（14px 對 12.5px），記在 #1688；高度由外層的 `min-h-lh` 對齊。
  *
  * **連線也由這一行講**（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）：下行斷了寫在這裡，旁邊一顆
  * 「立刻重連」；接回來短暫寫「已重新連線」。dsh 另有一顆 `ConnectionIndicator`，掛在設定列，我們沒有設定列，

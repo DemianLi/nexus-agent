@@ -3323,10 +3323,10 @@ const TURN_LABEL = `${TURN} .status-shimmer`;
 const TURN_ELAPSED = `${STATUS_RUNNING} [data-testid="running-elapsed"]`;
 const TURN_GLYPH = `${TURN} [data-slot="status-glyph"]`;
 
-/** glyph 三個 circle 的 `[[cx, cy], …]`。 */
+/** glyph 三個 circle 的 `[[cx, cy, r, opacity], …]`：vendor `draw` 每幀改這四個（同 `scripts/measure-frames.mjs`）。 */
 const readPose = (page: Page) =>
   page.$$eval(`${TURN_GLYPH} circle`, (circles) =>
-    circles.map((c) => [c.getAttribute('cx') ?? '', c.getAttribute('cy') ?? '']),
+    circles.map((c) => ['cx', 'cy', 'r', 'opacity'].map((a) => c.getAttribute(a) ?? '')),
   );
 const openingPoseIn = (page: Page, activity: string) =>
   page.evaluate(
@@ -3455,7 +3455,7 @@ describe('瀏覽器量狀態列的行為（#1684）', () => {
             const timer = setInterval(() => {
               poses.add(
                 [...region.querySelectorAll('circle')]
-                  .map((c) => `${c.getAttribute('cx')},${c.getAttribute('cy')}`)
+                  .map((c) => ['cx', 'cy', 'r', 'opacity'].map((a) => c.getAttribute(a)).join(','))
                   .join(' '),
               );
             }, 250);
