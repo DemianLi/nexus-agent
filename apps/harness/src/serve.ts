@@ -48,6 +48,7 @@ import {
   resolveSessionLogDir,
   resolveWorkspaceRoot,
   SESSION_LOG_OFF_DISCLOSURE,
+  describePermissionNarrowing,
 } from './assembly-root.js';
 import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
 import type { CordisRoot, NexusAssembly } from './cordis-root.js';
@@ -1108,6 +1109,10 @@ async function startServer(
       // 外掛交出的警告同理逐條記（例如 MCP 連不上）：它每條對話都重連一次，這一條連不上不代表上一條也沒連上。
       for (const line of describeWarnings(threadList.loaded, built.warnings)) {
         log(`[組裝] thread "${threadId}" 警告：${line}`);
+      }
+      // 續接時日誌記的檔案政策比權限表裡每一組都寬，接上日誌時會被收回預設組（#1621）：伺服器日誌留一行，部署方看得出為什麼這條對話的權限變了。
+      if (built.permissionNarrowed !== undefined) {
+        log(`[權限] thread "${threadId}" ${describePermissionNarrowing(built.permissionNarrowed)}`);
       }
       // 組裝之後這條 thread 的外掛執行期交出的話（例如 MCP 掉線重連的進度，#1099）同樣逐條記；組裝收掉時註冊表一起沒了。
       built.onWarning((warning) => {
