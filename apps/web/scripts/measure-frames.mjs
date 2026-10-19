@@ -10,6 +10,9 @@
  * 3. **開關側欄**：⌘B／Ctrl+B 開關，重複幾次。
  * 4. **工具段展開時串流中捲動**（#1682 驗收 D）：一步 12 顆工具（讀檔、grep 計數、找檔各 4 顆）收成一段，回覆接著慢慢串；
  *    展開那一段與每種各一列（SG 的 `StepList`／`OutputBlock` 都是 `glass-panel`），在對話區上下捲。
+ *    `--tool-mix diff`（#1685 B 驗收 12）：12 顆裡寫檔、改檔各 4 顆（SG 的 `DiffView`，`step.patch`；另 4 顆是改之前的讀檔），全部展開。
+ *    `--tool-mix big-writes`（同上）：6 顆寫檔、每顆 6,000 行（每張都撞到 `DiffView` 的上限），段展開、卡全部收著：
+ *    量的是串流中每一格段跟著重畫時，列與段的 `+N −M`（vendor 的 `patchStats`）的成本。
  *
  * `--suite reasoning`（#1683 驗收 E）換成兩個推理列的情境，上面四個不跑：
  * 5. **長歷史初次載入**：先填 {@link REASONING_TURNS} 輪、每輪一則約 2k 字推理（markdown）加一句回覆，重新整理頁面，從載入到
@@ -121,11 +124,74 @@ function plan() {
 /** 情境 4 的那一步：12 顆工具（{@link TOOL_TURN} 這句話觸發），結果回來之後慢慢串。 */
 const TOOL_TURN = '第四輪：工具段';
 const TOOL_FILES = 4;
-/** `mixed`：讀檔、grep 計數、找檔各 4 顆，展開每種兩列。`generic`：12 顆都走通用卡（SG 的結果框），全部展開——玻璃面最多的那一端。 */
+/**
+ * `mixed`：讀檔、grep 計數、找檔各 4 顆，展開每種兩列。`generic`：12 顆都走通用卡（SG 的結果框），全部展開——玻璃面最多的那一端。
+ * `diff`：讀檔、寫檔、改檔各 4 顆（見 {@link toolCalls}），全部展開（8 個 `DiffView`）。`big-writes`：6 顆寫檔、每顆 {@link BIG_WRITE_LINES} 行，卡全部收著。
+ */
 const TOOL_MIX = options['tool-mix'];
-if (TOOL_MIX !== 'mixed' && TOOL_MIX !== 'generic')
-  throw new Error(`--tool-mix 只收 mixed 或 generic：${TOOL_MIX}`);
-function toolCalls() {
+const TOOL_MIXES = ['mixed', 'generic', 'diff', 'big-writes'];
+if (!TOOL_MIXES.includes(TOOL_MIX))
+  throw new Error(`--tool-mix 只收 ${TOOL_MIXES.join('、')}：${TOOL_MIX}`);
+/** `big-writes` 每顆寫檔的行數：超過 `MAX_RENDERED_LINES`（5000），展開的話撞到上限。 */
+const BIG_WRITE_LINES = 6000;
+const BIG_WRITES = 6;
+/**
+ * 這一步要發的工具呼叫；`done` 是這一輪已經回來幾個工具結果。`diff` 分兩步：「先讀後改」的策略擋著沒讀過就改的 `edit_file`，
+ * 所以先讀 4 個檔，回來之後再寫 4 個新檔、改那 4 個檔（一段仍是 12 顆）。其餘一步發完。沒有要發的回 `[]`。
+ */
+function toolCalls(done) {
+  if (TOOL_MIX === 'diff' && done === 0)
+    return Array.from({ length: TOOL_FILES }, (_, index) => ({
+      index,
+      id: `call_r${index}_${randomUUID().slice(0, 8)}`,
+      type: 'function',
+      function: {
+        name: 'read_file',
+        arguments: JSON.stringify({ file_path: `/notes-${index}.md` }),
+      },
+    }));
+  if (done > (TOOL_MIX === 'diff' ? TOOL_FILES : 0)) return [];
+  if (TOOL_MIX === 'big-writes')
+    return Array.from({ length: BIG_WRITES }, (_, index) => ({
+      index,
+      id: `call_${index}_${randomUUID().slice(0, 8)}`,
+      type: 'function',
+      function: {
+        name: 'write_file',
+        arguments: JSON.stringify({
+          file_path: `/big-${index}.txt`,
+          content: Array.from(
+            { length: BIG_WRITE_LINES },
+            (_, line) => `第 ${line + 1} 行：寫進大檔的一行，內容沒有意義`,
+          ).join('\n'),
+        }),
+      },
+    }));
+  if (TOOL_MIX === 'diff') {
+    const calls = [];
+    for (let i = 0; i < TOOL_FILES; i++) {
+      calls.push([
+        'write_file',
+        {
+          file_path: `/new-${i}.md`,
+          content: Array.from({ length: 30 }, (_, line) => `新檔 ${i} 的第 ${line + 1} 行`).join(
+            '\n',
+          ),
+        },
+      ]);
+      // `notes-<i>.md` 是 `replyText(2)`：「## 第 1 節」只出現一次。
+      calls.push([
+        'edit_file',
+        { file_path: `/notes-${i}.md`, old_string: '## 第 1 節', new_string: '## 第 1 節（改過）' },
+      ]);
+    }
+    return calls.map(([name, args], index) => ({
+      index,
+      id: `call_${index}_${randomUUID().slice(0, 8)}`,
+      type: 'function',
+      function: { name, arguments: JSON.stringify(args) },
+    }));
+  }
   if (TOOL_MIX === 'generic')
     return Array.from({ length: TOOL_FILES * 3 }, (_, index) => ({
       index,
@@ -227,15 +293,19 @@ async function fakeLlm(req, res) {
     return;
   }
   const toolTurn = lastUserText(messages).includes(TOOL_TURN);
-  const afterTools = toolTurn && messages.at(-1)?.role === 'tool';
+  // 這一輪（最後一則人說的話之後）已經回來的工具結果。
+  const lastHuman = messages.findLastIndex(
+    (m) => m.role === 'user' && JSON.stringify(m.content).includes(TOOL_TURN),
+  );
+  const done = messages.slice(lastHuman + 1).filter((m) => m.role === 'tool').length;
+  const calls = toolTurn ? toolCalls(done) : [];
+  const afterTools = toolTurn && calls.length === 0;
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
   const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
-  if (toolTurn && !afterTools) {
+  if (calls.length > 0) {
     send({
       ...base,
-      choices: [
-        { index: 0, delta: { role: 'assistant', tool_calls: toolCalls() }, finish_reason: null },
-      ],
+      choices: [{ index: 0, delta: { role: 'assistant', tool_calls: calls }, finish_reason: null }],
     });
     send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] });
     send({ ...base, choices: [], usage });
@@ -601,10 +671,15 @@ async function scenarioTools(page, cdp) {
   const group = run.locator('[data-slot="step-group"] > button').first();
   await group.waitFor({ timeout: 60_000 });
   if ((await group.getAttribute('aria-expanded')) !== 'true') await group.click();
-  // mixed：每種各展開兩列（讀檔、grep 計數、找檔）；generic：全部展開。
+  // mixed：每種各展開兩列（讀檔、grep 計數、找檔）；generic、diff：全部展開；big-writes：全部收著。
   const rows = run.locator('[data-slot="step-row"] > button');
-  const openCount = TOOL_MIX === 'generic' ? TOOL_FILES * 3 : 6;
-  await rows.nth(openCount - 1).waitFor();
+  const openCount =
+    TOOL_MIX === 'generic' || TOOL_MIX === 'diff'
+      ? TOOL_FILES * 3
+      : TOOL_MIX === 'big-writes'
+        ? 0
+        : 6;
+  await rows.nth(TOOL_MIX === 'big-writes' ? BIG_WRITES - 1 : openCount - 1).waitFor();
   const opened = [];
   for (let index = 0; index < openCount; index++) {
     const row = rows.nth(index);
@@ -613,8 +688,18 @@ async function scenarioTools(page, cdp) {
   }
   const panels = await run.locator('.glass-panel').count();
   const outputs = await run.locator('[data-slot="output-block"]').count();
-  // 展開的列要真的畫出 SG 的結果框（玻璃），不然量的不是這張卡的面。
-  if (outputs === 0) throw new Error('展開的列沒有任何 SG 結果框');
+  const diffs = await run.locator('[data-slot="diff-view"]').count();
+  const stats = await run.locator('[data-slot="diff-stats"]').count();
+  // 展開的列要真的畫出 SG 的結果框或 diff（玻璃），不然量的不是這張卡的面。
+  if (TOOL_MIX === 'diff') {
+    if (diffs < TOOL_FILES * 2)
+      throw new Error(`diff 應該有 ${TOOL_FILES * 2} 個 DiffView，只有 ${diffs} 個`);
+  } else if (TOOL_MIX === 'big-writes') {
+    // 卡收著：沒有 DiffView；每列一顆 +N −M，加上段那一列的合計。
+    if (diffs !== 0) throw new Error(`big-writes 的卡應該全部收著，畫了 ${diffs} 個 DiffView`);
+    if (stats !== BIG_WRITES + 1)
+      throw new Error(`big-writes 應該有 ${BIG_WRITES + 1} 顆 +N −M，只有 ${stats} 顆`);
+  } else if (outputs === 0) throw new Error('展開的列沒有任何 SG 結果框');
   if (TOOL_MIX === 'generic' && outputs < 10)
     throw new Error(`generic 應該每列都有結果框，只有 ${outputs} 個`);
   await sleep(1500);
@@ -656,7 +741,7 @@ async function scenarioTools(page, cdp) {
   const tools = await run.locator('[data-slot="step-row"]').count();
   await page.getByRole('button', { name: '停止' }).click();
   await waitTurnDone(page);
-  return Object.assign(deltas, { setup: { tools, opened, panels, outputs } });
+  return Object.assign(deltas, { setup: { tools, opened, panels, outputs, diffs, stats } });
 }
 
 const REASONING_ROW = '[data-testid="reasoning-row"]';
@@ -960,7 +1045,7 @@ for (let run = 1; run <= RUNS; run++) {
       console.log(`第 ${run} 次 ${name} 的場面：${JSON.stringify(s.setup)}`);
     else if (s.setup !== undefined)
       console.log(
-        `第 ${run} 次 ${name} 的場面：段內 ${s.setup.tools} 列、展開 ${s.setup.opened.join('／')}、glass-panel ${s.setup.panels} 個、結果框 ${s.setup.outputs} 個`,
+        `第 ${run} 次 ${name} 的場面：段內 ${s.setup.tools} 列、展開 ${s.setup.opened.join('／')}、glass-panel ${s.setup.panels} 個、結果框 ${s.setup.outputs} 個、DiffView ${s.setup.diffs} 個、+N −M ${s.setup.stats} 顆`,
       );
     console.log(
       `第 ${run} 次 ${name}：原始 p95 ${s.p95.toFixed(2)}ms、以 vsync 計 p95 ${s.p95Vsync.toFixed(2)}ms、掉幀 ${s.dropped}／${s.frames}（${(s.droppedRatio * 100).toFixed(1)}%）；p50 ${s.p50.toFixed(2)}、p99 ${s.p99.toFixed(2)}、最長 ${s.max.toFixed(1)}` +

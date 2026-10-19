@@ -50,11 +50,13 @@ function DiffStats({ added, removed, className }: { added: number; removed: numb
 }
 
 /** A patch as a diff: hunks with added and removed lines coloured, headers dropped. */
-function DiffView({ patch, className }: { patch: string; className?: string }) {
+function DiffView({ patch, className, label }: { patch: string; className?: string; label?: string }) {
   const lines = patchLines(patch)
   return (
     <div
       data-slot="diff-view"
+      tabIndex={0}
+      aria-label={label}
       className={cn("glass-panel scrollbar-thin max-h-80 overflow-auto rounded-md py-1 font-mono text-[11.5px] leading-[1.6]", className)}
     >
       {lines.map((line, index) => (

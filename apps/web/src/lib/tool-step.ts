@@ -8,8 +8,8 @@
  *   另外放進 trailing，狀態不能只靠動效表達（規格 §7）。
  * - **label 是一行字串**：標題加摘要（失敗時是錯誤第一行、停止的提問是 `STOPPED_QUESTION_TEXT`、撞到輸出上限是中文說明）。
  *   它包在 SG 的 `truncate` 裡，窄的時候會被截，所以狀態字不放在這裡。
- * - **明細**：一般工具用 SG 的 `detail`／`output`／`error`（`OutputBlock`）。SG 欄位表達不了的（讀檔卡、搜尋卡、提問清單、
- *   交付清單、待辦快照、diff、撞到輸出上限）由 `components/tool/card.tsx` 畫在 children 槽，**這幾種不設 `output`／`error`**：
+ * - **明細**：一般工具用 SG 的 `detail`／`output`／`error`（`OutputBlock`），寫檔／改檔用 SG 的 `patch`（`DiffView`，#1685 B）。
+ *   SG 欄位表達不了的（讀檔卡、搜尋卡、提問清單、交付清單、待辦快照、撞到輸出上限）由 `components/tool/card.tsx` 畫在 children 槽，**這幾種不設 `output`／`error`**：
  *   slots 是接在 SG 的明細後面（附加），兩邊都設就會把同一筆結果畫兩次（{@link ToolStep.resultInChildren}）。
  * - 參數照舊在 {@link INPUT_MAX_CHARS} 切頭尾（#958），結果照舊是 `toolOutput` 的頭、省略說明、尾（#601），組成一段字串。
  *
@@ -73,7 +73,7 @@ export interface ToolStep {
   readonly statusText: string;
   readonly failed: boolean;
   readonly stopped: boolean;
-  /** 結果畫在 children 槽（讀檔、搜尋、提問、交付、待辦、diff、撞到輸出上限），`step` 不帶 `output`／`error`。 */
+  /** 結果不走 SG 的 `output`／`error`：畫在 children 槽（讀檔、搜尋、提問、交付、待辦、撞到輸出上限），或是 diff（`step.patch`）。 */
   readonly resultInChildren: boolean;
   readonly questions: readonly QuestionItem[] | undefined;
   /** 這次的答案（線上那一份優先，退回本地那一則）；讀不到是 `undefined`。 */
@@ -188,6 +188,9 @@ export function toStep(
     id: entry.id,
     label: summary === '' ? title : `${title} ${summary}`,
     status: sgStatus(entry, stopped),
+    // 寫檔／改檔交給 SG 畫（#1685 B）：列上的 +N −M 與展開後的 `DiffView` 都由 vendor 從這一份算。字串是 `toolDiffView` 記住的那一個，
+    // 工具段（`tool-run.tsx`）拿到的是同一個實例。
+    ...(diffView === undefined ? {} : { patch: diffView.patch }),
     ...(inputShown && body !== undefined ? { detail: inputText(body.text) } : {}),
     ...(resultInChildren
       ? {}

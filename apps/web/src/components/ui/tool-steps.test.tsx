@@ -131,6 +131,19 @@ describe('0018：trailing 與 children 槽', () => {
     expect(result.compareDocumentPosition(own) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });
 
+  test('有 patch 的列：children 接在 SG 的 DiffView 後面（#1685 B 擴充 patch 分支）', () => {
+    render(
+      <StepRow step={{ id: 'p', label: '編輯 a.ts', status: 'done', patch: '@@\n-a\n+b' }}>
+        <p>手機版的歸屬</p>
+      </StepRow>,
+    );
+    fireEvent.click(screen.getByRole('button'));
+    const view = document.querySelector('[data-slot="diff-view"]')!;
+    const own = screen.getByText('手機版的歸屬');
+    expect(view.compareDocumentPosition(own) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(view.parentElement).toBe(own.parentElement);
+  });
+
   test('只有 children、沒有 detail／output／error 的列也打得開', () => {
     render(
       <StepRow step={{ id: 'x', label: '交付 report.pdf', status: 'done' }}>
