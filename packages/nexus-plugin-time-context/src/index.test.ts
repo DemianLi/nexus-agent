@@ -7,7 +7,8 @@
  * 每一條驗收都配反例：「第三行不是 `0s`」配「真的 0 才寫 `0s`」，「10 分鐘內不注入」配「剛好 10 分鐘就注入」。
  */
 
-import { AIMessage } from '@langchain/core/messages';
+import { AIMessage, HumanMessage } from '@langchain/core/messages';
+import type { PreStepListener } from '@nexus/agent-loop';
 import { SessionLog, toLoggedMessage } from '@nexus/core';
 import type { SessionLookup } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -17,6 +18,7 @@ import {
   DEFAULT_REFRESH_INTERVAL_MS,
   TIME_CONTEXT_MARKER,
   TIME_CONTEXT_MIDDLEWARE_NAME,
+  apply,
   createTimeContextListener,
   createTimestampFormatter,
   foldTimeContext,
@@ -161,8 +163,28 @@ describe('foldTimeContext：從日誌摺出事實', () => {
     const facts = foldTimeContext(log.events);
     expect(facts.turn).toBe(2);
     expect(facts.baselineBeforeTurn).toBe(T0 + 1_000);
-    // 這一輪已經叫過一次模型，核准後續接的 invoke 是第 2 步。
+    // 這一輪已經叫過一次模型，所以若有 invoke 在這之後進來，是第 2 步。（今天核准續接走被中斷的那張圖、不重進 beforeAgent，
+    // 見 harness `time-context-on-tree.test.ts` 的「核准續接」；這條折疊規則是防禦。）
     expect(facts.step).toBe(2);
+  });
+
+  it('這一輪之前最後一則模型看得到的事件是 compaction/summary 時，基線取它', () => {
+    const log = new SessionLog('t');
+    log.append('turn/start', { kind: 'message', text: '一' });
+    at(1_000);
+    log.append('assistant/message', reply('好'));
+    at(2_000);
+    // 摘要器在一輪結束後才寫摘要：它是模型下一次看到的歷史的一部分（`isModelVisibleEvent` 認它）。
+    log.append('compaction/summary', {
+      cutoffIndex: 1,
+      messagesBefore: 2,
+      filePath: null,
+      summary: toLoggedMessage(new HumanMessage({ content: '摘要' })),
+    });
+    at(15 * MIN);
+    log.append('turn/start', { kind: 'message', text: '二' });
+
+    expect(foldTimeContext(log.events).baselineBeforeTurn).toBe(T0 + 2_000);
   });
 
   it('注入的時間記在 lastInjectionTime；這一輪的那一格在每個 turn/start、turn/end 清掉', () => {
@@ -239,14 +261,22 @@ describe('listener：節流與內容', () => {
     expect(await invoke(log, listener)).toHaveLength(1);
   });
 
-  it('牆鐘倒退：不擋（免得時鐘被調回之後永遠不再注入）', async () => {
+  it('牆鐘倒退：不擋（免得時鐘被調回之後永遠不再注入），第三行鉗成 0s', async () => {
     const log = new SessionLog('t');
     const listener = makeListener(log);
     log.append('turn/start', { kind: 'message', text: '一' });
     at(5 * MIN);
+    log.append('assistant/message', reply('好'));
     await invoke(log, listener);
+    log.append('turn/start', { kind: 'message', text: '二' });
+    // 時鐘被調回 4 分鐘：上一則可見事件（5 分）比現在（1 分）還晚。
     at(MIN);
-    expect(await invoke(log, listener)).toHaveLength(1);
+    const [injection] = (await invoke(log, listener)) ?? [];
+    expect(injection).toBeDefined();
+    // 倒退的差距不能寫成負數（上面 `formatDuration(-5000)` 是單元；這裡問 listener 真的把它寫進第三行）。
+    expect(injection?.content.split('\n')[2]).toBe(
+      'Elapsed since the preceding model-visible message: 0s.',
+    );
   });
 
   it('兩條 thread 不共用節流狀態', async () => {
@@ -304,5 +334,48 @@ describe('listener：節流與內容', () => {
     expect(await listener(visible, { configurable: {} })).toBeUndefined();
     at(10 * MIN);
     expect(await listener(visible, { configurable: {} })).toHaveLength(1);
+  });
+});
+
+describe('apply：時區在載入當下解析並留住（dsh tests/time-context.spec.ts:371、:383）', () => {
+  const ctxWithServices = (): { ctx: never; captured: PreStepListener[] } => {
+    const captured: PreStepListener[] = [];
+    const services = new Map<string, unknown>([
+      [
+        'agentLoop',
+        { preStep: (_name: string, listener: PreStepListener) => captured.push(listener) },
+      ],
+      ['sessionLookup', { forCall: (): SessionLookup => ({ kind: 'not-attached' }) }],
+    ]);
+    const ctx = new Proxy({}, { get: (_target, key) => services.get(String(key)) });
+    return { ctx: ctx as never, captured };
+  };
+
+  it('載入之後行程的 TZ 再變，讀數的時區不跟著變', async () => {
+    const before = process.env.TZ;
+    try {
+      process.env.TZ = 'Asia/Taipei';
+      const { ctx, captured } = ctxWithServices();
+      apply(ctx, {});
+      process.env.TZ = 'America/New_York';
+      const [injection] = (await captured[0]?.([], { configurable: {} })) ?? [];
+      expect(injection?.content.split('\n')[0]).toBe(
+        'Time sampled while preparing turn 1, step 1: 2026-10-18T09:00:00+08:00[Asia/Taipei]',
+      );
+    } finally {
+      if (before === undefined) delete process.env.TZ;
+      else process.env.TZ = before;
+    }
+  });
+
+  it('沒設時區、行程的時區又解析不了：拋 failed to resolve the system time zone', () => {
+    const spy = vi.spyOn(Intl, 'DateTimeFormat').mockImplementation(() => {
+      throw new RangeError('no zone');
+    });
+    try {
+      expect(() => apply({} as never, {})).toThrow('failed to resolve the system time zone');
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

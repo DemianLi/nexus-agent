@@ -145,8 +145,9 @@ describe('相容層讓出貨清單原樣跑（#1386 ②）', () => {
   // 交換的對子裡沒有 `agent-instructions` 與 `system-prompt`：`agent/pre-step` 的 listener 順序就是列的順序（#1474），
   // #1625 之後有兩位消費者（`agent-instructions`、`time-context`），把 `agent-instructions` 換到 `time-context` 之後，
   // 同一次 invoke 裡兩則訊息的先後就跟著變——那是該有的差別，不是「順序由槽位表決定」的反例。
+  // 換 `time-context` 與 `system-prompt` 則不變：它仍在 `agent-instructions` 之後，兩顆 pre-step 的相對順序沒動。
   it.each([
-    ['skills', 'system-prompt'],
+    ['time-context', 'system-prompt'],
     ['plan-mode', 'goal'],
     ['repeat-reminder', 'tool-result-pruner'],
   ] as const)(

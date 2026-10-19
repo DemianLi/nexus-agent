@@ -656,7 +656,11 @@ export async function runServePhases(
   phases: readonly (readonly string[])[],
   script: Script,
   patchExtra = '',
-  patchOptions: { readonly timeContext?: boolean } = {},
+  patchOptions: {
+    readonly timeContext?: boolean;
+    /** 每一段（從第二段起）開始前呼叫一次，參數是那一段的序號（從 1 起）：給需要在兩台 serve 之間推時鐘的測試。 */
+    readonly beforePhase?: (index: number) => void;
+  } = {},
 ): Promise<Run> {
   const upstream = await fakeEndpoint(script, true);
   const home = await mkdtemp(join(tmpdir(), 'nexus-lh-home-'));
@@ -666,7 +670,8 @@ export async function runServePhases(
     mode: 0o600,
   });
   try {
-    for (const texts of phases) {
+    for (const [phaseIndex, texts] of phases.entries()) {
+      if (phaseIndex > 0) patchOptions.beforePhase?.(phaseIndex);
       let running: RunningServe | undefined;
       try {
         running = (await runServe({
@@ -785,13 +790,16 @@ export async function runServeDriver(
   drivers: ((ctx: DriverCtx) => Promise<void>) | readonly ((ctx: DriverCtx) => Promise<void>)[],
   script: Script,
   patchExtra = '',
+  patchOptions: { readonly timeContext?: boolean } = {},
 ): Promise<DriverRun> {
   const list = typeof drivers === 'function' ? [drivers] : drivers;
   const upstream = await fakeEndpoint(script, true);
   const home = await mkdtemp(join(tmpdir(), 'nexus-lh-home-'));
   const logs = await mkdtemp(join(tmpdir(), 'nexus-lh-logs-'));
   const patch = join(home, 'patch.yml');
-  writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra), { mode: 0o600 });
+  writeFileSync(patch, liveModelPatch(upstream.baseURL, patchExtra, patchOptions), {
+    mode: 0o600,
+  });
   try {
     for (const driver of list) {
       let running: RunningServe | undefined;

@@ -56,11 +56,14 @@
 # 同一條 thread 10 分鐘內不重複（`refreshIntervalMs`，`0` 是每次都注入）；從不進系統提示詞，所以前綴快取不受影響。
 #
 # 位置在 `agent-instructions` 正下方：同一次 invoke 裡人話在前、AGENTS.md 基線居中、讀數在最後。
-# **CLI 也掛這一列**（偏離 dsh，登記在套件檔頭）：dsh 的 CLI 不掛 time-context，但這裡 CLI 與 serve 共用一份出貨清單；
-# 要讓 CLI 不掛，等 CLI 有自己的清單再拿掉。讀數是**只增不減**的日誌事件，恢復一條舊 thread 不會改寫舊讀數。
+# **CLI 也掛這一列**（偏離 dsh，理由 1，登記在套件檔頭第 5 條）：dsh 只有 web-app 的 preset 掛它，照 dsh 該只掛 serve；
+# 但 serve 專屬層（`cordis.serve.yml`）的函式插件上不了樹（`plugin-tree.ts:51-52`），這一列只能寫在這份出貨清單，CLI 與 serve 一起掛。
+# 撤除條件：serve 層經 Include 上樹之後，把這一列搬到 `cordis.serve.yml`。
+# 讀數是**只增不減**的日誌事件，恢復一條舊 thread 不會改寫舊讀數。
 #
-# 顯示時區預設取行程的 `TZ`；容器裡常常是 UTC，要固定就用 `/plugin patch` 給 `timeZone: Asia/Taipei`
-# （IANA 名），或啟動時設 `TZ`。設定寫錯（不是 IANA 名、間隔不是非負整數、多餘欄位）這一列掉下來並在啟動時警告。
+# 顯示時區預設取行程的 `TZ`，載入時解析一次；容器裡常常是 UTC，要固定就啟動時設 `TZ`，或用
+# `plugin config set time-context --file <檔>`（檔裡寫 `timeZone: Asia/Taipei`，IANA 名；`plugin` 是 `plugin-cli.ts` 的寫入口），
+# 或在 `--patch` 裡給這一列的 `config`。設定寫錯（不是 IANA 名、間隔不是非負整數、多餘欄位）這一列掉下來並在啟動時警告。
 - id: time-context
   name: '@nexus/plugin-time-context'
 

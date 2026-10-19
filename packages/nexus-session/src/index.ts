@@ -66,6 +66,10 @@ export {
 // `sourceKwargs` 造一則訊息的來源記號（收尾指示）。本來就住在 core，這裡單向轉出。
 export { currentTurnStart, sourceKwargs } from '@nexus/core';
 
+// time-context 要的兩支讀日誌的述詞（#1625）：「這一顆開不開新的邏輯輪」與「這一顆會不會進模型」（含 `compaction/summary`）。
+// 本來就住在 core 的 `session-log.ts`，這裡單向轉出，插件不再自己重寫一份。
+export { isLogicalTurnStart, isModelVisibleEvent } from '@nexus/core';
+
 // 日誌的**型別**出口（#1456 Q4 (a)）：遷出的插件要在簽名裡寫 `SessionLog`／`SessionEvent`，但不能 import `@nexus/core`。
 // 跟上面四個值同一個形狀：單向轉出，實作留在 `@nexus/core`；撤除條件同上（#1421 Q2 (b)）。
 export type { SessionEvent, SessionEventMap, SessionLog } from '@nexus/core';

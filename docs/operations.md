@@ -1376,10 +1376,10 @@ Elapsed since the preceding model-visible message: 15m 0s.
 - **第二行今天一律 `unavailable`**：wire 還沒有帶瀏覽器時區（#1629、#1630）。第一行的時區只是顯示用的回退，**不代表使用者在哪個時區**。
 - **只進請求尾端，不進系統提示詞**：前綴快取不會因此失效；已經送出的讀數記在日誌上，續接舊會話時原樣回到模型手上，不改寫。
 - **同一條 thread 10 分鐘內不重複**（`refreshIntervalMs`，預設 600000）；`0` 是每次呼叫都注入，不是關掉。兩條 thread 各算各的。
-- **顯示時區預設是行程的 `TZ`**，載入時解析一次。**容器裡常常是 UTC**，要固定成使用者看得懂的時區，用 `plugin` 寫入口給 `timeZone`（IANA 名，例如 `Asia/Taipei`），或啟動時設 `TZ`。
+- **顯示時區預設是行程的 `TZ`**，載入時解析一次。**容器裡常常是 UTC**，要固定成使用者看得懂的時區，啟動時設 `TZ`，或用 `plugin config set time-context --file <檔>`（檔裡寫 `timeZone: Asia/Taipei`，IANA 名），或在 `--patch` 裡給這一列的 `config`。
 - **設定寫錯（不是 IANA 名、間隔不是非負安全整數、多出來的欄位）這一列掉下來**，啟動時印原因，其餘照常；設定只給新的 thread。
-- **關掉**：patch 寫 `- id: time-context` ＋ `disabled: true`。CLI 與 serve 共用同一份出貨清單，所以兩邊一起關（dsh 只有 web-app 掛它，我們的 CLI 也掛，偏離登記在套件檔頭）。
-- **每次 invoke 多一個圖節點**（`TimeContextMiddleware.before_agent`），在預設遞迴上限 100 下輪數不變（32 輪，被 floor 吃掉）；上限壓得很低的部署要自己量。
+- **關掉**：`plugin disable time-context`，或 patch 寫 `- id: time-context` ＋ `disabled: true`。這一列在 `cordis.yml`（CLI 與 serve 共用），所以兩邊一起關：dsh 只有 web-app 掛它、照理只掛 serve，但 serve 專屬層的函式插件上不了樹（`plugin-tree.ts:51-52`），所以我們的 CLI 也掛（偏離登記在套件檔頭第 5 條，撤除條件：serve 層經 Include 上樹後搬到 `cordis.serve.yml`）。
+- **每次 invoke 多一個圖節點**（`TimeContextMiddleware.before_agent`），在預設遞迴上限 100 下輪數不變（32 輪，被 floor 吃掉）；**但剛好卡在邊界上**：上限 99 就是 31 輪，再多一個 `beforeAgent` 節點，預設上限也會少一輪。上限壓得很低的部署要自己量。
 - **畫面上不會多一則**：讀數是持久訊息、模型看得到，但帶 `source.plugin`，web 的對話畫面不把它當使用者說的話畫出來（同 AGENTS.md 基線）。
 
 ### 後台改清單：`plugin` 寫入口與變更紀錄

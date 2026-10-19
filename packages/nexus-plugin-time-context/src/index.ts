@@ -23,7 +23,7 @@
  * ## 攔截時刻：dsh 第 2 格 `agent/pre-step`
  *
  * 和 `@nexus/plugin-agent-instructions` 同一格、同一個接縫，是它之外的第二位消費者：dsh 在 `agent/pre-step` 把讀數 splice 進那一步的批次
- * （`src/index.ts:185-229`）；我們這側經 `@nexus/agent-loop` 的 `preStep` 登記 listener（宿主以 `beforeAgent` 承載），**只佔注入那半**，
+ * （`src/index.ts:185-225`）；我們這側經 `@nexus/agent-loop` 的 `preStep` 登記 listener（宿主以 `beforeAgent` 承載），**只佔注入那半**，
  * 只能追加、落點由基座決定。位置由列的位置決定：`cordis.yml` 上這一列在 `agent-instructions` 正下方，所以同一次 invoke 裡讀數排在 AGENTS.md
  * 基線之後。逐欄的差與頻率量在 `apps/harness/src/interception-index.test.ts` 第 2 列。
  *
@@ -35,7 +35,7 @@
  * 1. **頻率：每次 invoke 一次，不是每步一次。**
  *    dsh 每個 step 都跑 pre-step（`src/index.ts:185`）；我們的宿主把 listener 掛在 `beforeAgent`，一次 invoke 只跑一次。每步要 `beforeModel`，
  *    那是圖裡每輪多一格的節點，#389 拍板每步那一半先不做。**後果**：同一次 invoke 裡，後面幾步看不到新的讀數（dsh 預設間隔 10 分鐘，一次
- *    invoke 很少跨過，差別小）。`step` 照實填：用日誌裡這一輪已經有幾顆 `model/start` 算（核准後續接的 invoke 不是第 1 步）。**撤除條件**：
+ *    invoke 很少跨過，差別小）。`step` 照實填：用日誌裡這一輪已經有幾顆 `model/start` 算（若有 invoke 在同一輪的模型呼叫之後才進來，不是第 1 步；核准續接今天不重進 `beforeAgent`，實跑見 harness 的「核准續接」）。**撤除條件**：
  *    #389 重開，或 core 開了多個貢獻者共用一格的 pre-step 節點。
  * 2. **不能 `reject`，也沒有 `signal`。** dsh 的下游決定 `reject`、或 signal 已中止時不注入（`:190`）；我們的 listener 只拿到
  *    `(visible, invocation)`、只能回要追加的訊息。**退到**：被叫到就照節流規則判斷。撤除條件同第 1 條。
@@ -75,7 +75,7 @@ import { agentLoopToken } from '@nexus/agent-loop';
 import type { PreStepInjection, PreStepInvocation, PreStepListener } from '@nexus/agent-loop';
 import type { Context } from '@nexus/cordis';
 import { defineManifest, injectOf, need, service } from '@nexus/sdk';
-import { sessionLookupToken } from '@nexus/session';
+import { isLogicalTurnStart, isModelVisibleEvent, sessionLookupToken } from '@nexus/session';
 import type { SessionEvent, SessionLookup } from '@nexus/session';
 import { z } from 'zod';
 
@@ -194,18 +194,12 @@ export interface TimeContextFacts {
   readonly baselineBeforeTurn: number | null;
 }
 
-/** 這一顆事件是不是「模型看得到的訊息」（第 1 步的基線候選）。 */
-function isModelVisible(event: SessionEvent): boolean {
-  switch (event.type) {
-    case 'turn/start':
-      return event.data.kind !== 'resume';
-    case 'user/message':
-    case 'assistant/message':
-    case 'tool/result':
-      return true;
-    default:
-      return false;
-  }
+/**
+ * 這一顆事件是不是第 1 步基線的候選：進模型的事件（`@nexus/session` 轉出的 `isModelVisibleEvent`，含 `compaction/summary`），
+ * 但 `resume` 那種 `turn/start` 不算——它不替模型多出新的一句話，只是核准後的續接。
+ */
+function isBaselineCandidate(event: SessionEvent): boolean {
+  return isModelVisibleEvent(event) && (event.type !== 'turn/start' || isLogicalTurnStart(event));
 }
 
 /**
@@ -219,7 +213,7 @@ export function foldTimeContext(events: readonly SessionEvent[]): TimeContextFac
   let turns = 0;
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
-    if (event?.type === 'turn/start' && event.data.kind !== 'resume') {
+    if (event !== undefined && isLogicalTurnStart(event)) {
       cut = index;
       turns += 1;
     }
@@ -231,7 +225,7 @@ export function foldTimeContext(events: readonly SessionEvent[]): TimeContextFac
   for (let index = 0; index < events.length; index += 1) {
     const event = events[index];
     if (event === undefined) continue;
-    if (index < cut && isModelVisible(event)) baselineBeforeTurn = event.time;
+    if (index < cut && isBaselineCandidate(event)) baselineBeforeTurn = event.time;
     if (event.type === 'turn/start' || event.type === 'turn/end') lastTurnInjectionTime = null;
     if (index > cut && event.type === 'model/start') step += 1;
     if (
