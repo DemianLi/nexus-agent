@@ -349,7 +349,7 @@ export interface BackgroundSubagentControl {
    * {@link BackgroundSubagentHost.resume} 之後 {@link BackgroundSubagentHost.sendFromUser}：冷的先接回來（#1271）。接受或拋
    * {@link BackgroundSubagentError}，不等那一輪跑完。
    */
-  readonly sendFromUser: (runId: string, text: string) => Promise<void>;
+  readonly sendFromUser: (runId: string, text: string, clientTimeZone?: string) => Promise<void>;
   /** {@link BackgroundSubagentHost.interrupt}。 */
   readonly interrupt: (runId: string) => boolean;
   /** {@link BackgroundSubagentHost.hasRunning}（封存要問「還有沒有背景子代理在跑」，#633）。 */
@@ -394,6 +394,8 @@ interface Steer {
   readonly text: string;
   /** agent 寫的才有（寄件人的會話 id）；**沒有就是人說的**（`sendFromUser`），日誌來源是 `user`、不加前綴。 */
   readonly senderSessionId?: string;
+  /** 人說的才有（#1734）：使用者的時區，邊界上已驗證並正規化；記在這句話的日誌來源上。 */
+  readonly clientTimeZone?: string;
 }
 
 /**
@@ -413,9 +415,14 @@ interface RunningRound {
 function turnOf(body: {
   readonly text: string;
   readonly senderSessionId?: string;
+  readonly clientTimeZone?: string;
 }): SessionEventMap['turn/start'] {
   return body.senderSessionId === undefined
-    ? { kind: 'message', text: body.text }
+    ? {
+        kind: 'message',
+        text: body.text,
+        ...(body.clientTimeZone !== undefined && { clientTimeZone: body.clientTimeZone }),
+      }
     : { kind: 'agent-message', text: body.text, senderSessionId: body.senderSessionId };
 }
 
@@ -662,15 +669,25 @@ export class BackgroundSubagentHost {
   sendFromUser(input: {
     readonly runId: string;
     readonly text: string;
+    /** 使用者的時區（#1734），邊界上已驗證並正規化；記在這句話的日誌來源上。 */
+    readonly clientTimeZone?: string;
   }): Promise<BackgroundRoundOutcome> {
-    return this.#deliver(input.runId, { text: input.text });
+    return this.#deliver(input.runId, {
+      text: input.text,
+      ...(input.clientTimeZone !== undefined && { clientTimeZone: input.clientTimeZone }),
+    });
   }
 
   /** 控制面（給 wire 用）：兩個動作都不回那一輪的下場，也不 reject。 */
   get control(): BackgroundSubagentControl {
     return {
-      sendFromUser: (runId, text) => {
-        const deliver = (): void => void this.sendFromUser({ runId, text });
+      sendFromUser: (runId, text, clientTimeZone) => {
+        const deliver = (): void =>
+          void this.sendFromUser({
+            runId,
+            text,
+            ...(clientTimeZone !== undefined && { clientTimeZone }),
+          });
         // 常駐的（以及沒有冷復活的）**同步受理**，不多等一拍：插話與中斷的先後照呼叫的先後。只有冷的要等接回來。
         if (this.#cold === undefined || this.#known.has(runId)) {
           try {
@@ -691,7 +708,11 @@ export class BackgroundSubagentHost {
 
   #deliver(
     runId: string,
-    body: { readonly text: string; readonly senderSessionId?: string },
+    body: {
+      readonly text: string;
+      readonly senderSessionId?: string;
+      readonly clientTimeZone?: string;
+    },
   ): Promise<BackgroundRoundOutcome> {
     if (this.#closed) throw new BackgroundSubagentError('closed', '背景子代理的載體已經關閉');
     const subagent = this.#known.get(runId);
@@ -1312,7 +1333,12 @@ export class BackgroundSubagentHost {
           message: toLoggedMessage(message),
           source:
             steer.senderSessionId === undefined
-              ? { kind: 'user' }
+              ? {
+                  kind: 'user',
+                  ...(steer.clientTimeZone !== undefined && {
+                    clientTimeZone: steer.clientTimeZone,
+                  }),
+                }
               : { kind: 'agent-message', form: 'relay', senderSessionId: steer.senderSessionId },
         });
         return message;

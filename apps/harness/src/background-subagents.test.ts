@@ -986,6 +986,70 @@ describe('載體本身（假 agent）', () => {
       await host.close();
     });
 
+    describe('帶使用者的時區（#1734）：記在這句人話自己的日誌來源上', () => {
+      it('閒著：新的一輪 turn/start 帶 clientTimeZone；派出去那一輪（沒有人說話）不帶', async () => {
+        const { agent, seen } = fakeAgent();
+        const { host, sessions } = make(() => agent);
+        const first = host.start({ subagent: 'worker', text: '開工' });
+        await first.outcome;
+        await host.sendFromUser({
+          runId: first.runId,
+          text: '改看 b.ts',
+          clientTimeZone: 'Asia/Taipei',
+        });
+        expect(seen.map((each) => each.text)).toEqual(['開工', '改看 b.ts']);
+        expect(starts(sessions.get({ kind: 'subagent', runId: first.runId })!)).toEqual([
+          { kind: 'message', text: '開工' },
+          { kind: 'message', text: '改看 b.ts', clientTimeZone: 'Asia/Taipei' },
+        ]);
+        await host.close();
+      });
+
+      it('跑著：下一步領走的那句，日誌來源是 { kind: user, clientTimeZone }；沒帶的那句來源還是裸的 user', async () => {
+        const hold = gate();
+        const { agent, seen } = fakeAgent(async () => {
+          await hold.opened;
+          await inboxOf(seen).claim();
+        });
+        const { host, sessions } = make(() => agent);
+        const first = host.start({ subagent: 'worker', text: '開工' });
+        await running(seen);
+        host.control.sendFromUser(first.runId, '有時區', 'Asia/Taipei');
+        host.control.sendFromUser(first.runId, '沒時區');
+        hold.open();
+        await first.outcome;
+        const log = sessions.get({ kind: 'subagent', runId: first.runId })!;
+        expect(
+          log.events
+            .filter((event) => event.type === 'user/message')
+            .map((event) => (event.data as { source: unknown }).source),
+        ).toEqual([{ kind: 'user', clientTimeZone: 'Asia/Taipei' }, { kind: 'user' }]);
+        await host.close();
+      });
+
+      it('這一輪被中止而沒領走的人話：退回成下一輪時時區跟著走', async () => {
+        const hold = gate();
+        const { agent, seen } = fakeAgent(async (text) => {
+          if (text === '開工') await hold.opened;
+        });
+        const { host, sessions } = make(() => agent);
+        const first = host.start({ subagent: 'worker', text: '開工' });
+        await running(seen);
+        host.control.sendFromUser(first.runId, '中止前的話', 'Asia/Taipei');
+        expect(host.control.interrupt(first.runId)).toBe(true);
+        const wake = host.sendFromUser({ runId: first.runId, text: '喚醒' });
+        hold.open();
+        await first.outcome;
+        await wake;
+        expect(starts(sessions.get({ kind: 'subagent', runId: first.runId })!)).toEqual([
+          { kind: 'message', text: '開工' },
+          { kind: 'message', text: '中止前的話', clientTimeZone: 'Asia/Taipei' },
+          { kind: 'message', text: '喚醒' },
+        ]);
+        await host.close();
+      });
+    });
+
     it('被拒帶型別化的碼：沒有這個編號、載體已關閉、已結算而名額滿了', async () => {
       const hold = gate();
       const { agent } = fakeAgent(async (text) => (text === '佔位' ? hold.opened : undefined));
