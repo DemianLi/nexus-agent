@@ -79,7 +79,11 @@ export interface Body {
 /** 腳本給的一則回覆。沒給 `content` 也沒給 `tools` 就回「好。」。 */
 export interface Reply {
   content?: string;
-  tools?: { id: string; name: string; args: unknown }[];
+  /**
+   * `argsJson` 是參數已經組好的 JSON 文字，給了就原樣送、不看 `args`：原生 `JSON.stringify` 是遞迴的，CI（Linux x64）上約 4100 層
+   * 就 `RangeError`（#1661），比那更深的參數要由測試自己迭代組好再交過來（#1668）。
+   */
+  tools?: { id: string; name: string; args: unknown; argsJson?: string }[];
   finish?: string;
   /** 先睡這麼多毫秒才回（讓「模型呼叫進行中」有一段可以按停、插話的時間）。 */
   delay?: number;
@@ -130,7 +134,7 @@ export async function fakeEndpoint(script: Script, stream: boolean): Promise<Fak
       const calls = (reply.tools ?? []).map((call) => ({
         id: call.id,
         type: 'function',
-        function: { name: call.name, arguments: JSON.stringify(call.args) },
+        function: { name: call.name, arguments: call.argsJson ?? JSON.stringify(call.args) },
       }));
       if (!stream) {
         res.writeHead(200, { 'content-type': 'application/json' });

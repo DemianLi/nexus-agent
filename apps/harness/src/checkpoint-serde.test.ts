@@ -22,6 +22,7 @@ import { fileURLToPath } from 'node:url';
 import { AIMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
 import { SESSION_EVENT_MAX_DEPTH } from '@nexus/core';
+import { THREAD_HISTORY_TOO_DEEP, WireRejectedError } from '@nexus/wire';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
@@ -35,6 +36,7 @@ import {
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { projectKey } from './jsonl-session-store.js';
+import { NESTING_TOO_DEEP_CODE } from './live-model.js';
 import { fakeEndpoint, hasTools, liveModelPatch } from './log-derived-history.fixture.js';
 import type { Body, FakeEndpoint, Reply, WireMessage } from './log-derived-history.fixture.js';
 import { PrunedMemorySaver } from './pruned-memory-saver.js';
@@ -195,16 +197,28 @@ function textOf(message: WireMessage): string {
     .join('');
 }
 
-/** 主呼叫照這一串最後一則決定：工具結果之後收尾；使用者說「深:<名字>」就叫一個參數是 `deep[名字]` 的工具。 */
-function scriptFor(deep: Record<string, unknown>) {
+/**
+ * 主呼叫照這一串最後一則決定：工具結果之後收尾；使用者說「深:<名字>」就叫一個參數是 `deep[名字]` 的工具。
+ * `deepJson[名字]` 有給的話參數直接送那段 JSON 文字（比原生 `JSON.stringify` 撐得住的還深的，見假端點的 `argsJson`）。
+ */
+function scriptFor(deep: Record<string, unknown>, deepJson: Record<string, string> = {}) {
   return (_index: number, body: Body): Reply => {
     if (!hasTools(body)) return { content: '【輔助呼叫】' };
     const last = body.messages.at(-1)!;
     if (last.role === 'tool') return { content: '收尾' };
     const name = /^深:(\S+)/.exec(textOf(last))?.[1];
-    return name === undefined
-      ? { content: '好' }
-      : { tools: [{ id: `call-${name}`, name: 'no_such_tool', args: deep[name] }] };
+    if (name === undefined) return { content: '好' };
+    const argsJson = deepJson[name];
+    return {
+      tools: [
+        {
+          id: `call-${name}`,
+          name: 'no_such_tool',
+          args: deep[name],
+          ...(argsJson !== undefined && { argsJson }),
+        },
+      ],
+    };
   };
 }
 
@@ -218,8 +232,9 @@ interface Rig {
 async function rig(
   deep: Record<string, unknown>,
   cleanups: (() => Promise<void>)[] = perTest,
+  deepJson: Record<string, string> = {},
 ): Promise<Rig> {
-  const upstream = await fakeEndpoint(scriptFor(deep), true);
+  const upstream = await fakeEndpoint(scriptFor(deep, deepJson), true);
   cleanups.push(() => upstream.close());
   const home = await mkdtemp(join(tmpdir(), 'nexus-checkpoint-home-'));
   const logs = await mkdtemp(join(tmpdir(), 'nexus-checkpoint-logs-'));
@@ -356,11 +371,9 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
   // `assistant-stream.ts:83-88`），回覆不進 state，存檔點輪不到這一則。這是行為改了，不是放寬：這一輪照樣失敗、下一輪照樣看不到深參數。
   // 存檔點那一關自己的 601 層邊界由上面 `DepthCheckedSerializer` 那一組直接釘（不經日誌）。
   //
-  // 更深的（約 2000 層起）輪不到日誌那一關：LangGraph 在圖裡走節點回傳值的 `_deserializeCommandSendObjectGraph`
-  // （`@langchain/langgraph` 的 `dist/constants.js`，遞迴）先爆 `Maximum call stack size exceeded`，碼是 UNKNOWN（#1665 之後
-  // 在本機 Node 25.9.0 實測 2000、3000 層的 `turn/failed` 都是這一句；棧深隨 Node 版本變，其他版本沒量），
-  // 見 [#1668](https://github.com/DemianLi/nexus-agent/issues/1668)。
-  it('事件 601 層（日誌那一關剛好超過上限一層）：那一輪失敗在記回覆那一刻，下一輪與重開後模型收到同一份、沒有那則回覆', async () => {
+  // 碼是 NESTING_TOO_DEEP（[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）：日誌那一關拋的 `SessionEventDepthError` 帶碼，
+  // `classifyTurnFailure` 認它。更深的見下一格。
+  it('事件 601 層（日誌那一關剛好超過上限一層）：那一輪失敗在記回覆那一刻，碼是 NESTING_TOO_DEEP，下一輪與重開後模型收到同一份、沒有那則回覆', async () => {
     const { upstream, start, logFile } = await rig({ deep: { v: mixed(AT_LOG_CAP + 1) } });
     const server = await start();
     await say(server, 'same-deep', '第一句');
@@ -380,8 +393,10 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
         `^會話事件的 assistant/message 的 data\\.message\\..* 是第 ${SESSION_EVENT_MAX_DEPTH + 1} 層巢狀，超過上限 ${SESSION_EVENT_MAX_DEPTH} 層$`,
       ),
     );
-    // 同 dsh：這種失敗沒有專屬的碼，不是 `LlmError` 的錯一律攤成 `errorChain` 文字、碼 UNKNOWN（`agent.ts:377-382`，`687f282e`）。
-    expect(data.error.code).toBe('UNKNOWN');
+    // 偏離 dsh（理由 1）：dsh 沒有這一類，不是 `LlmError` 的錯一律 UNKNOWN（`agent.ts:379-381`，`687f282e`）；上限是基座帶來的，見 `classifyTurnFailure`。
+    expect(data.error.code).toBe(NESTING_TOO_DEEP_CODE);
+    // 不重打：同一則回覆再要一次一樣深。
+    expect(mainCalls(upstream, '深:deep')).toBe(1);
     // 存檔點沒碰到這一則：量到的每一次寫入都在上限內。
     expect(Math.max(...dumpedDepths)).toBeLessThanOrEqual(CHECKPOINT_MAX_DEPTH);
     // 那則回覆不在日誌上，日誌上那次呼叫以 error 收。
@@ -403,7 +418,43 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
     await say(again, 'same-deep', '重開後');
     expect(roles('重開後')).toEqual([...live, 'assistant:好', 'user:重開後']);
   }, 60_000);
+
+  // 再深一點，輪不到日誌那一關：記回覆時 LangChain 的 `toDict()`（`escapeIfNeeded`，遞迴）先爆 `Maximum call stack size exceeded`，
+  // 碼是 UNKNOWN（#1668 實測：macOS、Node 25.9.0，6000 層起；邊界看堆疊大小，不是常數）。現在 `toLoggedMessage` 交給它之前先量，
+  // 拋同一種帶碼的錯。參數由 `mixedJson` 迭代組好再交給假端點：原生 `JSON.stringify` 在 CI 上約 4100 層就爆。
+  it('參數 6000 層（以前在 toDict 遞迴爆掉）：那一輪失敗在記回覆前，碼是 NESTING_TOO_DEEP，不重打，下一輪照常', async () => {
+    const { upstream, start, logFile } = await rig({}, perTest, { deep: mixedJson(6_000) });
+    const server = await start();
+    await say(server, 'same-6000', '第一句');
+    await say(server, 'same-6000', '深:deep');
+    const failed = await vi.waitFor(async () => {
+      const line = (await logLines(logFile('same-6000'))).find((candidate) =>
+        candidate.includes('"turn/failed"'),
+      );
+      if (line === undefined) throw new Error('還沒寫 turn/failed');
+      return line;
+    });
+    const data = (JSON.parse(failed) as { data: { message: string; error: { code: string } } })
+      .data;
+    expect(data.message).toBe(
+      `要記的訊息巢狀超過上限 ${SESSION_EVENT_MAX_DEPTH} 層，日誌收不下（轉成日誌的形狀之前就先拒）`,
+    );
+    expect(data.error.code).toBe(NESTING_TOO_DEEP_CODE);
+    expect(mainCalls(upstream, '深:deep')).toBe(1);
+
+    await say(server, 'same-6000', '再一句');
+    expect(
+      requestFor(upstream, '再一句').map((m) => `${m.role}:${m.role === 'system' ? '' : textOf(m)}`),
+    ).toEqual(['system:', 'user:第一句', 'assistant:好', 'user:深:deep', 'user:再一句']);
+  }, 60_000);
 });
+
+/** 主呼叫裡，最後一則使用者說 `prompt` 的有幾次（重打的話不只一次）。 */
+function mainCalls(upstream: FakeEndpoint, prompt: string): number {
+  return upstream.bodies.filter(
+    (body) => hasTools(body) && textOf(body.messages.at(-1)!) === prompt,
+  ).length;
+}
 
 describe('續接：日誌裡的舊事件比上限深（#1658）', () => {
   const shallow = { v: mixed(10) };
@@ -486,13 +537,17 @@ describe('續接：日誌裡的舊事件比上限深（#1658）', () => {
     ['參數 3000 層（原本的無聲區）', 'p3000'],
     ['參數 5000 層（原本 decirc 先爆）', 'p5000'],
   ])(
-    '%s：thread 建不起來，checkpoint_depth_exceeded，帶 seq 與層數',
+    '%s：thread 建不起來，wire 碼是 thread_history_too_deep，訊息帶 checkpoint_depth_exceeded、seq 與層數',
     async (_label, name) => {
       const client = await serveClient(resumed.server);
-      const rejected = await client.openEvents(`resume-${name}`).then(
-        () => '（沒有被拒）',
-        (error: unknown) => String(error),
+      const error = await client.openEvents(`resume-${name}`).then(
+        () => undefined,
+        (caught: unknown) => caught,
       );
+      // #1668：日誌太深不是暫時壞了，專用碼（不是 unknown_error）。
+      expect(error).toBeInstanceOf(WireRejectedError);
+      expect((error as WireRejectedError).code).toBe(THREAD_HISTORY_TOO_DEEP);
+      const rejected = String(error);
       expect(rejected).toContain(CHECKPOINT_DEPTH_EXCEEDED);
       expect(rejected).toContain(`日誌第 ${resumed.seqOf[name]} 顆事件`);
       expect(rejected).toContain(`上限 ${CHECKPOINT_MAX_DEPTH} 層`);
