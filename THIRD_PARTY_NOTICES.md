@@ -117,6 +117,7 @@ OFL 允許字型跟著軟體一起散布、也允許內嵌，條件是：不能�
 | [`@types/react`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@types/react-dom`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@types/semver`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
+| [`@types/spdx-expression-parse`](https://github.com/DefinitelyTyped/DefinitelyTyped) | MIT |
 | [`@vitejs/plugin-react`](https://github.com/vitejs/vite-plugin-react) | MIT |
 | [`ajv`](https://github.com/ajv-validator/ajv) | MIT |
 | [`axe-core`](https://github.com/dequelabs/axe-core) | MPL-2.0 |
@@ -128,6 +129,7 @@ OFL 允許字型跟著軟體一起散布、也允許內嵌，條件是：不能�
 | [`micromark-util-types`](https://github.com/micromark/micromark/tree/main/packages/micromark-util-types) | MIT |
 | [`playwright-core`](https://github.com/microsoft/playwright) | Apache-2.0 |
 | [`prettier`](https://github.com/prettier/prettier) | MIT |
+| [`spdx-expression-parse`](https://github.com/jslicense/spdx-expression-parse.js) | MIT |
 | [`tsdown`](https://github.com/rolldown/tsdown) | MIT |
 | [`tsx`](https://github.com/privatenumber/tsx) | MIT |
 | [`typescript`](https://github.com/microsoft/TypeScript) | Apache-2.0 |

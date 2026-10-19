@@ -13,13 +13,11 @@
  *
  * 套件的 license 與 repository 讀安裝好的 store，所以要先 `pnpm install`。`--check` 只比對、不寫檔。
  *
- * 跟 dsh 不同、但不是偏離的地方（nexus 沒有那些東西）：沒有 Python、沒有 Claude SDK 與 LibreOffice 的授權例外、沒有
+ * 跟 dsh 不同、但不是偏離的地方（nexus 沒有那些東西）：沒有 Python、沒有 Claude SDK 與 LibreOffice 的授權例外（字型的 OFL 例外照 LibreOffice 那一條的形狀，見 `OFL_FONT_PACKAGES`）、沒有
  * `patchedDependencies`。dsh 的「web 不是 private 才收」換成「網頁 dist 會進 tarball」：nexus 的 `apps/web` 是 private，
  * 但它的 `dist` 由 `scripts/release/payload.ts` 確認一定在產物裡。
  *
- * **SPDX 運算式自己解，不加 `spdx-expression-parse` 當相依**：判準與 dsh `isPermissive` 相同（`OR` 有一支合格就合格、`AND` 每支
- * 都要合格、帶 `+` 或 `WITH` 的一律不合格、解不開的不合格），只是語法剖析自己寫。這張卡就是在收緊相依的進入，為了一個
- * 三十行的剖析器加一顆新相依（加上它的兩顆資料套件）不划算。
+ * SPDX 運算式用 dsh 同一顆 `spdx-expression-parse` 解（dsh 根 `package.json` 的 devDependencies）。
  */
 
 import {
@@ -33,6 +31,8 @@ import {
 import { createRequire } from 'node:module';
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
+
+import parseSpdx from 'spdx-expression-parse';
 
 import { ROOT } from './workspace-packages.js';
 
@@ -242,66 +242,18 @@ export const PERMISSIVE_LICENSES: ReadonlySet<string> = new Set([
   'PSF-2.0',
 ]);
 
-type Spdx =
-  | { license: string; plus: boolean; exception: boolean }
-  | { op: 'AND' | 'OR'; left: Spdx; right: Spdx };
-
-/** SPDX 運算式的剖析：`OR` 優先序低於 `AND`，括號分組。解不開就丟。 */
-function parseSpdx(expression: string): Spdx {
-  const tokens = expression.match(/\(|\)|[^\s()]+/g) ?? [];
-  let at = 0;
-  const peek = (): string | undefined => tokens[at];
-  const take = (): string => {
-    const token = tokens[at++];
-    if (token === undefined) throw new Error('SPDX 運算式提早結束');
-    return token;
-  };
-  const atom = (): Spdx => {
-    const token = take();
-    if (token === '(') {
-      const inner = or();
-      if (take() !== ')') throw new Error('SPDX 括號沒有關');
-      return inner;
-    }
-    if (token === ')' || token === 'AND' || token === 'OR' || token === 'WITH')
-      throw new Error(`SPDX 多了 ${token}`);
-    const plus = token.endsWith('+');
-    let exception = false;
-    if (peek() === 'WITH') {
-      take();
-      take();
-      exception = true;
-    }
-    return { license: plus ? token.slice(0, -1) : token, plus, exception };
-  };
-  const and = (): Spdx => {
-    let left = atom();
-    while (peek() === 'AND') {
-      take();
-      left = { op: 'AND', left, right: atom() };
-    }
-    return left;
-  };
-  const or = (): Spdx => {
-    let left = and();
-    while (peek() === 'OR') {
-      take();
-      left = { op: 'OR', left, right: and() };
-    }
-    return left;
-  };
-  const parsed = or();
-  if (at !== tokens.length) throw new Error(`SPDX 多了 ${tokens[at]}`);
-  return parsed;
-}
-
-function isPermissiveSpdx(expression: Spdx): boolean {
-  if ('op' in expression) {
-    return expression.op === 'AND'
+/** 剖析後的 SPDX 運算式照這個專案的授權政策判（dsh `:655-665`，原樣）。 */
+function isPermissiveSpdx(expression: ReturnType<typeof parseSpdx>): boolean {
+  if ('conjunction' in expression) {
+    return expression.conjunction === 'and'
       ? isPermissiveSpdx(expression.left) && isPermissiveSpdx(expression.right)
       : isPermissiveSpdx(expression.left) || isPermissiveSpdx(expression.right);
   }
-  return !expression.plus && !expression.exception && PERMISSIVE_LICENSES.has(expression.license);
+  return (
+    expression.plus !== true &&
+    expression.exception === undefined &&
+    PERMISSIVE_LICENSES.has(expression.license)
+  );
 }
 
 /**
