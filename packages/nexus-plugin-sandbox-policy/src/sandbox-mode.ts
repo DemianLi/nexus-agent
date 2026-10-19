@@ -109,6 +109,15 @@ export function recordedSandboxMode(events: readonly SessionEvent[]): SandboxMod
   return undefined;
 }
 
+/**
+ * 背景子代理被叫醒、讀回委派快照時的上限（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）：收到的是日誌上記的那一格與子代理的日誌，
+ * 回傳這一輪實際用的那一格（不收就原樣回傳）。**純函式、不寫日誌**；由宿主在權限組合服務 `start` 之後設上。
+ */
+export type DelegationCeiling = (
+  recorded: SandboxMode,
+  log: Pick<SessionLog, 'sessionId'>,
+) => SandboxMode;
+
 /** 一次切換的結局。 */
 export type SandboxSwitchOutcome =
   /** 真的換了一格，日誌上多了一顆 `sandbox/mode`。 */
@@ -152,6 +161,9 @@ export class SandboxModeController implements SandboxGrantLedger {
    * 快照雖然不會串（ALS 逐次 `run`），但誰在讀哪一顆控制器的委派就講不清楚了。
    */
   readonly #delegated = new AsyncLocalStorage<{ readonly mode: SandboxMode }>();
+
+  /** 見 {@link SandboxModeController.setDelegationCeiling}。 */
+  #delegationCeiling: DelegationCeiling | undefined;
 
   /**
    * 接著的 root 日誌，**依接線順序**。
@@ -234,7 +246,24 @@ export class SandboxModeController implements SandboxGrantLedger {
         `子代理日誌 ${log.sessionId} 上沒有 sandbox/mode：不知道它是在哪一格委派的，不能拿 root 現在那格去猜`,
       );
     }
-    return this.delegateAs(mode, run);
+    // 讀回時套上限（#1739）：日誌上記的不動，這一輪實際用的才是收窄後的那一格。
+    return this.delegateAs(this.#delegationCeiling?.(mode, log) ?? mode, run);
+  }
+
+  /**
+   * 設上（或拿掉）{@link SandboxModeController.delegateFromLog} 讀回委派快照之後要過的上限（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）。
+   *
+   * **只管讀回，不管 {@link SandboxModeController.delegate}**：同步子代理在 `task` 那一次呼叫裡拍的是 root 當下那一格，root 已經在續接時收過；
+   * 背景子代理的快照是委派當下寫進它自己日誌的，部署方事後把全開從組合表拿掉，冷復活的子代理讀回的仍是全開，所以要在這裡收。
+   * 上限算不出來就拋（fail-closed）：這一輪不開跑，不退回沒收窄的那一格。
+   *
+   * 為什麼不在這個套件裡算：組合表在 `@nexus/plugin-permission-presets`（相依方向是 presets → sandbox-policy），宿主不能 import 插件套件，
+   * 由宿主把服務的純函式包成這個型別交進來。
+   *
+   * @param ceiling - 上限；`undefined` 拿掉。
+   */
+  setDelegationCeiling(ceiling: DelegationCeiling | undefined): void {
+    this.#delegationCeiling = ceiling;
   }
 
   /** 這一次呼叫是不是在某個子代理裡。 */

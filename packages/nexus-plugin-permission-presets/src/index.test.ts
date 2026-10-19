@@ -399,6 +399,27 @@ describe('掛上之後', () => {
     }
   });
 
+  it('narrowDelegated（#1739，1.2.0）：比表裡每一組都寬才收；目標只看表與設定，核准不外送；表裡有全開不收', async () => {
+    const shipped = await mountFor(['t']);
+    expect(shipped.service?.narrowDelegated('danger-full-access')).toStrictEqual({
+      preset: 'workspace-write',
+      fromSandbox: 'danger-full-access',
+      toSandbox: 'workspace-write',
+    });
+    expect(shipped.service?.narrowDelegated('workspace-write')).toBeUndefined();
+    expect(shipped.service?.narrowDelegated('read-only')).toBeUndefined();
+    // 設了 defaultPreset 且它不是最寬的一組：收到它（不是 workspace-write）。
+    const readOnlyDefault = await mountFor(['t'], { defaultPreset: 'read-only' });
+    expect(readOnlyDefault.service?.narrowDelegated('danger-full-access')).toStrictEqual({
+      preset: 'read-only',
+      fromSandbox: 'danger-full-access',
+      toSandbox: 'read-only',
+    });
+    // 部署方加回全開：不比每一組都寬，不收。
+    const withFull = await mountFor(['t'], WITH_FULL_ACCESS_CONFIG);
+    expect(withFull.service?.narrowDelegated('danger-full-access')).toBeUndefined();
+  });
+
   it('設定不同的兩次掛載各算各的表：服務不共用', async () => {
     const small = await mountFor(['t'], {
       presets: { a: { sandbox: 'read-only', approval: 'ask' } },
