@@ -62,7 +62,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
 ## 收尾順序（#1636）
 
 照 dsh `docs/cordis-primer.md:45`：「If teardown order matters, keep the related work in one effect」。Cordis 只保證下面三件事，
-不做全域的逐一收尾（dsh 明文否決，`.agents/notes/proposed/architecture/2026-10-09-cordis-cleanup-dependency-lifetimes.md:73`）。
+不做全域的逐一收尾（dsh 的 proposed note 否決，`.agents/notes/proposed/architecture/2026-10-09-cordis-cleanup-dependency-lifetimes.md:73`）。
 
 - **兄弟 effect 同時收。** 同一列裡兩個 `ctx.effect`、同一個 fiber 底下的子 fiber，卸載時一起開跑，誰先收完不保證。
 - **有順序要求的收尾，放進同一個 effect。** 用 generator effect 依序 `yield` 每一步的 disposer：卸載時倒序，前一個收完
@@ -72,6 +72,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
 
 宿主這一側：清單少一列時，`PluginTree.sync` 等那一列收完才回傳；同一個 id 刪掉又加回來，新的那一份掛上時舊的已經收完。
 收尾沒有逾時，所以 disposer 一定要會結束：永遠不 resolve 的 disposer 會讓那一次 `sync` 一直等，排在它後面的組裝也跟著等。
+需要上限（例如等一個遠端行程退出），就在自己的 disposer 裡設，宿主不替插件加。
 上面前兩條由 `packages/nexus-sdk/src/teardown-order.test.ts` 釘住，vendor 的 Cordis 改了行為會先紅。
 
 ## manifest
