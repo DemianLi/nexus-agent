@@ -189,6 +189,8 @@ const INDEX: readonly InterceptionRow[] = [
     occupants: [
       // 注入那半的**消費者**（#1474 起它遷上樹，只經 `@nexus/agent-loop` 的 `preStep` 登記 listener，自己沒有 `beforeAgent`）。
       'packages/nexus-plugin-agent-instructions/src/index.ts',
+      // 第二位消費者（#1625）：時間讀數，同一個接縫、同一顆宿主 middleware 當載體。
+      'packages/nexus-plugin-time-context/src/index.ts',
       // 注入那半的**載體**：宿主為每一位 listener 建的那顆 `beforeAgent` middleware（#1474）。
       'apps/harness/src/pre-step-middleware.ts',
       // 邊界提交（#652）：`exit_plan_mode` 同意之後的待關在下一步請求組起來之前交出去，同 dsh。
@@ -210,7 +212,9 @@ const INDEX: readonly InterceptionRow[] = [
       '同一次 invoke 的第二輪不會。價錢是**每次 invoke 一格、每輪零格**（上限 100：33 輪變 32 輪；' +
       '#394 寫的「零」是上限 20 被 floor 吃掉的讀數）。摘要把基線切掉之後，dsh 下一步就補回、' +
       '我們等到下一次 invoke（#397，登記在 plugin 檔頭）。要「每一步」的東西這一格撐不住，' +
-      '得換每輪多一格的 `beforeModel`（33 輪變 24 輪）——#389 因此以 not planned 關閉，重開條件在卡上。',
+      '得換每輪多一格的 `beforeModel`（33 輪變 24 輪）——#389 因此以 not planned 關閉，重開條件在卡上。' +
+      '**第二位消費者 `time-context`（#1625）同價**：也是每次 invoke 一格、每輪零格，而且在上限 100 下輪數不變（出貨清單有沒有它都是 32 輪，' +
+      '`time-context-on-tree.test.ts` J 組）；dsh 的每步重算同樣退成每次 invoke 一則（偏離登記在 `@nexus/plugin-time-context` 檔頭第 1 條）。',
   },
   {
     cell: 3,
@@ -314,7 +318,7 @@ const INDEX: readonly InterceptionRow[] = [
 const EXPECTED_ROWS = 5;
 
 /** 佔用位址的總數（列可能共用檔案，第 6 與第 7 格就共用 `output-schema.ts`）。 */
-const EXPECTED_SITES = 15;
+const EXPECTED_SITES = 16;
 
 /**
  * 第 2 列的承重事實：全樹的產品程式碼裡，`beforeAgent:` 的實作**恰好就是這一列列出的那些**。
@@ -346,6 +350,8 @@ const PRE_STEP_OTHER_CARRIERS: readonly string[] = [
   'packages/nexus-plugin-plan-mode/src/index.ts',
   // agent-instructions 是 `preStep` 的消費者：它登記 listener，載體是宿主的 `pre-step-middleware.ts`（#1474）。
   'packages/nexus-plugin-agent-instructions/src/index.ts',
+  // time-context（#1625）同上：第二位 `preStep` 消費者。
+  'packages/nexus-plugin-time-context/src/index.ts',
 ];
 
 /**

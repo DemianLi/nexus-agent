@@ -34,9 +34,9 @@ import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
-import { shippedPlugins } from './fixtures.js';
+import { shippedPlugins, withoutTimeContext } from './fixtures.js';
 
-const shipped = await shippedPlugins();
+const shipped = withoutTimeContext(await shippedPlugins());
 
 const GP = GENERAL_PURPOSE_SUBAGENT.name;
 
@@ -104,6 +104,8 @@ interface RunOptions {
   };
   /** 送幾句話。預設一句。 */
   readonly submits?: readonly string[];
+  /** 留著出貨的 `time-context` 那一列（#1625）。預設關掉，這一檔問的是工作區指令；只有「畫面上看不到」那組要它在。 */
+  readonly timeContext?: boolean;
   /**
    * 加在出貨清單**後面**的 plugin。
    *
@@ -128,7 +130,10 @@ async function run(options: RunOptions) {
   const built = await createNexusAgent({
     model,
     checkpointer,
-    plugins: [...shipped, ...(options.extraPlugins ?? [])],
+    plugins: [
+      ...(options.timeContext === true ? await shippedPlugins() : shipped),
+      ...(options.extraPlugins ?? []),
+    ],
     ...(options.files !== undefined && {
       backend: new ContainedFilesystemBackend({ rootDir: root, mode: 'workspace-write' }),
     }),
@@ -356,6 +361,30 @@ describe('畫面上看不到它', () => {
       expect(wire).not.toContain('這一句只該給模型看。');
       expect(wire).not.toContain('<system-reminder>');
       expect(wire).not.toContain(AGENT_INSTRUCTIONS_INTRO);
+    } finally {
+      await found.close();
+    }
+  }, 20000);
+
+  /**
+   * 時間讀數（#1625）同一個道理：它是給模型看的，不是誰講的話，同樣經 `agent/pre-step` 注進來、日誌記成 `source.plugin` 的 `user/message`。
+   * 沒有工作區也要有（讀數不依賴 AGENTS.md）。
+   */
+  it('時間讀數即時 frame 也一個字都沒有', async () => {
+    const found = await run({
+      files: { 'AGENTS.md': '規矩。' },
+      turns: [{ content: '好。' }],
+      timeContext: true,
+    });
+    try {
+      const reading = (found.prompts[0] ?? []).filter(
+        (message) => 'nexus.timeContext' in message.additional_kwargs,
+      );
+      // 前提：讀數這一輪確實注入了（不然這條是空掃）。
+      expect(reading).toHaveLength(1);
+      const wire = JSON.stringify(found.frames);
+      expect(wire).not.toContain('Time sampled');
+      expect(wire).not.toContain('Browser time zone');
     } finally {
       await found.close();
     }
