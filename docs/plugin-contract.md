@@ -59,6 +59,22 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   `ctx.effect`，註冊者那一列卸載時登記處自己撤掉，不靠呼叫者記得呼叫回傳的 disposer。
 - **列沒寫 `config` 時 Loader 交 `undefined`**，`strictObject` 收不下它。建列的宿主要補 `{}`。
 
+## 收尾順序（#1636）
+
+照 dsh `docs/cordis-primer.md:45`：「If teardown order matters, keep the related work in one effect」。Cordis 只保證下面三件事，
+不做全域的逐一收尾（dsh 的 proposed note 否決，`.agents/notes/proposed/architecture/2026-10-09-cordis-cleanup-dependency-lifetimes.md:73`）。
+
+- **兄弟 effect 同時收。** 同一列裡兩個 `ctx.effect`、同一個 fiber 底下的子 fiber，卸載時一起開跑，誰先收完不保證。
+- **有順序要求的收尾，放進同一個 effect。** 用 generator effect 依序 `yield` 每一步的 disposer：卸載時倒序，前一個收完
+  才跑下一個（disposer 要是 async 才會等）。例如「先送完最後一筆、再關連線」，兩步就要在同一個 effect 裡，不能各掛一個。
+- **依賴者先收完，提供者才收**，由 Cordis 保證。但這不保證**兄弟 effect 關掉的資源**還活著：自己的收尾用得到的資源，
+  由同一個 effect 管到底（dsh 同一份 note `:9-11`）。
+
+宿主這一側：清單少一列時，`PluginTree.sync` 等那一列收完才回傳；同一個 id 刪掉又加回來，新的那一份掛上時舊的已經收完。
+收尾沒有逾時，所以 disposer 一定要會結束：永遠不 resolve 的 disposer 會讓那一次 `sync` 一直等，排在它後面的組裝也跟著等。
+需要上限（例如等一個遠端行程退出），就在自己的 disposer 裡設，宿主不替插件加。
+上面前兩條由 `packages/nexus-sdk/src/teardown-order.test.ts` 釘住，vendor 的 Cordis 改了行為會先紅。
+
 ## manifest
 
 載入期驗證是 `validateManifest(raw, rowId)`：**缺任何一個必填欄位就拒收**，錯誤指名列 id、（讀得到時的）插件 id 與缺的
