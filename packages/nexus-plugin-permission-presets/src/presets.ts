@@ -8,8 +8,8 @@
  * @module
  */
 
-import type { ApprovalPolicyValue, SandboxMode } from '@nexus/core';
-import { APPROVAL_POLICIES, SANDBOX_MODES } from '@nexus/core';
+import { APPROVAL_POLICIES, SANDBOX_MODES } from '@nexus/permission-presets';
+import type { ApprovalPolicyValue, SandboxMode } from '@nexus/permission-presets';
 import { CUSTOM_PRESET } from '@nexus/wire';
 import { z } from 'zod';
 

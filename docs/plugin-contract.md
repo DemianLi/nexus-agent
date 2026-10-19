@@ -17,7 +17,8 @@ capabilities 的執行、版本路由與兩版並存不在這一刀，見文末�
 [`packages/nexus-session`](../packages/nexus-session)（`@nexus/session`，#1435 起單向轉出會話日誌的讀法，**#1463 起多一個接縫：第七個，會話查找**，宿主在樹上提供「這次呼叫的會話」）與
 [`packages/nexus-fs`](../packages/nexus-fs)（`@nexus/fs`，第八個，#1466，宿主在樹上提供「這次呼叫的那條 thread 的 fs 把手」）與
 [`packages/nexus-system-prompt`](../packages/nexus-system-prompt)（`@nexus/system-prompt`，#1477，**第二個由插件提供、宿主消費的服務**：系統提示詞的各段與變數名）與
-[`packages/nexus-goal`](../packages/nexus-goal)（`@nexus/goal`，#1486，**第三個由插件提供、宿主消費的服務**：每份 root 日誌上的 goal 域，查找時才建）。
+[`packages/nexus-goal`](../packages/nexus-goal)（`@nexus/goal`，#1486，**第三個由插件提供、宿主消費的服務**：每份 root 日誌上的 goal 域，查找時才建）與
+[`packages/nexus-permission-presets`](../packages/nexus-permission-presets)（`@nexus/permission-presets`，#1491，**第四個由插件提供、宿主消費的服務**：組一條 thread 時決定權限組合的起始值與目錄）。
 
 ## 這份規範管誰
 
@@ -244,6 +245,15 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   `callThreadId`、`toolCallSessionAddress` 在 #1469 加進來（present 要用：交付表的鍵帶 thread 與呼叫者位址，這是 #1458 檔頭預留的位置）。放這裡而不放 `@nexus/tools`／`@nexus/sdk`：前者的 `package.json` 只准相依 SDK 與工具型別（測試釘著），後者不 import core。
   現有消費者：`@nexus/plugin-ask-user`（三個寫法）、`@nexus/plugin-present`（`toolCallIdOf`、`toolRefusal`、`callThreadId`、`toolCallSessionAddress`）。
 - 這個慣例 dsh 也只是慣例，沒有 gate 強制；這裡同樣不加 gate。`@nexus/tools` 有一條測試守它的相依只有 SDK 與工具型別。依賴的放法照 dsh：宿主給的 `@nexus/sdk`、`@nexus/cordis`、服務定義套件（`@nexus/tools`）放 `peerDependencies`，`devDependencies` 留 `workspace:*` 供開發與測試——`ContractError` 的 `instanceof` 與 Cordis 的 `Context` 類別都要求宿主與插件看到同一份，放進 `dependencies` 在套件獨立安裝時就可能各裝一份。`@nexus/plugin-echo` 與 `@nexus/tools` 各有測試釘著。
+
+- **第十二個接縫：會話參與者（`sessionLookup.join`）與 `permissionPresets` 服務**（`@nexus/session` 1.1.0、`@nexus/fs` 1.2.0、`@nexus/permission-presets` 1.0.0，#1491 Q2、Q3、Q4、Q5）。
+  - **會話參與者**：`sessionLookup.join(installer)` 登記一位參與者；每條 thread 的 `registry.sessions` 在組裝時把登記者是某一列的那幾位一位一位折進去，**位置就是那一列在清單上的位置**（`bindToTree` 照清單順序呼叫），所以日誌上事件的相對順序（`approval/policy` → `sandbox/mode` → `permission/preset`）靠清單順序。參與者拿到的 subject 是 `{ address, log, rootLog（唯讀的 SessionLogView）, observe }`；`rootLog` 讓子代理的參與者讀父代理當下的狀態，不必碰控制器。次版號升級：`^1.0.0` 的舊消費者照常。
+  - **安裝失敗只記 warn**（R3）：沿用相容層七位會話參與者本來就有的語意（偏離表）。
+  - **冷復活（R2）**：背景子代理重啟後被叫醒，日誌以上一個行程的事件為 seed，結尾補 `session/end-seed`。參與者讀「這一次接上時寫的」事件要停在 `session/end-seed`——seed 裡舊的 `sandbox/mode { source: 'delegation' }` 不算數（`permission-presets` 的參與者就是這樣，單元測試與 `permission-presets-on-tree.test.ts` 各有一條紅燈）。
+  - **工作區根**：`@nexus/fs` 1.2.0 的 `workspaceRoot()`（行程級；沒給 `--workspace` 是 `undefined`）由入口建樹時交進來（`createCordisRoot({ workspaceRoot })`，CLI 與 serve 都照 `resolveWorkspaceRoot`，跟組裝點是同一支函式、同一個 cwd），`permission-presets` 在 `apply` 當下據它決定掛不掛。拿掉入口那一行交接，`/permission` 整顆不註冊、有 `--workspace` 的 thread 建不起來（訊息指名 `permission-presets`）。
+  - **提供者**：`permission-presets` 那一列（`@nexus/plugin-permission-presets`）。`apply` 裡註冊 `/permission`、`permissions` 投影、一位會話參與者，並 `provide` 一個 `permissionPresets` 服務；`start(request)` 是**自己的屬性、閉包住組合表與設定**，純函式（不碰日誌也不碰控制器）。
+  - **宿主**：`HOST_SERVICES` 多一格（`permissionPresets`，`^1.0.0`）。組 thread 時 `createNexusAgent` 之後向它要 `start`，據回傳值靜默 `switchTo` 兩顆控制器，目錄也從回傳值拿（`wire` 的 `permission.catalog`）。兩種錯（跟 `--sandbox` 矛盾、起始值對不上任何一組）包成以 `permission-presets` 為不能少掛條目的 `AssemblyDropError`，serve 試組與逐條 thread、CLI 都照「那一列掉了」記錄與轉換；訊息的內層逐字不變，外層從普通 `Error` 變成「起不來／組裝失敗」那一類。
+  - **紅燈**：`packages/nexus-plugin-permission-presets/src/index.test.ts`（一致性、套一次服務兩條 thread、參與者含 R2、`/permission`）、`packages/nexus-session/src/provider.test.ts`（登記簿）；宿主端——`permission-presets-on-tree.test.ts`（三顆事件順序、冷復活、目錄來自服務、工作區根沒交到樹上）、`permission-presets.test.ts`（`--sandbox`、續接、必掛名單、wire）、`serve-plugin-failed-record.test.ts`（矛盾時紀錄指名 `permission-presets`）。
 
 ## 契約版本走 semver
 
@@ -525,10 +535,15 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 | `@nexus/plugin-goal` 的 lint 排除 `src/invariant.ts`（#1486，demian Q5，照 #1463 Q3 (a)） | 產品需求超出 dsh | 理由、量法與撤除條件同 `@nexus/plugin-todo` 那一列：`invariant.ts` 是相容層的配套入口（`goal-invariant` 那一列），寫的是 `NexusPlugin`；排除只蓋到這一個檔（`packages/nexus-plugin-goal/src/eslint-exclusion.test.ts`）。**撤除條件**：2026-11-03 配套入口重審 |
 | 命令的「忙的時候放行」是宣告出來的資料（`CommandDefinition.runWhileBusy`，字面值清單），dsh 沒有這一格（#1516，demian 經 PM 認可） | 產品需求超出 dsh | **dsh 怎麼做**：命令沒有「跑著能不能執行」的閘門，（`packages/interaction/commands/src` 裡沒有 busy／running 的判斷）。**我們的閘門是 #123 的前提**：斜線命令一定跑在兩輪之間，所以 `/plan`、`/goal <目標>` 這類會改狀態的命令跑著時被擋。dsh 的暫停鈕（`goal-round-driver/src/index.ts:302-312`）跑著時當場中止，這件事我們需要放行**一個**呼叫（`/goal pause`），但不能放寬整個閘門。**為什麼是資料**：一個函式或整個命令的布林讓「哪些呼叫放行」散在 handler 裡、`slash.list` 讀不到；字面值清單讓閘門與 web 讀同一份。**撤除條件**：dsh 日後有同義的閘門，改讀那一份 |
 | 服務是查找時才建（lazy），`/goal` 的「一份都沒接」「接了不只一份」兩句拿掉（#1486，demian Q1 (a)、Q2 (a)） | 行為改變（這張卡唯一承認的一條） | 完整說明在 PR 內文的「行為改變」一節；這裡只記來龍去脈。遷移前每份會話裝一次參與者、registry 只能接一份 root 日誌，所以 `/goal` 要先問「接了幾份」；lazy 之後命令帶來的 `sessionLog` 就是它要動的那一份，兩句失去生產者。工具層的「不是 root」那句保留（逐字不變）。同一個 registry 想接幾份日誌都行 |
+| 權限組合的目錄是逐條 thread 的，dsh 整台共用（#1491，登記第 1 列） | 遷移卡不改行為（暫時） | dsh 的 `catalog()` 預設組只從設定或行程預設推（`packages/interaction/permission-presets/src/index.ts:293-299`）；我們今天的預設組是這條 thread 的起始值推出來的（續接的 thread 沒設 `defaultPreset` 時是日誌記著的那一組），wire 的 `permission.catalog` 逐條 thread 回。照 dsh 做會讓新會話的日誌多一顆 `sandbox/mode`、續接的目錄預設組變動，都是行為改變。撤除條件：之後的權限卡定 |
+| 子代理的組名由會話參與者寫，不是委派那一側寫（#1491 Q2-1，登記第 2 列） | 表達不出來，退到最接近的實作 | dsh 在委派側寫（`packages/subagent/subagent/src/child-agent.ts:248-279`）。委派那一刻拍下沙箱那一格靠包住 `task` 的 `wrapToolCall` 與 ALS（`sandbox-policy`），樹上沒有包工具呼叫的接縫。撤除條件：`sandbox-policy` 遷上樹時一起做 |
+| 會話參與者安裝失敗只記 warn、已寫的收不回（#1491，R3，登記第 3 列） | 表達不出來，退到最接近的實作 | dsh 的 `session/created` listener 同步拋錯會否決並回滾這次接上（`core/session/src/index.ts:1258-1286`）；相容層的七位會話參與者本來就是記 warn 的語意，`join` 沿用 |
+| 起始值在宿主的組 thread 那一步算，不在參與者裡套（#1491 Q3 (a)，登記第 4 列） | 遷移卡不改行為（暫時） | dsh 在 `session/created` 上整組套預設；我們把「算出預設組」放進 `permissionPresets.start`（純函式），宿主據回傳值靜默切兩顆控制器，之後參與者才釘組名，新會話的日誌只有一顆 `sandbox/mode`、順序逐字不變 |
+| `/permission` 的回覆拿掉「這次切換沒有完整記進日誌」那一句（#1491 Q1 (a)，demian 拍板） | 行為改變（這張卡承認的一條） | 兩顆旋鈕現在以日誌為準，切換就是往 root 日誌追加，沒有「沒接上日誌」這回事，這句失去生產者（`UNRECORDED_NOTE` 拿掉）。完整說明在 PR 內文的「行為改變」一節 |
 
 ## 接進清單（#1416 PR 2）
 
-`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項），`todo` 是第七顆（#1463，新增會話查找接縫），`submit-record` 是第八顆（#1466，新增 fs 查找接縫與 `tools` 1.2.0 的核准閘門），`present` 是第九顆（#1469，新增 `tools/result` 觀察者與 fs 把手上的工作區事實），`agent-instructions` 是第十顆（#1474，新增 `agent/pre-step` 接縫），`system-prompt` 是第十一顆（#1477，第二個插件提供、宿主消費的服務：`systemPrompt` 快照），`goal` 是第十二顆（#1486，第三個插件提供、宿主消費的服務：`goals` 查找表，服務查找時才建），`time-context` 是第十三顆（#1625，`agent/pre-step` 的第二位消費者，沒有新接縫：同一個 `agentLoop` 登記 listener、同一個 `sessionLookup` 讀這條 thread 的日誌；排在 `agent-instructions` 正下方，同一次 invoke 裡讀數在 AGENTS.md 基線之後）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
+`echo` 是第一顆遷上樹的插件，`token-meter` 是第二顆（#1421），`trajectory` 是第三顆（#1435，只換接縫的使用者，沒有新接縫），`skills` 是第四顆（#1446，新增技能來源接縫），`feedback` 是第五顆（#1456，新增命令接縫與第一個插件提供、宿主消費的服務），`ask-user` 是第六顆（#1458，新增預設答題管道接縫與工具登記選項），`todo` 是第七顆（#1463，新增會話查找接縫），`submit-record` 是第八顆（#1466，新增 fs 查找接縫與 `tools` 1.2.0 的核准閘門），`present` 是第九顆（#1469，新增 `tools/result` 觀察者與 fs 把手上的工作區事實），`agent-instructions` 是第十顆（#1474，新增 `agent/pre-step` 接縫），`system-prompt` 是第十一顆（#1477，第二個插件提供、宿主消費的服務：`systemPrompt` 快照），`goal` 是第十二顆（#1486，第三個插件提供、宿主消費的服務：`goals` 查找表，服務查找時才建），`time-context` 是第十三顆（#1625，`agent/pre-step` 的第二位消費者，沒有新接縫：同一個 `agentLoop` 登記 listener、同一個 `sessionLookup` 讀這條 thread 的日誌；排在 `agent-instructions` 正下方，同一次 invoke 裡讀數在 AGENTS.md 基線之後），`permission-presets` 是第十四顆（#1491，第四個插件提供、宿主消費的服務：`permissionPresets`，加上會話參與者接縫 `sessionLookup.join` 與 `@nexus/fs` 的 `workspaceRoot()`；兩顆旋鈕改成以日誌為準）。清單（`cordis.yml`、home 的變更紀錄、`--patch`）仍由相容層的 `loadPluginConfig` 讀、疊、驗，
 **樹那一側不是第二份清單，是清單的一個消費者**：
 
 | 東西 | 在哪 | 做什麼 |

@@ -539,6 +539,18 @@ export interface SessionEventMap {
     readonly source?: 'delegation';
   };
   /**
+   * 使用者選了哪一組權限組合，**只記意圖、不控制執行**（兩顆旋鈕各自的事件才控制，[#437](https://github.com/DemianLi/nexus-agent/issues/437)）。
+   *
+   * 照 dsh 的同名事件（`packages/interaction/permission-presets/src/index.ts`）：一筆帶整個值；它存在的理由是兩組捆著同樣的一對值時，
+   * 留得住使用者選的是哪一組。**不標 `ignorable`**（dsh 同）：舊 runtime 略過它不會讀錯執行，但 dsh 的規矩是新增的種類一律拒讀、
+   * 由版本號管相容，我們跟（`SESSION_LOG_FORMAT_VERSION` 35）。**缺席的意思**：#437 以前的日誌沒有這一顆，續接時由目前的值推導。
+   *
+   * **事件擴充住在 core 了**（[#1491](https://github.com/DemianLi/nexus-agent/issues/1491)，前例 `todo/write`、`deliverables/presented`）：
+   * 以前是 `@nexus/plugin-permission-presets` 對 `@nexus/core` 寫 `declare module`，而遷上樹之後那顆插件不能 import `@nexus/core`
+   * （#1420 的 lint）。誰寫它：`@nexus/permission-presets` 的會話參與者（接上日誌時釘起始組合）與 `/permission`。
+   */
+  'permission/preset': { readonly preset: string };
+  /**
    * 一次模型呼叫的 token 帳目，**供應商報什麼記什麼**。
    *
    * 一輪有幾格就有幾筆（工具呼叫每一輪都要再叫一次模型）；一輪花了多少要自己加，

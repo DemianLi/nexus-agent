@@ -8,7 +8,10 @@
  * @module
  */
 
-import type { ProjectionUnit, SessionEvent } from '@nexus/core';
+// 只為了把 `sandbox/mode` 的事件型別帶進來：它宣告在 sandbox-policy 的 `declare module '@nexus/core'`（`approval/policy`
+// 與 `permission/preset` 在核心）。型別 import，編出來的 lib 裡不留，所以不是執行期相依。
+import type {} from '@nexus/plugin-sandbox-policy';
+import type { ProjectionUnit, SessionEvent } from '@nexus/projections';
 import { PERMISSIONS_PROJECTION_KEY } from '@nexus/wire';
 import type { PermissionSelection } from '@nexus/wire';
 import { derivePreset } from './presets.js';

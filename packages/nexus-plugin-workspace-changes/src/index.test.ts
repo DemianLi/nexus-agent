@@ -144,6 +144,7 @@ async function mount(
   createSessionRunner({
     address: { kind: 'root' },
     log,
+    rootLog: log,
     installers: registry.sessions.installers(),
   });
   const [entry] = registry.middleware.list();
@@ -398,6 +399,7 @@ describe('輪的邊界', () => {
     createSessionRunner({
       address: { kind: 'root' },
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     log.append('turn/end', {});
@@ -558,6 +560,7 @@ describe('合格與否（#669，照 dsh 的 eligible）', () => {
     createSessionRunner({
       address: { kind: 'subagent', runId: 'task-1' },
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     log.append('turn/start', { kind: 'message', text: '子代理的一輪。' });
@@ -924,6 +927,7 @@ describe('git 快照（#461）', () => {
     createSessionRunner({
       address: { kind: 'root' },
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     const [entry] = registry.middleware.list();

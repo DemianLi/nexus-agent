@@ -52,7 +52,7 @@
  * @module
  */
 
-import type { SessionLookup } from '@nexus/core';
+import type { SessionInstaller, SessionLookup } from '@nexus/core';
 import { defineToken } from '@nexus/sdk';
 
 export {
@@ -74,6 +74,9 @@ export { isLogicalTurnStart, isModelVisibleEvent } from '@nexus/core';
 // 跟上面四個值同一個形狀：單向轉出，實作留在 `@nexus/core`；撤除條件同上（#1421 Q2 (b)）。
 export type { SessionEvent, SessionEventMap, SessionLog } from '@nexus/core';
 
+// 會話參與者的型別出口（#1491 Q2）：`join(participant)` 的參數型別與它收到的 subject（address、可寫的 log、唯讀的 rootLog、observe）。
+export type { SessionInstaller, SessionSubject } from '@nexus/core';
+
 // 會話查找的型別出口（#1463 Q2 (a)）：工具在簽名裡要寫 `SessionLookup` 與它帶的 `SessionAddress`，但不能 import `@nexus/core`。
 export type { SessionAddress, SessionLookup } from '@nexus/core';
 
@@ -83,8 +86,13 @@ export type { TodoItem, TodoStatus } from '@nexus/core';
 // 交付物的詞彙（#1469）：`present` 的 `deliverables/presented` 酬載。
 export type { PresentedFile } from '@nexus/core';
 
-/** 契約版本（semver）。介面破壞性改動跳 major，消費者的範圍擋下不相容的提供者。 */
-export const SESSION_LOOKUP_CONTRACT_VERSION = '1.0.0';
+/**
+ * 契約版本（semver）。介面破壞性改動跳 major，消費者的範圍擋下不相容的提供者。
+ *
+ * **1.1.0（[#1491](https://github.com/DemianLi/nexus-agent/issues/1491) Q2）**：多一個 `join`（會話參與者接縫），只增不減——`forCall` 的消費者
+ * （`todo`、`present`、`goal`、`time-context`，範圍都是 `^1.0.0`）不受影響。
+ */
+export const SESSION_LOOKUP_CONTRACT_VERSION = '1.1.0';
 
 /** 會話查找：這次工具呼叫該寫進哪一份會話日誌。 */
 export interface SessionLookupService {
@@ -100,6 +108,35 @@ export interface SessionLookupService {
    * @param invocation - 工具 handler 的第二個參數（`ToolRunnableConfig`）。
    */
   forCall(invocation: unknown): SessionLookup;
+
+  /**
+   * **登記一位會話參與者**（[#1491](https://github.com/DemianLi/nexus-agent/issues/1491) Q2 (a)）：這條 thread 的每一份會話日誌（root 與每次子代理）接上時，
+   * 安裝函式被叫一次，拿到 `{ address, log, rootLog, observe }`。dsh `session/created` 的對應物——**接上就寫**：全新的會話把起始狀態
+   * 釘進日誌（`@nexus/permission-presets` 釘起始組合）。
+   *
+   * ## 形狀照 #1469 Q1 (a)：折進 thread，不掛樹上的事件
+   *
+   * 要對**每條 thread** 生效的 listener 不能掛在樹上的 Cordis 事件上——列卸載會撤掉 listener，開著的 thread 就收不到。所以這裡只**登記**：
+   * 宿主在組一條 thread 時，把登記者是某一列的那幾位折進那條 thread 的 `registry.sessions.join`，**位置就是那一列在清單上的位置**
+   * （日誌上的事件順序靠它：`approval/policy` → `sandbox/mode` → `permission/preset`）。登記是 effect，列卸載時登記處自己撤；**已經折進去的
+   * 不受影響**（只給新對話，決議 §3-2 第 6 條）。
+   *
+   * ## 安裝失敗的語意（偏離 dsh，R3）
+   *
+   * dsh 的 `session/created` listener 同步拋錯會**否決並回滾**這次接上；我們的參與者安裝失敗只記一行 warn、已經寫進日誌的收不回
+   * （`@nexus/core` 的 `createSessionRunner`，append 是定案的）。**表達不出來的原因**：相容層的七位參與者本來就是這個語意。
+   *
+   * ## 契約
+   *
+   * - `subject.log` 是**這一份**日誌（可寫）。**不要自己 `log.subscribe()`**，要看事件走 `subject.observe`。
+   * - `subject.rootLog` 是這條 thread 的 root 日誌，**唯讀**。參與者不能經由它寫 root：「誰往 root 日誌寫 `sandbox/mode`／`approval/policy`，
+   *   誰就移得動 fence 與閘門」（#1494）靠這一點成立。
+   * - 參與者自己決定管不管這一份（`subject.address.kind`）；沒看的下場是每次子代理上多長一份自己。
+   *
+   * @param participant - 安裝函式；回傳的收尾函式在這份日誌的接線收掉時叫。
+   * @returns 撤掉這次登記的函式（列卸載時也會自動撤）。
+   */
+  join(participant: SessionInstaller): () => void;
 }
 
 /** `sessionLookup` 服務的 token。 */

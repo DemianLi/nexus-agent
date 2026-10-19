@@ -43,8 +43,8 @@ FULL_RES = [
     re.compile(rx)
     for rx in (
         # 全部套件都依賴它們。vendor 的 Cordis 是容器本身（#1401）。
-        # sdk、tools、projections、session、fs、skills、commands、feedback、goal、approval-channel、tool-result、agent-loop、system-prompt 是插件規範與接縫的定義（#1416、#1421、#1435、#1446、#1456、#1458、#1466、#1474、#1477、#1486）：遷出的插件都相依它們，改了就不能只跑改動的那幾顆插件。
-        r'^packages/nexus-(core|wire|sdk|tools|projections|session|fs|skills|commands|feedback|goal|approval-channel|tool-result|agent-loop|system-prompt|deque)/',
+        # sdk、tools、projections、session、fs、skills、commands、feedback、goal、approval-channel、tool-result、agent-loop、system-prompt、permission-presets 是插件規範與接縫的定義（#1416、#1421、#1435、#1446、#1456、#1458、#1466、#1474、#1477、#1486、#1491）：遷出的插件都相依它們，改了就不能只跑改動的那幾顆插件。
+        r'^packages/nexus-(core|wire|sdk|tools|projections|session|fs|skills|commands|feedback|goal|approval-channel|tool-result|agent-loop|system-prompt|permission-presets|deque)/',
         r'^vendor/',
         # 相依、工具鏈、workspace 設定：影響每一個套件。
         r'^(package\.json|pnpm-lock\.yaml|pnpm-workspace\.yaml|\.npmrc|\.prettierignore|\.prettierrc.*|prettier\.config\..*)$',

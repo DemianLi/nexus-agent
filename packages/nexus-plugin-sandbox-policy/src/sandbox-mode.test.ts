@@ -214,6 +214,7 @@ describe('跟著 root 日誌走（#1494）', () => {
     const dispose = createSessionRunner({
       address: { kind: 'root' },
       log: live,
+      rootLog: live,
       installers: [
         {
           origin: { kind: 'test' } as never,

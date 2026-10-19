@@ -211,12 +211,19 @@ export interface CordisRootOptions {
    * ask-user 在呼叫當下拒絕（fail-closed）——拿掉入口那一行交接，serve 與 CLI 的測試都會紅，這就是驗收 E 要的。
    */
   readonly channel?: ApprovalChannel;
+  /**
+   * 這個行程的工作區根（`fs` 那一列的 `workspaceRoot()`；#1491 Q4 (a)）。**入口明確交進來，這裡不自己算**：入口照
+   * `resolveWorkspaceRoot(invocation.workspace, cwd)` 算（跟組裝點是同一支函式、同一個 cwd），沒有 `--workspace` 就不給。
+   * 拿掉入口那一行交接，`permission-presets` 以為沒有圍堵、整顆不註冊 `/permission`——CLI 與 serve 的測試都會紅。
+   */
+  readonly workspaceRoot?: string;
 }
 
 /** 一個還沒建的根。入口先拿到它，失敗與關掉的收尾才有東西可收，照 dsh launcher 的 `app.current`。 */
 export function createCordisRoot(options: CordisRootOptions = {}): CordisRoot {
   const tree = new PluginTree({
     ...(options.channel !== undefined && { channel: options.channel }),
+    ...(options.workspaceRoot !== undefined && { workspaceRoot: options.workspaceRoot }),
   });
   let booted = false;
   const dispose = async (): Promise<void> => {

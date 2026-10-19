@@ -74,6 +74,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     expect(log.length).toBe(1);
@@ -97,6 +98,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     expect(seenDuringInstall).toBe(1);
@@ -116,6 +118,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     expect(seen).toEqual(['turn/start']);
@@ -131,6 +134,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     expect(seen).toEqual(['turn/start']);
@@ -154,6 +158,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
       warn,
     });
@@ -175,6 +180,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
       warn,
     });
@@ -202,6 +208,7 @@ describe('接線', () => {
     createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
       warn,
     });
@@ -224,6 +231,7 @@ describe('接線', () => {
     const detach = createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
     });
     detach();
@@ -238,6 +246,7 @@ describe('接線', () => {
     const detach = createSessionRunner({
       address: ROOT_ADDRESS,
       log,
+      rootLog: log,
       installers: [],
     });
     expect(() => detach()).not.toThrow();

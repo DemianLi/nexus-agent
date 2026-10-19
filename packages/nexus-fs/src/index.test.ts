@@ -20,7 +20,7 @@ afterEach(async () => {
 describe('@nexus/fs 的定義', () => {
   it('token 名是 fs，契約版本是 semver 常數', () => {
     expect(fsToken).toEqual({ name: 'fs', version: FS_LOOKUP_CONTRACT_VERSION });
-    expect(FS_LOOKUP_CONTRACT_VERSION).toBe('1.1.0');
+    expect(FS_LOOKUP_CONTRACT_VERSION).toBe('1.2.0');
   });
 
   it('virtualPathOf 是 core 那一支的單向轉出：同一個函式、相對路徑以根為起點、.. 夾回根（#1469）', () => {
@@ -62,6 +62,35 @@ describe('@nexus/fs 的定義', () => {
     // 提供者那一列卸載之後，抓在手上的服務仍可呼叫（方法是屬性閉包、不碰 `this.ctx`）。
     await context.loader.resolve('fs').fiber?.ctx.fiber.dispose();
     expect(grabbed?.forCall(config)).toEqual({ kind: 'ambiguous', count: 2 });
+  });
+
+  it('workspaceRoot()：行程級的工作區根，建構時交進來；沒交是 undefined（沒有圍堵），列卸載後仍可呼叫（#1491）', async () => {
+    const consumerOf = (root: string | undefined) => {
+      const provider = createFsLookupProvider(() => ({ kind: 'not-attached' }), root);
+      const grabbed: { current?: { workspaceRoot(): string | undefined } } = {};
+      const consumer = {
+        name: 'fs-consumer',
+        inject: injectOf(need(fsToken, '^1.2.0')),
+        apply(ctx: Context) {
+          grabbed.current = service(ctx, fsToken);
+        },
+      };
+      return { provider, consumer, grabbed };
+    };
+    for (const expected of ['/work/space', undefined]) {
+      const { provider, consumer, grabbed } = consumerOf(expected);
+      const context = new Context();
+      root = context;
+      await context.plugin(Loader);
+      Object.assign(context.loader.builtins, { fs: provider.Provider, consumer });
+      await context.loader.create({ id: 'fs', name: 'cordis:fs' } as never, null);
+      await context.loader.create({ id: 'c', name: 'cordis:consumer' } as never, null);
+      await context.loader.await();
+      expect(grabbed.current?.workspaceRoot()).toBe(expected);
+      await context.loader.resolve('fs').fiber?.ctx.fiber.dispose();
+      expect(grabbed.current?.workspaceRoot()).toBe(expected);
+      await context.fiber.dispose();
+    }
   });
 
   it('三角色：定義套件只相依 SDK 與 core 的單向轉出（型別與 virtualPathOf）；core 與 SDK 是 peer，不進 dependencies', () => {

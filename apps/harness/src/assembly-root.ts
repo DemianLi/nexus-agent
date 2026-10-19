@@ -73,16 +73,16 @@ import { DEFAULT_MAX_GOAL_ROUNDS, GOALS_SERVICE } from '@nexus/goal';
 import type { GoalServices } from '@nexus/goal';
 import { WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
-import { createNexusAgent } from './agent-factory.js';
+import { assemblyDropErrorFor, createNexusAgent } from './agent-factory.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import type { AssemblyDrop, NexusAgentHandle } from './agent-factory.js';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
 import { CONTAINED_FILESYSTEM, sandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
 import {
+  PERMISSION_PRESETS_PLUGIN_NAME,
   PERMISSION_PRESETS_SERVICE,
-  permissionPresetsPlugin,
-} from '@nexus/plugin-permission-presets';
-import type { PermissionPresetsService } from '@nexus/plugin-permission-presets';
+} from '@nexus/permission-presets';
+import type { PermissionCatalog, PermissionPresetsService } from '@nexus/permission-presets';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
 import type { CredentialService } from './credentials.js';
@@ -842,7 +842,7 @@ export async function createCliAgent(
    * 權限組合的目錄（#437）。有圍堵且 `permission-presets` 那一列掛上了才有；沒有時 wire 的 `permission.catalog` 回 `not_supported`、
    * `permissions` 投影缺席，web 藏起選單。
    */
-  permissionPresets: PermissionPresetsService | undefined;
+  permissionPresets: { catalog(): PermissionCatalog } | undefined;
   /** 使用者可以點名派的子代理（`subagent.list`，#328 第 2 項）：`task` 實際收的那份。serve 交給 wire-handler。 */
   subagentKinds: readonly { readonly name: string; readonly description: string }[];
   /**
@@ -945,7 +945,10 @@ export async function createCliAgent(
   // **有圍堵而 `permission-presets` 那一列沒掛：同樣起不來。** `/sandbox` 已經拿掉（#437），`/permission` 是切沙箱與核准的唯一入口；
   // 那一列不在，使用者就沒有任何辦法在會話中收緊或放寬。掛了但 `apply` 拋（組合表壞了、`defaultPreset` 與 `--sandbox` 矛盾）
   // 則由 `startup-audit.ts` 的必掛名單接住——那一列的 id 在 `REQUIRED_ENTRY_IDS` 上。
-  if (workspaceRoot !== undefined && !startupEntryMounted(plugins, permissionPresetsPlugin)) {
+  if (
+    workspaceRoot !== undefined &&
+    !startupEntryMounted(plugins, { name: PERMISSION_PRESETS_PLUGIN_NAME })
+  ) {
     throw new Error(
       '有 --workspace（檔案系統有圍堵），但清單上的 permission-presets 那一列沒有掛（不存在或被停用）。' +
         '它提供 /permission——切換檔案政策與核准政策的唯一入口；關掉它，會話中就沒有任何辦法改這兩顆旋鈕。' +
@@ -1021,15 +1024,6 @@ export async function createCliAgent(
               workspaceRoot,
               fsContainment: CONTAINED_FILESYSTEM,
               sandboxPolicy: { controller: sandboxMode, rootDir: workspaceRoot },
-              // 這一次是怎麼開始的（`permission-presets` 讀）：沒有續接的日誌就是新會話；`--sandbox` 有給才算明確。
-              //
-              // **「新會話」看 `approvalPolicy` 有沒有給，不看 `rootSeed`**：`serve` 的註冊表是 pump 建的、不經這個工廠，
-              // 它不傳 `rootSeed`；而兩條產品路徑的續接一律把 `approvalPolicy` 給滿（記著的，沒記就 `ask`），新會話一律不給。
-              permissionSeed: {
-                fresh: invocation.approvalPolicy === undefined,
-                sandboxExplicit:
-                  invocation.approvalPolicy === undefined && invocation.sandbox !== undefined,
-              },
             }),
       }),
       ...plugins,
@@ -1097,6 +1091,45 @@ export async function createCliAgent(
     ...(invocation.attachments !== undefined && { attachments: invocation.attachments }),
     ...(invocation.spillPolicy !== undefined && { spillPolicy: invocation.spillPolicy }),
   });
+  // **權限組合的起始值**（#1491 Q3 (a)）：向 `permission-presets` 那一列要（它提供、折進這條 thread 的 `permissionPresets` 服務），再對兩顆控制器
+  // **靜默** `switchTo` 回來的值。呼叫點在 `createNexusAgent` 回來之後、回傳之前——控制器與 fence 早在 `createNexusAgent` 之前就建好了，
+  // 折進來的服務要等它回來才拿得到。**這時還沒有日誌接著**（`attachSessions` 在呼叫端），所以不寫事件，新會話日誌上 `sandbox/mode` 仍只有一顆；
+  // 之後各參與者接日誌時才把起始值釘進去。跟以前一樣：以前也是在還沒接日誌時由那一列的 `apply` 靜默切。
+  //
+  // 這一步的兩種錯（跟 `--sandbox` 矛盾、起始值對不上任何一組）是逐條 thread 的，包成以 `permission-presets` 為不能少掛條目的
+  // `AssemblyDropError`：serve 試組、逐條 thread 與 CLI 三條路都照以前「那一列掉了 → 必掛」的方式記錄與轉換。內層訊息逐字不變。
+  let permissionCatalog: PermissionCatalog | undefined;
+  if (workspaceRoot !== undefined) {
+    const presets = services.get<PermissionPresetsService>(PERMISSION_PRESETS_SERVICE);
+    if (presets === undefined) {
+      await dispose().catch(() => {});
+      throw new Error(
+        `有 --workspace（檔案系統有圍堵），但 ${PERMISSION_PRESETS_SERVICE} 服務沒有折進這條 thread——` +
+          'permission-presets 那一列沒有提供它（行程級的工作區根沒有交到樹上，或那一列沒有起來）。',
+      );
+    }
+    try {
+      const started = presets.start({
+        // 這一次是怎麼開始的：沒有續接的日誌就是新會話；`--sandbox` 有給才算明確。
+        //
+        // **「新會話」看 `approvalPolicy` 有沒有給，不看 `rootSeed`**：`serve` 的註冊表是 pump 建的、不經這個工廠，
+        // 它不傳 `rootSeed`；而兩條產品路徑的續接一律把 `approvalPolicy` 給滿（記著的，沒記就 `ask`），新會話一律不給。
+        seed: {
+          fresh: invocation.approvalPolicy === undefined,
+          sandboxExplicit:
+            invocation.approvalPolicy === undefined && invocation.sandbox !== undefined,
+        },
+        sandbox: sandboxMode.current,
+        approval: approvalPolicy.current,
+      });
+      sandboxMode.switchTo(started.sandbox);
+      approvalPolicy.switchTo(started.approval);
+      permissionCatalog = started.catalog;
+    } catch (error) {
+      await dispose().catch(() => {});
+      throw assemblyDropErrorFor(plugins, PERMISSION_PRESETS_PLUGIN_NAME, error, dropped) ?? error;
+    }
+  }
   // 註冊表跟 agent 同壽命：REPL 是一條連續對話，`seq` 要跨輪連續才有意義。**subagent 的
   // 那些日誌也掛在它上面**，第一次有人要寫的時候才出生（見 `SessionRegistry` 的偏離）。
   const sessions = new SessionRegistry(THREAD_ID, rootSeed === undefined ? {} : { rootSeed });
@@ -1125,7 +1158,9 @@ export async function createCliAgent(
     telemetrySharing,
     feedback,
     workspaceChanges: services.get(WORKSPACE_CHANGES_SERVICE),
-    permissionPresets: services.get(PERMISSION_PRESETS_SERVICE),
+    // wire 的 `permission.catalog` 讀它：逐條 thread 的目錄（含這條 thread 的預設組，偏離登記在 `@nexus/permission-presets`）。
+    permissionPresets:
+      permissionCatalog === undefined ? undefined : { catalog: () => permissionCatalog },
     subagentKinds,
     goals: services.get<GoalServices>(GOALS_SERVICE),
     workspaceRoot,

@@ -143,6 +143,43 @@ export class AssemblyDropError extends Error {
   }
 }
 
+/**
+ * `createNexusAgent` 回來之後、組裝點自己做的一步在某一列的名義下失敗，換成**以那一列為不能少掛條目**的 {@link AssemblyDropError}
+ * （[#1491](https://github.com/DemianLi/nexus-agent/issues/1491) Q3 更正 1）。
+ *
+ * serve 記「這一列掉了」只認 `AssemblyDropError`（試組與逐條 thread 兩處都是 `instanceof`），CLI 的 `startupErrorFrom` 也是；
+ * 換成別的錯誤型別，三條路都會直接重拋、不記。內層訊息逐字原樣放進 `drop.message`。
+ *
+ * @param plugins - 這一次組裝的清單（找那一列的條目與身分）。
+ * @param pluginName - 那一列的 plugin `name`。
+ * @param error - 拋出來的錯誤。
+ * @param dropped - `createNexusAgent` 已經回報的掉了的列（可少掛的也在），一起列。
+ * @returns 包好的錯誤；清單上找不到那一列時是 `undefined`，呼叫端原樣重拋。
+ */
+export function assemblyDropErrorFor(
+  plugins: readonly PluginEntry[],
+  pluginName: string,
+  error: unknown,
+  dropped: readonly AssemblyDrop[],
+): AssemblyDropError | undefined {
+  const resolved = resolveEntriesPerEntry(plugins);
+  const index = plugins.findIndex((entry) => entry.plugin.name === pluginName);
+  const entry = plugins[index];
+  const origin = resolved[index]?.origin;
+  if (entry === undefined || origin === undefined) return undefined;
+  const reason = error instanceof Error ? error.message : String(error);
+  const drop: AssemblyDrop = {
+    entry,
+    drop: {
+      origin,
+      stage: 'apply',
+      message: `${formatOrigin(origin)} 在組裝這條 thread 時失敗 — ${reason}`,
+      cause: error,
+    },
+  };
+  return new AssemblyDropError([...dropped, drop], new Set([entry]));
+}
+
 export interface CreateNexusAgentOptions {
   /** plugin 清單。順序有意義：middleware 的順序、以及 `except` 的射程都跟著它。 */
   readonly plugins: readonly PluginEntry[];
@@ -1110,8 +1147,16 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
               allowedModels: [...options.modelSelectionPolicy.allowedModels],
             });
           }
+          // root 日誌以唯讀視圖交出（#1491 Q2-1）：子代理的參與者要看父代理的狀態，但不能寫 root。root 本身接上時它就是這一份。
           if (installers.length > 0)
-            runners.push(createSessionRunner({ address, log, installers }));
+            runners.push(
+              createSessionRunner({
+                address,
+                log,
+                rootLog: address.kind === 'root' ? log : sessions.root,
+                installers,
+              }),
+            );
         });
         // **登記排在這一步**：綁上、背景 host 建好、參與者訂閱都成功之後才登記（#1463），前面任何一步拋，樹上的查找都不會
         // 留下一張沒收的註冊表。同一條 thread id 重組時後登記的取代先登記的，見 `thread-sessions.ts`。

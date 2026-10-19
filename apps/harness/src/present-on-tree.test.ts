@@ -71,7 +71,10 @@ function home(): { dir: string; env: NodeJS.ProcessEnv } {
 
 /** 入口怎麼建樹就怎麼建（serve：有人在）。 */
 function newRoot(): CordisRoot {
-  const root = createCordisRoot({ channel: entryApprovalChannel(undefined) });
+  const root = createCordisRoot({
+    channel: entryApprovalChannel(undefined),
+    workspaceRoot: tmpdir(),
+  });
   roots.push(root);
   return root;
 }
@@ -290,7 +293,7 @@ describe('B：出貨清單上的 present 經樹進來，位置與名字不變', 
     });
   }, 60000);
 
-  it('契約版本：tools 服務 1.3.0（onResult）、fs 查找服務 1.1.0（hasWorkspace）', async () => {
+  it('契約版本：tools 服務 1.3.0（onResult）、fs 查找服務 1.2.0（hasWorkspace 加 #1469、workspaceRoot 加 #1491）', async () => {
     const { env } = home();
     const root = newRoot();
     await loadDefaultPlugins({ env, warn: warnNothing }, { tree: root.tree });
@@ -299,7 +302,7 @@ describe('B：出貨清單上的 present 經樹進來，位置與名字不變', 
       '1.3.0',
     );
     expect((tree.get('fs') as { contractVersion?: string } | undefined)?.contractVersion).toBe(
-      '1.1.0',
+      '1.2.0',
     );
   }, 60000);
 
@@ -629,7 +632,10 @@ describe('三個入口各有一條（拿掉任一入口的接線要紅）', () =
 
   it('CLI 的樹（boot "cli"）：交付寫進這條 thread 的日誌', async () => {
     const { env } = home();
-    const root = createCordisRoot({ channel: entryApprovalChannel(HEADLESS_APPROVALS) });
+    const root = createCordisRoot({
+      channel: entryApprovalChannel(HEADLESS_APPROVALS),
+      workspaceRoot: tmpdir(),
+    });
     roots.push(root);
     const loaded = await loadDefaultPlugins({ env, warn: warnNothing }, { tree: root.tree });
     const assembly = await root.boot('cli', { plugins: loaded.plugins });

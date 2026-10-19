@@ -36,7 +36,7 @@ describe('@nexus/session 是 @nexus/core 的單向轉出', () => {
       'toolCallIds',
     ]);
     expect(session.sessionLookupToken.name).toBe('sessionLookup');
-    expect(session.SESSION_LOOKUP_CONTRACT_VERSION).toBe('1.0.0');
+    expect(session.SESSION_LOOKUP_CONTRACT_VERSION).toBe('1.1.0');
   });
 
   it('@nexus/core 只放 peerDependencies 與 devDependencies，不進 dependencies（不能讓安裝結果出現第二份 core）', () => {
