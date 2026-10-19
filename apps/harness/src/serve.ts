@@ -504,7 +504,9 @@ async function startUnderHomeLock(
 ): Promise<RunningServe> {
   // **真模型路徑的啟動環境：兩層 `.env`**（#730），排在讀清單與建密鑰之前：壞的 `.env` 與舊位置搬家訊息在
   // server 還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`。
-  const liveLaunch = invocation.live ? loadLiveLaunchEnv({ cwd, env }) : undefined;
+  const liveLaunch = invocation.live ? loadLiveLaunchEnv({ cwd, env, store: true }) : undefined;
+  // 這一把 key 來自哪一層（#1540 Q2 (a)）：只講名字與來源、不含值；排在拿到 home 鎖之後（上面 `runServe` 先拿鎖才進這裡）。
+  if (liveLaunch?.keySource !== undefined) log(liveLaunch.keySource);
   // **對外代理：啟動流程的第一件事**（#746），排在載完環境之後、第一顆外掛載入之前。假模型路徑沒有 `.env`，
   // 用只有行程環境的那一層。server 起不來就當場還原；起來了，收尾跟著 `close()` 走。
   const disposeProxy = await installLaunchProxy(

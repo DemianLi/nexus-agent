@@ -79,7 +79,7 @@ function credentials() {
     target: {},
     warn: () => undefined,
   });
-  return createCredentialService({ home, launchEnv, warn: () => undefined });
+  return createCredentialService({ home, launchEnv, store: true, warn: () => undefined });
 }
 
 const config = () =>
@@ -137,7 +137,7 @@ describe('key 從受管檔來、每次請求前解析', () => {
 });
 
 describe('四層優先序走到假端點（不是只看 resolve 的回傳）', () => {
-  it('啟動環境 > 受管檔 > 目前資料夾 .env > home .env：逐層拿掉，端點收到的跟著換', async () => {
+  it('serve：受管檔 > 啟動環境 > 目前資料夾 .env > home .env：逐層拿掉，端點收到的跟著換（#1540）', async () => {
     writeFileSync(join(home, '.env'), `${LIVE_API_KEY_ENV}=home-env\n`);
     writeFileSync(join(root, '.env'), `${LIVE_API_KEY_ENV}=project-env\n`);
     managed('managed-file');
@@ -151,20 +151,21 @@ describe('四層優先序走到假端點（不是只看 resolve 的回傳）', (
       return createLiveModel(
         config(),
         undefined,
-        createCredentialService({ home, launchEnv, warn: () => undefined }),
+        createCredentialService({ home, launchEnv, store: true, warn: () => undefined }),
       );
     };
 
+    // 啟動環境同名也輸給受管檔。
     await build({ [LIVE_API_KEY_ENV]: 'process' }).invoke([new HumanMessage('a')]);
-    await build({}).invoke([new HumanMessage('b')]);
     rmSync(join(home, CREDENTIALS_FILE));
+    await build({ [LIVE_API_KEY_ENV]: 'process' }).invoke([new HumanMessage('b')]);
     await build({}).invoke([new HumanMessage('c')]);
     rmSync(join(root, '.env'));
     await build({}).invoke([new HumanMessage('d')]);
 
     expect(seen).toEqual([
-      'Bearer process',
       'Bearer managed-file',
+      'Bearer process',
       'Bearer project-env',
       'Bearer home-env',
     ]);
@@ -185,7 +186,7 @@ function withEnv(inherited: NodeJS.ProcessEnv) {
     target: { ...inherited },
     warn: () => undefined,
   });
-  return createCredentialService({ home, launchEnv, warn: () => undefined });
+  return createCredentialService({ home, launchEnv, store: true, warn: () => undefined });
 }
 
 /** 取 `invoke` 或建構的拋出物。 */
