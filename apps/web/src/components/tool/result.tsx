@@ -1,12 +1,11 @@
 /**
- * 工具卡展開之後的內容：寫檔／改檔的 diff（[#601](https://github.com/DemianLi/nexus-agent/issues/601)）、讀檔卡與搜尋卡
- * （[#625](https://github.com/DemianLi/nexus-agent/issues/625)），以及通用卡的結果文字。要畫哪一段、切在哪裡由
- * `lib/tool-diff.ts`、`lib/tool-result-card.ts` 與 `lib/tool-output.ts` 決定，這裡只管畫。
+ * 工具卡展開之後的內容：讀檔卡與搜尋卡（[#625](https://github.com/DemianLi/nexus-agent/issues/625)），以及通用卡的結果文字。
+ * 要畫哪一段、切在哪裡由 `lib/tool-result-card.ts` 與 `lib/tool-output.ts` 決定，這裡只管畫。寫檔／改檔的 diff 不在這裡：
+ * #1685 B 起交給 SG 的 `DiffView`（`step.patch`，上限在 nexus 層 `components/ui/diff-view.tsx`）。
  *
- * - **收合**：diff、讀檔、搜尋三種在對話裡都只畫頭尾兩段，中間一顆鈕展開（照 dsh 的 `FoldToggle`）；展開之後照審查頁
- *   的上限畫到 {@link MAX_RENDERED_LINES} 列——harness 的上限管的是位元組，管不住畫面上的行數。diff 與搜尋另有字元上限
+ * - **收合**：讀檔、搜尋在對話裡都只畫頭尾兩段，中間一顆鈕展開（照 dsh 的 `FoldToggle`）；展開之後照審查頁
+ *   的上限畫到 {@link MAX_RENDERED_LINES} 列——harness 的上限管的是位元組，管不住畫面上的行數。搜尋另有字元上限
  *   （每列、整張卡，`lib/card-limit.ts`，#961）：列數管不到一列超長、也管不到幾千列各二十幾字。
- * - **diff**：對話裡最多 {@link CHAT_DIFF_MAX_LINES} 列。底色與符號色跟審查頁同一組（`DIFF_TONE`／`DIFF_SIGN`）。
  * - **讀檔**（dsh `ReadBlock`）：標頭是路徑、讀到哪裡、語言；每行帶行號，整段一起高亮（`highlightLines`），語言的文法
  *   還在載時先畫純文字、載完補上色。對話裡最多 {@link CHAT_READ_MAX_LINES} 行。
  * - **搜尋**（dsh `SearchBlock`）：標頭一句摘要，截斷時寫「顯示 X／共 N」；grep 每個檔一列標題、底下帶行號的命中，
@@ -22,7 +21,7 @@ import type { ReactNode } from 'react';
 
 import { Surface } from '@/components/surface';
 import { CARD_LINE_MAX_CHARS, fitRowCount } from '@/lib/card-limit';
-import { DIFF_SIGN, DIFF_TONE, MAX_RENDERED_LINES } from '@/lib/diff-rows';
+import { MAX_RENDERED_LINES } from '@/lib/diff-rows';
 import {
   grammarLoadCount,
   highlightLines,
@@ -30,8 +29,7 @@ import {
   supportsHighlighting,
 } from '@/lib/markdown/highlight';
 import type { HighlightSpan } from '@/lib/markdown/highlight';
-import { CHAT_DIFF_MAX_LINES, cappedRows, diffRows } from '@/lib/tool-diff';
-import type { DiffFragment, ToolDiffRow } from '@/lib/tool-diff';
+import { cappedRows } from '@/lib/tool-diff';
 import {
   CHAT_READ_MAX_LINES,
   CHAT_SEARCH_MAX_LINES,
@@ -42,7 +40,6 @@ import {
 } from '@/lib/tool-result-card';
 import type { ReadCard, ReadLine, SearchCard, SearchRow } from '@/lib/tool-result-card';
 import { clipMiddle, omittedLabel, type ToolOutput } from '@/lib/tool-output';
-import { cn } from '@/lib/utils';
 
 /**
  * 一列的文字，超過 {@link CARD_LINE_MAX_CHARS} 字元時取頭尾各半、中間一句講沒畫多少字（#961）。
@@ -59,39 +56,6 @@ function ClippedText({ text }: { text: string }) {
       </span>
       {clipped.tail}
     </>
-  );
-}
-
-function DiffLine({ row }: { row: ToolDiffRow }) {
-  if (row.kind === 'path') {
-    return (
-      <div className="text-muted-foreground px-3 pb-1 font-medium break-all" data-diff-line="path">
-        {row.text}
-      </div>
-    );
-  }
-  if (row.kind === 'gap') {
-    return (
-      <div className="text-muted-foreground px-3 select-none" data-diff-line="gap">
-        {row.text}
-      </div>
-    );
-  }
-  return (
-    <div
-      className={cn(
-        'grid grid-cols-[1.5em_minmax(0,1fr)] whitespace-pre-wrap',
-        DIFF_TONE[row.kind],
-      )}
-      data-diff-line={row.kind}
-    >
-      <span className={cn('text-center select-none', DIFF_SIGN[row.kind])}>
-        {row.kind === 'add' ? '+' : row.kind === 'del' ? '-' : ' '}
-      </span>
-      <span className="pr-3 wrap-anywhere">
-        <ClippedText text={row.text} />
-      </span>
-    </div>
   );
 }
 
@@ -122,7 +86,7 @@ function FoldToggle({
   );
 }
 
-/** 展開後沒畫完時的那一句：撞到 {@link MAX_RENDERED_LINES} 列，或（diff、搜尋）撞到整張卡的字元預算。 */
+/** 展開後沒畫完時的那一句：撞到 {@link MAX_RENDERED_LINES} 列，或（搜尋）撞到整張卡的字元預算。 */
 function RenderCapNote({ shown, unit }: { shown: number; unit: '行' | '列' }) {
   return (
     <p className="text-muted-foreground px-3 pt-1 font-sans">
@@ -173,22 +137,6 @@ function Folded<T>({
       {!expanded && tail.map((row, at) => render(row, head.length + hidden + at))}
       {expanded && rows.length > limit && <RenderCapNote shown={limit} unit={unit} />}
     </>
-  );
-}
-
-export function ToolDiff({ fragments }: { fragments: readonly DiffFragment[] }) {
-  const rows = useMemo(() => diffRows(fragments), [fragments]);
-  return (
-    <Surface tone="stage" className="py-2 font-mono text-tip leading-5.5" data-testid="tool-diff">
-      <Folded
-        rows={rows}
-        capped={cappedRows(rows, CHAT_DIFF_MAX_LINES)}
-        unit="行"
-        testId="tool-diff-toggle"
-        render={(row, key) => <DiffLine key={key} row={row} />}
-        weigh={(row) => row.text.length}
-      />
-    </Surface>
   );
 }
 

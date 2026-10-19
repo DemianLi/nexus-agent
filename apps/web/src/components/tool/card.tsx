@@ -22,9 +22,8 @@ import { useMemo, useState } from 'react';
 import { Surface } from '@/components/surface';
 import { SubagentPanel, SubagentStateLabel } from '@/components/tool/subagent-control';
 import { TodoList } from '@/components/todo/list';
-import { ToolDiff, ToolOutputBlock, ToolRead, ToolSearch } from '@/components/tool/result';
+import { ToolOutputBlock, ToolRead, ToolSearch } from '@/components/tool/result';
 import { Badge } from '@/components/ui/badge';
-import { DiffStats } from '@/components/ui/diff-view';
 import { OutputBlock, StepRow, STEP_LABELS } from '@/components/ui/tool-steps';
 import { answerText } from '@/lib/question-view';
 import type { QuestionAnswer } from '@/lib/question-view';
@@ -168,12 +167,6 @@ export function ToolCard({
                 <span className="sr-only">，另有 {view.todoExtra} 項進行中</span>
               </span>
             )}
-            {view.diffView !== undefined && (
-              <DiffStats
-                added={view.diffView.totals.added}
-                removed={view.diffView.totals.removed}
-              />
-            )}
             {view.backgroundRunId !== undefined && (
               <SubagentStateLabel runId={view.backgroundRunId} />
             )}
@@ -220,8 +213,6 @@ function toolBody(entry: ToolEntry, view: ReturnType<typeof toStep>): ReactNode 
   } else if (view.presented !== undefined && view.presented.length > 0)
     parts.push(<PresentedFileList key="presented" files={view.presented} />);
   else if (view.todos !== undefined) parts.push(<TodoList key="todos" todos={view.todos} />);
-  else if (view.diffView !== undefined)
-    parts.push(<ToolDiff key="diff" fragments={view.diffView.fragments} />);
   else if (view.readCard !== undefined) parts.push(<ToolRead key="read" card={view.readCard} />);
   else if (view.searchCard !== undefined)
     parts.push(<ToolSearch key="search" card={view.searchCard} />);

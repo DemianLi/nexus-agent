@@ -29,6 +29,10 @@ afterEach(cleanup);
 const rowLabel = (card: HTMLElement = screen.getByTestId('tool-entry')) =>
   card.querySelector('[data-slot="step-row"] > button > span')?.textContent;
 
+/** SG `DiffView` 畫出來的每一行（#1685 B）：vendor 每行一個 div，空行畫成一個空白。 */
+const diffLines = (root: ParentNode = document) =>
+  [...root.querySelectorAll('[data-slot="diff-view"] > div')].map((line) => line.textContent);
+
 function tool(overrides: Partial<ToolEntry> = {}): ToolEntry {
   return {
     kind: 'tool',
@@ -630,24 +634,19 @@ describe('工具卡的結果與 diff', () => {
       expect(screen.queryByRole('button', { name: /[+−]\d/ })).toBeNull();
     });
 
-    it('展開是整檔新增的 diff，對話裡只留 9 列，中間可以展開', () => {
+    it('展開是 SG 的 DiffView：路徑一列、不帶數字的 @@、整檔新增，照 SG 全部畫出來（不再收成 9 列）', () => {
       render(<ToolCard entry={write} />);
       expand(/寫入檔案/);
-      const diff = screen.getByTestId('tool-diff');
-      const rows = () => diff.querySelectorAll('[data-diff-line]');
-      expect(rows()).toHaveLength(9);
-      expect(rows()[0]?.textContent).toBe('/notes.md');
-      expect(rows()[1]?.getAttribute('data-diff-line')).toBe('add');
-      expect(rows()[1]?.textContent).toBe('+第 1 行');
-      expect(rows()[8]?.textContent).toBe('+第 12 行');
+      const rows = diffLines();
+      expect(rows).toHaveLength(14);
+      expect(rows.slice(0, 3)).toEqual(['diff --git a/notes.md b/notes.md', '@@', '+第 1 行']);
+      expect(rows.at(-1)).toBe('+第 12 行');
+      expect(rows.some((row) => /@@ -\d/.test(row ?? ''))).toBe(false);
       expect(screen.queryByLabelText('結果')).toBeNull();
-
-      const toggle = screen.getByTestId('tool-diff-toggle');
-      expect(toggle.textContent).toBe('展開其餘 4 行');
-      expect(toggle.getAttribute('aria-expanded')).toBe('false');
-      fireEvent.click(toggle);
-      expect(rows()).toHaveLength(13);
-      expect(toggle.textContent).toBe('收起');
+      // 可以停焦點、有名稱（patch 0024，X5）：寬的行要靠鍵盤橫向捲。
+      const view = screen.getByRole('generic', { name: '改動內容' });
+      expect(view.getAttribute('data-slot')).toBe('diff-view');
+      expect(view.tabIndex).toBe(0);
     });
 
     it('覆寫舊檔（meta 帶 diffs）：畫跟舊檔比的 diff，不是整檔新增', () => {
@@ -660,9 +659,9 @@ describe('工具卡的結果與 diff', () => {
       expect(trigger.textContent).toContain('+1');
       expect(trigger.textContent).toContain('−1');
       fireEvent.click(trigger);
-      const rows = screen.getByTestId('tool-diff').querySelectorAll('[data-diff-line]');
-      expect([...rows].map((row) => row.textContent)).toEqual([
-        '/notes.md',
+      expect(diffLines()).toEqual([
+        'diff --git a/notes.md b/notes.md',
+        '@@',
         ' 第 1 行',
         '-舊的',
         '+新的',
@@ -677,7 +676,7 @@ describe('工具卡的結果與 diff', () => {
     it('執行中也畫', () => {
       render(<ToolCard entry={{ ...write, status: 'running', text: undefined }} />);
       expand(/寫入檔案/);
-      expect(screen.getByTestId('tool-diff')).toBeTruthy();
+      expect(diffLines()).toContain('+第 1 行');
     });
 
     it('失敗時退回通用卡：沒有 diff、沒有 +N −M、紅字', () => {
@@ -686,7 +685,7 @@ describe('工具卡的結果與 diff', () => {
       const trigger = screen.getByRole('button', { name: /寫入檔案/ });
       expect(trigger.textContent).not.toContain('+12');
       fireEvent.click(trigger);
-      expect(screen.queryByTestId('tool-diff')).toBeNull();
+      expect(document.querySelector('[data-slot="diff-view"]')).toBeNull();
       expect(screen.getAllByText(error, { selector: 'pre' })).toHaveLength(1);
     });
 
@@ -699,7 +698,7 @@ describe('工具卡的結果與 diff', () => {
       const trigger = screen.getByRole('button', { name: /寫入檔案/ });
       expect(trigger.textContent).not.toMatch(/\+\d/);
       fireEvent.click(trigger);
-      expect(screen.queryByTestId('tool-diff')).toBeNull();
+      expect(document.querySelector('[data-slot="diff-view"]')).toBeNull();
       expect(screen.getByLabelText('結果').textContent).toBe('Successfully wrote to /notes.md');
     });
   });
@@ -721,14 +720,12 @@ describe('工具卡的結果與 diff', () => {
       expect(trigger.textContent).toContain('+1');
       expect(trigger.textContent).toContain('−1');
       fireEvent.click(trigger);
-      const rows = screen.getByTestId('tool-diff').querySelectorAll('[data-diff-line]');
-      expect([...rows].map((row) => row.getAttribute('data-diff-line'))).toEqual([
-        'path',
-        'del',
-        'add',
+      expect(diffLines()).toEqual([
+        'diff --git a/a.ts b/a.ts',
+        '@@',
+        '-const a = 1;',
+        '+const a = 2;',
       ]);
-      expect(rows[1]?.textContent).toBe('-const a = 1;');
-      expect(rows[2]?.textContent).toBe('+const a = 2;');
     });
 
     const replaced = "Successfully replaced 2 instance(s) of the string in '/a.ts'";
@@ -745,7 +742,7 @@ describe('工具卡的結果與 diff', () => {
       const trigger = screen.getByRole('button', { name: /編輯檔案/ });
       expect(trigger.textContent).not.toContain('+1');
       fireEvent.click(trigger);
-      expect(screen.queryByTestId('tool-diff')).toBeNull();
+      expect(document.querySelector('[data-slot="diff-view"]')).toBeNull();
       expect(screen.getByLabelText('結果').textContent).toContain('Successfully replaced');
     });
 
@@ -755,20 +752,19 @@ describe('工具卡的結果與 diff', () => {
       expect(trigger.textContent).toContain('+2');
       expect(trigger.textContent).toContain('−2');
       fireEvent.click(trigger);
-      // 10 列超過對話裡的 9 列，中間那一列（兩段之間的 ⋯）收著；展開看全部。
-      fireEvent.click(screen.getByTestId('tool-diff-toggle'));
-      const rows = screen.getByTestId('tool-diff').querySelectorAll('[data-diff-line]');
-      expect([...rows].map((row) => row.getAttribute('data-diff-line'))).toEqual([
-        'path',
-        'context',
-        'del',
-        'add',
-        'context',
-        'gap',
-        'context',
-        'del',
-        'add',
-        'context',
+      // 同一個檔的第二段只多一列 @@，不重複路徑（#1685 B.2）。
+      expect(diffLines()).toEqual([
+        'diff --git a/a.ts b/a.ts',
+        '@@',
+        ' x',
+        '-const a = 1;',
+        '+const a = 2;',
+        ' y',
+        '@@',
+        ' p',
+        '-const a = 1;',
+        '+const a = 2;',
+        ' q',
       ]);
       expect(screen.queryByLabelText('結果')).toBeNull();
     });
@@ -777,9 +773,9 @@ describe('工具卡的結果與 diff', () => {
       const done = { ...edit, status: 'done' as const, text: replaced };
       const view = render(<ToolCard entry={done} />);
       fireEvent.click(screen.getByRole('button', { name: /編輯檔案/ }));
-      expect(screen.queryByTestId('tool-diff')).toBeNull();
+      expect(document.querySelector('[data-slot="diff-view"]')).toBeNull();
       view.rerender(<ToolCard entry={{ ...done, meta: applied }} />);
-      expect(screen.getByTestId('tool-diff')).toBeTruthy();
+      expect(diffLines()).toContain('+const a = 2;');
       expect(screen.queryByLabelText('結果')).toBeNull();
     });
 
@@ -789,7 +785,7 @@ describe('工具卡的結果與 diff', () => {
       const trigger = screen.getByRole('button', { name: /編輯檔案/ });
       expect(trigger.textContent).toContain(error);
       fireEvent.click(trigger);
-      expect(screen.queryByTestId('tool-diff')).toBeNull();
+      expect(document.querySelector('[data-slot="diff-view"]')).toBeNull();
     });
   });
 
@@ -1021,19 +1017,20 @@ describe('diff 卡與搜尋卡的畫面字元上限（#961）', () => {
   const head = '頭'.repeat(CARD_LINE_MAX_CHARS / 2);
   const tail = '尾'.repeat(CARD_LINE_MAX_CHARS / 2);
 
-  it('diff：新建檔一行超長，畫頭尾各半，中間一句講沒畫幾個字', () => {
+  // #1685 B 起 diff 是 SG 的 DiffView，上限在 nexus 層（`components/ui/diff-view.tsx` 的 `capPatch`）：「行」是 patch 的行，
+  // 帶 `+`／`-`／空白前綴，`diff --git` 與 `@@` 也算。列上的 +N −M 照全量算（vendor 用 `patchStats(step.patch)`）。
+  it('diff：新建檔一行超長，從中間截，頭那段留著 + 號（上色照舊）', () => {
     render(<ToolCard entry={write(`${head}${'麻'.repeat(7)}${tail}`)} />);
     expand(/寫入檔案/);
-    const row = screen.getByTestId('tool-diff').querySelector('[data-diff-line="add"]');
-    expect(row?.textContent).toBe(`+${head}⋯ 中間 7 字沒畫 ⋯${tail}`);
-    expect(screen.getByTestId('card-line-omitted').textContent).toBe('⋯ 中間 7 字沒畫 ⋯');
+    // 那一行是「+」加 2,007 字：頭留 1,000（含 +）、尾留 1,000，中間 8 字。
+    expect(diffLines()[2]).toBe(`+${head.slice(1)}⋯ 中間 8 字沒畫 ⋯${tail}`);
   });
 
-  it('diff：一行剛好在上限內，原樣畫、沒有那一句', () => {
-    render(<ToolCard entry={write(`${head}${tail}`)} />);
+  it('diff：一行剛好在上限內（含 + 號 2,000 字），原樣畫', () => {
+    render(<ToolCard entry={write(`${head}${tail.slice(1)}`)} />);
     expand(/寫入檔案/);
-    expect(screen.queryByTestId('card-line-omitted')).toBeNull();
-    expect(screen.getByTestId('tool-diff').textContent).toContain(`${head}${tail}`);
+    expect(diffLines()[2]).toBe(`+${head}${tail.slice(1)}`);
+    expect(diffLines()).toHaveLength(3);
   });
 
   it('diff：meta 帶的 diffs 一側超長也一樣收', () => {
@@ -1043,35 +1040,46 @@ describe('diff 卡與搜尋卡的畫面字元上限（#961）', () => {
     };
     render(<ToolCard entry={write('新的', meta)} />);
     expand(/寫入檔案/);
-    expect(screen.getByTestId('card-line-omitted').textContent).toBe('⋯ 中間 3 字沒畫 ⋯');
+    expect(diffLines()).toContain(`-${head.slice(1)}⋯ 中間 4 字沒畫 ⋯${tail}`);
   });
 
-  it('diff：列數沒超過 5000、但全部字元超過整張卡的預算，展開後只畫前面幾列並說明', () => {
-    // 每列約 36 字元，總量是預算的三倍，但列數仍遠低於 5000（不是列數上限擋的）。
-    const count = Math.ceil((CARD_MAX_CHARS * 3) / 36);
-    expect(count).toBeLessThan(MAX_RENDERED_LINES);
-    const content = Array.from(
-      { length: count },
-      (_, at) => `第 ${at + 1} 行${'字'.repeat(30)}`,
-    ).join('\n');
+  it(`diff：6,000 行的新檔展開後畫到 ${MAX_RENDERED_LINES} 行，尾端一行講沒畫幾行；列上的 +N 照全量`, () => {
+    const content = Array.from({ length: 6000 }, (_, at) => `l${at + 1}`).join('\n');
     render(<ToolCard entry={write(content)} />);
-    expand(/寫入檔案/);
-    fireEvent.click(screen.getByTestId('tool-diff-toggle'));
-    const card = screen.getByTestId('tool-diff');
-    const drawn = card.querySelectorAll('[data-diff-line]').length;
+    const trigger = screen.getByRole('button', { name: /寫入檔案/ });
+    expect(trigger.textContent).toContain('+6000');
+    expect(within(trigger).getByText('新增 6000 行，刪除 0 行')).toBeTruthy();
+    fireEvent.click(trigger);
+    const rows = diffLines();
+    // patch 共 6,002 行（路徑、@@、6,000 行），畫前 5,000 行，剩 1,002 行。
+    expect(rows).toHaveLength(MAX_RENDERED_LINES + 1);
+    expect(rows[MAX_RENDERED_LINES - 1]).toBe(`+l${MAX_RENDERED_LINES - 2}`);
+    expect(rows.at(-1)).toBe('... 還有 1002 行沒畫');
+  });
+
+  it('diff：行數沒超過 5000、但全部字元超過整張卡的預算，停在預算處並說明；+N 照全量', () => {
+    // 中文 24 字短列（#961 最壞的那一種），總量是預算的三倍，行數仍遠低於 5000（不是行數上限擋的）。
+    const count = Math.ceil((CARD_MAX_CHARS * 3) / 25);
+    expect(count).toBeLessThan(MAX_RENDERED_LINES);
+    const content = Array.from({ length: count }, () => '字'.repeat(24)).join('\n');
+    render(<ToolCard entry={write(content)} />);
+    const trigger = screen.getByRole('button', { name: /寫入檔案/ });
+    expect(trigger.textContent).toContain(`+${count}`);
+    fireEvent.click(trigger);
+    const rows = diffLines();
+    const drawn = rows.length - 1;
     expect(drawn).toBeGreaterThan(100);
     expect(drawn).toBeLessThan(count / 2);
-    expect(card.textContent?.length).toBeLessThan(CARD_MAX_CHARS * 1.2);
-    expect(card.textContent).toContain(`只顯示前 ${drawn} 行`);
+    expect(rows.slice(0, -1).join('').length).toBeLessThanOrEqual(CARD_MAX_CHARS);
+    expect(rows.at(-1)).toBe(`... 還有 ${count + 2 - drawn} 行沒畫`);
   });
 
-  it('diff：預算內的列全畫、沒有那一句', () => {
+  it('diff：預算內的行全畫、沒有那一句', () => {
     const content = Array.from({ length: 12 }, (_, at) => `第 ${at + 1} 行`).join('\n');
     render(<ToolCard entry={write(content)} />);
     expand(/寫入檔案/);
-    fireEvent.click(screen.getByTestId('tool-diff-toggle'));
-    expect(screen.getByTestId('tool-diff').querySelectorAll('[data-diff-line]')).toHaveLength(13);
-    expect(screen.queryByText(/只顯示前/)).toBeNull();
+    expect(diffLines()).toHaveLength(14);
+    expect(diffLines().some((row) => row?.startsWith('...'))).toBe(false);
   });
 
   it('搜尋：命中行超長，畫頭尾各半，行號與冒號留著', () => {
@@ -1324,6 +1332,22 @@ describe('換成 SG 之後每一項資訊都還在（#1682 B2）', () => {
     ).not.toBeNull();
   });
 
+  it('子代理的改檔：展開區有 diff，手機版的歸屬照樣在（patch 0018 的 patch 分支也接 children，#1685 B.5）', () => {
+    render(
+      <ToolCard
+        entry={tool({
+          name: 'edit_file',
+          input: JSON.stringify({ file_path: '/a.ts', old_string: 'a', new_string: 'b' }),
+          status: 'running',
+          attribution: { kind: 'subagent', name: 'writer', callId: 'c0' },
+        })}
+      />,
+    );
+    const area = expanded() as HTMLElement;
+    expect(diffLines(area)).toEqual(['diff --git a/a.ts b/a.ts', '@@', '-a', '+b']);
+    expect(within(area).getByText('子代理 writer').closest('.sm\\:hidden')).not.toBeNull();
+  });
+
   it('寫檔：行數在列上，diff 在展開區，沒有 SG 的結果框', () => {
     render(
       <ToolCard
@@ -1336,7 +1360,7 @@ describe('換成 SG 之後每一項資訊都還在（#1682 B2）', () => {
     );
     expect(trigger().textContent).toContain('+2');
     const area = expanded() as HTMLElement;
-    expect(within(area).getByTestId('tool-diff')).toBeTruthy();
+    expect(diffLines(area)).toEqual(['diff --git a/a.md b/a.md', '@@', '+一', '+二']);
     expect(screen.queryByLabelText('結果')).toBeNull();
     expect(screen.queryByLabelText('參數')).toBeNull();
   });

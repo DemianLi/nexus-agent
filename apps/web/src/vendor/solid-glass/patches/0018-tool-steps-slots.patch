@@ -29,7 +29,7 @@
  
    return (
      <div data-slot="step-row" className="flex flex-col gap-1.5">
-@@ -85,6 +91,7 @@
+@@ -85,13 +91,17 @@
          className={cn(lineClass, step.status === "running" && "animate-pulse")}
        >
          <span className="truncate text-[12.5px]">{step.label}</span>
@@ -37,7 +37,18 @@
          {step.patch && <DiffStats {...patchStats(step.patch)} />}
          {canOpen && <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />}
        </button>
-@@ -100,6 +107,7 @@
+ 
+       {open &&
+         (step.patch ? (
+-          <DiffView patch={step.patch} />
++          <div className="flex flex-col gap-1.5">
++            <DiffView patch={step.patch} />
++            {children}
++          </div>
+         ) : (
+           <div className="flex flex-col gap-1.5">
+             {step.detail && <OutputBlock label={step.detailLabel ?? words.detail} text={step.detail} />}
+@@ -100,6 +110,7 @@
              ) : (
                step.output && <OutputBlock label={words.output} text={step.output} />
              )}
@@ -45,7 +56,7 @@
            </div>
          ))}
      </div>
-@@ -110,14 +118,27 @@
+@@ -110,14 +121,27 @@
  const defaultLabels: StepLabels = { detail: "Input", output: "Output", error: "Error" }
  
  /** Calls as a list of what each one did; a row opens to the call itself. */
@@ -79,7 +90,7 @@
      </div>
    )
  }
-@@ -143,6 +164,7 @@
+@@ -143,6 +167,7 @@
    defaultOpen = false,
    open: openProp,
    onOpenChange,
@@ -87,7 +98,7 @@
  }: {
    steps: Step[]
    /** The folded line. Defaults to a count of the calls. */
-@@ -152,6 +174,8 @@
+@@ -152,6 +177,8 @@
    /** Controlled open state; left out, the group keeps its own. */
    open?: boolean
    onOpenChange?: (open: boolean) => void
@@ -96,7 +107,7 @@
  }) {
    const running = steps.some((step) => step.status === "running")
    const [openState, setOpenState] = React.useState(defaultOpen)
-@@ -173,7 +197,11 @@
+@@ -173,7 +200,11 @@
          {stats && <DiffStats {...stats} />}
          <ChevronRight className={cn("size-3.5 shrink-0 transition-transform", open && "rotate-90")} />
        </button>

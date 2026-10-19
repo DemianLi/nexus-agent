@@ -15,7 +15,11 @@
  * - **算法**：每一段 `{oldText, newText}` 各自跑 `diff` 的 `structuredPatch`，上下文 3 行；比較的改動超過
  *   {@link MAX_DIFF_EDIT_LENGTH} 就不找了，整段當成替換（`diff@9` 在那時回 `undefined`）。
  * - **不畫行號**：edit 的兩段、`meta` 的每一段都是從檔案中間截出來的，算出來的行號從 1 起跳，跟檔案裡的位置對不上；
- *   dsh 也不畫。換檔時先一列路徑，同一檔的下一段、同一段裡相隔太遠的兩處改動之前各一列 `⋯`。
+ *   dsh 也不畫。
+ * - **交給 SG 的是 unified patch**（#1685 B，`StepRow` 的 `step.patch`）：{@link toolPatch} 組字串。換檔時一列
+ *   `diff --git a/<路徑> b/<路徑>`（SG 照畫，等於以前的路徑那一列），每個 hunk 前一列**不帶數字的 `@@`**（取代以前的 `⋯`）：
+ *   帶數字就畫出從 1 起算、對不上的行號；不給 `@@` 的話，內容是 `+++ x`／`--- x` 的行在 hunk 外會被 SG 當成檔頭丟掉。
+ *   全樹組 unified patch 字串的只有這一支（審查頁不畫 `DiffView`，自己用 `hunkHeader` 畫標頭）。
  *
  * **更正幀**：即時路徑先來一顆沒 `meta` 的完成、再來同 id 帶 `meta` 的一顆（wire 的 reducer 換掉那一格），
  * 呼叫端的 memo 要把 `meta` 算進去，卡片才補畫得出來。
@@ -29,14 +33,8 @@
 import { structuredPatch } from 'diff';
 import type { ToolEntry, WorkspaceDiffHunk } from '@nexus/wire';
 
-import { hunkRows } from '@/lib/diff-rows';
-import type { DiffRow } from '@/lib/diff-rows';
-
 export const WRITE_FILE = 'write_file';
 export const EDIT_FILE = 'edit_file';
-
-/** 對話裡最多畫幾列（含路徑那一列），多的收在中間（dsh `CHAT_DIFF_MAX_LINES`）。 */
-export const CHAT_DIFF_MAX_LINES = 9;
 
 /** 逐行比較最多找這麼多處改動，一處替換算兩處（dsh `MAX_DIFF_EDIT_LENGTH`）。 */
 export const MAX_DIFF_EDIT_LENGTH = 256;
@@ -53,11 +51,6 @@ export interface DiffFragment {
   readonly path: string;
   readonly hunks: readonly WorkspaceDiffHunk[];
 }
-
-/** diff 裡的一列。路徑與 `⋯` 是版面，其他照 {@link DiffRow} 的三種。 */
-export type ToolDiffRow =
-  | { readonly kind: 'path' | 'gap'; readonly text: string }
-  | { readonly kind: DiffRow['kind']; readonly text: string };
 
 export function parseArgs(input: string): Record<string, unknown> | undefined {
   try {
@@ -177,35 +170,76 @@ export function diffTotals(hunks: readonly WorkspaceDiffHunk[]): {
   return { added, removed };
 }
 
+const ESCAPES: Readonly<Record<string, string>> = { '\n': '\\n', '\r': '\\r', '\t': '\\t' };
+
 /**
- * 攤平成要畫的列（dsh `buildRows`）：換檔時先一列路徑；同一檔的下一段、同一段裡的下一個 hunk 之前各一列 `⋯`。
+ * 路徑放進 `diff --git` 那一列之前，C0 控制字元與 DEL 轉義成看得見的 `\n`、`\x1b` 這種寫法：路徑裡的換行會把那一列拆成兩列，
+ * 後半段可能被上色、算進增刪數，或憑空開出一個 hunk。開頭的 `/` 拿掉一個，不畫成 `a//notes.md`。
  */
-export function diffRows(fragments: readonly DiffFragment[]): ToolDiffRow[] {
-  const rows: ToolDiffRow[] = [];
-  let previousPath: string | undefined;
-  for (const fragment of fragments) {
-    if (fragment.path !== previousPath) rows.push({ kind: 'path', text: fragment.path });
-    else rows.push({ kind: 'gap', text: '⋯' });
-    previousPath = fragment.path;
-    fragment.hunks.forEach((hunk, index) => {
-      if (index > 0) rows.push({ kind: 'gap', text: '⋯' });
-      for (const row of hunkRows(hunk)) rows.push({ kind: row.kind, text: row.text });
-    });
-  }
-  return rows;
+export function patchPath(path: string): string {
+  return path
+    .replace(/^\//, '')
+    .replace(
+      // eslint-disable-next-line no-control-regex -- 要找的就是控制字元
+      /[\u0000-\u001f\u007f]/g,
+      (c) => ESCAPES[c] ?? `\\x${c.charCodeAt(0).toString(16).padStart(2, '0')}`,
+    );
 }
 
-/** 卡片要的全部：每一段的 hunks 與合計的增刪行數。沒有 diff 就走通用卡。 */
-export function toolDiffView(entry: Pick<ToolEntry, 'name' | 'status' | 'input' | 'meta'>):
-  | {
-      readonly fragments: readonly DiffFragment[];
-      readonly totals: { added: number; removed: number };
+/**
+ * 幾段 diff 組成 SG `DiffView` 吃的 unified patch（#1685 B）：換檔時先一列 `diff --git`，同一個檔的下一段不重複；
+ * 每個 hunk 前一列不帶數字的 `@@`（見檔頭）。hunk 的每一行本來就帶 `+`／`-`／空白前綴，原樣接上。
+ */
+export function toolPatch(fragments: readonly DiffFragment[]): string {
+  const lines: string[] = [];
+  let previousPath: string | undefined;
+  for (const fragment of fragments) {
+    if (fragment.path !== previousPath) {
+      const path = patchPath(fragment.path);
+      lines.push(`diff --git a/${path} b/${path}`);
     }
-  | undefined {
+    previousPath = fragment.path;
+    for (const hunk of fragment.hunks) {
+      lines.push('@@');
+      for (const line of hunk.lines) lines.push(line);
+    }
+  }
+  return lines.join('\n');
+}
+
+/** 卡片要的全部：交給 SG 的 patch 與合計的增刪行數。 */
+export interface ToolDiffView {
+  readonly patch: string;
+  readonly totals: { readonly added: number; readonly removed: number };
+}
+
+/**
+ * 一則工具呼叫算好的 diff，以那一則為鍵記住（#1685 B）：工具卡與它所在的工具段（`tool-run.tsx` 的 steps）都從這裡拿，
+ * 拿到的是**同一個字串**，nexus 層 `patchStats` 的快取（`components/ui/diff-view.tsx`）以字串為鍵，同一個實例查起來不必重算雜湊。
+ * wire 的 reducer 換掉那一格時是新的物件，舊的跟著被回收。
+ */
+const views = new WeakMap<object, ToolDiffView | undefined>();
+
+function computeDiffView(
+  entry: Pick<ToolEntry, 'name' | 'status' | 'input' | 'meta'>,
+): ToolDiffView | undefined {
   const diffs = toolDiffs(entry);
   if (diffs === undefined) return undefined;
   const fragments = diffs.map((diff) => ({ path: diff.path, hunks: diffHunks(diff) }));
-  return { fragments, totals: diffTotals(fragments.flatMap((fragment) => fragment.hunks)) };
+  return {
+    patch: toolPatch(fragments),
+    totals: diffTotals(fragments.flatMap((fragment) => fragment.hunks)),
+  };
+}
+
+/** 這張卡的 diff；沒有 diff 就走通用卡。 */
+export function toolDiffView(
+  entry: Pick<ToolEntry, 'name' | 'status' | 'input' | 'meta'>,
+): ToolDiffView | undefined {
+  if (views.has(entry)) return views.get(entry);
+  const view = computeDiffView(entry);
+  views.set(entry, view);
+  return view;
 }
 
 /**

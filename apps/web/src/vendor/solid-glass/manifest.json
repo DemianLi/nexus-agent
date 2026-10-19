@@ -186,7 +186,7 @@
     "components/ui/tool-steps.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/tool-steps.tsx",
-      "sha256": "60818b617d8d36884ffb89500da9426ae7f2ca9610a8f9c20b16ef78342e6a25",
+      "sha256": "f7eaf97d65c6fb20cc371034bf1439e19943c38943d5a3a89d085a3121039636",
       "patches": [
         "patches/0016-tool-steps-strict-index.patch",
         "patches/0017-tool-steps-controlled-open.patch",
@@ -198,7 +198,9 @@
     "components/ui/diff-view.tsx": {
       "source": "solid-glass",
       "from": "src/components/ui/diff-view.tsx",
-      "sha256": "f2661b83cbd3e3994ae865c3de399ebe8fe136c9d6e5dadd9d44d200438ae00c"
+      "sha256": "894e21b771193ffe455672ff2a1a2b1488ad8b05b50ce003d1336e8a4c3aba21",
+      "patches": ["patches/0024-diff-view-keyboard-scroll.patch"],
+      "upstreamSha256": "f2661b83cbd3e3994ae865c3de399ebe8fe136c9d6e5dadd9d44d200438ae00c"
     },
     "components/ui/reasoning.tsx": {
       "source": "solid-glass",
