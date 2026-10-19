@@ -596,8 +596,8 @@ WantedBy=multi-user.target
   [#599](https://github.com/DemianLi/nexus-agent/issues/599)／[#1501](https://github.com/DemianLi/nexus-agent/issues/1501)）：`SIGTERM` 之後 serve 最多等 5 秒收完每條 thread，
   到了就強制結束、退出碼仍是 0。`apps/harness/src/systemd-unit.test.ts` 讀這一段，`TimeoutStopSec` 不大於那個常數就紅。
   這兩個數字改其中一個，另一個要跟著改。
-- **`ExecStart` 指的是 `current` 這個符號連結。** 升級就是解開新版、`ln -sfn` 換掉 `current`、`systemctl restart nexus-agent`；
-  回退就是把 `current` 指回舊版。連結換掉之前跑著的行程不受影響。
+- **`ExecStart` 指的是 `current` 這個符號連結。** 換版就是解開另一版、`ln -sfn` 換掉 `current`、重啟；連結換掉之前跑著的行程不受影響。
+  **退回舊版不能只把 `current` 指回去**：新版寫過的 home 舊版讀不了，要連 home 一起還原，見〈升級與回滾〉。
 - **`--live` 要有 key，而且要在第一次 `enable --now` 之前就位。** 上面第三、四步放進 home 的受管憑證檔最合適（`chmod 600`，擁有者是 `nexus-agent`；
   見〈金鑰放哪裡〉），它的值不進行程的環境變數。**不要把 key 寫在命令列或 heredoc 裡**：那會跟著指令進管理員的 shell history（`~/.bash_history`）；
   所以先建出權限 600 的空檔，再用編輯器填。單元檔不要寫 `Environment=NVIDIA_API_KEY=…`：`systemctl show` 讀得到，子行程也繼承得到。
@@ -620,6 +620,93 @@ systemctl status nexus-agent                                     # active (runni
 journalctl -u nexus-agent -n 20                                  # 找到「nexus-agent 在 http://…」
 sudo systemctl stop nexus-agent; systemctl status nexus-agent    # inactive (dead)，Main PID 的 status=0/SUCCESS
 ```
+
+## 升級與回滾
+
+[#1537](https://github.com/DemianLi/nexus-agent/issues/1537)。**1.0 之前不承諾相容，也不支援降版**：新版寫過的會話日誌與變更紀錄，
+舊版讀不了（dsh 也一樣，不支援降版）。所以出事時的退路是**還原升級前備份的整個 home，再起舊版**，不是把程式換回舊版。
+升級之後新寫的對話與設定會跟著丟掉。
+
+### home 底下有什麼
+
+home 是 `NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`（systemd 的設法是 `/var/lib/nexus-agent`，見〈用 systemd 常駐〉）。
+備份時整個 home 一起打包，不要挑檔；下表是讓你知道裡面有哪些是秘密、哪些換不回來：
+
+| 檔或目錄 | 是什麼 | 備註 |
+| --- | --- | --- |
+| `sessions/` | 會話日誌（每條對話一份） | 給了 `--session-log <目錄>` 的話在那個目錄，也要一起備份 |
+| `attachments/` | 上傳的檔案與圖 | 內容定址，會話日誌只記參照 |
+| `tool-results/` | 過大的工具結果原文 | 有保留期（〈接著上一次跑下去〉） |
+| `plugin-journal.jsonl` | 插件清單的變更紀錄 | 舊版不認得它；`.lock` 是它的鎖檔 |
+| `cordis.patch.yml.migrated-<時間>` | 從舊版遷移時改名留下的原檔 | 不再讀取 |
+| `thread-organization.json` | 側欄的釘選與封存 | |
+| `.credentials.yaml` | 受管憑證（API key） | **秘密** |
+| `.env` | 代理設定等環境變數 | **秘密**（可能有 key） |
+| `browser-session.json` | 瀏覽器登入的簽章密鑰 | **秘密** |
+| `config-hash-key.json` | 會話日誌 header 設定雜湊的鍵 | **秘密** |
+| `invariant-log.jsonl` | 不變量量測記錄 | |
+| `plugin-snapshot.json` | 已儲存與執行中的清單對照 | 每次啟動重寫，還原時不必在意 |
+| `serve.lock` | 「一個 home 一個 serve」的鎖檔 | 備份可以帶，還原時不必 |
+
+備份檔裡有秘密，要用跟 home 一樣的權限保管（擁有者是跑 serve 的那個使用者、`0600`），不要放進別人讀得到的地方。
+
+### 升級
+
+1. **讀升級指南**：Release 說明開頭有連結；也可以直接看 repo 的 `docs/upgrade-guide/v<目前在跑的版本>/`，每一份的「遷移」都要做。
+2. **停 serve**：`sudo systemctl stop nexus-agent`（或對 serve 的 node 行程送 `SIGTERM`；別對 `pnpm` 送，它會把訊號吃掉）。
+   serve 起動時會拿 `<home>/serve.lock` 的鎖（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)），所以下一步之前，
+   可以用「另起一個 serve 會被鎖擋下」來確認沒有別的行程還在寫這個 home。
+3. **備份整個 home，連權限一起**：
+
+   ```bash
+   sudo tar -cpf /var/backups/nexus-agent-home-<日期>.tar -C /var/lib nexus-agent
+   sudo chmod 600 /var/backups/nexus-agent-home-<日期>.tar
+   ```
+
+   給了 `--session-log` 的話，那個目錄也照樣打包一份。
+4. **裝新版，舊版留著**：照〈用 systemd 常駐〉解開到新目錄、`ln -sfn` 換掉 `current`。舊版的目錄不要刪，回滾時要用。
+5. **起新版**：`sudo systemctl start nexus-agent`。
+
+### 升級之後確認
+
+- **版本**：`node /opt/nexus-agent/current/lib/serve.js --version` 印的是新版號。
+- **啟動輸出**（`journalctl -u nexus-agent -n 50`）：
+  - 從還有 `cordis.patch.yml` 的版本升上來時，第一次啟動有一行
+    `[清單] 已把舊的 cordis.patch.yml 的 N 條 patch 遷進變更紀錄 …；原檔改名為 ….migrated-<時間>（不再讀取，0600）。`；
+  - `[對照快照] N 列，與執行中相同 …` 那一行（見〈plugin 清單〉）；
+  - 有「nexus-agent 在 http://…」那一行。
+- **插件設定**：同一個 `NEXUS_AGENT_HOME` 跑 `node /opt/nexus-agent/current/lib/serve.js --dump-config`（不開 server），
+  檔頭寫 `patched by <home>/plugin-journal.jsonl`，之前停用的列仍有 `disabled: true`。
+- **對話**：開一條升級前的舊對話，內容都在；再開一條新對話，送一句話有回覆。
+
+### 回滾
+
+1. 停新版：`sudo systemctl stop nexus-agent`。
+2. 要留新版期間的資料的話，先把現在的 home 另外打包一份（之後要撈也只能用新版讀）。
+3. 把 home 還原成升級前的備份：先把現在的 home 移開，再解開備份。
+
+   ```bash
+   sudo mv /var/lib/nexus-agent /var/lib/nexus-agent.after-upgrade-<日期>
+   sudo tar -xpf /var/backups/nexus-agent-home-<日期>.tar -C /var/lib
+   ```
+
+4. `ln -sfn` 把 `current` 指回舊版的目錄，`sudo systemctl start nexus-agent`。
+5. 照「升級之後確認」核一次：版本是舊版號、舊對話都在、停用的插件仍是停用。
+
+### 為什麼不能直接換回舊程式
+
+不還原 home、只把程式換回舊版，會壞在下面這幾處。前兩條是 2026-10-19 用 v0.5.19 實測看到的（升級、新版接著一條舊對話
+又開一條新的，再不還原就換回 v0.5.19）：
+
+- **新版碰過的對話，舊版讀不了**。新版續寫過或新建的會話日誌，header 的格式版本蓋成新版的號，舊版拒讀：側欄只把它們
+  算成「讀不了 N 條」，打開或往裡送話都回「這條 thread 建不起來：會話 "…" 的格式版本是 49，這一版只讀得懂到 14。
+  檔案沒有壞，是比這一版新。」（實測的兩個號；`packages/nexus-core/src/session-store.ts` 的 `SessionFormatUnsupportedError`）。
+  新版沒碰過的舊對話照常讀得到。格式每一版改了什麼，紀錄在同一個檔的檔頭。
+- **從還沒有變更紀錄的版本（例如 v0.5.19）升上來，再換回去，插件設定靜靜回到出廠**。新版第一次啟動已經把 home 的
+  `cordis.patch.yml` 遷進變更紀錄、原檔改名；舊版不認得變更紀錄，也找不到 `cordis.patch.yml`，就照出廠設定跑：
+  之前停用的插件又回來、改過的設定都不見。啟動輸出沒有任何一行提到，只有 `--dump-config` 看得出來（檔頭不再有 `patched by`）。
+- **換回的版本認得變更紀錄、但紀錄裡有它不認得的筆，serve 起不來**。紀錄是 strict 讀的，讀到不認得的 `op` 會當成壞檔、
+  指名第幾行（見〈後台改清單〉的「換回舊版程式」）。v0.5.19 不讀變更紀錄，所以從它升上來再換回去碰不到這一條。
 
 ## 執行上限
 
@@ -1527,7 +1614,7 @@ home 是 `0700`；不要把它貼進 issue 或聊天）。直接 `cat` 就能讀
 
 **換回舊版程式**：紀錄的格式是 strict 的，舊版（`rejected`／`failed` 之前，**以及 #1424 之前、還不認得 `self-disabled` 的版本**）讀到不認得的 `op` 會把它當成壞掉的檔、serve 起不來，
 訊息指名第幾行。要換回舊版，**先照下面「紀錄壞了怎麼救」的三步處理**，或不換回。換回舊版本來就要排程重啟，寫清楚就好；這一版不讓
-讀端略過不認得的筆（略過就是靜靜漏掉稽核）。
+讀端略過不認得的筆（略過就是靜靜漏掉稽核）。整台退回舊版的做法是還原升級前的 home 備份，見〈升級與回滾〉。
 
 **代價要先想清楚**：`rejected`／`failed`／`self-disabled` 跟被接受的改動是**交錯排**的，而 `seq` 必須連續，所以「搬出去」不是只搬那幾行——
 **第一筆 `rejected`／`failed`／`self-disabled` 之後的所有行都要搬走**，其中被接受的改動也一起丟掉，清單會回到那一刻。要保留那些改動，換回舊版之後

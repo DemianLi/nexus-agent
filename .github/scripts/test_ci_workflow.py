@@ -158,5 +158,21 @@ class Budget(unittest.TestCase):
         self.assertLessEqual(peak, PEAK_LIMIT)
 
 
+class UpgradeGuideGate(unittest.TestCase):
+    """升級指南的 gate 要掛在每張 PR 都跑的 plan，而且 checkout 要帶 tags（#1537）。"""
+
+    def setUp(self) -> None:
+        self.steps = load(CI)['jobs']['plan']['steps']
+
+    def test_runs_in_plan_without_condition(self) -> None:
+        steps = [s for s in self.steps if s.get('run') == 'python3 .github/scripts/check_upgrade_guides.py']
+        self.assertEqual(len(steps), 1)
+        self.assertNotIn('if', steps[0])
+
+    def test_checkout_fetches_tags(self) -> None:
+        checkout = [s for s in self.steps if str(s.get('uses', '')).startswith('actions/checkout@')]
+        self.assertEqual(checkout[0].get('with', {}).get('fetch-depth'), 0)
+
+
 if __name__ == '__main__':
     unittest.main()

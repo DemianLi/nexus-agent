@@ -1,0 +1,170 @@
+"""檢查 `docs/upgrade-guide/` 的升級指南：路徑形狀、frontmatter、段落（#1537）。規則見 AGENTS.md「發版」。
+
+規則逐條照 dsh `scripts/verify-upgrade-guides.ts`（687f282e）：
+
+- 目錄裡只准有 `v<semver>/<kebab-case>/guide.md`，其他檔一律報；
+- frontmatter 的鍵恰好是 `description` 與 `kind`，`kind` 是 `upgrade-guide`，`description` 是非空字串；
+- 深度 ≤ 2 的標題恰好是一個 `#` 標題，接著 `## 變更`、`## 遷移`，順序不能換；
+- 目錄不存在就沒有違規。
+
+另外多驗一條：版本目錄的 `v<版號>` 必須是已存在的 git tag。dsh 的 `<version>` 是讀者正在跑的那一版、也就是上一個
+發出的版本（SKILL.md:8、:26），它從根 `package.json` 讀，因為它的 manifest 存的就是這個值。nexus 先開版號 PR 再發版，
+manifest 存的是「要發的那一版」（今天還是 0.0.0），所以改取最近一個 Release tag，並由這裡擋住寫錯的目錄
+（#1537 偏離 2，理由 1；撤除條件：manifest 改成記已發出版本的那天）。
+
+和 dsh 不同的地方，都是工具不同、規則不變：
+
+- 只收 `guide.md` 一份中文（dsh 的 `guide.zh.md`、`guide.i18n.yaml` 是雙語配對，本 repo 文件只有中文，見 #1537 偏離 1）。
+  段落名照 dsh 中文版的「变更」「迁移」，寫成正體；字數上限照 dsh 中文版，不設。
+- 寫成 stdlib 的 Python，跑在 `ci.yml` 的 `plan` job：純文件 PR 會跳過 `static`，只有 `plan` 每張都跑。
+  `plan` 不裝相依，所以不用 PyYAML，frontmatter 只收單行的 `鍵: 值`（比 YAML 嚴，dsh 的指南也都是這個形狀）；
+  標題不用 mdast，自己掃頂層的 ATX 與 setext 標題，跳過 fenced code 與引言。
+"""
+
+from __future__ import annotations
+
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[2]
+GUIDE_ROOT = 'docs/upgrade-guide'
+FRONTMATTER_KEYS = ['description', 'kind']
+SECTIONS = ['變更', '遷移']
+SEMVER = r'(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:-[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?'
+GUIDE_PATH = re.compile(rf'^v{SEMVER}/[a-z0-9]+(?:-[a-z0-9]+)*/guide\.md$')
+
+FRONTMATTER = re.compile(r'^---\r?\n([\s\S]*?)\r?\n---\r?\n')
+FIELD = re.compile(r'^([A-Za-z_][\w-]*):(?:[ \t]+(.*?))?[ \t]*$')
+# 不加引號時 YAML 會讀成非字串的值（照 dsh 的 JSON_SCHEMA）。
+NON_STRING = re.compile(r'^(?:null|Null|NULL|~|true|True|TRUE|false|False|FALSE|-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][-+]?\d+)?)?$')
+FENCE = re.compile(r'^ {0,3}(`{3,}|~{3,})')
+ATX = re.compile(r'^ {0,3}(#{1,6})(?:[ \t]|$)')
+SETEXT = re.compile(r'^ {0,3}(=+|-+)[ \t]*$')
+NOT_PARAGRAPH = re.compile(r'^ {0,3}(?:[-+*][ \t]|\d+[.)][ \t]|>|#)|^ {4}|^\t')
+
+
+def parse_frontmatter(text: str) -> tuple[dict[str, object], list[str]]:
+    """單行 `鍵: 值` 的 frontmatter。值加了引號才算一定是字串；重複的鍵、其他形狀都報。"""
+    fields: dict[str, object] = {}
+    problems: list[str] = []
+    for line in text.splitlines():
+        if line.strip() == '' or line.lstrip().startswith('#'):
+            continue
+        match = FIELD.match(line)
+        if match is None:
+            problems.append(f'frontmatter 只收單行的「鍵: 值」，這行不是：{line!r}')
+            continue
+        key, raw = match.group(1), match.group(2) or ''
+        if key in fields:
+            problems.append(f'frontmatter 的鍵 {key} 重複')
+        if len(raw) >= 2 and raw[0] == raw[-1] and raw[0] in '"\'':
+            fields[key] = raw[1:-1]
+        elif NON_STRING.match(raw):
+            fields[key] = None
+        else:
+            fields[key] = raw
+    return fields, problems
+
+
+def outline(body: str) -> list[str]:
+    """頂層、深度 ≤ 2 的標題，取原文（同 dsh 用 mdast 位置切出來的那段）。"""
+    headings: list[str] = []
+    fence: str | None = None
+    paragraph: list[str] = []
+    for line in body.splitlines():
+        if fence is not None:
+            close = FENCE.match(line)
+            if close and close.group(1)[0] == fence[0] and len(close.group(1)) >= len(fence) and line.strip() == close.group(1):
+                fence = None
+            continue
+        opened = FENCE.match(line)
+        if opened:
+            fence, paragraph = opened.group(1), []
+            continue
+        atx = ATX.match(line)
+        if atx:
+            if len(atx.group(1)) <= 2:
+                headings.append(line.strip())
+            paragraph = []
+            continue
+        setext = SETEXT.match(line)
+        if setext and paragraph:
+            if setext.group(1)[0] == '=' or setext.group(1)[0] == '-':
+                headings.append('\n'.join(paragraph + [line.strip()]))
+            paragraph = []
+            continue
+        if line.strip() == '' or NOT_PARAGRAPH.match(line):
+            paragraph = []
+            continue
+        paragraph.append(line.strip())
+    return headings
+
+
+def guide_violations(source: str) -> list[str]:
+    match = FRONTMATTER.match(source)
+    if match is None:
+        return ['開頭要是 YAML frontmatter（--- 包起來）']
+    violations: list[str] = []
+    fields, problems = parse_frontmatter(match.group(1))
+    violations.extend(problems)
+    keys = sorted(fields)
+    if keys != FRONTMATTER_KEYS:
+        violations.append(f'frontmatter 的鍵要恰好是 {", ".join(FRONTMATTER_KEYS)}，實際是 {", ".join(keys) or "（沒有）"}')
+    if fields.get('kind') != 'upgrade-guide':
+        violations.append('kind 要是 upgrade-guide')
+    description = fields.get('description')
+    if not isinstance(description, str) or description.strip() == '':
+        violations.append('description 要是非空字串')
+
+    headings = outline(source[match.end():])
+    expected = [f'## {section}' for section in SECTIONS]
+    if len(headings) != len(expected) + 1 or not headings[0].startswith('# ') or headings[1:] != expected:
+        want = '、'.join(f'「{h}」' for h in expected)
+        got = '、'.join(f'「{h}」' for h in headings) or '（沒有）'
+        violations.append(f'標題要是一個「#」標題，接著恰好 {want}；實際是 {got}')
+    return violations
+
+
+def release_tags(root: Path) -> set[str]:
+    out = subprocess.run(['git', 'tag', '--list', 'v*'], cwd=root, check=True, capture_output=True, text=True).stdout
+    return {line.strip() for line in out.splitlines() if line.strip()}
+
+
+def collect_violations(root: Path, tags: set[str]) -> list[str]:
+    directory = root / GUIDE_ROOT
+    if not directory.exists():
+        return []
+    violations: list[str] = []
+    for version in sorted(p.name for p in directory.iterdir() if p.is_dir()):
+        if GUIDE_PATH.match(f'{version}/x/guide.md') and version not in tags:
+            violations.append(
+                f'{GUIDE_ROOT}/{version}：沒有這個 tag。版本目錄取最近一個 Release 的 tag（讀者正在跑的那一版），'
+                '不是 package.json 的版號；CI 的 checkout 要帶 tags'
+            )
+    files = sorted(p.relative_to(directory).as_posix() for p in directory.rglob('*') if not p.is_dir())
+    for file in files:
+        path = f'{GUIDE_ROOT}/{file}'
+        if not GUIDE_PATH.match(file):
+            violations.append(f'{path}：{GUIDE_ROOT} 底下只放 v<semver>/<kebab-case 名稱>/guide.md')
+            continue
+        for violation in guide_violations((directory / file).read_text(encoding='utf-8')):
+            violations.append(f'{path}：{violation}')
+    return violations
+
+
+def main() -> int:
+    directory = ROOT / GUIDE_ROOT
+    violations = collect_violations(ROOT, release_tags(ROOT) if directory.exists() else set())
+    for violation in violations:
+        print(f'::error::{violation}')
+    if violations:
+        print('升級指南的格式不對，規則見 AGENTS.md「發版」。')
+        return 1
+    print('升級指南格式通過。')
+    return 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

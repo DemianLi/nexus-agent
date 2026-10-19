@@ -163,6 +163,42 @@ PR 合併後 GitHub 會自動刪掉 head branch（repo 開了 `delete_branch_on_
 不維護手寫的 CHANGELOG。release notes 由 `--generate-notes` 依 PR 標題自動生成，而 PR 標題規範已經
 強制每個變更都有一句可讀的中文描述 —— 那就是 changelog 的原料。
 
+### 升級指南
+
+標題只說做了什麼，不說營運者要改哪個設定。所以**外部看得到的不相容變更，在引入它的那張 PR 裡就寫一份升級指南**，
+不留到發版前（照 dsh `AGENTS.md:11` 與 `.agents/skills/dsh-create-upgrade-guide/SKILL.md`）。
+
+- **範圍**：升上來之後，照舊版的做法、設定或檔案，行為會變、會壞或會被拒的：
+  - `serve` 與 CLI 的旗標、子命令；
+  - `cordis.yml`、`cordis.serve.yml`、`--patch` 覆寫檔、變更紀錄裡的列 id 與 config 鍵、允許的值；
+  - home 底下的檔與格式：`sessions/`、`attachments/`、`tool-results/`、`plugin-journal.jsonl`、`thread-organization.json`、
+    `browser-session.json`、`.credentials.yaml`、`config-hash-key.json`、`.env`、`serve.lock`；
+  - `@nexus/sdk` 給外部插件的面；
+  - wire 協定裡 web 以外的客戶端會用到的部分。
+
+  web 與 harness 在同一張 PR 一起改的 wire 變更不必寫：消費者同一張都改到了，同 dsh。純新增的旗標、鍵、插件也不必寫。
+  會話日誌格式的升版紀錄在 `packages/nexus-core/src/session-store.ts` 檔頭，指南只寫讀者要做的事，再連到那裡。
+- **位置**：`docs/upgrade-guide/v<版號>/<item>/guide.md`。`<版號>` 是**最近一個 Release 的 tag**，也就是讀者正在跑的
+  那一版；`<item>` 是 kebab-case 的變更名。每個 item 目錄只有 `guide.md` 一份。
+- **維護**：下一版發出之前，最新的版本目錄描述「那一版到 `develop`」的差異。之後的 PR 再碰同一個面，就在同一張 PR
+  改那份指南；變更撤回就刪掉它。發版之後舊目錄凍結，新的不相容變更寫進新 tag 的目錄。一份指南不跨兩版。
+- **格式**：frontmatter 恰好 `kind: upgrade-guide` 與一句說「什麼壞了」的 `description`；一個 `#` 標題，之後恰好
+  `## 變更`、`## 遷移` 兩段。「變更」寫舊行為、新行為、誰受影響；「遷移」是編號步驟，指名檔、鍵、指令，最後一步寫
+  怎麼確認改好了。
+- **gate**：`.github/scripts/check_upgrade_guides.py`，跑在 `ci.yml` 的 `plan`（純文件 PR 也跑），檢查路徑形狀、
+  版本目錄是已存在的 tag、frontmatter 與段落。
+
+Release 的說明開頭會連到 `docs/upgrade-guide/v<上一個 tag>/`，有這個目錄才連。升級前要備份什麼、怎麼確認、出事怎麼
+退回去，見 [`docs/operations.md`](docs/operations.md)〈升級與回滾〉。
+
+和 dsh 不同的兩處：
+
+- **只寫中文一份**（理由 2）。dsh 每份有英、中兩份加配對紀錄，500 字上限只套英文；本 repo 的文件只有中文，所以只有
+  `guide.md`，段落名用 dsh 中文版的「變更」「遷移」，不設字數上限（同 dsh 中文版）。
+- **`<版號>` 取 tag，不取根 `package.json`**（理由 1）。dsh 的 `<version>` 是讀者正在跑的那一版，它從 manifest 讀，因為
+  它的 manifest 存的就是已發出的版本；nexus 先開版號 PR 再發版，manifest 存的是「要發的那一版」（今天還是 `0.0.0`），
+  照抄會在版號 PR 到 Release 之間把指南放錯目錄。撤除條件：manifest 改成記已發出版本的那天。
+
 ## Agent skills
 
 ### Issue tracker
