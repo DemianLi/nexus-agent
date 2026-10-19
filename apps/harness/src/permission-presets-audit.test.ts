@@ -300,7 +300,13 @@ describe('開著的 thread 照舊表，新開的 thread 用新表（D4、E1、G5
 
     // 另一條 thread 的日誌上的組合不動：A 切走之後 B 還是 workspace-write，A 自己切得過去、B 的 /permission 回覆不變。
     // （/permission 的回覆是從日誌折出來的，量不到 fence；真的 fence 見下一條測試。）
-    expect(await client.slashRun('a', '/permission read-only')).toMatchObject({ kind: 'success' });
+    // 背景子代理還在收尾時 slash 會被擋（rejected），等到 root 閒下來再切。
+    let switched = await client.slashRun('a', '/permission read-only');
+    for (let tries = 0; tries < 200 && switched.kind === 'rejected'; tries += 1) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+      switched = await client.slashRun('a', '/permission read-only');
+    }
+    expect(switched).toMatchObject({ kind: 'success' });
     const bAfter = await client.slashRun('b', '/permission');
     expect(bAfter.kind === 'success' && bAfter.text).toBe(
       bBefore.kind === 'success' && bBefore.text,
