@@ -198,7 +198,7 @@
   }
 }
 
-/* ── 持續狀態：orb（P0 只有 working 與 breathing）── */
+/* ── 持續狀態：orb（只剩空白 hero 的 breathing；狀態列的 working 隨 #1684 換成 SG 的 StatusGlyph）── */
 
 .agent-orb {
   --orb-size: 20px;
@@ -230,23 +230,9 @@
   opacity: 0.35;
 }
 
-.agent-orb[data-state='working']::before {
-  animation: motion-orb-spin 2.4s linear infinite;
-}
-
-.agent-orb[data-state='working']::after {
-  animation: motion-orb-spin 1.2s linear infinite reverse;
-}
-
 .agent-orb[data-state='breathing']::before,
 .agent-orb[data-state='breathing']::after {
   animation: motion-orb-breathe 3s ease-in-out infinite;
-}
-
-@keyframes motion-orb-spin {
-  to {
-    transform: rotate(360deg);
-  }
 }
 
 @keyframes motion-orb-breathe {
@@ -319,7 +305,7 @@
   }
 }
 
-/* ── 持續狀態：狀態列 shimmer ── */
+/* ── 持續狀態：shimmer（只剩待辦進行中那一項；狀態列與思考過程換成 SG 的 `.status-shimmer`，#1684、#1683。去留記在 #1687）── */
 
 .text-shimmer {
   background: linear-gradient(
@@ -348,7 +334,7 @@
  * 位移／縮放／模糊拿掉，留 150 的透明度；尺寸瞬間到位；循環動畫停在一格；狀態不靠動效表達。
  *
  * 每條都帶 `:root:root` 前綴：補回原型 `:root[data-reduce-motion]` 的 (0,2,0) specificity。拿掉它，
- * `.agent-orb[data-state='working']::before`、`[data-kind='pending'][data-active='true']` 這類帶狀態的選擇器
+ * `.agent-orb[data-state='breathing']::before`、`[data-kind='pending'][data-active='true']` 這類帶狀態的選擇器
  * 就比這裡的強，reduced-motion 會無聲失效（`scripts/check-built-css.mjs` 比對 specificity）。
  */
 @media (prefers-reduced-motion: reduce) {
@@ -407,11 +393,7 @@
     animation: none;
   }
 
-  /* orb：working 停在轉了一點的角度，breathing 停在呼吸中段 */
-  :root:root .agent-orb[data-state='working']::before {
-    transform: rotate(30deg);
-  }
-
+  /* orb：breathing 停在呼吸中段 */
   :root:root .agent-orb[data-state='breathing']::before,
   :root:root .agent-orb[data-state='breathing']::after {
     transform: scale(0.91);

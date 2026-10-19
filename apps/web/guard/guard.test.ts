@@ -3314,3 +3314,280 @@ describe('瀏覽器量推理列的行為與覆寫（#1683）', () => {
     }
   });
 });
+
+// ---------- 狀態列（#1684，`?overlay=turn-status`） ----------
+
+const STATUS_RUNNING = '[data-guard-status="running"]';
+const TURN = `${STATUS_RUNNING} [data-slot="turn-status"]`;
+const TURN_LABEL = `${TURN} .status-shimmer`;
+const TURN_ELAPSED = `${STATUS_RUNNING} [data-testid="running-elapsed"]`;
+const TURN_GLYPH = `${TURN} [data-slot="status-glyph"]`;
+
+/** glyph 三個 circle 的 `[[cx, cy, r, opacity], …]`：vendor `draw` 每幀改這四個（同 `scripts/measure-frames.mjs`）。 */
+const readPose = (page: Page) =>
+  page.$$eval(`${TURN_GLYPH} circle`, (circles) =>
+    circles.map((c) => ['cx', 'cy', 'r', 'opacity'].map((a) => c.getAttribute(a) ?? '')),
+  );
+const openingPoseIn = (page: Page, activity: string) =>
+  page.evaluate(
+    (a) => (window as unknown as { __openingPose: (a: string) => string[][] }).__openingPose(a),
+    activity,
+  );
+const setActivity = (page: Page, activity: string) =>
+  page.evaluate(
+    (a) => (window as unknown as { __setTurnActivity: (a: string) => void }).__setTurnActivity(a),
+    activity,
+  );
+
+/** label 的字色、漸層與往上疊的底（漸層畫在 label 自己身上、只透過字露出來，底從上一層開始疊；自己那層只帶 opacity）。 */
+const readLabel = (page: Page) =>
+  page.$eval(TURN_LABEL, (el) => {
+    const own = getComputedStyle(el);
+    const chain = [
+      { backgroundColor: 'rgba(0, 0, 0, 0)', backgroundImage: 'none', opacity: own.opacity },
+    ];
+    for (let node = el.parentElement; node !== null; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      chain.push({
+        backgroundColor: style.backgroundColor,
+        backgroundImage: style.backgroundImage,
+        opacity: style.opacity,
+      });
+    }
+    return {
+      name: el.textContent ?? '',
+      color: own.color,
+      clip: own.backgroundClip,
+      image: own.backgroundImage,
+      animation: `${own.animationName} ${own.animationDuration}`,
+      mutedColor: (() => {
+        const probe = document.createElement('span');
+        probe.style.color = 'var(--muted-foreground)';
+        document.body.append(probe);
+        const color = getComputedStyle(probe).color;
+        probe.remove();
+        return color;
+      })(),
+      chain,
+    };
+  });
+
+describe.each(
+  MODES.flatMap((mode) => (['light', 'dark'] as const).map((theme) => [mode, theme] as const)),
+)('瀏覽器量狀態列（#1684）：%s、%s', (mode, theme) => {
+  test('平常：label 是 SG 的 status-shimmer（sg-status-shimmer 2.4s），三個色標對底色都過 4.5；經過時間過 4.5', async () => {
+    const page = await openOverlay('turn-status', theme, {
+      mode,
+      marks: { [TURN_LABEL]: {}, [TURN_ELAPSED]: { 'data-guard-text': 'turn-elapsed' } },
+    });
+    try {
+      const label = await readLabel(page);
+      const stops = [...label.image.matchAll(/(?:oklch|oklab|rgba?)\([^)]*\)/g)].map((m) => m[0]);
+      const ratios = stops.map((stop) => ({ stop, ...worstOn(stop, label.chain) }));
+      report[`turn-status:${mode}:${theme}:shimmer`] = {
+        ...label,
+        chain: undefined,
+        stops: ratios.map((r) => `${r.stop} ${round(r.ratio)}（${r.on}）`),
+      };
+      // 量具自檢：字真的是透明的、顏色來自三個色標的漸層、動畫在跑。
+      expect(label).toMatchObject({
+        name: '執行中…',
+        color: 'rgba(0, 0, 0, 0)',
+        clip: 'text',
+        animation: 'sg-status-shimmer 2.4s',
+      });
+      expect(stops).toHaveLength(3);
+      expect(
+        ratios
+          .filter((r) => !(r.ratio >= TEXT_MIN))
+          .map((r) => `${r.stop} ${round(r.ratio)}（${r.on}）`),
+      ).toEqual([]);
+      const elapsed = (await collectTexts(page)).filter((t) => t.name === 'turn-elapsed');
+      expect(elapsed).toHaveLength(1);
+      expectTexts(elapsed, ['turn-elapsed'], `turn-status:${mode}:${theme}`);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('減少動態：shimmer 停住、沒有漸層，字色等於 --muted-foreground、過 4.5', async () => {
+    const page = await openOverlay('turn-status', theme, {
+      mode,
+      reducedMotion: true,
+      marks: { [TURN_LABEL]: {} },
+    });
+    try {
+      const label = await readLabel(page);
+      const contrast = worstOn(label.color, label.chain);
+      report[`turn-status:${mode}:${theme}:shimmer-reduced`] = {
+        ...label,
+        chain: undefined,
+        ratio: round(contrast.ratio),
+      };
+      expect(label).toMatchObject({ name: '執行中…', image: 'none', animation: 'none 0s' });
+      expect(label.color).toBe(label.mutedColor);
+      expect(contrast.ratio).toBeGreaterThanOrEqual(TEXT_MIN);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe('瀏覽器量狀態列的行為（#1684）', () => {
+  const onlyRunning = (page: Page) =>
+    page.goto(`${page.url()}&only=running`).then(() => page.waitForSelector(TURN_GLYPH));
+
+  test('live region 不變動：glyph 照常在動，[role="status"] 3 秒內沒有 childList／characterData 的變動', async () => {
+    const page = await openOverlay('turn-status', 'light', { marks: { [TURN_GLYPH]: {} } });
+    try {
+      const result = await page.evaluate(
+        (selector) =>
+          new Promise<{ mutations: number; poses: number }>((resolve) => {
+            const region = document.querySelector(`${selector} [role="status"]`)!;
+            let mutations = 0;
+            const observer = new MutationObserver((records) => {
+              mutations += records.filter(
+                (r) => r.type === 'childList' || r.type === 'characterData',
+              ).length;
+            });
+            observer.observe(region, { childList: true, characterData: true, subtree: true });
+            const poses = new Set<string>();
+            const timer = setInterval(() => {
+              poses.add(
+                [...region.querySelectorAll('circle')]
+                  .map((c) => ['cx', 'cy', 'r', 'opacity'].map((a) => c.getAttribute(a)).join(','))
+                  .join(' '),
+              );
+            }, 250);
+            setTimeout(() => {
+              clearInterval(timer);
+              observer.disconnect();
+              resolve({ mutations, poses: poses.size });
+            }, 3000);
+          }),
+        STATUS_RUNNING,
+      );
+      report['turn-status:live-region-mutations'] = result;
+      // 量具自檢：這段期間 glyph 真的在動（不然「0 筆變動」是因為什麼都沒在跑）。
+      expect(result.poses).toBeGreaterThan(1);
+      expect(result.mutations).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('AX 樹：只有一個 status 節點，讀得到的字只有「執行中…」，沒有數字；glyph 不在樹裡', async () => {
+    const page = await openOverlay('turn-status', 'light', { marks: { [TURN_GLYPH]: {} } });
+    try {
+      await onlyRunning(page);
+      await settle(page);
+      const cdp = await page.context().newCDPSession(page);
+      const { nodes } = (await cdp.send('Accessibility.getFullAXTree')) as {
+        nodes: { ignored: boolean; role?: { value: string }; name?: { value: string } }[];
+      };
+      const visible = nodes.filter((n) => !n.ignored);
+      const result = {
+        status: visible.filter((n) => n.role?.value === 'status').length,
+        texts: visible
+          .filter((n) => n.role?.value === 'StaticText')
+          .map((n) => n.name?.value ?? ''),
+        graphics: visible
+          .map((n) => n.role?.value ?? '')
+          .filter((role) => /svg|graphics|image|img/i.test(role)),
+      };
+      report['turn-status:ax'] = result;
+      // 量具自檢：經過時間真的畫出來了（aria-hidden，不在樹裡）。
+      expect(await page.$eval(TURN_ELAPSED, (el) => el.textContent)).toMatch(/秒/);
+      expect(result).toEqual({ status: 1, texts: ['執行中…'], graphics: [] });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('glyph：平常在動；減少動態停在起始姿勢、1 秒內不動；換 activity 立刻跳到新的起始姿勢', async () => {
+    const page = await openOverlay('turn-status', 'light', { marks: { [TURN_GLYPH]: {} } });
+    try {
+      const a = await readPose(page);
+      await page.waitForTimeout(300);
+      const b = await readPose(page);
+      report['turn-status:glyph-normal'] = { a, b };
+      expect(b).not.toEqual(a);
+    } finally {
+      await page.close();
+    }
+    const reduced = await openOverlay('turn-status', 'light', {
+      reducedMotion: true,
+      marks: { [TURN_GLYPH]: {} },
+    });
+    try {
+      const a = await readPose(reduced);
+      await reduced.waitForTimeout(1000);
+      const b = await readPose(reduced);
+      const thinking = await openingPoseIn(reduced, 'thinking');
+      await setActivity(reduced, 'running');
+      await reduced.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+      const running = await readPose(reduced);
+      const expected = await openingPoseIn(reduced, 'running');
+      report['turn-status:glyph-reduced'] = { a, b, thinking, running, expected };
+      expect(thinking).not.toEqual(expected);
+      expect([a, b]).toEqual([thinking, thinking]);
+      expect(running).toEqual(expected);
+    } finally {
+      await reduced.close();
+    }
+  });
+
+  test.each([375, 1280])(
+    '高度不跳：%dpx 寬，就緒、執行中、等你回答三種狀態列一樣高',
+    async (width) => {
+      const page = await openOverlay('turn-status', 'light', {
+        viewport: { width, height: 800 },
+        marks: { '[data-guard-status]': {} },
+      });
+      try {
+        const heights = await page.$$eval('[data-guard-status]', (els) =>
+          els.map((el) => [
+            el.getAttribute('data-guard-status'),
+            Math.round(el.firstElementChild!.getBoundingClientRect().height * 100) / 100,
+          ]),
+        );
+        report[`turn-status:${width}:heights`] = heights;
+        expect(heights.map(([name]) => name)).toEqual(['idle', 'running', 'awaiting']);
+        expect(new Set(heights.map(([, h]) => h)).size).toBe(1);
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
+  test('375 寬：狀態列加經過時間不撐破欄寬、label 一行、整頁沒有橫向捲動', async () => {
+    const page = await openOverlay('turn-status', 'light', {
+      viewport: { width: 375, height: 800 },
+      marks: { [TURN_ELAPSED]: {} },
+    });
+    try {
+      const box = await page.evaluate(
+        ({ row, label, elapsed }) => {
+          const column = document.querySelector(row)!.getBoundingClientRect();
+          const l = document.querySelector(label)!.getBoundingClientRect();
+          const e = document.querySelector(elapsed)!.getBoundingClientRect();
+          return {
+            columnRight: column.right,
+            elapsedRight: e.right,
+            labelHeight: l.height,
+            // TurnStatus 那一列是 `h-5`；label 折行就會比它高。
+            rowHeight: document.querySelector(label)!.parentElement!.getBoundingClientRect().height,
+            pageOverflow: document.documentElement.scrollWidth - window.innerWidth,
+          };
+        },
+        { row: STATUS_RUNNING, label: TURN_LABEL, elapsed: TURN_ELAPSED },
+      );
+      report['turn-status:375'] = box;
+      expect(box.elapsedRight).toBeLessThanOrEqual(box.columnRight);
+      expect(box.labelHeight).toBeLessThanOrEqual(box.rowHeight);
+      expect(box.pageOverflow).toBeLessThanOrEqual(0);
+    } finally {
+      await page.close();
+    }
+  });
+});
