@@ -171,6 +171,8 @@ const WORKER: PluginEntry = {
 type Extra = Partial<Pick<CreateNexusAgentOptions, 'backgroundSubagents' | 'streamRetry'>> & {
   /** 上一個行程留下的事件：新行程從它續接（`SessionRegistry` 的 `rootSeed`）。 */
   readonly seed?: readonly SessionEvent[];
+  /** 模型的 `temperature`；省略即 0.3。 */
+  readonly temperature?: number;
 };
 
 /** 產品組裝接上本機假端點與一份 root 日誌；`close` 收掉三樣。 */
@@ -183,7 +185,7 @@ async function assemble(plugins: readonly PluginEntry[], systemPrompt: string, e
       model: 'fake',
       apiKey: 'sk-loopback',
       maxRetries: 0,
-      temperature: 0.3,
+      temperature: extra.temperature ?? 0.3,
       configuration: { baseURL: upstream.baseURL },
     }),
     backend: new ContainedFilesystemBackend({ rootDir: root }),
@@ -492,6 +494,21 @@ describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650�
         expect.objectContaining({ reason: 'initial', modelCall: second.seq }),
       ]);
     }
+  });
+
+  it('設定寫了 temperature: -0：照送，header 記 0（供應商收到的就是 0；寫入那一關拒收 -0）', async () => {
+    const { agent, sessions, bodies, close } = await assemble([], '你是測試助手。', {
+      ...retrying,
+      temperature: -0,
+    });
+    try {
+      await runTurn(agent, '一', quiet, sessions.root);
+    } finally {
+      await close();
+    }
+    expect(bodies).toHaveLength(1);
+    const header = eventsOf(sessions.root.events, 'request/header')[0]!.header;
+    expect(Object.is(header.config.temperature, 0)).toBe(true);
   });
 
   it('工具參數巢狀超過寫入上限（600 層，#1661）：這次請求失敗、不是爆堆疊，這條 thread 之後每一次都一樣', async () => {
