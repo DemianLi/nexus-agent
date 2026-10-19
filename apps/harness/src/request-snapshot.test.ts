@@ -12,6 +12,7 @@
  * 3. **記錄點在模型呼叫上，不在 middleware 這一層**：基座的 `memory` 注入發生在我們的 middleware 之後，
  *    站在外面看的 middleware 看不到記憶內容，快照看得到；最內側改寫提示詞與工具的 middleware，快照也跟著。
  * 4. **不進遙測**：見 `packages/nexus-core/src/session-telemetry-coordinator.test.ts`；這裡只確認它確實是 `ignorable`。
+ * 5. **記不進去，這次請求不送**（[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)）：端點收到 0 個請求，呼叫原樣拋出寫入的錯。
  *
  * **零憑證、零外部連線**。
  */
@@ -23,17 +24,18 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { MemorySaver } from '@langchain/langgraph';
+import { tool } from '@langchain/core/tools';
 import { ChatOpenAI } from '@langchain/openai';
 import { SessionRegistry } from '@nexus/core';
-import type { PluginEntry, SessionEvent, SessionEventMap } from '@nexus/core';
+import type { PluginEntry, SessionEvent, SessionEventMap, SessionLog } from '@nexus/core';
 import { createEchoPlugin } from './echo.fixture.js';
 import { createMemoryPlugin } from '@nexus/plugin-memory';
 import { createPlanModePlugin, DEFAULT_PLAN_GUIDANCE } from '@nexus/plugin-plan-mode';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
 import type { CreateNexusAgentOptions } from './agent-factory.js';
-import { runRepl } from './cli.js';
+import { runRepl, runTurn } from './cli.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 
 /** 一次請求的 body 裡我們關心的那幾格。 */
@@ -166,16 +168,13 @@ const WORKER: PluginEntry = {
   },
 };
 
-/** 餵幾行進 REPL，收回日誌與端點收到的 body。 */
-async function run(
-  lines: string,
-  plugins: readonly PluginEntry[],
-  systemPrompt = '你是測試助手。',
-  extra: Partial<Pick<CreateNexusAgentOptions, 'backgroundSubagents'>> & {
-    /** 上一個行程留下的事件：新行程從它續接（`SessionRegistry` 的 `rootSeed`）。 */
-    readonly seed?: readonly SessionEvent[];
-  } = {},
-) {
+type Extra = Partial<Pick<CreateNexusAgentOptions, 'backgroundSubagents'>> & {
+  /** 上一個行程留下的事件：新行程從它續接（`SessionRegistry` 的 `rootSeed`）。 */
+  readonly seed?: readonly SessionEvent[];
+};
+
+/** 產品組裝接上本機假端點與一份 root 日誌；`close` 收掉三樣。 */
+async function assemble(plugins: readonly PluginEntry[], systemPrompt: string, extra: Extra) {
   const upstream = await fakeEndpoint();
   const root = await mkdtemp(join(tmpdir(), 'nexus-snap-'));
   await writeFile(join(root, 'AGENTS.md'), MEMORY_TEXT);
@@ -200,6 +199,22 @@ async function run(
     extra.seed === undefined ? {} : { rootSeed: extra.seed },
   );
   const detach = attachSession(sessions);
+  const close = async () => {
+    detach();
+    await dispose();
+    await upstream.close();
+  };
+  return { agent, commands, sessions, bodies: upstream.bodies, close };
+}
+
+/** 餵幾行進 REPL，收回日誌與端點收到的 body。 */
+async function run(
+  lines: string,
+  plugins: readonly PluginEntry[],
+  systemPrompt = '你是測試助手。',
+  extra: Extra = {},
+) {
+  const { agent, commands, sessions, bodies, close } = await assemble(plugins, systemPrompt, extra);
   const input = new PassThrough();
   input.end(lines);
   try {
@@ -211,11 +226,9 @@ async function run(
       commands,
     );
   } finally {
-    detach();
-    await dispose();
-    await upstream.close();
+    await close();
   }
-  return { events: [...sessions.root.events], bodies: upstream.bodies };
+  return { events: [...sessions.root.events], bodies };
 }
 
 describe('請求快照 = 端點實際收到的（產品組裝）', () => {
@@ -377,5 +390,134 @@ describe('記錄點在模型呼叫上，不在 middleware 這一層', () => {
         parameters: tool.function.parameters,
       })),
     );
+  });
+});
+
+describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650）', () => {
+  const quiet = { log: () => {}, error: () => {} };
+
+  /** 讓 `type` 那種事件的**第一次**寫入拋 `broken`，其餘照寫。 */
+  function breakFirst(log: SessionLog, type: string, broken: Error): void {
+    const append = log.append.bind(log);
+    let armed = true;
+    (log as { append: unknown }).append = (...args: Parameters<SessionLog['append']>) => {
+      if (armed && args[0] === type) {
+        armed = false;
+        throw broken;
+      }
+      return append(...args);
+    };
+  }
+
+  /** 第一輪撞上壞掉的寫入，第二輪照常；分開收兩輪的日誌與端點請求數。 */
+  async function failThenSucceed(type: 'request/header' | 'request/system') {
+    const broken = new Error(`${type} 寫不進去`);
+    const { agent, sessions, bodies, close } = await assemble(
+      [createEchoPlugin()],
+      '你是測試助手。',
+      {},
+    );
+    breakFirst(sessions.root, type, broken);
+    // LangChain 重拋 handler 的錯之前自己印一行（`@langchain/core` `callbacks/manager.js:376`）：收起來，也斷言它真的印了。
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      const thrown = await runTurn(agent, '一', quiet, sessions.root).then(
+        () => undefined,
+        (error: unknown) => error,
+      );
+      const first = { events: [...sessions.root.events], requests: bodies.length };
+      const lines = printed.mock.calls.map((call) => call.map(String).join(' '));
+      await runTurn(agent, '二', quiet, sessions.root);
+      return { broken, thrown, first, lines, events: [...sessions.root.events], bodies };
+    } finally {
+      printed.mockRestore();
+      await close();
+    }
+  }
+
+  /**
+   * 沿 `cause` 往下找到最裡面那一個。基座的 `createAgent` 把 middleware 裡拋的錯包成 `MiddlewareError`、原錯放在
+   * `cause`（`langchain` `dist/agents/errors.js:62-81`），每一種模型呼叫的錯到這一層都長這樣，不是這張卡的形狀。
+   */
+  const innermost = (error: unknown): unknown =>
+    error instanceof Error && error.cause !== undefined ? innermost(error.cause) : error;
+
+  /** 兩種情境共有的：沒送、原樣拋、有配對的 error 收尾、沒有重試、LangChain 印了一行。 */
+  function expectNotSent(result: Awaited<ReturnType<typeof failThenSucceed>>): void {
+    // 先斷言沒送：這一格是卡的判準，突變（吞掉錯、`raiseError` 改回 false）都先紅在這裡。
+    expect(result.first.requests).toBe(0);
+    expect(innermost(result.thrown)).toBe(result.broken);
+    const starts = eventsOf(result.first.events, 'model/start');
+    expect(starts).toHaveLength(1);
+    expect(eventsOf(result.first.events, 'model/end')).toEqual([
+      expect.objectContaining({ outcome: 'error', modelCall: starts[0]!.seq }),
+    ]);
+    expect(result.first.events.some((event) => event.type.startsWith('llm/retry'))).toBe(false);
+    expect(eventsOf(result.first.events, 'turn/failed')).toEqual([
+      expect.objectContaining({ message: result.broken.message }),
+    ]);
+    // chat model 也標 `handleLLMStart`（`manager.js` 那一行寫死的字），一行、帶原錯。
+    expect(result.lines).toEqual([
+      `Error in handler RequestSnapshotHandler, handleLLMStart: Error: ${result.broken.message}`,
+    ]);
+    // 第二輪照常送出，那一份快照指回第二次呼叫。
+    expect(result.bodies).toHaveLength(1);
+  }
+
+  it('request/header 寫不進去：這次不送；system 已先記下，下一次只補記 header（initial）', async () => {
+    const result = await failThenSucceed('request/header');
+    expectNotSent(result);
+    // system 寫在 header 之前，那一顆已經落下、指向沒送出的那次呼叫（PR 內文交 PM 定）。
+    expect(eventsOf(result.first.events, 'request/system')).toHaveLength(1);
+    expect(eventsOf(result.first.events, 'request/header')).toHaveLength(0);
+
+    const second = eventsOf(result.events, 'model/start')[1]!;
+    expect(eventsOf(result.events, 'request/system')).toHaveLength(1);
+    expect(eventsOf(result.events, 'request/header')).toEqual([
+      expect.objectContaining({ reason: 'initial', modelCall: second.seq }),
+    ]);
+  });
+
+  it('request/system 寫不進去：這次不送、header 沒試；下一次兩顆都記（initial）', async () => {
+    const result = await failThenSucceed('request/system');
+    expectNotSent(result);
+    expect(result.first.events.some((event) => event.type.startsWith('request/'))).toBe(false);
+
+    const second = eventsOf(result.events, 'model/start')[1]!;
+    for (const type of ['request/system', 'request/header'] as const) {
+      expect(eventsOf(result.events, type)).toEqual([
+        expect.objectContaining({ reason: 'initial', modelCall: second.seq }),
+      ]);
+    }
+  });
+
+  it('工具參數巢狀超過寫入上限（600 層，#1661）：這次請求失敗、不是爆堆疊，這條 thread 之後每一次都一樣', async () => {
+    // 每層 `{ type, properties: { next } }` 佔兩層，400 層 ≈ 800 層巢狀。
+    let schema: Record<string, unknown> = { type: 'string' };
+    for (let level = 0; level < 400; level++) {
+      schema = { type: 'object', properties: { next: schema } };
+    }
+    const deep: PluginEntry = {
+      plugin: {
+        name: 'deep-tool',
+        apply: (registry) =>
+          void registry.tools.register(
+            tool(() => '好', { name: 'deep', description: '很深。', schema: schema as never }),
+          ),
+      },
+    };
+    const { agent, sessions, bodies, close } = await assemble([deep], '你是測試助手。', {});
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      for (const text of ['一', '二']) {
+        await expect(runTurn(agent, text, quiet, sessions.root)).rejects.toThrow(/超過上限 600 層/);
+      }
+      expect(bodies).toHaveLength(0);
+      expect(eventsOf(sessions.root.events, 'request/header')).toHaveLength(0);
+      expect(eventsOf(sessions.root.events, 'turn/failed')).toHaveLength(2);
+    } finally {
+      printed.mockRestore();
+      await close();
+    }
   });
 });

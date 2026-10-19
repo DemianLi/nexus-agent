@@ -10,7 +10,7 @@ import type { AIMessage } from '@langchain/core/messages';
 import { HumanMessage, SystemMessage } from '@langchain/core/messages';
 import type { Runnable } from '@langchain/core/runnables';
 import { FakeListChatModel } from '@langchain/core/utils/testing';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   createRequestSnapshotRecorder,
@@ -234,23 +234,22 @@ describe('recordRequestSnapshot：變了才記', () => {
   });
 });
 
-describe('記不進去不扳倒模型呼叫，也不無聲吞掉（#1526）', () => {
-  it('handler 接住的錯講一條 warn、模型照樣回；下一次記得進去就照記', async () => {
+describe('記不進去，這次請求不送（#1726，照 dsh agent.ts:637-650）', () => {
+  it('handler 的錯原樣拋出、模型沒被叫；基準不前進，下一次記得進去照記 initial', async () => {
     const log = new SessionLog('s');
     const append = log.append.bind(log);
+    const broken = new Error('壞了');
     let fail = true;
     (log as { append: unknown }).append = (...args: Parameters<typeof log.append>) => {
       if (fail) {
         fail = false;
-        throw new Error('壞了');
+        throw broken;
       }
       return append(...args);
     };
-    const warnings: string[] = [];
-    const recorder = createRequestSnapshotRecorder(
-      { forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }) },
-      (message) => warnings.push(message),
-    );
+    const recorder = createRequestSnapshotRecorder({
+      forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }),
+    });
     const hook = (
       recorder as unknown as {
         wrapModelCall: (
@@ -259,24 +258,32 @@ describe('記不進去不扳倒模型呼叫，也不無聲吞掉（#1526）', ()
         ) => Promise<unknown>;
       }
     ).wrapModelCall;
+    const model = new FakeListChatModel({ responses: ['好'] });
+    let generated = 0;
+    const generate = model._generate.bind(model);
+    model._generate = (...args: Parameters<typeof model._generate>) => {
+      generated += 1;
+      return generate(...args);
+    };
     // 走真的 callback：middleware 把 handler 綁在模型上，模型被叫時 `handleChatModelStart` 才跑。
     const call = () =>
-      hook(
-        {
-          model: new FakeListChatModel({ responses: ['好'] }),
-          messages: [],
-          runtime: { configurable: {} },
-        },
-        (next) => next.model.invoke(messages[0]!),
+      hook({ model, messages: [], runtime: { configurable: {} } }, (next) =>
+        next.model.invoke(messages[0]!),
       );
+    // LangChain 重拋前自己印一行 console.error（`callbacks/manager.js:376`），收起來不讓它弄髒輸出，順便斷言它真的印了。
+    const printed = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    try {
+      await expect(call()).rejects.toBe(broken);
+      expect(generated).toBe(0);
+      expect(kinds(log)).toEqual([]);
+      expect(printed).toHaveBeenCalledTimes(1);
+    } finally {
+      printed.mockRestore();
+    }
 
     const reply = (await call()) as AIMessage;
     expect(reply.content).toBe('好');
-    expect(warnings).toEqual(['請求快照記不進去，這次不記：壞了']);
-    expect(kinds(log)).toEqual([]);
-
-    await call();
+    expect(generated).toBe(1);
     expect(kinds(log)).toEqual(['request/system:initial', 'request/header:initial']);
-    expect(warnings).toHaveLength(1);
   });
 });
