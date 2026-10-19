@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { runCli } from './cli.js';
 import { createCliAgent } from './assembly-root.js';
-import { foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { toAgentInvocation } from './messages.js';
 import { loadDefaultPlugins } from './plugin-config.js';
@@ -96,7 +96,7 @@ async function serveWithLog(env: NodeJS.ProcessEnv) {
   const lines: string[] = [];
   const server = (await runServe({
     argv: ['--port', '0'],
-    log: (line) => lines.push(line),
+    log: bodyLog(lines),
     env,
   })) as RunningServe;
   running = server;

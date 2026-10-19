@@ -252,6 +252,12 @@ export const PROTECTED_ENTRY_REASONS: ReadonlyMap<string, string> = new Map([
       '要放寬，把數值調大；要關掉閒置逐出，把 `idleEvictAfterMs` 設成 0。',
   ],
   [
+    '#settings/logger-console',
+    '這一列不裝任何東西，只講伺服器日誌的等級門檻與格式。關掉它不會讓日誌停下來' +
+      '——`startupSetting` 把關掉的那一列當成沒有那一列，值於是回到 schema 的預設（info、文字格式），' +
+      '日誌照樣印，只會讓這份設定讀起來像把日誌關了。要少印，把 `levels.default` 調高。',
+  ],
+  [
     '#settings/tool-result-stash',
     '這一列不裝任何東西，只講過大工具結果暫存的根目錄與保留天數。關掉它不會讓工具結果不再暫存' +
       '——`startupSetting` 把關掉的那一列當成沒有那一列，值於是回到 schema 的預設，' +

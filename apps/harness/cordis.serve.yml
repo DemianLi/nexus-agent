@@ -16,3 +16,18 @@
 # 「沒有這份紀錄」。上限（`timeoutMs` 等）見 `--dump-config-schema`。
 - id: workspace-changes
   name: '@nexus/plugin-workspace-changes'
+
+# 伺服器日誌怎麼印（#1534）：等級門檻與格式。**起動期讀一次、改了要重啟**；只有 serve 載（CLI 的輸出走 `Printer`，不歸這一列）。
+# 每一行伺服器日誌都帶等級（error／warn／info／debug），`levels` 以 logger 名為鍵、值是**等級名稱**（不是數字：dsh 的 fork 與我們 vendor 的上游
+# 同一個數字意思不同，見 `src/settings/logger-console.ts` 檔頭偏離一），`default` 是沒單獨寫的 logger 的門檻。出廠 `default: info`＝印出來的行數和沒有這一列時一樣。
+# 共用主機只留警告以上：在自己的 `~/.nexus-agent/cordis.patch.yml` 把 `levels` 改成 `{ default: warn }`。
+# `format: json` 時一行一個 JSON 物件（`ts`、`level`、`logger`、`msg`），訊息裡的換行留在 `msg` 字串裡；欄位表與注意事項見 docs/operations.md「伺服器日誌的等級與格式」。
+# `showTime` 設成 `''` 就不印時間前綴（journald 底下它自己會加）。`maxLength` 對每一行截斷，JSON 的 `msg` 也一樣。
+# **這一列關不掉**：全部格都有 schema 預設，關掉只會回到同一組值，讀起來卻像把日誌關了，所以在 `PROTECTED_ENTRY_NAMES` 上（同 `thread-capacity`）。
+- id: logger-console
+  name: '#settings/logger-console'
+  config:
+    format: text
+    levels:
+      default: info
+    colors: false

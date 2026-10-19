@@ -119,8 +119,10 @@ export interface FailureRecorderOptions {
   readonly path: string;
   /** 行程的有效帳號。 */
   readonly effective: string;
-  /** 伺服器日誌。 */
+  /** 伺服器日誌（info）。 */
   readonly log: (line: string) => void;
+  /** 「沒寫成」那幾句的出口（warn，#1534）；省略就走 `log`。 */
+  readonly warn?: (line: string) => void;
   /** 算 `at`，測試給固定的。 */
   readonly now?: () => Date;
   /** 等鎖多久，省略即 {@link FAILURE_RECORD_WAIT_MS}。 */
@@ -135,6 +137,7 @@ export interface FailureRecorderOptions {
  */
 export function createFailureRecorder(options: FailureRecorderOptions): FailureRecorder {
   const { path, effective, log } = options;
+  const warn = options.warn ?? log;
   const waitMs = options.waitMs ?? FAILURE_RECORD_WAIT_MS;
   // 「沒寫成」那一句，同一列歸因到同一筆只講一次：home 唯讀時不要每條 thread 都講一遍。
   const complained = new Set<string>();
@@ -146,7 +149,7 @@ export function createFailureRecorder(options: FailureRecorderOptions): FailureR
     complained.add(key);
     const why = error instanceof Error ? error.message : String(error);
     // 錯誤文字是檔案系統或鎖的，不是設定值；原因原文不在這裡。
-    log(
+    warn(
       `[變更紀錄] ${id} 掛不上，但這一筆 failed 沒寫成（歸因到紀錄第 ${String(seq)} 筆）：${why}`,
     );
   }
@@ -240,7 +243,7 @@ export function createFailureRecorder(options: FailureRecorderOptions): FailureR
       }
     } catch (error) {
       const why = error instanceof Error ? error.message : String(error);
-      log(`[變更紀錄] ${row.id} 自己停用了自己，但這一筆 self-disabled 沒寫成：${why}`);
+      warn(`[變更紀錄] ${row.id} 自己停用了自己，但這一筆 self-disabled 沒寫成：${why}`);
     }
   }
 

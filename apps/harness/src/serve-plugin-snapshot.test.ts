@@ -12,7 +12,7 @@ import { join } from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { parse as parseYaml } from 'yaml';
 
-import { foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { seedHomePatch, writeJournalText } from './plugin-journal.fixture.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
@@ -60,7 +60,7 @@ function home(): Home {
 async function start(env: NodeJS.ProcessEnv, lines: string[]): Promise<RunningServe> {
   const server = (await runServe({
     argv: ['--port', '0'],
-    log: (line) => lines.push(line),
+    log: bodyLog(lines),
     env,
   })) as RunningServe;
   running = server;
@@ -85,7 +85,7 @@ async function say(server: RunningServe, thread: string): Promise<string | undef
 /** `--dump-config` 印出來的列 id（同一個 home、同一組 patch）。 */
 async function dumpedIds(env: NodeJS.ProcessEnv): Promise<string[]> {
   const lines: string[] = [];
-  const result = await runServe({ argv: ['--dump-config'], log: (line) => lines.push(line), env });
+  const result = await runServe({ argv: ['--dump-config'], log: bodyLog(lines), env });
   expect(result).toBeUndefined();
   const rows = parseYaml(lines.join('\n')) as { id?: string; name: string }[];
   return rows.map((row) => row.id ?? row.name);

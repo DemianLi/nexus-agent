@@ -29,7 +29,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runCli } from './cli.js';
 import { createCliAgent } from './assembly-root.js';
-import { serveClient, shippedPlugins } from './fixtures.js';
+import { bodyLog, serveClient, shippedPlugins } from './fixtures.js';
 import { DEFAULT_LIVE_MODEL_ENTRY, DEFAULT_LIVE_MODEL_ID, LIVE_API_KEY_ENV } from './live-model.js';
 import { loadDefaultPlugins } from './plugin-config.js';
 import { runServe } from './serve.js';
@@ -845,7 +845,7 @@ describe('那一列寫壞了：起動期就講，照樣起來、沒有模型標�
     const logged: string[] = [];
     running = (await runServe({
       argv: ['--port', '0', '--patch', await writePatch(BAD)],
-      log: (line) => logged.push(line),
+      log: bodyLog(logged),
       env: {},
     })) as RunningServe;
     expect(logged.filter((line) => DROPPED.test(line))).toHaveLength(1);

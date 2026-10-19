@@ -15,7 +15,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { runCli } from './cli.js';
-import { foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { resolveInvariantLogPath } from './assembly-root.js';
 import { harnessInvariantLogPath } from './harness-home.js';
 import { createInvariantLog, MAX_MESSAGE_CHARS } from './invariant-log.js';
@@ -70,7 +70,7 @@ function recorder() {
   const err: string[] = [];
   return {
     printer: {
-      log: (line: string) => void out.push(line),
+      log: bodyLog(out),
       error: (line: string) => void err.push(line),
     },
     stdout: () => out.join('\n'),
@@ -312,12 +312,13 @@ describe('CLI 那條路', () => {
 describe('serve 那條路', () => {
   const PATCH = new URL('./serve-session-wiring.patch.yml', import.meta.url).pathname;
 
-  it('thread 的 installed 與探針的違規都進了同一個檔，sessionId 是 threadId，console.error 照舊', async () => {
+  it('thread 的 installed 與探針的違規都進了同一個檔，sessionId 是 threadId，違規走伺服器日誌 error 等級', async () => {
     const home = tempHome();
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const serverLines: string[] = [];
     running = await runServe({
       argv: ['--port', '0', '--patch', PATCH],
-      log: () => undefined,
+      log: bodyLog(serverLines),
       env: { NEXUS_AGENT_HOME: home },
     });
     const client = await serveClient(running as RunningServe);
@@ -336,19 +337,23 @@ describe('serve 那條路', () => {
     }
     expect(violations.length).toBeGreaterThan(0);
     expect(violations[0]).toMatchObject({ sessionId: 'log-thread', package: WIRING_PROBE_PACKAGE });
-    // 違規本身仍然走 runner 預設的 console.error，沒有被旁路取代。
-    expect(spy.mock.calls.map((call) => String(call[0]))).toContain(
+    // 違規本身仍然報出來，沒有被旁路取代：走伺服器日誌的 error 等級（#1534），不再是 runner 預設的 console.error。
+    expect(serverLines).toContain(
+      `invariant violated by "${WIRING_PROBE_PACKAGE}": 看到 turn/start`,
+    );
+    expect(spy.mock.calls.map((call) => String(call[0]))).not.toContain(
       `invariant violated by "${WIRING_PROBE_PACKAGE}": 看到 turn/start`,
     );
   });
 
-  it('落盤關掉就不寫：沒有記錄檔，違規照舊走 console.error', async () => {
+  it('落盤關掉就不寫：沒有記錄檔，違規走伺服器日誌 error 等級', async () => {
     // serve 啟動時本來就會在 home 建瀏覽器會話密鑰，所以這裡問的是記錄檔，不是 home。
     const homeDir = tempHome();
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const serverLines: string[] = [];
     running = await runServe({
       argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH, '--patch', PATCH],
-      log: () => undefined,
+      log: bodyLog(serverLines),
       env: { NEXUS_AGENT_HOME: homeDir },
     });
     const client = await serveClient(running as RunningServe);
@@ -357,7 +362,10 @@ describe('serve 那條路', () => {
     await foldTurn(events);
 
     expect(existsSync(harnessInvariantLogPath({ NEXUS_AGENT_HOME: homeDir }))).toBe(false);
-    expect(spy.mock.calls.map((call) => String(call[0]))).toContain(
+    expect(serverLines).toContain(
+      `invariant violated by "${WIRING_PROBE_PACKAGE}": 看到 turn/start`,
+    );
+    expect(spy.mock.calls.map((call) => String(call[0]))).not.toContain(
       `invariant violated by "${WIRING_PROBE_PACKAGE}": 看到 turn/start`,
     );
   });

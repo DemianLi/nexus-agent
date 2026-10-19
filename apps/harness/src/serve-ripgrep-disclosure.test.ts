@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
+import { bodyLog } from './fixtures.js';
 
 // 讓「內附的不見了」那一條能換掉解析：`ripgrepStatus` 綁的是模組內部的 `resolveRgPath`，所以換的是它並餵一個會失敗的解析函式。
 vi.mock('./rg-path.js', async (importOriginal) => {
@@ -44,7 +45,7 @@ const grepLines = (lines: readonly string[]): string[] =>
 describe('啟動日誌講出 grep 的 ripgrep', () => {
   it('內附的在：印出它的絕對路徑，而且跟 grep 實際用的是同一支', async () => {
     const lines: string[] = [];
-    serve = await startScriptedServe(TURNS, { log: (line) => lines.push(line) });
+    serve = await startScriptedServe(TURNS, { log: bodyLog(lines) });
 
     expect(grepLines(lines)).toEqual([`搜尋（grep）：內附 ripgrep ${await realResolveRgPath()}`]);
   });
@@ -53,7 +54,7 @@ describe('啟動日誌講出 grep 的 ripgrep', () => {
     process.env['PATH'] = await mkdtemp(join(tmpdir(), 'nexus-no-rg-'));
     temporary.push(process.env['PATH']);
     const lines: string[] = [];
-    serve = await startScriptedServe(TURNS, { log: (line) => lines.push(line) });
+    serve = await startScriptedServe(TURNS, { log: bodyLog(lines) });
 
     expect(grepLines(lines)).toEqual([`搜尋（grep）：內附 ripgrep ${await realResolveRgPath()}`]);
   });
@@ -65,7 +66,7 @@ describe('啟動日誌講出 grep 的 ripgrep', () => {
       ),
     );
     const lines: string[] = [];
-    serve = await startScriptedServe(TURNS, { log: (line) => lines.push(line) });
+    serve = await startScriptedServe(TURNS, { log: bodyLog(lines) });
 
     const [line] = grepLines(lines);
     expect(grepLines(lines)).toHaveLength(1);

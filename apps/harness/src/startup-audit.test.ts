@@ -18,7 +18,7 @@ import { AssemblyDropError } from './agent-factory.js';
 import type { AssemblyDrop } from './agent-factory.js';
 import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
 import { runCli } from './cli.js';
-import { foldTurn, serveClient, withSystemPromptVariables } from './fixtures.js';
+import { bodyLog, foldTurn, serveClient, withSystemPromptVariables } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { createCordisRoot } from './cordis-root.js';
 import type { CordisRoot } from './cordis-root.js';
@@ -265,7 +265,7 @@ describe('沒有設定格式卻寫了 config：照樣掛，警告講那份設定
     ]);
 
     const logged: string[] = [];
-    running = await runServe({ argv: ['--port', '0'], log: (line) => logged.push(line), env });
+    running = await runServe({ argv: ['--port', '0'], log: bodyLog(logged), env });
     expect(logged).toContain(LINE);
 
     const { plugins } = await loadDefaultPlugins({ env });
@@ -381,7 +381,7 @@ describe('serve：組裝時掉了的列', () => {
     const lines: string[] = [];
     const server = (await runServe({
       argv: ['--port', '0'],
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
       env,
     })) as RunningServe;
     running = server;

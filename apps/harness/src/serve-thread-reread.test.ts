@@ -13,7 +13,7 @@ import { join } from 'node:path';
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { projectKey } from './jsonl-session-store.js';
 import { changePlugin } from './plugin-change.js';
@@ -105,7 +105,7 @@ function probeRow(config: string, extra = ''): string {
 async function start(env: NodeJS.ProcessEnv, lines: string[]): Promise<RunningServe> {
   const server = (await runServe({
     argv: ['--port', '0'],
-    log: (line) => lines.push(line),
+    log: bodyLog(lines),
     env,
   })) as RunningServe;
   running = server;

@@ -334,7 +334,8 @@ function trimLoggerConsole(source, file) {
     let out = once(source, "import z from 'schemastery'\n", '');
     out = out.replace(/  static readonly Config: z<ConsoleExporter\.Config> = z\.object\(\{[\s\S]*?\}\) as z<ConsoleExporter\.Config>\n\n/, () => '');
     if (out.includes('schemastery') || out.includes('z.object')) throw new Error('logger-console 本地修改沒命中（shared.ts，Config）');
-    return out;
+    // 時間前綴用訊息自己的時間，不是印出的當下：晚掛上的 exporter 回放緩衝時，早先的話才不會全印成現在的時間（#1534）。
+    return once(out, 'Time.template(this.showTime)', 'Time.template(this.showTime, new Date(message.ts))');
   }
   if (file === 'index.ts') {
     let out = once(source, "import supportsColor from 'supports-color'\n", '');

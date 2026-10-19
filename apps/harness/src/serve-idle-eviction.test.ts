@@ -21,7 +21,7 @@ import type { WireClient } from '@nexus/wire';
 import { emptyConversation, reduceAll } from '@nexus/wire';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV, HARNESS_SESSIONS_DIR_NAME } from './harness-home.js';
 import { seedHomePatch } from './plugin-journal.fixture.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
@@ -70,7 +70,7 @@ function home(patch?: string): Home {
 async function start(h: Home, lines: string[]): Promise<RunningServe> {
   const server = (await runServe({
     argv: ['--port', '0', '--workspace', h.workspace],
-    log: (line) => void lines.push(line),
+    log: bodyLog(lines),
     env: h.env,
   })) as RunningServe;
   running.push(server);

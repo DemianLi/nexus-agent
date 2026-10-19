@@ -674,8 +674,8 @@ export type NexusAgent = NexusAgentHandle['agent'];
 /** {@link createCliAgent} 的入口身分選項。**省略都是有意義的**：兩個入口各自只傳自己的那幾格。 */
 export interface CreateCliAgentSession {
   /**
-   * 不變量違規往哪裡講。[`serve.ts`](./serve.ts) 刻意不傳——伺服器那條路徑的違規進的是伺服器日誌，
-   * 維持 runner 的預設（[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
+   * 不變量違規往哪裡講。[`serve.ts`](./serve.ts) 傳伺服器日誌的 `invariant` logger（error 等級，
+   * [#1534](https://github.com/DemianLi/nexus-agent/issues/1534)；原先維持 runner 預設，[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
    */
   readonly onInvariantViolation?: (error: InvariantError) => void;
   /**

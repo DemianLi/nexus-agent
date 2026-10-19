@@ -20,7 +20,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDeliverableClient, createWireClient } from '@nexus/wire';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { SESSION_LOG_OFF_DISCLOSURE } from './assembly-root.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
@@ -28,7 +28,7 @@ import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
 import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { exchangeServeToken, fetchWithCookie, foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, exchangeServeToken, fetchWithCookie, foldTurn, serveClient } from './fixtures.js';
 
 let running: RunningServe | undefined;
 
@@ -195,7 +195,7 @@ describe('serve 的 --session-log', () => {
     const lines: string[] = [];
     running = await runServe({
       argv: ['--port', '0'],
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
       env: {},
     });
     await driveTurn(running as RunningServe, 'delta');
@@ -215,7 +215,7 @@ describe('serve 的 --session-log', () => {
     const lines: string[] = [];
     running = await runServe({
       argv: ['--port', '0'],
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
       env: { [HARNESS_HOME_ENV]: home },
     });
     expect(lines.join('\n')).toContain(`會話日誌：${projectDirOf(join(home, 'sessions'))}`);
@@ -241,7 +241,7 @@ describe('serve 的 --session-log', () => {
     const lines: string[] = [];
     running = await runServe({
       argv: ['--port', '0', '--session-log', root],
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
       env: {},
     });
     // 印的要是**那一格**，不只是根：根是那一格的前綴，斷言根的話印哪一個都綠。
@@ -281,7 +281,7 @@ describe('serve：清單把落盤關掉', () => {
     const lines: string[] = [];
     const server = (await runServe({
       argv: ['--port', '0', '--patch', PERSISTENCE_OFF_PATCH],
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
       env: {},
     })) as RunningServe;
     running = server;
@@ -363,10 +363,14 @@ describe('serve：清單把落盤關掉', () => {
  * 靜默遺失。
  */
 describe('重開 server 之後接得回同一條 thread', () => {
-  async function start(root: string, extra: readonly string[] = []): Promise<RunningServe> {
+  async function start(
+    root: string,
+    extra: readonly string[] = [],
+    log: (line: string) => void = () => undefined,
+  ): Promise<RunningServe> {
     running = await runServe({
       argv: ['--port', '0', '--session-log', root, ...extra],
-      log: () => undefined,
+      log,
       env: {},
     });
     return running as RunningServe;
@@ -685,21 +689,18 @@ describe('重開 server 之後接得回同一條 thread', () => {
     );
     await writeFile(log, `${rewritten.map((event) => JSON.stringify(event)).join('\n')}\n`);
 
-    const errors = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    try {
-      const second = await start(root, ['--workspace', workspace]);
-      const reported = await (await serveClient(second)).slashRun('alpha', '/permission');
-      await stop(second);
-      // 前提：真的接回來了，那一格是日誌上的 bogus。
-      expect(JSON.stringify(reported)).toContain('bogus');
-      const violations = errors.mock.calls
-        .map((args) => args.map(String).join(' '))
-        .filter((line) => line.includes('"@nexus/plugin-sandbox-policy"'));
-      expect(violations.length).toBeGreaterThanOrEqual(1);
-      expect(violations[0]).toContain(`seq ${String(last)}`);
-      expect(violations[0]).toContain('"bogus"');
-    } finally {
-      errors.mockRestore();
-    }
+    // 違規走伺服器日誌的 error 等級（#1534），不再是 `console.error`。
+    const serverLines: string[] = [];
+    const second = await start(root, ['--workspace', workspace], bodyLog(serverLines));
+    const reported = await (await serveClient(second)).slashRun('alpha', '/permission');
+    await stop(second);
+    // 前提：真的接回來了，那一格是日誌上的 bogus。
+    expect(JSON.stringify(reported)).toContain('bogus');
+    const violations = serverLines.filter((line) =>
+      line.includes('"@nexus/plugin-sandbox-policy"'),
+    );
+    expect(violations.length).toBeGreaterThanOrEqual(1);
+    expect(violations[0]).toContain(`seq ${String(last)}`);
+    expect(violations[0]).toContain('"bogus"');
   });
 });

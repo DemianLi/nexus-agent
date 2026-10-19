@@ -246,7 +246,7 @@ thread id、截到第幾個位元組、丟了幾個位元組。**截掉的位元
 
 ### 不變量量測記錄
 
-不變量配套入口的違規原本只進 `console.error`（CLI 是 stderr 的 `[不變量] …`，serve 是伺服器日誌），
+不變量配套入口的違規原本只進 `console.error`（CLI 是 stderr 的 `[不變量] …`，serve 起初也是 `console.error`，#1534 起走伺服器日誌的 `error` 等級，見〈伺服器日誌的等級與格式〉），
 沒有計數、沒有留存，所以「這些檢查過去有沒有報過」答不了。為了讓第二刀（那八個配套入口要不要留）
 的決策有數字（[#976](https://github.com/DemianLi/nexus-agent/issues/976)），CLI 與 serve 都會另外
 append 一份 `$NEXUS_AGENT_HOME/invariant-log.jsonl`，一行一筆、兩種：
@@ -531,6 +531,68 @@ CI 在每張動到 TypeScript 的 PR 與每次 Release 上都跑過；主機上�
   版本與內容跟 tarball 一起由 `.sha256` 釘住；授權取 repo 根 `LICENSE`（MIT）。
 - **缺口：擋得住損壞，擋不住惡意替換。** `.sha256` 與 SBOM 跟 tarball 從同一個 Release 頁面下載；能換掉 tarball 的人也換得掉另外三個檔，
   雜湊照樣對得上。產物簽章不在這張（#1545 Q3 (a)），併進企業決議 §八 的發行金鑰（[#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 第二版）。
+
+## 伺服器日誌的等級與格式
+
+[#1534](https://github.com/DemianLi/nexus-agent/issues/1534)。`serve` 的伺服器日誌**全部寫標準輸出**（systemd 底下進 journald），每一行都帶等級。
+CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
+
+**一行長這樣**（文字格式，照 dsh 的 `render`）：
+
+```
+2026-10-19 10:00:00 [W] serve [組裝] thread "x" 這一條沒掛上：…
+```
+
+時間、`[E|W|I|D]`（error／warn／info／debug）、logger 名、訊息本文。多行訊息的續行縮排對齊。
+
+| 等級 | 放什麼 |
+| --- | --- |
+| `error` | 起不來、收不了（`[啟動失敗] 收尾也出錯`）、不變量違規（logger 名 `invariant`）、Cordis 樹上 disposer 拋的錯（例如插件關不掉；以前只進記憶體緩衝，緩衝滿 1000 則就被擠掉） |
+| `warn` | 要人處理的：`[組裝] …沒掛上`／`警告`、`[外掛]`（含 MCP 掉線重連的進度）、`[清單]` 的警告、`[請求] 處理失敗，回 400`、寫不進去的 `[會話日誌]`／`[對照快照]`／`[變更紀錄]`、不可用的 `代理：`、`[home 鎖]` |
+| `info` | 狀態披露：網址、模型、plugin 清單、會話日誌路徑、thread 上限、閒置逐出、遙測與 tracing 披露、`[會話日誌] … 接回來了`、`[對照快照]` 的摘要 |
+
+**命令的輸出不是日誌**：`--help`、`--version`、`--dump-config`、`--dump-config-schema` 照原樣寫標準輸出，不加前綴、不包 JSON、不看門檻
+（`--dump-config-schema` 的標準輸出只有那份 JSON）。
+
+### 調門檻與格式
+
+設定是清單上的一列 `logger-console`（`cordis.serve.yml`，只有 `serve` 載；**起動期讀一次、改了要重啟**；**關不掉**——要少印請調高門檻）。
+在自己的 `~/.nexus-agent/cordis.patch.yml`（或 `--patch`）整份取代它的 `config`：
+
+```yaml
+- id: logger-console
+  config:
+    format: json          # text（預設）| json
+    levels:
+      default: warn       # 共用主機只留警告以上
+      invariant: error    # 也可以按 logger 名單獨設
+    showTime: ''          # 文字格式的時間前綴；journald 底下它自己會加，設空字串就不重複
+```
+
+- **`levels` 的值是等級名稱**（`error`／`warn`／`info`／`debug`），不是數字：dsh 的 Cordis 是自己的 fork，順序是 error 0、info 1、warn 2、debug 3；
+  我們 vendor 的上游是 error 0、warn 1、info 2、debug 3，同一個數字在兩邊意思不同。名稱寫錯（例如 `warning`）那一列掉了，啟動時有一段警告指名它，門檻回到出廠的 info。
+- 出廠 `levels: { default: info }`，印出來的行數和沒有這一列時一樣（行首多了時間與等級前綴）。門檻設成 `warn` 之後 **info 的披露不印——包括那一行帶 token 的網址**；
+  靠那一行登入的部署請把 `default` 留在 `info`。
+- `colors`（出廠 `false`）只對文字格式有意義；JSON 一律不上色。`maxLength`（省略＝10240）對每一行截斷、行尾接 `...`，**JSON 的 `msg` 也一樣**。
+
+### JSON 格式（`format: json`）
+
+一行一個 JSON 物件（JSON Lines），訊息裡的換行留在字串裡、不會多出一行：
+
+| 欄位 | 內容 |
+| --- | --- |
+| `ts` | ISO 8601，UTC（`2026-10-19T02:00:00.000Z`） |
+| `level` | `error`／`warn`／`info`／`debug` |
+| `logger` | logger 名（`serve`、`invariant`，樹上插件是它的名稱） |
+| `msg` | 訊息本文（錯誤物件放 `stack`，沒有就放 `message`；物件參數用 `util.inspect` 的形式） |
+| `thread_id` | 訊息帶 thread 時才有；**目前沒有任何一行填它**，來源由 #1536 統一 |
+
+欄位名取 OTel Logs 資料模型的慣用語意，但**不引入 OTel SDK、不送出去**：只寫標準輸出，和文字格式同一個出口。
+
+- **帶 token 的網址那一行（`nexus-agent 在 …`）在 JSON 模式照樣印**（`info` 等級，在 `msg` 裡）：它今天就進標準輸出、systemd 底下就進 journald，換格式不改變暴露面。
+  **日誌平台要當成含秘密的資料處理**；根本解是 #1428 的身分，不是藏這一行。
+- 致命的啟動失敗與收尾失敗（`serve.ts` 的 `main()`）仍以純文字寫標準錯誤，不看格式與門檻：根可能已經收掉，沒有 logger 可用。
+- 不做轉送（syslog、OTLP、HTTP 推送）、不寫檔、不輪替：交給 systemd／journald 或 logrotate。
 
 ## 用 systemd 常駐
 
@@ -852,7 +914,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   （`agent-loop`、`recursion-limit`、`tool-fs-search` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
-  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`memory-gauge`、`deliverable-files`、
+  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`logger-console`、`memory-gauge`、`deliverable-files`、
     `session-persistence`、`tool-text`、`projection-flush`、`downlink`、`tool-result-stash`、`spill-policy`、`background-subagents`、
     `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
     `agent-default-model` 不在這裡：沒帶 `--live` 時它在每條對話組裝時讀，改了新對話就生效。
@@ -956,7 +1018,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   所以事後從日誌回放看不到那份原始內容，只看到它存在過、多大、哪個 URI。瀏覽器那一側本來就收不到（串流與歷史端點只送結果文字）。
 - **MCP 伺服器掛上之後掉了線會自動重連**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)，照 dsh）：500 ms
   起每次連續失敗加倍、上限 30 秒，連續失敗 10 次放棄，連上之後撐過 30 秒失敗次數歸零；斷線期間工具照列但呼叫失敗，連回來之後同一批
-  工具又叫得動、定義不變。放棄之後那台的工具對模型隱藏，到下一次組裝才恢復。進度往伺服器日誌（stderr）寫。`reconnect.enabled: false`
+  工具又叫得動、定義不變。放棄之後那台的工具對模型隱藏，到下一次組裝才恢復。進度往伺服器日誌寫（`serve` 是標準輸出、warn 等級，logger 名 `serve`；CLI 才是標準錯誤）。`reconnect.enabled: false`
   關掉。`tools/list_changed` 與重連後的新工具不處理（工具集合在組裝時定下）。
 - **空檔與只有註解的檔會讓啟動失敗。** 要停用某一層請寫 `[]`——「我把它清空了」與「我把它
   寫壞了」在磁碟上長得一樣，所以不猜。
@@ -1027,6 +1089,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 | `thread-search`             | 按內容搜尋以前的會話（側欄的搜尋框）；**出廠不開**                                                                             | 有（一格）                       | 關得掉（＝搜尋一律失敗） |
 | `thread-capacity`           | serve 行程裡最多同時有幾條 thread，與閒置的 thread 多久之後撤出記憶體；**出廠開著**（500 條、2 小時）                           | 有（兩格）                       | **關不掉**               |
 | `downlink`                  | 下行串流的心跳間隔，與每條下行線排著等送的位元組上限；**出廠開著**                                                              | 有（兩格）                       | **關不掉**               |
+| `logger-console`            | 伺服器日誌的等級門檻與格式（文字／一行一筆 JSON）；**只有 `serve` 載**，見〈伺服器日誌的等級與格式〉；**出廠 info、文字**           | 有（五格）                       | **關不掉**               |
 | `browser-session`           | 瀏覽器 cookie 的絕對有效期                                                                                                     | 有（一格）                       | **關不掉**               |
 | `deliverable-files`         | 交付檔的三個上限（一頁位元組／整檔位元組（只管整檔讀）／一頁行數）                                                             | 有（三格）                       | **關不掉**               |
 | `tool-text`                 | 工具結果的結構化資料（`meta`）與壓縮摘要全文放上線的位元組上限（結果文字本身不截）                                             | 有（一格）                       | **關不掉**               |
@@ -1041,7 +1104,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
 （[#529](https://github.com/DemianLi/nexus-agent/issues/529)）。
 **更要緊的分界是消費點跑的時刻**：
 
-- **`session-persistence`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`browser-session`、`deliverable-files`、
+- **`session-persistence`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`logger-console`、`browser-session`、`deliverable-files`、
   `tool-text`、`live-model` 跑在註冊表存在之前**，所以 `apply` 是空的、值在起動期解一次往下傳。`thread-search`、
   `browser-session`、`deliverable-files`、`tool-text` 的消費點分別是內容搜尋的索引、瀏覽器會話的建構子、兩支交付方法（`deliverable.read`／`deliverable.readBytes`）、
   以及工具結果 `meta` 與壓縮摘要那兩條（即時的 `ThreadPump` 與重播的 `historyPage`，都在 `createWireHandler` 的閉包底下），

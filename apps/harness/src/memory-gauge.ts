@@ -364,8 +364,13 @@ export interface RunningMemoryGauge {
 export interface MemoryGaugeOptions {
   /** 兩次寫日誌之間的毫秒數；起動時另外立刻寫一行。 */
   readonly intervalMs: number;
-  /** 日誌往哪寫（serve 的 `log`）。 */
+  /** 日誌往哪寫（serve 的 `log`，info 等級）。 */
   readonly log: (line: string) => void;
+  /**
+   * `onReading` 回的警告往哪寫（serve 的 `warn`，warn 等級，#1534）；省略就走 `log`。
+   * 門檻調到 warn 的主機只留警告以上，用量警告正是最不該被濾掉的那一行。
+   */
+  readonly warn?: (line: string) => void;
   /** 讀外界的縫；省略即真的。 */
   readonly deps?: MemoryGaugeDeps;
   /**
@@ -387,6 +392,7 @@ export interface MemoryGaugeOptions {
  */
 export function startMemoryGauge(options: MemoryGaugeOptions): RunningMemoryGauge {
   const { intervalMs, log, deps, onReading } = options;
+  const warn = options.warn ?? log;
   let stopped = false;
   let busy = false;
   const tick = async (): Promise<void> => {
@@ -397,7 +403,7 @@ export function startMemoryGauge(options: MemoryGaugeOptions): RunningMemoryGaug
       if (!stopped) {
         log(formatMemoryLine(reading));
         if (onReading !== undefined) {
-          for (const line of onReading(reading)) log(line);
+          for (const line of onReading(reading)) warn(line);
         }
       }
     } catch {

@@ -524,3 +524,22 @@ export function approvalToolNames(pendings: readonly PendingInput[]): string[] {
 export function virtualFilesOf(result: object): Record<string, FileData | undefined> {
   return (result as { files?: Record<string, FileData | undefined> }).files ?? {};
 }
+
+/**
+ * serve 的伺服器日誌每一行是 `[yyyy-MM-dd hh:mm:ss ][E|W|I|D] 名字 訊息本文`（#1534，照 dsh 的 `render`）。
+ * 測試比的是**訊息本文**，這裡把前綴剝掉。多行訊息的續行縮排是「時間＋`[X]`＋空格」那麼長（`render` 的 `indent`，**不含名字**），一併剝掉。
+ * 不是這個形狀的行原樣回傳。
+ */
+export function serverLogBody(line: string): string {
+  const match = /^(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} )?\[[EWID]\] (\S+) /u.exec(line);
+  if (match === null) return line;
+  const indent = match[0].length - (match[1] as string).length - 1;
+  return line.slice(match[0].length).replace(new RegExp(`\\n {${String(indent)}}`, 'gu'), '\n');
+}
+
+/** 把 `runServe` 的 `log` 收進一個陣列、只留訊息本文。 */
+export function bodyLog(sink: string[]): (line: string) => void {
+  return (line) => {
+    sink.push(serverLogBody(line));
+  };
+}

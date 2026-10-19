@@ -397,14 +397,17 @@ export interface PluginSnapshotWriter {
  * - 日誌那一行：第一次一定記（帶路徑），之後只在哪一列的 `sync` 變了才記，不讓每條 thread 都洗一行。
  *
  * @param options.path - 快照檔路徑。
- * @param options.log - 伺服器日誌。
+ * @param options.log - 伺服器日誌（info）。
+ * @param options.warn - 寫不進去那一句的出口（warn，#1534）；省略就走 `log`。
  * @returns 寫檔那一支。
  */
 export function createPluginSnapshotWriter(options: {
   readonly path: string;
   readonly log: (line: string) => void;
+  readonly warn?: (line: string) => void;
 }): PluginSnapshotWriter {
   const { path, log } = options;
+  const warn = options.warn ?? log;
   let tail: Promise<void> = Promise.resolve();
   let lastDigest: string | undefined;
   const warned = new Set<string>();
@@ -418,7 +421,7 @@ export function createPluginSnapshotWriter(options: {
       if (!warned.has(message)) {
         warned.add(message);
         // 目錄 fsync 失敗時 rename 已經做了：檔上可能已是這一份，只是還沒落盤。
-        log(`[對照快照] 寫不進或沒落盤 ${path}：${message}（serve 照常，下一次重讀再試）`);
+        warn(`[對照快照] 寫不進或沒落盤 ${path}：${message}（serve 照常，下一次重讀再試）`);
       }
       return false;
     }

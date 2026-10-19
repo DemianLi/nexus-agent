@@ -103,8 +103,10 @@ export interface ThreadPluginListOptions {
   readonly audit: StartupAuditOptions;
   /** 起動期讀一次的設定列：值以啟動那一份為準，重讀時不同就記「已儲存，待重啟」。 */
   readonly startupRead: readonly NexusPlugin<unknown>[];
-  /** 伺服器日誌。 */
+  /** 伺服器日誌（info）。 */
   readonly log: (line: string) => void;
+  /** 要人處理的那幾句（讀清單的警告、未稽核的覆蓋層、掛不上的列）的出口（warn，#1534）；省略就走 `log`。 */
+  readonly warn?: (line: string) => void;
   /**
    * 啟動試組掉了的列（`assemblyDropsOf(startup, trial.dropped)`），帶著掉在哪一步。省略時對照快照把它們記成 `apply`。
    */
@@ -212,6 +214,7 @@ export interface ThreadPluginReader {
  */
 export function createThreadPluginList(options: ThreadPluginListOptions): ThreadPluginReader {
   const { startup, audit, log } = options;
+  const logWarn = options.warn ?? log;
   // 已知掉了的列，鍵是列 id 加那一列疊完的宣告，宣告一改鍵就不同。讀清單時掉的（`known`）由 `loadDefaultPlugins` 自己
   // 標成停用，這裡只管講不講；試組在組裝時才掉的（`knownAssembly`）要這裡標成停用，以後的 thread 才不重試。
   const known = new Set<string>();
@@ -283,7 +286,7 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
   const warn: PluginConfigWarn = (message) => {
     if (warned.has(message)) return;
     warned.add(message);
-    log(`[清單] ${message}`);
+    logWarn(`[清單] ${message}`);
   };
   // 變更紀錄那一層的兩件事要讓人在伺服器日誌看得到（#1412）：舊的 patch 檔出現了、沒讀；`--patch` 蓋到哪幾列（不經過紀錄，
   // 稽核看不到）。啟動那一刻講一次，之後每次重讀只在內容變了才再講。
@@ -300,7 +303,7 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
         '（這一層不經過變更紀錄，稽核看不到；開關回 overridden、設定被它蓋掉的改設定會被拒）';
       if (reportedLayers.has(line)) continue;
       reportedLayers.add(line);
-      log(`[清單] ${line}`);
+      logWarn(`[清單] ${line}`);
     }
   }
   reportLayers(startup.layers);
@@ -392,7 +395,9 @@ export function createThreadPluginList(options: ThreadPluginListOptions): Thread
         });
         if (!fresh) continue;
         known.add(key);
-        log(`[清單] 這一列沒掛上，之後的 thread 也不掛，直到它的設定改了：${describeDrop(drop)}`);
+        logWarn(
+          `[清單] 這一列沒掛上，之後的 thread 也不掛，直到它的設定改了：${describeDrop(drop)}`,
+        );
       }
       const rows = new Map(loaded.rows);
       const plugins = loaded.plugins.map((entry) => {

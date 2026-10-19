@@ -34,10 +34,10 @@ afterEach(async () => {
   running = undefined;
 });
 
-async function oneTurn(threadId: string) {
+async function oneTurn(threadId: string, log: (line: string) => void = () => undefined) {
   running = await runServe({
     argv: ['--port', '0', '--patch', PATCH],
-    log: () => undefined,
+    log,
     env: {},
   });
   const client = await serveClient(running as RunningServe);
@@ -47,10 +47,19 @@ async function oneTurn(threadId: string) {
 }
 
 describe('serve 的 thread 接上了會話消費者', () => {
-  it('不變量：探針看到 turn/start 就報，違規走 runner 預設的 console.error', async () => {
+  it('不變量：探針看到 turn/start 就報，違規以 error 等級進伺服器日誌（#1534）', async () => {
     const spy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
-    await oneTurn('wiring-invariant');
-    expect(spy.mock.calls.map((call) => String(call[0]))).toContain(
+    const lines: string[] = [];
+    await oneTurn('wiring-invariant', (line) => lines.push(line));
+    expect(lines).toContainEqual(
+      expect.stringMatching(
+        new RegExp(
+          ` \\[E\\] invariant invariant violated by "${WIRING_PROBE_PACKAGE}": 看到 turn/start$`,
+        ),
+      ),
+    );
+    // 不再走 runner 預設的 `console.error`。
+    expect(spy.mock.calls.map((call) => String(call[0]))).not.toContain(
       `invariant violated by "${WIRING_PROBE_PACKAGE}": 看到 turn/start`,
     );
   });

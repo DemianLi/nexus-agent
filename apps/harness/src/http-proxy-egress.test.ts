@@ -22,6 +22,7 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { bodyLog } from './fixtures.js';
 
 const PROXY_NAMES = [
   'http_proxy',
@@ -338,7 +339,7 @@ describe('每一條啟動路徑都裝，收尾一定還原', () => {
 
     running = await runServe({
       argv: ['--port', '0'],
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
       env: { [HARNESS_HOME_ENV]: home },
       cwd: home,
     });

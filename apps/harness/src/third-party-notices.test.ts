@@ -219,6 +219,7 @@ describe('parseVendoredRows', () => {
       '@nexus/cordis',
       '@nexus/cordis-plugin-loader',
       '@nexus/cordis-plugin-include',
+      '@nexus/cordis-plugin-logger-console',
     ]);
     expect(rows.every((row) => /^https:\/\/\S+$/.test(row.upstream))).toBe(true);
   });
