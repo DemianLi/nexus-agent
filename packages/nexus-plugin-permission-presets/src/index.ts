@@ -34,7 +34,7 @@
  * 7. **（遷上樹新增，#1491）目錄是逐條 thread 的、子代理組名由參與者寫、參與者安裝失敗只記 warn。** 三條偏離的理由、類別與撤除條件登記在
  *    `@nexus/permission-presets` 的檔頭與 `docs/plugin-contract.md`。
  *
- * ## 形狀（#1491：第十三顆搬上 Cordis 樹的插件）
+ * ## 形狀（#1491：第十四顆搬上 Cordis 樹的插件）
  *
  * 函式插件，具名匯出 `name`／`inject`／`Config`／`manifest`／`apply`，**沒有 default**。相依只有 `@nexus/sdk`、`@nexus/fs`（工作區根）、
  * `@nexus/commands`、`@nexus/projections`、`@nexus/session`（會話參與者）、`@nexus/permission-presets`（服務的定義）與 `@nexus/wire`（詞彙）：
@@ -43,7 +43,7 @@
  * - **插件不碰控制器。** 以前 `apply` 從 host 服務抓兩顆控制器 `switchTo`；現在宿主組一條 thread 時呼叫 {@link PermissionPresetsService.start}
  *   （純函式）拿起始值，自己靜默切控制器。`/permission` 直接寫 root 日誌，控制器跟著日誌走。
  * - **提供一個服務、消費四個接縫。**
- * - 舊的 `NexusPlugin` 外殼不在這裡：它是測試夾具，住在 `apps/harness` 的 `permission-presets.fixture.ts`。
+ * - 舊的 `NexusPlugin` 外殼（`createPermissionPresetsPlugin`）沒有搬成夾具：遷完之後全 repo 沒有任何呼叫端（`git grep -n "createPermissionPresetsPlugin"` 零筆），測試改走真的 `Loader` 與提供者，所以直接刪掉。
  *
  * @module
  */

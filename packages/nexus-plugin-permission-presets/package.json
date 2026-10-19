@@ -26,7 +26,6 @@
     "@nexus/core": "workspace:*",
     "@nexus/fs": "workspace:*",
     "@nexus/permission-presets": "workspace:*",
-    "@nexus/plugin-sandbox-policy": "workspace:*",
     "@nexus/projections": "workspace:*",
     "@nexus/sdk": "workspace:*",
     "@nexus/session": "workspace:*",

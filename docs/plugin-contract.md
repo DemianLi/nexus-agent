@@ -537,8 +537,8 @@ resume 之後同一個 `callId` 覆寫那一筆、只交付一次（`packages/ne
 | 服務是查找時才建（lazy），`/goal` 的「一份都沒接」「接了不只一份」兩句拿掉（#1486，demian Q1 (a)、Q2 (a)） | 行為改變（這張卡唯一承認的一條） | 完整說明在 PR 內文的「行為改變」一節；這裡只記來龍去脈。遷移前每份會話裝一次參與者、registry 只能接一份 root 日誌，所以 `/goal` 要先問「接了幾份」；lazy 之後命令帶來的 `sessionLog` 就是它要動的那一份，兩句失去生產者。工具層的「不是 root」那句保留（逐字不變）。同一個 registry 想接幾份日誌都行 |
 | 權限組合的目錄是逐條 thread 的，dsh 整台共用（#1491，登記第 1 列） | 遷移卡不改行為（暫時） | dsh 的 `catalog()` 預設組只從設定或行程預設推（`packages/interaction/permission-presets/src/index.ts:293-299`）；我們今天的預設組是這條 thread 的起始值推出來的（續接的 thread 沒設 `defaultPreset` 時是日誌記著的那一組），wire 的 `permission.catalog` 逐條 thread 回。照 dsh 做會讓新會話的日誌多一顆 `sandbox/mode`、續接的目錄預設組變動，都是行為改變。撤除條件：之後的權限卡定 |
 | 子代理的組名由會話參與者寫，不是委派那一側寫（#1491 Q2-1，登記第 2 列） | 表達不出來，退到最接近的實作 | dsh 在委派側寫（`packages/subagent/subagent/src/child-agent.ts:248-279`）。委派那一刻拍下沙箱那一格靠包住 `task` 的 `wrapToolCall` 與 ALS（`sandbox-policy`），樹上沒有包工具呼叫的接縫。撤除條件：`sandbox-policy` 遷上樹時一起做 |
-| 會話參與者安裝失敗只記 warn、已寫的收不回（#1491，R3，登記第 3 列） | 表達不出來，退到最接近的實作 | dsh 的 `session/created` listener 同步拋錯會否決並回滾這次接上（`core/session/src/index.ts:1258-1286`）；相容層的七位會話參與者本來就是記 warn 的語意，`join` 沿用 |
-| 起始值在宿主的組 thread 那一步算，不在參與者裡套（#1491 Q3 (a)，登記第 4 列） | 遷移卡不改行為（暫時） | dsh 在 `session/created` 上整組套預設；我們把「算出預設組」放進 `permissionPresets.start`（純函式），宿主據回傳值靜默切兩顆控制器，之後參與者才釘組名，新會話的日誌只有一顆 `sandbox/mode`、順序逐字不變 |
+| 會話參與者安裝失敗只記 warn、已寫的收不回（#1491，R3，登記第 3 列） | 表達不出來，退到最接近的實作 | dsh 的 `session/created` listener 同步拋錯會否決並回滾這次接上（`core/session/src/index.ts:1258-1286`）；相容層的七位會話參與者本來就是記 warn 的語意，`join` 沿用。撤除條件：會話註冊表能在參與者拋錯時回滾這次接上（`registry.sessions` 與 `join` 一起改，連同相容層其餘的參與者同一天換） |
+| 起始值在宿主的組 thread 那一步算，不在參與者裡套（#1491 Q3 (a)，登記第 4 列） | 遷移卡不改行為（暫時） | dsh 在 `session/created` 上整組套預設；我們把「算出預設組」放進 `permissionPresets.start`（純函式），宿主據回傳值靜默切兩顆控制器，之後參與者才釘組名，新會話的日誌只有一顆 `sandbox/mode`、順序逐字不變。撤除條件：兩顆控制器整個拿掉、fence 與閘門改讀日誌投影（#1491 Q1 (c)）時，宿主不再靜默切控制器，起始值就能直接由參與者往日誌套 |
 | `/permission` 的回覆拿掉「這次切換沒有完整記進日誌」那一句（#1491 Q1 (a)，demian 拍板） | 行為改變（這張卡承認的一條） | 兩顆旋鈕現在以日誌為準，切換就是往 root 日誌追加，沒有「沒接上日誌」這回事，這句失去生產者（`UNRECORDED_NOTE` 拿掉）。完整說明在 PR 內文的「行為改變」一節 |
 
 ## 接進清單（#1416 PR 2）

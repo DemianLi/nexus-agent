@@ -21,9 +21,11 @@
  *    `sandbox-policy` 遷上樹時一起做。
  * 3. **參與者安裝失敗只記 warn、已寫的收不回**（R3；類別：基座表達不出來）。dsh 的 `session/created` listener 同步拋錯會否決並回滾這次接上
  *    （`core/session/src/index.ts:1258-1286`）；相容層的七位會話參與者本來就是記 warn 的語意，`@nexus/session` 的 `join` 沿用。
+ *    **撤除條件**：會話註冊表能在參與者拋錯時回滾這次接上（`registry.sessions` 與 `join` 一起改，連同相容層其餘的參與者同一天換）；在那之前單獨改這一位沒有意義。
  * 4. **起始值在宿主的組 thread 那一步算，不在參與者裡套**（Q3 (a)）。dsh 在 `session/created` 上整組套預設；我們把「算出預設組」放進
  *    {@link PermissionPresetsService.start}（純函式，不碰日誌也不碰控制器），宿主據回傳值靜默切兩顆控制器，之後參與者才釘組名。
  *    好處是新會話的日誌只有一顆 `sandbox/mode`、順序逐字不變。
+ *    **撤除條件**：兩顆控制器整個拿掉、fence 與閘門改讀日誌投影（#1491 Q1 (c)）時，宿主不再靜默切控制器，起始值就能直接由參與者往日誌套。
  *
  * ## 相依
  *

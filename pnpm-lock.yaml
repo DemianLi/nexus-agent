@@ -956,9 +956,6 @@ importers:
       '@nexus/permission-presets':
         specifier: workspace:*
         version: link:../nexus-permission-presets
-      '@nexus/plugin-sandbox-policy':
-        specifier: workspace:*
-        version: link:../nexus-plugin-sandbox-policy
       '@nexus/projections':
         specifier: workspace:*
         version: link:../nexus-projections
