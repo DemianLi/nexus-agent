@@ -4847,9 +4847,6 @@ packages:
       eslint: ^8.57.0 || ^9.0.0 || ^10.0.0
       typescript: '>=4.8.4 <6.1.0'
 
-  typescript@7.1.0-dev.20261018.1:
-    resolution: {integrity: sha512-i9Bjbbgj8hde40wnu2Ci5XX/RVu1jZFds4G3sOJwXfLGvSJlG1e/2yk/s+d1aoH90myX9XmnU5HrIZhxnIZmOA==}
-
   typescript@5.9.3:
     resolution: {integrity: sha512-jl1vZzPDinLr9eUt3J/t7V6FgNEw9QjvBPdysz9KfQDD41fQrC2Y4vKQdiaUpFT4bXlb1RHhLpp8wtm6M5TgSw==}
     engines: {node: '>=14.17'}
