@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-/* global console, process, URL, setTimeout, clearTimeout, window, requestAnimationFrame, performance */
+/* global console, process, URL, setTimeout, clearTimeout, window, document, requestAnimationFrame, performance */
 /**
  * 大面積玻璃的效能門檻（#1468 Q7、Q13、Q17，#1512）：Chrome 關 GPU 加速、CPU 降速 4 倍，量三種情境的 frame time，
  * p95 ≤ 16.7ms 才能合併（判的是 vsync 個數：p95 ≤ 1 個 vsync，見 `summarize`）；不達標就退成不透明（`data-glass="opaque"`／reduced-transparency 那條路），由 PM 與 demian 決定。
@@ -10,6 +10,13 @@
  * 3. **開關側欄**：⌘B／Ctrl+B 開關，重複幾次。
  * 4. **工具段展開時串流中捲動**（#1682 驗收 D）：一步 12 顆工具（讀檔、grep 計數、找檔各 4 顆）收成一段，回覆接著慢慢串；
  *    展開那一段與每種各一列（SG 的 `StepList`／`OutputBlock` 都是 `glass-panel`），在對話區上下捲。
+ *
+ * `--suite reasoning`（#1683 驗收 E）換成兩個推理列的情境，上面四個不跑：
+ * 5. **長歷史初次載入**：先填 {@link REASONING_TURNS} 輪、每輪一則約 2k 字推理（markdown）加一句回覆，重新整理頁面，從載入到
+ *    第一頁的推理列全部畫出後 2 秒。歷史一頁最多 50 則訊息（`@nexus/wire` 的 `HISTORY_PAGE_MESSAGES`），一輪是人一則、AI 一則，
+ *    所以初次載入最多 {@link LOAD_ROWS} 列，更早的要往上捲才載。SG 的 `<details>` 收著也掛內文，Base UI 的 collapsible 收著不畫，
+ *    差在這裡。
+ * 6. **推理收著時串流中捲動**：接著一輪推理慢慢串（收著），在對話區上下捲。
  *
  * frame time 用 `requestAnimationFrame` 兩次回呼的間隔算，只取情境進行中的那一段。間隔在 60Hz 下本來就落在 16.67ms 上下
  * 抖動零點幾毫秒，所以同時記三種數字：原始間隔的 p95、換算成 vsync 個數再乘回去的 p95（先量一段沒降速、沒操作的閒置間隔取中位數當
@@ -54,8 +61,12 @@ const { values: options } = parseArgs({
     harness: { type: 'string' },
     viewport: { type: 'string', default: '1440x900' },
     'tool-mix': { type: 'string', default: 'mixed' },
+    suite: { type: 'string', default: 'glass' },
   },
 });
+const SUITE = options.suite;
+if (SUITE !== 'glass' && SUITE !== 'reasoning')
+  throw new Error(`--suite 只收 glass 或 reasoning：${SUITE}`);
 const RUNS = Number(options.runs);
 const HARNESS_DIR = options.harness ?? fileURLToPath(new URL('../../harness/', import.meta.url));
 const TSX = join(HARNESS_DIR, 'node_modules/.bin/tsx');
@@ -133,8 +144,33 @@ function toolCalls() {
   }));
 }
 
+/** 情境 5、6 的推理：約 2k 字的 markdown（粗體、清單、程式碼、行內 code、連結），第 `i` 則。 */
+const REASONING_TURNS = 40;
+/** 初次載入的那一頁畫得出幾列推理：50 則訊息的一半（見情境 5）。 */
+const LOAD_ROWS = 25;
+const REASONING_STREAM = '推理串流';
+function reasoningText(i) {
+  const parts = [];
+  for (let k = 0; parts.join('').length < 2000; k++)
+    parts.push(
+      `第 ${i + 1} 則推理的第 ${k + 1} 段：先看 **需求** 有沒有講清楚，再對照 \`notes-${k}.md\` 的[說明](https://example.com)。` +
+        `\n\n- 方案 A：成本低、風險高\n- 方案 B：成本中、風險中\n\n` +
+        '```ts\n' +
+        `const cost${k} = ${i} * ${k + 1};\n` +
+        '```\n\n',
+    );
+  return parts.join('');
+}
+
 function lastUserText(messages) {
-  const last = [...messages].reverse().find((m) => m.role === 'user');
+  // time-context 插件（#1625）在第一輪補一則「Time sampled …」的 user 訊息，跳過它才是人說的那句。
+  const last = [...messages]
+    .reverse()
+    .find(
+      (m) =>
+        m.role === 'user' &&
+        !(typeof m.content === 'string' && m.content.startsWith('Time sampled')),
+    );
   if (last === undefined) return '';
   return typeof last.content === 'string'
     ? last.content
@@ -179,6 +215,10 @@ async function fakeLlm(req, res) {
     return;
   }
   const messages = body.messages ?? [];
+  if (SUITE === 'reasoning') {
+    await streamReasoning(res, base, usage, lastUserText(messages).includes(REASONING_STREAM));
+    return;
+  }
   const toolTurn = lastUserText(messages).includes(TOOL_TURN);
   const afterTools = toolTurn && messages.at(-1)?.role === 'tool';
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
@@ -217,6 +257,45 @@ async function fakeLlm(req, res) {
   res.write('data: [DONE]\n\n');
   res.end();
 }
+
+/** 推理（`reasoning_content`）接一句回覆。`slow`：推理慢慢串（情境 6），否則幾塊就送完（填歷史）。 */
+async function streamReasoning(res, base, usage, slow) {
+  res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+  const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+  const reasoning = slow
+    ? Array.from({ length: 16 }, (_, i) => reasoningText(i)).join('')
+    : reasoningText(fills++);
+  const chunks = slow ? 1500 : 8;
+  const delayMs = slow ? 20 : 2;
+  send({
+    ...base,
+    choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
+  });
+  const step = Math.ceil(reasoning.length / chunks);
+  for (let i = 0; i < reasoning.length; i += step) {
+    if (res.destroyed) return;
+    await sleep(delayMs);
+    send({
+      ...base,
+      choices: [
+        {
+          index: 0,
+          delta: { reasoning_content: reasoning.slice(i, i + step) },
+          finish_reason: null,
+        },
+      ],
+    });
+  }
+  send({
+    ...base,
+    choices: [{ index: 0, delta: { content: '好，結論是方案 B。' }, finish_reason: null }],
+  });
+  send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }] });
+  send({ ...base, choices: [], usage });
+  res.write('data: [DONE]\n\n');
+  res.end();
+}
+let fills = 0;
 
 async function startFakeLlm() {
   const server = createServer((req, res) => {
@@ -573,6 +652,121 @@ async function scenarioTools(page, cdp) {
   return Object.assign(deltas, { setup: { tools, opened, panels, outputs } });
 }
 
+const REASONING_ROW = '[data-testid="reasoning-row"]';
+
+/** 情境 5：重新整理，從載入到第一頁的 {@link LOAD_ROWS} 列推理全部畫出、再過 2 秒。rAF 記錄器用 init script 在文件一開始就掛上。 */
+async function scenarioLoad(page, cdp) {
+  await page.addInitScript(() => {
+    const state = { deltas: [], last: 0, running: true };
+    window.__frames = state;
+    const tick = (now) => {
+      if (!state.running) return;
+      if (state.last !== 0) state.deltas.push(now - state.last);
+      state.last = now;
+      requestAnimationFrame(tick);
+    };
+    requestAnimationFrame(tick);
+  });
+  const { result, events } = await traced(cdp, async () => {
+    await page.reload();
+    await page
+      .waitForFunction(
+        ([selector, n]) => document.querySelectorAll(selector).length >= n,
+        [REASONING_ROW, LOAD_ROWS],
+        { timeout: 120_000, polling: 100 },
+      )
+      .catch(async (error) => {
+        const seen = await page.evaluate(
+          (selector) => ({
+            rows: document.querySelectorAll(selector).length,
+            ai: document.querySelectorAll('[data-testid="ai-entry"]').length,
+            human: document.querySelectorAll('[data-testid="human-entry"]').length,
+          }),
+          REASONING_ROW,
+        );
+        throw new Error(`重新整理後推理列不到 ${LOAD_ROWS} 列：${JSON.stringify(seen)}`, {
+          cause: error,
+        });
+      });
+    const readyMs = await page.evaluate(() => performance.now());
+    await sleep(2000);
+    return page.evaluate((readyMs) => {
+      window.__frames.running = false;
+      return { deltas: window.__frames.deltas, readyMs };
+    }, readyMs);
+  });
+  const setup = await page.evaluate((selector) => {
+    const rows = [...document.querySelectorAll(selector)];
+    return { rows: rows.length, mounted: rows.filter((r) => r.querySelector('.markdown')).length };
+  }, REASONING_ROW);
+  return Object.assign(result.deltas, {
+    compositor: compositor(events),
+    setup: { ...setup, readyMs: Math.round(result.readyMs) },
+  });
+}
+
+/** 情境 6：一輪推理慢慢串、收著，在對話區上下捲；量完推理要還在串（標題仍是「思考中」）。 */
+async function scenarioReasoningStream(page, cdp) {
+  await send(page, `${REASONING_STREAM}：慢慢想`);
+  await page.getByRole('button', { name: '停止', exact: true }).waitFor({ timeout: 30_000 });
+  const row = page.locator(REASONING_ROW).last();
+  const thinking = () => row.evaluate((el) => el.textContent?.includes('思考中') ?? false);
+  for (let i = 0; i < 300 && !(await thinking()); i++) await sleep(100);
+  if (!(await thinking())) throw new Error('沒看到「思考中」的推理列');
+  await sleep(1500);
+  const box = await page.locator('[data-slot="message-scroller"]').first().boundingBox();
+  if (box === null) throw new Error('找不到對話區');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  const deltas = await recordFrames(
+    page,
+    async () => {
+      for (let round = 0; round < 6; round++) {
+        for (let i = 0; i < 10; i++) {
+          await page.mouse.wheel(0, -120);
+          await sleep(50);
+        }
+        for (let i = 0; i < 10; i++) {
+          await page.mouse.wheel(0, 120);
+          await sleep(50);
+        }
+      }
+    },
+    cdp,
+  );
+  if (!(await thinking())) throw new Error('量測途中推理就串完了，不是「推理串流中」');
+  const setup = await row.evaluate((el) => ({
+    open: el.querySelector('details')?.open ?? el.querySelector('[data-panel-open]') !== null,
+    mounted: el.querySelector('.markdown') !== null,
+  }));
+  if (setup.open) throw new Error('推理列是打開的，不是「收著」');
+  await page.getByRole('button', { name: '停止', exact: true }).click();
+  await waitTurnDone(page);
+  return Object.assign(deltas, { setup });
+}
+
+async function measureReasoning(page, cdp, vsync) {
+  // 填歷史不降速，省時間。
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
+  for (let i = 0; i < REASONING_TURNS; i++) {
+    await send(page, `推理歷史 ${i + 1}`);
+    await page.getByRole('button', { name: '停止', exact: true }).waitFor({ timeout: 30_000 });
+    await waitTurnDone(page);
+  }
+  const filled = await page.evaluate(
+    (selector) => document.querySelectorAll(selector).length,
+    REASONING_ROW,
+  );
+  if (filled < REASONING_TURNS)
+    throw new Error(`填完歷史只有 ${filled} 列推理（要 ${REASONING_TURNS}）`);
+  await cdp.send('Emulation.setCPUThrottlingRate', { rate: CPU_THROTTLE });
+  const load = await scenarioLoad(page, cdp);
+  const stream = await scenarioReasoningStream(page, cdp);
+  return {
+    長歷史初次載入: Object.assign(summarize(load, vsync), { setup: load.setup }),
+    推理收著時串流中捲動: Object.assign(summarize(stream, vsync), { setup: stream.setup }),
+  };
+}
+
 async function measureOnce(run) {
   const root = mkdtempSync(join(tmpdir(), 'nexus-frames-'));
   const llm = await startFakeLlm();
@@ -600,6 +794,11 @@ async function measureOnce(run) {
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
     const idle = await recordFrames(page, () => sleep(2000));
     const vsync = percentile(idle, 50);
+
+    if (SUITE === 'reasoning') {
+      const scenarios = await measureReasoning(page, cdp, vsync);
+      return { run, browser: browser.version(), ...check, vsync, scenarios };
+    }
 
     // 先填兩輪歷史（不降速，省時間），再降速量。
     await cdp.send('Emulation.setCPUThrottlingRate', { rate: 1 });
@@ -635,7 +834,9 @@ for (let run = 1; run <= RUNS; run++) {
   const result = await measureOnce(run);
   results.push(result);
   for (const [name, s] of Object.entries(result.scenarios)) {
-    if (s.setup !== undefined)
+    if (s.setup !== undefined && SUITE === 'reasoning')
+      console.log(`第 ${run} 次 ${name} 的場面：${JSON.stringify(s.setup)}`);
+    else if (s.setup !== undefined)
       console.log(
         `第 ${run} 次 ${name} 的場面：段內 ${s.setup.tools} 列、展開 ${s.setup.opened.join('／')}、glass-panel ${s.setup.panels} 個、結果框 ${s.setup.outputs} 個`,
       );

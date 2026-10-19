@@ -199,6 +199,16 @@
       "source": "solid-glass",
       "from": "src/components/ui/diff-view.tsx",
       "sha256": "f2661b83cbd3e3994ae865c3de399ebe8fe136c9d6e5dadd9d44d200438ae00c"
+    },
+    "components/ui/reasoning.tsx": {
+      "source": "solid-glass",
+      "from": "src/components/ui/reasoning.tsx",
+      "sha256": "af3ee334b82347dd9818e8019d89bfc78ed217b3cb7e0721b5664aa82ecbb376",
+      "patches": [
+        "patches/0020-reasoning-node-children.patch",
+        "patches/0021-reasoning-trailing.patch"
+      ],
+      "upstreamSha256": "cc17a2722b0db779242b7eaa09ae50f272fae1aeb680db443ff96987ebf9fe87"
     }
   }
 }
