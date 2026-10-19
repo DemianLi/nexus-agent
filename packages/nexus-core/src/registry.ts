@@ -58,7 +58,7 @@ import type { SessionAddress } from './session-address.js';
 import type { SessionRegistry } from './session-registry.js';
 import type { SessionLog } from './session-log.js';
 import type { LoggedMessage } from './logged-message.js';
-import { appendSubagentCatalog } from './subagent-catalog.js';
+import { appendSubagentCatalog, type SubagentCatalogData } from './subagent-catalog.js';
 import type { SessionTelemetryRedactRule, SessionTelemetryService } from './session-telemetry.js';
 import type { FeedbackService } from './feedback.js';
 import type { FsService } from './fs-service.js';
@@ -1317,7 +1317,8 @@ export function pickSessionForCall(
   // `open` 而不是 `get`：subagent 的日誌在第一次有人要寫的時候才出生，理由見
   // `SessionRegistry` 的偏離第 1 條。訂閱者在這一行之內就裝好了。
   const log = picked.bound.open(picked.address);
-  // 子代理收到的那句話在這裡寫：每一位訂閱者（持久化在內）都接好了。寫不進去從這裡拋（#1665）。
+  // 父那一份的目錄與子代理收到的那句話在這裡寫：每一位訂閱者（持久化在內）都接好了。寫不進去從這裡拋（#1665、#1702）。
+  writePendingCatalog(log);
   writePendingSpawnInput(log);
   return { kind: 'ok', address: picked.address, log };
 }
@@ -1341,6 +1342,35 @@ export function pickSessionForCall(
  * 以子日誌為鍵、弱引用：子日誌不在了，登記跟著消失。
  */
 const pendingSpawnInputs = new WeakMap<SessionLog, LoggedMessage>();
+
+/**
+ * 前景子代理出生時等著寫進**父那一份**的 `subagent/catalog`（[#1023](https://github.com/DemianLi/nexus-agent/issues/1023)），子日誌 → 那一顆。
+ * `bind` 的訂閱者在子日誌出生那一刻登記，{@link pickSessionForCall} 在 `open` 回來之後寫。
+ *
+ * **寫不進去就讓派出失敗**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)），照 dsh：目錄是直接子代理的持久權威，
+ * 寫不進去拋（`packages/subagent/subagent/src/catalog.ts:144`）。**時序同 dsh**：dsh 在 `submitMaterialized` 的 `commit` 回呼寫
+ * （`manager.ts:467`），排在第一句准入之後（`:1401-1402`）；這裡是 `open` 回來之後、子代理第一句之前。
+ *
+ * **偏離 dsh，理由 1（基座表達不出來）——失敗浮出的位置。** dsh 寫不進去就在派出那一刻 `dispose(activation)` 再重拋
+ * （`manager.ts:1405-1413`），派出的工具呼叫失敗。我們的子日誌是惰性出生的（`SessionRegistry` 偏離第 1 條），deepagents 的 `task`
+ * 在派出前沒有掛點；在出生通知的訂閱者裡拋，又會跳過排在後面的訂閱者（持久化在內，理由同 {@link pendingSpawnInputs}）。所以從
+ * 子代理第一次查找拋出去，經 `task` 回到父代理成一次失敗的委派（工具錯誤，`packages/core/tools/src/index.ts:1594-1595`）。
+ * **回頭點**：底座換成 Cordis、子日誌改成在派出那一刻出生之後（#1385），改回在派出點寫，寫不進去撤掉 activation。
+ *
+ * **寫成功才清掉**，理由同 {@link pendingSpawnInputs}。以子日誌為鍵、弱引用。
+ */
+const pendingCatalogs = new WeakMap<
+  SessionLog,
+  { parent: SessionLog; data: SubagentCatalogData }
+>();
+
+/** 寫 {@link pendingCatalogs} 裡等著的那一顆；沒有就什麼都不做。寫不進去原錯往外拋，登記留著。 */
+function writePendingCatalog(log: SessionLog): void {
+  const pending = pendingCatalogs.get(log);
+  if (pending === undefined) return;
+  appendSubagentCatalog(pending.parent, pending.data);
+  pendingCatalogs.delete(log);
+}
 
 /** 寫 {@link pendingSpawnInputs} 裡等著的那一句；沒有就什麼都不做。寫不進去原錯往外拋，登記留著。 */
 function writePendingSpawnInput(log: SessionLog): void {
@@ -1734,10 +1764,10 @@ export function createRegistry(options: CreateRegistryOptions = {}): InternalPlu
         // 記它，從日誌推這個子代理的歷史就缺了開頭那一句（#1159）。**這裡只登記，不寫**：寫在 `open` 回來之後
         // （{@link pickSessionForCall}），理由見 {@link pendingSpawnInputs}。
         if (link.input !== undefined) pendingSpawnInputs.set(log, link.input);
-        appendSubagentCatalog(link.parent, {
-          childId: log.sessionId,
-          callId: link.callId,
-          mode: 'one-shot',
+        // 目錄同樣只登記、在 `open` 回來之後寫（#1702，見 {@link pendingCatalogs}）。
+        pendingCatalogs.set(log, {
+          parent: link.parent,
+          data: { childId: log.sessionId, callId: link.callId, mode: 'one-shot' },
         });
       });
       let active = true;

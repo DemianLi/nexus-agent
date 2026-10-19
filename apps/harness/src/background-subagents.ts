@@ -809,9 +809,35 @@ export class BackgroundSubagentHost {
     const { callId, ...first } = input;
     const outcome = this.submit({ runId, ...first });
     if (callId !== undefined) {
-      appendSubagentCatalog(this.#sessions.root, { childId, callId, mode: 'continuable' });
+      try {
+        appendSubagentCatalog(this.#sessions.root, { childId, callId, mode: 'continuable' });
+      } catch (error) {
+        // 目錄寫不進去就派出失敗（#1702）：撤回剛准入的那一輪再重拋，同 dsh 寫目錄失敗時 `dispose(activation)`
+        // （`packages/subagent/subagent/src/manager.ts:1401-1416`）。錯經工具本體回到父代理成錯誤結果。
+        this.#retract(runId);
+        throw error;
+      }
     }
     return { runId, outcome };
+  }
+
+  /**
+   * 撤回 {@link start} 剛准入、還沒被領走的那個背景子代理：佇列裡它的輪次以失敗收尾、編號與模型選擇忘掉。
+   *
+   * **只在 `start` 同一段同步程式裡叫**：`submit` 只排進佇列、喚醒 runner，runner 要到下一個 microtask 才領得走，
+   * 所以這時那一輪一定還在 {@link #queue} 裡，沒有在跑的要停。
+   */
+  #retract(runId: string): void {
+    for (let at = this.#queue.length - 1; at >= 0; at -= 1) {
+      const job = this.#queue[at]!;
+      if (job.runId !== runId) continue;
+      this.#queue.splice(at, 1);
+      job.settle({ ok: false, error: `背景子代理 ${runId} 的目錄寫不進去，派出撤回` });
+    }
+    this.#known.delete(runId);
+    this.#choices.delete(runId);
+    this.#paused.delete(runId);
+    this.#publishStatus();
   }
 
   /**

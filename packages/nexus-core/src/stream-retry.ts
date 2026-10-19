@@ -296,12 +296,21 @@ function signal(payload: StreamRetrySignal): void {
   }
 }
 
-/** 記一顆事件；記不進去不能扳倒重試（同 `model-calls.ts`）。 */
-function tryAppend(write: () => void): void {
+/**
+ * 記一顆重試事件；**記不進去就不重打，這次呼叫失敗**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）。
+ * 照 dsh `llm-retry/src/index.ts:188`、`:190`：兩顆都直接 `append`，沒有 catch，寫入錯從退避裡拋出去、這一輪失敗。
+ * 這裡已經在失敗路徑上（那次嘗試的錯還沒交出去），所以兩個錯一起拋，原錯在前、也是 `cause`（同 `containment.ts` 的
+ * `recordUnknownOutcome`、dsh `agent.ts:353`）：沿 `cause` 認錯誤種類的人看到的仍是原錯。
+ */
+function appendOrFail(write: () => void, original: unknown, type: string): void {
   try {
     write();
-  } catch {
-    // 見上。
+  } catch (appendError) {
+    throw new AggregateError(
+      [original, appendError],
+      `模型呼叫失敗，${type} 也記不進去，不再重打`,
+      { cause: original },
+    );
   }
 }
 
@@ -368,20 +377,23 @@ export async function retryModelCall<T>(
     const modelCall = log === undefined ? undefined : captured.of(log);
     const code = reported.code;
     if (log !== undefined) {
-      tryAppend(() =>
-        log.append(
-          'llm/retry',
-          withModelCall(
-            {
-              retryId,
-              retry,
-              maxRetries: options.maxRetries,
-              failure: failureOf(reported, outcome.reason),
-              delayMs,
-            },
-            modelCall,
+      appendOrFail(
+        () =>
+          log.append(
+            'llm/retry',
+            withModelCall(
+              {
+                retryId,
+                retry,
+                maxRetries: options.maxRetries,
+                failure: failureOf(reported, outcome.reason),
+                delayMs,
+              },
+              modelCall,
+            ),
           ),
-        ),
+        outcome.reason,
+        'llm/retry',
       );
     }
     const callField = modelCall === undefined ? {} : { modelCall };
@@ -401,14 +413,17 @@ export async function retryModelCall<T>(
     const waited = await sleep(delayMs, signalAbort);
     if (!waited) throw outcome.reason;
     if (log !== undefined) {
-      tryAppend(() =>
-        log.append(
-          'llm/retry-started',
-          withModelCall(
-            { retryId, retry, waitedMs: Math.max(0, Date.now() - waitStart) },
-            modelCall,
+      appendOrFail(
+        () =>
+          log.append(
+            'llm/retry-started',
+            withModelCall(
+              { retryId, retry, waitedMs: Math.max(0, Date.now() - waitStart) },
+              modelCall,
+            ),
           ),
-        ),
+        outcome.reason,
+        'llm/retry-started',
       );
     }
     notify?.({ kind: STREAM_RETRY_SIGNAL, phase: 'started', retryId, retry, ...callField });
