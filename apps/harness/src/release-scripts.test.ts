@@ -30,7 +30,6 @@ import { releaseMembers, sharedVersion } from '../../../scripts/release/members.
 import { fileSha256, productName, sha256Line } from '../../../scripts/release/pack.js';
 import {
   SBOM_FILE,
-  WEB_FONT_LICENSES,
   collectClosureViolations,
   collectPayloadViolations,
   pruneThirdPartyMaps,
@@ -209,6 +208,11 @@ describe('sha256', () => {
   });
 });
 
+/**
+ * 網頁打包的三顆字型的 OFL 全文（#1713）。刻意寫死、不引 `payload.ts` 的常數：那邊少列一份，這裡的「少一份就紅」要跟著紅。
+ */
+const FONT_LICENSES = ['Geist-OFL.txt', 'GeistMono-OFL.txt', 'NotoSansTC-OFL.txt'];
+
 /** 一棵最小的、合格的產物樹。 */
 function goodTree(root: string): void {
   const put = (path: string, text = '{}'): void => {
@@ -224,8 +228,7 @@ function goodTree(root: string): void {
   put('cordis.serve.yml', '');
   for (const entry of ['serve', 'cli', 'plugin-cli']) put(`lib/${entry}.js`, '');
   put('node_modules/@nexus/web/dist/index.html', '<div id="root"></div>');
-  for (const file of WEB_FONT_LICENSES)
-    put(`node_modules/@nexus/web/dist/assets/fonts/${file}`, 'OFL');
+  for (const file of FONT_LICENSES) put(`node_modules/@nexus/web/dist/assets/fonts/${file}`, 'OFL');
   put('node_modules/.pnpm/@nexus+core@file+x/node_modules/@nexus/core/lib/index.js', '');
   put('node_modules/.pnpm/@nexus+cordis@file+v/node_modules/@nexus/cordis/lib/index.js', '');
   put('node_modules/.pnpm/@nexus+cordis@file+v/node_modules/@nexus/cordis/src/index.ts', '');
@@ -271,7 +274,7 @@ describe('產物樹的內容檢查', () => {
       /THIRD_PARTY_NOTICES\.md 產物缺這個檔/u,
     ],
     ['缺 SBOM', () => rmSync(join(root, SBOM_FILE)), /sbom\.cdx\.json 產物缺這個檔/u],
-    ...WEB_FONT_LICENSES.map(
+    ...FONT_LICENSES.map(
       (file) =>
         [
           `缺字型的 OFL 全文 ${file}`,
