@@ -4,7 +4,8 @@
  * - 本頁**不寫任何 class**，版面只用 inline style：寫了 class 也不在出貨的 CSS 裡，量到的會是「沒有樣式」（`src/guard-page.test.ts` 擋）。
  * - 要量的元素掛 `data-guard-*`：
  *   - `data-guard-text`：量它的字色對它實際的底色（往上疊到不透明為止）；門檻預設 4.5，`data-guard-min` 另給。
- *   - `data-guard-texts`：同上，但量的是它底下每個 `[aria-hidden]` 的字（元件自己的 span 掛不了屬性）。
+ *   - `data-guard-texts`：同上，但量的是它底下每個 `[aria-hidden]` 的字（元件自己的 span 掛不了屬性）；底下有 `DiffStats` 時改量它的
+ *     `+`／`−` 兩個 span（#1685：`aria-hidden` 在包裝層上，字色在裡面那兩個 span）。
  *   - `data-guard-focus`：鍵盤聚焦後量焦點的樣子；外框畫在別的元素上時，那個元素掛 `data-guard-outline-host`。
  *   - `data-guard-field`：文字欄位，鍵盤聚焦後量邊框的顏色（邊框畫在群組上時同樣看 `data-guard-outline-host`）。
  *   - `data-guard-docked`：貼在輸入框上方的卡片（`Surface tone="docked"`），量它是不是平的（1px 邊、沒有投影）。
@@ -72,7 +73,6 @@ import { Check, MoreHorizontal } from 'lucide-react';
 import { StrictMode, useEffect, useRef, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 
-import { Counts } from '@/components/changes/counts';
 import { CompactionRow } from '@/components/compaction-row';
 import { SessionUsage } from '@/components/cost/session-usage';
 import { Composer } from '@/components/composer';
@@ -94,13 +94,17 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
+import { createChangesStores } from '@/lib/changes-diff';
 import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
 import { AttachmentRail } from '@/components/attachment-rail';
 import { SentAttachments } from '@/components/sent-attachments';
+import { ChangesCard } from '@/components/changes/card';
+import { RightSidebarPanel, RightSidebarProvider } from '@/components/sidebar/right-sidebar';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { ComposerPick } from '@/components/ui/composer';
+import { DiffStats } from '@/components/ui/diff-view';
 import { Input } from '@/components/ui/input';
 import {
   InputGroup,
@@ -281,7 +285,7 @@ function GuardPage() {
             </CardHeader>
             <CardContent>
               <div data-guard-texts="card-counts">
-                <Counts added={12} deleted={3} />
+                <DiffStats added={12} removed={3} />
               </div>
               <Button variant="destructive" data-guard-hover="button-destructive-card">
                 卡片裡的刪除
@@ -798,6 +802,113 @@ function ReasoningPage() {
   );
 }
 
+/**
+ * 增刪行數（#1685 PR A，`?overlay=diff-stats`）：SG `DiffStats` 的 `+`／`−` 疊在四種底上量對比——頁面底與漸層（`page`）、
+ * 工具段 `StepList` 的 `--panel`（`panel`，段裡寫檔那張卡的標頭）、改動卡（`changes`）、審查頁（測試點開卡片後量）。
+ * 改動卡與審查頁讀假的 fetch：摘要三個檔（一個二進位），比較都回同一段。路徑故意很長：375 寬時列被擠，量 stats 有沒有被擠窄。
+ */
+const DIFF_LONG_NOTES = 'docs/meeting-notes/2026/october/quarterly-review-follow-up.md';
+const DIFF_NOTES = Array.from({ length: 12 }, (_, i) => `第 ${i + 1} 行`).join('\n');
+const DIFF_WRITE = CARD({
+  id: 'diff-write',
+  callId: 'diff-c1',
+  name: 'write_file',
+  input: JSON.stringify({ file_path: `/${DIFF_LONG_NOTES}`, content: `${DIFF_NOTES}\n` }),
+  text: `Successfully wrote to /${DIFF_LONG_NOTES}`,
+});
+const DIFF_TOOLS: ToolEntry[] = [
+  DIFF_WRITE,
+  CARD({
+    id: 'diff-echo',
+    callId: 'diff-c2',
+    name: 'echo',
+    input: '{"message":"嗨"}',
+    text: 'echo: 嗨',
+  }),
+];
+const DIFF_SUMMARY = {
+  files: [
+    {
+      path: 'packages/nexus-harness/src/plugins/workspace/changes/summary-reader.ts',
+      display: 'packages/nexus-harness/src/plugins/workspace/changes/summary-reader.ts',
+      added: 1234,
+      deleted: 5,
+    },
+    { path: 'notes.md', display: 'notes.md', added: 12, deleted: 0 },
+    { path: 'logo.png', display: 'logo.png', added: 0, deleted: 0, binary: true },
+  ],
+  total: 3,
+  added: 1246,
+  deleted: 5,
+};
+const DIFF_FILE = {
+  kind: 'text',
+  path: 'packages/nexus-harness/src/plugins/workspace/changes/summary-reader.ts',
+  display: 'packages/nexus-harness/src/plugins/workspace/changes/summary-reader.ts',
+  before: true,
+  after: true,
+  coarse: false,
+  hunks: [{ oldStart: 3, oldLines: 2, newStart: 3, newLines: 2, lines: [' keep', '-old', '+new'] }],
+};
+const DIFF_CHANGES = createChangesStores({
+  threadId: 'guard',
+  baseUrl: 'http://guard.invalid',
+  fetch: async (url) =>
+    new Response(
+      JSON.stringify(new URL(String(url)).pathname.endsWith('/summary') ? DIFF_SUMMARY : DIFF_FILE),
+    ),
+});
+
+function DiffStatsPage() {
+  const [open, setOpen] = useState(true);
+  return (
+    <RightSidebarProvider threadId="guard" sources={{ changes: DIFF_CHANGES }}>
+      <div
+        style={{
+          maxWidth: '48rem',
+          margin: '0 auto',
+          padding: 16,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: 16,
+        }}
+      >
+        <div data-guard-diffstats="page">
+          <DiffStats added={1234} removed={0} />
+        </div>
+        {/* 段裡每一則是一格 `MessageScrollerItem`，要包在 scroller 裡（同 `Transcript`）。 */}
+        <div data-guard-diffstats="panel">
+          <MessageScrollerProvider>
+            <MessageScroller>
+              <MessageScrollerViewport aria-label="工具段">
+                <MessageScrollerContent>
+                  <ToolRun
+                    run={{
+                      kind: 'tool-run',
+                      id: 'tools:diff-run',
+                      entries: DIFF_TOOLS,
+                      tools: DIFF_TOOLS,
+                    }}
+                    open={open}
+                    onOpenChange={setOpen}
+                    renderEntry={(entry) =>
+                      entry.kind === 'tool' ? <ToolCard entry={entry} /> : null
+                    }
+                  />
+                </MessageScrollerContent>
+              </MessageScrollerViewport>
+            </MessageScroller>
+          </MessageScrollerProvider>
+        </div>
+        <div data-guard-diffstats="changes">
+          <ChangesCard seq={7} changes={DIFF_CHANGES} />
+        </div>
+      </div>
+      <RightSidebarPanel />
+    </RightSidebarProvider>
+  );
+}
+
 /** 對話區（#1638 PR B）：人與 AI 輪流，AI 的回覆夠長、總高度超出容器，捲到最新的按鈕才有機會出現；最後一則 AI 被停止，畫表尾。 */
 const MESSAGES: ConversationEntry[] = Array.from({ length: 6 }, (_, i): ConversationEntry[] => [
   { kind: 'human', id: `h-${i}`, text: `第 ${i + 1} 個問題：這份報表的數字要怎麼看？` },
@@ -1041,6 +1152,8 @@ function OverlayPage({ name }: { name: string }) {
       return <ToolCardsPage />;
     case 'reasoning':
       return <ReasoningPage />;
+    case 'diff-stats':
+      return <DiffStatsPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':

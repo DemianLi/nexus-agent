@@ -276,5 +276,25 @@ describe('registry 檔的改動還在', () => {
     });
   });
 
+  // 增刪行數的兩色（#1685 PR A，README 本地修改第 75 條）：覆寫檔那兩段還在，vendor 的 `DiffStats` 仍是兩個子 span、各自寫死
+  // emerald／rose。vendor 升版改了結構（多一層、換順序），`span:first-child`／`:last-child` 就錨錯；畫出來的對比在 `guard/` 量。
+  describe('diff-view 的覆寫（#1685）', () => {
+    test('第 75 條：`+N` 是第一個子 span、`−M` 是最後一個，vendor 原色是 emerald-600／rose-600', () => {
+      const diff = code(read('../../vendor/solid-glass/components/ui/diff-view.tsx'));
+      expect(read('../../styles/solid-glass.overrides.css')).toContain(
+        '[data-slot="diff-stats"] > span:first-child {\n  color: var(--success);\n}',
+      );
+      expect(read('../../styles/solid-glass.overrides.css')).toContain(
+        '[data-slot="diff-stats"] > span:last-child {\n  color: var(--destructive);\n}',
+      );
+      expect(diff).toContain(
+        '<span data-slot="diff-stats" className={cn("shrink-0 text-[12px] tabular-nums", className)}>\n' +
+          '      <span className="text-emerald-600 dark:text-emerald-400">+{added}</span>{" "}\n' +
+          '      <span className="text-rose-600 dark:text-rose-400">−{removed}</span>\n' +
+          '    </span>',
+      );
+    });
+  });
+
   // #1281 的三條（側欄、dropdown-menu、cmdk 的 text-ui）照 #1468 Q19 拿掉：dropdown-menu 與 cmdk 隨 #1583、側欄隨 #1680 換成 vendor 版。
 });
