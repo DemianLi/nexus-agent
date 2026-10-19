@@ -993,6 +993,82 @@ function DiffStatsPage() {
   );
 }
 
+/**
+ * SG 的 `DiffView`（#1685 PR B，`?overlay=diff-view`）：產品的工具卡給了 `step.patch` 之後，展開的 diff 疊在兩種底上——
+ * 工具段 `StepList` 的 `--panel` 上（`data-guard-diffview="group"`），以及單獨一張卡、直接疊在頁面底上（`"standalone"`）。
+ * 改檔那張有兩個檔、同一檔兩段：`diff --git`、`@@`、新增、刪除、上下文都有；寫檔那張每行 1,999 字，撞到整張卡的字元預算，尾端有
+ * `... 還有 N 行沒畫`。
+ */
+const DIFF_VIEW_EDIT = CARD({
+  id: 'dv-edit',
+  callId: 'dv-c1',
+  name: 'edit_file',
+  input: JSON.stringify({ file_path: '/src/app.ts', old_string: 'a', new_string: 'b' }),
+  text: 'ok',
+  meta: {
+    diffs: [
+      { path: '/src/app.ts', oldText: 'x\nconst a = 1;\ny\n', newText: 'x\nconst a = 2;\ny\n' },
+      { path: '/src/app.ts', oldText: 'p\nold\nq\n', newText: 'p\nnew\nq\n' },
+      { path: '/docs/notes.md', oldText: null, newText: '第一行\n第二行\n' },
+    ],
+  },
+});
+const DIFF_VIEW_WRITE = CARD({
+  id: 'dv-write',
+  callId: 'dv-c2',
+  name: 'write_file',
+  input: JSON.stringify({
+    file_path: '/data/wide.txt',
+    content: Array.from({ length: 25 }, (_, i) => `${i}`.padEnd(1999, 'x')).join('\n'),
+  }),
+  text: 'ok',
+});
+const DIFF_VIEW_TOOLS: ToolEntry[] = [DIFF_VIEW_EDIT, DIFF_VIEW_WRITE];
+
+function DiffViewPage() {
+  const [open, setOpen] = useState(true);
+  return (
+    <div
+      style={{
+        maxWidth: '48rem',
+        margin: '0 auto',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      }}
+    >
+      <div data-guard-diffview="group">
+        <MessageScrollerProvider>
+          <MessageScroller>
+            <MessageScrollerViewport aria-label="工具段">
+              <MessageScrollerContent>
+                <ToolRun
+                  run={{
+                    kind: 'tool-run',
+                    id: 'tools:dv-run',
+                    entries: DIFF_VIEW_TOOLS,
+                    tools: DIFF_VIEW_TOOLS,
+                  }}
+                  open={open}
+                  onOpenChange={setOpen}
+                  renderEntry={(entry) =>
+                    entry.kind === 'tool' ? <ToolCard entry={entry} defaultOpen /> : null
+                  }
+                />
+              </MessageScrollerContent>
+            </MessageScrollerViewport>
+          </MessageScroller>
+        </MessageScrollerProvider>
+      </div>
+      <div data-guard-diffview="standalone">
+        <ToolCard entry={{ ...DIFF_VIEW_EDIT, id: 'dv-edit-2' }} defaultOpen />
+        <ToolCard entry={{ ...DIFF_VIEW_WRITE, id: 'dv-write-2' }} defaultOpen />
+      </div>
+    </div>
+  );
+}
+
 /** 對話區（#1638 PR B）：人與 AI 輪流，AI 的回覆夠長、總高度超出容器，捲到最新的按鈕才有機會出現；最後一則 AI 被停止，畫表尾。 */
 const MESSAGES: ConversationEntry[] = Array.from({ length: 6 }, (_, i): ConversationEntry[] => [
   { kind: 'human', id: `h-${i}`, text: `第 ${i + 1} 個問題：這份報表的數字要怎麼看？` },
@@ -1238,6 +1314,8 @@ function OverlayPage({ name }: { name: string }) {
       return <ReasoningPage />;
     case 'diff-stats':
       return <DiffStatsPage />;
+    case 'diff-view':
+      return <DiffViewPage />;
     case 'turn-status':
       return <TurnStatusPage />;
     case 'questionnaire':

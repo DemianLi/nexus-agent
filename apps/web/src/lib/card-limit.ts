@@ -2,8 +2,8 @@
  * diff 卡、搜尋卡與讀檔卡的畫面字元上限（[#961](https://github.com/DemianLi/nexus-agent/issues/961)、
  * [#980](https://github.com/DemianLi/nexus-agent/issues/980)）。
  *
- * 這幾種專屬卡的列是 `whitespace-pre-wrap`＋`wrap-anywhere`，**單列超長時點開的成本隨長度超線性成長**：
- * 一行 527KB 的連續中文，diff 卡點開要 105 秒、搜尋卡 66 秒；「字＋127 空白」約 0.5／0.9 秒。
+ * 搜尋卡與讀檔卡的列是 `whitespace-pre-wrap`＋`wrap-anywhere`（diff 卡在 #1685 B 之前也是），**單列超長時點開的成本隨長度
+ * 超線性成長**：一行 527KB 的連續中文，那時的 diff 卡點開要 105 秒、搜尋卡 66 秒；「字＋127 空白」約 0.5／0.9 秒。
  * 傳輸上的上限擋不住它：搜尋 meta「至少留一項」（`capToolResultMeta`），write_file 新建檔的 diff 是從參數算的，
  * 兩條都沒有大小上限。列數上限（{@link MAX_RENDERED_LINES}）也管不到：它管列數、不管每列多長，
  * 而幾千列各二十幾字的短列在 5,000 列時也要 131ms 且有長任務。
@@ -14,11 +14,11 @@
  * - **整張卡** 展開後所有列加起來最多 {@link CARD_MAX_CHARS} 字元（每列最多算 {@link CARD_LINE_MAX_CHARS}），
  *   超過的列不畫、底下寫「只顯示前 N 行」。
  *
- * **登記的偏離**：dsh 的 `DiffBlock`、`SearchBlock` 預設 `white-space: pre`＋橫向捲動、不截字（換行是選項：
- * `DiffBlock.module.css` 的 `data-code-wrap`、`SearchBlock.module.css` 的 `.line`，master `ec48669`），所以沒有這個問題；
- * 我們的卡一開始就選了自動換行，成本出在換行。這裡不退回橫向捲動（那是 UI 形狀的改變，不是這張卡的事），
- * 沿用 #950、#958 已登記的做法在畫面上截。讀檔卡同理（dsh `ReadBlock.module.css` 預設 `white-space: pre`，`data-code-wrap` 才換行，
- * dsh master `5badb15009a`）。
+ * **登記的偏離**（搜尋卡、讀檔卡）：dsh 的 `SearchBlock` 預設 `white-space: pre`＋橫向捲動、不截字（換行是選項：
+ * `SearchBlock.module.css` 的 `.line`，master `ec48669`），所以沒有這個問題；我們的卡一開始就選了自動換行，成本出在換行。
+ * 這裡不退回橫向捲動（那是 UI 形狀的改變，不是這張卡的事），沿用 #950、#958 已登記的做法在畫面上截。讀檔卡同理
+ * （dsh `ReadBlock.module.css` 預設 `white-space: pre`，`data-code-wrap` 才換行，dsh master `5badb15009a`）。
+ * diff 卡 #1685 B 起是 SG 的 `whitespace-pre`，跟 dsh 的 `DiffBlock` 一樣，不再是偏離（見下面那段）。
  *
  * **讀檔卡只收每列、不收整張卡**（#980）：一頁最多 100,000 位元組的 meta 擋住了總量，單列連續中文最多約 33,000 字
  * （超過就整格不給、改走通用卡），那一列點開約 99–105ms 且有長任務，每列 {@link CARD_LINE_MAX_CHARS} 之後回到地板。
@@ -35,8 +35,12 @@
  *
  * 最壞是中文短列（每個字都是斷行點）：40,000 是它仍在約 100ms 內、沒有長任務的最大值，所以取它。
  * 每列 2,000 是人眼的上限（換行後約 28 個畫面列），不是效能的上限：改成 4,000，收著畫 9 列各 4,000 中文的
- * 那一格從 50ms 變 65ms（IQR 60–72），仍沒有長任務。收著最多畫 9 列（`CHAT_DIFF_MAX_LINES`），
- * 9 × {@link CARD_LINE_MAX_CHARS} 要在 {@link CARD_MAX_CHARS} 之內。
+ * 那一格從 50ms 變 65ms（IQR 60–72），仍沒有長任務。（那時 diff 卡收著最多畫 9 列；#1685 B 照 SG 拿掉了收合。）
+ *
+ * **diff 卡 #1685 B 起改由 SG 的 `DiffView` 畫**：`whitespace-pre`＋橫向捲動，同 dsh，換行的成本不在了。這兩道上限與
+ * {@link MAX_RENDERED_LINES} 照舊沿用（PM 定題 3a：上限是機制），套在 nexus 層 `components/ui/diff-view.tsx` 的 `capPatch`：
+ * 「行」是交給 SG 的 unified patch 的行：`diff --git`、`@@` 也算進 5,000 行與字元預算——上限管的是畫出來的行，
+ * 這兩種行 SG 也會畫成一列（PM 在 #1754 同意）。沒畫完時尾端一行 `... 還有 N 行沒畫`。
  *
  * **這兩道壓不住的，靠字型堆疊解**（[#979](https://github.com/DemianLi/nexus-agent/issues/979)）：堆疊裡沒有字型涵蓋的符號
  * （旗、☺、❤、⚠️ 之類）要走系統字型回退，成本跟字元上限無關，分兩段——每個新頁面第一次遇到約 40ms（🏳️‍🌈 約 75ms），

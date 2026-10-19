@@ -6,12 +6,16 @@ import {
   cappedRows,
   contentLines,
   diffHunks,
-  diffRows,
   diffTotals,
   MAX_DIFF_EDIT_LENGTH,
+  patchPath,
   toolDiffs,
   toolDiffView,
+  toolPatch,
 } from '@/lib/tool-diff';
+import type { DiffFragment, FileDiff } from '@/lib/tool-diff';
+// 直接拿 vendor 那支，不經 nexus 層：要證的是 SG 自己怎麼讀這份 patch（#1685 B.1）。
+import { patchStats } from '@/vendor/solid-glass/components/ui/diff-view';
 
 /** #601、#625：寫檔、改檔什麼時候畫 diff、畫哪一份，以及 diff 怎麼算、怎麼切。 */
 
@@ -158,45 +162,116 @@ describe('diff 的算法', () => {
   it('257 行的新檔也走整段替換，+N 仍是行數', () => {
     const hunks = diffHunks({ path: '/a', oldText: null, newText: lines(257).join('\n') });
     expect(diffTotals(hunks)).toEqual({ added: 257, removed: 0 });
-    expect(diffRows([{ path: '/a', hunks }])).toHaveLength(258);
+    // 檔頭一列、@@ 一列、257 行
+    expect(toolPatch([{ path: '/a', hunks }]).split('\n')).toHaveLength(259);
   });
 
-  it('同一段裡相隔太遠的兩處改動分成兩個 hunk，中間一列 ⋯', () => {
+  it('同一段裡相隔太遠的兩處改動分成兩個 hunk，各自一列 @@', () => {
     const before = lines(10);
     const after = [...before];
     after[0] = 'L1';
     after[9] = 'L10';
     const hunks = diffHunks({ path: '/a', oldText: before.join('\n'), newText: after.join('\n') });
     expect(hunks).toHaveLength(2);
-    const rows = diffRows([{ path: '/a', hunks }]);
-    expect(rows[0]).toEqual({ kind: 'path', text: '/a' });
-    expect(rows.filter((row) => row.kind === 'gap')).toHaveLength(1);
-    expect(rows.find((row) => row.kind === 'del')).toEqual({ kind: 'del', text: 'l1' });
+    const patch = toolPatch([{ path: '/a', hunks }]).split('\n');
+    expect(patch[0]).toBe('diff --git a/a b/a');
+    expect(patch.filter((line) => line === '@@')).toHaveLength(2);
+    expect(patch).toContain('-l1');
   });
 });
 
-describe('多段的 diff 怎麼排', () => {
-  it('換檔時先一列路徑；同一檔的下一段之前一列 ⋯', () => {
-    const fragment = (path: string, from: string, to: string) => ({
-      path,
-      hunks: diffHunks({ path, oldText: from, newText: to }),
-    });
-    const rows = diffRows([
-      fragment('/a', 'x\n', 'y\n'),
-      fragment('/a', 'p\n', 'q\n'),
-      fragment('/b', 'm\n', 'n\n'),
+const fragment = (diff: FileDiff): DiffFragment => ({ path: diff.path, hunks: diffHunks(diff) });
+
+describe('toolPatch：交給 SG 的 unified patch（#1685 B）', () => {
+  it('換檔時先一列 diff --git；同一檔的下一段只多一列 @@，不重複檔頭', () => {
+    const patch = toolPatch([
+      fragment({ path: '/a', oldText: 'x\n', newText: 'y\n' }),
+      fragment({ path: '/a', oldText: 'p\n', newText: 'q\n' }),
+      fragment({ path: '/b', oldText: 'm\n', newText: 'n\n' }),
     ]);
-    expect(rows.map((row) => `${row.kind}:${row.text}`)).toEqual([
-      'path:/a',
-      'del:x',
-      'add:y',
-      'gap:⋯',
-      'del:p',
-      'add:q',
-      'path:/b',
-      'del:m',
-      'add:n',
+    expect(patch.split('\n')).toEqual([
+      'diff --git a/a b/a',
+      '@@',
+      '-x',
+      '+y',
+      '@@',
+      '-p',
+      '+q',
+      'diff --git a/b b/b',
+      '@@',
+      '-m',
+      '+n',
     ]);
+  });
+
+  it('@@ 一律不帶數字：從 1 起算的行號跟檔案對不上，不給 SG 畫（B.2）', () => {
+    const before = lines(40);
+    const after = before.map((line, index) => (index % 12 === 0 ? line.toUpperCase() : line));
+    const patch = toolPatch([
+      fragment({ path: '/a', oldText: before.join('\n'), newText: after.join('\n') }),
+    ]);
+    expect(patch.split('\n').filter((line) => line.startsWith('@@')).length).toBeGreaterThan(1);
+    expect(patch).not.toMatch(/@@ -\d/);
+  });
+
+  /**
+   * 性質（B.1）：SG 的 `patchStats` 讀這份 patch 算出來的增刪數，等於我們從 hunks 算的合計。內容故意長得像檔頭：
+   * `++ x`／`-- y` 加上前綴正好是 `+++ x`／`--- y`，hunk 外會被 SG 當成檔頭丟掉（拿掉 `@@` 這幾組會紅）；另有 `diff --git`、
+   * `@@ -1 +1 @@`、空行、沒有結尾換行、同一檔兩段、兩個檔、整段替換。
+   */
+  const tricky: (readonly FileDiff[])[] = [
+    [{ path: '/a', oldText: null, newText: '++ x\n+++ x\n--- y\n' }],
+    [{ path: '/a', oldText: '-- y\nkeep\n', newText: 'keep\n++ x\n' }],
+    [{ path: '/a', oldText: '--- y\n+++ x\nz\n', newText: '+++ x\n--- y\nz\n' }],
+    [{ path: '/a', oldText: 'a\n', newText: '+diff --git z\n@@ -1 +1 @@\n\n\nb' }],
+    [{ path: '/a', oldText: 'diff --git a/q b/q\nkeep\n', newText: 'keep\n' }],
+    [{ path: '/a', oldText: '\n\n', newText: '' }],
+    [
+      { path: '/a', oldText: 'x\n+++ a\n', newText: 'y\n--- b\n' },
+      { path: '/a', oldText: '@@\n', newText: '@@ -9 +9 @@\n' },
+    ],
+    [
+      { path: '/a', oldText: 'old\n', newText: '--- a/b\n+++ b/b\n' },
+      { path: '/b c/中文.md', oldText: null, newText: '--- x\n' },
+    ],
+    [{ path: '/a', oldText: lines(300, 'old').join('\n'), newText: lines(300, '+++ ').join('\n') }],
+  ];
+  it.each(tricky.map((diffs, index) => [index, diffs] as const))(
+    '第 %i 組：SG 的 patchStats 等於 diffTotals',
+    (_, diffs) => {
+      const fragments = diffs.map(fragment);
+      expect(patchStats(toolPatch(fragments))).toEqual(
+        diffTotals(fragments.flatMap((each) => each.hunks)),
+      );
+    },
+  );
+
+  it('路徑裡的換行與控制字元轉義成看得見的寫法，不會多出一列被當成內容', () => {
+    const patch = toolPatch([
+      fragment({ path: '/evil\n+x\n-y\t\u001b\u007f', oldText: null, newText: 'a\n' }),
+    ]);
+    const shown = 'evil\\n+x\\n-y\\t\\x1b\\x7f';
+    expect(patch.split('\n')[0]).toBe(`diff --git a/${shown} b/${shown}`);
+    expect(patchStats(patch)).toEqual({ added: 1, removed: 0 });
+  });
+
+  it('路徑：開頭的 / 拿掉一個；空白與中文原樣', () => {
+    expect(patchPath('/docs/a b/中文.md')).toBe('docs/a b/中文.md');
+    expect(patchPath('rel/x.ts')).toBe('rel/x.ts');
+    expect(patchPath('//x')).toBe('/x');
+  });
+
+  it('同一則呼叫拿到同一個實例；新的一則（reducer 換掉那一格）重算', () => {
+    const call = edit({ file_path: '/a.ts', old_string: 'a', new_string: 'b' });
+    const first = toolDiffView(call);
+    expect(first).toBeDefined();
+    expect(toolDiffView(call)).toBe(first);
+    const next = { ...call };
+    expect(toolDiffView(next)).not.toBe(first);
+    expect(toolDiffView(next)).toEqual(first);
+    const none = { ...call, status: 'failed' as const };
+    expect(toolDiffView(none)).toBeUndefined();
+    expect(toolDiffView(none)).toBeUndefined();
   });
 });
 
