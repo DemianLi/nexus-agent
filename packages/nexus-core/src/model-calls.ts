@@ -77,6 +77,8 @@
  * - **`model/end` 記不進去**：正常回來的那次，寫入錯往外拋，回覆不進 graph state；**已經在失敗路徑上**（`handler` 拋了、
  *   回覆記不進去）的那次，兩個錯一起拋，原錯在前、也是 `cause`（dsh `:495-499` 的 `AggregateError`），不蓋掉原錯。
  * - `forCall` 不是 `ok`（這次呼叫不屬於任何一份日誌）照舊不記、照常呼叫：那不是寫入失敗。
+ * - **請求快照**（`request/header`／`request/system`，{@link ./request-snapshot.ts}）記不進去也一樣：在模型被叫的那一刻拋，
+ *   這次請求沒送出，這裡記 `model/end{outcome:'error'}` 再往外拋（[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)）。
  *
  * **回覆那顆不吞**（[#1665](https://github.com/DemianLi/nexus-agent/issues/1665)），照 dsh：`assistant/message` 在
  * `live.settle()` 裡寫（`packages/core/agent-loop/src/agent.ts:537-546`，`687f282e`），寫不進去就 abandon、原錯重拋
