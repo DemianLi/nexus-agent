@@ -337,6 +337,7 @@ export {
 } from './protocol.js';
 
 export { decodeSseData, decodeSseStream, encodeSseData, encodeSseFrame } from './sse.js';
+export { canonicalClientTimeZone } from './time-zone.js';
 
 export type {
   AiEntry,

@@ -305,6 +305,12 @@ export type UserMessageSource =
        * 這個 key。**格式 48 起才有**。
        */
       readonly requestId?: string;
+      /**
+       * 使用者在哪個時區（`run.start` 的 `client_time_zone`，[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)），邊界上已驗證並正規化。
+       * 就是 dsh 的 `clientTimeZone`（`packages/api/session-controller/src/types.ts:418`，`687f282e`）。只有輪中插話被領走時記的這一顆帶得到它
+       * （一輪開頭那句在 `turn/start`）。客戶端沒帶就整個不放這個 key。**格式 49 起才有**。
+       */
+      readonly clientTimeZone?: string;
     }
   | {
       readonly kind: 'session-reference';
@@ -383,6 +389,13 @@ export interface SessionEventMap {
         readonly requestId?: string;
         /** 這句話在送出佇列裡的 id，也就是 `run.start` 回給客戶端的 `run_id`；只在帶 `requestId` 時才寫。 */
         readonly runId?: string;
+        /**
+         * 使用者在哪個時區（`run.start` 的 `client_time_zone`，[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)），邊界上已驗證並正規化。
+         * dsh 落在 `user/message` 的 `source.clientTimeZone`（`packages/api/session-controller/src/types.ts:418`，`687f282e`）；
+         * 我們一輪開頭那句人話記在這裡（見本事件的偏離），所以放在這一顆。`@nexus/plugin-time-context` 讀它決定「Browser time zone」那一行。
+         * 客戶端沒帶就整個不放這個 key，**和 `requestId` 無關**（兩個欄位各自獨立）。**格式 49 起才有**。
+         */
+        readonly clientTimeZone?: string;
       }
     | { readonly kind: 'resume' }
     | {

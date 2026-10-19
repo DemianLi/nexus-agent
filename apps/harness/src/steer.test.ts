@@ -246,6 +246,51 @@ describe('真的組裝：跑著的這一輪收插話', () => {
     }
   }, 20000);
 
+  it('插話帶時區（#1629）：三個位置都記——turn/start、inbox/spliced 的 source、領走後 user/message 的 source', async () => {
+    const run = await assemble([POKE, { content: '收到' }], {
+      onPoke: () =>
+        void run.pump.submit({
+          kind: 'message',
+          text: '改用 X',
+          id: 's1',
+          steer: true,
+          clientTimeZone: 'America/New_York',
+        }),
+    });
+    try {
+      await run.pump.submit({
+        kind: 'message',
+        text: '開始',
+        id: 'm1',
+        clientTimeZone: 'Asia/Taipei',
+      });
+      await run.pump.whenIdle();
+      const events = run.pump.sessionLog.events;
+      expect(events.find((event) => event.type === 'turn/start')?.data).toMatchObject({
+        clientTimeZone: 'Asia/Taipei',
+      });
+      const insertedSources = events.flatMap((event) =>
+        event.type === 'inbox/spliced' && event.data.removedCount === undefined
+          ? event.data.inserted.map((item) => [item.text, item.source])
+          : [],
+      );
+      expect(insertedSources).toEqual([
+        ['開始', { kind: 'user', clientTimeZone: 'Asia/Taipei' }],
+        ['改用 X', { kind: 'user', clientTimeZone: 'America/New_York' }],
+      ]);
+      // 插話被領走、記成 user/message 時，時區跟著 source 走（plugin 靠這個決定這一輪是 resolved 還是 mixed）。
+      const steered = events.filter(
+        (event) => event.type === 'user/message' && event.data.source.kind === 'user',
+      );
+      expect(steered.map((event) => (event.data as { source: unknown }).source)).toContainEqual({
+        kind: 'user',
+        clientTimeZone: 'America/New_York',
+      });
+    } finally {
+      await run.close();
+    }
+  }, 20000);
+
   it('模型說完時還有插話：同一輪再叫一次模型，turn/end 只有一顆（出貨清單全掛上）', async () => {
     const run = await assemble(
       [{ content: '說完了' }, { content: '收到插話' }],

@@ -1432,7 +1432,7 @@ Browser time zone for this request: unavailable. Ask the user to clarify otherwi
 Elapsed since the preceding model-visible message: 15m 0s.
 ```
 
-- **第二行今天一律 `unavailable`**：wire 還沒有帶瀏覽器時區（#1629、#1630）。第一行的時區只是顯示用的回退，**不代表使用者在哪個時區**。
+- **第二行看這一輪的人話帶不帶時區**（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)，照 dsh 的 `deriveBrowserTimeZoneContext`）：`run.start` 帶了 `client_time_zone` 的話，唯一的時區寫「Browser time zone for this request: Asia/Taipei. Interpret otherwise-unqualified dates and times in this zone.」，**第一行的時鐘也改用這個時區**；同一輪有不同時區的人話（輪中插話換了時區）寫 `mixed ["America/New_York","Asia/Tokyo"]` 並請模型向使用者確認；都沒帶就是 `unavailable`（舊客戶端、CLI、目標續行）。web 真的送出時區是 [#1630](https://github.com/DemianLi/nexus-agent/issues/1630)，在那之前實際跑出來仍是 `unavailable`。**沒帶時區時**第一行的時區只是顯示用的回退，**不代表使用者在哪個時區**。
 - **只進請求尾端，不進系統提示詞**：前綴快取不會因此失效；已經送出的讀數記在日誌上，續接舊會話時原樣回到模型手上，不改寫。
 - **同一條 thread 10 分鐘內不重複**（`refreshIntervalMs`，預設 600000）；`0` 是每次呼叫都注入，不是關掉。兩條 thread 各算各的。
 - **顯示時區預設是行程的 `TZ`**，載入時解析一次。**容器裡常常是 UTC**，要固定成使用者看得懂的時區，啟動時設 `TZ`，或用 `plugin config set time-context --file <檔>`（檔裡寫 `timeZone: Asia/Taipei`，IANA 名），或在 `--patch` 裡給這一列的 `config`。
@@ -1720,6 +1720,16 @@ LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
 - **日誌**：`turn/start`（`kind: 'message'`）與佇列項各多一格選填 `mention`，輪中插話則留在 `user/message` 的內容區塊裡。**格式 42，不標 `ignorable`**——舊 runtime 略過它，排著的項目被折回來重跑時點名就悄悄不見了。
 - **線上**：排著的件（`WireQueuedInput.mention`）、領走時的 `claimed`／`claimedNextStep`、歷史重播的人話（`HumanEntry.mention`）都帶它；`text` 不含點名也不含提示區塊（歷史把提示區塊剝掉，從它讀回點名）。
 - **會被看到提示區塊的地方**：送進模型的訊息、摘要器的輸入（摘要裡可能帶到點名的字，沒有處理）。泡泡、佇列、標題（讀的是 `turn/start.text`）、`thread.search` 的全文（跟歷史同一個判準剝掉提示區塊）不受影響：搜提示裡的字（「子代理」「委派工具」）不會命中被點名的話，搜使用者自己打的字照常命中。
+
+## 瀏覽器時區（`client_time_zone`）
+
+`run.start` 可以帶一格選填的 `client_time_zone`（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)，**照 dsh**：`session.prompt` 的 `clientTimeZone`，`packages/api/session-controller/src/index.ts:467-482`）。模型要把「明天下午三點」這種沒指名時區的時間按使用者的時區解讀，得知道使用者在哪個時區；瀏覽器自己知道（`Intl.DateTimeFormat().resolvedOptions().timeZone`），伺服器不知道（容器常常是 UTC）。
+
+- **協定**：`params.client_time_zone`，`UTC` 或 IANA 的 `Area/Location` 時區名（例如 `Asia/Taipei`、`America/Argentina/Buenos_Aires`），前後不能有空白。不合格式、這個執行期的 `Intl` 不認得、或不是字串，回 `invalid_argument`，訊息點名 `client_time_zone`，**這一句不進佇列**（驗證排在查重送之前，壞的時區不會被「重送」吞掉）。**省略＝維持現狀**，舊客戶端不受影響；舊 server 會略過這一格。wire client 的 `runStart(thread, text, { clientTimeZone })` 已接上。
+- **正規化**：伺服器記下的是 `Intl` 回報的正規名，別名會收成同一個值（不同 Node／ICU 版本的正規名不盡相同，例如 `Asia/Kolkata` 與 `Asia/Calcutta` 哪個是正規名看執行期；日誌讀回時不再要求「等於這個執行期的正規名」，見 `@nexus/plugin-time-context` 檔頭偏離 6）。
+- **記在哪**：人話的來源上，不進 thread 設定（那會是整條 thread 共用的一個值，同一條 thread 換了時區就說謊）。三個位置同 `request_id`：排著時 `inbox/spliced` 裡那一件的 `source.clientTimeZone`、開了一輪之後的 `turn/start`（`kind: 'message'`）、輪中插話被領走時 `user/message` 的 `source.clientTimeZone`。**格式 49，不標 `ignorable`**（既有事件上多的選填欄位；舊 runtime 讀新檔照常重建，只是把這條 thread 的時區報成不明）。沒帶 `client_time_zone` 的送出，日誌與以前位元組相同；48 以前的檔沒有這一格，等於沒帶，不補寫。
+- **誰讀**：`@nexus/plugin-time-context`，見上面「時間讀數」。**子代理不繼承**：子代理的日誌沒有 `turn/start`，它那一則讀數的第二行是 `unavailable`（dsh 的 `subagent` 會把 `clientTimeZone` 傳下去，我們還沒有；需要時另開卡）。
+- **不在這裡**：使用者在設定裡指定時區（覆蓋瀏覽器回報的）不在這張卡；web 送出時區是 [#1630](https://github.com/DemianLi/nexus-agent/issues/1630)。
 
 ## 重送同一句話（請求編號）
 
