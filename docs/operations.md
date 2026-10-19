@@ -436,17 +436,21 @@ refs:
 - **從舊版升上來的遷移（受管檔現在優先於環境變數）**：以前啟動環境排在受管檔前面，兩邊都有同名 key 時用的是環境那一把；
   現在 serve 改成用受管檔那一把，**沒有執行期警告、也沒有退回舊序的開關**（dsh 否決過「蓋掉時警告」）。受影響的是：
   受管檔有值、而 serve 的行程環境也 export 了同名變數的部署；以及只把 key 放在受管檔、卻用 `cli:live`／eval 的人。四步：
-  1. **比對兩邊的名字（只比名字、不印值）**：`grep -c '^  NVIDIA_API_KEY:' ~/.nexus-agent/.credentials.yaml` 看受管檔有沒有；
-     serve 行程的環境看 `EnvironmentFile=`／`systemctl show -p Environment`／shell profile 有沒有同名變數。**別 `cat` 檔、別 `echo` 值。**
+  1. **比對兩邊的名字（只比名字、不印值）**：受管檔有沒有（systemd 部署的 home 是 `/var/lib/nexus-agent`，檔案擁有者是
+     `nexus-agent`，所以用 `sudo -u nexus-agent grep -cE '^[[:space:]]+NVIDIA_API_KEY:' /var/lib/nexus-agent/.credentials.yaml`；本機跑則是
+     `~/.nexus-agent/.credentials.yaml`）。serve 行程的環境有沒有同名變數，看行程實際的環境、只數名字：
+     `sudo cat /proc/<MainPID>/environ | tr '\0' '\n' | grep -c '^NVIDIA_API_KEY='`（`<MainPID>` 取自 `systemctl show -p MainPID --value nexus-agent`）。
+     **別用 `systemctl show -p Environment`**：它會把值印出來（〈金鑰放哪裡〉那一段也講過）。**別 `cat` 檔、別 `echo` 值。**
   2. **決定留哪一把**。要用環境那一把，就改寫進受管檔；要用受管檔那一把，把環境裡那個同名變數拿掉（不然只是白白留著一把會讓人誤會的 key）。
   3. **要停用受管檔那一把：刪掉 `refs` 底下那一行。** 執行期改受管檔，下一個請求就生效，不必重啟。
-  4. **一次性驗證**（`cli:live`、eval、spike）的 key 要放在環境或 `.env`，不要只放受管檔。重啟 serve 看起動日誌那一行來源，確認是你要的那一層。
+  4. **一次性驗證**（`cli:live`、eval、spike）的 key 要放在環境或 `.env`，不要只放受管檔。要確認 serve 目前用的是哪一層，才需要重啟，看起動日誌那一行來源（它只在起動時印一次）。
 - **受管檔一定要 `chmod 600`。** group 或 other 任何一位有權限，serve 起動就拒絕，訊息帶著要跑的指令（一次性入口不讀這個檔，也就不檢查它）。
   檔案格式錯（未知頂層鍵、`version` 不是 1、重複的鍵、非字串的值）也是起動就失敗；訊息指名檔案，不會把值印出來。
 - **它的值不進行程的環境變數**，所以子行程（`execute`、MCP、git 快照）看不到它。兩份 `.env` 則是照舊寫進
   行程環境（啟動環境已有的變數不會被蓋掉）。
 - **改了下一個請求就生效**，不必重啟：每次請求前先 `stat` 一次，修改時間、大小、inode 或權限變了才重讀。
   執行期改壞（格式錯、權限放寬）時，繼續用上一份可用的內容並在 stderr 警告一次；還沒讀成功過就直接失敗。
+  **受管檔現在是第一層，所以這個「沿用上一份」會影響到的請求比以前多**：權限被放寬（例如誤 `chmod 644`）之後，serve 不會立刻停擺，而是繼續用放寬之前讀到的那一把，直到 stderr 警告被看到並修好為止。
   key 被整個拿掉的話，那個請求會失敗並指名缺哪一個。
 - **key 長什麼樣才收**（[#1541](https://github.com/DemianLi/nexus-agent/issues/1541)）：四層都過同一道檢查，
   在啟動時（`--live` 組裝當下）與每個請求前各判一次。

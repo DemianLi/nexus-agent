@@ -231,7 +231,7 @@ describe('一次性入口（headless profile）：不掛受管檔', () => {
     await expect(serve(where, [])).rejects.toThrow(`chmod 600 ${file}`);
   }, 60000);
 
-  it('只有受管檔有 key：serve 用它；CLI 失敗，指名缺哪一個並說「此入口不讀受管檔」', async () => {
+  it('只有受管檔有 key：serve 用它；CLI 失敗，指名缺哪一個', async () => {
     const where = layout();
     managedFile(where.home, FROM_FILE);
     delete process.env[LIVE_API_KEY_ENV];
@@ -245,7 +245,8 @@ describe('一次性入口（headless profile）：不掛受管檔', () => {
       () => undefined,
       (error: unknown) => error as Error,
     );
-    expect(failure?.message).toContain(LIVE_API_KEY_ENV);
-    expect(failure?.message).toContain('此入口不讀受管檔');
+    // 兩種訊息共有的開頭：主 checkout 根目錄若有舊位置的 `.env`，走的是 `legacyEnvMovedError`，那句沒有「此入口不讀受管檔」；
+    // 沒有舊檔時才是 `missingKeyMessage`（那一句由 `live-model-credentials.test.ts` 釘住）。
+    expect(failure?.message).toContain(`缺少環境變數 ${LIVE_API_KEY_ENV}`);
   }, 60000);
 });
