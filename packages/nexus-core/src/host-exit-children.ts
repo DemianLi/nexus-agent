@@ -23,8 +23,14 @@
  * @module
  */
 
-/** 能被強殺的子行程：`ChildProcess` 用到的那一個方法。 */
+/**
+ * 能被強殺的子行程：`ChildProcess` 用到的兩個成員。
+ *
+ * `pid` 是**送訊號前要看的**：spawn 失敗（`'error'` 還沒送到）的 `ChildProcess` 沒有 pid，這時 `kill()` 送出去的是 `kill(0, sig)`，
+ * 也就是整個行程群組，serve 自己也在裡面（[#1742](https://github.com/DemianLi/nexus-agent/issues/1742)）。
+ */
 export interface HostExitChild {
+  readonly pid?: number | undefined;
   kill(signal: NodeJS.Signals): boolean;
 }
 
@@ -33,6 +39,9 @@ const children = new Set<HostExitChild>();
 /** 行程結束那一刻：逐個送 SIGKILL。掛在 `'exit'` 上的就是它；匯出給測試直接呼叫，不必真的結束行程。 */
 export function terminateHostExitChildren(): void {
   for (const child of children) {
+    // 沒有 pid 的（spawn 失敗、`'error'` 還沒送到）不送：`kill()` 會變成對整個行程群組送 SIGKILL。登記的時點在 spawn 之後、
+    // 還不知道有沒有 pid，所以守衛放在這裡、送訊號的當下看。照 dsh `signalTree` 的 `if (pid === undefined) return`。
+    if (child.pid === undefined) continue;
     try {
       child.kill('SIGKILL');
     } catch {
