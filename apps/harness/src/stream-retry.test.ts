@@ -11,10 +11,11 @@
 import { createServer } from 'node:http';
 import type { ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import { tool } from '@langchain/core/tools';
 import { MemorySaver } from '@langchain/langgraph';
 import { deriveTokenUsage } from '@nexus/core';
 import { applyTokenMeter, initialTokenMeter, viewTokenMeter } from '@nexus/plugin-token-meter';
-import type { SessionEventMap, StreamRetryOptions } from '@nexus/core';
+import type { PluginEntry, SessionEventMap, StreamRetryOptions } from '@nexus/core';
 import {
   emptyConversation,
   LLM_RETRY,
@@ -24,6 +25,7 @@ import {
 } from '@nexus/wire';
 import type { AiEntry, Event } from '@nexus/wire';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { z } from 'zod';
 import { STREAM_RETRY_SIGNAL } from '@nexus/core';
 import { createNexusAgent } from './agent-factory.js';
 import { createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
@@ -50,7 +52,14 @@ type Act =
   /** 同 `ok`，但收尾前供應商報了用量（120 輸入、20 輸出）。 */
   | 'okusage'
   /** 一口氣吐 {@link DENSE} 個字片段、緊接著送 503 的錯誤事件（順序測試用：失敗那次有一大串片段排在佇列裡）。 */
-  | 'dense503';
+  | 'dense503'
+  /** 叫一顆工具，參數吐到一半（`{"text": "嗨`），沒有 `finish_reason`，緊接著送 `[DONE]`（#1538 驗收 6：中間的代理在 chunk 邊界乾淨收尾）。 */
+  | 'toolHalf'
+  /** 同 `toolHalf`，但連 `[DONE]` 都沒有，上游直接乾淨關線。 */
+  | 'toolHalfEof';
+
+/** `toolHalf` 的工具參數：串到一半就斷了的 JSON。 */
+const TOOL_HALF_ARGS = '{"text": "嗨';
 
 /** `dense503` 吐幾個字片段。 */
 const DENSE = 300;
@@ -96,6 +105,24 @@ async function scriptedOpenAi(script: readonly Act[]) {
       res.end('data: [DONE]\n\n');
       return;
     }
+    if (act === 'toolHalf' || act === 'toolHalfEof') {
+      res.write(
+        chunk(id, {
+          role: 'assistant',
+          content: null,
+          tool_calls: [
+            {
+              index: 0,
+              id: 'call_half',
+              type: 'function',
+              function: { name: 'echo', arguments: TOOL_HALF_ARGS },
+            },
+          ],
+        }),
+      );
+      res.end(act === 'toolHalf' ? 'data: [DONE]\n\n' : undefined);
+      return;
+    }
     res.write(chunk(id, { role: 'assistant', content: '' }));
     if (act === 'ok' || act === 'okusage') {
       res.write(chunk(id, { content: '丙' }));
@@ -139,6 +166,8 @@ async function scriptedOpenAi(script: readonly Act[]) {
 }
 
 interface RunOptions {
+  /** 這一輪掛的插件（要有工具可叫時用）。 */
+  readonly plugins?: readonly PluginEntry[];
   /** 預算；省略就是不給（等於不重打）。 */
   readonly streamRetry?: StreamRetryOptions;
   /** 慢消費者：pump 每讀到一個圖事件就多等這麼久（毫秒），讓字片段在佇列裡積壓。 */
@@ -212,7 +241,7 @@ async function runTurn(script: readonly Act[], options: RunOptions = {}) {
       }),
     ),
     checkpointer: new MemorySaver(),
-    plugins: [],
+    plugins: [...(options.plugins ?? [])],
     ...(options.streamRetry !== undefined && { streamRetry: options.streamRetry }),
   });
   const warnings: string[] = [];
@@ -692,4 +721,57 @@ describe('串流第一則事件之後才出錯（#520）', () => {
     expect(saved.thrown).toBeUndefined();
     expect(saved.hits).toBe(3);
   }, 30_000);
+
+  /**
+   * #1538 驗收 6：工具呼叫的參數吐到一半、串流卻乾乾淨淨收尾（沒有 `finish_reason`）。以前這會被轉接器收成 `invalid_tool_call`，
+   * 工具層回 `INVALID_ARGS`，模型被告知「你給的參數不對」，實際上是上游把回應切了。現在這一輪整個作廢、照 `TRANSPORT` 重打，
+   * 工具本體一次都沒被叫、日誌上沒有任何 `tool/call`／`tool/result`。`[DONE]` 與乾淨關線各走一次。
+   */
+  it.each([
+    ['送出 [DONE]', 'toolHalf'],
+    ['連 [DONE] 都沒有、乾淨關線', 'toolHalfEof'],
+  ] as const)(
+    '工具參數吐到一半、沒有 finish_reason 就%s：不是 INVALID_ARGS，是 TRANSPORT 整次重打',
+    async (_label, act) => {
+      const bodies: string[] = [];
+      const run = await runTurn([act], {
+        streamRetry: BUDGET,
+        plugins: [
+          {
+            plugin: {
+              name: 'stream-retry-echo',
+              apply(registry) {
+                registry.tools.register(
+                  tool(
+                    ({ text }: { text: string }) => {
+                      bodies.push(text);
+                      return `回聲：${text}`;
+                    },
+                    {
+                      name: 'echo',
+                      description: '原樣回聲。',
+                      schema: z.object({ text: z.string() }),
+                    },
+                  ),
+                );
+              },
+            },
+          },
+        ],
+      });
+      expect(run.thrown).toBeUndefined();
+      expect(run.hits).toBe(2);
+      const types = run.events.map((event) => event.type);
+      expect(types).not.toContain('tool/call');
+      expect(types).not.toContain('tool/result');
+      expect(bodies).toEqual([]);
+      expect(JSON.stringify(run.events)).not.toContain('INVALID_ARGS');
+      const retries = run.events.filter((event) => event.type === 'llm/retry');
+      expect(
+        retries.map((event) => (event.data as { failure: { code?: string } }).failure.code),
+      ).toEqual(['TRANSPORT']);
+      expect(shownReplies(run.frames).map((entry) => entry.text)).toEqual(['丙丁']);
+    },
+    30_000,
+  );
 });

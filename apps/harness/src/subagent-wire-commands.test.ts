@@ -93,8 +93,12 @@ describe('替身控制面：wire 這一層', () => {
   function recorder(reject?: BackgroundSubagentError) {
     const calls: string[] = [];
     const control: BackgroundSubagentControl = {
-      sendFromUser: (runId, text) => {
-        calls.push(`send:${runId}:${text}`);
+      sendFromUser: (runId, text, clientTimeZone) => {
+        calls.push(
+          clientTimeZone === undefined
+            ? `send:${runId}:${text}`
+            : `send:${runId}:${text}@${clientTimeZone}`,
+        );
         return reject === undefined ? Promise.resolve() : Promise.reject(reject);
       },
       interrupt: (runId) => {
@@ -114,6 +118,67 @@ describe('替身控制面：wire 這一層', () => {
     await client.slashList('t1'); // 建出 thread
     expect(await client.subagentSend('t1', 'bg-live', '  先看 b.ts\n')).toMatchObject(ACCEPTED);
     expect(calls).toEqual(['send:bg-live:  先看 b.ts\n']);
+  });
+
+  it('subagent.send 帶 client_time_zone（#1734）：正規化成規範名再交給控制面；不帶就是沒有第三個參數', async () => {
+    const { calls, control } = recorder();
+    const { client, raw } = stubbed(control);
+    await client.slashList('t1');
+    expect(
+      await client.subagentSend('t1', 'bg-live', '嗨', { clientTimeZone: 'asia/taipei' }),
+    ).toMatchObject(ACCEPTED);
+    expect(
+      await raw('t1', SUBAGENT_SEND_METHOD, {
+        run_id: 'bg-live',
+        text: '再',
+        client_time_zone: 'UTC',
+      }),
+    ).toMatchObject(ACCEPTED);
+    expect(await client.subagentSend('t1', 'bg-live', '沒帶')).toMatchObject(ACCEPTED);
+    expect(calls).toEqual([
+      'send:bg-live:嗨@Asia/Taipei',
+      'send:bg-live:再@UTC',
+      'send:bg-live:沒帶',
+    ]);
+  });
+
+  it('subagent.send 的 client_time_zone 不合法（#1734）：invalid_argument、訊息指名欄位，而且沒送到控制面', async () => {
+    const { calls, control } = recorder();
+    const { client, raw } = stubbed(control);
+    await client.slashList('t1');
+    for (const bad of ['Asia/Taipe', '', '+08:00', 'Asia/Taipei\n', 8, null, {}, ['Asia/Taipei']]) {
+      const response = await raw('t1', SUBAGENT_SEND_METHOD, {
+        run_id: 'bg-live',
+        text: '嗨',
+        client_time_zone: bad,
+      });
+      expect(response, JSON.stringify(bad)).toMatchObject({
+        type: 'error',
+        error: 'invalid_argument',
+      });
+      expect(String(response.message)).toContain('client_time_zone');
+    }
+    expect(calls).toEqual([]);
+  });
+
+  it('不合法的 client_time_zone 先於「有沒有這個背景子代理」被擋（#1734）：沒有控制面時也是 invalid_argument，不靠回應差別試探編號', async () => {
+    const { raw } = stubbed(undefined);
+    await raw('t1', 'slash.list', {});
+    expect(
+      await raw('t1', SUBAGENT_SEND_METHOD, {
+        run_id: 'bg-nope',
+        text: '嗨',
+        client_time_zone: 'Asia/Taipe',
+      }),
+    ).toMatchObject({ type: 'error', error: 'invalid_argument' });
+    // 對照：同一個沒有控制面的 thread，時區合法就是 not_found。
+    expect(
+      await raw('t1', SUBAGENT_SEND_METHOD, {
+        run_id: 'bg-nope',
+        text: '嗨',
+        client_time_zone: 'Asia/Taipei',
+      }),
+    ).toMatchObject({ type: 'error', error: SUBAGENT_NOT_FOUND });
   });
 
   it('subagent.send 的參數：缺 run_id、空白 text 是 invalid_argument，而且沒送到控制面', async () => {

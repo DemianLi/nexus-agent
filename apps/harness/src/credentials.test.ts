@@ -19,6 +19,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
   ambientCredentials,
+  describeKeySource,
   CREDENTIALS_FILE,
   createCredentialService,
   parseCredentialsDocument,
@@ -59,11 +60,12 @@ function dotenv(dir: string, text: string): void {
 function service(
   inherited: NodeJS.ProcessEnv = {},
   warn: (line: string) => void = () => undefined,
+  store = true,
 ) {
   // 用自己的 target 當「啟動環境」，載入完再交給服務。
   const target = { ...inherited };
   const launchEnv = loadLaunchEnv({ cwd, home, target, warn: () => undefined });
-  return { credentials: createCredentialService({ home, launchEnv, warn }), target };
+  return { credentials: createCredentialService({ home, launchEnv, store, warn }), target };
 }
 
 describe('parseCredentialsDocument', () => {
@@ -103,23 +105,24 @@ describe('parseCredentialsDocument', () => {
   });
 });
 
-describe('解析順序：啟動環境 > 受管檔 > 目前資料夾 .env > home .env', () => {
-  it('四層各放一把不同的值，逐一拿掉最上面那層，拿到的依序是下一層', () => {
+describe('解析順序（serve，掛受管檔）：受管檔 > 啟動環境 > 目前資料夾 .env > home .env', () => {
+  it('四層各放一把不同的值，逐一拿掉最上面那層，拿到的依序是下一層（#1540）', () => {
     dotenv(home, `${KEY}=from-home-env\n`);
     dotenv(cwd, `${KEY}=from-project-env\n`);
     managed(`version: 1\nrefs:\n  ${KEY}: from-file\n`);
 
+    // 受管檔在，啟動環境同名也輸：管理者寫進受管檔的 key 一定生效。
     expect(service({ [KEY]: 'from-process' }).credentials.resolve(KEY)).toEqual({
-      value: 'from-process',
-      source: 'env',
-    });
-    expect(service().credentials.resolve(KEY)).toEqual({
       value: 'from-file',
       source: 'file',
       path: file,
     });
 
     rmSync(file);
+    expect(service({ [KEY]: 'from-process' }).credentials.resolve(KEY)).toEqual({
+      value: 'from-process',
+      source: 'env',
+    });
     expect(service().credentials.resolve(KEY)).toEqual({
       value: 'from-project-env',
       source: 'project-env',
@@ -137,6 +140,14 @@ describe('解析順序：啟動環境 > 受管檔 > 目前資料夾 .env > home 
     expect(service().credentials.resolve(KEY)).toBeUndefined();
   });
 
+  it('受管檔裡沒有這一把（只有別的名字）：才輪到啟動環境', () => {
+    managed(`version: 1\nrefs:\n  OTHER_KEY: x\n`);
+    expect(service({ [KEY]: 'from-process' }).credentials.resolve(KEY)).toEqual({
+      value: 'from-process',
+      source: 'env',
+    });
+  });
+
   /** 受管檔存在的意義：內容不進行程的環境變數。 */
   it('受管檔的值不會被寫進 target', () => {
     managed(`version: 1\nrefs:\n  ${KEY}: ${SECRET}\n`);
@@ -151,6 +162,70 @@ describe('解析順序：啟動環境 > 受管檔 > 目前資料夾 .env > home 
     dotenv(home, `${KEY}=v\n`);
     expect(() => service().credentials.check()).not.toThrow();
     expect(service().credentials.resolve(KEY)?.source).toBe('user-env');
+  });
+});
+
+describe('一次性入口（CLI、eval、spike，不掛受管檔）：啟動環境 > 目前資料夾 .env > home .env（#1540）', () => {
+  const oneShot = (inherited: NodeJS.ProcessEnv = {}) =>
+    service(inherited, () => undefined, false).credentials;
+
+  it('受管檔放著不用：三層各放一把不同的值，逐一拿掉最上面那層', () => {
+    dotenv(home, `${KEY}=from-home-env\n`);
+    dotenv(cwd, `${KEY}=from-project-env\n`);
+    managed(`version: 1\nrefs:\n  ${KEY}: from-file\n`);
+
+    expect(oneShot({ [KEY]: 'from-process' }).resolve(KEY)).toEqual({
+      value: 'from-process',
+      source: 'env',
+    });
+    expect(oneShot().resolve(KEY)).toMatchObject({ value: 'from-project-env' });
+    rmSync(join(cwd, '.env'));
+    expect(oneShot().resolve(KEY)).toMatchObject({ value: 'from-home-env' });
+    rmSync(join(home, '.env'));
+    // 只有受管檔有 key：這個入口找不到它。
+    expect(oneShot().resolve(KEY)).toBeUndefined();
+  });
+
+  it('壞掉的受管檔（0644、壞 YAML）不擋：check 與 resolve 都不拋，也不讀它', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: [壞的\n`, 0o644);
+    dotenv(home, `${KEY}=from-home-env\n`);
+    const credentials = oneShot();
+    expect(() => credentials.check()).not.toThrow();
+    expect(credentials.resolve(KEY)).toMatchObject({ value: 'from-home-env' });
+    expect(credentials.store).toBe(false);
+  });
+});
+
+describe('describeKeySource：啟動時講「來自哪一層」，不含值（#1540）', () => {
+  it('各層一句話；只有名字與來源', () => {
+    dotenv(home, `${KEY}=${SECRET}-home\n`);
+    dotenv(cwd, `${KEY}=${SECRET}-project\n`);
+    managed(`version: 1\nrefs:\n  ${KEY}: ${SECRET}\n`);
+    const lines = [
+      describeKeySource(service().credentials, KEY),
+      describeKeySource(service({ [KEY]: SECRET }).credentials, KEY),
+    ];
+    expect(lines[0]).toBe(`${KEY}：來自受管檔 ${file}`);
+    expect(lines[1]).toBe(`${KEY}：來自受管檔 ${file}`);
+    rmSync(file);
+    expect(describeKeySource(service({ [KEY]: SECRET }).credentials, KEY)).toBe(
+      `${KEY}：來自啟動環境`,
+    );
+    expect(describeKeySource(service().credentials, KEY)).toBe(`${KEY}：來自${join(cwd, '.env')}`);
+    rmSync(join(cwd, '.env'));
+    expect(describeKeySource(service().credentials, KEY)).toBe(`${KEY}：來自${join(home, '.env')}`);
+    rmSync(join(home, '.env'));
+    expect(describeKeySource(service().credentials, KEY)).toBeUndefined();
+  });
+
+  it('一次性入口寫明「此入口不讀受管檔」；任何一行都不含值的前 6 個字元', () => {
+    managed(`version: 1\nrefs:\n  ${KEY}: ${SECRET}\n`);
+    dotenv(home, `${KEY}=${SECRET}-home\n`);
+    const line = describeKeySource(service({}, () => undefined, false).credentials, KEY);
+    expect(line).toBe(`${KEY}：來自${join(home, '.env')}（此入口不讀受管檔）`);
+    for (const text of [line, describeKeySource(service().credentials, KEY)]) {
+      expect(text).not.toContain(SECRET.slice(0, 6));
+    }
   });
 });
 

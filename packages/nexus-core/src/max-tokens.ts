@@ -46,7 +46,8 @@
  *
  * 1. **認得的字串是 `length` 與 `max_tokens`**，照 dsh 在轉接器那一層分類。web 那條路的原始值在
  *    我們拿到之前就被 `@langchain/core` 對映過（`dist/language_models/openai_completions_stream.js:260-270`
- *    的 `mapFinishReason`），不認得的供應商字串一律變成 `stop`——那一段不在我們手上，表達不出來。
+ *    的 `mapFinishReason`）：**已知字串只是改名**；不認得的供應商字串原本一律變成 `stop`，現在在 `fetch` 層就被
+ *    `apps/harness/src/live-model.ts` 的 `withStreamCompletionCheck` 當成失敗（`UnknownFinishReasonError`，#1538），走不到這裡。
  *    CLI 那條（非串流 `_generate`）拿到的是供應商原字串。
  * 2. **子代理那一側退到一份載體**：dsh 的子代理有自己的 `turn/end`，`task` 讀它的原因；我們子代理的
  *    日誌沒有 `turn/end`，基座的 `task` 只交回文字。所以由子代理的模型呼叫記、父圖的 `task` 取，

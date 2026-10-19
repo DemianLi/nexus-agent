@@ -48,6 +48,7 @@ import {
   resolveSessionLogDir,
   resolveWorkspaceRoot,
   SESSION_LOG_OFF_DISCLOSURE,
+  describeDelegationNarrowing,
   describePermissionNarrowing,
 } from './assembly-root.js';
 import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
@@ -504,7 +505,9 @@ async function startUnderHomeLock(
 ): Promise<RunningServe> {
   // **真模型路徑的啟動環境：兩層 `.env`**（#730），排在讀清單與建密鑰之前：壞的 `.env` 與舊位置搬家訊息在
   // server 還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`。
-  const liveLaunch = invocation.live ? loadLiveLaunchEnv({ cwd, env }) : undefined;
+  const liveLaunch = invocation.live ? loadLiveLaunchEnv({ cwd, env, store: true }) : undefined;
+  // 這一把 key 來自哪一層（#1540 Q2 (a)）：只講名字與來源、不含值；排在拿到 home 鎖之後（上面 `runServe` 先拿鎖才進這裡）。
+  if (liveLaunch?.keySource !== undefined) log(liveLaunch.keySource);
   // **對外代理：啟動流程的第一件事**（#746），排在載完環境之後、第一顆外掛載入之前。假模型路徑沒有 `.env`，
   // 用只有行程環境的那一層。server 起不來就當場還原；起來了，收尾跟著 `close()` 走。
   const disposeProxy = await installLaunchProxy(
@@ -1114,6 +1117,10 @@ async function startServer(
       if (built.permissionNarrowed !== undefined) {
         log(`[權限] thread "${threadId}" ${describePermissionNarrowing(built.permissionNarrowed)}`);
       }
+      // 冷復活的背景子代理叫醒時，委派快照比權限表裡每一組都寬就收回預設組（#1739）：叫醒發生在組裝之後，所以是訂閱；每個子代理一個行程只留一行。
+      built.onDelegationNarrowed((event) => {
+        log(`[權限] thread "${threadId}" ${describeDelegationNarrowing(event)}`);
+      });
       // 組裝之後這條 thread 的外掛執行期交出的話（例如 MCP 掉線重連的進度，#1099）同樣逐條記；組裝收掉時註冊表一起沒了。
       built.onWarning((warning) => {
         for (const line of describeWarnings(threadList.loaded, [warning])) {

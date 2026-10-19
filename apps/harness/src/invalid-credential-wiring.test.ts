@@ -89,7 +89,12 @@ describe('運行中受管檔被改壞（serve 的路）', () => {
   it('第二輪 turn/failed 是 INVALID_CREDENTIAL：不送出、不重打、日誌沒有 key 片段', async () => {
     managedRaw(GOOD_KEY);
     const launchEnv = loadLaunchEnv({ cwd: root, home, target: {}, warn: () => undefined });
-    const credentials = createCredentialService({ home, launchEnv, warn: () => undefined });
+    const credentials = createCredentialService({
+      home,
+      launchEnv,
+      store: true,
+      warn: () => undefined,
+    });
     const config = liveModelConfigSchema.parse({
       baseUrl,
       retryPolicy: {
