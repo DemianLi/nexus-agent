@@ -96,7 +96,7 @@ describe('groupToolRuns：只收全部完成的連續段（#1309）', () => {
     ]);
   });
 
-  it('執行中的卡（帶邊框光的那顆）不收，也不讓前面的段把它吞進去', () => {
+  it('執行中的卡不收，也不讓前面的段把它吞進去', () => {
     const turn = new Turn();
     turn.step();
     turn.step();

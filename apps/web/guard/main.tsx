@@ -48,8 +48,8 @@
  *   與一列單獨放在頁面上、展開的列。量執行中不閃、結果框聚焦的外框、1024 以下 44px、減少動態時箭頭不轉場、疊在清單裡的結果框不 blur
  *   （README 本地修改第 61–65 條）。兩塊各包一層 `data-guard-tool`（`group`、`standalone`）給 `guard.test.ts` 找。
  * - `?overlay=tool-cards` 畫產品的工具卡與工具段（#1682 PR B）：一段打開的工具段（兩張完成的卡，第一張展開）、單獨的卡（執行中、
- *   等你回答、完成展開、失敗展開、停止的提問、子代理歸屬、撞到輸出上限）。量三種底上的字（頁面、清單的 `--panel`、結果框）、Badge、
- *   錯誤框的紅字，列、群組、結果框的焦點；`data-guard-cards` 包整頁。
+ *   等你回答、完成展開、失敗展開、停止的提問、子代理歸屬、背景子代理、撞到輸出上限）。量三種底上的字（頁面、清單的 `--panel`、結果框）、
+ *   Badge、背景子代理的狀態字、錯誤框與撞到上限那段說明的紅字，列、群組、結果框的焦點；`data-guard-cards` 包整頁。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -80,6 +80,8 @@ import { Surface } from '@/components/surface';
 import { TodoPanel } from '@/components/todo/panel';
 import { Transcript } from '@/components/transcript';
 import { ToolCard } from '@/components/tool/card';
+import { SubagentControlContext } from '@/components/tool/subagent-control';
+import type { SubagentControl } from '@/components/tool/subagent-control';
 import { ToolRun } from '@/components/tool-run';
 import {
   MessageScroller,
@@ -598,6 +600,16 @@ const RUN_ENTRIES: ConversationEntry[] = [
   ...RUN_TOOLS,
 ];
 const STOP_ERROR = 'Error: tool call aborted before dispatch';
+/** 背景子代理卡的狀態字（「跑著」）要有控制器才畫；guard 只量字，卡收著、面板不畫，其餘欄位不會被叫到。 */
+const GUARD_SUBAGENTS: SubagentControl = {
+  connected: true,
+  renderEntry: () => null,
+  history: async () => ({ ok: false, message: '' }),
+  stateOf: () => 'running',
+  echoesOf: () => [],
+  send: async () => ({ ok: true }),
+  interrupt: async () => undefined,
+};
 const ASK_INPUT = JSON.stringify({ questions: [{ id: 'd', question: '哪一天？' }] });
 
 function ToolCardsPage() {
@@ -685,6 +697,17 @@ function ToolCardsPage() {
       <ToolCard
         entry={CARD({ id: 'sub', attribution: { kind: 'subagent', name: 'writer', callId: 'c0' } })}
       />
+      <SubagentControlContext.Provider value={GUARD_SUBAGENTS}>
+        <ToolCard
+          entry={CARD({
+            id: 'background',
+            name: 'task',
+            input: '{"description":"寫報告","subagent_type":"researcher"}',
+            text: '已在背景開始',
+            meta: { kind: 'background-subagent', runId: 'bg-1', subagentType: 'researcher' },
+          })}
+        />
+      </SubagentControlContext.Provider>
       <ToolCard
         entry={CARD({
           id: 'max',

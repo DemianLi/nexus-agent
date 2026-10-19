@@ -1,8 +1,9 @@
-import type { Event } from '@nexus/wire';
+import type { Event, ToolEntry } from '@nexus/wire';
 import { emptyConversation, reduceAll } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
+import { ToolRun } from '@/components/tool-run';
 import { Transcript } from '@/components/transcript';
 import { MIN_TOOLS } from '@/lib/tool-runs';
 import { findOrExpandTranscriptItem, findTranscriptItem } from '@/lib/transcript-locate';
@@ -133,6 +134,26 @@ describe('連續完成的工具呼叫收成一列（#1309）', () => {
   it('段至少兩顆：SG 的 StepGroup 只有一步（而且不在跑）時退化成 StepRow，children、trailing、open 都不轉過去（#1722 審查）', () => {
     // 工具段一律自己給 children 與 open；只剩一步的話 SG 會丟掉它們，段裡的卡、定位、思考列都會不見。
     expect(MIN_TOOLS).toBeGreaterThanOrEqual(2);
+    // 直接畫一顆的段、而且說要打開：沒有群組按鈕、沒有任何一格條目，SG 只畫一列（上面那條限制的理由）。
+    const entries = turn({ steps: 1, reply: false }).entries.filter(
+      (entry) => entry.kind === 'tool' || entry.kind === 'ai',
+    );
+    const tools = entries.filter((entry): entry is ToolEntry => entry.kind === 'tool');
+    expect(tools).toHaveLength(1);
+    render(
+      <ToolRun
+        run={{ kind: 'tool-run', id: 'tools:r1', entries, tools }}
+        open
+        onOpenChange={() => {}}
+        renderEntry={(entry) => <span data-testid="run-child">{entry.id}</span>}
+      />,
+    );
+    const run = screen.getByTestId('tool-run');
+    expect(run.querySelector('[data-slot="step-group"]')).toBeNull();
+    expect(run.querySelector('[aria-expanded]')).toBeNull();
+    expect(run.querySelectorAll('[data-message-id]')).toHaveLength(0);
+    expect(screen.queryAllByTestId('run-child')).toHaveLength(0);
+    expect(run.querySelectorAll('[data-slot="step-row"]')).toHaveLength(1);
   });
 
   it('收合與展開都沒有 axe 違規', async () => {

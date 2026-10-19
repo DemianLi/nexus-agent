@@ -74,12 +74,13 @@ import { registerRunExpander, registerTranscriptScroller } from '@/lib/transcrip
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { RetryNotice } from '@/components/retry-notice';
 import { useScrollButtonClearance } from '@/hooks/use-scroll-button-clearance';
+import { useStableNames } from '@/hooks/use-stable-names';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
 import { BLOCKED_HINT_TEXT } from '@/lib/archived-view';
 import { settledNoticeText } from '@/lib/queue-view';
 import { pairAnswers } from '@/lib/question-view';
-import { agentMessageCaption, subagentLabel, subagentNames as namesOf } from '@/lib/subagent-view';
+import { agentMessageCaption, subagentLabel } from '@/lib/subagent-view';
 import { reasoningRunning, visibleReasoning } from '@/lib/reasoning-view';
 import { pendingAgentText, pendingSteers, pendingSteerText } from '@/lib/steer-view';
 
@@ -514,7 +515,8 @@ export function Transcript({
   deliverableDownload?: DeliverableDownloader;
 }) {
   const answers = useMemo(() => pairAnswers(state.entries), [state.entries]);
-  const names = useMemo(() => namesOf(state.entries), [state.entries]);
+  // 串流中 `entries` 每一格都換；名字表內容沒變就回同一份，工具卡的 memo（`toStep` 裡的 diff、讀檔、搜尋）才擋得住（#1682）。
+  const names = useStableNames(state.entries);
   // 收起來的工具呼叫哪幾段打開了（#1309）：預設收合、不跨重新整理。
   const [openRuns, setOpenRuns] = useState<ReadonlySet<string>>(new Set());
   const grouped = useMemo(() => groupToolRuns(transcriptItems(state.entries)), [state.entries]);

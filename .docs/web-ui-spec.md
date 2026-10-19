@@ -281,7 +281,12 @@
 - 換題：進度條 `aria-live` 關掉，legend 前放 sr-only「第 2 題，共 3 題」。
 - AI 回覆：`role="log"` 設 `aria-live="off"`，串流不逐字唸，結束時把全文丟進 polite 區唸一次。
 - 往前翻讀完：另一格 polite 唸「載入了較早的 N 則。」（N＝人打的字與模型的回覆，同 wire 一頁的單位），**不唸接上來的內容**，也不跟上一條共用一格（2026-09-25，inventory 列 9）。
-- 工具卡狀態變化不唸；orb 旁已有同義文字時 `aria-hidden`。
+- 工具卡狀態變化不唸。orb（狀態列、空白 hero）旁已有同義文字時 `aria-hidden`。
+- **工具卡與工具段**（#1682，SG 的 `StepRow`／`StepGroup`）：
+  - 列是一顆帶 `aria-expanded` 的按鈕，名稱＝標題＋摘要＋列尾看得見的字（工具名、計數、歸屬、狀態字）。狀態一定有字（Badge），不靠顏色、圖示或動效。
+  - 群組按鈕的名稱＝「N 個工具呼叫，讀取 ×3、寫入檔案」（段裡只收完成的工具）。摘要是純字串、會被報讀，用「，」「、」接，不用「·」。
+  - 展開後沒有內容的列，SG 會停用按鈕（聽起來像壞掉），所以空的時候放一句 emptyNote（「沒有參數。」「還沒有結果。」「沒有結果文字。」），按鈕照樣按得到。
+  - 結果框的 `pre` 停得上焦點（vendor patch `0019`），名稱是框的標題（「參數」「結果」「錯誤」），鍵盤可以捲。
 - **輸入框**（#1591）：名稱「要說的話」（`<label for="prompt">`），送出的說明（平常「Enter 送出」，跑著時「Enter 排隊・⌘/Ctrl Enter 插話」，`lib/submit-mode.ts`）是 sr-only 的一段、掛在 `aria-describedby`。`/` 與 @ 選單開著時輸入框帶 `aria-controls`（清單）與 `aria-activedescendant`（目前那一項）。主按鈕的名稱是「送出」「排隊送出」「插話送出」「停止」之一，照 dsh 的 `primaryLabel`。
 - ❌ 的名稱「停止這一輪，不回答這些問題」（`aria-label` 與 tooltip 同一句），不加確認。
 - **tooltip 只是視覺**（#1583）：Base UI 的 tooltip 不給 `role="tooltip"`、也不掛 `aria-describedby`，報讀器聽不到它。tooltip 的字不能帶 Trigger 名稱裡沒有的資訊，要聽到的寫進 `aria-label`（例：模型座「模型：X，從下一步生效，點開切換」）。

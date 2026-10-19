@@ -2738,7 +2738,7 @@ describe('瀏覽器量 tool-steps 的覆寫（#1682，第 61、63、64、65 條�
 });
 
 /**
- * 產品的工具卡與工具段（#1682 PR B 驗收 C，`?overlay=tool-cards`）：三種底上的字都過 4.5——列的字疊在頁面底色與漸層上（單獨的卡）、
+ * 產品的工具卡與工具段（#1682 PR B 驗收 C，`?overlay=tool-cards`）：三種底上的字都過 4.5——列的字疊在頁面底色與漸層上（單獨的卡，含背景子代理的狀態字）、
  * 疊在 `StepList` 的 `--panel` 上（段裡的卡）、結果框的標題與內文、錯誤框的紅字、Badge；列、群組、結果框的焦點是 2px 字色外框。
  * 亮暗加兩種不透明退路都量。vendor 元件掛不了屬性，開頁後補。
  */
@@ -2764,6 +2764,10 @@ const toolCardsMarks: Record<string, Record<string, string>> = {
     'data-guard-focus': 'card-output',
   },
   [`${CARDS} [data-slot="output-block"]`]: { 'data-guard-outline-host': '' },
+  [`${CARDS} [data-subagent-state]`]: { 'data-guard-text': 'card-subagent-state' },
+  [`${CARDS} [data-testid="tool-entry"] p.text-destructive`]: {
+    'data-guard-text': 'card-max-tokens',
+  },
   [`${CARDS} :is([data-slot="step-row"], [data-slot="step-group"]) > button:not(:disabled)`]: {
     'data-guard-focus': 'card-button',
   },
@@ -2778,15 +2782,31 @@ describe.each(
       const texts = await collectTexts(page);
       const focus = await collectFocus(page);
       const count = (name: string) => texts.filter((t) => t.name === name).length;
-      // 量具自檢：單獨的卡 7 張、段裡 2 張、群組 1 列；Badge 9 顆；結果框（段裡展開那張的參數與結果、完成那張的參數與結果、
-      // 失敗那張的參數與錯誤、撞到上限那張的參數）7 個，其中錯誤框 1 個。
-      expect(count('card-label-page')).toBe(7);
-      expect(count('card-label-panel')).toBe(2);
-      expect(count('run-label')).toBe(1);
-      expect(count('card-badge')).toBe(9);
-      expect(count('card-output-text')).toBe(7);
-      expect(count('card-code')).toBe(9);
-      expect(count('card-attribution')).toBe(1);
+      // 量具自檢：單獨的卡 8 張、段裡 2 張、群組 1 列；Badge 10 顆；結果框（段裡展開那張的參數與結果、完成那張的參數與結果、
+      // 失敗那張的參數與錯誤、撞到上限那張的參數）7 個，其中錯誤框 1 個；背景子代理的「跑著」1 個、撞到上限那段紅字說明 1 段
+      // （#1682 審查：它直接疊在頁面底色上）。
+      const names = [
+        'card-label-page',
+        'card-label-panel',
+        'run-label',
+        'card-badge',
+        'card-output-text',
+        'card-code',
+        'card-attribution',
+        'card-subagent-state',
+        'card-max-tokens',
+      ];
+      expect(Object.fromEntries(names.map((name) => [name, count(name)]))).toEqual({
+        'card-label-page': 8,
+        'card-label-panel': 2,
+        'run-label': 1,
+        'card-badge': 10,
+        'card-output-text': 7,
+        'card-code': 10,
+        'card-attribution': 1,
+        'card-subagent-state': 1,
+        'card-max-tokens': 1,
+      });
       const error = await page.$$eval(
         `${CARDS} [data-slot="output-block"] > pre`,
         (els) => els.filter((el) => el.className.includes('text-destructive')).length,
@@ -2803,10 +2823,12 @@ describe.each(
           'card-output-text',
           'card-code',
           'card-attribution',
+          'card-subagent-state',
+          'card-max-tokens',
         ],
         `tool-cards:${mode}:${theme}`,
       );
-      expect(focus.filter((f) => f.name.startsWith('card-button'))).toHaveLength(10);
+      expect(focus.filter((f) => f.name.startsWith('card-button'))).toHaveLength(11);
       expectFocus(focus, `tool-cards:${mode}:${theme}`);
     } finally {
       await page.close();

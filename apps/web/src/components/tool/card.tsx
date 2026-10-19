@@ -129,7 +129,8 @@ export function ToolCard({
   /** 背景子代理的編號 → 名字（`lib/subagent-view.ts`），`send_message` 那張卡用它說出傳給誰；沒給就說不出名字。 */
   subagentNames?: ReadonlyMap<string, string>;
 }) {
-  // 串流中每一格都會重畫；參數一長（整檔的 write）算 diff 不便宜，所以只在這一則或配到的答案變了才重算。
+  // 串流中每一格都會重畫；參數一長（整檔的 write）算 diff 不便宜，所以只在這一則、配到的答案或名字表變了才重算。
+  // 名字表要由呼叫端穩住（`useStableNames`），每格新建一個 `Map` 這裡就每格重算（#1682 審查）。
   const view = useMemo(
     () =>
       toStep(entry, {
@@ -152,7 +153,6 @@ export function ToolCard({
       data-testid="tool-entry"
       data-status={entry.status}
       data-variant={classifyTool(entry.name)}
-      data-kind="run"
     >
       <StepRow
         step={view.step}
