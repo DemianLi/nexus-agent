@@ -95,12 +95,19 @@ function definitions(registry: PluginRegistry): string {
   );
 }
 
+/**
+ * 對這些行程各送一次 SIGKILL。pid 不是大於 1 的整數就丟錯、不送：`process.kill(0, …)` 殺整個行程群組（含 vitest 主行程與外層 shell），
+ * 而 `Number('')` 就是 0（#1712；`apps/harness/src/test-pids.fixture.ts` 是同一份）。
+ */
 const killAll = (pids: number[]) => {
   for (const pid of pids) {
+    if (!(Number.isInteger(pid) && pid > 1))
+      throw new RangeError(`不是可以送訊號的 pid：${String(pid)}`);
     try {
       process.kill(pid, 'SIGKILL');
-    } catch {
-      // 已經不在了。
+    } catch (error) {
+      // 已經不在了（ESRCH）以外的錯不吞。
+      if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
     }
   }
 };

@@ -5,8 +5,14 @@
  * 折疊器因此不讓那顆把狀態翻回 idle。按鈕在換手層的面板上，這一行只說它在等人。
  *
  * **代理的現況只由它唸**（§8）：待決、串流、失敗都是這一格 `role="status"`。別處的 `role="status"` 只有 §8 例外清單上那兩格
- * （`styles/live-region.test.ts` 守著）。執行中配 working orb 與 shimmer（§7），
- * orb 旁已有同義文字所以 `aria-hidden`；reduced-motion 下兩者都停在一格，字照樣在。
+ * （`styles/live-region.test.ts` 守著）。
+ *
+ * **執行中那一列是 SG 的 `TurnStatus`**（[#1684](https://github.com/DemianLi/nexus-agent/issues/1684)，地圖 #1497 第 ④ 步）：glyph 加
+ * `.status-shimmer` 的字，外觀照 SG（#1468 Q8）。live region 是包在外面的這一格 `<div role="status">`（vendor 的兩處
+ * `role="status"` 由 patch `0023` 拿掉）。字固定「執行中…」，glyph 的樣子跟著這一刻在做什麼換（`lib/turn-activity.ts`）：
+ * 字在 live region 裡，跟著換就每換一次唸一次。glyph 是 `aria-hidden` 的裝飾；reduced-motion 下 glyph 停在起始姿勢、shimmer 停住，
+ * 字照樣在。SG 的經過時間、token 數、可展開的 children 都不接（包裝層 `components/ui/turn-status.tsx` 型別上擋掉）。
+ * 只換這一支：其他支的字級跟它不一樣（14px 對 12.5px），記在 #1688；高度由外層的 `min-h-lh` 對齊。
  *
  * **連線也由這一行講**（[#593](https://github.com/DemianLi/nexus-agent/issues/593)）：下行斷了寫在這裡，旁邊一顆
  * 「立刻重連」；接回來短暫寫「已重新連線」。dsh 另有一顆 `ConnectionIndicator`，掛在設定列，我們沒有設定列，
@@ -14,19 +20,21 @@
  *
  * **執行中帶經過時間**（[#1308](https://github.com/DemianLi/nexus-agent/issues/1308)）：從 server 記下的這一輪開始時刻起算
  * （`lib/running-turn.ts`），用回應的 `Date` 標頭換算兩邊的時鐘差（`lib/server-clock.ts`），所以重新整理不歸零。每秒跳，
- * **放在 live region 外面、而且 `aria-hidden`**：放裡面的話報讀器每秒重唸一次。只跟著「執行中」出現——停在核准點時這一格唸的是
- * 面板名稱；核准後續接，時間從第一段接著算，含等人的那段（同觀測分頁的牆鐘）。
+ * **放在 live region 外面、而且 `aria-hidden`**：放裡面的話報讀器每秒重唸一次（所以不放進 TurnStatus 的 `trailing`：它也在
+ * live region 裡）。只跟著「執行中」出現——停在核准點時這一格唸的是面板名稱；核准後續接，時間從第一段接著算，含等人的那段
+ * （同觀測分頁的牆鐘）。滿 1 秒才畫（照 SG）。
  */
 
 import type { ConversationState } from '@nexus/wire';
 import { useEffect, useState } from 'react';
 
-import { AgentOrb } from '@/components/agent-orb';
 import { Button } from '@/components/ui/button';
+import { TurnStatus } from '@/components/ui/turn-status';
 import { pendingAsker } from '@/lib/approval-asker';
 import { pendingLabel } from '@/lib/pending-label';
 import { elapsedText, runningTurnStart } from '@/lib/running-turn';
 import { serverClock } from '@/lib/server-clock';
+import { turnActivity } from '@/lib/turn-activity';
 
 /** 經過時間每隔多久重算一次。 */
 export const ELAPSED_TICK_MS = 1000;
@@ -38,7 +46,8 @@ function RunningElapsed({ since }: { since: number | undefined }) {
     const timer = setInterval(() => setNow(serverClock.now()), ELAPSED_TICK_MS);
     return () => clearInterval(timer);
   }, []);
-  if (since === undefined || now === undefined) return null;
+  // 滿 1 秒才畫（照 SG `turn-status.tsx` 的 `elapsed >= 1`）：「0 秒」講的是一件還沒發生的事。
+  if (since === undefined || now === undefined || now - since < 1000) return null;
   return (
     <span
       aria-hidden
@@ -185,11 +194,12 @@ export function StatusLine({
   }
   if (state.status === 'running') {
     return (
-      <div className="flex items-center gap-2">
-        <p className="text-muted-foreground flex items-center gap-1.5 text-body" role="status">
-          <AgentOrb state="working" size={20} decorative />
-          <span className="text-shimmer">執行中…</span>
-        </p>
+      // `min-h-lh` 跟 `text-body` 放在同一層：1lh 就是 text-body 的行高（23px），跟其他支一樣高；不然 SG 那一列是 `h-5`（20px），
+      // 就緒 → 執行中 → 等你回答時整條狀態列跳 3px（#1684 驗收 D5，PM 預先核准）。
+      <div className="flex min-h-lh items-center gap-2 text-body">
+        <div role="status">
+          <TurnStatus activity={turnActivity(state)} label="執行中…" />
+        </div>
         <RunningElapsed since={runningTurnStart(state)} />
       </div>
     );
