@@ -79,7 +79,6 @@ describe('ApprovalPolicyController', () => {
     controller.switchTo('never');
     expect(controller.current).toBe('never');
     expect(policiesOf(log)).toEqual([{ policy: 'ask' }]);
-    expect(controller.attachedCount).toBe(0);
   });
 
   it('接了兩份日誌，切換每一份都寫', () => {

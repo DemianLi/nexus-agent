@@ -243,16 +243,6 @@ export class SandboxModeController implements SandboxGrantLedger {
   }
 
   /**
-   * 現在接著幾份日誌。
-   *
-   * `/permission` 讀它是為了**在零份的時候把「這次切換沒留痕跡」講出來**——一次悄悄沒進
-   * 日誌的切換與一次進了日誌的切換，在畫面上長得一模一樣。
-   */
-  get attachedCount(): number {
-    return this.#logs.length;
-  }
-
-  /**
    * 交給 fence 與提示句的那顆來源。
    *
    * **是欄位不是方法**，這樣拿去傳給別人時不必再 bind——傳一個沒 bind 的方法出去會在

@@ -134,11 +134,6 @@ export class ApprovalPolicyController {
     return this.#policy;
   }
 
-  /** 現在接著幾份日誌。切換時用來把「這次切換沒留痕跡」講出來。 */
-  get attachedCount(): number {
-    return this.#logs.length;
-  }
-
   /**
    * 交給閘門與升級工具的來源。**是欄位不是方法**，拿去傳給別人時不必 bind（理由同 `SandboxModeController.source`）。
    */
