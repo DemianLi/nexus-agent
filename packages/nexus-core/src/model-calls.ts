@@ -113,11 +113,9 @@ function appendEndAfterFailure(
   try {
     log.append('model/end', { modelCall, outcome });
   } catch (appendError) {
-    throw new AggregateError(
-      [original, appendError],
-      '模型呼叫失敗，model/end 也記不進去',
-      { cause: original },
-    );
+    throw new AggregateError([original, appendError], '模型呼叫失敗，model/end 也記不進去', {
+      cause: original,
+    });
   }
 }
 
@@ -164,7 +162,12 @@ export function createModelCallRecorder(sessions: {
         // 記不進去就從這裡拋，下面的 `catch` 把這次呼叫記成 `error`（#1665）。
         recordReply(log, response, modelCall);
       } catch (error) {
-        appendEndAfterFailure(log, modelCall, modelCallAborted(request) ? 'aborted' : 'error', error);
+        appendEndAfterFailure(
+          log,
+          modelCall,
+          modelCallAborted(request) ? 'aborted' : 'error',
+          error,
+        );
         throw error;
       }
       // 記不進去從這裡拋：回覆不進 graph state（#1702）。

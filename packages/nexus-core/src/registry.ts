@@ -1354,7 +1354,10 @@ const pendingSpawnInputs = new WeakMap<SessionLog, LoggedMessage>();
  *
  * **寫成功才清掉**，理由同 {@link pendingSpawnInputs}。以子日誌為鍵、弱引用。
  */
-const pendingCatalogs = new WeakMap<SessionLog, { parent: SessionLog; data: SubagentCatalogData }>();
+const pendingCatalogs = new WeakMap<
+  SessionLog,
+  { parent: SessionLog; data: SubagentCatalogData }
+>();
 
 /** 寫 {@link pendingCatalogs} 裡等著的那一顆；沒有就什麼都不做。寫不進去原錯往外拋，登記留著。 */
 function writePendingCatalog(log: SessionLog): void {

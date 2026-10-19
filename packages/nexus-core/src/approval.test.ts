@@ -307,9 +307,9 @@ describe('不必問人就確定的拒絕，圖內寫一對 approval/*（#1029）
         forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }),
       };
       const { ran, request } = call();
-      await expect(
-        wrapperOf(ask, { kind: 'policy-never' }, sessions)(request, ran),
-      ).rejects.toBe(broken);
+      await expect(wrapperOf(ask, { kind: 'policy-never' }, sessions)(request, ran)).rejects.toBe(
+        broken,
+      );
       expect(ran).not.toHaveBeenCalled();
     },
   );
@@ -330,7 +330,10 @@ describe('不必問人就確定的拒絕，圖內寫一對 approval/*（#1029）
     };
     const containment = (
       createContainmentMiddleware(sessions) as unknown as {
-        wrapToolCall: (request: unknown, handler: (request: unknown) => Promise<unknown>) => Promise<unknown>;
+        wrapToolCall: (
+          request: unknown,
+          handler: (request: unknown) => Promise<unknown>,
+        ) => Promise<unknown>;
       }
     ).wrapToolCall;
     const gate = wrapperOf(ask, { kind: 'policy-never' }, sessions);

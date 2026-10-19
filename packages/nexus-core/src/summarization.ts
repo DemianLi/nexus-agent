@@ -1810,7 +1810,11 @@ function withTokenBudget(
           // 帶著 {@link SUPPRESS_SUMMARY} 再走一遍同一條鏈，有效串、參數截斷與日誌記帳都照平常的路。
           try {
             return await inner(
-              { ...request, [SUPPRESS_SUMMARY]: true, [RETAIN_DECISION]: decision } as typeof request,
+              {
+                ...request,
+                [SUPPRESS_SUMMARY]: true,
+                [RETAIN_DECISION]: decision,
+              } as typeof request,
               measured,
             );
           } catch (retryError) {

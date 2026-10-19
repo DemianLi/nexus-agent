@@ -243,7 +243,10 @@ describe('剪刀：先換記過的、再剪新的、新剪的當場記', () => {
     port.failing = true;
     const { base, seen } = spy();
     const messages = [new HumanMessage('嗨'), big('a')];
-    await run(withToolResultPruning(base, () => true, SMALL, port), messages);
+    await run(
+      withToolResultPruning(base, () => true, SMALL, port),
+      messages,
+    );
 
     expect(seen[0]?.[1]).toBe(messages[1]);
     expect(port.appended).toBe(0);

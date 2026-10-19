@@ -121,7 +121,6 @@ describe('找不到日誌：不記，呼叫照跑', () => {
     const response = new AIMessage('好。');
     await expect(run(lookup, () => response)).resolves.toBe(response);
   });
-
 });
 
 /**

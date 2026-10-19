@@ -338,38 +338,49 @@ describe('subagent 那側', () => {
 });
 
 /**
- * **記不進去不能反過來把摘要器殺掉。**
+ * **摘要記不進去，這次摘要不生效**（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：照 dsh 自動壓縮的 pressure 路徑
+ * （`compaction-basic/src/index.ts:163-173`），記 warn、這一輪照原樣繼續。真的跑一整場：只讓 `compaction/summary` 寫不進去，
+ * 其餘照真的寫——門檻每次都到、每次都摘不成，整場照樣跑完，模型一次都沒收到摘要，歷史檔一次都沒寫出路徑。
  *
- * 這一層比 `model/usage` 那顆更嚴：它是**同名取代**，從這裡漏出去的錯不只是掉一行日誌，
- * 是把摘要器本身連根拔掉——那一輪的訊息串不會被壓，長對話直接撞窗口。
- *
- * 拿掉 `withCompactionLog` 裡那個 try/catch，這條當場紅。
+ * 以前這一格釘的是相反的事（記不進去吞掉、摘要照樣生效），那就是日誌與模型看到的分家。
  */
 describe('日誌寫不進去的時候', () => {
-  it('append 拋了，那一輪照樣跑完、歷史照樣寫出來', async () => {
-    // ⚠️ **這個 spy 打在 prototype 上，所以每一個寫日誌的人都在拋**——`model/usage` 那顆
-    // 也在裡面，而它同樣吃掉自己的錯。所以這條綠**不足以**單獨證明 `withCompactionLog`
-    // 有 try/catch；能證明的是「拿掉它會紅」，那個突變跑過了。
-    const append = vi.spyOn(SessionLog.prototype, 'append').mockImplementation(() => {
-      throw new Error('日誌壞了');
-    });
+  it('compaction/summary 拋了：那一輪照樣跑完，模型沒收到摘要，日誌也沒有', async () => {
+    const real = SessionLog.prototype.append;
+    let attempts = 0;
+    const append = vi.spyOn(SessionLog.prototype, 'append').mockImplementation(function (
+      this: SessionLog,
+      ...args: Parameters<SessionLog['append']>
+    ) {
+      if (args[0] === 'compaction/summary') {
+        attempts += 1;
+        throw new Error('日誌壞了');
+      }
+      return real.apply(this, args);
+    } as SessionLog['append']);
     try {
-      const { root, prompts } = await run(chatter(), {
+      const { root, prompts, rootEvents } = await run(chatter(), {
         summarization: { trigger: [{ type: 'tokens', value: 3_000 }] },
         invocations: 12,
       });
 
-      // 日誌當然是空的——它整個壞了。要看的是**跑完了**，而且摘要真的發生過、歷史真的寫出來：
-      // 摘要訊息只有在 offload 寫成功時才寫出路徑（基座 `buildSummaryMessage` 看 `filePath`）。
-      // #348 之前這裡讀的是工作區裡的 `conversation_history/`，現在那一格在 graph state 裡。
+      // 門檻真的到過：試記過摘要（不然這一格什麼都沒證明）。
+      expect(attempts).toBeGreaterThan(0);
       expect(root).toEqual([]);
+      expect(rootEvents.some((event) => event.type === 'compaction/summary')).toBe(false);
+      // 模型一次都沒收到摘要：摘要訊息只有在 offload 寫成功時才寫出路徑（基座 `buildSummaryMessage` 看 `filePath`），
+      // 而歷史檔在暫存層等「有沒有生出摘要」才提交（#1389）。
       expect(
         prompts.some((prompt) =>
           prompt.some((message) =>
             message.text.includes('has been saved to /conversation_history/'),
           ),
         ),
-      ).toBe(true);
+      ).toBe(false);
+      // 整場跑完：每一次呼叫都有起訖。
+      const starts = rootEvents.filter((event) => event.type === 'model/start').length;
+      expect(starts).toBeGreaterThan(0);
+      expect(rootEvents.filter((event) => event.type === 'model/end')).toHaveLength(starts);
     } finally {
       append.mockRestore();
     }
