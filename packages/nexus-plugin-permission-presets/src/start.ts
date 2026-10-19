@@ -8,13 +8,16 @@
  */
 
 import type {
+  ApprovalPolicyValue,
   PermissionCatalog,
+  PermissionNarrowing,
   PermissionStarted,
   PermissionStartRequest,
+  SandboxMode,
 } from '@nexus/permission-presets';
 import type { PresetOption } from '@nexus/wire';
 
-import { CUSTOM_PRESET, derivePreset, specOf } from './presets.js';
+import { CUSTOM_PRESET, derivePreset, isSandboxWider, specOf } from './presets.js';
 import type { PresetTable } from './presets.js';
 
 function optionOf(table: PresetTable, name: string): PresetOption {
@@ -60,6 +63,45 @@ export function assertPresetConfig(table: PresetTable, configured: string | unde
 }
 
 /**
+ * 續接時要不要收回，收到哪一組（[#1621](https://github.com/DemianLi/nexus-agent/issues/1621) Q2 (b)）。**純函式**。
+ *
+ * 收的條件只有一個：**日誌記的沙箱模式比組合表裡每一組的沙箱都寬**。不比「對不上任何一組」：部署方把 `read-only` 從表裡刪掉，停在 `read-only` 的
+ * 會話也對不上、顯示 `custom`，但它比 `workspace-write` 窄，收成 `workspace-write` 就是放寬。部署方用 patch 加回全開之後，全開不比表裡最寬的寬，不收。
+ *
+ * 收到哪一組：`defaultPreset` 有設就是它，否則表裡**沙箱最寬的那一組**（同寬取先宣告的）。出廠表就是 `workspace-write`。選最寬而不是表裡第一組：
+ * 第一組是 `read-only`，把一條全開的會話一路收到唯讀，比部署方要的多；`--sandbox` 是行程的啟動旗標，這時候不在手上，無從得知「新會話會從哪一組開始」。
+ *
+ * @param table - 組合表。
+ * @param configured - 設定的預設組（`defaultPreset`），可省略。
+ * @param current - 日誌記的兩顆旋鈕現在的值。
+ * @returns 要收回的描述；不用收是 `undefined`。
+ */
+export function narrowingOf(
+  table: PresetTable,
+  configured: string | undefined,
+  current: { readonly sandbox: SandboxMode; readonly approval: ApprovalPolicyValue },
+): PermissionNarrowing | undefined {
+  const entries = Object.entries(table);
+  if (entries.length === 0) return undefined;
+  if (!entries.every(([, spec]) => isSandboxWider(current.sandbox, spec.sandbox))) return undefined;
+  const target =
+    configured !== undefined && specOf(table, configured) !== undefined
+      ? ([configured, specOf(table, configured)] as const)
+      : entries.reduce((widest, entry) =>
+          isSandboxWider(entry[1].sandbox, widest[1].sandbox) ? entry : widest,
+        );
+  const [preset, spec] = target;
+  if (spec === undefined) return undefined;
+  return {
+    preset,
+    fromSandbox: current.sandbox,
+    fromApproval: current.approval,
+    toSandbox: spec.sandbox,
+    toApproval: spec.approval,
+  };
+}
+
+/**
  * 決定這一次的預設組，並算出兩顆旋鈕接日誌之前該有的值。**純函式**。
  * @throws 跟 `--sandbox` 矛盾、或新會話的起始值對不上任何一組又沒有設定 `defaultPreset`（逐條 thread 的錯）。
  */
@@ -89,7 +131,12 @@ export function startPresets(
           approval: spec.approval,
           catalog: buildCatalog(table, configured),
         }
-      : { sandbox, approval, catalog: buildCatalog(table, configured) };
+      : {
+          sandbox,
+          approval,
+          catalog: buildCatalog(table, configured),
+          ...narrowedField(table, configured, sandbox, approval),
+        };
   }
   const inferred = derivePreset(table, { preset: null, sandbox, approval });
   if (inferred !== CUSTOM_PRESET) {
@@ -101,6 +148,24 @@ export function startPresets(
         '要嘛在表裡補上那一組，要嘛設定 defaultPreset。',
     );
   }
-  // 續接的會話可以是 custom（保留日誌裡的值）；目錄仍需要一個預設，拿表裡第一組。
-  return { sandbox, approval, catalog: buildCatalog(table, Object.keys(table)[0] as string) };
+  // 續接的會話可以是 custom（保留日誌裡的值，除非比表裡每一組都寬，見 {@link narrowingOf}）；目錄仍需要一個預設：
+  // 要收回的話就是收到的那一組，否則拿表裡第一組。
+  const narrowed = narrowingOf(table, configured, { sandbox, approval });
+  return {
+    sandbox,
+    approval,
+    catalog: buildCatalog(table, narrowed?.preset ?? (Object.keys(table)[0] as string)),
+    ...(narrowed !== undefined && { narrowed }),
+  };
+}
+
+/** `start` 回傳裡 `narrowed` 那一格：要收回才有，沒有就整個不放這個 key。 */
+function narrowedField(
+  table: PresetTable,
+  configured: string | undefined,
+  sandbox: SandboxMode,
+  approval: ApprovalPolicyValue,
+): { readonly narrowed?: PermissionNarrowing } {
+  const narrowed = narrowingOf(table, configured, { sandbox, approval });
+  return narrowed === undefined ? {} : { narrowed };
 }
