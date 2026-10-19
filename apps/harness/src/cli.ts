@@ -98,6 +98,7 @@ import {
   formatGoalDriverDisclosure,
   type NexusAgent,
   goalDriverPort,
+  describeDelegationNarrowing,
   describePermissionNarrowing,
 } from './assembly-root.js';
 import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
@@ -1136,6 +1137,12 @@ async function runLaunched(
     if (built.permissionNarrowed !== undefined) {
       printer.error(`[權限] ${describePermissionNarrowing(built.permissionNarrowed)}`);
     }
+    // 冷復活的背景子代理叫醒時，委派快照比權限表裡每一組都寬就收回預設組（#1739）：叫醒發生在組裝之後，所以是訂閱；每個子代理一個行程只印一行。
+    built.onDelegationNarrowed((event) => {
+      const print = (): void => printer.error(`[權限] ${describeDelegationNarrowing(event)}`);
+      if (replLine.redraw === undefined) print();
+      else replLine.redraw(print);
+    });
     // 組裝之後外掛執行期交出的話（例如 MCP 掉線重連的進度，#1099）接著印到標準錯誤。
     built.onWarning((warning) => {
       for (const text of describeWarnings(loaded, [warning])) {

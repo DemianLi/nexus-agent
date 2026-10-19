@@ -145,7 +145,7 @@ export const GOALS_SERVICE_RANGE = '^1.0.0';
  * `permissionPresets` 服務的契約範圍（#1491 Q3 (a)）：跟 {@link FEEDBACK_SERVICE_RANGE} 同一類——插件提供、宿主消費，折進這條 thread 的
  * `registry.services`。宿主組一條 thread 時叫它的 `start`（純函式：不碰日誌也不碰控制器）拿起始值與這條 thread 的目錄。
  */
-export const PERMISSION_PRESETS_SERVICE_RANGE = '^1.1.0';
+export const PERMISSION_PRESETS_SERVICE_RANGE = '^1.2.0';
 
 /** 宿主取的每一個服務：token 與範圍。加一個「插件提供、宿主消費」的服務就在這裡多一格。 */
 const HOST_SERVICES: readonly { readonly token: ServiceToken<unknown>; readonly range: string }[] =
