@@ -193,10 +193,14 @@ function killAliases(text: string): string[] {
 /** 本地的 pid 守衛：呼叫之前（同一段函式）出現過的 `Number.isInteger(pid) && pid > 1`。 */
 const LOCAL_PID_GUARD = /Number\.isInteger\(pid\)\s*&&\s*pid\s*>\s*1/u;
 
-/** 這個呼叫點可以放行嗎：訊號 0（只探測、不送）；或 pid 是變數 `pid`，而且它之前 600 個字元內有本地守衛。 */
+/**
+ * 這個呼叫點可以放行嗎：訊號 0（只探測、不送）；或 pid 是變數 `pid`（或它的負號 `-pid`：送給自己用 `detached` 開出來的子行程的整個群組），
+ * 而且它之前 600 個字元內有本地守衛。負號不放寬守衛：`pid > 1` 擋掉 undefined／0／1，`-pid` 就只會是一個真子行程的群組，
+ * 不會是 `kill(0)`（自己的群組）也不會是 `kill(-1)`（全機）。
+ */
 function allowedKill(text: string, site: KillSite): boolean {
   if (site.signal === '0') return true;
-  if (site.pid !== 'pid') return false;
+  if (site.pid !== 'pid' && site.pid !== '-pid') return false;
   return LOCAL_PID_GUARD.test(text.slice(Math.max(0, site.offset - 600), site.offset));
 }
 
@@ -253,6 +257,16 @@ describe('不繞過 helper 直接送非 0 訊號', () => {
       expect(offending(far)).toEqual(["kill(other,'SIGKILL')"]);
       const later = `process.kill(pid, 'SIGKILL');\nif (!(Number.isInteger(pid) && pid > 1)) throw new Error('x');\n`;
       expect(offending(later)).toEqual(["kill(pid,'SIGKILL')"]);
+    });
+
+    it('負號的 -pid（自己 detached 子行程的群組）：前面有本地守衛才放行，別的運算式與沒有守衛的照擋', () => {
+      const guard = 'if (pid !== undefined && Number.isInteger(pid) && pid > 1) ';
+      expect(offending(`${guard}process.kill(-pid, 'SIGKILL');`)).toEqual([]);
+      expect(offending("process.kill(-pid, 'SIGKILL');")).toEqual(["kill(-pid,'SIGKILL')"]);
+      expect(offending(`${guard}process.kill(-other, 'SIGKILL');`)).toEqual([
+        "kill(-other,'SIGKILL')",
+      ]);
+      expect(offending(`${guard}process.kill(-1, 'SIGKILL');`)).toEqual(["kill(-1,'SIGKILL')"]);
     });
 
     it('globalThis.process.kill、global.process.kill 也算；ChildProcess 的 server.process.kill 不算', () => {
