@@ -16,9 +16,10 @@ import type { ReactNode } from 'react';
 
 import { Chevron } from '@/components/chevron';
 import { Surface } from '@/components/surface';
-import { Counts, FileCounts } from '@/components/changes/counts';
+import { FileCounts } from '@/components/changes/counts';
 import { useRightSidebar } from '@/components/sidebar/right-sidebar-context';
 import { Button } from '@/components/ui/button';
+import { DiffStats } from '@/components/ui/diff-view';
 import type { ChangesStores } from '@/lib/changes-diff';
 
 /** 收起時先列幾個（dsh `COLLAPSED_ROWS`）。 */
@@ -58,7 +59,7 @@ export function ChangesCard({ seq, changes }: { seq: number; changes: ChangesSto
       >
         <FileDiff className="text-muted-foreground size-5 shrink-0" aria-hidden />
         <span className="min-w-0 flex-1 font-medium">{`${total} 個檔案有改動`}</span>
-        <Counts added={added} deleted={deleted} />
+        <DiffStats added={added} removed={deleted} />
       </Pressable>
       <ul className="flex flex-col px-1 pb-1">
         {rows.map(({ file, index }) => (

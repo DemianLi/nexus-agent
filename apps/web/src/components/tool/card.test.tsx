@@ -622,7 +622,12 @@ describe('工具卡的結果與 diff', () => {
       const trigger = screen.getByRole('button', { name: /寫入檔案/ });
       expect(trigger.textContent).toContain('+12');
       expect(trigger.textContent).toContain('−0');
-      expect(within(trigger).getByText('新增 12 行，')).toBeTruthy();
+      // 名稱裡行數只唸一次（#1685）：看得見的「+12 −0」是 aria-hidden，唸的是 sr-only 那一段。
+      const named = screen.getByRole('button', {
+        name: (name) => /寫入檔案/.test(name) && name.match(/新增 12 行，刪除 0 行/g)?.length === 1,
+      });
+      expect(named).toBe(trigger);
+      expect(screen.queryByRole('button', { name: /[+−]\d/ })).toBeNull();
     });
 
     it('展開是整檔新增的 diff，對話裡只留 9 列，中間可以展開', () => {
