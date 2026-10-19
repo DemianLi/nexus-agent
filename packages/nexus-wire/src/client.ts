@@ -317,7 +317,15 @@ export interface WireClient {
    * 人對單一背景子代理說一句話（`subagent.send`，[#865](https://github.com/DemianLi/nexus-agent/issues/865)）。
    * 語意與錯誤碼見 `SUBAGENT_SEND_METHOD`。受理就回（成功是 `{ accepted: true }`），不等那一輪跑完。
    */
-  subagentSend(threadId: string, runId: string, text: string): Promise<UplinkResult>;
+  subagentSend(
+    threadId: string,
+    runId: string,
+    text: string,
+    options?: {
+      /** 使用者的時區（[#1734](https://github.com/DemianLi/nexus-agent/issues/1734)），見 `SubagentSendCommand` 的 `client_time_zone`。 */
+      readonly clientTimeZone?: string;
+    },
+  ): Promise<UplinkResult>;
   /** 只停單一背景子代理當下那一輪（`subagent.interrupt`）。不認得的編號是被接受的 no-op。 */
   subagentInterrupt(threadId: string, runId: string): Promise<UplinkResult>;
   /** 評一則回覆（`feedback.put`，[#278](https://github.com/DemianLi/nexus-agent/issues/278)）。 */
@@ -1055,11 +1063,17 @@ export function createWireClient(options: WireClientOptions): WireClient {
       });
     },
 
-    async subagentSend(threadId, runId, text) {
+    async subagentSend(threadId, runId, text, options) {
       return sendCommand(threadId, SUBAGENT_SEND_METHOD, {
         id: nextCommandId++,
         method: SUBAGENT_SEND_METHOD,
-        params: { run_id: runId, text },
+        params: {
+          run_id: runId,
+          text,
+          ...(options?.clientTimeZone === undefined
+            ? {}
+            : { client_time_zone: options.clientTimeZone }),
+        },
       });
     },
 

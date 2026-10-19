@@ -23,7 +23,7 @@ import type { ReactNode, UIEvent } from 'react';
 
 import type { WorkspaceChangesSummary, WorkspaceDiffHunk, WorkspaceFileDiff } from '@nexus/wire';
 
-import { Counts, FileCounts } from '@/components/changes/counts';
+import { FileCounts } from '@/components/changes/counts';
 import { Button } from '@/components/ui/button';
 import {
   Command,
@@ -32,6 +32,7 @@ import {
   CommandItem,
   CommandList,
 } from '@/components/ui/command';
+import { DiffStats } from '@/components/ui/diff-view';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import type { ChangesDiffState, ChangesDiffStore, ChangesStores } from '@/lib/changes-diff';
 import {
@@ -97,7 +98,7 @@ function ReviewBody({
     <div className="flex min-h-0 flex-1 flex-col" data-testid="changes-review">
       <p className="text-muted-foreground flex flex-wrap items-center gap-x-3 px-4 pt-3 pb-2 text-body">
         {`${summary.total} 個檔案有改動`}
-        <Counts added={summary.added} deleted={summary.deleted} />
+        <DiffStats added={summary.added} removed={summary.deleted} />
       </p>
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b px-4 pb-3">
         <FilePicker summary={summary} index={at} onSelect={onSelect} />

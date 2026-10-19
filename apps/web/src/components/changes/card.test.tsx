@@ -80,12 +80,12 @@ describe('改動摘要的讀取', () => {
 });
 
 describe('改動卡', () => {
-  it('標頭是總檔數與總行數；一檔一列，二進位的不給行數', async () => {
+  it('標頭是總檔數與總行數；一檔一列，二進位的不給行數；行數照 SG 不分位（#1685）', async () => {
     await renderCard(() => json(SUMMARY));
     const card = screen.getByRole('region', { name: '這一輪改動的檔案，共 2 個' });
     expect(card.textContent).toContain('2 個檔案有改動');
     expect(screen.getAllByTestId('changed-file').map((row) => row.textContent)).toEqual([
-      'src/app.ts+1,234新增 1234 行，−5刪除 5 行',
+      'src/app.ts+1234 −5新增 1234 行，刪除 5 行',
       'logo.png二進位檔',
     ]);
   });
