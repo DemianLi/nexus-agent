@@ -41,6 +41,7 @@ import type { ScriptedTurn } from './scripted-model.js';
 import { composeAttachSessions } from './session-attach.js';
 import type { SessionTitleDetach } from './session-title-llm.js';
 import type { PumpAgent } from './thread-pump.js';
+import { signalPid } from './test-pids.fixture.js';
 import { createWireHandler } from './wire-handler.js';
 import type { ThreadAgent, WireHandlerOptions } from './wire-handler.js';
 import type { BackgroundSubagentControl } from './background-subagents.js';
@@ -772,13 +773,7 @@ function pidsOf(marker: string): number[] {
 }
 
 function killAll(pids: readonly number[]): void {
-  for (const pid of pids) {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      // 已經不在了。
-    }
-  }
+  for (const pid of pids) signalPid(pid, 'SIGKILL');
 }
 
 describe('H：MCP 收尾有期限（#1543）', () => {
