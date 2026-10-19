@@ -98,6 +98,7 @@ import {
   formatGoalDriverDisclosure,
   type NexusAgent,
   goalDriverPort,
+  describeDelegationNarrowing,
   describePermissionNarrowing,
 } from './assembly-root.js';
 import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
@@ -894,10 +895,13 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // 與舊位置搬家訊息在什麼都還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`，同以前。
   const liveLaunch = invocation.live
     ? loadLiveLaunchEnv({
+        store: false,
         ...(options.cwd !== undefined && { cwd: options.cwd }),
         ...(options.env !== undefined && { env: options.env }),
       })
     : undefined;
+  // 這一把 key 來自哪一層（#1540）：CLI 不讀受管檔，那一行會寫明；只有名字與來源、不含值。
+  if (liveLaunch?.keySource !== undefined) printer.error(liveLaunch.keySource);
 
   // **對外代理：啟動流程的第一件事**（#746），排在載完環境之後、第一顆外掛載入之前。假模型路徑沒有 `.env`，
   // 用只有行程環境的那一層。收尾一定還原，不然同一個行程裡後面的呼叫會繼承這一次的派送器與環境。
@@ -1136,6 +1140,12 @@ async function runLaunched(
     if (built.permissionNarrowed !== undefined) {
       printer.error(`[權限] ${describePermissionNarrowing(built.permissionNarrowed)}`);
     }
+    // 冷復活的背景子代理叫醒時，委派快照比權限表裡每一組都寬就收回預設組（#1739）：叫醒發生在組裝之後，所以是訂閱；每個子代理一個行程只印一行。
+    built.onDelegationNarrowed((event) => {
+      const print = (): void => printer.error(`[權限] ${describeDelegationNarrowing(event)}`);
+      if (replLine.redraw === undefined) print();
+      else replLine.redraw(print);
+    });
     // 組裝之後外掛執行期交出的話（例如 MCP 掉線重連的進度，#1099）接著印到標準錯誤。
     built.onWarning((warning) => {
       for (const text of describeWarnings(loaded, [warning])) {
