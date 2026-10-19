@@ -187,3 +187,44 @@ export function newlyTruncatedArgs(
   }
   return found;
 }
+
+/**
+ * 把基座這次新縮短的那幾則換回交給基座之前的原訊息（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)）：
+ * `compaction/truncate-args` 記不進去時，這次的縮短不生效，模型看到的要跟日誌一致。
+ *
+ * **整則換回，不逐個參數改回**：基座縮短時整則重建訊息（見檔頭），換回 `before` 裡那一則，`id` 與其餘欄位也一起回來。
+ * 一則裡只要有一個呼叫在 `calls` 裡就換；`before` 裡同一個 `id` 出現不只一次的不換（分不出是哪一則，同 {@link newlyTruncatedArgs}）。
+ * 日誌上記過、交給基座之前就換上去的那些縮短在 `before` 裡本來就是短的，所以照樣生效。
+ *
+ * @param before - 交給基座之前的串（已套過記過的縮短）。
+ * @param sent - 基座交下去的串。
+ * @param calls - {@link newlyTruncatedArgs} 的結果。
+ * @returns 沒有要換的時候是 `sent` 本身；否則長度與順序與 `sent` 相同的新陣列。
+ */
+export function restoreNewlyTruncatedArgs(
+  before: readonly BaseMessage[],
+  sent: readonly BaseMessage[],
+  calls: readonly NewlyTruncatedCall[],
+): readonly BaseMessage[] {
+  if (calls.length === 0) return sent;
+  const owner = new Map<string, BaseMessage | null>();
+  for (const message of before) {
+    for (const call of toolCallsOf(message) ?? []) {
+      if (call.id === undefined) continue;
+      owner.set(call.id, owner.has(call.id) ? null : message);
+    }
+  }
+  const truncated = new Set(calls.map((call) => call.callId));
+  let changed = false;
+  const next = sent.map((message) => {
+    for (const call of toolCallsOf(message) ?? []) {
+      if (call.id === undefined || !truncated.has(call.id)) continue;
+      const original = owner.get(call.id);
+      if (original === undefined || original === null) continue;
+      changed = true;
+      return original;
+    }
+    return message;
+  });
+  return changed ? next : sent;
+}
