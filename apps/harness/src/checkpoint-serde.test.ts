@@ -420,15 +420,18 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
   }, 60_000);
 
   // 再深一點，輪不到日誌那一關：記回覆時 LangChain 的 `toDict()`（`escapeIfNeeded`，遞迴）先爆 `Maximum call stack size exceeded`，
-  // 碼是 UNKNOWN（#1668 實測：macOS、Node 25.9.0，6000 層起；邊界看堆疊大小，不是常數）。現在 `toLoggedMessage` 交給它之前先量，
-  // 拋同一種帶碼的錯。參數由 `mixedJson` 迭代組好再交給假端點：原生 `JSON.stringify` 在 CI 上約 4100 層就爆。
-  it('參數 6000 層（以前在 toDict 遞迴爆掉）：那一輪失敗在記回覆前，碼是 NESTING_TOO_DEEP，不重打，下一輪照常', async () => {
-    const { upstream, start, logFile } = await rig({}, perTest, { deep: mixedJson(6_000) });
+  // 碼是 UNKNOWN（#1668 實測：macOS、Node 25.9.0，6000 層前後開始爆；邊界看堆疊大小，不是常數，同一台在 vitest 裡 6000 層有時
+  // 爆、有時走到日誌那一關）。所以這一格取 20000 層，遠過那條邊界，拿掉預先量測就一定回到 UNKNOWN。現在 `toLoggedMessage`
+  // 交給它之前先量，拋同一種帶碼的錯。參數由 `mixedJson` 迭代組好再交給假端點：原生 `JSON.stringify` 在 CI 上約 4100 層就爆。
+  it('參數 20000 層（以前在 toDict 遞迴爆掉）：那一輪失敗在記回覆前，碼是 NESTING_TOO_DEEP，不重打，下一輪照常', async () => {
+    const { upstream, start, logFile } = await rig({}, perTest, { deep: mixedJson(20_000) });
     const server = await start();
-    await say(server, 'same-6000', '第一句');
-    await say(server, 'same-6000', '深:deep');
+    await say(server, 'same-20000', '第一句');
+    // 這一輪不開下行：串流裡帶著解析好的參數的那則事件，下行序列化（原生 `JSON.stringify`）自己就會爆、斷掉訂閱者，
+    // 那是下行自己的上限，不在這一格；這一格只量記回覆這一關。收尾看日誌的 `turn/failed`。
+    await (await serveClient(server)).runStart('same-20000', '深:deep');
     const failed = await vi.waitFor(async () => {
-      const line = (await logLines(logFile('same-6000'))).find((candidate) =>
+      const line = (await logLines(logFile('same-20000'))).find((candidate) =>
         candidate.includes('"turn/failed"'),
       );
       if (line === undefined) throw new Error('還沒寫 turn/failed');
@@ -442,7 +445,7 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
     expect(data.error.code).toBe(NESTING_TOO_DEEP_CODE);
     expect(mainCalls(upstream, '深:deep')).toBe(1);
 
-    await say(server, 'same-6000', '再一句');
+    await say(server, 'same-20000', '再一句');
     expect(
       requestFor(upstream, '再一句').map((m) => `${m.role}:${m.role === 'system' ? '' : textOf(m)}`),
     ).toEqual(['system:', 'user:第一句', 'assistant:好', 'user:深:deep', 'user:再一句']);
