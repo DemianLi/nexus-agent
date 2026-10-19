@@ -8,7 +8,7 @@
 
 import { AIMessage, HumanMessage, SystemMessage, ToolMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { SessionLog } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
 import { createSummarizer, DEFAULT_SUMMARIZATION } from './summarization.js';
@@ -241,7 +241,7 @@ describe('createSummarizer 接上真的基座', () => {
     new HumanMessage('最後一句'),
   ];
 
-  function setup(lookup: (log: SessionLog) => unknown) {
+  function setup(lookup: (log: SessionLog) => unknown, report?: (message: string) => void) {
     const log = new SessionLog('s');
     const middleware = createSummarizer(
       { write: async (path: string) => ({ path }) } as never,
@@ -249,6 +249,9 @@ describe('createSummarizer 接上真的基座', () => {
       new TokenAnchorBook(),
       { forCall: () => lookup(log) } as never,
       false,
+      undefined,
+      undefined,
+      report,
     );
     const sent: (readonly BaseMessage[])[] = [];
     const call = (messages: readonly BaseMessage[]) =>
@@ -370,19 +373,86 @@ describe('createSummarizer 接上真的基座', () => {
     expect(truncations(log)).toHaveLength(0);
   });
 
-  it('記不進去（append 拋）不殺摘要器：模型呼叫照常發生', async () => {
-    const broken = {
-      kind: 'ok',
-      address: { kind: 'root' },
-      log: {
-        events: [],
-        append: () => {
-          throw new Error('寫不進去');
-        },
-      },
-    };
-    const { sent, call } = setup(() => broken);
+  /** #1702：縮短是一筆事件，記不進去就等於沒縮——模型看到原文、講一條 warn、這一輪照常（照 dsh compaction-basic `:163-173`）。 */
+  it('記不進去（append 拋）：這次的縮短換回原文，warn 一條，模型呼叫照常發生', async () => {
+    const warnings: string[] = [];
+    const { log, sent, call } = setup(
+      (l) => ({ kind: 'ok', address: { kind: 'root' }, log: l }),
+      (message) => warnings.push(message),
+    );
+    const real = log.append.bind(log);
+    vi.spyOn(log, 'append').mockImplementation(((type: never, data: never) => {
+      if (type === 'compaction/truncate-args') throw new Error('寫不進去');
+      return real(type, data);
+    }) as typeof log.append);
     await expect(call(history())).resolves.toBeDefined();
-    expect(String(argOf(sent[0]!))).toContain('argument truncated');
+    expect(sent).toHaveLength(1);
+    expect(argOf(sent[0]!)).toBe(original);
+    expect(truncations(log)).toHaveLength(0);
+    expect(warnings).toEqual([expect.stringContaining('compaction/truncate-args 記不進去')]);
+  });
+
+  /**
+   * 換回的是「交給基座之前」那一則，不是進來的原訊息：同一則助手訊息裡，`call_a` 的縮短日誌上記過（交給基座之前就換上去了），
+   * `call_b` 是這次新縮的。記不進去只撤 `call_b`，`call_a` 照樣是短的。
+   */
+  it('記不進去：同一則裡記過的縮短照樣生效，只撤這次新縮的那一個', async () => {
+    const warnings: string[] = [];
+    const { log, sent, call } = setup(
+      (l) => ({ kind: 'ok', address: { kind: 'root' }, log: l }),
+      (message) => warnings.push(message),
+    );
+    recordInto(log, 'call_a', { content: { originalChars: 300, value: `abc${MARKER}` } });
+    const real = log.append.bind(log);
+    vi.spyOn(log, 'append').mockImplementation(((type: never, data: never) => {
+      if (type === 'compaction/truncate-args') throw new Error('寫不進去');
+      return real(type, data);
+    }) as typeof log.append);
+    const write = (id: string, path: string) => ({
+      id,
+      name: 'write_file',
+      args: { file_path: path, content: original },
+    });
+    await call([
+      new HumanMessage('寫兩個檔'),
+      new AIMessage({
+        id: 'msg_two',
+        content: '兩個都寫。',
+        tool_calls: [write('call_a', '/a.txt'), write('call_b', '/b.txt')],
+        response_metadata: { output_version: 'v1' },
+      }),
+      new ToolMessage({ content: '寫好了', tool_call_id: 'call_a', name: 'write_file' }),
+      new ToolMessage({ content: '寫好了', tool_call_id: 'call_b', name: 'write_file' }),
+      new AIMessage('都寫好了'),
+      new HumanMessage('最後一句'),
+    ]);
+    const two = sent[0]!.find((m) => AIMessage.isInstance(m) && m.tool_calls?.length === 2) as
+      AIMessage | undefined;
+    expect(two?.tool_calls?.map((c) => [c.id, c.args.content])).toEqual([
+      ['call_a', `abc${MARKER}`],
+      ['call_b', original],
+    ]);
+    expect(truncations(log)).toHaveLength(1);
+    expect(warnings).toEqual([expect.stringContaining('compaction/truncate-args 記不進去')]);
+  });
+
+  it('記不進去之後下一次記得進去：照常縮、照常記（沒有殘留的狀態）', async () => {
+    const warnings: string[] = [];
+    const { log, sent, call } = setup(
+      (l) => ({ kind: 'ok', address: { kind: 'root' }, log: l }),
+      (message) => warnings.push(message),
+    );
+    const real = log.append.bind(log);
+    const append = vi.spyOn(log, 'append').mockImplementation(((type: never, data: never) => {
+      if (type === 'compaction/truncate-args') throw new Error('寫不進去');
+      return real(type, data);
+    }) as typeof log.append);
+    await call(history());
+    append.mockRestore();
+    await call(history());
+    expect(argOf(sent[0]!)).toBe(original);
+    expect(String(argOf(sent[1]!))).toContain('argument truncated');
+    expect(truncations(log)).toHaveLength(1);
+    expect(warnings).toHaveLength(1);
   });
 });

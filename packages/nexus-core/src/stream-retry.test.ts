@@ -551,6 +551,42 @@ describe('日誌與通知（失敗當下）', () => {
     expect(signals.map((each) => (each as { phase: string }).phase)).toEqual(['scheduled']);
   });
 
+  /**
+   * #1702：重試事件記不進去就不重打，這次呼叫失敗（照 dsh `llm-retry/src/index.ts:188`、`:190`，兩顆都沒有 catch）。
+   * 已經在失敗路徑上，兩個錯一起拋，原錯在前也是 `cause`。
+   */
+  it.each([
+    ['llm/retry', ['model/start', 'model/end'], []],
+    ['llm/retry-started', ['model/start', 'model/end', 'llm/retry'], ['scheduled']],
+  ] as const)(
+    '%s 記不進去：不重打，AggregateError（原錯在前也是 cause）',
+    async (type, expectedTypes, expectedPhases) => {
+      const { log, signals, run } = rig({ maxRetries: 2, initialDelayMs: 1, jitterRatio: 0 });
+      const real = log.append.bind(log);
+      const broken = new Error('寫不進去');
+      vi.spyOn(log, 'append').mockImplementation(((kind: never, data: never) => {
+        if (kind === type) throw broken;
+        return real(kind, data);
+      }) as typeof log.append);
+      const original = new Error('連線斷了');
+      let calls = 0;
+      const error = await run(async () => {
+        calls += 1;
+        noteStreamFailure({ code: 'TRANSPORT' });
+        throw original;
+      }).then(
+        () => undefined,
+        (thrown: unknown) => thrown,
+      );
+      expect(calls).toBe(1);
+      expect(error).toBeInstanceOf(AggregateError);
+      expect((error as AggregateError).errors).toEqual([original, broken]);
+      expect((error as AggregateError).cause).toBe(original);
+      expect(typesOf(log)).toEqual(expectedTypes);
+      expect(signals.map((each) => (each as { phase: string }).phase)).toEqual(expectedPhases);
+    },
+  );
+
   it('範圍外（沒有圖脈絡、沒有 writer）也不拋：日誌照寫，通知是空操作', async () => {
     const log = new SessionLog('stream-retry');
     const sessions = {
