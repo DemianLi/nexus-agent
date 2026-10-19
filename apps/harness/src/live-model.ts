@@ -753,9 +753,14 @@ export class StreamIdleTimeoutError extends Error {
  *    {@link StreamIdleTimeoutError} 的同時向重試那一顆回報 `TIMEOUT`，跟串流中途斷掉（`TRANSPORT`）走同一條路。重打的預算
  *    與第一則事件之前的失敗**共用同一份 `retryPolicy`**（#1427，出廠 6 次，比 dsh 的預設 5 次多，見 `settings/live-model.ts`
  *    的偏離二）。**第一則事件之前的逾時由 SDK 的 `timeout` 計時器產生**，同樣經 `onFailedAttempt` 回報、進同一份預算。
- * 2. **位元組級，不是 chunk 級**。dsh 等的是解析好的一個 chunk；我們在 `fetch` 這一層只看得到位元組，
- *    所以 SSE 的 keep-alive 註解行（`: ping`）也會重新計時。供應商要是只送 keep-alive 不送內容，這一層
- *    擋不到。退到位元組級是因為這是手上最靠近 adapter 的一格（同 {@link withInbandStreamErrors}）。
+ * 2. **事件級，不是 chunk 級**（#1538 起；之前是位元組級）。dsh 等的是轉接器解好的一個 chunk，SSE 解析器已經把 keep-alive 註解行吞掉，
+ *    所以只送 keep-alive 的供應商會被擋下；我們在 `fetch` 這一層沒有解好的 chunk 可等，退到這裡是因為這是手上最靠近 adapter 的一格
+ *    （同 {@link withInbandStreamErrors}）。這一層疊在 {@link withStreamCompletionCheck} **外面**，只看得到它放行的位元組，而它只交**完整的 SSE 事件**：
+ *    - 寫到一半、一個位元組一個位元組滴的事件**不算進度**，閒置逾時照走（位元組級時這種滴灌會一直把計時器撥回去）；
+ *    - 只有註解行的 keep-alive（`: ping`）是完整事件，照樣放行、照樣重新計時——供應商只送 keep-alive 不送內容時，這一層**還是擋不到**，
+ *      這是與 dsh 剩下的那一格差距；
+ *    - 完成檢查放棄監看（單一事件超過 {@link INBAND_WATCH_MAX_CHARS}）之後，或型錄條目把完成檢查關掉（`compat.supportsFinishReason: false`），位元組原樣交下來，那條連線退回位元組級。
+ *    常駐測試在 `stream-completion-check.test.ts` 的「閒置逾時的粒度」。
  *
  * @param timeoutMs - 閒置多久算逾時。
  * @param baseFetch - 底層的 fetch。產品路徑是 {@link withInbandStreamErrors}；測試換掉它。

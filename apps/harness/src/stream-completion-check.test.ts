@@ -446,3 +446,75 @@ describe('withStreamCompletionCheck 單獨：不改位元組、非 SSE 與非 2x
     await expect(response.text()).resolves.toBe(huge);
   });
 });
+
+/**
+ * 閒置逾時與完成檢查疊在一起之後的計時粒度（#1538 審查）：`withStreamIdleTimeout` 在完成檢查**外面**，只看得到完成檢查放行的位元組。
+ * 完成檢查只交完整的 SSE 事件，所以計時是**事件級**，不再是位元組級：
+ *
+ * - 只有註解行的 keep-alive 事件（`: ping`）是完整事件，照樣放行、照樣重新計時——供應商只送 keep-alive 不送內容時這一層還是擋不到（與 dsh 差的一格）。
+ * - 一個事件寫到一半、一個位元組一個位元組滴的，不算進度：事件收尾之前什麼都不交，閒置逾時照走。
+ * - 水位 0：有人讀才計時，消費者處理得慢不算上游閒置（同 dsh `timeout/src/index.ts:123-128`）。
+ */
+describe('閒置逾時的粒度（疊在完成檢查外面）', () => {
+  const IDLE_MS = 250;
+  const idleConfig = () => liveModelConfigSchema.parse({ baseUrl, streamIdleTimeoutMs: IDLE_MS });
+  const sleep = (ms: number) => new Promise<void>((done) => setTimeout(done, ms));
+
+  it('keep-alive 註解行是完整事件：每 80 毫秒一則、共超過閒置上限，仍會重新計時，串流正常結束', async () => {
+    body = (response) => {
+      void (async () => {
+        response.write(chunk({ role: 'assistant', content: '甲' }));
+        for (let i = 0; i < 6; i += 1) {
+          await sleep(80);
+          response.write(': ping\n\n');
+        }
+        response.write(chunk({ content: '乙' }));
+        response.write(chunk({}, 'stop'));
+        response.end(DONE);
+      })();
+    };
+    const { error, text } = await run(createLiveModel(idleConfig()));
+    expect(error).toBeUndefined();
+    expect(hits).toBe(1);
+    expect(text).toBe('甲乙');
+  });
+
+  it('事件寫到一半、一個位元組一個位元組滴：不算進度，閒置逾時照走（TIMEOUT）', async () => {
+    body = (response) => {
+      void (async () => {
+        response.write(chunk({ role: 'assistant', content: '甲' }));
+        // 一則永遠不收尾的事件，每 80 毫秒滴一個位元組，滴得比整個測試的耗時上限還久：
+        // 位元組級計時（拿掉完成檢查）會一直被滴醒，要等滴完才逾時。
+        response.write('data: {"id":"c1"');
+        for (let i = 0; i < 50 && !response.destroyed; i += 1) {
+          await sleep(80);
+          response.write(' ');
+        }
+      })();
+    };
+    const started = Date.now();
+    const { error } = await run(createLiveModel(idleConfig()));
+    expect(codeOf(error)).toBe('TIMEOUT');
+    expect(hits).toBe(RETRIES + 1);
+    // 事件級：每一次嘗試約 250 毫秒就逾時；位元組級要 4 秒以上。
+    expect(Date.now() - started).toBeLessThan(2000);
+  });
+
+  it('水位 0：消費者處理得慢（每一段停 400 毫秒，比閒置上限久）不算上游閒置', async () => {
+    body = (response) => {
+      response.write(chunk({ role: 'assistant', content: '甲' }));
+      response.write(chunk({ content: '乙' }));
+      response.write(chunk({ content: '丙' }));
+      response.write(chunk({}, 'stop'));
+      response.end(DONE);
+    };
+    const model = createLiveModel(idleConfig());
+    let text = '';
+    for await (const part of await model.stream('嗨')) {
+      if (typeof part.content === 'string') text += part.content;
+      await sleep(400);
+    }
+    expect(text).toBe('甲乙丙');
+    expect(hits).toBe(1);
+  });
+});
