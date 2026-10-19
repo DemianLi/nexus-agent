@@ -112,7 +112,7 @@ describe('記什麼', () => {
   });
 });
 
-describe('記不進去不能扳倒模型呼叫', () => {
+describe('找不到日誌：不記，呼叫照跑', () => {
   it.each<[string, SessionLookup]>([
     ['not-attached', { kind: 'not-attached' }],
     ['unknown-caller', { kind: 'unknown-caller' }],
@@ -122,27 +122,57 @@ describe('記不進去不能扳倒模型呼叫', () => {
     await expect(run(lookup, () => response)).resolves.toBe(response);
   });
 
-  /** 半對的事件比沒有更糟：開頭沒記成，結尾也不記，不變量才不會讀成寫錯了。 */
-  it('開頭記不進去：結尾也不記，呼叫照跑', async () => {
+});
+
+/**
+ * [#1702](https://github.com/DemianLi/nexus-agent/issues/1702)：記不進去這次呼叫就失敗，不吞——照 dsh 請求 header 的寫入
+ * （`agent.ts:637-650`，寫不進去就不送請求）與收尾（`:484-510`）。失敗路徑上收尾也記不進去，兩個錯一起拋、原錯在前
+ * （`:495-499`）。
+ */
+describe('記不進去：這次呼叫失敗', () => {
+  it('開頭記不進去：請求不送出，append 的錯原樣往外拋', async () => {
     const log = new SessionLog('calls');
-    const append = vi.spyOn(log, 'append').mockImplementationOnce(() => {
-      throw new Error('寫不進去');
+    const broken = new Error('寫不進去');
+    vi.spyOn(log, 'append').mockImplementationOnce(() => {
+      throw broken;
     });
-    const response = new AIMessage('好。');
-    await expect(run(ok(log), () => response)).resolves.toBe(response);
-    expect(append).toHaveBeenCalledTimes(1);
+    const handler = vi.fn(() => new AIMessage('好。'));
+    await expect(run(ok(log), handler)).rejects.toBe(broken);
+    expect(handler).not.toHaveBeenCalled();
+    expect(typesOf(log)).toEqual([]);
   });
 
-  it('結尾記不進去：回應照樣傳回', async () => {
+  it('成功之後結尾記不進去：append 的錯往外拋，回應不傳回', async () => {
     const log = new SessionLog('calls');
     const real = log.append.bind(log);
+    const broken = new Error('寫不進去');
     vi.spyOn(log, 'append').mockImplementation(((type: never, data: never) => {
-      if (type === 'model/end') throw new Error('寫不進去');
+      if (type === 'model/end') throw broken;
       return real(type, data);
     }) as typeof log.append);
-    const response = new AIMessage('好。');
-    await expect(run(ok(log), () => response)).resolves.toBe(response);
+    await expect(run(ok(log), () => new AIMessage('好。'))).rejects.toBe(broken);
     expect(typesOf(log)).toEqual(['model/start', 'assistant/message']);
+  });
+
+  it('模型拋了、結尾也記不進去：AggregateError，原錯在前也是 cause', async () => {
+    const log = new SessionLog('calls');
+    const real = log.append.bind(log);
+    const broken = new Error('寫不進去');
+    vi.spyOn(log, 'append').mockImplementation(((type: never, data: never) => {
+      if (type === 'model/end') throw broken;
+      return real(type, data);
+    }) as typeof log.append);
+    const boom = new Error('模型不見了');
+    const error = await run(ok(log), () => {
+      throw boom;
+    }).then(
+      () => undefined,
+      (thrown: unknown) => thrown,
+    );
+    expect(error).toBeInstanceOf(AggregateError);
+    expect((error as AggregateError).errors).toEqual([boom, broken]);
+    expect((error as AggregateError).cause).toBe(boom);
+    expect(typesOf(log)).toEqual(['model/start']);
   });
 });
 

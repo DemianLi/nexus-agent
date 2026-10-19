@@ -76,18 +76,20 @@ describe('subagentLinks', () => {
 });
 
 describe('appendSubagentCatalog', () => {
-  it('寫不進去（日誌正在發佈）不拋，回 false', () => {
+  it('寫不進去（日誌正在發佈）就拋，不吞（#1702，照 dsh catalog.ts:144／:163）', () => {
     const log = new SessionLog('root');
-    const results: boolean[] = [];
+    const errors: unknown[] = [];
     log.subscribe((event) => {
       if (event.type === 'turn/start') {
-        results.push(
-          appendSubagentCatalog(log, { childId: 'root/x', callId: 'a', mode: 'one-shot' }),
-        );
+        try {
+          appendSubagentCatalog(log, { childId: 'root/x', callId: 'a', mode: 'one-shot' });
+        } catch (error) {
+          errors.push(error);
+        }
       }
     });
     log.append('turn/start', { kind: 'message', text: '一' });
-    expect(results).toEqual([false]);
+    expect(errors).toHaveLength(1);
     expect(log.events.map((event) => event.type)).toEqual(['turn/start']);
   });
 });

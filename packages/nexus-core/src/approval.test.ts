@@ -23,8 +23,10 @@ import type {
   ToolExecution,
 } from './approval.js';
 import type { ApprovalPolicySource, ApprovalPolicyValue } from './approval-policy.js';
+import { createContainmentMiddleware } from './containment.js';
 import type { ToolEventSessions } from './containment.js';
 import type { NamedEntry } from './entries.js';
+import { SessionLog } from './session-log.js';
 import {
   APPROVAL_NO_CHANNEL,
   APPROVAL_POLICY_NEVER,
@@ -285,6 +287,67 @@ describe('不必問人就確定的拒絕，圖內寫一對 approval/*（#1029）
     )(call().request, call().ran);
     expect(lost.status).toBe('error');
     expect(appended).toEqual([]);
+  });
+
+  /**
+   * #1702：寫不進去往外拋，不吞（照 dsh `user-approval/src/index.ts:225`、`:232`，兩顆都沒有 catch）。
+   * 工具本體不跑；轉成錯誤結果是包在外面的圍堵那一層的事（下一格）。
+   */
+  it.each(['approval/asked', 'approval/decided'])(
+    '%s 寫不進去：append 的錯往外拋，本體不跑',
+    async (type) => {
+      const log = new SessionLog('s');
+      const real = log.append.bind(log);
+      const broken = new Error('寫不進去');
+      vi.spyOn(log, 'append').mockImplementation(((kind: never, data: never, options: never) => {
+        if (kind === type) throw broken;
+        return real(kind, data, options);
+      }) as typeof log.append);
+      const sessions: ToolEventSessions = {
+        forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }),
+      };
+      const { ran, request } = call();
+      await expect(
+        wrapperOf(ask, { kind: 'policy-never' }, sessions)(request, ran),
+      ).rejects.toBe(broken);
+      expect(ran).not.toHaveBeenCalled();
+    },
+  );
+
+  /**
+   * 對應 dsh `packages/core/tools/src/index.ts:1544-1545`（派發前的錯 → `toolErrorResult`）：圍堵排在第 0 格、包住閘門，
+   * 把閘門拋的錯翻成這次呼叫的錯誤結果並記 `tool/result`。
+   */
+  it('接上圍堵：寫不進去變成這次呼叫的錯誤結果，本體不跑，日誌有 tool/call 與 tool/result', async () => {
+    const log = new SessionLog('s');
+    const real = log.append.bind(log);
+    vi.spyOn(log, 'append').mockImplementation(((kind: never, data: never, options: never) => {
+      if (kind === 'approval/asked') throw new Error('寫不進去');
+      return real(kind, data, options);
+    }) as typeof log.append);
+    const sessions: ToolEventSessions = {
+      forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log }),
+    };
+    const containment = (
+      createContainmentMiddleware(sessions) as unknown as {
+        wrapToolCall: (request: unknown, handler: (request: unknown) => Promise<unknown>) => Promise<unknown>;
+      }
+    ).wrapToolCall;
+    const gate = wrapperOf(ask, { kind: 'policy-never' }, sessions);
+    const ran = vi.fn(async () => ({ text: '跑過了', status: 'success' }));
+    const request = {
+      toolCall: { name: exec.name, args: exec.args, id: exec.callId },
+      tool: { name: exec.name },
+      state: {},
+      runtime: { configurable: { checkpoint_ns: 'tools:x' } },
+    };
+    const result = (await containment(request, (inner) =>
+      gate(inner as Parameters<Wrapper>[0], ran),
+    )) as { status?: string; content?: unknown };
+    expect(ran).not.toHaveBeenCalled();
+    expect(result.status).toBe('error');
+    expect(String(result.content)).toContain('寫不進去');
+    expect(log.events.map((event) => event.type)).toEqual(['tool/call', 'tool/result']);
   });
 });
 

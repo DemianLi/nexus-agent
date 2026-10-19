@@ -112,16 +112,25 @@ describe('把記過的換上去', () => {
   });
 });
 
-/** 一顆手造的日誌接口：讀寫都在記憶體裡的一份 `SessionLog`。 */
-function fakeLog(log: SessionLog | undefined): ToolResultPruneLog & { appended: number } {
-  const state = { appended: 0 };
+/** 一顆手造的日誌接口：讀寫都在記憶體裡的一份 `SessionLog`。`failing` 為真時 `record` 什麼都不寫、回 `false`（記不進去）。 */
+function fakeLog(
+  log: SessionLog | undefined,
+): ToolResultPruneLog & { appended: number; failing: boolean } {
+  const state = { appended: 0, failing: false };
   return {
     get appended() {
       return state.appended;
     },
+    get failing() {
+      return state.failing;
+    },
+    set failing(value: boolean) {
+      state.failing = value;
+    },
     recorded: () => (log === undefined ? undefined : recordedPrunesOf(log.events)),
     record: (_request: PruneRequest, results: readonly NewlyPruned[]) => {
-      if (log === undefined) return;
+      if (log === undefined) return true;
+      if (state.failing) return false;
       state.appended += 1;
       log.append('compaction/prune', {
         results: results.map((result) => ({
@@ -130,6 +139,7 @@ function fakeLog(log: SessionLog | undefined): ToolResultPruneLog & { appended: 
           content: result.content,
         })),
       });
+      return true;
     },
   };
 }
@@ -205,6 +215,38 @@ describe('剪刀：先換記過的、再剪新的、新剪的當場記', () => {
     expect(measureToolResultContent(seen[1]![1]!.content)).toBeLessThan(300);
     expect(seen[1]![2]).toBe(fresh);
     expect(port.appended).toBe(1);
+  });
+
+  it('記不進去（#1702）：新剪的這次不套用，記過的照樣套用', async () => {
+    const log = new SessionLog('s');
+    const port = fakeLog(log);
+    const { base, seen } = spy();
+    const wrapped = withToolResultPruning(base, () => true, SMALL, port);
+    await run(wrapped, [new HumanMessage('嗨'), big('a')]);
+    const recordedA = seen[0]?.[1]?.content;
+
+    port.failing = true;
+    const fresh = big('b');
+    await run(wrapped, [new HumanMessage('嗨'), big('a'), fresh]);
+
+    // 記過的 a 照樣是剪過的那一份。
+    expect(seen[1]?.[1]?.content).toBe(recordedA);
+    // 新剪的 b 記不進去：模型看到的是原文，跟日誌一致。
+    expect(seen[1]?.[2]).toBe(fresh);
+    expect(port.appended).toBe(1);
+    expect([...recordedPrunesOf(log.events).keys()]).toEqual(['a']);
+  });
+
+  it('記不進去、也沒有記過的：請求原樣往下交', async () => {
+    const log = new SessionLog('s');
+    const port = fakeLog(log);
+    port.failing = true;
+    const { base, seen } = spy();
+    const messages = [new HumanMessage('嗨'), big('a')];
+    await run(withToolResultPruning(base, () => true, SMALL, port), messages);
+
+    expect(seen[0]?.[1]).toBe(messages[1]);
+    expect(port.appended).toBe(0);
   });
 
   it('設定改了（門檻放寬）也不影響記過的：已剪的永遠是當時剪成的樣子', async () => {

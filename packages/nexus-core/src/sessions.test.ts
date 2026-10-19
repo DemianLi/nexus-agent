@@ -383,6 +383,50 @@ describe('sessions.expectSpawn', () => {
     expect(catalogs(other.root)).toEqual([]);
   });
 
+  /**
+   * #1702：目錄寫不進去就讓這次派出失敗，照 dsh（`catalog.ts:144`、`:163` 直接拋）。寫在 `open` 回來之後，所以排在後面的訂閱者
+   * （持久化）照樣接上；從查找拋出去，是子代理第一次查找那一步失敗。登記留著，下一次查找再試；子代理那句話排在目錄之後，目錄沒寫成就不寫。
+   */
+  it('目錄寫不進去：原錯從查找拋出去，訂閱者照樣接上，子日誌一顆都沒寫，下一次查找再試', () => {
+    const registry = createRegistry();
+    const sessions = new SessionRegistry('t');
+    registry.sessions.bind(sessions);
+    const input = toLoggedMessage(new HumanMessage('去查一下'));
+    registry.sessions.expectSpawn('tools:spawn', { parent: sessions.root, callId: 'c1', input });
+    const seen: SessionLog[] = [];
+    sessions.observe(({ address, log }) => {
+      if (address.kind === 'subagent') seen.push(log);
+    });
+    const boom = new Error('寫不進去');
+    let rejecting = true;
+    const real = sessions.root.append.bind(sessions.root);
+    vi.spyOn(sessions.root, 'append').mockImplementation(((
+      type: never,
+      data: never,
+      options: never,
+    ) => {
+      if (rejecting && type === 'subagent/catalog') throw boom;
+      return real(type, data, options);
+    }) as typeof sessions.root.append);
+
+    expect(() => registry.sessions.forCall(inChild)).toThrow(boom);
+    expect(seen).toHaveLength(1);
+    const child = seen[0]!;
+    expect(catalogs(sessions.root)).toEqual([]);
+    expect(child.events).toEqual([]);
+    // 登記留著：下一次查找再拋，不會靜靜跳過。
+    expect(() => registry.sessions.forCall(inChild)).toThrow(boom);
+    rejecting = false;
+    const found = registry.sessions.forCall(inChild);
+    expect(found.kind === 'ok' && found.log).toBe(child);
+    expect(catalogs(sessions.root)).toEqual([
+      { childId: child.sessionId, callId: 'c1', mode: 'one-shot' },
+    ]);
+    expect(child.events.map((event) => event.type)).toEqual(['user/message']);
+    registry.sessions.forCall(inChild);
+    expect(catalogs(sessions.root)).toHaveLength(1);
+  });
+
   it('解綁之後開出來的子日誌不寫', () => {
     const registry = createRegistry();
     const sessions = new SessionRegistry('t');

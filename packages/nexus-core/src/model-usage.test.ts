@@ -234,13 +234,13 @@ describe('這顆 middleware 記得進去的時候', () => {
 });
 
 /**
- * **這顆 middleware 坐在 request path 上，所以它一條都不准拋。**
+ * 找不到日誌（非 `ok`）不記、不拋：把非 `ok` 改成拋，紅的就是這裡。它們在真流量上不是理論——`not-attached` 是**常態**
+ * （絕大多數組裝點沒有 `attachSession`），`ambiguous` 在 `serve.ts` 一次組裝配多條 thread 時是真的。
  *
- * 這一組是絆索：拿掉 `model-usage.ts` 裡那個 try/catch、或把非 `ok` 改成拋，紅的就是
- * 這裡。而它們在真流量上不是理論——`not-attached` 是**常態**（絕大多數組裝點沒有
- * `attachSession`），`ambiguous` 在 `serve.ts` 一次組裝配多條 thread 時是真的。
+ * 找到了日誌、`append` 卻拋：這次呼叫失敗（[#1702](https://github.com/DemianLi/nexus-agent/issues/1702)，照 dsh
+ * `request.ts` 的 usage 寫入沒有 catch）。
  */
-describe('寫不進去的時候，它不准扳倒模型呼叫', () => {
+describe('寫不進去的時候', () => {
   it.each([
     ['沒接上會話註冊表', { kind: 'not-attached' } as const],
     ['認不出這次呼叫', { kind: 'unknown-caller' } as const],
@@ -251,10 +251,11 @@ describe('寫不進去的時候，它不准扳倒模型呼叫', () => {
     ).resolves.toBeInstanceOf(AIMessage);
   });
 
-  it('append 自己拋也吃掉——不然一次寫日誌失敗就是一次模型呼叫死掉', async () => {
+  it('append 自己拋：這次呼叫失敗，append 的錯原樣往外拋（#1702）', async () => {
     const log = new SessionLog('s');
+    const broken = new Error('日誌拒收');
     const append = vi.spyOn(log, 'append').mockImplementation(() => {
-      throw new Error('日誌拒收');
+      throw broken;
     });
     await expect(
       record(
@@ -265,11 +266,11 @@ describe('寫不進去的時候，它不准扳倒模型呼叫', () => {
           log,
         },
       ),
-    ).resolves.toBeInstanceOf(AIMessage);
+    ).rejects.toBe(broken);
     expect(append).toHaveBeenCalledOnce();
   });
 
-  it('模型自己拋的照樣往外拋——被吃掉的只有記錄這一步', async () => {
+  it('模型自己拋的照樣往外拋', async () => {
     const middleware = createModelUsageRecorder({
       forCall: () => ({ kind: 'ok', address: { kind: 'root' }, log: new SessionLog('s') }),
     });
@@ -419,12 +420,33 @@ describe('失敗與中止的呼叫', () => {
     expect(beginAttemptReport()).toBeUndefined();
   });
 
-  it('記不進去不能蓋掉模型原本的錯', async () => {
+  it('記不進去不蓋掉模型原本的錯：AggregateError，原錯在前也是 cause（#1702）', async () => {
     const log = new SessionLog('s');
+    const broken = new Error('日誌拒收');
     vi.spyOn(log, 'append').mockImplementation(() => {
-      throw new Error('日誌拒收');
+      throw broken;
     });
     const error = await run(log, { outcome: 'throw', attempt: (report) => report?.(reported) });
-    expect((error as Error).message).toBe('串流中途斷了');
+    expect(error).toBeInstanceOf(AggregateError);
+    const [original, appendError] = (error as AggregateError).errors as Error[];
+    expect(original?.message).toBe('串流中途斷了');
+    expect(appendError).toBe(broken);
+    expect((error as AggregateError).cause).toBe(original);
+  });
+
+  it('合成的空收尾（沒有原錯）記不進去：append 的錯原樣往外拋', async () => {
+    const log = new SessionLog('s');
+    const broken = new Error('日誌拒收');
+    vi.spyOn(log, 'append').mockImplementation(() => {
+      throw broken;
+    });
+    const controller = new AbortController();
+    controller.abort();
+    const error = await run(log, {
+      outcome: 'synthetic-stop',
+      signal: controller.signal,
+      attempt: (report) => report?.(reported),
+    });
+    expect(error).toBe(broken);
   });
 });
