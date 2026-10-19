@@ -39,7 +39,8 @@
  *
  * **diff 卡 #1685 B 起改由 SG 的 `DiffView` 畫**：`whitespace-pre`＋橫向捲動，同 dsh，換行的成本不在了。這兩道上限與
  * {@link MAX_RENDERED_LINES} 照舊沿用（PM 定題 3a：上限是機制），套在 nexus 層 `components/ui/diff-view.tsx` 的 `capPatch`：
- * 「行」是交給 SG 的 unified patch 的行（`diff --git`、`@@` 也算），沒畫完時尾端一行 `... 還有 N 行沒畫`。
+ * 「行」是交給 SG 的 unified patch 的行：`diff --git`、`@@` 也算進 5,000 行與字元預算——上限管的是畫出來的行，
+ * 這兩種行 SG 也會畫成一列（PM 在 #1754 同意）。沒畫完時尾端一行 `... 還有 N 行沒畫`。
  *
  * **這兩道壓不住的，靠字型堆疊解**（[#979](https://github.com/DemianLi/nexus-agent/issues/979)）：堆疊裡沒有字型涵蓋的符號
  * （旗、☺、❤、⚠️ 之類）要走系統字型回退，成本跟字元上限無關，分兩段——每個新頁面第一次遇到約 40ms（🏳️‍🌈 約 75ms），
