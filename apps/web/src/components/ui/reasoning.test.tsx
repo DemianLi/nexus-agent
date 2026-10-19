@@ -50,7 +50,9 @@ describe('0020：內文收節點、外層是 div', () => {
     expect(body.querySelector('pre')?.textContent).toContain('const a = 1');
     expect(body.textContent).not.toContain('**');
     // vendor 原本是 `<p>`：段落、清單、程式碼區塊放進去，React 會報 validateDOMNesting。
-    expect(error.mock.calls.flat().join('\n')).not.toMatch(/cannot be a descendant|cannot contain a nested/);
+    expect(error.mock.calls.flat().join('\n')).not.toMatch(
+      /cannot be a descendant|cannot contain a nested/,
+    );
   });
 });
 

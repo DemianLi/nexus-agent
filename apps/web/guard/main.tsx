@@ -50,6 +50,10 @@
  * - `?overlay=tool-cards` 畫產品的工具卡與工具段（#1682 PR B）：一段打開的工具段（兩張完成的卡，第一張展開）、單獨的卡（執行中、
  *   等你回答、完成展開、失敗展開、停止的提問、子代理歸屬、背景子代理、撞到輸出上限）。量三種底上的字（頁面、清單的 `--panel`、結果框）、
  *   Badge、背景子代理的狀態字、錯誤框與撞到上限那段說明的紅字，列、群組、結果框的焦點；`data-guard-cards` 包整頁。
+ * - `?overlay=reasoning` 畫產品的推理列（SG 的 `Reasoning`，#1683）：講完的一列（內文有粗體、清單、行內 code、連結）、還在想的一列
+ *   （摘要很長，量 375 寬往左裁）、夾在一段打開的工具段裡的一列（`StepList` 的 `--panel` 上）。量字的對比（頁面與 `--panel` 兩種底、
+ *   「思考中」的漸層與減少動態時停住的那一格）、焦點、AX 樹、箭頭、44px、shimmer、`white-space`；三塊各包一層 `data-guard-reasoning`
+ *   （`done`、`running`、`panel`）。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -723,6 +727,76 @@ function ToolCardsPage() {
   );
 }
 
+/** 推理列（#1683）：內文要有連結與行內 code（量對比），還在想的那列摘要要長（量 375 寬往左裁）。 */
+const REASONING_MD =
+  '先讀**需求**，再對照 `docs/plan.md` 的[成本表](https://example.com)。\n\n- 方案 A：成本低、風險高\n- 方案 B：成本中、風險中\n\n建議方案 B。';
+const REASONING_LONG =
+  '先讀需求。\n使用者要一張表，列出三個方案的成本與風險、交付時程、需要的人力與每一項的假設，最後再給一句建議與理由';
+const REASONING_RUN_ENTRIES: ConversationEntry[] = [
+  {
+    kind: 'ai',
+    id: 'reasoning-run-0',
+    text: '',
+    reasoning: REASONING_MD,
+    streaming: false,
+    attribution: { kind: 'root' },
+  },
+  ...RUN_TOOLS.map((tool) => ({ ...tool, id: `reasoning-${tool.id}` })),
+];
+
+function ReasoningPage() {
+  const [open, setOpen] = useState(true);
+  return (
+    <div
+      style={{
+        maxWidth: '48rem',
+        margin: '0 auto',
+        padding: 16,
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      }}
+    >
+      <div data-guard-reasoning="done">
+        <ReasoningRow text={REASONING_MD} running={false} />
+      </div>
+      <div data-guard-reasoning="running">
+        <ReasoningRow text={REASONING_LONG} running />
+      </div>
+      {/* 段裡每一則是一格 `MessageScrollerItem`，要包在 scroller 裡（同 `Transcript`）。 */}
+      <div data-guard-reasoning="panel">
+        <MessageScrollerProvider>
+          <MessageScroller>
+            <MessageScrollerViewport aria-label="工具段">
+              <MessageScrollerContent>
+                <ToolRun
+                  run={{
+                    kind: 'tool-run',
+                    id: 'tools:reasoning-run-0',
+                    entries: REASONING_RUN_ENTRIES,
+                    tools: REASONING_RUN_ENTRIES.filter(
+                      (entry): entry is ToolEntry => entry.kind === 'tool',
+                    ),
+                  }}
+                  open={open}
+                  onOpenChange={setOpen}
+                  renderEntry={(entry) =>
+                    entry.kind === 'tool' ? (
+                      <ToolCard entry={entry} />
+                    ) : entry.kind === 'ai' && entry.reasoning !== undefined ? (
+                      <ReasoningRow text={entry.reasoning} running={false} />
+                    ) : null
+                  }
+                />
+              </MessageScrollerContent>
+            </MessageScrollerViewport>
+          </MessageScroller>
+        </MessageScrollerProvider>
+      </div>
+    </div>
+  );
+}
+
 /** 對話區（#1638 PR B）：人與 AI 輪流，AI 的回覆夠長、總高度超出容器，捲到最新的按鈕才有機會出現；最後一則 AI 被停止，畫表尾。 */
 const MESSAGES: ConversationEntry[] = Array.from({ length: 6 }, (_, i): ConversationEntry[] => [
   { kind: 'human', id: `h-${i}`, text: `第 ${i + 1} 個問題：這份報表的數字要怎麼看？` },
@@ -964,6 +1038,8 @@ function OverlayPage({ name }: { name: string }) {
       return <ToolStepsPage />;
     case 'tool-cards':
       return <ToolCardsPage />;
+    case 'reasoning':
+      return <ReasoningPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':

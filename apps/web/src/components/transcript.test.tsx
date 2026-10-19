@@ -67,12 +67,15 @@ const rowIn = (entry: HTMLElement) => within(entry).queryByTestId('reasoning-row
  * 推理列是原生 `<details>`／`<summary>`（#1683），jsdom 認不出 summary 的角色：直接找元素。真實的角色與 expanded 由 guard 讀
  * Chromium 的 AX 樹。
  */
-const summaryIn = (scope: HTMLElement) => scope.querySelector<HTMLElement>('[data-testid=reasoning-row] summary')!;
-const detailsIn = (scope: HTMLElement) => scope.querySelector<HTMLDetailsElement>('[data-testid=reasoning-row] details')!;
+const summaryIn = (scope: HTMLElement) =>
+  scope.querySelector<HTMLElement>('[data-testid=reasoning-row] summary')!;
+const detailsIn = (scope: HTMLElement) =>
+  scope.querySelector<HTMLDetailsElement>('[data-testid=reasoning-row] details')!;
 /** summary 的名稱取自內容、跳過 `aria-hidden`（摘要與「·」、箭頭）：這裡只有純文字，照這條算就等於 accname。 */
 function nameOf(summary: HTMLElement): string {
   const copy = summary.cloneNode(true) as HTMLElement;
-  for (const hidden of copy.querySelectorAll('[aria-hidden="true"], [aria-hidden=""]')) hidden.remove();
+  for (const hidden of copy.querySelectorAll('[aria-hidden="true"], [aria-hidden=""]'))
+    hidden.remove();
   return copy.textContent?.trim() ?? '';
 }
 

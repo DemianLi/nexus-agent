@@ -256,5 +256,25 @@ describe('registry 檔的改動還在', () => {
     });
   });
 
+  // 思考過程的覆寫（#1683，README 本地修改第 70 條）：覆寫檔那一段還在，vendor 的 summary 仍是 `w-fit`。畫出來的寬度在 `guard/` 量。
+  describe('reasoning 的覆寫（#1683）', () => {
+    test('第 70 條：summary 不超出欄寬、標題不被擠；vendor 的 summary 仍是 `w-fit`、沒有 max-width，標題是第一個 span、沒有 shrink-0', () => {
+      const reasoning = code(read('../../vendor/solid-glass/components/ui/reasoning.tsx'));
+      expect(read('../../styles/solid-glass.overrides.css')).toContain(
+        '[data-slot="reasoning"] > summary {\n  max-width: 100%;\n}',
+      );
+      expect(read('../../styles/solid-glass.overrides.css')).toContain(
+        '[data-slot="reasoning"] > summary > span:first-child {\n  flex-shrink: 0;\n}',
+      );
+      expect(reasoning).toMatch(/<summary className="flex w-fit\b/);
+      expect(reasoning).not.toMatch(/\bmax-w-/);
+      // 標題是 summary 裡第一個 span、沒有 shrink-0（覆寫檔用 `span:first-child` 錨它）。
+      expect(reasoning).toMatch(
+        /<summary [^>]*>\s*<span className=\{cn\(thinking && "status-shimmer"\)\}>/,
+      );
+      expect(reasoning).not.toMatch(/\bshrink-0\b/);
+    });
+  });
+
   // #1281 的三條（側欄、dropdown-menu、cmdk 的 text-ui）照 #1468 Q19 拿掉：dropdown-menu 與 cmdk 隨 #1583、側欄隨 #1680 換成 vendor 版。
 });

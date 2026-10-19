@@ -10,7 +10,8 @@ afterEach(cleanup);
  * 畫出來的樣子（展開後藏摘要、`white-space`、箭頭、44px、shimmer 的動畫）在 `guard/` 量。
  */
 
-const LONG = '\n**First** we list the files.\nThen we read a.txt.\n\n- a.txt\n- b.txt\n\n```\nls\n```\nNow read b.txt.\n';
+const LONG =
+  '\n**First** we list the files.\nThen we read a.txt.\n\n- a.txt\n- b.txt\n\n```\nls\n```\nNow read b.txt.\n';
 
 const row = () => screen.getByTestId('reasoning-row');
 const summary = () => row().querySelector('summary')!;
@@ -18,7 +19,8 @@ const details = () => row().querySelector('details')!;
 /** summary 的名稱取自內容、跳過 `aria-hidden`：這裡只有純文字，照這條算就等於 accname。 */
 function nameOf(element: HTMLElement): string {
   const copy = element.cloneNode(true) as HTMLElement;
-  for (const hidden of copy.querySelectorAll('[aria-hidden="true"], [aria-hidden=""]')) hidden.remove();
+  for (const hidden of copy.querySelectorAll('[aria-hidden="true"], [aria-hidden=""]'))
+    hidden.remove();
   return copy.textContent?.trim() ?? '';
 }
 
@@ -83,7 +85,9 @@ describe('收合時的摘要（trailing）', () => {
     render(<ReasoningRow text={LONG} running={false} />);
     const dot = [...summary().querySelectorAll('span')].find((s) => s.textContent === '·')!;
     expect(dot.className).toContain('group-open/reasoning:hidden');
-    expect(screen.getByTestId('reasoning-summary').className).toContain('group-open/reasoning:hidden');
+    expect(screen.getByTestId('reasoning-summary').className).toContain(
+      'group-open/reasoning:hidden',
+    );
   });
 
   test('推理只有空白時沒有「·」也沒有摘要', () => {
