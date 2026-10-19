@@ -519,8 +519,10 @@ export interface SessionEventMap {
    *
    * ## 誰寫它
    *
-   * `apps/harness/src/sandbox-mode.ts` 的 `SandboxModeController`：接上一份日誌的當下寫
-   * 一顆**起始值**，之後每一次**真的變了**的切換各寫一顆。切到已經生效的那一格不寫
+   * 兩處（#1491 起，與 `docs/plugin-contract.md` 第十二接縫的寫入面一致）：**起始值**由
+   * `packages/nexus-plugin-sandbox-policy/src/sandbox-mode.ts` 的 `SandboxModeController` 接上一份日誌的當下寫；
+   * **之後每一次真的變了的切換**由 `/permission`（`packages/nexus-plugin-permission-presets/src/index.ts` 的 `handler`）
+   * 直接往 root 日誌 `append`，控制器訂閱日誌跟著，自己不再有寫入口。切到已經生效的那一格不寫
    * ——照 dsh 的「净变化为零的选择不追加任何内容」
    * （`packages/interaction/permission-presets/README.zh.md`）。
    *

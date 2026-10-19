@@ -6,7 +6,15 @@
  * 對的錯誤型別；而 serve 記「這一列掉了」只認 `AssemblyDropError`，斷言因此看**錯誤型別與紀錄**，不只比訊息。
  */
 
-import { chmodSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
@@ -221,7 +229,7 @@ async function subagentEvents(
 }
 
 describe('開著的 thread 照舊表，新開的 thread 用新表（D4、E1、G5）', () => {
-  it('serve 開著時把全開那組從表裡拿掉：A 的目錄、/permission 與子代理日誌照舊表，B 用新表，彼此的 fence 不動', async () => {
+  it('serve 開著時把全開那組從表裡拿掉：A 的目錄、/permission 與子代理日誌照舊表，B 用新表，日誌上的組合彼此不動', async () => {
     const dir = scratch('nexus-presets-live-table-');
     const workspace = scratch('nexus-presets-live-table-ws-');
     const sessionLog = join(dir, 'sessions');
@@ -290,12 +298,64 @@ describe('開著的 thread 照舊表，新開的 thread 用新表（D4、E1、G5
       preset: 'danger-full-access',
     });
 
-    // 另一條 thread 的 fence 不動：A 切走之後 B 還是 workspace-write，A 自己切得過去、B 的 /permission 回覆不變。
+    // 另一條 thread 的日誌上的組合不動：A 切走之後 B 還是 workspace-write，A 自己切得過去、B 的 /permission 回覆不變。
+    // （/permission 的回覆是從日誌折出來的，量不到 fence；真的 fence 見下一條測試。）
     expect(await client.slashRun('a', '/permission read-only')).toMatchObject({ kind: 'success' });
     const bAfter = await client.slashRun('b', '/permission');
     expect(bAfter.kind === 'success' && bAfter.text).toBe(
       bBefore.kind === 'success' && bBefore.text,
     );
     expect(bAfter.kind === 'success' && bAfter.text).toContain('目前的權限組合：workspace-write');
+  }, 120000);
+});
+
+describe('換表之後兩條 thread 的 fence 互不影響', () => {
+  it('A 在舊表上切到 read-only、換表後開 B：A 寫工作區內的檔被擋，B 寫同一處成功', async () => {
+    const dir = scratch('nexus-presets-live-fence-');
+    const workspace = scratch('nexus-presets-live-fence-ws-');
+    const patch = join(dir, 'scripted.patch.yml');
+    writeFileSync(
+      patch,
+      scriptedPatchText([
+        {
+          content: '',
+          toolCalls: [{ name: 'write_file', args: { file_path: '/note.txt', content: '寫了' } }],
+        },
+        { content: '好。' },
+      ]),
+    );
+    const env = { [HARNESS_HOME_ENV]: dir };
+    await changePlugin(
+      { op: 'config-set', id: 'permission-presets', config: WITH_FULL_ACCESS },
+      { env },
+    );
+    running = (await runServe({
+      argv: ['--port', '0', '--workspace', workspace, '--patch', patch],
+      log: () => undefined,
+      env,
+    })) as RunningServe;
+    const client = await serveClient(running);
+    const target = join(workspace, 'note.txt');
+    const speak = async (thread: string): Promise<void> => {
+      const events = await client.openEvents(thread);
+      const started = await client.runStart(thread, '寫一個檔');
+      expect(started.type).not.toBe('error');
+      await foldTurn(events);
+      await events.return?.(undefined);
+    };
+
+    expect(await client.slashRun('a', '/permission read-only')).toMatchObject({ kind: 'success' });
+    await changePlugin(
+      { op: 'config-set', id: 'permission-presets', config: WITHOUT_FULL_ACCESS },
+      { env },
+    );
+
+    // A 先跑：唯讀，擋下。檔案沒有出現。
+    await speak('a');
+    expect(existsSync(target)).toBe(false);
+    // B 是換表之後才開的新 thread：workspace-write，同一個呼叫寫得進去（反例：不是這個環境本來就寫不了）。
+    await speak('b');
+    expect(existsSync(target)).toBe(true);
+    expect(readFileSync(target, 'utf8')).toBe('寫了');
   }, 120000);
 });
