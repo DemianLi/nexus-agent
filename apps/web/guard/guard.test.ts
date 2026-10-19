@@ -2978,13 +2978,27 @@ const REASONING_HEAD = ['title', 'dot', 'trailing'];
 describe.each(
   MODES.flatMap((mode) => (['light', 'dark'] as const).map((theme) => [mode, theme] as const)),
 )('瀏覽器量推理列（#1683）：%s、%s', (mode, theme) => {
-  test('頁面與 --panel 兩種底上的標題、「·」、摘要、內文（段落、清單、粗體、連結、行內 code）過 4.5；summary 的焦點', async () => {
+  test('頁面與 --panel 兩種底上的標題、「·」、摘要、內文（段落、清單、粗體、連結、行內 code）過 4.5；summary 的焦點（外框 offset 2px）', async () => {
     const page = await openOverlay('reasoning', theme, { mode, marks: reasoningMarks });
     try {
       const head = (await collectTexts(page)).filter((t) =>
         REASONING_HEAD.some((part) => t.name.startsWith(`reasoning-${part}-`)),
       );
       const focus = await collectFocus(page);
+      // 外框離 summary 2px（覆寫檔 base layer 那條 `:focus-visible` 的 offset；collectFocus 不量 offset）。
+      const offsets = await page.$$eval(
+        `${REASONING_ROWS} [data-slot="reasoning"] > summary`,
+        (els) =>
+          els.map((el) => {
+            (el as HTMLElement).focus();
+            return {
+              focusVisible: el.matches(':focus-visible'),
+              offset: getComputedStyle(el).outlineOffset,
+            };
+          }),
+      );
+      report[`reasoning:${mode}:${theme}:outline-offset`] = offsets;
+      expect(offsets).toEqual(Array(3).fill({ focusVisible: true, offset: '2px' }));
       await openReasoningRows(page, ['done', 'panel']);
       await settle(page);
       await markReasoningBody(page);

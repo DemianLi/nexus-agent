@@ -39,8 +39,9 @@
  * - `?overlay=composer-<狀態>` 畫產品的輸入框（SG 的 `Composer`，#1591 驗收 D）：`idle`（閒著）、`draft`（有草稿）、`running`（跑著）、
  *   `running-draft`（跑著有草稿）、`menu`（`/` 選單開著）；底列的 `danger`、`locked`、`pick-open`、`tones`、`dormant` 見
  *   `ComposerPage`。輸入框貼在頁面底部，寬度跟產品一樣（左右各 16px、最寬 48rem）。
- * - `?overlay=collapsibles` 畫產品裡展開收合的元件（#1638 PR A），都關著：思考過程、摘要列、工具卡、待辦、提問面板。量展開途中的高度、
- *   reduced-motion 直接到位、箭頭轉向、思考過程展開後藏摘要（這幾件都靠真的 CSS 命中 Base UI 的屬性，jsdom 量不到）。
+ * - `?overlay=collapsibles` 畫產品裡展開收合的元件（#1638 PR A），都關著：思考過程、摘要列、工具卡、待辦、提問面板。量摘要列展開途中的
+ *   高度、reduced-motion 直接到位、箭頭跟著 `data-panel-open` 轉（靠真的 CSS 命中 Base UI 的屬性，jsdom 量不到）；思考過程（#1683 起是
+ *   SG 的原生 `<details>`）量箭頭跟著 `details[open]` 轉、展開後藏摘要。
  * - `?overlay=messages` 畫產品的對話區（`Transcript`，#1638 PR B）：人與 AI 輪流十二則、最後一則 AI 被停止（帶表尾），高度固定、
  *   內容超出，量泡泡字與表尾的對比、捲到最新的按鈕（焦點、動效、reduced-motion）、每一則的 `content-visibility`、外殼的行高、底部淡出。
  * - `?overlay=questionnaire` 畫產品的提問面板（#1638 PR C），量選項的焦點外框（offset、不帶 ring）與字的對比。
