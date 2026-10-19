@@ -60,11 +60,13 @@ import { startGuardServer, type GuardServer } from './server';
  * 16. **tool-steps**（#1682 PR A，`?overlay=tool-steps`）：列、群組那一列、結果框的字過 4.5，結果框聚焦時 2px 外框畫在外層、offset 2px
  *    （第 62 條）；執行中不閃（第 61 條）；375 寬按鈕至少 44px、1280 寬照 SG（第 63 條）；減少動態時箭頭不轉場（第 64 條）；疊在清單裡的
  *    結果框沒有 blur、清單與單獨放的結果框照 SG 有（第 65 條）。
+ * 17. **增刪行數**（#1685 PR A，`?overlay=diff-stats`）：`+`／`−` 在頁面、`StepList` 的 `--panel`、改動卡、審查頁與選檔器上過 4.5，
+ *    顏色就是 `--success`／`--destructive`（第 75 條）；375 寬時包裝層不被擠（第 76 條）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
  *
- * 量不到的：brand 與 SG 的 `status-*` 這幾個顏色，測試頁上沒有元件不寫 class 就會用到它們（只有 `Counts` 的增刪數用到 success／destructive），
+ * 量不到的：brand 與 SG 的 `status-*` 這幾個顏色，測試頁上沒有元件不寫 class 就會用到它們（只有 `DiffStats` 的增刪數用到 success／destructive，覆寫檔第 75 條），
  * 由靜態那一層（`tokens-contrast.test.ts`）量。
  *
  * 跑法：先 `pnpm --filter @nexus/web run build`，再 `pnpm --filter @nexus/web run test:guard`（CI 在 static job 的 build 之後）。
@@ -257,7 +259,12 @@ function collectTexts(page: Page): Promise<TextSample[]> {
     }
     for (const group of document.querySelectorAll('[data-guard-texts]')) {
       const name = group.getAttribute('data-guard-texts') ?? '';
-      group.querySelectorAll('[aria-hidden]').forEach((el, i) => {
+      // 兩種都量，照文件順序。`DiffStats` 的 `aria-hidden` 掛在包裝層上（#1685 第 76 條），那一層自己沒有字、字色在裡面的
+      // `+`／`−` 兩個 span（第 75 條換的就是這兩個），所以量那兩個 span、不量包裝層：量包裝層只會量到繼承下來的字色。
+      const targets = group.querySelectorAll(
+        '[aria-hidden]:not(:has(> [data-slot="diff-stats"])), [data-slot="diff-stats"] > span',
+      );
+      targets.forEach((el, i) => {
         samples.push(sample(el, `${name}-${i}`, defaultMin));
       });
     }
@@ -3590,4 +3597,156 @@ describe('瀏覽器量狀態列的行為（#1684）', () => {
       await page.close();
     }
   });
+});
+
+/**
+ * 增刪行數（#1685 PR A 驗收 3、4，`?overlay=diff-stats`）：SG `DiffStats` 的 `+`／`−` 疊在每一種底上都過 4.5——頁面底與漸層、
+ * 工具段 `StepList` 的 `--panel`、改動卡、審查頁（標頭與選檔器的清單）；亮暗加兩種不透明退路。兩色是覆寫檔第 75 條換的
+ * `--success`／`--destructive`：另外比對算出來的顏色就是那兩個 token，拿掉覆寫要紅（就算 SG 的原色剛好在某一格過了 4.5）。
+ * 375 寬時包裝層（第 76 條）不被擠：寬度跟 vendor 那顆單獨放著一樣。
+ */
+const DIFF_STATS = '[data-slot="diff-stats"] > span';
+const DIFF_REVIEW = '[data-testid="changes-review"]';
+const diffStatsMarks: Record<string, Record<string, string>> = {
+  [`[data-guard-diffstats="page"] ${DIFF_STATS}`]: { 'data-guard-text': 'diff-page' },
+  [`[data-guard-diffstats="panel"] [data-slot="step-list"] ${DIFF_STATS}`]: {
+    'data-guard-text': 'diff-panel',
+  },
+  [`[data-guard-diffstats="changes"] ${DIFF_STATS}`]: { 'data-guard-text': 'diff-changes' },
+};
+
+/** 點改動卡的標頭打開審查頁，再打開選檔器；兩處的 `DiffStats` 補上量具屬性。 */
+async function openDiffReview(page: Page): Promise<void> {
+  await page.click('[data-guard-diffstats="changes"] [data-testid="changes"] > button');
+  await page.waitForSelector(`${DIFF_REVIEW} [data-slot="diff-stats"]`);
+  await page.click(`${DIFF_REVIEW} [data-testid="review-file"]`);
+  await page.waitForSelector(`[data-slot="popover-content"] [data-slot="diff-stats"]`);
+  await settle(page);
+  await page.evaluate((selector) => {
+    for (const el of document.querySelectorAll(`[data-testid="changes-review"] ${selector}`))
+      el.setAttribute('data-guard-text', 'diff-review');
+    for (const el of document.querySelectorAll(`[data-slot="popover-content"] ${selector}`))
+      el.setAttribute('data-guard-text', 'diff-review-picker');
+  }, DIFF_STATS);
+}
+
+describe.each(
+  MODES.flatMap((mode) => (['light', 'dark'] as const).map((theme) => [mode, theme] as const)),
+)('瀏覽器量增刪行數（#1685 PR A）：%s、%s', (mode, theme) => {
+  test('頁面、清單、改動卡、審查頁上的 +／− 過 4.5，顏色是 success／destructive', async () => {
+    const page = await openOverlay('diff-stats', theme, {
+      mode,
+      marks: diffStatsMarks,
+      prepare: openDiffReview,
+    });
+    try {
+      const texts = await collectTexts(page);
+      const names = [
+        'diff-page',
+        'diff-panel',
+        'diff-changes',
+        'diff-review',
+        'diff-review-picker',
+      ];
+      // 量具自檢：頁面上 1 顆、段裡寫檔那張 1 顆、改動卡標頭 1 顆加兩列（二進位那列寫字）、審查頁標頭的合計與這個檔各 1 顆、
+      // 選檔器兩列；每顆兩個 span。
+      expect(
+        Object.fromEntries(
+          names.map((name) => [name, texts.filter((t) => t.name === name).length]),
+        ),
+      ).toEqual({
+        'diff-page': 2,
+        'diff-panel': 2,
+        'diff-changes': 6,
+        'diff-review': 4,
+        'diff-review-picker': 4,
+      });
+      expectTexts(texts, names, `diff-stats:${mode}:${theme}`);
+      // 覆寫檔第 75 條：`+` 是 `--success`、`−` 是 `--destructive`（拿一個 inline style 的探針讀 token 算出來的顏色）。
+      const colors = await page.evaluate(() => {
+        const probe = (token: string) => {
+          const el = document.createElement('span');
+          el.style.color = `var(${token})`;
+          document.body.append(el);
+          const color = getComputedStyle(el).color;
+          el.remove();
+          return color;
+        };
+        const success = probe('--success');
+        const destructive = probe('--destructive');
+        const wrong = [...document.querySelectorAll('[data-slot="diff-stats"]')].flatMap(
+          (stats) => {
+            const [plus, minus] = [...stats.querySelectorAll(':scope > span')];
+            const pairs: [Element | undefined, string, string][] = [
+              [plus, success, '+'],
+              [minus, destructive, '−'],
+            ];
+            return pairs
+              .filter(([el, want]) => el === undefined || getComputedStyle(el).color !== want)
+              .map(
+                ([el, want, sign]) =>
+                  `${sign} ${el === undefined ? '沒有' : getComputedStyle(el).color} ≠ ${want}`,
+              );
+          },
+        );
+        return {
+          success,
+          destructive,
+          count: document.querySelectorAll('[data-slot="diff-stats"]').length,
+          wrong,
+        };
+      });
+      report[`diff-stats:${mode}:${theme}:colors`] = colors;
+      expect(colors.count).toBe(9);
+      expect(colors.wrong).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+test('第 76 條：375 寬時包裝層不被擠，寬度跟 vendor 那顆單獨放著一樣（#1685 PR A）', async () => {
+  const page = await openOverlay('diff-stats', 'light', {
+    viewport: { width: 375, height: 812 },
+    marks: diffStatsMarks,
+    prepare: openDiffReview,
+  });
+  try {
+    const measured = await page.evaluate(() =>
+      [...document.querySelectorAll('[data-slot="diff-stats"]')].map((stats) => {
+        // 包裝層：`aria-hidden` 那層的外面（`components/ui/diff-view.tsx`）。
+        const wrapper = stats.parentElement!.parentElement!;
+        const alone = stats.cloneNode(true) as HTMLElement;
+        const holder = document.createElement('div');
+        holder.style.cssText = 'position:absolute;left:0;top:0;width:max-content;visibility:hidden';
+        holder.append(alone);
+        document.body.append(holder);
+        const natural = alone.getBoundingClientRect().width;
+        holder.remove();
+        return {
+          where:
+            stats.closest('[data-guard-diffstats]')?.getAttribute('data-guard-diffstats') ??
+            (stats.closest('[data-slot="popover-content"]') !== null ? 'picker' : 'review'),
+          text: stats.textContent,
+          wrapper: wrapper.getBoundingClientRect().width,
+          inner: stats.getBoundingClientRect().width,
+          natural,
+        };
+      }),
+    );
+    report['diff-stats:375-width'] = measured;
+    // 量具自檢：九顆都量到了，而且單獨放著的寬度不是 0。
+    expect(measured).toHaveLength(9);
+    expect(measured.every((m) => m.natural > 0)).toBe(true);
+    expect(
+      measured
+        .filter((m) => Math.abs(m.wrapper - m.natural) > 0.5 || Math.abs(m.inner - m.natural) > 0.5)
+        .map(
+          (m) =>
+            `${m.where} ${m.text}：包裝層 ${round(m.wrapper)}、裡面 ${round(m.inner)}、單獨 ${round(m.natural)}`,
+        ),
+    ).toEqual([]);
+  } finally {
+    await page.close();
+  }
 });

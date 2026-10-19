@@ -304,7 +304,7 @@ describe('git 快照帶來的新值（#467）', () => {
     const diff = { kind: 'oversized', path: file.path, display: file.display };
     await renderCard(() => json(diff)(), only(file));
     // 摘要沒有標 oversized，所以卡片上就是一般的行數。
-    expect(rows()[0]!.textContent).toContain('+1,200');
+    expect(rows()[0]!.textContent).toContain('+1200');
     expect(rows()[0]!.textContent).not.toContain('檔案過大');
 
     await click(rows()[0]!);
