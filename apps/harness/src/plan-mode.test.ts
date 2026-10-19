@@ -66,12 +66,12 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { createNexusAgent, HEADLESS_APPROVALS } from './agent-factory.js';
 import { createCliAgent } from './assembly-root.js';
 import { runRepl } from './cli.js';
-import { shippedPlugins, withScriptedModel } from './fixtures.js';
+import { shippedPlugins, withoutTimeContext, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 
-const shipped = await shippedPlugins();
+const shipped = withoutTimeContext(await shippedPlugins());
 
 /** 出貨清單上 `plan-mode` 那一列換 config，其餘不動。不給就是出貨的樣子（`startActive` 關）。 */
 function withPlanMode(config?: { startActive?: boolean; guidance?: string }): PluginEntry[] {
