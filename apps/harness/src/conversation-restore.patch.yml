@@ -5,3 +5,6 @@
 - insert:
     - id: request-recorder
       name: './conversation-restore.fixture.ts'
+# 不相干的列關掉：`time-context`（#1625）每次呼叫多一則帶牆鐘時間的訊息，這一檔數的是「續接之後模型收到哪幾則」。
+- id: time-context
+  disabled: true

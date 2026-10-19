@@ -47,15 +47,20 @@ import {
   createSandboxPolicyPlugin,
   sandboxPolicySentence,
 } from '@nexus/plugin-sandbox-policy';
-import { shippedPlugins, shippedPluginsWithFullAccess, withScriptedModel } from './fixtures.js';
+import {
+  shippedPlugins,
+  shippedPluginsWithFullAccess,
+  withScriptedModel,
+  withoutTimeContext,
+} from './fixtures.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedToolCall, ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 
-const shipped = await shippedPlugins();
+const shipped = withoutTimeContext(await shippedPlugins());
 /** 部署方用 patch 加回全開那一組之後的清單（#1621：出廠表只有兩組，`--sandbox danger-full-access` 起不來）。 */
-const withFullAccess = await shippedPluginsWithFullAccess();
+const withFullAccess = withoutTimeContext(await shippedPluginsWithFullAccess());
 
 const WORKER: PluginEntry = {
   plugin: {

@@ -70,6 +70,26 @@ export function shippedPlugins(): Promise<readonly PluginEntry[]> {
 }
 
 /**
+ * 出貨清單拿掉 `time-context` 那一列（[#1625](https://github.com/DemianLi/nexus-agent/issues/1625)）。
+ *
+ * 那一列每次 agent 呼叫開頭追加一則帶**牆鐘時間**的使用者訊息，所以：數訊息／數事件／數輪數的測試多一格，
+ * 「兩次跑出來逐位元組相同」的測試（重啟對照、相容層對照）因為兩次取樣的秒數不同而不再相同。這些測試問的是別的事，
+ * 時間讀數本身的驗收（文字、節流、續接、前綴快取、接線紅燈）在 `time-context-on-tree.test.ts`，用固定時鐘跑。
+ *
+ * 用法：不相干的測試把 `await shippedPlugins()` 包一層；**要驗時間讀數的測試不要包**。走 `--patch` 的測試改在 patch 裡寫
+ * `- id: time-context` ＋ `disabled: true`（{@link TIME_CONTEXT_OFF_PATCH_ROWS}）。
+ *
+ * @param plugins - 出貨清單（任何一份）。
+ * @returns 少了 `time-context` 的同一份清單，其餘順序不變。
+ */
+export function withoutTimeContext(plugins: readonly PluginEntry[]): readonly PluginEntry[] {
+  return plugins.filter((entry) => entry.id !== 'time-context');
+}
+
+/** {@link withoutTimeContext} 的 patch 版：接在任何一份 patch 文字後面，把那一列關掉。 */
+export const TIME_CONTEXT_OFF_PATCH_ROWS = '- id: time-context\n  disabled: true\n';
+
+/**
  * **serve 的**出貨清單：出貨那一層加上 serve 專屬層（`cordis.serve.yml`，#669 第 4 步），跟 `serve` 零設定時組出來的那一份相同。
  * 要測「serve 才有的列」（每一輪的改動紀錄）用這一份；CLI 的測試用 {@link shippedPlugins}。同樣只讀出貨層、不疊 patch，同樣一列都不能掉。
  *

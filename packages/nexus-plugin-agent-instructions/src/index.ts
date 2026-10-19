@@ -81,7 +81,9 @@
  * 掛在 `beforeAgent` 上，**每一輪不多付 super-step，但每次 invoke 多付一格**——`beforeAgent` 也是圖裡的
  * 一個節點，只是一次 invoke 只走一次。2026-09-18 用 `LoopingChatModel` 在預設上限 100 上實測：預設組裝
  * 33 輪，加上這顆是 32 輪（有沒有 `--workspace` 都一樣：沒有工作區時組裝點墊 `StateBackend`，宿主的 middleware 照建；#1474 的 D 組量過）；同樣的注入改掛 `beforeModel` 是 24 輪（每輪多一格，見
- * `@nexus/core` 的 `repeat-reminder.ts`「代價」那一段）。
+ * `@nexus/core` 的 `repeat-reminder.ts`「代價」那一段）。**2026-10-19 重量（#1625，`time-context-on-tree.test.ts` J 組）：出貨清單今天是 32 輪，
+ * 連這顆也拿掉還是 32**——「33→32」是當年只有它一個 `beforeAgent` 節點時的讀數，現在清單上還有別的 `beforeAgent` 節點，
+ * 邊界另外落在別處（上限 99 是 31 輪）。
  *
  * **#394 原本寫「代價：零」，錯的。** 那次在上限 20、每輪兩格的組裝上量，`floor(19/2)` 與 `floor(18/2)`
  * 都是 9，每次 invoke 的那一格被 floor 吃掉了。每輪零增量的結論是對的，「零」這個字是錯的

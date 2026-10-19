@@ -705,6 +705,16 @@ function middlewareNames(agent: unknown): string[] {
   return names;
 }
 
+/**
+ * #1625 之後清單上多一列 `time-context`，緊接在 `agent-instructions` 下面、走同一個 `agent/pre-step` 接縫：宿主為每位 listener 各建一顆
+ * `beforeAgent` middleware，所以鏈上在 `AgentInstructionsMiddleware` 後面多**恰好一格** `TimeContextMiddleware`。上面寫死的名單仍是
+ * `b0a74042` 錄到的那一份，只在這裡插這一格，其餘一個都不能多、不能少、不能換位。
+ */
+const withTimeContext = (chain: readonly string[]): string[] =>
+  chain.flatMap((name) =>
+    name === 'AgentInstructionsMiddleware' ? [name, 'TimeContextMiddleware'] : [name],
+  );
+
 describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐字相同（出貨清單、CLI、serve 各一次）', () => {
   it('出貨清單（createNexusAgent）', async () => {
     const shipped = await shippedPlugins();
@@ -718,7 +728,7 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
       }),
     });
     try {
-      expect(middlewareNames(agent)).toEqual([...CHAIN_SHIPPED]);
+      expect(middlewareNames(agent)).toEqual(withTimeContext(CHAIN_SHIPPED));
     } finally {
       await dispose();
     }
@@ -735,7 +745,7 @@ describe('D：middleware 鏈的名字與順序，與 b0a74042 實際錄到的逐
         workspace: workspaceWith('規矩。'),
       });
       try {
-        expect(middlewareNames(thread.built.agent)).toEqual([...expected]);
+        expect(middlewareNames(thread.built.agent)).toEqual(withTimeContext(expected));
       } finally {
         await closeThread(thread);
       }

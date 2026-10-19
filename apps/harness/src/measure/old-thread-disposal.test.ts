@@ -22,7 +22,7 @@ import { join } from 'node:path';
 
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
-import { foldTurn, serveClient } from '../fixtures.js';
+import { foldTurn, serveClient, TIME_CONTEXT_OFF_PATCH_ROWS } from '../fixtures.js';
 import { HARNESS_HOME_ENV } from '../harness-home.js';
 import { openJsonlSessionStore, projectKey } from '../jsonl-session-store.js';
 import { runServe } from '../serve.js';
@@ -86,7 +86,7 @@ describe('仍在用舊版插件的 thread', () => {
       await writeFile(join(dir, version, 'plugin.mjs'), pluginSource(version), { mode: 0o600 });
       await writeFile(
         join(dir, `patch-${version}.yml`),
-        `- insert:\n    - id: versioned-probe\n      name: ./${version}/plugin.mjs\n`,
+        `- insert:\n    - id: versioned-probe\n      name: ./${version}/plugin.mjs\n${TIME_CONTEXT_OFF_PATCH_ROWS}`,
         { mode: 0o600 },
       );
     }
