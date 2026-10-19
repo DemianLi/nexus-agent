@@ -470,6 +470,65 @@ export HTTP_PROXY=http://127.0.0.1:7890
 
 驗證：`--live` 送一則訊息，同時看代理軟體的連線紀錄；沒看到請求時，用 `env | grep -i proxy` 確認變數真的在啟動這個行程的環境裡。
 
+## 核對安裝內容
+
+[#1545](https://github.com/DemianLi/nexus-agent/issues/1545) 步驟 4、6。Release 上每個版本附四個檔：
+
+| 檔 | 是什麼 |
+| --- | --- |
+| `nexus-agent-<版本>-linux-x64.tar.gz` | 產物本身（`pnpm deploy --prod` 的完整閉包，見〈用 systemd 常駐〉） |
+| `nexus-agent-<版本>-linux-x64.tar.gz.sha256` | tarball 的雜湊 |
+| `nexus-agent-<版本>-linux-x64.cdx.json` | SBOM：閉包裡每一顆套件的 name、version、license，第三方的再加 lockfile 記的 integrity（CycloneDX 1.6 JSON） |
+| `nexus-agent-<版本>-linux-x64.cdx.json.sha256` | SBOM 的雜湊 |
+
+tarball 裡另有 `LICENSE`、`THIRD_PARTY_NOTICES.md`（第三方授權清單）和 `sbom.cdx.json`，最後這份與 Release 附的那份位元組相同。
+以下全程離線，主機上只要有 Node（產物本來就要它）。第 1、2 步在放這四個檔的下載目錄裡執行。SBOM 列的是 linux-x64 版的
+閉包，平台套件（原生二進位、內附的 ripgrep）也是 linux-x64 那一版：Release 只出這一個平台。第 4 步有測試盯著
+（`apps/harness/src/release-scripts.test.ts`），改它要讓那條測試照樣過：
+
+<!-- verify-install:start -->
+```bash
+# 1. 兩個雜湊：擋得住下載或搬運途中的損壞
+sha256sum -c nexus-agent-<版本>-linux-x64.tar.gz.sha256 nexus-agent-<版本>-linux-x64.cdx.json.sha256
+
+# 2. 解開之後，產物裡的 SBOM 就是 Release 附的那份
+cmp /opt/nexus-agent/nexus-agent-<版本>-linux-x64/sbom.cdx.json nexus-agent-<版本>-linux-x64.cdx.json
+
+# 3. 列出閉包裡的每一顆（名字@版本、授權），拿去對機關的弱點資料庫
+cd /opt/nexus-agent/nexus-agent-<版本>-linux-x64
+node -e 'const b=require("./sbom.cdx.json");for(const c of [b.metadata.component,...b.components])console.log(`${c.group?c.group+"/":""}${c.name}@${c.version}\t${c.licenses.map(l=>l.expression??l.license.id??l.license.name).join(" ")}`)'
+
+# 4. 主機上實際裝著的套件與 SBOM 逐顆對：印「一致」並以 0 結束；有漏或多就列出來、以 1 結束
+node -e '
+const fs=require("fs"),path=require("path");
+const id=(dir)=>{const m=JSON.parse(fs.readFileSync(path.join(dir,"package.json"),"utf8"));return m.name+"@"+m.version};
+const installed=new Set([id(".")]);
+const store="node_modules/.pnpm";
+for(const entry of fs.readdirSync(store,{withFileTypes:true})){
+  if(!entry.isDirectory()||entry.name==="node_modules")continue;
+  const modules=path.join(store,entry.name,"node_modules");
+  for(const first of fs.readdirSync(modules)){
+    if(first.startsWith("."))continue;
+    const names=first.startsWith("@")?fs.readdirSync(path.join(modules,first)).map((second)=>first+"/"+second):[first];
+    for(const name of names){const dir=path.join(modules,name);if(!fs.lstatSync(dir).isSymbolicLink())installed.add(id(dir))}
+  }
+}
+const bom=JSON.parse(fs.readFileSync("sbom.cdx.json","utf8"));
+const listed=new Set([bom.metadata.component,...bom.components].map((c)=>(c.group?c.group+"/":"")+c.name+"@"+c.version));
+const missing=[...installed].filter((x)=>!listed.has(x)),extra=[...listed].filter((x)=>!installed.has(x));
+if(missing.length+extra.length===0){console.log("一致："+installed.size+" 顆")}else{console.log("SBOM 漏了："+missing.join("、")+"\nSBOM 多了："+extra.join("、"));process.exitCode=1}'
+```
+<!-- verify-install:end -->
+
+第 4 步跟發版時 `release:verify-packed-install` 做的是同一件事（`scripts/release/sbom.ts` 的 `sbomProblems`）：每一顆都在 SBOM 裡，SBOM 裡也沒有閉包外的。
+CI 在每張動到 TypeScript 的 PR 與每次 Release 上都跑過；主機上再跑一次，核的是「解開之後到現在，沒有人往 `node_modules` 裡加或換過套件版本」。
+
+- **SBOM 的雜湊是 registry tarball 的。** 第三方套件的 `hashes` 取自閉包 lockfile 的 integrity（npm registry 上那個 `.tgz` 的 SHA-512），
+  拿來對弱點資料庫或 registry 都對得上，但**不能**拿主機上解開的檔案重算出來。我們自己的套件（`@nexus/*`）lockfile 不記 integrity，所以沒有 `hashes`，
+  版本與內容跟 tarball 一起由 `.sha256` 釘住；授權取 repo 根 `LICENSE`（MIT）。
+- **缺口：擋得住損壞，擋不住惡意替換。** `.sha256` 與 SBOM 跟 tarball 從同一個 Release 頁面下載；能換掉 tarball 的人也換得掉另外三個檔，
+  雜湊照樣對得上。產物簽章不在這張（#1545 Q3 (a)），併進企業決議 §八 的發行金鑰（[#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 第二版）。
+
 ## 用 systemd 常駐
 
 [#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5。對象是 Release 打出來的 `nexus-agent-<版本>-linux-x64.tar.gz`（解開即用，目標機不用裝 pnpm、不用連 registry），

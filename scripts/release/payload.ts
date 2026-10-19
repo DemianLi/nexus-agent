@@ -57,15 +57,46 @@ export interface PayloadOptions {
 /** 閉包裡不該出現的開發工具（`pnpm deploy --prod` 不會裝；出現就是 `dependencies` 被誤放）。 */
 const DEV_TOOLS = /^(tsx|vitest|eslint|typescript|tsdown|vite|prettier|playwright-core)@/u;
 
-/** 產物根一定要有的檔。 */
+/** 產物根的 SBOM 檔名（`sbom.ts` 產生、`verify-packed-install` 核對，#1545 步驟 4）。 */
+export const SBOM_FILE = 'sbom.cdx.json';
+
+/**
+ * 產物 manifest（產物根的 `package.json`，即 `apps/harness/package.json`）的 `license` 該是什麼，照 dsh
+ * `scripts/build-python-release.py:256-259`（`687f282e`）驗 `License-Expression == "MIT"`。
+ */
+const PRODUCT_LICENSE = 'MIT';
+
+/**
+ * 產物根一定要有的檔。授權檔照 dsh `scripts/build-python-release.py`（`687f282e`）的三件事：
+ *
+ * 1. **複製**（`:180`、`:183`）：`LICENSE` 與 `THIRD_PARTY_NOTICES.md` 複製進產物，我們在 `pack.ts`。
+ * 2. **宣告**（`:185-195`）：把 `license-files` 寫進 pyproject。**偏離，理由 1**：npm 的 manifest 沒有對應 `license-files`
+ *    的欄位。退到：manifest 的 `license` 欄位（{@link PRODUCT_LICENSE}）加上這裡的必備檔檢查。撤除條件：產物改經 package
+ *    manager 安裝、有對應欄位時。
+ * 3. **驗證**：`:256-259` 驗 `License-Expression == "MIT"`，我們驗產物 manifest 的 `license`（{@link collectPayloadViolations}）；
+ *    `:260-265` 驗 `License-File` 清單，我們驗兩份都在產物根（這份清單）。
+ */
 const REQUIRED_FILES = [
   'package.json',
   'build-stamp.json',
+  'LICENSE',
+  'THIRD_PARTY_NOTICES.md',
+  SBOM_FILE,
   'cordis.yml',
   'cordis.serve.yml',
   'lib/serve.js',
   'lib/cli.js',
   'lib/plugin-cli.js',
+] as const;
+
+/**
+ * 網頁打包進去的三顆字型（OFL-1.1）的授權全文，web 的建置放在 `dist/assets/fonts/`（#1713，PR #1717）。
+ * OFL 要求散布時附上授權全文，少一份就是散布條件沒做到。
+ */
+export const WEB_FONT_LICENSES = [
+  'Geist-OFL.txt',
+  'GeistMono-OFL.txt',
+  'NotoSansTC-OFL.txt',
 ] as const;
 
 /**
@@ -160,6 +191,17 @@ export function collectPayloadViolations(
   for (const file of REQUIRED_FILES) {
     if (!existsSync(join(root, file))) violations.push({ path: file, message: '產物缺這個檔' });
   }
+  // 照 dsh `build-python-release.py:256-259` 的 `License-Expression == "MIT"`，見 {@link REQUIRED_FILES} 的三件事。
+  const manifestPath = join(root, 'package.json');
+  if (existsSync(manifestPath)) {
+    const { license } = JSON.parse(readFileSync(manifestPath, 'utf8')) as { license?: unknown };
+    if (license !== PRODUCT_LICENSE) {
+      violations.push({
+        path: 'package.json',
+        message: `產物 manifest 的 license 是 ${JSON.stringify(license)}，應為 ${PRODUCT_LICENSE}`,
+      });
+    }
+  }
   if (existsSync(join(root, 'src'))) {
     violations.push({ path: 'src', message: '產物根不收 src/（只收編好的 lib/）' });
   }
@@ -171,6 +213,15 @@ export function collectPayloadViolations(
         message:
           '網頁 dist 不在產物裡：開網址會是空白頁或 404（先 build，且 apps/web 的 files 要收 dist）',
       });
+    }
+    for (const file of WEB_FONT_LICENSES) {
+      const path = `node_modules/@nexus/web/dist/assets/fonts/${file}`;
+      if (!existsSync(join(root, path))) {
+        violations.push({
+          path,
+          message: '網頁打包的字型缺 OFL 授權全文（OFL 要求散布時附上全文，#1713）',
+        });
+      }
     }
   }
 
@@ -389,7 +440,7 @@ interface InstalledManifest {
 }
 
 /** 沿 `from` 的祖先 `node_modules` 找一個套件的目錄。 */
-function installedPackage(from: string, name: string): string | undefined {
+export function installedPackage(from: string, name: string): string | undefined {
   const resolver = createRequire(join(from, 'package.json'));
   for (const directory of resolver.resolve.paths(name) ?? []) {
     const candidate = join(directory, name);

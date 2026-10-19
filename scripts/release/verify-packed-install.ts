@@ -6,7 +6,8 @@
  * 解開之後**不再跑任何 install**，所以整個流程沒有一步會連 registry——缺的東西只會在下面幾件事裡現形：
  *
  * 1. `.sha256` 與 tarball 對得上（等同 `sha256sum -c`）；
- * 2. 解開的樹過靜態檢查（`payload.ts` 的三道：拒收 `src/`／`.map`、出貨清單每列解析得到、相依圖完整）；
+ * 2. 解開的樹過靜態檢查（`payload.ts` 的三道：拒收 `src/`／`.map`、出貨清單每列解析得到、相依圖完整）；SBOM 與實際裝了的
+ *    閉包雙向相同（`sbom.ts` 的 `sbomProblems`，#1545 驗收 6），Release 要附的那份 SBOM 與產物裡的位元組相同、對得上自己的 `.sha256`；
  * 3. `lib/serve.js --version` 等於產物版本，stderr 是空的；
  * 4. 目標平台的 `node-addon-system` 載得起來（flock 的原生二進位，#1503／會話租約都靠它）；內附的 ripgrep 在 `PATH` 上沒有 rg
  *    的環境下照樣跑得起來（#1502 刀 4：grep 只用內附那一支，沒有退路）；
@@ -43,10 +44,12 @@ import { parseArgs } from 'node:util';
 
 import { fileSha256 } from './pack.js';
 import {
+  SBOM_FILE,
   collectClosureViolations,
   collectPayloadViolations,
   walkInstalledGraph,
 } from './payload.js';
+import { sbomProblems } from './sbom.js';
 
 /** 乾淨的子行程環境：宿主的 tsx hook、NODE_PATH 都不能替產物補洞。 */
 export function cleanEnv(home: string): NodeJS.ProcessEnv {
@@ -81,6 +84,24 @@ export function checksumProblems(tarball: string): string[] {
     problems.push(`.sha256 記的檔名是 ${String(name)}，tarball 是 ${basename(tarball)}`);
   if (expected !== actual)
     problems.push(`sha256 對不上：.sha256 寫 ${String(expected)}，實際 ${actual}`);
+  return problems;
+}
+
+/**
+ * 步驟 2b：Release 要附的 SBOM（tarball 旁邊的 `<產物名>.cdx.json`）在、對得上自己的 `.sha256`，而且與產物裡那份位元組相同
+ * （#1545 步驟 4）。產物裡那份對不對閉包由 `sbomProblems` 管。
+ *
+ * @param tarball - tarball 路徑。
+ * @param root - 解開後的產物根。
+ */
+export function attachedSbomProblems(tarball: string, root: string): string[] {
+  const attached = tarball.replace(/\.tar\.gz$/u, '.cdx.json');
+  if (!existsSync(attached)) return [`缺 ${basename(attached)}（Release 要附的 SBOM）`];
+  const problems = checksumProblems(attached);
+  const inner = join(root, SBOM_FILE);
+  if (existsSync(inner) && !readFileSync(inner).equals(readFileSync(attached))) {
+    problems.push(`${basename(attached)} 與產物裡的 ${SBOM_FILE} 不同`);
+  }
   return problems;
 }
 
@@ -360,6 +381,8 @@ export async function verifyPackedInstall(
     }
     const graph = walkInstalledGraph(root);
     problems.push(...graph.missing.map((chain) => `相依圖缺：${chain}`));
+    problems.push(...sbomProblems(root));
+    problems.push(...attachedSbomProblems(tarball, root));
 
     const manifest = JSON.parse(readFileSync(join(root, 'package.json'), 'utf8')) as {
       version: string;
@@ -626,7 +649,7 @@ if (import.meta.main) {
     process.exitCode = 1;
   } else {
     console.log(
-      `verify-packed-install：${basename(tarball)} 解開即用——sha256 對上、靜態檢查過、--version、原生二進位與內附 ripgrep、header 戳記、serve 起得來、SIGTERM exit 0。`,
+      `verify-packed-install：${basename(tarball)} 解開即用——sha256 對上、靜態檢查過、SBOM 與閉包相同、--version、原生二進位與內附 ripgrep、header 戳記、serve 起得來、SIGTERM exit 0。`,
     );
   }
 }
