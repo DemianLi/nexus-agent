@@ -1,8 +1,19 @@
 /**
- * 憑證服務：按名字解析 key，**順序照 dsh**：啟動環境 > 受管檔 > 目前資料夾 `.env` > harness home `.env`
- * （[#730](https://github.com/DemianLi/nexus-agent/issues/730) 的 B 段）。
+ * 憑證服務：按名字解析 key，順序**照 dsh，分兩邊**（[#730](https://github.com/DemianLi/nexus-agent/issues/730) 的 B 段、
+ * [#1540](https://github.com/DemianLi/nexus-agent/issues/1540)）：
  *
- * 對照 dsh `packages/credentials/credentials-local`（`477b4f4`）與 `packages/llm/llm-deepseek-api-key`：
+ * - **serve（對應 dsh 的 Web profile）掛受管檔，而且它最優先**：受管檔 > 啟動環境 > 目前資料夾 `.env` > harness home `.env`。
+ *   理由同 dsh `packages/credentials/credentials-local/src/index.ts:1-20`：使用者（管理者）明確存進受管檔的 key 必須一致生效，
+ *   環境變數（CI、`EnvironmentFile=`、shell profile 替別的工具 export 的那一把）只在檔裡沒有值時才用。決策紀錄
+ *   `.agents/notes/implemented/architecture/2026-10-09-stored-credential-precedence.md`，其中**否決**了「受管值蓋掉環境值時警告」，所以這裡
+ *   也沒有執行期警告、沒有退回舊序的開關；起動時印一行來源（{@link describeKeySource}），對應 dsh `describe` 回報的 `source`。
+ * - **一次性入口（CLI、eval、spike）對應 dsh 的 headless profile，不掛受管檔**：啟動環境 > 目前資料夾 `.env` > harness home `.env`，
+ *   不 `stat`、不讀、不檢查受管檔，壞掉的受管檔也不擋。理由同 `2026-10-12-headless-environment-auth.md`：一次性任務自己帶進來的 key
+ *   （`NVIDIA_API_KEY=… pnpm cli:live`）不該被共用 home 上的受管檔靜靜換掉。
+ *
+ * 兩邊都以 `store` 旗標區分，沒有預設值（{@link CredentialServiceOptions.store}）。
+ *
+ * 對照 dsh `packages/credentials/credentials-local` 與 `packages/llm/llm-deepseek-api-key`（`1517a4db`，條文引自 `687f282e` 的 clone）：
  *
  * - **受管檔**放在 harness home 底下（{@link CREDENTIALS_FILE}），帶版本的 YAML，只放憑證：
  *   ```yaml
@@ -59,16 +70,18 @@ export interface ResolvedCredential {
 
 /** 憑證服務。同步：受管檔很小，同步讀讓「建構時快速失敗」與「請求時再解析」用同一個函式。 */
 export interface CredentialService {
+  /** 這份服務有沒有掛受管檔。`false` 的入口不讀它（錯誤訊息據此指路，見 `missingKeyMessage`）。 */
+  readonly store: boolean;
   /**
    * 按名字解析。
    *
    * @param name - 環境變數形狀的名字（例如 `NVIDIA_API_KEY`）。
-   * @returns 第一個有非空值的層；都沒有是 `undefined`。
-   * @throws 受管檔第一次讀就壞了（權限、格式）。已經讀過一次好的，之後壞了保留最後一份並警告。
+   * @returns 第一個有非空值的層（`store` 時受管檔最先）；都沒有是 `undefined`。
+   * @throws 受管檔第一次讀就壞了（權限、格式）。已經讀過一次好的，之後壞了保留最後一份並警告。沒掛受管檔時不會拋。
    */
   resolve(name: string): ResolvedCredential | undefined;
   /**
-   * 啟動時完整檢查受管檔：權限、格式、內容。檔案不存在是正常的。
+   * 啟動時完整檢查受管檔：權限、格式、內容。檔案不存在是正常的。沒掛受管檔（`store: false`）是空操作：不 `stat`、不讀。
    *
    * @throws 任何一項不過。
    */
@@ -139,6 +152,11 @@ export interface CredentialServiceOptions {
   readonly home: string;
   /** 兩層 `.env` 與行程繼承的快照。 */
   readonly launchEnv: LaunchEnvironment;
+  /**
+   * 掛不掛受管檔。**沒有預設值**（呼叫端要明說自己是哪一邊）：`true` 是 serve，受管檔最優先；`false` 是一次性入口，
+   * 完全不碰受管檔。
+   */
+  readonly store: boolean;
   /** 執行期重載失敗往哪裡講（一次）。省略即 stderr。 */
   readonly warn?: (line: string) => void;
 }
@@ -151,6 +169,7 @@ export interface CredentialServiceOptions {
 export function createCredentialService(options: CredentialServiceOptions): CredentialService {
   const file = join(options.home, CREDENTIALS_FILE);
   const warn = options.warn ?? ((line: string) => void process.stderr.write(line));
+  const { store } = options;
   /** 最後一份好的內容，與它是憑哪個 stat 讀來的。 */
   let good: { readonly signature: string; readonly refs: ReadonlyMap<string, string> } | undefined;
   /** 最後一次警告過的 stat 簽章：同一個壞檔只講一次。 */
@@ -188,11 +207,15 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
   }
 
   return {
+    store,
     resolve(name) {
+      // 受管檔最優先（serve）；一次性入口整格跳過，連 `stat` 都不做。
+      if (store) {
+        const value = stored().get(name);
+        if (value !== undefined) return { value, source: 'file', path: file };
+      }
       const inherited = options.launchEnv.get(name, ['process']);
       if (inherited !== undefined) return { value: inherited.value, source: 'env' };
-      const value = stored().get(name);
-      if (value !== undefined) return { value, source: 'file', path: file };
       const dotenv = options.launchEnv.get(name, ['project-env', 'user-env']);
       if (dotenv !== undefined) {
         return {
@@ -204,9 +227,33 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
       return undefined;
     },
     check() {
-      stored();
+      if (store) stored();
     },
   };
+}
+
+/**
+ * 起動時講「這一把 key 來自哪一層」的那一行（[#1540](https://github.com/DemianLi/nexus-agent/issues/1540) Q2 (a)）：
+ * 只有名字與來源，**不含值的任何片段**。一次性入口（沒掛受管檔）的那一行寫明「此入口不讀受管檔」，讓人看得出為什麼 serve 用的 key 在這裡沒生效。
+ * 還沒有任何一層有值時回 `undefined`：缺 key 由 `createLiveModel` 當場失敗並指名缺哪一個，這裡不重複。
+ *
+ * @param credentials - 這次啟動的憑證服務。
+ * @param name - 變數名字。
+ * @returns 一行話（不帶時間或前綴，呼叫端自己加）；沒有值是 `undefined`。
+ */
+export function describeKeySource(
+  credentials: CredentialService,
+  name: string,
+): string | undefined {
+  const hit = credentials.resolve(name);
+  if (hit === undefined) return undefined;
+  const from =
+    hit.source === 'file'
+      ? `受管檔 ${hit.path ?? ''}`.trimEnd()
+      : hit.source === 'env'
+        ? '啟動環境'
+        : `${hit.path ?? (hit.source === 'project-env' ? '目前資料夾的 .env' : 'harness home 的 .env')}`;
+  return `${name}：來自${from}${credentials.store ? '' : '（此入口不讀受管檔）'}`;
 }
 
 /**
@@ -218,6 +265,7 @@ export function createCredentialService(options: CredentialServiceOptions): Cred
  */
 export function ambientCredentials(env: NodeJS.ProcessEnv = process.env): CredentialService {
   return {
+    store: false,
     resolve(name) {
       const value = env[name];
       return value === undefined || value.length === 0 ? undefined : { value, source: 'env' };

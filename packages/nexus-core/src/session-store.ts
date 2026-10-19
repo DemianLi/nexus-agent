@@ -592,7 +592,7 @@ import type { SessionEvent } from './session-log.js';
  *
  * ## 49：訊息帶使用者的時區（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)）
  *
- * `run.start` 可以帶一格選填的 `client_time_zone`（照 dsh `session.prompt` 的 `clientTimeZone`，記在訊息來源 `{ kind: 'user', rpcId, clientTimeZone }`）。
+ * `run.start` 可以帶一格選填的 `client_time_zone`（照 dsh `session.prompt` 的 `clientTimeZone`，記在訊息來源 `{ kind: 'user', rpcId, clientTimeZone }`；`subagent.send` 也帶，寫進**子代理自己的日誌**同樣這幾個位置，[#1734](https://github.com/DemianLi/nexus-agent/issues/1734)）。
  * 伺服器在邊界上驗證並正規化（`UTC` 或 IANA `Area/Location`，別名退回這個執行期的正規名），記在人話的三個來源，涵蓋一句話的三個階段，和 48 的
  * `requestId` 同一批位置：排著時在 `inbox/spliced` 裡那一件（`QueuedInput.source.clientTimeZone`）；開了一輪之後在 `turn/start`（`kind: 'message'`）；
  * 輪中插話被領走時在 `user/message` 的 `source.clientTimeZone`。`@nexus/plugin-time-context` 讀這一輪裡的這幾格，決定給模型的「Browser time zone」那一行。
