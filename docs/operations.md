@@ -1146,7 +1146,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   **那次量的是 `openai/gpt-oss-120b`，出貨的 nemotron 沒量過**。代價：串流中段失敗最壞重付 6 次整個回覆。
   **重打只看失敗的碼**（#1437）：失敗只有一支分類器，`llm/retry` 與 `turn/failed` 同一個碼，碼在 `retryableCodes` 裡才重打。
   碼的對應：429（含沒帶 `retry-after` header 的）是 `RATE_LIMIT`、5xx（含串流中段與沒有數字碼的錯誤信封）是 `SERVER`、逾時是 `TIMEOUT`、
-  連線層的失敗（連線被拒、讀串流時被切斷）是 `TRANSPORT`、「模型說停了（stop）卻沒有任何文字、推理或工具呼叫」是 `EMPTY_RESPONSE`——
+  連線層的失敗（連線被拒、讀串流時被切斷、**串流在收到結束原因 `finish_reason` 之前就乾淨地結束**——例如反向代理的讀取逾時收掉上游）是 `TRANSPORT`、「模型說停了（stop）卻沒有任何文字、推理或工具呼叫」是 `EMPTY_RESPONSE`——
   這種空回覆照同一份預算重打，預算用盡就是這一輪失敗、`turn/failed.error.code` 是 `EMPTY_RESPONSE`（使用者看到的是失敗訊息，不再是什麼都沒有）。
   **只有推理、沒有答案的回覆不重打**（沒有失敗訊息，網頁上只多一段折起來的思考過程）。
   不在清單裡的不重打，不管預設或自己寫的清單怎麼寫：401／403 `AUTH`、402／配額 `QUOTA`、400／413 `INVALID_REQUEST`、上下文溢出
@@ -1171,6 +1171,12 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   `llm/retry-started`，失敗那次的 `model/end` 帶 `outcome: error`、用量照記。退避期間按停止：輪次以中止收尾、不再重打。請求本身有問題的錯誤（例如串流內的 400）不重打。
   第一則事件之前的失敗沒有半段回覆可擦，只有倒數與 `llm/retry`。**子代理的回覆也會重打，但已經畫出去的子代理字
   不會被擦**（畫面上多一則斷尾的回覆）。
+- **串流完成檢查與 `compat.supportsFinishReason`**（[#1538](https://github.com/DemianLi/nexus-agent/issues/1538)）：每條串流都要有一則帶
+  `finish_reason` 的事件。看到 `[DONE]` 或上游關線卻從沒收到結束原因，就當成被中途切斷（`TRANSPORT`，照 `retryPolicy` 整次重打，
+  預算用盡才是這一輪失敗）；供應商回了 nexus 不認得的結束原因（認得的是 `stop`、`length`、`max_tokens`、`tool_calls`、`function_call`、
+  `content_filter`）當成失敗（`UNKNOWN`、不重打，訊息指名原字串）。**內網自架的端點（vLLM 之類）若串流不送 `finish_reason`**，
+  那一筆型錄寫 `compat: { supportsFinishReason: false }`，兩項檢查都關掉，行為同沒有這一層；不寫就是 `true`。症狀是每一輪都以
+  `TRANSPORT` 失敗、端點收到的請求數是 `1 + maxRetries`。只有推理、沒有 `finish_reason` 就斷掉的串流，從今天的靜靜結束變成 `TRANSPORT` 重打。
 - **關推理的寫法在型錄那一筆**（[#650](https://github.com/DemianLi/nexus-agent/issues/650)、原本的 `thinkingOffBody`）：
   `off` 那一級加 `compat.chatTemplateKwargs`（`$var: thinking.enabled` 在 `off` 解成 `false`）。它只有標題呼叫會
   加進請求 body，主請求不帶。出貨那顆模型不關推理的話，標題那 64 個輸出 token 全被推理吃光，一個標題都回不出來
