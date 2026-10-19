@@ -24,5 +24,5 @@ v0.5.19 的插件清單疊三層：出貨的 `cordis.yml`、home 的 `cordis.pat
    `N` 等於你原檔裡的 patch 條數。
 3. 遷移進來的 `insert` 相對模組路徑會換成絕對路徑。之後要搬 home 的話，搬完核對這些路徑（見〈後台改清單〉的「第一次啟動的遷移」）。
 4. 之後改插件用 `plugin` 寫入口，不要再編輯 `cordis.patch.yml`；要用檔案管理的設定改放進 `--patch` 覆寫檔。
-5. 確認：同一個 `NEXUS_AGENT_HOME` 跑 `serve --dump-config`，檔頭寫 `patched by <home>/plugin-journal.jsonl`，之前停用的列仍有
+5. 確認：同一個 `NEXUS_AGENT_HOME` 跑 `serve --dump-config`，那一組的分組行（`# ==` 開頭那一行）寫 `patched by <home>/plugin-journal.jsonl`，之前停用的列仍有
    `disabled: true`、改過的 `config` 都在。
