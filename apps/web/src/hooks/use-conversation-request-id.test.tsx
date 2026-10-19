@@ -50,7 +50,9 @@ describe('send 的請求編號（#1335）', () => {
     await act(async () => {
       await result.current.send('一句話', undefined, undefined, undefined, 'req-1');
     });
-    expect(started).toEqual([{ text: '一句話', options: { requestId: 'req-1' } }]);
+    expect(started).toEqual([
+      { text: '一句話', options: { requestId: 'req-1', clientTimeZone: expect.any(String) } },
+    ]);
   });
 
   it('沒給編號：這一次現產一個，兩次送出各不相同', async () => {
@@ -76,7 +78,11 @@ describe('send 的請求編號（#1335）', () => {
     await act(async () => {
       await result.current.send('插一句', 'steer', undefined, undefined, 'req-2');
     });
-    expect(started[0]!.options).toEqual({ requestId: 'req-2', mode: 'steer' });
+    expect(started[0]!.options).toEqual({
+      requestId: 'req-2',
+      clientTimeZone: expect.any(String),
+      mode: 'steer',
+    });
   });
 
   it.each([
