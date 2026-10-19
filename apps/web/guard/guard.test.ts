@@ -2844,3 +2844,33 @@ test('0019：結果框的 pre 鍵盤聚焦後，方向鍵捲得動（#1682 PR B�
     await page.close();
   }
 });
+
+test('第 66 條：工具段裡空的那一則不留空格，清單頂端就是第一張卡（#1682 PR B）', async () => {
+  const page = await openOverlay('tool-cards', 'light', {
+    marks: { [`${CARDS} [data-slot="step-list"]`]: {} },
+  });
+  try {
+    const measured = await page.$eval(`${CARDS} [data-slot="step-list"]`, (list) => {
+      const top = list.getBoundingClientRect().top;
+      const cells = [...list.children].map((cell) => ({
+        display: getComputedStyle(cell).display,
+        card: cell.querySelector('[data-slot="step-row"]') !== null,
+        empty: cell.querySelector('[data-slot="message-scroller-item"]:empty') !== null,
+      }));
+      const card = list.querySelector('[data-slot="step-row"]');
+      return { cells, gap: card === null ? -1 : card.getBoundingClientRect().top - top };
+    });
+    report['tool-cards:empty-cell'] = measured;
+    // 量具自檢：段首真的有一格空的（guard 頁放了只有思考的那一步）。
+    expect(measured.cells).toEqual([
+      { display: 'none', card: false, empty: true },
+      { display: 'block', card: true, empty: false },
+      { display: 'block', card: true, empty: false },
+    ]);
+    // 第一張卡離清單頂端只有它自己那格的上 padding（`py-1.5`）加邊線，空格在的時候多一整格。
+    expect(measured.gap).toBeGreaterThan(0);
+    expect(measured.gap).toBeLessThanOrEqual(8);
+  } finally {
+    await page.close();
+  }
+});

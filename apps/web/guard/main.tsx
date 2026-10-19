@@ -592,6 +592,11 @@ const RUN_TOOLS: ToolEntry[] = [
   }),
   CARD({ id: 'run-2', callId: 'run-c2', name: 'grep', input: '{"pattern":"計畫"}', text: '2' }),
 ];
+/** 段首是只有思考、沒有思考文字的那一步（`tool-runs.ts` 的 `transparent`）：畫出空的 item，量第 66 條。 */
+const RUN_ENTRIES: ConversationEntry[] = [
+  { kind: 'ai', id: 'run-0', text: '', streaming: false, attribution: { kind: 'root' } },
+  ...RUN_TOOLS,
+];
 const STOP_ERROR = 'Error: tool call aborted before dispatch';
 const ASK_INPUT = JSON.stringify({ questions: [{ id: 'd', question: '哪一天？' }] });
 
@@ -615,7 +620,7 @@ function ToolCardsPage() {
           <MessageScrollerViewport aria-label="工具段">
             <MessageScrollerContent>
               <ToolRun
-                run={{ kind: 'tool-run', id: 'tools:run-1', entries: RUN_TOOLS, tools: RUN_TOOLS }}
+                run={{ kind: 'tool-run', id: 'tools:run-0', entries: RUN_ENTRIES, tools: RUN_TOOLS }}
                 open={open}
                 onOpenChange={setOpen}
                 renderEntry={(entry) =>
