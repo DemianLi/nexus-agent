@@ -35,7 +35,6 @@ const KEYFRAMES_ALLOWED = new Set([
   'motion-page-in',
   'motion-orb-spin',
   'motion-orb-breathe',
-  'motion-beam-angle',
   'motion-beam-pulse',
   'motion-shimmer',
   'motion-caret',

@@ -8,6 +8,8 @@
  * 1. **串流中捲動**：回覆還在串的時候，在對話區上下捲。
  * 2. **開 composer 選單**：輸入框（一層玻璃）上開模型選擇浮層（又一層玻璃），開、等、關，重複幾次。
  * 3. **開關側欄**：⌘B／Ctrl+B 開關，重複幾次。
+ * 4. **工具段展開時串流中捲動**（#1682 驗收 D）：一步 12 顆工具（讀檔、grep 計數、找檔各 4 顆）收成一段，回覆接著慢慢串；
+ *    展開那一段與每種各一列（SG 的 `StepList`／`OutputBlock` 都是 `glass-panel`），在對話區上下捲。
  *
  * frame time 用 `requestAnimationFrame` 兩次回呼的間隔算，只取情境進行中的那一段。間隔在 60Hz 下本來就落在 16.67ms 上下
  * 抖動零點幾毫秒，所以同時記三種數字：原始間隔的 p95、換算成 vsync 個數再乘回去的 p95（先量一段沒降速、沒操作的閒置間隔取中位數當
@@ -51,6 +53,7 @@ const { values: options } = parseArgs({
     headed: { type: 'boolean', default: false },
     harness: { type: 'string' },
     viewport: { type: 'string', default: '1440x900' },
+    'tool-mix': { type: 'string', default: 'mixed' },
   },
 });
 const RUNS = Number(options.runs);
@@ -97,6 +100,47 @@ function plan() {
     : { text: replyText(40), chunks: 1500, delayMs: 20 };
 }
 
+/** 情境 4 的那一步：12 顆工具（{@link TOOL_TURN} 這句話觸發），結果回來之後慢慢串。 */
+const TOOL_TURN = '第四輪：工具段';
+const TOOL_FILES = 4;
+/** `mixed`：讀檔、grep 計數、找檔各 4 顆，展開每種兩列。`generic`：12 顆都走通用卡（SG 的結果框），全部展開——玻璃面最多的那一端。 */
+const TOOL_MIX = options['tool-mix'];
+if (TOOL_MIX !== 'mixed' && TOOL_MIX !== 'generic')
+  throw new Error(`--tool-mix 只收 mixed 或 generic：${TOOL_MIX}`);
+function toolCalls() {
+  if (TOOL_MIX === 'generic')
+    return Array.from({ length: TOOL_FILES * 3 }, (_, index) => ({
+      index,
+      id: `call_${index}_${randomUUID().slice(0, 8)}`,
+      type: 'function',
+      function: {
+        name: 'grep',
+        arguments: JSON.stringify({ pattern: `第 ${index + 1}`, path: '/', output_mode: 'count' }),
+      },
+    }));
+  const calls = [];
+  for (let i = 0; i < TOOL_FILES; i++) {
+    calls.push(['read_file', { file_path: `/notes-${i}.md` }]);
+    // count 模式走通用卡（SG 的結果框）；content 模式與 ls 有自己的搜尋卡。
+    calls.push(['grep', { pattern: '節', path: '/', output_mode: 'count' }]);
+    calls.push(['glob', { pattern: `notes-${i}*` }]);
+  }
+  return calls.map(([name, args], index) => ({
+    index,
+    id: `call_${index}_${randomUUID().slice(0, 8)}`,
+    type: 'function',
+    function: { name, arguments: JSON.stringify(args) },
+  }));
+}
+
+function lastUserText(messages) {
+  const last = [...messages].reverse().find((m) => m.role === 'user');
+  if (last === undefined) return '';
+  return typeof last.content === 'string'
+    ? last.content
+    : last.content.map((part) => part.text ?? '').join('');
+}
+
 async function fakeLlm(req, res) {
   let raw = '';
   for await (const chunk of req) raw += chunk;
@@ -134,9 +178,27 @@ async function fakeLlm(req, res) {
     );
     return;
   }
-  const { text, chunks, delayMs } = plan();
+  const messages = body.messages ?? [];
+  const toolTurn = lastUserText(messages).includes(TOOL_TURN);
+  const afterTools = toolTurn && messages.at(-1)?.role === 'tool';
   res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
   const send = (o) => res.write(`data: ${JSON.stringify(o)}\n\n`);
+  if (toolTurn && !afterTools) {
+    send({
+      ...base,
+      choices: [
+        { index: 0, delta: { role: 'assistant', tool_calls: toolCalls() }, finish_reason: null },
+      ],
+    });
+    send({ ...base, choices: [{ index: 0, delta: {}, finish_reason: 'tool_calls' }] });
+    send({ ...base, choices: [], usage });
+    res.write('data: [DONE]\n\n');
+    res.end();
+    return;
+  }
+  const { text, chunks, delayMs } = afterTools
+    ? { text: replyText(40), chunks: 1500, delayMs: 20 }
+    : plan();
   send({
     ...base,
     choices: [{ index: 0, delta: { role: 'assistant', content: '' }, finish_reason: null }],
@@ -202,6 +264,8 @@ async function startServe(root, llmPort) {
   const workspace = join(root, 'ws');
   mkdirSync(home);
   mkdirSync(workspace);
+  for (let i = 0; i < TOOL_FILES; i++)
+    writeFileSync(join(workspace, `notes-${i}.md`), replyText(2));
   const port = 20000 + Math.floor(Math.random() * 20000);
   const env = {
     ...process.env,
@@ -442,6 +506,73 @@ async function scenarioSidebar(page, cdp) {
   );
 }
 
+async function scenarioTools(page, cdp) {
+  await send(page, TOOL_TURN);
+  const run = page.locator('[data-testid="tool-run"]').last();
+  await run.waitFor({ timeout: 60_000 });
+  await page.getByRole('button', { name: '停止' }).waitFor({ timeout: 30_000 });
+  // 等工具都完成、收成一段（段首那顆按鈕是群組的）。
+  const group = run.locator('[data-slot="step-group"] > button').first();
+  await group.waitFor({ timeout: 60_000 });
+  if ((await group.getAttribute('aria-expanded')) !== 'true') await group.click();
+  // mixed：每種各展開兩列（讀檔、grep 計數、找檔）；generic：全部展開。
+  const rows = run.locator('[data-slot="step-row"] > button');
+  const openCount = TOOL_MIX === 'generic' ? TOOL_FILES * 3 : 6;
+  await rows.nth(openCount - 1).waitFor();
+  const opened = [];
+  for (let index = 0; index < openCount; index++) {
+    const row = rows.nth(index);
+    if ((await row.getAttribute('aria-expanded')) !== 'true') await row.click();
+    opened.push(await row.getAttribute('aria-expanded'));
+  }
+  const panels = await run.locator('.glass-panel').count();
+  const outputs = await run.locator('[data-slot="output-block"]').count();
+  // 展開的列要真的畫出 SG 的結果框（玻璃），不然量的不是這張卡的面。
+  if (outputs === 0) throw new Error('展開的列沒有任何 SG 結果框');
+  if (TOOL_MIX === 'generic' && outputs < 10)
+    throw new Error(`generic 應該每列都有結果框，只有 ${outputs} 個`);
+  await sleep(1500);
+  const box = await page.locator('[data-slot="message-scroller"]').first().boundingBox();
+  if (box === null) throw new Error('找不到對話區');
+  await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+  // 量測期間工具段要在畫面裡（不是被串流帶走了）：前後各看一次它跟對話區的框有沒有交集。
+  const visible = async () => {
+    const r = await run.boundingBox();
+    return r !== null && r.y < box.y + box.height && r.y + r.height > box.y;
+  };
+  // 先用滾輪捲回工具段（`scrollIntoView` 會被貼底捲動拉回去）。
+  for (let i = 0; i < 80 && !(await visible()); i++) {
+    await page.mouse.wheel(0, -120);
+    await sleep(50);
+  }
+  const visibleBefore = await visible();
+  const deltas = await recordFrames(
+    page,
+    async () => {
+      for (let round = 0; round < 6; round++) {
+        for (let i = 0; i < 10; i++) {
+          await page.mouse.wheel(0, -120);
+          await sleep(50);
+        }
+        for (let i = 0; i < 10; i++) {
+          await page.mouse.wheel(0, 120);
+          await sleep(50);
+        }
+      }
+    },
+    cdp,
+  );
+  const stillStreaming = await page.getByRole('button', { name: '停止' }).count();
+  if (stillStreaming === 0) throw new Error('量測途中回覆就串完了，不是「串流中」');
+  const visibleAfter = await visible();
+  if (!visibleBefore || !visibleAfter)
+    throw new Error(`量測期間工具段不在畫面裡（前 ${visibleBefore}、後 ${visibleAfter}）`);
+  const tools = await run.locator('[data-slot="step-row"]').count();
+  await page.getByRole('button', { name: '停止' }).click();
+  await waitTurnDone(page);
+  return Object.assign(deltas, { setup: { tools, opened, panels, outputs } });
+}
+
 async function measureOnce(run) {
   const root = mkdtempSync(join(tmpdir(), 'nexus-frames-'));
   const llm = await startFakeLlm();
@@ -484,6 +615,8 @@ async function measureOnce(run) {
       開composer選單: summarize(await scenarioMenu(page, cdp), vsync),
       開關側欄: summarize(await scenarioSidebar(page, cdp), vsync),
     };
+    const tools = await scenarioTools(page, cdp);
+    scenarios.工具段展開捲動 = Object.assign(summarize(tools, vsync), { setup: tools.setup });
     return { run, browser: browser.version(), ...check, vsync, scenarios };
   } catch (error) {
     if (serve) process.stderr.write(redact(serve.out.join('')).slice(-4000));
@@ -501,11 +634,16 @@ const results = [];
 for (let run = 1; run <= RUNS; run++) {
   const result = await measureOnce(run);
   results.push(result);
-  for (const [name, s] of Object.entries(result.scenarios))
+  for (const [name, s] of Object.entries(result.scenarios)) {
+    if (s.setup !== undefined)
+      console.log(
+        `第 ${run} 次 ${name} 的場面：段內 ${s.setup.tools} 列、展開 ${s.setup.opened.join('／')}、glass-panel ${s.setup.panels} 個、結果框 ${s.setup.outputs} 個`,
+      );
     console.log(
       `第 ${run} 次 ${name}：原始 p95 ${s.p95.toFixed(2)}ms、以 vsync 計 p95 ${s.p95Vsync.toFixed(2)}ms、掉幀 ${s.dropped}／${s.frames}（${(s.droppedRatio * 100).toFixed(1)}%）；p50 ${s.p50.toFixed(2)}、p99 ${s.p99.toFixed(2)}、最長 ${s.max.toFixed(1)}` +
         `｜合成器：${s.compositor.frames} 幀、掉 ${(s.compositor.droppedRatio * 100).toFixed(1)}%、部分 ${(s.compositor.partialRatio * 100).toFixed(1)}%，DrawAndSwap p95 ${s.compositor.drawAndSwapP95?.toFixed(2)}ms（最長 ${s.compositor.drawAndSwapMax?.toFixed(2)}）`,
     );
+  }
 }
 const verdict = Object.fromEntries(
   Object.keys(results[0].scenarios).map((name) => {

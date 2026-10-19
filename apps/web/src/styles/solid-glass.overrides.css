@@ -536,3 +536,14 @@ body {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
+
+/*
+ * 工具段裡沒畫東西的那一則不留空格（#1682 PR B；README 本地修改第 66 條）：`StepGroup` 打開時替每個 child 包一層
+ * `<div class="px-2.5 py-1.5">`（`components/ui/tool-steps.tsx:143`），段裡只有思考、沒有思考文字的那一步（`tool-runs.ts` 的
+ * `transparent`）畫出空的 `MessageScrollerItem`。item 自己的 `empty:hidden` 藏得掉它，藏不掉外面那層：清單頂端多一條 12px 的空格加
+ * 一條分隔線。item 留著（段內定位、`data-message-id` 要它），只藏 SG 包的那層。寫在 layer 外。`guard/` 量段裡每一格都有東西。
+ */
+/* prettier-ignore */
+[data-slot="step-list"] > div:has(> [data-slot="message-scroller-item"]:empty) {
+  display: none;
+}
