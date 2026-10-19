@@ -42,7 +42,10 @@
  *
  * - **沒有 `reason: 'resume'` 與 `'series'`。** dsh 的 loop 實例第一次請求即使 header 沒變也記一份 `'resume'`；我們
  *   用日誌上最後一份當基準，**續接後沒變就不重記**（卡 #1020 的驗收句：長會話不讓日誌線性膨脹）。`'series'`
- *   是 dsh 為提示快取前綴分析標「新的訊息序列」，我們沒有消費者。
+ *   是 dsh 為提示快取前綴分析標「新的訊息序列」，我們沒有消費者。續接時要 stringify 日誌上最後一份 header 當基準
+ *   （`baselineOf`），建不起來那條 thread 就送不出去（#1726 起不再吞）。判斷不可達：`request/header` 沒進過任何一版
+ *   release；寫入時同一份 header 已在同一個 handler 裡被原生 `JSON.stringify` 過，同一個 runtime 續接不會拋。剩下的只有
+ *   跨 runtime（撐得較深的 Node 寫、Node 22 續接），那時這次請求的 HTTP body 一樣 stringify 不出去。
  * - **沒有 `request/context`**（dsh 的路由中繼資料：上下文窗口、`systemPromptUpdate`）。我們的窗口由設定檔型錄給，
  *   不是請求帶的。
  * - **`config` 是供應商層實際收到的參數**（`invocation_params`），不是 dsh 的 `LlmCallConfig{provider, model, reasoningEffort,
@@ -65,12 +68,28 @@
  * 不在 `MODEL_VISIBLE_EVENT_TABLE`。會話遙測的鏡像**不送**它們（系統提示詞可能含工作區內容，見
  * {@link ./session-telemetry.ts | isMirroredEvent}）。
  *
- * ## 記不進去不能扳倒模型呼叫
+ * ## 記不進去，這次請求不送（[#1726](https://github.com/DemianLi/nexus-agent/issues/1726)）
  *
- * 抽取、比對、`append` 任何一步拋都接住，這次不記（{@link ./model-calls.ts} 的起訖以前也這樣接，#1702 起照 dsh 拋；這兩顆不在
- * #1702 的範圍）。基準只在**記成功之後**才前進，所以失敗的
- * 那次下一次會再試。接住的不無聲吞掉：每次往 `report` 講一條 warn（省略即 `console.warn`，#1526）——深巢狀的 header
- * 在 Node 22 上會讓原生 `JSON.stringify` 爆堆疊，那條 thread 之後每次呼叫都記不進去，沒有這一條就只是日誌上靜靜少了快照。
+ * 照 dsh：`request/header` 直接 `append`、不吞（`packages/core/agent-loop/src/agent.ts:637-650`，`687f282e`），寫不進去這次請求
+ * 就不送，「日誌 = 模型收到的」不破。抽取、比對、`append` 任何一步拋，都讓這次模型呼叫在送出**之前**失敗：handler 設
+ * `raiseError = true`，LangChain 的 `handleChatModelStart` 只在這個旗標為真時把 handler 的錯重拋
+ * （`@langchain/core@1.2.9` `callbacks/manager.js:362-380`），所以基座表達得出來，不需要偏離。副作用：LangChain 重拋前會自己往
+ * `console.error` 印一行 `Error in handler RequestSnapshotHandler, handleLLMStart: …`。
+ *
+ * 錯經 {@link ./model-calls.ts} 記成 `model/end{outcome:'error'}` 往外拋；它沒有回報碼，{@link ./stream-retry.ts} 不重打，同 dsh。
+ * 基準只在**記成功之後**才前進（dsh 的 `requestHeaderLogged` 也是寫成功才設），所以下一次呼叫會再試、第一份照樣是 `initial`。
+ *
+ * 兩顆的寫入順序是先 `request/system` 後 `request/header`：header 寫不進去時，日誌上已經有這次的 `request/system`，它指回的那次
+ * 呼叫 `model/end` 是 `outcome:'error'`、沒有送出。形狀同 dsh：`step()` 先寫 `system/message`（`agent.ts:423`）與 `user/message`
+ * （`:430-439`），再寫 `request/header`（`:637-650`），header 寫不進去時那一步的 system 與 user 一樣留在日誌上。dsh 的不變量是
+ * 「送出的必定在送出之前就在日誌上」，不是「日誌上的必定被送出」；讀 `request/system` 的地方取的是最近（生效）的那一份
+ * （`packages/nexus-plugin-trajectory/src/trajectory.ts` 的 `noteSnapshot`、`apps/harness/src/log-derived-history.fixture.ts`）。
+ *
+ * header 超過寫入那一關的 600 層上限時，工具清單不變，這條 thread 之後**每次**呼叫都會在這裡失敗（#1726 驗收 4）。這是
+ * #1661 偏離的後果，不是照 dsh：dsh 寫 header 那一關沒有深度上限（`packages/core/session/src/index.ts:808-811` 迭代的
+ * `snapshotJsonValue`），601 層到原生 stringify 上限之間照寫照送；我們在這個區間 fail-closed（見 `session-log.ts` 的
+ * `SESSION_EVENT_MAX_DEPTH`）。#1526 的有損值到不了這裡：工具參數與 `extra` 先經 `jsonCopy` 洗過，`config` 的數字欄把 `-0`
+ * 正規化成 `0`。
  *
  * @module
  */
@@ -189,8 +208,9 @@ function extractConfig(
     for (const key of keys) if (invocation[key] !== undefined) return invocation[key];
     return undefined;
   };
+  // `-0` 寫成 `0`：供應商收到的 JSON 就是 `0`，而寫入那一關拒收 `-0`（#1526），不正規化的話設了 `-0` 的主機每次呼叫都送不出去。
   const number = (value: unknown): number | undefined =>
-    typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+    typeof value === 'number' && Number.isFinite(value) ? (value === 0 ? 0 : value) : undefined;
   const model = pick('model', 'model_name');
   const effortRaw = pick('reasoning_effort');
   const reasoning = invocation['reasoning'];
@@ -281,8 +301,8 @@ function baselineOf(log: SessionLog): Baseline {
     const event = events[at]!;
     if (fresh.header === undefined && event.type === 'request/header') {
       // 先拷一份沒凍過的再 stringify（#1526）：日誌裡的是凍過的，V8 對凍過的巢狀撐得比較淺（CI 的 Node 22 上凍過的陣列
-      // 約 2200 層、沒凍過的約 4100 層），續接回來的舊日誌可能更深（新寫的有 600 層上限，#1661）。拋在這裡的話基準永遠建不起來，這條 thread 之後每次呼叫都被
-      // 下面 handler 的 `catch` 接住（每次一條 warn），兩種快照都不再記。
+      // 約 2200 層、沒凍過的約 4100 層），續接回來的舊日誌可能更深（新寫的有 600 層上限，#1661）。拋在這裡的話基準永遠建不起來，
+      // 這條 thread 之後每次呼叫都在送出之前失敗（#1726，見檔頭「記不進去，這次請求不送」）。
       fresh.header = JSON.stringify(
         snapshotJsonValue(event.data.header, 'request/header 的 header'),
       );
@@ -343,12 +363,12 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
   readonly name = 'nexusRequestSnapshot';
   /** 請求送出**之前**落地，不背景化。 */
   override awaitHandlers = true;
-  override raiseError = false;
+  /** 記不進去就讓這次請求不送（#1726）：LangChain 只在這個旗標為真時把 handler 的錯重拋。見檔頭。 */
+  override raiseError = true;
 
   constructor(
     private readonly log: SessionLog,
     private readonly modelCall: number | undefined,
-    private readonly report: (message: string) => void,
   ) {
     super();
   }
@@ -360,24 +380,18 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
     _parentRunId?: string,
     extraParams?: Record<string, unknown>,
   ): void {
-    try {
-      const kwargs = (llm as { kwargs?: Record<string, unknown> }).kwargs ?? {};
-      const fallback = kwargs['model'] ?? kwargs['model_name'] ?? kwargs['modelName'];
-      recordRequestSnapshot(
-        this.log,
-        extractRequest(
-          messages,
-          extraParams?.['invocation_params'],
-          extraParams?.['options'],
-          typeof fallback === 'string' ? fallback : undefined,
-        ),
-        this.modelCall,
-      );
-    } catch (error) {
-      // 見檔頭「記不進去不能扳倒模型呼叫」：只講一條，不往外拋。
-      const reason = error instanceof Error ? error.message : String(error);
-      this.report(`請求快照記不進去，這次不記：${reason}`);
-    }
+    const kwargs = (llm as { kwargs?: Record<string, unknown> }).kwargs ?? {};
+    const fallback = kwargs['model'] ?? kwargs['model_name'] ?? kwargs['modelName'];
+    recordRequestSnapshot(
+      this.log,
+      extractRequest(
+        messages,
+        extraParams?.['invocation_params'],
+        extraParams?.['options'],
+        typeof fallback === 'string' ? fallback : undefined,
+      ),
+      this.modelCall,
+    );
   }
 }
 
@@ -389,14 +403,10 @@ class RequestSnapshotHandler extends BaseCallbackHandler {
  * 所以外面每一顆 middleware 看到的仍是原本的模型。見檔頭「記錄點」一節，為什麼記錄點不在 middleware 這一層。
  *
  * @param sessions - 註冊表的 `sessions` 通道，用來問「這次呼叫該寫進哪一份」。
- * @param report - 記不進去時往哪裡講一條 warn；省略即 `console.warn`。
  */
-export function createRequestSnapshotRecorder(
-  sessions: {
-    forCall(config: unknown): SessionLookup;
-  },
-  report: (message: string) => void = (message) => console.warn(message),
-): AgentMiddleware {
+export function createRequestSnapshotRecorder(sessions: {
+  forCall(config: unknown): SessionLookup;
+}): AgentMiddleware {
   return createMiddleware({
     name: REQUEST_SNAPSHOT_MIDDLEWARE_NAME,
     wrapModelCall: (request, handler) => {
@@ -407,7 +417,7 @@ export function createRequestSnapshotRecorder(
       if (found.kind !== 'ok' || !RunnableBinding.isRunnable(request.model)) {
         return handler(request);
       }
-      const watcher = new RequestSnapshotHandler(found.log, currentModelCall(found.log), report);
+      const watcher = new RequestSnapshotHandler(found.log, currentModelCall(found.log));
       return handler({
         ...request,
         model: bindModelConfig(request.model, (current) => ({
