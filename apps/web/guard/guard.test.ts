@@ -259,10 +259,11 @@ function collectTexts(page: Page): Promise<TextSample[]> {
     }
     for (const group of document.querySelectorAll('[data-guard-texts]')) {
       const name = group.getAttribute('data-guard-texts') ?? '';
-      // `DiffStats` 的 `aria-hidden` 在包裝層上，字色在裡面的 `+`／`−` 兩個 span（#1685）。
-      const targets = group.querySelector('[data-slot="diff-stats"]')
-        ? group.querySelectorAll('[data-slot="diff-stats"] > span')
-        : group.querySelectorAll('[aria-hidden]');
+      // 兩種都量，照文件順序。`DiffStats` 的 `aria-hidden` 掛在包裝層上（#1685 第 76 條），那一層自己沒有字、字色在裡面的
+      // `+`／`−` 兩個 span（第 75 條換的就是這兩個），所以量那兩個 span、不量包裝層：量包裝層只會量到繼承下來的字色。
+      const targets = group.querySelectorAll(
+        '[aria-hidden]:not(:has(> [data-slot="diff-stats"])), [data-slot="diff-stats"] > span',
+      );
       targets.forEach((el, i) => {
         samples.push(sample(el, `${name}-${i}`, defaultMin));
       });
