@@ -6,33 +6,51 @@
  * `@nexus/plugin-permission-presets` 的測試，serve 的紀錄在 `serve-plugin-failed-record.test.ts`；這一份只問「接在樹上之後」。
  */
 
+import { chmodSync, mkdtempSync, rmSync } from 'node:fs';
 import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { SessionLog } from '@nexus/core';
+import { PERMISSION_PRESETS_CONTRACT_VERSION } from '@nexus/permission-presets';
 import type { SessionEvent } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
 import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
+import type { CordisRoot } from './cordis-root.js';
 import {
   shippedPlugins,
   shippedPluginsWithConfig,
   shippedPluginsWithFullAccess,
 } from './fixtures.js';
-import { loadDefaultPlugins } from './plugin-config.js';
+import { HARNESS_HOME_ENV } from './harness-home.js';
+import { isBridgeEntry, loadDefaultPlugins } from './plugin-config.js';
+import { liveBindingsOf } from './plugin-live-versions.js';
+import { buildPluginSnapshot } from './plugin-snapshot.js';
+import { auditStartupEntries } from './startup-audit.js';
 
 const shipped = await shippedPlugins();
 const withFullAccess = await shippedPluginsWithFullAccess();
 
 let workspace: string;
+const roots: CordisRoot[] = [];
+const temporary: string[] = [];
 beforeEach(async () => {
   workspace = await mkdtemp(join(tmpdir(), 'nexus-presets-tree-'));
 });
 afterEach(async () => {
+  for (const root of roots.splice(0)) await root.dispose().catch(() => {});
+  for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true });
   await rm(workspace, { recursive: true, force: true });
 });
+
+function home(): NodeJS.ProcessEnv {
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-presets-tree-home-'));
+  chmodSync(dir, 0o700);
+  temporary.push(dir);
+  return { [HARNESS_HOME_ENV]: dir };
+}
 
 const typesOf = (events: readonly SessionEvent[], wanted: readonly string[]): string[] =>
   events.map((event) => event.type).filter((type) => wanted.includes(type));
@@ -184,4 +202,77 @@ describe('行程級的工作區根沒交到樹上', () => {
       await root.dispose();
     }
   });
+});
+
+describe('B：出貨清單上的 permission-presets 經樹進來，提供 permissionPresets 服務', () => {
+  const ID = 'permission-presets';
+
+  /** 入口的順序：建根（有工作區就交工作區根）→ 讀清單（帶樹）。 */
+  async function load(withWorkspace: boolean) {
+    const root = createCordisRoot({
+      channel: entryApprovalChannel(undefined),
+      ...(withWorkspace && { workspaceRoot: workspace }),
+    });
+    roots.push(root);
+    const loaded = await loadDefaultPlugins(
+      { env: home(), warn: () => undefined },
+      { tree: root.tree },
+    );
+    return { root, loaded };
+  }
+
+  it('有工作區：是橋接列、沒有掉列；啟動稽核過；樹上 include 列 ACTIVE；快照 running／saved 都是 mounted；liveBindingsOf 含這一列', async () => {
+    const { root, loaded } = await load(true);
+    const entry = loaded.plugins.find((candidate) => loaded.rows.get(candidate)?.id === ID);
+    expect(entry).toBeDefined();
+    expect(entry !== undefined && isBridgeEntry(entry)).toBe(true);
+    expect(entry?.plugin.name).toBe(ID);
+    expect(loaded.dropped).toEqual([]);
+    expect(loaded.rows.get(entry as never)).toEqual({
+      id: ID,
+      module: '@nexus/plugin-permission-presets',
+    });
+    expect(() => auditStartupEntries(loaded, { live: false })).not.toThrow();
+
+    const tree = await root.tree.context();
+    expect(tree.loader.resolve(`include:${ID}`).fiber?.ctx.fiber.state).toBe(2);
+
+    const source = {
+      entries: loaded.entries,
+      ids: loaded.ids,
+      plugins: loaded.plugins,
+      rows: loaded.rows,
+      drops: loaded.dropped.map(({ id, stage }) => ({ id, stage })),
+    };
+    const snapshot = buildPluginSnapshot({
+      running: source,
+      saved: source,
+      generatedAt: new Date(0),
+    });
+    expect(snapshot.rows.find((row) => row.id === ID)).toMatchObject({
+      module: '@nexus/plugin-permission-presets',
+      running: { state: 'mounted' },
+      saved: { state: 'mounted' },
+      sync: 'same',
+    });
+    expect(
+      liveBindingsOf({ loaded, plugins: loaded.plugins }, []).map((binding) => binding.id),
+    ).toContain(ID);
+  }, 60000);
+
+  it('樹上的 permissionPresets 服務：歸屬是 permission-presets 那一列、契約版本是定義套件的常數', async () => {
+    const { root } = await load(true);
+    const tree = await root.tree.context();
+    const service = tree.get('permissionPresets') as
+      { provider?: string; contractVersion?: string } | undefined;
+    expect(service?.provider).toBe(`include:${ID}`);
+    expect(service?.contractVersion).toBe(PERMISSION_PRESETS_CONTRACT_VERSION);
+  }, 60000);
+
+  it('沒給工作區根：樹上沒有這個服務（偏離 4：沒有圍堵就沒有東西可以捆），也沒有掉列', async () => {
+    const { root, loaded } = await load(false);
+    const tree = await root.tree.context();
+    expect(tree.get('permissionPresets')).toBeUndefined();
+    expect(loaded.dropped).toEqual([]);
+  }, 60000);
 });

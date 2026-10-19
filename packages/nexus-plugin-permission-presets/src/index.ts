@@ -11,7 +11,7 @@
  *   （#1494），閘門與 fence 照舊逐次讀各自的控制器，不讀這一組的快照。
  * - **現在是哪一組是推導出來的**（{@link derivePreset}）：實際值對上哪一組就是哪一組，對不上是 `custom`；日誌上最後一顆 `permission/preset`
  *   只在兩組捆著同樣的值時分勝負。
- * - **`permissions` 投影只推現在的值**（`{ currentValue }`），目錄（`permission.catalog`）整台共用。
+ * - **`permissions` 投影只推現在的值**（`{ currentValue }`），目錄（`permission.catalog`）dsh 整台共用，我們逐條 thread 回（偏離 7）。
  * - **新會話把起始組合釘進日誌**（dsh `pinInitialPermission`）：登記一位會話參與者（`@nexus/session` 的 `join`），接上就寫。
  * - **子代理**：背景子代理核准一律釘 `never`（編背景圖時換上的閘門，`@nexus/core` 的 `createBackgroundApprovalGate`）；**前景子代理跟 root 當下的核准政策走**
  *   （[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，dsh 沒有）。組合名只在父代理是 `danger-full-access` 時帶下去（dsh `child-agent.ts:252`、`:277`），兩種子代理一樣。
@@ -31,8 +31,9 @@
  *    （`packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`），表裡有就人人可選；我們的 serve 多人共用一台主機，同一把 token 底下
  *    的每個人都切得到，所以出廠只留兩組。CLI 跟著少一組屬理由 1：出貨層只有一份表，表達不出「serve 少、CLI 照舊」。部署方要全開就把整張表
  *    重寫一份加回（見 `presets.ts` 的 `DEFAULT_PRESETS`）；沒加回又用 `--sandbox danger-full-access` 起，新會話在起動當下失敗。
- * 7. **（遷上樹新增，#1491）目錄是逐條 thread 的、子代理組名由參與者寫、參與者安裝失敗只記 warn。** 三條偏離的理由、類別與撤除條件登記在
- *    `@nexus/permission-presets` 的檔頭與 `docs/plugin-contract.md`。
+ * 7. **（遷上樹新增，#1491）目錄是逐條 thread 的、子代理組名由參與者寫、參與者安裝失敗只記 warn、起始值在宿主的組 thread 那一步算。**
+ *    這四條偏離的理由、類別與撤除條件登記在 `@nexus/permission-presets` 的檔頭第 1 至 4 條與 `docs/plugin-contract.md`；
+ *    該檔頭第 5 條是下面第 8 條（`/permission` 不對模型講一聲）。
  * 8. **切換核准政策時沒有對模型講一聲。** dsh 的 `user-approval` 在政策變動時用 `agent.inject` 排一則使用者訊息給下一步模型
  *    （`packages/interaction/user-approval/src/index.ts:184-187`，`687f282e`：「The approval policy changed from … to … (changed by the user).」）；
  *    我們的 `/permission` 一直沒有這一步（相容層就沒有，這張遷移不改行為）。
