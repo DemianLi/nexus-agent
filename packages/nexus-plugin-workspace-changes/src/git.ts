@@ -152,8 +152,14 @@ export class GitRunner {
       const untrack = trackHostExitChild(child);
       let grace: NodeJS.Timeout | undefined;
       const terminate = (): void => {
+        if (child.exitCode !== null || child.signalCode !== null) return;
+        // 起不來的 child 沒有 pid（'error' 事件還沒送到）：此時 `kill()` 會對 pid 0 送訊號，也就是整個行程群組（包括 serve 自己）
+        // （#1742；照 dsh `signalTree` 的 `if (pid === undefined) return`）。'error' 隨後會把這一趟 reject。
+        if (child.pid === undefined) return;
         child.kill('SIGTERM');
-        grace = setTimeout(() => child.kill('SIGKILL'), TERMINATE_GRACE_MS);
+        grace = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL');
+        }, TERMINATE_GRACE_MS);
         grace.unref();
       };
       signal.addEventListener('abort', terminate, { once: true });

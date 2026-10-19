@@ -16,7 +16,7 @@
 | 邊框怎麼畫 | 照 SG：面（卡片、浮層）的邊畫在陰影裡；控制項（按鈕、欄位）的細線是自己的 `border`，再疊 inset 光與投影 | §5 |
 | 字型 | Geist／Geist Mono（打包 latin，等寬另加方框字元的 symbols2），等寬再退系統等寬，中文退 Noto Sans TC，**全部打包進本地** | §5 |
 | 亮暗切換 | header 循環三態、預設跟系統、`localStorage`、`index.html` 內嵌腳本防閃、不裝 `next-themes` | §6 |
-| 動效 | 純 CSS＋`tw-animate-css`；封閉模式清單；開 250／關 150；reduced-motion 分模式退 | §7 |
+| 動效 | 純 CSS＋`tw-animate-css`（例外：狀態列的 SG `StatusGlyph`，§7）；封閉模式清單；開 250／關 150；reduced-motion 分模式退 | §7 |
 | 無障礙 | WCAG 2.2 AA＋APG＋Radix 內建；焦點只在會丟掉時才搬 | §8 |
 | 斷點 | 1024（以下收成抽屜）；驗收 375／768／1280 | §9 |
 | 原型哪些能搬 | 主題、token、模式規則、registry 改法直接搬；原型 App 只當參考 | §10 |
@@ -94,7 +94,7 @@
 | 27 | slash 選單 | shadcn `command` | 在 `App.tsx` |
 | 28 | `@` 引用 | shadcn `command`（跟 slash 選單共用同一顆 popover）；觸發、插入、非同步狀態照 dsh（§4.4） | `lib/file-mention.ts`、`lib/session-mention.ts`、`lib/mention-menu.ts`、`components/session-reference.tsx`、在 `composer.tsx` |
 | 29 | 送出佇列 | 自建，shadcn `collapsible`＋`button`＋`textarea`；行為照 dsh `QueueDock`（一件直接畫、兩件以上收合、就地改、刪與插話；插話鈕只在這一輪跑著時按得動，按下去那一則離開佇列、改畫在對話尾端）；新項目撐過 200ms 才畫、只淡入淡出不 stagger；放在待辦面板下、換手區外，停在核准點時照樣看得到。**插話**（#710）：跑著時 Cmd/Ctrl+Enter 送插話，Enter 與送出鈕照舊排隊（照 dsh 的預設，沒做它讓 Enter 改成插話的偏好設定），送出提示跟著換（#1591 起提示只給報讀：sr-only、掛在輸入框的 `aria-describedby`，畫面上不畫，看畫面的人因此看不到加速鍵那一句，PM 已告知 demian）；排著的插話不進佇列，照 dsh 畫在對話尾端（淡一階，底下一句「插話・下一步送進模型」；這一輪停了就改說「下一輪送進模型」，harness 留到下一輪的第一次模型呼叫才領），被領走時同一格換成人的話。**草稿空白時 Cmd/Ctrl+Enter 把排著的全部改成插話**（照 dsh `steerQueue`：照排的先後一件一件送，碰到「不收了」或「不在隊裡」靜靜停），輸入框提示字跟著換 | `queue-dock.tsx`、`lib/submit-mode.ts`、`lib/steer-view.ts`、`lib/steer-queue.ts` |
-| 31 | 狀態列 | 自建（shimmer、orb 見 §7） | `status-line.tsx` 留 |
+| 31 | 狀態列 | 執行中那一列是 SG 的 `TurnStatus`＋`StatusGlyph`（#1684，vendor 原樣加 patch `0022`、`0023`）；其他支自建 | `status-line.tsx` 留（live region 與轉接層） |
 | 35 | 讚踩＋回饋框 | 框換 shadcn `dialog`，表單邏輯留；讚踩按鈕留在 `transcript.tsx` | `feedback-dialog.tsx` 換外殼 |
 | 36 | Toast | shadcn `sonner`，**改成收 `theme` prop、拿掉 `next-themes`** | — |
 
@@ -208,7 +208,7 @@
 出處：[動效策略](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887)。完整互動對照表與持續狀態的節奏在該留言。
 
 **底層**
-- **純 CSS**，`thinking-orbs`、`border-beam` 不進 `apps/web`。
+- **純 CSS**，`thinking-orbs`、`border-beam` 不進 `apps/web`。**例外：狀態列執行中那一列的 SG `StatusGlyph`**（#1684）是 JS `requestAnimationFrame` 每幀畫，vendor 原樣。「純 CSS」是 demian 2026-09-18 在 [#378](https://github.com/DemianLi/nexus-agent/issues/378) 拍板的；後來 #1468 的 Q12（status-line 換成 `TurnStatus`，它硬依賴 `StatusGlyph`）與 Q16（SG 的 AI 元件 vendor 原樣）蓋過了這一條，#1468 §6 的牴觸表當時沒列到它（#1684 PM 定，demian 可推翻）。
 - **裝 `tw-animate-css`**：registry 的 dialog／sheet／tooltip 寫了 `animate-in` 等 class，沒裝時建置出來一筆都沒有，也不報錯。
 - 在 `@theme`（**不用 `inline`**）覆寫 `--animate-in` 250ms／`--animate-out` 150ms、曲線 `--ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1)`。覆寫後 registry 的 `duration-*` 蓋不掉，單獨改用 `animation-duration-*`。
 - 進場 fill-mode `backwards`，退場 `both`。
@@ -238,7 +238,7 @@
 - **按壓 .96（120ms）只給實心主按鈕與送出鍵**。
 - **stagger 40ms 只給提問選項**（前 6 個）。
 - **不動的**：載入歷史與切換對話、串流逐字（只有游標閃）；sonner 用它自帶的動畫與 reduced-motion（全關，跟我們「留 150 淡入」不同，已知差異）。
-- **orb** P0 只做 working 與 breathing。
+- **orb** 只剩空白 hero 的 breathing；狀態列的 working 隨 #1684 換成 SG 的 `StatusGlyph`（語意是「這一輪正在跑」，所以待命畫面不換）。`StatusGlyph` 在 reduced-motion 下停在每個圖形的起始姿勢，換圖形時 450ms 的 morph 也不跑。
 
 **reduced-motion**（不是全關；實作寫 `@media (prefers-reduced-motion: reduce)`，原型的 `data-reduce-motion` 屬性只是模擬）
 - 位移、縮放、模糊拿掉，留 ≤ 150 的透明度；尺寸瞬間到位；按壓不縮；循環停一格；**狀態不能只靠動效表達**。
@@ -246,7 +246,7 @@
 - 做法：media query 裡把 `--animate-in`／`--animate-out`／`--animate-collapsible-*` 換成只有透明度的版本。SG 的 sheet 用 transition 滑入、不走這幾個變數，由覆寫檔對抽屜另外拿掉位移、壓到 150（#1583，`check-built-css` 量產物）。
 - JS 的 `scrollTo({ behavior: 'smooth' })` 不看 CSS，要自己讀偏好。
 
-**效能**：持續動畫只動 transform／opacity，邊框光只剩等你處理那一圈的呼吸（opacity；執行中那道 conic 光隨 #1682 的工具卡換成 SG 拿掉）；`will-change` 不常駐。
+**效能**：持續動畫只動 transform／opacity（例外：`StatusGlyph` 每幀改 SVG 的 `cx`／`cy`／`r`／`opacity` 屬性，vendor 原樣，由 #1684 驗收 E 的量測當保險：串流中捲動與串流中不捲動兩格，條件同下），邊框光只剩等你處理那一圈的呼吸（opacity；執行中那道 conic 光隨 #1682 的工具卡換成 SG 拿掉）；`will-change` 不常駐。
 - **大面積玻璃照 SG**（Q7），不再限「blur 只給小元素」。換來的是一道合併門檻（Q13、Q17）：Chrome 關 GPU 加速、CPU 降速 4 倍，量**串流中捲動、開 composer 選單（兩層 blur）、開關側欄**三種情境，p95 frame time ≤ 16.7ms。判讀用 rAF 間隔換算成 vsync 個數之後的 p95，**≤ 1 個 vsync** 就是過（≥95% 的幀準時；不用乘回毫秒比 16.7，headless 的時間戳只到 0.1ms，閒置間隔量成 16.8 時零掉幀也會判不過）；合成器 trace 的 `DrawAndSwap` 當佐證。量具是 `apps/web/scripts/measure-frames.mjs`（假模型端點、真 serve、headless Chrome）。
 - [#1512](https://github.com/DemianLi/nexus-agent/issues/1512) 量過三種情境都是 16.70ms（CPU 實測降速約 3.8 倍；數字與條件在該 PR）。限制：headless；實機只量 demian 那台 Mac，VDI／沒有 GPU 的機器沒量（已知缺口，接受）。
 - **不達標的退路是不透明**：沿用 `prefers-reduced-transparency` 那條路與 `<html data-glass="opaque">`，面換成不透明、拿掉 blur（§5 的目標一樣要過）。
@@ -283,13 +283,14 @@
 - 換題：進度條 `aria-live` 關掉，legend 前放 sr-only「第 2 題，共 3 題」。
 - AI 回覆：`role="log"` 設 `aria-live="off"`，串流不逐字唸，結束時把全文丟進 polite 區唸一次。
 - 往前翻讀完：另一格 polite 唸「載入了較早的 N 則。」（N＝人打的字與模型的回覆，同 wire 一頁的單位），**不唸接上來的內容**，也不跟上一條共用一格（2026-09-25，inventory 列 9）。
-- 工具卡狀態變化不唸。orb（狀態列、空白 hero）旁已有同義文字時 `aria-hidden`。
+- 工具卡狀態變化不唸。狀態列的 glyph（SG `StatusGlyph`）與空白 hero 的 orb 旁已有同義文字時 `aria-hidden`。glyph 是裝飾，非文字對比以裝飾性豁免（WCAG 1.4.11 只管辨識內容所需的圖形；這一刻在做什麼由狀態列的字與工具列的字講，不靠 glyph）。
 - **工具卡與工具段**（#1682，SG 的 `StepRow`／`StepGroup`）：
   - 列是一顆帶 `aria-expanded` 的按鈕，名稱＝標題＋摘要＋列尾看得見的字（工具名、計數、歸屬、狀態字）。狀態一定有字（Badge），不靠顏色、圖示或動效。
   - 群組按鈕的名稱＝「N 個工具呼叫，讀取 ×3、寫入檔案」（段裡只收完成的工具）。摘要是純字串、會被報讀，用「，」「、」接，不用「·」。
   - 展開後沒有內容的列，SG 會停用按鈕（聽起來像壞掉），所以空的時候放一句 emptyNote（「沒有參數。」「還沒有結果。」「沒有結果文字。」），按鈕照樣按得到。
   - 結果框的 `pre` 停得上焦點（vendor patch `0019`），名稱是框的標題（「參數」「結果」「錯誤」），鍵盤可以捲。
 - **思考過程**（#1683，SG 的 `Reasoning`）：原生 `<summary>`，不另加 role、`aria-expanded`，展開與否由瀏覽器報。名稱只有「思考過程」或「思考中」；收合時那行摘要與「·」`aria-hidden`（摘要每來一顆 chunk 就變，焦點停在上面時報讀器會跟著重唸）。推理不進 polite 區唸（狀態列已經唸「執行中」）。
+- **狀態列執行中那一列**（#1684，SG 的 `TurnStatus`）：live region 是 `status-line.tsx` 包在外面的 `<div role="status">`，vendor 的兩處 `role="status"` 由 patch `0023` 拿掉（按鈕上那處還會蓋掉按鈕角色）。字固定「執行中…」，不跟著 glyph 的樣子換（換一次就唸一次）。經過時間在 live region 外、`aria-hidden`（#1308），不接 SG 的經過時間、token 數與 children（都在那一列裡，會被一起唸）。
 - **輸入框**（#1591）：名稱「要說的話」（`<label for="prompt">`），送出的說明（平常「Enter 送出」，跑著時「Enter 排隊・⌘/Ctrl Enter 插話」，`lib/submit-mode.ts`）是 sr-only 的一段、掛在 `aria-describedby`。`/` 與 @ 選單開著時輸入框帶 `aria-controls`（清單）與 `aria-activedescendant`（目前那一項）。主按鈕的名稱是「送出」「排隊送出」「插話送出」「停止」之一，照 dsh 的 `primaryLabel`。
 - ❌ 的名稱「停止這一輪，不回答這些問題」（`aria-label` 與 tooltip 同一句），不加確認。
 - **tooltip 只是視覺**（#1583）：Base UI 的 tooltip 不給 `role="tooltip"`、也不掛 `aria-describedby`，報讀器聽不到它。tooltip 的字不能帶 Trigger 名稱裡沒有的資訊，要聽到的寫進 `aria-label`（例：模型座「模型：X，從下一步生效，點開切換」）。
@@ -357,7 +358,7 @@
 | 12 | 元件原始碼的字串字面值不越過系統的值：不用 Tailwind 預設色板（含 `white`／`black`）、字級只走 `text-ui`／`text-body`／`text-tip`／`text-micro`、圓角不寫數字任意值、不硬寫色碼、卡片與內層 stage 用 `Surface` 不手寫配方。例外只能列在 `apps/web/src/styles/design-system.test.ts` 的 `ALLOWED`（附理由），列了卻不再命中的條目報錯，所以例外只會變少 | [#1141](https://github.com/DemianLi/nexus-agent/issues/1141) |
 | 13 | 建置出來的 CSS 裡沒有只來自測試檔或說明文件的 class：Tailwind 預設掃整個專案，測試的範例字串與文件提到的類別名會被編成真的規則（裸的 `.container`、`.shadow` 會套到不相干的元素）。`src/index.css` 用 `@source not` 排除，`scripts/check-built-css.mjs` 量產物確認 | [#1141](https://github.com/DemianLi/nexus-agent/issues/1141) |
 
-**靠 review、不寫測試的**：持續動畫只動 transform／opacity。
+**靠 review、不寫測試的**：持續動畫只動 transform／opacity（`StatusGlyph` 例外，見 §7）。
 
 **還沒驗過的**（實作時要補驗或留意）：
 

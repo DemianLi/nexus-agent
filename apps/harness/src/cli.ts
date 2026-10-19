@@ -98,6 +98,7 @@ import {
   formatGoalDriverDisclosure,
   type NexusAgent,
   goalDriverPort,
+  describePermissionNarrowing,
 } from './assembly-root.js';
 import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
 import type { CordisRoot, NexusAssembly } from './cordis-root.js';
@@ -1130,6 +1131,10 @@ async function runLaunched(
       built.warnings,
     )) {
       printer.error(line);
+    }
+    // 續接時日誌記的檔案政策比權限表裡每一組都寬，接上日誌時會被收回預設組（#1621）：標準錯誤留一行。
+    if (built.permissionNarrowed !== undefined) {
+      printer.error(`[權限] ${describePermissionNarrowing(built.permissionNarrowed)}`);
     }
     // 組裝之後外掛執行期交出的話（例如 MCP 掉線重連的進度，#1099）接著印到標準錯誤。
     built.onWarning((warning) => {

@@ -55,6 +55,11 @@
  *   （摘要很長，量 375 寬往左裁）、夾在一段打開的工具段裡的一列（`StepList` 的 `--panel` 上）。量字的對比（頁面與 `--panel` 兩種底、
  *   「思考中」的漸層與減少動態時停住的那一格）、焦點、AX 樹、箭頭、44px、shimmer、`white-space`；三塊各包一層 `data-guard-reasoning`
  *   （`done`、`running`、`panel`）。
+ * - `?overlay=turn-status` 畫產品的狀態列（`StatusLine`，#1684）：就緒、執行中、等你回答三種各一列，寬度與左右留白同 `App.tsx`
+ *   （最寬 42rem、左右 24px）。執行中那一列是 SG 的 `TurnStatus`，帶經過時間（server 時鐘樣本在載入時補一次、這一輪 75 秒前開始）；
+ *   三塊各包一層 `data-guard-status`（`idle`、`running`、`awaiting`）。`&only=running` 只畫執行中那一列（量 AX 樹、live region）。
+ *   執行中那一列的 activity 由 `window.__setTurnActivity('thinking' | 'searching' | 'running' | 'writing')` 換；
+ *   `window.__openingPose(activity)` 給那種 activity 的起始姿勢（`[[cx, cy, r, opacity], …]`）。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */
@@ -80,6 +85,7 @@ import { ContextMeter } from '@/components/context-meter';
 import { PendingSwap } from '@/components/pending-swap';
 import { QuestionPanel } from '@/components/question-panel';
 import { ReasoningRow } from '@/components/reasoning-row';
+import { StatusLine } from '@/components/status-line';
 import { RetryNotice } from '@/components/retry-notice';
 import { Surface } from '@/components/surface';
 import { TodoPanel } from '@/components/todo/panel';
@@ -95,6 +101,9 @@ import {
   MessageScrollerViewport,
 } from '@/components/ui/message-scroller';
 import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
+import { serverClock } from '@/lib/server-clock';
+import { Script } from '@/test/conversation-frames';
+import { turn, view, withTrajectory } from '@/test/trajectory-fixtures';
 import { AttachmentRail } from '@/components/attachment-rail';
 import { SentAttachments } from '@/components/sent-attachments';
 import { Badge } from '@/components/ui/badge';
@@ -173,6 +182,7 @@ import {
   useSidebar,
 } from '@/components/ui/sidebar';
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip';
+import { STATUS_FIGURES } from '@/components/ui/status-glyph';
 import { StepGroup, StepRow } from '@/components/ui/tool-steps';
 import type { Step } from '@/components/ui/tool-steps';
 
@@ -798,6 +808,77 @@ function ReasoningPage() {
   );
 }
 
+/** 狀態列（#1684）：執行中那一列每種 activity 一個本輪的樣子（判法見 `lib/turn-activity.ts`）。 */
+const TURN_ENTRIES: Readonly<Record<string, readonly ConversationEntry[]>> = {
+  thinking: [],
+  searching: [RUN_TOOLS[0]!].map((t) => ({ ...t, name: 'grep', status: 'running' as const })),
+  running: [RUN_TOOLS[0]!].map((t) => ({ ...t, name: 'execute', status: 'running' as const })),
+  writing: [
+    { kind: 'ai', id: 'a-writing', text: '找到了', streaming: true, attribution: { kind: 'root' } },
+  ],
+};
+
+/** 這一輪 75 秒前開始（軌跡投影的 `turn/start`），server 時鐘樣本在畫面載入時補一次，經過時間才畫得出來（`lib/running-turn.ts`）。 */
+function runningState(activity: string) {
+  const { end: _end, durationMs: _duration, ...open } = turn(1, { time: Date.now() - 75_000 });
+  const state = withTrajectory(emptyConversation(), new Script(), view([turn(0), open]));
+  return { ...state, status: 'running' as const, entries: TURN_ENTRIES[activity] ?? [] };
+}
+
+function TurnStatusPage() {
+  const [activity, setActivity] = useState('thinking');
+  useState(() => {
+    const now = Date.now();
+    serverClock.observe(new Date(now).toUTCString(), now - 20, now + 20);
+    return null;
+  });
+  useEffect(() => {
+    const hooks = window as unknown as {
+      __setTurnActivity?: (a: string) => void;
+      __openingPose?: (a: string) => string[][];
+    };
+    hooks.__setTurnActivity = setActivity;
+    // 每種 activity 的起始姿勢（減少動態時 glyph 停在這裡），照 vendor `draw` 取到小數兩位、四個屬性都給。
+    // 1.7 是 vendor 沒 export 的 `RADIUS`（`src/test/glyph-env.ts` 的 `GLYPH_RADIUS`，`registry-edits.test.ts` 釘住原文）。
+    hooks.__openingPose = (a) =>
+      (STATUS_FIGURES.find((entry) => entry.activity === a)?.figure(0) ?? []).map((dot) => [
+        dot.x.toFixed(2),
+        dot.y.toFixed(2),
+        (1.7 * dot.s).toFixed(2),
+        Math.max(0, Math.min(1, dot.o)).toFixed(2),
+      ]);
+  }, []);
+  const only = params.get('only');
+  const rows = [
+    ['idle', emptyConversation()],
+    ['running', runningState(activity)],
+    [
+      'awaiting',
+      { ...emptyConversation(), status: 'awaiting-input' as const, pendings: [QUESTION] },
+    ],
+  ] as const;
+  return (
+    <div
+      style={{
+        maxWidth: '42rem',
+        margin: '0 auto',
+        padding: '16px 24px 0',
+        display: 'flex',
+        flexDirection: 'column',
+        gap: 16,
+      }}
+    >
+      {rows
+        .filter(([name]) => only === null || only === name)
+        .map(([name, state]) => (
+          <div key={name} data-guard-status={name}>
+            <StatusLine state={state} connected />
+          </div>
+        ))}
+    </div>
+  );
+}
+
 /** 對話區（#1638 PR B）：人與 AI 輪流，AI 的回覆夠長、總高度超出容器，捲到最新的按鈕才有機會出現；最後一則 AI 被停止，畫表尾。 */
 const MESSAGES: ConversationEntry[] = Array.from({ length: 6 }, (_, i): ConversationEntry[] => [
   { kind: 'human', id: `h-${i}`, text: `第 ${i + 1} 個問題：這份報表的數字要怎麼看？` },
@@ -1041,6 +1122,8 @@ function OverlayPage({ name }: { name: string }) {
       return <ToolCardsPage />;
     case 'reasoning':
       return <ReasoningPage />;
+    case 'turn-status':
+      return <TurnStatusPage />;
     case 'questionnaire':
       return <QuestionnairePage />;
     case 'composer-idle':
