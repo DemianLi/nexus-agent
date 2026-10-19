@@ -74,12 +74,13 @@ import { registerRunExpander, registerTranscriptScroller } from '@/lib/transcrip
 import { FEEDBACK_COPY, isRatable } from '@/lib/feedback';
 import { RetryNotice } from '@/components/retry-notice';
 import { useScrollButtonClearance } from '@/hooks/use-scroll-button-clearance';
+import { useStableNames } from '@/hooks/use-stable-names';
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
 import { EXIT_PLAN_MODE } from '@/lib/plan-review';
 import { BLOCKED_HINT_TEXT } from '@/lib/archived-view';
 import { settledNoticeText } from '@/lib/queue-view';
 import { pairAnswers } from '@/lib/question-view';
-import { agentMessageCaption, subagentLabel, subagentNames as namesOf } from '@/lib/subagent-view';
+import { agentMessageCaption, subagentLabel } from '@/lib/subagent-view';
 import { reasoningRunning, visibleReasoning } from '@/lib/reasoning-view';
 import { pendingAgentText, pendingSteers, pendingSteerText } from '@/lib/steer-view';
 
@@ -210,14 +211,11 @@ function Marker({ children, testId }: { children: string; testId: string }) {
 export function Entry({
   entry,
   feedback,
-  beam,
   answer,
   subagentNames,
 }: {
   entry: ConversationEntry;
   feedback?: TranscriptFeedback;
-  /** 這顆工具卡帶執行中的邊框光（同時最多一個）。 */
-  beam: boolean;
   /** 配到這張提問卡的答案。 */
   answer?: AnswerEntry;
   /** 背景子代理的編號 → 名字（`lib/subagent-view.ts`）。 */
@@ -279,11 +277,10 @@ export function Entry({
 
   if (entry.kind === 'tool') {
     // 交出計劃的那一顆畫成計劃卡（#654）。
-    if (entry.name === EXIT_PLAN_MODE) return <PlanToolCard entry={entry} beam={beam} />;
+    if (entry.name === EXIT_PLAN_MODE) return <PlanToolCard entry={entry} />;
     return (
       <ToolCard
         entry={entry}
-        beam={beam}
         subagentNames={subagentNames}
         {...(answer === undefined ? {} : { answer })}
       />
@@ -517,14 +514,11 @@ export function Transcript({
    */
   deliverableDownload?: DeliverableDownloader;
 }) {
-  // 執行中的邊框光同時最多一個（§7 效能）：給最後一顆還在跑的工具。
-  const beamId = state.entries.findLast(
-    (entry) => entry.kind === 'tool' && entry.status === 'running',
-  )?.id;
   const answers = useMemo(() => pairAnswers(state.entries), [state.entries]);
-  const names = useMemo(() => namesOf(state.entries), [state.entries]);
-  // 收起來的工具呼叫哪幾段打開了（#1309）：預設收合、不跨重新整理。值記怎麼打開的——觀測分頁定位進來的不做動畫。
-  const [openRuns, setOpenRuns] = useState<ReadonlyMap<string, 'user' | 'locate'>>(new Map());
+  // 串流中 `entries` 每一格都換；名字表內容沒變就回同一份，工具卡的 memo（`toStep` 裡的 diff、讀檔、搜尋）才擋得住（#1682）。
+  const names = useStableNames(state.entries);
+  // 收起來的工具呼叫哪幾段打開了（#1309）：預設收合、不跨重新整理。
+  const [openRuns, setOpenRuns] = useState<ReadonlySet<string>>(new Set());
   const grouped = useMemo(() => groupToolRuns(transcriptItems(state.entries)), [state.entries]);
   // 定位時（使用者按下去的那一刻）要讀到最新的分組，登記一次就好，所以走 ref。
   const groupedRef = useRef(grouped);
@@ -537,7 +531,7 @@ export function Transcript({
         const run = toolRunOf(groupedRef.current, entryId);
         if (run === undefined) return false;
         // 同步畫出來：定位接著就要找那一格、量它的位置。
-        flushSync(() => setOpenRuns((current) => new Map(current).set(run, 'locate')));
+        flushSync(() => setOpenRuns((current) => new Set(current).add(run)));
         return true;
       }),
     [],
@@ -547,7 +541,6 @@ export function Transcript({
     return (
       <Entry
         entry={entry}
-        beam={entry.id === beamId}
         subagentNames={names}
         {...(feedback === undefined ? {} : { feedback })}
         {...(answer === undefined ? {} : { answer })}
@@ -556,18 +549,16 @@ export function Transcript({
   };
   const items = grouped.flatMap((item) => {
     if (item.kind === 'tool-run') {
-      const opened = openRuns.get(item.id);
       return {
         id: item.id,
         node: (
           <ToolRun
             run={item}
-            open={opened !== undefined}
-            instant={opened === 'locate'}
+            open={openRuns.has(item.id)}
             onOpenChange={(open) =>
               setOpenRuns((current) => {
-                const next = new Map(current);
-                if (open) next.set(item.id, 'user');
+                const next = new Set(current);
+                if (open) next.add(item.id);
                 else next.delete(item.id);
                 return next;
               })

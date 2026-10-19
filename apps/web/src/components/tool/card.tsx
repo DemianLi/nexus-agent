@@ -1,92 +1,41 @@
 /**
- * 工具卡（規格 §4.2 列 13／14，#406）：收合時一行（狀態、標題、工具名、摘要、歸屬、狀態字），展開看參數、結果、diff 與錯誤（哪個工具畫哪幾樣見下面 #601 那條）。
- * 直接吃 `ToolEntry.status` 的四格；分類與摘要在 `lib/tool-view.ts`。
+ * 工具卡（規格 §4.2 列 13／14，#406）：SG 的 `StepRow`（#1682，地圖 #1497 第 ④ 步）。收著是一行按鈕：標題加摘要（SG 的 label），
+ * 後面接 nexus 的 trailing（工具名、待辦「+N」、`+N −M`、子代理狀態字、歸屬、狀態字）；展開看參數、結果、錯誤，
+ * 或 SG 欄位表達不了的那幾種檢視。`ToolEntry` 怎麼變成 SG 的 `Step` 在轉接層 `lib/tool-step.ts`（`toStep`）。
  *
- * - **浮起來**（`shadow-material`），展開的內容放內層 stage（§5）。
- * - **動效**（§7）：展開收合 250／150 高度＋透明度（collapsible）；出現往上 8px 由對話列表管；
- *   執行中的邊框光**同時最多一個**（`beam` 由呼叫端決定給誰）。
- * - **報讀**（§8）：狀態變化不唸，狀態由狀態列講；orb 旁有同義文字，所以 `aria-hidden`。
- * - **停在提問時被停止的 `ask_user_question`**（§4.3，#409）：直接展開、列出題目與選項，標「已停止，請直接打字回覆」，
- *   不畫紅字——停止不是失敗（#276），而那句紅字是給模型看的英文。判法在 `lib/question-view.ts`。
- * - **答完的 `ask_user_question`**（§4.3，#409；#439 之後）：展開列「問題 → 回答」，答案讀線上的 `ToolEntry.text`
- *   （那一段就是模型收到的結果），所以重新整理、別的分頁、往回載入的歷史都看得到；沒有 `text` 的舊日誌退回本地那一則
- *   `AnswerEntry`。兩份都讀不到、或配不起來就只列題目，收著那一行退回「已回答 N 題」。參數原文不畫：它就是這幾題。
- * - **`present`**（#441 第一刀）：收著講檔名，展開逐個列檔名、完整路徑、說明，不畫參數原文。只講這顆呼叫說了什麼；
- *   交付成不成立看狀態，交付卡片是第二刀。判法在 `lib/present-view.ts`。
- * - **`todo_write`**（#575）：收著講「2/5 完成 · 進行中的那一項」，同時進行的其餘幾項另起一格「+N」，不接在會被
- *   截斷的字後面（照 dsh `planSummary`）；展開逐項列那一次寫入的快照，不畫參數原文，不做跟前一次的差異。參數解不開
- *   或有一項壞掉就退回參數原文，不畫半套。判法在 `lib/todo-view.ts`；清單跟輸入框上方的面板共用（`list.tsx`），
- *   這裡是快照，所以進行中那一項不閃。
- * - **結果與 diff**（#601）：其他工具展開後畫結果文字（`ToolEntry.text`）；`ls`、`read_file`、`glob`、`grep`、`write_file`、
- *   `edit_file` 只畫結果、不畫參數（照 dsh）。`write_file`、`edit_file` 畫 diff，收著那一行接 `+N −M`，失敗時不接：
- *   執行中（含停在核准點）從參數算，成功之後畫結果 `meta` 裡實際套用的那幾段；沒有 `meta` 時 write 退回參數算的整檔
- *   新增、edit 退回結果文字（#625）。判法在 `lib/tool-diff.ts`、`lib/tool-output.ts`。
- * - **子代理撞到輸出上限的 `task`**（#608）：紅字那一句給模型看的英文換成中文講，寫到一半的那段照結果畫（同一套行數
- *   上限）。認不出來就照舊畫原文。判法在 `lib/max-tokens-view.ts`。
- * - **讀檔卡與搜尋卡**（#625）：`read_file`、`grep`、`glob` 成功而且結果帶 `meta` 時，畫帶行號的檔案檢視、分檔的
- *   命中或路徑清單，取代結果文字；`meta` 缺席或形狀不對就照舊畫結果文字。判法在 `lib/tool-result-card.ts`。
+ * - **外觀照 SG**（#1468 Q8）：不再是浮起來的卡片，沒有狀態圖示（它們都是 `aria-hidden`、跟狀態字同義）、沒有執行中的邊框光、
+ *   參數不上色、展開沒有動效。狀態字一定在 trailing 裡（規格 §7：狀態不能只靠動效表達；label 包在 truncate 裡，窄的時候會被截）。
+ *   執行中 SG 會讓按鈕閃（`animate-pulse`），覆寫檔停掉（波谷時次要字的對比不到 4.5，Q5 優先）。
+ * - **展開由這裡控制**（patch `0017`）：停在提問時被停止的那一刻打開，觀測分頁一掛上就是開的（`defaultOpen`）。
+ * - **報讀**（§8）：狀態變化不唸，狀態由狀態列講；按鈕的名稱含標題、摘要與狀態字。
+ * - **SG 欄位表達不了的畫在 children 槽**（patch `0018`，接在 SG 的明細後面）：讀檔卡與搜尋卡（#625）、提問清單（§4.3，#409、#439）、
+ *   交付清單（#441）、待辦快照（#575）、寫檔／改檔的 diff（#601）、撞到輸出上限的說明與寫到一半的結果（#608）、
+ *   背景子代理的模型行與面板（#869、#889）、手機版的歸屬。這幾種的結果只畫在這裡，`toStep` 不設 SG 的 `output`／`error`。
+ *   哪個工具畫哪一種、摘要怎麼取，見 `lib/tool-step.ts` 與它引用的各個 `lib/*-view.ts`。
+ * - **外層那一格 div** 帶 `data-testid="tool-entry"`、`data-status`、`data-variant`，給測試與 guard 找。
  */
 
-import { DELEGATION_TOOL_NAMES, isBackgroundSubagentMeta } from '@nexus/wire';
 import type { AnswerEntry, Attribution, QuestionItem, ToolEntry } from '@nexus/wire';
-import { Check, Hand, X } from 'lucide-react';
+import type { ReactNode } from 'react';
 import { useMemo, useState } from 'react';
 
-import { Chevron } from '@/components/chevron';
 import { Surface } from '@/components/surface';
-import { AgentOrb } from '@/components/agent-orb';
 import { Counts } from '@/components/changes/counts';
 import { SubagentPanel, SubagentStateLabel } from '@/components/tool/subagent-control';
 import { TodoList } from '@/components/todo/list';
-import {
-  ToolDiff,
-  ToolInputBlock,
-  ToolOutputBlock,
-  ToolRead,
-  ToolSearch,
-} from '@/components/tool/result';
+import { ToolDiff, ToolOutputBlock, ToolRead, ToolSearch } from '@/components/tool/result';
 import { Badge } from '@/components/ui/badge';
-import { RowTrigger } from '@/components/row-trigger';
-import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
-import {
-  answersOfText,
-  answerText,
-  ASK_USER_QUESTION,
-  isStoppedQuestion,
-  pairQuestions,
-  questionsOf,
-  questionSummary,
-  STOPPED_QUESTION_TEXT,
-} from '@/lib/question-view';
+import { OutputBlock, StepRow, STEP_LABELS } from '@/components/ui/tool-steps';
+import { answerText } from '@/lib/question-view';
 import type { QuestionAnswer } from '@/lib/question-view';
-import { basename, PRESENT, presentedFilesOf, presentSummary } from '@/lib/present-view';
+import { basename } from '@/lib/present-view';
 import type { PresentedFile } from '@/lib/present-view';
-import { TODO_WRITE, todosOf, todoSummary } from '@/lib/todo-view';
-import { toolDiffView } from '@/lib/tool-diff';
-import { readCardOf, searchCardOf } from '@/lib/tool-result-card';
-import {
-  SUBAGENT_MAX_TOKENS_TEXT,
-  SUBAGENT_PARTIAL_TEXT,
-  subagentMaxTokensOf,
-} from '@/lib/max-tokens-view';
-import { outputOf, showsInput, toolOutput } from '@/lib/tool-output';
-import {
-  SEND_MESSAGE,
-  sendMessageSummary,
-  sendMessageTitle,
-  subagentModelText,
-} from '@/lib/subagent-view';
-import { classifyTool, firstLine, toolInputBody, toolSummary, toolTitle } from '@/lib/tool-view';
+import { SUBAGENT_MAX_TOKENS_TEXT, SUBAGENT_PARTIAL_TEXT } from '@/lib/max-tokens-view';
+import { outputOf } from '@/lib/tool-output';
+import { toStep } from '@/lib/tool-step';
+import { classifyTool } from '@/lib/tool-view';
 
-export const TOOL_STATUS_LABEL = {
-  running: '執行中',
-  // **不是「執行中」也不是「失敗」**：這顆呼叫的本體停下來等一個人回答（問答；子代理照 dsh 不停下來等人，
-  // [#324](https://github.com/DemianLi/nexus-agent/issues/324)）。講「執行中」會讓人以為只要等就好，講「失敗」是說謊（[#239](https://github.com/DemianLi/nexus-agent/issues/239)）。
-  // **停在核准閘門上的不是這一格**：照 dsh 寫「執行中」，等待由核准卡表示（[#317](https://github.com/DemianLi/nexus-agent/issues/317)）。
-  suspended: '等你回答',
-  done: '完成',
-  failed: '失敗',
-} as const satisfies Record<ToolEntry['status'], string>;
+export { TOOL_STATUS_LABEL } from '@/lib/tool-step';
 
 /** 子代理歸屬（列 15）。root 不畫；join 不起來時照講「未歸屬」——寧可說不知道，不要說錯。 */
 export function AttributionBadge({ attribution }: { attribution: Attribution }) {
@@ -96,13 +45,6 @@ export function AttributionBadge({ attribution }: { attribution: Attribution }) 
       {attribution.kind === 'subagent' ? `子代理 ${attribution.name}` : '未歸屬的子代理'}
     </Badge>
   );
-}
-
-function StatusIcon({ status }: { status: ToolEntry['status'] }) {
-  if (status === 'running') return <AgentOrb state="working" size={20} decorative />;
-  if (status === 'suspended') return <Hand aria-hidden className="text-brand size-4" />;
-  if (status === 'done') return <Check aria-hidden className="text-muted-foreground size-4" />;
-  return <X aria-hidden className="text-destructive size-4" />;
 }
 
 /**
@@ -175,13 +117,11 @@ function PresentedFileList({ files }: { files: readonly PresentedFile[] }) {
 
 export function ToolCard({
   entry,
-  beam,
   answer,
   subagentNames,
   defaultOpen = false,
 }: {
   entry: ToolEntry;
-  beam: boolean;
   /** 一掛上就是展開的（觀測分頁在列上按開才掛這張卡，不必再點第二下，#1033）。 */
   defaultOpen?: boolean;
   /** 配到這張提問卡的那一則答案（`pairAnswers`）；別的工具、或配不到時沒有。 */
@@ -189,7 +129,17 @@ export function ToolCard({
   /** 背景子代理的編號 → 名字（`lib/subagent-view.ts`），`send_message` 那張卡用它說出傳給誰；沒給就說不出名字。 */
   subagentNames?: ReadonlyMap<string, string>;
 }) {
-  const stopped = isStoppedQuestion(entry);
+  // 串流中每一格都會重畫；參數一長（整檔的 write）算 diff 不便宜，所以只在這一則、配到的答案或名字表變了才重算。
+  // 名字表要由呼叫端穩住（`useStableNames`），每格新建一個 `Map` 這裡就每格重算（#1682 審查）。
+  const view = useMemo(
+    () =>
+      toStep(entry, {
+        ...(answer === undefined ? {} : { answer }),
+        ...(subagentNames === undefined ? {} : { subagentNames }),
+      }),
+    [entry, answer, subagentNames],
+  );
+  const { stopped } = view;
   const [open, setOpen] = useState(stopped || defaultOpen);
   // 停下來的那一刻這張卡早就在畫面上了（等你回答），所以要在**翻成**停止時打開，初始值只管重播出來的那種。
   const [wasStopped, setWasStopped] = useState(stopped);
@@ -197,203 +147,103 @@ export function ToolCard({
     setWasStopped(stopped);
     if (stopped) setOpen(true);
   }
-  const variant = classifyTool(entry.name);
-  const body = toolInputBody(entry.name, entry.input);
-  const sendLine =
-    entry.name === SEND_MESSAGE
-      ? sendMessageSummary(entry.input, entry.attribution, subagentNames ?? new Map())
-      : undefined;
-  // 背景派出的委派卡：標頭多一個狀態字，展開後多一區對它說話與單獨停止（#869）。
-  const backgroundRunId =
-    DELEGATION_TOOL_NAMES.includes(entry.name) && isBackgroundSubagentMeta(entry.meta)
-      ? entry.meta.runId
-      : undefined;
-  // 這個子代理被指定跑哪一顆模型（#889）：只有模型替它挑了才有，沒有就不畫。
-  const subagentModel =
-    DELEGATION_TOOL_NAMES.includes(entry.name) && isBackgroundSubagentMeta(entry.meta)
-      ? subagentModelText(entry.meta)
-      : undefined;
-  const questions = entry.name === ASK_USER_QUESTION ? questionsOf(entry.input) : undefined;
-  // 答案優先讀線上那一份（#439）：它不分分頁，重新整理與重播都在。本地那一則是舊日誌（沒有 `text`）的退路。
-  const given =
-    questions === undefined ? undefined : (answersOfText(entry.text) ?? answer?.answers);
-  const paired =
-    questions === undefined || given === undefined ? undefined : pairQuestions(questions, given);
-  const presented = entry.name === PRESENT ? presentedFilesOf(entry.input) : undefined;
-  const todos = entry.name === TODO_WRITE ? todosOf(entry.input) : undefined;
-  const todoLine = todos === undefined ? undefined : todoSummary(todos);
-  const failed = entry.status === 'failed' && !stopped;
-  const answered = entry.status === 'done';
-  const { name, status, input, meta } = entry;
-  // 參數一長（整檔的 write）比較就不便宜，串流中每一格都會重畫，所以只在這幾格變了才重算。**`meta` 要算進去**：
-  // 即時路徑先來沒 `meta` 的完成、再來同 id 帶 `meta` 的更正幀，status 早就是 done，只有它變（#625）。
-  const diffView = useMemo(
-    () => toolDiffView({ name, status, input, meta }),
-    [name, status, input, meta],
-  );
-  const readCard = useMemo(
-    () => readCardOf({ name, status, input, meta }),
-    [name, status, input, meta],
-  );
-  const searchCard = useMemo(
-    () => searchCardOf({ name, status, input, meta }),
-    [name, status, input, meta],
-  );
-  const output = toolOutput(entry);
-  const truncated = subagentMaxTokensOf(entry);
-  const inputShown = showsInput(entry.name);
+  const body = toolBody(entry, view);
   return (
-    <Collapsible
-      open={open}
-      onOpenChange={setOpen}
-      render={
-        <Surface
-          tone="raised"
-          className="border-beam"
-          data-testid="tool-entry"
-          data-status={entry.status}
-          data-variant={variant}
-          data-kind="run"
-          data-active={beam}
-        />
-      }
+    <div
+      data-testid="tool-entry"
+      data-status={entry.status}
+      data-variant={classifyTool(entry.name)}
     >
-      <RowTrigger className="gap-2.5 py-2">
-        <span className="flex size-5 shrink-0 items-center justify-center">
-          {stopped ? (
-            <X aria-hidden className="text-muted-foreground size-4" />
-          ) : (
-            <StatusIcon status={entry.status} />
-          )}
-        </span>
-        <span className="text-ui shrink-0 font-medium">
-          {entry.name === SEND_MESSAGE
-            ? sendMessageTitle(entry.attribution)
-            : toolTitle(entry.name)}
-        </span>
-        {/* 手機寬度讓給摘要：標題已經講了是哪一類，工具名是給熟的人對照的；不讓的話改檔卡的路徑只剩「/…」（#625 實機）。 */}
-        <code className="text-muted-foreground hidden shrink-0 font-mono text-tip sm:inline">
-          {entry.name}
-        </code>
-        {/* 外層吃掉剩下的寬度，裡面那格才截斷：「+N」要貼在摘要後面，不是被推到最右邊的狀態字旁邊。 */}
-        <span className="flex min-w-0 flex-1 gap-1.5 text-tip">
-          <span
-            className={`min-w-0 truncate ${failed ? 'text-destructive' : 'text-muted-foreground'}`}
-          >
-            {/* 失敗時這一格換成錯誤的第一行（照 dsh `errorSummary`）：收著也看得到為什麼。 */}
-            {stopped
-              ? STOPPED_QUESTION_TEXT
-              : failed && entry.error !== undefined
-                ? truncated !== undefined
-                  ? SUBAGENT_MAX_TOKENS_TEXT
-                  : firstLine(entry.error)
-                : questions !== undefined
-                  ? questionSummary(questions, answered, given)
-                  : presented !== undefined
-                    ? presentSummary(presented)
-                    : todoLine !== undefined
-                      ? todoLine.text
-                      : (sendLine ?? toolSummary(entry.name, entry.input))}
-          </span>
-          {todoLine !== undefined &&
-            todoLine.extra > 0 &&
-            !(failed && entry.error !== undefined) && (
-              <span className="text-muted-foreground shrink-0" data-testid="todo-extra">
-                <span aria-hidden>+{todoLine.extra}</span>
-                <span className="sr-only">，另有 {todoLine.extra} 項進行中</span>
+      <StepRow
+        step={view.step}
+        open={open}
+        onOpenChange={setOpen}
+        trailing={
+          <>
+            {/* 手機寬度讓給摘要：標題已經講了是哪一類，工具名是給熟的人對照的（#625 實機）。 */}
+            <code className="hidden shrink-0 font-mono text-tip sm:inline">{entry.name}</code>
+            {view.todoExtra > 0 && (
+              <span className="shrink-0 text-tip" data-testid="todo-extra">
+                <span aria-hidden>+{view.todoExtra}</span>
+                <span className="sr-only">，另有 {view.todoExtra} 項進行中</span>
               </span>
             )}
-          {diffView !== undefined && (
-            <Counts added={diffView.totals.added} deleted={diffView.totals.removed} />
-          )}
-        </span>
-        {backgroundRunId !== undefined && <SubagentStateLabel runId={backgroundRunId} />}
-        <span className="hidden sm:inline-flex">
-          <AttributionBadge attribution={entry.attribution} />
-        </span>
-        <Badge variant={failed ? 'destructive' : 'secondary'} className="shrink-0">
-          {stopped ? '已停止' : TOOL_STATUS_LABEL[entry.status]}
-        </Badge>
-        <Chevron className="text-muted-foreground" />
-      </RowTrigger>
-      <CollapsibleContent className="data-closed:animate-collapsible-up data-open:animate-collapsible-down overflow-hidden">
-        <div className="m-1 mt-0 flex flex-col gap-2">
-          {entry.attribution.kind !== 'root' && (
-            <div className="px-2 sm:hidden">
+            {view.diffView !== undefined && (
+              <Counts added={view.diffView.totals.added} deleted={view.diffView.totals.removed} />
+            )}
+            {view.backgroundRunId !== undefined && (
+              <SubagentStateLabel runId={view.backgroundRunId} />
+            )}
+            <span className="hidden shrink-0 sm:inline-flex">
               <AttributionBadge attribution={entry.attribution} />
-            </div>
-          )}
-          {subagentModel !== undefined && (
-            <p data-subagent-model="" className="text-muted-foreground px-3 pt-1 text-tip">
-              {subagentModel}
-            </p>
-          )}
-          {questions !== undefined ? (
-            <>
-              <QuestionList questions={questions} answers={paired} />
-              {answered && paired === undefined && (
-                <p className="text-muted-foreground px-3 pb-1 text-tip">
-                  {given === undefined
-                    ? '這次的答案讀不出來：結果文字太長被截過，或不是預期的形狀。'
-                    : '答案和題目對不起來，只列題目。'}
-                </p>
-              )}
-            </>
-          ) : presented !== undefined && presented.length > 0 ? (
-            <PresentedFileList files={presented} />
-          ) : todos !== undefined ? (
-            <TodoList todos={todos} />
-          ) : diffView !== undefined ? (
-            <ToolDiff fragments={diffView.fragments} />
-          ) : readCard !== undefined ? (
-            <ToolRead card={readCard} />
-          ) : searchCard !== undefined ? (
-            <ToolSearch card={searchCard} />
-          ) : (
-            <>
-              {inputShown &&
-                (body === undefined ? (
-                  <p className="text-muted-foreground px-3 py-2 text-tip">沒有參數。</p>
-                ) : (
-                  <ToolInputBlock
-                    text={body.text}
-                    lang={body.lang}
-                    streaming={entry.status === 'running'}
-                  />
-                ))}
-              {output !== undefined && <ToolOutputBlock output={output} />}
-              {!inputShown && output === undefined && entry.error === undefined && (
-                <p className="text-muted-foreground px-3 py-2 text-tip">
-                  {entry.status === 'running' ? '還沒有結果。' : '沒有結果文字。'}
-                </p>
-              )}
-            </>
-          )}
-          {truncated !== undefined ? (
-            <>
-              <Surface as="p" tone="stage" className="text-destructive p-3 text-tip">
-                {SUBAGENT_MAX_TOKENS_TEXT}
-                {truncated.partial.trim() !== '' && SUBAGENT_PARTIAL_TEXT}
-              </Surface>
-              {truncated.partial.trim() !== '' && (
-                <ToolOutputBlock output={outputOf(truncated.partial)} />
-              )}
-            </>
-          ) : (
-            entry.error !== undefined &&
-            !stopped && (
-              <Surface
-                as="pre"
-                tone="stage"
-                className="text-destructive p-3 font-mono text-tip whitespace-pre-wrap"
-              >
-                {entry.error}
-              </Surface>
-            )
-          )}
-          {backgroundRunId !== undefined && <SubagentPanel runId={backgroundRunId} />}
-        </div>
-      </CollapsibleContent>
-    </Collapsible>
+            </span>
+            <Badge variant={view.failed ? 'destructive' : 'secondary'} className="shrink-0">
+              {view.statusText}
+            </Badge>
+          </>
+        }
+      >
+        {body}
+      </StepRow>
+    </div>
   );
+}
+
+/** children 槽：SG 欄位表達不了的那幾樣；什麼都沒有就是 `undefined`（不然 SG 會當成有東西可開）。 */
+function toolBody(entry: ToolEntry, view: ReturnType<typeof toStep>): ReactNode {
+  const parts: ReactNode[] = [];
+  if (entry.attribution.kind !== 'root')
+    parts.push(
+      <div key="attribution" className="sm:hidden">
+        <AttributionBadge attribution={entry.attribution} />
+      </div>,
+    );
+  if (view.subagentModel !== undefined)
+    parts.push(
+      <p key="model" data-subagent-model="" className="text-muted-foreground text-tip">
+        {view.subagentModel}
+      </p>,
+    );
+  if (view.questions !== undefined) {
+    parts.push(<QuestionList key="questions" questions={view.questions} answers={view.paired} />);
+    if (view.answered && view.paired === undefined)
+      parts.push(
+        <p key="questions-note" className="text-muted-foreground text-tip">
+          {view.given === undefined
+            ? '這次的答案讀不出來：結果文字太長被截過，或不是預期的形狀。'
+            : '答案和題目對不起來，只列題目。'}
+        </p>,
+      );
+  } else if (view.presented !== undefined && view.presented.length > 0)
+    parts.push(<PresentedFileList key="presented" files={view.presented} />);
+  else if (view.todos !== undefined) parts.push(<TodoList key="todos" todos={view.todos} />);
+  else if (view.diffView !== undefined)
+    parts.push(<ToolDiff key="diff" fragments={view.diffView.fragments} />);
+  else if (view.readCard !== undefined) parts.push(<ToolRead key="read" card={view.readCard} />);
+  else if (view.searchCard !== undefined)
+    parts.push(<ToolSearch key="search" card={view.searchCard} />);
+  if (view.truncated !== undefined) {
+    const partial = view.truncated.partial.trim() !== '';
+    parts.push(
+      <Surface key="truncated" as="p" tone="stage" className="text-destructive p-3 text-tip">
+        {SUBAGENT_MAX_TOKENS_TEXT}
+        {partial && SUBAGENT_PARTIAL_TEXT}
+      </Surface>,
+    );
+    if (partial)
+      parts.push(<ToolOutputBlock key="partial" output={outputOf(view.truncated.partial)} />);
+  } else if (view.resultInChildren && view.failed && entry.error !== undefined)
+    // 有自己一份檢視的那幾種失敗了：錯誤照 SG 的錯誤框畫，接在檢視後面（SG 的 `error` 沒設，不會畫兩次）。
+    parts.push(
+      <OutputBlock key="error" label={STEP_LABELS.error} text={entry.error} tone="error" />,
+    );
+  if (view.emptyNote !== undefined)
+    parts.push(
+      <p key="empty" className="text-muted-foreground text-tip">
+        {view.emptyNote}
+      </p>,
+    );
+  if (view.backgroundRunId !== undefined)
+    parts.push(<SubagentPanel key="subagent" runId={view.backgroundRunId} />);
+  return parts.length === 0 ? undefined : parts;
 }

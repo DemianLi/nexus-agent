@@ -239,6 +239,15 @@ describe('registry 檔的改動還在', () => {
       expect(vendor()).toMatch(/data-slot="output-block" className=\{cn\("glass-panel\b/);
       expect(vendor()).toMatch(/data-slot="step-list" className=\{cn\("glass-panel\b/);
     });
+
+    test('第 66 條：段裡空的那一則連 SG 包的那層一起藏；vendor 仍替每個 child 包一層有 padding 的 div', () => {
+      expect(overrides()).toContain(
+        '[data-slot="step-list"] > div:has(> [data-slot="message-scroller-item"]:empty) {\n  display: none;\n}',
+      );
+      expect(vendor()).toContain(
+        'React.Children.map(children, (child) => <div className="px-2.5 py-1.5">{child}</div>)',
+      );
+    });
   });
 
   // #1281 的三條（側欄、dropdown-menu、cmdk 的 text-ui）照 #1468 Q19 拿掉：dropdown-menu 與 cmdk 隨 #1583、側欄隨 #1680 換成 vendor 版。

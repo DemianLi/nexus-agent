@@ -6,7 +6,7 @@
 
 | 層 | 放什麼 | 規則 |
 | --- | --- | --- |
-| `src/components/ui/` | shadcn registry 裝進來的元件，或 vendor 的 solid-glass 元件的 nexus 層 | 只放 registry 來的；檔頭寫來源與版本；裝法見規格 §4.1。已換成 solid-glass 的（#1523 起：button、input、textarea、input-group、separator、skeleton、card、badge；#1583 起：dialog、popover、sheet、tooltip、alert-dialog、dropdown-menu、command；#1591 起：composer、context-ring）只轉出 `src/vendor/solid-glass/components/ui/` 的原檔，本地修改寫在這一層或覆寫檔，登記在 [vendor README](src/vendor/solid-glass/README.md) 的「本地修改」。自己的元件不要放這裡 |
+| `src/components/ui/` | shadcn registry 裝進來的元件，或 vendor 的 solid-glass 元件的 nexus 層 | 只放 registry 來的；檔頭寫來源與版本；裝法見規格 §4.1。已換成 solid-glass 的（#1523 起：button、input、textarea、input-group、separator、skeleton、card、badge；#1583 起：dialog、popover、sheet、tooltip、alert-dialog、dropdown-menu、command；#1591 起：composer、context-ring；#1682 起：tool-steps、diff-view）只轉出 `src/vendor/solid-glass/components/ui/` 的原檔，本地修改寫在這一層或覆寫檔，登記在 [vendor README](src/vendor/solid-glass/README.md) 的「本地修改」。自己的元件不要放這裡 |
 | `src/components/*.tsx`（含各資料夾） | 我們自己的元件 | 資料夾按功能分（`tool/`、`todo/`、`sidebar/`…），檔名不重複資料夾名 |
 | `src/components/row-trigger.tsx` 這類 | 兩處以上共用的自製積木 | 見下面「什麼時候抽」 |
 | `src/lib/` | 不畫畫面的邏輯與投影 | 元件只讀它的結果 |
@@ -49,8 +49,8 @@
 | 階 | 用在 | 例 |
 | --- | --- | --- |
 | `text-body`（14／23） | 內文，與本來就是內文大小的按鈕、選單項 | 對話、`Button` 預設（vendor 原文寫 `text-sm`，同字級）、下拉選單與 cmdk 的項目、右側欄的分頁鈕 |
-| `text-ui`（13／18） | **可以點的**與**當標題的**小字 | 小字的可展開列（思考過程、待辦、送出佇列、觀測與成本分頁的列）、輸入框底列的膠囊鈕、「這一輪的過程」、成本分頁的區段標題、卡片標頭（工具卡的標題、計劃、等待核准） |
-| `text-tip`（12／16） | 小字說明、附註、時間、計數 | 工具名與摘要、`Badge`（vendor 原文寫 `text-xs`，同字級）、`xs` 按鈕（vendor 原文寫 `text-xs`：外觀照 SG，#1468 Q8、Q19 拿掉了 #1281 按鈕那一條，下面「按鈕不縮成 `text-tip`」管的是產品原始碼）、tooltip、快捷鍵提示、時間戳、popover 裡數字上面的欄位名、卡片裡單一區塊上面的小標籤（「結果」「呼叫參數」「子代理的對話」）、錯誤與提示句 |
+| `text-ui`（13／18） | **可以點的**與**當標題的**小字 | 小字的可展開列（思考過程、待辦、送出佇列、觀測與成本分頁的列）、輸入框底列的膠囊鈕、「這一輪的過程」、成本分頁的區段標題、卡片標頭（計劃、等待核准）；工具卡與工具段那一列的字照 SG（vendor `tool-steps` 寫死 13px／12.5px，#1682） |
+| `text-tip`（12／16） | 小字說明、附註、時間、計數 | 工具名與摘要、`Badge`（vendor 原文寫 `text-xs`，同字級）、`xs` 按鈕（vendor 原文寫 `text-xs`：外觀照 SG，#1468 Q8、Q19 拿掉了 #1281 按鈕那一條，下面「按鈕不縮成 `text-tip`」管的是產品原始碼）、tooltip、快捷鍵提示、時間戳、popover 裡數字上面的欄位名、卡片裡單一區塊上面的小標籤（「子代理的對話」；工具卡的「參數」「結果」「錯誤」是 SG 結果框的標題，照 SG）、錯誤與提示句 |
 | `text-micro`（11） | 只有程式碼區塊的語言標籤。它在 CSS 裡用 `var(--text-micro)`，不是 class，所以搜 `text-micro` 這個 class 搜不到 | 回覆裡程式碼區塊左上角的「ts」（`src/styles/markdown.css` 的 `.md-code-lang`） |
 
 怎麼判：
@@ -91,6 +91,15 @@
 - **確認框的 `AlertDialogAction` 按了就關**（包裝層接了 Close），`onClick` 照樣會跑；不用自己在 `onClick` 裡關。
 - **command 的勾自己畫**：vendor 附在每個選項後面的勾被藏掉了（覆寫檔第 27 條）。要標「目前選的」就在選項裡自己放一顆 `<Check aria-label="目前選的" />`（`composer.tsx` 的 `@` 選單）。`CommandDialog` 不自己包 `Command`，由呼叫端包。
 - **寬度蓋 SG 的值要寫同一組前綴**：sheet 寫 `data-[side=right]:w-full`、`data-[side=right]:sm:max-w-none`，dialog 寫 `sm:max-w-lg`，cn 才會把 SG 的 `data-[side=*]:w-3/4`、`sm:max-w-sm` 拿掉。
+
+## 工具卡（SG tool-steps）
+
+#1682 起工具卡是 SG 的 `StepRow`、工具段是 `StepGroup`（vendor README 的「本地修改」第 56–66 條）。寫呼叫端時：
+
+- **`ToolEntry` 只經 `lib/tool-step.ts` 轉成 `Step`**：狀態收成 SG 的三態（`running`／`done`／`error`），四格狀態的字由卡放在 `trailing` 的 `Badge`。
+- **結果自己畫的種類不設 SG 的 `output`／`error`**（讀檔、搜尋、diff、提問、交付、待辦、撞到輸出上限的子代理）：畫在 children，SG 的結果框只給通用卡，不畫兩次。展開後什麼都沒有的列 SG 會停用按鈕，所以空的時候放一句 `emptyNote`。
+- **`StepGroup` 只有一步、而且沒在跑時退化成單獨一列**，`children`、`trailing`、`open` 都不會轉過去：工具段至少兩顆（`tool-runs.ts` 的 `MIN_TOOLS`，有測試釘住）。
+- **段裡沒畫東西的 child 照樣占一格**（SG 逐個包一層有 padding 的 div）：`MessageScrollerItem` 是空的那格由覆寫檔第 66 條藏掉，別在 child 外面再包東西，不然藏不到。
 
 ## 新增 shadcn 元件
 
