@@ -62,8 +62,11 @@ export function isAlive(pid: number): boolean {
     process.kill(pid, 0);
     return true;
   } catch (error) {
-    // EPERM：行程在，屬於別的使用者。
-    return (error as NodeJS.ErrnoException).code === 'EPERM';
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return false;
+    // EPERM：行程在，屬於別的使用者。其他錯（EINVAL 之類）不是「不在了」，照丟，不讓 `expect(isAlive(pid)).toBe(false)` 假通過。
+    if (code === 'EPERM') return true;
+    throw error;
   }
 }
 

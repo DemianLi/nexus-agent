@@ -163,7 +163,7 @@ $ echo '{"stop_hook_active":false}' | bash ~/.claude/stop-hook-git-check.sh; ech
 
 測試的清理對 **pid 0** 送了 `SIGKILL`。`process.kill(0, …)` 的對象是呼叫者自己的**行程群組**——vitest 主行程、全部 worker、和從同一個 shell 起的外層指令一起被殺。pid 0 從哪來：假子行程用 `writeFileSync` 寫 pid 檔，這會先建出**空檔**再寫字；driver 一看到檔案存在就 `process.exit(0)`，子行程剛好在兩步之間被收掉，檔案永遠是空的；測試 `Number(讀到的字串)`，而 `Number('') === 0`。
 
-修法與守衛：pid 一律從 `readPidFile` 取（等到內容是完整的正整數才回）、訊號一律用 `signalPid`（pid 不是大於 1 的整數就丟錯、不送），都在 `apps/harness/src/test-pids.fixture.ts`；假子行程改成「寫暫存檔再 `rename`」；`no-group-signal.test.ts` 掃整棵測試原始碼，繞過 helper 直接送非 0 訊號的一律紅。serve 本身不受影響：`apps/harness/src` 與 `packages/*/src` 的產品程式碼只有一處 `process.kill`，訊號是 `0`（存在性檢查，`plugin-journal.ts`，pid 0 已排除），其餘都是對 `ChildProcess` 物件呼叫 `.kill()`；發版腳本 `scripts/release/verify-packed-install.ts` 的 `process.kill(-child.pid, …)` 對的是自己用 `detached: true` 起的群組，`child.pid` 未定義就直接 return。
+修法與守衛：pid 一律從 `readPidFile` 取（等到內容是完整的正整數才回）、訊號一律用 `signalPid`（pid 不是大於 1 的整數就丟錯、不送），都在 `apps/harness/src/test-pids.fixture.ts`；假子行程改成「寫暫存檔再 `rename`」；`no-group-signal.test.ts` 掃整棵測試原始碼，繞過 helper 直接送非 0 訊號的一律紅。產品碼裡直接呼叫 `process.kill` 的只有一處，訊號是 `0`（存在性檢查，`plugin-journal.ts`，pid 0 已在它前面排除）。**但 `ChildProcess.kill()` 不是無害的**：spawn 失敗、`'error'` 事件還沒送到之前，`child.pid` 是 `undefined`，這時 `child.kill(sig)` 送出去的就是 `kill(0, sig)`，整個行程群組（包括 serve 自己）。`ripgrep-runner.ts` 早有守衛（#1705），`git.ts` 的收尾與 `host-exit-children.ts` 的強殺窗口很窄、尚未守衛，修法在 [#1742](https://github.com/DemianLi/nexus-agent/issues/1742)，不在這張。要實測這類探針只能用下面的 setsid 配方隔離，別在測試行程的群組裡跑；另外 `child_process.execFile` **不認 `detached`**（只有 `spawn` 認），想靠 `detached` 把探針關進自己的群組要用 `spawn`；發版腳本 `scripts/release/verify-packed-install.ts` 的 `process.kill(-child.pid, …)` 對的是自己用 `detached: true` 起的群組，`child.pid` 未定義就直接 return。
 
 ### 怎麼分辨「無聲結束」跟「全綠」
 
@@ -179,7 +179,7 @@ grep -E "Test Files|Tests " /tmp/harness-all.txt || echo "沒有摘要：沒跑�
 
 ```bash
 perl -MPOSIX -e 'my $p = fork(); if ($p == 0) { POSIX::setsid(); exec @ARGV or die } waitpid($p, 0); my $s = $? & 127; exit($s ? 128 + $s : $? >> 8);' \
-  pnpm exec vitest run > /tmp/harness-all.txt 2>&1; echo EXIT=$?
+  rtk proxy pnpm exec vitest run > /tmp/harness-all.txt 2>&1; echo EXIT=$?
 ```
 
-被群組訊號殺掉時這會印 `EXIT=137`（128 + 9），正常結束是 vitest 自己的退出碼。macOS 沒有 `setsid` 指令，所以用 perl。
+（兩段都用 `rtk proxy` 是為了拿到原始輸出；沒裝 rtk 的環境把 `rtk proxy ` 拿掉即可。）被群組訊號殺掉時這會印 `EXIT=137`（128 + 9），正常結束是 vitest 自己的退出碼。macOS 沒有 `setsid` 指令，所以用 perl。

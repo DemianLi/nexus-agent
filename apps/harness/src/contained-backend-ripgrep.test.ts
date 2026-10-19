@@ -323,7 +323,7 @@ describe('取消與逾時', () => {
       signal: controller.signal,
       executable,
     });
-    await vi.waitFor(async () => expect(await exists(pidFile)).toBe(true));
+    await readPidFile(pidFile); // 內容完整才算起來（shim 的 `echo $$ >` 是先建空檔、後寫字）
     controller.abort();
 
     const outcome = await pending;
@@ -358,7 +358,7 @@ describe('取消與逾時', () => {
       executable,
       internals: { killGraceMs: 300 },
     });
-    await vi.waitFor(async () => expect(await exists(pidFile)).toBe(true));
+    await readPidFile(pidFile); // 內容完整才算起來（shim 的 `echo $$ >` 是先建空檔、後寫字）
     controller.abort();
 
     const outcome = await pending;
@@ -616,7 +616,7 @@ describe('掛進真的組裝之後', () => {
     const running = runAgent([{ name: 'grep', args: { pattern: 'needle', path: '/' } }], {
       signal: controller.signal,
     });
-    await vi.waitFor(async () => expect(await exists(pidFile)).toBe(true), { timeout: 20_000 });
+    await readPidFile(pidFile, 20_000);
     controller.abort();
 
     await running;
