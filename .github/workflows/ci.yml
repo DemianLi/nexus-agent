@@ -105,6 +105,10 @@ jobs:
       - name: 檢查升級指南
         run: python3 .github/scripts/check_upgrade_guides.py
 
+      # 自寫 Markdown 的相對連結（#1537，照 dsh `verify-md-links`）。同上放在 plan，純文件 PR 才擋得到。
+      - name: 檢查 Markdown 相對連結
+        run: python3 .github/scripts/check_md_links.py
+
       - name: 攔截大檔案
         run: |
           set -euo pipefail

@@ -1,4 +1,4 @@
-"""check_upgrade_guides.py 的單元測試（#1537）：路徑、frontmatter、段落、相對連結，以及版本目錄要是已存在的 tag。"""
+"""check_upgrade_guides.py 的單元測試（#1537）：路徑、frontmatter、段落，以及版本目錄要是已存在的 tag。"""
 
 from __future__ import annotations
 
@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from check_upgrade_guides import collect_violations, github_slug
+from check_upgrade_guides import collect_violations
 
 TAGS = {'v0.5.19'}
 
@@ -37,12 +37,12 @@ description: 舊的 cordis.patch.yml 第一次啟動時遷進變更紀錄。
 """
 
 
-def tree(files: dict[str, str], others: dict[str, str] | None = None) -> list[str]:
-    """files 放在 docs/upgrade-guide 底下，others 相對於 repo 根。"""
+def tree(files: dict[str, str]) -> list[str]:
+    """files 放在 docs/upgrade-guide 底下。"""
     with tempfile.TemporaryDirectory() as tmp:
         root = Path(tmp)
-        for rel, text in [*((f'docs/upgrade-guide/{k}', v) for k, v in files.items()), *(others or {}).items()]:
-            path = root / rel
+        for rel, text in files.items():
+            path = root / 'docs/upgrade-guide' / rel
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_text(text, encoding='utf-8')
         return collect_violations(root, TAGS)
@@ -159,67 +159,6 @@ class Sections(unittest.TestCase):
         self.assertEqual(guide(GOOD + '\n***\n\n- - -\n'), [])
         # `- - -` 是分隔線、不開清單，下一行縮兩格的 `##` 仍是頂層標題。
         self.assertTrue(any('標題要是' in v for v in guide(GOOD + '\n- - -\n  ## 備註\n')))
-
-
-OPS = """# 操作
-
-## 升級與回滾
-
-```bash
-# 不是標題
-```
-
-### 後台改清單：`plugin` 寫入口與變更紀錄
-
-## 重複
-
-## 重複
-
-<a id="手寫錨點"></a>
-"""
-
-
-def linked(link: str) -> list[str]:
-    body = GOOD.replace('舊版讀 home 的 `cordis.patch.yml`。', f'舊版讀 home 的 `cordis.patch.yml`，見 {link}。')
-    return tree({'v0.5.19/plugin-journal-migration/guide.md': body}, {'docs/ops.md': OPS, 'src/a.ts': ''})
-
-
-class Links(unittest.TestCase):
-    def test_github_slug(self) -> None:
-        self.assertEqual(github_slug('後台改清單：plugin 寫入口與變更紀錄'), '後台改清單plugin-寫入口與變更紀錄')
-        self.assertEqual(github_slug('Showcase: web_fetch'), 'showcase-web_fetch')
-
-    def test_resolving_links_pass(self) -> None:
-        for link in (
-            '[升級](../../../ops.md#升級與回滾)',
-            '[改清單](../../../ops.md#後台改清單plugin-寫入口與變更紀錄)',
-            '[第二個重複](../../../ops.md#重複-1)',
-            '[手寫](../../../ops.md#手寫錨點)',
-            '[編碼](../../../ops.md#%E5%8D%87%E7%B4%9A%E8%88%87%E5%9B%9E%E6%BB%BE)',
-            '[原始碼](../../../../src/a.ts#L1)',
-            '[外部](https://example.com/x.md#nope)',
-            '[根](/docs/nope.md)',
-            '[本檔](#變更)',
-            '`[程式碼裡](nope.md)`',
-        ):
-            with self.subTest(link=link):
-                self.assertEqual(linked(link), [])
-
-    def test_missing_target(self) -> None:
-        violations = linked('[沒有](../../../nope.md)')
-        self.assertEqual(len(violations), 1)
-        self.assertIn('不存在的檔案', violations[0])
-
-    def test_missing_anchor(self) -> None:
-        for link in ('[沒有](../../../ops.md#不存在)', '[fence 裡的](../../../ops.md#不是標題)', '[第三個重複](../../../ops.md#重複-2)', '[本檔](#沒有這段)'):
-            with self.subTest(link=link):
-                self.assertTrue(any('沒有這個錨點' in v for v in linked(link)))
-
-    def test_link_definition_is_checked(self) -> None:
-        self.assertTrue(any('不存在的檔案' in v for v in guide(GOOD + '\n[參考]: ../../../nope.md\n')))
-
-    def test_link_inside_fence_is_not_checked(self) -> None:
-        self.assertEqual(guide(GOOD + '\n```\n[不查](nope.md)\n```\n'), [])
 
 
 if __name__ == '__main__':
