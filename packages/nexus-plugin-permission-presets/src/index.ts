@@ -33,6 +33,10 @@
  *    重寫一份加回（見 `presets.ts` 的 `DEFAULT_PRESETS`）；沒加回又用 `--sandbox danger-full-access` 起，新會話在起動當下失敗。
  * 7. **（遷上樹新增，#1491）目錄是逐條 thread 的、子代理組名由參與者寫、參與者安裝失敗只記 warn。** 三條偏離的理由、類別與撤除條件登記在
  *    `@nexus/permission-presets` 的檔頭與 `docs/plugin-contract.md`。
+ * 8. **切換核准政策時沒有對模型講一聲。** dsh 的 `user-approval` 在政策變動時用 `agent.inject` 排一則使用者訊息給下一步模型
+ *    （`packages/interaction/user-approval/src/index.ts:184-187`，`687f282e`：「The approval policy changed from … to … (changed by the user).」）；
+ *    我們的 `/permission` 一直沒有這一步（相容層就沒有，這張遷移不改行為）。
+ *    類別：遷移卡不改行為（暫時）。**撤除條件**：之後的權限卡決定要不要補這則訊息（補了就是行為改變，要自己一張卡）。
  *
  * ## 形狀（#1491：第十四顆搬上 Cordis 樹的插件）
  *

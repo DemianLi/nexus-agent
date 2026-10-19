@@ -943,8 +943,8 @@ export async function createCliAgent(
     );
   }
   // **有圍堵而 `permission-presets` 那一列沒掛：同樣起不來。** `/sandbox` 已經拿掉（#437），`/permission` 是切沙箱與核准的唯一入口；
-  // 那一列不在，使用者就沒有任何辦法在會話中收緊或放寬。掛了但 `apply` 拋（組合表壞了、`defaultPreset` 與 `--sandbox` 矛盾）
-  // 則由 `startup-audit.ts` 的必掛名單接住——那一列的 id 在 `REQUIRED_ENTRY_IDS` 上。
+  // 那一列不在，使用者就沒有任何辦法在會話中收緊或放寬。掛了但 `apply` 拋（組合表壞了）則由 `startup-audit.ts` 的必掛名單接住——那一列的 id 在 `REQUIRED_ENTRY_IDS` 上；
+  // `defaultPreset` 與 `--sandbox` 矛盾、起始值對不上任何一組這兩種逐條 thread 的錯在 `start` 拋（下面「權限組合的起始值」那一段），包成 `AssemblyDropError`。
   if (
     workspaceRoot !== undefined &&
     !startupEntryMounted(plugins, { name: PERMISSION_PRESETS_PLUGIN_NAME })
@@ -959,7 +959,7 @@ export async function createCliAgent(
   // **核准政策的控制器也建在這裡**，理由同上（一條 thread 一格）。`approvals.policy` 把它的來源交給閘門與升級工具，
   // `approvalPolicy` 服務把控制器本身交給 `approval-gate` 那一列去接日誌；**與 `approvals.enabled`（入口有沒有人在）是兩件事**。
   //
-  // **起始值：續接用日誌記的，新會話由 `--sandbox` 推**（偏離，登記在 `@nexus/plugin-permission-presets` 檔頭第 1 條）：
+  // **起始值：續接用日誌記的，新會話由 `--sandbox` 推**（偏離，登記在 `packages/nexus-plugin-permission-presets/src/index.ts` 檔頭第 1 條）：
   // 全開就是 `never`、其他是 `ask`，同 dsh 的 `DSH_PERMISSION_MODE`。**續接的呼叫端一定會把 `approvalPolicy` 給滿**
   // （`cli.ts`、`serve.ts` 的合併：記著的，沒記就 `ask`）——否則一份只記了全開沙箱、沒記核准的舊日誌會在這裡被推成 `never`。
   const approvalPolicy = new ApprovalPolicyController(
