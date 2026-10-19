@@ -22,6 +22,7 @@ import { HARNESS_HOME_ENV } from './harness-home.js';
 import { toAgentInvocation } from './messages.js';
 import { loadDefaultPlugins } from './plugin-config.js';
 import type { ScriptedChatModel } from './scripted-model.js';
+import { signalPid } from './test-pids.fixture.js';
 import { seedHomePatch } from './plugin-journal.fixture.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
@@ -178,7 +179,7 @@ describe('MCP 掛上之後掉線', () => {
     };
     const first = alive();
     expect(first.length).toBeGreaterThan(0);
-    for (const pid of first) process.kill(pid, 'SIGKILL');
+    for (const pid of first) signalPid(pid, 'SIGKILL');
     const heard = (needle: string) =>
       lines.some(
         (line) =>

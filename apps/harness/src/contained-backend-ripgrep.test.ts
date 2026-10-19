@@ -41,6 +41,7 @@ import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import { ripgrepStatus } from './rg-path.js';
 import { runRipgrep } from './ripgrep-runner.js';
+import { isAlive, readPidFile } from './test-pids.fixture.js';
 
 // 包一層讓個別測試能換掉解析結果（abort 接線、解析不到）；預設原樣呼叫真的。
 vi.mock('./rg-path.js', async (importOriginal) => {
@@ -91,15 +92,8 @@ async function script(name: string, body: string): Promise<string> {
   return file;
 }
 
-/** 行程還活著嗎（`kill 0` 對已回收的行程丟 `ESRCH`）。 */
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
+/** 行程還活著嗎（`kill 0` 對已回收的行程丟 `ESRCH`）。pid 不合法時丟錯（#1712）。 */
+const alive = isAlive;
 
 /** 寫一份 `RIPGREP_CONFIG_PATH` 指向的設定檔並設進行程環境。 */
 async function configWith(lines: string[]): Promise<void> {
@@ -271,7 +265,7 @@ describe('輸出上限', () => {
     expect(result.matches).toBeUndefined();
     expect(result.error).toContain('narrow');
     expect(result.error).toContain('1024');
-    expect(alive(Number((await readFile(pidFile, 'utf8')).trim()))).toBe(false);
+    expect(alive(await readPidFile(pidFile))).toBe(false);
   }, 15_000);
 
   it('runner 的碼是 SEARCH_RAW_OUTPUT_OVERFLOW', async () => {
@@ -336,7 +330,7 @@ describe('取消與逾時', () => {
 
     expect(Date.now() - started).toBeLessThan(3500);
     expect(outcome).toMatchObject({ kind: 'error', code: SEARCH_ABORTED });
-    const pid = Number((await readFile(pidFile, 'utf8')).trim());
+    const pid = await readPidFile(pidFile);
     expect(alive(pid)).toBe(false);
   }, 15_000);
 
@@ -351,7 +345,7 @@ describe('取消與逾時', () => {
     });
 
     expect(outcome).toMatchObject({ kind: 'error', code: SEARCH_ABORTED });
-    expect(alive(Number((await readFile(pidFile, 'utf8')).trim()))).toBe(false);
+    expect(alive(await readPidFile(pidFile))).toBe(false);
   }, 15_000);
 
   it('SIGTERM 被忽略時，寬限之後升級成 SIGKILL', async () => {
@@ -370,7 +364,7 @@ describe('取消與逾時', () => {
     const outcome = await pending;
 
     expect(outcome).toMatchObject({ kind: 'error', code: SEARCH_ABORTED });
-    expect(alive(Number((await readFile(pidFile, 'utf8')).trim()))).toBe(false);
+    expect(alive(await readPidFile(pidFile))).toBe(false);
   }, 15_000);
 });
 
@@ -627,7 +621,7 @@ describe('掛進真的組裝之後', () => {
 
     await running;
 
-    const pid = Number((await readFile(pidFile, 'utf8')).trim());
+    const pid = await readPidFile(pidFile);
     await vi.waitFor(() => expect(alive(pid)).toBe(false), { timeout: 5_000 });
   }, 60_000);
 

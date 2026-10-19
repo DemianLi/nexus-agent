@@ -23,7 +23,10 @@ const PACKAGE_DIR = fileURLToPath(new URL('..', import.meta.url));
 
 /** 假 git：把 pid 寫進檔、忽略 SIGTERM、一直掛著；`FAKE_GIT_QUICK=1` 時寫完就結束。 */
 const FAKE_GIT = `#!${process.execPath}
-require('node:fs').writeFileSync(process.env.FAKE_GIT_PID_FILE, String(process.pid));
+// 寫暫存檔再 rename：pid 檔一出現就是完整的（直接 writeFileSync 會先建出空檔，#1712）。
+const fs = require('node:fs');
+fs.writeFileSync(process.env.FAKE_GIT_PID_FILE + '.tmp', String(process.pid));
+fs.renameSync(process.env.FAKE_GIT_PID_FILE + '.tmp', process.env.FAKE_GIT_PID_FILE);
 if (process.env.FAKE_GIT_QUICK === '1') process.exit(0);
 process.on('SIGTERM', () => {});
 setInterval(() => {}, 1000);
@@ -62,17 +65,41 @@ if (${JSON.stringify(mode)} === 'tracked') {
 const cleanup: string[] = [];
 const leftovers: number[] = [];
 afterEach(async () => {
-  for (const pid of leftovers.splice(0)) {
-    try {
-      process.kill(pid, 'SIGKILL');
-    } catch {
-      // 已經不在了。
-    }
-  }
+  for (const pid of leftovers.splice(0)) killPid(pid);
   for (const path of cleanup.splice(0)) await rm(path, { recursive: true, force: true });
 });
 
+/**
+ * 對單一行程送 SIGKILL。pid 不是大於 1 的整數就丟錯、不送：`process.kill(0, …)` 殺整個行程群組（含 vitest 主行程與外層 shell），
+ * 而 `Number('')` 就是 0（#1712；`apps/harness/src/test-pids.fixture.ts` 是同一份）。
+ */
+function killPid(pid: number): void {
+  if (!(Number.isInteger(pid) && pid > 1)) {
+    throw new RangeError(`不是可以送訊號的 pid：${String(pid)}`);
+  }
+  try {
+    process.kill(pid, 'SIGKILL');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+  }
+}
+
+/** 等 pid 檔出現而且內容是完整的整數（寫的人先建檔、後寫字，直接讀會讀到空字串）。 */
+async function readPid(path: string): Promise<number> {
+  const deadline = Date.now() + 10_000;
+  for (;;) {
+    const text = await readFile(path, 'utf8').catch(() => '');
+    if (/^\d+\s*$/u.test(text) && Number.isInteger(Number(text)) && Number(text) > 1)
+      return Number(text);
+    if (Date.now() >= deadline)
+      throw new Error(`等不到 ${path} 的完整 pid（讀到 ${JSON.stringify(text)}）`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
 function alive(pid: number): boolean {
+  if (!(Number.isInteger(pid) && pid > 1))
+    throw new RangeError(`不是可以送訊號的 pid：${String(pid)}`);
   try {
     process.kill(pid, 0);
     return true;
@@ -97,7 +124,7 @@ async function serveThenExit(mode: 'tracked' | 'bare' | 'completed') {
     ['--import', 'tsx', driver, fakeGit, pidFile, dir],
     { cwd: PACKAGE_DIR, timeout: 20_000 },
   );
-  const pid = Number(await readFile(pidFile, 'utf8'));
+  const pid = await readPid(pidFile);
   leftovers.push(pid);
   return { pid, stdout };
 }
