@@ -158,5 +158,32 @@ class Budget(unittest.TestCase):
         self.assertLessEqual(peak, PEAK_LIMIT)
 
 
+class UpgradeGuideGate(unittest.TestCase):
+    """升級指南與 Markdown 連結的 gate 要掛在每張 PR 都跑的 plan，而且 checkout 要帶 tags（#1537）。"""
+
+    def setUp(self) -> None:
+        self.steps = load(CI)['jobs']['plan']['steps']
+
+    def test_runs_in_plan_without_condition(self) -> None:
+        for script in ('check_upgrade_guides.py', 'check_md_links.py'):
+            with self.subTest(script=script):
+                steps = [s for s in self.steps if s.get('run') == f'python3 .github/scripts/{script}']
+                self.assertEqual(len(steps), 1)
+                self.assertNotIn('if', steps[0])
+
+    def test_checkout_fetches_tags(self) -> None:
+        checkout = [s for s in self.steps if str(s.get('uses', '')).startswith('actions/checkout@')]
+        self.assertEqual(checkout[0].get('with', {}).get('fetch-depth'), 0)
+
+    def test_release_finds_previous_tag(self) -> None:
+        # release notes 用 `git describe` 找上一個 tag 再連到它的指南；淺 clone 時那行靜靜回空、notes 就不見，不報錯。
+        steps = load(CI.with_name('release.yml'))['jobs']['release']['steps']
+        checkout = [s for s in steps if str(s.get('uses', '')).startswith('actions/checkout@')]
+        self.assertEqual(checkout[0].get('with', {}).get('fetch-depth'), 0)
+        run = next(s['run'] for s in steps if 'gh release create' in str(s.get('run', '')))
+        self.assertIn("git describe --tags --abbrev=0 --match 'v*' HEAD", run)
+        self.assertIn('[ -d "docs/upgrade-guide/$prev" ]', run)
+
+
 if __name__ == '__main__':
     unittest.main()
