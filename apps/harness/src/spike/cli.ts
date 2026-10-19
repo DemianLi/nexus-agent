@@ -20,7 +20,8 @@ import { createLiveSpikeAgent, createSpikeAgent } from './spike-agent.js';
 
 /** 真模型路徑的啟動：載入環境、裝對外代理（#746），回憑證服務。這支腳本跑到行程結束，代理不另收尾。 */
 async function launchLive(): Promise<CredentialService> {
-  const { credentials, launchEnv } = loadLiveLaunchEnv();
+  const { credentials, launchEnv, keySource } = loadLiveLaunchEnv({ store: false });
+  if (keySource !== undefined) console.error(keySource);
   await installLaunchProxy(launchEnv, (message) => console.error(message));
   return credentials;
 }

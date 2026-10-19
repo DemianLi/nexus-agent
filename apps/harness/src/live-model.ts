@@ -24,7 +24,7 @@ import type { RequestGuard } from './attachment-chat-openai.js';
 import { projectAttachments } from './attachment-projection.js';
 import type { AttachmentSource } from './attachment-projection.js';
 import { resolveHarnessHome } from './harness-home.js';
-import { ambientCredentials, createCredentialService } from './credentials.js';
+import { ambientCredentials, createCredentialService, describeKeySource } from './credentials.js';
 import type { CredentialService } from './credentials.js';
 import { legacyEnvMovedError, loadLaunchEnv } from './launch-env.js';
 import type { LaunchEnvironment } from './launch-env.js';
@@ -1641,17 +1641,22 @@ function classifyAndReportFailedAttempt(error: unknown): void {
  */
 function resolveUsableKey(credentials: CredentialService): string {
   const hit = credentials.resolve(LIVE_API_KEY_ENV);
-  if (hit === undefined) throw new Error(missingKeyMessage());
+  if (hit === undefined) throw new Error(missingKeyMessage(credentials.store));
   return assertUsableApiKey(LIVE_API_KEY_ENV, hit);
 }
 
-/** 缺 key 的失敗訊息：指名缺哪一個、去哪裡放。 */
-function missingKeyMessage(): string {
-  return (
-    `缺少環境變數 ${LIVE_API_KEY_ENV}。真實供應商的 key 沒有預設值也不 fallback，` +
-    '依序從這幾處找：啟動環境、harness home 的受管憑證檔（~/.nexus-agent/.credentials.yaml，chmod 600）、' +
-    '目前資料夾的 .env、harness home 的 .env（~/.nexus-agent/.env）；欄位名見 .env.example。'
-  );
+/**
+ * 缺 key 的失敗訊息：指名缺哪一個、去哪裡放。分兩種講法（#1540）：serve 掛受管檔且它最優先；一次性入口（CLI、eval、spike）不讀受管檔，
+ * 訊息明說，免得人把 key 只放受管檔、跑 `cli:live` 卻找不到原因。
+ */
+function missingKeyMessage(store: boolean): string {
+  return store
+    ? `缺少環境變數 ${LIVE_API_KEY_ENV}。真實供應商的 key 沒有預設值也不 fallback，` +
+        '依序從這幾處找：harness home 的受管憑證檔（~/.nexus-agent/.credentials.yaml，chmod 600，最優先）、' +
+        '啟動環境、目前資料夾的 .env、harness home 的 .env（~/.nexus-agent/.env）；欄位名見 .env.example。'
+    : `缺少環境變數 ${LIVE_API_KEY_ENV}。真實供應商的 key 沒有預設值也不 fallback，` +
+        '此入口不讀受管檔（.credentials.yaml 只有 serve 讀），依序從這幾處找：' +
+        '啟動環境、目前資料夾的 .env、harness home 的 .env（~/.nexus-agent/.env）；欄位名見 .env.example。';
 }
 
 /** {@link loadLiveLaunchEnv} 的結果。 */
@@ -1659,32 +1664,40 @@ export interface LiveLaunch {
   readonly launchEnv: LaunchEnvironment;
   /** 這次啟動的憑證服務：模型從它取 key，每次請求前解析。 */
   readonly credentials: CredentialService;
+  /**
+   * 「`NVIDIA_API_KEY` 來自哪一層」那一行（#1540）：只有名字與來源，不含值；一次性入口會寫明「此入口不讀受管檔」。
+   * 啟動當下還沒有任何一層有值時是 `undefined`（缺 key 由 `createLiveModel` 當場失敗）。呼叫端各自印到自己的日誌。
+   */
+  readonly keySource: string | undefined;
 }
 
 /**
- * 真模型路徑的啟動：載入兩層 `.env`（{@link loadLaunchEnv}）、建憑證服務並**完整檢查受管檔**
+ * 真模型路徑的啟動：載入兩層 `.env`（{@link loadLaunchEnv}）、建憑證服務；`store` 時並**完整檢查受管檔**
  * （權限或格式不對就起不來）。key 都找不到、而舊位置（程式碼資料夾根目錄）的 `.env` 還在時，
  * 直接失敗、指名搬去哪裡。
  *
  * **這不是 fallback。** 每一層都是明說過的來源（順序見 `credentials.ts`）；缺的變數留給
- * {@link createLiveModel} 當場失敗並指名缺哪一個。已經設好的環境變數不會被檔案蓋掉。
+ * {@link createLiveModel} 當場失敗並指名缺哪一個。
  *
- * @param options - `cwd` 是「專案」那一層 `.env` 所在（省略即 `process.cwd()`）；
- *   `env` 只用來解 harness home（省略即 `process.env`）。兩層 `.env` 的值仍寫進 `process.env`（同 dsh）；
- *   受管檔的值不會。
- * @throws 壞的 `.env`、壞的受管檔、或舊位置搬家訊息。
+ * @param options - `store` **必填**（#1540，照 dsh 分兩邊）：serve 傳 `true`，受管檔最優先；CLI、eval、spike 傳 `false`，
+ *   完全不碰受管檔（不 `stat`、不讀、不檢查，壞檔也不擋），順序是啟動環境 > 目前資料夾 `.env` > harness home `.env`。
+ *   `cwd` 是「專案」那一層 `.env` 所在（省略即 `process.cwd()`）；`env` 只用來解 harness home（省略即 `process.env`）。
+ *   兩層 `.env` 的值仍寫進 `process.env`（同 dsh）；受管檔的值不會。
+ * @throws 壞的 `.env`、`store` 時壞的受管檔、或舊位置搬家訊息。
  */
-export function loadLiveLaunchEnv(
-  options: { readonly cwd?: string; readonly env?: NodeJS.ProcessEnv } = {},
-): LiveLaunch {
+export function loadLiveLaunchEnv(options: {
+  readonly store: boolean;
+  readonly cwd?: string;
+  readonly env?: NodeJS.ProcessEnv;
+}): LiveLaunch {
   const cwd = options.cwd ?? process.cwd();
   const home = resolveHarnessHome(options.env ?? process.env);
   const launchEnv = loadLaunchEnv({ cwd, home });
-  const credentials = createCredentialService({ home, launchEnv });
+  const credentials = createCredentialService({ home, launchEnv, store: options.store });
   credentials.check();
   if (credentials.resolve(LIVE_API_KEY_ENV) === undefined) {
     const moved = legacyEnvMovedError(launchEnv, LIVE_API_KEY_ENV, { cwd, home });
     if (moved !== undefined) throw moved;
   }
-  return { launchEnv, credentials };
+  return { launchEnv, credentials, keySource: describeKeySource(credentials, LIVE_API_KEY_ENV) };
 }

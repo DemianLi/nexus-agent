@@ -895,10 +895,13 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // 與舊位置搬家訊息在什麼都還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`，同以前。
   const liveLaunch = invocation.live
     ? loadLiveLaunchEnv({
+        store: false,
         ...(options.cwd !== undefined && { cwd: options.cwd }),
         ...(options.env !== undefined && { env: options.env }),
       })
     : undefined;
+  // 這一把 key 來自哪一層（#1540）：CLI 不讀受管檔，那一行會寫明；只有名字與來源、不含值。
+  if (liveLaunch?.keySource !== undefined) printer.error(liveLaunch.keySource);
 
   // **對外代理：啟動流程的第一件事**（#746），排在載完環境之後、第一顆外掛載入之前。假模型路徑沒有 `.env`，
   // 用只有行程環境的那一層。收尾一定還原，不然同一個行程裡後面的呼叫會繼承這一次的派送器與環境。
