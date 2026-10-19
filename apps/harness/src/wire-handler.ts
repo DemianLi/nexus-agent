@@ -229,7 +229,7 @@ export interface ThreadAgent {
   readonly workspaceChanges?: WorkspaceChanges;
   /**
    * 權限組合的目錄（[#437](https://github.com/DemianLi/nexus-agent/issues/437)），選配。沒有圍堵（沒給 `--workspace`）或
-   * 沒掛 `@nexus/plugin-permission-presets` 的組裝就沒有，那時 `permission.catalog` 回 `not_supported`、`permissions` 投影缺席。
+   * `permission-presets` 那一列沒掛的組裝就沒有，那時 `permission.catalog` 回 `not_supported`、`permissions` 投影缺席。
    */
   readonly permissionPresets?: { catalog(): PermissionCatalog };
   /**

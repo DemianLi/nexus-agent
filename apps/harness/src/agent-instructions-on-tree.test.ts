@@ -86,7 +86,10 @@ function home(): NodeJS.ProcessEnv {
 
 /** 入口怎麼建樹就怎麼建（serve：有人在）。 */
 function newRoot(): CordisRoot {
-  const root = createCordisRoot({ channel: entryApprovalChannel(undefined) });
+  const root = createCordisRoot({
+    channel: entryApprovalChannel(undefined),
+    workspaceRoot: tmpdir(),
+  });
   roots.push(root);
   return root;
 }
@@ -107,7 +110,10 @@ async function boot(env: NodeJS.ProcessEnv, entry: 'serve' | 'cli' = 'serve'): P
     entry === 'serve'
       ? newRoot()
       : (() => {
-          const created = createCordisRoot({ channel: entryApprovalChannel(HEADLESS_APPROVALS) });
+          const created = createCordisRoot({
+            channel: entryApprovalChannel(HEADLESS_APPROVALS),
+            workspaceRoot: tmpdir(),
+          });
           roots.push(created);
           return created;
         })();
@@ -577,7 +583,7 @@ describe('D：輪數不變——這顆 middleware 每次 invoke 一格、每輪�
  *
  * 錄法（PR 內文也寫了）：`git worktree add --detach <dir> b0a74042`、`pnpm install --frozen-lockfile`，在 `apps/harness/src/` 放一個
  * 臨時測試，三種組裝各建一次（出貨清單＝`createNexusAgent({ plugins: await shippedPlugins(), summarization: false, backend })`；
- * CLI／serve＝`createCordisRoot({ channel: entryApprovalChannel(HEADLESS_APPROVALS | undefined) })` ＋ `loadDefaultPlugins(…, { tree })` ＋
+ * CLI／serve＝`createCordisRoot({ channel: entryApprovalChannel(HEADLESS_APPROVALS | undefined), workspaceRoot: tmpdir() })` ＋ `loadDefaultPlugins(…, { tree })` ＋
  * `root.boot('cli' | 'serve')` ＋ `assembly.create(…)`），都帶一個放了 AGENTS.md 的工作區；名單取自建好的 agent 身上那份
  * middleware stack（與 `summarization.test.ts` 的 `middlewareNames` 同一個走法）。同一支探針在這個分支上跑，三份與下面逐字相同。
  * CLI 與 serve 錄到的兩份相同；出貨清單（不經 `root.boot`，沒有入口掛的列）比它們少 `nexusStreamRetry` 與 `nexusFileReference` 兩格。

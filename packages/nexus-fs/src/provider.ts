@@ -32,16 +32,20 @@ export interface FsLookupProviderHandle {
  * 造一個提供者。
  *
  * @param lookup - 宿主的挑法：拿到這次呼叫的 config，回 {@link FsLookup}。**每次呼叫都問它**，不快取結果。
+ * @param workspaceRoot - 這個行程的工作區根（#1491 Q4 (a)），由宿主交進來；`undefined` 是沒有圍堵。行程級、不隨 thread 變，所以建構時定死。
  */
 export function createFsLookupProvider(
   lookup: (config: unknown) => FsLookup,
+  workspaceRoot?: string,
 ): FsLookupProviderHandle {
   class FsLookupServiceImpl extends ContractService<FsLookupService> implements FsLookupService {
     readonly forCall: (invocation: unknown) => FsLookup;
+    readonly workspaceRoot: () => string | undefined;
 
     constructor(ctx: Context) {
       super(ctx, fsToken);
       this.forCall = (invocation) => lookup(invocation);
+      this.workspaceRoot = () => workspaceRoot;
     }
   }
 

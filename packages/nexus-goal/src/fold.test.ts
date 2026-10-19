@@ -566,6 +566,10 @@ describe('什麼推得動 roundsStarted', () => {
       'request/header',
       'request/system',
       'model/selection',
+      // 權限組合的意圖（#1491：事件宣告從插件的 `declare module` 搬進 core 的 `SessionEventMap`，所以這份名單看得到它）。
+      'permission/preset',
+      // 沙箱模式（#1491：事件宣告同樣從 `@nexus/plugin-sandbox-policy` 的 `declare module` 搬進 core）。
+      'sandbox/mode',
     ] as const;
     KNOWN satisfies readonly SessionEventType[];
     // 反過來這一條才是絆索：多一種而沒有列進來，`Exhaustive` 就變成 `never`。

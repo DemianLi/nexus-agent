@@ -24,6 +24,7 @@ import {
   loopbackRequest,
   noSessions,
   shippedPlugins,
+  shippedPluginsWithConfig,
   shippedPluginsWithFullAccess,
   TEST_BROWSER_AUTH,
 } from './fixtures.js';
@@ -69,9 +70,9 @@ function currentPreset(
     .currentValue;
 }
 
-/** 把出貨清單上 `permission-presets` 那一列的設定換掉。 */
+/** 把出貨清單上 `permission-presets` 那一列的設定換掉（走 patch；樹上的列直接蓋條目的 config 不會生效，#1491）。 */
 function withPresetsConfig(config: object) {
-  return shipped.map((entry) => (entry.id === 'permission-presets' ? { ...entry, config } : entry));
+  return shippedPluginsWithConfig('permission-presets', config);
 }
 
 describe('新會話的起始組合由 --sandbox 推', () => {
@@ -270,7 +271,7 @@ describe('該起不來的時候起不來', () => {
     await expect(
       createCliAgent(
         { live: false, workspace: root, sandbox: 'danger-full-access' },
-        withPresetsConfig({ defaultPreset: 'read-only' }),
+        await withPresetsConfig({ defaultPreset: 'read-only' }),
         root,
       ),
     ).rejects.toThrow('互相矛盾');
@@ -319,7 +320,7 @@ describe('該起不來的時候起不來', () => {
     await expect(
       createCliAgent(
         { live: false, workspace: root },
-        withPresetsConfig({
+        await withPresetsConfig({
           presets: { 'read-only': { sandbox: 'read-only', approval: 'ask' } },
         }),
         root,
@@ -330,7 +331,7 @@ describe('該起不來的時候起不來', () => {
   it('`defaultPreset` 套在沒給 --sandbox 的新會話：兩顆旋鈕都被設到那一組', async () => {
     const built = await createCliAgent(
       { live: false, workspace: root },
-      withPresetsConfig({ defaultPreset: 'read-only' }),
+      await withPresetsConfig({ defaultPreset: 'read-only' }),
       root,
     );
     const detach = built.attachSession(built.sessions);

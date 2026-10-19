@@ -37,7 +37,7 @@ import {
   ResumeWorkspaceConflictError,
 } from './resume-guards.js';
 import { openJsonlSessionStore } from './jsonl-session-store.js';
-import { PERMISSION_COMMAND_NAME } from '@nexus/plugin-permission-presets';
+import { PERMISSION_COMMAND_NAME } from '@nexus/permission-presets';
 
 /** 分開收 stdout 與 stderr：不變量違規走的是後者。 */
 function recorder() {

@@ -8,6 +8,9 @@
  * plugin 的工具都接上了」。
  */
 
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { tool } from '@langchain/core/tools';
 import type { StructuredTool } from '@langchain/core/tools';
@@ -146,6 +149,35 @@ export function shippedPluginsWithFullAccess(
     shippedFullAccess.set(serve, loaded);
   }
   return loaded;
+}
+
+/**
+ * 出貨清單上某一列的設定換成 `config`（整份替換）：跟部署方用 `--patch` 改那一列之後組出來的相同。
+ *
+ * **走真的 patch 載入路徑，不手改條目**（#1491）：樹上的函式插件那一列是橋接列，直接 `{ ...entry, config }` 蓋掉條目的設定
+ * 不會生效（樹上那一列的設定來自載入器，不是條目物件），所以要換設定一律走 patch。patch 檔寫在暫存目錄，載完就刪。
+ *
+ * @param rowId - 要換設定的列 id。
+ * @param config - 那一列新的設定。
+ * @returns 其餘照出貨清單的清單。
+ */
+export async function shippedPluginsWithConfig(
+  rowId: string,
+  config: object,
+): Promise<readonly PluginEntry[]> {
+  const dir = await mkdtemp(join(tmpdir(), 'nexus-patch-config-'));
+  try {
+    const patch = join(dir, 'row.patch.yml');
+    // JSON 是合法的 YAML：不必在這裡再寫一份序列化。
+    await writeFile(patch, JSON.stringify([{ id: rowId, config }]));
+    const { plugins, dropped } = await loadPluginConfig({ overlays: [patch] });
+    if (dropped.length > 0) {
+      throw new Error(`換設定的清單有列沒掛上：${dropped.map((drop) => drop.message).join('；')}`);
+    }
+    return plugins;
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 }
 
 /**

@@ -83,6 +83,7 @@ function attach(registry: PluginRegistry, log: SessionLog): () => void {
   return createSessionRunner({
     address: { kind: 'root' },
     log,
+    rootLog: log,
     installers: registry.sessions.installers(),
     warn: (message) => {
       throw new Error(`不該有 warn：${message}`);

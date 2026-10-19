@@ -64,6 +64,7 @@ import type {
   PluginEntry,
   ProjectionUnit,
   RegisterOptions,
+  SessionInstaller,
 } from '@nexus/core';
 import { ManifestError, validateManifest } from '@nexus/sdk';
 import type { SystemPromptAssembly } from '@nexus/system-prompt';
@@ -901,6 +902,11 @@ interface FoldedContributions {
   readonly resultListeners: readonly ToolResultListener[];
   /** `agent/pre-step` listener（#1474），照那一列登記的順序；折進 thread 時一位建一顆 middleware（`registry.middleware.use`，不帶位置旗標）。 */
   readonly preSteps: readonly Pick<PreStepEntry, 'name' | 'listener'>[];
+  /**
+   * 會話參與者（#1491），照那一列登記的順序；折進 thread 時一位一位交給 `registry.sessions.join`。位置就是這一列在清單上的位置
+   * （`registerFolded` 在橋接列的 `apply` 裡被叫，所以落在相容層七位參與者之間的正確位置）。
+   */
+  readonly participants: readonly SessionInstaller[];
   readonly projections: readonly ProjectionUnit[];
   /** 技能來源路徑（#1446），照那一列登記的順序。 */
   readonly skillSources: readonly string[];
@@ -970,6 +976,10 @@ function registerFolded(
     if (middleware !== undefined) registry.middleware.use(middleware, { last: true });
   }
   for (const unit of contributions.projections) registry.projections.register(unit);
+  // 會話參與者（#1491）：**走 `registry.sessions.join`，位置就是這一列在清單上的位置**——日誌上 `approval/policy` → `sandbox/mode` →
+  // `permission/preset` 的相對順序靠它（今天靠各列的 `apply` 依清單順序登記 join，遷移之後仍是同一個順序）。參與者安裝失敗只記 warn、
+  // 已寫的收不回，是相容層參與者本來的語意（偏離 dsh，見 `@nexus/session` 的 `join`）。
+  for (const participant of contributions.participants) registry.sessions.join(participant);
   // 技能來源走 `registry.skills.addSource`，**照那一列登記的順序**：`sources` 依序即優先序（後面的來源贏過前面的同名 skill）。
   // 格式與重名在樹上的提供者登記時就驗過了，這一層的 `NamedEntries` 只是第二道（相容層的列也走它）。
   for (const path of contributions.skillSources) registry.skills.addSource(path);
@@ -1001,6 +1011,8 @@ function bindDetached(entry: PluginEntry, id: string): PluginEntry {
       // 答題管道：從組裝的 registry 讀 `channel` 服務（組裝根提供，#1458 Q1 (c) 的第三個進入點）。讀不到就是「沒有指定」，
       // 照今天的語意不提供。**每次單獨掛上各讀各的**：同一個行程裡兩份無樹組裝（一份 headless、一份有人在）各有各的值。
       const channel = registry.services.get(CHANNEL_SERVICE);
+      // 工作區根（#1491 Q4 (a)）：同樣從這一次組裝的 host 服務 `workspaceRoot` 讀（組裝點只在有 `--workspace` 時提供）。
+      const workspaceRoot = registry.services.get('workspaceRoot');
       registerFolded(
         registry,
         await mountDetached({
@@ -1009,6 +1021,7 @@ function bindDetached(entry: PluginEntry, id: string): PluginEntry {
           provides: meta.provides,
           config: entry.config,
           ...(channel === undefined ? {} : { channel }),
+          ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
           // 會話查找（#1463）：**這一次組裝自己的 `registry.sessions`**，只看那一份。查找在呼叫當下才問、不在掛載當下
           // 快取，所以之後 `attachSession` 才綁上來的註冊表也看得到；同一個行程裡兩份無樹組裝各問各的、互不相見。
           sessionLookup: (config) => registry.sessions.forCall(config),
@@ -1713,6 +1726,7 @@ async function loadPluginConfigOnce(
       gates: verdict.gates,
       resultListeners: verdict.resultListeners,
       preSteps: verdict.preSteps,
+      participants: verdict.participants,
       projections: verdict.projections,
       skillSources: verdict.skillSources,
       commands: verdict.commands,

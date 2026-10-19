@@ -1,16 +1,30 @@
-/** plugin 本身：預設組怎麼決定、目錄長什麼樣、載入時的硬相依。組裝在產品上的行為在 `apps/harness/src/permission-presets.test.ts`。 */
+/**
+ * plugin 本身：預設組怎麼決定、目錄長什麼樣、掛在真的 Loader 上之後註冊了什麼、會話參與者與 `/permission` 對日誌做了什麼。
+ * 組裝在產品上的行為（`--sandbox`、續接、必掛名單、wire）在 `apps/harness/src/permission-presets.test.ts`；掛上樹之後的接縫
+ * （參與者折進 thread 的位置、冷復活、逐條 thread）在 `apps/harness/src/permission-presets-on-tree.test.ts`。
+ *
+ * **測試檔不受 SDK lint 管**（`PLUGIN_LINT_IGNORES`），所以這裡可以 import `@nexus/core` 造日誌與跑參與者；`src/index.ts` 不行。
+ */
 
-import { ApprovalPolicyController, createHostServicesPlugin, loadPlugins } from '@nexus/core';
-import { CONTAINED_FILESYSTEM, SandboxModeController } from '@nexus/plugin-sandbox-policy';
-import { describe, expect, it } from 'vitest';
-
+import { createCommandsProvider } from '@nexus/commands/provider';
+import { createSessionRunner, SessionLog, SessionRegistry } from '@nexus/core';
+import type { SessionAddress } from '@nexus/core';
+import { Context } from '@nexus/cordis';
+import Loader from '@nexus/cordis-plugin-loader';
+import { createFsLookupProvider } from '@nexus/fs/provider';
 import {
-  buildCatalog,
-  createPermissionPresetsPlugin,
-  PERMISSION_PRESETS_SERVICE,
-  resolveDefaultPreset,
-} from './index.js';
-import type { PermissionSeed } from './index.js';
+  PERMISSION_PRESETS_CONTRACT_VERSION,
+  permissionPresetsToken,
+} from '@nexus/permission-presets';
+import type { PermissionPresetsService, PermissionSeed } from '@nexus/permission-presets';
+import { createProjectionsProvider } from '@nexus/projections/provider';
+import { checkConformance, checkSharedAcrossThreads } from '@nexus/sdk';
+import type { ThreadStep } from '@nexus/sdk';
+import { createSessionLookupProvider } from '@nexus/session/provider';
+import { afterEach, describe, expect, it } from 'vitest';
+
+import * as permissionPresets from './index.js';
+import { buildCatalog, startPresets } from './index.js';
 import { DEFAULT_PRESETS } from './presets.js';
 import type { PresetTable } from './presets.js';
 
@@ -23,99 +37,77 @@ const WITH_FULL_ACCESS: PresetTable = {
   'danger-full-access': { sandbox: 'danger-full-access', approval: 'never' },
 };
 
-function knobs(
-  sandbox: ConstructorParameters<typeof SandboxModeController>[0],
-  approval: 'ask' | 'never',
-) {
-  return {
-    sandbox: new SandboxModeController(sandbox),
-    approval: new ApprovalPolicyController(approval),
-  };
-}
-
-describe('resolveDefaultPreset', () => {
-  it('沒設 defaultPreset：由起始的兩顆值推；不動旋鈕', () => {
-    const k = knobs('read-only', 'ask');
-    expect(
-      resolveDefaultPreset({ table: DEFAULT_PRESETS, configured: undefined, seed: FRESH, ...k }),
-    ).toBe('read-only');
-    expect([k.sandbox.current, k.approval.current]).toEqual(['read-only', 'ask']);
+describe('startPresets：預設組怎麼決定、兩顆旋鈕接日誌之前該有什麼值', () => {
+  it('沒設 defaultPreset：由起始的兩顆值推；值原樣', () => {
+    const started = startPresets(DEFAULT_PRESETS, undefined, {
+      seed: FRESH,
+      sandbox: 'read-only',
+      approval: 'ask',
+    });
+    expect([started.sandbox, started.approval]).toEqual(['read-only', 'ask']);
+    expect(started.catalog.defaultPreset).toBe('read-only');
   });
 
   it('設了 defaultPreset 的新會話：兩顆旋鈕都設到那一組', () => {
-    const k = knobs('workspace-write', 'ask');
-    expect(
-      resolveDefaultPreset({
-        table: WITH_FULL_ACCESS,
-        configured: 'danger-full-access',
-        seed: FRESH,
-        ...k,
-      }),
-    ).toBe('danger-full-access');
-    expect([k.sandbox.current, k.approval.current]).toEqual(['danger-full-access', 'never']);
-  });
-
-  it('續接不套 defaultPreset：保留日誌裡的值', () => {
-    const k = knobs('read-only', 'ask');
-    resolveDefaultPreset({
-      table: WITH_FULL_ACCESS,
-      configured: 'danger-full-access',
-      seed: RESUMED,
-      ...k,
+    const started = startPresets(WITH_FULL_ACCESS, 'danger-full-access', {
+      seed: FRESH,
+      sandbox: 'workspace-write',
+      approval: 'ask',
     });
-    expect([k.sandbox.current, k.approval.current]).toEqual(['read-only', 'ask']);
+    expect([started.sandbox, started.approval]).toEqual(['danger-full-access', 'never']);
+    expect(started.catalog.defaultPreset).toBe('danger-full-access');
   });
 
-  it('defaultPreset 不在表裡：報錯並列出有哪些', () => {
-    expect(() =>
-      resolveDefaultPreset({
-        table: DEFAULT_PRESETS,
-        configured: 'nope',
-        seed: FRESH,
-        ...knobs('read-only', 'ask'),
-      }),
-    ).toThrow(/nope.*read-only、workspace-write/s);
+  it('續接不套 defaultPreset：保留日誌裡的值，目錄的預設組仍是設定的那一組', () => {
+    const started = startPresets(WITH_FULL_ACCESS, 'danger-full-access', {
+      seed: RESUMED,
+      sandbox: 'read-only',
+      approval: 'ask',
+    });
+    expect([started.sandbox, started.approval]).toEqual(['read-only', 'ask']);
+    expect(started.catalog.defaultPreset).toBe('danger-full-access');
   });
 
-  it('defaultPreset 與明確給的 --sandbox 矛盾：報錯；沒明確給就以 defaultPreset 為準', () => {
+  it('defaultPreset 與明確給的 --sandbox 矛盾：報錯；沒明確給就以 defaultPreset 為準；同一組不矛盾', () => {
     const explicit: PermissionSeed = { fresh: true, sandboxExplicit: true };
     expect(() =>
-      resolveDefaultPreset({
-        table: DEFAULT_PRESETS,
-        configured: 'read-only',
+      startPresets(DEFAULT_PRESETS, 'read-only', {
         seed: explicit,
-        ...knobs('danger-full-access', 'never'),
+        sandbox: 'danger-full-access',
+        approval: 'never',
       }),
     ).toThrow('互相矛盾');
-    // 同一組、不矛盾就放行。
     expect(
-      resolveDefaultPreset({
-        table: DEFAULT_PRESETS,
-        configured: 'read-only',
+      startPresets(DEFAULT_PRESETS, 'read-only', {
         seed: explicit,
-        ...knobs('read-only', 'ask'),
-      }),
+        sandbox: 'read-only',
+        approval: 'ask',
+      }).catalog.defaultPreset,
     ).toBe('read-only');
+    const implicit = startPresets(DEFAULT_PRESETS, 'read-only', {
+      seed: FRESH,
+      sandbox: 'workspace-write',
+      approval: 'ask',
+    });
+    expect([implicit.sandbox, implicit.approval]).toEqual(['read-only', 'ask']);
   });
 
   it('起始值對不上任何一組又沒設 defaultPreset：新會話報錯，續接放行（拿表裡第一組當目錄預設）', () => {
     const table = { only: { sandbox: 'read-only', approval: 'ask' } } as const;
     expect(() =>
-      resolveDefaultPreset({
-        table,
-        configured: undefined,
-        seed: FRESH,
-        ...knobs('workspace-write', 'ask'),
-      }),
+      startPresets(table, undefined, { seed: FRESH, sandbox: 'workspace-write', approval: 'ask' }),
     ).toThrow('對不上組合表裡任何一組');
     expect(
-      resolveDefaultPreset({
-        table,
-        configured: undefined,
-        seed: RESUMED,
-        ...knobs('workspace-write', 'ask'),
-      }),
+      startPresets(table, undefined, { seed: RESUMED, sandbox: 'workspace-write', approval: 'ask' })
+        .catalog.defaultPreset,
     ).toBe('only');
+  });
+
+  it('不改傳進來的值：回傳的是新物件，呼叫端自己決定要不要切旋鈕', () => {
+    const request = { seed: FRESH, sandbox: 'workspace-write', approval: 'ask' } as const;
+    const started = startPresets(WITH_FULL_ACCESS, 'danger-full-access', request);
+    expect(request.sandbox).toBe('workspace-write');
+    expect(started.sandbox).toBe('danger-full-access');
   });
 });
 
@@ -138,58 +130,468 @@ describe('目錄', () => {
   });
 });
 
-describe('載入', () => {
-  const fenced = (
-    sandbox = new SandboxModeController('workspace-write'),
-    approval = new ApprovalPolicyController('ask'),
-  ) =>
-    createHostServicesPlugin({
-      fsContainment: CONTAINED_FILESYSTEM,
-      sandboxPolicy: { controller: sandbox, rootDir: '/workspace' },
-      approvalPolicy: approval,
-    });
+interface Mounted {
+  readonly root: Context;
+  readonly sessions: ReadonlyMap<string, SessionRegistry>;
+  readonly service: PermissionPresetsService | undefined;
+  readonly commands: ReturnType<typeof createCommandsProvider>;
+  readonly projections: ReturnType<typeof createProjectionsProvider>;
+  readonly lookup: ReturnType<typeof createSessionLookupProvider>;
+  /** 以某條 thread 的身分打 `/permission <input>`：回命令的結果。 */
+  readonly command: (thread: string, input: string) => { kind: string; text: string };
+  /** 把已登記的參與者裝到某一份日誌上（宿主折進 thread 的那一步，這裡手動做）。 */
+  readonly join: (
+    thread: string,
+    options?: { address?: SessionAddress; log?: SessionLog },
+  ) => () => void;
+  /** 那一列起不來時的錯誤訊息；起得來是 `undefined`。 */
+  readonly failure: () => Promise<string | undefined>;
+}
 
-  it('沒有圍堵：什麼都不註冊（沒有命令、沒有投影、沒有目錄服務）', async () => {
-    const { registry } = await loadPlugins([createPermissionPresetsPlugin()]);
-    expect(registry.commands.find('permission')).toBeUndefined();
-    expect(registry.projections.list()).toHaveLength(0);
-    expect(registry.services.get(PERMISSION_PRESETS_SERVICE)).toBeUndefined();
+const opened: Context[] = [];
+afterEach(async () => {
+  for (const root of opened.splice(0)) await root.fiber.dispose();
+});
+
+/** 掛一次：每條 thread 一張註冊表，共用同一份提供者。`workspaceRoot` 省略 = 沒有圍堵。 */
+async function mountFor(
+  threads: readonly string[],
+  config: unknown = {},
+  workspaceRoot: string | null = '/workspace',
+): Promise<Mounted> {
+  const sessions = new Map(threads.map((thread) => [thread, new SessionRegistry(thread)]));
+  const commands = createCommandsProvider();
+  const projections = createProjectionsProvider();
+  const lookup = createSessionLookupProvider(() => ({ kind: 'not-attached' }));
+  const fs = createFsLookupProvider(() => ({ kind: 'not-attached' }), workspaceRoot ?? undefined);
+  const root = new Context();
+  opened.push(root);
+  await root.plugin(Loader);
+  Object.assign(root.loader.builtins, {
+    fs: fs.Provider,
+    commands: commands.Provider,
+    projections: projections.Provider,
+    'session-lookup': lookup.Provider,
+    'permission-presets': permissionPresets,
   });
+  const create = (options: { id: string; name: string; config?: unknown }) =>
+    root.loader.create(options as never, null);
+  await create({ id: 'fs', name: 'cordis:fs' });
+  await create({ id: 'commands', name: 'cordis:commands' });
+  await create({ id: 'projections', name: 'cordis:projections' });
+  await create({ id: 'session-lookup', name: 'cordis:session-lookup' });
+  await create({ id: 'permission-presets-row', name: 'cordis:permission-presets', config });
+  await root.loader.await();
+  const service = root.get(permissionPresetsToken.name) as PermissionPresetsService | undefined;
+  return {
+    root,
+    sessions,
+    service,
+    commands,
+    projections,
+    lookup,
+    command: (thread, input) => {
+      const entry = commands.entries().find((item) => item.definition.name === 'permission');
+      const log = sessions.get(thread)?.root;
+      if (entry === undefined || log === undefined) throw new Error('命令或 thread 不存在');
+      return entry.definition.handler({
+        commandId: `cmd-${thread}`,
+        rawInput: input,
+        attachments: [],
+        signal: new AbortController().signal,
+        sessionLog: log,
+        steer: () => undefined,
+      }) as { kind: string; text: string };
+    },
+    join: (thread, options = {}) => {
+      const registry = sessions.get(thread);
+      if (registry === undefined) throw new Error('thread 不存在');
+      return createSessionRunner({
+        address: options.address ?? { kind: 'root' },
+        log: options.log ?? registry.root,
+        rootLog: registry.root,
+        installers: lookup.participants().map((entry) => ({
+          value: entry.participant,
+          origin: { id: entry.source, name: 'permission-presets' },
+        })),
+      });
+    },
+    failure: async () => {
+      const fiber = root.loader.resolve('permission-presets-row').fiber?.ctx.fiber;
+      if (fiber === undefined) return '沒有 fiber';
+      return fiber.await().then(
+        () => undefined,
+        (error: unknown) => (error instanceof Error ? error.message : String(error)),
+      );
+    },
+  };
+}
 
-  it('有圍堵：註冊 /permission、permissions 投影與目錄服務', async () => {
-    const { registry } = await loadPlugins([fenced(), createPermissionPresetsPlugin()]);
-    expect(registry.commands.find('permission')).toBeDefined();
-    expect(registry.projections.list().map((unit) => unit.key)).toEqual(['permissions']);
-    expect(registry.services.use(PERMISSION_PRESETS_SERVICE).catalog().defaultPreset).toBe(
-      'workspace-write',
-    );
-  });
+const kinds = (log: SessionLog, type: string): unknown[] =>
+  log.events.filter((event) => event.type === type).map((event) => event.data);
 
-  it('有圍堵卻沒有核准旋鈕：載入失敗，訊息指名服務', async () => {
-    const noApproval = createHostServicesPlugin({
-      fsContainment: CONTAINED_FILESYSTEM,
-      sandboxPolicy: {
-        controller: new SandboxModeController('workspace-write'),
-        rootDir: '/workspace',
+describe('一致性套件：真的提供者、真的 Loader', () => {
+  it('permission-presets 全格通過：manifest、匯出形式、載入→卸載後命令／投影／參與者都撤掉、缺提供者停在 PENDING', async () => {
+    let latestCommands = createCommandsProvider();
+    let latestProjections = createProjectionsProvider();
+    let latestLookup = createSessionLookupProvider(() => ({ kind: 'not-attached' }));
+    const failures = await checkConformance({
+      row: 'permission-presets',
+      module: permissionPresets,
+      config: {},
+      providers: {
+        // 有工作區根，插件才真的註冊東西；沒有的話「卸載後撤乾淨」是空話。
+        fs: () => createFsLookupProvider(() => ({ kind: 'not-attached' }), '/workspace').Provider,
+        commands: () => {
+          latestCommands = createCommandsProvider();
+          return latestCommands.Provider;
+        },
+        projections: () => {
+          latestProjections = createProjectionsProvider();
+          return latestProjections.Provider;
+        },
+        sessionLookup: () => {
+          latestLookup = createSessionLookupProvider(() => ({ kind: 'not-attached' }));
+          return latestLookup.Provider;
+        },
       },
+      residue: () =>
+        latestCommands.registrations() +
+        latestProjections.registrations() +
+        latestLookup.registrations(),
     });
-    await expect(loadPlugins([noApproval, createPermissionPresetsPlugin()])).rejects.toThrow(
-      'approvalPolicy',
-    );
+    expect(failures).toEqual([]);
   });
 
-  it('壞設定載入就拋：空表、用了保留字 custom', async () => {
-    await expect(
-      loadPlugins([fenced(), createPermissionPresetsPlugin({ presets: {} })]),
-    ).rejects.toThrow('空的');
-    await expect(
-      loadPlugins([
-        fenced(),
-        createPermissionPresetsPlugin({
+  it('manifest：提供 permissionPresets（1.0.0），消費 fs／commands／projections／sessionLookup；沒有 default 匯出', () => {
+    expect(permissionPresets.manifest.provides).toEqual([
+      { token: 'permissionPresets', version: PERMISSION_PRESETS_CONTRACT_VERSION },
+    ]);
+    expect(permissionPresets.manifest.consumes).toEqual([
+      { token: 'fs', range: '^1.2.0' },
+      { token: 'commands', range: '^1.0.0' },
+      { token: 'projections', range: '^1.0.0' },
+      { token: 'sessionLookup', range: '^1.1.0' },
+    ]);
+    expect(permissionPresets.name).toBe('permission-presets');
+    expect('default' in permissionPresets).toBe(false);
+  });
+});
+
+describe('掛上之後', () => {
+  it('沒有圍堵（沒有工作區根）：什麼都不註冊——沒有命令、沒有投影、沒有參與者、沒有目錄服務', async () => {
+    const run = await mountFor(['t'], {}, null);
+    expect(await run.failure()).toBeUndefined();
+    expect(run.service).toBeUndefined();
+    expect(run.commands.registrations()).toBe(0);
+    expect(run.projections.registrations()).toBe(0);
+    expect(run.lookup.registrations()).toBe(0);
+  });
+
+  it('有圍堵：註冊 /permission、permissions 投影、一位參與者與 permissionPresets 服務，歸屬是這一列', async () => {
+    const run = await mountFor(['t']);
+    expect(await run.failure()).toBeUndefined();
+    expect(run.commands.entries().map((entry) => [entry.definition.name, entry.source])).toEqual([
+      ['permission', 'permission-presets-row'],
+    ]);
+    expect(run.projections.entries().map((entry) => entry.unit.key)).toEqual(['permissions']);
+    expect(run.lookup.participants().map((entry) => entry.source)).toEqual([
+      'permission-presets-row',
+    ]);
+    expect((run.service as { provider?: string } | undefined)?.provider).toBe(
+      'permission-presets-row',
+    );
+    expect(
+      run.service?.start({ seed: FRESH, sandbox: 'workspace-write', approval: 'ask' }),
+    ).toMatchObject({
+      sandbox: 'workspace-write',
+      approval: 'ask',
+      catalog: { defaultPreset: 'workspace-write' },
+    });
+  });
+
+  it('壞設定在掛載當下就拋，那一列起不來、什麼都沒註冊：空表、保留字 custom、defaultPreset 不在表裡', async () => {
+    const cases: [object, string][] = [
+      [{ presets: {} }, '空的'],
+      [
+        {
           presets: { custom: { sandbox: 'read-only', approval: 'ask' } },
           defaultPreset: 'custom',
+        },
+        '保留字',
+      ],
+      [{ defaultPreset: 'nope' }, 'nope'],
+    ];
+    for (const [config, message] of cases) {
+      const run = await mountFor(['t'], config);
+      expect(await run.failure()).toContain(message);
+      expect(run.service).toBeUndefined();
+      expect(run.commands.registrations()).toBe(0);
+      expect(run.lookup.registrations()).toBe(0);
+    }
+  });
+
+  it('設定不同的兩次掛載各算各的表：服務不共用', async () => {
+    const small = await mountFor(['t'], {
+      presets: { a: { sandbox: 'read-only', approval: 'ask' } },
+    });
+    const big = await mountFor(['t']);
+    expect(
+      small.service?.start({ seed: RESUMED, sandbox: 'read-only', approval: 'ask' }).catalog
+        .options,
+    ).toHaveLength(1);
+    expect(
+      big.service?.start({ seed: RESUMED, sandbox: 'read-only', approval: 'ask' }).catalog.options,
+    ).toHaveLength(2);
+  });
+
+  it('提供者那一列卸載之後，宿主手上的服務快照仍可呼叫（方法不碰 this.ctx）', async () => {
+    const run = await mountFor(['t']);
+    const grabbed = run.service;
+    await run.root.loader.resolve('permission-presets-row').fiber?.ctx.fiber.dispose();
+    expect(
+      grabbed?.start({ seed: FRESH, sandbox: 'read-only', approval: 'ask' }).catalog.defaultPreset,
+    ).toBe('read-only');
+  });
+});
+
+describe('會話參與者', () => {
+  it('root 新會話：日誌上已有兩顆旋鈕的起始值（前面的參與者寫的）、還沒有組名 → 釘一顆 permission/preset', async () => {
+    const run = await mountFor(['t']);
+    const log = run.sessions.get('t')!.root;
+    log.append('approval/policy', { policy: 'ask' });
+    log.append('sandbox/mode', { mode: 'read-only' });
+    run.join('t');
+    expect(kinds(log, 'permission/preset')).toEqual([{ preset: 'read-only' }]);
+  });
+
+  it('日誌上已經有組名（續接、空轉的重接）：什麼都不寫', async () => {
+    const run = await mountFor(['t']);
+    const log = run.sessions.get('t')!.root;
+    log.append('sandbox/mode', { mode: 'read-only' });
+    log.append('approval/policy', { policy: 'ask' });
+    log.append('permission/preset', { preset: 'read-only' });
+    const before = log.events.length;
+    run.join('t');
+    expect(log.events).toHaveLength(before);
+  });
+
+  it('對不上任何一組（custom）：不釘', async () => {
+    const run = await mountFor(['t']);
+    const log = run.sessions.get('t')!.root;
+    log.append('sandbox/mode', { mode: 'read-only' });
+    log.append('approval/policy', { policy: 'never' });
+    run.join('t');
+    expect(kinds(log, 'permission/preset')).toEqual([]);
+  });
+
+  describe('子代理：組名只在父代理是全開時帶下去', () => {
+    const subagent: SessionAddress = { kind: 'subagent', runId: 'run-1' };
+
+    async function child(
+      options: {
+        delegated?: 'read-only' | 'workspace-write' | 'danger-full-access';
+        approval?: 'ask' | 'never';
+        /** 子代理日誌是不是從上一個行程 seed 回來的（背景子代理冷復活）。 */
+        seeded?: boolean;
+      } = {},
+    ) {
+      const run = await mountFor(['t'], WITH_FULL_ACCESS_CONFIG);
+      const root = run.sessions.get('t')!.root;
+      if (options.approval !== undefined)
+        root.append('approval/policy', { policy: options.approval });
+      // 子代理日誌：先有上一個行程留下的（seed），再由 sandbox-policy 的參與者在委派當下寫 `source: 'delegation'`（排在前面）。
+      const seedLog = new SessionLog('child-first-life');
+      if (options.seeded === true && options.delegated !== undefined) {
+        seedLog.append('sandbox/mode', { mode: options.delegated, source: 'delegation' });
+      }
+      const log =
+        options.seeded === true
+          ? new SessionLog('child', { seed: seedLog.events })
+          : new SessionLog('child');
+      return { run, root, log };
+    }
+
+    it('這一次接上時委派的沙箱是全開、父代理的核准是 never → 寫 permission/preset danger-full-access', async () => {
+      const { run, log } = await child({ approval: 'never' });
+      // 前面的參與者（sandbox-policy）在委派當下寫的那一顆，在 permission-presets 的參與者之前。
+      log.append('sandbox/mode', { mode: 'danger-full-access', source: 'delegation' });
+      run.join('t', { address: subagent, log });
+      expect(kinds(log, 'permission/preset')).toEqual([{ preset: 'danger-full-access' }]);
+    });
+
+    it('委派的沙箱不是全開，或父代理的核准還是 ask（推不出全開那一組）→ 不寫', async () => {
+      const notFull = await child({ approval: 'never' });
+      notFull.log.append('sandbox/mode', { mode: 'workspace-write', source: 'delegation' });
+      notFull.run.join('t', { address: subagent, log: notFull.log });
+      expect(kinds(notFull.log, 'permission/preset')).toEqual([]);
+
+      const asks = await child({ approval: 'ask' });
+      asks.log.append('sandbox/mode', { mode: 'danger-full-access', source: 'delegation' });
+      asks.run.join('t', { address: subagent, log: asks.log });
+      expect(kinds(asks.log, 'permission/preset')).toEqual([]);
+    });
+
+    it('不在委派裡被開的子代理日誌（沒有 delegation 那一顆）→ 不寫', async () => {
+      const { run, log } = await child({ approval: 'never' });
+      run.join('t', { address: subagent, log });
+      expect(kinds(log, 'permission/preset')).toEqual([]);
+    });
+
+    it('冷復活（R2）：seed 裡上一個行程留下的 delegation 事件不算數——這一次接上沒有人重新寫，就不寫', async () => {
+      const { run, log } = await child({
+        approval: 'never',
+        delegated: 'danger-full-access',
+        seeded: true,
+      });
+      // 前提：那一顆舊事件確實在日誌裡，而且在 `session/end-seed` 之前。
+      const types = log.events.map((event) => event.type);
+      expect(types).toEqual(['sandbox/mode', 'session/end-seed']);
+      run.join('t', { address: subagent, log });
+      expect(kinds(log, 'permission/preset')).toEqual([]);
+    });
+
+    it('冷復活之後又在委派當下重新寫了一顆（end-seed 之後）→ 這一顆算數', async () => {
+      const { run, log } = await child({
+        approval: 'never',
+        delegated: 'workspace-write',
+        seeded: true,
+      });
+      log.append('sandbox/mode', { mode: 'danger-full-access', source: 'delegation' });
+      run.join('t', { address: subagent, log });
+      expect(kinds(log, 'permission/preset')).toEqual([{ preset: 'danger-full-access' }]);
+    });
+  });
+});
+
+/** 組合表含全開那一組的設定（子代理的測試要推得出 `danger-full-access`）。 */
+const WITH_FULL_ACCESS_CONFIG = { presets: WITH_FULL_ACCESS };
+
+describe('/permission', () => {
+  /** 一條接好的 thread：旋鈕的起始值與組名都已經在日誌上（前面的參與者與這一位寫的）。 */
+  async function ready(
+    config: unknown = {},
+    start: {
+      mode: 'read-only' | 'workspace-write' | 'danger-full-access';
+      policy: 'ask' | 'never';
+    } = {
+      mode: 'workspace-write',
+      policy: 'ask',
+    },
+  ) {
+    const run = await mountFor(['t'], config);
+    const log = run.sessions.get('t')!.root;
+    log.append('approval/policy', { policy: start.policy });
+    log.append('sandbox/mode', { mode: start.mode });
+    run.join('t');
+    return { run, log };
+  }
+
+  it('不帶引數：報現況與可寫根，列出切得過去的', async () => {
+    const { run } = await ready();
+    const result = run.command('t', '');
+    expect(result.kind).toBe('success');
+    expect(result.text).toBe(
+      '目前的權限組合：workspace-write（檔案政策 workspace-write、核准 ask）。\n可寫根 "/workspace"。\n切得過去的：read-only、workspace-write。',
+    );
+  });
+
+  it('對不上任何一組：顯示 custom 與兩顆旋鈕的值', async () => {
+    const { run } = await ready({}, { mode: 'read-only', policy: 'never' });
+    expect(run.command('t', '').text).toContain(
+      '目前的權限組合：custom（檔案政策 read-only、核准 never，對不上任何一組）。',
+    );
+  });
+
+  it('切到不同的一組：先記意圖，再只寫真的不同的那顆旋鈕（核准沒變就不寫）', async () => {
+    const { run, log } = await ready();
+    const before = log.events.length;
+    const result = run.command('t', 'read-only');
+    expect(result).toEqual({
+      kind: 'success',
+      text: '權限組合從 workspace-write 換成 read-only（檔案政策 read-only、核准 ask）。',
+    });
+    expect(log.events.slice(before).map((event) => [event.type, event.data])).toEqual([
+      ['permission/preset', { preset: 'read-only' }],
+      ['sandbox/mode', { mode: 'read-only' }],
+    ]);
+  });
+
+  it('兩顆都不同：順序是 permission/preset → sandbox/mode → approval/policy', async () => {
+    const { run, log } = await ready(WITH_FULL_ACCESS_CONFIG);
+    const before = log.events.length;
+    run.command('t', 'danger-full-access');
+    expect(log.events.slice(before).map((event) => event.type)).toEqual([
+      'permission/preset',
+      'sandbox/mode',
+      'approval/policy',
+    ]);
+  });
+
+  it('切到同一組：什麼都不寫；不認得的名字（含 custom）：回 error、什麼都不寫', async () => {
+    const { run, log } = await ready();
+    const before = log.events.length;
+    expect(run.command('t', 'workspace-write')).toEqual({
+      kind: 'success',
+      text: '本來就是 workspace-write，沒有變。',
+    });
+    expect(run.command('t', 'nope')).toEqual({
+      kind: 'error',
+      text: '/permission 認不得 "nope"。認得的是 read-only、workspace-write。',
+    });
+    expect(run.command('t', 'custom').kind).toBe('error');
+    expect(log.events).toHaveLength(before);
+  });
+
+  it('回覆裡沒有「這次切換沒有完整記進日誌」那句——切換就是寫日誌，沒有「沒接上」這回事（#1491 Q1：拿掉 UNRECORDED_NOTE）', async () => {
+    const { run } = await ready();
+    expect(run.command('t', 'read-only').text).not.toContain('沒有完整記進');
+  });
+});
+
+describe('套一次、服務兩條 thread', () => {
+  const STEPS: ThreadStep<string>[] = [
+    { thread: 'thread-a', input: 'read-only' },
+    { thread: 'thread-b', input: '' },
+    { thread: 'thread-b', input: 'read-only' },
+    { thread: 'thread-a', input: '' },
+  ];
+
+  it('共用一份與各自一份相同：每條 thread 的日誌只有自己寫的，現況只看自己的日誌', async () => {
+    const failures = await checkSharedAcrossThreads({
+      name: 'permission-presets',
+      steps: STEPS,
+      mount: async (threads) => {
+        const run = await mountFor(threads);
+        for (const thread of threads) {
+          const log = run.sessions.get(thread)!.root;
+          log.append('approval/policy', { policy: 'ask' });
+          log.append('sandbox/mode', { mode: 'workspace-write' });
+          run.join(thread);
+        }
+        return run;
+      },
+      call: (run, thread, input) =>
+        Promise.resolve({
+          answer: run.command(thread, input),
+          written: run.sessions.get(thread)!.root.events.map((event) => event.type),
         }),
-      ]),
-    ).rejects.toThrow('保留字');
+    });
+    expect(failures).toEqual([]);
+  });
+
+  it('一條切了、另一條不動', async () => {
+    const run = await mountFor(['thread-a', 'thread-b']);
+    for (const thread of ['thread-a', 'thread-b']) {
+      const log = run.sessions.get(thread)!.root;
+      log.append('approval/policy', { policy: 'ask' });
+      log.append('sandbox/mode', { mode: 'workspace-write' });
+      run.join(thread);
+    }
+    run.command('thread-a', 'read-only');
+    expect(run.command('thread-b', '').text).toContain('目前的權限組合：workspace-write');
+    expect(kinds(run.sessions.get('thread-b')!.root, 'sandbox/mode')).toEqual([
+      { mode: 'workspace-write' },
+    ]);
   });
 });

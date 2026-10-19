@@ -73,9 +73,9 @@ export function startupSetting<T>(plugins: readonly PluginEntry[], plugin: Nexus
  * @param plugin - 要問的是誰。
  * @returns 掛了就是 `true`。
  */
-export function startupEntryMounted<T>(
+export function startupEntryMounted(
   plugins: readonly PluginEntry[],
-  plugin: NexusPlugin<T>,
+  plugin: { readonly name: string },
 ): boolean {
   return plugins.some((entry) => entry.plugin.name === plugin.name && entry.disabled !== true);
 }

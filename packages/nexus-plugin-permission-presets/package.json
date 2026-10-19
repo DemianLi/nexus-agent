@@ -20,15 +20,31 @@
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
+    "@nexus/commands": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/cordis-plugin-loader": "workspace:*",
+    "@nexus/core": "workspace:*",
+    "@nexus/fs": "workspace:*",
+    "@nexus/permission-presets": "workspace:*",
+    "@nexus/projections": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*",
     "@types/node": "^24.10.0",
     "eslint": "^9.39.0",
     "typescript": "^5.9.3",
     "vitest": "^4.1.11"
   },
   "dependencies": {
-    "@nexus/core": "workspace:*",
-    "@nexus/plugin-sandbox-policy": "workspace:*",
     "@nexus/wire": "workspace:*",
     "zod": "^4.3.6"
+  },
+  "peerDependencies": {
+    "@nexus/commands": "workspace:*",
+    "@nexus/cordis": "workspace:*",
+    "@nexus/fs": "workspace:*",
+    "@nexus/permission-presets": "workspace:*",
+    "@nexus/projections": "workspace:*",
+    "@nexus/sdk": "workspace:*",
+    "@nexus/session": "workspace:*"
   }
 }

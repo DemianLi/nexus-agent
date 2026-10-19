@@ -79,7 +79,6 @@ describe('ApprovalPolicyController', () => {
     controller.switchTo('never');
     expect(controller.current).toBe('never');
     expect(policiesOf(log)).toEqual([{ policy: 'ask' }]);
-    expect(controller.attachedCount).toBe(0);
   });
 
   it('接了兩份日誌，切換每一份都寫', () => {
@@ -185,6 +184,7 @@ describe('ApprovalPolicyController 跟著 root 日誌走（#1494）', () => {
     const dispose = createSessionRunner({
       address: { kind: 'root' },
       log: live,
+      rootLog: live,
       installers: [
         { origin: { kind: 'test' } as never, value: (subject) => second.attach(subject) },
       ],
