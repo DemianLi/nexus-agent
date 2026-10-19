@@ -22,12 +22,23 @@ import type { Context } from '@nexus/cordis';
 import { ContractService } from '@nexus/sdk';
 
 import { sessionLookupToken } from './index.js';
-import type { SessionLookup, SessionLookupService } from './index.js';
+import type { SessionInstaller, SessionLookup, SessionLookupService } from './index.js';
+
+/** 一位會話參與者的登記（#1491）：安裝函式，與登記它的那一列。 */
+export interface SessionParticipantEntry {
+  readonly participant: SessionInstaller;
+  /** 登記者那一列的 id（Cordis 的列 id；沒有列就是插件名）。 */
+  readonly source: string;
+}
 
 /** {@link createSessionLookupProvider} 的回傳：交給 Loader 當內建插件的類別。 */
 export interface SessionLookupProviderHandle {
   /** 掛進 Loader 的 `builtins` 的那個服務類別。 */
   readonly Provider: new (ctx: Context) => SessionLookupService;
+  /** 目前每一位會話參與者，依登記順序；快照。宿主把登記者是某一列的那幾位折進每條 thread 的 `registry.sessions.join`（#1491）。 */
+  participants(): readonly SessionParticipantEntry[];
+  /** 登記筆數：一致性套件的 `residue` 用它。 */
+  registrations(): number;
 }
 
 /**
@@ -39,6 +50,8 @@ export interface SessionLookupProviderHandle {
 export function createSessionLookupProvider(
   lookup: (config: unknown) => SessionLookup,
 ): SessionLookupProviderHandle {
+  const items: SessionParticipantEntry[] = [];
+
   class SessionLookupServiceImpl
     extends ContractService<SessionLookupService>
     implements SessionLookupService
@@ -49,7 +62,28 @@ export function createSessionLookupProvider(
       super(ctx, sessionLookupToken);
       this.forCall = (invocation) => lookup(invocation);
     }
+
+    join(participant: SessionInstaller): () => void {
+      // `this.ctx` 追蹤到呼叫者（消費者）：登記者那一列的 id 取自它。
+      const caller = this.ctx.fiber;
+      const source = caller.entry?.id ?? caller.runtime?.name ?? '(未知)';
+      if (typeof participant !== 'function') {
+        throw new TypeError(`${source} 登記會話參與者時給的不是函式`);
+      }
+      return this.ctx.effect(() => {
+        const entry: SessionParticipantEntry = { participant, source };
+        items.push(entry);
+        return () => {
+          const index = items.indexOf(entry);
+          if (index >= 0) items.splice(index, 1);
+        };
+      }, 'sessionLookup.join()');
+    }
   }
 
-  return { Provider: SessionLookupServiceImpl };
+  return {
+    Provider: SessionLookupServiceImpl,
+    participants: () => [...items],
+    registrations: () => items.length,
+  };
 }

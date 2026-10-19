@@ -70,6 +70,7 @@ function mount(
       createSessionRunner({
         address: { kind: 'root' },
         log,
+        rootLog: log,
         installers: registry.sessions.installers(),
         warn: (message) => {
           throw new Error(`不該有 warn：${message}`);
@@ -224,6 +225,7 @@ describe('兩次組裝不串台', () => {
       createSessionRunner({
         address: { kind: 'root' },
         log,
+        rootLog: log,
         installers: registry.sessions.installers(),
       });
       const command = registry.commands.find(GOAL_COMMAND_NAME);

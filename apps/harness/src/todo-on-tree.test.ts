@@ -71,7 +71,10 @@ function home(): { dir: string; env: NodeJS.ProcessEnv } {
 
 /** 入口怎麼建樹就怎麼建（serve：有人在）。 */
 function newRoot(): CordisRoot {
-  const root = createCordisRoot({ channel: entryApprovalChannel(undefined) });
+  const root = createCordisRoot({
+    channel: entryApprovalChannel(undefined),
+    workspaceRoot: tmpdir(),
+  });
   roots.push(root);
   return root;
 }
@@ -242,7 +245,7 @@ describe('B：出貨清單上的 todo 經樹進來，位置與名字不變', () 
     });
   }, 60000);
 
-  it('樹上的會話查找服務：歸屬是 session-lookup 那一列、契約版本 1.0.0', async () => {
+  it('樹上的會話查找服務：歸屬是 session-lookup 那一列、契約版本 1.1.0（#1491 加 join）', async () => {
     const { env } = home();
     const root = newRoot();
     await loadDefaultPlugins({ env, warn: warnNothing }, { tree: root.tree });
@@ -250,7 +253,7 @@ describe('B：出貨清單上的 todo 經樹進來，位置與名字不變', () 
       | { provider?: string; contractVersion?: string; forCall(config: unknown): unknown }
       | undefined;
     expect(service?.provider).toBe('session-lookup');
-    expect(service?.contractVersion).toBe('1.0.0');
+    expect(service?.contractVersion).toBe('1.1.0');
     // 還沒有任何一條 thread 登記：沒接上。
     expect(
       service?.forCall({ configurable: { thread_id: 'x', checkpoint_ns: 'tools:c' } }),

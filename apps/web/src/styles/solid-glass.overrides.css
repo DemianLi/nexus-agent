@@ -502,24 +502,27 @@ body {
 
 /*
  * 工具列與群組那一列在 1024 以下 44px（規格 §9，#1682；README 本地修改第 63 條）：vendor 的按鈕只有一行字高（`lineClass`）。
- * 選擇器錨在 `data-slot`，寫在 layer 外；1024 以上照 SG。`guard/` 在 375 與 1280 寬各量一次。
+ * #1683 擴到思考過程的 `<summary>`（vendor 同樣只有一行字高）。選擇器錨在 `data-slot`，寫在 layer 外；1024 以上照 SG。
+ * `guard/` 在 375 與 1280 寬各量一次。
  */
 /* prettier-ignore */
 @media (width < 64rem) {
   [data-slot="step-row"] > button,
-  [data-slot="step-group"] > button {
+  [data-slot="step-group"] > button,
+  [data-slot="reasoning"] > summary {
     min-height: 2.75rem;
   }
 }
 
 /*
  * 減少動態時工具列的箭頭不轉場（#528 的規則，#1682；README 本地修改第 64 條）：vendor 的箭頭 `transition-transform`，打開時轉 90°。
- * 寫在 layer 外，蓋得過 utilities 層。`guard/` 在模擬 reduced-motion 下量計算值。
+ * #1683 擴到思考過程 `<summary>` 裡的箭頭（同一個寫法）。寫在 layer 外，蓋得過 utilities 層。`guard/` 在模擬 reduced-motion 下量計算值。
  */
 /* prettier-ignore */
 @media (prefers-reduced-motion: reduce) {
   [data-slot="step-row"] > button > svg,
-  [data-slot="step-group"] > button > svg {
+  [data-slot="step-group"] > button > svg,
+  [data-slot="reasoning"] > summary > svg {
     transition-duration: 0s;
   }
 }
@@ -546,4 +549,23 @@ body {
 /* prettier-ignore */
 [data-slot="step-list"] > div:has(> [data-slot="message-scroller-item"]:empty) {
   display: none;
+}
+
+/*
+ * 思考過程的 `<summary>` 不超出欄寬（#1683 PM 決定題 3；README 本地修改第 70 條）：vendor 的 summary 是 `w-fit`
+ * （`components/ui/reasoning.tsx:27`），`fit-content` 下限是 min-content，收合時那行摘要不折行（`whitespace-nowrap`／`truncate`），
+ * min-content 就是整行摘要的寬：375 寬串流中量到 summary 右緣 688px、欄寬 359.5px。補 `max-width: 100%`，寬度蓋在欄寬，
+ * 摘要在裡面縮（轉接層的 `min-w-0`），串流中往左裁、講完時 `…` 截斷。
+ * 寬度蓋住之後，vendor 的標題 span（summary 的第一個 span，沒有 `shrink-0`）跟著 flex 一起縮：「思考中」量到折成 3 行（56.25px），
+ * 同一個根因（上游的 summary 裡沒有會變長的東西，trailing 是 patch `0021` 加的），併在這一條給標題 `flex-shrink: 0`
+ * （#1683 PM 決定 issuecomment-6259021234，錨在 vendor 結構上的選擇器先例是第 31 條）。寫在 layer 外。`guard/` 在 375 寬量。
+ */
+/* prettier-ignore */
+[data-slot="reasoning"] > summary {
+  max-width: 100%;
+}
+
+/* prettier-ignore */
+[data-slot="reasoning"] > summary > span:first-child {
+  flex-shrink: 0;
 }

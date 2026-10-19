@@ -156,7 +156,7 @@ function attach(registry: ReturnType<typeof createRegistry>, sessions: SessionRe
   const installers = registry.sessions.installers();
   registry.sessions.bind(sessions);
   sessions.observe(({ address, log }) => {
-    if (installers.length > 0) createSessionRunner({ address, log, installers });
+    if (installers.length > 0) createSessionRunner({ address, log, rootLog: log, installers });
   });
 }
 

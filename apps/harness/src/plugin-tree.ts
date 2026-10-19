@@ -74,9 +74,11 @@ import { createProjectionsProvider } from '@nexus/projections/provider';
 import type { ProjectionEntry } from '@nexus/projections/provider';
 import { feedbackToken } from '@nexus/feedback';
 import { goalsToken } from '@nexus/goal';
+import { permissionPresetsToken } from '@nexus/permission-presets';
 import { ContractError, FIBER_STATE, missingServices } from '@nexus/sdk';
 import type { ServiceToken } from '@nexus/sdk';
 import { createSessionLookupProvider } from '@nexus/session/provider';
+import type { SessionParticipantEntry } from '@nexus/session/provider';
 import { createFsLookupProvider } from '@nexus/fs/provider';
 import type { FsLookup } from '@nexus/fs';
 import { createSkillSourcesProvider } from '@nexus/skills/provider';
@@ -139,11 +141,21 @@ export const FEEDBACK_SERVICE_RANGE = '^1.0.0';
  */
 export const GOALS_SERVICE_RANGE = '^1.0.0';
 
+/**
+ * `permissionPresets` 服務的契約範圍（#1491 Q3 (a)）：跟 {@link FEEDBACK_SERVICE_RANGE} 同一類——插件提供、宿主消費，折進這條 thread 的
+ * `registry.services`。宿主組一條 thread 時叫它的 `start`（純函式：不碰日誌也不碰控制器）拿起始值與這條 thread 的目錄。
+ */
+export const PERMISSION_PRESETS_SERVICE_RANGE = '^1.0.0';
+
 /** 宿主取的每一個服務：token 與範圍。加一個「插件提供、宿主消費」的服務就在這裡多一格。 */
 const HOST_SERVICES: readonly { readonly token: ServiceToken<unknown>; readonly range: string }[] =
   [
     { token: feedbackToken as ServiceToken<unknown>, range: FEEDBACK_SERVICE_RANGE },
     { token: goalsToken as ServiceToken<unknown>, range: GOALS_SERVICE_RANGE },
+    {
+      token: permissionPresetsToken as ServiceToken<unknown>,
+      range: PERMISSION_PRESETS_SERVICE_RANGE,
+    },
   ];
 
 /**
@@ -268,6 +280,11 @@ export type RowVerdict =
        */
       readonly preSteps: readonly Pick<PreStepEntry, 'name' | 'listener'>[];
       /**
+       * 這一列登記的會話參與者（#1491，`@nexus/session` 1.1.0 的 `join`），**依登記順序**。折進這條 thread 的 registry 時一位一位交給
+       * `registry.sessions.join`，**位置就是這一列在清單上的位置**（`bindToTree` 照清單順序呼叫）：日誌上事件的相對順序靠它。
+       */
+      readonly participants: readonly SessionParticipantEntry['participant'][];
+      /**
        * **這一列負責折進這條 thread 的**投影單元（#1421）：登記者是這一列、而且這一列是那個 key 目前還活著的第一個登記者。
        * 同一個 key 由兩列共用時（提供者那一層引用計數共用，PM 決策 1），每個 key 只交給其中一列，這條 thread 的登記處才
        * 不會撞上它自己的重複拒絕（`NamedEntries`，照舊）。
@@ -380,6 +397,12 @@ export interface PluginTreeOptions {
    * 服務的值是 `undefined`，ask-user 在呼叫當下拒絕（fail-closed，#669）。
    */
   readonly channel?: ApprovalChannel;
+  /**
+   * 這個行程的工作區根（主機路徑；#1491 Q4 (a)）：進入點照 `resolveWorkspaceRoot(invocation.workspace, cwd)` 算出來，建樹時交進來，
+   * 樹把它放進 `fs` 那一列（`@nexus/fs` 的 `workspaceRoot()`）。`permission-presets` 在 `apply` 當下據它決定掛不掛 `/permission`。
+   * 不給就是沒有 `--workspace`（檔案系統沒有圍堵）。
+   */
+  readonly workspaceRoot?: string;
 }
 
 /** 一棵 Cordis 樹加上它的工具登記處與 Include。 */
@@ -395,8 +418,9 @@ export class PluginTree {
   /** 行程裡每一條活著的 thread 綁上的註冊表（#1463）：`session-lookup` 那一列問它，入口的 `attachSession` 往它登記。 */
   readonly #threadSessions = new ThreadSessions();
   #sessionLookup = createSessionLookupProvider((config) => this.#threadSessions.forCall(config));
-  /** fs 查找（#1466）：同一張登記表、同一支挑法，一筆登記同時帶這條 thread 的 fs 把手。 */
-  #fsLookup = createFsLookupProvider((config) => this.#threadSessions.fsForCall(config));
+  /** fs 查找（#1466）：同一張登記表、同一支挑法，一筆登記同時帶這條 thread 的 fs 把手；另帶行程級的工作區根（#1491）。 */
+  #fsLookup: ReturnType<typeof createFsLookupProvider>;
+  readonly #workspaceRoot: string | undefined;
   /** 串行化 {@link run}。 */
   #chain: Promise<unknown> = Promise.resolve();
   /** 最後一次推給 Include 的設定簽章；一樣就不推。 */
@@ -424,6 +448,16 @@ export class PluginTree {
   constructor(options: PluginTreeOptions = {}) {
     this.#channel = options.channel;
     this.#approvalChannel = createApprovalChannelProvider(options.channel);
+    this.#workspaceRoot = options.workspaceRoot;
+    this.#fsLookup = createFsLookupProvider(
+      (config) => this.#threadSessions.fsForCall(config),
+      options.workspaceRoot,
+    );
+  }
+
+  /** 這棵樹上 `fs` 那一列交出去的工作區根（建樹時交進來的那一份）；沒有圍堵是 `undefined`。給測試與審計對照用。 */
+  get workspaceRoot(): string | undefined {
+    return this.#workspaceRoot;
   }
 
   /**
@@ -935,6 +969,10 @@ export class PluginTree {
           .preSteps()
           .filter((item) => item.source === id)
           .map(({ name, listener }) => ({ name, listener })),
+        participants: this.#sessionLookup
+          .participants()
+          .filter((item) => item.source === id)
+          .map((item) => item.participant),
         // 投影單元由 `#assignProjections` 在所有列的結果都有了之後再分：共用的 key 只能給一列。
         projections: [],
         // 技能來源路徑由 `#assignSkillSources` 在所有列的結果都有了之後再分。
@@ -1017,6 +1055,11 @@ export interface DetachedMount {
    * （`not-attached`，插件在呼叫當下拒絕）。
    */
   readonly fsLookup?: (config: unknown) => FsLookup;
+  /**
+   * 這一次單獨掛上時的工作區根（#1491 Q4 (a)）。**沒有樹的呼叫端也要有**：`bindDetached` 從那一次組裝的 host 服務 `workspaceRoot`
+   * 讀出來交進來（組裝點只在有 `--workspace` 時提供它）；不給等於沒有圍堵。
+   */
+  readonly workspaceRoot?: string;
 }
 
 /** {@link mountDetached} 取出的東西：這一列登記的工具、投影單元、技能來源路徑、命令定義，與它提供、宿主取到的服務。 */
@@ -1030,6 +1073,8 @@ export interface DetachedContributions {
   readonly resultListeners: readonly ToolResultListener[];
   /** 這一列登記的 `agent/pre-step` listener（#1474），同 {@link RowVerdict} 的 `preSteps`。 */
   readonly preSteps: readonly Pick<PreStepEntry, 'name' | 'listener'>[];
+  /** 這一列登記的會話參與者（#1491），同 {@link RowVerdict} 的 `participants`。 */
+  readonly participants: readonly SessionParticipantEntry['participant'][];
   readonly projections: readonly ProjectionUnit[];
   readonly skillSources: readonly string[];
   readonly commands: readonly CommandDefinition[];
@@ -1058,7 +1103,10 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
   const sessionLookup = createSessionLookupProvider(
     mount.sessionLookup ?? (() => ({ kind: 'not-attached' })),
   );
-  const fsLookup = createFsLookupProvider(mount.fsLookup ?? (() => ({ kind: 'not-attached' })));
+  const fsLookup = createFsLookupProvider(
+    mount.fsLookup ?? (() => ({ kind: 'not-attached' })),
+    mount.workspaceRoot,
+  );
   const preSteps = createAgentLoopProvider();
   const root = new Context();
   const contractErrors = new Map<string, ContractError>();
@@ -1146,6 +1194,10 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
           .preSteps()
           .filter((entry) => entry.source === mount.id)
           .map(({ name, listener }) => ({ name, listener })),
+        participants: sessionLookup
+          .participants()
+          .filter((entry) => entry.source === mount.id)
+          .map((entry) => entry.participant),
         projections: projections
           .entries()
           .filter((entry) => entry.sources.includes(mount.id))

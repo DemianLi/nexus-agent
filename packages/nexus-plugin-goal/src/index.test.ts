@@ -57,6 +57,7 @@ function attach(options: GoalPluginOptions = {}): {
   const detach = createSessionRunner({
     address: { kind: 'root' },
     log,
+    rootLog: log,
     installers: registry.sessions.installers(),
     warn: (message) => {
       throw new Error(`不該有 warn：${message}`);
@@ -395,6 +396,7 @@ describe('接上一份已經有內容的日誌', () => {
     createSessionRunner({
       address: { kind: 'root' },
       log: first.log,
+      rootLog: first.log,
       installers: registry.sessions.installers(),
     });
 
@@ -516,6 +518,7 @@ describe('續接回來的日誌', () => {
     createSessionRunner({
       address: { kind: 'root' },
       log,
+      rootLog: log,
       installers: registry.sessions.installers(),
       warn: (message) => {
         throw new Error(`不該有 warn：${message}`);

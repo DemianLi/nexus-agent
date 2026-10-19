@@ -62,8 +62,14 @@ export { virtualPathOf } from '@nexus/core';
  * `1.1.0`（#1469）：`FsService` 多 `hasWorkspace()`，`offWorkspacePrefixes()` 把 plugin 用 `backend.mount()` 掛的前綴也併進來
  * （兩樣都在 fold 填 backend 的同一處算）；另轉出 `virtualPathOf`。向後相容的新增：只用 `backend()` 的消費者
  * （`submit-record`，宣告 `^1.0.0`）照常。
+ *
+ * `1.2.0`（[#1491](https://github.com/DemianLi/nexus-agent/issues/1491) Q4 (a)）：`FsLookupService` 多 `workspaceRoot()`——**行程級**的工作區事實
+ * （主機上的可寫根；沒給 `--workspace` 是 `undefined`），由入口建樹時交進來，`permission-presets` 在 `apply` 當下據它決定掛不掛 `/permission`、
+ * 並在 `/permission` 不帶引數時報可寫根。向後相容的新增：只用 `forCall` 的消費者（宣告 `^1.0.0`、`^1.1.0`）照常。它跟逐條 thread 的
+ * `FsService.hasWorkspace()` 是兩格事實：那一格要在呼叫當下依 thread 問，這一格整台一份（serve 每條 thread 的根都是同一個
+ * `resolveWorkspaceRoot(invocation.workspace, cwd)`，續接時 `assertSameWorkspaceRoot` 擋住不同的根）。
  */
-export const FS_LOOKUP_CONTRACT_VERSION = '1.1.0';
+export const FS_LOOKUP_CONTRACT_VERSION = '1.2.0';
 
 /**
  * 找這次呼叫那條 thread 的 fs 把手的結果。
@@ -96,6 +102,15 @@ export interface FsLookupService {
    * @param invocation - 工具 handler 的第二個參數（`ToolRunnableConfig`）。
    */
   forCall(invocation: unknown): FsLookup;
+
+  /**
+   * **這個行程的工作區根**（主機上的路徑）；沒給 `--workspace`（檔案系統沒有圍堵）是 `undefined`。行程級、整台一份，
+   * 由入口建樹時交進來（[#1491](https://github.com/DemianLi/nexus-agent/issues/1491) Q4 (a)，前例 #1458 的 `channel`）。
+   *
+   * 它回答的是 `apply` 當下就要知道的事（「有沒有圍堵」、「圍的是哪個目錄」），所以不依 thread 挑、不需要呼叫設定。要問**這一條 thread**
+   * 有沒有工作區用 {@link FsService.hasWorkspace}。
+   */
+  workspaceRoot(): string | undefined;
 }
 
 /** `fs` 服務的 token。 */

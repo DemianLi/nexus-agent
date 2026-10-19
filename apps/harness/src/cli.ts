@@ -55,7 +55,7 @@ import { PLAN_COMMAND_NAME, recordedPlanMode } from '@nexus/plugin-plan-mode';
 import { AssemblyDropError, HEADLESS_APPROVALS } from './agent-factory.js';
 import { driveGoalRound } from './goal-driver.js';
 import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
-import { PERMISSION_COMMAND_NAME } from '@nexus/plugin-permission-presets';
+import { PERMISSION_COMMAND_NAME } from '@nexus/permission-presets';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
 import { processLaunchEnv } from './launch-env.js';
@@ -907,7 +907,13 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`：`runLaunched` 載完清單才建它，但起不來、跑壞了、
   // 跑完了都在這裡卸載。跑壞了的那一條先保住原本的錯誤，同下面 `runLaunched` 收尾的規則。
   // 預設答題管道由入口給（#1458 Q1 (c)）：這個入口沒有人在，與下面組裝時傳的 `HEADLESS_APPROVALS` 是同一個決定。
-  const root = createCordisRoot({ channel: entryApprovalChannel(HEADLESS_APPROVALS) });
+  // 工作區根也由入口給（#1491 Q4 (a)）：照 `resolveWorkspaceRoot` 算，跟組裝點與 `--resume` 的同工作區檢查（下面 `assertSameWorkspaceRoot`）
+  // 是同一支函式、同一個 cwd（`options.cwd ?? process.cwd()`）。沒有 `--workspace` 就不給：`permission-presets` 據此不註冊 `/permission`。
+  const workspaceRoot = resolveWorkspaceRoot(invocation.workspace, options.cwd ?? process.cwd());
+  const root = createCordisRoot({
+    channel: entryApprovalChannel(HEADLESS_APPROVALS),
+    ...(workspaceRoot !== undefined && { workspaceRoot }),
+  });
   try {
     try {
       await runLaunched(options, invocation, printer, liveLaunch, root);

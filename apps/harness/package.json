@@ -62,6 +62,7 @@
     "@nexus/deque": "workspace:*",
     "@nexus/feedback": "workspace:*",
     "@nexus/goal": "workspace:*",
+    "@nexus/permission-presets": "workspace:*",
     "@nexus/plugin-agent-instructions": "workspace:*",
     "@nexus/plugin-ask-user": "workspace:*",
     "@nexus/plugin-feedback": "workspace:*",

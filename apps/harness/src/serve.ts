@@ -515,7 +515,12 @@ async function startUnderHomeLock(
   // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`：`startServer` 載完清單才建它，起不來與關掉時都
   // 在這裡卸載，排在 server 自己的收尾之後、還原代理之前。
   // 預設答題管道由入口給（#1458 Q1 (c)）：serve 有人在（web 收得到問題），組裝時也不傳 `approvals`——同一個決定。
-  const root = createCordisRoot({ channel: entryApprovalChannel(undefined) });
+  // 工作區根也由入口給（#1491 Q4 (a)）：跟每條 thread 組裝時算的是同一支 `resolveWorkspaceRoot`、同一個 cwd，整台一份。
+  const workspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
+  const root = createCordisRoot({
+    channel: entryApprovalChannel(undefined),
+    ...(workspaceRoot !== undefined && { workspaceRoot }),
+  });
   let running: RunningServe;
   try {
     running = await startServer(options, invocation, liveLaunch, log, root);
