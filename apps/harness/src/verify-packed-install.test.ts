@@ -13,7 +13,6 @@ import {
   existsSync,
   mkdirSync,
   mkdtempSync,
-  readFileSync,
   realpathSync,
   rmSync,
   symlinkSync,
@@ -38,6 +37,7 @@ import {
   stampProblems,
   versionProblems,
 } from '../../../scripts/release/verify-packed-install.js';
+import { isAlive, readPidFile, signalPid } from './test-pids.fixture.js';
 
 const ok = { status: 0, stdout: '', stderr: '' };
 
@@ -287,14 +287,7 @@ describe('smokeInstalledServe 逾時送 SIGKILL 給整個行程群組', () => {
   beforeEach(() => void (dir = mkdtempSync(join(tmpdir(), 'verify-pgroup-'))));
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  const alive = (pid: number): boolean => {
-    try {
-      process.kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const alive = isAlive;
 
   it('serve 忽略 SIGTERM 又起了子行程：逾時被殺之後，子行程也不見', async () => {
     const root = join(dir, 'root');
@@ -304,9 +297,9 @@ describe('smokeInstalledServe 逾時送 SIGKILL 給整個行程群組', () => {
       join(root, 'lib/serve.js'),
       [
         "import { spawn } from 'node:child_process';",
-        "import { writeFileSync } from 'node:fs';",
+        "import { renameSync, writeFileSync } from 'node:fs';",
         "const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
-        `writeFileSync(${JSON.stringify(grandchildPid)}, String(g.pid));`,
+        `writeFileSync(${JSON.stringify(grandchildPid)} + '.tmp', String(g.pid)); renameSync(${JSON.stringify(grandchildPid)} + '.tmp', ${JSON.stringify(grandchildPid)});`,
         "process.on('SIGTERM', () => {});",
         'setInterval(() => {}, 1000);',
       ].join('\n'),
@@ -319,12 +312,12 @@ describe('smokeInstalledServe 逾時送 SIGKILL 給整個行程群組', () => {
     expect(problems.join('\n')).toMatch(/serve 沒印出網址/u);
     expect(problems.join('\n')).toMatch(/SIGTERM 後 exit null/u);
     expect(existsSync(grandchildPid)).toBe(true);
-    const pid = Number(readFileSync(grandchildPid, 'utf8'));
+    const pid = await readPidFile(grandchildPid);
     // 孤兒被 init 收養後還要一點時間才會消失：等到 3 秒。
     const deadline = Date.now() + 3_000;
     while (alive(pid) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
     const stillAlive = alive(pid);
-    if (stillAlive) process.kill(pid, 'SIGKILL'); // 失敗時也別留下孤兒
+    if (stillAlive) signalPid(pid, 'SIGKILL'); // 失敗時也別留下孤兒
     expect(stillAlive).toBe(false);
   }, 30_000);
   // verify 自己被中斷（終端機 Ctrl-C、CI 取消）時，離開了前景群組的 serve 與它的子行程不能留下來。
@@ -339,10 +332,10 @@ describe('smokeInstalledServe 逾時送 SIGKILL 給整個行程群組', () => {
         join(root, 'lib/serve.js'),
         [
           "import { spawn } from 'node:child_process';",
-          "import { writeFileSync } from 'node:fs';",
+          "import { renameSync, writeFileSync } from 'node:fs';",
           "const g = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], { stdio: 'ignore' });",
-          `writeFileSync(${JSON.stringify(grandchildPid)}, String(g.pid));`,
-          `writeFileSync(${JSON.stringify(servePid)}, String(process.pid));`,
+          `writeFileSync(${JSON.stringify(grandchildPid)} + '.tmp', String(g.pid)); renameSync(${JSON.stringify(grandchildPid)} + '.tmp', ${JSON.stringify(grandchildPid)});`,
+          `writeFileSync(${JSON.stringify(servePid)} + '.tmp', String(process.pid)); renameSync(${JSON.stringify(servePid)} + '.tmp', ${JSON.stringify(servePid)});`,
           "process.on('SIGTERM', () => {});",
           'setInterval(() => {}, 1000);',
         ].join('\n'),
@@ -380,8 +373,8 @@ describe('smokeInstalledServe 逾時送 SIGKILL 給整個行程群組', () => {
           await new Promise((r) => setTimeout(r, 50));
         }
         expect(existsSync(servePid) && existsSync(grandchildPid), log).toBe(true);
-        serve = Number(readFileSync(servePid, 'utf8'));
-        grandchild = Number(readFileSync(grandchildPid, 'utf8'));
+        serve = await readPidFile(servePid);
+        grandchild = await readPidFile(grandchildPid);
         expect(alive(serve) && alive(grandchild)).toBe(true);
         runnerProc.kill(signal);
         const result = await ended;
@@ -395,8 +388,7 @@ describe('smokeInstalledServe 逾時送 SIGKILL 給整個行程群組', () => {
         expect(alive(grandchild)).toBe(false);
         expect(existsSync(scratch)).toBe(false);
       } finally {
-        for (const pid of [serve, grandchild])
-          if (pid > 0 && alive(pid)) process.kill(pid, 'SIGKILL');
+        for (const pid of [serve, grandchild]) if (pid > 1 && alive(pid)) signalPid(pid, 'SIGKILL');
         if (runnerProc.exitCode === null && runnerProc.signalCode === null)
           runnerProc.kill('SIGKILL');
       }
