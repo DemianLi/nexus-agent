@@ -60,6 +60,8 @@ import { startGuardServer, type GuardServer } from './server';
  * 16. **tool-steps**（#1682 PR A，`?overlay=tool-steps`）：列、群組那一列、結果框的字過 4.5，結果框聚焦時 2px 外框畫在外層、offset 2px
  *    （第 62 條）；執行中不閃（第 61 條）；375 寬按鈕至少 44px、1280 寬照 SG（第 63 條）；減少動態時箭頭不轉場（第 64 條）；疊在清單裡的
  *    結果框沒有 blur、清單與單獨放的結果框照 SG 有（第 65 條）。
+ * 17. **增刪行數**（#1685 PR A，`?overlay=diff-stats`）：`+`／`−` 在頁面、`StepList` 的 `--panel`、改動卡、審查頁與選檔器上過 4.5，
+ *    顏色就是 `--success`／`--destructive`（第 75 條）；375 寬時包裝層不被擠（第 76 條）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。

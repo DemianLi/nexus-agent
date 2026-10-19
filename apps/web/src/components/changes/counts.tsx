@@ -1,7 +1,7 @@
 /**
  * 一個改動過的檔的行數（[#443](https://github.com/DemianLi/nexus-agent/issues/443)）：改動卡與審查頁共用。
  * 行數畫成 SG 的 `DiffStats`（nexus 層 `components/ui/diff-view.tsx`，#1685 PR A：報讀器唸「新增 12 行，刪除 3 行」，不唸符號）。
- * 二進位與過大的檔不給行數、寫字說明（同 dsh `Counts`），SG 沒有這兩種，留在這一層。
+ * 二進位與過大的檔不給行數、寫字說明（同 dsh `ChangedFiles.tsx` 的做法），SG 沒有這兩種，留在這一層。
  */
 
 import type { WorkspaceChangedFile } from '@nexus/wire';

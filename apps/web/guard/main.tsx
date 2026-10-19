@@ -56,6 +56,9 @@
  *   （摘要很長，量 375 寬往左裁）、夾在一段打開的工具段裡的一列（`StepList` 的 `--panel` 上）。量字的對比（頁面與 `--panel` 兩種底、
  *   「思考中」的漸層與減少動態時停住的那一格）、焦點、AX 樹、箭頭、44px、shimmer、`white-space`；三塊各包一層 `data-guard-reasoning`
  *   （`done`、`running`、`panel`）。
+ * - `?overlay=diff-stats` 畫增刪行數（SG 的 `DiffStats`＋nexus 包裝層，#1685 PR A）：頁面上一顆、工具段裡寫檔那張卡、改動卡（讀假的
+ *   fetch，路徑故意很長）；測試再點開審查頁與選檔器。量 `+`／`−` 在四種底上的對比、算出來的顏色是 `--success`／`--destructive`（第 75 條）、
+ *   375 寬不被擠（第 76 條）；三塊各包一層 `data-guard-diffstats`（`page`、`panel`、`changes`）。
  * - `?overlay=attachments` 畫輸入框底下的草稿附件兩排（放得下、放不下）與已送出的附件（#1638 PR C），量按鈕聚焦時外殼不出 ring、
  *   字的對比（上傳中的標題是 shimmer，另量漸層每個色標）、左右淡出跟著橫向捲動。
  */

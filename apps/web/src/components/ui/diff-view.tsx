@@ -4,7 +4,7 @@
  * `vendor/solid-glass/README.md` 的「本地修改」：
  *
  * - **`DiffStats` 包一層**（第 76 條，#1685 PR A）：vendor 只畫「+12 −3」，報讀器唸符號。這一層把 vendor 那顆包進 `aria-hidden`，
- *   旁邊一段 sr-only「新增 12 行，刪除 3 行」（同以前的 `Counts`，§8）。vendor 的 `DiffStats` 只收 `added`／`removed`／`className`，
+ *   旁邊一段 sr-only「新增 12 行，刪除 3 行」（同這張卡以前 `changes/counts.tsx` 的唸法，§8）。vendor 的 `DiffStats` 只收 `added`／`removed`／`className`，
  *   掛不上 `aria-hidden`，所以外面再包一層；外層帶 `shrink-0`，在 flex 列裡不被擠（vendor 的 `shrink-0` 在裡面那層，管不到外層）。
  *   只加外層、不複製上游標記，走包裝層（#1583 判準）。vendor 的 `StepRow`／`StepGroup` import 的也是這一層，一起改到。
  * - **兩色換成 `--success`／`--destructive`**（第 75 條，覆寫檔 `styles/solid-glass.overrides.css`）：SG 的 emerald-600／rose-600 亮色過不了 4.5。

@@ -572,9 +572,10 @@ body {
 
 /*
  * 增刪行數的兩色換成 nexus 的 `--success`／`--destructive`（#1685 PM 定題 4；README 本地修改第 75 條）：vendor 的 `DiffStats`
- * （`components/ui/diff-view.tsx:46-47`）是 `text-emerald-600`／`text-rose-600`（暗 `-400`），亮色的 emerald-600 在頁面底與卡片上
- * 過不了 4.5。換成以前 `Counts` 用的兩個 token（`tokens.generated.css` 已對頁面、卡片、`--panel` 調過）。選擇器錨在 vendor 的
- * 兩個子 span（`registry-edits.test.ts` 釘住原文）。寫在 layer 外，蓋得過 vendor 的 utility。`guard/` 在各種底、亮暗、三種模式量。
+ * （`components/ui/diff-view.tsx:46-47`）是 `text-emerald-600`／`text-rose-600`（暗 `-400`），亮色兩個在頁面底、卡片、`--panel`
+ * 上都過不了 4.5。換成以前 `changes/counts.tsx` 用的兩個 token（`tokens.generated.css` 已對頁面、卡片、`--panel` 調過），亮暗同一對。
+ * 選擇器錨在 vendor 的兩個子 span（`registry-edits.test.ts` 釘住原文）。寫在 layer 外，蓋得過 vendor 的 utility。`guard/` 在各種底、
+ * 亮暗、三種模式量。
  */
 /* prettier-ignore */
 [data-slot="diff-stats"] > span:first-child {
