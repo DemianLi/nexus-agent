@@ -6,9 +6,9 @@ import { Surface } from '@/components/surface';
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
 
 /**
- * collapsible 換成 SG 的 Base UI 版（#1638 PR A）之後，nexus 依賴的屬性契約。樣式靠這幾個屬性命中：`Chevron` 與思考過程的摘要
- * 跟著 Trigger 的 `data-panel-open`，展開收合的動效跟著 Panel 的 `data-open`／`data-closed`。CSS 有沒有真的命中，jsdom 量不到，
- * 由 `guard/` 量（`?overlay=collapsibles`）。
+ * collapsible 換成 SG 的 Base UI 版（#1638 PR A）之後，nexus 依賴的屬性契約。樣式靠這幾個屬性命中：`Chevron` 跟著 Trigger 的
+ * `data-panel-open`，展開收合的動效跟著 Panel 的 `data-open`／`data-closed`。思考過程 #1683 起是 SG 的原生 `<details>`，不走這裡。
+ * CSS 有沒有真的命中，jsdom 量不到，由 `guard/` 量（`?overlay=collapsibles`）。
  */
 
 afterEach(cleanup);

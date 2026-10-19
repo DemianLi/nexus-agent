@@ -49,9 +49,9 @@ import { startGuardServer, type GuardServer } from './server';
  * 12. **輸入框的底列**（#1591 PR 2）：三顆 Pick 與用量環的焦點；Pick 的 12px 次要字（含兩種退路）；環三個色階是 status token、
  *    過 3:1（第 37 條）；「全開」的警示色（第 35 條）；鎖住的樣子（第 39 條）；清單開著時選項的字與高度（第 25 條擴充）；環的明細；
  *    reduced-motion 下弧長不走 transition（第 38 條）；375 寬 44px、不溢出、不重疊（第 36、40 條）。
- * 13. **展開收合**（#1638 PR A，`?overlay=collapsibles`）：展開途中的高度介於 0 與最終值之間（Q1：keyframes 讀 Base UI 的
+ * 13. **展開收合**（#1638 PR A，`?overlay=collapsibles`）：摘要列展開途中的高度介於 0 與最終值之間（Q1：keyframes 讀 Base UI 的
  *    `--collapsible-panel-height`，Panel 的 `data-open:` 命中動效）；reduced-motion 下沒有高度動效、第一幀就到位；箭頭跟著 Trigger 的
- *    `data-panel-open` 轉半圈、思考過程展開後藏「·」與摘要（Q2）。
+ *    `data-panel-open` 轉半圈。思考過程（#1683 換成 SG 的原生 `<details>`）的箭頭跟著 `details[open]` 轉 90 度、展開後藏「·」與摘要（Q2）。
  * 14. **對話區**（#1638 PR B，`?overlay=messages`，產品的 `Transcript`）：泡泡字、表尾、捲到最新的按鈕圖示的對比與按鈕的焦點（亮暗加兩種退路，
  *    {@link OVERLAYS}）；每一則的 `content-visibility` 是 `visible`（第 42 條）；按鈕的動效照 §7：不位移、只縮放 .97、reduced-motion 下沒有
  *    transition（第 41 條）；外殼的行高是 SG 的 20px、泡泡維持 23px；底部淡出捲到底時收成 0。
@@ -2173,14 +2173,20 @@ describe('瀏覽器量桌面側欄的收合動效（#1680 PR B，`?overlay=deskt
 
 describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', () => {
   // 這幾件都靠真的 CSS 命中 Base UI 的屬性（Panel 的 `data-open`、Trigger 的 `data-panel-open`、`--collapsible-panel-height`），
-  // jsdom 不載 CSS，元件測試量不到。量思考過程那一列：箭頭、摘要、內容的高度動效都在它身上。
-  const ROW = '[data-testid="reasoning-row"]';
-  const openRow = (reducedMotion: boolean) =>
-    openOverlay('collapsibles', 'light', { reducedMotion, marks: { [ROW]: {} } });
+  // jsdom 不載 CSS，元件測試量不到。高度動效量摘要列：思考過程改用 SG 的原生 `<details>` 之後沒有高度動效（#1683 決定題 2），
+  // 同頁還帶高度動效的是摘要列。思考過程只量箭頭與展開後藏「·」與摘要。
+  const COMPACTION = '[data-testid="compaction-row"]';
+  const REASONING = '[data-testid="reasoning-row"]';
+  const TRIGGER = `${COMPACTION} [data-slot="collapsible-trigger"]`;
+  const openRows = (reducedMotion: boolean) =>
+    openOverlay('collapsibles', 'light', {
+      reducedMotion,
+      marks: { [COMPACTION]: {}, [REASONING]: {} },
+    });
 
-  /** 點開那一列，回傳內容在展開動效 40% 時的高度、第一幀的高度與動效跑完的高度。 */
+  /** 點開摘要列，回傳內容在展開動效 40% 時的高度、第一幀的高度與動效跑完的高度。 */
   async function expand(page: Page) {
-    await page.click(`${ROW} button[aria-expanded]`);
+    await page.click(TRIGGER);
     return page.evaluate(async (row) => {
       const panel = () =>
         document.querySelector<HTMLElement>(`${row} [data-slot="collapsible-content"]`);
@@ -2207,11 +2213,11 @@ describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', (
         final: el.getBoundingClientRect().height,
         variable: el.style.getPropertyValue('--collapsible-panel-height'),
       };
-    }, ROW);
+    }, COMPACTION);
   }
 
   test('展開途中的高度介於 0 與最終值之間（Q1：keyframes 讀 Base UI 的 --collapsible-panel-height）', async () => {
-    const page = await openRow(false);
+    const page = await openRows(false);
     try {
       const measured = await expand(page);
       report['collapsible:expand'] = measured;
@@ -2226,7 +2232,7 @@ describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', (
   });
 
   test('減少動態：沒有高度動效，點開的第一幀就到位', async () => {
-    const page = await openRow(true);
+    const page = await openRows(true);
     try {
       const measured = await expand(page);
       report['collapsible:expand-reduced'] = measured;
@@ -2238,40 +2244,50 @@ describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', (
     }
   });
 
-  test('箭頭跟著 Trigger 開著時的 data-panel-open 轉半圈；思考過程展開後藏「·」與摘要（Q2）', async () => {
-    const page = await openRow(false);
+  test('摘要列的箭頭跟著 Trigger 開著時的 data-panel-open 轉半圈', async () => {
+    const page = await openRows(false);
     try {
       const read = () =>
-        page.$eval(ROW, (row) => {
-          const trigger = row.querySelector('button[aria-expanded]')!;
+        page.$eval(TRIGGER, (trigger) => ({
+          expanded: trigger.getAttribute('aria-expanded'),
+          panelOpen: trigger.hasAttribute('data-panel-open'),
+          // Tailwind v4 的 `rotate-180` 寫的是獨立的 `rotate` 屬性，不是 `transform`。
+          chevron: getComputedStyle(trigger.querySelector('svg[data-motion-rotate]')!).rotate,
+        }));
+      const closed = await read();
+      await page.click(TRIGGER);
+      await settle(page);
+      const opened = await read();
+      report['collapsible:trigger'] = { closed, opened };
+      expect(closed).toEqual({ expanded: 'false', panelOpen: false, chevron: 'none' });
+      expect(opened).toEqual({ expanded: 'true', panelOpen: true, chevron: '180deg' });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('思考過程的箭頭跟著 details[open] 轉 90 度，展開後藏「·」與摘要（#1638 Q2、#1683）', async () => {
+    const page = await openRows(false);
+    try {
+      const read = () =>
+        page.$eval(REASONING, (row) => {
+          const summary = row.querySelector('details > summary')!;
           return {
-            expanded: trigger.getAttribute('aria-expanded'),
-            panelOpen: trigger.hasAttribute('data-panel-open'),
-            // Tailwind v4 的 `rotate-180` 寫的是獨立的 `rotate` 屬性，不是 `transform`。
-            chevron: getComputedStyle(trigger.querySelector('svg[data-motion-rotate]')!).rotate,
-            hidden: [...trigger.querySelectorAll('span[aria-hidden]')]
+            open: row.querySelector('details')!.open,
+            chevron: getComputedStyle(summary.querySelector('svg')!).rotate,
+            hidden: [...summary.querySelectorAll('span[aria-hidden]')]
               .filter((el) => el.textContent?.trim() !== '')
               .map((el) => getComputedStyle(el).display === 'none'),
           };
         });
       const closed = await read();
-      await page.click(`${ROW} button[aria-expanded]`);
+      await page.click(`${REASONING} details > summary`);
       await settle(page);
       const opened = await read();
-      report['collapsible:trigger'] = { closed, opened };
-      expect(closed).toEqual({
-        expanded: 'false',
-        panelOpen: false,
-        chevron: 'none',
-        hidden: [false, false],
-      });
+      report['collapsible:reasoning'] = { closed, opened };
+      expect(closed).toEqual({ open: false, chevron: 'none', hidden: [false, false] });
       // 量具自檢：「·」與摘要兩個都量到了。
-      expect(opened).toEqual({
-        expanded: 'true',
-        panelOpen: true,
-        chevron: '180deg',
-        hidden: [true, true],
-      });
+      expect(opened).toEqual({ open: true, chevron: '90deg', hidden: [true, true] });
     } finally {
       await page.close();
     }
@@ -2895,4 +2911,406 @@ test('第 66 條：工具段裡空的那一則不留空格，清單頂端就是�
   } finally {
     await page.close();
   }
+});
+
+/**
+ * 推理列（#1683，`?overlay=reasoning`）：SG 的 `Reasoning` 接上產品的轉接層。三塊：講完的一列（`done`）、還在想的一列（`running`，
+ * 摘要很長）、工具段裡的一列（`panel`，疊在 `StepList` 的 `--panel` 上）。vendor 元件掛不了屬性，開頁後補。
+ * 標題、「·」、摘要量收著的時候；內文（段落、清單、粗體、連結、行內 code）打開 `done` 與 `panel` 再量。
+ */
+const REASONING_ROWS = '[data-guard-reasoning]';
+const reasoningIn = (block: 'done' | 'running' | 'panel') =>
+  `[data-guard-reasoning="${block}"] [data-slot="reasoning"]`;
+/** 收著時看得見的（標題、「·」、摘要、summary 的焦點）交給 `openOverlay` 等；內文收著時看不見，打開之後才補標記（`markReasoningBody`）。 */
+const reasoningMarks: Record<string, Record<string, string>> = Object.fromEntries(
+  (
+    [
+      ['done', 'page'],
+      ['running', 'page'],
+      ['panel', 'panel'],
+    ] as const
+  ).flatMap(([block, on]) => {
+    const row = reasoningIn(block);
+    return [
+      [`${row} > summary`, { 'data-guard-focus': `reasoning-summary-${block}` }],
+      [`${row} > summary > span:nth-child(2)`, { 'data-guard-text': `reasoning-dot-${on}` }],
+      [
+        `${row} [data-testid="reasoning-summary"]`,
+        { 'data-guard-text': `reasoning-trailing-${on}` },
+      ],
+      ...(block === 'running'
+        ? []
+        : [
+            [`${row} > summary > span:first-child`, { 'data-guard-text': `reasoning-title-${on}` }],
+          ]),
+    ];
+  }),
+);
+const REASONING_BODY = ['body', 'li', 'strong', 'link', 'code'];
+const markReasoningBody = (page: Page) =>
+  page.evaluate((parts) => {
+    const tags: Record<string, string> = {
+      body: 'p',
+      li: 'li',
+      strong: 'strong',
+      link: 'a',
+      code: 'code',
+    };
+    for (const [block, on] of [
+      ['done', 'page'],
+      ['panel', 'panel'],
+    ]) {
+      const row = document.querySelector(
+        `[data-guard-reasoning="${block}"] [data-slot="reasoning"]`,
+      )!;
+      for (const part of parts)
+        for (const el of row.querySelectorAll(`.markdown ${tags[part]}`))
+          el.setAttribute('data-guard-text', `reasoning-${part}-${on}`);
+    }
+  }, REASONING_BODY);
+const openReasoningRows = (page: Page, blocks: ('done' | 'running' | 'panel')[]) =>
+  page.evaluate((selectors) => {
+    for (const selector of selectors)
+      document.querySelector<HTMLDetailsElement>(selector)!.open = true;
+  }, blocks.map(reasoningIn));
+const REASONING_HEAD = ['title', 'dot', 'trailing'];
+
+describe.each(
+  MODES.flatMap((mode) => (['light', 'dark'] as const).map((theme) => [mode, theme] as const)),
+)('瀏覽器量推理列（#1683）：%s、%s', (mode, theme) => {
+  test('頁面與 --panel 兩種底上的標題、「·」、摘要、內文（段落、清單、粗體、連結、行內 code）過 4.5；summary 的焦點（外框 offset 2px）', async () => {
+    const page = await openOverlay('reasoning', theme, { mode, marks: reasoningMarks });
+    try {
+      const head = (await collectTexts(page)).filter((t) =>
+        REASONING_HEAD.some((part) => t.name.startsWith(`reasoning-${part}-`)),
+      );
+      const focus = await collectFocus(page);
+      // 外框離 summary 2px（覆寫檔 base layer 那條 `:focus-visible` 的 offset；collectFocus 不量 offset）。
+      const offsets = await page.$$eval(
+        `${REASONING_ROWS} [data-slot="reasoning"] > summary`,
+        (els) =>
+          els.map((el) => {
+            (el as HTMLElement).focus();
+            return {
+              focusVisible: el.matches(':focus-visible'),
+              offset: getComputedStyle(el).outlineOffset,
+            };
+          }),
+      );
+      report[`reasoning:${mode}:${theme}:outline-offset`] = offsets;
+      expect(offsets).toEqual(Array(3).fill({ focusVisible: true, offset: '2px' }));
+      await openReasoningRows(page, ['done', 'panel']);
+      await settle(page);
+      await markReasoningBody(page);
+      const body = (await collectTexts(page)).filter((t) =>
+        REASONING_BODY.some((part) => t.name.startsWith(`reasoning-${part}-`)),
+      );
+      const count = (texts: TextSample[]) =>
+        Object.fromEntries(
+          [...new Set(texts.map((t) => t.name))].map((name) => [
+            name,
+            texts.filter((t) => t.name === name).length,
+          ]),
+        );
+      // 量具自檢：收著時兩種底上的標題、三列的「·」與摘要；打開後兩種底上的兩段、兩項清單、粗體、連結、行內 code 都量到。
+      expect(count(head)).toEqual({
+        'reasoning-title-page': 1,
+        'reasoning-title-panel': 1,
+        'reasoning-dot-page': 2,
+        'reasoning-dot-panel': 1,
+        'reasoning-trailing-page': 2,
+        'reasoning-trailing-panel': 1,
+      });
+      expect(count(body)).toEqual(
+        Object.fromEntries(
+          ['page', 'panel'].flatMap((on) => [
+            [`reasoning-body-${on}`, 2],
+            [`reasoning-li-${on}`, 2],
+            [`reasoning-strong-${on}`, 1],
+            [`reasoning-link-${on}`, 1],
+            [`reasoning-code-${on}`, 1],
+          ]),
+        ),
+      );
+      expectTexts(
+        [...head, ...body],
+        Object.keys(count([...head, ...body])),
+        `reasoning:${mode}:${theme}`,
+      );
+      expect(focus.map((f) => f.name)).toEqual([
+        'reasoning-summary-done-0',
+        'reasoning-summary-running-0',
+        'reasoning-summary-panel-0',
+      ]);
+      expectFocus(focus, `reasoning:${mode}:${theme}`);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe.each(['light', 'dark'] as const)('瀏覽器量推理列的「思考中」（#1683）：%s', (theme) => {
+  const TITLE = `${reasoningIn('running')} > summary > span:first-child`;
+  const readTitle = (page: Page) =>
+    page.$eval(TITLE, (el) => {
+      const own = getComputedStyle(el);
+      // 漸層畫在標題自己身上、只透過字露出來：底色從上一層開始疊；自己那層只帶 opacity。
+      const chain = [
+        { backgroundColor: 'rgba(0, 0, 0, 0)', backgroundImage: 'none', opacity: own.opacity },
+      ];
+      for (let node = el.parentElement; node !== null; node = node.parentElement) {
+        const style = getComputedStyle(node);
+        chain.push({
+          backgroundColor: style.backgroundColor,
+          backgroundImage: style.backgroundImage,
+          opacity: style.opacity,
+        });
+      }
+      return {
+        name: el.textContent ?? '',
+        shimmer: el.classList.contains('status-shimmer'),
+        color: own.color,
+        clip: own.backgroundClip,
+        image: own.backgroundImage,
+        animation: `${own.animationName} ${own.animationDuration}`,
+        chain,
+      };
+    });
+
+  test('平常：SG 的 status-shimmer（sg-status-shimmer 2.4s），漸層每個色標對底色都過 4.5', async () => {
+    const page = await openOverlay('reasoning', theme, { marks: { [TITLE]: {} } });
+    try {
+      const title = await readTitle(page);
+      const stops = [...title.image.matchAll(/(?:oklch|oklab|rgba?)\([^)]*\)/g)].map((m) => m[0]);
+      const ratios = stops.map((stop) => ({ stop, ...worstOn(stop, title.chain) }));
+      report[`reasoning:${theme}:shimmer`] = {
+        ...title,
+        chain: undefined,
+        stops: ratios.map((r) => `${r.stop} ${round(r.ratio)}（${r.on}）`),
+      };
+      // 量具自檢：字真的是透明的、顏色來自三個色標的漸層、動畫在跑。
+      expect(title).toMatchObject({
+        name: '思考中',
+        shimmer: true,
+        color: 'rgba(0, 0, 0, 0)',
+        clip: 'text',
+        animation: 'sg-status-shimmer 2.4s',
+      });
+      expect(stops).toHaveLength(3);
+      expect(
+        ratios
+          .filter((r) => !(r.ratio >= TEXT_MIN))
+          .map((r) => `${r.stop} ${round(r.ratio)}（${r.on}）`),
+      ).toEqual([]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('減少動態：停住、沒有漸層，字色照常過 4.5', async () => {
+    const page = await openOverlay('reasoning', theme, {
+      reducedMotion: true,
+      marks: { [TITLE]: {} },
+    });
+    try {
+      const title = await readTitle(page);
+      const contrast = worstOn(title.color, title.chain);
+      report[`reasoning:${theme}:shimmer-reduced`] = {
+        ...title,
+        chain: undefined,
+        ratio: round(contrast.ratio),
+      };
+      expect(title).toMatchObject({
+        name: '思考中',
+        shimmer: true,
+        image: 'none',
+        animation: 'none 0s',
+      });
+      expect(contrast.ratio).toBeGreaterThanOrEqual(TEXT_MIN);
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe('瀏覽器量推理列的行為與覆寫（#1683）', () => {
+  const marks = { [REASONING_ROWS]: {} };
+
+  test('AX 樹：三個 summary 是可展開的，名稱只有「思考過程」或「思考中」（摘要 aria-hidden 不進名稱），打開後報 expanded', async () => {
+    const page = await openOverlay('reasoning', 'light', { marks });
+    try {
+      const cdp = await page.context().newCDPSession(page);
+      const read = async () => {
+        const { nodes } = (await cdp.send('Accessibility.getFullAXTree')) as {
+          nodes: {
+            ignored: boolean;
+            role?: { value: string };
+            name?: { value: string };
+            properties?: { name: string; value: { value: unknown } }[];
+          }[];
+        };
+        return nodes
+          .filter((n) => !n.ignored && n.role?.value === 'DisclosureTriangle')
+          .map((n) => ({
+            name: n.name?.value,
+            expanded: n.properties?.find((p) => p.name === 'expanded')?.value.value,
+          }));
+      };
+      const closed = await read();
+      await openReasoningRows(page, ['done', 'running', 'panel']);
+      await settle(page);
+      const opened = await read();
+      report['reasoning:ax'] = { closed, opened };
+      expect(closed).toEqual([
+        { name: '思考過程', expanded: false },
+        { name: '思考中', expanded: false },
+        { name: '思考過程', expanded: false },
+      ]);
+      expect(opened.map((n) => n.expanded)).toEqual([true, true, true]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('推理列裡沒有 live region：推理不進 polite 區唸', async () => {
+    const page = await openOverlay('reasoning', 'light', { marks });
+    try {
+      const live = await page.$$eval(
+        `${REASONING_ROWS} [data-slot="reasoning"] :is([aria-live], [role="status"], [role="log"], [role="alert"])`,
+        (els) => els.length,
+      );
+      const rows = await page.$$eval(
+        `${REASONING_ROWS} [data-slot="reasoning"]`,
+        (els) => els.length,
+      );
+      // 量具自檢：三列都在。
+      expect(rows).toBe(3);
+      expect(live).toBe(0);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('內文的 .markdown 是 white-space: normal（轉接層那層 whitespace-normal 擋掉 SG 的 pre-wrap）', async () => {
+    const page = await openOverlay('reasoning', 'light', { marks });
+    try {
+      const measured = await page.$eval(reasoningIn('done'), (row) => ({
+        frame: getComputedStyle(row.querySelector(':scope > div')!).whiteSpace,
+        markdown: getComputedStyle(row.querySelector('.markdown')!).whiteSpace,
+      }));
+      report['reasoning:white-space'] = measured;
+      // 量具自檢：SG 的內文框真的是 pre-wrap。
+      expect(measured).toEqual({ frame: 'pre-wrap', markdown: 'normal' });
+    } finally {
+      await page.close();
+    }
+  });
+
+  test('打開後只有箭頭轉：沒有高度動效、沒有其他動畫（#1683 決定題 2）', async () => {
+    const page = await openOverlay('reasoning', 'light', { marks });
+    try {
+      await openReasoningRows(page, ['done']);
+      const animations = await page.$eval(reasoningIn('done'), (row) =>
+        row.getAnimations({ subtree: true }).map((a) => ({
+          kind: a.constructor.name,
+          what:
+            a instanceof CSSTransition
+              ? a.transitionProperty
+              : a instanceof CSSAnimation
+                ? a.animationName
+                : '',
+          target: ((a.effect as KeyframeEffect | null)?.target?.tagName ?? '').toLowerCase(),
+        })),
+      );
+      const open = await page.$eval(reasoningIn('done'), (row) => (row as HTMLDetailsElement).open);
+      report['reasoning:animations'] = animations;
+      expect(open).toBe(true);
+      // 量具自檢：箭頭那條轉場量得到，代表打開的當下就在讀。
+      expect(animations).toEqual([{ kind: 'CSSTransition', what: 'rotate', target: 'svg' }]);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each([
+    [375, true],
+    [1280, false],
+  ] as const)('第 63 條（擴充）：%i 寬時 summary 至少 44px：%s', async (width, touch) => {
+    const page = await openOverlay('reasoning', 'light', {
+      viewport: { width, height: 900 },
+      marks,
+    });
+    try {
+      const heights = await page.$$eval(
+        `${REASONING_ROWS} [data-slot="reasoning"] > summary`,
+        (els) => els.map((el) => el.getBoundingClientRect().height),
+      );
+      report[`reasoning:height:${width}`] = heights;
+      expect(heights).toHaveLength(3);
+      // 1280 寬照 SG（一行字高）：量具自檢，44px 不是本來就有的。
+      for (const h of heights) expect(h >= 44).toBe(touch);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each([
+    [true, '0s'],
+    [false, 'not-0s'],
+  ] as const)(
+    '第 64 條（擴充）：減少動態（%s）時 summary 箭頭的轉場時長',
+    async (reducedMotion, expected) => {
+      const page = await openOverlay('reasoning', 'light', { reducedMotion, marks });
+      try {
+        const durations = await page.$$eval(
+          `${REASONING_ROWS} [data-slot="reasoning"] > summary > svg`,
+          (els) => els.map((el) => getComputedStyle(el).transitionDuration),
+        );
+        report[`reasoning:chevron:${reducedMotion ? 'reduce' : 'normal'}`] = durations;
+        expect(durations).toHaveLength(3);
+        for (const d of durations) expect(d === '0s' ? '0s' : 'not-0s').toBe(expected);
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
+  test('375 寬、還在想、摘要很長：第 70 條：summary 不超出欄寬、標題不折行，摘要往左裁、留著最新的字', async () => {
+    const page = await openOverlay('reasoning', 'light', {
+      viewport: { width: 375, height: 812 },
+      marks,
+    });
+    try {
+      const measured = await page.$eval('[data-guard-reasoning="running"]', (block) => {
+        const summary = block.querySelector('summary')!;
+        const title = summary.querySelector('span')!;
+        const outer = block.querySelector('[data-testid="reasoning-summary"]')!;
+        const inner = outer.firstElementChild!;
+        const box = (el: Element) => el.getBoundingClientRect();
+        return {
+          summaryRight: box(summary).right,
+          summaryHeight: box(summary).height,
+          columnRight: box(block).right,
+          titleHeight: box(title).height,
+          titleLine: parseFloat(getComputedStyle(title).lineHeight),
+          innerLeft: box(inner).left,
+          outerLeft: box(outer).left,
+          innerRight: box(inner).right,
+          outerRight: box(outer).right,
+          pageOverflow: document.documentElement.scrollWidth > document.documentElement.clientWidth,
+        };
+      });
+      report['reasoning:375-running'] = measured;
+      expect(measured.summaryRight).toBeLessThanOrEqual(measured.columnRight + 0.5);
+      // 第 70 條的第二個選擇器：標題不跟著摘要縮，只有一行、summary 仍是第 63 條的 44px。
+      expect(measured.titleHeight).toBeLessThan(measured.titleLine * 1.5);
+      expect(measured.summaryHeight).toBe(44);
+      // 量具自檢：摘要真的放不下（裡面那層比外面寬、左邊被裁）。
+      expect(measured.innerLeft).toBeLessThan(measured.outerLeft);
+      expect(Math.abs(measured.innerRight - measured.outerRight)).toBeLessThanOrEqual(0.5);
+      expect(measured.pageOverflow).toBe(false);
+    } finally {
+      await page.close();
+    }
+  });
 });

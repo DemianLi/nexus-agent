@@ -83,6 +83,7 @@
 | 8 | 會話標頭 | 自建；標題規則在 `lib/thread-title.ts`（標頭、瀏覽器分頁標題、側欄列表共用），換字不做動效 | 在 `App.tsx` |
 | 9 | 歷史往回捲 | shadcn `message-scroller`（帶 `@shadcn/react`） | — |
 | 10／11 | 使用者／助理訊息 | shadcn `message`＋`bubble`；**markdown 自建**：`mdast-util-from-markdown`＋`micromark-extension-gfm`＋增量解析＋`cjkFriendlyStrong`。撞到輸出上限的那一輪，最後一則底下一行灰字，同「（已停止）」（`lib/max-tokens-view.ts`，#608） | `transcript.tsx` 留（歸屬、狀態字面） |
+| 12 | 推理區塊（思考過程） | solid-glass 的 `Reasoning`（#1683 起；vendor `components/ui/reasoning.tsx`，套 vendor README「本地修改」第 67、68 條的 patch、第 69 條的包裝，第 63、64 條的覆寫擴到它身上）。原生 `<details>`，預設收合；收合時一行摘要放在標題後面的 `trailing`；內文用列 10／11 那一套 markdown | `reasoning-row.tsx` 留轉接 |
 | 13 | 工具卡 | solid-glass 的 `StepRow`（#1682 起；vendor `components/ui/tool-steps.tsx`，套 vendor README「本地修改」第 56–59 條的 patch、第 60–66 條的包裝與覆寫）。`lib/tool-step.ts` 把 `ToolEntry` 轉成 SG 的 `Step`：狀態收成 SG 的三態，四格 `ToolEntry.status` 的字放在列尾的 `badge`（狀態不靠顏色或動效）；通用卡的參數、結果、錯誤用 SG 的結果框，專屬呈現（列 14）、提問、交付、待辦、子代理面板畫在展開後的 children，不畫兩次。連續完成的工具（至少 2 顆）收成 SG 的 `StepGroup`（工具段，`tool-run.tsx`）。沒有狀態圖示、邊框光、外框卡片 | `tool/card.tsx`、`tool-run.tsx` |
 | 14 | 工具專屬呈現 | 自建：依工具名分類（`classifyTool`）＋通用卡兜底，分哪幾類照 nexus 實際工具名定；讀檔卡的高亮 `shiki/core`（ts／bash／json 靜態、其餘 `import()`）、數學 `katex`。通用卡的參數是 SG 結果框裡的純文字，不上色（#1682） | `tool/result.tsx` |
 | 15／22 | 子代理歸屬、決定紀錄 | 自建＋shadcn `badge` | 在 `transcript.tsx` |
@@ -227,6 +228,7 @@
 | 桌面側欄收合 | 照 SG（#1680）：width／left 的 transition 200ms linear；reduced-motion 沒有 transition（`motion.css`，`guard/` 量） |
 | 面板高度差 | resize 300 |
 | 工具卡、工具段展開 | **沒有動畫**（#1682 照 SG：`StepRow`／`StepGroup` 開關是立即的，只有箭頭轉 90°；reduced-motion 箭頭不轉場，vendor README 本地修改第 64 條） |
+| 思考過程展開 | **沒有動畫**（#1683 照 SG：原生 `<details>` 開關是立即的，只有箭頭轉 90°；reduced-motion 箭頭不轉場，第 64 條擴充）。「思考中」用 SG 的 `.status-shimmer`（2.4s 掃過，reduced-motion 停住、改回字色）；狀態列的 shimmer 是 nexus 自己的 `.text-shimmer`，兩種並存 |
 | 提問面板收起 | 250／150，高度＋透明度 |
 | 新訊息、工具卡出現 | 250，往上 8px |
 | 面板換掉輸入框、上下題 | 舊 150 淡出 → 新 250 長出；上下題有方向 |
@@ -287,6 +289,7 @@
   - 群組按鈕的名稱＝「N 個工具呼叫，讀取 ×3、寫入檔案」（段裡只收完成的工具）。摘要是純字串、會被報讀，用「，」「、」接，不用「·」。
   - 展開後沒有內容的列，SG 會停用按鈕（聽起來像壞掉），所以空的時候放一句 emptyNote（「沒有參數。」「還沒有結果。」「沒有結果文字。」），按鈕照樣按得到。
   - 結果框的 `pre` 停得上焦點（vendor patch `0019`），名稱是框的標題（「參數」「結果」「錯誤」），鍵盤可以捲。
+- **思考過程**（#1683，SG 的 `Reasoning`）：原生 `<summary>`，不另加 role、`aria-expanded`，展開與否由瀏覽器報。名稱只有「思考過程」或「思考中」；收合時那行摘要與「·」`aria-hidden`（摘要每來一顆 chunk 就變，焦點停在上面時報讀器會跟著重唸）。推理不進 polite 區唸（狀態列已經唸「執行中」）。
 - **輸入框**（#1591）：名稱「要說的話」（`<label for="prompt">`），送出的說明（平常「Enter 送出」，跑著時「Enter 排隊・⌘/Ctrl Enter 插話」，`lib/submit-mode.ts`）是 sr-only 的一段、掛在 `aria-describedby`。`/` 與 @ 選單開著時輸入框帶 `aria-controls`（清單）與 `aria-activedescendant`（目前那一項）。主按鈕的名稱是「送出」「排隊送出」「插話送出」「停止」之一，照 dsh 的 `primaryLabel`。
 - ❌ 的名稱「停止這一輪，不回答這些問題」（`aria-label` 與 tooltip 同一句），不加確認。
 - **tooltip 只是視覺**（#1583）：Base UI 的 tooltip 不給 `role="tooltip"`、也不掛 `aria-describedby`，報讀器聽不到它。tooltip 的字不能帶 Trigger 名稱裡沒有的資訊，要聽到的寫進 `aria-label`（例：模型座「模型：X，從下一步生效，點開切換」）。
