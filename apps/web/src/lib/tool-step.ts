@@ -144,7 +144,8 @@ export function toStep(
   const truncated = subagentMaxTokensOf(entry);
   const showsError = failed && entry.error !== undefined;
 
-  const title = entry.name === SEND_MESSAGE ? sendMessageTitle(entry.attribution) : toolTitle(entry.name);
+  const title =
+    entry.name === SEND_MESSAGE ? sendMessageTitle(entry.attribution) : toolTitle(entry.name);
   // 失敗時摘要換成錯誤的第一行（照 dsh `errorSummary`）：收著也看得到為什麼。
   const summary = stopped
     ? STOPPED_QUESTION_TEXT

@@ -620,7 +620,12 @@ function ToolCardsPage() {
           <MessageScrollerViewport aria-label="工具段">
             <MessageScrollerContent>
               <ToolRun
-                run={{ kind: 'tool-run', id: 'tools:run-0', entries: RUN_ENTRIES, tools: RUN_TOOLS }}
+                run={{
+                  kind: 'tool-run',
+                  id: 'tools:run-0',
+                  entries: RUN_ENTRIES,
+                  tools: RUN_TOOLS,
+                }}
                 open={open}
                 onOpenChange={setOpen}
                 renderEntry={(entry) =>

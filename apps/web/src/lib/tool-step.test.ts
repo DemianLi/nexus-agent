@@ -141,7 +141,11 @@ describe('結果畫在 children 的種類，SG 的 output／error 都不設（sl
     ],
     [
       '寫檔 diff',
-      { name: 'write_file', input: JSON.stringify({ file_path: '/a.md', content: '一\n' }), text: 'ok' },
+      {
+        name: 'write_file',
+        input: JSON.stringify({ file_path: '/a.md', content: '一\n' }),
+        text: 'ok',
+      },
     ],
     [
       '讀檔卡',
@@ -202,7 +206,9 @@ describe('結果與參數的字串（#601、#958）', () => {
   });
 
   it('只畫結果的工具不設 detail；一般工具設排好的參數', () => {
-    expect(toStep(tool({ name: 'ls', input: '{"path":"/"}', text: 'a' })).step.detail).toBeUndefined();
+    expect(
+      toStep(tool({ name: 'ls', input: '{"path":"/"}', text: 'a' })).step.detail,
+    ).toBeUndefined();
     expect(toStep(tool()).step.detail).toBe('{\n  "message": "嗨"\n}');
   });
 });

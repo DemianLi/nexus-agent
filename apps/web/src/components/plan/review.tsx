@@ -212,9 +212,5 @@ export function PlanCard({ entry, plan }: { entry: ToolEntry; plan: PlanDocument
 export function PlanToolCard({ entry }: { entry: ToolEntry }) {
   // 串流中每一格都會重畫，參數不變就不重解 markdown。
   const plan = useMemo(() => submittedPlanOf(entry), [entry]);
-  return plan === undefined ? (
-    <ToolCard entry={entry} />
-  ) : (
-    <PlanCard entry={entry} plan={plan} />
-  );
+  return plan === undefined ? <ToolCard entry={entry} /> : <PlanCard entry={entry} plan={plan} />;
 }

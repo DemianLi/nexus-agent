@@ -2830,11 +2830,11 @@ test('0019：結果框的 pre 鍵盤聚焦後，方向鍵捲得動（#1682 PR B�
     }));
     for (let i = 0; i < 5; i++) await page.keyboard.press('ArrowDown');
     // 鍵盤捲動是平滑捲動，等它停下來。
-    await page.waitForFunction(
-      (el) => el !== null && el.scrollTop > 0,
-      await pre.elementHandle(),
-      { timeout: 2000 },
-    ).catch(() => undefined);
+    await page
+      .waitForFunction((el) => el !== null && el.scrollTop > 0, await pre.elementHandle(), {
+        timeout: 2000,
+      })
+      .catch(() => undefined);
     const after = await pre.evaluate((el) => el.scrollTop);
     report['tool-steps:arrow-scroll'] = { ...before, after };
     // 量具自檢：真的超出框高、真的停在那一格上。
