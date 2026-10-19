@@ -329,23 +329,23 @@ async function recordLookups(booted: Booted): Promise<SessionLookup[]> {
   return seen;
 }
 
-describe('G：子代理各有一則讀數，查找都找得到自己那份日誌', () => {
-  function workerSource(model?: ScriptedChatModel): PluginEntry {
-    return {
-      plugin: {
-        name: 'worker-source',
-        apply(registry) {
-          registry.subagents.register({
-            name: 'worker',
-            description: '幹活的。',
-            systemPrompt: '你是 worker。',
-            ...(model === undefined ? {} : { model: model as never }),
-          });
-        },
+function workerSource(model?: ScriptedChatModel): PluginEntry {
+  return {
+    plugin: {
+      name: 'worker-source',
+      apply(registry) {
+        registry.subagents.register({
+          name: 'worker',
+          description: '幹活的。',
+          systemPrompt: '你是 worker。',
+          ...(model === undefined ? {} : { model: model as never }),
+        });
       },
-    };
-  }
+    },
+  };
+}
 
+describe('G：子代理各有一則讀數，查找都找得到自己那份日誌', () => {
   it('同步子代理：它那幾輪的 prompt 有一則讀數，日誌記在子代理自己那份；root 那份仍只有一則', async () => {
     const booted = await boot(home());
     const lookups = await recordLookups(booted);
@@ -427,6 +427,94 @@ describe('G：子代理各有一則讀數，查找都找得到自己那份日誌
       ),
     ).toBe(true);
     expect(lookups.filter((answer) => answer.kind !== 'ok')).toEqual([]);
+    await closeThread(thread);
+  }, 60000);
+});
+
+describe('I：對背景子代理說話帶時區（#1734）：子代理自己的日誌記下來，它下一則讀數是 resolved', () => {
+  const ZONE_LINE =
+    'Browser time zone for this request: Asia/Taipei. Interpret otherwise-unqualified dates and times in this zone.';
+
+  /** 委派一個背景子代理、等它第一輪收工；回 thread、子代理的日誌與編號。 */
+  async function delegated(workerTurns: readonly ScriptedTurn[], threadId: string) {
+    const booted = await boot(home());
+    const worker = new ScriptedChatModel({ turns: workerTurns });
+    const thread = await openThread(
+      booted,
+      threadId,
+      [
+        {
+          content: '委派。',
+          toolCalls: [
+            {
+              name: 'subagent',
+              id: 'root-call',
+              args: { description: '幹活', subagent_type: 'worker', run_in_background: true },
+            },
+          ],
+        },
+        { content: '根收尾。' },
+      ],
+      { extra: [workerSource(worker)], invocation: { backgroundSubagents: { maxActive: 8 } } },
+    );
+    await runOn(thread);
+    const entry = (): (typeof thread.sessions extends { list(): infer L } ? L : never)[number] => {
+      const found = thread.sessions.list().find((item) => item.address.kind === 'subagent');
+      if (found === undefined) throw new Error('沒有子代理日誌');
+      return found;
+    };
+    await until(() => entry().log.events.some((event) => event.type === 'turn/end'));
+    const address = entry().address;
+    if (address.kind !== 'subagent') throw new Error('不是子代理位址');
+    const background = thread.attachment.background;
+    if (background === undefined) throw new Error('這份組裝沒有背景子代理控制面');
+    return { thread, worker, log: entry().log, runId: address.runId, background };
+  }
+
+  it('派出去那一刻沒有人說話：讀數的時區行是 unavailable（對照 dsh manager.ts 的 { kind: user } 不帶時區）', async () => {
+    const { thread, worker, log } = await delegated([{ content: '背景收工。' }], 'i-dispatch');
+    expect(readingsOf(worker.prompts[0] ?? [])[0]).toContain(UNAVAILABLE_ZONE);
+    expect(log.events.filter((e) => e.type === 'turn/start').map((e) => e.data)).toEqual([
+      expect.not.objectContaining({ clientTimeZone: expect.anything() }),
+    ]);
+    await closeThread(thread);
+  }, 60000);
+
+  it('帶時區說話：新的一輪 turn/start 記下時區，子代理的下一則讀數是 resolved', async () => {
+    const { thread, worker, log, runId, background } = await delegated(
+      [{ content: '背景收工。' }, { content: '收到。' }],
+      'i-send',
+    );
+    at(11 * MIN); // 過了節流窗，這一輪才會有新讀數
+    await background.sendFromUser(runId, '改看 b.ts', 'Asia/Taipei');
+    await until(() => log.events.filter((e) => e.type === 'turn/end').length >= 2);
+    const starts = log.events.filter((e) => e.type === 'turn/start').map((e) => e.data);
+    expect(starts[1]).toMatchObject({
+      kind: 'message',
+      text: '改看 b.ts',
+      clientTimeZone: 'Asia/Taipei',
+    });
+    const readings = readingsOf(worker.prompts[1] ?? []);
+    expect(readings).toHaveLength(2);
+    expect(readings[1]).toContain(ZONE_LINE);
+    await closeThread(thread);
+  }, 60000);
+
+  it('不帶時區說話：新的一輪照舊是 unavailable（沒有拿上一次的時區頂替）', async () => {
+    const { thread, worker, log, runId, background } = await delegated(
+      [{ content: '背景收工。' }, { content: '收到。' }, { content: '再收。' }],
+      'i-send-none',
+    );
+    at(11 * MIN);
+    await background.sendFromUser(runId, '先說有時區', 'Asia/Taipei');
+    await until(() => log.events.filter((e) => e.type === 'turn/end').length >= 2);
+    at(22 * MIN);
+    await background.sendFromUser(runId, '這句沒帶');
+    await until(() => log.events.filter((e) => e.type === 'turn/end').length >= 3);
+    const starts = log.events.filter((e) => e.type === 'turn/start').map((e) => e.data);
+    expect(starts[2]).not.toHaveProperty('clientTimeZone');
+    const readings = readingsOf(worker.prompts[2] ?? []);
+    expect(readings.at(-1)).toContain(UNAVAILABLE_ZONE);
     await closeThread(thread);
   }, 60000);
 });
