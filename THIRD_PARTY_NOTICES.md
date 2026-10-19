@@ -27,7 +27,7 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 
 | 上游 | 固定在 | 授權 |
 | --- | --- | --- |
-| [solid-glass](https://github.com/deeplethe/solid-glass) | `387c3c2dc236` | MIT |
+| [solid-glass](https://github.com/deeplethe/solid-glass) | `6e8903e494a1` | MIT |
 | [shadcn](https://www.npmjs.com/package/shadcn) | 4.21.4 | MIT |
 
 ## 執行期的 npm 相依
@@ -81,7 +81,6 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 | [`micromark-util-sanitize-uri`](https://github.com/micromark/micromark/tree/main/packages/micromark-util-sanitize-uri) | MIT |
 | [`micromark-util-symbol`](https://github.com/micromark/micromark/tree/main/packages/micromark-util-symbol) | MIT |
 | [`quickjs-emscripten`](https://github.com/justjake/quickjs-emscripten) | MIT |
-| [`radix-ui`](https://github.com/radix-ui/primitives) | MIT |
 | [`react`](https://github.com/react/react) | MIT |
 | [`react-dom`](https://github.com/react/react) | MIT |
 | [`semver`](https://github.com/npm/node-semver) | ISC |
