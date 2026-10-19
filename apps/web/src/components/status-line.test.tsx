@@ -1,5 +1,5 @@
 import { emptyConversation } from '@nexus/wire';
-import type { ConversationState } from '@nexus/wire';
+import type { AiEntry, ConversationEntry, ConversationState, ToolEntry } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -7,12 +7,15 @@ import { ELAPSED_TICK_MS, StatusLine } from '@/components/status-line';
 import { serverClock } from '@/lib/server-clock';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
 import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
+import type { Activity } from '@/components/ui/status-glyph';
 import { Script } from '@/test/conversation-frames';
+import { drawnPose, openingPose, stubGlyphEnvironment } from '@/test/glyph-env';
 import { turn, view, withTrajectory } from '@/test/trajectory-fixtures';
 
 afterEach(() => {
   cleanup();
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   serverClock.reset();
 });
 
@@ -177,10 +180,98 @@ describe('StatusLine 執行中的經過時間（#1308）', () => {
     expect(screen.queryByTestId('running-elapsed')).toBeNull();
   });
 
+  it('未滿 1 秒不畫（照 SG）：「0 秒」講的是還沒發生的事；滿 1 秒才出現', () => {
+    browserSkewed(0);
+    // 一筆樣本的估計取區間中點（`server-clock.ts`）：標頭秒級，server 的「現在」估成 SERVER_NOW + 500，所以這裡經過約 0.5 秒。
+    render(<StatusLine state={runningSince(SERVER_NOW)} connected />);
+    expect(screen.queryByTestId('running-elapsed')).toBeNull();
+    act(() => vi.advanceTimersByTime(ELAPSED_TICK_MS));
+    expect(screen.getByTestId('running-elapsed').textContent).toBe('1 秒');
+  });
+
   it('不是執行中（就緒、停在核准點）：不帶經過時間', () => {
     browserSkewed(0);
     const state = runningSince(SERVER_NOW - 42_000);
     render(<StatusLine state={{ ...state, status: 'idle' }} connected />);
     expect(screen.queryByTestId('running-elapsed')).toBeNull();
+  });
+});
+
+describe('StatusLine 執行中那一列換成 SG 的 TurnStatus（#1684）', () => {
+  const root = { kind: 'root' } as const;
+  const tool = (name: string): ToolEntry => ({
+    kind: 'tool',
+    id: `tool-${name}`,
+    callId: `call_${name}`,
+    name,
+    input: '{}',
+    status: 'running',
+    attribution: root,
+  });
+  const writing: AiEntry = {
+    kind: 'ai',
+    id: 'ai-1',
+    text: '找到了',
+    streaming: true,
+    attribution: root,
+  };
+  const runningWith = (entries: readonly ConversationEntry[]): ConversationState => ({
+    ...idle,
+    status: 'running',
+    entries,
+  });
+  /** 每種 activity 一個本輪的樣子（判法見 `lib/turn-activity.ts`）。 */
+  const STATES: readonly (readonly [Activity, ConversationState])[] = [
+    ['searching', runningWith([tool('grep')])],
+    ['running', runningWith([tool('execute')])],
+    ['writing', runningWith([writing])],
+  ];
+
+  it('jsdom 沒有 matchMedia／IntersectionObserver：不拋錯、不畫 glyph，字照樣是「執行中…」', () => {
+    const { container } = render(<StatusLine state={{ ...idle, status: 'running' }} connected />);
+    expect(container.querySelector('[data-slot="status-glyph"]')).toBeNull();
+    expect(container.querySelector('[data-slot="turn-status"]')).not.toBeNull();
+    expect(screen.getByRole('status').textContent).toBe('執行中…');
+  });
+
+  it('量具自檢：三種 activity 的起始姿勢彼此不同，也跟預設的 thinking 不同', () => {
+    const poses = [...STATES.map(([activity]) => activity), 'thinking' as const].map((a) =>
+      JSON.stringify(openingPose(a)),
+    );
+    expect(new Set(poses).size).toBe(4);
+  });
+
+  it.each(STATES)('activity 有接上：%s 畫的是它自己的起始姿勢', (activity, state) => {
+    stubGlyphEnvironment();
+    const { container } = render(<StatusLine state={state} connected />);
+    expect(drawnPose(container)).toEqual(openingPose(activity));
+  });
+
+  it('字固定是「執行中…」：activity 換了，live region 的字不變', () => {
+    stubGlyphEnvironment();
+    const { container, rerender } = render(<StatusLine state={STATES[0]![1]} connected />);
+    const before = screen.getByRole('status').textContent;
+    const poseBefore = drawnPose(container);
+    rerender(<StatusLine state={STATES[2]![1]} connected />);
+    expect(drawnPose(container)).not.toEqual(poseBefore);
+    expect([before, screen.getByRole('status').textContent]).toEqual(['執行中…', '執行中…']);
+  });
+
+  it('只有一個 live region，包著 TurnStatus；glyph 在裡面但 aria-hidden', () => {
+    stubGlyphEnvironment();
+    const { container } = render(<StatusLine state={STATES[1]![1]} connected />);
+    const regions = container.querySelectorAll('[role="status"]');
+    expect(regions).toHaveLength(1);
+    expect(regions[0]!.querySelector('[data-slot="turn-status"]')).not.toBeNull();
+    expect(
+      regions[0]!.querySelector('[data-slot="status-glyph"]')?.getAttribute('aria-hidden'),
+    ).toBe('true');
+  });
+
+  it('沒有 SG 的英文（tokens、8s 這種時間）；沒有新增可聚焦的元素', () => {
+    stubGlyphEnvironment();
+    const { container } = render(<StatusLine state={STATES[1]![1]} connected />);
+    expect(container.textContent).not.toMatch(/tokens|\d+s\b/);
+    expect(container.querySelectorAll('button, a[href], input, [tabindex]')).toHaveLength(0);
   });
 });

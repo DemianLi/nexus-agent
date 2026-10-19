@@ -276,5 +276,21 @@ describe('registry 檔的改動還在', () => {
     });
   });
 
+  // 狀態列靠 vendor 原文的兩件事（#1684）：glyph 是裝飾（狀態列的字已經講了，§8:284），label 帶 SG 的 shimmer。
+  // vendor 升版改了任一件，這裡紅：前者會讓報讀器多唸、非文字對比的豁免不成立，後者會讓 guard 的 shimmer 那條量錯對象。
+  describe('turn-status 與 status-glyph 的 vendor 原文（#1684）', () => {
+    test('glyph 的 svg 是 aria-hidden="true"', () => {
+      const glyph = code(read('../../vendor/solid-glass/components/ui/status-glyph.tsx'));
+      expect(glyph).toMatch(/<svg\s+ref=\{svg\}\s+data-slot="status-glyph"[^>]*aria-hidden="true"/);
+    });
+
+    test('label 包在 status-shimmer 的 span 裡', () => {
+      const status = code(read('../../vendor/solid-glass/components/ui/turn-status.tsx'));
+      expect(status).toContain(
+        '{label && <span className="status-shimmer truncate">{label}</span>}',
+      );
+    });
+  });
+
   // #1281 的三條（側欄、dropdown-menu、cmdk 的 text-ui）照 #1468 Q19 拿掉：dropdown-menu 與 cmdk 隨 #1583、側欄隨 #1680 換成 vendor 版。
 });
