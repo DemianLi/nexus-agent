@@ -192,7 +192,7 @@ CLI 每一次啟動各自一個 run 目錄，一份會話一個 `.jsonl` 加一�
 **強制結束時還在跑的 git 會被一起收掉**（[#1542](https://github.com/DemianLi/nexus-agent/issues/1542)）。
 三條強制結束的路（收尾中再按一次、收尾逾時、下面 #1501 的致命退出）都不等子行程；`workspace-changes` 起的 git 在行程
 結束那一刻被送 SIGKILL，不留孤兒。只收 git 本身：git 再起的行程（例如使用者自訂的 clean／smudge filter）收不到。`kill -9`、OOM 這類
-不經過 Node 的結束一樣什麼都收不到。MCP 的 stdio server **不在這裡強殺**：正常收尾時 MCP 插件會關掉
+不經過 Node 的結束一樣什麼都收不到。**起不來的子行程不送訊號**（[#1742](https://github.com/DemianLi/nexus-agent/issues/1742)）：spawn 失敗、`'error'` 還沒送到時 `ChildProcess` 沒有 pid，這時 `kill()` 送出去的是 `kill(0, sig)`，也就是整個行程群組（含 serve 自己）；git 與 rg 的收尾、以及行程結束時的強殺，送之前都先看 pid。MCP 的 stdio server **不在這裡強殺**：正常收尾時 MCP 插件會關掉
 連線（最多等 5 秒），強制結束時 server 的 stdin 會被關掉，所以**自己接的 stdio server 要在 stdin
 關掉時自己結束**，不然 serve 走了它還留著。
 
