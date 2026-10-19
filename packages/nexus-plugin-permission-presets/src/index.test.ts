@@ -24,7 +24,7 @@ import { createSessionLookupProvider } from '@nexus/session/provider';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import * as permissionPresets from './index.js';
-import { buildCatalog, startPresets } from './index.js';
+import { buildCatalog, isSandboxWider, narrowingOf, startPresets } from './index.js';
 import { DEFAULT_PRESETS } from './presets.js';
 import type { PresetTable } from './presets.js';
 
@@ -97,10 +97,14 @@ describe('startPresets：預設組怎麼決定、兩顆旋鈕接日誌之前該�
     expect(() =>
       startPresets(table, undefined, { seed: FRESH, sandbox: 'workspace-write', approval: 'ask' }),
     ).toThrow('對不上組合表裡任何一組');
-    expect(
-      startPresets(table, undefined, { seed: RESUMED, sandbox: 'workspace-write', approval: 'ask' })
-        .catalog.defaultPreset,
-    ).toBe('only');
+    const resumed = startPresets(table, undefined, {
+      seed: RESUMED,
+      sandbox: 'workspace-write',
+      approval: 'ask',
+    });
+    expect(resumed.catalog.defaultPreset).toBe('only');
+    // 比表裡唯一一組寬：續接會收回到它（#1621 第 2 步）。
+    expect(resumed.narrowed?.preset).toBe('only');
   });
 
   it('不改傳進來的值：回傳的是新物件，呼叫端自己決定要不要切旋鈕', () => {
@@ -108,6 +112,70 @@ describe('startPresets：預設組怎麼決定、兩顆旋鈕接日誌之前該�
     const started = startPresets(WITH_FULL_ACCESS, 'danger-full-access', request);
     expect(request.sandbox).toBe('workspace-write');
     expect(started.sandbox).toBe('danger-full-access');
+  });
+});
+
+describe('narrowingOf：續接時要不要收回、收到哪一組（#1621 第 2 步）', () => {
+  const full = { sandbox: 'danger-full-access', approval: 'never' } as const;
+
+  it('比表裡每一組都寬：收到沙箱最寬的那一組（出廠表就是 workspace-write），帶來源與目標兩顆旋鈕', () => {
+    expect(narrowingOf(DEFAULT_PRESETS, undefined, full)).toEqual({
+      preset: 'workspace-write',
+      fromSandbox: 'danger-full-access',
+      fromApproval: 'never',
+      toSandbox: 'workspace-write',
+      toApproval: 'ask',
+    });
+  });
+
+  it('設了 defaultPreset：收到那一組，不是最寬的', () => {
+    expect(narrowingOf(DEFAULT_PRESETS, 'read-only', full)?.preset).toBe('read-only');
+  });
+
+  it('表裡有全開（部署方加回）：不比每一組都寬，不收', () => {
+    expect(narrowingOf(WITH_FULL_ACCESS, undefined, full)).toBeUndefined();
+  });
+
+  it('比最寬那一組窄（read-only 從表裡刪掉、停在 read-only）：不收——收成 workspace-write 就是放寬', () => {
+    const table = { 'workspace-write': DEFAULT_PRESETS['workspace-write'] } as PresetTable;
+    expect(
+      narrowingOf(table, undefined, { sandbox: 'read-only', approval: 'ask' }),
+    ).toBeUndefined();
+  });
+
+  it('同寬不收：停在 workspace-write 的一般日誌', () => {
+    expect(
+      narrowingOf(DEFAULT_PRESETS, undefined, { sandbox: 'workspace-write', approval: 'ask' }),
+    ).toBeUndefined();
+  });
+
+  it('同寬的幾組取先宣告的', () => {
+    const table: PresetTable = {
+      first: { sandbox: 'workspace-write', approval: 'never' },
+      second: { sandbox: 'workspace-write', approval: 'ask' },
+    };
+    expect(narrowingOf(table, undefined, full)?.preset).toBe('first');
+  });
+
+  it('續接進 startPresets：回的 sandbox／approval 仍是日誌原值，收回的描述放在 narrowed', () => {
+    const started = startPresets(DEFAULT_PRESETS, undefined, {
+      seed: RESUMED,
+      ...full,
+    });
+    expect([started.sandbox, started.approval]).toEqual(['danger-full-access', 'never']);
+    expect(started.narrowed?.preset).toBe('workspace-write');
+    expect(started.catalog.defaultPreset).toBe('workspace-write');
+    // 新會話永遠不收：起始值就是要用的值。
+    expect(
+      startPresets(DEFAULT_PRESETS, 'workspace-write', { seed: FRESH, ...full }).narrowed,
+    ).toBeUndefined();
+  });
+
+  it('isSandboxWider：嚴格偏序，自己不比自己寬', () => {
+    expect(isSandboxWider('danger-full-access', 'workspace-write')).toBe(true);
+    expect(isSandboxWider('workspace-write', 'read-only')).toBe(true);
+    expect(isSandboxWider('workspace-write', 'workspace-write')).toBe(false);
+    expect(isSandboxWider('read-only', 'danger-full-access')).toBe(false);
   });
 });
 
@@ -263,7 +331,7 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest：提供 permissionPresets（1.0.0），消費 fs／commands／projections／sessionLookup；沒有 default 匯出', () => {
+  it('manifest：提供 permissionPresets（1.1.0），消費 fs／commands／projections／sessionLookup；沒有 default 匯出', () => {
     expect(permissionPresets.manifest.provides).toEqual([
       { token: 'permissionPresets', version: PERMISSION_PRESETS_CONTRACT_VERSION },
     ]);

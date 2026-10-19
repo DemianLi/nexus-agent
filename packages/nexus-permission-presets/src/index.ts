@@ -22,10 +22,15 @@
  * 3. **參與者安裝失敗只記 warn、已寫的收不回**（R3；類別：基座表達不出來）。dsh 的 `session/created` listener 同步拋錯會否決並回滾這次接上
  *    （`core/session/src/index.ts:1258-1286`）；相容層的七位會話參與者本來就是記 warn 的語意，`@nexus/session` 的 `join` 沿用。
  *    **撤除條件**：會話註冊表能在參與者拋錯時回滾這次接上（`registry.sessions` 與 `join` 一起改，連同相容層其餘的參與者同一天換）；在那之前單獨改這一位沒有意義。
- * 4. **起始值在宿主的組 thread 那一步算，不在參與者裡套**（Q3 (a)）。dsh 在 `session/created` 上整組套預設；我們把「算出預設組」放進
+ * 4. **起始值在宿主的組 thread 那一步算，不在參與者裡套**（Q3 (a)；類別：遷移卡不改行為（暫時））。dsh 在 `session/created` 上整組套預設；我們把「算出預設組」放進
  *    {@link PermissionPresetsService.start}（純函式，不碰日誌也不碰控制器），宿主據回傳值靜默切兩顆控制器，之後參與者才釘組名。
  *    好處是新會話的日誌只有一顆 `sandbox/mode`、順序逐字不變。
  *    **撤除條件**：兩顆控制器整個拿掉、fence 與閘門改讀日誌投影（#1491 Q1 (c)）時，宿主不再靜默切控制器，起始值就能直接由參與者往日誌套。
+ * 5. **`/permission` 切換核准政策時不對模型注入一則使用者訊息**（類別：遷移卡不改行為（暫時））。dsh 的 `user-approval` 在政策變動時用
+ *    `agent.inject` 排一則「The approval policy changed from … to … (changed by the user).」給下一步模型
+ *    （`packages/interaction/user-approval/src/index.ts:184-187`，`687f282e`）；我們的 `/permission` 從相容層起就沒有這一步，遷移不改行為。
+ *    這一條住在提供者（`@nexus/plugin-permission-presets` 檔頭第 8 條），登記在這裡是因為定義套件是偏離登記的總表（`docs/plugin-contract.md` 登記第 5 列）。
+ *    **撤除條件**：之後的權限卡決定要不要補這則訊息（補了就是行為改變，要自己一張卡）。
  *
  * ## 相依
  *
@@ -49,8 +54,13 @@ export { APPROVAL_POLICIES, SANDBOX_MODES } from '@nexus/core';
 export type { ApprovalPolicyValue, SandboxMode } from '@nexus/core';
 export type { PermissionCatalog } from '@nexus/wire';
 
-/** 契約版本（semver）。介面破壞性改動跳 major，宿主的範圍檢查擋下不相容的提供者。 */
-export const PERMISSION_PRESETS_CONTRACT_VERSION = '1.0.0';
+/**
+ * 契約版本（semver）。介面破壞性改動跳 major，宿主的範圍檢查擋下不相容的提供者。
+ *
+ * **1.1.0（[#1621](https://github.com/DemianLi/nexus-agent/issues/1621) 第 2 步）**：{@link PermissionStarted} 多選填的 `narrowed`，只增不減；
+ * 宿主的範圍抬到 `^1.1.0`（讀得到這一格才能留 warn）。
+ */
+export const PERMISSION_PRESETS_CONTRACT_VERSION = '1.1.0';
 
 /** 服務名：宿主讀折進 `registry.services` 的這個名字。 */
 export const PERMISSION_PRESETS_SERVICE = 'permissionPresets';
@@ -82,6 +92,24 @@ export interface PermissionStartRequest {
   readonly approval: ApprovalPolicyValue;
 }
 
+/**
+ * 續接時被收回的那一次（[#1621](https://github.com/DemianLi/nexus-agent/issues/1621) Q2 (b)）：日誌記的沙箱模式比組合表裡**每一組**的都寬，
+ * 會話接上時由權限組合的會話參與者往 root 日誌切到這一格。`start` 只**通知**宿主有這件事（讓宿主在伺服器日誌留一行），不替它切控制器——
+ * 兩顆控制器仍從日誌起算，切換寫進日誌之後才跟著走（見 {@link PermissionStarted}）。
+ */
+export interface PermissionNarrowing {
+  /** 收到哪一組（這條 thread 的預設組）。 */
+  readonly preset: string;
+  /** 日誌原本記的沙箱模式。 */
+  readonly fromSandbox: SandboxMode;
+  /** 日誌原本記的核准政策。 */
+  readonly fromApproval: ApprovalPolicyValue;
+  /** 收成那一組的沙箱模式。 */
+  readonly toSandbox: SandboxMode;
+  /** 收成那一組的核准政策。 */
+  readonly toApproval: ApprovalPolicyValue;
+}
+
 /** {@link PermissionPresetsService.start} 的結果。 */
 export interface PermissionStarted {
   /** 套完預設組之後沙箱旋鈕該有的值。fresh 且有 `defaultPreset` 時是那一組的值，否則原樣。 */
@@ -90,6 +118,12 @@ export interface PermissionStarted {
   readonly approval: ApprovalPolicyValue;
   /** 這條 thread 的目錄，含預設組（偏離 1）。 */
   readonly catalog: PermissionCatalog;
+  /**
+   * 續接且日誌記的沙箱模式比組合表裡每一組都寬時才有（1.1.0）。**`sandbox`／`approval` 在這時仍是日誌記的原值**，不是收完的值：
+   * 沙箱政策與核准閘門的參與者接上時會把控制器當下的值釘進日誌，宿主若先把控制器切窄，釘進去的就是窄的值，收回的三顆事件會少掉、順序也變。
+   * 收回由權限組合的參與者在接上時做。
+   */
+  readonly narrowed?: PermissionNarrowing;
 }
 
 /** 權限組合服務：宿主組一條 thread 時向它要起始值與目錄。 */

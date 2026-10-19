@@ -30,10 +30,11 @@ async function start(
   root: string,
   workspace: string,
   extra: readonly string[] = [],
+  log: (line: string) => void = () => {},
 ): Promise<RunningServe> {
   const server = (await runServe({
     argv: ['--port', '0', '--session-log', root, '--workspace', workspace, ...extra],
-    log: () => {},
+    log,
     env: {},
   })) as RunningServe;
   running = server;
@@ -147,7 +148,7 @@ describe('出廠表沒有全開（#1621）', () => {
     );
   });
 
-  it('升級前切到全開的會話，升級後沒加回：serve 照樣起得來，續接保留日誌裡的值、顯示 custom，切不回全開', async () => {
+  it('升級前切到全開的會話，升級後沒加回：serve 照樣起得來，續接收回預設組並留一行 server 日誌，切不回全開（#1621 第 2 步）', async () => {
     const root = await mkdtemp(join(tmpdir(), 'nexus-permission-wire-'));
     const workspace = await mkdtemp(join(tmpdir(), 'nexus-permission-wire-ws-'));
     const before = await serveClient(await start(root, workspace, WITH_FULL_ACCESS));
@@ -158,8 +159,12 @@ describe('出廠表沒有全開（#1621）', () => {
     await running?.close();
     running = undefined;
 
-    const after = await serveClient(await start(root, workspace));
-    expect(await refreshed(after, 't')).toBe('custom');
+    const lines: string[] = [];
+    const after = await serveClient(
+      await start(root, workspace, [], (line) => void lines.push(line)),
+    );
+    expect(await refreshed(after, 't')).toBe('workspace-write');
+    expect(lines.filter((line) => line.includes('[權限] thread "t"'))).toHaveLength(1);
     expect(await after.slashRun('t', '/permission danger-full-access')).toMatchObject({
       kind: 'error',
     });

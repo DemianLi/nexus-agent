@@ -82,7 +82,11 @@ import {
   PERMISSION_PRESETS_PLUGIN_NAME,
   PERMISSION_PRESETS_SERVICE,
 } from '@nexus/permission-presets';
-import type { PermissionCatalog, PermissionPresetsService } from '@nexus/permission-presets';
+import type {
+  PermissionCatalog,
+  PermissionNarrowing,
+  PermissionPresetsService,
+} from '@nexus/permission-presets';
 import { SandboxModeController } from '@nexus/plugin-sandbox-policy';
 import type { SandboxMode } from './contained-backend.js';
 import type { CredentialService } from './credentials.js';
@@ -581,6 +585,20 @@ export const SCRIPTED_MODEL_NAME = 'scripted';
  */
 export const PROMPT_WORKING_DIRECTORY = '/';
 
+/**
+ * 續接時被收回預設組的那一行話（serve 的伺服器日誌與 CLI 的標準錯誤各留一行，[#1621](https://github.com/DemianLi/nexus-agent/issues/1621) Q2 (b)）。
+ * 帶原本的兩個值與收成哪一組，部署方看得出為什麼這條對話的權限變了。
+ *
+ * @param narrowing - `start` 回報的收回。
+ * @returns 一行給人看的話（不帶 thread id，呼叫端自己加前綴）。
+ */
+export function describePermissionNarrowing(narrowing: PermissionNarrowing): string {
+  return (
+    `日誌記的檔案政策 ${narrowing.fromSandbox}（核准 ${narrowing.fromApproval}）比權限表裡每一組都寬，續接時收回預設組 ` +
+    `${narrowing.preset}（檔案政策 ${narrowing.toSandbox}、核准 ${narrowing.toApproval}）`
+  );
+}
+
 /** REPL 與一次性模式共用同一條對話——checkpointer 認的是這個 id。 */
 export const THREAD_ID = 'cli';
 
@@ -843,6 +861,11 @@ export async function createCliAgent(
    * `permissions` 投影缺席，web 藏起選單。
    */
   permissionPresets: { catalog(): PermissionCatalog } | undefined;
+  /**
+   * 續接時日誌記的沙箱模式比權限表裡每一組都寬，會話接上時會被收回預設組（[#1621](https://github.com/DemianLi/nexus-agent/issues/1621) Q2 (b)）。
+   * 沒有這件事是 `undefined`。**只是通知**：收回由權限組合的會話參與者在 `attachSessions` 時往 root 日誌寫，這裡的值讓 serve／CLI 留一行 warn。
+   */
+  permissionNarrowed: PermissionNarrowing | undefined;
   /** 使用者可以點名派的子代理（`subagent.list`，#328 第 2 項）：`task` 實際收的那份。serve 交給 wire-handler。 */
   subagentKinds: readonly { readonly name: string; readonly description: string }[];
   /**
@@ -1099,6 +1122,7 @@ export async function createCliAgent(
   // 這一步的兩種錯（跟 `--sandbox` 矛盾、起始值對不上任何一組）是逐條 thread 的，包成以 `permission-presets` 為不能少掛條目的
   // `AssemblyDropError`：serve 試組、逐條 thread 與 CLI 三條路都照以前「那一列掉了 → 必掛」的方式記錄與轉換。內層訊息逐字不變。
   let permissionCatalog: PermissionCatalog | undefined;
+  let permissionNarrowed: PermissionNarrowing | undefined;
   if (workspaceRoot !== undefined) {
     const presets = services.get<PermissionPresetsService>(PERMISSION_PRESETS_SERVICE);
     if (presets === undefined) {
@@ -1125,6 +1149,7 @@ export async function createCliAgent(
       sandboxMode.switchTo(started.sandbox);
       approvalPolicy.switchTo(started.approval);
       permissionCatalog = started.catalog;
+      permissionNarrowed = started.narrowed;
     } catch (error) {
       await dispose().catch(() => {});
       throw assemblyDropErrorFor(plugins, PERMISSION_PRESETS_PLUGIN_NAME, error, dropped) ?? error;
@@ -1161,6 +1186,7 @@ export async function createCliAgent(
     // wire 的 `permission.catalog` 讀它：逐條 thread 的目錄（含這條 thread 的預設組，偏離登記在 `@nexus/permission-presets`）。
     permissionPresets:
       permissionCatalog === undefined ? undefined : { catalog: () => permissionCatalog },
+    permissionNarrowed,
     subagentKinds,
     goals: services.get<GoalServices>(GOALS_SERVICE),
     workspaceRoot,

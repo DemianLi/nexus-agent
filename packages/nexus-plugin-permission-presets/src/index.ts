@@ -11,7 +11,7 @@
  *   （#1494），閘門與 fence 照舊逐次讀各自的控制器，不讀這一組的快照。
  * - **現在是哪一組是推導出來的**（{@link derivePreset}）：實際值對上哪一組就是哪一組，對不上是 `custom`；日誌上最後一顆 `permission/preset`
  *   只在兩組捆著同樣的值時分勝負。
- * - **`permissions` 投影只推現在的值**（`{ currentValue }`），目錄（`permission.catalog`）整台共用。
+ * - **`permissions` 投影只推現在的值**（`{ currentValue }`），目錄（`permission.catalog`）dsh 整台共用，我們逐條 thread 回（偏離 7）。
  * - **新會話把起始組合釘進日誌**（dsh `pinInitialPermission`）：登記一位會話參與者（`@nexus/session` 的 `join`），接上就寫。
  * - **子代理**：背景子代理核准一律釘 `never`（編背景圖時換上的閘門，`@nexus/core` 的 `createBackgroundApprovalGate`）；**前景子代理跟 root 當下的核准政策走**
  *   （[#328](https://github.com/DemianLi/nexus-agent/issues/328) 第 1 項，dsh 沒有）。組合名只在父代理是 `danger-full-access` 時帶下去（dsh `child-agent.ts:252`、`:277`），兩種子代理一樣。
@@ -31,12 +31,25 @@
  *    （`packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`），表裡有就人人可選；我們的 serve 多人共用一台主機，同一把 token 底下
  *    的每個人都切得到，所以出廠只留兩組。CLI 跟著少一組屬理由 1：出貨層只有一份表，表達不出「serve 少、CLI 照舊」。部署方要全開就把整張表
  *    重寫一份加回（見 `presets.ts` 的 `DEFAULT_PRESETS`）；沒加回又用 `--sandbox danger-full-access` 起，新會話在起動當下失敗。
- * 7. **（遷上樹新增，#1491）目錄是逐條 thread 的、子代理組名由參與者寫、參與者安裝失敗只記 warn。** 三條偏離的理由、類別與撤除條件登記在
- *    `@nexus/permission-presets` 的檔頭與 `docs/plugin-contract.md`。
+ * 7. **（遷上樹新增，#1491）目錄是逐條 thread 的、子代理組名由參與者寫、參與者安裝失敗只記 warn、起始值在宿主的組 thread 那一步算。**
+ *    這四條偏離的理由、類別與撤除條件登記在 `@nexus/permission-presets` 的檔頭第 1 至 4 條與 `docs/plugin-contract.md`；
+ *    該檔頭第 5 條是下面第 8 條（`/permission` 不對模型講一聲）。
  * 8. **切換核准政策時沒有對模型講一聲。** dsh 的 `user-approval` 在政策變動時用 `agent.inject` 排一則使用者訊息給下一步模型
  *    （`packages/interaction/user-approval/src/index.ts:184-187`，`687f282e`：「The approval policy changed from … to … (changed by the user).」）；
  *    我們的 `/permission` 一直沒有這一步（相容層就沒有，這張遷移不改行為）。
  *    類別：遷移卡不改行為（暫時）。**撤除條件**：之後的權限卡決定要不要補這則訊息（補了就是行為改變，要自己一張卡）。
+ * 9. **續接時，日誌記的沙箱比表裡每一組都寬就收回預設組（理由 2，[#1621](https://github.com/DemianLi/nexus-agent/issues/1621) 第 2 步）。**
+ *    dsh 續接照日誌裡的值，表怎麼變都不動它；我們的 serve 多人共用一台主機，出廠拿掉全開（偏離 6）之後，升級前已經切到全開的會話若續接照舊，
+ *    等於那一條 thread 永遠留著表裡不存在的全開。收的條件只有「比每一組都寬」（部署方加回全開不收；`read-only` 被刪掉後停在 `read-only` 的會話比
+ *    `workspace-write` 窄，也不收）。收到 `defaultPreset`，沒設就是表裡沙箱最寬的那一組（不是第一組：第一組是 `read-only`，收太多）。
+ *    收回在**會話參與者**裡做（`start` 只回 `narrowed` 描述）：沙箱與核准的參與者排在前面、每次接上都把控制器釘到日誌的值，宿主在 `start`
+ *    之後切控制器會被它們蓋回去。寫事件的順序照 `/permission`（`permission/preset` → `sandbox/mode` → `approval/policy`，只寫真的變了的）；
+ *    沒有新事件種類、日誌格式不動。**撤除條件**：沒有（出廠表沒有全開這件事一天不變，這條就一天要在）。
+ *    **為什麼目標不照 dsh 的 `inferredDefault`**（理由 1）：dsh 的預設組是 `config.defaultPreset ?? inferredDefault`，`inferredDefault` 由行程起始的沙箱與核准推出
+ *    （`packages/interaction/permission-presets/src/index.ts:222-231`，`687f282e`）；寫事件的參與者拿不到行程的 `--sandbox`，root 的 `SessionAddress` 也沒有
+ *    thread 鍵可以對回 `start`，所以退到「`defaultPreset`，沒設取沙箱最寬的一組」。兩種規則只有一格結果不同：`--sandbox read-only` 起動、沒設
+ *    `defaultPreset`、日誌記著全開——照 dsh 收到 `read-only`，照這裡收到 `workspace-write`（要收得更窄就設 `defaultPreset`）。
+ *    dsh 的對照點：續接時保留日誌裡的值是 `:446-455`（`pinInitialPermission` 後半），續接時拒絕的前例是 `:431-436`（`auto` 在續接時拋錯）。
  *
  * ## 形狀（#1491：第十四顆搬上 Cordis 樹的插件）
  *
@@ -77,7 +90,7 @@ import {
   specOf,
 } from './presets.js';
 import type { PermissionPresetsConfig, PresetTable } from './presets.js';
-import { assertPresetConfig, startPresets } from './start.js';
+import { assertPresetConfig, narrowingOf, startPresets } from './start.js';
 
 export {
   applyPermissionEvent,
@@ -91,10 +104,11 @@ export {
   CUSTOM_PRESET,
   DEFAULT_PRESETS,
   derivePreset,
+  isSandboxWider,
   permissionPresetsConfigSchema,
   specOf,
 } from './presets.js';
-export { assertPresetConfig, buildCatalog, startPresets } from './start.js';
+export { assertPresetConfig, buildCatalog, narrowingOf, startPresets } from './start.js';
 export type {
   PermissionKnobs,
   PermissionPresetsConfig,
@@ -191,6 +205,7 @@ export function apply(ctx: Context, config: PermissionPresetsConfig): void {
   const table: PresetTable = config.presets;
   assertPresetConfig(table, config.defaultPreset);
 
+  const configured = config.defaultPreset;
   service(ctx, projectionsToken).register(createPermissionsUnit(table));
   // 用 `new` 不用 `ctx.plugin(Class)`：不開子 fiber，歸屬就是這一列。建構子 `provide` 是 effect，列卸載時服務跟著撤。
   new PermissionPresetsServiceImpl(ctx, table, config.defaultPreset);
@@ -201,6 +216,24 @@ export function apply(ctx: Context, config: PermissionPresetsConfig): void {
       // 兩顆旋鈕的值讀這份日誌：approval-gate 與 sandbox-policy 的參與者排在前面，已經把起始值釘進來了（`approval/policy` → `sandbox/mode` →
       // `permission/preset` 的順序靠這一列在清單上的位置）。
       const knobs = foldPermissionKnobs(subject.log.events);
+      // 續接收回（#1621 Q2 (b)）：日誌記的沙箱模式比表裡每一組都寬，就切到預設組。**順序照 `/permission`**：先記意圖，再只寫真的不同的那顆旋鈕。
+      // 排在釘起始組合之前，這一輪就不會再釘一顆（收回已經記了 `permission/preset`）。控制器靠訂閱跟著日誌走，不碰它們。
+      // 此刻日誌上已經有 sandbox-policy 的參與者釘的那顆（排在前面），`knobs.sandbox` 是日誌記的原值。
+      const narrowing =
+        knobs.sandbox === null
+          ? undefined
+          : narrowingOf(table, configured, {
+              sandbox: knobs.sandbox,
+              approval: knobs.approval ?? ASSUMED_APPROVAL,
+            });
+      if (narrowing !== undefined) {
+        subject.log.append('permission/preset', { preset: narrowing.preset });
+        if (narrowing.toSandbox !== narrowing.fromSandbox)
+          subject.log.append('sandbox/mode', { mode: narrowing.toSandbox });
+        if (narrowing.toApproval !== narrowing.fromApproval)
+          subject.log.append('approval/policy', { policy: narrowing.toApproval });
+        return undefined;
+      }
       if (knobs.preset === null) {
         const effective = derivePreset(table, { ...knobs, preset: null });
         if (effective !== CUSTOM_PRESET)
