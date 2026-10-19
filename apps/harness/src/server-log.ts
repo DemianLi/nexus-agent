@@ -20,7 +20,7 @@
  * @module
  */
 
-import { Logger } from '@nexus/cordis';
+import { Context as CordisContext, Logger } from '@nexus/cordis';
 import type { Context, Message } from '@nexus/cordis';
 import { ConsoleExporter } from '@nexus/cordis-plugin-logger-console';
 
@@ -61,18 +61,13 @@ export function defaultLoggerConsoleConfig(): LoggerConsoleConfig {
 /** 帶 thread 的訊息可以在 `meta` 放這一格（#1536 決定填法），JSON 會多一個 `thread_id`。 */
 type ThreadedMessage = Message & { thread_id?: unknown };
 
-/**
- * vendor 的 `ConsoleExporter` 建構子會 `ctx.logger.exporter(this)`，登記跟著**根的 fiber** 走。我們不要那一條（見 {@link mountServerLog}），
- * 所以建構時交一個什麼都不登記的 ctx，登記由我們自己做。
- */
-const NO_REGISTRATION = { logger: { exporter: () => undefined } } as unknown as Context;
-
 class ServerLogExporter extends ConsoleExporter {
   readonly #format: LoggerConsoleConfig['format'];
   readonly #write: LogWrite;
 
-  constructor(config: LoggerConsoleConfig, write: LogWrite) {
-    super(NO_REGISTRATION, {
+  /** @param keeper - 登記掛在這個 context 的 fiber 上（見 {@link mountServerLog}）；vendor 的建構子會 `ctx.logger.exporter(this)`。 */
+  constructor(keeper: Context, config: LoggerConsoleConfig, write: LogWrite) {
+    super(keeper, {
       // JSON 不上色：ANSI 序列進了 `msg` 日誌平台會拆不開。
       colors: config.format === 'json' ? false : config.colors,
       showTime: config.showTime,
@@ -107,23 +102,29 @@ class ServerLogExporter extends ConsoleExporter {
 }
 
 /**
- * 把 console exporter 掛到根上：**先回放緩衝、再登記**（照 dsh，見檔頭）。
+ * 把 console exporter 掛到根上：**先取緩衝、再登記、最後回放**（回放照 dsh，見檔頭）。
  *
  * **登記不跟著根的 fiber 走，這是承重的。** `ctx.logger.exporter()` 是一個 `ctx.effect`，根卸載時它會和樹上其他 fiber 的 disposer 同時被收掉；
  * 而 Cordis 在 fiber 的 `_unload` 裡把 disposer 拋的錯記成 `ctx.logger.error`——那一刻 exporter 常常已經被收了，錯誤只進緩衝（實測：
- * `server-log.test.ts` 的「樹上的錯誤印得出來」在 exporter 走 effect 時是紅的）。所以直接放進 logger 服務的 `exporters` 表，
- * 活到整個 logger 服務（也就是整棵樹）結束；樹收掉之後沒有人再叫 logger，不會有洩漏。
+ * `server-log.test.ts` 的「樹上的錯誤印得出來」在 exporter 掛在根上時是紅的）。
+ *
+ * 做法照 dsh `app-boot/src/index.ts:1207-1212`（"The collector must outlive root disposal to retain asynchronous cleanup errors."）：
+ * 另建一個樹外的 keeper Context、`keeper.logger = ctx.logger`，再走公開的 `keeper.logger.exporter()`（vendor `ConsoleExporter` 的建構子就是這一行）。
+ * 登記的 fiber 是 keeper 的，不是根的，所以根卸載收不到它；keeper 不卸載，活到行程結束。偏離理由 2 見 `settings/logger-console.ts` 檔頭。
  *
  * @param ctx - Cordis 的根 context（`PluginTree.context()`）。
  * @param config - 驗過的設定；`defaultLoggerConsoleConfig()` 是設定列起不來時的退路。
  * @param write - 一行的出口。
  */
 export function mountServerLog(ctx: Context, config: LoggerConsoleConfig, write: LogWrite): void {
-  const exporter = new ServerLogExporter(config, write);
-  for (const message of ctx.logger.buffer.slice()) {
+  const keeper = new CordisContext();
+  keeper.logger = ctx.logger;
+  // 先取緩衝：登記之後新來的話走即時那條，回放的只該是登記之前已有的。
+  const buffered = ctx.logger.buffer.slice();
+  const exporter = new ServerLogExporter(keeper, config, write);
+  for (const message of buffered) {
     if (exporter.passes(message)) exporter.export(message);
   }
-  ctx.logger.exporters.set(++ctx.logger._snExporter, exporter);
 }
 
 /** serve 在一次執行裡用的伺服器日誌：說話的 logger，與「什麼時候把 exporter 掛上」。 */

@@ -21,7 +21,7 @@ import type { WireClient } from '@nexus/wire';
 import { emptyConversation, reduceAll } from '@nexus/wire';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
-import { bodyLog, foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, foldTurn, levelsOf, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV, HARNESS_SESSIONS_DIR_NAME } from './harness-home.js';
 import { seedHomePatch } from './plugin-journal.fixture.js';
 import { PLUGIN_SNAPSHOT_FILE_NAME } from './plugin-snapshot.js';
@@ -67,10 +67,10 @@ function home(patch?: string): Home {
   };
 }
 
-async function start(h: Home, lines: string[]): Promise<RunningServe> {
+async function start(h: Home, lines: string[], raw?: string[]): Promise<RunningServe> {
   const server = (await runServe({
     argv: ['--port', '0', '--workspace', h.workspace],
-    log: bodyLog(lines),
+    log: bodyLog(lines, raw),
     env: h.env,
   })) as RunningServe;
   running.push(server);
@@ -148,7 +148,8 @@ describe('閒置逐出從 serve 組裝起（#1484）', () => {
   it('接線：設了就撤；撤完快照不再列它握著的設定版本；再開一次是重新組裝', async () => {
     const h = home(EVICT_PATCH);
     const lines: string[] = [];
-    const server = await start(h, lines);
+    const raw: string[] = [];
+    const server = await start(h, lines, raw);
     expect(lines.some((line) => line.startsWith('thread 閒置逐出：閒置 50 毫秒'))).toBe(true);
     const client = await serveClient(server);
     await setup(client, 't1');
@@ -157,6 +158,8 @@ describe('閒置逐出從 serve 組裝起（#1484）', () => {
     expect(echoBefore?.live?.[0]?.threads).toContain('t1');
 
     await until(() => evictedLine(lines, 't1'));
+    // 等級：正常撤出記憶體是 info，不是 warn（#1534）；門檻調到 warn 的主機不為它出一行。
+    expect(levelsOf(raw, '[閒置逐出] thread "t1"')).toEqual(['I']);
     // 撤完才重寫快照（占位放掉之前），所以等它出現。
     await until(() => {
       const row = h.snapshot().rows.find((candidate) => candidate.id === 'echo');

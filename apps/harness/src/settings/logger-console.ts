@@ -23,16 +23,22 @@
  * 交給內網的日誌平台，所以多一個一行一個 JSON 物件的格式，判準取 JSON Lines；欄位名取 OTel Logs 資料模型的慣用語意，**不引入 OTel SDK、不送出去**。
  * 欄位表見 `docs/operations.md`「伺服器日誌的等級與格式」。
  *
- * ### 偏離三：設定住在 `#settings/` 的設定列，不是 Cordis 樹上的一列（理由 1：基座表達不出來；**偏離 #1534 卡面**）
+ * ### 偏離三：設定住在 `#settings/` 的設定列，不是 Cordis 樹上的一列（理由 2：產品需求超出 dsh；**偏離 #1534 卡面**，PM 於 #1752 裁決）
  *
  * 卡面寫「這一列掛在 Cordis 樹上」，照 dsh：`logger-console` 是樹上一個 plugin，建構時 `ctx.logger.exporter(this)`。
- * 這裡退到起動期設定列（同 `thread-capacity`），**實證的理由是這一條**：`ctx.logger.exporter()` 是一個 `ctx.effect`，登記跟著那個 fiber 走；
- * 樹卸載時它和樹上其他 fiber 的 disposer 同時被收，Cordis 在 `_unload` 裡把 disposer 拋的錯記成 `ctx.logger.error`——那一刻 exporter 常常已經不在，
- * 錯誤又只進緩衝。實測：exporter 走 effect 登記時，`server-log.test.ts` 的「樹上的錯誤印得出來」是紅的（突變 M7）。
- * 所以 `../server-log.ts` 的 `mountServerLog` 把 exporter 直接放進 logger 服務的 `exporters` 表，活到整個 logger 服務（整棵樹）結束，
- * 設定則由 `startupSetting` 在清單讀完後解出來。
+ * **基座做得到樹上那一種**（PM 的探針 C／F／G 都抓到過），所以這不是「基座表達不出來」。
  *
- * 次要的理由：serve 在讀清單之前就要記話（代理、home 鎖、變更紀錄那幾行），exporter 要讀完清單才有設定——這一點靠回放緩衝解決
+ * 症狀是真的：`ctx.logger.exporter()` 是一個 `ctx.effect`，登記跟著那一列的 fiber 走；根卸載時所有 disposer 並行收，exporter 常常先被收掉，
+ * Cordis 在 `_unload` 裡把 disposer 拋的錯記成 `ctx.logger.error` 時它已經不在，錯誤只進緩衝（實測：exporter 掛在根上時
+ * `server-log.test.ts` 的「樹上的錯誤印得出來」是紅的，突變 M7）。dsh 樹上的 logger-console 同樣會丟——dsh 不出貨 console exporter，
+ * 它自己要留住卸載錯誤的收集器就**放在樹外**：`app-boot/src/index.ts:1207-1212`，另建一個 `diagnostics = new Context()`、
+ * `diagnostics.logger = ctx.logger`，再走公開的 `diagnostics.logger.exporter(...)`，註解寫著 "The collector must outlive root disposal to retain asynchronous cleanup errors."。
+ *
+ * nexus 要在**出貨產品**裡把根卸載時的錯誤印到 console，這是 dsh 沒有的需求，所以是理由 2。退到的做法照 dsh app-boot：exporter 掛在樹外、活過根卸載的 keeper Context 上
+ * （`../server-log.ts` 的 `mountServerLog`，只走公開 API，不碰 logger 服務的私有欄位），設定由 `startupSetting` 在清單讀完後解出（同 `thread-capacity`）。
+ * 撤除條件：dsh 出貨一顆能活過根卸載的 console exporter 的那一天，改回樹上的一列。
+ *
+ * 次要的事：serve 在讀清單之前就要記話（代理、home 鎖、變更紀錄那幾行），exporter 要讀完清單才有設定——這一點靠回放緩衝解決
  * （照 dsh，`apps/cli/tests/profiles/web/tests/web-failure-matrix.expected.e2e.ts:52-53`：`ctx.logger.buffer.forEach` 之後才 `ctx.logger.exporter`），
  * 不是非設定列不可的理由。
  *

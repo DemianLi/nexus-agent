@@ -519,6 +519,11 @@ export interface WireHandlerOptions {
    */
   warn?(message: string): void;
   /**
+   * 正常狀態的一行（info 等級，[#1534](https://github.com/DemianLi/nexus-agent/issues/1534)）：目前只有「閒置逐出：這條 thread 撤出記憶體」。
+   * 把門檻調到 warn 的主機不該為每一條正常撤掉的 thread 看到一行。缺席就退回 {@link warn}（行不變），所以沒接線的測試照舊。
+   */
+  info?(message: string): void;
+  /**
    * 附件儲存（`POST /threads/:id/uploads`，[#732](https://github.com/DemianLi/nexus-agent/issues/732)），選配。
    *
    * **缺席就是這個組裝沒有附件儲存**（手搭的組裝、沒有 harness home 的測試）：上傳路徑回 `not_supported`，web 據這個碼把附件列藏起來。
@@ -1313,7 +1318,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     closing.set(threadId, done);
     threads.delete(threadId);
     ready.delete(threadId);
-    options.warn?.(
+    (options.info ?? options.warn)?.(
       `[閒置逐出] thread "${threadId}" 閒置 ${String(Math.round((now() - state.lastActiveAt) / 1000))} 秒，撤出記憶體（日誌在磁碟上，再開這條 thread 會照重啟後的路徑重組）`,
     );
     void (async (): Promise<void> => {

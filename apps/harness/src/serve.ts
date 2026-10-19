@@ -941,6 +941,8 @@ async function startServer(
         }),
     // 一頁歷史撐破軟上限時（#479）、退回標題寫不進去時（#647）、模型標題寫不成時（#650）講一聲。
     warn,
+    // 閒置逐出把一條 thread 撤出記憶體是正常狀態（#1534）：info，門檻調到 warn 的主機不為它出一行。
+    info: log,
     // **冷讀那一格**（#302）：讀的是續接那條路寫進去的同一格，只列切得過去的——`cwd` 就是續接時
     // `assertSameCwd` 比的那一個。落盤關掉（#612）就整個不給，列表那時講「列不出來」而不是「沒有」。
     ...(sessionStore === undefined
@@ -1147,7 +1149,9 @@ async function startServer(
       }
       // 續接時日誌記的檔案政策比權限表裡每一組都寬，接上日誌時會被收回預設組（#1621）：伺服器日誌留一行，部署方看得出為什麼這條對話的權限變了。
       if (built.permissionNarrowed !== undefined) {
-        log(`[權限] thread "${threadId}" ${describePermissionNarrowing(built.permissionNarrowed)}`);
+        warn(
+          `[權限] thread "${threadId}" ${describePermissionNarrowing(built.permissionNarrowed)}`,
+        );
       }
       // 組裝之後這條 thread 的外掛執行期交出的話（例如 MCP 掉線重連的進度，#1099）同樣逐條記；組裝收掉時註冊表一起沒了。
       built.onWarning((warning) => {

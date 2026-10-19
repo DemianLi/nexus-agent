@@ -537,9 +537,25 @@ export function serverLogBody(line: string): string {
   return line.slice(match[0].length).replace(new RegExp(`\\n {${String(indent)}}`, 'gu'), '\n');
 }
 
-/** 把 `runServe` 的 `log` 收進一個陣列、只留訊息本文。 */
-export function bodyLog(sink: string[]): (line: string) => void {
+/**
+ * 把 `runServe` 的 `log` 收進一個陣列、只留訊息本文。要驗**等級**的測試另給 `raw`：原樣的一行也收進去，
+ * 再用 {@link serverLogLevel} 讀等級字母（本文那一份看不到等級）。
+ */
+export function bodyLog(sink: string[], raw?: string[]): (line: string) => void {
   return (line) => {
+    raw?.push(line);
     sink.push(serverLogBody(line));
   };
+}
+
+/** 一行伺服器日誌的等級字母（`E`／`W`／`I`／`D`）；不是那個形狀回 `undefined`。 */
+export function serverLogLevel(line: string): string | undefined {
+  return /^(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} )?\[([EWID])\] \S+ /u.exec(line)?.[1];
+}
+
+/** 原樣的伺服器日誌行裡，本文以 `prefix` 開頭的那幾行的等級字母。 */
+export function levelsOf(raw: readonly string[], prefix: string): (string | undefined)[] {
+  return raw
+    .filter((line) => serverLogBody(line).startsWith(prefix))
+    .map((line) => serverLogLevel(line));
 }

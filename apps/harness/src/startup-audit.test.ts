@@ -18,7 +18,7 @@ import { AssemblyDropError } from './agent-factory.js';
 import type { AssemblyDrop } from './agent-factory.js';
 import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
 import { runCli } from './cli.js';
-import { bodyLog, foldTurn, serveClient, withSystemPromptVariables } from './fixtures.js';
+import { bodyLog, foldTurn, levelsOf, serveClient, withSystemPromptVariables } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { createCordisRoot } from './cordis-root.js';
 import type { CordisRoot } from './cordis-root.js';
@@ -377,11 +377,11 @@ describe('serve：組裝時掉了的列', () => {
   }
 
   /** 起一台 serve、開兩條對話各跑一輪，回伺服器日誌。 */
-  async function serveTwoThreads(env: NodeJS.ProcessEnv): Promise<string[]> {
+  async function serveTwoThreads(env: NodeJS.ProcessEnv, raw?: string[]): Promise<string[]> {
     const lines: string[] = [];
     const server = (await runServe({
       argv: ['--port', '0'],
-      log: bodyLog(lines),
+      log: bodyLog(lines, raw),
       env,
     })) as RunningServe;
     running = server;
@@ -414,8 +414,11 @@ describe('serve：組裝時掉了的列', () => {
    */
   it('試組時沒掉、對話組裝時才掉：那一條照樣建得起來，伺服器日誌逐條記一筆', async () => {
     const { env, witness } = homeWithCountingModule(2);
-    const lines = await serveTwoThreads(env);
+    const raw: string[] = [];
+    const lines = await serveTwoThreads(env, raw);
     expect(lines.filter((line) => line.startsWith('警告：'))).toEqual([]);
+    // 等級：部署方把門檻調到 warn 時，這一行不能掉（#1534 驗收 1）。
+    expect(levelsOf(raw, '[組裝] thread')).toEqual(['W', 'W']);
     const perThread = lines.filter((line) => line.startsWith('[組裝]'));
     expect(perThread).toHaveLength(2);
     expect(perThread[0]).toMatch(

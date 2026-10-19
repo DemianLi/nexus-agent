@@ -17,7 +17,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 
 import { runCli } from './cli.js';
 import { createCliAgent } from './assembly-root.js';
-import { bodyLog, foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, foldTurn, levelsOf, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { toAgentInvocation } from './messages.js';
 import { loadDefaultPlugins } from './plugin-config.js';
@@ -94,9 +94,10 @@ async function boundTools(env: NodeJS.ProcessEnv): Promise<readonly string[]> {
 /** 起一台 serve，回伺服器日誌與「開一條對話跑一輪」的函式。 */
 async function serveWithLog(env: NodeJS.ProcessEnv) {
   const lines: string[] = [];
+  const raw: string[] = [];
   const server = (await runServe({
     argv: ['--port', '0'],
-    log: bodyLog(lines),
+    log: bodyLog(lines, raw),
     env,
   })) as RunningServe;
   running = server;
@@ -107,7 +108,7 @@ async function serveWithLog(env: NodeJS.ProcessEnv) {
     await foldTurn(events);
     await events.return?.(undefined);
   };
-  return { lines, openThread };
+  return { lines, raw, openThread };
 }
 
 const WARNED =
@@ -141,11 +142,13 @@ describe('MCP 連不上、沒寫 failOnStartupError', () => {
    */
   it('serve 起得來、啟動時警告；伺服器恢復之後開的下一條對話連得上', async () => {
     const { env, recover } = homeWithLateServer();
-    const { lines, openThread } = await serveWithLog(env);
+    const { lines, raw, openThread } = await serveWithLog(env);
     expect(lines.filter((line) => WARNED.test(line))).toHaveLength(1);
 
     await openThread('a');
     expect(lines.filter((line) => line.startsWith('[組裝] thread "a" 警告：'))).toHaveLength(1);
+    // 等級：門檻調到 warn 的主機看得到這一行（#1534 驗收 1）。
+    expect(levelsOf(raw, '[組裝] thread "a" 警告：')).toEqual(['W']);
 
     recover();
     await openThread('b');
@@ -163,7 +166,7 @@ describe('MCP 掛上之後掉線', () => {
       '        reconnect:\n          initialDelayMs: 100\n          maxDelayMs: 200\n          maxAttempts: 5',
     );
     recover();
-    const { lines, openThread } = await serveWithLog(env);
+    const { lines, raw, openThread } = await serveWithLog(env);
     await openThread('a');
     const home = env[HARNESS_HOME_ENV] ?? '';
     const alive = (): number[] => {
@@ -191,6 +194,10 @@ describe('MCP 掛上之後掉線', () => {
       if (Date.now() - start > 20_000) throw new Error(`等太久了：${lines.join('\n')}`);
       await new Promise((resolve) => setTimeout(resolve, 50));
     }
+    // 等級：掉線重連的進度是 warn，門檻調到 warn 的主機看得到（#1534 驗收 1）。
+    const levels = levelsOf(raw, '[外掛] thread "a"：');
+    expect(levels.length).toBeGreaterThan(0);
+    expect(new Set(levels)).toEqual(new Set(['W']));
   }, 60_000);
 });
 
