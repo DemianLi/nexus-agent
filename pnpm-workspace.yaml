@@ -6,3 +6,25 @@ packages:
 # peer 範圍不符時直接讓 pnpm install 失敗，而不是印 warning 後照樣裝起來。
 # deepagents 1.x 的 minor 會抬高 peer 下限（見 issue #33），這個開關讓那件事在 CI 當場爆。
 strictPeerDependencies: true
+
+# 發布不到 24 小時的版本不准解析進來（#1545）。`pnpm add`／`pnpm update` 解析時由 pnpm 自己擋
+# （ERR_PNPM_NO_MATURE_MATCHING_VERSION）；已經寫進 lockfile 的版本 `--frozen-lockfile` 不再查，
+# 那一段由 CI 的 `.github/scripts/check_lockfile_age.py` 補上。
+#
+# 數值照 dsh（687f282e）：dsh 用 pnpm 11（`package.json:7`），沒有明設這個鍵，靠 pnpm 11 預設的 24 小時
+# （`apps/desktop/packaging/README.md:227`、`scripts/local-bundle-registry.spec.ts:513`）。
+# **偏離 dsh，理由 1（基座表達不出來）**：nexus 留在 pnpm 10.34.5（#1502 的 `pnpm deploy` 旗標照 pnpm 10 定），
+# 它沒有這個預設（沒設就是不擋），所以明寫 1440 分鐘，等於 dsh 實際生效的值。
+minimumReleaseAge: 1440
+# 例外只收**精確版本**（`name@x.y.z`），每一條上面寫為什麼不能等，照 dsh `pnpm-workspace.yaml:57-107`。
+# 急件安全修補照 dsh 的決策筆記：先等，或縮小範圍；真的等不了才逐條加例外，不放寬上面的政策。
+minimumReleaseAgeExclude: []
+
+# 帶 install script 的相依一律要在 `allowBuilds` 逐項審過，沒列的讓 `pnpm install` 硬錯（ERR_PNPM_IGNORED_BUILDS），
+# 不再只印警告後略過。形狀照 dsh `pnpm-workspace.yaml:26-55`：每一項明寫 true／false 並附理由。
+# **偏離 dsh，理由 1**：dsh 靠 pnpm 11 預設開著的 strictDepBuilds（它那段註解寫「pnpm 10+」，對 10.34.5 不準：
+# 10.34.5 的預設是 false，`dist/pnpm.cjs` 的 `strict-dep-builds` 預設值），所以這裡明設 true。
+strictDepBuilds: true
+allowBuilds:
+  # 原生二進位：postinstall 驗證並放好平台的 esbuild 執行檔。tsdown、vite、tsx 都靠它。
+  esbuild: true
