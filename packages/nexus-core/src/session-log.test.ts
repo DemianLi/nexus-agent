@@ -13,6 +13,7 @@ import {
   MODEL_VISIBLE_EVENT_TYPES,
   openTurnStart,
   SESSION_EVENT_MAX_DEPTH,
+  SessionEventDepthError,
   SessionLog,
 } from './session-log.js';
 import type { SessionEvent } from './session-log.js';
@@ -803,8 +804,9 @@ describe('寫入那一關的深度上限（#1661）', () => {
 
     it('多一層就拒，路徑指到那一顆', () => {
       const batch = [rawEvent(0, 'x'), rawEvent(1, nested(SESSION_EVENT_MAX_DEPTH, 'object'))];
+      // 太深是帶碼的子類別（#1668），仍是 TypeError。
       expect(() => materializeAppendBatch(batch)).toThrow(
-        new TypeError(
+        new SessionEventDepthError(
           `會話事件的 寫入批次[1].data.meta${'.next'.repeat(5)}…（省略 ${SESSION_EVENT_MAX_DEPTH + 2 - 8} 段） ` +
             `是第 ${SESSION_EVENT_MAX_DEPTH + 3} 層巢狀，超過上限 ${SESSION_EVENT_MAX_DEPTH + 2} 層`,
         ),

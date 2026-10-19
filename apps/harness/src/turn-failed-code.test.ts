@@ -293,7 +293,10 @@ describe('classifyTurnFailure 本身', () => {
     for (const inner of [new SessionEventDepthError('太深'), new CheckpointDepthError(700, 602)]) {
       const wrapped = new Error('外層', { cause: new Error('中間', { cause: inner }) });
       expect(classifyTurnFailure(inner).code).toBe(NESTING_TOO_DEEP_CODE);
-      expect(classifyTurnFailure(wrapped)).toEqual({ message: '外層', code: NESTING_TOO_DEEP_CODE });
+      expect(classifyTurnFailure(wrapped)).toEqual({
+        message: '外層',
+        code: NESTING_TOO_DEEP_CODE,
+      });
     }
     expect(DEFAULT_STREAM_RETRYABLE_CODES).not.toContain(NESTING_TOO_DEEP_CODE);
   });

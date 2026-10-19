@@ -440,14 +440,16 @@ describe('同台：模型帶進 state 的深參數（#1658）', () => {
     const data = (JSON.parse(failed) as { data: { message: string; error: { code: string } } })
       .data;
     expect(data.message).toBe(
-      `要記的訊息巢狀超過上限 ${SESSION_EVENT_MAX_DEPTH} 層，日誌收不下（轉成日誌的形狀之前就先拒）`,
+      `要記的訊息巢狀超過 ${SESSION_EVENT_MAX_DEPTH * 2} 層，日誌收不下（上限 ${SESSION_EVENT_MAX_DEPTH} 層；轉成日誌的形狀之前就先拒）`,
     );
     expect(data.error.code).toBe(NESTING_TOO_DEEP_CODE);
     expect(mainCalls(upstream, '深:deep')).toBe(1);
 
     await say(server, 'same-20000', '再一句');
     expect(
-      requestFor(upstream, '再一句').map((m) => `${m.role}:${m.role === 'system' ? '' : textOf(m)}`),
+      requestFor(upstream, '再一句').map(
+        (m) => `${m.role}:${m.role === 'system' ? '' : textOf(m)}`,
+      ),
     ).toEqual(['system:', 'user:第一句', 'assistant:好', 'user:深:deep', 'user:再一句']);
   }, 60_000);
 });
