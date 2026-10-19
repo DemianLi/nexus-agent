@@ -70,6 +70,7 @@ import {
   THREAD_FEED_PATH,
   THREAD_SEARCH_PATH,
   THREADS_PATH,
+  canonicalClientTimeZone,
   changesDiffPath,
   changesSummaryPath,
   DELIVERABLE_READ_METHOD,
@@ -229,7 +230,7 @@ export interface ThreadAgent {
   readonly workspaceChanges?: WorkspaceChanges;
   /**
    * 權限組合的目錄（[#437](https://github.com/DemianLi/nexus-agent/issues/437)），選配。沒有圍堵（沒給 `--workspace`）或
-   * 沒掛 `@nexus/plugin-permission-presets` 的組裝就沒有，那時 `permission.catalog` 回 `not_supported`、`permissions` 投影缺席。
+   * `permission-presets` 那一列沒掛的組裝就沒有，那時 `permission.catalog` 回 `not_supported`、`permissions` 投影缺席。
    */
   readonly permissionPresets?: { catalog(): PermissionCatalog };
   /**
@@ -2145,6 +2146,26 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         );
       }
       const requestId = rawRequestId as string | undefined;
+      // 使用者的時區（#1629）：選填，照 dsh `session.prompt` 的 `clientTimeZone`（`session-controller/src/index.ts:467-482`，`687f282e`）。
+      // 邊界上驗證並正規化（`UTC` 或 IANA `Area/Location`，別名退回正規名），不合法回 `invalid_argument` 並指名欄位，那句話不進佇列。
+      // **排在重送認人之前**：不合法的輸入不論是不是重送都被擋下，不會因為編號收過就悄悄回原本那一件。
+      const rawClientTimeZone = (params as { client_time_zone?: unknown }).client_time_zone;
+      let clientTimeZone: string | undefined;
+      if (rawClientTimeZone !== undefined) {
+        clientTimeZone =
+          typeof rawClientTimeZone === 'string'
+            ? canonicalClientTimeZone(rawClientTimeZone)
+            : undefined;
+        if (clientTimeZone === undefined) {
+          return json(
+            errorResponse(
+              command.id,
+              'invalid_argument',
+              'run.start 的 client_time_zone 要是 UTC 或 IANA 的 Area/Location 時區名（例如 Asia/Taipei）',
+            ),
+          );
+        }
+      }
       if (requestId !== undefined) {
         // 收過就回原本那一件的 `run_id`，不再排。**只比編號、不比內容**（同 dsh）。回應形狀的偏離登記在 `findPromptRequest`
         // （`@nexus/core` 的 `inbox.ts`）：dsh 回 `{ accepted: true }`，我們的 `run_id` 兼作佇列項目 id，畫面靠它對人。
@@ -2219,6 +2240,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           text,
           id: runId,
           ...(requestId === undefined ? {} : { requestId }),
+          ...(clientTimeZone === undefined ? {} : { clientTimeZone }),
           ...(mode === 'steer' ? { steer: true as const } : {}),
           ...(admitted.length > 0 && { attachments: admitted }),
           ...(mention !== undefined && { mention }),

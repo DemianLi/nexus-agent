@@ -52,7 +52,7 @@
   name: '@nexus/plugin-agent-instructions'
 
 # 時間讀數（#1625）：每次 agent 呼叫開頭、**同一個 `agent/pre-step` 接縫**上，追加一則持久的使用者訊息，
-# 寫著取樣時間、瀏覽器時區（目前一律 unavailable，#1629 才有）與距上一則模型看得到的訊息過了多久。
+# 寫著取樣時間、瀏覽器時區（`run.start` 帶 `client_time_zone` 才有，#1629；沒帶是 unavailable）與距上一則模型看得到的訊息過了多久。
 # 同一條 thread 10 分鐘內不重複（`refreshIntervalMs`，`0` 是每次都注入）；從不進系統提示詞，所以前綴快取不受影響。
 #
 # 位置在 `agent-instructions` 正下方：同一次 invoke 裡人話在前、AGENTS.md 基線居中、讀數在最後。
@@ -808,7 +808,10 @@
 # - **`defaultPreset` 選填**：新會話的起始組。省略就由 `--sandbox` 推出的起始值對表（全開＋不問、其他＋問）。與明確給的
 #   `--sandbox` 矛盾時啟動報錯，不悄悄讓其中一個蓋掉另一個。
 # - **沒有圍堵（沒給 `--workspace`）時這一列什麼都不註冊**（沒有東西可以捆）；有圍堵時這一列關不掉，理由同上一列。
-#   這一列 `apply` 拋（表壞了、預設組對不上）整個起不來——它的 id 在 `startup-audit.ts` 的必掛名單上。
+#   這一列 `apply` 拋（表壞了）整個起不來——它的 id 在 `startup-audit.ts` 的必掛名單上；預設組跟 `--sandbox` 矛盾、起始值對不上表裡任何一組，
+#   則在組裝每條 thread 時由 `start` 拋，宿主包成同一個必掛條目的 `AssemblyDropError`。
+# - **這一列是樹上的一列**（#1491）：註冊 `/permission`、`permissions` 投影與一位會話參與者，並提供 `permissionPresets` 服務；
+#   兩顆旋鈕以日誌為準（切換就是往 root 日誌追加）。工作區根由入口建樹時交進來（`@nexus/fs` 的 `workspaceRoot()`）。
 - id: permission-presets
   name: '@nexus/plugin-permission-presets'
 

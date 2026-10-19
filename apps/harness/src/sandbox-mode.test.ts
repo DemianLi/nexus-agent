@@ -26,7 +26,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
 import { toAgentInvocation } from './messages.js';
-import { PERMISSION_COMMAND_NAME } from '@nexus/plugin-permission-presets';
+import { PERMISSION_COMMAND_NAME } from '@nexus/permission-presets';
 import type { ScriptedChatModel } from './scripted-model.js';
 import { shippedPlugins, withScriptedModel } from './fixtures.js';
 

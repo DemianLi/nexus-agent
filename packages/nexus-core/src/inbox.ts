@@ -60,6 +60,12 @@ export type QueuedInputSource =
        * 客戶端沒帶就整個不放這個 key。**格式 48 起才有**。
        */
       readonly requestId?: string;
+      /**
+       * 使用者在哪個時區（`run.start` 的 `client_time_zone`，[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)），
+       * 邊界上已驗證並正規化。照 dsh 的 `MessageSource` `{ kind: 'user', rpcId, clientTimeZone }`（`packages/api/session-controller/src/types.ts:418`，
+       * `687f282e`）。客戶端沒帶就整個不放這個 key。**格式 49 起才有**。
+       */
+      readonly clientTimeZone?: string;
     }
   | {
       /** 背景子代理結算的通知（[#840](https://github.com/DemianLi/nexus-agent/issues/840)）：執行期的記帳，不是人說的話。 */

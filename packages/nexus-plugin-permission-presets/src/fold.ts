@@ -8,7 +8,7 @@
  * @module
  */
 
-import type { ProjectionUnit, SessionEvent } from '@nexus/core';
+import type { ProjectionUnit, SessionEvent } from '@nexus/projections';
 import { PERMISSIONS_PROJECTION_KEY } from '@nexus/wire';
 import type { PermissionSelection } from '@nexus/wire';
 import { derivePreset } from './presets.js';

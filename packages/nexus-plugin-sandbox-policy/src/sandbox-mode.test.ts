@@ -57,13 +57,6 @@ describe('切換', () => {
     expect(controller.switchTo('read-only').kind).toBe('unchanged');
     expect(log.events).toHaveLength(afterAttach);
   });
-
-  it('沒有日誌接在上面時 attachedCount 是 0（呼叫端據此說「這次切換沒留痕跡」）', () => {
-    const controller = new SandboxModeController('workspace-write');
-    expect(controller.attachedCount).toBe(0);
-    controller.attach(subjectOf(new SessionLog('t')));
-    expect(controller.attachedCount).toBe(1);
-  });
 });
 
 describe('切換寫進會話日誌', () => {
@@ -214,6 +207,7 @@ describe('跟著 root 日誌走（#1494）', () => {
     const dispose = createSessionRunner({
       address: { kind: 'root' },
       log: live,
+      rootLog: live,
       installers: [
         {
           origin: { kind: 'test' } as never,

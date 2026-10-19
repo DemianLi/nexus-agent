@@ -33,6 +33,7 @@
       "@nexus/fs": ["../../packages/nexus-fs/src/index.ts"],
       "@nexus/fs/provider": ["../../packages/nexus-fs/src/provider.ts"],
       "@nexus/goal": ["../../packages/nexus-goal/src/index.ts"],
+      "@nexus/permission-presets": ["../../packages/nexus-permission-presets/src/index.ts"],
       "@nexus/plugin-agent-instructions": [
         "../../packages/nexus-plugin-agent-instructions/src/index.ts"
       ],

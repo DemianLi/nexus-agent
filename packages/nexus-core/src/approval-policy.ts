@@ -27,7 +27,7 @@
  * ## 跟著 root 日誌走（[#1494](https://github.com/DemianLi/nexus-agent/issues/1494)）
  *
  * {@link ApprovalPolicyController.attach} 接上日誌之後**也訂閱它**：root 日誌上出現不帶 `source` 的 `approval/policy`，控制器的格子就跟著那一顆。
- * `/permission` 與 `resolveDefaultPreset` 仍走 {@link ApprovalPolicyController.switchTo}，它寫的那一顆回到自己的訂閱時是同一格，什麼都不動。
+ * 寫入口有兩種：宿主在組 thread 時靜默 {@link ApprovalPolicyController.switchTo} 起始值（`assembly-root.ts`，據 `permissionPresets.start` 的回傳），這時還沒有日誌接著；`/permission`（#1491 起在樹上的 `@nexus/plugin-permission-presets`，`index.ts` 的 `handler`）**不再碰控制器，直接往 root 日誌 `append` `approval/policy`**，控制器靠上面這條訂閱跟著。
  * 訂閱者**只改格子、不寫日誌**（listener 跑在日誌發布期間，回頭 `append` 會被重入護欄擋下）；`source: 'delegation'` 的那一顆是子代理的，一律略過
  * （與 {@link recordedApprovalPolicy} 同一條界線）。
  *
@@ -132,11 +132,6 @@ export class ApprovalPolicyController {
   /** 這一刻是哪一格。 */
   get current(): ApprovalPolicyValue {
     return this.#policy;
-  }
-
-  /** 現在接著幾份日誌。切換時用來把「這次切換沒留痕跡」講出來。 */
-  get attachedCount(): number {
-    return this.#logs.length;
   }
 
   /**

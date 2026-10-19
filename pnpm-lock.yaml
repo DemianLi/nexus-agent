@@ -98,6 +98,9 @@ importers:
       '@nexus/goal':
         specifier: workspace:*
         version: link:../../packages/nexus-goal
+      '@nexus/permission-presets':
+        specifier: workspace:*
+        version: link:../../packages/nexus-permission-presets
       '@nexus/plugin-agent-instructions':
         specifier: workspace:*
         version: link:../../packages/nexus-plugin-agent-instructions
@@ -603,6 +606,30 @@ importers:
         specifier: ^4.1.11
         version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0))
 
+  packages/nexus-permission-presets:
+    devDependencies:
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/wire':
+        specifier: workspace:*
+        version: link:../nexus-wire
+      '@types/node':
+        specifier: ^24.10.0
+        version: 24.13.3
+      eslint:
+        specifier: ^9.39.0
+        version: 9.39.5(jiti@2.7.0)
+      typescript:
+        specifier: ^5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.11
+        version: 4.1.11(@opentelemetry/api@1.9.1)(@types/node@24.13.3)(jsdom@27.4.0)(vite@7.3.6(@types/node@24.13.3)(jiti@2.7.0)(lightningcss@1.32.0)(tsx@4.23.12)(yaml@2.9.0))
+
   packages/nexus-plugin-agent-instructions:
     dependencies:
       '@langchain/core':
@@ -904,12 +931,6 @@ importers:
 
   packages/nexus-plugin-permission-presets:
     dependencies:
-      '@nexus/core':
-        specifier: workspace:*
-        version: link:../nexus-core
-      '@nexus/plugin-sandbox-policy':
-        specifier: workspace:*
-        version: link:../nexus-plugin-sandbox-policy
       '@nexus/wire':
         specifier: workspace:*
         version: link:../nexus-wire
@@ -917,6 +938,33 @@ importers:
         specifier: ^4.3.6
         version: 4.4.3
     devDependencies:
+      '@nexus/commands':
+        specifier: workspace:*
+        version: link:../nexus-commands
+      '@nexus/cordis':
+        specifier: workspace:*
+        version: link:../../vendor/cordis
+      '@nexus/cordis-plugin-loader':
+        specifier: workspace:*
+        version: link:../../vendor/loader
+      '@nexus/core':
+        specifier: workspace:*
+        version: link:../nexus-core
+      '@nexus/fs':
+        specifier: workspace:*
+        version: link:../nexus-fs
+      '@nexus/permission-presets':
+        specifier: workspace:*
+        version: link:../nexus-permission-presets
+      '@nexus/projections':
+        specifier: workspace:*
+        version: link:../nexus-projections
+      '@nexus/sdk':
+        specifier: workspace:*
+        version: link:../nexus-sdk
+      '@nexus/session':
+        specifier: workspace:*
+        version: link:../nexus-session
       '@types/node':
         specifier: ^24.10.0
         version: 24.13.3

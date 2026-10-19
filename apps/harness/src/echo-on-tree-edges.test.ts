@@ -289,6 +289,7 @@ describe('沒遷移的列不上樹，也不會被兩邊各套一次', () => {
       'trajectory',
       'token-meter',
       'system-prompt',
+      'permission-presets',
     ]);
   }, 60000);
 });

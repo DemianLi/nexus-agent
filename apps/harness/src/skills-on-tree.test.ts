@@ -45,7 +45,7 @@ function scratch(prefix = 'nexus-skills-tree-'): string {
 }
 
 function newRoot(): CordisRoot {
-  const root = createCordisRoot();
+  const root = createCordisRoot({ workspaceRoot: tmpdir() });
   roots.push(root);
   return root;
 }

@@ -469,3 +469,64 @@ describe('依賴的列被關掉、掉在 requires（#1423）', () => {
     expect(lines.join('\n')).toContain('故意在 dep-a 的 apply 裡壞掉');
   }, 120000);
 });
+
+/**
+ * `permission-presets` 的起始組合是組裝點在 `createNexusAgent` 之後向那一列要的（[#1491](https://github.com/DemianLi/nexus-agent/issues/1491)
+ * Q3），錯誤包成以那一列為不能少掛條目的 `AssemblyDropError`：serve 記「這一列掉了」只認這個型別，換成普通 `Error` 就一筆都不記。
+ */
+describe('權限組合的起始值與 --sandbox 矛盾（#1491）', () => {
+  const CONTRADICTION: JournalBody = {
+    op: 'config-set',
+    id: 'permission-presets',
+    name: '@nexus/plugin-permission-presets',
+    before: null,
+    after: { defaultPreset: 'read-only' },
+  };
+
+  function workspaceArgs(): string[] {
+    // 工作區要在 home 外面（#1620 拒絕重疊）。
+    const workspace = mkdtempSync(join(tmpdir(), 'nexus-serve-failed-ws-'));
+    temporary.push(workspace);
+    return ['--workspace', workspace, '--sandbox', 'workspace-write'];
+  }
+
+  it('啟動試組：起不來，紀錄裡有一筆指名 permission-presets 的 failed（stage 是 apply），內層訊息逐字在', async () => {
+    const h = home(false);
+    const raw = await h.raw(CONTRADICTION);
+    const failure = await runServe({
+      argv: ['--port', '0', ...workspaceArgs()],
+      log: () => undefined,
+      env: h.env,
+    }).then(
+      () => undefined,
+      (error: unknown) => (error instanceof Error ? error.message : String(error)),
+    );
+    expect(failure).toMatch(/起不來/u);
+    expect(failure).toContain('permission-presets');
+    expect(failure).toContain('互相矛盾');
+    expect(failedOf(h.dir)).toHaveLength(1);
+    expect(failedOf(h.dir)[0]).toMatchObject({
+      id: 'permission-presets',
+      triggerSeq: raw.seq,
+      stage: 'apply',
+    });
+  }, 60000);
+
+  it('這一條 thread 組裝時：那條建不起來，伺服器照常，那一筆在拋之前已經寫進去；改回來之後下一條建得起來', async () => {
+    const h = home(false);
+    const server = await start(h.env, [], workspaceArgs());
+    expect(await say(server, 'warm')).toBeUndefined();
+    const bad = await h.raw(CONTRADICTION);
+    const refused = await say(server, 'a');
+    expect(refused).toContain('permission-presets');
+    expect(refused).toContain('互相矛盾');
+    expect(failedOf(h.dir)).toHaveLength(1);
+    expect(failedOf(h.dir)[0]).toMatchObject({
+      id: 'permission-presets',
+      triggerSeq: bad.seq,
+      stage: 'apply',
+    });
+    await h.change({ op: 'config-reset', id: 'permission-presets' });
+    expect(await say(server, 'b')).toBeUndefined();
+  }, 120000);
+});

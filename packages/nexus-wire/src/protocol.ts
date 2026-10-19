@@ -157,6 +157,19 @@ export interface RunStartCommand {
      * 舊客戶端不受影響。沒實作的舊 server 會略過這一格。
      */
     readonly request_id?: string;
+    /**
+     * 使用者在哪個時區（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)），**選填**，給 `@nexus/plugin-time-context`
+     * 的「Browser time zone」那一行用。照 dsh `session.prompt` 的 `clientTimeZone`（`packages/api/session-controller/src/index.ts:467-482`，
+     * `687f282e`）：多人共用一台主機時，主機的時區不等於每個使用者的時區，瀏覽器知道使用者在哪。
+     *
+     * **形狀**：`UTC` 或 IANA 的 `Area/Location` 名（例如 `Asia/Taipei`）；伺服器會驗證並正規化（別名退回正規名，所以日誌上記的是正規名），
+     * 空字串、前後有空白、格式不對、系統不認得的名字回 `invalid_argument`，訊息指名這個欄位，那句話不進佇列。
+     * 省略＝維持現狀（模型被告知時區不明，遇到「明天」會向使用者確認），舊客戶端不受影響；沒實作的舊 server 會略過這一格。
+     *
+     * 這個欄位記在這句話的來源上（一輪開頭那句的 `turn/start`、輪中插話的 `user/message`），**不是**這條 thread 的設定：
+     * 同一條 thread 上不同句話可以來自不同時區，模型看到的是這一輪裡有幾種。
+     */
+    readonly client_time_zone?: string;
   };
 }
 

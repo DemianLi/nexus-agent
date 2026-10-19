@@ -18,9 +18,10 @@ import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { fileURLToPath } from 'node:url';
 
+import { HumanMessage } from '@langchain/core/messages';
 import type { BaseMessage } from '@langchain/core/messages';
-import { SessionRegistry } from '@nexus/core';
-import type { PluginEntry } from '@nexus/core';
+import { SessionRegistry, toLoggedMessage } from '@nexus/core';
+import type { PluginEntry, SessionLookup } from '@nexus/core';
 import { uniformDecisions } from '@nexus/wire';
 import { isAgentInstructionsMessage } from '@nexus/plugin-agent-instructions';
 import { TIME_CONTEXT_MARKER, TIME_CONTEXT_MIDDLEWARE_NAME } from '@nexus/plugin-time-context';
@@ -83,7 +84,7 @@ function workspaceWith(agentsMd: string | undefined): string {
   return dir;
 }
 
-/** 一個 home；`patch` 有給就寫成使用者的 patch（部署方的 `plugin patch`）。 */
+/** 一個 home；`patch` 有給就寫成 home 裡的 `cordis.patch.yml`（使用者的 patch 檔，第一次啟動時會遷進變更紀錄，見 `plugin-config.ts:20`；`plugin disable` 這類指令寫的是變更紀錄，不是這個檔）。 */
 function home(patch?: string): NodeJS.ProcessEnv {
   const dir = scratch();
   if (patch !== undefined) writeFileSync(join(dir, 'cordis.patch.yml'), patch, { mode: 0o600 });
@@ -100,6 +101,7 @@ interface Booted {
 async function boot(env: NodeJS.ProcessEnv, entry: 'serve' | 'cli' = 'serve'): Promise<Booted> {
   const root = createCordisRoot({
     channel: entryApprovalChannel(entry === 'serve' ? undefined : HEADLESS_APPROVALS),
+    workspaceRoot: tmpdir(),
   });
   roots.push(root);
   const loaded = await loadDefaultPlugins({ env, warn: () => {} }, { tree: root.tree });
@@ -144,9 +146,13 @@ async function openThread(
  * 說一句話。**照入口（runner）的樣子**先記 `turn/start`、收尾記 `turn/end`：直接 `agent.invoke` 不經 runner，日誌上不會有這兩顆，
  * 而讀數的輪數與基線都是從它們算的（沒有 `turn/start` 的日誌就是同步子代理那一種，第三行會是 unavailable）。
  */
-async function runOn(thread: OpenThread, text = '開工'): Promise<void> {
+async function runOn(thread: OpenThread, text = '開工', clientTimeZone?: string): Promise<void> {
   const log = rootLog(thread);
-  log.append('turn/start', { kind: 'message', text });
+  log.append('turn/start', {
+    kind: 'message',
+    text,
+    ...(clientTimeZone === undefined ? {} : { clientTimeZone }),
+  });
   await thread.built.agent.invoke(toAgentInvocation(text), {
     configurable: { thread_id: thread.threadId },
   });
@@ -303,6 +309,26 @@ describe('C：節流——同一條 thread 10 分鐘內不重複，兩條 thread
   }, 60000);
 });
 
+/**
+ * 把樹上 `sessionLookup` 服務的每一次回答錄下來（#1625 審查要求）：子代理那幾格光看「第三行是 unavailable」分不出
+ * 「查到了子代理自己那份日誌、只是沒有基線」與「查找掉到 not-attached 的退路」——兩條路輸出同一行字。
+ * **這裡錄的是服務的回答，釘的是「服務查得到子代理的日誌」；插件有沒有拿它來讀，由插件單元測試的
+ * 「查找回 ok、位址是子代理」那一條釘**（只認 root 位址的突變在那一條紅）。
+ */
+async function recordLookups(booted: Booted): Promise<SessionLookup[]> {
+  const service = (await booted.root.tree.context()).get('sessionLookup') as
+    { forCall(config: unknown): SessionLookup } | undefined;
+  if (service === undefined) throw new Error('樹上沒有 sessionLookup 服務');
+  const seen: SessionLookup[] = [];
+  const original = service.forCall.bind(service);
+  vi.spyOn(service, 'forCall').mockImplementation((config) => {
+    const answer = original(config);
+    seen.push(answer);
+    return answer;
+  });
+  return seen;
+}
+
 describe('G：子代理各有一則讀數，查找都找得到自己那份日誌', () => {
   function workerSource(model?: ScriptedChatModel): PluginEntry {
     return {
@@ -322,6 +348,7 @@ describe('G：子代理各有一則讀數，查找都找得到自己那份日誌
 
   it('同步子代理：它那幾輪的 prompt 有一則讀數，日誌記在子代理自己那份；root 那份仍只有一則', async () => {
     const booted = await boot(home());
+    const lookups = await recordLookups(booted);
     const thread = await openThread(
       booted,
       'g-sync',
@@ -345,11 +372,19 @@ describe('G：子代理各有一則讀數，查找都找得到自己那份日誌
     const subagent = thread.sessions.list().find((entry) => entry.address.kind === 'subagent');
     expect(injectedReadings(subagent?.log.events ?? [])).toHaveLength(1);
     expect(injectedReadings(rootLog(thread).events)).toHaveLength(1);
+    // 子代理那則讀數是「查到了它自己那份日誌」得出來的，不是掉到 not-attached 的退路：
+    // 查找回過 ok、位址是 subagent、日誌就是會話表上那一份；而且這條 thread 全程沒有一次 not-attached。
+    const answers = lookups.filter((answer) => answer.kind === 'ok');
+    expect(answers.some((a) => a.address.kind === 'subagent' && a.log === subagent?.log)).toBe(
+      true,
+    );
+    expect(lookups.filter((answer) => answer.kind !== 'ok')).toEqual([]);
     await closeThread(thread);
   }, 60000);
 
   it('背景子代理：同上，日誌記在背景那一份', async () => {
     const booted = await boot(home());
+    const lookups = await recordLookups(booted);
     const worker = new ScriptedChatModel({ turns: [{ content: '背景收工。' }] });
     const thread = await openThread(
       booted,
@@ -382,6 +417,16 @@ describe('G：子代理各有一則讀數，查找都找得到自己那份日誌
     expect(readingsOf(worker.prompts[0] ?? [])).toHaveLength(1);
     const background = thread.sessions.list().find((entry) => entry.address.kind === 'subagent');
     expect(injectedReadings(background?.log.events ?? [])).toHaveLength(1);
+    // 同上：背景那份讀數也是查到自己那份日誌得出來的，不是退路。
+    expect(
+      lookups.some(
+        (answer) =>
+          answer.kind === 'ok' &&
+          answer.address.kind === 'subagent' &&
+          answer.log === background?.log,
+      ),
+    ).toBe(true);
+    expect(lookups.filter((answer) => answer.kind !== 'ok')).toEqual([]);
     await closeThread(thread);
   }, 60000);
 });
@@ -443,6 +488,66 @@ describe('I：接線紅燈——patch 掉這一列，A 的斷言就紅（serve �
     },
     60000,
   );
+});
+
+describe('K：瀏覽器時區（#1629）——人話帶的時區到了模型手上', () => {
+  it('resolved：第一行時鐘換成使用者的時區，第二行請模型照這個時區解讀；日誌記的就是模型看到的', async () => {
+    const booted = await boot(home());
+    const thread = await openThread(booted, 'k-resolved', [{ content: '好。' }]);
+    await runOn(thread, '嗨', 'America/New_York');
+    const [reading] = readingsOf(thread.model.prompts[0] ?? []);
+    expect(reading).toBe(
+      [
+        'Time sampled while preparing turn 1, step 1: 2026-10-17T21:00:00-04:00[America/New_York]',
+        'Browser time zone for this request: America/New_York. Interpret otherwise-unqualified dates and times in this zone.',
+        'Elapsed since the preceding model-visible message: unavailable.',
+      ].join('\n'),
+    );
+    expect(JSON.stringify(injectedReadings(rootLog(thread).events))).toContain('America/New_York');
+    await closeThread(thread);
+  }, 60000);
+
+  it('mixed：這一輪有兩種時區的人話，第一行退回行程時區，第二行列出兩個並請模型確認', async () => {
+    const booted = await boot(home());
+    const thread = await openThread(booted, 'k-mixed', [{ content: '好。' }]);
+    const log = rootLog(thread);
+    // 一輪開頭那句在 turn/start；輪中插話在 user/message 的 source（領走時記）。這裡手排好，等於插話在第一次叫模型之前就到了。
+    log.append('turn/start', { kind: 'message', text: '嗨', clientTimeZone: 'America/New_York' });
+    log.append('user/message', {
+      message: toLoggedMessage(new HumanMessage({ content: '補一句' })),
+      source: { kind: 'user', clientTimeZone: 'Asia/Tokyo' },
+    });
+    await thread.built.agent.invoke(toAgentInvocation('嗨'), {
+      configurable: { thread_id: thread.threadId },
+    });
+    const [reading] = readingsOf(thread.model.prompts[0] ?? []);
+    expect(reading?.split('\n').slice(0, 2)).toEqual([
+      'Time sampled while preparing turn 1, step 1: 2026-10-18T09:00:00+08:00[Asia/Taipei]',
+      'Browser time zone for this request: mixed ["America/New_York","Asia/Tokyo"]. Ask the user to clarify otherwise-unqualified dates and times.',
+    ]);
+    await closeThread(thread);
+  }, 60000);
+
+  it('missing：沒帶時區（舊客戶端、CLI）——和 #1625 的讀數逐字相同', async () => {
+    const booted = await boot(home());
+    const thread = await openThread(booted, 'k-missing', [{ content: '好。' }]);
+    await runOn(thread, '嗨');
+    expect(readingsOf(thread.model.prompts[0] ?? [])[0]?.split('\n')[1]).toBe(UNAVAILABLE_ZONE);
+    await closeThread(thread);
+  }, 60000);
+
+  it('下一輪不帶時區就回到 missing：上一輪的時區不外溢（讀數只看這一輪）', async () => {
+    const booted = await boot(home());
+    const thread = await openThread(booted, 'k-next', [{ content: '一。' }, { content: '二。' }]);
+    await runOn(thread, '嗨', 'America/New_York');
+    at(15 * MIN);
+    await runOn(thread, '再問');
+    const readings = readingsOf(thread.model.prompts[1] ?? []);
+    expect(readings).toHaveLength(2);
+    expect(readings[0]).toContain('Browser time zone for this request: America/New_York.');
+    expect(readings[1]?.split('\n')[1]).toBe(UNAVAILABLE_ZONE);
+    await closeThread(thread);
+  }, 60000);
 });
 
 describe('J：代價——有沒有這一列，預設上限 100 下的輪數', () => {
@@ -550,6 +655,26 @@ describe('F：前綴快取——第二輪請求的前面逐位元組等於第一
     expect(after[1]).toContain('turn 2, step 1');
     expect(after[1]).toContain('Elapsed since the preceding model-visible message: 11m 0s.');
     expect(after[1]).not.toContain('message: 0s.');
+  }, 90_000);
+
+  it('serve 重啟後 9 分鐘內接著說（兩台 runServe、同一個日誌目錄）：沒有新讀數，只有第一台那一則，位元組相同（#1625 審查要求的常駐格）', async () => {
+    // 上一格推 11 分鐘看「超過間隔會補一則」；這一格推 9 分鐘看另一半——**節流狀態從日誌讀回，不在行程記憶體裡**：
+    // 如果節流是行程內的 Map，重啟之後它是空的，第二台就會在 9 分鐘內補一則（這一格會紅）。
+    vi.stubEnv('NVIDIA_API_KEY', 'nvapi-fake-for-time-context');
+    const run = await runServePhases(
+      [['第一句'], ['第二句']],
+      mainOnly(() => ({})),
+      '',
+      { timeContext: true, beforePhase: () => vi.setSystemTime(T0 + 9 * MIN) },
+    );
+    const readingsIn = (body: { messages: readonly unknown[] }): string[] =>
+      body.messages.map((m) => JSON.stringify(m)).filter((m) => m.includes('Time sampled'));
+    const [first, second] = run.mainBodies;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    const old = readingsIn(first!);
+    expect(old).toHaveLength(1);
+    expect(readingsIn(second!)).toEqual(old);
   }, 90_000);
 });
 
