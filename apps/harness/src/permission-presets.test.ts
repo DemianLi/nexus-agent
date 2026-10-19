@@ -217,7 +217,7 @@ describe('`/permission` 是切換的唯一入口', () => {
 });
 
 describe('續接不重新套預設', () => {
-  it('日誌記著全開沙箱、沒記核准（#437 以前的日誌）：核准照 `ask` 起算，不被推成 `never`', async () => {
+  it('日誌記著全開沙箱、沒記核准（#437 以前的日誌）：收回預設組，核准照 `ask` 起算、不被推成 `never`', async () => {
     // 兩條產品路徑的續接把 `approvalPolicy` 給滿（記著的，沒記就 `ask`）；這裡照那個形狀呼叫。
     const built = await createCliAgent(
       { live: false, workspace: root, sandbox: 'danger-full-access', approvalPolicy: 'ask' },
@@ -226,11 +226,17 @@ describe('續接不重新套預設', () => {
     );
     const detach = built.attachSession(built.sessions);
     try {
-      // 全開沙箱配 `ask` 對不上任何一組，續接保留日誌裡的值：顯示 `custom`，也**沒有**起不來。
-      expect(currentPreset(built.projections, built.sessionLog.events)).toBe('custom');
+      // 全開沙箱配 `ask` 對不上任何一組，而且比表裡每一組都寬（#1621 第 2 步）：續接收回預設組，
+      // 核准照 `ask` 起算、沒被推成 `never`——所以只多 `permission/preset` 與 `sandbox/mode` 兩顆，核准不重寫。
+      expect(currentPreset(built.projections, built.sessionLog.events)).toBe('workspace-write');
       expect(dataOf(built.sessionLog.events, 'approval/policy')).toEqual([{ policy: 'ask' }]);
-      // custom 不是切換目標，也不釘進日誌。
-      expect(dataOf(built.sessionLog.events, 'permission/preset')).toEqual([]);
+      expect(dataOf(built.sessionLog.events, 'permission/preset')).toEqual([
+        { preset: 'workspace-write' },
+      ]);
+      expect(dataOf(built.sessionLog.events, 'sandbox/mode')).toEqual([
+        { mode: 'danger-full-access' },
+        { mode: 'workspace-write' },
+      ]);
     } finally {
       detach();
       await built.dispose();

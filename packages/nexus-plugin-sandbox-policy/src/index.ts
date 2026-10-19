@@ -322,6 +322,7 @@ export { recordedSandboxMode, SandboxModeController } from './sandbox-mode.js';
 export {
   BLANK_JUSTIFICATION_REFUSAL,
   escalationReason,
+  isStrictlyWider,
   MISSING_TARGET_REFUSAL,
   nonWideningRefusal,
   rejectedRefusal,

@@ -37,6 +37,13 @@
  *    （`packages/interaction/user-approval/src/index.ts:184-187`，`687f282e`：「The approval policy changed from … to … (changed by the user).」）；
  *    我們的 `/permission` 一直沒有這一步（相容層就沒有，這張遷移不改行為）。
  *    類別：遷移卡不改行為（暫時）。**撤除條件**：之後的權限卡決定要不要補這則訊息（補了就是行為改變，要自己一張卡）。
+ * 9. **續接時，日誌記的沙箱比表裡每一組都寬就收回預設組（理由 2，[#1621](https://github.com/DemianLi/nexus-agent/issues/1621) 第 2 步）。**
+ *    dsh 續接照日誌裡的值，表怎麼變都不動它；我們的 serve 多人共用一台主機，出廠拿掉全開（偏離 6）之後，升級前已經切到全開的會話若續接照舊，
+ *    等於那一條 thread 永遠留著表裡不存在的全開。收的條件只有「比每一組都寬」（部署方加回全開不收；`read-only` 被刪掉後停在 `read-only` 的會話比
+ *    `workspace-write` 窄，也不收）。收到 `defaultPreset`，沒設就是表裡沙箱最寬的那一組（不是第一組：第一組是 `read-only`，收太多）。
+ *    收回在**會話參與者**裡做（`start` 只回 `narrowed` 描述）：沙箱與核准的參與者排在前面、每次接上都把控制器釘到日誌的值，宿主在 `start`
+ *    之後切控制器會被它們蓋回去。寫事件的順序照 `/permission`（`permission/preset` → `sandbox/mode` → `approval/policy`，只寫真的變了的）；
+ *    沒有新事件種類、日誌格式不動。**撤除條件**：沒有（出廠表沒有全開這件事一天不變，這條就一天要在）。
  *
  * ## 形狀（#1491：第十四顆搬上 Cordis 樹的插件）
  *
@@ -77,7 +84,7 @@ import {
   specOf,
 } from './presets.js';
 import type { PermissionPresetsConfig, PresetTable } from './presets.js';
-import { assertPresetConfig, startPresets } from './start.js';
+import { assertPresetConfig, narrowingOf, startPresets } from './start.js';
 
 export {
   applyPermissionEvent,
@@ -91,10 +98,11 @@ export {
   CUSTOM_PRESET,
   DEFAULT_PRESETS,
   derivePreset,
+  isSandboxWider,
   permissionPresetsConfigSchema,
   specOf,
 } from './presets.js';
-export { assertPresetConfig, buildCatalog, startPresets } from './start.js';
+export { assertPresetConfig, buildCatalog, narrowingOf, startPresets } from './start.js';
 export type {
   PermissionKnobs,
   PermissionPresetsConfig,
@@ -191,6 +199,7 @@ export function apply(ctx: Context, config: PermissionPresetsConfig): void {
   const table: PresetTable = config.presets;
   assertPresetConfig(table, config.defaultPreset);
 
+  const configured = config.defaultPreset;
   service(ctx, projectionsToken).register(createPermissionsUnit(table));
   // 用 `new` 不用 `ctx.plugin(Class)`：不開子 fiber，歸屬就是這一列。建構子 `provide` 是 effect，列卸載時服務跟著撤。
   new PermissionPresetsServiceImpl(ctx, table, config.defaultPreset);
@@ -201,6 +210,24 @@ export function apply(ctx: Context, config: PermissionPresetsConfig): void {
       // 兩顆旋鈕的值讀這份日誌：approval-gate 與 sandbox-policy 的參與者排在前面，已經把起始值釘進來了（`approval/policy` → `sandbox/mode` →
       // `permission/preset` 的順序靠這一列在清單上的位置）。
       const knobs = foldPermissionKnobs(subject.log.events);
+      // 續接收回（#1621 Q2 (b)）：日誌記的沙箱模式比表裡每一組都寬，就切到預設組。**順序照 `/permission`**：先記意圖，再只寫真的不同的那顆旋鈕。
+      // 排在釘起始組合之前，這一輪就不會再釘一顆（收回已經記了 `permission/preset`）。控制器靠訂閱跟著日誌走，不碰它們。
+      // 此刻日誌上已經有 sandbox-policy 的參與者釘的那顆（排在前面），`knobs.sandbox` 是日誌記的原值。
+      const narrowing =
+        knobs.sandbox === null
+          ? undefined
+          : narrowingOf(table, configured, {
+              sandbox: knobs.sandbox,
+              approval: knobs.approval ?? ASSUMED_APPROVAL,
+            });
+      if (narrowing !== undefined) {
+        subject.log.append('permission/preset', { preset: narrowing.preset });
+        if (narrowing.toSandbox !== narrowing.fromSandbox)
+          subject.log.append('sandbox/mode', { mode: narrowing.toSandbox });
+        if (narrowing.toApproval !== narrowing.fromApproval)
+          subject.log.append('approval/policy', { policy: narrowing.toApproval });
+        return undefined;
+      }
       if (knobs.preset === null) {
         const effective = derivePreset(table, { ...knobs, preset: null });
         if (effective !== CUSTOM_PRESET)
