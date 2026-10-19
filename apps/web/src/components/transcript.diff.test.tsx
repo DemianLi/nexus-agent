@@ -57,6 +57,33 @@ describe('段與卡共用同一份 patch（#1685 B.6、B.7）', () => {
   });
 
   /**
+   * 段的合計是全量（#1685 B.4）：上限只截交給 vendor `DiffView` 畫的那一份（`components/ui/diff-view.tsx` 的 `capPatch`），
+   * 段（`ToolRun` 的 steps）自己另外向 `toolDiffView` 要 patch，那條路上截過的話 vendor 的 `patchStats` 會少報。
+   * 一張 6,000 行（撞到 5,000 行與字元預算）加一張 3 行：合計要是 6,003。
+   */
+  it('段裡有一張撞到上限的寫檔：段按鈕的字與名稱照樣是全量合計', () => {
+    const script = new Script();
+    const big = Array.from({ length: 6000 }, (_, i) => `第 ${i + 1} 行`).join('\n');
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('h1', '寫兩份檔'),
+      script.started('c1', 'write_file', { file_path: '/big.txt', content: big }),
+      script.finished('c1', 'ok'),
+      script.started('c2', 'write_file', { file_path: '/a.md', content: '一\n二\n三\n' }),
+      script.finished('c2', 'ok'),
+    ]);
+    render(<Transcript state={state} isFresh={() => false} />);
+    const group = groupButton();
+    expect(group.textContent).toContain('+6003');
+    expect(within(group).getByText('新增 6003 行，刪除 0 行')).toBeTruthy();
+    expect(
+      within(screen.getByTestId('tool-run')).getByRole('button', {
+        name: /新增 6003 行，刪除 0 行/,
+      }),
+    ).toBe(group);
+  });
+
+  /**
    * 卡（`toStep`）與段（`ToolRun` 的 steps）都向 `toolDiffView` 要 patch，那一則只算一次：字串在 JS 裡依值比較，
    * `Object.is` 分不出是不是同一個實例，所以數 diff 算了幾次。拿掉 `toolDiffView` 的 WeakMap 這條會紅。
    */

@@ -591,7 +591,7 @@ body {
 }
 
 /*
- * 工具卡 diff 的行色過 4.5（#1685 PR B 驗收 10；README 本地修改第 80 條）：vendor 的 `DiffView`（`components/ui/diff-view.tsx:66-69`）
+ * 工具卡 diff 的行色過 4.5（#1685 PR B 驗收 10；README 本地修改第 80 條）：vendor 的 `DiffView`（`components/ui/diff-view.tsx:65-68`）
  * `@@` 與 `...` 行是 `text-muted-foreground/70`，亮色 3.04–3.12、暗色 3.87–4.24；新增行 `text-emerald-700` 亮色 4.11–4.30、
  * 刪除行 `text-rose-700` 亮色 4.37–4.59（guard 量的，頁面上與 `StepList` 裡、三種模式）。字色換成 `--muted-foreground`、`--success`、
  * `--destructive`，底色（`bg-emerald-500/10`、`bg-rose-500/10`）照 SG：換字色就過（最低 5.29），不必動底色的 alpha。暗色的增刪行本來就過，
