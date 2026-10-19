@@ -325,6 +325,92 @@ describe('用記下的那一格重新進委派（#827）', () => {
     expect(controller.current).toBe('danger-full-access');
   });
 
+  describe('讀回時的上限（#1739）', () => {
+    const logWith = (mode: 'read-only' | 'workspace-write' | 'danger-full-access') => {
+      const log = new SessionLog('root/bg-ceil');
+      log.append('sandbox/mode', { mode, source: 'delegation' });
+      return log;
+    };
+    const toWorkspaceWrite = (recorded: string): 'workspace-write' | 'read-only' =>
+      recorded === 'danger-full-access' ? 'workspace-write' : 'read-only';
+
+    it('這一輪實際用的是上限收窄後的那一格；日誌一顆都沒動，上限拿到的是日誌上記的那一格與日誌', () => {
+      const controller = new SandboxModeController('danger-full-access');
+      const seen: [string, string][] = [];
+      controller.setDelegationCeiling((recorded, log) => {
+        seen.push([recorded, log.sessionId]);
+        return 'workspace-write';
+      });
+      const log = logWith('danger-full-access');
+      const inside = controller.delegateFromLog(log, () => ({
+        current: controller.current,
+        delegated: controller.delegatedMode,
+      }));
+      expect(inside).toEqual({ current: 'workspace-write', delegated: 'workspace-write' });
+      expect(seen).toEqual([['danger-full-access', 'root/bg-ceil']]);
+      expect(log.events.map((event) => event.data)).toEqual([
+        { mode: 'danger-full-access', source: 'delegation' },
+      ]);
+      expect(controller.current).toBe('danger-full-access'); // root 自己那一格不受影響
+    });
+
+    it('不用收的（上限原樣回傳）照舊；沒設上限、或拿掉上限，也照舊', () => {
+      const controller = new SandboxModeController('workspace-write');
+      expect(controller.delegateFromLog(logWith('read-only'), () => controller.current)).toBe(
+        'read-only',
+      );
+      controller.setDelegationCeiling((recorded) => recorded);
+      expect(controller.delegateFromLog(logWith('read-only'), () => controller.current)).toBe(
+        'read-only',
+      );
+      controller.setDelegationCeiling(toWorkspaceWrite);
+      expect(
+        controller.delegateFromLog(logWith('danger-full-access'), () => controller.current),
+      ).toBe('workspace-write');
+      controller.setDelegationCeiling(undefined);
+      expect(
+        controller.delegateFromLog(logWith('danger-full-access'), () => controller.current),
+      ).toBe('danger-full-access');
+    });
+
+    it('只管讀回：delegate（同步子代理拍的是 root 當下那一格）不過上限', () => {
+      const controller = new SandboxModeController('danger-full-access');
+      controller.setDelegationCeiling(() => 'read-only');
+      expect(controller.delegate(() => controller.current)).toBe('danger-full-access');
+    });
+
+    it('上限拋錯就整輪不開跑（fail-closed），不退回沒收窄的那一格', () => {
+      const controller = new SandboxModeController('danger-full-access');
+      controller.setDelegationCeiling(() => {
+        throw new Error('算不出上限');
+      });
+      let ran = false;
+      expect(() =>
+        controller.delegateFromLog(logWith('danger-full-access'), () => {
+          ran = true;
+        }),
+      ).toThrow('算不出上限');
+      expect(ran).toBe(false);
+    });
+
+    it('收窄之後仍在委派裡：子代理拿不到 root 的 grant、記不進 root 的 denial（升級仍被拒的前提）', () => {
+      const controller = new SandboxModeController('danger-full-access');
+      controller.setDelegationCeiling(toWorkspaceWrite);
+      const grant: SandboxGrant = {
+        mode: 'danger-full-access',
+        target: '/a.txt',
+        denied: undefined,
+      };
+      controller.grant(grant);
+      const inside = controller.delegateFromLog(logWith('danger-full-access'), () => ({
+        peek: controller.peekGrant(),
+        take: controller.takeGrant(grant),
+      }));
+      expect(inside).toEqual({ peek: undefined, take: false });
+      expect(controller.peekGrant()).toBe(grant);
+    });
+  });
+
   it('日誌上沒有 sandbox/mode 就拋，不拿 root 現在那格去猜', () => {
     const controller = new SandboxModeController('danger-full-access');
     const log = new SessionLog('root/bg-2');

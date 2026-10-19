@@ -311,6 +311,7 @@ export function createSandboxPolicyPlugin(): PluginEntry {
  * `recordedSandboxMode` 則是 `--resume` 與 serve 那兩條路上讀日誌用的。
  */
 export { recordedSandboxMode, SandboxModeController } from './sandbox-mode.js';
+export type { DelegationCeiling } from './sandbox-mode.js';
 
 /**
  * 升級那一半對外講的每一句話。

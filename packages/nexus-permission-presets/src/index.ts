@@ -59,8 +59,11 @@ export type { PermissionCatalog } from '@nexus/wire';
  *
  * **1.1.0（[#1621](https://github.com/DemianLi/nexus-agent/issues/1621) 第 2 步）**：{@link PermissionStarted} 多選填的 `narrowed`，只增不減；
  * 宿主的範圍抬到 `^1.1.0`（讀得到這一格才能留 warn）。
+ *
+ * **1.2.0（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）**：{@link PermissionPresetsService} 多一個純函式
+ * {@link PermissionPresetsService.narrowDelegated}，只增不減；宿主的範圍抬到 `^1.2.0`（冷復活的背景子代理在讀回委派快照時要問它）。
  */
-export const PERMISSION_PRESETS_CONTRACT_VERSION = '1.1.0';
+export const PERMISSION_PRESETS_CONTRACT_VERSION = '1.2.0';
 
 /** 服務名：宿主讀折進 `registry.services` 的這個名字。 */
 export const PERMISSION_PRESETS_SERVICE = 'permissionPresets';
@@ -110,6 +113,19 @@ export interface PermissionNarrowing {
   readonly toApproval: ApprovalPolicyValue;
 }
 
+/**
+ * 冷復活的背景子代理被收回的那一次（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）：子代理日誌記的委派沙箱比組合表裡**每一組**的都寬。
+ * 只有沙箱：子代理的核准照舊釘在 `never`，不在這裡。
+ */
+export interface DelegationNarrowing {
+  /** 收到哪一組（`defaultPreset`，沒設是表裡檔案政策最寬的一組）。 */
+  readonly preset: string;
+  /** 子代理日誌記的委派沙箱。 */
+  readonly fromSandbox: SandboxMode;
+  /** 收成的沙箱。 */
+  readonly toSandbox: SandboxMode;
+}
+
 /** {@link PermissionPresetsService.start} 的結果。 */
 export interface PermissionStarted {
   /** 套完預設組之後沙箱旋鈕該有的值。fresh 且有 `defaultPreset` 時是那一組的值，否則原樣。 */
@@ -138,6 +154,17 @@ export interface PermissionPresetsService {
    *   `defaultPreset`。這兩種是逐條 thread 的錯；設定本身的錯（組合表是空的、組名是保留字、`defaultPreset` 不在表裡）在插件的 `apply` 就拋。
    */
   start(request: PermissionStartRequest): PermissionStarted;
+
+  /**
+   * 背景子代理被叫醒、讀回自己日誌上的委派沙箱時，這一格要不要收回（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)，1.2.0）。
+   * **純函式，只看「組合表＋這一格快照」**，不讀 root 當下的狀態、不碰日誌、不碰控制器：條件與目標跟 {@link PermissionStarted.narrowed} 相同
+   * （比表裡每一組都寬才收；有 `defaultPreset` 收到它，否則收到表裡檔案政策最寬的一組）。照 dsh，子代理的快照在委派時拍、冷復活只重播，
+   * 不看父代理的即時狀態（`manager.ts:881-882`、`.agents/notes/archived/feature/2026-07-25-subagent-policy-inheritance.md:34`）。
+   *
+   * @param sandbox - 子代理日誌上記的委派沙箱。
+   * @returns 要收回的描述；不用收是 `undefined`。
+   */
+  narrowDelegated(sandbox: SandboxMode): DelegationNarrowing | undefined;
 }
 
 /** `permissionPresets` 服務的 token。 */

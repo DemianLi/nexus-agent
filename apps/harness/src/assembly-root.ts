@@ -84,6 +84,7 @@ import {
 } from '@nexus/permission-presets';
 import type {
   PermissionCatalog,
+  DelegationNarrowing,
   PermissionNarrowing,
   PermissionPresetsService,
 } from '@nexus/permission-presets';
@@ -599,6 +600,37 @@ export function describePermissionNarrowing(narrowing: PermissionNarrowing): str
   );
 }
 
+/** 冷復活的背景子代理被收回沙箱的那一次（{@link CreateCliAgentSession.onDelegationNarrowed} 交給 serve／CLI 的事件）。 */
+export interface DelegationNarrowedEvent extends DelegationNarrowing {
+  /** 被收回的子代理的會話 id（它自己那份日誌的）。 */
+  readonly sessionId: string;
+}
+
+/**
+ * 冷復活的背景子代理被收回沙箱的那一行話（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)，措辭比照 {@link describePermissionNarrowing}）。
+ * **只講沙箱**：子代理的核准照舊釘在 `never`，沒有動；**日誌也沒改**：它記的仍是委派當時那一格，實際跑的是收窄後的。
+ *
+ * @param event - 被收回的那一次。
+ * @returns 一行給人看的話（不帶 thread id，呼叫端自己加前綴）。
+ */
+export function describeDelegationNarrowing(event: DelegationNarrowedEvent): string {
+  return (
+    `背景子代理 ${event.sessionId} 的委派快照記的檔案政策 ${event.fromSandbox} 比權限表裡每一組都寬，叫醒時收回預設組 ${event.preset}` +
+    `（檔案政策 ${event.toSandbox}；核准不動，子代理的日誌也沒有改）`
+  );
+}
+
+/**
+ * 每個子代理、每個行程只留一次話（卡上定題）：鍵是子代理日誌的會話 id（跨 thread 不重複）。閒置逐出之後重組不再重複。
+ * 測試用 {@link resetDelegationNarrowingWarnings} 清掉。
+ */
+const warnedDelegationNarrowing = new Set<string>();
+
+/** 清掉「已經留過話」的紀錄。**只給測試用**：同一個行程裡要重複驗證同一個子代理的 warn 才需要。 */
+export function resetDelegationNarrowingWarnings(): void {
+  warnedDelegationNarrowing.clear();
+}
+
 /** REPL 與一次性模式共用同一條對話——checkpointer 認的是這個 id。 */
 export const THREAD_ID = 'cli';
 
@@ -866,6 +898,12 @@ export async function createCliAgent(
    * 沒有這件事是 `undefined`。**只是通知**：收回由權限組合的會話參與者在 `attachSessions` 時往 root 日誌寫，這裡的值讓 serve／CLI 留一行 warn。
    */
   permissionNarrowed: PermissionNarrowing | undefined;
+  /**
+   * 訂閱「冷復活的背景子代理在讀回委派快照時被收回沙箱」（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）。發生在組裝**之後**
+   * （子代理被叫醒的那一輪），所以是訂閱而不是一格值；serve／CLI 各留一行 warn。同一個子代理在同一個行程裡只通知一次。沒有權限組合
+   * （沒有圍堵）的組裝永遠不會觸發。回傳取消訂閱。
+   */
+  onDelegationNarrowed: (listener: (event: DelegationNarrowedEvent) => void) => () => void;
   /** 使用者可以點名派的子代理（`subagent.list`，#328 第 2 項）：`task` 實際收的那份。serve 交給 wire-handler。 */
   subagentKinds: readonly { readonly name: string; readonly description: string }[];
   /**
@@ -1123,6 +1161,7 @@ export async function createCliAgent(
   // `AssemblyDropError`：serve 試組、逐條 thread 與 CLI 三條路都照以前「那一列掉了 → 必掛」的方式記錄與轉換。內層訊息逐字不變。
   let permissionCatalog: PermissionCatalog | undefined;
   let permissionNarrowed: PermissionNarrowing | undefined;
+  const delegationNarrowedListeners = new Set<(event: DelegationNarrowedEvent) => void>();
   if (workspaceRoot !== undefined) {
     const presets = services.get<PermissionPresetsService>(PERMISSION_PRESETS_SERVICE);
     if (presets === undefined) {
@@ -1150,6 +1189,20 @@ export async function createCliAgent(
       approvalPolicy.switchTo(started.approval);
       permissionCatalog = started.catalog;
       permissionNarrowed = started.narrowed;
+      // **冷復活的背景子代理讀回委派快照時過的上限**（#1739）：背景子代理每一輪由 host 的 `enter` 走 `delegateFromLog`，快照是委派當下寫進它自己日誌的；
+      // 部署方事後把全開從組合表拿掉，root 在續接時收回了，冷復活的子代理讀回的仍是全開。只看「表＋快照」，不讀 root 當下的狀態（照 dsh，快照在
+      // 委派時拍、冷復活只重播）；讀回時收、**不寫子代理日誌**（多寫就多一個能移動 fence 的寫入處）。偏離登記在 `@nexus/plugin-permission-presets` 檔頭第 10 條。
+      sandboxMode.setDelegationCeiling((recorded, log) => {
+        const narrowing = presets.narrowDelegated(recorded);
+        if (narrowing === undefined) return recorded;
+        if (!warnedDelegationNarrowing.has(log.sessionId)) {
+          warnedDelegationNarrowing.add(log.sessionId);
+          for (const listener of delegationNarrowedListeners) {
+            listener({ sessionId: log.sessionId, ...narrowing });
+          }
+        }
+        return narrowing.toSandbox;
+      });
     } catch (error) {
       await dispose().catch(() => {});
       throw assemblyDropErrorFor(plugins, PERMISSION_PRESETS_PLUGIN_NAME, error, dropped) ?? error;
@@ -1187,6 +1240,10 @@ export async function createCliAgent(
     permissionPresets:
       permissionCatalog === undefined ? undefined : { catalog: () => permissionCatalog },
     permissionNarrowed,
+    onDelegationNarrowed: (listener) => {
+      delegationNarrowedListeners.add(listener);
+      return () => void delegationNarrowedListeners.delete(listener);
+    },
     subagentKinds,
     goals: services.get<GoalServices>(GOALS_SERVICE),
     workspaceRoot,

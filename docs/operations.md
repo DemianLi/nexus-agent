@@ -30,7 +30,7 @@
 已經切到全開的舊會話，續接時**自動收回**：日誌記的檔案政策比表裡每一組都寬，就切到預設組（`defaultPreset`，沒設就是表裡檔案政策最寬的那一組，
 出廠表是 `workspace-write`），並寫進日誌（`permission/preset`、`sandbox/mode`、`approval/policy`，只寫變了的）；server 日誌（CLI 是標準錯誤）會留一行
 `[權限] thread "…" …`，說明從哪一組收到哪一組。下一次寫檔就照預設組的圍堵判。部署方把全開加回表裡就不收；用 `--sandbox read-only` 起動的部署，要讓全開的舊會話收到 `read-only` 而不是 `workspace-write`，要設 `defaultPreset: read-only`（參與者拿不到 `--sandbox`）；停在 `read-only`、而表裡沒有 `read-only` 的會話比
-`workspace-write` 窄，也不收（顯示 `custom`）。切走之後切不回全開。**已知缺口**：冷復活的背景子代理拿的是當初的委派快照，不會被這一步收窄（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）。
+`workspace-write` 窄，也不收（顯示 `custom`）。切走之後切不回全開。**背景子代理同理**（[#1739](https://github.com/DemianLi/nexus-agent/issues/1739)）：重啟之後被叫醒的背景子代理，讀回的是當初派出時記在它自己日誌上的沙箱；那一格比表裡每一組都寬，這一輪就收到同一個預設組（只收沙箱，核准照舊不問；子代理日誌**不改**，仍記當初那一格，實際跑的是收窄後的）。server 日誌（CLI 是標準錯誤）每個子代理每個行程留一行 `[權限] … 背景子代理 …`。叫升級照舊被拒。
 
 - **現在是哪一組是推導出來的**：兩顆旋鈕實際的值對上哪一組就是哪一組，對不上任何一組顯示 `custom`（只能顯示，不是切換目標）。
 - **`--sandbox` 同時決定核准的起始值**：`--sandbox danger-full-access` 是「全開＋不問」，**要先把那一組加回表裡，否則起動失敗**
