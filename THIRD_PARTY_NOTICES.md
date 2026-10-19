@@ -98,6 +98,8 @@ Cordis 框架與它的 Loader、Include 以原始碼複製進 repo，不經 npm 
 
 OFL 允許字型跟著軟體一起散布、也允許內嵌，條件是：不能單獨販售字型本身；散布時要附上原本的著作權聲明與 OFL 全文；修改過的字型不能沿用保留的字型名稱。
 
+這個例外的決議記錄：[#1545 issuecomment-6254467463](https://github.com/DemianLi/nexus-agent/issues/1545#issuecomment-6254467463)。
+
 ## 只在開發時用的 npm 相依
 
 只為開發、測試、型別或工具**直接**宣告的外部套件，不在執行期安裝，也沒有打包進網頁。這裡的套件仍可能被某個執行期相依遞移帶進來，那以 `pnpm-lock.yaml` 為準。
