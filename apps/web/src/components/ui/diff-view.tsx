@@ -12,6 +12,7 @@
  * - **`DiffView` 畫之前先截**（第 77 條，#1685 PR B 的 X4）：寫檔的 diff 沒有大小上限（`lib/card-limit.ts`），沿用以前 `ToolDiff` 的三道上限，
  *   見 {@link capPatch}。截在這一層、不在轉接層：vendor 用 `patchStats(step.patch)` 算列與群組的 +N −M，截過的 patch 會少報。
  *   截好的字串以 `useMemo` 記住，vendor 那顆包 `memo`，工具段跟著串流重畫時不重切。
+ * - **`DiffView` 停得上焦點、有名稱**（第 79 條，patch `0024`，X5）：vendor 加 `label` prop，這一層給預設「改動內容」（`StepRow` 不傳）。
  * - **`patchStats` 有界快取**（第 78 條）：vendor 的 `StepRow`／`StepGroup` 每次畫都對每一顆 `step.patch` 整份 split 一次，見 {@link patchStats}。
  *
  * @module

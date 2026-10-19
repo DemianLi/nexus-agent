@@ -532,10 +532,13 @@ body {
  * `glass-panel`（`backdrop-filter: var(--glass-blur)`），展開的列把結果框畫在清單裡，就是玻璃疊玻璃。12 列全部展開、串流中捲動，
  * 關 GPU 加 CPU 4 倍下 vsync p95 是 2（掉幀 23–30%）；只拿掉這一層是 1（issuecomment-6256296211）。結果框底下本來就是 blur 過的清單，
  * 再 blur 一次畫面上幾乎看不出來；背景色、邊線、陰影照 SG。清單本身與單獨放在頁面上的結果框照 SG 保留 blur。
+ * #1685 B 擴到 `DiffView`（X2）：寫檔／改檔給了 `step.patch` 之後，展開的列畫的是 vendor 的 `DiffView`，它也是 `glass-panel`
+ * （`components/ui/diff-view.tsx:58`），同一個玻璃疊玻璃。
  * 寫在 layer 外，蓋得過 vendor 的 `.glass-panel`。`guard/` 量疊在清單裡的是 `none`、單獨放的不是。
  */
 /* prettier-ignore */
-[data-slot="step-list"] [data-slot="output-block"] {
+[data-slot="step-list"] [data-slot="output-block"],
+[data-slot="step-list"] [data-slot="diff-view"] {
   -webkit-backdrop-filter: none;
   backdrop-filter: none;
 }
@@ -584,5 +587,28 @@ body {
 
 /* prettier-ignore */
 [data-slot="diff-stats"] > span:last-child {
+  color: var(--destructive);
+}
+
+/*
+ * 工具卡 diff 的行色過 4.5（#1685 PR B 驗收 10；README 本地修改第 80 條）：vendor 的 `DiffView`（`components/ui/diff-view.tsx:66-69`）
+ * `@@` 與 `...` 行是 `text-muted-foreground/70`，亮色 3.04–3.12、暗色 3.87–4.24；新增行 `text-emerald-700` 亮色 4.11–4.30、
+ * 刪除行 `text-rose-700` 亮色 4.37–4.59（guard 量的，頁面上與 `StepList` 裡、三種模式）。字色換成 `--muted-foreground`、`--success`、
+ * `--destructive`，底色（`bg-emerald-500/10`、`bg-rose-500/10`）照 SG：換字色就過（最低 5.29），不必動底色的 alpha。暗色的增刪行本來就過，
+ * 一起換是跟第 75 條同一對 token，同一張卡標頭的「+12」與底下的「+」行是同一個綠。選擇器錨在 vendor 的 class（`registry-edits.test.ts` 釘住原文），
+ * 寫在 layer 外，蓋得過 utilities 層的 `dark:` 變體。
+ */
+/* prettier-ignore */
+[data-slot="diff-view"] > [class~="text-muted-foreground/70"] {
+  color: var(--muted-foreground);
+}
+
+/* prettier-ignore */
+[data-slot="diff-view"] > [class~="text-emerald-700"] {
+  color: var(--success);
+}
+
+/* prettier-ignore */
+[data-slot="diff-view"] > [class~="text-rose-700"] {
   color: var(--destructive);
 }

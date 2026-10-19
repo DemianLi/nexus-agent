@@ -62,6 +62,9 @@ import { startGuardServer, type GuardServer } from './server';
  *    結果框沒有 blur、清單與單獨放的結果框照 SG 有（第 65 條）。
  * 17. **增刪行數**（#1685 PR A，`?overlay=diff-stats`）：`+`／`−` 在頁面、`StepList` 的 `--panel`、改動卡、審查頁與選檔器上過 4.5，
  *    顏色就是 `--success`／`--destructive`（第 75 條）；375 寬時包裝層不被擠（第 76 條）。
+ * 18. **工具卡的 diff**（#1685 PR B，`?overlay=diff-view`，產品的 `ToolRun`＋`ToolCard`）：SG `DiffView` 每一種行（`diff --git`、`@@`、
+ *    新增、刪除、上下文、`... 還有 N 行沒畫`）在 `StepList` 裡與單獨放在頁面上都過 4.5；疊在清單裡的沒有 blur、單獨的照 SG 有（第 65 條）；
+ *    聚焦時 2px 外框沒被切掉、方向鍵捲得動（patch `0024`）。
  *
  * 面有三種狀態（{@link MODES}）：平常的半透明、`prefers-reduced-transparency: reduce`（CDP 模擬）、`<html data-glass="opaque">`。
  * 後兩種是不透明的退路，對比要一樣達標，面也要真的不透明。
@@ -3612,6 +3615,10 @@ const diffStatsMarks: Record<string, Record<string, string>> = {
   [`[data-guard-diffstats="panel"] [data-slot="step-list"] ${DIFF_STATS}`]: {
     'data-guard-text': 'diff-panel',
   },
+  // 段收著那一列的合計（#1685 PR B 起 steps 帶 patch，vendor 的 `StepGroup` 畫在按鈕裡），疊在頁面底上。
+  [`[data-guard-diffstats="panel"] [data-slot="step-group"] > button ${DIFF_STATS}`]: {
+    'data-guard-text': 'diff-group',
+  },
   [`[data-guard-diffstats="changes"] ${DIFF_STATS}`]: { 'data-guard-text': 'diff-changes' },
 };
 
@@ -3643,19 +3650,21 @@ describe.each(
       const texts = await collectTexts(page);
       const names = [
         'diff-page',
+        'diff-group',
         'diff-panel',
         'diff-changes',
         'diff-review',
         'diff-review-picker',
       ];
-      // 量具自檢：頁面上 1 顆、段裡寫檔那張 1 顆、改動卡標頭 1 顆加兩列（二進位那列寫字）、審查頁標頭的合計與這個檔各 1 顆、
-      // 選檔器兩列；每顆兩個 span。
+      // 量具自檢：頁面上 1 顆、段收著那一列的合計 1 顆、段裡寫檔那張 1 顆、改動卡標頭 1 顆加兩列（二進位那列寫字）、
+      // 審查頁標頭的合計與這個檔各 1 顆、選檔器兩列；每顆兩個 span。
       expect(
         Object.fromEntries(
           names.map((name) => [name, texts.filter((t) => t.name === name).length]),
         ),
       ).toEqual({
         'diff-page': 2,
+        'diff-group': 2,
         'diff-panel': 2,
         'diff-changes': 6,
         'diff-review': 4,
@@ -3697,7 +3706,7 @@ describe.each(
         };
       });
       report[`diff-stats:${mode}:${theme}:colors`] = colors;
-      expect(colors.count).toBe(9);
+      expect(colors.count).toBe(10);
       expect(colors.wrong).toEqual([]);
     } finally {
       await page.close();
@@ -3735,8 +3744,8 @@ test('第 76 條：375 寬時包裝層不被擠，寬度跟 vendor 那顆單獨�
       }),
     );
     report['diff-stats:375-width'] = measured;
-    // 量具自檢：九顆都量到了，而且單獨放著的寬度不是 0。
-    expect(measured).toHaveLength(9);
+    // 量具自檢：十顆都量到了，而且單獨放著的寬度不是 0。
+    expect(measured).toHaveLength(10);
     expect(measured.every((m) => m.natural > 0)).toBe(true);
     expect(
       measured
@@ -3749,4 +3758,146 @@ test('第 76 條：375 寬時包裝層不被擠，寬度跟 vendor 那顆單獨�
   } finally {
     await page.close();
   }
+});
+
+/**
+ * 工具卡的 diff（#1685 PR B 驗收 9、10、11，`?overlay=diff-view`）：產品的工具卡給了 `step.patch` 之後畫 SG 的 `DiffView`。
+ * 每一行照開頭分成六種（`diff --git` 路徑、`@@`、新增、刪除、上下文、`... 還有 N 行沒畫`），疊在 `StepList` 裡（`group`）與單獨放在
+ * 頁面上（`standalone`）各量一次；亮暗加兩種不透明退路。
+ */
+const DIFF_VIEW = '[data-guard-diffview] [data-slot="diff-view"]';
+const DIFF_VIEW_KINDS = ['file', 'hunk', 'add', 'del', 'context', 'more'] as const;
+const diffViewMarks: Record<string, Record<string, string>> = {
+  '[data-guard-diffview="group"] [data-slot="diff-view"]': {},
+  '[data-guard-diffview="standalone"] [data-slot="diff-view"]': {},
+};
+
+/** 每一行依開頭標上 `data-guard-text="diffview-<group|standalone>-<種類>"`。 */
+async function markDiffViewLines(page: Page): Promise<void> {
+  await page.evaluate((selector) => {
+    for (const el of document.querySelectorAll(`${selector} > div`)) {
+      const text = el.textContent ?? '';
+      const where = el.closest('[data-guard-diffview]')?.getAttribute('data-guard-diffview');
+      const kind = text.startsWith('diff --git ')
+        ? 'file'
+        : text.startsWith('@@')
+          ? 'hunk'
+          : text.startsWith('...')
+            ? 'more'
+            : text.startsWith('+')
+              ? 'add'
+              : text.startsWith('-')
+                ? 'del'
+                : 'context';
+      el.setAttribute('data-guard-text', `diffview-${where}-${kind}`);
+    }
+  }, DIFF_VIEW);
+}
+
+describe.each(
+  MODES.flatMap((mode) => (['light', 'dark'] as const).map((theme) => [mode, theme] as const)),
+)('瀏覽器量工具卡的 diff（#1685 PR B）：%s、%s', (mode, theme) => {
+  test('每一種行在清單裡與單獨放在頁面上都過 4.5', async () => {
+    const page = await openOverlay('diff-view', theme, {
+      mode,
+      marks: diffViewMarks,
+      prepare: markDiffViewLines,
+    });
+    try {
+      const texts = await collectTexts(page);
+      const names = (['group', 'standalone'] as const).flatMap((where) =>
+        DIFF_VIEW_KINDS.map((kind) => `diffview-${where}-${kind}`),
+      );
+      // 量具自檢：兩處各兩張卡（改檔、寫檔），六種行都量到（`expectTexts` 檢查每個名字都在）。
+      expect(await page.$$eval(DIFF_VIEW, (els) => els.length)).toBe(4);
+      expectTexts(
+        texts.filter((t) => t.name.startsWith('diffview-')),
+        names,
+        `diff-view:${mode}:${theme}`,
+      );
+    } finally {
+      await page.close();
+    }
+  });
+});
+
+describe('瀏覽器量工具卡的 diff 的覆寫與焦點（#1685 PR B）', () => {
+  test('第 65 條：疊在清單裡的 DiffView 沒有 backdrop-filter；單獨放的照 SG 有', async () => {
+    const page = await openOverlay('diff-view', 'light', { marks: diffViewMarks });
+    try {
+      const filter = (selector: string) =>
+        page.$$eval(selector, (els) => els.map((el) => getComputedStyle(el).backdropFilter));
+      const measured = {
+        nested: await filter(
+          '[data-guard-diffview="group"] [data-slot="step-list"] [data-slot="diff-view"]',
+        ),
+        standalone: await filter('[data-guard-diffview="standalone"] [data-slot="diff-view"]'),
+      };
+      report['diff-view:backdrop'] = measured;
+      expect(measured.nested).toEqual(['none', 'none']);
+      expect(measured.standalone).toHaveLength(2);
+      for (const f of measured.standalone) expect(f).toMatch(/blur\(/);
+    } finally {
+      await page.close();
+    }
+  });
+
+  test.each(['light', 'dark'] as const)(
+    'patch 0024（%s）：DiffView 停得上焦點、2px 外框沒被祖先切掉、方向鍵捲得動',
+    async (theme) => {
+      const page = await openOverlay('diff-view', theme, {
+        marks: { ...diffViewMarks, [DIFF_VIEW]: { 'data-guard-focus': 'diff-view' } },
+      });
+      try {
+        const focus = await collectFocus(page);
+        expect(focus).toHaveLength(4);
+        expectFocus(focus, `diff-view:${theme}`);
+        const clipped = await page.$$eval(DIFF_VIEW, (els) =>
+          els.flatMap((el, i) => {
+            (el as HTMLElement).focus();
+            const style = getComputedStyle(el);
+            const reach = parseFloat(style.outlineOffset) + parseFloat(style.outlineWidth);
+            const rect = el.getBoundingClientRect();
+            const out = [];
+            for (let node = el.parentElement; node !== null; node = node.parentElement) {
+              const s = getComputedStyle(node);
+              if (s.overflowX === 'visible' && s.overflowY === 'visible') continue;
+              const box = node.getBoundingClientRect();
+              const left = box.left + parseFloat(s.borderLeftWidth);
+              const right = box.right - parseFloat(s.borderRightWidth);
+              const top = box.top + parseFloat(s.borderTopWidth);
+              const bottom = box.bottom - parseFloat(s.borderBottomWidth);
+              const sides = [
+                rect.left - reach < left - 0.5 && s.overflowX !== 'visible' ? '左' : '',
+                rect.right + reach > right + 0.5 && s.overflowX !== 'visible' ? '右' : '',
+                rect.top - reach < top - 0.5 && s.overflowY !== 'visible' ? '上' : '',
+                rect.bottom + reach > bottom + 0.5 && s.overflowY !== 'visible' ? '下' : '',
+              ].join('');
+              if (sides !== '')
+                out.push(`#${i} 被 ${node.tagName}.${node.className} 切掉（${sides}）`);
+            }
+            return out;
+          }),
+        );
+        report[`diff-view:${theme}:clipped`] = clipped;
+        expect(clipped).toEqual([]);
+
+        // 寫檔那張的行很寬、行數超過 max-h-80：鍵盤聚焦後方向鍵橫向與直向都捲得動。
+        const wide = page
+          .locator('[data-guard-diffview="standalone"] [data-slot="diff-view"]')
+          .nth(1);
+        await wide.focus();
+        await page.keyboard.press('ArrowRight');
+        await page.keyboard.press('ArrowDown');
+        await page.waitForFunction(
+          (el) => el !== null && el.scrollLeft > 0 && el.scrollTop > 0,
+          await wide.elementHandle(),
+        );
+        const scrolled = await wide.evaluate((el) => ({ left: el.scrollLeft, top: el.scrollTop }));
+        report[`diff-view:${theme}:scrolled`] = scrolled;
+      } finally {
+        await page.close();
+      }
+    },
+  );
 });

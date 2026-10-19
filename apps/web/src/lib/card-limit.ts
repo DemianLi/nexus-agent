@@ -35,8 +35,11 @@
  *
  * 最壞是中文短列（每個字都是斷行點）：40,000 是它仍在約 100ms 內、沒有長任務的最大值，所以取它。
  * 每列 2,000 是人眼的上限（換行後約 28 個畫面列），不是效能的上限：改成 4,000，收著畫 9 列各 4,000 中文的
- * 那一格從 50ms 變 65ms（IQR 60–72），仍沒有長任務。收著最多畫 9 列（`CHAT_DIFF_MAX_LINES`），
- * 9 × {@link CARD_LINE_MAX_CHARS} 要在 {@link CARD_MAX_CHARS} 之內。
+ * 那一格從 50ms 變 65ms（IQR 60–72），仍沒有長任務。（那時 diff 卡收著最多畫 9 列；#1685 B 照 SG 拿掉了收合。）
+ *
+ * **diff 卡 #1685 B 起改由 SG 的 `DiffView` 畫**：`whitespace-pre`＋橫向捲動，同 dsh，換行的成本不在了。這兩道上限與
+ * {@link MAX_RENDERED_LINES} 照舊沿用（PM 定題 3a：上限是機制），套在 nexus 層 `components/ui/diff-view.tsx` 的 `capPatch`：
+ * 「行」是交給 SG 的 unified patch 的行（`diff --git`、`@@` 也算），沒畫完時尾端一行 `... 還有 N 行沒畫`。
  *
  * **這兩道壓不住的，靠字型堆疊解**（[#979](https://github.com/DemianLi/nexus-agent/issues/979)）：堆疊裡沒有字型涵蓋的符號
  * （旗、☺、❤、⚠️ 之類）要走系統字型回退，成本跟字元上限無關，分兩段——每個新頁面第一次遇到約 40ms（🏳️‍🌈 約 75ms），
