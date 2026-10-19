@@ -502,24 +502,27 @@ body {
 
 /*
  * 工具列與群組那一列在 1024 以下 44px（規格 §9，#1682；README 本地修改第 63 條）：vendor 的按鈕只有一行字高（`lineClass`）。
- * 選擇器錨在 `data-slot`，寫在 layer 外；1024 以上照 SG。`guard/` 在 375 與 1280 寬各量一次。
+ * #1683 擴到思考過程的 `<summary>`（vendor 同樣只有一行字高）。選擇器錨在 `data-slot`，寫在 layer 外；1024 以上照 SG。
+ * `guard/` 在 375 與 1280 寬各量一次。
  */
 /* prettier-ignore */
 @media (width < 64rem) {
   [data-slot="step-row"] > button,
-  [data-slot="step-group"] > button {
+  [data-slot="step-group"] > button,
+  [data-slot="reasoning"] > summary {
     min-height: 2.75rem;
   }
 }
 
 /*
  * 減少動態時工具列的箭頭不轉場（#528 的規則，#1682；README 本地修改第 64 條）：vendor 的箭頭 `transition-transform`，打開時轉 90°。
- * 寫在 layer 外，蓋得過 utilities 層。`guard/` 在模擬 reduced-motion 下量計算值。
+ * #1683 擴到思考過程 `<summary>` 裡的箭頭（同一個寫法）。寫在 layer 外，蓋得過 utilities 層。`guard/` 在模擬 reduced-motion 下量計算值。
  */
 /* prettier-ignore */
 @media (prefers-reduced-motion: reduce) {
   [data-slot="step-row"] > button > svg,
-  [data-slot="step-group"] > button > svg {
+  [data-slot="step-group"] > button > svg,
+  [data-slot="reasoning"] > summary > svg {
     transition-duration: 0s;
   }
 }

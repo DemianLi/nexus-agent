@@ -202,6 +202,7 @@ describe('registry 檔的改動還在', () => {
   describe('tool-steps 的覆寫（#1682）', () => {
     const overrides = () => read('../../styles/solid-glass.overrides.css');
     const vendor = () => code(read('../../vendor/solid-glass/components/ui/tool-steps.tsx'));
+    const reasoning = () => code(read('../../vendor/solid-glass/components/ui/reasoning.tsx'));
 
     test('第 61 條：執行中那一列不閃；vendor 仍在 running 時給按鈕 `animate-pulse`', () => {
       expect(overrides()).toContain(
@@ -219,17 +220,22 @@ describe('registry 檔的改動還在', () => {
 
     test('第 63 條：1024 以下按鈕至少 44px；vendor 的按鈕仍沒有最小高度', () => {
       expect(overrides()).toContain(
-        '@media (width < 64rem) {\n  [data-slot="step-row"] > button,\n  [data-slot="step-group"] > button {\n    min-height: 2.75rem;\n  }\n}',
+        '@media (width < 64rem) {\n  [data-slot="step-row"] > button,\n  [data-slot="step-group"] > button,\n  [data-slot="reasoning"] > summary {\n    min-height: 2.75rem;\n  }\n}',
       );
       expect(vendor()).not.toMatch(/\bmin-h-/);
+      // #1683 擴到思考過程的 summary：vendor 的 summary 同樣沒有最小高度。
+      expect(reasoning()).not.toMatch(/\bmin-h-/);
     });
 
     test('第 64 條：減少動態時箭頭不轉場；vendor 的箭頭仍是 `transition-transform`、沒有 motion-reduce', () => {
       expect(overrides()).toContain(
-        '@media (prefers-reduced-motion: reduce) {\n  [data-slot="step-row"] > button > svg,\n  [data-slot="step-group"] > button > svg {\n    transition-duration: 0s;\n  }\n}',
+        '@media (prefers-reduced-motion: reduce) {\n  [data-slot="step-row"] > button > svg,\n  [data-slot="step-group"] > button > svg,\n  [data-slot="reasoning"] > summary > svg {\n    transition-duration: 0s;\n  }\n}',
       );
       expect(vendor()).toContain('size-3.5 shrink-0 transition-transform');
       expect(vendor()).not.toMatch(/motion-reduce:/);
+      // #1683 擴到思考過程 summary 裡的箭頭：vendor 同樣是 `transition-transform`、沒有 motion-reduce。
+      expect(reasoning()).toContain('size-3.5 transition-transform group-open/reasoning:rotate-90');
+      expect(reasoning()).not.toMatch(/motion-reduce:/);
     });
 
     test('第 65 條：疊在清單裡的結果框不 blur；vendor 的清單與結果框仍都是 `glass-panel`', () => {

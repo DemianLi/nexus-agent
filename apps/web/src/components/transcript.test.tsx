@@ -63,6 +63,18 @@ const think = (id: string, reasoning: string) => delta(id, { type: 'reasoning-de
 const say = (id: string, text: string) => delta(id, { type: 'text-delta', text });
 const bubbleIn = (entry: HTMLElement) => entry.querySelector('[data-slot=bubble]');
 const rowIn = (entry: HTMLElement) => within(entry).queryByTestId('reasoning-row');
+/**
+ * 推理列是原生 `<details>`／`<summary>`（#1683），jsdom 認不出 summary 的角色：直接找元素。真實的角色與 expanded 由 guard 讀
+ * Chromium 的 AX 樹。
+ */
+const summaryIn = (scope: HTMLElement) => scope.querySelector<HTMLElement>('[data-testid=reasoning-row] summary')!;
+const detailsIn = (scope: HTMLElement) => scope.querySelector<HTMLDetailsElement>('[data-testid=reasoning-row] details')!;
+/** summary 的名稱取自內容、跳過 `aria-hidden`（摘要與「·」、箭頭）：這裡只有純文字，照這條算就等於 accname。 */
+function nameOf(summary: HTMLElement): string {
+  const copy = summary.cloneNode(true) as HTMLElement;
+  for (const hidden of copy.querySelectorAll('[aria-hidden="true"], [aria-hidden=""]')) hidden.remove();
+  return copy.textContent?.trim() ?? '';
+}
 
 describe('正文空的回覆', () => {
   it('只有推理、講完了的那一步只畫推理列、不畫泡泡；有正文的那則照畫泡泡', () => {
@@ -138,7 +150,7 @@ describe('正文空的回覆', () => {
   it('推理之後先吐了空白：仍然是「思考中」', () => {
     show([running(), start('a'), think('a', '想'), say('a', '\n\n')]);
     const entry = screen.getByTestId('ai-entry');
-    expect(within(entry).getByRole('button').textContent).toContain('思考中');
+    expect(nameOf(summaryIn(entry))).toBe('思考中');
   });
 
   it('還在吐字、沒推理的空回覆照畫帶游標的泡泡', () => {
@@ -151,13 +163,13 @@ describe('正文空的回覆', () => {
     show([running(), start('a'), think('a', '想')]);
     const entry = screen.getByTestId('ai-entry');
     expect(bubbleIn(entry)).toBeNull();
-    expect(within(entry).getByRole('button').textContent).toContain('思考中');
+    expect(nameOf(summaryIn(entry))).toBe('思考中');
   });
 
   it('正文一開始吐字，推理就算講完了；泡泡帶游標', () => {
     show([running(), start('a'), think('a', '想'), say('a', '答')]);
     const entry = screen.getByTestId('ai-entry');
-    expect(within(entry).getByRole('button').textContent).toContain('思考過程');
+    expect(nameOf(summaryIn(entry))).toBe('思考過程');
     expect(bubbleIn(entry)?.querySelector('.stream-caret')).not.toBeNull();
   });
 
@@ -188,7 +200,7 @@ describe('正文空的回覆', () => {
       }),
     ]);
     const entry = screen.getByTestId('ai-entry');
-    expect(within(entry).getByRole('button').textContent).toContain('思考過程');
+    expect(nameOf(summaryIn(entry))).toBe('思考過程');
     expect(entry.textContent).toContain('（已停止）');
   });
 
@@ -248,8 +260,8 @@ describe('推理列', () => {
 
   it('預設收合；講完的摘要是第一行、拿掉 `**`', () => {
     show([running(), start('a'), think('a', long), finish('a')]);
-    const trigger = screen.getByRole('button', { name: '思考過程' });
-    expect(trigger.getAttribute('aria-expanded')).toBe('false');
+    expect(nameOf(summaryIn(document.body))).toBe('思考過程');
+    expect(detailsIn(document.body).open).toBe(false);
     expect(screen.getByTestId('reasoning-summary').textContent).toBe('First we list the files.');
   });
 
@@ -258,16 +270,17 @@ describe('推理列', () => {
     expect(screen.getByTestId('reasoning-summary').textContent).toBe('Now read b.txt.');
   });
 
-  it('摘要不進按鈕的可存取名稱：每來一顆 chunk 它就變一次', () => {
+  it('摘要不進 summary 的可存取名稱：每來一顆 chunk 它就變一次', () => {
     show([running(), start('a'), think('a', long)]);
-    expect(screen.getByRole('button', { name: '思考中' })).toBeTruthy();
+    const summary = summaryIn(document.body);
+    expect(summary.textContent).toContain('Now read b.txt.');
+    expect(nameOf(summary)).toBe('思考中');
   });
 
   it('展開後畫出推理全文（markdown），摘要收起來', () => {
     show([running(), start('a'), think('a', long), finish('a')]);
-    const trigger = screen.getByRole('button', { name: '思考過程' });
-    fireEvent.click(trigger);
-    expect(trigger.getAttribute('aria-expanded')).toBe('true');
+    fireEvent.click(summaryIn(document.body));
+    expect(detailsIn(document.body).open).toBe(true);
     const row = screen.getByTestId('reasoning-row');
     expect(row.querySelector('strong')?.textContent).toBe('First');
     expect(row.textContent).toContain('Now read b.txt.');
