@@ -1155,7 +1155,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   這種空回覆照同一份預算重打，預算用盡就是這一輪失敗、`turn/failed.error.code` 是 `EMPTY_RESPONSE`（使用者看到的是失敗訊息，不再是什麼都沒有）。
   **只有推理、沒有答案的回覆不重打**（沒有失敗訊息，網頁上只多一段折起來的思考過程）。
   不在清單裡的不重打，不管預設或自己寫的清單怎麼寫：401／403 `AUTH`、402／配額 `QUOTA`、400／413 `INVALID_REQUEST`、上下文溢出
-  `CONTEXT_WINDOW_EXCEEDED`、其他 4xx `HTTP_<狀態>`（404、408、410、418、422、425…，**依 dsh，不是量到的救回率**）、解不開的回應 `UNKNOWN`。
+  `CONTEXT_WINDOW_EXCEEDED`、其他 4xx `HTTP_<狀態>`（404、408、410、418、422、425…，**依 dsh，不是量到的救回率**）、回覆巢狀太深、日誌收不下 `NESTING_TOO_DEEP`（見〈會話日誌〉）、解不開的回應 `UNKNOWN`。
   把 `HTTP_422` 之類加進 `retryableCodes` 就會重打它。標題、摘要器與 eval 的呼叫不經過「空回覆算失敗」那一步（它們沒有「這一步沒有答案就失敗」的語意）。
   供應商給的 `retry-after` 不超過 `maxDelayMs` 就照它等（不加抖動），**超過就直接放棄**、不重打；每次等待是 `initialDelayMs` 倍增、
   封頂 `maxDelayMs`，抖動之後再夾到上限。**`mode: always`（無限重試）拒收**：這是對 dsh 的登記偏離——一輪沒有盡頭、中段失敗每次重付整個回覆，
