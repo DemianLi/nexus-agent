@@ -23,9 +23,9 @@ import { createNexusAgent } from './agent-factory.js';
 
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
-import { shippedPlugins } from './fixtures.js';
+import { shippedPlugins, withoutTimeContext } from './fixtures.js';
 
-const shipped = await shippedPlugins();
+const shipped = withoutTimeContext(await shippedPlugins());
 
 const THREAD_ID = 'todo';
 

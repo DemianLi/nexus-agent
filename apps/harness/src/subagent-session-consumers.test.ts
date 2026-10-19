@@ -33,11 +33,11 @@ import { createNexusAgent } from './agent-factory.js';
 
 import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
-import { shippedPlugins } from './fixtures.js';
+import { shippedPlugins, withoutTimeContext } from './fixtures.js';
 import { createGoalPlugin, goalCoreOf } from './goal.fixture.js';
 import { GOALS_SERVICE } from '@nexus/goal';
 
-const shipped = await shippedPlugins();
+const shipped = withoutTimeContext(await shippedPlugins());
 
 const WRITER_TOOL_NAME = 'writer_tool';
 const ROOT_ID = 'consumers';

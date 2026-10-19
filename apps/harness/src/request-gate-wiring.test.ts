@@ -30,7 +30,7 @@ import { HumanMessage } from '@langchain/core/messages';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { liveSubagentModelFor } from './assembly-root.js';
-import { serveClient } from './fixtures.js';
+import { serveClient, TIME_CONTEXT_OFF_PATCH_ROWS } from './fixtures.js';
 import { DEFAULT_LIVE_MODEL_ENTRY, LIVE_API_KEY_ENV } from './live-model.js';
 import { RequestGate } from './request-gate.js';
 import { runServe } from './serve.js';
@@ -229,7 +229,8 @@ async function patchFor(
       `      - ${B}`,
     );
   }
-  await writeFile(path, lines.join('\n') + '\n', 'utf8');
+  // 數的是端點收到的請求；`time-context`（#1625）不相干，關掉。
+  await writeFile(path, lines.join('\n') + '\n' + TIME_CONTEXT_OFF_PATCH_ROWS, 'utf8');
   return path;
 }
 

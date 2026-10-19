@@ -197,5 +197,49 @@ describe('registry 檔的改動還在', () => {
     expect({ ...pkg.dependencies, ...pkg.devDependencies }).not.toHaveProperty('next-themes');
   });
 
+  // tool-steps 的覆寫檔五條（#1682 PR A，README 本地修改第 61–65 條）：覆寫檔那一段還在，vendor 原文仍是要蓋掉的那個樣子。
+  // 上游哪天自己改掉，這裡紅，提醒把本地修改拿掉。畫出來的計算值在 `guard/`（`?overlay=tool-steps`）量。
+  describe('tool-steps 的覆寫（#1682）', () => {
+    const overrides = () => read('../../styles/solid-glass.overrides.css');
+    const vendor = () => code(read('../../vendor/solid-glass/components/ui/tool-steps.tsx'));
+
+    test('第 61 條：執行中那一列不閃；vendor 仍在 running 時給按鈕 `animate-pulse`', () => {
+      expect(overrides()).toContain(
+        '[data-slot="step-row"] > button.animate-pulse {\n  animation-name: none;\n}',
+      );
+      expect(vendor()).toContain('step.status === "running" && "animate-pulse"');
+    });
+
+    test('第 62 條：結果框的 pre 聚焦時外框畫在外層；vendor 外層仍是 `overflow-hidden`', () => {
+      expect(overrides()).toContain(
+        '[data-slot="output-block"]:has(> pre:focus-visible) {\n  outline: 2px solid var(--ring);\n}',
+      );
+      expect(vendor()).toMatch(/data-slot="output-block"[\s\S]{0,120}\boverflow-hidden\b/);
+    });
+
+    test('第 63 條：1024 以下按鈕至少 44px；vendor 的按鈕仍沒有最小高度', () => {
+      expect(overrides()).toContain(
+        '@media (width < 64rem) {\n  [data-slot="step-row"] > button,\n  [data-slot="step-group"] > button {\n    min-height: 2.75rem;\n  }\n}',
+      );
+      expect(vendor()).not.toMatch(/\bmin-h-/);
+    });
+
+    test('第 64 條：減少動態時箭頭不轉場；vendor 的箭頭仍是 `transition-transform`、沒有 motion-reduce', () => {
+      expect(overrides()).toContain(
+        '@media (prefers-reduced-motion: reduce) {\n  [data-slot="step-row"] > button > svg,\n  [data-slot="step-group"] > button > svg {\n    transition-duration: 0s;\n  }\n}',
+      );
+      expect(vendor()).toContain('size-3.5 shrink-0 transition-transform');
+      expect(vendor()).not.toMatch(/motion-reduce:/);
+    });
+
+    test('第 65 條：疊在清單裡的結果框不 blur；vendor 的清單與結果框仍都是 `glass-panel`', () => {
+      expect(overrides()).toContain(
+        '[data-slot="step-list"] [data-slot="output-block"] {\n  -webkit-backdrop-filter: none;\n  backdrop-filter: none;\n}',
+      );
+      expect(vendor()).toMatch(/data-slot="output-block" className=\{cn\("glass-panel\b/);
+      expect(vendor()).toMatch(/data-slot="step-list" className=\{cn\("glass-panel\b/);
+    });
+  });
+
   // #1281 的三條（側欄、dropdown-menu、cmdk 的 text-ui）照 #1468 Q19 拿掉：dropdown-menu 與 cmdk 隨 #1583、側欄隨 #1680 換成 vendor 版。
 });

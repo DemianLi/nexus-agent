@@ -41,6 +41,7 @@ pnpm workspace，Node 要 22.19 以上的 22.x，或 24 以上（23 已 EOL，�
 | 長期目標 | 一個會話記得住跨多輪的目標；開關是 `/goal` | `nexus-plugin-goal` |
 | Todo | 模型自己維護的工作清單 | `nexus-plugin-todo` |
 | 工作區指令 | 工作區的 `AGENTS.md` 當一則訊息送進每個 agent | `nexus-plugin-agent-instructions` |
+| 時間讀數 | 每次呼叫開頭追加現在時間與距上一則訊息的時長，同一條會話 10 分鐘內不重複 | `nexus-plugin-time-context` |
 | 技能 | 工作區的 `skills/<name>/SKILL.md` 列進提示詞，模型需要時自己去讀；沒有技能就不加任何字 | `nexus-plugin-skills` |
 | 交付宣告 | 模型指名這一輪交付了哪些檔 | `nexus-plugin-present` |
 | 評分與回饋 | `/feedback` | `nexus-plugin-feedback` |

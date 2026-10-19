@@ -69,6 +69,7 @@
       "@nexus/plugin-submit-record": ["./packages/nexus-plugin-submit-record/src/index.ts"],
       "@nexus/plugin-system-prompt": ["./packages/nexus-plugin-system-prompt/src/index.ts"],
       "@nexus/plugin-telemetry-otel": ["./packages/nexus-plugin-telemetry-otel/src/index.ts"],
+      "@nexus/plugin-time-context": ["./packages/nexus-plugin-time-context/src/index.ts"],
       "@nexus/plugin-todo": ["./packages/nexus-plugin-todo/src/index.ts"],
       "@nexus/plugin-todo/invariant": ["./packages/nexus-plugin-todo/src/invariant.ts"],
       "@nexus/plugin-token-meter": ["./packages/nexus-plugin-token-meter/src/index.ts"],

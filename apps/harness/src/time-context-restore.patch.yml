@@ -1,0 +1,5 @@
+# 把 conversation-restore.fixture.ts 那顆請求記錄器插到出貨清單上，**不**關掉 `time-context`（#1625）。
+# 讀它的是 `time-context-on-tree.test.ts` 的 E 組：續接之後模型手上的讀數是不是原來那一則。
+- insert:
+    - id: request-recorder
+      name: './conversation-restore.fixture.ts'
