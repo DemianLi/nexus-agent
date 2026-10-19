@@ -78,7 +78,7 @@ jobs:
 
       # 不自己 git tag：runner 沒有 committer 身分，git tag -a 會 exit 128。
       # gh release create 會依 --target 自行建立 tag，少一段 git 操作也少一個失敗點。
-      # 產物（tar.gz 與 .sha256）附在 Release 上；沒有 npm publish（理由 2：完全內網，沒有 registry 可用）。
+      # 產物（tar.gz、SBOM 的 .cdx.json，各配一份 .sha256，#1545）附在 Release 上；沒有 npm publish（理由 2：完全內網，沒有 registry 可用）。
       - name: 建立 tag 與 GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -86,7 +86,7 @@ jobs:
         run: |
           set -euo pipefail
           gh release create "$VERSION" \
-            .release-out/*.tar.gz .release-out/*.sha256 \
+            .release-out/*.tar.gz .release-out/*.cdx.json .release-out/*.sha256 \
             --target "${{ github.sha }}" \
             --title "$VERSION" \
             --generate-notes \
