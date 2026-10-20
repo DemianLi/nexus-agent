@@ -447,11 +447,9 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       const sample = Buffer.alloc(BINARY_SAMPLE_BYTES);
       const { bytesRead } = await handle.read(sample, 0, BINARY_SAMPLE_BYTES, 0);
       if (sample.subarray(0, bytesRead).includes(0)) return notText(filePath, 'binary file');
-      const source = handle.createReadStream({
-        start: 0,
-        autoClose: false,
-        ...(signal === undefined ? {} : { signal }),
-      });
+      // 不把 signal 交給串流：串流自己在中止時 destroy(AbortError)，而 scanWindow 已經在每個 chunk 之間看 signal 並收手，
+      // 兩邊搶著收會留下沒人接的 'error' 事件。
+      const source = handle.createReadStream({ start: 0, autoClose: false });
       scan = await scanWindow(streamUtf8(source, { ignoreBOM: true }), params, options);
     }
     const page = pageOf(scan, params);
