@@ -192,6 +192,7 @@ describe('失敗碼：一句話，不認得的原樣顯示', () => {
       'EMPTY_RESPONSE',
       'LOCAL_CAPACITY',
       'INVALID_CREDENTIAL',
+      'NESTING_TOO_DEEP',
       'UNKNOWN',
     ];
     for (const code of vocabulary) {
@@ -206,6 +207,8 @@ describe('失敗碼：一句話，不認得的原樣顯示', () => {
     expect(failureCodeText('INVALID_CREDENTIAL')).toBe(
       '本機金鑰格式不對，請求沒送出，重送無效，請管理者修正',
     );
+    // 巢狀太深（#1668、#1753）：講是訊息的形狀、這一輪沒做完，不提層數。
+    expect(failureCodeText('NESTING_TOO_DEEP')).toBe('這則訊息巢狀太深，這一輪沒有完成');
   });
 
   it('重試列的原因：帶了 HTTP 狀態就接在後面，碼本身是同一個 HTTP_<n> 只寫一次（#1449）', () => {

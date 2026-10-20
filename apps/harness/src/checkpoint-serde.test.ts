@@ -28,6 +28,7 @@ import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } 
 import {
   CHECKPOINT_DEPTH_EXCEEDED,
   CHECKPOINT_MAX_DEPTH,
+  CHECKPOINT_PRECHECK_DEPTH,
   CHECKPOINT_UNSERIALIZABLE,
   CHECKPOINT_WRAPPER_DEPTH,
   DepthCheckedSerializer,
@@ -118,6 +119,37 @@ describe('DepthCheckedSerializer', () => {
     const loop: Record<string, unknown> = {};
     loop['self'] = loop;
     expect(checkpointDepth(loop)).toBe(1);
+  });
+
+  it('預檢（#1761）：原始結構超過門檻就不呼叫任何 toJSON；沒超過的照舊先 toJSON，層數是精確的', () => {
+    // 門檻是上限的兩倍。超過的，`toJSON`（LangChain 訊息的那一支是遞迴的，冷行程 2000 層就爆）一次都不能被叫。
+    const toJSON = vi.fn(() => ({ replaced: true }));
+    const tooDeep = { toJSON, v: mixed(CHECKPOINT_PRECHECK_DEPTH + 1) };
+    expect(checkpointDepth(tooDeep)).toBeGreaterThan(CHECKPOINT_PRECHECK_DEPTH);
+    expect(toJSON).not.toHaveBeenCalled();
+    // 深處的物件帶 toJSON 也一樣不叫（遞迴發生在被呼叫的那一刻）。
+    const nested = vi.fn(() => 'x');
+    let value: unknown = { toJSON: nested };
+    for (let level = 0; level < CHECKPOINT_PRECHECK_DEPTH + 1; level++) value = { next: value };
+    expect(checkpointDepth(value)).toBeGreaterThan(CHECKPOINT_PRECHECK_DEPTH);
+    expect(nested).not.toHaveBeenCalled();
+
+    // 剛好在門檻上的：仍走 toJSON（這一步決定寫不寫得進去，要精確）。
+    const atGate = vi.fn(() => ({ a: { b: 1 } }));
+    expect(checkpointDepth({ toJSON: atGate, v: mixed(CHECKPOINT_PRECHECK_DEPTH - 1) })).toBe(2);
+    expect(atGate).toHaveBeenCalledTimes(1);
+  });
+
+  it('預檢（#1761）：序列化器用自己上限的兩倍當門檻，超過的在交給基座之前就拋，toJSON 不被呼叫', async () => {
+    // 檔頭的 `beforeEach` 包了 `dumpsTyped` 另外用預設門檻量一次（會叫 toJSON），這一格要量的是序列化器自己，先還原。
+    vi.restoreAllMocks();
+    const ours = new DepthCheckedSerializer(new MemorySaver().serde, 10);
+    const toJSON = vi.fn(() => ({ ok: 1 }));
+    await expect(ours.dumpsTyped({ toJSON, v: mixed(30) })).rejects.toMatchObject({
+      code: CHECKPOINT_DEPTH_EXCEEDED,
+      limit: 10,
+    });
+    expect(toJSON).not.toHaveBeenCalled();
   });
 
   it('超過上限在交給基座之前就拋，5000 層也不是 Maximum call stack size exceeded', async () => {

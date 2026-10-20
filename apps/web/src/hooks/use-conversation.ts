@@ -58,6 +58,7 @@ import type { RatingsView } from '@/lib/feedback-ratings';
 import { RECOVERED_NOTICE_MS, reconnectDelay } from '@/lib/reconnect';
 import { mayHaveArrived, newRequestId } from '@/lib/request-id';
 import { threadCapacityText } from '@/lib/thread-capacity';
+import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
 import { threadSubagentText } from '@/lib/thread-subagent';
 import { randomUuid } from '@/lib/uuid';
 
@@ -548,8 +549,11 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       } catch (error) {
         if (!cancelled) {
           // 認的是型別錯誤上的碼，不解析訊息（#1481）。`message` 與 `serverMessage` 都是給管理者的原文，不往畫面送。
+          // 永久的拒絕：子代理的會話（#1708）、歷史太深灌不回去（#1753）。
           const permanent =
-            error instanceof WireRejectedError ? threadSubagentText(error.code) : undefined;
+            error instanceof WireRejectedError
+              ? (threadSubagentText(error.code) ?? threadHistoryTooDeepText(error.code))
+              : undefined;
           if (permanent !== undefined) {
             refuse(permanent);
             return;
@@ -710,6 +714,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         return {
           message:
             threadCapacityText(result.error) ??
+            threadHistoryTooDeepText(result.error) ??
             sendRejectionText(result.error, hasAttachments, mention !== undefined) ??
             result.message,
         };

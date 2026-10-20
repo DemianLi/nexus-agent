@@ -224,6 +224,58 @@ describe('載體本身（假 agent）', () => {
     await host.close();
   });
 
+  it('子代理的 turn/failed 通知外面（#1536）：帶 run id、日誌第幾筆、失敗碼與請求編號；回呼拋錯只 warn、不改下場', async () => {
+    const failing: BackgroundAgent = {
+      streamEvents: () =>
+        Promise.reject(
+          Object.assign(new Error('Bad gateway'), {
+            status: 502,
+            headers: new Headers({ 'x-request-id': 'gw-sub' }),
+          }),
+        ),
+    };
+    const reports: unknown[] = [];
+    const warnings: string[] = [];
+    let throwing = false;
+    const sessions = new SessionRegistry('root-1');
+    const host = new BackgroundSubagentHost({
+      sessions,
+      compile: () => failing,
+      onTurnFailed: (report) => {
+        reports.push(report);
+        if (throwing) throw new Error('回呼炸了');
+      },
+      warn: (message) => void warnings.push(message),
+    });
+    expect(await host.submit({ runId: 'bg-1', subagent: 'worker', text: '句' })).toEqual({
+      ok: false,
+      error: 'Bad gateway',
+    });
+    const log = sessions.get({ kind: 'subagent', runId: 'bg-1' })!;
+    const failedAt = log.events.findIndex((event) => event.type === 'turn/failed');
+    expect(reports).toEqual([
+      {
+        runId: 'bg-1',
+        // 這一筆的 seq 在子代理自己那份日誌：id 是 `<主對話>/<runId>`，不是 root 那份。
+        sessionId: 'root-1/bg-1',
+        seq: log.events[failedAt]!.seq,
+        code: 'SERVER',
+        status: 502,
+        requestId: 'gw-sub',
+      },
+    ]);
+
+    throwing = true;
+    expect(await host.submit({ runId: 'bg-1', subagent: 'worker', text: '再一句' })).toEqual({
+      ok: false,
+      error: 'Bad gateway',
+    });
+    expect(reports).toHaveLength(2);
+    expect(warnings.join('\n')).toContain('回呼炸了');
+    expect(log.events.filter((event) => event.type === 'turn/failed')).toHaveLength(2);
+    await host.close();
+  });
+
   it('編圖失敗（例如 profile 會動子代理的組成）也是這一輪的失敗，不往外拋', async () => {
     const { host, sessions } = make(() => {
       throw new Error('這個模型的 harness profile 會動子代理的組成');
