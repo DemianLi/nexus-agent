@@ -567,6 +567,12 @@ export interface IdleSweepingWireHandler extends WireHandler {
    * 與 `threadFor` 檢查 {@link WireHandlerOptions.maxThreads} 用的同一個數——建構中的算、撤到一半的也算。只讀，給記憶體警告寫「現在幾條」用。
    */
   threadCount(): number;
+  /** 撤到一半、還佔著名額的 thread 數（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，`/metrics` 的 `nexus_threads_closing`）。 */
+  closingCount(): number;
+  /**
+   * `close()` 已經開始了沒（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，`/readyz` 據此回 503）。**只讀**：叫 `close()` 的那一刻同步變 `true`，不會變回來。
+   */
+  isClosing(): boolean;
 }
 
 const JSON_MEDIA_TYPE = 'application/json';
@@ -3499,6 +3505,8 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     },
     sweepIdle,
     threadCount: () => threads.size + closing.size,
+    closingCount: () => closing.size,
+    isClosing: () => closed,
     async close() {
       // 計時器先停、之後的掃描一律不動作；已經在撤的等它撤完——撤到一半就收線的話，那條的寫租約與子行程沒人收（#1484）。
       closed = true;

@@ -84,6 +84,11 @@ export interface StartWireServerOptions {
    * **和 {@link StartWireServerOptions.warn} 分開**：那一個的呼叫端會把每則訊息包成「處理失敗，回 400」。
    */
   readonly warnDisconnect?: (message: string) => void;
+  /**
+   * 每個請求回應時叫一次（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，請求計數用）：`path` 是 pathname（不含 query），`status` 是回的狀態碼。
+   * **早退的 413 與最後一道防線回的 400 也算**，所以計數反映的是實際送出的碼。SSE 長連線在回應開始時算一次。拋了也不影響回應。
+   */
+  readonly onResponse?: (info: { readonly path: string; readonly status: number }) => void;
 }
 
 /** 先收完整份的路由，本文超過上限。 */
@@ -318,6 +323,17 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     options.heartbeatIntervalMs ?? DEFAULT_SSE_HEARTBEAT_INTERVAL_MS,
     options.warnDisconnect ?? ((message: string) => console.warn(message)),
   );
+  /** 一個請求只算一次：`handle` 內已經算過，最後一道防線就不再補算。 */
+  const counted = new WeakSet<IncomingMessage>();
+  const count = (incoming: IncomingMessage, path: string, status: number): void => {
+    if (options.onResponse === undefined || counted.has(incoming)) return;
+    counted.add(incoming);
+    try {
+      options.onResponse({ path, status });
+    } catch {
+      // 計數壞了不該連累回應。
+    }
+  };
   const handle = async (incoming: IncomingMessage, outgoing: ServerResponse): Promise<void> => {
     const address = server.address() as AddressInfo;
     const origin = `http://${host}:${address.port}`;
@@ -340,6 +356,7 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     } catch (error: unknown) {
       if (!(error instanceof RequestBodyTooLarge)) throw error;
       // 413：回完就斷線——對方可能還在傳一份我們不收的本文，留著這條連線只會讓它被拿去當下一個請求的開頭。
+      count(incoming, pathnameOf(incoming.url), 413);
       outgoing.writeHead(413, { 'content-type': 'text/plain', connection: 'close' });
       outgoing.end('request body too large', () => incoming.destroy());
       return;
@@ -352,6 +369,7 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
       ...(streaming ? { duplex: 'half' } : {}),
     } as RequestInit);
     const response = await options.handler.handle(live);
+    count(incoming, path, response.status);
     if (streaming) {
       // 串流本文路由回應時本文可能還沒讀完（早退的 415、錯誤）：這條連線不能再當 keep-alive 用，
       // 回完就把沒讀完的請求端砍掉（照 dsh 的串流模式）。
@@ -384,6 +402,7 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
         outgoing.destroy();
         return;
       }
+      count(incoming, pathnameOf(incoming.url), 400);
       outgoing.writeHead(400);
       outgoing.end();
     });
