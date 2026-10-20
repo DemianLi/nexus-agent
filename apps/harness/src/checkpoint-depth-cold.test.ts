@@ -1,0 +1,118 @@
+/**
+ * 預設 stack、冷啟動的新行程：續接深歷史回 `thread_history_too_deep`，不是 `unknown_error`（[#1761](https://github.com/DemianLi/nexus-agent/issues/1761)）。
+ *
+ * `checkpoint-serde.test.ts` 的續接那一組在 vitest 行程裡跑：前面跑過很多格，函式都暖了，同一個預設 stack 撐得更深，3000、5000 層在那裡是綠的。
+ * 真正的 serve 重啟之後第一個續接是冷的——2000 層就在 `checkpointDepth` 對 LangChain 訊息呼叫遞迴的 `toJSON` 時爆堆疊
+ * （`Maximum call stack size exceeded`，回 `unknown_error`，網頁當成暫時失敗一直重讀）。**只在 vitest 行程內跑的測試證明不了這件事**，
+ * 所以這一檔每一格各起一個新的 `node` 行程（**不帶 `--stack-size`**），深的那一條就是那個行程的第一個工作，腳本是
+ * `checkpoint-depth-cold.fixture.ts`。
+ *
+ * - **續接**：一個行程先真跑、再把日誌改成指定層數的舊事件（上限出現之前寫下的）；每個層數另起一個新行程續接。
+ * - **同台寫入**（#1761 第 3 點）：新行程裡模型回一則 2000 層以上的工具參數，日誌 600 層那一關先擋，不會走到 `checkpointDepth` 的 `toJSON`。
+ *
+ * 拿掉 `checkpointDepth` 的預檢，2000、3000、5000 層那幾格紅；1500 層（以前就好的）不變。
+ *
+ * **零憑證、零外部連線**：假端點在 loopback，key 是假的。
+ */
+
+import { spawn } from 'node:child_process';
+import { cpSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { THREAD_HISTORY_TOO_DEEP } from '@nexus/wire';
+import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+
+import { CHECKPOINT_DEPTH_EXCEEDED, CHECKPOINT_MAX_DEPTH } from './checkpoint-serde.js';
+
+const fixture = fileURLToPath(new URL('./checkpoint-depth-cold.fixture.ts', import.meta.url));
+const harnessDir = fileURLToPath(new URL('../', import.meta.url));
+
+const temporary: string[] = [];
+afterAll(() => {
+  for (const dir of temporary.splice(0)) rmSync(dir, { recursive: true, force: true });
+});
+
+/** 起一個新的 node 行程跑腳本，回它印的最後一行 JSON。不帶 `--stack-size`；失敗帶 stderr 一起丟。 */
+async function child(mode: string, dir: string, ...levels: number[]): Promise<unknown> {
+  const spawned = spawn(
+    process.execPath,
+    ['--import', 'tsx', fixture, mode, dir, ...levels.map(String)],
+    {
+      cwd: harnessDir,
+      env: { ...process.env },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    },
+  );
+  let stdout = '';
+  let stderr = '';
+  spawned.stdout.setEncoding('utf8').on('data', (chunk: string) => (stdout += chunk));
+  spawned.stderr.setEncoding('utf8').on('data', (chunk: string) => (stderr += chunk));
+  const code = await new Promise<number | null>((resolve) => spawned.once('exit', resolve));
+  if (code !== 0) throw new Error(`${mode} 子行程以 ${String(code)} 結束：\n${stderr}`);
+  const last = stdout
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .at(-1);
+  return last === undefined ? undefined : (JSON.parse(last) as unknown);
+}
+
+interface Rejected {
+  readonly outcome: string;
+  readonly code?: string;
+  readonly message?: string;
+}
+
+describe('續接：新行程、預設 stack，第一個工作就是深的那一條', () => {
+  const levels = [1500, 2000, 3000, 5000];
+  const results = new Map<number, Rejected>();
+
+  beforeAll(async () => {
+    const base = mkdtempSync(join(tmpdir(), 'nexus-depth-cold-'));
+    temporary.push(base);
+    const source = join(base, 'source');
+    // 一個行程造所有層數的舊日誌；每個層數各複製一份（同一個 home 只能起一個 serve），各起一個新行程續接。
+    await child('generate', source, ...levels);
+    const resumed = await Promise.all(
+      levels.map(async (level) => {
+        const copy = join(base, `resume-${String(level)}`);
+        cpSync(source, copy, { recursive: true });
+        return [level, (await child('resume', copy, level)) as Rejected] as const;
+      }),
+    );
+    for (const [level, result] of resumed) results.set(level, result);
+  }, 240_000);
+
+  it.each(levels)(
+    '參數 %i 層：thread 建不起來，wire 碼是 thread_history_too_deep，訊息帶 checkpoint_depth_exceeded 與日誌第幾顆',
+    (level) => {
+      const result = results.get(level)!;
+      expect(result.outcome).toBe('rejected');
+      // 以前 2000 層以上在這裡是 `unknown_error`（Maximum call stack size exceeded）。
+      expect(result.code).toBe(THREAD_HISTORY_TOO_DEEP);
+      expect(result.message).toContain(CHECKPOINT_DEPTH_EXCEEDED);
+      expect(result.message).toMatch(/日誌第 \d+ 顆事件/u);
+      expect(result.message).toContain(`上限 ${String(CHECKPOINT_MAX_DEPTH)} 層`);
+      expect(result.message).not.toContain('Maximum call stack');
+    },
+  );
+});
+
+describe('同台寫入：新行程裡模型回極深的工具參數，日誌那一關先擋', () => {
+  it.each([2000, 5000])(
+    '參數 %i 層：這一輪失敗，碼是 NESTING_TOO_DEEP，不是 RangeError',
+    async (level) => {
+      const dir = mkdtempSync(join(tmpdir(), 'nexus-depth-cold-write-'));
+      temporary.push(dir);
+      const { failed } = (await child('write', dir, level)) as {
+        failed: { code?: string; message?: string }[];
+      };
+      expect(failed).toHaveLength(1);
+      expect(failed[0]!.code).toBe('NESTING_TOO_DEEP');
+      expect(failed[0]!.message).toContain('日誌收不下');
+      expect(failed[0]!.message).not.toContain('Maximum call stack');
+    },
+    120_000,
+  );
+});
