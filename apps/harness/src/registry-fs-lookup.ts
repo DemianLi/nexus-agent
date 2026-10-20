@@ -17,6 +17,21 @@ import type { FsService } from '@nexus/core';
 import type { FsLookup } from '@nexus/fs';
 
 /**
+ * 沒有樹的組裝怎麼回答 `forThread`（#1774）：這一次組裝自己的 `fs` 服務，**不看 id**——無樹的組裝一份 registry 就是一條 thread、一個 backend，
+ * 沒有別條 thread 的把手可以挑錯（跟 {@link registryFsLookup} 不依 `thread_id` 挑是同一個理由）。還沒有 `fs` 服務是 `undefined`。
+ *
+ * @param registry - 這一次組裝的 registry（只用 `services`）。
+ */
+export function registryFsForThread(registry: {
+  readonly services: { get(name: string): unknown };
+}): (threadId: string) => FsService | undefined {
+  return () => {
+    const fs = registry.services.get(FS_SERVICE);
+    return typeof fs === 'object' && fs !== null ? (fs as FsService) : undefined;
+  };
+}
+
+/**
  * @param registry - 這一次組裝的 registry（只用 `services`）。
  * @returns 查找函式：**每次呼叫都讀** `fs` 服務，所以提供它的那一列排在前面或後面都一樣。
  */

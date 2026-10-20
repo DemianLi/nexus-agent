@@ -56,7 +56,12 @@ async function mountFor(threads: readonly string[]): Promise<Mounted> {
       const backend = fakeBackendOver(files.get(thread) as Map<string, string>);
       return [
         thread,
-        { backend: () => backend, offWorkspacePrefixes: () => [], hasWorkspace: () => true },
+        {
+          backend: () => backend,
+          offWorkspacePrefixes: () => [],
+          hasWorkspace: () => true,
+          workspaceRoot: () => undefined,
+        },
       ];
     }),
   );

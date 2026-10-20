@@ -5,7 +5,8 @@ import Loader from '@nexus/cordis-plugin-loader';
 import { injectOf, need, service } from '@nexus/sdk';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { virtualPathOf as coreVirtualPathOf } from '@nexus/core';
+import { createFsService, virtualPathOf as coreVirtualPathOf } from '@nexus/core';
+import type { FsService } from '@nexus/core';
 
 import { FS_LOOKUP_CONTRACT_VERSION, fsToken, virtualPathOf } from './index.js';
 import type { FsLookup } from './index.js';
@@ -20,7 +21,7 @@ afterEach(async () => {
 describe('@nexus/fs 的定義', () => {
   it('token 名是 fs，契約版本是 semver 常數', () => {
     expect(fsToken).toEqual({ name: 'fs', version: FS_LOOKUP_CONTRACT_VERSION });
-    expect(FS_LOOKUP_CONTRACT_VERSION).toBe('1.2.0');
+    expect(FS_LOOKUP_CONTRACT_VERSION).toBe('2.0.0');
   });
 
   it('virtualPathOf 是 core 那一支的單向轉出：同一個函式、相對路徑以根為起點、.. 夾回根（#1469）', () => {
@@ -40,7 +41,7 @@ describe('@nexus/fs 的定義', () => {
     let grabbed: { forCall(config: unknown): FsLookup } | undefined;
     const consumer = {
       name: 'fs-consumer',
-      inject: injectOf(need(fsToken, '^1.0.0')),
+      inject: injectOf(need(fsToken, '^2.0.0')),
       apply(ctx: Context) {
         grabbed = service(ctx, fsToken);
       },
@@ -64,21 +65,21 @@ describe('@nexus/fs 的定義', () => {
     expect(grabbed?.forCall(config)).toEqual({ kind: 'ambiguous', count: 2 });
   });
 
-  it('workspaceRoot()：行程級的工作區根，建構時交進來；沒交是 undefined（沒有圍堵），列卸載後仍可呼叫（#1491）', async () => {
-    const consumerOf = (root: string | undefined) => {
-      const provider = createFsLookupProvider(() => ({ kind: 'not-attached' }), root);
-      const grabbed: { current?: { workspaceRoot(): string | undefined } } = {};
+  it('hasContainment()：行程級的「有沒有圍堵」，建構時交進來；沒交是 false，列卸載後仍可呼叫（#1774）', async () => {
+    for (const expected of [true, false]) {
+      const provider = createFsLookupProvider(
+        () => ({ kind: 'not-attached' }),
+        undefined,
+        expected,
+      );
+      const grabbed: { current?: { hasContainment(): boolean } } = {};
       const consumer = {
         name: 'fs-consumer',
-        inject: injectOf(need(fsToken, '^1.2.0')),
+        inject: injectOf(need(fsToken, '^2.0.0')),
         apply(ctx: Context) {
           grabbed.current = service(ctx, fsToken);
         },
       };
-      return { provider, consumer, grabbed };
-    };
-    for (const expected of ['/work/space', undefined]) {
-      const { provider, consumer, grabbed } = consumerOf(expected);
       const context = new Context();
       root = context;
       await context.plugin(Loader);
@@ -86,9 +87,55 @@ describe('@nexus/fs 的定義', () => {
       await context.loader.create({ id: 'fs', name: 'cordis:fs' } as never, null);
       await context.loader.create({ id: 'c', name: 'cordis:consumer' } as never, null);
       await context.loader.await();
-      expect(grabbed.current?.workspaceRoot()).toBe(expected);
+      expect(grabbed.current?.hasContainment()).toBe(expected);
       await context.loader.resolve('fs').fiber?.ctx.fiber.dispose();
-      expect(grabbed.current?.workspaceRoot()).toBe(expected);
+      expect(grabbed.current?.hasContainment()).toBe(expected);
+      await context.fiber.dispose();
+    }
+  });
+
+  it('forThread()：每次呼叫都問宿主交進來的函式，原樣傳 threadId；沒交一律 undefined；列卸載後仍可呼叫（#1774）', async () => {
+    const handles = new Map<string, FsService>();
+    const seen: string[] = [];
+    const provider = createFsLookupProvider(
+      () => ({ kind: 'not-attached' }),
+      (threadId) => {
+        seen.push(threadId);
+        return handles.get(threadId);
+      },
+    );
+    const bare = createFsLookupProvider(() => ({ kind: 'not-attached' }));
+    const grabbed: { current?: { forThread(threadId: string): FsService | undefined } } = {};
+    const grabbedBare: { current?: { forThread(threadId: string): FsService | undefined } } = {};
+    const consumerOf = (slot: typeof grabbed) => ({
+      name: 'fs-consumer',
+      inject: injectOf(need(fsToken, '^2.0.0')),
+      apply(ctx: Context) {
+        slot.current = service(ctx, fsToken);
+      },
+    });
+    for (const [built, slot] of [
+      [provider, grabbed],
+      [bare, grabbedBare],
+    ] as const) {
+      const context = new Context();
+      root = context;
+      await context.plugin(Loader);
+      Object.assign(context.loader.builtins, { fs: built.Provider, consumer: consumerOf(slot) });
+      await context.loader.create({ id: 'fs', name: 'cordis:fs' } as never, null);
+      await context.loader.create({ id: 'c', name: 'cordis:consumer' } as never, null);
+      await context.loader.await();
+      if (built === provider) {
+        const handle = createFsService();
+        handles.set('a', handle);
+        expect(slot.current?.forThread('a')).toBe(handle);
+        expect(slot.current?.forThread('b')).toBeUndefined();
+        await context.loader.resolve('fs').fiber?.ctx.fiber.dispose();
+        expect(slot.current?.forThread('a')).toBe(handle);
+        expect(seen).toEqual(['a', 'b', 'a']);
+      } else {
+        expect(slot.current?.forThread('a')).toBeUndefined();
+      }
       await context.fiber.dispose();
     }
   });

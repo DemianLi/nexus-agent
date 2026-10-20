@@ -101,7 +101,7 @@ interface Booted {
 async function boot(env: NodeJS.ProcessEnv, entry: 'serve' | 'cli' = 'serve'): Promise<Booted> {
   const root = createCordisRoot({
     channel: entryApprovalChannel(entry === 'serve' ? undefined : HEADLESS_APPROVALS),
-    workspaceRoot: tmpdir(),
+    contained: true,
   });
   roots.push(root);
   const loaded = await loadDefaultPlugins({ env, warn: () => {} }, { tree: root.tree });

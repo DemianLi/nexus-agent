@@ -8,7 +8,7 @@
 
 import { createCommandsProvider } from '@nexus/commands/provider';
 import { createSessionRunner, SessionLog, SessionRegistry } from '@nexus/core';
-import type { SessionAddress } from '@nexus/core';
+import type { FsService, SessionAddress } from '@nexus/core';
 import { Context } from '@nexus/cordis';
 import Loader from '@nexus/cordis-plugin-loader';
 import { createFsLookupProvider } from '@nexus/fs/provider';
@@ -221,17 +221,45 @@ afterEach(async () => {
   for (const root of opened.splice(0)) await root.fiber.dispose();
 });
 
-/** 掛一次：每條 thread 一張註冊表，共用同一份提供者。`workspaceRoot` 省略 = 沒有圍堵。 */
+/** 一把 fs 把手：`workspaceRoot()` 回給定的根（fold 當下才會填的那一格，這裡直接給；`settleFsService` 不對外）。 */
+function fsHandleWithRoot(root: string): FsService {
+  return {
+    backend: () => undefined,
+    offWorkspacePrefixes: () => [],
+    hasWorkspace: () => true,
+    workspaceRoot: () => root,
+  };
+}
+
+/**
+ * 掛一次：每條 thread 一張註冊表，共用同一份提供者。
+ *
+ * `workspaceRoot`：`null` = 沒有圍堵（`hasContainment()` 是 false，一條 thread 的把手都不登記）；字串 = 每條 thread 的根都是它；
+ * 物件 = 逐條 thread 的根（鍵是 thread id，缺的 thread 沒有登記把手）。#1774 起可寫根是逐條 thread 的，行程級只剩「有沒有圍堵」。
+ */
 async function mountFor(
   threads: readonly string[],
   config: unknown = {},
-  workspaceRoot: string | null = '/workspace',
+  workspaceRoot: string | null | Readonly<Record<string, string>> = '/workspace',
 ): Promise<Mounted> {
   const sessions = new Map(threads.map((thread) => [thread, new SessionRegistry(thread)]));
   const commands = createCommandsProvider();
   const projections = createProjectionsProvider();
   const lookup = createSessionLookupProvider(() => ({ kind: 'not-attached' }));
-  const fs = createFsLookupProvider(() => ({ kind: 'not-attached' }), workspaceRoot ?? undefined);
+  const rootOf = (thread: string): string | undefined =>
+    workspaceRoot === null
+      ? undefined
+      : typeof workspaceRoot === 'string'
+        ? workspaceRoot
+        : workspaceRoot[thread];
+  const fs = createFsLookupProvider(
+    () => ({ kind: 'not-attached' }),
+    (thread) => {
+      const root = rootOf(thread);
+      return root === undefined ? undefined : fsHandleWithRoot(root);
+    },
+    workspaceRoot !== null,
+  );
   const root = new Context();
   opened.push(root);
   await root.plugin(Loader);
@@ -308,8 +336,13 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
       module: permissionPresets,
       config: {},
       providers: {
-        // 有工作區根，插件才真的註冊東西；沒有的話「卸載後撤乾淨」是空話。
-        fs: () => createFsLookupProvider(() => ({ kind: 'not-attached' }), '/workspace').Provider,
+        // 有圍堵，插件才真的註冊東西；沒有的話「卸載後撤乾淨」是空話。
+        fs: () =>
+          createFsLookupProvider(
+            () => ({ kind: 'not-attached' }),
+            () => undefined,
+            true,
+          ).Provider,
         commands: () => {
           latestCommands = createCommandsProvider();
           return latestCommands.Provider;
@@ -336,7 +369,7 @@ describe('一致性套件：真的提供者、真的 Loader', () => {
       { token: 'permissionPresets', version: PERMISSION_PRESETS_CONTRACT_VERSION },
     ]);
     expect(permissionPresets.manifest.consumes).toEqual([
-      { token: 'fs', range: '^1.2.0' },
+      { token: 'fs', range: '^2.0.0' },
       { token: 'commands', range: '^1.0.0' },
       { token: 'projections', range: '^1.0.0' },
       { token: 'sessionLookup', range: '^1.1.0' },
@@ -582,6 +615,37 @@ describe('/permission', () => {
     expect(result.kind).toBe('success');
     expect(result.text).toBe(
       '目前的權限組合：workspace-write（檔案政策 workspace-write、核准 ask）。\n可寫根 "/workspace"。\n切得過去的：read-only、workspace-write。',
+    );
+  });
+
+  it('不帶引數報的是這條 thread 的可寫根：A 報 /x、B 報 /y；兩條都在同一個提供者底下（#1774）', async () => {
+    const run = await mountFor(['a', 'b'], {}, { a: '/x', b: '/y' });
+    for (const thread of ['a', 'b']) {
+      const log = run.sessions.get(thread)!.root;
+      log.append('approval/policy', { policy: 'ask' });
+      log.append('sandbox/mode', { mode: 'workspace-write' });
+      run.join(thread);
+    }
+    expect(run.command('a', '').text).toContain('可寫根 "/x"。');
+    expect(run.command('b', '').text).toContain('可寫根 "/y"。');
+    expect(run.command('b', '').text).not.toContain('/x');
+  });
+
+  it('這條 thread 沒有登記把手：明說查不到，不拿別條 thread 的根充數（fs 是安全邊界，#1482）', async () => {
+    const run = await mountFor(['a', 'b'], {}, { a: '/x' });
+    const log = run.sessions.get('b')!.root;
+    log.append('approval/policy', { policy: 'ask' });
+    log.append('sandbox/mode', { mode: 'workspace-write' });
+    run.join('b');
+    const text = run.command('b', '').text;
+    expect(text).toContain('可寫根：查不到這條 thread 的可寫根。');
+    expect(text).not.toContain('/x');
+  });
+
+  it('有沒有圍堵是行程級：hasContainment() 是 false 就不註冊 /permission，即使有 thread 登記了把手（#1774）', async () => {
+    const run = await mountFor(['a'], {}, null);
+    expect(run.commands.entries().some((item) => item.definition.name === 'permission')).toBe(
+      false,
     );
   });
 

@@ -101,3 +101,40 @@ describe('ThreadSessions.fsForCall', () => {
     expect(found.kind === 'ok' && found.fs).toBe(second);
   });
 });
+
+describe('ThreadSessions.fsForThread（#1774）', () => {
+  it('依 root 會話 id 精確找回登記的那一個把手；撤除後、沒登記過的 id 都是 undefined', () => {
+    const live = new ThreadSessions();
+    const fsA = createFsService();
+    const fsB = createFsService();
+    expect(live.fsForThread('a')).toBeUndefined();
+    const undoA = live.register(new SessionRegistry('a'), fsA);
+    live.register(new SessionRegistry('b'), fsB);
+    expect(live.fsForThread('a')).toBe(fsA);
+    expect(live.fsForThread('b')).toBe(fsB);
+    expect(live.fsForThread('c')).toBeUndefined();
+    undoA();
+    expect(live.fsForThread('a')).toBeUndefined();
+  });
+
+  it('只剩一條時也不退路：不是它的 id 不拿它充數（fs 是安全邊界，#1482）；登記時沒給把手也是 undefined', () => {
+    const live = new ThreadSessions();
+    const fsB = createFsService();
+    live.register(new SessionRegistry('b'), fsB);
+    expect(live.size).toBe(1);
+    expect(live.fsForThread('a')).toBeUndefined();
+    expect(live.fsForThread('b')).toBe(fsB);
+    live.register(new SessionRegistry('bare'));
+    expect(live.fsForThread('bare')).toBeUndefined();
+  });
+
+  it('同一個 root id 重組：拿到的是取代後的把手；舊的 undo 只撤自己', () => {
+    const live = new ThreadSessions();
+    const first = createFsService();
+    const second = createFsService();
+    const undoFirst = live.register(new SessionRegistry('same'), first);
+    live.register(new SessionRegistry('same'), second);
+    undoFirst();
+    expect(live.fsForThread('same')).toBe(second);
+  });
+});

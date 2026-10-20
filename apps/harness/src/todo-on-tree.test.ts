@@ -73,7 +73,7 @@ function home(): { dir: string; env: NodeJS.ProcessEnv } {
 function newRoot(): CordisRoot {
   const root = createCordisRoot({
     channel: entryApprovalChannel(undefined),
-    workspaceRoot: tmpdir(),
+    contained: true,
   });
   roots.push(root);
   return root;

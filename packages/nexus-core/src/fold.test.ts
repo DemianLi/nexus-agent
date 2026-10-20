@@ -1880,7 +1880,12 @@ describe('fs 服務', () => {
 
   it('不是 createFsService 建的那一種不碰：誰提供的就由誰說了算', async () => {
     const own = fakeBackend('own');
-    const fs = { backend: () => own, offWorkspacePrefixes: () => [], hasWorkspace: () => false };
+    const fs = {
+      backend: () => own,
+      offWorkspacePrefixes: () => [],
+      hasWorkspace: () => false,
+      workspaceRoot: () => undefined,
+    };
     await fold([createHostServicesPlugin({ fs })], { defaultBackend: fakeBackend('default') });
     expect(marker(fs.backend())).toBe('own');
   });
@@ -1897,6 +1902,20 @@ describe('fs 服務', () => {
     await fold([createHostServicesPlugin({ fs: without })]);
     expect(withWorkspace.hasWorkspace()).toBe(true);
     expect(without.hasWorkspace()).toBe(false);
+  });
+
+  // 可寫根逐條 thread（#1774）：跟 hasWorkspace 同一處算，值是這一次組裝的 host 服務 `workspaceRoot`。
+  it('workspaceRoot()：fold 之前是 undefined；每次組裝讀自己的 host 服務（A 是 /x、B 是 /y）；沒有圍堵是 undefined', async () => {
+    const a = createFsService();
+    const b = createFsService();
+    const none = createFsService();
+    expect(a.workspaceRoot()).toBeUndefined();
+    await fold([createHostServicesPlugin({ fs: a, workspaceRoot: '/x' })]);
+    await fold([createHostServicesPlugin({ fs: b, workspaceRoot: '/y' })]);
+    await fold([createHostServicesPlugin({ fs: none })]);
+    expect(a.workspaceRoot()).toBe('/x');
+    expect(b.workspaceRoot()).toBe('/y');
+    expect(none.workspaceRoot()).toBeUndefined();
   });
 
   it('能力排在提供 fs 那一列的後面也算數：fold 在所有 apply 之後才算', async () => {
