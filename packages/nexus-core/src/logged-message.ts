@@ -41,7 +41,11 @@ import type {
   StoredMessageData,
 } from '@langchain/core/messages';
 
-import { snapshotJsonValue } from './session-log.js';
+import {
+  SESSION_EVENT_MAX_DEPTH,
+  SessionEventDepthError,
+  snapshotJsonValue,
+} from './session-log.js';
 
 /**
  * 日誌裡的一則訊息。`type` 是 `ai`／`human`／`tool` 這些，`data` 是那一則的欄位。
@@ -57,13 +61,55 @@ export interface LoggedMessage {
   };
 }
 
+/** {@link toLoggedMessage} 在交給 `toDict()` 之前先量的門檻：日誌上限的兩倍（理由見那裡）。 */
+const PRECHECK_DEPTH = SESSION_EVENT_MAX_DEPTH * 2;
+
+/**
+ * `value` 巢狀的物件與陣列有沒有超過 `limit` 層（根是容器的話算第 1 層，純量不算）。迭代走訪，超過就停。
+ *
+ * 走的是自有、可列舉的值。同一顆物件只走一次：`BaseMessage` 的 `lc_kwargs` 跟欄位指到同一份，繞回自己的也不會走不完。
+ * 只走一次可能少算從較深那條路到它的層數，所以這裡只會**少報**、不會多報。
+ */
+function nestingExceeds(value: unknown, limit: number): boolean {
+  const seen = new Set<object>();
+  const stack: [unknown, number][] = [[value, 1]];
+  for (let item = stack.pop(); item !== undefined; item = stack.pop()) {
+    const [current, depth] = item;
+    if (current === null || typeof current !== 'object' || seen.has(current)) continue;
+    if (depth > limit) return true;
+    seen.add(current);
+    for (const child of Object.values(current)) stack.push([child, depth + 1]);
+  }
+  return false;
+}
+
 /**
  * 把一則訊息轉成日誌收得下的形狀。
  *
+ * **太深的先拒**（[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）：`toDict()` 一路的 `escapeIfNeeded`
+ * （`@langchain/core@1.2.9` 的 `load/validation.js`）與下面那一次 `JSON.stringify` 都是遞迴的，交錯巢狀幾千層就
+ * `Maximum call stack size exceeded`——輪不到 `SessionLog.append` 那一關的層數檢查，回合失敗只剩一顆認不出來的 `RangeError`。
+ * 實測（macOS、Node 25.9.0、真的 `serve`）同台模型回 6000 層前後的工具參數就是這樣，邊界隨堆疊大小變。所以先迭代量訊息本身，
+ * 超過 {@link PRECHECK_DEPTH} 就拋跟日誌那一關同一種 {@link SessionEventDepthError}。
+ *
+ * **門檻不是上限本身**：這裡量的是 `BaseMessage` 物件，跟日誌裡那一份的形狀不同，層數對不齊；取上限本身的話，日誌那一關會拒的訊息
+ * 改由這裡拒，錯誤訊息就少了事件種類、路徑與層數（core 的 `containment`、`model-calls` 測試釘著那一句）。取上限的兩倍：
+ * 比它淺的照舊走 `toDict()` 再由日誌那一關拒（幾千層才爆，這段沒有風險），只有更深的在這裡先拒。
+ * 超過兩倍的訊息包進事件後一定也超過上限，所以這一步**不改變哪些訊息記得進去**。
+ *
+ * **與 dsh 的偏離（理由 1）**：dsh 的訊息走自己的迭代快照，沒有這一步。我們記的是 LangChain 的 `BaseMessage`，轉成純 JSON 只能
+ * 經基座那一組遞迴的 `toDict()`（見檔頭），退到在交給它之前先量。
+ *
  * @param message - 模型看到的那一則。
  * @returns 純 JSON 的 `StoredMessage`。
+ * @throws {SessionEventDepthError} 訊息本身巢狀超過 {@link PRECHECK_DEPTH} 層。
  */
 export function toLoggedMessage(message: BaseMessage): LoggedMessage {
+  if (nestingExceeds(message, PRECHECK_DEPTH)) {
+    throw new SessionEventDepthError(
+      `要記的訊息巢狀超過 ${PRECHECK_DEPTH} 層，日誌收不下（上限 ${SESSION_EVENT_MAX_DEPTH} 層；轉成日誌的形狀之前就先拒）`,
+    );
+  }
   const [stored] = mapChatMessagesToStoredMessages([message]);
   return JSON.parse(JSON.stringify(stored)) as LoggedMessage;
 }

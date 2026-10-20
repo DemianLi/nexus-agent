@@ -1656,6 +1656,25 @@ type SnapshotTask =
  */
 export const SESSION_EVENT_MAX_DEPTH = 600;
 
+/** 會話事件巢狀超過 {@link SESSION_EVENT_MAX_DEPTH} 的穩定碼。 */
+export const SESSION_EVENT_DEPTH_EXCEEDED = 'session_event_depth_exceeded';
+
+/**
+ * 會話事件巢狀太深，寫入那一關拒收（[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）。認 `code`，不認訊息。
+ *
+ * **仍是 `TypeError`**：拒收的其他理由（不是純 JSON、繞回自己）照舊拋 `TypeError`，接的人不必分兩種。多一個碼，是讓回合失敗
+ * 分得出「太深」這一類（harness 的 `classifyTurnFailure` 認它）。
+ */
+export class SessionEventDepthError extends TypeError {
+  /** 失敗分類碼，見 {@link SESSION_EVENT_DEPTH_EXCEEDED}。 */
+  readonly code = SESSION_EVENT_DEPTH_EXCEEDED;
+
+  constructor(message: string) {
+    super(message);
+    this.name = 'SessionEventDepthError';
+  }
+}
+
 /**
  * 深拷貝成**無損的**純 JSON，**拷不動就當場拋**。
  *
@@ -1690,8 +1709,8 @@ export function snapshotJsonValue(
   label: string,
   maxDepth: number = Number.POSITIVE_INFINITY,
 ): unknown {
-  const fail = (path: SnapshotPath, reason: string, maxSegments?: number): never => {
-    throw new TypeError(`會話事件的 ${renderPath(path, maxSegments)} ${reason}`);
+  const fail = (path: SnapshotPath, reason: string): never => {
+    throw new TypeError(`會話事件的 ${renderPath(path)} ${reason}`);
   };
   const ancestors = new Set<object>();
   let root: unknown;
@@ -1768,7 +1787,9 @@ export function snapshotJsonValue(
     if (ancestors.has(current)) fail(task.path, '繞回自己，日誌不收循環參考');
     const depth = task.depth + 1;
     if (depth > maxDepth) {
-      fail(task.path, `是第 ${depth} 層巢狀，超過上限 ${maxDepth} 層`, DEPTH_FAILURE_PATH_SEGMENTS);
+      throw new SessionEventDepthError(
+        `會話事件的 ${renderPath(task.path, DEPTH_FAILURE_PATH_SEGMENTS)} 是第 ${depth} 層巢狀，超過上限 ${maxDepth} 層`,
+      );
     }
 
     if (Array.isArray(current)) {

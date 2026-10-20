@@ -13,14 +13,21 @@
 import { createServer } from 'node:http';
 import type { Server } from 'node:http';
 import type { AddressInfo } from 'node:net';
+import type { ChatGenerationChunk, ChatResult } from '@langchain/core/outputs';
 import { MemorySaver } from '@langchain/langgraph';
-import { SessionLog } from '@nexus/core';
+import { DEFAULT_STREAM_RETRYABLE_CODES, SessionEventDepthError, SessionLog } from '@nexus/core';
 import type { SessionEvent, SessionEventMap } from '@nexus/core';
 import { applyTrajectory, initialTrajectory, viewTrajectory } from '@nexus/plugin-trajectory';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
 import { runTurn } from './cli.js';
-import { classifyTurnFailure, createLiveModel, LIVE_API_KEY_ENV } from './live-model.js';
+import { CheckpointDepthError } from './checkpoint-serde.js';
+import {
+  classifyTurnFailure,
+  createLiveModel,
+  LIVE_API_KEY_ENV,
+  NESTING_TOO_DEEP_CODE,
+} from './live-model.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import { liveModelConfigSchema } from './settings/live-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -198,7 +205,37 @@ describe('turn/failed 帶分類碼（假端點＋真的 pump）', () => {
     );
     expect(data.error).toEqual({ message: data.message, code: 'UNKNOWN' });
   });
+
+  // #1668：深度造成的失敗有自己的碼，靠的是拋錯的人帶碼；`RangeError` 本身一律不認。這一格是真的遞迴爆掉，不是手造的物件。
+  it('跟深度無關的 RangeError（模型那一格自己無窮遞迴）是 UNKNOWN，不是 NESTING_TOO_DEEP', async () => {
+    const data = await failedTurn(new RecursingModel({ turns: [] }));
+    expect(data.message).toBe('Maximum call stack size exceeded');
+    expect(data.error).toEqual({ message: data.message, code: 'UNKNOWN' });
+  });
 });
+
+/** 真的無窮遞迴，爆的是 V8 自己的 `RangeError`。 */
+function overflow(): never {
+  const down = (n: number): number => down(n + 1) + 1;
+  down(0);
+  throw new Error('沒有爆');
+}
+
+/** 模型那一格一被呼叫就無窮遞迴（兩條路都蓋：`invoke` 在掛了 callback 時也改走串流）。 */
+class RecursingModel extends ScriptedChatModel {
+  /** 母類別綁工具時回一顆新的 `ScriptedChatModel`，會丟掉這個子類別；這裡用不到工具，回自己。 */
+  override bindTools(): ScriptedChatModel {
+    return this;
+  }
+
+  override _generate(): Promise<ChatResult> {
+    return new Promise<ChatResult>(() => overflow());
+  }
+
+  override async *_streamResponseChunks(): AsyncGenerator<ChatGenerationChunk> {
+    yield overflow();
+  }
+}
 
 describe('軌跡投影讀得到這個碼（#1115 之後補上）', () => {
   it('真的失敗的那一輪：投影的 failureCode 就是日誌上 turn/failed 的 error.code', async () => {
@@ -250,5 +287,17 @@ describe('classifyTurnFailure 本身', () => {
   it('抓得住的邊界：沒有 `status` 的非 Error 值也不拋，是 UNKNOWN', () => {
     expect(classifyTurnFailure('字串')).toEqual({ message: '字串', code: 'UNKNOWN' });
     expect(classifyTurnFailure(undefined)).toEqual({ message: 'undefined', code: 'UNKNOWN' });
+  });
+
+  it('巢狀太深（#1668）：日誌那一關與存檔點的兩種錯，包了幾層都認碼；不在預設可重試集', () => {
+    for (const inner of [new SessionEventDepthError('太深'), new CheckpointDepthError(700, 602)]) {
+      const wrapped = new Error('外層', { cause: new Error('中間', { cause: inner }) });
+      expect(classifyTurnFailure(inner).code).toBe(NESTING_TOO_DEEP_CODE);
+      expect(classifyTurnFailure(wrapped)).toEqual({
+        message: '外層',
+        code: NESTING_TOO_DEEP_CODE,
+      });
+    }
+    expect(DEFAULT_STREAM_RETRYABLE_CODES).not.toContain(NESTING_TOO_DEEP_CODE);
   });
 });

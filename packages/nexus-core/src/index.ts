@@ -720,7 +720,9 @@ export {
   materializeAppendBatch,
   MESSAGE_PROJECTION_EVENT_TYPES,
   MODEL_VISIBLE_EVENT_TYPES,
+  SESSION_EVENT_DEPTH_EXCEEDED,
   SESSION_EVENT_MAX_DEPTH,
+  SessionEventDepthError,
   SessionLog,
   snapshotJsonValue,
 } from './session-log.js';

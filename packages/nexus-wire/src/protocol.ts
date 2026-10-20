@@ -394,6 +394,13 @@ export const THREAD_AT_CAPACITY = 'thread_at_capacity';
  */
 export const THREAD_IS_SUBAGENT = 'thread_is_subagent';
 
+/**
+ * 這條 thread 的歷史（磁碟上的會話日誌）裡有一則巢狀太深，灌不回 serve 的狀態，這條 thread 建不起來
+ * （[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）。多半是上限出現之前寫下的舊日誌。message 寫了是日誌第幾顆事件、
+ * 幾層、上限多少。**不是暫時失敗，重試沒用**：同一份日誌每次都一樣深。任何會經 `threadFor` 續接舊 thread 的路都可能回。
+ */
+export const THREAD_HISTORY_TOO_DEEP = 'thread_history_too_deep';
+
 /** 這條線上的錯誤碼：協定的那十個，加上我們自己的命令用到的。 */
 export type WireErrorCode =
   | ErrorCode
@@ -405,6 +412,7 @@ export type WireErrorCode =
   | typeof SUBAGENT_CLOSED
   | typeof THREAD_AT_CAPACITY
   | typeof THREAD_IS_SUBAGENT
+  | typeof THREAD_HISTORY_TOO_DEEP
   | typeof MODEL_DOES_NOT_SUPPORT_IMAGES
   | typeof ATTACHMENT_NOT_FOUND;
 

@@ -10,10 +10,12 @@ import {
   isModelCallFailure,
   markModelCallFailure,
   noteStreamFailure,
+  SESSION_EVENT_DEPTH_EXCEEDED,
   streamFailureReporter,
   tagModelRoute,
 } from '@nexus/core';
 import type { AttemptUsage, LlmFailure, StreamFailure } from '@nexus/core';
+import { CHECKPOINT_DEPTH_EXCEEDED } from './checkpoint-serde.js';
 
 import { assertUsableApiKey, INVALID_CREDENTIAL_CODE } from './api-key.js';
 import { AttachmentChatOpenAI } from './attachment-chat-openai.js';
@@ -1726,6 +1728,9 @@ function classifyInbandEnvelope(envelope: Record<string, unknown>, status: numbe
   );
 }
 
+/** 這一輪因為巢狀太深而失敗的碼（#1668），見 {@link classifyTurnFailure}「巢狀太深」。不在預設可重試集：同一份歷史重打一樣深。 */
+export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
+
 /**
  * 把「這一輪為什麼失敗」描述成日誌裡的 {@link LlmFailure}（[#434](https://github.com/DemianLi/nexus-agent/issues/434)），
  * 給 `turn/failed.error`**，也給 `llm/retry.failure`**（[#1437](https://github.com/DemianLi/nexus-agent/issues/1437)）。
@@ -1750,6 +1755,7 @@ function classifyInbandEnvelope(envelope: Record<string, unknown>, status: numbe
  * | 模型呼叫拋的、串流中段的錯誤信封（SDK 拋的沒有 `status` 的 `APIError`）：信封的數字碼（400–599）照上面幾列；沒有數字碼 | 照上面；`SERVER` | 照上面；是 |
  * | 沒有狀態、逾時那幾個名字（{@link isTimeoutLink}），或模型呼叫的錯誤鏈上有 {@link TIMEOUT_ERROR_CODES} 的碼 | `TIMEOUT` | 是 |
  * | 本機排隊等不到名額（`request-gate.ts` 拋的 `LocalCapacityError`，沒有送請求，#1505） | `LOCAL_CAPACITY` | 否 |
+ * | 巢狀太深：任何一環的 `code` 是日誌那一關的 `session_event_depth_exceeded`（`@nexus/core` 的 `SessionEventDepthError`）或存檔點的 `checkpoint_depth_exceeded`（`checkpoint-serde.ts` 的 `CheckpointDepthError`）（#1668） | {@link NESTING_TOO_DEEP_CODE} | 否 |
  * | 空回覆（{@link createEmptyResponseMiddleware} 拋的 `EmptyResponseError`） | `EMPTY_RESPONSE` | 是 |
  * | 沒有狀態、連線層的（`APIConnectionError`、模型呼叫的錯誤鏈上有 {@link NETWORK_ERROR_CODES} 的碼、讀串流時被切斷，見 {@link connectionFailures}） | `TRANSPORT` | 是 |
  * | **其餘——不是供應商的錯，或解不開的回應** | `UNKNOWN` | 否 |
@@ -1761,6 +1767,16 @@ function classifyInbandEnvelope(envelope: Record<string, unknown>, status: numbe
  * `#withdraw` 的狀態查詢——它們沒有供應商的任何痕跡，就是 `UNKNOWN`。**不要把它們套進 `TRANSPORT`**：「沒有狀態」
  * 不等於「網路問題」，這是 #1437 之前那支把整類程式錯誤標成網路問題的原因（Q2 (a)：解不開的回應也是 `UNKNOWN`，dsh 記成
  * `PI_AI_ERROR`、同樣不重試）。
+ *
+ * ## 巢狀太深（[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）
+ *
+ * **認碼，不認 `RangeError`。** `Maximum call stack size exceeded` 可能來自任何無窮遞迴（工具、插件自己的 bug），從錯誤本身分不出
+ * 是不是深度造成的，誤分比留 `UNKNOWN` 糟。深的東西在走到會遞迴的那一段之前就被量過、拋帶碼的錯（`@nexus/core` 的
+ * `toLoggedMessage`、`SessionLog.append`，存檔點的 `DepthCheckedSerializer`），所以這一類一律有碼可認；`RangeError` 照舊是 `UNKNOWN`。
+ *
+ * **與 dsh 的偏離（理由 1）**：dsh 沒有這一類（`packages/core/agent-loop/src/agent.ts:379-381`，`687f282e`：不是 `LlmError` 的
+ * 一律 `UNKNOWN`），因為它整條路都是迭代的、沒有深度上限。我們的上限是基座帶來的（LangGraph 的存檔點、LangChain 遞迴的
+ * `toDict()`、OTLP 匯出），撞上限的那一輪要讓人認得出原因，就補這一個碼。
  *
  * ## 為什麼要先拆 `MiddlewareError`
  *
@@ -1787,6 +1803,7 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   let empty = false;
   let localCapacity = false;
   let invalidCredential = false;
+  let tooDeep = false;
   // 「只看結構」的連線與串流中段規則只套在模型呼叫拋的錯誤鏈上（工具 middleware 的錯不算）。
   const links = [...causeLinks(root)];
   const modelCall = links.some((link) => isModelCallFailure(link));
@@ -1803,6 +1820,7 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
     if (name === 'EmptyResponseError') empty = true;
     if (name === 'LocalCapacityError') localCapacity = true;
     if (name === 'InvalidCredentialError') invalidCredential = true;
+    if (code === SESSION_EVENT_DEPTH_EXCEEDED || code === CHECKPOINT_DEPTH_EXCEEDED) tooDeep = true;
     if (inband === undefined && modelCall && isInbandApiError(link)) {
       const body = (link as { error?: unknown }).error;
       inband = inbandErrorStatus(
@@ -1828,13 +1846,15 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
                 ? INVALID_CREDENTIAL_CODE
                 : localCapacity
                   ? LOCAL_CAPACITY_CODE
-                  : empty
-                    ? 'EMPTY_RESPONSE'
-                    : timedOut
-                      ? 'TIMEOUT'
-                      : connection
-                        ? 'TRANSPORT'
-                        : 'UNKNOWN';
+                  : tooDeep
+                    ? NESTING_TOO_DEEP_CODE
+                    : empty
+                      ? 'EMPTY_RESPONSE'
+                      : timedOut
+                        ? 'TIMEOUT'
+                        : connection
+                          ? 'TRANSPORT'
+                          : 'UNKNOWN';
   return { message, code, ...(status !== undefined && { status }) };
 }
 
