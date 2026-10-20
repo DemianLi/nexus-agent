@@ -1,11 +1,12 @@
 import type { ThreadListResult, WireClient } from '@nexus/wire';
-import { THREAD_AT_CAPACITY } from '@nexus/wire';
+import { THREAD_AT_CAPACITY, THREAD_HISTORY_TOO_DEEP } from '@nexus/wire';
 import { act, cleanup, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { useThreadManagement } from '@/hooks/use-thread-management';
 import type { Listing, ThreadDirectory } from '@/hooks/use-thread-directory';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
+import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 
 /** 側欄會話管理的接線（#633）：集合以 server 回的為準、舊回應不蓋新的、列表一來蓋在上面的就作廢。 */
 
@@ -256,6 +257,21 @@ describe('改名', () => {
     const { hook } = setup(client, okListing(listed([], [])));
     await act(async () => {
       expect(await hook.result.current!.onRename('t1', '標題')).toBe(THREAD_AT_CAPACITY_TEXT);
+    });
+    expect(hook.result.current?.titles.size).toBe(0);
+  });
+
+  it('歷史太深（#1753，冷會話改名經 `threadFor`）：講給使用者看的那一句，不接 server 的原文', async () => {
+    const client = {
+      threadRename: vi.fn(async () => ({
+        kind: 'rejected' as const,
+        code: THREAD_HISTORY_TOO_DEEP,
+        message: '這條 thread 建不起來：日誌第 3 顆事件巢狀 3000 層，超過上限 600',
+      })),
+    };
+    const { hook } = setup(client, okListing(listed([], [])));
+    await act(async () => {
+      expect(await hook.result.current!.onRename('t1', '標題')).toBe(THREAD_HISTORY_TOO_DEEP_TEXT);
     });
     expect(hook.result.current?.titles.size).toBe(0);
   });

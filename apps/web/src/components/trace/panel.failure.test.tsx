@@ -66,6 +66,15 @@ describe('觀測分頁：失敗的那一輪標頭寫它是哪一類失敗（#112
     expect(head().textContent).toContain('耗時');
   });
 
+  it('巢狀太深（NESTING_TOO_DEEP，#1753）：寫中文的那一句，英文碼只留在 title 與 data-failure-code', async () => {
+    mount(conversation([{ end: 'failed', failureCode: 'NESTING_TOO_DEEP' }]));
+    await act(async () => {});
+    const fact = screen.getByTestId('trace-head-failure');
+    expect(fact.textContent).toBe('失敗（這則訊息巢狀太深，這一輪沒有完成）');
+    expect(fact.getAttribute('data-failure-code')).toBe('NESTING_TOO_DEEP');
+    expect(head().textContent).not.toContain('NESTING_TOO_DEEP');
+  });
+
   it('HTTP_<n> 帶狀態碼；不認得的碼原樣寫在括號裡', async () => {
     mount(conversation([{ end: 'failed', failureCode: 'HTTP_418' }]));
     await act(async () => {});
