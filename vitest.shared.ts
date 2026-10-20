@@ -22,7 +22,7 @@ export const pathsPlugin = (): ReturnType<typeof tsconfigPaths> =>
 /**
  * **偏離 dsh，理由 1（基座表達不出來）。** dsh 處理 workspace 裸名插件只有兩種做法：開子行程
  * （`loader-smoke/src/index.ts:100-127`），或在 `mkdtemp` 底下手寫 `node_modules`（`app-boot.spec.ts` 約 `:934-990`）。
- * 兩種都表達不出 `apps/harness` 那 80 個測試檔對行程內物件的斷言（函式身分 `toBe(applyX)`、樹上的列、middleware 鏈、
+ * 兩種都表達不出 `apps/harness` 那 99 個測試檔（#1650 在 959e9af7 實測，分類見該卡）對行程內物件的斷言（函式身分 `toBe(applyX)`、樹上的列、middleware 鏈、
  * ctx 服務物件）；要表達只能重寫斷言。`plugin-tree.ts` 的 `resolveBareSpecifier` 是 Node 原生的 `import.meta.resolve`，
  * 看不到 vite 的 `paths` 外掛，要經 tsx 的 resolve hook 才會照 `paths` 解析。
  *
