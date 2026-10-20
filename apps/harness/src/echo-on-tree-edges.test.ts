@@ -590,6 +590,55 @@ describe('推清單被拒之後，推回上一份不會被當成沒變而跳過�
   }, 60000);
 });
 
+describe('Include 起不來之後同一份清單再推：每次都重建，不留殘列（#1674）', () => {
+  it('壞清單檔連推兩次都被拒；第二次之後樹上的列數與第一次相同、沒有殘留的 fiber；修好之後推回 active', async () => {
+    const root = newRoot();
+    const dir = scratch();
+    const shipped = write(
+      dir,
+      'cordis.yml',
+      `- id: echo\n  name: '${ECHO_MODULE}'\n  disabled:\n    __jsExpr: ${JSON.stringify('true')}\n`,
+    );
+    const input = {
+      shipped,
+      patches: [{ id: 'echo', config: {} }],
+      rows: [{ id: 'echo', module: ECHO_MODULE, disabled: false, config: {}, provides: [] }],
+    };
+    const push = () =>
+      root.tree
+        .run(() => root.tree.sync(input))
+        .then(
+          () => undefined,
+          (error: unknown) => error,
+        );
+    /** 樹上每一列（含 include 自己）現在掛著的 fiber 數；`entries()` 只列還在 Loader 裡的。 */
+    const shape = async () => {
+      const loader = (await root.tree.context()).loader;
+      const entries = [...loader.entries()];
+      return {
+        rows: entries.length,
+        ids: entries.map((entry) => entry.options.id).sort(),
+        fibers: entries.filter((entry) => entry.fiber !== undefined).length,
+      };
+    };
+
+    const first = await push();
+    expect(first).toBeInstanceOf(PluginTreeError);
+    const afterFirst = await shape();
+    const second = await push();
+    expect(second).toBeInstanceOf(PluginTreeError);
+    const afterSecond = await shape();
+    // 第二次是拆掉重建：不能多出列，也不能多留 fiber。
+    expect(afterSecond).toEqual(afterFirst);
+
+    // 修好清單檔：再推一次，Include 回到 ACTIVE，那一列起來。
+    writeFileSync(shipped, ECHO_SHIPPED);
+    const healed = await root.tree.run(() => root.tree.sync(input));
+    expect(healed.verdict('echo').kind).toBe('active');
+    expect((await shape()).ids).toContain('include');
+  }, 60000);
+});
+
 describe('插件自我停用只在記憶體，但同一份宣告不再被重新掛上（#1424）', () => {
   it('不寫檔、不進紀錄；讀清單多次也只掛一次，那一列判成停用而不是掉列', async () => {
     const dir = scratch();
