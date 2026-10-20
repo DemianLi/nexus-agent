@@ -20,7 +20,7 @@ import type { Context } from '@nexus/cordis';
 import { ContractService } from '@nexus/sdk';
 
 import { fsToken } from './index.js';
-import type { FsLookup, FsLookupService } from './index.js';
+import type { FsLookup, FsLookupService, FsService } from './index.js';
 
 /** {@link createFsLookupProvider} 的回傳：交給 Loader 當內建插件的類別。 */
 export interface FsLookupProviderHandle {
@@ -32,20 +32,24 @@ export interface FsLookupProviderHandle {
  * 造一個提供者。
  *
  * @param lookup - 宿主的挑法：拿到這次呼叫的 config，回 {@link FsLookup}。**每次呼叫都問它**，不快取結果。
- * @param workspaceRoot - 這個行程的工作區根（#1491 Q4 (a)），由宿主交進來；`undefined` 是沒有圍堵。行程級、不隨 thread 變，所以建構時定死。
+ * @param forThread - 宿主的精確查找（#1774）：依 root 會話 id 找那條 thread 的把手，找不到是 `undefined`。**每次呼叫都問它**。省略＝一律找不到。
+ * @param contained - 這個行程有沒有圍堵（#1774，前身是 1.2.0 的行程級 `workspaceRoot`），由宿主交進來。行程級、不隨 thread 變，所以建構時定死。
  */
 export function createFsLookupProvider(
   lookup: (config: unknown) => FsLookup,
-  workspaceRoot?: string,
+  forThread: (threadId: string) => FsService | undefined = () => undefined,
+  contained = false,
 ): FsLookupProviderHandle {
   class FsLookupServiceImpl extends ContractService<FsLookupService> implements FsLookupService {
     readonly forCall: (invocation: unknown) => FsLookup;
-    readonly workspaceRoot: () => string | undefined;
+    readonly forThread: (threadId: string) => FsService | undefined;
+    readonly hasContainment: () => boolean;
 
     constructor(ctx: Context) {
       super(ctx, fsToken);
       this.forCall = (invocation) => lookup(invocation);
-      this.workspaceRoot = () => workspaceRoot;
+      this.forThread = (threadId) => forThread(threadId);
+      this.hasContainment = () => contained;
     }
   }
 

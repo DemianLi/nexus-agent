@@ -77,6 +77,7 @@ async function mount(threads: readonly string[]): Promise<Mounted> {
       backend: () => backend,
       offWorkspacePrefixes: () => [],
       hasWorkspace: () => true,
+      workspaceRoot: () => undefined,
     });
     bind(thread);
   }
