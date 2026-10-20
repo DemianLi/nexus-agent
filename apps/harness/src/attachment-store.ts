@@ -32,8 +32,13 @@
  *    收到的是主機路徑（它的檔案工具不在工作區圍欄裡）；我們的 backend 有圍欄，所以走路由。基座表達不出的是「圍欄外的絕對路徑」。
  * 2. **圖片沒有正規化／縮圖。** dsh 在收下時把圖轉成 8-bit sRGB 並縮小到 2048×2048 以內、4 MB 上下（`normalization.ts`，靠 sharp）；
  *    我們沒有影像函式庫，圖按收到的位元組原樣存（`saveImage`），超過上限的拒收而不縮（`image-intake.ts`）。送進模型的是原圖。
- * 3. **沒有逐會話目錄**：dsh 的附件根也是全域內容定址（`attachments/v1`），不按會話分。同一個使用者的不同會話讀得到彼此的
- *    附件（要知道內容雜湊才能點到單一檔，但 `ls` 列得出來）；多人共用主機的隔離靠 `0700`，不靠會話。
+ * 3. **儲存沒有逐會話目錄，但模型讀附件的路由按 thread 收窄**（理由 2，[#1773](https://github.com/DemianLi/nexus-agent/issues/1773)，#1675 Q3 (a)，
+ *    demian 2026-10-20 拍板）。**儲存照 dsh**：附件根是全域內容定址（`attachments/v1`），不按會話分，同樣的內容只存一份。**路由不照 dsh**：
+ *    dsh 是單人桌面，模型讀的是主機路徑、沒有路由；nexus 是一台主機多人共用，所有 web 使用者在同一個 OS 帳號底下，`0700` 分不開人
+ *    （以前同一台 serve 的任何 thread 都能 `ls /attachments` 列出別條 thread 上傳的檔，照路徑 `read_file` 讀得到）。補的是路由多一道
+ *    「這條 thread 的 root 日誌引用過」的判準，跟網頁讀圖同一條（`attachment-reference.ts`，照 dsh `session.attachment`），在呼叫當下判，
+ *    `ls`／`read`／`grep`／`glob` 都過這一關，沒引用過的路徑回覆跟不存在相同。見 `attachment-route.ts`。對舊 thread 也生效：判準是日誌，
+ *    自己上傳的照舊讀得到，只有別條 thread 的附件從此讀不到。
  * 4. **home 以上的祖先開不了就略過那一層**（理由 2，#1528 Q1 (b)，demian 2026-10-17 拍板）。dsh 的 home 證明一路 fsync
  *    到檔案系統根，任何一層開不了都是寫入失敗；多人共用的主機常把 `/home` 這類目錄收成 `0711`（進得去、列不了），照 dsh
  *    的話每一次上傳都失敗。所以只在 home **以上**、只對**開目錄時**的 `EACCES`／`EPERM`，略過那一層並在伺服器日誌講一次；
@@ -52,7 +57,8 @@ import { ATTACHMENTS_MODEL_PREFIX } from '@nexus/core';
 import type { FileAttachmentRef, ImageAttachmentRef, ImageMediaType } from '@nexus/core';
 
 import { syncDirectory } from './atomic-file.js';
-import { ContainedFilesystemBackend } from './contained-backend.js';
+import { ThreadScopedAttachmentBackend } from './attachment-route.js';
+import type { AttachmentScope } from './attachment-route.js';
 import { PRIVATE_DIR_MODE, PRIVATE_FILE_MODE } from './owner-only.js';
 import { assertPrivateFile } from './plugin-config.js';
 import type { PrivateFileRole } from './plugin-config.js';
@@ -255,10 +261,15 @@ export class AttachmentStore {
   /**
    * 模型讀附件的路由目標：唯讀的圍堵 backend，根是 {@link filesDir}。路由掛在 {@link ATTACHMENTS_PREFIX} 底下。
    * 目錄還不存在（沒有人上傳過）時先建起來，不然第一次 `ls` 會說根不存在。
+   *
+   * **只露出 `scope` 說這條 thread 引用過的檔案**（偏離 3，#1773），見 `attachment-route.ts`。`scope` 是必傳的：沒有「整個
+   * `files` 目錄都看得到」的版本，免得有人漏傳而路由悄悄變回全開。
+   *
+   * @param scope - 這條 thread 的 root 日誌的口，路由在每次呼叫當下才讀。
    */
-  async readOnlyRoute(): Promise<ContainedFilesystemBackend> {
+  async readOnlyRoute(scope: AttachmentScope): Promise<ThreadScopedAttachmentBackend> {
     await this.#prepare();
-    return new ContainedFilesystemBackend({ rootDir: this.filesDir, mode: 'read-only' });
+    return new ThreadScopedAttachmentBackend({ rootDir: this.filesDir, scope });
   }
 
   /**
