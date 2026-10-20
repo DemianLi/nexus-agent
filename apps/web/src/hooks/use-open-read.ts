@@ -7,7 +7,9 @@ import { useEffect, useRef, useState } from 'react';
  *
  * 只認**暫時的**失敗：thread 起不來時 server 的 `threadOrError` 回的兩種碼（`thread_at_capacity`、`unknown_error`），
  * 以及網路層拋的錯。**永久的「沒有」不算**——`not_supported`（這個組裝沒有）、載體層的 4xx（舊 server 不認得這個 method
- * 回 404）、`result.ok === false` 的業務回答：接回來也一樣，重讀只是每次接回多打一次。
+ * 回 404）、`result.ok === false` 的業務回答：接回來也一樣，重讀只是每次接回多打一次。`threadOrError` 的另外兩種碼也是永久的：
+ * `thread_is_subagent`（子代理的會話，#1544）與 `thread_history_too_deep`（日誌裡有一則太深、灌不回去，#1668／#1753），
+ * 同一份日誌每次都一樣。
  */
 export function worthRereading(
   failure: { readonly code?: string } | { readonly thrown: unknown },

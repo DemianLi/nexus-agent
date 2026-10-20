@@ -5,7 +5,7 @@ import type {
   SubagentListResult,
   WireProjection,
 } from '@nexus/wire';
-import { THREAD_AT_CAPACITY, UplinkTransportError } from '@nexus/wire';
+import { THREAD_AT_CAPACITY, THREAD_HISTORY_TOO_DEEP, UplinkTransportError } from '@nexus/wire';
 import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -30,6 +30,7 @@ describe('worthRereading（#1483）', () => {
     ['網路層拋錯', { thrown: new TypeError('Failed to fetch') }, true],
     ['載體層 5xx', { thrown: new UplinkTransportError(502, '') }, true],
     ['這個組裝沒有', { code: 'not_supported' }, false],
+    ['歷史太深、灌不回去（#1753）', { code: THREAD_HISTORY_TOO_DEEP }, false],
     ['沒有碼的拒絕', {}, false],
     [
       '舊 server 不認得這個 method（404）',
@@ -96,6 +97,22 @@ describe('useOpenRead（#1483）', () => {
 
   it('這個組裝沒有（not_supported）：接上幾次都不重讀', async () => {
     const read = reader({ kind: 'rejected', code: 'not_supported', message: '沒有' });
+    const hook = mount(read);
+    await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
+    await act(async () => undefined);
+    hook.rerender({ connections: 1 });
+    hook.rerender({ connections: 2 });
+    await act(async () => undefined);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(hook.result.current).toBeNull();
+  });
+
+  it('歷史太深（thread_history_too_deep，#1753）：永久的，接上幾次都不重讀', async () => {
+    const read = reader({
+      kind: 'rejected',
+      code: THREAD_HISTORY_TOO_DEEP,
+      message: '這條 thread 建不起來：日誌第 3 顆事件有 3000 層，超過上限 600',
+    });
     const hook = mount(read);
     await waitFor(() => expect(read).toHaveBeenCalledTimes(1));
     await act(async () => undefined);
