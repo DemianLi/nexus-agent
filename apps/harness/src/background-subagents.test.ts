@@ -256,6 +256,8 @@ describe('載體本身（假 agent）', () => {
     expect(reports).toEqual([
       {
         runId: 'bg-1',
+        // 這一筆的 seq 在子代理自己那份日誌：id 是 `<主對話>/<runId>`，不是 root 那份。
+        sessionId: 'root-1/bg-1',
         seq: log.events[failedAt]!.seq,
         code: 'SERVER',
         status: 502,

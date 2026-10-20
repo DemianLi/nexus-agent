@@ -191,6 +191,8 @@ export interface BackgroundParentPort {
 export interface BackgroundTurnFailure {
   /** 子代理的 run id。 */
   readonly runId: string;
+  /** `seq` 所在的那份日誌的 id：子代理自己的，`<主對話的 thread id>/<runId>`（落盤的檔名見 `docs/operations.md`〈從回報追到請求〉）。 */
+  readonly sessionId: string;
   readonly seq: number;
   readonly code: string;
   readonly status?: number;
@@ -1290,7 +1292,7 @@ export class BackgroundSubagentHost {
       else {
         try {
           const failed = log.append('turn/failed', { message, error: classifyTurnFailure(error) });
-          this.#notifyTurnFailed(job, failed);
+          this.#notifyTurnFailed(job, log.sessionId, failed);
         } catch (appendError) {
           this.#warnFailure(job, `${message}（連 turn/failed 都寫不進去：${String(appendError)}）`);
         }
@@ -1333,12 +1335,13 @@ export class BackgroundSubagentHost {
   }
 
   /** `turn/failed` 寫進這個子代理的日誌之後通知外面（#1536）。拋錯只講一聲，不影響輪次，也不當成「寫不進 turn/failed」。 */
-  #notifyTurnFailed(job: Job, failed: SessionEvent<'turn/failed'>): void {
+  #notifyTurnFailed(job: Job, sessionId: string, failed: SessionEvent<'turn/failed'>): void {
     if (this.#onTurnFailed === undefined) return;
     const failure = failed.data.error;
     try {
       this.#onTurnFailed({
         runId: job.runId,
+        sessionId,
         seq: failed.seq,
         code: failure?.code ?? 'UNKNOWN',
         ...(failure?.status !== undefined && { status: failure.status }),

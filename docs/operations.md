@@ -612,7 +612,7 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 | `level` | `error`／`warn`／`info`／`debug` |
 | `logger` | logger 名（`serve`、`invariant`，樹上插件是它的名稱） |
 | `msg` | 訊息本文（錯誤物件放 `stack`，沒有就放 `message`；物件參數用 `util.inspect` 的形式） |
-| `thread_id`、`run_id`、`seq`、`code`、`status`、`provider_request_id` | 只有 `[回合] … 失敗` 那一行帶（見〈從回報追到請求〉）；其他行沒有這幾個鍵。`provider_request_id` 沒有就不出現，超過 200 字元的截斷接 `…` |
+| `thread_id`、`run_id`、`session_id`、`seq`、`code`、`status`、`provider_request_id` | 只有 `[回合] … 失敗` 那一行帶（見〈從回報追到請求〉）；其他行沒有這幾個鍵。`provider_request_id` 沒有就不出現，超過 200 字元的截斷接 `…` |
 
 欄位名取 OTel Logs 資料模型的慣用語意，但**不引入 OTel SDK、不送出去**：只寫標準輸出，和文字格式同一個出口。
 
@@ -636,6 +636,7 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 | `thread "t1"` | 會話日誌的檔名：`<harness home>/sessions/<專案目錄>/t1.jsonl` |
 | `run "…"` | 使用者那一句話在佇列上的編號（`run.start` 回的 `run_id`）。續答核准、不是從佇列來的輪沒有這一段；背景子代理失敗時是子代理自己的 run id，thread 是派它的主對話 |
 | `日誌第 N 筆` | 那份 `.jsonl` 裡 `seq` 等於 N 的事件，就是這一輪的 `turn/failed`；失敗訊息本文在它的 `data.message` |
+| `子代理日誌 "t1/bg-1" 第 N 筆` | **背景子代理**失敗時，N 是子代理**自己那份日誌**的 `seq`（不是 `t1.jsonl` 的），日誌 id 是 `<thread>/<run_id>`。檔案在同一個專案目錄底下，檔名把 `/` 編成 `%2f`：`sessions/<專案目錄>/t1%2fbg-1.jsonl`（run id 含大寫或很長時檔名尾巴會多一段摘要，用 `ls …/t1%2fbg-1*` 照前綴找） |
 | `SERVER`、`status=502` | 失敗碼與 HTTP 狀態（沒有狀態就省略） |
 | `request_id=gw-123` | 模型供應商回應標頭裡的請求編號（`request-id`、`x-request-id`、`x-deepseek-request-id`，取第一個非空的）。拿它去問閘道那一側「哪一次請求」；沒有這幾個標頭就省略 |
 
@@ -644,12 +645,14 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1.jsonl
 # 這一條 thread 上所有重試過的失敗，各帶自己的請求編號：
 jq -c 'select(.type == "llm/retry") | .data.failure' ~/.nexus-agent/sessions/<專案目錄>/t1.jsonl
+# 背景子代理那一行（子代理日誌 "t1/bg-1"）：讀它自己的檔，不是 t1.jsonl：
+jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1%2fbg-1.jsonl
 ```
 
 - **這一行不放失敗訊息本文**：訊息可能帶路徑或使用者內容，那些只在會話日誌，誰能讀照會話日誌的規矩。
-- JSON 格式下，同樣的資料是 `thread_id`、`run_id`、`seq`、`code`、`status`、`provider_request_id` 這幾個鍵（見上面的欄位表），`msg` 仍是上面那行文字。
-- **已知缺口**：供應商在串流**中段**才送錯誤信封（HTTP 200 開線之後）時，SDK 丟出的錯誤沒有回應標頭，`turn/failed` 沒有請求編號；
-  這種情況下重試紀錄（`llm/retry`）有，因為它是在串流層、手上還握著回應標頭時記的。
+- JSON 格式下，同樣的資料是 `thread_id`、`run_id`、`session_id`（只有背景子代理有，就是上表的子代理日誌 id）、`seq`、`code`、`status`、`provider_request_id` 這幾個鍵（見上面的欄位表），`msg` 仍是上面那行文字。
+- **串流中段才送來的錯誤信封**（HTTP 200 開線之後，`data: {"error":…}`）：SDK 丟出的錯誤帶著回應標頭，所以 `turn/failed` 與 `llm/retry` 兩邊都有請求編號（實測、有測試釘著）。
+  這種情況 `turn/failed` 的失敗碼目前是 `UNKNOWN`、沒有 status，`llm/retry` 記的卻是 `SERVER`／503；分類的落差另案處理（#1763），不影響用請求編號追。
 - **請求錯誤行**：`[請求] <方法> <路徑> 處理失敗，回 400：…` 帶方法與路徑（只有 pathname，**不帶 `?` 後面的 query**，`/?token=` 的權杖在 query 裡），
   管理者才知道是哪一個請求。
 

@@ -912,7 +912,12 @@ export interface TurnFailedReport {
   readonly threadId: string;
   /** 這一輪的 `run_id`（送出佇列那一件的 id）。不是從佇列領走的輪（續答核准、直接叫 `submit` 的）沒有。 */
   readonly runId?: string;
-  /** 剛寫的那一筆 `turn/failed` 在會話日誌裡的 `seq`，用它回頭讀日誌。 */
+  /**
+   * `seq` 屬於哪一份日誌。**只有背景子代理的失敗才有**（它的 `turn/failed` 寫在子代理自己那份日誌，id 是 `<thread>/<runId>`）；
+   * 沒有＝就是 `threadId` 這條 thread 自己的日誌。
+   */
+  readonly sessionId?: string;
+  /** 剛寫的那一筆 `turn/failed` 在 {@link sessionId}（沒有就是 thread 自己）那份會話日誌裡的 `seq`，用它回頭讀日誌。 */
   readonly seq: number;
   readonly code: string;
   readonly status?: number;

@@ -69,6 +69,9 @@ export interface StartWireServerOptions {
    * 一個請求處理失敗時往哪裡講（見 {@link startWireServer} 的最後一道防線）。預設 `console.warn`。
    * 第二個參數是那個請求的方法與 pathname（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)），管理者才知道是哪一個請求。
    * **`path` 只有 pathname，不帶 query**：`/?token=…` 的權杖在 query 裡，進日誌就洩了。
+   *
+   * **與 dsh 的偏離（理由 2：產品需求超出 dsh）**：dsh 的 webserver 最後一道防線只記錯誤本身（`packages/host/webserver/src/index.ts`）。
+   * nexus 是多人共用的 `serve`，管理者要從使用者回報的時間找到是哪一個請求，所以多帶方法與 pathname。
    */
   readonly warn?: (error: Error, request: WarnedRequest) => void;
   /**

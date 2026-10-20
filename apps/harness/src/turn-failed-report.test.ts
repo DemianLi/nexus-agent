@@ -6,6 +6,7 @@
  * `turn-failed-log-wiring.test.ts`。
  */
 
+import { TURN_CANCEL_CONFIG_KEY, TurnBlockedError } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
 import { ThreadPump } from './thread-pump.js';
@@ -113,6 +114,49 @@ describe('ThreadPump 的 onTurnFailed', () => {
     }
     expect(pump.sessionLog.events.filter((event) => event.type === 'turn/failed')).toHaveLength(2);
     expect(pump.running).toBe(false);
+  });
+
+  it('按停止：這一輪以 aborted 收，不是失敗，回報 0 次', async () => {
+    const reports: TurnFailedReport[] = [];
+    // 一直等到這一輪的中止訊號舉起來，才拋（被切斷的請求拋什麼看供應商，pump 認的是訊號）。
+    let started: () => void = () => undefined;
+    const running = new Promise<void>((resolve) => (started = resolve));
+    const waiting: PumpAgent = {
+      streamEvents: (_input: unknown, config: { configurable: Record<string, unknown> }) =>
+        new Promise((_resolve, reject) => {
+          started();
+          const signal = config.configurable[TURN_CANCEL_CONFIG_KEY] as AbortSignal;
+          signal.addEventListener('abort', () => reject(new Error('被切斷')), { once: true });
+        }),
+      getState: () => Promise.resolve({ values: {} }),
+      updateState: () => Promise.resolve(undefined),
+    } as unknown as PumpAgent;
+    const pump = pumpWith(waiting, (report) => reports.push(report));
+    const done = pump.submit({ kind: 'message', text: '嗨' });
+    await running;
+    expect(pump.cancel()).toBe('run');
+    await done;
+    await settle(pump);
+
+    expect(reports).toEqual([]);
+    const types = pump.sessionLog.events.map((event) => event.type);
+    expect(types).not.toContain('turn/failed');
+    expect(pump.sessionLog.events.find((event) => event.type === 'turn/end')?.data).toMatchObject({
+      reason: { kind: 'aborted' },
+    });
+  });
+
+  it('準入閘門擋下（封存的會話）：這一輪以 blocked 收，不是失敗，回報 0 次', async () => {
+    const reports: TurnFailedReport[] = [];
+    const pump = pumpWith(failingAgent(new TurnBlockedError()), (report) => reports.push(report));
+    await pump.submit({ kind: 'message', text: '嗨' });
+    await settle(pump);
+
+    expect(reports).toEqual([]);
+    expect(pump.sessionLog.events.some((event) => event.type === 'turn/failed')).toBe(false);
+    expect(pump.sessionLog.events.find((event) => event.type === 'turn/end')?.data).toMatchObject({
+      reason: { kind: 'blocked' },
+    });
   });
 
   it('沒有掛回呼：照常失敗收尾', async () => {

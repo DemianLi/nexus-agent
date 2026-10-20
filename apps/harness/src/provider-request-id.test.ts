@@ -23,7 +23,7 @@ import { liveModelConfigSchema, streamRetryOptionsOf } from './settings/live-mod
 
 const RETRIES = 2;
 
-type Cell = 'http502' | 'inband503' | 'midstream';
+type Cell = 'http502' | 'inband503' | 'inbandMid' | 'midstream';
 
 let server: Server;
 let baseUrl: string;
@@ -50,6 +50,18 @@ beforeEach(async () => {
     if (cell === 'inband503') {
       response.write(
         `data: ${JSON.stringify({ error: { message: 'in-band failure', type: 'x', code: 503 } })}\n\n`,
+      );
+      response.end('data: [DONE]\n\n');
+      return;
+    }
+    if (cell === 'inbandMid') {
+      // 先送一則內容，**再**送錯誤信封：第一則事件不是錯誤，`withInbandStreamErrors` 的「首事件」那條路不管它，
+      // 錯誤是 SDK 在串流中段讀到、自己拋的（`openai` 的 `core/streaming`，丟的 `APIError` 帶著回應標頭）。
+      response.write(
+        `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 0, model: 'm', choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: null }] })}\n\n`,
+      );
+      response.write(
+        `data: ${JSON.stringify({ error: { message: 'mid in-band failure', type: 'x', code: 503 } })}\n\n`,
       );
       response.end('data: [DONE]\n\n');
       return;
@@ -136,6 +148,19 @@ describe('供應商請求編號進 llm/retry 與 turn/failed', () => {
       status: 503,
       requestId: 'gw-inband',
     });
+  }, 30_000);
+
+  it('串流中段才送錯誤信封（200 開線、先有內容、再來 in-band 錯誤）：llm/retry 與最後的失敗分類都帶得到', async () => {
+    cell = 'inbandMid';
+    headers = { 'x-request-id': 'gw-midin' };
+    const { log, error } = await run();
+
+    expect(hits).toBe(RETRIES + 1);
+    const failures = retryFailures(log);
+    expect(failures).toHaveLength(RETRIES);
+    for (const failure of failures) expect(failure.requestId).toBe('gw-midin');
+    // 碼是另一件事（中段 in-band 的 `turn/failed` 目前記 UNKNOWN、`llm/retry` 記 SERVER，#1763）；這一格只管請求編號。
+    expect(classifyTurnFailure(error).requestId).toBe('gw-midin');
   }, 30_000);
 
   it('串流中段才斷：llm/retry 與最後的失敗分類都帶得到回應標頭裡的編號', async () => {

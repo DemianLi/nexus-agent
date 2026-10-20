@@ -26,6 +26,7 @@ import { ConsoleExporter } from '@nexus/cordis-plugin-logger-console';
 
 import { DEFAULT_SHOW_TIME, loggerConsoleConfigSchema } from './settings/logger-console.js';
 import type { LogLevelName, LoggerConsoleConfig } from './settings/logger-console.js';
+import type { TurnFailedFields } from './turn-failed-log.js';
 
 /** 等級名稱換成 vendor `LoggerLevel` 的數字，見檔頭「等級順序」。 */
 export const LOG_LEVEL_NUMBERS: Readonly<Record<LogLevelName, number>> = {
@@ -65,6 +66,7 @@ export function defaultLoggerConsoleConfig(): LoggerConsoleConfig {
 type ThreadedMessage = Message & {
   thread_id?: unknown;
   run_id?: unknown;
+  session_id?: unknown;
   seq?: unknown;
   code?: unknown;
   status?: unknown;
@@ -75,6 +77,7 @@ type ThreadedMessage = Message & {
 const JSON_META_FIELDS = [
   ['thread_id', 'string'],
   ['run_id', 'string'],
+  ['session_id', 'string'],
   ['seq', 'number'],
   ['code', 'string'],
   ['status', 'number'],
@@ -162,7 +165,7 @@ export interface ServerLog {
    * `serve` logger，但這一條帶著結構化欄位（#1536）：JSON 模式多出 `thread_id`、`run_id`、`seq`、`code`、`status`、`provider_request_id`
    * 這幾個鍵，文字模式的行不變。**每次回新的 logger**，欄位不會漏到別的行。
    */
-  serveWith(fields: object): Logger;
+  serveWith(fields: TurnFailedFields): Logger;
   /**
    * 用讀完清單的設定掛 exporter 並回放緩衝。**只有第一次有效**：已經掛過（例如更早的失敗路徑用了出廠設定）就不再掛第二顆，
    * 否則同一則話會印兩次。

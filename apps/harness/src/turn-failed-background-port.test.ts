@@ -73,13 +73,22 @@ describe('背景子代理的失敗通知', () => {
     expect(port?.onTurnFailed).toBeTypeOf('function');
     port!.onTurnFailed!({
       runId: 'bg-1',
+      sessionId: 't-bg/bg-1',
       seq: 7,
       code: 'SERVER',
       status: 502,
       requestId: 'gw-sub',
     });
     expect(received).toEqual([
-      { threadId: 't-bg', runId: 'bg-1', seq: 7, code: 'SERVER', status: 502, requestId: 'gw-sub' },
+      {
+        threadId: 't-bg',
+        runId: 'bg-1',
+        sessionId: 't-bg/bg-1',
+        seq: 7,
+        code: 'SERVER',
+        status: 502,
+        requestId: 'gw-sub',
+      },
     ]);
     await handler.close();
     await running.close();

@@ -91,7 +91,7 @@ async function failingTurn(where: ReturnType<typeof layout>) {
   })) as RunningServe;
   const client = await serveClient(running);
   const events = await client.openEvents('t1');
-  await client.runStart('t1', '嗨');
+  const started = (await client.runStart('t1', '嗨')) as { result: { run_id: string } };
   await foldTurn(events);
   await events.return?.(undefined);
   // 收線會排空並關檔——落盤的驗收只有在 `close()` 之後才成立。
@@ -105,7 +105,7 @@ async function failingTurn(where: ReturnType<typeof layout>) {
     .split('\n')
     .filter((line) => line.length > 0)
     .map((line) => JSON.parse(line) as SessionEvent);
-  return { raw, lines, session, sessionText: text };
+  return { raw, lines, session, sessionText: text, runId: started.result.run_id };
 }
 
 beforeEach(async () => {
@@ -123,13 +123,17 @@ afterEach(async () => {
 
 describe('一輪失敗在伺服器日誌的那一行（文字模式）', () => {
   it('剛好一行 [回合]：帶 thread、run、SERVER、請求編號，日誌第 N 筆就是會話日誌的 turn/failed', async () => {
-    const { raw, lines, session } = await failingTurn(layout());
+    const { raw, lines, session, runId } = await failingTurn(layout());
 
     const failedLines = lines.filter((line) => line.startsWith('[回合]'));
     expect(failedLines).toHaveLength(1);
     const line = failedLines[0]!;
+    // run id 就是 `run.start` 回給呼叫端的那一個（不是隨便一個非空字串）。
     expect(line).toMatch(
-      /^\[回合\] thread "t1" run "[^"]+" 失敗（日誌第 (\d+) 筆）：SERVER status=502 request_id=gw-123$/u,
+      new RegExp(
+        `^\\[回合\\] thread "t1" run "${runId}" 失敗（日誌第 (\\d+) 筆）：SERVER status=502 request_id=gw-123$`,
+        'u',
+      ),
     );
     const seq = Number(/日誌第 (\d+) 筆/u.exec(line)![1]);
     expect(session[seq]?.type).toBe('turn/failed');
@@ -151,7 +155,7 @@ describe('一輪失敗在伺服器日誌的那一行（文字模式）', () => {
 describe('JSON 模式', () => {
   it('thread_id／run_id／seq／code／status／provider_request_id 各成一個鍵，本文沒有失敗訊息', async () => {
     const where = layout(['- id: logger-console', '  config:', '    format: json']);
-    const { raw, session, sessionText } = await failingTurn(where);
+    const { raw, session, sessionText, runId } = await failingTurn(where);
 
     const entries = raw
       .filter((line) => line.startsWith('{'))
@@ -162,11 +166,11 @@ describe('JSON 模式', () => {
       level: 'warn',
       logger: 'serve',
       thread_id: 't1',
+      run_id: runId,
       code: 'SERVER',
       status: 502,
       provider_request_id: 'gw-123',
     });
-    expect(typeof failed[0]!.run_id).toBe('string');
     expect(session[failed[0]!.seq as number]?.type).toBe('turn/failed');
     expect(sessionText).toContain('SECRET-PROBE');
     for (const line of raw) expect(line).not.toContain('SECRET-PROBE');
