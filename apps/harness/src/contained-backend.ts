@@ -483,7 +483,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * **不要改成自己 `resolve(this.cwd, …)`**：`danger-full-access` 下 `verdict` 不檢查、原樣回傳路徑，
    * 今天擋住 `..`、`~` 與跑出根的只剩這一道。
    */
-  private resolveVirtual(virtualPath: string): string {
+  protected resolveVirtual(virtualPath: string): string {
     return (this as unknown as { resolvePath(key: string): string }).resolvePath(virtualPath);
   }
 

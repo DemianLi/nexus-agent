@@ -99,6 +99,7 @@ import type {
 } from './background-subagents.js';
 import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 import { TextOnlyStateBackend } from './binary-read.js';
+import { createAttachmentScope } from './attachment-route.js';
 import { ATTACHMENTS_PREFIX } from './attachment-store.js';
 import type { AttachmentStore } from './attachment-store.js';
 import { systemPromptDefaultsEntry } from './system-prompt-middleware.js';
@@ -825,6 +826,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
 
     // 暫存的路由目標與外溢層的存檔服務是**同一個實例**：同一個會話目錄、同一套權限，外溢的檔與基座 eviction 的檔
     // 都落在模型 `read_file` 讀得到的同一條前綴底下（#719）。
+    // 附件路由只露出這條 thread 的 root 日誌引用過的檔（#1773）：路由在這裡建、比日誌接上還早，所以先建一個沒綁日誌的 scope，
+    // `attachSession` 才綁 root 日誌；綁之前路由什麼都不露出，每次呼叫當下才讀日誌（不是快照）。
+    const attachmentScope = createAttachmentScope();
     const stashRoute =
       options.toolResultStash === undefined
         ? undefined
@@ -837,7 +841,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         withToolResultStash(
           options.backend ?? new TextOnlyStateBackend(),
           stashRoute,
-          options.attachments === undefined ? undefined : await options.attachments.readOnlyRoute(),
+          options.attachments === undefined
+            ? undefined
+            : await options.attachments.readOnlyRoute(attachmentScope),
         ),
       ),
       ...(options.spillPolicy !== undefined &&
@@ -1114,6 +1120,8 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       ): SessionDetach {
         const installers = registry.sessions.installers();
         const unbind = registry.sessions.bind(sessions);
+        // 附件路由的判準讀這條 thread 的 root 日誌（#1773）。子代理用的是 root 的這一份 backend，所以子代理也讀 root 的，不讀自己的。
+        const unbindAttachmentScope = attachmentScope.bind(sessions.root);
         // 背景派出的 host：**在這裡建**（任何圖的環境之外），detach 時等進行中的輪收完。
         const closeHost = delegation?.attach(
           sessions,
@@ -1165,6 +1173,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
         const teardown = (): void => {
           unobserve();
           unbind();
+          unbindAttachmentScope();
           unregister?.();
           for (const stop of [...runners].reverse()) stop();
           runners.length = 0;
