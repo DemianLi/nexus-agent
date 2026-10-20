@@ -571,6 +571,43 @@ describe('E：不是供應商的錯，與被層層包住的供應商錯', () => 
     expect(classifyTurnFailure(wrapped).code).toBe('TRANSPORT');
   });
 
+  it('「模型呼叫」的記號標在 MiddlewareError 包裝層上（wrapModelCall 的 catch 實際拿到的）→ 仍認得串流中段的 in-band 錯誤（#1763）', () => {
+    // 形狀同 openai SDK 在串流中段拋的那顆：基底類別 APIError、沒有 status，信封在 `error`。
+    class APIError extends Error {
+      constructor(readonly error: unknown) {
+        super('mid in-band failure');
+      }
+    }
+    const inband = new APIError({ message: '過載', type: 'x', code: 503 });
+    // 標記標在包裝層，不是底下的供應商錯——`empty-response.ts` 的 catch 看到的就是基座包過的那一層。
+    const wrapped = MiddlewareError.wrap(MiddlewareError.wrap(inband, 'inner'), 'outer');
+    expect(classifyTurnFailure(wrapped).code).toBe('UNKNOWN');
+    let layer: unknown = wrapped;
+    while (MiddlewareError.isInstance(layer) && MiddlewareError.isInstance(layer.cause)) {
+      layer = layer.cause;
+    }
+    markModelCallFailure(layer);
+    expect(classifyTurnFailure(wrapped)).toMatchObject({ code: 'SERVER', status: 503 });
+  });
+
+  it('同一個標記位置對連線錯誤也成立；沒有標記的工具錯誤仍是 UNKNOWN（#1763）', () => {
+    const reset = new TypeError('fetch failed', {
+      cause: Object.assign(new Error('ECONNRESET'), { code: 'ECONNRESET' }),
+    });
+    const wrapped = MiddlewareError.wrap(reset, 'model');
+    expect(classifyTurnFailure(wrapped).code).toBe('UNKNOWN');
+    markModelCallFailure(wrapped);
+    expect(classifyTurnFailure(wrapped).code).toBe('TRANSPORT');
+    // 另一條沒被標的鏈（工具的錯）不受影響。
+    const tool = MiddlewareError.wrap(
+      new Error('MCP 伺服器連不上', {
+        cause: Object.assign(new Error('ECONNREFUSED'), { code: 'ECONNREFUSED' }),
+      }),
+      'mcp',
+    );
+    expect(classifyTurnFailure(tool).code).toBe('UNKNOWN');
+  });
+
   it('被包住的 422 與 408 也是 HTTP_<n>', () => {
     for (const status of [408, 422, 425]) {
       const inner = Object.assign(new Error(String(status)), { status });

@@ -1835,6 +1835,11 @@ export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
  * 供應商的錯在最底下。{@link causeLinks} 只展 10 層，所以直接丟進來**一個狀態都讀不到**。先沿 `cause` 拆到不是
  * `MiddlewareError` 為止，同 `turn-cancel.ts` 的 `isTurnCancelled`。
  *
+ * **拆的時候要留住模型呼叫的記號**（#1763）：`wrapModelCall` 的 catch（`empty-response.ts`）標的正是這些 `MiddlewareError` 其中一層，
+ * 不是底下的供應商錯。拆掉就丟，串流中段才送錯誤信封的那一輪在 `llm/retry` 是 `SERVER`／503（那條走 `onFailedAttempt`，錯誤沒被包），
+ * 在 `turn/failed` 卻是 `UNKNOWN`。拆的過程中任何一層有記號，就視為模型呼叫的錯。dsh 沒有這一格（它的 `LlmError` 沒有被中介層包過），
+ * 這是基座（LangChain 把 middleware 內的錯包成 `MiddlewareError`）帶來的，偏離理由 1。
+ *
  * `message` 是呼叫端照舊寫進 `turn/failed.message` 的那句（最外層的 `error.message`），不是底下那個：兩處同一句，
  * 讀的人不用猜哪個才是人話。
  *
@@ -1843,7 +1848,14 @@ export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
 export function classifyTurnFailure(error: unknown): LlmFailure {
   const message = error instanceof Error ? error.message : String(error);
   let root = error;
-  while (MiddlewareError.isInstance(root)) root = root.cause;
+  // 拆掉的 `MiddlewareError` 本身可能帶著「模型呼叫」的記號（#1763）：`wrapModelCall` 的 catch 拿到的就是基座包過的那一層
+  // （`empty-response.ts` 標的是它，不是底下的供應商錯），拆掉就丟了記號，「只看結構」的模型呼叫規則（串流中段的
+  // in-band `APIError`、`ECONNRESET`…）在真的一輪裡一條都不會觸發，落到 `UNKNOWN`。
+  let wrappedModelCall = false;
+  while (MiddlewareError.isInstance(root)) {
+    if (isModelCallFailure(root)) wrappedModelCall = true;
+    root = root.cause;
+  }
 
   let status: number | undefined;
   let requestId: string | undefined;
@@ -1859,7 +1871,7 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   let tooDeep = false;
   // 「只看結構」的連線與串流中段規則只套在模型呼叫拋的錯誤鏈上（工具 middleware 的錯不算）。
   const links = [...causeLinks(root)];
-  const modelCall = links.some((link) => isModelCallFailure(link));
+  const modelCall = wrappedModelCall || links.some((link) => isModelCallFailure(link));
   for (const link of links) {
     const found = (link as { status?: unknown }).status;
     if (status === undefined && typeof found === 'number') status = found;
