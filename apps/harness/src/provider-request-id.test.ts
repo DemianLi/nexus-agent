@@ -159,7 +159,8 @@ describe('供應商請求編號進 llm/retry 與 turn/failed', () => {
     const failures = retryFailures(log);
     expect(failures).toHaveLength(RETRIES);
     for (const failure of failures) expect(failure.requestId).toBe('gw-midin');
-    // 碼是另一件事（中段 in-band 的 `turn/failed` 目前記 UNKNOWN、`llm/retry` 記 SERVER，#1763）；這一格只管請求編號。
+    // 這一格只管請求編號。這裡直接呼叫 `model.stream`，錯誤沒經過圖裡的 `wrapModelCall`，沒有「模型呼叫」的記號，所以不斷言碼；
+    // 碼的對齊從 `runServe` 起量，見 `serve-inband-mid-failed.test.ts`（#1763）。
     expect(classifyTurnFailure(error).requestId).toBe('gw-midin');
   }, 30_000);
 
