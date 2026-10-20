@@ -656,6 +656,78 @@ jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1%2fbg-1.jsonl
 - **請求錯誤行**：`[請求] <方法> <路徑> 處理失敗，回 400：…` 帶方法與路徑（只有 pathname，**不帶 `?` 後面的 query**，`/?token=` 的權杖在 query 裡），
   管理者才知道是哪一個請求。
 
+## 探針與指標
+
+[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)。以前要知道 serve 活不活著，只能看 port 有沒有開、去 `ps`、讀 stdout。現在有三個路徑，**只在本機 loopback 上、只被動抓取、serve 不往任何地方送**：
+
+| 路徑 | 預設 | 要登入嗎 | 回應 |
+| --- | --- | --- | --- |
+| `GET /livez` | 開 | 不用 | `200 ok`：handler 跑得到就回，不查任何狀態（回得了，就代表事件圈在轉）。 |
+| `GET /readyz` | 開 | 不用 | `200 ok`：在聽、收尾還沒開始。`503 closing`：收尾已經開始（serve 收到 SIGTERM／SIGINT 後第一件事就是立旗）。 |
+| `GET /metrics` | **關** | `Authorization: Bearer <token>` | Prometheus 文字格式 0.0.4（`text/plain; version=0.0.4`）。 |
+
+- **三個路徑都先過信任圍欄**，跟 wire 同一道：`Host` 不是 loopback（`localhost`、`127.x.x.x`、`[::1]`）、`Sec-Fetch-Site: cross-site`、`Origin` 與 `Host` 不一致，一律 `403`。只收 `GET`／`HEAD`，其餘 `405`。
+- **探針免登入，本文只有狀態字**（`ok`／`closing`），不帶數字、版本或任何細節。同機的人用 `ss -ltn` 本來就看得到有一台 serve 在聽。
+- **thread 數到上限不算沒就緒。** 已經開著的 thread 照樣服務，而且同一個 home 只有一台 serve（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)），沒有別台可以分流；到上限要看指標（`nexus_threads` 對 `nexus_threads_max`），不看探針。
+- **探針語意取 Kubernetes 的分法**：`livez` 失敗＝該被重啟；`readyz` 失敗＝先別送新請求。systemd 用得上的是 `livez`（接 watchdog 或外面的監控腳本）；`readyz` 給前面有反向代理的部署。
+
+### 打開指標
+
+```yaml
+# ~/.nexus-agent/cordis.patch.yml
+- id: ops-endpoints
+  config:
+    metrics:
+      enabled: true
+      # tokenFile: /var/lib/nexus-agent/metrics-token   # 不寫就是 <home>/metrics-token
+```
+
+- **token 檔**：打開時 serve 讀 `<home>/metrics-token`，**沒有就建**：目錄 `0700`、檔 `0600`，內容是一個 43 字元的 base64url 加換行（裸的，不是 JSON，監控那一側原樣讀得了）。已存在的檔 group 或 other 有任何權限位元就**拒絕啟動**（訊息指名檔案），內容認不得也拒絕、不覆寫。要換 token 就刪掉檔再重啟，並更新監控那一側。
+- **缺或錯的 bearer 一律 `401`**，不說是哪一種。**會話 cookie 換不到指標，反過來指標的 token 也換不到 wire**：避免把瀏覽器的 cookie 交給監控系統。
+- 啟動日誌印一行 `探針：…；指標：關` 或 `指標：開 /metrics（要 Authorization: Bearer，token 在 <路徑>）`，**不印 token 本身**。
+- **起動時讀一次，改了要重啟。** `probes.enabled: false` 可以把兩個探針路徑也關掉（回 `404`）。
+
+Prometheus 的設定（跟 serve 在同一台主機上抓）：
+
+```yaml
+scrape_configs:
+  - job_name: nexus-agent
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /var/lib/nexus-agent/metrics-token
+    static_configs:
+      - targets: ['127.0.0.1:8787']
+```
+
+手動看一眼：
+
+```bash
+curl -s -H "Authorization: Bearer $(cat /var/lib/nexus-agent/metrics-token)" http://127.0.0.1:8787/metrics
+```
+
+### 指標清單
+
+名單固定，**標籤不含 thread id 或路徑**，基數不隨使用者長。讀不到的來源整個不出現，**不回 0**。
+
+| 指標 | 型別 | 說明 |
+| --- | --- | --- |
+| `nexus_threads` | gauge | 行程裡的 thread 數（含建構中的，不含撤到一半的）。 |
+| `nexus_threads_closing` | gauge | 撤到一半、還佔著名額的 thread 數。 |
+| `nexus_threads_max` | gauge | thread 數上限（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）；`threads + closing` 到這個數就拒收新 thread。 |
+| `nexus_http_requests_total{surface,code_class}` | counter | 回完的請求數。`surface` 是 `wire`（`/threads`）、`web`（網頁與其他）、`ops`（這三個路徑）；`code_class` 是 `2xx`…`5xx`。 |
+| `nexus_turn_failures_total{code}` | counter | 失敗收場的回合數（含背景子代理），`code` 是失敗分類的碼，跟伺服器日誌 `[回合]` 那一行同一個。 |
+| `nexus_event_loop_delay_seconds{quantile="0.5\|0.99"}`、`nexus_event_loop_delay_max_seconds` | gauge | **上一次抓取以來**的事件圈延遲（`perf_hooks.monitorEventLoopDelay`，每次抓取後歸零）。事件圈被同步工作卡住時，`livez` 一樣會逾時，這個數字告訴你卡了多久。 |
+| `process_start_time_seconds` | gauge | 行程啟動的 Unix 時間。 |
+| `nexus_memory_rss_bytes`、`nexus_memory_heap_used_bytes` | gauge | 行程自己的 RSS 與 V8 heap（跟 `memory-gauge` 同一個量具，抓取當下現讀，**不需要**打開 `memory-gauge`）。 |
+| `nexus_cgroup_memory_current_bytes`、`nexus_cgroup_memory_max_bytes` | gauge | Linux cgroup 的用量與上限；沒有 cgroup 或 cgroup 沒設上限時對應的指標不出現。 |
+
+- **記憶體門檻警告不在這裡**：那是 `memory-gauge` 的 `warnAtPercent`（[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)），只寫日誌。告警規則與門檻是監控那一側的事。
+- **計數是行程內的**，serve 重啟歸零（Prometheus 的 `rate()` 認得 counter 重置）。
+- **不做的**：推送（OTel metrics、StatsD、remote write）、逐 thread 或逐使用者的指標（thread id 進標籤基數無上限，而且在共用主機上等於公開別人的活動）、逐請求延遲直方圖（SSE 長連線會把直方圖撐歪）、web 的管理畫面（等 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 的管理員身分）。
+- **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh（`1517a4db`）沒有探針端點，也沒有指標出口（唯一相關的是 OTel 的 `selfObsMeterProvider` 被刻意排除）。判準取公開的慣例（Kubernetes 的 `livez`／`readyz`、Prometheus 文字格式），逐點見 `apps/harness/src/ops-endpoints.ts` 的檔頭。這一列沒有新增任何出境路徑。
+- **將來若開 `--host`（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547)）**，「探針免登入、只在 loopback」的前提要重看；現在 serve 只綁 `127.0.0.1`。
+
 ## 用 systemd 常駐
 
 [#1502](https://github.com/DemianLi/nexus-agent/issues/1502) 刀 5。對象是 Release 打出來的 `nexus-agent-<版本>-linux-x64.tar.gz`（解開即用，目標機不用裝 pnpm、不用連 registry），
@@ -1103,7 +1175,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   （`agent-loop`、`recursion-limit`、`tool-fs-search` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
-  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`logger-console`、`memory-gauge`、`deliverable-files`、
+  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`logger-console`、`memory-gauge`、`ops-endpoints`、`deliverable-files`、
     `session-persistence`、`tool-text`、`projection-flush`、`downlink`、`tool-result-stash`、`spill-policy`、`background-subagents`、
     `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
     `agent-default-model` 不在這裡：沒帶 `--live` 時它在每條對話組裝時讀，改了新對話就生效。
