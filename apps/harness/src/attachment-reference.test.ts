@@ -6,7 +6,12 @@
 import type { SessionEvent } from '@nexus/core';
 import { describe, expect, it } from 'vitest';
 
-import { referencedImage } from './attachment-reference.js';
+import {
+  referencedAttachments,
+  referencedFilePaths,
+  referencedImage,
+  referencesAttachment,
+} from './attachment-reference.js';
 
 const sha = (c: string) => `sha256:${c.repeat(64)}`;
 const image = (c: string) =>
@@ -95,5 +100,74 @@ describe('referencedImage', () => {
         sha('a'),
       ),
     ).toBeUndefined();
+  });
+});
+
+const file = (c: string, name = 'a.txt') =>
+  ({ type: 'file', attachmentId: sha(c), name, bytes: 1 }) as const;
+const fileBlock = (c: string, name = 'a.txt') => {
+  const { type: _type, ...ref } = file(c, name);
+  return { type: 'nexus-file', attachment: ref };
+};
+
+describe('referencedAttachments／referencesAttachment／referencedFilePaths（#1773）', () => {
+  it('逐種事件列出檔案與圖兩種參照，依出現順序、不去重', () => {
+    const events = [
+      event('turn/start', { kind: 'message', text: 't', attachments: [file('a'), image('b')] }),
+      event('inbox/spliced', {
+        target: 'next-turn',
+        start: 0,
+        inserted: [{ id: 'q', text: '', source: { kind: 'user' }, attachments: [file('a')] }],
+      }),
+      event('user/message', { message: message([fileBlock('c'), block('d')]) }),
+      event('tool/result', { callId: 'c', isError: false, message: message([fileBlock('e')]) }),
+      event('assistant/message', { message: message([fileBlock('f')]) }),
+    ];
+    expect(
+      [...referencedAttachments(events)].map(
+        (found) => `${found.kind}:${found.ref.attachmentId[7]}`,
+      ),
+    ).toEqual(['file:a', 'image:b', 'file:a', 'file:c', 'image:d', 'file:e', 'file:f']);
+  });
+
+  it('檔案要 attachmentId 與檔名都對上；圖只比 attachmentId；種類不同不算', () => {
+    const events = [
+      event('turn/start', { kind: 'message', text: 't', attachments: [file('a'), image('b')] }),
+    ];
+    expect(
+      referencesAttachment(events, { kind: 'file', attachmentId: sha('a'), name: 'a.txt' }),
+    ).toBe(true);
+    expect(
+      referencesAttachment(events, { kind: 'file', attachmentId: sha('a'), name: 'b.txt' }),
+    ).toBe(false);
+    expect(
+      referencesAttachment(events, { kind: 'file', attachmentId: sha('b'), name: 'a.txt' }),
+    ).toBe(false);
+    expect(referencesAttachment(events, { kind: 'image', attachmentId: sha('b') })).toBe(true);
+    expect(referencesAttachment(events, { kind: 'image', attachmentId: sha('a') })).toBe(false);
+    expect(referencesAttachment([], { kind: 'image', attachmentId: sha('b') })).toBe(false);
+  });
+
+  it('referencedFilePaths：檔案換成 /前兩碼/hex/檔名；圖、壞雜湊、空檔名略過；同位元組不同檔名各一條', () => {
+    const events = [
+      event('turn/start', {
+        kind: 'message',
+        text: 't',
+        attachments: [
+          file('a'),
+          file('a', 'other.txt'),
+          image('b'),
+          { type: 'file', attachmentId: 'sha256:zz', name: 'bad.txt', bytes: 1 },
+          { type: 'file', attachmentId: sha('c'), name: '', bytes: 1 },
+          null,
+        ],
+      }),
+    ];
+    const hex = 'a'.repeat(64);
+    expect([...referencedFilePaths(events)].sort()).toEqual([
+      `/aa/${hex}/a.txt`,
+      `/aa/${hex}/other.txt`,
+    ]);
+    expect(referencedFilePaths([]).size).toBe(0);
   });
 });

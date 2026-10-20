@@ -20,8 +20,8 @@ import { createNexusAgent } from './agent-factory.js';
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { emptyCommandPoint, loopbackRequest, noSessions, TEST_BROWSER_AUTH } from './fixtures.js';
-import { toAgentInvocation } from './messages.js';
 import { ScriptedChatModel } from './scripted-model.js';
+import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
 import { createWireHandler } from './wire-handler.js';
 
@@ -213,11 +213,19 @@ describe('模型用 read_file 讀得到上傳的檔案', () => {
         backend: new ContainedFilesystemBackend({ rootDir: workspace, mode: 'read-only' }),
         attachments: store,
       });
+      // 路由只露出這條 thread 的日誌引用過的檔（#1773）：走 pump、訊息帶著檔案參照，日誌才接得上。
+      const pump = new ThreadPump(built.agent as unknown as PumpAgent, 'read-attachment');
+      const detach = built.attachSession(pump.sessions);
       try {
-        await built.agent.invoke(toAgentInvocation('讀那個檔案。'), {
-          configurable: { thread_id: 'read-attachment' },
+        await pump.submit({
+          kind: 'message',
+          text: '讀那個檔案。',
+          attachments: [{ type: 'file', ...saved }],
         });
+        await pump.whenIdle();
       } finally {
+        pump.close();
+        detach();
         await built.dispose();
       }
       expect(model.prompts.length).toBeGreaterThanOrEqual(3);

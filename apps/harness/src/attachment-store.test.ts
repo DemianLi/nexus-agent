@@ -7,8 +7,10 @@ import { createHash } from 'node:crypto';
 import { chmod, mkdtemp, readdir, readFile, rm, stat, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import type { SessionEvent } from '@nexus/core';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
+import { scopeOfEvents } from './attachment-route.js';
 import {
   AttachmentError,
   AttachmentStore,
@@ -34,6 +36,21 @@ const sha = (bytes: Uint8Array | string) => createHash('sha256').update(bytes).d
 async function* chunks(...parts: string[]): AsyncGenerator<Uint8Array> {
   for (const part of parts) yield Buffer.from(part);
 }
+
+/** 日誌只有一則 turn/start，引用給定的檔案參照：路由的 scope 用（#1773）。 */
+const scopeReferencing = (...refs: { attachmentId: string; name: string; bytes: number }[]) =>
+  scopeOfEvents([
+    {
+      type: 'turn/start',
+      seq: 0,
+      time: 0,
+      data: {
+        kind: 'message',
+        text: 't',
+        attachments: refs.map((ref) => ({ type: 'file', ...ref })),
+      },
+    } as unknown as SessionEvent,
+  ]);
 
 const mode = async (path: string) => (await stat(path)).mode & 0o777;
 
@@ -196,7 +213,7 @@ describe('參照的驗證', () => {
 describe('模型讀得到（唯讀路由）', () => {
   it('路由的根底下讀得到存的檔；寫、改都被擋', async () => {
     const ref = await store.save({ data: Buffer.from('第一行\n第二行\n'), name: '說明.txt' });
-    const route = await store.readOnlyRoute();
+    const route = await store.readOnlyRoute(scopeReferencing(ref));
     const relative = store.modelPathOf(ref).slice(ATTACHMENTS_PREFIX.length);
     const read = await route.read(relative);
     expect(read.error).toBeUndefined();
@@ -207,14 +224,14 @@ describe('模型讀得到（唯讀路由）', () => {
   });
 
   it('路由根在還沒有任何上傳時也存在（第一次 ls 不會說根不存在）', async () => {
-    const route = await store.readOnlyRoute();
+    const route = await store.readOnlyRoute(scopeReferencing());
     const listed = await route.ls('/');
     expect(listed.error).toBeUndefined();
   });
 
   it('路由只暴露 files：物件與暫存目錄讀不到', async () => {
     const ref = await store.save({ data: Buffer.from('x'), name: 'a.txt' });
-    const route = await store.readOnlyRoute();
+    const route = await store.readOnlyRoute(scopeReferencing(ref));
     const digest = ref.attachmentId.slice('sha256:'.length);
     const escaped = await route.read(`/../file-objects/${digest.slice(0, 2)}/${digest}`);
     expect(escaped.error).toBeDefined();
