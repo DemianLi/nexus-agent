@@ -3,6 +3,11 @@ import type { ContentBlock } from '@langchain/core/messages';
 import { AIMessage } from '@langchain/core/messages';
 import { fromLoggedMessage, loggedContentBlocks, toLoggedMessage } from './logged-message.js';
 import { resumedLog } from './fixtures.js';
+import {
+  SESSION_EVENT_DEPTH_EXCEEDED,
+  SESSION_EVENT_MAX_DEPTH,
+  SessionEventDepthError,
+} from './session-log.js';
 
 describe('loggedContentBlocks', () => {
   it('把字串轉成一塊 text', () => {
@@ -86,5 +91,29 @@ describe('fromLoggedMessage 推得回深巢狀的那一則（#1526）', () => {
     // 比對用 JSON.stringify：vitest 的 toEqual 是遞迴的。
     expect(JSON.stringify(backArgs)).toBe(JSON.stringify(args));
     expect(Object.isFrozen(backArgs)).toBe(false);
+  });
+});
+
+describe('toLoggedMessage 交給 toDict 之前先量（#1668）', () => {
+  const deepCall = (depth: number) =>
+    new AIMessage({
+      id: 'm1',
+      content: '',
+      tool_calls: [{ id: 'c1', name: 't', args: { v: deepMixed(depth) } }],
+    });
+
+  it('超過上限兩倍的先拒：帶碼的 SessionEventDepthError，不是 toDict 的 RangeError', () => {
+    let thrown: unknown;
+    try {
+      toLoggedMessage(deepCall(SESSION_EVENT_MAX_DEPTH * 2 + 100));
+    } catch (error) {
+      thrown = error;
+    }
+    expect(thrown).toBeInstanceOf(SessionEventDepthError);
+    expect((thrown as SessionEventDepthError).code).toBe(SESSION_EVENT_DEPTH_EXCEEDED);
+  });
+
+  it('比上限深、但不到兩倍的放行：交給日誌那一關拒，錯誤訊息才帶得到事件種類與路徑', () => {
+    expect(() => toLoggedMessage(deepCall(SESSION_EVENT_MAX_DEPTH + 300))).not.toThrow();
   });
 });

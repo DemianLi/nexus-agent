@@ -107,6 +107,7 @@ import {
   TURN_NOT_FOUND,
   SUBAGENT_SEND_METHOD,
   THREAD_AT_CAPACITY,
+  THREAD_HISTORY_TOO_DEEP,
   THREAD_IS_SUBAGENT,
   isSlashMethod,
   isWireChannel,
@@ -134,6 +135,7 @@ import {
   runsWhileBusy,
 } from '@nexus/plugin-commands';
 import { AttachmentError } from './attachment-store.js';
+import { CHECKPOINT_DEPTH_EXCEEDED } from './checkpoint-serde.js';
 import { answerElicitation } from './mcp-elicitation.js';
 import { referencedImage } from './attachment-reference.js';
 import type { AttachmentStore, FileAttachmentRef, ImageAttachmentRef } from './attachment-store.js';
@@ -1210,6 +1212,19 @@ export class SubagentSessionError extends Error {
   }
 }
 
+/** `cause` 鏈上（最多 10 環，同 `live-model.ts` 的 `causeLinks`）有沒有一環的 `code` 是 `code`。 */
+function hasCode(error: unknown, code: string): boolean {
+  const seen = new Set<unknown>();
+  let current = error;
+  for (let depth = 0; depth < 10; depth += 1) {
+    if (typeof current !== 'object' || current === null || seen.has(current)) return false;
+    if ((current as { code?: unknown }).code === code) return true;
+    seen.add(current);
+    current = (current as { cause?: unknown }).cause;
+  }
+  return false;
+}
+
 export function createWireHandler(options: WireHandlerOptions): IdleSweepingWireHandler {
   /**
    * 這台 server 的交付上限，**一個 server 解一次**。
@@ -1634,7 +1649,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    * 請求本身沒有錯，是這條 thread 起不來（壞掉的日誌、別的行程握著、目錄對不上……）。
    * 協定的錯誤碼裡沒有「thread 起不來」，最近的是 `unknown_error`——原因寫在 message 裡。
    * **例外是滿了**（{@link ThreadCapacityError}，[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）：那不是壞了，回 `thread_at_capacity`；
-   * 還有**這個 id 是子代理的會話**（{@link SubagentSessionError}，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）：回 `thread_is_subagent`。
+   * 還有**這個 id 是子代理的會話**（{@link SubagentSessionError}，[#1544](https://github.com/DemianLi/nexus-agent/issues/1544)）：回 `thread_is_subagent`；
+   * 以及**日誌裡有一則太深、灌不回存檔點**（`checkpoint_depth_exceeded`，[#1668](https://github.com/DemianLi/nexus-agent/issues/1668)）：回 `thread_history_too_deep`，
+   * 認 `cause` 鏈上任何一環的碼（同 `classifyTurnFailure` 認碼不認訊息）。
    *
    * @param threadId - 哪一條。
    * @param id - 回給哪一顆上行封包；下行那條沒有，是 `null`。
@@ -1656,6 +1673,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         return json(errorResponse(id, THREAD_IS_SUBAGENT, error.message));
       }
       const reason = error instanceof Error ? error.message : String(error);
+      // 日誌太深不是暫時壞了（#1668）：專用碼，重試沒用。訊息照舊帶「建不起來」與第幾顆事件、幾層。
+      if (hasCode(error, CHECKPOINT_DEPTH_EXCEEDED)) {
+        return json(errorResponse(id, THREAD_HISTORY_TOO_DEEP, `這條 thread 建不起來：${reason}`));
+      }
       return json(errorResponse(id, 'unknown_error', `這條 thread 建不起來：${reason}`));
     }
   }
