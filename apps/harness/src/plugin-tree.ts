@@ -27,7 +27,10 @@
  *
  * 「讀清單 → 推給樹 → 等收斂 → 取工具快照」是一段（{@link PluginTree.run}）：兩條 thread 同時組裝時各自要拿到
  * **跟自己讀到的清單相符**的工具，不能一條讀到舊清單、另一條推了新清單、它又取到新的。**只包這一段，不包整個組裝**。
- * 清單沒變時（簽章同上一次）不推，只重取快照。
+ * **每次都推，不比對「跟上一次一樣就跳過」**（[#1674](https://github.com/DemianLi/nexus-agent/issues/1674)，照 dsh `app-boot/src/index.ts` 每次直接推）：
+ * 推被 Include 拒了之後，Include 手上已經是被拒的那一份（它在套用之前先寫 `config`），宿主記的「上一次推出去的」卻還是更早那一份，
+ * 之後推回那一份會被當成沒變而跳過。同一份清單再推一次，Cordis 的 `update` 不動任何一列（量過：不重掛、不卸載、fiber 同一個、
+ * 自我停用不重講，每次多 0.1～0.2 毫秒），所以不需要這個快取。
  *
  * ## 收斂的語意（實測，`vendor/include/nexus-tests/convergence.spec.ts`）
  *
@@ -423,8 +426,6 @@ export class PluginTree {
   readonly #workspaceRoot: string | undefined;
   /** 串行化 {@link run}。 */
   #chain: Promise<unknown> = Promise.resolve();
-  /** 最後一次推給 Include 的設定簽章；一樣就不推。 */
-  #signature?: string;
   #epoch = 0;
   /** 契約不相容的錯誤，以消費者那一列的 id 為鍵：Cordis 把它交給提供者的 logger，要對回消費者得自己收。 */
   readonly #contractErrors = new Map<string, ContractError>();
@@ -598,13 +599,12 @@ export class PluginTree {
       only,
       ...(this.#epoch === 0 ? {} : { epoch: this.#epoch }),
     };
-    const signature = JSON.stringify(config);
     const loader = root.loader;
     const existing = this.#includeEntry(root);
     if (existing === undefined) {
       await this.#create(root, { id: INCLUDE_ROW_ID, name: `cordis:${INCLUDE_ROW_ID}`, config });
       await loader.await();
-    } else if (signature !== this.#signature) {
+    } else {
       // 推之前先抓住每一列現在的 fiber（#1636）：被刪掉的列先離開 Loader 的 store、才非同步收尾（`group.ts` 的 `remove` 不等），
       // `loader.await()` 看不到它。推完再等這些 fiber 收完，`sync` 回傳時清單上已經沒有的列都收完了（量過的是下面 `update` 那條路；
       // 抓的位置在分支前面，Include 不是 ACTIVE、整列重建那條路也一起等，但沒有測試走到它）。照 dsh `app-boot/src/index.ts` 的
@@ -632,7 +632,6 @@ export class PluginTree {
       await Promise.allSettled(previous.map((fiber) => fiber.await()));
       await loader.await();
     }
-    this.#signature = signature;
     if (this.#includeState(root) !== FIBER_STATE.ACTIVE) {
       const message = await this.#failureOf(root, INCLUDE_ROW_ID);
       throw new PluginTreeError(`Include 那一列沒有起來，清單推不上樹：${message}`);

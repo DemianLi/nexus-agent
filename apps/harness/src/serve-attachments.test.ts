@@ -81,11 +81,15 @@ describe('serve：上傳的檔案存進 NEXUS_AGENT_HOME，模型讀得到', () 
     const uploaded = await client.uploadFile(THREAD, new TextEncoder().encode(TEXT), 'notes.txt');
     // 前提：上傳真的被收下了（server 沒接附件儲存的話是 not_supported）。
     expect(uploaded).toMatchObject({ kind: 'ok', receipt: { name: 'notes.txt' } });
+    if (uploaded.kind !== 'ok') throw new Error('上傳沒被收下');
     const stored = join(attachmentsRootOf(home), 'files', digest.slice(0, 2), digest, 'notes.txt');
     expect((await stat(stored)).mode & 0o777).toBe(0o400);
 
     const events = await client.openEvents(THREAD);
-    await client.runStart(THREAD, '讀那份檔案。');
+    // 路由只露出這條 thread 的日誌引用過的檔（#1773）：訊息要把收據帶上，模型才讀得到。
+    await client.runStart(THREAD, '讀那份檔案。', {
+      attachments: [{ type: 'file', receiptId: uploaded.receipt.receiptId }],
+    });
     const state = await foldTurn(events);
     await events.return?.(undefined);
     // 暗號出現在線上的對話裡 ＝ 模型的 read_file 讀到了上傳的檔。

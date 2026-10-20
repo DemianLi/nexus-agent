@@ -65,8 +65,15 @@ export interface StartWireServerOptions {
   readonly host?: string;
   /** 先收完整份的路由的本文上限（位元組）。預設 {@link DEFAULT_MAX_REQUEST_BODY_BYTES}；超過回 413。串流路由不受管。 */
   readonly maxRequestBodyBytes?: number;
-  /** 一個請求處理失敗時往哪裡講（見 {@link startWireServer} 的最後一道防線）。預設 `console.warn`。 */
-  readonly warn?: (error: Error) => void;
+  /**
+   * 一個請求處理失敗時往哪裡講（見 {@link startWireServer} 的最後一道防線）。預設 `console.warn`。
+   * 第二個參數是那個請求的方法與 pathname（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)），管理者才知道是哪一個請求。
+   * **`path` 只有 pathname，不帶 query**：`/?token=…` 的權杖在 query 裡，進日誌就洩了。
+   *
+   * **與 dsh 的偏離（理由 2：產品需求超出 dsh）**：dsh 的 webserver 最後一道防線只記錯誤本身（`packages/host/webserver/src/index.ts`）。
+   * nexus 是多人共用的 `serve`，管理者要從使用者回報的時間找到是哪一個請求，所以多帶方法與 pathname。
+   */
+  readonly warn?: (error: Error, request: WarnedRequest) => void;
   /**
    * SSE 心跳間隔（毫秒），預設 {@link DEFAULT_SSE_HEARTBEAT_INTERVAL_MS}。連續 {@link MAX_MISSED_HEARTBEATS} 拍緩衝卡著、
    * 沒有任何排出去的進展，就斷那一條線（#1504）。
@@ -77,6 +84,11 @@ export interface StartWireServerOptions {
    * **和 {@link StartWireServerOptions.warn} 分開**：那一個的呼叫端會把每則訊息包成「處理失敗，回 400」。
    */
   readonly warnDisconnect?: (message: string) => void;
+  /**
+   * 每個請求回應時叫一次（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，請求計數用）：`path` 是 pathname（不含 query），`status` 是回的狀態碼。
+   * **早退的 413 與最後一道防線回的 400 也算**，所以計數反映的是實際送出的碼。SSE 長連線在回應開始時算一次。拋了也不影響回應。
+   */
+  readonly onResponse?: (info: { readonly path: string; readonly status: number }) => void;
 }
 
 /** 先收完整份的路由，本文超過上限。 */
@@ -289,6 +301,20 @@ async function writeResponse(
   }
 }
 
+/** 最後一道防線記錄的請求：方法與 pathname。 */
+export interface WarnedRequest {
+  readonly method: string;
+  readonly path: string;
+}
+
+/**
+ * 原始請求目標 → pathname：**在 `?` 與 `#` 前切開，不解析**。最後一道防線本來就會收到畸形的網址，`new URL()` 自己會拋，
+ * 拋了這一行就印不出來；用切的，畸形的也有結果，而 query 裡的權杖一個字都進不來。
+ */
+export function pathnameOf(target: string | undefined): string {
+  return (target ?? '').split(/[?#]/u, 1)[0] ?? '';
+}
+
 export async function startWireServer(options: StartWireServerOptions): Promise<WireServer> {
   const host = options.host ?? '127.0.0.1';
   const warn = options.warn ?? ((error: Error) => console.warn(error));
@@ -297,6 +323,17 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     options.heartbeatIntervalMs ?? DEFAULT_SSE_HEARTBEAT_INTERVAL_MS,
     options.warnDisconnect ?? ((message: string) => console.warn(message)),
   );
+  /** 一個請求只算一次：`handle` 內已經算過，最後一道防線就不再補算。 */
+  const counted = new WeakSet<IncomingMessage>();
+  const count = (incoming: IncomingMessage, path: string, status: number): void => {
+    if (options.onResponse === undefined || counted.has(incoming)) return;
+    counted.add(incoming);
+    try {
+      options.onResponse({ path, status });
+    } catch {
+      // 計數壞了不該連累回應。
+    }
+  };
   const handle = async (incoming: IncomingMessage, outgoing: ServerResponse): Promise<void> => {
     const address = server.address() as AddressInfo;
     const origin = `http://${host}:${address.port}`;
@@ -319,6 +356,7 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
     } catch (error: unknown) {
       if (!(error instanceof RequestBodyTooLarge)) throw error;
       // 413：回完就斷線——對方可能還在傳一份我們不收的本文，留著這條連線只會讓它被拿去當下一個請求的開頭。
+      count(incoming, pathnameOf(incoming.url), 413);
       outgoing.writeHead(413, { 'content-type': 'text/plain', connection: 'close' });
       outgoing.end('request body too large', () => incoming.destroy());
       return;
@@ -331,6 +369,7 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
       ...(streaming ? { duplex: 'half' } : {}),
     } as RequestInit);
     const response = await options.handler.handle(live);
+    count(incoming, path, response.status);
     if (streaming) {
       // 串流本文路由回應時本文可能還沒讀完（早退的 415、錯誤）：這條連線不能再當 keep-alive 用，
       // 回完就把沒讀完的請求端砍掉（照 dsh 的串流模式）。
@@ -355,11 +394,15 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
   // 整個行程退出：同機任何人送一個畸形的請求就能把 serve 打掉（#424 審查時實測過）。
   const server: Server = createServer((incoming, outgoing) => {
     void handle(incoming, outgoing).catch((error: unknown) => {
-      warn(error instanceof Error ? error : new Error(String(error)));
+      warn(error instanceof Error ? error : new Error(String(error)), {
+        method: incoming.method ?? '',
+        path: pathnameOf(incoming.url),
+      });
       if (outgoing.headersSent) {
         outgoing.destroy();
         return;
       }
+      count(incoming, pathnameOf(incoming.url), 400);
       outgoing.writeHead(400);
       outgoing.end();
     });

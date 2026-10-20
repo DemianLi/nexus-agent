@@ -369,6 +369,43 @@ function isAbortLike(error: unknown): boolean {
 const connectionFailures = new WeakSet<object>();
 
 /**
+ * 供應商請求編號的標頭名，**順序照 dsh**（`packages/llm/llm-deepseek/src/transport.ts:38-41`，`687f282e`）：取第一個有的。
+ * 第一則事件就是錯誤信封時，{@link withInbandStreamErrors} 合成的 Response 要把這幾個標頭（加 `retry-after`）搬過去，用的也是這一份名單，
+ * 不另寫一份（#1536）。
+ */
+export const PROVIDER_REQUEST_ID_HEADERS = [
+  'request-id',
+  'x-request-id',
+  'x-deepseek-request-id',
+] as const;
+
+/**
+ * 從標頭取供應商請求編號（#1536）：依 {@link PROVIDER_REQUEST_ID_HEADERS} 的順序，**第一個有這個標頭的就是它**；
+ * 空字串整格不帶，**不往下一個退**（照 dsh：`headers.get(a) ?? headers.get(b) ?? …` 之後再 `id ? … : {}`）。
+ * `Headers` 與純物件兩種形狀都認，同 {@link retryAfterMsOf}。
+ */
+export function requestIdOfHeaders(headers: unknown): string | undefined {
+  if (typeof headers !== 'object' || headers === null) return undefined;
+  const get = (headers as { get?: unknown }).get;
+  for (const name of PROVIDER_REQUEST_ID_HEADERS) {
+    const value =
+      typeof get === 'function'
+        ? (headers as Headers).get(name)
+        : (headers as Record<string, unknown>)[name];
+    if (value === null || value === undefined) continue;
+    return typeof value === 'string' && value.length > 0 ? value : undefined;
+  }
+  return undefined;
+}
+
+/**
+ * 串流中段才斷的錯誤物件 → 那條回應的供應商請求編號（#1536）。回應標頭在 fetch 回來時就拿到了，但串流中段拋的錯
+ * （undici 的 `terminated`、我們自己的完成檢查）身上沒有標頭，分類器沿錯誤鏈找不到；在標 {@link connectionFailures} 的同一刻標在這裡。
+ * 理由同 {@link connectionFailures}：用 `WeakMap`，不往別人的錯誤物件上塞欄位。
+ */
+const failureRequestIds = new WeakMap<object, string>();
+
+/**
  * HTTP 狀態 → 失敗碼。**整個專案唯一的一張表**（#1437）：分類器、第一則事件的錯誤信封、第一則事件之後的信封監看用同一張，
  * 所以同一個狀態不論從哪條路進來都是同一個碼。表的順序與詞彙照 dsh 的 `providerError`
  * （`packages/llm/llm-deepseek/src/transport.ts:22-35`）：
@@ -613,7 +650,7 @@ export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof 
     if (envelope !== undefined) {
       await reader.cancel();
       const headers = new Headers({ 'content-type': 'application/json' });
-      for (const name of ['retry-after', 'x-request-id', 'request-id']) {
+      for (const name of ['retry-after', ...PROVIDER_REQUEST_ID_HEADERS]) {
         const value = response.headers.get(name);
         if (value !== null) headers.set(name, value);
       }
@@ -628,6 +665,7 @@ export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof 
         : createInbandWatcher(
             report,
             buffered.slice(firstBoundary.index + firstBoundary[0].length),
+            requestIdOfHeaders(response.headers),
           );
 
     // 沒事：把嗅掉的那幾段原樣接回去。**接的是原始位元組**，不是解碼後再編碼回來的字串。
@@ -677,6 +715,7 @@ export function withInbandStreamErrors(baseFetch: typeof fetch = fetch): typeof 
 function createInbandWatcher(
   report: (failure: StreamFailure) => void,
   rest: string,
+  requestId?: string,
 ): (text: string) => void {
   let pending = '';
   let watching = true;
@@ -693,7 +732,11 @@ function createInbandWatcher(
           // 同一支分類器（#1437）：信封的狀態碼走 {@link failureCodeOfStatus}，`insufficient_quota` 之類走欄位。
           // 沒有數字碼的信封記 `SERVER`（照 dsh 的 `providerError`），與第一則事件那條一致。
           const status = inbandStatus(envelope);
-          report({ code: classifyInbandEnvelope(envelope, status).code, status });
+          report({
+            code: classifyInbandEnvelope(envelope, status).code,
+            status,
+            ...(requestId !== undefined && { requestId }),
+          });
           watching = false;
           pending = '';
           return;
@@ -781,6 +824,9 @@ export function withStreamIdleTimeout(
 
     // 當場鎖住 reader，理由同 withInbandStreamErrors。
     const report = streamFailureReporter();
+    // 串流中段才斷：回應標頭裡的請求編號此刻就在手上（#1536），回報時帶上。
+    const requestId = requestIdOfHeaders(response.headers);
+    const requestIdField = requestId === undefined ? {} : { requestId };
     const reader = response.body.getReader();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const watched = new ReadableStream<Uint8Array>(
@@ -797,15 +843,18 @@ export function withStreamIdleTimeout(
               next = await Promise.race([reader.read(), idle]);
             } catch (error: unknown) {
               if (error instanceof StreamIdleTimeoutError) {
-                report({ code: 'TIMEOUT' });
+                report({ code: 'TIMEOUT', ...requestIdField });
               } else if (!isAbortLike(error) && !(error instanceof UnknownFinishReasonError)) {
                 // 使用者中止的 AbortError 不回報——那是我們自己要的，不重打。
                 // 陌生的 finish_reason 也不回報（#1538，Q1 (a)）：那是回應本身的問題不是連線的，落到 `UNKNOWN`、不重打。
                 // **讀上游這一步失敗，定義上就是連線層的事**（#1437）：undici 的 `terminated`、`ERR_INCOMPLETE_CHUNKED_ENCODING`。
                 // 標在這顆錯上，分類器認記號，`turn/failed` 才與這裡同一個 `TRANSPORT`；解不開的回應（SDK 讀完才解析出錯）
                 // 不經過這一步，所以不會被當成連線問題重打（Q2 (a)）。
-                if (typeof error === 'object' && error !== null) connectionFailures.add(error);
-                report({ code: 'TRANSPORT' });
+                if (typeof error === 'object' && error !== null) {
+                  connectionFailures.add(error);
+                  if (requestId !== undefined) failureRequestIds.set(error, requestId);
+                }
+                report({ code: 'TRANSPORT', ...requestIdField });
               }
               throw error;
             }
@@ -931,6 +980,7 @@ export function withStreamCompletionCheck(baseFetch: typeof fetch = fetch): type
     }
 
     // 當場鎖住 reader，理由同 withInbandStreamErrors。
+    const requestId = requestIdOfHeaders(response.headers);
     const reader = response.body.getReader();
     // 還沒收尾的那一則事件的位元組：**扣著不交**，收尾了才連同前面完整的事件一起交下去。這樣觸發點那則事件之前的位元組
     // 可以照常交給下游（SDK 先把它們解析完，例如先遇到解不開的事件就拋它自己的錯），錯誤留到下一次讀才丟。
@@ -980,7 +1030,8 @@ export function withStreamCompletionCheck(baseFetch: typeof fetch = fetch): type
     ): void => {
       if (failure instanceof StreamEndedWithoutFinishError) {
         connectionFailures.add(failure);
-        report({ code: 'TRANSPORT' });
+        if (requestId !== undefined) failureRequestIds.set(failure, requestId);
+        report({ code: 'TRANSPORT', ...(requestId !== undefined && { requestId }) });
       }
       void reader.cancel(failure).catch(() => {});
       controller.error(failure);
@@ -1784,6 +1835,11 @@ export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
  * 供應商的錯在最底下。{@link causeLinks} 只展 10 層，所以直接丟進來**一個狀態都讀不到**。先沿 `cause` 拆到不是
  * `MiddlewareError` 為止，同 `turn-cancel.ts` 的 `isTurnCancelled`。
  *
+ * **拆的時候要留住模型呼叫的記號**（#1763）：`wrapModelCall` 的 catch（`empty-response.ts`）標的正是這些 `MiddlewareError` 其中一層，
+ * 不是底下的供應商錯。拆掉就丟，串流中段才送錯誤信封的那一輪在 `llm/retry` 是 `SERVER`／503（那條走 `onFailedAttempt`，錯誤沒被包），
+ * 在 `turn/failed` 卻是 `UNKNOWN`。拆的過程中任何一層有記號，就視為模型呼叫的錯。dsh 沒有這一格（它的 `LlmError` 沒有被中介層包過），
+ * 這是基座（LangChain 把 middleware 內的錯包成 `MiddlewareError`）帶來的，偏離理由 1。
+ *
  * `message` 是呼叫端照舊寫進 `turn/failed.message` 的那句（最外層的 `error.message`），不是底下那個：兩處同一句，
  * 讀的人不用猜哪個才是人話。
  *
@@ -1792,9 +1848,18 @@ export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
 export function classifyTurnFailure(error: unknown): LlmFailure {
   const message = error instanceof Error ? error.message : String(error);
   let root = error;
-  while (MiddlewareError.isInstance(root)) root = root.cause;
+  // 拆掉的 `MiddlewareError` 本身可能帶著「模型呼叫」的記號（#1763）：`wrapModelCall` 的 catch 拿到的就是基座包過的那一層
+  // （`empty-response.ts` 標的是它，不是底下的供應商錯），拆掉就丟了記號，「只看結構」的模型呼叫規則（串流中段的
+  // in-band `APIError`、`ECONNRESET`…）在真的一輪裡一條都不會觸發，落到 `UNKNOWN`。
+  let wrappedModelCall = false;
+  while (MiddlewareError.isInstance(root)) {
+    if (isModelCallFailure(root)) wrappedModelCall = true;
+    root = root.cause;
+  }
 
   let status: number | undefined;
+  let requestId: string | undefined;
+  let requestIdSearched = false;
   let inband: number | undefined;
   let quota = false;
   let overflow = false;
@@ -1806,10 +1871,20 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   let tooDeep = false;
   // 「只看結構」的連線與串流中段規則只套在模型呼叫拋的錯誤鏈上（工具 middleware 的錯不算）。
   const links = [...causeLinks(root)];
-  const modelCall = links.some((link) => isModelCallFailure(link));
+  const modelCall = wrappedModelCall || links.some((link) => isModelCallFailure(link));
   for (const link of links) {
     const found = (link as { status?: unknown }).status;
     if (status === undefined && typeof found === 'number') status = found;
+    // 供應商請求編號（#1536）：回應的標頭在錯誤鏈上某一環的 `headers`，或串流中段才斷時標在 {@link failureRequestIds}。
+    // 沿鏈找到第一個帶有非空編號的環就停（錯誤鏈由外往內走，最外層帶標頭的那一環先贏）。
+    if (!requestIdSearched) {
+      const tagged = failureRequestIds.get(link);
+      const fromHeaders = tagged ?? requestIdOfHeaders((link as { headers?: unknown }).headers);
+      if (fromHeaders !== undefined) {
+        requestId = fromHeaders;
+        requestIdSearched = true;
+      }
+    }
     const { code, type, name } = link as { code?: unknown; type?: unknown; name?: unknown };
     if (code === 'insufficient_quota' || type === 'insufficient_quota') quota = true;
     if (name === 'RateLimitQuotaExhaustedError' || name === 'InsufficientQuotaError') quota = true;
@@ -1855,7 +1930,12 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
                         : connection
                           ? 'TRANSPORT'
                           : 'UNKNOWN';
-  return { message, code, ...(status !== undefined && { status }) };
+  return {
+    message,
+    code,
+    ...(status !== undefined && { status }),
+    ...(requestId !== undefined && { requestId }),
+  };
 }
 
 /**
@@ -1907,6 +1987,7 @@ function classifyAndReportFailedAttempt(error: unknown): void {
     noteStreamFailure({
       code: failure.code,
       ...(failure.status !== undefined && { status: failure.status }),
+      ...(failure.requestId !== undefined && { requestId: failure.requestId }),
       ...(retryAfterMs !== undefined && { retryAfterMs }),
     });
   }

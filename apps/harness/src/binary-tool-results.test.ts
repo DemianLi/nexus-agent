@@ -88,11 +88,9 @@ describe('後端照 dsh 看內容判二進位', () => {
     expect(typeof result.content).toBe('string');
   });
 
-  it('偏離：副檔名判成非文字、內容卻是合法文字，一樣拒成 binary file（dsh 照讀）', async () => {
+  it('看內容，不看副檔名（#1530 撤掉 #642 的偏離）：副檔名判成非文字、內容卻是合法文字，照讀', async () => {
     await writeFile(join(root, 'fake.png'), 'just text\n');
-    expect(await backend().read('/fake.png')).toEqual({
-      error: 'cannot read "/fake.png": binary file',
-    });
+    expect(await backend().read('/fake.png')).toMatchObject({ content: 'just text\n' });
   });
 
   it('UTF-8 的中文與 SVG 照讀，內容一字不差', async () => {

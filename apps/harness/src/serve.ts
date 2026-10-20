@@ -55,6 +55,7 @@ import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
 import type { CordisRoot, NexusAssembly } from './cordis-root.js';
 import { createServerLog } from './server-log.js';
 import type { ServerLog } from './server-log.js';
+import { turnFailedFields, turnFailedMessage } from './turn-failed-log.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { createColdChildStore } from './background-cold.js';
@@ -148,9 +149,13 @@ import { threadTitlePlugin } from './settings/thread-title.js';
 import { threadTitleLlmPlugin } from './settings/thread-title-llm.js';
 import { downlinkPlugin } from './settings/downlink.js';
 import { startMemoryGauge } from './memory-gauge.js';
+import { loadOrCreateMetricsToken, METRICS_TOKEN_FILE } from './metrics-token.js';
+import { createOpsEndpoints, isOpsPath, OpsMetrics, surfaceOf } from './ops-endpoints.js';
+import type { OpsEndpoints } from './ops-endpoints.js';
 import type { MemoryGaugeDeps } from './memory-gauge.js';
 import { createMemoryPressureWatch, memoryUsageSource } from './memory-pressure.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
+import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
 import { threadCapacityPlugin } from './settings/thread-capacity.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
@@ -356,8 +361,9 @@ function resolveWebDist(): string {
 }
 
 /**
- * 按路徑把請求分給兩個面（[#424](https://github.com/DemianLi/nexus-agent/issues/424)）。
+ * 按路徑把請求分給三個面（[#424](https://github.com/DemianLi/nexus-agent/issues/424)、[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)）。
  *
+ * `/livez`、`/readyz`、`/metrics` 給探針與指標（先過信任圍欄，見 `ops-endpoints.ts`）——**排在 `/threads` 的判斷之前**；
  * `/threads` 與它底下的路徑給 wire——圍欄、會話 cookie、JSON 閘門都在那裡；其他給網頁的靜態服務。
  * 換 token 的 `GET /?token=` 因此碰不到 wire 的 JSON 閘門（瀏覽器導覽不帶 `content-type`），照 dsh：
  * index 走 `frontend-static` 的 `authorizeIndex`，API 走 `requestRejection`。
@@ -365,10 +371,12 @@ function resolveWebDist(): string {
 function routeBySurface(
   wire: WireHandler,
   web: (request: Request) => Promise<Response>,
+  ops: OpsEndpoints,
 ): WireHandler {
   return {
     handle: (request) => {
       const { pathname } = new URL(request.url);
+      if (isOpsPath(pathname)) return ops.handle(request);
       return pathname === THREADS_PATH || pathname.startsWith(`${THREADS_PATH}/`)
         ? wire.handle(request)
         : web(request);
@@ -703,6 +711,8 @@ async function startServer(
   // 下行串流的心跳間隔與每條線的位元組上限（#1504）。**兩個消費點在兩處**：心跳間隔交給 `startWireServer`（socket 那一層），位元組上限交給
   // `createWireHandler`（訂閱者佇列）。預設開、關不掉（`plugin-config.ts` 的 `PROTECTED_ENTRY_REASONS`）。
   const downlink = startupSetting(plugins, downlinkPlugin);
+  // 探針與指標（#1535）：探針預設開，指標預設關。路由與披露在下面，token 檔在瀏覽器密鑰之後讀。
+  const opsConfig = startupSetting(plugins, opsEndpointsPlugin);
   // **先照每條 thread 那一次組一份，組完就收**（#749）。上面那幾列只驗了自己的設定；其餘每一列的設定、重名、
   // `requires` 缺件、`apply` 裡的值檢查（例如 `tool-result-pruner` 的門檻），不組一次就不會發生，而 serve 的
   // agent 是每條 thread 才組的——不先組這一次，伺服器照樣起來，每個開對話的人才各撞一次，伺服器日誌一行都沒有。
@@ -837,6 +847,11 @@ async function startServer(
     await loadOrCreateBrowserSessionSecret(resolveHarnessHome(env)),
     browserSession.maxAgeDays,
   );
+  // 指標的 bearer token（#1535）：只有打開指標才讀或建，**在綁 port 之前**——權限過寬、內容認不得就讓 serve 起不來，不覆寫，同上面那把瀏覽器密鑰。
+  const metricsTokenFile = join(resolveHarnessHome(env), METRICS_TOKEN_FILE);
+  const metricsToken = opsConfig.metrics.enabled
+    ? await loadOrCreateMetricsToken(opsConfig.metrics.tokenFile ?? metricsTokenFile)
+    : undefined;
   const webDist = options.webDist ?? resolveWebDist();
   // 釘選與封存兩個集合（#633）：home 底下一個檔，**啟動時就讀**——壞檔（版本、格式、權限）讓 serve 起不來，不覆寫，
   // 跟上面那把瀏覽器密鑰同一個處置。沒落盤時不開：釘選一條重啟就消失的 thread 沒有意義，見下面 `createWireHandler` 的註解。
@@ -924,6 +939,16 @@ async function startServer(
     }
   };
 
+  // serve 自己的 `close()` 開始了沒：`/readyz` 在 server 關掉之前就要回 503（#1535）。
+  let closing = false;
+  // 指標的計數與取樣（#1535）：只有打開才建（關著的時候不起事件圈取樣、不計數）。thread 數與上限抓取當下才現算。
+  const opsMetrics = opsConfig.metrics.enabled
+    ? new OpsMetrics(() => ({
+        threads: handler.threadCount() - handler.closingCount(),
+        threadsClosing: handler.closingCount(),
+        maxThreads: threadCapacity.maxThreads,
+      }))
+    : undefined;
   const handler = createWireHandler({
     auth,
     // 附件儲存（#732）：上傳路徑存進這裡；每條 thread 的 agent 另外掛一條唯讀路由給模型讀（見下面 `attachments`）。
@@ -946,6 +971,13 @@ async function startServer(
     warn,
     // 閒置逐出把一條 thread 撤出記憶體是正常狀態（#1534）：info，門檻調到 warn 的主機不為它出一行。
     info: log,
+    // 一輪失敗（含背景子代理）在伺服器日誌記一行 warn（#1536）：thread、run、日誌第幾筆、失敗碼、供應商請求編號；不含失敗訊息本文。
+    // JSON 模式同樣的格另外成鍵。**接線紅燈從 `runServe` 起量**（`turn-failed-log-wiring.test.ts`），拿掉這一行就沒有那一行日誌。
+    onTurnFailed: (report) => {
+      // 指標的回合失敗計數（#1535）：跟下面那一行日誌共用同一個回呼，不各插一行。指標關著（`opsMetrics` 缺席）就什麼都不做。
+      opsMetrics?.recordTurnFailure(report.code);
+      serverLogOut.serveWith(turnFailedFields(report)).warn(turnFailedMessage(report));
+    },
     // **冷讀那一格**（#302）：讀的是續接那條路寫進去的同一格，只列切得過去的——`cwd` 就是續接時
     // `assertSameCwd` 比的那一個。落盤關掉（#612）就整個不給，列表那時講「列不出來」而不是「沒有」。
     ...(sessionStore === undefined
@@ -1308,15 +1340,32 @@ async function startServer(
   let server: WireServer;
   try {
     server = await startWireServer({
-      handler: routeBySurface(handler, createWebStaticHandler({ distRoot: webDist, auth })),
+      handler: routeBySurface(
+        handler,
+        createWebStaticHandler({ distRoot: webDist, auth }),
+        createOpsEndpoints({
+          isClosing: () => closing || handler.isClosing(),
+          probes: opsConfig.probes.enabled,
+          ...(opsMetrics !== undefined &&
+            metricsToken !== undefined && {
+              metrics: { token: metricsToken, render: () => opsMetrics.render() },
+            }),
+        }),
+      ),
       port: invocation.port,
       // 一個請求處理失敗（畸形的網址、讀檔錯誤）：記進伺服器日誌、回 400，行程照跑。見 `wire-server.ts`。
-      warn: (error) => {
-        warn(`[請求] 處理失敗，回 400：${error.message}`);
+      // 方法與 pathname 一起記（#1536）：管理者才對得回是哪一個請求；pathname 不含 query，權杖不進日誌。
+      warn: (error, request) => {
+        warn(`[請求] ${request.method} ${request.path} 處理失敗，回 400：${error.message}`);
       },
       // 下行串流的心跳間隔與斷線的那一行 warn（#1504）。**另開一個選項，不借上面的 `warn`**：那一個會把每則訊息包成「處理失敗，回 400」。
       heartbeatIntervalMs: downlink.heartbeatIntervalMs,
       warnDisconnect: warn,
+      // 請求計數（#1535）：回完每個請求算一次，面按路徑分（跟路由同一份判斷）。
+      ...(opsMetrics !== undefined && {
+        onResponse: ({ path, status }: { path: string; status: number }) =>
+          opsMetrics.recordRequest(surfaceOf(path), status),
+      }),
     });
   } catch (error) {
     // 啟動失敗的收尾：先保住原本的錯（收尾的錯記進伺服器日誌，不蓋掉它），`threadSearch` 照樣收（#1511）。
@@ -1364,6 +1413,14 @@ async function startServer(
     `thread 上限：${String(threadCapacity.maxThreads)}（到了拒收新 thread，${
       idleEvictMs === undefined ? '要重啟 serve 才釋放' : '閒置的 thread 被撤掉才釋放名額'
     }）`,
+  );
+  // 探針與指標講出來（#1535）：不印 token 本身，只印在哪個檔。
+  log(
+    `探針：${opsConfig.probes.enabled ? '/livez、/readyz（免登入、只回狀態字）' : '關'}；指標：${
+      metricsToken === undefined
+        ? '關'
+        : `開 /metrics（要 Authorization: Bearer，token 在 ${opsConfig.metrics.tokenFile ?? metricsTokenFile}）`
+    }`,
   );
   // 模型請求並行上限講出來（#1505）：不設就印「不限」。沒連真實供應商（假模型）時閘不會被用到，也照實講出設定值。
   log(
@@ -1414,6 +1471,8 @@ async function startServer(
     url: server.url,
     authenticatedUrl,
     close: async () => {
+      // `/readyz` 在 server 關掉之前就回 503（#1535）：監管程式看到 closing 就別再送新請求。
+      closing = true;
       // **每一步各自接住，全部跑完才拋**（#1511）：`handler.close()` 現在會拒絕（thread 收尾失敗），
       // 不能讓它擋住 `threadSearch` 與 `failureRecorder.flush()`。錯誤交給 `main` 印。
       const failures: unknown[] = [];
@@ -1425,6 +1484,7 @@ async function startServer(
         }
       };
       await attempt(() => memoryGauge?.stop());
+      await attempt(() => opsMetrics?.stop());
       await attempt(() => server.close());
       await attempt(() => handler.close());
       await attempt(() => threadSearch?.close());

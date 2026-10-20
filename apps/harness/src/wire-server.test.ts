@@ -15,7 +15,7 @@ import {
   testSessionCookie,
 } from './fixtures.js';
 import { createWireHandler } from './wire-handler.js';
-import { startWireServer } from './wire-server.js';
+import { pathnameOf, startWireServer } from './wire-server.js';
 import type { WireHandler } from './wire-handler.js';
 import type { WireServer } from './wire-server.js';
 
@@ -221,6 +221,89 @@ describe('最後一道防線（照 dsh webserver）', () => {
     const next = await fetch(`${running.url}/fine`);
     expect(next.status).toBe(200);
     expect(await next.text()).toBe('ok');
+  });
+
+  it('最後一道防線的紀錄帶方法與 pathname，query 的權杖一個字都不進（#1536）', async () => {
+    const warned: { error: Error; request: { method: string; path: string } }[] = [];
+    const handler: WireHandler = {
+      handle: async () => {
+        throw new Error('炸了');
+      },
+      close: async () => undefined,
+    };
+    running = await startWireServer({
+      handler,
+      warn: (error, request) => void warned.push({ error, request }),
+    });
+    expect((await fetch(`${running.url}/threads/t1/runs?token=SECRET-PROBE#frag`)).status).toBe(
+      400,
+    );
+    expect(warned.map((entry) => entry.request)).toEqual([
+      { method: 'GET', path: '/threads/t1/runs' },
+    ]);
+    expect(JSON.stringify(warned.map((entry) => entry.request))).not.toContain('SECRET-PROBE');
+  });
+
+  it('onResponse：每個請求回完算一次，帶 pathname（不含 query）與實際送出的狀態碼（#1535）', async () => {
+    const seen: { path: string; status: number }[] = [];
+    const handler: WireHandler = {
+      handle: async (request) => {
+        const { pathname } = new URL(request.url);
+        if (pathname === '/boom') throw new Error('炸了');
+        return new Response('x', { status: pathname === '/teapot' ? 418 : 200 });
+      },
+      close: async () => undefined,
+    };
+    running = await startWireServer({
+      handler,
+      warn: () => undefined,
+      onResponse: (info) => void seen.push(info),
+    });
+    await fetch(`${running.url}/fine?token=SECRET-PROBE`);
+    await fetch(`${running.url}/teapot`);
+    // handler 拋錯 → 最後一道防線回 400，算一次（不是 handle 內算一次、這裡又補一次）。
+    await fetch(`${running.url}/boom`);
+    expect(seen).toEqual([
+      { path: '/fine', status: 200 },
+      { path: '/teapot', status: 418 },
+      { path: '/boom', status: 400 },
+    ]);
+    expect(JSON.stringify(seen)).not.toContain('SECRET-PROBE');
+  });
+
+  it('onResponse：本文太大的 413 也算；回呼拋了不影響回應', async () => {
+    const seen: number[] = [];
+    const handler: WireHandler = {
+      handle: async () => new Response('ok'),
+      close: async () => undefined,
+    };
+    running = await startWireServer({
+      handler,
+      maxRequestBodyBytes: 16,
+      onResponse: ({ status }) => {
+        seen.push(status);
+        throw new Error('計數壞了');
+      },
+    });
+    const big = await fetch(`${running.url}/threads/search`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ query: 'x'.repeat(256) }),
+    });
+    expect(big.status).toBe(413);
+    const fine = await fetch(`${running.url}/fine`);
+    expect(fine.status).toBe(200);
+    expect(await fine.text()).toBe('ok');
+    expect(seen).toEqual([413, 200]);
+  });
+
+  it('畸形的請求目標也印得出 pathname（用切的，不解析）', () => {
+    expect(pathnameOf('/a/b?token=x')).toBe('/a/b');
+    expect(pathnameOf('/a/b#frag')).toBe('/a/b');
+    expect(pathnameOf('/a/%zz/b?x=1')).toBe('/a/%zz/b');
+    expect(pathnameOf('?token=x')).toBe('');
+    expect(pathnameOf('')).toBe('');
+    expect(pathnameOf(undefined)).toBe('');
   });
 
   it('客戶端砍掉連線，handler 手上的 request.signal 跟著中止（#983）', async () => {

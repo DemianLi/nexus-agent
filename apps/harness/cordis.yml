@@ -378,7 +378,7 @@
 #
 # **它們內部又分兩層，分界是消費點跑的時刻**：
 #
-# - **起動期**（`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`memory-gauge`、`browser-session`、`deliverable-files`、`tool-text`、`projection-flush`、`downlink`、
+# - **起動期**（`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`memory-gauge`、`ops-endpoints`、`browser-session`、`deliverable-files`、`tool-text`、`projection-flush`、`downlink`、
 #   `tool-result-stash`、`spill-policy`、`background-subagents`、`subagent-model-selection`、`live-model`）：消費者是`serve.ts` 的冷讀清單、內容搜尋的索引、`BrowserAuth` 的建構子、`createWireHandler` 閉包裡的
 #   兩條交付路由，以及交給組裝的那顆 model——全都在**任何 agent 出生之前**就要有值，那一刻註冊表還不存在。`thread-title`
 #   另外還給寫退回標題的 pump 與 CLI（#647），吃的是同一份起動期的值；`thread-title-llm` 跟它一起在建模型的那一刻
@@ -477,6 +477,21 @@
   config:
     reportIntervalMs: 0
     warnAtPercent: 75
+
+# serve 的探針與指標端點（#1535）。三個路徑都**先過信任圍欄**（Host 不是 loopback 一律 403）、只收 GET／HEAD，只在本機 loopback 上、只被動抓取，serve 不往任何地方送。
+# - 探針（預設開）：`GET /livez`（活著，回得了就是 200 ok）、`GET /readyz`（200 ok＝在聽、收尾還沒開始；503 closing＝收尾已開始）。免登入，本文只有狀態字。
+#   thread 數到上限**不算**沒就緒（已開著的照樣服務；到上限看指標）。`probes.enabled: false` 時兩個路徑回 404。
+# - 指標（**預設關閉**）：`metrics.enabled: true` 才有 `GET /metrics`（Prometheus 文字格式 0.0.4，手寫）。要 `Authorization: Bearer <token>`，缺或錯回 401；
+#   token 在 `tokenFile`（缺席是 `<home>/metrics-token`，`0600`，沒有就建；權限過寬就拒絕啟動）。瀏覽器的會話 cookie 換不到指標。名單固定、標籤不含 thread id 或路徑。
+# 起動期讀一次、改了要重啟。要打開指標，在自己的 `~/.nexus-agent/cordis.patch.yml` 把 `metrics.enabled` 設成 true。
+# **偏離登記：產品需求超出 dsh**（dsh `1517a4db` 沒有探針端點與指標出口），逐點見 `src/ops-endpoints.ts` 的檔頭。這一列關得掉（`disabled: true` 等於沒有這一列，探針開、指標關）。
+- id: ops-endpoints
+  name: '#settings/ops-endpoints'
+  config:
+    probes:
+      enabled: true
+    metrics:
+      enabled: false
 
 # 瀏覽器 cookie 的絕對有效期（#424）。dsh 那側是 plugin 設定 `cookieMaxAgeDays`，預設同樣是 30
 # ——這一列補上的正是 `browser-auth.ts` 原本登記的那條偏離（「寫死 30 天，不能設定」）。

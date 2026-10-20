@@ -294,7 +294,7 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 
 **工具結果暫存回得來**：過大的工具結果原文存在主機的私有目錄（預設 `<harness home>/tool-results/`，目錄 0700、檔案 0600，按會話分目錄），續接時預覽指的路徑照樣讀得到。保留天數與位置在 `tool-result-stash` 那一列設定（`cleanupPeriodDays` 預設 30，`0` 表示不清）；根目錄寫不進去時退回記憶體暫存並講一聲。
 
-**上傳的檔案存在 harness home**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)，只有 `serve`）：`POST /threads/:id/uploads` 把檔案的原始位元組存到 `<harness home>/attachments/v1/`，內容定址、同樣的內容只存一份；目錄 0700、檔案唯讀（0400），檔名清成葉名。回一張收據，只在收下它的那條 thread 有效、行程重開就失效。模型用 `read_file` 讀 `/attachments/<雜湊前兩碼>/<雜湊>/<檔名>`（唯讀路由，不是主機路徑）。沒有保留期清理，也沒有單檔大小上限（照 dsh `file-upload`）。**上傳不受請求本文上限管**：Node 轉接層（`wire-server.ts`）對上傳路由是串流——位元組從 socket 一路流進儲存，行程記憶體不跟著檔案大小漲（實測 480 MiB 的檔 RSS 約漲 80 MiB，有界；整份緩衝是近 2 GiB）。其他路由（JSON）先收完整份，本文上限 300 MiB（`DEFAULT_MAX_REQUEST_BODY_BYTES`，照 dsh `client/connection` 的 `http-bridge.ts`），超過回 413 並斷線。**所以 300 MiB 的上限擋不到上傳**，上傳也沒有儲存配額（dsh 預設也沒有），磁碟寫滿由主機管。要清就自己刪 `attachments/` 底下沒有被會話引用的檔。
+**上傳的檔案存在 harness home**（[#732](https://github.com/DemianLi/nexus-agent/issues/732)，只有 `serve`）：`POST /threads/:id/uploads` 把檔案的原始位元組存到 `<harness home>/attachments/v1/`，內容定址、同樣的內容只存一份；目錄 0700、檔案唯讀（0400），檔名清成葉名。回一張收據，只在收下它的那條 thread 有效、行程重開就失效。模型用 `read_file` 讀 `/attachments/<雜湊前兩碼>/<雜湊>/<檔名>`（唯讀路由，不是主機路徑）。**路由只露出這條 thread 的日誌引用過的檔案**（#1773，見下面「模型讀附件的範圍」）。沒有保留期清理，也沒有單檔大小上限（照 dsh `file-upload`）。**上傳不受請求本文上限管**：Node 轉接層（`wire-server.ts`）對上傳路由是串流——位元組從 socket 一路流進儲存，行程記憶體不跟著檔案大小漲（實測 480 MiB 的檔 RSS 約漲 80 MiB，有界；整份緩衝是近 2 GiB）。其他路由（JSON）先收完整份，本文上限 300 MiB（`DEFAULT_MAX_REQUEST_BODY_BYTES`，照 dsh `client/connection` 的 `http-bridge.ts`），超過回 413 並斷線。**所以 300 MiB 的上限擋不到上傳**，上傳也沒有儲存配額（dsh 預設也沒有），磁碟寫滿由主機管。要清就自己刪 `attachments/` 底下沒有被會話引用的檔。
 
 **送出時帶附件**（#732）：`run.start` 的 `attachments` 收「上傳收據」與「內嵌的圖（base64）」。收據收下就用掉（同一份不能用第二次；整句被拒時放回去）；圖在收下時驗過（PNG／JPEG／GIF／WebP，每張 20 MiB、每句 20 張／200 MiB、每張 6400 萬像素，只看檔頭不解碼）才存進同一個 `attachments/`（不縮圖、不轉檔）。**日誌、存檔點、軌跡裡只有參照**（雜湊、檔名、大小、圖的寬高）；位元組只在組請求的那一刻讀回來：檔案換成一行字（路徑與「用檔案工具讀」的說明），圖換成 `image_url`。目前的模型在型錄宣告了純文字（`input` 沒有 `image`）時，帶圖的送出回 `model_does_not_support_images`；會話中途換成純文字模型，之前送過的圖在請求裡變成一行佔位字。沒宣告 `input` 的模型照送圖。圖的位元組每次呼叫模型都從磁碟重讀、重編 base64，沒有快取；`attachments/` 被清掉的話，帶它的舊訊息在請求裡變成「已不在儲存裡，請重新附上」的一行。
 
@@ -303,6 +303,8 @@ CLI 用 `--resume <run 目錄>` 讀回那個目錄裡 root 的那一份日誌、
 **斜線命令帶附件**（#732）：命令用 `input.attachments: true` 宣告收附件（`slash.list` 的 descriptor 上看得到），`slash.run` 的 `attachments`（形狀同 `run.start`）才會被收下。**收下的時機在執行器確認命令宣告之後、handler 之前**：沒宣告的命令帶了附件，這次執行落定成 `error`（日誌有 `command/run`＋`command/done` 一對），收據與儲存一個字不動；不是命令的一行（`kind: 'unknown'`）同樣什麼都不收，輸入框可以當一般訊息送。命令回 `error`（或拋錯、發派的請求中止）時用掉的收據放回去，輸入框留著草稿與附件。`/goal` 是第一個宣告的：`/goal create|edit <目標>` 帶附件時，附件跟著開出來的那一輪訊息（`turn/start.attachments`），固定的一句 `Reference attachments for the goal objective.` 是那一輪的文字；其他子命令（`status`／`pause`／`resume`／`clear`）帶附件回 `error`，沒有目標文字只有附件也回 `error`。
 
 **讀圖**（#733）：`GET /threads/:id/attachments/:attachmentId`（`attachmentId` 是 `sha256:<hex>`，整段 URL 編碼；同會話 cookie 認證）回 `{ attachment, data }`（參照加 base64，照 dsh `session.attachment`）。**授權是「這條 thread 的日誌引用過它」，不是知道 id**：附件儲存是整個 harness home 共用、內容定址的，所以別條 thread、沒引用過的 id、檔案（只收圖）、壞編號、沒載入的 thread 一律 `attachment_not_found`，不細分。只讀已經載入的 thread（記憶體裡那份日誌，含還沒落盤的），不為了讀圖建 thread。日誌引用了但位元組不在了（`attachments/` 被清）是 `unknown_error`。
+
+**模型讀附件的範圍**（#1773，#1675 Q3 (a)）：儲存仍是整台 serve 一份，但模型經 `/attachments/…` 讀檔的路由**只露出這條 thread 的日誌引用過的檔案**，跟上面讀圖同一個判準。`read_file`、`ls`、`glob`、`grep` 都只看得到（也只搜得到）引用過的檔；沒引用過的路徑，`read_file` 回的錯誤跟「檔不存在」逐字一樣，不細分「存在但你不能看」。**呼叫當下才判**：路由讀這條 thread 的 root 日誌現在的樣子，第二輪才附上的檔，第二輪就讀得到；日誌還沒接上或已卸下時什麼都不露出。判準是檔案參照的 `attachmentId` 與檔名**都**要對上：同樣的位元組被不同的人用不同的檔名上傳，各有一條檔名別名，只露出自己引用的那一條。前景與背景子代理用 root 的這一個路由，讀得到 root 引用過的，讀不到別條 thread 的。**不算外漏**：B 自己上傳了位元組完全相同的檔，B 讀得到它自己的那一條（內容定址的結果）。**升級影響**：舊 thread 也套這條——它們的日誌本來就記著自己附過什麼，所以自己附過的檔照常讀得到；以前靠「別條 thread 的檔案路徑」讀到東西的做法（例如使用者把另一條 thread 的 `/attachments/…` 路徑貼進來）升級後讀不到，要在這條 thread 重新附上。偏離 dsh 的理由 2（一台主機多人共用、0700 分不開人），登記在 `attachment-store.ts` 檔頭偏離 3。
 
 **附件物件損毀（`ATTACHMENT_CORRUPT`）**（#1338）：附件是內容定址的，物件的路徑就是它內容的 sha256。**這個碼的意思是物件的內容重算出來對不上路徑上的雜湊**（磁碟損毀、寫到一半被中斷、有人動過儲存目錄；大小對不上參照也算），harness 不把來路不明的位元組交出去。**三個地方會撞到**：讀圖（網頁取圖回 `unknown_error`、harness 記一行 `[讀圖] thread … 的圖 sha256:… 讀不回來`，原因是「圖片的內容對不上它的雜湊」或「圖片的大小對不上參照」；組給模型的請求把那張圖換成 `is no longer available in attachment storage` 的佔位字，這一條不記警告，所以只看佔位字會漏掉）；上傳檔案與送出內嵌圖時，碰到已經存在的同雜湊物件也會重算，對不上就整個上傳失敗（`unknown_error`，訊息是「既有物件的內容對不上它的雜湊（sha256:…），不拿來去重」），不會回一張指向壞物件的收據。
 
@@ -575,7 +577,7 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 | 等級 | 放什麼 |
 | --- | --- |
 | `error` | 起不來、收不了（`[啟動失敗] 收尾也出錯`）、不變量違規（logger 名 `invariant`）、Cordis 樹上 disposer 拋的錯（例如插件關不掉；以前只進記憶體緩衝，緩衝滿 1000 則就被擠掉） |
-| `warn` | 要人處理的：`[組裝] …沒掛上`／`警告`、`[外掛]`（含 MCP 掉線重連的進度）、`[權限] … 收窄`（有會話的權限被收回）、`[清單]` 的警告、`[請求] 處理失敗，回 400`、寫不進去的 `[會話日誌]`／`[對照快照]`／`[變更紀錄]`、不可用的 `代理：`、`[home 鎖]` |
+| `warn` | 要人處理的：`[組裝] …沒掛上`／`警告`、`[外掛]`（含 MCP 掉線重連的進度）、`[權限] … 收窄`（有會話的權限被收回）、`[清單]` 的警告、`[請求] <方法> <路徑> 處理失敗，回 400`、`[回合] … 失敗`（一輪對話失敗，見〈從回報追到請求〉）、寫不進去的 `[會話日誌]`／`[對照快照]`／`[變更紀錄]`、不可用的 `代理：`、`[home 鎖]` |
 | `info` | 狀態披露：網址、模型、plugin 清單、會話日誌路徑、thread 上限、閒置逐出、遙測與 tracing 披露、`[會話日誌] … 接回來了`、`[對照快照]` 的摘要 |
 
 **命令的輸出不是日誌**：`--help`、`--version`、`--dump-config`、`--dump-config-schema` 照原樣寫標準輸出，不加前綴、不包 JSON、不看門檻
@@ -612,7 +614,7 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 | `level` | `error`／`warn`／`info`／`debug` |
 | `logger` | logger 名（`serve`、`invariant`，樹上插件是它的名稱） |
 | `msg` | 訊息本文（錯誤物件放 `stack`，沒有就放 `message`；物件參數用 `util.inspect` 的形式） |
-| `thread_id` | 訊息帶 thread 時才有；**目前沒有任何一行填它**，來源由 #1536 統一 |
+| `thread_id`、`run_id`、`session_id`、`seq`、`code`、`status`、`provider_request_id` | 只有 `[回合] … 失敗` 那一行帶（見〈從回報追到請求〉）；其他行沒有這幾個鍵。`provider_request_id` 沒有就不出現，超過 200 字元的截斷接 `…` |
 
 欄位名取 OTel Logs 資料模型的慣用語意，但**不引入 OTel SDK、不送出去**：只寫標準輸出，和文字格式同一個出口。
 
@@ -620,6 +622,113 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
   **日誌平台要當成含秘密的資料處理**；根本解是 #1428 的身分，不是藏這一行。
 - 致命的啟動失敗與收尾失敗（`serve.ts` 的 `main()`）仍以純文字寫標準錯誤，不看格式與門檻：根可能已經收掉，沒有 logger 可用。
 - 不做轉送（syslog、OTLP、HTTP 推送）、不寫檔、不輪替：交給 systemd／journald 或 logrotate。
+
+### 從回報追到請求
+
+[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)。使用者回報「剛剛那句話失敗了」時，從伺服器日誌往回追到**會話日誌裡那一筆失敗**，再追到**模型閘道那一側的哪一次請求**。
+
+一輪對話失敗（`turn/failed` 寫進會話日誌）之後，伺服器日誌多一行 `warn`，logger 名 `serve`：
+
+```
+2026-10-20 10:00:00 [W] serve [回合] thread "t1" run "9f0c…" 失敗（日誌第 4 筆）：SERVER status=502 request_id=gw-123
+```
+
+| 這一段 | 怎麼用 |
+| --- | --- |
+| `thread "t1"` | 會話日誌的檔名：`<harness home>/sessions/<專案目錄>/t1.jsonl` |
+| `run "…"` | 使用者那一句話在佇列上的編號（`run.start` 回的 `run_id`）。續答核准、不是從佇列來的輪沒有這一段；背景子代理失敗時是子代理自己的 run id，thread 是派它的主對話 |
+| `日誌第 N 筆` | 那份 `.jsonl` 裡 `seq` 等於 N 的事件，就是這一輪的 `turn/failed`；失敗訊息本文在它的 `data.message` |
+| `子代理日誌 "t1/bg-1" 第 N 筆` | **背景子代理**失敗時，N 是子代理**自己那份日誌**的 `seq`（不是 `t1.jsonl` 的），日誌 id 是 `<thread>/<run_id>`。檔案在同一個專案目錄底下，檔名把 `/` 編成 `%2f`：`sessions/<專案目錄>/t1%2fbg-1.jsonl`（run id 含大寫或很長時檔名尾巴會多一段摘要，用 `ls …/t1%2fbg-1*` 照前綴找） |
+| `SERVER`、`status=502` | 失敗碼與 HTTP 狀態（沒有狀態就省略） |
+| `request_id=gw-123` | 模型供應商回應標頭裡的請求編號（`request-id`、`x-request-id`、`x-deepseek-request-id`，取第一個非空的）。拿它去問閘道那一側「哪一次請求」；沒有這幾個標頭就省略 |
+
+```bash
+# 在那份會話日誌裡找這一輪的失敗（N 換成「日誌第 N 筆」）：
+jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1.jsonl
+# 這一條 thread 上所有重試過的失敗，各帶自己的請求編號：
+jq -c 'select(.type == "llm/retry") | .data.failure' ~/.nexus-agent/sessions/<專案目錄>/t1.jsonl
+# 背景子代理那一行（子代理日誌 "t1/bg-1"）：讀它自己的檔，不是 t1.jsonl：
+jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1%2fbg-1.jsonl
+```
+
+- **這一行不放失敗訊息本文**：訊息可能帶路徑或使用者內容，那些只在會話日誌，誰能讀照會話日誌的規矩。
+- JSON 格式下，同樣的資料是 `thread_id`、`run_id`、`session_id`（只有背景子代理有，就是上表的子代理日誌 id）、`seq`、`code`、`status`、`provider_request_id` 這幾個鍵（見上面的欄位表），`msg` 仍是上面那行文字。
+- **串流中段才送來的錯誤信封**（HTTP 200 開線之後，`data: {"error":…}`）：SDK 丟出的錯誤帶著回應標頭，所以 `turn/failed` 與 `llm/retry` 兩邊都有請求編號（實測、有測試釘著）。
+  這種情況 `turn/failed` 的失敗碼目前是 `UNKNOWN`、沒有 status，`llm/retry` 記的卻是 `SERVER`／503；分類的落差另案處理（#1763），不影響用請求編號追。
+- **請求錯誤行**：`[請求] <方法> <路徑> 處理失敗，回 400：…` 帶方法與路徑（只有 pathname，**不帶 `?` 後面的 query**，`/?token=` 的權杖在 query 裡），
+  管理者才知道是哪一個請求。
+
+## 探針與指標
+
+[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)。以前要知道 serve 活不活著，只能看 port 有沒有開、去 `ps`、讀 stdout。現在有三個路徑，**只在本機 loopback 上、只被動抓取、serve 不往任何地方送**：
+
+| 路徑 | 預設 | 要登入嗎 | 回應 |
+| --- | --- | --- | --- |
+| `GET /livez` | 開 | 不用 | `200 ok`：handler 跑得到就回，不查任何狀態（回得了，就代表事件圈在轉）。 |
+| `GET /readyz` | 開 | 不用 | `200 ok`：在聽、收尾還沒開始。`503 closing`：收尾已經開始（serve 收到 SIGTERM／SIGINT 後第一件事就是立旗）。 |
+| `GET /metrics` | **關** | `Authorization: Bearer <token>` | Prometheus 文字格式 0.0.4（`text/plain; version=0.0.4`）。 |
+
+- **三個路徑都先過信任圍欄**，跟 wire 同一道：`Host` 不是 loopback（`localhost`、`127.x.x.x`、`[::1]`）、`Sec-Fetch-Site: cross-site`、`Origin` 與 `Host` 不一致，一律 `403`。只收 `GET`／`HEAD`，其餘 `405`。
+- **探針免登入，本文只有狀態字**（`ok`／`closing`），不帶數字、版本或任何細節。同機的人用 `ss -ltn` 本來就看得到有一台 serve 在聽。
+- **thread 數到上限不算沒就緒。** 已經開著的 thread 照樣服務，而且同一個 home 只有一台 serve（[#1503](https://github.com/DemianLi/nexus-agent/issues/1503)），沒有別台可以分流；到上限要看指標（`nexus_threads` 對 `nexus_threads_max`），不看探針。
+- **探針語意取 Kubernetes 的分法**：`livez` 失敗＝該被重啟；`readyz` 失敗＝先別送新請求。systemd 用得上的是 `livez`（接 watchdog 或外面的監控腳本）；`readyz` 給前面有反向代理的部署。
+
+### 打開指標
+
+```yaml
+# ~/.nexus-agent/cordis.patch.yml
+- id: ops-endpoints
+  config:
+    metrics:
+      enabled: true
+      # tokenFile: /var/lib/nexus-agent/metrics-token   # 不寫就是 <home>/metrics-token
+```
+
+- **token 檔**：打開時 serve 讀 `<home>/metrics-token`，**沒有就建**：目錄 `0700`、檔 `0600`，內容是一個 43 字元的 base64url 加換行（裸的，不是 JSON，監控那一側原樣讀得了）。已存在的檔 group 或 other 有任何權限位元就**拒絕啟動**（訊息指名檔案），內容認不得也拒絕、不覆寫。要換 token 就刪掉檔再重啟，並更新監控那一側。
+- **缺或錯的 bearer 一律 `401`**，不說是哪一種。**會話 cookie 換不到指標，反過來指標的 token 也換不到 wire**：避免把瀏覽器的 cookie 交給監控系統。
+- 啟動日誌印一行 `探針：…；指標：關` 或 `指標：開 /metrics（要 Authorization: Bearer，token 在 <路徑>）`，**不印 token 本身**。
+- **起動時讀一次，改了要重啟。** `probes.enabled: false` 可以把兩個探針路徑也關掉（回 `404`）。
+
+Prometheus 的設定（跟 serve 在同一台主機上抓）：
+
+```yaml
+scrape_configs:
+  - job_name: nexus-agent
+    metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials_file: /var/lib/nexus-agent/metrics-token
+    static_configs:
+      - targets: ['127.0.0.1:8787']
+```
+
+手動看一眼：
+
+```bash
+curl -s -H "Authorization: Bearer $(cat /var/lib/nexus-agent/metrics-token)" http://127.0.0.1:8787/metrics
+```
+
+### 指標清單
+
+名單固定，**標籤不含 thread id 或路徑**，基數不隨使用者長。讀不到的來源整個不出現，**不回 0**。
+
+| 指標 | 型別 | 說明 |
+| --- | --- | --- |
+| `nexus_threads` | gauge | 行程裡的 thread 數（含建構中的，不含撤到一半的）。 |
+| `nexus_threads_closing` | gauge | 撤到一半、還佔著名額的 thread 數。 |
+| `nexus_threads_max` | gauge | thread 數上限（[#1476](https://github.com/DemianLi/nexus-agent/issues/1476)）；`threads + closing` 到這個數就拒收新 thread。 |
+| `nexus_http_requests_total{surface,code_class}` | counter | 回完的請求數。`surface` 是 `wire`（`/threads`）、`web`（網頁與其他）、`ops`（這三個路徑）；`code_class` 是 `2xx`…`5xx`。 |
+| `nexus_turn_failures_total{code}` | counter | 失敗收場的回合數（含背景子代理），`code` 是失敗分類的碼，跟伺服器日誌 `[回合]` 那一行同一個。 |
+| `nexus_event_loop_delay_seconds{quantile="0.5\|0.99"}`、`nexus_event_loop_delay_max_seconds` | gauge | **上一次抓取以來**的事件圈延遲（`perf_hooks.monitorEventLoopDelay`，每次抓取後歸零）。事件圈被同步工作卡住時，`livez` 一樣會逾時，這個數字告訴你卡了多久。 |
+| `process_start_time_seconds` | gauge | 行程啟動的 Unix 時間。 |
+| `nexus_memory_rss_bytes`、`nexus_memory_heap_used_bytes` | gauge | 行程自己的 RSS 與 V8 heap（跟 `memory-gauge` 同一個量具，抓取當下現讀，**不需要**打開 `memory-gauge`）。 |
+| `nexus_cgroup_memory_current_bytes`、`nexus_cgroup_memory_max_bytes` | gauge | Linux cgroup 的用量與上限；沒有 cgroup 或 cgroup 沒設上限時對應的指標不出現。 |
+
+- **記憶體門檻警告不在這裡**：那是 `memory-gauge` 的 `warnAtPercent`（[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)），只寫日誌。告警規則與門檻是監控那一側的事。
+- **計數是行程內的**，serve 重啟歸零（Prometheus 的 `rate()` 認得 counter 重置）。
+- **不做的**：推送（OTel metrics、StatsD、remote write）、逐 thread 或逐使用者的指標（thread id 進標籤基數無上限，而且在共用主機上等於公開別人的活動）、逐請求延遲直方圖（SSE 長連線會把直方圖撐歪）、web 的管理畫面（等 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 的管理員身分）。
+- **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh（`1517a4db`）沒有探針端點，也沒有指標出口（唯一相關的是 OTel 的 `selfObsMeterProvider` 被刻意排除）。判準取公開的慣例（Kubernetes 的 `livez`／`readyz`、Prometheus 文字格式），逐點見 `apps/harness/src/ops-endpoints.ts` 的檔頭。這一列沒有新增任何出境路徑。
+- **將來若開 `--host`（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547)）**，「探針免登入、只在 loopback」的前提要重看；現在 serve 只綁 `127.0.0.1`。
 
 ## 用 systemd 常駐
 
@@ -1068,7 +1177,7 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   （`agent-loop`、`recursion-limit`、`tool-fs-search` 與 `@nexus/core/*` 那幾列，`session-persistence` 除外）。**已經開著的對話不變**；重開 server 之後才
   第一次碰到的舊對話，拿的是那一刻的清單。兩件事照舊要重啟：
   - **換插件的版本**：同一個模組只載一次，改了程式碼要重啟。
-  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`logger-console`、`memory-gauge`、`deliverable-files`、
+  - **啟動時讀一次的那幾列**（`browser-session`、`thread-title`、`thread-title-llm`、`thread-search`、`thread-capacity`、`logger-console`、`memory-gauge`、`ops-endpoints`、`deliverable-files`、
     `session-persistence`、`tool-text`、`projection-flush`、`downlink`、`tool-result-stash`、`spill-policy`、`background-subagents`、
     `live-model`、`subagent-model-selection`）：改了伺服器日誌記一行「[清單] 「…」改了，已儲存，待重啟」，新對話照舊用啟動時的值。
     `agent-default-model` 不在這裡：沒帶 `--live` 時它在每條對話組裝時讀，改了新對話就生效。
@@ -1952,7 +2061,27 @@ LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
 `run.start` 可以帶一格選填的 `client_time_zone`（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)，**照 dsh**：`session.prompt` 的 `clientTimeZone`，`packages/api/session-controller/src/index.ts:467-482`）。模型要把「明天下午三點」這種沒指名時區的時間按使用者的時區解讀，得知道使用者在哪個時區；瀏覽器自己知道（`Intl.DateTimeFormat().resolvedOptions().timeZone`），伺服器不知道（容器常常是 UTC）。
 
 - **協定**：`params.client_time_zone`，`UTC` 或 IANA 的 `Area/Location` 時區名（例如 `Asia/Taipei`、`America/Argentina/Buenos_Aires`），前後不能有空白。不合格式、這個執行期的 `Intl` 不認得、或不是字串，回 `invalid_argument`，訊息點名 `client_time_zone`，**這一句不進佇列**（驗證排在查重送之前，壞的時區不會被「重送」吞掉）。**省略＝維持現狀**，舊客戶端不受影響；舊 server 會略過這一格。wire client 的 `runStart(thread, text, { clientTimeZone })` 已接上。
-- **正規化**：伺服器記下的是 `Intl` 回報的正規名，別名會收成同一個值。**讀日誌時照 dsh 逐字要求記著的名字等於這個執行期的正規名**，否則那一輪的 pre-step 拋錯。不同 Node／ICU 版本的正規名不盡相同（Node 25.9 把 `Asia/Kolkata` 收成 `Asia/Calcutta`），這個風險另開 [#1733](https://github.com/DemianLi/nexus-agent/issues/1733) 等 demian 決定；發版產物升 Node 之前要先有結論。
+- **正規化**：伺服器記下的是 `Intl` 回報的正規名，別名會收成同一個值。**讀日誌時照 dsh 逐字要求記著的名字等於這個執行期的正規名**，否則那一輪的 pre-step 拋錯。正規名由執行期的 ICU 決定（Node 25.9 把 `Asia/Kolkata` 收成 `Asia/Calcutta`），所以升 Node 之前要看下一條。
+- **升 Node 之前**（[#1733](https://github.com/DemianLi/nexus-agent/issues/1733)，demian 2026-10-20 拍板：照 dsh 不偏離、不回報上游）：
+  - **實測**（CI 的 node-compat 兩格加本機，臨時探針在 PR #1772，量完已拿掉）：555 個名字（tzdata 所有 zone 與 link 名）裡有 110 個會被 `Intl` 改寫成別的正規名，例如 `Asia/Kolkata`→`Asia/Calcutta`、`Asia/Ho_Chi_Minh`→`Asia/Saigon`、`Europe/Kyiv`→`Europe/Kiev`、`US/Eastern`→`America/New_York`、`Etc/UTC`→`UTC`。**Node 22.19.0（ICU 77.1、tzdata 2025b）、25.9.0（ICU 78.3、2026a）、26.12.0（ICU 78.3、2026e）三邊逐條相同，沒有換版本會反過來的名字。** 沒量到的：ICU 只有 77.1 與 78.3 兩版（25.9 與 26.12 共用 78.3）；名單取自 tzdata 2026a，之後新增的名字沒量；用系統 ICU（`--with-intl=system-icu`）編的 Node 沒量。所以這是「目前沒看到」，不是保證。
+  - **影響範圍**：time-context 只讀**這一輪**的日誌事件（最後一個非 `resume` 的 `turn/start` 起）。撞到的只可能是**一個跨過升級的未完成輪**：升級前寫進日誌的名字，在那一輪還沒收完時被新 runtime 讀到。下一次 `run.start` 開的新一輪由新 runtime 重新正規化，不受影響（`@nexus/plugin-time-context` 的測試釘住這一點）。開卡時寫的「每輪都拋錯」是推測，讀碼後不成立。
+  - **症狀**：那一輪的 pre-step 拋 `TypeError: browser time zone must be canonical: "<名字>"`，這一輪失敗（listener 拋錯不吞），`turn/failed.message` 就是這句。
+  - **升之前先查**：在**新**的 Node 上，把日誌裡記過的時區名逐個問一遍；有不是正規名的，就是升完之後會撞到的那幾個（`$HOME_DIR` 換成 harness home）：
+    ```bash
+    grep -rhoE '"clientTimeZone":"[^"]*"' "$HOME_DIR/sessions" | sed -E 's/.*:"([^"]*)"$/\1/' | sort -u | node -e "
+    const names = require('fs').readFileSync(0, 'utf8').split('\n').filter(Boolean);
+    let bad = 0;
+    for (const name of names) {
+      let canonical = null;
+      try { canonical = new Intl.DateTimeFormat('en-US', { timeZone: name }).resolvedOptions().timeZone; } catch {}
+      if (canonical !== name) { bad += 1; console.log(name + ' -> ' + canonical); }
+    }
+    console.log(names.length + ' 個名字，' + bad + ' 個不是這個 Node 的正規名');
+    process.exit(bad === 0 ? 0 : 1);
+    "
+    ```
+    這是保守的檢查（掃全部日誌，實際上只有升級那一刻還沒收完的輪會被擋）。退出碼 0 就不用做別的。
+  - **撞到之後**：不用改日誌。那一輪失敗之後，使用者再送一句話就開新的一輪，新 runtime 會把瀏覽器回報的名字重新正規化寫進去（web 送出時帶 `client_time_zone`，[#1630](https://github.com/DemianLi/nexus-agent/issues/1630)）。升之前沒有還沒收完的輪，就什麼都不會發生；要連那一輪都不撞，升之前先讓進行中的輪收完。
 - **記在哪**：人話的來源上，不進 thread 設定（那會是整條 thread 共用的一個值，同一條 thread 換了時區就說謊）。三個位置同 `request_id`：排著時 `inbox/spliced` 裡那一件的 `source.clientTimeZone`、開了一輪之後的 `turn/start`（`kind: 'message'`）、輪中插話被領走時 `user/message` 的 `source.clientTimeZone`。**格式 49，不標 `ignorable`**（既有事件上多的選填欄位，沒有 `ignorable` 可標）。**一台 48 的 runtime 讀不了 49 的檔**（`SessionFormatUnsupportedError`），而且續接時 header 會被改寫成 49：發版後退回前一版，被新版碰過的 thread 會打不開。沒帶 `client_time_zone` 的送出，日誌與以前位元組相同；48 以前的檔沒有這一格，等於沒帶，不補寫。
 - **誰讀**：`@nexus/plugin-time-context`，見上面「時間讀數」。**子代理不繼承**：派出去那一刻沒有人說話，子代理日誌的第一個 `turn/start` 不帶時區，它那一則讀數的第二行是 `unavailable`。dsh 派子代理時同樣沒帶時區（`packages/subagent/subagent/src/manager.ts:464` 給的是 `{ kind: 'user' }`）。
 - **人對背景子代理說話**（[#1734](https://github.com/DemianLi/nexus-agent/issues/1734)，**照 dsh** 的 `subagent.prompt` 帶 `clientTimeZone`，`packages/subagent/subagent/src/index.ts:447-475`）：`subagent.send` 的 `params.client_time_zone` 規則同 `run.start`（共用 `@nexus/wire` 的 `canonicalClientTimeZone`；不合法回 `invalid_argument` 並點名欄位，**排在「有沒有這個背景子代理」之前**，不讓呼叫端靠回應差別試探編號；省略＝維持現狀）。時區記在**子代理自己那份日誌**上這句人話的來源：子代理閒著，新一輪的 `turn/start`（`kind: 'message'`）帶 `clientTimeZone`；正在跑，下一步領走時 `user/message` 的 `source: { kind: 'user', clientTimeZone }`；被中止沒領走而退回的輪次與冷復活（先接回來再投遞）都跟著帶。子代理的下一則時間讀數因此是 `resolved`。wire client 的 `subagentSend(thread, runId, text, { clientTimeZone })` 已接上；web 的子代理輸入框送不送時區是 [#1630](https://github.com/DemianLi/nexus-agent/issues/1630) 那一側。**格式不變**（49 已含這兩個欄位）。
