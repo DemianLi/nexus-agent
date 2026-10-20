@@ -28,6 +28,7 @@ import {
   SESSION_STATS,
   SUBAGENT_STATUS,
   THREAD_AT_CAPACITY,
+  THREAD_HISTORY_TOO_DEEP,
   THREAD_IS_SUBAGENT,
   TITLE,
   TODOS,
@@ -64,6 +65,7 @@ import { ABORTED_BEFORE_DISPATCH_CODE, STOPPED_QUESTION_TEXT } from '@/lib/quest
 import { REMEMBERED_THREAD_KEY } from '@/lib/remembered-thread';
 import { PARKED_STEER_TEXT, PENDING_STEER_TEXT } from '@/lib/steer-view';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
+import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 import { axeViolations } from '@/test/axe';
 import { stubCmdkLayout } from '@/test/cmdk';
@@ -918,6 +920,32 @@ describe('對話介面', () => {
     );
     expect(screen.queryByRole('button', { name: '立刻重連' })).toBeNull();
     expect(screen.queryByText(/subagent\.send|下行被拒/)).toBeNull();
+    expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
+    // 第一次退避最多 500ms：等過去，下行仍只開過一次。
+    await new Promise((resolve) => setTimeout(resolve, 700));
+    expect(openEvents).toHaveBeenCalledOnce();
+  });
+
+  it('記住的會話歷史太深（#1753）：講那一句，沒有重連鈕、不接原文，也不再開', async () => {
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '記住的那條' }));
+    const fake = fakeClient([]);
+    const serverMessage = '這條 thread 建不起來：日誌第 3 顆事件巢狀 3000 層，超過上限 600';
+    const openEvents = vi.fn<WireClient['openEvents']>(async () => {
+      const body = JSON.stringify({
+        type: 'error',
+        id: null,
+        error: THREAD_HISTORY_TOO_DEEP,
+        message: serverMessage,
+      });
+      throw new WireRejectedError(THREAD_HISTORY_TOO_DEEP, serverMessage, `下行被拒：${body}`);
+    });
+    render(<App client={{ ...fake.client, openEvents }} />);
+
+    await waitFor(() =>
+      expect(screen.getByRole('status').textContent).toBe(THREAD_HISTORY_TOO_DEEP_TEXT),
+    );
+    expect(screen.queryByRole('button', { name: '立刻重連' })).toBeNull();
+    expect(screen.queryByText(/建不起來|下行被拒|上限 600/)).toBeNull();
     expect(screen.queryByText(RESUMED_THREAD_NOTICE)).toBeNull();
     // 第一次退避最多 500ms：等過去，下行仍只開過一次。
     await new Promise((resolve) => setTimeout(resolve, 700));
@@ -1820,6 +1848,27 @@ describe('上行被拒絕的時候', () => {
     const card = await toastWith(THREAD_AT_CAPACITY_TEXT);
     expect(card.textContent).not.toContain('#1478 toast');
     expect(input.value).toBe('滿了的那一句');
+  });
+
+  it('歷史太深（#1753）：草稿放回去，說明換成給使用者看的那一句，不接 server 的原文', async () => {
+    seq = 0;
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const runStart = async (): Promise<UplinkResult> => ({
+      type: 'error',
+      id: 1,
+      error: THREAD_HISTORY_TOO_DEEP,
+      message: '這條 thread 建不起來：日誌第 3 顆事件巢狀 3000 層（#1753 toast）',
+    });
+    render(<App client={{ ...fake.client, runStart }} />);
+
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    const input = screen.getByLabelText('要說的話') as HTMLTextAreaElement;
+    fireEvent.change(input, { target: { value: '太深的那一句' } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+
+    const card = await toastWith(THREAD_HISTORY_TOO_DEEP_TEXT);
+    expect(card.textContent).not.toContain('#1753 toast');
+    expect(input.value).toBe('太深的那一句');
   });
 });
 

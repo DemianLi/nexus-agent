@@ -23,6 +23,9 @@
  * 交給內網的日誌平台，所以多一個一行一個 JSON 物件的格式，判準取 JSON Lines；欄位名取 OTel Logs 資料模型的慣用語意，**不引入 OTel SDK、不送出去**。
  * 欄位表見 `docs/operations.md`「伺服器日誌的等級與格式」。
  *
+ * 一輪對話失敗的那一行（#1536）另外帶 `thread_id`、`run_id`、`session_id`（背景子代理才有）、`seq`、`code`、`status`、`provider_request_id` 幾個鍵，文字格式的行不看它們；
+ * 其他行沒有這幾個鍵。這幾個鍵是同一個偏離的一部分：dsh 沒有 JSON，也就沒有結構化欄位。
+ *
  * ### 偏離三：設定住在 `#settings/` 的設定列，不是 Cordis 樹上的一列（理由 2：產品需求超出 dsh；**偏離 #1534 卡面**，PM 於 #1752 裁決）
  *
  * 卡面寫「這一列掛在 Cordis 樹上」，照 dsh：`logger-console` 是樹上一個 plugin，建構時 `ctx.logger.exporter(this)`。

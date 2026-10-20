@@ -1,11 +1,17 @@
 import type { Event, WireClient, WireFeedbackItem } from '@nexus/wire';
-import { THREAD_AT_CAPACITY, THREAD_IS_SUBAGENT, WireRejectedError } from '@nexus/wire';
+import {
+  THREAD_AT_CAPACITY,
+  THREAD_HISTORY_TOO_DEEP,
+  THREAD_IS_SUBAGENT,
+  WireRejectedError,
+} from '@nexus/wire';
 import { act, cleanup, configure, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useConversation } from '@/hooks/use-conversation';
 import { RECOVERED_NOTICE_MS } from '@/lib/reconnect';
 import { THREAD_AT_CAPACITY_TEXT } from '@/lib/thread-capacity';
+import { THREAD_HISTORY_TOO_DEEP_TEXT } from '@/lib/thread-history-too-deep';
 import { THREAD_IS_SUBAGENT_TEXT } from '@/lib/thread-subagent';
 
 /**
@@ -177,6 +183,31 @@ describe('useConversation 下行被拒：永久的不重試，暫時的照試（
     await tick(60_000);
     expect(openEvents).toHaveBeenCalledOnce();
     expect(result.current.refusal).toBe(THREAD_IS_SUBAGENT_TEXT);
+  });
+
+  it('歷史太深（#1753）：講那一句、不接原文、不排重試；推過最長的退避、按「立刻重連」、網路回來都不再開', async () => {
+    const { client, openEvents, setFailOpen } = scriptedClient();
+    setFailOpen(
+      rejected(
+        THREAD_HISTORY_TOO_DEEP,
+        '這條 thread 建不起來：日誌第 3 顆事件巢狀 3000 層，超過上限 600',
+      ),
+    );
+    const { result } = renderHook(() => useConversation({ client, threadId: 't' }));
+    await tick();
+    expect(result.current.connected).toBe(false);
+    expect(result.current.refusal).toBe(THREAD_HISTORY_TOO_DEEP_TEXT);
+    expect(result.current.connectionError).toBeUndefined();
+    expect(result.current.reconnecting).toBeUndefined();
+
+    await tick(60_000);
+    act(() => result.current.reconnectNow());
+    await act(async () => {
+      window.dispatchEvent(new Event('online'));
+    });
+    await tick(60_000);
+    expect(openEvents).toHaveBeenCalledOnce();
+    expect(result.current.refusal).toBe(THREAD_HISTORY_TOO_DEEP_TEXT);
   });
 
   it('對照組：thread 數滿了是暫時的，照退避重試，refusal 是另一句', async () => {
