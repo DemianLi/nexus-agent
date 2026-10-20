@@ -55,6 +55,7 @@ import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
 import type { CordisRoot, NexusAssembly } from './cordis-root.js';
 import { createServerLog } from './server-log.js';
 import type { ServerLog } from './server-log.js';
+import { turnFailedFields, turnFailedMessage } from './turn-failed-log.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { createColdChildStore } from './background-cold.js';
@@ -946,6 +947,11 @@ async function startServer(
     warn,
     // 閒置逐出把一條 thread 撤出記憶體是正常狀態（#1534）：info，門檻調到 warn 的主機不為它出一行。
     info: log,
+    // 一輪失敗（含背景子代理）在伺服器日誌記一行 warn（#1536）：thread、run、日誌第幾筆、失敗碼、供應商請求編號；不含失敗訊息本文。
+    // JSON 模式同樣的格另外成鍵。**接線紅燈從 `runServe` 起量**（`turn-failed-log-wiring.test.ts`），拿掉這一行就沒有那一行日誌。
+    onTurnFailed: (report) => {
+      serverLogOut.serveWith(turnFailedFields(report)).warn(turnFailedMessage(report));
+    },
     // **冷讀那一格**（#302）：讀的是續接那條路寫進去的同一格，只列切得過去的——`cwd` 就是續接時
     // `assertSameCwd` 比的那一個。落盤關掉（#612）就整個不給，列表那時講「列不出來」而不是「沒有」。
     ...(sessionStore === undefined
@@ -1311,8 +1317,9 @@ async function startServer(
       handler: routeBySurface(handler, createWebStaticHandler({ distRoot: webDist, auth })),
       port: invocation.port,
       // 一個請求處理失敗（畸形的網址、讀檔錯誤）：記進伺服器日誌、回 400，行程照跑。見 `wire-server.ts`。
-      warn: (error) => {
-        warn(`[請求] 處理失敗，回 400：${error.message}`);
+      // 方法與 pathname 一起記（#1536）：管理者才對得回是哪一個請求；pathname 不含 query，權杖不進日誌。
+      warn: (error, request) => {
+        warn(`[請求] ${request.method} ${request.path} 處理失敗，回 400：${error.message}`);
       },
       // 下行串流的心跳間隔與斷線的那一行 warn（#1504）。**另開一個選項，不借上面的 `warn`**：那一個會把每則訊息包成「處理失敗，回 400」。
       heartbeatIntervalMs: downlink.heartbeatIntervalMs,

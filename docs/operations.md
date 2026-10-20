@@ -575,7 +575,7 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 | 等級 | 放什麼 |
 | --- | --- |
 | `error` | 起不來、收不了（`[啟動失敗] 收尾也出錯`）、不變量違規（logger 名 `invariant`）、Cordis 樹上 disposer 拋的錯（例如插件關不掉；以前只進記憶體緩衝，緩衝滿 1000 則就被擠掉） |
-| `warn` | 要人處理的：`[組裝] …沒掛上`／`警告`、`[外掛]`（含 MCP 掉線重連的進度）、`[權限] … 收窄`（有會話的權限被收回）、`[清單]` 的警告、`[請求] 處理失敗，回 400`、寫不進去的 `[會話日誌]`／`[對照快照]`／`[變更紀錄]`、不可用的 `代理：`、`[home 鎖]` |
+| `warn` | 要人處理的：`[組裝] …沒掛上`／`警告`、`[外掛]`（含 MCP 掉線重連的進度）、`[權限] … 收窄`（有會話的權限被收回）、`[清單]` 的警告、`[請求] <方法> <路徑> 處理失敗，回 400`、`[回合] … 失敗`（一輪對話失敗，見〈從回報追到請求〉）、寫不進去的 `[會話日誌]`／`[對照快照]`／`[變更紀錄]`、不可用的 `代理：`、`[home 鎖]` |
 | `info` | 狀態披露：網址、模型、plugin 清單、會話日誌路徑、thread 上限、閒置逐出、遙測與 tracing 披露、`[會話日誌] … 接回來了`、`[對照快照]` 的摘要 |
 
 **命令的輸出不是日誌**：`--help`、`--version`、`--dump-config`、`--dump-config-schema` 照原樣寫標準輸出，不加前綴、不包 JSON、不看門檻
@@ -612,7 +612,7 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
 | `level` | `error`／`warn`／`info`／`debug` |
 | `logger` | logger 名（`serve`、`invariant`，樹上插件是它的名稱） |
 | `msg` | 訊息本文（錯誤物件放 `stack`，沒有就放 `message`；物件參數用 `util.inspect` 的形式） |
-| `thread_id` | 訊息帶 thread 時才有；**目前沒有任何一行填它**，來源由 #1536 統一 |
+| `thread_id`、`run_id`、`seq`、`code`、`status`、`provider_request_id` | 只有 `[回合] … 失敗` 那一行帶（見〈從回報追到請求〉）；其他行沒有這幾個鍵。`provider_request_id` 沒有就不出現，超過 200 字元的截斷接 `…` |
 
 欄位名取 OTel Logs 資料模型的慣用語意，但**不引入 OTel SDK、不送出去**：只寫標準輸出，和文字格式同一個出口。
 
@@ -620,6 +620,38 @@ CLI 不歸這一節：它走 `Printer` 到標準錯誤，是互動介面。
   **日誌平台要當成含秘密的資料處理**；根本解是 #1428 的身分，不是藏這一行。
 - 致命的啟動失敗與收尾失敗（`serve.ts` 的 `main()`）仍以純文字寫標準錯誤，不看格式與門檻：根可能已經收掉，沒有 logger 可用。
 - 不做轉送（syslog、OTLP、HTTP 推送）、不寫檔、不輪替：交給 systemd／journald 或 logrotate。
+
+### 從回報追到請求
+
+[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)。使用者回報「剛剛那句話失敗了」時，從伺服器日誌往回追到**會話日誌裡那一筆失敗**，再追到**模型閘道那一側的哪一次請求**。
+
+一輪對話失敗（`turn/failed` 寫進會話日誌）之後，伺服器日誌多一行 `warn`，logger 名 `serve`：
+
+```
+2026-10-20 10:00:00 [W] serve [回合] thread "t1" run "9f0c…" 失敗（日誌第 4 筆）：SERVER status=502 request_id=gw-123
+```
+
+| 這一段 | 怎麼用 |
+| --- | --- |
+| `thread "t1"` | 會話日誌的檔名：`<harness home>/sessions/<專案目錄>/t1.jsonl` |
+| `run "…"` | 使用者那一句話在佇列上的編號（`run.start` 回的 `run_id`）。續答核准、不是從佇列來的輪沒有這一段；背景子代理失敗時是子代理自己的 run id，thread 是派它的主對話 |
+| `日誌第 N 筆` | 那份 `.jsonl` 裡 `seq` 等於 N 的事件，就是這一輪的 `turn/failed`；失敗訊息本文在它的 `data.message` |
+| `SERVER`、`status=502` | 失敗碼與 HTTP 狀態（沒有狀態就省略） |
+| `request_id=gw-123` | 模型供應商回應標頭裡的請求編號（`request-id`、`x-request-id`、`x-deepseek-request-id`，取第一個非空的）。拿它去問閘道那一側「哪一次請求」；沒有這幾個標頭就省略 |
+
+```bash
+# 在那份會話日誌裡找這一輪的失敗（N 換成「日誌第 N 筆」）：
+jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1.jsonl
+# 這一條 thread 上所有重試過的失敗，各帶自己的請求編號：
+jq -c 'select(.type == "llm/retry") | .data.failure' ~/.nexus-agent/sessions/<專案目錄>/t1.jsonl
+```
+
+- **這一行不放失敗訊息本文**：訊息可能帶路徑或使用者內容，那些只在會話日誌，誰能讀照會話日誌的規矩。
+- JSON 格式下，同樣的資料是 `thread_id`、`run_id`、`seq`、`code`、`status`、`provider_request_id` 這幾個鍵（見上面的欄位表），`msg` 仍是上面那行文字。
+- **已知缺口**：供應商在串流**中段**才送錯誤信封（HTTP 200 開線之後）時，SDK 丟出的錯誤沒有回應標頭，`turn/failed` 沒有請求編號；
+  這種情況下重試紀錄（`llm/retry`）有，因為它是在串流層、手上還握著回應標頭時記的。
+- **請求錯誤行**：`[請求] <方法> <路徑> 處理失敗，回 400：…` 帶方法與路徑（只有 pathname，**不帶 `?` 後面的 query**，`/?token=` 的權杖在 query 裡），
+  管理者才知道是哪一個請求。
 
 ## 用 systemd 常駐
 

@@ -903,6 +903,23 @@ const DELEGATION_TOOLS: readonly string[] = DELEGATION_TOOL_NAMES;
  */
 const runScope = new AsyncLocalStorage<CurrentRun>();
 
+/**
+ * 一輪失敗、`turn/failed` 寫進日誌之後交給外面的那一份（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)）：
+ * 管理者從 thread 與回合對得回伺服器日誌、再對到會話日誌的那一筆與閘道的那一次請求。**只有編號與失敗碼，不含訊息本文**
+ * （訊息可能帶路徑或使用者內容，那些留在會話日誌，誰能讀照會話日誌的規矩；偏離 dsh 的登記見 #1536）。
+ */
+export interface TurnFailedReport {
+  readonly threadId: string;
+  /** 這一輪的 `run_id`（送出佇列那一件的 id）。不是從佇列領走的輪（續答核准、直接叫 `submit` 的）沒有。 */
+  readonly runId?: string;
+  /** 剛寫的那一筆 `turn/failed` 在會話日誌裡的 `seq`，用它回頭讀日誌。 */
+  readonly seq: number;
+  readonly code: string;
+  readonly status?: number;
+  /** 供應商的請求編號（`LlmFailure.requestId`）。 */
+  readonly requestId?: string;
+}
+
 interface CurrentRun {
   readonly controller: AbortController;
   /** root 那則回覆到目前為止的文字。`message-finish` 之後清空——講完的那則已經在 checkpoint 裡了。 */
@@ -1141,6 +1158,7 @@ export class ThreadPump {
   readonly #isArchived: (() => boolean) | undefined;
   readonly #subscribers = new Set<Subscriber>();
   readonly #downlinkMaxBytes: number;
+  readonly #onTurnFailed: ((report: TurnFailedReport) => void) | undefined;
   readonly #sessions: SessionRegistry;
   /**
    * 傳輸層的號，給瀏覽器排序去重用的。
@@ -1372,6 +1390,8 @@ export class ThreadPump {
    * @param isArchived - 這條 thread 封存了沒有（[#633](https://github.com/DemianLi/nexus-agent/issues/633)，`thread-organization.ts`）。
    *   **省略即沒有封存這回事**（沒接整理檔的組裝）。封存的 thread 不跑模型步驟：每一步送出請求之前問一次，擋下的那一輪以 `blocked` 收，
    *   見 {@link ThreadPump.#runOnce} 的 catch。
+   * @param onTurnFailed - 一輪失敗、`turn/failed` 寫進日誌之後叫一次（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)），
+   *   serve 用它在伺服器日誌記一行。**回呼拋錯吞掉**，不影響這一輪的收尾。使用者按停止、準入閘門擋下的輪不叫它（那兩條不是失敗）。
    * @param downlinkMaxBytes - 每條下行的佇列位元組上限（[#1504](https://github.com/DemianLi/nexus-agent/issues/1504)，`downlink` 那一列）。
    *   **省略即 {@link DEFAULT_DOWNLINK_MAX_BYTES}**（2 MiB，照 dsh `TerminalFollower`）。
    * @throws `titleLimits` 不是兩個正整數。
@@ -1391,8 +1411,10 @@ export class ThreadPump {
     projectionFlushMs?: number,
     isArchived?: () => boolean,
     downlinkMaxBytes: number = DEFAULT_DOWNLINK_MAX_BYTES,
+    onTurnFailed?: (report: TurnFailedReport) => void,
   ) {
     this.#downlinkMaxBytes = downlinkMaxBytes;
+    this.#onTurnFailed = onTurnFailed;
     this.#agent = agent;
     this.#isArchived = isArchived;
     this.#projectionOut = new ProjectionCoalescer(
@@ -2122,7 +2144,9 @@ export class ThreadPump {
       this.#parkIfStopped();
     } catch (error) {
       const failure = error instanceof Error ? error : new Error(String(error));
-      log.append('turn/failed', { message: failure.message, error: classifyTurnFailure(error) });
+      this.#reportTurnFailed(
+        log.append('turn/failed', { message: failure.message, error: classifyTurnFailure(error) }),
+      );
       throw failure;
     }
     // 那幾張卡照上面寫的 `tool/result` 收（#297）。**不走日誌的訂閱者**：它只認有 run 的時候，
@@ -2733,6 +2757,25 @@ export class ThreadPump {
     this.#stopParked = this.#queue.some((job) => !job.answers);
   }
 
+  /** `turn/failed` 寫進日誌之後通知外面（#1536）。回呼拋錯吞掉：通知是附帶的，不能改變這一輪怎麼收尾。 */
+  #reportTurnFailed(failed: SessionEvent<'turn/failed'>, runId?: string): void {
+    const handler = this.#onTurnFailed;
+    if (handler === undefined) return;
+    const error = failed.data.error;
+    try {
+      handler({
+        threadId: this.#threadId,
+        ...(runId !== undefined && { runId }),
+        seq: failed.seq,
+        code: error?.code ?? 'UNKNOWN',
+        ...(error?.status !== undefined && { status: error.status }),
+        ...(error?.requestId !== undefined && { requestId: error.requestId }),
+      });
+    } catch {
+      // 吞掉：見上。
+    }
+  }
+
   async #runOnce(input: PumpInput, claimed?: QueuedInput): Promise<void> {
     // **記在這裡而不是 submit 裡**：submit 只是排隊，真正開跑才是這一輪的起點。
     // 記在排隊時的話，兩件事排在一起時日誌會出現「兩個 start 之後才有第一個 end」。
@@ -2934,10 +2977,13 @@ export class ThreadPump {
       // 失敗的原因已經以 `lifecycle failed` 上了線（實測：失敗 frame 先發、然後才拋），
       // 所以這裡不再合成一顆。下行**不關**——這條線是長期的，下一次 submit 還要用。
       const failure = error instanceof Error ? error : new Error(String(error));
-      this.#sessions.root.append('turn/failed', {
-        message: failure.message,
-        error: classifyTurnFailure(error),
-      });
+      this.#reportTurnFailed(
+        this.#sessions.root.append('turn/failed', {
+          message: failure.message,
+          error: classifyTurnFailure(error),
+        }),
+        claimed?.id,
+      );
       this.#stopRequested = false;
       throw failure;
     } finally {

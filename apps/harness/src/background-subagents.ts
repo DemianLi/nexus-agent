@@ -66,6 +66,7 @@ import {
   turnReachedMaxTokens,
 } from '@nexus/core';
 import type {
+  SessionEvent,
   SessionEventMap,
   SessionLog,
   SessionRegistry,
@@ -167,6 +168,11 @@ export interface BackgroundAgentMessage {
  * serve 傳 pump 的 `notifySettled` 與 `receiveAgentMessage`。
  */
 export interface BackgroundParentPort {
+  /**
+   * 背景子代理的一輪失敗、`turn/failed` 寫進**它自己的日誌**之後叫一次（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)）。
+   * 只有編號與失敗碼，不含訊息本文。拋錯只講一聲（`warn`），不影響輪次。
+   */
+  readonly onTurnFailed?: (failure: BackgroundTurnFailure) => void;
   /** 背景子代理結算了（#840）。 */
   readonly onSettled?: (settlement: BackgroundSettlement) => void;
   /** 背景子代理寫來一則話（#849）。 */
@@ -179,6 +185,16 @@ export interface BackgroundParentPort {
    * 沒給就從不擋。
    */
   readonly isArchived?: () => boolean;
+}
+
+/** 背景子代理一輪失敗的對照資料（#1536）：`seq` 是它**自己日誌**裡那一筆 `turn/failed`。 */
+export interface BackgroundTurnFailure {
+  /** 子代理的 run id。 */
+  readonly runId: string;
+  readonly seq: number;
+  readonly code: string;
+  readonly status?: number;
+  readonly requestId?: string;
 }
 
 /** 一個背景子代理此刻的狀態（#867），見 {@link BackgroundSubagentHost.statuses}。 */
@@ -285,6 +301,8 @@ export interface BackgroundSubagentHostOptions {
   readonly onStatus?: (items: readonly BackgroundSubagentStatus[]) => void;
   /** {@link BackgroundParentPort.isArchived}。 */
   readonly isArchived?: () => boolean;
+  /** {@link BackgroundParentPort.onTurnFailed}。 */
+  readonly onTurnFailed?: (failure: BackgroundTurnFailure) => void;
   /**
    * 冷復活的存放處（[#1271](https://github.com/DemianLi/nexus-agent/issues/1271)）。**給了**：建構時從 root 日誌上的 `subagent/catalog`
    * 找出重啟之前派出的 continuable 子代理，唯讀冷讀它們的身分；叫得醒的列為 `idle`，收到話（{@link BackgroundSubagentHost.resume}）
@@ -461,6 +479,7 @@ export class BackgroundSubagentHost {
   readonly #warn: ((message: string) => void) | undefined;
   readonly #onSettled: BackgroundSubagentHostOptions['onSettled'];
   readonly #isArchived: (() => boolean) | undefined;
+  readonly #onTurnFailed: ((failure: BackgroundTurnFailure) => void) | undefined;
   readonly #cold: ColdChildStore | undefined;
   /**
    * 重啟之前派出的 continuable 子代理（#1271）：編號 → 唯讀冷讀的結果。叫醒（{@link BackgroundSubagentHost.resume}）之後從這裡搬進
@@ -504,6 +523,7 @@ export class BackgroundSubagentHost {
     // 不綁的話那一輪繼承子代理的 LangGraph／日誌路由環境，主對話的回覆就記到子代理的日誌名下（#849 的 live 實跑抓到）。
     // `onSettled` 本來就從迴圈的環境叫，一起綁只是讓兩個出口的規矩一致。
     this.#isArchived = options.isArchived;
+    this.#onTurnFailed = options.onTurnFailed;
     this.#onSettled =
       options.onSettled === undefined ? undefined : AsyncResource.bind(options.onSettled);
     this.#onMessage =
@@ -1269,7 +1289,8 @@ export class BackgroundSubagentHost {
       if (log === undefined) this.#warnFailure(job, message);
       else {
         try {
-          log.append('turn/failed', { message, error: classifyTurnFailure(error) });
+          const failed = log.append('turn/failed', { message, error: classifyTurnFailure(error) });
+          this.#notifyTurnFailed(job, failed);
         } catch (appendError) {
           this.#warnFailure(job, `${message}（連 turn/failed 都寫不進去：${String(appendError)}）`);
         }
@@ -1308,6 +1329,29 @@ export class BackgroundSubagentHost {
       this.#warn?.(`[背景子代理] ${runId} 的結算通知沒送到主對話：${message}`);
     } catch {
       // 講不出來也不影響輪次。
+    }
+  }
+
+  /** `turn/failed` 寫進這個子代理的日誌之後通知外面（#1536）。拋錯只講一聲，不影響輪次，也不當成「寫不進 turn/failed」。 */
+  #notifyTurnFailed(job: Job, failed: SessionEvent<'turn/failed'>): void {
+    if (this.#onTurnFailed === undefined) return;
+    const failure = failed.data.error;
+    try {
+      this.#onTurnFailed({
+        runId: job.runId,
+        seq: failed.seq,
+        code: failure?.code ?? 'UNKNOWN',
+        ...(failure?.status !== undefined && { status: failure.status }),
+        ...(failure?.requestId !== undefined && { requestId: failure.requestId }),
+      });
+    } catch (callbackError) {
+      try {
+        this.#warn?.(
+          `[背景子代理] ${job.runId} 的失敗通知講不出去：${callbackError instanceof Error ? callbackError.message : String(callbackError)}`,
+        );
+      } catch {
+        // 講不出來也不影響輪次。
+      }
     }
   }
 

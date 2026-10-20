@@ -65,8 +65,12 @@ export interface StartWireServerOptions {
   readonly host?: string;
   /** 先收完整份的路由的本文上限（位元組）。預設 {@link DEFAULT_MAX_REQUEST_BODY_BYTES}；超過回 413。串流路由不受管。 */
   readonly maxRequestBodyBytes?: number;
-  /** 一個請求處理失敗時往哪裡講（見 {@link startWireServer} 的最後一道防線）。預設 `console.warn`。 */
-  readonly warn?: (error: Error) => void;
+  /**
+   * 一個請求處理失敗時往哪裡講（見 {@link startWireServer} 的最後一道防線）。預設 `console.warn`。
+   * 第二個參數是那個請求的方法與 pathname（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)），管理者才知道是哪一個請求。
+   * **`path` 只有 pathname，不帶 query**：`/?token=…` 的權杖在 query 裡，進日誌就洩了。
+   */
+  readonly warn?: (error: Error, request: WarnedRequest) => void;
   /**
    * SSE 心跳間隔（毫秒），預設 {@link DEFAULT_SSE_HEARTBEAT_INTERVAL_MS}。連續 {@link MAX_MISSED_HEARTBEATS} 拍緩衝卡著、
    * 沒有任何排出去的進展，就斷那一條線（#1504）。
@@ -289,6 +293,20 @@ async function writeResponse(
   }
 }
 
+/** 最後一道防線記錄的請求：方法與 pathname。 */
+export interface WarnedRequest {
+  readonly method: string;
+  readonly path: string;
+}
+
+/**
+ * 原始請求目標 → pathname：**在 `?` 與 `#` 前切開，不解析**。最後一道防線本來就會收到畸形的網址，`new URL()` 自己會拋，
+ * 拋了這一行就印不出來；用切的，畸形的也有結果，而 query 裡的權杖一個字都進不來。
+ */
+export function pathnameOf(target: string | undefined): string {
+  return (target ?? '').split(/[?#]/u, 1)[0] ?? '';
+}
+
 export async function startWireServer(options: StartWireServerOptions): Promise<WireServer> {
   const host = options.host ?? '127.0.0.1';
   const warn = options.warn ?? ((error: Error) => console.warn(error));
@@ -355,7 +373,10 @@ export async function startWireServer(options: StartWireServerOptions): Promise<
   // 整個行程退出：同機任何人送一個畸形的請求就能把 serve 打掉（#424 審查時實測過）。
   const server: Server = createServer((incoming, outgoing) => {
     void handle(incoming, outgoing).catch((error: unknown) => {
-      warn(error instanceof Error ? error : new Error(String(error)));
+      warn(error instanceof Error ? error : new Error(String(error)), {
+        method: incoming.method ?? '',
+        path: pathnameOf(incoming.url),
+      });
       if (outgoing.headersSent) {
         outgoing.destroy();
         return;
