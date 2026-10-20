@@ -337,6 +337,8 @@ export {
 
 export {
   createObservationPolicy,
+  createVersionHasher,
+  noteReadVersion,
   OBSERVATION_POLICY_MIDDLEWARE_NAME,
   OBSERVATION_POLICY_NOTICE,
   OBSERVATION_POLICY_PLUGIN_NAME,
@@ -345,6 +347,7 @@ export {
   OBSERVED_READ_TOOL,
   OBSERVED_WRITE_TOOL,
 } from './observation.js';
+export type { VersionHasher } from './observation.js';
 
 // 檔案錯誤與讀到哪各是一對：middleware 開 ALS 槽、backend 的 Proxy 寫入，只掛一半會靜默失效。
 // 兩對都只由 `foldRegistry` 組起來，主入口不公開半邊（#698）；core 以外要用時公開成對的單一入口。
@@ -379,7 +382,18 @@ export {
   SEARCH_OVERFLOW_MIDDLEWARE_NAME,
 } from './search-overflow.js';
 
-export { continuationFooter, READ_CONTINUATION_MIDDLEWARE_NAME } from './read-continuation.js';
+export {
+  continuationFooter,
+  currentReadWindow,
+  EMPTY_CONTENT_WARNING,
+  noteReadWindow,
+  READ_CONTINUATION_MIDDLEWARE_NAME,
+  READ_LIMIT,
+  READ_MAX_BYTES,
+  READ_MAX_LINE_LENGTH,
+  readLineTruncationSuffix,
+} from './read-continuation.js';
+export type { ReadExtent, ReadWindowRequest } from './read-continuation.js';
 export type {
   DiffResultMeta,
   FileDiff,

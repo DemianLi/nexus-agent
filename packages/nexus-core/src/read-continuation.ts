@@ -88,8 +88,8 @@ export const READ_CONTINUATION_MIDDLEWARE_NAME = 'nexusReadContinuation';
 /** 基座的讀檔工具。名字是 `deepagents@1.13.1` 取的，不是我們（同 `observation.ts` 的 `OBSERVED_*`）。 */
 const READ_TOOL = 'read_file';
 
-/** 基座空檔時回的那句（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:22`）。 */
-const EMPTY_CONTENT_WARNING = 'System reminder: File exists but has empty contents';
+/** 基座空檔（或全是空白）時回的那句（`deepagents@1.13.1`，`dist/langsmith-zm0ILQsV.js:22`）。自己讀檔的 backend 要回同一句。 */
+export const EMPTY_CONTENT_WARNING = 'System reminder: File exists but has empty contents';
 
 /** 基座自己截斷時附的那段說明的開頭（`READ_FILE_TRUNCATION_MSG`，見檔頭）。 */
 const BASE_TRUNCATION_MARK = '[Output was truncated due to size limits.';
@@ -102,8 +102,30 @@ export const READ_LIMIT = 2000;
 /** 一頁選到的行累計最多幾個位元組。同 dsh 的 `READ_MAX_BYTES`（`read-render.ts:14`）。 */
 export const READ_MAX_BYTES = 50 * 1024;
 
+/**
+ * 一行最多幾個字元，超過截斷並接 {@link READ_LINE_TRUNCATION_SUFFIX}。同 dsh 的 `READ_MAX_LINE_LENGTH`
+ * （`packages/fs/tool-fs/src/read-render.ts:11`）。
+ */
+export const READ_MAX_LINE_LENGTH = 2000;
+
+/** 被截斷的行接的後綴，措辭同 dsh（`read-render.ts:69-71`）。 */
+export function readLineTruncationSuffix(maxLineLength: number = READ_MAX_LINE_LENGTH): string {
+  return `... (line truncated to ${maxLineLength} chars)`;
+}
+
+/**
+ * 一次 `read_file` 要 backend 建的那一頁（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）。
+ * `offset` 從 0 起算（同基座），`limit` 是工具的 `limit`（已套預設與上限）。
+ */
+export interface ReadWindowRequest {
+  readonly offset: number;
+  readonly limit: number;
+  readonly maxLineLength: number;
+  readonly maxBytes: number;
+}
+
 /** 一次 `read_file` 裡，backend 讀到的範圍。 */
-interface ReadExtent {
+export interface ReadExtent {
   /** 從第幾行讀起，0 起算，同基座的 `offset`。 */
   readonly offset: number;
   /** 交給工具的行數。 */
@@ -116,6 +138,10 @@ interface ReadExtent {
 
 /** 一次工具呼叫裡記下的東西。`extent` 沒有 ＝ 這一次沒有讀到文字內容。 */
 interface CallRecord {
+  /** 這一次要 backend 建的頁；backend 用 {@link currentReadWindow} 領走（只領一次）。 */
+  request?: ReadWindowRequest;
+  /** `request` 被領走了沒。 */
+  requestTaken?: boolean;
   extent?: ReadExtent;
   /** 交給工具的那幾行，原文（給 meta，見 {@link readResultMeta}）。跟 `extent` 同時寫。 */
   lines?: readonly string[];
@@ -155,7 +181,40 @@ function linesWithinBytes(lines: readonly string[], wanted: number): number {
 }
 
 /**
+ * backend 在 `read_file` 裡的第一次 `read` 領這一頁的請求：自己讀、自己建頁，不必交出整段讓外面切
+ * （[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)，偏離 1）。
+ *
+ * **只有 `read_file` 裡、這次呼叫的第一次 `read` 才有**，其餘回 `undefined`——摘要器、`agent-instructions` 的 `discover`、
+ * 測試直接呼叫 backend 時，backend 照基座的切片語意回，不截行、不套位元組上限。領了之後要叫 {@link noteReadWindow}
+ * 把頁回報回來；沒回報的話 {@link readWithExtent} 走原本的路。
+ *
+ * @returns 要建的頁；不在 `read_file` 裡、或已經領過是 `undefined`。
+ */
+export function currentReadWindow(): ReadWindowRequest | undefined {
+  const record = currentRead.getStore();
+  if (record?.request === undefined || record.requestTaken === true) return undefined;
+  record.requestTaken = true;
+  return record.request;
+}
+
+/**
+ * backend 建好頁之後回報：頁的範圍與交給工具的那幾行（已截行的版本）。回報了，{@link readWithExtent} 就把 backend 回的內容
+ * 原樣交出，不再 `split`、不再切。不在 `read_file` 裡時什麼都不做。
+ *
+ * @param extent - 這一頁的範圍；`total` 是整個檔的行數（結尾那個換行不算一行，同基座的編號）。
+ * @param lines - 交給工具的那幾行。
+ */
+export function noteReadWindow(extent: ReadExtent, lines: readonly string[]): void {
+  const record = currentRead.getStore();
+  if (record === undefined) return;
+  record.extent = extent;
+  record.lines = lines;
+}
+
+/**
  * 在一次 `read_file` 裡：讀到檔尾、數行、切回原本的 `limit`，再照 {@link READ_MAX_BYTES} 收一次。
+ *
+ * **backend 自己建了頁的話**（它領了 {@link currentReadWindow} 的請求並叫了 {@link noteReadWindow}），這裡只交出它回的內容。
  *
  * @returns 交給工具的那一份——沒撞到位元組上限時，跟不放開 `limit` 時一字不差。
  */
@@ -168,7 +227,10 @@ async function readWithExtent(
   // 基座的工具三個都會給；沒給 `limit` 的不是它，原樣轉交。
   if (typeof limit !== 'number') return read(...(args as [unknown, number, number]));
   const offset = typeof rawOffset === 'number' ? rawOffset : 0;
+  record.request = { offset, limit, maxLineLength: READ_MAX_LINE_LENGTH, maxBytes: READ_MAX_BYTES };
   const result = (await read(path, offset, Number.MAX_SAFE_INTEGER)) as ReadResultLike;
+  // backend 自己建了頁（#1530）：內容已經是那一頁，範圍也已經回報。
+  if (record.extent !== undefined) return result;
   if (typeof result !== 'object' || result === null || typeof result.content !== 'string') {
     return result;
   }

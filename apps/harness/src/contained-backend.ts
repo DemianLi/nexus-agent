@@ -65,6 +65,7 @@ import { createHash } from 'node:crypto';
 import { dirname, extname, relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
+import type { FileHandle } from 'node:fs/promises';
 import { applyGrepMaxCount, FilesystemBackend } from 'deepagents';
 import type {
   DeleteResult,
@@ -76,18 +77,25 @@ import type {
 } from 'deepagents';
 
 import {
+  createVersionHasher,
+  currentReadWindow,
   currentToolCallSignal,
+  EMPTY_CONTENT_WARNING,
+  noteReadVersion,
+  noteReadWindow,
   noteSandboxDenial,
   noteSearchError,
   SEARCH_FAILED,
 } from '@nexus/core';
 import { writeFileAtomic, withTargetLock } from './atomic-workspace-write.js';
 import type { AtomicWriteInternals } from './atomic-workspace-write.js';
-import { notTextReason, refuseNonText } from './binary-read.js';
+import { BINARY_SAMPLE_BYTES } from './binary-read.js';
 import { canonicalize } from './canonical-path.js';
 import { resolveRgPath } from './rg-path.js';
 import { runRipgrep } from './ripgrep-runner.js';
 import type { RipgrepInternals } from './ripgrep-runner.js';
+import { pageOf, scanWindow, ScanAborted } from './text-window.js';
+import { NotUtf8, streamUtf8 } from './utf8-stream.js';
 import type {
   SandboxDenial,
   SearchErrorCode,
@@ -105,6 +113,20 @@ import type {
 function denied<T extends { error: string }>(result: T): T {
   noteSandboxDenial();
   return result;
+}
+
+/** 讀檔碰到不是文字的檔。字句同基座 `notTextReason` 時代的：`cannot read "<路徑>": <原因>`。 */
+function notText(filePath: string, reason: 'binary file' | 'invalid UTF-8 text'): ReadResult {
+  return { error: `cannot read "${filePath}": ${reason}` };
+}
+
+/** 整份位元組 fatal 解碼；開頭的 BOM 留著（偏離 2）。 */
+function decodeWhole(bytes: Uint8Array): string {
+  try {
+    return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+  } catch {
+    throw new NotUtf8();
+  }
 }
 
 /**
@@ -290,7 +312,18 @@ export interface ContainedFilesystemBackendOptions {
   readonly ripgrep?: RipgrepInternals;
   /** 原子寫入的測試接縫（暫存名、檢查點、注入失敗），見 {@link AtomicWriteInternals}。正式組裝不給。 */
   readonly atomicInternals?: AtomicWriteInternals;
+  /**
+   * 讀檔：檔案大小**達到**這個位元組數就串流讀，邊讀邊掃，不整份留在記憶體；比它小的一次讀進來。預設 {@link READ_STREAM_MIN_SIZE}。
+   * 名字與預設照 dsh 的 `readStreamMinSize`（`packages/fs/tool-fs/src/read.ts:21`、`index.ts:42`）。
+   */
+  readonly streamMinSize?: number;
 }
+
+/** 讀檔改用串流的檔案大小門檻（位元組）。同 dsh 的 `STREAM_MIN_SIZE`（`read.ts:21`）。 */
+export const READ_STREAM_MIN_SIZE = 10 * 1024 * 1024;
+
+/** 讀檔被取消（使用者停止、工具逾時）時回的錯誤字句。 */
+const READ_ABORTED = 'read aborted';
 
 /**
  * 在寫入路徑上加了 canonicalize-then-contain 的 `FilesystemBackend`。
@@ -310,6 +343,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
   private readonly ripgrepInternals: RipgrepInternals | undefined;
   /** 原子寫入的測試接縫；正式組裝是 `undefined`。 */
   private readonly atomicInternals: AtomicWriteInternals | undefined;
+  /** 讀檔改串流的大小門檻。 */
+  private readonly streamMinSize: number;
 
   /**
    * 這一刻的圍堵強度，錯誤訊息會指名它。
@@ -332,48 +367,105 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     this.grants = options.grants;
     this.ripgrepInternals = options.ripgrep;
     this.atomicInternals = options.atomicInternals;
+    this.streamMinSize = options.streamMinSize ?? READ_STREAM_MIN_SIZE;
   }
 
   /**
-   * 讀檔：二進位檔照 dsh 拒絕（{@link refuseNonText}，判準與偏離見 `binary-read.ts`），其餘原樣交給基座。
+   * 讀檔（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：**自己讀，只讀一次**，不再先 `super.read` 整份、
+   * 再讀一次原始位元組判二進位，也不再讓「先讀後改」為了記版本整份 `readRaw`。
    *
-   * **判在基座讀完之後**：不存在、是符號連結、超出根目錄，照舊由基座回它自己的錯。文字那一支基座已經用有損的 UTF-8
-   * 解掉了（非法位元組變成 U+FFFD，分不出原本就是 U+FFFD），所以另外讀一次原始位元組來判；非文字那一支位元組就在
-   * 手上。
+   * 路徑與錯誤字句照基座（`FilesystemBackend.read`）：路徑走基座的 `resolvePath`（字面檢查 `..`、`~`、跑出根），不是一般檔回
+   * `File '…' not found`，用 `O_RDONLY|O_NOFOLLOW` 開檔（符號連結是 `ELOOP`），其餘例外回 `Error reading file '…': …`。
+   * 判二進位照 dsh（`fsio.ts` 的 `readWholeText`／`streamWholeText`）：前 {@link BINARY_SAMPLE_BYTES} 位元組有 NUL 是
+   * `binary file`，fatal 解碼失敗是 `invalid UTF-8 text`；**看內容，不看副檔名**（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。
+   *
+   * **大小決定路由**：用開檔後同一個 fd 的 `stat`，`size` 小於 `streamMinSize` 就 `readFile` 一次，否則 `createReadStream` 逐 chunk
+   * 解碼、掃描；兩條路交給同一支 {@link scanWindow}，判斷的與讀到的是同一個檔。
+   *
+   * **在 `read_file` 裡**（`currentReadWindow()` 有值）：照請求建頁——每行截到 2000 字元、選到的行累計 50 KiB 就停但掃到檔尾數總行數——
+   * 並回報頁的範圍（`noteReadWindow`）與邊讀邊算好的版本（`noteReadVersion`，給「先讀後改」）。**不在 `read_file` 裡**（摘要器、
+   * `agent-instructions` 的 `discover`、直接呼叫）：語意照基座，回 `lines[offset, offset+limit)`，不截行、不套位元組上限。
+   *
+   * 取消：`currentToolCallSignal()` 接進讀取，中止時回 `{ error: 'read aborted' }`，不拋。
+   *
+   * **與 dsh 的偏離**：行尾 `\r` 不去掉、開頭的 BOM 不吃掉（偏離 2，理由見 `text-window.ts` 與 `utf8-stream.ts`）；另外視窗經旁路回報，
+   * 不經工具回傳值（偏離 1，見 `read-continuation.ts`）。
    *
    * @param filePath - 虛擬路徑。
-   * @param offset - 從第幾行起（0 起算），交給基座。
-   * @param limit - 最多幾行，交給基座。
-   * @returns 基座的結果，或二進位檔的錯誤結果。
+   * @param offset - 從第幾行起（0 起算）。
+   * @param limit - 最多幾行。
+   * @returns 內容（`mimeType: 'text/plain'`，基座的工具才走文字那一支），或錯誤結果。
    */
-  override async read(filePath: string, offset?: number, limit?: number): Promise<ReadResult> {
-    const result = await super.read(filePath, offset, limit);
-    if (result.error !== undefined) return result;
-    if (result.content instanceof Uint8Array) return refuseNonText(filePath, result.content);
-    let reason: string | undefined;
+  override async read(filePath: string, offset = 0, limit = 500): Promise<ReadResult> {
+    const signal = currentToolCallSignal();
     try {
-      reason = notTextReason(await this.rawBytes(filePath));
+      const resolved = this.resolveVirtual(filePath);
+      if (signal?.aborted === true) return { error: READ_ABORTED };
+      if (!(await stat(resolved)).isFile()) return { error: `File '${filePath}' not found` };
+      const handle = await open(resolved, constants.O_RDONLY | constants.O_NOFOLLOW);
+      try {
+        return await this.readOpened(handle, filePath, offset, limit, signal);
+      } finally {
+        await handle.close();
+      }
     } catch (error: unknown) {
+      if (error instanceof ScanAborted || signal?.aborted === true) return { error: READ_ABORTED };
+      if (error instanceof NotUtf8) return notText(filePath, 'invalid UTF-8 text');
       return { error: `Error reading file '${filePath}': ${(error as Error).message}` };
     }
-    return reason === undefined ? result : { error: `cannot read "${filePath}": ${reason}` };
   }
 
-  /**
-   * 一個檔的原始位元組。路徑照基座虛擬模式的 `resolvePath` 拼（`cwd` 底下字面拼接，它在 TS 上是 private），開檔照基座
-   * 帶 `O_NOFOLLOW`——判的要是基座剛讀的那一個檔。
-   */
-  private async rawBytes(filePath: string): Promise<Uint8Array> {
-    const virtualPath = filePath.startsWith('/') ? filePath : `/${filePath}`;
-    const handle = await open(
-      resolve(this.cwd, virtualPath.slice(1)),
-      constants.O_RDONLY | constants.O_NOFOLLOW,
-    );
-    try {
-      return await handle.readFile();
-    } finally {
-      await handle.close();
+  /** {@link read} 開好檔之後的那一半：判文字、掃描、組結果。 */
+  private async readOpened(
+    handle: FileHandle,
+    filePath: string,
+    offset: number,
+    limit: number,
+    signal: AbortSignal | undefined,
+  ): Promise<ReadResult> {
+    const info = await handle.stat();
+    const window = currentReadWindow();
+    const params = window ?? {
+      offset: Math.max(0, Math.trunc(offset)),
+      limit: Math.max(0, Math.trunc(limit)),
+      maxLineLength: Infinity,
+      maxBytes: Infinity,
+    };
+    const hasher = window === undefined ? undefined : createVersionHasher();
+    const options = {
+      ...(hasher === undefined ? {} : { onChunk: (chunk: string) => hasher.update(chunk) }),
+      ...(signal === undefined ? {} : { signal }),
+    };
+    let scan;
+    if (info.size < this.streamMinSize) {
+      const bytes = await handle.readFile(signal === undefined ? undefined : { signal });
+      if (bytes.subarray(0, BINARY_SAMPLE_BYTES).includes(0))
+        return notText(filePath, 'binary file');
+      const decoded = decodeWhole(bytes);
+      scan = await scanWindow([decoded], params, options);
+    } else {
+      const sample = Buffer.alloc(BINARY_SAMPLE_BYTES);
+      const { bytesRead } = await handle.read(sample, 0, BINARY_SAMPLE_BYTES, 0);
+      if (sample.subarray(0, bytesRead).includes(0)) return notText(filePath, 'binary file');
+      const source = handle.createReadStream({
+        start: 0,
+        autoClose: false,
+        ...(signal === undefined ? {} : { signal }),
+      });
+      scan = await scanWindow(streamUtf8(source, { ignoreBOM: true }), params, options);
     }
+    const page = pageOf(scan, params);
+    if (page.kind === 'blank') return { content: EMPTY_CONTENT_WARNING, mimeType: 'text/plain' };
+    if (page.kind === 'beyond') {
+      return {
+        error: `Line offset ${params.offset} exceeds file length (${page.splitLength} lines)`,
+      };
+    }
+    if (window !== undefined && hasher !== undefined) {
+      noteReadWindow(page.extent, scan.lines);
+      noteReadVersion(hasher.version(info.mtime.toISOString()));
+    }
+    return { content: page.content, mimeType: 'text/plain' };
   }
 
   /**
