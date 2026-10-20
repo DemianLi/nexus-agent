@@ -13,3 +13,4 @@ apps/harness/src/serve-shutdown.test.ts       # 真的子行程 serve 加訊號�
 apps/harness/src/serve-echo-on-tree.test.ts   # Loader 依套件名 import 插件的那條路
 apps/harness/src/entry-main.test.ts           # 經符號連結啟動時 import.meta.main 為真（#1502 刀 1；22.19 是它的下限）
 apps/web/src/lib/theme.test.tsx               # web 的 vitest 在這一版跑得起來；碰 localStorage（Node 25 起有行程全域的那份）。#1602 的 test-env.test.ts 合併後加進來
+apps/harness/src/tz-probe-1733.test.ts   # 臨時探針 #1733
