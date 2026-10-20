@@ -2488,8 +2488,9 @@ describe('瀏覽器量對話區（#1638 PR B，`?overlay=messages`）', () => {
 
   /**
    * 浮鈕的避讓（`hooks/use-scroll-button-clearance.ts`，#1295）在浮鈕位移之後還對（#1687 驗收 C3）。浮鈕從藏著的位置
-   * （往下一整個身高、縮 .95）過渡到出現的位置，hook 在過渡途中量到的是途中的框；它要在 `transitionend`（平常）與
-   * `data-active` 一換（reduced-motion 下沒有過渡）時重量，最後的 `data-obscuring` 才對得上終點的框。
+   * （往下一整個身高、縮 .95）過渡到出現的位置，hook 在過渡途中量到的是途中的框；它要在 `transitionend` 時重量，最後的
+   * `data-obscuring` 才對得上終點的框。reduced-motion 下沒有過渡，靠捲動那次重量就量到終點：primitive 的 `data-active` 在 scroll
+   * 事件之前就翻好（`@shadcn/react` 0.3.1 實測）；升 primitive 之後翻轉時機變了，reduced-motion 那一格會紅。
    *
    * 做法：先記下藏著與出現兩個框，在對話內容裡挑一個「壓得到出現的框、壓不到藏著的框」的元素標成要讓開的目標，
    * 再捲一次回頂端。平常的那一格先自檢：過渡暫停在 0 的框與 `finish()` 之後的框，用 `obscures()` 算出來的結論不同
@@ -2553,7 +2554,7 @@ describe('瀏覽器量對話區（#1638 PR B，`?overlay=messages`）', () => {
             viewport.scrollTop = 0;
             for (let i = 0; i < 120 && button.getAttribute('data-active') !== 'true'; i++)
               await frame();
-            // 讓 hook 因 `data-active` 換掉而排的那次重量先跑完（量到的是過渡剛開始的框），再把過渡推到終點：
+            // 讓 hook 因捲動而排的那次重量先跑完（量到的是過渡剛開始的框），再把過渡推到終點：
             // 這樣終點要靠 `transitionend` 才量得到，拿掉它會紅。
             await frame();
             await frame();

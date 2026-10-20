@@ -16,9 +16,13 @@ import type { RefObject } from 'react';
  * `message-scroller-button`（`components/ui/message-scroller.test.tsx` 釘）。
  *
  * **浮鈕會位移**（#1687 撤掉 README 本地修改第 41 條、改回 vendor 原樣）：藏著時 `translate-y-full scale-95`，出現與藏起來各有
- * 200／400ms 的過渡。`getBoundingClientRect` 量到的是過渡途中的框，所以除了捲動與尺寸，再加兩個重量的時機：
- * - `data-active` 一換（`MutationObserver`）：reduced-motion 下沒有過渡、位置直接跳，不會有 `transitionend`。
- * - 浮鈕自己的 `transitionend`：過渡跑完，量到終點的框。
+ * 200／400ms 的過渡。`getBoundingClientRect` 量到的是過渡途中的框，所以除了捲動與尺寸，再聽浮鈕自己的 `transitionend`：
+ * 過渡跑完再量一次，量到終點的框。
+ *
+ * **不另外看 `data-active`**（PM 2026-10-21 判，#1687）：primitive 的 `data-active` 只在捲動、尺寸、內容變動這三種事件的處理裡
+ * 同步翻轉，而且比這裡排的 rAF 重量先提交（翻轉在 scroll 事件之前，同一幀），所以 reduced-motion 下沒有過渡、位置直接跳，
+ * 捲動那次重量量到的就是終點。這是在 `@shadcn/react` 0.3.1 上實測的；**升 primitive 的版本時要重核**，翻轉若改成在別的時機發生，
+ * 這裡就要補一個看 `data-active` 的重量時機（`guard/` 的避讓格 reduced-motion 那一格量得到）。
  * 過渡那一小段裡量到的還是途中的框，可能閃一下；不改用 `offsetTop`：水平置中也是靠 transform，改了等於綁死 vendor 的 class。
  */
 
@@ -84,8 +88,6 @@ export function useScrollButtonClearance(viewportRef: RefObject<HTMLElement | nu
 
     viewport.addEventListener('scroll', schedule, { passive: true });
     button.addEventListener('transitionend', settled);
-    const active = new MutationObserver(schedule);
-    active.observe(button, { attributes: true, attributeFilter: ['data-active'] });
     // 面板展開、視窗變寬窄時不會捲動，要靠尺寸變化再量一次。jsdom 沒有 ResizeObserver（也沒有版面），那裡只聽捲動。
     const resize = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(schedule);
     resize?.observe(viewport);
@@ -94,7 +96,6 @@ export function useScrollButtonClearance(viewportRef: RefObject<HTMLElement | nu
     return () => {
       viewport.removeEventListener('scroll', schedule);
       button.removeEventListener('transitionend', settled);
-      active.disconnect();
       resize?.disconnect();
       cancelAnimationFrame(frame);
     };
