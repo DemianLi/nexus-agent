@@ -40,6 +40,7 @@ import { createContainmentMiddleware } from './containment.js';
 import { createToolBarrierMiddleware } from './tool-barrier.js';
 import { createOutputSchemaMiddleware } from './output-schema.js';
 import { createFsToolErrorsMiddleware, recordBackendOutcomes } from './fs-tool-errors.js';
+import { limitGlobPatterns } from './glob-pattern-limit.js';
 import { FS_SERVICE, settleFsService } from './fs-service.js';
 import { WORKSPACE_CAPABILITY } from './sandbox.js';
 import { createReadContinuationMiddleware, recordReadExtent } from './read-continuation.js';
@@ -799,11 +800,14 @@ export function foldRegistry(
   if (permissions.length > 0) params.permissions = permissions;
   // 三層都轉交同一個實例；讀到哪那一層在內側，失敗記錄看到的是它切回去之後的那份。
   // 抓 meta 的那層在最內側，看到的是 backend 原本交出的結果，見 {@link ./tool-result-meta.ts}。
+  // glob pattern 的上限貼著 backend、不看設定：超過的那一次 backend 一次都不叫，外面每一層看到的都是那則錯誤，
+  // 見 {@link ./glob-pattern-limit.ts}。
   if (backend !== undefined) {
+    const limited = limitGlobPatterns(backend);
     params.backend = recordBackendOutcomes(
       recordReadExtent(
         // 筆數上限的包裝在搜尋卡那層內側：卡片看到的是截過的前段，跟模型同一份。
-        recordToolResultMeta(searchOverflow === undefined ? backend : capSearchResults(backend), {
+        recordToolResultMeta(searchOverflow === undefined ? limited : capSearchResults(limited), {
           search: searchMetaAllowed(registry, permissions),
         }),
       ),

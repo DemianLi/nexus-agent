@@ -362,6 +362,14 @@ export {
 } from './fs-tool-errors.js';
 export type { SearchErrorCode } from './fs-tool-errors.js';
 
+// glob pattern 的大括號上限：包 backend 的那一層只由 `foldRegistry` 掛，主入口只公開上限與錯誤字句。
+export {
+  GLOB_PATTERN_MAX_DEPTH,
+  GLOB_PATTERN_MAX_EXPANSIONS,
+  GLOB_PATTERN_MAX_LENGTH,
+  GLOB_PATTERN_TOO_COMPLEX,
+} from './glob-pattern-limit.js';
+
 export type { SpillPolicyOptions, SpillRef, SpillSaveRequest, SpillStore } from './spill-policy.js';
 export {
   createSpillPolicyMiddleware,
