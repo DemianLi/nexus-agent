@@ -54,6 +54,7 @@ import type { SessionEvent } from '@nexus/core';
 import type { DeliverableFilePage, DeliverableFileStat } from '@nexus/wire';
 
 import type { DeliverableFilesConfig } from './settings/deliverable-files.js';
+import { NotUtf8, streamUtf8 } from './utf8-stream.js';
 
 /** 文字不會帶的那個位元組；它在就代表這個檔不是文字。照 dsh 的 `NUL`。 */
 const NUL = String.fromCharCode(0);
@@ -284,36 +285,6 @@ export async function readDeliverableBytes(
 /** 一頁超過位元組上限時丟出來，在 {@link readDeliverablePage} 裡翻成拒絕。 */
 class PageTooLarge extends Error {}
 
-/** 讀到不是 UTF-8 的位元組時丟出來，在 {@link readDeliverablePage} 裡翻成 `not-text`。 */
-class NotUtf8 extends Error {}
-
-/**
- * 把檔案串流成 UTF-8 文字，**碰到不是 UTF-8 的位元組就停**，照 dsh 的 `streamText`（「decodes and
- * rejects non-UTF-8 as it goes」）。
- *
- * 用 `TextDecoder` 而不是 `createReadStream` 的 `encoding`：後者把壞位元組換成 U+FFFD、不會拒；
- * 而且 `TextDecoder` 預設吃掉開頭的 BOM，跟這條路從前整檔解碼時一樣。多位元組字元切在兩片之間
- * 由 `stream: true` 接住。
- *
- * 呼叫端提早收手時（`for await` 的 `return`），底下那個串流跟著關掉，檔案其餘部分不讀。
- *
- * @param path - 已經通過閘門的那條絕對路徑。
- * @throws {NotUtf8} 讀到的位元組不是 UTF-8。
- */
-async function* streamUtf8(path: string): AsyncGenerator<string> {
-  const decoder = new TextDecoder('utf-8', { fatal: true });
-  const decode = (chunk?: Buffer): string => {
-    try {
-      return chunk === undefined ? decoder.decode() : decoder.decode(chunk, { stream: true });
-    } catch {
-      throw new NotUtf8();
-    }
-  };
-  for await (const chunk of createReadStream(path)) yield decode(chunk as Buffer);
-  const tail = decode();
-  if (tail.length > 0) yield tail;
-}
-
 /** 從串流切出來的一頁，還沒掃 NUL。 */
 interface CutPage {
   readonly text: string;
@@ -331,7 +302,7 @@ interface CutPage {
  *
  * **最後一行後面的換行不算一行**：串流結束時手上沒有半行，就不補一行空的。
  *
- * @param chunks - 解碼過的文字片段，見 {@link streamUtf8}。
+ * @param chunks - 解碼過的文字片段，見 {@link streamUtf8}（`utf8-stream.ts`，預覽沿用 `TextDecoder` 預設，吃掉開頭的 BOM）。
  * @param offset - 從第幾行起，0 起算。
  * @param limit - 最多幾行。
  * @param maxBytes - 一頁的位元組上限，含行與行之間的換行。
@@ -419,7 +390,12 @@ export async function readDeliverablePage(
   let page: CutPage;
   try {
     // 提早 return 會讓 `for await` 呼叫迭代器的 `return`，串流隨之關掉，檔案其餘部分不讀。
-    page = await cutPage(streamUtf8(located.target), offset, limit, limits.maxBytes);
+    page = await cutPage(
+      streamUtf8(createReadStream(located.target)),
+      offset,
+      limit,
+      limits.maxBytes,
+    );
   } catch (error) {
     if (error instanceof PageTooLarge) {
       return refuse(

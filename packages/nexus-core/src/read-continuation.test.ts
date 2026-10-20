@@ -11,8 +11,11 @@ import { z } from 'zod';
 import {
   continuationFooter,
   createReadContinuationMiddleware,
+  currentReadWindow,
+  noteReadWindow,
   READ_LIMIT,
   READ_MAX_BYTES,
+  READ_MAX_LINE_LENGTH,
   recordReadExtent,
 } from './read-continuation.js';
 
@@ -415,5 +418,100 @@ describe('模型看到的 read_file', () => {
       return undefined;
     });
     expect(seen).toBe(request);
+  });
+});
+
+describe('backend 自己建頁的旁路（#1530）', () => {
+  const wrap = wrapperOf(createReadContinuationMiddleware());
+
+  /** 領走請求、自己建頁（取 `limit` 行，固定檔案共 10 行）、回報範圍的 backend。 */
+  class WindowBackend {
+    readonly taken: Array<ReturnType<typeof currentReadWindow>> = [];
+    readonly calls: Array<[string, number, number]> = [];
+
+    async read(path: string, offset = 0, limit = 500): Promise<{ content?: string }> {
+      this.calls.push([path, offset, limit]);
+      const window = currentReadWindow();
+      this.taken.push(window);
+      this.taken.push(currentReadWindow());
+      if (window === undefined) return { content: 'raw' };
+      const lines = Array.from({ length: 10 }, (_, i) => `row ${i + 1}`).slice(
+        window.offset,
+        window.offset + window.limit,
+      );
+      noteReadWindow(
+        { offset: window.offset, shown: lines.length, total: 10, cappedByBytes: false },
+        lines,
+      );
+      return { content: lines.join('\n') };
+    }
+  }
+
+  it('第一次領得到請求、第二次領不到；請求帶著工具的 offset／limit 與 dsh 的兩個上限', async () => {
+    const backend = recordReadExtent(new WindowBackend()) as WindowBackend;
+    await wrap(requestFor('read_file'), async () => {
+      await backend.read('/f', 2, 3);
+      return new ToolMessage({
+        content: [{ type: 'text', text: '     3\trow 3' }],
+        tool_call_id: 'call-1',
+      });
+    });
+    expect(backend.taken[0]).toEqual({
+      offset: 2,
+      limit: 3,
+      maxLineLength: READ_MAX_LINE_LENGTH,
+      maxBytes: READ_MAX_BYTES,
+    });
+    expect(backend.taken[1]).toBeUndefined();
+  });
+
+  it('回報了就不再切：backend 回什麼交什麼，結尾的提示照回報的範圍', async () => {
+    const backend = recordReadExtent(new WindowBackend()) as WindowBackend;
+    const result = (await wrap(requestFor('read_file'), async () => {
+      const out = await backend.read('/f', 0, 4);
+      return new ToolMessage({
+        content: [{ type: 'text', text: out.content ?? '' }],
+        tool_call_id: 'call-1',
+        name: 'read_file',
+      });
+    })) as ToolMessage;
+    expect(textOf(result)).toBe(
+      'row 1\nrow 2\nrow 3\nrow 4\n\n(Showing lines 1-4 of 10. Use offset=4 to continue.)',
+    );
+    // 只讀一次。
+    expect(backend.calls).toHaveLength(1);
+  });
+
+  it('不在 read_file 裡：領不到請求，回報什麼都不做', async () => {
+    expect(currentReadWindow()).toBeUndefined();
+    expect(() =>
+      noteReadWindow({ offset: 0, shown: 0, total: 0, cappedByBytes: false }, []),
+    ).not.toThrow();
+    const backend = recordReadExtent(new WindowBackend()) as WindowBackend;
+    // 別的工具的 read：原樣轉交。
+    await wrap(requestFor('grep'), async () => {
+      await backend.read('/f', 0, 4);
+      return new ToolMessage({ content: 'x', tool_call_id: 'call-1' });
+    });
+    expect(backend.taken[0]).toBeUndefined();
+  });
+
+  it('領了請求卻沒回報：走原本的切片路，不吃掉內容', async () => {
+    class LazyBackend {
+      async read(_path: string, _offset: number, _limit: number): Promise<{ content: string }> {
+        currentReadWindow();
+        return { content: 'a\nb\nc\n' };
+      }
+    }
+    const backend = recordReadExtent(new LazyBackend()) as LazyBackend;
+    const result = (await wrap(requestFor('read_file'), async () => {
+      const out = await backend.read('/f', 0, 100);
+      return new ToolMessage({
+        content: [{ type: 'text', text: out.content }],
+        tool_call_id: 'call-1',
+        name: 'read_file',
+      });
+    })) as ToolMessage;
+    expect(textOf(result)).toMatch(/\(End of file - total 3 lines\)$/);
   });
 });

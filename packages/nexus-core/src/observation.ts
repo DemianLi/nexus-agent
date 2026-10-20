@@ -30,6 +30,11 @@
  * 之間有縫。這跟 `ContainedFilesystemBackend` 已經明文接受的那條同型（policy fence，
  * 不是 kernel boundary）。
  *
+ * **讀檔記的版本可以由 backend 回報**（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：`read_file` 成功之後
+ * 本來要再 `readRaw` 一次才有版本，等於同一個檔讀兩遍（大檔更糟）。能邊讀邊算出同一個 token 的 backend
+ * （{@link createVersionHasher}、{@link noteReadVersion}）直接把版本交上來，這裡就記它，不再讀；沒回報的照舊 `readRaw`。
+ * 寫與改前的比對仍是 `readRaw`，兩邊的 token 必須逐字相同——`apps/harness` 的 `contained-read-window.test.ts` 釘著。
+ *
  * **偏離二：規則寫在系統提示詞，不是工具描述裡。** dsh 把它寫進工具描述——
  * 「read an existing file first (**the default fs-observation-policy requires it**)」、
  * 「Read the file first…, unless you just created or edited it in this session」
@@ -43,6 +48,8 @@
  *
  * @module
  */
+
+import { AsyncLocalStorage } from 'node:async_hooks';
 
 import { ToolMessage } from '@langchain/core/messages';
 import { adaptBackendProtocol } from 'deepagents';
@@ -113,8 +120,9 @@ const STALE_VERSION = 'FS_STALE_VERSION';
 function versionOf(data: unknown): string {
   const file = data as { readonly modified_at?: unknown; readonly content?: unknown };
   const modified = typeof file.modified_at === 'string' ? file.modified_at : '';
-  const text = contentText(file.content);
-  return `${modified}:${text.length}:${hash(text)}`;
+  const hasher = createVersionHasher();
+  hasher.update(contentText(file.content));
+  return hasher.version(modified);
 }
 
 /** `FileData.content` 在 v1 是行陣列、v2 是字串或位元組。認不得的一律當空字串。 */
@@ -125,11 +133,59 @@ function contentText(content: unknown): string {
   return '';
 }
 
-/** djb2。這裡要的是「內容變了會變號」，不是密碼學強度。 */
-function hash(text: string): string {
+/**
+ * 版本 token 的雜湊與長度，**可以分段餵**（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）。
+ *
+ * 讀檔工具串流讀大檔時，整份文字不在記憶體裡，版本只能邊讀邊算。djb2 本來就是逐字元累加，分段算的結果與整份一次算
+ * 相同；{@link versionOf} 與讀檔 backend 用的是這同一份，兩邊才不會各算各的。
+ */
+export interface VersionHasher {
+  /** 餵下一段文字（UTF-16 單位，與整份文字的 `length`／`charCodeAt` 一致）。 */
+  update(text: string): void;
+  /**
+   * 組成版本 token：`${modified_at}:${長度}:${djb2}`。
+   *
+   * @param modifiedAt - 檔案的 `modified_at`（ISO 8601），同基座 `readRaw` 回的那個。
+   */
+  version(modifiedAt: string): string;
+}
+
+/** 造一份從空文字起算的 {@link VersionHasher}。djb2：這裡要的是「內容變了會變號」，不是密碼學強度。 */
+export function createVersionHasher(): VersionHasher {
   let acc = 5381;
-  for (let i = 0; i < text.length; i += 1) acc = ((acc << 5) + acc + text.charCodeAt(i)) | 0;
-  return (acc >>> 0).toString(36);
+  let length = 0;
+  return {
+    update(text) {
+      for (let i = 0; i < text.length; i += 1) acc = ((acc << 5) + acc + text.charCodeAt(i)) | 0;
+      length += text.length;
+    },
+    version: (modifiedAt) => `${modifiedAt}:${length}:${(acc >>> 0).toString(36)}`,
+  };
+}
+
+/** 一次 `read_file` 裡，backend 回報的版本（見 {@link noteReadVersion}）。 */
+interface ReadVersionSlot {
+  version?: string;
+}
+
+/**
+ * 正在跑的 `read_file` 的版本槽。**observation 自己開一顆**，不借 `read-continuation` 的：兩個 middleware 的排位由 fold 決定，
+ * 自己開槽的話不論誰包誰，backend 在深處 `getStore()` 拿到的都是這一顆。
+ */
+const currentReadVersion = new AsyncLocalStorage<ReadVersionSlot>();
+
+/**
+ * backend 讀完一個檔、邊讀邊算好版本之後回報（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）。`read_file` 成功時
+ * 「先讀後改」直接記這一個，不必為了記版本再整份 `readRaw` 一次。不在 `read_file` 裡時什麼都不做。
+ *
+ * **只有算得出跟 `readRaw` 同一個 token 的 backend 才該叫它。** token 是 {@link createVersionHasher} 對整份解碼後的文字算的，
+ * `modified_at` 是同一次 `stat` 的 `mtime`。沒有回報的 backend 照舊，observation 自己 `readRaw`。
+ *
+ * @param version - {@link VersionHasher.version} 的結果。
+ */
+export function noteReadVersion(version: string): void {
+  const slot = currentReadVersion.getStore();
+  if (slot !== undefined) slot.version = version;
 }
 
 /**
@@ -220,7 +276,12 @@ export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddl
    * @param path - 這次的目標。
    * @param readFailed - 這次讀取的工具結果是不是錯誤。變更路徑上一律 `false`。
    */
-  const observe = async (path: string, readFailed = false): Promise<void> => {
+  const observe = async (path: string, readFailed = false, reported?: string): Promise<void> => {
+    // 讀成功、而且 backend 已經邊讀邊算好版本：記它，不再整份讀一次（#1530）。失敗的讀不會有回報。
+    if (!readFailed && reported !== undefined) {
+      observed.set(path, { kind: 'present', version: reported });
+      return;
+    }
     const state = await look(path);
     if (readFailed && state.kind === 'present') return;
     observed.set(path, state);
@@ -244,11 +305,12 @@ export function createObservationPolicy(backend: AnyBackendProtocol): AgentMiddl
       const callId = request.toolCall.id ?? '';
 
       if (toolName === OBSERVED_READ_TOOL) {
-        const result = await handler(request);
+        const slot: ReadVersionSlot = {};
+        const result = await currentReadVersion.run(slot, () => handler(request));
         // **讀完才記，而且版本記的是後端的真話不是工具的輸出**：讀一個不存在的檔會被
         // 記成確認缺席，那正是之後受防護的新建所需要的授權。**但讀失敗時記不下「存在」**
         // ——理由見 {@link observe}。
-        await observe(path, isErrorResult(result));
+        await observe(path, isErrorResult(result), slot.version);
         return result;
       }
 

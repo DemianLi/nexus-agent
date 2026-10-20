@@ -11,6 +11,8 @@ import type { AnyBackendProtocol } from 'deepagents';
 import { describe, expect, it } from 'vitest';
 import {
   createObservationPolicy,
+  createVersionHasher,
+  noteReadVersion,
   OBSERVATION_POLICY_NOTICE,
   OBSERVED_EDIT_TOOL,
   OBSERVED_READ_TOOL,
@@ -339,5 +341,113 @@ describe('讀失敗不算讀過', () => {
     const { calls, handler } = probe();
     await wrap(requestFor(OBSERVED_WRITE_TOOL, '/nope.md'), handler);
     expect(calls).toEqual([OBSERVED_WRITE_TOOL]);
+  });
+});
+
+describe('backend 回報讀檔版本（#1530）', () => {
+  /** 與 `versionOf` 無關的獨立 djb2，驗 {@link createVersionHasher} 的算式。 */
+  function djb2(text: string): string {
+    let acc = 5381;
+    for (let i = 0; i < text.length; i += 1) acc = ((acc << 5) + acc + text.charCodeAt(i)) | 0;
+    return (acc >>> 0).toString(36);
+  }
+
+  const MODIFIED = '2026-01-01T00:00:01.000Z';
+
+  it('分段餵與整份一次餵給出同一個 token，格式是 modified_at:UTF-16 長度:djb2', () => {
+    const text = '你好\r\nworld🙂\n\uFEFFend';
+    const whole = createVersionHasher();
+    whole.update(text);
+    for (let step = 1; step <= text.length; step += 1) {
+      const parts = createVersionHasher();
+      for (let at = 0; at < text.length; at += step) parts.update(text.slice(at, at + step));
+      expect(parts.version(MODIFIED)).toBe(whole.version(MODIFIED));
+    }
+    expect(whole.version(MODIFIED)).toBe(`${MODIFIED}:${text.length}:${djb2(text)}`);
+    expect(createVersionHasher().version(MODIFIED)).toBe(`${MODIFIED}:0:${djb2('')}`);
+  });
+
+  /** 讀的 handler 邊「讀」邊回報版本（模擬 contained backend）。 */
+  function reportingRead(content: string, modifiedAt = MODIFIED) {
+    return async (): Promise<ToolMessage> => {
+      const hasher = createVersionHasher();
+      hasher.update(content);
+      noteReadVersion(hasher.version(modifiedAt));
+      return new ToolMessage({ content: '讀到了', tool_call_id: 'call-1' });
+    };
+  }
+
+  function countingBackend(content: string) {
+    const files = new Map([['/a.md', content]]);
+    const fake = fakeBackend(files);
+    // fakeBackend 的 `modified_at` 是自己的時鐘：第一個檔是 00:00:01。
+    let readRawCalls = 0;
+    const inner = fake.backend as unknown as { readRaw(path: string): unknown };
+    const original = inner.readRaw.bind(inner);
+    inner.readRaw = (path: string) => {
+      readRawCalls += 1;
+      return original(path);
+    };
+    return { backend: fake.backend, set: fake.set, calls: () => readRawCalls };
+  }
+
+  it('回報的版本與 readRaw 的一樣 → 讀完不再 readRaw，之後 edit 放行', async () => {
+    const { backend, calls } = countingBackend('原本的');
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { calls: ran, handler } = probe();
+
+    await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), reportingRead('原本的'));
+    expect(calls()).toBe(0);
+    await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.md'), handler);
+    expect(ran).toEqual([OBSERVED_EDIT_TOOL]);
+    // edit 前比對一次、edit 後重記一次。
+    expect(calls()).toBe(2);
+  });
+
+  it('回報的版本與 readRaw 不同 → edit 被擋（版本真的在比，不是回報什麼都信）', async () => {
+    const { backend } = countingBackend('原本的');
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { calls: ran, handler } = probe();
+
+    await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), reportingRead('另一份內容'));
+    const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.md'), handler)) as ToolMessage;
+    expect(toolErrorOf(result)?.code).toBe('FS_STALE_VERSION');
+    expect(ran).toEqual([]);
+  });
+
+  it('沒回報的 backend 照舊 readRaw 一次', async () => {
+    const { backend, calls } = countingBackend('原本的');
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { handler } = probe();
+    await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), handler);
+    expect(calls()).toBe(1);
+  });
+
+  it('讀失敗時回報的版本不算：之後的 edit 還是 FS_NOT_OBSERVED', async () => {
+    const { backend } = countingBackend('原本的');
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { handler } = probe();
+    await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), async () => {
+      noteReadVersion(`${MODIFIED}:3:abc`);
+      return new ToolMessage({ content: 'Error: boom', tool_call_id: 'call-1', status: 'error' });
+    });
+    const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.md'), handler)) as ToolMessage;
+    expect(toolErrorOf(result)?.code).toBe('FS_NOT_OBSERVED');
+  });
+
+  it('不在 read_file 裡叫 noteReadVersion：什麼都不做、不拋，也不污染下一次讀', async () => {
+    expect(() => noteReadVersion('x')).not.toThrow();
+    const { backend, calls } = countingBackend('原本的');
+    const wrap = wrapperOf(createObservationPolicy(backend));
+    const { handler } = probe();
+    // 寫工具裡叫它：槽不存在，無效。
+    await wrap(requestFor(OBSERVED_WRITE_TOOL, '/new.md'), async () => {
+      noteReadVersion('x');
+      return new ToolMessage({ content: 'ok', tool_call_id: 'call-1' });
+    });
+    const before = calls();
+    await wrap(requestFor(OBSERVED_READ_TOOL, '/a.md'), handler);
+    // 下一次讀沒回報，照舊 readRaw 一次——沒有拿到上一次殘留的版本。
+    expect(calls() - before).toBe(1);
   });
 });

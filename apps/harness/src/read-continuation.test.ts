@@ -164,18 +164,35 @@ describe('讀檔結果最後補上讀到哪', () => {
     expect(logged[0]).toContain('limit must be less than or equal to 2000');
   }, 20000);
 
-  it('基座自己截斷（上游絆索）：第一行自己就超過上限時落到這條，寫 Output capped', async () => {
+  it('基座自己截斷（上游絆索，沒給 --workspace 的 StateBackend）：第一行自己就超過上限時落到這條，寫 Output capped', async () => {
     // 第一行 90,000 字元：超過 50 KiB，照樣給它（偏離二），格式化後超過基座的 80,000 字元上限。
-    await writeFile(join(root, 'wide.txt'), `${'x'.repeat(90_000)}\nsecond\n`);
-    const { messages } = await run([
-      { name: 'read_file', args: { file_path: '/wide.txt' } },
-      { name: 'read_file', args: { file_path: '/wide.txt', offset: 1 } },
-    ]);
-    const [first, second] = messages.map(textOf);
+    // `--workspace` 的 contained 路徑從 #1530 起把每行截到 2000 字元，不會再走到基座的截斷；StateBackend 沒有，所以絆索改掛在這。
+    const { messages } = await run(
+      [
+        {
+          name: 'write_file',
+          args: { file_path: '/wide.txt', content: `${'x'.repeat(90_000)}\nsecond\n` },
+        },
+        { name: 'read_file', args: { file_path: '/wide.txt' } },
+        { name: 'read_file', args: { file_path: '/wide.txt', offset: 1 } },
+      ],
+      false,
+    );
+    const [first, second] = messages.slice(1).map(textOf);
     expect(first).toContain('[Output was truncated due to size limits.');
     // 第一行就沒顯示完：重讀只會再截一次，所以跳過它。
     expect(first).toMatch(/\(Output capped\. Use offset=1 to continue\.\)$/);
     expect(second).toBe('     2\tsecond\n\n(End of file - total 2 lines)');
+  }, 20000);
+
+  it('--workspace 的巨行（#1530）：第一行截到 2000 字元接後綴，不落到基座的截斷，續讀尾註算得準', async () => {
+    await writeFile(join(root, 'wide.txt'), `${'x'.repeat(90_000)}\nsecond\n`);
+    const { messages } = await run([{ name: 'read_file', args: { file_path: '/wide.txt' } }]);
+    const [first] = messages.map(textOf);
+    expect(first).toBe(
+      `     1\t${'x'.repeat(2000)}... (line truncated to 2000 chars)\n     2\tsecond\n\n(End of file - total 2 lines)`,
+    );
+    expect(first).not.toContain('[Output was truncated due to size limits.');
   }, 20000);
 
   it('沒給 --workspace（基座的 StateBackend）一樣補', async () => {
