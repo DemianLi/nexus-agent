@@ -23,6 +23,7 @@ import type { PluginChange } from './plugin-change.js';
 import { appendRaw, readJournalText } from './plugin-journal.fixture.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { bodyLog } from './fixtures.js';
 
 const temporary: string[] = [];
 const running: RunningServe[] = [];
@@ -58,7 +59,7 @@ async function upgradedHome(): Promise<{ dir: string; env: NodeJS.ProcessEnv }> 
 async function startServe(env: NodeJS.ProcessEnv, lines: string[] = []): Promise<RunningServe> {
   const server = (await runServe({
     argv: ['--port', '0'],
-    log: (line) => void lines.push(line),
+    log: bodyLog(lines),
     env,
   })) as RunningServe;
   running.push(server);

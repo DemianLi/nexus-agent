@@ -30,7 +30,7 @@ import { HumanMessage } from '@langchain/core/messages';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { liveSubagentModelFor } from './assembly-root.js';
-import { serveClient, TIME_CONTEXT_OFF_PATCH_ROWS } from './fixtures.js';
+import { bodyLog, serveClient, TIME_CONTEXT_OFF_PATCH_ROWS } from './fixtures.js';
 import { DEFAULT_LIVE_MODEL_ENTRY, LIVE_API_KEY_ENV } from './live-model.js';
 import { RequestGate } from './request-gate.js';
 import { runServe } from './serve.js';
@@ -260,7 +260,7 @@ describe('serve --live：每個建模型的地方都從全機那一份閘取名�
     endpoint = await startEndpoint();
     running = (await runServe({
       argv: ['--port', '0', '--live', '--patch', await patchFor(endpoint.baseUrl, options)],
-      log: (line) => logged.push(line),
+      log: bodyLog(logged),
       env: {},
     })) as RunningServe;
     const client = await serveClient(running);

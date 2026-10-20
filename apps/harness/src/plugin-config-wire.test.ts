@@ -28,7 +28,7 @@ import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
 import { parseCliArgs, runCli } from './cli.js';
 import { createCliAgent } from './assembly-root.js';
 import { CREDENTIALS_FILE } from './credentials.js';
-import { serveClient, foldTurn } from './fixtures.js';
+import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
 import { toAgentInvocation } from './messages.js';
@@ -307,7 +307,7 @@ describe('serve 在啟動時就把清單組過一次', () => {
     const lines: string[] = [];
     const server = (await runServe({
       argv: ['--port', '0'],
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
       env,
     })) as RunningServe;
     running = server;
@@ -352,7 +352,7 @@ describe('serve 在啟動時就把清單組過一次', () => {
     const lines: string[] = [];
     const server = (await runServe({
       argv: ['--port', '0'],
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
       env,
     })) as RunningServe;
     running = server;
@@ -523,7 +523,7 @@ describe('serve 在啟動時就把清單組過一次', () => {
     const lines: string[] = [];
     running = await runServe({
       argv: ['--port', '0'],
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
       env: { [HARNESS_HOME_ENV]: home },
     });
     expect(lines.filter((line) => line.startsWith('遙測：'))).toHaveLength(1);
@@ -557,7 +557,7 @@ describe('--dump-config 在兩個入口都印得出來', () => {
 
     const result = await runServe({
       argv: ['--dump-config', '--patch', patch, '--port', '0'],
-      log: (line) => printed.push(line),
+      log: bodyLog(printed),
       env: { [HARNESS_HOME_ENV]: home },
     });
 

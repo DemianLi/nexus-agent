@@ -473,4 +473,34 @@ describe('計時器', () => {
     expect(calls).toBe(3);
     gauge.stop();
   });
+
+  /** `onReading` 回的警告：有給 `warn` 就走 `warn`（讀數行仍走 `log`）；沒給就退回 `log`，行不變（#1534）。 */
+  it('onReading 的警告：給了 warn 走 warn、讀數走 log；沒給就一起走 log', async () => {
+    vi.useFakeTimers();
+    const split = { info: [] as string[], warn: [] as string[] };
+    const withWarn = startMemoryGauge({
+      intervalMs: 1000,
+      log: (l) => split.info.push(l),
+      warn: (l) => split.warn.push(l),
+      onReading: () => ['警告：用量高'],
+      deps: deps({}),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    withWarn.stop();
+    expect(split.warn).toEqual(['警告：用量高']);
+    expect(split.info).toHaveLength(1);
+    expect(split.info[0]).toMatch(/^記憶體：/u);
+
+    const merged: string[] = [];
+    const withoutWarn = startMemoryGauge({
+      intervalMs: 1000,
+      log: (l) => merged.push(l),
+      onReading: () => ['警告：用量高'],
+      deps: deps({}),
+    });
+    await vi.advanceTimersByTimeAsync(0);
+    withoutWarn.stop();
+    expect(merged).toHaveLength(2);
+    expect(merged[1]).toBe('警告：用量高');
+  });
 });

@@ -257,6 +257,8 @@ describe('E：serve 兩台、CLI --resume 的 warn 與下一次寫檔的 fence',
     expect(warns[0]).toContain('thread "t"');
     expect(warns[0]).toContain('danger-full-access');
     expect(warns[0]).toContain('workspace-write');
+    // 等級：權限被收回是 warn（PM 定「收窄一律 warn」），門檻調到 warn 的共用主機看得到。
+    expect(warns[0]).toMatch(/^(?:\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} )?\[W\] serve /u);
     // 使用者看到的是權限座回到預設組；切不回全開。
     expect(await client.slashRun('t', '/permission')).toMatchObject({
       kind: 'success',

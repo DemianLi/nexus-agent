@@ -53,6 +53,8 @@ import {
 } from './assembly-root.js';
 import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
 import type { CordisRoot, NexusAssembly } from './cordis-root.js';
+import { createServerLog } from './server-log.js';
+import type { ServerLog } from './server-log.js';
 import { formatConversationRestore, restoreConversation } from './conversation-restore.js';
 import { openJsonlSessionStore, projectKey } from './jsonl-session-store.js';
 import { createColdChildStore } from './background-cold.js';
@@ -149,6 +151,7 @@ import { startMemoryGauge } from './memory-gauge.js';
 import type { MemoryGaugeDeps } from './memory-gauge.js';
 import { createMemoryPressureWatch, memoryUsageSource } from './memory-pressure.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
+import { loggerConsolePlugin } from './settings/logger-console.js';
 import { threadCapacityPlugin } from './settings/thread-capacity.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
 import { SessionReferenceCandidates } from './session-reference-candidates.js';
@@ -464,13 +467,31 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 一個檔都沒寫。起不來的每一條路都放鎖，正常 `close()` 在最後一步放（下面）。
   // 平台拿不到 flock 時照常起來、講一聲（Q1 (a)，同會話寫租約）；`EACCES` 這類其餘的錯原樣往外拋。
   const homeLock = await acquireHomeLock(resolveHarnessHome(env), options.homeLock);
-  if ('unavailable' in homeLock) {
-    log(`[home 鎖] 這個平台拿不到 home 鎖，不擋第二個 serve：${homeLock.unavailable}`);
-  }
+  // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`；它的 logger 是伺服器日誌的出口（#1534），所以**在第一行日誌之前**就要在：
+  // 樹的 context 是第一次叫才建（`plugin-tree.ts` 的 `context()`），這裡先叫。exporter 要讀完清單才知道設定，
+  // 晚掛上時先回放緩衝，所以排在它前面的幾行（home 鎖、代理、變更紀錄遷移）一樣印得出來；起不來的路徑掛出廠設定（`mountDefault`）。
+  // 預設答題管道由入口給（#1458 Q1 (c)）：serve 有人在（web 收得到問題），組裝時也不傳 `approvals`——同一個決定。
+  // 工作區根也由入口給（#1491 Q4 (a)）：跟每條 thread 組裝時算的是同一支 `resolveWorkspaceRoot`、同一個 cwd，整台一份。
+  let root: CordisRoot | undefined;
+  let serverLog: ServerLog | undefined;
   let started: RunningServe;
   try {
-    started = await startUnderHomeLock(options, invocation, env, cwd, log);
+    const workspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
+    root = createCordisRoot({
+      channel: entryApprovalChannel(undefined),
+      ...(workspaceRoot !== undefined && { workspaceRoot }),
+    });
+    serverLog = createServerLog(await root.tree.context(), log);
+    if ('unavailable' in homeLock) {
+      serverLog.serve.warn(
+        `[home 鎖] 這個平台拿不到 home 鎖，不擋第二個 serve：${homeLock.unavailable}`,
+      );
+    }
+    started = await startUnderHomeLock(options, invocation, env, cwd, serverLog, root);
   } catch (error) {
+    // 根在這裡收掉（`dispose` 冪等，`startUnderHomeLock` 自己收過也沒關係）；收之前先掛 exporter，收尾拋的錯才印得出來。
+    serverLog?.mountDefault();
+    await root?.dispose().catch(() => {});
     if (!('unavailable' in homeLock)) await homeLock.release().catch(() => undefined);
     throw error;
   }
@@ -501,34 +522,28 @@ async function startUnderHomeLock(
   invocation: ServeInvocation,
   env: Readonly<Record<string, string | undefined>>,
   cwd: string,
-  log: (line: string) => void,
+  serverLog: ServerLog,
+  root: CordisRoot,
 ): Promise<RunningServe> {
   // **真模型路徑的啟動環境：兩層 `.env`**（#730），排在讀清單與建密鑰之前：壞的 `.env` 與舊位置搬家訊息在
   // server 還沒起來的時候就講。沒帶 `--live` 不讀任何 `.env`。
   const liveLaunch = invocation.live ? loadLiveLaunchEnv({ cwd, env, store: true }) : undefined;
   // 這一把 key 來自哪一層（#1540 Q2 (a)）：只講名字與來源、不含值；排在拿到 home 鎖之後（上面 `runServe` 先拿鎖才進這裡）。
-  if (liveLaunch?.keySource !== undefined) log(liveLaunch.keySource);
+  if (liveLaunch?.keySource !== undefined) serverLog.serve.info(liveLaunch.keySource);
   // **對外代理：啟動流程的第一件事**（#746），排在載完環境之後、第一顆外掛載入之前。假模型路徑沒有 `.env`，
   // 用只有行程環境的那一層。server 起不來就當場還原；起來了，收尾跟著 `close()` 走。
   const disposeProxy = await installLaunchProxy(
     liveLaunch?.launchEnv ?? processLaunchEnv(),
     (message) => {
-      log(message);
+      serverLog.serve.warn(message);
     },
   );
-  // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`：`startServer` 載完清單才建它，起不來與關掉時都
-  // 在這裡卸載，排在 server 自己的收尾之後、還原代理之前。
-  // 預設答題管道由入口給（#1458 Q1 (c)）：serve 有人在（web 收得到問題），組裝時也不傳 `approvals`——同一個決定。
-  // 工作區根也由入口給（#1491 Q4 (a)）：跟每條 thread 組裝時算的是同一支 `resolveWorkspaceRoot`、同一個 cwd，整台一份。
-  const workspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
-  const root = createCordisRoot({
-    channel: entryApprovalChannel(undefined),
-    ...(workspaceRoot !== undefined && { workspaceRoot }),
-  });
+  // **根（上面 `runServe` 建的）起不來與關掉時都在這裡卸載**（#1401），排在 server 自己的收尾之後、還原代理之前。
   let running: RunningServe;
   try {
-    running = await startServer(options, invocation, liveLaunch, log, root);
+    running = await startServer(options, invocation, liveLaunch, serverLog, root);
   } catch (error) {
+    serverLog.mountDefault();
     await root.dispose().catch(() => {});
     await disposeProxy();
     throw error;
@@ -554,12 +569,22 @@ async function startServer(
   options: RunServeOptions,
   invocation: ServeInvocation,
   liveLaunch: LiveLaunch | undefined,
-  serverLog: (line: string) => void,
+  serverLogOut: ServerLog,
   root: CordisRoot,
 ): Promise<RunningServe> {
-  // `goalDriver` 那個閉包的參數也叫 `log`（它是讀日誌的 getter），所以伺服器日誌在這裡
-  // 另取一個名字——同一個函式，只是不讓兩個 `log` 在同一段裡打架。
-  const log = serverLog;
+  // `goalDriver` 那個閉包的參數也叫 `log`（它是讀日誌的 getter），所以伺服器日誌的三支在這裡另取名字，不讓兩個 `log` 在同一段裡打架。
+  // **每一行伺服器日誌都帶等級**（#1534）：`log` 是狀態披露（info），`warn` 是要人處理的，`fail` 是起不來與收不了的（error）。
+  // 傳給別的函式當 `log`／`warn` 回呼時，照那個回呼講的是哪一種接哪一支。
+  const log = (line: string): void => {
+    serverLogOut.serve.info(line);
+  };
+  const warn = (line: string): void => {
+    serverLogOut.serve.warn(line);
+  };
+  const fail = (line: string): void => {
+    serverLogOut.serve.error(line);
+  };
+  const invariantLogger = serverLogOut.logger('invariant');
   const cwd = options.cwd ?? process.cwd();
   // **瀏覽器會話的密鑰也從這一份 env 解 home**（#424）：日誌根與密鑰落在同一個 home 底下。
   // 密鑰在下面讀：權限過寬、記錄壞掉，都該在 server 還沒起來的時候就講。每次啟動只讀這一次，
@@ -583,6 +608,7 @@ async function startServer(
     path: join(resolveHarnessHome(env), PLUGIN_JOURNAL_FILE_NAME),
     effective: hostActor(env).effective,
     log,
+    warn,
   });
   // **插件自己停用了自己也記一筆**（#1424）：Loader 自我停用那一格的呼叫點發的事件，由樹轉進來；只記不折，閃動由樹的記憶止住。
   root.tree.onSelfDisable = (event) => failureRecorder.noteSelfDisabled(event);
@@ -594,6 +620,10 @@ async function startServer(
     },
     { tree: root.tree },
   );
+  // **伺服器日誌的 exporter 在清單讀完的這一刻掛上**（#1534）：設定來自 `#settings/logger-console` 那一列，掛上時先回放緩衝，
+  // 排在它前面的幾行（home 鎖、代理、變更紀錄遷移）與下面「必掛的掉了」那一段的話都印得出來。
+  const plugins: readonly PluginEntry[] = loaded.plugins;
+  serverLogOut.mount(startupSetting(plugins, loggerConsolePlugin));
   // **掉了哪幾列在這裡判第一次**（#751），同 CLI 那一刻：必掛的掉了就在這裡起不來——還沒建瀏覽器會話密鑰、還沒綁
   // port。可少掛的掉了先不印，等下面試組那一次補完再合成一段。掉了的列在清單上已標成沒掛，每條 thread 組裝時照樣跳過。
   const audit = { live: invocation.live };
@@ -609,7 +639,6 @@ async function startServer(
     throw error;
   }
   failureRecorder.note(failedRowsOf(loaded.dropped, undefined), 'startup');
-  const plugins: readonly PluginEntry[] = loaded.plugins;
   const optionalEntries = optionalEntriesOf(loaded, audit);
   // **起動期解一次、往下傳一份**：這兩顆都有消費者跑在任何 agent 出生之前（冷讀清單、`BrowserAuth`），那時
   // 還沒有註冊表可以讀服務。標題那兩個數字也往下傳給寫標題的 pump（#647），同一份值。理由與偏離登記見
@@ -643,7 +672,7 @@ async function startServer(
   // 別人改得動的根不清，失敗只記一筆不擋啟動。
   const stashConfig = startupSetting(plugins, toolResultStashPlugin);
   const stashRoot = resolveToolResultStashRoot(stashConfig, env);
-  await cleanupToolResultStash(stashRoot, stashConfig.cleanupPeriodDays, { warn: log });
+  await cleanupToolResultStash(stashRoot, stashConfig.cleanupPeriodDays, { warn });
   // 外溢層的預算（#719）：server 的性質，解一次；省略就是不掛。
   const spillPolicy = startupSetting(plugins, spillPolicyPlugin);
   // 背景續行子代理（#841）：server 的性質，解一次；`one-shot` 就不傳，回到基座的 `task`。
@@ -653,8 +682,8 @@ async function startServer(
   // 第一條 thread；啟動時印的模型名也從這一份來。
   const liveModel = startupSetting(plugins, liveModelPlugin);
   // 全機的模型請求並行閘（#1505）：起動期建一份，每條 thread 的組裝共用；沒設 `maxConcurrentRequests` 就沒有。
-  // 排隊逾時的那一行走獨立的 `serverLog`，不借別處的 `warn`。
-  const requestGate = createRequestGate(liveModel, serverLog);
+  // 排隊逾時的那一行走獨立的 `warn`，不借別處的。
+  const requestGate = createRequestGate(liveModel, warn);
   // 子代理逐次選模型（#875）：server 的性質，解一次、對著型錄驗一次（起不來就在 server 起來之前）。
   // 每個新會話在 `createAgent` 裡各自取樣，續接的會話讀日誌那一份。
   const modelSelection = startupSetting(plugins, subagentModelSelectionPlugin);
@@ -697,8 +726,8 @@ async function startServer(
   const tokenAnchorBook = new TokenAnchorBook({
     singleDigitModels: singleDigitModelIds(liveModel.models),
   });
-  // **不變量的量測記錄（#976）**：一台 server 一份，每條 thread 的組裝傳同一個 tap。違規本身照舊走 runner 預設的
-  // `console.error`（進伺服器日誌），這份只是另外留一份可數的紀錄；試組那一次不接線所以不傳。
+  // **不變量的量測記錄（#976）**：一台 server 一份，每條 thread 的組裝傳同一個 tap。違規本身走伺服器日誌的 `invariant` logger（error 等級，
+  // #1534；以前走 runner 預設的 `console.error`），這份只是另外留一份可數的紀錄；試組那一次不接線所以不傳。
   // 落盤關掉或 home 在工作區底下時不寫，理由見 `resolveInvariantLogPath`。
   const invariantLogPath = resolveInvariantLogPath(
     invocation.workspace,
@@ -737,7 +766,7 @@ async function startServer(
     assemblyDropsOf(loaded, trial.dropped),
     trial.warnings,
   )) {
-    log(line);
+    warn(line);
   }
   // **試組掉了的列帶進每條 thread 的組裝，直接算沒掛**（卡上第 6 項）：不再重試、不再每條各印一次。照 dsh：樹只掛
   // 一次，沒起來的條目一直不在，直到改設定重載。我們的「重載」是每條 thread 重讀清單（#1405）：那一列的設定一改，
@@ -750,7 +779,7 @@ async function startServer(
   // **已儲存 vs 執行中的對照寫成 home 底下一份 JSON 檔**（#1406）：啟動時一次、之後每次重讀一次。不開 wire 路由——
   // 還沒有管理員身分，`/threads` 底下每個登入的人都看得到。檔裡不帶設定值也不帶 drop 原文，理由與偏離登記見
   // `plugin-snapshot.ts`；路徑與讀法見 `docs/operations.md`。
-  const snapshotWriter = createPluginSnapshotWriter({ path: pluginSnapshotPath(env), log });
+  const snapshotWriter = createPluginSnapshotWriter({ path: pluginSnapshotPath(env), log, warn });
   // **活著的設定版本的版本字串用 `config-hash-key.json` 那把鍵**（#1442 Q2 (a)），跟會話日誌 header 的 `configHash` 同一把：
   // 設定值不進檔，改了又改回來是同一版。**落盤關掉就不取**（同 `headerMetadataOf`：關掉落盤的啟動不該在 home 底下建鍵檔），
   // 鍵讀不到或落在工作區底下也只講一次、不帶 `live`；快照其餘照舊。
@@ -762,7 +791,7 @@ async function startServer(
           ...(invocation.workspace !== undefined && { workspace: invocation.workspace }),
           cwd,
         }).catch((error: unknown) => {
-          log(
+          warn(
             `[對照快照] 這一次不列活著的設定版本：${error instanceof Error ? error.message : String(error)}`,
           );
           return undefined;
@@ -786,6 +815,7 @@ async function startServer(
     // 起動期讀的那幾列：名單與分類表同一份（`plugin-row-classes.ts`），上面 `startupSetting` 那幾行讀的就是它們。
     startupRead: STARTUP_READ_PLUGINS,
     log,
+    warn,
     publishSnapshot: async (snapshot) => {
       await snapshotWriter.publish(snapshot);
     },
@@ -817,7 +847,7 @@ async function startServer(
   // 上傳的檔案存在 harness home 底下、會話日誌之外（#732）。只解析路徑，第一次上傳才建目錄。
   // home 以上的祖先開不了、略過那一層 fsync 時，講在伺服器日誌（#1528 Q1 (b)）。
   const attachmentStore = new AttachmentStore(attachmentsRootOf(resolveHarnessHome(env)), {
-    warn: log,
+    warn,
   });
 
   // **會話根按目錄分，一個專案一格**——照 dsh 的 `projectDir(root, cwd)`
@@ -834,7 +864,7 @@ async function startServer(
           directory: join(sessionLogDir, projectKey(cwd)),
           // 後端講話（例如這個平台拿不到寫租約）走伺服器日誌，前綴同協調器那條。
           warn: (message) => {
-            log(`[會話日誌] ${message}`);
+            warn(`[會話日誌] ${message}`);
           },
         });
   // **新建的 header 帶建置版本、插件清單與設定雜湊**（#1025）：鍵與建置版本是 server 的性質，起動期讀一次；清單與雜湊
@@ -847,7 +877,7 @@ async function startServer(
           ...(invocation.workspace !== undefined && { workspace: invocation.workspace }),
           cwd,
           warn: (message) => {
-            log(`[會話日誌] ${message}`);
+            warn(`[會話日誌] ${message}`);
           },
         });
 
@@ -869,7 +899,7 @@ async function startServer(
           rootDir: sessionLogDir,
           cwd,
           title: threadTitle,
-          warn: serverLog,
+          warn,
         });
 
   // 閒置逐出（#1484）：沒有 `sessionStore` 就是沒落盤，撤掉的 thread 回不來，所以一律不逐出；設成 0 是管理者關掉逐出（#1619，
@@ -913,9 +943,9 @@ async function startServer(
           onThreadEvicted: () => threadPluginList.republishSnapshot(),
         }),
     // 一頁歷史撐破軟上限時（#479）、退回標題寫不進去時（#647）、模型標題寫不成時（#650）講一聲。
-    warn: (message) => {
-      serverLog(message);
-    },
+    warn,
+    // 閒置逐出把一條 thread 撤出記憶體是正常狀態（#1534）：info，門檻調到 warn 的主機不為它出一行。
+    info: log,
     // **冷讀那一格**（#302）：讀的是續接那條路寫進去的同一格，只列切得過去的——`cwd` 就是續接時
     // `assertSameCwd` 比的那一個。落盤關掉（#612）就整個不給，列表那時講「列不出來」而不是「沒有」。
     ...(sessionStore === undefined
@@ -982,12 +1012,12 @@ async function startServer(
         handedOff = true;
         await resumed?.stored.close();
       };
-      // **第四與第五個引數都刻意不傳，而且理由不同。**
+      // **第四個引數傳伺服器日誌的 `invariant` logger，第五個刻意不傳，而且理由不同。**
       //
-      // 第四個（不變量違規往哪裡講）：這條路徑維持 `createInvariantRunner` 的預設
-      // （`console.error`），進的是伺服器日誌。CLI 那條要繞過 `Printer` 才印得出前綴，
-      // 這裡沒有那個問題——伺服器日誌本來就沒有跟誰搶終端機
-      // （[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。
+      // 第四個（不變量違規往哪裡講）：傳進去的是下面 `session.onInvariantViolation`，違規走伺服器日誌的 error 等級
+      // （[#1534](https://github.com/DemianLi/nexus-agent/issues/1534)；原先維持 `createInvariantRunner` 預設的 `console.error`，
+      // 進的是 stderr、不受門檻與格式管，[#107](https://github.com/DemianLi/nexus-agent/issues/107)）。CLI 那條要繞過 `Printer` 才印得出前綴，
+      // 這裡沒有那個問題——伺服器日誌本來就沒有跟誰搶終端機。
       //
       // 第五個（核准政策）：**這裡維持預設的「有人在」**。CLI 與 eval 關掉它是因為那兩個
       // 入口收不了核准決定，而 web 這端真的按得下去（[#79](https://github.com/DemianLi/nexus-agent/pull/79)
@@ -1072,7 +1102,7 @@ async function startServer(
               toolResultStash: {
                 rootDir: stashRoot,
                 session: `${sessionStore.directory}\0${threadId}`,
-                warn: log,
+                warn,
               },
               ...(spillPolicy.maxInlineTokens !== undefined && {
                 spillPolicy: { maxInlineTokens: spillPolicy.maxInlineTokens },
@@ -1082,7 +1112,14 @@ async function startServer(
           {
             plugins: threadList.plugins,
             // 帳是這台 server 的，不是這條 thread 的：第二條 thread 的第一次借第一條的（#702）。
-            session: { tokenAnchorBook, ...(invariantTap !== undefined && { invariantTap }) },
+            // 不變量違規走伺服器日誌的 error 等級（#1534）：logger 名 `invariant`，文字就是 runner 預設 `console.error` 印的那一句。
+            session: {
+              tokenAnchorBook,
+              onInvariantViolation: (error) => {
+                invariantLogger.error(error.message);
+              },
+              ...(invariantTap !== undefined && { invariantTap }),
+            },
           },
         );
       } catch (error) {
@@ -1107,24 +1144,27 @@ async function startServer(
       // **啟動時沒掉、這一條組裝時才掉的列**（卡上第 6 項，例如跟這條 thread 的工作區有關的 `apply`）：同一套規則，
       // 只作用在這一條——可少掛的在這條 thread 裡不掛、伺服器日誌記一筆；不能少掛的已經在上面讓這條 thread 建不起來。
       for (const drop of assemblyDropsOf(threadList.loaded, built.dropped)) {
-        log(`[組裝] thread "${threadId}" 這一條沒掛上：${describeDrop(drop)}`);
+        warn(`[組裝] thread "${threadId}" 這一條沒掛上：${describeDrop(drop)}`);
       }
       // 外掛交出的警告同理逐條記（例如 MCP 連不上）：它每條對話都重連一次，這一條連不上不代表上一條也沒連上。
       for (const line of describeWarnings(threadList.loaded, built.warnings)) {
-        log(`[組裝] thread "${threadId}" 警告：${line}`);
+        warn(`[組裝] thread "${threadId}" 警告：${line}`);
       }
       // 續接時日誌記的檔案政策比權限表裡每一組都寬，接上日誌時會被收回預設組（#1621）：伺服器日誌留一行，部署方看得出為什麼這條對話的權限變了。
       if (built.permissionNarrowed !== undefined) {
-        log(`[權限] thread "${threadId}" ${describePermissionNarrowing(built.permissionNarrowed)}`);
+        warn(
+          `[權限] thread "${threadId}" ${describePermissionNarrowing(built.permissionNarrowed)}`,
+        );
       }
       // 冷復活的背景子代理叫醒時，委派快照比權限表裡每一組都寬就收回預設組（#1739）：叫醒發生在組裝之後，所以是訂閱；每個子代理一個行程只留一行。
       built.onDelegationNarrowed((event) => {
-        log(`[權限] thread "${threadId}" ${describeDelegationNarrowing(event)}`);
+        // 權限被收回：一律 warn（與上面 thread 層的 `[權限]` 同一條規則，PM 定），門檻調到 warn 的共用主機看得到。
+        warn(`[權限] thread "${threadId}" ${describeDelegationNarrowing(event)}`);
       });
       // 組裝之後這條 thread 的外掛執行期交出的話（例如 MCP 掉線重連的進度，#1099）同樣逐條記；組裝收掉時註冊表一起沒了。
       built.onWarning((warning) => {
         for (const line of describeWarnings(threadList.loaded, [warning])) {
-          log(`[外掛] thread "${threadId}"：${line}`);
+          warn(`[外掛] thread "${threadId}"：${line}`);
         }
       });
       // **對話從日誌推回模型**（#306），同 CLI 的 `--resume`，在這條 thread 的第一輪之前。灌不進去就讓它
@@ -1224,9 +1264,7 @@ async function startServer(
               goalDriver: (log: () => SessionLog, flush: () => Promise<void>) =>
                 // **`goals` 是這一條 thread 自己那一次組裝的**：`createCliAgent` 每條
                 // thread 各跑一次（`:341`），所以兩條 thread 的目標從此分得開（#459）。
-                goalDriverPort(goals, log, flush, (message) => {
-                  serverLog(message);
-                }),
+                goalDriverPort(goals, log, flush, warn),
             }
           : {}),
         // 落盤關掉（#612）就不給：日誌只在註冊表的記憶體裡，同 CLI 那一支。
@@ -1254,7 +1292,7 @@ async function startServer(
                   // CLI 那條走 `Printer` 是為了前綴分得出誰在講話；這裡沒有那個問題，
                   // 伺服器日誌本來就沒有跟誰搶終端機（同不變量那條的理由）。
                   warn: (message) => {
-                    log(`[會話日誌] ${message}`);
+                    warn(`[會話日誌] ${message}`);
                   },
                 });
                 // **協調器真的接上之後**，續接那個把手才歸它收（它的 `dispose` 會關）。先設的話，這一步
@@ -1273,17 +1311,19 @@ async function startServer(
       handler: routeBySurface(handler, createWebStaticHandler({ distRoot: webDist, auth })),
       port: invocation.port,
       // 一個請求處理失敗（畸形的網址、讀檔錯誤）：記進伺服器日誌、回 400，行程照跑。見 `wire-server.ts`。
-      warn: (error) => serverLog(`[請求] 處理失敗，回 400：${error.message}`),
+      warn: (error) => {
+        warn(`[請求] 處理失敗，回 400：${error.message}`);
+      },
       // 下行串流的心跳間隔與斷線的那一行 warn（#1504）。**另開一個選項，不借上面的 `warn`**：那一個會把每則訊息包成「處理失敗，回 400」。
       heartbeatIntervalMs: downlink.heartbeatIntervalMs,
-      warnDisconnect: serverLog,
+      warnDisconnect: warn,
     });
   } catch (error) {
     // 啟動失敗的收尾：先保住原本的錯（收尾的錯記進伺服器日誌，不蓋掉它），`threadSearch` 照樣收（#1511）。
     try {
       await handler.close();
     } catch (closeError: unknown) {
-      serverLog(`[啟動失敗] 收尾也出錯：${errorChain(closeError)}`);
+      fail(`[啟動失敗] 收尾也出錯：${errorChain(closeError)}`);
     }
     threadSearch?.close();
     throw error;
@@ -1357,6 +1397,7 @@ async function startServer(
       : startMemoryGauge({
           intervalMs: memoryGaugeConfig.reportIntervalMs,
           log,
+          warn,
           ...(options.memoryGaugeDeps === undefined ? {} : { deps: options.memoryGaugeDeps }),
           // 用量警告（#1493，保險絲第 0 級）：跟著取樣開關走，取樣關著這一整段不建。
           onReading: createMemoryPressureWatch({

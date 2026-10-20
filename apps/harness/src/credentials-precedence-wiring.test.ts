@@ -25,7 +25,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runCli } from './cli.js';
 import { CREDENTIALS_FILE } from './credentials.js';
-import { foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
 import { runServe } from './serve.js';
@@ -130,7 +130,7 @@ function managedFile(home: string, key: string, mode = 0o600): string {
 async function serve(where: ReturnType<typeof layout>, lines: string[]): Promise<RunningServe> {
   return (await runServe({
     argv: ['--port', '0', '--live', '--patch', where.patch],
-    log: (line) => void lines.push(line),
+    log: bodyLog(lines),
     env: where.env,
     cwd: where.cwd,
   })) as RunningServe;

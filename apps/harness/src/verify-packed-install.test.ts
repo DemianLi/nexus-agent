@@ -190,6 +190,37 @@ describe('步驟 6：serve', () => {
       expect(ripgrepDisclosureProblems(`plugin：echo\n${line}\n網頁：x`, root)).toEqual([]);
     });
 
+    /**
+     * #1534：serve 的日誌每行帶「時間 [等級] 名字 」前綴，整行不再以「搜尋（grep）」開頭。驗證腳本先剝前綴再比；
+     * 拿掉 `ripgrepDisclosureProblems` 裡的 `.map(serverLogBody)` 這一條會紅（CI 的 packed-install 曾因此紅）。
+     */
+    it('帶伺服器日誌前綴的那一行（有時間、沒有時間）：照樣認得，路徑在安裝樹底下不報', () => {
+      const path = `${root}/node_modules/.pnpm/@vscode+ripgrep-linux-x64@1.18.0/node_modules/@vscode/ripgrep-linux-x64/bin/rg`;
+      const body = `搜尋（grep）：內附 ripgrep ${path}`;
+      expect(
+        ripgrepDisclosureProblems(
+          `2026-10-19 17:33:16 [I] serve plugin：echo\n2026-10-19 17:33:16 [I] serve ${body}`,
+          root,
+        ),
+      ).toEqual([]);
+      expect(ripgrepDisclosureProblems(`[I] serve ${body}`, root)).toEqual([]);
+    });
+
+    it('帶前綴的「不可用」與「宿主的 rg」兩種問題仍報（剝前綴不能把壞的也放過去）', () => {
+      expect(
+        ripgrepDisclosureProblems(
+          '2026-10-19 17:33:16 [I] serve 搜尋（grep）：內附 ripgrep 不可用（x 不存在）',
+          root,
+        ),
+      ).toEqual([expect.stringContaining('不可用')]);
+      expect(
+        ripgrepDisclosureProblems(
+          '2026-10-19 17:33:16 [I] serve 搜尋（grep）：內附 ripgrep /usr/bin/rg',
+          root,
+        ),
+      ).toEqual([expect.stringMatching(/不在安裝樹/u)]);
+    });
+
     it('沒有這一行（啟動路徑少了披露）：報', () => {
       expect(ripgrepDisclosureProblems('plugin：echo\n網頁：x', root)).toEqual([
         expect.stringMatching(/沒有 grep 用哪一支 ripgrep/u),

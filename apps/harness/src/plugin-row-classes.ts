@@ -48,6 +48,7 @@ import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { downlinkPlugin } from './settings/downlink.js';
 import { liveModelPlugin } from './settings/live-model.js';
+import { loggerConsolePlugin } from './settings/logger-console.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { projectionFlushPlugin } from './settings/projection-flush.js';
 import { spillPolicyPlugin } from './settings/spill-policy.js';
@@ -85,6 +86,7 @@ export const STARTUP_READ_PLUGINS: readonly NexusPlugin<unknown>[] = [
   threadCapacityPlugin,
   memoryGaugePlugin,
   downlinkPlugin,
+  loggerConsolePlugin,
 ] as readonly NexusPlugin<unknown>[];
 
 /** 表上的一格。 */

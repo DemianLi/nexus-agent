@@ -1019,6 +1019,7 @@ describe('保護名單', () => {
       '#settings/projection-flush',
       '#settings/downlink',
       '#settings/thread-capacity',
+      '#settings/logger-console',
       '#settings/tool-result-stash',
       '#settings/live-model',
       '#settings/default-model',

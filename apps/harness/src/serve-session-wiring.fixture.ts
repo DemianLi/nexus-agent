@@ -5,8 +5,8 @@
  * 它是一個 patch 條目載進來的（`serve-session-wiring.patch.yml`），所以走的是 `runServe` 真正的組裝，
  * 而不是手搭的 `ThreadAgent`——手搭的測試沒走 `serve.ts` 的閉包，少轉交任何一個接線口都量不到。
  *
- * - 不變量：看到 `turn/start` 就報一筆違規。serve 不傳 `onInvariantViolation`，違規走 runner 預設的
- *   `console.error`，測試攔那一行。
+ * - 不變量：看到 `turn/start` 就報一筆違規。serve 傳伺服器日誌的 `invariant` logger（#1534），違規
+ *   以 error 等級進伺服器日誌，測試讀那一行。
  * - 遙測：把後端提供成服務，記錄收進模組層的 {@link probeSink}。測試與載入器讀的是同一個模組實例。
  */
 

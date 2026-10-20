@@ -412,8 +412,9 @@ export interface CreateNexusAgentOptions {
    * 就分不出誰是誰）。
    *
    * 定案見 [#107](https://github.com/DemianLi/nexus-agent/issues/107)。**`serve.ts` 那條
-   * 路徑刻意不傳**，維持預設：那裡的 `console.error` 進的是伺服器日誌，撞不到任何人的
-   * 終端機。兩條進入點答案不同是選的，不是漏的。
+   * 路徑傳的是伺服器日誌的 `invariant` logger**（[#1534](https://github.com/DemianLi/nexus-agent/issues/1534)：改走伺服器日誌的 error 等級，
+   * 才分得出等級、也跟著 `format: json`；以前維持預設，預設的 `console.error` 進的是 stderr，撞不到任何人的終端機，也進不了伺服器日誌的門檻）。
+   * 兩條進入點答案不同是選的，不是漏的。
    */
   readonly onInvariantViolation?: (error: InvariantError) => void;
   /**

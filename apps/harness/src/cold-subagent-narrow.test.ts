@@ -274,6 +274,8 @@ describe('冷復活的背景子代理，委派快照比權限表裡每一組都�
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('danger-full-access');
     expect(warnings[0]).toContain('workspace-write');
+    // 等級：權限被收回一律 warn（#1534），門檻調到 warn 的主機看得到。
+    expect(warnings[0]).toMatch(/\[W\] serve /u);
     // R2：fence 相關的三種事件，叫醒前後逐顆相同（既沒多寫、也沒改寫）。
     expect(fenceEvents(second.events)).toEqual(fenceEvents(first.before));
   }, 120000);

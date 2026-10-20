@@ -19,6 +19,7 @@ import { BROWSER_SESSION_SECRET_FILE } from './browser-session-secret.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { runServe } from './serve.js';
 import type { RunningServe } from './serve.js';
+import { bodyLog } from './fixtures.js';
 
 const POSIX = process.platform !== 'win32';
 const INDEX = '<!doctype html><title>nexus web</title>';
@@ -56,7 +57,7 @@ async function start(
 ): Promise<RunningServe> {
   running = await runServe({
     argv: ['--port', String(options.port ?? 0)],
-    log: (line) => void lines.push(line),
+    log: bodyLog(lines),
     env: options.home === undefined ? {} : { [HARNESS_HOME_ENV]: options.home },
     ...(options.webDist === undefined ? {} : { webDist: options.webDist }),
   });

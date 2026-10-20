@@ -10,7 +10,7 @@
 
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import type { MemoryGaugeDeps } from './memory-gauge.js';
 import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
@@ -36,7 +36,7 @@ async function until(predicate: () => boolean, ms = 5000): Promise<void> {
 describe('記憶體量具，從 serve 組裝起（#1490 驗收 B、C）', () => {
   it('出廠（預設關閉）：日誌裡一行記憶體都沒有，過了一段時間也沒有', async () => {
     const lines: string[] = [];
-    serve = await startScriptedServe(TURNS, { log: (line) => lines.push(line) });
+    serve = await startScriptedServe(TURNS, { log: bodyLog(lines) });
     await new Promise((resolve) => setTimeout(resolve, 1200));
     expect(lines.filter((line) => GAUGE_LINE.test(line))).toEqual([]);
   });
@@ -45,7 +45,7 @@ describe('記憶體量具，從 serve 組裝起（#1490 驗收 B、C）', () => 
     const lines: string[] = [];
     serve = await startScriptedServe(TURNS, {
       extraRows: '- id: memory-gauge\n  config:\n    reportIntervalMs: 1000\n',
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     await until(() => lines.filter((line) => GAUGE_LINE.test(line)).length >= 2, 4000);
     const gauge = lines.filter((line) => GAUGE_LINE.test(line));
@@ -64,7 +64,7 @@ describe('記憶體量具，從 serve 組裝起（#1490 驗收 B、C）', () => 
     const lines: string[] = [];
     serve = await startScriptedServe(TURNS, {
       extraRows: '- id: memory-gauge\n  config:\n    reportIntervalMs: 1000\n',
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     await until(() => lines.some((line) => GAUGE_LINE.test(line)));
     await serve.close();
@@ -80,7 +80,7 @@ describe('記憶體量具，從 serve 組裝起（#1490 驗收 B、C）', () => 
     const lines: string[] = [];
     serve = await startScriptedServe(TURNS, {
       extraRows: '- id: memory-gauge\n  config:\n    reportIntervalMs: 500\n',
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     await new Promise((resolve) => setTimeout(resolve, 1200));
     expect(lines.filter((line) => GAUGE_LINE.test(line))).toEqual([]);
@@ -125,7 +125,7 @@ describe('記憶體用量警告，從 serve 組裝起（#1493 驗收 C、F）', 
     const lines: string[] = [];
     serve = await startScriptedServe(TURNS, {
       memoryGaugeDeps: fakeCgroup(() => 99),
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     await new Promise((resolve) => setTimeout(resolve, 1300));
     expect(lines.filter((line) => line.startsWith('[記憶體]') || GAUGE_LINE.test(line))).toEqual(
@@ -139,7 +139,7 @@ describe('記憶體用量警告，從 serve 組裝起（#1493 驗收 C、F）', 
     serve = await startScriptedServe(TURNS, {
       extraRows: '- id: memory-gauge\n  config:\n    reportIntervalMs: 1000\n',
       memoryGaugeDeps: fakeCgroup(() => used),
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     const count = (pattern: RegExp): number => lines.filter((line) => pattern.test(line)).length;
     // 真的開一條 thread：警告裡的「現在幾條」要是 handler 的數，不是寫死的。
@@ -170,13 +170,28 @@ describe('記憶體用量警告，從 serve 組裝起（#1493 驗收 C、F）', 
     expect(count(RECOVERED)).toBe(1);
   }, 20_000);
 
+  it('用量警告是 warn 等級、讀數那一行是 info（#1534）：門檻調到 warn 的主機不會丟掉警告', async () => {
+    const raw: string[] = [];
+    serve = await startScriptedServe(TURNS, {
+      extraRows:
+        '- id: memory-gauge\n  config:\n    reportIntervalMs: 1000\n- id: logger-console\n  config:\n    levels:\n      default: warn\n',
+      memoryGaugeDeps: fakeCgroup(() => 80),
+      log: (line) => raw.push(line),
+    });
+    await until(() => raw.some((line) => line.includes('[記憶體] 警告：')));
+    const warning = raw.find((line) => line.includes('[記憶體] 警告：')) ?? '';
+    expect(warning).toMatch(/\[W\] serve \[記憶體\] 警告：/u);
+    // 讀數那一行是 info：門檻 warn 時一行都不會出現。
+    expect(raw.filter((line) => /記憶體：/u.test(line) && !line.includes('警告'))).toEqual([]);
+  }, 20_000);
+
   it('warnAtPercent 真的是 serve 傳進去的那個值：門檻 50，60% 就警告（拿掉傳門檻那行會紅）', async () => {
     const lines: string[] = [];
     serve = await startScriptedServe(TURNS, {
       extraRows:
         '- id: memory-gauge\n  config:\n    reportIntervalMs: 1000\n    warnAtPercent: 50\n',
       memoryGaugeDeps: fakeCgroup(() => 60),
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     await until(() => lines.some((line) => WARNING.test(line)));
     expect(lines.find((line) => WARNING.test(line))).toContain('門檻 50%');
@@ -188,7 +203,7 @@ describe('記憶體用量警告，從 serve 組裝起（#1493 驗收 C、F）', 
       extraRows:
         '- id: memory-gauge\n  config:\n    reportIntervalMs: 1000\n    warnAtPercent: 100\n',
       memoryGaugeDeps: fakeCgroup(() => 99),
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     await new Promise((resolve) => setTimeout(resolve, 1300));
     expect(lines.filter((line) => GAUGE_LINE.test(line) || WARNING.test(line))).toEqual([]);
@@ -207,7 +222,7 @@ describe('記憶體用量警告，從 serve 組裝起（#1493 驗收 C、F）', 
         freemem: () => 100 * MIB,
         totalmem: () => 16384 * MIB,
       },
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     await until(() => lines.filter((line) => GAUGE_LINE.test(line)).length >= 3, 5000);
     expect(lines.filter((line) => WARNING.test(line))).toEqual([]);
@@ -228,7 +243,7 @@ describe('記憶體用量警告，從 serve 組裝起（#1493 驗收 C、F）', 
           throw new Error('freemem 壞了');
         },
       },
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     await until(() => lines.filter((line) => GAUGE_LINE.test(line)).length >= 3, 5000);
     expect(lines.filter((line) => WARNING.test(line))).toEqual([]);

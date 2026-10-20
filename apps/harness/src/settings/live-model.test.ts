@@ -23,7 +23,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { runCli } from '../cli.js';
 import { createCliAgent } from '../assembly-root.js';
-import { foldTurn, serveClient } from '../fixtures.js';
+import { bodyLog, foldTurn, serveClient } from '../fixtures.js';
 import {
   DEFAULT_LIVE_BASE_URL,
   DEFAULT_LIVE_MAX_OUTPUT_TOKENS,
@@ -646,7 +646,7 @@ describe('在設定裡覆寫會生效——產品路徑（#545）', () => {
       argv: ['--live', '--patch', patch, '說一句話。'],
       input: new PassThrough(),
       output: new PassThrough(),
-      printer: { log: (line: string) => void out.push(line), error: () => undefined },
+      printer: { log: bodyLog(out), error: () => undefined },
       env: {},
     });
 
@@ -660,7 +660,7 @@ describe('在設定裡覆寫會生效——產品路徑（#545）', () => {
     const logged: string[] = [];
     running = (await runServe({
       argv: ['--port', '0', '--live', '--patch', patch],
-      log: (line: string) => void logged.push(line),
+      log: bodyLog(logged),
       env: {},
     })) as RunningServe;
     expect(logged).toContain(`模型：${OVERRIDE.modelId}`);
@@ -692,7 +692,7 @@ describe('在設定裡覆寫會生效——產品路徑（#545）', () => {
     const logged: string[] = [];
     running = (await runServe({
       argv: ['--port', '0', '--patch', await writeBadPatch()],
-      log: (line: string) => void logged.push(line),
+      log: bodyLog(logged),
       env: {},
     })) as RunningServe;
     expect(

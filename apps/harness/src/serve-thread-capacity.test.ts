@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import { THREAD_AT_CAPACITY, WireRejectedError } from '@nexus/wire';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, foldTurn, serveClient } from './fixtures.js';
 import { scriptedPatchText, startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
 import { runServe } from './serve.js';
@@ -40,7 +40,7 @@ describe('thread 數上限，從 serve 組裝起（#1476 驗收 F）', () => {
     const lines: string[] = [];
     serve = await startScriptedServe(TURNS, {
       extraRows: '- id: thread-capacity\n  config:\n    maxThreads: 1\n',
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     expect(lines.filter((line) => line.startsWith('thread 上限：'))).toEqual([
       expect.stringContaining('thread 上限：1（'),
@@ -114,7 +114,7 @@ const SHIPPED_EVICT_LINE = expect.stringMatching(
 describe('出廠打開（#1619）', () => {
   it('A 出廠值：不帶 patch 改這一列，起動日誌印上限 500 與閒置 7200000 毫秒後撤出', async () => {
     const lines: string[] = [];
-    serve = await startScriptedServe(TURNS, { log: (line) => lines.push(line) });
+    serve = await startScriptedServe(TURNS, { log: bodyLog(lines) });
     // 前提：這台有落盤（逐出只在落盤時生效），不然下面那行是「沒有落盤」那一支。
     expect(lines.some((line) => line.startsWith('會話日誌：'))).toBe(true);
     expect(capacityLines(lines)).toEqual([
@@ -127,7 +127,7 @@ describe('出廠打開（#1619）', () => {
     const lines: string[] = [];
     serve = await startScriptedServe(TURNS, {
       extraRows: '- id: thread-capacity\n  config:\n    maxThreads: 1000\n',
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     expect(capacityLines(lines)).toEqual([
       expect.stringMatching(/^thread 上限：1000（/u),
@@ -139,7 +139,7 @@ describe('出廠打開（#1619）', () => {
     const lines: string[] = [];
     serve = await startScriptedServe(TURNS, {
       extraRows: '- id: thread-capacity\n  config:\n    idleEvictAfterMs: 600000\n',
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     expect(capacityLines(lines)).toEqual([
       expect.stringMatching(/^thread 上限：500（/u),
@@ -157,7 +157,7 @@ describe('出廠打開（#1619）', () => {
     const lines: string[] = [];
     serve = await startScriptedServe(TURNS, {
       extraRows: '- id: thread-capacity\n  config:\n    idleEvictAfterMs: 0\n',
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     // 前提：有落盤，否則「不逐出」是沒落盤那一支給的，這條就是空的。
     expect(lines.some((line) => line.startsWith('會話日誌：'))).toBe(true);
@@ -226,7 +226,7 @@ describe('出廠打開（#1619）', () => {
     const lines: string[] = [];
     serve = await startScriptedServe(TURNS, {
       extraRows: '- id: thread-capacity\n  config:\n    maxThreads: 0\n',
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     expect(lines).toContainEqual(expect.stringMatching(/thread-capacity.*設定驗不過.*maxThreads/u));
     expect(capacityLines(lines)).toEqual([

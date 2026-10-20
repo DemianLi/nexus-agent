@@ -35,6 +35,7 @@ import { z } from 'zod';
 import { BrowserAuth } from './browser-auth.js';
 import { loadPluginConfig, serveShippedConfigPath } from './plugin-config.js';
 import type { ScriptedTurn } from './scripted-model.js';
+import { serverLogBody, serverLogLevel } from './server-log-line.js';
 import { scriptedModelPlugin } from './settings/scripted-model.js';
 import type { AttachSessions } from './session-attach.js';
 import { systemPromptDefaultsEntry } from './system-prompt-middleware.js';
@@ -523,4 +524,24 @@ export function approvalToolNames(pendings: readonly PendingInput[]): string[] {
  */
 export function virtualFilesOf(result: object): Record<string, FileData | undefined> {
   return (result as { files?: Record<string, FileData | undefined> }).files ?? {};
+}
+
+export { serverLogBody, serverLogLevel };
+
+/**
+ * 把 `runServe` 的 `log` 收進一個陣列、只留訊息本文。要驗**等級**的測試另給 `raw`：原樣的一行也收進去，
+ * 再用 {@link serverLogLevel} 讀等級字母（本文那一份看不到等級）。
+ */
+export function bodyLog(sink: string[], raw?: string[]): (line: string) => void {
+  return (line) => {
+    raw?.push(line);
+    sink.push(serverLogBody(line));
+  };
+}
+
+/** 原樣的伺服器日誌行裡，本文以 `prefix` 開頭的那幾行的等級字母。 */
+export function levelsOf(raw: readonly string[], prefix: string): (string | undefined)[] {
+  return raw
+    .filter((line) => serverLogBody(line).startsWith(prefix))
+    .map((line) => serverLogLevel(line));
 }

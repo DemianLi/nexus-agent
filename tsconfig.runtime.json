@@ -85,7 +85,8 @@
       "@nexus/wire": ["./packages/nexus-wire/src/index.ts"],
       "@nexus/cordis": ["./vendor/cordis/src/index.ts"],
       "@nexus/cordis-plugin-include": ["./vendor/include/src/index.ts"],
-      "@nexus/cordis-plugin-loader": ["./vendor/loader/src/index.ts"]
+      "@nexus/cordis-plugin-loader": ["./vendor/loader/src/index.ts"],
+      "@nexus/cordis-plugin-logger-console": ["./vendor/logger-console/src/index.ts"]
     }
   }
 }

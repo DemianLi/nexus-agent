@@ -8,7 +8,7 @@
  *
  * - **心跳間隔**：調短的間隔真的是那條線上 `: ping` 的節奏（拿掉 `heartbeatIntervalMs` 那一行，預設 2 秒，這個窗口裡一個都收不到）。
  * - **位元組上限**：調到比任何一顆 frame 都小，下行第一顆就超限、被斷，serve 日誌有那一行（拿掉 `downlinkMaxBytes` 那一行，預設 2 MiB，下行好好跑完）。
- * - **斷線 warn 走 serverLog、不借 400 的那條**：檢 `serve.ts` 的接線文字（斷線要真的卡住才看得到，造不出來）。
+ * - **斷線 warn 走 warn 等級（#1534）、不借 400 的那條**：檢 `serve.ts` 的接線文字（斷線要真的卡住才看得到，造不出來）。
  *
  * **零憑證、零外部連線**：模型是腳本。
  */
@@ -19,7 +19,7 @@ import { join } from 'node:path';
 import { createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { exchangeServeToken, fetchWithCookie, foldTurn } from './fixtures.js';
+import { bodyLog, exchangeServeToken, fetchWithCookie, foldTurn } from './fixtures.js';
 import { startScriptedServe } from './scripted-serve.js';
 import type { ScriptedServe } from './scripted-serve.js';
 
@@ -81,7 +81,7 @@ describe('下行串流設定，從 serve 組裝起（#1504 驗收 6）', () => {
     const lines: string[] = [];
     serve = await startScriptedServe(TURNS, {
       extraRows: '- id: downlink\n  config:\n    maxQueuedBytes: 150\n',
-      log: (line) => lines.push(line),
+      log: bodyLog(lines),
     });
     const cookie = await exchangeServeToken(serve.running.authenticatedUrl);
     const client = createWireClient({
@@ -97,10 +97,10 @@ describe('下行串流設定，從 serve 組裝起（#1504 驗收 6）', () => {
     ]);
   });
 
-  it('serve.ts 把兩個值交到各自的消費點，斷線的 warn 走 serverLog、不借「處理失敗，回 400」那一條', () => {
+  it('serve.ts 把兩個值交到各自的消費點，斷線的 warn 走 warn 等級、不借「處理失敗，回 400」那一條', () => {
     const source = readFileSync(join(import.meta.dirname, 'serve.ts'), 'utf8');
     expect(source).toContain('downlinkMaxBytes: downlink.maxQueuedBytes');
     expect(source).toContain('heartbeatIntervalMs: downlink.heartbeatIntervalMs');
-    expect(source).toContain('warnDisconnect: serverLog');
+    expect(source).toContain('warnDisconnect: warn');
   });
 });
