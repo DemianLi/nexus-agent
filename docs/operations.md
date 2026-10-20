@@ -2059,7 +2059,27 @@ LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
 `run.start` 可以帶一格選填的 `client_time_zone`（[#1629](https://github.com/DemianLi/nexus-agent/issues/1629)，**照 dsh**：`session.prompt` 的 `clientTimeZone`，`packages/api/session-controller/src/index.ts:467-482`）。模型要把「明天下午三點」這種沒指名時區的時間按使用者的時區解讀，得知道使用者在哪個時區；瀏覽器自己知道（`Intl.DateTimeFormat().resolvedOptions().timeZone`），伺服器不知道（容器常常是 UTC）。
 
 - **協定**：`params.client_time_zone`，`UTC` 或 IANA 的 `Area/Location` 時區名（例如 `Asia/Taipei`、`America/Argentina/Buenos_Aires`），前後不能有空白。不合格式、這個執行期的 `Intl` 不認得、或不是字串，回 `invalid_argument`，訊息點名 `client_time_zone`，**這一句不進佇列**（驗證排在查重送之前，壞的時區不會被「重送」吞掉）。**省略＝維持現狀**，舊客戶端不受影響；舊 server 會略過這一格。wire client 的 `runStart(thread, text, { clientTimeZone })` 已接上。
-- **正規化**：伺服器記下的是 `Intl` 回報的正規名，別名會收成同一個值。**讀日誌時照 dsh 逐字要求記著的名字等於這個執行期的正規名**，否則那一輪的 pre-step 拋錯。不同 Node／ICU 版本的正規名不盡相同（Node 25.9 把 `Asia/Kolkata` 收成 `Asia/Calcutta`），這個風險另開 [#1733](https://github.com/DemianLi/nexus-agent/issues/1733) 等 demian 決定；發版產物升 Node 之前要先有結論。
+- **正規化**：伺服器記下的是 `Intl` 回報的正規名，別名會收成同一個值。**讀日誌時照 dsh 逐字要求記著的名字等於這個執行期的正規名**，否則那一輪的 pre-step 拋錯。正規名由執行期的 ICU 決定（Node 25.9 把 `Asia/Kolkata` 收成 `Asia/Calcutta`），所以升 Node 之前要看下一條。
+- **升 Node 之前**（[#1733](https://github.com/DemianLi/nexus-agent/issues/1733)，demian 2026-10-20 拍板：照 dsh 不偏離、不回報上游）：
+  - **實測**（CI 的 node-compat 兩格加本機，臨時探針在 PR #1772，量完已拿掉）：555 個名字（tzdata 所有 zone 與 link 名）裡有 110 個會被 `Intl` 改寫成別的正規名，例如 `Asia/Kolkata`→`Asia/Calcutta`、`Asia/Ho_Chi_Minh`→`Asia/Saigon`、`Europe/Kyiv`→`Europe/Kiev`、`US/Eastern`→`America/New_York`、`Etc/UTC`→`UTC`。**Node 22.19.0（ICU 77.1、tzdata 2025b）、25.9.0（ICU 78.3、2026a）、26.12.0（ICU 78.3、2026e）三邊逐條相同，沒有換版本會反過來的名字。** 沒量到的：ICU 只有 77.1 與 78.3 兩版（25.9 與 26.12 共用 78.3）；名單取自 tzdata 2026a，之後新增的名字沒量；用系統 ICU（`--with-intl=system-icu`）編的 Node 沒量。所以這是「目前沒看到」，不是保證。
+  - **影響範圍**：time-context 只讀**這一輪**的日誌事件（最後一個非 `resume` 的 `turn/start` 起）。撞到的只可能是**一個跨過升級的未完成輪**：升級前寫進日誌的名字，在那一輪還沒收完時被新 runtime 讀到。下一次 `run.start` 開的新一輪由新 runtime 重新正規化，不受影響（`@nexus/plugin-time-context` 的測試釘住這一點）。開卡時寫的「每輪都拋錯」是推測，讀碼後不成立。
+  - **症狀**：那一輪的 pre-step 拋 `TypeError: browser time zone must be canonical: "<名字>"`，這一輪失敗（listener 拋錯不吞），`turn/failed.message` 就是這句。
+  - **升之前先查**：在**新**的 Node 上，把日誌裡記過的時區名逐個問一遍；有不是正規名的，就是升完之後會撞到的那幾個（`$HOME_DIR` 換成 harness home）：
+    ```bash
+    grep -rhoE '"clientTimeZone":"[^"]*"' "$HOME_DIR/sessions" | sed -E 's/.*:"([^"]*)"$/\1/' | sort -u | node -e "
+    const names = require('fs').readFileSync(0, 'utf8').split('\n').filter(Boolean);
+    let bad = 0;
+    for (const name of names) {
+      let canonical = null;
+      try { canonical = new Intl.DateTimeFormat('en-US', { timeZone: name }).resolvedOptions().timeZone; } catch {}
+      if (canonical !== name) { bad += 1; console.log(name + ' -> ' + canonical); }
+    }
+    console.log(names.length + ' 個名字，' + bad + ' 個不是這個 Node 的正規名');
+    process.exit(bad === 0 ? 0 : 1);
+    "
+    ```
+    這是保守的檢查（掃全部日誌，實際上只有升級那一刻還沒收完的輪會被擋）。退出碼 0 就不用做別的。
+  - **撞到之後**：不用改日誌。那一輪失敗之後，使用者再送一句話就開新的一輪，新 runtime 會把瀏覽器回報的名字重新正規化寫進去（web 送出時帶 `client_time_zone`，[#1630](https://github.com/DemianLi/nexus-agent/issues/1630)）。升之前沒有還沒收完的輪，就什麼都不會發生；要連那一輪都不撞，升之前先讓進行中的輪收完。
 - **記在哪**：人話的來源上，不進 thread 設定（那會是整條 thread 共用的一個值，同一條 thread 換了時區就說謊）。三個位置同 `request_id`：排著時 `inbox/spliced` 裡那一件的 `source.clientTimeZone`、開了一輪之後的 `turn/start`（`kind: 'message'`）、輪中插話被領走時 `user/message` 的 `source.clientTimeZone`。**格式 49，不標 `ignorable`**（既有事件上多的選填欄位，沒有 `ignorable` 可標）。**一台 48 的 runtime 讀不了 49 的檔**（`SessionFormatUnsupportedError`），而且續接時 header 會被改寫成 49：發版後退回前一版，被新版碰過的 thread 會打不開。沒帶 `client_time_zone` 的送出，日誌與以前位元組相同；48 以前的檔沒有這一格，等於沒帶，不補寫。
 - **誰讀**：`@nexus/plugin-time-context`，見上面「時間讀數」。**子代理不繼承**：派出去那一刻沒有人說話，子代理日誌的第一個 `turn/start` 不帶時區，它那一則讀數的第二行是 `unavailable`。dsh 派子代理時同樣沒帶時區（`packages/subagent/subagent/src/manager.ts:464` 給的是 `{ kind: 'user' }`）。
 - **人對背景子代理說話**（[#1734](https://github.com/DemianLi/nexus-agent/issues/1734)，**照 dsh** 的 `subagent.prompt` 帶 `clientTimeZone`，`packages/subagent/subagent/src/index.ts:447-475`）：`subagent.send` 的 `params.client_time_zone` 規則同 `run.start`（共用 `@nexus/wire` 的 `canonicalClientTimeZone`；不合法回 `invalid_argument` 並點名欄位，**排在「有沒有這個背景子代理」之前**，不讓呼叫端靠回應差別試探編號；省略＝維持現狀）。時區記在**子代理自己那份日誌**上這句人話的來源：子代理閒著，新一輪的 `turn/start`（`kind: 'message'`）帶 `clientTimeZone`；正在跑，下一步領走時 `user/message` 的 `source: { kind: 'user', clientTimeZone }`；被中止沒領走而退回的輪次與冷復活（先接回來再投遞）都跟著帶。子代理的下一則時間讀數因此是 `resolved`。wire client 的 `subagentSend(thread, runId, text, { clientTimeZone })` 已接上；web 的子代理輸入框送不送時區是 [#1630](https://github.com/DemianLi/nexus-agent/issues/1630) 那一側。**格式不變**（49 已含這兩個欄位）。

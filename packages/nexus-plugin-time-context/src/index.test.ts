@@ -446,6 +446,27 @@ describe('瀏覽器時區：三種讀數（#1629，dsh src/request-zone.ts）', 
     );
   });
 
+  it('舊名字只擋它自己那一輪：下一輪重新記的正規名照收，fold 不再看到上一輪的別名（#1733）', () => {
+    const canonicalOf = (zone: string): string =>
+      new Intl.DateTimeFormat('en-US', { timeZone: zone }).resolvedOptions().timeZone;
+    const [canonical] = ['Asia/Calcutta', 'Asia/Kolkata'].filter(
+      (zone) => canonicalOf(zone) === zone,
+    );
+    const [alias] = ['Asia/Calcutta', 'Asia/Kolkata'].filter((zone) => canonicalOf(zone) !== zone);
+    expect(canonical).toBeDefined();
+    expect(alias).toBeDefined();
+
+    // 升 Node 之前寫下的別名，這一輪還沒收完就被新 runtime 讀到：這一輪拋。
+    const log = new SessionLog('t');
+    humanTurn(log, '一', alias);
+    expect(() => foldTimeContext(log.events)).toThrow('must be canonical');
+
+    // 下一個 `run.start` 的新一輪由現在的 runtime 重新正規化，上一輪的別名不在這一輪的範圍裡。
+    at(MIN);
+    humanTurn(log, '二', canonical);
+    expect(foldTimeContext(log.events).browser).toEqual({ kind: 'resolved', timeZone: canonical });
+  });
+
   it('fold：只看這一輪——上一輪的時區不外溢，resume 的 turn/start 不重置', () => {
     const log = new SessionLog('t');
     humanTurn(log, '一', 'America/New_York');
