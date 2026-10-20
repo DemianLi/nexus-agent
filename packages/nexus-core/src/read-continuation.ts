@@ -42,19 +42,28 @@
  * （`createDeepAgent`，`dist/langsmith-zm0ILQsV.js:6210-6211`），`customToolDescriptions` 沒有往下傳；
  * 換掉工具實例則會被 langchain 拒絕（`AgentNode.js` 約 250 行：同名不同實例的 client tool）。退到
  * 最接近的：模型那一側換成一份 OpenAI 形狀的定義（不是 client tool，驗證不擋），執行的仍是基座的工具。
+ * （「換不掉」只在走 `createDeepAgent` 時成立；#1530 之後 contained backend 的讀檔不再經基座的 `read`，但工具本體仍是基座的。）
  *
  * **偏離二：一行都塞不下時照樣給那一行。** dsh 先把單行截到 2000 字元，所以第一行永遠塞得下；
  * 基座不截行（超過 5000 字元切成續行），所以第一行本身就超過 50 KiB 時不停在零行——給它，由基座
- * 格式化後的 80,000 字元上限去截（下面「已知的界線」那一條）。
+ * 格式化後的 80,000 字元上限去截（下面「已知的界線」那一條）。**範圍縮到不自己建頁的 backend**：
+ * contained backend 自己建頁（下一段），每行先截到 2000 字元，第一行永遠塞得下，跟 dsh 一樣。
  *
  * **偏離：在工具外面補，不是在工具裡寫。** 基座的工具我們改不了，退到同
  * {@link ./fs-tool-errors.ts} 的做法——一顆貼著工具本體的 `wrapToolCall`，時刻是 dsh 的
  * `tools/execute`。它要的總行數從 backend 取：
  *
- * - {@link recordReadExtent} 包住交給基座的 backend。**在一次 `read_file` 裡**，它把 `read` 的
- *   `limit` 放開成讀到檔尾，自己數行，再照原本的 `limit` 切回去交給工具。工具拿到的內容與原本
- *   一字不差，backend 也只讀一次檔（`FilesystemBackend.read` 本來就整份讀進來）。
+ * - {@link recordReadExtent} 包住交給基座的 backend。**在一次 `read_file` 裡**，backend 可以用
+ *   {@link currentReadWindow} 領走這一頁的請求（offset、limit、行長與位元組上限），**自己讀、自己建頁**，
+ *   再用 {@link noteReadWindow} 把範圍與行回報回來；這時這裡只把它回的內容原樣交出（contained backend 走這條，
+ *   [#1530](https://github.com/DemianLi/nexus-agent/issues/1530)：檔案只讀一次、大檔串流、單行截到 2000 字元）。
+ * - **沒領請求的 backend**（`StateBackend`、`CompositeBackend`、plugin 自帶的）走原本的路：把 `read` 的 `limit` 放開成
+ *   讀到檔尾，自己數行，再照原本的 `limit` 切回去交給工具。工具拿到的內容與原本一字不差。
  * - middleware 讀這次記下的範圍，接在文字結果的最後。
+ *
+ * **偏離三（#1530 的偏離 1）：視窗經旁路回報，不經工具回傳值。** dsh 的 `read` 把頁與範圍當一個回傳值交出；
+ * 基座的 `read_file` 只收 `{ content }`，範圍放不進去，所以走 `AsyncLocalStorage` 的旁路（`currentReadWindow`／
+ * `noteReadWindow`），退到最接近的做法。
  *
  * 「這一次呼叫」同樣由 `AsyncLocalStorage` 界定；不在 `read_file` 裡的 `read`（摘要器、測試直接
  * 呼叫 backend）原樣轉交，參數不動。

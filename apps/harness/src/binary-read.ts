@@ -5,15 +5,16 @@
  * NVIDIA 對它回 400，那則工具結果又已經進了 state，同一條 thread 之後每一輪都 400（實測）。dsh 的 `read` 不看副檔名、
  * 看內容（`packages/fs/fs-local/src/fsio.ts:386-399`，`477b4f4`）：前 {@link BINARY_SAMPLE_BYTES} 個位元組有 NUL 是
  * `binary file`，不是合法 UTF-8 是 `invalid UTF-8 text`，兩句都帶 `FS_NOT_TEXT`。圖片另走 `read_image`，要掛了附件
- * 儲存才有——我們沒有，等於 dsh「沒掛」的那一格。
+ * 儲存才有——我們沒有，等於 dsh「沒掛」的那一格（附件／`read_image` 見 [#731](https://github.com/DemianLi/nexus-agent/issues/731)）。
  *
  * 判在 backend 的 `read` 上，兩種 backend 各一個掛點：落磁碟的 `ContainedFilesystemBackend`（`contained-backend.ts`），與沒給
  * `--workspace` 時墊底的 {@link TextOnlyStateBackend}。回 `{ error }` 就走基座既有的錯誤路：`read_file` 回
  * `Error: …`。子代理拿的是同一個 backend，一併涵蓋。
  *
- * **偏離**：副檔名被基座判成非文字、內容卻是合法文字的檔（例如一份叫 `.png` 的純文字），dsh 照讀，我們一律拒成
- * `binary file`。照讀要自己重做基座文字那一支的切頁與空檔提示；基座不認得的副檔名一律當 `text/plain`，會落到
- * 非文字那一支的只有它表上的圖、音、影、pdf、ppt，實務上內容都是二進位。
+ * **偏離已撤銷（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）**：本來副檔名被基座判成非文字、內容卻是合法文字的檔
+ * （例如一份叫 `.png` 的純文字），我們一律拒成 `binary file`，dsh 則照讀。`ContainedFilesystemBackend.read` 現在自己讀檔、
+ * 自己建頁，**看內容、不看副檔名**，跟 dsh 一樣；這份檔留下的只有 {@link notTextReason}／{@link BINARY_SAMPLE_BYTES}
+ * 與沒給 `--workspace` 時墊底的 {@link TextOnlyStateBackend}（state 裡的位元組內容沒有「看內容」的餘地，仍照舊拒絕）。
  *
  * @module
  */

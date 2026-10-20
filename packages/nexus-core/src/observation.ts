@@ -30,6 +30,11 @@
  * 之間有縫。這跟 `ContainedFilesystemBackend` 已經明文接受的那條同型（policy fence，
  * 不是 kernel boundary）。
  *
+ * **讀檔記的版本可以由 backend 回報**（[#1530](https://github.com/DemianLi/nexus-agent/issues/1530)）：`read_file` 成功之後
+ * 本來要再 `readRaw` 一次才有版本，等於同一個檔讀兩遍（大檔更糟）。能邊讀邊算出同一個 token 的 backend
+ * （{@link createVersionHasher}、{@link noteReadVersion}）直接把版本交上來，這裡就記它，不再讀；沒回報的照舊 `readRaw`。
+ * 寫與改前的比對仍是 `readRaw`，兩邊的 token 必須逐字相同——`apps/harness` 的 `contained-read-window.test.ts` 釘著。
+ *
  * **偏離二：規則寫在系統提示詞，不是工具描述裡。** dsh 把它寫進工具描述——
  * 「read an existing file first (**the default fs-observation-policy requires it**)」、
  * 「Read the file first…, unless you just created or edited it in this session」
