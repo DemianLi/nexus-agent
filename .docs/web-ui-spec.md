@@ -16,7 +16,7 @@
 | 邊框怎麼畫 | 照 SG：面（卡片、浮層）的邊畫在陰影裡；控制項（按鈕、欄位）的細線是自己的 `border`，再疊 inset 光與投影 | §5 |
 | 字型 | Geist／Geist Mono（打包 latin，等寬另加方框字元的 symbols2），等寬再退系統等寬，中文退 Noto Sans TC，**全部打包進本地** | §5 |
 | 亮暗切換 | header 循環三態、預設跟系統、`localStorage`、`index.html` 內嵌腳本防閃、不裝 `next-themes` | §6 |
-| 動效 | 純 CSS＋`tw-animate-css`（例外：狀態列的 SG `StatusGlyph`，§7）；封閉模式清單；開 250／關 150；reduced-motion 分模式退 | §7 |
+| 動效 | 純 CSS＋`tw-animate-css`（例外：狀態列的 SG `StatusGlyph`，§7）；封閉模式清單；進出場時長照 SG（浮層 100、tooltip 150）；reduced-motion 分模式退 | §7 |
 | 無障礙 | WCAG 2.2 AA＋APG＋Radix 內建；焦點只在會丟掉時才搬 | §8 |
 | 斷點 | 1024（以下收成抽屜）；驗收 375／768／1280 | §9 |
 | 原型哪些能搬 | 主題、token、模式規則、registry 改法直接搬；原型 App 只當參考 | §10 |
@@ -210,10 +210,10 @@
 **底層**
 - **純 CSS**，`thinking-orbs`、`border-beam` 不進 `apps/web`。**例外：狀態列執行中那一列的 SG `StatusGlyph`**（#1684）是 JS `requestAnimationFrame` 每幀畫，vendor 原樣。「純 CSS」是 demian 2026-09-18 在 [#378](https://github.com/DemianLi/nexus-agent/issues/378) 拍板的；後來 #1468 的 Q12（status-line 換成 `TurnStatus`，它硬依賴 `StatusGlyph`）與 Q16（SG 的 AI 元件 vendor 原樣）蓋過了這一條，#1468 §6 的牴觸表當時沒列到它（#1684 PM 定，demian 可推翻）。
 - **裝 `tw-animate-css`**：registry 的 dialog／sheet／tooltip 寫了 `animate-in` 等 class，沒裝時建置出來一筆都沒有，也不報錯。
-- 在 `@theme`（**不用 `inline`**）覆寫 `--animate-in` 250ms／`--animate-out` 150ms、曲線 `--ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1)`。覆寫後 registry 的 `duration-*` 蓋不掉，單獨改用 `animation-duration-*`。
+- 進出場照 SG 的機制（#1687）：`--animate-in`／`--animate-out` 讀元件自己的 `duration-*`／`ease-*`（tw-animate 的 `--tw-duration`／`--tw-ease`），沒寫的 150ms、`ease`。`@theme` **不用 `inline`**（inline 會讓 reduced-motion 換掉的變數沒人讀）；值逐元素宣告在 `styles/motion.css` 的 `*` 上，因為只宣告在 `:root` 的話 `var(--tw-duration)` 在 `:root` 就解掉了（vendor README 本地修改第 81 條，`guard/` 與 `check-built-css` 量）。
 - 進場 fill-mode `backwards`，退場 `both`。
 
-**token**：SG 沒有定義任何時長、曲線或 `--animate-*` 變數，它的時長寫死在自己的規則裡（transition 150ms ease-out `:982-987`；進場 `sg-float-in` 220ms、`sg-fade-in` 240ms `:1297-1301`；持續動畫 1.2s／2.4s／1.6s `:1259-1293`）。所以下面這組 nexus 的 token 先留著，**第 ③／④ 步換成 SG 的元件時一起換掉**（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。時長、曲線、位移、縮放、模糊、resize 整組原本照 Libraries.dev（時長 40／80／150／250／350／400／500，位移 4／6／8／12／30，縮放 .96–.99，模糊 2／3／8，resize 300），外加 `--duration-press` 120、`--duration-overlay` 200、`--auto-advance-delay` 200。
+**token**：SG 沒有定義任何時長、曲線或 `--animate-*` 變數，它的時長寫死在自己的規則裡（transition 150ms ease-out `:982-987`；進場 `sg-float-in` 220ms、`sg-fade-in` 240ms `:1297-1301`；持續動畫 1.2s／2.4s／1.6s `:1259-1293`），元件則自己寫 `duration-*`。進出場與展開收合 #1687 已換成 SG 的機制；下面這組 nexus 的 token 還有消費者或待清，**留給 ⑥（#1689）一起收**（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)）。時長、曲線、位移、縮放、模糊、resize 整組原本照 Libraries.dev（時長 40／80／150／250／350／400／500，位移 4／6／8／12／30，縮放 .96–.99，模糊 2／3／8，resize 300），外加 `--duration-press` 120、`--duration-overlay` 200、`--auto-advance-delay` 200。
 
 **模式清單封閉**：浮層彈出、對話框、側滑抽屜、換內容、展開收合、進場、進度、按壓、持續狀態。清單外沒有動效，只留 100–150ms 顏色過渡。
 
@@ -221,15 +221,17 @@
 | --- | --- |
 | 下拉選單 | **沒有動畫**（#1583 照 SG：vendor 的 Content 寫 `animate-none!`，開關都是立即的） |
 | 指令選單 | 住在 popover 裡（composer 的 `/` 與 @ 選單），動效就是 popover 那一列（輸入框底列的 Pick 是下拉選單，#1591 起）；cmdk 本身沒有動效（#1583 換成 SG 版） |
-| popover | 照 SG 的機制（#1583）：淡入＋zoom .95＋往外 slide 2（`slide-in-from-*-2`）。SG 寫的 `duration-100` 蓋不掉 `@theme` 的 `--animate-in`／`--animate-out`，所以時長仍是 250／150，**全域時長留到 ④ 收尾一起換** |
-| tooltip | 同 popover（#1583）：淡入＋zoom .95＋slide 2，250／150（全域時長留到 ④）；延遲 0（SG 的 `TooltipProvider` 預設） |
-| 對話框（含確認框） | 同 popover（#1583）：淡入＋zoom .95，250／150（全域時長留到 ④）；遮罩淡入、`backdrop-blur-xs` |
+| popover | 照 SG（#1583、#1687）：淡入＋zoom .95＋往外 slide 2（`slide-in-from-*-2`），開關都是 100ms、`ease`（SG 寫的 `duration-100`） |
+| tooltip | 同 popover（#1583）：淡入＋zoom .95＋slide 2，開關都是 150ms、`ease`（SG 的 tooltip 沒寫 `duration-*`，是 tw-animate 的預設，#1687）；延遲 0（SG 的 `TooltipProvider` 預設） |
+| 對話框（含確認框） | 同 popover（#1583）：淡入＋zoom .95，開關都是 100ms、`ease`（#1687）；遮罩同樣 100ms 淡入淡出、`backdrop-blur-xs` |
 | 抽屜（手機側欄 <1024、窄螢幕的右側欄） | 照 SG 的機制（#1583）：transition 200ms、位移 2.5rem 加淡入淡出；遮罩 150 淡入。reduced-motion 不位移、≤ 150（覆寫檔，vendor README 本地修改第 23 條） |
 | 桌面側欄收合 | 照 SG（#1680）：width／left 的 transition 200ms linear；reduced-motion 沒有 transition（`motion.css`，`guard/` 量） |
 | 面板高度差 | resize 300 |
 | 工具卡、工具段展開 | **沒有動畫**（#1682 照 SG：`StepRow`／`StepGroup` 開關是立即的，只有箭頭轉 90°；reduced-motion 箭頭不轉場，vendor README 本地修改第 64 條） |
 | 思考過程展開 | **沒有動畫**（#1683 照 SG：原生 `<details>` 開關是立即的，只有箭頭轉 90°；reduced-motion 箭頭不轉場，第 64 條擴充）。「思考中」用 SG 的 `.status-shimmer`（2.4s 掃過，reduced-motion 停住、改回字色）；狀態列的 shimmer 是 nexus 自己的 `.text-shimmer`，兩種並存 |
-| 提問面板收起 | 250／150，高度＋透明度 |
+| 提問面板收起 | **沒有動畫**（#1687 照 SG：collapsible 沒有高度動效，收起的同一輪就 `hidden`，內容保持掛載）；箭頭照 SG 朝右、轉 90° |
+| 其他展開收合（摘要列、待辦、排隊清單、核准的原始內容、觀測分頁） | **沒有動畫**（#1687 照 SG），只有 `Chevron` 朝右、轉 90°（150ms，reduced-motion 不轉場） |
+| 捲到最新的按鈕 | 照 vendor 原樣（#1687 撤掉本地修改第 41 條）：藏著時往下位移一整個身高、縮 .95；出現 200ms、藏起來 400ms；reduced-motion 沒有 transition。避讓在過渡跑完或 `data-active` 一換時重量 |
 | 新訊息、工具卡出現 | 250，往上 8px |
 | 面板換掉輸入框、上下題 | 舊 150 淡出 → 新 250 長出；上下題有方向 |
 | 單選自動跳 | 先停 200 |
@@ -243,7 +245,7 @@
 **reduced-motion**（不是全關；實作寫 `@media (prefers-reduced-motion: reduce)`，原型的 `data-reduce-motion` 屬性只是模擬）
 - 位移、縮放、模糊拿掉，留 ≤ 150 的透明度；尺寸瞬間到位；按壓不縮；循環停一格；**狀態不能只靠動效表達**。
 - SG 的進場（`.animate-float-in`／`.animate-fade-in`）在 reduced-motion 下被 SG 設成 `animation: none`，覆寫檔改回 150ms 淡入；SG 的持續動畫照 SG 停掉（Q5 優先於 Q8，`reduced-motion.test.ts`）。
-- 做法：media query 裡把 `--animate-in`／`--animate-out`／`--animate-collapsible-*` 換成只有透明度的版本。SG 的 sheet 用 transition 滑入、不走這幾個變數，由覆寫檔對抽屜另外拿掉位移、壓到 150（#1583，`check-built-css` 量產物）。
+- 做法：media query 裡把 `--animate-in`／`--animate-out` 換成只有透明度的版本，選擇器寫到 `:root:root *`（平常的值逐元素宣告，只寫 `:root:root` 會被蓋回去，#1687）。SG 的 sheet 用 transition 滑入、不走這幾個變數，由覆寫檔對抽屜另外拿掉位移、壓到 150（#1583，`check-built-css` 量產物）。
 - JS 的 `scrollTo({ behavior: 'smooth' })` 不看 CSS，要自己讀偏好。
 
 **效能**：持續動畫只動 transform／opacity（例外：`StatusGlyph` 每幀改 SVG 的 `cx`／`cy`／`r`／`opacity` 屬性，vendor 原樣，由 #1684 驗收 E 的量測當保險：串流中捲動與串流中不捲動兩格，條件同下），邊框光只剩等你處理那一圈的呼吸（opacity；執行中那道 conic 光隨 #1682 的工具卡換成 SG 拿掉）；`will-change` 不常駐。
@@ -335,7 +337,7 @@
 | **只當參考** | `prototype-app.tsx`、`kit.tsx`（`AutoHeight`、`AgentOrb`、`Beam`）、`scenario.ts`、`old-button.tsx` | 看行為怎麼長，照產品的資料流重寫 |
 | **不搬** | `main.tsx` 的原型掛載、`?prototype=375` 開關、假資料劇本、切換列 | — |
 
-**搬的時候會無聲壞掉的一處**：`index.css` 的 `@theme` 覆寫 `--animate-collapsible-down/up` 時引用 `motion-fade-in`／`motion-fade-out`，而這兩個 `@keyframes` 定義在原型範圍的 `tokens.css`。只搬 `index.css` 不搬 keyframes，collapsible 的動效會變成什麼都沒有，而且不報錯。
+**搬的時候會無聲壞掉的一處**：`index.css` 的 `@theme` 覆寫 `--animate-collapsible-down/up` 時引用 `motion-fade-in`／`motion-fade-out`，而這兩個 `@keyframes` 定義在原型範圍的 `tokens.css`。只搬 `index.css` 不搬 keyframes，collapsible 的動效會變成什麼都沒有，而且不報錯。（#1687 照 SG 拿掉 collapsible 的高度動效之後，這兩個變數已不存在。）
 
 **另一件實作要想的**：`AutoHeight` 在高度變化那 300ms 裁切（`overflow: hidden`），期間邊框光會被切掉一瞬間。
 

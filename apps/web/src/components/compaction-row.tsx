@@ -50,7 +50,7 @@ export function CompactionRow({ entry }: { readonly entry: CompactionEntry }) {
         {line}
         <Chevron />
       </RowTrigger>
-      <CollapsibleContent className="data-closed:animate-collapsible-up data-open:animate-collapsible-down overflow-hidden">
+      <CollapsibleContent className="overflow-hidden">
         <div
           data-testid="compaction-summary"
           className="overflow-y-auto px-3 pt-1 pb-3"

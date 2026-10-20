@@ -4,8 +4,8 @@
  * `proto-*` class 改名（`agent-orb`、`border-beam`、`text-shimmer`、`stream-caret`），`data-reduce-motion` 模擬
  * 改成真的 media query，CPU 降速退路拿掉（量過 60fps，規格說不需要）。
  *
- * 進出場的 `--animate-in`／`--animate-out`／`--animate-collapsible-*` 在 `index.css` 的 `@theme`；
- * 它們引用本檔的 `motion-fade-in`／`motion-fade-out`，兩邊要一起搬、一起改。
+ * 進出場的 `--animate-in`／`--animate-out`：`index.css` 的 `@theme` 讓 Tailwind 產出 `animation: var(--animate-in)`，
+ * 值在本檔的「進出場」那段逐元素宣告（#1687）；reduced-motion 換成本檔的 `motion-fade-in`／`motion-fade-out`。
  */
 
 /*
@@ -41,9 +41,28 @@
 }
 
 /*
+ * ── 進出場：照 SG 的機制，時長與曲線讀元件自己的 `duration-*`／`ease-*`（#1687）──
+ * SG 的 dialog、alert-dialog、popover、dropdown-menu 寫 `duration-100`，tw-animate-css 讀它設的 `--tw-duration`；沒寫的
+ * （tooltip）是 tw-animate 的預設 150ms、`ease`。
+ *
+ * **要逐元素宣告**：自訂屬性裡的 `var()` 在宣告它的元素上解析。只寫在 `@theme`（產物是 `:root` 上的宣告）的話，
+ * `--tw-duration` 在 `:root` 就解成 150ms，子元素繼承的是解好的值，讀不到自己 `duration-100` 設的那一個（實測 dialog 是 150）。
+ * tw-animate 自己的版本是 `@theme inline`，utility 直接展開數值所以沒這個問題；我們不能用 inline，見 `index.css` 的 `@theme`。
+ * reduced-motion 那段要跟著寫成 `:root:root *`，只寫 `:root:root` 會被這裡在每個元素上蓋回去（`check-built-css` 量產物）。
+ * fill-mode 留 `backwards`／`both`：進場等延遲時先停在起點，退場停在終點，不閃一下原樣（規格 §7）。
+ */
+*,
+::before,
+::after {
+  --animate-in: enter var(--tw-animation-duration, var(--tw-duration, 150ms)) var(--tw-ease, ease)
+    var(--tw-animation-delay, 0s) 1 normal backwards;
+  --animate-out: exit var(--tw-animation-duration, var(--tw-duration, 150ms)) var(--tw-ease, ease)
+    var(--tw-animation-delay, 0s) 1 normal both;
+}
+
+/*
  * ── 動效模式清單 ──
- * 浮層彈出、對話框、側滑抽屜：registry 的 animate-in／out（index.css 的 @theme 已改成開 250／關 150），
- *   各元件只調縮放、位移與個別時長。
+ * 浮層彈出、對話框：registry 的 animate-in／out，時長照元件自己寫的（上面「進出場」那段）；側滑抽屜是 SG 的 transition。
  * 換內容、上下題、進場、展開收合、進度、按壓、resize、持續狀態：下面這些。
  *
  * 新增或刪掉 @keyframes 時，同一個 PR 更新 `scripts/check-built-css.mjs` 的允許清單（它量建置出來的 CSS）。
@@ -305,7 +324,7 @@
   }
 }
 
-/* ── 持續狀態：shimmer（只剩待辦進行中那一項；狀態列與思考過程換成 SG 的 `.status-shimmer`，#1684、#1683。去留記在 #1687）── */
+/* ── 持續狀態：shimmer（只剩待辦進行中那一項；狀態列與思考過程換成 SG 的 `.status-shimmer`，#1684、#1683。去留歸 ⑤ 的 #1692）── */
 
 .text-shimmer {
   background: linear-gradient(
@@ -339,16 +358,22 @@
  */
 @media (prefers-reduced-motion: reduce) {
   :root:root {
-    --animate-in: motion-fade-in 150ms ease backwards;
-    --animate-out: motion-fade-out 150ms ease both;
-    --animate-collapsible-down: motion-fade-in 150ms ease;
-    --animate-collapsible-up: none;
     scroll-behavior: auto;
   }
 
+  /* 上面「進出場」那段寫在每個元素上，這裡也要寫到每個元素，只寫 `:root:root` 會被蓋回去。 */
+  :root:root,
+  :root:root *,
+  :root:root ::before,
+  :root:root ::after {
+    --animate-in: motion-fade-in 150ms ease backwards;
+    --animate-out: motion-fade-out 150ms ease both;
+  }
+
   /*
-   * 元件自己寫的 `animation-duration-*`（抽屜 350／250）直接設 `animation-duration`，蓋掉上面那組變數裡的 150：
-   * 動畫換成了淡入淡出，時長卻還是 350。這裡把它壓回 150。
+   * 元件自己寫的 `animation-duration-*` 直接設 `animation-duration`，蓋掉上面那組變數裡的 150：
+   * 動畫換成了淡入淡出，時長卻還是原本的。這裡把它壓回 150。抽屜改成 SG 的 transition 之後（#1583）已經沒有元件寫，
+   * 去留跟其他沒消費者的 token 一起在 ⑥（#1689）定。
    */
   :root:root [class*='animation-duration-'] {
     animation-duration: 150ms;

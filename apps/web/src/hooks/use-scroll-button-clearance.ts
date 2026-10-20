@@ -13,7 +13,13 @@ import type { RefObject } from 'react';
  * 浮鈕自己有焦點時不藏，焦點不能憑空消失。只看標了的元素，不抓全部的 `form`：新元件要讓就自己標。
  *
  * 不改 vendor 的 `message-scroller.tsx`（#1638 PR B 起是 SG 版），只靠浮鈕的 `data-slot`：合併 `render` 的 Button 之後仍是
- * `message-scroller-button`（`components/ui/message-scroller.test.tsx` 釘）。浮鈕藏著時不位移（README 本地修改第 41 條），量到的框不受過渡影響。
+ * `message-scroller-button`（`components/ui/message-scroller.test.tsx` 釘）。
+ *
+ * **浮鈕會位移**（#1687 撤掉 README 本地修改第 41 條、改回 vendor 原樣）：藏著時 `translate-y-full scale-95`，出現與藏起來各有
+ * 200／400ms 的過渡。`getBoundingClientRect` 量到的是過渡途中的框，所以除了捲動與尺寸，再加兩個重量的時機：
+ * - `data-active` 一換（`MutationObserver`）：reduced-motion 下沒有過渡、位置直接跳，不會有 `transitionend`。
+ * - 浮鈕自己的 `transitionend`：過渡跑完，量到終點的框。
+ * 過渡那一小段裡量到的還是途中的框，可能閃一下；不改用 `offsetTop`：水平置中也是靠 transform，改了等於綁死 vendor 的 class。
  */
 
 /** 浮鈕要讓開的元素：標在對話裡的輸入區上。 */
@@ -72,7 +78,14 @@ export function useScrollButtonClearance(viewportRef: RefObject<HTMLElement | nu
       if (frame === 0) frame = requestAnimationFrame(check);
     };
 
+    const settled = (event: TransitionEvent) => {
+      if (event.target === button) schedule();
+    };
+
     viewport.addEventListener('scroll', schedule, { passive: true });
+    button.addEventListener('transitionend', settled);
+    const active = new MutationObserver(schedule);
+    active.observe(button, { attributes: true, attributeFilter: ['data-active'] });
     // 面板展開、視窗變寬窄時不會捲動，要靠尺寸變化再量一次。jsdom 沒有 ResizeObserver（也沒有版面），那裡只聽捲動。
     const resize = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(schedule);
     resize?.observe(viewport);
@@ -80,6 +93,8 @@ export function useScrollButtonClearance(viewportRef: RefObject<HTMLElement | nu
     schedule();
     return () => {
       viewport.removeEventListener('scroll', schedule);
+      button.removeEventListener('transitionend', settled);
+      active.disconnect();
       resize?.disconnect();
       cancelAnimationFrame(frame);
     };
