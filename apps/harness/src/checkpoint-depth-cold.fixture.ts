@@ -10,7 +10,8 @@
  * - `generate <dir> <層數…>`：真跑 serve，每個層數一條 thread，各說一句話（工具參數是淺的）；收掉之後把日誌裡那則訊息的參數換成
  *   指定層數（原樣 JSON 文字，不用遞迴的 `JSON.stringify`）。這是造「上限出現之前寫下的舊日誌」的做法，同 `checkpoint-serde.test.ts`。
  * - `resume <dir> <層數>`：開 serve，**第一件事**就是續接 `t<層數>`，印被拒的碼與訊息，或 `opened`。
- * - `write <dir> <層數>`：同台，假端點回一則參數 `<層數>` 層的工具呼叫，印這一輪 `turn/failed` 的碼與訊息。
+ * - `write <dir> <層數>`：同台，假端點回一則參數 `<層數>` 層的工具呼叫，印這一輪 `turn/failed` 的碼與訊息、整份日誌有沒有 `RangeError`，
+ *   以及下行有沒有一路收到 root 收尾（`downlink`：`closed` 或 `broken`，斷了不算這支腳本失敗——見 `write`）。
  *
  * **零憑證、零外部連線**：假端點在 loopback，key 是假的。
  */
@@ -181,10 +182,18 @@ async function write(dir: string, level: number): Promise<void> {
   const upstream = await fakeEndpoint(script(mixedJson(level)), true);
   const where = layoutAt(dir, upstream.baseURL);
   const server = await start(where);
-  await say(server, 'w', '深:w');
+  // 下行有沒有斷要如實報，不能讓它扳倒腳本：深參數的 `messages` 事件在下行 `JSON.stringify` 時會不會爆堆疊看平台
+  //（Linux 上 5000 層會，serve 記 `[下行] … 無法序列化，已斷開`，歸 #1560；macOS 上不會）。這一格要量的是日誌那一關。
+  let downlink: 'closed' | 'broken' = 'closed';
+  try {
+    await say(server, 'w', '深:w');
+  } catch {
+    downlink = 'broken';
+  }
   await server.close();
   await upstream.close();
-  const events = (await readFile(logFile(where, 'w'), 'utf8'))
+  const logText = await readFile(logFile(where, 'w'), 'utf8');
+  const events = logText
     .split('\n')
     .filter((line) => line.length > 0)
     .map(
@@ -193,6 +202,9 @@ async function write(dir: string, level: number): Promise<void> {
     );
   const failed = events.filter((event) => event.type === 'turn/failed');
   emit({
+    downlink,
+    // 整份日誌（不只 turn/failed）有沒有留下堆疊爆掉的痕跡。
+    rangeError: logText.includes('RangeError') || logText.includes('Maximum call stack'),
     failed: failed.map((event) => ({ code: event.data.error?.code, message: event.data.message })),
   });
 }

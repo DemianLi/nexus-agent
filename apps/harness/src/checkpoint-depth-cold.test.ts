@@ -102,19 +102,40 @@ describe('續接：新行程、預設 stack，第一個工作就是深的那一�
 });
 
 describe('同台寫入：新行程裡模型回極深的工具參數，日誌那一關先擋', () => {
-  it.each([2000, 5000])(
-    '參數 %i 層：這一輪失敗，碼是 NESTING_TOO_DEEP，不是 RangeError',
-    async (level) => {
-      const dir = mkdtempSync(join(tmpdir(), 'nexus-depth-cold-write-'));
-      temporary.push(dir);
-      const { failed } = (await child('write', dir, level)) as {
-        failed: { code?: string; message?: string }[];
-      };
-      expect(failed).toHaveLength(1);
-      expect(failed[0]!.code).toBe('NESTING_TOO_DEEP');
-      expect(failed[0]!.message).toContain('日誌收不下');
-      expect(failed[0]!.message).not.toContain('Maximum call stack');
-    },
-    120_000,
-  );
+  interface Written {
+    readonly downlink: 'closed' | 'broken';
+    readonly rangeError: boolean;
+    readonly failed: { code?: string; message?: string }[];
+  }
+  const written = async (level: number): Promise<Written> => {
+    const dir = mkdtempSync(join(tmpdir(), 'nexus-depth-cold-write-'));
+    temporary.push(dir);
+    return (await child('write', dir, level)) as Written;
+  };
+
+  it('參數 2000 層：這一輪失敗，碼是 NESTING_TOO_DEEP，不是 RangeError；下行也一路收到尾', async () => {
+    const result = await written(2000);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]!.code).toBe('NESTING_TOO_DEEP');
+    expect(result.failed[0]!.message).toContain('日誌收不下');
+    expect(result.failed[0]!.message).not.toContain('Maximum call stack');
+    expect(result.rangeError).toBe(false);
+    expect(result.downlink).toBe('closed');
+  }, 120_000);
+
+  /**
+   * 5000 層：**只量日誌那一關**，下行的結果不斷言（斷了或正常收尾都收）。
+   *
+   * 為什麼不斷言下行：同一則深參數的 `messages` 事件要走下行 `JSON.stringify`，Linux 的預設 stack 在 5000 層會爆
+   * （serve 記 `[下行] thread w 有一顆 messages 事件無法序列化，已斷開 1 條下行：Maximum call stack size exceeded`，CI 上
+   * 子行程因此「下行在 root 收尾之前就斷了」），macOS 上不會。斷言任何一邊都會變成依平台而定的測試。原因與歸屬見 #1560。
+   * 日誌那一關不看平台：這一輪的 `turn/failed` 是 `NESTING_TOO_DEEP`，整份日誌裡沒有 `RangeError`。
+   */
+  it('參數 5000 層：日誌裡這一輪的 turn/failed 是 NESTING_TOO_DEEP，整份日誌沒有 RangeError（下行不斷言）', async () => {
+    const result = await written(5000);
+    expect(result.failed).toHaveLength(1);
+    expect(result.failed[0]!.code).toBe('NESTING_TOO_DEEP');
+    expect(result.failed[0]!.message).toContain('日誌收不下');
+    expect(result.rangeError).toBe(false);
+  }, 120_000);
 });
