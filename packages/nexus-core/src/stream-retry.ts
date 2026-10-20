@@ -108,6 +108,8 @@ export interface StreamFailure {
    * （照 dsh 的 normal 模式）。
    */
   readonly retryAfterMs?: number;
+  /** 供應商的請求編號（回應標頭，非空字串才帶）。寫進 `llm/retry` 的 `failure.requestId`（#1536）。 */
+  readonly requestId?: string;
 }
 
 /** 圖裡 `config.writer` 送出的通知的記號。pump 認它，其餘的 `custom` 一律不上線。 */
@@ -321,6 +323,7 @@ function failureOf(reported: StreamFailure, reason: unknown): LlmFailure {
     message,
     code: reported.code,
     ...(reported.status !== undefined && { status: reported.status }),
+    ...(reported.requestId !== undefined && { requestId: reported.requestId }),
   };
 }
 

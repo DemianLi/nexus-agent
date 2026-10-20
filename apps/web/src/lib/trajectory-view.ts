@@ -213,6 +213,9 @@ export const TURN_END_LABEL: Readonly<Record<TrajectoryEnd, string>> = {
  *
  * `INVALID_CREDENTIAL` 也是本機的碼（#1541）：這台主機設定的金鑰修掉頭尾空白後是空的、或含有 HTTP 標頭放不下的字元，請求根本沒送出去，
  * 不重試。那句話要講清楚是本機的金鑰格式、不是供應商拒絕（那是 `AUTH`），而且重送沒用、要管理者修（#1652）。
+ *
+ * `NESTING_TOO_DEEP` 也是本機的碼（#1668）：這一輪裡有一則訊息巢狀太深，日誌或存檔點寫不下，這一輪停在那裡，不重試
+ * （同一份內容重打一樣深）。那句話講是訊息的形狀，不提層數與上限（#1753）。
  */
 export const FAILURE_CODE_LABEL: Readonly<Record<string, string>> = {
   AUTH: '驗證失敗',
@@ -226,6 +229,7 @@ export const FAILURE_CODE_LABEL: Readonly<Record<string, string>> = {
   EMPTY_RESPONSE: '回覆是空的',
   LOCAL_CAPACITY: '本機排隊太久，請求沒送出，可稍後再送',
   INVALID_CREDENTIAL: '本機金鑰格式不對，請求沒送出，重送無效，請管理者修正',
+  NESTING_TOO_DEEP: '這則訊息巢狀太深，這一輪沒有完成',
   UNKNOWN: '原因不明',
 };
 

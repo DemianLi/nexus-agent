@@ -18,7 +18,10 @@
  * - **寫入先量層數**（迭代走訪，不遞迴），超過 {@link CHECKPOINT_MAX_DEPTH} 就拋 {@link CheckpointDepthError}，碼
  *   {@link CHECKPOINT_DEPTH_EXCEEDED}，**在交給 `stringify` 之前**——所以 `decirc` 那一段也不會先爆。`put` 拋錯時
  *   `MemorySaver` 不寫那一份，存檔點留在上一顆：那一輪失敗，下一輪照常跑，模型收到的是被拒之前的歷史。
- * - **吞錯的那句字串當第二道**：量過了還是被換成那句（例如值裡有 `BigInt`），一樣拋，碼 {@link CHECKPOINT_UNSERIALIZABLE}。
+ * - **量之前先預檢**（[#1761](https://github.com/DemianLi/nexus-agent/issues/1761)）：量層數的那一步會呼叫 LangChain 訊息的 `toJSON`，那是遞迴的，
+  冷行程裡 2000 層就爆堆疊，回的是 `RangeError` 而不是 {@link CheckpointDepthError}。所以 {@link checkpointDepth} 先用不呼叫 `toJSON`
+  的迭代走訪量原始結構，超過上限的兩倍（{@link CHECKPOINT_PRECHECK_DEPTH}）就不再往下做，細節見那支函式。
+- **吞錯的那句字串當第二道**：量過了還是被換成那句（例如值裡有 `BigInt`），一樣拋，碼 {@link CHECKPOINT_UNSERIALIZABLE}。
  * - **讀回傳同一個上限給 `load`**：寫入的上限量的是整份存檔點，`load` 從每個 LangChain 物件自己那一層開始數，只會更淺，
  *   所以「寫得進去就讀得回來」。`jsonplus.js` 沒有開放這個參數，`_reviver` 那一段只好自己寫，見 {@link reviveJson}。
  *
@@ -31,6 +34,8 @@
  * ## 與 dsh 的偏離（理由 1）
  *
  * dsh 沒有存檔點這一層（一輪到下一輪的狀態是會話日誌加記憶體，見 `pruned-memory-saver.ts`），這一份是 LangGraph 基座才有的。
+ * 預檢（#1761）同理：dsh 在 `packages/bundle/headless/src/json-stream.ts` 對病態的深參數也是「遞迴之前先卡深度」（`MAX_DEPTH`，
+ * 註解寫的就是不卡會遞迴到爆堆疊），原則相同；差別是我們要擋的遞迴在 `@langchain/core` 的 `toJSON` 裡，改不了，只能在呼叫它之前先量。
  * 基座的序列化會吞錯、`load` 的上限從 serializer 調不到，退到最接近的做法：自己包一層 serializer，複製的部分取最小、標明出處，
  * 並用 `checkpoint-serde.test.ts` 釘住 `@langchain/langgraph-checkpoint` 的版本，升版時那一格會紅，逼人重新核對這段複製。
  *
@@ -58,6 +63,12 @@ export const CHECKPOINT_WRAPPER_DEPTH = 2;
 
 /** 一次寫入（存檔點、metadata、每一筆 write）最多巢狀幾層。讀回時同一個數字傳給 `load`。 */
 export const CHECKPOINT_MAX_DEPTH = SESSION_EVENT_MAX_DEPTH + CHECKPOINT_WRAPPER_DEPTH;
+
+/**
+ * {@link checkpointDepth} 在呼叫任何 `toJSON` 之前先量的門檻：上限的兩倍（理由見那裡，與 `@nexus/core` `logged-message.ts` 的
+ * `PRECHECK_DEPTH` 同一套做法）。
+ */
+export const CHECKPOINT_PRECHECK_DEPTH = CHECKPOINT_MAX_DEPTH * 2;
 
 /** 存檔點太深，寫入被拒。認 `code`，不認訊息。 */
 export class CheckpointDepthError extends Error {
@@ -100,14 +111,40 @@ const SWALLOWED = new TextEncoder().encode(
 );
 
 /**
- * 交給 `JSON.stringify(value, _default)` 之後巢狀幾層（根是容器的話算第 1 層，純量不算）。迭代走訪，深巢狀不會撞上堆疊。
+ * 交給 `JSON.stringify(value, _default)` 之後巢狀幾層（根是容器的話算第 1 層，純量不算）。
  *
  * 照 `JSON.stringify` 的順序：先 `toJSON(key)`，再過基座的 replacer `_default`（`jsonplus.js:91-107`，1.1.5）。`_default`
  * 會把幾種值換成 `{lc: 2, ...}` 的紀錄，這裡照它多算的層數：`undefined` 1 層；`RegExp`、`Error` 2 層；`Uint8Array` 3 層；
  * `Set` 的元素、`Map` 的鍵值對多 3 層。其餘（`Send`、`DeltaSnapshot`）換出來的層數跟走自有屬性一樣。
  * 迴圈參照照 `decirc` 換成字串，不往下走。
+ *
+ * **走訪本身是迭代的，但 `toJSON` 不是**（[#1761](https://github.com/DemianLi/nexus-agent/issues/1761)）：LangChain 訊息的
+ * `toJSON` 是 `@langchain/core` 的遞迴實作（`Serializable.toJSON` → `escapeIfNeeded`，`load/validation.js`，1.2.9），交錯巢狀
+ * 幾千層就 `Maximum call stack size exceeded`。實測（macOS、Node 25.9.0）新行程第一個續接冷著跑，參數 2000 層就爆，暖過之後
+ * 才撐到幾千層，邊界看冷熱與剩餘堆疊，所以 vitest 這種暖行程裡永遠看不到。#1668 的「先量再拒」因此在量的那一步先爆，
+ * 回的是 `RangeError`，`threadOrError` 認不得，網頁收到暫時性的 `unknown_error`。
+ *
+ * **所以先預檢**：呼叫任何 `toJSON` 之前，先用不呼叫 `toJSON` 的同一支迭代走訪量原始結構；超過 `precheck` 層就直接回那個層數，
+ * 不再往下做會遞迴的那一步。門檻取上限的兩倍，不取上限本身：原始結構與寫進存檔點的形狀層數對不齊（`toJSON` 會多包幾層），
+ * 取上限本身的話，寫得進去的訊息可能被這裡誤拒，也讓報出來的層數與下面那條路不同。比兩倍淺的照舊走 `toJSON` 取得精確的層數
+ * （幾百到一千多層，遠低於冷著爆的那一格）；超過兩倍的，包進存檔點後一定也超過上限，所以這一步**不改變哪些訊息寫得進去**。
+ * 預檢回的是原始結構的層數，比寫進存檔點的少幾層，只用在「超過上限」的訊息裡。
+ *
+ * @param precheck - 預檢門檻，預設 {@link CHECKPOINT_PRECHECK_DEPTH}。
  */
-export function checkpointDepth(value: unknown): number {
+export function checkpointDepth(
+  value: unknown,
+  precheck: number = CHECKPOINT_PRECHECK_DEPTH,
+): number {
+  const raw = walkDepth(value, false);
+  return raw > precheck ? raw : walkDepth(value, true);
+}
+
+/**
+ * {@link checkpointDepth} 的迭代走訪。`callToJSON` 為 `false` 時**一個 `toJSON` 都不呼叫**，走的是自有、可列舉的值
+ * （`BaseMessage` 的 `lc_kwargs` 跟欄位指到同一份，兩邊都會走，層數相同）。
+ */
+function walkDepth(value: unknown, callToJSON: boolean): number {
   type Frame =
     | {
         readonly kind: 'enter';
@@ -132,7 +169,7 @@ export function checkpointDepth(value: unknown): number {
       continue;
     }
     if (current === null || typeof current !== 'object') continue;
-    const toJSON = (current as { toJSON?: unknown }).toJSON;
+    const toJSON = callToJSON ? (current as { toJSON?: unknown }).toJSON : undefined;
     if (typeof toJSON === 'function') {
       current = (toJSON as (key: string) => unknown).call(current, frame.key);
       if (current === undefined) {
@@ -204,7 +241,7 @@ export class DepthCheckedSerializer implements SerializerProtocol {
   /** @inheritdoc 先量層數，再交給基座；被換成那句字串就拋。 */
   async dumpsTyped(data: unknown): Promise<[string, Uint8Array]> {
     if (data instanceof Uint8Array) return this.#inner.dumpsTyped(data);
-    const depth = checkpointDepth(data);
+    const depth = checkpointDepth(data, this.#maxDepth * 2);
     if (depth > this.#maxDepth) throw new CheckpointDepthError(depth, this.#maxDepth);
     const dumped = await this.#inner.dumpsTyped(data);
     if (sameBytes(dumped[1], SWALLOWED)) throw new CheckpointUnserializableError();

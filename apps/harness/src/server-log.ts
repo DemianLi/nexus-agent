@@ -26,6 +26,7 @@ import { ConsoleExporter } from '@nexus/cordis-plugin-logger-console';
 
 import { DEFAULT_SHOW_TIME, loggerConsoleConfigSchema } from './settings/logger-console.js';
 import type { LogLevelName, LoggerConsoleConfig } from './settings/logger-console.js';
+import type { TurnFailedFields } from './turn-failed-log.js';
 
 /** 等級名稱換成 vendor `LoggerLevel` 的數字，見檔頭「等級順序」。 */
 export const LOG_LEVEL_NUMBERS: Readonly<Record<LogLevelName, number>> = {
@@ -58,8 +59,30 @@ export function defaultLoggerConsoleConfig(): LoggerConsoleConfig {
   return loggerConsoleConfigSchema.parse({});
 }
 
-/** 帶 thread 的訊息可以在 `meta` 放這一格（#1536 決定填法），JSON 會多一個 `thread_id`。 */
-type ThreadedMessage = Message & { thread_id?: unknown };
+/**
+ * 帶 thread 的訊息可以在 `meta` 放這幾格，JSON 會多出同名的鍵（#1536 決定填法：{@link ServerLog.serveWith}）。
+ * 文字模式不看它們，行還是原樣。
+ */
+type ThreadedMessage = Message & {
+  thread_id?: unknown;
+  run_id?: unknown;
+  session_id?: unknown;
+  seq?: unknown;
+  code?: unknown;
+  status?: unknown;
+  provider_request_id?: unknown;
+};
+
+/** JSON 行上除了固定欄位之外、從 `meta` 帶出來的鍵，及它們要的型別。 */
+const JSON_META_FIELDS = [
+  ['thread_id', 'string'],
+  ['run_id', 'string'],
+  ['session_id', 'string'],
+  ['seq', 'number'],
+  ['code', 'string'],
+  ['status', 'number'],
+  ['provider_request_id', 'string'],
+] as const;
 
 class ServerLogExporter extends ConsoleExporter {
   readonly #format: LoggerConsoleConfig['format'];
@@ -90,13 +113,18 @@ class ServerLogExporter extends ConsoleExporter {
 
   /** 一則 → 一行 JSON。`JSON.stringify` 把 `\n` 轉成 `\\n`，所以換行留在 `msg` 裡、不會多出一行。 */
   renderJson(message: Message): string {
-    const threadId = (message as ThreadedMessage).thread_id;
+    const meta = message as ThreadedMessage;
+    const extra: Record<string, string | number> = {};
+    for (const [key, type] of JSON_META_FIELDS) {
+      const value = meta[key];
+      if (typeof value === type) extra[key] = value as string | number;
+    }
     return JSON.stringify({
       ts: new Date(message.ts).toISOString(),
       level: message.type,
       logger: message.name,
       msg: Logger.format(this, message),
-      ...(typeof threadId === 'string' && { thread_id: threadId }),
+      ...extra,
     });
   }
 }
@@ -134,6 +162,11 @@ export interface ServerLog {
   /** 別的名字的 logger（例如 `invariant`）：門檻可以在清單的 `levels` 裡以名字單獨設。 */
   logger(name: string): Logger;
   /**
+   * `serve` logger，但這一條帶著結構化欄位（#1536）：JSON 模式多出 `thread_id`、`run_id`、`seq`、`code`、`status`、`provider_request_id`
+   * 這幾個鍵，文字模式的行不變。**每次回新的 logger**，欄位不會漏到別的行。
+   */
+  serveWith(fields: TurnFailedFields): Logger;
+  /**
    * 用讀完清單的設定掛 exporter 並回放緩衝。**只有第一次有效**：已經掛過（例如更早的失敗路徑用了出廠設定）就不再掛第二顆，
    * 否則同一則話會印兩次。
    */
@@ -161,6 +194,12 @@ export function createServerLog(ctx: Context, write: LogWrite): ServerLog {
   return {
     serve: ctx.logger(SERVE_LOGGER_NAME),
     logger: (name) => ctx.logger(name),
+    serveWith: (fields) => {
+      const logger = ctx.logger(SERVE_LOGGER_NAME);
+      const defined = Object.entries(fields).filter(([, value]) => value !== undefined);
+      logger.meta = { ...logger.meta, ...Object.fromEntries(defined) } as Logger['meta'];
+      return logger;
+    },
     mount,
     mountDefault: () => {
       mount(defaultLoggerConsoleConfig());

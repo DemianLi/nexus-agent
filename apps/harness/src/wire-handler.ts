@@ -142,7 +142,7 @@ import type { AttachmentStore, FileAttachmentRef, ImageAttachmentRef } from './a
 import { admitImages, ImageIntakeError } from './image-intake.js';
 import { isBackgroundRunId } from './background-run-id.js';
 import { BackgroundSubagentError } from './background-subagents.js';
-import type { BackgroundSubagentControl } from './background-subagents.js';
+import type { BackgroundSubagentControl, BackgroundTurnFailure } from './background-subagents.js';
 import type { AttachSessions } from './session-attach.js';
 import { HistoryQueryError, historyPage } from './conversation-history.js';
 import type { SessionReferenceReader } from './session-reference.js';
@@ -179,7 +179,7 @@ import { isTrustedWireRequest } from './request-trust.js';
 import { readProjectionChildSeeds } from './projection-children.js';
 import type { StoredThreadList } from './session-list.js';
 import type { ModelSelectionHost } from './model-selection-host.js';
-import type { PumpAgent, QueueAction } from './thread-pump.js';
+import type { PumpAgent, QueueAction, TurnFailedReport } from './thread-pump.js';
 import { ThreadFeed } from './thread-feed.js';
 import { ThreadPump } from './thread-pump.js';
 import {
@@ -525,6 +525,12 @@ export interface WireHandlerOptions {
    * 把門檻調到 warn 的主機不該為每一條正常撤掉的 thread 看到一行。缺席就退回 {@link warn}（行不變），所以沒接線的測試照舊。
    */
   info?(message: string): void;
+  /**
+   * 一條 thread 的一輪失敗、`turn/failed` 寫進會話日誌之後叫一次（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)），
+   * 含背景子代理的失敗（`threadId` 是它的主對話，`runId` 是子代理自己的）。serve 用它在伺服器日誌記一行，讓管理者從時間或 thread
+   * 對回會話日誌的那一筆與供應商的請求編號。**只有編號與失敗碼，不含訊息本文。** 缺席就不講。
+   */
+  onTurnFailed?(report: TurnFailedReport): void;
   /**
    * 附件儲存（`POST /threads/:id/uploads`，[#732](https://github.com/DemianLi/nexus-agent/issues/732)），選配。
    *
@@ -1506,6 +1512,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             ? undefined
             : () => options.threadOrganization!.isArchived(threadId),
           options.downlinkMaxBytes,
+          options.onTurnFailed === undefined
+            ? undefined
+            : (report) => options.onTurnFailed!(report),
         );
         // **緊接著建好就接上全域下行**（#632）：在它收下任何一件之前，狀態與中斷一顆都不漏。
         detachFeed = feed.attach(pump);
@@ -1536,6 +1545,11 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             touchThread(threadId);
             pump.notifySubagentStatus(items);
           },
+          // 背景子代理的一輪失敗也進伺服器日誌（#1536）：帶主對話的 thread id 與子代理自己的 run id。
+          ...(options.onTurnFailed !== undefined && {
+            onTurnFailed: (failure: BackgroundTurnFailure) =>
+              options.onTurnFailed!({ threadId, ...failure }),
+          }),
           // 背景子代理的每一步也過封存閘門（#633，dsh 沿 lineage 看 root）。
           ...(options.threadOrganization !== undefined && {
             isArchived: () => options.threadOrganization!.isArchived(threadId),

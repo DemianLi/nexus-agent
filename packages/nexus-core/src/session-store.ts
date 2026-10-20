@@ -607,6 +607,25 @@ import type { SessionEvent } from './session-log.js';
  *
  * **併行的升版**：#1624、#1579 也各自要升版。**誰先合進 `develop` 誰拿下一號，後合的以先合的為底重算**（rebase 時把這一段的編號往後挪，內容不變）。
  * 這張寫的時候 `develop` 的版本是 48，所以拿 49。
+ *
+ * ### 49 之內新增、沒有升版的欄位
+ *
+ * - **`llm/retry.failure.requestId` 與 `turn/failed.error.requestId`**（[#1536](https://github.com/DemianLi/nexus-agent/issues/1536)）：
+ *   選填的字串，供應商回應標頭裡的請求編號（`request-id`、`x-request-id`、`x-deepseek-request-id`，取第一個非空的），管理者拿它去問模型閘道
+ *   「哪一次請求」。**不升**：判準同 32 那段與上面 `messagesCompactable` 的前例——它是**既有事件上的選填紀錄欄位**，不進模型、不左右
+ *   任何折疊、不影響續接的行為，多一個欄位不改舊讀方對其餘欄位的讀法。
+ *
+ *   **換回舊版程式**（實測，2026-10-20，用 develop `959e9af7` 的程式碼，在乾淨的 worktree 裡讀一份**新版真的 serve 跑出來**的日誌：
+ *   假端點回 502＋`x-request-id: gw-123`、重試一次，日誌裡 `llm/retry` 與 `turn/failed` 各有一筆帶 `requestId`，header 是 49）：
+ *   唯讀打開（`open().read()`，15 筆）、續接（`resume`，15 筆、next-seq 15）與呼叫歸屬（`indexModelCalls`）都照常，不會拒讀、也不會報壞檔；
+ *   `requestId` 在舊版的記憶體裡原樣留著（兩處的 `failure`／`error` 都讀得到 `gw-123`）。舊版的線上投影有沒有帶出這一格，這次沒有量。
+ *   不必先做任何處理。
+ *
+ *   **讀舊檔**：這一格以前沒有，沒有就是沒記（沒有回應標頭的失敗：還沒收到回應就失敗（連線被拒、DNS 失敗）、供應商沒送這幾個標頭），
+ *   不是空字串，不補寫歷史（`apps/harness/src/provider-request-id.test.ts` 釘住「沒有標頭就沒有這一格」）。
+ *
+ *   **登記方式**：`docs/persistence-changes/README.md` 的 Compatibility rules 表（[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)）
+ *   還沒合進 `develop`，這一筆先記在這裡；那張合進來之後，這一筆照表第一列（加一個選填的事件本文屬性）補登 `same-version`。
  */
 export const SESSION_LOG_FORMAT_VERSION = 49;
 
