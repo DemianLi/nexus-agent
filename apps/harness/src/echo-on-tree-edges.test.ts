@@ -490,6 +490,106 @@ describe('設定帶 __jsExpr', () => {
   }, 60000);
 });
 
+describe('推清單被拒之後，推回上一份不會被當成沒變而跳過（#1674）', () => {
+  const rowOf = (prefix: string) => [
+    { id: 'echo', module: ECHO_MODULE, disabled: false, config: { prefix }, provides: [] },
+  ];
+
+  it('x → 重讀到壞檔推 z 被拒 → 檔改回來推 x 仍照實被拒 → refresh 之後推 x 是 active、Include 手上是 x', async () => {
+    const root = newRoot();
+    const dir = scratch();
+    const shipped = write(dir, 'cordis.yml', ECHO_SHIPPED);
+    const push = (prefix: string) =>
+      root.tree.run(() =>
+        root.tree.sync({
+          shipped,
+          patches: [{ id: 'echo', config: { prefix } }],
+          rows: rowOf(prefix),
+        }),
+      );
+    const patchesOf = async (): Promise<unknown> => {
+      const entry = (await root.tree.context()).loader.resolve('include');
+      return (entry.fiber?.config as { patches?: unknown } | undefined)?.patches;
+    };
+    const include = async () =>
+      (await root.tree.context()).loader.resolve('include:echo').parent.tree as unknown as {
+        refresh(): Promise<void>;
+      };
+
+    expect((await push('x')).verdict('echo').kind).toBe('active');
+    writeFileSync(
+      shipped,
+      `- id: echo\n  name: '${ECHO_MODULE}'\n  disabled:\n    __jsExpr: ${JSON.stringify('true')}\n`,
+    );
+    await (await include()).refresh();
+    const failure = await push('z').then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(failure).toBeInstanceOf(PluginTreeError);
+    // Include 在套用之前先寫了 config：它手上已經是被拒的 z。
+    expect(await patchesOf()).toEqual([{ id: 'echo', config: { prefix: 'z' } }]);
+
+    writeFileSync(shipped, ECHO_SHIPPED);
+    // 檔改回來了，但 Include 還握著上一次讀到的壞內容（沒有 refresh）：推回 x 要真的推、照實被拒。
+    // 修之前這一步被當成沒變而跳過（簽章等於上一份 x），回報 active，Include 手上卻仍是 z。
+    const stillBad = await push('x').then(
+      () => undefined,
+      (error: unknown) => error,
+    );
+    expect(stillBad).toBeInstanceOf(PluginTreeError);
+    expect((stillBad as PluginTreeError).message).toMatch(/__jsExpr/u);
+
+    await (await include()).refresh();
+    // 修之前這一步是 dropped：「樹上這一列的設定與清單疊出來的不一致」，宿主推不回 x。
+    expect((await push('x')).verdict('echo').kind).toBe('active');
+    expect(await patchesOf()).toEqual([{ id: 'echo', config: { prefix: 'x' } }]);
+  }, 60000);
+
+  it('同一份清單連推幾次：不重掛、不卸載、fiber 還是同一個（每次都推的安全前提）', async () => {
+    const dir = scratch();
+    const counter = `__pushAgain_${String(Date.now())}`;
+    const bag = globalThis as Record<string, unknown>;
+    bag[counter] = { apply: 0, dispose: 0 };
+    try {
+      const module = write(
+        dir,
+        'counted.mjs',
+        functionPlugin({
+          id: 'counted',
+          range: '^1.0.0',
+          apply: `const c = globalThis[${JSON.stringify(counter)}]; c.apply += 1; ctx.effect(() => () => { c.dispose += 1 })`,
+        }),
+      );
+      const shipped = write(
+        dir,
+        'cordis.yml',
+        `- id: counted\n  name: 'file://${module}'\n  config: {}\n`,
+      );
+      const input = {
+        shipped,
+        patches: [],
+        rows: [
+          { id: 'counted', module: `file://${module}`, disabled: false, config: {}, provides: [] },
+        ],
+      };
+      const root = newRoot();
+      const fiberOf = async () =>
+        (await root.tree.context()).loader.resolve('include:counted').fiber;
+      await root.tree.run(() => root.tree.sync(input));
+      const first = await fiberOf();
+      for (let again = 0; again < 5; again += 1) {
+        const snapshot = await root.tree.run(() => root.tree.sync(input));
+        expect(snapshot.verdict('counted').kind).toBe('active');
+      }
+      expect(bag[counter]).toEqual({ apply: 1, dispose: 0 });
+      expect(await fiberOf()).toBe(first);
+    } finally {
+      delete bag[counter];
+    }
+  }, 60000);
+});
+
 describe('插件自我停用只在記憶體，但同一份宣告不再被重新掛上（#1424）', () => {
   it('不寫檔、不進紀錄；讀清單多次也只掛一次，那一列判成停用而不是掉列', async () => {
     const dir = scratch();
