@@ -1347,20 +1347,22 @@ async function startServer(
     },
   });
 
+  const opsEndpoints = createOpsEndpoints({
+    isClosing: () => closing || handler.isClosing(),
+    probes: opsConfig.probes.enabled,
+    ...(opsMetrics !== undefined &&
+      metricsToken !== undefined && {
+        metrics: { token: metricsToken, render: () => opsMetrics.render() },
+      }),
+  });
+
   let server: WireServer;
   try {
     server = await startWireServer({
       handler: routeBySurface(
         handler,
         createWebStaticHandler({ distRoot: webDist, auth }),
-        createOpsEndpoints({
-          isClosing: () => closing || handler.isClosing(),
-          probes: opsConfig.probes.enabled,
-          ...(opsMetrics !== undefined &&
-            metricsToken !== undefined && {
-              metrics: { token: metricsToken, render: () => opsMetrics.render() },
-            }),
-        }),
+        opsEndpoints,
       ),
       port: invocation.port,
       // 一個請求處理失敗（畸形的網址、讀檔錯誤）：記進伺服器日誌、回 400，行程照跑。見 `wire-server.ts`。
@@ -1483,6 +1485,12 @@ async function startServer(
     close: async () => {
       // `/readyz` 在 server 關掉之前就回 503（#1535）：監管程式看到 closing 就別再送新請求。
       closing = true;
+      // **時間窗**（#1777）：立旗之後 listener 要再照常在聽一小段，探針才抓得到 503。`server.close()` 一開頭就 `closeAllConnections()`
+      // （`wire-server.ts`），不留這一段，旗標只在同一個 macrotask 裡亮過，沒有任何請求看得到。**只有 `/readyz` 被抓過才等**：
+      // 沒有監控在看，等了也沒人聽（測試與一次性使用不付這個代價）。時間窗屬於整體 5 秒收尾上限（#599），所以設定上限 2000。
+      if (opsConfig.probes.enabled && opsConfig.probes.drainMs > 0 && opsEndpoints.readyzProbed()) {
+        await new Promise<void>((resolve) => setTimeout(resolve, opsConfig.probes.drainMs));
+      }
       // **每一步各自接住，全部跑完才拋**（#1511）：`handler.close()` 現在會拒絕（thread 收尾失敗），
       // 不能讓它擋住 `threadSearch` 與 `failureRecorder.flush()`。錯誤交給 `main` 印。
       const failures: unknown[] = [];
