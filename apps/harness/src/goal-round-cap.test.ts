@@ -109,12 +109,22 @@ async function untilBlocked(
 }
 
 describe('serve：goal-round-cap 那一列夾住續行', () => {
-  /** 驗收 1；拿掉 `thread-pump.ts` 交上限的那一個參數（驗收 2），這一條要紅：會跑滿目標自己的 5 輪、記 round-limit。 */
-  it('上限 2：跑完第 2 輪續行就不再排，目標記 round-cap，訊息指名那一列', async () => {
-    const client = await untilBlocked('cap-serve', script(5), capRow(2));
+  /**
+   * 驗收 1；拿掉 `thread-pump.ts` 交上限的那一個參數（驗收 2），這一條要紅：會跑滿目標自己的 5 輪、記 round-limit。
+   * 啟動那一行講的是這一次實際的上限：serve 沒把那一列交給揭露那一行的話，這裡要紅。
+   */
+  it('上限 2：跑完第 2 輪續行就不再排，目標記 round-cap，訊息指名那一列；啟動那一行寫 2 輪', async () => {
+    const lines: string[] = [];
+    const client = await untilBlocked(
+      'cap-serve',
+      script(5),
+      capRow(2),
+      (line) => void lines.push(line),
+    );
     const shown = await goalText(client, 'cap-serve');
     expect(shown).toMatch(/^擋住它的：round-cap：.*goal-round-cap/mu);
     expect(shown).toContain('輪次：2/5');
+    expect(lines.join('\n')).toContain('給的 2 輪');
   });
 
   /** 驗收 5：`round-cap` 之後人恢復目標，重新起算，再跑滿 2 輪才又擋。比累計的話恢復之後馬上又擋，一輪都不跑。 */

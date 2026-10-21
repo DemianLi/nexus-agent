@@ -176,8 +176,8 @@ export interface CliInvocation {
    * 這個問題。所以這個欄位在兩個入口的預設相反，旗標名同一個：CLI `--goal-driver` 開、
    * serve `--no-goal-driver` 關。）
    *
-   * 開著的時候，唯一的硬上限是那個目標自己的 `max_goal_rounds`；額外那條停損刻意沒做，
-   * 理由在 `goal-driver.ts` 檔頭。
+   * 開著的時候有兩條硬上限，先到的那一條管：那個目標自己的 `max_goal_rounds`，與操作者給的那一條（下面的
+   * `maxGoalRounds`，或 `goal-round-cap` 那一列，#1623）。「連續 N 輪沒進展就停」那條停損刻意沒做，理由在 `goal-driver.ts` 檔頭。
    */
   readonly goalDriver: boolean;
   /**

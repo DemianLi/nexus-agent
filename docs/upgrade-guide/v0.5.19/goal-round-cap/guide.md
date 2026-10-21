@@ -39,5 +39,7 @@ v0.5.19 的續行只有一條上限：目標自己的 `max_goal_rounds`（模型
      disabled: true
    ```
 
+   關掉這一列不會把 CLI 的 `--max-goal-rounds` 帶回 v0.5.19 的累計算法：有給這個旗標的話，它照新版每次建立或恢復目標重新起算。
+
 4. 確認：啟動輸出的 `續行：…` 那一行寫著「部署設定（cordis.yml 的 goal-round-cap 那一列）給的 N 輪」，關掉時寫
    「goal-round-cap 那一列關著」。細節見 [`docs/operations.md`](../../../operations.md) 講 `goal-round-cap` 那一段。

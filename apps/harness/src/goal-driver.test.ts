@@ -194,8 +194,11 @@ describe('操作的人給的那條上限', () => {
     expect(decision.kind === 'block' && decision.reason.code).toBe(ROUND_CAP_BLOCK_CODE);
   });
 
-  /** 只數這個目標的輪：清掉再建的新目標不吃舊目標的帳。 */
-  it('只數同一個目標的輪', () => {
+  /**
+   * 清掉再建：新目標從它自己的 `create` 起算。這一條分不出「只看同一個 id」——舊目標的輪都在新 `create` 之前，不看 id 也數不到；
+   * 分得出來的是下面兩條。
+   */
+  it('清掉再建：新目標從自己的 create 起算，舊目標排過的輪不算', () => {
     const OTHER = goalId('goal-0');
     const decision = decideGoalRound(
       logOf([
@@ -205,6 +208,34 @@ describe('操作的人給的那條上限', () => {
         ...goalRound(3, OTHER),
         change('create'),
         ...SETTLED,
+      ]).events,
+      view({ maxGoalRounds: 99, roundsStarted: 0 }),
+      CAP,
+    );
+    expect(decision.kind === 'run' && decision.round.round).toBe(1);
+  });
+
+  /** 起算點只認同一個目標的授權：別的目標的 `resume` 夾在中間，不讓這個目標的數歸零（手搭的日誌，產品上一條 thread 一個目標）。 */
+  it('別的目標的授權不重新起算這一個', () => {
+    const OTHER = goalId('goal-0');
+    const decision = decideGoalRound(
+      logOf([...afterCreate(3), change('resume', OTHER), ...goalRound(1, OTHER)]).events,
+      view({ maxGoalRounds: 99, roundsStarted: 3 }),
+      CAP,
+    );
+    expect(decision.kind === 'block' && decision.reason.code).toBe(ROUND_CAP_BLOCK_CODE);
+  });
+
+  /** 授權之後只數同一個目標的輪：別的目標的續行輪不算進這一個的帳（手搭的日誌）。 */
+  it('授權之後別的目標的輪不算', () => {
+    const OTHER = goalId('goal-0');
+    const decision = decideGoalRound(
+      logOf([
+        change('create'),
+        ...SETTLED,
+        ...goalRound(1, OTHER),
+        ...goalRound(2, OTHER),
+        ...goalRound(3, OTHER),
       ]).events,
       view({ maxGoalRounds: 99, roundsStarted: 0 }),
       CAP,

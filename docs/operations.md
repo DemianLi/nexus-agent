@@ -1060,8 +1060,8 @@ home 是 `NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`（systemd 的設法�
 **要核准的工具因此一次只問一顆**：同一步裡排前面的先問，後面的等它答完才開卡。
 
 **目標自己往下走與否，CLI 與 `serve` 的預設相反**（[#445](https://github.com/DemianLi/nexus-agent/issues/445)）。
-開著的時候，一個 active 的目標在每一輪落定時會自己再開一輪，直到它被完成、被擋住，或用完自己的
-`max_goal_rounds`（預設 256）。**CLI 預設關**，要 `--goal-driver` 才開：CLI 的核准是自動拒絕，續行只會一再撞
+開著的時候，一個 active 的目標在每一輪落定時會自己再開一輪，直到它被完成、被擋住、用完自己的
+`max_goal_rounds`（預設 256），或撞到操作者給的上限（`goal-round-cap` 那一列或 `--max-goal-rounds`，見下一段）。**CLI 預設關**，要 `--goal-driver` 才開：CLI 的核准是自動拒絕，續行只會一再撞
 同一個拒絕、空轉燒輪。**`serve` 預設開**，要 `--no-goal-driver` 才關：要核准的工具在 `serve` 上是停下來等人，
 不會空轉（`serve` 也接受 `--goal-driver`，意思是明講要開；兩個一起給會報錯）。啟動時印的那一行「續行：…」
 講的是這一次實際的狀態。模型從第 `blockedAfterConsecutiveRounds` 輪（預設 3）起可以把自己標成 blocked 而退出迴圈，
