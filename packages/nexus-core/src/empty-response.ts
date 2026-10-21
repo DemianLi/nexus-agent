@@ -44,7 +44,6 @@
 import { AIMessage } from '@langchain/core/messages';
 import { createMiddleware } from 'langchain';
 import type { AgentMiddleware } from './base-types.js';
-import { markModelCallFailure } from './model-call-failure.js';
 import { noteStreamFailure } from './stream-retry.js';
 import { isSyntheticStopReply, modelCallAborted } from './turn-cancel.js';
 
@@ -122,15 +121,9 @@ export function createEmptyResponseMiddleware(): AgentMiddleware {
   return createMiddleware({
     name: EMPTY_RESPONSE_MIDDLEWARE_NAME,
     wrapModelCall: async (request, handler) => {
-      let response: Awaited<ReturnType<typeof handler>>;
-      try {
-        response = await handler(request);
-      } catch (error: unknown) {
-        // 順帶的第二個職責：這裡拋出來的一定是模型呼叫的錯，記下來，失敗分類器才敢套「只看結構」的連線規則，
-        // 工具 middleware 拋的錯（MCP 連不上…）不會被它搶走。見 {@link ./model-call-failure.ts}。
-        markModelCallFailure(error);
-        throw error;
-      }
+      // **這裡不標「模型呼叫的失敗」**（#1778）：這一層在 plugin 的 `wrapModelCall` 外面，`catch` 收到的包含插件自己拋的錯。
+      // 記號由最內層那一顆打，見 {@link ./model-call-failure.ts}。
+      const response = await handler(request);
       if (
         !AIMessage.isInstance(response) ||
         isSyntheticStopReply(response) ||

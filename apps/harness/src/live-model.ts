@@ -501,11 +501,20 @@ function firstEventError(buffered: string, ended: boolean): Record<string, unkno
  *
  * **只認結構化的數字碼，認不出來就 500。** 500 不是保守的預設，是**照 dsh 抄的**：
  * 它的 `providerError` 在沒有 HTTP 狀態碼可看時（`status === undefined`，正是串流內
- * 錯誤的情形）落到 `code = 'SERVER'`（`llm-deepseek/src/protocols/messages/transport.ts:35`），
+ * 錯誤的情形）落到 `code = 'SERVER'`（`packages/llm/llm-deepseek/src/transport.ts:35`，`687f282e`），
  * 而 `SERVER` 在預設可重試集裡（`llm/src/retry-policy.ts:18`）。翻成我們的載體就是
  * `500`，經 {@link failureCodeOfStatus} 記成 `SERVER`、可重試。
  *
  * 只收 400–599：Response 的建構子不讓 204／304 帶 body，而一個「錯誤」本來也不該是 2xx。
+ *
+ * **與 dsh 的偏離（理由 1，#1778 補登記）**：上面「落到 500」只抄了 dsh 的**兜底**，認數字碼這一步 dsh 沒有。dsh 的
+ * 串流內信封（`packages/llm/llm-deepseek/src/sse.ts:25`，`687f282e`：`providerError(event, undefined)`）完全不帶狀態，
+ * 只看 `error.type`／字串 `error.code`／訊息文字分類，兜底是 `SERVER`。我們這裡讀信封裡**數字**的 `code`／`status`
+ * 當成 HTTP 狀態，再交給 {@link failureCodeOfStatus}；不讀 `error.type`。理由：基座（OpenAI SDK／LangChain 的重試與分類）
+ * 整條路只看 `status`，第一則事件就是信封的那種端點（#516）必須翻成帶狀態的 HTTP 回應基座才認得出來；中段的信封為了
+ * 與它同一個碼（見下一段）而共用這一支。後果：中段信封帶 `{ code: 429 }` 我們記 `RATE_LIMIT`，dsh 要看 `type`；
+ * 信封只有 `type: 'authentication_error'` 沒有數字碼，我們記 `SERVER`（可重試），dsh 記 `AUTH`。端點實際會送哪一種
+ * 沒有量過，要不要補讀 `type` 另開卡。
  *
  * **兩種投遞方式共用這一支**（#1437）：第一則事件是信封時，這裡決定翻出來的 HTTP 回應的狀態；第一則事件之後的信封
  * （{@link createInbandWatcher}）與 SDK 在串流中段拋的、沒有 `status` 的 `APIError`（{@link classifyTurnFailure}）讀同一支，
@@ -1835,10 +1844,18 @@ export const NESTING_TOO_DEEP_CODE = 'NESTING_TOO_DEEP';
  * 供應商的錯在最底下。{@link causeLinks} 只展 10 層，所以直接丟進來**一個狀態都讀不到**。先沿 `cause` 拆到不是
  * `MiddlewareError` 為止，同 `turn-cancel.ts` 的 `isTurnCancelled`。
  *
- * **拆的時候要留住模型呼叫的記號**（#1763）：`wrapModelCall` 的 catch（`empty-response.ts`）標的正是這些 `MiddlewareError` 其中一層，
- * 不是底下的供應商錯。拆掉就丟，串流中段才送錯誤信封的那一輪在 `llm/retry` 是 `SERVER`／503（那條走 `onFailedAttempt`，錯誤沒被包），
- * 在 `turn/failed` 卻是 `UNKNOWN`。拆的過程中任何一層有記號，就視為模型呼叫的錯。dsh 沒有這一格（它的 `LlmError` 沒有被中介層包過），
- * 這是基座（LangChain 把 middleware 內的錯包成 `MiddlewareError`）帶來的，偏離理由 1。
+ * **拆的時候要留住模型呼叫的記號**（#1763）：「模型呼叫的失敗」的記號（`model-call-failure.ts`）是標在 `wrapModelCall` 的 catch 拿到的
+ * 那一個錯上，而那一個錯常常就是基座包的某一層 `MiddlewareError`，不是底下的供應商錯。拆掉就丟，串流中段才送錯誤信封的那一輪在
+ * `llm/retry` 是 `SERVER`／503（那條走 `onFailedAttempt`，錯誤沒被包），在 `turn/failed` 卻是 `UNKNOWN`。拆的過程中任何一層有記號，
+ * 就視為模型呼叫的錯。dsh 沒有這一格（它的 `LlmError` 沒有被中介層包過），這是基座（LangChain 把 middleware 內的錯包成
+ * `MiddlewareError`）帶來的，偏離理由 1。
+ *
+ * **記號只標在最靠近模型的那一層**（#1778，`turn-cancel.ts` 的 `createTurnCancelModelSignal`，我們這串中介層最內側的一格），
+ * 不標在 `emptyResponse` 那一層：`emptyResponse` 在所有插件的 `wrapModelCall` 外面，插件自己拋的錯（沒有任何模型呼叫的痕跡）會
+ * 一路經過它的 catch 被標成「模型呼叫的失敗」，再被上面的「拆了留記號」原樣保住，只看結構的規則（`ECONNREFUSED` 之類的
+ * `cause`）就把插件的錯記成 `TRANSPORT`。最內層那一格在插件的外圍之內，插件拋的錯到不了它。上面「拆了留記號」仍要留：最內層
+ * 那一格之外還有 deepagents 自己的幾個中介層會再包一層，記號落在被包的那一層。不經 `createAgent` 的呼叫（標題、摘要、評測）
+ * 沒有這串中介層，照舊靠 `onFailedAttempt`（{@link classifyFailedAttempt}）標。
  *
  * `message` 是呼叫端照舊寫進 `turn/failed.message` 的那句（最外層的 `error.message`），不是底下那個：兩處同一句，
  * 讀的人不用猜哪個才是人話。
@@ -1849,7 +1866,7 @@ export function classifyTurnFailure(error: unknown): LlmFailure {
   const message = error instanceof Error ? error.message : String(error);
   let root = error;
   // 拆掉的 `MiddlewareError` 本身可能帶著「模型呼叫」的記號（#1763）：`wrapModelCall` 的 catch 拿到的就是基座包過的那一層
-  // （`empty-response.ts` 標的是它，不是底下的供應商錯），拆掉就丟了記號，「只看結構」的模型呼叫規則（串流中段的
+  // （`turn-cancel.ts` 標的可能是它，不是底下的供應商錯），拆掉就丟了記號，「只看結構」的模型呼叫規則（串流中段的
   // in-band `APIError`、`ECONNRESET`…）在真的一輪裡一條都不會觸發，落到 `UNKNOWN`。
   let wrappedModelCall = false;
   while (MiddlewareError.isInstance(root)) {

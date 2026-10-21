@@ -25,7 +25,7 @@ import type { AddressInfo } from 'node:net';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { MiddlewareError } from 'langchain';
 import {
-  createEmptyResponseMiddleware,
+  createTurnCancelModelSignal,
   markModelCallFailure,
   retryModelCall,
   SessionLog,
@@ -172,8 +172,8 @@ async function run(
   const log = new SessionLog('classification');
   const model = createLiveModel(config);
   let error: unknown;
-  // 真的圖裡，每一次模型呼叫都經過 `wrapModelCall` 那一格（它記下「這顆錯是模型呼叫拋的」）；這裡照樣包一層。
-  const guard = createEmptyResponseMiddleware() as unknown as {
+  // 真的圖裡，每一次模型呼叫都經過最內層那一格 `wrapModelCall`（它記下「這顆錯是模型呼叫拋的」，#1778）；這裡照樣包一層。
+  const guard = createTurnCancelModelSignal() as unknown as {
     wrapModelCall: (request: unknown, handler: () => Promise<unknown>) => Promise<unknown>;
   };
   await retryModelCall(streamRetryOptionsOf(config.retryPolicy), { log }, () =>
@@ -579,7 +579,7 @@ describe('E：不是供應商的錯，與被層層包住的供應商錯', () => 
       }
     }
     const inband = new APIError({ message: '過載', type: 'x', code: 503 });
-    // 標記標在包裝層，不是底下的供應商錯——`empty-response.ts` 的 catch 看到的就是基座包過的那一層。
+    // 標記標在包裝層，不是底下的供應商錯——`turn-cancel.ts` 那一格的 catch 看到的可能是基座包過的那一層（deepagents 的中介層在它裡面）。
     const wrapped = MiddlewareError.wrap(MiddlewareError.wrap(inband, 'inner'), 'outer');
     expect(classifyTurnFailure(wrapped).code).toBe('UNKNOWN');
     let layer: unknown = wrapped;
