@@ -32,4 +32,4 @@ GitHub 端已啟用 secret scanning 與 push protection，但它們只擋得住�
 
 ## 會話日誌格式
 
-**升 `SESSION_LOG_FORMAT_VERSION` 就要在版本邊目錄補一條邊**（`packages/nexus-core/src/session-format.ts`，[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)）：`additive` 或 `breaking`，讀方為舊形狀留了分支的填 `readerBranch`，並讓一份比它舊的夾具含觸發它的事件。不補邊，模組載入就拋。**發 release 時格式版本是新的**，同一張 PR 把它加進 `RELEASED_SESSION_FORMAT_VERSIONS`，並用 `scripts/session-format-fixtures/generate.ts` 以那一版的寫入器凍一份夾具到 `apps/harness/src/fixtures/session-format/v<N>/`。
+**升 `SESSION_LOG_FORMAT_VERSION` 就要在版本邊目錄補一條邊**（`packages/nexus-core/src/session-format.ts`，[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)）：`additive` 或 `breaking`，讀方為舊形狀留了分支的填 `readerBranch`，並讓一份比它舊的夾具含觸發它的事件。不補邊，模組載入就拋。**要發的版本格式版本是新的**（不在 `RELEASED_SESSION_FORMAT_VERSIONS` 裡），**發版前**開一張進 `develop` 的 PR 補上：把它加進 `RELEASED_SESSION_FORMAT_VERSIONS`，在 `scripts/session-format-fixtures/generate.ts` 的 `TARGETS` 加一筆，`rev` 填當下 `develop` 的 commit（版號 PR 只改版號、不動格式，用它之前或之後的 commit 都一樣），以那一版的寫入器凍一份夾具到 `apps/harness/src/fixtures/session-format/v<N>/`。不能留到發版那一步：`develop → main` 的 PR 不另加 commit，tag 也要 Release 跑完才有。這張合進去之後到 Release 發出之前，若又升了格式版本，就照新的版本重做一次。

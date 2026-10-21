@@ -199,7 +199,9 @@ describe.each(names)('夾具 %s', (name) => {
         expect(
           currentMessageFeedback(events).map((entry) => ({
             turn: entry.turn,
-            target: 'messageId' in entry.item ? 'message' : 'turn',
+            ...('messageId' in entry.item
+              ? { target: 'message', messageId: entry.item.messageId }
+              : { target: 'turn' }),
             rating: entry.item.rating,
           })),
         ).toEqual(trigger.feedback);
@@ -259,13 +261,23 @@ describe('規則（驗收 D）', () => {
     }
   });
 
-  it('readerBranch 指到的檔與行都在', () => {
-    for (const edge of SESSION_FORMAT_EDGES) {
-      if (edge.readerBranch === undefined) continue;
-      const [path, line] = edge.readerBranch.split(':');
+  it('readerBranch 指到的那一行就是那條分支：檔在、行裡有它的錨點', () => {
+    // 邊的 `to` → 那一行一定有的字串。改了讀方、行號漂了，這裡紅；加了新的 readerBranch 沒登錨點，也紅。
+    const anchors = new Map<number, string>([
+      [9, 'if (logged === undefined) {'],
+      [10, "if ('messageId' in stored) {"],
+      [13, 'if (header.workspaceRoot === undefined) return;'],
+      [33, "if (turnOpen || suspended) close(event.time, { event: 'completed' });"],
+      [45, 'event.data.beforeCall === true ? messagesBefore : messagesBefore + 1'],
+    ]);
+    const branched = SESSION_FORMAT_EDGES.filter((edge) => edge.readerBranch !== undefined);
+    expect(branched.map((edge) => edge.to)).toEqual([...anchors.keys()]);
+    for (const edge of branched) {
+      const [path, line] = edge.readerBranch!.split(':');
       const file = join(REPO, path!);
       expect(existsSync(file), edge.readerBranch).toBe(true);
-      expect(readFileSync(file, 'utf8').split('\n').length).toBeGreaterThanOrEqual(Number(line));
+      const text = readFileSync(file, 'utf8').split('\n')[Number(line) - 1];
+      expect(text, edge.readerBranch).toContain(anchors.get(edge.to));
     }
   });
 });

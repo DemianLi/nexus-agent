@@ -25,6 +25,14 @@
  * - CLI 的工作目錄固定為 {@link FIXTURE_CWD}：header 的 `cwd` 記的是它，重產才寫得出同一個值。
  * - 子行程只拿到 `PATH`、`LANG`、一個暫存的 `HOME` 與 `NEXUS_AGENT_HOME`（不讀任何人的 home patch，也碰不到任何金鑰）。
  *   `pnpm install` 例外：它要真的 `HOME` 找本機的 store，但環境裡的 `*_API_KEY` 一律拿掉。
+ * - 全部目標跑完才一次寫進夾具目錄：每一次 CLI 跑的時候，這一輪還沒動過夾具目錄，CLI 記的 `build.dirty` 才會跟
+ *   `expected.json` 的 `computedByToday.dirty` 一致（都要在乾淨的樹上跑）。
+ *
+ * ## 換機器重產不了
+ *
+ * - 離線安裝靠本機 pnpm store 裡已經有各 tag 的套件；換一台沒裝過那些 tag 的機器，安裝會失敗、停下來。
+ * - header 的 `cwd` 記的是 {@link FIXTURE_CWD} 的 realpath（macOS 上是 `/private/var/tmp/…`），在 Linux 上重產會寫成
+ *   `/var/tmp/…`，夾具會變。
  *
  * 不在 typecheck 與 lint 的範圍內（`in-tree/` 那幾支是對各 tag 的型別寫的，在今天的樹裡編不過）。
  *
@@ -68,7 +76,8 @@ const PROMPT = '你好';
  * 讀方分支的觸發。有 `in-tree/trigger-<名>.ts` 的由那一版補寫事件；`workspace-root` 不用補寫（12 以前的 header 本來就沒有
  * `workspaceRoot`），只記今天的守衛對它的輸出。
  */
-type Trigger = 'turn-feedback' | 'summary-missing' | 'open-turn' | 'workspace-root';
+type Trigger =
+  'turn-feedback' | 'turn-feedback-tail' | 'summary-missing' | 'open-turn' | 'workspace-root';
 
 interface Target {
   /** 夾具目錄名。 */
@@ -93,7 +102,7 @@ const TARGETS: readonly Target[] = [
     triggers: ['turn-feedback', 'summary-missing'],
     ownReplay: false,
   },
-  { name: 'v9', rev: 'v0.4.31', version: 9, triggers: ['turn-feedback'], ownReplay: true },
+  { name: 'v9', rev: 'v0.4.31', version: 9, triggers: ['turn-feedback-tail'], ownReplay: true },
   { name: 'v10', rev: 'v0.5.0', version: 10, ownReplay: true },
   { name: 'v12', rev: 'v0.5.7', version: 12, triggers: ['workspace-root'], ownReplay: true },
   { name: 'v13', rev: 'v0.5.15', version: 13, ownReplay: true },
@@ -244,7 +253,14 @@ function todayReplay(events: readonly SessionEvent[]): unknown {
     : { kind: 'unreplayable', reason: replay.reason };
 }
 
-/** 把 run 目錄的會話搬進夾具目錄，寫 `expected.json`。 */
+/**
+ * 還沒寫進夾具目錄的夾具：檔名 → 內容。全部 target 跑完才一次寫（{@link flush}），所以每一次 CLI 跑的時候夾具目錄都還沒
+ * 被這一輪改過，CLI 自己記的 `build.dirty`（整個 repo 的 `git status`）在乾淨的樹上就是 `false`；中途有一份失敗，
+ * 整批都不寫。
+ */
+const PENDING = new Map<string, Map<string, string>>();
+
+/** 把 run 目錄的會話與 `expected.json` 讀進 {@link PENDING}。 */
 function freeze(
   name: string,
   directory: string,
@@ -252,13 +268,12 @@ function freeze(
   own: Record<string, unknown> | undefined,
   triggers: readonly unknown[],
 ): void {
-  const into = join(FIXTURES, name);
-  rmSync(into, { recursive: true, force: true });
-  mkdirSync(into, { recursive: true });
+  const files = new Map<string, string>();
   const sessions: Record<string, unknown> = {};
   for (const id of sessionsIn(directory)) {
-    copyFileSync(join(directory, `${id}.header.json`), join(into, `${id}.header.json`));
-    copyFileSync(join(directory, `${id}.jsonl`), join(into, `${id}.jsonl`));
+    for (const file of [`${id}.header.json`, `${id}.jsonl`]) {
+      files.set(file, readFileSync(join(directory, file), 'utf8'));
+    }
     const header = JSON.parse(readFileSync(join(directory, `${id}.header.json`), 'utf8')) as {
       version: number;
     };
@@ -279,8 +294,20 @@ function freeze(
     sessions,
     triggers,
   };
-  writeFileSync(join(into, 'expected.json'), `${JSON.stringify(expected, null, 2)}\n`);
-  log(`寫好 ${into}`);
+  files.set('expected.json', `${JSON.stringify(expected, null, 2)}\n`);
+  PENDING.set(name, files);
+  log(`備好 ${name}`);
+}
+
+/** 把 {@link PENDING} 寫進夾具目錄。 */
+function flush(): void {
+  for (const [name, files] of PENDING) {
+    const into = join(FIXTURES, name);
+    rmSync(into, { recursive: true, force: true });
+    mkdirSync(into, { recursive: true });
+    for (const [file, content] of files) writeFileSync(join(into, file), content);
+    log(`寫好 ${into}`);
+  }
 }
 
 /** 歷史畫面上每一顆收尾 frame 的 `event`（`completed`／`failed`）。 */
@@ -296,6 +323,7 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
   return triggers.flatMap((trigger): unknown[] => {
     switch (trigger) {
       case 'turn-feedback':
+      case 'turn-feedback-tail':
         return [
           {
             edge: 10,
@@ -303,7 +331,9 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
             computedBy: 'today',
             feedback: currentMessageFeedback(readEvents(directory, 'cli')).map((entry) => ({
               turn: entry.turn,
-              target: 'messageId' in entry.item ? 'message' : 'turn',
+              ...('messageId' in entry.item
+                ? { target: 'message', messageId: entry.item.messageId }
+                : { target: 'turn' }),
               rating: entry.item.rating,
             })),
           },
@@ -470,3 +500,4 @@ function generateMixed(): void {
 const wanted = new Set(process.argv.slice(2));
 for (const target of TARGETS) if (wanted.size === 0 || wanted.has(target.name)) generate(target);
 if (wanted.size === 0 || wanted.has(MIXED_NAME)) generateMixed();
+flush();
