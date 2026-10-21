@@ -665,7 +665,7 @@ jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1%2fbg-1.jsonl
 | 路徑 | 預設 | 要登入嗎 | 回應 |
 | --- | --- | --- | --- |
 | `GET /livez` | 開 | 不用 | `200 ok`：handler 跑得到就回，不查任何狀態（回得了，就代表事件圈在轉）。 |
-| `GET /readyz` | 開 | 不用 | `200 ok`：在聽、收尾還沒開始。`503 closing`：收尾已經開始（serve 收到 SIGTERM／SIGINT 後第一件事就是立旗）。 |
+| `GET /readyz` | 開 | 不用 | `200 ok`：在聽、收尾還沒開始。`503 closing`：收尾已經開始（serve 收到 SIGTERM／SIGINT 後第一件事就是立旗，**之後 listener 再照常在聽一小段時間窗**，這段時間內抓到的是 503，時間窗過了才關 listener，之後是連不上）。 |
 | `GET /metrics` | **關** | `Authorization: Bearer <token>` | Prometheus 文字格式 0.0.4（`text/plain; version=0.0.4`）。 |
 
 - **三個路徑都先過信任圍欄**，跟 wire 同一道：`Host` 不是 loopback（`localhost`、`127.x.x.x`、`[::1]`）、`Sec-Fetch-Site: cross-site`、`Origin` 與 `Host` 不一致，一律 `403`。只收 `GET`／`HEAD`，其餘 `405`。
@@ -688,6 +688,11 @@ jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1%2fbg-1.jsonl
 - **缺或錯的 bearer 一律 `401`**，不說是哪一種。**會話 cookie 換不到指標，反過來指標的 token 也換不到 wire**：避免把瀏覽器的 cookie 交給監控系統。
 - 啟動日誌印一行 `探針：…；指標：關` 或 `指標：開 /metrics（要 Authorization: Bearer，token 在 <路徑>）`，**不印 token 本身**。
 - **起動時讀一次，改了要重啟。** `probes.enabled: false` 可以把兩個探針路徑也關掉（回 `404`）。
+- **`/readyz` 的收尾時間窗**（`probes.drainMs`，毫秒，`0` 到 `2000`，預設 `500`）：立旗之後、關 listener 之前，listener 照常在聽這麼久，`/readyz` 回 `503 closing`。
+  沒有這一段時，`server.close()` 一開頭就會斷掉所有連線，監控只會看到連不上（也算沒就緒，但看不到「正在關機」這個狀態）。
+  - **只有 `/readyz` 被抓過才等**：從起動到收尾都沒有人抓過，等了也沒人聽，直接關。
+  - **探針間隔比時間窗長就有機會漏掉**：500 毫秒的時間窗，抓取間隔 5 秒的監控大多看不到 503，只會看到連不上。要讓這種監控看得到，把 `drainMs` 調大；上限 2000，因為行程收尾整體有 5 秒（收到第二次訊號當場結束，[#599](https://github.com/DemianLi/nexus-agent/issues/599)），時間窗之外還要留給 thread 收尾與落盤。
+  - 時間窗內 serve 其餘路徑照常服務，不拒絕新請求。`0` 關掉時間窗。
 
 Prometheus 的設定（跟 serve 在同一台主機上抓）：
 
@@ -702,11 +707,19 @@ scrape_configs:
       - targets: ['127.0.0.1:8787']
 ```
 
+**token 檔是 `0600`，只有跑 serve 的那個使用者讀得到**（權限過寬 serve 會拒絕啟動）。上面的 `credentials_file` 直接指向它，所以 Prometheus 要**用同一個使用者跑**；如果 Prometheus 是別的使用者（例如 `prometheus`），讀這個檔會被拒。兩種做法：
+
+- 同一個使用者跑 Prometheus（最單純）；
+- 複製一份給 Prometheus 的使用者：`install -m 0600 -o prometheus /var/lib/nexus-agent/metrics-token /etc/prometheus/nexus-agent-token`，`credentials_file` 指向複本。**複本的權限自己管**（只給 Prometheus 的使用者讀），換 token（刪掉原檔重啟 serve）之後要重新複製一次，否則監控會一直 401。
+
 手動看一眼：
 
 ```bash
-curl -s -H "Authorization: Bearer $(cat /var/lib/nexus-agent/metrics-token)" http://127.0.0.1:8787/metrics
+curl -s -H @<(printf 'Authorization: Bearer %s\n' "$(cat /var/lib/nexus-agent/metrics-token)") http://127.0.0.1:8787/metrics
 ```
+
+token **不要放進命令列**（`-H "Authorization: Bearer …"` 的字串會出現在 `ps` 裡，同一台主機的其他使用者看得到）。上面這行用 `-H @<檔>` 讓 curl 從檔案讀標頭：這裡的「檔」是 shell 的程序替換（`<(…)`，bash、zsh 可用），`printf` 是 shell 內建，不會多開一個帶著 token 的行程。
+也可以自己寫一個 `0600` 的標頭檔，內容一行 `Authorization: Bearer <token>`，再 `curl -H @標頭檔 …`。
 
 ### 指標清單
 
@@ -727,7 +740,7 @@ curl -s -H "Authorization: Bearer $(cat /var/lib/nexus-agent/metrics-token)" htt
 - **記憶體門檻警告不在這裡**：那是 `memory-gauge` 的 `warnAtPercent`（[#1493](https://github.com/DemianLi/nexus-agent/issues/1493)），只寫日誌。告警規則與門檻是監控那一側的事。
 - **計數是行程內的**，serve 重啟歸零（Prometheus 的 `rate()` 認得 counter 重置）。
 - **不做的**：推送（OTel metrics、StatsD、remote write）、逐 thread 或逐使用者的指標（thread id 進標籤基數無上限，而且在共用主機上等於公開別人的活動）、逐請求延遲直方圖（SSE 長連線會把直方圖撐歪）、web 的管理畫面（等 [#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 的管理員身分）。
-- **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh（`1517a4db`）沒有探針端點，也沒有指標出口（唯一相關的是 OTel 的 `selfObsMeterProvider` 被刻意排除）。判準取公開的慣例（Kubernetes 的 `livez`／`readyz`、Prometheus 文字格式），逐點見 `apps/harness/src/ops-endpoints.ts` 的檔頭。這一列沒有新增任何出境路徑。
+- **偏離 dsh（登記，理由 2：產品需求超出 dsh）**：dsh（`687f282e`）沒有探針端點，也沒有指標出口（唯一相關的是 OTel 的 `selfObsMeterProvider` 被刻意排除）。判準取公開的慣例（Kubernetes 的 `livez`／`readyz`、Prometheus 文字格式），逐點見 `apps/harness/src/ops-endpoints.ts` 的檔頭。這一列沒有新增任何出境路徑。
 - **將來若開 `--host`（[#1547](https://github.com/DemianLi/nexus-agent/issues/1547)）**，「探針免登入、只在 loopback」的前提要重看；現在 serve 只綁 `127.0.0.1`。
 
 ## 用 systemd 常駐

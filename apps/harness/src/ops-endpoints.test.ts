@@ -229,6 +229,21 @@ describe('驗收 3：就緒跟著收尾走', () => {
     flag = true;
     expect((await ops.handle(get('/readyz'))).status).toBe(503);
   });
+
+  it('readyzProbed：只有過了圍欄、探針開著的 /readyz 才算被抓過（#1777）', async () => {
+    const ops = createOpsEndpoints({ isClosing: () => false });
+    expect(ops.readyzProbed()).toBe(false);
+    await ops.handle(get('/livez'));
+    await ops.handle(get('/readyz', { host: 'evil.example' }));
+    await ops.handle(get('/readyz', {}, 'POST'));
+    expect(ops.readyzProbed()).toBe(false);
+    await ops.handle(get('/readyz'));
+    expect(ops.readyzProbed()).toBe(true);
+
+    const off = createOpsEndpoints({ isClosing: () => false, probes: false });
+    await off.handle(get('/readyz'));
+    expect(off.readyzProbed()).toBe(false);
+  });
 });
 
 /** 一個 Prometheus 文字格式的最小解析器：逐行解析，格式不對就拋。 */

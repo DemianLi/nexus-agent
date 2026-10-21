@@ -310,6 +310,58 @@ describe('回合失敗計數（驗收 6）', () => {
   });
 });
 
+describe('收尾時間窗：close() 開始後 listener 還在聽，/readyz 回 503（#1777）', () => {
+  const DRAIN = (drainMs: number) => [
+    '- id: ops-endpoints',
+    '  config:',
+    '    probes:',
+    `      drainMs: ${String(drainMs)}`,
+  ];
+
+  it('抓過 /readyz → close() 一開始立刻看得到 503 closing；時間窗過了 listener 才關', async () => {
+    const where = layout(DRAIN(400));
+    const server = await start(where);
+    expect((await fetch(`${server.url}/readyz`)).status).toBe(200);
+
+    const startedAt = Date.now();
+    const closing = server.close();
+    // 真的新連線（不是 keep-alive 的舊連線），在時間窗裡打。
+    const during = await fetch(`${server.url}/readyz`, { headers: { connection: 'close' } });
+    expect(during.status).toBe(503);
+    expect(await during.text()).toBe('closing');
+    // /livez 不受影響：活著就是活著。
+    expect((await fetch(`${server.url}/livez`, { headers: { connection: 'close' } })).status).toBe(
+      200,
+    );
+
+    await closing;
+    // 下限：時間窗真的等過了（拿掉等待，這裡紅）。
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(380);
+    // 時間窗過了，listener 關了。
+    await expect(fetch(`${server.url}/readyz`)).rejects.toThrow();
+    running = undefined;
+  });
+
+  it('沒有人抓過 /readyz → 不等：關得比時間窗快很多', async () => {
+    const where = layout(DRAIN(2000));
+    const server = await start(where);
+    const startedAt = Date.now();
+    await server.close();
+    running = undefined;
+    expect(Date.now() - startedAt).toBeLessThan(1500);
+  });
+
+  it('時間窗長度跟著 drainMs 走，不是寫死的數字', async () => {
+    const where = layout(DRAIN(1200));
+    const server = await start(where);
+    expect((await fetch(`${server.url}/readyz`)).status).toBe(200);
+    const startedAt = Date.now();
+    await server.close();
+    running = undefined;
+    expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1150);
+  });
+});
+
 describe('驗收 8：子行程起真的 serve，接線拿掉就紅', () => {
   it('--patch 打開指標，讀 token 檔、帶 bearer 抓 /metrics 拿到 200；不帶是 401；/livez 免登入', async () => {
     const where = layout(METRICS_ON);

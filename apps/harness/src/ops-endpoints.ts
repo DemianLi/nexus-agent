@@ -4,7 +4,8 @@
  * 今天要知道 serve 活不活著，只能看 port 有沒有開。這一檔補三個**被動抓取**的路徑，serve 不主動往任何地方送，指標預設關著：
  *
  * - **`/livez`**：handler 跑得到就回 `200 ok`。不查任何狀態——回得了，就代表事件圈在轉。
- * - **`/readyz`**：`200 ok` 是「在聽、收尾還沒開始」；`503 closing` 是收尾已經開始。**thread 數到上限不算沒就緒**：已經開著的 thread 照樣服務，
+ * - **`/readyz`**：`200 ok` 是「在聽、收尾還沒開始」；`503 closing` 是收尾已經開始（#1777：`close()` 立旗後 listener 還會照常在聽一段時間窗，
+ *   見 `serve.ts`；沒有這段，`server.close()` 一開頭就斷掉所有連線，監控只會看到連不上，看不到 503）。**thread 數到上限不算沒就緒**：已經開著的 thread 照樣服務，
  *   而且同一個 home 只有一台 serve（#1503），沒有別台可以分流。到上限要看指標。
  * - **`/metrics`**：Prometheus 文字格式 0.0.4，手寫。**名單固定、標籤不含 thread id 或路徑**，基數不隨使用者長。
  *
@@ -14,7 +15,7 @@
  *
  * ## 偏離 dsh：產品需求超出 dsh（理由 2）
  *
- * dsh `1517a4db` 沒有探針端點，也沒有指標出口（唯一相關的是 OTel 的 `selfObsMeterProvider` 被刻意排除）。判準取公開的慣例：探針語意取
+ * dsh `687f282e` 沒有探針端點，也沒有指標出口（唯一相關的是 OTel 的 `selfObsMeterProvider` 被刻意排除）。判準取公開的慣例：探針語意取
  * Kubernetes 的 `livez`／`readyz` 分法；格式取 Prometheus 文字格式（`# HELP`／`# TYPE`，counter 名以 `_total` 結尾）。**不新增任何出境路徑**。
  *
  * @module
@@ -210,6 +211,8 @@ export interface OpsEndpointsOptions {
 /** 探針與指標的請求處理。 */
 export interface OpsEndpoints {
   handle(request: Request): Promise<Response>;
+  /** 起動以來有沒有人抓過 `/readyz`（過了信任圍欄、探針開著，200 或 503 都算）。收尾時間窗只在有人看的時候才等（#1777）。 */
+  readyzProbed(): boolean;
 }
 
 const NO_STORE = { 'cache-control': 'no-store' } as const;
@@ -241,7 +244,9 @@ function bearerOf(headers: Headers): string | undefined {
  */
 export function createOpsEndpoints(options: OpsEndpointsOptions): OpsEndpoints {
   const probes = options.probes ?? true;
+  let readyzProbed = false;
   return {
+    readyzProbed: () => readyzProbed,
     async handle(request) {
       // **先過信任圍欄**，在看方法、路徑、token 之前（同 wire，不開捷徑）。
       if (!isTrustedWireRequest(request.headers)) return text(403, 'forbidden');
@@ -252,8 +257,9 @@ export function createOpsEndpoints(options: OpsEndpointsOptions): OpsEndpoints {
       const { pathname } = new URL(request.url);
       if (pathname === LIVEZ_PATH || pathname === READYZ_PATH) {
         if (!probes) return text(404, 'not found', {}, head);
-        if (pathname === READYZ_PATH && options.isClosing()) {
-          return text(503, 'closing', {}, head);
+        if (pathname === READYZ_PATH) {
+          readyzProbed = true;
+          if (options.isClosing()) return text(503, 'closing', {}, head);
         }
         return text(200, 'ok', {}, head);
       }
