@@ -52,6 +52,7 @@ server-qualified 形狀。（**只有乾淨的名字對得上**，被正規化�
 | `toolCallTimeoutMs`    | 兩者      | 否   | 一次 `tools/call` 的逾時，預設 60000                                                       |
 | `failOnStartupError`   | 兩者      | 否   | 掛上那一刻連不上、列不出工具或註冊不上時要不要讓這一列失敗，預設 `false`（見行為）         |
 | `maxInstructionBytes`  | 兩者      | 否   | server 指引**連同出處標頭**的 UTF-8 位元組上限，預設 32768；超過算連線失敗（同上，不截斷） |
+| `approval`             | 兩者      | 否   | 哪些工具要先讓人核准，預設 `{ default: ask }`：整台都問（見核准）                          |
 
 秘密一律從呼叫端的環境變數來，不寫進程式碼、設定檔或測試 fixture（見
 [`docs/standards.md`](../../docs/standards.md)）。
@@ -102,6 +103,47 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   `dispose()` 觸發。stdio 子行程的 pipe 是活的 handle，沒收掉的話行程不會退出。
 - **`apply` 中途失敗自己收拾。** 連線開了但註冊撞名時，plugin 先關掉 client 再收成警告或
   拋出——那時登記還沒發生，`lifecycle` 通道接不到它。
+
+## 核准（[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)）
+
+**這台 server 的工具預設都要人核准。** 模型叫到要核准的工具時，畫面先跳出核准面板，人按允許之前 server 收不到 `tools/call`。
+在那一列寫 `approval` 改它：
+
+```yaml
+- insert:
+    - id: mcp-crm
+      name: '@nexus/plugin-mcp'
+      config:
+        serverName: crm
+        connection: { transport: stdio, command: crm-mcp }
+        approval:
+          default: ask # ask：這台的工具都要人核准（省略即 ask）；allow：都不問
+          exempt: [search_orders, get_order] # default 是 ask 時，這幾支不問
+```
+
+- **`exempt` 寫 server 自己公告的名字**（raw name，就是 `tools/call` 上線的那個），不是模型看到的 `mcp__crm__…`：被換字、補了指紋的
+  public name 寫設定的人對不上（見工具名）。只收精確名字，不收樣式。
+- **唯讀的 server 寫 `approval: { default: allow }`**，整台都不問，回到 dsh 的行為。
+- **`default: allow` 又寫了 `exempt`（連空陣列也算）是設定錯誤**，那一列載入失敗、訊息指名它：這組寫法看起來像「只問這幾支」，
+  其實整台都不問。
+- **失敗的方向都是多問**：`exempt` 打錯字，那一支照樣被問；server 換了版本多出新工具，新工具照 `default` 被問。`exempt` 裡有
+  `tools/list` 沒列出的名字時，掛上那一刻交出一則警告指名它（`serve` 每條對話組裝一次，所以每條對話各一則，同連不上那則）。
+- **問人之後的事不歸這一列**，全在核准中介層，跟 `submit_record` 同一條路、同一組碼：
+  - 人按不允許：`APPROVAL_REJECTED_BY_USER`。
+  - 核准政策是 `never`：不問、一律回絕，`APPROVAL_POLICY_NEVER`。出廠的兩組權限組核准都是 `ask`，要 `never` 得用 `--patch`
+    改 `permission-presets` 那一列（只在有 `--workspace` 時生效，見 [`docs/operations.md`](../../docs/operations.md)）。
+  - **背景子代理**叫到：背後沒有人，一律回絕（`APPROVAL_POLICY_NEVER`）。前景子代理照 #328 問 root 的人。
+  - **CLI**（一次性與 REPL 都是）：這個入口沒有核准管道（`HEADLESS_APPROVALS`），沒宣告免問的工具一律回絕，`APPROVAL_POLICY_NEVER`。
+    要在 CLI 用 MCP 工具，那幾支得列進 `exempt` 或整台 `default: allow`。
+- **核准卡的理由**寫 server 名與 raw name：`MCP server crm 的工具 update_order 要先讓人看過（設定 approval）`。它進日誌的
+  `approval/asked`，也進回絕的文字；web 的核准面板今天還不畫它（[#1628](https://github.com/DemianLi/nexus-agent/issues/1628)），
+  面板上是工具名與整份參數。參數不截：人核准的是整份內容。
+- **只管這台 server 自己的工具**：`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` 三支資源工具不經這個
+  閘門，`approval` 管不到讀資源（見下一節）。
+- **不讀 MCP 的 tool annotations**（`readOnlyHint`、`destructiveHint`）：SDK 說明寫明那些只是 hint，client 不該依不受信任的 server
+  給的 annotations 做決定。
+- 閘門經 `registry.approvals.gate()` 登記，只回 `ask` 或委派給下一位、**從不回 `allow`**（回 `allow` 會把排在後面的閘門整條吃掉）。
+  連不上、列不出工具的那一列不登記閘門；`tools/list` 一支都沒列出的、`default: allow` 的也不登記。
 
 ## 指引與資源（[#431](https://github.com/DemianLi/nexus-agent/issues/431)、[#430](https://github.com/DemianLi/nexus-agent/issues/430)）
 
@@ -191,6 +233,12 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
 `@langchain/mcp-adapters` 而不是自己接 `@modelcontextprotocol/sdk`：adapter 產出的是
 `DynamicStructuredTool`，正是 `registry.tools.register()` 收的東西，自己接 SDK 等於把
 「MCP content block 翻成 LangChain 工具結果」整段重寫一次。上面的明文限制裡，結果呈現、`stderr` 三條就是這個選擇的代價；重連因此是自己包的 supervisor，沒開 adapter 內建的 `restart`（固定間隔、固定次數，表達不出 dsh 的指數退避與穩定期重置，而且重連之後已註冊的舊工具物件仍綁著死掉的 client，實測 `Not connected`）。
+
+**核准宣告是 dsh 沒有的**（[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)，偏離規則的理由 2：產品需求超出 dsh 的射程）。
+dsh 的 mcp-client 沒有核准設定，MCP 工具沒有人回 `ask`、預設一律放行。我們的產品是企業內部的業務輔助機器人，內部系統的寫入全走 MCP，
+「哪台、哪幾支要人看過」是部署方的業務判斷，要能寫在設定裡；**沒寫就整台都問**（#1622 Q2 (a)），忘了寫的結果是多問一次，不是寫入沒經過人。
+最接近的 dsh 做法是 `hooks-claude-code`（每次呼叫起一支外部指令、比對模型面的工具名、行程級一份設定），不照搬。機制本身照 dsh：閘門掛在
+`tools/pre-execute` 形狀的 waterfall 上，決策詞彙、政策、管道、拒絕碼全部沿用。細節見 [`src/approval.ts`](src/approval.ts) 檔頭。
 
 **基座沒有內建 MCP。** `deepagents@1.13.1` 整包沒有一處提到 MCP；MCP 在 LangChain JS 這一
 側是 `@langchain/mcp-adapters` 這個獨立套件。
