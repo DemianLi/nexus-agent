@@ -342,6 +342,23 @@ describe('收尾時間窗：close() 開始後 listener 還在聽，/readyz 回 5
     running = undefined;
   });
 
+  it('窗內 run.start 回 server_closing（#1787）：close() 一開始就停准入，窗前與沒收尾時照常', async () => {
+    const where = layout(DRAIN(600));
+    const server = await start(where);
+    const client = await serveClient(server);
+    expect((await fetch(`${server.url}/readyz`)).status).toBe(200);
+    // 對照組：還沒收尾，run.start 成功。
+    const events = await client.openEvents('closing-before');
+    expect(await client.runStart('closing-before', '窗前')).toMatchObject({ type: 'success' });
+    await foldTurn(events);
+
+    const closing = server.close();
+    const refused = await client.runStart('closing-window', '窗內');
+    expect(refused).toMatchObject({ type: 'error', error: 'server_closing' });
+    await closing;
+    running = undefined;
+  });
+
   it('沒有人抓過 /readyz → 不等：關得比時間窗快很多', async () => {
     const where = layout(DRAIN(2000));
     const server = await start(where);

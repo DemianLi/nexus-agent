@@ -32,9 +32,9 @@ function harness(...definitions: CommandDefinition[]) {
   return harnessWith({}, ...definitions);
 }
 
-/** 同上，另外可以給執行器選項（`acceptSteer`）。 */
+/** 同上，另外可以給執行器選項（`acceptSteer`、`acceptOpenTurn`）。 */
 function harnessWith(
-  extra: { acceptSteer?: (text: string) => void },
+  extra: { acceptSteer?: (text: string) => void; acceptOpenTurn?: () => void },
   ...definitions: CommandDefinition[]
 ) {
   const sessionLog = new SessionLog('t');
@@ -601,5 +601,57 @@ describe('runsWhileBusy（#1516）：依這一次呼叫的完整字面值判斷�
     const idle = await executor.execute('/goal', signal);
     expect(idle?.steers).toEqual([{ text: '幫我接著做' }]);
     expect(sent).toEqual(['幫我接著做']);
+  });
+});
+
+/** `openTurn`（#1787）：命令要做出會讓宿主自己開一輪的動作之前先問宿主；跟 `acceptSteer` 同一個形狀。 */
+describe('openTurn', () => {
+  it('宿主不收：例外冒出 handler、命令之後的動作沒做，command/done 是 error', async () => {
+    let afterAsk = false;
+    const { executor, events, signal } = harnessWith(
+      {
+        acceptOpenTurn: () => {
+          throw new Error('收尾中');
+        },
+      },
+      ok('go', ({ openTurn }) => {
+        openTurn?.();
+        afterAsk = true;
+        return { kind: 'success' };
+      }),
+    );
+    await expect(executor.execute('/go', signal)).rejects.toThrow('收尾中');
+    expect(afterAsk).toBe(false);
+    expect(events.map((event) => event.type)).toEqual(['command/run', 'command/done']);
+    expect(events[1]?.data).toMatchObject({ kind: 'error' });
+  });
+
+  it('宿主收（或沒設）：照常落定，不多出任何東西', async () => {
+    const asked = vi.fn();
+    const { executor, events, signal } = harnessWith(
+      { acceptOpenTurn: asked },
+      ok('go', ({ openTurn }) => {
+        openTurn?.();
+        return { kind: 'success' };
+      }),
+    );
+    expect((await executor.execute('/go', signal))?.result).toEqual({ kind: 'success' });
+    expect(asked).toHaveBeenCalledTimes(1);
+    expect(events.map((event) => event.type)).toEqual(['command/run', 'command/done']);
+
+    const bare = harness(ok('go', ({ openTurn }) => (openTurn?.(), { kind: 'success' })));
+    expect((await bare.executor.execute('/go', bare.signal))?.result.kind).toBe('success');
+  });
+
+  it('命令結束之後不能再問：拋錯，不靜靜丟掉', async () => {
+    let late: (() => void) | undefined;
+    const { executor, signal } = harness(
+      ok('go', ({ openTurn }) => {
+        late = openTurn;
+        return { kind: 'success' };
+      }),
+    );
+    await executor.execute('/go', signal);
+    expect(() => late?.()).toThrow('已經結束');
   });
 });

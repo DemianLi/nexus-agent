@@ -1553,6 +1553,9 @@ async function startServer(
     close: async (options) => {
       // `/readyz` 在 server 關掉之前就回 503（#1535）：監管程式看到 closing 就別再送新請求。
       closing = true;
+      // 會開新一輪的命令從這一刻起回 `server_closing`（#1787）：立旗與時間窗之間不留縫，窗裡才不會再收新的一輪、在窗末被切斷。
+      // 致命例外的收尾（`drain: false`）一樣先停准入。
+      handler.stopAdmission();
       // **時間窗**（#1777）：立旗之後 listener 要再照常在聽一小段，探針才抓得到 503。`server.close()` 一開頭就 `closeAllConnections()`
       // （`wire-server.ts`），不留這一段，旗標只在同一個 macrotask 裡亮過，沒有任何請求看得到。**只有 `/readyz` 被抓過才等**：
       // 沒有監控在看，等了也沒人聽（測試與一次性使用不付這個代價）。時間窗屬於整體 5 秒收尾上限（#599），所以設定上限 2000。
