@@ -13,6 +13,7 @@
  * **與 dsh 的偏離（理由 1，基座表達不出來）：行尾的 `\r` 不去掉。** dsh 去掉（`read-render.ts:91-93`），但基座的 `edit_file` 對
  * `old_string` 做字面比對、不正規化行尾（#1531 照抄）；在 CRLF 檔上讀的時候把 `\r` 去掉，模型照抄出來的 `old_string` 就永遠對不上。
  * 撤除條件見卡 #1530 的偏離 2（#1563 N0335 改檔保留 CRLF 之後，`\r` 這一半撤掉）。
+ * 判行長時不算行尾的 `\r`（#1776，dsh 是先去掉才判）：CRLF 檔裡剛好 `maxLineLength` 個字元的行不會被標截斷；`\r` 撤掉時這個扣除一併消失。
  *
  * 另外多回三樣 dsh 的 `WindowResult` 沒有、基座的 `read` 語意要的東西：換行的個數（`Line offset N exceeds file length (M lines)` 的 M 是
  * 換行數加 1）、檔案是不是以換行結尾（頁到檔尾時結尾那個換行要留著，與基座切片一致）、有沒有看過非空白字元（基座對空檔與全空白的檔回
@@ -86,22 +87,34 @@ export async function scanWindow(
   /** 這一行有沒有任何字元（最後一行沒有換行收尾時，靠它決定要不要算一行）。 */
   let lineHasChars = false;
   let buffer = '';
+  /** 這一行有沒有因為緩衝滿了而丟掉字元（丟掉了就一定超長，不必再看緩衝尾巴是不是 `\r`）。 */
+  let lineDropped = false;
   /** 這一行要不要收進頁裡：行號在 offset 之後、頁還沒滿、沒被位元組上限截掉。 */
   let collecting = limit > 0 && offset <= 0;
 
   const append = (segment: string): void => {
     if (segment.length === 0) return;
     lineHasChars = true;
-    if (!collecting || buffer.length >= lineBufferCap) return;
+    if (!collecting) return;
+    if (buffer.length >= lineBufferCap) {
+      lineDropped = true;
+      return;
+    }
     buffer += segment;
-    if (buffer.length > lineBufferCap) buffer = buffer.slice(0, lineBufferCap);
+    if (buffer.length > lineBufferCap) {
+      buffer = buffer.slice(0, lineBufferCap);
+      lineDropped = true;
+    }
   };
 
   const endLine = (): void => {
     totalLines += 1;
     if (collecting) {
+      // 判長度不算行尾的 `\r`（#1776，照 dsh：它先去掉 `\r` 才判，我們保留 `\r` 不去掉，見檔頭偏離）：CRLF 檔裡剛好
+      // `maxLineLength` 個字元的行不該被標截斷。緩衝丟過字元的一行一定超長，那時緩衝尾巴是不是 `\r` 不作數。
+      const contentLength = buffer.length - (buffer.endsWith('\r') ? 1 : 0);
       const text =
-        buffer.length > maxLineLength
+        lineDropped || contentLength > maxLineLength
           ? `${buffer.substring(0, maxLineLength)}... (line truncated to ${maxLineLength} chars)`
           : buffer;
       const bytes = Buffer.byteLength(text, 'utf8') + (lines.length > 0 ? 1 : 0);
@@ -113,6 +126,7 @@ export async function scanWindow(
       }
     }
     buffer = '';
+    lineDropped = false;
     lineHasChars = false;
     collecting = !cappedByBytes && totalLines >= offset && lines.length < limit;
   };

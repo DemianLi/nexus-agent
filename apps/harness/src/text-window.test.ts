@@ -135,6 +135,31 @@ describe('scanWindow：行長與位元組上限（dsh buildWindow）', () => {
     expect(scan.lines).toEqual(['a\r', 'b\r']);
   });
 
+  // #1776：判長度不算行尾的 `\r`（dsh 先去掉 `\r` 才判；我們保留 `\r`，所以判長度時要自己扣掉）。
+  it('CRLF：剛好 2000 字元的行不標截斷，`\r` 仍留著；2001 字元的標', async () => {
+    const scan = await scanWindow(
+      [`${'x'.repeat(2000)}\r\n${'y'.repeat(2001)}\r\n${'z'.repeat(2000)}\n`],
+      params(),
+    );
+    expect(scan.lines).toEqual([
+      `${'x'.repeat(2000)}\r`,
+      `${'y'.repeat(2000)}... (line truncated to 2000 chars)`,
+      'z'.repeat(2000),
+    ]);
+  });
+
+  it('CRLF：片段邊界落在 `\r` 前後、以及行中間出現的 `\r`，判斷不變', async () => {
+    const exact = `${'x'.repeat(2000)}\r\n`;
+    const cut = Array.from(exact);
+    // 逐字元分片：`\r` 自己、`\n` 自己都是獨立片段。
+    expect((await scanWindow(cut, params())).lines).toEqual([`${'x'.repeat(2000)}\r`]);
+    // 緩衝滿了之後才冒出 `\r`（2001 字元當中第 2001 個字元就是 `\r`，後面還有字）：一定超長。
+    const midCr = `${'m'.repeat(2000)}\rtail\n`;
+    expect((await scanWindow([midCr], params())).lines).toEqual([
+      `${'m'.repeat(2000)}... (line truncated to 2000 chars)`,
+    ]);
+  });
+
   it('中止就丟 ScanAborted', async () => {
     const controller = new AbortController();
     controller.abort();

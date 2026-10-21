@@ -42,7 +42,9 @@
  * （`createDeepAgent`，`dist/langsmith-zm0ILQsV.js:6210-6211`），`customToolDescriptions` 沒有往下傳；
  * 換掉工具實例則會被 langchain 拒絕（`AgentNode.js` 約 250 行：同名不同實例的 client tool）。退到
  * 最接近的：模型那一側換成一份 OpenAI 形狀的定義（不是 client tool，驗證不擋），執行的仍是基座的工具。
- * （「換不掉」只在走 `createDeepAgent` 時成立；#1530 之後 contained backend 的讀檔不再經基座的 `read`，但工具本體仍是基座的。）
+ * （「換不掉」只在走 `createDeepAgent` 時成立：**自有組裝收得到 `customToolDescriptions`**（#1776 補正；`agent-assembly.ts` 直接呼叫
+ * `createFilesystemMiddleware({ backend, permissions })`，`FilesystemMiddlewareOptions` 有這個欄位），行為沒改，
+ * 要不要真的換描述交給 #1563。#1530 之後 contained backend 的讀檔不再經基座的 `read`，但工具本體仍是基座的。）
  *
  * **偏離二：一行都塞不下時照樣給那一行。** dsh 先把單行截到 2000 字元，所以第一行永遠塞得下；
  * 基座不截行（超過 5000 字元切成續行），所以第一行本身就超過 50 KiB 時不停在零行——給它，由基座
