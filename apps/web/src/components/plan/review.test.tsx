@@ -1,13 +1,22 @@
 import type { PendingQuestion, ToolEntry } from '@nexus/wire';
+import { emptyConversation, reduceAll } from '@nexus/wire';
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PlanReviewPanel, PlanToolCard } from '@/components/plan/review';
 import { PLAN_TAB_MISSING_TEXT, RightSidebarToggle } from '@/components/sidebar/right-sidebar';
-import { AUTO_OPENED_KEY, planDocument, planReviewOf } from '@/lib/plan-review';
+import {
+  AUTO_OPENED_KEY,
+  PLAN_REVIEW_DISMISSED_TEXT,
+  planDocument,
+  planReviewOf,
+} from '@/lib/plan-review';
+import { createConversationStore } from '@/lib/conversation-store';
 import { ABORTED_BEFORE_DISPATCH_CODE } from '@/lib/question-view';
+import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { PlanDocument } from '@/lib/plan-review';
 import { axeViolations } from '@/test/axe';
+import { Script } from '@/test/conversation-frames';
 import { WithRightSidebar, memoryStorage } from '@/test/right-sidebar';
 
 /**
@@ -278,6 +287,38 @@ describe('計劃卡', () => {
     const card = screen.getByTestId('plan-card');
     expect(within(card).getByTestId('plan-outcome').textContent).toBe(label);
     expect(within(card).getByTestId('plan-title').textContent).toBe('改登入頁');
+  });
+
+  it('關掉審核的新形狀（#1607 之後，工具跑完帶新字）：chip 寫「要求修改」，不是「已同意」', async () => {
+    await mount({
+      panel: false,
+      card: toolEntry({ status: 'done', text: PLAN_REVIEW_DISMISSED_TEXT }),
+    });
+    const card = screen.getByTestId('plan-card');
+    expect(card.getAttribute('data-outcome')).toBe('revise');
+    expect(within(card).getByTestId('plan-outcome').textContent).toBe('要求修改');
+  });
+
+  it('觀測分頁那一列也一樣：關掉審核的新形狀寫「要求修改」', async () => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('history-0', '規劃一下'),
+      script.started('p1', 'exit_plan_mode', { plan: '# 改登入頁\n\n先改文案。' }),
+      script.finished('p1', PLAN_REVIEW_DISMISSED_TEXT),
+      script.completed(),
+    ]);
+    localStorage.setItem(
+      LAYOUT_KEY_PREFIX + 't',
+      JSON.stringify({ open: true, tabs: [{ kind: 'trace' }], active: 'trace' }),
+    );
+    render(
+      <WithRightSidebar sources={{ conversation: createConversationStore(state) }}>
+        {null}
+      </WithRightSidebar>,
+    );
+    await act(async () => {});
+    expect(screen.getByTestId('trace-plan-outcome').textContent).toBe('要求修改');
   });
 
   it('還在等：沒有 chip', async () => {

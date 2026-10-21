@@ -209,6 +209,8 @@ async function rig(turns: ScriptedTurn[], channel: 'human' | 'none' = 'human'): 
       ...shipped,
       createMcpPlugin({
         serverName: 'srv',
+        // 量的不是核准：這台的工具都不問（#1622 起沒寫 approval 就整台都問）。
+        approval: { default: 'allow' },
         connection: {
           transport: 'stdio',
           command: process.execPath,

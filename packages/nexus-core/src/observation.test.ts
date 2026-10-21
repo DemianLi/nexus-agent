@@ -415,6 +415,52 @@ describe('backend 回報讀檔版本（#1530）', () => {
     expect(ran).toEqual([]);
   });
 
+  // #1776：基座對非文字副檔名的 `readRaw` 回位元組。這一層只有假 backend，harness 的真磁碟測試之外要有自己的紅燈
+  // （審查突變：拿掉 `contentText` 的 Uint8Array 分支，core 全套仍綠）。
+  describe('readRaw 回位元組（#1776）', () => {
+    /** `readRaw` 回固定位元組的假 backend。 */
+    function bytesBackend(bytes: Uint8Array): AnyBackendProtocol {
+      return {
+        readRaw: () => ({ data: { content: bytes, modified_at: MODIFIED } }),
+      } as unknown as AnyBackendProtocol;
+    }
+
+    async function editAfterReading(
+      bytes: Uint8Array,
+      reported: string,
+    ): Promise<string[] | string> {
+      const wrap = wrapperOf(createObservationPolicy(bytesBackend(bytes)));
+      const { calls: ran, handler } = probe();
+      await wrap(requestFor(OBSERVED_READ_TOOL, '/a.png'), reportingRead(reported));
+      const result = (await wrap(requestFor(OBSERVED_EDIT_TOOL, '/a.png'), handler)) as ToolMessage;
+      return ran.length > 0 ? ran : (toolErrorOf(result)?.code ?? 'no-error');
+    }
+
+    it('位元組是 UTF-8 文字：照文字算版本，讀完 edit 放行', async () => {
+      const text = '你好\r\nworld🙂\n';
+      expect(await editAfterReading(new TextEncoder().encode(text), text)).toEqual([
+        OBSERVED_EDIT_TOOL,
+      ]);
+    });
+
+    it('開頭的 BOM 留著：回報的版本含 BOM，解碼丟掉 BOM 就會對不上', async () => {
+      const text = '\uFEFFfirst\r\nsecond\r\n';
+      expect(await editAfterReading(new TextEncoder().encode(text), text)).toEqual([
+        OBSERVED_EDIT_TOOL,
+      ]);
+      // 對照：回報的版本沒有 BOM，就是另一份內容，被擋。
+      expect(await editAfterReading(new TextEncoder().encode(text), text.slice(1))).toBe(
+        'FS_STALE_VERSION',
+      );
+    });
+
+    it('解不開 UTF-8（真的二進位）：當空字串，版本只剩 modified_at；回報了內容的版本就對不上', async () => {
+      const binary = new Uint8Array([0xff, 0xfe, 0x00, 0x80]);
+      expect(await editAfterReading(binary, '')).toEqual([OBSERVED_EDIT_TOOL]);
+      expect(await editAfterReading(binary, '\uFFFD')).toBe('FS_STALE_VERSION');
+    });
+  });
+
   it('沒回報的 backend 照舊 readRaw 一次', async () => {
     const { backend, calls } = countingBackend('原本的');
     const wrap = wrapperOf(createObservationPolicy(backend));

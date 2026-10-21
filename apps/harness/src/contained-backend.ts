@@ -44,7 +44,7 @@
  * 並把頁的範圍與邊讀邊算的版本回報給 `@nexus/core`；**不在 `read_file` 裡**的呼叫維持基座的切片語意。判二進位看內容、
  * 不看副檔名（撤掉 #642 的副檔名偏離，見 `binary-read.ts`）。**偏離 2**：行尾 `\r` 與開頭的 BOM 保留，不照 dsh 去掉——
  * 基座的 `readRaw` 版本 token 與既有輸出都含它們；去掉的條件綁在 [#1563](https://github.com/DemianLi/nexus-agent/issues/1563)
- * N0335，到時一起翻。
+ * N0335，**到時只撤 `\r`、BOM 留著**（`text-window.ts` 檔頭寫的是這樣）。
  *
  * 第四個是 **`uploadFiles`**——`BackendProtocolV2` 上另一個會改檔案的方法，覆蓋面漏掉它
  * 就有一條繞得過 fence 的路（PR #62 的 review 實測，經 symlink 寫穿到根外）。
