@@ -342,21 +342,40 @@ describe('跟基座同一套字句與位元組', () => {
     expect((await stat(join(root, 'd'))).isDirectory()).toBe(true);
   });
 
-  it('非文字副檔名：內容當 base64 解碼，寫出的位元組與基座相同', async () => {
+  // #1813：照 dsh（`write.ts:75/:82/:124`，沒有依副檔名的分支）一律寫 UTF-8 文字。基座的 `write` 對非文字副檔名把內容當 base64
+  // 解碼，那是已撤銷的偏離（`contained-backend.ts` 的 `write` 註解）：這裡同時釘住「我們寫文字」與「基座仍在解碼」——
+  // 後一半翻了（基座升版改了語意），這條紅，提醒回頭看這個偏離還需不需要。
+  it('一律寫 UTF-8 文字，不看副檔名；基座對非文字副檔名仍把內容當 base64（偏離的證據）', async () => {
     const { bare, ours, bareRoot } = await twin();
     const bytes = Buffer.from([0, 1, 2, 250, 251, 255, 0x89, 0x50]);
     const b64 = bytes.toString('base64');
-    for (const ext of ['.png', '.jpg', '.pdf', '.mp4', '.pptx', '.ogg', '.md', '.svg', '.json']) {
+    const textual = ['.md', '.svg', '.json', '.txt'];
+    const nonText = ['.png', '.jpg', '.pdf', '.mp4', '.pptx', '.ogg', '.PNG'];
+    for (const ext of [...textual, ...nonText]) {
       await ours.write(`/f${ext}`, b64);
       await bare.write(`/f${ext}`, b64);
-      expect(await readFile(join(root, `f${ext}`))).toEqual(
-        await readFile(join(bareRoot, `f${ext}`)),
-      );
+      // 我們：寫進去的就是給的那段字。
+      expect(await readFile(join(root, `f${ext}`), 'utf8')).toBe(b64);
+      const theirs = await readFile(join(bareRoot, `f${ext}`));
+      // 基座：文字副檔名同我們，非文字副檔名是解碼後的位元組。
+      if (textual.includes(ext)) expect(theirs.toString('utf8')).toBe(b64);
+      else expect(theirs).toEqual(bytes);
     }
-    // 大小寫不同的副檔名，基座一樣判成非文字。
-    await ours.write('/UP.PNG', b64);
-    await bare.write('/UP.PNG', b64);
-    expect(await readFile(join(root, 'UP.PNG'))).toEqual(await readFile(join(bareRoot, 'UP.PNG')));
+  });
+
+  it('純文字（不是 base64）寫到 .png：落盤就是那段文字，回成功', async () => {
+    const result = await contained().write('/notes.png', '你好\n世界🙂\n');
+    expect(result).toEqual({ path: '/notes.png', filesUpdate: null });
+    expect(await readFile(join(root, 'notes.png'), 'utf8')).toBe('你好\n世界🙂\n');
+  });
+
+  it('覆蓋既有的 .png 純文字檔也是文字，保留 mode', async () => {
+    await writeFile(join(root, 'p1.png'), 'just text\n', { mode: 0o640 });
+    await chmod(join(root, 'p1.png'), 0o640);
+    const result = await contained().write('/p1.png', 'hello world\n');
+    expect(result.error).toBeUndefined();
+    expect(await readFile(join(root, 'p1.png'), 'utf8')).toBe('hello world\n');
+    expect((await stat(join(root, 'p1.png'))).mode & 0o777).toBe(0o640);
   });
 
   it('write 缺的父目錄會建（跟基座一樣）', async () => {
