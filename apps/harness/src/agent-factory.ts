@@ -101,6 +101,8 @@ import { BASE_TOOL_NAMES, RESERVED_BASE_TOOL_NAMES } from './base-tools.js';
 import { TextOnlyStateBackend } from './binary-read.js';
 import { createAttachmentScope } from './attachment-route.js';
 import { ATTACHMENTS_PREFIX } from './attachment-store.js';
+import { ContainedFilesystemBackend } from './contained-backend.js';
+import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
 import type { AttachmentStore } from './attachment-store.js';
 import { systemPromptDefaultsEntry } from './system-prompt-middleware.js';
 import { createToolResultStash } from './tool-result-stash.js';
@@ -196,6 +198,17 @@ export interface CreateNexusAgentOptions {
    * {@link ATTACHMENTS_PREFIX} 底下，模型用 `read_file` 讀使用者上傳的檔案。**省略就不掛**（CLI、eval、spike）。
    */
   readonly attachments?: AttachmentStore;
+  /**
+   * **唯讀共用參考區**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)）：給了就把 `rootDir`（`--workspace`）以固定 `read-only` 的圍堵 backend 掛在
+   * {@link SHARED_WORKSPACE_PREFIX} 底下，併進 `offWorkspacePrefixes()`（`present` 據它拒絕：這個前綴不在這條 thread 的可寫根上）。
+   * 只有這條 thread 有私有可寫根時才給；舊 thread 的可寫根本來就是共用區，不再另掛。**省略就不掛**（CLI、eval、spike）。
+   *
+   * 偏離登記（理由 2，#1775 兩條之第 2 條；延伸＝工作區指示檔從共用區讀、落盤關掉時可寫根在記憶體，登記在 `thread-roots.ts` 檔頭）：`--workspace` 退成唯讀共用區，且**不吃升級**（Q8 (a)）。部署方要放全員共用的參考資料，
+   * 又不能讓一條對話改到別條對話看得到的檔；一條 thread 的核准，別條 thread 的使用者沒有核准過。補的是**一條固定唯讀的路由**：mode 是字面值
+   * `'read-only'`（不接沙箱控制器的 source），也不傳 `grants`（認領不到任何 grant），所以 `danger-full-access` 與核准過的升級都改不了它。
+   * 同附件路由的形狀（`attachment-store.ts` 的 `readOnlyRoute`：固定 `read-only`、不吃控制器與 grant）。
+   */
+  readonly sharedWorkspace?: { readonly rootDir: string };
   /**
    * 工具結果外溢層（[#719](https://github.com/DemianLi/nexus-agent/issues/719)）：一則結果超過 `maxInlineTokens`，
    * 全文存進 {@link toolResultStash} 的主機目錄，模型只收到頭尾預覽加路徑。**省略就不掛**；**沒有
@@ -556,6 +569,7 @@ function withToolResultStash(
   backend: AnyBackendProtocol,
   stash?: StashRoute,
   attachments?: AnyBackendProtocol,
+  shared?: AnyBackendProtocol,
 ): AnyBackendProtocol {
   // **路由鍵要有結尾斜線**（[#354](https://github.com/DemianLi/nexus-agent/issues/354)），理由同
   // {@link withConversationHistory}。少了它，照確切路徑 `read_file` 仍讀得到，但在這個目錄底下
@@ -570,6 +584,8 @@ function withToolResultStash(
   return new CompositeBackend(backend, {
     [`${TOOL_RESULT_STASH_PREFIX}/`]: stash === undefined ? new TextOnlyStateBackend() : stash,
     ...(attachments === undefined ? {} : { [`${ATTACHMENTS_PREFIX}/`]: attachments }),
+    // 唯讀共用參考區（#1775）：同一個 composite 上的另一格，理由同附件那一格（巢狀會藏住路由前綴）。
+    ...(shared === undefined ? {} : { [`${SHARED_WORKSPACE_PREFIX}/`]: shared }),
   });
 }
 
@@ -778,6 +794,7 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       TOOL_RESULT_STASH_PREFIX,
       CONVERSATION_HISTORY_PREFIX,
       ...(options.attachments === undefined ? [] : [ATTACHMENTS_PREFIX]),
+      ...(options.sharedWorkspace === undefined ? [] : [SHARED_WORKSPACE_PREFIX]),
     ],
   });
   // **放在最前面**：`system-prompt` 那一列折進 thread 時（`registerFolded`）要讀這次組裝的 `model`／`cwd`（#720、#1477）。這個條目
@@ -836,6 +853,16 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
     const params = foldRegistry(registry, {
       // 工具事件（#1248）：宿主持有的派發面。沒有監聽者時三顆生產者與圍堵的派發都是直通。
       events: registry.dispatch,
+      // 插件的路由包在這一層外面：跟下面任何一條重疊就遮住它（唯讀共用區會變可寫），fold 當場拋。
+      // 保留清單只列**這一次組裝真的啟用的**路由：沒有工具結果暫存（落盤關掉時）或沒有附件時，那個前綴不在清單裡、外掛可以掛。
+      // 沒有暫存時下面 composite 那一格只是記憶體墊底（`TextOnlyStateBackend`，不碰磁碟），被外掛遮住沒有安全後果；
+      // 有暫存、有附件、有共用區時那一格碰得到磁碟，所以列進來。
+      reservedBackendPrefixes: [
+        CONVERSATION_HISTORY_PREFIX,
+        ...(stashRoute === undefined ? [] : [TOOL_RESULT_STASH_PREFIX]),
+        ...(options.attachments === undefined ? [] : [ATTACHMENTS_PREFIX]),
+        ...(options.sharedWorkspace === undefined ? [] : [SHARED_WORKSPACE_PREFIX]),
+      ],
       defaultBackend: withConversationHistory(
         // 墊底的虛擬 FS 讀到二進位檔照 dsh 拒絕（#642），路由那兩格同一種。
         withToolResultStash(
@@ -844,6 +871,13 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
           options.attachments === undefined
             ? undefined
             : await options.attachments.readOnlyRoute(attachmentScope),
+          options.sharedWorkspace === undefined
+            ? undefined
+            : // 固定 `read-only` 的字面值、不傳 `grants`：不接沙箱控制器，全開與升級都改不了它（#1775 Q8 (a)）。
+              new ContainedFilesystemBackend({
+                rootDir: options.sharedWorkspace.rootDir,
+                mode: 'read-only',
+              }),
         ),
       ),
       ...(options.spillPolicy !== undefined &&

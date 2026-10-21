@@ -81,7 +81,7 @@
  */
 
 import type { NexusPlugin, PluginEntry } from '@nexus/core';
-import { resolveToolName, WORKSPACE_CAPABILITY } from '@nexus/core';
+import { resolveToolName, SHARED_WORKSPACE_SERVICE, WORKSPACE_CAPABILITY } from '@nexus/core';
 import type { SandboxMode } from '@nexus/core';
 import { createMiddleware } from 'langchain';
 
@@ -110,15 +110,26 @@ const DELEGATION_TOOL_NAME = 'task';
  * （它真的會放行某些暫存區），不是平台的事實；我們的 `ContainedFilesystemBackend` 只認可寫根，這半句在我們這裡不成立，
  * 抄了會讓模型去寫 `/tmp` 然後被擋。基礎建設不同、事實不同，所以這是措辭的偏離，不是機制的偏離。
  *
+ * **有唯讀共用參考區時多講一句**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)）：新 thread 的 `/` 是自己的私有根，部署方放的參考資料
+ * 在共用區前綴底下，只能讀。這一句跟模式無關（共用區在 `danger-full-access` 下也唯讀），用工具的位址空間講，不給主機路徑。
+ *
  * @param mode - 這一刻的圍堵強度。
  * @param options - `contained`：這次組裝有沒有圍堵（預設有）。決定 `workspace-write` 帶不帶可寫根。
+ *   `sharedPrefix`：這條 thread 的唯讀共用區前綴（沒有共用區就省略）。
  * @returns 接到 system prompt 後面的那段話。
  */
 export function sandboxPolicySentence(
   mode: SandboxMode,
-  options: { readonly contained?: boolean } = {},
+  options: { readonly contained?: boolean; readonly sharedPrefix?: string } = {},
 ): string {
-  const contained = options.contained ?? true;
+  const shared =
+    options.sharedPrefix === undefined
+      ? ''
+      : `共用參考區在 \`${options.sharedPrefix}\`，唯讀：可以讀、搜尋，寫入一律被拒，不會因為檔案政策放寬而變成可寫。`;
+  return policyBody(mode, options.contained ?? true) + shared;
+}
+
+function policyBody(mode: SandboxMode, contained: boolean): string {
   switch (mode) {
     case 'read-only':
       return (
@@ -204,7 +215,7 @@ declare module '@nexus/core' {
  */
 function policyPromptMiddleware(
   resolveMode: () => SandboxMode,
-  options: { readonly contained: boolean },
+  options: { readonly contained: boolean; readonly sharedPrefix?: string },
 ) {
   return {
     name: SANDBOX_POLICY_MIDDLEWARE_NAME,
@@ -242,11 +253,18 @@ export const sandboxPolicyPlugin: NexusPlugin = {
   name: 'sandbox-policy',
   // **沒有 `requires`**：相依只在有圍堵時成立，由下面的 `use()` 當場擋（`assertRequires` 是無條件的，沒有圍堵的組裝會被它誤殺）。
   apply(registry) {
+    // 這條 thread 有唯讀共用區時，組裝點交一格共用區前綴（#1775）；沒有就是舊 thread 或 CLI，政策句不多講。
+    // **與有沒有圍堵無關**：落盤關掉的新 thread 沒有圍堵（可寫根是記憶體），共用區照樣在。
+    const sharedService = registry.services.get(SHARED_WORKSPACE_SERVICE);
+    const sharedPrefix = typeof sharedService === 'string' ? sharedService : undefined;
     if (registry.services.get(FS_CONTAINMENT_SERVICE) === undefined) {
-      // **沒有圍堵：只講那一句**。控制器、可寫根、能力、日誌事件、升級一樣都不掛——沒有東西可以切、可以升、可以記。
+      // **沒有圍堵：只講那一句**（有共用區就再多一句）。控制器、可寫根、能力、日誌事件、升級一樣都不掛——沒有東西可以切、可以升、可以記。
       registry.middleware.use(
         createMiddleware(
-          policyPromptMiddleware(() => UNCONTAINED_POLICY_MODE, { contained: false }),
+          policyPromptMiddleware(() => UNCONTAINED_POLICY_MODE, {
+            contained: false,
+            ...(sharedPrefix !== undefined && { sharedPrefix }),
+          }),
         ),
       );
       return;
@@ -276,7 +294,10 @@ export const sandboxPolicyPlugin: NexusPlugin = {
     registerSandboxEscalation(registry, controller);
     registry.middleware.use(
       createMiddleware({
-        ...policyPromptMiddleware(resolveMode, { contained: true }),
+        ...policyPromptMiddleware(resolveMode, {
+          contained: true,
+          ...(sharedPrefix !== undefined && { sharedPrefix }),
+        }),
         // **委派那一刻拍下這一格**（#326）：子代理整個在 `task` 那一次呼叫的 handler 裡跑，所以包住
         // handler，子代理的 fence、升級工具、日誌開啟都讀得到快照。**同步拍**，照 dsh 在子代理啟動的
         // 第一個 await 之前拍（`captureDelegatedPolicyOverrides`）。這顆 middleware 也掛在子代理上（#327），

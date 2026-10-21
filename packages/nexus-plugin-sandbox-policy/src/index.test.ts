@@ -17,6 +17,50 @@ import { createHostServicesPlugin, loadPlugins } from '@nexus/core';
 import { CONTAINED_FILESYSTEM, createSandboxPolicyPlugin, sandboxPolicySentence } from './index.js';
 import { SandboxModeController } from './sandbox-mode.js';
 
+describe('唯讀共用參考區那一句（#1775）', () => {
+  it.each(['read-only', 'workspace-write', 'danger-full-access'] as const)(
+    '%s：有共用區前綴就多講一句「在 <前綴>，唯讀」，用工具的位址空間講，句子裡沒有主機路徑',
+    (mode) => {
+      const sentence = sandboxPolicySentence(mode, { sharedPrefix: '/shared' });
+      expect(sentence).toContain('共用參考區在 `/shared`，唯讀');
+      expect(sentence).not.toMatch(/\/var|\/home|\/Users|\/workspace/u);
+      // 沒有共用區就一個字都不多。
+      expect(sandboxPolicySentence(mode)).not.toContain('共用參考區');
+    },
+  );
+
+  it('掛上之後 middleware 講的就是這一句：有圍堵與沒有圍堵（落盤關掉的新 thread）兩條路都講', async () => {
+    for (const withFence of [true, false]) {
+      const { registry } = await loadPlugins([
+        createHostServicesPlugin({
+          sharedWorkspace: '/shared',
+          ...(withFence && {
+            fsContainment: CONTAINED_FILESYSTEM,
+            sandboxPolicy: {
+              controller: new SandboxModeController('workspace-write'),
+              rootDir: '/w',
+            },
+          }),
+        }),
+        createSandboxPolicyPlugin(),
+      ]);
+      const [entry] = registry.middleware.list();
+      let seen = '';
+      const middleware = (entry!.value as unknown as { middleware: unknown }).middleware as {
+        wrapModelCall: (
+          request: unknown,
+          handler: (request: { systemPrompt?: string }) => unknown,
+        ) => unknown;
+      };
+      await middleware.wrapModelCall({}, (request) => {
+        seen = request.systemPrompt ?? '';
+        return undefined;
+      });
+      expect(seen).toContain('共用參考區在 `/shared`，唯讀');
+    }
+  });
+});
+
 describe('政策那句話本身', () => {
   it('三格各有各的話，沒有一格漏掉', () => {
     expect(sandboxPolicySentence('read-only')).toContain('read-only');

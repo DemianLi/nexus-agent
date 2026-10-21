@@ -111,7 +111,13 @@ function straysOf(reads: readonly ServiceRead[]): ServiceRead[] {
 async function readsOf(plugins: readonly PluginEntry[]): Promise<ServiceRead[]> {
   const reads: ServiceRead[] = [];
   for (const plugin of new Set(plugins.map((entry) => entry.plugin))) watch(plugin, reads);
-  const built = await createCliAgent({ live: false, workspace: root }, plugins, root);
+  // 帶 `sharedWorkspaceRoot`：量 serve 新 thread 的形狀（#1775），host-services 才會提供 `sharedWorkspace`——`sandbox-policy` 在 `apply` 當下讀它。
+  // 沒有共用區時（CLI、舊 thread）那一格缺席，讀到的是 `undefined`，次序一樣不承重（host-services 排最前面）。
+  const built = await createCliAgent(
+    { live: false, workspace: root, workspaceRoot: root, sharedWorkspaceRoot: root },
+    plugins,
+    root,
+  );
   await built.dispose();
   return reads;
 }

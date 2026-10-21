@@ -324,7 +324,8 @@ export interface ThreadAgent {
   readonly rootSeed?: readonly SessionEvent[];
   /**
    * 這一次組裝的工作區根，**沒給 `--workspace` 就是 `undefined`**
-   * （[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。
+   * （[#452](https://github.com/DemianLi/nexus-agent/issues/452)）。serve 上這是**這條 thread 的可寫根**（私有根，
+   * [#1775](https://github.com/DemianLi/nexus-agent/issues/1775)；舊 thread 才是 `--workspace`），落盤關掉時是 `undefined`。
    *
    * 兩支交付讀檔方法拿它當錨。**由組裝點交出來，不是這裡算的**——算它的是
    * `createCliAgent`，而呼叫端不准再寫一次 `resolve(cwd, ...)`（見 `cli.ts` 的
@@ -336,8 +337,9 @@ export interface ThreadAgent {
    * （[#519](https://github.com/DemianLi/nexus-agent/issues/519)）。
    *
    * 它跟 {@link workspaceRoot} 是兩個來源：這一格來自磁碟上的 header，那一格來自這一次的
-   * `--workspace`。**兩個都有值的時候它們一定相等**——`assertSameWorkspaceRoot` 在續接那一刻
-   * 就擋下了不等的情形——而 `locateAt` 對不等**再拒一次**，理由見那裡。
+   * 可寫根。**兩個都有值的時候它們一定相等**——續接守衛在續接那一刻就擋下了不等的情形
+   * （CLI 是 `assertSameWorkspaceRoot`；serve 是 `thread-roots.ts` 的 `createThreadPlacer`，續接時可寫根就是 header 記的那一個）——
+   * 而 `locateAt` 對不等**再拒一次**，理由見那裡。
    *
    * **是 header 有沒有那一格，不是 `version >= 13`。** 一份 12 的日誌被 13 接回來之後 header 的
    * `version` 會被覆寫成 13，而那一格仍然不在（續接不回填，見 `session-store.ts` 的版本 13
@@ -3207,8 +3209,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    *    `PRESENT_NO_WORKSPACE_MESSAGE`；#1469 起「有沒有工作區」讀 fs 把手的 `hasWorkspace()`，逐條 thread），所以一個沒給 `--workspace` 的行程續寫進這份日誌的那一段，
    *    裡面一顆 `deliverables/presented` 都不會有。**這是放寬的正確性前提**：哪天 `present` 改成
    *    「沒有工作區就錨在 cwd」，這條路就變成一次靜默錯檔。
-   * 2. **有給 `--workspace` 的那些段落，根一定等於 header 記的那個。** `assertSameWorkspaceRoot`
-   *    在每一次續接當場比過（`resume-guards.ts` 的四格表），不等就拋。
+   * 2. **有可寫根的那些段落，根一定等於 header 記的那個。** CLI 的 `assertSameWorkspaceRoot`
+   *    （`resume-guards.ts` 的四格表）與 serve 的 `createThreadPlacer`（#1775：可寫根就是 header 記的那個，不是則拋）
+   *    在每一次續接當場比過，不等就拋。
    *
    * 兩條合起來：header 記著根 ⟹ 這份日誌裡每一顆 `deliverables/presented` 都是在那個根底下宣告的。
    * 而 header 那一格只在會話出生時寫得進去——續接只覆寫 `version`、**不回填**那一格，格式 13 以前

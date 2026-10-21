@@ -103,8 +103,9 @@ async function connect(
   workspace: string | undefined,
   turns: readonly ScriptedTurn[],
 ): Promise<Omit<Session, 'root'>> {
+  // 量的是 submit-record 的核准流，不是私有根：把可寫根固定成 `--workspace`（接縫，#1775 之前的形狀）。
   const serve = await startScriptedServe(turns, {
-    ...(workspace !== undefined && { workspace }),
+    ...(workspace !== undefined && { workspace, workspaceRootOf: () => workspace }),
   });
   const client = await serveClient(serve.running);
   const events = await client.openEvents(threadId);
