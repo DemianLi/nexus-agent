@@ -17,6 +17,10 @@
  * 同樣只有按下去的分頁記得；同意就是工具跑完、不同意是閘門的拒絕理由，同一個讀法也認得。卡上只有文字、沒有碼，所以
  * 跟 harness 的字比對；抄來的字由 `plan-review.test.ts` 讀那邊的原始碼對。
  *
+ * 關掉審核（要自己打字）的那一次有兩種形狀，兩種都認：#1607 之前工具回錯誤（`failed`，舊字
+ * {@link LEGACY_PLAN_REVIEW_DISMISSED_TEXT}），#1607 之後照 dsh 回成功結果（`done`，新字 {@link PLAN_REVIEW_DISMISSED_TEXT}，
+ * #1575 Q1 (b)）。
+ *
  * @module
  */
 
@@ -130,7 +134,7 @@ export type PlanScanOutcome =
   | { readonly kind: 'stale' }
   | { readonly kind: 'aborted' };
 
-/** 審核的結果：同意、要求修改（含選了繼續規劃、舊路由的拒絕）、這一輪被停掉。 */
+/** 審核的結果：同意、要求修改（含關掉審核、選了繼續規劃、舊路由的拒絕）、這一輪被停掉。 */
 export type PlanOutcome = 'approved' | 'revise' | 'stopped';
 
 export const PLAN_OUTCOME_LABEL: Readonly<Record<PlanOutcome, string>> = {
@@ -139,8 +143,18 @@ export const PLAN_OUTCOME_LABEL: Readonly<Record<PlanOutcome, string>> = {
   stopped: '停止',
 };
 
-/** 人關掉審核那一題（「要求修改」）時工具回的話（`PLAN_REVIEW_DISMISSED_MESSAGE`）。 */
+/**
+ * 人關掉審核那一題（「要求修改」）時工具回的話，#1607 之後的形狀（`PLAN_REVIEW_DISMISSED_MESSAGE`）：工具卡是 `done`，照 dsh
+ * 回成功結果（#1575 Q1 (b)，dsh `plan-mode/src/index.ts:291-296` 那句的意思）。**同一句寫死在 #1607**，兩邊逐字相同；
+ * 要改字，兩張一起改。
+ */
 export const PLAN_REVIEW_DISMISSED_TEXT =
+  '使用者關掉了計劃審核，要用自己的話回覆；計劃模式仍開著。';
+
+/**
+ * 同一件事 #1607 之前的形狀：工具回錯誤（`failed`，字帶 core 的錯誤前綴）。舊會話與 #1607 合併前的 harness 都還會送。
+ */
+export const LEGACY_PLAN_REVIEW_DISMISSED_TEXT =
   '使用者關掉了計劃審核，要自己說話。留在計劃模式，停在這裡，等使用者的訊息。';
 
 /** 選了繼續規劃（有沒有寫意見都一樣）時工具回的話的開頭（`PLAN_KEEP_PLANNING_MESSAGE`、`planFeedbackMessage`）。 */
@@ -157,12 +171,18 @@ export const LEGACY_PLAN_REJECTED_TEXT = `有人看過並拒絕了 "${EXIT_PLAN_
  */
 export function planOutcomeOf(entry: ToolEntry): PlanOutcome | undefined {
   if (entry.name !== EXIT_PLAN_MODE) return undefined;
-  // 兩條路都只有同意才讓工具跑完：新路由回 `PLAN_APPROVED_MESSAGE`，舊路由是閘門放行之後工具本體跑完。
-  if (entry.status === 'done') return 'approved';
+  // 工具跑完的有兩種：關掉審核（#1607 之後回成功結果，比結尾），與同意（新路由回 `PLAN_APPROVED_MESSAGE`，舊路由是閘門
+  // 放行之後工具本體跑完）。
+  if (entry.status === 'done') {
+    return (entry.text ?? '').endsWith(PLAN_REVIEW_DISMISSED_TEXT) ? 'revise' : 'approved';
+  }
   if (entry.status !== 'failed') return undefined;
   const said = entry.error ?? entry.text ?? '';
   if (endedWithoutAnswer(entry)) return 'stopped';
-  if (said.endsWith(PLAN_REVIEW_DISMISSED_TEXT) || said.endsWith(LEGACY_PLAN_REJECTED_TEXT)) {
+  if (
+    said.endsWith(LEGACY_PLAN_REVIEW_DISMISSED_TEXT) ||
+    said.endsWith(LEGACY_PLAN_REJECTED_TEXT)
+  ) {
     return 'revise';
   }
   if (said.includes(PLAN_KEEP_PLANNING_LEAD)) return 'revise';
