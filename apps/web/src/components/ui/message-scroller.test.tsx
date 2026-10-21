@@ -12,7 +12,7 @@ import {
 } from '@/components/ui/message-scroller';
 
 /**
- * message-scroller 換成 SG 版（#1638 PR B）之後，nexus 這邊的兩條本地修改（README 第 41、44 條）與按鈕的 `data-slot`。
+ * message-scroller 換成 SG 版（#1638 PR B）之後，nexus 這邊的本地修改（README 第 44 條；第 41 條 #1687 撤掉）與按鈕的 `data-slot`。
  * CSS 有沒有真的命中（計算後的 transition、transform、content-visibility）jsdom 量不到，由 `guard/` 量（`?overlay=messages`）。
  */
 
@@ -61,7 +61,14 @@ describe('message-scroller（SG 版）', () => {
     expect(button?.getAttribute('data-slot')).toBe('message-scroller-button');
   });
 
-  it('第 41 條：按鈕的動效照 §7：只淡入＋縮放 .97、不位移，時長與緩動走 token；呼叫端的 class 照樣接得上', () => {
+  it('第 41 條已撤（#1687）：按鈕的 class 就是 vendor 原樣，呼叫端的 class 照樣接得上', async () => {
+    const [vendor, nexus] = await Promise.all([
+      import('@/vendor/solid-glass/components/ui/message-scroller'),
+      import('@/components/ui/message-scroller'),
+    ]);
+    // 包裝層拿掉：轉出的就是 vendor 那一顆，`SCROLL_BUTTON_MOTION` 不再存在。
+    expect(nexus.MessageScrollerButton).toBe(vendor.MessageScrollerButton);
+    expect(Object.keys(nexus)).not.toContain('SCROLL_BUTTON_MOTION');
     render(
       <Scroller>
         <MessageScrollerButton className="rounded-full" />
@@ -69,27 +76,17 @@ describe('message-scroller（SG 版）', () => {
     );
     const classes = (buttons()[0]?.className ?? '').split(/\s+/);
     for (const kept of [
-      'transition-[scale,opacity]',
-      'duration-(--duration-fast)',
-      'data-[active=false]:scale-97',
-      'data-[active=false]:duration-(--duration-quick)',
-      'data-[active=false]:ease-(--ease-smooth-out)',
-      'data-[active=true]:ease-(--ease-smooth-out)',
-      'data-[direction=end]:data-[active=false]:translate-y-0',
-      'data-[direction=start]:data-[active=false]:translate-y-0',
-      'rounded-full',
-    ])
-      expect(classes).toContain(kept);
-    // vendor 那組被蓋掉的值一條都不剩（cn 沒合掉就會兩條並存，誰贏看 CSS 的順序）。
-    for (const gone of [
       'transition-[translate,scale,opacity]',
       'duration-200',
       'data-[active=false]:scale-95',
       'data-[active=false]:duration-400',
       'data-[direction=end]:data-[active=false]:translate-y-full',
       'data-[direction=start]:data-[active=false]:-translate-y-full',
+      'rounded-full',
     ])
+      expect(classes).toContain(kept);
+    for (const gone of ['transition-[scale,opacity]', 'data-[active=false]:scale-97'])
       expect(classes).not.toContain(gone);
-    expect(classes.join(' ')).not.toMatch(/cubic-bezier/);
+    expect(classes.join(' ')).not.toMatch(/--duration-|--ease-/);
   });
 });

@@ -202,7 +202,7 @@ const ALLOWED: readonly Allowed[] = [
   // 自己的元件。
   {
     file: 'components/chevron.tsx',
-    what: 'group-data-panel-open:rotate-180',
+    what: 'group-data-panel-open:rotate-90',
     why: '`Chevron` 本身：全站唯一該寫展開箭頭旋轉的地方',
   },
   {
