@@ -57,6 +57,8 @@ FULL_RES = [
         r'^docs/operations\.md$',
         r'^apps/harness/(cordis(\.serve)?\.yml|package\.json|vitest\.config\..*|tsconfig.*\.json|eslint\.config\..*)$',
         r'^apps/harness/src/(test-home\.setup\.ts|.*\.patch\.yml|.*\.fixture\.ts)$',
+        # 已出貨格式的會話日誌夾具（#1529）：`session-format-fixtures.test.ts` 讀它們，副檔名不是 .ts，只改夾具時 TS_RE 看不到。
+        r'^apps/harness/src/fixtures/session-format/',
         r'^apps/web/(package\.json|vite\.config\..*|vitest\.config\..*|tsconfig.*\.json|eslint\.config\..*)$',
     )
 ]

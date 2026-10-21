@@ -35,12 +35,18 @@
  * | 出口 | 這裡的哪一句 | 人被問到了嗎 |
  * | --- | --- | --- |
  * | 沒指名檔案、理由空白 | {@link MISSING_TARGET_REFUSAL}、{@link BLANK_JUSTIFICATION_REFUSAL} | 沒有 |
+ * | 目標在唯讀共用區底下 | {@link sharedReadOnlyRefusal} | 沒有 |
  * | 不加寬 | {@link nonWideningRefusal} | 沒有 |
  * | 子代理 | {@link unaskedRefusal}（`delegated`） | 沒有 |
  * | 這個 session 關掉了人工核准 | {@link unaskedRefusal}（`policy-never`） | 沒有 |
  * | 沒有 checkpointer | {@link unaskedRefusal}（`no-channel`） | 沒有 |
  * | 組裝點沒提供核准管道 | {@link unaskedRefusal}（`no-service`） | 沒有 |
  * | 被拒 | 人給的理由，或 {@link rejectedRefusal} | 有 |
+ *
+ * **唯讀共用區那一條是偏離 2 的延伸**（[#1800](https://github.com/DemianLi/nexus-agent/issues/1800)，登記在 `apps/harness/src/thread-roots.ts` 檔頭）：
+ * dsh 沒有唯讀共用區，所以沒有對照。serve 把 `--workspace` 掛成 `/shared`，固定唯讀、不接受任何 grant（#1675 Q8 (a)）；對那底下的路徑升級，
+ * 核准卡問的是一個不可能成功的問題（核准了、重試仍被擋）。所以判在**加寬之前**——這個目標不論現在是哪一格、要升到哪一格都沒有答案。
+ * 判準是前綴，不是被擋下的那一次：共用區的 backend 不接控制器、不記 denial，這裡讀不到「剛才被擋下的是哪個 backend」。
  *
  * 沒提供核准管道那一條是 dsh 的「no approval service is composed」：**讀不到就當作沒有人可問**，不像
  * `ask_user_question` 退到 `{ kind: 'human' }`。dsh 的 `cancelled` 在我們這側**沒有對應物**（`approval.ts`
@@ -83,6 +89,7 @@ import {
   CHANNEL_SERVICE,
   toolCallIdOf,
   toolRefusal,
+  virtualPathOf,
 } from '@nexus/core';
 import { z } from 'zod';
 
@@ -146,6 +153,32 @@ export function nonWideningRefusal(requested: unknown, current: SandboxMode): st
     `升級到 ${JSON.stringify(requested)} 並不比這次呼叫現在的 "${current}" 更寬，` +
     '所以沒有去問人。'
   );
+}
+
+/**
+ * 目標落在唯讀共用區底下的那句話。**不論現在是哪一格、要升到哪一格**都是這一句——共用區固定唯讀，
+ * 連 `danger-full-access` 都寫不進去（#1675 Q8 (a)），所以升級沒有任何一格能讓它成功。
+ * @param sharedPrefix - 這條 thread 的共用區前綴（工具的位址空間，例如 `/shared`）。
+ * @returns 給模型的拒絕。
+ */
+export function sharedReadOnlyRefusal(sharedPrefix: string): string {
+  return (
+    `\`${sharedPrefix}\` 底下是唯讀的共用參考區，任何權限都不能升級，所以沒有去問人。` +
+    '要寫東西，寫到自己的工作區（不在這個前綴底下的路徑）。'
+  );
+}
+
+/**
+ * `target` 是不是落在 `prefix` 底下（含前綴本身）。先照檔案工具同一套規則正規化（相對路徑以根為起點、`..` 夾回根），
+ * 所以 `shared/x`、`/shared/./x`、`/shared/../shared/x` 都算。
+ *
+ * @param target - 模型給的路徑。
+ * @param prefix - 共用區前綴，沒有尾斜線。
+ * @returns 在前綴底下時為真。
+ */
+export function isUnderSharedPrefix(target: string, prefix: string): boolean {
+  const virtual = virtualPathOf(target);
+  return virtual === prefix || virtual.startsWith(`${prefix}/`);
 }
 
 /** 沒指名檔案的那句話。 */
@@ -255,11 +288,13 @@ interface EscalationVerdict {
  * @param controller - 這次組裝那一格。
  * @param channel - 這次組裝有沒有人可以按核准；組裝點沒提供時是 `undefined`，當作沒有人可問。
  * @param approvalPolicy - 核准政策的來源（#437），**每次問人之前讀一次**；`never` 就不問。沒有提供時當作 `ask`。
+ * @param sharedPrefix - 這條 thread 的唯讀共用區前綴（#1800）；目標落在它底下就不問人。沒有共用區（舊 thread、CLI）時省略。
  */
 function createEscalationTool(
   controller: SandboxModeController,
   channel: ApprovalChannel | undefined,
   approvalPolicy: ApprovalPolicySource | undefined,
+  sharedPrefix?: string,
 ) {
   return tool(
     async (args: z.infer<typeof escalationSchema>, runtime: ToolRuntimeLike) => {
@@ -275,6 +310,10 @@ function createEscalationTool(
       // **順序照 dsh**：先驗欄位（`validateEscalationArgs`），再判加寬，最後才看有沒有人可問。
       if (target.trim() === '') return refuse(MISSING_TARGET_REFUSAL);
       if (justification.trim() === '') return refuse(BLANK_JUSTIFICATION_REFUSAL);
+      // 唯讀共用區：在判加寬之前（偏離 2 的延伸，#1800，見模組註解）——升到哪一格都不會讓它成功，也就不該問人。
+      if (sharedPrefix !== undefined && isUnderSharedPrefix(target, sharedPrefix)) {
+        return refuse(sharedReadOnlyRefusal(sharedPrefix));
+      }
       // resume 時本體整個重跑，所以這一格在**人按下去之後**又判一次：人看卡片的那段時間裡，
       // `/sandbox` 可能已經換過格子。
       const current = controller.current;
@@ -355,16 +394,19 @@ function createEscalationTool(
  *
  * @param registry - plugin 拿到的註冊表。核准管道從 {@link CHANNEL_SERVICE} 讀（軟相依，讀不到就 fail-closed）。
  * @param controller - 這次組裝那一格，grant 發在它身上、fence 從它身上認領。
+ * @param sharedPrefix - 唯讀共用區前綴（#1800），省略＝這條 thread 沒有共用區。
  */
 export function registerSandboxEscalation(
   registry: Parameters<NexusPlugin['apply']>[0],
   controller: SandboxModeController,
+  sharedPrefix?: string,
 ): void {
   registry.tools.register(
     createEscalationTool(
       controller,
       registry.services.get(CHANNEL_SERVICE),
       registry.services.get(APPROVAL_POLICY_SERVICE)?.source,
+      sharedPrefix,
     ),
   );
   controller.enableEscalation(SANDBOX_ESCALATION_HINT);

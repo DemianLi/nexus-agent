@@ -90,7 +90,10 @@ import type { SessionEvent } from './session-log.js';
  *   [#98](https://github.com/DemianLi/nexus-agent/pull/98) 就在，格式版本到
  *   [#173](https://github.com/DemianLi/nexus-agent/pull/173) 才開始蓋，v2 只多了 `goal`
  *   這個變體；v2 之於 v3、v3 之於 v4 同理，各只多了一種事件。所以不需要遷移包——dsh 養兩個是因為它的
- *   舊版真的長得不一樣。
+ *   舊版真的長得不一樣。**這段推理留作歷史**：「哪一版直接讀得了」現在由版本邊目錄回答
+ *   （{@link ./session-format.ts | SESSION_FORMAT_EDGES}，[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)）——
+ *   每一次升版逐條登記成 `additive`（舊檔直接讀，靠讀方分支的記 `readerBranch`）或 `breaking`（沒有遷移、拒讀），
+ *   模組載入時驗，`parseHeader` 據它判。
  * - **比這個號新的拒絕**，而且跟壞檔分開報（{@link SessionFormatUnsupportedError} 與
  *   {@link SessionCorruptionError}，照 dsh 的 `SessionFormatUnsupportedError`／
  *   `SessionPersistenceCorruptionError`）：新版寫的檔不是壞的，是這一版讀不懂。
@@ -624,8 +627,10 @@ import type { SessionEvent } from './session-log.js';
  *   **讀舊檔**：這一格以前沒有，沒有就是沒記（沒有回應標頭的失敗：還沒收到回應就失敗（連線被拒、DNS 失敗）、供應商沒送這幾個標頭），
  *   不是空字串，不補寫歷史（`apps/harness/src/provider-request-id.test.ts` 釘住「沒有標頭就沒有這一格」）。
  *
- *   **登記方式**：`docs/persistence-changes/README.md` 的 Compatibility rules 表（[#1529](https://github.com/DemianLi/nexus-agent/issues/1529)）
- *   還沒合進 `develop`，這一筆先記在這裡；那張合進來之後，這一筆照表第一列（加一個選填的事件本文屬性）補登 `same-version`。
+ *   **登記方式**：先記在這裡。dsh 把這種變更逐筆登記在 `docs/persistence-changes/README.md` 的 Compatibility rules 表上
+ *   （`same-version`）；那張表要不要照 dsh 建，歸 [#1529](https://github.com/DemianLi/nexus-agent/issues/1529) 第五刀（升版節奏要不要
+ *   改照 dsh 的同版相容審查），第一刀不建。待補登的清單（這一筆與 48 之內的 `messagesCompactable`）在版本邊目錄的檔頭
+ *   （{@link ./session-format.ts}〈待補登〉）。
  */
 export const SESSION_LOG_FORMAT_VERSION = 49;
 

@@ -1,0 +1,12 @@
+# 混版夾具的後半（今天的工作樹續寫）：把摘要門檻壓到 3 則、保留量壓到 1 個 token，續接後第一次呼叫之前就摘要一次（新順序）。
+# config 是整份替換，照今天出貨那一列寫，只改 trigger 的則數與保留量。
+- id: summarization
+  config:
+    trigger:
+      - { type: tokens, value: 100000 }
+      - { type: messages, value: 3 }
+    retainTokens: 1
+    truncateArgs:
+      trigger: { type: messages, value: 20 }
+      keep: { type: messages, value: 20 }
+    historyPathPrefix: /conversation_history

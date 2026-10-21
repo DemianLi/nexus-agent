@@ -792,6 +792,19 @@ export {
   SessionEventUnsupportedError,
   SessionFormatUnsupportedError,
 } from './session-store.js';
+export type {
+  SessionFormatCatalog,
+  SessionFormatEdge,
+  SessionFormatEdgeKind,
+  StoredFormatVersionClass,
+} from './session-format.js';
+export {
+  RELEASED_SESSION_FORMAT_VERSIONS,
+  SESSION_FORMAT_CATALOG,
+  SESSION_FORMAT_EDGES,
+  classifyStoredFormatVersion,
+  createSessionFormatCatalog,
+} from './session-format.js';
 
 export { errorChain } from './error-chain.js';
 

@@ -130,8 +130,10 @@ import { dirname, join } from 'node:path';
 import { setTimeout as wait } from 'node:timers/promises';
 import { createHash, randomBytes, randomUUID } from 'node:crypto';
 import {
+  classifyStoredFormatVersion,
   isUnreadableSessionEvent,
   materializeAppendBatch,
+  SESSION_FORMAT_CATALOG,
   SESSION_LOG_FORMAT_VERSION,
   SessionCorruptionError,
   SessionEventUnsupportedError,
@@ -142,6 +144,7 @@ import type {
   ReadonlyStoredSession,
   ResumedStoredSession,
   SessionEvent,
+  SessionFormatCatalog,
   SessionStore,
   StoredSession,
   StoredSessionHeader,
@@ -283,6 +286,8 @@ interface LeaseContext {
   readonly openLog: OpenLogFile;
   /** 後端的 `options.warn`（沒給就是 `console.warn` 加前綴）：截掉尾巴時講一行。 */
   readonly warn: (message: string) => void;
+  /** 讀 header 時問的版本邊目錄（見 {@link ParseHeaderOptions.catalog}）。 */
+  readonly catalog: SessionFormatCatalog;
 }
 
 /** 拿租約；拿不到的平台講一聲、回 `undefined`。搶不到與其餘的錯照常拋。 */
@@ -709,13 +714,23 @@ export interface ParseHeaderOptions {
   readonly id?: string;
   /** 版本比這一版新照讀、不拋。**只給產品路徑外的離線掃描**（`eval/session-scan.ts` 的「照格式版本表態」）。 */
   readonly acceptNewer?: boolean;
+  /**
+   * 問「這個版本讀不讀得了」的版本邊目錄（`@nexus/core` 的 `session-format.ts`，#1529）。省略即出貨那一份。
+   * **只給測試換**（同 {@link JsonlSessionStoreOptions.lock}）：把一條邊標成 `breaking`，驗舊檔經出貨的 store 被拒。
+   */
+  readonly catalog?: SessionFormatCatalog;
 }
 
 /**
  * 讀 header，**版本太新與讀不懂分開報**（見 `session-store.ts` 的版本 3 那一段）。續接、列、唯讀打開與離線掃描
  * 共用這一份，差別只在選項。
  *
- * @throws {@link SessionFormatUnsupportedError} 版本比這一版新（開了 `acceptNewer` 就不拋）。
+ * **版本讀不讀得了問目錄**（`classifyStoredFormatVersion`，#1529）：比目錄新的，與比某條 `breaking` 邊舊的（這一版
+ * 沒有那一段的遷移），都以 {@link SessionFormatUnsupportedError} 拒讀，訊息分得出是哪一種。續接、唯讀打開與列表都經過
+ * 這裡，所以就地續寫只走得到全是 `additive` 的區間。
+ *
+ * @throws {@link SessionFormatUnsupportedError} 版本比這一版新（開了 `acceptNewer` 就不拋），或比一條 `breaking` 邊舊
+ *   （`acceptNewer` 不放行這一種）。
  * @throws {@link SessionCorruptionError} 不是 JSON、欄位形狀不對、或 id 對不上。
  */
 export function parseHeader(text: string, options: ParseHeaderOptions = {}): StoredSessionHeader {
@@ -731,13 +746,19 @@ export function parseHeader(text: string, options: ParseHeaderOptions = {}): Sto
   if (!isRecord(value)) throw new SessionCorruptionError(id, 'header 不是一個物件');
   if (expected === undefined && typeof value['id'] === 'string') id = value['id'];
   const { version } = value;
-  if (
-    options.acceptNewer !== true &&
-    typeof version === 'number' &&
-    Number.isSafeInteger(version) &&
-    version > SESSION_LOG_FORMAT_VERSION
-  ) {
-    throw new SessionFormatUnsupportedError(id, version);
+  if (typeof version === 'number' && Number.isSafeInteger(version) && version >= 1) {
+    const verdict = classifyStoredFormatVersion(version, options.catalog ?? SESSION_FORMAT_CATALOG);
+    if (verdict === 'newer' && options.acceptNewer !== true) {
+      throw new SessionFormatUnsupportedError(id, version);
+    }
+    if (verdict === 'older-without-migration') {
+      throw new SessionFormatUnsupportedError(
+        id,
+        version,
+        `會話 "${id}" 的格式版本是 ${String(version)}，這一版沒有 v${String(version)} 的遷移，讀不了。` +
+          `檔案沒有壞，是比這一版能接的舊。`,
+      );
+    }
   }
   if (typeof version !== 'number' || !Number.isSafeInteger(version) || version < 1) {
     throw new SessionCorruptionError(id, `header 的 version 是 ${JSON.stringify(version)}`);
@@ -1034,6 +1055,7 @@ async function fileRevision(path: string): Promise<string> {
  */
 async function listStoredSessions(
   directory: string,
+  catalog: SessionFormatCatalog,
   options: StoredSessionListOptions = {},
 ): Promise<StoredSessionListing> {
   const { signal } = options;
@@ -1064,7 +1086,7 @@ async function listStoredSessions(
     }
     let header: StoredSessionHeader;
     try {
-      header = parseHeader(text);
+      header = parseHeader(text, { catalog });
     } catch (error: unknown) {
       if (
         error instanceof SessionCorruptionError ||
@@ -1090,6 +1112,7 @@ async function listStoredSessions(
 async function openStoredSessionForRead(
   directory: string,
   id: string,
+  catalog: SessionFormatCatalog,
 ): Promise<ReadonlyStoredSession> {
   const base = safeBaseName(id);
   const headerPath = join(directory, `${base}${HEADER_SUFFIX}`);
@@ -1105,7 +1128,7 @@ async function openStoredSessionForRead(
     }
     throw error;
   }
-  const header = parseHeader(text, { id });
+  const header = parseHeader(text, { id, catalog });
   const logPath = join(directory, `${base}${LOG_SUFFIX}`);
   return {
     header,
@@ -1160,7 +1183,7 @@ async function resumeStoredSession(
       if (isNotFound(error)) throw missing();
       throw error;
     }
-    const header = parseHeader(headerText, { id });
+    const header = parseHeader(headerText, { id, catalog: context.catalog });
     const body = await readBody(join(directory, `${base}${LOG_SUFFIX}`));
     const { events, validBytes } = parseJsonlSessionBody(id, body, {
       version: header.version,
@@ -1170,6 +1193,8 @@ async function resumeStoredSession(
     return {
       header,
       events,
+      // 就地續寫、header 換成這一版：**只在加性區間成立**（#1529）。走到這裡的版本，從它到這一版的每一條邊都是
+      // `additive`——有 `breaking` 的話上面的 `parseHeader` 已經拒讀，續寫進去的新詞彙舊段落的讀法不受影響。
       stored: new JsonlStoredSession(
         directory,
         { ...header, version: SESSION_LOG_FORMAT_VERSION },
@@ -1241,6 +1266,8 @@ export interface JsonlSessionStoreOptions {
   readonly lock?: TryLock;
   /** 開日誌檔的那一下。**只給測試換**：用來包住把手，製造寫到一半拋錯、短寫、sync 拋錯與截回失敗。 */
   readonly openLog?: OpenLogFile;
+  /** 讀 header 時問的版本邊目錄。**只給測試換**，見 {@link ParseHeaderOptions.catalog}。 */
+  readonly catalog?: SessionFormatCatalog;
 }
 
 /** 落在 `directory` 上的後端。兩個工廠差在目錄是新開的還是既有的。 */
@@ -1251,6 +1278,7 @@ function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): Jso
     lock: options.lock,
     warn,
     openLog: options.openLog ?? ((path, flags, mode) => open(path, flags, mode)),
+    catalog: options.catalog ?? SESSION_FORMAT_CATALOG,
     unavailable: (outcome) => {
       if (warned) return;
       warned = true;
@@ -1269,10 +1297,10 @@ function jsonlStoreAt(directory: string, options: JsonlSessionStoreOptions): Jso
       return resumeStoredSession(directory, id, context);
     },
     list(options?: StoredSessionListOptions): Promise<StoredSessionListing> {
-      return listStoredSessions(directory, options);
+      return listStoredSessions(directory, context.catalog, options);
     },
     open(id: string): Promise<ReadonlyStoredSession> {
-      return openStoredSessionForRead(directory, id);
+      return openStoredSessionForRead(directory, id, context.catalog);
     },
   };
 }
