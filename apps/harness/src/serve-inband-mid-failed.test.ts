@@ -26,17 +26,21 @@ const temporary: string[] = [];
 let server: Server | undefined;
 let baseUrl = '';
 let running: RunningServe | undefined;
+/** 串流中段送出去的信封；每條測試自己設。 */
+let envelope: Record<string, unknown> = { message: 'mid in-band failure', type: 'x', code: 503 };
+let hits = 0;
 
 beforeEach(async () => {
+  envelope = { message: 'mid in-band failure', type: 'x', code: 503 };
+  hits = 0;
   server = createServer((request, response) => {
+    hits += 1;
     request.resume();
     response.writeHead(200, { 'content-type': 'text/event-stream', 'x-request-id': 'gw-mid' });
     response.write(
       `data: ${JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 0, model: 'm', choices: [{ index: 0, delta: { content: 'hi' }, finish_reason: null }] })}\n\n`,
     );
-    response.write(
-      `data: ${JSON.stringify({ error: { message: 'mid in-band failure', type: 'x', code: 503 } })}\n\n`,
-    );
+    response.write(`data: ${JSON.stringify({ error: envelope })}\n\n`);
     response.end('data: [DONE]\n\n');
   });
   await new Promise<void>((resolve) => server!.listen(0, '127.0.0.1', resolve));
@@ -114,5 +118,19 @@ describe('串流中段的 in-band 錯誤（#1763）', () => {
     const error = (failed[0]!.data as unknown as { error: Record<string, unknown> }).error;
     expect(last).toMatchObject({ code: 'SERVER', status: 503 });
     expect(error).toMatchObject({ code: last.code, status: last.status });
+  }, 60000);
+
+  // #1805：只有 `type`、沒有數字碼、訊息也不含額度／超窗字樣的信封，照 dsh 的 `providerError` 記 `AUTH`（不是 `SERVER`）。
+  // 突變：拿掉 `classifyInbandError` 讀 `type` 的那一階，這條就紅（`SERVER`、被重打 3 次）。
+  it('只有 type: authentication_error 的信封 → turn/failed 是 AUTH，不重打（#1805）', async () => {
+    envelope = { message: '金鑰不對', type: 'authentication_error' };
+    const session = await failingTurn();
+    const retries = session.filter((event) => event.type === 'llm/retry');
+    const failed = session.filter((event) => event.type === 'turn/failed');
+    expect(failed).toHaveLength(1);
+    const error = (failed[0]!.data as unknown as { error: Record<string, unknown> }).error;
+    expect(error).toMatchObject({ code: 'AUTH' });
+    expect(hits).toBe(1);
+    expect(retries).toHaveLength(0);
   }, 60000);
 });
