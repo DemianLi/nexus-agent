@@ -13,8 +13,8 @@
  * [#455](https://github.com/DemianLi/nexus-agent/issues/455)）。
  *
  * **一個 thread 一個 agent，關掉 server 時一起清。** `createNexusAgent` 回的
- * `dispose` 在這裡才真的有意義——MCP plugin 底下是 stdio 子行程，而這是一個長命的
- * 行程，漏了不會有任何錯誤訊息。啟動時另外先組一份、驗完就收（#749），清單上哪一列壞了
+ * `dispose` 在這裡才真的有意義——這是一個長命的行程，漏了不會有任何錯誤訊息。**MCP 的連線不在這裡面**：
+ * 整台 serve 一份連線池，一份設定一個 stdio 子行程，所有 thread 共用，關掉 server 時才收（#1677）。啟動時另外先組一份、驗完就收（#749），清單上哪一列壞了
  * 在綁 port 之前就講，不等第一條 thread；那一次掉了的列，之後每條 thread 都直接算沒掛（#751）。
  *
  * 假模型下的限制與 CLI 的 REPL 一樣：`CLI_SCRIPT` 只有四輪，問到後面
@@ -1259,7 +1259,7 @@ async function startServer(
       for (const drop of assemblyDropsOf(threadList.loaded, built.dropped)) {
         warn(`[組裝] thread "${threadId}" 這一條沒掛上：${describeDrop(drop)}`);
       }
-      // 外掛交出的警告同理逐條記（例如 MCP 連不上）：它每條對話都重連一次，這一條連不上不代表上一條也沒連上。
+      // 外掛交出的警告同理逐條記（例如 MCP 連不上）：連線池在背景重試，還沒連上的期間每條組裝都記一行，連上之後組的就不記。
       for (const line of describeWarnings(threadList.loaded, built.warnings)) {
         warn(`[組裝] thread "${threadId}" 警告：${line}`);
       }

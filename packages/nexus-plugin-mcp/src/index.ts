@@ -137,7 +137,8 @@ export const mcpConfigSchema = z.strictObject({
   /**
    * 連線掉了之後的自動重連（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)），欄位與預設照 dsh 的
    * `reconnect`：`enabled`（`true`）、`initialDelayMs`（500，每次連續失敗加倍）、`maxDelayMs`（30000，退避上限，也是穩定多久
-   * 之後失敗次數歸零）、`maxAttempts`（10）。**只管掛上之後才掉的線**；掛上那一刻就連不上的列不重連（見 `supervisor.ts` 檔頭偏離 5）。
+   * 之後失敗次數歸零）、`maxAttempts`（10）。掛上之後才掉的線照這份重連；掛上那一刻就連不上的列，serve（有連線池）照同一份在背景
+   * 重試，CLI 不重連（見 `supervisor.ts` 檔頭偏離 5）。
    */
   reconnect: reconnectSchema.default(() => reconnectSchema.parse({})),
   /**
@@ -145,8 +146,10 @@ export const mcpConfigSchema = z.strictObject({
    * dsh 的 client 宣告的 capabilities 是 `{}`（`packages/mcp/mcp-client/src/connection.ts:261`，`5badb15009`），沒有這個功能。
    *
    * `true`（預設）**不等於一定開**：只有這次組裝有人可以回答（`channel.kind === 'human'`，同 `ask_user_question`）才開，其餘照舊關著，
-   * 那次呼叫落成普通的工具錯誤。**組裝期決定、不留到呼叫時**——elicitation 是連線握手時就宣告給 server 的 client 能力，
-   * 呼叫時才決定做不到。寫 `false` 是明著關掉。
+   * 那次呼叫落成普通的工具錯誤。**連線建起來時決定、不留到呼叫時**——新協定把這個 client 能力帶在每次呼叫的 `_meta` 裡，但值是
+   * adapter 在 `getTools` 建工具時就定死的（`@langchain/mcp-adapters` 2.0.0 `dist/tools.js` 的 `createToolInvocation`），呼叫時改不了。
+   * serve 的連線池因此把實際的旗標放進鍵（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)），旗標不同的組裝不共用連線。
+   * 寫 `false` 是明著關掉。
    */
   elicitation: z.boolean().default(true),
   /**
@@ -182,7 +185,9 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
  * 蓋不到 dsh 的三種。
  *
  * **偏離登記（掛上那一刻就連不上的列）**：dsh 連不上之後在背景重連、連上就把工具補上。我們一次組裝之內工具就定了
- * （deepagents 建好就不可變，`packages/nexus-core/src/load.ts` 檔頭），補不了工具，所以這一種不重連；serve 下一條對話重新組裝時會再連一次。
+ * （deepagents 建好就不可變，`packages/nexus-core/src/load.ts` 檔頭），補不了工具。serve 有連線池（[`pool.ts`](./pool.ts)，
+ * [#1677](https://github.com/DemianLi/nexus-agent/issues/1677)），照 dsh 在背景重試，連上之後組的對話有工具，之前組好的沒有；CLI 一次組裝
+ * 就是整個行程，不重連。
  *
  * **掛上之後才掉的線會自動重連**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)），政策照 dsh，實作與偏離見
  * [`supervisor.ts`](./supervisor.ts) 檔頭：已註冊的工具物件換不掉，所以註冊的物件把呼叫委派給目前這一代連線。

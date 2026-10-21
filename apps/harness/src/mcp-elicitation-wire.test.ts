@@ -51,7 +51,11 @@ afterEach(async () => {
  */
 async function open(
   threadId: string,
-  shared?: { pool: McpConnectionPool; marker: string; call?: { name: string; args: object } },
+  shared?: {
+    pool: McpConnectionPool;
+    marker: string;
+    call?: { name: string; args: Record<string, unknown> };
+  },
 ) {
   const call = shared?.call ?? { name: 'mcp__srv__ask_form', args: {} };
   const built = await createNexusAgent({
