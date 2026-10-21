@@ -8,7 +8,6 @@
  */
 
 import { open, mkdtemp, rm, writeFile } from 'node:fs/promises';
-import type { PathLike } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
@@ -19,19 +18,18 @@ import { FilesystemBackend } from 'deepagents';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
 /**
- * 計數 `node:fs/promises` 的 `open`（#1776）：`contained-backend.ts` 開檔就是這一支，原樣轉給真的，只多記一筆。
- * 只有這個測試檔看得到這層包裝；`openedPaths()` 取出記下的路徑。
+ * 計數 `node:fs/promises` 開檔的次數（#1776）：`contained-backend.ts` 開檔是 `open`，用路徑直接讀是 `readFile(path)`（內部也是開一次檔），
+ * 兩支都原樣轉給真的，只多記一筆路徑。傳進來的若是 FileHandle（不是路徑）就不算開檔。只有這個測試檔看得到這層包裝。
  */
 const fsOpenCalls = vi.hoisted(() => [] as string[]);
 vi.mock('node:fs/promises', async (importOriginal) => {
   const actual = await importOriginal<typeof import('node:fs/promises')>();
-  return {
-    ...actual,
-    open: ((path: PathLike, ...rest: unknown[]) => {
-      fsOpenCalls.push(String(path));
-      return (actual.open as (...args: unknown[]) => unknown)(path, ...rest);
-    }) as typeof actual.open,
-  };
+  const counting = <F extends (...args: never[]) => unknown>(original: F): F =>
+    ((target: unknown, ...rest: unknown[]) => {
+      if (typeof target === 'string' || target instanceof URL) fsOpenCalls.push(String(target));
+      return (original as unknown as (...args: unknown[]) => unknown)(target, ...rest);
+    }) as unknown as F;
+  return { ...actual, open: counting(actual.open), readFile: counting(actual.readFile) };
 });
 
 /** 這個測試檔從現在起開過幾次這個檔。 */
@@ -157,8 +155,8 @@ describe('驗收 2：一次 read_file 只讀一次檔', () => {
     expect(opened).toHaveBeenCalledTimes(1);
   });
 
-  // #1776：上面只 spy `readOpened`，在 `read` 開檔前多開一次檔（再 `readFile`）它一樣是 1 次。這裡數 `node:fs/promises` 的 `open`。
-  it('同一路徑只 open 一次（數 fs 的 open，不是我們自己的方法）', async () => {
+  // #1776：上面只 spy `readOpened`，在 `read` 開檔前多開一次檔（再 `readFile`）它一樣是 1 次。這裡數 `node:fs/promises` 的 `open` 與用路徑讀的 `readFile`。
+  it('同一路徑只開一次檔（數 fs 的 open 與用路徑的 readFile，不是我們自己的方法）', async () => {
     const file = join(root, 'once-open.txt');
     await writeFile(file, 'a\nb\nc\n');
     const before = openCountOf(file);
@@ -321,6 +319,19 @@ describe('驗收 6b：副檔名不是文字的純文字檔，讀過就改得了�
     expect(results[0]?.status).toBe('success');
     expect(results[1]?.status).not.toBe('error');
     expect(results[1]?.text).not.toContain('被改動');
+  });
+
+  // 審查突變 A2：把 `contentText` 的 `ignoreBOM: true` 改成 false，原本沒有任何測試紅。BOM 是版本比對承重的一條：
+  // `read_file` 回報的版本是對「BOM 留著」的文字算的，寫入側解碼若丟掉 BOM，長度差 1，讀完 edit 就被擋。
+  it('BOM＋CRLF 的 .png：read_file 之後 edit_file 成功（BOM 留著才對得上版本）', async () => {
+    await writeFile(join(root, 'e-bom.png'), Buffer.from('\uFEFFfirst\r\nsecond\r\n', 'utf8'));
+    const results = await run(backend, [
+      read('/e-bom.png'),
+      edit('/e-bom.png', 'second', 'SECOND'),
+    ]);
+    expect(results[0]?.status).toBe('success');
+    expect(results[1]?.status).not.toBe('error');
+    expect(results[1]?.text).toContain('Successfully replaced');
   });
 
   it('讀完被別人換掉的還是擋下（版本真的在比）：非文字副檔名也一樣', async () => {
