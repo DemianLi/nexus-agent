@@ -515,6 +515,7 @@ function ConversationView({
       conversation: conversation.store,
       subagentUsage,
       trajectoryPull,
+      loadThrough: conversation.loadThrough,
     }),
     [
       changes,
@@ -524,6 +525,7 @@ function ConversationView({
       conversation.store,
       subagentUsage,
       trajectoryPull,
+      conversation.loadThrough,
     ],
   );
 
