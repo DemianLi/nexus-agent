@@ -19,6 +19,7 @@
  * @module
  */
 
+import { extname } from 'node:path';
 import { StateBackend } from 'deepagents';
 import type { ReadResult, WriteResult } from 'deepagents';
 
@@ -50,6 +51,19 @@ export function refuseNonText(filePath: string, bytes: Uint8Array): ReadResult {
 }
 
 /**
+ * 基座 `getMimeType`／`isTextMimeType`（`deepagents@1.13.1` 沒有匯出）判成非文字的副檔名：圖、音、影、pdf、ppt（`MIME_TYPES` 表裡
+ * 不是 `text/*`、`application/json`、`application/javascript`、`image/svg+xml` 的那些；大小寫不分，`extname(path).toLocaleLowerCase()`）。
+ * 基座的 `StateBackend.write` 在 v2 格式下對這些把內容當 base64 解碼成位元組，{@link TextOnlyStateBackend.write} 要認得這一格才自己組更新。
+ * 升版時對照：`binary-tool-results.test.ts` 的「基座語意的釘子」逐個副檔名比基座。
+ */
+export const NON_TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.heif',
+  '.mp3', '.wav', '.aiff', '.aac', '.ogg', '.flac',
+  '.mp4', '.webm', '.mpeg', '.mov', '.avi', '.flv', '.mpg', '.wmv', '.3gpp',
+  '.pdf', '.ppt', '.pptx',
+]); // prettier-ignore
+
+/**
  * 沒給 `--workspace` 時墊底的虛擬 FS，讀檔碰到二進位檔照 dsh 拒絕。
  *
  * 基座的 `StateBackend.write` 碰到非文字副檔名會把內容當 base64 解成位元組存起來，`read` 再原樣交回去——模型寫一張
@@ -72,26 +86,34 @@ export class TextOnlyStateBackend extends StateBackend {
   }
 
   /**
-   * 一律存成文字，不看副檔名（#1813）。
+   * 內容一律當 UTF-8 文字存，不看副檔名（#1813，照 dsh `write.ts:75/:82/:124`）。
    *
-   * **偏離 deepagents（理由 1，基座表達不出來）：** 基座的 `write` 對非文字副檔名把內容 base64 解碼，沒有選項可以關；
-   * 它的 `files`／`fileFormat`／`isLegacy`／`sendFilesUpdate` 是 private，這裡照它在非 legacy 模式的做法自己組更新（`deepagents@1.13.1`，
-   * 升版時看 `StateBackend.write`）。存的 `mimeType` 是 `text/plain` 而不是路徑推出來的 `image/png`：後者基座的 `read_file`
-   * 會當成圖片塊交給模型，那正是 #642 要擋的毒。
+   * **偏離 deepagents（理由 1，基座表達不出來），範圍收到最小：** 基座的 `write` 只有 v2 格式下、副檔名被它判成非文字的路徑
+   * （{@link NON_TEXT_EXTENSIONS}）才把內容 base64 解碼，沒有選項可以關。**只有這一格自己組更新**；其餘（文字副檔名、整個 v1 格式——
+   * 基座在 v1 本來就不解碼）都交回 `super.write`，所以文字路徑與基座逐欄同形（`mimeType` 依副檔名、既有檔保留 `mimeType`）。
+   *
+   * 自己組的這一格照基座非 legacy 與 legacy 兩種寫法（`files`／`isLegacy`／`sendFilesUpdate` 是 private，用型別斷言取；`deepagents@1.13.1`，
+   * 升版時對照 `StateBackend.write`，`binary-tool-results.test.ts` 有兩條釘子）。存的 `mimeType` 是 `text/plain` 而不是路徑推出的
+   * `image/png`：後者基座的 `read_file` 會當成圖片塊交給模型，那正是 #642 要擋的毒。
    */
   override write(filePath: string, content: string): WriteResult {
+    if (!NON_TEXT_EXTENSIONS.has(extname(filePath).toLowerCase())) {
+      return super.write(filePath, content);
+    }
     const internals = this as unknown as {
       readonly files: Record<string, { readonly created_at?: string } | undefined>;
       readonly fileFormat: string;
       readonly isLegacy: boolean;
       sendFilesUpdate(update: Record<string, unknown>): void;
     };
+    if (internals.fileFormat !== 'v2') return super.write(filePath, content);
     const now = new Date().toISOString();
-    const createdAt = internals.files[filePath]?.created_at ?? now;
-    const data =
-      internals.fileFormat === 'v1'
-        ? { content: content.split('\n'), created_at: createdAt, modified_at: now }
-        : { content, mimeType: 'text/plain', created_at: createdAt, modified_at: now };
+    const data = {
+      content,
+      mimeType: 'text/plain',
+      created_at: internals.files[filePath]?.created_at ?? now,
+      modified_at: now,
+    };
     if (internals.isLegacy) {
       return { path: filePath, filesUpdate: { [filePath]: data } } as unknown as WriteResult;
     }
