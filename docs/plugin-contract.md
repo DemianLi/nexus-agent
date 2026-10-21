@@ -228,6 +228,7 @@ export function apply(ctx: Context, config: z.infer<typeof Config>) {
   次版號升級：宣告 `^1.2.0` 的 `submit-record`、`echo`、`ask-user` 不呼叫它，照常（`packages/nexus-tools/src/provider.test.ts` 的 `old-120` 消費者釘住）。
 - **fs 接縫 1.1.0：工作區事實跟著把手走**（`@nexus/fs`，#1469 Q2 (a)）。`FsService` 多 `hasWorkspace(): boolean`；`offWorkspacePrefixes()` 把 plugin 用 `backend.mount()` 掛的路由前綴也併進來（組裝點明著交的在前、plugin 掛的在後，重複 fold 不累加）。
   兩樣都在 **fold 填 backend 的同一處**算（`settleFsService(service, backend, facts)` 是唯一的算法，`fold.ts` 把 `registry.capabilities.has(WORKSPACE_CAPABILITY)` 與 `registry.backend.mounts()` 當 `facts` 交進去），不在別處再算一次。
+  **`backend.mount()` 的前綴限制（#1775）**：外掛掛的路由前綴不得與組裝點自己的路由重疊——`/shared`、`/attachments`、`/conversation_history`、`/large_tool_results`——相同、更深、更上層（含根 `/`）一律被拒：`fold` 的 `reservedBackendPrefixes` 當場拋，訊息點名外掛與重疊的前綴。外掛的路由包在組裝點預設路由的外面，不擋的話外掛可以遮住唯讀共用區。CLI 與 serve 都生效；沒有啟用的路由（沒有附件、沒有工具結果暫存、沒有共用區）不在保留清單裡，該前綴照常可掛——沒有暫存時組裝點那一格只是記憶體墊底，被遮住沒有安全後果。
   fold 在所有 `apply` 之後跑，所以 `hasWorkspace()` 與工具呼叫當下才讀 `capabilities.has` 等價（`sandbox-policy` 在 `apply` 裡提供能力）。另轉出 `virtualPathOf`（路徑換算，實作留在 core，同其他轉出）。
   向後相容的新增：只用 `backend()` 的消費者（`submit-record`，宣告 `^1.0.0`）照常。
 - **第九個接縫：`agent/pre-step`——一次 agent 呼叫開頭追加訊息**（`@nexus/agent-loop` 1.0.0，#1474 Q1 (a)、Q2 (a)）。對應 dsh 的 `agent/pre-step`：插件在模型看到這一步之前，往訊息批次加一則持久的使用者訊息，`agent-instructions` 的 `AGENTS.md` 基線是第一個消費者。

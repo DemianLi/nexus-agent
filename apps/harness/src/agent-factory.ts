@@ -854,6 +854,9 @@ export async function createNexusAgent(options: CreateNexusAgentOptions) {
       // 工具事件（#1248）：宿主持有的派發面。沒有監聽者時三顆生產者與圍堵的派發都是直通。
       events: registry.dispatch,
       // 插件的路由包在這一層外面：跟下面任何一條重疊就遮住它（唯讀共用區會變可寫），fold 當場拋。
+      // 保留清單只列**這一次組裝真的啟用的**路由：沒有工具結果暫存（落盤關掉時）或沒有附件時，那個前綴不在清單裡、外掛可以掛。
+      // 沒有暫存時下面 composite 那一格只是記憶體墊底（`TextOnlyStateBackend`，不碰磁碟），被外掛遮住沒有安全後果；
+      // 有暫存、有附件、有共用區時那一格碰得到磁碟，所以列進來。
       reservedBackendPrefixes: [
         CONVERSATION_HISTORY_PREFIX,
         ...(stashRoute === undefined ? [] : [TOOL_RESULT_STASH_PREFIX]),

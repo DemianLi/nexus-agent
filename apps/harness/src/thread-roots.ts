@@ -15,7 +15,7 @@
  *
  * **續接一律讀 header，不用 thread id 重算**：雜湊規則或基底以後變了，已經配出去的根照樣找得回來。
  *
- *  * ## 偏離登記（與 dsh 的偏離，理由 2：產品需求超出 dsh 的射程；PM 2026-10-20 核定共兩條）
+ * ## 偏離登記（與 dsh 的偏離，理由 2：產品需求超出 dsh 的射程；PM 2026-10-20 核定共兩條）
  *
  * 1. **系統替每條新 thread 配根，不由人選、也不按專案共用。**
  *    dsh 是單人桌面：根是會話 header 的 `cwd`，逐次從 header 取（`packages/sandbox/sandbox-policy/src/index.ts:83`、`:164-171`，`687f282e`），
@@ -131,7 +131,7 @@ export interface ThreadPlacerOptions {
   /** 基底的絕對路徑（{@link resolveThreadRootsBase}）。 */
   readonly base: string;
   /**
-   * 這條 thread 的會話鑰匙；落盤關掉（沒有 `sessionStore`）時是 `undefined`，那時可寫根是記憶體（偏離 3）。
+   * 這條 thread 的會話鑰匙；落盤關掉（沒有 `sessionStore`）時是 `undefined`，那時可寫根是記憶體（偏離 2 的延伸）。
    */
   readonly sessionKeyOf: ((threadId: string) => string) | undefined;
 }
@@ -172,7 +172,7 @@ export function createThreadPlacer(options: ThreadPlacerOptions): ThreadPlacer {
           : `這條對話記的根既不是 --workspace，也不在私有根基底 ${options.base} 底下。用 --workspace ${String(recorded)} 再接。`,
       );
     }
-    // 新 thread：落盤關掉就沒有磁碟上的可寫根（偏離 3，(f)）：`root` 明著回 `undefined`＝記憶體，`--workspace` 照樣掛成唯讀共用區。
+    // 新 thread：落盤關掉就沒有磁碟上的可寫根（偏離 2 的延伸，(f)）：`root` 明著回 `undefined`＝記憶體，`--workspace` 照樣掛成唯讀共用區。
     // **這是唯一收這個判斷的地方**。
     if (options.sessionKeyOf === undefined) return { root: undefined, sharedRoot: shared };
     const root = join(options.base, threadRootDirName(options.sessionKeyOf(threadId)));
@@ -270,7 +270,7 @@ export interface ThreadRootsOverlapCheck {
  * - 工具結果暫存根：暫存清掃會碰合 `^session-…` 的目錄，而它的根可由設定列改。
  * - 附件根、會話日誌目錄：都是基礎建設，不是任何一條 thread 的工作區。
  *
- * 基底寫死在 home 底下，所以 home 本身與 home 根目錄那一層的狀態檔不可能落進任何一條 thread 的根（偏離 2）。
+ * 基底寫死在 home 底下，所以 home 本身與 home 根目錄那一層的狀態檔不可能落進任何一條 thread 的根（對卡的選擇：基底寫死，見上面〈對卡的選擇〉；不是對 dsh 的偏離）。
  */
 export async function assertThreadRootsBaseSeparate(check: ThreadRootsOverlapCheck): Promise<void> {
   const base = await canonicalize(resolve(check.base));

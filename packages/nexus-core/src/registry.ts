@@ -428,6 +428,10 @@ export interface BackendRegistrationPoint {
    *   `CompositeBackend.getBackendAndKey()` 直接對前綴做 `startsWith` 與
    *   `slice(0, -1)`，少了尾斜線它會切錯路徑。同時也讓「同一個掛載點」只有一種
    *   寫法，重複偵測才是可靠的。
+   *   **不得與組裝點自己的路由重疊**（#1775）：`/shared`（唯讀共用區）、`/attachments`、`/conversation_history`、
+   *   `/large_tool_results`——相同、更深、更上層（含根 `/`）的前綴，fold 當場拋（`FoldOptions.reservedBackendPrefixes`，
+   *   訊息點名外掛與前綴）。外掛的路由包在組裝點預設路由的外面，重疊會遮住那一條（例如讓唯讀共用區變可寫）。
+   *   CLI 與 serve 一樣生效；沒給 `reservedBackendPrefixes` 的呼叫端（單元測試）不受限。
    * @param backend - backend 實例。
    * @returns 只撤銷這一次掛載的冪等 undo。
    */
