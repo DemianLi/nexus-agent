@@ -115,6 +115,15 @@ export interface CommandInvocation {
    *   開場那句就帶著它們（`turn/start.attachments`），所以讀圖的授權（日誌引用過它）自然成立。
    */
   readonly steer: (text: string, attachments?: readonly AttachmentRef[]) => void;
+  /**
+   * 命令**即將做出會讓宿主自己開一輪的動作**時，先問宿主收不收（#1787）。`steer` 只管「命令送一句話」那一條路；
+   * 還有一條不經過它：命令改了域的狀態，宿主的排程器看見變更就自己開一輪（`/goal <目標>`、`/goal resume` 把目標變成進行中，
+   * 排程器接著起第一輪）。宿主不收（伺服器收尾中）就**拋例外**，從這裡冒出去。
+   *
+   * handler 該在動任何域**之前**呼叫，這樣被拒的命令什麼都沒寫：沒有目標被建起來、也沒有被續上，`command/done` 落定成 `error`。
+   * 在 REPL 與沒有收尾時間窗的宿主上永遠收。**執行器一定交這一格**；省略只會出現在手搭的呼叫（測試），省略即不問，所以 handler 用 `openTurn?.()`。
+   */
+  readonly openTurn?: () => void;
 }
 
 /** 一筆命令註冊。 */

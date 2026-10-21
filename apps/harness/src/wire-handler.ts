@@ -98,6 +98,7 @@ import {
   QUEUE_ITEM_NOT_FOUND,
   REQUEST_ID_MAX_LENGTH,
   RUN_START_MODES,
+  SERVER_CLOSING,
   STEER_UNAVAILABLE,
   SUBAGENT_AT_CAPACITY,
   SUBAGENT_CLOSED,
@@ -575,6 +576,13 @@ export interface IdleSweepingWireHandler extends WireHandler {
    * `close()` 已經開始了沒（[#1535](https://github.com/DemianLi/nexus-agent/issues/1535)，`/readyz` 據此回 503）。**只讀**：叫 `close()` 的那一刻同步變 `true`，不會變回來。
    */
   isClosing(): boolean;
+  /**
+   * 停止收會開新一輪的命令（[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)）：`serve.ts` 的 `close()` 在立 `/readyz` 旗之後、
+   * 時間窗開始之前叫一次。之後 `run.start`、`subagent.send`、以及 `slash.run` 裡會 steer 起一輪的命令回 {@link SERVER_CLOSING}
+   * （HTTP 照舊 200）；`run.cancel`、`input.respond`、`queue.update`、讀取與下行照常。**不可逆、冪等**。
+   * **不處理**：前一輪落定後 pump 領排隊的下一件、目標排程器續一輪——這兩條不經過上行命令，這道門擋不到（要不要擋另開卡）。
+   */
+  stopAdmission(): void;
 }
 
 const JSON_MEDIA_TYPE = 'application/json';
@@ -1226,6 +1234,17 @@ export class SubagentSessionError extends Error {
   }
 }
 
+/** 收尾中拒收這一句時回給使用者的話。**給使用者看**：web 目前直接顯示 `result.message`（理由見 `SERVER_CLOSING`）。 */
+const SERVER_CLOSING_MESSAGE = '伺服器正在重新啟動，這句話沒有送出；稍後再送一次。';
+
+/** 斜線命令的 `acceptSteer`／`acceptOpenTurn` 在收尾中拋的例外；只有 `handleSlash` 接，回 `server_closing`。 */
+class ServerClosingError extends Error {
+  constructor() {
+    super(SERVER_CLOSING_MESSAGE);
+    this.name = 'ServerClosingError';
+  }
+}
+
 /** `cause` 鏈上（最多 10 環，同 `live-model.ts` 的 `causeLinks`）有沒有一環的 `code` 是 `code`。 */
 function hasCode(error: unknown, code: string): boolean {
   const seen = new Set<unknown>();
@@ -1295,11 +1314,21 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
   /**
    * 每條 thread 此刻有幾個請求握著它（[#1484](https://github.com/DemianLi/nexus-agent/issues/1484)）。**鍵是 thread id 不是 state**：
    * `handle()` 一進來就同步 +1，早於任何 `await`、早於 `threadFor`，所以連「thread 還不在記憶體裡」的請求也算——
-   * `run.start` 在 `admitAttachments` 的 `await` 前後，這條 thread 看起來什麼都沒在做，只有這個數字擋得住逐出落在那一段、
+   * `run.start` 在 `admitAttachmentsCore` 的 `await` 前後，這條 thread 看起來什麼都沒在做，只有這個數字擋得住逐出落在那一段、
    * 讓 `start()` 往一個已收線的 pump 送話（`submit` 拒絕、被 `start()` 吞掉，那句話就不見了）。
    */
   const httpInFlight = new Map<string, number>();
   let closed = false;
+  /**
+   * 不再收會開新一輪的命令了（{@link IdleSweepingWireHandler.stopAdmission}）。同步旗標：檢查與它之後的同步段落之間沒有 `await`，
+   * 所以「檢查過、旗標才立」只會發生在 `admitAttachmentsCore` 那種 `await` 的前後——那一處在 `await` 回來之後重查。
+   */
+  let admissionStopped = false;
+
+  /** 收尾中拒收這一句：附件收據由呼叫端放回去，這裡只負責回應。 */
+  function serverClosing(id: number | null): Response {
+    return json(errorResponse(id, SERVER_CLOSING, SERVER_CLOSING_MESSAGE));
+  }
 
   /** 這條 thread 此刻的最後活動時間往現在推。沒載入的略過（初始時間在建好那一刻設）。 */
   function touchThread(threadId: string): void {
@@ -1592,7 +1621,15 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
             commands: threadAgent.commands,
             sessionLog: pump.sessionLog,
             // 命令要送的話跟 `run.start` 收的話同一道驗（#713）：引用不能用就讓命令在動任何東西之前失敗。
-            acceptSteer: (text) => void pump.referencedText(text),
+            acceptSteer: (text) => {
+              // 收尾中不替命令開新一輪（#1787）：在命令動任何域之前就拒收，命令落定成 `error`、什麼都沒改。`handleSlash` 認這個例外回 `server_closing`。
+              if (admissionStopped) throw new ServerClosingError();
+              void pump.referencedText(text);
+            },
+            // 同一道閘，給「不 steer、但改了域之後排程器自己開一輪」的命令（`/goal <目標>`、`/goal resume`，#1787）：在寫日誌之前拒。
+            acceptOpenTurn: () => {
+              if (admissionStopped) throw new ServerClosingError();
+            },
           }),
           feedback: threadAgent.feedback,
           workspaceChanges: threadAgent.workspaceChanges,
@@ -1819,22 +1856,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
    *    後面任何一步失敗再放回去——整句拒收，使用者可以修了重送，檔案不必重傳。
    * 3. **圖**：四道上限與格式（`image-intake.ts`），通過才存進附件儲存。
    *
-   * @returns 參照（照選取順序，只放參照），或要回給呼叫端的錯誤。
+   * 不碰回應格式（`run.start` 與 `slash.run` 共用）：成功時附帶「放回收據」的 `restore`，拒收時給碼與訊息。
+   *
+   * @returns 參照（照選取順序，只放參照）加 `restore`，或要回給呼叫端的錯誤。
    */
-  async function admitAttachments(
-    thread: ThreadState,
-    threadId: string,
-    id: number,
-    attachments: readonly PromptAttachment[],
-  ): Promise<readonly AttachmentRef[] | Response> {
-    const outcome = await admitAttachmentsCore(thread, threadId, attachments);
-    if (outcome.kind === 'rejected') {
-      return json(errorResponse(id, outcome.code, outcome.message));
-    }
-    return outcome.attachments;
-  }
-
-  /** {@link admitAttachments} 的本體：不碰回應格式，`run.start` 與 `slash.run` 共用。成功時附帶「放回收據」。 */
   async function admitAttachmentsCore(
     thread: ThreadState,
     threadId: string,
@@ -2060,6 +2085,13 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
       }
       return json(successResponse(envelope.id, { accepted: true }));
     }
+    // **收尾中不開新一輪**（#1787）。冷 thread 擋在 `threadFor` 之前：不為一句不會收的話組 agent、起 MCP 子行程再拆掉。熱的 thread 的
+    // `run.start` 在下面、request_id 去重**之後**才擋（窗前收過的重送要拿回原本的 `run_id`）。`slash.run` 看不出一行會不會 steer，
+    // 交給 `acceptSteer`（命令真的呼叫 `steer` 時才拒）與 `acceptOpenTurn`（命令要改的域狀態會讓排程器自己開一輪時才拒，`/goal` 的建立／續上／改進行中的目標）。
+    if (admissionStopped) {
+      if (method === SUBAGENT_SEND_METHOD) return serverClosing(envelope.id);
+      if (method === 'run.start' && !threads.has(threadId)) return serverClosing(envelope.id);
+    }
     if (isSubagentMethod(method)) {
       // 對單一背景子代理傳話、單獨停（#865）。
       //
@@ -2226,6 +2258,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
           await pending;
         }
       }
+      // 收尾中拒收（#1787）：**排在去重之後**——窗前收過的那一筆重送已經在上面拿回原本的 `run_id`；排在 `promptRequestsInFlight.set` 之前，
+      // 拒收不留任何痕跡。不合法的輸入在上面先擋，不論收不收尾都是同一個回應。
+      if (admissionStopped) return serverClosing(command.id);
       let settleRequest: ((runId: string | undefined) => void) | undefined;
       if (requestId !== undefined) {
         const inFlight = new Promise<string | undefined>((resolve) => (settleRequest = resolve));
@@ -2279,9 +2314,17 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         const runId = crypto.randomUUID();
         let admitted: readonly AttachmentRef[] = [];
         if (promptAttachments.length > 0) {
-          const outcome = await admitAttachments(thread, threadId, command.id, promptAttachments);
-          if (outcome instanceof Response) return outcome;
-          admitted = outcome;
+          const outcome = await admitAttachmentsCore(thread, threadId, promptAttachments);
+          if (outcome.kind === 'rejected') {
+            return json(errorResponse(command.id, outcome.code, outcome.message));
+          }
+          // **准入的 `await` 回來之後再查一次**（#1787，同 dsh `commands.ts:342-347`：await 之後重查 agent 還在不在）：等附件的那段時間
+          // 收尾可能開始了。收據已經用掉，放回去，使用者稍後重送不必重傳。
+          if (admissionStopped) {
+            outcome.restore();
+            return serverClosing(command.id);
+          }
+          admitted = outcome.attachments;
         }
         start(pump, {
           kind: 'message',
@@ -2483,6 +2526,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         ),
       );
     } catch (error) {
+      // 收尾中：命令要 steer 起一輪、或要改出一個會讓排程器開一輪的狀態，被 `acceptSteer`／`acceptOpenTurn` 擋下（#1787）。線上是 wire 錯誤碼，不是 `kind: 'error'` 的命令結果——
+      // 日誌那側照舊落定成一對 `command/run`／`command/done`（`error`），沒有 `turn/start`，也沒有任何域被動到。
+      if (error instanceof ServerClosingError) return serverClosing(id);
       // handler 自己拋的，或執行前後被中止。**日誌那側已經落定成一顆 `kind: 'error'` 的
       // `command/done`**（執行器在往外拋之前就寫完了），所以線上跟前一種形狀一樣——
       // 少的只有 `command_id`，理由見 `SlashRunResult`。
@@ -2569,6 +2615,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     if (background === undefined) {
       return json(errorResponse(id, SUBAGENT_NOT_FOUND, `沒有編號 ${params.run_id} 的背景子代理`));
     }
+    // 上面那道閘在 `threadFor` 之前，而冷的 thread 在這條路上要先建 agent（`await`）：窗可能在建的期間才開。投遞之前再查一次，
+    // 同 `run.start` 在准入 `await` 之後的第二次檢查（#1787）。
+    if (admissionStopped) return serverClosing(id);
     try {
       // 冷的先接回來再投遞（#1271）；已常駐的立刻過。
       await background.sendFromUser(params.run_id, params.text, clientTimeZone);
@@ -3510,6 +3559,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     threadCount: () => threads.size + closing.size,
     closingCount: () => closing.size,
     isClosing: () => closed,
+    stopAdmission: () => {
+      admissionStopped = true;
+    },
     async close() {
       // 計時器先停、之後的掃描一律不動作；已經在撤的等它撤完——撤到一半就收線的話，那條的寫租約與子行程沒人收（#1484）。
       closed = true;

@@ -45,6 +45,8 @@ function mount(
   run: (rawInput: string, attachments?: readonly AttachmentRef[]) => CommandResult;
   /** `run` 期間命令請宿主送的話（`steer` 收到的），照呼叫順序。 */
   steers: { text: string; attachments?: readonly AttachmentRef[] }[];
+  /** `run` 期間命令問宿主「收不收會讓宿主開一輪的動作」（`openTurn`）的次數；`refuse` 打開時宿主拒收（拋）。 */
+  turnGate: { calls: number; refuse: boolean };
   detach: () => void;
 } {
   const clock = 100;
@@ -62,6 +64,7 @@ function mount(
 
   const opened: SessionLog[] = [];
   const steers: { text: string; attachments?: readonly AttachmentRef[] }[] = [];
+  const turnGate = { calls: 0, refuse: false };
   const detachers: (() => void)[] = [];
   for (let index = 0; index < logs; index += 1) {
     const log = new SessionLog(`goal-${String(index)}`);
@@ -87,6 +90,7 @@ function mount(
     logs: opened,
     serviceFor: (log) => goals.serviceFor(log),
     steers,
+    turnGate,
     run: (rawInput, attachments = []) => {
       const result = command.handler({
         commandId: 'cmd-test-1',
@@ -100,6 +104,10 @@ function mount(
             text,
             ...(steerAttachments === undefined ? {} : { attachments: steerAttachments }),
           });
+        },
+        openTurn: () => {
+          turnGate.calls += 1;
+          if (turnGate.refuse) throw new Error('宿主不收');
         },
       });
       if (result instanceof Promise) throw new TypeError('/goal 是同步的');
@@ -240,6 +248,7 @@ describe('兩次組裝不串台', () => {
             signal: new AbortController().signal,
             sessionLog: log,
             steer: () => undefined,
+            openTurn: () => undefined,
           }) as CommandResult,
       };
     };
@@ -423,6 +432,7 @@ describe('附件隨目標（#732）', () => {
         signal: new AbortController().signal,
         sessionLog: logs[0] as SessionLog,
         steer: reject,
+        openTurn: () => undefined,
       }),
     ).toThrow('宿主不收');
     expect(logs[0]?.events.filter((event) => event.type === 'goal/change')).toHaveLength(0);
@@ -524,5 +534,68 @@ describe('域的拒絕與域的壞掉分得出來', () => {
     expect(() => run('')).toThrow(/goal 重放在會話事件/u);
     expect(() => run('把測試修綠')).toThrow(/goal 重放在會話事件/u);
     detach();
+  });
+});
+
+describe('會讓宿主開一輪的命令，先問宿主收不收（openTurn，#1787）', () => {
+  const image = {
+    type: 'image',
+    attachmentId: `sha256:${'a'.repeat(64)}`,
+    mediaType: 'image/png',
+    bytes: 3,
+    width: 1,
+    height: 1,
+  } as const;
+  /** 宿主拒收之後：拋出來、日誌上一顆 `goal/change` 都沒有（沒建、沒續、沒改）。 */
+  function expectRefused(run: () => CommandResult, logs: SessionLog[], expectedChanges: number) {
+    expect(run).toThrow('宿主不收');
+    expect(logs[0]?.events.filter((event) => event.type === 'goal/change')).toHaveLength(
+      expectedChanges,
+    );
+  }
+
+  it('create（含附件）、resume、edit 進行中的目標：各問一次，拒收時什麼都沒寫', () => {
+    const m = mount(1);
+    m.turnGate.refuse = true;
+    // create：沒有目標時建。
+    expectRefused(() => m.run('把測試修綠'), m.logs, 0);
+    // 帶附件的 create：openTurn 排在 steer 之前，兩者拒收都是同一個結果。
+    expectRefused(() => m.run('把測試修綠', [image]), m.logs, 0);
+    expect(m.steers).toEqual([]);
+    expect(m.turnGate.calls).toBe(2);
+
+    // 建起一個（窗前），之後對它的 edit／resume 都先問。
+    m.turnGate.refuse = false;
+    m.run('把測試修綠');
+    const changes = m.logs[0]?.events.filter((event) => event.type === 'goal/change').length ?? 0;
+    m.turnGate.refuse = true;
+    const before = m.turnGate.calls;
+    expectRefused(() => m.run('edit 改個目標'), m.logs, changes); // active 的 edit
+    expectRefused(() => m.run('resume'), m.logs, changes);
+    expect(m.turnGate.calls).toBe(before + 2);
+    m.detach();
+  });
+
+  it('不開輪的不問：show、pause、clear、edit 停著的目標、被拒的 create／edit', () => {
+    const m = mount(1);
+    m.run('把測試修綠');
+    m.run('pause');
+    m.turnGate.calls = 0;
+    m.turnGate.refuse = true; // 問了就拋：下面每一格都不該被問
+    expect(successText(m.run(''))).toContain('暫停');
+    expect(successText(m.run('edit 暫停中改目標'))).toContain('目標改好了');
+    expect(m.turnGate.calls).toBe(0);
+    // pause 的是 active 的目標；resume 才會再讓它 active（這一格會問，所以放在最後單獨量）。
+    expect(successText(m.run('clear'))).toBe(GOAL_CLEARED_MESSAGE);
+    expect(m.turnGate.calls).toBe(0);
+    m.detach();
+
+    // 被域或前置檢查拒絕的 create／edit 也不問。
+    const none = mount(1);
+    none.turnGate.refuse = true;
+    expect(errorText(none.run('edit 新目標'))).toBe(goalMissingMessage('edit'));
+    expect(errorText(none.run('resume'))).toBe(goalMissingMessage('resume'));
+    expect(none.turnGate.calls).toBe(0);
+    none.detach();
   });
 });

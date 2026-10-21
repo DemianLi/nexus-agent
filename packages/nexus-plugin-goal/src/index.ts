@@ -350,8 +350,8 @@ export function mountGoal(host: GoalMountHost, core: GoalCore, config: GoalConfi
     // 其餘子命令照舊只在兩輪之間——`create`／`edit` 帶附件會 steer 起一輪，`resume`／`clear` 沒有理由跟飛行中的輪賽跑。
     runWhileBusy: GOAL_RUN_WHILE_BUSY,
     // 命令要動哪一份日誌由執行器交過來（`CommandInvocation.sessionLog`，#688，契約上是 root）。
-    handler: ({ rawInput, sessionLog, attachments, steer }) =>
-      executeGoalCommand(core.serviceFor(sessionLog), rawInput, attachments, steer),
+    handler: ({ rawInput, sessionLog, attachments, steer, openTurn }) =>
+      executeGoalCommand(core.serviceFor(sessionLog), rawInput, attachments, steer, openTurn),
   });
 }
 
