@@ -7,7 +7,7 @@
  * **零憑證、零外部連線**：模型是 `ScriptedChatModel`。
  */
 
-import { open, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, open, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ToolMessage } from '@langchain/core/messages';
@@ -310,15 +310,17 @@ describe('驗收 6b：副檔名不是文字的純文字檔，讀過就改得了�
     expect(results[1]?.text).toContain('Successfully replaced');
   });
 
-  it('cjk.png：read_file 之後 write_file 成功（不得 FS_STALE_VERSION）', async () => {
+  it('cjk.png：read_file 之後 write_file 成功（不得 FS_STALE_VERSION），落盤就是寫進去的那段文字（#1813）', async () => {
     await writeFile(join(root, 'e-cjk.png'), '你好\n世界🙂\n');
     const results = await run(backend, [
       read('/e-cjk.png'),
-      { name: 'write_file', args: { file_path: '/e-cjk.png', content: 'aGk=' } },
+      { name: 'write_file', args: { file_path: '/e-cjk.png', content: '新的內容 hello\n' } },
     ]);
     expect(results[0]?.status).toBe('success');
     expect(results[1]?.status).not.toBe('error');
     expect(results[1]?.text).not.toContain('被改動');
+    // #1810 之前這一步被意外擋下、之後會回成功卻把內容當 base64 解碼落成亂碼；#1813 起一律寫文字。
+    expect(await readFile(join(root, 'e-cjk.png'), 'utf8')).toBe('新的內容 hello\n');
   });
 
   // 審查突變 A2：把 `contentText` 的 `ignoreBOM: true` 改成 false，原本沒有任何測試紅。BOM 是版本比對承重的一條：

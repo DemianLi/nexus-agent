@@ -101,6 +101,26 @@ describe('referencedImage', () => {
       ),
     ).toBeUndefined();
   });
+
+  it('參照陣列裡混著 undefined、null、字串、數字：略過那幾格，不拋，其餘的照認（#1782）', () => {
+    // 記憶體裡的事件不經 JSON，陣列可以有 `undefined`（稀疏或被清掉的格）；以前只擋 `null`，`undefined['attachmentId']` 會拋。
+    const dirty = [undefined, null, 'x', 7, image('a')];
+    for (const attachments of [dirty, [undefined], [undefined, null]]) {
+      const events = [event('turn/start', { kind: 'message', text: 't', attachments })];
+      const want = attachments.includes(dirty[4]) ? bare : undefined;
+      expect(referencedImage(events, sha('a'))).toEqual(want);
+      expect(referencesAttachment(events, { kind: 'image', attachmentId: sha('a') })).toBe(
+        want !== undefined,
+      );
+      expect(referencedFilePaths(events).size).toBe(0);
+    }
+    const spliced = event('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [{ id: 'q', text: '', source: { kind: 'user' }, attachments: [undefined] }],
+    });
+    expect(referencedImage([spliced], sha('a'))).toBeUndefined();
+  });
 });
 
 const file = (c: string, name = 'a.txt') =>
