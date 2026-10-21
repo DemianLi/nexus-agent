@@ -363,7 +363,12 @@ export interface RunningServe {
    * 帶著這個行程登入 token 的網址——啟動時印的就是這一個（#424）。在瀏覽器開它，換到會話 cookie。
    */
   readonly authenticatedUrl: string;
-  close(): Promise<void>;
+  /**
+   * 收尾。`drain: false` 跳過 `/readyz` 的時間窗（#1787）：致命例外的收尾只有 fail-loud 那 2 秒（`fail-loud.ts`），
+   * 時間窗最多也是 2 秒，兩個加起來 dispose 會被 `exit(1)` 切掉（thread 收尾與落盤正是 #1501 要保住的）；
+   * 而且那一段時間 serve 還在收新回合，跟「不讓壞掉的 serve 存活」衝突。預設（省略）照舊等時間窗，SIGTERM／SIGINT 走這條。
+   */
+  close(options?: { readonly drain?: boolean }): Promise<void>;
 }
 
 /**
@@ -521,12 +526,12 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   }
   return {
     ...started,
-    close: async () => {
+    close: async (options) => {
       // 放鎖是 `close()` 的最後一步，排在 server、thread、日誌、根、代理都收完之後：鎖放掉之後，
       // 下一台才可以碰這些檔。收尾失敗也要放；兩邊都失敗時以收尾的為主（放鎖只是關一個 fd）。
       let closeFailure: { readonly error: unknown } | undefined;
       try {
-        await started.close();
+        await started.close(options);
       } catch (error: unknown) {
         closeFailure = { error };
       }
@@ -574,10 +579,10 @@ async function startUnderHomeLock(
   }
   return {
     ...running,
-    close: async () => {
+    close: async (options) => {
       try {
         try {
-          await running.close();
+          await running.close(options);
         } finally {
           await root.dispose();
         }
@@ -1535,13 +1540,19 @@ async function startServer(
   return {
     url: server.url,
     authenticatedUrl,
-    close: async () => {
+    close: async (options) => {
       // `/readyz` 在 server 關掉之前就回 503（#1535）：監管程式看到 closing 就別再送新請求。
       closing = true;
       // **時間窗**（#1777）：立旗之後 listener 要再照常在聽一小段，探針才抓得到 503。`server.close()` 一開頭就 `closeAllConnections()`
       // （`wire-server.ts`），不留這一段，旗標只在同一個 macrotask 裡亮過，沒有任何請求看得到。**只有 `/readyz` 被抓過才等**：
       // 沒有監控在看，等了也沒人聽（測試與一次性使用不付這個代價）。時間窗屬於整體 5 秒收尾上限（#599），所以設定上限 2000。
-      if (opsConfig.probes.enabled && opsConfig.probes.drainMs > 0 && opsEndpoints.readyzProbed()) {
+      // 致命例外的收尾（`drain: false`）不等：理由見 {@link RunningServe.close}。旗標照立，`/readyz` 照回 503。
+      if (
+        options?.drain !== false &&
+        opsConfig.probes.enabled &&
+        opsConfig.probes.drainMs > 0 &&
+        opsEndpoints.readyzProbed()
+      ) {
         await new Promise<void>((resolve) => setTimeout(resolve, opsConfig.probes.drainMs));
       }
       // **每一步各自接住，全部跑完才拋**（#1511）：`handler.close()` 現在會拒絕（thread 收尾失敗），
@@ -1605,11 +1616,13 @@ export interface ServeProcessLifecycle {
 export function installServeProcessLifecycle(proc: ServeProcess = process): ServeProcessLifecycle {
   let running: RunningServe | undefined;
   let disposal: Promise<void> | undefined;
-  const dispose = (): Promise<void> =>
+  // **誰先開始收尾誰決定要不要等 `/readyz` 時間窗**：訊號等（#1777），致命例外不等（#1787）。兩邊仍共用同一顆 promise，
+  // 所以訊號先到、致命隨後時，致命路徑也在同一個收尾裡（它自己的 2 秒上限仍在 `installFailLoud`）。
+  const disposeWith = (drain: boolean): Promise<void> =>
     (disposal ??= (async () => {
       if (running === undefined) return;
       try {
-        await running.close();
+        await running.close({ drain });
       } catch (error) {
         // 控制器在收尾失敗時只強制結束、不講原因；會話日誌寫不下去是這裡最該聽見的那種。
         console.error(error instanceof Error ? error.message : String(error));
@@ -1620,7 +1633,7 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
   // 收尾有上限，照 dsh（`process-shutdown.ts`，#599）。所以用 `on` 不用 `once`：`once`
   // 用掉之後第二次落回預設動作，是同一個結果但不是政策。
   const shutdown = createProcessShutdown(
-    dispose,
+    () => disposeWith(true),
     (code) => {
       proc.exit(code);
     },
@@ -1635,7 +1648,7 @@ export function installServeProcessLifecycle(proc: ServeProcess = process): Serv
   proc.on('SIGINT', () => {
     shutdown.interrupt(130);
   });
-  const uninstall = installFailLoud('nexus-agent serve', proc, dispose);
+  const uninstall = installFailLoud('nexus-agent serve', proc, () => disposeWith(false));
   return {
     attach(next) {
       running = next;
