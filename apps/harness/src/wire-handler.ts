@@ -1237,7 +1237,7 @@ export class SubagentSessionError extends Error {
 /** 收尾中拒收這一句時回給使用者的話。**給使用者看**：web 目前直接顯示 `result.message`（理由見 `SERVER_CLOSING`）。 */
 const SERVER_CLOSING_MESSAGE = '伺服器正在重新啟動，這句話沒有送出；稍後再送一次。';
 
-/** 斜線命令的 `acceptSteer` 在收尾中拋的例外；只有 `handleSlash` 接，回 `server_closing`。 */
+/** 斜線命令的 `acceptSteer`／`acceptOpenTurn` 在收尾中拋的例外；只有 `handleSlash` 接，回 `server_closing`。 */
 class ServerClosingError extends Error {
   constructor() {
     super(SERVER_CLOSING_MESSAGE);
@@ -1625,6 +1625,10 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
               // 收尾中不替命令開新一輪（#1787）：在命令動任何域之前就拒收，命令落定成 `error`、什麼都沒改。`handleSlash` 認這個例外回 `server_closing`。
               if (admissionStopped) throw new ServerClosingError();
               void pump.referencedText(text);
+            },
+            // 同一道閘，給「不 steer、但改了域之後排程器自己開一輪」的命令（`/goal <目標>`、`/goal resume`，#1787）：在寫日誌之前拒。
+            acceptOpenTurn: () => {
+              if (admissionStopped) throw new ServerClosingError();
             },
           }),
           feedback: threadAgent.feedback,
@@ -2083,7 +2087,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     }
     // **收尾中不開新一輪**（#1787）。冷 thread 擋在 `threadFor` 之前：不為一句不會收的話組 agent、起 MCP 子行程再拆掉。熱的 thread 的
     // `run.start` 在下面、request_id 去重**之後**才擋（窗前收過的重送要拿回原本的 `run_id`）。`slash.run` 看不出一行會不會 steer，
-    // 交給 `acceptSteer`（命令真的呼叫 `steer` 時才拒）。
+    // 交給 `acceptSteer`（命令真的呼叫 `steer` 時才拒）與 `acceptOpenTurn`（命令要改的域狀態會讓排程器自己開一輪時才拒，`/goal` 的建立／續上／改進行中的目標）。
     if (admissionStopped) {
       if (method === SUBAGENT_SEND_METHOD) return serverClosing(envelope.id);
       if (method === 'run.start' && !threads.has(threadId)) return serverClosing(envelope.id);
@@ -2522,7 +2526,7 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
         ),
       );
     } catch (error) {
-      // 收尾中：命令要 steer 起一輪，被 `acceptSteer` 擋下（#1787）。線上是 wire 錯誤碼，不是 `kind: 'error'` 的命令結果——
+      // 收尾中：命令要 steer 起一輪、或要改出一個會讓排程器開一輪的狀態，被 `acceptSteer`／`acceptOpenTurn` 擋下（#1787）。線上是 wire 錯誤碼，不是 `kind: 'error'` 的命令結果——
       // 日誌那側照舊落定成一對 `command/run`／`command/done`（`error`），沒有 `turn/start`，也沒有任何域被動到。
       if (error instanceof ServerClosingError) return serverClosing(id);
       // handler 自己拋的，或執行前後被中止。**日誌那側已經落定成一顆 `kind: 'error'` 的
@@ -2611,6 +2615,9 @@ export function createWireHandler(options: WireHandlerOptions): IdleSweepingWire
     if (background === undefined) {
       return json(errorResponse(id, SUBAGENT_NOT_FOUND, `沒有編號 ${params.run_id} 的背景子代理`));
     }
+    // 上面那道閘在 `threadFor` 之前，而冷的 thread 在這條路上要先建 agent（`await`）：窗可能在建的期間才開。投遞之前再查一次，
+    // 同 `run.start` 在准入 `await` 之後的第二次檢查（#1787）。
+    if (admissionStopped) return serverClosing(id);
     try {
       // 冷的先接回來再投遞（#1271）；已常駐的立刻過。
       await background.sendFromUser(params.run_id, params.text, clientTimeZone);

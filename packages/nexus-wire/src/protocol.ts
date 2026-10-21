@@ -402,10 +402,15 @@ export const THREAD_IS_SUBAGENT = 'thread_is_subagent';
 export const THREAD_HISTORY_TOO_DEEP = 'thread_history_too_deep';
 
 /**
- * serve 正在收尾（收到 `SIGTERM`／`SIGINT`，`/readyz` 時間窗已經開始，[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)），
- * **這一句話沒有送出**：會開新一輪的上行命令（`run.start`、`subagent.send`，以及 `slash.run` 裡會 steer 起一輪的 `/plan <話>`、
- * `/goal create|edit` 帶附件）在時間窗內一律回這個碼，HTTP 照舊 200。`run.cancel`、`input.respond`、`queue.update`、讀取與下行不受影響。
- * 附件收據放回去、請求編號沒用掉：**使用者稍後重送同一句話即可**（重啟之後帶同一個 `request_id` 重送，已經收過的那一筆照樣拿回原本的 `run_id`）。
+ * serve 正在收尾（`close()` 已經開始：收到 `SIGTERM`／`SIGINT`，或致命例外；`close()` 一開始就停收新的一輪，**不論有沒有 `/readyz` 時間窗**——
+ * `drainMs: 0`、沒人抓過 `/readyz`、致命例外不等時間窗的路徑都一樣，[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)），
+ * **這一句話沒有送出**：會開新一輪的上行命令一律回這個碼，HTTP 照舊 200：
+ * `run.start`、`subagent.send`，以及 `slash.run` 裡會開一輪的命令——`/plan <話>`、`/goal <目標>`（建立）、`/goal resume`、
+ * `/goal edit`（改進行中的目標、或換掉已完成的目標）、`/goal create|edit` 帶附件。`/goal` 這幾種不 steer，但目標一變成進行中排程器就自己起一輪，
+ * 所以在寫 `goal/change` 之前就拒（沒有目標被建起來、也沒有被續上）。`/goal pause`／`clear`、`run.cancel`、`input.respond`、`queue.update`、讀取與下行不受影響。
+ *
+ * **重送**：請求編號沒用掉；重啟之後帶同一個 `request_id` 重送，已經收過的那一筆照樣拿回原本的 `run_id`。**附件不一定能原樣重送**：
+ * 上傳過的檔案收據放在 serve 的記憶體表裡，被拒時雖然放回去，重啟之後表是空的，**檔案要重新上傳**；圖片是隨請求帶來的，重送即可。
  * 重試馬上沒用——這台 serve 是在關機——要等它重新起來。
  *
  * **message 是寫給使用者看的**，不是給管理者的（本專案其他碼的 message 多半給管理者看）：web 目前直接把 `result.message` 顯示在輸入框旁，

@@ -13,9 +13,12 @@
  * 5. 整條 `/wire` 都擋（`run.cancel` 也回 `server_closing`）→ 「只擋新一輪」紅。
  * 6. `acceptSteer` 不查旗標 → 「slash.run 的 steer」紅。
  * 7. `stopAdmission` 變成 no-op → 所有「窗內」那幾格紅。
+ * 8. 准入 `await` 之後的 `outcome.restore()` 拿掉 → 「被拒時收據放回去」紅（收據表裡那份沒了，之後的命令用它被回「不存在、已經用過」）。
+ * 9. `run.cancel` 那一支的 `pump.cancel()` 拿掉 → 「run.cancel 停得掉」紅（那一輪永遠不收）。
+ * 10. `subagent.send` 在 `sendFromUser` 之前的再查一次拿掉 → 「建 agent 的 await 期間窗開了」紅（投遞了）。
  *
- * **沒有測的一件**：被拒時附件收據放回去（`outcome.restore()`）。收據表是 handler 閉包裡的記憶體表、沒有對外的讀口，而窗內准入不會再開，
- * 放回去的收據在這台 serve 的剩餘壽命裡沒有人會再用（重啟之後表是空的），所以沒有可觀察的行為可以釘；寫在 PR 內文，靠讀程式碼把關。
+ * **收據放回去為什麼測得到**：窗內 `run.start` 不會再成功，但窗內還有別的路會用收據——不 steer、只收附件的斜線命令（`attach`）。被拒的那一句
+ * 要是把收據吞了，之後對同一份收據的命令就回「不存在、已經用過」。
  *
  * **零憑證、零外部連線**：附件根放 `/var/tmp`，模型是假 agent。
  */
@@ -89,7 +92,7 @@ afterEach(async () => {
 });
 
 /** 一台 handler＋client。`upstream()` 是假 agent 被叫的次數；`created()` 是 `createAgent` 被叫的次數。 */
-function rig() {
+function rig(rigOptions: { buildHold?: Promise<void>; storedKnown?: boolean } = {}) {
   let ran = 0;
   let created = 0;
   const sends: string[] = [];
@@ -116,6 +119,17 @@ function rig() {
       return { kind: 'success' };
     },
   });
+  // `attach`：收附件、不 steer、不開輪——窗內用收據的那條路。
+  const attachSeen: number[] = [];
+  registry.commands.register({
+    name: 'attach',
+    description: '收附件',
+    input: { hint: '無', attachments: true },
+    handler: ({ attachments }) => {
+      attachSeen.push(attachments.length);
+      return { kind: 'success' };
+    },
+  });
   registry.commands.register({
     name: 'plain',
     description: '不開輪',
@@ -125,8 +139,10 @@ function rig() {
   const handler = createWireHandler({
     auth: TEST_BROWSER_AUTH,
     attachments: store,
+    ...(rigOptions.storedKnown === true && { storedThreadKnown: async () => true }),
     createAgent: async () => {
       created += 1;
+      if (rigOptions.buildHold !== undefined) await rigOptions.buildHold;
       return {
         agent,
         commands: registry.commands,
@@ -156,6 +172,7 @@ function rig() {
     upstream: () => ran,
     created: () => created,
     sends: () => sends,
+    attachSeen: () => attachSeen,
     log: () => log?.() ?? [],
     turnStarts: () => (log?.() ?? []).filter((event) => event.type === 'turn/start'),
   };
@@ -231,7 +248,44 @@ describe('窗內：run.start 回 server_closing', () => {
   });
 });
 
+describe('窗內：被拒的那一句不吞收據', () => {
+  it('准入的 await 回來之後被拒：收據放回去，窗內不 steer 的命令還用得到它', async () => {
+    const r = rig();
+    const thread = 'closing-receipt';
+    expect(await r.client.runStart(thread, '窗前')).toMatchObject({ type: 'success' });
+    await until(() => r.upstream() === 1);
+    const uploaded = await r.client.uploadFile(thread, new TextEncoder().encode('內容'), 'a.txt');
+    if (uploaded.kind !== 'ok') throw new Error('上傳沒成功');
+    const file: PromptAttachment = { type: 'file', receiptId: uploaded.receipt.receiptId };
+
+    // 一句帶收據＋圖的話：收據在准入開頭就從表裡取走，接著卡在 `saveImage`；這時時間窗開始。
+    const release = gate();
+    store.hold = release.opened;
+    const pending = r.client.runStart(thread, '附檔附圖', { attachments: [file, IMAGE] });
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    r.handler.stopAdmission();
+    release.open();
+    expect(await pending).toMatchObject(CLOSING);
+
+    // 同一份收據，窗內給一個收附件、不 steer 的命令：用得到（沒有 restore 的話這裡回「不存在、已經用過」）。
+    expect(await r.client.slashRun(thread, '/attach', [file])).toMatchObject({ kind: 'success' });
+    expect(r.attachSeen()).toEqual([1]);
+  });
+});
+
 describe('窗內：subagent.send 與 slash.run', () => {
+  it('subagent.send：建 agent 的 await 期間窗開了，投遞之前再查一次，沒有投遞', async () => {
+    const build = gate();
+    const r = rig({ buildHold: build.opened, storedKnown: true });
+    // 記憶體裡沒有、磁碟上有的 thread：`subagent.send` 要先建 agent（卡在 `createAgent`）。
+    const pending = r.client.subagentSend('closing-subagent-build', 'bg-1', '建到一半的話');
+    await until(() => r.created() === 1);
+    r.handler.stopAdmission();
+    build.open();
+    expect(await pending).toMatchObject(CLOSING);
+    expect(r.sends()).toEqual([]);
+  });
+
   it('subagent.send：熱的與冷的都回 server_closing，沒有投遞、冷的不建 agent', async () => {
     const r = rig();
     const thread = 'closing-subagent';
@@ -283,10 +337,18 @@ describe('窗內：只擋新一輪', () => {
     const hold = gate();
     let ran = 0;
     const agent = {
-      streamEvents: async () => {
+      streamEvents: async (_input: unknown, config: { configurable: Record<string, unknown> }) => {
         ran += 1;
+        // 這一輪的中止訊號（`TURN_CANCEL_CONFIG_KEY`）：被切斷就醒來拋錯，同真模型被中止時的樣子。
+        const signal = Object.values(config.configurable).find(
+          (value): value is AbortSignal => value instanceof AbortSignal,
+        );
         return (async function* () {
-          await hold.opened;
+          await new Promise<void>((resolve) => {
+            void hold.opened.then(resolve);
+            signal?.addEventListener('abort', () => resolve(), { once: true });
+          });
+          if (signal?.aborted === true) throw new Error('被切斷了');
           yield COMPLETED;
         })();
       },
@@ -319,8 +381,12 @@ describe('窗內：只擋新一輪', () => {
 
     handler.stopAdmission();
     expect(await client.runCancel(thread)).toMatchObject({ type: 'success' });
-    hold.open();
-    await until(() => (log?.() ?? []).some((event) => event.type === 'turn/end'));
+    // **閘門不在這裡開**：那一輪只能靠 `run.cancel` 收（拿掉 `pump.cancel()` 它就永遠不收、這裡逾時）；收完才放閘讓假串流收尾。
+    try {
+      await until(() => (log?.() ?? []).some((event) => event.type === 'turn/end'));
+    } finally {
+      hold.open();
+    }
     // 讀取照常（斜線清單是 thread 上的讀取）。
     expect(await client.slashList(thread)).toMatchObject({ kind: 'ok' });
   });
