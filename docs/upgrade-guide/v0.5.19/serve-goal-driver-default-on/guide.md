@@ -8,8 +8,9 @@ description: serve 的目標續行改成預設開，一個 active 的目標沒�
 ## 變更
 
 v0.5.19 的 `serve` 要加 `--goal-driver` 才會在目標沒達成時自己再開一輪，不加就是一輪結束就結束。新版（PR #1130）
-把 `serve` 的預設翻成開：一個 active 的目標在每一輪落定時會自己再開一輪，直到被完成、被擋住，或用完目標自己的
-`max_goal_rounds`（預設 256）。要核准的工具在 `serve` 上是停下來等人，不會空轉。CLI 的預設不變，仍是關。
+把 `serve` 的預設翻成開：一個 active 的目標在每一輪落定時會自己再開一輪，直到被完成、被擋住，或用完輪數上限。
+上限有兩條，先到的那一條管：目標自己的 `max_goal_rounds`（預設 256），與清單上 `goal-round-cap` 那一列（出廠 20，每次建立或恢復
+目標重新起算，見 [`goal-round-cap`](../goal-round-cap/guide.md)）。要核准的工具在 `serve` 上是停下來等人，不會空轉。CLI 的預設不變，仍是關。
 
 `--goal-driver` 照樣接受（明講要開）；新增 `--no-goal-driver` 關掉，兩個一起給會報錯。
 

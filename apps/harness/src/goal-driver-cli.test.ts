@@ -16,11 +16,12 @@ import { PassThrough } from 'node:stream';
 import { describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { driveGoalRounds, runCli, runRepl, runTurn } from './cli.js';
+import { driveGoalRounds, MAX_GOAL_ROUNDS_SOURCE, runCli, runRepl, runTurn } from './cli.js';
 import { createCliAgent, formatGoalDriverDisclosure, goalDriverPort } from './assembly-root.js';
 import { parseCliArgs } from './cli.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import { ROUND_CAP_BLOCK_CODE } from './goal-driver.js';
+import { DEFAULT_GOAL_ROUND_CAP, GOAL_ROUND_CAP_SOURCE } from './settings/goal-round-cap.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedModelState, ScriptedTurn } from './scripted-model.js';
 import type { NexusAgentHandle } from './agent-factory.js';
@@ -29,6 +30,9 @@ import { goalId, SessionRegistry } from '@nexus/core';
 import { createGoalPlugin, goalCoreOf, goalPlugin } from './goal.fixture.js';
 import { GOALS_SERVICE, renderGoalRoundPrompt } from '@nexus/goal';
 import type { GoalServices } from '@nexus/goal';
+
+/** 出貨清單上 `goal-round-cap` 那一列的上限：`runCli` 走出貨清單，披露那一行帶的就是它。 */
+const SHIPPED_ROUND_CAP = { limit: DEFAULT_GOAL_ROUND_CAP, source: GOAL_ROUND_CAP_SOURCE };
 
 const shipped = await shippedPlugins();
 
@@ -384,7 +388,7 @@ describe('伴生在預設組裝上是武裝的，旗標關著也一樣', () => {
 });
 
 /**
- * 命令列那條上限。**它存在的理由是目標自己那條不歸操作的人管**：`service.ts:269` 是
+ * 命令列那條上限。**它存在的理由是目標自己那條不歸操作的人管**：`service.ts:254` 是
  * `request.maxGoalRounds ?? this.#defaultMaxGoalRounds`，`??` 不是 `Math.min`，所以模型在
  * `create_goal` 裡填的數字贏過組裝點給的預設。這一份釘的是「模型填了一個大數字，人設的
  * 那條照樣夾得住」。
@@ -403,13 +407,45 @@ describe('--max-goal-rounds', () => {
     const { printer } = recorder();
 
     await runTurn(agent, '把 CI 修綠', printer, log);
-    await driveGoalRounds(agent, printer, log, port, 1);
+    await driveGoalRounds(agent, printer, log, port, { limit: 1, source: MAX_GOAL_ROUNDS_SOURCE });
 
     expect(startKinds(log)).toEqual(['message', 'goal']);
     const goal = goals.serviceFor(log)?.get();
     expect(goal?.maxGoalRounds).toBe(5);
     expect(goal?.phase).toBe('blocked');
     expect(goal?.blockedReason?.code).toBe(ROUND_CAP_BLOCK_CODE);
+    await stop();
+  });
+
+  /**
+   * **人恢復之後重新起算**（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)，#1614 Q-A2 (a)）：上限 1，跑 1 輪就擋；
+   * 人恢復目標之後再跑 1 輪才又擋。以前比的是累計，恢復成功了，排程器下一次決定卻馬上又記 `round-cap`，一輪都續不了。
+   */
+  it('round-cap 之後人恢復，重新起算再跑滿上限', async () => {
+    const { agent, log, goals, port, stop } = await build([
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 5 } }],
+      },
+      { content: '建好了。' },
+      { content: '第 1 輪。' },
+      { content: '第 2 輪。' },
+      { content: '不該跑到這一輪。' },
+    ]);
+    const { printer } = recorder();
+    const cap = { limit: 1, source: MAX_GOAL_ROUNDS_SOURCE };
+
+    await runTurn(agent, '把 CI 修綠', printer, log);
+    await driveGoalRounds(agent, printer, log, port, cap);
+    const service = goalCoreOf(goals).serviceFor(log);
+    const blocked = service.get();
+    expect(blocked?.blockedReason?.code).toBe(ROUND_CAP_BLOCK_CODE);
+    service.resume({ id: blocked!.id, revision: blocked!.revision });
+    await driveGoalRounds(agent, printer, log, port, cap);
+
+    expect(startKinds(log)).toEqual(['message', 'goal', 'goal']);
+    expect(service.get()?.roundsStarted).toBe(2);
+    expect(service.get()?.blockedReason?.code).toBe(ROUND_CAP_BLOCK_CODE);
     await stop();
   });
 
@@ -488,9 +524,11 @@ describe('披露', () => {
    * 一個更小的。
    */
   it('給了上限就印出來，沒給就明著說沒給', () => {
-    expect(formatGoalDriverDisclosure(true, 3)).toContain('--max-goal-rounds 3');
-    expect(formatGoalDriverDisclosure(true, 3)).toContain('max_goal_rounds');
-    expect(formatGoalDriverDisclosure(true)).toContain('沒有給 --max-goal-rounds');
+    const flag = { limit: 3, source: MAX_GOAL_ROUNDS_SOURCE };
+    expect(formatGoalDriverDisclosure(true, flag)).toContain('--max-goal-rounds 旗標給的 3 輪');
+    expect(formatGoalDriverDisclosure(true, flag)).toContain('每次建立或恢復目標重新起算');
+    expect(formatGoalDriverDisclosure(true, flag)).toContain('max_goal_rounds');
+    expect(formatGoalDriverDisclosure(true)).toContain('也沒有給 --max-goal-rounds');
   });
 
   it('runCli 印的那一行帶著真的生效值', async () => {
@@ -502,7 +540,9 @@ describe('披露', () => {
       printer,
       env: {},
     });
-    expect(out.join('\n')).toContain(formatGoalDriverDisclosure(true, 2));
+    expect(out.join('\n')).toContain(
+      formatGoalDriverDisclosure(true, { limit: 2, source: MAX_GOAL_ROUNDS_SOURCE }),
+    );
   });
 
   /**
@@ -528,7 +568,7 @@ describe('披露', () => {
     });
     const said = out.join('\n');
     // 披露照樣說「開啟」——旗標真的開著，說謊的披露比沒有披露更糟。
-    expect(said).toContain(formatGoalDriverDisclosure(true));
+    expect(said).toContain(formatGoalDriverDisclosure(true, SHIPPED_ROUND_CAP));
     // 但一輪都沒排，也沒有任何抱怨。
     expect(said).not.toContain('[續行] 第');
     expect(said).not.toContain('[續行] 排下一輪時出事');
@@ -569,7 +609,7 @@ describe('披露', () => {
         printer,
         env: {},
       });
-      expect(out.join('\n')).toContain(formatGoalDriverDisclosure(on));
+      expect(out.join('\n')).toContain(formatGoalDriverDisclosure(on, SHIPPED_ROUND_CAP));
     }
   });
 });

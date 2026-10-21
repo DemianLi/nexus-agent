@@ -50,19 +50,21 @@
  *   那是這條路的**正常樣子**，不是停滯。這個判準會在長任務中途把目標 block 掉。
  * - **一條會誤殺健康長任務的停損，比沒有停損更糟。**
  *
- * 做的是另一條，而且問的是完全不同的問題：**操作的人在命令列上講死一個輪數**
- * （`--max-goal-rounds`，見 {@link decideGoalRound} 的 `roundCap`）。它不猜停滯，所以誤殺
- * 不了任何東西——它回答的是「這一次呼叫我准你燒幾輪」。
+ * 做的是另一條，而且問的是完全不同的問題：**操作的人講死一個輪數**（見 {@link decideGoalRound} 的
+ * `roundCap`）。它不猜停滯，所以誤殺不了任何東西——它回答的是「人每授權一次，我准你燒幾輪」。兩個入口都有
+ * （[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)）：serve 讀 `cordis.yml` 的 `goal-round-cap` 那一列
+ * （出廠 20）；CLI 讀同一列，命令列的 `--max-goal-rounds` 贏過它。**數的是最後一次建立或恢復目標之後的輪數**，不是累計
+ * （#1614 Q-A2 (a)，見 {@link GoalRoundCap}）。
  *
- * **為什麼非有一條不可**：`maxGoalRounds` 不是操作的人設得動的。`service.ts:269` 是
+ * **為什麼非有一條不可**：`maxGoalRounds` 不是操作的人設得動的。`service.ts:254` 是
  * `request.maxGoalRounds ?? this.#defaultMaxGoalRounds`——`??` 而不是 `Math.min`，所以
- * 模型在 `create_goal` 裡自己填的那個數字**贏過**組裝點給的預設。「唯一的硬上限是
- * `maxGoalRounds`」在真 key 上等於「唯一的硬上限由模型自己挑」，那不是一條停損。
+ * 模型在 `create_goal` 裡自己填的那個數字**贏過**組裝點給的預設，而且還能用 `update_goal` 中途調高。
+ * 「唯一的硬上限是 `maxGoalRounds`」在真 key 上等於「唯一的硬上限由模型自己挑」，那不是一條停損。
  *
- * **這是一筆登記過的載體偏離**：dsh 的 driver 沒有這一格（`goal-round-driver/src/index.ts`
- * 的第 166 行只讀 `goal.maxGoalRounds`）。它不需要——那是一個你要刻意掛載的 Cordis
- * plugin，選擇權在宿主那側；我們的等價物是一個旗標，而旗標後面直接是一支燒 API key 的
- * 迴圈（`cli.ts` 的 `driveGoalRounds`）。
+ * **偏離登記（理由 2，產品需求超出 dsh）**：dsh 的 driver 沒有這一格（`goal-round-driver/src/index.ts:182-188`，
+ * `687f282e`，只比 `goal.maxGoalRounds`）。dsh 是單人桌面，driver 是使用者自己掛的；我們的 serve 是多人共用的內網主機、
+ * 出廠就開著續行，一個失控的目標會一直花錢、佔 thread 名額，部署的人要能從外面夾住它。CLI 那一半同理：旗標後面直接是一支
+ * 燒 API key 的迴圈（`cli.ts` 的 `driveGoalRounds`）。補的是一條模型改不動的上限；目標域的 `??` 不動，同 dsh。
  *
  * （2026-09-19 註：「刻意掛載」這半句要打折——dsh 的 base 其實出廠就掛著這顆 driver，擋續行的
  * 是行程本地、每次 `agent/created` 歸零的啟用狀態。多一條操作者上限這個偏離本身不受影響，見
@@ -94,6 +96,19 @@ export const ROUND_LIMIT_BLOCK_CODE = 'round-limit';
  * dsh 沒有這個代碼，見檔頭那筆登記。
  */
 export const ROUND_CAP_BLOCK_CODE = 'round-cap';
+
+/**
+ * 操作的人給的那條上限：人每授權一次（建立或恢復目標），續行最多再排幾輪（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)）。
+ *
+ * **數的是授權之後的輪數，不是累計**（#1614 Q-A2 (a)）：比累計的話，`round-cap` 之後人按恢復，域那邊會成功（它只看目標自己的上限），
+ * 排程器卻下一次決定就又記 `round-cap`，人怎麼按都續不了。每次授權重新起算，意思是「部署的人保證每 N 輪至少有一個人看過」。
+ */
+export interface GoalRoundCap {
+  /** 一次授權最多排幾輪，正整數。 */
+  readonly limit: number;
+  /** 這條上限是誰給的，寫進 blocker 的訊息裡（例如 `--max-goal-rounds`），讓人知道去哪裡改。 */
+  readonly source: string;
+}
 
 /** 排得出一輪時，要交給入口點的東西。 */
 export interface GoalRoundRequest {
@@ -222,6 +237,38 @@ function reauthorizedSince(events: readonly SessionEvent[], at: number): boolean
   return false;
 }
 
+/**
+ * 這個目標**最後一次被人授權之後**（最後一顆 `create` 或 `resume` 的 `goal/change`）排過幾輪續行，數 `turn/start{kind:'goal'}`。
+ *
+ * 只看同一個目標的 id：清掉再建的新目標不吃舊目標的輪數。`edit`（`update_goal`）不算授權，模型改自己的上限不會讓這個數歸零。
+ * 日誌上找不到那一顆授權時（續行 armed 就一定有，所以只會出現在手搭的日誌上），退回目標自己的累計數，寧可早停。
+ */
+function roundsSinceAuthorized(events: readonly SessionEvent[], goal: GoalView): number {
+  let since = -1;
+  for (let at = events.length - 1; at >= 0; at -= 1) {
+    const event = events[at];
+    if (event?.type !== 'goal/change' || event.data.operation === 'clear') continue;
+    const { operation } = event.data;
+    if ((operation === 'create' || operation === 'resume') && event.data.goal.id === goal.id) {
+      since = at;
+      break;
+    }
+  }
+  if (since < 0) return goal.roundsStarted;
+  let rounds = 0;
+  for (let at = since + 1; at < events.length; at += 1) {
+    const event = events[at];
+    if (
+      event?.type === 'turn/start' &&
+      event.data.kind === 'goal' &&
+      event.data.goalId === goal.id
+    ) {
+      rounds += 1;
+    }
+  }
+  return rounds;
+}
+
 /** 看到這幾種原因就把續行授權收回來，不只是這一次不排。值是收回失敗時警告裡的說法。 */
 const REVOKING_REASONS: Partial<Record<GoalDriverIdleReason, string>> = {
   'turn-max-tokens': '撞到輸出上限',
@@ -234,13 +281,13 @@ const REVOKING_REASONS: Partial<Record<GoalDriverIdleReason, string>> = {
  *
  * @param events - 這一份會話日誌到目前為止的全部事件。
  * @param goal - 目前那份視圖；沒有目前目標時給 `undefined`。
- * @param roundCap - 操作的人這一次呼叫給的輪數上限；省略即只有目標自己那一條。
+ * @param roundCap - 操作的人給的上限（CLI 的 `--max-goal-rounds`、或 `goal-round-cap` 那一列）；省略即只有目標自己那一條。
  * @returns 排一輪、記一顆 blocker，或閒著（帶得出理由）。
  */
 export function decideGoalRound(
   events: readonly SessionEvent[],
   goal: GoalView | undefined,
-  roundCap?: number,
+  roundCap?: GoalRoundCap,
 ): GoalDriverDecision {
   const notClosed = turnClosed(events);
   if (notClosed !== undefined) return { kind: 'idle', reason: notClosed };
@@ -265,13 +312,13 @@ export function decideGoalRound(
   // **順序有意義**：目標自己那個數字先問。兩條同時到頂時該說的是 `round-limit`——那一刻
   // 人設的閘沒有夾到任何東西，說成 `round-cap` 會把功勞算錯，而這兩者分不分得開正是開著
   // 旗標跑真模型時要看的那件事。
-  if (roundCap !== undefined && goal.roundsStarted >= roundCap) {
+  if (roundCap !== undefined && roundsSinceAuthorized(events, goal) >= roundCap.limit) {
     return {
       kind: 'block',
       ref: { id: goal.id, revision: goal.revision },
       reason: {
         code: ROUND_CAP_BLOCK_CODE,
-        message: `這一次呼叫用完了 --max-goal-rounds 給的 ${roundCap} 個續行輪次。`,
+        message: `上一次建立或恢復目標之後已經續行了 ${String(roundCap.limit)} 輪，到了${roundCap.source}給的上限；要繼續就恢復目標，會重新起算。`,
       },
     };
   }
@@ -324,6 +371,12 @@ export interface GoalDriverPort {
   flush(): Promise<void>;
   /** 排程器自己出事時說一聲。 */
   warn(message: string): void;
+  /**
+   * 操作的人給的上限（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)，serve 的 `goal-round-cap` 那一列）。**不是域的事**，
+   * 放在這裡是因為 pump 只拿得到 port：serve 在組 port 的閉包裡把起動期讀的值掛上來，pump 照原樣交給 {@link driveGoalRound}。
+   * 缺席即只有目標自己那一條。CLI 不經 pump，直接把上限傳給 {@link driveGoalRound}。
+   */
+  readonly roundCap?: GoalRoundCap;
 }
 
 /**
@@ -350,7 +403,7 @@ export interface GoalDriverPort {
  *
  * @param readEvents - 讀當下的事件；**每次呼叫都要重讀**，不是一份快照。
  * @param port - 域那一側的四件事。
- * @param roundCap - 操作的人這一次呼叫給的輪數上限。**兩次決定都帶著它，但今天那是形式
+ * @param roundCap - 操作的人給的上限。**兩次決定都帶著它，但今天那是形式
  *   上的一致而不是一條擋得住什麼的閘**：唯一能在 `flush()` 期間新踩到上限的變化是
  *   `roundsStarted` 往前走，而那同時會讓下面那道「號碼變了就重來」先攔下來。寫成只帶
  *   第一次也量不出差別——留著是因為兩次決定該問同一個問題，不是因為它今天擋得到東西。
@@ -359,7 +412,7 @@ export interface GoalDriverPort {
 export async function driveGoalRound(
   readEvents: () => readonly SessionEvent[],
   port: GoalDriverPort,
-  roundCap?: number,
+  roundCap?: GoalRoundCap,
 ): Promise<GoalRoundRequest | undefined> {
   const first = decideGoalRound(readEvents(), port.goal(), roundCap);
   if (first.kind === 'idle') {

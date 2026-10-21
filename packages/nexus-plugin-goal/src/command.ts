@@ -243,6 +243,9 @@ export const GOAL_REJECTED_MESSAGE = `這個 goal 命令在目前的狀態下不
  * @param attachments - 這次呼叫收下的附件參照；沒有就省略。
  * @param steer - 請宿主送一句帶附件的話（`CommandInvocation.steer`）。**在動域之前呼叫**：被宿主拒收就什麼都沒改；之後域拒絕的話
  *   （回 `error`），執行器會把這句作廢。
+ * @param openTurn - 請宿主收下「這個命令會讓它自己開一輪」（`CommandInvocation.openTurn`，#1787）。**在寫 `goal/change` 之前呼叫**，
+ *   宿主不收就拋、什麼都沒寫。會讓排程器接著起一輪的只有三種：建立（含 `edit` 換掉已完成的目標）、`resume`、`edit` 進行中的目標；
+ *   `pause`／`clear`／`edit` 停著的目標與唯讀的都不呼叫。
  * @returns 直接呈現給人的結果。
  * @throws 域的非預期失敗，包含折疊壞掉之後的每一次讀。
  */
@@ -251,6 +254,7 @@ export function executeGoalCommand(
   rawInput: string,
   attachments: readonly AttachmentRef[] = [],
   steer?: (text: string, attachments?: readonly AttachmentRef[]) => void,
+  openTurn?: () => void,
 ): CommandResult {
   const goals = service;
   const command = parseGoalCommand(rawInput);
@@ -274,6 +278,7 @@ export function executeGoalCommand(
         if (current !== undefined && current.phase !== 'complete') {
           return { kind: 'error', text: goalAlreadyMessage(current.phase) };
         }
+        openTurn?.();
         if (attachments.length > 0) sendAttachments();
         return renderGoal('目標建好了', goals.create({ objective: command.objective }));
       }
@@ -281,6 +286,8 @@ export function executeGoalCommand(
         if (current === undefined) return { kind: 'error', text: goalMissingMessage('edit') };
         // **完成掉的目標用 edit 換一個新的**，而且回的是「建好了」不是「改好了」——
         // 換掉的是身分不只是敘述，說成「改好了」會讓人以為歷史還接在同一條上。
+        // 會開一輪的是「換新目標」與「改進行中的目標」（變更後排程器照樣問）；停著（暫停／被擋住）的目標改了仍是停著。
+        if (current.phase === 'complete' || current.phase === 'active') openTurn?.();
         if (attachments.length > 0) sendAttachments();
         if (current.phase === 'complete') {
           return renderGoal('目標建好了', goals.create({ objective: command.objective }));
@@ -295,6 +302,7 @@ export function executeGoalCommand(
         return renderGoal('目標暫停了', goals.pause(goalRef(current)));
       case 'resume':
         if (current === undefined) return { kind: 'error', text: goalMissingMessage('resume') };
+        openTurn?.();
         return renderGoal('目標續上了', goals.resume(goalRef(current)));
       case 'clear':
         if (current === undefined) return { kind: 'success', text: GOAL_NOTHING_TO_CLEAR_MESSAGE };

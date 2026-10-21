@@ -2223,7 +2223,12 @@ export class ThreadPump {
     this.#goalDrives += 1;
     void (async () => {
       try {
-        const round = await driveGoalRound(() => this.#sessions.root.events, driver);
+        // 操作者上限跟著 port 來（serve 的 `goal-round-cap` 那一列，#1623）；缺席即只有目標自己那一條。
+        const round = await driveGoalRound(
+          () => this.#sessions.root.events,
+          driver,
+          driver.roundCap,
+        );
         // 再問一次：`flush()` 期間人可能已經送了東西進來。`driveGoalRound` 自己看不到
         // 排隊——它只讀日誌，而排隊中的那一筆還沒寫下任何事件——所以這是唯一看得到的地方。
         if (round === undefined || this.#closed || this.running) return;
