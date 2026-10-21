@@ -133,14 +133,17 @@ name。public name 是 `(serverName, rawName)` 的純函式——連線順序、
   - 核准政策是 `never`：不問、一律回絕，`APPROVAL_POLICY_NEVER`。出廠的兩組權限組核准都是 `ask`，要 `never` 得用 `--patch`
     改 `permission-presets` 那一列（只在有 `--workspace` 時生效，見 [`docs/operations.md`](../../docs/operations.md)）。
   - **背景子代理**叫到：背後沒有人，一律回絕（`APPROVAL_POLICY_NEVER`）。前景子代理照 #328 問 root 的人。
-  - 這一次組裝沒有人可以按（沒有答題管道）：一律回絕。
+  - **CLI**（一次性與 REPL 都是）：這個入口沒有核准管道（`HEADLESS_APPROVALS`），沒宣告免問的工具一律回絕，`APPROVAL_POLICY_NEVER`。
+    要在 CLI 用 MCP 工具，那幾支得列進 `exempt` 或整台 `default: allow`。
 - **核准卡的理由**寫 server 名與 raw name：`MCP server crm 的工具 update_order 要先讓人看過（設定 approval）`。它進日誌的
   `approval/asked`，也進回絕的文字；web 的核准面板今天還不畫它（[#1628](https://github.com/DemianLi/nexus-agent/issues/1628)），
   面板上是工具名與整份參數。參數不截：人核准的是整份內容。
+- **只管這台 server 自己的工具**：`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource` 三支資源工具不經這個
+  閘門，`approval` 管不到讀資源（見下一節）。
 - **不讀 MCP 的 tool annotations**（`readOnlyHint`、`destructiveHint`）：SDK 說明寫明那些只是 hint，client 不該依不受信任的 server
   給的 annotations 做決定。
 - 閘門經 `registry.approvals.gate()` 登記，只回 `ask` 或委派給下一位、**從不回 `allow`**（回 `allow` 會把排在後面的閘門整條吃掉）。
-  連不上、列不出工具的那一列不登記閘門；`default: allow` 也不登記。
+  連不上、列不出工具的那一列不登記閘門；`tools/list` 一支都沒列出的、`default: allow` 的也不登記。
 
 ## 指引與資源（[#431](https://github.com/DemianLi/nexus-agent/issues/431)、[#430](https://github.com/DemianLi/nexus-agent/issues/430)）
 

@@ -67,14 +67,14 @@ export type McpApproval = z.infer<typeof mcpApprovalSchema>;
  * @param serverName - 這一台 server 的命名空間，進 `reason`。
  * @param approval - 驗過的宣告。
  * @param rawNameOf - 這一列註冊的工具：public name → raw name。不在表上的工具不是這一列的，一律 `next()`。
- * @returns 要登記的 listener；`default: allow` 時是 `undefined`（不登記）。
+ * @returns 要登記的 listener；`default: allow`、或 `tools/list` 一支都沒列出時是 `undefined`（不登記：沒有工具可擋）。
  */
 export function mcpApprovalGate(
   serverName: string,
   approval: McpApproval,
   rawNameOf: ReadonlyMap<string, string>,
 ): PreToolListener | undefined {
-  if (approval.default === 'allow') return undefined;
+  if (approval.default === 'allow' || rawNameOf.size === 0) return undefined;
   const exempt = new Set(approval.exempt ?? []);
   return (exec, next) => {
     const rawName = rawNameOf.get(exec.name);

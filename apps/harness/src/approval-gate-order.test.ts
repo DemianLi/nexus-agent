@@ -269,6 +269,10 @@ async function measure(plugins: () => readonly PluginEntry[], threadId: string):
  * MCP 那一列（[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)）不在出貨清單，部署方用 patch 插；插了就有第二位 gate。
  * 它照 (a) 寫——不是自己的工具一律 `next()`——所以排在 submit-record 前面，`submit_record` 照樣停下來等人。這一行就是那句話的
  * 實測：閘門對別的工具改回 `allow`，它會變得跟第二行一樣。
+ *
+ * 反方向（submit-record 在前、MCP 的工具照樣被問）不在這張表：這裡量的是 `submit_record` 寫出去沒。它量在
+ * [`mcp-approval-wire.test.ts`](./mcp-approval-wire.test.ts) 的 A——那裡走出貨清單，patch `insert` 不帶 `id` 就接在尾巴
+ * （`plugin-config.ts` 的 `applyEntryPatches`），所以 MCP 那一列正排在 submit-record 後面。
  */
 const MCP_SERVER = fileURLToPath(new URL('./mcp-fixture-server.ts', import.meta.url));
 

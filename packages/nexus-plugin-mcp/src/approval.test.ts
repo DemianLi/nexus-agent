@@ -17,6 +17,7 @@ import type { McpPluginOptions } from './index.js';
 import { publicToolName } from './names.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
+const MODERN_SERVER = fileURLToPath(new URL('./modern-stdio-server.ts', import.meta.url));
 
 /** 鏈底：真的走到 waterfall 尾巴時的那一格。用一個認得出來的值，才分得出「委派了」與「自己回 allow」。 */
 const BOTTOM: PreToolDecision = { kind: 'deny', reason: '鏈底' };
@@ -202,6 +203,30 @@ describe('接上一台真的 MCP server', () => {
     const { registry, dispose } = await loadPlugins([plugin]);
     try {
       expect(registry.logger.warnings()[0]?.message).toContain('maxInstructionBytes (40)');
+      expect(registry.approvals.listeners()).toEqual([]);
+    } finally {
+      await dispose();
+    }
+  });
+
+  it('tools/list 回零支：沒有工具可擋，不登記閘門', async () => {
+    const { registry, dispose } = await loadPlugins([
+      createMcpPlugin({
+        serverName: 'empty',
+        connection: {
+          transport: 'stdio',
+          command: process.execPath,
+          args: ['--import', 'tsx', MODERN_SERVER],
+          env: { FIXTURE_NO_TOOLS: '1' },
+        },
+      }),
+    ]);
+    try {
+      expect(
+        [...registry.tools.effective().keys()].filter((name) => name.startsWith('mcp__')),
+      ).toEqual([]);
+      // 連上了、沒有出錯：不是走「連不上」那條路才沒有閘門。
+      expect(registry.logger.warnings()).toEqual([]);
       expect(registry.approvals.listeners()).toEqual([]);
     } finally {
       await dispose();

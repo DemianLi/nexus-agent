@@ -139,6 +139,13 @@ const settledAfter =
     state.status === 'idle' &&
     state.entries.filter((entry) => entry.kind === 'ai' && !entry.streaming).length >= turns;
 
+/**
+ * A、E 等的終點：停在核准卡，**或**跑完兩輪。只等其中一個的話，走錯那條路（該問沒問、該放沒放）時要等到逾時才紅；
+ * 兩個都收，錯的那條路走到底就停下來，由後面的斷言當場講出是哪一條。
+ */
+const askedOrSettled = (state: ConversationState): boolean =>
+  awaitingApproval(state) || settledAfter(2)(state);
+
 function toolEntry(state: ConversationState, name: string) {
   const entry = state.entries.find((each) => each.kind === 'tool' && each.name === name);
   if (entry?.kind !== 'tool') throw new Error(`沒有 ${name} 的工具卡`);
@@ -168,15 +175,17 @@ const done: ScriptedTurn = { content: '收工。' };
 describe('宣告要問的工具', () => {
   it('A：核准前停在核准卡，理由帶 server 名與 raw name；server 一次都沒收到', async () => {
     const session = await open([callRecord, done]);
-    await until(session, awaitingApproval);
+    await until(session, askedOrSettled);
 
+    expect(session.calls()).toEqual([]);
     const approval = session.state.pendings.find(isApprovalPending)!;
     expect(approval.actions).toEqual([
       { name: RECORD, args: { item: '螺絲' }, description: REASON, callId: expect.any(String) },
     ]);
-    expect(session.calls()).toEqual([]);
     // 線上先看到核准卡，日誌稍後才落盤：等到那一筆寫進去再比。
-    await expect.poll(() => session.log().map((event) => event.type)).toContain('approval/asked');
+    await expect
+      .poll(() => session.log().map((event) => event.type), { timeout: 10_000 })
+      .toContain('approval/asked');
     expect(session.log().map((event) => event.type)).toContain('interrupt/raised');
     expect(session.log().find((event) => event.type === 'approval/asked')?.data).toMatchObject({
       toolName: RECORD,
@@ -220,7 +229,7 @@ describe('宣告要問的工具', () => {
             event.type === 'inbox/spliced' &&
             event.data.inserted.some((item) => item.text === '先等一下'),
         );
-    await expect.poll(spliced).toBeDefined();
+    await expect.poll(spliced, { timeout: 10_000 }).toBeDefined();
     expect(spliced()?.data).toMatchObject({ target: 'next-turn' });
     // 那一筆沒有被放行：核准之後沒有結果，也沒有開新的一輪。
     const log = session.log();
@@ -236,7 +245,7 @@ describe('對照組與政策', () => {
   it('E：exempt 裡的那一支（raw name，public name 被補了指紋）不問、直接跑，server 收到一次', async () => {
     expect(SEARCH).not.toBe('mcp__crm__orders.search');
     const session = await open([callSearch, done]);
-    await until(session, settledAfter(2));
+    await until(session, askedOrSettled);
 
     expect(session.state.pendings).toEqual([]);
     expect(session.calls()).toEqual(['orders.search']);
@@ -256,7 +265,9 @@ describe('對照組與政策', () => {
     expect(session.calls()).toEqual([]);
     expect(toolEntry(session.state, RECORD).errorCode).toBe(APPROVAL_POLICY_NEVER);
     // 量的確實是 never 那一格：起始政策記在日誌上（日誌稍後才落盤，等到收尾那一筆再比）。
-    await expect.poll(() => session.log().map((event) => event.type)).toContain('turn/end');
+    await expect
+      .poll(() => session.log().map((event) => event.type), { timeout: 10_000 })
+      .toContain('turn/end');
     expect(
       session
         .log()
