@@ -33,6 +33,7 @@ import type {
 import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
+import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
 import { boundArtifacts } from './artifact-bound.js';
 import { projectNonText } from './project-content.js';
 import { ensureHub } from './hub.js';
@@ -43,6 +44,8 @@ import type { McpResourceRequest, McpSource } from './hub.js';
 export { publicToolName, SERVER_NAME_PATTERN } from './names.js';
 export { MCP_HUB_SERVICE, RESOURCE_TOOL_NAMES } from './hub.js';
 export { reconnectSchema } from './supervisor.js';
+export { approvalReason, mcpApprovalSchema } from './approval.js';
+export type { McpApproval } from './approval.js';
 export type { ReconnectPolicy } from './supervisor.js';
 
 /** 帶出處標頭的 server 指引預設上限（UTF-8 位元組），照 dsh 的 `maxInstructionBytes`。 */
@@ -138,6 +141,12 @@ export const mcpConfigSchema = z.strictObject({
    * 呼叫時才決定做不到。寫 `false` 是明著關掉。
    */
   elicitation: z.boolean().default(true),
+  /**
+   * 哪些工具要先讓人核准（[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)），形狀與偏離見 [`approval.ts`](./approval.ts)。
+   * **省略即 `{ default: ask }`：整台都問**。唯讀的 server 寫 `{ default: allow }`；`default: ask` 時用 `exempt` 列免問的工具
+   * （server 自己公告的名字）。
+   */
+  approval: mcpApprovalSchema.default(() => mcpApprovalSchema.parse({})),
 });
 
 /** 驗過的設定。 */
@@ -220,6 +229,8 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     try {
       const first = new Map<string, ToolCall>();
       const names: string[] = [];
+      // 核准閘門用的對照：模型叫的是 public name，宣告寫的是 raw name。
+      const rawNameOf = new Map<string, string>();
       for (const tool of await client.getTools()) {
         const rawName = tool.name;
         throwOnToolError(tool);
@@ -231,7 +242,18 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
         tool.name = publicToolName(serverName, rawName);
         delegateTo(tool, rawName, label, () => supervisor);
         names.push(tool.name);
+        rawNameOf.set(tool.name, rawName);
         registered.push(registry.tools.register(tool as StructuredTool));
+      }
+      // 閘門跟工具一起進 `registered`：下面任何一步收住或拋，它跟工具一起撤掉，不留一位擋著不存在的工具的 listener。
+      const gate = mcpApprovalGate(serverName, config.approval, rawNameOf);
+      if (gate !== undefined) registered.push(registry.approvals.gate(gate));
+      const unknown = unknownExempt(config.approval, rawNameOf.values());
+      if (unknown.length > 0) {
+        registry.logger.warn(
+          `MCP 伺服器 "${serverName}" 的 approval.exempt 有 tools/list 沒列出的名字：${unknown.join('、')}` +
+            `（要寫 server 自己公告的名字；沒對到的照 default 被問）`,
+        );
       }
       // 指引與資源走同一條已經連上的 SDK client，不再經 `MultiServerMCPClient` 開新連線。放在 `try` 裡：
       // 超過上限的指引算連線失敗，要跟列不出工具走同一個出口（撤工具、收連線、警告或拋）。

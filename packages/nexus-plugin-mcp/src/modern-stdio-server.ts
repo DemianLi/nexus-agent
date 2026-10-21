@@ -44,7 +44,8 @@ function createServer(): McpServer {
       ...(instructions !== undefined && { instructions }),
     },
   );
-  registerModernTools(server);
+  // 核准宣告用（#1622）：一支工具都不公告的 server，`tools/list` 回空陣列，閘門不該登記。
+  if (process.env['FIXTURE_NO_TOOLS'] !== '1') registerModernTools(server);
   if (process.env['FIXTURE_DROP_TOOL'] === '1') {
     server.registerTool('drop_connection', { description: '回一個看起來像斷線的錯誤。' }, () => {
       throw new Error('Connection closed');

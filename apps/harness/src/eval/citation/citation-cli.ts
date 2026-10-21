@@ -73,7 +73,10 @@ function parseArgs(argv: readonly string[]): Options {
   };
 }
 
-/** 每組一個 patch：把夾具 server 以 `kb` 掛上去。 */
+/**
+ * 每組一個 patch：把夾具 server 以 `kb` 掛上去。它只有一支搜尋工具、是唯讀的，所以寫 `approval: { default: allow }`：
+ * #1622 起沒寫就整台都問，而評測沒有人去按核准。
+ */
 async function writePatch(group: Group): Promise<string> {
   const dir = await mkdtemp('/var/tmp/nexus-citation-patch-');
   const file = join(dir, 'kb.patch.yml');
@@ -91,6 +94,7 @@ async function writePatch(group: Group): Promise<string> {
           cwd: ${HARNESS_DIR}
           env:
             ${MODE_ENV}: '${group}'
+        approval: { default: allow }
 `,
   );
   return file;

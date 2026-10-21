@@ -10,6 +10,8 @@
  * 由 `mcp.test.ts` 以 `node --import tsx <這個檔>` 啟動。
  */
 
+import { appendFileSync } from 'node:fs';
+
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -35,5 +37,39 @@ server.registerTool('fail', { description: '一定失敗，回 isError。', inpu
   isError: true,
   content: [{ type: 'text', text: FAILURE_TEXT }],
 }));
+
+/**
+ * 核准宣告的驗收用（#1622）：量的是 **server 這一側有沒有收到 `tools/call`**，不是 client 看到什麼。`FIXTURE_CALL_LOG` 指一個檔，
+ * 這兩支每被呼叫一次就往裡面附加一行 raw name；沒設就不記。環境變數經那一列的 `connection.env` 傳進來。
+ */
+const CALL_LOG = process.env['FIXTURE_CALL_LOG'];
+const recordCall = (rawName: string): void => {
+  if (CALL_LOG !== undefined) appendFileSync(CALL_LOG, `${rawName}\n`);
+};
+
+/** 會寫東西的那一支：宣告成要問。 */
+export const RECORD_ORDER = 'record_order';
+server.registerTool(
+  RECORD_ORDER,
+  { description: '登記一筆訂單。', inputSchema: { item: z.string().describe('品項') } },
+  ({ item }) => {
+    recordCall(RECORD_ORDER);
+    return { content: [{ type: 'text', text: `已登記：${item}` }] };
+  },
+);
+
+/**
+ * 查詢的那一支，名字刻意帶句點：public name 會被換字並補指紋（`publicToolName`），`exempt` 寫的是 raw name，
+ * 拿 public name 去掉前綴來比就對不上。
+ */
+export const SEARCH_ORDERS = 'orders.search';
+server.registerTool(
+  SEARCH_ORDERS,
+  { description: '查訂單。', inputSchema: { query: z.string().describe('查什麼') } },
+  ({ query }) => {
+    recordCall(SEARCH_ORDERS);
+    return { content: [{ type: 'text', text: `${query}：查無資料` }] };
+  },
+);
 
 await server.connect(new StdioServerTransport());

@@ -1237,6 +1237,10 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
           transport: stdio
           command: npx
           args: ['-y', '@modelcontextprotocol/server-github']
+        # 沒寫 approval 就整台都要人核准；只讀的那幾支列進 exempt 免問，
+        # 名字照 server 的 tools/list 公告的抄（不是模型看到的 mcp__github__…）
+        approval:
+          exempt: ['<只讀那支工具的名字>']
 
 # 插一顆自己寫的：路徑錨在這個 patch 檔旁邊（`./` 與 `../` 都可以，絕對路徑也可以），
 # 模組要 `export default` 那顆 plugin
@@ -1344,6 +1348,18 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
   就記一行「[組裝] thread "…" 警告：…」，伺服器回來之後開的對話就有工具了。要它連不上就算掉，那一列的
   `config` 寫 `failOnStartupError: true`（掉了之後照上一條，到重啟或改了那一列為止不再連），見
   [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)。
+- **MCP 的工具預設都要人核准**（[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)，超出 dsh）：模型叫到時先跳核准面板，
+  人按允許之前伺服器收不到呼叫。那一列寫 `approval` 改它：`{ default: allow }` 整台不問（唯讀的伺服器這樣寫），
+  `{ exempt: [<名字>…] }` 只讓這幾支不問，名字寫**伺服器自己公告的**，不是模型看到的 `mcp__…`。`default: allow` 又寫 `exempt`
+  是設定錯誤、那一列載入失敗；`exempt` 裡有伺服器沒列出的名字，啟動時那段警告指名它，那一支以外照問。問了之後的事跟其他要核准的
+  工具同一條路：人不允許回 `APPROVAL_REJECTED_BY_USER`；**核准政策是 `never` 時一律回絕**、**背景子代理叫到也一律回絕**
+  （背後沒有人）、**CLI 叫到也一律回絕**（一次性與 REPL 都沒有核准管道），都是 `APPROVAL_POLICY_NEVER`；前景子代理問主對話的人。
+  所以要在 CLI 或背景子代理裡用的工具，得列進 `exempt` 或整台 `default: allow`。核准卡的理由寫伺服器名與工具名，進日誌的
+  `approval/asked`，web 的面板今天還不畫它（[#1628](https://github.com/DemianLi/nexus-agent/issues/1628)）。
+  三支資源工具（`list_mcp_resources`、`list_mcp_resource_templates`、`read_mcp_resource`）不經這個閘門，`approval` 管不到讀資源。
+  **這是行為改變**：升上來之前插了 MCP 列的部署方，見升級指南
+  [`mcp-tools-need-approval`](upgrade-guide/v0.5.19/mcp-tools-need-approval/guide.md)。寫法細節見
+  [`packages/nexus-plugin-mcp/README.md`](../packages/nexus-plugin-mcp/README.md)〈核准〉。
 - **MCP 伺服器的使用指引與資源也進得來**（[#431](https://github.com/DemianLi/nexus-agent/issues/431)、
   [#430](https://github.com/DemianLi/nexus-agent/issues/430)）：伺服器 `initialize` 回的 `instructions` 會加上
   `### MCP server: <名字>` 接在系統提示詞後面，模型另有 `list_mcp_resources`、`list_mcp_resource_templates`、
