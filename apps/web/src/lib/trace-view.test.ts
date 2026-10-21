@@ -15,6 +15,7 @@ import {
 import { describe, expect, it } from 'vitest';
 
 import { MAX_TOKENS_NOTICE } from '@/lib/max-tokens-view';
+import { PLAN_REVIEW_DISMISSED_TEXT } from '@/lib/plan-review';
 import { Script } from '@/test/conversation-frames';
 import {
   ENDING_LABEL,
@@ -398,6 +399,18 @@ describe('計劃的審核結果與子代理', () => {
       summary: '搬家計劃',
       outcome: 'approved',
     });
+  });
+
+  it('關掉審核的新形狀（#1607 之後，工具跑完帶新字）：結果是要求修改', () => {
+    const script = new Script();
+    const state = reduceAll(emptyConversation(), [
+      script.running(),
+      ...script.human('history-0', '規劃一下'),
+      script.started('p1', 'exit_plan_mode', { plan: '# 搬家計劃\n\n先打包。' }),
+      script.finished('p1', PLAN_REVIEW_DISMISSED_TEXT),
+      script.completed(),
+    ]);
+    expect(only(state)[1]).toMatchObject({ kind: 'tool', outcome: 'revise' });
   });
 
   it('子代理那幾列帶歸屬，主對話的不帶；join 不起來就照講未歸屬', () => {

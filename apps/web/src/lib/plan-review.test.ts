@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   AUTO_OPENED_KEY,
   LEGACY_PLAN_REJECTED_TEXT,
+  LEGACY_PLAN_REVIEW_DISMISSED_TEXT,
   MAX_AUTO_OPENED,
   PLAN_KEEP_PLANNING_LEAD,
   PLAN_REVIEW_DISMISSED_TEXT,
@@ -119,12 +120,23 @@ describe('交出的計劃（計劃卡）', () => {
 describe('審核結果', () => {
   const failed = (said: string) => tool({ status: 'failed', error: `Error: ${said}` });
 
-  it('工具跑完就是同意（新舊兩條路都一樣）', () => {
+  it('工具跑完、不是關掉審核那一句：同意（新舊兩條路都一樣）', () => {
     expect(planOutcomeOf(tool({ status: 'done', text: '計劃已獲准' }))).toBe('approved');
+    expect(
+      planOutcomeOf(
+        tool({ status: 'done', text: '計劃已獲准，離開計劃模式；從你的下一步起照計劃執行。' }),
+      ),
+    ).toBe('approved');
+  });
+
+  it('關掉審核的新形狀（#1607 之後，工具跑完帶新字）：要求修改', () => {
+    expect(planOutcomeOf(tool({ status: 'done', text: PLAN_REVIEW_DISMISSED_TEXT }))).toBe(
+      'revise',
+    );
   });
 
   it('關掉審核、選了繼續規劃（有沒有意見）、舊路由的拒絕：都是要求修改', () => {
-    expect(planOutcomeOf(failed(PLAN_REVIEW_DISMISSED_TEXT))).toBe('revise');
+    expect(planOutcomeOf(failed(LEGACY_PLAN_REVIEW_DISMISSED_TEXT))).toBe('revise');
     expect(planOutcomeOf(failed(`${PLAN_KEEP_PLANNING_LEAD}修改計劃後再提交一次。`))).toBe(
       'revise',
     );
@@ -163,7 +175,7 @@ describe('審核結果', () => {
   });
 
   it('結果文字只在 `text`（沒有 `error`）也讀得到', () => {
-    expect(planOutcomeOf(tool({ status: 'failed', text: PLAN_REVIEW_DISMISSED_TEXT }))).toBe(
+    expect(planOutcomeOf(tool({ status: 'failed', text: LEGACY_PLAN_REVIEW_DISMISSED_TEXT }))).toBe(
       'revise',
     );
   });
@@ -172,10 +184,10 @@ describe('審核結果', () => {
 describe('抄來的字跟 harness 對得上（web 不相依那兩個套件，改了那邊這裡要紅）', () => {
   const source = read(PLAN_MODE_SOURCE);
 
-  it('工具名、關掉審核那一句', () => {
+  it('工具名、關掉審核那一句（#1607 之前是舊字、之後是新字，兩種都認；換成第三種要紅）', () => {
     expect(/EXIT_PLAN_MODE_TOOL_NAME = '([^']*)'/.exec(source)?.[1]).toBe('exit_plan_mode');
-    expect(/PLAN_REVIEW_DISMISSED_MESSAGE =\s*'([^']*)'/.exec(source)?.[1]).toBe(
-      PLAN_REVIEW_DISMISSED_TEXT,
+    expect([LEGACY_PLAN_REVIEW_DISMISSED_TEXT, PLAN_REVIEW_DISMISSED_TEXT]).toContain(
+      /PLAN_REVIEW_DISMISSED_MESSAGE =\s*'([^']*)'/.exec(source)?.[1],
     );
   });
 
