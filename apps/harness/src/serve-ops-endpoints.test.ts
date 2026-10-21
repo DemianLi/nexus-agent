@@ -24,8 +24,8 @@ import { bodyLog, exchangeServeToken, foldTurn, serveClient } from './fixtures.j
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { LIVE_API_KEY_ENV } from './live-model.js';
 import { METRICS_TOKEN_FILE } from './metrics-token.js';
-import { runServe } from './serve.js';
-import type { RunningServe } from './serve.js';
+import { installServeProcessLifecycle, runServe } from './serve.js';
+import type { RunningServe, ServeProcess } from './serve.js';
 
 const serveEntry = fileURLToPath(new URL('./serve.ts', import.meta.url));
 const harnessDir = fileURLToPath(new URL('../', import.meta.url));
@@ -360,6 +360,83 @@ describe('收尾時間窗：close() 開始後 listener 還在聽，/readyz 回 5
     running = undefined;
     expect(Date.now() - startedAt).toBeGreaterThanOrEqual(1150);
   });
+});
+
+describe('致命例外的收尾不走時間窗，不吃掉 fail-loud 的 2 秒預算（#1787）', () => {
+  const DRAIN_2000 = ['- id: ops-endpoints', '  config:', '    probes:', '      drainMs: 2000'];
+
+  /** 假行程：記下 `exit` 的時間與碼；`fire` 觸發註冊過的 handler。 */
+  function fakeProcess() {
+    const handlers = new Map<string, ((arg?: unknown) => void)[]>();
+    const exits: { code: number; at: number }[] = [];
+    const proc = {
+      exitCode: undefined as number | string | null | undefined,
+      on(event: string, handler: (arg?: unknown) => void) {
+        handlers.set(event, [...(handlers.get(event) ?? []), handler]);
+      },
+      off() {},
+      stderr: { write: () => true },
+      exit: (code: number) => {
+        exits.push({ code, at: Date.now() });
+      },
+    } as unknown as ServeProcess;
+    const fire = (event: string, arg?: unknown): void => {
+      for (const handler of handlers.get(event) ?? []) handler(arg);
+    };
+    return { proc, exits, fire };
+  }
+
+  /** 真的 `runServe`＋假行程；`close` 外面包一層記下收到的選項與完成時間。 */
+  async function wired() {
+    const where = layout(DRAIN_2000);
+    const server = await start(where);
+    // 先抓一次 /readyz：沒抓過的話時間窗本來就不等，這一格就量不到東西。
+    expect((await fetch(`${server.url}/readyz`)).status).toBe(200);
+    const calls: { options: unknown; at: number }[] = [];
+    const wrapped: RunningServe = {
+      ...server,
+      close: async (options) => {
+        try {
+          await server.close(options);
+        } finally {
+          calls.push({ options, at: Date.now() });
+        }
+      },
+    };
+    const { proc, exits, fire } = fakeProcess();
+    installServeProcessLifecycle(proc).attach(wrapped);
+    return { server, calls, exits, fire };
+  }
+
+  it('致命例外：dispose 在 fail-loud 的 2 秒上限內完成，exit(1) 在 dispose 完成之後', async () => {
+    const { calls, exits, fire } = await wired();
+    const startedAt = Date.now();
+    fire('uncaughtException', new Error('fatal probe'));
+    await vi.waitFor(() => expect(exits).toHaveLength(1), { timeout: 5000 });
+    running = undefined;
+
+    expect(exits[0]!.code).toBe(1);
+    expect(calls).toHaveLength(1);
+    expect(calls[0]!.options).toEqual({ drain: false });
+    // 順序：收尾做完才退出（時間窗若吃掉預算，`exit(1)` 會先到、thread 收尾被切掉）。
+    expect(calls[0]!.at).toBeLessThanOrEqual(exits[0]!.at);
+    // 上界：沒有等 2000 毫秒的時間窗（時間窗若被等，退出落在 2000 毫秒上下）。
+    expect(exits[0]!.at - startedAt).toBeLessThan(1200);
+  }, 15000);
+
+  it('SIGTERM 照舊等時間窗：窗內抓得到 503，收尾要等過 drainMs', async () => {
+    const { server, calls, exits, fire } = await wired();
+    const startedAt = Date.now();
+    fire('SIGTERM');
+    const during = await fetch(`${server.url}/readyz`, { headers: { connection: 'close' } });
+    expect(during.status).toBe(503);
+    await vi.waitFor(() => expect(exits).toHaveLength(1), { timeout: 8000 });
+    running = undefined;
+
+    expect(exits[0]!.code).toBe(0);
+    expect(calls[0]!.options).toEqual({ drain: true });
+    expect(exits[0]!.at - startedAt).toBeGreaterThanOrEqual(1900);
+  }, 15000);
 });
 
 describe('驗收 8：子行程起真的 serve，接線拿掉就紅', () => {
