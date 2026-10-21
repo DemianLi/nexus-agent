@@ -11,6 +11,7 @@ import { approvalGatePlugin } from './approval.js';
 import {
   APPROVAL_POLICY_SERVICE,
   ApprovalPolicyController,
+  approvalPolicyOnResume,
   isApprovalPolicy,
   recordedApprovalPolicy,
 } from './approval-policy.js';
@@ -211,6 +212,17 @@ describe('recordedApprovalPolicy', () => {
     log.append('approval/policy', { policy: 'ask' });
     log.append('approval/policy', { policy: 'never', source: 'delegation' });
     expect(recordedApprovalPolicy(log.events)).toBe('ask');
+  });
+});
+
+describe('approvalPolicyOnResume', () => {
+  it('記著的照記著的；一顆 root 的都沒有（#437 以前的日誌）照 ask，子代理那顆不算', () => {
+    const log = new SessionLog('t');
+    expect(approvalPolicyOnResume(log.events)).toBe('ask');
+    log.append('approval/policy', { policy: 'never', source: 'delegation' });
+    expect(approvalPolicyOnResume(log.events)).toBe('ask');
+    log.append('approval/policy', { policy: 'never' });
+    expect(approvalPolicyOnResume(log.events)).toBe('never');
   });
 });
 

@@ -16,6 +16,7 @@ import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import {
+  approvalPolicyOnResume,
   RELEASED_SESSION_FORMAT_VERSIONS,
   SESSION_FORMAT_CATALOG,
   SESSION_FORMAT_EDGES,
@@ -24,6 +25,7 @@ import {
   createSessionFormatCatalog,
   currentMessageFeedback,
   interruptedTurnClosers,
+  recordedApprovalPolicy,
   replayConversation,
   resumeClosingInterruptedTurn,
 } from '@nexus/core';
@@ -72,6 +74,8 @@ interface Expected {
     readonly resumeWithWorkspace?: string;
     readonly summaries?: readonly { readonly beforeCall: boolean }[];
     readonly firstHalf?: { readonly eventCount: number; readonly replay: Replay };
+    readonly approvalPolicyRecorded?: boolean;
+    readonly approvalPolicyOnResume?: string;
   }[];
 }
 
@@ -230,6 +234,10 @@ describe.each(names)('夾具 %s', (name) => {
         const { computedBy: _, ...replay } = trigger.firstHalf.replay;
         expect(replaySummary(events.slice(0, trigger.firstHalf.eventCount))).toEqual(replay);
       }
+      if (trigger.approvalPolicyOnResume !== undefined) {
+        expect(recordedApprovalPolicy(events) !== undefined).toBe(trigger.approvalPolicyRecorded);
+        expect(approvalPolicyOnResume(events)).toBe(trigger.approvalPolicyOnResume);
+      }
     });
   }
 });
@@ -268,6 +276,7 @@ describe('規則（驗收 D）', () => {
       [10, "if ('messageId' in stored) {"],
       [13, 'if (header.workspaceRoot === undefined) return;'],
       [33, "if (turnOpen || suspended) close(event.time, { event: 'completed' });"],
+      [34, "return recordedApprovalPolicy(events) ?? 'ask';"],
       [45, 'event.data.beforeCall === true ? messagesBefore : messagesBefore + 1'],
     ]);
     const branched = SESSION_FORMAT_EDGES.filter((edge) => edge.readerBranch !== undefined);
@@ -280,6 +289,18 @@ describe('規則（驗收 D）', () => {
       expect(text, edge.readerBranch).toContain(anchors.get(edge.to));
     }
   });
+});
+
+describe('33→34 的讀方分支只有一份（#1797）', () => {
+  // 入口改回自己寫一份 `recordedApprovalPolicy(...) ?? 'ask'` 時行為不變，入口層的續接測試抓不到，只能看原始碼。
+  it.each(['apps/harness/src/cli.ts', 'apps/harness/src/serve.ts'])(
+    '%s 續接的核准政策呼叫 approvalPolicyOnResume，不自己讀日誌',
+    (path) => {
+      const source = readFileSync(join(REPO, path), 'utf8');
+      expect(source).toContain('approvalPolicyOnResume(resumed.events)');
+      expect(source).not.toContain('recordedApprovalPolicy');
+    },
+  );
 });
 
 describe('接線（驗收 B）：13→14 標成 breaking，經出貨的 store 讀', () => {

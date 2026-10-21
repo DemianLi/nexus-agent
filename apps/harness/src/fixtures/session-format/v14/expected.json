@@ -6,7 +6,7 @@
     "released": true
   },
   "computedByToday": {
-    "head": "fe52c279c58fa6a07e4f934cd75826b2e518a301",
+    "head": "13c45a2a67e0d99709e13b35dfdb6290185bed28",
     "dirty": false
   },
   "sessions": {
@@ -124,6 +124,13 @@
         "running",
         "completed"
       ]
+    },
+    {
+      "edge": 34,
+      "session": "cli",
+      "computedBy": "today",
+      "approvalPolicyRecorded": false,
+      "approvalPolicyOnResume": "ask"
     }
   ]
 }
