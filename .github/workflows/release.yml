@@ -66,6 +66,17 @@ jobs:
           VERSION: ${{ inputs.version }}
         run: pnpm run release:version --expect "$VERSION"
 
+      # 漏洞掃描（#1545 步驟 5，Q1 (a)）：prod 相依有 high／critical 又不在 `.github/audit-exceptions.json` 上就停，不打包。
+      # 判斷與每日排程（`audit.yml`）同一支。結果（audit 原始輸出＋這次用到的例外清單）配一份 `.sha256` 附在 Release 上。
+      - name: 漏洞掃描
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          report="nexus-agent-${VERSION#v}-audit.json"
+          python3 .github/scripts/check_audit.py --out ".release-out/$report"
+          (cd .release-out && sha256sum "$report" > "$report.sha256")
+
       - name: 打包
         run: pnpm run release:pack
 
@@ -78,7 +89,7 @@ jobs:
 
       # 不自己 git tag：runner 沒有 committer 身分，git tag -a 會 exit 128。
       # gh release create 會依 --target 自行建立 tag，少一段 git 操作也少一個失敗點。
-      # 產物（tar.gz、SBOM 的 .cdx.json，各配一份 .sha256，#1545）附在 Release 上；沒有 npm publish（理由 2：完全內網，沒有 registry 可用）。
+      # 產物（tar.gz、SBOM 的 .cdx.json、漏洞掃描結果的 -audit.json，各配一份 .sha256，#1545）附在 Release 上；沒有 npm publish（理由 2：完全內網，沒有 registry 可用）。
       # 上一個 tag 有升級指南目錄（AGENTS.md「發版」〈升級指南〉，#1537）就在 notes 開頭連過去：`--notes` 與 `--generate-notes`
       # 並用時，生成的內容接在後面。上一個 tag 取這次 commit 往回最近的 `v*`，新 tag 這時還沒建，所以就是讀者正在跑的那一版。
       - name: 建立 tag 與 GitHub Release
@@ -94,7 +105,7 @@ jobs:
             notes=(--notes "從 $prev 升上來之前，先讀[升級指南](https://github.com/$REPO/tree/$VERSION/docs/upgrade-guide/$prev)，並照[〈升級與回滾〉](https://github.com/$REPO/blob/$VERSION/docs/operations.md#升級與回滾)先備份 home。")
           fi
           gh release create "$VERSION" \
-            .release-out/*.tar.gz .release-out/*.cdx.json .release-out/*.sha256 \
+            .release-out/*.tar.gz .release-out/*.cdx.json .release-out/*-audit.json .release-out/*.sha256 \
             --target "${{ github.sha }}" \
             --title "$VERSION" \
             ${notes[@]+"${notes[@]}"} \
