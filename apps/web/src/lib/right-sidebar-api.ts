@@ -11,7 +11,7 @@ import type { ConversationStore } from '@/lib/conversation-store';
 import type { DeliverableDownloader } from '@/lib/deliverable-download';
 import type { DeliverableFileStore } from '@/lib/deliverable-file';
 import type { LocatedFile } from '@/lib/deliverables-view';
-import type { PlanDocument } from '@/lib/plan-review';
+import type { PlanDocument, PlanScanOutcome } from '@/lib/plan-review';
 import type { PanelKind } from '@/lib/right-sidebar';
 import type { SubagentUsageLoader } from '@/lib/subagent-usage';
 import type { TrajectoryPuller } from '@/lib/trajectory-pull';
@@ -43,6 +43,12 @@ export interface RightSidebarSources {
    * 理由同 {@link RightSidebarSources.conversation}。沒給就是今天的樣子：內文沒載入的呼叫不畫定位鈕。
    */
   readonly loadThrough?: ((seq: number) => Promise<void>) | undefined;
+  /**
+   * 計劃分頁的旁路掃描（#1798，`Conversation.findPlan`）：那一份計劃不在載入的對話裡時，往前一頁一頁讀歷史找它，不動對話窗口。
+   * **身分要穩定**，理由同 {@link RightSidebarSources.conversation}。`App` 等第一頁歷史到了才給；沒給就只講那一句。
+   */
+  readonly findPlan?:
+    ((callId: string, signal: AbortSignal) => Promise<PlanScanOutcome>) | undefined;
 }
 
 /** 卡片用得到的那一半。 */
