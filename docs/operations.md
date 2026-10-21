@@ -504,7 +504,7 @@ export HTTP_PROXY=http://127.0.0.1:7890
 
 ## 核對安裝內容
 
-[#1545](https://github.com/DemianLi/nexus-agent/issues/1545) 步驟 4、6。Release 上每個版本附四個檔：
+[#1545](https://github.com/DemianLi/nexus-agent/issues/1545) 步驟 4、6。Release 上每個版本附六個檔：
 
 | 檔 | 是什麼 |
 | --- | --- |
@@ -512,9 +512,11 @@ export HTTP_PROXY=http://127.0.0.1:7890
 | `nexus-agent-<版本>-linux-x64.tar.gz.sha256` | tarball 的雜湊 |
 | `nexus-agent-<版本>-linux-x64.cdx.json` | SBOM：閉包裡每一顆套件的 name、version、license，第三方的再加 lockfile 記的 integrity（CycloneDX 1.6 JSON） |
 | `nexus-agent-<版本>-linux-x64.cdx.json.sha256` | SBOM 的雜湊 |
+| `nexus-agent-<版本>-audit.json` | 發版當下的漏洞掃描結果，見下面〈漏洞掃描〉 |
+| `nexus-agent-<版本>-audit.json.sha256` | 掃描結果的雜湊 |
 
 tarball 裡另有 `LICENSE`、`THIRD_PARTY_NOTICES.md`（第三方授權清單）和 `sbom.cdx.json`，最後這份與 Release 附的那份位元組相同。
-以下全程離線，主機上只要有 Node（產物本來就要它）。第 1、2 步在放這四個檔的下載目錄裡執行。SBOM 列的是 linux-x64 版的
+以下全程離線，主機上只要有 Node（產物本來就要它）。第 1、2 步在放這些檔的下載目錄裡執行。SBOM 列的是 linux-x64 版的
 閉包，平台套件（原生二進位、內附的 ripgrep）也是 linux-x64 那一版：Release 只出這一個平台。第 4 步有測試盯著
 （`apps/harness/src/release-scripts.test.ts`），改它要讓那條測試照樣過：
 
@@ -558,8 +560,37 @@ CI 在每張動到 TypeScript 的 PR 與每次 Release 上都跑過；主機上�
 - **SBOM 的雜湊是 registry tarball 的。** 第三方套件的 `hashes` 取自閉包 lockfile 的 integrity（npm registry 上那個 `.tgz` 的 SHA-512），
   拿來對弱點資料庫或 registry 都對得上，但**不能**拿主機上解開的檔案重算出來。我們自己的套件（`@nexus/*`）lockfile 不記 integrity，所以沒有 `hashes`，
   版本與內容跟 tarball 一起由 `.sha256` 釘住；授權取 repo 根 `LICENSE`（MIT）。
-- **缺口：擋得住損壞，擋不住惡意替換。** `.sha256` 與 SBOM 跟 tarball 從同一個 Release 頁面下載；能換掉 tarball 的人也換得掉另外三個檔，
+- **缺口：擋得住損壞，擋不住惡意替換。** `.sha256` 與 SBOM 跟 tarball 從同一個 Release 頁面下載；能換掉 tarball 的人也換得掉其他幾個檔，
   雜湊照樣對得上。產物簽章不在這張（#1545 Q3 (a)），併進企業決議 §八 的發行金鑰（[#1428](https://github.com/DemianLi/nexus-agent/issues/1428) 第二版）。
+
+### 漏洞掃描
+
+[#1545](https://github.com/DemianLi/nexus-agent/issues/1545) 步驟 5、6。對 prod 相依跑 `pnpm audit --prod --json`，判斷在 `.github/scripts/check_audit.py`。
+只在 GitHub runner 上跑，主機上不跑、不連外。
+
+- **每天一次**：台北時間 08:43，在 `develop` 上跑（`.github/workflows/audit.yml`）。紅了 GitHub 會通知最後改過那份排程的人；也可以到 Actions 頁手動跑。
+- **發版前一次**：Release 在打包之前跑同一支。prod 相依有 high 或 critical、又不在例外清單上，Release 就停在這一步，不會打包。
+- **不擋 PR**（#1545 Q1 (a)）：結果跟著上游公告變，不是哪張 PR 改出來的。
+- moderate、low 不擋，只列在輸出裡。
+
+Release 附的 `nexus-agent-<版本>-audit.json` 有三個鍵：`audit` 是 pnpm 的原始輸出，`exceptions` 是當時的例外清單，`checkedOn` 是判斷到期用的日期（UTC）。
+用 `sha256sum -c nexus-agent-<版本>-audit.json.sha256` 核對。它只反映**發版當下**的公告；之後才公布的弱點，要拿 SBOM 去對機關的弱點資料庫。
+
+**例外清單**是 `.github/audit-exceptions.json`。列進去等於接受一條風險，要 demian 拍板。每一條六個欄位都要有，少一個掃描就紅：
+
+| 欄位 | 寫什麼 |
+| --- | --- |
+| `advisory` | GHSA 編號 |
+| `paths` | 接受的相依路徑，形狀同 audit 輸出的 `findings[].paths`（例如 `apps__harness>deepagents>micromatch>braces`）。同一筆出現在沒列的路徑上就紅 |
+| `reason` | 為什麼接受，連到拍板的地方 |
+| `expires` | 到期日 `YYYY-MM-DD`，以 UTC 日期判斷（排程也跑 UTC）。當天仍有效，隔天起紅：台北時間要到隔天 08:00 才算過期 |
+| `review` | 到期前要重新評估什麼 |
+| `removal` | 什麼條件成立就撤掉 |
+
+下面三種情況掃描也會紅，要回頭改清單：例外到期了；列了例外的那一筆出了修補版（`patched_versions` 不再是 `<0.0.0`，該升版）；audit 已經不報那一筆了（該撤）。
+
+**不要在 `pnpm-workspace.yaml` 加 `auditConfig.ignoreGhsas`。** 在 pnpm 10.34.5 實測，列進去的那一筆會從 `--json` 的 `advisories` 消失，就看不到它出了修補版沒有；
+字串陣列也放不下理由與到期日。判斷只看例外清單，所以在開發機上直接跑 `pnpm audit`，會看到清單上那幾筆，這是預期的。
 
 ## 伺服器日誌的等級與格式
 

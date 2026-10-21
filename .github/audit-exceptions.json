@@ -1,0 +1,12 @@
+{
+  "exceptions": [
+    {
+      "advisory": "GHSA-vfj7-8cjw-p6xm",
+      "paths": ["apps__harness>deepagents>micromatch>braces"],
+      "reason": "沒有修補版（patched_versions <0.0.0）。demian 2026-10-20 拍板風險接受，效期 60 天。見 https://github.com/DemianLi/nexus-agent/issues/1545#issuecomment-6291035911",
+      "expires": "2026-12-18",
+      "review": "到期前重新評估：上游有沒有修補版，或 deepagents 換掉這條相依",
+      "removal": "braces 出修補版、升到修補版之後，或閉包裡不再有 braces"
+    }
+  ]
+}
