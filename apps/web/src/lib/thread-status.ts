@@ -16,6 +16,15 @@ import { isPlanReview } from '@/lib/plan-review';
  * - **跑完沒看**（dsh 的 `completionUnread`，`observeRunning`）：從在跑翻成閒著、而且不是目前打開的那條，記一筆；
  *   列表回來之前連先前狀態都不知道的那次停下也算。那條再跑起來、被打開、或列表上已經沒有它時清掉。
  *
+ * - **清單途中的變化重放**（#1600 `N1362`，dsh `client/sessions/manager.ts:412-477`、`:600-606` 的 `listMutations`）：
+ *   列表是冷讀磁碟，回來要好幾秒，回來時可能已經比全域下行舊。送出前記 `list-requested`，之後的 frame 照常套用、
+ *   同時記下來；列表到了先當基線套上去，再照順序重放紀錄。重疊的刷新只套最新那一次的回應（ticket），紀錄從最早那一次
+ *   起算。**每次接上都清掉紀錄**：斷線期間漏掉的 frame 不會補，斷線前記下的重放在接上後的清單之後會把舊事實蓋回去；
+ *   接上之後馬上重抓，新的 ticket 丟掉舊的回應。
+ * - **有效空白**（#1600 `N1363`，dsh `manager.ts:95`、`:284-298` 的 `engagedSessions`）：清單上的 `blank` 是磁碟上
+ *   還沒有 `turn/start`。全域下行或清單說在跑過的那條就不算空白，**跑完也不鬆開**（照 dsh：跑完之後、下一次刷新之前
+ *   快照還說空白），清單上沒有那條時才拿掉。
+ *
  * **全部動作走同一個有序的 reducer**：接上的清空必須排在補送的第一顆之前。拆成兩次各自的 `setState`，React 合批時
  * 順序一錯，重接那一刻標記就全不見（#728 是同一個形狀）。
  *
@@ -27,6 +36,12 @@ export type PendingKind = 'approval' | 'question' | 'plan-review';
 
 const PRECEDENCE: Record<PendingKind, number> = { approval: 0, question: 1, 'plan-review': 2 };
 
+/**
+ * 清單刷新途中記下、回應到了要重放的一筆變更（dsh 的 `SessionListMutation`）。今天只有全域下行的 frame；
+ * #1581 刀 2 的分叉佔位（dsh `kind: 'placeholder'`）是下一支，加在這個聯集上、在 {@link replay} 裡接。
+ */
+export type ListMutation = { readonly kind: 'frame'; readonly frame: ThreadFeedFrame };
+
 export interface ThreadStatusState {
   readonly current: string;
   readonly running: ReadonlyMap<string, boolean>;
@@ -35,16 +50,32 @@ export interface ThreadStatusState {
   readonly unread: ReadonlySet<string>;
   /** 列表回來過至少一次。之前連先前狀態都不知道的停下也算「跑完沒看」（dsh 的 `beforeBaseline`）。 */
   readonly baselined: boolean;
+  /** 說在跑過的 thread（dsh 的 `engagedSessions`）：清單上標著空白也不算空白。 */
+  readonly engaged: ReadonlySet<string>;
+  /** 清單刷新途中的變更；`undefined` 是沒有刷新在途。 */
+  readonly mutations: readonly ListMutation[] | undefined;
 }
 
 export type ThreadStatusAction =
   | { readonly type: 'connected' }
   | { readonly type: 'frame'; readonly frame: ThreadFeedFrame }
+  /** 送出一次列表請求，記在送出之前。 */
+  | { readonly type: 'list-requested' }
   | { readonly type: 'listed'; readonly items: readonly ThreadSummary[] }
+  /** 最新那一次列表請求失敗了：紀錄不再有人重放。 */
+  | { readonly type: 'list-failed' }
   | { readonly type: 'current'; readonly threadId: string };
 
 export function initialThreadStatus(current: string): ThreadStatusState {
-  return { current, running: new Map(), pending: new Map(), unread: new Set(), baselined: false };
+  return {
+    current,
+    running: new Map(),
+    pending: new Map(),
+    unread: new Set(),
+    baselined: false,
+    engaged: new Set(),
+    mutations: undefined,
+  };
 }
 
 /**
@@ -66,6 +97,8 @@ function observeRunning(
   const previous = state.running.get(threadId);
   const nextRunning = new Map(state.running).set(threadId, running);
   const unread = new Set(state.unread);
+  const engaged =
+    running && !state.engaged.has(threadId) ? new Set(state.engaged).add(threadId) : state.engaged;
   if (running) unread.delete(threadId);
   else if (
     (previous === true || (previous === undefined && !state.baselined)) &&
@@ -73,7 +106,7 @@ function observeRunning(
   ) {
     unread.add(threadId);
   }
-  return { ...state, running: nextRunning, unread };
+  return { ...state, running: nextRunning, unread, engaged };
 }
 
 function applyFrame(state: ThreadStatusState, frame: ThreadFeedFrame): ThreadStatusState {
@@ -109,14 +142,23 @@ function applyListing(
     const previous = next.running.get(item.threadId);
     if (previous === undefined) {
       next = { ...next, running: new Map(next.running).set(item.threadId, item.running) };
+      if (item.running) next = { ...next, engaged: new Set(next.engaged).add(item.threadId) };
     } else if (previous !== item.running) {
       next = observeRunning(next, item.threadId, item.running);
+    } else if (item.running && !next.engaged.has(item.threadId)) {
+      next = { ...next, engaged: new Set(next.engaged).add(item.threadId) };
     }
   }
   const present = new Set(items.map((item) => item.threadId));
   const running = new Map([...next.running].filter(([id]) => present.has(id)));
   const unread = new Set([...next.unread].filter((id) => present.has(id) && id !== next.current));
-  return { ...next, running, unread, baselined: true };
+  const engaged = new Set([...next.engaged].filter((id) => present.has(id)));
+  return { ...next, running, unread, engaged, baselined: true };
+}
+
+/** 列表到了之後，照順序重放刷新途中記下的變更（dsh `refreshList` 的 `mutations.reduce(applyMutation, baseline)`）。 */
+function replay(state: ThreadStatusState, mutations: readonly ListMutation[]): ThreadStatusState {
+  return mutations.reduce((next, mutation) => applyFrame(next, mutation.frame), state);
 }
 
 export function reduceThreadStatus(
@@ -125,11 +167,26 @@ export function reduceThreadStatus(
 ): ThreadStatusState {
   switch (action.type) {
     case 'connected':
-      return { ...state, pending: new Map() };
-    case 'frame':
-      return applyFrame(state, action.frame);
+      return {
+        ...state,
+        pending: new Map(),
+        ...(state.mutations === undefined ? {} : { mutations: [] }),
+      };
+    case 'frame': {
+      const next = applyFrame(state, action.frame);
+      return state.mutations === undefined
+        ? next
+        : { ...next, mutations: [...state.mutations, { kind: 'frame', frame: action.frame }] };
+    }
+    case 'list-requested':
+      return state.mutations === undefined ? { ...state, mutations: [] } : state;
     case 'listed':
-      return applyListing(state, action.items);
+      return {
+        ...replay(applyListing(state, action.items), state.mutations ?? []),
+        mutations: undefined,
+      };
+    case 'list-failed':
+      return state.mutations === undefined ? state : { ...state, mutations: undefined };
     case 'current': {
       if (action.threadId === state.current && !state.unread.has(action.threadId)) return state;
       const unread = new Set(state.unread);
@@ -137,6 +194,14 @@ export function reduceThreadStatus(
       return { ...state, current: action.threadId, unread };
     }
   }
+}
+
+/**
+ * 這一列算不算空白（#1600 `N1363`，dsh `effectiveBlank`）：清單說空白、而且沒有人說它在跑過。側欄的過濾、分組與
+ * 「新對話」挑哪一條都看這個；列的名字與時間照舊看清單的 `blank`。
+ */
+export function effectiveBlank(state: ThreadStatusState, item: ThreadSummary): boolean {
+  return item.blank && !state.engaged.has(item.threadId);
 }
 
 /** 一列畫什麼。等人回答 ＞ 在跑 ＞ 跑完沒看 ＞ 什麼都不畫（dsh `sessionStatuses` 的順序）。 */

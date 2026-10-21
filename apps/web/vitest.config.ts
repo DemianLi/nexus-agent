@@ -3,6 +3,7 @@ import { defineConfig } from 'vitest/config';
 import tsconfigPaths from 'vite-tsconfig-paths';
 
 import { RESOLVE_ALIAS } from './resolve-alias';
+import { vitestExecArgv } from './vitest.shared';
 
 /**
  * 測試設定。**不沿用 `vite.config.ts`**：那一份在 `command === 'serve'` 時拋錯（#426），而 vitest 載入設定時
@@ -17,5 +18,6 @@ export default defineConfig({
   test: {
     environment: 'jsdom',
     include: ['src/**/*.test.{ts,tsx}'],
+    execArgv: vitestExecArgv,
   },
 });

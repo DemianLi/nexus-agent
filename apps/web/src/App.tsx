@@ -201,6 +201,11 @@ export function App({ client }: { client?: WireClient } = {}) {
   // `connecting`）——兩次讀到的是同一份清單，只會換一次。
   const navigation = useRef(0);
   const connecting = useRef(false);
+  // 清單讀回來的那一刻才挑，要用那時的有效空白，不是按下去那一刻的（讀清單要好幾秒，這段時間全域下行照樣在推）。
+  const blankOf = useRef(directory.blankOf);
+  useEffect(() => {
+    blankOf.current = directory.blankOf;
+  }, [directory.blankOf]);
 
   /**
    * 「新對話」（[#313](https://github.com/DemianLi/nexus-agent/issues/313)）：目前這條還是空白就留在原地，否則
@@ -217,7 +222,7 @@ export function App({ client }: { client?: WireClient } = {}) {
     void readThreadListing(wire)
       .then((listing) => {
         if (navigation.current !== ticket) return;
-        const target = newConversationTarget(listing, current);
+        const target = newConversationTarget(listing, current, blankOf.current);
         setChoice({
           threadId: target.kind === 'reuse' ? target.threadId : randomUuid(),
           origin: 'fresh',
@@ -336,10 +341,12 @@ function ConversationView({
   );
   // **這個分頁在這條上講過話沒有**，決定「新對話」要不要留在原地（#313）。照 dsh `Session.handleBlank` 的鏡像：
   // 畫面上有東西（自己送出的話、重播回來的歷史、目標排的輪次）就不是空白，斜線命令不算——它不起一輪。
+  // **送出了、人話還沒折進來也算**（`attempted`，#1600）：不然那一個來回裡按「新對話」會留在原地，要按第二次。
   // **判準看自己的畫面，不看清單**：清單是冷讀磁碟，還沒落盤的這一條根本不在上面。
   // **歷史還沒折完（`connected` 還沒翻）就當成講過**：那時分不出來，而這顆按鈕是停在核准點、連不上的 thread
   // 唯一的出口——寧可多開一條，也不能把人留在原地。
-  const engaged = !conversation.connected || conversation.state.entries.length > 0;
+  const engaged =
+    !conversation.connected || conversation.attempted || conversation.state.entries.length > 0;
   const title = conversation.state.title;
   const heading = headerTitle(
     title,
