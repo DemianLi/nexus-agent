@@ -167,6 +167,8 @@ import { memoryGaugePlugin } from './settings/memory-gauge.js';
 import { opsEndpointsPlugin } from './settings/ops-endpoints.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
 import { threadCapacityPlugin } from './settings/thread-capacity.js';
+import { GOAL_ROUND_CAP_SOURCE, goalRoundCapPlugin } from './settings/goal-round-cap.js';
+import type { GoalRoundCap } from './goal-driver.js';
 import { threadSearchPlugin } from './settings/thread-search.js';
 import { SessionReferenceCandidates } from './session-reference-candidates.js';
 import { ThreadSearch } from './thread-search.js';
@@ -727,6 +729,11 @@ async function startServer(
   // thread 數上限（#1476，保險絲第 2 級）。**server 的性質**：`threads` 表一台伺服器一張，檢查在 `createWireHandler` 的
   // `threadFor` 裡，所以值在這裡解、往下傳一份。出廠開著、關不掉（#1619，`settings/thread-capacity.ts`）。
   const threadCapacity = startupSetting(plugins, threadCapacityPlugin);
+  // 目標續行的操作者上限（#1623）：人每授權一次最多續行幾輪。關掉那一列就只剩目標自己那條；`--no-goal-driver` 時不起作用。
+  // **掛沒掛先問**：`startupSetting` 對關掉的列回 schema 預設，不先問會把關掉讀成 20。
+  const goalRoundCap: GoalRoundCap | undefined = startupEntryMounted(plugins, goalRoundCapPlugin)
+    ? { limit: startupSetting(plugins, goalRoundCapPlugin).limit, source: GOAL_ROUND_CAP_SOURCE }
+    : undefined;
   // 記憶體量具（#1490）：只讀只講，預設關閉（`reportIntervalMs: 0`），開了才在起動尾端起，見 `memory-gauge.ts`。
   const memoryGaugeConfig = startupSetting(plugins, memoryGaugePlugin);
   // 下行串流的心跳間隔與每條線的位元組上限（#1504）。**兩個消費點在兩處**：心跳間隔交給 `startWireServer`（socket 那一層），位元組上限交給
@@ -1364,7 +1371,10 @@ async function startServer(
               goalDriver: (log: () => SessionLog, flush: () => Promise<void>) =>
                 // **`goals` 是這一條 thread 自己那一次組裝的**：`createCliAgent` 每條
                 // thread 各跑一次（`:341`），所以兩條 thread 的目標從此分得開（#459）。
-                goalDriverPort(goals, log, flush, warn),
+                ({
+                  ...goalDriverPort(goals, log, flush, warn),
+                  ...(goalRoundCap !== undefined && { roundCap: goalRoundCap }),
+                }),
             }
           : {}),
         // 落盤關掉（#612）就不給：日誌只在註冊表的記憶體裡，同 CLI 那一支。
@@ -1477,7 +1487,7 @@ async function startServer(
   );
   // 同一條規矩底下的另一行：**這一輪結束之後還會不會有下一輪**。這台 server 上它是
   // per-thread 的行為，但旗標是整個 process 的，所以講在這裡。
-  log(formatGoalDriverDisclosure(invocation.goalDriver, undefined, 'serve'));
+  log(formatGoalDriverDisclosure(invocation.goalDriver, goalRoundCap, 'serve'));
   // 上限講出來（#1476）：一律印數字（#1619 起出廠就有值），管理者從這一行分得出出廠值和自己改過的值。
   log(
     `thread 上限：${String(threadCapacity.maxThreads)}（到了拒收新 thread，${

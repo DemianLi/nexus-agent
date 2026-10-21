@@ -80,7 +80,8 @@ export const GOALS_SERVICE = 'goals';
  * `maxGoalRounds` 沒指定時的預設，**照抄 dsh 的 256**。
  *
  * **它進耐久快照，所以是建立當下的那個值**，不是讀取當下的預設：改了這個常數不會追溯到既有的目標身上。消費它的是續行排程器
- * （`apps/harness` 的 `goal-driver.ts`）——用完就記一顆 `round-limit` 的 blocker，而那是開著 `--goal-driver` 時**唯一的硬上限**。
+ * （`apps/harness` 的 `goal-driver.ts`）——用完就記一顆 `round-limit` 的 blocker。它是模型填得動的那條；操作者那條在 harness 的
+ * `goal-round-cap` 那一列（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)，記 `round-cap`），兩條先到的那一條管。
  */
 export const DEFAULT_MAX_GOAL_ROUNDS = 256;
 

@@ -332,6 +332,47 @@ describe('掛了旗標', () => {
     await stop();
   });
 
+  /**
+   * **模型調高自己的上限，操作者那條照樣夾住**（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623) 驗收 4）。上限放在 port 上，
+   * 由 pump 交給決定函式；拿掉 `thread-pump.ts` 交它的那一個參數，這一條會跑滿 1000 輪的腳本、記不到 `round-cap`。
+   *
+   * 調高放在人說話的那一輪裡：`edit` 要有人直接打的那一輪才授權（`@nexus/plugin-goal` 的 `authorityFor`），續行輪裡模型改不動，
+   * 所以這是模型唯一調得高的時機。
+   */
+  it('模型把自己的上限調到 1000，操作者給的 2 照樣在 2 輪夾住、記 round-cap', async () => {
+    const turns: readonly ScriptedTurn[] = [
+      {
+        content: '',
+        toolCalls: [{ name: 'create_goal', args: { objective: '把 CI 修綠', max_goal_rounds: 2 } }],
+      },
+      {
+        content: '',
+        toolCalls: [
+          {
+            name: 'update_goal',
+            args: { goal_id: 'goal-1', revision: 1, action: 'edit', max_goal_rounds: 1000 },
+          },
+        ],
+      },
+      { content: '建好了，上限也調高了。' },
+      QUIET,
+      QUIET,
+      QUIET,
+    ];
+    const { pump, port, stop } = await build({
+      turns,
+      threadId: 'driver-cap-raised',
+      withDriver: true,
+      portOverrides: { roundCap: { limit: 2, source: '測試的上限' } },
+    });
+    await pump.submit({ kind: 'message', text: '把 CI 修綠' });
+    await settle(pump);
+    expect(startKinds(pump.sessionLog)).toEqual(['message', 'goal', 'goal']);
+    expect(port.blocks).toEqual(['round-cap']);
+    expect(port.goal()).toMatchObject({ phase: 'blocked', roundsStarted: 2, maxGoalRounds: 1000 });
+    await stop();
+  });
+
   /** 耐久檢查點過不去就停用續行，**不是重試**——見 `goal-driver.ts` 檔頭。 */
   it('flush 失敗就 disarm，一輪都不排', async () => {
     const { pump, port, stop } = await build({

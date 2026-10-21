@@ -77,12 +77,13 @@ const BAD_BROWSER_SESSION = '- id: browser-session\n  config:\n    maxAgeDays: 0
 const BAD_TODO = "- id: todo\n  config:\n    allowParallelInProgress: '不是布林'\n";
 
 describe('必掛的列掉了：兩個入口都起不來', () => {
-  it('名單上是 browser-session、system-prompt、background-subagents 與 permission-presets，而且比的是條目 id', () => {
+  it('名單上是 browser-session、system-prompt、background-subagents、permission-presets 與 goal-round-cap，而且比的是條目 id', () => {
     expect([...REQUIRED_ENTRY_IDS]).toEqual([
       'browser-session',
       'system-prompt',
       'background-subagents',
       'permission-presets',
+      'goal-round-cap',
     ]);
   });
 
@@ -112,6 +113,36 @@ describe('必掛的列掉了：兩個入口都起不來', () => {
 
   it('對照：只有 todo 壞，兩個入口都起得來', async () => {
     const env = homeWith(BAD_TODO);
+    expect((await cli(env)).error).toBeUndefined();
+    running = await runServe({ argv: ['--port', '0'], log: () => undefined, env });
+  });
+});
+
+/**
+ * 目標續行的操作者上限寫壞（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623) 驗收 8）：照 #751 寫壞的列會掉，掉了上限就沒了（fail-open），
+ * 所以這一列在必掛名單上，同 `background-subagents`。**關掉不一樣**：`disabled: true` 是部署方明講只留目標自己那條，照常起來（驗收 7）。
+ */
+describe('goal-round-cap 寫壞：兩個入口都起不來；關掉照常起來', () => {
+  it.each([['0'], ['-1'], ['2.5'], ["'二十'"]])(
+    'limit 寫成 %s：CLI 與 serve 拋同一則 StartupError，指名這一列（必掛）',
+    async (raw) => {
+      const env = homeWith(`- id: goal-round-cap\n  config:\n    limit: ${raw}\n`);
+
+      const fromCli = await cli(env);
+      expect(fromCli.error).toBeInstanceOf(StartupError);
+      const message = (fromCli.error as Error).message;
+      expect(message).toMatch(
+        /^ {2}goal-round-cap（#settings\/goal-round-cap）〔必掛〕設定驗不過：/mu,
+      );
+
+      await expect(runServe({ argv: ['--port', '0'], log: () => undefined, env })).rejects.toThrow(
+        message,
+      );
+    },
+  );
+
+  it('對照：disabled: true，兩個入口都起得來', async () => {
+    const env = homeWith('- id: goal-round-cap\n  disabled: true\n');
     expect((await cli(env)).error).toBeUndefined();
     running = await runServe({ argv: ['--port', '0'], log: () => undefined, env });
   });

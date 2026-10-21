@@ -47,6 +47,7 @@ import { browserSessionPlugin } from './settings/browser-session.js';
 import { backgroundSubagentsPlugin } from './settings/background-subagents.js';
 import { deliverableFilesPlugin } from './settings/deliverable-files.js';
 import { downlinkPlugin } from './settings/downlink.js';
+import { goalRoundCapPlugin } from './settings/goal-round-cap.js';
 import { liveModelPlugin } from './settings/live-model.js';
 import { loggerConsolePlugin } from './settings/logger-console.js';
 import { memoryGaugePlugin } from './settings/memory-gauge.js';
@@ -89,6 +90,7 @@ export const STARTUP_READ_PLUGINS: readonly NexusPlugin<unknown>[] = [
   opsEndpointsPlugin,
   downlinkPlugin,
   loggerConsolePlugin,
+  goalRoundCapPlugin,
 ] as readonly NexusPlugin<unknown>[];
 
 /** 表上的一格。 */
