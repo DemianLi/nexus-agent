@@ -185,9 +185,13 @@ export const SESSION_FORMAT_EDGES: readonly SessionFormatEdge[] = [
     ref: '#721',
     readerBranch: 'apps/harness/src/conversation-history.ts:1137',
   },
-  // 有讀方分支（入口續接時 `recordedApprovalPolicy(...) ?? 'ask'`，serve 與 CLI 各一處），觸發要走入口，CI 上重建不了；
-  // 收成共用函式、用夾具直接餵它之後再填，見 #1797。
-  { from: 33, to: 34, kind: 'additive', ref: '#437' },
+  {
+    from: 33,
+    to: 34,
+    kind: 'additive',
+    ref: '#437',
+    readerBranch: 'packages/nexus-core/src/approval-policy.ts:111',
+  },
   { from: 34, to: 35, kind: 'additive', ref: '#437' },
   { from: 35, to: 36, kind: 'additive', ref: '#724' },
   { from: 36, to: 37, kind: 'additive', ref: '#723' },
