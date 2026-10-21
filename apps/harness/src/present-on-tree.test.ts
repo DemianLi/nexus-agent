@@ -73,7 +73,7 @@ function home(): { dir: string; env: NodeJS.ProcessEnv } {
 function newRoot(): CordisRoot {
   const root = createCordisRoot({
     channel: entryApprovalChannel(undefined),
-    workspaceRoot: tmpdir(),
+    contained: true,
   });
   roots.push(root);
   return root;
@@ -293,7 +293,7 @@ describe('B：出貨清單上的 present 經樹進來，位置與名字不變', 
     });
   }, 60000);
 
-  it('契約版本：tools 服務 1.3.0（onResult）、fs 查找服務 1.2.0（hasWorkspace 加 #1469、workspaceRoot 加 #1491）', async () => {
+  it('契約版本：tools 服務 1.3.0（onResult）、fs 查找服務 2.0.0（hasWorkspace 加 #1469、行程級 workspaceRoot 加 #1491、#1774 改逐條 thread 後跳 major）', async () => {
     const { env } = home();
     const root = newRoot();
     await loadDefaultPlugins({ env, warn: warnNothing }, { tree: root.tree });
@@ -302,7 +302,7 @@ describe('B：出貨清單上的 present 經樹進來，位置與名字不變', 
       '1.3.0',
     );
     expect((tree.get('fs') as { contractVersion?: string } | undefined)?.contractVersion).toBe(
-      '1.2.0',
+      '2.0.0',
     );
   }, 60000);
 
@@ -634,7 +634,7 @@ describe('三個入口各有一條（拿掉任一入口的接線要紅）', () =
     const { env } = home();
     const root = createCordisRoot({
       channel: entryApprovalChannel(HEADLESS_APPROVALS),
-      workspaceRoot: tmpdir(),
+      contained: true,
     });
     roots.push(root);
     const loaded = await loadDefaultPlugins({ env, warn: warnNothing }, { tree: root.tree });

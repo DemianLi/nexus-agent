@@ -50,6 +50,7 @@ function handleOf(backend: unknown): FsService {
     backend: () => backend as never,
     offWorkspacePrefixes: () => [],
     hasWorkspace: () => true,
+    workspaceRoot: () => undefined,
   };
 }
 
@@ -278,15 +279,15 @@ describe('樹上這一列（#1474）', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告兩個必要依賴：agentLoop（^1.0.0）、fs（^1.1.0）；沒有 default 匯出', () => {
+  it('manifest 宣告兩個必要依賴：agentLoop（^1.0.0）、fs（^2.0.0）；沒有 default 匯出', () => {
     expect(module.manifest.consumes).toEqual([
       { token: 'agentLoop', range: '^1.0.0' },
-      { token: 'fs', range: '^1.1.0' },
+      { token: 'fs', range: '^2.0.0' },
     ]);
     expect(module.manifest.provides).toEqual([]);
     expect(module.inject).toEqual({
       agentLoop: { range: '^1.0.0' },
-      fs: { range: '^1.1.0' },
+      fs: { range: '^2.0.0' },
     });
     expect(agentLoopToken.name).toBe('agentLoop');
     expect('default' in module).toBe(false);

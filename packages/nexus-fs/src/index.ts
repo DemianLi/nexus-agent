@@ -65,11 +65,20 @@ export { virtualPathOf } from '@nexus/core';
  *
  * `1.2.0`（[#1491](https://github.com/DemianLi/nexus-agent/issues/1491) Q4 (a)）：`FsLookupService` 多 `workspaceRoot()`——**行程級**的工作區事實
  * （主機上的可寫根；沒給 `--workspace` 是 `undefined`），由入口建樹時交進來，`permission-presets` 在 `apply` 當下據它決定掛不掛 `/permission`、
- * 並在 `/permission` 不帶引數時報可寫根。向後相容的新增：只用 `forCall` 的消費者（宣告 `^1.0.0`、`^1.1.0`）照常。它跟逐條 thread 的
- * `FsService.hasWorkspace()` 是兩格事實：那一格要在呼叫當下依 thread 問，這一格整台一份（serve 每條 thread 的根都是同一個
- * `resolveWorkspaceRoot(invocation.workspace, cwd)`，續接時 `assertSameWorkspaceRoot` 擋住不同的根）。
+ * 並在 `/permission` 不帶引數時報可寫根。
+ *
+ * `2.0.0`（[#1774](https://github.com/DemianLi/nexus-agent/issues/1774)，重開 #1491 Q4 (a) 的「主機上的可寫根」那一半，demian 2026-10-20 拍板）：
+ * **可寫根從行程級的一格改成逐條 thread 的一格**。破壞性改動，所以跳 major：
+ *
+ * - `FsLookupService.workspaceRoot()` **拿掉**，換成 `hasContainment()`——行程級只留「有沒有圍堵」這一格（`apply` 當下就要知道，不依 thread 挑）。
+ * - `FsService.workspaceRoot()`（`@nexus/core`）：**這條 thread** 的可寫根，跟 `hasWorkspace()` 並列，fold 當下一起算。
+ * - `FsLookupService.forThread(threadId)`：依 root 會話 id（＝thread id）**精確**找回那條 thread 的把手，給手上沒有工具呼叫設定、只有
+ *   `sessionLog` 的命令 handler 用（`/permission` 不帶引數時報這條 thread 的根）。**不套「只剩一筆就是它」的退路**：fs 是安全邊界（#1482），
+ *   查不到就是 `undefined`，不猜。
+ *
+ * 這一版不改任何行為：每條 thread 拿到的仍是 `--workspace` 解析出來的那一個根；每條 thread 配自己的根是之後的事。消費者的範圍一起跳到 `^2.0.0`。
  */
-export const FS_LOOKUP_CONTRACT_VERSION = '1.2.0';
+export const FS_LOOKUP_CONTRACT_VERSION = '2.0.0';
 
 /**
  * 找這次呼叫那條 thread 的 fs 把手的結果。
@@ -104,13 +113,24 @@ export interface FsLookupService {
   forCall(invocation: unknown): FsLookup;
 
   /**
-   * **這個行程的工作區根**（主機上的路徑）；沒給 `--workspace`（檔案系統沒有圍堵）是 `undefined`。行程級、整台一份，
-   * 由入口建樹時交進來（[#1491](https://github.com/DemianLi/nexus-agent/issues/1491) Q4 (a)，前例 #1458 的 `channel`）。
+   * **依 thread 精確找回那條 thread 的 fs 把手**（#1774）。給手上沒有工具呼叫設定的呼叫端用——今天是命令 handler，它只有 `sessionLog`
+   * （其 `sessionId` 就是 root 會話 id＝thread id）。
    *
-   * 它回答的是 `apply` 當下就要知道的事（「有沒有圍堵」、「圍的是哪個目錄」），所以不依 thread 挑、不需要呼叫設定。要問**這一條 thread**
-   * 有沒有工作區用 {@link FsService.hasWorkspace}。
+   * 跟 {@link forCall} 的差別：**不挑、不退路**。`threadId` 沒有登記（沒綁、已撤、或是別的行程的 id）就是 `undefined`，即使行程裡只剩一條活著的
+   * thread 也不把它當成答案——fs 是安全邊界（#1482），猜錯是讀到別條 thread 的根。
+   *
+   * @param threadId - root 會話 id（＝thread id）。
+   * @returns 那條 thread 的把手；沒有登記是 `undefined`。把手的 {@link FsService.workspaceRoot} 與 {@link FsService.backend} 都要在呼叫當下才讀。
    */
-  workspaceRoot(): string | undefined;
+  forThread(threadId: string): FsService | undefined;
+
+  /**
+   * **這個行程有沒有圍堵**（給了 `--workspace`）。行程級、整台一份，由入口建樹時交進來（前例 #1458 的 `channel`）。
+   *
+   * 它回答的是 `apply` 當下就要知道的事（「要不要掛 `/permission`」），所以不依 thread 挑、不需要呼叫設定。**不回根**：根是逐條 thread 的，
+   * 從 {@link FsService.workspaceRoot} 讀（{@link forCall}、{@link forThread} 取得把手）。要問**這一條 thread** 有沒有工作區用 {@link FsService.hasWorkspace}。
+   */
+  hasContainment(): boolean;
 }
 
 /** `fs` 服務的 token。 */

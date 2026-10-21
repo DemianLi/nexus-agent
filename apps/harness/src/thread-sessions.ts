@@ -105,6 +105,19 @@ export class ThreadSessions implements SessionLookupRegistrar {
       : { kind: 'ok', fs, address: picked.address };
   }
 
+  /**
+   * 依 root 會話 id（＝thread id）**精確**找回那條 thread 的 fs 把手（#1774）。給只有 `sessionLog` 的命令 handler 用
+   * （`/permission` 不帶引數時報這條 thread 的可寫根）。
+   *
+   * 跟 {@link fsForCall} 不同，**不套「只剩一筆就是它」**：id 沒有登記（沒綁、已撤、別的行程的）就是 `undefined`，即使行程裡只剩一條活著的
+   * thread。fs 是安全邊界（#1482），猜錯是讀到別條 thread 的根。登記時沒給 fs 把手的那一筆同樣是 `undefined`。
+   *
+   * @param threadId - root 會話 id。
+   */
+  fsForThread(threadId: string): FsService | undefined {
+    return this.#live.get(threadId)?.fs;
+  }
+
   /** 現在登記著幾條。給測試與稽核對照。 */
   get size(): number {
     return this.#live.size;

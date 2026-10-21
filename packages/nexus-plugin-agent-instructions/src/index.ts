@@ -33,7 +33,7 @@
  *    **退到什麼**：只讀工作區根那一層的四個候選。
  *    **重開條件**：出現跨專案共用指令的需求，或 `--workspace` 常指到 repo 子目錄而漏掉 repo 根的指令。
  * 2. **哪一條**：dsh 的 `fs` 是**選配**（`inject = ['sessionProjections', 'workingDirectory']`，`ctx.get('fs')` 拿不到就返回，
- *    `src/index.ts:36`、`:121-127`）；我們把 `fs` 放進 `inject`（必填，`^1.1.0`）。
+ *    `src/index.ts:36`、`:121-127`）；我們把 `fs` 放進 `inject`（必填，`^2.0.0`）。
  *    **為什麼表達不出來**：我們要在 `apply` 當下就把服務抓進閉包。沒有樹的路徑上（eval、`createNexusAgent` 的測試）插件被
  *    `mountDetached` 掛一次就卸載，呼叫當下才經 `ctx` 取服務會拋；而不經 `inject` 的選用服務在 `apply` 當下沒有次序保證——`fs` 那一列
  *    還沒提供就會永遠拿到 `undefined`，基線也就靜靜消失。
@@ -250,10 +250,10 @@ export function createAgentInstructionsListener(
 export const name = 'agent-instructions';
 
 /**
- * 要的服務：`agentLoop`（`^1.0.0`，登記 `preStep` listener）與 `fs`（`^1.1.0`，呼叫當下拿這條 thread 的 backend）。範圍在這裡宣告，
+ * 要的服務：`agentLoop`（`^1.0.0`，登記 `preStep` listener）與 `fs`（`^2.0.0`，呼叫當下拿這條 thread 的 backend）。範圍在這裡宣告，
  * 落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。`fs` 放進 `inject` 而不是選配，理由見檔頭偏離 2。
  */
-export const inject = injectOf(need(agentLoopToken, '^1.0.0'), need(fsToken, '^1.1.0'));
+export const inject = injectOf(need(agentLoopToken, '^1.0.0'), need(fsToken, '^2.0.0'));
 
 /** 這個插件的設定（manifest 的 `config`）：見 {@link agentInstructionsConfigSchema}。`strictObject`：未知欄位讓載入失敗。 */
 export const Config = agentInstructionsConfigSchema;
@@ -265,7 +265,7 @@ export const manifest = defineManifest({
   provides: [],
   consumes: [
     { token: agentLoopToken.name, range: '^1.0.0' },
-    { token: fsToken.name, range: '^1.1.0' },
+    { token: fsToken.name, range: '^2.0.0' },
   ],
   config: Config,
   // 換程式碼要重啟行程；設定（`maxBytes`）只給新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。
