@@ -54,7 +54,8 @@ import { assertSameCwd, assertSameWorkspaceRoot } from './resume-guards.js';
 import { PLAN_COMMAND_NAME, recordedPlanMode } from '@nexus/plugin-plan-mode';
 import { AssemblyDropError, HEADLESS_APPROVALS } from './agent-factory.js';
 import { driveGoalRound } from './goal-driver.js';
-import type { GoalDriverPort, GoalRoundRequest } from './goal-driver.js';
+import type { GoalDriverPort, GoalRoundCap, GoalRoundRequest } from './goal-driver.js';
+import { GOAL_ROUND_CAP_SOURCE, goalRoundCapPlugin } from './settings/goal-round-cap.js';
 import { PERMISSION_COMMAND_NAME } from '@nexus/permission-presets';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
@@ -298,8 +299,11 @@ export function parseCliArgs(argv: readonly string[]): CliInvocation {
   };
 }
 
+/** `--max-goal-rounds` 給的上限寫進 blocker 訊息與啟動那一行時的來源。 */
+export const MAX_GOAL_ROUNDS_SOURCE = '命令列 --max-goal-rounds 旗標';
+
 /**
- * `--max-goal-rounds` 那一格。
+ * `--max-goal-rounds` 那一格。**只管旗標**：`goal-round-cap` 那一列沒有這條規矩，續行沒開時它安靜地不起作用（#1623）。
  *
  * **沒開旗標就拋，不是靜靜收下。** 一個收下來卻沒有消費者的上限，跟沒設一模一樣——而
  * 差別在於畫面上看起來設過了。這條路上唯一會發生的事就是有人以為自己壓住了輪數。
@@ -595,7 +599,7 @@ export async function runTurn(
  * @param printer - 輸出去處。
  * @param sessionLog - 這條 REPL 的事件日誌。
  * @param driver - 排程器那一側。
- * @param roundCap - `--max-goal-rounds`；省略即只有目標自己那一條上限。**它到頭時走的
+ * @param roundCap - 操作者那條上限（`--max-goal-rounds`，沒給就是 `goal-round-cap` 那一列）；省略即只有目標自己那一條上限。**它到頭時走的
  *   是跟目標那條同一條路**（記一顆 blocker 然後停），不是在這裡 `break`——安靜停下來的
  *   迴圈會留下一個還 active 的目標，而那在日誌上跟「模型收工了」分不開。
  */
@@ -604,7 +608,7 @@ export async function driveGoalRounds(
   printer: Printer,
   sessionLog: SessionLog,
   driver: GoalDriverPort,
-  roundCap?: number,
+  roundCap?: GoalRoundCap,
 ): Promise<void> {
   for (;;) {
     const round = await driveGoalRound(() => sessionLog.events, driver, roundCap);
@@ -730,7 +734,7 @@ export async function runRepl(
   sessionLog: SessionLog,
   commands: Pick<CommandRegistrationPoint, 'find' | 'list'>,
   driver?: GoalDriverPort,
-  roundCap?: number,
+  roundCap?: GoalRoundCap,
   titleLimits?: ThreadTitleLimits,
   line?: ReplLine,
 ): Promise<void> {
@@ -989,6 +993,18 @@ async function runLaunched(
   const threadTitle = startupSetting(plugins, threadTitlePlugin);
   // LLM 標題那一列（#650），同上：沒帶 `--live` 也解，寫壞的設定不因為這一次用不到就放過。
   const threadTitleLlm = startupSetting(plugins, threadTitleLlmPlugin);
+  // 目標續行的操作者上限（#1623）：`--max-goal-rounds` 贏過 `goal-round-cap` 那一列，那一列贏過「不設」。續行沒開時不起作用：
+  // 旗標沒配 `--goal-driver` 已經在解析時報錯，那一列則安靜地不用（出廠就有值，CLI 預設不開續行，見 `settings/goal-round-cap.ts`）。
+  // 掛沒掛先問，理由同 serve：`startupSetting` 對關掉的列回 schema 預設。
+  const goalRoundCap: GoalRoundCap | undefined =
+    invocation.maxGoalRounds !== undefined
+      ? { limit: invocation.maxGoalRounds, source: MAX_GOAL_ROUNDS_SOURCE }
+      : startupEntryMounted(plugins, goalRoundCapPlugin)
+        ? {
+            limit: startupSetting(plugins, goalRoundCapPlugin).limit,
+            source: GOAL_ROUND_CAP_SOURCE,
+          }
+        : undefined;
 
   // **續接也在建 agent 之前讀**：沙箱模式的起始那一格與 root 日誌的 seed 都是組裝時就要給的
   // 東西，而讀不到（沒有那個目錄、版本太新、壞檔）也該在什麼都還沒起來的時候就講。
@@ -1276,7 +1292,7 @@ async function runLaunched(
     }
     // 第七行：**這一輪結束之後還會不會有下一輪**。前六行講的是東西往哪裡去，這一行講
     // 的是誰在推——而那是 `--goal-driver` 落地之後畫面上唯一看得出來的差別。
-    printer.log(formatGoalDriverDisclosure(invocation.goalDriver, invocation.maxGoalRounds));
+    printer.log(formatGoalDriverDisclosure(invocation.goalDriver, goalRoundCap));
 
     const driver = invocation.goalDriver
       ? goalDriverPort(
@@ -1291,7 +1307,7 @@ async function runLaunched(
       printer.log(`> ${invocation.prompt}\n`);
       await runTurn(agent, invocation.prompt, printer, sessionLog, threadTitle);
       if (driver !== undefined)
-        await driveGoalRounds(agent, printer, sessionLog, driver, invocation.maxGoalRounds);
+        await driveGoalRounds(agent, printer, sessionLog, driver, goalRoundCap);
     } else {
       printer.log('輸入 /help 看有哪些命令，/exit 或按 Ctrl-D 結束。\n');
       await runRepl(
@@ -1301,7 +1317,7 @@ async function runLaunched(
         sessionLog,
         commands,
         driver,
-        invocation.maxGoalRounds,
+        goalRoundCap,
         threadTitle,
         replLine,
       );

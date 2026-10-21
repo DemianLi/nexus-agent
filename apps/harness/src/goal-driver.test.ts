@@ -102,33 +102,124 @@ describe('上限耗盡', () => {
 
 /**
  * 操作的人那一條上限。**它跟目標自己那一條是兩件事**：目標那個數字是模型在
- * `create_goal` 裡填的（`service.ts:269` 的 `??` 不是 `Math.min`），所以「上限」在沒有這
+ * `create_goal` 裡填的（`service.ts:254` 的 `??` 不是 `Math.min`），所以「上限」在沒有這
  * 一格之前完全由模型自己挑。
+ *
+ * **數的是最後一次建立或恢復目標之後排過幾輪**（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)，#1614 Q-A2 (a)），
+ * 不是累計：以前比累計，`round-cap` 之後人按恢復也續不了。所以這一段的日誌都帶授權那一顆 `goal/change`。
  */
-describe('命令列給的那條上限', () => {
+const CAP = { limit: 3, source: '測試的上限' } as const;
+
+/** 一顆授權（或改目標）的變更：決定只讀它的 `operation` 與目標 id。 */
+function change(operation: 'create' | 'resume' | 'edit', id = ID): readonly [string, unknown] {
+  return ['goal/change', { kind: 'goal/change', operation, goal: { id }, roundsStarted: 0 }];
+}
+
+/** 一輪續行，好好收工了。 */
+function goalRound(round: number, id = ID): readonly (readonly [string, unknown])[] {
+  return [['turn/start', { kind: 'goal', text: '續', goalId: id, revision: 1, round }], END];
+}
+
+/** 建立目標之後跑了 `rounds` 輪續行。 */
+function afterCreate(rounds: number): readonly (readonly [string, unknown])[] {
+  return [
+    change('create'),
+    ...SETTLED,
+    ...Array.from({ length: rounds }, (_, at) => goalRound(at + 1)).flat(),
+  ];
+}
+
+describe('操作的人給的那條上限', () => {
   it('目標自己那條還很寬，人設的那條照樣夾得住', () => {
     const decision = decideGoalRound(
-      logOf(SETTLED).events,
+      logOf(afterCreate(3)).events,
       view({ maxGoalRounds: 99, roundsStarted: 3 }),
-      3,
+      CAP,
     );
     expect(decision).toEqual({
       kind: 'block',
       ref: { id: ID, revision: 1 },
       reason: {
         code: ROUND_CAP_BLOCK_CODE,
-        message: '這一次呼叫用完了 --max-goal-rounds 給的 3 個續行輪次。',
+        message:
+          '上一次建立或恢復目標之後已經續行了 3 輪，到了測試的上限給的上限；要繼續就恢復目標，會重新起算。',
       },
     });
   });
 
   it('還沒到就照排——邊界同樣是 >=，不是 >', () => {
     const decision = decideGoalRound(
-      logOf(SETTLED).events,
+      logOf(afterCreate(2)).events,
       view({ maxGoalRounds: 99, roundsStarted: 2 }),
-      3,
+      CAP,
     );
     expect(decision.kind === 'run' && decision.round.round).toBe(3);
+  });
+
+  /**
+   * **恢復之後重新起算**：累計已經 3 輪、到了上限；人按恢復之後，同一個累計數照樣排，第 4 輪的號碼照舊往上數（模型讀到的
+   * `Round: N/M` 是目標自己的累計，不動）。比累計的寫法在這裡會再記一次 `round-cap`，人怎麼按都續不了。
+   */
+  it('恢復之後重新起算：累計到了上限，恢復後照排', () => {
+    const decision = decideGoalRound(
+      logOf([...afterCreate(3), change('resume'), ...SETTLED]).events,
+      view({ maxGoalRounds: 99, roundsStarted: 3 }),
+      CAP,
+    );
+    expect(decision.kind === 'run' && decision.round.round).toBe(4);
+  });
+
+  it('恢復之後再跑滿上限，又夾住', () => {
+    const decision = decideGoalRound(
+      logOf([
+        ...afterCreate(3),
+        change('resume'),
+        ...goalRound(4),
+        ...goalRound(5),
+        ...goalRound(6),
+      ]).events,
+      view({ maxGoalRounds: 99, roundsStarted: 6 }),
+      CAP,
+    );
+    expect(decision.kind === 'block' && decision.reason.code).toBe(ROUND_CAP_BLOCK_CODE);
+  });
+
+  /** `update_goal` 記的是 `edit`：模型改自己的上限不是人授權，不能讓這個數歸零。 */
+  it('edit 不重新起算', () => {
+    const decision = decideGoalRound(
+      logOf([...afterCreate(3), change('edit')]).events,
+      view({ maxGoalRounds: 1000, roundsStarted: 3 }),
+      CAP,
+    );
+    expect(decision.kind === 'block' && decision.reason.code).toBe(ROUND_CAP_BLOCK_CODE);
+  });
+
+  /** 只數這個目標的輪：清掉再建的新目標不吃舊目標的帳。 */
+  it('只數同一個目標的輪', () => {
+    const OTHER = goalId('goal-0');
+    const decision = decideGoalRound(
+      logOf([
+        change('create', OTHER),
+        ...goalRound(1, OTHER),
+        ...goalRound(2, OTHER),
+        ...goalRound(3, OTHER),
+        change('create'),
+        ...SETTLED,
+      ]).events,
+      view({ maxGoalRounds: 99, roundsStarted: 0 }),
+      CAP,
+    );
+    expect(decision.kind === 'run' && decision.round.round).toBe(1);
+  });
+
+  /** 找不到授權那一顆（只有手搭的日誌會這樣）就退回累計，寧可早停。 */
+  it('日誌上沒有授權就比累計', () => {
+    const decision = decideGoalRound(
+      logOf(SETTLED).events,
+      view({ maxGoalRounds: 99, roundsStarted: 3 }),
+      CAP,
+    );
+    expect(decision.kind === 'block' && decision.reason.code).toBe(ROUND_CAP_BLOCK_CODE);
   });
 
   /**
@@ -138,9 +229,9 @@ describe('命令列給的那條上限', () => {
    */
   it('兩條同時到頂，記的是 round-limit 不是 round-cap', () => {
     const decision = decideGoalRound(
-      logOf(SETTLED).events,
+      logOf(afterCreate(2)).events,
       view({ maxGoalRounds: 2, roundsStarted: 2 }),
-      2,
+      { limit: 2, source: '測試的上限' },
     );
     expect(decision.kind === 'block' && decision.reason.code).toBe(ROUND_LIMIT_BLOCK_CODE);
   });
@@ -174,7 +265,7 @@ describe('到頂之後記的那顆 blocker', () => {
 
   it('人設的那條到頂，記 round-cap 而且不排', async () => {
     const port = portOf(view({ maxGoalRounds: 99, roundsStarted: 3 }));
-    const round = await driveGoalRound(() => logOf(SETTLED).events, port, 3);
+    const round = await driveGoalRound(() => logOf(afterCreate(3)).events, port, CAP);
     expect(round).toBeUndefined();
     expect(port.blocked).toEqual([ROUND_CAP_BLOCK_CODE]);
   });
@@ -186,7 +277,7 @@ describe('到頂之後記的那顆 blocker', () => {
    */
   it('同一個狀態沒給上限就照排——對照組', async () => {
     const port = portOf(view({ maxGoalRounds: 99, roundsStarted: 3 }));
-    const round = await driveGoalRound(() => logOf(SETTLED).events, port);
+    const round = await driveGoalRound(() => logOf(afterCreate(3)).events, port);
     expect(round?.round).toBe(4);
     expect(port.blocked).toEqual([]);
   });

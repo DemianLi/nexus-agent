@@ -1061,6 +1061,26 @@ home 是 `NEXUS_AGENT_HOME`，沒設就是 `~/.nexus-agent`（systemd 的設法�
 但那是准許不是保證。額外那條「連續 N 輪沒進展就停」刻意沒做，理由在
 `apps/harness/src/goal-driver.ts` 的檔頭。
 
+**操作者給的輪數上限：`goal-round-cap` 那一列**（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)）。目標自己的
+`max_goal_rounds` 是模型在 `create_goal` 填的，模型在人說話的那一輪也能用 `update_goal` 改高，所以它擋不住一個停不下來的目標。
+這一列是部署的人給的另一條上限，**出廠 20**：人每建立或恢復一次目標，續行最多排 20 輪，到了就把目標記成 `blocked`
+（`round-cap`），訊息指名這一列；要接著跑就 `/goal resume`，從 0 重新算。模型改目標（`edit`）不重新算。兩條上限先到的那一條管，
+同時到記的是目標自己那條（`round-limit`）。
+
+```yaml
+- id: goal-round-cap
+  config:
+    limit: 50 # 正整數；0、負數、小數、字串都會讓 serve 與 CLI 起不來，訊息指名這一列
+```
+
+- **關掉**（`disabled: true`）就只剩目標自己的 `max_goal_rounds`，跟沒有這一列時一樣。這一列不像 `thread-capacity` 那樣關不掉。
+- **CLI**：`--max-goal-rounds N` 贏過這一列，這一列贏過不設。續行沒開（CLI 預設）時這一列不起作用、不報錯；
+  `--max-goal-rounds` 沒配 `--goal-driver` 照舊報錯。旗標的算法也改成每次建立或恢復目標重新起算（以前比的是累計輪數）。
+- **確認**：啟動時「續行：…」那一行寫明這一次有哪幾條上限，例如「部署設定（cordis.yml 的 goal-round-cap 那一列）給的 20 輪」，
+  關掉時寫「goal-round-cap 那一列關著」。
+- **已知殘差**：續行提示詞裡的 `Round: N/M` 照 dsh 逐字，M 是目標自己的上限、N 是累計輪數，所以這一列比較小時模型看到的 M 偏大，
+  恢復之後 N 也不歸零。20 這個數沒有實測過健康的目標要跑幾輪，是保守的起點，理由在 `apps/harness/src/settings/goal-round-cap.ts` 的檔頭。
+
 **目標在跑的時候也能暫停，按下去當場停掉這一輪**（[#1516](https://github.com/DemianLi/nexus-agent/issues/1516)，照 dsh `goal-round-driver` 對暫停的反應）。
 有**兩個入口**，效果一樣：wire 的 `goal.pause`（帶目標的 `goalId` 與看到的 `revision`；`revision` 過期回 `{ ok: false, error: { code: 'goal-stale', current } }`，
 不假裝成功；目標不是 active 回 `goal-not-active`；沒有目標回 `goal-not-found`；沒有 goal 域的組裝回 `not_supported`；**不依賴續行排程器**，`--no-goal-driver` 也照樣收，暫停是 goal 服務本身的事，同 dsh 的 `@Remote('pause')`），與斜線命令 `/goal pause`。

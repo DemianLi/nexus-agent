@@ -75,7 +75,7 @@ import { WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { assemblyDropErrorFor, createNexusAgent } from './agent-factory.js';
 import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
-import type { GoalDriverPort } from './goal-driver.js';
+import type { GoalDriverPort, GoalRoundCap } from './goal-driver.js';
 import type { AssemblyDrop, NexusAgentHandle } from './agent-factory.js';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
 import { CONTAINED_FILESYSTEM, sandboxPolicyPlugin } from '@nexus/plugin-sandbox-policy';
@@ -181,9 +181,10 @@ export interface CliInvocation {
    */
   readonly goalDriver: boolean;
   /**
-   * 這一次呼叫最多讓續行排幾輪。省略即不設，只剩目標自己那一條。
+   * 命令列的 `--max-goal-rounds`：人每授權一次（建立或恢復目標），續行最多再排幾輪（#1623 起每次授權重新起算，不比累計）。
+   * 省略即沒給，這時 `goal-round-cap` 那一列有值就用它，那一列也關掉才只剩目標自己那一條。
    *
-   * **它存在的理由是目標自己那條上限不歸操作的人管**：`service.ts:269` 是
+   * **它存在的理由是目標自己那條上限不歸操作的人管**：`service.ts:254` 是
    * `request.maxGoalRounds ?? this.#defaultMaxGoalRounds`——`??` 不是 `Math.min`，所以
    * 模型在 `create_goal` 裡填的數字贏過組裝點給的預設。這一格是**模型改不動的那一個**，
    * 完整理由在 `goal-driver.ts` 檔頭。
@@ -692,34 +693,36 @@ export const THREAD_ID = 'cli';
  * 又跑了三十輪」與「人問了三十次」在帳單上一模一樣而在畫面上沒有差別。
  *
  * **而上限有兩條，所以兩條都要講。** 目標自己那個 `max_goal_rounds` 是**模型填的**
- * （`service.ts:269` 的 `??`），`--max-goal-rounds` 才是操作的人設得動的那一條。只印其中
- * 一條的話，這一行就會變成上面那句自己警告過的謊話——只印目標那條會讓人以為有一個他控制
- * 得了的數字，只印命令列那條會讓人看不見模型可以在它底下自己挑一個更小的。沒給命令列那
- * 條時要**明著說沒給**，理由同上。
+ * （`service.ts:254` 的 `??`，還能用 `update_goal` 調高），操作的人設得動的是另一條（[#1623](https://github.com/DemianLi/nexus-agent/issues/1623)：
+ * `goal-round-cap` 那一列，CLI 的 `--max-goal-rounds` 贏過它）。只印其中一條的話，這一行就會變成上面那句自己警告過的謊話——
+ * 只印目標那條會讓人以為有一個他控制得了的數字，只印操作者那條會讓人看不見模型可以在它底下自己挑一個更小的。操作者那條
+ * 沒有時要**明著說沒有**，理由同上。操作者那條**每次建立或恢復目標重新起算**，也要講，不然人會以為那是一個目標一輩子的總數。
  *
  * **兩個入口的預設相反**（#445）：CLI 預設關、要 `--goal-driver` 才開；serve 預設開、要
  * `--no-goal-driver` 才關。所以「怎麼改成另一邊」那半句要看入口講，不然 serve 關著的時候這一行
- * 會叫人去加一個本來就是預設的旗標。serve 也沒有 `--max-goal-rounds`，所以那一半不講。
+ * 會叫人去加一個本來就是預設的旗標。
  *
  * @param on - 續行開著沒有。
- * @param roundCap - `--max-goal-rounds` 那個數字；省略即這一次呼叫沒給。只有 CLI 有這個旗標。
+ * @param roundCap - 操作者那條上限與它的來源；省略即沒有（那一列關掉、CLI 也沒給旗標）。
  * @param entry - 哪個入口；預設 CLI。
  * @returns 那一行。
  */
 export function formatGoalDriverDisclosure(
   on: boolean,
-  roundCap?: number,
+  roundCap?: GoalRoundCap,
   entry: 'cli' | 'serve' = 'cli',
 ): string {
+  const own = `目標自己的 max_goal_rounds（模型在 create_goal 填的，沒填就是 ${DEFAULT_MAX_GOAL_ROUNDS}）`;
+  const limits =
+    roundCap === undefined
+      ? `上限只有一條——${own}；沒有操作者給的上限（goal-round-cap 那一列關著${entry === 'cli' ? '，也沒有給 --max-goal-rounds' : ''}）`
+      : `上限兩條，先到的那一條管——${roundCap.source}給的 ${String(roundCap.limit)} 輪（每次建立或恢復目標重新起算），與${own}`;
   if (entry === 'serve') {
     if (!on) return '續行：關閉（--no-goal-driver；一輪結束就結束，要人再推）';
-    return `續行：開啟（預設；目標沒達成時自己再開一輪；上限只有一條——目標自己的 max_goal_rounds，模型在 create_goal 填的，沒填就是 ${DEFAULT_MAX_GOAL_ROUNDS}；--no-goal-driver 可以關掉）`;
+    return `續行：開啟（預設；目標沒達成時自己再開一輪；${limits}；--no-goal-driver 可以關掉）`;
   }
   if (!on) return '續行：關閉（一輪結束就結束，要人再推；--goal-driver 可以打開）';
-  const own = `目標自己的 max_goal_rounds（模型在 create_goal 填的，沒填就是 ${DEFAULT_MAX_GOAL_ROUNDS}）`;
-  return roundCap === undefined
-    ? `續行：開啟（目標沒達成時自己再開一輪；上限只有一條——${own}；這一次呼叫沒有給 --max-goal-rounds）`
-    : `續行：開啟（目標沒達成時自己再開一輪；上限兩條，先到的那一條管——--max-goal-rounds ${roundCap}，與${own}）`;
+  return `續行：開啟（目標沒達成時自己再開一輪；${limits}）`;
 }
 
 /**
