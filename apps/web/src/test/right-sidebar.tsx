@@ -26,7 +26,7 @@ export function WithRightSidebar({
   );
 }
 
-/** 一份記憶體裡的 `Storage`：Node 25 自帶的那一份蓋住了 jsdom 的，連 `getItem` 都沒有。 */
+/** 一份記憶體裡的 `Storage`。Node 25 的全域蓋住 jsdom 那份的問題已由 `vitest.shared.ts` 統一關掉（#1602）；這份留著是為了每條測試之間隔離。 */
 export function memoryStorage(): Storage {
   const entries = new Map<string, string>();
   return {
