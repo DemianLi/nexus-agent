@@ -220,15 +220,14 @@ describe('換手層上的提問面板', () => {
     expect(within(approvalPanel).queryByRole('button', { name: /收起/ })).toBeNull();
   });
 
-  it('收起再展開，答到一半的還在（內容保持掛載）；關完才 hidden', async () => {
+  it('收起再展開，答到一半的還在（內容保持掛載）；收起的同一輪就 hidden（#1687：沒有高度動效）', () => {
     render(<Harness pendings={[QUESTIONS]} />);
     fireEvent.click(radio('週二'));
     fireEvent.click(within(panel()).getByRole('button', { name: '收起這些問題' }));
     const content = panel().querySelector('[data-slot="collapsible-content"]')!;
-    // 關的動效那 150ms 裡還看得到、但已經進不去。
-    expect(content.hasAttribute('hidden')).toBe(false);
+    // 不等計時器、不等下一輪：點下去這一輪就藏起來，也進不去。
+    expect(content.hasAttribute('hidden')).toBe(true);
     expect(content.hasAttribute('inert')).toBe(true);
-    await waitFor(() => expect(content.hasAttribute('hidden')).toBe(true));
 
     fireEvent.click(within(panel()).getByRole('button', { name: '展開這些問題' }));
     expect(content.hasAttribute('hidden')).toBe(false);

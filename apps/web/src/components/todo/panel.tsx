@@ -57,7 +57,7 @@ export function TodoPanel({
         </span>
         <Chevron />
       </RowTrigger>
-      <CollapsibleContent className="data-closed:animate-collapsible-up data-open:animate-collapsible-down overflow-hidden">
+      <CollapsibleContent className="overflow-hidden">
         <div className="m-1 mt-0 max-h-60 overflow-y-auto" data-testid="todo-panel-scroll">
           <TodoList todos={todos} live={status === 'running'} />
         </div>

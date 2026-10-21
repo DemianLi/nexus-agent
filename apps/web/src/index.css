@@ -36,46 +36,18 @@
  * 現行規則見 `.docs/web-ui-spec.md` §5–§7；兩段 `@theme` 從原型 tag `proto-375-design-language` 搬來（#401）。
  *
  * 動效：registry 元件寫的 animate-in／animate-out 靠 tw-animate-css 才有 CSS（沒裝時一筆都不產出、也不報錯）。
- * 進出場改成「開快關更快」：開 250、關 150、曲線 smooth-out。刻意不讀 --tw-duration，
- * registry 各自寫的 duration-200 就蓋不掉；真要單獨改（例如抽屜）用 animation-duration-*。
- * 不用 inline：reduced-motion 要在執行期把這幾個變數換成只有透明度的版本（`styles/motion.css`）。
- * collapsible 那兩條引用 `styles/motion.css` 的 motion-fade-in／out，少了那兩個 keyframes 會無聲失效。
+ * 時長與曲線照 SG 的機制（#1687）：讀元件自己的 `duration-*`／`ease-*`（tw-animate 的 `--tw-duration`／`--tw-ease`），沒寫的 150ms、`ease`。
+ * **不用 inline**：inline 會讓 utility 直接展開數值、不再讀 `var(--animate-in)`，reduced-motion 在執行期換掉的變數就沒人讀，
+ * 無聲失效（`check-built-css` 量產物）。可是非 inline 的值宣告在 `:root`，裡面的 `var(--tw-duration)` 會在 `:root` 先解掉，
+ * 所以真正生效的值逐元素寫在 `styles/motion.css` 的「進出場」那段；這裡留同一份值，只為了讓 Tailwind 產出 `var(--animate-in)`。
+ * `--ease-smooth-out` 還有別的消費者，留給 ⑥（#1689）。
  */
 @theme {
   --ease-smooth-out: cubic-bezier(0.22, 1, 0.36, 1);
-  --animate-in: enter var(--tw-animation-duration, 250ms) var(--ease-smooth-out)
+  --animate-in: enter var(--tw-animation-duration, var(--tw-duration, 150ms)) var(--tw-ease, ease)
     var(--tw-animation-delay, 0s) 1 normal backwards;
-  --animate-out: exit var(--tw-animation-duration, 150ms) var(--ease-smooth-out)
+  --animate-out: exit var(--tw-animation-duration, var(--tw-duration, 150ms)) var(--tw-ease, ease)
     var(--tw-animation-delay, 0s) 1 normal both;
-  --animate-collapsible-down:
-    collapsible-down var(--tw-animation-duration, 250ms) var(--ease-smooth-out),
-    motion-fade-in var(--tw-animation-duration, 250ms) var(--ease-smooth-out);
-  --animate-collapsible-up:
-    collapsible-up var(--tw-animation-duration, 150ms) var(--ease-smooth-out),
-    motion-fade-out var(--tw-animation-duration, 150ms) var(--ease-smooth-out);
-
-  /*
-   * 展開收合的高度讀 Base UI 量好的 `--collapsible-panel-height`（#1638 Q1）。tw-animate-css 同名的那兩個只認
-   * `--radix-`／`--bits-`／`--reka-`／`--kb-collapsible-content-height`，最後退成 `auto`：高度在 0 與 auto 之間直接跳，jsdom 量不到。
-   * **要寫在 `@theme` 裡**：Tailwind 把 `@theme` 的 keyframes 照宣告順序排在產物最後、layer 外，同名的以後宣告的為準；寫在
-   * `styles/*.css` 會排在 tw-animate 那份前面而輸掉（`guard/` 量展開途中的高度）。
-   */
-  @keyframes collapsible-down {
-    from {
-      height: 0;
-    }
-    to {
-      height: var(--collapsible-panel-height, auto);
-    }
-  }
-  @keyframes collapsible-up {
-    from {
-      height: var(--collapsible-panel-height, auto);
-    }
-    to {
-      height: 0;
-    }
-  }
 }
 
 @theme inline {

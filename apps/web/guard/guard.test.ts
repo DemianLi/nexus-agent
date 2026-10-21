@@ -49,12 +49,11 @@ import { startGuardServer, type GuardServer } from './server';
  * 12. **輸入框的底列**（#1591 PR 2）：三顆 Pick 與用量環的焦點；Pick 的 12px 次要字（含兩種退路）；環三個色階是 status token、
  *    過 3:1（第 37 條）；「全開」的警示色（第 35 條）；鎖住的樣子（第 39 條）；清單開著時選項的字與高度（第 25 條擴充）；環的明細；
  *    reduced-motion 下弧長不走 transition（第 38 條）；375 寬 44px、不溢出、不重疊（第 36、40 條）。
- * 13. **展開收合**（#1638 PR A，`?overlay=collapsibles`）：摘要列展開途中的高度介於 0 與最終值之間（Q1：keyframes 讀 Base UI 的
- *    `--collapsible-panel-height`，Panel 的 `data-open:` 命中動效）；reduced-motion 下沒有高度動效、第一幀就到位；箭頭跟著 Trigger 的
- *    `data-panel-open` 轉半圈。思考過程（#1683 換成 SG 的原生 `<details>`）的箭頭跟著 `details[open]` 轉 90 度、展開後藏「·」與摘要（Q2）。
+ * 13. **展開收合**（#1638 PR A，`?overlay=collapsibles`）：摘要列照 SG 沒有高度動效、點開的第一幀就到位（#1687，平常與
+ *    reduced-motion 各一格）；箭頭照 SG 跟著 Trigger 的 `data-panel-open` 轉 90 度，平常 150ms、reduced-motion 不轉場。思考過程（#1683 換成 SG 的原生 `<details>`）的箭頭跟著 `details[open]` 轉 90 度、展開後藏「·」與摘要（Q2）。
  * 14. **對話區**（#1638 PR B，`?overlay=messages`，產品的 `Transcript`）：泡泡字、表尾、捲到最新的按鈕圖示的對比與按鈕的焦點（亮暗加兩種退路，
- *    {@link OVERLAYS}）；每一則的 `content-visibility` 是 `visible`（第 42 條）；按鈕的動效照 §7：不位移、只縮放 .97、reduced-motion 下沒有
- *    transition（第 41 條）；外殼的行高是 SG 的 20px、泡泡維持 23px；底部淡出捲到底時收成 0。
+ *    {@link OVERLAYS}）；每一則的 `content-visibility` 是 `visible`（第 42 條）；按鈕的動效照 vendor 原樣（#1687 撤掉第 41 條），
+ *    reduced-motion 下沒有 transition；按鈕位移之後避讓（`data-obscuring`）照終點的框算；外殼的行高是 SG 的 20px、泡泡維持 23px；底部淡出捲到底時收成 0。
  * 15. **桌面側欄的收合**（#1680 PR B，`?overlay=desktop-sidebar`）：gap 與 container 的 transition 是 SG 的 200ms linear，
  *    reduced-motion 下整個關掉（`motion.css`）。手機抽屜的寬度在 375 與 768 都是 `--sidebar-width`（本地修改第 55 條，見 {@link WIDTHS}）。
  * 16. **tool-steps**（#1682 PR A，`?overlay=tool-steps`）：列、群組那一列、結果框的字過 4.5，結果框聚焦時 2px 外框畫在外層、offset 2px
@@ -1652,6 +1651,118 @@ describe('瀏覽器量 modal 浮層的版面與動效（#1583）', () => {
     },
   );
 
+  /**
+   * 進出場的時長照 SG（#1687 驗收 A1、A3）：vendor 的 dialog、alert-dialog（含遮罩）、popover 寫 `duration-100`，tooltip 沒寫、
+   * 是 tw-animate 的預設 150。浮層一開頁就開著，進場已經跑完：計算值的 `animation-*` 還在，讀它；退場仿照上面抽屜那格，
+   * 同一個 eval 裡把 `data-open` 換成 `data-closed` 再讀。分得出「`--animate-in` 只宣告在 `:root`、讀不到元素自己的
+   * `--tw-duration`」的只有寫了 `duration-100` 的那幾格（那時量到 150）；tooltip 本來就是 150，只當對照。
+   */
+  const ENTER_EXIT = [
+    { name: 'dialog', overlay: 'dialog', selector: '[data-slot="dialog-content"]', ms: 100 },
+    {
+      name: 'dialog-overlay',
+      overlay: 'dialog',
+      selector: '[data-slot="dialog-overlay"]',
+      ms: 100,
+    },
+    {
+      name: 'alert-dialog',
+      overlay: 'alert-dialog',
+      selector: '[data-slot="alert-dialog-content"]',
+      ms: 100,
+    },
+    {
+      name: 'alert-dialog-overlay',
+      overlay: 'alert-dialog',
+      selector: '[data-slot="alert-dialog-overlay"]',
+      ms: 100,
+    },
+    { name: 'popover', overlay: undefined, selector: '[data-slot="popover-content"]', ms: 100 },
+    { name: 'tooltip', overlay: undefined, selector: '[data-slot="tooltip-content"]', ms: 150 },
+  ];
+
+  async function readEnterExit(
+    overlay: string | undefined,
+    selector: string,
+    reducedMotion: boolean,
+  ) {
+    const page =
+      overlay === undefined
+        ? await (async () => {
+            const p = await open('light');
+            if (reducedMotion) await p.emulateMedia({ reducedMotion: 'reduce' });
+            return p;
+          })()
+        : await openOverlay(overlay, 'light', { reducedMotion, marks: { [selector]: {} } });
+    try {
+      return await page.$eval(selector, (el) => {
+        const read = () => {
+          const style = getComputedStyle(el);
+          return {
+            name: style.animationName,
+            duration: style.animationDuration,
+            easing: style.animationTimingFunction,
+            fill: style.animationFillMode,
+          };
+        };
+        /** 這個名字的 @keyframes 動到哪些屬性。 */
+        const animated = (name: string) => {
+          const props = new Set<string>();
+          for (const sheet of document.styleSheets)
+            for (const rule of sheet.cssRules)
+              if (rule instanceof CSSKeyframesRule && rule.name === name)
+                for (const frame of rule.cssRules)
+                  for (const prop of (frame as CSSKeyframeRule).style) props.add(prop);
+          return [...props].sort();
+        };
+        const enter = read();
+        el.removeAttribute('data-open');
+        el.setAttribute('data-closed', '');
+        const exit = read();
+        return {
+          enter,
+          exit,
+          animates: { enter: animated(enter.name), exit: animated(exit.name) },
+        };
+      });
+    } finally {
+      await page.close();
+    }
+  }
+
+  test.each(ENTER_EXIT)(
+    '$name 的進出場照 SG：$ms ms、ease，fill-mode 是 backwards／both（#1687 A1）',
+    async ({ name, overlay, selector, ms }) => {
+      const measured = await readEnterExit(overlay, selector, false);
+      report[`enter-exit:${name}`] = measured;
+      expect(measured.enter).toEqual({
+        name: 'enter',
+        duration: `${ms / 1000}s`,
+        easing: 'ease',
+        fill: 'backwards',
+      });
+      expect(measured.exit).toEqual({
+        name: 'exit',
+        duration: `${ms / 1000}s`,
+        easing: 'ease',
+        fill: 'both',
+      });
+    },
+  );
+
+  test.each(ENTER_EXIT)(
+    'reduced-motion 下 $name 只淡入淡出：≤ 150ms、只動 opacity（#1687 A3）',
+    async ({ name, overlay, selector }) => {
+      const measured = await readEnterExit(overlay, selector, true);
+      report[`enter-exit-reduced:${name}`] = measured;
+      expect(measured.enter).toMatchObject({ name: 'motion-fade-in', fill: 'backwards' });
+      expect(measured.exit).toMatchObject({ name: 'motion-fade-out', fill: 'both' });
+      for (const phase of [measured.enter, measured.exit])
+        expect(Number.parseFloat(phase.duration)).toBeLessThanOrEqual(0.15);
+      expect(measured.animates).toEqual({ enter: ['opacity'], exit: ['opacity'] });
+    },
+  );
+
   test.each([
     { width: 375, px: 44 },
     { width: 1280, px: 32 },
@@ -2182,9 +2293,9 @@ describe('瀏覽器量桌面側欄的收合動效（#1680 PR B，`?overlay=deskt
 });
 
 describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', () => {
-  // 這幾件都靠真的 CSS 命中 Base UI 的屬性（Panel 的 `data-open`、Trigger 的 `data-panel-open`、`--collapsible-panel-height`），
-  // jsdom 不載 CSS，元件測試量不到。高度動效量摘要列：思考過程改用 SG 的原生 `<details>` 之後沒有高度動效（#1683 決定題 2），
-  // 同頁還帶高度動效的是摘要列。思考過程只量箭頭與展開後藏「·」與摘要。
+  // 這幾件都靠真的 CSS 命中 Base UI 的屬性（Panel 的 `data-open`、Trigger 的 `data-panel-open`），jsdom 不載 CSS，元件測試量不到。
+  // 展開收合照 SG 沒有高度動效（#1687：SG 的 collapsible Panel 沒有任何 class；思考過程 #1683 起是原生 `<details>`）：
+  // 量摘要列點開的第一幀就到位。思考過程只量箭頭與展開後藏「·」與摘要。
   const COMPACTION = '[data-testid="compaction-row"]';
   const REASONING = '[data-testid="reasoning-row"]';
   const TRIGGER = `${COMPACTION} [data-slot="collapsible-trigger"]`;
@@ -2226,55 +2337,55 @@ describe('瀏覽器量展開收合（#1638 PR A，`?overlay=collapsibles`）', (
     }, COMPACTION);
   }
 
-  test('展開途中的高度介於 0 與最終值之間（Q1：keyframes 讀 Base UI 的 --collapsible-panel-height）', async () => {
-    const page = await openRows(false);
-    try {
-      const measured = await expand(page);
-      report['collapsible:expand'] = measured;
-      // 量具自檢：真的有那條高度動效、展開後有高度。
-      expect(measured.grows).toBe(true);
-      expect(measured.final).toBeGreaterThan(0);
-      expect(measured.mid).toBeGreaterThan(0);
-      expect(measured.mid).toBeLessThan(measured.final);
-    } finally {
-      await page.close();
-    }
-  });
+  test.each([false, true])(
+    '摘要列照 SG 沒有高度動效：點開的第一幀就到位、內容上沒有任何動畫（#1687 B1；reduced-motion %s）',
+    async (reducedMotion) => {
+      const page = await openRows(reducedMotion);
+      try {
+        const measured = await expand(page);
+        report[`collapsible:expand${reducedMotion ? '-reduced' : ''}`] = measured;
+        // 量具自檢：展開後有高度。
+        expect(measured.final).toBeGreaterThan(0);
+        expect(measured.grows).toBe(false);
+        expect(measured.animations).toBe(0);
+        expect(measured.first).toBe(measured.final);
+      } finally {
+        await page.close();
+      }
+    },
+  );
 
-  test('減少動態：沒有高度動效，點開的第一幀就到位', async () => {
-    const page = await openRows(true);
-    try {
-      const measured = await expand(page);
-      report['collapsible:expand-reduced'] = measured;
-      expect(measured.grows).toBe(false);
-      expect(measured.final).toBeGreaterThan(0);
-      expect(measured.first).toBe(measured.final);
-    } finally {
-      await page.close();
-    }
-  });
-
-  test('摘要列的箭頭跟著 Trigger 開著時的 data-panel-open 轉半圈', async () => {
-    const page = await openRows(false);
-    try {
-      const read = () =>
-        page.$eval(TRIGGER, (trigger) => ({
-          expanded: trigger.getAttribute('aria-expanded'),
-          panelOpen: trigger.hasAttribute('data-panel-open'),
-          // Tailwind v4 的 `rotate-180` 寫的是獨立的 `rotate` 屬性，不是 `transform`。
-          chevron: getComputedStyle(trigger.querySelector('svg[data-motion-rotate]')!).rotate,
-        }));
-      const closed = await read();
-      await page.click(TRIGGER);
-      await settle(page);
-      const opened = await read();
-      report['collapsible:trigger'] = { closed, opened };
-      expect(closed).toEqual({ expanded: 'false', panelOpen: false, chevron: 'none' });
-      expect(opened).toEqual({ expanded: 'true', panelOpen: true, chevron: '180deg' });
-    } finally {
-      await page.close();
-    }
-  });
+  test.each([false, true])(
+    '摘要列的箭頭照 SG：跟著 Trigger 開著時的 data-panel-open 轉 90 度，平常 150ms、減少動態不轉場（#1687 B4；reduced-motion %s）',
+    async (reducedMotion) => {
+      const page = await openRows(reducedMotion);
+      try {
+        const read = () =>
+          page.$eval(TRIGGER, (trigger) => {
+            const chevron = getComputedStyle(trigger.querySelector('svg[data-motion-rotate]')!);
+            return {
+              expanded: trigger.getAttribute('aria-expanded'),
+              panelOpen: trigger.hasAttribute('data-panel-open'),
+              // Tailwind v4 的 `rotate-90` 寫的是獨立的 `rotate` 屬性，不是 `transform`。
+              chevron: chevron.rotate,
+              transition: `${chevron.transitionProperty} ${chevron.transitionDuration}`,
+            };
+          });
+        const closed = await read();
+        await page.click(TRIGGER);
+        await settle(page);
+        const opened = await read();
+        report[`collapsible:trigger${reducedMotion ? '-reduced' : ''}`] = { closed, opened };
+        expect(closed).toMatchObject({ expanded: 'false', panelOpen: false, chevron: 'none' });
+        expect(opened).toMatchObject({ expanded: 'true', panelOpen: true, chevron: '90deg' });
+        expect(opened.transition).toBe(
+          reducedMotion ? 'none 0s' : 'transform, translate, scale, rotate 0.15s',
+        );
+      } finally {
+        await page.close();
+      }
+    },
+  );
 
   test('思考過程的箭頭跟著 details[open] 轉 90 度，展開後藏「·」與摘要（#1638 Q2、#1683）', async () => {
     const page = await openRows(false);
@@ -2327,7 +2438,7 @@ describe('瀏覽器量對話區（#1638 PR B，`?overlay=messages`）', () => {
   });
 
   test.each([false, true])(
-    '捲到最新的按鈕照 §7：不位移、只縮放 .97，時長走 token；reduced-motion 下沒有 transition（本地修改第 41 條；reduced-motion %s）',
+    '捲到最新的按鈕照 vendor 原樣：藏著時往下位移一整個身高、縮 .95，出現 200ms、藏起來 400ms；reduced-motion 下沒有 transition（#1687 撤掉第 41 條；reduced-motion %s）',
     async (reducedMotion) => {
       const page = await openMessages(reducedMotion);
       try {
@@ -2341,7 +2452,6 @@ describe('瀏覽器量對話區（#1638 PR B，`?overlay=messages`）', () => {
               scale: style.scale,
               transitionProperty: style.transitionProperty,
               transitionDuration: style.transitionDuration,
-              top: el.getBoundingClientRect().top,
             };
           });
         const hidden = await read();
@@ -2354,23 +2464,128 @@ describe('瀏覽器量對話區（#1638 PR B，`?overlay=messages`）', () => {
         // 量具自檢：真的量到藏著與出現兩種狀態，元素是 reduced-motion 那條規則認得的 data-slot。
         expect([hidden.active, shown.active]).toEqual(['false', 'true']);
         expect(shown.slot).toBe('message-scroller-button');
-        // 不位移：只有置中用的 -50%（vendor 藏著時是 translate-y-full），框的上緣只差縮放的那一點。
-        expect([hidden.translate, shown.translate]).toEqual(['-50%', '-50%']);
-        expect(Math.abs(hidden.top - shown.top)).toBeLessThan(1);
-        expect([hidden.scale, shown.scale]).toEqual(['0.97', '1']);
+        // 藏著時 vendor 的 `translate-y-full`（y 是身高的 100%）疊在置中用的 -50% 上；出現時只剩置中。
+        expect(hidden.translate).toContain('100%');
+        expect(shown.translate).toBe('-50%');
+        expect([hidden.scale, shown.scale]).toEqual(['0.95', '1']);
         if (reducedMotion) {
           expect([hidden.transitionProperty, shown.transitionProperty]).toEqual(['none', 'none']);
         } else {
-          // `--duration-quick` 150、`--duration-fast` 250（vendor 是 400 與 200）。
           expect(hidden).toMatchObject({
-            transitionProperty: 'scale, opacity',
-            transitionDuration: '0.15s',
+            transitionProperty: 'translate, scale, opacity',
+            transitionDuration: '0.4s',
           });
           expect(shown).toMatchObject({
-            transitionProperty: 'scale, opacity',
-            transitionDuration: '0.25s',
+            transitionProperty: 'translate, scale, opacity',
+            transitionDuration: '0.2s',
           });
         }
+      } finally {
+        await page.close();
+      }
+    },
+  );
+
+  /**
+   * 浮鈕的避讓（`hooks/use-scroll-button-clearance.ts`，#1295）在浮鈕位移之後還對（#1687 驗收 C3）。浮鈕從藏著的位置
+   * （往下一整個身高、縮 .95）過渡到出現的位置，hook 在過渡途中量到的是途中的框；它要在 `transitionend` 時重量，最後的
+   * `data-obscuring` 才對得上終點的框。reduced-motion 下沒有過渡，靠捲動那次重量就量到終點：primitive 的 `data-active` 在 scroll
+   * 事件之前就翻好（`@shadcn/react` 0.3.1 實測）；升 primitive 之後翻轉時機變了，reduced-motion 那一格會紅。
+   *
+   * 做法：先記下藏著與出現兩個框，在對話內容裡挑一個「壓得到出現的框、壓不到藏著的框」的元素標成要讓開的目標，
+   * 再捲一次回頂端。平常的那一格先自檢：過渡暫停在 0 的框與 `finish()` 之後的框，用 `obscures()` 算出來的結論不同
+   * （不然拿掉 `transitionend` 也不會紅）；再等兩幀讓 hook 的 rAF 跑完，讀 `data-obscuring`。
+   */
+  test.each([false, true])(
+    '浮鈕過渡到終點之後，data-obscuring 照終點的框算（#1687 C3；reduced-motion %s）',
+    async (reducedMotion) => {
+      const page = await openMessages(reducedMotion);
+      try {
+        const hiddenBox = await page.$eval(SCROLL_BUTTON, (el) =>
+          el.getBoundingClientRect().toJSON(),
+        );
+        await scrollMessages(page, 'top');
+        // 挑目標：內容裡壓得到出現的框、壓不到藏著的框的元素（餘裕同 hook 的 4px）。
+        const picked = await page.$eval(
+          '[data-slot="message-scroller-viewport"]',
+          (viewport, hidden) => {
+            const button = viewport.parentElement!.querySelector(
+              '[data-slot="message-scroller-button"]',
+            )!;
+            const shown = button.getBoundingClientRect();
+            const hit = (a: DOMRect | typeof hidden, b: DOMRect) =>
+              a.left < b.right + 4 &&
+              b.left < a.right + 4 &&
+              a.top < b.bottom + 4 &&
+              b.top < a.bottom + 4;
+            const target = [
+              ...viewport.querySelectorAll<HTMLElement>('[data-slot="message-scroller-content"] *'),
+            ]
+              .reverse()
+              .find((el) => {
+                const box = el.getBoundingClientRect();
+                return box.height > 0 && hit(shown, box) && !hit(hidden, box);
+              });
+            target?.setAttribute('data-scroll-button-avoid', '');
+            return target !== undefined;
+          },
+          hiddenBox,
+        );
+        // 量具自檢：版面上挑得到這樣的目標。
+        expect(picked).toBe(true);
+        await scrollMessages(page, 'end');
+        const measured = await page.$eval(
+          '[data-slot="message-scroller-viewport"]',
+          async (viewport, reduced) => {
+            const frame = () => new Promise((resolve) => requestAnimationFrame(resolve));
+            const button = viewport.parentElement!.querySelector<HTMLElement>(
+              '[data-slot="message-scroller-button"]',
+            )!;
+            const target = viewport.querySelector('[data-scroll-button-avoid]')!;
+            const hit = (a: DOMRect) => {
+              const b = target.getBoundingClientRect();
+              return (
+                a.left < b.right + 4 &&
+                b.left < a.right + 4 &&
+                a.top < b.bottom + 4 &&
+                b.top < a.bottom + 4
+              );
+            };
+            viewport.scrollTop = 0;
+            for (let i = 0; i < 120 && button.getAttribute('data-active') !== 'true'; i++)
+              await frame();
+            // 讓 hook 因捲動而排的那次重量先跑完（量到的是過渡剛開始的框），再把過渡推到終點：
+            // 這樣終點要靠 `transitionend` 才量得到，拿掉它會紅。
+            await frame();
+            await frame();
+            let start: boolean | undefined;
+            if (!reduced) {
+              const transitions = button.getAnimations();
+              for (const t of transitions) {
+                t.pause();
+                t.currentTime = 0;
+              }
+              start = hit(button.getBoundingClientRect());
+              for (const t of transitions) t.finish();
+            }
+            const end = hit(button.getBoundingClientRect());
+            await frame();
+            await frame();
+            return {
+              active: button.getAttribute('data-active'),
+              start,
+              end,
+              obscuring: button.hasAttribute('data-obscuring'),
+            };
+          },
+          reducedMotion,
+        );
+        report[`messages:clearance:${reducedMotion ? 'reduced' : 'normal'}`] = measured;
+        expect(measured.active).toBe('true');
+        expect(measured.end).toBe(true);
+        // 自檢：過渡的起點與終點，壓不壓得到的結論不同。
+        if (!reducedMotion) expect(measured.start).toBe(false);
+        expect(measured.obscuring).toBe(measured.end);
       } finally {
         await page.close();
       }

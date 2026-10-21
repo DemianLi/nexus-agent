@@ -46,3 +46,40 @@ describe('reduced-motion 下的 SG 動畫', () => {
     expect(cascade.value([selector], 'animation', REDUCED)).toBe('none');
   });
 });
+
+/**
+ * 進出場的 `--animate-in`／`--animate-out`（#1687）：時長與曲線讀元件自己的 `duration-*`／`ease-*`，所以值要逐元素宣告在 `*` 上
+ * （`motion.css` 的「進出場」那段）。fill-mode 是機制（規格 §7）：進場 `backwards`、退場 `both`。實際量到的時長由 `guard/` 量。
+ */
+describe('進出場的 --animate-in／--animate-out', () => {
+  /** 原始檔裡值會折行，比之前把空白收成一格。 */
+  const value = (selector: string, property: string, query?: typeof REDUCED) =>
+    cascade.value([selector], property, query)?.replace(/\s+/g, ' ');
+  const EVERY = ['*', '::before', '::after'];
+  const REDUCED_EVERY = [':root:root *', ':root:root ::before', ':root:root ::after'];
+
+  test.each(EVERY)(
+    '%s 上的值讀 --tw-duration／--tw-ease，fill-mode 是 backwards／both',
+    (selector) => {
+      expect(value(selector, '--animate-in')).toBe(
+        'enter var(--tw-animation-duration, var(--tw-duration, 150ms)) var(--tw-ease, ease) var(--tw-animation-delay, 0s) 1 normal backwards',
+      );
+      expect(value(selector, '--animate-out')).toBe(
+        'exit var(--tw-animation-duration, var(--tw-duration, 150ms)) var(--tw-ease, ease) var(--tw-animation-delay, 0s) 1 normal both',
+      );
+    },
+  );
+
+  test('@theme 留同一份值（只為了讓 Tailwind 產出 var(--animate-in)）', () => {
+    expect(value('@theme', '--animate-in')).toBe(value('*', '--animate-in'));
+    expect(value('@theme', '--animate-out')).toBe(value('*', '--animate-out'));
+  });
+
+  test.each([':root:root', ...REDUCED_EVERY])(
+    'reduced-motion 下 %s 換成只有透明度的淡入淡出，fill-mode 不變',
+    (selector) => {
+      expect(value(selector, '--animate-in', REDUCED)).toBe('motion-fade-in 150ms ease backwards');
+      expect(value(selector, '--animate-out', REDUCED)).toBe('motion-fade-out 150ms ease both');
+    },
+  );
+});

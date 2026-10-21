@@ -37,11 +37,9 @@ const KEYFRAMES_ALLOWED = new Set([
   'motion-beam-pulse',
   'motion-shimmer',
   'motion-caret',
-  // 第三方：tw-animate-css（之後裝 accordion 會多 accordion-*）
+  // 第三方：tw-animate-css（collapsible-down／up 隨 #1687 拿掉高度動效一起退出；之後裝 accordion 會多 accordion-*）
   'enter',
   'exit',
-  'collapsible-down',
-  'collapsible-up',
   // 第三方：Tailwind
   'spin',
   'pulse',
@@ -260,6 +258,45 @@ for (const [name, fade, forbidden] of [
       failures.push(`第 3 條：reduced-motion 的 ${name} 不是只有透明度：${v}`);
 }
 
+// 第 3 條的延伸（#1687）：進出場照 SG 的機制，時長讀元件自己的 `duration-*`（tw-animate 的 `--tw-duration`）。
+// - utility 要寫成 `animation: var(--animate-in)`：`@theme` 改成 inline 或整段刪掉時，utility 直接展開數值，上面換掉的變數就沒人讀。
+// - 值要宣告在 `*` 上：只宣告在 `:root` 的話 `var(--tw-duration)` 在 `:root` 就解掉，元素讀不到自己的 `duration-100`。
+// - reduced-motion 的覆寫也要寫到 `*` 上，只寫 `:root:root` 會被 `*` 那條在每個元素上蓋回去。
+const leadingClass = (selector) => {
+  const raw = /^\.((?:\\.|[\w-])+)/.exec(selector)?.[1];
+  return raw === undefined ? undefined : raw.replace(/\\(.)/g, '$1');
+};
+for (const name of ['--animate-in', '--animate-out']) {
+  const utility = name.slice(2);
+  const users = rules.filter(
+    (r) =>
+      !REDUCED_MOTION.test(r.media) &&
+      new RegExp(`(^|:)${utility}$`).test(leadingClass(r.selector) ?? ''),
+  );
+  if (users.length === 0) failures.push(`第 3 條：產物裡沒有 .${utility}（量具自檢）`);
+  for (const r of users)
+    if (declarations(r.body).get('animation') !== `var(${name})`)
+      failures.push(
+        `第 3 條：${r.selector} 不是 animation: var(${name})（@theme 不能用 inline）：${declarations(r.body).get('animation')}`,
+      );
+  const plain = rules.filter(
+    (r) => !REDUCED_MOTION.test(r.media) && declarations(r.body).has(name),
+  );
+  if (!plain.some((r) => r.selector === '*'))
+    failures.push(`第 3 條：${name} 沒有宣告在 * 上，元素讀不到自己的 --tw-duration`);
+  for (const r of plain)
+    if (!declarations(r.body).get(name).includes('var(--tw-duration'))
+      failures.push(
+        `第 3 條：${r.selector} 的 ${name} 不讀 --tw-duration：${declarations(r.body).get(name)}`,
+      );
+  const everyReduced = reduced.filter((r) => {
+    const c = compounds(r.selector);
+    return c.at(-1) === '*' && c.slice(0, -1).every((a) => /^(:root)+$/.test(a)) && c.length > 1;
+  });
+  if (!everyReduced.some((r) => declarations(r.body).get(name)?.includes('motion-fade-')))
+    failures.push(`第 3 條：reduced-motion 的 ${name} 沒有寫到 * 上，會被每個元素上的宣告蓋回去`);
+}
+
 // 第 4 條
 for (const name of keyframes)
   if (!KEYFRAMES_ALLOWED.has(name)) failures.push(`第 4 條：@keyframes ${name} 不在允許清單上`);
@@ -338,6 +375,15 @@ if (slides.length > 0)
     )
       failures.push(`第 3 條：reduced-motion 下 ${surface} 的 transition 時長沒有壓到 150ms 以下`);
   }
+
+// 動效 token 都要有宣告（#1687 驗收 D1）：`var()` 指到不存在的變數時 CSS 不報錯，時長會變成 0、曲線變成預設。
+const declared = new Set(
+  rules.flatMap((r) => [...declarations(r.body).keys()].filter((k) => k.startsWith('--'))),
+);
+for (const rule of rules)
+  for (const [, value] of declarations(rule.body))
+    for (const [, name] of value.matchAll(/var\((--(?:duration|distance|scale|blur|ease)-[\w-]+)/g))
+      if (!declared.has(name)) failures.push(`${rule.selector} 引用了沒有宣告的 ${name}`);
 
 // 引用到的 motion-* keyframes 要存在
 for (const rule of rules)
