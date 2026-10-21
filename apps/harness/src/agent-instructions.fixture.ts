@@ -46,6 +46,7 @@ export function createAgentInstructionsMiddleware(
     offWorkspacePrefixes: () => [] as readonly string[],
     hasWorkspace: () => true,
     workspaceRoot: () => undefined,
+    sharedWorkspacePrefix: () => undefined,
   };
   return createPreStepMiddleware(
     AGENT_INSTRUCTIONS_MIDDLEWARE_NAME,

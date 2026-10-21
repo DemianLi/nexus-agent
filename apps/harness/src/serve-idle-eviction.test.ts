@@ -72,6 +72,8 @@ async function start(h: Home, lines: string[], raw?: string[]): Promise<RunningS
     argv: ['--port', '0', '--workspace', h.workspace],
     log: bodyLog(lines, raw),
     env: h.env,
+    // 量的是逐出與續接，不是私有根：可寫根固定成 `--workspace`（接縫，#1775 之前的形狀）。
+    workspaceRootOf: () => h.workspace,
   })) as RunningServe;
   running.push(server);
   return server;

@@ -74,6 +74,7 @@ import type { GoalServices } from '@nexus/goal';
 import { WORKSPACE_CHANGES_SERVICE } from '@nexus/plugin-workspace-changes';
 import type { WorkspaceChanges } from '@nexus/plugin-workspace-changes';
 import { assemblyDropErrorFor, createNexusAgent } from './agent-factory.js';
+import { SHARED_WORKSPACE_PREFIX } from './thread-roots.js';
 import type { GoalDriverPort } from './goal-driver.js';
 import type { AssemblyDrop, NexusAgentHandle } from './agent-factory.js';
 import { isSandboxMode, SANDBOX_MODES, ContainedFilesystemBackend } from './contained-backend.js';
@@ -414,7 +415,9 @@ export function resolveWorkspaceRoot(
 export type WorkspaceRootOf = (threadId: string) => string | undefined;
 
 /**
- * 這張卡的實作：每條 thread 一律是 `--workspace` 解析出來的那一個根（行為不變）。每條 thread 配自己的根是之後的事，換掉這一支就好。
+ * **CLI 的實作**：每條 thread 一律是 `--workspace` 解析出來的那一個根。serve 不用這一支——serve 的可寫根由 `thread-roots.ts` 的
+ * `createThreadPlacer` 逐條 thread 配（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)，新 thread 配私有根）；
+ * 測試接縫 `RunServeOptions.workspaceRootOf` 才會走到這一支的形狀。
  *
  * @param workspace - `--workspace` 命令列上那串字。
  * @param cwd - 解析的起點。
@@ -453,7 +456,26 @@ export function resolveInvariantLogPath(
   }
 }
 
-/** 兩個日誌目錄旗標共用的那道檢查。**一份**，理由同 {@link resolveSessionLogDir} 的呼叫端。 */
+/**
+ * 兩個日誌目錄旗標共用的那道檢查。**一份**，理由同 {@link resolveSessionLogDir} 的呼叫端。
+ *
+ * ## 「啟動路徑的安全檢查都拿 `--workspace` 來比」在 #1775 之後仍然對（逐條重判）
+ *
+ * #1775 之前 `--workspace` 是每條 thread 的可寫根；之後新 thread 的可寫根是 home 底下的私有目錄，`--workspace` 退成**所有 thread 都讀得到的唯讀共用區**。
+ * 這些檢查擋的是「基礎建設的檔落進模型讀得到的地方」，判準本來就是讀得到（#1620 檔頭：「讀取不受圍堵」），不是寫得到，所以**比 `--workspace` 仍然是對的、不必改**：
+ * 共用區裡的檔每條新 thread 的模型都經 `/shared` 讀得到，舊 thread 還寫得動。私有根在 home 底下、是基底的子目錄，home 的狀態檔在每條私有根**外面**，
+ * 反方向（home 落進私有根）不可能；基底本身與其他路徑的重疊另由 `thread-roots.ts` 的 `assertThreadRootsBaseSeparate` 擋。
+ *
+ * 呼叫點全表（行號以 `e643d137` 為準）：
+ *
+ * | 檢查 | 呼叫點 | 比什麼 | 判斷 |
+ * | --- | --- | --- | --- |
+ * | `assertLaunchPathsOutsideWorkspace` | `serve.ts:486` | 目前資料夾的 `.env`、home、home 的 `.env`、舊 `.env` ⇄ `--workspace` | 不改。讀得到就洩漏 key 與金鑰；檔頭補了私有根的 Q3 例外 |
+ * | `resolveSessionLogDir`（本體 `:316`，走本函式） | `serve.ts:688`、`cli.ts:1016` | `--session-log`／預設日誌根 ⇄ `--workspace` | 不改。日誌在共用區 ＝ 所有人讀得到整份對話史 |
+ * | `resolveInvariantLogPath`（`:443`，走本函式） | `serve.ts:757`、`cli.ts:1004` | 量測記錄 ⇄ `--workspace` | 不改，且仍是「只不寫」不拋 |
+ * | `loadConfigHashKey`（`session-header-metadata.ts:142`，走本函式） | `serve.ts:814`、`:947`（經 `createSessionHeaderMetadataResolver`）、`cli.ts:1183`（經 `resolveSessionHeaderMetadata`） | 設定雜湊鍵檔 ⇄ `--workspace` | 不改。**這三處是安全檢查，不是顯示用的**（#1783 內文把它們標成 header metadata／顯示用，那一格分類是錯的） |
+ * | `--resume` 的日誌路徑 | `cli.ts:354` | 續接的日誌 ⇄ `--workspace` | 不改，CLI 的可寫根仍是 `--workspace` |
+ */
 export function outsideWorkspace(
   path: string,
   workspacePath: string | undefined,
@@ -515,6 +537,16 @@ export interface LaunchPathsCheck {
  * 多人共用一台主機的內網機器人：任何一位使用者叫模型讀 `.env`，就拿到管理者的 key。**補的是**啟動時這一道路徑重疊檢查；
  * **不改的是** `launch-env.ts` 的分層與載入規則（照 dsh）、讀取面照舊不圍（#1291）。只做 serve（Q4）：CLI 是一個人在自己的
  * 終端機跑，跟 dsh 同一個形狀；放在這裡，CLI 之後要用可以直接叫。
+ *
+ * ## #1775 的例外（#1620 Q3，demian 接受）：私有可寫根落在 home 底下
+ *
+ * 這道檢查本身**不改**，仍然只比 `--workspace`。serve 的新 thread 另有一個可寫根（`<home>/thread-roots/thread-<雜湊>`，`thread-roots.ts`），
+ * 它落在 home 底下——Q3 的理由「工作區落在 home 裡，模型就能改 home 的狀態檔」對它**不成立**：那條 thread 的 backend 根是它自己這個子目錄，
+ * home 的狀態檔（`.credentials.yaml`、`sessions/`、`attachments/`、`serve.lock`、設定雜湊鍵檔、瀏覽器會話密鑰、metrics-token、plugin-journal）都在根**外面**；
+ * `..` 被 backend 擋下，絕對路徑會被當成根底下的子路徑。基底寫死在 home 底下的 `thread-roots`（不開成設定列），所以 home 本身、home 的上層與
+ * home 根目錄那一層的狀態檔不可能落進任何一條 thread 的根。
+ *
+ * **剩下的風險**：私有根裡若出現指向 home 的目錄連結，讀得穿（同 #1291 已接受的那一格；模型沒有 shell，自己做不出連結）。
  *
  * **擋不到的**：工作區裡指向 home 或 `.env` 的目錄連結。要擋得掃整棵樹，而且連結可以在啟動之後才建；這是 #1291
  * 已經接受的「目錄符號連結讀穿」同一格，寫在 `docs/operations.md`。
@@ -804,11 +836,20 @@ export async function createCliAgent(
      * **這條 thread 的可寫根**（[#1774](https://github.com/DemianLi/nexus-agent/issues/1774)）：入口依「thread → 根」（{@link WorkspaceRootOf}）取得後明著交進來，
      * 組裝點用它建 backend、host 服務 `workspaceRoot`、`sandboxPolicy.rootDir`，並原樣從回傳值交回去（交付錨、檔案搜尋、header）。
      *
-     * **選填，而且省略時退回 `--workspace` 解析出來的根**（`resolveWorkspaceRoot(workspace, cwd)`）：手上只有 `--workspace` 的呼叫端
-     * （大量既有測試、嵌入方）行為不變。兩個產品入口（serve、CLI）一律明著傳，所以「這一格是逐條 thread 取得的」靠入口的接線測試守
+     * **選填，而且「鍵不在」時退回 `--workspace` 解析出來的根**（`resolveWorkspaceRoot(workspace, cwd)`）：手上只有 `--workspace` 的呼叫端
+     * （大量既有測試、嵌入方、CLI）行為不變。**鍵在、值是 `undefined` 就是「這條 thread 沒有圍堵」，不退回**（#1775，PM 補充第 1 件）：
+     * 「回 `undefined` 就是沒有圍堵」的語意在入口與組裝點之間不再分岔——serve 一律明著傳這一格（連 `undefined` 也傳），
+     * 所以續接守衛與組裝點拿到的永遠是同一個值。「這一格是逐條 thread 取得的」靠入口的接線測試守
      * （`workspace-root-per-thread.test.ts` 從 `runServe` 起量），不靠這裡的退回。
      */
-    readonly workspaceRoot?: string;
+    readonly workspaceRoot?: string | undefined;
+    /**
+     * **唯讀共用參考區的根**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)）：只有這條 thread 有私有可寫根時才給，值是 `--workspace` 解析出來的根。
+     * 組裝點把它以固定 `read-only` 掛在 `SHARED_WORKSPACE_PREFIX` 底下（`agent-factory.ts` 的 `sharedWorkspace`），並提供 host 服務
+     * `sharedWorkspace`（前綴）給 `agent-instructions`、`sandbox-policy` 與 `fs` 把手。舊 thread、CLI 不給。
+     * 落盤關掉的新 thread（可寫根是記憶體，`workspaceRoot` 明著是 `undefined`）照樣給（PM 裁決 (f)）。
+     */
+    readonly sharedWorkspaceRoot?: string;
     /**
      * 全機的模型請求並行閘（[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)）：**只有 serve 給**，起動期建一份、每條 thread 的組裝
      * 共用同一份（名額是整台 serve 的，不是這條 thread 的）。對話、換模型別顆、背景子代理指定的模型、標題（含跟隨主路由的那顆）都從
@@ -1016,7 +1057,13 @@ export async function createCliAgent(
   // `createCliAgent`，所以一條 thread 一格。建在模組層或工廠閉包裡的話兩條 thread 會共用
   // 同一格——一條 thread 的 `/permission read-only` 收緊到另一條 thread 的檔案工具上，
   // 而那是靜默的（見 `sandbox-mode.ts` 的模組註解）。
-  const workspaceRoot = invocation.workspaceRoot ?? resolveWorkspaceRoot(invocation.workspace, cwd);
+  // 鍵在就用它的值（`undefined` 也算：沒有圍堵）；鍵不在才退回 `--workspace`（#1775，見 `workspaceRoot` 選項）。
+  const workspaceRoot = Object.hasOwn(invocation, 'workspaceRoot')
+    ? invocation.workspaceRoot
+    : resolveWorkspaceRoot(invocation.workspace, cwd);
+  // 唯讀共用區：入口給了就掛。有私有可寫根時共用區是 `--workspace`；落盤關掉的新 thread 可寫根是記憶體（`workspaceRoot` 是 `undefined`），
+  // 共用區照樣掛（#1775，(f)）。舊 thread 與 CLI 不給。
+  const sharedWorkspaceRoot = invocation.sharedWorkspaceRoot;
   // **有圍堵而 `sandbox-policy` 那一列沒掛：起不來**（#669，dsh 的方向）。fence 還在擋，模型卻不知道、也請不到升級，
   // 看起來像關掉了護欄其實護欄還在。不加進 `PROTECTED_ENTRY_NAMES`：沒有圍堵時關掉它是合法的（只剩那一句政策）。
   if (workspaceRoot !== undefined && !startupEntryMounted(plugins, sandboxPolicyPlugin)) {
@@ -1097,6 +1144,8 @@ export async function createCliAgent(
       createHostServicesPlugin({
         channel,
         approvalPolicy,
+        // 唯讀共用區的前綴（#1775）：缺席＝這條 thread 沒有共用區（舊 thread、CLI）。**與有沒有圍堵無關**：落盤關掉的新 thread 沒有圍堵、共用區照樣在。
+        ...(sharedWorkspaceRoot !== undefined && { sharedWorkspace: SHARED_WORKSPACE_PREFIX }),
         // **有沒有圍堵是一格獨立的事實，不是控制器在不在**（#669）：對應 dsh 的 `ctx.fs.sandboxMode`。`sandbox-policy` 那一列據它
         // 分岔——有圍堵就掛控制器、升級；沒有就只貢獻那一句不宣稱圍堵的政策。兩個服務一起交，缺一個
         // 那一列載入當場拋（有圍堵卻缺控制器）。
@@ -1125,6 +1174,7 @@ export async function createCliAgent(
     // `onFailedAttempt` 會回報失敗，腳本模型照給也無事發生。
     streamRetry: streamRetryOptionsOf(liveModel.retryPolicy),
     ...(backend !== undefined && { backend }),
+    ...(sharedWorkspaceRoot !== undefined && { sharedWorkspace: { rootDir: sharedWorkspaceRoot } }),
     ...(invocation.recursionLimit !== undefined && { recursionLimit: invocation.recursionLimit }),
     systemPrompt: SYSTEM_PROMPT,
     // **`--live` 時是 `live-model` 那一列的型號**，跟上面 `createCliModel` 讀的是同一份，兩邊不會漂移；
@@ -1191,7 +1241,7 @@ export async function createCliAgent(
       await dispose().catch(() => {});
       throw new Error(
         `有 --workspace（檔案系統有圍堵），但 ${PERMISSION_PRESETS_SERVICE} 服務沒有折進這條 thread——` +
-          'permission-presets 那一列沒有提供它（行程級的工作區根沒有交到樹上，或那一列沒有起來）。',
+          'permission-presets 那一列沒有提供它（這條 thread 的圍堵事實沒有交到樹上，或那一列沒有起來）。',
       );
     }
     try {

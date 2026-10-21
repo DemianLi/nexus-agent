@@ -33,7 +33,7 @@
  *    **退到什麼**：只讀工作區根那一層的四個候選。
  *    **重開條件**：出現跨專案共用指令的需求，或 `--workspace` 常指到 repo 子目錄而漏掉 repo 根的指令。
  * 2. **哪一條**：dsh 的 `fs` 是**選配**（`inject = ['sessionProjections', 'workingDirectory']`，`ctx.get('fs')` 拿不到就返回，
- *    `src/index.ts:36`、`:121-127`）；我們把 `fs` 放進 `inject`（必填，`^2.0.0`）。
+ *    `src/index.ts:36`、`:121-127`）；我們把 `fs` 放進 `inject`（必填，`^2.1.0`）。
  *    **為什麼表達不出來**：我們要在 `apply` 當下就把服務抓進閉包。沒有樹的路徑上（eval、`createNexusAgent` 的測試）插件被
  *    `mountDetached` 掛一次就卸載，呼叫當下才經 `ctx` 取服務會拋；而不經 `inject` 的選用服務在 `apply` 當下沒有次序保證——`fs` 那一列
  *    還沒提供就會永遠拿到 `undefined`，基線也就靜靜消失。
@@ -50,6 +50,12 @@
  *    （#1474，`@nexus/agent-loop` 的 `preStep`；接縫本身的偏離登記在那個套件的檔頭），內容與重開條件不變。
  *    **留下的缺口**：同一次 invoke 裡，摘要之後的那幾輪看不到工作區指令，要等使用者下一句話。
  *    **重開條件**：#389 重開，或 core 開了讓多個貢獻者共用一格的 pre-step 節點。
+ * 4. **偏離 2 的延伸**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775) 第 10 項；#1775 的偏離 2「`--workspace` 退成唯讀共用區」，理由 2「產品需求超出 dsh 的射程」，登記在 `apps/harness/src/thread-roots.ts` 檔頭）：dsh 讀的是
+ *    工作目錄這一棵樹上的指示檔，工作目錄就是可寫根。我們在 serve 上讓每條新 thread 有自己的私有可寫根，`--workspace` 退成唯讀共用區
+ *    （`FsService.sharedWorkspacePrefix()`），所以**新 thread 讀共用區、不讀自己的私有根**：部署方放的規則檔生效，模型寫進私有根的
+ *    `AGENTS.md` 不會升格成系統指示（那是一條使用者訊息的載體，不該由模型自己填）。
+ *    **退到什麼**：有前綴就讀前綴底下，沒有（舊 thread、CLI、沒有圍堵）讀 `/`，與 dsh 行為相同。
+ *    **重開條件**：出現「使用者自己放在私有根裡的指示檔也要生效」的需求。
  *
  * ## 摘要之後：看的是模型看得到的那一串
  *
@@ -185,7 +191,9 @@ function trimmedDigest(content: string): string {
 }
 
 /**
- * 讀工作區根那一層的候選檔。
+ * 讀工作區根那一層的候選檔。**新 thread 讀唯讀共用區**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)，demian 2026-10-20 拍板 (a)）：
+ * 它的可寫根是自己的私有目錄，部署方放在 `--workspace` 的指示檔在共用區前綴底下；模型寫進私有根的 `AGENTS.md` 不會變成系統指示。
+ * 舊 thread 沒有共用區前綴，可寫根本來就是 `--workspace`，照舊讀 `/`。
  *
  * 讀不到（不存在、backend 拒絕、內容不是字串）就跳過——**不拋**。指令是幫忙的東西，一份讀不到不該
  * 讓這一輪對話倒下；dsh 那側同樣是「沒有就沒有」。
@@ -193,14 +201,17 @@ function trimmedDigest(content: string): string {
  * 同一層內容相同的只留第一個（`AGENTS.md` 與 `CLAUDE.md` 互為符號連結或直接複製是常見的做法），
  * 保留的是**先出現的那個路徑**。
  */
-async function discover(backend: AnyBackendProtocol): Promise<InstructionFile[]> {
+async function discover(
+  backend: AnyBackendProtocol,
+  directory: string,
+): Promise<InstructionFile[]> {
   const adapted = adaptBackendProtocol(backend);
   const files: InstructionFile[] = [];
   const seen = new Set<string>();
   for (const candidate of INSTRUCTION_FILE_CANDIDATES) {
     let content: string | undefined;
     try {
-      const result = await adapted.read(`/${candidate}`);
+      const result = await adapted.read(`${directory}/${candidate}`);
       if (result.error != null) continue;
       if (typeof result.content !== 'string') continue;
       content = result.content;
@@ -240,8 +251,10 @@ export function createAgentInstructionsListener(
     if (visible.some(isAgentInstructionsMessage)) return undefined;
     const found = lookups.fs(invocation);
     const backend = found.kind === 'ok' ? found.fs.backend() : undefined;
-    if (backend === undefined) return undefined;
-    const rendered = renderAgentInstructions(await discover(backend), maxBytes);
+    if (backend === undefined || found.kind !== 'ok') return undefined;
+    // 有共用區前綴的 thread（新 thread，#1775）讀共用區；沒有的（舊 thread、沒有圍堵）讀 `/`。
+    const directory = found.fs.sharedWorkspacePrefix() ?? '';
+    const rendered = renderAgentInstructions(await discover(backend, directory), maxBytes);
     if (rendered === undefined) return undefined;
     return [{ content: rendered.text, additionalKwargs: { [AGENT_INSTRUCTIONS_MARKER]: true } }];
   };
@@ -250,10 +263,10 @@ export function createAgentInstructionsListener(
 export const name = 'agent-instructions';
 
 /**
- * 要的服務：`agentLoop`（`^1.0.0`，登記 `preStep` listener）與 `fs`（`^2.0.0`，呼叫當下拿這條 thread 的 backend）。範圍在這裡宣告，
+ * 要的服務：`agentLoop`（`^1.0.0`，登記 `preStep` listener）與 `fs`（`^2.1.0`，呼叫當下拿這條 thread 的 backend 與共用區前綴）。範圍在這裡宣告，
  * 落進 Cordis 的 `Context.intercept`，提供者的 `check` 讀得到。`fs` 放進 `inject` 而不是選配，理由見檔頭偏離 2。
  */
-export const inject = injectOf(need(agentLoopToken, '^1.0.0'), need(fsToken, '^2.0.0'));
+export const inject = injectOf(need(agentLoopToken, '^1.0.0'), need(fsToken, '^2.1.0'));
 
 /** 這個插件的設定（manifest 的 `config`）：見 {@link agentInstructionsConfigSchema}。`strictObject`：未知欄位讓載入失敗。 */
 export const Config = agentInstructionsConfigSchema;
@@ -265,7 +278,7 @@ export const manifest = defineManifest({
   provides: [],
   consumes: [
     { token: agentLoopToken.name, range: '^1.0.0' },
-    { token: fsToken.name, range: '^2.0.0' },
+    { token: fsToken.name, range: '^2.1.0' },
   ],
   config: Config,
   // 換程式碼要重啟行程；設定（`maxBytes`）只給新的 thread（#1405、決議 §3-2 第 6 條：組 thread 時取快照）。

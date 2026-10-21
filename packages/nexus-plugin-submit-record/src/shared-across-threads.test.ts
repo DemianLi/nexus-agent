@@ -61,6 +61,7 @@ async function mountFor(threads: readonly string[]): Promise<Mounted> {
           offWorkspacePrefixes: () => [],
           hasWorkspace: () => true,
           workspaceRoot: () => undefined,
+          sharedWorkspacePrefix: () => undefined,
         },
       ];
     }),

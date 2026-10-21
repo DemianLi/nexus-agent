@@ -1,6 +1,6 @@
 /**
  * `permission-presets` 遷上樹（[#1491](https://github.com/DemianLi/nexus-agent/issues/1491)）**接縫本身**的驗收：會話參與者折進 thread
- * 的位置（三顆事件的相對順序）、冷復活不多寫一顆、目錄從折進來的服務拿（不是組裝點自己算）、行程級的工作區根沒交到樹上就起不來。
+ * 的位置（三顆事件的相對順序）、冷復活不多寫一顆、目錄從折進來的服務拿（不是組裝點自己算）、「有沒有圍堵」沒交到樹上就起不來。
  *
  * 產品行為（`--sandbox`、續接、`/permission`、必掛名單、wire）在 `permission-presets.test.ts`，plugin 本身在
  * `@nexus/plugin-permission-presets` 的測試，serve 的紀錄在 `serve-plugin-failed-record.test.ts`；這一份只問「接在樹上之後」。
@@ -183,7 +183,7 @@ describe('目錄從折進這條 thread 的服務拿', () => {
   });
 });
 
-describe('行程級的工作區根沒交到樹上', () => {
+describe('有沒有圍堵沒交到樹上', () => {
   it('有 --workspace 而根沒拿到工作區根：這條 thread 建不起來，訊息指名 permission-presets', async () => {
     const root = createCordisRoot({ channel: entryApprovalChannel(undefined) });
     const loaded = await loadDefaultPlugins(

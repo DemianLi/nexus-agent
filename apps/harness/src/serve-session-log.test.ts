@@ -17,7 +17,7 @@
 
 import { appendFile, mkdtemp, readdir, readFile, writeFile } from 'node:fs/promises';
 import { homedir, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createDeliverableClient, createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -368,10 +368,15 @@ describe('重開 server 之後接得回同一條 thread', () => {
     extra: readonly string[] = [],
     log: (line: string) => void = () => undefined,
   ): Promise<RunningServe> {
+    // 這一檔守的是 #504 的續接守衛（header 記的根跟這一次的比），要的是「`--workspace` 就是可寫根」那個形狀：
+    // 用測試接縫 `workspaceRootOf` 固定成這樣。產品預設（#1775：新 thread 配私有根）的續接分類在 `thread-private-root.test.ts`。
+    const at = extra.indexOf('--workspace');
+    const workspace = at === -1 ? undefined : resolve(extra[at + 1] as string);
     running = await runServe({
       argv: ['--port', '0', '--session-log', root, ...extra],
       log,
       env: {},
+      ...(workspace !== undefined && { workspaceRootOf: () => workspace }),
     });
     return running as RunningServe;
   }

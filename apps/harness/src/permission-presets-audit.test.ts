@@ -253,6 +253,8 @@ describe('開著的 thread 照舊表，新開的 thread 用新表（D4、E1、G5
       ],
       log: () => undefined,
       env,
+      // 量的是換表前後的 fence，不是私有根：可寫根固定成 `--workspace`（接縫，#1775 之前的形狀）。
+      workspaceRootOf: () => workspace,
     })) as RunningServe;
     const client = await serveClient(running);
     const optionsOf = async (thread: string): Promise<string[]> => {
@@ -339,6 +341,8 @@ describe('換表之後兩條 thread 的 fence 互不影響', () => {
       argv: ['--port', '0', '--workspace', workspace, '--patch', patch],
       log: () => undefined,
       env,
+      // 量的是換表前後的 fence，不是私有根：可寫根固定成 `--workspace`（接縫，#1775 之前的形狀）。
+      workspaceRootOf: () => workspace,
     })) as RunningServe;
     const client = await serveClient(running);
     const target = join(workspace, 'note.txt');
