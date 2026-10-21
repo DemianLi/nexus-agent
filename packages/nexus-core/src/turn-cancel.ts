@@ -72,6 +72,7 @@
 import { AIMessage, ToolMessage } from '@langchain/core/messages';
 import { RunnableBinding } from '@langchain/core/runnables';
 import { bindModelConfig } from './model-binding.js';
+import { markModelCallFailure } from './model-call-failure.js';
 import { Command, isCommand } from '@langchain/langgraph';
 import { createMiddleware, MiddlewareError } from 'langchain';
 
@@ -353,12 +354,25 @@ export function createTurnCancelGuard(): AgentMiddleware {
  *
  * **無狀態，一份走遍**，同 {@link createTurnCancelGuard}。
  *
+ * **順帶把模型呼叫拋的錯記成「模型呼叫的失敗」**（#1778，見 {@link ./model-call-failure.ts}）——這個職責**依賴最內層這個位置**。
+ *
  * @returns 可以放進 middleware 陣列的實例，**要排在最內層**。
  */
 export function createTurnCancelModelSignal(): AgentMiddleware {
   return createMiddleware({
     name: TURN_CANCEL_MODEL_SIGNAL_MIDDLEWARE_NAME,
-    wrapModelCall: async (request, handler) => {
+    wrapModelCall: async (request, nextHandler) => {
+      // **第二個職責（#1778）：handler 拋出來的錯一定是模型呼叫的錯，在這裡記下來**，失敗分類器才敢套「只看結構」的連線規則。
+      // 這一顆是我們交出去那串的最內層，所有 plugin 的 `wrapModelCall` 都在它外面，插件自己拋的錯（MCP 連不上…）經過不了這一行、不會被標。
+      // 標在 handler 一拋出來的當下，下面「被切斷」的判斷與兩條早退都看得到同一顆已標過的錯。見 {@link ./model-call-failure.ts}。
+      const handler: typeof nextHandler = async (next) => {
+        try {
+          return await nextHandler(next);
+        } catch (error: unknown) {
+          markModelCallFailure(error);
+          throw error;
+        }
+      };
       const signal = signalOfRequest(request);
       // 動態模型（函式）包不了，照舊交出去——那條路上中止等到下一步才生效。
       if (signal === undefined || !RunnableBinding.isRunnable(request.model)) {
