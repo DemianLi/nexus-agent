@@ -2,10 +2,14 @@ import type { ThreadListResult, ThreadSummary } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 
 import { newConversationTarget, readThreadListing } from './new-conversation.js';
+import { effectiveBlank, initialThreadStatus, reduceThreadStatus } from './thread-status.js';
 
 function row(threadId: string, blank: boolean): ThreadSummary {
   return { threadId, updatedAt: 0, running: false, blank };
 }
+
+/** 只看清單上的 `blank`：沒有全域下行時的有效空白。 */
+const raw = (item: ThreadSummary): boolean => item.blank;
 
 function listed(...items: ThreadSummary[]): ThreadListResult {
   return { items, unreadable: 0 };
@@ -16,28 +20,50 @@ function listed(...items: ThreadSummary[]): ThreadListResult {
  */
 describe('newConversationTarget', () => {
   it('清單讀不出來：開新的', () => {
-    expect(newConversationTarget(undefined, '目前')).toEqual({ kind: 'new' });
+    expect(newConversationTarget(undefined, '目前', raw)).toEqual({ kind: 'new' });
   });
 
   it('拿清單順序上第一條空白的，不看它前面那些講過話的', () => {
     const target = newConversationTarget(
       listed(row('講過話', false), row('空白一', true), row('空白二', true)),
       '目前',
+      raw,
     );
 
     expect(target).toEqual({ kind: 'reuse', threadId: '空白一' });
   });
 
   it('目前這條就算標著空白也不挑：走到這裡代表這個分頁在它上面講過話了', () => {
-    expect(newConversationTarget(listed(row('目前', true), row('別條', true)), '目前')).toEqual({
+    expect(
+      newConversationTarget(listed(row('目前', true), row('別條', true)), '目前', raw),
+    ).toEqual({
       kind: 'reuse',
       threadId: '別條',
     });
-    expect(newConversationTarget(listed(row('目前', true)), '目前')).toEqual({ kind: 'new' });
+    expect(newConversationTarget(listed(row('目前', true)), '目前', raw)).toEqual({ kind: 'new' });
   });
 
   it('沒有空白的：開新的', () => {
-    expect(newConversationTarget(listed(row('講過話', false)), '目前')).toEqual({ kind: 'new' });
+    expect(newConversationTarget(listed(row('講過話', false)), '目前', raw)).toEqual({
+      kind: 'new',
+    });
+  });
+
+  it('清單說空白、全域下行說它在跑：不挑（#1600 N1363）', () => {
+    const b = row('別的分頁在跑', true);
+    const state = [
+      { type: 'listed' as const, items: [b] },
+      {
+        type: 'frame' as const,
+        frame: { type: 'status' as const, threadId: b.threadId, running: true },
+      },
+    ].reduce(reduceThreadStatus, initialThreadStatus('目前'));
+
+    expect(newConversationTarget(listed(b), '目前', (item) => effectiveBlank(state, item))).toEqual(
+      {
+        kind: 'new',
+      },
+    );
   });
 });
 

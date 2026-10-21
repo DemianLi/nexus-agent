@@ -3808,6 +3808,52 @@ describe.each([false, true])('側欄的即時狀態（StrictMode：%s）', (stri
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(statusOf(target)).toBe('running');
   });
+
+  it('清單在路上時那條跑完：晚到的清單還說在跑，畫「已完成」，不倒回執行中（#1600）', async () => {
+    const pending: ((outcome: ThreadListOutcome) => void)[] = [];
+    const feed = rendered(
+      () =>
+        new Promise<ThreadListOutcome>((resolve) => {
+          pending.push(resolve);
+        }),
+    );
+    await waitFor(() => expect(pending.length).toBeGreaterThanOrEqual(2));
+    // 每一次列表請求都還沒回來的時候，全域下行說 a 跑完了。
+    feed.line().push({ type: 'status', threadId: 'a', running: false });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    for (const resolve of pending) resolve(ok(row('a', '改登入頁', true)));
+
+    const target = await rowOf('改登入頁');
+    await waitFor(() => expect(statusOf(target)).toBe('completed'));
+  });
+
+  it('清單說空白、全域下行說在跑的那條：照樣列出來，排在日期組、不在空白區（#1600）', async () => {
+    const feed = rendered(async () => ({
+      kind: 'ok',
+      result: {
+        unreadable: 0,
+        items: [{ threadId: 'b', updatedAt: Date.now(), running: false, blank: true }],
+      },
+    }));
+    const list = await screen.findByRole('group', { name: '以前的會話' });
+    await waitFor(() => expect(feed.line()).toBeDefined());
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    // 別的分頁的空白會話不列（只列目前這條）。
+    expect(within(list).queryByRole('button', { name: new RegExp(BLANK_THREAD_LABEL) })).toBeNull();
+
+    feed.line().push({ type: 'status', threadId: 'b', running: true });
+
+    const today = await within(list).findByRole('group', { name: '今天' });
+    const target = await within(today).findByRole('button', {
+      name: new RegExp(BLANK_THREAD_LABEL),
+    });
+    expect(statusOf(target)).toBe('running');
+    // 只出現在日期組那一次：空白區沒有它。
+    const named = { name: new RegExp(BLANK_THREAD_LABEL) };
+    expect(within(list).getAllByRole('button', named)).toHaveLength(
+      within(today).getAllByRole('button', named).length,
+    );
+  });
 });
 
 /**
@@ -4179,6 +4225,86 @@ describe('新對話重用空白會話', () => {
 
     expect(state.reads).toBe(1);
     expect(fake.opened).toHaveLength(1);
+  });
+
+  /** 送出一句、不等它畫出來：`runStart` 可能還掛著。 */
+  async function sendWithoutWaiting(text: string): Promise<void> {
+    await waitFor(() => expect(screen.getByPlaceholderText('說點什麼…')).toBeTruthy());
+    fireEvent.change(screen.getByLabelText('要說的話'), { target: { value: text } });
+    fireEvent.click(screen.getByRole('button', { name: '送出' }));
+  }
+
+  it('送出了、伺服器的回音還沒到就按：照樣換過去，不必按第二次（#1600）', async () => {
+    seq = 0;
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
+    const fake = fakeClient([]);
+    const { client, state } = gated(fake, LISTED);
+    render(<App client={{ ...client, runStart: () => new Promise<never>(() => undefined) }} />);
+    // 側欄的清單掛上來讀的那一次；下面驗的是「新對話」自己讀了一次。
+    await waitFor(() => expect(state.reads).toBe(1));
+    await sendWithoutWaiting('記一筆。');
+
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+
+    await waitFor(() => expect(fake.opened).toEqual(['上一條', '空白那條']));
+    expect(state.reads).toBeGreaterThanOrEqual(2);
+  });
+
+  it('送出被伺服器拒絕之後按：仍是空白，留在原地（#1600，照 dsh）', async () => {
+    seq = 0;
+    const fake = fakeClient([]);
+    const { client, state } = gated(fake, LISTED);
+    const runStart: WireClient['runStart'] = async () => ({
+      type: 'error',
+      id: 1,
+      error: 'invalid_argument',
+      message: '收不了',
+    });
+    render(<App client={{ ...client, runStart }} />);
+    await waitFor(() => expect(state.reads).toBe(1));
+    await sendWithoutWaiting('記一筆。');
+    await settle();
+
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+    await settle();
+
+    expect(state.reads).toBe(1);
+    expect(fake.opened).toHaveLength(1);
+  });
+
+  it('送出斜線命令之後按：它不起一輪，留在原地（#1600）', async () => {
+    seq = 0;
+    const fake = fakeClient([]);
+    const { client, state } = gated(fake, LISTED);
+    render(<App client={client} />);
+    await waitFor(() => expect(state.reads).toBe(1));
+    await sendWithoutWaiting('/whatever');
+    await waitFor(() => expect(fake.slashed).toEqual(['/whatever']));
+    await settle();
+
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+    await settle();
+
+    expect(state.reads).toBe(1);
+    expect(fake.opened).toHaveLength(1);
+  });
+
+  it('清單說空白、全域下行說在跑的那條不挑：別的分頁正在用它（#1600）', async () => {
+    seq = 0;
+    localStorage.setItem(REMEMBERED_THREAD_KEY, JSON.stringify({ threadId: '上一條' }));
+    const fake = fakeClient([frame('lifecycle', [], { event: 'completed', graph_name: 'root' })]);
+    const { client } = gated(fake, LISTED);
+    const openThreadFeed: WireClient['openThreadFeed'] = async () =>
+      (async function* stream() {
+        yield { type: 'status', threadId: '空白那條', running: true } as const;
+        await new Promise<never>(() => undefined);
+      })();
+    render(<App client={{ ...client, openThreadFeed }} />);
+    await sayOnce();
+
+    fireEvent.click(screen.getByRole('button', { name: '新對話' }));
+
+    await waitFor(() => expect(fake.opened).toEqual(['上一條', '更舊的空白']));
   });
 
   it('連不上的 thread：畫面是空的也不算空白，新對話走得出去', async () => {

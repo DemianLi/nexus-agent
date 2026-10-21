@@ -2,7 +2,12 @@ import type { ThreadListResult, ThreadSummary, WireClient } from '@nexus/wire';
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 
 import { reconnectDelay } from '@/lib/reconnect';
-import { initialThreadStatus, reduceThreadStatus, rowStatus } from '@/lib/thread-status';
+import {
+  effectiveBlank,
+  initialThreadStatus,
+  reduceThreadStatus,
+  rowStatus,
+} from '@/lib/thread-status';
 import type { RowStatus } from '@/lib/thread-status';
 
 /**
@@ -14,7 +19,8 @@ import type { RowStatus } from '@/lib/thread-status';
  * - **全域下行**（`WireClient.openThreadFeed`）：一個分頁一條。斷了照 `lib/reconnect.ts` 的退避重接，不放棄。
  * - **列表**：全域下行**每次接上**（含第一次）重抓一次，當「在跑」的起點——那條線不補送狀態（`THREAD_FEED_PATH`）。
  *   側欄打開時也重抓（`refresh`，#302 的理由：清單會變，會話增減不走那條線）。**只有這兩個時機**：線開不起來又沒打開
- *   側欄，就一次都不抓。晚送出的那一次回來之後，早送出、晚回來的那一份丟掉。
+ *   側欄，就一次都不抓。晚送出的那一次回來之後，早送出、晚回來的那一份丟掉。送出前記 `list-requested`，途中的
+ *   frame 在回應到了之後重放（#1600，見 `lib/thread-status.ts`）。
  *
  * @module
  */
@@ -27,6 +33,8 @@ export type Listing =
 export interface ThreadDirectory {
   readonly listing: Listing;
   readonly statusOf: (item: ThreadSummary) => RowStatus;
+  /** 這一列算不算空白：清單說空白、而且沒有人說它在跑過（#1600，`effectiveBlank`）。 */
+  readonly blankOf: (item: ThreadSummary) => boolean;
   /** 重抓一次列表。 */
   readonly refresh: () => void;
 }
@@ -39,6 +47,7 @@ export function useThreadDirectory(client: WireClient, currentThreadId: string):
   const refresh = useCallback(() => {
     ticket.current += 1;
     const mine = ticket.current;
+    dispatch({ type: 'list-requested' });
     client.listThreads().then(
       (outcome) => {
         if (mine !== ticket.current) return;
@@ -47,10 +56,12 @@ export function useThreadDirectory(client: WireClient, currentThreadId: string):
           dispatch({ type: 'listed', items: outcome.result.items });
         } else {
           setListing({ kind: 'failed', message: outcome.message });
+          dispatch({ type: 'list-failed' });
         }
       },
       (error: unknown) => {
         if (mine !== ticket.current) return;
+        dispatch({ type: 'list-failed' });
         setListing({
           kind: 'failed',
           message: error instanceof Error ? error.message : String(error),
@@ -94,5 +105,6 @@ export function useThreadDirectory(client: WireClient, currentThreadId: string):
   }, [client, refresh]);
 
   const statusOf = useCallback((item: ThreadSummary) => rowStatus(status, item), [status]);
-  return { listing, statusOf, refresh };
+  const blankOf = useCallback((item: ThreadSummary) => effectiveBlank(status, item), [status]);
+  return { listing, statusOf, blankOf, refresh };
 }
