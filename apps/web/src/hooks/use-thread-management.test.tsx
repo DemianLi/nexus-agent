@@ -35,6 +35,7 @@ function setup(client: Partial<Record<keyof WireClient, unknown>>, first: Listin
     listing,
     refresh,
     statusOf: () => 'idle' as never,
+    blankOf: (item) => item.blank,
   });
   const hook = renderHook(
     ({ listing }: { listing: Listing }) =>

@@ -91,7 +91,7 @@ export function ThreadList({
   /** 釘選、封存、改名（#633）；沒給就沒有那些。 */
   readonly management?: ThreadManagement;
 }) {
-  const { listing, statusOf, refresh } = directory;
+  const { listing, statusOf, blankOf, refresh } = directory;
   const labelId = useId();
 
   useEffect(() => {
@@ -149,7 +149,7 @@ export function ThreadList({
   const visible =
     listing.kind === 'ok'
       ? withCurrentTitle(listing.result.items, currentThreadId, currentTitle).filter(
-          (item) => !item.blank || item.threadId === currentThreadId,
+          (item) => !blankOf(item) || item.threadId === currentThreadId,
         )
       : [];
   const view = mergeThreadSearch(
@@ -244,6 +244,7 @@ export function ThreadList({
               {view.items.length > 0 && (
                 <ThreadGroupList
                   sections={sections}
+                  isBlank={blankOf}
                   row={(item) => (
                     <ThreadRow
                       key={item.threadId}
@@ -320,16 +321,18 @@ export function ThreadList({
  */
 function ThreadGroupList({
   sections,
+  isBlank,
   row,
   archivedOpen,
   onArchivedOpenChange,
 }: {
   readonly sections: ThreadSections;
+  readonly isBlank: (item: ThreadSummary) => boolean;
   readonly row: (item: ThreadSummary) => ReactNode;
   readonly archivedOpen: boolean;
   readonly onArchivedOpenChange: (open: boolean) => void;
 }) {
-  const { blank, groups } = groupThreads(sections.rest, Date.now());
+  const { blank, groups } = groupThreads(sections.rest, Date.now(), isBlank);
   return (
     <>
       {sections.pinned.length > 0 && (

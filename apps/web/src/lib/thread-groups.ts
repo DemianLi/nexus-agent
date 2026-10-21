@@ -61,11 +61,18 @@ export interface ThreadGroups {
   }[];
 }
 
-export function groupThreads(items: readonly ThreadSummary[], now: number): ThreadGroups {
-  const blank = items.filter((item) => item.blank);
+/**
+ * @param isBlank - 這一列算不算空白。側欄傳 `ThreadDirectory.blankOf`：清單說空白、但全域下行說在跑過的那條不算（#1600）。
+ */
+export function groupThreads(
+  items: readonly ThreadSummary[],
+  now: number,
+  isBlank: (item: ThreadSummary) => boolean,
+): ThreadGroups {
+  const blank = items.filter(isBlank);
   const byBucket = new Map<ThreadBucket, ThreadSummary[]>();
   for (const item of items) {
-    if (item.blank) continue;
+    if (isBlank(item)) continue;
     const bucket = bucketOf(item.updatedAt, now);
     byBucket.set(bucket, [...(byBucket.get(bucket) ?? []), item]);
   }

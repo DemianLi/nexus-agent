@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 
 import { isPlanReview } from '@/lib/plan-review';
 import {
+  effectiveBlank,
   initialThreadStatus,
   pendingKindOf,
   reduceThreadStatus,
@@ -181,5 +182,112 @@ describe('跑完沒看', () => {
   it('列表上已經沒有那條就清掉', () => {
     const state = run('here', listed(item('a', true)), status('a', false), listed(item('b')));
     expect(rowStatus(state, item('a'))).toBeUndefined();
+  });
+});
+
+/**
+ * 清單刷新途中的變化重放（#1600 `N1362`，dsh `manager.ts:412-477`、`:600-606` 的 `listMutations`）：列表是冷讀磁碟，
+ * 回來時可能已經比全域下行舊。送出前記 `list-requested`，途中的 frame 在列表當基線套上去之後照順序重放。
+ */
+describe('清單途中的變化重放（#1600）', () => {
+  const requested: ThreadStatusAction = { type: 'list-requested' };
+  const failed: ThreadStatusAction = { type: 'list-failed' };
+
+  it('途中跑完、晚到的清單還說在跑：是「已完成」，不是倒回「執行中」', () => {
+    const state = run('目前', requested, status('A', false), listed(item('A', true)));
+    expect(rowStatus(state, item('A'))).toBe('completed');
+  });
+
+  it('途中開跑、晚到的清單還說閒著：是「執行中」，而且沒有記成跑完沒看', () => {
+    const state = run(
+      '目前',
+      listed(item('B')),
+      requested,
+      status('B', true),
+      listed(item('B', false)),
+    );
+    expect(rowStatus(state, item('B'))).toBe('running');
+    expect(state.unread.has('B')).toBe(false);
+  });
+
+  it('刷新重疊：只有第二次的回應到，紀錄從第一次送出起算', () => {
+    // 第一次的回應被 ticket 丟掉（hook 不 dispatch），所以這裡只有一個 `listed`。
+    const state = run(
+      '目前',
+      listed(item('A', true)),
+      requested,
+      status('A', false),
+      requested,
+      listed(item('A', true)),
+    );
+    expect(rowStatus(state, item('A'))).toBe('completed');
+  });
+
+  it('途中記下的提問也重放：晚到的清單之後標記還在', () => {
+    const state = run('目前', requested, ask('A', approval('int-1')), listed(item('A', true)));
+    expect(rowStatus(state, item('A', true))).toBe('approval');
+  });
+
+  it('重接時清掉紀錄：斷線前記下的提問不在接上後的清單之後回來', () => {
+    // 斷線前掛著 int-1，斷線期間被答掉；接上時伺服器只補送還掛著的（這裡沒有）。
+    const state = run(
+      '目前',
+      requested,
+      ask('A', approval('int-1')),
+      { type: 'connected' },
+      requested,
+      listed(item('A', true)),
+    );
+    expect(rowStatus(state, item('A', true))).toBe('running');
+  });
+
+  it('列表回來之後就不再記：之後的 frame 不會在下一次列表時再重放一次', () => {
+    const state = run('目前', requested, listed(item('A', true)), status('A', false));
+    expect(state.mutations).toBeUndefined();
+  });
+
+  it('刷新失敗也清掉紀錄', () => {
+    const state = run('目前', listed(item('A', true)), requested, status('A', false), failed);
+    expect(state.mutations).toBeUndefined();
+    expect(rowStatus(state, item('A'))).toBe('completed');
+  });
+});
+
+/** 有效空白（#1600 `N1363`，dsh `effectiveBlank`／`engagedSessions`）。 */
+describe('有效空白（#1600）', () => {
+  const blankRow = (threadId: string, running = false): ThreadSummary => ({
+    ...item(threadId, running),
+    blank: true,
+  });
+
+  it('清單說空白、全域下行說在跑：不算空白', () => {
+    const state = run('目前', listed(blankRow('B')), status('B', true));
+    expect(effectiveBlank(state, blankRow('B'))).toBe(false);
+  });
+
+  it('清單自己說在跑：不算空白', () => {
+    const state = run('目前', listed(blankRow('B', true)));
+    expect(effectiveBlank(state, blankRow('B', true))).toBe(false);
+  });
+
+  it('跑完也不鬆開：下一次刷新之前快照還說空白，照 dsh 留著「講過」', () => {
+    const state = run('目前', listed(blankRow('B')), status('B', true), status('B', false));
+    expect(effectiveBlank(state, blankRow('B'))).toBe(false);
+  });
+
+  it('沒人說在跑過：照清單，是空白', () => {
+    const state = run('目前', listed(blankRow('B')));
+    expect(effectiveBlank(state, blankRow('B'))).toBe(true);
+  });
+
+  it('清單上已經沒有那條：拿掉，之後再出現照清單算', () => {
+    const state = run(
+      '目前',
+      listed(blankRow('B')),
+      status('B', true),
+      listed(),
+      listed(blankRow('B')),
+    );
+    expect(effectiveBlank(state, blankRow('B'))).toBe(true);
   });
 });

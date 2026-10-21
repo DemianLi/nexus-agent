@@ -38,6 +38,15 @@ describe('bucketOf', () => {
 });
 
 describe('groupThreads', () => {
+  it('空白與否照傳進來的判斷：清單說空白、但判斷說不是的那一列進日期組（#1600）', () => {
+    const items = [thread('在跑的空白', at(2026, 9, 25, 9), { blank: true, title: undefined })];
+    const { blank, groups } = groupThreads(items, NOW, () => false);
+    expect(blank).toEqual([]);
+    expect(groups.map((group) => [group.bucket, group.items.map((item) => item.threadId)])).toEqual(
+      [['today', ['在跑的空白']]],
+    );
+  });
+
   it('空白那一列排在最前面、不進分組；組照今天到更早，組內保持原順序；沒有列的組不出現', () => {
     const items = [
       thread('新的', at(2026, 9, 25, 9), { blank: true, title: undefined }),
@@ -46,7 +55,7 @@ describe('groupThreads', () => {
       thread('上週', at(2026, 9, 20)),
       thread('很久以前', at(2026, 1, 1)),
     ];
-    const { blank, groups } = groupThreads(items, NOW);
+    const { blank, groups } = groupThreads(items, NOW, (item) => item.blank);
     expect(blank.map((item) => item.threadId)).toEqual(['新的']);
     expect(groups.map((group) => [group.bucket, group.items.map((item) => item.threadId)])).toEqual(
       [
