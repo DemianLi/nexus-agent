@@ -1,0 +1,57 @@
+{
+  "writer": {
+    "rev": "today",
+    "commit": "fe52c279c58fa6a07e4f934cd75826b2e518a301",
+    "formatVersion": 49,
+    "released": false
+  },
+  "computedByToday": {
+    "head": "fe52c279c58fa6a07e4f934cd75826b2e518a301",
+    "dirty": false
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 49,
+      "eventCount": 23,
+      "types": [
+        "approval/policy",
+        "turn/start",
+        "session/title",
+        "user/message",
+        "model/start",
+        "request/system",
+        "request/header",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "today",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    }
+  },
+  "triggers": []
+}

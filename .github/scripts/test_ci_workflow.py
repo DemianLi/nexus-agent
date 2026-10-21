@@ -216,3 +216,14 @@ class AuditWiring(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+class SessionFormatFixtures(unittest.TestCase):
+    """會話日誌夾具（#1529）不是 .ts，只改它的 PR 不會被 TS_RE 認成要跑測試；拿掉 FULL_RES 那一條，讀它的測試就靜靜不跑。"""
+
+    def test_fixture_only_change_runs_full(self) -> None:
+        result = plan_ci.plan(
+            ['apps/harness/src/fixtures/session-format/v14/cli.jsonl'], 'pull_request', 'develop'
+        )
+        self.assertEqual(result['ts'], 'true')
+        self.assertEqual(result['full'], 'true')

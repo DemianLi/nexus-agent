@@ -1,0 +1,253 @@
+{
+  "version": 49,
+  "id": "cli",
+  "createdAt": 1792586703880,
+  "cwd": "/private/var/tmp/nexus-session-format-cwd",
+  "build": {
+    "commit": "09398dd523471a1d03852e18c7bbae6ecc672414",
+    "dirty": false
+  },
+  "plugins": [
+    {
+      "name": "@nexus/plugin-echo",
+      "id": "echo",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-agent-instructions",
+      "id": "agent-instructions",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-skills",
+      "id": "skills",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-plan-mode",
+      "id": "plan-mode",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-goal",
+      "id": "goal",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-todo",
+      "id": "todo",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-feedback",
+      "id": "feedback",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-present",
+      "id": "present",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-ask-user",
+      "id": "ask-user",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-submit-record",
+      "id": "submit-record",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-trajectory",
+      "id": "trajectory",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-token-meter",
+      "id": "token-meter",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-system-prompt",
+      "id": "system-prompt",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/core/repeat-reminder",
+      "id": "repeat-reminder",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/core/tool-result-pruner",
+      "id": "tool-result-pruner",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/core/summarization",
+      "id": "summarization",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/core/observation-policy",
+      "id": "observation-policy",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/core/model-usage",
+      "id": "model-usage",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/core/session-checkpoint-policy",
+      "id": "session-checkpoint-policy",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/core/approval-gate",
+      "id": "approval-gate",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/core/session-persistence",
+      "id": "session-persistence",
+      "disabled": false
+    },
+    {
+      "name": "#settings/thread-title",
+      "id": "thread-title",
+      "disabled": false
+    },
+    {
+      "name": "#settings/thread-title-llm",
+      "id": "thread-title-llm",
+      "disabled": false
+    },
+    {
+      "name": "#settings/thread-search",
+      "id": "thread-search",
+      "disabled": false
+    },
+    {
+      "name": "#settings/browser-session",
+      "id": "browser-session",
+      "disabled": false
+    },
+    {
+      "name": "#settings/deliverable-files",
+      "id": "deliverable-files",
+      "disabled": false
+    },
+    {
+      "name": "#settings/tool-text",
+      "id": "tool-text",
+      "disabled": false
+    },
+    {
+      "name": "#settings/projection-flush",
+      "id": "projection-flush",
+      "disabled": false
+    },
+    {
+      "name": "#settings/tool-result-stash",
+      "id": "tool-result-stash",
+      "disabled": false
+    },
+    {
+      "name": "#settings/spill-policy",
+      "id": "spill-policy",
+      "disabled": false
+    },
+    {
+      "name": "#settings/tool-fs-search",
+      "id": "tool-fs-search",
+      "disabled": false
+    },
+    {
+      "name": "#settings/background-subagents",
+      "id": "background-subagents",
+      "disabled": false
+    },
+    {
+      "name": "#settings/subagent-model-selection",
+      "id": "subagent-model-selection",
+      "disabled": false
+    },
+    {
+      "name": "#settings/live-model",
+      "id": "live-model",
+      "disabled": false
+    },
+    {
+      "name": "#settings/default-model",
+      "id": "agent-default-model",
+      "disabled": false
+    },
+    {
+      "name": "#settings/scripted-model",
+      "id": "cli-script",
+      "disabled": false
+    },
+    {
+      "name": "#settings/recursion-limit",
+      "id": "recursion-limit",
+      "disabled": false
+    },
+    {
+      "name": "#settings/agent-loop",
+      "id": "agent-loop",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-sandbox-policy",
+      "id": "sandbox-policy",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-permission-presets",
+      "id": "permission-presets",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/core/invariant",
+      "id": "core-invariant",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-commands/invariant",
+      "id": "commands-invariant",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-goal/invariant",
+      "id": "goal-invariant",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-plan-mode/invariant",
+      "id": "plan-mode-invariant",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-present/invariant",
+      "id": "present-invariant",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-workspace-changes/invariant",
+      "id": "workspace-changes-invariant",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-sandbox-policy/invariant",
+      "id": "sandbox-policy-invariant",
+      "disabled": false
+    },
+    {
+      "name": "@nexus/plugin-todo/invariant",
+      "id": "todo-invariant",
+      "disabled": false
+    }
+  ],
+  "configHash": "hmac-sha256:3b39bc273e0a5d6e"
+}
