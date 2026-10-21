@@ -291,7 +291,7 @@ export const sandboxPolicyPlugin: NexusPlugin = {
       return undefined;
     });
     // **升級跟著 fence 掛**：沒有圍堵的組裝沒有東西可以升。它也是 read-only 那句「照升級指引做」成立的前提。
-    registerSandboxEscalation(registry, controller);
+    registerSandboxEscalation(registry, controller, sharedPrefix);
     registry.middleware.use(
       createMiddleware({
         ...policyPromptMiddleware(resolveMode, {
@@ -346,11 +346,13 @@ export {
   BLANK_JUSTIFICATION_REFUSAL,
   escalationReason,
   isStrictlyWider,
+  isUnderSharedPrefix,
   MISSING_TARGET_REFUSAL,
   nonWideningRefusal,
   rejectedRefusal,
   SANDBOX_ESCALATION_HINT,
   SANDBOX_ESCALATION_TOOL_NAME,
+  sharedReadOnlyRefusal,
   unaskedRefusal,
 } from './sandbox-escalation.js';
 export type { UnaskedReason } from './sandbox-escalation.js';
