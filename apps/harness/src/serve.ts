@@ -574,6 +574,10 @@ async function startUnderHomeLock(
     log: (message) => {
       serverLog.logger('mcp').warn(message);
     },
+    // dsh 是 error 級的那幾句（關閉確認不到）：伺服器日誌有 error，照 dsh 接過去（`supervisor.ts` 檔頭偏離 6）。
+    error: (message) => {
+      serverLog.logger('mcp').error(message);
+    },
   });
   // **根（上面 `runServe` 建的）起不來與關掉時都在這裡卸載**（#1401），排在 server 自己的收尾之後、還原代理之前。
   let running: RunningServe;

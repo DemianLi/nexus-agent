@@ -11,16 +11,23 @@ import { mkdtempSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { createHostServicesPlugin, loadPlugins } from '@nexus/core';
+import { CHANNEL_SERVICE, createHostServicesPlugin, loadPlugins } from '@nexus/core';
 import type { PluginRegistry, PreToolDecision, PreToolListener } from '@nexus/core';
 import { afterEach, describe, expect, it } from 'vitest';
 import { RELEASE_NOTE } from './fixture-tools.js';
-import { createMcpPlugin, MCP_POOL_SERVICE, McpConnectionPool, mcpConfigSchema } from './index.js';
+import {
+  createMcpPlugin,
+  FIRST_CONNECT_WAIT_MS,
+  MCP_POOL_SERVICE,
+  McpConnectionPool,
+  mcpConfigSchema,
+} from './index.js';
 import type { McpPluginOptions } from './index.js';
 import { poolKey } from './pool.js';
 import { modelToolNames } from './tool-names.js';
 
 const FIXTURE_SERVER = fileURLToPath(new URL('./fixture-server.ts', import.meta.url));
+const MODERN_SERVER = fileURLToPath(new URL('./modern-stdio-server.ts', import.meta.url));
 const FAST = { initialDelayMs: 40, maxDelayMs: 160, maxAttempts: 5 } as const;
 const TOOL = 'mcp__srv__fetch_release_note';
 
@@ -62,12 +69,16 @@ async function waitFor(check: () => Promise<boolean> | boolean, ms = 10_000): Pr
   }
 }
 
-/** 一份池，測試結束時關；`logged` 是池的日誌（serve 給伺服器日誌）。 */
-function pool(): { pool: McpConnectionPool; logged: string[] } {
+/** 一份池，測試結束時關；`logged` 是池的日誌（serve 給伺服器日誌），`errors` 是 dsh 寫成 error 級的那幾句。 */
+function pool(): { pool: McpConnectionPool; logged: string[]; errors: string[] } {
   const logged: string[] = [];
-  const created = new McpConnectionPool({ log: (message) => logged.push(message) });
+  const errors: string[] = [];
+  const created = new McpConnectionPool({
+    log: (message) => logged.push(message),
+    error: (message) => errors.push(message),
+  });
   cleanup.push(() => created.close());
-  return { pool: created, logged };
+  return { pool: created, logged, errors };
 }
 
 /** 一列設定，帶獨一無二的記號；`flag` 存在時 server 一啟動就退出（模擬起不來）。 */
@@ -97,6 +108,30 @@ function row(overrides: Partial<McpPluginOptions> = {}) {
     down: () => writeFileSync(flag, ''),
     up: () => unlinkSync(flag),
   };
+}
+
+/** 一列接新協議 server 的設定；`hang()` 之後起的子行程讀著 stdin 卻永遠不回 initialize（同 `reconnect.test.ts` 的 #1543）。 */
+function hangRow() {
+  const marker = `--marker-${randomUUID()}`;
+  const dir = mkdtempSync(join(tmpdir(), 'nexus-mcp-pool-hang-'));
+  cleanup.push(() => {
+    // 被丟下的握手要等到 SDK 的請求逾時才有人收；測試自己收掉，不留給別的測試檔的 pgrep。
+    killAll(pidsOf(marker));
+    rmSync(dir, { recursive: true, force: true });
+  });
+  const flag = join(dir, 'hang');
+  const options: McpPluginOptions = {
+    serverName: 'srv',
+    connection: {
+      transport: 'stdio',
+      command: process.execPath,
+      args: ['--import', 'tsx', MODERN_SERVER, marker],
+      env: { FIXTURE_HANG_IF_FILE: flag },
+    },
+    approval: { default: 'allow' },
+    reconnect: FAST,
+  };
+  return { options, pids: () => pidsOf(marker), hang: () => writeFileSync(flag, '') };
 }
 
 /** 一份組裝（一條 thread）：池經宿主服務交進去。 */
@@ -178,7 +213,7 @@ describe('同一份設定整個池一份連線', () => {
       shared.acquire(config, false),
       shared.acquire(config, false),
     ]);
-    expect(second).toBe(first);
+    expect(second.shared).toBe(first.shared);
   }, 30_000);
 });
 
@@ -218,7 +253,26 @@ describe('池的鍵', () => {
       shared.acquire(config, true),
       shared.acquire(config, false),
     ]);
-    expect(human).not.toBe(none);
+    expect(human.shared).not.toBe(none.shared);
+    expect(r.pids()).toHaveLength(2);
+  }, 30_000);
+
+  it('組裝照這次有沒有人可以回答取鍵：一份有 human 答題管道、一份沒有，各起一個子行程', async () => {
+    const { pool: shared } = pool();
+    const r = row();
+    const human = await loadPlugins([
+      createHostServicesPlugin({
+        [CHANNEL_SERVICE]: { kind: 'human' },
+        [MCP_POOL_SERVICE]: shared,
+      }),
+      createMcpPlugin(r.options),
+    ]);
+    cleanup.push(() => human.dispose());
+    const none = await assemble(shared, r.options);
+    for (const { registry } of [human, none]) {
+      expect(String(await invoke(registry))).toContain(RELEASE_NOTE);
+    }
+    // 拿設定上的旗標（出廠 true）取鍵的話，兩份落在同一把鍵上，只起 1 個。
     expect(r.pids()).toHaveLength(2);
   }, 30_000);
 });
@@ -263,6 +317,68 @@ describe('第一次就連不上', () => {
   }, 30_000);
 });
 
+describe('第一次握手卡住（PM 審查擋 1）', () => {
+  it('別的組裝最多等期限就落定（沒有工具並警告），卡住的那一份還沒落定；關池在期限內落定，卡住的那一份跟著落定', async () => {
+    const { pool: shared, logged, errors } = pool();
+    const h = hangRow();
+    h.hang();
+    let firstSettled = false;
+    const first = assemble(shared, h.options).finally(() => {
+      firstSettled = true;
+    });
+    await waitFor(() => h.pids().length > 0);
+
+    const started = Date.now();
+    const second = await assemble(shared, h.options);
+    const waited = Date.now() - started;
+    console.log(`#1677 擋 1：第二份組裝等了 ${String(waited)} ms`);
+    expect(waited).toBeGreaterThanOrEqual(FIRST_CONNECT_WAIT_MS - 100);
+    expect(waited).toBeLessThan(FIRST_CONNECT_WAIT_MS + 3000);
+    expect(firstSettled).toBe(false);
+    expect(modelToolNames(second.registry)).toEqual([]);
+    expect(warned(second.registry).some((m) => m.includes('still connecting after 5000ms'))).toBe(
+      true,
+    );
+
+    const closing = Date.now();
+    await shared.close();
+    const closed = Date.now() - closing;
+    console.log(`#1677 擋 1：關池花了 ${String(closed)} ms`);
+    expect(closed).toBeLessThan(6000);
+    // 收不乾淨的那句是 dsh 的 error 級，走池的 `error`，不混進一般進度。
+    const unconfirmed =
+      'mcp-client(srv): transport closure could not be confirmed during disposal — server shutdown may be incomplete';
+    expect(errors).toContain(unconfirmed);
+    expect(logged).not.toContain(unconfirmed);
+    await waitFor(() => firstSettled, 2000);
+    expect(modelToolNames((await first).registry)).toEqual([]);
+  }, 40_000);
+});
+
+describe('斷線空窗裡組的 thread（PM 審查擋 2）', () => {
+  it('照最近一代登記工具；空窗期呼叫回 disconnected；重連之後同一條叫得動', async () => {
+    const { pool: shared, logged } = pool();
+    const r = row({ reconnect: { ...FAST, maxAttempts: 1000 } });
+    await assemble(shared, r.options);
+    r.down();
+    killAll(r.pids());
+    await waitFor(() =>
+      logged.some((m) => m.startsWith('mcp-client(srv): connection lost; reconnecting')),
+    );
+
+    const gap = await assemble(shared, r.options);
+    expect(modelToolNames(gap.registry)).toContain(TOOL);
+    expect(visible(gap.registry)).toEqual([TOOL]);
+    expect(warned(gap.registry)).toEqual([]);
+    await expect(invoke(gap.registry)).rejects.toThrow('mcp-client(srv): server is disconnected');
+
+    r.up();
+    await waitFor(() => logged.some((m) => m.startsWith('mcp-client(srv): reconnected')));
+    expect(String(await invoke(gap.registry))).toContain(RELEASE_NOTE);
+    expect(r.pids()).toHaveLength(1);
+  }, 30_000);
+});
+
 describe('放棄重連之後（Q5 (b)）', () => {
   it('開著的組裝照舊隱藏工具、呼叫說已放棄；下一份組裝取用時重開，拿得到工具', async () => {
     const { pool: shared, logged } = pool();
@@ -283,6 +399,43 @@ describe('放棄重連之後（Q5 (b)）', () => {
     expect(visible(old.registry)).toEqual([]);
     await expect(invoke(old.registry)).rejects.toThrow('reconnection was given up');
     expect(r.pids()).toHaveLength(1);
+  }, 30_000);
+
+  it('放棄之後同時來兩次取用：只重開一份、只起 1 個子行程', async () => {
+    const { pool: shared, logged } = pool();
+    const r = row({ reconnect: { initialDelayMs: 20, maxDelayMs: 40, maxAttempts: 2 } });
+    const config = mcpConfigSchema.parse(r.options);
+    const { shared: old } = await shared.acquire(config, false);
+    r.down();
+    killAll(r.pids());
+    await waitFor(() => logged.some((m) => m.includes('giving up after 2 consecutive')));
+
+    r.up();
+    const [x, y] = await Promise.all([
+      shared.acquire(config, false),
+      shared.acquire(config, false),
+    ]);
+    expect(x.shared).not.toBe(old);
+    expect(y.shared).toBe(x.shared);
+    expect(r.pids()).toHaveLength(1);
+  }, 30_000);
+});
+
+describe('重連關掉、第一次就連不上', () => {
+  it('記的是「第一次就連不上」那一句（照 dsh `connection.ts:211-216`），不是掉線；下一份組裝重新連', async () => {
+    const { pool: shared, logged } = pool();
+    const r = row({ reconnect: { ...FAST, enabled: false } });
+    r.down();
+    const before = await assemble(shared, r.options);
+    expect(modelToolNames(before.registry)).toEqual([]);
+    expect(logged).toContain(
+      'mcp-client(srv): connection failed and reconnect is disabled — no tools were registered; the next assembly connects again',
+    );
+    expect(logged.some((m) => m.includes('connection lost'))).toBe(false);
+
+    r.up();
+    const after = await assemble(shared, r.options);
+    expect(String(await invoke(after.registry))).toContain(RELEASE_NOTE);
   }, 30_000);
 });
 

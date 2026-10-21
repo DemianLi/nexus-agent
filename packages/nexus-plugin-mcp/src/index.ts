@@ -42,7 +42,7 @@ import {
 import type { Generation, RequestOptions, SdkClient, ToolCall } from './connection.js';
 import { ensureHub } from './hub.js';
 import { MCP_POOL_SERVICE } from './pool.js';
-import type { McpConnectionPool, SharedConnection } from './pool.js';
+import type { Acquired, McpConnectionPool } from './pool.js';
 import { Supervisor, reconnectSchema } from './supervisor.js';
 import type { ReconnectPolicy } from './supervisor.js';
 import type { McpResourceRequest, McpSource } from './hub.js';
@@ -53,8 +53,8 @@ export { reconnectSchema } from './supervisor.js';
 export { approvalReason, mcpApprovalSchema } from './approval.js';
 export type { McpApproval } from './approval.js';
 export type { ReconnectPolicy } from './supervisor.js';
-export { MCP_POOL_SERVICE, McpConnectionPool } from './pool.js';
-export type { McpConnectionPoolOptions } from './pool.js';
+export { FIRST_CONNECT_WAIT_MS, MCP_POOL_SERVICE, McpConnectionPool } from './pool.js';
+export type { Acquired, McpConnectionPoolOptions, SharedConnection } from './pool.js';
 
 /** 帶出處標頭的 server 指引預設上限（UTF-8 位元組），照 dsh 的 `maxInstructionBytes`。 */
 export const DEFAULT_MAX_INSTRUCTION_BYTES = 32_768;
@@ -344,26 +344,29 @@ export default mcpPlugin;
  * **一次組裝從頭到尾綁取用當下的那個監督者**：委派、放棄後隱藏、資源三處讀的都是它。池替已放棄的那一份重開之後，開著的 thread
  * 照舊停在舊的監督者上（工具隱藏、呼叫說已放棄），新 thread 拿到新的（Q5 (b)）。三處讀不同的來源的話，工具會藏起來卻叫得動。
  *
- * 失敗的分法同自己連的那條：連不上（第一次就連不上、或掉線正在重連）、註冊不上，都是撤掉這份註冊表已經登記的、交出警告，
- * 寫了 `failOnStartupError: true` 就拋。
+ * **斷線空窗裡照最近一代的工具清單登記**（照 dsh，見 `pool.ts` 檔頭）：委派讀目前這一代，空窗期呼叫回 `server is disconnected`，
+ * 重連之後叫得動。
+ *
+ * 失敗的分法同自己連的那條：一代都還沒連上過（第一次就連不上、或還在連而等到了期限）、註冊不上，都是撤掉這份註冊表已經登記的、
+ * 交出警告，寫了 `failOnStartupError: true` 就拋。
  */
 async function applyShared(
   registry: PluginRegistry,
   config: McpConfig,
-  shared: SharedConnection,
+  { shared, error: connectError }: Acquired,
 ): Promise<void> {
   const { serverName } = config;
   const { label, supervisor } = shared;
   const registered: (() => void)[] = [];
   let instructions = '';
   try {
-    const generation = supervisor.current();
-    if (generation?.listed === undefined) {
-      throw shared.startupError ?? new Error(`${label}: server is disconnected`);
+    const listing = shared.listed();
+    if (listing === undefined) {
+      throw connectError ?? new Error(`${label}: server is disconnected`);
     }
     const names: string[] = [];
     const rawNameOf = new Map<string, string>();
-    for (const listed of generation.listed.tools) {
+    for (const listed of listing.tools) {
       const rawName = listed.name;
       // 池裡的物件每份組裝共用，不改；改名與委派都做在這份組裝自己的那一個上。
       const tool = borrowed(listed);
@@ -384,7 +387,7 @@ async function applyShared(
       );
     }
     registered.push(registry.middleware.use(hideTools(serverName, names, () => supervisor.gaveUp)));
-    instructions = generation.listed.instructions;
+    instructions = listing.instructions;
   } catch (error) {
     for (const undo of registered.reverse()) undo();
     if (config.failOnStartupError) throw error;
@@ -412,8 +415,11 @@ async function applyShared(
 }
 
 /**
- * 這份組裝自己的工具物件：原型照池裡那一個、自有欄位（schema、description、`responseFormat`、metadata……）複製一份。之後只改
- * 這一份的 `name` 與 `func`，池裡的不動——直接改的話，第二份組裝會再包一層委派、名字也已經被第一份改過。
+ * 這份組裝自己的工具物件：原型照池裡那一個、自有欄位**淺拷貝**一份。之後只改這一份的 `name` 與 `func`，池裡的不動——直接改的話，
+ * 第二份組裝會再包一層委派、名字也已經被第一份改過。
+ *
+ * **淺拷貝**：欄位裡的物件（`schema`、`metadata`、`tags`、`lc_kwargs`、`defaultConfig`）每份組裝與池裡那一個共用同一份。今天沒有
+ * 人就地改它們（只換 `name` 與 `func` 這兩格本身）；要改的話先換成自己的一份，不要就地改。
  */
 function borrowed(tool: StructuredTool): StructuredTool {
   return Object.assign(
