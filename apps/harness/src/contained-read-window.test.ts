@@ -17,6 +17,24 @@ import { SessionRegistry } from '@nexus/core';
 import { FilesystemBackend } from 'deepagents';
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 
+/**
+ * 計數 `node:fs/promises` 開檔的次數（#1776）：`contained-backend.ts` 開檔是 `open`，用路徑直接讀是 `readFile(path)`（內部也是開一次檔），
+ * 兩支都原樣轉給真的，只多記一筆路徑。傳進來的若是 FileHandle（不是路徑）就不算開檔。只有這個測試檔看得到這層包裝。
+ */
+const fsOpenCalls = vi.hoisted(() => [] as string[]);
+vi.mock('node:fs/promises', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:fs/promises')>();
+  const counting = <F extends (...args: never[]) => unknown>(original: F): F =>
+    ((target: unknown, ...rest: unknown[]) => {
+      if (typeof target === 'string' || target instanceof URL) fsOpenCalls.push(String(target));
+      return (original as unknown as (...args: unknown[]) => unknown)(target, ...rest);
+    }) as unknown as F;
+  return { ...actual, open: counting(actual.open), readFile: counting(actual.readFile) };
+});
+
+/** 這個測試檔從現在起開過幾次這個檔。 */
+const openCountOf = (file: string): number => fsOpenCalls.filter((path) => path === file).length;
+
 import { createNexusAgent } from './agent-factory.js';
 import { ContainedFilesystemBackend, READ_STREAM_MIN_SIZE } from './contained-backend.js';
 import { toAgentInvocation } from './messages.js';
@@ -135,6 +153,16 @@ describe('驗收 2：一次 read_file 只讀一次檔', () => {
     expect(baseRaw).not.toHaveBeenCalled();
     expect(ours).toHaveBeenCalledTimes(1);
     expect(opened).toHaveBeenCalledTimes(1);
+  });
+
+  // #1776：上面只 spy `readOpened`，在 `read` 開檔前多開一次檔（再 `readFile`）它一樣是 1 次。這裡數 `node:fs/promises` 的 `open` 與用路徑讀的 `readFile`。
+  it('同一路徑只開一次檔（數 fs 的 open 與用路徑的 readFile，不是我們自己的方法）', async () => {
+    const file = join(root, 'once-open.txt');
+    await writeFile(file, 'a\nb\nc\n');
+    const before = openCountOf(file);
+    const [result] = await run(backend, [read('/once-open.txt')]);
+    expect(result?.text).toContain('(End of file - total 3 lines)');
+    expect(openCountOf(file) - before).toBe(1);
   });
 });
 
@@ -268,6 +296,87 @@ describe('驗收 6：看內容，不看副檔名', () => {
   });
 });
 
+describe('驗收 6b：副檔名不是文字的純文字檔，讀過就改得了（#1776）', () => {
+  // `read_file` 回報的版本是對解碼後的文字算的；寫入側的新鮮度檢查走基座 `readRaw`，對非文字副檔名它回位元組，
+  // 以前被當成空字串，兩邊永遠對不上，錯誤句子還叫模型重讀。
+  it('notes.png：read_file 之後 edit_file 成功', async () => {
+    await writeFile(join(root, 'e-notes.png'), 'just text\n');
+    const results = await run(backend, [
+      read('/e-notes.png'),
+      edit('/e-notes.png', 'just', 'only'),
+    ]);
+    expect(results[0]?.status).toBe('success');
+    expect(results[1]?.status).not.toBe('error');
+    expect(results[1]?.text).toContain('Successfully replaced');
+  });
+
+  it('cjk.png：read_file 之後 write_file 成功（不得 FS_STALE_VERSION）', async () => {
+    await writeFile(join(root, 'e-cjk.png'), '你好\n世界🙂\n');
+    const results = await run(backend, [
+      read('/e-cjk.png'),
+      { name: 'write_file', args: { file_path: '/e-cjk.png', content: 'aGk=' } },
+    ]);
+    expect(results[0]?.status).toBe('success');
+    expect(results[1]?.status).not.toBe('error');
+    expect(results[1]?.text).not.toContain('被改動');
+  });
+
+  // 審查突變 A2：把 `contentText` 的 `ignoreBOM: true` 改成 false，原本沒有任何測試紅。BOM 是版本比對承重的一條：
+  // `read_file` 回報的版本是對「BOM 留著」的文字算的，寫入側解碼若丟掉 BOM，長度差 1，讀完 edit 就被擋。
+  it('BOM＋CRLF 的 .png：read_file 之後 edit_file 成功（BOM 留著才對得上版本）', async () => {
+    await writeFile(join(root, 'e-bom.png'), Buffer.from('\uFEFFfirst\r\nsecond\r\n', 'utf8'));
+    const results = await run(backend, [
+      read('/e-bom.png'),
+      edit('/e-bom.png', 'second', 'SECOND'),
+    ]);
+    expect(results[0]?.status).toBe('success');
+    expect(results[1]?.status).not.toBe('error');
+    expect(results[1]?.text).toContain('Successfully replaced');
+  });
+
+  it('讀完被別人換掉的還是擋下（版本真的在比）：非文字副檔名也一樣', async () => {
+    const file = join(root, 'e-changed.png');
+    await writeFile(file, 'before\n');
+    const { agent, attachSession, dispose } = await createNexusAgent({
+      model: new ScriptedChatModel({
+        turns: [
+          { content: '', toolCalls: [read('/e-changed.png')] },
+          { content: '', toolCalls: [edit('/e-changed.png', 'before', 'after')] },
+          { content: '收工。' },
+        ],
+      }),
+      backend,
+      checkpointer: new MemorySaver(),
+      plugins: [
+        {
+          plugin: {
+            name: 'touch-png',
+            apply(registry) {
+              registry.approvals.gate(async (exec, next) => {
+                if (exec.name === 'edit_file') await writeFile(file, 'someone else\n');
+                return next();
+              });
+            },
+          },
+        },
+      ],
+    });
+    const detach = attachSession(new SessionRegistry('read-window-stale-png'));
+    try {
+      const state = (await agent.invoke(toAgentInvocation('讀。'), {
+        configurable: { thread_id: 'read-window-stale-png' },
+      })) as { messages: BaseMessage[] };
+      const tools = state.messages.filter((m): m is ToolMessage => ToolMessage.isInstance(m));
+      expect(tools[0]?.status).toBe('success');
+      expect(tools[1]?.status).toBe('error');
+      expect(tools[1]?.text ?? textOf(tools[1]!)).toContain('被改動');
+    } finally {
+      detach();
+      await dispose();
+    }
+  });
+});
+
 describe('驗收 7：取消', () => {
   it('50 MB 串流到一半中止 → 200 ms 內收尾，回 read aborted', async () => {
     const big = join(root, 'big.txt');
@@ -289,4 +398,50 @@ describe('驗收 7：取消', () => {
     await running;
     expect(Date.now() - started).toBeLessThan(10_000);
   }, 30_000);
+  // #1776：`read` 在開檔之前就看 signal（`contained-backend.ts` 的 `READ_ABORTED` 早退）。上面那條是讀到一半才中止，
+  // 這一條是讀之前就已經中止：回 `read aborted`、`open` 零次。突變：拿掉那一行早退 → `open` 變 1 次，這條紅
+  // （後面的 `readFile({ signal })` 仍會因為已中止而回同一句，所以只看結果分不出來，要數 `open`）。
+  it('signal 先中止 → read aborted，open 0 次', async () => {
+    const file = join(root, 'pre-aborted.txt');
+    await writeFile(file, 'a\nb\n');
+    const controller = new AbortController();
+    const ours = vi.spyOn(ContainedFilesystemBackend.prototype, 'read');
+    const { agent, attachSession, dispose } = await createNexusAgent({
+      model: new ScriptedChatModel({
+        turns: [{ content: '', toolCalls: [read('/pre-aborted.txt')] }, { content: '收工。' }],
+      }),
+      backend,
+      checkpointer: new MemorySaver(),
+      plugins: [
+        {
+          plugin: {
+            name: 'abort-before-read',
+            apply(registry) {
+              // 核准閘門在工具真的跑之前：這裡中止，工具呼叫的 signal 就是已中止的。
+              registry.approvals.gate(async (exec, next) => {
+                if (exec.name === 'read_file') controller.abort();
+                return next();
+              });
+            },
+          },
+        },
+      ],
+    });
+    const detach = attachSession(new SessionRegistry('read-window-pre-aborted'));
+    const before = openCountOf(file);
+    try {
+      await agent
+        .invoke(toAgentInvocation('讀。'), {
+          configurable: { thread_id: 'read-window-pre-aborted' },
+          signal: controller.signal,
+        })
+        .catch(() => undefined);
+    } finally {
+      detach();
+      await dispose();
+    }
+    expect(ours).toHaveBeenCalledTimes(1);
+    await expect(ours.mock.results[0]!.value).resolves.toEqual({ error: 'read aborted' });
+    expect(openCountOf(file) - before).toBe(0);
+  });
 });
