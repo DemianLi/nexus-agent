@@ -226,6 +226,13 @@ export interface CommandExecutorOptions {
    * 被拒收的命令什麼都沒改、`command/done` 落定成 `error`（例如 `@` 的會話引用不能用，#713）。
    */
   readonly acceptSteer?: (text: string) => void;
+  /**
+   * 命令呼叫 `openTurn()`（它即將改的域狀態會讓宿主自己開一輪）時，宿主先驗一次收不收。省略即都收。
+   *
+   * 跟 {@link CommandExecutorOptions.acceptSteer} 同一個形狀：**拋出來的例外會從 handler 裡的 `openTurn` 冒出去**，
+   * handler 在動域之前呼叫，被拒的命令什麼都沒改、`command/done` 落定成 `error`（伺服器收尾中，#1787）。
+   */
+  readonly acceptOpenTurn?: () => void;
 }
 
 /** 單次執行的選項。 */
@@ -402,6 +409,10 @@ export function createCommandExecutor(options: CommandExecutorOptions): CommandE
           signal,
           sessionLog,
           steer,
+          openTurn: () => {
+            if (!open) throw new Error(`命令 "/${parsed.name}" 已經結束，不能再 openTurn。`);
+            options.acceptOpenTurn?.();
+          },
         });
         result = normalizeResult(parsed.name, await withAbort(Promise.resolve(returned), signal));
       } catch (error: unknown) {
