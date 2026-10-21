@@ -1,14 +1,14 @@
-{"type":"turn/start","seq":0,"time":1792583865846,"data":{"kind":"message","text":"你好"}}
-{"type":"model/start","seq":1,"time":1792583865862,"data":{}}
-{"type":"model/end","seq":2,"time":1792583865863,"data":{}}
-{"type":"tool/call","seq":3,"time":1792583865865,"data":{"callId":"call_1_0","name":"echo","arguments":"{\"message\":\"CLI 接線測試\"}"}}
-{"type":"tool/result","seq":4,"time":1792583865866,"data":{"callId":"call_1_0","isError":false}}
-{"type":"model/start","seq":5,"time":1792583865868,"data":{}}
-{"type":"model/end","seq":6,"time":1792583865868,"data":{}}
-{"type":"tool/call","seq":7,"time":1792583865869,"data":{"callId":"call_2_0","name":"write_file","arguments":"{\"file_path\":\"/cli.md\",\"content\":\"CLI 寫的\"}"}}
-{"type":"tool/result","seq":8,"time":1792583865870,"data":{"callId":"call_2_0","isError":false}}
-{"type":"model/start","seq":9,"time":1792583865872,"data":{}}
-{"type":"model/end","seq":10,"time":1792583865872,"data":{}}
-{"type":"turn/end","seq":11,"time":1792583865876,"data":{}}
-{"type":"session/end-seed","seq":12,"time":1792583869669,"data":{}}
-{"type":"feedback/message-put","seq":13,"time":1792583869669,"data":{"item":{"turn":0,"rating":"negative","note":"夾具：以輪為目標的評分","category":"task-result","version":"4cfd036b-48e1-4189-8f76-b2bc4eca7f66","createdAt":1792583869669,"updatedAt":1792583869669}}}
+{"type":"turn/start","seq":0,"time":1792584260226,"data":{"kind":"message","text":"你好"}}
+{"type":"model/start","seq":1,"time":1792584260242,"data":{}}
+{"type":"model/end","seq":2,"time":1792584260243,"data":{}}
+{"type":"tool/call","seq":3,"time":1792584260245,"data":{"callId":"call_1_0","name":"echo","arguments":"{\"message\":\"CLI 接線測試\"}"}}
+{"type":"tool/result","seq":4,"time":1792584260245,"data":{"callId":"call_1_0","isError":false}}
+{"type":"model/start","seq":5,"time":1792584260247,"data":{}}
+{"type":"model/end","seq":6,"time":1792584260247,"data":{}}
+{"type":"tool/call","seq":7,"time":1792584260248,"data":{"callId":"call_2_0","name":"write_file","arguments":"{\"file_path\":\"/cli.md\",\"content\":\"CLI 寫的\"}"}}
+{"type":"tool/result","seq":8,"time":1792584260249,"data":{"callId":"call_2_0","isError":false}}
+{"type":"model/start","seq":9,"time":1792584260250,"data":{}}
+{"type":"model/end","seq":10,"time":1792584260250,"data":{}}
+{"type":"turn/end","seq":11,"time":1792584260254,"data":{}}
+{"type":"session/end-seed","seq":12,"time":1792584263990,"data":{}}
+{"type":"feedback/message-put","seq":13,"time":1792584263991,"data":{"item":{"turn":0,"rating":"negative","note":"夾具：以輪為目標的評分","category":"task-result","version":"de32d168-6a8a-4f58-8385-3fc08df13870","createdAt":1792584263990,"updatedAt":1792584263990}}}

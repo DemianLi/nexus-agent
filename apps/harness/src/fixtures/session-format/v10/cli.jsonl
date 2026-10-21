@@ -1,15 +1,15 @@
-{"type":"turn/start","seq":0,"time":1792583540214,"data":{"kind":"message","text":"你好"}}
-{"type":"model/start","seq":1,"time":1792583540241,"data":{}}
-{"type":"assistant/message","seq":2,"time":1792583540243,"data":{"message":{"type":"ai","data":{"content":"先回聲一次，確認工具接得上。","tool_calls":[{"id":"call_1_0","name":"echo","args":{"message":"CLI 接線測試"},"type":"tool_call"}],"invalid_tool_calls":[],"additional_kwargs":{},"response_metadata":{}}}}}
-{"type":"model/end","seq":3,"time":1792583540243,"data":{}}
-{"type":"tool/call","seq":4,"time":1792583540245,"data":{"callId":"call_1_0","name":"echo","arguments":"{\"message\":\"CLI 接線測試\"}"}}
-{"type":"tool/result","seq":5,"time":1792583540246,"data":{"callId":"call_1_0","isError":false,"message":{"type":"tool","data":{"status":"success","content":"回聲：CLI 接線測試","tool_call_id":"call_1_0","name":"echo","metadata":{"versions":{"@langchain/core":"1.2.9"}},"additional_kwargs":{},"response_metadata":{}}}}}
-{"type":"model/start","seq":6,"time":1792583540254,"data":{}}
-{"type":"assistant/message","seq":7,"time":1792583540254,"data":{"message":{"type":"ai","data":{"content":"再寫一個檔，確認檔案系統接得上。","tool_calls":[{"id":"call_2_0","name":"write_file","args":{"file_path":"/cli.md","content":"CLI 寫的"},"type":"tool_call"}],"invalid_tool_calls":[],"additional_kwargs":{},"response_metadata":{}}}}}
-{"type":"model/end","seq":8,"time":1792583540254,"data":{}}
-{"type":"tool/call","seq":9,"time":1792583540256,"data":{"callId":"call_2_0","name":"write_file","arguments":"{\"file_path\":\"/cli.md\",\"content\":\"CLI 寫的\"}"}}
-{"type":"tool/result","seq":10,"time":1792583540258,"data":{"callId":"call_2_0","isError":false,"message":{"type":"tool","data":{"content":"Successfully wrote to '/cli.md'","tool_call_id":"call_2_0","name":"write_file","additional_kwargs":{},"response_metadata":{}}}}}
-{"type":"model/start","seq":11,"time":1792583540266,"data":{}}
-{"type":"assistant/message","seq":12,"time":1792583540267,"data":{"message":{"type":"ai","data":{"content":"工具回來了，這條線是通的。","tool_calls":[],"invalid_tool_calls":[],"additional_kwargs":{},"response_metadata":{}}}}}
-{"type":"model/end","seq":13,"time":1792583540267,"data":{}}
-{"type":"turn/end","seq":14,"time":1792583540274,"data":{}}
+{"type":"turn/start","seq":0,"time":1792584287539,"data":{"kind":"message","text":"你好"}}
+{"type":"model/start","seq":1,"time":1792584287602,"data":{}}
+{"type":"assistant/message","seq":2,"time":1792584287604,"data":{"message":{"type":"ai","data":{"content":"先回聲一次，確認工具接得上。","tool_calls":[{"id":"call_1_0","name":"echo","args":{"message":"CLI 接線測試"},"type":"tool_call"}],"invalid_tool_calls":[],"additional_kwargs":{},"response_metadata":{}}}}}
+{"type":"model/end","seq":3,"time":1792584287605,"data":{}}
+{"type":"tool/call","seq":4,"time":1792584287607,"data":{"callId":"call_1_0","name":"echo","arguments":"{\"message\":\"CLI 接線測試\"}"}}
+{"type":"tool/result","seq":5,"time":1792584287608,"data":{"callId":"call_1_0","isError":false,"message":{"type":"tool","data":{"status":"success","content":"回聲：CLI 接線測試","tool_call_id":"call_1_0","name":"echo","metadata":{"versions":{"@langchain/core":"1.2.9"}},"additional_kwargs":{},"response_metadata":{}}}}}
+{"type":"model/start","seq":6,"time":1792584287611,"data":{}}
+{"type":"assistant/message","seq":7,"time":1792584287611,"data":{"message":{"type":"ai","data":{"content":"再寫一個檔，確認檔案系統接得上。","tool_calls":[{"id":"call_2_0","name":"write_file","args":{"file_path":"/cli.md","content":"CLI 寫的"},"type":"tool_call"}],"invalid_tool_calls":[],"additional_kwargs":{},"response_metadata":{}}}}}
+{"type":"model/end","seq":8,"time":1792584287611,"data":{}}
+{"type":"tool/call","seq":9,"time":1792584287613,"data":{"callId":"call_2_0","name":"write_file","arguments":"{\"file_path\":\"/cli.md\",\"content\":\"CLI 寫的\"}"}}
+{"type":"tool/result","seq":10,"time":1792584287614,"data":{"callId":"call_2_0","isError":false,"message":{"type":"tool","data":{"content":"Successfully wrote to '/cli.md'","tool_call_id":"call_2_0","name":"write_file","additional_kwargs":{},"response_metadata":{}}}}}
+{"type":"model/start","seq":11,"time":1792584287616,"data":{}}
+{"type":"assistant/message","seq":12,"time":1792584287616,"data":{"message":{"type":"ai","data":{"content":"工具回來了，這條線是通的。","tool_calls":[],"invalid_tool_calls":[],"additional_kwargs":{},"response_metadata":{}}}}}
+{"type":"model/end","seq":13,"time":1792584287616,"data":{}}
+{"type":"turn/end","seq":14,"time":1792584287621,"data":{}}
