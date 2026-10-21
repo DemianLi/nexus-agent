@@ -145,15 +145,18 @@ backend；`read-only` 也攔不住它們寫檔。harness 管得住的只有「MC
 - **基底寫死在 `<home>/thread-roots`，不是設定列**：它跟 `--workspace`、工具結果暫存根、附件根、會話日誌目錄**四個都不能重疊**（兩個方向、解開
   符號連結再比），任何一個重疊 serve 當場起不來，訊息點名是哪一個。要換位置，換 `NEXUS_AGENT_HOME`。
 - **`--workspace` 變成 `/shared`**：唯讀、所有 thread 共用、不接受升級（`danger-full-access` 也一樣）；`present` 與 `@` 搜尋不到它。
-  agent 指示檔（`AGENTS.md` 之類）改從這個共用區讀，所以部署方放在 `--workspace` 根目錄的規則檔照樣生效；thread 私有根裡的規則檔也讀得到，
-  並**各自獨立**。
+  agent 指示檔（`AGENTS.md` 之類）改從這個共用區讀，所以部署方放在 `--workspace` 根目錄的規則檔照樣生效。**只讀共用區**：thread 私有根裡的
+  `AGENTS.md` 不會被注入（模型自己寫的檔不該變成下一輪的指令；有測試釘住）。
+- **外掛掛的 backend 路由不得與組裝點自己的路由重疊**（`/shared/`、`/conversation_history/`、工具結果暫存與附件的前綴，以及根 `/`）：外掛的路由
+  包在組裝點預設路由的外面，重疊會蓋掉 `/shared/` 的唯讀，所以載入當場拒絕並點名外掛與前綴。
 - **舊 thread 不搬**：header 記的根就是 `--workspace`、或 header 沒有那一格的對話，繼續把 `--workspace` 當可寫根（沒有 `/shared`），
   彼此照舊看得到對方的檔案。要它們也隔離，只能開新 thread；系統不會自動搬檔。
 - **header 的根既不是 `--workspace` 也不是基底底下的 `thread-…` 目錄**：續接被拒（`ResumeWorkspaceConflictError`，訊息指名兩個根）。
 - **不會自動清**：thread 刪了或過期了，私有根還在；要清自己清 `<home>/thread-roots` 底下對應的目錄（用 header 的 `workspaceRoot` 對得上哪一條）。
   這是刻意的：私有根裡是使用者的產出，系統不替人決定哪一份可以丟。
-- **落盤關掉時**（`session-persistence` 那一列關掉）：沒有 header 可以記根，所以新 thread 的可寫根是**記憶體裡的虛擬檔案系統**，行程結束就沒了；
-  `--workspace` 仍然以 `/shared` 唯讀掛著；啟動會印一行「[私有根] 會話日誌落盤關掉…」讓部署方知道。這一格沒有圍堵，`/permission` 回「不適用」；
+- **落盤關掉時**（`session-persistence` 那一列關掉）——**偏離 2 的延伸**（dsh 沒有「每條 thread 一個私有根」，落盤關掉時 dsh 也沒有東西可以對照）：
+  沒有 header 可以記根，所以新 thread 的可寫根是**記憶體裡的虛擬檔案系統，重啟就沒了**；
+  `--workspace` 仍然以 `/shared` 唯讀掛著；啟動會印一行「[私有根] 會話日誌落盤關掉…重啟就沒了…」讓部署方知道。這一格沒有圍堵，`/permission` 回「不適用」；
   同時給 `--sandbox` **啟動失敗**（沒有東西可以圍，說的是「要配落盤」）。
 
 ## 會話日誌

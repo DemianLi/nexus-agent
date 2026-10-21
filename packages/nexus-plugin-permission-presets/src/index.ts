@@ -237,6 +237,10 @@ export function apply(ctx: Context, config: PermissionPresetsConfig): void {
   new PermissionPresetsServiceImpl(ctx, table, config.defaultPreset);
 
   service(ctx, sessionLookupToken).join((subject) => {
+    // 這條 thread 沒有圍堵（#1775，落盤關掉的新 thread：可寫根是記憶體，`--workspace` 只以唯讀共用區掛上）：行程級的 `hasContainment()` 是真的，
+    // 所以參與者裝上來了，但這條 thread 沒有 fence 可捆，兩顆旋鈕也不存在；往它的日誌釘 `permission/preset` 或收回只會留下一顆沒有意義的事件。
+    // 查不到這條 thread 的把手（沒登記）時照舊往下走，不在這裡猜。子代理的日誌 id 不同，所以認 root 日誌的會話 id（就是 thread id）。
+    if (fs.forThread(subject.rootLog.sessionId)?.hasWorkspace() === false) return undefined;
     if (subject.address.kind === 'root') {
       // 釘起始組合（dsh `pinInitialPermission`）：日誌上沒有 `permission/preset` 才釘，續接與空轉的重接什麼都不寫。
       // 兩顆旋鈕的值讀這份日誌：approval-gate 與 sandbox-policy 的參與者排在前面，已經把起始值釘進來了（`approval/policy` → `sandbox/mode` →

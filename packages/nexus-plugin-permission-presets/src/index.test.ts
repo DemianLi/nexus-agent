@@ -674,6 +674,20 @@ describe('/permission', () => {
     expect(run.command('a', '').text).toContain('可寫根 "/x"。');
   });
 
+  it('行程級有圍堵、這條 thread 沒有：參與者也不往它的日誌釘或收回 permission/preset（#1775）', async () => {
+    const run = await mountFor(['a', 'b'], {}, { a: '/x', b: '' });
+    for (const thread of ['a', 'b']) {
+      run.sessions.get(thread)!.root.append('approval/policy', { policy: 'ask' });
+      run.sessions.get(thread)!.root.append('sandbox/mode', { mode: 'workspace-write' });
+      run.sessions.get(thread)!.root.append('sandbox/mode', { mode: 'danger-full-access' });
+      run.join(thread);
+    }
+    // 對照：有圍堵的 a 被收回（出廠表沒有全開）；沒有圍堵的 b 一顆都沒有，日誌只剩上面寫進去的三顆。
+    expect(kinds(run.sessions.get('a')!.root, 'permission/preset')).not.toEqual([]);
+    expect(kinds(run.sessions.get('b')!.root, 'permission/preset')).toEqual([]);
+    expect(run.sessions.get('b')!.root.events).toHaveLength(3);
+  });
+
   it('對不上任何一組：顯示 custom 與兩顆旋鈕的值', async () => {
     const { run } = await ready({}, { mode: 'read-only', policy: 'never' });
     expect(run.command('t', '').text).toContain(

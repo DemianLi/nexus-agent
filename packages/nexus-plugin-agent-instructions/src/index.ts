@@ -50,7 +50,7 @@
  *    （#1474，`@nexus/agent-loop` 的 `preStep`；接縫本身的偏離登記在那個套件的檔頭），內容與重開條件不變。
  *    **留下的缺口**：同一次 invoke 裡，摘要之後的那幾輪看不到工作區指令，要等使用者下一句話。
  *    **重開條件**：#389 重開，或 core 開了讓多個貢獻者共用一格的 pre-step 節點。
- * 4. **哪一條**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775) item 10，理由 2「產品需求超出 dsh 的射程」）：dsh 讀的是
+ * 4. **偏離 2 的延伸**（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775) 第 10 項；#1775 的偏離 2「`--workspace` 退成唯讀共用區」，理由 2「產品需求超出 dsh 的射程」，登記在 `apps/harness/src/thread-roots.ts` 檔頭）：dsh 讀的是
  *    工作目錄這一棵樹上的指示檔，工作目錄就是可寫根。我們在 serve 上讓每條新 thread 有自己的私有可寫根，`--workspace` 退成唯讀共用區
  *    （`FsService.sharedWorkspacePrefix()`），所以**新 thread 讀共用區、不讀自己的私有根**：部署方放的規則檔生效，模型寫進私有根的
  *    `AGENTS.md` 不會升格成系統指示（那是一條使用者訊息的載體，不該由模型自己填）。

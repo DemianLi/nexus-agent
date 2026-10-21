@@ -95,6 +95,7 @@ import { createProcessShutdown } from './process-shutdown.js';
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
 import {
   assertThreadRootsBaseSeparate,
+  verifyThreadRootsBase,
   createFixedThreadPlacer,
   createThreadPlacer,
   resolveThreadRootsBase,
@@ -912,7 +913,9 @@ async function startServer(
         ...(sessionLogDir === undefined ? [] : [{ label: '會話日誌目錄', path: sessionLogDir }]),
       ],
     });
-    // 落盤關掉（#612）：沒有 header、不能續接、沒有會話鑰匙，新 thread 的可寫根是記憶體，`--workspace` 照樣唯讀掛成共用區（PM 裁決 (f)）。
+    // 基底（或還沒有基底時的 home）的擁有者與權限現在就驗，壞了起不來，不等第一條新 thread 才拋。
+    verifyThreadRootsBase(threadRootsBase);
+    // 落盤關掉（#612）：沒有 header、不能續接、沒有會話鑰匙，新 thread 的可寫根是記憶體，`--workspace` 照樣唯讀掛成共用區（PM 裁決 (f)，偏離 2 的延伸）。
     // **照實講**，不靜靜收下：`--sandbox` 在這個組合下一個位元組都影響不到（可寫根不在磁碟上，共用區固定唯讀），所以直接拒絕（同 `parseSandboxMode`
     // 沒配 `--workspace` 的理由）；其餘不適用的（`present`、`@` 列檔、改動摘要、`/permission` 的檔案政策）跟沒給 `--workspace` 一樣，在這一行講明。
     if (sessionStore === undefined) {
@@ -923,8 +926,8 @@ async function startServer(
         );
       }
       warn(
-        '[私有根] 會話日誌落盤關掉（沒有 header、不能續接）：每條 thread 的可寫根是記憶體，--workspace 以唯讀共用區掛在 ' +
-          `${SHARED_WORKSPACE_PREFIX}。檔案不落磁碟、沒有圍堵：present、@ 列檔、改動摘要與檔案政策（--sandbox、/permission）跟沒給 --workspace 一樣不適用。`,
+        '[私有根] 會話日誌落盤關掉（沒有 header、不能續接）：每條 thread 的可寫根只在記憶體裡，重啟就沒了；--workspace 以唯讀共用區掛在 ' +
+          `${SHARED_WORKSPACE_PREFIX}（偏離 2 的延伸，#1775）。檔案不落磁碟、沒有圍堵：present、@ 列檔、改動摘要與檔案政策（--sandbox、/permission）跟沒給 --workspace 一樣不適用。`,
       );
     }
   }

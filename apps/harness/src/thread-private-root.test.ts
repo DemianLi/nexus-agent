@@ -20,13 +20,24 @@
  * **零憑證、零外部連線**：目錄都在 `/var/tmp`。
  */
 
-import { mkdir, mkdtemp, readFile, readdir, rm, stat, writeFile } from 'node:fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { createDeliverableClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { foldTurn, serveClient } from './fixtures.js';
+import { bodyLog, exchangeServeToken, fetchWithCookie, foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
 import { scriptedPatchText } from './scripted-serve.js';
 import type { ScriptedTurn } from './scripted-model.js';
@@ -622,8 +633,21 @@ describe('其餘組合', () => {
       const server = await start(fx, [{ content: '好。' }], {
         argv: ['--patch', PERSISTENCE_OFF_PATCH],
       });
-      const result = await (await serveClient(server)).slashRun('a', '/permission read-only');
-      expect(JSON.stringify(result)).toContain('不適用');
+      const client = await serveClient(server);
+      // 先讓 thread 出生（說一輪），再量事件數：`/permission` 前後，這條 thread 日誌上的事件一顆都不能多。
+      await turn(server, 'a');
+      const eventCount = async (): Promise<number> => {
+        const page = await client.threadHistory('a');
+        if (page.kind !== 'ok') throw new Error(`歷史拿不到：${page.message}`);
+        return page.result.events.length;
+      };
+      const before = await eventCount();
+      expect(before).toBeGreaterThan(0);
+      for (const input of ['/permission', '/permission read-only', '/permission workspace-write']) {
+        const result = await client.slashRun('a', input);
+        expect(JSON.stringify(result)).toContain('不適用');
+      }
+      expect(await eventCount()).toBe(before);
     }, 60000);
   });
 
@@ -649,4 +673,302 @@ describe('其餘組合', () => {
       /會話日誌目錄/u,
     );
   }, 60000);
+});
+
+/** 這條 thread 的 root 日誌（落盤的那一份）裡每一顆事件。 */
+async function logEvents(
+  home: string,
+  threadId: string,
+): Promise<{ type: string; seq: number; data: unknown }[]> {
+  const directory = join(home, 'sessions');
+  const names = await readdir(directory, { recursive: true });
+  const found = names.find((name) => name.endsWith(`${threadId}.jsonl`) && !name.includes('%2f'));
+  if (found === undefined) throw new Error(`找不到 ${threadId} 的日誌`);
+  return (await readFile(join(directory, found), 'utf8'))
+    .split('\n')
+    .filter((line) => line.length > 0)
+    .map((line) => JSON.parse(line) as { type: string; seq: number; data: unknown });
+}
+
+describe('#1620 例外的前提：私有根在 home 底下，模型的位址空間碰不到 home', () => {
+  it('../../<home 的檔> 回 Path traversal；寫 /../x 被拒；.credentials.yaml、sessions/、attachments/ 到不了', async () => {
+    const fx = await fixture();
+    await writeFile(join(fx.home, '.credentials.yaml'), 'HOME-SECRET', { mode: 0o600 });
+    for (const dir of ['sessions', 'attachments']) {
+      await mkdir(join(fx.home, dir), { recursive: true, mode: 0o700 });
+      await writeFile(join(fx.home, dir, 'leak.txt'), 'HOME-LEAK', { mode: 0o600 });
+    }
+    const tools = await turn(
+      await start(fx, [
+        {
+          content: '',
+          toolCalls: [{ name: 'read_file', args: { file_path: '../../.credentials.yaml' } }],
+        },
+        {
+          content: '',
+          toolCalls: [{ name: 'write_file', args: { file_path: '/../x', content: 'no' } }],
+        },
+        {
+          content: '',
+          toolCalls: [{ name: 'read_file', args: { file_path: '/.credentials.yaml' } }],
+        },
+        { content: '', toolCalls: [{ name: 'ls', args: { path: '/sessions' } }] },
+        { content: '', toolCalls: [{ name: 'ls', args: { path: '/attachments' } }] },
+        {
+          content: '',
+          toolCalls: [{ name: 'read_file', args: { file_path: '/attachments/leak.txt' } }],
+        },
+        {
+          content: '',
+          toolCalls: [{ name: 'read_file', args: { file_path: '/../../sessions/leak.txt' } }],
+        },
+        { content: '完。' },
+      ]),
+      'a',
+    );
+    const [traversal, absolute, attachmentRead, upSessions] = tools.filter(
+      (tool) => tool.name === 'read_file',
+    );
+    expect(traversal?.status).toBe('failed');
+    expect(`${traversal?.text ?? ''}${traversal?.error ?? ''}`).toContain(
+      'Path traversal not allowed',
+    );
+    expect(thread(tools, 'write_file').status).toBe('failed');
+    // 寫 `/../x`：圍堵那一道就拒（路徑裡有 `..`），不是剛好落在哪裡。
+    expect(
+      `${thread(tools, 'write_file').error ?? ''}${thread(tools, 'write_file').text ?? ''}`,
+    ).toContain('路徑裡有 ".."');
+    // 絕對路徑映到 A 的根底下，那裡沒有這個檔。
+    expect(absolute?.status).toBe('failed');
+    expect(attachmentRead?.status).toBe('failed');
+    expect(upSessions?.status).toBe('failed');
+    for (const listing of tools.filter((tool) => tool.name === 'ls')) {
+      expect(listing.text ?? '').not.toContain('leak.txt');
+    }
+    // 整輪模型看到的任何一段文字都沒有 home 裡的內容。
+    expect(textsOf(tools)).not.toContain('HOME-SECRET');
+    expect(textsOf(tools)).not.toContain('HOME-LEAK');
+    // 寫 `/../x` 沒有在任何地方落檔：基底、home、私有根旁邊都沒有。
+    for (const where of [join(base(fx), 'x'), join(fx.home, 'x'), join(fx.shared, 'x')]) {
+      await expect(stat(where)).rejects.toThrow();
+    }
+  }, 60000);
+});
+
+describe('啟動時基底的重疊與權限（符號連結造出來的重疊也要擋）', () => {
+  it('基底是指向 --workspace 的符號連結：home 本身沒有重疊所以 #1620 不響，這一道要擋，點名 --workspace', async () => {
+    const fx = await fixture();
+    await symlink(fx.shared, join(fx.home, THREAD_ROOTS_DIR_NAME));
+    await expect(start(fx, WRITE)).rejects.toThrow(/- --workspace：/u);
+    expect(await readdir(fx.shared)).toEqual(['ref.md']);
+  }, 60000);
+
+  it('附件根是指進基底的符號連結（<home>/attachments → <home>/thread-roots）：點名附件根', async () => {
+    const fx = await fixture();
+    await mkdir(base(fx), { recursive: true, mode: 0o700 });
+    await symlink(base(fx), join(fx.home, 'attachments'));
+    await expect(start(fx, WRITE)).rejects.toThrow(/- 附件根：/u);
+  }, 60000);
+
+  it('基底已經在、卻群組可寫：啟動就拒（不等第一條新 thread 才拋），訊息不是「這條對話」', async () => {
+    const fx = await fixture();
+    await mkdir(base(fx), { recursive: true, mode: 0o700 });
+    await chmod(base(fx), 0o770);
+    const error = await start(fx, WRITE).then(
+      () => undefined,
+      (caught: unknown) => caught as Error,
+    );
+    expect(error?.message).toContain('私有可寫根');
+    expect(error?.message).toContain('拒絕啟動');
+  }, 60000);
+});
+
+describe('交付與重啟', () => {
+  const WRITE_THEN_PRESENT: ScriptedTurn[] = [
+    {
+      content: '',
+      toolCalls: [{ name: 'write_file', args: { file_path: '/r.csv', content: 'ROW-4242' } }],
+    },
+    { content: '交付。', toolCalls: [{ name: 'present', args: { files: [{ path: '/r.csv' }] } }] },
+    { content: '完。' },
+  ];
+
+  it('B 的 present 讀不到 A 根裡的檔', async () => {
+    const fx = await fixture();
+    await turn(await start(fx, WRITE_THEN_PRESENT), 'a');
+    const b = await turn(
+      await start(fx, [
+        {
+          content: '交付。',
+          toolCalls: [{ name: 'present', args: { files: [{ path: '/r.csv' }] } }],
+        },
+        { content: '完。' },
+      ]),
+      'b',
+    );
+    expect(thread(b, 'present').status).toBe('failed');
+    expect(
+      (await logEvents(fx.home, 'b')).some((event) => event.type === 'deliverables/presented'),
+    ).toBe(false);
+  }, 90000);
+
+  it('重啟之後，A 之前 present 的交付讀得到（從 header 記的私有根讀）', async () => {
+    const fx = await fixture();
+    await turn(await start(fx, WRITE_THEN_PRESENT), 'a');
+    const presented = (await logEvents(fx.home, 'a')).find(
+      (event) => event.type === 'deliverables/presented',
+    );
+    expect(presented).toBeDefined();
+    await running?.close();
+    running = undefined;
+
+    const server = await start(fx, [{ content: '好。' }]);
+    const cookie = await exchangeServeToken(server.authenticatedUrl);
+    const withCookie = fetchWithCookie(cookie);
+    // 拿歷史就把 thread 建起來了，路由才問得到錨。
+    const page = await (await serveClient(server)).threadHistory('a');
+    expect(page.kind).toBe('ok');
+    const read = await createDeliverableClient({ baseUrl: server.url, fetch: withCookie }).read(
+      'a',
+      {
+        seq: presented!.seq,
+        index: 0,
+      },
+    );
+    expect(read.kind).toBe('ok');
+    expect(JSON.stringify(read)).toContain('ROW-4242');
+  }, 120000);
+});
+
+describe('不自動清：閒置逐出與封存之後，私有根和裡面的檔都還在', () => {
+  const EVICT_ROWS = '- id: thread-capacity\n  config:\n    idleEvictAfterMs: 50\n';
+
+  it('閒置逐出', async () => {
+    const fx = await fixture();
+    const lines: string[] = [];
+    const server = await start(fx, WRITE, { extraRows: EVICT_ROWS, log: bodyLog(lines) });
+    // 逐出要這條 thread 沒有任何下行握著：turn() 只收迭代器、不斷連線，這裡自己中止。
+    const client = await serveClient(server);
+    const controller = new AbortController();
+    const events = await client.openEvents('a', { signal: controller.signal });
+    await client.runStart('a', '開始。');
+    await foldTurn(events);
+    controller.abort();
+    await events.return?.(undefined).catch(() => undefined);
+    const rootA = (await headerOf(fx.home, 'a')).workspaceRoot!;
+    const deadline = Date.now() + 15000;
+    while (
+      !lines.some((line) => line.startsWith('[閒置逐出] thread "a"')) &&
+      Date.now() < deadline
+    ) {
+      await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    // 前提：真的逐出了，不然「還在」什麼都沒證明。
+    expect(lines.some((line) => line.startsWith('[閒置逐出] thread "a"'))).toBe(true);
+    expect(await readFile(join(rootA, 'r.csv'), 'utf8')).toBe('ROW-4242');
+    expect(await privateRoots(fx)).toHaveLength(1);
+  }, 90000);
+
+  it('封存與取消封存', async () => {
+    const fx = await fixture();
+    const server = await start(fx, WRITE);
+    await turn(server, 'a');
+    const rootA = (await headerOf(fx.home, 'a')).workspaceRoot!;
+    const client = await serveClient(server);
+    expect((await client.threadArchive('a')).kind).toBe('ok');
+    expect(await readFile(join(rootA, 'r.csv'), 'utf8')).toBe('ROW-4242');
+    await client.threadUnarchive('a');
+    expect(await readFile(join(rootA, 'r.csv'), 'utf8')).toBe('ROW-4242');
+    expect(await privateRoots(fx)).toHaveLength(1);
+  }, 90000);
+});
+
+describe('子代理拿的是那條 thread 的根', () => {
+  it('前景子代理寫的檔落在 A 的私有根，--workspace 與 B 都沒有', async () => {
+    const fx = await fixture();
+    const server = await start(fx, [
+      {
+        content: '委派。',
+        toolCalls: [
+          { name: 'subagent', args: { description: '幹活', subagent_type: 'general-purpose' } },
+        ],
+      },
+      {
+        content: '',
+        toolCalls: [
+          { name: 'write_file', args: { file_path: '/by-foreground.txt', content: 'F' } },
+        ],
+      },
+      { content: '子代理做完了。' },
+      { content: '收到。' },
+    ]);
+    await turn(server, 'a');
+    const rootA = (await headerOf(fx.home, 'a')).workspaceRoot!;
+    expect(await readFile(join(rootA, 'by-foreground.txt'), 'utf8')).toBe('F');
+    expect(await readdir(fx.shared)).toEqual(['ref.md']);
+    const b = await turn(await start(fx, PROBE), 'b');
+    expect(thread(b, 'ls').text).not.toContain('by-foreground.txt');
+  }, 120000);
+
+  it('冷復活的背景子代理（重啟後叫醒）寫的檔落在 A 的私有根，--workspace 沒有', async () => {
+    const fx = await fixture();
+    const first = await start(fx, [
+      {
+        content: '委派。',
+        toolCalls: [
+          {
+            name: 'subagent',
+            args: {
+              description: '幹活',
+              subagent_type: 'general-purpose',
+              run_in_background: true,
+            },
+          },
+        ],
+      },
+      { content: '子代理做完了。' },
+      { content: '收到。' },
+    ]);
+    await turn(first, 'a');
+    const rootA = (await headerOf(fx.home, 'a')).workspaceRoot!;
+    // 等背景子代理的日誌出現並收尾（第一輪做完），取它的 run id。
+    const sessions = join(fx.home, 'sessions');
+    let runId: string | undefined;
+    const deadline = Date.now() + 15000;
+    while (runId === undefined && Date.now() < deadline) {
+      const names = await readdir(sessions, { recursive: true });
+      const body = names.find((name) => name.includes('a%2fbg-') && name.endsWith('.jsonl'));
+      if (body !== undefined) {
+        const text = await readFile(join(sessions, body), 'utf8');
+        if (text.includes('"turn/end"'))
+          runId = body.slice(body.indexOf('a%2f') + 4, -'.jsonl'.length);
+      }
+      if (runId === undefined) await new Promise((resolve) => setTimeout(resolve, 25));
+    }
+    expect(runId).toBeDefined();
+    await running?.close();
+    running = undefined;
+
+    const second = await start(fx, [
+      {
+        content: '',
+        toolCalls: [{ name: 'write_file', args: { file_path: '/woke.txt', content: 'W' } }],
+      },
+      { content: '完成。' },
+    ]);
+    expect(await (await serveClient(second)).subagentSend('a', runId!, '起來')).toMatchObject({
+      type: 'success',
+    });
+    const wake = Date.now() + 15000;
+    for (;;) {
+      try {
+        expect(await readFile(join(rootA, 'woke.txt'), 'utf8')).toBe('W');
+        break;
+      } catch (error) {
+        if (Date.now() >= wake) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 50));
+      }
+    }
+    expect(await readdir(fx.shared)).toEqual(['ref.md']);
+  }, 120000);
 });

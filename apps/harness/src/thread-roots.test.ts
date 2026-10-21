@@ -134,6 +134,23 @@ describe('createThreadPlacer：每一列', () => {
     }
   });
 
+  it('續接，header 的根是別的 home 底下的私有根（名字是 thread-<32 hex>）：拒，出路是換回原來的 home，不叫人把它當 --workspace', async () => {
+    const { shared, place } = await setup();
+    const foreign = `/old-home/thread-roots/${threadRootDirName('k\0someone')}`;
+    const error = await place(request('a', header(foreign))).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ResumeWorkspaceConflictError);
+    const message = (error as Error).message;
+    expect(message).toContain(foreign);
+    expect(message).toContain(shared);
+    expect(message).toContain('換回原來的 home');
+    // 反例：一般「換過 --workspace」的出路（用 --workspace <根> 再接）對私有根是洩漏，不能出現。
+    expect(message).not.toContain(`用 --workspace ${foreign}`);
+    // 對照：不是私有根形狀的，出路維持「用 --workspace <header 的根> 再接」。
+    const plain = await place(request('a', header('/somewhere/else'))).catch((e: unknown) => e);
+    expect((plain as Error).message).toContain('用 --workspace /somewhere/else 再接');
+    expect((plain as Error).message).not.toContain('換回原來的 home');
+  });
+
   it('根已經在但不是私有的（0755）：拒絕使用；是符號連結也拒', async () => {
     const { base, place } = await setup();
     const name = threadRootDirName('k\0loose');
