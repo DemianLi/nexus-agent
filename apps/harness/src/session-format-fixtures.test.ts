@@ -137,7 +137,7 @@ describe.each(names)('夾具 %s', (name) => {
 
   it.each(ids)('唯讀打開 %s：事件、版本與推回模型的歷史等於 expected.json', async (id) => {
     const session = expected.sessions[id]!;
-    const opened = await openJsonlSessionStore({ directory: await copied(name) }).open(id);
+    const opened = await openJsonlSessionStore({ directory: await copied(name) }).open(id, 'read');
     expect(opened.header.version).toBe(session.headerVersion);
     const events = await opened.read();
     expect(events).toHaveLength(session.eventCount);
@@ -179,6 +179,7 @@ describe.each(names)('夾具 %s', (name) => {
     it(`格式 ${String(trigger.edge)} 的讀方分支（${trigger.session}）照 expected.json`, async () => {
       const opened = await openJsonlSessionStore({ directory: await copied(name) }).open(
         trigger.session,
+        'read',
       );
       const events = await opened.read();
       if (trigger.replay !== undefined) {
@@ -281,7 +282,7 @@ describe('接線（驗收 B）：13→14 標成 breaking，經出貨的 store �
     const listing = await store.list();
     expect(listing.unreadable).toBe(Object.keys(expectedOf('v13').sessions).length);
     expect(listing.sessions).toEqual([]);
-    for (const open of [() => store.open('cli'), () => store.resume('cli')]) {
+    for (const open of [() => store.open('cli', 'read'), () => store.resume('cli')]) {
       const error: unknown = await open().catch((caught: unknown) => caught);
       expect(error).toBeInstanceOf(SessionFormatUnsupportedError);
       expect((error as Error).message).toContain('沒有 v13 的遷移');
@@ -291,7 +292,7 @@ describe('接線（驗收 B）：13→14 標成 breaking，經出貨的 store �
   it('v14 的夾具照常讀回', async () => {
     const store = openJsonlSessionStore({ directory: await copied('v14'), catalog: breaking });
     expect((await store.list()).unreadable).toBe(0);
-    const events = await (await store.open('cli')).read();
+    const events = await (await store.open('cli', 'read')).read();
     expect(events).toHaveLength(expectedOf('v14').sessions['cli']!.eventCount);
   });
 });
