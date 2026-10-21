@@ -1,0 +1,78 @@
+{
+  "writer": {
+    "rev": "v0.4.15",
+    "commit": "0b08210d5e58a9b9252d705ff1ce9bb2ee7bae77",
+    "formatVersion": 8,
+    "released": true
+  },
+  "computedByToday": {
+    "head": "dd30148af76fca7b240830b688837a71ea2fc190",
+    "dirty": true
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 8,
+      "eventCount": 14,
+      "types": [
+        "turn/start",
+        "model/start",
+        "model/end",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "model/end",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "model/end",
+        "turn/end",
+        "session/end-seed",
+        "feedback/message-put"
+      ],
+      "replay": {
+        "computedBy": "today",
+        "kind": "unreplayable",
+        "reason": "result-missing"
+      }
+    },
+    "compacted": {
+      "headerVersion": 8,
+      "eventCount": 5,
+      "types": [
+        "turn/start",
+        "model/start",
+        "model/end",
+        "compaction/summary",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "today",
+        "kind": "unreplayable",
+        "reason": "summary-missing"
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 10,
+      "session": "cli",
+      "computedBy": "today",
+      "feedback": [
+        {
+          "turn": 0,
+          "target": "turn",
+          "rating": "negative"
+        }
+      ]
+    },
+    {
+      "edge": 9,
+      "session": "compacted",
+      "computedBy": "today",
+      "replay": {
+        "kind": "unreplayable",
+        "reason": "summary-missing"
+      }
+    }
+  ]
+}

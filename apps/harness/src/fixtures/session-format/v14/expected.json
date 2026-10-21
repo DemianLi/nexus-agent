@@ -1,0 +1,129 @@
+{
+  "writer": {
+    "rev": "v0.5.19",
+    "commit": "1e7fcd59a1e7b057d8738b1e4dd1d49e8edea934",
+    "formatVersion": 14,
+    "released": true
+  },
+  "computedByToday": {
+    "head": "dd30148af76fca7b240830b688837a71ea2fc190",
+    "dirty": true
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 14,
+      "eventCount": 18,
+      "types": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "context/measure",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "v0.5.19",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    },
+    "crashed": {
+      "headerVersion": 14,
+      "eventCount": 5,
+      "types": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call"
+      ],
+      "replay": {
+        "computedBy": "v0.5.19",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "tool"
+        ]
+      }
+    },
+    "crashed-resumed": {
+      "headerVersion": 14,
+      "eventCount": 6,
+      "types": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call",
+        "session/end-seed"
+      ],
+      "replay": {
+        "computedBy": "v0.5.19",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "tool"
+        ]
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 33,
+      "session": "crashed",
+      "computedBy": "today",
+      "closers": [
+        {
+          "type": "tool/result"
+        },
+        {
+          "type": "turn/end",
+          "reason": "interrupted"
+        }
+      ],
+      "lifecyclesAfterResume": [
+        "running",
+        "completed"
+      ]
+    },
+    {
+      "edge": 33,
+      "session": "crashed-resumed",
+      "computedBy": "today",
+      "closers": [
+        {
+          "type": "tool/result"
+        },
+        {
+          "type": "turn/end",
+          "reason": "interrupted"
+        }
+      ],
+      "lifecyclesAfterResume": [
+        "running",
+        "completed"
+      ]
+    }
+  ]
+}

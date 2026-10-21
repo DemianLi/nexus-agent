@@ -1,0 +1,5 @@
+{"type":"turn/start","seq":0,"time":1792583897156,"data":{"kind":"message","text":"幫我回聲一次"}}
+{"type":"model/start","seq":1,"time":1792583897156,"data":{}}
+{"type":"assistant/message","seq":2,"time":1792583897156,"data":{"message":{"type":"ai","data":{"content":"先回聲一次。","tool_calls":[{"id":"crashed-call","name":"echo","args":{"message":"夾具"},"type":"tool_call"}],"invalid_tool_calls":[],"additional_kwargs":{},"response_metadata":{}}}}}
+{"type":"model/end","seq":3,"time":1792583897156,"data":{}}
+{"type":"tool/call","seq":4,"time":1792583897156,"data":{"callId":"crashed-call","name":"echo","arguments":"{\"message\":\"夾具\"}"}}

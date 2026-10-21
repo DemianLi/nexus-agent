@@ -1,0 +1,63 @@
+{
+  "writer": {
+    "rev": "v0.4.31",
+    "commit": "ff3776ceb3cd52b450ab8aae4b5031c325d1e42f",
+    "formatVersion": 9,
+    "released": true
+  },
+  "computedByToday": {
+    "head": "dd30148af76fca7b240830b688837a71ea2fc190",
+    "dirty": true
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 9,
+      "eventCount": 17,
+      "types": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "turn/end",
+        "session/end-seed",
+        "feedback/message-put"
+      ],
+      "replay": {
+        "computedBy": "v0.4.31",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 10,
+      "session": "cli",
+      "computedBy": "today",
+      "feedback": [
+        {
+          "turn": 0,
+          "target": "turn",
+          "rating": "negative"
+        }
+      ]
+    }
+  ]
+}

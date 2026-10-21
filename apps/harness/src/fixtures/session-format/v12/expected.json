@@ -1,0 +1,56 @@
+{
+  "writer": {
+    "rev": "v0.5.7",
+    "commit": "09387d561835291f69589aba707fcb5f8776272c",
+    "formatVersion": 12,
+    "released": true
+  },
+  "computedByToday": {
+    "head": "dd30148af76fca7b240830b688837a71ea2fc190",
+    "dirty": true
+  },
+  "sessions": {
+    "cli": {
+      "headerVersion": 12,
+      "eventCount": 15,
+      "types": [
+        "turn/start",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "tool/call",
+        "tool/result",
+        "model/start",
+        "assistant/message",
+        "model/end",
+        "turn/end"
+      ],
+      "replay": {
+        "computedBy": "v0.5.7",
+        "kind": "replayed",
+        "roles": [
+          "human",
+          "ai",
+          "tool",
+          "ai",
+          "tool",
+          "ai"
+        ]
+      }
+    }
+  },
+  "triggers": [
+    {
+      "edge": 13,
+      "session": "cli",
+      "computedBy": "today",
+      "workspaceRootRecorded": false,
+      "resumeWithWorkspace": "allowed"
+    }
+  ]
+}
