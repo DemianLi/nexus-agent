@@ -678,6 +678,22 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     glob?: string | null,
     maxCount?: number | null,
   ): Promise<GrepResult> {
+    return this.grepPaths(pattern, [dirPath || '.'], glob, maxCount);
+  }
+
+  /**
+   * {@link grep} 的本體，**一次 rg 搜多個起點**（rg 吃多個路徑引數）。起點之間不存在的略過、全都不存在回 `{ matches: [] }`；
+   * 其餘（`--no-config`、上限、取消、錯誤分類、`maxCount` 在解析之後才套）與單一起點完全一樣。
+   * 給「要搜的是一堆分散的子目錄」的子類用，免得一個目錄起一次 rg（[#1782](https://github.com/DemianLi/nexus-agent/issues/1782)）。
+   *
+   * @param dirPaths - 起點的虛擬路徑。
+   */
+  protected async grepPaths(
+    pattern: string,
+    dirPaths: readonly string[],
+    glob?: string | null,
+    maxCount?: number | null,
+  ): Promise<GrepResult> {
     // `spawn` 在 `cwd` 不存在時也回 `ENOENT`，跟找不到 rg 分不出來；不先確認的話「根不存在」會被說成「rg 不見了」。放在最前面。
     // **根不存在不是錯誤，是「沒有東西可找」**（`{ matches: [] }`，同基座對不存在的起點）：暫存 backend 的根是第一次
     // 存東西才建的（`tool-result-stash.ts`），經 `CompositeBackend` 搜 `/` 時也會搜到它。根存在卻不是目錄才是錯誤。
@@ -690,23 +706,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         'grep cannot search: the workspace root is not an accessible directory',
       );
     }
-    let baseFull: string;
-    try {
-      baseFull = this.resolveVirtual(dirPath || '.');
-    } catch {
-      return { matches: [] };
-    }
-    try {
-      await stat(baseFull);
-    } catch {
-      return { matches: [] };
-    }
-    // **搜尋起點要傳相對於工作區根的路徑**（根本身是 `.`）：rg 的錨點是它自己 `getcwd()` 的 realpath，根經過 symlink 時
-    // 傳絕對路徑會對不上、帶目錄的 `--glob` 一個都命中不了；相對路徑不受影響（rg 15.1.0 實測；`cwd` 為根、路徑為 `.` 或
-    // `src` 時 `logs/app.log`、`/logs/app.log`、`src/**/*.ts` 都對根錨定）。
-    // 一律加 `./` 前綴：目錄名剛好是 `-` 時 rg 會改讀 stdin（0 筆、沒有錯誤），`-x` 這類也不會被當成旗標。
-    const searchRel = relative(this.cwd, baseFull);
-    const searchArg = searchRel === '' ? '.' : `.${sep}${searchRel}`;
+    const searchArgs = await this.existingSearchArgs(dirPaths);
+    if (searchArgs.length === 0) return { matches: [] };
     let executable = this.ripgrepInternals?.executable;
     if (executable === undefined) {
       try {
@@ -722,7 +723,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     }
     const outcome = await runRipgrep({
       executable,
-      argv: ['--json', '-F', ...(glob ? ['--glob', glob] : []), '--', pattern, searchArg],
+      argv: ['--json', '-F', ...(glob ? ['--glob', glob] : []), '--', pattern, ...searchArgs],
       cwd: this.cwd,
       signal: currentToolCallSignal(),
       internals: this.ripgrepInternals,
@@ -732,6 +733,34 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       result: { matches: this.parseRipgrepJson(outcome.stdout) },
       maxCount: maxCount ?? null,
     });
+  }
+
+  /**
+   * 把虛擬路徑換成 rg 的搜尋引數，濾掉解不出來或不存在的。
+   *
+   * **搜尋起點要傳相對於工作區根的路徑**（根本身是 `.`）：rg 的錨點是它自己 `getcwd()` 的 realpath，根經過 symlink 時
+   * 傳絕對路徑會對不上、帶目錄的 `--glob` 一個都命中不了；相對路徑不受影響（rg 15.1.0 實測；`cwd` 為根、路徑為 `.` 或
+   * `src` 時 `logs/app.log`、`/logs/app.log` 與 `src` 底下的遞迴 glob 都對根錨定）。
+   * 一律加 `./` 前綴：目錄名剛好是 `-` 時 rg 會改讀 stdin（0 筆、沒有錯誤），`-x` 這類也不會被當成旗標。
+   */
+  private async existingSearchArgs(dirPaths: readonly string[]): Promise<string[]> {
+    const args: string[] = [];
+    for (const dirPath of dirPaths) {
+      let baseFull: string;
+      try {
+        baseFull = this.resolveVirtual(dirPath || '.');
+      } catch {
+        continue;
+      }
+      try {
+        await stat(baseFull);
+      } catch {
+        continue;
+      }
+      const searchRel = relative(this.cwd, baseFull);
+      args.push(searchRel === '' ? '.' : `.${sep}${searchRel}`);
+    }
+    return args;
   }
 
   /**
