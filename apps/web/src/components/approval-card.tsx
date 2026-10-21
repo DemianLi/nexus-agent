@@ -28,6 +28,9 @@
  *
  * **沙箱升級**（`request_sandbox_escalation`，#1292）畫 harness 送的那句描述（模式、理由、只蓋這一次），不畫工具名與參數 JSON；
  * 升到全開多一句警告。沒有描述就照一般的畫（`lib/sandbox-escalation.ts`）。
+ *
+ * **其他工具畫閘門給的理由**（#1628）：「要執行 …」下面一行，例如 MCP 閘門寫明哪台 server、哪支工具（名字被補了指紋時人看不出來）。
+ * core 沒有理由時填的預設字不畫，那句跟「要執行 …」重複（`lib/approval-reason.ts`）。是一般的文字，報讀照樣唸得到，不靠 tooltip。
  */
 
 import type { PendingApproval } from '@nexus/wire';
@@ -39,6 +42,7 @@ import type { PendingAsker } from '@/lib/approval-asker';
 import { Button } from '@/components/ui/button';
 import { RowTrigger } from '@/components/row-trigger';
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
+import { approvalReasonOf } from '@/lib/approval-reason';
 import { FULL_ACCESS_NOTE, escalationView } from '@/lib/sandbox-escalation';
 
 /** 封閉詞彙的中文字面。認不得的原樣顯示——寧可露出來，不要吞掉。 */
@@ -88,11 +92,18 @@ function Actions({ pending, asker }: { pending: PendingApproval; asker?: Pending
             </div>
           );
         }
+        const reason = approvalReasonOf(action);
         return (
           <div key={`${action.name}-${index}`} className="flex flex-col gap-1.5">
             <p className="text-body">
               要執行 <code className="font-mono font-medium">{action.name}</code>
             </p>
+            {reason !== undefined && (
+              // 理由裡有 server 給的工具名：長名字沒有空格，不斷行會撐破窄螢幕。
+              <p className="text-body wrap-anywhere" data-testid="approval-reason">
+                {reason}
+              </p>
+            )}
             <pre className="text-muted-foreground font-mono text-tip whitespace-pre-wrap">
               {/* 參數解不開的那顆，酬載帶的是模型吐的原字串（#281）：原樣顯示，不再包一層引號。 */}
               {typeof action.args === 'string' ? action.args : JSON.stringify(action.args, null, 2)}

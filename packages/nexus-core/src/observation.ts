@@ -39,12 +39,15 @@
  * 「read an existing file first (**the default fs-observation-policy requires it**)」、
  * 「Read the file first…, unless you just created or edited it in this session」
  * （`snapshots/web` 底下每一份 `system-prompt.expected.md`）。理由跟 {@link ROOT_ONLY_NOTICE} 同一條：
- * 模型看得到的只有描述，不寫在那裡它每碰一個新檔就得先撞一次牆。**那個縫在我們這裡是關
- * 著的**：`customToolDescriptions` 只存在於 `FilesystemMiddlewareOptions` 上，而
+ * 模型看得到的只有描述，不寫在那裡它每碰一個新檔就得先撞一次牆。**那個縫只在走
+ * `createDeepAgent` 時是關著的**：`customToolDescriptions` 只存在於 `FilesystemMiddlewareOptions` 上，而
  * `createDeepAgent` 建 `createFilesystemMiddleware` 時只傳
- * `{ backend, permissions, tools }`——root 與 subagent 兩條路都不轉發它。退到最接近的
- * 載體：`wrapModelCall` 往 `systemMessage` 追加一句（同一個模型、同一輪看得到，只是位置
- * 不同）。**紀律沒退**：規則照樣在模型動手之前就講給它聽。
+ * `{ backend, permissions, tools }`——root 與 subagent 兩條路都不轉發它。**自有組裝收得到它**
+ * （#1776 補正；`agent-assembly.ts` 的 root 與 subagent 兩處都是直接呼叫
+ * `createFilesystemMiddleware({ backend, permissions })`，`FilesystemMiddlewareOptions` 本來就有這個欄位），
+ * 所以「換不掉」不成立，只是今天沒有人用它。**行為沒改**：仍然退到 `wrapModelCall` 往 `systemMessage` 追加一句
+ * （同一個模型、同一輪看得到，只是位置不同）。**紀律沒退**：規則照樣在模型動手之前就講給它聽。
+ * 要不要改成真的換掉工具描述，交給 [#1563](https://github.com/DemianLi/nexus-agent/issues/1563)。
  *
  * @module
  */
@@ -114,8 +117,9 @@ const STALE_VERSION = 'FS_STALE_VERSION';
  * （ISO 8601，毫秒），**單靠它會在同一毫秒內的兩次寫入上撞號**，所以再併上長度與一個
  * 便宜的內容雜湊。內容本來就在 `readRaw` 的回傳裡，不必多讀一次。
  *
- * 二進位檔（`content` 不是字串也不是行陣列）只落到 `modified_at`——那是這一格已知的弱點，
- * 不是疏漏：模型改不動二進位檔，這條路上唯一會走到它的是 `write_file` 覆蓋。
+ * 真的二進位檔（`content` 是解不開 UTF-8 的位元組）只落到 `modified_at`——那是這一格已知的弱點，
+ * 不是疏漏：模型改不動二進位檔，這條路上唯一會走到它的是 `write_file` 覆蓋。位元組若解得開（副檔名不是文字、內容是文字的檔，
+ * #1776）就照文字算，見 {@link contentText}。
  */
 function versionOf(data: unknown): string {
   const file = data as { readonly modified_at?: unknown; readonly content?: unknown };
@@ -125,11 +129,26 @@ function versionOf(data: unknown): string {
   return hasher.version(modified);
 }
 
-/** `FileData.content` 在 v1 是行陣列、v2 是字串或位元組。認不得的一律當空字串。 */
+/**
+ * `FileData.content` 在 v1 是行陣列、v2 是字串或位元組。認不得的一律當空字串。
+ *
+ * **位元組要解碼**（[#1776](https://github.com/DemianLi/nexus-agent/issues/1776)）：基座對非文字副檔名（`.png`…）的 `readRaw` 回位元組，
+ * 而 backend 的 `read_file` 看內容不看副檔名（#1530），內容是文字的 `notes.png` 讀得到、回報的版本是對解碼後的文字算的。
+ * 這裡若把位元組當空字串，寫與改前的比對永遠對不上那個版本，模型被「在你讀過之後被改動了」叫去一直重讀。
+ * 所以位元組用同一套規則解碼：fatal UTF-8、**開頭的 BOM 留著**（`ignoreBOM: true`，與 `contained-backend.ts` 的整份解碼一致，
+ * 回報版本的 backend 也是這樣算）；解不開的（真的二進位檔）仍是空字串——那一格只剩 `modified_at` 的弱點，同上面 {@link versionOf} 所述。
+ */
 function contentText(content: unknown): string {
   if (typeof content === 'string') return content;
   if (Array.isArray(content) && content.every((line) => typeof line === 'string'))
     return content.join('\n');
+  if (content instanceof Uint8Array) {
+    try {
+      return new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(content);
+    } catch {
+      return '';
+    }
+  }
   return '';
 }
 

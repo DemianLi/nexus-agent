@@ -20,7 +20,8 @@ import { tmpdir } from 'node:os';
 import { join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { open } from 'node:fs/promises';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { foldTurn, serveClient } from './fixtures.js';
 import { HARNESS_HOME_ENV } from './harness-home.js';
@@ -37,6 +38,7 @@ const temporary: string[] = [];
 const servers: RunningServe[] = [];
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   for (const server of servers.splice(0)) await server.close().catch(() => undefined);
   for (const root of temporary.splice(0)) rmSync(root, { recursive: true, force: true });
 });
@@ -85,6 +87,69 @@ function tree(root: string): Record<string, { readonly bytes: string; readonly m
   return out;
 }
 
+/** 某個 thread 的會話紀錄（`<threadId>.jsonl`，在 home 底下哪一層不論）最後一筆是什麼事件；檔案不在、尾巴只寫了一半都回 `undefined`。 */
+function lastEventType(root: string, threadId: string): string | undefined {
+  const walk = (dir: string): string | undefined => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      const path = join(dir, entry.name);
+      if (entry.isDirectory()) {
+        const found = walk(path);
+        if (found !== undefined) return found;
+      } else if (entry.name === `${threadId}.jsonl`) {
+        const lastLine = readFileSync(path, 'utf8').trimEnd().split('\n').at(-1) ?? '';
+        try {
+          return (JSON.parse(lastLine) as { readonly type?: string }).type;
+        } catch {
+          return undefined;
+        }
+      }
+    }
+    return undefined;
+  };
+  return walk(root);
+}
+
+/**
+ * 等第一台把這一輪的尾巴寫完（[#1811](https://github.com/DemianLi/nexus-agent/issues/1811)）。
+ *
+ * 用戶端收到 `turn/end` 的時候，最後一批事件（`… model/end、context/measure、turn/end`）還在會話紀錄的寫入佇列裡，要再過一小會兒才落盤
+ * （本機約 15 ms，CI 的 Node 26 上偶爾更久）。這時候取「之前」的指紋，那一批會在第二台被拒的那幾毫秒裡落下去：位元組與 mtime
+ * 都變了，卻不是第二台寫的。所以先等到會話紀錄的最後一筆就是 `turn/end`：這是確定的條件，不是睡一段時間；等不到就逾時丟錯，不會靜靜放行。
+ */
+async function untilTurnEndIsOnDisk(root: string, threadId: string): Promise<void> {
+  const deadline = Date.now() + 5000;
+  while (lastEventType(root, threadId) !== 'turn/end') {
+    if (Date.now() > deadline) {
+      throw new Error(
+        `第一台的 ${threadId} 紀錄 5 秒內沒寫到 turn/end（最後一筆：${lastEventType(root, threadId)}）`,
+      );
+    }
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
+/**
+ * 模擬寫入佇列慢：把含 `turn/end` 的那一批的 `writeFile` 延後 `ms` 毫秒再真的寫。
+ * 產品裡這個延遲是排隊與 fsync 的時間，量不準也壓不住；這裡換成固定值，才能讓「沒等」確定地紅。
+ */
+async function delayTurnEndFlush(ms: number): Promise<void> {
+  const probe = join(mkdtempSync(join(tmpdir(), 'nexus-fh-')), 'probe');
+  temporary.push(join(probe, '..'));
+  writeFileSync(probe, '');
+  const handle = await open(probe);
+  const proto = Object.getPrototypeOf(handle) as {
+    writeFile: (this: unknown, data: unknown, ...rest: unknown[]) => Promise<void>;
+  };
+  await handle.close();
+  const original = proto.writeFile;
+  vi.spyOn(proto, 'writeFile').mockImplementation(async function (this: unknown, data, ...rest) {
+    if (typeof data === 'string' && data.includes('"type":"turn/end"')) {
+      await new Promise((resolve) => setTimeout(resolve, ms));
+    }
+    return original.call(this, data, ...rest);
+  });
+}
+
 /** 說一句話並把這一輪折完。 */
 async function say(server: RunningServe, threadId: string): Promise<void> {
   const client = await serveClient(server);
@@ -115,12 +180,31 @@ describe('同一個 home 起兩台 serve', () => {
     await client.threadPin('pinned');
     expect(existsSync(join(dir, THREAD_ORGANIZATION_FILE))).toBe(true);
     expect(existsSync(join(dir, PLUGIN_SNAPSHOT_FILE_NAME))).toBe(true);
+    // 取基線之前要等第一台寫完：用戶端看到 turn/end 的時候，紀錄的尾巴還沒落盤（見 untilTurnEndIsOnDisk）。
+    await untilTurnEndIsOnDisk(dir, 'pinned');
     const before = tree(dir);
 
     // 換一組 `--patch` 的話，沒擋住的第二台會把快照換成自己那一份（卡上失敗情境 3）；這裡不給 `--patch` 也一樣要擋。
     await expect(start(env)).rejects.toThrow(HomeInUseError);
 
     expect(tree(dir)).toEqual(before);
+  }, 60000);
+
+  it('寫入佇列慢的時候，取基線會等到 turn/end 落盤才放行（模擬 Node 26 上偶發的競態）', async () => {
+    await delayTurnEndFlush(80);
+    const { dir, env } = newHome();
+    const first = await start(env);
+    await say(first, 'pinned');
+    // 前提：用戶端已經折完這一輪，紀錄的尾巴卻還沒到——競態是真的存在，不是這個測試自己捏的。
+    expect(lastEventType(dir, 'pinned')).not.toBe('turn/end');
+
+    await untilTurnEndIsOnDisk(dir, 'pinned');
+
+    expect(lastEventType(dir, 'pinned')).toBe('turn/end');
+    // 之後不再有第一台自己的寫入：隔一段時間，指紋不變。
+    const settled = tree(dir);
+    await new Promise((resolve) => setTimeout(resolve, 150));
+    expect(tree(dir)).toEqual(settled);
   }, 60000);
 
   it('第二台被拒之前，連變更紀錄的遷移都沒做（鎖排在 prepareJournal 之前）', async () => {
