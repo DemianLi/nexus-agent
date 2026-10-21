@@ -27,8 +27,14 @@ function gen(id: number): Gen {
   return { id, closed, markClosed };
 }
 
-/** 一組可控的假連線：`failures` 是接下來要失敗幾次，`clock` 是可控時鐘。 */
-function harness(policy: Partial<ReconnectPolicy> = {}) {
+/**
+ * 一組可控的假連線：`failures` 是接下來要失敗幾次，`clock` 是可控時鐘。`start: 'failed'` 是第一次就連不上：監督者建構時
+ * 沒有第 0 代（`first` 照樣建，只是沒交出去）。
+ */
+function harness(
+  policy: Partial<ReconnectPolicy> = {},
+  start: 'connected' | 'failed' = 'connected',
+) {
   let clock = 0;
   let next = 1;
   const state = {
@@ -77,7 +83,7 @@ function harness(policy: Partial<ReconnectPolicy> = {}) {
     error: (message) => state.errors.push(message),
   };
   const first = gen(0);
-  const supervisor = new Supervisor(hooks, first);
+  const supervisor = new Supervisor(hooks, start === 'connected' ? first : undefined);
   return {
     state,
     first,
@@ -372,6 +378,75 @@ describe('關閉的期限（#1543，照 dsh GENERATION_CLOSE_TIMEOUT_MS）', () 
     await vi.advanceTimersByTimeAsync(100_000);
     expect(h.state.connects).toBe(0);
     expect(h.state.errors.filter((m) => m.includes('reconnect stopped'))).toEqual([]);
+  });
+});
+
+describe('第一次就連不上（建構時沒有第 0 代）', () => {
+  it('建構當下就照退避排第 1 次，連上了就是目前這一代，日誌說「retrying」不說「lost」', async () => {
+    const h = harness({}, 'failed');
+    expect(h.supervisor.current()).toBeUndefined();
+    expect(h.state.reports).toEqual([
+      'mcp-client(t): connection failed; retrying in 500ms (attempt 1/10)',
+    ]);
+    await vi.advanceTimersByTimeAsync(499);
+    expect(h.state.connects).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(h.state.connects).toBe(1);
+    expect(h.supervisor.current()?.id).toBe(1);
+    expect(h.supervisor.gaveUp).toBe(false);
+    expect(h.state.reports.at(-1)).toBe('mcp-client(t): reconnected (attempt 1/10)');
+  });
+
+  it('一直連不上：同一份預算，第 10 次之後放棄，不再排計時器', async () => {
+    const h = harness({}, 'failed');
+    h.state.failures = 100;
+    await vi.advanceTimersByTimeAsync(10 * 30_000);
+    expect(h.state.connects).toBe(10);
+    expect(h.supervisor.gaveUp).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('連上之後才掉線：照一般的掉線走，那一代會先關掉再重連', async () => {
+    const h = harness({}, 'failed');
+    await vi.advanceTimersByTimeAsync(500);
+    const adopted = h.supervisor.current();
+    expect(adopted?.id).toBe(1);
+    adopted?.down?.();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(h.state.closed).toEqual([1]);
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(h.supervisor.current()?.id).toBe(2);
+  });
+
+  it('還沒連上就 dispose：取消待跑的那一次，之後不再連', async () => {
+    const h = harness({}, 'failed');
+    await h.supervisor.dispose();
+    await vi.advanceTimersByTimeAsync(100_000);
+    expect(h.state.connects).toBe(0);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('第 1 次在途時 dispose：等它收斂，連上的那一代關掉、不採用', async () => {
+    const h = harness({}, 'failed');
+    let open!: () => void;
+    h.state.gate = new Promise<void>((resolve) => {
+      open = resolve;
+    });
+    await vi.advanceTimersByTimeAsync(500);
+    expect(h.state.connects).toBe(1);
+    const disposing = h.supervisor.dispose();
+    open();
+    await vi.advanceTimersByTimeAsync(0);
+    await disposing;
+    expect(h.supervisor.current()).toBeUndefined();
+    expect(h.state.closed).toEqual([1]);
+    expect(h.state.errors).toEqual([]);
+  });
+
+  it('reconnect.enabled: false：不排重連，直接標成放棄', () => {
+    const h = harness({ enabled: false }, 'failed');
+    expect(h.supervisor.gaveUp).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
   });
 });
 

@@ -18,11 +18,9 @@
  * `@langchain/mcp-adapters` 這個獨立套件。修訂隨本 PR 一併落地。
  */
 
-import { ToolMessage } from '@langchain/core/messages';
 import type { StructuredTool } from '@langchain/core/tools';
 import { MultiServerMCPClient } from '@langchain/mcp-adapters';
-import type { Connection } from '@langchain/mcp-adapters';
-import { CHANNEL_SERVICE, scrubbedParentEnv } from '@nexus/core';
+import { CHANNEL_SERVICE } from '@nexus/core';
 import type {
   AgentMiddleware,
   ApprovalChannel,
@@ -34,9 +32,17 @@ import { createMiddleware } from 'langchain';
 import { z } from 'zod';
 import { SERVER_NAME_PATTERN, publicToolName } from './names.js';
 import { mcpApprovalGate, mcpApprovalSchema, unknownExempt } from './approval.js';
-import { boundArtifacts } from './artifact-bound.js';
-import { projectNonText } from './project-content.js';
+import {
+  callOf,
+  clientOptions,
+  generationOf,
+  instructionsOf,
+  throwOnToolError,
+} from './connection.js';
+import type { Generation, RequestOptions, SdkClient, ToolCall } from './connection.js';
 import { ensureHub } from './hub.js';
+import { MCP_POOL_SERVICE } from './pool.js';
+import type { Acquired, McpConnectionPool } from './pool.js';
 import { Supervisor, reconnectSchema } from './supervisor.js';
 import type { ReconnectPolicy } from './supervisor.js';
 import type { McpResourceRequest, McpSource } from './hub.js';
@@ -47,6 +53,8 @@ export { reconnectSchema } from './supervisor.js';
 export { approvalReason, mcpApprovalSchema } from './approval.js';
 export type { McpApproval } from './approval.js';
 export type { ReconnectPolicy } from './supervisor.js';
+export { FIRST_CONNECT_WAIT_MS, MCP_POOL_SERVICE, McpConnectionPool } from './pool.js';
+export type { Acquired, McpConnectionPoolOptions, SharedConnection } from './pool.js';
 
 /** 帶出處標頭的 server 指引預設上限（UTF-8 位元組），照 dsh 的 `maxInstructionBytes`。 */
 export const DEFAULT_MAX_INSTRUCTION_BYTES = 32_768;
@@ -129,7 +137,8 @@ export const mcpConfigSchema = z.strictObject({
   /**
    * 連線掉了之後的自動重連（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)），欄位與預設照 dsh 的
    * `reconnect`：`enabled`（`true`）、`initialDelayMs`（500，每次連續失敗加倍）、`maxDelayMs`（30000，退避上限，也是穩定多久
-   * 之後失敗次數歸零）、`maxAttempts`（10）。**只管掛上之後才掉的線**；掛上那一刻就連不上的列不重連（見 `supervisor.ts` 檔頭偏離 5）。
+   * 之後失敗次數歸零）、`maxAttempts`（10）。掛上之後才掉的線照這份重連；掛上那一刻就連不上的列，serve（有連線池）照同一份在背景
+   * 重試，CLI 不重連（見 `supervisor.ts` 檔頭偏離 5）。
    */
   reconnect: reconnectSchema.default(() => reconnectSchema.parse({})),
   /**
@@ -137,8 +146,10 @@ export const mcpConfigSchema = z.strictObject({
    * dsh 的 client 宣告的 capabilities 是 `{}`（`packages/mcp/mcp-client/src/connection.ts:261`，`5badb15009`），沒有這個功能。
    *
    * `true`（預設）**不等於一定開**：只有這次組裝有人可以回答（`channel.kind === 'human'`，同 `ask_user_question`）才開，其餘照舊關著，
-   * 那次呼叫落成普通的工具錯誤。**組裝期決定、不留到呼叫時**——elicitation 是連線握手時就宣告給 server 的 client 能力，
-   * 呼叫時才決定做不到。寫 `false` 是明著關掉。
+   * 那次呼叫落成普通的工具錯誤。**連線建起來時決定、不留到呼叫時**——新協定把這個 client 能力帶在每次呼叫的 `_meta` 裡，但值是
+   * adapter 在 `getTools` 建工具時就定死的（`@langchain/mcp-adapters` 2.0.0 `dist/tools.js` 的 `createToolInvocation`），呼叫時改不了。
+   * serve 的連線池因此把實際的旗標放進鍵（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)），旗標不同的組裝不共用連線。
+   * 寫 `false` 是明著關掉。
    */
   elicitation: z.boolean().default(true),
   /**
@@ -174,7 +185,9 @@ export type McpPluginOptions = z.input<typeof mcpConfigSchema>;
  * 蓋不到 dsh 的三種。
  *
  * **偏離登記（掛上那一刻就連不上的列）**：dsh 連不上之後在背景重連、連上就把工具補上。我們一次組裝之內工具就定了
- * （deepagents 建好就不可變，`packages/nexus-core/src/load.ts` 檔頭），補不了工具，所以這一種不重連；serve 下一條對話重新組裝時會再連一次。
+ * （deepagents 建好就不可變，`packages/nexus-core/src/load.ts` 檔頭），補不了工具。serve 有連線池（[`pool.ts`](./pool.ts)，
+ * [#1677](https://github.com/DemianLi/nexus-agent/issues/1677)），照 dsh 在背景重試，連上之後組的對話有工具，之前組好的沒有；CLI 一次組裝
+ * 就是整個行程，不重連。
  *
  * **掛上之後才掉的線會自動重連**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)），政策照 dsh，實作與偏離見
  * [`supervisor.ts`](./supervisor.ts) 檔頭：已註冊的工具物件換不掉，所以註冊的物件把呼叫委派給目前這一代連線。
@@ -193,27 +206,13 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
     // 有人可以回答才宣告 elicitation 能力；沒人提供 channel 就是沒有答題者（同 ask-user，#669）。
     const channel: ApprovalChannel | undefined = registry.services.get(CHANNEL_SERVICE);
     const elicitation = config.elicitation && channel?.kind === 'human';
-    const client = new MultiServerMCPClient({
-      mcpServers: { [serverName]: toAdapterConnection(config, elicitation) },
-      // 名字由 `publicToolName` 一個地方說了算，所以 adapter 這邊的前綴全部關掉。
-      // 開著的話會有兩份拼名字的邏輯，而其中一份不做正規化。
-      prefixToolNameWithServerName: false,
-      additionalToolNamePrefix: '',
-      // 兩格都拋，失敗才全部走到下面同一個 `catch`，收住還是拋由 `failOnStartupError` 一個地方決定。
-      throwOnLoadError: true,
-      onConnectionError: 'throw',
-      // 圖片、音訊這些非文字塊換成文字說明（#642）：模型那一側的工具訊息只收文字。換在工具本體裡，
-      // 所以 state、日誌、還原、畫面看到的都是換過的那一份。
-      // 同一個鉤子裡也把超過上限的 artifact 換成占位（#1320，`artifact-bound.ts`）：內嵌資源與 structuredContent 否則整份進日誌。
-      afterToolCall: ({ result: [content, artifacts] }) => {
-        const projected = projectNonText(content);
-        const bounded = boundArtifacts(artifacts);
-        return projected === undefined && bounded === undefined
-          ? undefined
-          : { result: [projected ?? content, bounded ?? artifacts] };
-      },
-    });
-
+    // 宿主給了連線池（serve，#1677）就向池取用，一份設定整台一份連線；沒給（CLI）照舊這次組裝自己連。
+    const pool: McpConnectionPool | undefined = registry.services.get(MCP_POOL_SERVICE);
+    if (pool !== undefined) {
+      await applyShared(registry, config, await pool.acquire(config, elicitation));
+      return;
+    }
+    const client = new MultiServerMCPClient(clientOptions(config, elicitation));
     const label = `mcp-client(${serverName})`;
     const registered: (() => void)[] = [];
     let supervisor: Supervisor<Generation> | undefined;
@@ -339,6 +338,97 @@ export const mcpPlugin: NexusPlugin<McpConfig> = {
 export default mcpPlugin;
 
 /**
+ * 有池時的 `apply`（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）。向池取來的那一份連線**不屬於這次組裝**：這裡
+ * 只登記、只撤這份註冊表的東西，收住或拋都不關連線，`onDispose` 也只撤登記。
+ *
+ * **一次組裝從頭到尾綁取用當下的那個監督者**：委派、放棄後隱藏、資源三處讀的都是它。池替已放棄的那一份重開之後，開著的 thread
+ * 照舊停在舊的監督者上（工具隱藏、呼叫說已放棄），新 thread 拿到新的（Q5 (b)）。三處讀不同的來源的話，工具會藏起來卻叫得動。
+ *
+ * **斷線空窗裡照最近一代的工具清單登記**（照 dsh，見 `pool.ts` 檔頭）：委派讀目前這一代，空窗期呼叫回 `server is disconnected`，
+ * 重連之後叫得動。
+ *
+ * 失敗的分法同自己連的那條：一代都還沒連上過（第一次就連不上、或還在連而等到了期限）、註冊不上，都是撤掉這份註冊表已經登記的、
+ * 交出警告，寫了 `failOnStartupError: true` 就拋。
+ */
+async function applyShared(
+  registry: PluginRegistry,
+  config: McpConfig,
+  { shared, error: connectError }: Acquired,
+): Promise<void> {
+  const { serverName } = config;
+  const { label, supervisor } = shared;
+  const registered: (() => void)[] = [];
+  let instructions = '';
+  try {
+    const listing = shared.listed();
+    if (listing === undefined) {
+      throw connectError ?? new Error(`${label}: server is disconnected`);
+    }
+    const names: string[] = [];
+    const rawNameOf = new Map<string, string>();
+    for (const listed of listing.tools) {
+      const rawName = listed.name;
+      // 池裡的物件每份組裝共用，不改；改名與委派都做在這份組裝自己的那一個上。
+      const tool = borrowed(listed);
+      tool.name = publicToolName(serverName, rawName);
+      delegateTo(tool, rawName, label, () => supervisor);
+      names.push(tool.name);
+      rawNameOf.set(tool.name, rawName);
+      registered.push(registry.tools.register(tool));
+    }
+    // 閘門一份註冊表一顆，同自己連的那條（#1622）；共用的只有連線。
+    const gate = mcpApprovalGate(serverName, config.approval, rawNameOf);
+    if (gate !== undefined) registered.push(registry.approvals.gate(gate));
+    const unknown = unknownExempt(config.approval, rawNameOf.values());
+    if (unknown.length > 0) {
+      registry.logger.warn(
+        `MCP 伺服器 "${serverName}" 的 approval.exempt 有 tools/list 沒列出的名字：${unknown.join('、')}` +
+          `（要寫 server 自己公告的名字；沒對到的照 default 被問）`,
+      );
+    }
+    registered.push(registry.middleware.use(hideTools(serverName, names, () => supervisor.gaveUp)));
+    instructions = listing.instructions;
+  } catch (error) {
+    for (const undo of registered.reverse()) undo();
+    if (config.failOnStartupError) throw error;
+    const reason = error instanceof Error ? error.message : String(error);
+    registry.logger.warn(
+      `MCP 伺服器 "${serverName}" 連不上、列不出工具或工具註冊不上，這一次沒有它的工具` +
+        `（要讓這一列失敗就寫 failOnStartupError: true）：${reason}`,
+    );
+  }
+  // 資源的登記不看連線成敗（照 dsh，同自己連的那條）；讀的是同一個監督者目前這一代，背景連上之後這次組裝的資源也叫得動。
+  const unregisterSource = ensureHub(registry).add(
+    resourceSource(serverName, instructions, config.toolCallTimeoutMs, () => {
+      const generation = supervisor.current();
+      return generation?.sdk === undefined
+        ? undefined
+        : {
+            sdk: generation.sdk,
+            lost: () => {
+              supervisor.down(generation);
+            },
+          };
+    }),
+  );
+  registry.lifecycle.onDispose(unregisterSource);
+}
+
+/**
+ * 這份組裝自己的工具物件：原型照池裡那一個、自有欄位**淺拷貝**一份。之後只改這一份的 `name` 與 `func`，池裡的不動——直接改的話，
+ * 第二份組裝會再包一層委派、名字也已經被第一份改過。
+ *
+ * **淺拷貝**：欄位裡的物件（`schema`、`metadata`、`tags`、`lc_kwargs`、`defaultConfig`）每份組裝與池裡那一個共用同一份。今天沒有
+ * 人就地改它們（只換 `name` 與 `func` 這兩格本身）；要改的話先換成自己的一份，不要就地改。
+ */
+function borrowed(tool: StructuredTool): StructuredTool {
+  return Object.assign(
+    Object.create(Object.getPrototypeOf(tool) as object) as StructuredTool,
+    tool,
+  );
+}
+
+/**
  * 建一個條目。**薄薄一層**：設定不在這裡驗，驗在載入的時候——那時候才有 id 可以指名。
  *
  * @param options - 設定，形狀見 {@link mcpConfigSchema}。
@@ -346,77 +436,6 @@ export default mcpPlugin;
  */
 export function createMcpPlugin(options: McpPluginOptions): PluginEntry {
   return { plugin: mcpPlugin, config: options };
-}
-
-/** SDK client 上，這個檔會用到的那幾個方法；結構型別，不直接依賴 `@modelcontextprotocol/client`。 */
-interface SdkClient {
-  onclose?: () => void;
-  getInstructions(): string | undefined;
-  listResources(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
-  listResourceTemplates(params?: { cursor: string }, options?: RequestOptions): Promise<unknown>;
-  readResource(params: { uri: string }, options?: RequestOptions): Promise<unknown>;
-}
-
-interface RequestOptions {
-  signal?: AbortSignal;
-  timeout?: number;
-}
-
-/**
- * 帶出處標頭的 server 指引，照 dsh（`mcp-client/src/connection.ts:318-322`）：空白就沒有；有就是
- * `### MCP server: <name>\n\n<內容>`，**位元組數**（不是字數）超過上限就拋。大括號原樣。
- */
-function instructionsOf(raw: string | undefined, config: McpConfig): string {
-  const text = raw?.trimEnd() ?? '';
-  if (text.trim() === '') return '';
-  const attributed = `### MCP server: ${config.serverName}\n\n${text}`;
-  if (Buffer.byteLength(attributed) > config.maxInstructionBytes) {
-    throw new Error(
-      `server instructions exceed maxInstructionBytes (${String(config.maxInstructionBytes)})`,
-    );
-  }
-  return attributed;
-}
-
-/** 一代連線：這一代每個工具的呼叫（以 raw name 為鍵）與它的 SDK client。 */
-interface Generation {
-  readonly calls: ReadonlyMap<string, ToolCall>;
-  readonly sdk: SdkClient | undefined;
-  /** transport 真的關掉了才落定（stdio 是子行程的 close 事件）；沒有 SDK client 的一代沒有東西可等，立刻落定。 */
-  readonly closed: Promise<void>;
-  /** 監督者掛上的「這一代斷了」通報。 */
-  onDown?: () => void;
-}
-
-/**
- * 建一代，**建的當下**就掛 `onclose`：沒被採用的那一代（dispose 期間才連上的）也要等得到它關掉。先記「關掉了」，再通報斷線。
- */
-function generationOf(
-  calls: ReadonlyMap<string, ToolCall>,
-  sdk: SdkClient | undefined,
-): Generation {
-  if (sdk === undefined) return { calls, sdk, closed: Promise.resolve() };
-  let markClosed!: () => void;
-  const generation: Generation = {
-    calls,
-    sdk,
-    closed: new Promise<void>((resolve) => {
-      markClosed = resolve;
-    }),
-  };
-  sdk.onclose = () => {
-    markClosed();
-    generation.onDown?.();
-  };
-  return generation;
-}
-
-type ToolCall = (...args: unknown[]) => Promise<unknown>;
-
-/** 一個工具目前的呼叫（已經過 {@link throwOnToolError} 的那一層）。 */
-function callOf(tool: StructuredTool): ToolCall {
-  const func = (tool as unknown as { func: ToolCall }).func;
-  return (...args) => func.call(tool, ...args);
 }
 
 /**
@@ -522,64 +541,4 @@ function resourceSource(
 
 function cursorParams(cursor: string | undefined): { cursor: string } | undefined {
   return cursor === undefined ? undefined : { cursor };
-}
-
-/**
- * 把 server 回的 `isError` 結果改成**拋**，照 dsh（`throw new Error(text)`）。
- *
- * adapter 2.0.0 在有 `tool_call_id` 時不拋，回一則 `status: 'error'` 的 `ToolMessage`，文字是 server 給的原文、
- * 沒有前綴；1.1.4 是拋 `ToolException`。回訊息的話不經過圍堵（`containment.ts`）那條「拋錯 → `Error: 工具 … 執行失敗：`」
- * 的路，而 Chat Completions 的轉換器只送 content，模型就只看到一段裸文字，分不出這是失敗。拋回去，
- * 失敗的格式（前綴、`status: 'error'`、日誌事件）就跟其他工具共用同一個出口。
- */
-function throwOnToolError(tool: StructuredTool): void {
-  const inner = (tool as unknown as { func: (...args: unknown[]) => Promise<unknown> }).func;
-  (tool as unknown as { func: typeof inner }).func = async (...args) => {
-    const result = await inner.call(tool, ...args);
-    const message = Array.isArray(result) ? result[0] : result;
-    if (ToolMessage.isInstance(message) && message.status === 'error') {
-      throw new Error(textOf(message.content));
-    }
-    return result;
-  };
-}
-
-/** 一則訊息 content 裡的文字塊，換行接起來。 */
-function textOf(content: ToolMessage['content']): string {
-  if (typeof content === 'string') return content;
-  return content
-    .map((block) => (block.type === 'text' && typeof block.text === 'string' ? block.text : ''))
-    .filter((text) => text !== '')
-    .join('\n');
-}
-
-/** 把我們的連線設定翻成 adapter 收的形狀。 */
-function toAdapterConnection(config: McpConfig, elicitation: boolean): Connection {
-  const timeout = config.toolCallTimeoutMs;
-  const connection = config.connection;
-  if (connection.transport === 'stdio') {
-    return {
-      transport: 'stdio',
-      command: connection.command,
-      // adapter 的 stdio schema 把 `args` 列為必填，沒有參數的 server 也要給一個空陣列。
-      args: [...(connection.args ?? [])],
-      // **一律傳整份**，照 dsh 的 `buildChildEnv`（`packages/mcp/mcp-client/src/transport.ts:22`，`477b4f4`）：清洗過的
-      // 父環境在前、設定的在後。不傳或只傳設定那幾格的話，底由 adapter（只補 `PATH`）與 SDK
-      // （`getDefaultEnvironment()`，六個名字）決定，語系與代理都到不了子行程。
-      env: { ...scrubbedParentEnv(), ...connection.env },
-      ...(connection.cwd !== undefined && { cwd: connection.cwd }),
-      // 2.0.0 的現代協定 server 要問使用者（elicitation）時走 LangGraph interrupt，等一次 resume。**有人可以回答才開**
-      // （{@link McpConfig.elicitation}）：沒人的話開著會讓那一輪停在沒人接的 interrupt 上；關掉之後 adapter 把這種呼叫當工具失敗，
-      // 走一般的錯誤出口。舊協定 server 要問的話需要 `onElicitation`，我們不給，所以它不會宣告這個能力。
-      elicitation,
-      defaultToolTimeout: timeout,
-    };
-  }
-  return {
-    transport: 'http',
-    url: connection.url,
-    ...(connection.headers !== undefined && { headers: { ...connection.headers } }),
-    elicitation,
-    defaultToolTimeout: timeout,
-  };
 }

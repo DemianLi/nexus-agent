@@ -111,6 +111,15 @@ async function serveWithLog(env: NodeJS.ProcessEnv) {
   return { lines, raw, openThread };
 }
 
+/** 等伺服器日誌出現某一行；等不到就把整份日誌放進錯誤。 */
+async function until(predicate: () => boolean, lines: readonly string[]): Promise<void> {
+  const start = Date.now();
+  while (!predicate()) {
+    if (Date.now() - start > 20_000) throw new Error(`等太久了：${lines.join('\n')}`);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
 const WARNED =
   /^ {2}mcp-late（@nexus\/plugin-mcp）：MCP 伺服器 "late" 連不上、列不出工具或工具註冊不上/u;
 
@@ -136,12 +145,16 @@ describe('MCP 連不上、沒寫 failOnStartupError', () => {
   }, 60_000);
 
   /**
-   * 卡上的驗收：serve 起得來、啟動時那段警告指名它；**伺服器恢復之後開的下一條對話連得上**。每條對話組裝時都重連，
-   * 連不上的那一條在伺服器日誌記一行，連上了就不記——那一行就是這條對話有沒有那台工具的判準（沒有警告＝工具註冊好了，
-   * CLI 那條量過工具清單）。
+   * 卡上的驗收：serve 起得來、啟動時那段警告指名它；**伺服器恢復、背景重試連上之後開的下一條對話連得上**。serve 的連線在池裡
+   * （[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)）：第一次就連不上的那一份照 dsh 在背景退避重試，不再是下一條
+   * 對話組裝時重連。還沒連上時組的對話在伺服器日誌記一行，連上了之後組的不記——那一行就是這條對話有沒有那台工具的判準（沒有
+   * 警告＝工具註冊好了，CLI 那條量過工具清單）。退避調小，恢復之後不必等出廠的 500 ms 起跳。
    */
-  it('serve 起得來、啟動時警告；伺服器恢復之後開的下一條對話連得上', async () => {
-    const { env, recover } = homeWithLateServer();
+  it('serve 起得來、啟動時警告；伺服器恢復、背景重試連上之後開的下一條對話連得上', async () => {
+    const { env, recover } = homeWithLateServer(
+      // 預算放大：機器慢的話，10 次（約 2 秒）可能在恢復之前就放棄。
+      '        reconnect:\n          initialDelayMs: 100\n          maxDelayMs: 200\n          maxAttempts: 1000',
+    );
     const { lines, raw, openThread } = await serveWithLog(env);
     expect(lines.filter((line) => WARNED.test(line))).toHaveLength(1);
 
@@ -151,17 +164,30 @@ describe('MCP 連不上、沒寫 failOnStartupError', () => {
     expect(levelsOf(raw, '[組裝] thread "a" 警告：')).toEqual(['W']);
 
     recover();
+    await until(
+      () =>
+        lines.some((line) => /^mcp-client\(late\): reconnected \(attempt \d+\/1000\)$/u.test(line)),
+      lines,
+    );
     await openThread('b');
     expect(lines.filter((line) => line.startsWith('[組裝] thread "b"'))).toEqual([]);
+    // #1677 驗收 H：背景連上的那一份就是 b 用的那一份，不是 b 組裝時又連一次。
+    const wrapper = join(env[HARNESS_HOME_ENV] ?? '', 'late-server.mjs');
+    const alive = execFileSync('pgrep', ['-f', '--', wrapper])
+      .toString()
+      .split('\n')
+      .filter(Boolean);
+    expect(alive).toHaveLength(1);
   }, 60_000);
 });
 
 describe('MCP 掛上之後掉線', () => {
   /**
-   * **執行期的話走產品路徑到伺服器日誌**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)）：外掛在 `apply` 裡綁好
-   * `registry.logger`，組裝之後掉線重連的進度由 serve 接 `exporter` 記成 `[外掛] thread "…"：…`，指名是哪顆外掛。
+   * **執行期的話走產品路徑到伺服器日誌**（[#1099](https://github.com/DemianLi/nexus-agent/issues/1099)）。serve 的連線在池裡、
+   * 整台一份（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)），不屬於哪一條對話：掉線重連的進度記在 `mcp` 這個
+   * logger 下，指名的是哪台 server（`mcp-client(<serverName>)`），不再是哪一條對話。
    */
-  it('殺掉 MCP 子行程：伺服器日誌記下掉線與重連，指名外掛與那條對話', async () => {
+  it('殺掉 MCP 子行程：伺服器日誌記下掉線與重連，指名那台 server', async () => {
     const { env, recover } = homeWithLateServer(
       '        reconnect:\n          initialDelayMs: 100\n          maxDelayMs: 200\n          maxAttempts: 5',
     );
@@ -184,18 +210,15 @@ describe('MCP 掛上之後掉線', () => {
     expect(first.length).toBeGreaterThan(0);
     for (const pid of first) signalPid(pid, 'SIGKILL');
     const heard = (needle: string) =>
-      lines.some(
-        (line) =>
-          line.startsWith('[外掛] thread "a"：mcp-late（@nexus/plugin-mcp）：') &&
-          line.includes(needle),
-      );
-    const start = Date.now();
-    while (!(heard('connection lost; reconnecting') && heard('reconnected (attempt 1/5)'))) {
-      if (Date.now() - start > 20_000) throw new Error(`等太久了：${lines.join('\n')}`);
-      await new Promise((resolve) => setTimeout(resolve, 50));
-    }
+      lines.some((line) => line.startsWith('mcp-client(late): ') && line.includes(needle));
+    await until(
+      () => heard('connection lost; reconnecting') && heard('reconnected (attempt 1/5)'),
+      lines,
+    );
+    // 不再掛在哪一條對話底下。
+    expect(lines.filter((line) => line.startsWith('[外掛] thread "a"'))).toEqual([]);
     // 等級：掉線重連的進度是 warn，門檻調到 warn 的主機看得到（#1534 驗收 1）。
-    const levels = levelsOf(raw, '[外掛] thread "a"：');
+    const levels = levelsOf(raw, 'mcp-client(late): ');
     expect(levels.length).toBeGreaterThan(0);
     expect(new Set(levels)).toEqual(new Set(['W']));
   }, 60_000);

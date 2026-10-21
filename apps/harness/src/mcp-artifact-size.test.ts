@@ -7,9 +7,9 @@
  */
 
 import { fileURLToPath } from 'node:url';
-import { SessionRegistry } from '@nexus/core';
+import { createHostServicesPlugin, SessionRegistry } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
-import { createMcpPlugin } from '@nexus/plugin-mcp';
+import { createMcpPlugin, MCP_POOL_SERVICE, McpConnectionPool } from '@nexus/plugin-mcp';
 import { createWireClient } from '@nexus/wire';
 import { describe, expect, it } from 'vitest';
 import { createNexusAgent } from './agent-factory.js';
@@ -35,9 +35,12 @@ interface Measured {
   readonly history: number;
   /** 串流與歷史端點中是否出現過填充字元（原始資料漏上線的徵兆）。 */
   readonly leaked: boolean;
+  /** 會話日誌裡那則工具訊息的 content 與 artifact，序列化（#1677 驗收 K 拿來逐位元組比）。 */
+  readonly payload: string;
 }
 
-async function measure(tool: string, kb: number): Promise<Measured> {
+/** @param pool - 給了就經宿主服務交給 MCP 那一列（serve 的形狀，#1677）；省略是每列自己連（CLI 的形狀）。 */
+async function measure(tool: string, kb: number, pool?: McpConnectionPool): Promise<Measured> {
   const model = new ScriptedChatModel({
     turns: [
       { content: '', toolCalls: [{ name: `mcp__srv__${tool}`, args: { kb } }] },
@@ -48,6 +51,7 @@ async function measure(tool: string, kb: number): Promise<Measured> {
     model,
     checkpointer: new PrunedMemorySaver(),
     plugins: [
+      ...(pool === undefined ? [] : [createHostServicesPlugin({ [MCP_POOL_SERVICE]: pool })]),
       createMcpPlugin({
         serverName: 'srv',
         // 量的不是核准：這台的工具都不問（#1622 起沒寫 approval 就整台都問）。
@@ -105,7 +109,7 @@ async function measure(tool: string, kb: number): Promise<Measured> {
     const result = log.find((event) => event.type === 'tool/result');
     const message =
       result?.type === 'tool/result'
-        ? (result.data.message?.data as { artifact?: unknown } | undefined)
+        ? (result.data.message?.data as { artifact?: unknown; content?: unknown } | undefined)
         : undefined;
     return {
       logResult: JSON.stringify(result).length,
@@ -113,6 +117,7 @@ async function measure(tool: string, kb: number): Promise<Measured> {
       stream: frames.reduce((sum, frame) => sum + frame.length, 0),
       history: history.length,
       leaked: [...frames, history].some((text) => text.includes('AAAAAAAAAAAAAAAA')),
+      payload: JSON.stringify({ content: message?.content, artifact: message?.artifact }),
     };
   } finally {
     void handler.close();
@@ -149,4 +154,30 @@ describe('MCP 的 artifact 到會話日誌與瀏覽器各多大（#1320）', () 
     expect(m.logResult).toBeLessThan(16 * 1024);
     expect(m.leaked).toBe(false);
   }, 60_000);
+});
+
+describe('走宿主的連線池（#1677 驗收 K）', () => {
+  /**
+   * 池建 client 時沿用 plugin 自己連的那一份 adapter 選項（`connection.ts` 的 `clientOptions`），所以非文字塊換說明（#642）與
+   * artifact 上限（#1320）兩邊一樣：同一支工具走池與不走池，日誌裡的工具訊息逐位元組相同。
+   */
+  it.each([
+    ['embed_blob', 3072],
+    ['structured', 1024],
+    ['big_image', 3072],
+  ])(
+    '%s：走池與不走池的工具結果逐位元組相同',
+    async (tool, kb) => {
+      const direct = await measure(tool, kb);
+      const pool = new McpConnectionPool({ log: () => undefined });
+      try {
+        const pooled = await measure(tool, kb, pool);
+        expect(pooled.payload).toBe(direct.payload);
+        expect(pooled.payload.length).toBeGreaterThan(0);
+      } finally {
+        await pool.close();
+      }
+    },
+    60_000,
+  );
 });

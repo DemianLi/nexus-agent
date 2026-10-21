@@ -13,8 +13,8 @@
  * [#455](https://github.com/DemianLi/nexus-agent/issues/455)）。
  *
  * **一個 thread 一個 agent，關掉 server 時一起清。** `createNexusAgent` 回的
- * `dispose` 在這裡才真的有意義——MCP plugin 底下是 stdio 子行程，而這是一個長命的
- * 行程，漏了不會有任何錯誤訊息。啟動時另外先組一份、驗完就收（#749），清單上哪一列壞了
+ * `dispose` 在這裡才真的有意義——這是一個長命的行程，漏了不會有任何錯誤訊息。**MCP 的連線不在這裡面**：
+ * 整台 serve 一份連線池，一份設定一個 stdio 子行程，所有 thread 共用，關掉 server 時才收（#1677）。啟動時另外先組一份、驗完就收（#749），清單上哪一列壞了
  * 在綁 port 之前就講，不等第一條 thread；那一次掉了的列，之後每條 thread 都直接算沒掛（#751）。
  *
  * 假模型下的限制與 CLI 的 REPL 一樣：`CLI_SCRIPT` 只有四輪，問到後面
@@ -75,6 +75,7 @@ import {
 } from '@nexus/core';
 import type { StoredSessionHeader } from '@nexus/core';
 import { assertSameCwd } from './resume-guards.js';
+import { McpConnectionPool } from '@nexus/plugin-mcp';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
 import { processLaunchEnv } from './launch-env.js';
@@ -569,12 +570,24 @@ async function startUnderHomeLock(
       serverLog.serve.warn(message);
     },
   );
+  // **MCP 連線池整台一份**（#1677）：試組與每條 thread 都從它取，一份設定一份連線。起不來與關掉時都在這裡收，排在 server 自己的
+  // 收尾（thread 都撤了）之後、卸載根之前（池最後那句「關閉確認不到」要印得出來）。
+  const mcpPool = new McpConnectionPool({
+    log: (message) => {
+      serverLog.logger('mcp').warn(message);
+    },
+    // dsh 是 error 級的那幾句（關閉確認不到）：伺服器日誌有 error，照 dsh 接過去（`supervisor.ts` 檔頭偏離 6）。
+    error: (message) => {
+      serverLog.logger('mcp').error(message);
+    },
+  });
   // **根（上面 `runServe` 建的）起不來與關掉時都在這裡卸載**（#1401），排在 server 自己的收尾之後、還原代理之前。
   let running: RunningServe;
   try {
-    running = await startServer(options, invocation, liveLaunch, serverLog, root);
+    running = await startServer(options, invocation, liveLaunch, serverLog, root, mcpPool);
   } catch (error) {
     serverLog.mountDefault();
+    await mcpPool.close();
     await root.dispose().catch(() => {});
     await disposeProxy();
     throw error;
@@ -584,7 +597,11 @@ async function startUnderHomeLock(
     close: async (options) => {
       try {
         try {
-          await running.close(options);
+          try {
+            await running.close(options);
+          } finally {
+            await mcpPool.close();
+          }
         } finally {
           await root.dispose();
         }
@@ -602,6 +619,7 @@ async function startServer(
   liveLaunch: LiveLaunch | undefined,
   serverLogOut: ServerLog,
   root: CordisRoot,
+  mcpPool: McpConnectionPool,
 ): Promise<RunningServe> {
   // `goalDriver` 那個閉包的參數也叫 `log`（它是讀日誌的 getter），所以伺服器日誌的三支在這裡另取名字，不讓兩個 `log` 在同一段裡打架。
   // **每一行伺服器日誌都帶等級**（#1534）：`log` 是狀態披露（info），`warn` 是要人處理的，`fail` 是起不來與收不了的（error）。
@@ -781,15 +799,18 @@ async function startServer(
     ...(options.cwd !== undefined && { cwd: options.cwd }),
   });
   const trial = await assembly
-    .create({
-      ...invocation,
-      liveModel,
-      ...(requestGate !== undefined && { requestGate }),
-      ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
-      threadTitle,
-      threadTitleLlm,
-      optionalEntries,
-    })
+    .create(
+      {
+        ...invocation,
+        liveModel,
+        ...(requestGate !== undefined && { requestGate }),
+        ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
+        threadTitle,
+        threadTitleLlm,
+        optionalEntries,
+      },
+      { session: { mcpPool } },
+    )
     .catch(async (error: unknown) => {
       if (!(error instanceof AssemblyDropError)) throw error;
       const startupError = startupErrorFrom(loaded, error, audit);
@@ -1222,6 +1243,7 @@ async function startServer(
             // 不變量違規走伺服器日誌的 error 等級（#1534）：logger 名 `invariant`，文字就是 runner 預設 `console.error` 印的那一句。
             session: {
               tokenAnchorBook,
+              mcpPool,
               onInvariantViolation: (error) => {
                 invariantLogger.error(error.message);
               },
@@ -1253,7 +1275,7 @@ async function startServer(
       for (const drop of assemblyDropsOf(threadList.loaded, built.dropped)) {
         warn(`[組裝] thread "${threadId}" 這一條沒掛上：${describeDrop(drop)}`);
       }
-      // 外掛交出的警告同理逐條記（例如 MCP 連不上）：它每條對話都重連一次，這一條連不上不代表上一條也沒連上。
+      // 外掛交出的警告同理逐條記（例如 MCP 連不上）：連線池在背景重試，還沒連上的期間每條組裝都記一行，連上之後組的就不記。
       for (const line of describeWarnings(threadList.loaded, built.warnings)) {
         warn(`[組裝] thread "${threadId}" 警告：${line}`);
       }
