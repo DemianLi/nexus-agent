@@ -68,6 +68,8 @@ export async function startScriptedServe(
     readonly log?: (line: string) => void;
     /** 記憶體量具讀外界的縫，換成假讀數（`RunServeOptions.memoryGaugeDeps`）；省略即真的。 */
     readonly memoryGaugeDeps?: MemoryGaugeDeps;
+    /** 測試接縫（`RunServeOptions.workspaceRootOf`）：把每條 thread 的可寫根固定成這個函式回的值（不配私有根）。 */
+    readonly workspaceRootOf?: (threadId: string) => string | undefined;
   } = {},
 ): Promise<ScriptedServe> {
   const dir = await mkdtemp(join(tmpdir(), 'nexus-scripted-serve-'));
@@ -85,6 +87,7 @@ export async function startScriptedServe(
     log: options.log ?? (() => undefined),
     env: {},
     ...(options.memoryGaugeDeps === undefined ? {} : { memoryGaugeDeps: options.memoryGaugeDeps }),
+    ...(options.workspaceRootOf === undefined ? {} : { workspaceRootOf: options.workspaceRootOf }),
   })) as RunningServe;
   return {
     running,

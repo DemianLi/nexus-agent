@@ -275,7 +275,7 @@ describe('B：出貨清單上的 submit-record 經樹進來，位置與名字不
     });
   }, 60000);
 
-  it('樹上的 fs 查找服務：歸屬是 fs 那一列、契約 2.0.0（#1469 加 hasWorkspace、#1491 加行程級 workspaceRoot、#1774 改逐條 thread 後跳 major）；tools 服務 1.3.0（#1469 加 onResult；gate 是 1.2.0 起）', async () => {
+  it('樹上的 fs 查找服務：歸屬是 fs 那一列、契約 2.1.0（#1469 加 hasWorkspace、#1491 加行程級 workspaceRoot、#1774 改逐條 thread 後跳 major、#1775 加 sharedWorkspacePrefix）；tools 服務 1.3.0（#1469 加 onResult；gate 是 1.2.0 起）', async () => {
     const { env } = home();
     const root = newRoot();
     await loadDefaultPlugins({ env, warn: warnNothing }, { tree: root.tree });
@@ -283,7 +283,7 @@ describe('B：出貨清單上的 submit-record 經樹進來，位置與名字不
     const fs = tree.get('fs') as
       (FsLookupService & { provider?: string; contractVersion?: string }) | undefined;
     expect(fs?.provider).toBe('fs');
-    expect(fs?.contractVersion).toBe('2.0.0');
+    expect(fs?.contractVersion).toBe('2.1.0');
     // 還沒有任何一條 thread 登記：沒接上。
     expect(fs?.forCall({ configurable: { thread_id: 'x', checkpoint_ns: 'tools:c' } })).toEqual({
       kind: 'not-attached',

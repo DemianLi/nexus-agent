@@ -46,7 +46,6 @@ import {
   resolveInvariantLogPath,
   assertLaunchPathsOutsideWorkspace,
   resolveSessionLogDir,
-  launchWorkspaceRootOf,
   resolveWorkspaceRoot,
   SESSION_LOG_OFF_DISCLOSURE,
   describeDelegationNarrowing,
@@ -75,7 +74,7 @@ import {
   SessionNotFoundError,
 } from '@nexus/core';
 import type { StoredSessionHeader } from '@nexus/core';
-import { assertSameCwd, assertSameWorkspaceRoot } from './resume-guards.js';
+import { assertSameCwd } from './resume-guards.js';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
 import { processLaunchEnv } from './launch-env.js';
@@ -94,6 +93,13 @@ import { installFailLoud } from './fail-loud.js';
 import type { FailLoudProcess } from './fail-loud.js';
 import { createProcessShutdown } from './process-shutdown.js';
 import { AttachmentStore, attachmentsRootOf } from './attachment-store.js';
+import {
+  assertThreadRootsBaseSeparate,
+  createFixedThreadPlacer,
+  createThreadPlacer,
+  resolveThreadRootsBase,
+  SHARED_WORKSPACE_PREFIX,
+} from './thread-roots.js';
 import { HARNESS_HOME_ENV, resolveHarnessHome } from './harness-home.js';
 import { acquireHomeLock } from './home-lock.js';
 import type { TryLock } from './kernel-file-lock.js';
@@ -344,8 +350,8 @@ export interface RunServeOptions {
   readonly memoryGaugeDeps?: MemoryGaugeDeps;
   /**
    * 「thread → 可寫根」（{@link WorkspaceRootOf}，#1774），只給測試用：A 回 X、B 回 Y，才量得出每一格都跟著 thread 走而不是行程級的同一個根。
-   * 產品路徑不設，用 `launchWorkspaceRootOf`（每條 thread 都是 `--workspace` 解析出來的那一個根）。**有沒有圍堵仍由 `--workspace` 決定**
-   * （行程級），這一支只回根的值。
+   * 產品路徑不設，用 `thread-roots.ts` 的 `createThreadPlacer`（#1775：新 thread 配私有根，`--workspace` 唯讀共用）。給了這一支就換成
+   * `createFixedThreadPlacer`：沒有私有根、沒有 `/shared`，續接守衛逐字比。**有沒有圍堵仍由 `--workspace` 決定**（行程級），這一支只回根的值。
    */
   readonly workspaceRootOf?: WorkspaceRootOf;
 }
@@ -603,9 +609,6 @@ async function startServer(
   };
   const invariantLogger = serverLogOut.logger('invariant');
   const cwd = options.cwd ?? process.cwd();
-  // 「thread → 可寫根」（#1774）：測試可以換成 A 回 X、B 回 Y；產品路徑每條 thread 都是 `--workspace` 解析出來的那一個。
-  const workspaceRootOf =
-    options.workspaceRootOf ?? launchWorkspaceRootOf(invocation.workspace, cwd);
   // **瀏覽器會話的密鑰也從這一份 env 解 home**（#424）：日誌根與密鑰落在同一個 home 底下。
   // 密鑰在下面讀：權限過寬、記錄壞掉，都該在 server 還沒起來的時候就講。每次啟動只讀這一次，
   // 之後在記憶體裡驗。
@@ -894,6 +897,48 @@ async function startServer(
             warn(`[會話日誌] ${message}`);
           },
         });
+  // **每條新 thread 的私有可寫根與唯讀共用區**（#1775）。「thread（連同它的 header）→ 放在哪裡」整台一份：新 thread 在基底底下配一個目錄，
+  // 續接照 header 分類（`thread-roots.ts` 檔頭有表）。測試接縫 `workspaceRootOf` 給了就換成固定的那一支（沒有私有根，續接守衛逐字比）。
+  const sharedWorkspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
+  const threadRootsBase = resolveThreadRootsBase(env);
+  if (options.workspaceRootOf === undefined && sharedWorkspaceRoot !== undefined) {
+    // 基底不能跟 `--workspace`、工具結果暫存根、附件根、會話日誌目錄重疊（兩個方向）；排在綁 port 之前，起不來的訊息點名是哪一對。
+    await assertThreadRootsBaseSeparate({
+      base: threadRootsBase,
+      others: [
+        { label: '--workspace', path: sharedWorkspaceRoot },
+        { label: '工具結果暫存根', path: stashRoot },
+        { label: '附件根', path: attachmentsRootOf(resolveHarnessHome(env)) },
+        ...(sessionLogDir === undefined ? [] : [{ label: '會話日誌目錄', path: sessionLogDir }]),
+      ],
+    });
+    // 落盤關掉（#612）：沒有 header、不能續接、沒有會話鑰匙，新 thread 的可寫根是記憶體，`--workspace` 照樣唯讀掛成共用區（PM 裁決 (f)）。
+    // **照實講**，不靜靜收下：`--sandbox` 在這個組合下一個位元組都影響不到（可寫根不在磁碟上，共用區固定唯讀），所以直接拒絕（同 `parseSandboxMode`
+    // 沒配 `--workspace` 的理由）；其餘不適用的（`present`、`@` 列檔、改動摘要、`/permission` 的檔案政策）跟沒給 `--workspace` 一樣，在這一行講明。
+    if (sessionStore === undefined) {
+      if (invocation.sandbox !== undefined) {
+        throw new Error(
+          '--sandbox 要配落盤：會話日誌落盤關掉時，每條 thread 的可寫根是記憶體（--workspace 只以唯讀共用區掛上），' +
+            '圍堵那道 fence 不在路徑上，這個模式一個位元組都影響不到。要嘛開著落盤，要嘛不要給 --sandbox。',
+        );
+      }
+      warn(
+        '[私有根] 會話日誌落盤關掉（沒有 header、不能續接）：每條 thread 的可寫根是記憶體，--workspace 以唯讀共用區掛在 ' +
+          `${SHARED_WORKSPACE_PREFIX}。檔案不落磁碟、沒有圍堵：present、@ 列檔、改動摘要與檔案政策（--sandbox、/permission）跟沒給 --workspace 一樣不適用。`,
+      );
+    }
+  }
+  const placeThread =
+    options.workspaceRootOf !== undefined
+      ? createFixedThreadPlacer(options.workspaceRootOf)
+      : createThreadPlacer({
+          sharedRoot: sharedWorkspaceRoot,
+          base: threadRootsBase,
+          sessionKeyOf:
+            sessionStore === undefined
+              ? undefined
+              : (threadId) => `${sessionStore.directory}\0${threadId}`,
+        });
   // **新建的 header 帶建置版本、插件清單與設定雜湊**（#1025）：鍵與建置版本是 server 的性質，起動期讀一次；清單與雜湊
   // 是那條 thread 組裝時重讀的那一份（#1405），跟 `--dump-config` 同源。落盤關掉就不算。
   const headerMetadataOf =
@@ -1082,13 +1127,15 @@ async function startServer(
         threadList = await threadPluginList.read();
         assembledFrom = threadList;
         if (resumed !== undefined) assertSameCwd('serve', threadId, resumed.header, cwd);
-        // **這條 thread 的可寫根只在這裡取一次**（#1774）：「thread → 根」那一支只收 thread，回來的值**同時**交給下面的續接守衛與組裝點，兩邊不會分岔。
-        const threadWorkspaceRoot = workspaceRootOf(threadId);
-        // **再認它跑在哪個工作區底下**（#504）。順序與理由逐字同 CLI 的 `--resume`：目錄先認，
-        // 這一道在沙箱那一道之前。根在這裡取（`createCliAgent` 還沒跑），組裝點拿到的是同一個值。
-        if (resumed !== undefined) {
-          assertSameWorkspaceRoot('serve', threadId, resumed.header, threadWorkspaceRoot);
-        }
+        // **這條 thread 的可寫根只在這裡取一次**（#1774、#1775）：「thread（連同 header）→ 放在哪裡」回來的值**同時**交給組裝點與下面的續接分類，兩邊不會分岔。
+        // 新 thread 在這裡配私有根；續接照 header 分類（header 的根是這一次的 `--workspace`、沒記、或在基底底下就照用，其餘拋 `ResumeWorkspaceConflictError`），
+        // 順序與理由逐字同 CLI 的 `--resume`：目錄先認，這一道在沙箱那一道之前（#504）。
+        const placement = await placeThread({
+          entry: 'serve',
+          threadId,
+          resumedHeader: resumed?.header,
+        });
+        const threadWorkspaceRoot = placement.root;
         // 同 CLI 的 `--resume`：模式從日誌來；日誌記著模式就表示上一次有 fence，這一次沒有
         // `--workspace` 的話那道 fence 不在路徑上，接回來的 `read-only` 會靜靜蒸發。
         const resumedSandbox =
@@ -1117,8 +1164,12 @@ async function startServer(
         built = await assembly.create(
           {
             ...effective,
-            // 這條 thread 的可寫根（#1774）：入口明著交，組裝點不自己從 `--workspace` 算。
-            ...(threadWorkspaceRoot !== undefined && { workspaceRoot: threadWorkspaceRoot }),
+            // 這條 thread 的可寫根（#1774）：入口**明著交**，連 `undefined`（沒有圍堵）也交——鍵在就不退回 `--workspace`（#1775）。
+            workspaceRoot: threadWorkspaceRoot,
+            // 有私有可寫根時，`--workspace` 退成唯讀共用區（#1775）；舊 thread、沒有圍堵不給。
+            ...(placement.sharedRoot !== undefined && {
+              sharedWorkspaceRoot: placement.sharedRoot,
+            }),
             // 插話（#710）：只有 serve 有，見 `createCliAgent` 那一格。
             stepInbox: true,
             ...(modelSelectionPolicy !== undefined && { modelSelectionPolicy }),

@@ -67,6 +67,15 @@ export interface FsService {
    * @returns 這次組裝的可寫根；還沒 fold 或這次組裝沒有圍堵是 `undefined`。
    */
   workspaceRoot(): string | undefined;
+  /**
+   * **這條 thread** 的唯讀共用參考區在模型位址空間裡的前綴（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)，`@nexus/fs` 2.1.0 起）。
+   *
+   * 新 thread 有私有可寫根，`--workspace` 退成唯讀共用區、掛在這個前綴底下（`apps/harness/src/agent-factory.ts`）；舊 thread 的可寫根本來就是
+   * 共用區，沒有這一格。fold 當下讀組裝點提供的 host 服務 `sharedWorkspace`，跟 {@link workspaceRoot} 同一次算、同一條 thread。
+   * 消費者：`agent-instructions`（部署方放在共用區的指示檔從這裡讀）。這個前綴同時也在 {@link offWorkspacePrefixes} 裡。
+   * @returns 前綴（不含結尾斜線）；還沒 fold、或這條 thread 沒有共用區是 `undefined`。
+   */
+  sharedWorkspacePrefix(): string | undefined;
 }
 
 /** {@link settleFsService} 在 fold 當下算好、一起填進把手的事實（#1469）。 */
@@ -77,6 +86,8 @@ export interface FsFacts {
   readonly mountPrefixes: readonly string[];
   /** 這次組裝的可寫根（host 服務 `workspaceRoot`，#1774）；沒有圍堵是 `undefined`。 */
   readonly workspaceRoot: string | undefined;
+  /** 這條 thread 的唯讀共用區前綴（host 服務 `sharedWorkspace`，#1775）；沒有是 `undefined`。 */
+  readonly sharedWorkspacePrefix: string | undefined;
 }
 
 /** {@link createFsService} 的參數。 */
@@ -100,6 +111,7 @@ export function createFsService(options: FsServiceOptions = {}): FsService {
   let folded: AnyBackendProtocol | undefined;
   let workspace = false;
   let root: string | undefined;
+  let shared: string | undefined;
   const assembly = [...(options.offWorkspacePrefixes ?? [])];
   let prefixes: readonly string[] = assembly;
   const service: FsService = {
@@ -107,11 +119,13 @@ export function createFsService(options: FsServiceOptions = {}): FsService {
     offWorkspacePrefixes: () => prefixes,
     hasWorkspace: () => workspace,
     workspaceRoot: () => root,
+    sharedWorkspacePrefix: () => shared,
   };
   settlers.set(service, (backend, facts) => {
     folded = backend;
     workspace = facts.hasWorkspace;
     root = facts.workspaceRoot;
+    shared = facts.sharedWorkspacePrefix;
     // 組裝點明著交的在前，plugin 掛的在後；重複填（同一格 fold 兩次）不累加。
     prefixes = [...assembly, ...facts.mountPrefixes];
   });

@@ -1885,6 +1885,7 @@ describe('fs 服務', () => {
       offWorkspacePrefixes: () => [],
       hasWorkspace: () => false,
       workspaceRoot: () => undefined,
+      sharedWorkspacePrefix: () => undefined,
     };
     await fold([createHostServicesPlugin({ fs })], { defaultBackend: fakeBackend('default') });
     expect(marker(fs.backend())).toBe('own');
@@ -1916,6 +1917,23 @@ describe('fs 服務', () => {
     expect(a.workspaceRoot()).toBe('/x');
     expect(b.workspaceRoot()).toBe('/y');
     expect(none.workspaceRoot()).toBeUndefined();
+  });
+
+  // 唯讀共用區前綴（#1775）：跟 workspaceRoot 同一處算，值是這一次組裝的 host 服務 `sharedWorkspace`；與有沒有圍堵無關。
+  it('sharedWorkspacePrefix()：fold 之前是 undefined；每次組裝讀自己的 host 服務；沒提供是 undefined；沒有根也照樣有', async () => {
+    const withShared = createFsService();
+    const withoutShared = createFsService();
+    const sharedNoRoot = createFsService();
+    expect(withShared.sharedWorkspacePrefix()).toBeUndefined();
+    await fold([
+      createHostServicesPlugin({ fs: withShared, workspaceRoot: '/x', sharedWorkspace: '/shared' }),
+    ]);
+    await fold([createHostServicesPlugin({ fs: withoutShared, workspaceRoot: '/y' })]);
+    await fold([createHostServicesPlugin({ fs: sharedNoRoot, sharedWorkspace: '/shared' })]);
+    expect(withShared.sharedWorkspacePrefix()).toBe('/shared');
+    expect(withoutShared.sharedWorkspacePrefix()).toBeUndefined();
+    expect(sharedNoRoot.workspaceRoot()).toBeUndefined();
+    expect(sharedNoRoot.sharedWorkspacePrefix()).toBe('/shared');
   });
 
   it('能力排在提供 fs 那一列的後面也算數：fold 在所有 apply 之後才算', async () => {

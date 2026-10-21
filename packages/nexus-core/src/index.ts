@@ -122,6 +122,7 @@ export {
   hostPathOf,
   isSandboxMode,
   SANDBOX_MODES,
+  SHARED_WORKSPACE_SERVICE,
   virtualPathOf,
   WORKSPACE_CAPABILITY,
   WORKSPACE_ROOT_SERVICE,

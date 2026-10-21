@@ -332,6 +332,12 @@ export interface NexusServices {
    * **沒有工作區就沒人提供**：`services.get()` 回 `undefined` 就是「這次組裝沒有工作區」，要用根的 plugin 據此不合格。
    */
   workspaceRoot: string;
+  /**
+   * 唯讀共用參考區在模型位址空間裡的前綴（#1775）。名字見 {@link ./sandbox.ts | SHARED_WORKSPACE_SERVICE}。
+   *
+   * **這條 thread 沒有共用區就沒人提供**：`--workspace` 沒給、或這條是舊 thread（可寫根本來就是共用區）。
+   */
+  sharedWorkspace: string;
 }
 
 /** 已經宣告過型別的服務名。空表時是 `never`，那時只有寬的多載可用。 */

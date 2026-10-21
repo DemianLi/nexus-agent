@@ -218,7 +218,7 @@
 | E-10 | microVM／容器隔離 | **dsh 也沒有** | 框架要、dsh 也沒有 | 沒有 | 決策 3（development-plan.md §7） |
 | E-11 | MCP stdio 子行程（跑在 fence 外） | **判過不做**（改判） | 同形 | 有-選配（額外能力；acp-app 那條路跟著 ACP 判過不做） | #503、#430、#431 |
 | E-13 | 打包的腳本執行期（workspace-dependencies：回報內建 Python／Node／pnpm 的路徑）（新） | **判過不做** | （09-19 時 dsh 還沒有這一列） | 沒有 | 決策 3（development-plan.md §7） |
-| E-14 | 每條會話各自選工作區目錄（web-app 的 workspace／workspace-controller／directory-picker）（新） | **判過不做** | （09-19 沒列） | 沒有 | #372 |
+| E-14 | 每條會話各自選工作區目錄（web-app 的 workspace／workspace-controller／directory-picker）（新） | **判過不做**（「選」這一半；host 那一半由 #1675 重開：#1775 起 serve 的新 thread 由系統配私有可寫根，不是使用者選的） | （09-19 沒列） | 沒有 | #372、#1675、#1775 |
 | G-06 | danger-full-access 的強度（symlink 逃逸） | **判過不做** | 判過：偏離（contained-backend.ts:119） | 有-選配 | — |
 
 <details><summary>逐列依據</summary>

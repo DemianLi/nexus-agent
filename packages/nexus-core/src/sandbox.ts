@@ -84,6 +84,17 @@ export const WORKSPACE_CAPABILITY = 'workspace';
 export const WORKSPACE_ROOT_SERVICE = 'workspaceRoot';
 
 /**
+ * **唯讀共用參考區**這個 host 服務的名字（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)）。值是模型位址空間裡的前綴
+ * （例如 `/shared`，不是主機路徑），**只有這條 thread 有私有可寫根、`--workspace` 退成唯讀共用區時才提供**；舊 thread 的可寫根本來就是
+ * 共用區，不提供、也不再另掛。
+ *
+ * 要它是因為三個讀方各自需要知道「這條 thread 有沒有共用區、在哪個前綴」：`fs` 把手（併進 `offWorkspacePrefixes()`，讓 `present` 拒掉）、
+ * `agent-instructions`（部署方放在 `--workspace` 的指示檔從這裡讀）、`sandbox-policy`（政策句多講一句「共用參考區在 …，唯讀」）。
+ * 照 {@link WORKSPACE_ROOT_SERVICE} 的做法：組裝點最前面交一格，缺席表達「沒有」。
+ */
+export const SHARED_WORKSPACE_SERVICE = 'sharedWorkspace';
+
+/**
  * 把模型給檔案工具的路徑換成工作區位址空間裡的絕對路徑：補前導 `/`、正規化、去尾斜線。
  *
  * **為什麼有這一份。** 這條規則的主人是基座 `FilesystemBackend` 在 `virtualMode` 下的 `resolvePath`

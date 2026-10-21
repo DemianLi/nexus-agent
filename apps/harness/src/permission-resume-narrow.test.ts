@@ -225,6 +225,8 @@ describe('E：serve 兩台、CLI --resume 的 warn 與下一次寫檔的 fence',
       argv: ['--port', '0', '--session-log', home, '--workspace', workspace, ...extra],
       log: (line) => void lines.push(line),
       env: {},
+      // 量的是權限組合的 fence，不是私有根：可寫根固定成 `--workspace`（接縫，#1775 之前的形狀）。
+      workspaceRootOf: () => workspace,
     })) as RunningServe;
     running = server;
     return server;

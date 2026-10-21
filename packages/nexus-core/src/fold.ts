@@ -42,7 +42,11 @@ import { createOutputSchemaMiddleware } from './output-schema.js';
 import { createFsToolErrorsMiddleware, recordBackendOutcomes } from './fs-tool-errors.js';
 import { limitGlobPatterns } from './glob-pattern-limit.js';
 import { FS_SERVICE, settleFsService } from './fs-service.js';
-import { WORKSPACE_CAPABILITY, WORKSPACE_ROOT_SERVICE } from './sandbox.js';
+import {
+  SHARED_WORKSPACE_SERVICE,
+  WORKSPACE_CAPABILITY,
+  WORKSPACE_ROOT_SERVICE,
+} from './sandbox.js';
 import { createReadContinuationMiddleware, recordReadExtent } from './read-continuation.js';
 import { recordToolResultMeta } from './tool-result-meta.js';
 import { createInvalidToolArgsMiddleware } from './invalid-tool-args.js';
@@ -577,11 +581,15 @@ export function foldRegistry(
   // **工作區事實與 plugin 掛的路由前綴在這裡一起算**（#1469）：fold 在所有 `apply` 之後，能力與 mount 都已註冊齊，
   // 所以結果跟「工具被叫時才讀」的相同；消費者之後只從這一格把手讀。
   const workspaceRootService = registry.services.get(WORKSPACE_ROOT_SERVICE);
+  const sharedWorkspaceService = registry.services.get(SHARED_WORKSPACE_SERVICE);
   settleFsService(registry.services.get(FS_SERVICE), backend, {
     hasWorkspace: registry.capabilities.has(WORKSPACE_CAPABILITY),
     mountPrefixes: registry.backend.mounts().map(([prefix]) => prefix),
     // 這一條 thread 的可寫根（#1774）：組裝點提供的 host 服務 `workspaceRoot`，只在有圍堵時有；不是字串就當沒有。
     workspaceRoot: typeof workspaceRootService === 'string' ? workspaceRootService : undefined,
+    // 唯讀共用參考區的前綴（#1775）：只有這條 thread 有私有可寫根時組裝點才提供；不是字串就當沒有。
+    sharedWorkspacePrefix:
+      typeof sharedWorkspaceService === 'string' ? sharedWorkspaceService : undefined,
   });
   const observationPolicy = foldObservationPolicy(registry, options, backend);
   // 檔案工具的失敗標成錯誤（#293）：只在有 backend 時掛——包的是交給基座的那一份，策略手上

@@ -221,13 +221,17 @@ afterEach(async () => {
   for (const root of opened.splice(0)) await root.fiber.dispose();
 });
 
-/** 一把 fs 把手：`workspaceRoot()` 回給定的根（fold 當下才會填的那一格，這裡直接給；`settleFsService` 不對外）。 */
+/**
+ * 一把 fs 把手：`workspaceRoot()` 回給定的根（fold 當下才會填的那一格，這裡直接給；`settleFsService` 不對外）。
+ * 根給空字串＝這條 thread 沒有圍堵（`hasWorkspace()` 是 false、沒有根）：#1775 落盤關掉的新 thread，行程級有圍堵、這條沒有。
+ */
 function fsHandleWithRoot(root: string): FsService {
   return {
     backend: () => undefined,
     offWorkspacePrefixes: () => [],
-    hasWorkspace: () => true,
-    workspaceRoot: () => root,
+    hasWorkspace: () => root !== '',
+    workspaceRoot: () => (root === '' ? undefined : root),
+    sharedWorkspacePrefix: () => undefined,
   };
 }
 
@@ -241,6 +245,8 @@ async function mountFor(
   threads: readonly string[],
   config: unknown = {},
   workspaceRoot: string | null | Readonly<Record<string, string>> = '/workspace',
+  /** 行程級的 `hasContainment()`；省略＝有根就是有圍堵（`workspaceRoot` 不是 `null`）。 */
+  containment: boolean = workspaceRoot !== null,
 ): Promise<Mounted> {
   const sessions = new Map(threads.map((thread) => [thread, new SessionRegistry(thread)]));
   const commands = createCommandsProvider();
@@ -258,7 +264,7 @@ async function mountFor(
       const root = rootOf(thread);
       return root === undefined ? undefined : fsHandleWithRoot(root);
     },
-    workspaceRoot !== null,
+    containment,
   );
   const root = new Context();
   opened.push(root);
@@ -643,10 +649,29 @@ describe('/permission', () => {
   });
 
   it('有沒有圍堵是行程級：hasContainment() 是 false 就不註冊 /permission，即使有 thread 登記了把手（#1774）', async () => {
-    const run = await mountFor(['a'], {}, null);
+    // 真的登記一條 thread 的把手（`a` 有根 `/x`），行程級的 hasContainment() 卻是 false：標題後半句才量得到（#1785 第 3 點）。
+    const run = await mountFor(['a'], {}, { a: '/x' }, false);
     expect(run.commands.entries().some((item) => item.definition.name === 'permission')).toBe(
       false,
     );
+  });
+
+  it('行程級有圍堵、這條 thread 沒有（#1775 落盤關掉的新 thread）：/permission 不適用，不寫任何事件', async () => {
+    const run = await mountFor(['a', 'b'], {}, { a: '/x', b: '' });
+    for (const thread of ['a', 'b']) {
+      run.sessions.get(thread)!.root.append('approval/policy', { policy: 'ask' });
+      run.sessions.get(thread)!.root.append('sandbox/mode', { mode: 'workspace-write' });
+      run.join(thread);
+    }
+    const before = run.sessions.get('b')!.root.events.length;
+    for (const input of ['', 'read-only']) {
+      const result = run.command('b', input);
+      expect(result.kind).toBe('error');
+      expect(result.text).toContain('不適用');
+    }
+    expect(run.sessions.get('b')!.root.events.length).toBe(before);
+    // 另一條有圍堵的 thread 照常。
+    expect(run.command('a', '').text).toContain('可寫根 "/x"。');
   });
 
   it('對不上任何一組：顯示 custom 與兩顆旋鈕的值', async () => {

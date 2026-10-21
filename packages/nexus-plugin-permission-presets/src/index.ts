@@ -287,6 +287,15 @@ export function apply(ctx: Context, config: PermissionPresetsConfig): void {
     description: '看或切換這個會話的權限組合（檔案政策＋核准政策）',
     input: { hint: `[${Object.keys(table).join('｜')}]` },
     handler: ({ rawInput, sessionLog }) => {
+      // 這條 thread 沒有圍堵（#1775，落盤關掉的新 thread：可寫根是記憶體，`--workspace` 只以唯讀共用區掛上）：行程級的 `hasContainment()` 是真的，
+      // 所以這顆命令註冊了，但這條 thread 沒有 fence 可以切、也沒有檔案政策可報。照「沒給 `--workspace`」的處理：不適用，不寫任何事件。
+      // 查不到這條 thread 的把手（沒登記、已撤）時照舊往下走，不在這裡猜。
+      if (fs.forThread(sessionLog.sessionId)?.hasWorkspace() === false) {
+        return {
+          kind: 'error',
+          text: `/${PERMISSION_COMMAND_NAME} 在這條對話不適用：它的檔案在虛擬檔案系統裡，沒有檔案圍堵可以切。`,
+        };
+      }
       const name = rawInput.trim();
       const names = Object.keys(table);
       const knobs = foldPermissionKnobs(sessionLog.events);
