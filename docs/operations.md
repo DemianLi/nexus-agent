@@ -760,6 +760,8 @@ jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1%2fbg-1.jsonl
   - **只有 `/readyz` 被抓過才等**：從起動到收尾都沒有人抓過，等了也沒人聽，直接關。
   - **探針間隔比時間窗長就有機會漏掉**：500 毫秒的時間窗，抓取間隔 5 秒的監控大多看不到 503，只會看到連不上。要讓這種監控看得到，把 `drainMs` 調大；上限 2000，因為行程收尾整體有 5 秒（收到第二次訊號當場結束，[#599](https://github.com/DemianLi/nexus-agent/issues/599)），時間窗之外還要留給 thread 收尾與落盤。
   - 時間窗內 serve 其餘路徑照常服務，不拒絕新請求。`0` 關掉時間窗。
+  - **時間窗內開的回合，在窗末會被切斷，上游（模型）請求照樣會送出**：窗內新進的 `/wire` 請求照常接受，窗末 `server.close()` 一開頭就斷掉所有連線，下行串流在那一刻被切。已經送出的上游請求不會因為這一刀取消。
+  - **致命例外（未捕捉的例外、未處理的 rejection）的收尾不等時間窗**（[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)）：fail-loud 只給收尾 2 秒就 `exit(1)`，時間窗最多也是 2 秒，兩個疊在一起 thread 收尾與落盤會被切掉。所以致命路徑立旗之後（`/readyz` 照回 503）直接收；只有 `SIGTERM`／`SIGINT` 等時間窗。
 
 Prometheus 的設定（跟 serve 在同一台主機上抓）：
 
