@@ -78,12 +78,16 @@ async function put(
   const events = options.events?.length
     ? options.events
     : [{ type: 'model/usage', time: 1, data: {} }];
-  await stored.append(
-    events.map(
-      (event, seq) => ({ type: event.type, seq, time: event.time, data: event.data }) as never,
-    ),
-  );
-  await stored.close();
+  try {
+    await stored.append(
+      events.map(
+        (event, seq) => ({ type: event.type, seq, time: event.time, data: event.data }) as never,
+      ),
+    );
+  } finally {
+    // 寫失敗也要放掉租約與日誌的 handle：沒關的 handle 被 GC 回收時 Node 會丟 `ERR_INVALID_STATE`（unhandled error，#1814）。
+    await stored.close();
+  }
   if (options.tail !== undefined) {
     const log = (await readdir(directory)).find((name) => name === `${id}.jsonl`);
     if (log === undefined) throw new Error('夾具：撕裂的尾巴只給簡單的 id');
@@ -104,6 +108,31 @@ async function putRaw(projectCwd: string, id: string, header: unknown): Promise<
     typeof header === 'string' ? header : JSON.stringify(header),
   );
   return directory;
+}
+
+/**
+ * 一次放 `count` 份會話（id 是 `s00`、`s01`…，`createdAt` 是 1000 起每份加一）：**只有第一份經後端寫**，其餘照它的檔案複製，
+ * 改 header 的 id 與 createdAt（#1814）。
+ *
+ * 每份經後端寫要 `fsync` 好幾次（日誌批次、header 暫存檔、目錄），單份約 25 ms；55 份在忙的機器上超過 5 秒期限，逾時後這個
+ * 迴圈還在跑，下一條測試的 `root` 已經換了，殘留的寫入跑進去（`s44`、`s45` 出現在別條測試的清單裡）。這裡要的只是「目錄裡有 N 份
+ * 列得出來的會話」，不是 N 次寫入，所以複製。格式由第一份的真檔案決定，格式版本升了不必改這裡。
+ */
+async function putMany(projectCwd: string, count: number): Promise<void> {
+  const directory = await put(projectCwd, 's00', { createdAt: 1_000, events: [] });
+  const header = JSON.parse(await readFile(join(directory, 's00.header.json'), 'utf8')) as {
+    id: string;
+    createdAt: number;
+  };
+  const log = await readFile(join(directory, 's00.jsonl'));
+  for (let i = 1; i < count; i += 1) {
+    const id = `s${String(i).padStart(2, '0')}`;
+    await writeFile(
+      join(directory, `${id}.header.json`),
+      `${JSON.stringify({ ...header, id, createdAt: 1_000 + i }, null, 2)}\n`,
+    );
+    await writeFile(join(directory, `${id}.jsonl`), log);
+  }
 }
 
 function service(
@@ -197,9 +226,9 @@ describe('SessionReferenceCandidates.list', () => {
   });
 
   it('最多回 limit 筆，預設 50', async () => {
-    for (let i = 0; i < 55; i += 1) {
-      await put(CWD, `s${String(i).padStart(2, '0')}`, { createdAt: 1_000 + i, events: [] });
-    }
+    await putMany(CWD, 55);
+    // 夾具是真的：放得下的 limit 列得出全部 55 份（複製出來的檔不是被靜靜略過）。
+    expect(await service({ limit: 100 }).list('me', '')).toHaveLength(55);
     expect(await service().list('me', '')).toHaveLength(50);
     expect(await service({ limit: 3 }).list('me', '')).toHaveLength(3);
   });

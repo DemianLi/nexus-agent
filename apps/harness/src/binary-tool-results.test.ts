@@ -9,8 +9,8 @@
  *
  * - **後端的判準**：照 dsh 的 `readWholeText`（`packages/fs/fs-local/src/fsio.ts:386-399`，`477b4f4`）看內容——前 8KB
  *   有 NUL 就是 `binary file`，不是合法 UTF-8 就是 `invalid UTF-8 text`。兩種 backend 各驗：落磁碟的
- *   `ContainedFilesystemBackend`，與沒給 `--workspace` 時墊底的 `TextOnlyStateBackend`（模型 `write_file` 一張
- *   base64 的 PNG 再讀，同樣中毒，實測）。
+ *   `ContainedFilesystemBackend`，與沒給 `--workspace` 時墊底的 `TextOnlyStateBackend`（state 裡真的有位元組時同樣中毒，實測；
+ *   #1813 之前模型 `write_file` 一張 base64 的 PNG 就能把位元組寫進去，現在 `write` 一律存文字，位元組只剩 `uploadFiles` 灌進來的）。
  * - **真的組裝打真的轉換器**：對手方是本機的假 Chat Completions 端點，照真端點的規則回 400（原文見 {@link REJECTED}），
  *   走 serve 那條（`ThreadPump`，串流）連跑兩輪。`ScriptedChatModel` 驗不到這一層：它不經過轉換器，看不到
  *   `isDataContentBlock` 放行了什麼。
@@ -25,14 +25,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { MemorySaver } from '@langchain/langgraph';
 import { ChatOpenAI } from '@langchain/openai';
-import { createFilesystemMiddleware } from 'deepagents';
+import { createFilesystemMiddleware, StateBackend } from 'deepagents';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import {
   CONVERSATION_HISTORY_PREFIX,
   createNexusAgent,
   TOOL_RESULT_STASH_PREFIX,
 } from './agent-factory.js';
-import { TextOnlyStateBackend } from './binary-read.js';
+import { NON_TEXT_EXTENSIONS, TextOnlyStateBackend } from './binary-read.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import { ThreadPump } from './thread-pump.js';
 import type { PumpAgent } from './thread-pump.js';
@@ -156,6 +156,114 @@ describe('沒掛工作區的虛擬 FS 一樣拒絕', () => {
       },
     });
     expect(backend.read('/fake.png')).toEqual({ error: 'cannot read "/fake.png": binary file' });
+  });
+
+  // #1813：`write` 一律存文字。突變：還原成基座的 `write`（`super.write`）→ `.png` 的字串被 base64 解碼，這條紅。
+  it('write：非文字副檔名也存成文字（mimeType 是 text/plain），讀得回同一段字', () => {
+    const backend = stateWith({});
+    const text = '你好\n世界🙂 not base64!!\n';
+    for (const path of ['/n.png', '/n.PDF', '/n.mp4', '/n.pptx']) {
+      const result = backend.write(path, text) as unknown as {
+        path?: string;
+        filesUpdate?: Record<string, { content: unknown; mimeType: string }>;
+      };
+      expect(result.path).toBe(path);
+      expect(result.filesUpdate?.[path]).toMatchObject({ content: text, mimeType: 'text/plain' });
+      const reread = stateWith(result.filesUpdate ?? {});
+      expect(reread.read(path)).toMatchObject({ content: text });
+    }
+  });
+
+  it('write：覆蓋保留 created_at；位元組的舊檔被文字取代', () => {
+    const backend = stateWith({
+      '/dot.png': {
+        content: new Uint8Array(PNG),
+        mimeType: 'image/png',
+        created_at: at,
+        modified_at: at,
+      },
+    });
+    const result = backend.write('/dot.png', 'now text') as unknown as {
+      filesUpdate: Record<string, { content: unknown; mimeType: string; created_at: string }>;
+    };
+    expect(result.filesUpdate['/dot.png']).toMatchObject({
+      content: 'now text',
+      mimeType: 'text/plain',
+      created_at: at,
+    });
+  });
+
+  // 基座語意的釘子（#1813）：我們只在「基座 v2 對非文字副檔名 base64 解碼」那一格自己組更新，其餘交回基座。
+  // 這兩條讓基座升版時哪一邊變了都會紅，提醒回頭看那個覆寫還需不需要、表還對不對。
+  describe('對照基座 StateBackend.write（deepagents 1.13.1）', () => {
+    const b64 = PNG.toString('base64');
+    /** 去掉時間戳（兩邊各自 `new Date()`），其餘欄位逐一比。 */
+    const shape = (update: unknown, path: string) => {
+      const {
+        modified_at: _m,
+        created_at: _c,
+        ...rest
+      } = (update as { filesUpdate: Record<string, Record<string, unknown>> }).filesUpdate[path]!;
+      return rest;
+    };
+    const base = (files: Record<string, unknown> = {}) =>
+      new StateBackend({ state: { files } } as never);
+
+    it('基座仍把 v2 非文字副檔名的內容當 base64 解成位元組（哪天不解碼了，這條紅，就該拿掉覆寫）', () => {
+      for (const ext of NON_TEXT_EXTENSIONS) {
+        const update = base().write(`/x${ext}`, b64) as unknown as {
+          filesUpdate: Record<string, { content: unknown }>;
+        };
+        const stored = update.filesUpdate[`/x${ext}`]?.content;
+        expect(stored, ext).toBeInstanceOf(Uint8Array);
+        expect(Buffer.from(stored as Uint8Array).equals(PNG), ext).toBe(true);
+      }
+    });
+
+    it('表不漏：基座不解碼的常見文字副檔名（與沒有副檔名）不在 NON_TEXT_EXTENSIONS 裡，而且基座存的是字串', () => {
+      for (const path of [
+        '/a.md',
+        '/a.json',
+        '/a.svg',
+        '/a.txt',
+        '/a.ts',
+        '/a.js',
+        '/Dockerfile',
+      ]) {
+        const stored = (
+          base().write(path, 'hi') as unknown as {
+            filesUpdate: Record<string, { content: unknown }>;
+          }
+        ).filesUpdate[path]?.content;
+        expect(stored, path).toBe('hi');
+      }
+    });
+
+    it('文字副檔名：新檔與既有檔（保留 mimeType）都與基座逐欄同形，v1 格式的非文字副檔名也是', () => {
+      const text = '一行\n第二行';
+      for (const path of ['/n.md', '/n.json', '/n.svg', '/n.txt', '/n']) {
+        expect(shape(stateWith({}).write(path, text), path), path).toEqual(
+          shape(base().write(path, text), path),
+        );
+      }
+      const existing = {
+        '/old.md': {
+          content: 'old',
+          mimeType: 'text/markdown',
+          created_at: at,
+          modified_at: at,
+        },
+      };
+      expect(shape(stateWith(existing).write('/old.md', text), '/old.md')).toEqual(
+        shape(base(existing).write('/old.md', text), '/old.md'),
+      );
+      // v1：基座本來就不解碼，行陣列格式；我們交回基座，所以一樣。
+      const v1 = (backendOf: new (...args: never[]) => StateBackend) =>
+        new backendOf({ state: { files: {} } } as never, { fileFormat: 'v1' } as never);
+      expect(shape(v1(TextOnlyStateBackend).write('/v.png', text), '/v.png')).toEqual(
+        shape(v1(StateBackend).write('/v.png', text), '/v.png'),
+      );
+    });
   });
 
   it('文字檔與不存在的檔照基座', () => {
@@ -284,25 +392,25 @@ async function twoTurns(
 }
 
 describe('真的組裝：沒掛工作區（state 裡的虛擬 FS）', () => {
-  // 墊底那一格與兩個路由格都是 `TextOnlyStateBackend`。路由格的錯誤裡是 `CompositeBackend` 剝掉前綴之後的路徑，
-  // 跟基座自己在路由格回的 `File '…' not found` 同一個樣子。
+  // 墊底那一格與兩個路由格都是 `TextOnlyStateBackend`。
+  //
+  // #1813 之前這裡是「模型把一張 base64 的 PNG 寫進 .png 再讀，讀到 dsh 那句 binary file」：基座的 `write` 對非文字副檔名
+  // 把內容 base64 解成位元組存起來。現在 `write` 一律存文字（照 dsh，沒有依副檔名的分支），模型這條路寫不出位元組，
+  // 寫進去的 base64 字串就是文字，讀回來是同一段字——一樣不會中毒（讀到的是字串、不是圖片塊）。
+  // 「state 裡真的有位元組時 `read` 照 dsh 拒絕」由下面「沒掛工作區的虛擬 FS 一樣拒絕」直接餵 state 驗。
   it.each([
-    { path: '/dot.png', shown: '/dot.png' },
-    { path: `${TOOL_RESULT_STASH_PREFIX}/dot.png`, shown: '/dot.png' },
-    { path: `${CONVERSATION_HISTORY_PREFIX}/dot.png`, shown: '/dot.png' },
+    { path: '/dot.png' },
+    { path: `${TOOL_RESULT_STASH_PREFIX}/dot.png` },
+    { path: `${CONVERSATION_HISTORY_PREFIX}/dot.png` },
   ])(
-    '模型寫進 $path 再讀：兩輪照常收尾，讀到的是 dsh 那句錯誤',
-    async ({ path, shown }) => {
+    '模型寫進 $path 再讀：存的是文字，讀回同一段字，兩輪照常收尾、不中毒',
+    async ({ path }) => {
+      const text = PNG.toString('base64');
       const { events, requests } = await twoTurns(
         [
-          {
-            call: {
-              name: 'write_file',
-              args: { file_path: path, content: PNG.toString('base64') },
-            },
-          },
+          { call: { name: 'write_file', args: { file_path: path, content: text } } },
           { call: { name: 'read_file', args: { file_path: path } } },
-          { text: '那是一張圖，我讀不了。' },
+          { text: '讀到了。' },
           { text: '好的。' },
         ],
         undefined,
@@ -315,13 +423,12 @@ describe('真的組裝：沒掛工作區（state 裡的虛擬 FS）', () => {
       expect(requests.map((request) => request.rejected)).toEqual([false, false, false, false]);
 
       const tools = requests[2]?.messages.filter((message) => message.role === 'tool');
-      // 寫入那一步真的寫進去了，不然讀的那一步是「找不到」，驗不到判準。
       expect(JSON.stringify(tools?.at(0)?.content)).not.toMatch(/Error/);
-      expect(tools?.at(-1)?.content).toEqual([
-        { type: 'text', text: `Error: cannot read "${shown}": binary file` },
-      ]);
+      // 讀回來的是我們寫的那段字，不是 binary file 的拒絕，也不是圖片塊。
+      expect(JSON.stringify(tools?.at(-1)?.content)).toContain(text);
+      expect(JSON.stringify(tools?.at(-1)?.content)).not.toMatch(/binary file|image_url/);
       const results = events.filter((event) => event.type === 'tool/result');
-      expect(results.at(-1)?.data).toMatchObject({ isError: true });
+      expect(results.at(-1)?.data).not.toMatchObject({ isError: true });
     },
     20000,
   );
