@@ -23,6 +23,7 @@ const ITEMS = [thread('a', '幫我改登入頁'), thread('b', '讀規格'), thre
 const DIRECTORY: ThreadDirectory = {
   listing: { kind: 'ok', result: { items: ITEMS, unreadable: 0 } },
   statusOf: () => undefined,
+  blankOf: (item) => item.blank,
   refresh: () => undefined,
 };
 

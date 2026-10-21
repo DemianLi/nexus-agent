@@ -139,6 +139,12 @@ export interface Conversation {
    * 其他的不重播，早送的那一輪會看不到。斷了就翻回 `false`。
    */
   readonly connected: boolean;
+  /**
+   * 這個分頁在這條上送出過一句話（#1600 `N1374`，dsh `Session.firstPromptPendingTurn`）：`run.start` 出門之前就翻，
+   * 不等人話的 frame 折進來。伺服器明說不收、或確定沒出門時翻回來；斷在網路層、可能已經到了的那種不翻回來。
+   * 斜線命令不翻：它不起一輪。
+   */
+  readonly attempted: boolean;
   /** 上一次開線失敗、或下行斷掉的原因。接回來就清掉。串流自己正常收掉時沒有原因可講，這一格不在。 */
   readonly connectionError?: string;
   /**
@@ -366,6 +372,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     recoveredTimer?: ReturnType<typeof setTimeout>;
   }>({ attempt: 0, lost: false, everConnected: false });
   const [commandError, setCommandError] = useState<string | undefined>(undefined);
+  const [attempted, setAttempted] = useState(false);
   const [slashCommands, setSlashCommands] = useState<readonly SlashDescriptor[]>([]);
   const [slashError, setSlashError] = useState<string | undefined>(undefined);
   const [slashNotice, setSlashNotice] = useState<string | undefined>(undefined);
@@ -694,6 +701,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       }
       setSlashError(undefined);
       setSlashNotice(undefined);
+      // 在第一個 `await` 之前翻（dsh `session.ts:262-266`）：回音折進來之前按「新對話」，也要算這條講過了。
+      setAttempted(true);
       let result: UplinkResult;
       try {
         // 排隊不帶 `mode`、沒有附件不帶 `attachments`：都是預設。編號每一次都帶（#1335）。
@@ -708,9 +717,13 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       } catch (error) {
         const message = error instanceof Error ? error.message : String(error);
         // 請求可能已經到了（網路層斷了、閘道 502／504）就標不確定；伺服器明說不收的照舊（#1335）。
-        return mayHaveArrived(error) ? { message, uncertain: true } : { message };
+        if (mayHaveArrived(error)) return { message, uncertain: true };
+        setAttempted(false);
+        return { message };
       }
       if (result.type === 'error') {
+        // 被拒仍是空白（dsh `session.ts:302-307`）。
+        setAttempted(false);
         return {
           message:
             threadCapacityText(result.error) ??
@@ -954,6 +967,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     state,
     store,
     connected,
+    attempted,
     recovered,
     reconnectNow,
     ...(reconnecting === undefined ? {} : { reconnecting }),

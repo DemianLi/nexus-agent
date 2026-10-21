@@ -15,7 +15,7 @@
  * @module
  */
 
-import type { ThreadListResult, WireClient } from '@nexus/wire';
+import type { ThreadListResult, ThreadSummary, WireClient } from '@nexus/wire';
 
 /** 按「新對話」之後要去的地方。 */
 export type NewConversationTarget =
@@ -27,12 +27,15 @@ export type NewConversationTarget =
  * @param listing - `GET /threads` 的結果；讀不出來是 `undefined`，那就照 #313 以前的做法開新的。
  * @param currentThreadId - 目前這一條。它就算在清單上標著空白也不挑——要留在原地的話畫面那一側已經留了，
  *   走到這裡代表這個分頁在它上面講過話，清單上那個 `blank` 是舊的。
+ * @param isBlank - 這一列算不算空白。傳 `ThreadDirectory.blankOf`：別的分頁正在跑、磁碟上還沒有 `turn/start` 的那條
+ *   清單上標著空白，但不能挑（#1600，dsh `effectiveBlank`）。
  */
 export function newConversationTarget(
   listing: ThreadListResult | undefined,
   currentThreadId: string,
+  isBlank: (item: ThreadSummary) => boolean,
 ): NewConversationTarget {
-  const blank = listing?.items.find((item) => item.blank && item.threadId !== currentThreadId);
+  const blank = listing?.items.find((item) => isBlank(item) && item.threadId !== currentThreadId);
   return blank === undefined ? { kind: 'new' } : { kind: 'reuse', threadId: blank.threadId };
 }
 
