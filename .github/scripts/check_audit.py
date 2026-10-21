@@ -26,9 +26,10 @@ PR 動到 lockfile 時也跑）。dsh 實際只靠 GitHub 的 alert。nexus 部�
 - 列了例外的 advisory 有了修補版：`patched_versions` 不再是 `<0.0.0`。該升版，不該再例外；
 - 列了例外的 advisory 出現在條目沒列的路徑上：例外只接受審過的那幾條路徑；
 - 例外清單上的 advisory，audit 已經不報了：例外過時，該撤；
-- audit 的輸出解不出來（網路錯、registry 錯）：當成不合格（fail-closed）。
+- audit 的輸出解不出來（網路錯、registry 錯）：當成不合格（fail-closed）；
+- 不在例外上的 advisory，嚴重度不是認得的五級之一（含缺欄位）：同樣 fail-closed。
 
-moderate、low 不擋，只列出來。
+info、low、moderate 不擋，只列出來。
 """
 
 from __future__ import annotations
@@ -47,6 +48,8 @@ ROOT = Path(__file__).resolve().parents[2]
 EXCEPTIONS = ROOT / '.github' / 'audit-exceptions.json'
 
 BLOCKING = ('high', 'critical')
+# 只列出、不擋的等級。pnpm 的 `metadata.vulnerabilities` 就是這五級；認不得的（含缺欄位）一律當成擋（fail-closed）。
+NON_BLOCKING = ('info', 'low', 'moderate')
 # `pnpm audit --json` 對沒有修補版的 advisory 寫的 `patched_versions`。
 NO_PATCH = '<0.0.0'
 FIELDS = ('advisory', 'paths', 'reason', 'expires', 'review', 'removal')
@@ -163,10 +166,12 @@ def judge(findings: list[Finding], exceptions: dict[str, Exception_]) -> tuple[l
         label = f'{finding.module}（{finding.advisory}，{finding.severity}）'
         exception = exceptions.get(finding.advisory)
         if exception is None:
-            if finding.severity in BLOCKING:
+            if finding.severity in NON_BLOCKING:
+                notices.append(f'{label}：{finding.title}')
+            elif finding.severity in BLOCKING:
                 problems.append(f'{label} 不在例外清單上：{finding.title}；路徑 {", ".join(sorted(finding.paths))}')
             else:
-                notices.append(f'{label}：{finding.title}')
+                problems.append(f'{label} 的嚴重度認不得，當成要擋：{finding.title}；路徑 {", ".join(sorted(finding.paths))}')
             continue
         if finding.patched != NO_PATCH:
             problems.append(f'{label} 有修補版了（patched_versions {finding.patched}）：升版並撤掉例外')

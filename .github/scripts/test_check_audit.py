@@ -81,17 +81,32 @@ class Blocking(unittest.TestCase):
         self.assertIn('不在例外清單上', problems[0])
 
     def test_critical_not_listed_fails(self) -> None:
-        self.assertTrue(run(audit(advisory(severity='critical')), listed()))
+        problems = run(audit(advisory(severity='critical')), listed())
+        self.assertEqual(len(problems), 1)
+        self.assertIn('不在例外清單上', problems[0])
 
     def test_high_listed_passes(self) -> None:
         # 例外清單上的那一筆，metadata 仍照算 high 1（pnpm 10.34.5 實測）；只看 advisories 才會綠。
         self.assertEqual(run(audit(advisory()), listed(entry())), [])
 
     def test_moderate_and_low_only_noted(self) -> None:
-        output = audit(advisory('GHSA-2222-3333-4444', 'moderate'), advisory('GHSA-5555-6666-7777', 'low'))
+        output = audit(
+            advisory('GHSA-2222-3333-4444', 'moderate'),
+            advisory('GHSA-5555-6666-7777', 'low'),
+            advisory('GHSA-2222-5555-7777', 'info'),
+        )
         problems, notices, _raw = check(lambda: output, listed(), TODAY)
         self.assertEqual(problems, [])
-        self.assertEqual(len(notices), 2)
+        self.assertEqual(len(notices), 3)
+
+    def test_unknown_severity_fails_closed(self) -> None:
+        missing = advisory()
+        del missing['severity']
+        for item in (missing, advisory(severity='severe')):
+            with self.subTest(severity=item.get('severity')):
+                problems = run(audit(item), listed())
+                self.assertEqual(len(problems), 1)
+                self.assertIn('嚴重度認不得', problems[0])
 
     def test_clean_audit_passes(self) -> None:
         self.assertEqual(run(audit(), listed()), [])
