@@ -100,17 +100,19 @@ export class ResumeWorkspaceConflictError extends Error {
    * @param sessionId - 要續接的那份會話。
    * @param requestedRoot - 這一次 `--workspace` 解析出來的根。
    * @param existingRoot - header 記的那個。
+   * @param remedy - 訊息最後那句出路；省略就是「用 --workspace <header 的根> 再接」。serve 有私有根之後（#1775）另有出路，由它自己講。
    */
   constructor(
     readonly entry: string,
     readonly sessionId: string,
     readonly requestedRoot: string,
     readonly existingRoot: string,
+    remedy?: string,
   ) {
     super(
       `${entry} 接不回來：會話 "${sessionId}" 跑在工作區 ${existingRoot} 底下，` +
         `不是 ${requestedRoot}。那份日誌記下的檔案路徑錨在前者，接到後者上讀到的會是` +
-        `另一個工作區裡的同名檔。用 --workspace ${existingRoot} 再接。`,
+        `另一個工作區裡的同名檔。${remedy ?? `用 --workspace ${existingRoot} 再接。`}`,
     );
   }
 }

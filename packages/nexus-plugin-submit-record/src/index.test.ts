@@ -37,6 +37,7 @@ function fsHandle(backend: AnyBackendProtocol | undefined): FsService {
     offWorkspacePrefixes: () => [],
     hasWorkspace: () => true,
     workspaceRoot: () => undefined,
+    sharedWorkspacePrefix: () => undefined,
   };
 }
 

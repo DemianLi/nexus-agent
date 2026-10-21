@@ -51,6 +51,7 @@ function handleOf(backend: unknown): FsService {
     offWorkspacePrefixes: () => [],
     hasWorkspace: () => true,
     workspaceRoot: () => undefined,
+    sharedWorkspacePrefix: () => undefined,
   };
 }
 
@@ -159,6 +160,35 @@ describe('讀工作區根那一層', () => {
     const injections = await inject({ '/AGENTS.md': '規矩。' });
     expect(injections).toHaveLength(1);
     expect(injections?.[0]?.additionalKwargs).toEqual({ [AGENT_INSTRUCTIONS_MARKER]: true });
+  });
+});
+
+describe('新 thread 讀唯讀共用區（#1775）', () => {
+  /** 有共用區前綴的 fs 把手：私有根（`/`）與共用區（`/shared`）各有一份指示檔，內容不同。 */
+  function handleWithShared(prefix: string | undefined, backend: unknown): FsService {
+    return { ...handleOf(backend), sharedWorkspacePrefix: () => prefix };
+  }
+  const BACKEND = fakeBackend({
+    '/AGENTS.md': 'PRIVATE-RULE',
+    '/shared/AGENTS.md': 'DEPLOY-RULE',
+  });
+  const run = (prefix: string | undefined) =>
+    createAgentInstructionsListener(DEFAULT_MAX_BYTES, {
+      fs: () => ({ kind: 'ok', fs: handleWithShared(prefix, BACKEND), address: { kind: 'root' } }),
+    })([], INVOCATION);
+
+  it('有共用區前綴：部署方放在共用區的指示進基線，模型寫進私有根的 /AGENTS.md 不會', async () => {
+    const text = (await run('/shared'))?.[0]?.content ?? '';
+    expect(text).toContain('DEPLOY-RULE');
+    expect(text).not.toContain('PRIVATE-RULE');
+    // 標頭仍是候選檔名，不帶前綴（模型看到的是「Instructions from: AGENTS.md」）。
+    expect(text).toContain('Instructions from: AGENTS.md');
+  });
+
+  it('沒有共用區前綴（舊 thread、沒有圍堵）：照舊讀 /', async () => {
+    const text = (await run(undefined))?.[0]?.content ?? '';
+    expect(text).toContain('PRIVATE-RULE');
+    expect(text).not.toContain('DEPLOY-RULE');
   });
 });
 
@@ -279,15 +309,15 @@ describe('樹上這一列（#1474）', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告兩個必要依賴：agentLoop（^1.0.0）、fs（^2.0.0）；沒有 default 匯出', () => {
+  it('manifest 宣告兩個必要依賴：agentLoop（^1.0.0）、fs（^2.1.0）；沒有 default 匯出', () => {
     expect(module.manifest.consumes).toEqual([
       { token: 'agentLoop', range: '^1.0.0' },
-      { token: 'fs', range: '^2.0.0' },
+      { token: 'fs', range: '^2.1.0' },
     ]);
     expect(module.manifest.provides).toEqual([]);
     expect(module.inject).toEqual({
       agentLoop: { range: '^1.0.0' },
-      fs: { range: '^2.0.0' },
+      fs: { range: '^2.1.0' },
     });
     expect(agentLoopToken.name).toBe('agentLoop');
     expect('default' in module).toBe(false);

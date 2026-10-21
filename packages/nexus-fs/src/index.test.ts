@@ -21,7 +21,7 @@ afterEach(async () => {
 describe('@nexus/fs 的定義', () => {
   it('token 名是 fs，契約版本是 semver 常數', () => {
     expect(fsToken).toEqual({ name: 'fs', version: FS_LOOKUP_CONTRACT_VERSION });
-    expect(FS_LOOKUP_CONTRACT_VERSION).toBe('2.0.0');
+    expect(FS_LOOKUP_CONTRACT_VERSION).toBe('2.1.0');
   });
 
   it('virtualPathOf 是 core 那一支的單向轉出：同一個函式、相對路徑以根為起點、.. 夾回根（#1469）', () => {
@@ -138,6 +138,35 @@ describe('@nexus/fs 的定義', () => {
       }
       await context.fiber.dispose();
     }
+  });
+
+  // #1785 第 1 點（卡 #1774 驗收「契約版本」）：2.0.0 是破壞性改動，宣告舊範圍的消費者不能掛上新提供者（Loader 的 `inject` 檢查擋下）。
+  // 2.1.0（#1775）是向後相容的新增：`^2.0.0` 照樣掛得上，要新方法的消費者宣告 `^2.1.0`，更新的 `^2.2.0` 掛不上。
+  it.each([
+    ['^1.0.0', false],
+    ['^1.1.0', false],
+    ['^1.2.0', false],
+    ['^2.0.0', true],
+    ['^2.1.0', true],
+    ['^2.2.0', false],
+  ] as const)('宣告 need(fsToken, %s) 的消費者在 %s 提供者上 apply：%s', async (range, applied) => {
+    const provider = createFsLookupProvider(() => ({ kind: 'not-attached' }));
+    let ran = false;
+    const consumer = {
+      name: 'fs-consumer',
+      inject: injectOf(need(fsToken, range)),
+      apply() {
+        ran = true;
+      },
+    };
+    const context = new Context();
+    root = context;
+    await context.plugin(Loader);
+    Object.assign(context.loader.builtins, { fs: provider.Provider, consumer });
+    await context.loader.create({ id: 'fs', name: 'cordis:fs' } as never, null);
+    await context.loader.create({ id: 'c', name: 'cordis:consumer' } as never, null);
+    await context.loader.await().catch(() => undefined);
+    expect(ran).toBe(applied);
   });
 
   it('三角色：定義套件只相依 SDK 與 core 的單向轉出（型別與 virtualPathOf）；core 與 SDK 是 peer，不進 dependencies', () => {

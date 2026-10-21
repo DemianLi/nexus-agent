@@ -104,6 +104,7 @@ async function mount(
     offWorkspacePrefixes: () => prefixes,
     hasWorkspace: () => options.workspace ?? true,
     workspaceRoot: () => undefined,
+    sharedWorkspacePrefix: () => undefined,
   };
   const sessions = new SessionRegistry('unit');
   const tools = createToolsProvider();

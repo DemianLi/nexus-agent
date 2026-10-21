@@ -77,8 +77,12 @@ export { virtualPathOf } from '@nexus/core';
  *   查不到就是 `undefined`，不猜。
  *
  * 這一版不改任何行為：每條 thread 拿到的仍是 `--workspace` 解析出來的那一個根；每條 thread 配自己的根是之後的事。消費者的範圍一起跳到 `^2.0.0`。
+ *
+ * `2.1.0`（[#1775](https://github.com/DemianLi/nexus-agent/issues/1775)）：`FsService` 多 `sharedWorkspacePrefix()`——新 thread 有私有可寫根、
+ * `--workspace` 退成唯讀共用區時，共用區在模型位址空間裡的前綴（沒有共用區是 `undefined`）。向後相容的新增：只用 `backend()`／`workspaceRoot()` 等
+ * 既有方法的消費者（`^2.0.0`）照常；要讀共用區的消費者（`agent-instructions`）宣告 `^2.1.0`。
  */
-export const FS_LOOKUP_CONTRACT_VERSION = '2.0.0';
+export const FS_LOOKUP_CONTRACT_VERSION = '2.1.0';
 
 /**
  * 找這次呼叫那條 thread 的 fs 把手的結果。

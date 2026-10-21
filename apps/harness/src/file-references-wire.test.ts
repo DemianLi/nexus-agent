@@ -9,7 +9,7 @@
 
 import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 
 import type { BaseMessage } from '@langchain/core/messages';
 import type { Event, WireClient } from '@nexus/wire';
@@ -50,11 +50,15 @@ async function workspace(): Promise<string> {
 }
 
 async function serve(argv: readonly string[], cwd?: string): Promise<RunningServe> {
+  // 量的是列檔，不是私有根：給了 `--workspace` 就把可寫根固定成它（接縫，#1775 之前的形狀）。
+  const at = argv.indexOf('--workspace');
+  const workspace = at === -1 ? undefined : resolve(cwd ?? process.cwd(), argv[at + 1] as string);
   running = (await runServe({
     argv: ['--port', '0', ...argv],
     log: () => undefined,
     env: {},
     ...(cwd === undefined ? {} : { cwd }),
+    ...(workspace === undefined ? {} : { workspaceRootOf: () => workspace }),
   })) as RunningServe;
   return running;
 }

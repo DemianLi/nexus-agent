@@ -70,6 +70,8 @@ ${deliverableFilesPatch}`,
     argv: ['--port', '0', '--workspace', dir, '--patch', patch],
     log: () => undefined,
     env: {},
+    // 量的是交付檔的上限，不是私有根：可寫根固定成 `--workspace`（接縫，#1775 之前的形狀）。
+    workspaceRootOf: () => dir,
   })) as RunningServe;
   const client = await serveClient(running);
   const events = await client.openEvents(THREAD);

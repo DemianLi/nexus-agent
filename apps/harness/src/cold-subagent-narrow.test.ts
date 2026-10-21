@@ -153,6 +153,8 @@ async function startServe(
     ],
     log: (line) => void lines.push(line),
     env: where.env,
+    // 量的是子代理的委派快照，不是私有根：可寫根固定成 `--workspace`（接縫，#1775 之前的形狀）。
+    workspaceRootOf: () => where.workspace,
   })) as RunningServe;
 }
 

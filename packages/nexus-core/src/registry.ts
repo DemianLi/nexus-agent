@@ -332,6 +332,12 @@ export interface NexusServices {
    * **沒有工作區就沒人提供**：`services.get()` 回 `undefined` 就是「這次組裝沒有工作區」，要用根的 plugin 據此不合格。
    */
   workspaceRoot: string;
+  /**
+   * 唯讀共用參考區在模型位址空間裡的前綴（#1775）。名字見 {@link ./sandbox.ts | SHARED_WORKSPACE_SERVICE}。
+   *
+   * **這條 thread 沒有共用區就沒人提供**：`--workspace` 沒給、或這條是舊 thread（可寫根本來就是共用區）。
+   */
+  sharedWorkspace: string;
 }
 
 /** 已經宣告過型別的服務名。空表時是 `never`，那時只有寬的多載可用。 */
@@ -422,6 +428,10 @@ export interface BackendRegistrationPoint {
    *   `CompositeBackend.getBackendAndKey()` 直接對前綴做 `startsWith` 與
    *   `slice(0, -1)`，少了尾斜線它會切錯路徑。同時也讓「同一個掛載點」只有一種
    *   寫法，重複偵測才是可靠的。
+   *   **不得與組裝點自己的路由重疊**（#1775）：`/shared`（唯讀共用區）、`/attachments`、`/conversation_history`、
+   *   `/large_tool_results`——相同、更深、更上層（含根 `/`）的前綴，fold 當場拋（`FoldOptions.reservedBackendPrefixes`，
+   *   訊息點名外掛與前綴）。外掛的路由包在組裝點預設路由的外面，重疊會遮住那一條（例如讓唯讀共用區變可寫）。
+   *   CLI 與 serve 一樣生效；沒給 `reservedBackendPrefixes` 的呼叫端（單元測試）不受限。
    * @param backend - backend 實例。
    * @returns 只撤銷這一次掛載的冪等 undo。
    */
