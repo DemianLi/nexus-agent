@@ -269,7 +269,11 @@ export class AttachmentStore {
    */
   async readOnlyRoute(scope: AttachmentScope): Promise<ThreadScopedAttachmentBackend> {
     await this.#prepare();
-    return new ThreadScopedAttachmentBackend({ rootDir: this.filesDir, scope });
+    return new ThreadScopedAttachmentBackend({
+      rootDir: this.filesDir,
+      scope,
+      warn: this.#warn,
+    });
   }
 
   /**

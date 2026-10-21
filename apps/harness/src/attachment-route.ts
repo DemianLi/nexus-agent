@@ -52,6 +52,9 @@ import { referencedFilePaths } from './attachment-reference.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
 import type { RipgrepInternals } from './ripgrep-runner.js';
 
+/** 附件路由 grep 出錯時模型看到的那一句：固定字串、不帶任何路徑（#1822）。 */
+export const ATTACHMENT_SEARCH_FAILED_MESSAGE = 'grep failed while searching the attachments';
+
 /** 路由問「這條 thread 的 root 日誌現在長什麼樣」的口。 */
 export interface AttachmentScope {
   /** root 日誌現在的事件；還沒接上或已解綁是 `undefined`（路由什麼都不露出）。**每次呼叫都重讀，不要快取。** */
@@ -118,12 +121,15 @@ function visibleOf(events: readonly SessionEvent[] | undefined): Visible {
  */
 export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
   readonly #scope: AttachmentScope;
+  readonly #warn: (line: string) => void;
 
   constructor(options: {
     readonly rootDir: string;
     readonly scope: AttachmentScope;
     /** 測試接縫（數 rg 起了幾次）。 */
     readonly ripgrep?: RipgrepInternals;
+    /** 伺服器日誌：搜尋出錯時 rg 的原始訊息只寫在這裡（#1822）。省略即標準錯誤。 */
+    readonly warn?: (line: string) => void;
   }) {
     super({
       rootDir: options.rootDir,
@@ -131,6 +137,7 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
       ...(options.ripgrep === undefined ? {} : { ripgrep: options.ripgrep }),
     });
     this.#scope = options.scope;
+    this.#warn = options.warn ?? ((line) => process.stderr.write(`${line}\n`));
   }
 
   /** 這一刻能看到什麼：**每次呼叫重算一次**，一次呼叫裡前後一致。 */
@@ -244,7 +251,14 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     // **一次 rg 搜全部目標**（`grepPaths`），不是一個目錄起一次：引用很多時（幾百個）每次 grep 起幾百個 rg 子行程。
     // `maxCount` 不傳下去（傳 `null`），濾完引用集之後才截斷，`truncated` 才對得上使用者看得到的筆數。
     const found = await this.grepPaths(pattern, targets, glob, null);
-    if (found.error !== undefined) return found;
+    if (found.error !== undefined) {
+      // **rg 的原始訊息不交給模型**（#1822）：它會帶出同一個附件目錄下、這條 thread 沒引用過的別名檔名（`…/SECRET.txt: Permission denied`），
+      // 結果過濾只擋得到命中的那幾行、擋不到錯誤字串。模型拿固定的一句，原文寫進伺服器日誌給管理者。
+      // dsh 沒有對應做法（單人桌面、沒有「這條 thread 引用過哪些檔」的引用集；`search-core.ts` 的 `classifyRunFailure` 把 stderr 原樣接在訊息後面），
+      // 這是偏離 3（#1773，理由 2）帶出來的需求。
+      this.#warn(`[附件路由] grep 出錯，原始訊息不交給模型：${found.error}`);
+      return { error: ATTACHMENT_SEARCH_FAILED_MESSAGE };
+    }
     const matches = (found.matches ?? []).filter((match) => visible.files.has(match.path));
     return applyGrepMaxCount({ result: { matches }, maxCount: maxCount ?? null });
   }

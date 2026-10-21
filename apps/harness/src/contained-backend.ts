@@ -722,7 +722,16 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     }
     const outcome = await runRipgrep({
       executable,
-      argv: ['--json', '-F', ...(glob ? ['--glob', glob] : []), '--', pattern, ...searchArgs],
+      // 照 dsh `buildGrepCommand`（`packages/fs/tool-fs-search/src/grep.ts:112`，`687f282e`）：pattern 與 glob 走 `--flag=value` 形式、
+      // 起點放在 `--` 後面，模型給的值不可能被當成旗標（`-x` 開頭的 pattern 照樣是 pattern）。`-F` 是 nexus 自己的（#1605 Q1）。
+      argv: [
+        '--json',
+        '-F',
+        ...(glob ? [`--glob=${glob}`] : []),
+        `--regexp=${pattern}`,
+        '--',
+        ...searchArgs,
+      ],
       cwd: this.cwd,
       signal: currentToolCallSignal(),
       internals: this.ripgrepInternals,

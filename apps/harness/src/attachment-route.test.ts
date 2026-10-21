@@ -18,7 +18,7 @@
  * **零憑證、零外部連線**：模型是腳本，儲存放 `/var/tmp`。
  */
 
-import { mkdtemp, rm } from 'node:fs/promises';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 
 import type { BaseMessage } from '@langchain/core/messages';
@@ -29,7 +29,11 @@ import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createAttachmentScope, ThreadScopedAttachmentBackend } from './attachment-route.js';
+import {
+  ATTACHMENT_SEARCH_FAILED_MESSAGE,
+  createAttachmentScope,
+  ThreadScopedAttachmentBackend,
+} from './attachment-route.js';
 import { AttachmentStore, attachmentsRootOf, ATTACHMENTS_PREFIX } from './attachment-store.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
@@ -213,6 +217,87 @@ describe('路由只露出這條 thread 日誌引用過的檔', () => {
     // 0 份引用：同一個結果、同樣不起 rg。
     expect(await routeFor([]).grep('needle', '/')).toEqual({ matches: [] });
     expect(spawns).toHaveLength(0);
+  });
+
+  describe('grep 出錯：rg 的原始訊息不交給模型（#1822）', () => {
+    const ALIAS = 'SECRET-ALIAS-NAME.txt';
+
+    /** 一個只引用 `a.txt` 的路由；`warn` 收伺服器日誌。 */
+    async function routeWith(executable?: string) {
+      const a = await put('needle once\n', 'a.txt');
+      const warned: string[] = [];
+      const scope = createAttachmentScope();
+      scope.bind({ events: [turnStart(a.ref)] });
+      const route = new ThreadScopedAttachmentBackend({
+        rootDir: store.filesDir,
+        scope,
+        warn: (line) => warned.push(line),
+        ...(executable === undefined ? {} : { ripgrep: { executable } }),
+      });
+      return { a, route, warned };
+    }
+
+    it('rg 的 stderr 帶著沒引用的別名檔名：模型只拿到固定的一句，原文進伺服器日誌', async () => {
+      const fake = join(home, 'fake-rg');
+      await writeFile(
+        fake,
+        `#!/bin/sh\necho "rg: ./a/b/${ALIAS}: Permission denied (os error 13)" >&2\nexit 2\n`,
+      );
+      await chmod(fake, 0o755);
+      const { route, warned } = await routeWith(fake);
+
+      const result = await route.grep('needle', '/');
+      expect(result.error).toBe(ATTACHMENT_SEARCH_FAILED_MESSAGE);
+      expect(JSON.stringify(result)).not.toContain(ALIAS);
+      expect(result.matches).toBeUndefined();
+      // 伺服器日誌留得到原始錯誤。
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toContain(ALIAS);
+      expect(warned[0]).toContain('Permission denied');
+    });
+
+    it.skipIf(process.getuid?.() === 0)(
+      '真的 rg：引用目錄裡一個沒引用、讀不到的別名檔，模型的結果裡沒有它的檔名',
+      async () => {
+        const { a, route, warned } = await routeWith();
+        // 同樣的位元組、另一個檔名：落在同一個 /前兩碼/hex 目錄，沒被引用，然後讓它讀不到。
+        const alias = await put('needle once\n', ALIAS);
+        expect(alias.path.split('/')[2]).toBe(a.path.split('/')[2]);
+        const aliasFile = join(store.filesDir, alias.path);
+        await chmod(aliasFile, 0o000);
+        try {
+          const result = await route.grep('needle', '/');
+          expect(JSON.stringify(result)).not.toContain(ALIAS);
+          // 真 rg 在這種情形回 exit 2：走錯誤路徑，原文只在日誌。
+          expect(result.error).toBe(ATTACHMENT_SEARCH_FAILED_MESSAGE);
+          expect(warned.join('\n')).toContain(ALIAS);
+        } finally {
+          await chmod(aliasFile, 0o644);
+        }
+      },
+    );
+
+    it('以 - 開頭的 pattern 照樣當 pattern 搜，argv 是 --regexp= 形式（照 dsh）', async () => {
+      const a = await put('see -leading-dash here\n', 'a.txt');
+      const spawns: (readonly string[])[] = [];
+      const scope = createAttachmentScope();
+      scope.bind({ events: [turnStart(a.ref)] });
+      const route = new ThreadScopedAttachmentBackend({
+        rootDir: store.filesDir,
+        scope,
+        ripgrep: { onSpawn: (argv) => spawns.push(argv) },
+      });
+
+      const result = await route.grep('-leading-dash', '/', '*.txt');
+      expect(result.error).toBeUndefined();
+      expect(result.matches?.map((m) => m.path)).toEqual([a.path]);
+      expect(spawns).toHaveLength(1);
+      expect(spawns[0]).toContain('--regexp=-leading-dash');
+      expect(spawns[0]).toContain('--glob=*.txt');
+      // 起點都在 `--` 後面。
+      const dashes = spawns[0]!.indexOf('--');
+      expect(spawns[0]!.slice(dashes + 1).every((arg) => arg.startsWith('./'))).toBe(true);
+    });
   });
 
   it('呼叫當下才判：同一個路由，日誌之後才引用的檔，之後就讀得到', async () => {
