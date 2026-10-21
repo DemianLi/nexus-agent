@@ -19,7 +19,7 @@
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
@@ -29,7 +29,7 @@ import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createNexusAgent } from './agent-factory.js';
-import { createAttachmentScope } from './attachment-route.js';
+import { createAttachmentScope, ThreadScopedAttachmentBackend } from './attachment-route.js';
 import { AttachmentStore, attachmentsRootOf, ATTACHMENTS_PREFIX } from './attachment-store.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
@@ -143,6 +143,78 @@ describe('路由只露出這條 thread 日誌引用過的檔', () => {
     expect((await route.grep('needle', a.path)).matches?.map((m) => m.path)).toEqual([a.path]);
   });
 
+  it('grep 引用了 200 份檔也只起一次 rg；結果與截斷照引用集算（#1782）', async () => {
+    const refs: AttachmentRef[] = [];
+    const paths: string[] = [];
+    // 二十份一批並行存：一份一份存要 6 秒多（每份都落盤），一次全開又怕撞檔案描述符上限。
+    for (let batch = 0; batch < 10; batch += 1) {
+      const saved = await Promise.all(
+        Array.from({ length: 20 }, (_, k) => {
+          const i = batch * 20 + k;
+          return put(`needle ${String(i)}\n`, `f${String(i)}.txt`);
+        }),
+      );
+      for (const one of saved) {
+        refs.push(one.ref);
+        paths.push(one.path);
+      }
+    }
+    // 沒被引用的檔：同樣含 needle，不該出現在結果裡。
+    await put('needle hidden\n', 'hidden.txt');
+    const spawns: (readonly string[])[] = [];
+    const scope = createAttachmentScope();
+    scope.bind({ events: [turnStart(...refs)] });
+    const route = new ThreadScopedAttachmentBackend({
+      rootDir: store.filesDir,
+      scope,
+      ripgrep: { onSpawn: (argv) => spawns.push(argv) },
+    });
+
+    const all = await route.grep('needle', '/');
+    expect(spawns).toHaveLength(1);
+    expect(all.matches?.map((m) => m.path).sort()).toEqual([...paths].sort());
+    expect(all.truncated).toBeUndefined();
+
+    spawns.length = 0;
+    const capped = await route.grep('needle', '/', null, 5);
+    expect(spawns).toHaveLength(1);
+    expect(capped.matches).toHaveLength(5);
+    expect(capped.truncated).toBe(true);
+  }, 30000);
+
+  it('起點裡有一個不存在就略過它、其餘照搜；0 份引用時一次 rg 都不起（#1782）', async () => {
+    const a = await put('needle a\n', 'a.txt');
+    const b = await put('needle b\n', 'b.txt');
+    const spawns: (readonly string[])[] = [];
+    const routeFor = (events: SessionEvent[]) => {
+      const scope = createAttachmentScope();
+      scope.bind({ events });
+      return new ThreadScopedAttachmentBackend({
+        rootDir: store.filesDir,
+        scope,
+        ripgrep: { onSpawn: (argv) => spawns.push(argv) },
+      });
+    };
+
+    // thread 引用過 b，但 b 的目錄後來被刪掉了：a 的命中照樣回、也只起一次 rg。
+    const route = routeFor([turnStart(a.ref, b.ref)]);
+    await rm(dirname(store.pathOf(b.ref)), { recursive: true, force: true });
+    const found = await route.grep('needle', '/');
+    expect(found.error).toBeUndefined();
+    expect(found.matches?.map((m) => m.path)).toEqual([a.path]);
+    expect(spawns).toHaveLength(1);
+
+    // 引用的目錄全都不存在：回空、不起 rg（不是 rg 對不存在的路徑報錯）。
+    spawns.length = 0;
+    await rm(dirname(store.pathOf(a.ref)), { recursive: true, force: true });
+    expect(await route.grep('needle', '/')).toEqual({ matches: [] });
+    expect(spawns).toHaveLength(0);
+
+    // 0 份引用：同一個結果、同樣不起 rg。
+    expect(await routeFor([]).grep('needle', '/')).toEqual({ matches: [] });
+    expect(spawns).toHaveLength(0);
+  });
+
   it('呼叫當下才判：同一個路由，日誌之後才引用的檔，之後就讀得到', async () => {
     const a = await put('alpha-secret\n', 'a.txt');
     const events: SessionEvent[] = [];
@@ -152,6 +224,24 @@ describe('路由只露出這條 thread 日誌引用過的檔', () => {
     events.push(turnStart(a.ref));
     expect(JSON.stringify(await route.read(a.path))).toContain('alpha-secret');
     expect((await route.ls('/')).files).toHaveLength(1);
+  });
+
+  it('呼叫當下才判，來源每次回一份新陣列也一樣（綁定當下不能把 events 存下來）（#1782）', async () => {
+    // `SessionRegistry.root.events` 是每次問都組一份新陣列的 getter：就地 push 的測試分不出「綁定時存了參照」與「每次重讀」。
+    const a = await put('alpha-secret\n', 'a.txt');
+    const backing: SessionEvent[] = [];
+    const scope = createAttachmentScope();
+    scope.bind({
+      get events() {
+        return [...backing];
+      },
+    });
+    const route = await store.readOnlyRoute(scope);
+
+    expect((await route.read(a.path)).error).toBeDefined();
+    backing.push(turnStart(a.ref));
+    expect(JSON.stringify(await route.read(a.path))).toContain('alpha-secret');
+    expect((await route.grep('alpha', '/')).matches?.map((m) => m.path)).toEqual([a.path]);
   });
 
   it('還沒綁日誌、或已解綁：什麼都不露出（fail closed）', async () => {
@@ -236,6 +326,19 @@ describe('路由只露出這條 thread 日誌引用過的檔', () => {
       (await withFile.route.read(`/../file-objects/${digest.slice(0, 2)}/${digest}`)).error,
     ).toBeDefined();
     expect((await withFile.route.read('/../file-objects')).error).toBeDefined();
+  });
+
+  it('參照陣列裡有 undefined：路由不拋——引用過的照讀、沒引用過的是「不存在」（#1782）', async () => {
+    const a = await put('alpha-secret\n', 'a.txt');
+    const b = await put('beta-secret\n', 'b.txt');
+    const { route } = await routeOver([turnStart(undefined as unknown as object, a.ref)]);
+    expect(JSON.stringify(await route.read(a.path))).toContain('alpha-secret');
+    expect((await route.read(b.path)).error).toMatch(/ENOENT/u);
+    expect((await route.ls('/')).files).toHaveLength(1);
+
+    const onlyHoles = await routeOver([turnStart(undefined as unknown as object)]);
+    expect((await onlyHoles.route.read(a.path)).error).toMatch(/ENOENT/u);
+    expect((await onlyHoles.route.ls('/')).files).toEqual([]);
   });
 
   it('寫、改、刪都擋；引用過的檔也一樣', async () => {

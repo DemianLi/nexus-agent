@@ -760,6 +760,8 @@ jq -c 'select(.seq == N)' ~/.nexus-agent/sessions/<專案目錄>/t1%2fbg-1.jsonl
   - **只有 `/readyz` 被抓過才等**：從起動到收尾都沒有人抓過，等了也沒人聽，直接關。
   - **探針間隔比時間窗長就有機會漏掉**：500 毫秒的時間窗，抓取間隔 5 秒的監控大多看不到 503，只會看到連不上。要讓這種監控看得到，把 `drainMs` 調大；上限 2000，因為行程收尾整體有 5 秒（收到第二次訊號當場結束，[#599](https://github.com/DemianLi/nexus-agent/issues/599)），時間窗之外還要留給 thread 收尾與落盤。
   - 時間窗內 serve 其餘路徑照常服務，不拒絕新請求。`0` 關掉時間窗。
+  - **時間窗內開的回合，在窗末會被切斷，上游（模型）請求照樣會送出**：窗內新進的 `/wire` 請求照常接受，窗末 `server.close()` 一開頭就斷掉所有連線，下行串流在那一刻被切。已經送出的上游請求不會因為這一刀取消。
+  - **致命例外（未捕捉的例外、未處理的 rejection）的收尾不等時間窗**（[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)）：fail-loud 只給收尾 2 秒就 `exit(1)`，時間窗最多也是 2 秒，兩個疊在一起 thread 收尾與落盤會被切掉。所以致命路徑立旗之後（`/readyz` 照回 503）直接收；只有 `SIGTERM`／`SIGINT` 等時間窗。
 
 Prometheus 的設定（跟 serve 在同一台主機上抓）：
 
@@ -2169,11 +2171,17 @@ LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
 - **正規化**：伺服器記下的是 `Intl` 回報的正規名，別名會收成同一個值。**讀日誌時照 dsh 逐字要求記著的名字等於這個執行期的正規名**，否則那一輪的 pre-step 拋錯。正規名由執行期的 ICU 決定（Node 25.9 把 `Asia/Kolkata` 收成 `Asia/Calcutta`），所以升 Node 之前要看下一條。
 - **升 Node 之前**（[#1733](https://github.com/DemianLi/nexus-agent/issues/1733)，demian 2026-10-20 拍板：照 dsh 不偏離、不回報上游）：
   - **實測**（CI 的 node-compat 兩格加本機，臨時探針在 PR #1772，量完已拿掉）：555 個名字（tzdata 所有 zone 與 link 名）裡有 110 個會被 `Intl` 改寫成別的正規名，例如 `Asia/Kolkata`→`Asia/Calcutta`、`Asia/Ho_Chi_Minh`→`Asia/Saigon`、`Europe/Kyiv`→`Europe/Kiev`、`US/Eastern`→`America/New_York`、`Etc/UTC`→`UTC`。**Node 22.19.0（ICU 77.1、tzdata 2025b）、25.9.0（ICU 78.3、2026a）、26.12.0（ICU 78.3、2026e）三邊逐條相同，沒有換版本會反過來的名字。** 沒量到的：ICU 只有 77.1 與 78.3 兩版（25.9 與 26.12 共用 78.3）；名單取自 tzdata 2026a，之後新增的名字沒量；用系統 ICU（`--with-intl=system-icu`）編的 Node 沒量。所以這是「目前沒看到」，不是保證。
-  - **影響範圍**：time-context 只讀**這一輪**的日誌事件（最後一個非 `resume` 的 `turn/start` 起）。撞到的只可能是**一個跨過升級的未完成輪**：升級前寫進日誌的名字，在那一輪還沒收完時被新 runtime 讀到。下一次 `run.start` 開的新一輪由新 runtime 重新正規化，不受影響（`@nexus/plugin-time-context` 的測試釘住這一點）。開卡時寫的「每輪都拋錯」是推測，讀碼後不成立。
+  - **影響範圍**：time-context 只讀**這一輪**的日誌事件（最後一個非 `resume` 的 `turn/start` 起）。升級前記下的名字，新 runtime 讀得到的有兩類：
+    - **一個跨過升級的未完成輪**：升級前寫進 `turn/start` 的名字，在那一輪還沒收完時被新 runtime 讀到。
+    - **升級前排著、還沒開跑的項目**（[#1779](https://github.com/DemianLi/nexus-agent/issues/1779)）：排隊中的 `next-turn` 與插話的 `next-step`。佇列不另外存，是從日誌的 `inbox/spliced` 折出來的（`packages/nexus-core/src/inbox.ts`），重開之後還在；項目開成新一輪、或插話被領走時，`pumpInputOf`／`userMessageSourceOf`（`apps/harness/src/thread-pump.ts`）把項目存著的 `source.clientTimeZone` **原樣**抄進新一輪的 `turn/start`／`user/message`，**不重新正規化**。所以升級前排著的每一件，升級後開那一輪（或被領走）時都會撞到；使用者升級後再送的一句排在它們後面。背景子代理的插話也帶時區（`subagent.send`，記在子代理自己的日誌上，退回的輪次與冷復活都跟著帶，見下面 #1734 那條）；**這一條沒有另外驗過子代理的佇列能不能跨過升級**，只確定日誌上記的名字會被同一個檢查讀到。`run-start-client-time-zone.test.ts` 的「升 Node 之前排著的項目」把這個行為釘住（不改行為）。
+    - 只有佇列裡**沒有**升級前舊項目時，下一次 `run.start` 開的新一輪才由新 runtime 重新正規化、不受影響（`@nexus/plugin-time-context` 的測試釘住這一點）。開卡時寫的「每輪都拋錯」是推測，讀碼後不成立。
   - **症狀**：那一輪的 pre-step 拋 `TypeError: browser time zone must be canonical: "<名字>"`，這一輪失敗（listener 拋錯不吞），`turn/failed.message` 就是這句。
   - **升之前先查**：在**新**的 Node 上，把日誌裡記過的時區名逐個問一遍；有不是正規名的，就是升完之後會撞到的那幾個（`$HOME_DIR` 換成 harness home）：
     ```bash
-    grep -rhoE '"clientTimeZone":"[^"]*"' "$HOME_DIR/sessions" | sed -E 's/.*:"([^"]*)"$/\1/' | sort -u | node -e "
+    (
+    set -o pipefail
+    [ -d "$HOME_DIR/sessions" ] || { echo "找不到 $HOME_DIR/sessions：HOME_DIR 設錯了" >&2; exit 2; }
+    { grep -rhoE '"clientTimeZone":"[^"]*"' "$HOME_DIR/sessions" || [ $? -eq 1 ]; } | sed -E 's/.*:"([^"]*)"$/\1/' | sort -u | node -e "
     const names = require('fs').readFileSync(0, 'utf8').split('\n').filter(Boolean);
     let bad = 0;
     for (const name of names) {
@@ -2184,9 +2192,10 @@ LLM 評審與使用者模擬器的準入規則、暫緩項與重開條件見
     console.log(names.length + ' 個名字，' + bad + ' 個不是這個 Node 的正規名');
     process.exit(bad === 0 ? 0 : 1);
     "
+    )
     ```
-    這是保守的檢查（掃全部日誌，實際上只有升級那一刻還沒收完的輪會被擋）。退出碼 0 就不用做別的。
-  - **撞到之後**：不用改日誌。那一輪失敗之後，使用者再送一句話就開新的一輪，新 runtime 會把瀏覽器回報的名字重新正規化寫進去（web 送出時帶 `client_time_zone`，[#1630](https://github.com/DemianLi/nexus-agent/issues/1630)）。升之前沒有還沒收完的輪，就什麼都不會發生；要連那一輪都不撞，升之前先讓進行中的輪收完。
+    這是保守的檢查（掃全部日誌；實際會被擋的只有升級那一刻還沒收完的輪、與還排著的項目）。退出碼 0 就不用做別的；整段包在子殼層裡，貼進互動式終端機退出時只結束它自己、不會關掉你的終端機；**退出碼 2 是路徑設錯**（`$HOME_DIR/sessions` 不存在，不會印「0 個名字」假裝安全），1 是有不是正規名的名字，其他非 0 是 `grep` 本身出錯（`set -o pipefail`）。
+  - **撞到之後**：不用改日誌。撞到的那一輪失敗一次（pre-step 拋錯；升級前排著的項目是被開成那一輪、或被領走時撞到，項目隨那一輪離開佇列，不會一直重撞）；舊項目都開過之後，使用者再送一句話就開新的一輪，新 runtime 會把瀏覽器回報的名字重新正規化寫進去（web 送出時帶 `client_time_zone`，[#1630](https://github.com/DemianLi/nexus-agent/issues/1630)）。**要一件都不撞，升之前除了讓進行中的輪收完，還要把佇列清空**：排著的（`next-turn`）讓它跑完或在介面上刪掉，插話（`next-step`）也一樣。升之前沒有進行中的輪、佇列也空，就什麼都不會發生。
 - **記在哪**：人話的來源上，不進 thread 設定（那會是整條 thread 共用的一個值，同一條 thread 換了時區就說謊）。三個位置同 `request_id`：排著時 `inbox/spliced` 裡那一件的 `source.clientTimeZone`、開了一輪之後的 `turn/start`（`kind: 'message'`）、輪中插話被領走時 `user/message` 的 `source.clientTimeZone`。**格式 49，不標 `ignorable`**（既有事件上多的選填欄位，沒有 `ignorable` 可標）。**一台 48 的 runtime 讀不了 49 的檔**（`SessionFormatUnsupportedError`），而且續接時 header 會被改寫成 49：發版後退回前一版，被新版碰過的 thread 會打不開。沒帶 `client_time_zone` 的送出，日誌與以前位元組相同；48 以前的檔沒有這一格，等於沒帶，不補寫。
 - **誰讀**：`@nexus/plugin-time-context`，見上面「時間讀數」。**子代理不繼承**：派出去那一刻沒有人說話，子代理日誌的第一個 `turn/start` 不帶時區，它那一則讀數的第二行是 `unavailable`。dsh 派子代理時同樣沒帶時區（`packages/subagent/subagent/src/manager.ts:464` 給的是 `{ kind: 'user' }`）。
 - **人對背景子代理說話**（[#1734](https://github.com/DemianLi/nexus-agent/issues/1734)，**照 dsh** 的 `subagent.prompt` 帶 `clientTimeZone`，`packages/subagent/subagent/src/index.ts:447-475`）：`subagent.send` 的 `params.client_time_zone` 規則同 `run.start`（共用 `@nexus/wire` 的 `canonicalClientTimeZone`；不合法回 `invalid_argument` 並點名欄位，**排在「有沒有這個背景子代理」之前**，不讓呼叫端靠回應差別試探編號；省略＝維持現狀）。時區記在**子代理自己那份日誌**上這句人話的來源：子代理閒著，新一輪的 `turn/start`（`kind: 'message'`）帶 `clientTimeZone`；正在跑，下一步領走時 `user/message` 的 `source: { kind: 'user', clientTimeZone }`；被中止沒領走而退回的輪次與冷復活（先接回來再投遞）都跟著帶。子代理的下一則時間讀數因此是 `resolved`。wire client 的 `subagentSend(thread, runId, text, { clientTimeZone })` 已接上；web 的子代理輸入框送不送時區是 [#1630](https://github.com/DemianLi/nexus-agent/issues/1630) 那一側。**格式不變**（49 已含這兩個欄位）。

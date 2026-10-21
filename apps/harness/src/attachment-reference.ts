@@ -45,9 +45,12 @@ function* attachmentsInContent(content: unknown): Generator<ReferencedAttachment
  */
 function* attachmentsInRefs(refs: unknown): Generator<ReferencedAttachment> {
   if (!Array.isArray(refs)) return;
-  for (const entry of refs as readonly (Record<string, unknown> | null)[]) {
-    if (entry === null || typeof entry['attachmentId'] !== 'string') continue;
-    const { type, ...ref } = entry;
+  for (const entry of refs as readonly unknown[]) {
+    // `null`、`undefined`、字串、數字都不是參照：略過，不拋（#1782；#733 起讀圖路由用 `ref?.['type']`，對 `undefined` 也是略過）。
+    if (entry === null || typeof entry !== 'object') continue;
+    const candidate = entry as Record<string, unknown>;
+    if (typeof candidate['attachmentId'] !== 'string') continue;
+    const { type, ...ref } = candidate;
     if (type === 'image') yield { kind: 'image', ref: ref as unknown as ImageAttachmentRef };
     else if (type === 'file') yield { kind: 'file', ref: ref as unknown as FileAttachmentRef };
   }

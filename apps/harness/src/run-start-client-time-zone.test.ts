@@ -13,8 +13,9 @@
  * **零憑證、零外部連線**：模型是假 agent。
  */
 
-import type { SessionEvent } from '@nexus/core';
-import { SESSION_LOG_FORMAT_VERSION } from '@nexus/core';
+import { SESSION_LOG_FORMAT_VERSION, SessionLog, STEP_INBOX_CONFIG_KEY } from '@nexus/core';
+import type { SessionEvent, StepInbox } from '@nexus/core';
+import { foldTimeContext } from '@nexus/plugin-time-context';
 import { createWireClient } from '@nexus/wire';
 import { afterEach, describe, expect, it } from 'vitest';
 
@@ -268,6 +269,132 @@ describe('pump：三個位置與舊日誌', () => {
       ]);
     } finally {
       second.close();
+    }
+  });
+});
+
+// #1779：升 Node 之前排著、還沒開跑的項目（排隊中的 `next-turn`、插話的 `next-step`）也帶著日誌上記的時區名。
+// 開那一輪（或領走）時 `pumpInputOf`／`userMessageSourceOf` 把它**原樣**抄進 `turn/start`／`user/message`，不重新正規化；
+// 那個名字在新 Node 上若不是正規名，讀的時候（`foldTimeContext`）就拋 `must be canonical`。`docs/operations.md`「升 Node 之前」
+// 寫的處理方式（升之前佇列也要清空）依據的就是這個行為；這裡把它釘住，不改行為。
+describe('升 Node 之前排著的項目：原樣抄進新一輪，讀的時候才拋（#1779）', () => {
+  /** 在這個執行期上不是正規名的舊名字：升級前的 runtime 記的是它，升級後的 `Intl` 回報另一個。 */
+  const OLD_NAME = 'Asia/Kolkata';
+
+  it('前提：OLD_NAME 在這個執行期上不是正規名（ICU 哪天變了，這條先紅，不是下面的斷言莫名紅）', () => {
+    const canonical = new Intl.DateTimeFormat('en-US', { timeZone: OLD_NAME }).resolvedOptions()
+      .timeZone;
+    expect(canonical).not.toBe(OLD_NAME);
+  });
+
+  /** 領得走插話的假 agent：一輪開頭領一次、收尾前領到空為止。 */
+  function claimingAgent(): PumpAgent {
+    return {
+      streamEvents: async (_input: unknown, config: { configurable: Record<string, unknown> }) => {
+        const inbox = config.configurable[STEP_INBOX_CONFIG_KEY] as StepInbox;
+        return (async function* () {
+          await inbox.claim();
+          while ((await inbox.finish()).length > 0);
+          yield COMPLETED;
+        })();
+      },
+      getState: async () => ({ values: {} }),
+      updateState: async () => ({}),
+    } as unknown as PumpAgent;
+  }
+
+  function pumpOver(seed: SessionLog, agent: PumpAgent): ThreadPump {
+    return new ThreadPump(
+      agent,
+      'tz-upgrade',
+      undefined,
+      seed.events,
+      undefined,
+      undefined,
+      undefined,
+      true,
+    );
+  }
+
+  it('排隊中（next-turn）：帶別名的那一件開成新一輪，turn/start 照抄別名，foldTimeContext 拋 must be canonical', async () => {
+    const seed = new SessionLog('tz-upgrade');
+    seed.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [
+        { id: 'old-q', text: '升級前排著的', source: { kind: 'user', clientTimeZone: OLD_NAME } },
+      ],
+    });
+    const pump = pumpOver(seed, claimingAgent());
+    try {
+      expect(pump.inbox.map((item) => item.id)).toEqual(['old-q']);
+      // 使用者升級後再送一句：排在舊項目後面，舊項目先開那一輪。
+      await pump.submit({
+        kind: 'message',
+        text: '升級後的新一句',
+        id: 'new-q',
+        clientTimeZone: 'Asia/Calcutta',
+      });
+      await pump.whenIdle();
+      const starts = turnStarts(pump.sessionLog.events).map((event) => event.data);
+      expect(starts[0]).toStrictEqual({
+        kind: 'message',
+        text: '升級前排著的',
+        clientTimeZone: OLD_NAME,
+      });
+      // 讀「第一輪」的日誌（最後一個 turn/start 之前的那一段）：舊名字原樣在裡面，一讀就拋。
+      const events = pump.sessionLog.events;
+      const firstStart = events.findIndex((event) => event.type === 'turn/start');
+      const secondStart = events.findIndex(
+        (event, index) => index > firstStart && event.type === 'turn/start',
+      );
+      expect(() => foldTimeContext(events.slice(0, secondStart))).toThrow(
+        `browser time zone must be canonical: "${OLD_NAME}"`,
+      );
+    } finally {
+      pump.close();
+    }
+  });
+
+  it('插話（next-step）：領走時 user/message 的 source 照抄別名，foldTimeContext 拋 must be canonical', async () => {
+    const seed = new SessionLog('tz-upgrade');
+    seed.append('inbox/spliced', {
+      target: 'next-turn',
+      start: 0,
+      inserted: [{ id: 'm1', text: '開始', source: { kind: 'user' } }],
+    });
+    seed.append('turn/start', { kind: 'message', text: '開始' });
+    seed.append('inbox/spliced', { target: 'next-turn', start: 0, removedCount: 1, inserted: [] });
+    seed.append('inbox/spliced', {
+      target: 'next-step',
+      start: 0,
+      inserted: [
+        { id: 'old-s', text: '升級前插的', source: { kind: 'user', clientTimeZone: OLD_NAME } },
+      ],
+    });
+    seed.append('turn/end', { reason: { kind: 'aborted', cause: { kind: 'user' } } });
+    const pump = pumpOver(seed, claimingAgent());
+    try {
+      expect(pump.nextStep.map((item) => item.id)).toEqual(['old-s']);
+      await pump.submit({
+        kind: 'message',
+        text: '升級後',
+        id: 'new-m',
+        clientTimeZone: 'Asia/Calcutta',
+      });
+      await pump.whenIdle();
+      const claimed = pump.sessionLog.events.filter(
+        (event) => event.type === 'user/message' && event.data.source.kind === 'user',
+      );
+      expect(claimed.map((event) => (event.data as { source: unknown }).source)).toContainEqual({
+        kind: 'user',
+        clientTimeZone: OLD_NAME,
+      });
+      expect(() => foldTimeContext(pump.sessionLog.events)).toThrow(
+        `browser time zone must be canonical: "${OLD_NAME}"`,
+      );
+    } finally {
+      pump.close();
     }
   });
 });
