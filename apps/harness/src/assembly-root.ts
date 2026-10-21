@@ -50,6 +50,8 @@ import type { ToolResultStashOptions } from './tool-result-stash.js';
 import type { ThreadTitleLlmConfig } from './settings/thread-title-llm.js';
 import { createSessionTitleLlm } from './session-title-llm.js';
 import type { AttachSessionTitleLlm } from './session-title-llm.js';
+import { MCP_POOL_SERVICE } from '@nexus/plugin-mcp';
+import type { McpConnectionPool } from '@nexus/plugin-mcp';
 import {
   ApprovalPolicyController,
   type ApprovalPolicyValue,
@@ -786,6 +788,11 @@ export interface CreateCliAgentSession {
    * `registry.sessions`。
    */
   readonly sessionLookup?: SessionLookupRegistrar;
+  /**
+   * 行程級的 MCP 連線池（[#1677](https://github.com/DemianLi/nexus-agent/issues/1677)），當宿主服務交給 MCP 那幾列：一份設定整台
+   * 一份連線。**serve 傳**（起動期建一份、試組與每條 thread 傳同一份）；CLI 一個行程一個組裝，省略就是每列自己連，行為不變。
+   */
+  readonly mcpPool?: McpConnectionPool;
 }
 
 /**
@@ -921,6 +928,7 @@ export async function createCliAgent(
     rootSeed,
     tokenAnchorBook,
     sessionLookup,
+    mcpPool,
   }: CreateCliAgentSession = {},
 ): Promise<{
   agent: NexusAgent;
@@ -1144,6 +1152,8 @@ export async function createCliAgent(
       createHostServicesPlugin({
         channel,
         approvalPolicy,
+        // MCP 連線池（#1677）：缺席＝每列自己連（CLI）。
+        [MCP_POOL_SERVICE]: mcpPool,
         // 唯讀共用區的前綴（#1775）：缺席＝這條 thread 沒有共用區（舊 thread、CLI）。**與有沒有圍堵無關**：落盤關掉的新 thread 沒有圍堵、共用區照樣在。
         ...(sharedWorkspaceRoot !== undefined && { sharedWorkspace: SHARED_WORKSPACE_PREFIX }),
         // **有沒有圍堵是一格獨立的事實，不是控制器在不在**（#669）：對應 dsh 的 `ctx.fs.sandboxMode`。`sandbox-policy` 那一列據它

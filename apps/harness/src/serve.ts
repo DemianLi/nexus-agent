@@ -75,6 +75,7 @@ import {
 } from '@nexus/core';
 import type { StoredSessionHeader } from '@nexus/core';
 import { assertSameCwd } from './resume-guards.js';
+import { McpConnectionPool } from '@nexus/plugin-mcp';
 import { recordedSandboxMode } from '@nexus/plugin-sandbox-policy';
 import { installLaunchProxy } from './http-proxy-boot.js';
 import { processLaunchEnv } from './launch-env.js';
@@ -562,12 +563,20 @@ async function startUnderHomeLock(
       serverLog.serve.warn(message);
     },
   );
+  // **MCP 連線池整台一份**（#1677）：試組與每條 thread 都從它取，一份設定一份連線。起不來與關掉時都在這裡收，排在 server 自己的
+  // 收尾（thread 都撤了）之後、卸載根之前（池最後那句「關閉確認不到」要印得出來）。
+  const mcpPool = new McpConnectionPool({
+    log: (message) => {
+      serverLog.logger('mcp').warn(message);
+    },
+  });
   // **根（上面 `runServe` 建的）起不來與關掉時都在這裡卸載**（#1401），排在 server 自己的收尾之後、還原代理之前。
   let running: RunningServe;
   try {
-    running = await startServer(options, invocation, liveLaunch, serverLog, root);
+    running = await startServer(options, invocation, liveLaunch, serverLog, root, mcpPool);
   } catch (error) {
     serverLog.mountDefault();
+    await mcpPool.close();
     await root.dispose().catch(() => {});
     await disposeProxy();
     throw error;
@@ -577,7 +586,11 @@ async function startUnderHomeLock(
     close: async () => {
       try {
         try {
-          await running.close();
+          try {
+            await running.close();
+          } finally {
+            await mcpPool.close();
+          }
         } finally {
           await root.dispose();
         }
@@ -595,6 +608,7 @@ async function startServer(
   liveLaunch: LiveLaunch | undefined,
   serverLogOut: ServerLog,
   root: CordisRoot,
+  mcpPool: McpConnectionPool,
 ): Promise<RunningServe> {
   // `goalDriver` 那個閉包的參數也叫 `log`（它是讀日誌的 getter），所以伺服器日誌的三支在這裡另取名字，不讓兩個 `log` 在同一段裡打架。
   // **每一行伺服器日誌都帶等級**（#1534）：`log` 是狀態披露（info），`warn` 是要人處理的，`fail` 是起不來與收不了的（error）。
@@ -769,15 +783,18 @@ async function startServer(
     ...(options.cwd !== undefined && { cwd: options.cwd }),
   });
   const trial = await assembly
-    .create({
-      ...invocation,
-      liveModel,
-      ...(requestGate !== undefined && { requestGate }),
-      ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
-      threadTitle,
-      threadTitleLlm,
-      optionalEntries,
-    })
+    .create(
+      {
+        ...invocation,
+        liveModel,
+        ...(requestGate !== undefined && { requestGate }),
+        ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
+        threadTitle,
+        threadTitleLlm,
+        optionalEntries,
+      },
+      { session: { mcpPool } },
+    )
     .catch(async (error: unknown) => {
       if (!(error instanceof AssemblyDropError)) throw error;
       const startupError = startupErrorFrom(loaded, error, audit);
@@ -1210,6 +1227,7 @@ async function startServer(
             // 不變量違規走伺服器日誌的 error 等級（#1534）：logger 名 `invariant`，文字就是 runner 預設 `console.error` 印的那一句。
             session: {
               tokenAnchorBook,
+              mcpPool,
               onInvariantViolation: (error) => {
                 invariantLogger.error(error.message);
               },

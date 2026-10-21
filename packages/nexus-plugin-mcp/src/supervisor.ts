@@ -104,7 +104,10 @@ export interface SupervisorHooks<G> {
   readonly now?: () => number;
 }
 
-/** 一台 server 的連線監督者；建構時第 0 代已經連上。 */
+/**
+ * 一台 server 的連線監督者。建構時給第 0 代就是已經連上；不給是**第一次就連不上**，立刻照退避排下一次（照 dsh 初次失敗也走
+ * `scheduleReconnect`，`connection.ts:209-243`）——第一次嘗試由呼叫端自己做，它才知道要不要拋（`failOnStartupError`）。
+ */
 export class Supervisor<G> {
   private readonly hooks: SupervisorHooks<G>;
   private generation: G | undefined;
@@ -115,9 +118,10 @@ export class Supervisor<G> {
   private attempt: Promise<void> = Promise.resolve();
   private gaveUpFlag = false;
 
-  constructor(hooks: SupervisorHooks<G>, initial: G) {
+  constructor(hooks: SupervisorHooks<G>, initial: G | undefined) {
     this.hooks = hooks;
-    this.adopt(initial);
+    if (initial === undefined) this.schedule(false);
+    else this.adopt(initial);
   }
 
   /** 目前這一代；掉線等待重連的期間、放棄之後、dispose 之後是 `undefined`。 */

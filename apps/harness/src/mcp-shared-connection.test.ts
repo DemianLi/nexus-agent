@@ -57,22 +57,26 @@ function pidsOf(marker: string): number[] {
   }
 }
 
-/** 一次讀數：連續兩次相同才算穩定（版本協商的探測行程會來了又走），峰值另外記。 */
+/**
+ * 一次讀數：連續兩次相同的 pid 集合才算穩定（版本協商的探測行程會來了又走），峰值另外記。記 pid 不只記個數：
+ * 「起來後」與「3 條 thread 後」都是 1 的話，要是**同一個** pid 才證明試組連上的那一份留給了 thread 用。
+ */
 interface Reading {
   readonly stable: number;
   readonly peak: number;
+  readonly pids: readonly number[];
 }
 
 async function settle(marker: string, ms = 10_000): Promise<Reading> {
   const deadline = Date.now() + ms;
   let peak = 0;
-  let previous = -1;
+  let previous: string | undefined;
   for (;;) {
-    const count = pidsOf(marker).length;
-    peak = Math.max(peak, count);
-    if (count === previous) return { stable: count, peak };
-    if (Date.now() > deadline) throw new Error(`行程數一直在變：最後 ${String(count)}`);
-    previous = count;
+    const pids = pidsOf(marker).sort((a, b) => a - b);
+    peak = Math.max(peak, pids.length);
+    if (pids.join(',') === previous) return { stable: pids.length, peak, pids };
+    if (Date.now() > deadline) throw new Error(`行程一直在變：最後 ${pids.join(',')}`);
+    previous = pids.join(',');
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
 }
@@ -155,11 +159,20 @@ describe.each([
     readings['收掉後'] = await settle(marker);
 
     console.log(`#1677 ${label}：${JSON.stringify(readings)}`);
+    // 改之前（c5fe199b 量到）：0／3／0／0，每條 thread 各起一個、逐出就收。
+    // 改之後（驗收 A、D、D2）：試組連上的那一份留給 thread 用，逐出之後目前的版本照樣留著，收掉才關。
     expect(Object.fromEntries(Object.entries(readings).map(([at, r]) => [at, r.stable]))).toEqual({
-      起來後: 0,
-      '3 條 thread 後': 3,
-      全部逐出後: 0,
+      起來後: 1,
+      '3 條 thread 後': 1,
+      全部逐出後: 1,
       收掉後: 0,
     });
+    expect(
+      new Set(
+        [readings['起來後'], readings['3 條 thread 後'], readings['全部逐出後']].map(
+          (r) => r?.pids[0],
+        ),
+      ).size,
+    ).toBe(1);
   }, 60_000);
 });
