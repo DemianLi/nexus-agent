@@ -64,9 +64,11 @@
 import { access, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { MemorySaver } from '@langchain/langgraph';
 import { formatOrigin, loadPlugins } from '@nexus/core';
 import type { PluginEntry } from '@nexus/core';
+import { createMcpPlugin } from '@nexus/plugin-mcp';
 import { SUBMIT_RECORD_TOOL_NAME } from '@nexus/plugin-submit-record';
 import { createSubmitRecordPlugin } from './submit-record.fixture.js';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -261,7 +263,27 @@ async function measure(plugins: () => readonly PluginEntry[], threadId: string):
  *
  * `submit-first` 是**對調**，不是刪掉。刪掉寬鬆那位只證明「它不能省」；**對調才證明是順序在
  * 決定**——同一組 plugin、同一份腳本，只換排列，結局就從「沒人看過就寫出去」變回「停下來等人」。
+ *
+ * ## 第四行：一位真的會出貨的第二位 gate
+ *
+ * MCP 那一列（[#1622](https://github.com/DemianLi/nexus-agent/issues/1622)）不在出貨清單，部署方用 patch 插；插了就有第二位 gate。
+ * 它照 (a) 寫——不是自己的工具一律 `next()`——所以排在 submit-record 前面，`submit_record` 照樣停下來等人。這一行就是那句話的
+ * 實測：閘門對別的工具改回 `allow`，它會變得跟第二行一樣。
  */
+const MCP_SERVER = fileURLToPath(new URL('./mcp-fixture-server.ts', import.meta.url));
+
+/** 一列沒寫 `approval` 的 MCP：整台都問（#1622 Q2 (a)），所以它一定掛了閘門。 */
+function mcpRowPlugin(): PluginEntry {
+  return createMcpPlugin({
+    serverName: 'crm',
+    connection: {
+      transport: 'stdio',
+      command: process.execPath,
+      args: ['--import', 'tsx', MCP_SERVER],
+    },
+  });
+}
+
 const ROWS = [
   {
     label: 'control：只有 submit-record',
@@ -280,6 +302,12 @@ const ROWS = [
     label: 'submit-first：同一組人，只把順序對調',
     threadId: 'gate-order-submit-first',
     plugins: () => [createSubmitRecordPlugin(), permissiveGatePlugin()],
+    outcome: 'interrupt=true written=false',
+  },
+  {
+    label: 'mcp-first：一列 MCP 的閘門排在 submit-record 之前',
+    threadId: 'gate-order-mcp-first',
+    plugins: () => [mcpRowPlugin(), createSubmitRecordPlugin()],
     outcome: 'interrupt=true written=false',
   },
 ] as const;

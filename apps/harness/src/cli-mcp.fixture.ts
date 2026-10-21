@@ -44,6 +44,8 @@ const mcpFixture: NexusPlugin = {
           command: process.execPath,
           args: ['--import', 'tsx', FIXTURE_SERVER],
         },
+        // 夾具 server 只回資料、不寫東西：照 #1622 的寫法明著宣告整台不問。
+        approval: { default: 'allow' },
       }),
     ),
 };
