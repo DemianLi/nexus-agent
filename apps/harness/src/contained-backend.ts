@@ -675,6 +675,16 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * 其餘（`--no-config`、上限、取消、錯誤分類、`maxCount` 在解析之後才套）與單一起點完全一樣。
    * 給「要搜的是一堆分散的子目錄」的子類用，免得一個目錄起一次 rg（[#1782](https://github.com/DemianLi/nexus-agent/issues/1782)）。
    *
+   * **偏離 dsh**（理由 2，登記在 `attachment-store.ts` 檔頭偏離 3）：dsh 的 `buildGrepCommand` 只收一個起點；多起點是附件路由
+   * 「只搜這條 thread 引用過的目錄」那條偏離帶出來的，這裡不為別的用途開放。
+   *
+   * **呼叫端負責去重**：起點不能重複、也不能互相包含（`['/a', '/a']`、`['/', '/a']` 會讓同一份檔的命中出現兩次）。附件路由給的是
+   * `Set` 裡互不重疊的第三層目錄，所以今天不會發生。
+   *
+   * **全部起點一次放進 argv，沒有分批**：作業系統的 argv 有長度上限，超過時 `spawn` 失敗，而這一層把 spawn 失敗一律說成
+   * `grep could not start its search command (ripgrep launch failed)`——**那句話會讓人以為 rg 不見了，其實是起點太多**。
+   * macOS 實測 1 萬個起點正常、2 萬個失敗；正式環境要一條 thread 引用上萬份附件才會碰到，所以不分批、只在這裡寫明。
+   *
    * @param dirPaths - 起點的虛擬路徑。
    */
   protected async grepPaths(

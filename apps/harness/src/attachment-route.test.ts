@@ -19,7 +19,7 @@
  */
 
 import { mkdtemp, rm } from 'node:fs/promises';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
@@ -181,6 +181,39 @@ describe('路由只露出這條 thread 日誌引用過的檔', () => {
     expect(capped.matches).toHaveLength(5);
     expect(capped.truncated).toBe(true);
   }, 30000);
+
+  it('起點裡有一個不存在就略過它、其餘照搜；0 份引用時一次 rg 都不起（#1782）', async () => {
+    const a = await put('needle a\n', 'a.txt');
+    const b = await put('needle b\n', 'b.txt');
+    const spawns: (readonly string[])[] = [];
+    const routeFor = (events: SessionEvent[]) => {
+      const scope = createAttachmentScope();
+      scope.bind({ events });
+      return new ThreadScopedAttachmentBackend({
+        rootDir: store.filesDir,
+        scope,
+        ripgrep: { onSpawn: (argv) => spawns.push(argv) },
+      });
+    };
+
+    // thread 引用過 b，但 b 的目錄後來被刪掉了：a 的命中照樣回、也只起一次 rg。
+    const route = routeFor([turnStart(a.ref, b.ref)]);
+    await rm(dirname(store.pathOf(b.ref)), { recursive: true, force: true });
+    const found = await route.grep('needle', '/');
+    expect(found.error).toBeUndefined();
+    expect(found.matches?.map((m) => m.path)).toEqual([a.path]);
+    expect(spawns).toHaveLength(1);
+
+    // 引用的目錄全都不存在：回空、不起 rg（不是 rg 對不存在的路徑報錯）。
+    spawns.length = 0;
+    await rm(dirname(store.pathOf(a.ref)), { recursive: true, force: true });
+    expect(await route.grep('needle', '/')).toEqual({ matches: [] });
+    expect(spawns).toHaveLength(0);
+
+    // 0 份引用：同一個結果、同樣不起 rg。
+    expect(await routeFor([]).grep('needle', '/')).toEqual({ matches: [] });
+    expect(spawns).toHaveLength(0);
+  });
 
   it('呼叫當下才判：同一個路由，日誌之後才引用的檔，之後就讀得到', async () => {
     const a = await put('alpha-secret\n', 'a.txt');
