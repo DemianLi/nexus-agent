@@ -28,6 +28,9 @@ import { endedWithoutAnswer } from '@/lib/question-view';
 /** 交出計劃的工具名（`@nexus/plugin-plan-mode` 的 `EXIT_PLAN_MODE_TOOL_NAME`）。 */
 export const EXIT_PLAN_MODE = 'exit_plan_mode';
 
+/** 沒帶工具呼叫 id 的審核用的計劃 id 開頭（`components/plan/review.tsx` 的 `planIdOf`）：這種 id 不在日誌裡。 */
+export const REVIEW_PLAN_ID_PREFIX = 'review:';
+
 /** 認出來的一次審核。 */
 export interface PlanReview {
   /** 審核那一題的 id：同意時答的就是它。 */
@@ -114,6 +117,18 @@ export function submittedPlanOf(entry: ToolEntry): PlanDocument | undefined {
   if (typeof plan !== 'string' || !HEADING.test(plan.trim())) return undefined;
   return planDocument(plan);
 }
+
+/**
+ * 計劃分頁的旁路掃描（#1798，`Conversation.findPlan`）找到什麼。照 dsh `planResourceProvider` 的幾種結局：找到（帶那一頁的
+ * `firstSeq`，給「定位」`loadThrough` 用）、掃完沒有（`plan/not-found`）、讀取失敗（`plan/read-failed`）。另外兩種是 nexus 的：
+ * 掃到一半換代（`stale`，呼叫端從新的游標重掃）與被中止（`aborted`，呼叫端已經不要了）。
+ */
+export type PlanScanOutcome =
+  | { readonly kind: 'found'; readonly plan: PlanDocument; readonly firstSeq: number }
+  | { readonly kind: 'not-found' }
+  | { readonly kind: 'failed'; readonly message: string }
+  | { readonly kind: 'stale' }
+  | { readonly kind: 'aborted' };
 
 /** 審核的結果：同意、要求修改（含選了繼續規劃、舊路由的拒絕）、這一輪被停掉。 */
 export type PlanOutcome = 'approved' | 'revise' | 'stopped';

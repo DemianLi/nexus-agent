@@ -506,6 +506,8 @@ function ConversationView({
   useEffect(() => () => trajectoryPull.dispose(), [trajectoryPull]);
   // 右側欄讀的跟卡片同一批 store（#640）：分頁與卡片看到的是同一份快取。
   // `conversation` 放的是 store（身分穩定），不是對話狀態：後者每一格串流都變，`sources` 一變 `RightSidebarPanel` 的 `memo` 就擋不住（#1033）。
+  // 計劃分頁的旁路掃描（#1798）從已載入那一頁的游標往前讀：第一頁到了才給，之前沒有游標可以起頭。
+  const historyReady = conversation.history !== undefined;
   const sidebarSources = useMemo(
     () => ({
       changes,
@@ -516,6 +518,7 @@ function ConversationView({
       subagentUsage,
       trajectoryPull,
       loadThrough: conversation.loadThrough,
+      ...(historyReady ? { findPlan: conversation.findPlan } : {}),
     }),
     [
       changes,
@@ -526,6 +529,8 @@ function ConversationView({
       subagentUsage,
       trajectoryPull,
       conversation.loadThrough,
+      historyReady,
+      conversation.findPlan,
     ],
   );
 
