@@ -22,7 +22,7 @@ import { UNWIRED_WIRE_CONTRACT } from '@/test/wire-contract';
  * `serve-history.test.ts`）。這裡只驗畫面這一層：歷史畫出來了、之後的即時回覆接得上、送出等歷史、兩句披露、往前翻。
  */
 
-/** 同 `App.test.tsx` 那一份：Node 25 的全域 `localStorage` 蓋住 jsdom 的。 */
+/** 同 `App.test.tsx` 那一份：Node 25 的全域已由 `vitest.shared.ts` 統一關掉（#1602），stub 留著是為了每條測試之間隔離。 */
 function memoryStorage(): Storage {
   const entries = new Map<string, string>();
   return {

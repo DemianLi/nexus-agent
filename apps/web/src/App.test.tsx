@@ -85,10 +85,8 @@ const findPanel = (name: string) => screen.findByRole('region', { name }, PANEL_
 /**
  * 一份活在記憶體裡的 `Storage`。
  *
- * **不用環境給的那一份**：Node 25 自己帶一個全域 `localStorage`，沒給 `--localstorage-file`
- * 時上面連 `getItem` 都沒有，而它蓋住了 jsdom 的那一份（實測 `getItem is not a function`）。
- * App 在那種環境照樣開得起來——那正是「讀寫失敗只是記不住」那條約定——但測試要的是一份真的
- * 記得住的。
+ * Node 25 自帶的全域 `localStorage` 蓋住 jsdom 那一份的問題，已由 `vitest.shared.ts` 統一關掉（`--no-webstorage`，
+ * #1602）；這份 stub 留著是為了每條測試之間隔離，上一條寫進去的不會留到下一條。
  */
 /** 側欄清單裡的會話列。搜尋框有字時的 ×（#1307）也是按鈕，不是列。 */
 function threadRows(list: HTMLElement): HTMLElement[] {

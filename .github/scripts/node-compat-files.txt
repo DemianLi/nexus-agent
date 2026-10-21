@@ -12,4 +12,5 @@ apps/harness/src/serve-home-lock.test.ts      # 同上，兩台 serve 搶同一�
 apps/harness/src/serve-shutdown.test.ts       # 真的子行程 serve 加訊號收尾
 apps/harness/src/serve-echo-on-tree.test.ts   # Loader 依套件名 import 插件的那條路
 apps/harness/src/entry-main.test.ts           # 經符號連結啟動時 import.meta.main 為真（#1502 刀 1；22.19 是它的下限）
-apps/web/src/lib/theme.test.tsx               # web 的 vitest 在這一版跑得起來；碰 localStorage（Node 25 起有行程全域的那份）。#1602 的 test-env.test.ts 合併後加進來
+apps/web/src/lib/theme.test.tsx               # web 的 vitest 在這一版跑得起來；碰 localStorage（Node 25 起有行程全域的那份）
+apps/web/src/test-env.test.ts                 # web 的 vitest 拿到的 localStorage／sessionStorage 是 jsdom 的，不是 Node 的行程全域（#1602：--no-webstorage 只有 25 以後有，22.19 那格恆綠、26 那格才分得出對錯）

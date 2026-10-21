@@ -15,8 +15,8 @@ import { memoryStorage, WithRightSidebar } from '@/test/right-sidebar';
  */
 
 /**
- * 右側欄把版面記在 `localStorage`：每個測試換一份新的，不然上一個測試開的分頁會留到下一個。Node 25 自帶的那份
- * 寫不進去，本機看不出來；CI 的 Node 22 用 jsdom 的，寫得進去。
+ * 右側欄把版面記在 `localStorage`：每個測試換一份新的，不然上一個測試開的分頁會留到下一個。Node 25 的全域蓋住
+ * jsdom 那份的問題已由 `vitest.shared.ts` 統一關掉（#1602）；這份 stub 是為了每條測試之間隔離。
  */
 beforeEach(() => {
   vi.stubGlobal('localStorage', memoryStorage());
