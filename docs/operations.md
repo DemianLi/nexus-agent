@@ -1237,9 +1237,10 @@ patch 檔是一個頂層 YAML 陣列，每一列按 `id` 指到一個條目：
           transport: stdio
           command: npx
           args: ['-y', '@modelcontextprotocol/server-github']
-        # 沒寫 approval 就整台都要人核准；這兩支只讀，免問（寫 server 自己公告的名字）
+        # 沒寫 approval 就整台都要人核准；只讀的那幾支列進 exempt 免問，
+        # 名字照 server 的 tools/list 公告的抄（不是模型看到的 mcp__github__…）
         approval:
-          exempt: [search_repositories, get_file_contents]
+          exempt: ['<只讀那支工具的名字>']
 
 # 插一顆自己寫的：路徑錨在這個 patch 檔旁邊（`./` 與 `../` 都可以，絕對路徑也可以），
 # 模組要 `export default` 那顆 plugin
