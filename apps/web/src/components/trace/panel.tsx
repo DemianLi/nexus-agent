@@ -38,9 +38,11 @@ import { useVisibleSnapshot } from '@/hooks/use-visible-snapshot';
 import {
   TRACE_HEADLINE,
   TRACE_LIMITS,
+  TRACE_LOCATE_LOADING_TEXT,
   TRACE_STRUCTURED_HEADLINE,
   TRACE_STRUCTURED_LIMITS,
   TRACE_TARGET_MISSING_TEXT,
+  loadsThrough,
   traceModel,
   turnSeqOfMessage,
 } from '@/lib/trace-view';
@@ -99,9 +101,12 @@ const Timeline = memo(function Timeline({
   onRevealed,
   puller,
   pull,
+  loadThrough,
 }: {
   state: ConversationState;
   locate: PanelBodyProps['locate'];
+  /** 往前載到某一輪（#1601）；沒給就是內文沒載入的呼叫不畫定位鈕。 */
+  loadThrough: ((seq: number) => Promise<void>) | undefined;
   reveal: TurnReveal | undefined;
   onRevealed: (nonce: number) => void;
   /** 按需拉細節（#1083）；沒給就只有推送的那幾輪。 */
@@ -242,11 +247,10 @@ const Timeline = memo(function Timeline({
   // 連按兩次同一個結果時句子沒變、DOM 沒變，報讀器不會再唸：先清空，隔一下再填回去。
   const relocate = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   useEffect(() => () => clearTimeout(relocate.current), []);
-  const onLocate = useCallback(
-    (row: TraceRow) => {
-      if (row.target === undefined) return;
-      const found = locate(row.target);
-      setMissing(found ? undefined : row.key);
+  const finishLocate = useCallback(
+    (key: string, target: string | undefined) => {
+      const found = target !== undefined && locate(target);
+      setMissing(found ? undefined : key);
       clearTimeout(relocate.current);
       setAnnounced('');
       const text = found ? TRACE_LOCATED_TEXT : TRACE_TARGET_MISSING_TEXT;
@@ -254,6 +258,49 @@ const Timeline = memo(function Timeline({
     },
     [locate],
   );
+  // 目標還沒載入（#1601）：先往前載到那一輪，**載完、畫出來之後**才定位。`await` 回來時對話區還沒重畫，當場找格子找不到，
+  // 所以只記下要找哪一列，等模型重算過、那一列有了 `target` 再交給下面的 effect。同時只記一筆，後按的取代先按的。
+  const [pending, setPending] = useState<
+    { readonly key: string; readonly settled: boolean } | undefined
+  >(undefined);
+  // 按下去那一刻才查這一列在哪一輪：模型每一格串流都換，放進 `onLocate` 的依賴會讓每一列的 `memo` 擋不住。
+  const modelRef = useRef(model);
+  modelRef.current = model;
+  const onLocate = useCallback(
+    (row: TraceRow) => {
+      if (row.target !== undefined) {
+        setPending(undefined);
+        finishLocate(row.key, row.target);
+        return;
+      }
+      const seq = modelRef.current.turns.find((turn) =>
+        turn.rows.some((candidate) => candidate.key === row.key),
+      )?.seq;
+      if (loadThrough === undefined || seq === undefined || !loadsThrough(row)) return;
+      const { key } = row;
+      setMissing(undefined);
+      setPending({ key, settled: false });
+      clearTimeout(relocate.current);
+      setAnnounced(TRACE_LOCATE_LOADING_TEXT);
+      void loadThrough(seq).then(() =>
+        setPending((current) => (current?.key === key ? { key, settled: true } : current)),
+      );
+    },
+    [finishLocate, loadThrough],
+  );
+  useEffect(() => {
+    if (pending === undefined || !pending.settled) return;
+    setPending(undefined);
+    let target: string | undefined;
+    for (const turn of model.turns) {
+      const row = turn.rows.find((candidate) => candidate.key === pending.key);
+      if (row !== undefined) {
+        target = row.target;
+        break;
+      }
+    }
+    finishLocate(pending.key, target);
+  }, [pending, model, finishLocate]);
   const onPull = useMemo(
     () =>
       puller === undefined
@@ -324,6 +371,7 @@ const Timeline = memo(function Timeline({
             missing={missing}
             revealed={turn.seq !== undefined && turn.seq === revealedSeq}
             onLocate={onLocate}
+            canLoadThrough={loadThrough !== undefined}
             pullStatus={
               turn.summaryOnly === true && turn.seq !== undefined
                 ? statusFor?.(turn.seq)
@@ -369,6 +417,7 @@ export function TraceBody({ visible, sources, locate, reveal, onRevealed }: Pane
       onRevealed={onRevealed ?? noop}
       puller={sources.trajectoryPull}
       pull={pull}
+      loadThrough={sources.loadThrough}
     />
   );
 }

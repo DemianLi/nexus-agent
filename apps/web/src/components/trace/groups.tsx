@@ -13,6 +13,7 @@ import { TraceRowView } from '@/components/trace/row';
 import { HeadFacts, TurnHeader } from '@/components/trace/turn-head';
 import { Button } from '@/components/ui/button';
 import { Collapsible, CollapsibleContent } from '@/components/ui/collapsible';
+import { loadsThrough } from '@/lib/trace-view';
 import type { TraceDigest, TraceRow, TraceTurn } from '@/lib/trace-view';
 import type { PullStatus } from '@/lib/trajectory-pull';
 import { TURN_KIND_LABEL } from '@/lib/trajectory-view';
@@ -33,6 +34,7 @@ export function TurnGroup({
   missing,
   revealed,
   onLocate,
+  canLoadThrough = false,
   pullStatus,
   onPull,
 }: {
@@ -43,6 +45,8 @@ export function TurnGroup({
   /** 剛被成本分頁指到的那一組：畫一圈標示。 */
   revealed: boolean;
   onLocate: (row: TraceRow) => void;
+  /** 面板拿得到 `loadThrough`（#1601）：內文沒載入的呼叫也畫定位鈕，按下去先載到這一輪。 */
+  canLoadThrough?: boolean;
   /** 只有摘要的組才有：載入細節的進度（沒給就不畫載入鈕）。 */
   pullStatus?: PullStatus | undefined;
   onPull?: ((seq: number) => void) | undefined;
@@ -97,6 +101,7 @@ export function TurnGroup({
             row={row}
             names={names}
             missing={missing === row.key}
+            loadable={canLoadThrough && turn.seq !== undefined && loadsThrough(row)}
             onLocate={onLocate}
           />
         ))}

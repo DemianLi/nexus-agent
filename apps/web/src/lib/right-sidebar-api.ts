@@ -38,6 +38,11 @@ export interface RightSidebarSources {
    * 分頁切走再回來、面板重掛，已經拉到的不必再拉。沒給就只有推送的那幾輪細節、更早的輪只有摘要。
    */
   readonly trajectoryPull?: TrajectoryPuller | undefined;
+  /**
+   * 往前載到日誌位置 `seq` 為止（#1601，`Conversation.loadThrough`）：觀測分頁的定位目標還沒載入時先載到那一輪。**身分要穩定**，
+   * 理由同 {@link RightSidebarSources.conversation}。沒給就是今天的樣子：內文沒載入的呼叫不畫定位鈕。
+   */
+  readonly loadThrough?: ((seq: number) => Promise<void>) | undefined;
 }
 
 /** 卡片用得到的那一半。 */

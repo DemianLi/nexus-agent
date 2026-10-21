@@ -197,12 +197,18 @@ export const TraceRowView = memo(
     row,
     names,
     missing,
+    loadable = false,
     onLocate,
   }: {
     row: TraceRow;
     names: ReadonlyMap<string, string>;
     /** 上一次按這一列的定位找不到。 */
     missing: boolean;
+    /**
+     * 這一列現在沒有地方可定位，但載入更早的對話之後就有（投影有、內文沒載入的呼叫，#1601）：照樣畫定位鈕，
+     * 按下去由面板先載到那一輪再定位。
+     */
+    loadable?: boolean;
     onLocate: (row: TraceRow) => void;
   }) {
     return (
@@ -211,7 +217,7 @@ export const TraceRowView = memo(
           <div className="min-w-0 flex-1">
             <RowBody row={row} names={names} />
           </div>
-          {row.target !== undefined && (
+          {(row.target !== undefined || loadable) && (
             <Button
               type="button"
               variant="ghost"
@@ -239,6 +245,7 @@ export const TraceRowView = memo(
     sameRow(previous.row, next.row) &&
     previous.names === next.names &&
     previous.missing === next.missing &&
+    previous.loadable === next.loadable &&
     previous.onLocate === next.onLocate,
 );
 
