@@ -73,7 +73,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { dirname, extname, relative, resolve, sep } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
@@ -258,18 +258,6 @@ function digestOf(operation: string, payload: readonly unknown[]): string {
 function sameDenial(bound: SandboxDenial | undefined, call: SandboxDenial): boolean {
   return bound !== undefined && bound.target === call.target && bound.digest === call.digest;
 }
-
-/**
- * 基座 `getMimeType`／`isTextMimeType`（`deepagents` 沒有匯出）判成非文字的副檔名：圖、音、影、pdf、ppt。
- * 基座的 `write` 對這些把內容當 base64 解碼成位元組再寫（附件與摘要器走的就是這條），所以這裡要一樣。
- * 升版時的對照：`contained-backend.test.ts` 對著裸的 `FilesystemBackend` 逐個副檔名比寫出來的位元組。
- */
-const NON_TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.heif',
-  '.mp3', '.wav', '.aiff', '.aac', '.ogg', '.flac',
-  '.mp4', '.webm', '.mpeg', '.mov', '.avi', '.flv', '.mpg', '.wmv', '.3gpp',
-  '.pdf', '.ppt', '.pptx',
-]); // prettier-ignore
 
 /**
  * 基座錯誤字句開頭的那個字。拆成常數是因為 `tool-error-prefix.test.ts` 釘住「字串裡寫 `Error: ` 的只有前綴的定義」；
@@ -492,7 +480,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    *
    * 基座的 `write` 是 `O_TRUNC` 就地覆寫，所以不能前後包一層，這裡自己做完：結果形狀與錯誤字句照基座
    * （成功 `{ path, filesUpdate: null }`，失敗 `{ error: "Error writing file '…': …" }`，symlink 的原句）。
-   * 非文字副檔名的內容照基座當 base64 解碼。整段在逐目標的鎖裡。
+   * **內容一律當 UTF-8 文字寫，不看副檔名**（[#1813](https://github.com/DemianLi/nexus-agent/issues/1813)，見下面的偏離）。整段在逐目標的鎖裡。
+   *
+   * **與 dsh 的偏離已撤銷：** 基座的 `write` 對非文字副檔名（圖、音、影、pdf、ppt）把內容當 base64 解碼成位元組再寫，工具描述沒講，模型寫的純文字落成亂碼
+   * 還回「Successfully wrote」。dsh 沒有任何依副檔名的分支（`packages/fs/tool-fs/src/write.ts:75/:82/:124`：UTF-8 文字，`fs-local` 的
+   * `writeFile(content, { encoding: 'utf8' })`），這裡照 dsh。要寫位元組的內部呼叫端走 `uploadFiles`（見下），不經過這支。
    *
    * @param filePath - 虛擬路徑。
    * @param content - 檔案內容。
@@ -513,13 +505,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         if (existing !== undefined && !existing.isFile()) {
           return { error: `Error writing file '${checked}': not a regular file` };
         }
-        const data = NON_TEXT_EXTENSIONS.has(extname(checked).toLowerCase())
-          ? Buffer.from(content, 'base64')
-          : content;
         await mkdir(dirname(resolved), { recursive: true });
         await writeFileAtomic(
           resolved,
-          data,
+          content,
           existing === undefined ? undefined : existing.mode & 0o777,
           this.atomicInternals,
         );
@@ -678,6 +667,32 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     glob?: string | null,
     maxCount?: number | null,
   ): Promise<GrepResult> {
+    return this.grepPaths(pattern, [dirPath || '.'], glob, maxCount);
+  }
+
+  /**
+   * {@link grep} 的本體，**一次 rg 搜多個起點**（rg 吃多個路徑引數）。起點之間不存在的略過、全都不存在回 `{ matches: [] }`；
+   * 其餘（`--no-config`、上限、取消、錯誤分類、`maxCount` 在解析之後才套）與單一起點完全一樣。
+   * 給「要搜的是一堆分散的子目錄」的子類用，免得一個目錄起一次 rg（[#1782](https://github.com/DemianLi/nexus-agent/issues/1782)）。
+   *
+   * **偏離 dsh**（理由 2，登記在 `attachment-store.ts` 檔頭偏離 3）：dsh 的 `buildGrepCommand` 只收一個起點；多起點是附件路由
+   * 「只搜這條 thread 引用過的目錄」那條偏離帶出來的，這裡不為別的用途開放。
+   *
+   * **呼叫端負責去重**：起點不能重複、也不能互相包含（`['/a', '/a']`、`['/', '/a']` 會讓同一份檔的命中出現兩次）。附件路由給的是
+   * `Set` 裡互不重疊的第三層目錄，所以今天不會發生。
+   *
+   * **全部起點一次放進 argv，沒有分批**：作業系統的 argv 有長度上限，超過時 `spawn` 失敗，而這一層把 spawn 失敗一律說成
+   * `grep could not start its search command (ripgrep launch failed)`——**那句話會讓人以為 rg 不見了，其實是起點太多**。
+   * macOS 實測 1 萬個起點正常、2 萬個失敗；正式環境要一條 thread 引用上萬份附件才會碰到，所以不分批、只在這裡寫明。
+   *
+   * @param dirPaths - 起點的虛擬路徑。
+   */
+  protected async grepPaths(
+    pattern: string,
+    dirPaths: readonly string[],
+    glob?: string | null,
+    maxCount?: number | null,
+  ): Promise<GrepResult> {
     // `spawn` 在 `cwd` 不存在時也回 `ENOENT`，跟找不到 rg 分不出來；不先確認的話「根不存在」會被說成「rg 不見了」。放在最前面。
     // **根不存在不是錯誤，是「沒有東西可找」**（`{ matches: [] }`，同基座對不存在的起點）：暫存 backend 的根是第一次
     // 存東西才建的（`tool-result-stash.ts`），經 `CompositeBackend` 搜 `/` 時也會搜到它。根存在卻不是目錄才是錯誤。
@@ -690,23 +705,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         'grep cannot search: the workspace root is not an accessible directory',
       );
     }
-    let baseFull: string;
-    try {
-      baseFull = this.resolveVirtual(dirPath || '.');
-    } catch {
-      return { matches: [] };
-    }
-    try {
-      await stat(baseFull);
-    } catch {
-      return { matches: [] };
-    }
-    // **搜尋起點要傳相對於工作區根的路徑**（根本身是 `.`）：rg 的錨點是它自己 `getcwd()` 的 realpath，根經過 symlink 時
-    // 傳絕對路徑會對不上、帶目錄的 `--glob` 一個都命中不了；相對路徑不受影響（rg 15.1.0 實測；`cwd` 為根、路徑為 `.` 或
-    // `src` 時 `logs/app.log`、`/logs/app.log`、`src/**/*.ts` 都對根錨定）。
-    // 一律加 `./` 前綴：目錄名剛好是 `-` 時 rg 會改讀 stdin（0 筆、沒有錯誤），`-x` 這類也不會被當成旗標。
-    const searchRel = relative(this.cwd, baseFull);
-    const searchArg = searchRel === '' ? '.' : `.${sep}${searchRel}`;
+    const searchArgs = await this.existingSearchArgs(dirPaths);
+    if (searchArgs.length === 0) return { matches: [] };
     let executable = this.ripgrepInternals?.executable;
     if (executable === undefined) {
       try {
@@ -722,7 +722,7 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     }
     const outcome = await runRipgrep({
       executable,
-      argv: ['--json', '-F', ...(glob ? ['--glob', glob] : []), '--', pattern, searchArg],
+      argv: ['--json', '-F', ...(glob ? ['--glob', glob] : []), '--', pattern, ...searchArgs],
       cwd: this.cwd,
       signal: currentToolCallSignal(),
       internals: this.ripgrepInternals,
@@ -732,6 +732,34 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
       result: { matches: this.parseRipgrepJson(outcome.stdout) },
       maxCount: maxCount ?? null,
     });
+  }
+
+  /**
+   * 把虛擬路徑換成 rg 的搜尋引數，濾掉解不出來或不存在的。
+   *
+   * **搜尋起點要傳相對於工作區根的路徑**（根本身是 `.`）：rg 的錨點是它自己 `getcwd()` 的 realpath，根經過 symlink 時
+   * 傳絕對路徑會對不上、帶目錄的 `--glob` 一個都命中不了；相對路徑不受影響（rg 15.1.0 實測；`cwd` 為根、路徑為 `.` 或
+   * `src` 時 `logs/app.log`、`/logs/app.log` 與 `src` 底下的遞迴 glob 都對根錨定）。
+   * 一律加 `./` 前綴：目錄名剛好是 `-` 時 rg 會改讀 stdin（0 筆、沒有錯誤），`-x` 這類也不會被當成旗標。
+   */
+  private async existingSearchArgs(dirPaths: readonly string[]): Promise<string[]> {
+    const args: string[] = [];
+    for (const dirPath of dirPaths) {
+      let baseFull: string;
+      try {
+        baseFull = this.resolveVirtual(dirPath || '.');
+      } catch {
+        continue;
+      }
+      try {
+        await stat(baseFull);
+      } catch {
+        continue;
+      }
+      const searchRel = relative(this.cwd, baseFull);
+      args.push(searchRel === '' ? '.' : `.${sep}${searchRel}`);
+    }
+    return args;
   }
 
   /**

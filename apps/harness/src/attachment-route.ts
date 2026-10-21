@@ -50,6 +50,7 @@ import type { SessionEvent } from '@nexus/core';
 
 import { referencedFilePaths } from './attachment-reference.js';
 import { ContainedFilesystemBackend } from './contained-backend.js';
+import type { RipgrepInternals } from './ripgrep-runner.js';
 
 /** 路由問「這條 thread 的 root 日誌現在長什麼樣」的口。 */
 export interface AttachmentScope {
@@ -61,6 +62,10 @@ export interface AttachmentScope {
 export interface BindableAttachmentScope extends AttachmentScope {
   /**
    * 綁上 root 日誌。後綁的取代先綁的；回傳的解綁函式只在它還是現在這一個時才清（舊的晚解綁不會清掉新的）。
+   *
+   * **這個語意靠一個前提才安全：一個 `createNexusAgent` 只服務一條 thread**（`agent-factory.ts` 每個 agent 一份自己的
+   * scope，`attachSession` 綁的就是那條 thread 的 root）。同一個 scope 被兩條 thread 共用的話，後綁的會悄悄蓋掉先綁的，
+   * 先綁那條 thread 的模型就改讀到另一條的引用集——要共用 agent 必須先把 scope 改成按 thread 分。
    *
    * @param source - 有 `events` 的東西（`SessionRegistry.root`）；每次問才讀 `events`。
    */
@@ -114,8 +119,17 @@ function visibleOf(events: readonly SessionEvent[] | undefined): Visible {
 export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
   readonly #scope: AttachmentScope;
 
-  constructor(options: { readonly rootDir: string; readonly scope: AttachmentScope }) {
-    super({ rootDir: options.rootDir, mode: 'read-only' });
+  constructor(options: {
+    readonly rootDir: string;
+    readonly scope: AttachmentScope;
+    /** 測試接縫（數 rg 起了幾次）。 */
+    readonly ripgrep?: RipgrepInternals;
+  }) {
+    super({
+      rootDir: options.rootDir,
+      mode: 'read-only',
+      ...(options.ripgrep === undefined ? {} : { ripgrep: options.ripgrep }),
+    });
     this.#scope = options.scope;
   }
 
@@ -206,7 +220,7 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
 
   /**
    * 只在引用過的檔所在的目錄（`/<前兩碼>/<hex>`，同樣的位元組不同檔名各有一條別名，所以目錄裡可能多出沒被引用的別名）裡搜，
-   * 結果再濾到引用過的檔。**不整個 `files` 目錄搜再濾**：別條 thread 的附件可能很大很多，輸出上限（`ripgrep-runner.ts`）會被
+   * 結果再濾到引用過的檔，**全部目標一次 rg**（不是一個目錄一次）。**不整個 `files` 目錄搜再濾**：別條 thread 的附件可能很大很多，輸出上限（`ripgrep-runner.ts`）會被
    * 它們吃掉，這條 thread 自己的檔反而搜不到。`--glob` 的錨點是 `cwd`（工作區根），不是搜尋起點，所以改搜子目錄不改 glob 的語意。
    */
   override async grep(
@@ -226,14 +240,12 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
             dir.split('/').length === 3 &&
             (base === '/' || dir === base || dir.startsWith(`${base}/`)),
         );
-    const matches: NonNullable<GrepResult['matches']> = [];
-    for (const target of targets) {
-      const part = await super.grep(pattern, target, glob, null);
-      if (part.error !== undefined) return part;
-      for (const match of part.matches ?? []) {
-        if (visible.files.has(match.path)) matches.push(match);
-      }
-    }
+    if (targets.length === 0) return { matches: [] };
+    // **一次 rg 搜全部目標**（`grepPaths`），不是一個目錄起一次：引用很多時（幾百個）每次 grep 起幾百個 rg 子行程。
+    // `maxCount` 不傳下去（傳 `null`），濾完引用集之後才截斷，`truncated` 才對得上使用者看得到的筆數。
+    const found = await this.grepPaths(pattern, targets, glob, null);
+    if (found.error !== undefined) return found;
+    const matches = (found.matches ?? []).filter((match) => visible.files.has(match.path));
     return applyGrepMaxCount({ result: { matches }, maxCount: maxCount ?? null });
   }
 }
