@@ -35,6 +35,12 @@ const capRow = (limit: number): string =>
   `- id: goal-round-cap\n  config:\n    limit: ${String(limit)}\n`;
 const CAP_DISABLED = '- id: goal-round-cap\n  disabled: true\n';
 
+/**
+ * 跑滿 21 輪的兩條：單跑時 serve 約 1.3 秒、CLI 約 0.8 秒（2026-10-22 本機量），平行負載下離預設的 5 秒不夠遠。
+ * 21 是分得出「關掉的列被讀成出廠 20」的最小輪數。
+ */
+const LONG_TIMEOUT_MS = 20_000;
+
 /** 人說一句 → 模型建目標（自己填 `maxGoalRounds`）→ 收尾。之後每個續行輪一句話，備得比會跑的多。 */
 function script(maxGoalRounds: number): ScriptedTurn[] {
   return [
@@ -132,22 +138,26 @@ describe('serve：goal-round-cap 那一列夾住續行', () => {
   });
 
   /**
-   * 驗收 7：那一列關掉就只剩目標自己那條，跟沒有這一列一樣；啟動那一行講明操作者那條關著。目標自己給 22，比出廠的 20 大——
+   * 驗收 7：那一列關掉就只剩目標自己那條，跟沒有這一列一樣；啟動那一行講明操作者那條關著。目標自己給 21，比出廠的 20 大——
    * 讀那一列時沒先問掛沒掛，關掉的列會被讀成 schema 預設 20，這裡就在 20 輪記 round-cap。
    */
-  it('那一列關掉：跑滿目標自己的 22 輪、記 round-limit，不是被讀成出廠的 20', async () => {
-    const lines: string[] = [];
-    const client = await untilBlocked(
-      'cap-off',
-      script(22),
-      CAP_DISABLED,
-      (line) => void lines.push(line),
-    );
-    const shown = await goalText(client, 'cap-off');
-    expect(shown).toContain('擋住它的：round-limit：');
-    expect(shown).toContain('輪次：22/22');
-    expect(lines.join('\n')).toContain('goal-round-cap 那一列關著');
-  });
+  it(
+    '那一列關掉：跑滿目標自己的 21 輪、記 round-limit，不是被讀成出廠的 20',
+    async () => {
+      const lines: string[] = [];
+      const client = await untilBlocked(
+        'cap-off',
+        script(21),
+        CAP_DISABLED,
+        (line) => void lines.push(line),
+      );
+      const shown = await goalText(client, 'cap-off');
+      expect(shown).toContain('擋住它的：round-limit：');
+      expect(shown).toContain('輪次：21/21');
+      expect(lines.join('\n')).toContain('goal-round-cap 那一列關著');
+    },
+    LONG_TIMEOUT_MS,
+  );
 });
 
 /** CLI 跑一次（`--patch` 換腳本與那一列），回印出來的每一行。 */
@@ -186,14 +196,18 @@ describe('CLI：--max-goal-rounds 贏過那一列，那一列贏過不設', () =
   });
 
   /**
-   * 目標自己給 22，比出廠的 20 大：讀那一列時沒先問掛沒掛，關掉的列會被讀成 schema 預設 20，這裡就只跑 20 輪。
+   * 目標自己給 21，比出廠的 20 大：讀那一列時沒先問掛沒掛，關掉的列會被讀成 schema 預設 20，這裡就只跑 20 輪。
    * 目標自己的數比 20 小的話兩條都先撞到它，量不出這件事。
    */
-  it('那一列關掉、也沒給旗標：只剩目標自己的 22，不是被讀成出廠的 20', async () => {
-    const { rounds, said } = await cli(['--goal-driver'], script(22), CAP_DISABLED);
-    expect(rounds).toBe(22);
-    expect(said).toContain('goal-round-cap 那一列關著，也沒有給 --max-goal-rounds');
-  });
+  it(
+    '那一列關掉、也沒給旗標：只剩目標自己的 21，不是被讀成出廠的 20',
+    async () => {
+      const { rounds, said } = await cli(['--goal-driver'], script(21), CAP_DISABLED);
+      expect(rounds).toBe(21);
+      expect(said).toContain('goal-round-cap 那一列關著，也沒有給 --max-goal-rounds');
+    },
+    LONG_TIMEOUT_MS,
+  );
 
   /** Q-A4 (a)：那一列出廠就有值，CLI 預設不開續行；不帶 `--goal-driver` 照常啟動、不報錯，也一輪都不排。 */
   it('沒帶 --goal-driver：照常啟動、不報錯，一輪都不排', async () => {

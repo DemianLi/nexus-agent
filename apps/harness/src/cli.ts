@@ -130,7 +130,8 @@ export const USAGE = `用法：cli [選項] [要說的話...]
                        不能配 --sandbox（模式從日誌來）或 --session-log（就寫回那個目錄）
   --goal-driver        一個 active 的目標沒達成時自己再開一輪（預設關）
   --max-goal-rounds <n>
-                       這一次呼叫最多讓它排幾輪（要配 --goal-driver）
+                       每次建立或恢復目標之後最多續行幾輪（要配 --goal-driver）
+                       蓋過清單上 goal-round-cap 那一列（出廠 20）
                        目標自己的 max_goal_rounds 是模型填的，這一條它改不動
   --recursion-limit <n>
                        agent 迴圈上限（LangGraph super-step，預設 100 ≈ 33 個模型輪）
