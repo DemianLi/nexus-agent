@@ -51,6 +51,8 @@ FULL_RES = [
         r'^(eslint\.config\..*|tsconfig.*\.json|vitest\..*)$',
         # CI 自己：改了它就該用它驗一次完整的。`actions/` 是每個 job 共用的 setup（Node 版本在這裡，#1546）。
         r'^\.github/(workflows|scripts|actions)/',
+        # 漏洞掃描的例外清單（#1545）：格式由 `.github/scripts/test_check_audit.py` 驗，只改清單的 PR 也要跑到它。
+        r'^\.github/audit-exceptions\.json$',
         # 測試「讀」而不是 import 的檔：import 圖看不到它們（見 ci.yml 的說明）。
         r'^docs/operations\.md$',
         r'^apps/harness/(cordis(\.serve)?\.yml|package\.json|vitest\.config\..*|tsconfig.*\.json|eslint\.config\..*)$',

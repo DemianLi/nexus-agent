@@ -185,5 +185,34 @@ class UpgradeGuideGate(unittest.TestCase):
         self.assertIn('[ -d "docs/upgrade-guide/$prev" ]', run)
 
 
+class AuditWiring(unittest.TestCase):
+    """漏洞掃描（#1545 步驟 5）接在發版與每日排程上。兩份 workflow 都不在 PR 上跑，拿掉那一步不會有別的東西紅。"""
+
+    SCRIPT = 'python3 .github/scripts/check_audit.py'
+
+    def test_release_scans_before_pack_and_attaches_report(self) -> None:
+        steps = load(CI.with_name('release.yml'))['jobs']['release']['steps']
+        names = [s.get('name') for s in steps]
+        scan = steps[names.index('漏洞掃描')]
+        self.assertNotIn('if', scan)
+        self.assertIn(f'{self.SCRIPT} --out ".release-out/$report"', scan['run'])
+        self.assertIn('report="nexus-agent-${VERSION#v}-audit.json"', scan['run'])
+        self.assertIn('sha256sum "$report" > "$report.sha256"', scan['run'])
+        self.assertLess(names.index('漏洞掃描'), names.index('打包'))
+        run = next(s['run'] for s in steps if 'gh release create' in str(s.get('run', '')))
+        self.assertIn('.release-out/*-audit.json', run)
+
+    def test_daily_schedule_runs_the_scan(self) -> None:
+        workflow = load(CI.with_name('audit.yml'))
+        # PyYAML 把 `on` 讀成 True。
+        triggers = workflow[True]
+        self.assertEqual(len(triggers['schedule']), 1)
+        self.assertNotIn('pull_request', triggers)
+        steps = workflow['jobs']['audit']['steps']
+        scans = [s for s in steps if s.get('run') == self.SCRIPT]
+        self.assertEqual(len(scans), 1)
+        self.assertNotIn('if', scans[0])
+
+
 if __name__ == '__main__':
     unittest.main()
