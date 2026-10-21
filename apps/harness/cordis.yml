@@ -481,15 +481,18 @@
 # serve 的探針與指標端點（#1535）。三個路徑都**先過信任圍欄**（Host 不是 loopback 一律 403）、只收 GET／HEAD，只在本機 loopback 上、只被動抓取，serve 不往任何地方送。
 # - 探針（預設開）：`GET /livez`（活著，回得了就是 200 ok）、`GET /readyz`（200 ok＝在聽、收尾還沒開始；503 closing＝收尾已開始）。免登入，本文只有狀態字。
 #   thread 數到上限**不算**沒就緒（已開著的照樣服務；到上限看指標）。`probes.enabled: false` 時兩個路徑回 404。
+#   **收尾時間窗**（#1777）：`probes.drainMs`（毫秒，0 到 2000，預設 500）。serve 收尾立旗後 listener 再照常在聽這一段時間，`/readyz` 回 503 closing，
+#   然後才關 listener；沒有人抓過 `/readyz` 就不等。0 關掉時間窗（立旗後馬上關 listener，監控看到的是連不上）。
 # - 指標（**預設關閉**）：`metrics.enabled: true` 才有 `GET /metrics`（Prometheus 文字格式 0.0.4，手寫）。要 `Authorization: Bearer <token>`，缺或錯回 401；
 #   token 在 `tokenFile`（缺席是 `<home>/metrics-token`，`0600`，沒有就建；權限過寬就拒絕啟動）。瀏覽器的會話 cookie 換不到指標。名單固定、標籤不含 thread id 或路徑。
 # 起動期讀一次、改了要重啟。要打開指標，在自己的 `~/.nexus-agent/cordis.patch.yml` 把 `metrics.enabled` 設成 true。
-# **偏離登記：產品需求超出 dsh**（dsh `1517a4db` 沒有探針端點與指標出口），逐點見 `src/ops-endpoints.ts` 的檔頭。這一列關得掉（`disabled: true` 等於沒有這一列，探針開、指標關）。
+# **偏離登記：產品需求超出 dsh**（dsh `687f282e` 沒有探針端點與指標出口），逐點見 `src/ops-endpoints.ts` 的檔頭。這一列關得掉（`disabled: true` 等於沒有這一列，探針開、指標關）。
 - id: ops-endpoints
   name: '#settings/ops-endpoints'
   config:
     probes:
       enabled: true
+      drainMs: 500
     metrics:
       enabled: false
 

@@ -237,13 +237,29 @@ describe('出貨的 cordis.yml', () => {
     // **探針與指標**（#1535，探針預設開、指標預設關）：出貨那一行與 schema 預設相等。
     expect(byId.get('ops-endpoints')).toEqual(opsEndpointsConfigSchema.parse({}));
     expect(opsEndpointsConfigSchema.parse({})).toEqual({
-      probes: { enabled: true },
+      probes: { enabled: true, drainMs: 500 },
       metrics: { enabled: false },
     });
     expect(
       opsEndpointsConfigSchema.safeParse({ metrics: { enabled: true, port: 1 } }).success,
     ).toBe(false);
     expect(opsEndpointsConfigSchema.safeParse({ metrics: { tokenFile: '' } }).success).toBe(false);
+    // tokenFile 要是絕對路徑（#1777）：相對路徑會跟著 serve 的工作目錄走，檔頭註解說絕對、程式卻不驗。
+    expect(
+      opsEndpointsConfigSchema.safeParse({ metrics: { tokenFile: 'tokens/metrics' } }).success,
+    ).toBe(false);
+    expect(
+      opsEndpointsConfigSchema.safeParse({
+        metrics: { tokenFile: '/var/lib/nexus-agent/metrics-token' },
+      }).success,
+    ).toBe(true);
+    // 收尾時間窗（#1777）：0 關掉、上限 2000（整體收尾 5 秒，#599）、多 1 拒、小數與負數拒。
+    for (const drainMs of [0, 500, 2000]) {
+      expect(opsEndpointsConfigSchema.safeParse({ probes: { drainMs } }).success).toBe(true);
+    }
+    for (const drainMs of [2001, -1, 0.5]) {
+      expect(opsEndpointsConfigSchema.safeParse({ probes: { drainMs } }).success).toBe(false);
+    }
     expect(memoryGaugeConfigSchema.parse({})).toEqual({ reportIntervalMs: 0, warnAtPercent: 75 });
     // 間隔的邊界（M1）：計時器上限收、多 1 拒——超過 2³¹−1 時 Node 會把間隔改成 1 ms，日誌每毫秒一行。
     expect(memoryGaugeConfigSchema.parse({ reportIntervalMs: 2_147_483_647 })).toEqual({
