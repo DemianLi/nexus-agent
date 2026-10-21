@@ -171,6 +171,13 @@ describe('MCP 連不上、沒寫 failOnStartupError', () => {
     );
     await openThread('b');
     expect(lines.filter((line) => line.startsWith('[組裝] thread "b"'))).toEqual([]);
+    // #1677 驗收 H：背景連上的那一份就是 b 用的那一份，不是 b 組裝時又連一次。
+    const wrapper = join(env[HARNESS_HOME_ENV] ?? '', 'late-server.mjs');
+    const alive = execFileSync('pgrep', ['-f', '--', wrapper])
+      .toString()
+      .split('\n')
+      .filter(Boolean);
+    expect(alive).toHaveLength(1);
   }, 60_000);
 });
 
