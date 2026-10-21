@@ -14,7 +14,13 @@ import { describe, expect, it } from 'vitest';
 
 import { createHostServicesPlugin, loadPlugins } from '@nexus/core';
 
-import { CONTAINED_FILESYSTEM, createSandboxPolicyPlugin, sandboxPolicySentence } from './index.js';
+import {
+  CONTAINED_FILESYSTEM,
+  createSandboxPolicyPlugin,
+  isUnderSharedPrefix,
+  sandboxPolicySentence,
+  sharedReadOnlyRefusal,
+} from './index.js';
 import { SandboxModeController } from './sandbox-mode.js';
 
 describe('唯讀共用參考區那一句（#1775）', () => {
@@ -151,5 +157,31 @@ describe('圍堵政策的協作者在有圍堵時是硬相依', () => {
       createSandboxPolicyPlugin(),
     ]);
     expect(registry.commands.find('sandbox')).toBeUndefined();
+  });
+});
+
+describe('升級的目標在不在唯讀共用區底下（#1800）', () => {
+  it.each([
+    ['/shared', true],
+    ['/shared/', true],
+    ['/shared/x.txt', true],
+    ['shared/x.txt', true],
+    ['/shared/./a/../x.txt', true],
+    ['/shared/../shared/x.txt', true],
+    ['/x.txt', false],
+    ['/sharedx.txt', false],
+    ['/shared-notes/x.txt', false],
+    ['/sub/shared/x.txt', false],
+    ['/shared/../x.txt', false],
+    ['', false],
+  ])('%s → %s', (target, expected) => {
+    expect(isUnderSharedPrefix(target, '/shared')).toBe(expected);
+  });
+
+  it('說明用工具的位址空間講前綴，句子裡沒有主機路徑，也沒有升級的指引', () => {
+    const sentence = sharedReadOnlyRefusal('/shared');
+    expect(sentence).toContain('`/shared`');
+    expect(sentence).toContain('不能升級');
+    expect(sentence).not.toMatch(/\/var|\/home|\/Users|request_sandbox_escalation/u);
   });
 });
