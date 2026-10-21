@@ -404,6 +404,26 @@ export function resolveWorkspaceRoot(
 }
 
 /**
+ * **「thread → 可寫根」**（[#1774](https://github.com/DemianLi/nexus-agent/issues/1774)，#1675 Q7 (a)）：只收 thread，回這條 thread 的可寫根（主機上的絕對路徑）；
+ * `undefined` 是這條 thread 沒有圍堵。
+ *
+ * 可寫根從行程級的一格改成逐條 thread 的一格：serve 的 `createAgent` 與 CLI 每條 thread 組裝時問它一次，得到的值**同時**交給續接守衛
+ * （`assertSameWorkspaceRoot`）與組裝點，兩邊才不會分岔。dsh 的對應物是 `resolveWorkspaceRoot(session?.header.cwd ?? this.workspaceRoot)`
+ * （`packages/sandbox/sandbox-policy/src/index.ts:164-171`）：根是會話自己的一格，行程級那一格只是備援。
+ */
+export type WorkspaceRootOf = (threadId: string) => string | undefined;
+
+/**
+ * 這張卡的實作：每條 thread 一律是 `--workspace` 解析出來的那一個根（行為不變）。每條 thread 配自己的根是之後的事，換掉這一支就好。
+ *
+ * @param workspace - `--workspace` 命令列上那串字。
+ * @param cwd - 解析的起點。
+ */
+export function launchWorkspaceRootOf(workspace: string | undefined, cwd: string): WorkspaceRootOf {
+  return () => resolveWorkspaceRoot(workspace, cwd);
+}
+
+/**
  * 不變量量測記錄（[#976](https://github.com/DemianLi/nexus-agent/issues/976)）要寫到哪裡；
  * **不該寫的時候回 `undefined`**，呼叫端就不建 tap。它跟著會話日誌的兩條既有承諾走，不另立規矩：
  *
@@ -781,6 +801,15 @@ export async function createCliAgent(
      */
     readonly liveModel?: LiveModelConfig;
     /**
+     * **這條 thread 的可寫根**（[#1774](https://github.com/DemianLi/nexus-agent/issues/1774)）：入口依「thread → 根」（{@link WorkspaceRootOf}）取得後明著交進來，
+     * 組裝點用它建 backend、host 服務 `workspaceRoot`、`sandboxPolicy.rootDir`，並原樣從回傳值交回去（交付錨、檔案搜尋、header）。
+     *
+     * **選填，而且省略時退回 `--workspace` 解析出來的根**（`resolveWorkspaceRoot(workspace, cwd)`）：手上只有 `--workspace` 的呼叫端
+     * （大量既有測試、嵌入方）行為不變。兩個產品入口（serve、CLI）一律明著傳，所以「這一格是逐條 thread 取得的」靠入口的接線測試守
+     * （`workspace-root-per-thread.test.ts` 從 `runServe` 起量），不靠這裡的退回。
+     */
+    readonly workspaceRoot?: string;
+    /**
      * 全機的模型請求並行閘（[#1505](https://github.com/DemianLi/nexus-agent/issues/1505)）：**只有 serve 給**，起動期建一份、每條 thread 的組裝
      * 共用同一份（名額是整台 serve 的，不是這條 thread 的）。對話、換模型別顆、背景子代理指定的模型、標題（含跟隨主路由的那顆）都從
      * 這一份取名額。省略＝不建閘（CLI、REPL、嵌入方與沒設 `maxConcurrentRequests` 的 serve）。
@@ -987,7 +1016,7 @@ export async function createCliAgent(
   // `createCliAgent`，所以一條 thread 一格。建在模組層或工廠閉包裡的話兩條 thread 會共用
   // 同一格——一條 thread 的 `/permission read-only` 收緊到另一條 thread 的檔案工具上，
   // 而那是靜默的（見 `sandbox-mode.ts` 的模組註解）。
-  const workspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
+  const workspaceRoot = invocation.workspaceRoot ?? resolveWorkspaceRoot(invocation.workspace, cwd);
   // **有圍堵而 `sandbox-policy` 那一列沒掛：起不來**（#669，dsh 的方向）。fence 還在擋，模型卻不知道、也請不到升級，
   // 看起來像關掉了護欄其實護欄還在。不加進 `PROTECTED_ENTRY_NAMES`：沒有圍堵時關掉它是合法的（只剩那一句政策）。
   if (workspaceRoot !== undefined && !startupEntryMounted(plugins, sandboxPolicyPlugin)) {

@@ -32,7 +32,12 @@ afterEach(async () => {
 
 /** 一格 fs 把手：`backend()` 在呼叫當下才讀（同 core 的 `createFsService`）。 */
 function fsHandle(backend: AnyBackendProtocol | undefined): FsService {
-  return { backend: () => backend, offWorkspacePrefixes: () => [], hasWorkspace: () => true };
+  return {
+    backend: () => backend,
+    offWorkspacePrefixes: () => [],
+    hasWorkspace: () => true,
+    workspaceRoot: () => undefined,
+  };
 }
 
 /** 一個永遠認得這次呼叫的 fs 查找（單元面不驗挑法，挑法在 core 與宿主那邊量）。 */
@@ -300,13 +305,13 @@ describe('樹上這一列（#1466）', () => {
     expect(failures).toEqual([]);
   });
 
-  it('manifest 宣告兩個必要依賴：tools（^1.2.0，要有 gate）與 fs（^1.0.0）；沒有 default 匯出', () => {
+  it('manifest 宣告兩個必要依賴：tools（^1.2.0，要有 gate）與 fs（^2.0.0）；沒有 default 匯出', () => {
     expect(submitRecord.manifest.consumes).toEqual([
       { token: 'tools', range: '^1.2.0' },
-      { token: fsToken.name, range: '^1.0.0' },
+      { token: fsToken.name, range: '^2.0.0' },
     ]);
     expect(submitRecord.manifest.provides).toEqual([]);
-    expect(submitRecord.inject).toEqual({ tools: { range: '^1.2.0' }, fs: { range: '^1.0.0' } });
+    expect(submitRecord.inject).toEqual({ tools: { range: '^1.2.0' }, fs: { range: '^2.0.0' } });
     expect('default' in submitRecord).toBe(false);
   });
 

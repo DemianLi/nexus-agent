@@ -58,6 +58,15 @@ export interface FsService {
    * @returns 有工作區就是 `true`；還沒 fold 或這次組裝沒有工作區是 `false`。
    */
   hasWorkspace(): boolean;
+  /**
+   * **這條 thread** 的可寫根（主機上的絕對路徑；[#1774](https://github.com/DemianLi/nexus-agent/issues/1774)，`@nexus/fs` 2.0.0 起）。
+   *
+   * 就是這次組裝的 host 服務 `workspaceRoot`（組裝點只在有圍堵時提供，`sandbox.ts` 的 `WORKSPACE_ROOT_SERVICE`），在 fold 填 backend 的同一處
+   * 讀進來，跟 {@link hasWorkspace} 同一次算、同一條 thread。**逐條 thread**：每條 thread 的根由組裝點依「thread → 根」那支函式取得，
+   * 這個把手是這次組裝的那一格，不會出現「這條 thread 的 backend 配上別條的根」。以前它是 `@nexus/fs` 查找服務上行程級的一格（1.2.0）。
+   * @returns 這次組裝的可寫根；還沒 fold 或這次組裝沒有圍堵是 `undefined`。
+   */
+  workspaceRoot(): string | undefined;
 }
 
 /** {@link settleFsService} 在 fold 當下算好、一起填進把手的事實（#1469）。 */
@@ -66,6 +75,8 @@ export interface FsFacts {
   readonly hasWorkspace: boolean;
   /** plugin 用 `backend.mount()` 掛上的路由前綴（`registry.backend.mounts()` 的鍵），原樣。 */
   readonly mountPrefixes: readonly string[];
+  /** 這次組裝的可寫根（host 服務 `workspaceRoot`，#1774）；沒有圍堵是 `undefined`。 */
+  readonly workspaceRoot: string | undefined;
 }
 
 /** {@link createFsService} 的參數。 */
@@ -88,16 +99,19 @@ const settlers = new WeakMap<
 export function createFsService(options: FsServiceOptions = {}): FsService {
   let folded: AnyBackendProtocol | undefined;
   let workspace = false;
+  let root: string | undefined;
   const assembly = [...(options.offWorkspacePrefixes ?? [])];
   let prefixes: readonly string[] = assembly;
   const service: FsService = {
     backend: () => folded,
     offWorkspacePrefixes: () => prefixes,
     hasWorkspace: () => workspace,
+    workspaceRoot: () => root,
   };
   settlers.set(service, (backend, facts) => {
     folded = backend;
     workspace = facts.hasWorkspace;
+    root = facts.workspaceRoot;
     // 組裝點明著交的在前，plugin 掛的在後；重複填（同一格 fold 兩次）不累加。
     prefixes = [...assembly, ...facts.mountPrefixes];
   });
@@ -110,8 +124,8 @@ export function createFsService(options: FsServiceOptions = {}): FsService {
  * 不是 {@link createFsService} 建的那一種（測試直接交一個物件、或根本沒人提供）就不碰：那個值是誰提供的，
  * 就由誰說了算。
  *
- * **這是「這次組裝有沒有工作區」與「plugin 掛了哪些路由」唯一被算的地方**（#1469）：fold 把兩樣一起交進來，消費者之後
- * 只從把手讀，不在別處再算一次。
+ * **這是「這次組裝有沒有工作區」、「可寫根是哪個」與「plugin 掛了哪些路由」唯一被算的地方**（#1469、#1774）：fold 把它們一起交進來，
+ * 消費者之後只從把手讀，不在別處再算一次。
  *
  * @param service - `registry.services.get(FS_SERVICE)` 拿到的東西。
  * @param backend - `foldBackend` 折出來的那一個。

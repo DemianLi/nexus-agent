@@ -161,7 +161,7 @@ describe('目錄從折進這條 thread 的服務拿', () => {
   it('同一棵樹上兩條 thread：預設組各算各的（偏離登記：逐條 thread 的目錄）', async () => {
     const root = createCordisRoot({
       channel: entryApprovalChannel(undefined),
-      workspaceRoot: workspace,
+      contained: true,
     });
     const loaded = await loadDefaultPlugins(
       { env: {}, warn: () => undefined },
@@ -211,7 +211,7 @@ describe('B：出貨清單上的 permission-presets 經樹進來，提供 permis
   async function load(withWorkspace: boolean) {
     const root = createCordisRoot({
       channel: entryApprovalChannel(undefined),
-      ...(withWorkspace && { workspaceRoot: workspace }),
+      ...(withWorkspace && { contained: true }),
     });
     roots.push(root);
     const loaded = await loadDefaultPlugins(

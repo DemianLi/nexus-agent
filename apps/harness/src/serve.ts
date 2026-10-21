@@ -46,11 +46,13 @@ import {
   resolveInvariantLogPath,
   assertLaunchPathsOutsideWorkspace,
   resolveSessionLogDir,
+  launchWorkspaceRootOf,
   resolveWorkspaceRoot,
   SESSION_LOG_OFF_DISCLOSURE,
   describeDelegationNarrowing,
   describePermissionNarrowing,
 } from './assembly-root.js';
+import type { WorkspaceRootOf } from './assembly-root.js';
 import { createCordisRoot, entryApprovalChannel } from './cordis-root.js';
 import type { CordisRoot, NexusAssembly } from './cordis-root.js';
 import { createServerLog } from './server-log.js';
@@ -340,6 +342,12 @@ export interface RunServeOptions {
    * 產品路徑不設，量具讀真的 `/proc`、`/sys/fs/cgroup` 與 `process`。
    */
   readonly memoryGaugeDeps?: MemoryGaugeDeps;
+  /**
+   * 「thread → 可寫根」（{@link WorkspaceRootOf}，#1774），只給測試用：A 回 X、B 回 Y，才量得出每一格都跟著 thread 走而不是行程級的同一個根。
+   * 產品路徑不設，用 `launchWorkspaceRootOf`（每條 thread 都是 `--workspace` 解析出來的那一個根）。**有沒有圍堵仍由 `--workspace` 決定**
+   * （行程級），這一支只回根的值。
+   */
+  readonly workspaceRootOf?: WorkspaceRootOf;
 }
 
 export interface RunningServe {
@@ -479,15 +487,16 @@ export async function runServe(options: RunServeOptions): Promise<RunningServe |
   // 樹的 context 是第一次叫才建（`plugin-tree.ts` 的 `context()`），這裡先叫。exporter 要讀完清單才知道設定，
   // 晚掛上時先回放緩衝，所以排在它前面的幾行（home 鎖、代理、變更紀錄遷移）一樣印得出來；起不來的路徑掛出廠設定（`mountDefault`）。
   // 預設答題管道由入口給（#1458 Q1 (c)）：serve 有人在（web 收得到問題），組裝時也不傳 `approvals`——同一個決定。
-  // 工作區根也由入口給（#1491 Q4 (a)）：跟每條 thread 組裝時算的是同一支 `resolveWorkspaceRoot`、同一個 cwd，整台一份。
+  // 「有沒有圍堵」也由入口給（#1491 Q4 (a)、#1774）：跟每條 thread 組裝時算的是同一支 `resolveWorkspaceRoot`、同一個 cwd，整台一份。可寫根不在這裡：逐條 thread。
   let root: CordisRoot | undefined;
   let serverLog: ServerLog | undefined;
   let started: RunningServe;
   try {
-    const workspaceRoot = resolveWorkspaceRoot(invocation.workspace, cwd);
+    // 行程級只留「有沒有圍堵」（#1774）：可寫根是逐條 thread 的，每條 thread 組裝時才依 thread 取。
+    const contained = resolveWorkspaceRoot(invocation.workspace, cwd) !== undefined;
     root = createCordisRoot({
       channel: entryApprovalChannel(undefined),
-      ...(workspaceRoot !== undefined && { workspaceRoot }),
+      ...(contained && { contained }),
     });
     serverLog = createServerLog(await root.tree.context(), log);
     if ('unavailable' in homeLock) {
@@ -594,6 +603,9 @@ async function startServer(
   };
   const invariantLogger = serverLogOut.logger('invariant');
   const cwd = options.cwd ?? process.cwd();
+  // 「thread → 可寫根」（#1774）：測試可以換成 A 回 X、B 回 Y；產品路徑每條 thread 都是 `--workspace` 解析出來的那一個。
+  const workspaceRootOf =
+    options.workspaceRootOf ?? launchWorkspaceRootOf(invocation.workspace, cwd);
   // **瀏覽器會話的密鑰也從這一份 env 解 home**（#424）：日誌根與密鑰落在同一個 home 底下。
   // 密鑰在下面讀：權限過寬、記錄壞掉，都該在 server 還沒起來的時候就講。每次啟動只讀這一次，
   // 之後在記憶體裡驗。
@@ -1070,16 +1082,12 @@ async function startServer(
         threadList = await threadPluginList.read();
         assembledFrom = threadList;
         if (resumed !== undefined) assertSameCwd('serve', threadId, resumed.header, cwd);
+        // **這條 thread 的可寫根只在這裡取一次**（#1774）：「thread → 根」那一支只收 thread，回來的值**同時**交給下面的續接守衛與組裝點，兩邊不會分岔。
+        const threadWorkspaceRoot = workspaceRootOf(threadId);
         // **再認它跑在哪個工作區底下**（#504）。順序與理由逐字同 CLI 的 `--resume`：目錄先認，
-        // 這一道在沙箱那一道之前。根在這裡自己算（`createCliAgent` 還沒跑），走的是同一個
-        // `resolveWorkspaceRoot` 與同一個 cwd。
+        // 這一道在沙箱那一道之前。根在這裡取（`createCliAgent` 還沒跑），組裝點拿到的是同一個值。
         if (resumed !== undefined) {
-          assertSameWorkspaceRoot(
-            'serve',
-            threadId,
-            resumed.header,
-            resolveWorkspaceRoot(invocation.workspace, cwd),
-          );
+          assertSameWorkspaceRoot('serve', threadId, resumed.header, threadWorkspaceRoot);
         }
         // 同 CLI 的 `--resume`：模式從日誌來；日誌記著模式就表示上一次有 fence，這一次沒有
         // `--workspace` 的話那道 fence 不在路徑上，接回來的 `read-only` 會靜靜蒸發。
@@ -1109,6 +1117,8 @@ async function startServer(
         built = await assembly.create(
           {
             ...effective,
+            // 這條 thread 的可寫根（#1774）：入口明著交，組裝點不自己從 `--workspace` 算。
+            ...(threadWorkspaceRoot !== undefined && { workspaceRoot: threadWorkspaceRoot }),
             // 插話（#710）：只有 serve 有，見 `createCliAgent` 那一格。
             stepInbox: true,
             ...(modelSelectionPolicy !== undefined && { modelSelectionPolicy }),

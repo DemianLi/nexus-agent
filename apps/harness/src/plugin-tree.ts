@@ -67,7 +67,7 @@ import type { ApprovalChannel } from '@nexus/approval-channel';
 import { createApprovalChannelProvider } from '@nexus/approval-channel/provider';
 import { createCommandsProvider } from '@nexus/commands/provider';
 import type { CommandEntry } from '@nexus/commands/provider';
-import type { CommandDefinition, ProjectionUnit, SessionLookup } from '@nexus/core';
+import type { CommandDefinition, FsService, ProjectionUnit, SessionLookup } from '@nexus/core';
 import { Context } from '@nexus/cordis';
 import type { Message } from '@nexus/cordis';
 import Include from '@nexus/cordis-plugin-include';
@@ -401,11 +401,11 @@ export interface PluginTreeOptions {
    */
   readonly channel?: ApprovalChannel;
   /**
-   * 這個行程的工作區根（主機路徑；#1491 Q4 (a)）：進入點照 `resolveWorkspaceRoot(invocation.workspace, cwd)` 算出來，建樹時交進來，
-   * 樹把它放進 `fs` 那一列（`@nexus/fs` 的 `workspaceRoot()`）。`permission-presets` 在 `apply` 當下據它決定掛不掛 `/permission`。
-   * 不給就是沒有 `--workspace`（檔案系統沒有圍堵）。
+   * 這個行程有沒有圍堵（給了 `--workspace`；#1491 Q4 (a)、#1774）：進入點照 `resolveWorkspaceRoot(invocation.workspace, cwd) !== undefined` 算出來，
+   * 建樹時交進來，樹把它放進 `fs` 那一列（`@nexus/fs` 2.0.0 的 `hasContainment()`）。`permission-presets` 在 `apply` 當下據它決定掛不掛 `/permission`。
+   * 不給就是沒有圍堵。**不帶根**：可寫根是逐條 thread 的（#1774），由組裝點依「thread → 根」取得，經 `FsService.workspaceRoot()` 讀。
    */
-  readonly workspaceRoot?: string;
+  readonly contained?: boolean;
 }
 
 /** 一棵 Cordis 樹加上它的工具登記處與 Include。 */
@@ -421,9 +421,9 @@ export class PluginTree {
   /** 行程裡每一條活著的 thread 綁上的註冊表（#1463）：`session-lookup` 那一列問它，入口的 `attachSession` 往它登記。 */
   readonly #threadSessions = new ThreadSessions();
   #sessionLookup = createSessionLookupProvider((config) => this.#threadSessions.forCall(config));
-  /** fs 查找（#1466）：同一張登記表、同一支挑法，一筆登記同時帶這條 thread 的 fs 把手；另帶行程級的工作區根（#1491）。 */
+  /** fs 查找（#1466）：同一張登記表、同一支挑法，一筆登記同時帶這條 thread 的 fs 把手；另帶行程級的「有沒有圍堵」（#1491、#1774）。 */
   #fsLookup: ReturnType<typeof createFsLookupProvider>;
-  readonly #workspaceRoot: string | undefined;
+  readonly #contained: boolean;
   /** 串行化 {@link run}。 */
   #chain: Promise<unknown> = Promise.resolve();
   #epoch = 0;
@@ -449,16 +449,17 @@ export class PluginTree {
   constructor(options: PluginTreeOptions = {}) {
     this.#channel = options.channel;
     this.#approvalChannel = createApprovalChannelProvider(options.channel);
-    this.#workspaceRoot = options.workspaceRoot;
+    this.#contained = options.contained === true;
     this.#fsLookup = createFsLookupProvider(
       (config) => this.#threadSessions.fsForCall(config),
-      options.workspaceRoot,
+      (threadId) => this.#threadSessions.fsForThread(threadId),
+      this.#contained,
     );
   }
 
-  /** 這棵樹上 `fs` 那一列交出去的工作區根（建樹時交進來的那一份）；沒有圍堵是 `undefined`。給測試與審計對照用。 */
-  get workspaceRoot(): string | undefined {
-    return this.#workspaceRoot;
+  /** 這棵樹上 `fs` 那一列交出去的「有沒有圍堵」（建樹時交進來的那一份）。給測試與審計對照用。 */
+  get contained(): boolean {
+    return this.#contained;
   }
 
   /**
@@ -1064,10 +1065,15 @@ export interface DetachedMount {
    */
   readonly fsLookup?: (config: unknown) => FsLookup;
   /**
-   * 這一次單獨掛上時的工作區根（#1491 Q4 (a)）。**沒有樹的呼叫端也要有**：`bindDetached` 從那一次組裝的 host 服務 `workspaceRoot`
-   * 讀出來交進來（組裝點只在有 `--workspace` 時提供它）；不給等於沒有圍堵。
+   * 這一次單獨掛上時依 thread 找 fs 把手（#1774，`@nexus/fs` 2.0.0 的 `forThread`）。同 {@link fsLookup}：`bindDetached` 交這次組裝自己的那一格；
+   * 不給等於找不到。
    */
-  readonly workspaceRoot?: string;
+  readonly fsForThread?: (threadId: string) => FsService | undefined;
+  /**
+   * 這一次單獨掛上時有沒有圍堵（#1491 Q4 (a)、#1774）。**沒有樹的呼叫端也要有**：`bindDetached` 從那一次組裝的 host 服務 `workspaceRoot`
+   * 有沒有值推出來（組裝點只在有 `--workspace` 時提供它）；不給等於沒有圍堵。
+   */
+  readonly contained?: boolean;
 }
 
 /** {@link mountDetached} 取出的東西：這一列登記的工具、投影單元、技能來源路徑、命令定義，與它提供、宿主取到的服務。 */
@@ -1113,7 +1119,8 @@ export async function mountDetached(mount: DetachedMount): Promise<DetachedContr
   );
   const fsLookup = createFsLookupProvider(
     mount.fsLookup ?? (() => ({ kind: 'not-attached' })),
-    mount.workspaceRoot,
+    mount.fsForThread,
+    mount.contained === true,
   );
   const preSteps = createAgentLoopProvider();
   const root = new Context();

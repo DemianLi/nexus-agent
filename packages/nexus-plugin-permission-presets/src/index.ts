@@ -25,7 +25,7 @@
  * 3. **沒有使用者設定那一層。** dsh 的 `settings` 讓使用者另外存「新會話的預設組」；我們沒有使用者設定這一層，預設只來自 `defaultPreset` 與 `--sandbox`。
  * 4. **沒有圍堵（沒給 `--workspace`）時整顆不掛。** dsh 在沒有圍堵的 shell 上直接拋（presets 捆的是沙箱模式，掛在不圍堵的執行器上是設定錯誤）；
  *    我們的設定檔機制沒有辦法讓一列在某些 profile 才存在，所以退到「不註冊」——淨效果相同（沒有圍堵就沒有 `/permission`），但這不是 dsh 的機制，
- *    同 `@nexus/plugin-sandbox-policy` 登記過的 `/sandbox`。判準是 `@nexus/fs` 的 `workspaceRoot()`（#1491 Q4 (a)，行程級）。
+ *    同 `@nexus/plugin-sandbox-policy` 登記過的 `/sandbox`。判準是 `@nexus/fs` 的 `hasContainment()`（行程級；#1491 Q4 (a)，#1774 起 2.0.0）。可寫根是逐條 thread 的：`/permission` 不帶引數時報**這條 thread** 的根（`forThread(sessionLog.sessionId)` 取把手、`FsService.workspaceRoot()` 讀值）。
  * 5. **沒有 `auto` 那一組與目錄變動通知。** dsh 的 `auto` 是選配、出廠沒開的一組，目錄靠 payload-free 的事件通知變動；我們出廠的目錄啟動時就定了。
  * 6. **出廠表不含 `danger-full-access`（理由 2，[#1621](https://github.com/DemianLi/nexus-agent/issues/1621)）。** dsh base 出廠三組
  *    （`packages/bundle/base/cordis.patch.yml:264-276`，`687f282e`），表裡有就人人可選；我們的 serve 多人共用一台主機，同一把 token 底下
@@ -133,9 +133,9 @@ export type {
 /** 插件在樹上的列用的名字（`ctx.fiber.runtime.name`、必掛判斷用）。 */
 export const name = 'permission-presets';
 
-/** 要的服務：fs（行程級的工作區根）、命令、投影、會話查找（參與者接縫）。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`。 */
+/** 要的服務：fs（行程級的「有沒有圍堵」與逐條 thread 的可寫根）、命令、投影、會話查找（參與者接縫）。範圍在這裡宣告，落進 Cordis 的 `Context.intercept`。 */
 export const inject = injectOf(
-  need(fsToken, '^1.2.0'),
+  need(fsToken, '^2.0.0'),
   need(commandsToken, '^1.0.0'),
   need(projectionsToken, '^1.0.0'),
   need(sessionLookupToken, '^1.1.0'),
@@ -150,7 +150,7 @@ export const manifest = defineManifest({
   owner: '平台團隊',
   provides: [{ token: permissionPresetsToken.name, version: permissionPresetsToken.version }],
   consumes: [
-    { token: fsToken.name, range: '^1.2.0' },
+    { token: fsToken.name, range: '^2.0.0' },
     { token: commandsToken.name, range: '^1.0.0' },
     { token: projectionsToken.name, range: '^1.0.0' },
     { token: sessionLookupToken.name, range: '^1.1.0' },
@@ -224,9 +224,10 @@ class PermissionPresetsServiceImpl
  * @throws 組合表是空的、`custom` 當組名、`defaultPreset` 不在表裡（行程級設定錯，那一列判 `dropped`，必掛名單接住）。
  */
 export function apply(ctx: Context, config: PermissionPresetsConfig): void {
-  // 偏離 4：沒有圍堵（行程沒給 `--workspace`）就沒有東西可以捆。
-  const rootDir = service(ctx, fsToken).workspaceRoot();
-  if (rootDir === undefined) return;
+  // 偏離 4：沒有圍堵（行程沒給 `--workspace`）就沒有東西可以捆。**行程級的「有沒有圍堵」**（`@nexus/fs` 2.0.0 的 `hasContainment()`）；
+  // 可寫根是逐條 thread 的（#1774），不在 `apply` 當下讀，`/permission` 被叫時才依這條 thread 問。
+  const fs = service(ctx, fsToken);
+  if (!fs.hasContainment()) return;
   const table: PresetTable = config.presets;
   assertPresetConfig(table, config.defaultPreset);
 
@@ -293,8 +294,13 @@ export function apply(ctx: Context, config: PermissionPresetsConfig): void {
       const approval = knobs.approval ?? ASSUMED_APPROVAL;
       const current = derivePreset(table, knobs);
       if (name.length === 0) {
-        // 可寫根也報（舊 `/sandbox` 不帶引數時就報，使用者靠它確認圍的是哪個目錄）。
-        const root = `\n可寫根 ${JSON.stringify(rootDir)}。`;
+        // 可寫根也報（舊 `/sandbox` 不帶引數時就報，使用者靠它確認圍的是哪個目錄）。**報的是這條 thread 的根**（#1774）：依 `sessionLog` 的
+        // 會話 id（＝thread id）精確找回這條 thread 的 fs 把手、呼叫當下才讀；查不到（沒登記、已撤）明說查不到，不拿別條 thread 的根充數。
+        const threadRoot = fs.forThread(sessionLog.sessionId)?.workspaceRoot();
+        const root =
+          threadRoot === undefined
+            ? '\n可寫根：查不到這條 thread 的可寫根。'
+            : `\n可寫根 ${JSON.stringify(threadRoot)}。`;
         return {
           kind: 'success',
           text:

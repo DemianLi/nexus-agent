@@ -92,6 +92,7 @@ import {
   resolveSessionLogDir,
   SESSION_LOG_OFF_DISCLOSURE,
   assertPersistenceFlags,
+  launchWorkspaceRootOf,
   resolveWorkspaceRoot,
   outsideWorkspace,
   THREAD_ID,
@@ -912,12 +913,14 @@ export async function runCli(options: RunCliOptions): Promise<void> {
   // **Cordis 根由這裡持有**（#1401），照 dsh launcher 的 `app.current`：`runLaunched` 載完清單才建它，但起不來、跑壞了、
   // 跑完了都在這裡卸載。跑壞了的那一條先保住原本的錯誤，同下面 `runLaunched` 收尾的規則。
   // 預設答題管道由入口給（#1458 Q1 (c)）：這個入口沒有人在，與下面組裝時傳的 `HEADLESS_APPROVALS` 是同一個決定。
-  // 工作區根也由入口給（#1491 Q4 (a)）：照 `resolveWorkspaceRoot` 算，跟組裝點與 `--resume` 的同工作區檢查（下面 `assertSameWorkspaceRoot`）
+  // 「有沒有圍堵」也由入口給（#1491 Q4 (a)、#1774）：照 `resolveWorkspaceRoot` 算，跟組裝點與 `--resume` 的同工作區檢查（下面 `assertSameWorkspaceRoot`）
   // 是同一支函式、同一個 cwd（`options.cwd ?? process.cwd()`）。沒有 `--workspace` 就不給：`permission-presets` 據此不註冊 `/permission`。
-  const workspaceRoot = resolveWorkspaceRoot(invocation.workspace, options.cwd ?? process.cwd());
+  // 可寫根不在這裡：逐條 thread，CLI 的這條 thread 在組裝前取（下面 `workspaceRootOf`）。
+  const contained =
+    resolveWorkspaceRoot(invocation.workspace, options.cwd ?? process.cwd()) !== undefined;
   const root = createCordisRoot({
     channel: entryApprovalChannel(HEADLESS_APPROVALS),
-    ...(workspaceRoot !== undefined && { workspaceRoot }),
+    ...(contained && { contained }),
   });
   try {
     try {
@@ -1062,13 +1065,10 @@ async function runLaunched(
     // 目錄不對的話這一格也不該拿來判。**這裡自己算一次根**，因為 `createCliAgent` 還沒跑
     // ——而一道要在「什麼都還沒起來之前」響的檢查等不到它。算的是同一個 `resolveWorkspaceRoot`
     // 與同一個 cwd，所以跟組裝拿到的是同一個值，不是第二份 `resolve(cwd, ...)`。
+    // **這條 thread 的可寫根在這裡取一次**（#1774）：同一個值交給守衛與組裝點。
+    const threadWorkspaceRoot = launchWorkspaceRootOf(invocation.workspace, resumeCwd)(THREAD_ID);
     if (resumed !== undefined) {
-      assertSameWorkspaceRoot(
-        '--resume',
-        THREAD_ID,
-        resumed.header,
-        resolveWorkspaceRoot(invocation.workspace, resumeCwd),
-      );
+      assertSameWorkspaceRoot('--resume', THREAD_ID, resumed.header, threadWorkspaceRoot);
     }
     if (resumedSandbox !== undefined && invocation.workspace === undefined) {
       throw new Error(
@@ -1089,6 +1089,7 @@ async function runLaunched(
       .create(
         {
           ...effective,
+          ...(threadWorkspaceRoot !== undefined && { workspaceRoot: threadWorkspaceRoot }),
           liveModel,
           ...(liveLaunch !== undefined && { credentials: liveLaunch.credentials }),
           threadTitle,

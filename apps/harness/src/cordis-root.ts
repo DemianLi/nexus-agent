@@ -212,18 +212,19 @@ export interface CordisRootOptions {
    */
   readonly channel?: ApprovalChannel;
   /**
-   * 這個行程的工作區根（`fs` 那一列的 `workspaceRoot()`；#1491 Q4 (a)）。**入口明確交進來，這裡不自己算**：入口照
-   * `resolveWorkspaceRoot(invocation.workspace, cwd)` 算（跟組裝點是同一支函式、同一個 cwd），沒有 `--workspace` 就不給。
+   * 這個行程有沒有圍堵（`fs` 那一列的 `hasContainment()`；#1491 Q4 (a)、#1774）。**入口明確交進來，這裡不自己算**：入口照
+   * `resolveWorkspaceRoot(invocation.workspace, cwd) !== undefined` 算（跟組裝點是同一支函式、同一個 cwd），沒有 `--workspace` 就不給。
    * 拿掉入口那一行交接，`permission-presets` 以為沒有圍堵、整顆不註冊 `/permission`——CLI 與 serve 的測試都會紅。
+   * **不帶根**：可寫根是逐條 thread 的，由組裝點依「thread → 根」取得。
    */
-  readonly workspaceRoot?: string;
+  readonly contained?: boolean;
 }
 
 /** 一個還沒建的根。入口先拿到它，失敗與關掉的收尾才有東西可收，照 dsh launcher 的 `app.current`。 */
 export function createCordisRoot(options: CordisRootOptions = {}): CordisRoot {
   const tree = new PluginTree({
     ...(options.channel !== undefined && { channel: options.channel }),
-    ...(options.workspaceRoot !== undefined && { workspaceRoot: options.workspaceRoot }),
+    ...(options.contained === true && { contained: true }),
   });
   let booted = false;
   const dispose = async (): Promise<void> => {

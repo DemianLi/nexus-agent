@@ -76,7 +76,7 @@ import {
   createSystemPromptMiddleware,
   systemPromptDefaultsOf,
 } from './system-prompt-middleware.js';
-import { registryFsLookup } from './registry-fs-lookup.js';
+import { registryFsForThread, registryFsLookup } from './registry-fs-lookup.js';
 import { assertPluginCompatible, PluginCompatibilityError } from './plugin-compatibility.js';
 import {
   createJournalFile,
@@ -1017,8 +1017,9 @@ function bindDetached(entry: PluginEntry, id: string): PluginEntry {
       // 答題管道：從組裝的 registry 讀 `channel` 服務（組裝根提供，#1458 Q1 (c) 的第三個進入點）。讀不到就是「沒有指定」，
       // 照今天的語意不提供。**每次單獨掛上各讀各的**：同一個行程裡兩份無樹組裝（一份 headless、一份有人在）各有各的值。
       const channel = registry.services.get(CHANNEL_SERVICE);
-      // 工作區根（#1491 Q4 (a)）：同樣從這一次組裝的 host 服務 `workspaceRoot` 讀（組裝點只在有 `--workspace` 時提供）。
-      const workspaceRoot = registry.services.get('workspaceRoot');
+      // 有沒有圍堵（#1491 Q4 (a)、#1774）：同樣從這一次組裝的 host 服務 `workspaceRoot` 有沒有值推（組裝點只在有 `--workspace` 時提供）。
+      // 根本身是逐條 thread 的，不在這裡取：函式插件在呼叫當下經 `fs` 把手讀 `workspaceRoot()`。
+      const contained = registry.services.get('workspaceRoot') !== undefined;
       registerFolded(
         registry,
         await mountDetached({
@@ -1027,13 +1028,14 @@ function bindDetached(entry: PluginEntry, id: string): PluginEntry {
           provides: meta.provides,
           config: entry.config,
           ...(channel === undefined ? {} : { channel }),
-          ...(workspaceRoot === undefined ? {} : { workspaceRoot }),
+          ...(contained && { contained }),
           // 會話查找（#1463）：**這一次組裝自己的 `registry.sessions`**，只看那一份。查找在呼叫當下才問、不在掛載當下
           // 快取，所以之後 `attachSession` 才綁上來的註冊表也看得到；同一個行程裡兩份無樹組裝各問各的、互不相見。
           sessionLookup: (config) => registry.sessions.forCall(config),
           // fs 查找（#1466）：**這一次組裝自己的 host-services `fs` 服務**——就是這次組裝 fold 填值的那一格，不是另建的 backend。
           // 在呼叫當下才讀；無樹的組裝一份註冊表就一個 backend，所以不必依 thread 挑（見 `registry-fs-lookup.ts`）。
           fsLookup: registryFsLookup(registry),
+          fsForThread: registryFsForThread(registry),
         }),
       );
     },
