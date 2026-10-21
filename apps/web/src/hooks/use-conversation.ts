@@ -10,6 +10,7 @@ import type {
   AnswerEntry,
   CommandOutcome,
   ConversationState,
+  Event,
   GoalPauseResult,
   PromptAttachment,
   SubagentMention,
@@ -61,6 +62,9 @@ import { threadCapacityText } from '@/lib/thread-capacity';
 import { threadHistoryTooDeepText } from '@/lib/thread-history-too-deep';
 import { threadSubagentText } from '@/lib/thread-subagent';
 import { randomUuid } from '@/lib/uuid';
+
+/** `loadThrough` 每頁至少幾則，照 dsh 的 `JUMP_PAGE_MESSAGES`（`session.ts:57`）。 */
+export const JUMP_PAGE_MESSAGES = 200;
 
 /** 回饋對話框開給誰：一則回覆（按了讚或踩），或整個會話（只打了 `/feedback`）。 */
 export type FeedbackTarget =
@@ -134,6 +138,11 @@ export interface Conversation {
   readonly historyError?: { readonly message: string; readonly code?: string };
   /** 往前翻一頁，接在最前面。沒有更早的、或正在拿時什麼都不做。 */
   loadEarlier(): Promise<void>;
+  /**
+   * 往前一頁一頁載到日誌位置 `seq` 為止（#1601 `N1356`），給「在對話裡定位」用：目標還沒載入時先載到那一輪。
+   * `seq` 是日誌位置，跟軌跡投影的 `turn.seq`、歷史游標 `firstSeq` 同一套。語意見實作。
+   */
+  loadThrough(seq: number): Promise<void>;
   /**
    * 下行開好了沒。**開好之前不能送**——這條線只補送還掛著的中斷（[#728](https://github.com/DemianLi/nexus-agent/issues/728)），
    * 其他的不重播，早送的那一輪會看不到。斷了就翻回 `false`。
@@ -394,6 +403,19 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
   >(undefined);
   const historyRef = useRef(history);
   historyRef.current = history;
+  /**
+   * 歷史換過幾次（#1601 `N1372`）：開線或重連的那一頁**換上去的那一刻**加一，往前翻的請求回來時代數不同就整份丟掉。
+   * 照 dsh `Session.loadThrough` 的 `openGeneration`。**不拿 `generation` 那格**：它在重試計時器到點時就加一，比新的一頁
+   * 換上來早；兩者之間按下的「載入更早的」帶的是舊游標，卻記到新的代數，回來時檢查照樣會過。
+   */
+  const historyEpoch = useRef(0);
+  /**
+   * 往前翻的忙碌旗標（`loadEarlier` 與 `loadThrough` 共用，照 dsh 的 `loadingOlder`）。**放 ref**：`history.loading` 要等下一次
+   * 畫面才換，連按兩下擋不住。
+   */
+  const paging = useRef(false);
+  /** 正在跑的 `loadThrough`：目標（重複呼叫壓到最低）與它的 promise。 */
+  const jump = useRef<{ target: number; promise: Promise<void> } | undefined>(undefined);
   const clientRef = useRef(client);
   clientRef.current = client;
   const dialogRef = useRef(feedbackDialog);
@@ -503,13 +525,25 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         // 本地的東西（例如「已核准：X」）跟重新整理一樣不在了。第一次開線時現有的那份本來就是空的。
         // **還掛著的中斷也靠這一條回來**（#728）：歷史折不出它，伺服器在下行接上時補送原本那一顆、號也是原本的，
         // 排在線上等這裡折完才抽。沿用舊的那份的話，它的號比斷線前看到的小，面板就在重接那一刻不見。
+        historyEpoch.current += 1;
+        paging.current = false;
+        jump.current = undefined;
         if (page.kind === 'ok') {
           const { events: frames, ...cursor } = page.result;
           advance(() => reduceAll(emptyConversation(), frames));
           setHistory({ ...cursor, loading: false });
           setHistoryError(undefined);
         } else {
-          advance(() => emptyConversation());
+          // **重連時歷史被拒，保留畫面**（#1601 `N1345`），照 dsh `journal-stream` 重連期間保留已發佈的視窗：關掉落盤的組裝
+          // （#613）歷史一律被拒，網路一閃就整份清空。**`lastSeq` 照樣歸零**，理由同上一段 #593：serve 重開過的話傳輸號從 0
+          // 起算，留著舊水位之後的即時幀全被當成重複丟掉。還掛著的中斷清掉，由伺服器接上時補送（#728）。第一次開線照舊從空的開始。
+          // **代價**：落盤關掉又碰上 serve 重開時，畫面留著伺服器已經沒有的那份對話，旁邊有歷史錯誤那一句；斷線時那一輪若還在跑，
+          // 狀態也可能停在跑著，等下一顆幀或重新整理才收。
+          if (retry.current.everConnected) {
+            advance((previous) => ({ ...previous, lastSeq: -1, pendings: [] }));
+          } else {
+            advance(() => emptyConversation());
+          }
           setHistory(undefined);
           setHistoryError({
             message: page.message,
@@ -858,7 +892,9 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
 
   const loadEarlier = useCallback(async () => {
     const current = historyRef.current;
-    if (current === undefined || !current.hasMore || current.loading) return;
+    if (current === undefined || !current.hasMore || current.loading || paging.current) return;
+    paging.current = true;
+    const epoch = historyEpoch.current;
     // 上一次的錯誤與報讀在按下去的當下清掉：按鈕換成「讀取中…」，旁邊那一句不留著。報讀那一格先清空再寫，
     // 連續兩頁都是 50 則時第二次才唸得到（文字沒變的話 DOM 不動，polite 區不會再唸）。
     const { error: _previousError, loaded: _previousLoaded, ...rest } = current;
@@ -870,6 +906,8 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         throughSeq: current.throughSeq,
       });
     } catch (error) {
+      if (epoch !== historyEpoch.current) return;
+      paging.current = false;
       setHistory({
         ...rest,
         loading: false,
@@ -877,6 +915,10 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
       });
       return;
     }
+    // **換代就整份丟掉**（#1601 `N1372`）：回應到之前重連換上了新的一頁，這一頁是接在舊游標前面的，接上去會留下補不回來的
+    // 空洞、`firstSeq` 也被改回舊值。三條路（拋錯、被拒、成功）都用舊的 `rest` 寫，所以三條都要擋。
+    if (epoch !== historyEpoch.current) return;
+    paging.current = false;
     if (page.kind === 'rejected') {
       setHistory({ ...rest, loading: false, error: page.message });
       return;
@@ -893,6 +935,93 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
         .length,
     });
   }, [threadId, advance]);
+
+  /**
+   * 照 dsh `Session.loadThrough`（`session.ts:427-481`）：每頁至少 {@link JUMP_PAGE_MESSAGES} 則一頁一頁往前，**成功的頁私下留著、
+   * 結束時一次接在前面**，畫面只變一次。
+   *
+   * - 跳轉正在跑時再叫：目標壓到最低，回同一個 promise。
+   * - 單頁的「載入更早的」正在跑：直接回，不排在它後面（呼叫端等它收完再按）。
+   * - 某一頁沒有進展（`firstSeq` 沒變小）就停，不空轉。那一頁照 dsh 照樣收下（harness 的切點不會落在游標之後，
+   *   沒進展的那一頁裡沒有訊息）。
+   * - 中途被拒或拋錯：已經拿到的頁照樣接上，錯誤寫進 `history.error`。
+   * - 換代（重連換上了新的一頁，見 `historyEpoch`）：整份丟掉，迴圈也停。
+   */
+  const loadThrough = useCallback(
+    (seq: number): Promise<void> => {
+      const current = historyRef.current;
+      if (current === undefined || !current.hasMore || current.firstSeq <= seq) {
+        return Promise.resolve();
+      }
+      const running = jump.current;
+      if (running !== undefined) {
+        running.target = Math.min(running.target, seq);
+        return running.promise;
+      }
+      if (paging.current) return Promise.resolve();
+      paging.current = true;
+      const epoch = historyEpoch.current;
+      const { error: _previousError, loaded: _previousLoaded, ...rest } = current;
+      setHistory({ ...rest, loading: true });
+      const book: { target: number; promise: Promise<void> } = {
+        target: seq,
+        promise: Promise.resolve(),
+      };
+      // 先登記再開跑：`threadHistory` 同步拋的話 `finally` 在這一格裡就跑完，晚登記會留下一個永遠不收的跳轉。
+      jump.current = book;
+      book.promise = (async () => {
+        const pages: (readonly Event[])[] = [];
+        let beforeSeq = current.firstSeq;
+        let hasMore = current.hasMore;
+        let failure: string | undefined;
+        try {
+          while (hasMore && beforeSeq > book.target) {
+            if (epoch !== historyEpoch.current) return;
+            const page = await clientRef.current.threadHistory(threadId, {
+              beforeSeq,
+              throughSeq: current.throughSeq,
+              maxMessages: JUMP_PAGE_MESSAGES,
+            });
+            if (page.kind === 'rejected') {
+              failure = page.message;
+              return;
+            }
+            const before = beforeSeq;
+            pages.push(page.result.events);
+            beforeSeq = page.result.firstSeq;
+            hasMore = page.result.hasMore;
+            if (beforeSeq >= before) return;
+          }
+        } catch (error) {
+          failure = error instanceof Error ? error.message : String(error);
+        } finally {
+          if (jump.current === book) jump.current = undefined;
+          if (epoch === historyEpoch.current) {
+            paging.current = false;
+            // 頁是由新往舊拿的，倒過來才是日誌的順序；接起來從空的折一次，同 `loadEarlier` 的理由。
+            const earlier = reduceAll(emptyConversation(), pages.reverse().flat());
+            if (pages.length > 0) advance((previous) => prependEntries(previous, earlier));
+            setHistory({
+              ...rest,
+              firstSeq: beforeSeq,
+              hasMore,
+              loading: false,
+              ...(failure === undefined ? {} : { error: failure }),
+              ...(pages.length === 0
+                ? {}
+                : {
+                    loaded: earlier.entries.filter(
+                      (entry) => entry.kind === 'human' || entry.kind === 'ai',
+                    ).length,
+                  }),
+            });
+          }
+        }
+      })();
+      return book.promise;
+    },
+    [threadId, advance],
+  );
 
   const seedRatings = useCallback(() => {
     void ratingsController.ensure();
@@ -972,6 +1101,7 @@ export function useConversation(options: UseConversationOptions = {}): Conversat
     reconnectNow,
     ...(reconnecting === undefined ? {} : { reconnecting }),
     loadEarlier,
+    loadThrough,
     ...(history === undefined
       ? {}
       : {

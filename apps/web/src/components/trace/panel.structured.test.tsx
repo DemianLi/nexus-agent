@@ -4,6 +4,7 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { RightSidebarToggle } from '@/components/sidebar/right-sidebar';
+import { TRACE_LOCATE_LABEL } from '@/components/trace/row';
 import { TRACE_MORE_TURNS_LABEL, TURN_PAGE } from '@/components/trace/panel';
 import {
   DIGEST_PAGE,
@@ -15,8 +16,10 @@ import {
 import { createConversationStore } from '@/lib/conversation-store';
 import { LAYOUT_KEY_PREFIX } from '@/lib/right-sidebar';
 import type { SidebarLayout } from '@/lib/right-sidebar';
+import type { RightSidebarSources } from '@/lib/right-sidebar-api';
 import {
   TRACE_CALL_UNLOADED_TEXT,
+  TRACE_LOCATE_LOADING_TEXT,
   TRACE_HEADLINE,
   TRACE_LIMITS,
   TRACE_STRUCTURED_HEADLINE,
@@ -48,10 +51,10 @@ afterEach(() => {
 
 const open: SidebarLayout = { open: true, tabs: [{ kind: 'trace' }], active: 'trace' };
 
-function mount(state: ConversationState) {
+function mount(state: ConversationState, extra: Omit<RightSidebarSources, 'conversation'> = {}) {
   localStorage.setItem(LAYOUT_KEY_PREFIX + 't', JSON.stringify(open));
   return render(
-    <WithRightSidebar sources={{ conversation: createConversationStore(state) }}>
+    <WithRightSidebar sources={{ conversation: createConversationStore(state), ...extra }}>
       <RightSidebarToggle />
     </WithRightSidebar>,
   );
@@ -422,5 +425,91 @@ describe('觀測分頁：結構化模式', () => {
     await act(async () => {});
     fireEvent.click(screen.getByRole('button', { name: /更早的 6 輪/ }));
     expect(await axeViolations(document.body)).toEqual([]);
+  });
+});
+
+describe('觀測分頁：目標還沒載入時先載到那一輪再定位（#1601 `N1356`）', () => {
+  const scrollIntoView = vi.fn();
+  beforeEach(() => {
+    scrollIntoView.mockClear();
+    Element.prototype.scrollIntoView = scrollIntoView;
+  });
+
+  /** 投影有第 3 輪（`seq` 300）的一次呼叫，條目還沒載入；載入之後那則回覆在對話裡。 */
+  function unloaded() {
+    const script = new Script();
+    const trajectory = view([turn(3, { calls: [call(5, { reply: reply(311, 'run-x') })] })]);
+    const before = withTrajectory(
+      reduceAll(emptyConversation(), [script.running(), script.completed()]),
+      script,
+      trajectory,
+    );
+    const after = withTrajectory(
+      reduceAll(emptyConversation(), [
+        script.running(),
+        ...script.ai('x', { text: '較早的回覆' }),
+        script.completed(),
+      ]),
+      script,
+      trajectory,
+    );
+    return { before, after };
+  }
+
+  const callRow = () =>
+    screen.getAllByTestId('trace-row').find((row) => row.getAttribute('data-kind') === 'call')!;
+
+  it('內文沒載入的呼叫也有定位鈕：按下去先載到那一輪，畫出來之後捲到那一則並標示', async () => {
+    const { before, after } = unloaded();
+    const store = createConversationStore(before);
+    const target = after.entries.find((entry) => entry.kind === 'ai')!.id;
+    let item: HTMLElement | undefined;
+    const loadThrough = vi.fn(async (_seq: number) => {
+      // 對話區跟著畫出那一格：替身直接放一格，同 `panel.test.tsx` 的定位測試。
+      store.set(after);
+      item = document.createElement('div');
+      item.setAttribute('data-slot', 'message-scroller-item');
+      item.setAttribute('data-message-id', target);
+      document.body.append(item);
+    });
+    localStorage.setItem(LAYOUT_KEY_PREFIX + 't', JSON.stringify(open));
+    render(
+      <WithRightSidebar sources={{ conversation: store, loadThrough }}>
+        <RightSidebarToggle />
+      </WithRightSidebar>,
+    );
+    await act(async () => {});
+    const button = within(callRow()).getByRole('button', {
+      name: new RegExp(TRACE_LOCATE_LABEL),
+    });
+    fireEvent.click(button);
+    expect(screen.getByRole('status').textContent).toBe(TRACE_LOCATE_LOADING_TEXT);
+    await act(async () => {});
+    expect(loadThrough).toHaveBeenCalledWith(300);
+    expect(item?.hasAttribute('data-located')).toBe(true);
+    expect(scrollIntoView.mock.contexts).toContain(item);
+    expect(screen.queryByTestId('trace-missing')).toBeNull();
+  });
+
+  it('載完了還是沒有那一則（伺服器拿不到、或沒有進展就停）：在那一列底下講原因', async () => {
+    const { before } = unloaded();
+    const loadThrough = vi.fn(async () => {});
+    mount(before, { loadThrough });
+    await act(async () => {});
+    fireEvent.click(
+      within(callRow()).getByRole('button', { name: new RegExp(TRACE_LOCATE_LABEL) }),
+    );
+    await act(async () => {});
+    expect(loadThrough).toHaveBeenCalledTimes(1);
+    expect(screen.getByTestId('trace-missing')).toBeTruthy();
+  });
+
+  it('沒給 `loadThrough`：維持原樣，內文沒載入的呼叫不畫定位鈕', async () => {
+    const { before } = unloaded();
+    mount(before);
+    await act(async () => {});
+    expect(
+      within(callRow()).queryByRole('button', { name: new RegExp(TRACE_LOCATE_LABEL) }),
+    ).toBeNull();
   });
 });
