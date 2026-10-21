@@ -15,7 +15,7 @@
 
 ## 0. 一段話
 
-nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](https://github.com/DemianLi/nexus-agent/issues/949)）。它的介面以中性灰為主，顏色只出現在狀態、焦點和需要人注意的地方；層次靠幾層深淺不同的表面和很淡的陰影，幾乎不畫框線；字只有兩種粗細，次要的資訊靠顏色退後；動效短、開快關更快，而且只有封閉清單裡的那幾種。**AI 專屬的部分**（狀態、思考、工具、核准、提問）的做法是：狀態集中在一處、收著也看得到重點、需要人決定時換掉輸入框。亮色與暗色的鑑別度一樣，對比度由產生器解出來並有測試守著；所有資源都打包在本地。
+nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](https://github.com/DemianLi/nexus-agent/issues/949)）。它的介面以中性灰為主，顏色只出現在狀態、焦點和需要人注意的地方；層次靠幾層深淺不同的表面和很淡的陰影，幾乎不畫框線；字只有兩種粗細，次要的資訊靠顏色退後；動效短、開關一樣快、數值照 SG，而且只有封閉清單裡的那幾種。**AI 專屬的部分**（狀態、思考、工具、核准、提問）的做法是：狀態集中在一處、收著也看得到重點、需要人決定時換掉輸入框。亮色與暗色的鑑別度一樣，對比度由產生器解出來並有測試守著；所有資源都打包在本地。
 
 ## 1. 八個特徵
 
@@ -59,16 +59,17 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
   - 次要靠顏色不靠字重，「細字在中文與小字級下先糊掉」：beautiful-ui 的原則，加上一條它自己沒守住的——次要色本身要過 4.5:1（它的說明字只有 2.4–2.7:1，比對文件 §3、§4；`COMPONENTS.md`「外觀原則」第二條）。
 - **規則在哪**：規格 §5「字型」；`COMPONENTS.md`「字級的主次」；`design-system.test.ts`（只准四階、擋細字重）、`type-hierarchy.test.ts`、`tokens-contrast.test.ts`。
 
-### 1.5 動效：開快關更快，清單封閉
+### 1.5 動效：數值照 SG，清單封閉
 
 - **長什麼樣**：
-  - 彈出的東西先縮一點再長出來：時長與曲線照 SG（#1687），對話框、確認框、popover 開關都是 100ms，tooltip 150ms，曲線 `ease`；展開收合沒有高度動效。
+  - 彈出的東西先縮一點再長出來，進場和退場一樣快：時長與曲線照 SG（#1687），對話框、確認框、popover 開關都是 100ms，tooltip 150ms，曲線 `ease`；展開收合沒有高度動效。
   - 有動效的只有封閉清單裡的幾種模式：浮層彈出、對話框、側滑抽屜、換內容、展開收合、進場、進度、按壓、持續狀態。清單外只留 100–150ms 的顏色過渡。
   - 按下去縮一下只給實心主按鈕與送出鍵；逐項錯開進場只給提問選項。
   - 執行中的持續狀態是狀態列上 SG 的 `StatusGlyph`（三個點換著圖形動，JS 每幀畫，#1684 起；規格 §7 的「純 CSS」例外）和邊框光；空白 hero 的待命仍是純 CSS 的 breathing orb（`agent-orb.tsx`）。
   - 減少動態時不是全關：拿掉位移、縮放、模糊，留 150ms 以內的淡入淡出。
 - **從哪裡來**：
-  - 「開快關更快、先縮一點再長出來」與整組時長、位移、縮放、模糊 token：Libraries.dev（元件清單 §3.3）。
+  - 進出場的時長與曲線、展開收合不做高度動效：SG（#1687）。
+  - 「先縮一點再長出來」與其餘時長、位移、縮放、模糊 token：Libraries.dev（元件清單 §3.3）；這組 token 還有消費者，留給 ⑥（#1689）一起收。
   - 封閉清單、按壓只給主按鈕、減少動態的退法：[#378 動效策略](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887)。
   - 不裝 `thinking-orbs`、`border-beam`，改純 CSS 仿：demian 看過原型後的決定（[#375 原型結論](https://github.com/DemianLi/nexus-agent/issues/375#issuecomment-5708312161)，由 #378 拍板）。
   - 按壓不擴大到 ghost 按鈕：「一按就縮，在一排工具卡上會很吵」（比對文件 §4）。
@@ -107,7 +108,7 @@ nexus 是企業內部查資料、接內部系統的聊天機器人（[#949](http
 | --- | --- | --- | --- | --- |
 | [shadcn/ui](https://github.com/shadcn-ui/ui) 官方（含 2026 新出的 chat 元件與 `questionnaire`） | **基底** | 元件外殼與基礎件（sidebar、sheet、dialog、command、collapsible、button……） | registry 原樣的外觀：`border` 換成陰影（規格 §5）、`ring-[3px]` 關掉改 outline（規格 §5「互動狀態」）、英文報讀字串換中文（規格 §8） | 規格 §4；[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108) |
 | [solid-glass](https://github.com/deeplethe/solid-glass)（固定在 `6e8903e`，跟上游 `main`） | **外觀與設計 token 的來源**，取代原本的主題 | 顏色的色相、彩度、alpha；玻璃面（含大面積 blur）與陰影；圓角階梯；字型 Geist／Geist Mono；5 個 `sg-*` keyframes | 達不到本專案門檻的色值（只重解明度）、灰色的焦點線（換回文字色）、reduced-motion 下進場整個關掉（改 150ms 淡入）、三個簡體中文字型；dark variant、body 寫在 layer 外照本專案的機制 | [#1468 拍板](https://github.com/DemianLi/nexus-agent/issues/1468#issuecomment-6221153573)；`apps/web/src/vendor/solid-glass/README.md`「本地修改」 |
-| [Libraries.dev](https://github.com/Jakubantalik/Libraries.dev) | **元件多樣性與交互模式的參考**：用在 SG 沒有定義的元件或互動上（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)；原本是一般元件的模仿對象，視覺、token、動效的數值改以 SG 為準） | 原本拿的外觀：卡片套展示區、全圓 pill、淡陰影、半透明細線；accent 變成 `--brand`；整組動效 token 與「開快關更快」；orb 與邊框光的樣子 | 效果套件不裝，改純 CSS 仿（#375、#378）；寫死暗色不跟、視覺不複刻（規格 §2）；字型不用 Inter／Roboto Mono，標題字 Saans 授權不明不拿（規格 §3、§5）；`#17181c` 帶藍，主色改用無彩（#377） | [元件清單 §3](agent-ui-element-inventory.md)；[#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)、[#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887) |
+| [Libraries.dev](https://github.com/Jakubantalik/Libraries.dev) | **元件多樣性與交互模式的參考**：用在 SG 沒有定義的元件或互動上（demian 2026-10-17 在 PM session 拍板，記在 [#1512](https://github.com/DemianLi/nexus-agent/issues/1512)；原本是一般元件的模仿對象，視覺、token、動效的數值改以 SG 為準） | 原本拿的外觀：卡片套展示區、全圓 pill、淡陰影、半透明細線；accent 變成 `--brand`；整組動效 token 與「開快關更快」（開 250、關 150；進出場 #1687 起改照 SG，開關都 100）；orb 與邊框光的樣子 | 效果套件不裝，改純 CSS 仿（#375、#378）；寫死暗色不跟、視覺不複刻（規格 §2）；字型不用 Inter／Roboto Mono，標題字 Saans 授權不明不拿（規格 §3、§5）；`#17181c` 帶藍，主色改用無彩（#377） | [元件清單 §3](agent-ui-element-inventory.md)；[#377](https://github.com/DemianLi/nexus-agent/issues/377#issuecomment-5717372498)、[#378](https://github.com/DemianLi/nexus-agent/issues/378#issuecomment-5718598887) |
 | [beautiful-ui](https://github.com/slev12397/beautiful-ui) | **AI 專屬元件的參考對象**；不安裝、不複製，只用本專案元件重寫 | 收尾與密度的細節（§1.6 那幾張卡）；三條外觀原則（`COMPONENTS.md`「外觀原則」） | 它的設計數值：說明字對比不及格、任意字級 201 處（比對文件 §4）；8 個我們沒有場景的元件（比對文件 §0）；音效、預設深色、影片、示範資料、外部字型與外連素材（[#1278](https://github.com/DemianLi/nexus-agent/issues/1278) 拍板第 6 點） | [比對文件](beautiful-ui-comparison.md)；地圖 [#1278](https://github.com/DemianLi/nexus-agent/issues/1278)；PR [#1289](https://github.com/DemianLi/nexus-agent/pull/1289) |
 | [AI Elements](https://github.com/vercel/ai-elements)（Vercel） | 清單參考 | 「agent 介面該有哪些元件」的清單 | 程式碼一律不裝：`reasoning`／`message` 會把主 chunk 拉到約 2 MB（規格 §4.1） | [選型調研](agent-ui-library-survey.md) 開頭「後續決議」；[#374](https://github.com/DemianLi/nexus-agent/issues/374#issuecomment-5707786108) |
 | [assistant-ui](https://github.com/assistant-ui/assistant-ui) | 調研過，拒絕 runtime 層 | — | runtime 層會跟 `@nexus/wire` 搶狀態擁有權 | 選型調研「結論速查表」、§3.2 |

@@ -107,7 +107,7 @@
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 1 | App 殼（三欄：會話列表／對話／右側欄） | —（純前端） | `ui-layout`（`AppFrame`、`SIDEBAR_AUTO_COLLAPSE = 1024`） | sc `sidebar`（手機 Sheet） | 卡片縮放 `--resize-dur 300ms` | RWD 主載體；2026-09-25 #640 補上右側欄（1024 以上停靠、以下全螢幕覆蓋），殼層三欄齊了 |
-| 2 | 手機抽屜與頂部列 | —（純前端） | `ui-layout` 的 `narrowExpanded` | sc `sheet`、`drawer` | 下拉 open 250ms／close 150ms、scale 0.97 | 1024 以下 |
+| 2 | 手機抽屜與頂部列 | —（純前端） | `ui-layout` 的 `narrowExpanded` | sc `sheet`、`drawer` | 抽屜照 SG 的 sheet：transition 200ms、位移 2.5rem 加淡入淡出；下拉選單沒有動畫（規格 §7） | 1024 以下 |
 | 3 | 主題切換（light／dark／system） | —（純前端） | `ui-theme`（`--dsw-*` token、`ThemeRuntime`） | shadcn `.dark` | — | 見 §3.4 分歧 |
 | 4 | 連線狀態指示 | P1（`nexus-wire` 的 `client.ts`／`sse.ts` 沒有連線狀態；`WireChannel` 只是頻道名）**——2026-09-22 複查：這句仍然成立，但畫面上已有前端自推的簡版（`use-conversation.ts:187` 的 `connected`／`connectionError`，`StatusLine` 收）** | `ui-primitives/ConnectionIndicator` | — | `thinking-orbs` `connecting` | 2026-09-25 #593（PR #597）：察覺斷線、照 dsh 退避自動重連，接回時整份重建 |
 | 5 | 右側欄（檔案、預覽、終端） | P1 | `ui-sidebar-right`、`ui-sidebar-files`、`ui-sidebar-documentpreview`、`ui-sidebar-terminal` | AIE `file-tree`、`terminal` | 側欄滑入 | 2026-09-25 #640 做了：一格停靠＋分頁，住著改動比對（#443）與交付預覽（#452），兩者之前放在 Sheet；分格、浮窗、拖放、引導頁不做，檔案樹、終端要 harness 先有列檔等路 |
@@ -156,7 +156,7 @@
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 26 | 輸入框（多行、送出、停止） | P0（`RunCancelCommand`） | `ui-conversation/.../InputBar` | AIE `prompt-input` | 執行中 `border-beam`（`md`，或手機上 `line`） | Libraries.dev 首頁卡就是這個組合 |
-| 27 | slash 命令選單 | P0（`SlashDescriptor`、`SlashListCommand`） | `ui-commands`、`ui-input-trigger`（`/`、`@` 偵測） | sc `command` | 選單 open 250ms／close 150ms | |
+| 27 | slash 命令選單 | P0（`SlashDescriptor`、`SlashListCommand`） | `ui-commands`、`ui-input-trigger`（`/`、`@` 偵測） | sc `command` | 住在 popover 裡，開關都是 100ms、`ease`（規格 §7，#1687） | |
 | 28 | `@` 引用（檔案、會話、子代理、skill） | P1 | `ui-reference`、`ui-subagent` 的 `@` source、`ui-skill` | AIE `inline-citation` | — | 2026-09-28 #653 做了檔案與資料夾：打 `@` 開選單、選了插純文字 `@/path`，規則在規格 §4.4；沒有 `--workspace` 就沒有選單。2026-09-29 #713 補了會話與子代理（同一個選單分三段；送出後泡泡畫成一小塊，同專案的點了切過去），skill 與 chip（標籤）沒做 |
 | 29 | 送出佇列 | P1 | `ui-conversation/.../QueueDock` | AIE `queue` | 只淡入淡出，不 stagger（#645 Q8） | 2026-09-26 做了（#645）：放在待辦面板下、換手區外；跑著時純文字送得出去、排進佇列，斜線命令照擋；人的話等開跑才畫。2026-09-25 拍板：照 dsh 放伺服器（列得出、可改可刪、落盤），harness 先做、web 等落地再畫；停止後排著的停住不跑（翻掉 #265 Q6「停完接著跑」）；插話另開（#710：2026-09-29 web 第一步，跑著時 Cmd/Ctrl+Enter 送插話、排著的畫在對話尾端；佇列列上的插話鈕與草稿空白時 Cmd/Ctrl+Enter 全部改成插話是第二步，同日做完）。harness 先修 #629（排著的訊息吞掉核准） |
 | 30 | 模型選擇 | P1 | `ui-model-selection` | AIE `model-selector` | — | 2026-09-26 #723 拍板：先做底下的型錄（#729，只動 harness、畫面不變），每會話選擇與這一項晚點，恢復條件寫在 #723 |
@@ -175,7 +175,7 @@
 | # | 元件 | wire | dsh | 市面 | 動效 | 備註 |
 | --- | --- | --- | --- | --- | --- | --- |
 | 35 | 逐則讚／踩＋回饋對話框 | P0（`FeedbackCommand` 系列） | `ui-message-feedback`、`ui-chat/MessageIconActions` | AIE `message` 的 actions | 按下 scale 0.97＋bounce | 現有 `feedback-dialog.tsx` |
-| 36 | Toast | —（純前端） | `ui-primitives/Toast` | sc `sonner` | open 250ms／close 150ms | |
+| 36 | Toast | —（純前端） | `ui-primitives/Toast` | sc `sonner` | sonner 自帶的動畫（規格 §7） | |
 
 ### 2.8 不列入
 
@@ -224,7 +224,7 @@
 
 **字型**：內文 `"Inter"`、等寬 `"Roboto Mono"`，都是免費字型；**標題 display 字 "Saans"**（`@font-face` 從 `assets/fonts/Saans-Medium.woff2` 載入）。repo 沒有附這個字型的授權檔，名稱與 Displaay 字型廠的商用字型相同（**未核實**），**不要拿**。
 
-### 3.3 動效 token（整組可以拿）
+### 3.3 動效 token（原本整組拿；進出場 #1687 起改照 SG）
 
 同一個檔案的 `:root`，與主題無關：
 
@@ -250,7 +250,7 @@
 
 註解標明這些值來自 transitions.dev。
 
-**「開快關更快、先縮一點再長出來」是這套動效的核心規則**：open 250ms 配 close 150ms、scale 0.96–0.99、`--ease-smooth-out`。要模仿的是這條規則，不是某一個特效。
+**「開快關更快、先縮一點再長出來」是 Libraries.dev 這套動效的核心規則**：open 250ms 配 close 150ms、scale 0.96–0.99、`--ease-smooth-out`。nexus 原本模仿的是這條規則；#1687 起進出場改照 SG，對話框、確認框、popover 開關都是 100ms，tooltip 150ms，曲線 `ease`，「開快關更快」不再適用，現行數值以規格 §7 為準。上面這組 token 還有消費者的，留給 ⑥（#1689）一起收。
 
 **agent 狀態 → 動效（提案，未 prototype）**：
 
