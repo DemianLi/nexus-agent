@@ -53,6 +53,7 @@ export {
   APPROVAL_POLICIES,
   APPROVAL_POLICY_SERVICE,
   ApprovalPolicyController,
+  approvalPolicyOnResume,
   DEFAULT_APPROVAL_POLICY,
   isApprovalPolicy,
   recordedApprovalPolicy,

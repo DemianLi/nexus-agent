@@ -57,8 +57,10 @@ import { join } from 'node:path';
 
 import { ROOT } from '../workspace-packages.js';
 import {
+  approvalPolicyOnResume,
   currentMessageFeedback,
   interruptedTurnClosers,
+  recordedApprovalPolicy,
   replayConversation,
 } from '../../packages/nexus-core/src/index.ts';
 import type { SessionEvent, StoredSessionHeader } from '../../packages/nexus-core/src/index.ts';
@@ -73,11 +75,16 @@ const HERE = join(ROOT, 'scripts/session-format-fixtures');
 const PROMPT = '你好';
 
 /**
- * 讀方分支的觸發。有 `in-tree/trigger-<名>.ts` 的由那一版補寫事件；`workspace-root` 不用補寫（12 以前的 header 本來就沒有
- * `workspaceRoot`），只記今天的守衛對它的輸出。
+ * 讀方分支的觸發。有 `in-tree/trigger-<名>.ts` 的由那一版補寫事件；`workspace-root` 與 `approval-policy-missing` 不用補寫
+ * （12 以前的 header 本來就沒有 `workspaceRoot`，34 以前的日誌本來就沒有 `approval/policy`），只記今天的讀方對它的輸出。
  */
 type Trigger =
-  'turn-feedback' | 'turn-feedback-tail' | 'summary-missing' | 'open-turn' | 'workspace-root';
+  | 'turn-feedback'
+  | 'turn-feedback-tail'
+  | 'summary-missing'
+  | 'open-turn'
+  | 'workspace-root'
+  | 'approval-policy-missing';
 
 interface Target {
   /** 夾具目錄名。 */
@@ -106,7 +113,13 @@ const TARGETS: readonly Target[] = [
   { name: 'v10', rev: 'v0.5.0', version: 10, ownReplay: true },
   { name: 'v12', rev: 'v0.5.7', version: 12, triggers: ['workspace-root'], ownReplay: true },
   { name: 'v13', rev: 'v0.5.15', version: 13, ownReplay: true },
-  { name: 'v14', rev: 'v0.5.19', version: 14, triggers: ['open-turn'], ownReplay: true },
+  {
+    name: 'v14',
+    rev: 'v0.5.19',
+    version: 14,
+    triggers: ['open-turn', 'approval-policy-missing'],
+    ownReplay: true,
+  },
   { name: 'v49', rev: undefined, version: 49, ownReplay: true },
 ];
 /** 混版的前半。 */
@@ -380,6 +393,18 @@ function triggerExpectations(triggers: readonly Trigger[], directory: string): u
             computedBy: 'today',
             workspaceRootRecorded: header.workspaceRoot !== undefined,
             resumeWithWorkspace,
+          },
+        ];
+      }
+      case 'approval-policy-missing': {
+        const events = readEvents(directory, 'cli');
+        return [
+          {
+            edge: 34,
+            session: 'cli',
+            computedBy: 'today',
+            approvalPolicyRecorded: recordedApprovalPolicy(events) !== undefined,
+            approvalPolicyOnResume: approvalPolicyOnResume(events),
           },
         ];
       }

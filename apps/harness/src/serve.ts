@@ -27,7 +27,7 @@ import { createRequire } from 'node:module';
 import { parseArgs } from 'node:util';
 import { dirname, join } from 'node:path';
 import { THREADS_PATH } from '@nexus/wire';
-import { errorChain, recordedApprovalPolicy, TokenAnchorBook } from '@nexus/core';
+import { approvalPolicyOnResume, errorChain, TokenAnchorBook } from '@nexus/core';
 import { HARNESS_VERSION } from './harness-version.js';
 import { singleDigitModelIds } from './model-catalog.js';
 import type {
@@ -1150,10 +1150,9 @@ async function startServer(
               `接回來的模式一個位元組都影響不到。`,
           );
         }
-        // 核准政策同樣從日誌來（#437）；#437 以前的日誌沒有，照 `ask` 起算，也就是以前的行為。
-        // 續接就給滿：沒記照 `ask`，不讓組裝點按沙箱模式去推（全開沙箱配 #437 以前的日誌會被推成 `never`）。
+        // 核准政策同樣從日誌來（#437），續接就給滿（日誌沒記的照 `ask`，見 `approvalPolicyOnResume`）。
         const resumedApprovalPolicy =
-          resumed === undefined ? undefined : (recordedApprovalPolicy(resumed.events) ?? 'ask');
+          resumed === undefined ? undefined : approvalPolicyOnResume(resumed.events);
         const effective = {
           ...invocation,
           ...(resumedSandbox !== undefined && { sandbox: resumedSandbox }),

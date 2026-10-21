@@ -97,6 +97,20 @@ export function recordedApprovalPolicy(
   return undefined;
 }
 
+/**
+ * 續接時核准政策的起始值：日誌記著的那一格；一顆都沒有就是 `ask`。CLI 與 serve 的 `--resume` 都走這一支。
+ *
+ * 一顆都沒有的是 #437 以前的日誌（格式 34 以前），當時的行為就是 `ask`，所以這裡寫死 `ask`，不跟著
+ * {@link DEFAULT_APPROVAL_POLICY} 走。**續接就給滿**：不留空讓組裝點按沙箱模式去推，全開沙箱配舊日誌會被推成 `never`。
+ * 這是版本邊目錄 33→34 登記的讀方分支（`session-format.ts`）。
+ *
+ * @param events - 讀回來的 root 日誌。
+ * @returns 續接起算的核准政策。
+ */
+export function approvalPolicyOnResume(events: readonly SessionEvent[]): ApprovalPolicyValue {
+  return recordedApprovalPolicy(events) ?? 'ask';
+}
+
 /** 一次切換的結局。 */
 export type ApprovalPolicySwitchOutcome =
   /** 真的換了一格，日誌上多了一顆 `approval/policy`。 */
