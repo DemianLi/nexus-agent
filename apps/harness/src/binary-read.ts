@@ -20,7 +20,7 @@
  */
 
 import { StateBackend } from 'deepagents';
-import type { ReadResult } from 'deepagents';
+import type { ReadResult, WriteResult } from 'deepagents';
 
 /** dsh 判二進位時取樣的位元組數（`fsio.ts` 的 `BINARY_SAMPLE_BYTES`）。 */
 export const BINARY_SAMPLE_BYTES = 8192;
@@ -53,7 +53,9 @@ export function refuseNonText(filePath: string, bytes: Uint8Array): ReadResult {
  * 沒給 `--workspace` 時墊底的虛擬 FS，讀檔碰到二進位檔照 dsh 拒絕。
  *
  * 基座的 `StateBackend.write` 碰到非文字副檔名會把內容當 base64 解成位元組存起來，`read` 再原樣交回去——模型寫一張
- * PNG 再讀，同一條 thread 就中毒了（實測）。state 裡文字那一支一定是字串（不是字串的基座自己回錯），所以**內容不是
+ * PNG 再讀，同一條 thread 就中毒了（實測）。**`write` 現在一律把內容當 UTF-8 文字存**（[#1813](https://github.com/DemianLi/nexus-agent/issues/1813)，
+ * 照 dsh：`write.ts:75/:82/:124` 沒有任何依副檔名的分支），所以模型這一條路寫不出位元組了；state 裡的位元組只剩 `uploadFiles`
+ * 灌進來的（與 checkpoint 往返後的）。state 裡文字那一支一定是字串（不是字串的基座自己回錯），所以**內容不是
  * 字串就是非文字那一支**：位元組，或 checkpoint 往返後變成的普通物件（基座 `read_file` 對它做 `Object.values`）。
  * 零參數建構，所以仍是基座的非 legacy 模式。
  */
@@ -67,5 +69,33 @@ export class TextOnlyStateBackend extends StateBackend {
         ? content
         : Uint8Array.from(Object.values((content ?? {}) as Record<string, number>));
     return refuseNonText(filePath, bytes);
+  }
+
+  /**
+   * 一律存成文字，不看副檔名（#1813）。
+   *
+   * **偏離 deepagents（理由 1，基座表達不出來）：** 基座的 `write` 對非文字副檔名把內容 base64 解碼，沒有選項可以關；
+   * 它的 `files`／`fileFormat`／`isLegacy`／`sendFilesUpdate` 是 private，這裡照它在非 legacy 模式的做法自己組更新（`deepagents@1.13.1`，
+   * 升版時看 `StateBackend.write`）。存的 `mimeType` 是 `text/plain` 而不是路徑推出來的 `image/png`：後者基座的 `read_file`
+   * 會當成圖片塊交給模型，那正是 #642 要擋的毒。
+   */
+  override write(filePath: string, content: string): WriteResult {
+    const internals = this as unknown as {
+      readonly files: Record<string, { readonly created_at?: string } | undefined>;
+      readonly fileFormat: string;
+      readonly isLegacy: boolean;
+      sendFilesUpdate(update: Record<string, unknown>): void;
+    };
+    const now = new Date().toISOString();
+    const createdAt = internals.files[filePath]?.created_at ?? now;
+    const data =
+      internals.fileFormat === 'v1'
+        ? { content: content.split('\n'), created_at: createdAt, modified_at: now }
+        : { content, mimeType: 'text/plain', created_at: createdAt, modified_at: now };
+    if (internals.isLegacy) {
+      return { path: filePath, filesUpdate: { [filePath]: data } } as unknown as WriteResult;
+    }
+    internals.sendFilesUpdate({ [filePath]: data });
+    return { path: filePath };
   }
 }

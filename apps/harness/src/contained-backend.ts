@@ -73,7 +73,7 @@
  */
 
 import { createHash } from 'node:crypto';
-import { dirname, extname, relative, resolve, sep } from 'node:path';
+import { dirname, relative, resolve, sep } from 'node:path';
 import { constants } from 'node:fs';
 import { lstat, mkdir, open, realpath, stat } from 'node:fs/promises';
 import type { FileHandle } from 'node:fs/promises';
@@ -258,18 +258,6 @@ function digestOf(operation: string, payload: readonly unknown[]): string {
 function sameDenial(bound: SandboxDenial | undefined, call: SandboxDenial): boolean {
   return bound !== undefined && bound.target === call.target && bound.digest === call.digest;
 }
-
-/**
- * 基座 `getMimeType`／`isTextMimeType`（`deepagents` 沒有匯出）判成非文字的副檔名：圖、音、影、pdf、ppt。
- * 基座的 `write` 對這些把內容當 base64 解碼成位元組再寫（附件與摘要器走的就是這條），所以這裡要一樣。
- * 升版時的對照：`contained-backend.test.ts` 對著裸的 `FilesystemBackend` 逐個副檔名比寫出來的位元組。
- */
-const NON_TEXT_EXTENSIONS: ReadonlySet<string> = new Set([
-  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.heic', '.heif',
-  '.mp3', '.wav', '.aiff', '.aac', '.ogg', '.flac',
-  '.mp4', '.webm', '.mpeg', '.mov', '.avi', '.flv', '.mpg', '.wmv', '.3gpp',
-  '.pdf', '.ppt', '.pptx',
-]); // prettier-ignore
 
 /**
  * 基座錯誤字句開頭的那個字。拆成常數是因為 `tool-error-prefix.test.ts` 釘住「字串裡寫 `Error: ` 的只有前綴的定義」；
@@ -492,7 +480,11 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    *
    * 基座的 `write` 是 `O_TRUNC` 就地覆寫，所以不能前後包一層，這裡自己做完：結果形狀與錯誤字句照基座
    * （成功 `{ path, filesUpdate: null }`，失敗 `{ error: "Error writing file '…': …" }`，symlink 的原句）。
-   * 非文字副檔名的內容照基座當 base64 解碼。整段在逐目標的鎖裡。
+   * **內容一律當 UTF-8 文字寫，不看副檔名**（[#1813](https://github.com/DemianLi/nexus-agent/issues/1813)，見下面的偏離）。整段在逐目標的鎖裡。
+   *
+   * **與 dsh 的偏離已撤銷：** 基座的 `write` 對非文字副檔名（圖、音、影、pdf、ppt）把內容當 base64 解碼成位元組再寫，工具描述沒講，模型寫的純文字落成亂碼
+   * 還回「Successfully wrote」。dsh 沒有任何依副檔名的分支（`packages/fs/tool-fs/src/write.ts:75/:82/:124`：UTF-8 文字，`fs-local` 的
+   * `writeFile(content, { encoding: 'utf8' })`），這裡照 dsh。要寫位元組的內部呼叫端走 `uploadFiles`（見下），不經過這支。
    *
    * @param filePath - 虛擬路徑。
    * @param content - 檔案內容。
@@ -513,13 +505,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
         if (existing !== undefined && !existing.isFile()) {
           return { error: `Error writing file '${checked}': not a regular file` };
         }
-        const data = NON_TEXT_EXTENSIONS.has(extname(checked).toLowerCase())
-          ? Buffer.from(content, 'base64')
-          : content;
         await mkdir(dirname(resolved), { recursive: true });
         await writeFileAtomic(
           resolved,
-          data,
+          content,
           existing === undefined ? undefined : existing.mode & 0o777,
           this.atomicInternals,
         );
