@@ -107,6 +107,17 @@ const MIXED_NAME = 'mixed-v44-v49';
 const git = (...args: string[]): string =>
   execFileSync('git', ['-C', ROOT, ...args], { encoding: 'utf8' }).trim();
 
+/**
+ * 「今天」的讀方是哪一份樹：啟動時算一次。夾具目錄本身不算進 dirty，產生器會改它；
+ * 寫到一半才算的話，前面寫過的夾具會讓後面每一份都記成 dirty。
+ */
+const TODAY = {
+  head: git('rev-parse', 'HEAD'),
+  dirty:
+    git('status', '--porcelain', '--', '.', ':(exclude)apps/harness/src/fixtures/session-format')
+      .length > 0,
+} as const;
+
 /** 拿掉金鑰的環境，給 `pnpm install`。 */
 function installEnv(): NodeJS.ProcessEnv {
   const env = { ...process.env };
@@ -244,8 +255,6 @@ function freeze(
   const into = join(FIXTURES, name);
   rmSync(into, { recursive: true, force: true });
   mkdirSync(into, { recursive: true });
-  const today = git('rev-parse', 'HEAD');
-  const dirty = git('status', '--porcelain').length > 0;
   const sessions: Record<string, unknown> = {};
   for (const id of sessionsIn(directory)) {
     copyFileSync(join(directory, `${id}.header.json`), join(into, `${id}.header.json`));
@@ -266,7 +275,7 @@ function freeze(
   }
   const expected = {
     writer,
-    computedByToday: { head: today, dirty },
+    computedByToday: TODAY,
     sessions,
     triggers,
   };
