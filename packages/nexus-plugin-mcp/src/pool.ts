@@ -15,9 +15,9 @@
  *   同一份設定同時取用只連一次。
  * - **建立那一份的取用等第一次連線落定**（照 dsh 的 `await connection.ready`，`index.ts:199`）：寫了 `failOnStartupError: true`
  *   就拋、池裡不留；沒寫就照 dsh 在背景重試（`supervisor.ts`），連上之後開的 thread 拿得到工具。
- * - **其餘的取用最多等 {@link FIRST_CONNECT_WAIT_MS}**：握手卡住時（SDK 的請求逾時實測約 120 秒才收，#1543），不讓同一把鍵上
- *   之後的每一次組裝都跟著卡住。到期就照「連不上」處理這一份組裝：警告、沒有工具（`failOnStartupError: true` 就拋），連線照樣在
- *   背景繼續。偏離見下。
+ * - **其餘的取用最多等 {@link FIRST_CONNECT_WAIT_MS}**：握手卡住時要等 SDK 的請求逾時才收（#1820 重審用新協定、不回 initialize
+ *   的夾具量到 60.3 秒），不讓同一把鍵上之後的每一次組裝都跟著卡住。到期就照「連不上」處理這一份組裝：警告、沒有工具
+ *   （`failOnStartupError: true` 就拋），連線照樣在背景繼續。偏離見下。
  * - **斷線空窗裡組的 thread 照最近一代的工具清單登記**（照 dsh：`generationDown` 只清 client，工具登記到放棄才撤，
  *   `connection.ts:180-185`、`:226-232`）：委派讀的是目前這一代，空窗期呼叫回 `server is disconnected`，重連之後同一條 thread
  *   叫得動。
