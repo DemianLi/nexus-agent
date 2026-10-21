@@ -23,6 +23,7 @@ import { dirname, join } from 'node:path';
 
 import type { BaseMessage } from '@langchain/core/messages';
 import { MemorySaver } from '@langchain/langgraph';
+import { SEARCH_ABORTED } from '@nexus/core';
 import type { AttachmentRef, SessionEvent } from '@nexus/core';
 import type { Event } from '@nexus/wire';
 import { GENERAL_PURPOSE_SUBAGENT } from 'deepagents';
@@ -35,6 +36,7 @@ import {
   ThreadScopedAttachmentBackend,
 } from './attachment-route.js';
 import { AttachmentStore, attachmentsRootOf, ATTACHMENTS_PREFIX } from './attachment-store.js';
+import type { GrepPathsResult } from './contained-backend.js';
 import { ScriptedChatModel } from './scripted-model.js';
 import type { ScriptedTurn } from './scripted-model.js';
 import { ThreadPump } from './thread-pump.js';
@@ -222,28 +224,40 @@ describe('路由只露出這條 thread 日誌引用過的檔', () => {
   describe('grep 出錯：rg 的原始訊息不交給模型（#1822）', () => {
     const ALIAS = 'SECRET-ALIAS-NAME.txt';
 
-    /** 一個只引用 `a.txt` 的路由；`warn` 收伺服器日誌。 */
-    async function routeWith(executable?: string) {
+    /** 一個只引用 `a.txt` 的路由（直接建，不經儲存）；`warn` 收伺服器日誌。 */
+    async function routeWith(executable?: string, rawOutputMaxBytes?: number) {
       const a = await put('needle once\n', 'a.txt');
       const warned: string[] = [];
       const scope = createAttachmentScope();
-      scope.bind({ events: [turnStart(a.ref)] });
+      scope.bind({ events: [turnStart(a.ref)], sessionId: 'thread-1822' });
       const route = new ThreadScopedAttachmentBackend({
         rootDir: store.filesDir,
         scope,
         warn: (line) => warned.push(line),
-        ...(executable === undefined ? {} : { ripgrep: { executable } }),
+        ...(executable === undefined
+          ? {}
+          : {
+              ripgrep: {
+                executable,
+                ...(rawOutputMaxBytes === undefined ? {} : { rawOutputMaxBytes }),
+              },
+            }),
       });
       return { a, route, warned };
     }
 
-    it('rg 的 stderr 帶著沒引用的別名檔名：模型只拿到固定的一句，原文進伺服器日誌', async () => {
+    /** 一支假的 rg：照 `body` 的 shell 腳本跑。 */
+    async function fakeRg(body: string): Promise<string> {
       const fake = join(home, 'fake-rg');
-      await writeFile(
-        fake,
-        `#!/bin/sh\necho "rg: ./a/b/${ALIAS}: Permission denied (os error 13)" >&2\nexit 2\n`,
-      );
+      await writeFile(fake, `#!/bin/sh\n${body}\n`);
       await chmod(fake, 0o755);
+      return fake;
+    }
+
+    it('rg 的 stderr 帶著沒引用的別名檔名：模型只拿到固定的一句，原文進伺服器日誌', async () => {
+      const fake = await fakeRg(
+        `echo "rg: ./a/b/${ALIAS}: Permission denied (os error 13)" >&2\nexit 2`,
+      );
       const { route, warned } = await routeWith(fake);
 
       const result = await route.grep('needle', '/');
@@ -254,12 +268,69 @@ describe('路由只露出這條 thread 日誌引用過的檔', () => {
       expect(warned).toHaveLength(1);
       expect(warned[0]).toContain(ALIAS);
       expect(warned[0]).toContain('Permission denied');
+      // 日誌行對得上是哪條 thread、哪種錯誤。
+      expect(warned[0]).toContain('thread-1822');
+      expect(warned[0]).toContain('SEARCH_FAILED');
+    });
+
+    it('SEARCH_INVALID_PATTERN（rg 的 stderr 同樣原樣接上）也換成固定的一句，日誌帶碼', async () => {
+      const fake = await fakeRg(
+        `echo "rg: ./a/b/${ALIAS}: regex parse error: unclosed group" >&2\nexit 2`,
+      );
+      const { route, warned } = await routeWith(fake);
+
+      const result = await route.grep('needle', '/');
+      expect(result.error).toBe(ATTACHMENT_SEARCH_FAILED_MESSAGE);
+      expect(JSON.stringify(result)).not.toContain(ALIAS);
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toContain('SEARCH_INVALID_PATTERN');
+      expect(warned[0]).toContain(ALIAS);
+    });
+
+    it('SEARCH_RAW_OUTPUT_OVERFLOW 照舊：「縮小範圍」的提示留給模型，不寫 warn', async () => {
+      const fake = await fakeRg(`head -c 4096 /dev/zero | tr '\\0' x\nexec sleep 20`);
+      const { route, warned } = await routeWith(fake, 1024);
+
+      const result = await route.grep('needle', '/');
+      expect(result.error).toContain('narrow');
+      expect(result.error).not.toBe(ATTACHMENT_SEARCH_FAILED_MESSAGE);
+      expect(warned).toEqual([]);
+    }, 15_000);
+
+    it('SEARCH_ABORTED 照舊：按停止不是要人處理的事，不寫 warn', async () => {
+      const a = await put('needle once\n', 'a.txt');
+      const warned: string[] = [];
+      const scope = createAttachmentScope();
+      scope.bind({ events: [turnStart(a.ref)] });
+      // 中止的碼只在工具呼叫的訊號被觸發時出現；這裡換掉 `grepPaths` 直接給它，量路由怎麼處理這個碼。
+      class Aborted extends ThreadScopedAttachmentBackend {
+        protected override async grepPaths(): Promise<GrepPathsResult> {
+          return { error: 'grep aborted', errorCode: SEARCH_ABORTED };
+        }
+      }
+      const route = new Aborted({
+        rootDir: store.filesDir,
+        scope,
+        warn: (line) => warned.push(line),
+      });
+
+      expect(await route.grep('needle', '/')).toEqual({ error: 'grep aborted' });
+      expect(warned).toEqual([]);
     });
 
     it.skipIf(process.getuid?.() === 0)(
       '真的 rg：引用目錄裡一個沒引用、讀不到的別名檔，模型的結果裡沒有它的檔名',
       async () => {
-        const { a, route, warned } = await routeWith();
+        // **經 `AttachmentStore` 的 `readOnlyRoute` 建路由**（不是直接 `new` 路由）：量的是產品組裝那一條接線——`warn` 要從儲存傳到路由，
+        // 拿掉 `readOnlyRoute` 裡的 `warn: this.#warn`，原文就會掉到沒有等級的標準錯誤、不進伺服器日誌。
+        const a = await put('needle once\n', 'a.txt');
+        const warned: string[] = [];
+        const wired = new AttachmentStore(attachmentsRootOf(home), {
+          warn: (line) => warned.push(line),
+        });
+        const scope = createAttachmentScope();
+        scope.bind({ events: [turnStart(a.ref)], sessionId: 'thread-real' });
+        const route = await wired.readOnlyRoute(scope);
         // 同樣的位元組、另一個檔名：落在同一個 /前兩碼/hex 目錄，沒被引用，然後讓它讀不到。
         const alias = await put('needle once\n', ALIAS);
         expect(alias.path.split('/')[2]).toBe(a.path.split('/')[2]);
@@ -271,13 +342,14 @@ describe('路由只露出這條 thread 日誌引用過的檔', () => {
           // 真 rg 在這種情形回 exit 2：走錯誤路徑，原文只在日誌。
           expect(result.error).toBe(ATTACHMENT_SEARCH_FAILED_MESSAGE);
           expect(warned.join('\n')).toContain(ALIAS);
+          expect(warned.join('\n')).toContain('thread-real');
         } finally {
           await chmod(aliasFile, 0o644);
         }
       },
     );
 
-    it('以 - 開頭的 pattern 照樣當 pattern 搜，argv 是 --regexp= 形式（照 dsh）', async () => {
+    it('以 - 開頭的 pattern 照樣當 pattern 搜，argv 是 --regexp= 形式、起點在 -- 後面（形式同 dsh）', async () => {
       const a = await put('see -leading-dash here\n', 'a.txt');
       const spawns: (readonly string[])[] = [];
       const scope = createAttachmentScope();

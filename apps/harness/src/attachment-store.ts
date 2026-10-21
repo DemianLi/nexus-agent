@@ -38,7 +38,9 @@
  *    （以前同一台 serve 的任何 thread 都能 `ls /attachments` 列出別條 thread 上傳的檔，照路徑 `read_file` 讀得到）。補的是路由多一道
  *    「這條 thread 的 root 日誌引用過」的判準，跟網頁讀圖同一條（`attachment-reference.ts`，照 dsh `session.attachment`），在呼叫當下判，
  *    `ls`／`read`／`grep`／`glob` 都過這一關，沒引用過的路徑回覆跟不存在相同。見 `attachment-route.ts`。對舊 thread 也生效：判準是日誌，
- *    自己上傳的照舊讀得到，只有別條 thread 的附件從此讀不到。
+ *    自己上傳的照舊讀得到，只有別條 thread 的附件從此讀不到。**`grep` 出錯時也不照 dsh**（#1822）：dsh 的 `search-core.ts` 把 rg 的 stderr 原樣接在
+ *    錯誤訊息後面，在這裡會把同一個目錄下沒引用過的別名檔名帶給模型，所以 `SEARCH_FAILED`／`SEARCH_INVALID_PATTERN` 回固定字句
+ *    （原文、thread id 與錯誤碼寫進伺服器日誌）；`SEARCH_ABORTED`／`SEARCH_RAW_OUTPUT_OVERFLOW` 不帶路徑，照舊。
  * 4. **home 以上的祖先開不了就略過那一層**（理由 2，#1528 Q1 (b)，demian 2026-10-17 拍板）。dsh 的 home 證明一路 fsync
  *    到檔案系統根，任何一層開不了都是寫入失敗；多人共用的主機常把 `/home` 這類目錄收成 `0711`（進得去、列不了），照 dsh
  *    的話每一次上傳都失敗。所以只在 home **以上**、只對**開目錄時**的 `EACCES`／`EPERM`，略過那一層並在伺服器日誌講一次；

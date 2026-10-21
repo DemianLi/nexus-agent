@@ -143,10 +143,16 @@ function decodeWhole(bytes: Uint8Array): string {
 /**
  * 搜尋失敗：替這一次工具呼叫記下碼，回帶 `error` 的結果。字句不以 `Error: ` 開頭，前綴由 `fs-tool-errors.ts` 補。
  */
-function searchFailure(code: SearchErrorCode, message: string): GrepResult {
+function searchFailure(code: SearchErrorCode, message: string): GrepPathsResult {
   noteSearchError(code);
-  return { error: message };
+  return { error: message, errorCode: code };
 }
+
+/**
+ * {@link ContainedFilesystemBackend.grepPaths} 的結果：多一格 `errorCode`，給子類分辨「該不該把錯誤原文交給模型」
+ * （附件路由只換 `SEARCH_FAILED`／`SEARCH_INVALID_PATTERN`，#1822）。**不經公開的 `grep` 出去**，`grep` 把它剝掉。
+ */
+export type GrepPathsResult = GrepResult & { readonly errorCode?: SearchErrorCode };
 
 /**
  * 圍堵的強度。名字照抄 dsh 的三個 mode（`references/deepseek-harness/packages/fs/fs-sandbox/README.md`）。
@@ -667,7 +673,8 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     glob?: string | null,
     maxCount?: number | null,
   ): Promise<GrepResult> {
-    return this.grepPaths(pattern, [dirPath || '.'], glob, maxCount);
+    const result = await this.grepPaths(pattern, [dirPath || '.'], glob, maxCount);
+    return result.error === undefined ? result : { error: result.error };
   }
 
   /**
@@ -686,13 +693,14 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
    * macOS 實測 1 萬個起點正常、2 萬個失敗；正式環境要一條 thread 引用上萬份附件才會碰到，所以不分批、只在這裡寫明。
    *
    * @param dirPaths - 起點的虛擬路徑。
+   * @returns 搜尋結果；失敗時帶 `error` 與 `errorCode`（{@link GrepPathsResult}）。
    */
   protected async grepPaths(
     pattern: string,
     dirPaths: readonly string[],
     glob?: string | null,
     maxCount?: number | null,
-  ): Promise<GrepResult> {
+  ): Promise<GrepPathsResult> {
     // `spawn` 在 `cwd` 不存在時也回 `ENOENT`，跟找不到 rg 分不出來；不先確認的話「根不存在」會被說成「rg 不見了」。放在最前面。
     // **根不存在不是錯誤，是「沒有東西可找」**（`{ matches: [] }`，同基座對不存在的起點）：暫存 backend 的根是第一次
     // 存東西才建的（`tool-result-stash.ts`），經 `CompositeBackend` 搜 `/` 時也會搜到它。根存在卻不是目錄才是錯誤。
@@ -722,8 +730,10 @@ export class ContainedFilesystemBackend extends FilesystemBackend {
     }
     const outcome = await runRipgrep({
       executable,
-      // 照 dsh `buildGrepCommand`（`packages/fs/tool-fs-search/src/grep.ts:112`，`687f282e`）：pattern 與 glob 走 `--flag=value` 形式、
-      // 起點放在 `--` 後面，模型給的值不可能被當成旗標（`-x` 開頭的 pattern 照樣是 pattern）。`-F` 是 nexus 自己的（#1605 Q1）。
+      // **形式照 dsh `buildGrepCommand`，內容不是逐字相同**（`packages/fs/tool-fs-search/src/grep.ts:112`，`687f282e`）：pattern 與 glob 走
+      // `--flag=value` 形式、起點放在 `--` 後面，模型給的值不可能被當成旗標（`-x` 開頭的 pattern 照樣是 pattern）。差別：dsh 是
+      // `--json`、`--regexp=`、`--glob=`、（有 path 才）`--`＋一個 path；這裡是 `--json`、`-F`（nexus 自己的，#1605 Q1）、`--glob=`、`--regexp=`
+      // （glob 與 regexp 的順序相反，rg 不在意）、**一定帶 `--`**、起點多個且都有 `./` 前綴（理由見 `existingSearchArgs`）。
       argv: [
         '--json',
         '-F',

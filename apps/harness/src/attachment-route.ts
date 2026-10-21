@@ -46,6 +46,7 @@ import type {
   ReadResult,
 } from 'deepagents';
 
+import { SEARCH_FAILED, SEARCH_INVALID_PATTERN } from '@nexus/core';
 import type { SessionEvent } from '@nexus/core';
 
 import { referencedFilePaths } from './attachment-reference.js';
@@ -57,6 +58,8 @@ export const ATTACHMENT_SEARCH_FAILED_MESSAGE = 'grep failed while searching the
 
 /** 路由問「這條 thread 的 root 日誌現在長什麼樣」的口。 */
 export interface AttachmentScope {
+  /** 這條 thread 的 root 日誌 id（日誌行用來對上是哪條 thread）；還沒接上或來源沒帶是 `undefined`。 */
+  sessionId?(): string | undefined;
   /** root 日誌現在的事件；還沒接上或已解綁是 `undefined`（路由什麼都不露出）。**每次呼叫都重讀，不要快取。** */
   events(): readonly SessionEvent[] | undefined;
 }
@@ -70,15 +73,20 @@ export interface BindableAttachmentScope extends AttachmentScope {
    * scope，`attachSession` 綁的就是那條 thread 的 root）。同一個 scope 被兩條 thread 共用的話，後綁的會悄悄蓋掉先綁的，
    * 先綁那條 thread 的模型就改讀到另一條的引用集——要共用 agent 必須先把 scope 改成按 thread 分。
    *
-   * @param source - 有 `events` 的東西（`SessionRegistry.root`）；每次問才讀 `events`。
+   * @param source - 有 `events` 的東西（`SessionRegistry.root`）；每次問才讀 `events`。`sessionId` 選填，只給日誌行用。
    */
-  bind(source: { readonly events: readonly SessionEvent[] }): () => void;
+  bind(source: {
+    readonly events: readonly SessionEvent[];
+    readonly sessionId?: string;
+  }): () => void;
 }
 
 /** 建一個還沒綁日誌的 scope：綁之前路由什麼都不露出。 */
 export function createAttachmentScope(): BindableAttachmentScope {
-  let current: { readonly events: readonly SessionEvent[] } | undefined;
+  let current:
+    { readonly events: readonly SessionEvent[]; readonly sessionId?: string } | undefined;
   return {
+    sessionId: () => current?.sessionId,
     events: () => current?.events,
     bind(source) {
       current = source;
@@ -252,12 +260,20 @@ export class ThreadScopedAttachmentBackend extends ContainedFilesystemBackend {
     // `maxCount` 不傳下去（傳 `null`），濾完引用集之後才截斷，`truncated` 才對得上使用者看得到的筆數。
     const found = await this.grepPaths(pattern, targets, glob, null);
     if (found.error !== undefined) {
-      // **rg 的原始訊息不交給模型**（#1822）：它會帶出同一個附件目錄下、這條 thread 沒引用過的別名檔名（`…/SECRET.txt: Permission denied`），
-      // 結果過濾只擋得到命中的那幾行、擋不到錯誤字串。模型拿固定的一句，原文寫進伺服器日誌給管理者。
+      // **rg 的原始訊息只在會帶出檔名的兩種錯誤換掉**（#1822）：`SEARCH_FAILED`（rg 非 0／1 結束，stderr 會帶出同一個附件目錄下、
+      // 這條 thread 沒引用過的別名檔名，`…/SECRET.txt: Permission denied`）與 `SEARCH_INVALID_PATTERN`（rg 的 stderr 同樣原樣接上）。
+      // 結果過濾只擋得到命中的那幾行、擋不到錯誤字串。模型拿固定的一句，原文寫進伺服器日誌給管理者（帶 thread id 與錯誤碼）。
+      // **其餘照舊**：`SEARCH_ABORTED`（使用者按停止）與 `SEARCH_RAW_OUTPUT_OVERFLOW`（「縮小 pattern 再試」的提示）的字句固定、不帶路徑，
+      // 換掉會讓 overflow 的提示不見，也會讓按停止寫出一行 warn（`serve.ts` 的 warn 是給要人處理的事）。
       // dsh 沒有對應做法（單人桌面、沒有「這條 thread 引用過哪些檔」的引用集；`search-core.ts` 的 `classifyRunFailure` 把 stderr 原樣接在訊息後面），
       // 這是偏離 3（#1773，理由 2）帶出來的需求。
-      this.#warn(`[附件路由] grep 出錯，原始訊息不交給模型：${found.error}`);
-      return { error: ATTACHMENT_SEARCH_FAILED_MESSAGE };
+      if (found.errorCode === SEARCH_FAILED || found.errorCode === SEARCH_INVALID_PATTERN) {
+        this.#warn(
+          `[附件路由] thread ${this.#scope.sessionId?.() ?? '（未綁定）'} grep 出錯（${found.errorCode}），原始訊息不交給模型：${found.error}`,
+        );
+        return { error: ATTACHMENT_SEARCH_FAILED_MESSAGE };
+      }
+      return { error: found.error };
     }
     const matches = (found.matches ?? []).filter((match) => visible.files.has(match.path));
     return applyGrepMaxCount({ result: { matches }, maxCount: maxCount ?? null });
