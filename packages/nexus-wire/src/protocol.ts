@@ -401,6 +401,18 @@ export const THREAD_IS_SUBAGENT = 'thread_is_subagent';
  */
 export const THREAD_HISTORY_TOO_DEEP = 'thread_history_too_deep';
 
+/**
+ * serve 正在收尾（收到 `SIGTERM`／`SIGINT`，`/readyz` 時間窗已經開始，[#1787](https://github.com/DemianLi/nexus-agent/issues/1787)），
+ * **這一句話沒有送出**：會開新一輪的上行命令（`run.start`、`subagent.send`，以及 `slash.run` 裡會 steer 起一輪的 `/plan <話>`、
+ * `/goal create|edit` 帶附件）在時間窗內一律回這個碼，HTTP 照舊 200。`run.cancel`、`input.respond`、`queue.update`、讀取與下行不受影響。
+ * 附件收據放回去、請求編號沒用掉：**使用者稍後重送同一句話即可**（重啟之後帶同一個 `request_id` 重送，已經收過的那一筆照樣拿回原本的 `run_id`）。
+ * 重試馬上沒用——這台 serve 是在關機——要等它重新起來。
+ *
+ * **message 是寫給使用者看的**，不是給管理者的（本專案其他碼的 message 多半給管理者看）：web 目前直接把 `result.message` 顯示在輸入框旁，
+ * 所以這裡寫的是「這句話沒有送出；稍後再送一次」的口吻。要讓 web 改用自己的固定文案，認這個碼就行（同 `thread_at_capacity`）。
+ */
+export const SERVER_CLOSING = 'server_closing';
+
 /** 這條線上的錯誤碼：協定的那十個，加上我們自己的命令用到的。 */
 export type WireErrorCode =
   | ErrorCode
@@ -413,6 +425,7 @@ export type WireErrorCode =
   | typeof THREAD_AT_CAPACITY
   | typeof THREAD_IS_SUBAGENT
   | typeof THREAD_HISTORY_TOO_DEEP
+  | typeof SERVER_CLOSING
   | typeof MODEL_DOES_NOT_SUPPORT_IMAGES
   | typeof ATTACHMENT_NOT_FOUND;
 
