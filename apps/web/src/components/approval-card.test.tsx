@@ -4,6 +4,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import { ApprovalCard } from '@/components/approval-card';
+import { defaultApprovalReason } from '@/lib/approval-reason';
 
 afterEach(cleanup);
 
@@ -143,15 +144,48 @@ describe('沙箱升級（#1292）', () => {
     expect(screen.getByText(ESCALATE)).toBeTruthy();
   });
 
-  it('其他工具帶了描述也照舊：工具名＋參數，不畫描述', () => {
-    card(pending({ file_path: '/a' }, 'write_file', '基座 HITL 的描述'));
+  it('其他工具不走升級那一支：工具名＋參數（描述照一般工具的規則，見下一組）', () => {
+    card(pending({ file_path: '/a' }, 'write_file', defaultApprovalReason('write_file')));
     expect(screen.queryByTestId('approval-escalation')).toBeNull();
-    expect(screen.queryByText('基座 HITL 的描述')).toBeNull();
     expect(screen.getByText('write_file')).toBeTruthy();
     expect(
       screen.getByText('{ "file_path": "/a" }', {
         normalizer: (text) => text.replace(/\s+/g, ' '),
       }),
     ).toBeTruthy();
+  });
+});
+
+describe('閘門給的理由（#1628）', () => {
+  const SEARCH = 'mcp__crm__orders_search_1a2b3c4d';
+  const REASON = 'MCP server crm 的工具 orders.search 要先讓人看過（設定 approval）';
+  const card = (p: PendingApproval) =>
+    render(<ApprovalCard pending={p} busy={false} onDecide={() => {}} onStop={() => {}} />);
+
+  it('真的理由：畫在「要執行 …」下面，工具名與參數照舊', () => {
+    card(pending({ query: '上週的退貨訂單' }, SEARCH, REASON));
+    expect(screen.getByTestId('approval-reason').textContent).toBe(REASON);
+    expect(screen.getByText(SEARCH)).toBeTruthy();
+    expect(screen.getByText(/"query": "上週的退貨訂單"/)).toBeTruthy();
+    // 在「要執行的內容」那一組裡：讀屏進那一組就唸得到，不是 tooltip。
+    expect(screen.getByRole('group', { name: '要執行的內容' }).textContent).toContain(REASON);
+  });
+
+  it('core 的預設字：不畫（跟「要執行 …」那一行重複）', () => {
+    card(pending({ file_path: '/a' }, 'write_file', defaultApprovalReason('write_file')));
+    expect(screen.queryByTestId('approval-reason')).toBeNull();
+    expect(screen.queryByText(defaultApprovalReason('write_file'))).toBeNull();
+  });
+
+  it('沒有描述（較舊的 server）：不多一行', () => {
+    card(pending({ file_path: '/a' }, 'write_file'));
+    expect(screen.queryByTestId('approval-reason')).toBeNull();
+  });
+
+  it('沙箱升級不重複畫：理由只在升級那一句', () => {
+    const reason = '把 "/outside/a.txt" 的檔案政策升到 workspace-write，只蓋這一次：要寫設定檔';
+    card(pending({ sandbox_permissions: 'workspace-write' }, 'request_sandbox_escalation', reason));
+    expect(screen.queryByTestId('approval-reason')).toBeNull();
+    expect(screen.getAllByText(reason)).toHaveLength(1);
   });
 });
