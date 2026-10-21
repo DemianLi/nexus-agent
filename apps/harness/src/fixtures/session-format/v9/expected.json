@@ -6,13 +6,13 @@
     "released": true
   },
   "computedByToday": {
-    "head": "6a7525e503a039287aa42aa260b71106a727ef68",
+    "head": "fe52c279c58fa6a07e4f934cd75826b2e518a301",
     "dirty": false
   },
   "sessions": {
     "cli": {
       "headerVersion": 9,
-      "eventCount": 17,
+      "eventCount": 21,
       "types": [
         "turn/start",
         "model/start",
@@ -30,6 +30,10 @@
         "model/end",
         "turn/end",
         "session/end-seed",
+        "feedback/message-put",
+        "turn/start",
+        "assistant/message",
+        "turn/end",
         "feedback/message-put"
       ],
       "replay": {
@@ -41,6 +45,8 @@
           "tool",
           "ai",
           "tool",
+          "ai",
+          "human",
           "ai"
         ]
       }
@@ -56,6 +62,12 @@
           "turn": 0,
           "target": "turn",
           "rating": "negative"
+        },
+        {
+          "turn": 17,
+          "target": "message",
+          "messageId": "fixture-reply",
+          "rating": "positive"
         }
       ]
     }

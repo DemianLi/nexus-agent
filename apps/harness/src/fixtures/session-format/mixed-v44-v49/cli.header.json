@@ -1,7 +1,7 @@
 {
   "version": 49,
   "id": "cli",
-  "createdAt": 1792584339824,
+  "createdAt": 1792586703880,
   "cwd": "/private/var/tmp/nexus-session-format-cwd",
   "build": {
     "commit": "09398dd523471a1d03852e18c7bbae6ecc672414",
@@ -249,5 +249,5 @@
       "disabled": false
     }
   ],
-  "configHash": "hmac-sha256:5ab68dc733af50cf"
+  "configHash": "hmac-sha256:3b39bc273e0a5d6e"
 }

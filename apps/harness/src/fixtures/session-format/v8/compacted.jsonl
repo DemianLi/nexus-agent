@@ -1,5 +1,5 @@
-{"type":"turn/start","seq":0,"time":1792584267312,"data":{"kind":"message","text":"幫我整理一下"}}
-{"type":"model/start","seq":1,"time":1792584267312,"data":{}}
-{"type":"model/end","seq":2,"time":1792584267312,"data":{}}
-{"type":"compaction/summary","seq":3,"time":1792584267312,"data":{"cutoffIndex":0,"messagesBefore":1,"filePath":"/conversation_history/compacted.md"}}
-{"type":"turn/end","seq":4,"time":1792584267312,"data":{}}
+{"type":"turn/start","seq":0,"time":1792586630552,"data":{"kind":"message","text":"幫我整理一下"}}
+{"type":"model/start","seq":1,"time":1792586630552,"data":{}}
+{"type":"model/end","seq":2,"time":1792586630552,"data":{}}
+{"type":"compaction/summary","seq":3,"time":1792586630552,"data":{"cutoffIndex":0,"messagesBefore":1,"filePath":"/conversation_history/compacted.md"}}
+{"type":"turn/end","seq":4,"time":1792586630552,"data":{}}
