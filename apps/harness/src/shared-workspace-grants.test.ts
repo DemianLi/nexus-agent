@@ -15,13 +15,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BaseMessage } from '@langchain/core/messages';
 import { Command } from '@langchain/langgraph';
-import { SANDBOX_ESCALATION_TOOL_NAME } from '@nexus/plugin-sandbox-policy';
+import { SANDBOX_ESCALATION_TOOL_NAME, sharedReadOnlyRefusal } from '@nexus/plugin-sandbox-policy';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import { createCliAgent } from './assembly-root.js';
 import { shippedPlugins, withScriptedModel } from './fixtures.js';
 import { toAgentInvocation } from './messages.js';
 import type { ScriptedTurn } from './scripted-model.js';
+import type { SandboxMode } from './contained-backend.js';
 
 const shipped = await shippedPlugins();
 const APPROVE = new Command({ resume: { decisions: [{ type: 'approve' }] } }) as never;
@@ -60,14 +61,14 @@ const escalate = (file_path: string): ScriptedTurn => ({
   ],
 });
 
-async function product(turns: readonly ScriptedTurn[]) {
+async function product(turns: readonly ScriptedTurn[], sandbox: SandboxMode = 'read-only') {
   return createCliAgent(
     {
       live: false,
       workspace: shared,
       workspaceRoot: priv,
       sharedWorkspaceRoot: shared,
-      sandbox: 'read-only',
+      sandbox,
     },
     withScriptedModel(shipped, turns),
     priv,
@@ -75,13 +76,16 @@ async function product(turns: readonly ScriptedTurn[]) {
 }
 
 /** 寫 → 升級 → 核准 → 原樣重試。回第一次被拒的訊息、有沒有掛出核准卡、核准之後的各則工具訊息。 */
-async function writeEscalateRetry(target: string, thread: string, escalateFor = target) {
-  const built = await product([
-    write(target, '內容'),
-    escalate(escalateFor),
-    write(target, '內容'),
-    { content: '停。' },
-  ]);
+async function writeEscalateRetry(
+  target: string,
+  thread: string,
+  escalateFor = target,
+  sandbox: SandboxMode = 'read-only',
+) {
+  const built = await product(
+    [write(target, '內容'), escalate(escalateFor), write(target, '內容'), { content: '停。' }],
+    sandbox,
+  );
   const detach = built.attachSession(built.sessions);
   const config = { configurable: { thread_id: thread } };
   try {
@@ -110,12 +114,14 @@ describe('/shared 不接受 grant', () => {
   // 升級填哪個路徑？被拒的訊息寫的是 backend 內的位址（`/x.txt`），模型照抄就是 `/x.txt`；照呼叫寫的完整路徑是 `/shared/x.txt`。
   // 兩種都要釘：grant 綁的是被擋下那次的位址，只測 `/shared/x.txt` 會被「位址對不上」擋住，看不出 backend 到底認不認 grant
   // （實測：把 grants 傳給共用區的 backend，`/shared/x.txt` 那種仍然綠，`/x.txt` 那種才紅）。
+  // #1800 之後完整路徑那一種在升級工具就被擋（不掛卡）；`/x.txt` 在虛擬路徑上是**私有根**的 `/x.txt`，不在共用區前綴底下，
+  // 工具照問——問的是私有根那個檔，是真問題；核准的 grant 認領不到共用區的 backend，這條承重的是「重試仍被擋」。
   it.each([
-    ['完整路徑 /shared/x.txt', '/shared/x.txt'],
-    ['訊息裡的 backend 內位址 /x.txt', '/x.txt'],
+    ['完整路徑 /shared/x.txt', '/shared/x.txt', false],
+    ['訊息裡的 backend 內位址 /x.txt', '/x.txt', true],
   ])(
     '共用區 /shared/x.txt 同一串動作（升級填 %s）：寫不進去，兩邊磁碟都沒有新檔',
-    async (_label, escalateFor) => {
+    async (_label, escalateFor, expectCard) => {
       const { first, card, after } = await writeEscalateRetry(
         '/shared/x.txt',
         `grant-shared${escalateFor}`,
@@ -123,9 +129,7 @@ describe('/shared 不接受 grant', () => {
       );
       // 前提：第一次寫真的是共用區的唯讀擋下的。
       expect(first[0]).toContain('唯讀');
-      // 已知的樣子（如實記）：升級工具照樣掛出一張核准卡、核准後回「核准了」——它不知道目標在共用區；
-      // 但核准的 grant 沒有任何 backend 認領得到，原樣重試仍被唯讀擋下。承重的是最後這幾條。
-      expect(card).toBe(true);
+      expect(card).toBe(expectCard);
       expect(after.join('\n')).not.toContain('Successfully wrote');
       expect(after[after.length - 1]).toContain('唯讀');
       expect(await readdir(shared)).toEqual(['ref.md']);
@@ -134,4 +138,52 @@ describe('/shared 不接受 grant', () => {
     },
     60000,
   );
+});
+
+describe('對唯讀共用區升級：不掛核准卡，直接說明不能升級（#1800）', () => {
+  // 兩格模式：`read-only` 下升級是加寬（以前會掛卡）；`workspace-write` 下「升到 workspace-write」不加寬（以前回「不比現在更寬」，答非所問）。
+  // 兩格都該是同一句「共用區唯讀」。
+  it.each([
+    ['read-only', '/shared/x.txt'],
+    ['read-only', 'shared/x.txt'],
+    ['read-only', '/shared/./sub/../x.txt'],
+    ['read-only', '/shared'],
+    ['workspace-write', '/shared/x.txt'],
+  ] as const)(
+    '%s 下對 %s 升級：沒有核准卡，回共用區唯讀的說明',
+    async (mode, target) => {
+      const built = await product([escalate(target), { content: '停。' }], mode);
+      const detach = built.attachSession(built.sessions);
+      try {
+        const result = await built.agent.invoke(toAgentInvocation('升級。'), {
+          configurable: { thread_id: `shared-escalation-${mode}-${target}` },
+        });
+        expect((result as { __interrupt__?: unknown[] }).__interrupt__).toBeUndefined();
+        const [reply] = toolTexts(result);
+        expect(reply).toContain(sharedReadOnlyRefusal('/shared'));
+        expect(reply).not.toContain('並不比');
+      } finally {
+        detach();
+        await built.dispose();
+      }
+      expect(await readdir(shared)).toEqual(['ref.md']);
+    },
+    60000,
+  );
+
+  it('反例：前綴長得像但不在共用區底下（/sharedx.txt）、私有根的 /own.txt：照舊掛核准卡', async () => {
+    for (const target of ['/sharedx.txt', '/own.txt']) {
+      const built = await product([escalate(target), { content: '停。' }]);
+      const detach = built.attachSession(built.sessions);
+      try {
+        const result = await built.agent.invoke(toAgentInvocation('升級。'), {
+          configurable: { thread_id: `shared-escalation-control-${target}` },
+        });
+        expect((result as { __interrupt__?: unknown[] }).__interrupt__?.length).toBeGreaterThan(0);
+      } finally {
+        detach();
+        await built.dispose();
+      }
+    }
+  }, 60000);
 });
