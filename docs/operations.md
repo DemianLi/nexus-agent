@@ -583,7 +583,7 @@ Release 附的 `nexus-agent-<版本>-audit.json` 有三個鍵：`audit` 是 pnpm
 | `advisory` | GHSA 編號 |
 | `paths` | 接受的相依路徑，形狀同 audit 輸出的 `findings[].paths`（例如 `apps__harness>deepagents>micromatch>braces`）。同一筆出現在沒列的路徑上就紅 |
 | `reason` | 為什麼接受，連到拍板的地方 |
-| `expires` | 到期日 `YYYY-MM-DD`。當天仍有效，隔天起紅 |
+| `expires` | 到期日 `YYYY-MM-DD`，以 UTC 日期判斷（排程也跑 UTC）。當天仍有效，隔天起紅：台北時間要到隔天 08:00 才算過期 |
 | `review` | 到期前要重新評估什麼 |
 | `removal` | 什麼條件成立就撤掉 |
 
